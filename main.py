@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from supabase import create_client
+import traceback
 
 app = FastAPI(
     title="TAI API",
@@ -9,7 +10,7 @@ app = FastAPI(
 )
 
 url = "https://xntdkrjhgcsccmqctdzyo.supabase.co"
-key = "여기에_sb_secret_전체값"
+key = "여기에_실제_sb_secret_전체값"
 
 supabase = create_client(url, key)
 
@@ -22,6 +23,8 @@ def env_check():
     return {
         "SUPABASE_URL": url,
         "SUPABASE_KEY_EXISTS": bool(key),
+        "SUPABASE_URL_PREFIX": url[:30],
+        "SUPABASE_KEY_PREFIX": key[:20],
     }
 
 @app.get("/test-db")
@@ -35,5 +38,7 @@ def test_db():
     except Exception as e:
         return {
             "success": False,
-            "error": str(e)
+            "error_type": type(e).__name__,
+            "error_repr": repr(e),
+            "traceback": traceback.format_exc(),
         }
