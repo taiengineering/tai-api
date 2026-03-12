@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from supabase import create_client
-import os
 
 app = FastAPI(
     title="TAI API",
@@ -9,29 +8,25 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-def get_supabase():
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
+url = "https://xntdkrjhgcsccmqctdzyo.supabase.co"
+key = "여기에_sb_secret_전체값"
 
-    if not url:
-        raise ValueError("SUPABASE_URL is missing")
-    if not key:
-        raise ValueError("SUPABASE_KEY is missing")
-
-    return create_client(url, key)
+supabase = create_client(url, key)
 
 @app.get("/")
 def root():
+    return {"message": "TAI API running"}
+
+@app.get("/env-check")
+def env_check():
     return {
-        "message": "TAI API running",
-        "has_url": bool(os.environ.get("SUPABASE_URL")),
-        "has_key": bool(os.environ.get("SUPABASE_KEY")),
+        "SUPABASE_URL": url,
+        "SUPABASE_KEY_EXISTS": bool(key),
     }
 
 @app.get("/test-db")
 def test_db():
     try:
-        supabase = get_supabase()
         result = supabase.table("companies").select("*").limit(1).execute()
         return {
             "success": True,
@@ -42,10 +37,3 @@ def test_db():
             "success": False,
             "error": str(e)
         }
-
-@app.get("/env-check")
-def env_check():
-    return {
-        "SUPABASE_URL": os.environ.get("SUPABASE_URL"),
-        "SUPABASE_KEY_EXISTS": bool(os.environ.get("SUPABASE_KEY")),
-    }
