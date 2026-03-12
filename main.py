@@ -10,7 +10,7 @@ app = FastAPI(
 )
 
 url = "https://xntdkrjhgcsccmqctdzyo.supabase.co"
-key = "여기에_실제_sb_secret_전체값"
+key = "sb_secret_fBeYn64yjsdUuucIjGQu0Q_ZSkVqYfx"
 
 supabase = create_client(url, key)
 
