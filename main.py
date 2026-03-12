@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from supabase import create_client
-import os
 import traceback
 
 app = FastAPI(
@@ -10,15 +9,10 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+url = "https://xntdkrjhgcsccmqctdzyo.supabase.co".strip()
+key = "sb_secret_fBeYn64yjsdUuucIjGQu0Q_ZSkVqYfx".strip()
+
 def get_supabase():
-    url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_KEY")
-
-    if not url:
-        raise ValueError("SUPABASE_URL is missing")
-    if not key:
-        raise ValueError("SUPABASE_KEY is missing")
-
     return create_client(url, key)
 
 @app.get("/")
@@ -28,8 +22,8 @@ def root():
 @app.get("/env-check")
 def env_check():
     return {
-        "SUPABASE_URL": os.environ.get("SUPABASE_URL"),
-        "SUPABASE_KEY_EXISTS": bool(os.environ.get("SUPABASE_KEY")),
+        "SUPABASE_URL": url,
+        "SUPABASE_KEY_EXISTS": bool(key),
     }
 
 @app.get("/test-db")
