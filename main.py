@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from supabase import create_client
-import traceback
+import os
 
 app = FastAPI(
     title="TAI API",
