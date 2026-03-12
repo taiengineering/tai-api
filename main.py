@@ -6,6 +6,7 @@ from routers.buildings import router as buildings_router
 from routers.areas import router as areas_router
 from routers.equipment_assets import router as assets_router
 from routers.inspection_sets import router as inspection_sets_router
+from routers.work_schedules import router as work_schedules_router
 
 app = FastAPI(
     title="TAI API",
@@ -20,6 +21,7 @@ app.include_router(buildings_router)
 app.include_router(areas_router)
 app.include_router(assets_router)
 app.include_router(inspection_sets_router)
+app.include_router(work_schedules_router)
 
 
 @app.get("/")
