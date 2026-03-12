@@ -9,8 +9,8 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-url = "https://xntdkrjhgcsccmqctdzyo.supabase.co"
-key = "sb_secret_fBeYn64yjsdUuucIjGQu0Q_ZSkVqYfx"
+url = "https://xntdkrjhgcscmqctdzyo.supabase.co".strip()
+key = "sb_secret_fBeYn64yjsdUuucIjGQu0Q_ZSkVqYfx".strip()
 
 supabase = create_client(url, key)
 
