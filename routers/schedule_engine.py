@@ -131,3 +131,7 @@ def generate_schedule(inspection_set_id: str):
         "created_count": len(created_rows),
         "created_rows": created_rows
     }
+    
+@router.get("/test")
+def test():
+    return {"message": "schedule engine alive"}
