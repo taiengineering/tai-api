@@ -30,6 +30,15 @@ def root():
 
 @app.get("/test-db")
 def test_db():
-    supabase = get_supabase()
-    result = supabase.table("companies").select("*").limit(1).execute()
-    return result.data
+    try:
+        supabase = get_supabase()
+        result = supabase.table("companies").select("*").limit(1).execute()
+        return {
+            "success": True,
+            "data": result.data
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
