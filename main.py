@@ -9,7 +9,7 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-url = "https://xntdkrjhgcsccmqctdzyo.supabase.co".strip()
+url = "https://xntdkrjhgcscmqctdzyo.supabase.co".strip()
 key = "sb_secret_fBeYn64yjsdUuucIjGQu0Q_ZSkVqYfx".strip()
 
 def get_supabase():
