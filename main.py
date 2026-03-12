@@ -42,3 +42,10 @@ def test_db():
             "success": False,
             "error": str(e)
         }
+
+@app.get("/env-check")
+def env_check():
+    return {
+        "SUPABASE_URL": os.environ.get("SUPABASE_URL"),
+        "SUPABASE_KEY_EXISTS": bool(os.environ.get("SUPABASE_KEY")),
+    }
