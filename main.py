@@ -48,3 +48,7 @@ app.include_router(law_collector_router)
 @app.get("/")
 def root():
     return {"message": "TAI API running"}
+
+| `POST /legal-engine/apply/{factory_id}` | 법령 판정 실행 |
+| `GET /legal-engine/result/{factory_id}` | 판정 결과 조회 |
+| `GET /legal-engine/summary/{factory_id}` | 판정 요약 조회 |
