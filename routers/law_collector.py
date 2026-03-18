@@ -24,6 +24,11 @@ router = APIRouter(prefix="/law-collector", tags=["법령 수집기"])
 LAW_API_OC   = os.environ.get("LAW_API_OC")
 LAW_API_BASE = "http://www.law.go.kr/DRF"
 
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ko-KR,ko;q=0.9",
+}
 
 # ============================================================
 # 유틸 함수
@@ -74,24 +79,21 @@ def law_type_name_to_code(name: str) -> str:
 
 
 # ============================================================
-# API 호출 함수 (requests 사용 - 동기)
+# API 호출 함수
 # ============================================================
 
-def fetch_law_content(mst_no: str) -> dict:
-    """법령 본문 조회 API"""
-    url = f"{LAW_API_BASE}/lawService.do"
+def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
+    """법령 목록 조회 API"""
+    url = f"{LAW_API_BASE}/lawSearch.do"
     params = {
         "OC": LAW_API_OC,
         "target": "law",
-        "MST": mst_no,
         "type": "XML",
+        "query": query,
+        "display": display,
+        "page": page,
     }
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "ko-KR,ko;q=0.9",
-    }
-    resp = requests.get(url, params=params, headers=headers, timeout=60)
+    resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=30)
     resp.encoding = "utf-8"
     resp.raise_for_status()
     return {"xml": resp.text, "status": resp.status_code}
@@ -106,7 +108,7 @@ def fetch_law_content(mst_no: str) -> dict:
         "MST": mst_no,
         "type": "XML",
     }
-    resp = requests.get(url, params=params, timeout=60)
+    resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=60)
     resp.encoding = "utf-8"
     resp.raise_for_status()
     return {"xml": resp.text, "status": resp.status_code}
