@@ -1,13 +1,14 @@
 # routers/law_collector.py
 # 법령 수집기 라우터
-# - POST /law-collector/collect/all     전체 수집 (최초 1회)
-# - POST /law-collector/collect/{law_id} 단건 수집
-# - POST /law-collector/check-updates   변경 감지 (증분 수집)
-# - GET  /law-collector/status          수집 상태 조회
+# - POST /law-collector/collect/all        전체 수집 (최초 1회)
+# - POST /law-collector/collect/{law_name} 단건 수집
+# - POST /law-collector/check-updates      변경 감지 (증분 수집)
+# - GET  /law-collector/status             수집 상태 조회
 
 import os
 import hashlib
-import httpx
+import requests
+import traceback
 import xml.etree.ElementTree as ET
 from datetime import datetime, date
 from typing import Optional
@@ -20,7 +21,7 @@ router = APIRouter(prefix="/law-collector", tags=["법령 수집기"])
 # 설정
 # ============================================================
 
-LAW_API_OC   = os.environ.get("LAW_API_OC")        # law.go.kr 인증키 (이메일 ID)
+LAW_API_OC   = os.environ.get("LAW_API_OC")
 LAW_API_BASE = "http://www.law.go.kr/DRF"
 
 
@@ -29,12 +30,10 @@ LAW_API_BASE = "http://www.law.go.kr/DRF"
 # ============================================================
 
 def make_hash(text: str) -> str:
-    """텍스트 해시 생성 (변경 감지용)"""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def parse_date(date_str: str) -> Optional[date]:
-    """YYYYMMDD → date 변환"""
     if not date_str or len(date_str) != 8:
         return None
     try:
@@ -44,17 +43,41 @@ def parse_date(date_str: str) -> Optional[date]:
 
 
 def clean_cdata(text: str) -> str:
-    """CDATA 텍스트 정리"""
     if not text:
         return ""
     return text.strip()
 
 
+def _safe_int(val: str) -> Optional[int]:
+    try:
+        return int(val.strip()) if val and val.strip() else None
+    except:
+        return None
+
+
+def law_type_name_to_code(name: str) -> str:
+    mapping = {
+        "법률":     "LAW",
+        "대통령령":  "ENFORCEMENT_DECREE",
+        "총리령":   "ENFORCEMENT_RULE",
+        "부령":     "ENFORCEMENT_RULE",
+        "고시":     "NOTICE",
+        "훈령":     "NOTICE",
+        "예규":     "NOTICE",
+        "기술기준": "STANDARD",
+        "규정":     "STANDARD",
+    }
+    for key, code in mapping.items():
+        if key in name:
+            return code
+    return "OTHER"
+
+
 # ============================================================
-# API 호출 함수
+# API 호출 함수 (requests 사용 - 동기)
 # ============================================================
 
-async def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
+def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
     """법령 목록 조회 API"""
     url = f"{LAW_API_BASE}/lawSearch.do"
     params = {
@@ -65,13 +88,13 @@ async def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
         "display": display,
         "page": page,
     }
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(url, params=params)
-        resp.raise_for_status()
-        return {"xml": resp.text, "status": resp.status_code}
+    resp = requests.get(url, params=params, timeout=30)
+    resp.encoding = "utf-8"
+    resp.raise_for_status()
+    return {"xml": resp.text, "status": resp.status_code}
 
 
-async def fetch_law_content(mst_no: str) -> dict:
+def fetch_law_content(mst_no: str) -> dict:
     """법령 본문 조회 API (조문 포함)"""
     url = f"{LAW_API_BASE}/lawService.do"
     params = {
@@ -80,35 +103,34 @@ async def fetch_law_content(mst_no: str) -> dict:
         "MST": mst_no,
         "type": "XML",
     }
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.get(url, params=params)
-        resp.raise_for_status()
-        return {"xml": resp.text, "status": resp.status_code}
+    resp = requests.get(url, params=params, timeout=60)
+    resp.encoding = "utf-8"
+    resp.raise_for_status()
+    return {"xml": resp.text, "status": resp.status_code}
 
 
 # ============================================================
 # XML 파싱 함수
 # ============================================================
 
-def parse_law_list_xml(xml_text: str) -> list[dict]:
+def parse_law_list_xml(xml_text: str) -> list:
     """법령 목록 XML 파싱"""
     root = ET.fromstring(xml_text)
     laws = []
     for law in root.findall("law"):
         laws.append({
-            "law_mst_no":         law.findtext("법령일련번호", ""),
-            "law_api_id":         law.findtext("법령ID", ""),
-            "law_name":           clean_cdata(law.findtext("법령명한글", "")),
-            "law_name_short":     clean_cdata(law.findtext("법령약칭명", "")),
-            "law_type_name":      law.findtext("법령구분명", ""),
-            "ministry_code":      law.findtext("소관부처코드", ""),
-            "ministry_name":      law.findtext("소관부처명", ""),
-            "law_number":         law.findtext("공포번호", ""),
-            "announcement_date":  parse_date(law.findtext("공포일자", "")),
-            "enforcement_date":   parse_date(law.findtext("시행일자", "")),
-            "revision_type":      law.findtext("제개정구분명", ""),
-            "current_status":     law.findtext("현행연혁코드", ""),
-            "detail_link":        law.findtext("법령상세링크", ""),
+            "law_mst_no":        law.findtext("법령일련번호", ""),
+            "law_api_id":        law.findtext("법령ID", ""),
+            "law_name":          clean_cdata(law.findtext("법령명한글", "")),
+            "law_name_short":    clean_cdata(law.findtext("법령약칭명", "")),
+            "law_type_name":     law.findtext("법령구분명", ""),
+            "ministry_code":     law.findtext("소관부처코드", ""),
+            "ministry_name":     law.findtext("소관부처명", ""),
+            "law_number":        law.findtext("공포번호", ""),
+            "announcement_date": parse_date(law.findtext("공포일자", "")),
+            "enforcement_date":  parse_date(law.findtext("시행일자", "")),
+            "revision_type":     law.findtext("제개정구분명", ""),
+            "current_status":    law.findtext("현행연혁코드", ""),
         })
     return laws
 
@@ -121,13 +143,14 @@ def parse_law_content_xml(xml_text: str) -> dict:
     basic = root.find("기본정보")
     info = {}
     if basic is not None:
+        ministry_el = basic.find("소관부처")
         info = {
             "law_api_id":        basic.findtext("법령ID", ""),
             "announcement_date": parse_date(basic.findtext("공포일자", "")),
             "law_number":        basic.findtext("공포번호", ""),
             "law_name":          clean_cdata(basic.findtext("법령명_한글", "")),
             "law_type_name":     basic.findtext("법종구분", ""),
-            "ministry_code":     basic.find("소관부처").get("소관부처코드", "") if basic.find("소관부처") is not None else "",
+            "ministry_code":     ministry_el.get("소관부처코드", "") if ministry_el is not None else "",
             "ministry_name":     basic.findtext("소관부처", ""),
             "enforcement_date":  parse_date(basic.findtext("시행일자", "")),
             "revision_type":     basic.findtext("제개정구분", ""),
@@ -177,46 +200,16 @@ def parse_law_content_xml(xml_text: str) -> dict:
 
             article["paragraphs"].append(paragraph)
 
-        # 항 없이 바로 호가 있는 경우
-        for ho in jo.findall("항/호"):
-            pass  # 위에서 처리됨
-
         articles.append(article)
 
     return {"info": info, "articles": articles, "raw_xml": xml_text}
-
-
-def _safe_int(val: str) -> Optional[int]:
-    try:
-        return int(val.strip()) if val and val.strip() else None
-    except:
-        return None
-
-
-def law_type_name_to_code(name: str) -> str:
-    """법령구분명 → 코드 변환"""
-    mapping = {
-        "법률":     "LAW",
-        "대통령령":  "ENFORCEMENT_DECREE",
-        "총리령":   "ENFORCEMENT_RULE",
-        "부령":     "ENFORCEMENT_RULE",
-        "고시":     "NOTICE",
-        "훈령":     "NOTICE",
-        "예규":     "NOTICE",
-        "기술기준": "STANDARD",
-        "규정":     "STANDARD",
-    }
-    for key, code in mapping.items():
-        if key in name:
-            return code
-    return "OTHER"
 
 
 # ============================================================
 # DB 저장 함수
 # ============================================================
 
-async def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> dict:
+def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> dict:
     """법령 전체를 DB에 저장"""
 
     law_mst_no    = law_info.get("law_mst_no", "")
@@ -262,17 +255,17 @@ async def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase)
         is_new_version = False
     else:
         version_data = {
-            "law_id":            law_id,
-            "version_no":        version_no,
-            "law_mst_no":        law_mst_no,
-            "revision_type_code": law_info.get("revision_type", ""),
-            "announcement_date": str(law_info.get("announcement_date")) if law_info.get("announcement_date") else None,
-            "enforcement_date":  str(law_info.get("enforcement_date")) if law_info.get("enforcement_date") else None,
-            "effective_from":    str(law_info.get("enforcement_date")) if law_info.get("enforcement_date") else None,
-            "is_current":        True,
+            "law_id":              law_id,
+            "version_no":          version_no,
+            "law_mst_no":          law_mst_no,
+            "revision_type_code":  law_info.get("revision_type", ""),
+            "announcement_date":   str(law_info.get("announcement_date")) if law_info.get("announcement_date") else None,
+            "enforcement_date":    str(law_info.get("enforcement_date")) if law_info.get("enforcement_date") else None,
+            "effective_from":      str(law_info.get("enforcement_date")) if law_info.get("enforcement_date") else None,
+            "is_current":          True,
             "version_status_code": "ACTIVE",
-            "raw_hash":          raw_hash,
-            "updated_at":        datetime.now().isoformat(),
+            "raw_hash":            raw_hash,
+            "updated_at":          datetime.now().isoformat(),
         }
         version_res = supabase.table("law_version").insert(version_data).execute()
         version_id = version_res.data[0]["id"]
@@ -294,11 +287,11 @@ async def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase)
     # 3) law_content_raw 저장
     if is_new_version:
         content_data = {
-            "law_version_id":  version_id,
+            "law_version_id":    version_id,
             "content_type_code": "XML",
-            "raw_xml":         raw_xml,
-            "text_hash":       raw_hash,
-            "updated_at":      datetime.now().isoformat(),
+            "raw_xml":           raw_xml,
+            "text_hash":         raw_hash,
+            "updated_at":        datetime.now().isoformat(),
         }
         supabase.table("law_content_raw").insert(content_data).execute()
 
@@ -327,12 +320,12 @@ async def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase)
             # 항 저장
             for p_idx, para in enumerate(art["paragraphs"]):
                 para_data = {
-                    "article_id":             article_id,
-                    "paragraph_no":           para["paragraph_no"],
-                    "paragraph_no_sort":      p_idx + 1,
-                    "paragraph_text":         para["paragraph_text"],
-                    "paragraph_status_code":  "ACTIVE",
-                    "updated_at":             datetime.now().isoformat(),
+                    "article_id":            article_id,
+                    "paragraph_no":          para["paragraph_no"],
+                    "paragraph_no_sort":     p_idx + 1,
+                    "paragraph_text":        para["paragraph_text"],
+                    "paragraph_status_code": "ACTIVE",
+                    "updated_at":            datetime.now().isoformat(),
                 }
                 para_res = supabase.table("law_paragraph").insert(para_data).execute()
                 paragraph_id = para_res.data[0]["id"]
@@ -340,13 +333,13 @@ async def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase)
                 # 호 저장
                 for i_idx, item in enumerate(para["items"]):
                     item_data = {
-                        "paragraph_id":      paragraph_id,
-                        "item_level_code":   "HO",
-                        "item_no":           item["item_no"],
-                        "item_no_sort":      i_idx + 1,
-                        "item_text":         item["item_text"],
-                        "item_status_code":  "ACTIVE",
-                        "updated_at":        datetime.now().isoformat(),
+                        "paragraph_id":     paragraph_id,
+                        "item_level_code":  "HO",
+                        "item_no":          item["item_no"],
+                        "item_no_sort":     i_idx + 1,
+                        "item_text":        item["item_text"],
+                        "item_status_code": "ACTIVE",
+                        "updated_at":       datetime.now().isoformat(),
                     }
                     item_res = supabase.table("law_item").insert(item_data).execute()
                     item_id = item_res.data[0]["id"]
@@ -375,7 +368,6 @@ async def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase)
         "update_needed":             False,
         "job_status_code":           "SUCCESS",
         "job_message":               f"수집완료 - 조문 {article_count}개",
-        "next_check_at":             None,
         "updated_at":                datetime.now().isoformat(),
     }
     supabase.table("law_update_tracking").upsert(
@@ -383,10 +375,10 @@ async def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase)
     ).execute()
 
     return {
-        "law_id":        law_id,
-        "version_id":    version_id,
+        "law_id":         law_id,
+        "version_id":     version_id,
         "is_new_version": is_new_version,
-        "article_count": article_count,
+        "article_count":  article_count,
     }
 
 
@@ -394,13 +386,12 @@ async def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase)
 # 변경 감지 함수
 # ============================================================
 
-async def check_law_update(law_tracking: dict, supabase) -> dict:
+def check_law_update(law_tracking: dict, supabase) -> dict:
     """단일 법령 변경 감지"""
-    law_id        = law_tracking["law_id"]
-    last_mst_no   = law_tracking.get("last_source_mst_no", "")
-    last_hash     = law_tracking.get("last_source_hash", "")
+    law_id      = law_tracking["law_id"]
+    last_mst_no = law_tracking.get("last_source_mst_no", "")
+    last_hash   = law_tracking.get("last_source_hash", "")
 
-    # law_master 조회
     master = supabase.table("law_master")\
         .select("law_name, law_api_id, law_mst_no")\
         .eq("id", law_id)\
@@ -412,19 +403,16 @@ async def check_law_update(law_tracking: dict, supabase) -> dict:
 
     law_name = master.data["law_name"]
 
-    # API로 현재 버전 조회
-    list_result = await fetch_law_list(query=law_name, display=5)
+    list_result = fetch_law_list(query=law_name, display=5)
     laws = parse_law_list_xml(list_result["xml"])
 
     if not laws:
         return {"changed": False, "reason": "API 결과 없음"}
 
-    # 현재 버전과 비교
     current = laws[0]
     current_mst_no = current["law_mst_no"]
 
     if current_mst_no == last_mst_no:
-        # law_update_tracking 최종확인 시간 업데이트
         supabase.table("law_update_tracking")\
             .update({
                 "last_checked_at": datetime.now().isoformat(),
@@ -437,15 +425,13 @@ async def check_law_update(law_tracking: dict, supabase) -> dict:
             .execute()
         return {"changed": False, "law_name": law_name}
 
-    # 변경 감지됨 → 본문 수집
-    content_result = await fetch_law_content(current_mst_no)
+    content_result = fetch_law_content(current_mst_no)
     parsed = parse_law_content_xml(content_result["xml"])
     new_hash = make_hash(content_result["xml"])
 
     if new_hash == last_hash:
         return {"changed": False, "law_name": law_name, "reason": "해시 동일"}
 
-    # 변경 로그 기록
     old_version = supabase.table("law_version")\
         .select("id")\
         .eq("law_id", law_id)\
@@ -453,11 +439,9 @@ async def check_law_update(law_tracking: dict, supabase) -> dict:
         .execute()
     old_version_id = old_version.data[0]["id"] if old_version.data else None
 
-    # 새 버전 저장
     law_info = {**parsed["info"], "law_mst_no": current_mst_no}
-    save_result = await save_law_to_db(law_info, content_result["xml"], parsed["articles"], supabase)
+    save_result = save_law_to_db(law_info, content_result["xml"], parsed["articles"], supabase)
 
-    # law_change_log 기록
     changed_article_count = sum(1 for a in parsed["articles"] if a.get("is_changed"))
     supabase.table("law_change_log").insert({
         "law_id":                law_id,
@@ -471,7 +455,6 @@ async def check_law_update(law_tracking: dict, supabase) -> dict:
         "updated_at":            datetime.now().isoformat(),
     }).execute()
 
-    # law_update_tracking 업데이트
     supabase.table("law_update_tracking")\
         .update({
             "last_checked_at":           datetime.now().isoformat(),
@@ -480,7 +463,7 @@ async def check_law_update(law_tracking: dict, supabase) -> dict:
             "last_collected_version_id": save_result["version_id"],
             "update_needed":             False,
             "job_status_code":           "SUCCESS",
-            "job_message":               f"변경 감지 및 수집 완료",
+            "job_message":               "변경 감지 및 수집 완료",
             "updated_at":                datetime.now().isoformat(),
         })\
         .eq("law_id", law_id)\
@@ -501,18 +484,15 @@ async def check_law_update(law_tracking: dict, supabase) -> dict:
 
 @router.post("/collect/all")
 async def collect_all_laws(background_tasks: BackgroundTasks):
-    """
-    전체 법령 수집 (최초 1회 실행)
-    law_collection_target 테이블의 모든 법령을 순차 수집
-    """
+    """전체 법령 수집 (최초 1회)"""
     background_tasks.add_task(_run_collect_all)
     return {
-        "status": "started",
-        "message": "전체 법령 수집이 백그라운드에서 시작됐습니다. /law-collector/status 에서 진행 상황을 확인하세요."
+        "status":  "started",
+        "message": "전체 법령 수집이 백그라운드에서 시작됐습니다. /law-collector/status 에서 확인하세요."
     }
 
 
-async def _run_collect_all():
+def _run_collect_all():
     """전체 수집 백그라운드 작업"""
     supabase = get_supabase()
     targets = supabase.table("law_collection_target")\
@@ -526,22 +506,19 @@ async def _run_collect_all():
 
     for target in targets.data:
         try:
-            # API로 법령 검색
-            list_result = await fetch_law_list(query=target["law_name"], display=5)
+            list_result = fetch_law_list(query=target["law_name"], display=5)
             laws = parse_law_list_xml(list_result["xml"])
 
             if not laws:
                 results["skipped"] += 1
                 continue
 
-            # 법령명 정확히 일치하는 것 선택
             matched = next(
                 (l for l in laws if target["law_name"] in l["law_name"]),
                 laws[0]
             )
 
-            # 본문 수집
-            content_result = await fetch_law_content(matched["law_mst_no"])
+            content_result = fetch_law_content(matched["law_mst_no"])
             parsed = parse_law_content_xml(content_result["xml"])
 
             law_info = {
@@ -551,22 +528,25 @@ async def _run_collect_all():
                 "revision_type":  matched.get("revision_type", ""),
             }
 
-            await save_law_to_db(law_info, content_result["xml"], parsed["articles"], supabase)
+            save_law_to_db(law_info, content_result["xml"], parsed["articles"], supabase)
             results["success"] += 1
+            print(f"수집완료: {target['law_name']}")
 
         except Exception as e:
             results["failed"] += 1
             results["errors"].append({"law_name": target["law_name"], "error": str(e)})
+            print(f"수집실패: {target['law_name']} - {str(e)}")
 
+    print(f"전체수집 완료: {results}")
     return results
 
 
 @router.post("/collect/{law_name}")
 async def collect_single_law(law_name: str):
-    import traceback
+    """단건 법령 수집"""
     supabase = get_supabase()
     try:
-        list_result = await fetch_law_list(query=law_name, display=5)
+        list_result = fetch_law_list(query=law_name, display=5)
         laws = parse_law_list_xml(list_result["xml"])
 
         if not laws:
@@ -577,7 +557,7 @@ async def collect_single_law(law_name: str):
             laws[0]
         )
 
-        content_result = await fetch_law_content(matched["law_mst_no"])
+        content_result = fetch_law_content(matched["law_mst_no"])
         parsed = parse_law_content_xml(content_result["xml"])
 
         law_info = {
@@ -587,7 +567,7 @@ async def collect_single_law(law_name: str):
             "revision_type":  matched.get("revision_type", ""),
         }
 
-        result = await save_law_to_db(law_info, content_result["xml"], parsed["articles"], supabase)
+        result = save_law_to_db(law_info, content_result["xml"], parsed["articles"], supabase)
 
         return {
             "status":         "success",
@@ -601,16 +581,13 @@ async def collect_single_law(law_name: str):
         raise
     except Exception as e:
         error_detail = traceback.format_exc()
-        print(f"ERROR: {error_detail}")  # Railway 로그에 출력
+        print(f"ERROR: {error_detail}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/check-updates")
 async def check_all_updates(background_tasks: BackgroundTasks):
-    """
-    전체 변경 감지 (증분 수집 - 스케줄러에서 호출)
-    law_update_tracking 의 모든 법령 변경 여부 확인
-    """
+    """전체 변경 감지 (증분 수집)"""
     background_tasks.add_task(_run_check_updates)
     return {
         "status":  "started",
@@ -618,18 +595,16 @@ async def check_all_updates(background_tasks: BackgroundTasks):
     }
 
 
-async def _run_check_updates():
+def _run_check_updates():
     """변경 감지 백그라운드 작업"""
     supabase = get_supabase()
-    trackings = supabase.table("law_update_tracking")\
-        .select("*")\
-        .execute()
+    trackings = supabase.table("law_update_tracking").select("*").execute()
 
     results = {"checked": 0, "changed": 0, "errors": []}
 
     for tracking in trackings.data:
         try:
-            result = await check_law_update(tracking, supabase)
+            result = check_law_update(tracking, supabase)
             results["checked"] += 1
             if result.get("changed"):
                 results["changed"] += 1
@@ -644,7 +619,6 @@ async def get_collection_status():
     """수집 상태 전체 조회"""
     supabase = get_supabase()
 
-    # 전체 수집 현황
     total     = supabase.table("law_master").select("id", count="exact").execute()
     collected = supabase.table("law_update_tracking").select("id", count="exact").execute()
     changed   = supabase.table("law_change_log").select("id", count="exact").execute()
@@ -653,7 +627,6 @@ async def get_collection_status():
         .eq("parse_status_code", "PENDING")\
         .execute()
 
-    # 최근 수집 실패 목록
     failed = supabase.table("law_update_tracking")\
         .select("law_id, job_message, updated_at")\
         .eq("job_status_code", "FAILED")\
@@ -662,9 +635,9 @@ async def get_collection_status():
         .execute()
 
     return {
-        "collected_law_count":    total.count,
-        "tracked_law_count":      collected.count,
-        "change_log_count":       changed.count,
-        "pending_parse_count":    pending.count,
-        "recent_failed":          failed.data,
+        "collected_law_count":  total.count,
+        "tracked_law_count":    collected.count,
+        "change_log_count":     changed.count,
+        "pending_parse_count":  pending.count,
+        "recent_failed":        failed.data,
     }
