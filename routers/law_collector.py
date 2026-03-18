@@ -547,6 +547,42 @@ async def collect_single_law(law_name: str):
     supabase = get_supabase()
     try:
         list_result = fetch_law_list(query=law_name, display=5)
+        laws = parse_law_list_xml(list_result["xml"])
+
+        if not laws:
+            raise HTTPException(status_code=404, detail=f"법령을 찾을 수 없습니다: {law_name}")
+
+        matched = next(
+            (l for l in laws if law_name in l["law_name"]),
+            laws[0]
+        )
+
+        content_result = fetch_law_content(matched["law_mst_no"])
+        parsed = parse_law_content_xml(content_result["xml"])
+
+        law_info = {
+            **parsed["info"],
+            "law_mst_no":     matched["law_mst_no"],
+            "law_name_short": matched.get("law_name_short", ""),
+            "revision_type":  matched.get("revision_type", ""),
+        }
+
+        result = save_law_to_db(law_info, content_result["xml"], parsed["articles"], supabase)
+
+        return {
+            "status":         "success",
+            "law_name":       matched["law_name"],
+            "law_mst_no":     matched["law_mst_no"],
+            "is_new_version": result["is_new_version"],
+            "article_count":  result["article_count"],
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_detail = traceback.format_exc()
+        print(f"ERROR: {error_detail}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/check-updates")
