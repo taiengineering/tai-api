@@ -543,12 +543,10 @@ def _run_collect_all():
 
 @router.post("/collect/{law_name}")
 async def collect_single_law(law_name: str):
-    import requests as req
+    """단건 법령 수집"""
+    supabase = get_supabase()
     try:
-        ip_check = req.get("https://api.ipify.org", timeout=5).text
-    except:
-        ip_check = "확인실패"
-    raise HTTPException(status_code=200, detail=f"Railway 실제 IP: {ip_check}")
+        list_result = fetch_law_list(query=law_name, display=5)
 
 
 @router.post("/check-updates")
