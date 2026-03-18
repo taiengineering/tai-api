@@ -31,13 +31,5 @@ def root():
     return {"message": "TAI API running"}
 ```
 
----
 
-## requirements.txt 전체 내용
-```
-fastapi
-uvicorn
-supabase
-httpx
-python-dotenv
-apscheduler
+
