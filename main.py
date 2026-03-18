@@ -29,7 +29,3 @@ app.include_router(law_collector_router)
 @app.get("/")
 def root():
     return {"message": "TAI API running"}
-```
-
-
-
