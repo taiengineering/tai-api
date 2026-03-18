@@ -563,9 +563,8 @@ async def _run_collect_all():
 
 @router.post("/collect/{law_name}")
 async def collect_single_law(law_name: str):
-    """단건 법령 수집"""
+    import traceback
     supabase = get_supabase()
-
     try:
         list_result = await fetch_law_list(query=law_name, display=5)
         laws = parse_law_list_xml(list_result["xml"])
@@ -591,16 +590,18 @@ async def collect_single_law(law_name: str):
         result = await save_law_to_db(law_info, content_result["xml"], parsed["articles"], supabase)
 
         return {
-            "status":        "success",
-            "law_name":      matched["law_name"],
-            "law_mst_no":    matched["law_mst_no"],
+            "status":         "success",
+            "law_name":       matched["law_name"],
+            "law_mst_no":     matched["law_mst_no"],
             "is_new_version": result["is_new_version"],
-            "article_count": result["article_count"],
+            "article_count":  result["article_count"],
         }
 
     except HTTPException:
         raise
     except Exception as e:
+        error_detail = traceback.format_exc()
+        print(f"ERROR: {error_detail}")  # Railway 로그에 출력
         raise HTTPException(status_code=500, detail=str(e))
 
 
