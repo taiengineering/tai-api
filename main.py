@@ -13,6 +13,7 @@ from routers.inspection_sets import router as inspection_sets_router
 from routers.work_schedules import router as work_schedules_router
 from routers.schedule_engine import router as schedule_engine_router
 from routers.law_collector import router as law_collector_router
+from routers.legal_engine import router as legal_engine_router
 
 app = FastAPI(
     title="TAI API",
@@ -30,6 +31,7 @@ app.include_router(teams_router)
 app.include_router(roles_router)
 app.include_router(users_router)
 app.include_router(contracts_router)
+app.include_router(legal_engine_router)
 
 # 공통 코드
 app.include_router(system_codes_router)
