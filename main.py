@@ -54,6 +54,7 @@ app.include_router(legal_engine_router)
 app.include_router(auth_router) 
 app.include_router(contacts_router)
 app.include_router(companies_router)
+app.include_router(system_codes_router)
 # 공통 코드
 
 
