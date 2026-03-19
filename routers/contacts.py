@@ -56,7 +56,7 @@ class ContactUpdate(BaseModel):
     sort_order:   Optional[int] = None
 
 class FileUrlCreate(BaseModel):
-    file_type:    str               -- company_file_type 전역변수
+    file_type:    str               # company_file_type 전역변수
     file_name:    str
     file_url:     Optional[str] = None
     contract_url: Optional[str] = None
