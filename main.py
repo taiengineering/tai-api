@@ -17,8 +17,6 @@ from routers.legal_engine import router as legal_engine_router
 from routers.auth import router as auth_router
 
 
-
-app.include_router(auth_router)
 app = FastAPI(
     title="TAI API",
     version="1.0",
@@ -36,6 +34,7 @@ app.include_router(roles_router)
 app.include_router(users_router)
 app.include_router(contracts_router)
 app.include_router(legal_engine_router)
+app.include_router(auth_router) 
 
 # 공통 코드
 app.include_router(system_codes_router)
