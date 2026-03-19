@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from routers.companies import router as companies_router
 from routers.factories import router as factories_router
 from routers.buildings import router as buildings_router
@@ -26,6 +27,20 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+# CORS 설정
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://admin.taieng.co.kr",
+        "https://taieng-admin.pages.dev",
+        "http://127.0.0.1:5500",
+        "http://localhost:5500"
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # 조직/회원
 app.include_router(companies_router)
 app.include_router(factories_router)
@@ -38,9 +53,9 @@ app.include_router(contracts_router)
 app.include_router(legal_engine_router)
 app.include_router(auth_router) 
 app.include_router(contacts_router)
-
+app.include_router(companies_router)
 # 공통 코드
-app.include_router(system_codes_router)
+
 
 # 설비/점검
 app.include_router(assets_router)
