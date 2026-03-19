@@ -1,5 +1,6 @@
 # routers/system_codes.py
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
+from typing import List
 from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/system-codes", tags=["system_codes"])
@@ -17,12 +18,13 @@ def get_all_codes():
         .execute().data
 
 
-@router.get("/multi/{categories}")
-def get_codes_by_categories(categories: str):
+@router.get("/multi")
+def get_codes_by_categories(
+    categories: str = Query(..., description="쉼표로 구분된 카테고리 목록. 예: user_role,user_status,company_type")
+):
     """
     여러 카테고리 한번에 조회
-    예: /system-codes/multi/user_role,user_status,company_type
-    ⚠️ 반드시 /{category} 보다 위에 위치해야 함
+    호출: GET /system-codes/multi?categories=user_role,user_status
     """
     supabase = get_supabase()
     category_list = [c.strip() for c in categories.split(",")]
@@ -52,7 +54,10 @@ def get_codes_by_categories(categories: str):
 
 @router.get("/{category}")
 def get_codes_by_category(category: str):
-    """카테고리별 시스템 코드 단건 조회"""
+    """
+    카테고리별 시스템 코드 단건 조회
+    호출: GET /system-codes/user_role
+    """
     supabase = get_supabase()
     return supabase.table("system_codes")\
         .select("code, code_name, description, sort_order")\
