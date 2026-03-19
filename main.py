@@ -17,6 +17,7 @@ from routers.law_collector import router as law_collector_router
 from routers.legal_engine import router as legal_engine_router
 from routers.auth import router as auth_router
 from routers.contacts import router as contacts_router
+from routers.notifications import router as notifications_router
 
 
 
@@ -55,6 +56,8 @@ app.include_router(auth_router)
 app.include_router(contacts_router)
 app.include_router(companies_router)
 app.include_router(system_codes_router)
+app.include_router(notifications_router)
+
 # 공통 코드
 
 
