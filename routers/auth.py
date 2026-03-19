@@ -117,14 +117,13 @@ def register(req: RegisterRequest):
 
     # 1. Supabase Auth 계정 생성
     try:
-        auth_res = supabase.auth.sign_up({
-            "email":    req.email,
-            "password": req.password,
-            "options": {
-                "data": {
-                    "name":      req.name,
-                    "role_code": req.role_code,
-                }
+        auth_res = supabase.auth.admin.create_user({
+            "email":         req.email,
+            "password":      req.password,
+            "email_confirm": True,
+            "user_metadata": {
+                "name":      req.name,
+                "role_code": req.role_code,
             }
         })
     except Exception as e:
