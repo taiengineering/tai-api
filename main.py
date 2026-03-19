@@ -14,7 +14,11 @@ from routers.work_schedules import router as work_schedules_router
 from routers.schedule_engine import router as schedule_engine_router
 from routers.law_collector import router as law_collector_router
 from routers.legal_engine import router as legal_engine_router
+from routers.auth import router as auth_router
 
+
+
+app.include_router(auth_router)
 app = FastAPI(
     title="TAI API",
     version="1.0",
