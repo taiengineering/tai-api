@@ -21,6 +21,7 @@ from routers.schedule_engine import router as schedule_engine_router
 from routers.law_collector import router as law_collector_router
 from routers.legal_engine import router as legal_engine_router
 from routers.ksic_engine import router as ksic_engine_router
+from routers.factory_process import router as factory_process_router
 
 app = FastAPI(
     title="TAI API",
@@ -72,6 +73,7 @@ app.include_router(assets_router, prefix="/equipment-assets", tags=["설비자�
 app.include_router(inspection_sets_router, prefix="/inspection-sets", tags=["점검세트"])
 app.include_router(work_schedules_router, prefix="/work-schedules", tags=["작업일정"])
 app.include_router(schedule_engine_router, prefix="/schedule-engine", tags=["일정엔진"])
+app.include_router(factory_process_router, prefix="/factory-process", tags=["공정관리"])
 
 # ─── 법령 ───────────────────────────────────────────────────
 app.include_router(law_collector_router, prefix="/law-collector", tags=["법령수집"])
