@@ -20,6 +20,7 @@ from routers.work_schedules import router as work_schedules_router
 from routers.schedule_engine import router as schedule_engine_router
 from routers.law_collector import router as law_collector_router
 from routers.legal_engine import router as legal_engine_router
+from routers import ksic_engine
 
 app = FastAPI(
     title="TAI API",
@@ -75,7 +76,7 @@ app.include_router(schedule_engine_router, prefix="/schedule-engine", tags=["일
 # ─── 법령 ───────────────────────────────────────────────────
 app.include_router(law_collector_router, prefix="/law-collector", tags=["법령수집"])
 app.include_router(legal_engine_router, prefix="/legal-engine", tags=["법령엔진"])
-
+app.include_router(ksic_engine.router, prefix="/ksic-engine")
 
 @app.get("/", tags=["헬스체크"])
 def root():
