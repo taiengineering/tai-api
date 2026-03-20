@@ -9,7 +9,7 @@ from db.supabase_client import get_supabase
 from datetime import datetime
 import traceback
 
-router = APIRouter(prefix="/legal-engine", tags=["legal_engine"])
+router = APIRouter(tags=["legal_engine"])
 
 ENGINE_VERSION = "1.0.0"
 
@@ -214,14 +214,18 @@ def apply_legal_rules(factory_id: str, supabase) -> dict:
 
         # 선임 필요
         if rule.get("appointment_required"):
-            results["appointment_required"].append({
-                "rule_id":                rule.get("rule_id"),
-                "law_name":               rule.get("law_name"),
-                "law_article":            rule.get("law_article"),
-                "appointment_target":     rule.get("appointment_target_code"),
-                "qualification_code":     rule.get("appointment_qualification_code"),
-                "qualification_level":    rule.get("appointment_qualification_level_code"),
-            })
+    results["appointment_required"].append({
+        "rule_id":                       rule.get("rule_id"),
+        "law_name":                      rule.get("law_name"),
+        "law_article":                   rule.get("law_article"),
+        "appointment_target":            rule.get("appointment_target_code"),
+        "qualification_code":            rule.get("appointment_qualification_code"),
+        "qualification_level":           rule.get("appointment_qualification_level_code"),
+        "qualification_level_operator":  rule.get("appointment_qualification_level_operator_code"),
+        "count_value":                   rule.get("appointment_count_value"),
+        "count_unit":                    rule.get("appointment_count_unit"),
+        "count_operator":                rule.get("appointment_count_operator"),
+    })
 
         # 점검 필요
         if rule.get("inspection_required"):
