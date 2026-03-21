@@ -22,6 +22,8 @@ from routers.law_collector import router as law_collector_router
 from routers.legal_engine import router as legal_engine_router
 from routers.ksic_engine import router as ksic_engine_router
 from routers.factory_process import router as factory_process_router
+from routers.building_register import router as building_register_router
+
 
 app = FastAPI(
     title="TAI API",
@@ -58,7 +60,7 @@ app.include_router(contacts_router, tags=["담당자/파일"])
 
 # ─── 계약 ───────────────────────────────────────────────────
 app.include_router(contracts_router, tags=["견적/계약"])
-
+app.include_router(building_register_router, prefix="/building-register", tags=["건축물대장"])
 # ─── 전역변수 ─────────────────────────────────────────────────
 app.include_router(system_codes_router, prefix="/system-codes", tags=["전역변수"])
 
