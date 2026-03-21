@@ -1,383 +1,310 @@
-# routers/legal_engine.py
-# 법령 적용 판정 엔진
-# - POST /legal-engine/apply/{factory_id}  법령 적용 판정 실행
-# - GET  /legal-engine/result/{factory_id} 판정 결과 조회
-# - GET  /legal-engine/summary/{factory_id} 판정 요약
+# routers/legal_engine.py  v2.0.0
+# legal_engine + ksic_engine 통합 판정
+#
+# 판정 순서:
+#   1. factories 조건 기반 룰 판정 (building_area, employee_count 등)
+#   2. 등록된 equipment_assets 기반 룰 판정
+#   3. KSIC → 공정 → 설비 추천 기반 룰 판정 (미등록 설비 포함)
+#   4. 결과 통합 (중복 제거, 출처 표시)
 
 from fastapi import APIRouter, HTTPException
 from db.supabase_client import get_supabase
 from datetime import datetime
-import traceback
+from typing import Optional, List, Dict, Any
 
 router = APIRouter(tags=["legal_engine"])
 
-ENGINE_VERSION = "1.1.0"
+ENGINE_VERSION = "2.0.0"
+
+# ============================================================
+# facility_name_std → equipment_type_code 매핑
+# ============================================================
+FACILITY_TO_EQUIPMENT_TYPE: Dict[str, str] = {
+    "변압기":"001","수변전반":"001","수배전반":"006","배전반":"006",
+    "분전반":"007","전동기":"008","모터":"008","UPS":"009",
+    "무정전전원장치":"009","비상발전기":"010","발전기":"010",
+    "차단기":"002","기중차단기":"002","진공차단기":"003",
+    "배선용차단기":"004","누전차단기":"005",
+    "펌프":"011","압축기":"012","컴프레서":"012","열교환기":"013",
+    "보일러":"014","증기보일러":"014","온수보일러":"014",
+    "탱크":"015","저장탱크":"015","밸브":"016","배관":"017",
+    "팬":"018","송풍기":"018","냉동기":"019","냉장기":"019","칠러":"020",
+    "크레인":"021","천장크레인":"021","이동식크레인":"021",
+    "호이스트":"022","프레스":"023","유압프레스":"023",
+    "컨베이어":"024","컨베이어벨트":"024",
+    "승강기":"025","엘리베이터":"025","에스컬레이터":"026",
+    "가스탱크":"027","고압가스탱크":"027","LPG탱크":"028",
+    "화학물질탱크":"029","유류탱크":"030","경유탱크":"030",
+    "스프링클러":"031","자동화재탐지":"032","화재감지기":"032",
+    "소화기":"033","소화전":"034","옥내소화전":"034",
+    "배기시설":"035","집진기":"036","집진장치":"036",
+    "오수처리시설":"037","하수처리시설":"037","압력용기":"038",
+    "냉동냉각기":"039","냉각탑":"039","공조기":"039","공조장치":"039",
+    # 추가 매핑
+    "프레스설비":"023","절단기":"023","절곡기":"023","노칭기":"023",
+    "슬리터":"023","권취기":"023","적층기":"023","실링설비":"023",
+    "물류자동화설비":"024","물류설비":"024",
+    "건조설비":"014","건조기":"014","가열설비":"014","에이징 설비":"014",
+    "제품저장탱크":"015","버퍼탱크":"015","혼합탱크":"015","원료저장탱크":"015",
+    "위험물 옥외탱크저장소":"015","고압가스 저장탱크":"027",
+    "고압가스 저장시설":"027","산업용배관망":"017","위험물 이송배관":"017",
+    "위험물 밸브":"016","공정펌프":"011","이송펌프":"011","급수펌프":"011",
+    "공정압축기":"012","압축공기공급설비":"012",
+    "접지설비":"001","전력계측장치":"001","전력감시장치":"001",
+    "가스감지설비":"032","화재감지설비":"032","가스누출감지기":"032",
+    "위험물 방유제":"030","연료저장탱크":"030",
+    "위험물 이송설비":"029","위험물 간이저장소":"029",
+    "도장부스":"036","흡입설비":"036","국소배기장치":"036",
+    "산업용배수설비":"037","폐수처리설비":"037",
+    "냉각수공급설비":"039","질소공급설비":"012","진공공급설비":"012",
+    "산업용로봇":"023","사출성형기":"023","분쇄설비":"012",
+    "혼합설비":"011","교반기":"011","원심분리기":"011",
+    "반응기":"015","증류탑":"015","흡수탑":"015",
+    "생산라인설비":"024","전극 코팅기":"023","전극 압연기":"023",
+    "용접전원장치":"008","산업안전설비":"034",
+    "유틸리티모니터링설비":"001","유틸리티제어설비":"001",
+    "용수공급설비":"011","산업용크레인":"021","갠트리크레인":"021",
+    "전동호이스트":"022","산세설비":"015","샌드블라스트 설비":"036",
+}
+
+def get_equipment_type(name: str) -> Optional[str]:
+    if not name:
+        return None
+    if name in FACILITY_TO_EQUIPMENT_TYPE:
+        return FACILITY_TO_EQUIPMENT_TYPE[name]
+    for key, code in FACILITY_TO_EQUIPMENT_TYPE.items():
+        if key in name or name in key:
+            return code
+    return None
+
 
 # ============================================================
 # 조건 비교 헬퍼
 # ============================================================
-
-def compare(factory_value, operator: str, rule_value) -> bool:
-    """조건 비교 함수 (gte/gt/lte/lt/eq/neq)"""
-    if factory_value is None:
-        return False
+def compare(value: Any, operator: str, threshold: Any) -> bool:
     try:
-        fv = float(factory_value)
-        rv = float(rule_value)
+        v = float(value)
+        t = float(threshold)
     except (TypeError, ValueError):
-        if operator == "eq":
-            return str(factory_value) == str(rule_value)
-        if operator == "neq":
-            return str(factory_value) != str(rule_value)
+        v = value
+        t = threshold
+    op_map = {
+        "gte": v >= t, "gt": v > t,
+        "lte": v <= t, "lt": v < t,
+        "eq":  v == t, "neq": v != t,
+    }
+    return op_map.get(operator, False)
+
+
+def check_factory_condition(rule: dict, factory: dict) -> bool:
+    """factories 컬럼 기반 조건 판정"""
+    code = rule.get("condition_code")
+    op   = rule.get("condition_operator_code")
+    val  = rule.get("condition_value")
+    if not code or not op or val is None:
+        return True
+    factory_val = factory.get(code)
+    if factory_val is None:
         return False
-
-    if operator == "gte": return fv >= rv
-    if operator == "gt":  return fv > rv
-    if operator == "lte": return fv <= rv
-    if operator == "lt":  return fv < rv
-    if operator == "eq":  return fv == rv
-    if operator == "neq": return fv != rv
-    return False
+    return compare(factory_val, op, val)
 
 
-# ============================================================
-# 시설 조건값 추출
-# ============================================================
-
-def extract_factory_conditions(factory: dict, facility_condition: list) -> dict:
-    """
-    factory 테이블 + facility_condition 테이블에서
-    법령 판단에 필요한 조건값을 추출
-    """
-    conditions = {}
-
-    field_map = {
-        "employee_count":           factory.get("employee_count"),
-        "contractor_count":         factory.get("contractor_count"),
-        "building_area":            factory.get("building_area"),
-        "floor_count":              factory.get("floor_count"),
-        "underground_floor_count":  factory.get("underground_floor_count"),
-        "electrical_capacity_kw":   factory.get("electrical_capacity_kw"),
-        "transformer_capacity_kva": factory.get("transformer_capacity_kva"),
-        "gas_capacity_kg":          factory.get("gas_capacity_kg"),
-        "gas_capacity_m3":          factory.get("gas_capacity_m3"),
-        "boiler_capacity_kw":       factory.get("boiler_capacity_kw"),
-        "boiler_capacity_th":       factory.get("boiler_capacity_th"),
-        "elevator_count":           factory.get("elevator_count"),
-        "annual_energy_toe":        factory.get("annual_energy_toe"),
-        "construction_amount":      factory.get("construction_amount"),
-        "is_factory_registered":    factory.get("is_factory_registered"),
-        "is_hazardous_material":    factory.get("is_hazardous_material"),
-        "is_multi_use":             factory.get("is_multi_use"),
-    }
-    conditions.update(field_map)
-
-    for fc in facility_condition:
-        code = fc.get("condition_code")
-        val  = fc.get("condition_value")
-        if code and val is not None:
-            conditions[code] = val
-
-    return conditions
+def check_equipment_condition(rule: dict, equipment_type_codes: set) -> bool:
+    """설비 유형 기반 조건 판정"""
+    eq_code = rule.get("equipment_type_code")
+    if not eq_code:
+        return True  # 설비 조건 없음 → 통과
+    return eq_code in equipment_type_codes
 
 
 # ============================================================
-# 설비 조건 판정 (equipment_assets 기반)
+# KSIC → 설비 추천 (process_equipment_map 기반)
 # ============================================================
+KSIC_MATCH_BANDS = ["MUST", "CORE", "CORE_PLUS"]
 
-def check_equipment_condition(rule: dict, equipment_map: dict) -> tuple[bool, dict]:
+def get_ksic_equipment_types(factory: dict, supabase) -> Dict[str, str]:
     """
-    룰에 equipment_type_code가 있을 경우
-    equipment_assets에서 해당 설비 존재 여부 + 용량 조건 비교
-
-    Returns:
-        (is_applicable, matched_info)
-        matched_info: 어떤 설비가 매칭됐는지 정보
+    KSIC 코드 기반 추천 설비 → equipment_type_code 딕셔너리 반환
+    {facility_name: equipment_type_code}
     """
-    equip_type = rule.get("equipment_type_code")
-    if not equip_type:
-        return None, {}  # 설비 조건 없음 → factories 조건으로 판정
+    ksic_code = factory.get("ksic_code")
+    if not ksic_code:
+        return {}
 
-    # 해당 설비 유형의 equipment_assets 목록
-    assets = equipment_map.get(equip_type, [])
-    if not assets:
-        return False, {"reason": f"설비 유형 {equip_type} 미등록"}
+    # 등록된 공정 확인
+    proc_res = supabase.table("factory_process")\
+        .select("process_id")\
+        .eq("factory_id", factory["id"])\
+        .eq("is_active", True)\
+        .execute()
+    process_ids = [p["process_id"] for p in (proc_res.data or [])]
 
-    # 설비 용량 조건 확인
-    equip_cond_code  = rule.get("equipment_condition_code")
-    equip_cond_op    = rule.get("equipment_condition_operator")
-    equip_cond_value = rule.get("equipment_condition_value")
+    # 공정 기반 설비 조회
+    if process_ids:
+        equip_res = supabase.table("process_equipment_map")\
+            .select("facility_name_std, match_band, match_score")\
+            .in_("process_id", process_ids)\
+            .in_("match_band", KSIC_MATCH_BANDS)\
+            .order("match_score", desc=True)\
+            .limit(200).execute()
+    else:
+        # KSIC 직접 조회 (공정 미등록 시 fallback)
+        equip_res = supabase.table("process_equipment_map")\
+            .select("facility_name_std, match_band, match_score")\
+            .eq("industry_code_full", ksic_code)\
+            .in_("match_band", KSIC_MATCH_BANDS)\
+            .order("match_score", desc=True)\
+            .limit(200).execute()
 
-    if not equip_cond_code or equip_cond_op is None or equip_cond_value is None:
-        # 용량 조건 없음 → 설비 존재 자체로 적용
-        matched = assets[0]
-        return True, {
-            "asset_id":   matched.get("id"),
-            "asset_name": matched.get("asset_name"),
-            "match_type": "existence",
-        }
+        if not equip_res.data:
+            # 3자리 코드로 재시도
+            equip_res = supabase.table("process_equipment_map")\
+                .select("facility_name_std, match_band, match_score")\
+                .like("industry_code_full", f"{ksic_code[:3]}%")\
+                .in_("match_band", KSIC_MATCH_BANDS)\
+                .order("match_score", desc=True)\
+                .limit(200).execute()
 
-    # 용량 조건 비교 — 가장 큰 용량의 설비로 판정
-    best_match = None
-    for asset in assets:
-        if not asset.get("is_operating", True):
+    # 중복 제거 후 equipment_type_code 매핑
+    result = {}
+    seen_names = set()
+    for e in equip_res.data or []:
+        name = e.get("facility_name_std", "")
+        if not name or name in seen_names:
             continue
-        asset_value = asset.get(equip_cond_code) or asset.get("capacity_value")
-        if compare(asset_value, equip_cond_op, equip_cond_value):
-            if best_match is None:
-                best_match = asset
-            else:
-                # 더 큰 용량 우선
-                try:
-                    if float(asset_value or 0) > float(
-                        best_match.get(equip_cond_code) or best_match.get("capacity_value") or 0
-                    ):
-                        best_match = asset
-                except (TypeError, ValueError):
-                    pass
+        seen_names.add(name)
+        eq_type = get_equipment_type(name)
+        if eq_type:
+            result[name] = eq_type
 
-    if best_match:
-        return True, {
-            "asset_id":     best_match.get("id"),
-            "asset_name":   best_match.get("asset_name"),
-            "asset_value":  best_match.get(equip_cond_code) or best_match.get("capacity_value"),
-            "match_type":   "capacity",
-        }
-
-    return False, {
-        "reason": f"설비 {equip_type} 존재하나 조건 미충족 ({equip_cond_op} {equip_cond_value})"
-    }
+    return result
 
 
 # ============================================================
-# 핵심 엔진 함수
+# 메인 판정 함수
 # ============================================================
+def apply_rules(factory: dict, supabase) -> dict:
+    factory_id = factory["id"]
+    now = datetime.now().isoformat()
 
-def apply_legal_rules(factory_id: str, supabase) -> dict:
-    """
-    factory_id 기반으로 법령 적용 판정
-    Returns: 판정 결과 딕셔너리
-    """
-
-    # 1) factory 데이터 로드
-    factory_res = supabase.table("factories")\
-        .select("*")\
-        .eq("id", factory_id)\
-        .single()\
-        .execute()
-
-    if not factory_res.data:
-        raise HTTPException(status_code=404, detail="사업장을 찾을 수 없습니다")
-
-    factory = factory_res.data
-
-    # 2) facility_condition 로드
-    fc_res = supabase.table("facility_condition")\
-        .select("*")\
-        .eq("factory_id", factory_id)\
-        .execute()
-    facility_condition = fc_res.data or []
-
-    # 3) equipment_assets 로드 — 설비 유형별 그룹화
-    equip_res = supabase.table("equipment_assets")\
-        .select("*")\
-        .eq("factory_id", factory_id)\
-        .execute()
-    equipment_assets = equip_res.data or []
-
-    # equipment_type_code 기준으로 그룹화
-    equipment_map: dict[str, list] = {}
-    for asset in equipment_assets:
-        etype = asset.get("equipment_type_code")
-        if etype:
-            equipment_map.setdefault(etype, []).append(asset)
-
-    # 4) 조건값 추출
-    conditions = extract_factory_conditions(factory, facility_condition)
-
-    # 5) 전체 법령 룰 로드
+    # 1. 전체 활성 룰 로드
     rules_res = supabase.table("master_building_legal_rules")\
         .select("*")\
         .eq("is_active", True)\
-        .order("priority_no")\
         .execute()
-    rules = rules_res.data or []
+    all_rules = rules_res.data or []
 
-    # 6) 기존 legal_applications 삭제 (재판정)
-    supabase.table("legal_applications")\
-        .delete()\
+    # 2. 등록된 설비 유형 조회
+    eq_res = supabase.table("equipment_assets")\
+        .select("equipment_type_code, asset_name")\
         .eq("factory_id", factory_id)\
         .execute()
+    registered_type_codes = set(
+        e["equipment_type_code"] for e in (eq_res.data or [])
+        if e.get("equipment_type_code")
+    )
 
-    # 7) 각 룰 판정
-    results = {
-        "factory_id":           factory_id,
-        "factory_name":         factory.get("name", ""),
-        "evaluated_at":         datetime.now().isoformat(),
-        "engine_version":       ENGINE_VERSION,
-        "total_rules":          len(rules),
-        "applicable_count":     0,
-        "appointment_required": [],
-        "inspection_required":  [],
-        "report_required":      [],
-        "penalty_required":     [],
-        "not_applicable":       [],
-    }
+    # 3. KSIC 기반 추천 설비
+    ksic_equipment = get_ksic_equipment_types(factory, supabase)
+    ksic_type_codes = set(ksic_equipment.values())
 
-    apply_logs = []
+    # 4. 통합 설비 유형 (등록 + KSIC 추천)
+    all_type_codes = registered_type_codes | ksic_type_codes
 
-    for rule in rules:
-        # 건물용도 필터
-        building_use_type_code = rule.get("building_use_type_code")
-        if building_use_type_code:
-            if factory.get("building_use_type_code") != building_use_type_code:
-                continue
+    # 5. 룰별 판정
+    applicable      = []
+    not_applicable  = []
 
-        # 업종 필터
-        business_type_code = rule.get("business_type_code")
-        if business_type_code:
-            factory_business = factory.get("business_type_code") or factory.get("industry_type_code")
-            if factory_business != business_type_code:
-                continue
+    for rule in all_rules:
+        rule_id  = rule.get("rule_id")
+        eq_code  = rule.get("equipment_type_code")
 
-        # ── 판정 로직 ──────────────────────────────────────────
-        equip_type = rule.get("equipment_type_code")
+        # 조건 판정
+        factory_ok   = check_factory_condition(rule, factory)
+        equipment_ok = check_equipment_condition(rule, all_type_codes)
 
-        if equip_type:
-            # [설비 기반 판정]
-            # 설비 조건 체크 → 맞으면 적용, 틀리면 미적용
-            is_applicable, equip_match = check_equipment_condition(rule, equipment_map)
-
-            if is_applicable:
-                condition_code     = rule.get("condition_code")
-                condition_operator = rule.get("condition_operator_code")
-                condition_value    = rule.get("condition_value")
-                factory_value      = conditions.get(condition_code)
-
-                # factories 조건도 함께 있으면 AND 조건으로 추가 검증
-                if condition_code and condition_value is not None:
-                    is_applicable = compare(factory_value, condition_operator, condition_value)
-
-            matched_conditions = {
-                "match_source":       "equipment",
-                "equipment_type":     equip_type,
-                "equipment_match":    equip_match,
-                "matched":            is_applicable,
-            }
-        else:
-            # [시설 기반 판정]
-            condition_code     = rule.get("condition_code")
-            condition_operator = rule.get("condition_operator_code")
-            condition_value    = rule.get("condition_value")
-            factory_value      = conditions.get(condition_code)
-            is_applicable      = compare(factory_value, condition_operator, condition_value)
-
-            matched_conditions = {
-                "match_source":       "factory",
-                "condition_code":     condition_code,
-                "condition_operator": condition_operator,
-                "condition_value":    str(condition_value),
-                "factory_value":      str(factory_value),
-                "matched":            is_applicable,
-            }
-        # ────────────────────────────────────────────────────────
-
-        # legal_applications 저장
-        log_data = {
-            "factory_id":              factory_id,
-            "rule_id":                 rule.get("id"),
-            "rule_code":               rule.get("rule_id"),
-            "law_name":                rule.get("law_name"),
-            "law_article":             rule.get("law_article"),
-            "rule_type_code":          rule.get("rule_type_code"),
-            "is_applicable":           is_applicable,
-            "matched_conditions":      matched_conditions,
-            "appointment_required":    rule.get("appointment_required", False),
-            "appointment_target_code": rule.get("appointment_target_code"),
-            "inspection_type_code":    rule.get("inspection_type_code"),
-            "inspection_cycle_unit":   rule.get("inspection_cycle_unit_code"),
-            "inspection_cycle_value":  rule.get("inspection_cycle_value"),
-            "action_required":         rule.get("action_type_code"),
-            "evaluated_at":            datetime.now().isoformat(),
-            "evaluated_by":            "engine",
-            "engine_version":          ENGINE_VERSION,
-        }
-        apply_logs.append(log_data)
-
-        if not is_applicable:
-            if equip_type:
-                reason = equip_match.get("reason", f"설비 {equip_type} 조건 미충족")
-            else:
-                reason = f"{condition_code} = {factory_value} (조건 미충족: {condition_operator} {condition_value})"
-
-            results["not_applicable"].append({
-                "rule_id":     rule.get("rule_id"),
-                "law_name":    rule.get("law_name"),
-                "law_article": rule.get("law_article"),
-                "reason":      reason,
+        if not factory_ok or not equipment_ok:
+            not_applicable.append({
+                "rule_id":    rule_id,
+                "law_name":   rule.get("law_name"),
+                "reason":     "factory_condition" if not factory_ok else "equipment_not_found",
             })
             continue
 
-        results["applicable_count"] += 1
+        # 출처 결정
+        if eq_code:
+            if eq_code in registered_type_codes:
+                triggered_by = "registered_equipment"
+            else:
+                triggered_by = "ksic_recommended"
+        else:
+            triggered_by = "factory_condition"
 
-        # 선임 필요
-        if rule.get("appointment_required"):
-            results["appointment_required"].append({
-                "rule_id":                      rule.get("rule_id"),
-                "law_name":                     rule.get("law_name"),
-                "law_article":                  rule.get("law_article"),
-                "appointment_target":           rule.get("appointment_target_code"),
-                "qualification_type":           rule.get("qualification_type"),
-                "qualification_code":           rule.get("appointment_qualification_code"),
-                "national_grade_code":          rule.get("national_grade_code"),
-                "career_level_code":            rule.get("career_level_code"),
-                "qualification_level":          rule.get("appointment_qualification_level_code"),
-                "qualification_level_operator": rule.get("appointment_qualification_level_operator_code"),
-                "count_value":                  rule.get("appointment_count_value"),
-                "count_unit":                   rule.get("appointment_count_unit"),
-                "count_operator":               rule.get("appointment_count_operator"),
-                # 설비 기반인 경우 어떤 설비가 트리거 됐는지
-                "triggered_by_equipment":       equip_type if equip_type else None,
-            })
+        applicable.append({
+            "rule_id":      rule_id,
+            "law_name":     rule.get("law_name"),
+            "law_article":  rule.get("law_article"),
+            "rule_type":    rule.get("rule_type_code"),
+            "triggered_by": triggered_by,
+            "appointment_required": rule.get("appointment_required"),
+            "appointment_target":   rule.get("appointment_target_code"),
+            "appointment_qualification": rule.get("appointment_qualification_code"),
+            "appointment_count":    rule.get("appointment_count_value"),
+            "inspection_required":  rule.get("inspection_required"),
+            "inspection_cycle_unit": rule.get("inspection_cycle_unit_code"),
+            "inspection_cycle_value": rule.get("inspection_cycle_value"),
+            "action_required":      rule.get("action_required"),
+            "action_type":          rule.get("action_type_code"),
+            "report_required":      rule.get("report_required"),
+            "remarks":              rule.get("remarks"),
+        })
 
-        # 점검 필요
-        if rule.get("inspection_required"):
-            results["inspection_required"].append({
-                "rule_id":                  rule.get("rule_id"),
-                "law_name":                 rule.get("law_name"),
-                "law_article":              rule.get("law_article"),
-                "inspection_type":          rule.get("inspection_type_code"),
-                "cycle_unit":               rule.get("inspection_cycle_unit_code"),
-                "cycle_value":              rule.get("inspection_cycle_value"),
-                "actor_code":               rule.get("inspection_actor_code"),
-                "triggered_by_equipment":   equip_type if equip_type else None,
-            })
+    # 6. 유형별 분류
+    appointment_rules = [r for r in applicable if r["appointment_required"]]
+    inspection_rules  = [r for r in applicable if r["inspection_required"]]
+    action_rules      = [r for r in applicable if r["action_required"]]
+    report_rules      = [r for r in applicable if r["report_required"]]
 
-        # 보고 필요
-        if rule.get("report_required"):
-            results["report_required"].append({
-                "rule_id":       rule.get("rule_id"),
-                "law_name":      rule.get("law_name"),
-                "law_article":   rule.get("law_article"),
-                "report_method": rule.get("report_method_code"),
-            })
+    # 7. 출처별 통계
+    by_source = {
+        "factory_condition":    sum(1 for r in applicable if r["triggered_by"] == "factory_condition"),
+        "registered_equipment": sum(1 for r in applicable if r["triggered_by"] == "registered_equipment"),
+        "ksic_recommended":     sum(1 for r in applicable if r["triggered_by"] == "ksic_recommended"),
+    }
 
-        # 처벌 정보
-        if rule.get("penalty_required"):
-            results["penalty_required"].append({
-                "rule_id":       rule.get("rule_id"),
-                "law_name":      rule.get("law_name"),
-                "law_article":   rule.get("law_article"),
-                "penalty_type":  rule.get("penalty_type_code"),
-                "penalty_value": rule.get("penalty_value"),
-                "penalty_unit":  rule.get("penalty_unit_code"),
-            })
+    # 8. KSIC 설비 요약
+    ksic_summary = [
+        {"facility_name": name, "equipment_type_code": code,
+         "is_registered": code in registered_type_codes}
+        for name, code in ksic_equipment.items()
+    ]
 
-    # 8) legal_applications 일괄 저장
-    if apply_logs:
-        supabase.table("legal_applications").insert(apply_logs).execute()
-
-    return results
+    return {
+        "factory_id":           factory_id,
+        "factory_name":         factory.get("name"),
+        "ksic_code":            factory.get("ksic_code"),
+        "ksic_name":            factory.get("ksic_name"),
+        "evaluated_at":         now,
+        "engine_version":       ENGINE_VERSION,
+        "total_rules":          len(all_rules),
+        "applicable_count":     len(applicable),
+        "not_applicable_count": len(not_applicable),
+        "summary": {
+            "appointment_required": len(appointment_rules),
+            "inspection_required":  len(inspection_rules),
+            "action_required":      len(action_rules),
+            "report_required":      len(report_rules),
+        },
+        "triggered_by_source": by_source,
+        "ksic_equipment_count": len(ksic_equipment),
+        "registered_equipment_count": len(registered_type_codes),
+        "appointment_required": appointment_rules,
+        "inspection_required":  inspection_rules,
+        "action_required":      action_rules,
+        "report_required":      report_rules,
+        "not_applicable":       not_applicable,
+        "ksic_equipment":       ksic_summary,
+    }
 
 
 # ============================================================
@@ -385,59 +312,74 @@ def apply_legal_rules(factory_id: str, supabase) -> dict:
 # ============================================================
 
 @router.post("/apply/{factory_id}")
-def apply_rules(factory_id: str):
-    """법령 적용 판정 실행"""
+def apply_legal_rules(factory_id: str):
+    """
+    통합 법령 판정 (v2.0.0)
+    - factories 조건 기반 판정
+    - 등록된 equipment_assets 기반 판정
+    - KSIC → 공정 → 설비 추천 기반 판정 (미등록 포함)
+    """
     supabase = get_supabase()
-    try:
-        result = apply_legal_rules(factory_id, supabase)
-        return {"status": "success", "data": result}
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"ERROR: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=str(e))
+
+    factory_res = supabase.table("factories")\
+        .select("*")\
+        .eq("id", factory_id)\
+        .single().execute()
+
+    if not factory_res.data:
+        raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
+
+    result = apply_rules(factory_res.data, supabase)
+    return {"status": "success", "data": result}
 
 
 @router.get("/result/{factory_id}")
-def get_result(factory_id: str):
-    """판정 결과 전체 조회"""
+def get_legal_result(factory_id: str):
+    """마지막 판정 결과 조회 (캐시)"""
     supabase = get_supabase()
-    result = supabase.table("legal_applications")\
+
+    res = supabase.table("legal_applications")\
         .select("*")\
         .eq("factory_id", factory_id)\
-        .eq("is_applicable", True)\
-        .order("rule_type_code")\
-        .execute()
-    return result.data
+        .order("evaluated_at", desc=True)\
+        .limit(1).execute()
+
+    if not res.data:
+        return {"status": "not_found", "message": "판정 결과 없음. /apply/{id} 먼저 실행하세요."}
+
+    return {"status": "success", "data": res.data[0]}
 
 
 @router.get("/summary/{factory_id}")
-def get_summary(factory_id: str):
-    """판정 결과 요약"""
+def get_legal_summary(factory_id: str):
+    """판정 요약만 빠르게 반환"""
     supabase = get_supabase()
 
-    all_results = supabase.table("legal_applications")\
-        .select("*")\
-        .eq("factory_id", factory_id)\
-        .execute()
+    factory_res = supabase.table("factories")\
+        .select("id, name, ksic_code, ksic_name, building_area, employee_count, is_factory_registered")\
+        .eq("id", factory_id)\
+        .single().execute()
 
-    if not all_results.data:
-        return {"message": "판정 결과가 없습니다. POST /legal-engine/apply/{factory_id} 먼저 실행하세요."}
+    if not factory_res.data:
+        raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
 
-    applicable = [r for r in all_results.data if r.get("is_applicable")]
+    result = apply_rules(factory_res.data, supabase)
 
     return {
-        "factory_id":            factory_id,
-        "evaluated_at":          all_results.data[0].get("evaluated_at"),
-        "total_rules_evaluated": len(all_results.data),
-        "applicable_count":      len(applicable),
-        "appointment_required":  [r for r in applicable if r.get("appointment_required")],
-        "inspection_required":   [r for r in applicable if r.get("inspection_type_code")],
-        "report_required":       [r for r in applicable if r.get("rule_type_code") == "003"],
-        "penalty_required":      [r for r in applicable if r.get("rule_type_code") == "006"],
+        "status": "success",
+        "data": {
+            "factory_id":       result["factory_id"],
+            "factory_name":     result["factory_name"],
+            "ksic_code":        result["ksic_code"],
+            "total_rules":      result["total_rules"],
+            "applicable_count": result["applicable_count"],
+            "summary":          result["summary"],
+            "triggered_by_source": result["triggered_by_source"],
+            "engine_version":   result["engine_version"],
+        }
     }
 
 
 @router.get("/test")
 def test():
-    return {"message": "legal engine alive", "version": ENGINE_VERSION}
+    return {"message": "TAI Legal Engine", "version": ENGINE_VERSION}
