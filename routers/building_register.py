@@ -116,23 +116,23 @@ def fetch_all_building_data(bdmgtsn: str) -> dict:
     result = {"bdmgtsn": bdmgtsn, "parsed": parsed}
 
     # 1. 표제부 (ji 원본 → ji=0000 fallback)
-    title = await get_building_title(sigungu, bjdong, bun, ji)
+    title = get_building_title(sigungu, bjdong, bun, ji)
     if not title:
-        title = await get_building_title(sigungu, bjdong, bun, "0000")
+        title = get_building_title(sigungu, bjdong, bun, "0000")
         if title:
             ji = "0000"  # 이후 조회에도 0000 사용
     result["title"] = title
 
     # 2. 기본개요 (지역지구구역)
-    basis = await get_building_basis(sigungu, bjdong, bun, ji)
+    basis = get_building_basis(sigungu, bjdong, bun, ji)
     result["basis"] = basis
 
     # 3. 층별개요
-    floors = await get_floor_outline(sigungu, bjdong, bun, ji)
+    floors = get_floor_outline(sigungu, bjdong, bun, ji)
     result["floors"] = floors
 
     # 4. 오수정화시설
-    sewage = await get_sewage_info(sigungu, bjdong, bun, ji)
+    sewage = get_sewage_info(sigungu, bjdong, bun, ji)
     result["sewage"] = sewage
 
     return result
@@ -270,7 +270,7 @@ def test():
 
 
 @router.get("/search")
-async def search_building(
+def search_building(
     address: str = Query(..., description="도로명주소"),
     save: bool  = Query(False, description="True이면 factory_id와 함께 저장")
 ):
@@ -279,7 +279,7 @@ async def search_building(
     저장하지 않음 — 저장은 POST /apply/{factory_id} 사용
     """
     # JUSO 조회
-    juso = await get_juso(address)
+    juso = get_juso(address)
     if not juso:
         raise HTTPException(status_code=404, detail="주소를 찾을 수 없습니다")
 
@@ -288,7 +288,7 @@ async def search_building(
         raise HTTPException(status_code=404, detail="건물관리번호를 찾을 수 없습니다")
 
     # 건축물대장 전체 조회
-    building_data = await fetch_all_building_data(bdmgtsn)
+    building_data = fetch_all_building_data(bdmgtsn)
 
     # 요약 생성
     title_items = building_data.get("title", []) or []
@@ -346,7 +346,7 @@ async def search_building(
 
 
 @router.post("/apply/{factory_id}")
-async def apply_building_register(
+def apply_building_register(
     factory_id: str,
     address: Optional[str] = Query(None, description="직접 주소 입력 (없으면 factories.address_road 사용)")
 ):
@@ -374,7 +374,7 @@ async def apply_building_register(
         raise HTTPException(status_code=400, detail="주소가 없습니다. address 파라미터를 입력해주세요")
 
     # JUSO 조회
-    juso = await get_juso(query_addr)
+    juso = get_juso(query_addr)
     if not juso:
         raise HTTPException(status_code=404, detail=f"주소를 찾을 수 없습니다: {query_addr}")
 
@@ -383,7 +383,7 @@ async def apply_building_register(
         raise HTTPException(status_code=404, detail="건물관리번호를 찾을 수 없습니다")
 
     # 건축물대장 전체 조회
-    building_data = await fetch_all_building_data(bdmgtsn)
+    building_data = fetch_all_building_data(bdmgtsn)
 
     # factories 업데이트 딕셔너리 생성
     update_data = build_factory_update(juso, building_data)
@@ -421,7 +421,7 @@ async def apply_building_register(
 
 
 @router.get("/floor/{factory_id}")
-async def get_factory_floor_outline(factory_id: str):
+def get_factory_floor_outline(factory_id: str):
     """시설의 층별개요 조회"""
     supabase = get_supabase()
 
