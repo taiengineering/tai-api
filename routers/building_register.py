@@ -9,8 +9,11 @@ from fastapi import APIRouter, HTTPException, Query
 from db.supabase_client import get_supabase
 from datetime import datetime
 from typing import Optional
-import httpx
+import requests
+import urllib3
 import os
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 router = APIRouter(tags=["building_register"])
 
@@ -47,114 +50,59 @@ def parse_bdmgtsn(bdmgtsn: str) -> dict:
     }
 
 
-async def get_juso(road_addr: str) -> Optional[dict]:
-    """도로명주소 → JUSO API → bdMgtSn + 좌표"""
-    async with httpx.AsyncClient(verify=False, timeout=10) as client:
-        r = await client.get(JUSO_URL, params={
-            "confmKey":     JUSO_KEY,
-            "currentPage":  1,
-            "countPerPage": 1,
-            "keyword":      road_addr,
-            "resultType":   "json"
-        })
-        data = r.json()
-        results = data.get("results", {}).get("juso", [])
-        return results[0] if results else None
+def get_juso(road_addr: str) -> Optional[dict]:
+    """도로명주소 → JUSO API → bdMgtSn"""
+    r = requests.get(JUSO_URL, params={
+        "confmKey":     JUSO_KEY,
+        "currentPage":  1,
+        "countPerPage": 1,
+        "keyword":      road_addr,
+        "resultType":   "json"
+    }, verify=False, timeout=10)
+    data = r.json()
+    results = data.get("results", {}).get("juso", [])
+    return results[0] if results else None
 
 
-async def get_building_title(sigungu: str, bjdong: str, bun: str, ji: str = "0000") -> Optional[list]:
-    """표제부 조회 — 연면적/층수/승강기/사용승인일/주용도/구조"""
-    async with httpx.AsyncClient(verify=False, timeout=10) as client:
-        r = await client.get(f"{BUILDING_BASE}/getBrTitleInfo", params={
-            "serviceKey": BUILDING_KEY,
-            "sigunguCd":  sigungu,
-            "bjdongCd":   bjdong,
-            "bun":        bun,
-            "ji":         ji,
-            "numOfRows":  10,
-            "pageNo":     1,
-            "_type":      "json"
-        })
-        data = r.json()
-        body = data.get("response", {}).get("body", {})
-        if str(body.get("totalCount", "0")) == "0":
-            return None
-        items = body.get("items", {}).get("item", [])
-        if isinstance(items, dict):
-            items = [items]
-        return items
+def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, rows: int = 10) -> Optional[list]:
+    """건축물대장 API 공통 호출"""
+    r = requests.get(f"{BUILDING_BASE}/{endpoint}", params={
+        "serviceKey": BUILDING_KEY,
+        "sigunguCd":  sigungu,
+        "bjdongCd":   bjdong,
+        "bun":        bun,
+        "ji":         ji,
+        "numOfRows":  rows,
+        "pageNo":     1,
+        "_type":      "json"
+    }, verify=False, timeout=10)
+    data = r.json()
+    body = data.get("response", {}).get("body", {})
+    if str(body.get("totalCount", "0")) == "0":
+        return None
+    items = body.get("items", {}).get("item", [])
+    if isinstance(items, dict):
+        items = [items]
+    return items
 
 
-async def get_building_basis(sigungu: str, bjdong: str, bun: str, ji: str = "0000") -> Optional[list]:
-    """기본개요 조회 — 지역지구구역"""
-    async with httpx.AsyncClient(verify=False, timeout=10) as client:
-        r = await client.get(f"{BUILDING_BASE}/getBrBasisOulnInfo", params={
-            "serviceKey": BUILDING_KEY,
-            "sigunguCd":  sigungu,
-            "bjdongCd":   bjdong,
-            "bun":        bun,
-            "ji":         ji,
-            "numOfRows":  10,
-            "pageNo":     1,
-            "_type":      "json"
-        })
-        data = r.json()
-        body = data.get("response", {}).get("body", {})
-        if str(body.get("totalCount", "0")) == "0":
-            return None
-        items = body.get("items", {}).get("item", [])
-        if isinstance(items, dict):
-            items = [items]
-        return items
+def get_building_title(sigungu: str, bjdong: str, bun: str, ji: str = "0000") -> Optional[list]:
+    return _building_get("getBrTitleInfo", sigungu, bjdong, bun, ji)
 
 
-async def get_floor_outline(sigungu: str, bjdong: str, bun: str, ji: str = "0000") -> Optional[list]:
-    """층별개요 조회"""
-    async with httpx.AsyncClient(verify=False, timeout=10) as client:
-        r = await client.get(f"{BUILDING_BASE}/getBrFlrOulnInfo", params={
-            "serviceKey": BUILDING_KEY,
-            "sigunguCd":  sigungu,
-            "bjdongCd":   bjdong,
-            "bun":        bun,
-            "ji":         ji,
-            "numOfRows":  100,
-            "pageNo":     1,
-            "_type":      "json"
-        })
-        data = r.json()
-        body = data.get("response", {}).get("body", {})
-        if str(body.get("totalCount", "0")) == "0":
-            return None
-        items = body.get("items", {}).get("item", [])
-        if isinstance(items, dict):
-            items = [items]
-        return items
+def get_building_basis(sigungu: str, bjdong: str, bun: str, ji: str = "0000") -> Optional[list]:
+    return _building_get("getBrBasisOulnInfo", sigungu, bjdong, bun, ji)
 
 
-async def get_sewage_info(sigungu: str, bjdong: str, bun: str, ji: str = "0000") -> Optional[list]:
-    """오수정화시설 조회"""
-    async with httpx.AsyncClient(verify=False, timeout=10) as client:
-        r = await client.get(f"{BUILDING_BASE}/getBrExposPublcRqstInfo", params={
-            "serviceKey": BUILDING_KEY,
-            "sigunguCd":  sigungu,
-            "bjdongCd":   bjdong,
-            "bun":        bun,
-            "ji":         ji,
-            "numOfRows":  10,
-            "pageNo":     1,
-            "_type":      "json"
-        })
-        data = r.json()
-        body = data.get("response", {}).get("body", {})
-        if str(body.get("totalCount", "0")) == "0":
-            return None
-        items = body.get("items", {}).get("item", [])
-        if isinstance(items, dict):
-            items = [items]
-        return items
+def get_floor_outline(sigungu: str, bjdong: str, bun: str, ji: str = "0000") -> Optional[list]:
+    return _building_get("getBrFlrOulnInfo", sigungu, bjdong, bun, ji, rows=100)
 
 
-async def fetch_all_building_data(bdmgtsn: str) -> dict:
+def get_sewage_info(sigungu: str, bjdong: str, bun: str, ji: str = "0000") -> Optional[list]:
+    return _building_get("getBrExposPublcRqstInfo", sigungu, bjdong, bun, ji)
+
+
+def fetch_all_building_data(bdmgtsn: str) -> dict:
     """bdMgtSn 기반 전체 건축물대장 정보 수집"""
     parsed = parse_bdmgtsn(bdmgtsn)
     if not parsed:
