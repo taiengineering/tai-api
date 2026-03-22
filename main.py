@@ -25,7 +25,7 @@ from routers.factory_process_v2 import router as factory_process_router      # â
 from routers.building_register import router as building_register_router
 from routers.process_management import router as process_management_router
 from routers.factory_process_v3 import router as factory_process_router
-from routers.legal_engine_v3 import router as legal_engine_router
+from routers.legal_engine import router as legal_engine_router
 
 app = FastAPI(
     title="TAI API",
