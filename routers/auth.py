@@ -1,7 +1,4 @@
 # routers/auth.py
-# 로그인: 휴대폰 번호 또는 이메일 + 비밀번호
-# - phone or email → users 테이블에서 email 조회 → Supabase Auth 로그인
-
 from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from typing import Optional
@@ -26,15 +23,19 @@ class RegisterRequest(BaseModel):
     company_type_code: Optional[str] = None
 
 class LoginRequest(BaseModel):
-    phone:    Optional[str] = None   # 휴대폰 번호 로그인
-    email:    Optional[str] = None   # 이메일 로그인 (관리자용)
-    password: str
+    """
+    login_id: 이메일 또는 전화번호 (통합 필드)
+    password: 비밀번호
+    ---
+    phone / email 개별 필드도 하위 호환으로 지원
+    """
+    login_id:  Optional[str] = None   # 이메일 또는 전화번호 통합
+    phone:     Optional[str] = None   # 하위 호환
+    email:     Optional[str] = None   # 하위 호환
+    password:  str
 
 class FindPasswordRequest(BaseModel):
     phone: str
-
-class ResetPasswordRequest(BaseModel):
-    email: str
 
 class UpdateMeRequest(BaseModel):
     name:           Optional[str] = None
@@ -56,13 +57,16 @@ class UpdateMeRequest(BaseModel):
 
 
 # ============================================================
-# 헬퍼 함수
+# 헬퍼
 # ============================================================
 
 def normalize_phone(phone: str) -> str:
     return re.sub(r'[^0-9]', '', phone)
 
-def get_user_from_token(token: str, supabase) -> dict:
+def is_email(value: str) -> bool:
+    return "@" in value
+
+def get_user_from_token(token: str, supabase):
     try:
         user_res = supabase.auth.get_user(token)
         if not user_res or not user_res.user:
@@ -71,11 +75,8 @@ def get_user_from_token(token: str, supabase) -> dict:
     except Exception:
         raise HTTPException(status_code=401, detail="토큰 검증 실패")
 
-def get_users_row(auth_id: str, supabase) -> dict:
-    res = supabase.table("users")\
-        .select("*")\
-        .eq("auth_id", auth_id)\
-        .limit(1).execute()
+def get_users_row(auth_id: str, supabase):
+    res = supabase.table("users").select("*").eq("auth_id", auth_id).limit(1).execute()
     return res.data[0] if res.data else None
 
 def generate_user_code() -> str:
@@ -94,10 +95,7 @@ def register(req: RegisterRequest):
     supabase = get_supabase()
     phone_normalized = normalize_phone(req.phone)
 
-    existing = supabase.table("users")\
-        .select("id")\
-        .eq("phone", phone_normalized)\
-        .limit(1).execute()
+    existing = supabase.table("users").select("id").eq("phone", phone_normalized).limit(1).execute()
     if existing.data:
         raise HTTPException(status_code=400, detail="이미 가입된 휴대폰 번호입니다")
 
@@ -106,11 +104,7 @@ def register(req: RegisterRequest):
             "email":         req.email,
             "password":      req.password,
             "email_confirm": True,
-            "user_metadata": {
-                "name":      req.name,
-                "phone":     phone_normalized,
-                "role_code": req.role_code,
-            }
+            "user_metadata": {"name": req.name, "phone": phone_normalized, "role_code": req.role_code}
         })
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"계정 생성 실패: {str(e)}")
@@ -119,17 +113,17 @@ def register(req: RegisterRequest):
         raise HTTPException(status_code=400, detail="회원가입 실패")
 
     auth_id = str(auth_res.user.id)
-
     company_id = None
+
     if req.company_name:
         try:
             company_res = supabase.table("companies").insert({
-                "name":              req.company_name,
+                "name": req.company_name,
                 "company_type_code": req.company_type_code or "002",
-                "status_code":       "TRIAL",
-                "is_active":         True,
-                "created_at":        datetime.now().isoformat(),
-                "updated_at":        datetime.now().isoformat(),
+                "status_code": "TRIAL",
+                "is_active": True,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
             }).execute()
             company_id = company_res.data[0]["id"] if company_res.data else None
         except Exception:
@@ -158,7 +152,7 @@ def register(req: RegisterRequest):
         raise HTTPException(status_code=500, detail=f"사용자 정보 저장 실패: {str(e)}")
 
     return {
-        "status":  "success",
+        "status": "success",
         "message": "회원가입이 완료됐습니다.",
         "data": {
             "user_id":    user_res.data[0]["id"],
@@ -171,86 +165,77 @@ def register(req: RegisterRequest):
 
 
 # ============================================================
-# 2. 로그인 (휴대폰 번호 또는 이메일)
+# 2. 로그인
 # ============================================================
 
 @router.post("/login")
 def login(req: LoginRequest):
     """
-    로그인 — phone 또는 email 중 하나 필수
-    - phone → users 테이블에서 email 조회 → Supabase Auth 로그인
-    - email → users 테이블에서 직접 조회 → Supabase Auth 로그인
+    로그인 — 아래 중 하나로 요청:
+
+    방법1) login_id 통합 필드 사용 (권장):
+      { "login_id": "hetto@kakao.com", "password": "..." }
+      { "login_id": "01047758888",     "password": "..." }
+
+    방법2) 개별 필드 사용 (하위 호환):
+      { "email": "hetto@kakao.com", "password": "..." }
+      { "phone": "01047758888",     "password": "..." }
     """
     supabase = get_supabase()
 
-    if not req.phone and not req.email:
-        raise HTTPException(status_code=400, detail="phone 또는 email 중 하나는 필수입니다")
+    # login_id 통합 처리
+    identifier = req.login_id or req.email or req.phone
+    if not identifier:
+        raise HTTPException(status_code=400, detail="login_id (이메일 또는 전화번호)가 필요합니다")
 
-    # 사용자 조회
-    if req.phone:
-        phone_normalized = normalize_phone(req.phone)
+    # 이메일 vs 전화번호 판별
+    if is_email(identifier):
         user_row = supabase.table("users")\
             .select("id, email, name, phone, role_code, company_id, factory_id, status_code, profile_image_url, auth_id")\
-            .eq("phone", phone_normalized)\
-            .limit(1).execute()
-        if not user_row.data:
-            raise HTTPException(status_code=401, detail="가입되지 않은 휴대폰 번호입니다")
-    else:
-        user_row = supabase.table("users")\
-            .select("id, email, name, phone, role_code, company_id, factory_id, status_code, profile_image_url, auth_id")\
-            .eq("email", req.email)\
+            .eq("email", identifier)\
+            .eq("status_code", "ACTIVE")\
             .limit(1).execute()
         if not user_row.data:
             raise HTTPException(status_code=401, detail="가입되지 않은 이메일입니다")
+    else:
+        phone_normalized = normalize_phone(identifier)
+        user_row = supabase.table("users")\
+            .select("id, email, name, phone, role_code, company_id, factory_id, status_code, profile_image_url, auth_id")\
+            .eq("phone", phone_normalized)\
+            .eq("status_code", "ACTIVE")\
+            .limit(1).execute()
+        if not user_row.data:
+            raise HTTPException(status_code=401, detail="가입되지 않은 휴대폰 번호입니다")
 
     user = user_row.data[0]
 
-    # 상태 체크
     status = user.get("status_code", "ACTIVE")
     if status == "SUSPENDED":
-        raise HTTPException(status_code=403, detail="정지된 계정입니다. 관리자에게 문의해주세요")
+        raise HTTPException(status_code=403, detail="정지된 계정입니다")
     if status == "DELETED":
         raise HTTPException(status_code=403, detail="삭제된 계정입니다")
     if status == "INACTIVE":
         raise HTTPException(status_code=403, detail="비활성화된 계정입니다")
 
-    # phone 기반 계정 (auth에 email 없음) → auth_id로 직접 sign_in 시도
-    # email이 없는 phone 전용 계정 처리
     login_email = user.get("email")
 
-    if not login_email:
-        # phone 전용 계정: auth.users의 phone으로 로그인 시도
-        # Supabase phone 로그인은 OTP 방식이므로, admin을 통해 직접 토큰 발급
-        try:
-            # admin.generate_link 또는 직접 세션 생성
-            auth_user_res = supabase.auth.admin.get_user(user["auth_id"])
-            if not auth_user_res or not auth_user_res.user:
-                raise HTTPException(status_code=401, detail="계정 정보를 찾을 수 없습니다")
-
-            # 비밀번호 검증을 위해 임시 이메일 로그인 시도
-            # phone 계정의 경우 auth.users에 email 없으므로 update_user로 검증
-            verify_res = supabase.auth.admin.update_user_by_id(
-                user["auth_id"],
-                {"password": req.password}  # 같은 비밀번호로 업데이트 = 검증
-            )
-            # sign_in_with_password를 phone 번호로 시도
-            phone_for_auth = user.get("phone", "")
-            if not phone_for_auth.startswith("+"):
-                phone_for_auth = "+82" + phone_for_auth.lstrip("0")
-
-            auth_res = supabase.auth.sign_in_with_password({
-                "phone":    phone_for_auth,
-                "password": req.password,
-            })
-        except HTTPException:
-            raise
-        except Exception:
-            raise HTTPException(status_code=401, detail="비밀번호가 올바르지 않습니다")
-    else:
-        # email 기반 로그인
+    if login_email:
+        # 이메일 기반 Supabase Auth 로그인
         try:
             auth_res = supabase.auth.sign_in_with_password({
                 "email":    login_email,
+                "password": req.password,
+            })
+        except Exception:
+            raise HTTPException(status_code=401, detail="비밀번호가 올바르지 않습니다")
+    else:
+        # 전화번호 전용 계정 — phone sign_in 시도
+        try:
+            phone_val = user.get("phone", "")
+            if not phone_val.startswith("+"):
+                phone_val = "+82" + phone_val.lstrip("0")
+            auth_res = supabase.auth.sign_in_with_password({
+                "phone":    phone_val,
                 "password": req.password,
             })
         except Exception:
@@ -259,7 +244,6 @@ def login(req: LoginRequest):
     if not auth_res.user or not auth_res.session:
         raise HTTPException(status_code=401, detail="로그인 실패")
 
-    # last_login_at 업데이트
     supabase.table("users")\
         .update({"last_login_at": datetime.now().isoformat()})\
         .eq("id", user["id"])\
@@ -302,17 +286,14 @@ def logout(authorization: Optional[str] = Header(None)):
 
 
 # ============================================================
-# 4. 휴대폰 번호 중복 확인
+# 4. 전화번호 중복 확인
 # ============================================================
 
 @router.post("/check-phone")
 def check_phone(phone: str):
     supabase = get_supabase()
     phone_normalized = normalize_phone(phone)
-    res = supabase.table("users")\
-        .select("id")\
-        .eq("phone", phone_normalized)\
-        .limit(1).execute()
+    res = supabase.table("users").select("id").eq("phone", phone_normalized).limit(1).execute()
     return {
         "status":    "success",
         "available": len(res.data) == 0,
@@ -328,10 +309,7 @@ def check_phone(phone: str):
 def reset_password(req: FindPasswordRequest):
     supabase = get_supabase()
     phone_normalized = normalize_phone(req.phone)
-    res = supabase.table("users")\
-        .select("email")\
-        .eq("phone", phone_normalized)\
-        .limit(1).execute()
+    res = supabase.table("users").select("email").eq("phone", phone_normalized).limit(1).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="가입되지 않은 휴대폰 번호입니다")
     email = res.data[0]["email"]
@@ -341,10 +319,7 @@ def reset_password(req: FindPasswordRequest):
         raise HTTPException(status_code=500, detail=f"이메일 발송 실패: {str(e)}")
     parts = email.split("@")
     masked = parts[0][:2] + "**@" + parts[1] if len(parts) == 2 else email
-    return {
-        "status":  "success",
-        "message": f"비밀번호 재설정 링크를 {masked}로 발송했습니다",
-    }
+    return {"status": "success", "message": f"재설정 링크를 {masked}로 발송했습니다"}
 
 
 # ============================================================
@@ -411,10 +386,7 @@ def update_me(req: UpdateMeRequest, authorization: Optional[str] = Header(None))
     if "phone" in update_data:
         update_data["phone"] = normalize_phone(update_data["phone"])
     update_data["updated_at"] = datetime.now().isoformat()
-    res = supabase.table("users")\
-        .update(update_data)\
-        .eq("id", user["id"])\
-        .execute()
+    res = supabase.table("users").update(update_data).eq("id", user["id"]).execute()
     return {"status": "success", "data": res.data[0] if res.data else {}}
 
 
@@ -424,4 +396,4 @@ def update_me(req: UpdateMeRequest, authorization: Optional[str] = Header(None))
 
 @router.get("/test")
 def test():
-    return {"message": "auth router alive", "login_type": "phone_or_email"}
+    return {"message": "auth router alive", "login_type": "login_id (email or phone)"}
