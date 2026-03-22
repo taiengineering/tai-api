@@ -1,625 +1,228 @@
-# routers/ksic_engine.py
-# KSIC → 공정 → 설비 → 법령 자동 판정 엔진
-# - GET  /ksic-engine/recommend-equipment/{factory_id}  KSIC 기반 설비 추천
-# - POST /ksic-engine/apply/{factory_id}                KSIC 기반 법령 판정
-# - GET  /ksic-engine/ksic-search                       KSIC 코드 검색
+"""
+KSIC 엔진 v3 추가 엔드포인트
+기존 ksic_engine.py 파일에 아래 라우터들을 추가하세요.
+prefix="/ksic-engine" 이미 등록되어 있음.
 
-from fastapi import APIRouter, HTTPException, Query
-from db.supabase_client import get_supabase
-from datetime import datetime
-from typing import Optional, List
-import traceback
+신규:
+  GET /ksic-engine/hierarchy          — lv1 전체 목록
+  GET /ksic-engine/hierarchy/lv2      — lv1 선택 후 lv2 목록
+  GET /ksic-engine/hierarchy/lv3      — lv2 선택 후 lv3 목록
+  GET /ksic-engine/hierarchy/lv4      — lv3 선택 후 lv4(업종코드) 목록
+"""
+from fastapi import APIRouter, Query
+from typing import Optional
+import os
+from supabase import create_client
 
-router = APIRouter(tags=["ksic_engine"])
+router = APIRouter(prefix="/ksic-engine", tags=["KSIC엔진"])
 
-ENGINE_VERSION = "1.0.0"
-
-# ============================================================
-# facility_name_std → equipment_type_code 매핑 테이블
-# process_equipment_map.facility_name_std 기준
-# ============================================================
-
-FACILITY_TO_EQUIPMENT_TYPE = {
-    # 전기 설비 (001~010)
-    "변압기":           "001",
-    "수변전반":         "001",
-    "수배전반":         "006",
-    "배전반":           "006",
-    "분전반":           "007",
-    "전동기":           "008",
-    "모터":             "008",
-    "UPS":             "009",
-    "무정전전원장치":   "009",
-    "비상발전기":       "010",
-    "발전기":           "010",
-    "차단기":           "002",
-    "기중차단기":       "002",
-    "진공차단기":       "003",
-    "배선용차단기":     "004",
-    "누전차단기":       "005",
-
-    # 기계 설비 (011~020)
-    "펌프":             "011",
-    "압축기":           "012",
-    "컴프레서":         "012",
-    "열교환기":         "013",
-    "보일러":           "014",
-    "증기보일러":       "014",
-    "온수보일러":       "014",
-    "탱크":             "015",
-    "저장탱크":         "015",
-    "밸브":             "016",
-    "배관":             "017",
-    "팬":               "018",
-    "송풍기":           "018",
-    "냉동기":           "019",
-    "냉장기":           "019",
-    "칠러":             "020",
-
-    # 중장비 (021~026)
-    "크레인":           "021",
-    "천장크레인":       "021",
-    "이동식크레인":     "021",
-    "호이스트":         "022",
-    "프레스":           "023",
-    "유압프레스":       "023",
-    "컨베이어":         "024",
-    "컨베이어벨트":     "024",
-    "승강기":           "025",
-    "엘리베이터":       "025",
-    "에스컬레이터":     "026",
-
-    # 저장탱크 (027~030)
-    "가스탱크":         "027",
-    "고압가스탱크":     "027",
-    "LPG탱크":         "028",
-    "액화석유가스탱크": "028",
-    "화학물질탱크":     "029",
-    "유해화학물질탱크": "029",
-    "유류탱크":         "030",
-    "경유탱크":         "030",
-    "기름탱크":         "030",
-
-    # 소방 설비 (031~034)
-    "스프링클러":       "031",
-    "자동소화장치":     "031",
-    "자동화재탐지":     "032",
-    "화재감지기":       "032",
-    "소화기":           "033",
-    "소화전":           "034",
-    "옥내소화전":       "034",
-
-    # 환경 설비 (035~040)
-    "배기시설":         "035",
-    "배기장치":         "035",
-    "집진기":           "036",
-    "집진장치":         "036",
-    "오수처리시설":     "037",
-    "하수처리시설":     "037",
-    "압력용기":         "038",
-    "냉동냉각기":       "039",
-    "냉각탑":           "039",
-    "공조기":           "039",
-    "공조장치":         "039",
-
-    # ── 추가 매핑 (process_equipment_map 실제 데이터 기반) ──
-
-    # 프레스/가공 계열 (023)
-    "프레스설비":       "023",
-    "절단기":           "023",
-    "절곡기":           "023",
-    "노칭기":           "023",
-    "슬리터":           "023",
-    "권취기":           "023",
-    "적층기":           "023",
-    "실링설비":         "023",
-
-    # 컨베이어/물류 계열 (024)
-    "물류자동화설비":   "024",
-    "물류설비":         "024",
-
-    # 보일러/가열 계열 (014)
-    "건조설비":         "014",
-    "건조기":           "014",
-    "가열설비":         "014",
-    "산업용로":         "014",
-    "전극 건조로":      "014",
-    "에이징 설비":      "014",
-    "포메이션 설비":    "014",
-
-    # 탱크 계열 (015)
-    "제품저장탱크":     "015",
-    "버퍼탱크":         "015",
-    "혼합탱크":         "015",
-    "원료저장탱크":     "015",
-    "위험물 옥외탱크저장소": "015",
-    "고압가스 저장탱크":"027",
-    "고압가스 저장시설":"027",
-
-    # 배관 계열 (017)
-    "산업용배관망":     "017",
-    "위험물 이송배관":  "017",
-    "선박 배관시험설비":"017",
-
-    # 밸브 계열 (016)
-    "위험물 밸브":      "016",
-
-    # 펌프 계열 (011)
-    "공정펌프":         "011",
-    "이송펌프":         "011",
-    "급수펌프":         "011",
-
-    # 압축기 계열 (012)
-    "공정압축기":       "012",
-    "압축공기공급설비": "012",
-
-    # 열교환기 계열 (013)
-    "열교환기":         "013",
-    "냉각기":           "013",
-
-    # 전기설비 계열 (001)
-    "접지설비":         "001",
-    "전력계측장치":     "001",
-    "전력감시장치":     "001",
-
-    # 화재감지/소방 계열 (032)
-    "가스감지설비":     "032",
-    "화재감지설비":     "032",
-    "가스누출감지기":   "032",
-
-    # 유류탱크 계열 (030)
-    "위험물 방유제":    "030",
-    "연료저장탱크":     "030",
-
-    # 화학물질탱크 계열 (029)
-    "위험물 이송설비":  "029",
-    "위험물 간이저장소":"029",
-    "위험물 옥내저장소":"029",
-    "위험물 옥외저장소":"029",
-
-    # 집진/배기 계열 (036)
-    "도장부스":         "036",
-    "흡입설비":         "036",
-    "국소배기장치":     "036",
-
-    # 오수처리 계열 (037)
-    "산업용배수설비":   "037",
-    "폐수처리설비":     "037",
-    "폐수처리장치":     "037",
-
-    # 냉각/공조 계열 (039)
-    "냉각수공급설비":   "039",
-    "증기공급설비":     "039",
-    "질소공급설비":     "012",  # 압축가스 계열
-    "진공공급설비":     "012",
-
-    # 크레인/중장비 계열 (021)
-    "전동호이스트":     "022",
-    "산업용크레인":     "021",
-    "이동식크레인":     "021",
-    "갠트리크레인":     "021",
-
-    # 기타 설비 → 가장 유사한 코드로 매핑
-    "산업용로봇":       "023",  # 프레스/자동화 계열
-    "사출성형기":       "023",
-    "분쇄설비":         "012",  # 압축/분쇄 계열
-    "혼합설비":         "011",  # 펌프/혼합 계열
-    "교반기":           "011",
-    "원심분리기":       "011",
-    "반응기":           "015",  # 탱크/반응 계열
-    "증류탑":           "015",
-    "흡수탑":           "015",
-    "생산라인설비":     "024",  # 컨베이어/라인 계열
-    "전극 코팅기":      "023",
-    "전극 압연기":      "023",
-    "산세설비":         "015",
-    "샌드블라스트 설비":"036",
-    "유틸리티모니터링설비": "001",
-    "유틸리티제어설비": "001",
-    "용수공급설비":     "011",
-    "산업안전설비":     "034",  # 소화전/안전 계열
-    "용접전원장치":     "008",  # 전동기 계열
-}
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 
-def map_facility_to_equipment_type(facility_name: str) -> Optional[str]:
-    """설비 표준명 → equipment_type_code 매핑"""
-    if not facility_name:
-        return None
-
-    # 완전 일치
-    if facility_name in FACILITY_TO_EQUIPMENT_TYPE:
-        return FACILITY_TO_EQUIPMENT_TYPE[facility_name]
-
-    # 부분 일치 (키가 설비명에 포함되는 경우)
-    for key, code in FACILITY_TO_EQUIPMENT_TYPE.items():
-        if key in facility_name or facility_name in key:
-            return code
-
-    return None
+def get_supabase():
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-# ============================================================
-# KSIC → 공정 → 설비 조회
-# ============================================================
-
-def get_equipment_by_ksic(ksic_code: str, supabase, match_bands: list = None) -> list:
-    """
-    KSIC 코드 기반으로 예상 설비 목록 반환
-    match_band: MUST > CORE > CORE_PLUS > OPTIONAL
-    """
-    if not ksic_code:
-        return []
-
-    if match_bands is None:
-        match_bands = ["MUST", "CORE", "CORE_PLUS"]
-
-    # process_equipment_map에서 직접 조회
-    equip_res = supabase.table("process_equipment_map")\
-        .select("facility_name_std, match_band, match_score, match_rank, category_path, equipment_role")\
-        .eq("industry_code_full", ksic_code)\
-        .in_("match_band", match_bands)\
-        .order("match_score", desc=True)\
-        .limit(100)\
-        .execute()
-
-    if not equip_res.data:
-        # 4자리 → 3자리로 축소해서 재시도
-        ksic_3 = ksic_code[:3]
-        equip_res = supabase.table("process_equipment_map")\
-            .select("facility_name_std, match_band, match_score, match_rank, category_path, equipment_role")\
-            .like("industry_code_full", f"{ksic_3}%")\
-            .in_("match_band", match_bands)\
-            .order("match_score", desc=True)\
-            .limit(100)\
-            .execute()
-
-    # 중복 설비 제거 (facility_name_std 기준, 가장 높은 match_score 유지)
-    seen = {}
-    for e in equip_res.data or []:
-        name = e.get("facility_name_std", "")
-        if name and name not in seen:
-            seen[name] = e
-        elif name and e.get("match_score", 0) > seen[name].get("match_score", 0):
-            seen[name] = e
-
-    return list(seen.values())
-
-
-# ============================================================
-# 설비 → 법령 룰 조회
-# ============================================================
-
-def get_rules_by_equipment_types(equipment_type_codes: list, supabase) -> list:
-    """equipment_type_code 목록 기반 법령 룰 조회"""
-    if not equipment_type_codes:
-        return []
-
-    rules_res = supabase.table("master_building_legal_rules")\
-        .select("*")\
-        .in_("equipment_type_code", equipment_type_codes)\
-        .eq("is_active", True)\
-        .order("priority_no")\
-        .execute()
-
-    return rules_res.data or []
-
-
-# ============================================================
-# 엔드포인트 1: KSIC 기반 설비 추천
-# ============================================================
-
-@router.get("/recommend-equipment/{factory_id}")
-def recommend_equipment(
-    factory_id: str,
-    include_optional: bool = Query(False, description="OPTIONAL 설비도 포함")
-):
-    """
-    KSIC 코드 기반으로 시설에 필요한 설비 목록 추천
-    """
+# ──────────────────────────────────────────────
+# GET /ksic-engine/hierarchy
+# lv1 목록 전체 (셀렉트바 대분류용)
+# ──────────────────────────────────────────────
+@router.get("/hierarchy")
+async def get_ksic_lv1():
+    """KSIC 대분류(lv1) 전체 목록 - 4단계 셀렉트 첫 번째"""
     supabase = get_supabase()
+    res = supabase.table("industry_master").select(
+        "lv1_code, lv1_name"
+    ).eq("is_active", True).execute()
 
-    # factory 조회
-    factory_res = supabase.table("factories")\
-        .select("id, name, ksic_code, ksic_name, industry_type_code")\
-        .eq("id", factory_id)\
-        .single().execute()
-
-    if not factory_res.data:
-        raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
-
-    factory = factory_res.data
-    ksic_code = factory.get("ksic_code")
-
-    if not ksic_code:
-        return {
-            "status": "warning",
-            "message": "KSIC 코드가 등록되지 않았습니다. 시설 정보에서 업종코드를 입력해주세요.",
-            "factory_id": factory_id,
-            "factory_name": factory.get("name"),
-        }
-
-    # match_band 설정
-    match_bands = ["MUST", "CORE", "CORE_PLUS"]
-    if include_optional:
-        match_bands.append("OPTIONAL")
-
-    # 설비 조회
-    equipments = get_equipment_by_ksic(ksic_code, supabase, match_bands)
-
-    # equipment_type_code 매핑
-    result_equipments = []
-    for e in equipments:
-        facility_name = e.get("facility_name_std", "")
-        eq_type_code = map_facility_to_equipment_type(facility_name)
-        result_equipments.append({
-            "facility_name_std":  facility_name,
-            "equipment_type_code": eq_type_code,
-            "match_band":         e.get("match_band"),
-            "match_score":        e.get("match_score"),
-            "category_path":      e.get("category_path"),
-            "is_mapped":          eq_type_code is not None,
-        })
-
-    # 현재 등록된 설비와 비교
-    existing_res = supabase.table("equipment_assets")\
-        .select("asset_name, equipment_type_code")\
-        .eq("factory_id", factory_id)\
-        .execute()
-    existing_types = set(
-        e.get("equipment_type_code")
-        for e in (existing_res.data or [])
-        if e.get("equipment_type_code")
-    )
-
-    # 미등록 설비 표시
-    for eq in result_equipments:
-        eq["is_registered"] = eq.get("equipment_type_code") in existing_types
-
-    # 통계
-    total       = len(result_equipments)
-    mapped      = sum(1 for e in result_equipments if e["is_mapped"])
-    registered  = sum(1 for e in result_equipments if e["is_registered"])
-    must_count  = sum(1 for e in result_equipments if e["match_band"] == "MUST")
-    core_count  = sum(1 for e in result_equipments if e["match_band"] in ["CORE", "CORE_PLUS"])
-
-    return {
-        "status":       "success",
-        "factory_id":   factory_id,
-        "factory_name": factory.get("name"),
-        "ksic_code":    ksic_code,
-        "ksic_name":    factory.get("ksic_name"),
-        "summary": {
-            "total_recommended": total,
-            "must_equipment":    must_count,
-            "core_equipment":    core_count,
-            "mapped_to_type":    mapped,
-            "already_registered": registered,
-            "not_registered":    mapped - registered,
-        },
-        "equipments":   result_equipments,
-    }
-
-
-# ============================================================
-# 엔드포인트 2: KSIC 기반 법령 자동 판정 (설비 추천 + 법령 적용)
-# ============================================================
-
-@router.post("/apply/{factory_id}")
-def apply_ksic_rules(factory_id: str):
-    """
-    KSIC 코드 기반으로:
-    1. 예상 설비 목록 추출 (MUST+CORE)
-    2. 해당 설비의 법령 룰 판정
-    3. 현재 등록된 설비 + KSIC 추천 설비 통합 판정
-    """
-    supabase = get_supabase()
-
-    # factory 조회
-    factory_res = supabase.table("factories")\
-        .select("*")\
-        .eq("id", factory_id)\
-        .single().execute()
-
-    if not factory_res.data:
-        raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
-
-    factory   = factory_res.data
-    ksic_code = factory.get("ksic_code")
-
-    result = {
-        "factory_id":    factory_id,
-        "factory_name":  factory.get("name"),
-        "ksic_code":     ksic_code,
-        "ksic_name":     factory.get("ksic_name"),
-        "evaluated_at":  datetime.now().isoformat(),
-        "engine_version": ENGINE_VERSION,
-    }
-
-    if not ksic_code:
-        result["warning"] = "KSIC 코드 미등록 — 설비 추천 불가"
-        result["recommended_equipments"] = []
-        result["ksic_based_rules"] = []
-        return {"status": "warning", "data": result}
-
-    # KSIC → 설비 추천
-    recommended = get_equipment_by_ksic(ksic_code, supabase, ["MUST", "CORE", "CORE_PLUS"])
-    recommended_type_codes = list(set(filter(None, [
-        map_facility_to_equipment_type(e.get("facility_name_std", ""))
-        for e in recommended
-    ])))
-
-    # 현재 등록된 설비
-    existing_res = supabase.table("equipment_assets")\
-        .select("equipment_type_code, asset_name")\
-        .eq("factory_id", factory_id)\
-        .execute()
-    existing_type_codes = list(set(filter(None, [
-        e.get("equipment_type_code")
-        for e in (existing_res.data or [])
-    ])))
-
-    # 통합 (등록 + 추천)
-    all_type_codes = list(set(recommended_type_codes + existing_type_codes))
-
-    # 법령 룰 조회
-    rules = get_rules_by_equipment_types(all_type_codes, supabase)
-
-    # 룰 분류
-    appointment_rules = []
-    inspection_rules  = []
-    action_rules      = []
-    report_rules      = []
-
-    for rule in rules:
-        eq_code = rule.get("equipment_type_code")
-        source  = "registered" if eq_code in existing_type_codes else "recommended"
-
-        base = {
-            "rule_id":            rule.get("rule_id"),
-            "law_name":           rule.get("law_name"),
-            "law_article":        rule.get("law_article"),
-            "equipment_type":     eq_code,
-            "source":             source,  # registered | recommended
-        }
-
-        if rule.get("appointment_required"):
-            appointment_rules.append({**base,
-                "appointment_target": rule.get("appointment_target_code"),
-                "qualification":      rule.get("appointment_qualification_code"),
+    # 중복 제거 + 정렬
+    seen = set()
+    items = []
+    for row in (res.data or []):
+        key = row["lv1_code"]
+        if key and key not in seen:
+            seen.add(key)
+            items.append({
+                "code": key,
+                "name": row["lv1_name"] or "",
             })
-        if rule.get("inspection_required"):
-            inspection_rules.append({**base,
-                "cycle_unit":  rule.get("inspection_cycle_unit_code"),
-                "cycle_value": rule.get("inspection_cycle_value"),
-            })
-        if rule.get("action_required"):
-            action_rules.append({**base,
-                "action_type": rule.get("action_type_code"),
-            })
-        if rule.get("report_required"):
-            report_rules.append({**base})
 
-    result.update({
-        "recommended_equipments": [
-            {
-                "facility_name": e.get("facility_name_std"),
-                "equipment_type_code": map_facility_to_equipment_type(e.get("facility_name_std", "")),
-                "match_band": e.get("match_band"),
-                "is_registered": map_facility_to_equipment_type(e.get("facility_name_std", "")) in existing_type_codes,
-            }
-            for e in recommended[:30]
-        ],
-        "summary": {
-            "recommended_equipment_count": len(recommended),
-            "mapped_type_codes":           len(recommended_type_codes),
-            "registered_type_codes":       len(existing_type_codes),
-            "total_rules_triggered":       len(rules),
-            "appointment_required":        len(appointment_rules),
-            "inspection_required":         len(inspection_rules),
-            "action_required":             len(action_rules),
-            "report_required":             len(report_rules),
-        },
-        "appointment_required": appointment_rules,
-        "inspection_required":  inspection_rules,
-        "action_required":      action_rules,
-        "report_required":      report_rules,
-    })
-
-    return {"status": "success", "data": result}
-
-
-# ============================================================
-# 엔드포인트 3: KSIC 코드 검색
-# ============================================================
-
-@router.get("/ksic-search")
-def ksic_search(
-    query: str = Query(..., description="업종명 또는 코드 검색"),
-    limit: int = Query(20, le=100)
-):
-    """KSIC 코드 검색"""
-    supabase = get_supabase()
-
-    # 코드 검색
-    if query.isdigit():
-        res = supabase.table("industry_master")\
-            .select("lv4_code, lv4_name, industry_path_ko, lv1_code, lv1_name")\
-            .like("lv4_code", f"{query}%")\
-            .eq("is_active", True)\
-            .limit(limit).execute()
-    else:
-        # 업종명 검색
-        res = supabase.table("industry_master")\
-            .select("lv4_code, lv4_name, industry_path_ko, lv1_code, lv1_name")\
-            .ilike("lv4_name", f"%{query}%")\
-            .eq("is_active", True)\
-            .limit(limit).execute()
+    items.sort(key=lambda x: x["code"])
 
     return {
         "status": "success",
-        "query":  query,
-        "count":  len(res.data or []),
-        "data":   res.data or [],
+        "data": {"level": 1, "items": items, "total": len(items)}
     }
 
 
-# ============================================================
-# 엔드포인트 4: KSIC 업종별 설비 통계
-# ============================================================
-
-@router.get("/ksic-equipment-stats/{ksic_code}")
-def ksic_equipment_stats(ksic_code: str):
-    """특정 KSIC 코드의 설비 통계"""
+# ──────────────────────────────────────────────
+# GET /ksic-engine/hierarchy/lv2?lv1={code}
+# lv2 목록 (lv1 선택 후 중분류용)
+# ──────────────────────────────────────────────
+@router.get("/hierarchy/lv2")
+async def get_ksic_lv2(lv1: str = Query(..., description="lv1 코드")):
+    """KSIC 중분류(lv2) 목록 - 대분류 선택 후"""
     supabase = get_supabase()
+    res = supabase.table("industry_master").select(
+        "lv2_code, lv2_name"
+    ).eq("lv1_code", lv1).eq("is_active", True).execute()
 
-    # 설비 조회
-    equipments = get_equipment_by_ksic(
-        ksic_code, supabase,
-        ["MUST", "CORE", "CORE_PLUS", "OPTIONAL"]
-    )
+    seen = set()
+    items = []
+    for row in (res.data or []):
+        key = row["lv2_code"]
+        if key and key not in seen:
+            seen.add(key)
+            items.append({
+                "code": key,
+                "name": row["lv2_name"] or "",
+            })
 
-    # match_band별 분류
-    by_band = {}
-    for e in equipments:
-        band = e.get("match_band", "UNKNOWN")
-        if band not in by_band:
-            by_band[band] = []
-        by_band[band].append({
-            "facility_name": e.get("facility_name_std"),
-            "equipment_type_code": map_facility_to_equipment_type(e.get("facility_name_std", "")),
-            "match_score": e.get("match_score"),
-        })
-
-    # 법령 룰 수 계산
-    all_type_codes = list(set(filter(None, [
-        map_facility_to_equipment_type(e.get("facility_name_std", ""))
-        for e in equipments
-    ])))
-    rules = get_rules_by_equipment_types(all_type_codes, supabase)
-
-    # KSIC 정보
-    industry_res = supabase.table("industry_master")\
-        .select("lv4_code, lv4_name, industry_path_ko")\
-        .eq("lv4_code", ksic_code)\
-        .limit(1).execute()
+    items.sort(key=lambda x: x["code"])
 
     return {
-        "status":       "success",
-        "ksic_code":    ksic_code,
-        "industry":     industry_res.data[0] if industry_res.data else None,
-        "equipment_summary": {
-            "total":      len(equipments),
-            "must":       len(by_band.get("MUST", [])),
-            "core":       len(by_band.get("CORE", [])),
-            "core_plus":  len(by_band.get("CORE_PLUS", [])),
-            "optional":   len(by_band.get("OPTIONAL", [])),
-        },
-        "law_rules_count": len(rules),
-        "by_band": by_band,
+        "status": "success",
+        "data": {"level": 2, "parent_code": lv1, "items": items, "total": len(items)}
     }
 
 
-@router.get("/test")
-def test():
-    return {"message": "KSIC engine alive", "version": ENGINE_VERSION}
+# ──────────────────────────────────────────────
+# GET /ksic-engine/hierarchy/lv3?lv2={code}
+# lv3 목록 (lv2 선택 후 소분류용)
+# ──────────────────────────────────────────────
+@router.get("/hierarchy/lv3")
+async def get_ksic_lv3(lv2: str = Query(..., description="lv2 코드")):
+    """KSIC 소분류(lv3) 목록 - 중분류 선택 후"""
+    supabase = get_supabase()
+    res = supabase.table("industry_master").select(
+        "lv3_code, lv3_name"
+    ).eq("lv2_code", lv2).eq("is_active", True).execute()
+
+    seen = set()
+    items = []
+    for row in (res.data or []):
+        key = row["lv3_code"]
+        if key and key not in seen:
+            seen.add(key)
+            items.append({
+                "code": key,
+                "name": row["lv3_name"] or "",
+            })
+
+    items.sort(key=lambda x: x["code"])
+
+    return {
+        "status": "success",
+        "data": {"level": 3, "parent_code": lv2, "items": items, "total": len(items)}
+    }
+
+
+# ──────────────────────────────────────────────
+# GET /ksic-engine/hierarchy/lv4?lv3={code}
+# lv4 목록 (lv3 선택 후 세세분류/업종코드용)
+# ──────────────────────────────────────────────
+@router.get("/hierarchy/lv4")
+async def get_ksic_lv4(lv3: str = Query(..., description="lv3 코드")):
+    """KSIC 세분류(lv4/업종코드) 목록 - 소분류 선택 후"""
+    supabase = get_supabase()
+    res = supabase.table("industry_master").select(
+        "industry_code_full, industry_name_full, industry_path_ko"
+    ).eq("lv3_code", lv3).eq("is_active", True).execute()
+
+    items = []
+    for row in (res.data or []):
+        if row.get("industry_code_full"):
+            items.append({
+                "code": row["industry_code_full"],
+                "name": row["industry_name_full"] or "",
+                "path": row["industry_path_ko"] or "",
+            })
+
+    items.sort(key=lambda x: x["code"])
+
+    return {
+        "status": "success",
+        "data": {"level": 4, "parent_code": lv3, "items": items, "total": len(items)}
+    }
+
+
+# ──────────────────────────────────────────────
+# GET /ksic-engine/process-search?ksic={code}&lv1={lv1}&lv2={lv2}&lv3={lv3}
+# KSIC 코드 기반 공정 목록 (v_process_unified)
+# 셀렉트바 각 단계별 공정 필터링용
+# ──────────────────────────────────────────────
+@router.get("/process-search")
+async def search_processes_by_ksic(
+    ksic: Optional[str] = Query(None, description="KSIC 4자리 업종코드"),
+    lv1: Optional[str] = Query(None, description="공정 대분류 (lv1)"),
+    lv2: Optional[str] = Query(None, description="공정 중분류 (lv2)"),
+    lv3: Optional[str] = Query(None, description="공정 소분류 (lv3)"),
+    source: Optional[str] = Query(None, description="소스 필터: KOSHA_GUIDE/TAI_EXISTING/TEMPLATE"),
+    limit: int = Query(200, ge=1, le=1000),
+):
+    """
+    KSIC 코드 기반 공정 목록 조회 (v_process_unified)
+    4단계 셀렉트바에서 각 단계별로 호출:
+    - ksic만 → 해당 업종의 lv1 목록
+    - ksic + lv1 → 해당 lv1의 lv2 목록
+    - ksic + lv1 + lv2 → 해당 lv2의 lv3 목록
+    - ksic + lv1 + lv2 + lv3 → 공정명 목록
+    """
+    supabase = get_supabase()
+
+    query = supabase.table("v_process_unified").select(
+        "id, process_id, industry_code_full, industry_name_full, "
+        "process_lv1, process_lv2, process_lv3, process_lv4, "
+        "process_path, process_source, source_priority"
+    )
+
+    if ksic:
+        query = query.eq("industry_code_full", ksic)
+    if lv1:
+        query = query.eq("process_lv1", lv1)
+    if lv2:
+        query = query.eq("process_lv2", lv2)
+    if lv3:
+        query = query.eq("process_lv3", lv3)
+    if source:
+        query = query.eq("process_source", source)
+
+    query = query.order("source_priority").order("process_lv1").order("process_lv2").order("process_lv3")
+    query = query.limit(limit)
+
+    res = query.execute()
+    items = res.data or []
+
+    # 단계별 unique 목록 추출
+    lv1_set = sorted(set(r["process_lv1"] for r in items if r.get("process_lv1")))
+    lv2_set = sorted(set(r["process_lv2"] for r in items if r.get("process_lv2")))
+    lv3_set = sorted(set(r["process_lv3"] for r in items if r.get("process_lv3")))
+
+    source_badge = {
+        "KOSHA_GUIDE": "KOSHA", "KOSHA_GUIDE_V2": "KOSHA",
+        "TAI_EXISTING": "TAI", "TEMPLATE": "TEMPLATE"
+    }
+
+    result_items = []
+    for row in items:
+        result_items.append({
+            **row,
+            "process_name": row.get("process_lv4") or row.get("process_lv3", ""),
+            "source_badge": source_badge.get(row.get("process_source", ""), ""),
+            "is_kosha": row.get("process_source", "").startswith("KOSHA"),
+        })
+
+    return {
+        "status": "success",
+        "data": {
+            "ksic_code": ksic,
+            "items": result_items,
+            "total": len(result_items),
+            "hierarchy": {
+                "lv1_options": lv1_set,
+                "lv2_options": lv2_set,
+                "lv3_options": lv3_set,
+            }
+        }
+    }
