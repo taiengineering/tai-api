@@ -8,7 +8,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from db.supabase_client import get_supabase
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any, List
 import requests
 import urllib3
 import os
@@ -52,38 +52,95 @@ def parse_bdmgtsn(bdmgtsn: str) -> dict:
 
 def get_juso(road_addr: str) -> Optional[dict]:
     """도로명주소 → JUSO API → bdMgtSn"""
-    r = requests.get(JUSO_URL, params={
-        "confmKey":     JUSO_KEY,
-        "currentPage":  1,
-        "countPerPage": 1,
-        "keyword":      road_addr,
-        "resultType":   "json"
-    }, verify=False, timeout=10)
-    data = r.json()
-    results = data.get("results", {}).get("juso", [])
-    return results[0] if results else None
-
-
-def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, rows: int = 10) -> Optional[list]:
-    """건축물대장 API 공통 호출"""
-    r = requests.get(f"{BUILDING_BASE}/{endpoint}", params={
-        "serviceKey": BUILDING_KEY,
-        "sigunguCd":  sigungu,
-        "bjdongCd":   bjdong,
-        "bun":        bun,
-        "ji":         ji,
-        "numOfRows":  rows,
-        "pageNo":     1,
-        "_type":      "json"
-    }, verify=False, timeout=10)
-    data = r.json()
-    body = data.get("response", {}).get("body", {})
-    if str(body.get("totalCount", "0")) == "0":
+    try:
+        r = requests.get(JUSO_URL, params={
+            "confmKey":     JUSO_KEY,
+            "currentPage":  1,
+            "countPerPage": 1,
+            "keyword":      road_addr,
+            "resultType":   "json"
+        }, verify=False, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+    except (requests.RequestException, ValueError, TypeError):
         return None
-    items = body.get("items", {}).get("item", [])
+    if not isinstance(data, dict):
+        return None
+    results = data.get("results")
+    if not isinstance(results, dict):
+        return None
+    juso = results.get("juso")
+    if isinstance(juso, dict):
+        return juso
+    if isinstance(juso, list) and juso:
+        return juso[0]
+    return None
+
+
+def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, rows: int = 10) -> Optional[List[dict]]:
+    """
+    건축물대장 API 공통 호출.
+    공공데이터포털은 건축물이 없거나 오류 시 body 가 빈 문자열("")이거나,
+    items 가 null 인 경우가 있어 기존 코드에서 AttributeError → 500 이 났음.
+    """
+    if not (BUILDING_KEY and str(BUILDING_KEY).strip()):
+        return None
+    try:
+        r = requests.get(
+            f"{BUILDING_BASE}/{endpoint}",
+            params={
+                "serviceKey": BUILDING_KEY,
+                "sigunguCd":  sigungu,
+                "bjdongCd":   bjdong,
+                "bun":        bun,
+                "ji":         ji,
+                "numOfRows":  rows,
+                "pageNo":     1,
+                "_type":      "json",
+            },
+            verify=False,
+            timeout=10,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except (requests.RequestException, ValueError, TypeError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+    resp = data.get("response")
+    if not isinstance(resp, dict):
+        return None
+
+    header = resp.get("header")
+    if isinstance(header, dict):
+        rc = str(header.get("resultCode", "00"))
+        if rc not in ("00", "0"):
+            return None
+
+    body = resp.get("body")
+    # 결과 없음/오류 시 body 가 dict 가 아닌 경우가 많음
+    if not isinstance(body, dict):
+        return None
+
+    try:
+        total = int(str(body.get("totalCount", "0")))
+    except (TypeError, ValueError):
+        total = 0
+    if total == 0:
+        return None
+
+    items_wrap = body.get("items")
+    if not isinstance(items_wrap, dict):
+        return None
+    items: Any = items_wrap.get("item")
+    if items is None:
+        return None
     if isinstance(items, dict):
-        items = [items]
-    return items
+        return [items]
+    if isinstance(items, list):
+        return items
+    return None
 
 
 def get_building_title(sigungu: str, bjdong: str, bun: str, ji: str = "0000") -> Optional[list]:
@@ -290,6 +347,9 @@ def search_building(
     # 건축물대장 전체 조회
     building_data = fetch_all_building_data(bdmgtsn)
 
+    # 설문/프론트 자동입력용 — factories 컬럼명과 동일한 키 (json.data)
+    data_preview = build_factory_update(juso, building_data)
+
     # 요약 생성
     title_items = building_data.get("title", []) or []
     title = None
@@ -333,6 +393,7 @@ def search_building(
         "status":      "success",
         "bdmgtsn":     bdmgtsn,
         "juso":        juso,
+        "data":        data_preview,
         "summary":     summary,
         "zone_info":   zone_info,
         "floor_count_from_floors": len(building_data.get("floors", []) or []),
