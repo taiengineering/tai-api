@@ -37,8 +37,9 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://tadmin.taieng.co.kr",
         "https://admin.taieng.co.kr",
-        "https://taieng-admin.pages.dev",
+        "https://tadmin.taieng.co.kr",
         "http://127.0.0.1:5500",
         "http://localhost:5500",
     ],
