@@ -1,9 +1,10 @@
-# routers/building_register.py v1.2.0
-# 각 단계 try/except + print 로그 추가 — Railway 로그에서 500 원인 확인용
+# routers/building_register.py v1.3.0
+# /search: async + 단계별 [BUILD-n] 로그, 표제부만 조회해 직렬화 단순화
 
 from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any, List
+import asyncio
 import requests, urllib3, os, traceback
 from supabase import create_client
 
@@ -15,7 +16,7 @@ SUPABASE_URL  = os.getenv("SUPABASE_URL")
 SUPABASE_KEY  = os.getenv("SUPABASE_KEY")
 JUSO_KEY      = os.environ.get("JUSO_API_KEY", "U01TX0FVVEgyMDI2MDMxODEyMjUxNjExNzc1MTc=")
 BUILDING_KEY  = os.environ.get("BUILDING_API_KEY", "")
-VERSION       = "1.2.0"
+VERSION       = "1.3.0"
 
 JUSO_URL      = "https://www.juso.go.kr/addrlink/addrLinkApi.do"
 BUILDING_BASE = "https://apis.data.go.kr/1613000/BldRgstHubService"
@@ -35,6 +36,20 @@ def parse_bdmgtsn(bdmgtsn: str) -> dict:
         "bun":       bdmgtsn[11:15],
         "ji":        bdmgtsn[15:19],
     }
+
+
+def _safe_int(val: Any) -> Optional[int]:
+    try:
+        return int(val) if val not in (None, "", "null") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_float(val: Any) -> Optional[float]:
+    try:
+        return float(val) if val not in (None, "", "null") else None
+    except (TypeError, ValueError):
+        return None
 
 
 def get_juso(road_addr: str) -> Optional[dict]:
@@ -65,6 +80,37 @@ def get_juso(road_addr: str) -> Optional[dict]:
     except Exception as e:
         print(f"[JUSO ERROR] {e}\n{traceback.format_exc()}")
         return None
+
+
+def _get_juso_info_sync(road_addr: str) -> Optional[dict]:
+    """JUSO 동기 호출 — HTTP/JSON 오류 시 예외 (search 단계에서 500 구분용)"""
+    r = requests.get(
+        JUSO_URL,
+        params={
+            "confmKey": JUSO_KEY,
+            "currentPage": 1,
+            "countPerPage": 1,
+            "keyword": road_addr,
+            "resultType": "json",
+        },
+        verify=False,
+        timeout=10,
+    )
+    r.raise_for_status()
+    data = r.json()
+    if not isinstance(data, dict):
+        raise ValueError("JUSO 응답이 JSON 객체가 아님")
+    results = data.get("results", {})
+    if not isinstance(results, dict):
+        raise ValueError("JUSO results 형식 오류")
+    juso = results.get("juso", [])
+    if isinstance(juso, dict):
+        juso = [juso]
+    return juso[0] if juso else None
+
+
+async def get_juso_info(road_addr: str) -> Optional[dict]:
+    return await asyncio.to_thread(_get_juso_info_sync, road_addr)
 
 
 def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, rows: int = 10) -> Optional[list]:
@@ -147,6 +193,25 @@ def get_floor_outline(sigungu, bjdong, bun, ji="0000"):
 
 def get_sewage_info(sigungu, bjdong, bun, ji="0000"):
     return _building_get("getBrExposPublcRqstInfo", sigungu, bjdong, bun, ji)
+
+
+def _get_br_title_info_sync(bdmgtsn: str) -> Optional[List[dict]]:
+    """bdMgtSn → 표제부 목록 (ji 폴백). 허브 오류는 내부에서 None."""
+    parsed = parse_bdmgtsn(bdmgtsn)
+    if not parsed:
+        return None
+    sigungu = parsed["sigunguCd"]
+    bjdong = parsed["bjdongCd"]
+    bun = parsed["bun"]
+    ji = parsed["ji"]
+    title = get_building_title(sigungu, bjdong, bun, ji)
+    if not title:
+        title = get_building_title(sigungu, bjdong, bun, "0000")
+    return title
+
+
+async def get_br_title_info(bdmgtsn: str) -> Optional[List[dict]]:
+    return await asyncio.to_thread(_get_br_title_info_sync, bdmgtsn)
 
 
 def fetch_all_building_data(bdmgtsn: str) -> dict:
@@ -274,96 +339,87 @@ def test():
 
 
 @router.get("/search")
-def search_building(
-    address: str  = Query(..., description="도로명주소"),
-    save:    bool = Query(False)
-):
-    print(f"\n{'='*50}")
-    print(f"[SEARCH] 시작 address={address}")
+async def search_building(address: str = Query(..., description="도로명주소"), save: bool = Query(False)):
+    print(f"[BUILD-1] 주소 검색: {address}")
 
-    # STAGE 1 — JUSO
+    # --- JUSO API ---
     try:
-        juso = get_juso(address)
+        juso_data = await get_juso_info(address)
+        print(f"[BUILD-2] JUSO 응답: {juso_data}")
     except Exception as e:
-        print(f"[SEARCH] STAGE1 예외: {e}\n{traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"JUSO 조회 오류: {str(e)}")
+        print(f"[BUILD-ERR-JUSO] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"주소 API 오류: {str(e)}")
 
-    if not juso:
+    if not juso_data:
         raise HTTPException(status_code=404, detail="주소를 찾을 수 없습니다")
 
-    bdmgtsn = juso.get("bdMgtSn", "")
-    print(f"[SEARCH] STAGE1 완료 bdmgtsn={bdmgtsn}")
+    bdmgtsn = (
+        juso_data.get("bdMgtSn")
+        or juso_data.get("bdmgtsn")
+        or (str(juso_data.get("admCd") or "") + str(juso_data.get("rnMgtSn") or ""))
+    )
+    print(f"[BUILD-3] bdMgtSn: {bdmgtsn}")
 
     if not bdmgtsn:
-        raise HTTPException(status_code=404, detail="건물관리번호를 찾을 수 없습니다")
+        raise HTTPException(status_code=404, detail="건물관리번호(bdMgtSn)를 찾을 수 없습니다")
 
-    # STAGE 2 — 건축물대장
+    # --- 건축물대장 표제부 ---
     try:
-        building_data = fetch_all_building_data(bdmgtsn)
-        print(f"[SEARCH] STAGE2 완료 title={len(building_data.get('title') or [])}건")
+        title_data = await get_br_title_info(bdmgtsn)
+        print(f"[BUILD-4] 표제부 응답: {title_data}")
     except Exception as e:
-        print(f"[SEARCH] STAGE2 예외: {e}\n{traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"건축물대장 조회 오류: {str(e)}")
+        print(f"[BUILD-ERR-TITLE] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"건축물대장 API 오류: {str(e)}")
 
-    # STAGE 3 — 응답 JSON 조립
+    # title_data 가 list 면 주건축물 우선, 없으면 첫 행
+    if isinstance(title_data, list):
+        title = next((i for i in title_data if i.get("mainAtchGbCdNm") == "주건축물"), None)
+        if not title and title_data:
+            title = title_data[0]
+        elif not title:
+            title = {}
+    elif isinstance(title_data, dict):
+        items = title_data.get("items") or title_data.get("data") or []
+        title = items[0] if items else title_data
+    else:
+        title = {}
+
+    print(f"[BUILD-5] 파싱된 표제부: {title}")
+
+    # --- 응답 직렬화 ---
     try:
-        title_items = building_data.get("title", []) or []
-        title = next((i for i in title_items if i.get("mainAtchGbCdNm") == "주건축물"), None)
-        if not title and title_items:
-            title = title_items[0]
+        use_approve_day = str(title.get("useAprDay") or title.get("use_approve_day") or "")
+        completion_year = int(use_approve_day[:4]) if len(use_approve_day) >= 4 else None
 
-        summary = {}
-        if title:
-            summary = {
-                "building_name":           title.get("bldNm", "").strip() or juso.get("bdNm", ""),
-                "road_address":            title.get("newPlatPlc", ""),
-                "total_area":              _to_float(title.get("totArea")),
-                "land_area":               _to_float(title.get("platArea")),
-                "arch_area":               _to_float(title.get("archArea")),
-                "floor_count":             _to_int(title.get("grndFlrCnt")),
-                "underground_floor_count": _to_int(title.get("ugrndFlrCnt")),
-                "height":                  _to_float(title.get("heit")),
-                "main_purpose":            title.get("mainPurpsCdNm", "").strip(),
-                "structure":               title.get("strctCdNm", "").strip(),
-                "use_approve_day":         title.get("useAprDay"),
-                "elevator_count":          _to_int(title.get("rideUseElvtCnt")),
-                "emergency_elevator_count":_to_int(title.get("emgenUseElvtCnt")),
-                "earthquake_design":       title.get("rserthqkDsgnApplyYn") == "1",
-            }
+        mp = title.get("mainPurpsCdNm") or title.get("main_purpose_name") or ""
+        main_purpose_name = mp.strip() if isinstance(mp, str) else str(mp or "")
 
-        basis_items = building_data.get("basis", []) or []
-        zone_info = {}
-        if basis_items:
-            b = basis_items[0]
-            zone_info = {
-                "land_use_zone":      b.get("jiyukCdNm", "").strip(),
-                "land_district_zone": b.get("jiguCdNm", "").strip(),
-                "land_planning_zone": b.get("guyukCdNm", "").strip(),
-            }
-
-        data = build_factory_update(juso, building_data)
-        print(f"[SEARCH] STAGE3 완료 data_keys={list(data.keys())[:5]}")
-
-    except Exception as e:
-        print(f"[SEARCH] STAGE3 예외: {e}\n{traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"응답 조립 오류: {str(e)}")
-
-    print(f"[SEARCH] 완료\n{'='*50}")
-    return {
-        "status":    "success",
-        "bdmgtsn":   bdmgtsn,
-        "juso":      juso,
-        "summary":   summary,
-        "zone_info": zone_info,
-        "data":      data,
-        "floor_count_from_floors": len(building_data.get("floors", []) or []),
-        "has_sewage": bool(building_data.get("sewage")),
-        "raw": {
-            "title_count": len(title_items),
-            "basis_count": len(basis_items),
-            "floor_count": len(building_data.get("floors", []) or []),
+        result = {
+            "status": "success",
+            "data": {
+                "bdmgtsn": bdmgtsn,
+                "main_purpose_name": main_purpose_name,
+                "floor_count": _safe_int(title.get("grndFlrCnt") or title.get("floor_count")),
+                "underground_floor_count": _safe_int(title.get("ugrndFlrCnt") or title.get("underground_floor_count")),
+                "building_area": _safe_float(title.get("totArea") or title.get("building_area")),
+                "arch_area": _safe_float(title.get("archArea") or title.get("arch_area")),
+                "use_approve_day": use_approve_day,
+                "completion_year": completion_year,
+                "ride_elevator_count": _safe_int(title.get("rideUseElvtCnt") or title.get("ride_elevator_count")),
+                "emergency_elevator_count": _safe_int(title.get("emgenUseElvtCnt") or title.get("emergency_elevator_count")),
+                "earthquake_design_applied": (
+                    title.get("erthqkDsgnApplyYn") == "Y"
+                    or title.get("rserthqkDsgnApplyYn") == "1"
+                    or title.get("earthquake_design_applied") is True
+                ),
+            },
         }
-    }
+        print(f"[BUILD-6] 최종 반환: {result}")
+        return result
+
+    except Exception as e:
+        print(f"[BUILD-ERR-SERIAL] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"응답 처리 오류: {str(e)}")
 
 
 @router.post("/apply/{factory_id}")
