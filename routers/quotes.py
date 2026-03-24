@@ -4,9 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 import os
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import resend
 from supabase import create_client
 
 router = APIRouter(prefix="/quotes", tags=["quotes"])
@@ -49,48 +47,38 @@ class SurveySubmit(BaseModel):
     survey_type:          Optional[str]   = "basic"
 
 
-SMTP_HOST   = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT   = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER   = os.getenv("SMTP_USER")
-SMTP_PASS   = os.getenv("SMTP_PASS")
-NOTIFY_EMAIL = os.getenv("NOTIFY_EMAIL", "tai@taieng.co.kr")
-
-
 def send_notification_email(quote_no: str, payload: SurveySubmit):
     try:
-        if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
-            print("[EMAIL] SMTP 미설정 — 발송 스킵")
+        api_key = os.environ.get("RESEND_API_KEY", "")
+        if not api_key:
+            print("[EMAIL] RESEND_API_KEY 미설정 — 스킵")
             return
 
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"[TAI] 새 견적 문의 접수 — {quote_no}"
-        msg["From"]    = SMTP_USER
-        msg["To"]      = NOTIFY_EMAIL
+        resend.api_key = api_key
+        notify_to = os.environ.get("NOTIFY_EMAIL", "tai@taieng.co.kr")
 
-        body = (
-            f"새 견적 문의가 접수됐습니다.\n\n"
-            f"견적번호: {quote_no}\n"
-            f"접수시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            f"업체명:   {payload.company_name}\n"
-            f"담당자:   {payload.contact_name}\n"
-            f"연락처:   {payload.contact_phone}\n"
-            f"이메일:   {payload.contact_email or 'N/A'}\n\n"
-            f"건물유형: {payload.building_type or 'N/A'}\n"
-            f"주소:     {payload.address or 'N/A'}\n"
-            f"연면적:   {payload.floor_area or 'N/A'} m2\n"
-            f"근로자수: {payload.employee_count or 'N/A'}명\n"
-            f"전기용량: {payload.electrical_kw or 'N/A'} kW\n\n"
-            f"출처:     {payload.source}\n\n"
-            f"관리자:   https://admin.taieng.co.kr/quote-list.html\n"
-        )
-
-        msg.attach(MIMEText(body, "plain", "utf-8"))
-
-        with smtplib.SMTP_SSL(SMTP_HOST, 465) as server:
-            server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(SMTP_USER, NOTIFY_EMAIL, msg.as_string())
-
-        print(f"[EMAIL] 발송 성공 → {NOTIFY_EMAIL}")
+        resend.Emails.send({
+            "from": "TAI Engineering <noreply@taieng.co.kr>",
+            "to": notify_to,
+            "subject": f"[TAI] 새 견적 문의 접수 — {quote_no}",
+            "text": (
+                f"새 견적 문의가 접수됐습니다.\n\n"
+                f"접수번호: {quote_no}\n"
+                f"접수시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                f"담당자명: {payload.contact_name}\n"
+                f"연락처:   {payload.contact_phone}\n"
+                f"이메일:   {payload.contact_email or 'N/A'}\n"
+                f"회사명:   {payload.company_name}\n\n"
+                f"건물유형: {payload.building_type or 'N/A'}\n"
+                f"주소:     {payload.address or 'N/A'}\n"
+                f"연면적:   {payload.floor_area or 'N/A'} m2\n"
+                f"근로자수: {payload.employee_count or 'N/A'}명\n"
+                f"전기용량: {payload.electrical_kw or 'N/A'} kW\n\n"
+                f"출처:     {payload.source}\n\n"
+                f"관리자:   https://admin.taieng.co.kr/quote-list.html\n"
+            )
+        })
+        print(f"[EMAIL] Resend 발송 성공 → {quote_no}")
 
     except Exception as e:
         print(f"[EMAIL ERROR] {e}")
