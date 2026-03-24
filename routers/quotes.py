@@ -1,5 +1,5 @@
 # routers/quotes.py
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
@@ -120,7 +120,7 @@ def send_notification_email(quote_no: str, payload: SurveySubmit):
 
 
 @router.post("/survey")
-def submit_survey(payload: SurveySubmit):
+def submit_survey(payload: SurveySubmit, background_tasks: BackgroundTasks):
     supabase = get_supabase()
 
     today = datetime.now().strftime("%Y%m%d")
@@ -155,7 +155,7 @@ def submit_survey(payload: SurveySubmit):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"저장 실패: {str(e)}")
 
-    send_notification_email(quote_no, payload)
+    background_tasks.add_task(send_notification_email, quote_no, payload)
 
     return {
         "status": "success",
