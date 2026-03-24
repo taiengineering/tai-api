@@ -8,8 +8,9 @@
 from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime
 from typing import Optional, Any, List
-import asyncio, re, requests, urllib3, os, traceback, time
+import asyncio, re, requests, urllib3, os, traceback
 from supabase import create_client
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -19,7 +20,7 @@ SUPABASE_URL  = os.getenv("SUPABASE_URL")
 SUPABASE_KEY  = os.getenv("SUPABASE_KEY")
 JUSO_KEY      = os.environ.get("JUSO_API_KEY", "U01TX0FVVEgyMDI2MDMxODEyMjUxNjExNzc1MTc=")
 BUILDING_KEY  = os.environ.get("BUILDING_API_KEY", "")
-VERSION       = "2.1.0"
+VERSION       = "2.2.0"
 
 JUSO_URL      = "https://www.juso.go.kr/addrlink/addrLinkApi.do"
 BUILDING_BASE = "https://apis.data.go.kr/1613000/BldRgstHubService"
@@ -72,41 +73,51 @@ def _to_int(v) -> Optional[int]:
 # JUSO API — 다단계 폴백
 # ============================================================
 
+JUSO_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (compatible; TAI-API/1.0)',
+    'Accept': 'application/json',
+    'Accept-Charset': 'UTF-8',
+}
+
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
 def _juso_call_once(keyword: str) -> Optional[dict]:
-    """JUSO API 단일 호출 (재시도 3회)"""
-    last_err = None
-    for attempt in range(3):
-        try:
-            r = requests.get(JUSO_URL, params={
-                "confmKey":     JUSO_KEY,
-                "currentPage":  1,
-                "countPerPage": 1,
-                "keyword":      keyword,
-                "resultType":   "json"
-            }, verify=False, timeout=15)
-            r.raise_for_status()
-            data = r.json()
-            results = data.get("results", {}) if isinstance(data, dict) else {}
-            common  = results.get("common", {}) if isinstance(results, dict) else {}
-            error_code = str(common.get("errorCode", "0"))
-            if error_code != "0":
-                print(f"[JUSO] errorCode={error_code} msg={common.get('errorMessage')}")
-                return None
-            total = int(common.get("totalCount", "0") or "0")
-            print(f"[JUSO] keyword={keyword[:25]} total={total} attempt={attempt+1}")
-            juso = results.get("juso", [])
-            if isinstance(juso, dict):
-                juso = [juso]
-            return juso[0] if juso else None
-        except (requests.exceptions.ConnectionError,
-                requests.exceptions.ChunkedEncodingError) as e:
-            last_err = e
-            time.sleep(1 * (attempt + 1))
-        except Exception as e:
-            print(f"[JUSO ERROR] {e}")
+    """JUSO API 단일 호출 — User-Agent 추가, 재시도 3회"""
+    try:
+        r = requests.get(JUSO_URL, params={
+            "confmKey":     JUSO_KEY,
+            "currentPage":  1,
+            "countPerPage": 1,
+            "keyword":      keyword,
+            "resultType":   "json",
+        }, headers=JUSO_HEADERS, verify=False, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+
+        if not isinstance(data, dict):
             return None
-    print(f"[JUSO] 3회 실패: {last_err}")
-    return None
+
+        results = data.get("results", {})
+        common = results.get("common", {})
+        error_code = common.get("errorCode", "0")
+        if error_code != "0":
+            print(f"[JUSO] 오류코드={error_code} keyword={keyword[:20]}")
+            return None
+
+        total = int(common.get("totalCount", 0) or 0)
+        print(f"[JUSO] keyword={keyword[:30]} totalCount={total}")
+
+        juso = results.get("juso", [])
+        if isinstance(juso, dict):
+            juso = [juso]
+        return juso[0] if juso else None
+
+    except (requests.exceptions.ConnectionError,
+            requests.exceptions.ChunkedEncodingError) as e:
+        print(f"[JUSO-RETRY] 연결 오류 재시도 중: {e}")
+        raise  # tenacity가 재시도 처리
+    except Exception as e:
+        print(f"[JUSO ERROR] {e}")
+        return None
 
 
 # 카카오 축약 시도명 → 공식 전체명 변환 테이블
