@@ -1,12 +1,10 @@
 # routers/quotes.py
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 import os
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import resend as resend_client
 from supabase import create_client
 
 router = APIRouter(prefix="/quotes", tags=["quotes"])
@@ -49,78 +47,39 @@ class SurveySubmit(BaseModel):
     survey_type:          Optional[str]   = "basic"
 
 
-def send_notification_email(quote_no: str, payload: SurveySubmit):
-    smtp_host  = os.getenv("SMTP_HOST", "smtp.gmail.com")
-    smtp_port  = int(os.getenv("SMTP_PORT", 587))
-    smtp_user  = os.getenv("SMTP_USER")
-    smtp_pass  = os.getenv("SMTP_PASS")
-    notify_to  = os.getenv("NOTIFY_EMAIL", "tai@taieng.co.kr")
-
-    if not smtp_user or not smtp_pass:
-        print("[WARN] SMTP not configured")
-        return
-
-    equip_list = []
-    if payload.equip_electric:  equip_list.append("Electric")
-    if payload.equip_gas:       equip_list.append("Gas")
-    if payload.equip_fire:      equip_list.append("Fire")
-    if payload.equip_elevator:  equip_list.append("Elevator")
-    if payload.equip_boiler:    equip_list.append("Boiler")
-    if payload.equip_crane:     equip_list.append("Crane")
-    if payload.equip_pressure:  equip_list.append("Pressure")
-    if payload.equip_chemical:  equip_list.append("Chemical")
-    if payload.equip_cold:      equip_list.append("Cold Storage")
-
-    body = (
-        f"[TAI Legal Diagnosis Request]\n\n"
-        f"Quote No: {quote_no}\n"
-        f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        f"Company: {payload.company_name}\n"
-        f"Contact: {payload.contact_name}\n"
-        f"Phone: {payload.contact_phone}\n"
-        f"Email: {payload.contact_email or 'N/A'}\n\n"
-        f"Building Type: {payload.building_type or 'N/A'}\n"
-        f"Address: {payload.address or 'N/A'}\n"
-        f"Floor Area: {payload.floor_area or 'N/A'} m2\n"
-        f"Employees: {payload.employee_count or 'N/A'}\n"
-        f"Electrical: {payload.electrical_kw or 'N/A'} kW\n\n"
-        f"Equipment: {', '.join(equip_list) if equip_list else 'None'}\n"
-        f"Hazmat: {'Yes' if payload.hazmat_yn else 'No'}\n"
-        f"Night Work: {'Yes' if payload.night_work_yn else 'No'}\n"
-        f"Source: {payload.source}\n\n"
-        f"Admin: https://admin.taieng.co.kr/quote-list.html\n"
-    )
-
+def send_notification_email(quote_no: str, payload: dict):
     try:
-        # Railway 서버는 한글 호스트명 문제 없음 — name_resolution 직접 지정
-        server = smtplib.SMTP(smtp_host, smtp_port, local_hostname="localhost")
-        server.ehlo("localhost")
-        server.starttls()
-        server.ehlo("localhost")
-        server.login(smtp_user, smtp_pass)
+        api_key = os.environ.get("RESEND_API_KEY", "")
+        if not api_key:
+            print("[EMAIL] RESEND_API_KEY 미설정 — 스킵")
+            return
 
-        # 전체 이메일을 bytes로 직접 구성 (한글 인코딩 완전 우회)
-        import email.utils
-        boundary = "===============TAI001=="
-        raw = (
-            f"MIME-Version: 1.0\r\n"
-            f"Content-Type: text/plain; charset=utf-8\r\n"
-            f"Content-Transfer-Encoding: base64\r\n"
-            f"From: {smtp_user}\r\n"
-            f"To: {notify_to}\r\n"
-            f"Subject: =?utf-8?b?{__import__('base64').b64encode(f'[TAI] {quote_no} - {payload.company_name}'.encode('utf-8')).decode()}?=\r\n"
-            f"\r\n"
-            f"{__import__('base64').b64encode(body.encode('utf-8')).decode()}\r\n"
-        )
-        server.sendmail(smtp_user, notify_to, raw.encode("ascii"))
-        server.quit()
-        print(f"[EMAIL] Sent -> {notify_to} ({quote_no})")
+        resend_client.api_key = api_key
+        notify_email = os.environ.get("NOTIFY_EMAIL", "tai@taieng.co.kr")
+
+        resend_client.Emails.send({
+            "from": "TAI Engineering <noreply@taieng.co.kr>",
+            "to": [notify_email],
+            "subject": f"[TAI] 새 견적 문의 접수 — {quote_no}",
+            "text": f"""새 견적 문의가 접수됐습니다.
+
+접수번호: {quote_no}
+담당자명: {payload.get('contact_name', '')}
+연락처:   {payload.get('contact_phone', '')}
+이메일:   {payload.get('contact_email', '')}
+회사명:   {payload.get('company_name', '')}
+주소:     {payload.get('address', '')}
+연면적:   {payload.get('floor_area', '')}㎡
+"""
+        })
+        print(f"[EMAIL] Resend 발송 성공 → {notify_email} ({quote_no})")
+
     except Exception as e:
         print(f"[EMAIL ERROR] {e}")
 
 
 @router.post("/survey")
-def submit_survey(payload: SurveySubmit):
+def submit_survey(payload: SurveySubmit, background_tasks: BackgroundTasks):
     supabase = get_supabase()
 
     today = datetime.now().strftime("%Y%m%d")
@@ -155,7 +114,7 @@ def submit_survey(payload: SurveySubmit):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"저장 실패: {str(e)}")
 
-    send_notification_email(quote_no, payload)
+    background_tasks.add_task(send_notification_email, quote_no, payload.dict())
 
     return {
         "status": "success",
