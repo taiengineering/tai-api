@@ -87,6 +87,6 @@ def health():
     import requests as req
     try:
         ip = req.get("https://api.ipify.org", timeout=5).text
-    except:
-        ip = "확인불가"
-    return {"status": "healthy", "server_ip": ip}
+    except Exception as e:
+        ip = f"확인불가: {e}"
+    return {"status": "healthy", "server_ip": ip, "version": "3.2.0"}
