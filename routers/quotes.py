@@ -86,10 +86,7 @@ def send_notification_email(quote_no: str, payload: SurveySubmit):
 
         msg.attach(MIMEText(body, "plain", "utf-8"))
 
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
+        with smtplib.SMTP_SSL(SMTP_HOST, 465) as server:
             server.login(SMTP_USER, SMTP_PASS)
             server.sendmail(SMTP_USER, NOTIFY_EMAIL, msg.as_string())
 
