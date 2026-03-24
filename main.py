@@ -13,10 +13,11 @@ from routers.factory_process_v3 import router as factory_process_router
 from routers.process_management import router as process_management_router
 from routers.building_register  import router as building_register_router
 from routers.quotes             import router as quotes_router
+from routers.report_forms       import router as report_forms_router
 
 app = FastAPI(
     title="TAI API",
-    version="3.0.0",
+    version="3.1.0",
     description="TAI 산업안전 플랫폼 API",
 )
 
@@ -46,14 +47,15 @@ app.include_router(legal_engine_router)
 app.include_router(ksic_engine_router)
 app.include_router(factory_process_router)
 app.include_router(process_management_router)
-app.include_router(building_register_router)
+app.include_router(building_register_router, prefix="/building-register")
 app.include_router(quotes_router)
+app.include_router(report_forms_router)
 
 
 # ── 헬스체크 ──────────────────────────────────────────────
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "3.0.0"}
+    return {"status": "ok", "service": "TAI API", "version": "3.1.0"}
 
 
 @app.get("/health")
