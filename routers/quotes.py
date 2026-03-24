@@ -49,72 +49,52 @@ class SurveySubmit(BaseModel):
     survey_type:          Optional[str]   = "basic"
 
 
+SMTP_HOST   = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT   = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER   = os.getenv("SMTP_USER")
+SMTP_PASS   = os.getenv("SMTP_PASS")
+NOTIFY_EMAIL = os.getenv("NOTIFY_EMAIL", "tai@taieng.co.kr")
+
+
 def send_notification_email(quote_no: str, payload: SurveySubmit):
-    smtp_host  = os.getenv("SMTP_HOST", "smtp.gmail.com")
-    smtp_port  = int(os.getenv("SMTP_PORT", 587))
-    smtp_user  = os.getenv("SMTP_USER")
-    smtp_pass  = os.getenv("SMTP_PASS")
-    notify_to  = os.getenv("NOTIFY_EMAIL", "tai@taieng.co.kr")
-
-    if not smtp_user or not smtp_pass:
-        print("[WARN] SMTP not configured")
-        return
-
-    equip_list = []
-    if payload.equip_electric:  equip_list.append("Electric")
-    if payload.equip_gas:       equip_list.append("Gas")
-    if payload.equip_fire:      equip_list.append("Fire")
-    if payload.equip_elevator:  equip_list.append("Elevator")
-    if payload.equip_boiler:    equip_list.append("Boiler")
-    if payload.equip_crane:     equip_list.append("Crane")
-    if payload.equip_pressure:  equip_list.append("Pressure")
-    if payload.equip_chemical:  equip_list.append("Chemical")
-    if payload.equip_cold:      equip_list.append("Cold Storage")
-
-    body = (
-        f"[TAI Legal Diagnosis Request]\n\n"
-        f"Quote No: {quote_no}\n"
-        f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        f"Company: {payload.company_name}\n"
-        f"Contact: {payload.contact_name}\n"
-        f"Phone: {payload.contact_phone}\n"
-        f"Email: {payload.contact_email or 'N/A'}\n\n"
-        f"Building Type: {payload.building_type or 'N/A'}\n"
-        f"Address: {payload.address or 'N/A'}\n"
-        f"Floor Area: {payload.floor_area or 'N/A'} m2\n"
-        f"Employees: {payload.employee_count or 'N/A'}\n"
-        f"Electrical: {payload.electrical_kw or 'N/A'} kW\n\n"
-        f"Equipment: {', '.join(equip_list) if equip_list else 'None'}\n"
-        f"Hazmat: {'Yes' if payload.hazmat_yn else 'No'}\n"
-        f"Night Work: {'Yes' if payload.night_work_yn else 'No'}\n"
-        f"Source: {payload.source}\n\n"
-        f"Admin: https://admin.taieng.co.kr/quote-list.html\n"
-    )
-
     try:
-        # Railway 서버는 한글 호스트명 문제 없음 — name_resolution 직접 지정
-        server = smtplib.SMTP(smtp_host, smtp_port, local_hostname="localhost")
-        server.ehlo("localhost")
-        server.starttls()
-        server.ehlo("localhost")
-        server.login(smtp_user, smtp_pass)
+        if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
+            print("[EMAIL] SMTP 미설정 — 발송 스킵")
+            return
 
-        # 전체 이메일을 bytes로 직접 구성 (한글 인코딩 완전 우회)
-        import email.utils
-        boundary = "===============TAI001=="
-        raw = (
-            f"MIME-Version: 1.0\r\n"
-            f"Content-Type: text/plain; charset=utf-8\r\n"
-            f"Content-Transfer-Encoding: base64\r\n"
-            f"From: {smtp_user}\r\n"
-            f"To: {notify_to}\r\n"
-            f"Subject: =?utf-8?b?{__import__('base64').b64encode(f'[TAI] {quote_no} - {payload.company_name}'.encode('utf-8')).decode()}?=\r\n"
-            f"\r\n"
-            f"{__import__('base64').b64encode(body.encode('utf-8')).decode()}\r\n"
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"[TAI] 새 견적 문의 접수 — {quote_no}"
+        msg["From"]    = SMTP_USER
+        msg["To"]      = NOTIFY_EMAIL
+
+        body = (
+            f"새 견적 문의가 접수됐습니다.\n\n"
+            f"견적번호: {quote_no}\n"
+            f"접수시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            f"업체명:   {payload.company_name}\n"
+            f"담당자:   {payload.contact_name}\n"
+            f"연락처:   {payload.contact_phone}\n"
+            f"이메일:   {payload.contact_email or 'N/A'}\n\n"
+            f"건물유형: {payload.building_type or 'N/A'}\n"
+            f"주소:     {payload.address or 'N/A'}\n"
+            f"연면적:   {payload.floor_area or 'N/A'} m2\n"
+            f"근로자수: {payload.employee_count or 'N/A'}명\n"
+            f"전기용량: {payload.electrical_kw or 'N/A'} kW\n\n"
+            f"출처:     {payload.source}\n\n"
+            f"관리자:   https://admin.taieng.co.kr/quote-list.html\n"
         )
-        server.sendmail(smtp_user, notify_to, raw.encode("ascii"))
-        server.quit()
-        print(f"[EMAIL] Sent -> {notify_to} ({quote_no})")
+
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(SMTP_USER, NOTIFY_EMAIL, msg.as_string())
+
+        print(f"[EMAIL] 발송 성공 → {NOTIFY_EMAIL}")
+
     except Exception as e:
         print(f"[EMAIL ERROR] {e}")
 
