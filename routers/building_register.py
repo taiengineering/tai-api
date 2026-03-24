@@ -20,9 +20,9 @@ SUPABASE_URL  = os.getenv("SUPABASE_URL")
 SUPABASE_KEY  = os.getenv("SUPABASE_KEY")
 JUSO_KEY      = os.environ.get("JUSO_API_KEY", "U01TX0FVVEgyMDI2MDMxODEyMjUxNjExNzc1MTc=")
 BUILDING_KEY  = os.environ.get("BUILDING_API_KEY", "")
-VERSION       = "2.2.0"
+VERSION       = "2.3.0"
 
-JUSO_URL      = "https://www.juso.go.kr/addrlink/addrLinkApi.do"
+JUSO_URL      = "https://business.juso.go.kr/addrlink/addrLinkApi.do"
 BUILDING_BASE = "https://apis.data.go.kr/1613000/BldRgstHubService"
 
 
@@ -81,14 +81,19 @@ JUSO_HEADERS = {
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
 def _juso_call_once(keyword: str) -> Optional[dict]:
-    """JUSO API 단일 호출 — User-Agent 추가, 재시도 3회"""
+    """JUSO API 단일 호출 — User-Agent 추가, firstSort 자동 판별, 재시도 3회"""
     try:
+        # 도로명/지번 자동 판별
+        has_road = any(x in keyword for x in ["로 ", "길 ", "대로 ", "로", "길", "대로"])
+        first_sort = "road" if has_road else "location"
+
         r = requests.get(JUSO_URL, params={
             "confmKey":     JUSO_KEY,
             "currentPage":  1,
             "countPerPage": 1,
             "keyword":      keyword,
             "resultType":   "json",
+            "firstSort":    first_sort,
         }, headers=JUSO_HEADERS, verify=False, timeout=10)
         r.raise_for_status()
         data = r.json()
