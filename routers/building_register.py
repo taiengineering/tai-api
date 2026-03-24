@@ -1,11 +1,11 @@
-# routers/building_register.py v1.3.0
-# /search: async + 단계별 [BUILD-n] 로그, 표제부만 조회해 직렬화 단순화
+# routers/building_register.py v1.4.0
+# 수정: _get_juso_info_sync 재시도 로직 추가 (ConnectionError 최대 3회)
 
 from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime
 from typing import Optional, Any, List
 import asyncio
-import requests, urllib3, os, traceback
+import requests, urllib3, os, traceback, time
 from supabase import create_client
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -16,7 +16,7 @@ SUPABASE_URL  = os.getenv("SUPABASE_URL")
 SUPABASE_KEY  = os.getenv("SUPABASE_KEY")
 JUSO_KEY      = os.environ.get("JUSO_API_KEY", "U01TX0FVVEgyMDI2MDMxODEyMjUxNjExNzc1MTc=")
 BUILDING_KEY  = os.environ.get("BUILDING_API_KEY", "")
-VERSION       = "1.3.0"
+VERSION       = "1.4.0"
 
 JUSO_URL      = "https://www.juso.go.kr/addrlink/addrLinkApi.do"
 BUILDING_BASE = "https://apis.data.go.kr/1613000/BldRgstHubService"
@@ -52,69 +52,175 @@ def _safe_float(val: Any) -> Optional[float]:
         return None
 
 
-def get_juso(road_addr: str) -> Optional[dict]:
-    """[STAGE 1] 도로명주소 → JUSO API → bdMgtSn"""
-    print(f"[JUSO] 요청 주소: {road_addr}")
+def _to_float(v) -> Optional[float]:
     try:
-        r = requests.get(JUSO_URL, params={
-            "confmKey":     JUSO_KEY,
-            "currentPage":  1,
-            "countPerPage": 1,
-            "keyword":      road_addr,
-            "resultType":   "json"
-        }, verify=False, timeout=10)
-        print(f"[JUSO] HTTP {r.status_code}")
-        data = r.json()
-        results = data.get("results", {})
-        common = results.get("common", {})
-        print(f"[JUSO] errorCode={common.get('errorCode')}, totalCount={common.get('totalCount')}")
-        juso = results.get("juso", [])
-        if isinstance(juso, dict):
-            juso = [juso]
-        if not juso:
-            print("[JUSO] 결과 없음")
-            return None
-        first = juso[0]
-        print(f"[JUSO] bdMgtSn={first.get('bdMgtSn')} roadAddr={first.get('roadAddr')}")
-        return first
-    except Exception as e:
-        print(f"[JUSO ERROR] {e}\n{traceback.format_exc()}")
+        f = float(v)
+        return f if f != 0 else None
+    except (TypeError, ValueError):
+        return None
+
+def _to_int(v) -> Optional[int]:
+    try:
+        i = int(v)
+        return i if i != 0 else None
+    except (TypeError, ValueError):
         return None
 
 
-def _get_juso_info_sync(road_addr: str) -> Optional[dict]:
-    """JUSO 동기 호출 — HTTP/JSON 오류 시 예외 (search 단계에서 500 구분용)"""
-    r = requests.get(
-        JUSO_URL,
-        params={
-            "confmKey": JUSO_KEY,
-            "currentPage": 1,
-            "countPerPage": 1,
-            "keyword": road_addr,
-            "resultType": "json",
-        },
-        verify=False,
-        timeout=10,
-    )
-    r.raise_for_status()
-    data = r.json()
-    if not isinstance(data, dict):
-        raise ValueError("JUSO 응답이 JSON 객체가 아님")
-    results = data.get("results", {})
-    if not isinstance(results, dict):
-        raise ValueError("JUSO results 형식 오류")
-    juso = results.get("juso", [])
-    if isinstance(juso, dict):
-        juso = [juso]
-    return juso[0] if juso else None
+# ============================================================
+# JUSO API
+# ============================================================
+
+def get_juso(road_addr: str) -> Optional[dict]:
+    """기존 동기 JUSO 호출 (apply 엔드포인트용) — 재시도 포함"""
+    return _get_juso_info_sync(road_addr)
+
+
+def _juso_call(keyword: str) -> Optional[dict]:
+    """JUSO API 단일 호출 — 재시도 포함. 성공 시 첫 결과 반환"""
+    params = {
+        "confmKey":     JUSO_KEY,
+        "currentPage":  1,
+        "countPerPage": 1,
+        "keyword":      keyword,
+        "resultType":   "json",
+    }
+    last_err = None
+    for attempt in range(3):
+        try:
+            r = requests.get(JUSO_URL, params=params, verify=False, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+            if not isinstance(data, dict):
+                raise ValueError("JUSO 응답이 JSON 객체가 아님")
+            results = data.get("results", {})
+            if not isinstance(results, dict):
+                raise ValueError("JUSO results 형식 오류")
+            common = results.get("common", {})
+            error_code = common.get("errorCode", "0")
+            if error_code != "0":
+                raise ValueError(f"JUSO 오류코드: {error_code} - {common.get('errorMessage')}")
+            print(f"[JUSO] OK attempt={attempt+1} totalCount={common.get('totalCount')}")
+            juso = results.get("juso", [])
+            if isinstance(juso, dict):
+                juso = [juso]
+            return juso[0] if juso else None
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.ChunkedEncodingError) as e:
+            last_err = e
+            wait = 1 * (attempt + 1)
+            print(f"[JUSO-RETRY] {attempt+1}/3 — {wait}초 후 재시도: {e}")
+            time.sleep(wait)
+            continue
+        except Exception as e:
+            raise
+    print(f"[JUSO ERROR] 3회 모두 실패: {last_err}")
+    raise last_err
+
+
+def _get_juso_info_sync(address: str) -> Optional[dict]:
+    """
+    JUSO 동기 호출 — 일반주소(지번) 입력 시 도로명 주소로 자동 변환
+    1단계: 입력 주소로 검색
+    2단계: 결과의 roadAddr(도로명)로 재검색 → 더 정확한 bdMgtSn 획득
+    3단계: 도로명 재검색 실패 시 원래 결과 사용
+    """
+    # 1단계: 입력 주소 그대로 검색
+    result = _juso_call(address)
+    if result is None:
+        print(f"[JUSO] 입력 주소로 결과 없음: {address}")
+        return None
+
+    road_addr  = result.get("roadAddr", "").strip()
+    jibun_addr = result.get("jibunAddr", "").strip()
+    print(f"[JUSO] 1단계 결과 — roadAddr={road_addr} jibunAddr={jibun_addr}")
+
+    # 2단계: 도로명 주소가 있고 입력과 다를 때 도로명으로 재검색
+    if road_addr and road_addr != address.strip():
+        print(f"[JUSO] 2단계 — 도로명으로 재검색: {road_addr}")
+        road_result = _juso_call(road_addr)
+        if road_result and road_result.get("bdMgtSn"):
+            print(f"[JUSO] 도로명 재검색 성공 bdMgtSn={road_result.get('bdMgtSn')}")
+            return road_result
+
+    # 3단계: 원래 결과에 bdMgtSn 있으면 그대로 사용
+    if result.get("bdMgtSn"):
+        print(f"[JUSO] 원래 결과 사용 bdMgtSn={result.get('bdMgtSn')}")
+        return result
+
+    # 4단계: 지번 주소로 재검색
+    if jibun_addr and jibun_addr != address.strip():
+        print(f"[JUSO] 4단계 — 지번주소로 재검색: {jibun_addr}")
+        jibun_result = _juso_call(jibun_addr)
+        if jibun_result and jibun_result.get("bdMgtSn"):
+            return jibun_result
+
+    return result
 
 
 async def get_juso_info(road_addr: str) -> Optional[dict]:
     return await asyncio.to_thread(_get_juso_info_sync, road_addr)
 
 
+def _juso_search_list(keyword: str, current_page: int = 1, count_per_page: int = 20) -> dict:
+    """
+    도로명주소 검색 API(addrLinkApi.do) — 팝업(Link URL)용 키와 별도 승인.
+    프론트는 이 엔드포인트만 호출하고 confmKey는 서버에만 둔다.
+    """
+    params = {
+        "confmKey": JUSO_KEY,
+        "currentPage": current_page,
+        "countPerPage": count_per_page,
+        "keyword": keyword.strip(),
+        "resultType": "json",
+    }
+    r = requests.get(JUSO_URL, params=params, verify=False, timeout=15)
+    r.raise_for_status()
+    data = r.json()
+    if not isinstance(data, dict):
+        raise ValueError("JUSO 응답 형식 오류")
+    results = data.get("results") or {}
+    common = results.get("common") or {}
+    err = common.get("errorCode", "0")
+    if err != "0":
+        raise ValueError(common.get("errorMessage") or f"JUSO 오류코드: {err}")
+    juso = results.get("juso") or []
+    if isinstance(juso, dict):
+        juso = [juso]
+    try:
+        total = int(common.get("totalCount") or 0)
+    except (TypeError, ValueError):
+        total = 0
+    return {
+        "items": juso,
+        "totalCount": total,
+        "currentPage": current_page,
+        "countPerPage": count_per_page,
+    }
+
+
+@router.get("/juso-search")
+async def juso_search(
+    keyword: str = Query(..., min_length=1, description="도로명·지번·건물명"),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+):
+    """도로명주소 검색 API 결과 목록 (웹에서 팝업 대신 사용)."""
+    try:
+        out = await asyncio.to_thread(_juso_search_list, keyword, page, size)
+        return {"status": "success", "data": out}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=502, detail=f"JUSO 검색 오류: {str(e)}")
+
+
+# ============================================================
+# 건축물대장 API
+# ============================================================
+
 def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, rows: int = 10) -> Optional[list]:
-    """[STAGE 2] 건축물대장 허브 API 공통 호출"""
     if not BUILDING_KEY:
         print(f"[BUILDING] BUILDING_API_KEY 미설정 — {endpoint} 스킵")
         return None
@@ -142,16 +248,16 @@ def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, r
 
         response = data.get("response") if isinstance(data, dict) else None
         if not isinstance(response, dict):
-            print(f"[BUILDING] {endpoint} response가 dict 아님: {type(response)}")
+            print(f"[BUILDING] {endpoint} response 이상: {type(response)}")
             return None
 
         body = response.get("body")
         if not isinstance(body, dict):
-            print(f"[BUILDING] {endpoint} body가 dict 아님: {type(body)} / 값: {str(body)[:100]}")
+            print(f"[BUILDING] {endpoint} body 이상: {type(body)} / {str(body)[:100]}")
             return None
 
         header = response.get("header", {})
-        print(f"[BUILDING] {endpoint} resultCode={header.get('resultCode')} resultMsg={header.get('resultMsg')}")
+        print(f"[BUILDING] {endpoint} resultCode={header.get('resultCode')}")
 
         try:
             total = int(body.get("totalCount", 0))
@@ -164,12 +270,11 @@ def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, r
 
         items_wrap = body.get("items")
         if not isinstance(items_wrap, dict):
-            print(f"[BUILDING] {endpoint} items가 dict 아님: {type(items_wrap)}")
+            print(f"[BUILDING] {endpoint} items 이상: {type(items_wrap)}")
             return None
 
         items = items_wrap.get("item")
         if items is None:
-            print(f"[BUILDING] {endpoint} item이 None")
             return None
         if isinstance(items, dict):
             items = [items]
@@ -196,14 +301,13 @@ def get_sewage_info(sigungu, bjdong, bun, ji="0000"):
 
 
 def _get_br_title_info_sync(bdmgtsn: str) -> Optional[List[dict]]:
-    """bdMgtSn → 표제부 목록 (ji 폴백). 허브 오류는 내부에서 None."""
     parsed = parse_bdmgtsn(bdmgtsn)
     if not parsed:
         return None
     sigungu = parsed["sigunguCd"]
-    bjdong = parsed["bjdongCd"]
-    bun = parsed["bun"]
-    ji = parsed["ji"]
+    bjdong  = parsed["bjdongCd"]
+    bun     = parsed["bun"]
+    ji      = parsed["ji"]
     title = get_building_title(sigungu, bjdong, bun, ji)
     if not title:
         title = get_building_title(sigungu, bjdong, bun, "0000")
@@ -234,21 +338,6 @@ def fetch_all_building_data(bdmgtsn: str) -> dict:
     result["floors"] = get_floor_outline(sigungu, bjdong, bun, ji)
     result["sewage"] = get_sewage_info(sigungu, bjdong, bun, ji)
     return result
-
-
-def _to_float(v) -> Optional[float]:
-    try:
-        f = float(v)
-        return f if f != 0 else None
-    except (TypeError, ValueError):
-        return None
-
-def _to_int(v) -> Optional[int]:
-    try:
-        i = int(v)
-        return i if i != 0 else None
-    except (TypeError, ValueError):
-        return None
 
 
 def build_factory_update(juso: dict, building_data: dict) -> dict:
@@ -342,7 +431,7 @@ def test():
 async def search_building(address: str = Query(..., description="도로명주소"), save: bool = Query(False)):
     print(f"[BUILD-1] 주소 검색: {address}")
 
-    # --- JUSO API ---
+    # STAGE 1 — JUSO (재시도 포함)
     try:
         juso_data = await get_juso_info(address)
         print(f"[BUILD-2] JUSO 응답: {juso_data}")
@@ -363,7 +452,7 @@ async def search_building(address: str = Query(..., description="도로명주소
     if not bdmgtsn:
         raise HTTPException(status_code=404, detail="건물관리번호(bdMgtSn)를 찾을 수 없습니다")
 
-    # --- 건축물대장 표제부 ---
+    # STAGE 2 — 건축물대장 표제부
     try:
         title_data = await get_br_title_info(bdmgtsn)
         print(f"[BUILD-4] 표제부 응답: {title_data}")
@@ -371,7 +460,6 @@ async def search_building(address: str = Query(..., description="도로명주소
         print(f"[BUILD-ERR-TITLE] {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=f"건축물대장 API 오류: {str(e)}")
 
-    # title_data 가 list 면 주건축물 우선, 없으면 첫 행
     if isinstance(title_data, list):
         title = next((i for i in title_data if i.get("mainAtchGbCdNm") == "주건축물"), None)
         if not title and title_data:
@@ -386,7 +474,7 @@ async def search_building(address: str = Query(..., description="도로명주소
 
     print(f"[BUILD-5] 파싱된 표제부: {title}")
 
-    # --- 응답 직렬화 ---
+    # STAGE 3 — 응답 직렬화
     try:
         use_approve_day = str(title.get("useAprDay") or title.get("use_approve_day") or "")
         completion_year = int(use_approve_day[:4]) if len(use_approve_day) >= 4 else None
