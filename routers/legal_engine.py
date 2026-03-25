@@ -8,21 +8,86 @@ v3 변경사항:
     mode: all       (종합가동 - 기존 v2.0.0 동일, 기본값)
 """
 from fastapi import APIRouter, HTTPException, Query
-from typing import Optional
+from typing import Optional, Any, Dict
 from datetime import datetime
-import os
-from supabase import create_client
+import json
+
+from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 ENGINE_VERSION = "3.0.0"
 
 
-def get_supabase():
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+def _parse_survey_data(raw: Any) -> Optional[Dict[str, Any]]:
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _survey_data_to_factory_fields(survey_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    견적 survey_data(JSON) → 시설 조건 법령 엔진용 필드.
+    factories 테이블과 동일한 키(worker_count, total_floor_area, …)를 맞춤.
+    """
+    snap = survey_data.get("survey_snapshot")
+    if not isinstance(snap, dict):
+        snap = {}
+
+    def _to_float(*vals) -> float:
+        for v in vals:
+            if v is None or v == "":
+                continue
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    def _to_int(*vals) -> int:
+        for v in vals:
+            if v is None or v == "":
+                continue
+            try:
+                return int(float(v))
+            except (TypeError, ValueError):
+                continue
+        return 0
+
+    workers = _to_int(
+        survey_data.get("employee_count"),
+        snap.get("workers"),
+    )
+    area = _to_float(
+        survey_data.get("floor_area"),
+        snap.get("area"),
+    )
+    power = _to_float(
+        survey_data.get("electrical_kw"),
+        snap.get("elecKw"),
+    )
+    building_use = (
+        str(snap.get("bldgUse") or "").strip()
+        or str(survey_data.get("building_type") or "").strip()
+        or str(snap.get("btype") or "").strip()
+        or str(snap.get("btypeCustom") or "").strip()
+    )
+    ksic = str(survey_data.get("ksic_code") or snap.get("ksic_code") or "").strip()
+
+    return {
+        "worker_count": workers,
+        "total_floor_area": area,
+        "electric_capacity": power,
+        "building_use_code": building_use,
+        "ksic_code": ksic,
+    }
 
 
 def format_rule_result(rule: dict, source_label: str = "") -> dict:
@@ -203,6 +268,93 @@ async def apply_legal_engine(
     except Exception:
         pass  # 테이블 없어도 결과 반환
 
+    return {"status": "success", "data": result_data}
+
+
+# ──────────────────────────────────────────────
+# POST /legal-engine/apply-quote/{quote_id}
+# 견적 survey_data 기반 시설 조건 법령 판정 (facility만)
+# ──────────────────────────────────────────────
+@router.post("/apply-quote/{quote_id}")
+async def apply_legal_engine_from_quote(quote_id: str):
+    supabase = get_supabase()
+    qres = (
+        supabase.table("quotes")
+        .select("id, quote_no, survey_data")
+        .eq("id", quote_id)
+        .single()
+        .execute()
+    )
+    if not qres.data:
+        raise HTTPException(status_code=404, detail="견적을 찾을 수 없습니다.")
+
+    sd = _parse_survey_data(qres.data.get("survey_data"))
+    if not sd:
+        raise HTTPException(
+            status_code=400,
+            detail="survey_data가 없습니다. 법적진단 설문 접수 건만 실행할 수 있습니다.",
+        )
+
+    factory_like = _survey_data_to_factory_fields(sd)
+    rules_res = (
+        supabase.table("master_building_legal_rules")
+        .select("*")
+        .eq("is_active", True)
+        .execute()
+    )
+    all_rules = rules_res.data or []
+    evaluated_at = datetime.now().isoformat()
+
+    applicable, not_applicable = _evaluate_facility_conditions(factory_like, all_rules)
+    triggered = {
+        "appointment": [],
+        "inspection": [],
+        "action": [],
+        "report": [],
+        "not_applicable": [],
+    }
+    _classify_rules(applicable, triggered)
+    for r in not_applicable:
+        triggered["not_applicable"].append(format_rule_result(r))
+
+    total_applicable = (
+        len(triggered["appointment"])
+        + len(triggered["inspection"])
+        + len(triggered["action"])
+        + len(triggered["report"])
+    )
+
+    na_list = triggered["not_applicable"]
+    na_cap = 100
+    na_trimmed = len(na_list) > na_cap
+
+    result_data = {
+        "quote_id": quote_id,
+        "quote_no": qres.data.get("quote_no"),
+        "source": "quote_survey",
+        "engine_version": ENGINE_VERSION,
+        "mode": "facility",
+        "evaluated_at": evaluated_at,
+        "facility_context": factory_like,
+        "note": "견적 설문 기반으로 시설(facility) 조건만 적용했습니다. 등록 설비·공정 기반 판정은 사업장 등록 후 법령엔진을 실행하세요.",
+        "total_rules_checked": len(all_rules),
+        "applicable_count": total_applicable,
+        "triggered_by_source": {"factory_condition": len(applicable)},
+        "appointment_required": triggered["appointment"],
+        "inspection_required": triggered["inspection"],
+        "action_required": triggered["action"],
+        "report_required": triggered["report"],
+        "not_applicable": na_list[:na_cap],
+        "not_applicable_total": len(na_list),
+        "not_applicable_truncated": na_trimmed,
+        "summary": {
+            "total": total_applicable,
+            "appointment": len(triggered["appointment"]),
+            "inspection": len(triggered["inspection"]),
+            "action": len(triggered["action"]),
+            "report": len(triggered["report"]),
+        },
+    }
     return {"status": "success", "data": result_data}
 
 
