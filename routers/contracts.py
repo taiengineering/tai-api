@@ -73,6 +73,7 @@ class QuoteUpdate(BaseModel):
     contact_email: Optional[str] = None
     items:         Optional[List[dict]] = None
     memo:          Optional[str] = None
+    status_code:   Optional[str] = None
 
 class ContractCreate(BaseModel):
     company_id:        str
@@ -126,7 +127,9 @@ def get_quotes(
     if company_id:   query = query.eq("company_id", company_id)
     if service_type: query = query.eq("service_type", service_type)
     if status_code:  query = query.eq("status_code", status_code)
-    if search:       query = query.ilike("contact_name", f"%{search}%")
+    if search:
+        pat = f"%{search}%"
+        query = query.or_(f"contact_name.ilike.{pat},company_name.ilike.{pat},quote_no.ilike.{pat}")
 
     offset = (page - 1) * size
     res = query.order("created_at", desc=True)\
@@ -197,10 +200,18 @@ def update_quote(quote_id: str, req: QuoteUpdate):
         .select("id, status_code").eq("id", quote_id).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="견적을 찾을 수 없습니다")
-    if existing.data["status_code"] in ["ACTIVE", "CANCELLED"]:
-        raise HTTPException(status_code=400, detail="처리된 견적은 수정할 수 없습니다")
+    st = existing.data["status_code"]
+    if st == "CANCELLED":
+        raise HTTPException(status_code=400, detail="취소된 견적은 수정할 수 없습니다")
+    if st == "PENDING_PAYMENT":
+        raise HTTPException(status_code=400, detail="계약 전환된 견적은 수정할 수 없습니다")
 
-    update_data = {k: v for k, v in req.dict().items() if v is not None}
+    update_data = {k: v for k, v in req.dict(exclude_unset=True).items() if v is not None}
+    if req.status_code is not None:
+        if req.status_code != "CANCELLED":
+            raise HTTPException(status_code=400, detail="상태 변경은 취소(CANCELLED)만 가능합니다")
+        if st not in ("REQUESTED", "CONFIRMED"):
+            raise HTTPException(status_code=400, detail="이 상태에서는 견적을 취소할 수 없습니다")
     if req.items:
         supply = sum(i.get("qty", 1) * i.get("unit_price", 0) for i in req.items)
         update_data["supply_amount"] = supply
