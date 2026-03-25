@@ -1,50 +1,33 @@
 # routers/quotes.py
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, ConfigDict
+from typing import Optional, Any, Dict
 from datetime import datetime
 import os
 import resend as resend_client
-from supabase import create_client
+
+from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/quotes", tags=["quotes"])
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-
-def get_supabase():
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
-
 
 class SurveySubmit(BaseModel):
-    building_type:        Optional[str]   = None
-    building_type_custom: Optional[str]   = None
-    address:              Optional[str]   = None
-    floor_area:           Optional[float] = None
-    floors_above:         Optional[int]   = None
-    floors_below:         Optional[int]   = None
-    built_year:           Optional[int]   = None
-    employee_count:       Optional[int]   = None
-    electrical_kw:        Optional[float] = None
-    equip_electric:       Optional[bool]  = False
-    equip_gas:            Optional[bool]  = False
-    equip_fire:           Optional[bool]  = False
-    equip_elevator:       Optional[bool]  = False
-    equip_boiler:         Optional[bool]  = False
-    equip_crane:          Optional[bool]  = False
-    equip_pressure:       Optional[bool]  = False
-    equip_chemical:       Optional[bool]  = False
-    equip_cold:           Optional[bool]  = False
-    hazmat_yn:            Optional[bool]  = False
-    night_work_yn:        Optional[bool]  = False
-    outsource_yn:         Optional[bool]  = False
-    contact_name:         str
-    contact_phone:        str
-    contact_email:        Optional[str]   = None
-    company_name:         str
-    source:               Optional[str]   = "survey_web"
-    survey_type:          Optional[str]   = "basic"
+    """필수 연락처·회사만 고정, 나머지 필드는 설문 JSON 전부 허용(extra)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    contact_name:  str
+    contact_phone: str
+    company_name:  str
+    contact_email: Optional[str] = None
+    source:        Optional[str] = "survey_web"
+    survey_type:   Optional[str] = "legal_diagnosis"
+
+
+def _payload_dict(m: SurveySubmit) -> Dict[str, Any]:
+    if hasattr(m, "model_dump"):
+        return m.model_dump()
+    return m.dict()
 
 
 def send_notification_email(quote_no: str, payload: dict):
@@ -57,6 +40,15 @@ def send_notification_email(quote_no: str, payload: dict):
         resend_client.api_key = api_key
         notify_email = os.environ.get("NOTIFY_EMAIL", "tai@taieng.co.kr")
 
+        snap = payload.get("survey_snapshot") or {}
+        addr = payload.get("address") or snap.get("addr") or ""
+        floor_area = payload.get("floor_area")
+        if floor_area is None and snap.get("area") is not None:
+            try:
+                floor_area = float(snap["area"])
+            except (TypeError, ValueError):
+                floor_area = snap.get("area")
+
         resend_client.Emails.send({
             "from": "TAI Engineering <noreply@taieng.co.kr>",
             "to": [notify_email],
@@ -68,8 +60,8 @@ def send_notification_email(quote_no: str, payload: dict):
 연락처:   {payload.get('contact_phone', '')}
 이메일:   {payload.get('contact_email', '')}
 회사명:   {payload.get('company_name', '')}
-주소:     {payload.get('address', '')}
-연면적:   {payload.get('floor_area', '')}㎡
+주소:     {addr}
+연면적:   {floor_area}㎡
 """
         })
         print(f"[EMAIL] Resend 발송 성공 → {notify_email} ({quote_no})")
@@ -94,19 +86,25 @@ def submit_survey(payload: SurveySubmit, background_tasks: BackgroundTasks):
 
     quote_no = f"TAI-{today}-{seq:04d}"
 
-    insert_data = {
-        "quote_no":      quote_no,
-        "service_type":  "CONSULTING",
-        "status_code":   "REQUESTED",
-        "contact_name":  payload.contact_name,
-        "contact_phone": payload.contact_phone,
-        "contact_email": payload.contact_email,
-        "company_name":  payload.company_name,
-        "source":        payload.source or "survey_web",
-        "survey_data":   payload.dict(),
-        "is_active":     True,
-        "created_at":    datetime.utcnow().isoformat(),
-        "updated_at":    datetime.utcnow().isoformat(),
+    full = _payload_dict(payload)
+    insert_data: Dict[str, Any] = {
+        "quote_no":       quote_no,
+        "service_type":   "CONSULTING",
+        "status_code":    "REQUESTED",
+        "contact_name":   payload.contact_name,
+        "contact_phone":  payload.contact_phone,
+        "contact_email":  payload.contact_email or None,
+        "company_name":   payload.company_name,
+        "source":         payload.source or "survey_web",
+        "survey_data":    full,
+        "company_id":     None,
+        "items":          [],
+        "supply_amount":  0,
+        "vat_amount":     0,
+        "total_amount":   0,
+        "is_active":      True,
+        "created_at":     datetime.utcnow().isoformat(),
+        "updated_at":     datetime.utcnow().isoformat(),
     }
 
     try:
@@ -114,7 +112,7 @@ def submit_survey(payload: SurveySubmit, background_tasks: BackgroundTasks):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"저장 실패: {str(e)}")
 
-    background_tasks.add_task(send_notification_email, quote_no, payload.dict())
+    background_tasks.add_task(send_notification_email, quote_no, full)
 
     return {
         "status": "success",
