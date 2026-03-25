@@ -1,23 +1,19 @@
--- 견적(quotes) — 법적진단 설문(https://taieng.co.kr/survey) 저장
--- Supabase → SQL Editor에서 실행
+-- ============================================================
+-- quotes 테이블: survey(웹 견적문의) 대응 컬럼 추가
+-- Supabase SQL Editor에서 실행
+-- ============================================================
 
-ALTER TABLE public.quotes
-  ADD COLUMN IF NOT EXISTS survey_data jsonb DEFAULT '{}'::jsonb;
+-- 1. company_id NOT NULL 제약 제거 (survey는 company_id 없이 접수)
+ALTER TABLE quotes ALTER COLUMN company_id DROP NOT NULL;
 
-ALTER TABLE public.quotes
-  ADD COLUMN IF NOT EXISTS source text;
+-- 2. survey 관련 컬럼 추가 (이미 존재하면 무시)
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS company_name   TEXT;
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS source         TEXT DEFAULT 'admin';
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS survey_data    JSONB;
+ALTER TABLE quotes ADD COLUMN IF NOT EXISTS survey_type    TEXT DEFAULT 'basic';
 
-ALTER TABLE public.quotes
-  ADD COLUMN IF NOT EXISTS company_name text;
-
-ALTER TABLE public.quotes
-  ADD COLUMN IF NOT EXISTS contact_phone text;
-
-ALTER TABLE public.quotes
-  ADD COLUMN IF NOT EXISTS contact_email text;
-
--- 웹 설문은 회사 미선택 → NULL 허용 (이미 허용이면 에러 없이 통과하지 않을 수 있음 — 무시)
-ALTER TABLE public.quotes
-  ALTER COLUMN company_id DROP NOT NULL;
-
-COMMENT ON COLUMN public.quotes.survey_data IS '법적진단 설문 원본 JSON';
+-- 3. 확인
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_name = 'quotes'
+ORDER BY ordinal_position;
