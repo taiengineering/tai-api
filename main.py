@@ -19,6 +19,7 @@ from routers.contacts           import router as contacts_router
 from routers.education          import router as education_router
 from routers.notifications      import router as notifications_router
 from routers.equipment_assets   import router as equipment_assets_router
+from routers.engine_equipment   import router as engine_equipment_router
 from routers.schedule_engine    import router as schedule_engine_router
 from routers.roles              import router as roles_router
 from routers.teams              import router as teams_router
@@ -70,6 +71,7 @@ app.include_router(contacts_router)
 app.include_router(education_router)
 app.include_router(notifications_router)
 app.include_router(equipment_assets_router)
+app.include_router(engine_equipment_router)
 app.include_router(schedule_engine_router)
 app.include_router(roles_router)
 app.include_router(teams_router)
