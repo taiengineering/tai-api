@@ -20,6 +20,63 @@ def get_supabase():
 
 
 # ──────────────────────────────────────────────
+# POST /process-management
+# 공정 신규 등록
+# ──────────────────────────────────────────────
+@router.post("")
+async def create_process(body: dict):
+    supabase = get_supabase()
+    try:
+        process_lv1 = (body.get("process_lv1") or "").strip()
+        process_lv4 = (body.get("process_lv4") or "").strip()
+
+        if not process_lv1:
+            raise HTTPException(status_code=400, detail="산업분류(process_lv1)는 필수입니다.")
+        if not process_lv4:
+            raise HTTPException(status_code=400, detail="공정명(process_lv4)는 필수입니다.")
+
+        import time
+        new_process_id = f"ADMIN-{int(time.time())}"
+
+        lv2 = (body.get("process_lv2") or "").strip()
+        lv3 = (body.get("process_lv3") or "").strip()
+        parts = [p for p in [process_lv1, lv2, lv3, process_lv4] if p]
+        process_path = ">".join(parts)
+        industry_code = (body.get("industry_code_full") or "").strip()
+
+        insert_data = {
+            "process_id":         new_process_id,
+            "process_lv1":        process_lv1,
+            "process_lv2":        lv2,
+            "process_lv3":        lv3,
+            "process_lv4":        process_lv4,
+            "process_path":       process_path,
+            "process_source":     body.get("process_source", "MANUAL"),
+            "industry_code_full": industry_code if industry_code else None,
+            "review_flag":        False,
+            "mapping_basis":      body.get("mapping_basis", "ADMIN_MANUAL"),
+        }
+
+        res = supabase.table("ksic_process_map").insert(insert_data).execute()
+
+        if not res.data:
+            raise HTTPException(status_code=500, detail="공정 등록에 실패했습니다.")
+
+        return {
+            "status": "success",
+            "message": "공정이 등록됐습니다.",
+            "data": {
+                **res.data[0],
+                "process_name": process_lv4
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────────
 # GET /process-management
 # 공정 마스터 목록 (v_process_unified 기반, 필터/페이지네이션)
 # ──────────────────────────────────────────────
@@ -163,48 +220,62 @@ async def get_process_detail(process_id: str):
 
 # ──────────────────────────────────────────────
 # GET /process-management/{process_id}/equipments
-# 공정 연결 설비 목록 (v_equipment_unified 기반)
+# 공정 연결 설비 목록 (process_equipment_map 테이블 직접 조회)
 # ──────────────────────────────────────────────
 @router.get("/{process_id}/equipments")
 async def get_process_equipments(
     process_id: str,
-    industry_code: Optional[str] = Query(None),
-    match_band: Optional[str] = Query(None, description="MUST/CORE/OPTIONAL"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
+    match_band: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50
 ):
     supabase = get_supabase()
-    offset = (page - 1) * page_size
+    try:
+        query = supabase.table("process_equipment_map").select(
+            "facility_name_std, match_band, match_score, source_type, equipment_role, category_path"
+        ).eq("process_id", process_id)
 
-    query = supabase.table("v_equipment_unified").select(
-        "id, industry_code_full, industry_name_full, process_id, "
-        "facility_name_std, match_band, match_score, match_basis, "
-        "source_type, source_priority",
-        count="exact"
-    ).eq("process_id", process_id)
+        if match_band:
+            query = query.eq("match_band", match_band.upper())
 
-    if industry_code:
-        query = query.eq("industry_code_full", industry_code)
-    if match_band:
-        query = query.eq("match_band", match_band)
+        res = query.execute()
+        rows = res.data or []
 
-    query = query.order("source_priority").order("match_band")
-    query = query.range(offset, offset + page_size - 1)
+        # DISTINCT ON facility_name_std (Python에서 처리)
+        seen = {}
+        for row in rows:
+            key = row.get("facility_name_std")
+            if key not in seen:
+                seen[key] = row
+        items = list(seen.values())
 
-    res = query.execute()
-    items = res.data or []
-    total = res.count or 0
+        # match_band 정렬: MUST > CORE > OPTIONAL > REFERENCE
+        band_order = {"MUST": 0, "CORE": 1, "OPTIONAL": 2, "REFERENCE": 3}
+        items.sort(key=lambda x: band_order.get(x.get("match_band", ""), 99))
 
-    return {
-        "status": "success",
-        "data": {
-            "process_id": process_id,
-            "items": items,
-            "total": total,
-            "page": page,
-            "page_size": page_size,
+        total = len(items)
+        start = (page - 1) * page_size
+        paged = items[start:start + page_size]
+
+        summary = {"MUST": 0, "CORE": 0, "OPTIONAL": 0, "REFERENCE": 0}
+        for item in items:
+            band = item.get("match_band", "")
+            if band in summary:
+                summary[band] += 1
+
+        return {
+            "status": "success",
+            "data": {
+                "process_id": process_id,
+                "items": paged,
+                "total": total,
+                "summary": {k.lower(): v for k, v in summary.items()},
+                "page": page,
+                "page_size": page_size
+            }
         }
-    }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ──────────────────────────────────────────────
@@ -214,36 +285,38 @@ async def get_process_equipments(
 @router.get("/{process_id}/factories")
 async def get_process_factories(process_id: str):
     supabase = get_supabase()
+    try:
+        res = supabase.table("factory_process").select(
+            "id, factory_id, is_primary, is_active, created_at, "
+            "factories!inner(id, name, site_code, ksic_code, ksic_name, address_road)"
+        ).eq("process_id", process_id).eq("is_active", True).execute()
 
-    res = supabase.table("factory_process").select(
-        "id, factory_id, is_primary, is_active, created_at, "
-        "factories!inner(id, factory_name, company_id, ksic_code, ksic_name, "
-        "companies!inner(id, company_name))"
-    ).eq("process_id", process_id).eq("is_active", True).execute()
+        rows = res.data or []
+        items = []
+        for row in rows:
+            f = row.get("factories") or {}
+            items.append({
+                "factory_process_id": row.get("id"),
+                "factory_id": row.get("factory_id"),
+                "factory_name": f.get("name"),
+                "site_code": f.get("site_code"),
+                "ksic_code": f.get("ksic_code"),
+                "ksic_name": f.get("ksic_name"),
+                "address": f.get("address_road"),
+                "is_primary": row.get("is_primary"),
+                "registered_at": row.get("created_at")
+            })
 
-    items = []
-    for row in (res.data or []):
-        f = row.get("factories", {})
-        c = f.get("companies", {})
-        items.append({
-            "factory_process_id": row["id"],
-            "factory_id": row["factory_id"],
-            "factory_name": f.get("factory_name", ""),
-            "company_name": c.get("company_name", ""),
-            "ksic_code": f.get("ksic_code", ""),
-            "ksic_name": f.get("ksic_name", ""),
-            "is_primary": row.get("is_primary", False),
-            "registered_at": row.get("created_at", ""),
-        })
-
-    return {
-        "status": "success",
-        "data": {
-            "process_id": process_id,
-            "items": items,
-            "total": len(items),
+        return {
+            "status": "success",
+            "data": {
+                "process_id": process_id,
+                "items": items,
+                "total": len(items)
+            }
         }
-    }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ──────────────────────────────────────────────
@@ -254,17 +327,52 @@ async def get_process_factories(process_id: str):
 async def update_process(process_id: str, body: dict):
     supabase = get_supabase()
 
-    allowed = {"review_flag", "mapping_basis"}
+    allowed = {
+        "process_lv1",
+        "process_lv2",
+        "process_lv3",
+        "process_lv4",
+        "process_source",
+        "industry_code_full",
+        "review_flag",
+        "mapping_basis",
+    }
     update_data = {k: v for k, v in body.items() if k in allowed}
 
     if not update_data:
-        raise HTTPException(status_code=400, detail="수정할 항목이 없습니다.")
+        raise HTTPException(status_code=400, detail="수정할 필드가 없습니다.")
 
     res = supabase.table("ksic_process_map").update(update_data).eq(
         "process_id", process_id
     ).execute()
 
-    if not res.data:
-        raise HTTPException(status_code=404, detail="공정을 찾을 수 없습니다.")
+    return {
+        "status": "success",
+        "message": "공정이 수정됐습니다.",
+        "updated_count": len(res.data or [])
+    }
 
-    return {"status": "success", "message": "공정이 수정됐습니다.", "updated_count": len(res.data)}
+
+# ──────────────────────────────────────────────
+# DELETE /process-management/{process_id}
+# 공정 삭제 (factory_process 비활성화 + ksic_process_map 삭제)
+# ──────────────────────────────────────────────
+@router.delete("/{process_id}")
+async def delete_process(process_id: str):
+    supabase = get_supabase()
+    try:
+        supabase.table("factory_process").update({"is_active": False}).eq(
+            "process_id", process_id
+        ).execute()
+
+        res = supabase.table("ksic_process_map").delete().eq(
+            "process_id", process_id
+        ).execute()
+
+        return {
+            "status": "success",
+            "message": f"공정 {process_id} 삭제 완료",
+            "deleted_count": len(res.data or [])
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
