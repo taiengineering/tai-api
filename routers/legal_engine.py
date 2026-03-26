@@ -1,22 +1,27 @@
 """
-법령 판정 엔진 라우터 — v3.0.0
-v3 변경사항:
-  POST /legal-engine/apply/{factory_id} — mode 파라미터 추가
-    mode: facility  (시설기준만)
-    mode: process   (등록 공정 기반)
-    mode: equipment (등록 설비 기반)
-    mode: all       (종합가동 - 기존 v2.0.0 동일, 기본값)
+법령 판정 엔진 라우터 — v3.1.0
+변경사항:
+  v3.1.0
+    - apply-quote: 판정 결과를 quotes.legal_result_json 에 저장 (누락 수정)
+    - apply-quote: GET /legal-engine/quote-result/{quote_id} 조회 엔드포인트 추가
+    - legal_applications upsert: except pass → 에러 로깅으로 개선 (silent fail 제거)
+  v3.0.0
+    - apply/{factory_id}: mode 파라미터 (facility/process/equipment/all)
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, Any, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 
 from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "3.0.0"
+ENGINE_VERSION = "3.1.0"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _parse_survey_data(raw: Any) -> Optional[Dict[str, Any]]:
@@ -144,7 +149,7 @@ async def apply_legal_engine(
     ).execute()
     all_rules = rules_res.data or []
 
-    evaluated_at = datetime.now().isoformat()
+    evaluated_at = _now_iso()
     triggered = {
         "appointment": [],
         "inspection": [],
@@ -188,23 +193,19 @@ async def apply_legal_engine(
 
     # ── MODE: all (종합가동) ──
     else:
-        # 시설 조건 판정
         fac_applicable, _ = _evaluate_facility_conditions(factory, all_rules)
         triggered_by_source["factory_condition"] = len(fac_applicable)
 
-        # 등록 설비 판정
         equip_applicable, _ = await _evaluate_equipment_conditions(
             factory_id, factory, all_rules, supabase
         )
         triggered_by_source["registered_equipment"] = len(equip_applicable)
 
-        # 공정 기반 판정
         proc_applicable, _ = await _evaluate_process_conditions(
             factory_id, factory, all_rules, supabase
         )
         triggered_by_source["process_recommended"] = len(proc_applicable)
 
-        # 통합 중복 제거 (rule_id 기준, 소스 표시)
         rule_map = {}
         for r in fac_applicable:
             rule_map[r["rule_id"]] = (r, "🏢 시설조건")
@@ -218,7 +219,6 @@ async def apply_legal_engine(
         applicable_combined = list(rule_map.values())
         applicable_only = [r for r, _ in applicable_combined]
 
-        # 미적용
         applicable_ids = set(r["rule_id"] for r in applicable_only)
         not_applicable = [r for r in all_rules if r["rule_id"] not in applicable_ids]
 
@@ -226,7 +226,7 @@ async def apply_legal_engine(
         for r in not_applicable:
             triggered["not_applicable"].append(format_rule_result(r))
 
-    # 3. 결과 저장
+    # 3. 결과 구성
     total_applicable = (
         len(triggered["appointment"]) +
         len(triggered["inspection"]) +
@@ -256,7 +256,7 @@ async def apply_legal_engine(
         }
     }
 
-    # legal_applications 테이블에 저장 (있는 경우)
+    # 4. legal_applications 저장 — upsert (unique: factory_id+mode)
     try:
         supabase.table("legal_applications").upsert({
             "factory_id": factory_id,
@@ -265,19 +265,22 @@ async def apply_legal_engine(
             "result_json": result_data,
             "evaluated_at": evaluated_at,
         }, on_conflict="factory_id,mode").execute()
-    except Exception:
-        pass  # 테이블 없어도 결과 반환
+    except Exception as e:
+        # silent fail 제거 → 로그 출력 (응답은 정상 반환)
+        print(f"[LEGAL ENGINE] legal_applications 저장 실패: {e}")
 
     return {"status": "success", "data": result_data}
 
 
 # ──────────────────────────────────────────────
 # POST /legal-engine/apply-quote/{quote_id}
-# 견적 survey_data 기반 시설 조건 법령 판정 (facility만)
+# 견적 survey_data 기반 시설 조건 법령 판정
+# v3.1.0: 판정 결과를 quotes 테이블에 저장 (누락 수정)
 # ──────────────────────────────────────────────
 @router.post("/apply-quote/{quote_id}")
 async def apply_legal_engine_from_quote(quote_id: str):
     supabase = get_supabase()
+
     qres = (
         supabase.table("quotes")
         .select("id, quote_no, survey_data")
@@ -303,7 +306,7 @@ async def apply_legal_engine_from_quote(quote_id: str):
         .execute()
     )
     all_rules = rules_res.data or []
-    evaluated_at = datetime.now().isoformat()
+    evaluated_at = _now_iso()
 
     applicable, not_applicable = _evaluate_facility_conditions(factory_like, all_rules)
     triggered = {
@@ -355,7 +358,60 @@ async def apply_legal_engine_from_quote(quote_id: str):
             "report": len(triggered["report"]),
         },
     }
+
+    # ✅ v3.1.0 수정: quotes 테이블에 판정 결과 저장 (이전 버전에서 누락됨)
+    try:
+        supabase.table("quotes").update({
+            "legal_result_json":      result_data,
+            "legal_evaluated_at":     evaluated_at,
+            "legal_applicable_count": total_applicable,
+            "updated_at":             evaluated_at,
+        }).eq("id", quote_id).execute()
+        print(f"[LEGAL ENGINE] quotes 판정 결과 저장 완료: {quote_id} ({total_applicable}건)")
+    except Exception as e:
+        print(f"[LEGAL ENGINE] quotes 저장 실패: {e}")
+
     return {"status": "success", "data": result_data}
+
+
+# ──────────────────────────────────────────────
+# GET /legal-engine/quote-result/{quote_id}
+# 견적 판정 결과 조회 (재판정 없이) — v3.1.0 신규
+# ──────────────────────────────────────────────
+@router.get("/quote-result/{quote_id}")
+async def get_legal_result_from_quote(quote_id: str):
+    """
+    저장된 견적 법령판정 결과 조회.
+    apply-quote 를 먼저 실행해야 데이터가 있습니다.
+    """
+    supabase = get_supabase()
+
+    res = (
+        supabase.table("quotes")
+        .select("id, quote_no, legal_result_json, legal_evaluated_at, legal_applicable_count")
+        .eq("id", quote_id)
+        .single()
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="견적을 찾을 수 없습니다.")
+
+    if not res.data.get("legal_result_json"):
+        raise HTTPException(
+            status_code=404,
+            detail="법령판정 결과가 없습니다. POST /legal-engine/apply-quote/{quote_id} 를 먼저 실행하세요."
+        )
+
+    return {
+        "status": "success",
+        "data": {
+            "quote_id":             quote_id,
+            "quote_no":             res.data.get("quote_no"),
+            "legal_evaluated_at":   res.data.get("legal_evaluated_at"),
+            "legal_applicable_count": res.data.get("legal_applicable_count"),
+            "result":               res.data.get("legal_result_json"),
+        }
+    }
 
 
 # ──────────────────────────────────────────────
@@ -450,7 +506,7 @@ async def _evaluate_equipment_conditions(
     ).eq("factory_id", factory_id).eq("is_active", True).execute()
 
     registered_equip = eq_res.data or []
-    equip_std_set = set(e.get("equipment_std", "") for e in registered_equip)
+    equip_std_set  = set(e.get("equipment_std", "")       for e in registered_equip)
     equip_type_set = set(e.get("equipment_type_code", "") for e in registered_equip)
 
     applicable = []
@@ -458,7 +514,7 @@ async def _evaluate_equipment_conditions(
 
     for rule in rules:
         target_equip = rule.get("target_equipment_std", "")
-        target_type = rule.get("target_equipment_type", "")
+        target_type  = rule.get("target_equipment_type", "")
 
         matched = False
         if target_equip and target_equip in equip_std_set:
@@ -466,9 +522,8 @@ async def _evaluate_equipment_conditions(
         elif target_type and target_type in equip_type_set:
             matched = True
         elif not target_equip and not target_type:
-            # 설비 조건 없는 룰 → 시설 조건으로 폴백
             workers = factory.get("worker_count") or 0
-            area = factory.get("total_floor_area") or 0
+            area    = factory.get("total_floor_area") or 0
             matched = _check_rule_conditions(rule, {
                 "worker_count": workers,
                 "total_floor_area": area,
@@ -486,7 +541,6 @@ async def _evaluate_process_conditions(
     factory_id: str, factory: dict, rules: list, supabase
 ) -> tuple:
     """등록 공정 기반 법령 판정 (공정 → 설비 추론 → 법령 적용)"""
-    # 등록 공정 조회 (MANUAL 제외)
     proc_res = supabase.table("factory_process").select(
         "process_id, source"
     ).eq("factory_id", factory_id).eq("is_active", True).execute()
@@ -499,7 +553,6 @@ async def _evaluate_process_conditions(
     if not process_ids:
         return [], rules
 
-    # 공정 → 설비 추론 (v_equipment_unified MUST/CORE)
     eq_res = supabase.table("v_equipment_unified").select(
         "facility_name_std, match_band"
     ).in_("process_id", process_ids).in_("match_band", ["MUST", "CORE"]).execute()
@@ -515,9 +568,8 @@ async def _evaluate_process_conditions(
         if target_equip and target_equip in inferred_equip:
             applicable.append(rule)
         elif not target_equip:
-            # 설비 조건 없는 룰 → 시설 조건 폴백
             workers = factory.get("worker_count") or 0
-            area = factory.get("total_floor_area") or 0
+            area    = factory.get("total_floor_area") or 0
             if _check_rule_conditions(rule, {"worker_count": workers, "total_floor_area": area}):
                 applicable.append(rule)
             else:
@@ -529,15 +581,15 @@ async def _evaluate_process_conditions(
 
 
 def _check_rule_conditions(rule: dict, context: dict) -> bool:
-    """룰 조건 체크 (간단 버전)"""
+    """룰 조건 체크"""
     conditions = rule.get("conditions", [])
     if not conditions:
         return False
 
     for cond in conditions:
-        field = cond.get("field", "")
+        field    = cond.get("field", "")
         operator = cond.get("operator", "gte")
-        value = cond.get("value")
+        value    = cond.get("value")
 
         if value is None:
             continue
@@ -548,14 +600,14 @@ def _check_rule_conditions(rule: dict, context: dict) -> bool:
 
         try:
             actual_num = float(actual)
-            value_num = float(value)
+            value_num  = float(value)
             if operator in ("gte", ">=") and actual_num >= value_num:
                 return True
             elif operator in ("lte", "<=") and actual_num <= value_num:
                 return True
-            elif operator in ("gt", ">") and actual_num > value_num:
+            elif operator in ("gt", ">")  and actual_num >  value_num:
                 return True
-            elif operator in ("lt", "<") and actual_num < value_num:
+            elif operator in ("lt", "<")  and actual_num <  value_num:
                 return True
             elif operator in ("eq", "=", "==") and actual_num == value_num:
                 return True
