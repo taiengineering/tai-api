@@ -1,19 +1,20 @@
 """
-엔진 설비 마스터 관리 라우터 — v1.0.0
+엔진 설비 마스터 관리 라우터 — v1.1.0
 
 대상 테이블:
-  - process_equipment_map  : 공정↔설비 매핑 마스터 (118만 건, 고유 설비 508개)
+  - process_equipment_map  : 공정↔설비 매핑 마스터 (118만 건, 고유 설비 ~300개)
   - equipment_model_master : 설비 모델 마스터 (2,874건)
 
 엔드포인트:
+  GET  /engine-equipment/stats         전체 통계
   GET  /engine-equipment/list          설비 마스터 목록 (facility_name_std 집계)
   GET  /engine-equipment/detail/{name} 설비 상세 (매핑 공정 목록 포함)
   PATCH /engine-equipment/update/{name} 설비 메타 수정 (카테고리/검토상태)
+  POST /engine-equipment/review/approve 검토필요 항목 일괄 승인
   GET  /engine-equipment/models        모델 마스터 목록
   GET  /engine-equipment/models/{id}   모델 상세
   PATCH /engine-equipment/models/{id}  모델 수정
-  GET  /engine-equipment/stats         전체 통계
-  POST /engine-equipment/review/approve 검토필요 항목 일괄 승인
+  GET  /engine-equipment/categories    카테고리 코드 목록
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
@@ -21,6 +22,8 @@ from datetime import datetime, timezone
 from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/engine-equipment", tags=["엔진설비마스터"])
+
+VERSION = "1.1.0"
 
 # 카테고리 코드 → 한글 매핑
 CATEGORY_MAP = {
@@ -54,24 +57,16 @@ async def get_equipment_stats():
     """엔진 설비 마스터 전체 통계 조회"""
     supabase = get_supabase()
 
-    # 전체 집계 (고유 설비 기준)
+    # 전체 매핑 행 수 (count만, 데이터 안 가져옴)
     all_res = supabase.table("process_equipment_map").select(
-        "facility_name_std, source_facility_category, match_band, needs_review",
-        count="exact"
+        "id", count="exact"
     ).limit(0).execute()
     total_rows = all_res.count or 0
 
-    # 고유 설비명 수
-    unique_res = supabase.rpc("count_distinct_equipment", {}).execute() if False else None
-    # 직접 집계: match_band별
-    band_res = supabase.table("process_equipment_map").select(
-        "match_band"
-    ).limit(2000).execute()
-
-    # 카테고리별 고유 설비 수 (샘플 집계)
+    # 고유 설비 집계용 샘플 — limit 3000으로 최적화 (v1.1.0)
     cat_sample = supabase.table("process_equipment_map").select(
         "facility_name_std, source_facility_category, match_band, needs_review"
-    ).limit(10000).execute()
+    ).limit(3000).execute()
     sample = cat_sample.data or []
 
     seen = set()
@@ -111,13 +106,14 @@ async def get_equipment_stats():
                 k: {"count": v, "label": CATEGORY_MAP.get(k, k)}
                 for k, v in sorted(cat_count.items(), key=lambda x: -x[1])
             },
+            "version": VERSION,
         }
     }
 
 
 # ─────────────────────────────────────────────────────
 # GET /engine-equipment/list  설비 마스터 목록
-# facility_name_std 기준 집계 — 고유 설비 508개 관리
+# facility_name_std 기준 집계
 # ─────────────────────────────────────────────────────
 @router.get("/list")
 async def list_equipment_master(
@@ -131,11 +127,10 @@ async def list_equipment_master(
     """
     고유 설비명(facility_name_std) 기준 집계 목록.
     페이지당 50건 기본, 최대 200건.
-    데이터 규모(118만)로 인해 Python 측 집계 방식 사용.
+    v1.1.0: limit 50000 → 20000 성능 최적화
     """
     supabase = get_supabase()
 
-    # 필터 조건 구성
     query = supabase.table("process_equipment_map").select(
         "facility_name_std, source_facility_category, category_path, "
         "match_band, match_score, source_type, needs_review, "
@@ -149,8 +144,8 @@ async def list_equipment_master(
     if needs_review is not None:
         query = query.eq("needs_review", needs_review)
 
-    # 데이터 크기 제한: 최대 50000건 fetch 후 Python 집계
-    query = query.limit(50000)
+    # v1.1.0: 50000 → 20000으로 성능 최적화
+    query = query.limit(20000)
     res = query.execute()
     rows = res.data or []
 
@@ -234,7 +229,6 @@ async def get_equipment_detail(facility_name: str):
     if not rows:
         raise HTTPException(status_code=404, detail="설비를 찾을 수 없습니다.")
 
-    # 업종 분포
     industry_set: dict = {}
     band_dist: dict = {"MUST": 0, "CORE": 0, "OPTIONAL": 0, "REFERENCE": 0}
     for row in rows:
@@ -257,14 +251,14 @@ async def get_equipment_detail(facility_name: str):
             "total_mappings":         len(rows),
             "industry_count":         len(industry_set),
             "band_distribution":      band_dist,
-            "processes":              rows[:100],  # 최대 100건만 반환
+            "processes":              rows[:100],
         }
     }
 
 
 # ─────────────────────────────────────────────────────
 # PATCH /engine-equipment/update/{facility_name}
-# 설비 메타 수정 (카테고리/검토상태/카테고리경로)
+# 설비 메타 수정
 # ─────────────────────────────────────────────────────
 @router.patch("/update/{facility_name}")
 async def update_equipment_master(facility_name: str, body: dict):
@@ -294,7 +288,7 @@ async def update_equipment_master(facility_name: str, body: dict):
 
 # ─────────────────────────────────────────────────────
 # POST /engine-equipment/review/approve
-# 검토 필요 항목 일괄 승인 (needs_review → false)
+# 검토 필요 항목 일괄 승인
 # ─────────────────────────────────────────────────────
 @router.post("/review/approve")
 async def bulk_approve_review(body: dict):
@@ -339,8 +333,8 @@ async def list_equipment_models(
     query = supabase.table("equipment_model_master").select(
         "id, manufacturer, model_name, equipment_std, primary_equipment_std, "
         "model_year, expected_life_years, maintenance_cycle_months, "
-        "risk_score, criticality_score, certification_class, "
-        "source_type, cert_match_status, certification_status, "
+        "risk_score, criticality_score, "
+        "source_type, cert_match_status, "
         "country_of_origin, equipment_lv2",
         count="exact"
     )
@@ -381,12 +375,13 @@ async def get_model_detail(model_id: str):
 
     res = supabase.table("equipment_model_master").select("*").eq(
         "id", model_id
-    ).single().execute()
+    ).limit(1).execute()
 
-    if not res.data:
+    rows = res.data or []
+    if not rows:
         raise HTTPException(status_code=404, detail="모델을 찾을 수 없습니다.")
 
-    return {"status": "success", "data": res.data}
+    return {"status": "success", "data": rows[0]}
 
 
 # ─────────────────────────────────────────────────────
@@ -400,7 +395,7 @@ async def update_model(model_id: str, body: dict):
     allowed = {
         "manufacturer", "model_name", "equipment_std",
         "model_year", "expected_life_years", "maintenance_cycle_months",
-        "risk_score", "criticality_score", "certification_class",
+        "risk_score", "criticality_score",
         "source_type", "country_of_origin", "equipment_lv2"
     }
     update_data = {k: v for k, v in body.items() if k in allowed}
