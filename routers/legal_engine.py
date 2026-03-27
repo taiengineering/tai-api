@@ -1,19 +1,15 @@
 """
-법령 판정 엔진 라우터 — v4.1.0
+법령 판정 엔진 라우터 — v4.1.1
 =================================
+v4.1.1 수정:
+  - _evaluate_equipment_conditions: equipment_assets에 is_active 컬럼 없음
+    → .eq("is_active", True) 제거
+
 v4.1.0 수정 (파이프라인 전체 연결):
-
-[문제1] _factory_to_context() 컬럼명 오류 수정
-  worker_count→employee_count, total_floor_area→building_area 등
-
-[문제2] INSPECTION_CYCLE_UNIT_MAP 코드 005(반기) 누락 추가
-  _get_inspection_cycle_label() 함수 로직 개선
-
-[문제3] POST /apply/{factory_id} → factories 테이블에 직접 저장
-  GET /result/{factory_id} → factories 테이블 우선 조회
-
-[문제4 신규] POST /create-inspection-sets/{factory_id}
-  법령결과 → inspection_sets 자동 생성 (멱등성 보장)
+  [문제1] _factory_to_context() 컬럼명 오류 수정
+  [문제2] INSPECTION_CYCLE_UNIT_MAP 코드 005(반기) 추가
+  [문제3] POST /apply → factories 테이블 직접 저장
+  [문제4] POST /create-inspection-sets 신규 엔드포인트
 
 [rule_type_code 의미]
 001=선임, 002=점검, 003=보고, 004=허가, 005=금지조치, 007=교육, 008=기록보존
@@ -27,7 +23,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "4.1.0"
+ENGINE_VERSION = "4.1.1"
 
 
 # ──────────────────────────────────────────────
@@ -49,13 +45,12 @@ APPOINTMENT_TARGET_MAP = {
     "city_gas_manager":           "도시가스안전관리자",
 }
 
-# v4.1.0: 코드 001(일1회), 002(주1회), 005(반기) 추가
 INSPECTION_CYCLE_UNIT_MAP = {
     "001": "일 1회",
     "002": "주 1회",
     "003": "월 1회",
     "004": "분기 1회",
-    "005": "반기 1회",   # ← v4.1.0 추가
+    "005": "반기 1회",
     "006": "연 1회",
     "007": "2년마다",
     "008": "5년마다",
@@ -176,7 +171,6 @@ def _factory_to_context(factory: dict) -> Dict[str, Any]:
     """
     등록된 factories 레코드 → context dict
     v4.1.0: 실제 DB 컬럼명으로 전면 수정
-    (worker_count→employee_count, total_floor_area→building_area 등)
     """
     return {
         "employee_count":           _to_int(factory.get("employee_count")),
@@ -249,7 +243,6 @@ def _check_rule_conditions(rule: dict, context: dict) -> bool:
 # ──────────────────────────────────────────────
 
 def _get_inspection_cycle_label(rule: dict) -> str:
-    """v4.1.0: 코드값(1(005))이 아닌 한글로 변환"""
     val  = rule.get("inspection_cycle_value")
     unit = rule.get("inspection_cycle_unit_code", "")
     if not val and not unit:
@@ -339,9 +332,10 @@ def _evaluate_conditions(context: dict, rules: list) -> tuple:
 
 
 async def _evaluate_equipment_conditions(factory_id, factory_context, rules, supabase):
+    # v4.1.1: equipment_assets에 is_active 컬럼 없음 → 필터 제거
     eq_res = supabase.table("equipment_assets").select(
-        "equipment_type_code, count, capacity"
-    ).eq("factory_id", factory_id).eq("is_active", True).execute()
+        "equipment_type_code, quantity, capacity_value"
+    ).eq("factory_id", factory_id).execute()
 
     extra = dict(factory_context)
     for eq in (eq_res.data or []):
@@ -350,13 +344,13 @@ async def _evaluate_equipment_conditions(factory_id, factory_context, rules, sup
             extra["elevator_count"] = max(extra.get("elevator_count", 0), 1)
         elif tc in ("boiler",):
             extra["boiler_capacity_kw"] = max(extra.get("boiler_capacity_kw", 0),
-                                              _to_float(eq.get("capacity")) or 1)
+                                              _to_float(eq.get("capacity_value")) or 1)
         elif tc in ("gas", "gas_tank"):
             extra["gas_capacity_kg"] = max(extra.get("gas_capacity_kg", 0), 1)
         elif tc in ("hazmat", "chemical"):
             extra["is_hazardous_material"] = 1
         elif tc in ("electric", "transformer"):
-            cap = _to_float(eq.get("capacity"))
+            cap = _to_float(eq.get("capacity_value"))
             if cap:
                 extra["electrical_capacity_kw"] = max(extra.get("electrical_capacity_kw", 0), cap)
                 extra["transformer_capacity_kva"] = max(extra.get("transformer_capacity_kva", 0), cap)
@@ -438,7 +432,7 @@ async def apply_legal_engine(
     mode: str = Query("all"),
 ):
     """
-    시설 등록 기반 법령 판정 + factories 테이블 직접 저장 (v4.1.0)
+    시설 등록 기반 법령 판정 + factories 테이블 직접 저장 (v4.1.1)
     """
     supabase = get_supabase()
 
@@ -502,7 +496,7 @@ async def apply_legal_engine(
                                     factory_id=factory_id,
                                     triggered_by_source=triggered_by_source)
 
-    # ── v4.1.0: factories 테이블에 직접 저장 (항상 실행) ──
+    # ── factories 테이블에 직접 저장 ──
     try:
         supabase.table("factories").update({
             "legal_result_json":      result_data,
@@ -511,9 +505,9 @@ async def apply_legal_engine(
             "legal_applicable_count": result_data.get("applicable_count", 0),
             "updated_at":             evaluated_at,
         }).eq("id", factory_id).execute()
-        print(f"[LEGAL ENGINE v4.1] factories 저장 완료: {factory_id} (적용 {result_data.get('applicable_count', 0)}건)")
+        print(f"[LEGAL ENGINE v4.1.1] factories 저장 완료: {factory_id} ({result_data.get('applicable_count', 0)}건)")
     except Exception as e:
-        print(f"[LEGAL ENGINE v4.1] factories 저장 실패: {e}")
+        print(f"[LEGAL ENGINE v4.1.1] factories 저장 실패: {e}")
 
     # ── legal_applications 보조 저장 (없어도 OK) ──
     try:
@@ -525,7 +519,7 @@ async def apply_legal_engine(
             "evaluated_at":   evaluated_at,
         }, on_conflict="factory_id,mode").execute()
     except Exception as e:
-        print(f"[LEGAL ENGINE v4.1] legal_applications 저장 실패 (무시): {e}")
+        print(f"[LEGAL ENGINE v4.1.1] legal_applications 저장 실패 (무시): {e}")
 
     return {"status": "success", "data": result_data}
 
@@ -665,8 +659,7 @@ async def get_legal_summary(factory_id: str):
 async def create_inspection_sets_from_legal(factory_id: str):
     """
     factories.legal_result_json의 inspection_required 항목을
-    inspection_sets로 자동 생성 (멱등성 보장).
-    v4.1.0 신규
+    inspection_sets로 자동 생성 (멱등성 보장). v4.1.0 신규
     """
     supabase = get_supabase()
 
@@ -698,7 +691,6 @@ async def create_inspection_sets_from_legal(factory_id: str):
         law_name    = rule.get("law_name", "")
         rule_id     = rule.get("rule_id", "")
 
-        # 텍스트에서 cycle_unit/value 파싱
         cycle_unit, cycle_value = "year", 1
         if "월 1회" in cycle_label or "매월" in cycle_label: cycle_unit, cycle_value = "month", 1
         elif "반기" in cycle_label: cycle_unit, cycle_value = "month", 6
@@ -728,7 +720,6 @@ async def create_inspection_sets_from_legal(factory_id: str):
     if not insert_rows:
         return {"status": "success", "message": "변환할 항목 없음", "data": {"created": 0}}
 
-    # 배치 삽입 (50건씩)
     created = 0
     for i in range(0, len(insert_rows), 50):
         res = supabase.table("inspection_sets").insert(insert_rows[i:i+50]).execute()
