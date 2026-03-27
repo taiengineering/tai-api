@@ -1,8 +1,8 @@
-# routers/auth.py — v3.1.0 (이메일 인증 추가)
+# routers/auth.py — v3.2.0 (이메일 인증 버그수정: dateutil 제거)
 from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import os, re, random
 from supabase import create_client
 
@@ -23,6 +23,19 @@ def is_email(value: str) -> bool:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+def _parse_iso(s: str) -> datetime:
+    """ISO8601 문자열 파싱 — 표준 라이브러리만 사용 (dateutil 불필요)"""
+    # +00:00 또는 Z 처리
+    s = s.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        # 마이크로초 없는 경우 fallback
+        dt = datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 # ── 스키마 ──────────────────────────────────────
@@ -68,7 +81,7 @@ class VerifyEmailRequest(BaseModel):
 
 @router.get("/test")
 def test():
-    return {"message": "auth router alive", "version": "3.1"}
+    return {"message": "auth router alive", "version": "3.2"}
 
 
 # ── 로그인 ──────────────────────────────────────
@@ -337,12 +350,9 @@ def update_me(req: UpdateMeRequest, authorization: Optional[str] = Header(None))
 async def send_verify_email(req: SendVerifyEmailRequest):
     """
     이메일 인증 코드 발송.
-    - users 테이블에서 이메일 조회
-    - 6자리 토큰 생성 → DB 저장
-    - Resend API로 발송
+    - 6자리 숫자 토큰 생성 → DB 저장 → Resend 발송
     """
     import resend as resend_client
-    import requests as req_http
 
     supabase = get_supabase()
     try:
@@ -376,7 +386,7 @@ async def send_verify_email(req: SendVerifyEmailRequest):
             "from":    "TAI Engineering <noreply@taieng.co.kr>",
             "to":      [req.email],
             "subject": f"[TAI] 이메일 인증 코드: {token}",
-            "text":    (
+            "text": (
                 f"인증 코드: {token}\n"
                 f"이 코드는 10분간 유효합니다.\n\n"
                 f"TAI Engineering"
@@ -399,13 +409,8 @@ async def send_verify_email(req: SendVerifyEmailRequest):
 async def verify_email(req: VerifyEmailRequest):
     """
     이메일 인증 토큰 검증.
-    - 토큰 일치 여부 확인
-    - 10분 만료 검사
-    - 성공 시 email_verified = true 저장
+    - dateutil 미사용 → fromisoformat 표준 라이브러리 사용 (v3.2.0 수정)
     """
-    from datetime import timedelta
-    import dateutil.parser
-
     supabase = get_supabase()
     try:
         res = supabase.table("users").select(
@@ -423,12 +428,10 @@ async def verify_email(req: VerifyEmailRequest):
         if stored_token != req.token:
             raise HTTPException(status_code=400, detail="인증 코드가 올바르지 않습니다.")
 
-        # 10분 만료 확인
+        # 10분 만료 확인 — 표준 라이브러리만 사용
         if sent_at_str:
             try:
-                sent_at = dateutil.parser.parse(sent_at_str)
-                if sent_at.tzinfo is None:
-                    sent_at = sent_at.replace(tzinfo=timezone.utc)
+                sent_at = _parse_iso(str(sent_at_str))
                 elapsed = datetime.now(timezone.utc) - sent_at
                 if elapsed > timedelta(minutes=10):
                     raise HTTPException(
@@ -455,8 +458,8 @@ async def verify_email(req: VerifyEmailRequest):
             "status": "success",
             "message": "이메일 인증이 완료됐습니다.",
             "data": {
-                "email":            req.email,
-                "email_verified":   True,
+                "email":             req.email,
+                "email_verified":    True,
                 "email_verified_at": now,
             },
         }
