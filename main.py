@@ -1,5 +1,5 @@
-# main.py — v3.6.0
-# feat(inspection): 점검리스트 시스템 추가
+# main.py — v3.7.0
+# perf: MV + 인덱스 기반 전체 API 성능 최적화
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -31,10 +31,11 @@ from routers.buildings               import router as buildings_router
 from routers.inspection_sets         import router as inspection_sets_router
 from routers.work_schedules          import router as work_schedules_router
 from routers.inspection_checklist    import router as inspection_router
+from routers.admin_stats             import router as admin_stats_router
 
 app = FastAPI(
     title="TAI API",
-    version="3.6.0",
+    version="3.7.0",
     description="TAI 산업안전 플랫폼 API",
 )
 
@@ -86,12 +87,13 @@ app.include_router(buildings_router)
 app.include_router(inspection_sets_router)
 app.include_router(work_schedules_router)
 app.include_router(inspection_router)
+app.include_router(admin_stats_router)
 
 
 # ── 헬스체크 ─────────────────────────────────────────────────
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "3.6.0"}
+    return {"status": "ok", "service": "TAI API", "version": "3.7.0"}
 
 
 @app.get("/health")
@@ -101,4 +103,4 @@ def health():
         ip = req.get("https://api.ipify.org", timeout=5).text
     except Exception as e:
         ip = f"확인불가: {e}"
-    return {"status": "healthy", "server_ip": ip, "version": "3.6.0"}
+    return {"status": "healthy", "server_ip": ip, "version": "3.7.0"}
