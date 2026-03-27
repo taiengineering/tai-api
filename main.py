@@ -32,6 +32,7 @@ from routers.inspection_sets         import router as inspection_sets_router
 from routers.work_schedules          import router as work_schedules_router
 from routers.inspection_checklist    import router as inspection_router
 from routers.admin_stats             import router as admin_stats_router
+from routers.repair                  import router as repair_router
 
 app = FastAPI(
     title="TAI API",
@@ -88,6 +89,7 @@ app.include_router(inspection_sets_router)
 app.include_router(work_schedules_router)
 app.include_router(inspection_router)
 app.include_router(admin_stats_router)
+app.include_router(repair_router)
 
 
 # ── 헬스체크 ─────────────────────────────────────────────
