@@ -1,18 +1,14 @@
 """
-법령 판정 엔진 라우터 — v4.1.1
+법령 판정 엔진 라우터 — v4.1.2
 =================================
-v4.1.1 수정:
-  - _evaluate_equipment_conditions: equipment_assets에 is_active 컬럼 없음
-    → .eq("is_active", True) 제거
+v4.1.2:
+  - /apply 응답에서 not_applicable 제거 → 응답 경량화
+  - DB(factories) 저장은 not_applicable 포함 전체 저장 유지
+  - /apply 응답: summary + applicable 항목만 반환
+  - /result 조회 시에도 not_applicable 제외 (프론트 불필요)
 
-v4.1.0 수정 (파이프라인 전체 연결):
-  [문제1] _factory_to_context() 컬럼명 오류 수정
-  [문제2] INSPECTION_CYCLE_UNIT_MAP 코드 005(반기) 추가
-  [문제3] POST /apply → factories 테이블 직접 저장
-  [문제4] POST /create-inspection-sets 신규 엔드포인트
-
-[rule_type_code 의미]
-001=선임, 002=점검, 003=보고, 004=허가, 005=금지조치, 007=교육, 008=기록보존
+v4.1.1: equipment_assets is_active 컬럼 없음 → 필터 제거
+v4.1.0: 파이프라인 전체 연결 (컬럼명 수정 / 반기 코드 / factories 저장 / inspection_sets 생성)
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, Any, Dict
@@ -23,7 +19,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "4.1.1"
+ENGINE_VERSION = "4.1.2"
 
 
 # ──────────────────────────────────────────────
@@ -112,16 +108,14 @@ def _to_int(*vals) -> int:
 
 
 # ──────────────────────────────────────────────
-# 설문 데이터 → context 변환
+# context 변환
 # ──────────────────────────────────────────────
 
 def _survey_data_to_context(survey_data: Dict[str, Any]) -> Dict[str, Any]:
     snap = survey_data.get("survey_snapshot")
     if not isinstance(snap, dict):
         snap = {}
-
     equip_list = snap.get("equip") or []
-
     workers    = _to_int(survey_data.get("employee_count"), snap.get("workers"))
     area       = _to_float(survey_data.get("floor_area"), snap.get("area"))
     power_kw   = _to_float(survey_data.get("electrical_kw"), snap.get("elecKw"))
@@ -129,30 +123,22 @@ def _survey_data_to_context(survey_data: Dict[str, Any]) -> Dict[str, Any]:
     gas_kg     = _to_float(snap.get("gasKg"), survey_data.get("gas_kg"))
     boiler_th  = _to_float(snap.get("boilerTh"), survey_data.get("boiler_th"))
     outsource  = _to_int(snap.get("outsource"), survey_data.get("outsource_count"))
-
     has_chem   = "chem"   in equip_list or bool(survey_data.get("equip_chemical"))
     has_elev   = "elev"   in equip_list or bool(survey_data.get("equip_elevator"))
     has_gas    = "gas"    in equip_list or gas_kg > 0
     has_boiler = "boiler" in equip_list or boiler_th > 0
-
-    btype = str(snap.get("btype") or snap.get("bldgUse") or
-                survey_data.get("building_type") or "").strip()
+    btype = str(snap.get("btype") or snap.get("bldgUse") or survey_data.get("building_type") or "").strip()
     ksic  = str(survey_data.get("ksic_code") or snap.get("ksic_code") or "").strip()
-    is_factory = 1 if (btype.startswith("공장") or btype.startswith("제조") or
-                       ksic.upper().startswith("C")) else 0
-
-    transformer_kva = power_kw
+    is_factory = 1 if (btype.startswith("공장") or btype.startswith("제조") or ksic.upper().startswith("C")) else 0
     cons_eok = _to_float(snap.get("constructionAmt"), survey_data.get("construction_amt"))
-    cons_won = cons_eok * 100_000_000 if cons_eok > 0 else 0
-
     return {
         "employee_count":          workers,
         "building_area":           area,
         "electrical_capacity_kw":  power_kw,
         "floor_count":             floors,
         "contractor_count":        outsource,
-        "transformer_capacity_kva": transformer_kva,
-        "construction_amount":     cons_won,
+        "transformer_capacity_kva": power_kw,
+        "construction_amount":     cons_eok * 100_000_000 if cons_eok > 0 else 0,
         "gas_capacity_kg":         gas_kg if gas_kg > 0 else (1 if has_gas else 0),
         "gas_capacity_m3":         1 if has_gas else 0,
         "boiler_capacity_kw":      boiler_th * 700 if boiler_th > 0 else (1 if has_boiler else 0),
@@ -168,10 +154,7 @@ def _survey_data_to_context(survey_data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _factory_to_context(factory: dict) -> Dict[str, Any]:
-    """
-    등록된 factories 레코드 → context dict
-    v4.1.0: 실제 DB 컬럼명으로 전면 수정
-    """
+    """v4.1.0: 실제 DB 컬럼명으로 전면 수정"""
     return {
         "employee_count":           _to_int(factory.get("employee_count")),
         "building_area":            _to_float(factory.get("building_area")),
@@ -202,39 +185,31 @@ def _check_rule_conditions(rule: dict, context: dict) -> bool:
     condition_code = rule.get("condition_code", "")
     operator       = rule.get("condition_operator_code", "gte")
     value_str      = rule.get("condition_value")
-
     if not condition_code:
         return True
-
     actual = context.get(condition_code)
     if actual is None:
         return False
-
     if condition_code.startswith("is_") and actual == 0:
         return False
-
     if value_str is None:
         try:
             return float(actual) > 0
         except (TypeError, ValueError):
             return bool(actual)
-
     try:
         actual_num = float(actual)
         value_num  = float(value_str)
-
-        if operator in ("gte", ">="):  return actual_num >= value_num
+        if operator in ("gte", ">="): return actual_num >= value_num
         elif operator in ("lte", "<="): return actual_num <= value_num
-        elif operator in ("gt", ">"):   return actual_num >  value_num
-        elif operator in ("lt", "<"):   return actual_num <  value_num
-        elif operator in ("eq", "=", "=="):   return actual_num == value_num
+        elif operator in ("gt", ">"): return actual_num > value_num
+        elif operator in ("lt", "<"): return actual_num < value_num
+        elif operator in ("eq", "=", "=="): return actual_num == value_num
         elif operator in ("neq", "!=", "<>"): return actual_num != value_num
         else: return actual_num >= value_num
     except (TypeError, ValueError):
-        if operator in ("eq", "=", "=="):
-            return str(actual).strip() == str(value_str).strip()
-        elif operator in ("in", "contains"):
-            return str(value_str) in str(actual)
+        if operator in ("eq", "=", "=="): return str(actual).strip() == str(value_str).strip()
+        elif operator in ("in", "contains"): return str(value_str) in str(actual)
         return False
 
 
@@ -254,29 +229,22 @@ def _get_inspection_cycle_label(rule: dict) -> str:
 
 
 def _get_appointment_target_label(rule: dict) -> str:
-    code = rule.get("appointment_target_code", "")
-    return APPOINTMENT_TARGET_MAP.get(code, code)
+    return APPOINTMENT_TARGET_MAP.get(rule.get("appointment_target_code", ""), rule.get("appointment_target_code", ""))
 
 
 def format_rule_result(rule: dict, source_label: str = "") -> dict:
-    rule_type_code     = str(rule.get("rule_type_code", ""))
-    inspection_cycle   = _get_inspection_cycle_label(rule)
-    appointment_target = _get_appointment_target_label(rule)
-
     pen_val  = rule.get("penalty_value")
     pen_unit = rule.get("penalty_unit_code", "")
-    penalty_amount = f"{pen_val} {pen_unit}" if pen_val and pen_unit else (str(pen_val) if pen_val else "")
-
     return {
         "rule_id":               rule.get("rule_id", ""),
-        "rule_type":             rule_type_code,
+        "rule_type":             str(rule.get("rule_type_code", "")),
         "law_name":              rule.get("law_name", ""),
         "law_article":           rule.get("law_article", ""),
         "description":           rule.get("remarks", ""),
-        "appointment_target":    appointment_target,
+        "appointment_target":    _get_appointment_target_label(rule),
         "qualification_required": rule.get("appointment_qualification_code", ""),
-        "inspection_cycle":      inspection_cycle,
-        "penalty_amount":        penalty_amount,
+        "inspection_cycle":      _get_inspection_cycle_label(rule),
+        "penalty_amount":        f"{pen_val} {pen_unit}" if pen_val and pen_unit else (str(pen_val) if pen_val else ""),
         "source_label":          source_label,
         "appointment_required":  rule.get("appointment_required", False),
         "inspection_required":   rule.get("inspection_required", False),
@@ -302,9 +270,7 @@ def _classify_rules_with_source(rule_source_pairs: list, triggered: dict):
 
 
 def _classify_one(rule: dict, formatted: dict, triggered: dict):
-    rule_type_code = str(rule.get("rule_type_code", ""))
-    category = RULE_TYPE_MAP.get(rule_type_code, "action")
-
+    category = RULE_TYPE_MAP.get(str(rule.get("rule_type_code", "")), "action")
     if rule.get("appointment_required"):
         triggered["appointment"].append(formatted)
     elif rule.get("inspection_required"):
@@ -324,31 +290,22 @@ def _classify_one(rule: dict, formatted: dict, triggered: dict):
 def _evaluate_conditions(context: dict, rules: list) -> tuple:
     applicable, not_applicable = [], []
     for rule in rules:
-        if _check_rule_conditions(rule, context):
-            applicable.append(rule)
-        else:
-            not_applicable.append(rule)
+        (applicable if _check_rule_conditions(rule, context) else not_applicable).append(rule)
     return applicable, not_applicable
 
 
 async def _evaluate_equipment_conditions(factory_id, factory_context, rules, supabase):
-    # v4.1.1: equipment_assets에 is_active 컬럼 없음 → 필터 제거
+    # v4.1.1: is_active 컬럼 없음 → 필터 제거
     eq_res = supabase.table("equipment_assets").select(
         "equipment_type_code, quantity, capacity_value"
     ).eq("factory_id", factory_id).execute()
-
     extra = dict(factory_context)
     for eq in (eq_res.data or []):
         tc = eq.get("equipment_type_code", "")
-        if tc in ("elevator", "elev"):
-            extra["elevator_count"] = max(extra.get("elevator_count", 0), 1)
-        elif tc in ("boiler",):
-            extra["boiler_capacity_kw"] = max(extra.get("boiler_capacity_kw", 0),
-                                              _to_float(eq.get("capacity_value")) or 1)
-        elif tc in ("gas", "gas_tank"):
-            extra["gas_capacity_kg"] = max(extra.get("gas_capacity_kg", 0), 1)
-        elif tc in ("hazmat", "chemical"):
-            extra["is_hazardous_material"] = 1
+        if tc in ("elevator", "elev"): extra["elevator_count"] = max(extra.get("elevator_count", 0), 1)
+        elif tc == "boiler": extra["boiler_capacity_kw"] = max(extra.get("boiler_capacity_kw", 0), _to_float(eq.get("capacity_value")) or 1)
+        elif tc in ("gas", "gas_tank"): extra["gas_capacity_kg"] = max(extra.get("gas_capacity_kg", 0), 1)
+        elif tc in ("hazmat", "chemical"): extra["is_hazardous_material"] = 1
         elif tc in ("electric", "transformer"):
             cap = _to_float(eq.get("capacity_value"))
             if cap:
@@ -358,18 +315,11 @@ async def _evaluate_equipment_conditions(factory_id, factory_context, rules, sup
 
 
 async def _evaluate_process_conditions(factory_id, factory_context, rules, supabase):
-    proc_res = supabase.table("factory_process").select(
-        "process_id, source"
-    ).eq("factory_id", factory_id).eq("is_active", True).execute()
-
+    proc_res = supabase.table("factory_process").select("process_id, source").eq("factory_id", factory_id).eq("is_active", True).execute()
     process_ids = [r["process_id"] for r in (proc_res.data or []) if r.get("source") != "MANUAL"]
     if not process_ids:
         return [], rules
-
-    eq_res = supabase.table("v_equipment_unified").select(
-        "facility_name_std, match_band"
-    ).in_("process_id", process_ids).in_("match_band", ["MUST", "CORE"]).execute()
-
+    eq_res = supabase.table("v_equipment_unified").select("facility_name_std, match_band").in_("process_id", process_ids).in_("match_band", ["MUST", "CORE"]).execute()
     inferred = set(r["facility_name_std"] for r in (eq_res.data or []))
     extra = dict(factory_context)
     for name in inferred:
@@ -378,38 +328,34 @@ async def _evaluate_process_conditions(factory_id, factory_context, rules, supab
         if "보일러" in nl: extra["boiler_capacity_kw"] = max(extra.get("boiler_capacity_kw", 0), 1)
         if "가스" in nl: extra["gas_capacity_kg"] = max(extra.get("gas_capacity_kg", 0), 1)
         if "위험물" in nl or "화학" in nl: extra["is_hazardous_material"] = 1
-
     return _evaluate_conditions(extra, rules)
 
 
 # ──────────────────────────────────────────────
-# 결과 구성
+# 결과 구성 — v4.1.2: not_applicable 별도 처리
 # ──────────────────────────────────────────────
 
-def _build_result(applicable, not_applicable, all_rules, mode, evaluated_at, source_pairs=None, **extra_fields):
-    triggered = {"appointment": [], "inspection": [], "action": [], "report": [], "not_applicable": []}
-
+def _build_result(applicable, not_applicable, all_rules, mode, evaluated_at,
+                  source_pairs=None, include_not_applicable=True, **extra_fields):
+    triggered = {"appointment": [], "inspection": [], "action": [], "report": []}
     if source_pairs is not None:
         _classify_rules_with_source(source_pairs, triggered)
     else:
         _classify_rules(applicable, triggered)
 
-    for r in not_applicable:
-        triggered["not_applicable"].append(format_rule_result(r))
+    total = sum(len(triggered[k]) for k in triggered)
 
-    total = sum(len(triggered[k]) for k in ("appointment", "inspection", "action", "report"))
-
-    return {
+    result = {
         "engine_version":        ENGINE_VERSION,
         "mode":                  mode,
         "evaluated_at":          evaluated_at,
         "total_rules_checked":   len(all_rules),
+        "not_applicable_count":  len(not_applicable),   # 건수만 포함
         "applicable_count":      total,
         "appointment_required":  triggered["appointment"],
         "inspection_required":   triggered["inspection"],
         "action_required":       triggered["action"],
         "report_required":       triggered["report"],
-        "not_applicable":        triggered["not_applicable"],
         "summary": {
             "total":       total,
             "appointment": len(triggered["appointment"]),
@@ -419,6 +365,12 @@ def _build_result(applicable, not_applicable, all_rules, mode, evaluated_at, sou
         },
         **extra_fields,
     }
+
+    # DB 저장용에만 not_applicable 포함 (include_not_applicable=True)
+    if include_not_applicable:
+        result["not_applicable"] = [format_rule_result(r) for r in not_applicable]
+
+    return result
 
 
 # ══════════════════════════════════════════════
@@ -432,7 +384,9 @@ async def apply_legal_engine(
     mode: str = Query("all"),
 ):
     """
-    시설 등록 기반 법령 판정 + factories 테이블 직접 저장 (v4.1.1)
+    시설 등록 기반 법령 판정 (v4.1.2)
+    - 응답: summary + applicable 항목만 (not_applicable 제외)
+    - DB 저장: not_applicable 포함 전체 저장
     """
     supabase = get_supabase()
 
@@ -451,34 +405,25 @@ async def apply_legal_engine(
 
     evaluated_at = _now_iso()
     context = _factory_to_context(factory)
-
     triggered_by_source = {"factory_condition": 0, "registered_equipment": 0, "process_recommended": 0}
 
     if mode == "facility":
         applicable, not_applicable = _evaluate_conditions(context, all_rules)
         triggered_by_source["factory_condition"] = len(applicable)
-        result_data = _build_result(applicable, not_applicable, all_rules, mode, evaluated_at,
-                                    factory_id=factory_id, triggered_by_source=triggered_by_source)
-
+        source_pairs = None
     elif mode == "process":
         applicable, not_applicable = await _evaluate_process_conditions(factory_id, context, all_rules, supabase)
         triggered_by_source["process_recommended"] = len(applicable)
-        result_data = _build_result(applicable, not_applicable, all_rules, mode, evaluated_at,
-                                    factory_id=factory_id, triggered_by_source=triggered_by_source)
-
+        source_pairs = None
     elif mode == "equipment":
         applicable, not_applicable = await _evaluate_equipment_conditions(factory_id, context, all_rules, supabase)
         triggered_by_source["registered_equipment"] = len(applicable)
-        result_data = _build_result(applicable, not_applicable, all_rules, mode, evaluated_at,
-                                    factory_id=factory_id, triggered_by_source=triggered_by_source)
-
+        source_pairs = None
     else:  # all
-        fac_app, _ = _evaluate_conditions(context, all_rules)
+        fac_app, _  = _evaluate_conditions(context, all_rules)
         triggered_by_source["factory_condition"] = len(fac_app)
-
-        eq_app, _  = await _evaluate_equipment_conditions(factory_id, context, all_rules, supabase)
+        eq_app, _   = await _evaluate_equipment_conditions(factory_id, context, all_rules, supabase)
         triggered_by_source["registered_equipment"] = len(eq_app)
-
         proc_app, _ = await _evaluate_process_conditions(factory_id, context, all_rules, supabase)
         triggered_by_source["process_recommended"] = len(proc_app)
 
@@ -490,69 +435,73 @@ async def apply_legal_engine(
         source_pairs   = list(rule_map.values())
         applicable_ids = {r["rule_id"] for r, _ in source_pairs}
         not_applicable = [r for r in all_rules if r["rule_id"] not in applicable_ids]
+        applicable     = []
 
-        result_data = _build_result([], not_applicable, all_rules, mode, evaluated_at,
-                                    source_pairs=source_pairs,
-                                    factory_id=factory_id,
-                                    triggered_by_source=triggered_by_source)
+    # DB 저장용 (not_applicable 포함)
+    result_for_db = _build_result(
+        applicable, not_applicable, all_rules, mode, evaluated_at,
+        source_pairs=source_pairs, include_not_applicable=True,
+        factory_id=factory_id, triggered_by_source=triggered_by_source,
+    )
 
-    # ── factories 테이블에 직접 저장 ──
+    # 응답용 (not_applicable 제외 — 경량)
+    result_for_response = _build_result(
+        applicable, not_applicable, all_rules, mode, evaluated_at,
+        source_pairs=source_pairs, include_not_applicable=False,
+        factory_id=factory_id, triggered_by_source=triggered_by_source,
+    )
+
+    # factories 테이블 저장 (전체 결과)
     try:
         supabase.table("factories").update({
-            "legal_result_json":      result_data,
+            "legal_result_json":      result_for_db,
             "last_diagnosis_at":      evaluated_at,
             "diagnosis_status":       "DONE",
-            "legal_applicable_count": result_data.get("applicable_count", 0),
+            "legal_applicable_count": result_for_db.get("applicable_count", 0),
             "updated_at":             evaluated_at,
         }).eq("id", factory_id).execute()
-        print(f"[LEGAL ENGINE v4.1.1] factories 저장 완료: {factory_id} ({result_data.get('applicable_count', 0)}건)")
+        print(f"[LEGAL ENGINE v4.1.2] factories 저장 완료: {factory_id} ({result_for_db.get('applicable_count', 0)}건)")
     except Exception as e:
-        print(f"[LEGAL ENGINE v4.1.1] factories 저장 실패: {e}")
+        print(f"[LEGAL ENGINE v4.1.2] factories 저장 실패: {e}")
 
-    # ── legal_applications 보조 저장 (없어도 OK) ──
+    # legal_applications 보조 저장
     try:
         supabase.table("legal_applications").upsert({
             "factory_id":     factory_id,
             "engine_version": ENGINE_VERSION,
             "mode":           mode,
-            "result_json":    result_data,
+            "result_json":    result_for_db,
             "evaluated_at":   evaluated_at,
         }, on_conflict="factory_id,mode").execute()
     except Exception as e:
-        print(f"[LEGAL ENGINE v4.1.1] legal_applications 저장 실패 (무시): {e}")
+        print(f"[LEGAL ENGINE v4.1.2] legal_applications 저장 실패 (무시): {e}")
 
-    return {"status": "success", "data": result_data}
+    return {"status": "success", "data": result_for_response}
 
 
 @router.post("/apply-quote/{quote_id}")
 async def apply_legal_engine_from_quote(quote_id: str):
     """견적 survey_data 기반 법령 판정"""
     supabase = get_supabase()
-
     qres = supabase.table("quotes").select("id, quote_no, survey_data").eq("id", quote_id).single().execute()
     if not qres.data:
         raise HTTPException(status_code=404, detail="견적을 찾을 수 없습니다.")
-
     sd = _parse_survey_data(qres.data.get("survey_data"))
     if not sd:
         raise HTTPException(status_code=400, detail="survey_data가 없습니다.")
-
     context   = _survey_data_to_context(sd)
     rules_res = supabase.table("master_building_legal_rules").select("*").eq("is_active", True).execute()
     all_rules = rules_res.data or []
     evaluated_at = _now_iso()
-
     applicable, not_applicable = _evaluate_conditions(context, all_rules)
-    na_cap  = 100
     result_data = _build_result(
-        applicable, not_applicable[:na_cap], all_rules, "facility", evaluated_at,
+        applicable, not_applicable, all_rules, "facility", evaluated_at,
+        include_not_applicable=False,
         quote_id=quote_id, quote_no=qres.data.get("quote_no"),
         source="quote_survey",
         not_applicable_total=len(not_applicable),
-        not_applicable_truncated=len(not_applicable) > na_cap,
         triggered_by_source={"factory_condition": len(applicable)},
     )
-
     try:
         supabase.table("quotes").update({
             "legal_result_json":      result_data,
@@ -562,7 +511,6 @@ async def apply_legal_engine_from_quote(quote_id: str):
         }).eq("id", quote_id).execute()
     except Exception as e:
         print(f"[LEGAL ENGINE] quotes 저장 실패: {e}")
-
     return {"status": "success", "data": result_data}
 
 
@@ -576,7 +524,7 @@ async def get_legal_result_from_quote(quote_id: str):
     if not res.data:
         raise HTTPException(status_code=404, detail="견적을 찾을 수 없습니다.")
     if not res.data.get("legal_result_json"):
-        raise HTTPException(status_code=404, detail="판정 결과 없음. POST /legal-engine/apply-quote/{quote_id} 먼저 실행하세요.")
+        raise HTTPException(status_code=404, detail="판정 결과 없음.")
     return {"status": "success", "data": {
         "quote_id": quote_id,
         "quote_no": res.data.get("quote_no"),
@@ -587,26 +535,23 @@ async def get_legal_result_from_quote(quote_id: str):
 
 
 @router.get("/result/{factory_id}")
-async def get_legal_result(
-    factory_id: str,
-    mode: str = Query("all"),
-):
+async def get_legal_result(factory_id: str, mode: str = Query("all")):
     """
-    v4.1.0: factories 테이블 우선 조회 → 없으면 legal_applications fallback
+    v4.1.2: factories 우선 조회 — not_applicable 제외하고 반환
     """
     supabase = get_supabase()
-
-    # factories 테이블 우선
     try:
         fac = supabase.table("factories").select(
             "legal_result_json, last_diagnosis_at, legal_applicable_count, diagnosis_status"
         ).eq("id", factory_id).single().execute()
-
         if fac.data and fac.data.get("legal_result_json"):
+            rj = fac.data["legal_result_json"]
+            # not_applicable 제거해서 반환
+            rj.pop("not_applicable", None)
             return {
                 "status": "success",
                 "data": {
-                    **fac.data["legal_result_json"],
+                    **rj,
                     "last_diagnosis_at":      fac.data.get("last_diagnosis_at"),
                     "legal_applicable_count": fac.data.get("legal_applicable_count"),
                     "diagnosis_status":       fac.data.get("diagnosis_status"),
@@ -614,17 +559,17 @@ async def get_legal_result(
             }
     except Exception:
         pass
-
-    # fallback: legal_applications
+    # fallback
     try:
         res = supabase.table("legal_applications").select("*").eq(
             "factory_id", factory_id
         ).eq("mode", mode).order("evaluated_at", desc=True).limit(1).execute()
         if res.data:
-            return {"status": "success", "data": res.data[0].get("result_json", {})}
+            rj = res.data[0].get("result_json", {})
+            rj.pop("not_applicable", None)
+            return {"status": "success", "data": rj}
     except Exception:
         pass
-
     raise HTTPException(status_code=404, detail="판정 결과 없음. POST /legal-engine/apply/{factory_id} 먼저 실행하세요.")
 
 
@@ -638,7 +583,6 @@ async def get_legal_summary(factory_id: str):
         ).eq("factory_id", factory_id).order("evaluated_at", desc=True).limit(4).execute()
     except Exception:
         return {"status": "success", "data": {"factory_id": factory_id, "results": []}}
-
     results = []
     for row in (res.data or []):
         rj = row.get("result_json", {})
@@ -652,45 +596,37 @@ async def get_legal_summary(factory_id: str):
 
 
 # ──────────────────────────────────────────────
-# 문제4 신규: 법령결과 → inspection_sets 자동 생성
+# 법령결과 → inspection_sets 자동 생성
 # ──────────────────────────────────────────────
 
 @router.post("/create-inspection-sets/{factory_id}")
 async def create_inspection_sets_from_legal(factory_id: str):
     """
-    factories.legal_result_json의 inspection_required 항목을
-    inspection_sets로 자동 생성 (멱등성 보장). v4.1.0 신규
+    factories.legal_result_json의 inspection_required →
+    inspection_sets 자동 생성 (멱등성 보장). v4.1.0 신규
     """
     supabase = get_supabase()
-
     fac = supabase.table("factories").select(
-        "id, company_id, legal_result_json, last_diagnosis_at"
+        "id, company_id, legal_result_json"
     ).eq("id", factory_id).single().execute()
-
     if not fac.data:
         raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다.")
-
     result_json = fac.data.get("legal_result_json")
     if not result_json:
         raise HTTPException(status_code=400, detail="법령판정 결과가 없습니다. 먼저 POST /legal-engine/apply/{factory_id} 실행하세요.")
 
     company_id       = fac.data.get("company_id")
     inspection_rules = result_json.get("inspection_required", [])
-
     if not inspection_rules:
         return {"status": "success", "message": "생성할 점검 항목이 없습니다.", "data": {"created": 0}}
 
-    # 기존 LEGAL_ENGINE 소스 삭제 (멱등성)
-    supabase.table("inspection_sets").delete().eq(
-        "factory_id", factory_id
-    ).eq("source", "LEGAL_ENGINE").execute()
+    supabase.table("inspection_sets").delete().eq("factory_id", factory_id).eq("source", "LEGAL_ENGINE").execute()
 
     insert_rows = []
     for rule in inspection_rules:
         cycle_label = rule.get("inspection_cycle", "")
         law_name    = rule.get("law_name", "")
         rule_id     = rule.get("rule_id", "")
-
         cycle_unit, cycle_value = "year", 1
         if "월 1회" in cycle_label or "매월" in cycle_label: cycle_unit, cycle_value = "month", 1
         elif "반기" in cycle_label: cycle_unit, cycle_value = "month", 6
@@ -701,7 +637,6 @@ async def create_inspection_sets_from_legal(factory_id: str):
         elif "5년" in cycle_label:  cycle_unit, cycle_value = "year",  5
         elif "10년" in cycle_label: cycle_unit, cycle_value = "year", 10
         elif "연 2회" in cycle_label: cycle_unit, cycle_value = "month", 6
-
         insert_rows.append({
             "company_id":          company_id,
             "factory_id":          factory_id,
@@ -716,7 +651,6 @@ async def create_inspection_sets_from_legal(factory_id: str):
             "source":              "LEGAL_ENGINE",
             "is_active":           True,
         })
-
     if not insert_rows:
         return {"status": "success", "message": "변환할 항목 없음", "data": {"created": 0}}
 
@@ -728,11 +662,7 @@ async def create_inspection_sets_from_legal(factory_id: str):
     return {
         "status": "success",
         "message": f"{created}개 점검 세트가 자동 생성됐습니다.",
-        "data": {
-            "factory_id":   factory_id,
-            "created":      created,
-            "source_rules": len(inspection_rules),
-        }
+        "data": {"factory_id": factory_id, "created": created, "source_rules": len(inspection_rules)},
     }
 
 
@@ -746,5 +676,4 @@ async def debug_quote_context(quote_id: str):
     sd = _parse_survey_data(qres.data.get("survey_data"))
     if not sd:
         raise HTTPException(status_code=400, detail="survey_data 없음")
-    context = _survey_data_to_context(sd)
-    return {"status": "success", "quote_no": qres.data.get("quote_no"), "context": context}
+    return {"status": "success", "quote_no": qres.data.get("quote_no"), "context": _survey_data_to_context(sd)}
