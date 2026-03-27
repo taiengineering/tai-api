@@ -1,7 +1,7 @@
 """
-엔진 설비 마스터 관리 라우터 — v1.2.0
-v1.2.0: MV(engine_equipment_summary) 기반으로 /stats, /list 교체
-  + POST /refresh 엔드포인트 추가
+엔진 설비 마스터 관리 라우터 — v1.2.1
+v1.2.1: /stats에서 별도 count 쿼리 제거 → MV 집계만 사용 (병목 제거)
+v1.2.0: MV(engine_equipment_summary) 기반으로 /stats, /list 교체 + POST /refresh
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
@@ -10,7 +10,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/engine-equipment", tags=["엔진설비마스터"])
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 
 CATEGORY_MAP = {
     "MECH":     "기계설비",
@@ -33,17 +33,16 @@ def _now_iso() -> str:
 
 
 # ─────────────────────────────────────────────────────
-# GET /engine-equipment/stats  전체 통계 (MV 기반 v1.2.0)
+# GET /engine-equipment/stats  (v1.2.1: count 쿼리 제거)
 # ─────────────────────────────────────────────────────
 @router.get("/stats")
 async def get_equipment_stats():
-    """MV(engine_equipment_summary) 기반 통계 — 빠른 응답"""
+    """MV(engine_equipment_summary) 단일 조회로 통계 — 빠른 응답"""
     supabase = get_supabase()
     try:
-        # MV 전체 조회 (~300행)
         res = supabase.table("engine_equipment_summary").select(
-            "facility_name_std, source_facility_category, top_band, needs_review, "
-            "process_count, industry_count, band_must, band_core, band_optional, band_reference"
+            "source_facility_category, top_band, needs_review, process_count, "
+            "band_must, band_core, band_optional, band_reference"
         ).execute()
         rows = res.data or []
 
@@ -51,38 +50,35 @@ async def get_equipment_stats():
         cat_count: dict = {}
         band_count = {"MUST": 0, "CORE": 0, "OPTIONAL": 0, "REFERENCE": 0}
         review_count = 0
+        total_process_mappings = 0
 
         for row in rows:
             cat  = row.get("source_facility_category") or ""
             band = row.get("top_band") or ""
             rev  = row.get("needs_review", False)
+            pc   = row.get("process_count") or 0
 
             cat_count[cat] = cat_count.get(cat, 0) + 1
             if band in band_count:
                 band_count[band] += 1
             if rev:
                 review_count += 1
+            total_process_mappings += pc
 
-        # 모델 마스터 수 (count만)
+        # 모델 마스터 수 (단순 count — 빠름)
         model_res = supabase.table("equipment_model_master").select(
             "id", count="exact"
         ).limit(0).execute()
         model_total = model_res.count or 0
 
-        # 전체 매핑 행 수
-        map_res = supabase.table("process_equipment_map").select(
-            "id", count="exact"
-        ).limit(0).execute()
-        total_rows = map_res.count or 0
-
         return {
             "status": "success",
             "data": {
-                "total_mapping_rows":     total_rows,
-                "unique_equipment":       total,
-                "model_master_total":     model_total,
-                "needs_review_count":     review_count,
-                "band_distribution":      band_count,
+                "total_mapping_rows":    total_process_mappings,
+                "unique_equipment":      total,
+                "model_master_total":    model_total,
+                "needs_review_count":    review_count,
+                "band_distribution":     band_count,
                 "category_distribution": {
                     k: {"count": v, "label": CATEGORY_MAP.get(k, k)}
                     for k, v in sorted(cat_count.items(), key=lambda x: -x[1])
@@ -95,22 +91,21 @@ async def get_equipment_stats():
 
 
 # ─────────────────────────────────────────────────────
-# GET /engine-equipment/list  설비 마스터 목록 (MV 기반 v1.2.0)
+# GET /engine-equipment/list  (MV 기반 v1.2.0)
 # ─────────────────────────────────────────────────────
 @router.get("/list")
 async def list_equipment_master(
-    search:       Optional[str]  = Query(None, description="설비명 검색"),
-    category:     Optional[str]  = Query(None, description="source_facility_category 필터"),
-    top_band:     Optional[str]  = Query(None, description="top_band 필터 (MUST/CORE/OPTIONAL/REFERENCE)"),
-    needs_review: Optional[bool] = Query(None, description="검토 필요 여부"),
+    search:       Optional[str]  = Query(None),
+    category:     Optional[str]  = Query(None),
+    top_band:     Optional[str]  = Query(None),
+    needs_review: Optional[bool] = Query(None),
     page:         int = Query(1, ge=1),
     page_size:    int = Query(50, ge=1, le=200),
 ):
-    """MV(engine_equipment_summary) 기반 목록 — 빠른 응답"""
+    """MV(engine_equipment_summary) 기반 목록"""
     supabase = get_supabase()
     try:
         query = supabase.table("engine_equipment_summary").select("*")
-
         if category:
             query = query.eq("source_facility_category", category)
         if top_band:
@@ -120,23 +115,19 @@ async def list_equipment_master(
         if search:
             query = query.ilike("facility_name_std", f"%{search}%")
 
-        # process_count DESC 정렬
         query = query.order("process_count", desc=True)
         res = query.execute()
         rows = res.data or []
 
-        # category_label 추가
         for row in rows:
             row["category_label"] = CATEGORY_MAP.get(row.get("source_facility_category") or "", "")
 
         total = len(rows)
         offset = (page - 1) * page_size
-        page_items = rows[offset: offset + page_size]
-
         return {
             "status": "success",
             "data": {
-                "items":       page_items,
+                "items":       rows[offset: offset + page_size],
                 "total":       total,
                 "page":        page,
                 "page_size":   page_size,
@@ -148,11 +139,10 @@ async def list_equipment_master(
 
 
 # ─────────────────────────────────────────────────────
-# POST /engine-equipment/refresh  MV 갱신 (신규 v1.2.0)
+# POST /engine-equipment/refresh  MV 갱신
 # ─────────────────────────────────────────────────────
 @router.post("/refresh")
 async def refresh_engine_equipment():
-    """engine_equipment_summary MV 수동 갱신"""
     supabase = get_supabase()
     try:
         supabase.rpc("refresh_engine_equipment_summary").execute()
@@ -178,11 +168,9 @@ async def get_equipment_detail(facility_name: str):
             "match_band, match_score, source_type, needs_review, "
             "source_facility_category, category_path, equipment_role"
         ).eq("facility_name_std", facility_name).order("match_band").limit(500).execute()
-
         rows = res.data or []
         if not rows:
             raise HTTPException(status_code=404, detail="설비를 찾을 수 없습니다.")
-
         industry_set: dict = {}
         band_dist = {"MUST": 0, "CORE": 0, "OPTIONAL": 0, "REFERENCE": 0}
         for row in rows:
@@ -192,31 +180,24 @@ async def get_equipment_detail(facility_name: str):
             b = row.get("match_band", "")
             if b in band_dist:
                 band_dist[b] += 1
-
         first = rows[0]
-        return {
-            "status": "success",
-            "data": {
-                "facility_name_std":        facility_name,
-                "source_facility_category": first.get("source_facility_category") or "",
-                "category_label":           CATEGORY_MAP.get(first.get("source_facility_category") or "", ""),
-                "category_path":            first.get("category_path") or "",
-                "equipment_role":           first.get("equipment_role") or "",
-                "total_mappings":           len(rows),
-                "industry_count":           len(industry_set),
-                "band_distribution":        band_dist,
-                "processes":                rows[:100],
-            }
-        }
+        return {"status": "success", "data": {
+            "facility_name_std":        facility_name,
+            "source_facility_category": first.get("source_facility_category") or "",
+            "category_label":           CATEGORY_MAP.get(first.get("source_facility_category") or "", ""),
+            "category_path":            first.get("category_path") or "",
+            "equipment_role":           first.get("equipment_role") or "",
+            "total_mappings":           len(rows),
+            "industry_count":           len(industry_set),
+            "band_distribution":        band_dist,
+            "processes":                rows[:100],
+        }}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ─────────────────────────────────────────────────────
-# PATCH /engine-equipment/update/{facility_name}
-# ─────────────────────────────────────────────────────
 @router.patch("/update/{facility_name}")
 async def update_equipment_master(facility_name: str, body: dict):
     supabase = get_supabase()
@@ -224,36 +205,22 @@ async def update_equipment_master(facility_name: str, body: dict):
     update_data = {k: v for k, v in body.items() if k in allowed}
     if not update_data:
         raise HTTPException(status_code=400, detail="수정할 항목이 없습니다.")
-    res = supabase.table("process_equipment_map").update(
-        update_data
-    ).eq("facility_name_std", facility_name).execute()
-    updated_count = len(res.data or [])
-    return {
-        "status": "success",
-        "message": f"{updated_count}건 업데이트됐습니다.",
-        "data": {"facility_name_std": facility_name, "updated_count": updated_count, **update_data}
-    }
+    res = supabase.table("process_equipment_map").update(update_data).eq("facility_name_std", facility_name).execute()
+    return {"status": "success", "message": f"{len(res.data or [])}건 업데이트됐습니다.",
+            "data": {"facility_name_std": facility_name, **update_data}}
 
 
-# ─────────────────────────────────────────────────────
-# POST /engine-equipment/review/approve
-# ─────────────────────────────────────────────────────
 @router.post("/review/approve")
 async def bulk_approve_review(body: dict):
     supabase = get_supabase()
     names = body.get("facility_names", [])
     if not names:
         raise HTTPException(status_code=400, detail="facility_names가 필요합니다.")
-    res = supabase.table("process_equipment_map").update(
-        {"needs_review": False}
-    ).in_("facility_name_std", names).execute()
-    updated = len(res.data or [])
-    return {"status": "success", "message": f"{updated}건 검토 승인됐습니다.", "data": {"approved_count": updated}}
+    res = supabase.table("process_equipment_map").update({"needs_review": False}).in_("facility_name_std", names).execute()
+    return {"status": "success", "message": f"{len(res.data or [])}건 검토 승인됐습니다.",
+            "data": {"approved_count": len(res.data or [])}}
 
 
-# ─────────────────────────────────────────────────────
-# GET /engine-equipment/models
-# ─────────────────────────────────────────────────────
 @router.get("/models")
 async def list_equipment_models(
     search:        Optional[str] = Query(None),
@@ -272,14 +239,10 @@ async def list_equipment_models(
         "country_of_origin, equipment_lv2",
         count="exact"
     )
-    if equipment_std:
-        query = query.eq("equipment_std", equipment_std)
-    if manufacturer:
-        query = query.ilike("manufacturer", f"%{manufacturer}%")
-    if source_type:
-        query = query.eq("source_type", source_type)
-    if search:
-        query = query.or_(f"model_name.ilike.%{search}%,manufacturer.ilike.%{search}%,equipment_std.ilike.%{search}%")
+    if equipment_std: query = query.eq("equipment_std", equipment_std)
+    if manufacturer:  query = query.ilike("manufacturer", f"%{manufacturer}%")
+    if source_type:   query = query.eq("source_type", source_type)
+    if search:        query = query.or_(f"model_name.ilike.%{search}%,manufacturer.ilike.%{search}%,equipment_std.ilike.%{search}%")
     query = query.order("equipment_std").order("manufacturer").range(offset, offset + page_size - 1)
     res = query.execute()
     return {"status": "success", "data": {
