@@ -21,6 +21,7 @@ from routers.notifications      import router as notifications_router
 from routers.equipment_assets   import router as equipment_assets_router
 from routers.engine_equipment   import router as engine_equipment_router
 from routers.engine_model       import router as engine_model_router
+from routers.personnel          import router as personnel_router
 from routers.schedule_engine    import router as schedule_engine_router
 from routers.roles              import router as roles_router
 from routers.teams              import router as teams_router
@@ -31,11 +32,11 @@ from routers.work_schedules     import router as work_schedules_router
 
 app = FastAPI(
     title="TAI API",
-    version="3.3.0",
+    version="3.4.0",
     description="TAI 산업안전 플랫폼 API",
 )
 
-# ── CORS ──────────────────────────────────────────────────────────
+# ── CORS ──────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -54,7 +55,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── 라우터 등록 ─────────────────────────────────────────────────
+# ── 라우터 등록 ───────────────────────────────────────────────────────
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(companies_router)
@@ -74,6 +75,7 @@ app.include_router(notifications_router)
 app.include_router(equipment_assets_router)
 app.include_router(engine_equipment_router)
 app.include_router(engine_model_router)
+app.include_router(personnel_router)
 app.include_router(schedule_engine_router)
 app.include_router(roles_router)
 app.include_router(teams_router)
@@ -83,10 +85,10 @@ app.include_router(inspection_sets_router)
 app.include_router(work_schedules_router)
 
 
-# ── 헬스체크 ──────────────────────────────────────────────────────
+# ── 헬스체크 ───────────────────────────────────────────────────────
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "3.3.0"}
+    return {"status": "ok", "service": "TAI API", "version": "3.4.0"}
 
 
 @app.get("/health")
@@ -96,4 +98,4 @@ def health():
         ip = req.get("https://api.ipify.org", timeout=5).text
     except Exception as e:
         ip = f"확인불가: {e}"
-    return {"status": "healthy", "server_ip": ip, "version": "3.3.0"}
+    return {"status": "healthy", "server_ip": ip, "version": "3.4.0"}
