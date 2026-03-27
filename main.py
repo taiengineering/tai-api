@@ -1,4 +1,6 @@
-# main.py
+# main.py — v3.5.0
+# S09: factory_process v1/v2 제거
+# S06: 이메일 인증 API 추가 (auth.py)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -32,11 +34,11 @@ from routers.work_schedules     import router as work_schedules_router
 
 app = FastAPI(
     title="TAI API",
-    version="3.4.0",
+    version="3.5.0",
     description="TAI 산업안전 플랫폼 API",
 )
 
-# ── CORS ──────────────────────────────────────────────────────────────
+# ── CORS ─────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -55,7 +57,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── 라우터 등록 ───────────────────────────────────────────────────────
+# ── 라우터 등록 ───────────────────────────────────────────
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(companies_router)
@@ -63,7 +65,7 @@ app.include_router(factories_router)
 app.include_router(system_codes_router)
 app.include_router(legal_engine_router)
 app.include_router(ksic_engine_router)
-app.include_router(factory_process_router)
+app.include_router(factory_process_router)         # v3 only
 app.include_router(process_management_router)
 app.include_router(building_register_router, prefix="/building-register")
 app.include_router(quotes_router)
@@ -85,10 +87,10 @@ app.include_router(inspection_sets_router)
 app.include_router(work_schedules_router)
 
 
-# ── 헬스체크 ───────────────────────────────────────────────────────
+# ── 헬스체크 ─────────────────────────────────────────────
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "3.4.0"}
+    return {"status": "ok", "service": "TAI API", "version": "3.5.0"}
 
 
 @app.get("/health")
@@ -98,4 +100,4 @@ def health():
         ip = req.get("https://api.ipify.org", timeout=5).text
     except Exception as e:
         ip = f"확인불가: {e}"
-    return {"status": "healthy", "server_ip": ip, "version": "3.4.0"}
+    return {"status": "healthy", "server_ip": ip, "version": "3.5.0"}
