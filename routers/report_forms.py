@@ -1,11 +1,11 @@
-# routers/report_forms.py v2.0.0
-# 안전관리 신고서식 자동화 API
+# routers/report_forms.py v2.0.1
+# fix: form_templates 쿼리 bylSeq → bylseq (컬럼명 소문자 정정)
 #
 # 엔드포인트:
 #   GET  /report-forms/templates                            — 서식 목록
 #   GET  /report-forms/templates/{form_code}                — 서식 상세
-#   GET  /report-forms/obligations                          — 법적 의무 목록 [NEW]
-#   GET  /report-forms/obligations/by-factory/{factory_id}  — 시설별 의무 [NEW]
+#   GET  /report-forms/obligations                          — 법적 의무 목록
+#   GET  /report-forms/obligations/by-factory/{factory_id}  — 시설별 의무
 #   GET  /report-forms/events/{factory_id}                  — 신고 이벤트 목록
 #   POST /report-forms/events                               — 신고 이벤트 생성
 #   PATCH /report-forms/events/{event_id}                   — 이벤트 상태 변경
@@ -13,8 +13,8 @@
 #   GET  /report-forms/submissions/detail/{id}              — 서류 상세
 #   POST /report-forms/submissions                          — 서류 저장
 #   PATCH /report-forms/submissions/{id}                    — 서류 수정
-#   POST /report-forms/submissions/preview-pdf              — 즉시 PDF 스트림 [NEW]
-#   POST /report-forms/submissions/{id}/pdf                 — 저장 후 PDF [NEW]
+#   POST /report-forms/submissions/preview-pdf              — 즉시 PDF 스트림
+#   POST /report-forms/submissions/{id}/pdf                 — 저장 후 PDF
 #   GET  /report-forms/dashboard/{factory_id}               — 대시보드 요약
 #   GET  /report-forms/test                                 — 헬스체크
 
@@ -88,9 +88,10 @@ def get_form_templates(
     supabase = get_supabase()
     offset = (page - 1) * page_size
 
+    # ✅ fix: bylSeq → bylseq (Supabase PostgreSQL 컬럼명은 소문자)
     q = supabase.table("form_templates").select(
         "id, form_code, form_no, form_name, law_code, "
-        "submit_to, submit_timing, trigger_event, bylSeq, hwp_url, is_active",
+        "submit_to, submit_timing, trigger_event, bylseq, hwp_url, is_active",
         count="exact"
     ).eq("is_active", is_active)
 
@@ -127,7 +128,7 @@ def get_form_template(form_code: str):
 
 
 # ============================================================
-# 2. 법적 의무 (legal_obligations) [NEW v2.0]
+# 2. 법적 의무 (legal_obligations)
 # ============================================================
 
 @router.get("/obligations")
@@ -164,12 +165,11 @@ def get_legal_obligations(
 def get_obligations_by_factory(factory_id: str):
     """
     시설별 해당 법적 의무 목록
-    - 시설 정보 조회 후 전체 의무 반환 (추후 법령판정 결과와 연동 예정)
+    - 시설 정보 조회 후 전체 의무 반환
     - obligation_form_mapping 함께 반환
     """
     supabase = get_supabase()
 
-    # 시설 정보 확인
     fac_res = supabase.table("factories").select(
         "id, name, ksic_code, worker_count, site_type"
     ).eq("id", factory_id).single().execute()
@@ -179,7 +179,6 @@ def get_obligations_by_factory(factory_id: str):
 
     fac = fac_res.data
 
-    # 의무 목록 + 연관 서식 매핑
     oblig_res = supabase.table("legal_obligations").select(
         "*, obligation_form_mapping(form_code, form_name, auto_generate, notes)"
     ).eq("status", "ACTIVE_MASTER_DRAFT").order("category_code").execute()
@@ -472,7 +471,7 @@ def update_form_submission(submission_id: str, body: dict):
 
 
 # ============================================================
-# 5. PDF 생성 [NEW v2.0]
+# 5. PDF 생성
 # ============================================================
 
 @router.post("/submissions/preview-pdf")
@@ -498,7 +497,6 @@ def preview_pdf(body: dict = Body(...)):
             headers={"Content-Disposition": f'inline; filename="{form_code}_preview.pdf"'}
         )
     except ImportError as e:
-        # PDF 라이브러리 미설치 시 HTML 반환 (개발 환경 대비)
         return JSONResponse({
             "status":  "html_only",
             "message": str(e),
@@ -510,9 +508,7 @@ def preview_pdf(body: dict = Body(...)):
 
 @router.post("/submissions/{submission_id}/pdf")
 def generate_and_save_pdf(submission_id: str):
-    """
-    저장된 서류 PDF 생성 → pdf_url DB 업데이트 → PDF 스트림 반환
-    """
+    """저장된 서류 PDF 생성 → pdf_url DB 업데이트 → PDF 스트림 반환"""
     supabase = get_supabase()
 
     res = supabase.table("form_submissions").select(
@@ -535,7 +531,6 @@ def generate_and_save_pdf(submission_id: str):
     try:
         pdf_bytes = _generate_pdf_bytes(html_content)
 
-        # pdf_url 업데이트 (Supabase Storage 연동 전 임시값)
         pdf_url = f"generated/{form_code}_{submission_id}.pdf"
         supabase.table("form_submissions").update(
             {"pdf_url": pdf_url, "updated_at": datetime.now().isoformat()}
@@ -618,4 +613,4 @@ def get_report_dashboard(factory_id: str):
 
 @router.get("/test")
 def test():
-    return {"status": "ok", "message": "report-forms API v2.0.0"}
+    return {"status": "ok", "message": "report-forms API v2.0.1"}
