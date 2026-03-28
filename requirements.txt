@@ -9,4 +9,4 @@ apscheduler
 python-multipart
 resend
 tenacity
-weasyprint
+xhtml2pdf
