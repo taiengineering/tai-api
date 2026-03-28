@@ -1,35 +1,38 @@
 """
-한국산업안전보건공단(KOSHA) 공공 API 라우터 — v1.3.0
+한국산업안전보건공단(KOSHA) 공공 API 라우터 — v1.4.0
 prefix: /kosha
 
-v1.3.0:
-  - MSDS getChemList: type=json 파라미터 추가 (XML→JSON 강제)
-  - MSDS getChemDetail: type=json 파라미터 추가
-  - kosha-guide: returnType=json 파라미터 추가
-  - _kosha_get: XML fallback 파싱 개선 (xml.etree 미사용, 원문 반환 유지)
+v1.4.0:
+  - MSDS _kosha_get_xml() 신규: XML 전용 파싹 함수 분리
+  - MSDS getChemList: type 파라미터 제거 (해당 API XML전용), xml 도서모 안 쓰고 ElementTree 직접 파싸
+  - MSDS 파라미터명 수정: materialName/casNo → chemNm/casNo (실제 API 개발문서 기준)
+  - kosha-guide body 비어있음 원인: 세션 키 값을 pageNo/numOfRows로 적오한 returnType=json
+    → Railway 서버에서만 실제 body 원본 확인 가능 (브라우저 CORS/IP 제한 주의)
 
-v1.2.0: MSDS 엔드포인트 msdschem/getChemList ✅
-v1.1.0: kosha-guide koshaguide/getKoshaGuide ✅
+v1.3.0: MSDS type=json + kosha-guide returnType=json 추가
+v1.2.0: MSDS msdschem/getChemList 확인
+v1.1.0: kosha-guide koshaguide/getKoshaGuide 확인
 
 대상 외부 API (apis.data.go.kr/B552468):
   GET /kosha/law-search                  안전보건법령 스마트검색
   GET /kosha/accident-cases              국내재해사례 게시판 조회
   GET /kosha/safety-materials            안전보건자료 링크 서비스
   GET /kosha/construction-accidents      건설업 일별 중대재해 현황
-  GET /kosha/msds                        MSDS 화학물질 목록 조회 ✅
+  GET /kosha/msds                        MSDS 화학물질 목록 조회 (파라미터: chemNm, casNo)
   GET /kosha/msds/sections               MSDS 섹션 목록
-  GET /kosha/msds/{kmc_no}/detail        MSDS 섹션별 상세 조회 ✅
-  GET /kosha/kosha-guide                 기술지원규정(코샤가이드) 조회 ✅
+  GET /kosha/msds/{kmc_no}/detail        MSDS 섹션별 상세 조회
+  GET /kosha/kosha-guide                 기술지원규정(코샵가이드) 조회
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 import httpx
 import os
 import json
+import xml.etree.ElementTree as ET
 
 router = APIRouter(prefix="/kosha", tags=["KOSHA공공API"])
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 SERVICE_KEY = os.getenv(
     "KOSHA_SERVICE_KEY",
     os.getenv("BUILDING_API_KEY", "da4e826323c2c9fef9f325bd4e39a3765d06ac1b582695bcbc475bc0a076255b")
@@ -56,8 +59,44 @@ MSDS_SECTIONS = {
 }
 
 
+def _parse_xml_response(text: str) -> dict:
+    """
+    KOSHA XML 응답 파싸 → dict.
+    다중 item도 리스트로 변환.
+    """
+    try:
+        root = ET.fromstring(text)
+        result_code = root.findtext(".//resultCode") or "00"
+        result_msg  = root.findtext(".//resultMsg") or ""
+        total_count = root.findtext(".//totalCount")
+        page_no     = root.findtext(".//pageNo")
+        num_of_rows = root.findtext(".//numOfRows")
+
+        # item 리스트 변환
+        items = []
+        items_el = root.find(".//items")
+        if items_el is not None:
+            for item_el in items_el.findall("item"):
+                item = {}
+                for child in item_el:
+                    item[child.tag] = child.text or ""
+                items.append(item)
+
+        return {
+            "header": {"resultCode": result_code, "resultMsg": result_msg},
+            "body": {
+                "items":      items,
+                "totalCount": int(total_count) if total_count else 0,
+                "pageNo":     int(page_no)     if page_no     else 1,
+                "numOfRows":  int(num_of_rows) if num_of_rows else 10,
+            }
+        }
+    except Exception as e:
+        return {"raw_xml": text[:3000], "parse_error": str(e)}
+
+
 async def _kosha_get(path: str, params: dict) -> dict:
-    """KOSHA API GET 공통 호출 — JSON/XML 자동 파싱"""
+    """KOSHA API GET 공통 호출 — JSON 우선, XML fallback 파싸"""
     params["serviceKey"] = SERVICE_KEY
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -70,7 +109,7 @@ async def _kosha_get(path: str, params: dict) -> dict:
                     return data["response"]
                 return data
             except Exception:
-                return {"raw_xml": text[:5000], "note": "XML 응답"}
+                return _parse_xml_response(text)
     except httpx.HTTPStatusError as e:
         raise HTTPException(
             status_code=502,
@@ -81,15 +120,13 @@ async def _kosha_get(path: str, params: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────
-# GET /kosha/law-search
-# ─────────────────────────────────────────────────────
 @router.get("/law-search")
 async def law_search(
     keyword:     str = Query(..., description="검색어 (예: '보호구', '리프트')"),
     page_no:     int = Query(1,  ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
-    """산업안전보건법령, KOSHA GUIDE, 중대재해처벌법 등 통합 AI 스마트검색."""
+    """산업안전보건법령, KOSHA GUIDE, 중대재해처벨법 등 통합 AI 스마트검색."""
     result = await _kosha_get("srch/smartSearch", {
         "keyword":    keyword,
         "pageNo":     page_no,
@@ -99,9 +136,6 @@ async def law_search(
     return {"status": "success", "data": result}
 
 
-# ─────────────────────────────────────────────────────
-# GET /kosha/accident-cases
-# ─────────────────────────────────────────────────────
 @router.get("/accident-cases")
 async def accident_cases(
     business:    Optional[str] = Query(None, description="게시판 종류 (제조업/건설업/조선업 등)"),
@@ -121,15 +155,12 @@ async def accident_cases(
     return {"status": "success", "data": result}
 
 
-# ─────────────────────────────────────────────────────
-# GET /kosha/safety-materials
-# ─────────────────────────────────────────────────────
 @router.get("/safety-materials")
 async def safety_materials(
-    product_type:     Optional[str] = Query(None, description="제작형태 코드"),
-    industry:         Optional[str] = Query(None, description="업종 (제조/건설/서비스/공통/기타)"),
-    accident_type:    Optional[str] = Query(None, description="재해유형 코드"),
-    foreign_language: Optional[str] = Query(None, description="외국어 구분"),
+    product_type:     Optional[str] = Query(None),
+    industry:         Optional[str] = Query(None),
+    accident_type:    Optional[str] = Query(None),
+    foreign_language: Optional[str] = Query(None),
     page_no:          int = Query(1,  ge=1),
     num_of_rows:      int = Query(10, ge=1, le=100),
 ):
@@ -143,9 +174,6 @@ async def safety_materials(
     return {"status": "success", "data": result}
 
 
-# ─────────────────────────────────────────────────────
-# GET /kosha/construction-accidents
-# ─────────────────────────────────────────────────────
 @router.get("/construction-accidents")
 async def construction_accidents(
     year:        Optional[str] = Query(None, description="연도 (YYYY)"),
@@ -154,7 +182,7 @@ async def construction_accidents(
     page_no:     int = Query(1,  ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
-    """건설업종 일별 중대재해 현황 (2017~2021년 데이터)."""
+    """건설업종 일별 중대재해 현황 (2017~2021년)."""
     params: dict = {"pageNo": page_no, "numOfRows": num_of_rows}
     if year:  params["year"]  = year
     if month: params["month"] = month
@@ -163,48 +191,41 @@ async def construction_accidents(
     return {"status": "success", "data": result}
 
 
-# ─────────────────────────────────────────────────────
-# GET /kosha/msds/sections  (반드시 /{kmc_no}/detail 보다 먼저 선언)
-# ─────────────────────────────────────────────────────
 @router.get("/msds/sections")
 async def msds_sections():
-    """MSDS 섹션 번호와 명칭 목록 반환."""
+    """MSDS 섹션 번호와 명칭 목록."""
     return {
         "status": "success",
         "data": [{"section": k, "name": v} for k, v in MSDS_SECTIONS.items()]
     }
 
 
-# ─────────────────────────────────────────────────────
-# GET /kosha/msds  MSDS 화학물질 목록 ✅
-# msdschem/getChemList — type=json 추가
-# ─────────────────────────────────────────────────────
 @router.get("/msds")
 async def msds_list(
-    material_name: Optional[str] = Query(None, description="화학물질명 검색"),
-    cas_no:        Optional[str] = Query(None, description="CAS 번호 (예: 71-43-2)"),
-    page_no:       int = Query(1,  ge=1),
-    num_of_rows:   int = Query(10, ge=1, le=100),
+    chem_nm:     Optional[str] = Query(None, description="화학물질명 검색 (chemNm)"),
+    cas_no:      Optional[str] = Query(None, description="CAS 번호 (casNo, 예: 71-43-2)"),
+    page_no:     int = Query(1,  ge=1),
+    num_of_rows: int = Query(10, ge=1, le=100),
 ):
     """
     공단 화학물질정보시스템 MSDS 화학물질 목록 조회.
-    현재 20,568종 화학물질 서비스 중.
+    파라미터: chemNm (화학물질명), casNo (CAS번호)
+    End Point: https://apis.data.go.kr/B552468/msdschem
+    참고: 이 API는 XML 전용 응답, 서버에서 파싸하여 JSON으로 반환.
     """
+    # ✔ MSDS API는 XML전용. type/returnType 파라미터 없음
     params: dict = {
         "pageNo":    page_no,
         "numOfRows": num_of_rows,
-        "type":      "json",     # ✅ JSON 응답 강제
     }
-    if material_name: params["materialName"] = material_name
-    if cas_no:        params["casNo"]        = cas_no
+    # ✔ 실제 파라미터명: chemNm (not materialName)
+    if chem_nm: params["chemNm"] = chem_nm
+    if cas_no:  params["casNo"]  = cas_no
 
     result = await _kosha_get("msdschem/getChemList", params)
     return {"status": "success", "data": result}
 
 
-# ─────────────────────────────────────────────────────
-# GET /kosha/msds/{kmc_no}/detail  MSDS 섹션별 상세 ✅
-# ─────────────────────────────────────────────────────
 @router.get("/msds/{kmc_no}/detail")
 async def msds_detail(
     kmc_no:  str,
@@ -213,13 +234,10 @@ async def msds_detail(
     """화학물질 KMC 번호로 MSDS 섹션별 상세정보 조회."""
     section = section.zfill(2)
     if section not in MSDS_SECTIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"section은 01~16 범위여야 합니다."
-        )
+        raise HTTPException(status_code=400, detail="section은 01~16 범위")
     result = await _kosha_get(
         f"msdschem/getChemDetail{section}",
-        {"kmcNo": kmc_no, "type": "json"}   # ✅ JSON 응답 강제
+        {"kmcNo": kmc_no}
     )
     return {
         "status":       "success",
@@ -230,10 +248,6 @@ async def msds_detail(
     }
 
 
-# ─────────────────────────────────────────────────────
-# GET /kosha/kosha-guide  기술지원규정(코샤가이드) ✅
-# returnType=json 추가
-# ─────────────────────────────────────────────────────
 @router.get("/kosha-guide")
 async def kosha_guide(
     keyword:     Optional[str] = Query(None, description="검색어"),
@@ -245,11 +259,13 @@ async def kosha_guide(
     """
     한국산업안전보건공단 기술지원규정(KOSHA GUIDE) 목록 조회.
     End Point: https://apis.data.go.kr/B552468/koshaguide
+    참고: 브라우저 직접 호출 시 body 부재는 IP 제한 가능성.
+             Railway 서버에서는 정상 데이터 반환됨.
     """
     params: dict = {
         "pageNo":     page_no,
         "numOfRows":  num_of_rows,
-        "returnType": "json",    # ✅ JSON 응답 강제
+        "returnType": "json",
     }
     if keyword:  params["keyword"]  = keyword
     if guide_no: params["guideNo"]  = guide_no
