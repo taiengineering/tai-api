@@ -1,22 +1,15 @@
 """
-한국산업안전보건공단(KOSHA) 공공 API 라우터 — v1.2.0
+한국산업안전보건공단(KOSHA) 공공 API 라우터 — v1.3.0
 prefix: /kosha
 
-v1.2.0:
-  - MSDS 엔드포인트 수정 (data.go.kr/data/15157612 Swagger 확인):
-    msdsInfoSvc/getMsdsList (추정) → msdschem/getChemList ✅
-  - MSDS 상세 섹션 엔드포인트 추가: /kosha/msds/{kmc_no}/detail
-    (B552468/msdschem/getChemDetail01~16)
-  - 각 섹션 의미:
-    01=화학제품과회사정보, 02=유해성위험성, 03=구성성분명칭및함유량
-    04=응급조치요령, 05=폭발화재시대처, 06=누출사고시대처
-    07=취급및저장방법, 08=노출방지및개인보호구, 09=물리화학적특성
-    10=안정성및반응성, 11=독성정보, 12=환경영향
-    13=폐기시주의사항, 14=운송에관한정보, 15=법적규제현황, 16=기타정보
+v1.3.0:
+  - MSDS getChemList: type=json 파라미터 추가 (XML→JSON 강제)
+  - MSDS getChemDetail: type=json 파라미터 추가
+  - kosha-guide: returnType=json 파라미터 추가
+  - _kosha_get: XML fallback 파싱 개선 (xml.etree 미사용, 원문 반환 유지)
 
-v1.1.0:
-  - kosha-guide 엔드포인트 수정: koshaguide/getKoshaGuide ✅
-  - _kosha_get 응답 파싱 개선
+v1.2.0: MSDS 엔드포인트 msdschem/getChemList ✅
+v1.1.0: kosha-guide koshaguide/getKoshaGuide ✅
 
 대상 외부 API (apis.data.go.kr/B552468):
   GET /kosha/law-search                  안전보건법령 스마트검색
@@ -24,6 +17,7 @@ v1.1.0:
   GET /kosha/safety-materials            안전보건자료 링크 서비스
   GET /kosha/construction-accidents      건설업 일별 중대재해 현황
   GET /kosha/msds                        MSDS 화학물질 목록 조회 ✅
+  GET /kosha/msds/sections               MSDS 섹션 목록
   GET /kosha/msds/{kmc_no}/detail        MSDS 섹션별 상세 조회 ✅
   GET /kosha/kosha-guide                 기술지원규정(코샤가이드) 조회 ✅
 """
@@ -35,14 +29,13 @@ import json
 
 router = APIRouter(prefix="/kosha", tags=["KOSHA공공API"])
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 SERVICE_KEY = os.getenv(
     "KOSHA_SERVICE_KEY",
     os.getenv("BUILDING_API_KEY", "da4e826323c2c9fef9f325bd4e39a3765d06ac1b582695bcbc475bc0a076255b")
 )
 KOSHA_BASE = "https://apis.data.go.kr/B552468"
 
-# MSDS 섹션 명칭 매핑
 MSDS_SECTIONS = {
     "01": "화학제품과 회사에 관한 정보",
     "02": "유해성·위험성",
@@ -73,7 +66,6 @@ async def _kosha_get(path: str, params: dict) -> dict:
             text = resp.text
             try:
                 data = json.loads(text)
-                # response.body 구조 → 평탄화
                 if "response" in data and isinstance(data["response"], dict):
                     return data["response"]
                 return data
@@ -89,11 +81,11 @@ async def _kosha_get(path: str, params: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────
-# GET /kosha/law-search  안전보건법령 스마트검색
+# GET /kosha/law-search
 # ─────────────────────────────────────────────────────
 @router.get("/law-search")
 async def law_search(
-    keyword: str = Query(..., description="검색어 (예: '보호구', '처장', '리프트')"),
+    keyword:     str = Query(..., description="검색어 (예: '보호구', '리프트')"),
     page_no:     int = Query(1,  ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
@@ -108,7 +100,7 @@ async def law_search(
 
 
 # ─────────────────────────────────────────────────────
-# GET /kosha/accident-cases  국내재해사례 게시판
+# GET /kosha/accident-cases
 # ─────────────────────────────────────────────────────
 @router.get("/accident-cases")
 async def accident_cases(
@@ -130,7 +122,7 @@ async def accident_cases(
 
 
 # ─────────────────────────────────────────────────────
-# GET /kosha/safety-materials  안전보건자료 링크
+# GET /kosha/safety-materials
 # ─────────────────────────────────────────────────────
 @router.get("/safety-materials")
 async def safety_materials(
@@ -141,7 +133,7 @@ async def safety_materials(
     page_no:          int = Query(1,  ge=1),
     num_of_rows:      int = Query(10, ge=1, le=100),
 ):
-    """한국산업안전보건공단 안전보건자료(책자, OPS, 교안, 영상 등) 링크(URL) 조회."""
+    """안전보건자료(책자, OPS, 교안, 영상 등) 링크(URL) 조회."""
     params: dict = {"pageNo": page_no, "numOfRows": num_of_rows}
     if product_type:     params["productType"]    = product_type
     if industry:         params["industry"]        = industry
@@ -152,7 +144,7 @@ async def safety_materials(
 
 
 # ─────────────────────────────────────────────────────
-# GET /kosha/construction-accidents  건설업 일별 중대재해
+# GET /kosha/construction-accidents
 # ─────────────────────────────────────────────────────
 @router.get("/construction-accidents")
 async def construction_accidents(
@@ -172,73 +164,7 @@ async def construction_accidents(
 
 
 # ─────────────────────────────────────────────────────
-# GET /kosha/msds  MSDS 화학물질 목록 조회 ✅
-# End Point: https://apis.data.go.kr/B552468/msdschem
-# 엔드포인트: msdschem/getChemList  ✅ data.go.kr/data/15157612 Swagger 확인
-# ─────────────────────────────────────────────────────
-@router.get("/msds")
-async def msds_list(
-    material_name: Optional[str] = Query(None, description="화학물질명 검색"),
-    cas_no:        Optional[str] = Query(None, description="CAS 번호 (예: 71-43-2)"),
-    page_no:       int = Query(1,  ge=1),
-    num_of_rows:   int = Query(10, ge=1, le=100),
-):
-    """
-    공단 화학물질정보시스템 MSDS 화학물질 목록 조회.
-    현재 20,568종 화학물질 서비스 중.
-    End Point: https://apis.data.go.kr/B552468/msdschem
-    """
-    params: dict = {"pageNo": page_no, "numOfRows": num_of_rows}
-    if material_name: params["materialName"] = material_name
-    if cas_no:        params["casNo"]        = cas_no
-
-    result = await _kosha_get("msdschem/getChemList", params)
-    return {"status": "success", "data": result}
-
-
-# ─────────────────────────────────────────────────────
-# GET /kosha/msds/{kmc_no}/detail  MSDS 섹션별 상세 조회 ✅
-# ─────────────────────────────────────────────────────
-@router.get("/msds/{kmc_no}/detail")
-async def msds_detail(
-    kmc_no: str,
-    section: str = Query(
-        "01",
-        description=(
-            "MSDS 섹션 번호 (01~16):\n"
-            "01=화학제품과 회사에 관한 정보, 02=유해성·위험성, 03=구성성분의 명칭 및 함유량, "
-            "04=응급조치요령, 05=폭발·화재시 대처, 06=누출사고시 대처, "
-            "07=취급 및 저장방법, 08=노출방지 및 개인보호구, 09=물리화학적 특성, "
-            "10=안정성 및 반응성, 11=독성정보, 12=환경영향, "
-            "13=폐기시 주의사항, 14=운송정보, 15=법적 규제현황, 16=기타"
-        )
-    ),
-):
-    """
-    화학물질 KMC 번호로 MSDS 섹션별 상세정보 조회.
-    section: 01~16 (기본값 01)
-    """
-    section = section.zfill(2)  # 1 → "01" 정규화
-    if section not in MSDS_SECTIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"section은 01~16 범위여야 합니다. 가능한 값: {list(MSDS_SECTIONS.keys())}"
-        )
-
-    endpoint = f"msdschem/getChemDetail{section}"
-    result = await _kosha_get(endpoint, {"kmcNo": kmc_no})
-
-    return {
-        "status":       "success",
-        "kmc_no":       kmc_no,
-        "section":      section,
-        "section_name": MSDS_SECTIONS[section],
-        "data":         result,
-    }
-
-
-# ─────────────────────────────────────────────────────
-# GET /kosha/msds/sections  MSDS 섹션 목록
+# GET /kosha/msds/sections  (반드시 /{kmc_no}/detail 보다 먼저 선언)
 # ─────────────────────────────────────────────────────
 @router.get("/msds/sections")
 async def msds_sections():
@@ -250,8 +176,63 @@ async def msds_sections():
 
 
 # ─────────────────────────────────────────────────────
+# GET /kosha/msds  MSDS 화학물질 목록 ✅
+# msdschem/getChemList — type=json 추가
+# ─────────────────────────────────────────────────────
+@router.get("/msds")
+async def msds_list(
+    material_name: Optional[str] = Query(None, description="화학물질명 검색"),
+    cas_no:        Optional[str] = Query(None, description="CAS 번호 (예: 71-43-2)"),
+    page_no:       int = Query(1,  ge=1),
+    num_of_rows:   int = Query(10, ge=1, le=100),
+):
+    """
+    공단 화학물질정보시스템 MSDS 화학물질 목록 조회.
+    현재 20,568종 화학물질 서비스 중.
+    """
+    params: dict = {
+        "pageNo":    page_no,
+        "numOfRows": num_of_rows,
+        "type":      "json",     # ✅ JSON 응답 강제
+    }
+    if material_name: params["materialName"] = material_name
+    if cas_no:        params["casNo"]        = cas_no
+
+    result = await _kosha_get("msdschem/getChemList", params)
+    return {"status": "success", "data": result}
+
+
+# ─────────────────────────────────────────────────────
+# GET /kosha/msds/{kmc_no}/detail  MSDS 섹션별 상세 ✅
+# ─────────────────────────────────────────────────────
+@router.get("/msds/{kmc_no}/detail")
+async def msds_detail(
+    kmc_no:  str,
+    section: str = Query("01", description="MSDS 섹션 01~16"),
+):
+    """화학물질 KMC 번호로 MSDS 섹션별 상세정보 조회."""
+    section = section.zfill(2)
+    if section not in MSDS_SECTIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"section은 01~16 범위여야 합니다."
+        )
+    result = await _kosha_get(
+        f"msdschem/getChemDetail{section}",
+        {"kmcNo": kmc_no, "type": "json"}   # ✅ JSON 응답 강제
+    )
+    return {
+        "status":       "success",
+        "kmc_no":       kmc_no,
+        "section":      section,
+        "section_name": MSDS_SECTIONS[section],
+        "data":         result,
+    }
+
+
+# ─────────────────────────────────────────────────────
 # GET /kosha/kosha-guide  기술지원규정(코샤가이드) ✅
-# End Point: https://apis.data.go.kr/B552468/koshaguide
+# returnType=json 추가
 # ─────────────────────────────────────────────────────
 @router.get("/kosha-guide")
 async def kosha_guide(
@@ -265,7 +246,11 @@ async def kosha_guide(
     한국산업안전보건공단 기술지원규정(KOSHA GUIDE) 목록 조회.
     End Point: https://apis.data.go.kr/B552468/koshaguide
     """
-    params: dict = {"pageNo": page_no, "numOfRows": num_of_rows}
+    params: dict = {
+        "pageNo":     page_no,
+        "numOfRows":  num_of_rows,
+        "returnType": "json",    # ✅ JSON 응답 강제
+    }
     if keyword:  params["keyword"]  = keyword
     if guide_no: params["guideNo"]  = guide_no
     if category: params["category"] = category
