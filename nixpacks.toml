@@ -1,0 +1,11 @@
+# nixpacks.toml — Railway 빌드 설정
+# WeasyPrint 의존 GTK/Cairo 시스템 라이브러리 설치
+
+[phases.setup]
+nixPkgs = [
+  "gobject-introspection",
+  "cairo",
+  "pango",
+  "gdk-pixbuf",
+  "libffi",
+]
