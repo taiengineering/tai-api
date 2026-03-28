@@ -1,198 +1,167 @@
 # TAI Backend MEMORY — 2026-03-28
 
-## 서버 정보
-- API: api.taieng.co.kr (Railway)
-- DB: Supabase (xntdkrjhgcscmqctdzyo)
-- GitHub: taiengineering/tai-api
-- 현재 버전: main.py **v3.8.0**
+## API 버전
+- **main.py**: v4.1.0
+- **Railway**: 배포 완료
 
 ---
 
 ## 오늘 완료된 작업
 
-### 1. legal_engine.py v4.1.2 ✅
-- `/apply` 응답에서 `not_applicable` 전체 목록 제거 → 응답 경량화
-- `not_applicable_count` (건수만) 응답에 포함
-- DB(factories) 저장은 not_applicable 포함 전체 저장 유지
-- `/result` 조회 시에도 not_applicable 제거
+### 1. 국세청 NTS 사업자등록정보 진위확인/상태조회 API ✅
+- `routers/biz_verify.py` v1.0.0 (prefix: `/biz-verify`)
+  - `POST /biz-verify/validate` — 진위확인 단건
+  - `POST /biz-verify/validate/bulk` — 진위확인 배치 (최대 100개)
+  - `POST /biz-verify/status` — 상태조회 단건
+  - `POST /biz-verify/status/bulk` — 상태조회 배치 (최대 100개)
+- `routers/companies.py`에 추가
+  - `POST /companies/nts-verify` — 진위확인 (405 오류 수정)
+  - `POST /companies/nts-status` — 상태조회
+- **NTS 실제 API**: `POST https://api.odcloud.kr/api/nts-businessman/v1/validate` (POST 방식)
+- 응답 필드: `valid_yn` (bool), `is_active` (계속사업자), `is_closed` (폐업)
+- Railway 환경변수 `NTS_API_KEY` 삽입 완료
 
-### 2. inspection_sets.equipment_set_id nullable ✅
-- `equipment_set_id NOT NULL` → nullable 변경 (DB 마이그레이션)
-- `/create-inspection-sets` 정상 동작 확인 (67개 생성)
+### 2. KOSHA 공공 API ✅
+- `routers/kosha_apis.py` v1.3.0 (prefix: `/kosha`)
 
-### 3. inspection_checklist.py v1.1.0 ✅
-- 7개 엔드포인트 구현 완료
-- `/status`: 전체 조회 → 각각 count 쿼리 4개로 분리 (성능 최적화)
-- DB 마이그레이션:
-  - `safety_inspection_results`: inspection_id, inspection_set_item_id, result_code, note, photo_url, checked_at 추가
-  - `work_schedules`: completed_at, inspector_name, summary 추가
+| 엔드포인트 | 실제 외부 URL | 비고 |
+|-----------|-------------|------|
+| `GET /kosha/law-search` | `B552468/srch/smartSearch` | returnType=json |
+| `GET /kosha/accident-cases` | `B552468/disaster_api02/getdisaster_api02` | callApiId 고정 |
+| `GET /kosha/safety-materials` | `B552468/selectMediaList01/getselectMediaList01` | |
+| `GET /kosha/construction-accidents` | `B552468/constDsstr01/getconstDsstr01` | 2017~2021년 |
+| `GET /kosha/msds` | `B552468/msdschem/getChemList` | ✅ 확인됨, type=json |
+| `GET /kosha/msds/sections` | (내부) | 섹션 명칭 목록 |
+| `GET /kosha/msds/{kmc_no}/detail` | `B552468/msdschem/getChemDetail01~16` | ✅ 확인됨 |
+| `GET /kosha/kosha-guide` | `B552468/koshaguide/getKoshaGuide` | ✅ 확인됨, returnType=json |
 
-### 4. MV 기반 성능 최적화 ✅
-- MV 2개 생성 및 populate: `engine_equipment_summary`, `dashboard_stats`
-- `GRANT SELECT ON engine_equipment_summary TO anon, authenticated, service_role` ← 핵심 수정
-- `GRANT SELECT ON dashboard_stats TO anon, authenticated, service_role`
+- **MSDS API data.go.kr 페이지**: `15157612` — End Point: `B552468/msdschem`
+- MSDS 섹션 01~16 (화학제품정보→기타참고사항)
 
-**engine_equipment.py v1.2.2:**
-- `/stats`: count 쿼리 제거 → MV 단일 조회
-- `/list`: Python 전체 조회 제거 → DB 측 `range()` 페이징
+### 3. 소방청 위험물 API ✅
+- `routers/fire_hazmat.py` v1.0.0 (prefix: `/fire-hazmat`)
+  - `GET /fire-hazmat/materials` — `1661000/materialInfoSvc/getMaterialList`
+  - `GET /fire-hazmat/materials/{id}` — `1661000/materialInfoSvc/getMaterialInfo`
 
-**admin_stats.py v1.0.0 (신규):**
-- `GET /admin/stats`: dashboard_stats MV 기반
-- `POST /admin/stats/refresh`: MV 수동 갱신
+### 4. 안전정보 게시판 posts ✅
+- **Supabase 마이그레이션**: `posts` 테이블 생성
+  - 컬럼: id, category, subcategory, title, content, summary, thumbnail_url, external_url, source, source_id, tags(array), attachments(jsonb), status, is_pinned, is_featured, view_count, like_count, author_id, author_name, published_at, created_at, updated_at
+  - RLS: published만 SELECT, service_role ALL
+  - 인덱스: category, status, published_at, is_pinned, is_featured, title(trgm)
+- `routers/posts.py` v1.0.0 (prefix: `/posts`)
+  - `GET /posts` — 목록 (category/search/source/sort/page/size 필터)
+  - `GET /posts/latest` — 최신글 (인증 불필요, 메인 노출용)
+  - `GET /posts/stats/today` — 오늘 통계 (위젯용)
+  - `GET /posts/{id}` — 상세 + view_count+1 + 이전/다음글
+  - `POST /posts` — 작성
+  - `PATCH /posts/{id}` — 수정
+  - `DELETE /posts/{id}` — soft delete (status → hidden)
+- 카테고리: notice, safety_news, law_update, accident_case, kosha_guide, msds, hazmat, general
 
-### 5. personnel.py v1.1.0 ✅
-필드 정합성 보완:
-- `/stats`: `matched_count`, `contracted_count`, `fee_total` 추가
-- `/requests`: 신규 엔드포인트 (matching_requests PERSONNEL 기반)
-- `/list`, `/agencies` 응답에 alias 필드 추가:
-  - `contact_phone` = phone, `contact_email` = email
-  - `service_regions` = region_sido
-  - `max_factory_count` = max_clients, `current_factory_count` = current_clients
-  - `representative_name`, `address` (safety_agencies)
-- `POST /personnel`, `POST /agencies`: alias body 처리
-- `POST /personnel/create`: alias 엔드포인트 추가
-- `/verify`: `VERIFIED` 상태 추가 (DB에는 APPROVED로 저장)
+### 5. report_forms.py 버그 수정 ✅
+- **v2.0.1**: `bylSeq` → `bylseq` (PostgreSQL 컬럼명 소문자 정정) — `/templates` 500 오류 해결
 
-### 6. repair.py v1.0.0 (신규) ✅
-- prefix: `/repair`
-- 대상 테이블: `repair_companies`, `matching_requests(request_type=REPAIR)`
-- 엔드포인트:
-  - `GET/POST /repair/companies`
-  - `GET/PATCH /repair/companies/{id}`
-  - `POST /repair/companies/{id}/verify`
-  - `GET/POST /repair/requests`
-  - `PATCH /repair/requests/{id}`
-  - `GET /repair/stats`
-
----
-
-## main.py 이력 주의사항
-
-**중요**: 오늘 세션 중 main.py가 v3.2.0 구버전으로 덮어씌워지는 사고 발생.
-원인: push_files로 여러 파일 동시 push 시 main.py SHA 충돌로 구버전이 올라감.
-해결: main.py 단독 create_or_update_file로 복구.
-
-**예방책**: main.py는 push_files에 포함하지 말고 항상 단독 create_or_update_file로 수정.
+### 6. WeasyPrint → xhtml2pdf 전환 ✅
+- **v2.0.2**: Railway 환경에서 `libgobject-2.0-0` GTK 라이브러리 없음 오류 해결
+- `requirements.txt`: `weasyprint` → `xhtml2pdf`
+- `nixpacks.toml`: GTK 패키지 제거 (불필요)
+- `_generate_pdf_bytes()`: xhtml2pdf 전용, UTF-8 인코딩 명시
 
 ---
 
-## 최종 성능 측정 결과
-
-| API | 최적화 전 | 최적화 후 |
-|-----|---------|---------|
-| ee/list | 3.381s | ~0.4s (MV + DB 페이징) |
-| ee/stats | 3.213s | ~0.5s (MV + count 제거) |
-| admin/stats | 404 | ~0.4s (MV 권한 부여) |
-| inspection/status | 2.231s | ~0.8s (count 쿼리 분리) |
-| factories | 0.763s | 유지 |
-
----
-
-## DB 마이그레이션 완료 목록
-
-```sql
--- inspection_sets
-ALTER TABLE inspection_sets ALTER COLUMN equipment_set_id DROP NOT NULL;
-
--- safety_inspection_results
-ALTER TABLE safety_inspection_results
-  ADD COLUMN IF NOT EXISTS inspection_id uuid,
-  ADD COLUMN IF NOT EXISTS inspection_set_item_id uuid,
-  ADD COLUMN IF NOT EXISTS result_code text DEFAULT 'NA',
-  ADD COLUMN IF NOT EXISTS note text,
-  ADD COLUMN IF NOT EXISTS photo_url text,
-  ADD COLUMN IF NOT EXISTS checked_at timestamptz;
-
--- work_schedules
-ALTER TABLE work_schedules
-  ADD COLUMN IF NOT EXISTS completed_at date,
-  ADD COLUMN IF NOT EXISTS inspector_name text,
-  ADD COLUMN IF NOT EXISTS summary text;
-
--- MV 권한
-GRANT SELECT ON engine_equipment_summary TO anon, authenticated, service_role;
-GRANT SELECT ON dashboard_stats TO anon, authenticated, service_role;
-```
-
----
-
-## 라우터 파일 목록 (최종 v3.8.0)
+## 현재 라우터 전체 목록 (main.py v4.1.0)
 
 | 파일 | prefix | 버전 | 상태 |
 |------|--------|------|------|
-| auth.py | /auth | v3.2.0 | ✅ |
+| auth.py | /auth | - | ✅ |
+| users.py | /users | - | ✅ |
+| companies.py | /companies | - | ✅ (nts-verify 추가) |
+| factories.py | /factories | - | ✅ |
+| system_codes.py | /system-codes | v2.0.0 | ✅ |
 | legal_engine.py | /legal-engine | v4.1.2 | ✅ |
 | ksic_engine.py | /ksic-engine | v3 | ✅ |
 | factory_process_v3.py | /factory-process | v3 | ✅ |
 | process_management.py | /process-management | v1.1 | ✅ |
 | building_register.py | /building-register | v2.3.0 | ✅ |
-| quotes.py | /quotes | v1 | ✅ |
-| report_forms.py | /report-forms | v1.0.0 | ✅ |
-| system_codes.py | /system-codes | v2.0.0 | ✅ |
+| quotes.py | /quotes | - | ✅ |
+| report_forms.py | /report-forms | v2.0.2 | ✅ |
+| contracts.py | - | - | ⚠️ 503 미확인 |
+| contacts.py | /contacts | - | ✅ |
+| education.py | /education | - | ✅ |
+| notifications.py | /notifications | - | ✅ |
 | equipment_assets.py | /equipment-assets | v1.2.0 | ✅ |
 | engine_equipment.py | /engine-equipment | v1.2.2 | ✅ |
 | engine_model.py | /engine-model | v1.0.0 | ✅ |
 | personnel.py | /personnel | v1.1.0 | ✅ |
-| repair.py | /repair | v1.0.0 | ✅ (신규) |
+| repair.py | /repair | v1.0.0 | ✅ |
+| biz_verify.py | /biz-verify | v1.0.0 | ✅ |
+| kosha_apis.py | /kosha | v1.3.0 | ✅ |
+| fire_hazmat.py | /fire-hazmat | v1.0.0 | ✅ |
+| posts.py | /posts | v1.0.0 | ✅ |
+| schedule_engine.py | /schedule-engine | - | ✅ |
+| roles.py | /roles | - | ✅ |
+| teams.py | /teams | - | ✅ |
+| areas.py | /areas | - | ✅ |
+| buildings.py | /buildings | - | ✅ |
+| inspection_sets.py | /inspection-sets | - | ✅ |
+| work_schedules.py | /work-schedules | - | ✅ |
 | inspection_checklist.py | /inspection | v1.1.0 | ✅ |
 | admin_stats.py | /admin | v1.0.0 | ✅ |
-| contracts.py | — | — | ⚠️ 503 미확인 |
-| contacts.py | — | — | ✅ |
-| education.py | — | — | ✅ |
-| notifications.py | — | — | ✅ |
-| schedule_engine.py | — | — | ✅ |
-| roles.py | — | — | ✅ |
-| teams.py | — | — | ✅ |
-| areas.py | — | — | ✅ |
-| buildings.py | — | — | ✅ |
-| inspection_sets.py | — | — | ✅ |
-| work_schedules.py | — | — | ✅ |
-| companies.py | /companies | v1 | ✅ |
-| factories.py | /factories | v1 | ✅ |
-| users.py | /users | v1 | ✅ |
 
 ---
 
-## MV 정보
+## 공공 API 인증키 및 엔드포인트 정리
 
-| MV 이름 | 행 수 | 설명 | RPC |
-|---------|-------|------|-----|
-| engine_equipment_summary | ~882행 | 설비 집계 | refresh_engine_equipment_summary |
-| dashboard_stats | 1행 | 대시보드 통계 | refresh_dashboard_stats |
-
----
-
-## 다음 진행 사항
-
-| 순서 | 작업 | 내용 |
-|------|------|------|
-| 1 | contracts 503 | Railway 런타임 로그 확인 필요 |
-| 2 | health 엔드포인트 | server_ip 임시 추가 → 원복 필요 |
-| 3 | system_codes CRUD | POST/PATCH/DELETE 미구현 |
-| 4 | 프론트엔드 연동 | personnel-list.html, repair 페이지 |
-
----
-
-## 내일 첫 작업 테스트 명령어
-
-```bash
-# 성능 테스트
-python3 -c "
-import requests, time
-BASE = 'https://api.taieng.co.kr'
-FID  = 'bbbbbbbb-0003-0003-0003-000000000003'
-for name, url in [
-    ('ee/list',  f'{BASE}/engine-equipment/list'),
-    ('ee/stats', f'{BASE}/engine-equipment/stats'),
-    ('admin',    f'{BASE}/admin/stats'),
-    ('insp',     f'{BASE}/inspection/status/{FID}'),
-]:
-    s = time.time()
-    r = requests.get(url)
-    print(f'{name}: {time.time()-s:.3f}s  {r.status_code}')
-"
-
-# repair 테스트
-curl -s "https://api.taieng.co.kr/repair/stats" | python3 -m json.tool
-curl -s "https://api.taieng.co.kr/personnel/stats" | python3 -m json.tool
 ```
+공통 인증키: da4e826323c2c9fef9f325bd4e39a3765d06ac1b582695bcbc475bc0a076255b
+환경변수: BUILDING_API_KEY / NTS_API_KEY (Railway 설정 완료)
+
+국세청 NTS: https://api.odcloud.kr/api/nts-businessman/v1
+  POST /validate  (진위확인) — body: {businesses: [{b_no, start_dt, p_nm, ...}]}
+  POST /status    (상태조회) — body: {b_no: ["번호"]}
+
+KOSHA: https://apis.data.go.kr/B552468
+  srch/smartSearch                          ✅ 법령 스마트검색
+  disaster_api02/getdisaster_api02          ✅ 국내재해사례
+  selectMediaList01/getselectMediaList01    ✅ 안전보건자료 링크
+  constDsstr01/getconstDsstr01              ✅ 건설업 중대재해
+  msdschem/getChemList                      ✅ MSDS 목록 (data.go.kr: 15157612)
+  msdschem/getChemDetail01~16               ✅ MSDS 섹션별 상세
+  koshaguide/getKoshaGuide                  ✅ 코샤가이드
+
+소방청: https://apis.data.go.kr/1661000/materialInfoSvc
+  getMaterialList  ✅ 위험물 목록
+  getMaterialInfo  ✅ 위험물 상세
+```
+
+---
+
+## DB 변경사항
+
+### 신규 테이블
+- `posts` — 안전정보 게시판
+
+### 수정된 컬럼 인식
+- `form_templates.bylseq` (소문자) — 기존 코드 `bylSeq` 오류 수정
+
+---
+
+## 미완료 / PENDING
+
+| 항목 | 내용 |
+|------|------|
+| contracts 503 | Railway 런타임 로그 확인 필요 |
+| 행정안전부 안전정보 통합공개 | 승인됨, URL 미확인 — data.go.kr 로그인 후 확인 필요 |
+| MSDS API 정상 응답 확인 | type=json 추가했으나 실제 데이터 반환 여부 미테스트 |
+| kosha-guide body 데이터 | returnType=json 추가했으나 빈 body 원인 추가 확인 필요 |
+
+---
+
+## 주요 원칙 / 트러블슈팅 기록
+
+- **PostgreSQL 컬럼명**: 항상 소문자 (bylseq ✓, bylSeq ✗)
+- **main.py 수정**: 반드시 단독 `create_or_update_file`로 (push_files와 혼용 시 SHA 충돌)
+- **FastAPI 라우팅 순서**: `/msds/sections`를 `/msds/{kmc_no}/detail` 보다 먼저 선언
+- **Railway PDF**: WeasyPrint(GTK 의존) 사용 불가 → xhtml2pdf(순수 Python) 사용
+- **KOSHA API returnType**: 각 엔드포인트별 명시 필요 (기본값 없음)
+- **NTS API**: GET 아닌 POST 방식, serviceKey는 query string, body는 JSON body로 분리
