@@ -1,0 +1,3 @@
+# nixpacks.toml — Railway 빌드 설정
+# xhtml2pdf는 순수 Python, 시스템 라이브러리 불필요
+# (weasyprint 제거로 GTK 의존성 해소)

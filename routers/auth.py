@@ -1,15 +1,16 @@
-# routers/auth.py
+# routers/auth.py — v3.2.0 (이메일 인증 버그수정: dateutil 제거)
 from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime
-import os, re
+from datetime import datetime, timezone, timedelta
+import os, re, random
 from supabase import create_client
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 
 def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -20,13 +21,29 @@ def normalize_phone(phone: str) -> str:
 def is_email(value: str) -> bool:
     return "@" in value
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def _parse_iso(s: str) -> datetime:
+    """ISO8601 문자열 파싱 — 표준 라이브러리만 사용 (dateutil 불필요)"""
+    # +00:00 또는 Z 처리
+    s = s.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        # 마이크로초 없는 경우 fallback
+        dt = datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
 
 # ── 스키마 ──────────────────────────────────────
 
 class LoginRequest(BaseModel):
-    login_id: Optional[str] = None   # 이메일 또는 전화번호 (권장)
-    email:    Optional[str] = None   # 하위 호환
-    phone:    Optional[str] = None   # 하위 호환
+    login_id: Optional[str] = None
+    email:    Optional[str] = None
+    phone:    Optional[str] = None
     password: str
 
 class RegisterRequest(BaseModel):
@@ -52,23 +69,25 @@ class UpdateMeRequest(BaseModel):
     allow_email:     Optional[bool] = None
     allow_kakao:     Optional[bool] = None
 
+class SendVerifyEmailRequest(BaseModel):
+    email: str
+
+class VerifyEmailRequest(BaseModel):
+    email: str
+    token: str
+
 
 # ── 테스트 ──────────────────────────────────────
 
 @router.get("/test")
 def test():
-    return {"message": "auth router alive", "version": "3.0"}
+    return {"message": "auth router alive", "version": "3.2"}
 
 
 # ── 로그인 ──────────────────────────────────────
 
 @router.post("/login")
 def login(req: LoginRequest):
-    """
-    로그인 (이메일 또는 전화번호)
-    - { "login_id": "hetto@kakao.com", "password": "..." }
-    - { "login_id": "01047758888", "password": "..." }
-    """
     supabase = get_supabase()
 
     identifier = req.login_id or req.email or req.phone
@@ -101,7 +120,7 @@ def login(req: LoginRequest):
 
     login_email = user.get("email")
     if not login_email:
-        raise HTTPException(status_code=401, detail="이 계정은 이메일이 설정되어 있지 않습니다. 관리자에게 문의하세요.")
+        raise HTTPException(status_code=401, detail="이 계정은 이메일이 설정되어 있지 않습니다.")
 
     try:
         auth_res = supabase.auth.sign_in_with_password({
@@ -116,7 +135,7 @@ def login(req: LoginRequest):
 
     try:
         supabase.table("users").update(
-            {"last_login_at": datetime.now().isoformat()}
+            {"last_login_at": _now_iso()}
         ).eq("id", user["id"]).execute()
     except Exception:
         pass
@@ -177,14 +196,14 @@ def register(req: RegisterRequest):
                 "company_type_code": req.company_type_code or "002",
                 "status_code": "TRIAL",
                 "is_active": True,
-                "created_at": datetime.now().isoformat(),
-                "updated_at": datetime.now().isoformat(),
+                "created_at": _now_iso(),
+                "updated_at": _now_iso(),
             }).execute()
             company_id = cr.data[0]["id"] if cr.data else None
         except Exception:
             pass
 
-    import random, string
+    import string
     user_code = "USR-" + datetime.now().strftime("%Y%m%d") + "-" + ''.join(random.choices(string.digits, k=4))
 
     try:
@@ -203,8 +222,8 @@ def register(req: RegisterRequest):
             "allow_sms":   True,
             "allow_email": True,
             "allow_kakao": False,
-            "created_at":  datetime.now().isoformat(),
-            "updated_at":  datetime.now().isoformat(),
+            "created_at":  _now_iso(),
+            "updated_at":  _now_iso(),
         }).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"사용자 저장 실패: {str(e)}")
@@ -318,6 +337,133 @@ def update_me(req: UpdateMeRequest, authorization: Optional[str] = Header(None))
     update_data = {k: v for k, v in req.dict().items() if v is not None}
     if "phone" in update_data:
         update_data["phone"] = normalize_phone(update_data["phone"])
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = _now_iso()
     result = supabase.table("users").update(update_data).eq("id", uid).execute()
     return {"status": "success", "data": result.data[0] if result.data else {}}
+
+
+# ────────────────────────────────────────────────
+# S06 이메일 인증
+# ────────────────────────────────────────────────
+
+@router.post("/send-verify-email")
+async def send_verify_email(req: SendVerifyEmailRequest):
+    """
+    이메일 인증 코드 발송.
+    - 6자리 숫자 토큰 생성 → DB 저장 → Resend 발송
+    """
+    import resend as resend_client
+
+    supabase = get_supabase()
+    try:
+        # 1. 사용자 조회
+        res = supabase.table("users").select(
+            "id, email, name"
+        ).eq("email", req.email).limit(1).execute()
+
+        if not res.data:
+            raise HTTPException(status_code=404, detail="가입되지 않은 이메일입니다.")
+
+        user = res.data[0]
+
+        # 2. 6자리 토큰 생성
+        token = str(random.randint(100000, 999999))
+        now = _now_iso()
+
+        # 3. DB 저장
+        supabase.table("users").update({
+            "email_verify_token":   token,
+            "email_verify_sent_at": now,
+            "updated_at":           now,
+        }).eq("id", user["id"]).execute()
+
+        # 4. Resend 발송
+        if not RESEND_API_KEY:
+            raise HTTPException(status_code=500, detail="RESEND_API_KEY 미설정")
+
+        resend_client.api_key = RESEND_API_KEY
+        resend_client.Emails.send({
+            "from":    "TAI Engineering <noreply@taieng.co.kr>",
+            "to":      [req.email],
+            "subject": f"[TAI] 이메일 인증 코드: {token}",
+            "text": (
+                f"인증 코드: {token}\n"
+                f"이 코드는 10분간 유효합니다.\n\n"
+                f"TAI Engineering"
+            ),
+        })
+
+        print(f"[AUTH] 인증 이메일 발송 → {req.email}")
+
+        return {
+            "status": "success",
+            "message": f"인증 코드를 {req.email}로 발송했습니다. 10분 이내에 입력해 주세요.",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/verify-email")
+async def verify_email(req: VerifyEmailRequest):
+    """
+    이메일 인증 토큰 검증.
+    - dateutil 미사용 → fromisoformat 표준 라이브러리 사용 (v3.2.0 수정)
+    """
+    supabase = get_supabase()
+    try:
+        res = supabase.table("users").select(
+            "id, email_verify_token, email_verify_sent_at, email_verified"
+        ).eq("email", req.email).limit(1).execute()
+
+        if not res.data:
+            raise HTTPException(status_code=404, detail="가입되지 않은 이메일입니다.")
+
+        user = res.data[0]
+        stored_token = user.get("email_verify_token")
+        sent_at_str  = user.get("email_verify_sent_at")
+
+        # 토큰 일치 확인
+        if stored_token != req.token:
+            raise HTTPException(status_code=400, detail="인증 코드가 올바르지 않습니다.")
+
+        # 10분 만료 확인 — 표준 라이브러리만 사용
+        if sent_at_str:
+            try:
+                sent_at = _parse_iso(str(sent_at_str))
+                elapsed = datetime.now(timezone.utc) - sent_at
+                if elapsed > timedelta(minutes=10):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="인증 코드가 만료됐습니다. 다시 요청해 주세요."
+                    )
+            except HTTPException:
+                raise
+            except Exception:
+                pass  # 파싱 오류는 통과
+
+        # 인증 성공 — DB 업데이트
+        now = _now_iso()
+        supabase.table("users").update({
+            "email_verified":     True,
+            "email_verified_at":  now,
+            "email_verify_token": None,
+            "updated_at":         now,
+        }).eq("email", req.email).execute()
+
+        print(f"[AUTH] 이메일 인증 성공 → {req.email}")
+
+        return {
+            "status": "success",
+            "message": "이메일 인증이 완료됐습니다.",
+            "data": {
+                "email":             req.email,
+                "email_verified":    True,
+                "email_verified_at": now,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

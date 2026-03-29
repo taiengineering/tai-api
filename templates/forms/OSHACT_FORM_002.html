@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>안전관리자·보건관리자·산업보건의 선임 등 보고서</title>
+  <style>
+    @page { size: A4; margin: 20mm 15mm; }
+    body { font-family: 'Malgun Gothic', '맑은 고딕', Arial, sans-serif; font-size: 12px; color: #111; margin: 0; }
+    h1 { font-size: 16px; text-align: center; margin-bottom: 2px; font-weight: bold; }
+    .subtitle { font-size: 11px; text-align: center; color: #444; margin-bottom: 12px; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; margin-bottom: 10px; }
+    th, td { border: 1px solid #333; padding: 5px 6px; vertical-align: top; font-size: 11px; word-break: break-word; }
+    th.section { background: #e8e8e8; font-size: 12px; font-weight: bold; text-align: left; padding: 5px 8px; }
+    .label { font-size: 10px; color: #555; display: block; margin-bottom: 2px; }
+    .value { font-size: 12px; font-weight: 500; min-height: 16px; }
+    .signature-box { height: 60px; border: 1px dashed #888; text-align: center; line-height: 60px; color: #999; font-size: 10px; }
+    .footer-note { font-size: 10px; color: #666; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>안전관리자·보건관리자·산업보건의 선임 등 보고서</h1>
+  <div class="subtitle">산업안전보건법 시행규칙 [별지 제2호서식]</div>
+
+  <!-- 사업체 -->
+  <table>
+    <tr><th class="section" colspan="4">사업체</th></tr>
+    <tr>
+      <td><span class="label">사업장명</span><span class="value">{{ company_name }}</span></td>
+      <td><span class="label">업종 또는 주요생산품명</span><span class="value">{{ industry }}</span></td>
+      <td colspan="2"><span class="label">소재지</span><span class="value">{{ company_address }}</span></td>
+    </tr>
+    <tr>
+      <td><span class="label">사업자등록번호</span><span class="value">{{ business_number }}</span></td>
+      <td><span class="label">근로자 수 총</span><span class="value">{{ worker_total }}명</span></td>
+      <td><span class="label">남</span><span class="value">{{ worker_male }}명</span></td>
+      <td><span class="label">여</span><span class="value">{{ worker_female }}명</span></td>
+    </tr>
+    <tr>
+      <td colspan="4"><span class="label">전화번호</span><span class="value">{{ company_phone }}</span></td>
+    </tr>
+  </table>
+
+  <!-- 안전관리자 -->
+  <table>
+    <tr><th class="section" colspan="4">안전관리자 (안전관리전문기관)</th></tr>
+    <tr>
+      <td><span class="label">성명</span><span class="value">{{ safety_name }}</span></td>
+      <td><span class="label">생년월일</span><span class="value">{{ safety_birth }}</span></td>
+      <td><span class="label">기관명</span><span class="value">{{ safety_org }}</span></td>
+      <td><span class="label">전자우편 주소</span><span class="value">{{ safety_email }}</span></td>
+    </tr>
+    <tr>
+      <td><span class="label">전화번호</span><span class="value">{{ safety_phone }}</span></td>
+      <td><span class="label">자격/면허번호</span><span class="value">{{ safety_license }}</span></td>
+      <td><span class="label">선임 등 연월일</span><span class="value">{{ safety_assign_date }}</span></td>
+      <td><span class="label">전담·겸임 구분</span><span class="value">{{ safety_type }}</span></td>
+    </tr>
+  </table>
+
+  <!-- 보건관리자 -->
+  <table>
+    <tr><th class="section" colspan="4">보건관리자 (보건관리전문기관)</th></tr>
+    <tr>
+      <td><span class="label">성명</span><span class="value">{{ health_name }}</span></td>
+      <td><span class="label">생년월일</span><span class="value">{{ health_birth }}</span></td>
+      <td><span class="label">기관명</span><span class="value">{{ health_org }}</span></td>
+      <td><span class="label">전자우편 주소</span><span class="value">{{ health_email }}</span></td>
+    </tr>
+    <tr>
+      <td><span class="label">전화번호</span><span class="value">{{ health_phone }}</span></td>
+      <td><span class="label">자격/면허번호</span><span class="value">{{ health_license }}</span></td>
+      <td><span class="label">선임 등 연월일</span><span class="value">{{ health_assign_date }}</span></td>
+      <td><span class="label">전담·겸임 구분</span><span class="value">{{ health_type }}</span></td>
+    </tr>
+  </table>
+
+  <!-- 산업보건의 -->
+  <table>
+    <tr><th class="section" colspan="4">산업보건의</th></tr>
+    <tr>
+      <td><span class="label">성명</span><span class="value">{{ doctor_name }}</span></td>
+      <td><span class="label">생년월일</span><span class="value">{{ doctor_birth }}</span></td>
+      <td><span class="label">기관명</span><span class="value">{{ doctor_org }}</span></td>
+      <td><span class="label">전자우편 주소</span><span class="value">{{ doctor_email }}</span></td>
+    </tr>
+    <tr>
+      <td><span class="label">전화번호</span><span class="value">{{ doctor_phone }}</span></td>
+      <td><span class="label">자격/면허번호</span><span class="value">{{ doctor_license }}</span></td>
+      <td><span class="label">선임 등 연월일</span><span class="value">{{ doctor_assign_date }}</span></td>
+      <td><span class="label">전담·겸임 구분</span><span class="value">{{ doctor_type }}</span></td>
+    </tr>
+  </table>
+
+  <!-- 제출 정보 -->
+  <table>
+    <tr><th class="section" colspan="4">제출 정보</th></tr>
+    <tr>
+      <td colspan="2"><span class="label">제출일</span><span class="value">{{ submit_date }}</span></td>
+      <td><span class="label">보고인 (사업주 또는 대표자)</span><span class="value">{{ reporter_name }}</span></td>
+      <td><span class="label">서명 또는 인</span><div class="signature-box">{{ signature_text }}</div></td>
+    </tr>
+  </table>
+
+  <!-- 첨부 서류 안내 -->
+  <div class="footer-note">
+    ※ 첨부서류: 1. 해당 자격·면허증 사본 (해당자에 한함) &nbsp; 2. 재직증명서
+  </div>
+</body>
+</html>
