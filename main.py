@@ -1,5 +1,5 @@
-# main.py — v4.2.0
-# feat: safety_info(행안부 안전정보) 라우터 추가
+# main.py — v4.2.1
+# feat: law_collector 라우터 추가
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -38,10 +38,11 @@ from routers.inspection_sets         import router as inspection_sets_router
 from routers.work_schedules          import router as work_schedules_router
 from routers.inspection_checklist    import router as inspection_router
 from routers.admin_stats             import router as admin_stats_router
+from routers.law_collector           import router as law_collector_router
 
 app = FastAPI(
     title="TAI API",
-    version="4.2.0",
+    version="4.2.1",
     description="TAI 산업안전 플랫폼 API",
 )
 
@@ -100,12 +101,13 @@ app.include_router(inspection_sets_router)
 app.include_router(work_schedules_router)
 app.include_router(inspection_router)
 app.include_router(admin_stats_router)
+app.include_router(law_collector_router)
 
 
 # ── 헬스체크 ─────────────────────────────────────────────
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "4.2.0"}
+    return {"status": "ok", "service": "TAI API", "version": "4.2.1"}
 
 
 @app.get("/health")
@@ -115,4 +117,4 @@ def health():
         ip = req.get("https://api.ipify.org", timeout=5).text
     except Exception as e:
         ip = f"확인불가: {e}"
-    return {"status": "healthy", "server_ip": ip, "version": "4.2.0"}
+    return {"status": "healthy", "server_ip": ip, "version": "4.2.1"}
