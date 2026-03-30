@@ -255,6 +255,7 @@ def format_rule_result(rule: dict, source_label: str = "") -> dict:
         "inspection_required":   rule.get("inspection_required", False),
         "action_required":       rule.get("action_required", False),
         "report_required":       rule.get("report_required", False),
+        "obligation_type":       (rule.get("obligation_type") or "").strip(),
         "condition_code":        rule.get("condition_code", ""),
         "condition_value":       rule.get("condition_value"),
     }
@@ -349,6 +350,16 @@ def _build_result(applicable, not_applicable, all_rules, mode, evaluated_at,
 
     total = sum(len(triggered[k]) for k in triggered)
 
+    rep_list = triggered["report"]
+    notify_list = [
+        x for x in rep_list
+        if str((x or {}).get("obligation_type") or "").upper() in ("NOTIFY", "NOTIFICATION")
+    ]
+    report_only = [
+        x for x in rep_list
+        if str((x or {}).get("obligation_type") or "").upper() not in ("NOTIFY", "NOTIFICATION")
+    ]
+
     result = {
         "engine_version":        ENGINE_VERSION,
         "mode":                  mode,
@@ -365,7 +376,8 @@ def _build_result(applicable, not_applicable, all_rules, mode, evaluated_at,
             "appointment": len(triggered["appointment"]),
             "inspection":  len(triggered["inspection"]),
             "action":      len(triggered["action"]),
-            "report":      len(triggered["report"]),
+            "report":      len(report_only),
+            "notify":      len(notify_list),
         },
         **extra_fields,
     }
@@ -677,6 +689,11 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
         "inspection_cycle": "",
         "penalty_amount": (rule.get("penalty_summary") or "") or "",
         "source_label": "",
+        "obligation_type": (rule.get("obligation_type") or "").strip(),
+        "appointment_required": bool(rule.get("appointment_required")),
+        "inspection_required": bool(rule.get("inspection_required")),
+        "action_required": bool(rule.get("action_required")),
+        "report_required": bool(rule.get("report_required")),
     }
 
 
@@ -772,7 +789,6 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         ("appointment", "선임"),
         ("inspection", "점검"),
         ("action", "조치"),
-        ("report", "신고"),
     ]
     obligations: List[Dict[str, Any]] = []
     for key, label in cat_labels:
@@ -780,10 +796,30 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         if items:
             obligations.append({"category": key, "label": label, "items": items})
 
+    report_items = triggered["report"]
+    notify_items = [
+        x
+        for x in report_items
+        if str(x.get("obligation_type") or "").upper() in ("NOTIFY", "NOTIFICATION")
+    ]
+    report_only = [
+        x
+        for x in report_items
+        if str(x.get("obligation_type") or "").upper() not in ("NOTIFY", "NOTIFICATION")
+    ]
+    if report_only:
+        obligations.append({"category": "report", "label": "신고", "items": report_only})
+    if notify_items:
+        obligations.append({"category": "notify", "label": "보고", "items": notify_items})
+
     rules_table: List[Dict[str, Any]] = []
     for key, label in cat_labels:
         for row in triggered[key]:
             rules_table.append({"category": label, **row})
+    for row in report_only:
+        rules_table.append({"category": "신고", **row})
+    for row in notify_items:
+        rules_table.append({"category": "보고", **row})
 
     appointment_n = len(triggered["appointment"])
     risk = _risk_level(total_applicable, appointment_n)
@@ -841,7 +877,8 @@ async def diagnose_step1(body: DiagnoseStep1Body):
             "appointment": len(triggered["appointment"]),
             "inspection": len(triggered["inspection"]),
             "action": len(triggered["action"]),
-            "report": len(triggered["report"]),
+            "report": len(report_only),
+            "notify": len(notify_items),
         },
     }
     return {"status": "success", "data": result_data}

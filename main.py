@@ -1,4 +1,4 @@
-# main.py — v4.3.1
+# main.py — v4.3.2
 # feat: 별표 데이터 API (byulpyo) + 크론 관리 시스템 (APScheduler + DB 연동)
 import logging
 from contextlib import asynccontextmanager
@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="TAI API",
-    version="4.3.1",
+    version="4.3.2",
     description="TAI 산업안전 플랫폼 API",
     lifespan=lifespan,
 )
