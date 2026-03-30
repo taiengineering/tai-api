@@ -4,6 +4,7 @@
 # - POST /law-collector/collect/{law_name} 단건 수집
 # - POST /law-collector/check-updates      변경 감지 (증분 수집)
 # - GET  /law-collector/status             수집 상태 조회
+# - GET  /law-collector/debug/{law_name}   [개발용] 법제처 API 원본 XML 확인
 
 import os
 import hashlib
@@ -21,7 +22,8 @@ router = APIRouter(prefix="/law-collector", tags=["법령 수집기"])
 # 설정
 # ============================================================
 
-# fix: LAW_API_OC 환경변수 없으면 "taieng" 기본값 사용
+# LAW_API_OC: 법제처 DRF API 인증 OC 값 (법제처 회원 ID)
+# 환경변수 LAW_API_OC 미설정 시 "taieng" 기본값 사용
 LAW_API_OC   = os.environ.get("LAW_API_OC", "taieng")
 LAW_API_BASE = "http://www.law.go.kr/DRF"
 
@@ -488,6 +490,44 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
 # 라우터 엔드포인트
 # ============================================================
 
+@router.get("/debug/{law_name}")
+async def debug_law_api(law_name: str):
+    """
+    [개발용] 법제처 API 원본 XML 응답 확인.
+    수집이 404로 실패할 때 실제 API 응답 내용 진단용.
+    """
+    try:
+        result = fetch_law_list(query=law_name, display=5)
+        xml_text = result["xml"]
+        # XML 파싱 시도
+        try:
+            root = ET.fromstring(xml_text)
+            # 루트 태그 및 자식 태그 목록
+            children = [child.tag for child in root]
+            law_count = len(root.findall("law"))
+        except Exception as pe:
+            children = []
+            law_count = -1
+            xml_text = f"XML 파싱 실패: {pe}\n\n원문: {xml_text}"
+
+        return {
+            "law_api_oc":  LAW_API_OC,
+            "query":       law_name,
+            "http_status": result["status"],
+            "xml_root_tag":   root.tag if law_count >= 0 else "unknown",
+            "xml_children":   children,
+            "law_count":      law_count,
+            "xml_preview":    xml_text[:2000],  # 앞 2000자만
+        }
+    except Exception as e:
+        return {
+            "law_api_oc": LAW_API_OC,
+            "query":      law_name,
+            "error":      str(e),
+            "traceback":  traceback.format_exc()[-500:],
+        }
+
+
 @router.post("/collect/all")
 async def collect_all_laws(background_tasks: BackgroundTasks):
     """전체 법령 수집 (최초 1회)"""
@@ -646,5 +686,5 @@ async def get_collection_status():
         "change_log_count":     changed.count,
         "pending_parse_count":  pending.count,
         "recent_failed":        failed.data,
-        "law_api_oc":           LAW_API_OC,  # 디버그용 — 환경변수 확인
+        "law_api_oc":           LAW_API_OC,
     }
