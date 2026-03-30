@@ -45,6 +45,8 @@ from routers.law_collector           import router as law_collector_router
 from routers.cron_manager            import router as cron_manager_router
 from routers.byulpyo                 import router as byulpyo_router
 from routers.price_setting           import router as price_setting_router
+from routers.internal_api_registry   import router as internal_api_registry_router
+from routers.report_api_registry     import router as report_api_registry_router
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +137,8 @@ app.include_router(law_collector_router)
 app.include_router(cron_manager_router)
 app.include_router(byulpyo_router)
 app.include_router(price_setting_router)
+app.include_router(internal_api_registry_router)
+app.include_router(report_api_registry_router)
 
 
 # ── 헬스체크 ─────────────────────────────────────────────
