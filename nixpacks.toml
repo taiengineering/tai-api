@@ -1,2 +1,1 @@
-[phases.setup]
-aptPkgs = ["libcairo2-dev", "pkg-config", "python3-dev", "libffi-dev"]
+# nixpacks.toml 비활성화 — Dockerfile 전환으로 불필요
