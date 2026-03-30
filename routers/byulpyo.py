@@ -139,6 +139,17 @@ def list_legal_inspection():
     }
 
 
+# ── 고압가스 ──────────────────────────────────────────────────
+
+@router.get("/highpressure-gas")
+def list_highpressure_gas(gas_type: str = None):
+    sb = get_supabase()
+    q = sb.table("master_highpressure_gas").select("*").eq("is_active", True)
+    if gas_type:
+        q = q.eq("gas_type", gas_type)
+    return {"status": "success", "data": q.order("gas_code").execute().data}
+
+
 # ── 통계 ──────────────────────────────────────────────────────
 
 @router.get("/stats")
@@ -156,6 +167,8 @@ def byulpyo_stats():
             "safety_manager": sb.table("master_safety_manager_criteria")
                 .select("id", count="exact").execute().count,
             "legal_inspection": sb.table("master_legal_inspection_target")
+                .select("id", count="exact").execute().count,
+            "highpressure_gas": sb.table("master_highpressure_gas")
                 .select("id", count="exact").execute().count,
         },
     }

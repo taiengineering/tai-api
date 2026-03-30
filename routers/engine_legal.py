@@ -84,6 +84,8 @@ async def engine_legal_stats():
             if ot in ("REPORT", "NOTIFY") and not (r.get("form_code") or "").strip():
                 form_unmapped += 1
 
+        hg = supabase.table("master_highpressure_gas").select("id", count="exact").execute()
+
         return {
             "status": "success",
             "data": {
@@ -94,6 +96,7 @@ async def engine_legal_stats():
                 "rules_by_sector": sector_cnt,
                 "rules_by_type": type_cnt,
                 "form_unmapped": form_unmapped,
+                "highpressure_gas": hg.count or 0,
                 "version": VERSION,
             },
         }
