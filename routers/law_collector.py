@@ -461,8 +461,8 @@ def _run_collect_all():
 
 
 @router.post("/collect/{law_name}")
-async def collect_single_law(law_name: str):
-    """단건 법령 수집"""
+async def collect_single_law(law_name: str, force: bool = False):
+    """단건 법령 수집. force=true 이면 기존 버전의 조문을 삭제 후 재파싱."""
     supabase = get_supabase()
     try:
         list_result = fetch_law_list(query=law_name, display=5)
@@ -488,6 +488,25 @@ async def collect_single_law(law_name: str):
             )
 
         parsed = parse_law_content_xml(content_result["xml"])
+
+        # force=true: 기존 버전의 조문이 0개이면 삭제 후 재수집
+        if force:
+            law_mst_no = matched["law_mst_no"]
+            law_key_check = supabase.table("law_master") \
+                .select("id").ilike("law_name", f"%{matched['law_name']}%").limit(1).execute()
+            if law_key_check.data:
+                existing_law_id = law_key_check.data[0]["id"]
+                ev = supabase.table("law_version") \
+                    .select("id").eq("law_id", existing_law_id).eq("law_mst_no", law_mst_no).execute()
+                if ev.data:
+                    old_vid = ev.data[0]["id"]
+                    art_cnt = supabase.table("law_article") \
+                        .select("id", count="exact").eq("law_version_id", old_vid).execute()
+                    if (art_cnt.count or 0) == 0:
+                        # 조문 0개인 버전 삭제 → 재수집 시 new_version으로 처리됨
+                        supabase.table("law_content_raw").delete().eq("law_version_id", old_vid).execute()
+                        supabase.table("law_version").delete().eq("id", old_vid).execute()
+
         law_info = {**parsed["info"], "law_mst_no": matched["law_mst_no"],
                     "law_name_short": matched.get("law_name_short", ""),
                     "revision_type": matched.get("revision_type", "")}
