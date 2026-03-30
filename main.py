@@ -1,5 +1,5 @@
-# main.py — v4.3.2
-# feat: 별표 데이터 API (byulpyo) + 크론 관리 시스템 (APScheduler + DB 연동)
+# main.py — v4.4.0
+# feat: 건설안전 모듈 (construction) 등록
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -47,6 +47,7 @@ from routers.byulpyo                 import router as byulpyo_router
 from routers.price_setting           import router as price_setting_router
 from routers.internal_api_registry   import router as internal_api_registry_router
 from routers.report_api_registry     import router as report_api_registry_router
+from routers.construction            import router as construction_router
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="TAI API",
-    version="4.3.2",
+    version="4.4.0",
     description="TAI 산업안전 플랫폼 API",
     lifespan=lifespan,
 )
@@ -139,12 +140,13 @@ app.include_router(byulpyo_router)
 app.include_router(price_setting_router)
 app.include_router(internal_api_registry_router)
 app.include_router(report_api_registry_router)
+app.include_router(construction_router, prefix="/construction", tags=["건설안전"])
 
 
 # ── 헬스체크 ─────────────────────────────────────────────
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "4.3.2"}
+    return {"status": "ok", "service": "TAI API", "version": "4.4.0"}
 
 
 @app.get("/health")
@@ -159,4 +161,4 @@ def health():
         cron_status = f"{len(scheduler.get_jobs())}개 등록" if scheduler.running else "중지"
     except Exception:
         cron_status = "미초기화"
-    return {"status": "healthy", "server_ip": ip, "version": "4.3.2", "cron": cron_status}
+    return {"status": "healthy", "server_ip": ip, "version": "4.4.0", "cron": cron_status}
