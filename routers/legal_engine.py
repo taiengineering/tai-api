@@ -1,11 +1,11 @@
 """
-법령 판정 엔진 라우터 — v4.3.2
+법령 판정 엔진 라우터 — v4.3.3
 =================================
-v4.3.2: diagnose/step1 개선
-  - factory_id Optional (없으면 익명 진단)
-  - flat body 파라미터 수용 (employee_count, floor_area, building_use_type 직접 전달 가능)
-  - obligation_type 완전 반영 (DB값 우선 + 플래그 fallback)
-  - summary.report / summary.notify 분리
+v4.3.3: summary.notify 집계 버그 수정
+  - _classify_rules_db에 notify_required 분기 추가 (NOTIFY 룰이 action으로 떨어지던 문제)
+  - summary.report/notify를 applicable 전체에서 obligation_type + 플래그로 직접 집계
+  - rules_table에 NOTIFY 카테고리 정상 포함
+v4.3.2: diagnose/step1 개선 (factory_id Optional, flat params, obligation_type 완전 반영)
 v4.2.0: 3단계 진단 API 추가
 """
 from fastapi import APIRouter, HTTPException, Query
@@ -18,7 +18,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "4.3.2"
+ENGINE_VERSION = "4.3.3"
 
 
 # ──────────────────────────────────────────────
@@ -204,9 +204,10 @@ def _check_rule_conditions(rule: dict, context: dict) -> bool:
 
 def _resolve_obligation_type(rule: dict) -> str:
     """DB의 obligation_type 우선, 없으면 플래그로 추론."""
-    ot = (rule.get("obligation_type") or "").strip()
+    ot = (rule.get("obligation_type") or "").strip().upper()
     if ot:
         return ot
+    # 플래그 기반 fallback
     if rule.get("appointment_required"):
         return "APPOINT"
     if rule.get("notify_required"):
@@ -218,6 +219,20 @@ def _resolve_obligation_type(rule: dict) -> str:
     if rule.get("action_required"):
         return "ACTION"
     return "OTHER"
+
+
+def _is_notify(rule: dict) -> bool:
+    """NOTIFY 여부 판정 — obligation_type 또는 notify_required 플래그."""
+    ot = (rule.get("obligation_type") or "").strip().upper()
+    return ot == "NOTIFY" or bool(rule.get("notify_required"))
+
+
+def _is_report(rule: dict) -> bool:
+    """REPORT 여부 판정 — obligation_type 또는 report_required 플래그 (NOTIFY 제외)."""
+    ot = (rule.get("obligation_type") or "").strip().upper()
+    if ot == "REPORT":
+        return True
+    return bool(rule.get("report_required")) and not _is_notify(rule)
 
 
 # ──────────────────────────────────────────────
@@ -267,21 +282,22 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
     """master_building_legal_rules 행 → 프론트/기존 format_rule_result 호환."""
     desc = (rule.get("obligation_summary") or rule.get("remarks") or "").strip()
     return {
-        "rule_id": rule.get("rule_id", ""),
-        "rule_type": str(rule.get("rule_type_code") or ""),
-        "law_name": rule.get("law_name") or "",
-        "law_article": rule.get("law_article") or "",
-        "description": desc,
-        "appointment_target": rule.get("appointment_target_code") or "",
+        "rule_id":               rule.get("rule_id", ""),
+        "rule_type":             str(rule.get("rule_type_code") or ""),
+        "law_name":              rule.get("law_name") or "",
+        "law_article":           rule.get("law_article") or "",
+        "description":           desc,
+        "appointment_target":    rule.get("appointment_target_code") or "",
         "qualification_required": rule.get("qualification_type") or "",
-        "inspection_cycle": "",
-        "penalty_amount": (rule.get("penalty_summary") or "") or "",
-        "source_label": "",
-        "obligation_type": _resolve_obligation_type(rule),
-        "appointment_required": bool(rule.get("appointment_required")),
-        "inspection_required": bool(rule.get("inspection_required")),
-        "action_required": bool(rule.get("action_required")),
-        "report_required": bool(rule.get("report_required")),
+        "inspection_cycle":      "",
+        "penalty_amount":        (rule.get("penalty_summary") or "") or "",
+        "source_label":          "",
+        "obligation_type":       _resolve_obligation_type(rule),
+        "appointment_required":  bool(rule.get("appointment_required")),
+        "inspection_required":   bool(rule.get("inspection_required")),
+        "action_required":       bool(rule.get("action_required")),
+        "report_required":       bool(rule.get("report_required")),
+        "notify_required":       bool(rule.get("notify_required")),
     }
 
 
@@ -314,15 +330,24 @@ def _classify_one(rule: dict, formatted: dict, triggered: dict):
 
 
 def _classify_rules_db(rules: List[Dict[str, Any]], triggered: Dict[str, List]) -> None:
+    """
+    v4.3.3: notify_required 분기 추가.
+    우선순위: appointment > inspection > notify > report > action
+    NOTIFY 룰이 report_required=False, action_required=False 이면 이전에 action으로 떨어지던 문제 수정.
+    """
     for rule in rules:
         formatted = format_rule_result_db(rule)
-        if rule.get("appointment_required"):
+        ot = (rule.get("obligation_type") or "").strip().upper()
+        if rule.get("appointment_required") or ot == "APPOINT":
             triggered["appointment"].append(formatted)
-        elif rule.get("inspection_required"):
+        elif rule.get("inspection_required") or ot == "INSPECT":
             triggered["inspection"].append(formatted)
-        elif rule.get("report_required"):
+        elif rule.get("notify_required") or ot == "NOTIFY":
+            # NOTIFY는 별도 카테고리(triggered["notify"])로 분류
+            triggered.setdefault("notify", []).append(formatted)
+        elif rule.get("report_required") or ot == "REPORT":
             triggered["report"].append(formatted)
-        elif rule.get("action_required"):
+        elif rule.get("action_required") or ot == "ACTION":
             triggered["action"].append(formatted)
         else:
             triggered["action"].append(formatted)
@@ -389,8 +414,8 @@ def _build_result(applicable, not_applicable, all_rules, mode, evaluated_at,
 
     total = sum(len(triggered[k]) for k in triggered)
     rep_list = triggered["report"]
-    notify_list = [x for x in rep_list if _resolve_obligation_type(x) in ("NOTIFY", "NOTIFICATION")]
-    report_only = [x for x in rep_list if _resolve_obligation_type(x) not in ("NOTIFY", "NOTIFICATION")]
+    notify_list = [x for x in rep_list if _is_notify(x)]
+    report_only = [x for x in rep_list if not _is_notify(x)]
 
     result = {
         "engine_version":        ENGINE_VERSION,
@@ -428,7 +453,7 @@ async def apply_legal_engine(
     body: Optional[dict] = None,
     mode: str = Query("all"),
 ):
-    """시설 등록 기반 법령 판정 (v4.3.2 — 하위 호환 유지)"""
+    """시설 등록 기반 법령 판정 (v4.3.3 — 하위 호환 유지)"""
     supabase = get_supabase()
     if body and body.get("mode"):
         mode = body["mode"]
@@ -547,7 +572,7 @@ class DiagnoseStep1Body(BaseModel):
     sector: str = Field(..., description="BUILDING | MANUFACTURING | CONSTRUCTION | SPECIAL_FACILITY")
     input: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
-    # flat 파라미터 직접 수용 (building_use_type, employee_count, floor_area 등)
+    # flat 파라미터 직접 수용
     building_use_type: Optional[str] = None
     employee_count: Optional[int] = None
     floor_area: Optional[float] = None
@@ -603,7 +628,6 @@ def _truthy(v: Any) -> bool:
 
 
 def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, Any]:
-    """프론트 섹터별 input → 룰 매칭용 컨텍스트."""
     sec = sector.strip().upper()
     ctx: Dict[str, Any] = {
         "worker_count": 0, "total_floor_area": 0.0, "electric_capacity": 0.0,
@@ -693,7 +717,6 @@ def _evaluate_facility_conditions_db(facility_ctx: Dict[str, Any], rules: List[D
     for rule in rules:
         cc = rule.get("condition_code")
         cv = rule.get("condition_value")
-        # condition_code/value 없으면 무조건 적용
         if not cc or cv is None:
             applicable.append(rule)
         elif _db_rule_matches_facility(rule, facility_ctx):
@@ -704,7 +727,7 @@ def _evaluate_facility_conditions_db(facility_ctx: Dict[str, Any], rules: List[D
 
 
 # ──────────────────────────────────────────────
-# POST /legal-engine/diagnose/step1  v4.3.2
+# POST /legal-engine/diagnose/step1  v4.3.3
 # ──────────────────────────────────────────────
 
 @router.post("/diagnose/step1")
@@ -719,7 +742,6 @@ async def diagnose_step1(body: DiagnoseStep1Body):
     factory_id = (body.factory_id or "").strip()
     supabase = get_supabase()
 
-    # factory_id 있을 때만 존재 확인
     if factory_id:
         fac_check = supabase.table("factories").select("id").eq("id", factory_id).limit(1).execute()
         if not fac_check.data:
@@ -758,8 +780,9 @@ async def diagnose_step1(body: DiagnoseStep1Body):
     evaluated_at = datetime.now().isoformat()
     applicable, not_applicable = _evaluate_facility_conditions_db(facility_ctx, all_rules)
 
+    # v4.3.3: notify 별도 버킷 포함
     triggered: Dict[str, List] = {
-        "appointment": [], "inspection": [], "action": [], "report": [], "not_applicable": [],
+        "appointment": [], "inspection": [], "notify": [], "report": [], "action": [], "not_applicable": [],
     }
     _classify_rules_db(applicable, triggered)
     for r in not_applicable:
@@ -767,32 +790,30 @@ async def diagnose_step1(body: DiagnoseStep1Body):
 
     total_applicable = (
         len(triggered["appointment"]) + len(triggered["inspection"])
-        + len(triggered["action"]) + len(triggered["report"])
+        + len(triggered["notify"]) + len(triggered["report"])
+        + len(triggered["action"])
     )
 
     law_names = sorted({x.get("law_name") for x in applicable if x.get("law_name")})
 
-    # report / notify 분리
-    report_items = triggered["report"]
-    notify_items = [x for x in report_items if _resolve_obligation_type(x) in ("NOTIFY",)]
-    report_only  = [x for x in report_items if _resolve_obligation_type(x) not in ("NOTIFY",)]
-
+    # ── obligations 구성 ──
     obligations: List[Dict[str, Any]] = []
     for key, label in [("appointment", "선임"), ("inspection", "점검"), ("action", "조치")]:
         if triggered[key]:
             obligations.append({"category": key, "label": label, "items": triggered[key]})
-    if report_only:
-        obligations.append({"category": "report", "label": "신고", "items": report_only})
-    if notify_items:
-        obligations.append({"category": "notify", "label": "보고", "items": notify_items})
+    if triggered["report"]:
+        obligations.append({"category": "report", "label": "신고", "items": triggered["report"]})
+    if triggered["notify"]:
+        obligations.append({"category": "notify", "label": "보고", "items": triggered["notify"]})
 
+    # ── rules_table 구성 ──
     rules_table: List[Dict[str, Any]] = []
     for key, label in [("appointment", "선임"), ("inspection", "점검"), ("action", "조치")]:
         for row in triggered[key]:
             rules_table.append({"category": label, **row})
-    for row in report_only:
+    for row in triggered["report"]:
         rules_table.append({"category": "신고", **row})
-    for row in notify_items:
+    for row in triggered["notify"]:
         rules_table.append({"category": "보고", **row})
 
     appointment_n = len(triggered["appointment"])
@@ -815,12 +836,13 @@ async def diagnose_step1(body: DiagnoseStep1Body):
     rules_out: List[Dict[str, Any]] = []
     for x in applicable:
         rules_out.append({
-            "rule_id":   x.get("rule_id"),
-            "law_name":  x.get("law_name") or "",
+            "rule_id":     x.get("rule_id"),
+            "law_name":    x.get("law_name") or "",
             "law_article": x.get("law_article") or "",
-            "obligation": (x.get("obligation_summary") or x.get("remarks") or "").strip(),
+            "obligation":  (x.get("obligation_summary") or x.get("remarks") or "").strip(),
         })
 
+    # v4.3.3: summary는 triggered 버킷에서 직접 집계 (applicable 전체 기준)
     result_data = {
         "factory_id":                factory_id or None,
         "sector":                    sector_raw,
@@ -839,7 +861,7 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         "appointment_required":      triggered["appointment"],
         "inspection_required":       triggered["inspection"],
         "action_required":           triggered["action"],
-        "report_required":           triggered["report"],
+        "report_required":           triggered["report"] + triggered["notify"],  # 하위 호환
         "not_applicable":            triggered["not_applicable"][:100],
         "not_applicable_total":      len(not_applicable),
         "total_rules_checked":       len(all_rules),
@@ -849,8 +871,8 @@ async def diagnose_step1(body: DiagnoseStep1Body):
             "appointment": len(triggered["appointment"]),
             "inspection":  len(triggered["inspection"]),
             "action":      len(triggered["action"]),
-            "report":      len(report_only),
-            "notify":      len(notify_items),
+            "report":      len(triggered["report"]),
+            "notify":      len(triggered["notify"]),   # ← 핵심 수정
         },
     }
     return {"status": "success", "data": result_data}
