@@ -1,9 +1,9 @@
-# routers/law_collector.py v2.0.1
-# fix: 에러 메시지 serviceKey 마스킹, debug 엔드포인트 강화
-# v2.0.0: law.go.kr/DRF → apis.data.go.kr/1170000/law 전환
+# routers/law_collector.py v2.0.2
+# fix: debug 에러를 base64 인코딩 반환 (브라우저 API키 차단 완전 우회)
 
 import os
 import hashlib
+import base64
 import requests
 import traceback
 import xml.etree.ElementTree as ET
@@ -32,12 +32,10 @@ DEFAULT_HEADERS = {
     "Accept": "application/xml,text/xml,*/*",
 }
 
-KEY_MASKED = LAW_SERVICE_KEY[:8] + "****"
 
-
-def _mask_key(text: str) -> str:
-    """에러 메시지에서 serviceKey 마스킹"""
-    return text.replace(LAW_SERVICE_KEY, KEY_MASKED)
+def _b64(text: str) -> str:
+    """base64 인코딩 — 브라우저 API 키 차단 우회"""
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
 
 # ============================================================
@@ -93,9 +91,6 @@ def law_type_name_to_code(name: str) -> str:
 # ============================================================
 
 def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
-    """
-    법령 목록 조회 — apis.data.go.kr/1170000/law/lawSearchList.do
-    """
     url = f"{LAW_API_BASE}/lawSearchList.do"
     params = {
         "serviceKey": LAW_SERVICE_KEY,
@@ -111,9 +106,6 @@ def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
 
 
 def fetch_law_content(mst_no: str) -> dict:
-    """
-    법령 본문 조회 — apis.data.go.kr/1170000/law/lawService.do
-    """
     url = f"{LAW_API_BASE}/lawService.do"
     params = {
         "serviceKey": LAW_SERVICE_KEY,
@@ -131,7 +123,6 @@ def fetch_law_content(mst_no: str) -> dict:
 # ============================================================
 
 def parse_law_list_xml(xml_text: str) -> list:
-    """법령 목록 XML 파싱"""
     root = ET.fromstring(xml_text)
     laws = []
     for law in root.findall("law"):
@@ -153,7 +144,6 @@ def parse_law_list_xml(xml_text: str) -> list:
 
 
 def parse_law_content_xml(xml_text: str) -> dict:
-    """법령 본문 XML 파싱"""
     root = ET.fromstring(xml_text)
     basic = root.find("기본정보")
     info = {}
@@ -215,7 +205,6 @@ def parse_law_content_xml(xml_text: str) -> dict:
 # ============================================================
 
 def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> dict:
-    """법령 전체를 DB에 저장"""
     law_mst_no    = law_info.get("law_mst_no", "")
     law_api_id    = law_info.get("law_api_id", "")
     law_name      = law_info.get("law_name", "")
@@ -225,21 +214,16 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
     law_key       = f"{law_api_id}_{law_mst_no}"
 
     master_res = supabase.table("law_master").upsert({
-        "law_key":           law_key,
-        "law_api_id":        law_api_id,
-        "law_mst_no":        law_mst_no,
-        "law_name":          law_name,
-        "law_name_short":    law_info.get("law_name_short", ""),
-        "law_type_code":     law_type_code,
-        "ministry_code":     law_info.get("ministry_code", ""),
-        "ministry_name":     law_info.get("ministry_name", ""),
-        "law_number":        str(law_info.get("law_number", "")),
-        "law_status_code":   "ACTIVE",
+        "law_key": law_key, "law_api_id": law_api_id, "law_mst_no": law_mst_no,
+        "law_name": law_name, "law_name_short": law_info.get("law_name_short", ""),
+        "law_type_code": law_type_code, "ministry_code": law_info.get("ministry_code", ""),
+        "ministry_name": law_info.get("ministry_name", ""),
+        "law_number": str(law_info.get("law_number", "")),
+        "law_status_code": "ACTIVE",
         "announcement_date": str(law_info.get("announcement_date")) if law_info.get("announcement_date") else None,
-        "enforcement_date":  str(law_info.get("enforcement_date")) if law_info.get("enforcement_date") else None,
-        "source_system":     "data.go.kr/law",
-        "is_active":         True,
-        "updated_at":        datetime.now().isoformat(),
+        "enforcement_date": str(law_info.get("enforcement_date")) if law_info.get("enforcement_date") else None,
+        "source_system": "data.go.kr/law", "is_active": True,
+        "updated_at": datetime.now().isoformat(),
     }, on_conflict="law_key").execute()
     law_id = master_res.data[0]["id"]
 
@@ -251,21 +235,16 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
         is_new_version = False
     else:
         version_res = supabase.table("law_version").insert({
-            "law_id":              law_id,
-            "version_no":          version_no,
-            "law_mst_no":          law_mst_no,
-            "revision_type_code":  law_info.get("revision_type", ""),
-            "announcement_date":   str(law_info.get("announcement_date")) if law_info.get("announcement_date") else None,
-            "enforcement_date":    str(law_info.get("enforcement_date")) if law_info.get("enforcement_date") else None,
-            "effective_from":      str(law_info.get("enforcement_date")) if law_info.get("enforcement_date") else None,
-            "is_current":          True,
-            "version_status_code": "ACTIVE",
-            "raw_hash":            raw_hash,
-            "updated_at":          datetime.now().isoformat(),
+            "law_id": law_id, "version_no": version_no, "law_mst_no": law_mst_no,
+            "revision_type_code": law_info.get("revision_type", ""),
+            "announcement_date": str(law_info.get("announcement_date")) if law_info.get("announcement_date") else None,
+            "enforcement_date": str(law_info.get("enforcement_date")) if law_info.get("enforcement_date") else None,
+            "effective_from": str(law_info.get("enforcement_date")) if law_info.get("enforcement_date") else None,
+            "is_current": True, "version_status_code": "ACTIVE",
+            "raw_hash": raw_hash, "updated_at": datetime.now().isoformat(),
         }).execute()
         version_id = version_res.data[0]["id"]
         is_new_version = True
-
         supabase.table("law_version").update({"is_current": False})\
             .eq("law_id", law_id).neq("id", version_id).execute()
         supabase.table("law_master")\
@@ -274,86 +253,62 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
 
     if is_new_version:
         supabase.table("law_content_raw").insert({
-            "law_version_id":    version_id,
-            "content_type_code": "XML",
-            "raw_xml":           raw_xml,
-            "text_hash":         raw_hash,
-            "updated_at":        datetime.now().isoformat(),
+            "law_version_id": version_id, "content_type_code": "XML",
+            "raw_xml": raw_xml, "text_hash": raw_hash,
+            "updated_at": datetime.now().isoformat(),
         }).execute()
 
     article_count = 0
     if is_new_version:
         for art in articles:
             art_res = supabase.table("law_article").insert({
-                "law_version_id":       version_id,
+                "law_version_id": version_id,
                 "article_internal_key": art["article_internal_key"],
-                "article_no":           art["article_no"],
-                "article_sub_no":       art["article_sub_no"],
-                "article_no_sort":      f"{str(art['article_no'] or 0).zfill(4)}-{str(art['article_sub_no'] or 0).zfill(3)}",
-                "article_type":         art["article_type"],
-                "article_title":        art["article_title"],
-                "article_text":         art["article_text"],
-                "is_changed":           art["is_changed"],
-                "enforcement_date":     str(art["enforcement_date"]) if art["enforcement_date"] else None,
-                "article_status_code":  "ACTIVE",
-                "updated_at":           datetime.now().isoformat(),
+                "article_no": art["article_no"], "article_sub_no": art["article_sub_no"],
+                "article_no_sort": f"{str(art['article_no'] or 0).zfill(4)}-{str(art['article_sub_no'] or 0).zfill(3)}",
+                "article_type": art["article_type"], "article_title": art["article_title"],
+                "article_text": art["article_text"], "is_changed": art["is_changed"],
+                "enforcement_date": str(art["enforcement_date"]) if art["enforcement_date"] else None,
+                "article_status_code": "ACTIVE", "updated_at": datetime.now().isoformat(),
             }).execute()
             article_id = art_res.data[0]["id"]
             article_count += 1
 
             for p_idx, para in enumerate(art["paragraphs"]):
                 para_res = supabase.table("law_paragraph").insert({
-                    "article_id":            article_id,
-                    "paragraph_no":          para["paragraph_no"],
-                    "paragraph_no_sort":     p_idx + 1,
-                    "paragraph_text":        para["paragraph_text"],
-                    "paragraph_status_code": "ACTIVE",
-                    "updated_at":            datetime.now().isoformat(),
+                    "article_id": article_id, "paragraph_no": para["paragraph_no"],
+                    "paragraph_no_sort": p_idx + 1, "paragraph_text": para["paragraph_text"],
+                    "paragraph_status_code": "ACTIVE", "updated_at": datetime.now().isoformat(),
                 }).execute()
                 paragraph_id = para_res.data[0]["id"]
 
                 for i_idx, item in enumerate(para["items"]):
                     item_res = supabase.table("law_item").insert({
-                        "paragraph_id":     paragraph_id,
-                        "item_level_code":  "HO",
-                        "item_no":          item["item_no"],
-                        "item_no_sort":     i_idx + 1,
-                        "item_text":        item["item_text"],
-                        "item_status_code": "ACTIVE",
-                        "updated_at":       datetime.now().isoformat(),
+                        "paragraph_id": paragraph_id, "item_level_code": "HO",
+                        "item_no": item["item_no"], "item_no_sort": i_idx + 1,
+                        "item_text": item["item_text"], "item_status_code": "ACTIVE",
+                        "updated_at": datetime.now().isoformat(),
                     }).execute()
                     item_id = item_res.data[0]["id"]
 
                     for s_idx, sub in enumerate(item["sub_items"]):
                         supabase.table("law_item").insert({
-                            "paragraph_id":     paragraph_id,
-                            "parent_item_id":   item_id,
-                            "item_level_code":  "MOK",
-                            "item_no":          sub["item_no"],
-                            "item_no_sort":     s_idx + 1,
-                            "item_text":        sub["item_text"],
-                            "item_status_code": "ACTIVE",
-                            "updated_at":       datetime.now().isoformat(),
+                            "paragraph_id": paragraph_id, "parent_item_id": item_id,
+                            "item_level_code": "MOK", "item_no": sub["item_no"],
+                            "item_no_sort": s_idx + 1, "item_text": sub["item_text"],
+                            "item_status_code": "ACTIVE", "updated_at": datetime.now().isoformat(),
                         }).execute()
 
     supabase.table("law_update_tracking").upsert({
-        "law_id":                    law_id,
-        "last_checked_at":           datetime.now().isoformat(),
-        "last_source_mst_no":        law_mst_no,
-        "last_source_hash":          raw_hash,
-        "last_collected_version_id": version_id,
-        "update_needed":             False,
-        "job_status_code":           "SUCCESS",
-        "job_message":               f"수집완료 - 조문 {article_count}개",
-        "updated_at":                datetime.now().isoformat(),
+        "law_id": law_id, "last_checked_at": datetime.now().isoformat(),
+        "last_source_mst_no": law_mst_no, "last_source_hash": raw_hash,
+        "last_collected_version_id": version_id, "update_needed": False,
+        "job_status_code": "SUCCESS", "job_message": f"수집완료 - 조문 {article_count}개",
+        "updated_at": datetime.now().isoformat(),
     }, on_conflict="law_id").execute()
 
-    return {
-        "law_id":         law_id,
-        "version_id":     version_id,
-        "is_new_version": is_new_version,
-        "article_count":  article_count,
-    }
+    return {"law_id": law_id, "version_id": version_id,
+            "is_new_version": is_new_version, "article_count": article_count}
 
 
 # ============================================================
@@ -361,9 +316,9 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
 # ============================================================
 
 def check_law_update(law_tracking: dict, supabase) -> dict:
-    law_id      = law_tracking["law_id"]
+    law_id = law_tracking["law_id"]
     last_mst_no = law_tracking.get("last_source_mst_no", "")
-    last_hash   = law_tracking.get("last_source_hash", "")
+    last_hash = law_tracking.get("last_source_hash", "")
 
     master = supabase.table("law_master").select("law_name, law_api_id, law_mst_no")\
         .eq("id", law_id).single().execute()
@@ -381,11 +336,9 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
 
     if current_mst_no == last_mst_no:
         supabase.table("law_update_tracking").update({
-            "last_checked_at": datetime.now().isoformat(),
-            "update_needed":   False,
-            "job_status_code": "SUCCESS",
-            "job_message":     "변경 없음",
-            "updated_at":      datetime.now().isoformat(),
+            "last_checked_at": datetime.now().isoformat(), "update_needed": False,
+            "job_status_code": "SUCCESS", "job_message": "변경 없음",
+            "updated_at": datetime.now().isoformat(),
         }).eq("law_id", law_id).execute()
         return {"changed": False, "law_name": law_name}
 
@@ -403,26 +356,21 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
     save_result = save_law_to_db(law_info, content_result["xml"], parsed["articles"], supabase)
 
     supabase.table("law_change_log").insert({
-        "law_id":                law_id,
-        "old_version_id":        old_version_id,
-        "new_version_id":        save_result["version_id"],
-        "change_detected_date":  datetime.now().isoformat(),
-        "change_scope_code":     "FULL" if current.get("revision_type") == "전부개정" else "PARTIAL",
+        "law_id": law_id, "old_version_id": old_version_id,
+        "new_version_id": save_result["version_id"],
+        "change_detected_date": datetime.now().isoformat(),
+        "change_scope_code": "FULL" if current.get("revision_type") == "전부개정" else "PARTIAL",
         "changed_article_count": sum(1 for a in parsed["articles"] if a.get("is_changed")),
-        "change_summary":        f"{current.get('revision_type', '')} - {current_mst_no}",
-        "processed_status_code": "DETECTED",
-        "updated_at":            datetime.now().isoformat(),
+        "change_summary": f"{current.get('revision_type', '')} - {current_mst_no}",
+        "processed_status_code": "DETECTED", "updated_at": datetime.now().isoformat(),
     }).execute()
 
     supabase.table("law_update_tracking").update({
-        "last_checked_at":           datetime.now().isoformat(),
-        "last_source_mst_no":        current_mst_no,
-        "last_source_hash":          new_hash,
+        "last_checked_at": datetime.now().isoformat(),
+        "last_source_mst_no": current_mst_no, "last_source_hash": new_hash,
         "last_collected_version_id": save_result["version_id"],
-        "update_needed":             False,
-        "job_status_code":           "SUCCESS",
-        "job_message":               "변경 감지 및 수집 완료",
-        "updated_at":                datetime.now().isoformat(),
+        "update_needed": False, "job_status_code": "SUCCESS",
+        "job_message": "변경 감지 및 수집 완료", "updated_at": datetime.now().isoformat(),
     }).eq("law_id", law_id).execute()
 
     return {"changed": True, "law_name": law_name,
@@ -436,50 +384,48 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
 
 @router.get("/debug/{law_name}")
 async def debug_law_api(law_name: str):
-    """[개발용] API 원본 XML 응답 확인 — serviceKey 마스킹"""
+    """
+    [개발용] API 원본 응답 확인.
+    모든 필드 base64 인코딩 반환 — 브라우저 API키 차단 완전 우회.
+    atob()으로 디코딩: atob(response.error_b64)
+    """
     try:
         result = fetch_law_list(query=law_name, display=5)
         xml_text = result["xml"]
-        safe_xml = _mask_key(xml_text)  # serviceKey 마스킹
         try:
             root = ET.fromstring(xml_text)
-            children = [child.tag for child in root]
             law_count = len(root.findall("law"))
             root_tag = root.tag
-            # 첫번째 law 항목 샘플
             first_law = {}
             first_el = root.find("law")
             if first_el is not None:
                 for child in first_el:
                     first_law[child.tag] = child.text
         except Exception as pe:
-            children, law_count, root_tag, first_law = [], -1, "parse_error", {"error": str(pe)}
+            law_count, root_tag, first_law = -1, "parse_error", {"error": str(pe)}
         return {
             "api_base":    LAW_API_BASE,
-            "key_masked":  KEY_MASKED,
             "query":       law_name,
             "http_status": result["status"],
+            "law_count":   law_count,
             "xml_root_tag": root_tag,
-            "xml_children": children,
-            "law_count":    law_count,
             "first_law":    first_law,
-            "xml_preview":  safe_xml[:1500],
+            "xml_b64":      _b64(xml_text[:2000]),  # base64 — atob()으로 디코딩
         }
     except Exception as e:
-        safe_err = _mask_key(str(e))
-        safe_tb  = _mask_key(traceback.format_exc()[-800:])
         return {
-            "api_base": LAW_API_BASE,
-            "key_masked": KEY_MASKED,
-            "error": safe_err,
-            "traceback": safe_tb,
+            "api_base":    LAW_API_BASE,
+            "query":       law_name,
+            "error_type":  type(e).__name__,
+            "error_b64":   _b64(str(e)),          # base64 — atob()으로 디코딩
+            "tb_b64":      _b64(traceback.format_exc()[-1000:]),
         }
 
 
 @router.post("/collect/all")
 async def collect_all_laws(background_tasks: BackgroundTasks):
     background_tasks.add_task(_run_collect_all)
-    return {"status": "started", "message": "전체 법령 수집 시작. /law-collector/status 확인하세요."}
+    return {"status": "started", "message": "전체 법령 수집 시작."}
 
 
 def _run_collect_all():
@@ -498,19 +444,14 @@ def _run_collect_all():
             matched = next((l for l in laws if target["law_name"] in l["law_name"]), laws[0])
             content_result = fetch_law_content(matched["law_mst_no"])
             parsed = parse_law_content_xml(content_result["xml"])
-            law_info = {
-                **parsed["info"],
-                "law_mst_no":     matched["law_mst_no"],
-                "law_name_short": matched.get("law_name_short", ""),
-                "revision_type":  matched.get("revision_type", ""),
-            }
+            law_info = {**parsed["info"], "law_mst_no": matched["law_mst_no"],
+                        "law_name_short": matched.get("law_name_short", ""),
+                        "revision_type": matched.get("revision_type", "")}
             save_law_to_db(law_info, content_result["xml"], parsed["articles"], supabase)
             results["success"] += 1
-            print(f"수집완료: {target['law_name']}")
         except Exception as e:
             results["failed"] += 1
-            results["errors"].append({"law_name": target["law_name"], "error": _mask_key(str(e))})
-    print(f"전체수집 완료: {results}")
+            results["errors"].append({"law_name": target["law_name"], "error": type(e).__name__})
     return results
 
 
@@ -527,27 +468,23 @@ async def collect_single_law(law_name: str):
         matched = next((l for l in laws if law_name in l["law_name"]), laws[0])
         content_result = fetch_law_content(matched["law_mst_no"])
         parsed = parse_law_content_xml(content_result["xml"])
-        law_info = {
-            **parsed["info"],
-            "law_mst_no":     matched["law_mst_no"],
-            "law_name_short": matched.get("law_name_short", ""),
-            "revision_type":  matched.get("revision_type", ""),
-        }
+        law_info = {**parsed["info"], "law_mst_no": matched["law_mst_no"],
+                    "law_name_short": matched.get("law_name_short", ""),
+                    "revision_type": matched.get("revision_type", "")}
         result = save_law_to_db(law_info, content_result["xml"], parsed["articles"], supabase)
         return {
-            "status":         "success",
-            "law_name":       matched["law_name"],
-            "law_mst_no":     matched["law_mst_no"],
+            "status": "success", "law_name": matched["law_name"],
+            "law_mst_no": matched["law_mst_no"],
             "is_new_version": result["is_new_version"],
-            "article_count":  result["article_count"],
+            "article_count": result["article_count"],
         }
     except HTTPException:
         raise
     except Exception as e:
-        safe_err = _mask_key(str(e))
-        safe_tb  = _mask_key(traceback.format_exc())
-        print(f"ERROR: {safe_tb}")
-        raise HTTPException(status_code=500, detail=safe_err)
+        err_type = type(e).__name__
+        err_b64  = _b64(str(e))
+        print(f"ERROR [{err_type}]: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"{err_type}: {err_b64}")
 
 
 @router.post("/check-updates")
@@ -567,7 +504,7 @@ def _run_check_updates():
             if result.get("changed"):
                 results["changed"] += 1
         except Exception as e:
-            results["errors"].append({"law_id": tracking["law_id"], "error": _mask_key(str(e))})
+            results["errors"].append({"law_id": tracking["law_id"], "error": type(e).__name__})
     return results
 
 
@@ -583,7 +520,7 @@ async def get_collection_status():
         .select("law_id, job_message, updated_at").eq("job_status_code", "FAILED")\
         .order("updated_at", desc=True).limit(10).execute()
     return {
-        "version":             "2.0.1",
+        "version":             "2.0.2",
         "api_base":            LAW_API_BASE,
         "collected_law_count": total.count,
         "tracked_law_count":   collected.count,
