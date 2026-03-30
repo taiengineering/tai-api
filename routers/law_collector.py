@@ -21,7 +21,8 @@ router = APIRouter(prefix="/law-collector", tags=["법령 수집기"])
 # 설정
 # ============================================================
 
-LAW_API_OC   = os.environ.get("LAW_API_OC")
+# fix: LAW_API_OC 환경변수 없으면 "taieng" 기본값 사용
+LAW_API_OC   = os.environ.get("LAW_API_OC", "taieng")
 LAW_API_BASE = "http://www.law.go.kr/DRF"
 
 DEFAULT_HEADERS = {
@@ -645,4 +646,5 @@ async def get_collection_status():
         "change_log_count":     changed.count,
         "pending_parse_count":  pending.count,
         "recent_failed":        failed.data,
+        "law_api_oc":           LAW_API_OC,  # 디버그용 — 환경변수 확인
     }
