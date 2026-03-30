@@ -18,7 +18,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "4.3.3"
+ENGINE_VERSION = "4.4.0"
 
 
 # ──────────────────────────────────────────────
@@ -278,6 +278,15 @@ def format_rule_result(rule: dict, source_label: str = "") -> dict:
     }
 
 
+def _calc_due_date(due_days) -> dict:
+    if not due_days:
+        return {}
+    d = int(due_days)
+    due_date = (date.today() + timedelta(days=d)).isoformat()
+    urgency = "IMMEDIATE" if d <= 3 else ("URGENT" if d <= 14 else "NORMAL")
+    return {"due_days": d, "due_date": due_date, "urgency": urgency}
+
+
 def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
     """master_building_legal_rules 행 → 프론트/기존 format_rule_result 호환."""
     desc = (rule.get("obligation_summary") or rule.get("remarks") or "").strip()
@@ -287,10 +296,12 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
         "law_name":              rule.get("law_name") or "",
         "law_article":           rule.get("law_article") or "",
         "description":           desc,
+        "obligation_summary":    desc,
         "appointment_target":    rule.get("appointment_target_code") or "",
         "qualification_required": rule.get("qualification_type") or "",
         "inspection_cycle":      "",
-        "penalty_amount":        (rule.get("penalty_summary") or "") or "",
+        "penalty_amount":        rule.get("penalty_summary") or "",
+        "penalty_summary":       rule.get("penalty_summary") or "",
         "source_label":          "",
         "obligation_type":       _resolve_obligation_type(rule),
         "appointment_required":  bool(rule.get("appointment_required")),
@@ -298,6 +309,11 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
         "action_required":       bool(rule.get("action_required")),
         "report_required":       bool(rule.get("report_required")),
         "notify_required":       bool(rule.get("notify_required")),
+        "form_code":             rule.get("form_code") or "",
+        "form_url":              rule.get("form_url") or "",
+        "due_days":              rule.get("due_days"),
+        "due_info":              _calc_due_date(rule.get("due_days")),
+        "sector":                rule.get("sector") or "",
     }
 
 
@@ -610,10 +626,8 @@ CONDITION_CODE_TO_CONTEXT_KEY: Dict[str, str] = {
 
 
 def _normalize_sector_db(sector: str) -> str:
-    u = sector.strip().upper()
-    if u == "SPECIAL_FACILITY":
-        return "SPECIAL"
-    return u
+    # DB에 SPECIAL_FACILITY로 저장되어 있으므로 변환하지 않음
+    return sector.strip().upper()
 
 
 def _truthy(v: Any) -> bool:
@@ -872,7 +886,8 @@ async def diagnose_step1(body: DiagnoseStep1Body):
             "inspection":  len(triggered["inspection"]),
             "action":      len(triggered["action"]),
             "report":      len(triggered["report"]),
-            "notify":      len(triggered["notify"]),   # ← 핵심 수정
+            "notify":      len(triggered["notify"]),
+            "form_linked": sum(1 for r in applicable if (r.get("form_code") or "").strip()),
         },
     }
     return {"status": "success", "data": result_data}

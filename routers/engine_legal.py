@@ -173,17 +173,34 @@ async def engine_legal_laws(
             for vid, aids in art_by_version.items():
                 hang_counts[vid] = sum(para_cnt_by_article.get(aid, 0) for aid in aids)
 
+        # rule_count: law_name 기준 집계
+        rule_counts: Dict[str, int] = defaultdict(int)
+        law_names = [r["law_name"] for r in rows if r.get("law_name")]
+        if law_names:
+            for chunk in _chunked(law_names):
+                rc = (
+                    supabase.table("master_building_legal_rules")
+                    .select("law_name")
+                    .in_("law_name", chunk)
+                    .eq("is_active", True)
+                    .execute()
+                )
+                for rr in rc.data or []:
+                    rule_counts[rr["law_name"]] += 1
+
         items = []
         for r in rows:
             vid = r.get("current_version_id")
             vs = str(vid) if vid else ""
             lt = r.get("law_type_code") or ""
+            ln = r.get("law_name") or ""
             items.append(
                 {
                     **r,
                     "law_type_label": LAW_TYPE_LABEL.get(lt, lt or "-"),
                     "article_count": article_counts.get(vs, 0),
                     "hang_count": hang_counts.get(vs, 0),
+                    "rule_count": rule_counts.get(ln, 0),
                 }
             )
 
