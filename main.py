@@ -1,5 +1,5 @@
-# main.py — v4.3.0
-# feat: 크론 관리 시스템 (APScheduler + DB 연동)
+# main.py — v4.3.1
+# feat: 별표 데이터 API (byulpyo) + 크론 관리 시스템 (APScheduler + DB 연동)
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -24,6 +24,7 @@ from routers.notifications           import router as notifications_router
 from routers.equipment_assets        import router as equipment_assets_router
 from routers.engine_equipment        import router as engine_equipment_router
 from routers.engine_model            import router as engine_model_router
+from routers.engine_legal            import router as engine_legal_router
 from routers.personnel               import router as personnel_router
 from routers.repair                  import router as repair_router
 from routers.biz_verify              import router as biz_verify_router
@@ -42,6 +43,7 @@ from routers.inspection_checklist    import router as inspection_router
 from routers.admin_stats             import router as admin_stats_router
 from routers.law_collector           import router as law_collector_router
 from routers.cron_manager            import router as cron_manager_router
+from routers.byulpyo                 import router as byulpyo_router
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +69,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="TAI API",
-    version="4.3.0",
+    version="4.3.1",
     description="TAI 산업안전 플랫폼 API",
     lifespan=lifespan,
 )
@@ -111,6 +113,7 @@ app.include_router(notifications_router)
 app.include_router(equipment_assets_router)
 app.include_router(engine_equipment_router)
 app.include_router(engine_model_router)
+app.include_router(engine_legal_router)
 app.include_router(personnel_router)
 app.include_router(repair_router)
 app.include_router(biz_verify_router)
@@ -129,12 +132,13 @@ app.include_router(inspection_router)
 app.include_router(admin_stats_router)
 app.include_router(law_collector_router)
 app.include_router(cron_manager_router)
+app.include_router(byulpyo_router)
 
 
 # ── 헬스체크 ─────────────────────────────────────────────
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "4.3.0"}
+    return {"status": "ok", "service": "TAI API", "version": "4.3.1"}
 
 
 @app.get("/health")
@@ -149,4 +153,4 @@ def health():
         cron_status = f"{len(scheduler.get_jobs())}개 등록" if scheduler.running else "중지"
     except Exception:
         cron_status = "미초기화"
-    return {"status": "healthy", "server_ip": ip, "version": "4.3.0", "cron": cron_status}
+    return {"status": "healthy", "server_ip": ip, "version": "4.3.1", "cron": cron_status}
