@@ -54,6 +54,59 @@ class DiagnosisReportUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+class RepairBrokerageUpdate(BaseModel):
+    repair_type_name: Optional[str] = None
+    amount_from: Optional[int] = None
+    amount_to: Optional[int] = None
+    commission_rate: Optional[float] = None
+    commission_fixed: Optional[int] = None
+    commission_type: Optional[str] = None
+    urgent_type: Optional[str] = None
+    urgent_surcharge_rate: Optional[float] = None
+    warranty_period_month: Optional[int] = None
+    vendor_monthly_fee: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+class SafetyManagementUpdate(BaseModel):
+    plan_name: Optional[str] = None
+    worker_count_from: Optional[int] = None
+    worker_count_to: Optional[int] = None
+    risk_grade_code: Optional[str] = None
+    visit_count_per_month: Optional[int] = None
+    hours_per_visit: Optional[int] = None
+    base_monthly_fee: Optional[int] = None
+    contract_period_month: Optional[int] = None
+    long_term_discount_rate: Optional[float] = None
+    include_safety_manager: Optional[bool] = None
+    include_fire_manager: Optional[bool] = None
+    include_elec_manager: Optional[bool] = None
+    include_document: Optional[bool] = None
+    include_education: Optional[bool] = None
+    emergency_call_fee: Optional[int] = None
+    document_fee_per_report: Optional[int] = None
+    education_fee_per_hour: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+class ConsultingUpdate(BaseModel):
+    service_name: Optional[str] = None
+    consulting_type_code: Optional[str] = None
+    facility_area_from: Optional[int] = None
+    facility_area_to: Optional[int] = None
+    staff_grade_code: Optional[str] = None
+    staff_count: Optional[int] = None
+    work_days: Optional[int] = None
+    base_fee: Optional[int] = None
+    report_type_code: Optional[str] = None
+    report_fee: Optional[int] = None
+    include_redesign: Optional[bool] = None
+    include_recheck: Optional[bool] = None
+    urgent_surcharge_rate: Optional[float] = None
+    urgent_days_threshold: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
 # ── 변경 로그 기록 ────────────────────────────────────────────
 
 def _log_changes(sb, table_name: str, record_id: str, old: dict, new: dict, changed_by: str = None):
@@ -175,3 +228,81 @@ def list_change_logs(
     offset = (page - 1) * page_size
     res = q.order("changed_at", desc=True).range(offset, offset + page_size - 1).execute()
     return {"status": "success", "data": res.data}
+
+
+# ── 수리중개 수수료 ──────────────────────────────────────────
+
+@router.get("/repair-brokerage")
+def list_repair_brokerage():
+    sb = get_supabase()
+    res = sb.table("price_repair_brokerage").select("*").order("repair_type_code").execute()
+    return {"status": "success", "data": res.data}
+
+
+@router.patch("/repair-brokerage/{item_id}")
+def update_repair_brokerage(item_id: str, body: RepairBrokerageUpdate):
+    sb = get_supabase()
+    old_res = sb.table("price_repair_brokerage").select("*").eq("id", item_id).single().execute()
+    if not old_res.data:
+        raise HTTPException(status_code=404, detail="수리중개 요금을 찾을 수 없습니다")
+
+    update_data = {k: v for k, v in body.dict().items() if v is not None}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="변경할 항목이 없습니다")
+    update_data["updated_at"] = datetime.now().isoformat()
+
+    changed = _log_changes(sb, "price_repair_brokerage", item_id, old_res.data, update_data)
+    res = sb.table("price_repair_brokerage").update(update_data).eq("id", item_id).execute()
+    return {"status": "success", "data": res.data[0] if res.data else None, "changes_logged": changed}
+
+
+# ── 안전관리 대행 ─────────────────────────────────────────────
+
+@router.get("/safety-management")
+def list_safety_management():
+    sb = get_supabase()
+    res = sb.table("price_safety_management").select("*").order("worker_count_from").execute()
+    return {"status": "success", "data": res.data}
+
+
+@router.patch("/safety-management/{item_id}")
+def update_safety_management(item_id: str, body: SafetyManagementUpdate):
+    sb = get_supabase()
+    old_res = sb.table("price_safety_management").select("*").eq("id", item_id).single().execute()
+    if not old_res.data:
+        raise HTTPException(status_code=404, detail="안전관리 요금을 찾을 수 없습니다")
+
+    update_data = {k: v for k, v in body.dict().items() if v is not None}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="변경할 항목이 없습니다")
+    update_data["updated_at"] = datetime.now().isoformat()
+
+    changed = _log_changes(sb, "price_safety_management", item_id, old_res.data, update_data)
+    res = sb.table("price_safety_management").update(update_data).eq("id", item_id).execute()
+    return {"status": "success", "data": res.data[0] if res.data else None, "changes_logged": changed}
+
+
+# ── 컨설팅 ────────────────────────────────────────────────────
+
+@router.get("/consulting")
+def list_consulting():
+    sb = get_supabase()
+    res = sb.table("price_consulting").select("*").order("consulting_type_code").execute()
+    return {"status": "success", "data": res.data}
+
+
+@router.patch("/consulting/{item_id}")
+def update_consulting(item_id: str, body: ConsultingUpdate):
+    sb = get_supabase()
+    old_res = sb.table("price_consulting").select("*").eq("id", item_id).single().execute()
+    if not old_res.data:
+        raise HTTPException(status_code=404, detail="컨설팅 요금을 찾을 수 없습니다")
+
+    update_data = {k: v for k, v in body.dict().items() if v is not None}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="변경할 항목이 없습니다")
+    update_data["updated_at"] = datetime.now().isoformat()
+
+    changed = _log_changes(sb, "price_consulting", item_id, old_res.data, update_data)
+    res = sb.table("price_consulting").update(update_data).eq("id", item_id).execute()
+    return {"status": "success", "data": res.data[0] if res.data else None, "changes_logged": changed}

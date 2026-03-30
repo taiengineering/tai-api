@@ -385,3 +385,24 @@ async def complete_inspection(work_schedule_id: str, body: dict = None):
                 "data": {"work_schedule_id": work_schedule_id, "completed_at": completed_at, "summary": summary}}
     except HTTPException: raise
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 점검 일정 목록 ────────────────────────────────────────────
+
+@router.get("/schedules")
+async def list_inspection_schedules(
+    factory_id: str = None,
+    status_code: str = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+):
+    """점검 일정 목록 (work_schedules 기반)"""
+    supabase = get_supabase()
+    q = supabase.table("work_schedules").select("*", count="exact")
+    if factory_id:
+        q = q.eq("factory_id", factory_id)
+    if status_code:
+        q = q.eq("status_code", status_code)
+    offset = (page - 1) * page_size
+    res = q.order("planned_date", desc=True).range(offset, offset + page_size - 1).execute()
+    return {"status": "success", "data": res.data, "total": res.count or 0}
