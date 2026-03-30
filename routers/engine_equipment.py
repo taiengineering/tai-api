@@ -1,17 +1,19 @@
 """
-엔진 설비 마스터 관리 라우터 — v1.2.2
-v1.2.2: /list DB 측 range() 페이지로 교체 (Python 전체 조회 제거)
+엔진 설비 마스터 관리 라우터 — v4.3.2
+v4.3.2: stats 확장 + GET /assets-list + PATCH /assets/{asset_id}
+v1.2.2: /list DB 측 range() 페이지로 교체
 v1.2.1: /stats count 쿼리 제거 → MV 단일 조회
 v1.2.0: MV(engine_equipment_summary) 기반으로 /stats, /list 교체
 """
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
 from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/engine-equipment", tags=["엔진설비마스터"])
 
-VERSION = "1.2.2"
+VERSION = "4.3.2"
 
 CATEGORY_MAP = {
     "MECH":     "기계설비", "ELEC":     "전기설비", "FIRE":     "소방설비",
@@ -26,12 +28,24 @@ def _now_iso() -> str:
 
 
 # ─────────────────────────────────────────────────────
-# GET /engine-equipment/stats  (v1.2.1: MV 단일 조회)
+# Pydantic 모델
+# ─────────────────────────────────────────────────────
+
+class AssetPatchBody(BaseModel):
+    last_inspection_date:  Optional[date] = None
+    next_inspection_date:  Optional[date] = None
+    equipment_model_id:    Optional[str]  = None
+    is_legal_target:       Optional[bool] = None
+
+
+# ─────────────────────────────────────────────────────
+# GET /engine-equipment/stats  (v4.3.2: asset 통계 확장)
 # ─────────────────────────────────────────────────────
 @router.get("/stats")
 async def get_equipment_stats():
     supabase = get_supabase()
     try:
+        # MV 기반 기존 통계
         res = supabase.table("engine_equipment_summary").select(
             "source_facility_category, top_band, needs_review, process_count"
         ).execute()
@@ -55,7 +69,34 @@ async def get_equipment_stats():
 
         model_res = supabase.table("equipment_model_master").select("id", count="exact").limit(0).execute()
 
+        # ── v4.3.2: equipment_assets 통계 ──
+        asset_total_res = supabase.table("equipment_assets").select("id", count="exact").limit(0).execute()
+        asset_total = asset_total_res.count or 0
+
+        asset_no_model_res = supabase.table("equipment_assets").select("id", count="exact")\
+            .is_("equipment_model_id", "null").limit(0).execute()
+        asset_no_model = asset_no_model_res.count or 0
+
+        asset_no_insp_res = supabase.table("equipment_assets").select("id", count="exact")\
+            .is_("last_inspection_date", "null").limit(0).execute()
+        asset_no_inspection = asset_no_insp_res.count or 0
+
+        legal_target_res = supabase.table("master_legal_inspection_target").select("id", count="exact").limit(0).execute()
+        legal_target_count = legal_target_res.count or 0
+
+        # 법정검사 대상 중 equipment_assets에 asset_name 매칭 없는 추정치
+        # master_legal_inspection_target.equipment_name 기준으로 asset_name ILIKE 매칭 체크
+        legal_rows = supabase.table("master_legal_inspection_target").select("equipment_name").execute()
+        legal_names = [r.get("equipment_name", "") for r in (legal_rows.data or []) if r.get("equipment_name")]
+        unmapped_count = 0
+        for lname in legal_names:
+            chk = supabase.table("equipment_assets").select("id", count="exact")\
+                .ilike("asset_name", f"%{lname[:6]}%").limit(0).execute()
+            if (chk.count or 0) == 0:
+                unmapped_count += 1
+
         return {"status": "success", "data": {
+            # 기존
             "total_mapping_rows":    total_mappings,
             "unique_equipment":      total,
             "model_master_total":    model_res.count or 0,
@@ -65,8 +106,109 @@ async def get_equipment_stats():
                 k: {"count": v, "label": CATEGORY_MAP.get(k, k)}
                 for k, v in sorted(cat_count.items(), key=lambda x: -x[1])
             },
+            # v4.3.2 신규
+            "asset_registered_total":       asset_total,
+            "asset_no_model":               asset_no_model,
+            "asset_no_inspection":          asset_no_inspection,
+            "legal_inspection_target_count": legal_target_count,
+            "legal_inspection_unmapped":    unmapped_count,
             "version": VERSION,
         }}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────
+# GET /engine-equipment/assets-list  (v4.3.2 신규)
+# ─────────────────────────────────────────────────────
+@router.get("/assets-list")
+async def list_assets(
+    page:                int           = Query(1, ge=1),
+    page_size:           int           = Query(50, ge=1, le=200),
+    search:              Optional[str] = Query(None),
+    has_model:           Optional[bool] = Query(None),
+    no_inspection:       Optional[bool] = Query(None),
+    is_legal_target:     Optional[bool] = Query(None),
+    equipment_type_code: Optional[str] = Query(None),
+):
+    supabase = get_supabase()
+    try:
+        fields = (
+            "id, asset_name, asset_code, equipment_type_code, equipment_category, "
+            "manufacturer, install_year, is_legal_target, last_inspection_date, "
+            "next_inspection_date, equipment_model_id, factory_id, is_operating"
+        )
+
+        def _apply_filters(q):
+            if search:
+                q = q.ilike("asset_name", f"%{search}%")
+            if has_model is True:
+                q = q.not_.is_("equipment_model_id", "null")
+            elif has_model is False:
+                q = q.is_("equipment_model_id", "null")
+            if no_inspection is True:
+                q = q.is_("last_inspection_date", "null")
+            elif no_inspection is False:
+                q = q.not_.is_("last_inspection_date", "null")
+            if is_legal_target is not None:
+                q = q.eq("is_legal_target", is_legal_target)
+            if equipment_type_code:
+                q = q.eq("equipment_type_code", equipment_type_code)
+            return q
+
+        # count
+        count_q = _apply_filters(
+            supabase.table("equipment_assets").select("id", count="exact")
+        )
+        total = (count_q.limit(0).execute().count) or 0
+
+        # data
+        offset = (page - 1) * page_size
+        data_q = _apply_filters(
+            supabase.table("equipment_assets").select(fields)
+        )
+        data_q = data_q.order("created_at", desc=True).range(offset, offset + page_size - 1)
+        res = data_q.execute()
+
+        return {
+            "status": "success",
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if total else 0,
+            "data": res.data or [],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────
+# PATCH /engine-equipment/assets/{asset_id}  (v4.3.2 신규)
+# ─────────────────────────────────────────────────────
+@router.patch("/assets/{asset_id}")
+async def patch_asset(asset_id: str, body: AssetPatchBody):
+    supabase = get_supabase()
+    try:
+        update_data = body.model_dump(exclude_none=True)
+        if not update_data:
+            raise HTTPException(status_code=400, detail="수정할 항목이 없습니다.")
+
+        # date → string 변환
+        for key in ("last_inspection_date", "next_inspection_date"):
+            if key in update_data and isinstance(update_data[key], date):
+                update_data[key] = update_data[key].isoformat()
+
+        update_data["updated_at"] = _now_iso()
+
+        res = supabase.table("equipment_assets").update(update_data)\
+            .eq("id", asset_id).execute()
+
+        if not res.data:
+            raise HTTPException(status_code=404, detail="자산을 찾을 수 없습니다.")
+
+        return {"status": "success", "data": res.data[0]}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -83,19 +225,16 @@ async def list_equipment_master(
     page:         int = Query(1, ge=1),
     page_size:    int = Query(50, ge=1, le=200),
 ):
-    """MV DB 측 페이지 — Python 전체 조회 제거"""
+    """MV DB 측 페이지"""
     supabase = get_supabase()
     try:
-        # count 쿼리로 total 먼저 파악
         count_q = supabase.table("engine_equipment_summary").select("facility_name_std", count="exact")
         if category:     count_q = count_q.eq("source_facility_category", category)
         if top_band:     count_q = count_q.eq("top_band", top_band)
         if needs_review is not None: count_q = count_q.eq("needs_review", needs_review)
         if search:       count_q = count_q.ilike("facility_name_std", f"%{search}%")
-        count_res = count_q.limit(0).execute()
-        total = count_res.count or 0
+        total = (count_q.limit(0).execute().count) or 0
 
-        # 데이터 쿼리 (DB 측 range)
         offset = (page - 1) * page_size
         data_q = supabase.table("engine_equipment_summary").select("*")
         if category:     data_q = data_q.eq("source_facility_category", category)
