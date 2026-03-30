@@ -19,14 +19,8 @@ router = APIRouter(prefix="/law-collector", tags=["법령 수집기"])
 # 설정
 # ============================================================
 
-LAW_SERVICE_KEY = os.environ.get(
-    "LAW_SERVICE_KEY",
-    os.environ.get(
-        "BUILDING_API_KEY",
-        "da4e826323c2c9fef9f325bd4e39a3765d06ac1b582695bcbc475bc0a076255b"
-    )
-)
-LAW_API_BASE = "https://apis.data.go.kr/1170000/law"
+LAW_API_OC   = os.environ.get("LAW_API_OC", "taieng")
+LAW_API_BASE = "http://www.law.go.kr/DRF"
 
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; TAI-LawCollector/2.0)",
@@ -91,13 +85,9 @@ def law_type_name_to_code(name: str) -> str:
 # ============================================================
 
 def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
-    url = f"{LAW_API_BASE}/lawSearchList.do"
+    url = f"{LAW_API_BASE}/lawSearch.do"
     params = {
-        "serviceKey": LAW_SERVICE_KEY,
-        "query":      query,
-        "numOfRows":  display,
-        "pageIndex":  page,
-        "type":       "xml",
+        "OC": LAW_API_OC, "target": "law", "type": "XML", "query": query, "display": display, "page": page,
     }
     resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=30)
     resp.encoding = "utf-8"
@@ -108,9 +98,7 @@ def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
 def fetch_law_content(mst_no: str) -> dict:
     url = f"{LAW_API_BASE}/lawService.do"
     params = {
-        "serviceKey": LAW_SERVICE_KEY,
-        "MST":        mst_no,
-        "type":       "xml",
+        "OC": LAW_API_OC, "target": "law", "MST": mst_no, "type": "XML",
     }
     resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=60)
     resp.encoding = "utf-8"
@@ -550,7 +538,7 @@ async def get_collection_status():
         .select("law_id, job_message, updated_at").eq("job_status_code", "FAILED")\
         .order("updated_at", desc=True).limit(10).execute()
     return {
-        "version":             "2.0.3",
+        "version":             "2.1.0",
         "api_base":            LAW_API_BASE,
         "collected_law_count": total.count,
         "tracked_law_count":   collected.count,
