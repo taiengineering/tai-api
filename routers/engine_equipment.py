@@ -1,5 +1,6 @@
 """
-엔진 설비 마스터 관리 라우터 — v4.3.2
+엔진 설비 마스터 관리 라우터 — v4.3.3
+v4.3.3: assets-list 응답을 data.items 형태로 통일, page_size 최대 5000, 행 보강(has_model 등)
 v4.3.2: stats 확장 + GET /assets-list + PATCH /assets/{asset_id}
 v1.2.2: /list DB 측 range() 페이지로 교체
 v1.2.1: /stats count 쿼리 제거 → MV 단일 조회
@@ -13,7 +14,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/engine-equipment", tags=["엔진설비마스터"])
 
-VERSION = "4.3.2"
+VERSION = "4.3.3"
 
 CATEGORY_MAP = {
     "MECH":     "기계설비", "ELEC":     "전기설비", "FIRE":     "소방설비",
@@ -35,6 +36,7 @@ class AssetPatchBody(BaseModel):
     last_inspection_date:  Optional[date] = None
     next_inspection_date:  Optional[date] = None
     equipment_model_id:    Optional[str]  = None
+    model_id:              Optional[str]  = None  # 별칭 → equipment_model_id
     is_legal_target:       Optional[bool] = None
 
 
@@ -119,12 +121,23 @@ async def get_equipment_stats():
 
 
 # ─────────────────────────────────────────────────────
-# GET /engine-equipment/assets-list  (v4.3.2 신규)
+# GET /engine-equipment/assets-list  (v4.3.3: 어드민과 동일 스키마)
 # ─────────────────────────────────────────────────────
+def _enrich_asset_row(row: dict) -> dict:
+    """프론트 calcEquipScore / 표시용 필드"""
+    mid = row.get("equipment_model_id") or row.get("model_id")
+    row["has_model"] = mid is not None
+    row["facility_category"] = row.get("equipment_type_code") or ""
+    row["rule_count"] = 0
+    row["has_inspection"] = bool(row.get("last_inspection_date"))
+    row["has_failure"] = False
+    return row
+
+
 @router.get("/assets-list")
 async def list_assets(
     page:                int           = Query(1, ge=1),
-    page_size:           int           = Query(50, ge=1, le=200),
+    page_size:           int           = Query(50, ge=1, le=5000),
     search:              Optional[str] = Query(None),
     has_model:           Optional[bool] = Query(None),
     no_inspection:       Optional[bool] = Query(None),
@@ -133,15 +146,9 @@ async def list_assets(
 ):
     supabase = get_supabase()
     try:
-        fields = (
-            "id, asset_name, asset_code, equipment_type_code, equipment_category, "
-            "manufacturer, install_year, is_legal_target, last_inspection_date, "
-            "next_inspection_date, equipment_model_id, factory_id, is_operating"
-        )
-
         def _apply_filters(q):
             if search:
-                q = q.ilike("asset_name", f"%{search}%")
+                q = q.ilike("asset_name", f"%{search.strip()}%")
             if has_model is True:
                 q = q.not_.is_("equipment_model_id", "null")
             elif has_model is False:
@@ -156,27 +163,25 @@ async def list_assets(
                 q = q.eq("equipment_type_code", equipment_type_code)
             return q
 
-        # count
-        count_q = _apply_filters(
-            supabase.table("equipment_assets").select("id", count="exact")
-        )
+        count_q = _apply_filters(supabase.table("equipment_assets").select("id", count="exact"))
         total = (count_q.limit(0).execute().count) or 0
 
-        # data
         offset = (page - 1) * page_size
-        data_q = _apply_filters(
-            supabase.table("equipment_assets").select(fields)
-        )
+        data_q = _apply_filters(supabase.table("equipment_assets").select("*"))
         data_q = data_q.order("created_at", desc=True).range(offset, offset + page_size - 1)
         res = data_q.execute()
 
+        items = [_enrich_asset_row(dict(r)) for r in (res.data or [])]
+
         return {
             "status": "success",
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": (total + page_size - 1) // page_size if total else 0,
-            "data": res.data or [],
+            "data": {
+                "items": items,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": (total + page_size - 1) // page_size if total else 0,
+            },
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -192,6 +197,10 @@ async def patch_asset(asset_id: str, body: AssetPatchBody):
         update_data = body.model_dump(exclude_none=True)
         if not update_data:
             raise HTTPException(status_code=400, detail="수정할 항목이 없습니다.")
+        if "model_id" in update_data and "equipment_model_id" not in update_data:
+            update_data["equipment_model_id"] = update_data.pop("model_id")
+        elif "model_id" in update_data:
+            update_data.pop("model_id", None)
 
         # date → string 변환
         for key in ("last_inspection_date", "next_inspection_date"):
