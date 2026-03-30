@@ -1,10 +1,12 @@
 """
-법령 판정 엔진 라우터 — v4.3.3
+법령 판정 엔진 라우터 — v4.4.0
 =================================
+v4.4.0: diagnose/step1 DB 저장 추가
+  - factory_diagnosis_results INSERT (is_latest=True, 이전 항목 False 처리)
+  - diagnosis_rule_results 50건씩 배치 INSERT
+  - 응답에 diagnosis_id 포함
+  - factory_id 없는 익명 진단은 저장 안 함 (정상)
 v4.3.3: summary.notify 집계 버그 수정
-  - _classify_rules_db에 notify_required 분기 추가 (NOTIFY 룰이 action으로 떨어지던 문제)
-  - summary.report/notify를 applicable 전체에서 obligation_type + 플래그로 직접 집계
-  - rules_table에 NOTIFY 카테고리 정상 포함
 v4.3.2: diagnose/step1 개선 (factory_id Optional, flat params, obligation_type 완전 반영)
 v4.2.0: 3단계 진단 API 추가
 """
@@ -207,7 +209,6 @@ def _resolve_obligation_type(rule: dict) -> str:
     ot = (rule.get("obligation_type") or "").strip().upper()
     if ot:
         return ot
-    # 플래그 기반 fallback
     if rule.get("appointment_required"):
         return "APPOINT"
     if rule.get("notify_required"):
@@ -222,13 +223,11 @@ def _resolve_obligation_type(rule: dict) -> str:
 
 
 def _is_notify(rule: dict) -> bool:
-    """NOTIFY 여부 판정 — obligation_type 또는 notify_required 플래그."""
     ot = (rule.get("obligation_type") or "").strip().upper()
     return ot == "NOTIFY" or bool(rule.get("notify_required"))
 
 
 def _is_report(rule: dict) -> bool:
-    """REPORT 여부 판정 — obligation_type 또는 report_required 플래그 (NOTIFY 제외)."""
     ot = (rule.get("obligation_type") or "").strip().upper()
     if ot == "REPORT":
         return True
@@ -349,7 +348,6 @@ def _classify_rules_db(rules: List[Dict[str, Any]], triggered: Dict[str, List]) 
     """
     v4.3.3: notify_required 분기 추가.
     우선순위: appointment > inspection > notify > report > action
-    NOTIFY 룰이 report_required=False, action_required=False 이면 이전에 action으로 떨어지던 문제 수정.
     """
     for rule in rules:
         formatted = format_rule_result_db(rule)
@@ -359,7 +357,6 @@ def _classify_rules_db(rules: List[Dict[str, Any]], triggered: Dict[str, List]) 
         elif rule.get("inspection_required") or ot == "INSPECT":
             triggered["inspection"].append(formatted)
         elif rule.get("notify_required") or ot == "NOTIFY":
-            # NOTIFY는 별도 카테고리(triggered["notify"])로 분류
             triggered.setdefault("notify", []).append(formatted)
         elif rule.get("report_required") or ot == "REPORT":
             triggered["report"].append(formatted)
@@ -469,7 +466,7 @@ async def apply_legal_engine(
     body: Optional[dict] = None,
     mode: str = Query("all"),
 ):
-    """시설 등록 기반 법령 판정 (v4.3.3 — 하위 호환 유지)"""
+    """시설 등록 기반 법령 판정 (v4.4.0 — 하위 호환 유지)"""
     supabase = get_supabase()
     if body and body.get("mode"):
         mode = body["mode"]
@@ -579,7 +576,7 @@ async def apply_legal_engine_from_quote(quote_id: str):
 
 
 # ──────────────────────────────────────────────
-# Pydantic 모델 — v4.3.2: factory_id Optional, flat 파라미터 수용
+# Pydantic 모델
 # ──────────────────────────────────────────────
 
 class DiagnoseStep1Body(BaseModel):
@@ -588,7 +585,6 @@ class DiagnoseStep1Body(BaseModel):
     sector: str = Field(..., description="BUILDING | MANUFACTURING | CONSTRUCTION | SPECIAL_FACILITY")
     input: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
-    # flat 파라미터 직접 수용
     building_use_type: Optional[str] = None
     employee_count: Optional[int] = None
     floor_area: Optional[float] = None
@@ -626,7 +622,6 @@ CONDITION_CODE_TO_CONTEXT_KEY: Dict[str, str] = {
 
 
 def _normalize_sector_db(sector: str) -> str:
-    # DB에 SPECIAL_FACILITY로 저장되어 있으므로 변환하지 않음
     return sector.strip().upper()
 
 
@@ -741,7 +736,7 @@ def _evaluate_facility_conditions_db(facility_ctx: Dict[str, Any], rules: List[D
 
 
 # ──────────────────────────────────────────────
-# POST /legal-engine/diagnose/step1  v4.3.3
+# POST /legal-engine/diagnose/step1  v4.4.0
 # ──────────────────────────────────────────────
 
 @router.post("/diagnose/step1")
@@ -794,7 +789,7 @@ async def diagnose_step1(body: DiagnoseStep1Body):
     evaluated_at = datetime.now().isoformat()
     applicable, not_applicable = _evaluate_facility_conditions_db(facility_ctx, all_rules)
 
-    # v4.3.3: notify 별도 버킷 포함
+    # notify 별도 버킷 포함
     triggered: Dict[str, List] = {
         "appointment": [], "inspection": [], "notify": [], "report": [], "action": [], "not_applicable": [],
     }
@@ -810,7 +805,6 @@ async def diagnose_step1(body: DiagnoseStep1Body):
 
     law_names = sorted({x.get("law_name") for x in applicable if x.get("law_name")})
 
-    # ── obligations 구성 ──
     obligations: List[Dict[str, Any]] = []
     for key, label in [("appointment", "선임"), ("inspection", "점검"), ("action", "조치")]:
         if triggered[key]:
@@ -820,7 +814,6 @@ async def diagnose_step1(body: DiagnoseStep1Body):
     if triggered["notify"]:
         obligations.append({"category": "notify", "label": "보고", "items": triggered["notify"]})
 
-    # ── rules_table 구성 ──
     rules_table: List[Dict[str, Any]] = []
     for key, label in [("appointment", "선임"), ("inspection", "점검"), ("action", "조치")]:
         for row in triggered[key]:
@@ -856,7 +849,6 @@ async def diagnose_step1(body: DiagnoseStep1Body):
             "obligation":  (x.get("obligation_summary") or x.get("remarks") or "").strip(),
         })
 
-    # v4.3.3: summary는 triggered 버킷에서 직접 집계 (applicable 전체 기준)
     result_data = {
         "factory_id":                factory_id or None,
         "sector":                    sector_raw,
@@ -890,6 +882,62 @@ async def diagnose_step1(body: DiagnoseStep1Body):
             "form_linked": sum(1 for r in applicable if (r.get("form_code") or "").strip()),
         },
     }
+
+    # ── v4.4.0: DB 저장 (factory_id 있을 때만) ──────────────────────────
+    diagnosis_id = None
+    if factory_id:
+        # 1. 기존 is_latest=True 해제 (같은 factory_id + sector)
+        try:
+            supabase.table("factory_diagnosis_results") \
+                .update({"is_latest": False}) \
+                .eq("factory_id", factory_id) \
+                .eq("sector", sector_raw) \
+                .eq("is_latest", True) \
+                .execute()
+        except Exception:
+            pass
+
+        # 2. factory_diagnosis_results INSERT
+        try:
+            save_res = supabase.table("factory_diagnosis_results").insert({
+                "factory_id":      factory_id,
+                "sector":          sector_raw,
+                "diagnosis_stage": 1,
+                "input_data":      inp,
+                "result_data":     result_data,
+                "rule_count":      total_applicable,
+                "is_latest":       True,
+            }).execute()
+            if save_res.data:
+                diagnosis_id = save_res.data[0].get("id")
+        except Exception as e:
+            print(f"[DIAGNOSE STEP1] factory_diagnosis_results 저장 실패: {e}")
+
+        # 3. diagnosis_rule_results INSERT (50건씩 배치)
+        if diagnosis_id and applicable:
+            try:
+                rule_rows = []
+                for rule in applicable:
+                    rule_rows.append({
+                        "diagnosis_id": diagnosis_id,
+                        "rule_code":    rule.get("rule_id") or rule.get("rule_code") or "",
+                        "rule_name":    (rule.get("obligation_summary") or rule.get("remarks") or "").strip(),
+                        "law_name":     rule.get("law_name") or "",
+                        "law_article":  rule.get("law_article") or "",
+                        "obligation":   (rule.get("obligation_summary") or "").strip(),
+                        "due_date":     None,
+                        "status":       "PENDING",
+                        "form_code":    rule.get("form_code") or None,
+                    })
+                for i in range(0, len(rule_rows), 50):
+                    supabase.table("diagnosis_rule_results").insert(rule_rows[i:i + 50]).execute()
+            except Exception as e:
+                print(f"[DIAGNOSE STEP1] diagnosis_rule_results 저장 실패: {e}")
+
+    # diagnosis_id 응답에 포함
+    result_data["diagnosis_id"] = diagnosis_id
+    # ────────────────────────────────────────────────────────────────────
+
     return {"status": "success", "data": result_data}
 
 
