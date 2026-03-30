@@ -65,15 +65,24 @@ async def engine_legal_stats():
 
         rules_rows = (
             supabase.table("master_building_legal_rules")
-            .select("law_name")
+            .select("law_name,sector,obligation_type,form_code")
             .eq("is_active", True)
             .execute()
         )
         unmapped = 0
+        sector_cnt: dict = {}
+        type_cnt: dict = {}
+        form_unmapped = 0
         for r in rules_rows.data or []:
             ln = (r.get("law_name") or "").strip()
             if ln and ln not in name_set:
                 unmapped += 1
+            s = r.get("sector") or "UNKNOWN"
+            sector_cnt[s] = sector_cnt.get(s, 0) + 1
+            ot = r.get("obligation_type") or "OTHER"
+            type_cnt[ot] = type_cnt.get(ot, 0) + 1
+            if ot in ("REPORT", "NOTIFY") and not (r.get("form_code") or "").strip():
+                form_unmapped += 1
 
         return {
             "status": "success",
@@ -82,6 +91,9 @@ async def engine_legal_stats():
                 "total_articles": la.count or 0,
                 "total_rules": ru.count or 0,
                 "unmapped_rules": unmapped,
+                "rules_by_sector": sector_cnt,
+                "rules_by_type": type_cnt,
+                "form_unmapped": form_unmapped,
                 "version": VERSION,
             },
         }
