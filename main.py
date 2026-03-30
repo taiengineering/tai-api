@@ -138,7 +138,7 @@ app.include_router(byulpyo_router)
 # ── 헬스체크 ─────────────────────────────────────────────
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "4.3.1"}
+    return {"status": "ok", "service": "TAI API", "version": "4.3.2"}
 
 
 @app.get("/health")
@@ -153,4 +153,4 @@ def health():
         cron_status = f"{len(scheduler.get_jobs())}개 등록" if scheduler.running else "중지"
     except Exception:
         cron_status = "미초기화"
-    return {"status": "healthy", "server_ip": ip, "version": "4.3.1", "cron": cron_status}
+    return {"status": "healthy", "server_ip": ip, "version": "4.3.2", "cron": cron_status}
