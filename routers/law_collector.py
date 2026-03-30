@@ -1,5 +1,6 @@
-# routers/law_collector.py v2.0.2
-# fix: debug 에러를 base64 인코딩 반환 (브라우저 API키 차단 완전 우회)
+# routers/law_collector.py v2.0.3
+# fix: raise_for_status() 제거 → HTTP 상태코드 + 응답 본문 직접 반환
+#      HTTPError 발생 원인(4xx/5xx) 브라우저 차단 없이 확인 가능
 
 import os
 import hashlib
@@ -34,7 +35,6 @@ DEFAULT_HEADERS = {
 
 
 def _b64(text: str) -> str:
-    """base64 인코딩 — 브라우저 API 키 차단 우회"""
     return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
 
@@ -87,7 +87,7 @@ def law_type_name_to_code(name: str) -> str:
 
 
 # ============================================================
-# API 호출 함수
+# API 호출 함수 — raise_for_status() 제거, 상태코드 직접 반환
 # ============================================================
 
 def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
@@ -101,8 +101,8 @@ def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
     }
     resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=30)
     resp.encoding = "utf-8"
-    resp.raise_for_status()
-    return {"xml": resp.text, "status": resp.status_code}
+    # raise_for_status() 제거 — 상태코드와 본문을 그대로 반환
+    return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok}
 
 
 def fetch_law_content(mst_no: str) -> dict:
@@ -114,8 +114,7 @@ def fetch_law_content(mst_no: str) -> dict:
     }
     resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=60)
     resp.encoding = "utf-8"
-    resp.raise_for_status()
-    return {"xml": resp.text, "status": resp.status_code}
+    return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok}
 
 
 # ============================================================
@@ -245,6 +244,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
         }).execute()
         version_id = version_res.data[0]["id"]
         is_new_version = True
+
         supabase.table("law_version").update({"is_current": False})\
             .eq("law_id", law_id).neq("id", version_id).execute()
         supabase.table("law_master")\
@@ -327,6 +327,9 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
 
     law_name = master.data["law_name"]
     list_result = fetch_law_list(query=law_name, display=5)
+    if not list_result["ok"]:
+        return {"changed": False, "reason": f"API 오류 {list_result['status']}"}
+
     laws = parse_law_list_xml(list_result["xml"])
     if not laws:
         return {"changed": False, "reason": "API 결과 없음"}
@@ -343,6 +346,9 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
         return {"changed": False, "law_name": law_name}
 
     content_result = fetch_law_content(current_mst_no)
+    if not content_result["ok"]:
+        return {"changed": False, "reason": f"본문 API 오류 {content_result['status']}"}
+
     parsed = parse_law_content_xml(content_result["xml"])
     new_hash = make_hash(content_result["xml"])
     if new_hash == last_hash:
@@ -386,39 +392,43 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
 async def debug_law_api(law_name: str):
     """
     [개발용] API 원본 응답 확인.
-    모든 필드 base64 인코딩 반환 — 브라우저 API키 차단 완전 우회.
-    atob()으로 디코딩: atob(response.error_b64)
+    HTTP 상태코드와 XML 본문을 직접 반환 (raise_for_status 없음).
+    xml_b64 필드: atob(xml_b64) 로 디코딩.
     """
     try:
         result = fetch_law_list(query=law_name, display=5)
+        http_status = result["status"]
         xml_text = result["xml"]
+
         try:
             root = ET.fromstring(xml_text)
             law_count = len(root.findall("law"))
-            root_tag = root.tag
+            root_tag  = root.tag
             first_law = {}
-            first_el = root.find("law")
+            first_el  = root.find("law")
             if first_el is not None:
                 for child in first_el:
                     first_law[child.tag] = child.text
         except Exception as pe:
             law_count, root_tag, first_law = -1, "parse_error", {"error": str(pe)}
+
         return {
             "api_base":    LAW_API_BASE,
             "query":       law_name,
-            "http_status": result["status"],
+            "http_status": http_status,
+            "ok":          result["ok"],
             "law_count":   law_count,
             "xml_root_tag": root_tag,
             "first_law":    first_law,
-            "xml_b64":      _b64(xml_text[:2000]),  # base64 — atob()으로 디코딩
+            "xml_b64":      _b64(xml_text[:2000]),
         }
     except Exception as e:
         return {
-            "api_base":    LAW_API_BASE,
-            "query":       law_name,
-            "error_type":  type(e).__name__,
-            "error_b64":   _b64(str(e)),          # base64 — atob()으로 디코딩
-            "tb_b64":      _b64(traceback.format_exc()[-1000:]),
+            "api_base":  LAW_API_BASE,
+            "query":     law_name,
+            "error_type": type(e).__name__,
+            "error_b64":  _b64(str(e)),
+            "tb_b64":     _b64(traceback.format_exc()[-800:]),
         }
 
 
@@ -437,12 +447,19 @@ def _run_collect_all():
     for target in targets.data:
         try:
             list_result = fetch_law_list(query=target["law_name"], display=5)
+            if not list_result["ok"]:
+                results["failed"] += 1
+                results["errors"].append({"law_name": target["law_name"], "error": f"HTTP {list_result['status']}"})
+                continue
             laws = parse_law_list_xml(list_result["xml"])
             if not laws:
                 results["skipped"] += 1
                 continue
             matched = next((l for l in laws if target["law_name"] in l["law_name"]), laws[0])
             content_result = fetch_law_content(matched["law_mst_no"])
+            if not content_result["ok"]:
+                results["failed"] += 1
+                continue
             parsed = parse_law_content_xml(content_result["xml"])
             law_info = {**parsed["info"], "law_mst_no": matched["law_mst_no"],
                         "law_name_short": matched.get("law_name_short", ""),
@@ -461,12 +478,27 @@ async def collect_single_law(law_name: str):
     supabase = get_supabase()
     try:
         list_result = fetch_law_list(query=law_name, display=5)
+
+        # HTTP 오류 — 상태코드 그대로 반환
+        if not list_result["ok"]:
+            raise HTTPException(
+                status_code=502,
+                detail=f"법제처 API 오류 HTTP {list_result['status']}: {list_result['xml'][:200]}"
+            )
+
         laws = parse_law_list_xml(list_result["xml"])
         if not laws:
             raise HTTPException(status_code=404, detail=f"법령을 찾을 수 없습니다: {law_name}")
 
         matched = next((l for l in laws if law_name in l["law_name"]), laws[0])
         content_result = fetch_law_content(matched["law_mst_no"])
+
+        if not content_result["ok"]:
+            raise HTTPException(
+                status_code=502,
+                detail=f"법제처 본문 API 오류 HTTP {content_result['status']}"
+            )
+
         parsed = parse_law_content_xml(content_result["xml"])
         law_info = {**parsed["info"], "law_mst_no": matched["law_mst_no"],
                     "law_name_short": matched.get("law_name_short", ""),
@@ -481,10 +513,8 @@ async def collect_single_law(law_name: str):
     except HTTPException:
         raise
     except Exception as e:
-        err_type = type(e).__name__
-        err_b64  = _b64(str(e))
-        print(f"ERROR [{err_type}]: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"{err_type}: {err_b64}")
+        print(f"ERROR [{type(e).__name__}]: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)[:200]}")
 
 
 @router.post("/check-updates")
@@ -520,7 +550,7 @@ async def get_collection_status():
         .select("law_id, job_message, updated_at").eq("job_status_code", "FAILED")\
         .order("updated_at", desc=True).limit(10).execute()
     return {
-        "version":             "2.0.2",
+        "version":             "2.0.3",
         "api_base":            LAW_API_BASE,
         "collected_law_count": total.count,
         "tracked_law_count":   collected.count,
