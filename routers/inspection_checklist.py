@@ -1,5 +1,8 @@
 """
-점검리스트 시스템 — v1.1.0
+점검리스트 시스템 — v1.2.0
+v1.2.0: BUG-4 수정
+  - generate_schedules: anchor_confirmed=True 필터 추가
+  - generate_schedules: skip 건수 응답 포함
 v1.1.0: /status 전체 조회 제거 → 각각 count 쿼리 4개로 분리 (성능 최적화)
 prefix: /inspection
 """
@@ -12,7 +15,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/inspection", tags=["점검리스트"])
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 LEGAL_INSPECTION_ITEMS = {
     "ELECACT-010":    ["배전반 외관 점검", "접지 상태 확인", "절연저항 측정", "과전류 차단기 동작 확인"],
@@ -146,6 +149,11 @@ async def generate_inspection_items(factory_id: str):
 
 @router.post("/generate-schedules/{factory_id}")
 async def generate_schedules(factory_id: str, body: Optional[dict] = None):
+    """
+    v1.2.0: BUG-4 수정
+    - anchor_confirmed=True인 것만 처리
+    - skip 건수 응답 포함
+    """
     supabase = get_supabase()
     try:
         body = body or {}
@@ -156,27 +164,69 @@ async def generate_schedules(factory_id: str, body: Optional[dict] = None):
         end_year  = start_dt.year + end_month // 12
         end_month = end_month % 12 + 1
         end_dt    = date(end_year, end_month, min(start_dt.day, calendar.monthrange(end_year, end_month)[1]))
+
+        # ── BUG-4: 전체 sets 수 먼저 조회 (skip 건수 계산용) ──
+        total_sets_res = supabase.table("inspection_sets").select(
+            "id", count="exact"
+        ).eq("factory_id", factory_id).eq("source", "LEGAL_ENGINE").eq("is_active", True).limit(0).execute()
+        total_sets = total_sets_res.count or 0
+
+        # ── BUG-4: anchor_confirmed=True인 것만 처리 ──
         sets_res = supabase.table("inspection_sets").select(
             "id, company_id, cycle_unit, cycle_value"
-        ).eq("factory_id", factory_id).eq("source", "LEGAL_ENGINE").execute()
+        ).eq("factory_id", factory_id).eq("source", "LEGAL_ENGINE") \
+         .eq("anchor_confirmed", True) \
+         .not_.is_("schedule_anchor_date", "null") \
+         .execute()
         sets = sets_res.data or []
+
         if not sets:
-            raise HTTPException(status_code=404, detail="점검 세트가 없습니다.")
+            return {
+                "status":  "success",
+                "message": "기준일이 확정된 점검 세트가 없습니다. 기준일을 먼저 설정해주세요.",
+                "data": {
+                    "factory_id":     factory_id,
+                    "sets_total":     total_sets,
+                    "sets_processed": 0,
+                    "sets_skipped":   total_sets,
+                    "created":        0,
+                    "period":         f"{start_str} ~ {end_dt.isoformat()}",
+                }
+            }
+
         supabase.table("work_schedules").delete().eq("factory_id", factory_id).eq(
             "status_code", "planned"
         ).gte("planned_date", start_str).lte("planned_date", end_dt.isoformat()).execute()
+
         insert_rows = []
         for s in sets:
             for d in _calc_schedule_dates(start_dt, end_dt, s.get("cycle_unit", "year"), s.get("cycle_value", 1)):
-                insert_rows.append({"inspection_set_id": s["id"], "company_id": s.get("company_id"),
-                                    "factory_id": factory_id, "planned_date": d.isoformat(), "status_code": "planned"})
+                insert_rows.append({
+                    "inspection_set_id": s["id"],
+                    "company_id":        s.get("company_id"),
+                    "factory_id":        factory_id,
+                    "planned_date":      d.isoformat(),
+                    "status_code":       "planned",
+                })
+
         created = 0
         for i in range(0, len(insert_rows), 100):
             res = supabase.table("work_schedules").insert(insert_rows[i:i+100]).execute()
             created += len(res.data or [])
-        return {"status": "success", "message": f"{created}개 스케줄이 생성됐습니다.",
-                "data": {"factory_id": factory_id, "sets_processed": len(sets), "created": created,
-                         "period": f"{start_str} ~ {end_dt.isoformat()}"}}
+
+        # ── BUG-4: skip 건수 응답 포함 ──
+        return {
+            "status":  "success",
+            "message": f"{created}개 스케줄이 생성됐습니다.",
+            "data": {
+                "factory_id":     factory_id,
+                "sets_total":     total_sets,
+                "sets_processed": len(sets),
+                "sets_skipped":   total_sets - len(sets),
+                "created":        created,
+                "period":         f"{start_str} ~ {end_dt.isoformat()}",
+            }
+        }
     except HTTPException: raise
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
@@ -188,19 +238,17 @@ async def get_inspection_status(factory_id: str):
     """
     supabase = get_supabase()
     try:
-        today            = date.today()
-        today_str        = today.isoformat()
-        month_start      = today.replace(day=1).isoformat()
-        month_end        = today.replace(day=calendar.monthrange(today.year, today.month)[1]).isoformat()
-        in_30_days       = (today + timedelta(days=30)).isoformat()
+        today      = date.today()
+        today_str  = today.isoformat()
+        month_start = today.replace(day=1).isoformat()
+        month_end   = today.replace(day=calendar.monthrange(today.year, today.month)[1]).isoformat()
+        in_30_days  = (today + timedelta(days=30)).isoformat()
 
-        # 1. 전체 점검 세트 수
         sets_res = supabase.table("inspection_sets").select(
             "id", count="exact"
         ).eq("factory_id", factory_id).eq("source", "LEGAL_ENGINE").limit(0).execute()
         total_sets = sets_res.count or 0
 
-        # 2. 이번 달 예정 수
         month_res = supabase.table("work_schedules").select(
             "id", count="exact"
         ).eq("factory_id", factory_id).gte("planned_date", month_start).lte(
@@ -208,13 +256,11 @@ async def get_inspection_status(factory_id: str):
         ).limit(0).execute()
         this_month_count = month_res.count or 0
 
-        # 3. 완료 수
         completed_res = supabase.table("work_schedules").select(
             "id", count="exact"
         ).eq("factory_id", factory_id).eq("status_code", "completed").limit(0).execute()
         completed_count = completed_res.count or 0
 
-        # 4. 지연 수 (planned + 예정일 < 오늘)
         overdue_res = supabase.table("work_schedules").select(
             "id", count="exact"
         ).eq("factory_id", factory_id).eq("status_code", "planned").lt(
@@ -222,7 +268,6 @@ async def get_inspection_status(factory_id: str):
         ).limit(0).execute()
         overdue_count = overdue_res.count or 0
 
-        # 5. 다가오는 30일 이내 일정 (쫑량만)
         upcoming_res = supabase.table("work_schedules").select(
             "id, planned_date, status_code, inspection_set_id, "
             "inspection_sets(inspection_set_name, law_name)"
@@ -386,8 +431,6 @@ async def complete_inspection(work_schedule_id: str, body: dict = None):
     except HTTPException: raise
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
-
-# ── 점검 일정 목록 ────────────────────────────────────────────
 
 @router.get("/schedules")
 async def list_inspection_schedules(
