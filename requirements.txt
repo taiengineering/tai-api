@@ -10,3 +10,4 @@ python-multipart
 resend
 tenacity
 xhtml2pdf
+python-dateutil>=2.8.2
