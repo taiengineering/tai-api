@@ -1,11 +1,11 @@
 """
-법령 판정 엔진 라우터 — v4.4.0
+법령 판정 엔진 라우터 — v4.4.1
 =================================
+v4.4.1: create-inspection-sets 버그 수정
+  - BUG-1: factory_diagnosis_results fallback 추가 (diagnose/step1 경로 단절 수정)
+  - BUG-1: master_building_legal_rules JOIN으로 cycle 정보 포함
+  - BUG-2: 중복 rule_id skip + 50건 배치 유지 (타임아웃 방지, delete 제거)
 v4.4.0: diagnose/step1 DB 저장 추가
-  - factory_diagnosis_results INSERT (is_latest=True, 이전 항목 False 처리)
-  - diagnosis_rule_results 50건씩 배치 INSERT
-  - 응답에 diagnosis_id 포함
-  - factory_id 없는 익명 진단은 저장 안 함 (정상)
 v4.3.3: summary.notify 집계 버그 수정
 v4.3.2: diagnose/step1 개선 (factory_id Optional, flat params, obligation_type 완전 반영)
 v4.2.0: 3단계 진단 API 추가
@@ -20,7 +20,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "4.4.0"
+ENGINE_VERSION = "4.4.1"
 
 
 # ──────────────────────────────────────────────
@@ -48,6 +48,23 @@ INSPECTION_CYCLE_UNIT_MAP = {
     "007": "2년마다", "008": "5년마다", "009": "4년마다",
     "010": "3년마다", "011": "3년마다", "012": "10년마다",
     "013": "5년마다(시설)",
+}
+
+# inspection_cycle_unit_code → (cycle_unit, cycle_value)
+CYCLE_CODE_MAP = {
+    "001": ("day",   1),
+    "002": ("week",  1),
+    "003": ("month", 1),
+    "004": ("month", 3),   # 분기
+    "005": ("month", 6),   # 반기
+    "006": ("year",  1),
+    "007": ("year",  2),
+    "008": ("year",  5),
+    "009": ("year",  4),
+    "010": ("year",  3),
+    "011": ("year",  3),
+    "012": ("year", 10),
+    "013": ("year",  5),
 }
 
 RULE_TYPE_MAP = {
@@ -201,11 +218,10 @@ def _check_rule_conditions(rule: dict, context: dict) -> bool:
 
 
 # ──────────────────────────────────────────────
-# obligation_type 결정 (DB값 우선, fallback은 플래그)
+# obligation_type 결정
 # ──────────────────────────────────────────────
 
 def _resolve_obligation_type(rule: dict) -> str:
-    """DB의 obligation_type 우선, 없으면 플래그로 추론."""
     ot = (rule.get("obligation_type") or "").strip().upper()
     if ot:
         return ot
@@ -287,7 +303,6 @@ def _calc_due_date(due_days) -> dict:
 
 
 def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
-    """master_building_legal_rules 행 → 프론트/기존 format_rule_result 호환."""
     desc = (rule.get("obligation_summary") or rule.get("remarks") or "").strip()
     return {
         "rule_id":               rule.get("rule_id", ""),
@@ -345,10 +360,6 @@ def _classify_one(rule: dict, formatted: dict, triggered: dict):
 
 
 def _classify_rules_db(rules: List[Dict[str, Any]], triggered: Dict[str, List]) -> None:
-    """
-    v4.3.3: notify_required 분기 추가.
-    우선순위: appointment > inspection > notify > report > action
-    """
     for rule in rules:
         formatted = format_rule_result_db(rule)
         ot = (rule.get("obligation_type") or "").strip().upper()
@@ -466,7 +477,7 @@ async def apply_legal_engine(
     body: Optional[dict] = None,
     mode: str = Query("all"),
 ):
-    """시설 등록 기반 법령 판정 (v4.4.0 — 하위 호환 유지)"""
+    """시설 등록 기반 법령 판정 (v4.4.1 — 하위 호환 유지)"""
     supabase = get_supabase()
     if body and body.get("mode"):
         mode = body["mode"]
@@ -580,7 +591,6 @@ async def apply_legal_engine_from_quote(quote_id: str):
 # ──────────────────────────────────────────────
 
 class DiagnoseStep1Body(BaseModel):
-    """법령 진단 1단계 — factory_id Optional, flat 또는 input 중첩 모두 허용"""
     factory_id: Optional[str] = Field(None, description="factories.id (없으면 익명 진단)")
     sector: str = Field(..., description="BUILDING | MANUFACTURING | CONSTRUCTION | SPECIAL_FACILITY")
     input: Optional[Dict[str, Any]] = Field(default_factory=dict)
@@ -736,7 +746,7 @@ def _evaluate_facility_conditions_db(facility_ctx: Dict[str, Any], rules: List[D
 
 
 # ──────────────────────────────────────────────
-# POST /legal-engine/diagnose/step1  v4.4.0
+# POST /legal-engine/diagnose/step1  v4.4.1
 # ──────────────────────────────────────────────
 
 @router.post("/diagnose/step1")
@@ -767,7 +777,6 @@ async def diagnose_step1(body: DiagnoseStep1Body):
     )
     all_rules = rules_res.data or []
 
-    # flat body 파라미터를 input dict에 병합
     inp = dict(body.input or {})
     flat_fields = {
         "building_use_type": body.building_use_type,
@@ -789,7 +798,6 @@ async def diagnose_step1(body: DiagnoseStep1Body):
     evaluated_at = datetime.now().isoformat()
     applicable, not_applicable = _evaluate_facility_conditions_db(facility_ctx, all_rules)
 
-    # notify 별도 버킷 포함
     triggered: Dict[str, List] = {
         "appointment": [], "inspection": [], "notify": [], "report": [], "action": [], "not_applicable": [],
     }
@@ -867,7 +875,7 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         "appointment_required":      triggered["appointment"],
         "inspection_required":       triggered["inspection"],
         "action_required":           triggered["action"],
-        "report_required":           triggered["report"] + triggered["notify"],  # 하위 호환
+        "report_required":           triggered["report"] + triggered["notify"],
         "not_applicable":            triggered["not_applicable"][:100],
         "not_applicable_total":      len(not_applicable),
         "total_rules_checked":       len(all_rules),
@@ -883,10 +891,9 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         },
     }
 
-    # ── v4.4.0: DB 저장 (factory_id 있을 때만) ──────────────────────────
+    # ── DB 저장 (factory_id 있을 때만) ──
     diagnosis_id = None
     if factory_id:
-        # 1. 기존 is_latest=True 해제 (같은 factory_id + sector)
         try:
             supabase.table("factory_diagnosis_results") \
                 .update({"is_latest": False}) \
@@ -896,8 +903,6 @@ async def diagnose_step1(body: DiagnoseStep1Body):
                 .execute()
         except Exception:
             pass
-
-        # 2. factory_diagnosis_results INSERT
         try:
             save_res = supabase.table("factory_diagnosis_results").insert({
                 "factory_id":      factory_id,
@@ -913,7 +918,6 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         except Exception as e:
             print(f"[DIAGNOSE STEP1] factory_diagnosis_results 저장 실패: {e}")
 
-        # 3. diagnosis_rule_results INSERT (50건씩 배치)
         if diagnosis_id and applicable:
             try:
                 rule_rows = []
@@ -934,10 +938,7 @@ async def diagnose_step1(body: DiagnoseStep1Body):
             except Exception as e:
                 print(f"[DIAGNOSE STEP1] diagnosis_rule_results 저장 실패: {e}")
 
-    # diagnosis_id 응답에 포함
     result_data["diagnosis_id"] = diagnosis_id
-    # ────────────────────────────────────────────────────────────────────
-
     return {"status": "success", "data": result_data}
 
 
@@ -1011,51 +1012,179 @@ async def get_legal_summary(factory_id: str):
 
 @router.post("/create-inspection-sets/{factory_id}")
 async def create_inspection_sets_from_legal(factory_id: str):
+    """
+    v4.4.1: BUG-1 + BUG-2 수정
+    - BUG-1: legal_result_json 없으면 factory_diagnosis_results fallback
+    - BUG-1: diagnosis_rule_results + master_building_legal_rules JOIN으로 cycle 정보 포함
+    - BUG-2: 기존 rule_id는 skip (delete 제거), 50건 배치 유지
+    """
     supabase = get_supabase()
     fac = supabase.table("factories").select(
         "id, company_id, legal_result_json"
     ).eq("id", factory_id).single().execute()
     if not fac.data:
         raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다.")
-    result_json = fac.data.get("legal_result_json")
-    if not result_json:
-        raise HTTPException(status_code=400, detail="법령판정 결과가 없습니다.")
-    company_id       = fac.data.get("company_id")
-    inspection_rules = result_json.get("inspection_required", [])
+
+    company_id      = fac.data.get("company_id")
+    result_json     = fac.data.get("legal_result_json")
+    inspection_rules: List[Dict[str, Any]] = []
+
+    # ── 경로 A: legal_result_json (apply API 경로) ──
+    if result_json:
+        inspection_rules = result_json.get("inspection_required", [])
+
+    # ── 경로 B: factory_diagnosis_results fallback (diagnose/step1 경로) ──
     if not inspection_rules:
-        return {"status": "success", "message": "생성할 점검 항목이 없습니다.", "data": {"created": 0}}
-    supabase.table("inspection_sets").delete().eq("factory_id", factory_id).eq("source", "LEGAL_ENGINE").execute()
+        try:
+            diag_res = supabase.table("factory_diagnosis_results") \
+                .select("id, result_data") \
+                .eq("factory_id", factory_id) \
+                .eq("is_latest", True) \
+                .order("created_at", desc=True) \
+                .limit(1).execute()
+            if diag_res.data:
+                diag_row     = diag_res.data[0]
+                diagnosis_id = diag_row.get("id")
+
+                # diagnosis_rule_results에서 rule_code 목록 가져오기
+                drr_res = supabase.table("diagnosis_rule_results") \
+                    .select("rule_code, rule_name, law_name, law_article, obligation, form_code") \
+                    .eq("diagnosis_id", diagnosis_id) \
+                    .execute()
+                drr_rows = drr_res.data or []
+
+                if drr_rows:
+                    # master_building_legal_rules JOIN → INSPECT 타입 + cycle 정보
+                    rule_codes = [r.get("rule_code") for r in drr_rows if r.get("rule_code")]
+                    masters_res = supabase.table("master_building_legal_rules") \
+                        .select(
+                            "rule_id, obligation_type, inspection_required, "
+                            "inspection_cycle_value, inspection_cycle_unit_code, "
+                            "cycle_unit_std, cycle_base_type, cycle_base_guide"
+                        ) \
+                        .in_("rule_id", rule_codes) \
+                        .eq("is_active", True) \
+                        .execute()
+
+                    inspect_master_map = {
+                        m["rule_id"]: m
+                        for m in (masters_res.data or [])
+                        if (m.get("obligation_type") or "").upper() == "INSPECT"
+                        or bool(m.get("inspection_required"))
+                    }
+
+                    for r in drr_rows:
+                        rc = r.get("rule_code", "")
+                        if rc in inspect_master_map:
+                            m = inspect_master_map[rc]
+                            inspection_rules.append({
+                                "rule_id":          rc,
+                                "law_name":         r.get("law_name", ""),
+                                "law_article":      r.get("law_article", ""),
+                                "description":      r.get("obligation", ""),
+                                "inspection_cycle": INSPECTION_CYCLE_UNIT_MAP.get(
+                                    str(m.get("inspection_cycle_unit_code") or ""), ""
+                                ),
+                                "form_code":        r.get("form_code"),
+                                "_master":          m,
+                            })
+        except Exception as e:
+            print(f"[CREATE-INSP-SETS] fallback 조회 실패: {e}")
+
+    if not inspection_rules:
+        return {
+            "status":  "success",
+            "message": "생성할 점검 항목이 없습니다. 먼저 법령진단을 실행하세요.",
+            "data":    {"created": 0},
+        }
+
+    # ── BUG-2: 기존 rule_id 조회 (중복 skip) ──
+    existing_res = supabase.table("inspection_sets") \
+        .select("legal_rule_id") \
+        .eq("factory_id", factory_id) \
+        .eq("source", "LEGAL_ENGINE") \
+        .eq("is_active", True) \
+        .execute()
+    existing_rule_ids = {
+        r["legal_rule_id"] for r in (existing_res.data or []) if r.get("legal_rule_id")
+    }
+
     insert_rows = []
     for rule in inspection_rules:
-        cycle_label = rule.get("inspection_cycle", "")
+        rule_id = rule.get("rule_id", "")
+        if rule_id in existing_rule_ids:
+            continue  # 중복 skip
+
+        m           = rule.get("_master", {})
         law_name    = rule.get("law_name", "")
-        rule_id     = rule.get("rule_id", "")
-        cycle_unit, cycle_value = "year", 1
-        if "월 1회" in cycle_label or "매월" in cycle_label: cycle_unit, cycle_value = "month", 1
-        elif "반기" in cycle_label: cycle_unit, cycle_value = "month", 6
-        elif "분기" in cycle_label: cycle_unit, cycle_value = "month", 3
-        elif "2년" in cycle_label: cycle_unit, cycle_value = "year", 2
-        elif "3년" in cycle_label: cycle_unit, cycle_value = "year", 3
-        elif "4년" in cycle_label: cycle_unit, cycle_value = "year", 4
-        elif "5년" in cycle_label: cycle_unit, cycle_value = "year", 5
-        elif "10년" in cycle_label: cycle_unit, cycle_value = "year", 10
-        elif "연 2회" in cycle_label: cycle_unit, cycle_value = "month", 6
+        cycle_label = rule.get("inspection_cycle", "")
+
+        # cycle 정보: master에서 우선 가져오기
+        cycle_unit_code = str(m.get("inspection_cycle_unit_code") or "")
+        if cycle_unit_code in CYCLE_CODE_MAP:
+            cycle_unit, cycle_value = CYCLE_CODE_MAP[cycle_unit_code]
+        else:
+            # cycle_unit_std fallback
+            cycle_unit_std = (m.get("cycle_unit_std") or "").lower()
+            UNIT_STD_MAP = {"year": "year", "month": "month", "day": "day", "week": "week"}
+            cycle_unit = UNIT_STD_MAP.get(cycle_unit_std, "year")
+            cycle_value = int(m.get("inspection_cycle_value") or 1)
+            # cycle_label fallback (경로 A)
+            if not cycle_unit_std:
+                if "월 1회" in cycle_label or "매월" in cycle_label: cycle_unit, cycle_value = "month", 1
+                elif "반기" in cycle_label: cycle_unit, cycle_value = "month", 6
+                elif "분기" in cycle_label: cycle_unit, cycle_value = "month", 3
+                elif "2년" in cycle_label: cycle_unit, cycle_value = "year", 2
+                elif "3년" in cycle_label: cycle_unit, cycle_value = "year", 3
+                elif "4년" in cycle_label: cycle_unit, cycle_value = "year", 4
+                elif "5년" in cycle_label: cycle_unit, cycle_value = "year", 5
+                elif "10년" in cycle_label: cycle_unit, cycle_value = "year", 10
+                elif "연 2회" in cycle_label: cycle_unit, cycle_value = "month", 6
+
         insert_rows.append({
-            "company_id": company_id, "factory_id": factory_id,
-            "inspection_set_name": f"{law_name} 점검", "inspection_set_code": rule_id,
-            "legal_rule_id": rule_id, "law_name": law_name,
-            "law_article": rule.get("law_article", ""), "cycle_unit": cycle_unit,
-            "cycle_value": cycle_value, "description": rule.get("description", ""),
-            "source": "LEGAL_ENGINE", "is_active": True,
+            "company_id":          company_id,
+            "factory_id":          factory_id,
+            "inspection_set_name": f"{law_name} 점검",
+            "inspection_set_code": rule_id,
+            "legal_rule_id":       rule_id,
+            "law_name":            law_name,
+            "law_article":         rule.get("law_article", ""),
+            "cycle_unit":          cycle_unit,
+            "cycle_value":         cycle_value,
+            "cycle_base_type":     m.get("cycle_base_type") or "LAST_INSPECTION",
+            "cycle_base_guide":    m.get("cycle_base_guide") or (
+                f"마지막 점검일로부터 {cycle_value}{'년' if cycle_unit == 'year' else '개월'}마다"
+            ),
+            "description":         rule.get("description", ""),
+            "source":              "LEGAL_ENGINE",
+            "is_active":           True,
+            "anchor_confirmed":    False,
+            "status_code":         "PENDING_ANCHOR",
         })
+
     if not insert_rows:
-        return {"status": "success", "message": "변환할 항목 없음", "data": {"created": 0}}
+        return {
+            "status":  "success",
+            "message": f"모든 점검 세트가 이미 존재합니다. ({len(existing_rule_ids)}개 유지)",
+            "data": {"created": 0, "skipped": len(existing_rule_ids), "source_rules": len(inspection_rules)},
+        }
+
+    # ── 50건 배치 INSERT ──
     created = 0
     for i in range(0, len(insert_rows), 50):
         res = supabase.table("inspection_sets").insert(insert_rows[i:i+50]).execute()
         created += len(res.data or [])
-    return {"status": "success", "message": f"{created}개 점검 세트가 자동 생성됐습니다.",
-            "data": {"factory_id": factory_id, "created": created, "source_rules": len(inspection_rules)}}
+
+    return {
+        "status":  "success",
+        "message": f"{created}개 점검 세트가 생성됐습니다. ({len(existing_rule_ids)}개 기존 유지)",
+        "data": {
+            "factory_id":   factory_id,
+            "created":      created,
+            "skipped":      len(existing_rule_ids),
+            "source_rules": len(inspection_rules),
+        },
+    }
 
 
 @router.get("/debug/context/{quote_id}")
