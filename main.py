@@ -1,5 +1,6 @@
 # main.py — v5.0.0
 # feat: TBM / 안전보건회의 / 위험성평가 라우터 등록
+# build: retrigger
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
