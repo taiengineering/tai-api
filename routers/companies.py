@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Companies 라우터 - 사업장 등록/관리 v2.0.0
+TAI Companies 라우터 - 사업장 등록/관리 v2.1.0
 
-v2.0.0: 온보딩 지원 API 추가
-  - GET  /companies/{id}/contacts         담당자 목록
-  - POST /companies/{id}/contacts         담당자 추가
-  - PATCH /companies/{id}/contacts/{cid}  담당자 수정
-  - DELETE /companies/{id}/contacts/{cid} 담당자 삭제 (대표담당자 보호)
-  - GET  /companies/{id}/contracts        계약 이력 목록
-  - POST /companies/{id}/files            파일 등록 (URL 방식)
-  - DELETE /companies/{id}/files/{fid}    파일 삭제
-  - PATCH /companies/{id}/contract-url    전자계약서 URL 저장
-  - POST /companies/onboarding            회사+시설+담당자 통합 등록
+v2.1.0: 사업자번호 중복 확인 API 추가
+  - GET /companies/check-biz?business_number=  사업자번호 중복 확인 (등록/미등록 + 회사명 반환)
+v2.0.0: 담당자/파일/계약이력/온보딩 API 추가
 """
 
 from fastapi import APIRouter, HTTPException, Query
@@ -21,6 +14,7 @@ from typing import Optional, List
 from datetime import datetime
 import httpx
 import os
+import re
 from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/companies", tags=["companies"])
@@ -105,7 +99,7 @@ class CompanyUpdate(BaseModel):
 
 
 class ContactBody(BaseModel):
-    contact_type: str             # 대표담당자 / 안전담당자 / 시설담당자 / 기타
+    contact_type: str
     name:         str
     phone:        str
     email:        Optional[str] = None
@@ -123,7 +117,7 @@ class ContactUpdate(BaseModel):
 
 
 class FileBody(BaseModel):
-    file_type:  str              # biz_reg | contract_paper | other
+    file_type:  str
     file_name:  str
     file_url:   str
     file_size:  Optional[int] = None
@@ -154,8 +148,6 @@ class OnboardingContact(BaseModel):
 
 
 class OnboardingBody(BaseModel):
-    """회사 + 시설 + 담당자를 한 번에 등록하는 온보딩 API."""
-    # 회사 정보
     company_name:        str
     company_type_code:   Optional[str] = "002"
     business_number:     Optional[str] = None
@@ -166,10 +158,8 @@ class OnboardingBody(BaseModel):
     address_sido:        Optional[str] = None
     address_sigungu:     Optional[str] = None
     zipcode:             Optional[str] = None
-    # 시설 (선택)
-    factory:  Optional[OnboardingFactory] = None
-    # 담당자 (선택)
-    contacts: List[OnboardingContact] = []
+    factory:             Optional[OnboardingFactory] = None
+    contacts:            List[OnboardingContact] = []
 
 
 # ============================================================
@@ -216,21 +206,68 @@ async def nts_status(body: dict):
     result = await _nts_post("/status", {"b_no": [b_no]})
     items  = result.get("data", [])
     item   = items[0] if items else {}
-    b_stt_cd  = item.get("b_stt_cd", "")
+    b_stt_cd   = item.get("b_stt_cd", "")
     status_map = {"01": "계속사업자", "02": "휴업자", "03": "폐업자"}
     return {
         "status": "success",
         "data": {
-            "b_no":               b_no,
-            "b_stt":              item.get("b_stt", ""),
-            "b_stt_cd":           b_stt_cd,
-            "b_stt_label":        status_map.get(b_stt_cd, item.get("b_stt", "")),
-            "is_active":          b_stt_cd == "01",
-            "is_closed":          b_stt_cd == "03",
-            "tax_type":           item.get("tax_type", ""),
-            "tax_type_cd":        item.get("tax_type_cd", ""),
-            "end_dt":             item.get("end_dt", ""),
-            "nts_status_code":    result.get("status_code"),
+            "b_no":            b_no,
+            "b_stt":           item.get("b_stt", ""),
+            "b_stt_cd":        b_stt_cd,
+            "b_stt_label":     status_map.get(b_stt_cd, item.get("b_stt", "")),
+            "is_active":       b_stt_cd == "01",
+            "is_closed":       b_stt_cd == "03",
+            "tax_type":        item.get("tax_type", ""),
+            "tax_type_cd":     item.get("tax_type_cd", ""),
+            "end_dt":          item.get("end_dt", ""),
+            "nts_status_code": result.get("status_code"),
+        }
+    }
+
+
+# ============================================================
+# 사업자번호 중복 확인  GET /companies/check-biz  v2.1.0
+# 고정 경로 — /{company_id} 앞에 반드시 먼저 선언
+# ============================================================
+
+@router.get("/check-biz")
+def check_biz(business_number: str = Query(..., description="사업자등록번호 (하이픈 임의)")):
+    """
+    사업자번호 중복 확인.
+    - available: true  → 사용 가능 (미등록)
+    - available: false → 이미 등록된 번호 + 회사명 반환
+    """
+    supabase    = get_supabase()
+    bn_clean    = re.sub(r'[^0-9]', '', business_number)
+
+    if not bn_clean or len(bn_clean) != 10:
+        raise HTTPException(
+            status_code=400,
+            detail="사업자등록번호는 10자리 숫자여야 합니다 (하이픈 제외)."
+        )
+
+    res = supabase.table("companies").select(
+        "id, name, business_number"
+    ).eq("business_number", bn_clean).eq("is_active", True).limit(1).execute()
+
+    if res.data:
+        return {
+            "status":    "success",
+            "available": False,
+            "message":   "이미 등록된 사업자등록번호입니다.",
+            "data": {
+                "business_number": bn_clean,
+                "company_id":      res.data[0]["id"],
+                "company_name":    res.data[0]["name"],
+            }
+        }
+
+    return {
+        "status":    "success",
+        "available": True,
+        "message":   "사용 가능한 사업자등록번호입니다.",
+        "data": {
+            "business_number": bn_clean,
         }
     }
 
@@ -241,23 +278,20 @@ async def nts_status(body: dict):
 
 @router.post("/onboarding")
 def onboarding(req: OnboardingBody):
-    """
-    회사 + 시설 + 담당자를 한 번에 등록.
-    단계별 등록이 번거로울 때 사용 (tadmin 얘: 신규가입 후 첫 설정).
-    """
+    """회사 + 시설 + 담당자를 한 번에 등록."""
     supabase = get_supabase()
-    now = datetime.now()
+    now      = datetime.now()
     result: dict = {}
 
     # 1. 회사 등록
     company_data = {
-        "name":                req.company_name,
-        "company_type_code":   req.company_type_code,
-        "company_code":        f"COM-{now.strftime('%Y%m%d%H%M%S')}",
-        "status_code":         "TRIAL",
-        "is_active":           True,
-        "created_at":          now.isoformat(),
-        "updated_at":          now.isoformat(),
+        "name":              req.company_name,
+        "company_type_code": req.company_type_code,
+        "company_code":      f"COM-{now.strftime('%Y%m%d%H%M%S')}",
+        "status_code":       "TRIAL",
+        "is_active":         True,
+        "created_at":        now.isoformat(),
+        "updated_at":        now.isoformat(),
     }
     for f in ("business_number", "representative_name", "contact_phone",
               "contact_email", "address_road", "address_sido", "address_sigungu", "zipcode"):
@@ -294,13 +328,13 @@ def onboarding(req: OnboardingBody):
     if req.factory:
         f = req.factory
         fac_data = {
-            "company_id":    company_id,
-            "name":          f.name,
+            "company_id":     company_id,
+            "name":           f.name,
             "factories_code": f"FAC-{now.strftime('%Y%m%d%H%M%S')}",
-            "status_code":   "ACTIVE",
-            "is_active":     True,
-            "created_at":    now.isoformat(),
-            "updated_at":    now.isoformat(),
+            "status_code":    "ACTIVE",
+            "is_active":      True,
+            "created_at":     now.isoformat(),
+            "updated_at":     now.isoformat(),
         }
         for fld in ("site_type", "ksic_code", "ksic_name", "address_road",
                     "address_sido", "address_sigungu", "employee_count"):
@@ -330,7 +364,7 @@ def get_companies(
     sido:        Optional[str] = Query(default=None),
 ):
     supabase = get_supabase()
-    query = supabase.table("companies").select("*", count="exact")
+    query    = supabase.table("companies").select("*", count="exact")
     if search:      query = query.ilike("name", f"%{search}%")
     if status_code: query = query.eq("status_code", status_code)
     if sido:        query = query.eq("address_sido", sido)
@@ -356,11 +390,15 @@ def get_companies(
 def create_company(req: CompanyCreate):
     supabase = get_supabase()
     if req.business_number:
-        dup = supabase.table("companies").select("id").eq("business_number", req.business_number).limit(1).execute()
+        dup = supabase.table("companies").select("id").eq(
+            "business_number", re.sub(r'[^0-9]', '', req.business_number)
+        ).limit(1).execute()
         if dup.data:
             raise HTTPException(status_code=400, detail="이미 등록된 사업자번호입니다")
     if req.corporation_number:
-        dup = supabase.table("companies").select("id").eq("corporation_number", req.corporation_number).limit(1).execute()
+        dup = supabase.table("companies").select("id").eq(
+            "corporation_number", req.corporation_number
+        ).limit(1).execute()
         if dup.data:
             raise HTTPException(status_code=400, detail="이미 등록된 법인번호입니다")
     now = datetime.now()
@@ -452,7 +490,7 @@ def get_company_factories(company_id: str):
 
 
 # ============================================================
-# 8. 담당자 목록  GET /companies/{id}/contacts
+# 8. 담당자 목록
 # ============================================================
 
 @router.get("/{company_id}/contacts")
@@ -465,19 +503,16 @@ def get_company_contacts(company_id: str):
 
 
 # ============================================================
-# 9. 담당자 추가  POST /companies/{id}/contacts
+# 9. 담당자 추가
 # ============================================================
 
 @router.post("/{company_id}/contacts")
 def add_company_contact(company_id: str, body: ContactBody):
     supabase = get_supabase()
-
-    # is_primary=True 요청 시 기존 is_primary 해제
     if body.is_primary:
         supabase.table("company_contacts").update({"is_primary": False}).eq(
             "company_id", company_id
         ).eq("is_primary", True).execute()
-
     now = datetime.now().isoformat()
     res = supabase.table("company_contacts").insert({
         "company_id":   company_id,
@@ -497,26 +532,21 @@ def add_company_contact(company_id: str, body: ContactBody):
 
 
 # ============================================================
-# 10. 담당자 수정  PATCH /companies/{id}/contacts/{cid}
+# 10. 담당자 수정
 # ============================================================
 
 @router.patch("/{company_id}/contacts/{contact_id}")
 def update_company_contact(company_id: str, contact_id: str, body: ContactUpdate):
     supabase = get_supabase()
-
-    # 대표담당자 존재 확인
     chk = supabase.table("company_contacts").select("id, is_primary").eq(
         "id", contact_id
     ).eq("company_id", company_id).limit(1).execute()
     if not chk.data:
         raise HTTPException(status_code=404, detail="담당자를 찾을 수 없습니다.")
-
-    # is_primary 설정 시 기존 is_primary 해제
     if body.is_primary is True:
         supabase.table("company_contacts").update({"is_primary": False}).eq(
             "company_id", company_id
         ).eq("is_primary", True).neq("id", contact_id).execute()
-
     update_data = {k: v for k, v in body.dict().items() if v is not None}
     update_data["updated_at"] = datetime.now().isoformat()
     res = supabase.table("company_contacts").update(update_data).eq("id", contact_id).execute()
@@ -524,23 +554,19 @@ def update_company_contact(company_id: str, contact_id: str, body: ContactUpdate
 
 
 # ============================================================
-# 11. 담당자 삭제  DELETE /companies/{id}/contacts/{cid}
+# 11. 담당자 삭제
 # ============================================================
 
 @router.delete("/{company_id}/contacts/{contact_id}")
 def delete_company_contact(company_id: str, contact_id: str):
     supabase = get_supabase()
-
     chk = supabase.table("company_contacts").select("id, is_primary").eq(
         "id", contact_id
     ).eq("company_id", company_id).limit(1).execute()
     if not chk.data:
         raise HTTPException(status_code=404, detail="담당자를 찾을 수 없습니다.")
-
-    # 대표담당자는 삭제 불가
     if chk.data[0].get("is_primary"):
         raise HTTPException(status_code=400, detail="대표담당자는 삭제할 수 없습니다. 다른 담당자를 대표담당자로 설정한 후 삭제하세요.")
-
     supabase.table("company_contacts").update({
         "is_active":  False,
         "updated_at": datetime.now().isoformat(),
@@ -549,7 +575,7 @@ def delete_company_contact(company_id: str, contact_id: str):
 
 
 # ============================================================
-# 12. 계약 이력  GET /companies/{id}/contracts
+# 12. 계약 이력
 # ============================================================
 
 @router.get("/{company_id}/contracts")
@@ -564,7 +590,7 @@ def get_company_contracts(company_id: str):
 
 
 # ============================================================
-# 13. 파일 등록  POST /companies/{id}/files
+# 13. 파일 등록
 # ============================================================
 
 @router.post("/{company_id}/files")
@@ -587,7 +613,7 @@ def add_company_file(company_id: str, body: FileBody):
 
 
 # ============================================================
-# 14. 파일 삭제  DELETE /companies/{id}/files/{fid}
+# 14. 파일 삭제
 # ============================================================
 
 @router.delete("/{company_id}/files/{file_id}")
@@ -606,7 +632,7 @@ def delete_company_file(company_id: str, file_id: str):
 
 
 # ============================================================
-# 15. 전자계약서 URL  PATCH /companies/{id}/contract-url
+# 15. 전자계약서 URL
 # ============================================================
 
 @router.patch("/{company_id}/contract-url")
@@ -615,13 +641,10 @@ def set_contract_url(company_id: str, body: ContractUrlBody):
     chk = supabase.table("companies").select("id").eq("id", company_id).limit(1).execute()
     if not chk.data:
         raise HTTPException(status_code=404, detail="회사를 찾을 수 없습니다.")
-
-    # company_files에 contract_url 타입으로 저장 (업서트 방식)
     now = datetime.now().isoformat()
     exist = supabase.table("company_files").select("id").eq(
         "company_id", company_id
     ).eq("file_type", "contract_url").limit(1).execute()
-
     if exist.data:
         supabase.table("company_files").update({
             "file_url":    body.contract_url,
@@ -638,5 +661,4 @@ def set_contract_url(company_id: str, body: ContractUrlBody):
             "uploaded_at": now,
             "created_at":  now,
         }).execute()
-
     return {"status": "success", "message": "전자계약서 URL이 저장됐습니다.", "data": {"contract_url": body.contract_url}}
