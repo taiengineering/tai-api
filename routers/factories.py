@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Factories 라우터 - 시설 등록/관리 v2.0.0
+TAI Factories 라우터 - 시설 등록/관리 v2.1.0
 
+v2.1.0: CHANGE / CLOSURE 이벤트 트리거 추가
+  - PATCH /factories/{id} 시 변경 유형에 따라 CHANGE 트리거
+  - PATCH 시 status_code='INACTIVE' 지정 시 CLOSURE 트리거
 v2.0.0: 담당자 관리 API 추가
-  - GET  /factories/{id}/contacts         시설 담당자 목록
-  - POST /factories/{id}/contacts         시설 담당자 추가
-  - PATCH /factories/{id}/contacts/{cid}  시설 담당자 수정
-  - DELETE /factories/{id}/contacts/{cid} 시설 담당자 삭제
 """
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, date
 from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/factories", tags=["factories"])
@@ -112,7 +111,7 @@ class FactoryUpdate(BaseModel):
 
 
 class FactoryContactBody(BaseModel):
-    contact_type: str             # 안전담당자 / 시설담당자 / 전기담당자 / 기타
+    contact_type: str
     name:         str
     phone:        str
     email:        Optional[str] = None
@@ -171,7 +170,9 @@ def get_factories(
 @router.post("")
 def create_factory(req: FactoryCreate):
     supabase = get_supabase()
-    company = supabase.table("companies").select("id").eq("id", req.company_id).single().execute()
+    company = supabase.table("companies").select("id").eq(
+        "id", req.company_id
+    ).single().execute()
     if not company.data:
         raise HTTPException(status_code=404, detail="사업장(회사)을 찾을 수 없습니다")
     now = datetime.now()
@@ -196,26 +197,67 @@ def create_factory(req: FactoryCreate):
 @router.get("/{factory_id}")
 def get_factory(factory_id: str):
     supabase = get_supabase()
-    res = supabase.table("factories").select("*").eq("id", factory_id).single().execute()
+    res = supabase.table("factories").select("*").eq(
+        "id", factory_id
+    ).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
     return {"status": "success", "data": res.data}
 
 
 # ============================================================
-# 4. 수정
+# 4. 수정 (v2.1.0: CHANGE / CLOSURE 트리거 추가)
 # ============================================================
 
 @router.patch("/{factory_id}")
-def update_factory(factory_id: str, req: FactoryUpdate):
+async def update_factory(factory_id: str, req: FactoryUpdate):
+    """
+    v2.1.0:
+    - 실제 변경이 있으면 CHANGE 이벤트 트리거
+    - status_code='INACTIVE' 로 변경 시 CLOSURE 이벤트 트리거
+    """
     supabase = get_supabase()
-    existing = supabase.table("factories").select("id").eq("id", factory_id).single().execute()
+    existing = supabase.table("factories").select("id, status_code").eq(
+        "id", factory_id
+    ).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
+
     update_data = {k: v for k, v in req.dict().items() if v is not None}
+    if not update_data:
+        return {"status": "success", "message": "변경된 내용이 없습니다.", "data": {}}
+
     update_data["updated_at"] = datetime.now().isoformat()
-    res = supabase.table("factories").update(update_data).eq("id", factory_id).execute()
-    return {"status": "success", "message": "시설 정보가 수정됐습니다", "data": res.data[0] if res.data else {}}
+    res = supabase.table("factories").update(update_data).eq(
+        "id", factory_id
+    ).execute()
+
+    # 이벤트 트리거
+    try:
+        from routers.event_trigger import trigger_event_schedules
+        new_status = update_data.get("status_code", "")
+        if new_status == "INACTIVE":
+            # 폐업 트리거
+            await trigger_event_schedules(
+                factory_id = factory_id,
+                event_type = "CLOSURE",
+                event_date = date.today(),
+            )
+        else:
+            # 일반 변경 트리거 (실제 변경 시)
+            await trigger_event_schedules(
+                factory_id = factory_id,
+                event_type = "CHANGE",
+                event_date = date.today(),
+            )
+    except Exception as e:
+        print(f"[FACTORIES] 이벤트 트리거 실패 (factory={factory_id}): {e}")
+
+    return {
+        "status":  "success",
+        "message": "시설 정보가 수정됐습니다",
+        "data":    res.data[0] if res.data else {},
+    }
 
 
 # ============================================================
@@ -225,7 +267,9 @@ def update_factory(factory_id: str, req: FactoryUpdate):
 @router.delete("/{factory_id}")
 def delete_factory(factory_id: str):
     supabase = get_supabase()
-    existing = supabase.table("factories").select("id").eq("id", factory_id).single().execute()
+    existing = supabase.table("factories").select("id").eq(
+        "id", factory_id
+    ).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
     supabase.table("factories").update({
@@ -263,7 +307,7 @@ def get_factory_buildings(factory_id: str):
 
 
 # ============================================================
-# 8. 시설 담당자 목록  GET /factories/{id}/contacts
+# 8. 시설 담당자 목록
 # ============================================================
 
 @router.get("/{factory_id}/contacts")
@@ -276,18 +320,16 @@ def get_factory_contacts(factory_id: str):
 
 
 # ============================================================
-# 9. 시설 담당자 추가  POST /factories/{id}/contacts
+# 9. 시설 담당자 추가
 # ============================================================
 
 @router.post("/{factory_id}/contacts")
 def add_factory_contact(factory_id: str, body: FactoryContactBody):
     supabase = get_supabase()
-
     if body.is_primary:
         supabase.table("factory_contacts").update({"is_primary": False}).eq(
             "factory_id", factory_id
         ).eq("is_primary", True).execute()
-
     now = datetime.now().isoformat()
     res = supabase.table("factory_contacts").insert({
         "factory_id":   factory_id,
@@ -307,7 +349,7 @@ def add_factory_contact(factory_id: str, body: FactoryContactBody):
 
 
 # ============================================================
-# 10. 시설 담당자 수정  PATCH /factories/{id}/contacts/{cid}
+# 10. 시설 담당자 수정
 # ============================================================
 
 @router.patch("/{factory_id}/contacts/{contact_id}")
@@ -318,20 +360,20 @@ def update_factory_contact(factory_id: str, contact_id: str, body: FactoryContac
     ).eq("factory_id", factory_id).limit(1).execute()
     if not chk.data:
         raise HTTPException(status_code=404, detail="담당자를 찾을 수 없습니다.")
-
     if body.is_primary is True:
         supabase.table("factory_contacts").update({"is_primary": False}).eq(
             "factory_id", factory_id
         ).eq("is_primary", True).neq("id", contact_id).execute()
-
     update_data = {k: v for k, v in body.dict().items() if v is not None}
     update_data["updated_at"] = datetime.now().isoformat()
-    res = supabase.table("factory_contacts").update(update_data).eq("id", contact_id).execute()
+    res = supabase.table("factory_contacts").update(update_data).eq(
+        "id", contact_id
+    ).execute()
     return {"status": "success", "message": "담당자가 수정됐습니다.", "data": res.data[0] if res.data else {}}
 
 
 # ============================================================
-# 11. 시설 담당자 삭제  DELETE /factories/{id}/contacts/{cid}
+# 11. 시설 담당자 삭제
 # ============================================================
 
 @router.delete("/{factory_id}/contacts/{contact_id}")
