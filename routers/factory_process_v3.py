@@ -1,5 +1,8 @@
 """
-시설 공정 관리 라우터 — v3.1.0
+시설 공정 관리 라우터 — v3.2.0
+v3.2.0: KCSC 공정 검색 및 등록 지원
+  - GET  /factory-process/kcsc/search?q=&limit=  kcsc_process_master ILIKE 검색
+  - POST /{factory_id}/processes: source='KCSC' + kcs_code 처리 추가
 v3.1.0: 공정수동등록 보완
   - GET /processes: display_name, is_manual 필드 명시적 추가
   - DELETE /{factory_id}/processes/{process_record_id}: UUID(id) 기준 soft delete
@@ -23,6 +26,7 @@ SOURCE_BADGE = {
     "TAI_EXISTING":  "TAI",
     "TEMPLATE":      "TEMPLATE",
     "MANUAL":        "수동입력",
+    "KCSC":          "KCSC",
 }
 
 
@@ -33,9 +37,10 @@ def get_supabase():
 # ── Pydantic 모델 ─────────────────────────────────────────
 
 class ProcessCreateBody(BaseModel):
-    process_id:          Optional[str] = None   # KCSC 코드 (MANUAL이면 생략)
+    process_id:          Optional[str] = None   # v_process_unified process_id (DB source)
+    kcs_code:            Optional[str] = None   # KCSC 공정 코드 (source='KCSC' 시 사용)
     process_name_manual: Optional[str] = None   # 수동 공정명 (MANUAL 필수)
-    source:              str = "DB"             # DB | MANUAL
+    source:              str = "DB"             # DB | MANUAL | KCSC
     process_lv1:         Optional[str] = None
     process_lv2:         Optional[str] = None
     process_lv3:         Optional[str] = None
@@ -145,8 +150,8 @@ async def get_factory_process_overview(
         if fid not in proc_map:
             proc_map[fid] = {"total": 0, "manual": 0, "primary": 0}
         proc_map[fid]["total"] += 1
-        if row.get("source") == "MANUAL":    proc_map[fid]["manual"]  += 1
-        if row.get("is_primary"):             proc_map[fid]["primary"] += 1
+        if row.get("source") in ("MANUAL",):  proc_map[fid]["manual"]  += 1
+        if row.get("is_primary"):              proc_map[fid]["primary"] += 1
 
     items = []
     for f in factories:
@@ -178,6 +183,35 @@ async def get_factory_process_overview(
 
 
 # ──────────────────────────────────────────────
+# GET /factory-process/kcsc/search  (v3.2.0 신규)
+# 고정 경로 — /{factory_id} 앞에 선언
+# ──────────────────────────────────────────────
+@router.get("/kcsc/search")
+async def search_kcsc_processes(
+    q:     str = Query(..., description="공정명 검색어"),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """
+    kcsc_process_master에서 process_name ILIKE 검색.
+    반환: items: [{kcs_code, process_name, level1_name, level2_name, construction_type}]
+    """
+    supabase = get_supabase()
+    res = supabase.table("kcsc_process_master").select(
+        "kcs_code, process_name, level1_name, level2_name, construction_type"
+    ).ilike("process_name", f"%{q}%").eq("is_active", True).limit(limit).execute()
+
+    items = res.data or []
+    return {
+        "status": "success",
+        "data": {
+            "q":     q,
+            "items": items,
+            "total": len(items),
+        }
+    }
+
+
+# ──────────────────────────────────────────────
 # GET /factory-process/{factory_id}/processes
 # v3.1.0: display_name, is_manual 명시적 추가
 # ──────────────────────────────────────────────
@@ -192,7 +226,7 @@ async def get_factory_processes(factory_id: str):
 
     items = res.data or []
 
-    db_process_ids = [r["process_id"] for r in items if r.get("source") != "MANUAL" and r.get("process_id")]
+    db_process_ids = [r["process_id"] for r in items if r.get("source") not in ("MANUAL", "KCSC") and r.get("process_id")]
     source_map = {}
     if db_process_ids:
         pres = supabase.table("v_process_unified").select(
@@ -209,6 +243,14 @@ async def get_factory_processes(factory_id: str):
         if is_manual:
             process_source = "MANUAL"
             display_name   = row.get("process_name_manual") or "수동입력 공정"
+        elif src_code == "KCSC":
+            process_source = "KCSC"
+            display_name   = (
+                row.get("process_name_manual")
+                or row.get("process_lv3")
+                or row.get("process_lv2")
+                or row.get("process_id", "")
+            )
         else:
             process_source = source_map.get(row.get("process_id", ""), "")
             display_name   = (
@@ -222,11 +264,11 @@ async def get_factory_processes(factory_id: str):
 
         result.append({
             **row,
-            "display_name":   display_name,          # v3.1.0 신규
-            "process_name":   display_name,           # 하위 호환
+            "display_name":   display_name,
+            "process_name":   display_name,
             "process_source": process_source,
             "source_badge":   SOURCE_BADGE.get(process_source, ""),
-            "is_manual":      is_manual,              # v3.1.0 신규
+            "is_manual":      is_manual,
         })
 
     return {
@@ -237,7 +279,7 @@ async def get_factory_processes(factory_id: str):
 
 # ──────────────────────────────────────────────
 # POST /factory-process/{factory_id}/processes
-# v3.1.0: Pydantic 모델 + 검증 강화
+# v3.2.0: source='KCSC' + kcs_code 처리 추가
 # ──────────────────────────────────────────────
 @router.post("/{factory_id}/processes")
 async def add_factory_process(factory_id: str, body: ProcessCreateBody):
@@ -268,7 +310,47 @@ async def add_factory_process(factory_id: str, body: ProcessCreateBody):
             "is_primary":          body.is_primary,
             "is_active":           True,
         }
+
+    elif source == "KCSC":
+        # v3.2.0: kcsc_process_master에서 kcs_code로 조회
+        if not body.kcs_code:
+            raise HTTPException(status_code=422, detail="KCSC 공정 등록 시 kcs_code는 필수입니다.")
+
+        kcsc_res = supabase.table("kcsc_process_master").select(
+            "kcs_code, process_name, level1_name, level2_name, construction_type, full_code"
+        ).eq("kcs_code", body.kcs_code).eq("is_active", True).limit(1).execute()
+
+        if not kcsc_res.data:
+            raise HTTPException(status_code=404, detail="KCSC 공정을 찾을 수 없습니다.")
+
+        kcsc = kcsc_res.data[0]
+
+        # 중복 체크 (같은 factory에 동일 kcs_code 이미 등록 여부)
+        dup = supabase.table("factory_process").select("id").eq(
+            "factory_id", factory_id
+        ).eq("process_id", body.kcs_code).eq("is_active", True).execute()
+        if dup.data:
+            raise HTTPException(status_code=409, detail="이미 등록된 KCSC 공정입니다.")
+
+        lv1 = kcsc.get("level1_name") or kcsc.get("construction_type") or "기타"
+        lv2 = kcsc.get("level2_name") or ""
+        process_name = kcsc.get("process_name", "")
+        insert_data = {
+            "factory_id":          factory_id,
+            "process_id":          body.kcs_code,          # kcs_code를 process_id로 저장
+            "process_name_manual": process_name,            # 공정명을 manual 필드에 저장
+            "process_lv1":         lv1,
+            "process_lv2":         lv2,
+            "process_lv3":         process_name,
+            "process_lv4":         None,
+            "process_path":        " > ".join(filter(None, [lv1, lv2, process_name])),
+            "source":              "KCSC",
+            "is_primary":          body.is_primary,
+            "is_active":           True,
+        }
+
     else:
+        # source == "DB"
         if not body.process_id:
             raise HTTPException(status_code=422, detail="KCSC 공정 등록 시 process_id는 필수입니다.")
 
@@ -304,11 +386,16 @@ async def add_factory_process(factory_id: str, body: ProcessCreateBody):
 
     record = res.data[0]
     is_manual = (source == "MANUAL")
-    display_name = record.get("process_name_manual") or record.get("process_lv4") or record.get("process_id", "")
+    display_name = (
+        record.get("process_name_manual")
+        or record.get("process_lv4")
+        or record.get("process_lv3")
+        or record.get("process_id", "")
+    )
     return {
         "status":  "success",
         "message": "공정이 추가됐습니다.",
-        "data":    {**record, "display_name": display_name, "is_manual": is_manual},
+        "data":    {**record, "display_name": display_name, "is_manual": is_manual, "source_badge": SOURCE_BADGE.get(source, source)},
     }
 
 
@@ -366,7 +453,7 @@ async def bulk_add_factory_processes(factory_id: str, body: dict):
 async def delete_factory_process(factory_id: str, process_record_id: str):
     """
     process_record_id = factory_process.id (UUID)
-    MANUAL 공정 포함 모든 공정 soft delete 가능.
+    MANUAL / KCSC 공정 포함 모든 공정 soft delete 가능.
     """
     supabase = get_supabase()
     res = supabase.table("factory_process").update({"is_active": False}).eq(
@@ -428,7 +515,7 @@ async def recommend_equipment(
 
     process_ids = list(set(
         r["process_id"] for r in proc_res.data
-        if r.get("source") != "MANUAL" and r.get("process_id")
+        if r.get("source") not in ("MANUAL", "KCSC") and r.get("process_id")
     ))
     if not process_ids:
         return {"status": "success", "data": {"factory_id": factory_id, "items": [], "total": 0}}
