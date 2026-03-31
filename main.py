@@ -1,5 +1,5 @@
-# main.py — v4.4.0
-# feat: 건설안전 모듈 (construction) 등록
+# main.py — v4.5.0
+# feat: safety_template 라우터 등록
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -48,11 +48,11 @@ from routers.price_setting           import router as price_setting_router
 from routers.internal_api_registry   import router as internal_api_registry_router
 from routers.report_api_registry     import router as report_api_registry_router
 from routers.construction            import router as construction_router
+from routers.safety_template         import router as safety_template_router
 
 logger = logging.getLogger(__name__)
 
 
-# ── APScheduler lifespan ─────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -73,12 +73,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="TAI API",
-    version="4.4.0",
+    version="4.5.0",
     description="TAI 산업안전 플랫폼 API",
     lifespan=lifespan,
 )
 
-# ── CORS ─────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -141,12 +140,12 @@ app.include_router(price_setting_router)
 app.include_router(internal_api_registry_router)
 app.include_router(report_api_registry_router)
 app.include_router(construction_router, prefix="/construction", tags=["건설안전"])
+app.include_router(safety_template_router)
 
 
-# ── 헬스체크 ─────────────────────────────────────────────
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "4.4.0"}
+    return {"status": "ok", "service": "TAI API", "version": "4.5.0"}
 
 
 @app.get("/health")
@@ -161,4 +160,4 @@ def health():
         cron_status = f"{len(scheduler.get_jobs())}개 등록" if scheduler.running else "중지"
     except Exception:
         cron_status = "미초기화"
-    return {"status": "healthy", "server_ip": ip, "version": "4.4.0", "cron": cron_status}
+    return {"status": "healthy", "server_ip": ip, "version": "4.5.0", "cron": cron_status}
