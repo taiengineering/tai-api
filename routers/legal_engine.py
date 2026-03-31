@@ -1,13 +1,16 @@
 """
-법령 판정 엔진 라우터 — v4.4.1
+법령 판정 엔진 라우터 — v4.4.2
 =================================
-v4.4.1: create-inspection-sets 버그 수정
-  - BUG-1: factory_diagnosis_results fallback 추가 (diagnose/step1 경로 단절 수정)
-  - BUG-1: master_building_legal_rules JOIN으로 cycle 정보 포함
-  - BUG-2: 중복 rule_id skip + 50건 배치 유지 (타임아웃 방지, delete 제거)
+v4.4.2: create-inspection-sets 타임아웃 추가 최적화
+  - fallback 경로 B에서 result_data (대용량 JSON) SELECT 제거
+    → factory_diagnosis_results에서 id만 조회 (diagnosis_id 목적)
+    → result_data는 사용하지 않으므로 SELECT 불필요
+  - inspection_sets INSERT 배치 크기 20건으로 축소 (안정성 강화)
+v4.4.1: create-inspection-sets BUG-1+2 수정
+  - factory_diagnosis_results fallback + master JOIN + 중복 skip + delete 제거
 v4.4.0: diagnose/step1 DB 저장 추가
 v4.3.3: summary.notify 집계 버그 수정
-v4.3.2: diagnose/step1 개선 (factory_id Optional, flat params, obligation_type 완전 반영)
+v4.3.2: diagnose/step1 개선
 v4.2.0: 3단계 진단 API 추가
 """
 from fastapi import APIRouter, HTTPException, Query
@@ -20,7 +23,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "4.4.1"
+ENGINE_VERSION = "4.4.2"
 
 
 # ──────────────────────────────────────────────
@@ -477,7 +480,7 @@ async def apply_legal_engine(
     body: Optional[dict] = None,
     mode: str = Query("all"),
 ):
-    """시설 등록 기반 법령 판정 (v4.4.1 — 하위 호환 유지)"""
+    """시설 등록 기반 법령 판정 (v4.4.2 — 하위 호환 유지)"""
     supabase = get_supabase()
     if body and body.get("mode"):
         mode = body["mode"]
@@ -746,7 +749,7 @@ def _evaluate_facility_conditions_db(facility_ctx: Dict[str, Any], rules: List[D
 
 
 # ──────────────────────────────────────────────
-# POST /legal-engine/diagnose/step1  v4.4.1
+# POST /legal-engine/diagnose/step1  v4.4.2
 # ──────────────────────────────────────────────
 
 @router.post("/diagnose/step1")
@@ -1013,10 +1016,10 @@ async def get_legal_summary(factory_id: str):
 @router.post("/create-inspection-sets/{factory_id}")
 async def create_inspection_sets_from_legal(factory_id: str):
     """
-    v4.4.1: BUG-1 + BUG-2 수정
-    - BUG-1: legal_result_json 없으면 factory_diagnosis_results fallback
-    - BUG-1: diagnosis_rule_results + master_building_legal_rules JOIN으로 cycle 정보 포함
-    - BUG-2: 기존 rule_id는 skip (delete 제거), 50건 배치 유지
+    v4.4.2: 타임아웃 추가 최적화
+    - fallback 경로 B: factory_diagnosis_results에서 id만 조회 (result_data 제거 — 대용량 JSON 로딩 방지)
+    - INSERT 배치 크기 20건으로 축소 (안정성 강화)
+    v4.4.1: BUG-1 fallback + master JOIN + BUG-2 중복 skip + delete 제거
     """
     supabase = get_supabase()
     fac = supabase.table("factories").select(
@@ -1034,19 +1037,19 @@ async def create_inspection_sets_from_legal(factory_id: str):
         inspection_rules = result_json.get("inspection_required", [])
 
     # ── 경로 B: factory_diagnosis_results fallback (diagnose/step1 경로) ──
+    # v4.4.2: select("id") — result_data 제거로 대용량 JSON 로딩 방지
     if not inspection_rules:
         try:
             diag_res = supabase.table("factory_diagnosis_results") \
-                .select("id, result_data") \
+                .select("id") \
                 .eq("factory_id", factory_id) \
                 .eq("is_latest", True) \
                 .order("created_at", desc=True) \
                 .limit(1).execute()
             if diag_res.data:
-                diag_row     = diag_res.data[0]
-                diagnosis_id = diag_row.get("id")
+                diagnosis_id = diag_res.data[0].get("id")
 
-                # diagnosis_rule_results에서 rule_code 목록 가져오기
+                # diagnosis_rule_results에서 rule_code 목록 조회
                 drr_res = supabase.table("diagnosis_rule_results") \
                     .select("rule_code, rule_name, law_name, law_article, obligation, form_code") \
                     .eq("diagnosis_id", diagnosis_id) \
@@ -1054,7 +1057,7 @@ async def create_inspection_sets_from_legal(factory_id: str):
                 drr_rows = drr_res.data or []
 
                 if drr_rows:
-                    # master_building_legal_rules JOIN → INSPECT 타입 + cycle 정보
+                    # master_building_legal_rules에서 INSPECT 타입 + cycle 정보 조회
                     rule_codes = [r.get("rule_code") for r in drr_rows if r.get("rule_code")]
                     masters_res = supabase.table("master_building_legal_rules") \
                         .select(
@@ -1098,7 +1101,7 @@ async def create_inspection_sets_from_legal(factory_id: str):
             "data":    {"created": 0},
         }
 
-    # ── BUG-2: 기존 rule_id 조회 (중복 skip) ──
+    # ── 기존 rule_id 조회 (중복 skip) ──
     existing_res = supabase.table("inspection_sets") \
         .select("legal_rule_id") \
         .eq("factory_id", factory_id) \
@@ -1119,18 +1122,17 @@ async def create_inspection_sets_from_legal(factory_id: str):
         law_name    = rule.get("law_name", "")
         cycle_label = rule.get("inspection_cycle", "")
 
-        # cycle 정보: master에서 우선 가져오기
+        # cycle 정보: CYCLE_CODE_MAP 우선, cycle_unit_std fallback
         cycle_unit_code = str(m.get("inspection_cycle_unit_code") or "")
         if cycle_unit_code in CYCLE_CODE_MAP:
             cycle_unit, cycle_value = CYCLE_CODE_MAP[cycle_unit_code]
         else:
-            # cycle_unit_std fallback
             cycle_unit_std = (m.get("cycle_unit_std") or "").lower()
             UNIT_STD_MAP = {"year": "year", "month": "month", "day": "day", "week": "week"}
-            cycle_unit = UNIT_STD_MAP.get(cycle_unit_std, "year")
+            cycle_unit  = UNIT_STD_MAP.get(cycle_unit_std, "year")
             cycle_value = int(m.get("inspection_cycle_value") or 1)
-            # cycle_label fallback (경로 A)
             if not cycle_unit_std:
+                # 텍스트 라벨 fallback (경로 A)
                 if "월 1회" in cycle_label or "매월" in cycle_label: cycle_unit, cycle_value = "month", 1
                 elif "반기" in cycle_label: cycle_unit, cycle_value = "month", 6
                 elif "분기" in cycle_label: cycle_unit, cycle_value = "month", 3
@@ -1169,10 +1171,10 @@ async def create_inspection_sets_from_legal(factory_id: str):
             "data": {"created": 0, "skipped": len(existing_rule_ids), "source_rules": len(inspection_rules)},
         }
 
-    # ── 50건 배치 INSERT ──
+    # ── 20건씩 배치 INSERT (v4.4.2: 50 → 20 안정성 강화) ──
     created = 0
-    for i in range(0, len(insert_rows), 50):
-        res = supabase.table("inspection_sets").insert(insert_rows[i:i+50]).execute()
+    for i in range(0, len(insert_rows), 20):
+        res = supabase.table("inspection_sets").insert(insert_rows[i:i + 20]).execute()
         created += len(res.data or [])
 
     return {
@@ -1401,7 +1403,7 @@ def diagnose_step3(body: dict):
             except Exception:
                 pass
     overdue_count = sum(1 for s in inspection_schedules if s['status'] == 'OVERDUE')
-    upcoming_count = sum(1 for s in inspection_schedules if s['status'] == 'URGENT')
+    upcoming_count = sum(1 for s in inspection_schedules if s['status'] == 'URGENT'  )
     return {
         'status': 'success', 'diagnosis_id': diagnosis.get('id'), 'stage': 3,
         'sector': sector, 'rule_count': len(matched),
