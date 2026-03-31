@@ -1,9 +1,9 @@
 """
-점검리스트 시스템 — v1.2.0
-v1.2.0: BUG-4 수정
-  - generate_schedules: anchor_confirmed=True 필터 추가
-  - generate_schedules: skip 건수 응답 포함
-v1.1.0: /status 전체 조회 제거 → 각각 count 쿼리 4개로 분리 (성능 최적화)
+점검리스트 시스템 — v1.3.0
+v1.3.0: 점검주기생성_버그수정
+  - generate_schedules: skipped_anchor 응답 필드 추가 (anchor_confirmed=False 건너뜀 건수)
+v1.2.0: BUG-4 anchor_confirmed=True 필터 + sets_skipped 응답
+v1.1.0: /status 전체 조회 제거 → 각각 count 쿼리 4개로 분리
 prefix: /inspection
 """
 from fastapi import APIRouter, HTTPException, Query
@@ -15,7 +15,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/inspection", tags=["점검리스트"])
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 LEGAL_INSPECTION_ITEMS = {
     "ELECACT-010":    ["배전반 외관 점검", "접지 상태 확인", "절연저항 측정", "과전류 차단기 동작 확인"],
@@ -150,9 +150,8 @@ async def generate_inspection_items(factory_id: str):
 @router.post("/generate-schedules/{factory_id}")
 async def generate_schedules(factory_id: str, body: Optional[dict] = None):
     """
-    v1.2.0: BUG-4 수정
-    - anchor_confirmed=True인 것만 처리
-    - skip 건수 응답 포함
+    v1.3.0: skipped_anchor 응답 필드 추가
+    v1.2.0: anchor_confirmed=True 필터 + sets_skipped 응답
     """
     supabase = get_supabase()
     try:
@@ -165,13 +164,13 @@ async def generate_schedules(factory_id: str, body: Optional[dict] = None):
         end_month = end_month % 12 + 1
         end_dt    = date(end_year, end_month, min(start_dt.day, calendar.monthrange(end_year, end_month)[1]))
 
-        # ── BUG-4: 전체 sets 수 먼저 조회 (skip 건수 계산용) ──
+        # 전체 sets 수 (skip 건수 계산용)
         total_sets_res = supabase.table("inspection_sets").select(
             "id", count="exact"
         ).eq("factory_id", factory_id).eq("source", "LEGAL_ENGINE").eq("is_active", True).limit(0).execute()
         total_sets = total_sets_res.count or 0
 
-        # ── BUG-4: anchor_confirmed=True인 것만 처리 ──
+        # anchor_confirmed=True인 것만 처리
         sets_res = supabase.table("inspection_sets").select(
             "id, company_id, cycle_unit, cycle_value"
         ).eq("factory_id", factory_id).eq("source", "LEGAL_ENGINE") \
@@ -179,6 +178,8 @@ async def generate_schedules(factory_id: str, body: Optional[dict] = None):
          .not_.is_("schedule_anchor_date", "null") \
          .execute()
         sets = sets_res.data or []
+
+        skipped_anchor = total_sets - len(sets)  # anchor 미설정으로 건너뜀
 
         if not sets:
             return {
@@ -189,6 +190,7 @@ async def generate_schedules(factory_id: str, body: Optional[dict] = None):
                     "sets_total":     total_sets,
                     "sets_processed": 0,
                     "sets_skipped":   total_sets,
+                    "skipped_anchor": skipped_anchor,
                     "created":        0,
                     "period":         f"{start_str} ~ {end_dt.isoformat()}",
                 }
@@ -214,7 +216,6 @@ async def generate_schedules(factory_id: str, body: Optional[dict] = None):
             res = supabase.table("work_schedules").insert(insert_rows[i:i+100]).execute()
             created += len(res.data or [])
 
-        # ── BUG-4: skip 건수 응답 포함 ──
         return {
             "status":  "success",
             "message": f"{created}개 스케줄이 생성됐습니다.",
@@ -223,6 +224,7 @@ async def generate_schedules(factory_id: str, body: Optional[dict] = None):
                 "sets_total":     total_sets,
                 "sets_processed": len(sets),
                 "sets_skipped":   total_sets - len(sets),
+                "skipped_anchor": skipped_anchor,
                 "created":        created,
                 "period":         f"{start_str} ~ {end_dt.isoformat()}",
             }

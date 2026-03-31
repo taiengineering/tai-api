@@ -1,9 +1,13 @@
 """
-법정점검 일정 생성 엔진 — v1.1.0
-v1.1.0: BUG-3 수정
-  - anchor_confirmed 체크 → ANCHOR_NOT_SET 반환
-  - 과거 날짜도 OVERDUE 상태로 생성
-  - 중복 체크 유지
+법정점검 일정 생성 엔진 — v1.2.0
+v1.2.0: 점검주기생성_버그수정
+  - anchor_confirmed 엄격 체크 완화
+    - next_planned_date 있으면 anchor_confirmed 없어도 생성 가능
+    - anchor만 있어도 cycle 계산으로 생성 가능
+    - anchor & next_planned_date 모두 없는 경우만 ANCHOR_NOT_SET
+  - status_code SCHEDULED (이전: OVERDUE/planned)
+  - 중복 방지 유지
+v1.1.0: BUG-3 anchor_confirmed 체크 + OVERDUE 상태 생성
 """
 from fastapi import APIRouter, HTTPException
 from db.supabase_client import get_supabase
@@ -18,8 +22,9 @@ def add_cycle(base_date: date, cycle_unit: str, cycle_value: int) -> date:
         return base_date + timedelta(days=cycle_value)
     if cycle_unit == "week":
         return base_date + timedelta(weeks=cycle_value)
-    if cycle_unit == "month":
-        month = base_date.month - 1 + cycle_value
+    if cycle_unit in ("month", "quarter", "half_year"):
+        months = cycle_value if cycle_unit == "month" else (3 if cycle_unit == "quarter" else 6)
+        month = base_date.month - 1 + months
         year  = base_date.year + month // 12
         month = month % 12 + 1
         day   = min(base_date.day, 28)
@@ -40,11 +45,11 @@ def test():
 @router.post("/generate/{inspection_set_id}")
 def generate_schedule(inspection_set_id: str):
     """
-    단건 일정 생성.
-    - anchor_confirmed=False → ANCHOR_NOT_SET 오류 반환
-    - next_planned_date = anchor + cycle
-    - 과거 날짜 → OVERDUE 상태로 생성
-    - 중복 방지
+    단건 일정 생성 (v1.2.0)
+    - next_planned_date 있으면 바로 사용
+    - next_planned_date 없고 anchor 있으면 anchor + cycle로 계산
+    - 둘 다 없으면 ANCHOR_NOT_SET 반환
+    - 중복 방지 (inspection_set_id + planned_date 체크)
     """
     try:
         supabase = get_supabase()
@@ -60,26 +65,28 @@ def generate_schedule(inspection_set_id: str):
             return {"success": False, "message": "inspection_set not found"}
 
         s = iset_res.data[0]
+        anchor   = s.get("schedule_anchor_date")
+        next_date = s.get("next_planned_date")
 
-        # ── BUG-3: anchor 없으면 명확한 오류 반환 ──
-        if not s.get("schedule_anchor_date") or not s.get("anchor_confirmed"):
-            return {
-                "success":           False,
-                "reason":            "ANCHOR_NOT_SET",
-                "message":           "기준일이 설정되지 않았습니다. 기준일을 먼저 입력해주세요.",
-                "inspection_set_id": inspection_set_id,
-                "created_count":     0,
-            }
+        # ── next_planned_date 없으면 anchor로 계산 ──
+        if not next_date:
+            if not anchor:
+                return {
+                    "success":           False,
+                    "reason":            "ANCHOR_NOT_SET",
+                    "message":           "기준일(anchor)이 설정되지 않았습니다. 기준일을 먼저 입력해주세요.",
+                    "inspection_set_id": inspection_set_id,
+                    "created_count":     0,
+                }
+            # anchor + cycle → next_date 계산
+            cycle_unit  = s.get("cycle_unit") or "year"
+            cycle_value = int(s.get("cycle_value") or 1)
+            anchor_dt   = date.fromisoformat(str(anchor))
+            next_date   = add_cycle(anchor_dt, cycle_unit, cycle_value).isoformat()
 
-        cycle_unit  = s.get("cycle_unit") or "year"
-        cycle_value = int(s.get("cycle_value") or 1)
-        anchor      = date.fromisoformat(str(s["schedule_anchor_date"]))
+        planned_date_str = str(next_date)
 
-        # next_planned_date = anchor + 주기
-        planned_date     = add_cycle(anchor, cycle_unit, cycle_value)
-        planned_date_str = planned_date.isoformat()
-
-        # 중복 체크
+        # ── 중복 체크 ──
         existing = (
             supabase.table("work_schedules")
             .select("id")
@@ -94,18 +101,27 @@ def generate_schedule(inspection_set_id: str):
                 "created_count":     0,
                 "message":           "이미 동일한 일정이 존재합니다.",
                 "planned_date":      planned_date_str,
+                "existing_id":       existing.data[0]["id"],
             }
 
-        # ── BUG-3: 과거 날짜도 OVERDUE 상태로 생성 ──
-        status_code = "OVERDUE" if planned_date < date.today() else "planned"
+        # ── 상태 결정 ──
+        try:
+            planned_dt = date.fromisoformat(planned_date_str)
+            status_code = "OVERDUE" if planned_dt < date.today() else "SCHEDULED"
+        except Exception:
+            status_code = "SCHEDULED"
 
         insert_payload = {
             "company_id":        s.get("company_id"),
             "factory_id":        s.get("factory_id"),
             "inspection_set_id": inspection_set_id,
             "planned_date":      planned_date_str,
+            "start_date":        planned_date_str,
+            "repeat_type":       s.get("cycle_unit") or "year",
+            "repeat_interval":   s.get("cycle_value") or 1,
             "status_code":       status_code,
-            "description":       f"{s.get('inspection_set_name', '')} 자동생성",
+            "active_yn":         True,
+            "description":       f"{s.get('inspection_set_name', '점검')} — 법정점검 일정",
         }
         res = supabase.table("work_schedules").insert(insert_payload).execute()
         created = res.data or []
