@@ -1,5 +1,5 @@
-# main.py — v4.8.0
-# feat: education_assign 라우터 등록
+# main.py — v4.9.0
+# feat: diagnosis 라우터 등록 (access-check)
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -52,6 +52,7 @@ from routers.construction            import router as construction_router
 from routers.safety_template         import router as safety_template_router
 from routers.event_trigger           import router as event_trigger_router
 from routers.worker_registry         import router as worker_registry_router
+from routers.diagnosis               import router as diagnosis_router
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="TAI API",
-    version="4.8.0",
+    version="4.9.0",
     description="TAI 산업안전 플랫폼 API",
     lifespan=lifespan,
 )
@@ -147,11 +148,12 @@ app.include_router(construction_router, prefix="/construction", tags=["건설안
 app.include_router(safety_template_router)
 app.include_router(event_trigger_router)      # v4.6.0
 app.include_router(worker_registry_router)    # v4.7.0
+app.include_router(diagnosis_router)          # v4.9.0 (diagnosis/access-check)
 
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "4.8.0"}
+    return {"status": "ok", "service": "TAI API", "version": "4.9.0"}
 
 
 @app.get("/health")
@@ -166,4 +168,4 @@ def health():
         cron_status = f"{len(scheduler.get_jobs())}개 등록" if scheduler.running else "중지"
     except Exception:
         cron_status = "미초기화"
-    return {"status": "healthy", "server_ip": ip, "version": "4.8.0", "cron": cron_status}
+    return {"status": "healthy", "server_ip": ip, "version": "4.9.0", "cron": cron_status}
