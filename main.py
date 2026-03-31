@@ -1,5 +1,5 @@
-# main.py — v4.7.0
-# feat: worker_registry 라우터 등록
+# main.py — v4.8.0
+# feat: education_assign 라우터 등록
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -20,6 +20,7 @@ from routers.report_forms            import router as report_forms_router
 from routers.contracts               import router as contracts_router
 from routers.contacts                import router as contacts_router
 from routers.education               import router as education_router
+from routers.education_assign        import router as education_assign_router
 from routers.notifications           import router as notifications_router
 from routers.equipment_assets        import router as equipment_assets_router
 from routers.engine_equipment        import router as engine_equipment_router
@@ -75,7 +76,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="TAI API",
-    version="4.7.0",
+    version="4.8.0",
     description="TAI 산업안전 플랫폼 API",
     lifespan=lifespan,
 )
@@ -113,7 +114,8 @@ app.include_router(quotes_router)
 app.include_router(report_forms_router)
 app.include_router(contracts_router)
 app.include_router(contacts_router)
-app.include_router(education_router)
+app.include_router(education_router)           # 기존 (education_history, education_settings)
+app.include_router(education_assign_router)    # v4.8.0 (assign, company-settings, master)
 app.include_router(notifications_router)
 app.include_router(equipment_assets_router)
 app.include_router(engine_equipment_router)
@@ -149,7 +151,7 @@ app.include_router(worker_registry_router)    # v4.7.0
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "4.7.0"}
+    return {"status": "ok", "service": "TAI API", "version": "4.8.0"}
 
 
 @app.get("/health")
@@ -164,4 +166,4 @@ def health():
         cron_status = f"{len(scheduler.get_jobs())}개 등록" if scheduler.running else "중지"
     except Exception:
         cron_status = "미초기화"
-    return {"status": "healthy", "server_ip": ip, "version": "4.7.0", "cron": cron_status}
+    return {"status": "healthy", "server_ip": ip, "version": "4.8.0", "cron": cron_status}
