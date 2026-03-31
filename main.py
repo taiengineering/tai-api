@@ -1,5 +1,6 @@
 # main.py — v4.9.0
 # feat: diagnosis 라우터 등록 (access-check)
+# build: retrigger
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
