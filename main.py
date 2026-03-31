@@ -1,6 +1,5 @@
-# main.py — v4.9.0
-# feat: diagnosis 라우터 등록 (access-check)
-# build: retrigger
+# main.py — v5.0.0
+# feat: TBM / 안전보건회의 / 위험성평가 라우터 등록
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -54,6 +53,9 @@ from routers.safety_template         import router as safety_template_router
 from routers.event_trigger           import router as event_trigger_router
 from routers.worker_registry         import router as worker_registry_router
 from routers.diagnosis               import router as diagnosis_router
+from routers.tbm                     import router as tbm_router
+from routers.safety_meetings         import router as safety_meetings_router
+from routers.risk_assessments        import router as risk_assessments_router
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +80,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="TAI API",
-    version="4.9.0",
+    version="5.0.0",
     description="TAI 산업안전 플랫폼 API",
     lifespan=lifespan,
 )
@@ -116,8 +118,8 @@ app.include_router(quotes_router)
 app.include_router(report_forms_router)
 app.include_router(contracts_router)
 app.include_router(contacts_router)
-app.include_router(education_router)           # 기존 (education_history, education_settings)
-app.include_router(education_assign_router)    # v4.8.0 (assign, company-settings, master)
+app.include_router(education_router)
+app.include_router(education_assign_router)
 app.include_router(notifications_router)
 app.include_router(equipment_assets_router)
 app.include_router(engine_equipment_router)
@@ -147,14 +149,17 @@ app.include_router(internal_api_registry_router)
 app.include_router(report_api_registry_router)
 app.include_router(construction_router, prefix="/construction", tags=["건설안전"])
 app.include_router(safety_template_router)
-app.include_router(event_trigger_router)      # v4.6.0
-app.include_router(worker_registry_router)    # v4.7.0
-app.include_router(diagnosis_router)          # v4.9.0 (diagnosis/access-check)
+app.include_router(event_trigger_router)
+app.include_router(worker_registry_router)
+app.include_router(diagnosis_router)          # v4.9.0
+app.include_router(tbm_router)                # v5.0.0
+app.include_router(safety_meetings_router)    # v5.0.0
+app.include_router(risk_assessments_router)   # v5.0.0
 
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "4.9.0"}
+    return {"status": "ok", "service": "TAI API", "version": "5.0.0"}
 
 
 @app.get("/health")
@@ -169,4 +174,4 @@ def health():
         cron_status = f"{len(scheduler.get_jobs())}개 등록" if scheduler.running else "중지"
     except Exception:
         cron_status = "미초기화"
-    return {"status": "healthy", "server_ip": ip, "version": "4.9.0", "cron": cron_status}
+    return {"status": "healthy", "server_ip": ip, "version": "5.0.0", "cron": cron_status}
