@@ -247,18 +247,21 @@ def check_biz(business_number: str = Query(..., description="사업자등록번�
         )
 
     res = supabase.table("companies").select(
-        "id, name, business_number"
+        "id, name, business_number, representative_name"
     ).eq("business_number", bn_clean).eq("is_active", True).limit(1).execute()
 
     if res.data:
+        co = res.data[0]
         return {
             "status":    "success",
             "available": False,
             "message":   "이미 등록된 사업자등록번호입니다.",
             "data": {
-                "business_number": bn_clean,
-                "company_id":      res.data[0]["id"],
-                "company_name":    res.data[0]["name"],
+                "exists":              True,
+                "business_number":     bn_clean,
+                "company_id":          co["id"],
+                "company_name":        co["name"],
+                "representative_name": co.get("representative_name", ""),
             }
         }
 

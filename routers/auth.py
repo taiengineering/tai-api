@@ -57,6 +57,8 @@ class RegisterRequest(BaseModel):
     # v3.4.0: 신규 필드
     business_number:      Optional[str] = None   # 사업자등록번호
     representative_name:  Optional[str] = None   # 대표자명
+    ksic_code:            Optional[str] = None   # 업종코드
+    contact_phone:        Optional[str] = None   # 회사 연락처
 
 class FindPasswordRequest(BaseModel):
     phone: str
@@ -296,11 +298,15 @@ def register(req: RegisterRequest):
                     "created_at":        _now_iso(),
                     "updated_at":        _now_iso(),
                 }
-                # v3.4.0: 사업자번호 / 대표자명 포함
+                # v3.4.0: 사업자번호 / 대표자명 / 업종 / 연락처 포함
                 if req.business_number:
                     company_data["business_number"] = re.sub(r'[^0-9]', '', req.business_number)
                 if req.representative_name:
                     company_data["representative_name"] = req.representative_name
+                if req.ksic_code:
+                    company_data["ksic_code"] = req.ksic_code
+                if req.contact_phone:
+                    company_data["contact_phone"] = req.contact_phone
 
                 cr = supabase.table("companies").insert(company_data).execute()
                 company_id = cr.data[0]["id"] if cr.data else None
