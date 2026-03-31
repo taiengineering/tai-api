@@ -9,8 +9,8 @@ GET    /users                회원 목록 조회
 POST   /users                회원 등록 (어드민용)
 GET    /users/{id}           회원 상세 조회
 PATCH  /users/{id}           회원 정보 수정
-DELETE /users/{id}           회원 비활성화
-PATCH  /users/{id}/status    회원 상태 변경
+DELETE /users/{id}           회원 비활성화 + 담당 일정 미배정 처리 (v2.0.0)
+PATCH  /users/{id}/status    회원 상태 변경 + 비활성화 시 일정 미배정 처리 (v2.0.0)
 PATCH  /users/{id}/role      회원 역할 변경
 GET    /users/{id}/factories 담당 시설 목록
 """
@@ -23,6 +23,11 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/users", tags=["users"])
 
+VERSION = "2.0.0"
+
+# 비활성화 상태 코드: 이 상태로 변경 시 work_schedules 미배정 처리
+DEACTIVATE_STATUSES = {"INACTIVE", "DELETED", "SUSPENDED"}
+
 
 # ============================================================
 # 스키마
@@ -31,7 +36,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 class UserCreate(BaseModel):
     email:      str
     name:       str
-    role_code:  str = "004"             # user_role 전역변수
+    role_code:  str = "004"
     company_id: Optional[str] = None
     factory_id: Optional[str] = None
     team_id:    Optional[str] = None
@@ -81,7 +86,29 @@ class StatusUpdate(BaseModel):
 
 
 class RoleUpdate(BaseModel):
-    role_code: str    # user_role: 001~008
+    role_code: str
+
+
+# ============================================================
+# 내부 헬퍼: 퇴사 후 work_schedules 미배정 처리
+# ============================================================
+
+def _unassign_user_schedules(supabase, user_id: str) -> int:
+    """
+    해당 유저의 SCHEDULED 상태 일정을 assigned_user_id=NULL로 일괄 업데이트.
+    일정 자체는 SCHEDULED 유지 (삭제 금지).
+    반환: 미배정 처리된 일정 수
+    """
+    try:
+        res = supabase.table("work_schedules").update(
+            {"assigned_user_id": None}
+        ).eq("assigned_user_id", user_id).eq(
+            "status_code", "SCHEDULED"
+        ).execute()
+        return len(res.data or [])
+    except Exception as e:
+        print(f"[USERS] work_schedules 미배정 처리 실패 (user_id={user_id}): {e}")
+        return 0
 
 
 # ============================================================
@@ -108,8 +135,7 @@ def get_users(
     if status_code: query = query.eq("status_code", status_code)
 
     offset = (page - 1) * size
-    res = query.order("created_at", desc=True)\
-               .range(offset, offset + size - 1).execute()
+    res = query.order("created_at", desc=True).range(offset, offset + size - 1).execute()
 
     return {
         "status": "success",
@@ -131,16 +157,12 @@ def get_users(
 def create_user(req: UserCreate):
     supabase = get_supabase()
 
-    # 이메일 중복 확인
-    dup = supabase.table("users")\
-        .select("id").eq("email", req.email).limit(1).execute()
+    dup = supabase.table("users").select("id").eq("email", req.email).limit(1).execute()
     if dup.data:
         raise HTTPException(status_code=400, detail="이미 등록된 이메일입니다")
 
-    # username 중복 확인
     if req.username:
-        dup = supabase.table("users")\
-            .select("id").eq("username", req.username).limit(1).execute()
+        dup = supabase.table("users").select("id").eq("username", req.username).limit(1).execute()
         if dup.data:
             raise HTTPException(status_code=400, detail="이미 사용 중인 아이디입니다")
 
@@ -160,11 +182,7 @@ def create_user(req: UserCreate):
     if not res.data:
         raise HTTPException(status_code=500, detail="회원 등록 실패")
 
-    return {
-        "status":  "success",
-        "message": "회원이 등록됐습니다",
-        "data":    res.data[0],
-    }
+    return {"status": "success", "message": "회원이 등록됐습니다", "data": res.data[0]}
 
 
 # ============================================================
@@ -174,12 +192,9 @@ def create_user(req: UserCreate):
 @router.get("/{user_id}")
 def get_user(user_id: str):
     supabase = get_supabase()
-    res = supabase.table("users")\
-        .select("*").eq("id", user_id).single().execute()
-
+    res = supabase.table("users").select("*").eq("id", user_id).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
-
     return {"status": "success", "data": res.data}
 
 
@@ -191,16 +206,14 @@ def get_user(user_id: str):
 def update_user(user_id: str, req: UserUpdate):
     supabase = get_supabase()
 
-    existing = supabase.table("users")\
-        .select("id").eq("id", user_id).single().execute()
+    existing = supabase.table("users").select("id").eq("id", user_id).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
 
     update_data = {k: v for k, v in req.dict().items() if v is not None}
     update_data["updated_at"] = datetime.now().isoformat()
 
-    res = supabase.table("users")\
-        .update(update_data).eq("id", user_id).execute()
+    res = supabase.table("users").update(update_data).eq("id", user_id).execute()
 
     return {
         "status":  "success",
@@ -210,29 +223,36 @@ def update_user(user_id: str, req: UserUpdate):
 
 
 # ============================================================
-# 5. 회원 비활성화
+# 5. 회원 비활성화 (v2.0.0: 담당 SCHEDULED 일정 미배정 처리)
 # ============================================================
 
 @router.delete("/{user_id}")
 def delete_user(user_id: str):
     supabase = get_supabase()
 
-    existing = supabase.table("users")\
-        .select("id").eq("id", user_id).single().execute()
+    existing = supabase.table("users").select("id").eq("id", user_id).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
 
+    # users 비활성화
     supabase.table("users").update({
         "is_active":   False,
         "status_code": "DELETED",
         "updated_at":  datetime.now().isoformat(),
     }).eq("id", user_id).execute()
 
-    return {"status": "success", "message": "회원이 비활성화됐습니다"}
+    # 담당 SCHEDULED 일정 미배정 처리
+    unassigned = _unassign_user_schedules(supabase, user_id)
+
+    return {
+        "status":  "success",
+        "message": "회원이 비활성화됐습니다",
+        "data":    {"unassigned_schedules": unassigned},
+    }
 
 
 # ============================================================
-# 6. 회원 상태 변경 (어드민용)
+# 6. 회원 상태 변경 (v2.0.0: INACTIVE/DELETED/SUSPENDED 시 일정 미배정)
 # ============================================================
 
 @router.patch("/{user_id}/status")
@@ -240,18 +260,27 @@ def update_user_status(user_id: str, req: StatusUpdate):
     """user_status: ACTIVE/INACTIVE/SUSPENDED/DELETED/PENDING"""
     supabase = get_supabase()
 
-    existing = supabase.table("users")\
-        .select("id").eq("id", user_id).single().execute()
+    existing = supabase.table("users").select("id").eq("id", user_id).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
 
+    is_active = (req.status_code == "ACTIVE")
     supabase.table("users").update({
         "status_code": req.status_code,
-        "is_active":   req.status_code == "ACTIVE",
+        "is_active":   is_active,
         "updated_at":  datetime.now().isoformat(),
     }).eq("id", user_id).execute()
 
-    return {"status": "success", "message": f"회원 상태가 변경됐습니다 ({req.status_code})"}
+    # 비활성화 상태인 경우 담당 일정 미배정 처리
+    unassigned = 0
+    if req.status_code in DEACTIVATE_STATUSES:
+        unassigned = _unassign_user_schedules(supabase, user_id)
+
+    return {
+        "status":  "success",
+        "message": f"회원 상태가 변경됐습니다 ({req.status_code})",
+        "data":    {"unassigned_schedules": unassigned},
+    }
 
 
 # ============================================================
@@ -264,14 +293,11 @@ def update_user_role(user_id: str, req: RoleUpdate):
        005=협력업체관리자/006=협력업체작업자/007=점검자/008=승인자"""
     supabase = get_supabase()
 
-    existing = supabase.table("users")\
-        .select("id").eq("id", user_id).single().execute()
+    existing = supabase.table("users").select("id").eq("id", user_id).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
 
-    # role_code 유효성 확인
-    valid = supabase.table("system_codes")\
-        .select("code").eq("category", "user_role")\
+    valid = supabase.table("system_codes").select("code").eq("category", "user_role")\
         .eq("code", req.role_code).limit(1).execute()
     if not valid.data:
         raise HTTPException(status_code=400, detail="유효하지 않은 역할 코드입니다")
@@ -292,8 +318,7 @@ def update_user_role(user_id: str, req: RoleUpdate):
 def get_user_factories(user_id: str):
     supabase = get_supabase()
 
-    user = supabase.table("users")\
-        .select("factory_id, company_id")\
+    user = supabase.table("users").select("factory_id, company_id")\
         .eq("id", user_id).single().execute()
     if not user.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
@@ -302,9 +327,8 @@ def get_user_factories(user_id: str):
     if not company_id:
         return {"status": "success", "data": {"items": [], "total": 0}}
 
-    res = supabase.table("factories")\
-        .select("id, name, site_type, address_road, employee_count, status_code")\
-        .eq("company_id", company_id)\
-        .order("created_at", desc=True).execute()
+    res = supabase.table("factories").select(
+        "id, name, site_type, address_road, employee_count, status_code"
+    ).eq("company_id", company_id).order("created_at", desc=True).execute()
 
     return {"status": "success", "data": {"items": res.data, "total": len(res.data)}}

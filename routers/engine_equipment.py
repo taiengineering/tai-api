@@ -1,20 +1,22 @@
 """
-엔진 설비 마스터 관리 라우터 — v4.3.3
-v4.3.3: assets-list 응답을 data.items 형태로 통일, page_size 최대 5000, 행 보강(has_model 등)
+엔진 설비 마스터 관리 라우터 — v4.4.0
+v4.4.0: 수리 완료 후 anchor 재설정
+  - PATCH /assets/{asset_id}: is_operating + repair_date 필드 추가
+    - is_operating=false: 설비만 업데이트, work_schedules 건드리지 않음
+    - is_operating=true + repair_date: factory의 MANUAL ACTIVE inspection_sets 재생성
+v4.3.3: assets-list 응답을 data.items 형태로 통일
 v4.3.2: stats 확장 + GET /assets-list + PATCH /assets/{asset_id}
-v1.2.2: /list DB 측 range() 페이지로 교체
-v1.2.1: /stats count 쿼리 제거 → MV 단일 조회
-v1.2.0: MV(engine_equipment_summary) 기반으로 /stats, /list 교체
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, date, timezone
+from dateutil.relativedelta import relativedelta
 from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/engine-equipment", tags=["엔진설비마스터"])
 
-VERSION = "4.3.3"
+VERSION = "4.4.0"
 
 CATEGORY_MAP = {
     "MECH":     "기계설비", "ELEC":     "전기설비", "FIRE":     "소방설비",
@@ -23,14 +25,57 @@ CATEGORY_MAP = {
     "LIFT":     "승강기설비", "BUILD":    "건축부속", "SAFETY":   "안전설비",
 }
 
+# cycle_unit → relativedelta
+DELTA_MAP = {
+    "day":       lambda v: relativedelta(days=v),
+    "week":      lambda v: relativedelta(weeks=v),
+    "month":     lambda v: relativedelta(months=v),
+    "quarter":   lambda v: relativedelta(months=3 * v),
+    "half_year": lambda v: relativedelta(months=6 * v),
+    "year":      lambda v: relativedelta(years=v),
+}
+REPEAT_TYPE_MAP = {
+    "day": "daily", "week": "weekly", "month": "monthly",
+    "quarter": "quarterly", "half_year": "half_yearly", "year": "yearly",
+}
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# ─────────────────────────────────────────────────────
+def _build_schedules_for_repair(iset: dict, anchor: date, end: date) -> list:
+    """수리 완료 후 anchor 기준 1년치 반복 일정 rows 생성."""
+    cycle_unit  = (iset.get("cycle_unit") or "year").lower()
+    cycle_value = int(iset.get("cycle_value") or 1)
+    fn          = DELTA_MAP.get(cycle_unit)
+    delta       = fn(cycle_value) if fn else relativedelta(years=cycle_value)
+    repeat_type = REPEAT_TYPE_MAP.get(cycle_unit, "yearly")
+
+    rows, cursor = [], anchor
+    while cursor <= end:
+        rows.append({
+            "factory_id":        iset["factory_id"],
+            "company_id":        iset.get("company_id"),
+            "inspection_set_id": iset["id"],
+            "planned_date":      cursor.isoformat(),
+            "start_date":        cursor.isoformat(),
+            "end_date":          cursor.isoformat(),
+            "repeat_type":       repeat_type,
+            "repeat_interval":   cycle_value,
+            "status_code":       "SCHEDULED",
+            "source_type":       "MANUAL",
+            "obligation_type":   iset.get("inspection_category") or "GENERAL",
+            "summary":           iset.get("inspection_set_name") or "",
+            "active_yn":         True,
+        })
+        cursor += delta
+    return rows
+
+
+# ───────────────────────────────────────────────────
 # Pydantic 모델
-# ─────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────
 
 class AssetPatchBody(BaseModel):
     last_inspection_date:  Optional[date] = None
@@ -38,16 +83,18 @@ class AssetPatchBody(BaseModel):
     equipment_model_id:    Optional[str]  = None
     model_id:              Optional[str]  = None  # 별칭 → equipment_model_id
     is_legal_target:       Optional[bool] = None
+    # v4.4.0 신규
+    is_operating:          Optional[bool] = None  # True=정상운전, False=고장/정지
+    repair_date:           Optional[str]  = None  # 수리완료일 'YYYY-MM-DD' (is_operating=True일 때만 유효)
 
 
-# ─────────────────────────────────────────────────────
-# GET /engine-equipment/stats  (v4.3.2: asset 통계 확장)
-# ─────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────
+# GET /engine-equipment/stats
+# ───────────────────────────────────────────────────
 @router.get("/stats")
 async def get_equipment_stats():
     supabase = get_supabase()
     try:
-        # MV 기반 기존 통계
         res = supabase.table("engine_equipment_summary").select(
             "source_facility_category, top_band, needs_review, process_count"
         ).execute()
@@ -71,7 +118,6 @@ async def get_equipment_stats():
 
         model_res = supabase.table("equipment_model_master").select("id", count="exact").limit(0).execute()
 
-        # ── v4.3.2: equipment_assets 통계 ──
         asset_total_res = supabase.table("equipment_assets").select("id", count="exact").limit(0).execute()
         asset_total = asset_total_res.count or 0
 
@@ -86,8 +132,6 @@ async def get_equipment_stats():
         legal_target_res = supabase.table("master_legal_inspection_target").select("id", count="exact").limit(0).execute()
         legal_target_count = legal_target_res.count or 0
 
-        # 법정검사 대상 중 equipment_assets에 asset_name 매칭 없는 추정치
-        # master_legal_inspection_target.equipment_name 기준으로 asset_name ILIKE 매칭 체크
         legal_rows = supabase.table("master_legal_inspection_target").select("equipment_name").execute()
         legal_names = [r.get("equipment_name", "") for r in (legal_rows.data or []) if r.get("equipment_name")]
         unmapped_count = 0
@@ -98,7 +142,6 @@ async def get_equipment_stats():
                 unmapped_count += 1
 
         return {"status": "success", "data": {
-            # 기존
             "total_mapping_rows":    total_mappings,
             "unique_equipment":      total,
             "model_master_total":    model_res.count or 0,
@@ -108,7 +151,6 @@ async def get_equipment_stats():
                 k: {"count": v, "label": CATEGORY_MAP.get(k, k)}
                 for k, v in sorted(cat_count.items(), key=lambda x: -x[1])
             },
-            # v4.3.2 신규
             "asset_registered_total":       asset_total,
             "asset_no_model":               asset_no_model,
             "asset_no_inspection":          asset_no_inspection,
@@ -120,11 +162,10 @@ async def get_equipment_stats():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ─────────────────────────────────────────────────────
-# GET /engine-equipment/assets-list  (v4.3.3: 어드민과 동일 스키마)
-# ─────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────
+# GET /engine-equipment/assets-list
+# ───────────────────────────────────────────────────
 def _enrich_asset_row(row: dict) -> dict:
-    """프론트 calcEquipScore / 표시용 필드"""
     mid = row.get("equipment_model_id") or row.get("model_id")
     row["has_model"] = mid is not None
     row["facility_category"] = row.get("equipment_type_code") or ""
@@ -172,14 +213,10 @@ async def list_assets(
         res = data_q.execute()
 
         items = [_enrich_asset_row(dict(r)) for r in (res.data or [])]
-
         return {
             "status": "success",
             "data": {
-                "items": items,
-                "total": total,
-                "page": page,
-                "page_size": page_size,
+                "items": items, "total": total, "page": page, "page_size": page_size,
                 "total_pages": (total + page_size - 1) // page_size if total else 0,
             },
         }
@@ -187,44 +224,119 @@ async def list_assets(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ─────────────────────────────────────────────────────
-# PATCH /engine-equipment/assets/{asset_id}  (v4.3.2 신규)
-# ─────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────
+# PATCH /engine-equipment/assets/{asset_id}  v4.4.0
+# ───────────────────────────────────────────────────
 @router.patch("/assets/{asset_id}")
 async def patch_asset(asset_id: str, body: AssetPatchBody):
+    """
+    v4.4.0: is_operating + repair_date 수리완료 로직 추가.
+    - is_operating=False: 설비만 업데이트, work_schedules 건드리지 않음
+    - is_operating=True + repair_date: factory의 MANUAL ACTIVE inspection_sets
+      SCHEDULED 일정 삭제 훈 repair_date 기준 1년치 재생성
+    """
     supabase = get_supabase()
     try:
-        update_data = body.model_dump(exclude_none=True)
+        # equipment_assets 업데이트 데이터 구성
+        update_data = {}
+        if body.last_inspection_date is not None:
+            update_data["last_inspection_date"] = body.last_inspection_date.isoformat()
+        if body.next_inspection_date is not None:
+            update_data["next_inspection_date"] = body.next_inspection_date.isoformat()
+        if body.is_legal_target is not None:
+            update_data["is_legal_target"] = body.is_legal_target
+        if body.is_operating is not None:
+            update_data["is_operating"] = body.is_operating
+        # model_id / equipment_model_id 별칭 처리
+        if body.model_id and not body.equipment_model_id:
+            update_data["equipment_model_id"] = body.model_id
+        elif body.equipment_model_id:
+            update_data["equipment_model_id"] = body.equipment_model_id
+
         if not update_data:
             raise HTTPException(status_code=400, detail="수정할 항목이 없습니다.")
-        if "model_id" in update_data and "equipment_model_id" not in update_data:
-            update_data["equipment_model_id"] = update_data.pop("model_id")
-        elif "model_id" in update_data:
-            update_data.pop("model_id", None)
-
-        # date → string 변환
-        for key in ("last_inspection_date", "next_inspection_date"):
-            if key in update_data and isinstance(update_data[key], date):
-                update_data[key] = update_data[key].isoformat()
 
         update_data["updated_at"] = _now_iso()
 
-        res = supabase.table("equipment_assets").update(update_data)\
-            .eq("id", asset_id).execute()
-
+        res = supabase.table("equipment_assets").update(update_data).eq("id", asset_id).execute()
         if not res.data:
             raise HTTPException(status_code=404, detail="자산을 찾을 수 없습니다.")
 
-        return {"status": "success", "data": res.data[0]}
+        asset = res.data[0]
+        repair_result = {"schedules_reset": 0, "sets_processed": 0}
+
+        # ── v4.4.0: 수리 완료 시 anchor 재설정 ──
+        # is_operating=True 이고 repair_date가 있을 때만 실행
+        if body.is_operating is True and body.repair_date:
+            try:
+                repair_date = date.fromisoformat(body.repair_date)
+                end_date    = repair_date + relativedelta(years=1)
+                factory_id  = asset.get("factory_id")
+
+                if factory_id:
+                    # 해당 시설의 MANUAL ACTIVE inspection_sets 조회
+                    sets_res = supabase.table("inspection_sets").select(
+                        "id, factory_id, company_id, cycle_value, cycle_unit, "
+                        "inspection_set_name, inspection_category"
+                    ).eq("factory_id", factory_id).eq("source", "MANUAL").eq(
+                        "status_code", "ACTIVE"
+                    ).eq("is_active", True).execute()
+
+                    sets = sets_res.data or []
+                    total_created = 0
+
+                    for iset in sets:
+                        try:
+                            # 기존 SCHEDULED 일정 삭제 (COMPLETED 유지)
+                            supabase.table("work_schedules").delete().eq(
+                                "inspection_set_id", iset["id"]
+                            ).eq("status_code", "SCHEDULED").execute()
+
+                            # repair_date 기준 1년치 재생성
+                            rows = _build_schedules_for_repair(iset, repair_date, end_date)
+
+                            # inspection_sets anchor 업데이트
+                            next_date = repair_date + (DELTA_MAP.get(
+                                (iset.get("cycle_unit") or "year").lower(),
+                                lambda v: relativedelta(years=v)
+                            )(int(iset.get("cycle_value") or 1)))
+                            supabase.table("inspection_sets").update({
+                                "schedule_anchor_date": repair_date.isoformat(),
+                                "schedule_end_date":    end_date.isoformat(),
+                                "next_planned_date":    next_date.isoformat(),
+                            }).eq("id", iset["id"]).execute()
+
+                            # 20건씩 배치 INSERT
+                            for i in range(0, len(rows), 20):
+                                r = supabase.table("work_schedules").insert(rows[i:i + 20]).execute()
+                                total_created += len(r.data or [])
+
+                        except Exception as e:
+                            print(f"[REPAIR] inspection_set={iset['id']} 일정 재생성 실패: {e}")
+
+                    repair_result = {
+                        "schedules_reset": total_created,
+                        "sets_processed":  len(sets),
+                        "repair_date":     repair_date.isoformat(),
+                        "end_date":        end_date.isoformat(),
+                    }
+            except Exception as e:
+                print(f"[REPAIR] anchor 재설정 실패 (asset_id={asset_id}): {e}")
+                # 엔진 상태 업데이트는 성공했으므로 일정 실패는 응답을 막지 않음
+
+        return {
+            "status": "success",
+            "data":   {**asset, "repair_result": repair_result},
+        }
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ─────────────────────────────────────────────────────
-# GET /engine-equipment/list  (v1.2.2: DB 측 페이지)
-# ─────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────
+# GET /engine-equipment/list
+# ───────────────────────────────────────────────────
 @router.get("/list")
 async def list_equipment_master(
     search:       Optional[str]  = Query(None),
@@ -234,7 +346,6 @@ async def list_equipment_master(
     page:         int = Query(1, ge=1),
     page_size:    int = Query(50, ge=1, le=200),
 ):
-    """MV DB 측 페이지"""
     supabase = get_supabase()
     try:
         count_q = supabase.table("engine_equipment_summary").select("facility_name_std", count="exact")
