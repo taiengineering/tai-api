@@ -1,9 +1,14 @@
 """
-점검리스트 시스템 — v1.3.0
-v1.3.0: 점검주기생성_버그수정
-  - generate_schedules: skipped_anchor 응답 필드 추가 (anchor_confirmed=False 건너뜀 건수)
-v1.2.0: BUG-4 anchor_confirmed=True 필터 + sets_skipped 응답
-v1.1.0: /status 전체 조회 제거 → 각각 count 쿼리 4개로 분리
+점검리스트 시스템 — v1.4.0
+v1.4.0: Rolling 완료 후 다음 회차 자동 생성
+  - complete/{id}: 완료 시점에 다음 planned_date 1건 자동 INSERT
+  - schedule_end_date 있으면 다음 회차가 그 날짜 넘으면 생성 안 함
+  - schedule_end_date 없으면 무한 반복
+  - 다음 회차 assigned_user_id=NULL (배정은 안전관리자 추후 시행)
+  - COMPLETED 상태 절대 수정 안 함
+v1.3.0: skipped_anchor 응답 필드
+v1.2.0: anchor_confirmed=True 필터 + sets_skipped
+v1.1.0: /status count 쿼리 4개 분리
 prefix: /inspection
 """
 from fastapi import APIRouter, HTTPException, Query
@@ -11,11 +16,12 @@ from typing import Optional
 from datetime import datetime, timezone, date, timedelta
 import calendar
 
+from dateutil.relativedelta import relativedelta
 from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/inspection", tags=["점검리스트"])
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 LEGAL_INSPECTION_ITEMS = {
     "ELECACT-010":    ["배전반 외관 점검", "접지 상태 확인", "절연저항 측정", "과전류 차단기 동작 확인"],
@@ -88,6 +94,19 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _add_cycle(base: date, cycle_unit: str, cycle_value: int) -> date:
+    """base + cycle → 다음 날짜."""
+    unit = cycle_unit.lower()
+    if unit == "day":        return base + timedelta(days=cycle_value)
+    if unit == "week":       return base + timedelta(weeks=cycle_value)
+    if unit in ("month", "quarter", "half_year"):
+        months = cycle_value if unit == "month" else (3 if unit == "quarter" else 6)
+        return base + relativedelta(months=months)
+    # year / 기타
+    try:    return base + relativedelta(years=cycle_value)
+    except: return base + relativedelta(years=1)
+
+
 def _calc_schedule_dates(start_date: date, end_date: date, cycle_unit: str, cycle_value: int) -> list:
     dates = []
     current = start_date
@@ -149,10 +168,6 @@ async def generate_inspection_items(factory_id: str):
 
 @router.post("/generate-schedules/{factory_id}")
 async def generate_schedules(factory_id: str, body: Optional[dict] = None):
-    """
-    v1.3.0: skipped_anchor 응답 필드 추가
-    v1.2.0: anchor_confirmed=True 필터 + sets_skipped 응답
-    """
     supabase = get_supabase()
     try:
         body = body or {}
@@ -164,13 +179,11 @@ async def generate_schedules(factory_id: str, body: Optional[dict] = None):
         end_month = end_month % 12 + 1
         end_dt    = date(end_year, end_month, min(start_dt.day, calendar.monthrange(end_year, end_month)[1]))
 
-        # 전체 sets 수 (skip 건수 계산용)
         total_sets_res = supabase.table("inspection_sets").select(
             "id", count="exact"
         ).eq("factory_id", factory_id).eq("source", "LEGAL_ENGINE").eq("is_active", True).limit(0).execute()
         total_sets = total_sets_res.count or 0
 
-        # anchor_confirmed=True인 것만 처리
         sets_res = supabase.table("inspection_sets").select(
             "id, company_id, cycle_unit, cycle_value"
         ).eq("factory_id", factory_id).eq("source", "LEGAL_ENGINE") \
@@ -178,21 +191,16 @@ async def generate_schedules(factory_id: str, body: Optional[dict] = None):
          .not_.is_("schedule_anchor_date", "null") \
          .execute()
         sets = sets_res.data or []
-
-        skipped_anchor = total_sets - len(sets)  # anchor 미설정으로 건너뜀
+        skipped_anchor = total_sets - len(sets)
 
         if not sets:
             return {
                 "status":  "success",
-                "message": "기준일이 확정된 점검 세트가 없습니다. 기준일을 먼저 설정해주세요.",
+                "message": "기준일이 확정된 점검 세트가 없습니다.",
                 "data": {
-                    "factory_id":     factory_id,
-                    "sets_total":     total_sets,
-                    "sets_processed": 0,
-                    "sets_skipped":   total_sets,
-                    "skipped_anchor": skipped_anchor,
-                    "created":        0,
-                    "period":         f"{start_str} ~ {end_dt.isoformat()}",
+                    "factory_id": factory_id, "sets_total": total_sets, "sets_processed": 0,
+                    "sets_skipped": total_sets, "skipped_anchor": skipped_anchor,
+                    "created": 0, "period": f"{start_str} ~ {end_dt.isoformat()}",
                 }
             }
 
@@ -204,11 +212,8 @@ async def generate_schedules(factory_id: str, body: Optional[dict] = None):
         for s in sets:
             for d in _calc_schedule_dates(start_dt, end_dt, s.get("cycle_unit", "year"), s.get("cycle_value", 1)):
                 insert_rows.append({
-                    "inspection_set_id": s["id"],
-                    "company_id":        s.get("company_id"),
-                    "factory_id":        factory_id,
-                    "planned_date":      d.isoformat(),
-                    "status_code":       "planned",
+                    "inspection_set_id": s["id"], "company_id": s.get("company_id"),
+                    "factory_id": factory_id, "planned_date": d.isoformat(), "status_code": "planned",
                 })
 
         created = 0
@@ -220,13 +225,9 @@ async def generate_schedules(factory_id: str, body: Optional[dict] = None):
             "status":  "success",
             "message": f"{created}개 스케줄이 생성됐습니다.",
             "data": {
-                "factory_id":     factory_id,
-                "sets_total":     total_sets,
-                "sets_processed": len(sets),
-                "sets_skipped":   total_sets - len(sets),
-                "skipped_anchor": skipped_anchor,
-                "created":        created,
-                "period":         f"{start_str} ~ {end_dt.isoformat()}",
+                "factory_id": factory_id, "sets_total": total_sets, "sets_processed": len(sets),
+                "sets_skipped": total_sets - len(sets), "skipped_anchor": skipped_anchor,
+                "created": created, "period": f"{start_str} ~ {end_dt.isoformat()}",
             }
         }
     except HTTPException: raise
@@ -235,9 +236,6 @@ async def generate_schedules(factory_id: str, body: Optional[dict] = None):
 
 @router.get("/status/{factory_id}")
 async def get_inspection_status(factory_id: str):
-    """
-    v1.1.0: 전체 조회 제거 → 각각 count 쿼리 4개로 분리
-    """
     supabase = get_supabase()
     try:
         today      = date.today()
@@ -246,38 +244,30 @@ async def get_inspection_status(factory_id: str):
         month_end   = today.replace(day=calendar.monthrange(today.year, today.month)[1]).isoformat()
         in_30_days  = (today + timedelta(days=30)).isoformat()
 
-        sets_res = supabase.table("inspection_sets").select(
-            "id", count="exact"
-        ).eq("factory_id", factory_id).eq("source", "LEGAL_ENGINE").limit(0).execute()
+        sets_res = supabase.table("inspection_sets").select("id", count="exact")\
+            .eq("factory_id", factory_id).eq("source", "LEGAL_ENGINE").limit(0).execute()
         total_sets = sets_res.count or 0
 
-        month_res = supabase.table("work_schedules").select(
-            "id", count="exact"
-        ).eq("factory_id", factory_id).gte("planned_date", month_start).lte(
-            "planned_date", month_end
-        ).limit(0).execute()
+        month_res = supabase.table("work_schedules").select("id", count="exact")\
+            .eq("factory_id", factory_id).gte("planned_date", month_start)\
+            .lte("planned_date", month_end).limit(0).execute()
         this_month_count = month_res.count or 0
 
-        completed_res = supabase.table("work_schedules").select(
-            "id", count="exact"
-        ).eq("factory_id", factory_id).eq("status_code", "completed").limit(0).execute()
+        completed_res = supabase.table("work_schedules").select("id", count="exact")\
+            .eq("factory_id", factory_id).eq("status_code", "completed").limit(0).execute()
         completed_count = completed_res.count or 0
 
-        overdue_res = supabase.table("work_schedules").select(
-            "id", count="exact"
-        ).eq("factory_id", factory_id).eq("status_code", "planned").lt(
-            "planned_date", today_str
-        ).limit(0).execute()
+        overdue_res = supabase.table("work_schedules").select("id", count="exact")\
+            .eq("factory_id", factory_id).eq("status_code", "planned")\
+            .lt("planned_date", today_str).limit(0).execute()
         overdue_count = overdue_res.count or 0
 
         upcoming_res = supabase.table("work_schedules").select(
             "id, planned_date, status_code, inspection_set_id, "
             "inspection_sets(inspection_set_name, law_name)"
-        ).eq("factory_id", factory_id).gte(
-            "planned_date", today_str
-        ).lte("planned_date", in_30_days).in_(
-            "status_code", ["planned", "in_progress"]
-        ).order("planned_date").limit(10).execute()
+        ).eq("factory_id", factory_id).gte("planned_date", today_str)\
+         .lte("planned_date", in_30_days).in_("status_code", ["planned", "in_progress"])\
+         .order("planned_date").limit(10).execute()
 
         upcoming = []
         for s in (upcoming_res.data or []):
@@ -287,12 +277,9 @@ async def get_inspection_status(factory_id: str):
             upcoming.append(s)
 
         return {"status": "success", "data": {
-            "factory_id":       factory_id,
-            "total_sets":       total_sets,
-            "this_month_count": this_month_count,
-            "completed_count":  completed_count,
-            "overdue_count":    overdue_count,
-            "upcoming":         upcoming,
+            "factory_id": factory_id, "total_sets": total_sets,
+            "this_month_count": this_month_count, "completed_count": completed_count,
+            "overdue_count": overdue_count, "upcoming": upcoming,
         }}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -391,45 +378,102 @@ async def record_inspection_results(inspection_id: str, body: dict):
 
 @router.post("/complete/{work_schedule_id}")
 async def complete_inspection(work_schedule_id: str, body: dict = None):
+    """
+    v1.4.0: Rolling 완료 후 다음 회차 자동 생성.
+    - 완료된 planned_date + delta = 다음 planned_date 1건 INSERT
+    - schedule_end_date 있으면 해당 날짜 넘으면 생성 안 함
+    - schedule_end_date 없으면 무한 반복
+    - assigned_user_id=NULL (배정은 안전관리자가 시행)
+    - COMPLETED 자체는 절대 수정 안 함
+    """
     supabase = get_supabase()
     try:
         body = body or {}
         summary      = body.get("summary", "")
         completed_at = body.get("completed_at", date.today().isoformat())
+
+        # 완료 상태로 업데이트 (COMPLETED 리코드는 이후 건드리지 않음)
         ws_res = supabase.table("work_schedules").update({
             "status_code": "completed", "completed_at": completed_at, "summary": summary,
         }).eq("id", work_schedule_id).execute()
         if not ws_res.data:
             raise HTTPException(status_code=404, detail="점검 일정을 찾을 수 없습니다.")
-        ws = ws_res.data[0]
+
+        ws                = ws_res.data[0]
         factory_id        = ws.get("factory_id")
         inspection_set_id = ws.get("inspection_set_id")
+        completed_date    = date.fromisoformat(str(completed_at))
+
+        next_schedule_created = False
+        next_planned_date     = None
+
         if inspection_set_id:
-            iset_res = supabase.table("inspection_sets").select("cycle_unit, cycle_value").eq(
-                "id", inspection_set_id
-            ).limit(1).execute()
+            iset_res = supabase.table("inspection_sets").select(
+                "id, factory_id, company_id, cycle_unit, cycle_value, "
+                "inspection_set_name, inspection_category, source, schedule_end_date"
+            ).eq("id", inspection_set_id).limit(1).execute()
+
             if iset_res.data:
-                cycle_unit  = iset_res.data[0].get("cycle_unit", "year")
-                cycle_value = iset_res.data[0].get("cycle_value", 1)
-                base = date.fromisoformat(str(completed_at))
-                if cycle_unit == "day":   next_date = base + timedelta(days=cycle_value)
-                elif cycle_unit == "week": next_date = base + timedelta(weeks=cycle_value)
-                elif cycle_unit == "month":
-                    m = base.month - 1 + cycle_value; y = base.year + m // 12; m = m % 12 + 1
-                    next_date = date(y, m, min(base.day, calendar.monthrange(y, m)[1]))
-                else:
-                    try:    next_date = date(base.year + cycle_value, base.month, base.day)
-                    except: next_date = date(base.year + cycle_value, base.month, 28)
-                if factory_id:
-                    company_res = supabase.table("factories").select("company_id").eq("id", factory_id).limit(1).execute()
-                    company_id = company_res.data[0].get("company_id") if company_res.data else None
-                    supabase.table("work_schedules").insert({
-                        "inspection_set_id": inspection_set_id, "company_id": company_id,
-                        "factory_id": factory_id, "planned_date": next_date.isoformat(), "status_code": "planned",
-                    }).execute()
-        supabase.table("safety_inspections").update({"status_code": "completed"}).eq("assignment_id", work_schedule_id).execute()
-        return {"status": "success", "message": "점검이 완료 처리됐습니다.",
-                "data": {"work_schedule_id": work_schedule_id, "completed_at": completed_at, "summary": summary}}
+                iset        = iset_res.data[0]
+                cycle_unit  = (iset.get("cycle_unit") or "year").lower()
+                cycle_value = int(iset.get("cycle_value") or 1)
+
+                # 다음 planned_date = 완료일 + delta
+                next_date = _add_cycle(completed_date, cycle_unit, cycle_value)
+                next_planned_date = next_date.isoformat()
+
+                # schedule_end_date 검사
+                end_str  = iset.get("schedule_end_date")
+                past_end = end_str and next_date > date.fromisoformat(end_str)
+
+                if not past_end:
+                    try:
+                        company_res = supabase.table("factories").select("company_id").eq(
+                            "id", factory_id
+                        ).limit(1).execute()
+                        company_id = company_res.data[0].get("company_id") if company_res.data else iset.get("company_id")
+
+                        source_type = "LEGAL" if iset.get("source") == "LEGAL_ENGINE" else "MANUAL"
+
+                        # 다음 회차 1건 INSERT
+                        new_ws = supabase.table("work_schedules").insert({
+                            "inspection_set_id": inspection_set_id,
+                            "company_id":        company_id,
+                            "factory_id":        factory_id,
+                            "planned_date":       next_date.isoformat(),
+                            "start_date":         next_date.isoformat(),
+                            "end_date":           next_date.isoformat(),
+                            "status_code":        "SCHEDULED",
+                            "source_type":        source_type,
+                            "obligation_type":    iset.get("inspection_category") or "GENERAL",
+                            "summary":            iset.get("inspection_set_name") or "",
+                            "active_yn":          True,
+                            "assigned_user_id":   None,   # 배정은 안전관리자가 시행
+                        }).execute()
+                        next_schedule_created = bool(new_ws.data)
+
+                        # inspection_sets.next_planned_date 업데이트
+                        supabase.table("inspection_sets").update({
+                            "next_planned_date": next_date.isoformat(),
+                        }).eq("id", inspection_set_id).execute()
+
+                    except Exception as e:
+                        print(f"[COMPLETE] 다음 회차 생성 실패 (iset={inspection_set_id}): {e}")
+
+        supabase.table("safety_inspections").update({"status_code": "completed"})\
+            .eq("assignment_id", work_schedule_id).execute()
+
+        return {
+            "status":  "success",
+            "message": "점검이 완료 처리됐습니다.",
+            "data": {
+                "work_schedule_id":     work_schedule_id,
+                "completed_at":         completed_at,
+                "summary":              summary,
+                "next_schedule_created": next_schedule_created,
+                "next_planned_date":    next_planned_date,
+            }
+        }
     except HTTPException: raise
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 

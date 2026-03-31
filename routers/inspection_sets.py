@@ -1,12 +1,12 @@
 """
-법정점검 세트 관리 라우터 — v1.4.0
-v1.4.0: 기준일 입력 + 반복일정 생성 (1년치)
-  - PATCH /{id}/anchor: anchor_date → 1년치 work_schedules 반복 생성 (기존 SCHEDULED 삭제 후 재생성)
-    cycle=1month → 12개, cycle=1year → 2개
-  - POST /anchor/bulk: factory_id의 PENDING_ANCHOR 전체 일괄 처리 (신규)
-  - 두 필드 모두 지원: anchor_date (신규) / schedule_anchor_date (하위 호환)
+법정점검 세트 관리 라우터 — v1.5.0
+v1.5.0: Rolling 생성 방식 전환
+  - _build_schedules: 1년치 일괄 → 오늘 이후 첫 번째 planned_date 1건만 생성
+  - end_date 파라미터 제거 (실제 INSERT 불필요)
+  - GET /inspection-sets/preview-schedule: 캘린더 표시용 가상 렌더링 (DB INSERT 없음)
+v1.4.0: 1년치 반복 생성
 v1.3.0: anchor 설정 시 work_schedules 1건 생성
-v1.2.0: MANUAL 점검세트 등록 (POST /manual)
+v1.2.0: MANUAL 점검세트 등록
 v1.1.0: 기준일 설정 API
 v1.0.0: 기본 CRUD
 """
@@ -19,7 +19,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/inspection-sets", tags=["inspection_sets"])
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 # cycle_unit → relativedelta 매핑
 DELTA_MAP = {
@@ -31,7 +31,6 @@ DELTA_MAP = {
     "year":      lambda v: relativedelta(years=v),
 }
 
-# cycle_unit → repeat_type 텍스트
 REPEAT_TYPE_MAP = {
     "day":       "daily",
     "week":      "weekly",
@@ -50,58 +49,65 @@ def _get_delta(cycle_unit: str, cycle_value: int):
 
 
 def _calc_next_date(anchor: date, cycle_unit: str, cycle_value: int) -> date:
-    """단일 next_date 계산 (하위 호환용)."""
+    """anchor + cycle → next_date."""
     return anchor + _get_delta(cycle_unit, cycle_value)
 
 
-def _build_schedules(iset: dict, anchor: date, end: date) -> List[dict]:
-    """anchor ~ end 범위의 반복 일정 rows 목록 생성."""
+def _next_planned_from(base: date, cycle_unit: str, cycle_value: int) -> date:
+    """
+    base(완료일/anchor) 기준으로 오늘 이후 첫 번째 planned_date 1건 계산.
+    base 자체가 오늘 이후면 base가 첫 번째.
+    """
+    delta    = _get_delta(cycle_unit, cycle_value)
+    cursor   = base + delta           # base 다음 회차부터 시작
+    today    = date.today()
+    while cursor < today:             # 과거 스킵
+        cursor += delta
+    return cursor
+
+
+def _build_next_schedule_row(iset: dict, base: date) -> dict:
+    """
+    v1.5.0 Rolling 방식:
+    base(완료일 또는 anchor)에서 다음 1건만 생성.
+    """
     cycle_unit  = (iset.get("cycle_unit") or "year").lower()
     cycle_value = int(iset.get("cycle_value") or 1)
-    delta       = _get_delta(cycle_unit, cycle_value)
+    planned     = _next_planned_from(base, cycle_unit, cycle_value)
     repeat_type = REPEAT_TYPE_MAP.get(cycle_unit, "yearly")
     source_type = "LEGAL" if iset.get("source") == "LEGAL_ENGINE" else "MANUAL"
-
-    rows, cursor = [], anchor
-    while cursor <= end:
-        rows.append({
-            "factory_id":        iset["factory_id"],
-            "company_id":        iset.get("company_id"),
-            "inspection_set_id": iset["id"],
-            "planned_date":      cursor.isoformat(),
-            "start_date":        cursor.isoformat(),
-            "end_date":          cursor.isoformat(),
-            "repeat_type":       repeat_type,
-            "repeat_interval":   cycle_value,
-            "status_code":       "SCHEDULED",
-            "source_type":       source_type,
-            "obligation_type":   iset.get("inspection_category") or "GENERAL",
-            "summary":           iset.get("inspection_set_name") or "",
-            "active_yn":         True,
-        })
-        cursor += delta
-    return rows
+    return {
+        "factory_id":        iset["factory_id"],
+        "company_id":        iset.get("company_id"),
+        "inspection_set_id": iset["id"],
+        "planned_date":      planned.isoformat(),
+        "start_date":        planned.isoformat(),
+        "end_date":          planned.isoformat(),
+        "repeat_type":       repeat_type,
+        "repeat_interval":   cycle_value,
+        "status_code":       "SCHEDULED",
+        "source_type":       source_type,
+        "obligation_type":   iset.get("inspection_category") or "GENERAL",
+        "summary":           iset.get("inspection_set_name") or "",
+        "active_yn":         True,
+        "assigned_user_id":  None,   # 배정은 안전관리자가 시행
+    }, planned
 
 
-# ── Pydantic 모델 ──────────────────────────────────
+# ── Pydantic 모델 ─────────────────────────────────────
 
 class AnchorBody(BaseModel):
-    """단건 기준일 설정 (v1.4.0). anchor_date 또는 schedule_anchor_date 중 하나 필수."""
-    anchor_date:          Optional[str] = None   # 신규 필드
+    anchor_date:          Optional[str] = None
     schedule_anchor_date: Optional[str] = None   # 하위 호환
-    end_date:             Optional[str] = None   # 일정 종료일 (없으면 1년 후)
-    last_inspection_date: Optional[str] = None   # 직전 점검일 (선택)
+    last_inspection_date: Optional[str] = None
 
 
 class BulkAnchorBody(BaseModel):
-    """일괄 기준일 설정 — factory_id의 PENDING_ANCHOR 전체 처리."""
     factory_id:  str
-    anchor_date: str            # 기준일 (전체 동일 적용)
-    end_date:    Optional[str] = None
+    anchor_date: str
 
 
 class AnchorBulkItem(BaseModel):
-    """PATCH /anchor/bulk 하위 호환용 (items 배열)."""
     id: str
     schedule_anchor_date: str
     last_inspection_date: Optional[str] = None
@@ -160,8 +166,7 @@ def get_inspection_sets(
 
 
 # ══════════════════════════════════════════════
-# POST /inspection-sets/manual
-# 고정 경로 — /{id} 앞에 반드시 먼저 선언
+# POST /inspection-sets/manual  ← /{id} 앞에 선언
 # ══════════════════════════════════════════════
 
 @router.post("/manual")
@@ -203,16 +208,85 @@ def create_manual_inspection_set(body: ManualInspectionSetBody):
 
 
 # ══════════════════════════════════════════════
-# POST /inspection-sets/anchor/bulk  (신규 v1.4.0)
-# factory_id의 PENDING_ANCHOR 전체 일괄 처리
-# 고정 경로 — /{id} 앞에 선언
+# GET /inspection-sets/preview-schedule  v1.5.0 (DB INSERT 없음)
+# ══════════════════════════════════════════════
+
+@router.get("/preview-schedule")
+def preview_schedule(
+    factory_id: str = Query(..., description="시설 ID"),
+    months:     int = Query(3, ge=1, le=12, description="향후 대상 개월수 (1~12)"),
+):
+    """
+    캘린더 표시용 가상 렌더링 (v1.5.0).
+    DB에 INSERT 없이 순수 계산만으로 향후 months개월치 예정일 반환.
+    프론트 캘린더에서 점선/회색 스타일로 표시.
+    """
+    supabase = get_supabase()
+
+    sets_res = supabase.table("inspection_sets").select(
+        "id, inspection_set_name, cycle_unit, cycle_value, "
+        "schedule_anchor_date, schedule_end_date, anchor_confirmed, next_planned_date"
+    ).eq("factory_id", factory_id).eq("anchor_confirmed", True).eq("is_active", True).execute()
+    sets = sets_res.data or []
+
+    today    = date.today()
+    end_date = today + relativedelta(months=months)
+    preview  = []
+
+    for iset in sets:
+        cycle_unit  = (iset.get("cycle_unit") or "year").lower()
+        cycle_value = int(iset.get("cycle_value") or 1)
+        delta       = _get_delta(cycle_unit, cycle_value)
+        name        = iset.get("inspection_set_name") or ""
+
+        # 시작점: next_planned_date 있으면 그것부터, 없으면 anchor부터 계산
+        anchor_str = iset.get("schedule_anchor_date")
+        if not anchor_str:
+            continue
+
+        next_str = iset.get("next_planned_date")
+        cursor   = date.fromisoformat(next_str) if next_str else date.fromisoformat(anchor_str) + delta
+
+        # schedule_end_date 있으면 준수
+        end_str  = iset.get("schedule_end_date")
+        iset_end = date.fromisoformat(end_str) if end_str else end_date
+        eff_end  = min(end_date, iset_end)
+
+        while cursor <= eff_end:
+            preview.append({
+                "inspection_set_id":   iset["id"],
+                "inspection_set_name": name,
+                "planned_date":        cursor.isoformat(),
+                "is_actual":           False,  # 실제 DB 레코드 아님
+                "cycle":               f"{cycle_value} {cycle_unit}",
+            })
+            cursor += delta
+
+    # planned_date 오름쉠 정렬
+    preview.sort(key=lambda x: x["planned_date"])
+
+    return {
+        "status": "success",
+        "data": {
+            "factory_id": factory_id,
+            "from":       today.isoformat(),
+            "to":         end_date.isoformat(),
+            "months":     months,
+            "count":      len(preview),
+            "preview":    preview,
+        }
+    }
+
+
+# ══════════════════════════════════════════════
+# POST /inspection-sets/anchor/bulk  ← /{id} 앞에 선언
 # ══════════════════════════════════════════════
 
 @router.post("/anchor/bulk")
 def set_anchor_bulk(body: BulkAnchorBody):
     """
     factory_id의 PENDING_ANCHOR 상태 inspection_sets 전체에
-    동일 anchor_date를 적용하고 반복일정을 생성합니다.
+    동일 anchor_date 적용 + Rolling 1건 일정 생성.
     """
     supabase = get_supabase()
 
@@ -230,40 +304,35 @@ def set_anchor_bulk(body: BulkAnchorBody):
         }
 
     anchor = date.fromisoformat(body.anchor_date)
-    end    = date.fromisoformat(body.end_date) if body.end_date else anchor + relativedelta(years=1)
-
-    results = []
-    total_created = 0
+    results, total_created = [], 0
 
     for iset in sets:
         iset_id = iset["id"]
         try:
+            cycle_unit  = (iset.get("cycle_unit") or "year").lower()
+            cycle_value = int(iset.get("cycle_value") or 1)
+            # Rolling: anchor 기준으로 오늘 이후 첫 번째 일정 1건
+            row, planned = _build_next_schedule_row(iset, anchor)
+
             # inspection_sets 업데이트
-            next_date = _calc_next_date(anchor, iset.get("cycle_unit") or "year", int(iset.get("cycle_value") or 1))
             supabase.table("inspection_sets").update({
                 "schedule_anchor_date": anchor.isoformat(),
-                "schedule_end_date":    end.isoformat(),
-                "next_planned_date":    next_date.isoformat(),
+                "next_planned_date":    planned.isoformat(),
                 "anchor_confirmed":     True,
                 "status_code":          "ACTIVE",
                 "updated_at":           datetime.now().isoformat(),
             }).eq("id", iset_id).execute()
 
-            # 기존 SCHEDULED 삭제
+            # 기존 SCHEDULED 삭제 후 1건 INSERT
             supabase.table("work_schedules").delete().eq(
                 "inspection_set_id", iset_id
             ).eq("status_code", "SCHEDULED").execute()
 
-            # 반복 일정 생성
-            rows    = _build_schedules(iset, anchor, end)
-            created = 0
-            for i in range(0, len(rows), 20):
-                r = supabase.table("work_schedules").insert(rows[i:i + 20]).execute()
-                created += len(r.data or [])
-
+            r = supabase.table("work_schedules").insert(row).execute()
+            created = len(r.data or [])
             total_created += created
-            results.append({"id": iset_id, "name": iset.get("inspection_set_name"), "created": created})
-
+            results.append({"id": iset_id, "name": iset.get("inspection_set_name"),
+                            "next_planned_date": planned.isoformat(), "created": created})
         except Exception as e:
             results.append({"id": iset_id, "name": iset.get("inspection_set_name"), "error": str(e)})
 
@@ -273,7 +342,6 @@ def set_anchor_bulk(body: BulkAnchorBody):
         "data": {
             "factory_id":    body.factory_id,
             "anchor_date":   anchor.isoformat(),
-            "end_date":      end.isoformat(),
             "total_sets":    len(sets),
             "total_created": total_created,
             "results":       results,
@@ -282,12 +350,12 @@ def set_anchor_bulk(body: BulkAnchorBody):
 
 
 # ══════════════════════════════════════════════
-# PATCH /inspection-sets/anchor/bulk (하위 호환 — items 배열)
+# PATCH /inspection-sets/anchor/bulk  (하위 호환)
 # ══════════════════════════════════════════════
 
 @router.patch("/anchor/bulk")
 def bulk_update_anchor(body: AnchorBulkPatchBody):
-    """일괄 기준일 저장 (하위 호환 — items 배열 방식)."""
+    """items 배열 방식 Rolling 업데이트 (하위 호환)."""
     supabase = get_supabase()
     updated_count, errors = 0, []
 
@@ -301,33 +369,26 @@ def bulk_update_anchor(body: AnchorBulkPatchBody):
                 errors.append({"id": item.id, "reason": "점검 세트를 찾을 수 없습니다."})
                 continue
 
-            iset       = res.data[0]
-            anchor     = date.fromisoformat(item.schedule_anchor_date)
-            end        = anchor + relativedelta(years=1)
-            next_date  = _calc_next_date(anchor, iset.get("cycle_unit") or "year", int(iset.get("cycle_value") or 1))
+            iset   = res.data[0]
+            anchor = date.fromisoformat(item.schedule_anchor_date)
+            row, planned = _build_next_schedule_row(iset, anchor)
 
             update_data = {
-                "schedule_anchor_date": item.schedule_anchor_date,
-                "schedule_end_date":    end.isoformat(),
-                "next_planned_date":    next_date.isoformat(),
+                "schedule_anchor_date": anchor.isoformat(),
+                "next_planned_date":    planned.isoformat(),
                 "anchor_confirmed":     True,
                 "status_code":          "ACTIVE",
                 "updated_at":           datetime.now().isoformat(),
             }
             if item.last_inspection_date:
                 update_data["last_inspection_date"] = item.last_inspection_date
-
             supabase.table("inspection_sets").update(update_data).eq("id", item.id).execute()
 
-            # 기존 SCHEDULED 삭제 후 재생성
             try:
                 supabase.table("work_schedules").delete().eq(
                     "inspection_set_id", item.id
                 ).eq("status_code", "SCHEDULED").execute()
-
-                rows = _build_schedules(iset, anchor, end)
-                for i in range(0, len(rows), 20):
-                    supabase.table("work_schedules").insert(rows[i:i + 20]).execute()
+                supabase.table("work_schedules").insert(row).execute()
             except Exception:
                 pass
 
@@ -339,30 +400,28 @@ def bulk_update_anchor(body: AnchorBulkPatchBody):
 
 
 # ══════════════════════════════════════════════
-# PATCH /inspection-sets/{id}/anchor  v1.4.0
+# PATCH /inspection-sets/{id}/anchor  v1.5.0
 # ══════════════════════════════════════════════
 
 @router.patch("/{inspection_set_id}/anchor")
 def update_inspection_anchor(inspection_set_id: str, body: AnchorBody):
     """
-    기준일 설정 + 1년치 반복일정 생성 (v1.4.0).
+    기준일 설정 + Rolling 1건 일정 생성 (v1.5.0).
 
-    - anchor_date 또는 schedule_anchor_date 중 하나 필수
-    - end_date 없으면 anchor + 1년
-    - 기존 SCHEDULED 일정 삭제 후 재생성 (COMPLETED는 유지)
-    - cycle=1month → 12개, cycle=1year → 2개
+    - anchor_date / schedule_anchor_date 중 하나 필수
+    - 기존 SCHEDULED 삭제 후 오늘 이후 첫 번째 planned_date 1건 INSERT
+    - COMPLETED 절대 건드리지 않음
+    - 애용: { "created": 1, "next_planned_date": "2026-05-01" }
     """
     supabase = get_supabase()
 
-    # anchor_date 필드 결정 (신규: anchor_date, 하위 호환: schedule_anchor_date)
     anchor_str = body.anchor_date or body.schedule_anchor_date
     if not anchor_str:
         raise HTTPException(status_code=422, detail="anchor_date 또는 schedule_anchor_date는 필수입니다.")
 
-    # inspection_set 전체 조회 (반복일정 생성에 필요)
     res = supabase.table("inspection_sets").select(
         "id, cycle_value, cycle_unit, factory_id, company_id, "
-        "inspection_set_name, inspection_category, source"
+        "inspection_set_name, inspection_category, source, schedule_end_date"
     ).eq("id", inspection_set_id).limit(1).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="점검 세트를 찾을 수 없습니다.")
@@ -371,14 +430,29 @@ def update_inspection_anchor(inspection_set_id: str, body: AnchorBody):
     cycle_unit  = (iset.get("cycle_unit") or "year").lower()
     cycle_value = int(iset.get("cycle_value") or 1)
     anchor      = date.fromisoformat(anchor_str)
-    end         = date.fromisoformat(body.end_date) if body.end_date else anchor + relativedelta(years=1)
-    next_date   = _calc_next_date(anchor, cycle_unit, cycle_value)
+
+    # Rolling: anchor 기준으로 오늘 이후 첫 번째 planned_date 1건
+    row, planned = _build_next_schedule_row(iset, anchor)
+
+    # schedule_end_date 있는데 planned가 그것을 넘으면 생성 안 함
+    end_str = iset.get("schedule_end_date")
+    if end_str and planned > date.fromisoformat(end_str):
+        return {
+            "status":  "success",
+            "message": "일정 종료일이 지나 새로운 회차 생성 안 함.",
+            "data": {
+                "inspection_set_id": inspection_set_id,
+                "anchor_date":       anchor.isoformat(),
+                "next_planned_date": planned.isoformat(),
+                "anchor_confirmed":  True,
+                "created":           0,
+            },
+        }
 
     # inspection_sets 업데이트
     update_data = {
         "schedule_anchor_date": anchor.isoformat(),
-        "schedule_end_date":    end.isoformat(),
-        "next_planned_date":    next_date.isoformat(),
+        "next_planned_date":    planned.isoformat(),
         "anchor_confirmed":     True,
         "status_code":          "ACTIVE",
         "updated_at":           datetime.now().isoformat(),
@@ -390,33 +464,26 @@ def update_inspection_anchor(inspection_set_id: str, body: AnchorBody):
     if not upd.data:
         raise HTTPException(status_code=500, detail="inspection_sets 업데이트 실패")
 
-    # 기존 SCHEDULED 일정 삭제 (COMPLETED는 유지)
     created = 0
     try:
+        # 기존 SCHEDULED 삭제 (COMPLETED 유지)
         supabase.table("work_schedules").delete().eq(
             "inspection_set_id", inspection_set_id
         ).eq("status_code", "SCHEDULED").execute()
 
-        # 반복 일정 rows 생성
-        rows = _build_schedules(iset, anchor, end)
-
-        # 20건씩 배치 INSERT
-        for i in range(0, len(rows), 20):
-            r = supabase.table("work_schedules").insert(rows[i:i + 20]).execute()
-            created += len(r.data or [])
-
+        # Rolling 1건 INSERT
+        r = supabase.table("work_schedules").insert(row).execute()
+        created = len(r.data or [])
     except Exception as e:
         print(f"[ANCHOR] work_schedules 생성 실패 (id={inspection_set_id}): {e}")
-        # 생성 실패해도 anchor 저장 응답은 반환
 
     return {
         "status":  "success",
-        "message": f"{created}개 반복일정이 생성됐습니다.",
+        "message": f"{created}개 일정이 생성됐습니다.",
         "data": {
             "inspection_set_id": inspection_set_id,
             "anchor_date":       anchor.isoformat(),
-            "end_date":          end.isoformat(),
-            "next_planned_date": next_date.isoformat(),
+            "next_planned_date": planned.isoformat(),
             "anchor_confirmed":  True,
             "cycle":             f"{cycle_value} {cycle_unit}",
             "created":           created,
