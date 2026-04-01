@@ -1,6 +1,5 @@
-# main.py — v5.1.0
-# feat: legal_engine_v510 라우터 등록 (건설 법령엔진 버그 수정)
-# legal_engine_v510_router를 legal_engine_router 앞에 등록 → /legal-engine/diagnose/step1 오버라이드
+# main.py — v5.1.0 (clean)
+# legal_engine.py 자체에 v5.1.0 수정 완료 → legal_engine_v510 오버라이드 제거
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -12,7 +11,6 @@ from routers.companies               import router as companies_router
 from routers.factories               import router as factories_router
 from routers.system_codes            import router as system_codes_router
 from routers.legal_engine            import router as legal_engine_router
-from routers.legal_engine_v510       import router as legal_engine_v510_router
 from routers.ksic_engine             import router as ksic_engine_router
 from routers.factory_process_v3      import router as factory_process_router
 from routers.process_management      import router as process_management_router
@@ -111,9 +109,7 @@ app.include_router(users_router)
 app.include_router(companies_router)
 app.include_router(factories_router)
 app.include_router(system_codes_router)
-# v5.1.0: legal_engine_v510_router를 먼저 등록 → /legal-engine/diagnose/step1 오버라이드
-app.include_router(legal_engine_v510_router)   # v5.1.0 건설 패치 (먼저 등록)
-app.include_router(legal_engine_router)        # 기존 (나머지 엔드포인트 처리)
+app.include_router(legal_engine_router)        # v5.1.0: 건설 버그 수정 포함
 app.include_router(ksic_engine_router)
 app.include_router(factory_process_router)
 app.include_router(process_management_router)
@@ -155,7 +151,7 @@ app.include_router(construction_router, prefix="/construction", tags=["건설안
 app.include_router(safety_template_router)
 app.include_router(event_trigger_router)
 app.include_router(worker_registry_router)
-app.include_router(diagnosis_router)          # v4.9.0→v2.0.0
+app.include_router(diagnosis_router)          # v2.0.0
 app.include_router(tbm_router)                # v5.0.0
 app.include_router(safety_meetings_router)    # v5.0.0
 app.include_router(risk_assessments_router)   # v5.0.0
