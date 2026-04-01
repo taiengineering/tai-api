@@ -229,54 +229,111 @@ def run_diagnosis(req_id: str):
         raise HTTPException(status_code=500, detail=f"진단 실행 오류: {str(e)}")
 
 
+# fix: Python 3.11 f-string 내 dict literal 사용 불가 → 변수로 분리
+_REQUEST_TYPE_MAP = {"v1": "법령진단", "v2": "공정진단", "v3": "설비진단"}
+
+
 def _build_result_html(req: dict, result: dict) -> str:
     """진단 결과를 편집 가능한 HTML로 변환"""
-    company = req.get("company_name", "")
-    sector  = req.get("sector", "")
-    summary = result.get("summary", {})
-    cs      = result.get("construction_summary", {})
-    today   = datetime.now().strftime("%Y년 %m월 %d일")
+    company  = req.get("company_name", "")
+    sector   = req.get("sector", "")
+    summary  = result.get("summary", {})
+    cs       = result.get("construction_summary", {})
+    today    = datetime.now().strftime("%Y년 %m월 %d일")
+
+    # fix: f-string 외부에서 미리 계산
+    req_type_label   = _REQUEST_TYPE_MAP.get(req.get("request_type", "v1"), "")
+    addr_detail      = req.get("address_detail", "")
+    full_address     = req.get("address", "") + (" " + addr_detail if addr_detail else "")
+    sm_required_label = "발생" if cs.get("safety_manager_required") else "해당없음"
+    sm_basis          = cs.get("safety_manager_basis", "")
+    cs_block          = (
+        f"<br><br>⚠️ <strong>안전관리자 선임 의무: {sm_required_label}</strong> ({sm_basis})"
+        if cs else ""
+    )
 
     def rows_html(rules: list, category: str) -> str:
         if not rules:
             return ""
-        html = f'<h3 style="color:#0d6efd;border-bottom:2px solid #0d6efd;padding-bottom:4px">{category}</h3><table style="width:100%;border-collapse:collapse;margin-bottom:16px"><thead><tr style="background:#f0f6ff"><th style="padding:6px;border:1px solid #dee2e6;text-align:left">법령명</th><th style="padding:6px;border:1px solid #dee2e6">조문</th><th style="padding:6px;border:1px solid #dee2e6">의무 내용</th><th style="padding:6px;border:1px solid #dee2e6">벌칙</th></tr></thead><tbody>'
+        html = (
+            f'<h3 style="color:#0d6efd;border-bottom:2px solid #0d6efd;padding-bottom:4px">{category}</h3>'
+            '<table style="width:100%;border-collapse:collapse;margin-bottom:16px">'
+            '<thead><tr style="background:#f0f6ff">'
+            '<th style="padding:6px;border:1px solid #dee2e6;text-align:left">법령명</th>'
+            '<th style="padding:6px;border:1px solid #dee2e6">조문</th>'
+            '<th style="padding:6px;border:1px solid #dee2e6">의무 내용</th>'
+            '<th style="padding:6px;border:1px solid #dee2e6">벌칙</th>'
+            '</tr></thead><tbody>'
+        )
         for r in rules:
-            html += f'<tr><td style="padding:6px;border:1px solid #dee2e6">{r.get("law_name","")}</td><td style="padding:6px;border:1px solid #dee2e6;white-space:nowrap">{r.get("law_article","")}</td><td style="padding:6px;border:1px solid #dee2e6">{r.get("obligation_summary") or r.get("description","")}</td><td style="padding:6px;border:1px solid #dee2e6;font-size:0.85em">{r.get("penalty_summary","")}</td></tr>'
+            obligation = r.get("obligation_summary") or r.get("description", "")
+            html += (
+                f'<tr>'
+                f'<td style="padding:6px;border:1px solid #dee2e6">{r.get("law_name","")}</td>'
+                f'<td style="padding:6px;border:1px solid #dee2e6;white-space:nowrap">{r.get("law_article","")}</td>'
+                f'<td style="padding:6px;border:1px solid #dee2e6">{obligation}</td>'
+                f'<td style="padding:6px;border:1px solid #dee2e6;font-size:0.85em">{r.get("penalty_summary","")}</td>'
+                f'</tr>'
+            )
         html += '</tbody></table>'
         return html
 
-    html = f"""<div style="font-family:'Noto Sans KR',sans-serif;max-width:900px;margin:0 auto;padding:24px">
-<div style="text-align:center;margin-bottom:32px">
-  <h1 style="color:#1a1f36;font-size:1.8rem">산업안전 법령진단 결과보고서</h1>
-  <p style="color:#6c757d">{today} &nbsp;|&nbsp; TAI Engineering</p>
-</div>
+    # fix: f-string 분리 — HTML 문자열을 일반 문자열 연결로 처리
+    html = (
+        '<div style="font-family:\'Noto Sans KR\',sans-serif;max-width:900px;margin:0 auto;padding:24px">'
+        '<div style="text-align:center;margin-bottom:32px">'
+        '<h1 style="color:#1a1f36;font-size:1.8rem">산업안전 법령진단 결과보고서</h1>'
+        f'<p style="color:#6c757d">{today} &nbsp;|&nbsp; TAI Engineering</p>'
+        '</div>'
 
-<table style="width:100%;border-collapse:collapse;margin-bottom:24px">
-  <tr style="background:#f8f9fa"><td style="padding:8px 12px;font-weight:600;width:25%;border:1px solid #dee2e6">회사명</td><td style="padding:8px 12px;border:1px solid #dee2e6">{company}</td><td style="padding:8px 12px;font-weight:600;width:25%;border:1px solid #dee2e6">사업자번호</td><td style="padding:8px 12px;border:1px solid #dee2e6">{req.get("biz_no","")}</td></tr>
-  <tr><td style="padding:8px 12px;font-weight:600;border:1px solid #dee2e6">주소</td><td style="padding:8px 12px;border:1px solid #dee2e6" colspan="3">{req.get("address","")}{" " + req.get("address_detail","") if req.get("address_detail") else ""}</td></tr>
-  <tr style="background:#f8f9fa"><td style="padding:8px 12px;font-weight:600;border:1px solid #dee2e6">담당자</td><td style="padding:8px 12px;border:1px solid #dee2e6">{req.get("contact_name","")}</td><td style="padding:8px 12px;font-weight:600;border:1px solid #dee2e6">연락처</td><td style="padding:8px 12px;border:1px solid #dee2e6">{req.get("contact_phone","")}</td></tr>
-  <tr><td style="padding:8px 12px;font-weight:600;border:1px solid #dee2e6">섹터</td><td style="padding:8px 12px;border:1px solid #dee2e6">{sector}</td><td style="padding:8px 12px;font-weight:600;border:1px solid #dee2e6">진단 유형</td><td style="padding:8px 12px;border:1px solid #dee2e6">{{"v1":"법령진단","v2":"공정진단","v3":"설비진단"}.get(req.get("request_type","v1"),"")}</td></tr>
-</table>
+        '<table style="width:100%;border-collapse:collapse;margin-bottom:24px">'
+        f'<tr style="background:#f8f9fa">'
+        f'<td style="padding:8px 12px;font-weight:600;width:25%;border:1px solid #dee2e6">회사명</td>'
+        f'<td style="padding:8px 12px;border:1px solid #dee2e6">{company}</td>'
+        f'<td style="padding:8px 12px;font-weight:600;width:25%;border:1px solid #dee2e6">사업자번호</td>'
+        f'<td style="padding:8px 12px;border:1px solid #dee2e6">{req.get("biz_no","")}</td></tr>'
 
-<div style="background:#e8f0fe;border-left:4px solid #0d6efd;padding:16px;margin-bottom:24px;border-radius:4px">
-  <strong>진단 요약</strong><br>
-  총 <strong>{summary.get("total",0)}건</strong>의 법령이 적용됩니다.
-  선임 {summary.get("appointment",0)}건 · 점검 {summary.get("inspection",0)}건 · 조치 {summary.get("action",0)}건 · 신고 {summary.get("report",0)}건 · 보고 {summary.get("notify",0)}건
-  {f'<br><br>⚠️ <strong>안전관리자 선임 의무: {"발생" if cs.get("safety_manager_required") else "해당없음"}</strong> ({cs.get("safety_manager_basis","")})' if cs else ""}
-</div>
+        f'<tr>'
+        f'<td style="padding:8px 12px;font-weight:600;border:1px solid #dee2e6">주소</td>'
+        f'<td style="padding:8px 12px;border:1px solid #dee2e6" colspan="3">{full_address}</td></tr>'
 
-{rows_html(result.get("appointment_required",[]), "선임 의무")}
-{rows_html(result.get("inspection_required",[]), "점검 의무")}
-{rows_html(result.get("action_required",[]), "안전조치 의무")}
-{rows_html(result.get("report_required",[]), "신고·보고 의무")}
+        f'<tr style="background:#f8f9fa">'
+        f'<td style="padding:8px 12px;font-weight:600;border:1px solid #dee2e6">담당자</td>'
+        f'<td style="padding:8px 12px;border:1px solid #dee2e6">{req.get("contact_name","")}</td>'
+        f'<td style="padding:8px 12px;font-weight:600;border:1px solid #dee2e6">연락처</td>'
+        f'<td style="padding:8px 12px;border:1px solid #dee2e6">{req.get("contact_phone","")}</td></tr>'
 
-<div style="margin-top:40px;padding-top:16px;border-top:1px solid #dee2e6;color:#6c757d;font-size:0.85rem;text-align:center">
-  본 보고서는 TAI Engineering이 제공하는 AI 기반 법령진단 결과입니다.<br>
-  실제 적용 여부는 현장 전문가의 최종 확인이 필요합니다.<br>
-  문의: TAI Engineering | taieng.co.kr
-</div>
-</div>"""
+        f'<tr>'
+        f'<td style="padding:8px 12px;font-weight:600;border:1px solid #dee2e6">섹터</td>'
+        f'<td style="padding:8px 12px;border:1px solid #dee2e6">{sector}</td>'
+        f'<td style="padding:8px 12px;font-weight:600;border:1px solid #dee2e6">진단 유형</td>'
+        f'<td style="padding:8px 12px;border:1px solid #dee2e6">{req_type_label}</td></tr>'
+        '</table>'
+
+        '<div style="background:#e8f0fe;border-left:4px solid #0d6efd;padding:16px;margin-bottom:24px;border-radius:4px">'
+        '<strong>진단 요약</strong><br>'
+        f'총 <strong>{summary.get("total", 0)}건</strong>의 법령이 적용됩니다. '
+        f'선임 {summary.get("appointment", 0)}건 · '
+        f'점검 {summary.get("inspection", 0)}건 · '
+        f'조치 {summary.get("action", 0)}건 · '
+        f'신고 {summary.get("report", 0)}건 · '
+        f'보고 {summary.get("notify", 0)}건'
+        f'{cs_block}'
+        '</div>'
+
+        + rows_html(result.get("appointment_required", []), "선임 의무")
+        + rows_html(result.get("inspection_required", []), "점검 의무")
+        + rows_html(result.get("action_required", []), "안전조치 의무")
+        + rows_html(result.get("report_required", []), "신고·보고 의무")
+
+        + '<div style="margin-top:40px;padding-top:16px;border-top:1px solid #dee2e6;'
+        'color:#6c757d;font-size:0.85rem;text-align:center">'
+        '본 보고서는 TAI Engineering이 제공하는 AI 기반 법령진단 결과입니다.<br>'
+        '실제 적용 여부는 현장 전문가의 최종 확인이 필요합니다.<br>'
+        '문의: TAI Engineering | taieng.co.kr'
+        '</div>'
+        '</div>'
+    )
     return html
 
 
