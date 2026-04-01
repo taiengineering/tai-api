@@ -1,5 +1,5 @@
 # main.py — v5.2.0
-# v5.2.0: public router 추가 (비회원 법령점검 신청)
+# v5.2.0: public router + public_admin router 추가
 # v5.1.0: legal_engine.py 건설 섹터 버그 수정
 import logging
 from contextlib import asynccontextmanager
@@ -57,7 +57,8 @@ from routers.diagnosis               import router as diagnosis_router
 from routers.tbm                     import router as tbm_router
 from routers.safety_meetings         import router as safety_meetings_router
 from routers.risk_assessments        import router as risk_assessments_router
-from routers.public                  import router as public_router   # v5.2.0 신규
+from routers.public                  import router as public_router       # v5.2.0: 비회원 공개 API
+from routers.public_admin            import router as public_admin_router # v5.2.0: 비회원 신청 관리 API
 
 logger = logging.getLogger(__name__)
 
@@ -107,12 +108,13 @@ app.add_middleware(
 
 # ── 라우터 등록 ────────────────────────────────────────────────
 app.include_router(public_router)              # v5.2.0: 비회원 공개 API (인증 불필요)
+app.include_router(public_admin_router)        # v5.2.0: 비회원 신청 관리 API
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(companies_router)
 app.include_router(factories_router)
 app.include_router(system_codes_router)
-app.include_router(legal_engine_router)        # v5.2.0: KCSC 공정·작업 연동
+app.include_router(legal_engine_router)
 app.include_router(ksic_engine_router)
 app.include_router(factory_process_router)
 app.include_router(process_management_router)
@@ -154,7 +156,7 @@ app.include_router(construction_router, prefix="/construction", tags=["건설안
 app.include_router(safety_template_router)
 app.include_router(event_trigger_router)
 app.include_router(worker_registry_router)
-app.include_router(diagnosis_router)          # v2.0.0
+app.include_router(diagnosis_router)
 app.include_router(tbm_router)
 app.include_router(safety_meetings_router)
 app.include_router(risk_assessments_router)
