@@ -1,19 +1,15 @@
 """
-법령 판정 엔진 라우터 — v5.2.0
+법령 판정 엔진 라우터 — v5.3.0
 =================================
+v5.3.0 (B-CON-001): 건설 전용 필드 연동 + 선임 판정 로직 고도화
+  - get_effective_worker_count(): CONSTRUCTION이면 employee_count + subcontractor_worker_count 합산
+  - get_construction_amount_threshold(): 공사 종류별 선임 기준 금액 동적 반환 (건축 150억/토목 120억)
+  - _factory_to_context(): factories.construction_type, subcontractor_worker_count 적용
+  - _get_construction_summary(): 새 필드로 선임 판정 정확화
+  - apply_legal_engine triggered_by_source에 construction 현황 정보 추가
 v5.2.0: 건설 법령진단 공정·작업 KCSC 연동
-  - diagnose/step2: kcsc_process_ids → kcsc_process_master에서 work_type_code 자동 조회
-    기존 construction_work_types 직접 입력 하위 호환 유지
-    응답에 kcsc_process_summary 추가
-  - diagnose/step3: construction_work_ids / kcsc_work_ids → kcsc_work_master에서
-    equipment_type_codes 자동 조회, 기존 equipments 직접 입력 하위 호환 유지
-    응답에 kcsc_work_summary, equipment_codes_applied 추가
 v5.1.0: 건설 섹터 법령엔진 버그 수정
-  1. CONDITION_CODE_TO_CONTEXT_KEY에 "contract_amount": "construction_amount" 추가 (핵심 버그)
-  2. CONSTRUCTION context 완성 (site_type, subcon_workers, contract_amount 직접 매핑)
-  3. diagnose/step1 결과에 construction_summary 블록 추가
 v4.4.3: create-inspection-sets 타임아웃 근본 해결
-v4.4.0: diagnose/step1 DB 저장 추가
 v4.2.0: 3단계 진단 API 추가
 """
 from fastapi import APIRouter, HTTPException, Query
@@ -26,11 +22,11 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.2.0"  # v5.2.0: 건설 KCSC 공정·작업 연동
+ENGINE_VERSION = "5.3.0"  # v5.3.0: 건설 전용 필드 연동
 
 
 # ──────────────────────────────────────────────
-# 코드 → 한글명 매핑 테이블
+# 코드 → 한글명 매핑 테이스트
 # ──────────────────────────────────────────────
 
 APPOINTMENT_TARGET_MAP = {
@@ -81,6 +77,40 @@ CONSTRUCTION_RELEVANT_LAW_PREFIXES = [
     "산업안전보건", "중대재해", "건설산업", "건설기술",
     "근로기준", "산업재해보상", "전기안전",
 ]
+
+
+# ──────────────────────────────────────────────
+# v5.3.0: 건설 전용 연산 함수
+# ──────────────────────────────────────────────
+
+_CONSTRUCTION_AMOUNT_THRESHOLDS: Dict[str, int] = {
+    "건축": 1_500_000_000,  # 150억
+    "토목": 1_200_000_000,  # 120억
+    "공통": 1_200_000_000,
+    "기타": 1_200_000_000,
+}
+
+
+def get_effective_worker_count(factory: dict) -> int:
+    """
+    v5.3.0: CONSTRUCTION 시설이면 employee_count + subcontractor_worker_count 합산 반환.
+    factories.sector 또는 컨텍스트에서 섹터 판단.
+    """
+    sec = str(factory.get("sector") or factory.get("site_type") or "").upper()
+    base = int(factory.get("employee_count") or factory.get("worker_count") or 0)
+    if sec == "CONSTRUCTION":
+        sub = int(factory.get("subcontractor_worker_count") or 0)
+        return base + sub
+    return base
+
+
+def get_construction_amount_threshold(factory: dict) -> int:
+    """
+    v5.3.0: 공사 종류별 안전관리자 선임 기준 금액 동적 반환.
+    construction_type: 건축(150억) | 토목/공통/기타(120억)
+    """
+    ctype = factory.get("construction_type") or "건축"
+    return _CONSTRUCTION_AMOUNT_THRESHOLDS.get(ctype, 1_500_000_000)
 
 
 def _now_iso() -> str:
@@ -169,7 +199,11 @@ def _survey_data_to_context(survey_data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _factory_to_context(factory: dict) -> Dict[str, Any]:
-    return {
+    """
+    v5.3.0: CONSTRUCTION 시설이면 subcontractor_worker_count 자동 합산,
+    construction_type별 선임 임계값 저장.
+    """
+    ctx = {
         "employee_count":           _to_int(factory.get("employee_count")),
         "building_area":            _to_float(factory.get("building_area")),
         "electrical_capacity_kw":   _to_float(factory.get("electrical_capacity_kw")),
@@ -189,6 +223,18 @@ def _factory_to_context(factory: dict) -> Dict[str, Any]:
         "building_use_code":        str(factory.get("main_purpose_name") or factory.get("building_use_code") or ""),
         "ksic_code":                str(factory.get("ksic_code") or ""),
     }
+    # v5.3.0: CONSTRUCTION 시설 worker_count = 직접 + 하도급
+    sec = str(factory.get("sector") or factory.get("site_type") or "").upper()
+    if sec == "CONSTRUCTION":
+        effective = get_effective_worker_count(factory)
+        threshold = get_construction_amount_threshold(factory)
+        ctx["worker_count"]               = effective
+        ctx["subcontractor_worker_count"]  = int(factory.get("subcontractor_worker_count") or 0)
+        ctx["construction_type"]           = factory.get("construction_type") or "건축"
+        ctx["safety_manager_threshold"]    = threshold
+    else:
+        ctx["worker_count"] = ctx["employee_count"]
+    return ctx
 
 
 # ──────────────────────────────────────────────
@@ -487,7 +533,10 @@ async def apply_legal_engine(
     body: Optional[dict] = None,
     mode: str = Query("all"),
 ):
-    """시설 등록 기반 법령 판정 (v5.2.0 — 하위 호환 유지)"""
+    """
+    시설 등록 기반 법령 판정 (v5.3.0)
+    v5.3.0: triggered_by_source에 construction 현황 정보 추가
+    """
     supabase = get_supabase()
     if body and body.get("mode"):
         mode = body["mode"]
@@ -501,7 +550,22 @@ async def apply_legal_engine(
     all_rules = rules_res.data or []
     evaluated_at = _now_iso()
     context = _factory_to_context(factory)
-    triggered_by_source = {"factory_condition": 0, "registered_equipment": 0, "process_recommended": 0}
+
+    # v5.3.0: 건설 수치 현황 추가
+    triggered_by_source: Dict[str, Any] = {
+        "factory_condition": 0,
+        "registered_equipment": 0,
+        "process_recommended": 0,
+    }
+    sec = str(factory.get("sector") or factory.get("site_type") or "").upper()
+    if sec == "CONSTRUCTION":
+        triggered_by_source.update({
+            "construction_type":   factory.get("construction_type"),
+            "total_worker_count":  get_effective_worker_count(factory),
+            "subcontractor_count": int(factory.get("subcontractor_worker_count") or 0),
+            "threshold_used":      get_construction_amount_threshold(factory),
+        })
+
     if mode == "facility":
         applicable, not_applicable = _evaluate_conditions(context, all_rules)
         triggered_by_source["factory_condition"] = len(applicable)
@@ -524,7 +588,7 @@ async def apply_legal_engine(
         rule_map = {}
         for r in fac_app:  rule_map[r["rule_id"]] = (r, "🏢 시설조건")
         for r in eq_app:   rule_map.setdefault(r["rule_id"], (r, "⚙️ 등록설비"))
-        for r in proc_app: rule_map.setdefault(r["rule_id"], (r, "🔄 공정추천"))
+        for r in proc_app: rule_map.setdefault(r["rule_id"], (r, "🔄 공정추청"))
         source_pairs   = list(rule_map.values())
         applicable_ids = {r["rule_id"] for r, _ in source_pairs}
         not_applicable = [r for r in all_rules if r["rule_id"] not in applicable_ids]
@@ -634,7 +698,7 @@ CONDITION_CODE_TO_CONTEXT_KEY: Dict[str, str] = {
     "transformer_capacity_kva": "transformer_capacity_kva",
     "annual_energy_toe":        "annual_energy_toe",
     "construction_amount":      "construction_amount",
-    "contract_amount":          "construction_amount",   # v5.1.0: 핵심 버그 수정
+    "contract_amount":          "construction_amount",
     "contractor_count":         "contractor_count",
     "is_hazardous_material":    "is_hazardous_material",
     "is_multi_use":             "is_multi_use",
@@ -660,6 +724,10 @@ def _truthy(v: Any) -> bool:
 
 
 def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    v5.3.0: CONSTRUCTION에서 subcon_workers 또는 subcontractor_worker_count 듨 다 해석.
+    하도급 눈종 파라미터 툆일화.
+    """
     sec = sector.strip().upper()
     ctx: Dict[str, Any] = {
         "worker_count": 0, "total_floor_area": 0.0, "electric_capacity": 0.0,
@@ -694,22 +762,34 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
         ctx["construction_amount"] = amount
         ctx["contract_amount"]     = amount
 
-        site_type = str(inp.get("construction_type") or inp.get("site_type") or "BUILDING")
+        # 공사 종류 내증: 건축/토목/BUILDING/CIVIL 모두 허용
+        raw_site = str(inp.get("construction_type") or inp.get("site_type") or "건축")
+        # 영문코드 대응
+        SITE_KO = {"BUILDING": "건축", "CIVIL": "토목", "SPECIALTY": "공통"}
+        site_type = SITE_KO.get(raw_site.upper(), raw_site)  # 한글 그대로
         ctx["construction_type"] = site_type
         ctx["building_use_code"] = site_type
-        ctx["is_building"]       = 1 if site_type == "BUILDING" else 0
-        ctx["is_civil"]          = 1 if site_type == "CIVIL"    else 0
+        ctx["is_building"] = 1 if site_type in ("건축", "BUILDING") else 0
+        ctx["is_civil"]    = 1 if site_type in ("토목", "CIVIL")    else 0
 
+        # v5.3.0: 하도급 파라미터명 통합 (subcon_workers + subcontractor_worker_count)
         direct = int(inp.get("direct_workers") or inp.get("worker_count") or inp.get("employee_count") or 0)
-        subcon = int(inp.get("subcon_workers") or 0)
-        ctx["worker_count"]   = direct + subcon
-        ctx["employee_count"] = direct + subcon
-        ctx["direct_workers"] = direct
-        ctx["subcon_workers"] = subcon
+        subcon = int(
+            inp.get("subcon_workers")
+            or inp.get("subcontractor_worker_count")
+            or 0
+        )
+        ctx["worker_count"]               = direct + subcon
+        ctx["employee_count"]             = direct + subcon
+        ctx["direct_workers"]             = direct
+        ctx["subcon_workers"]             = subcon
+        ctx["subcontractor_worker_count"] = subcon
 
         ctx["has_tunnel_bridge"] = 1 if _truthy(inp.get("has_tunnel_bridge")) else 0
 
-        threshold = 15_000_000_000 if site_type in ("BUILDING", "SPECIALTY") else 12_000_000_000
+        # v5.3.0: construction_type 기반 동적 임계값
+        fake_factory = {"construction_type": site_type}
+        threshold = get_construction_amount_threshold(fake_factory)
         ctx["safety_manager_threshold"] = threshold
     elif sec in ("SPECIAL_FACILITY", "SPECIAL"):
         ctx["building_use_code"] = str(inp.get("facility_type") or "")
@@ -786,38 +866,49 @@ def _evaluate_facility_conditions_db(
 
 
 # ──────────────────────────────────────────────
-# v5.1.0: 건설 선임 판정 요약 블록
+# v5.3.0: 건설 선임 판정 요약 블록
 # ──────────────────────────────────────────────
 
 def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    v5.3.0: construction_type 별 동적 임계값 적용
+    하도급 포함 총 근로자 수 반영
+    """
     amount    = float(facility_ctx.get("construction_amount") or 0)
-    workers   = int(facility_ctx.get("worker_count") or 0)
-    site_type = str(facility_ctx.get("construction_type") or facility_ctx.get("building_use_code") or "BUILDING")
+    workers   = int(facility_ctx.get("worker_count") or 0)   # 이미 하도급 포함
+    site_type = str(facility_ctx.get("construction_type") or facility_ctx.get("building_use_code") or "건축")
+    subcon    = int(facility_ctx.get("subcon_workers") or facility_ctx.get("subcontractor_worker_count") or 0)
+    direct    = int(facility_ctx.get("direct_workers") or (workers - subcon))
 
-    threshold   = 15_000_000_000 if site_type in ("BUILDING", "SPECIALTY") else 12_000_000_000
+    # v5.3.0: construction_type 기반 동적 임계값
+    fake = {"construction_type": site_type}
+    threshold   = get_construction_amount_threshold(fake)
     sm_required = (amount >= threshold) or (workers >= 50)
 
-    site_label  = "건축" if site_type == "BUILDING" else ("토목" if site_type == "CIVIL" else "전문")
-    basis_parts = [f"{site_label} {int(threshold/100_000_000)}억원 {'이상' if amount >= threshold else '미만'}"]
+    SITE_LABEL = {"건축": "건축", "토목": "토목", "공통": "공통", "기타": "기타",
+                  "BUILDING": "건축", "CIVIL": "토목", "SPECIALTY": "공통"}
+    site_label  = SITE_LABEL.get(site_type, site_type)
+    basis_parts = [f"{site_label} {int(threshold/100_000_000)}억원 {'\uc774\uc0c1' if amount >= threshold else '\ubbf8\ub9cc'}"]
     if workers >= 50:
-        basis_parts.append("근로자 50명 이상")
+        basis_parts.append(f"근로자(하도급 포함) {workers}명 ≥ 50명")
 
     return {
         "site_type":                site_type,
         "contract_amount":          amount,
         "contract_amount_eok":      round(amount / 100_000_000, 2) if amount else 0,
         "total_workers":            workers,
-        "direct_workers":           int(facility_ctx.get("direct_workers") or 0),
-        "subcon_workers":           int(facility_ctx.get("subcon_workers") or 0),
+        "direct_workers":           direct,
+        "subcon_workers":           subcon,
         "safety_manager_required":  sm_required,
         "safety_manager_basis":     ", ".join(basis_parts),
+        "threshold_used":           threshold,
         "key_thresholds_met": {
             "1억_산업안전보건관리비":       amount >= 100_000_000,
             "50억_유해위험방지계획서":      amount >= 5_000_000_000,
             "50억_기초안전보건교육":        amount >= 5_000_000_000,
             "100억_안전관리계획서":         amount >= 10_000_000_000,
-            "120억_안전관리자선임_토목":    site_type == "CIVIL"    and amount >= 12_000_000_000,
-            "150억_안전관리자선임_건축":    site_type == "BUILDING" and amount >= 15_000_000_000,
+            "120억_안전관리자선임_토목":    site_type in ("토목", "CIVIL")    and amount >= 12_000_000_000,
+            "150억_안전관리자선임_건축":    site_type in ("건축", "BUILDING") and amount >= 15_000_000_000,
             "200억_안전보건관리책임자":     amount >= 20_000_000_000,
             "1000억_건설안전판정사":        amount >= 100_000_000_000,
         },
@@ -825,7 +916,7 @@ def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ──────────────────────────────────────────────
-# POST /legal-engine/diagnose/step1  v5.1.0
+# POST /legal-engine/diagnose/step1
 # ──────────────────────────────────────────────
 
 @router.post("/diagnose/step1")
@@ -1204,7 +1295,7 @@ async def create_inspection_sets_from_legal(factory_id: str):
             "cycle_value":         cycle_value,
             "cycle_base_type":     m.get("cycle_base_type") or "LAST_INSPECTION",
             "cycle_base_guide":    m.get("cycle_base_guide") or (
-                f"마지막 점검일로부터 {cycle_value}{'년' if cycle_unit == 'year' else '개월'}마다"
+                f"마지막 점검일로부터 {cycle_value}{'\ub144' if cycle_unit == 'year' else '\uac1c\uc6d4'}마다"
             ),
             "description":         rule.get("description", ""),
             "source":              "LEGAL_ENGINE",
@@ -1222,7 +1313,7 @@ async def create_inspection_sets_from_legal(factory_id: str):
         res = supabase.table("inspection_sets").insert(insert_rows[i:i + 20]).execute()
         created += len(res.data or [])
 
-    return {"status": "success", "message": f"{created}개 점검 세트가 생성됐습니다. ({len(existing_rule_ids)}개 기존 유지)",
+    return {"status": "success", "message": f"{created}개 점검 세트가 생성똥습니다. ({len(existing_rule_ids)}개 기존 유지)",
             "data": {"factory_id": factory_id, "created": created, "skipped": len(existing_rule_ids),
                      "source_rules": len(inspection_rules)}}
 
@@ -1367,8 +1458,8 @@ def diagnose_step2(body: dict):
     diagnosis_id        = body.get('diagnosis_id')
     processes           = body.get('processes', [])
     construction_types  = body.get('construction_types', [])
-    work_types: List[str]       = list(body.get('construction_work_types') or [])  # 기존 하위 호환
-    kcsc_process_ids: List[str] = body.get('kcsc_process_ids') or []               # v5.2.0 신규
+    work_types: List[str]       = list(body.get('construction_work_types') or [])
+    kcsc_process_ids: List[str] = body.get('kcsc_process_ids') or []
 
     if not factory_id:
         raise HTTPException(status_code=400, detail='factory_id 필수')
@@ -1387,8 +1478,7 @@ def diagnose_step2(body: dict):
     input_data['construction_types'] = construction_types
     input_data['sector']             = sector
 
-    # v5.2.0: KCSC 공정 ID → work_type_code 자동 조회
-    kcsc_processes: List[Dict]      = []
+    kcsc_processes: List[Dict]       = []
     kcsc_process_summary: List[Dict] = []
 
     if kcsc_process_ids:
@@ -1402,17 +1492,13 @@ def diagnose_step2(body: dict):
         except Exception as e:
             print(f"[STEP2] kcsc_process_master 조회 실패: {e}")
 
-        # work_type_code 추출 (NULL 제외, 중복 제거) + 기존 직접 입력 합산
         kcsc_work_types = list(set(
             p['work_type_code'] for p in kcsc_processes if p.get('work_type_code')
         ))
         work_types = list(set(work_types + kcsc_work_types))
-
-        # input_data에 KCSC 정보 저장
         input_data['kcsc_process_ids'] = kcsc_process_ids
         input_data['kcsc_processes']   = kcsc_processes
 
-        # 응답용 공정 요약
         for p in kcsc_processes:
             kcsc_process_summary.append({
                 'process_id':      p['id'],
@@ -1423,12 +1509,10 @@ def diagnose_step2(body: dict):
                 'has_legal_rules': p.get('work_type_code') is not None,
             })
 
-    # 법령 룰 조회
     q = supabase.table('master_building_legal_rules').select('*').eq(
         'sector', sector
     ).lte('diagnosis_stage', 2).eq('is_active', True)
 
-    # CONSTRUCTION + 공종 필터
     if sector == 'CONSTRUCTION' and work_types:
         work_type_csv = ",".join(work_types)
         q = q.or_(
@@ -1492,18 +1576,14 @@ def diagnose_step2(body: dict):
 def diagnose_step3(body: dict):
     """
     건설 법령진단 3단계 — 설비·작업 법령 판정
-    v5.2.0:
-    - construction_work_ids: PTW 작업 ID → construction_works.kcsc_work_id 조회
-    - kcsc_work_ids: KCSC 작업 마스터 ID → equipment_type_codes 자동 조회
-    - 기존 equipments 직접 입력 하위 호환 유지
-    응답: equipment_codes_applied, kcsc_work_summary 추가
+    v5.2.0: construction_work_ids / kcsc_work_ids → equipment_type_codes 자동 조회
     """
     supabase   = get_supabase()
     factory_id = body.get('factory_id')
     diagnosis_id = body.get('diagnosis_id')
-    equipments: List[Dict]          = list(body.get('equipments') or [])   # 기존 하위 호환
-    construction_work_ids: List[str] = body.get('construction_work_ids') or []  # v5.2.0 신규
-    kcsc_work_ids: List[str]         = list(body.get('kcsc_work_ids') or [])    # v5.2.0 신규
+    equipments: List[Dict]           = list(body.get('equipments') or [])
+    construction_work_ids: List[str]  = body.get('construction_work_ids') or []
+    kcsc_work_ids: List[str]          = list(body.get('kcsc_work_ids') or [])
 
     if not factory_id:
         raise HTTPException(status_code=400, detail='factory_id 필수')
@@ -1523,7 +1603,6 @@ def diagnose_step3(body: dict):
     extra_equipment_codes: List[str] = []
     kcsc_work_summary: List[Dict]    = []
 
-    # v5.2.0 Step A: PTW 등록 작업 → kcsc_work_id 조회
     if construction_work_ids:
         try:
             ptw_res = supabase.table('construction_works') \
@@ -1536,7 +1615,6 @@ def diagnose_step3(body: dict):
         except Exception as e:
             print(f"[STEP3] construction_works 조회 실패 (테이블 없을 수 있음): {e}")
 
-    # v5.2.0 Step B: KCSC 작업 마스터 → equipment_type_codes 자동 조회
     if kcsc_work_ids:
         try:
             kcsc_work_res = supabase.table('kcsc_work_master') \
@@ -1544,7 +1622,6 @@ def diagnose_step3(body: dict):
                 .in_('id', kcsc_work_ids) \
                 .execute()
             kcsc_works = kcsc_work_res.data or []
-
             for w in kcsc_works:
                 eq_codes = w.get('equipment_type_codes') or []
                 extra_equipment_codes.extend(eq_codes)
@@ -1556,12 +1633,10 @@ def diagnose_step3(body: dict):
                     'equipment_codes': eq_codes,
                     'work_type_code':  w.get('work_type_code'),
                 })
-
             extra_equipment_codes = list(set(extra_equipment_codes))
         except Exception as e:
             print(f"[STEP3] kcsc_work_master 조회 실패: {e}")
 
-    # v5.2.0: 기존 equipments 배열에 KCSC 조회 결과 합산 (중복 제외)
     for code in extra_equipment_codes:
         if not any(e.get('equipment_code') == code for e in equipments):
             equipments.append({'equipment_code': code})
@@ -1571,13 +1646,11 @@ def diagnose_step3(body: dict):
     input_data['kcsc_work_ids']         = kcsc_work_ids
     input_data['extra_equipment_codes'] = extra_equipment_codes
 
-    # 3단계 룰 조회
     q = supabase.table('master_building_legal_rules').select('*') \
         .eq('sector', sector) \
         .eq('diagnosis_stage', 3) \
         .eq('is_active', True)
 
-    # v5.2.0: CONSTRUCTION + 설비/공종 코드 필터
     if sector == 'CONSTRUCTION' and extra_equipment_codes:
         eq_csv = ','.join(extra_equipment_codes)
         q = q.or_(f"construction_work_type.is.null,construction_work_type.in.({eq_csv})")
@@ -1588,7 +1661,6 @@ def diagnose_step3(body: dict):
 
     diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 3, input_data, matched)
 
-    # 점검 일정 생성
     inspection_schedules = []
     today = date.today()
     for equip in equipments:
@@ -1623,8 +1695,8 @@ def diagnose_step3(body: dict):
         'sector':                  sector,
         'engine_version':          ENGINE_VERSION,
         'rule_count':              len(matched),
-        'equipment_codes_applied': extra_equipment_codes,   # v5.2.0 신규
-        'kcsc_work_summary':       kcsc_work_summary,       # v5.2.0 신규
+        'equipment_codes_applied': extra_equipment_codes,
+        'kcsc_work_summary':       kcsc_work_summary,
         'inspection_schedules':    inspection_schedules,
         'overdue_count':           overdue_count,
         'upcoming_count':          upcoming_count,

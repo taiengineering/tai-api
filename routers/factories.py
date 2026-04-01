@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Factories 라우터 - 시설 등록/관리 v2.1.0
+TAI Factories 라우터 - 시설 등록/관리 v2.2.0
 
+v2.2.0 (B-CON-001): 건설 전용 필드 추가
+  - construction_type (VARCHAR 20: 건축/토목/공통/기타)
+  - subcontractor_worker_count (하도급 근로자 수)
 v2.1.0: CHANGE / CLOSURE 이벤트 트리거 추가
-  - PATCH /factories/{id} 시 변경 유형에 따라 CHANGE 트리거
-  - PATCH 시 status_code='INACTIVE' 지정 시 CLOSURE 트리거
 v2.0.0: 담당자 관리 API 추가
 """
 
@@ -68,6 +69,9 @@ class FactoryCreate(BaseModel):
     safety_manager_required: Optional[bool] = False
     special_use_flag:       Optional[bool] = False
     remarks:                Optional[str] = None
+    # v2.2.0: 건설 전용 필드
+    construction_type:            Optional[str] = None   # 건축/토목/공통/기타
+    subcontractor_worker_count:   Optional[int] = 0      # 하도급 근로자 수
 
 
 class FactoryUpdate(BaseModel):
@@ -108,6 +112,9 @@ class FactoryUpdate(BaseModel):
     is_multi_use:           Optional[bool] = None
     status_code:            Optional[str] = None
     remarks:                Optional[str] = None
+    # v2.2.0: 건설 전용 필드
+    construction_type:            Optional[str] = None   # 건축/토목/공통/기타
+    subcontractor_worker_count:   Optional[int] = None   # 하도급 근로자 수
 
 
 class FactoryContactBody(BaseModel):
@@ -187,7 +194,7 @@ def create_factory(req: FactoryCreate):
     res = supabase.table("factories").insert(data).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="시설 등록 실패")
-    return {"status": "success", "message": "시설이 등록됐습니다", "data": res.data[0]}
+    return {"status": "success", "message": "시설이 등록뙀습니다", "data": res.data[0]}
 
 
 # ============================================================
@@ -206,15 +213,15 @@ def get_factory(factory_id: str):
 
 
 # ============================================================
-# 4. 수정 (v2.1.0: CHANGE / CLOSURE 트리거 추가)
+# 4. 수정 (v2.2.0: 건설 필드 포함 + v2.1.0: CHANGE / CLOSURE 트리거)
 # ============================================================
 
 @router.patch("/{factory_id}")
 async def update_factory(factory_id: str, req: FactoryUpdate):
     """
-    v2.1.0:
-    - 실제 변경이 있으면 CHANGE 이벤트 트리거
-    - status_code='INACTIVE' 로 변경 시 CLOSURE 이벤트 트리거
+    v2.2.0: construction_type, subcontractor_worker_count 필드 저장·수정 가능
+    v2.1.0: 실제 변경이 있으면 CHANGE 이벤트 트리거
+            status_code='INACTIVE' 로 변경 시 CLOSURE 이벤트 트리거
     """
     supabase = get_supabase()
     existing = supabase.table("factories").select("id, status_code").eq(
@@ -237,14 +244,12 @@ async def update_factory(factory_id: str, req: FactoryUpdate):
         from routers.event_trigger import trigger_event_schedules
         new_status = update_data.get("status_code", "")
         if new_status == "INACTIVE":
-            # 폐업 트리거
             await trigger_event_schedules(
                 factory_id = factory_id,
                 event_type = "CLOSURE",
                 event_date = date.today(),
             )
         else:
-            # 일반 변경 트리거 (실제 변경 시)
             await trigger_event_schedules(
                 factory_id = factory_id,
                 event_type = "CHANGE",
@@ -255,7 +260,7 @@ async def update_factory(factory_id: str, req: FactoryUpdate):
 
     return {
         "status":  "success",
-        "message": "시설 정보가 수정됐습니다",
+        "message": "시설 정보가 수정똥습니다",
         "data":    res.data[0] if res.data else {},
     }
 
@@ -277,7 +282,7 @@ def delete_factory(factory_id: str):
         "status_code": "INACTIVE",
         "updated_at":  datetime.now().isoformat(),
     }).eq("id", factory_id).execute()
-    return {"status": "success", "message": "시설이 비활성화됐습니다"}
+    return {"status": "success", "message": "시설이 비활성화똥습니다"}
 
 
 # ============================================================
@@ -345,7 +350,7 @@ def add_factory_contact(factory_id: str, body: FactoryContactBody):
     }).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="담당자 등록 실패")
-    return {"status": "success", "message": "담당자가 추가됐습니다.", "data": res.data[0]}
+    return {"status": "success", "message": "담당자가 추가똥습니다.", "data": res.data[0]}
 
 
 # ============================================================
@@ -369,7 +374,7 @@ def update_factory_contact(factory_id: str, contact_id: str, body: FactoryContac
     res = supabase.table("factory_contacts").update(update_data).eq(
         "id", contact_id
     ).execute()
-    return {"status": "success", "message": "담당자가 수정됐습니다.", "data": res.data[0] if res.data else {}}
+    return {"status": "success", "message": "담당자가 수정똥습니다.", "data": res.data[0] if res.data else {}}
 
 
 # ============================================================
@@ -390,7 +395,7 @@ def delete_factory_contact(factory_id: str, contact_id: str):
         "is_active":  False,
         "updated_at": datetime.now().isoformat(),
     }).eq("id", contact_id).execute()
-    return {"status": "success", "message": "담당자가 삭제됐습니다."}
+    return {"status": "success", "message": "담당자가 삭제똥습니다."}
 
 
 # ============================================================
