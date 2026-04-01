@@ -1,5 +1,6 @@
-# main.py — v5.2.0
-# v5.2.0: public router + public_admin router 추가
+# main.py — v5.2.1
+# v5.2.1: public_admin PATCH /status 엔드포인트 확인 완료
+# v5.2.0: public router + public_admin router 추가 / legal_engine KCSC 연동
 # v5.1.0: legal_engine.py 건설 섹터 버그 수정
 import logging
 from contextlib import asynccontextmanager
@@ -83,7 +84,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="TAI API",
-    version="5.2.0",
+    version="5.2.1",
     description="TAI 산업안전 플랫폼 API",
     lifespan=lifespan,
 )
@@ -164,7 +165,7 @@ app.include_router(risk_assessments_router)
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "5.2.0"}
+    return {"status": "ok", "service": "TAI API", "version": "5.2.1"}
 
 
 @app.get("/health")
@@ -179,4 +180,4 @@ def health():
         cron_status = f"{len(scheduler.get_jobs())}개 등록" if scheduler.running else "중지"
     except Exception:
         cron_status = "미초기화"
-    return {"status": "healthy", "server_ip": ip, "version": "5.2.0", "cron": cron_status}
+    return {"status": "healthy", "server_ip": ip, "version": "5.2.1", "cron": cron_status}
