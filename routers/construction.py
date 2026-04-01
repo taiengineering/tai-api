@@ -1,13 +1,11 @@
 """
-건설안전 관리 라우터 — v1.0.0
+건설안전 관리 라우터 — v1.1.0
 =====================================
+v1.1.0:
+  - GET /kcsc/works 전체 위험작업 조회 엔드포인트 추가 (is_hazardous 필터)
+  - GET /kcsc/processes 정렬 버그 수정 (process_code → kcs_code)
+  - GET /kcsc/works/{process_id} is_active 필터 추가
 v1.0.0: 신규 생성
-  - 건설현장 CRUD + 통계
-  - 현장 공정(KCSC 연동) CRUD
-  - 위험작업/PTW CRUD
-  - 작업자 배치/출입 관리
-  - 안전점검/시정조치
-  - 안전관리자 선임 의무 자동 판정 엔진 (산안법 시행령 제16조)
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -18,7 +16,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(tags=["건설안전"])
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 
 def _now_iso() -> str:
@@ -119,6 +117,9 @@ class SitePatch(BaseModel):
 
 class ProcessCreate(BaseModel):
     process_master_id: Optional[str] = None
+    kcsc_process_id: Optional[str] = None      # v1.1.0: KCSC 공정 마스터 연결
+    work_type_code: Optional[str] = None        # v1.1.0: 법령진단 공종 코드
+    work_type_label: Optional[str] = None
     process_name: str
     construction_type: Optional[str] = None
     planned_start: Optional[date] = None
@@ -131,6 +132,8 @@ class ProcessCreate(BaseModel):
 
 class ProcessPatch(BaseModel):
     process_name: Optional[str] = None
+    kcsc_process_id: Optional[str] = None
+    work_type_code: Optional[str] = None
     planned_start: Optional[date] = None
     planned_end: Optional[date] = None
     actual_start: Optional[date] = None
@@ -145,7 +148,7 @@ class ProcessPatch(BaseModel):
 
 class WorkCreate(BaseModel):
     process_id: Optional[str] = None
-    work_master_id: Optional[str] = None
+    work_master_id: Optional[str] = None        # kcsc_work_master.id (트리거로 kcsc_work_id 자동 복사)
     work_name: str
     work_date: date
     work_time_start: Optional[str] = None
@@ -293,7 +296,6 @@ async def create_site(body: SiteCreate):
         for key in ("start_date", "end_date"):
             if key in data and isinstance(data[key], date):
                 data[key] = data[key].isoformat()
-        # 안전관리자 선임 의무 자동 판정
         if body.contract_amount is not None:
             sm = calc_safety_manager(
                 body.site_type,
@@ -333,7 +335,6 @@ async def update_site(site_id: str, body: SitePatch):
         for key in ("start_date", "end_date"):
             if key in data and isinstance(data[key], date):
                 data[key] = data[key].isoformat()
-        # 안전관리자 재판정 (금액/인원 변경 시)
         if "contract_amount" in data or "total_workers" in data or "site_type" in data:
             site_res = supabase.table("construction_sites").select("site_type,contract_amount,total_workers").eq("id", site_id).limit(1).execute()
             if site_res.data:
@@ -374,15 +375,13 @@ async def get_site_stats(site_id: str):
             raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
         site = site_res.data[0]
 
-        proc_res = supabase.table("construction_site_processes").select("id,status_code", count="exact").eq("site_id", site_id).eq("is_active", True).execute()
-        work_res = supabase.table("construction_works").select("id,status_code,ptw_status", count="exact").eq("site_id", site_id).eq("is_active", True).execute()
+        proc_res   = supabase.table("construction_site_processes").select("id,status_code", count="exact").eq("site_id", site_id).eq("is_active", True).execute()
+        work_res   = supabase.table("construction_works").select("id,status_code,ptw_status", count="exact").eq("site_id", site_id).eq("is_active", True).execute()
         worker_res = supabase.table("construction_workers").select("id,worker_type,entry_status", count="exact").eq("site_id", site_id).eq("is_active", True).execute()
-        insp_res = supabase.table("construction_inspections").select("id,overall_result", count="exact").eq("site_id", site_id).eq("is_active", True).execute()
+        insp_res   = supabase.table("construction_inspections").select("id,overall_result", count="exact").eq("site_id", site_id).eq("is_active", True).execute()
 
-        procs = proc_res.data or []
-        works = work_res.data or []
-        workers = worker_res.data or []
-        insps = insp_res.data or []
+        procs = proc_res.data or []; works = work_res.data or []
+        workers = worker_res.data or []; insps = insp_res.data or []
 
         return {"status": "success", "data": {
             "site_id": site_id,
@@ -514,18 +513,63 @@ async def delete_process(process_id: str):
 async def list_kcsc_processes(
     search: Optional[str] = Query(None),
     construction_type: Optional[str] = Query(None),
+    work_type_code: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
 ):
+    """
+    KCSC 공정 마스터 목록
+    v1.1.0: 정렬 컬럼 process_code → kcs_code 수정 / work_type_code 필터 추가
+    """
     supabase = get_supabase()
     try:
         offset = (page - 1) * size
-        q = supabase.table("kcsc_process_master").select("*", count="exact")
+        q = supabase.table("kcsc_process_master").select("*", count="exact").eq("is_active", True)
         if search:
             q = q.ilike("process_name", f"%{search}%")
         if construction_type:
             q = q.eq("construction_type", construction_type)
-        q = q.order("process_code").range(offset, offset + size - 1)
+        if work_type_code:
+            q = q.eq("work_type_code", work_type_code)
+        q = q.order("kcs_code").range(offset, offset + size - 1)  # v1.1.0 버그 수정
+        res = q.execute()
+        return {"status": "success", "data": {
+            "items": res.data or [], "total": res.count or 0, "page": page, "size": size,
+        }}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/kcsc/works")
+async def list_kcsc_works_all(
+    is_hazardous: Optional[bool] = Query(None),
+    work_type_code: Optional[str] = Query(None),
+    hazard_type: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    size: int = Query(100, ge=1, le=300),
+):
+    """
+    v1.1.0 신규: KCSC 전체 작업 목록 (is_hazardous 필터 지원)
+    프론트 step3 탭②: 위험작업 직접 선택에서 호출
+    """
+    supabase = get_supabase()
+    try:
+        offset = (page - 1) * size
+        q = supabase.table("kcsc_work_master").select(
+            "id, title, is_hazardous, hazard_type, safety_standard, "
+            "is_work_item, equipment_type_codes, work_type_code, process_id",
+            count="exact"
+        ).eq("is_active", True)
+        if is_hazardous is not None:
+            q = q.eq("is_hazardous", is_hazardous)
+        if work_type_code:
+            q = q.eq("work_type_code", work_type_code)
+        if hazard_type:
+            q = q.ilike("hazard_type", f"%{hazard_type}%")
+        if search:
+            q = q.ilike("title", f"%{search}%")
+        q = q.order("sort_order").order("title").range(offset, offset + size - 1)
         res = q.execute()
         return {"status": "success", "data": {
             "items": res.data or [], "total": res.count or 0, "page": page, "size": size,
@@ -535,11 +579,14 @@ async def list_kcsc_processes(
 
 
 @router.get("/kcsc/works/{process_id}")
-async def list_kcsc_works(process_id: str):
+async def list_kcsc_works_by_process(process_id: str):
+    """공정별 KCSC 작업 목록 (v1.1.0: is_active 필터 추가)"""
     supabase = get_supabase()
     try:
         res = supabase.table("kcsc_work_master").select("*") \
-            .eq("process_id", process_id).order("work_code").execute()
+            .eq("process_id", process_id) \
+            .eq("is_active", True) \
+            .order("sort_order").execute()
         return {"status": "success", "data": res.data or []}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
