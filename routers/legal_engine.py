@@ -1,6 +1,12 @@
 """
-법령 판정 엔진 라우터 — v4.4.3
+법령 판정 엔진 라우터 — v5.1.0
 =================================
+v5.1.0: 건설 섹터 법령엔진 버그 수정
+  1. CONDITION_CODE_TO_CONTEXT_KEY에 "contract_amount": "construction_amount" 추가 (핵심 버그)
+     → 건설 condition_code=contract_amount 인 룰 17건이 매핑 누락으로 전혀 적용 안 되던 문제 수정
+  2. CONSTRUCTION context 완성 (site_type, subcon_workers, contract_amount 직접 매핑)
+  3. diagnose/step1 결과에 construction_summary 블록 추가
+     → safety_manager_required, key_thresholds_met 등 포함
 v4.4.3: create-inspection-sets 타임아웃 근본 해결
   - diagnosis_rule_results에 obligation_type 컬럼 추가됨 (DB migration 완료)
   - diagnose/step1 저장 시 obligation_type 함께 저장
@@ -29,7 +35,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "4.4.3"
+ENGINE_VERSION = "5.1.0"  # v5.1.0: 건설 섹터 버그 수정
 
 
 # ──────────────────────────────────────────────
@@ -80,6 +86,12 @@ RULE_TYPE_MAP = {
     "001": "appointment", "002": "inspection", "003": "report",
     "004": "action", "005": "action", "007": "action", "008": "action",
 }
+
+# 건설 관련 주요 법령명 프리픽스 (조건 없는 룰 필터링용)
+CONSTRUCTION_RELEVANT_LAW_PREFIXES = [
+    "산업안전보건", "중대재해", "건설산업", "건설기술",
+    "근로기준", "산업재해보상", "전기안전",
+]
 
 
 def _now_iso() -> str:
@@ -486,7 +498,7 @@ async def apply_legal_engine(
     body: Optional[dict] = None,
     mode: str = Query("all"),
 ):
-    """시설 등록 기반 법령 판정 (v4.4.3 — 하위 호환 유지)"""
+    """시설 등록 기반 법령 판정 (v5.1.0 — 하위 호환 유지)"""
     supabase = get_supabase()
     if body and body.get("mode"):
         mode = body["mode"]
@@ -620,23 +632,27 @@ ALLOWED_DIAGNOSE_SECTORS = frozenset(
     {"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"}
 )
 
+# v5.1.0: "contract_amount": "construction_amount" 추가 (핵심 버그 수정)
 CONDITION_CODE_TO_CONTEXT_KEY: Dict[str, str] = {
-    "employee_count": "worker_count",
-    "building_area": "total_floor_area",
-    "electrical_capacity_kw": "electric_capacity",
-    "floor_count": "floor_count",
-    "elevator_count": "elevator_count",
-    "boiler_capacity_kw": "boiler_capacity_kw",
-    "boiler_capacity_th": "boiler_capacity_th",
-    "gas_capacity_kg": "gas_capacity_kg",
-    "gas_capacity_m3": "gas_capacity_m3",
+    "employee_count":           "worker_count",
+    "building_area":            "total_floor_area",
+    "electrical_capacity_kw":   "electric_capacity",
+    "floor_count":              "floor_count",
+    "elevator_count":           "elevator_count",
+    "boiler_capacity_kw":       "boiler_capacity_kw",
+    "boiler_capacity_th":       "boiler_capacity_th",
+    "gas_capacity_kg":          "gas_capacity_kg",
+    "gas_capacity_m3":          "gas_capacity_m3",
     "transformer_capacity_kva": "transformer_capacity_kva",
-    "annual_energy_toe": "annual_energy_toe",
-    "construction_amount": "construction_amount",
-    "contractor_count": "contractor_count",
-    "is_hazardous_material": "is_hazardous_material",
-    "is_multi_use": "is_multi_use",
-    "is_factory_registered": "is_factory_registered",
+    "annual_energy_toe":        "annual_energy_toe",
+    "construction_amount":      "construction_amount",
+    "contract_amount":          "construction_amount",   # v5.1.0 추가: 핵심 버그 수정
+    "contractor_count":         "contractor_count",
+    "is_hazardous_material":    "is_hazardous_material",
+    "is_multi_use":             "is_multi_use",
+    "is_factory_registered":    "is_factory_registered",
+    "electric_capacity":        "electric_capacity",     # v5.1.0 추가
+    "worker_count":             "worker_count",           # v5.1.0 추가
 }
 
 
@@ -660,7 +676,8 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
     ctx: Dict[str, Any] = {
         "worker_count": 0, "total_floor_area": 0.0, "electric_capacity": 0.0,
         "building_use_code": "", "ksic_code": "", "floor_count": 0,
-        "construction_amount": 0.0, "is_hazardous_material": 0, "is_multi_use": 0,
+        "construction_amount": 0.0, "contract_amount": 0.0,
+        "is_hazardous_material": 0, "is_multi_use": 0,
         "is_factory_registered": 0, "has_high_pressure_gas": 0,
         "has_hazardous_material": 0, "has_chemical_substance": 0,
         "has_boiler": 0, "has_tunnel_bridge": 0, "hospital_beds": 0, "student_count": 0,
@@ -684,11 +701,32 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
         ctx["has_chemical_substance"] = 1 if _truthy(inp.get("has_chemical_substance")) else 0
         ctx["has_boiler"] = 1 if _truthy(inp.get("has_boiler")) else 0
     elif sec == "CONSTRUCTION":
+        # v5.1.0: CONSTRUCTION context 완성
         eok = float(inp.get("contract_amount_eok") or 0)
-        ctx["construction_amount"] = eok * 100_000_000.0
-        ctx["worker_count"] = int(inp.get("worker_count") or inp.get("employee_count") or 0)
-        ctx["building_use_code"] = str(inp.get("construction_type") or "")
+        amount = eok * 100_000_000.0
+        ctx["construction_amount"] = amount
+        ctx["contract_amount"]     = amount   # v5.1.0: condition_code 직접 매핑
+
+        # 공사 종류 (BUILDING=건축, CIVIL=토목, SPECIALTY=전문)
+        site_type = str(inp.get("construction_type") or inp.get("site_type") or "BUILDING")
+        ctx["construction_type"] = site_type
+        ctx["building_use_code"] = site_type
+        ctx["is_building"]       = 1 if site_type == "BUILDING" else 0
+        ctx["is_civil"]          = 1 if site_type == "CIVIL"    else 0
+
+        # 근로자 수 (하도급 포함) — v5.1.0
+        direct = int(inp.get("direct_workers") or inp.get("worker_count") or inp.get("employee_count") or 0)
+        subcon = int(inp.get("subcon_workers") or 0)
+        ctx["worker_count"]   = direct + subcon
+        ctx["employee_count"] = direct + subcon
+        ctx["direct_workers"] = direct
+        ctx["subcon_workers"] = subcon
+
         ctx["has_tunnel_bridge"] = 1 if _truthy(inp.get("has_tunnel_bridge")) else 0
+
+        # 안전관리자 선임 기준 임계값 저장 (참조용)
+        threshold = 15_000_000_000 if site_type in ("BUILDING", "SPECIALTY") else 12_000_000_000
+        ctx["safety_manager_threshold"] = threshold
     elif sec in ("SPECIAL_FACILITY", "SPECIAL"):
         ctx["building_use_code"] = str(inp.get("facility_type") or "")
         ctx["total_floor_area"] = float(inp.get("total_floor_area") or inp.get("floor_area") or 0)
@@ -739,14 +777,24 @@ def _db_rule_matches_facility(rule: Dict[str, Any], context: Dict[str, Any]) -> 
     return _numeric_compare(actual_num, op, value_num)
 
 
-def _evaluate_facility_conditions_db(facility_ctx: Dict[str, Any], rules: List[Dict[str, Any]]) -> tuple:
+def _evaluate_facility_conditions_db(
+    facility_ctx: Dict[str, Any], rules: List[Dict[str, Any]], sector: str = ""
+) -> tuple:
     applicable: List[Dict[str, Any]] = []
     not_applicable: List[Dict[str, Any]] = []
     for rule in rules:
         cc = rule.get("condition_code")
         cv = rule.get("condition_value")
         if not cc or cv is None:
-            applicable.append(rule)
+            # v5.1.0: CONSTRUCTION 섹터에서 조건 없는 룰은 건설 관련 법령만
+            if sector == "CONSTRUCTION":
+                law = rule.get("law_name") or ""
+                if any(prefix in law for prefix in CONSTRUCTION_RELEVANT_LAW_PREFIXES):
+                    applicable.append(rule)
+                else:
+                    not_applicable.append(rule)
+            else:
+                applicable.append(rule)
         elif _db_rule_matches_facility(rule, facility_ctx):
             applicable.append(rule)
         else:
@@ -755,7 +803,46 @@ def _evaluate_facility_conditions_db(facility_ctx: Dict[str, Any], rules: List[D
 
 
 # ──────────────────────────────────────────────
-# POST /legal-engine/diagnose/step1  v4.4.3
+# v5.1.0: 건설 선임 판정 요약 블록
+# ──────────────────────────────────────────────
+
+def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
+    amount    = float(facility_ctx.get("construction_amount") or 0)
+    workers   = int(facility_ctx.get("worker_count") or 0)
+    site_type = str(facility_ctx.get("construction_type") or facility_ctx.get("building_use_code") or "BUILDING")
+
+    threshold   = 15_000_000_000 if site_type in ("BUILDING", "SPECIALTY") else 12_000_000_000
+    sm_required = (amount >= threshold) or (workers >= 50)
+
+    site_label  = "건축" if site_type == "BUILDING" else ("토목" if site_type == "CIVIL" else "전문")
+    basis_parts = [f"{site_label} {int(threshold/100_000_000)}억원 {'이상' if amount >= threshold else '미만'}"]
+    if workers >= 50:
+        basis_parts.append("근로자 50명 이상")
+
+    return {
+        "site_type":                site_type,
+        "contract_amount":          amount,
+        "contract_amount_eok":      round(amount / 100_000_000, 2) if amount else 0,
+        "total_workers":            workers,
+        "direct_workers":           int(facility_ctx.get("direct_workers") or 0),
+        "subcon_workers":           int(facility_ctx.get("subcon_workers") or 0),
+        "safety_manager_required":  sm_required,
+        "safety_manager_basis":     ", ".join(basis_parts),
+        "key_thresholds_met": {
+            "1억_산업안전보건관리비":       amount >= 100_000_000,
+            "50억_유해위험방지계획서":      amount >= 5_000_000_000,
+            "50억_기초안전보건교육":        amount >= 5_000_000_000,
+            "100억_안전관리계획서":         amount >= 10_000_000_000,
+            "120억_안전관리자선임_토목":    site_type == "CIVIL"    and amount >= 12_000_000_000,
+            "150억_안전관리자선임_건축":    site_type == "BUILDING" and amount >= 15_000_000_000,
+            "200억_안전보건관리책임자":     amount >= 20_000_000_000,
+            "1000억_건설안전판정사":        amount >= 100_000_000_000,
+        },
+    }
+
+
+# ──────────────────────────────────────────────
+# POST /legal-engine/diagnose/step1  v5.1.0
 # ──────────────────────────────────────────────
 
 @router.post("/diagnose/step1")
@@ -805,7 +892,9 @@ async def diagnose_step1(body: DiagnoseStep1Body):
 
     facility_ctx = _input_to_facility_context(sector_raw, inp)
     evaluated_at = datetime.now().isoformat()
-    applicable, not_applicable = _evaluate_facility_conditions_db(facility_ctx, all_rules)
+
+    # v5.1.0: sector 전달하여 건설 필터링 적용
+    applicable, not_applicable = _evaluate_facility_conditions_db(facility_ctx, all_rules, sector_raw)
 
     triggered: Dict[str, List] = {
         "appointment": [], "inspection": [], "notify": [], "report": [], "action": [], "not_applicable": [],
@@ -900,6 +989,10 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         },
     }
 
+    # v5.1.0: 건설 섹터 전용 선임 판정 요약 블록 추가
+    if sector_raw == "CONSTRUCTION":
+        result_data["construction_summary"] = _get_construction_summary(facility_ctx)
+
     # ── DB 저장 (factory_id 있을 때만) ──
     diagnosis_id = None
     if factory_id:
@@ -938,7 +1031,7 @@ async def diagnose_step1(body: DiagnoseStep1Body):
                         "law_name":        rule.get("law_name") or "",
                         "law_article":     rule.get("law_article") or "",
                         "obligation":      (rule.get("obligation_summary") or "").strip(),
-                        "obligation_type": _resolve_obligation_type(rule),  # v4.4.3: 추가
+                        "obligation_type": _resolve_obligation_type(rule),
                         "due_date":        None,
                         "status":          "PENDING",
                         "form_code":       rule.get("form_code") or None,
@@ -1040,11 +1133,9 @@ async def create_inspection_sets_from_legal(factory_id: str):
     result_json     = fac.data.get("legal_result_json")
     inspection_rules: List[Dict[str, Any]] = []
 
-    # ── 경로 A: legal_result_json (apply API 경로) ──
     if result_json:
         inspection_rules = result_json.get("inspection_required", [])
 
-    # ── 경로 B: factory_diagnosis_results fallback (diagnose/step1 경로) ──
     if not inspection_rules:
         try:
             diag_res = supabase.table("factory_diagnosis_results") \
@@ -1056,7 +1147,6 @@ async def create_inspection_sets_from_legal(factory_id: str):
             if diag_res.data:
                 diagnosis_id = diag_res.data[0].get("id")
 
-                # v4.4.3 핵심: obligation_type='INSPECT' 필터 → 183건에서 41건으로 축소
                 drr_res = supabase.table("diagnosis_rule_results") \
                     .select("rule_code, rule_name, law_name, law_article, obligation, form_code") \
                     .eq("diagnosis_id", diagnosis_id) \
@@ -1065,7 +1155,6 @@ async def create_inspection_sets_from_legal(factory_id: str):
                 drr_rows = drr_res.data or []
 
                 if drr_rows:
-                    # master IN() 쿼리도 41건으로 축소
                     rule_codes = [r.get("rule_code") for r in drr_rows if r.get("rule_code")]
                     masters_res = supabase.table("master_building_legal_rules") \
                         .select(
@@ -1077,7 +1166,6 @@ async def create_inspection_sets_from_legal(factory_id: str):
                         .eq("is_active", True) \
                         .execute()
 
-                    # obligation_type='INSPECT' 필터가 이미 적용됐으므로 추가 필터 불필요
                     inspect_master_map = {
                         m["rule_id"]: m
                         for m in (masters_res.data or [])
@@ -1107,7 +1195,6 @@ async def create_inspection_sets_from_legal(factory_id: str):
             "data":    {"created": 0},
         }
 
-    # ── 기존 rule_id 조회 (중복 skip) ──
     existing_res = supabase.table("inspection_sets") \
         .select("legal_rule_id") \
         .eq("factory_id", factory_id) \
@@ -1122,13 +1209,12 @@ async def create_inspection_sets_from_legal(factory_id: str):
     for rule in inspection_rules:
         rule_id = rule.get("rule_id", "")
         if rule_id in existing_rule_ids:
-            continue  # 중복 skip
+            continue
 
         m           = rule.get("_master", {})
         law_name    = rule.get("law_name", "")
         cycle_label = rule.get("inspection_cycle", "")
 
-        # cycle 정보: CYCLE_CODE_MAP 우선, cycle_unit_std fallback
         cycle_unit_code = str(m.get("inspection_cycle_unit_code") or "")
         if cycle_unit_code in CYCLE_CODE_MAP:
             cycle_unit, cycle_value = CYCLE_CODE_MAP[cycle_unit_code]
@@ -1138,7 +1224,6 @@ async def create_inspection_sets_from_legal(factory_id: str):
             cycle_unit  = UNIT_STD_MAP.get(cycle_unit_std, "year")
             cycle_value = int(m.get("inspection_cycle_value") or 1)
             if not cycle_unit_std:
-                # 텍스트 라벨 fallback (경로 A)
                 if "월 1회" in cycle_label or "매월" in cycle_label: cycle_unit, cycle_value = "month", 1
                 elif "반기" in cycle_label: cycle_unit, cycle_value = "month", 6
                 elif "분기" in cycle_label: cycle_unit, cycle_value = "month", 3
@@ -1177,7 +1262,6 @@ async def create_inspection_sets_from_legal(factory_id: str):
             "data": {"created": 0, "skipped": len(existing_rule_ids), "source_rules": len(inspection_rules)},
         }
 
-    # ── 20건씩 배치 INSERT ──
     created = 0
     for i in range(0, len(insert_rows), 20):
         res = supabase.table("inspection_sets").insert(insert_rows[i:i + 20]).execute()
@@ -1326,6 +1410,9 @@ def diagnose_step2(body: dict):
     diagnosis_id = body.get('diagnosis_id')
     processes = body.get('processes', [])
     construction_types = body.get('construction_types', [])
+    # v5.1.0: 건설 공종 목록 필터
+    work_types: List[str] = body.get('construction_work_types') or []
+
     if not factory_id:
         raise HTTPException(status_code=400, detail='factory_id 필수')
     prev = None
@@ -1340,7 +1427,20 @@ def diagnose_step2(body: dict):
     input_data['processes'] = processes
     input_data['construction_types'] = construction_types
     input_data['sector'] = sector
-    res = supabase.table('master_building_legal_rules').select('*').eq('sector', sector).lte('diagnosis_stage', 2).eq('is_active', True).execute()
+
+    # 기본 쿼리
+    q = supabase.table('master_building_legal_rules').select('*').eq(
+        'sector', sector
+    ).lte('diagnosis_stage', 2).eq('is_active', True)
+
+    # v5.1.0: CONSTRUCTION + 공종 필터
+    if sector == 'CONSTRUCTION' and work_types:
+        work_type_csv = ",".join(work_types)
+        q = q.or_(
+            f"construction_work_type.is.null,construction_work_type.in.({work_type_csv})"
+        )
+
+    res = q.execute()
     rules = res.data or []
     matched = [r for r in rules if _evaluate_condition(r, input_data)]
     diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 2, input_data, matched)
@@ -1351,9 +1451,19 @@ def diagnose_step2(body: dict):
         prev_codes = {r.get('rule_code') for r in prev_rules}
     added = [r for r in matched if (r.get('rule_code') or r.get('rule_id')) not in prev_codes]
     result = diagnosis.get('result_data', {})
+
+    work_type_summary: Dict[str, int] = {}
+    if work_types:
+        for r in matched:
+            wt = r.get('construction_work_type') or 'COMMON'
+            work_type_summary[wt] = work_type_summary.get(wt, 0) + 1
+
     return {
         'status': 'success', 'diagnosis_id': diagnosis.get('id'), 'stage': 2,
+        'engine_version': ENGINE_VERSION,
         'sector': sector, 'rule_count': len(matched), 'added_rule_count': len(added),
+        'filtered_by_work_types': work_types if work_types else None,
+        'work_type_summary': work_type_summary if work_types else None,
         'summary': {'applicable_law_categories': result.get('applicable_law_categories', []),
                     'appointment_required': result.get('appointment_required', False),
                     'key_obligations': result.get('key_obligations', []),
@@ -1361,7 +1471,9 @@ def diagnose_step2(body: dict):
         'rules': result.get('rules', []),
         'added_rules': [{'rule_code': r.get('rule_code') or r.get('rule_id'),
                          'rule_name': r.get('rule_name') or r.get('remarks', ''),
-                         'law_article': r.get('law_article', '')} for r in added],
+                         'law_article': r.get('law_article', ''),
+                         'work_type': r.get('construction_work_type'),
+                         'work_type_label': r.get('construction_work_type_label')} for r in added],
     }
 
 
@@ -1409,7 +1521,7 @@ def diagnose_step3(body: dict):
             except Exception:
                 pass
     overdue_count = sum(1 for s in inspection_schedules if s['status'] == 'OVERDUE')
-    upcoming_count = sum(1 for s in inspection_schedules if s['status'] == 'URGENT'  )
+    upcoming_count = sum(1 for s in inspection_schedules if s['status'] == 'URGENT')
     return {
         'status': 'success', 'diagnosis_id': diagnosis.get('id'), 'stage': 3,
         'sector': sector, 'rule_count': len(matched),
