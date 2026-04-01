@@ -46,7 +46,8 @@ async def _nts_post(endpoint: str, body: dict) -> dict:
 # ============================================================
 
 class CompanyCreate(BaseModel):
-    name:                str
+    name:                Optional[str] = None
+    company_name:        Optional[str] = None  # 프론트 별칭 → DB name
     company_type_code:   Optional[str] = "002"
     business_number:     Optional[str] = None
     corporation_number:  Optional[str] = None
@@ -73,6 +74,7 @@ class CompanyCreate(BaseModel):
 
 class CompanyUpdate(BaseModel):
     name:                Optional[str] = None
+    company_name:        Optional[str] = None  # 프론트 별칭 → DB name
     company_type_code:   Optional[str] = None
     business_number:     Optional[str] = None
     corporation_number:  Optional[str] = None
@@ -392,6 +394,10 @@ def get_companies(
 @router.post("")
 def create_company(req: CompanyCreate):
     supabase = get_supabase()
+    display_name = (req.name or req.company_name or "").strip()
+    if not display_name:
+        raise HTTPException(status_code=400, detail="회사명(name 또는 company_name)이 필요합니다")
+
     if req.business_number:
         dup = supabase.table("companies").select("id").eq(
             "business_number", re.sub(r'[^0-9]', '', req.business_number)
@@ -405,8 +411,11 @@ def create_company(req: CompanyCreate):
         if dup.data:
             raise HTTPException(status_code=400, detail="이미 등록된 법인번호입니다")
     now = datetime.now()
+    payload = req.dict(exclude_none=True)
+    payload.pop("company_name", None)
+    payload["name"] = display_name
     data = {
-        **req.dict(exclude_none=True),
+        **payload,
         "company_code": f"COM-{now.strftime('%Y%m%d%H%M%S')}",
         "status_code":  "TRIAL",
         "is_active":    True,
@@ -443,6 +452,8 @@ def update_company(company_id: str, req: CompanyUpdate):
     if not existing.data:
         raise HTTPException(status_code=404, detail="사업장을 찾을 수 없습니다")
     update_data = {k: v for k, v in req.dict().items() if v is not None}
+    if "company_name" in update_data:
+        update_data["name"] = update_data.pop("company_name")
     update_data["updated_at"] = datetime.now().isoformat()
     res = supabase.table("companies").update(update_data).eq("id", company_id).execute()
     return {"status": "success", "message": "사업장 정보가 수정됐습니다", "data": res.data[0] if res.data else {}}

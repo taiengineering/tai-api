@@ -57,6 +57,62 @@ class EducationHistoryUpdate(BaseModel):
     status: Optional[str] = None  # pending / completed / overdue
 
 
+class EducationPendingCreate(BaseModel):
+    """교육 발령(미이수 배정) — pending 행 생성"""
+    factory_id: str
+    user_id: str
+    education_code: str
+    due_date: Optional[date] = None
+    memo: Optional[str] = None
+
+
+class CompanyEducationSettingUpsert(BaseModel):
+    custom_url: Optional[str] = None
+    custom_url_label: Optional[str] = None
+    custom_note: Optional[str] = None
+    is_active: Optional[bool] = True
+
+
+def _merge_master_company_row(m: dict, srow: Optional[dict]) -> dict:
+    source_url = (m.get("source_url") or "").strip() or None
+    mid = m.get("id")
+    has_custom = False
+    custom_url = None
+    custom_label = None
+    custom_note = None
+    if srow and srow.get("is_active", True):
+        cu = (srow.get("custom_url") or "").strip()
+        if cu:
+            has_custom = True
+            custom_url = cu
+            custom_label = (srow.get("custom_url_label") or "").strip() or None
+            custom_note = (srow.get("custom_note") or "").strip() or None
+    effective_url = (custom_url or source_url or None)
+    eff_label = None
+    if has_custom and custom_url:
+        eff_label = custom_label or "회사 교육 링크"
+    elif source_url:
+        eff_label = "KOSHA/기본 링크"
+    return {
+        "education_id": str(mid) if mid is not None else None,
+        "education_code": m.get("education_code"),
+        "education_name": m.get("education_name") or m.get("education_code"),
+        "min_hours": m.get("min_hours"),
+        "cycle_trigger_code": m.get("cycle_trigger_code"),
+        "cycle_value": m.get("cycle_value"),
+        "cycle_unit_code": m.get("cycle_unit_code"),
+        "cycle_status_code": m.get("hours_status_code") or m.get("cycle_status_code"),
+        "source_url": source_url,
+        "effective_url": effective_url,
+        "effective_url_label": eff_label,
+        "has_custom": has_custom,
+        "custom_url": custom_url,
+        "custom_url_label": custom_label,
+        "custom_note": custom_note or "",
+        "is_active_setting": srow.get("is_active", True) if srow else True,
+    }
+
+
 # ─────────────────────────────────────────────────────────────
 # 1. 교육 마스터 (읽기 전용)
 # ─────────────────────────────────────────────────────────────
@@ -81,6 +137,189 @@ def get_education_master_detail(education_code: str, supabase: Client = Depends(
     if not res.data:
         raise HTTPException(status_code=404, detail="교육 마스터를 찾을 수 없습니다.")
     return {"success": True, "data": res.data}
+
+
+@router.get("/education/company-effective-link", tags=["교육관리"])
+def get_education_company_effective_link(
+    company_id: str = Query(..., description="회사 ID"),
+    education_code: str = Query(..., description="education_master.education_code"),
+    supabase: Client = Depends(get_supabase),
+):
+    """
+    교육 수강 링크 표시 우선순위:
+    1) company_education_setting.custom_url (테이블이 있고 행이 있는 경우)
+    2) education_master.source_url (KOSHA 등 기본값)
+    3) 없음 → effective_url null (프론트에서 이수증만 안내)
+    """
+    mres = supabase.table("education_master").select("*").eq("education_code", education_code).limit(1).execute()
+    if not mres.data:
+        raise HTTPException(status_code=404, detail="교육 마스터를 찾을 수 없습니다.")
+    m = mres.data[0]
+    mid = m.get("id")
+    source_url = (m.get("source_url") or "").strip() or None
+    education_name = m.get("education_name") or education_code
+
+    custom_url = None
+    custom_label = None
+    custom_note = None
+    has_custom = False
+
+    try:
+        if mid:
+            ces = (
+                supabase.table("company_education_setting")
+                .select("*")
+                .eq("company_id", company_id)
+                .eq("education_id", mid)
+                .limit(1)
+                .execute()
+            )
+            row = (ces.data or [None])[0]
+            if row and row.get("is_active", True):
+                cu = (row.get("custom_url") or "").strip()
+                if cu:
+                    custom_url = cu
+                    custom_label = (row.get("custom_url_label") or "").strip() or None
+                    custom_note = (row.get("custom_note") or "").strip() or None
+                    has_custom = True
+    except Exception:
+        pass
+
+    effective_url = (custom_url or source_url or None)
+    eff_label = None
+    if has_custom and custom_url:
+        eff_label = custom_label or "회사 교육 링크"
+    elif source_url:
+        eff_label = "KOSHA/기본 링크"
+
+    return {
+        "success": True,
+        "data": {
+            "education_code": education_code,
+            "education_name": education_name,
+            "source_url": source_url,
+            "effective_url": effective_url,
+            "effective_url_label": eff_label,
+            "has_custom": has_custom,
+            "custom_note": custom_note or "",
+        },
+    }
+
+
+@router.get("/education/company-settings", tags=["교육관리"])
+def get_company_education_settings(
+    company_id: str = Query(..., description="회사 ID"),
+    supabase: Client = Depends(get_supabase),
+):
+    """education_master + company_education_setting 병합 목록 (회사별 수강 링크 설정 화면용)"""
+    master_res = supabase.table("education_master").select("*").eq("is_active", True).order("sort_order").execute()
+    setting_data = []
+    try:
+        setting_res = (
+            supabase.table("company_education_setting")
+            .select("*")
+            .eq("company_id", company_id)
+            .execute()
+        )
+        setting_data = setting_res.data or []
+    except Exception:
+        setting_data = []
+
+    smap = {}
+    for s in setting_data:
+        eid = s.get("education_id")
+        if eid is not None:
+            smap[str(eid)] = s
+
+    result = []
+    for m in (master_res.data or []):
+        mid = m.get("id")
+        srow = smap.get(str(mid)) if mid is not None else None
+        result.append(_merge_master_company_row(m, srow))
+
+    return {"success": True, "data": result}
+
+
+@router.put("/education/company-settings/{education_id}", tags=["교육관리"])
+def upsert_company_education_setting(
+    education_id: str,
+    body: CompanyEducationSettingUpsert,
+    company_id: str = Query(..., description="회사 ID"),
+    supabase: Client = Depends(get_supabase),
+):
+    """회사별 교육 링크 저장·수정 (custom_url 비우면 행 삭제 → KOSHA 기본)"""
+    mcheck = supabase.table("education_master").select("id").eq("id", education_id).limit(1).execute()
+    if not mcheck.data:
+        raise HTTPException(status_code=404, detail="교육 마스터를 찾을 수 없습니다.")
+
+    cu = (body.custom_url or "").strip()
+    if not cu:
+        try:
+            supabase.table("company_education_setting").delete().eq("company_id", company_id).eq(
+                "education_id", education_id
+            ).execute()
+        except Exception:
+            pass
+        return {"success": True, "data": {"deleted": True}}
+
+    row_label = (body.custom_url_label or "").strip() or None
+    row_note = (body.custom_note or "").strip() or None
+    row_active = body.is_active if body.is_active is not None else True
+
+    existing = (
+        supabase.table("company_education_setting")
+        .select("id")
+        .eq("company_id", company_id)
+        .eq("education_id", education_id)
+        .limit(1)
+        .execute()
+    )
+    now = datetime.utcnow().isoformat()
+    if existing.data:
+        upd = {
+            "custom_url": cu,
+            "custom_url_label": row_label,
+            "custom_note": row_note,
+            "is_active": row_active,
+            "updated_at": now,
+        }
+        res = (
+            supabase.table("company_education_setting")
+            .update(upd)
+            .eq("company_id", company_id)
+            .eq("education_id", education_id)
+            .execute()
+        )
+    else:
+        ins = {
+            "company_id": company_id,
+            "education_id": education_id,
+            "custom_url": cu,
+            "custom_url_label": row_label,
+            "custom_note": row_note,
+            "is_active": row_active,
+            "created_at": now,
+            "updated_at": now,
+        }
+        res = supabase.table("company_education_setting").insert(ins).execute()
+
+    return {"success": True, "data": res.data[0] if res.data else {}}
+
+
+@router.delete("/education/company-settings/{education_id}", tags=["교육관리"])
+def delete_company_education_setting(
+    education_id: str,
+    company_id: str = Query(..., description="회사 ID"),
+    supabase: Client = Depends(get_supabase),
+):
+    """회사별 교육 링크 초기화 (KOSHA 기본으로 복원)"""
+    try:
+        supabase.table("company_education_setting").delete().eq("company_id", company_id).eq(
+            "education_id", education_id
+        ).execute()
+    except Exception:
+        pass
+    return {"success": True, "data": {"deleted": True}}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -170,12 +409,29 @@ def update_education_setting(
 # 3. 교육 이수 이력
 # ─────────────────────────────────────────────────────────────
 
+def _filter_education_rows_by_search(rows: list, search: Optional[str]) -> list:
+    if not search or not str(search).strip():
+        return rows
+    s = str(search).strip().lower()
+    out = []
+    for r in rows or []:
+        u = r.get("users") or {}
+        m = r.get("education_master") or {}
+        un = (u.get("name") or "").lower()
+        en = (m.get("education_name") or "").lower()
+        if s in un or s in en:
+            out.append(r)
+    return out
+
+
 @router.get("/education-history", tags=["교육관리"])
 def get_education_history(
     factory_id: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
     education_code: Optional[str] = Query(None),
     status: Optional[str] = Query(None, description="pending / completed / overdue"),
+    category: Optional[str] = Query(None, description="worker_safety / duty / training"),
+    search: Optional[str] = Query(None, description="이름·교육명 부분 검색(전체 로드 후 필터)"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     supabase: Client = Depends(get_supabase)
@@ -183,7 +439,10 @@ def get_education_history(
     """교육 이수 이력 목록 조회"""
     offset = (page - 1) * size
     q = supabase.table("education_history") \
-        .select("*, education_master(education_name, category, min_hours, due_rule), users(name, job_type), education_files(id)", count="exact")
+        .select(
+            "*, education_master(education_name, category, min_hours, due_rule), users(name, job_type, department, position), education_files(id)",
+            count="exact",
+        )
 
     if factory_id:
         q = q.eq("factory_id", factory_id)
@@ -193,6 +452,32 @@ def get_education_history(
         q = q.eq("education_code", education_code)
     if status:
         q = q.eq("status", status)
+    if category:
+        mres = supabase.table("education_master").select("education_code").eq("category", category).eq("is_active", True).execute()
+        codes = [x["education_code"] for x in (mres.data or [])]
+        if not codes:
+            return {
+                "success": True,
+                "data": {"items": [], "total": 0, "page": page, "size": size, "pages": 0},
+            }
+        q = q.in_("education_code", codes)
+
+    if search and str(search).strip():
+        res = q.order("due_date", desc=False).execute()
+        rows = _filter_education_rows_by_search(res.data or [], search)
+        total = len(rows)
+        pages = (total + size - 1) // size if size else 1
+        sliced = rows[offset : offset + size]
+        return {
+            "success": True,
+            "data": {
+                "items": sliced,
+                "total": total,
+                "page": page,
+                "size": size,
+                "pages": pages,
+            },
+        }
 
     res = q.order("due_date", desc=False).range(offset, offset + size - 1).execute()
     total = res.count or 0
@@ -204,8 +489,8 @@ def get_education_history(
             "total": total,
             "page": page,
             "size": size,
-            "pages": (total + size - 1) // size
-        }
+            "pages": (total + size - 1) // size if size else 0,
+        },
     }
 
 
@@ -273,6 +558,51 @@ def create_education_history(body: EducationHistoryCreate, supabase: Client = De
     if not res.data:
         raise HTTPException(status_code=500, detail="이수 이력 등록에 실패했습니다.")
 
+    return {"success": True, "data": res.data[0]}
+
+
+@router.post("/education-history/pending", tags=["교육관리"])
+def create_pending_education_history(body: EducationPendingCreate, supabase: Client = Depends(get_supabase)):
+    """교육 발령 — 미이수(pending) 배정 행 생성"""
+    master = (
+        supabase.table("education_master")
+        .select("education_code, education_name")
+        .eq("education_code", body.education_code)
+        .single()
+        .execute()
+    )
+    if not master.data:
+        raise HTTPException(status_code=404, detail="교육 마스터를 찾을 수 없습니다.")
+
+    dup = (
+        supabase.table("education_history")
+        .select("id")
+        .eq("factory_id", body.factory_id)
+        .eq("user_id", body.user_id)
+        .eq("education_code", body.education_code)
+        .in_("status", ["pending", "overdue"])
+        .limit(1)
+        .execute()
+    )
+    if dup.data:
+        raise HTTPException(status_code=400, detail="동일 교육이 이미 미이수로 배정되어 있습니다.")
+
+    now = datetime.utcnow().isoformat()
+    payload = {
+        "factory_id": body.factory_id,
+        "user_id": body.user_id,
+        "education_code": body.education_code,
+        "status": "pending",
+        "due_date": str(body.due_date) if body.due_date else None,
+        "completed_date": None,
+        "completed_hours": 0,
+        "memo": body.memo,
+        "created_at": now,
+        "updated_at": now,
+    }
+    res = supabase.table("education_history").insert(payload).execute()
+    if not res.data:
+        raise HTTPException(status_code=500, detail="교육 배정에 실패했습니다.")
     return {"success": True, "data": res.data[0]}
 
 
