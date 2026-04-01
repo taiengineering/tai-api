@@ -1,4 +1,5 @@
-# main.py — v5.2.1
+# main.py — v5.2.2
+# v5.2.2: alert_messages 라우터 추가
 # v5.2.1: public_admin PATCH /status 엔드포인트 확인 완료
 # v5.2.0: public router + public_admin router 추가 / legal_engine KCSC 연동
 # v5.1.0: legal_engine.py 건설 섹터 버그 수정
@@ -58,8 +59,9 @@ from routers.diagnosis               import router as diagnosis_router
 from routers.tbm                     import router as tbm_router
 from routers.safety_meetings         import router as safety_meetings_router
 from routers.risk_assessments        import router as risk_assessments_router
-from routers.public                  import router as public_router       # v5.2.0: 비회원 공개 API
-from routers.public_admin            import router as public_admin_router # v5.2.0: 비회원 신청 관리 API
+from routers.public                  import router as public_router
+from routers.public_admin            import router as public_admin_router
+from routers.alert_messages          import router as alert_messages_router  # v5.2.2
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +86,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="TAI API",
-    version="5.2.1",
+    version="5.2.2",
     description="TAI 산업안전 플랫폼 API",
     lifespan=lifespan,
 )
@@ -108,8 +110,9 @@ app.add_middleware(
 )
 
 # ── 라우터 등록 ────────────────────────────────────────────────
-app.include_router(public_router)              # v5.2.0: 비회원 공개 API (인증 불필요)
-app.include_router(public_admin_router)        # v5.2.0: 비회원 신청 관리 API
+app.include_router(public_router)              # 비회원 공개 API (인증 불필요)
+app.include_router(public_admin_router)        # 비회원 신청 관리 API
+app.include_router(alert_messages_router)      # v5.2.2: 알럿 메시지 관리
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(companies_router)
@@ -165,7 +168,7 @@ app.include_router(risk_assessments_router)
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "5.2.1"}
+    return {"status": "ok", "service": "TAI API", "version": "5.2.2"}
 
 
 @app.get("/health")
@@ -180,4 +183,4 @@ def health():
         cron_status = f"{len(scheduler.get_jobs())}개 등록" if scheduler.running else "중지"
     except Exception:
         cron_status = "미초기화"
-    return {"status": "healthy", "server_ip": ip, "version": "5.2.1", "cron": cron_status}
+    return {"status": "healthy", "server_ip": ip, "version": "5.2.2", "cron": cron_status}
