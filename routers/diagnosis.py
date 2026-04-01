@@ -164,16 +164,10 @@ def check_diagnosis_access(
     """
     법령진단 단계별 접근 가능 여부 확인.
 
-    v2.0.0 변경사항:
-    - 기존: diagnosis_purchases 테이블에서 단건 결제 기록 확인
-    - 변경: contracts 테이블에서 DIAGNOSIS ACTIVE 계약 + items 확인
-      (B2B 플로우: 견적→계약 승인 후 접근 허용)
-
+    v2.0.0: contracts 테이블 기반 확인
     - step=1 → 항상 has_access=True (무료)
     - step=2/3/99 → contracts에서 service_type='DIAGNOSIS', status_code='ACTIVE',
       items 배열에 factory_id + step 일치 항목 존재 여부 확인
-
-    SaaS contract_level(STARTER/BUSINESS/ENTERPRISE)은 체크하지 않음.
     """
     if step not in VALID_STEPS:
         raise HTTPException(
@@ -258,7 +252,6 @@ def check_diagnosis_access(
 # ============================================================
 # POST /diagnosis/purchases — [DEPRECATED v2.0.0]
 # 삭제 금지: 하위 호환 유지 / 내부 관리 로그 용도
-# 프론트에서 더 이상 호출하지 않음
 # ============================================================
 
 class PurchaseCreateBody(BaseModel):
@@ -277,12 +270,8 @@ class PurchaseCreateBody(BaseModel):
 @router.post("/purchases")
 def create_purchase(body: PurchaseCreateBody):
     """
-    [DEPRECATED v2.0.0]
-    법령진단 단건 결제 기록.
-
-    이 엔드포인트는 deprecated 처리됐습니다.
-    새로운 결제 흐름은 POST /diagnosis/request-quote → 관리자 승인 → contracts 생성입니다.
-    하위 호환을 위해 삭제하지 않고 유지합니다.
+    [DEPRECATED v2.0.0] 법령진단 단건 결제 기록.
+    새로운 결제 흐름은 POST /diagnosis/request-quote 를 사용하세요.
     """
     if body.step not in {2, 3, 99}:
         raise HTTPException(status_code=422, detail="step은 2, 3, 99 중 하나여야 합니다.")
@@ -332,7 +321,7 @@ def create_purchase(body: PurchaseCreateBody):
         }
         res = supabase.table("diagnosis_purchases").insert(row).execute()
         record = res.data[0] if res.data else {}
-    except Exception as e:
+    except Exception:
         record = {}
 
     return {
@@ -344,4 +333,3 @@ def create_purchase(body: PurchaseCreateBody):
             "has_access": is_card,
         }
     }
-"""
