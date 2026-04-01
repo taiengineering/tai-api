@@ -7,6 +7,7 @@ v5.3.0 (B-CON-001): 건설 전용 필드 연동 + 선임 판정 로직 고도화
   - _factory_to_context(): factories.construction_type, subcontractor_worker_count 적용
   - _get_construction_summary(): 새 필드로 선임 판정 정확화
   - apply_legal_engine triggered_by_source에 construction 현황 정보 추가
+  - fix: Python 3.11 f-string 내 백슬래시 오류 2곳 수정
 v5.2.0: 건설 법령진단 공정·작업 KCSC 연동
 v5.1.0: 건설 섹터 법령엔진 버그 수정
 v4.4.3: create-inspection-sets 타임아웃 근본 해결
@@ -26,7 +27,7 @@ ENGINE_VERSION = "5.3.0"  # v5.3.0: 건설 전용 필드 연동
 
 
 # ──────────────────────────────────────────────
-# 코드 → 한글명 매핑 테이스트
+# 코드 → 한글명 매핑 테이블
 # ──────────────────────────────────────────────
 
 APPOINTMENT_TARGET_MAP = {
@@ -588,7 +589,7 @@ async def apply_legal_engine(
         rule_map = {}
         for r in fac_app:  rule_map[r["rule_id"]] = (r, "🏢 시설조건")
         for r in eq_app:   rule_map.setdefault(r["rule_id"], (r, "⚙️ 등록설비"))
-        for r in proc_app: rule_map.setdefault(r["rule_id"], (r, "🔄 공정추청"))
+        for r in proc_app: rule_map.setdefault(r["rule_id"], (r, "🔄 공정추천"))
         source_pairs   = list(rule_map.values())
         applicable_ids = {r["rule_id"] for r, _ in source_pairs}
         not_applicable = [r for r in all_rules if r["rule_id"] not in applicable_ids]
@@ -725,8 +726,8 @@ def _truthy(v: Any) -> bool:
 
 def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, Any]:
     """
-    v5.3.0: CONSTRUCTION에서 subcon_workers 또는 subcontractor_worker_count 듨 다 해석.
-    하도급 눈종 파라미터 툆일화.
+    v5.3.0: CONSTRUCTION에서 subcon_workers 또는 subcontractor_worker_count 둘 다 해석.
+    하도급 파라미터명 통일화.
     """
     sec = sector.strip().upper()
     ctx: Dict[str, Any] = {
@@ -887,10 +888,13 @@ def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
 
     SITE_LABEL = {"건축": "건축", "토목": "토목", "공통": "공통", "기타": "기타",
                   "BUILDING": "건축", "CIVIL": "토목", "SPECIALTY": "공통"}
-    site_label  = SITE_LABEL.get(site_type, site_type)
-    basis_parts = [f"{site_label} {int(threshold/100_000_000)}억원 {'\uc774\uc0c1' if amount >= threshold else '\ubbf8\ub9cc'}"]
+    site_label = SITE_LABEL.get(site_type, site_type)
+
+    # fix: Python 3.11 f-string 내 백슬래시 금지 → 변수로 분리
+    _cmp_label = "이상" if amount >= threshold else "미만"
+    basis_parts = [f"{site_label} {int(threshold/100_000_000)}억원 {_cmp_label}"]
     if workers >= 50:
-        basis_parts.append(f"근로자(하도급 포함) {workers}명 ≥ 50명")
+        basis_parts.append(f"근로자(하도급 포함) {workers}명 >= 50명")
 
     return {
         "site_type":                site_type,
@@ -1283,6 +1287,9 @@ async def create_inspection_sets_from_legal(factory_id: str):
                 elif "5년" in cycle_label: cycle_unit, cycle_value = "year", 5
                 elif "10년" in cycle_label: cycle_unit, cycle_value = "year", 10
                 elif "연 2회" in cycle_label: cycle_unit, cycle_value = "month", 6
+
+        # fix: Python 3.11 f-string 내 백슬래시 금지 → 직접 한글 사용
+        _unit_label = "년" if cycle_unit == "year" else "개월"
         insert_rows.append({
             "company_id":          company_id,
             "factory_id":          factory_id,
@@ -1295,7 +1302,7 @@ async def create_inspection_sets_from_legal(factory_id: str):
             "cycle_value":         cycle_value,
             "cycle_base_type":     m.get("cycle_base_type") or "LAST_INSPECTION",
             "cycle_base_guide":    m.get("cycle_base_guide") or (
-                f"마지막 점검일로부터 {cycle_value}{'\ub144' if cycle_unit == 'year' else '\uac1c\uc6d4'}마다"
+                f"마지막 점검일로부터 {cycle_value}{_unit_label}마다"
             ),
             "description":         rule.get("description", ""),
             "source":              "LEGAL_ENGINE",
@@ -1313,7 +1320,7 @@ async def create_inspection_sets_from_legal(factory_id: str):
         res = supabase.table("inspection_sets").insert(insert_rows[i:i + 20]).execute()
         created += len(res.data or [])
 
-    return {"status": "success", "message": f"{created}개 점검 세트가 생성똥습니다. ({len(existing_rule_ids)}개 기존 유지)",
+    return {"status": "success", "message": f"{created}개 점검 세트가 생성됐습니다. ({len(existing_rule_ids)}개 기존 유지)",
             "data": {"factory_id": factory_id, "created": created, "skipped": len(existing_rule_ids),
                      "source_rules": len(inspection_rules)}}
 
