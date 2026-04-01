@@ -1,5 +1,6 @@
-# main.py — v5.1.0 (clean)
-# legal_engine.py 자체에 v5.1.0 수정 완료 → legal_engine_v510 오버라이드 제거
+# main.py — v5.2.0
+# v5.2.0: public router 추가 (비회원 법령점검 신청)
+# v5.1.0: legal_engine.py 건설 섹터 버그 수정
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -56,6 +57,7 @@ from routers.diagnosis               import router as diagnosis_router
 from routers.tbm                     import router as tbm_router
 from routers.safety_meetings         import router as safety_meetings_router
 from routers.risk_assessments        import router as risk_assessments_router
+from routers.public                  import router as public_router   # v5.2.0 신규
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +82,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="TAI API",
-    version="5.1.0",
+    version="5.2.0",
     description="TAI 산업안전 플랫폼 API",
     lifespan=lifespan,
 )
@@ -104,12 +106,13 @@ app.add_middleware(
 )
 
 # ── 라우터 등록 ────────────────────────────────────────────────
+app.include_router(public_router)              # v5.2.0: 비회원 공개 API (인증 불필요)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(companies_router)
 app.include_router(factories_router)
 app.include_router(system_codes_router)
-app.include_router(legal_engine_router)        # v5.1.0: 건설 버그 수정 포함
+app.include_router(legal_engine_router)        # v5.2.0: KCSC 공정·작업 연동
 app.include_router(ksic_engine_router)
 app.include_router(factory_process_router)
 app.include_router(process_management_router)
@@ -152,14 +155,14 @@ app.include_router(safety_template_router)
 app.include_router(event_trigger_router)
 app.include_router(worker_registry_router)
 app.include_router(diagnosis_router)          # v2.0.0
-app.include_router(tbm_router)                # v5.0.0
-app.include_router(safety_meetings_router)    # v5.0.0
-app.include_router(risk_assessments_router)   # v5.0.0
+app.include_router(tbm_router)
+app.include_router(safety_meetings_router)
+app.include_router(risk_assessments_router)
 
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "5.1.0"}
+    return {"status": "ok", "service": "TAI API", "version": "5.2.0"}
 
 
 @app.get("/health")
@@ -174,4 +177,4 @@ def health():
         cron_status = f"{len(scheduler.get_jobs())}개 등록" if scheduler.running else "중지"
     except Exception:
         cron_status = "미초기화"
-    return {"status": "healthy", "server_ip": ip, "version": "5.1.0", "cron": cron_status}
+    return {"status": "healthy", "server_ip": ip, "version": "5.2.0", "cron": cron_status}
