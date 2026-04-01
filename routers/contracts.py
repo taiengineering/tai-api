@@ -4,6 +4,10 @@
 TAI Contracts 라우터 - 견적/계약 관리
 전역변수: contract_status / service_type / saas_plan
 
+v2.0.0 (2026-04-01):
+  - convert_to_contract: service_type='DIAGNOSIS'이면 quotes.items → contracts.items 복사
+  - activate_contract: DIAGNOSIS 계약 활성화 시 status_code='ACTIVE' 처리
+
 [견적]
 GET    /quotes                   견적 목록
 POST   /quotes                   견적 등록
@@ -243,7 +247,9 @@ def confirm_quote(quote_id: str):
 
 @router.post("/quotes/{quote_id}/convert")
 def convert_to_contract(quote_id: str):
-    """견적 → 계약 전환 → PENDING_PAYMENT"""
+    """견적 → 계약 전환 → PENDING_PAYMENT
+    v2.0.0: service_type='DIAGNOSIS'이면 quotes.items → contracts.items 복사
+    """
     supabase = get_supabase()
     q = supabase.table("quotes").select("*").eq("id", quote_id).single().execute()
     if not q.data:
@@ -251,23 +257,31 @@ def convert_to_contract(quote_id: str):
     if q.data["status_code"] != "CONFIRMED":
         raise HTTPException(status_code=400, detail="견적확정 상태에서만 계약 전환 가능합니다")
 
-    now = datetime.now()
-    contract_res = supabase.table("contracts").insert({
-        "contract_no":    gen_contract_no(),
-        "company_id":     q.data["company_id"],
-        "service_type":   q.data["service_type"],
-        "contract_amount": q.data["supply_amount"],
-        "vat_amount":     q.data["vat_amount"],
-        "total_amount":   q.data["total_amount"],
-        "status_code":    "PENDING_PAYMENT",
-        "quote_id":       quote_id,
-        "paid_amount":    0,
-        "is_active":      True,
-        "created_at":     now.isoformat(),
-        "updated_at":     now.isoformat(),
-    }).execute()
+    now          = datetime.now()
+    service_type = q.data.get("service_type", "")
 
-    contract_id = contract_res.data[0]["id"]
+    contract_row = {
+        "contract_no":     gen_contract_no(),
+        "company_id":      q.data["company_id"],
+        "service_type":    service_type,
+        "contract_amount": q.data["supply_amount"],
+        "vat_amount":      q.data["vat_amount"],
+        "total_amount":    q.data["total_amount"],
+        "status_code":     "PENDING_PAYMENT",
+        "quote_id":        quote_id,
+        "paid_amount":     0,
+        "is_active":       True,
+        "created_at":      now.isoformat(),
+        "updated_at":      now.isoformat(),
+    }
+
+    # DIAGNOSIS: quotes.items → contracts.items 복사 (factory_id + step 정보 유지)
+    if service_type == "DIAGNOSIS":
+        contract_row["items"] = q.data.get("items") or []
+
+    contract_res = supabase.table("contracts").insert(contract_row).execute()
+    contract_id  = contract_res.data[0]["id"]
+
     supabase.table("quotes").update({
         "status_code": "PENDING_PAYMENT",
         "contract_id": contract_id,
@@ -384,7 +398,9 @@ def update_contract(contract_id: str, req: ContractUpdate):
 
 @router.post("/contracts/{contract_id}/activate")
 def activate_contract(contract_id: str):
-    """PENDING_PAYMENT → ACTIVE + 회사 상태 ACTIVE"""
+    """PENDING_PAYMENT → ACTIVE + 회사 상태 ACTIVE
+    v2.0.0: DIAGNOSIS 계약도 동일하게 ACTIVE 처리 (end_date=None → 영구)
+    """
     supabase = get_supabase()
     c = supabase.table("contracts").select("*").eq("id", contract_id).single().execute()
     if not c.data:
@@ -399,10 +415,12 @@ def activate_contract(contract_id: str):
         "updated_at":  now.isoformat(),
     }).eq("id", contract_id).execute()
 
-    supabase.table("companies").update({
-        "status_code": "ACTIVE",
-        "updated_at":  now.isoformat(),
-    }).eq("id", c.data["company_id"]).execute()
+    # SAAS 계약만 회사 상태 변경 (DIAGNOSIS는 기존 회사 상태 유지)
+    if c.data.get("service_type") != "DIAGNOSIS":
+        supabase.table("companies").update({
+            "status_code": "ACTIVE",
+            "updated_at":  now.isoformat(),
+        }).eq("id", c.data["company_id"]).execute()
 
     return {"status": "success", "message": "서비스가 활성화됐습니다 🎉"}
 
