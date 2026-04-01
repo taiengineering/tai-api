@@ -1,28 +1,19 @@
 """
-법령 판정 엔진 라우터 — v5.1.0
+법령 판정 엔진 라우터 — v5.2.0
 =================================
+v5.2.0: 건설 법령진단 공정·작업 KCSC 연동
+  - diagnose/step2: kcsc_process_ids → kcsc_process_master에서 work_type_code 자동 조회
+    기존 construction_work_types 직접 입력 하위 호환 유지
+    응답에 kcsc_process_summary 추가
+  - diagnose/step3: construction_work_ids / kcsc_work_ids → kcsc_work_master에서
+    equipment_type_codes 자동 조회, 기존 equipments 직접 입력 하위 호환 유지
+    응답에 kcsc_work_summary, equipment_codes_applied 추가
 v5.1.0: 건설 섹터 법령엔진 버그 수정
   1. CONDITION_CODE_TO_CONTEXT_KEY에 "contract_amount": "construction_amount" 추가 (핵심 버그)
-     → 건설 condition_code=contract_amount 인 룰 17건이 매핑 누락으로 전혀 적용 안 되던 문제 수정
   2. CONSTRUCTION context 완성 (site_type, subcon_workers, contract_amount 직접 매핑)
   3. diagnose/step1 결과에 construction_summary 블록 추가
-     → safety_manager_required, key_thresholds_met 등 포함
 v4.4.3: create-inspection-sets 타임아웃 근본 해결
-  - diagnosis_rule_results에 obligation_type 컬럼 추가됨 (DB migration 완료)
-  - diagnose/step1 저장 시 obligation_type 함께 저장
-  - create-inspection-sets fallback 경로 B:
-    .eq("obligation_type", "INSPECT") 필터 추가
-    → diagnosis_rule_results 조회 183건 → 41건으로 축소
-    → master_building_legal_rules IN() 쿼리도 41건으로 축소
-    → 전체 처리시간 대폭 단축 (타임아웃 해결)
-v4.4.2: create-inspection-sets 타임아웃 추가 최적화
-  - fallback 경로 B에서 result_data (대용량 JSON) SELECT 제거
-  - inspection_sets INSERT 배치 크기 20건으로 축소 (안정성 강화)
-v4.4.1: create-inspection-sets BUG-1+2 수정
-  - factory_diagnosis_results fallback + master JOIN + 중복 skip + delete 제거
 v4.4.0: diagnose/step1 DB 저장 추가
-v4.3.3: summary.notify 집계 버그 수정
-v4.3.2: diagnose/step1 개선
 v4.2.0: 3단계 진단 API 추가
 """
 from fastapi import APIRouter, HTTPException, Query
@@ -35,7 +26,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.1.0"  # v5.1.0: 건설 섹터 버그 수정
+ENGINE_VERSION = "5.2.0"  # v5.2.0: 건설 KCSC 공정·작업 연동
 
 
 # ──────────────────────────────────────────────
@@ -65,13 +56,12 @@ INSPECTION_CYCLE_UNIT_MAP = {
     "013": "5년마다(시설)",
 }
 
-# inspection_cycle_unit_code → (cycle_unit, cycle_value)
 CYCLE_CODE_MAP = {
     "001": ("day",   1),
     "002": ("week",  1),
     "003": ("month", 1),
-    "004": ("month", 3),   # 분기
-    "005": ("month", 6),   # 반기
+    "004": ("month", 3),
+    "005": ("month", 6),
     "006": ("year",  1),
     "007": ("year",  2),
     "008": ("year",  5),
@@ -87,7 +77,6 @@ RULE_TYPE_MAP = {
     "004": "action", "005": "action", "007": "action", "008": "action",
 }
 
-# 건설 관련 주요 법령명 프리픽스 (조건 없는 룰 필터링용)
 CONSTRUCTION_RELEVANT_LAW_PREFIXES = [
     "산업안전보건", "중대재해", "건설산업", "건설기술",
     "근로기준", "산업재해보상", "전기안전",
@@ -498,7 +487,7 @@ async def apply_legal_engine(
     body: Optional[dict] = None,
     mode: str = Query("all"),
 ):
-    """시설 등록 기반 법령 판정 (v5.1.0 — 하위 호환 유지)"""
+    """시설 등록 기반 법령 판정 (v5.2.0 — 하위 호환 유지)"""
     supabase = get_supabase()
     if body and body.get("mode"):
         mode = body["mode"]
@@ -632,7 +621,6 @@ ALLOWED_DIAGNOSE_SECTORS = frozenset(
     {"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"}
 )
 
-# v5.1.0: "contract_amount": "construction_amount" 추가 (핵심 버그 수정)
 CONDITION_CODE_TO_CONTEXT_KEY: Dict[str, str] = {
     "employee_count":           "worker_count",
     "building_area":            "total_floor_area",
@@ -646,13 +634,13 @@ CONDITION_CODE_TO_CONTEXT_KEY: Dict[str, str] = {
     "transformer_capacity_kva": "transformer_capacity_kva",
     "annual_energy_toe":        "annual_energy_toe",
     "construction_amount":      "construction_amount",
-    "contract_amount":          "construction_amount",   # v5.1.0 추가: 핵심 버그 수정
+    "contract_amount":          "construction_amount",   # v5.1.0: 핵심 버그 수정
     "contractor_count":         "contractor_count",
     "is_hazardous_material":    "is_hazardous_material",
     "is_multi_use":             "is_multi_use",
     "is_factory_registered":    "is_factory_registered",
-    "electric_capacity":        "electric_capacity",     # v5.1.0 추가
-    "worker_count":             "worker_count",           # v5.1.0 추가
+    "electric_capacity":        "electric_capacity",
+    "worker_count":             "worker_count",
 }
 
 
@@ -701,20 +689,17 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
         ctx["has_chemical_substance"] = 1 if _truthy(inp.get("has_chemical_substance")) else 0
         ctx["has_boiler"] = 1 if _truthy(inp.get("has_boiler")) else 0
     elif sec == "CONSTRUCTION":
-        # v5.1.0: CONSTRUCTION context 완성
         eok = float(inp.get("contract_amount_eok") or 0)
         amount = eok * 100_000_000.0
         ctx["construction_amount"] = amount
-        ctx["contract_amount"]     = amount   # v5.1.0: condition_code 직접 매핑
+        ctx["contract_amount"]     = amount
 
-        # 공사 종류 (BUILDING=건축, CIVIL=토목, SPECIALTY=전문)
         site_type = str(inp.get("construction_type") or inp.get("site_type") or "BUILDING")
         ctx["construction_type"] = site_type
         ctx["building_use_code"] = site_type
         ctx["is_building"]       = 1 if site_type == "BUILDING" else 0
         ctx["is_civil"]          = 1 if site_type == "CIVIL"    else 0
 
-        # 근로자 수 (하도급 포함) — v5.1.0
         direct = int(inp.get("direct_workers") or inp.get("worker_count") or inp.get("employee_count") or 0)
         subcon = int(inp.get("subcon_workers") or 0)
         ctx["worker_count"]   = direct + subcon
@@ -724,7 +709,6 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
 
         ctx["has_tunnel_bridge"] = 1 if _truthy(inp.get("has_tunnel_bridge")) else 0
 
-        # 안전관리자 선임 기준 임계값 저장 (참조용)
         threshold = 15_000_000_000 if site_type in ("BUILDING", "SPECIALTY") else 12_000_000_000
         ctx["safety_manager_threshold"] = threshold
     elif sec in ("SPECIAL_FACILITY", "SPECIAL"):
@@ -786,7 +770,6 @@ def _evaluate_facility_conditions_db(
         cc = rule.get("condition_code")
         cv = rule.get("condition_value")
         if not cc or cv is None:
-            # v5.1.0: CONSTRUCTION 섹터에서 조건 없는 룰은 건설 관련 법령만
             if sector == "CONSTRUCTION":
                 law = rule.get("law_name") or ""
                 if any(prefix in law for prefix in CONSTRUCTION_RELEVANT_LAW_PREFIXES):
@@ -893,7 +876,6 @@ async def diagnose_step1(body: DiagnoseStep1Body):
     facility_ctx = _input_to_facility_context(sector_raw, inp)
     evaluated_at = datetime.now().isoformat()
 
-    # v5.1.0: sector 전달하여 건설 필터링 적용
     applicable, not_applicable = _evaluate_facility_conditions_db(facility_ctx, all_rules, sector_raw)
 
     triggered: Dict[str, List] = {
@@ -989,11 +971,9 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         },
     }
 
-    # v5.1.0: 건설 섹터 전용 선임 판정 요약 블록 추가
     if sector_raw == "CONSTRUCTION":
         result_data["construction_summary"] = _get_construction_summary(facility_ctx)
 
-    # ── DB 저장 (factory_id 있을 때만) ──
     diagnosis_id = None
     if factory_id:
         try:
@@ -1115,13 +1095,7 @@ async def get_legal_summary(factory_id: str):
 
 @router.post("/create-inspection-sets/{factory_id}")
 async def create_inspection_sets_from_legal(factory_id: str):
-    """
-    v4.4.3: 타임아웃 근본 해결
-    - diagnosis_rule_results에서 obligation_type='INSPECT' 필터로 183건→41건 축소
-    - master_building_legal_rules IN() 쿼리도 41건으로 축소
-    v4.4.2: result_data SELECT 제거 + 배치 20건
-    v4.4.1: BUG-1 fallback + master JOIN + BUG-2 중복 skip
-    """
+    """v4.4.3: obligation_type=INSPECT 필터 + 배치 20건"""
     supabase = get_supabase()
     fac = supabase.table("factories").select(
         "id, company_id, legal_result_json"
@@ -1146,14 +1120,12 @@ async def create_inspection_sets_from_legal(factory_id: str):
                 .limit(1).execute()
             if diag_res.data:
                 diagnosis_id = diag_res.data[0].get("id")
-
                 drr_res = supabase.table("diagnosis_rule_results") \
                     .select("rule_code, rule_name, law_name, law_article, obligation, form_code") \
                     .eq("diagnosis_id", diagnosis_id) \
                     .eq("obligation_type", "INSPECT") \
                     .execute()
                 drr_rows = drr_res.data or []
-
                 if drr_rows:
                     rule_codes = [r.get("rule_code") for r in drr_rows if r.get("rule_code")]
                     masters_res = supabase.table("master_building_legal_rules") \
@@ -1165,12 +1137,7 @@ async def create_inspection_sets_from_legal(factory_id: str):
                         .in_("rule_id", rule_codes) \
                         .eq("is_active", True) \
                         .execute()
-
-                    inspect_master_map = {
-                        m["rule_id"]: m
-                        for m in (masters_res.data or [])
-                    }
-
+                    inspect_master_map = {m["rule_id"]: m for m in (masters_res.data or [])}
                     for r in drr_rows:
                         rc = r.get("rule_code", "")
                         m = inspect_master_map.get(rc, {})
@@ -1189,11 +1156,7 @@ async def create_inspection_sets_from_legal(factory_id: str):
             print(f"[CREATE-INSP-SETS] fallback 조회 실패: {e}")
 
     if not inspection_rules:
-        return {
-            "status":  "success",
-            "message": "생성할 점검 항목이 없습니다. 먼저 법령진단을 실행하세요.",
-            "data":    {"created": 0},
-        }
+        return {"status": "success", "message": "생성할 점검 항목이 없습니다.", "data": {"created": 0}}
 
     existing_res = supabase.table("inspection_sets") \
         .select("legal_rule_id") \
@@ -1201,20 +1164,16 @@ async def create_inspection_sets_from_legal(factory_id: str):
         .eq("source", "LEGAL_ENGINE") \
         .eq("is_active", True) \
         .execute()
-    existing_rule_ids = {
-        r["legal_rule_id"] for r in (existing_res.data or []) if r.get("legal_rule_id")
-    }
+    existing_rule_ids = {r["legal_rule_id"] for r in (existing_res.data or []) if r.get("legal_rule_id")}
 
     insert_rows = []
     for rule in inspection_rules:
         rule_id = rule.get("rule_id", "")
         if rule_id in existing_rule_ids:
             continue
-
         m           = rule.get("_master", {})
         law_name    = rule.get("law_name", "")
         cycle_label = rule.get("inspection_cycle", "")
-
         cycle_unit_code = str(m.get("inspection_cycle_unit_code") or "")
         if cycle_unit_code in CYCLE_CODE_MAP:
             cycle_unit, cycle_value = CYCLE_CODE_MAP[cycle_unit_code]
@@ -1233,7 +1192,6 @@ async def create_inspection_sets_from_legal(factory_id: str):
                 elif "5년" in cycle_label: cycle_unit, cycle_value = "year", 5
                 elif "10년" in cycle_label: cycle_unit, cycle_value = "year", 10
                 elif "연 2회" in cycle_label: cycle_unit, cycle_value = "month", 6
-
         insert_rows.append({
             "company_id":          company_id,
             "factory_id":          factory_id,
@@ -1256,27 +1214,17 @@ async def create_inspection_sets_from_legal(factory_id: str):
         })
 
     if not insert_rows:
-        return {
-            "status":  "success",
-            "message": f"모든 점검 세트가 이미 존재합니다. ({len(existing_rule_ids)}개 유지)",
-            "data": {"created": 0, "skipped": len(existing_rule_ids), "source_rules": len(inspection_rules)},
-        }
+        return {"status": "success", "message": f"모든 점검 세트가 이미 존재합니다. ({len(existing_rule_ids)}개 유지)",
+                "data": {"created": 0, "skipped": len(existing_rule_ids), "source_rules": len(inspection_rules)}}
 
     created = 0
     for i in range(0, len(insert_rows), 20):
         res = supabase.table("inspection_sets").insert(insert_rows[i:i + 20]).execute()
         created += len(res.data or [])
 
-    return {
-        "status":  "success",
-        "message": f"{created}개 점검 세트가 생성됐습니다. ({len(existing_rule_ids)}개 기존 유지)",
-        "data": {
-            "factory_id":   factory_id,
-            "created":      created,
-            "skipped":      len(existing_rule_ids),
-            "source_rules": len(inspection_rules),
-        },
-    }
+    return {"status": "success", "message": f"{created}개 점검 세트가 생성됐습니다. ({len(existing_rule_ids)}개 기존 유지)",
+            "data": {"factory_id": factory_id, "created": created, "skipped": len(existing_rule_ids),
+                     "source_rules": len(inspection_rules)}}
 
 
 @router.get("/debug/context/{quote_id}")
@@ -1403,18 +1351,28 @@ def _create_report_events_from_rules(supabase, factory_id: str, matched_rules: l
             print(f"[DIAGNOSIS] report_events 생성 실패: {e}")
 
 
+# ──────────────────────────────────────────────
+# POST /legal-engine/diagnose/step2  v5.2.0
+# ──────────────────────────────────────────────
+
 @router.post("/diagnose/step2")
 def diagnose_step2(body: dict):
-    supabase = get_supabase()
+    """
+    건설 법령진단 2단계 — 공종별 법령 판정
+    v5.2.0: kcsc_process_ids → kcsc_process_master에서 work_type_code 자동 조회
+    기존 construction_work_types 직접 입력 하위 호환 유지
+    """
+    supabase   = get_supabase()
     factory_id = body.get('factory_id')
-    diagnosis_id = body.get('diagnosis_id')
-    processes = body.get('processes', [])
-    construction_types = body.get('construction_types', [])
-    # v5.1.0: 건설 공종 목록 필터
-    work_types: List[str] = body.get('construction_work_types') or []
+    diagnosis_id        = body.get('diagnosis_id')
+    processes           = body.get('processes', [])
+    construction_types  = body.get('construction_types', [])
+    work_types: List[str]       = list(body.get('construction_work_types') or [])  # 기존 하위 호환
+    kcsc_process_ids: List[str] = body.get('kcsc_process_ids') or []               # v5.2.0 신규
 
     if not factory_id:
         raise HTTPException(status_code=400, detail='factory_id 필수')
+
     prev = None
     if diagnosis_id:
         try:
@@ -1422,34 +1380,73 @@ def diagnose_step2(body: dict):
             prev = prev_res.data
         except Exception:
             pass
-    sector = (prev or {}).get('sector', 'MANUFACTURING')
-    input_data = dict((prev or {}).get('input_data') or {})
-    input_data['processes'] = processes
-    input_data['construction_types'] = construction_types
-    input_data['sector'] = sector
 
-    # 기본 쿼리
+    sector     = (prev or {}).get('sector', 'MANUFACTURING')
+    input_data = dict((prev or {}).get('input_data') or {})
+    input_data['processes']          = processes
+    input_data['construction_types'] = construction_types
+    input_data['sector']             = sector
+
+    # v5.2.0: KCSC 공정 ID → work_type_code 자동 조회
+    kcsc_processes: List[Dict]      = []
+    kcsc_process_summary: List[Dict] = []
+
+    if kcsc_process_ids:
+        try:
+            kcsc_res = supabase.table('kcsc_process_master') \
+                .select('id, process_name, work_type_code, work_type_label, risk_level') \
+                .in_('id', kcsc_process_ids) \
+                .eq('is_active', True) \
+                .execute()
+            kcsc_processes = kcsc_res.data or []
+        except Exception as e:
+            print(f"[STEP2] kcsc_process_master 조회 실패: {e}")
+
+        # work_type_code 추출 (NULL 제외, 중복 제거) + 기존 직접 입력 합산
+        kcsc_work_types = list(set(
+            p['work_type_code'] for p in kcsc_processes if p.get('work_type_code')
+        ))
+        work_types = list(set(work_types + kcsc_work_types))
+
+        # input_data에 KCSC 정보 저장
+        input_data['kcsc_process_ids'] = kcsc_process_ids
+        input_data['kcsc_processes']   = kcsc_processes
+
+        # 응답용 공정 요약
+        for p in kcsc_processes:
+            kcsc_process_summary.append({
+                'process_id':      p['id'],
+                'process_name':    p.get('process_name', ''),
+                'work_type_code':  p.get('work_type_code'),
+                'work_type_label': p.get('work_type_label'),
+                'risk_level':      p.get('risk_level', 'MEDIUM'),
+                'has_legal_rules': p.get('work_type_code') is not None,
+            })
+
+    # 법령 룰 조회
     q = supabase.table('master_building_legal_rules').select('*').eq(
         'sector', sector
     ).lte('diagnosis_stage', 2).eq('is_active', True)
 
-    # v5.1.0: CONSTRUCTION + 공종 필터
+    # CONSTRUCTION + 공종 필터
     if sector == 'CONSTRUCTION' and work_types:
         work_type_csv = ",".join(work_types)
         q = q.or_(
             f"construction_work_type.is.null,construction_work_type.in.({work_type_csv})"
         )
 
-    res = q.execute()
-    rules = res.data or []
+    res     = q.execute()
+    rules   = res.data or []
     matched = [r for r in rules if _evaluate_condition(r, input_data)]
+
     diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 2, input_data, matched)
     _create_report_events_from_rules(supabase, factory_id, matched)
+
     prev_codes = set()
     if prev:
         prev_rules = (prev.get('result_data') or {}).get('rules', [])
         prev_codes = {r.get('rule_code') for r in prev_rules}
-    added = [r for r in matched if (r.get('rule_code') or r.get('rule_id')) not in prev_codes]
+    added  = [r for r in matched if (r.get('rule_code') or r.get('rule_id')) not in prev_codes]
     result = diagnosis.get('result_data', {})
 
     work_type_summary: Dict[str, int] = {}
@@ -1459,32 +1456,58 @@ def diagnose_step2(body: dict):
             work_type_summary[wt] = work_type_summary.get(wt, 0) + 1
 
     return {
-        'status': 'success', 'diagnosis_id': diagnosis.get('id'), 'stage': 2,
-        'engine_version': ENGINE_VERSION,
-        'sector': sector, 'rule_count': len(matched), 'added_rule_count': len(added),
+        'status':               'success',
+        'diagnosis_id':         diagnosis.get('id'),
+        'stage':                2,
+        'engine_version':       ENGINE_VERSION,
+        'sector':               sector,
+        'rule_count':           len(matched),
+        'added_rule_count':     len(added),
+        'kcsc_process_ids':     kcsc_process_ids,
+        'kcsc_process_summary': kcsc_process_summary,
         'filtered_by_work_types': work_types if work_types else None,
-        'work_type_summary': work_type_summary if work_types else None,
-        'summary': {'applicable_law_categories': result.get('applicable_law_categories', []),
-                    'appointment_required': result.get('appointment_required', False),
-                    'key_obligations': result.get('key_obligations', []),
-                    'risk_level': result.get('risk_level', 'LOW')},
+        'work_type_summary':    work_type_summary if work_types else None,
+        'summary': {
+            'applicable_law_categories': result.get('applicable_law_categories', []),
+            'appointment_required':      result.get('appointment_required', False),
+            'key_obligations':           result.get('key_obligations', []),
+            'risk_level':                result.get('risk_level', 'LOW'),
+        },
         'rules': result.get('rules', []),
-        'added_rules': [{'rule_code': r.get('rule_code') or r.get('rule_id'),
-                         'rule_name': r.get('rule_name') or r.get('remarks', ''),
-                         'law_article': r.get('law_article', ''),
-                         'work_type': r.get('construction_work_type'),
-                         'work_type_label': r.get('construction_work_type_label')} for r in added],
+        'added_rules': [{
+            'rule_code':       r.get('rule_code') or r.get('rule_id'),
+            'rule_name':       r.get('rule_name') or r.get('remarks', ''),
+            'law_article':     r.get('law_article', ''),
+            'work_type':       r.get('construction_work_type'),
+            'work_type_label': r.get('construction_work_type_label'),
+        } for r in added],
     }
 
 
+# ──────────────────────────────────────────────
+# POST /legal-engine/diagnose/step3  v5.2.0
+# ──────────────────────────────────────────────
+
 @router.post("/diagnose/step3")
 def diagnose_step3(body: dict):
-    supabase = get_supabase()
+    """
+    건설 법령진단 3단계 — 설비·작업 법령 판정
+    v5.2.0:
+    - construction_work_ids: PTW 작업 ID → construction_works.kcsc_work_id 조회
+    - kcsc_work_ids: KCSC 작업 마스터 ID → equipment_type_codes 자동 조회
+    - 기존 equipments 직접 입력 하위 호환 유지
+    응답: equipment_codes_applied, kcsc_work_summary 추가
+    """
+    supabase   = get_supabase()
     factory_id = body.get('factory_id')
     diagnosis_id = body.get('diagnosis_id')
-    equipments = body.get('equipments', [])
+    equipments: List[Dict]          = list(body.get('equipments') or [])   # 기존 하위 호환
+    construction_work_ids: List[str] = body.get('construction_work_ids') or []  # v5.2.0 신규
+    kcsc_work_ids: List[str]         = list(body.get('kcsc_work_ids') or [])    # v5.2.0 신규
+
     if not factory_id:
         raise HTTPException(status_code=400, detail='factory_id 필수')
+
     prev = None
     if diagnosis_id:
         try:
@@ -1492,14 +1515,80 @@ def diagnose_step3(body: dict):
             prev = prev_res.data
         except Exception:
             pass
-    sector = (prev or {}).get('sector', 'MANUFACTURING')
+
+    sector     = (prev or {}).get('sector', 'MANUFACTURING')
     input_data = dict((prev or {}).get('input_data') or {})
-    input_data['equipments'] = equipments
     input_data['sector'] = sector
-    res = supabase.table('master_building_legal_rules').select('*').eq('sector', sector).lte('diagnosis_stage', 3).eq('is_active', True).execute()
-    rules = res.data or []
+
+    extra_equipment_codes: List[str] = []
+    kcsc_work_summary: List[Dict]    = []
+
+    # v5.2.0 Step A: PTW 등록 작업 → kcsc_work_id 조회
+    if construction_work_ids:
+        try:
+            ptw_res = supabase.table('construction_works') \
+                .select('id, work_name, kcsc_work_id') \
+                .in_('id', construction_work_ids) \
+                .execute()
+            ptw_works = ptw_res.data or []
+            kcsc_ids_from_ptw = [w['kcsc_work_id'] for w in ptw_works if w.get('kcsc_work_id')]
+            kcsc_work_ids = list(set(kcsc_work_ids + kcsc_ids_from_ptw))
+        except Exception as e:
+            print(f"[STEP3] construction_works 조회 실패 (테이블 없을 수 있음): {e}")
+
+    # v5.2.0 Step B: KCSC 작업 마스터 → equipment_type_codes 자동 조회
+    if kcsc_work_ids:
+        try:
+            kcsc_work_res = supabase.table('kcsc_work_master') \
+                .select('id, title, is_hazardous, hazard_type, equipment_type_codes, work_type_code') \
+                .in_('id', kcsc_work_ids) \
+                .execute()
+            kcsc_works = kcsc_work_res.data or []
+
+            for w in kcsc_works:
+                eq_codes = w.get('equipment_type_codes') or []
+                extra_equipment_codes.extend(eq_codes)
+                kcsc_work_summary.append({
+                    'work_id':         w['id'],
+                    'title':           w.get('title', ''),
+                    'is_hazardous':    w.get('is_hazardous', False),
+                    'hazard_type':     w.get('hazard_type'),
+                    'equipment_codes': eq_codes,
+                    'work_type_code':  w.get('work_type_code'),
+                })
+
+            extra_equipment_codes = list(set(extra_equipment_codes))
+        except Exception as e:
+            print(f"[STEP3] kcsc_work_master 조회 실패: {e}")
+
+    # v5.2.0: 기존 equipments 배열에 KCSC 조회 결과 합산 (중복 제외)
+    for code in extra_equipment_codes:
+        if not any(e.get('equipment_code') == code for e in equipments):
+            equipments.append({'equipment_code': code})
+
+    input_data['equipments']            = equipments
+    input_data['construction_work_ids'] = construction_work_ids
+    input_data['kcsc_work_ids']         = kcsc_work_ids
+    input_data['extra_equipment_codes'] = extra_equipment_codes
+
+    # 3단계 룰 조회
+    q = supabase.table('master_building_legal_rules').select('*') \
+        .eq('sector', sector) \
+        .eq('diagnosis_stage', 3) \
+        .eq('is_active', True)
+
+    # v5.2.0: CONSTRUCTION + 설비/공종 코드 필터
+    if sector == 'CONSTRUCTION' and extra_equipment_codes:
+        eq_csv = ','.join(extra_equipment_codes)
+        q = q.or_(f"construction_work_type.is.null,construction_work_type.in.({eq_csv})")
+
+    res     = q.execute()
+    rules   = res.data or []
     matched = [r for r in rules if _evaluate_condition(r, input_data)]
+
     diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 3, input_data, matched)
+
+    # 점검 일정 생성
     inspection_schedules = []
     today = date.today()
     for equip in equipments:
@@ -1508,25 +1597,37 @@ def diagnose_step3(body: dict):
         cycle_years = 2
         if last_dt:
             try:
-                last = date.fromisoformat(last_dt)
-                next_due = date(last.year + cycle_years, last.month, last.day)
+                last      = date.fromisoformat(last_dt)
+                next_due  = date(last.year + cycle_years, last.month, last.day)
                 days_left = (next_due - today).days
                 inspection_schedules.append({
-                    'equipment_code': eq_code, 'capacity': equip.get('capacity'),
-                    'unit': equip.get('unit'), 'last_inspection_date': last_dt,
-                    'next_due_date': next_due.isoformat(), 'cycle_years': cycle_years,
-                    'days_left': days_left,
+                    'equipment_code':       eq_code,
+                    'capacity':             equip.get('capacity'),
+                    'unit':                 equip.get('unit'),
+                    'last_inspection_date': last_dt,
+                    'next_due_date':        next_due.isoformat(),
+                    'cycle_years':          cycle_years,
+                    'days_left':            days_left,
                     'status': 'OVERDUE' if days_left < 0 else ('URGENT' if days_left <= 30 else 'NORMAL'),
                 })
             except Exception:
                 pass
-    overdue_count = sum(1 for s in inspection_schedules if s['status'] == 'OVERDUE')
+
+    overdue_count  = sum(1 for s in inspection_schedules if s['status'] == 'OVERDUE')
     upcoming_count = sum(1 for s in inspection_schedules if s['status'] == 'URGENT')
+
     return {
-        'status': 'success', 'diagnosis_id': diagnosis.get('id'), 'stage': 3,
-        'sector': sector, 'rule_count': len(matched),
-        'inspection_schedules': inspection_schedules,
-        'overdue_count': overdue_count, 'upcoming_count': upcoming_count,
+        'status':                  'success',
+        'diagnosis_id':            diagnosis.get('id'),
+        'stage':                   3,
+        'sector':                  sector,
+        'engine_version':          ENGINE_VERSION,
+        'rule_count':              len(matched),
+        'equipment_codes_applied': extra_equipment_codes,   # v5.2.0 신규
+        'kcsc_work_summary':       kcsc_work_summary,       # v5.2.0 신규
+        'inspection_schedules':    inspection_schedules,
+        'overdue_count':           overdue_count,
+        'upcoming_count':          upcoming_count,
     }
 
 
