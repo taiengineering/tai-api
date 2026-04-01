@@ -7,14 +7,15 @@
     - CONSTRUCTION context 완성 (site_type, subcon_workers, tunnel, threshold)
     - construction_summary 결과 블록 추가
     - 건설 관련 법령 필터링 강화
+    - diagnose/step2: construction_work_type IN() 필터 추가
 
 이 라우터는 main.py에서 legal_engine_router보다 먼저 등록됨으로
-POST /legal-engine/diagnose/step1이 이 파일로 라우팅됨.
+POST /legal-engine/diagnose/step1,step2 가 이 파일로 라우팅됨.
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, Any, Dict, List
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from db.supabase_client import get_supabase
 
 # 필요한 헬퍼는 legal_engine에서 import
@@ -22,9 +23,10 @@ from routers.legal_engine import (
     _truthy, _to_float, _to_int,
     _classify_rules_db, format_rule_result_db,
     _resolve_obligation_type, _risk_level,
-    _db_rule_matches_facility,
     DiagnoseStep1Body, ALLOWED_DIAGNOSE_SECTORS,
     _normalize_sector_db,
+    _save_diagnosis_result, _evaluate_condition,
+    _create_report_events_from_rules, _determine_risk_level,
 )
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진v510"])
@@ -148,8 +150,8 @@ def _db_rule_matches_facility_v510(rule: Dict[str, Any], context: Dict[str, Any]
     op = (rule.get("condition_operator_code") or "gte").lower()
     if op in ("gte", ">="): return actual_num >= value_num
     if op in ("lte", "<="): return actual_num <= value_num
-    if op in ("gt",  ">"): return actual_num >  value_num
-    if op in ("lt",  "<"): return actual_num <  value_num
+    if op in ("gt",  ">"):  return actual_num >  value_num
+    if op in ("lt",  "<"):  return actual_num <  value_num
     if op in ("eq",  "=", "=="): return actual_num == value_num
     return actual_num >= value_num
 
@@ -186,7 +188,7 @@ def _evaluate_facility_conditions_db_v510(
 
 
 def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
-    """v5.1.0: 건설 선임 판정 결과 뼔록."""
+    """v5.1.0: 건설 선임 판정 결과 블록."""
     amount    = float(facility_ctx.get("construction_amount") or 0)
     workers   = int(facility_ctx.get("worker_count") or 0)
     site_type = str(facility_ctx.get("construction_type") or facility_ctx.get("building_use_code") or "BUILDING")
@@ -195,7 +197,7 @@ def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
     sm_required = (amount >= threshold) or (workers >= 50)
 
     site_label  = "건축" if site_type == "BUILDING" else ("토목" if site_type == "CIVIL" else "전문")
-    basis_parts = [f"{site_label} {int(threshold/100_000_000)}억원 {'\uc774\uc0c1' if amount >= threshold else '\ubbf8\ub9cc'}"]
+    basis_parts = [f"{site_label} {int(threshold/100_000_000)}억원 {'이상' if amount >= threshold else '미만'}"]
     if workers >= 50:
         basis_parts.append("근로자 50명 이상")
 
@@ -209,21 +211,20 @@ def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
         "safety_manager_required":  sm_required,
         "safety_manager_basis":     ", ".join(basis_parts),
         "key_thresholds_met": {
-            "1억_산업안전보건관리비":          amount >= 100_000_000,
-            "50억_유해위험방지계획서":        amount >= 5_000_000_000,
-            "50억_기초안전보건교육":          amount >= 5_000_000_000,
-            "100억_안전관리계획서":             amount >= 10_000_000_000,
+            "1억_산업안전보건관리비":       amount >= 100_000_000,
+            "50억_유해위험방지계획서":      amount >= 5_000_000_000,
+            "50억_기초안전보건교육":        amount >= 5_000_000_000,
+            "100억_안전관리계획서":         amount >= 10_000_000_000,
             "120억_안전관리자선임_토목":    site_type == "CIVIL"    and amount >= 12_000_000_000,
             "150억_안전관리자선임_건축":    site_type == "BUILDING" and amount >= 15_000_000_000,
-            "200억_안전보건관리책임자":        amount >= 20_000_000_000,
-            "1000억_건설안전판정사":                amount >= 100_000_000_000,
+            "200억_안전보건관리책임자":     amount >= 20_000_000_000,
+            "1000억_건설안전판정사":        amount >= 100_000_000_000,
         },
     }
 
 
 # ============================================================
 # POST /legal-engine/diagnose/step1  v5.1.0
-# main.py에서 legal_engine_router보다 먼저 등록 → 이 필드가 우선 라우팅됨
 # ============================================================
 
 @router.post("/diagnose/step1")
@@ -303,7 +304,6 @@ async def diagnose_step1_v510(body: DiagnoseStep1Body):
     appointment_n = len(triggered["appointment"])
     risk          = _risk_level(total_applicable, appointment_n)
 
-    # obligations 배열
     obligations: List[Dict[str, Any]] = []
     for key, label in [("appointment", "선임"), ("inspection", "점검"), ("action", "조치")]:
         if triggered[key]:
@@ -379,11 +379,11 @@ async def diagnose_step1_v510(body: DiagnoseStep1Body):
         },
     }
 
-    # v5.1.0: 건설 섹터 전용 요약 추가
+    # v5.1.0: 건설 섹터 전용 요약
     if sector_raw == "CONSTRUCTION":
         result_data["construction_summary"] = _get_construction_summary(facility_ctx)
 
-    # ── DB 저장 (factory_id 있을 때만) ──
+    # ── DB 저장 ──
     diagnosis_id = None
     if factory_id:
         try:
@@ -433,3 +433,112 @@ async def diagnose_step1_v510(body: DiagnoseStep1Body):
 
     result_data["diagnosis_id"] = diagnosis_id
     return {"status": "success", "data": result_data}
+
+
+# ============================================================
+# POST /legal-engine/diagnose/step2  v5.1.0
+# construction_work_type IN() 필터 추가
+# ============================================================
+
+@router.post("/diagnose/step2")
+def diagnose_step2_v510(body: dict):
+    """
+    법령진단 2단계 v5.1.0
+    건설 섹터: construction_work_types (공종 목록) 기반 필터링 추가.
+    - body.construction_work_types: ["EXCAVATION", "HIGH_WORK", ...] 전달 시
+      해당 공종의 룰만 반환
+    - 미전달 시 전체 2단계 룰 반환 (기존 동작 유지)
+    """
+    supabase         = get_supabase()
+    factory_id       = body.get("factory_id")
+    diagnosis_id     = body.get("diagnosis_id")
+    processes        = body.get("processes", [])
+    construction_types = body.get("construction_types", [])
+    # v5.1.0 신규: 건설 공종 목록
+    work_types: List[str] = body.get("construction_work_types") or []
+
+    if not factory_id:
+        raise HTTPException(status_code=400, detail="factory_id 필수")
+
+    prev = None
+    if diagnosis_id:
+        try:
+            prev_res = supabase.table("factory_diagnosis_results").select("*").eq(
+                "id", diagnosis_id
+            ).single().execute()
+            prev = prev_res.data
+        except Exception:
+            pass
+
+    sector = (prev or {}).get("sector", "MANUFACTURING")
+    input_data = dict((prev or {}).get("input_data") or {})
+    input_data["processes"]          = processes
+    input_data["construction_types"] = construction_types
+    input_data["sector"]             = sector
+
+    # 기본 쿼리: sector + diagnosis_stage <= 2
+    q = supabase.table("master_building_legal_rules").select("*").eq(
+        "sector", sector
+    ).lte("diagnosis_stage", 2).eq("is_active", True)
+
+    # v5.1.0: 건설 섹터 + 공종 목록 제공 시 construction_work_type IN() 필터
+    if sector == "CONSTRUCTION" and work_types:
+        # NULL (공종 무관 룰) + 선택된 공종 룰 모두 포함
+        # Supabase PostgREST: or(construction_work_type.is.null, construction_work_type.in.(A,B,C))
+        work_type_csv = ",".join(work_types)
+        q = q.or_(
+            f"construction_work_type.is.null,construction_work_type.in.({work_type_csv})"
+        )
+
+    rules_res = q.execute()
+    rules     = rules_res.data or []
+
+    # 조건 평가 (기존 _evaluate_condition 사용)
+    matched = [r for r in rules if _evaluate_condition(r, input_data)]
+
+    diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 2, input_data, matched)
+    _create_report_events_from_rules(supabase, factory_id, matched)
+
+    prev_codes = set()
+    if prev:
+        prev_rules = (prev.get("result_data") or {}).get("rules", [])
+        prev_codes = {r.get("rule_code") for r in prev_rules}
+    added = [r for r in matched if (r.get("rule_code") or r.get("rule_id")) not in prev_codes]
+
+    result = diagnosis.get("result_data", {})
+
+    # v5.1.0: 공종별 결과 요약
+    work_type_summary: Dict[str, int] = {}
+    if work_types:
+        for r in matched:
+            wt = r.get("construction_work_type") or "COMMON"
+            work_type_summary[wt] = work_type_summary.get(wt, 0) + 1
+
+    return {
+        "status":           "success",
+        "diagnosis_id":     diagnosis.get("id"),
+        "stage":            2,
+        "engine_version":   ENGINE_VERSION,
+        "sector":           sector,
+        "rule_count":       len(matched),
+        "added_rule_count": len(added),
+        "filtered_by_work_types": work_types if work_types else None,
+        "work_type_summary":      work_type_summary if work_types else None,
+        "summary": {
+            "applicable_law_categories": result.get("applicable_law_categories", []),
+            "appointment_required":      result.get("appointment_required", False),
+            "key_obligations":           result.get("key_obligations", []),
+            "risk_level":                result.get("risk_level", "LOW"),
+        },
+        "rules": result.get("rules", []),
+        "added_rules": [
+            {
+                "rule_code":    r.get("rule_code") or r.get("rule_id"),
+                "rule_name":    r.get("rule_name") or r.get("remarks", ""),
+                "law_article":  r.get("law_article", ""),
+                "work_type":    r.get("construction_work_type"),
+                "work_type_label": r.get("construction_work_type_label"),
+            }
+            for r in added
+        ],
+    }
