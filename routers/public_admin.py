@@ -2,6 +2,7 @@
 비회원 법령진단 신청 관리 API
 URL prefix: /admin/public-diagnosis-requests
 인증: 필요 (tadmin 토큰)
+v1.1.0 (WORK_ORDER_20260402): _build_result_html rows_html()에 form_url 서식 다운로드 링크 추가
 """
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
@@ -146,7 +147,6 @@ def update_status(req_id: str, body: StatusUpdateBody):
 def run_diagnosis(req_id: str):
     supabase = get_supabase()
 
-    # 신청 조회
     res = supabase.table("public_diagnosis_requests") \
         .select("*").eq("id", req_id).eq("is_active", True).limit(1).execute()
     if not res.data:
@@ -157,7 +157,6 @@ def run_diagnosis(req_id: str):
     facility_data   = req.get("facility_data") or {}
     request_type    = req.get("request_type", "v1")
 
-    # 법령진단 step1 실행 (내부 호출)
     try:
         from routers.legal_engine import (
             _input_to_facility_context,
@@ -169,7 +168,6 @@ def run_diagnosis(req_id: str):
         )
         from datetime import datetime
 
-        # 1단계 진단
         all_rules_res = supabase.table("master_building_legal_rules") \
             .select("*").eq("is_active", True).eq("sector", sector).eq("diagnosis_stage", 1).execute()
         all_rules = all_rules_res.data or []
@@ -209,7 +207,6 @@ def run_diagnosis(req_id: str):
         if sector == "CONSTRUCTION":
             diagnosis_result["construction_summary"] = _get_construction_summary(facility_ctx)
 
-        # 결과 HTML 자동 생성
         result_html = _build_result_html(req, diagnosis_result)
 
         supabase.table("public_diagnosis_requests").update({
@@ -234,14 +231,15 @@ _REQUEST_TYPE_MAP = {"v1": "법령진단", "v2": "공정진단", "v3": "설비�
 
 
 def _build_result_html(req: dict, result: dict) -> str:
-    """진단 결과를 편집 가능한 HTML로 변환"""
+    """진단 결과를 편집 가능한 HTML로 변환
+    v1.1.0: report/신고 섹션에 form_url 서식 다운로드 링크 추가
+    """
     company  = req.get("company_name", "")
     sector   = req.get("sector", "")
     summary  = result.get("summary", {})
     cs       = result.get("construction_summary", {})
     today    = datetime.now().strftime("%Y년 %m월 %d일")
 
-    # fix: f-string 외부에서 미리 계산
     req_type_label   = _REQUEST_TYPE_MAP.get(req.get("request_type", "v1"), "")
     addr_detail      = req.get("address_detail", "")
     full_address     = req.get("address", "") + (" " + addr_detail if addr_detail else "")
@@ -253,6 +251,7 @@ def _build_result_html(req: dict, result: dict) -> str:
     )
 
     def rows_html(rules: list, category: str) -> str:
+        """v1.1.0: 서식(form_url) 컬럼 추가"""
         if not rules:
             return ""
         html = (
@@ -262,23 +261,35 @@ def _build_result_html(req: dict, result: dict) -> str:
             '<th style="padding:6px;border:1px solid #dee2e6;text-align:left">법령명</th>'
             '<th style="padding:6px;border:1px solid #dee2e6">조문</th>'
             '<th style="padding:6px;border:1px solid #dee2e6">의무 내용</th>'
+            '<th style="padding:6px;border:1px solid #dee2e6">서식</th>'
             '<th style="padding:6px;border:1px solid #dee2e6">벌칙</th>'
             '</tr></thead><tbody>'
         )
         for r in rules:
             obligation = r.get("obligation_summary") or r.get("description", "")
+            form_code  = r.get("form_code", "") or ""
+            form_url   = r.get("form_url", "") or ""
+            # v1.1.0: form_url 기반 서식 링크 렌더링
+            if form_code and form_code not in ("NONE", "UNKNOWN", "ONLINE"):
+                link_url  = form_url or "https://www.law.go.kr"
+                form_link = f'<a href="{link_url}" target="_blank" style="font-size:0.8em;white-space:nowrap">[{form_code}]</a>'
+            elif form_code == "ONLINE":
+                online_url = form_url or "#"
+                form_link  = f'<a href="{online_url}" target="_blank" style="font-size:0.8em;white-space:nowrap">[온라인신고]</a>'
+            else:
+                form_link = ""
             html += (
                 f'<tr>'
                 f'<td style="padding:6px;border:1px solid #dee2e6">{r.get("law_name","")}</td>'
                 f'<td style="padding:6px;border:1px solid #dee2e6;white-space:nowrap">{r.get("law_article","")}</td>'
                 f'<td style="padding:6px;border:1px solid #dee2e6">{obligation}</td>'
+                f'<td style="padding:6px;border:1px solid #dee2e6;text-align:center">{form_link}</td>'
                 f'<td style="padding:6px;border:1px solid #dee2e6;font-size:0.85em">{r.get("penalty_summary","")}</td>'
                 f'</tr>'
             )
         html += '</tbody></table>'
         return html
 
-    # fix: f-string 분리 — HTML 문자열을 일반 문자열 연결로 처리
     html = (
         '<div style="font-family:\'Noto Sans KR\',sans-serif;max-width:900px;margin:0 auto;padding:24px">'
         '<div style="text-align:center;margin-bottom:32px">'
@@ -339,7 +350,6 @@ def _build_result_html(req: dict, result: dict) -> str:
 
 # ──────────────────────────────────────────────────────────────
 # PATCH /admin/public-diagnosis-requests/{id}/result-html
-# 결과 HTML 직접 수정 저장
 # ──────────────────────────────────────────────────────────────
 
 class ResultHtmlBody(BaseModel):
@@ -358,7 +368,6 @@ def update_result_html(req_id: str, body: ResultHtmlBody):
 
 # ──────────────────────────────────────────────────────────────
 # POST /admin/public-diagnosis-requests/{id}/mark-sent
-# 결과 발송 완료 처리
 # ──────────────────────────────────────────────────────────────
 
 @router.post("/{req_id}/mark-sent")

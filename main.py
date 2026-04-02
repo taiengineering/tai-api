@@ -1,10 +1,9 @@
-# main.py — v5.2.4
-# v5.2.4: public_admin.py f-string SyntaxError 수정 (Python 3.11 호환)
+# main.py — v5.2.5
+# v5.2.5: legal_engine v5.3.1 배포 (WORK_ORDER_20260402)
 # v5.2.3: feature_flags 라우터 추가 (B-FEAT-001 섹터×플랜 Feature Flag)
 # v5.2.2: alert_messages 라우터 추가
 # v5.2.1: public_admin PATCH /status 엔드포인트 확인 완료
 # v5.2.0: public router + public_admin router 추가 / legal_engine KCSC 연동
-# v5.1.0: legal_engine.py 건설 섹터 버그 수정
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -89,7 +88,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="TAI API",
-    version="5.2.4",
+    version="5.2.5",
     description="TAI 산업안전 플랫폼 API",
     lifespan=lifespan,
 )
@@ -172,7 +171,7 @@ app.include_router(risk_assessments_router)
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "5.2.4"}
+    return {"status": "ok", "service": "TAI API", "version": "5.2.5"}
 
 
 @app.get("/health")
@@ -187,4 +186,4 @@ def health():
         cron_status = f"{len(scheduler.get_jobs())}개 등록" if scheduler.running else "중지"
     except Exception:
         cron_status = "미초기화"
-    return {"status": "healthy", "server_ip": ip, "version": "5.2.4", "cron": cron_status}
+    return {"status": "healthy", "server_ip": ip, "version": "5.2.5", "cron": cron_status}
