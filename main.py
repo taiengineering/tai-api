@@ -15,6 +15,7 @@ from routers.companies               import router as companies_router
 from routers.factories               import router as factories_router
 from routers.system_codes            import router as system_codes_router
 from routers.legal_engine            import router as legal_engine_router
+from routers.engine_qa               import router as engine_qa_router      # QA 자동진단
 from routers.ksic_engine             import router as ksic_engine_router
 from routers.factory_process_v3      import router as factory_process_router
 from routers.process_management      import router as process_management_router
@@ -123,6 +124,7 @@ app.include_router(companies_router)
 app.include_router(factories_router)
 app.include_router(system_codes_router)
 app.include_router(legal_engine_router)
+app.include_router(engine_qa_router)           # QA 자동진단
 app.include_router(ksic_engine_router)
 app.include_router(factory_process_router)
 app.include_router(process_management_router)
