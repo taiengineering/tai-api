@@ -1,13 +1,9 @@
-# main.py — v5.5.0
-# v5.5.0: SECTOR_RULE_GROUPS 도입 — 공용 법령 구조 개선 (COMMON/CONSTRUCTION_MANUFACTURING 등)
+# main.py — v5.5.1
+# v5.5.1: _classify_rules_db obligation_type 절대 우선 분류 수정
+# v5.5.0: SECTOR_RULE_GROUPS 도입 — 공용 법령 구조 개선
 # v5.4.2: apply/{factory_id} 섹터 필터 누락 수정
-# v5.4.1: _CONSTRUCTION_AMOUNT_THRESHOLDS 단위 오류 수정 (15억→150억)
+# v5.4.1: _CONSTRUCTION_AMOUNT_THRESHOLDS 단위 오류 수정
 # v5.4.0: CONSTRUCTION 입력값 정비
-# v5.3.1: legal_engine v5.3.1 배포
-# v5.2.3: feature_flags 라우터 추가
-# v5.2.2: alert_messages 라우터 추가
-# v5.2.1: public_admin PATCH /status 확인
-# v5.2.0: public router + public_admin router 추가
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -66,12 +62,12 @@ from routers.safety_meetings         import router as safety_meetings_router
 from routers.risk_assessments        import router as risk_assessments_router
 from routers.public                  import router as public_router
 from routers.public_admin            import router as public_admin_router
-from routers.alert_messages          import router as alert_messages_router   # v5.2.2
-from routers.feature_flags           import router as feature_flags_router    # v5.2.3
+from routers.alert_messages          import router as alert_messages_router
+from routers.feature_flags           import router as feature_flags_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.5.0"
+APP_VERSION = "5.5.1"
 
 
 @asynccontextmanager
@@ -117,7 +113,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── 라우터 등록 ────────────────────────────────────────────────
 app.include_router(public_router)
 app.include_router(public_admin_router)
 app.include_router(alert_messages_router)
