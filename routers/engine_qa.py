@@ -2,7 +2,8 @@
 법령 엔진 QA 자동 진단 라우터
 ============================
 POST /legal-engine/qa-run
-  - 4개 섹터 × 정방향/역방향 테스트 케이스 자동 실행
+  - 3개 섹터(건물·제조·건설) × 정방향/역방향 테스트 케이스 자동 실행
+  - 특수시설(SPECIAL_FACILITY)은 용도별 법령 적용 필요 → 나라장터 등록 후 추가 예정
   - 조건 정확도, 섹터 격리, 선임 방향성 점수 산출
   - 문제 룰(condition=NULL APPOINT, 섹터 혼입) 자동 감지
 """
@@ -14,10 +15,10 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["엔진QA"])
 
-QA_VERSION = "1.1.0"  # v1.1.0: 전체 커버 시 100점, DB이슈 감점 방식
+QA_VERSION = "1.2.0"  # v1.2.0: 특수시설 제외 (용도별 법령 적용 필요)
 
 # ══════════════════════════════════════════════
-# 테스트 케이스 정의
+# 테스트 케이스 정의 (3개 섹터: 건물·제조·건설)
 # ══════════════════════════════════════════════
 
 QA_TEST_CASES: List[Dict[str, Any]] = [
@@ -131,33 +132,6 @@ QA_TEST_CASES: List[Dict[str, Any]] = [
                 "direct_workers": 0, "subcon_workers": 0},
      "expect": {"appoint_max": 0, "sm_required": False},
      "note": "아무 조건 없음"},
-
-    # ─────────────── SPECIAL_FACILITY ───────────────
-    {"id": "SPF-F1", "sector": "SPECIAL_FACILITY", "direction": "forward",
-     "label": "대형병원: 병상300+200명+500kW",
-     "input": {"hospital_beds": 300, "worker_count": 200,
-                "electric_capacity": 500, "total_floor_area": 10000},
-     "expect": {"appoint_min": 2},
-     "note": "의료기관 안전관리자+소방안전관리자"},
-
-    {"id": "SPF-F2", "sector": "SPECIAL_FACILITY", "direction": "forward",
-     "label": "학교: 학생1000명+근로자50",
-     "input": {"student_count": 1000, "worker_count": 50, "total_floor_area": 5000},
-     "expect": {"appoint_min": 1},
-     "note": "학교안전관리자 선임"},
-
-    {"id": "SPF-R1", "sector": "SPECIAL_FACILITY", "direction": "reverse",
-     "label": "빈 입력",
-     "input": {},
-     "expect": {"appoint_max": 0},
-     "note": "아무 조건 없음 — 선임 0"},
-
-    {"id": "SPF-R2", "sector": "SPECIAL_FACILITY", "direction": "reverse",
-     "label": "극소: 1명+10㎡+병상0+학생0",
-     "input": {"worker_count": 1, "total_floor_area": 10,
-                "hospital_beds": 0, "student_count": 0},
-     "expect": {"appoint_max": 0},
-     "note": "모든 기준 미달 — 선임 0"},
 ]
 
 # ══════════════════════════════════════════════
@@ -165,7 +139,7 @@ QA_TEST_CASES: List[Dict[str, Any]] = [
 # ══════════════════════════════════════════════
 
 def _run_db_quality_checks(supabase) -> List[Dict[str, Any]]:
-    """DB에서 직접 데이터 품질 이슈를 탐지"""
+    """DB에서 직접 데이터 품질 이슈를 탐지 (특수시설 제외)"""
     issues = []
 
     # 1. condition=NULL인 APPOINT 룰 (역방향에서 선임이 잘못 발동될 위험)
@@ -174,6 +148,7 @@ def _run_db_quality_checks(supabase) -> List[Dict[str, Any]]:
         .eq("is_active", True) \
         .eq("diagnosis_stage", 1) \
         .eq("obligation_type", "APPOINT") \
+        .not_.in_("sector", ["SPECIAL_FACILITY", "SPECIAL"]) \
         .is_("condition_code", "null") \
         .execute()
     for r in (res1.data or []):
@@ -193,6 +168,7 @@ def _run_db_quality_checks(supabase) -> List[Dict[str, Any]]:
         .eq("diagnosis_stage", 1) \
         .eq("obligation_type", "NOTIFY") \
         .eq("appointment_required", True) \
+        .not_.in_("sector", ["SPECIAL_FACILITY", "SPECIAL"]) \
         .is_("condition_code", "null") \
         .execute()
     for r in (res2.data or []):
@@ -205,11 +181,12 @@ def _run_db_quality_checks(supabase) -> List[Dict[str, Any]]:
             "desc": "NOTIFY인데 appointment_required=True + condition 없음"
         })
 
-    # 3. 섹터별 룰 분포 불균형 (CONSTRUCTION이 너무 적은지 확인)
+    # 3. 섹터별 룰 분포 (특수시설 제외)
     res3 = supabase.table("master_building_legal_rules") \
         .select("sector") \
         .eq("is_active", True) \
         .eq("diagnosis_stage", 1) \
+        .not_.in_("sector", ["SPECIAL_FACILITY", "SPECIAL"]) \
         .execute()
     sector_counts: Dict[str, int] = {}
     for r in (res3.data or []):
@@ -248,7 +225,6 @@ def _run_single_test(supabase, tc: Dict[str, Any]) -> Dict[str, Any]:
     inp = dict(tc["input"])
     expect = tc["expect"]
 
-    # 룰 조회
     sector_db = _normalize_sector_db(sector_raw)
     sector_groups = get_sector_groups(sector_db)
     rules_res = (
@@ -261,13 +237,11 @@ def _run_single_test(supabase, tc: Dict[str, Any]) -> Dict[str, Any]:
     )
     all_rules = rules_res.data or []
 
-    # 조건 평가
     facility_ctx = _input_to_facility_context(sector_raw, inp)
     applicable, not_applicable = _evaluate_facility_conditions_db(
         facility_ctx, all_rules, sector_raw
     )
 
-    # 분류 (dedup 포함)
     triggered: Dict[str, list] = {
         "appointment": [], "inspection": [], "notify": [],
         "report": [], "action": [], "not_applicable": [],
@@ -281,13 +255,11 @@ def _run_single_test(supabase, tc: Dict[str, Any]) -> Dict[str, Any]:
         len(triggered["action"])
     )
 
-    # 건설 선임 판정
     sm_required = None
     if sector_raw == "CONSTRUCTION":
         cs = _get_construction_summary(facility_ctx)
         sm_required = cs.get("safety_manager_required")
 
-    # PASS/FAIL 판정
     fail_reasons = []
     if "appoint_min" in expect and appoint_cnt < expect["appoint_min"]:
         fail_reasons.append(f"선임 부족: {appoint_cnt}개 (기대 {expect['appoint_min']}개 이상)")
@@ -333,14 +305,13 @@ def _run_single_test(supabase, tc: Dict[str, Any]) -> Dict[str, Any]:
 def run_engine_qa():
     """
     법령 엔진 품질 자동 진단
-    - 4개 섹터 × 정방향/역방향 테스트 케이스 실행
-    - 전체 커버 시 100점, DB이슈 발생 시 감점
-    - DB 데이터 품질 이슈 자동 탐지
+    - 3개 섹터(건물·제조·건설) × 정방향/역방향 테스트 케이스 실행
+    - 특수시설은 용도별 법령 필요로 현재 제외
+    - 전체 커버 시 100점, DB이슈 감점
     """
     supabase = get_supabase()
     started_at = datetime.now().isoformat()
 
-    # ── 1. 테스트 케이스 실행 ──
     test_results = []
     for tc in QA_TEST_CASES:
         try:
@@ -354,13 +325,11 @@ def run_engine_qa():
             }
         test_results.append(result)
 
-    # ── 2. DB 품질 진단 ──
     try:
         db_issues, sector_counts, total_rules = _run_db_quality_checks(supabase)
     except Exception as e:
         db_issues, sector_counts, total_rules = [{"type": "ERROR", "desc": str(e)}], {}, 0
 
-    # ── 3. 점수 계산 (v1.1.0: 전체 커버 시 100점, DB이슈 감점) ──
     total_cases   = len(test_results)
     passed_cases  = sum(1 for r in test_results if r["passed"])
     forward_total = sum(1 for r in test_results if r["direction"] == "forward")
@@ -371,16 +340,11 @@ def run_engine_qa():
     high_issues   = sum(1 for i in db_issues if i.get("severity") == "HIGH")
     medium_issues = sum(1 for i in db_issues if i.get("severity") == "MEDIUM")
 
-    # 점수 구성 (v1.1.0):
-    # - 전체 커버 시 100점 만점
-    # - DB 이슈 감점: HIGH -5점, MEDIUM -2점
-    # - 최종 = max(0, 테스트점수 - DB이슈감점)
     test_score  = round(passed_cases / total_cases * 100, 1) if total_cases else 0
     db_deduct   = high_issues * 5 + medium_issues * 2
     total_score = max(0, round(test_score - db_deduct, 1))
-    db_score    = max(0, 100 - db_deduct)  # 이슈 없을 때 DB 기준 최대점
+    db_score    = max(0, 100 - db_deduct)
 
-    # 섹터별 결과
     sector_summary: Dict[str, Dict] = {}
     for r in test_results:
         s = r["sector"]
@@ -403,6 +367,7 @@ def run_engine_qa():
         "qa_version":  QA_VERSION,
         "started_at":  started_at,
         "finished_at": datetime.now().isoformat(),
+        "note": "특수시설(SPECIAL_FACILITY)은 용도별 법령 적용 필요 — 나라장터 등록 후 추가 예정",
 
         "score": {
             "total":        total_score,
@@ -418,7 +383,6 @@ def run_engine_qa():
         },
 
         "sector_summary": sector_summary,
-
         "test_results": test_results,
 
         "db_quality": {
