@@ -1,22 +1,22 @@
 """
-법령 판정 엔진 라우터 — v5.4.0
+법령 판정 엔진 라우터 — v5.4.1
 =================================
+v5.4.1 (긴급 수정):
+  - _CONSTRUCTION_AMOUNT_THRESHOLDS: 1_500_000_000 → 15_000_000_000 (건축 150억 올바른 값)
+    1_200_000_000 → 12_000_000_000 (토목 120억 올바른 값)
+  - get_construction_amount_threshold 기본값: 1_500_000_000 → 15_000_000_000
+  - _get_construction_summary: _threshold_eok = int(threshold / 100_000_000) 복원
+    (threshold=15_000_000_000 / 100_000_000 = 150 → 올바른 억원 표기)
 v5.4.0 (WORK_ORDER_20260402_construction_input):
   - DiagnoseStep1Body: CONSTRUCTION 전용 명시적 필드 추가
-    (construction_type, direct_workers, subcon_workers,
-     electrical_capacity_kw, has_tunnel_bridge, has_blasting, has_crane)
   - diagnose_step1 flat_fields: 건설 전용 필드 7개 추가
-  - _input_to_facility_context CONSTRUCTION 분기:
-    has_blasting, has_crane, electrical_capacity_kw 파싱 추가
+  - _input_to_facility_context CONSTRUCTION 분기: has_blasting, has_crane, electrical_capacity_kw 추가
   - diagnose_step2: factory_id 없어도 익명 진단 지원
-    (sector 기본값 CONSTRUCTION, DB 저장/이벤트 생성 조건부)
   - diagnose_step3: inspection_schedules 하드코딩 2년 → DB 실제 점검주기 조회
 v5.3.1 (WORK_ORDER_20260402):
-  - _evaluate_facility_conditions_db(): CONSTRUCTION 산안법 제16조② APPOINT/NOTIFY
-    worker_count >= 50 자동 발동
+  - _evaluate_facility_conditions_db(): CONSTRUCTION 산안법 제16조② APPOINT/NOTIFY worker_count >= 50 자동 발동
   - diagnose_step2(): work_type_codes 직접 입력 파라미터 추가
   - _get_construction_summary(): key_thresholds_met 50명↑/300명↑ 추가
-  - fix: threshold 억원 표시 버그 (/ 100_000_000 → / 10_000_000)
 v5.3.0 (B-CON-001): 건설 전용 필드 연동 + 선임 판정 로직 고도화
 v5.2.0: 건설 법령진단 공정·작업 KCSC 연동
 v5.1.0: 건설 섹터 법령엔진 버그 수정
@@ -33,7 +33,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.4.0"  # v5.4.0: 건설 섹터 입력값 정비
+ENGINE_VERSION = "5.4.1"  # v5.4.1: 건설 임계값 단위 버그 수정
 
 
 # ──────────────────────────────────────────────
@@ -94,11 +94,13 @@ CONSTRUCTION_RELEVANT_LAW_PREFIXES = [
 # v5.3.0: 건설 전용 연산 함수
 # ──────────────────────────────────────────────
 
+# v5.4.1 fix: 올바른 단위 (원 단위)
+# 건축 150억 = 15,000,000,000원 / 토목 120억 = 12,000,000,000원
 _CONSTRUCTION_AMOUNT_THRESHOLDS: Dict[str, int] = {
-    "건축": 1_500_000_000,  # 150억
-    "토목": 1_200_000_000,  # 120억
-    "공통": 1_200_000_000,
-    "기타": 1_200_000_000,
+    "건축": 15_000_000_000,  # 150억
+    "토목": 12_000_000_000,  # 120억
+    "공통": 12_000_000_000,
+    "기타": 12_000_000_000,
 }
 
 
@@ -113,7 +115,7 @@ def get_effective_worker_count(factory: dict) -> int:
 
 def get_construction_amount_threshold(factory: dict) -> int:
     ctype = factory.get("construction_type") or "건축"
-    return _CONSTRUCTION_AMOUNT_THRESHOLDS.get(ctype, 1_500_000_000)
+    return _CONSTRUCTION_AMOUNT_THRESHOLDS.get(ctype, 15_000_000_000)  # v5.4.1 fix
 
 
 def _now_iso() -> str:
@@ -657,7 +659,6 @@ async def apply_legal_engine_from_quote(quote_id: str):
 # Pydantic 모델
 # ──────────────────────────────────────────────
 
-# [수정 2] v5.4.0: CONSTRUCTION 전용 명시적 필드 추가
 class DiagnoseStep1Body(BaseModel):
     factory_id: Optional[str] = Field(None, description="factories.id (없으면 익명 진단)")
     sector: str = Field(..., description="BUILDING | MANUFACTURING | CONSTRUCTION | SPECIAL_FACILITY")
@@ -727,7 +728,6 @@ def _truthy(v: Any) -> bool:
     return s in ("1", "true", "yes", "y", "on")
 
 
-# [수정 4] _input_to_facility_context: CONSTRUCTION 분기에 전기·작업 추가
 def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, Any]:
     sec = sector.strip().upper()
     ctx: Dict[str, Any] = {
@@ -784,11 +784,9 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
         ctx["subcontractor_worker_count"] = subcon
 
         ctx["has_tunnel_bridge"] = 1 if _truthy(inp.get("has_tunnel_bridge")) else 0
-        ctx["has_blasting"]      = 1 if _truthy(inp.get("has_blasting"))      else 0  # v5.4.0
-        ctx["has_crane"]         = 1 if _truthy(inp.get("has_crane"))          else 0  # v5.4.0
+        ctx["has_blasting"]      = 1 if _truthy(inp.get("has_blasting"))      else 0
+        ctx["has_crane"]         = 1 if _truthy(inp.get("has_crane"))          else 0
 
-        # v5.4.0: 건설현장 임시전기 용량 파싱
-        # condition_code=electrical_capacity_kw, value=75 룰 (CONST-007) 트리거용
         elec_kw = float(
             inp.get("electrical_capacity_kw")
             or inp.get("electric_capacity")
@@ -854,10 +852,6 @@ def _db_rule_matches_facility(rule: Dict[str, Any], context: Dict[str, Any]) -> 
 def _evaluate_facility_conditions_db(
     facility_ctx: Dict[str, Any], rules: List[Dict[str, Any]], sector: str = ""
 ) -> tuple:
-    """
-    v5.3.1: CONSTRUCTION 섹터에서 조건 없는 APPOINT/NOTIFY 룰 중
-    산안법 제16조② 해당 시 worker_count >= 50 자동 체크.
-    """
     applicable: List[Dict[str, Any]] = []
     not_applicable: List[Dict[str, Any]] = []
     for rule in rules:
@@ -895,8 +889,9 @@ def _evaluate_facility_conditions_db(
 
 def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
     """
-    v5.3.1: 50명↑/300명↑ key_thresholds_met 추가.
-    fix: threshold 억원 표시 버그 수정 (/ 100_000_000 → / 10_000_000)
+    v5.4.1: threshold 올바른 값(15_000_000_000)에 맞춰 억원 표기 복원
+    _threshold_eok = int(threshold / 100_000_000)
+    → 15_000_000_000 / 100_000_000 = 150 (올바른 150억 표기)
     """
     amount    = float(facility_ctx.get("construction_amount") or 0)
     workers   = int(facility_ctx.get("worker_count") or 0)
@@ -913,8 +908,8 @@ def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
     site_label = SITE_LABEL.get(site_type, site_type)
 
     _cmp_label = "이상" if amount >= threshold else "미만"
-    # fix: / 100_000_000 → / 10_000_000 (1_500_000_000 / 10_000_000 = 150)
-    _threshold_eok = int(threshold / 10_000_000)
+    # v5.4.1: threshold=15_000_000_000 / 100_000_000 = 150 (올바른 억원 표기)
+    _threshold_eok = int(threshold / 100_000_000)
     basis_parts = [f"{site_label} {_threshold_eok}억원 {_cmp_label}"]
     if workers >= 50:
         basis_parts.append(f"근로자(하도급 포함) {workers}명 >= 50명")
@@ -977,7 +972,6 @@ async def diagnose_step1(body: DiagnoseStep1Body):
     all_rules = rules_res.data or []
 
     inp = dict(body.input or {})
-    # [수정 3] v5.4.0: flat_fields에 CONSTRUCTION 전용 필드 추가
     flat_fields = {
         "building_use_type":     body.building_use_type,
         "employee_count":        body.employee_count,
@@ -1483,7 +1477,7 @@ def _create_report_events_from_rules(supabase, factory_id: str, matched_rules: l
 
 
 # ──────────────────────────────────────────────
-# POST /legal-engine/diagnose/step2  v5.4.0
+# POST /legal-engine/diagnose/step2  v5.4.1
 # ──────────────────────────────────────────────
 
 @router.post("/diagnose/step2")
@@ -1491,11 +1485,11 @@ def diagnose_step2(body: dict):
     """
     건설 법령진단 2단계 — 공종별 법령 판정
     v5.4.0: factory_id 없어도 익명 진단 지원 (sector 기본값 CONSTRUCTION)
-    v5.3.1: work_type_codes 직접 입력 파라미터 추가 (BLASTING·CRANE 등 KCSC 미등록 공종 대응)
+    v5.3.1: work_type_codes 직접 입력 파라미터 추가
     v5.2.0: kcsc_process_ids → kcsc_process_master에서 work_type_code 자동 조회
     """
     supabase   = get_supabase()
-    factory_id = body.get('factory_id')  # v5.4.0: factory_id 없어도 허용 (익명 진단)
+    factory_id = body.get('factory_id')
     diagnosis_id             = body.get('diagnosis_id')
     processes                = body.get('processes', [])
     construction_types       = body.get('construction_types', [])
@@ -1511,7 +1505,6 @@ def diagnose_step2(body: dict):
         except Exception:
             pass
 
-    # [수정 6] v5.4.0: sector 기본값 MANUFACTURING → CONSTRUCTION
     sector     = (prev or {}).get('sector', body.get('sector', 'CONSTRUCTION'))
     input_data = dict((prev or {}).get('input_data') or {})
     input_data['processes']          = processes
@@ -1567,7 +1560,6 @@ def diagnose_step2(body: dict):
     rules   = res.data or []
     matched = [r for r in rules if _evaluate_condition(r, input_data)]
 
-    # [수정 6] v5.4.0: factory_id 있을 때만 DB 저장 / 이벤트 생성
     diagnosis = {}
     if factory_id:
         diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 2, input_data, matched)
@@ -1710,7 +1702,6 @@ def diagnose_step3(body: dict):
 
     diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 3, input_data, matched)
 
-    # [수정 7] v5.4.0: 장비별 실제 점검주기 DB 조회 (하드코딩 2년 제거)
     eq_cycle_map: Dict[str, Dict] = {}
     if extra_equipment_codes:
         try:
@@ -1740,7 +1731,6 @@ def diagnose_step3(body: dict):
         eq_code = equip.get('equipment_code', '')
         last_dt = equip.get('last_inspection_date')
 
-        # DB에서 조회한 실제 주기 사용, 없으면 2년 기본값
         cycle_info  = eq_cycle_map.get(eq_code, {'unit': 'year', 'value': 2})
         cycle_unit  = cycle_info['unit']
         cycle_value = cycle_info['value']
