@@ -1,5 +1,8 @@
-# main.py — v5.2.5
-# v5.2.5: legal_engine v5.3.1 배포 (WORK_ORDER_20260402)
+# main.py — v5.4.2
+# v5.4.2: apply/{factory_id} 섹터 필터 누락 수정 (BUILDING 시설에 CONSTRUCTION 룰 혼입 방지)
+# v5.4.1: _CONSTRUCTION_AMOUNT_THRESHOLDS 단위 오류 수정 (15억→150억, 12억→120억)
+# v5.4.0: CONSTRUCTION 입력값 정비 (전용 필드 7개, 임시전기·발파·크레인, 익명 진단, 점검주기 DB 조회)
+# v5.3.1: legal_engine v5.3.1 배포 (WORK_ORDER_20260402)
 # v5.2.3: feature_flags 라우터 추가 (B-FEAT-001 섹터×플랜 Feature Flag)
 # v5.2.2: alert_messages 라우터 추가
 # v5.2.1: public_admin PATCH /status 엔드포인트 확인 완료
@@ -67,6 +70,8 @@ from routers.feature_flags           import router as feature_flags_router    # 
 
 logger = logging.getLogger(__name__)
 
+APP_VERSION = "5.4.2"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -88,7 +93,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="TAI API",
-    version="5.2.5",
+    version=APP_VERSION,
     description="TAI 산업안전 플랫폼 API",
     lifespan=lifespan,
 )
@@ -171,7 +176,7 @@ app.include_router(risk_assessments_router)
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "TAI API", "version": "5.2.5"}
+    return {"status": "ok", "service": "TAI API", "version": APP_VERSION}
 
 
 @app.get("/health")
@@ -186,4 +191,4 @@ def health():
         cron_status = f"{len(scheduler.get_jobs())}개 등록" if scheduler.running else "중지"
     except Exception:
         cron_status = "미초기화"
-    return {"status": "healthy", "server_ip": ip, "version": "5.2.5", "cron": cron_status}
+    return {"status": "healthy", "server_ip": ip, "version": APP_VERSION, "cron": cron_status}
