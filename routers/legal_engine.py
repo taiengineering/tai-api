@@ -1,12 +1,15 @@
 """
-법령 판정 엔진 라우터 — v5.4.1
+법령 판정 엔진 라우터 — v5.4.2
 =================================
+v5.4.2 (긴급 수정):
+  - apply/{factory_id} 섹터 필터 누락 수정
+  - 기존: 전체 822개 룰 무섹터 조회 → BUILDING 시설에 CONSTRUCTION 룰 혼입
+  - 수정: factory.sector 기준 필터링 → 정확한 섹터별 룰만 적용
 v5.4.1 (긴급 수정):
   - _CONSTRUCTION_AMOUNT_THRESHOLDS: 1_500_000_000 → 15_000_000_000 (건축 150억 올바른 값)
     1_200_000_000 → 12_000_000_000 (토목 120억 올바른 값)
   - get_construction_amount_threshold 기본값: 1_500_000_000 → 15_000_000_000
   - _get_construction_summary: _threshold_eok = int(threshold / 100_000_000) 복원
-    (threshold=15_000_000_000 / 100_000_000 = 150 → 올바른 억원 표기)
 v5.4.0 (WORK_ORDER_20260402_construction_input):
   - DiagnoseStep1Body: CONSTRUCTION 전용 명시적 필드 추가
   - diagnose_step1 flat_fields: 건설 전용 필드 7개 추가
@@ -33,7 +36,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.4.1"  # v5.4.1: 건설 임계값 단위 버그 수정
+ENGINE_VERSION = "5.4.2"  # v5.4.2: apply 섹터 필터 추가
 
 
 # ──────────────────────────────────────────────
@@ -533,6 +536,10 @@ async def apply_legal_engine(
     body: Optional[dict] = None,
     mode: str = Query("all"),
 ):
+    """
+    시설 등록 기반 법령 판정 (v5.4.2)
+    v5.4.2: factory.sector 기준으로 룰 필터링 — BUILDING 시설에 CONSTRUCTION 룰 혼입 방지
+    """
     supabase = get_supabase()
     if body and body.get("mode"):
         mode = body["mode"]
@@ -542,7 +549,13 @@ async def apply_legal_engine(
     if not fac_res.data:
         raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다.")
     factory = fac_res.data
-    rules_res = supabase.table("master_building_legal_rules").select("*").eq("is_active", True).execute()
+    # v5.4.2: factory.sector 기준 섹터 필터 추가
+    factory_sector = str(factory.get("sector") or "BUILDING").upper()
+    rules_res = supabase.table("master_building_legal_rules") \
+        .select("*") \
+        .eq("is_active", True) \
+        .eq("sector", factory_sector) \
+        .execute()
     all_rules = rules_res.data or []
     evaluated_at = _now_iso()
     context = _factory_to_context(factory)
@@ -908,7 +921,6 @@ def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
     site_label = SITE_LABEL.get(site_type, site_type)
 
     _cmp_label = "이상" if amount >= threshold else "미만"
-    # v5.4.1: threshold=15_000_000_000 / 100_000_000 = 150 (올바른 억원 표기)
     _threshold_eok = int(threshold / 100_000_000)
     basis_parts = [f"{site_label} {_threshold_eok}억원 {_cmp_label}"]
     if workers >= 50:
@@ -1477,7 +1489,7 @@ def _create_report_events_from_rules(supabase, factory_id: str, matched_rules: l
 
 
 # ──────────────────────────────────────────────
-# POST /legal-engine/diagnose/step2  v5.4.1
+# POST /legal-engine/diagnose/step2  v5.4.2
 # ──────────────────────────────────────────────
 
 @router.post("/diagnose/step2")
