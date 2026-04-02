@@ -1,4 +1,5 @@
-# routers/auth.py — v3.4.0
+# routers/auth.py — v3.4.1
+# v3.4.1: get_current_user() Depends 함수 추가 (alert_messages 등에서 사용)
 # v3.4.0: POST /auth/register — business_number, representative_name 필드 추가
 #          companies INSERT 시 사업자번호/대표자명 포함
 # v3.3.0: /auth/seed-test-accounts 임시 엔드포인트 추가
@@ -36,6 +37,34 @@ def _parse_iso(s: str) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+# ══════════════════════════════════════════════
+# v3.4.1: FastAPI Depends용 인증 의존성 함수
+# 다른 라우터에서 from routers.auth import get_current_user 로 사용
+# ══════════════════════════════════════════════
+
+def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
+    """
+    FastAPI Depends 전용 인증 함수.
+    Authorization: Bearer <token> 헤더에서 사용자 정보 반환.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="토큰이 없습니다")
+    token = authorization.replace("Bearer ", "")
+    supabase = get_supabase()
+    try:
+        ur = supabase.auth.get_user(token)
+        if not ur or not ur.user:
+            raise HTTPException(status_code=401, detail="유효하지 않은 토큰")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="토큰 검증 실패")
+    res = supabase.table("users").select("*").eq("auth_id", str(ur.user.id)).limit(1).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+    return res.data[0]
 
 
 # ── 스키마 ──────────────────────────────────
@@ -86,43 +115,33 @@ class VerifyEmailRequest(BaseModel):
 
 @router.get("/test")
 def test():
-    return {"message": "auth router alive", "version": "3.4"}
+    return {"message": "auth router alive", "version": "3.4.1"}
 
 
 # ── 테스트 계정 시드 (임시) ────────────────────
 
 @router.post("/seed-test-accounts")
 def seed_test_accounts():
-    """
-    테스트 계정 Supabase Auth 등록 + users.auth_id 업데이트.
-    auth_id가 없는 계정만 처리. 비밀번호: tai1234!
-    """
     supabase = get_supabase()
-
     TEST_ACCOUNTS = [
         {"email": "admin@tai.com",                  "password": "tai1234!"},
         {"email": "safety-mgr@korean-safe.co.kr",   "password": "tai1234!"},
         {"email": "worker@tai.com",                 "password": "tai1234!"},
         {"email": "worker@korean-safe.co.kr",       "password": "tai1234!"},
     ]
-
     results = []
     for acct in TEST_ACCOUNTS:
         email    = acct["email"]
         password = acct["password"]
-
         u_res = supabase.table("users").select("id, auth_id").eq("email", email).limit(1).execute()
         if not u_res.data:
             results.append({"email": email, "status": "skipped", "reason": "users 테이블에 없음"})
             continue
-
         user    = u_res.data[0]
         user_id = user["id"]
-
         if user.get("auth_id"):
             results.append({"email": email, "status": "skipped", "reason": "이미 auth_id 있음"})
             continue
-
         try:
             auth_res = supabase.auth.admin.create_user({
                 "email":         email,
@@ -135,7 +154,6 @@ def seed_test_accounts():
                 "updated_at": _now_iso(),
             }).eq("id", user_id).execute()
             results.append({"email": email, "status": "created", "auth_id": auth_id})
-
         except Exception as e:
             err = str(e)
             if "already" in err.lower() or "exists" in err.lower() or "duplicate" in err.lower():
@@ -158,7 +176,6 @@ def seed_test_accounts():
                     results.append({"email": email, "status": "error", "reason": str(e2)})
             else:
                 results.append({"email": email, "status": "error", "reason": err})
-
     return {"status": "success", "data": results}
 
 
@@ -167,11 +184,9 @@ def seed_test_accounts():
 @router.post("/login")
 def login(req: LoginRequest):
     supabase = get_supabase()
-
     identifier = req.login_id or req.email or req.phone
     if not identifier:
         raise HTTPException(status_code=400, detail="login_id (이메일 또는 전화번호)가 필요합니다")
-
     try:
         if is_email(identifier):
             rows = supabase.table("users").select(
@@ -190,16 +205,13 @@ def login(req: LoginRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"사용자 조회 오류: {str(e)}")
-
     user = rows.data[0]
     status = user.get("status_code", "ACTIVE")
     if status in ("SUSPENDED", "DELETED", "INACTIVE"):
         raise HTTPException(status_code=403, detail=f"접근 불가 계정입니다 ({status})")
-
     login_email = user.get("email")
     if not login_email:
         raise HTTPException(status_code=401, detail="이 계정은 이메일이 설정되어 있지 않습니다.")
-
     try:
         auth_res = supabase.auth.sign_in_with_password({
             "email":    login_email,
@@ -207,17 +219,14 @@ def login(req: LoginRequest):
         })
     except Exception:
         raise HTTPException(status_code=401, detail="비밀번호가 올바르지 않습니다")
-
     if not auth_res.user or not auth_res.session:
         raise HTTPException(status_code=401, detail="로그인 실패")
-
     try:
         supabase.table("users").update(
             {"last_login_at": _now_iso()}
         ).eq("id", user["id"]).execute()
     except Exception:
         pass
-
     return {
         "status": "success",
         "data": {
@@ -244,22 +253,14 @@ def login(req: LoginRequest):
 
 @router.post("/register")
 def register(req: RegisterRequest):
-    """
-    v3.4.0: business_number, representative_name 필드 추가.
-    company_name 입력 시 companies 테이블에 사업자번호/대표자명도 함께 저장.
-    """
     supabase = get_supabase()
     phone_normalized = normalize_phone(req.phone)
-
     existing = supabase.table("users").select("id").eq("phone", phone_normalized).limit(1).execute()
     if existing.data:
         raise HTTPException(status_code=400, detail="이미 가입된 휴대폰 번호입니다")
-
-    # 이메일 중복 확인
     email_dup = supabase.table("users").select("id").eq("email", req.email).limit(1).execute()
     if email_dup.data:
         raise HTTPException(status_code=400, detail="이미 가입된 이메일입니다")
-
     try:
         auth_res = supabase.auth.admin.create_user({
             "email":         req.email,
@@ -269,24 +270,18 @@ def register(req: RegisterRequest):
         })
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"계정 생성 실패: {str(e)}")
-
     if not auth_res.user:
         raise HTTPException(status_code=400, detail="회원가입 실패")
-
     auth_id    = str(auth_res.user.id)
     company_id = None
-
-    # 회사명 입력된 경우 companies 테이블에 등록
     if req.company_name:
-        # 사업자번호 중복 선확인
         if req.business_number:
             bn_clean = re.sub(r'[^0-9]', '', req.business_number)
             bn_dup = supabase.table("companies").select("id").eq(
                 "business_number", bn_clean
             ).limit(1).execute()
             if bn_dup.data:
-                company_id = bn_dup.data[0]["id"]  # 이미 등록된 회사 연결
-
+                company_id = bn_dup.data[0]["id"]
         if not company_id:
             try:
                 company_data = {
@@ -298,7 +293,6 @@ def register(req: RegisterRequest):
                     "created_at":        _now_iso(),
                     "updated_at":        _now_iso(),
                 }
-                # v3.4.0: 사업자번호 / 대표자명 / 업종 / 연락처 포함
                 if req.business_number:
                     company_data["business_number"] = re.sub(r'[^0-9]', '', req.business_number)
                 if req.representative_name:
@@ -307,15 +301,12 @@ def register(req: RegisterRequest):
                     company_data["ksic_code"] = req.ksic_code
                 if req.contact_phone:
                     company_data["contact_phone"] = req.contact_phone
-
                 cr = supabase.table("companies").insert(company_data).execute()
                 company_id = cr.data[0]["id"] if cr.data else None
             except Exception:
-                pass  # 회사 등록 실패 시 유저 등록만 진행
-
+                pass
     import string
     user_code = "USR-" + datetime.now().strftime("%Y%m%d") + "-" + ''.join(random.choices(string.digits, k=4))
-
     try:
         ur = supabase.table("users").insert({
             "auth_id":     auth_id,
@@ -337,7 +328,6 @@ def register(req: RegisterRequest):
         }).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"사용자 저장 실패: {str(e)}")
-
     return {
         "status":  "success",
         "message": "회원가입이 완료됐습니다.",
@@ -395,7 +385,7 @@ def reset_password(req: FindPasswordRequest):
     return {"status": "success", "message": f"재설정 링크를 {masked}로 발송했습니다"}
 
 
-# ── 토큰 검증 ────────────────────────────────
+# ── 토큰 검증 (라우터 엔드포인트) ───────────────
 
 @router.post("/verify-token")
 def verify_token(authorization: Optional[str] = Header(None)):
@@ -457,9 +447,7 @@ def update_me(req: UpdateMeRequest, authorization: Optional[str] = Header(None))
     return {"status": "success", "data": result.data[0] if result.data else {}}
 
 
-# ──────────────────────────────────────────────
-# S06 이메일 인증
-# ──────────────────────────────────────────────
+# ── 이메일 인증 ──────────────────────────────
 
 @router.post("/send-verify-email")
 async def send_verify_email(body: SendVerifyEmailRequest):
