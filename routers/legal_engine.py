@@ -1,28 +1,28 @@
 """
-법령 판정 엔진 라우터 — v5.4.2
+법령 판정 엔진 라우터 — v5.5.0
 =================================
+v5.5.0 (sector 구조 개선):
+  - SECTOR_RULE_GROUPS 딕셔너리 도입
+    · COMMON: 전 섹터 공통 법령 (건설산업기본법 등)
+    · CONSTRUCTION_MANUFACTURING: 건설+제조 공통 (근로기준법, 산안기준규칙, 산재보험법 등)
+    · BUILDING_CONSTRUCTION: 건물+건설 공통 (건설기술진흥법 시행규칙 등)
+    · BUILDING_MANUFACTURING: 건물+제조 공통 (산안법 시행령 50명 기준 등)
+  - diagnose_step1: .eq("sector") → .in_("sector", get_sector_groups())
+  - apply/{factory_id}: .eq("sector") → .in_("sector", get_sector_groups())
+  - diagnose_step2: .eq('sector') → .in_('sector', get_sector_groups())
+  - 법령 개정 시 1곳만 수정하면 모든 해당 섹터에 자동 반영
 v5.4.2 (긴급 수정):
   - apply/{factory_id} 섹터 필터 누락 수정
-  - 기존: 전체 822개 룰 무섹터 조회 → BUILDING 시설에 CONSTRUCTION 룰 혼입
-  - 수정: factory.sector 기준 필터링 → 정확한 섹터별 룰만 적용
 v5.4.1 (긴급 수정):
-  - _CONSTRUCTION_AMOUNT_THRESHOLDS: 1_500_000_000 → 15_000_000_000 (건축 150억 올바른 값)
-    1_200_000_000 → 12_000_000_000 (토목 120억 올바른 값)
-  - get_construction_amount_threshold 기본값: 1_500_000_000 → 15_000_000_000
-  - _get_construction_summary: _threshold_eok = int(threshold / 100_000_000) 복원
+  - _CONSTRUCTION_AMOUNT_THRESHOLDS 단위 오류 수정 (15억→150억)
 v5.4.0 (WORK_ORDER_20260402_construction_input):
   - DiagnoseStep1Body: CONSTRUCTION 전용 명시적 필드 추가
-  - diagnose_step1 flat_fields: 건설 전용 필드 7개 추가
-  - _input_to_facility_context CONSTRUCTION 분기: has_blasting, has_crane, electrical_capacity_kw 추가
   - diagnose_step2: factory_id 없어도 익명 진단 지원
   - diagnose_step3: inspection_schedules 하드코딩 2년 → DB 실제 점검주기 조회
 v5.3.1 (WORK_ORDER_20260402):
-  - _evaluate_facility_conditions_db(): CONSTRUCTION 산안법 제16조② APPOINT/NOTIFY worker_count >= 50 자동 발동
-  - diagnose_step2(): work_type_codes 직접 입력 파라미터 추가
-  - _get_construction_summary(): key_thresholds_met 50명↑/300명↑ 추가
+  - _evaluate_facility_conditions_db(): CONSTRUCTION 산안법 제16조② worker_count>=50 자동 발동
 v5.3.0 (B-CON-001): 건설 전용 필드 연동 + 선임 판정 로직 고도화
 v5.2.0: 건설 법령진단 공정·작업 KCSC 연동
-v5.1.0: 건설 섹터 법령엔진 버그 수정
 v4.4.3: create-inspection-sets 타임아웃 근본 해결
 v4.2.0: 3단계 진단 API 추가
 """
@@ -36,7 +36,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.4.2"  # v5.4.2: apply 섹터 필터 추가
+ENGINE_VERSION = "5.5.0"  # v5.5.0: SECTOR_RULE_GROUPS 구조 개선
 
 
 # ──────────────────────────────────────────────
@@ -94,11 +94,63 @@ CONSTRUCTION_RELEVANT_LAW_PREFIXES = [
 
 
 # ──────────────────────────────────────────────
-# v5.3.0: 건설 전용 연산 함수
+# v5.5.0: 섹터별 룰 그룹 매핑
+# ──────────────────────────────────────────────
+# sector 값 정의:
+#   COMMON                   : 전 섹터 공통 (건설산업기본법 등)
+#   CONSTRUCTION_MANUFACTURING: 건설+제조 공통 (근로기준법, 산안기준규칙, 산재보험법 등)
+#   BUILDING_CONSTRUCTION    : 건물+건설 공통 (건설기술진흥법 시행규칙 등)
+#   BUILDING_MANUFACTURING   : 건물+제조 공통 (산안법 시행령 50명 기준 등)
+#   BUILDING                 : 건물 전용
+#   MANUFACTURING            : 제조 전용
+#   CONSTRUCTION             : 건설 전용
+#   SPECIAL_FACILITY         : 특수시설 전용
+#
+# 법령 개정 시 COMMON/공용 룰 1곳만 수정하면 모든 해당 섹터에 자동 반영됨.
+
+SECTOR_RULE_GROUPS: Dict[str, List[str]] = {
+    "BUILDING": [
+        "COMMON",
+        "BUILDING",
+        "BUILDING_MANUFACTURING",
+        "BUILDING_CONSTRUCTION",
+    ],
+    "MANUFACTURING": [
+        "COMMON",
+        "MANUFACTURING",
+        "CONSTRUCTION_MANUFACTURING",
+        "BUILDING_MANUFACTURING",
+    ],
+    "CONSTRUCTION": [
+        "COMMON",
+        "CONSTRUCTION",
+        "CONSTRUCTION_MANUFACTURING",
+        "BUILDING_CONSTRUCTION",
+    ],
+    "SPECIAL_FACILITY": [
+        "COMMON",
+        "SPECIAL_FACILITY",
+        "BUILDING",
+        "BUILDING_MANUFACTURING",
+    ],
+    "SPECIAL": [
+        "COMMON",
+        "SPECIAL_FACILITY",
+        "BUILDING",
+        "BUILDING_MANUFACTURING",
+    ],
+}
+
+
+def get_sector_groups(sector: str) -> List[str]:
+    """섹터 코드 → 해당 섹터에 적용할 sector 값 목록 반환."""
+    return SECTOR_RULE_GROUPS.get(sector.strip().upper(), [sector.strip().upper()])
+
+
+# ──────────────────────────────────────────────
+# v5.4.1: 건설 전용 연산 함수 — threshold 단위 수정
 # ──────────────────────────────────────────────
 
-# v5.4.1 fix: 올바른 단위 (원 단위)
-# 건축 150억 = 15,000,000,000원 / 토목 120억 = 12,000,000,000원
 _CONSTRUCTION_AMOUNT_THRESHOLDS: Dict[str, int] = {
     "건축": 15_000_000_000,  # 150억
     "토목": 12_000_000_000,  # 120억
@@ -118,7 +170,7 @@ def get_effective_worker_count(factory: dict) -> int:
 
 def get_construction_amount_threshold(factory: dict) -> int:
     ctype = factory.get("construction_type") or "건축"
-    return _CONSTRUCTION_AMOUNT_THRESHOLDS.get(ctype, 15_000_000_000)  # v5.4.1 fix
+    return _CONSTRUCTION_AMOUNT_THRESHOLDS.get(ctype, 15_000_000_000)
 
 
 def _now_iso() -> str:
@@ -537,8 +589,9 @@ async def apply_legal_engine(
     mode: str = Query("all"),
 ):
     """
-    시설 등록 기반 법령 판정 (v5.4.2)
-    v5.4.2: factory.sector 기준으로 룰 필터링 — BUILDING 시설에 CONSTRUCTION 룰 혼입 방지
+    시설 등록 기반 법령 판정 (v5.5.0)
+    v5.5.0: get_sector_groups()로 COMMON/공용 룰 자동 포함
+    v5.4.2: factory.sector 기준으로 룰 필터링
     """
     supabase = get_supabase()
     if body and body.get("mode"):
@@ -549,12 +602,13 @@ async def apply_legal_engine(
     if not fac_res.data:
         raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다.")
     factory = fac_res.data
-    # v5.4.2: factory.sector 기준 섹터 필터 추가
+    # v5.5.0: get_sector_groups()로 COMMON/공용 sector 포함 조회
     factory_sector = str(factory.get("sector") or "BUILDING").upper()
+    sector_groups = get_sector_groups(factory_sector)
     rules_res = supabase.table("master_building_legal_rules") \
         .select("*") \
         .eq("is_active", True) \
-        .eq("sector", factory_sector) \
+        .in_("sector", sector_groups) \
         .execute()
     all_rules = rules_res.data or []
     evaluated_at = _now_iso()
@@ -564,6 +618,7 @@ async def apply_legal_engine(
         "factory_condition": 0,
         "registered_equipment": 0,
         "process_recommended": 0,
+        "sector_groups": sector_groups,
     }
     sec = str(factory.get("sector") or factory.get("site_type") or "").upper()
     if sec == "CONSTRUCTION":
@@ -644,6 +699,7 @@ async def apply_legal_engine_from_quote(quote_id: str):
     if not sd:
         raise HTTPException(status_code=400, detail="survey_data가 없습니다.")
     context   = _survey_data_to_context(sd)
+    # quote는 sector 정보가 없어 전체 조회 유지 (survey_data에서 sector 추출 가능한 경우 개선 예정)
     rules_res = supabase.table("master_building_legal_rules").select("*").eq("is_active", True).execute()
     all_rules = rules_res.data or []
     evaluated_at = _now_iso()
@@ -865,13 +921,22 @@ def _db_rule_matches_facility(rule: Dict[str, Any], context: Dict[str, Any]) -> 
 def _evaluate_facility_conditions_db(
     facility_ctx: Dict[str, Any], rules: List[Dict[str, Any]], sector: str = ""
 ) -> tuple:
+    """
+    v5.5.0: COMMON/공용 sector 룰은 조건 없이 applicable 처리.
+            CONSTRUCTION 섹터 특화 로직은 sector='CONSTRUCTION' 룰에만 적용.
+    """
     applicable: List[Dict[str, Any]] = []
     not_applicable: List[Dict[str, Any]] = []
     for rule in rules:
+        rule_sector = (rule.get("sector") or "").upper()
         cc = rule.get("condition_code")
         cv = rule.get("condition_value")
         if not cc or cv is None:
-            if sector == "CONSTRUCTION":
+            # 공용 섹터 룰(COMMON/CONSTRUCTION_MANUFACTURING 등)은 조건 없으면 applicable
+            if rule_sector in ("COMMON", "CONSTRUCTION_MANUFACTURING",
+                               "BUILDING_CONSTRUCTION", "BUILDING_MANUFACTURING"):
+                applicable.append(rule)
+            elif sector == "CONSTRUCTION":
                 law             = rule.get("law_name") or ""
                 obligation_type = (rule.get("obligation_type") or "").upper()
                 article         = rule.get("law_article") or ""
@@ -901,11 +966,6 @@ def _evaluate_facility_conditions_db(
 # ──────────────────────────────────────────────
 
 def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    v5.4.1: threshold 올바른 값(15_000_000_000)에 맞춰 억원 표기 복원
-    _threshold_eok = int(threshold / 100_000_000)
-    → 15_000_000_000 / 100_000_000 = 150 (올바른 150억 표기)
-    """
     amount    = float(facility_ctx.get("construction_amount") or 0)
     workers   = int(facility_ctx.get("worker_count") or 0)
     site_type = str(facility_ctx.get("construction_type") or facility_ctx.get("building_use_code") or "건축")
@@ -972,12 +1032,14 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         if not fac_check.data:
             raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다.")
 
+    # v5.5.0: get_sector_groups()로 COMMON/공용 sector 포함 조회
     sector_db = _normalize_sector_db(sector_raw)
+    sector_groups = get_sector_groups(sector_db)
     rules_res = (
         supabase.table("master_building_legal_rules")
         .select("*")
         .eq("is_active", True)
-        .eq("sector", sector_db)
+        .in_("sector", sector_groups)
         .eq("diagnosis_stage", 1)
         .execute()
     )
@@ -1075,6 +1137,7 @@ async def diagnose_step1(body: DiagnoseStep1Body):
     result_data = {
         "factory_id":                factory_id or None,
         "sector":                    sector_raw,
+        "sector_groups":             sector_groups,
         "step":                      1,
         "engine_version":            ENGINE_VERSION,
         "evaluated_at":              evaluated_at,
@@ -1489,14 +1552,15 @@ def _create_report_events_from_rules(supabase, factory_id: str, matched_rules: l
 
 
 # ──────────────────────────────────────────────
-# POST /legal-engine/diagnose/step2  v5.4.2
+# POST /legal-engine/diagnose/step2  v5.5.0
 # ──────────────────────────────────────────────
 
 @router.post("/diagnose/step2")
 def diagnose_step2(body: dict):
     """
     건설 법령진단 2단계 — 공종별 법령 판정
-    v5.4.0: factory_id 없어도 익명 진단 지원 (sector 기본값 CONSTRUCTION)
+    v5.5.0: get_sector_groups()로 COMMON/공용 룰 포함 조회
+    v5.4.0: factory_id 없어도 익명 진단 지원
     v5.3.1: work_type_codes 직접 입력 파라미터 추가
     v5.2.0: kcsc_process_ids → kcsc_process_master에서 work_type_code 자동 조회
     """
@@ -1558,8 +1622,10 @@ def diagnose_step2(body: dict):
         work_types = list(set(work_types + work_type_codes_direct))
         input_data['work_type_codes_direct'] = work_type_codes_direct
 
-    q = supabase.table('master_building_legal_rules').select('*').eq(
-        'sector', sector
+    # v5.5.0: get_sector_groups()로 COMMON/공용 sector 포함 조회
+    sector_groups = get_sector_groups(sector)
+    q = supabase.table('master_building_legal_rules').select('*').in_(
+        'sector', sector_groups
     ).lte('diagnosis_stage', 2).eq('is_active', True)
 
     if sector == 'CONSTRUCTION' and work_types:
@@ -1596,6 +1662,7 @@ def diagnose_step2(body: dict):
         'stage':                2,
         'engine_version':       ENGINE_VERSION,
         'sector':               sector,
+        'sector_groups':        sector_groups,
         'rule_count':           len(matched),
         'added_rule_count':     len(added),
         'kcsc_process_ids':     kcsc_process_ids,
@@ -1699,8 +1766,10 @@ def diagnose_step3(body: dict):
     input_data['kcsc_work_ids']         = kcsc_work_ids
     input_data['extra_equipment_codes'] = extra_equipment_codes
 
+    # step3는 설비 전용 룰 — sector 필터 (공용 sector는 step1/2에서 처리)
+    sector_groups_s3 = get_sector_groups(sector)
     q = supabase.table('master_building_legal_rules').select('*') \
-        .eq('sector', sector) \
+        .in_('sector', sector_groups_s3) \
         .eq('diagnosis_stage', 3) \
         .eq('is_active', True)
 
@@ -1719,7 +1788,7 @@ def diagnose_step3(body: dict):
         try:
             cycle_res = supabase.table('master_building_legal_rules') \
                 .select('construction_work_type, inspection_cycle_value, inspection_cycle_unit_code') \
-                .eq('sector', sector) \
+                .in_('sector', sector_groups_s3) \
                 .eq('diagnosis_stage', 3) \
                 .eq('obligation_type', 'INSPECT') \
                 .in_('construction_work_type', extra_equipment_codes) \
