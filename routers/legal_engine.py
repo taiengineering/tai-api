@@ -1,22 +1,23 @@
 """
-법령 판정 엔진 라우터 — v5.3.1
+법령 판정 엔진 라우터 — v5.4.0
 =================================
+v5.4.0 (WORK_ORDER_20260402_construction_input):
+  - DiagnoseStep1Body: CONSTRUCTION 전용 명시적 필드 추가
+    (construction_type, direct_workers, subcon_workers,
+     electrical_capacity_kw, has_tunnel_bridge, has_blasting, has_crane)
+  - diagnose_step1 flat_fields: 건설 전용 필드 7개 추가
+  - _input_to_facility_context CONSTRUCTION 분기:
+    has_blasting, has_crane, electrical_capacity_kw 파싱 추가
+  - diagnose_step2: factory_id 없어도 익명 진단 지원
+    (sector 기본값 CONSTRUCTION, DB 저장/이벤트 생성 조건부)
+  - diagnose_step3: inspection_schedules 하드코딩 2년 → DB 실제 점검주기 조회
 v5.3.1 (WORK_ORDER_20260402):
-  - _evaluate_facility_conditions_db(): CONSTRUCTION 산안법 제16조② APPOINT/NOTIFY 룰
-    조건 없이 worker_count >= 50 이면 자동 applicable 처리
+  - _evaluate_facility_conditions_db(): CONSTRUCTION 산안법 제16조② APPOINT/NOTIFY
+    worker_count >= 50 자동 발동
   - diagnose_step2(): work_type_codes 직접 입력 파라미터 추가
-    (BLASTING·CRANE 등 KCSC 미등록 공종 직접 전달 가능)
-  - _get_construction_summary(): key_thresholds_met에
-    "50명↑_안전관리자선임" / "300명↑_안전관리자선임" 항목 추가
-  - fix: _get_construction_summary 억원 표시 버그
-    int(threshold/100_000_000) → int(threshold/10_000_000)
+  - _get_construction_summary(): key_thresholds_met 50명↑/300명↑ 추가
+  - fix: threshold 억원 표시 버그 (/ 100_000_000 → / 10_000_000)
 v5.3.0 (B-CON-001): 건설 전용 필드 연동 + 선임 판정 로직 고도화
-  - get_effective_worker_count(): CONSTRUCTION이면 employee_count + subcontractor_worker_count 합산
-  - get_construction_amount_threshold(): 공사 종류별 선임 기준 금액 동적 반환 (건축 150억/토목 120억)
-  - _factory_to_context(): factories.construction_type, subcontractor_worker_count 적용
-  - _get_construction_summary(): 새 필드로 선임 판정 정확화
-  - apply_legal_engine triggered_by_source에 construction 현황 정보 추가
-  - fix: Python 3.11 f-string 내 백슬래시 오류 2곳 수정
 v5.2.0: 건설 법령진단 공정·작업 KCSC 연동
 v5.1.0: 건설 섹터 법령엔진 버그 수정
 v4.4.3: create-inspection-sets 타임아웃 근본 해결
@@ -32,7 +33,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.3.1"  # v5.3.1: WORK_ORDER_20260402
+ENGINE_VERSION = "5.4.0"  # v5.4.0: 건설 섹터 입력값 정비
 
 
 # ──────────────────────────────────────────────
@@ -102,9 +103,6 @@ _CONSTRUCTION_AMOUNT_THRESHOLDS: Dict[str, int] = {
 
 
 def get_effective_worker_count(factory: dict) -> int:
-    """
-    v5.3.0: CONSTRUCTION 시설이면 employee_count + subcontractor_worker_count 합산 반환.
-    """
     sec = str(factory.get("sector") or factory.get("site_type") or "").upper()
     base = int(factory.get("employee_count") or factory.get("worker_count") or 0)
     if sec == "CONSTRUCTION":
@@ -114,10 +112,6 @@ def get_effective_worker_count(factory: dict) -> int:
 
 
 def get_construction_amount_threshold(factory: dict) -> int:
-    """
-    v5.3.0: 공사 종류별 안전관리자 선임 기준 금액 동적 반환.
-    construction_type: 건축(150억) | 토목/공통/기타(120억)
-    """
     ctype = factory.get("construction_type") or "건축"
     return _CONSTRUCTION_AMOUNT_THRESHOLDS.get(ctype, 1_500_000_000)
 
@@ -208,10 +202,6 @@ def _survey_data_to_context(survey_data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _factory_to_context(factory: dict) -> Dict[str, Any]:
-    """
-    v5.3.0: CONSTRUCTION 시설이면 subcontractor_worker_count 자동 합산,
-    construction_type별 선임 임계값 저장.
-    """
     ctx = {
         "employee_count":           _to_int(factory.get("employee_count")),
         "building_area":            _to_float(factory.get("building_area")),
@@ -541,9 +531,6 @@ async def apply_legal_engine(
     body: Optional[dict] = None,
     mode: str = Query("all"),
 ):
-    """
-    시설 등록 기반 법령 판정 (v5.3.1)
-    """
     supabase = get_supabase()
     if body and body.get("mode"):
         mode = body["mode"]
@@ -670,11 +657,13 @@ async def apply_legal_engine_from_quote(quote_id: str):
 # Pydantic 모델
 # ──────────────────────────────────────────────
 
+# [수정 2] v5.4.0: CONSTRUCTION 전용 명시적 필드 추가
 class DiagnoseStep1Body(BaseModel):
     factory_id: Optional[str] = Field(None, description="factories.id (없으면 익명 진단)")
     sector: str = Field(..., description="BUILDING | MANUFACTURING | CONSTRUCTION | SPECIAL_FACILITY")
     input: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
+    # 공통
     building_use_type: Optional[str] = None
     employee_count: Optional[int] = None
     floor_area: Optional[float] = None
@@ -685,6 +674,15 @@ class DiagnoseStep1Body(BaseModel):
     contract_amount_eok: Optional[float] = None
     ksic_major: Optional[str] = None
     facility_type: Optional[str] = None
+
+    # v5.4.0: CONSTRUCTION 전용 명시적 필드
+    construction_type: Optional[str] = Field(None, description="건축 | 토목 | 공통 | 기타")
+    direct_workers: Optional[int] = Field(None, description="직영 근로자 수")
+    subcon_workers: Optional[int] = Field(None, description="하도급 근로자 수 (산안법 시행령 제16조③ 포함)")
+    electrical_capacity_kw: Optional[float] = Field(None, description="임시전기 설비 용량(kW) — 75kW 이상 시 전기안전관리자 선임")
+    has_tunnel_bridge: Optional[bool] = Field(None, description="터널·교량 공사 포함 여부")
+    has_blasting: Optional[bool] = Field(None, description="발파 작업 포함 여부")
+    has_crane: Optional[bool] = Field(None, description="크레인 사용 여부")
 
 
 ALLOWED_DIAGNOSE_SECTORS = frozenset(
@@ -729,6 +727,7 @@ def _truthy(v: Any) -> bool:
     return s in ("1", "true", "yes", "y", "on")
 
 
+# [수정 4] _input_to_facility_context: CONSTRUCTION 분기에 전기·작업 추가
 def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, Any]:
     sec = sector.strip().upper()
     ctx: Dict[str, Any] = {
@@ -785,6 +784,19 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
         ctx["subcontractor_worker_count"] = subcon
 
         ctx["has_tunnel_bridge"] = 1 if _truthy(inp.get("has_tunnel_bridge")) else 0
+        ctx["has_blasting"]      = 1 if _truthy(inp.get("has_blasting"))      else 0  # v5.4.0
+        ctx["has_crane"]         = 1 if _truthy(inp.get("has_crane"))          else 0  # v5.4.0
+
+        # v5.4.0: 건설현장 임시전기 용량 파싱
+        # condition_code=electrical_capacity_kw, value=75 룰 (CONST-007) 트리거용
+        elec_kw = float(
+            inp.get("electrical_capacity_kw")
+            or inp.get("electric_capacity")
+            or 0
+        )
+        ctx["electric_capacity"]        = elec_kw
+        ctx["electrical_capacity_kw"]   = elec_kw
+        ctx["transformer_capacity_kva"] = elec_kw
 
         fake_factory = {"construction_type": site_type}
         threshold = get_construction_amount_threshold(fake_factory)
@@ -856,7 +868,6 @@ def _evaluate_facility_conditions_db(
                 law             = rule.get("law_name") or ""
                 obligation_type = (rule.get("obligation_type") or "").upper()
                 article         = rule.get("law_article") or ""
-                # v5.3.1: 산안법 제16조② — worker_count 50명↑이면 선임 의무 자동 발동
                 if (obligation_type in ("APPOINT", "NOTIFY")
                         and "산업안전보건법" in law
                         and "16조" in article):
@@ -884,7 +895,7 @@ def _evaluate_facility_conditions_db(
 
 def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
     """
-    v5.3.1: key_thresholds_met에 50명↑/300명↑ 안전관리자선임 항목 추가.
+    v5.3.1: 50명↑/300명↑ key_thresholds_met 추가.
     fix: threshold 억원 표시 버그 수정 (/ 100_000_000 → / 10_000_000)
     """
     amount    = float(facility_ctx.get("construction_amount") or 0)
@@ -902,7 +913,7 @@ def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
     site_label = SITE_LABEL.get(site_type, site_type)
 
     _cmp_label = "이상" if amount >= threshold else "미만"
-    # fix: / 100_000_000 → / 10_000_000 (threshold=1_500_000_000 → 표시값 150)
+    # fix: / 100_000_000 → / 10_000_000 (1_500_000_000 / 10_000_000 = 150)
     _threshold_eok = int(threshold / 10_000_000)
     basis_parts = [f"{site_label} {_threshold_eok}억원 {_cmp_label}"]
     if workers >= 50:
@@ -966,17 +977,26 @@ async def diagnose_step1(body: DiagnoseStep1Body):
     all_rules = rules_res.data or []
 
     inp = dict(body.input or {})
+    # [수정 3] v5.4.0: flat_fields에 CONSTRUCTION 전용 필드 추가
     flat_fields = {
-        "building_use_type": body.building_use_type,
-        "employee_count":    body.employee_count,
-        "floor_area":        body.floor_area,
-        "worker_count":      body.worker_count,
-        "total_floor_area":  body.total_floor_area,
-        "electric_capacity": body.electric_capacity,
-        "floor_count":       body.floor_count,
-        "contract_amount_eok": body.contract_amount_eok,
-        "ksic_major":        body.ksic_major,
-        "facility_type":     body.facility_type,
+        "building_use_type":     body.building_use_type,
+        "employee_count":        body.employee_count,
+        "floor_area":            body.floor_area,
+        "worker_count":          body.worker_count,
+        "total_floor_area":      body.total_floor_area,
+        "electric_capacity":     body.electric_capacity,
+        "floor_count":           body.floor_count,
+        "contract_amount_eok":   body.contract_amount_eok,
+        "ksic_major":            body.ksic_major,
+        "facility_type":         body.facility_type,
+        # v5.4.0: CONSTRUCTION 전용
+        "construction_type":     body.construction_type,
+        "direct_workers":        body.direct_workers,
+        "subcon_workers":        body.subcon_workers,
+        "electrical_capacity_kw": body.electrical_capacity_kw,
+        "has_tunnel_bridge":     body.has_tunnel_bridge,
+        "has_blasting":          body.has_blasting,
+        "has_crane":             body.has_crane,
     }
     for k, v in flat_fields.items():
         if v is not None and k not in inp:
@@ -1463,28 +1483,25 @@ def _create_report_events_from_rules(supabase, factory_id: str, matched_rules: l
 
 
 # ──────────────────────────────────────────────
-# POST /legal-engine/diagnose/step2  v5.3.1
+# POST /legal-engine/diagnose/step2  v5.4.0
 # ──────────────────────────────────────────────
 
 @router.post("/diagnose/step2")
 def diagnose_step2(body: dict):
     """
     건설 법령진단 2단계 — 공종별 법령 판정
+    v5.4.0: factory_id 없어도 익명 진단 지원 (sector 기본값 CONSTRUCTION)
     v5.3.1: work_type_codes 직접 입력 파라미터 추가 (BLASTING·CRANE 등 KCSC 미등록 공종 대응)
     v5.2.0: kcsc_process_ids → kcsc_process_master에서 work_type_code 자동 조회
-    기존 construction_work_types 직접 입력 하위 호환 유지
     """
     supabase   = get_supabase()
-    factory_id = body.get('factory_id')
+    factory_id = body.get('factory_id')  # v5.4.0: factory_id 없어도 허용 (익명 진단)
     diagnosis_id             = body.get('diagnosis_id')
     processes                = body.get('processes', [])
     construction_types       = body.get('construction_types', [])
     work_types: List[str]             = list(body.get('construction_work_types') or [])
     work_type_codes_direct: List[str] = body.get('work_type_codes') or []
     kcsc_process_ids: List[str]       = body.get('kcsc_process_ids') or []
-
-    if not factory_id:
-        raise HTTPException(status_code=400, detail='factory_id 필수')
 
     prev = None
     if diagnosis_id:
@@ -1494,7 +1511,8 @@ def diagnose_step2(body: dict):
         except Exception:
             pass
 
-    sector     = (prev or {}).get('sector', 'MANUFACTURING')
+    # [수정 6] v5.4.0: sector 기본값 MANUFACTURING → CONSTRUCTION
+    sector     = (prev or {}).get('sector', body.get('sector', 'CONSTRUCTION'))
     input_data = dict((prev or {}).get('input_data') or {})
     input_data['processes']          = processes
     input_data['construction_types'] = construction_types
@@ -1549,8 +1567,11 @@ def diagnose_step2(body: dict):
     rules   = res.data or []
     matched = [r for r in rules if _evaluate_condition(r, input_data)]
 
-    diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 2, input_data, matched)
-    _create_report_events_from_rules(supabase, factory_id, matched)
+    # [수정 6] v5.4.0: factory_id 있을 때만 DB 저장 / 이벤트 생성
+    diagnosis = {}
+    if factory_id:
+        diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 2, input_data, matched)
+        _create_report_events_from_rules(supabase, factory_id, matched)
 
     prev_codes = set()
     if prev:
@@ -1596,13 +1617,14 @@ def diagnose_step2(body: dict):
 
 
 # ──────────────────────────────────────────────
-# POST /legal-engine/diagnose/step3  v5.2.0
+# POST /legal-engine/diagnose/step3  v5.4.0
 # ──────────────────────────────────────────────
 
 @router.post("/diagnose/step3")
 def diagnose_step3(body: dict):
     """
     건설 법령진단 3단계 — 설비·작업 법령 판정
+    v5.4.0: inspection_schedules 하드코딩 2년 → DB 실제 점검주기 조회
     v5.2.0: construction_work_ids / kcsc_work_ids → equipment_type_codes 자동 조회
     """
     supabase   = get_supabase()
@@ -1688,16 +1710,56 @@ def diagnose_step3(body: dict):
 
     diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 3, input_data, matched)
 
+    # [수정 7] v5.4.0: 장비별 실제 점검주기 DB 조회 (하드코딩 2년 제거)
+    eq_cycle_map: Dict[str, Dict] = {}
+    if extra_equipment_codes:
+        try:
+            cycle_res = supabase.table('master_building_legal_rules') \
+                .select('construction_work_type, inspection_cycle_value, inspection_cycle_unit_code') \
+                .eq('sector', sector) \
+                .eq('diagnosis_stage', 3) \
+                .eq('obligation_type', 'INSPECT') \
+                .in_('construction_work_type', extra_equipment_codes) \
+                .eq('is_active', True) \
+                .execute()
+            for r in (cycle_res.data or []):
+                ec = r.get('construction_work_type')
+                if ec and ec not in eq_cycle_map:
+                    unit_code = str(r.get('inspection_cycle_unit_code') or '')
+                    if unit_code in CYCLE_CODE_MAP:
+                        cycle_unit, cycle_val = CYCLE_CODE_MAP[unit_code]
+                    else:
+                        cycle_unit, cycle_val = 'year', int(r.get('inspection_cycle_value') or 2)
+                    eq_cycle_map[ec] = {'unit': cycle_unit, 'value': cycle_val}
+        except Exception as e:
+            print(f"[STEP3] 장비 점검주기 조회 실패: {e}")
+
     inspection_schedules = []
     today = date.today()
     for equip in equipments:
         eq_code = equip.get('equipment_code', '')
         last_dt = equip.get('last_inspection_date')
-        cycle_years = 2
+
+        # DB에서 조회한 실제 주기 사용, 없으면 2년 기본값
+        cycle_info  = eq_cycle_map.get(eq_code, {'unit': 'year', 'value': 2})
+        cycle_unit  = cycle_info['unit']
+        cycle_value = cycle_info['value']
+
         if last_dt:
             try:
-                last      = date.fromisoformat(last_dt)
-                next_due  = date(last.year + cycle_years, last.month, last.day)
+                last = date.fromisoformat(last_dt)
+                if cycle_unit == 'year':
+                    next_due = date(last.year + cycle_value, last.month, last.day)
+                elif cycle_unit == 'month':
+                    total_months = last.month + cycle_value
+                    y = last.year + (total_months - 1) // 12
+                    m = (total_months - 1) % 12 + 1
+                    next_due = date(y, m, last.day)
+                elif cycle_unit == 'day':
+                    next_due = last + timedelta(days=cycle_value)
+                else:
+                    next_due = date(last.year + 2, last.month, last.day)
+
                 days_left = (next_due - today).days
                 inspection_schedules.append({
                     'equipment_code':       eq_code,
@@ -1705,7 +1767,8 @@ def diagnose_step3(body: dict):
                     'unit':                 equip.get('unit'),
                     'last_inspection_date': last_dt,
                     'next_due_date':        next_due.isoformat(),
-                    'cycle_years':          cycle_years,
+                    'cycle_unit':           cycle_unit,
+                    'cycle_value':          cycle_value,
                     'days_left':            days_left,
                     'status': 'OVERDUE' if days_left < 0 else ('URGENT' if days_left <= 30 else 'NORMAL'),
                 })
