@@ -4,13 +4,15 @@ AI 법령 룰 생성기 — law_rule_generator.py
 Claude API를 사용하여 법령 조문 텍스트를 분석하고
 master_building_legal_rules 판정 룰 초안을 자동 생성합니다.
 
+모델: claude-haiku-4-5-20251001 (비용 최적화 — Sonnet 대비 ~25배 저렴)
+전략: Haiku로 전체 파싱 → 확신도 낮은 것만 수동 검토
+
 Endpoints:
   GET  /law-rule-generator/laws                     : 수집 법령 목록
   GET  /law-rule-generator/laws/{law_id}/articles   : 법령 조문 목록
   POST /law-rule-generator/parse                    : 조문 → AI 룰 초안 생성
   POST /law-rule-generator/parse-batch              : 법령 전체 일괄 파싱
   GET  /law-rule-generator/drafts                   : 초안 목록
-  GET  /law-rule-generator/drafts/{draft_id}        : 초안 상세
   PATCH /law-rule-generator/drafts/{draft_id}       : 초안 수정
   POST /law-rule-generator/drafts/{draft_id}/approve: 승인 → master 등록
   POST /law-rule-generator/drafts/{draft_id}/reject : 거부
@@ -29,7 +31,11 @@ from db.supabase_client import get_supabase
 router = APIRouter(prefix="/law-rule-generator", tags=["AI룰생성"])
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
+
+# ── 모델 설정 ──────────────────────────────────
+# Haiku: ~$0.0004/조문 → 전체 파싱 약 $7 (1만원)
+# Sonnet: ~$0.011/조문 → 전체 파싱 약 $200 (29만원)
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
 # 판정 룰 생성에 사용할 시스템 프롬프트
 SYSTEM_PROMPT = """당신은 한국 산업안전 법령 전문가입니다.
@@ -101,18 +107,18 @@ USER_PROMPT_TEMPLATE = """다음 법령 조문을 분석하여 판정 룰을 추
 # ──────────────────────────────────────────────
 
 async def call_claude(law_name: str, article_text: str) -> List[Dict]:
-    """Claude API로 조문 분석 → 룰 초안 JSON 반환"""
+    """Claude Haiku API로 조문 분석 → 룰 초안 JSON 반환"""
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다.")
 
     user_prompt = USER_PROMPT_TEMPLATE.format(
         law_name=law_name,
-        article_text=article_text[:3000],  # 토큰 제한
+        article_text=article_text[:3000],
     )
 
     payload = {
         "model":      CLAUDE_MODEL,
-        "max_tokens": 2000,
+        "max_tokens": 1500,
         "system":     SYSTEM_PROMPT,
         "messages":   [{"role": "user", "content": user_prompt}],
     }
@@ -137,9 +143,7 @@ async def call_claude(law_name: str, article_text: str) -> List[Dict]:
         if block.get("type") == "text":
             raw_text += block["text"]
 
-    # JSON 파싱
     raw_text = raw_text.strip()
-    # 마크다운 코드블록 제거
     raw_text = re.sub(r"```json\s*", "", raw_text)
     raw_text = re.sub(r"```\s*", "", raw_text)
     raw_text = raw_text.strip()
@@ -150,7 +154,6 @@ async def call_claude(law_name: str, article_text: str) -> List[Dict]:
             return parsed
         return []
     except json.JSONDecodeError:
-        # JSON 배열만 추출 시도
         match = re.search(r"\[.*\]", raw_text, re.DOTALL)
         if match:
             try:
@@ -170,7 +173,7 @@ async def get_laws(
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100),
 ):
-    """수집된 법령 목록 — 조문 수 및 기존 룰 연결 현황 포함"""
+    """수집된 법령 목록 — 조문 수 및 초안 현황 포함"""
     supabase = get_supabase()
 
     q = supabase.table("law_master").select("id, law_name, law_type_code, ministry_name, is_active", count="exact")
@@ -180,14 +183,10 @@ async def get_laws(
     offset = (page - 1) * page_size
     res = q.range(offset, offset + page_size - 1).order("law_name").execute()
 
-    # 법령별 조문수 조회
     law_ids = [r["id"] for r in (res.data or [])]
     article_counts: Dict[str, int] = {}
-    rule_counts: Dict[str, int] = {}
-    draft_counts: Dict[str, int] = {}
 
     if law_ids:
-        # 조문수 (현재 버전만)
         for lid in law_ids:
             try:
                 ver_res = supabase.table("law_version").select("id").eq("law_id", lid).eq("is_current", True).limit(1).execute()
@@ -201,10 +200,7 @@ async def get_laws(
         "status": "success",
         "data": {
             "items": [
-                {
-                    **r,
-                    "article_count": article_counts.get(r["id"], 0),
-                }
+                {**r, "article_count": article_counts.get(r["id"], 0)}
                 for r in (res.data or [])
             ],
             "total": res.count or 0,
@@ -234,12 +230,11 @@ async def get_articles(law_id: str):
 
     articles = []
     for a in (art_res.data or []):
-        # 기존 초안 여부
         dr = supabase.table("law_rule_drafts").select("id, status").eq("article_id", a["id"]).execute()
         drafts_info = dr.data or []
-        a["draft_count"]    = len(drafts_info)
-        a["has_approved"]   = any(d["status"] == "APPROVED" for d in drafts_info)
-        a["has_pending"]    = any(d["status"] == "PENDING"  for d in drafts_info)
+        a["draft_count"]  = len(drafts_info)
+        a["has_approved"] = any(d["status"] == "APPROVED" for d in drafts_info)
+        a["has_pending"]  = any(d["status"] == "PENDING"  for d in drafts_info)
         articles.append(a)
 
     return {"status": "success", "data": articles}
@@ -251,21 +246,17 @@ async def get_articles(law_id: str):
 
 @router.post("/parse")
 async def parse_article(body: dict):
-    """
-    단일 조문 AI 파싱 → 초안 생성
-    body: { article_id?, law_name, law_article, article_text }
-    """
+    """단일 조문 AI 파싱 → 초안 생성"""
     supabase = get_supabase()
 
-    law_name    = body.get("law_name", "")
-    law_article = body.get("law_article", "")
+    law_name     = body.get("law_name", "")
+    law_article  = body.get("law_article", "")
     article_text = body.get("article_text", "")
-    article_id  = body.get("article_id")
+    article_id   = body.get("article_id")
 
     if not law_name or not article_text:
         raise HTTPException(status_code=400, detail="law_name, article_text 필수")
 
-    # Claude API 호출
     try:
         rules = await call_claude(law_name, article_text)
     except HTTPException:
@@ -276,28 +267,27 @@ async def parse_article(body: dict):
     if not rules:
         return {"status": "success", "data": {"drafts": [], "message": "의무 없는 조문 (빈 배열 반환)"}}
 
-    # DB 저장
     saved = []
     for rule in rules:
         row = {
-            "law_name":         law_name,
-            "law_article":      law_article,
-            "article_id":       article_id,
-            "article_text":     article_text[:2000],
-            "draft_rule_id":    rule.get("draft_rule_id"),
-            "obligation_type":  rule.get("obligation_type"),
-            "sector":           rule.get("sector"),
-            "condition_code":   rule.get("condition_code"),
+            "law_name":           law_name,
+            "law_article":        law_article,
+            "article_id":         article_id,
+            "article_text":       article_text[:2000],
+            "draft_rule_id":      rule.get("draft_rule_id"),
+            "obligation_type":    rule.get("obligation_type"),
+            "sector":             rule.get("sector"),
+            "condition_code":     rule.get("condition_code"),
             "condition_operator": rule.get("condition_operator", "gte"),
-            "condition_value":  str(rule["condition_value"]) if rule.get("condition_value") is not None else None,
+            "condition_value":    str(rule["condition_value"]) if rule.get("condition_value") is not None else None,
             "obligation_summary": rule.get("obligation_summary"),
-            "penalty_summary":  rule.get("penalty_summary"),
+            "penalty_summary":    rule.get("penalty_summary"),
             "appointment_target": rule.get("appointment_target"),
-            "diagnosis_stage":  rule.get("diagnosis_stage", 1),
-            "ai_confidence":    rule.get("ai_confidence"),
-            "ai_reasoning":     rule.get("ai_reasoning"),
-            "ai_flags":         rule.get("ai_flags"),
-            "status":           "PENDING",
+            "diagnosis_stage":    rule.get("diagnosis_stage", 1),
+            "ai_confidence":      rule.get("ai_confidence"),
+            "ai_reasoning":       rule.get("ai_reasoning"),
+            "ai_flags":           rule.get("ai_flags"),
+            "status":             "PENDING",
         }
         ins = supabase.table("law_rule_drafts").insert(row).execute()
         if ins.data:
@@ -305,11 +295,7 @@ async def parse_article(body: dict):
 
     return {
         "status": "success",
-        "data": {
-            "draft_count": len(saved),
-            "drafts":      saved,
-            "message":     f"{len(saved)}개 초안 생성 완료",
-        },
+        "data": {"draft_count": len(saved), "drafts": saved, "message": f"{len(saved)}개 초안 생성 완료"},
     }
 
 
@@ -319,26 +305,21 @@ async def parse_article(body: dict):
 
 @router.post("/parse-batch")
 async def parse_batch(body: dict):
-    """
-    법령 전체 조문 일괄 AI 파싱
-    body: { law_id, skip_existing?: bool, max_articles?: int }
-    """
+    """법령 전체 조문 일괄 AI 파싱 (Haiku — 비용 최적화)"""
     supabase = get_supabase()
 
     law_id        = body.get("law_id")
     skip_existing = body.get("skip_existing", True)
-    max_articles  = min(body.get("max_articles", 30), 50)  # 최대 50개
+    max_articles  = min(body.get("max_articles", 30), 50)
 
     if not law_id:
         raise HTTPException(status_code=400, detail="law_id 필수")
 
-    # 법령 정보
     lm_res = supabase.table("law_master").select("law_name").eq("id", law_id).single().execute()
     if not lm_res.data:
         raise HTTPException(status_code=404, detail="법령 없음")
     law_name = lm_res.data["law_name"]
 
-    # 현재 버전 조문 조회
     ver_res = supabase.table("law_version").select("id").eq("law_id", law_id).eq("is_current", True).limit(1).execute()
     if not ver_res.data:
         raise HTTPException(status_code=404, detail="현재 버전 없음")
@@ -358,7 +339,6 @@ async def parse_batch(body: dict):
                 results["skipped"] += 1
                 continue
 
-            # 기존 초안 있으면 스킵 (skip_existing=True)
             if skip_existing and art.get("id"):
                 exists = supabase.table("law_rule_drafts").select("id").eq("article_id", art["id"]).limit(1).execute()
                 if exists.data:
@@ -366,29 +346,29 @@ async def parse_batch(body: dict):
                     continue
 
             article_label = f"제{art.get('article_no','')}조{art.get('article_title','')}"
-
             rules = await call_claude(law_name, art_text)
+
             if rules:
                 for rule in rules:
                     row = {
-                        "law_name":         law_name,
-                        "law_article":      article_label,
-                        "article_id":       art.get("id"),
-                        "article_text":     art_text[:2000],
-                        "draft_rule_id":    rule.get("draft_rule_id"),
-                        "obligation_type":  rule.get("obligation_type"),
-                        "sector":           rule.get("sector"),
-                        "condition_code":   rule.get("condition_code"),
+                        "law_name":           law_name,
+                        "law_article":        article_label,
+                        "article_id":         art.get("id"),
+                        "article_text":       art_text[:2000],
+                        "draft_rule_id":      rule.get("draft_rule_id"),
+                        "obligation_type":    rule.get("obligation_type"),
+                        "sector":             rule.get("sector"),
+                        "condition_code":     rule.get("condition_code"),
                         "condition_operator": rule.get("condition_operator", "gte"),
-                        "condition_value":  str(rule["condition_value"]) if rule.get("condition_value") is not None else None,
+                        "condition_value":    str(rule["condition_value"]) if rule.get("condition_value") is not None else None,
                         "obligation_summary": rule.get("obligation_summary"),
-                        "penalty_summary":  rule.get("penalty_summary"),
+                        "penalty_summary":    rule.get("penalty_summary"),
                         "appointment_target": rule.get("appointment_target"),
-                        "diagnosis_stage":  rule.get("diagnosis_stage", 1),
-                        "ai_confidence":    rule.get("ai_confidence"),
-                        "ai_reasoning":     rule.get("ai_reasoning"),
-                        "ai_flags":         rule.get("ai_flags"),
-                        "status":           "PENDING",
+                        "diagnosis_stage":    rule.get("diagnosis_stage", 1),
+                        "ai_confidence":      rule.get("ai_confidence"),
+                        "ai_reasoning":       rule.get("ai_reasoning"),
+                        "ai_flags":           rule.get("ai_flags"),
+                        "status":             "PENDING",
                     }
                     supabase.table("law_rule_drafts").insert(row).execute()
                     results["drafts_created"] += 1
@@ -397,11 +377,7 @@ async def parse_batch(body: dict):
         except Exception as e:
             results["errors"].append({"article": str(art.get("article_no")), "error": str(e)[:100]})
 
-    return {
-        "status": "success",
-        "law_name": law_name,
-        "data": results,
-    }
+    return {"status": "success", "law_name": law_name, "data": results}
 
 
 # ──────────────────────────────────────────────
@@ -410,13 +386,13 @@ async def parse_batch(body: dict):
 
 @router.get("/drafts")
 async def get_drafts(
-    status:     str = Query(""),
-    sector:     str = Query(""),
-    ob_type:    str = Query(""),
-    law_name:   str = Query(""),
+    status:         str = Query(""),
+    sector:         str = Query(""),
+    ob_type:        str = Query(""),
+    law_name:       str = Query(""),
     confidence_min: int = Query(0),
-    page:       int = Query(1, ge=1),
-    page_size:  int = Query(20, ge=1, le=100),
+    page:           int = Query(1, ge=1),
+    page_size:      int = Query(20, ge=1, le=100),
 ):
     supabase = get_supabase()
     q = supabase.table("law_rule_drafts").select("*", count="exact")
@@ -469,42 +445,36 @@ async def approve_draft(draft_id: str, body: dict = None):
         raise HTTPException(status_code=404, detail="초안 없음")
     d = dr.data
 
-    # rule_id 결정 (직접 지정 가능)
     rule_id = body.get("rule_id") or d.get("draft_rule_id") or f"AI-{draft_id[:8].upper()}"
-
-    # 중복 체크
     exists = supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute()
     if exists.data:
-        # 이미 있으면 suffix 추가
         rule_id = rule_id + "-V2"
 
-    # master 등록
     master_row = {
-        "rule_id":              rule_id,
-        "sector":               d.get("sector") or "BUILDING",
-        "law_name":             d.get("law_name"),
-        "law_article":          d.get("law_article"),
-        "obligation_type":      d.get("obligation_type"),
-        "obligation_summary":   d.get("obligation_summary"),
-        "penalty_summary":      d.get("penalty_summary"),
+        "rule_id":                 rule_id,
+        "sector":                  d.get("sector") or "BUILDING",
+        "law_name":                d.get("law_name"),
+        "law_article":             d.get("law_article"),
+        "obligation_type":         d.get("obligation_type"),
+        "obligation_summary":      d.get("obligation_summary"),
+        "penalty_summary":         d.get("penalty_summary"),
         "appointment_target_code": d.get("appointment_target"),
-        "condition_code":       d.get("condition_code"),
+        "condition_code":          d.get("condition_code"),
         "condition_operator_code": d.get("condition_operator", "gte"),
-        "condition_value":      d.get("condition_value"),
-        "appointment_required": d.get("obligation_type") == "APPOINT",
-        "inspection_required":  d.get("obligation_type") == "INSPECT",
-        "notify_required":      d.get("obligation_type") == "NOTIFY",
-        "report_required":      d.get("obligation_type") == "REPORT",
-        "action_required":      d.get("obligation_type") == "ACTION",
-        "diagnosis_stage":      d.get("diagnosis_stage", 1),
-        "is_active":            True,
-        "source_api":           "AI_GENERATED",
+        "condition_value":         d.get("condition_value"),
+        "appointment_required":    d.get("obligation_type") == "APPOINT",
+        "inspection_required":     d.get("obligation_type") == "INSPECT",
+        "notify_required":         d.get("obligation_type") == "NOTIFY",
+        "report_required":         d.get("obligation_type") == "REPORT",
+        "action_required":         d.get("obligation_type") == "ACTION",
+        "diagnosis_stage":         d.get("diagnosis_stage", 1),
+        "is_active":               True,
+        "source_api":              "AI_GENERATED",
     }
     ins = supabase.table("master_building_legal_rules").insert(master_row).execute()
     if not ins.data:
         raise HTTPException(status_code=500, detail="master 등록 실패")
 
-    # 초안 상태 업데이트
     supabase.table("law_rule_drafts").update({
         "status":             "APPROVED",
         "registered_rule_id": rule_id,
@@ -512,12 +482,7 @@ async def approve_draft(draft_id: str, body: dict = None):
         "reviewed_at":        datetime.now(timezone.utc).isoformat(),
     }).eq("id", draft_id).execute()
 
-    return {
-        "status":    "success",
-        "rule_id":   rule_id,
-        "message":   f"master_building_legal_rules에 {rule_id}로 등록됐습니다.",
-        "data":      ins.data[0],
-    }
+    return {"status": "success", "rule_id": rule_id, "message": f"master_building_legal_rules에 {rule_id}로 등록됐습니다.", "data": ins.data[0]}
 
 
 # ──────────────────────────────────────────────
@@ -571,6 +536,7 @@ async def get_stats():
     return {
         "status": "success",
         "data": {
+            "model":              CLAUDE_MODEL,
             "total_drafts":       len(rows),
             "status_breakdown":   status_cnt,
             "sector_breakdown":   sector_cnt,
