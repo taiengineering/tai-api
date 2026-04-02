@@ -1,9 +1,7 @@
-# main.py — v5.5.1
+# main.py — v5.5.2
+# v5.5.2: AI 법령 룰 생성기 라우터 추가 (law_rule_generator)
 # v5.5.1: _classify_rules_db obligation_type 절대 우선 분류 수정
 # v5.5.0: SECTOR_RULE_GROUPS 도입 — 공용 법령 구조 개선
-# v5.4.2: apply/{factory_id} 섹터 필터 누락 수정
-# v5.4.1: _CONSTRUCTION_AMOUNT_THRESHOLDS 단위 오류 수정
-# v5.4.0: CONSTRUCTION 입력값 정비
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -15,7 +13,8 @@ from routers.companies               import router as companies_router
 from routers.factories               import router as factories_router
 from routers.system_codes            import router as system_codes_router
 from routers.legal_engine            import router as legal_engine_router
-from routers.engine_qa               import router as engine_qa_router      # QA 자동진단
+from routers.engine_qa               import router as engine_qa_router
+from routers.law_rule_generator      import router as law_rule_generator_router  # v5.5.2
 from routers.ksic_engine             import router as ksic_engine_router
 from routers.factory_process_v3      import router as factory_process_router
 from routers.process_management      import router as process_management_router
@@ -68,7 +67,7 @@ from routers.feature_flags           import router as feature_flags_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.5.1"
+APP_VERSION = "5.5.2"
 
 
 @asynccontextmanager
@@ -124,7 +123,8 @@ app.include_router(companies_router)
 app.include_router(factories_router)
 app.include_router(system_codes_router)
 app.include_router(legal_engine_router)
-app.include_router(engine_qa_router)           # QA 자동진단
+app.include_router(engine_qa_router)
+app.include_router(law_rule_generator_router)   # v5.5.2 AI 룰 생성기
 app.include_router(ksic_engine_router)
 app.include_router(factory_process_router)
 app.include_router(process_management_router)
