@@ -1,6 +1,7 @@
-# routers/law_collector.py v2.0.3
-# fix: raise_for_status() 제거 → HTTP 상태코드 + 응답 본문 직접 반환
-#      HTTPError 발생 원인(4xx/5xx) 브라우저 차단 없이 확인 가능
+# routers/law_collector.py v3.0.0
+# v3.0: data.go.kr API 전환 (Railway IP 제한 없음)
+#       개정 감지 시 law_rule_drafts APPROVED 룰 → NEEDS_REVIEW 자동 표시
+#       /check-updates-v2 엔드포인트 (크론 전용)
 
 import os
 import hashlib
@@ -16,14 +17,18 @@ from db.database import get_supabase
 router = APIRouter(prefix="/law-collector", tags=["법령 수집기"])
 
 # ============================================================
-# 설정
+# 설정 — data.go.kr API (Railway IP 제한 없음)
 # ============================================================
 
+DATA_GOV_KEY  = os.environ.get("DATA_GOV_SERVICE_KEY", "")
+DATA_GOV_BASE = "https://apis.data.go.kr/1170000/law"
+
+# 폴백: law.go.kr (로컬 개발용)
 LAW_API_OC   = os.environ.get("LAW_API_OC", "taieng")
 LAW_API_BASE = "http://www.law.go.kr/DRF"
 
 DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; TAI-LawCollector/2.0)",
+    "User-Agent": "Mozilla/5.0 (compatible; TAI-LawCollector/3.0)",
     "Accept": "application/xml,text/xml,*/*",
 }
 
@@ -33,7 +38,7 @@ def _b64(text: str) -> str:
 
 
 # ============================================================
-# 유틸 함수
+# 유틸
 # ============================================================
 
 def make_hash(text: str) -> str:
@@ -50,9 +55,7 @@ def parse_date(date_str: str) -> Optional[date]:
 
 
 def clean_cdata(text: str) -> str:
-    if not text:
-        return ""
-    return text.strip()
+    return text.strip() if text else ""
 
 
 def _safe_int(val: str) -> Optional[int]:
@@ -64,15 +67,10 @@ def _safe_int(val: str) -> Optional[int]:
 
 def law_type_name_to_code(name: str) -> str:
     mapping = {
-        "법률":     "LAW",
-        "대통령령":  "ENFORCEMENT_DECREE",
-        "총리령":   "ENFORCEMENT_RULE",
-        "부령":     "ENFORCEMENT_RULE",
-        "고시":     "NOTICE",
-        "훈령":     "NOTICE",
-        "예규":     "NOTICE",
-        "기술기준": "STANDARD",
-        "규정":     "STANDARD",
+        "법률": "LAW", "대통령령": "ENFORCEMENT_DECREE",
+        "총리령": "ENFORCEMENT_RULE", "부령": "ENFORCEMENT_RULE",
+        "고시": "NOTICE", "훈령": "NOTICE", "예규": "NOTICE",
+        "기술기준": "STANDARD", "규정": "STANDARD",
     }
     for key, code in mapping.items():
         if key in name:
@@ -81,42 +79,62 @@ def law_type_name_to_code(name: str) -> str:
 
 
 # ============================================================
-# API 호출 함수 — raise_for_status() 제거, 상태코드 직접 반환
+# API 호출 — data.go.kr 우선, 폴백 law.go.kr
 # ============================================================
 
 def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
-    url = f"{LAW_API_BASE}/lawSearch.do"
-    params = {
-        "OC": LAW_API_OC, "target": "law", "type": "XML", "query": query, "display": display, "page": page,
-    }
-    resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=30)
-    resp.encoding = "utf-8"
-    # raise_for_status() 제거 — 상태코드와 본문을 그대로 반환
-    return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok}
+    """data.go.kr 법제처 API로 법령 목록 조회"""
+    if DATA_GOV_KEY:
+        url = f"{DATA_GOV_BASE}/lawSearchList.do"
+        params = {
+            "serviceKey": DATA_GOV_KEY,
+            "query": query,
+            "numOfRows": display,
+            "pageIndex": page,
+            "type": "xml",
+        }
+        resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=30)
+        resp.encoding = "utf-8"
+        return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "data.go.kr"}
+    else:
+        # 폴백: law.go.kr (로컬 개발용)
+        url = f"{LAW_API_BASE}/lawSearch.do"
+        params = {"OC": LAW_API_OC, "target": "law", "type": "XML",
+                  "query": query, "display": display, "page": page}
+        resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=30)
+        resp.encoding = "utf-8"
+        return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "law.go.kr"}
 
 
 def fetch_law_content(mst_no: str) -> dict:
-    url = f"{LAW_API_BASE}/lawService.do"
-    params = {
-        "OC": LAW_API_OC, "target": "law", "MST": mst_no, "type": "XML",
-    }
-    resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=60)
-    resp.encoding = "utf-8"
-    return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok}
+    """data.go.kr 법제처 API로 법령 본문 조회"""
+    if DATA_GOV_KEY:
+        url = f"{DATA_GOV_BASE}/lawService.do"
+        params = {"serviceKey": DATA_GOV_KEY, "MST": mst_no, "type": "xml"}
+        resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=60)
+        resp.encoding = "utf-8"
+        return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "data.go.kr"}
+    else:
+        url = f"{LAW_API_BASE}/lawService.do"
+        params = {"OC": LAW_API_OC, "target": "law", "MST": mst_no, "type": "XML"}
+        resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=60)
+        resp.encoding = "utf-8"
+        return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "law.go.kr"}
 
 
 # ============================================================
-# XML 파싱 함수
+# XML 파싱
 # ============================================================
 
 def parse_law_list_xml(xml_text: str) -> list:
     root = ET.fromstring(xml_text)
     laws = []
-    for law in root.findall("law"):
+    # data.go.kr: <LawSearch><법령> 또는 law.go.kr: <LawSearch><law>
+    for law in root.findall(".//법령") + root.findall(".//law"):
         laws.append({
-            "law_mst_no":        law.findtext("법령일련번호", ""),
+            "law_mst_no":        law.findtext("법령일련번호", "") or law.findtext("법령ID", ""),
             "law_api_id":        law.findtext("법령ID", ""),
-            "law_name":          clean_cdata(law.findtext("법령명한글", "")),
+            "law_name":          clean_cdata(law.findtext("법령명한글", "") or law.findtext("법령명", "")),
             "law_name_short":    clean_cdata(law.findtext("법령약칭명", "")),
             "law_type_name":     law.findtext("법령구분명", ""),
             "ministry_code":     law.findtext("소관부처코드", ""),
@@ -188,7 +206,7 @@ def parse_law_content_xml(xml_text: str) -> dict:
 
 
 # ============================================================
-# DB 저장 함수
+# DB 저장
 # ============================================================
 
 def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> dict:
@@ -300,13 +318,30 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
 
 
 # ============================================================
-# 변경 감지
+# 개정 감지 + AI 룰 NEEDS_REVIEW 표시 (핵심 신규 기능)
 # ============================================================
 
+def mark_rules_needs_review(law_name: str, change_summary: str, supabase) -> int:
+    """
+    개정된 법령의 승인된 AI 룰을 NEEDS_REVIEW 상태로 변경합니다.
+    대표님이 AI 룰 검토 페이지에서 재검토할 수 있도록 표시합니다.
+    """
+    res = supabase.table("law_rule_drafts").update({
+        "status":          "NEEDS_REVIEW",
+        "review_reason":   f"법령 개정 감지: {change_summary}",
+        "law_changed_at":  datetime.now().isoformat(),
+        "updated_at":      datetime.now().isoformat(),
+    }).eq("law_name", law_name).eq("status", "APPROVED").execute()
+
+    count = len(res.data) if res.data else 0
+    return count
+
+
 def check_law_update(law_tracking: dict, supabase) -> dict:
-    law_id = law_tracking["law_id"]
+    """법령 개정 여부 확인 → 변경 시 재수집 + AI 룰 NEEDS_REVIEW 표시"""
+    law_id      = law_tracking["law_id"]
     last_mst_no = law_tracking.get("last_source_mst_no", "")
-    last_hash = law_tracking.get("last_source_hash", "")
+    last_hash   = law_tracking.get("last_source_hash", "")
 
     master = supabase.table("law_master").select("law_name, law_api_id, law_mst_no")\
         .eq("id", law_id).single().execute()
@@ -325,6 +360,7 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
     current = laws[0]
     current_mst_no = current["law_mst_no"]
 
+    # 변경 없음
     if current_mst_no == last_mst_no:
         supabase.table("law_update_tracking").update({
             "last_checked_at": datetime.now().isoformat(), "update_needed": False,
@@ -333,6 +369,7 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
         }).eq("law_id", law_id).execute()
         return {"changed": False, "law_name": law_name}
 
+    # 변경 감지 → 본문 재수집
     content_result = fetch_law_content(current_mst_no)
     if not content_result["ok"]:
         return {"changed": False, "reason": f"본문 API 오류 {content_result['status']}"}
@@ -346,30 +383,44 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
         .eq("law_id", law_id).eq("is_current", True).execute()
     old_version_id = old_version.data[0]["id"] if old_version.data else None
 
-    law_info = {**parsed["info"], "law_mst_no": current_mst_no}
+    law_info = {**parsed["info"], "law_mst_no": current_mst_no,
+                "law_name_short": current.get("law_name_short", ""),
+                "revision_type":  current.get("revision_type", "")}
     save_result = save_law_to_db(law_info, content_result["xml"], parsed["articles"], supabase)
 
+    change_summary = f"{current.get('revision_type', '')} ({current_mst_no})"
+
+    # law_change_log 기록
     supabase.table("law_change_log").insert({
         "law_id": law_id, "old_version_id": old_version_id,
         "new_version_id": save_result["version_id"],
         "change_detected_date": datetime.now().isoformat(),
-        "change_scope_code": "FULL" if current.get("revision_type") == "전부개정" else "PARTIAL",
+        "change_scope_code": "FULL" if "전부" in current.get("revision_type", "") else "PARTIAL",
         "changed_article_count": sum(1 for a in parsed["articles"] if a.get("is_changed")),
-        "change_summary": f"{current.get('revision_type', '')} - {current_mst_no}",
+        "change_summary": change_summary,
         "processed_status_code": "DETECTED", "updated_at": datetime.now().isoformat(),
     }).execute()
+
+    # ★ AI 룰 NEEDS_REVIEW 표시 (핵심)
+    needs_review_count = mark_rules_needs_review(law_name, change_summary, supabase)
 
     supabase.table("law_update_tracking").update({
         "last_checked_at": datetime.now().isoformat(),
         "last_source_mst_no": current_mst_no, "last_source_hash": new_hash,
         "last_collected_version_id": save_result["version_id"],
         "update_needed": False, "job_status_code": "SUCCESS",
-        "job_message": "변경 감지 및 수집 완료", "updated_at": datetime.now().isoformat(),
+        "job_message": f"개정 감지 — AI룰 {needs_review_count}개 재검토 표시",
+        "updated_at": datetime.now().isoformat(),
     }).eq("law_id", law_id).execute()
 
-    return {"changed": True, "law_name": law_name,
-            "old_mst_no": last_mst_no, "new_mst_no": current_mst_no,
-            "articles": save_result["article_count"]}
+    return {
+        "changed":            True,
+        "law_name":           law_name,
+        "old_mst_no":         last_mst_no,
+        "new_mst_no":         current_mst_no,
+        "articles":           save_result["article_count"],
+        "needs_review_rules": needs_review_count,
+    }
 
 
 # ============================================================
@@ -378,30 +429,28 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
 
 @router.get("/debug/{law_name}")
 async def debug_law_api(law_name: str):
-    """
-    [개발용] API 원본 응답 확인.
-    HTTP 상태코드와 XML 본문을 직접 반환 (raise_for_status 없음).
-    xml_b64 필드: atob(xml_b64) 로 디코딩.
-    """
+    """[개발용] data.go.kr API 원본 응답 확인"""
     try:
         result = fetch_law_list(query=law_name, display=5)
         http_status = result["status"]
-        xml_text = result["xml"]
+        xml_text    = result["xml"]
+        source      = result.get("source", "unknown")
 
         try:
             root = ET.fromstring(xml_text)
-            law_count = len(root.findall("law"))
+            laws = root.findall(".//법령") + root.findall(".//law")
+            law_count = len(laws)
             root_tag  = root.tag
             first_law = {}
-            first_el  = root.find("law")
-            if first_el is not None:
-                for child in first_el:
+            if laws:
+                for child in laws[0]:
                     first_law[child.tag] = child.text
         except Exception as pe:
             law_count, root_tag, first_law = -1, "parse_error", {"error": str(pe)}
 
         return {
-            "api_base":    LAW_API_BASE,
+            "api_source":  source,
+            "has_api_key": bool(DATA_GOV_KEY),
             "query":       law_name,
             "http_status": http_status,
             "ok":          result["ok"],
@@ -411,13 +460,7 @@ async def debug_law_api(law_name: str):
             "xml_b64":      _b64(xml_text[:2000]),
         }
     except Exception as e:
-        return {
-            "api_base":  LAW_API_BASE,
-            "query":     law_name,
-            "error_type": type(e).__name__,
-            "error_b64":  _b64(str(e)),
-            "tb_b64":     _b64(traceback.format_exc()[-800:]),
-        }
+        return {"error_type": type(e).__name__, "error_b64": _b64(str(e))}
 
 
 @router.post("/collect/all")
@@ -462,16 +505,15 @@ def _run_collect_all():
 
 @router.post("/collect/{law_name}")
 async def collect_single_law(law_name: str, force: bool = False):
-    """단건 법령 수집. force=true 이면 기존 버전의 조문을 삭제 후 재파싱."""
+    """단건 법령 수집 — data.go.kr 우선 사용"""
     supabase = get_supabase()
     try:
-        list_result = fetch_law_list(query=law_name, display=5)
+        list_result = fetch_law_list(query=law_name, display=10)
 
-        # HTTP 오류 — 상태코드 그대로 반환
         if not list_result["ok"]:
             raise HTTPException(
                 status_code=502,
-                detail=f"법제처 API 오류 HTTP {list_result['status']}: {list_result['xml'][:200]}"
+                detail=f"법제처 API 오류 HTTP {list_result['status']} (source: {list_result.get('source')})"
             )
 
         laws = parse_law_list_xml(list_result["xml"])
@@ -489,21 +531,19 @@ async def collect_single_law(law_name: str, force: bool = False):
 
         parsed = parse_law_content_xml(content_result["xml"])
 
-        # force=true: 기존 버전의 조문이 0개이면 삭제 후 재수집
         if force:
             law_mst_no = matched["law_mst_no"]
-            law_key_check = supabase.table("law_master") \
+            law_key_check = supabase.table("law_master")\
                 .select("id").ilike("law_name", f"%{matched['law_name']}%").limit(1).execute()
             if law_key_check.data:
                 existing_law_id = law_key_check.data[0]["id"]
-                ev = supabase.table("law_version") \
+                ev = supabase.table("law_version")\
                     .select("id").eq("law_id", existing_law_id).eq("law_mst_no", law_mst_no).execute()
                 if ev.data:
                     old_vid = ev.data[0]["id"]
-                    art_cnt = supabase.table("law_article") \
+                    art_cnt = supabase.table("law_article")\
                         .select("id", count="exact").eq("law_version_id", old_vid).execute()
                     if (art_cnt.count or 0) == 0:
-                        # 조문 0개인 버전 삭제 → 재수집 시 new_version으로 처리됨
                         supabase.table("law_content_raw").delete().eq("law_version_id", old_vid).execute()
                         supabase.table("law_version").delete().eq("id", old_vid).execute()
 
@@ -512,7 +552,9 @@ async def collect_single_law(law_name: str, force: bool = False):
                     "revision_type": matched.get("revision_type", "")}
         result = save_law_to_db(law_info, content_result["xml"], parsed["articles"], supabase)
         return {
-            "status": "success", "law_name": matched["law_name"],
+            "status": "success",
+            "api_source": list_result.get("source"),
+            "law_name": matched["law_name"],
             "law_mst_no": matched["law_mst_no"],
             "is_new_version": result["is_new_version"],
             "article_count": result["article_count"],
@@ -520,26 +562,37 @@ async def collect_single_law(law_name: str, force: bool = False):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"ERROR [{type(e).__name__}]: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)[:200]}")
 
 
 @router.post("/check-updates")
 async def check_all_updates(background_tasks: BackgroundTasks):
+    """기존 호환용 — /check-updates-v2 와 동일"""
     background_tasks.add_task(_run_check_updates)
     return {"status": "started", "message": "변경 감지 시작됐습니다."}
+
+
+@router.post("/check-updates-v2")
+async def check_all_updates_v2(background_tasks: BackgroundTasks):
+    """
+    크론 전용 엔드포인트 — 15일 주기 실행
+    변경 감지 시 AI 룰을 NEEDS_REVIEW로 자동 표시합니다.
+    """
+    background_tasks.add_task(_run_check_updates)
+    return {"status": "started", "message": "법령 개정 감지 시작 — 변경 시 AI 룰 재검토 표시됩니다."}
 
 
 def _run_check_updates():
     supabase = get_supabase()
     trackings = supabase.table("law_update_tracking").select("*").execute()
-    results = {"checked": 0, "changed": 0, "errors": []}
+    results = {"checked": 0, "changed": 0, "needs_review_total": 0, "errors": []}
     for tracking in trackings.data:
         try:
             result = check_law_update(tracking, supabase)
             results["checked"] += 1
             if result.get("changed"):
                 results["changed"] += 1
+                results["needs_review_total"] += result.get("needs_review_rules", 0)
         except Exception as e:
             results["errors"].append({"law_id": tracking["law_id"], "error": type(e).__name__})
     return results
@@ -551,17 +604,18 @@ async def get_collection_status():
     total     = supabase.table("law_master").select("id", count="exact").execute()
     collected = supabase.table("law_update_tracking").select("id", count="exact").execute()
     changed   = supabase.table("law_change_log").select("id", count="exact").execute()
-    pending   = supabase.table("law_parsing_result").select("id", count="exact")\
-        .eq("parse_status_code", "PENDING").execute()
-    failed = supabase.table("law_update_tracking")\
+    needs_rev = supabase.table("law_rule_drafts").select("id", count="exact")\
+        .eq("status", "NEEDS_REVIEW").execute()
+    failed    = supabase.table("law_update_tracking")\
         .select("law_id, job_message, updated_at").eq("job_status_code", "FAILED")\
         .order("updated_at", desc=True).limit(10).execute()
     return {
-        "version":             "2.1.0",
-        "api_base":            LAW_API_BASE,
-        "collected_law_count": total.count,
-        "tracked_law_count":   collected.count,
-        "change_log_count":    changed.count,
-        "pending_parse_count": pending.count,
-        "recent_failed":       failed.data,
+        "version":              "3.0.0",
+        "api_source":           "data.go.kr" if DATA_GOV_KEY else "law.go.kr (폴백)",
+        "has_api_key":          bool(DATA_GOV_KEY),
+        "collected_law_count":  total.count,
+        "tracked_law_count":    collected.count,
+        "change_log_count":     changed.count,
+        "needs_review_rules":   needs_rev.count,
+        "recent_failed":        failed.data,
     }
