@@ -1,6 +1,11 @@
 """
-법령 판정 엔진 라우터 — v5.5.1
+법령 판정 엔진 라우터 — v5.5.2
 =================================
+v5.5.2 (중복 제거):
+  - _classify_rules_db: APPOINT 분류 시 appointment_target_code 기준 중복 제거
+    · 같은 선임 대상(에너지관리자, 소방안전관리자 등)이 여러 법령에서 중복 발동되던 문제 해결
+    · 동일 target_code의 첫 번째 룰만 결과에 포함, 나머지는 스킵
+    · 효과: energy_manager(4개→1개), fire_safety_manager(3개→1개) 등 정리
 v5.5.1 (분류 로직 수정):
   - _classify_rules_db: obligation_type 절대 우선 분류
     · 기존: appointment_required=True이면 obligation_type 무관하게 APPOINT로 분류
@@ -19,6 +24,7 @@ v5.3.0: 건설 전용 필드 연동 + 선임 판정 로직 고도화
 v5.2.0: 건설 법령진단 공정·작업 KCSC 연동
 v4.4.3: create-inspection-sets 타임아웃 근본 해결
 v4.2.0: 3단계 진단 API 추가
+
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -30,7 +36,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.5.1"  # v5.5.1: obligation_type 절대 우선 분류
+ENGINE_VERSION = "5.5.2"  # v5.5.2: appointment_target_code 기준 중복 제거
 
 
 # ──────────────────────────────────────────────
@@ -451,17 +457,33 @@ def _classify_one(rule: dict, formatted: dict, triggered: dict):
 
 def _classify_rules_db(rules: List[Dict[str, Any]], triggered: Dict[str, List]) -> None:
     """
-    v5.5.1: obligation_type 절대 우선 분류.
+    v5.5.2: obligation_type 절대 우선 분류 + appointment_target_code 기준 중복 제거.
+
+    [중복 제거 로직]
+    같은 appointment_target_code를 가진 룰이 여러 법령에 걸쳐 존재하는 경우
+    (예: energy_manager가 에너지이용합리화법·에너지이용합리화법 시행령 등 4개 룰)
+    첫 번째 룰만 결과에 포함하고 나머지는 스킵.
+    이로써 진단 결과에서 동일 선임 의무 중복 표시 문제를 해결.
+
+    [분류 우선순위]
     obligation_type이 명시되어 있으면 appointment_required 등 bool 필드보다 반드시 우선 사용.
-    이유: NOTIFY+appointment_required=True 룰(신고 의무)이 APPOINT로 잘못 집계되던 버그 수정.
     obligation_type이 없거나 OTHER인 경우에만 bool 필드를 fallback으로 사용.
     """
+    seen_appoint_targets: set = set()  # ★ v5.5.2: APPOINT 중복 제거용
+
     for rule in rules:
         formatted = format_rule_result_db(rule)
         ot = (rule.get("obligation_type") or "").strip().upper()
 
         if ot == "APPOINT":
+            # ★ appointment_target_code 기준 중복 제거
+            target = (rule.get("appointment_target_code") or rule.get("rule_id") or "").strip()
+            if target and target in seen_appoint_targets:
+                continue  # 이미 같은 선임 의무 있음 → 스킵
+            if target:
+                seen_appoint_targets.add(target)
             triggered["appointment"].append(formatted)
+
         elif ot == "INSPECT":
             triggered["inspection"].append(formatted)
         elif ot == "NOTIFY":
@@ -473,6 +495,11 @@ def _classify_rules_db(rules: List[Dict[str, Any]], triggered: Dict[str, List]) 
         else:
             # obligation_type 없음/OTHER → bool 필드 fallback
             if rule.get("appointment_required"):
+                target = (rule.get("appointment_target_code") or rule.get("rule_id") or "").strip()
+                if target and target in seen_appoint_targets:
+                    continue
+                if target:
+                    seen_appoint_targets.add(target)
                 triggered["appointment"].append(formatted)
             elif rule.get("inspection_required"):
                 triggered["inspection"].append(formatted)
@@ -586,7 +613,7 @@ async def apply_legal_engine(
     body: Optional[dict] = None,
     mode: str = Query("all"),
 ):
-    """시설 등록 기반 법령 판정 (v5.5.1)"""
+    """시설 등록 기반 법령 판정 (v5.5.2)"""
     supabase = get_supabase()
     if body and body.get("mode"):
         mode = body["mode"]
@@ -1537,12 +1564,12 @@ def _create_report_events_from_rules(supabase, factory_id: str, matched_rules: l
 
 
 # ──────────────────────────────────────────────
-# POST /legal-engine/diagnose/step2  v5.5.1
+# POST /legal-engine/diagnose/step2  v5.5.2
 # ──────────────────────────────────────────────
 
 @router.post("/diagnose/step2")
 def diagnose_step2(body: dict):
-    """건설 법령진단 2단계 — 공종별 법령 판정 (v5.5.1)"""
+    """건설 법령진단 2단계 — 공종별 법령 판정 (v5.5.2)"""
     supabase   = get_supabase()
     factory_id = body.get('factory_id')
     diagnosis_id             = body.get('diagnosis_id')
