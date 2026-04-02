@@ -8,6 +8,8 @@ v5.3.1 (WORK_ORDER_20260402):
     (BLASTING·CRANE 등 KCSC 미등록 공종 직접 전달 가능)
   - _get_construction_summary(): key_thresholds_met에
     "50명↑_안전관리자선임" / "300명↑_안전관리자선임" 항목 추가
+  - fix: _get_construction_summary 억원 표시 버그
+    int(threshold/100_000_000) → int(threshold/10_000_000)
 v5.3.0 (B-CON-001): 건설 전용 필드 연동 + 선임 판정 로직 고도화
   - get_effective_worker_count(): CONSTRUCTION이면 employee_count + subcontractor_worker_count 합산
   - get_construction_amount_threshold(): 공사 종류별 선임 기준 금액 동적 반환 (건축 150억/토목 120억)
@@ -883,6 +885,7 @@ def _evaluate_facility_conditions_db(
 def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
     """
     v5.3.1: key_thresholds_met에 50명↑/300명↑ 안전관리자선임 항목 추가.
+    fix: threshold 억원 표시 버그 수정 (/ 100_000_000 → / 10_000_000)
     """
     amount    = float(facility_ctx.get("construction_amount") or 0)
     workers   = int(facility_ctx.get("worker_count") or 0)
@@ -899,7 +902,9 @@ def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
     site_label = SITE_LABEL.get(site_type, site_type)
 
     _cmp_label = "이상" if amount >= threshold else "미만"
-    basis_parts = [f"{site_label} {int(threshold/100_000_000)}억원 {_cmp_label}"]
+    # fix: / 100_000_000 → / 10_000_000 (threshold=1_500_000_000 → 표시값 150)
+    _threshold_eok = int(threshold / 10_000_000)
+    basis_parts = [f"{site_label} {_threshold_eok}억원 {_cmp_label}"]
     if workers >= 50:
         basis_parts.append(f"근로자(하도급 포함) {workers}명 >= 50명")
 
@@ -922,8 +927,8 @@ def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
             "150억_안전관리자선임_건축":     site_type in ("건축", "BUILDING") and amount >= 15_000_000_000,
             "200억_안전보건관리책임자":      amount >= 20_000_000_000,
             "1000억_건설안전판정사":         amount >= 100_000_000_000,
-            "50명이상_안전관리자선임":       workers >= 50,    # v5.3.1 추가
-            "300명이상_안전관리자선임":      workers >= 300,   # v5.3.1 추가
+            "50명이상_안전관리자선임":       workers >= 50,
+            "300명이상_안전관리자선임":      workers >= 300,
         },
     }
 
@@ -1475,7 +1480,7 @@ def diagnose_step2(body: dict):
     processes                = body.get('processes', [])
     construction_types       = body.get('construction_types', [])
     work_types: List[str]             = list(body.get('construction_work_types') or [])
-    work_type_codes_direct: List[str] = body.get('work_type_codes') or []  # v5.3.1: BLASTING·CRANE 직접 입력
+    work_type_codes_direct: List[str] = body.get('work_type_codes') or []
     kcsc_process_ids: List[str]       = body.get('kcsc_process_ids') or []
 
     if not factory_id:
@@ -1526,7 +1531,6 @@ def diagnose_step2(body: dict):
                 'has_legal_rules': p.get('work_type_code') is not None,
             })
 
-    # v5.3.1: BLASTING·CRANE 등 KCSC 미등록 공종 직접 입력 합산
     if work_type_codes_direct:
         work_types = list(set(work_types + work_type_codes_direct))
         input_data['work_type_codes_direct'] = work_type_codes_direct
@@ -1571,7 +1575,7 @@ def diagnose_step2(body: dict):
         'added_rule_count':     len(added),
         'kcsc_process_ids':     kcsc_process_ids,
         'kcsc_process_summary': kcsc_process_summary,
-        'work_type_codes_direct': work_type_codes_direct,  # v5.3.1
+        'work_type_codes_direct': work_type_codes_direct,
         'filtered_by_work_types': work_types if work_types else None,
         'work_type_summary':    work_type_summary if work_types else None,
         'summary': {
