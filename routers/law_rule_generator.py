@@ -7,6 +7,11 @@ Claude Haiku API로 법령 조문 → 판정룰 초안 자동 생성.
   PENDING → (승인) APPROVED → (법령개정) NEEDS_REVIEW → (재검토) APPROVED/REJECTED
   PENDING → (거부) REJECTED
   PENDING → (수정) MODIFIED → (승인) APPROVED
+
+v1.1.0 (2026-04-02):
+  - SPECIAL_FACILITY 섹터 제외 (용도별 법령 적용 필요 → 나라장터 등록 후 추가 예정)
+  - SYSTEM_PROMPT, USER_PROMPT_TEMPLATE에서 SPECIAL_FACILITY 제거
+  - parse_article, parse_batch에서 SPECIAL_FACILITY 초안 저장 차단
 """
 import os
 import json
@@ -22,6 +27,10 @@ router = APIRouter(prefix="/law-rule-generator", tags=["AI룰생성"])
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL      = "claude-haiku-4-5-20251001"
+
+# ★ 파싱에서 제외할 섹터 — SPECIAL_FACILITY는 용도별 법령 체계가 달라 별도 처리 예정
+EXCLUDED_SECTORS = {"SPECIAL_FACILITY", "SPECIAL", "CONSTRUCTION_SPECIAL",
+                    "MANUFACTURING_SPECIAL", "CONSTRUCTION_MANUFACTURING_SPECIAL"}
 
 SYSTEM_PROMPT = """당신은 한국 산업안전 법령 전문가입니다.
 법령 조문 텍스트를 분석하여 안전관리 시스템의 판정 룰을 JSON 형식으로 추출합니다.
@@ -45,17 +54,17 @@ SYSTEM_PROMPT = """당신은 한국 산업안전 법령 전문가입니다.
 - annual_energy_toe: 연간 에너지 사용량 (TOE)
 - construction_amount: 공사금액 (원)
 - floor_count: 건물 층수
-- hospital_beds: 병상 수
-- student_count: 학생 수
 - is_factory_registered: 공장등록 여부 (0/1)
 
-섹터 코드:
-- BUILDING: 건물·시설 (업무용·판매용·의료 등)
+섹터 코드 (반드시 아래 4가지 중 하나만 사용):
+- BUILDING: 건물·시설 (업무용·판매용·숙박·근린생활 등 일반 건축물)
 - MANUFACTURING: 공장·제조업
 - CONSTRUCTION: 건설현장
-- SPECIAL_FACILITY: 특수시설 (학교·병원·사회복지시설 등)
 - COMMON: 전 섹터 공통
 - CONSTRUCTION_MANUFACTURING: 건설+제조 공통
+
+⚠️ 주의: 학교·병원·사회복지시설 등 특수시설 전용 법령은 건너뜁니다.
+  해당 법령(의료법·학교안전법·사회복지사업법 등)의 조문에서 의무가 발견되면 []을 반환하세요.
 
 응답은 반드시 순수 JSON 배열만 출력하세요. 마크다운이나 설명 없이 JSON만 출력합니다.
 의무가 없는 조문(정의, 목적, 용어해설 등)은 빈 배열 []을 반환하세요."""
@@ -70,9 +79,9 @@ USER_PROMPT_TEMPLATE = """다음 법령 조문을 분석하여 판정 룰을 추
 
 [
   {{
-    "draft_rule_id": "법령약어-번호-섹터약어 (예: FIREACT-001-MFG)",
+    "draft_rule_id": "법령약어-번호-섹터약어 (예: FIREACT-001-BLD)",
     "obligation_type": "APPOINT|INSPECT|NOTIFY|REPORT|ACTION",
-    "sector": "BUILDING|MANUFACTURING|CONSTRUCTION|SPECIAL_FACILITY|COMMON|CONSTRUCTION_MANUFACTURING",
+    "sector": "BUILDING|MANUFACTURING|CONSTRUCTION|COMMON|CONSTRUCTION_MANUFACTURING",
     "condition_code": "위 목록에서 선택 또는 null",
     "condition_operator": "gte|lte|gt|lt|eq",
     "condition_value": "숫자 문자열 또는 null",
@@ -213,6 +222,11 @@ async def parse_article(body: dict):
 
     saved = []
     for rule in rules:
+        # ★ 특수시설 섹터 초안 저장 차단
+        rule_sector = (rule.get("sector") or "").strip().upper()
+        if rule_sector in EXCLUDED_SECTORS:
+            continue
+
         row = {
             "law_name": law_name, "law_article": law_article,
             "article_id": article_id, "article_text": article_text[:2000],
@@ -267,7 +281,8 @@ async def parse_batch(body: dict):
      .order("article_no_sort").limit(max_articles).execute()
 
     articles = arts.data or []
-    results  = {"total": len(articles), "processed": 0, "skipped": 0, "drafts_created": 0, "errors": []}
+    results  = {"total": len(articles), "processed": 0, "skipped": 0,
+                "drafts_created": 0, "special_excluded": 0, "errors": []}
 
     for art in articles:
         try:
@@ -286,6 +301,12 @@ async def parse_batch(body: dict):
             rules = await call_claude(law_name, art_text)
 
             for rule in rules:
+                # ★ 특수시설 섹터 초안 저장 차단
+                rule_sector = (rule.get("sector") or "").strip().upper()
+                if rule_sector in EXCLUDED_SECTORS:
+                    results["special_excluded"] += 1
+                    continue
+
                 supabase.table("law_rule_drafts").insert({
                     "law_name": law_name, "law_article": label,
                     "article_id": art.get("id"), "article_text": art_text[:2000],
@@ -332,6 +353,8 @@ async def get_drafts(
     if ob_type:        q = q.eq("obligation_type", ob_type)
     if law_name:       q = q.ilike("law_name", f"%{law_name}%")
     if confidence_min: q = q.gte("ai_confidence", confidence_min)
+    # ★ 특수시설 섹터 초안 항상 제외
+    q = q.not_.in_("sector", list(EXCLUDED_SECTORS))
     offset = (page - 1) * page_size
     res = q.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
     return {"status": "success", "data": {
@@ -380,6 +403,10 @@ async def approve_draft(draft_id: str, body: dict = None):
     if not dr.data:
         raise HTTPException(status_code=404, detail="초안 없음")
     d = dr.data
+
+    # ★ 특수시설 섹터 초안은 master 등록 차단
+    if (d.get("sector") or "").upper() in EXCLUDED_SECTORS:
+        raise HTTPException(status_code=400, detail="특수시설 섹터는 현재 master 등록 불가 (용도별 법령 체계 구축 후 추가 예정)")
 
     rule_id = body.get("rule_id") or d.get("draft_rule_id") or f"AI-{draft_id[:8].upper()}"
     if supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute().data:
@@ -453,11 +480,13 @@ async def get_stats():
         s  = r.get("status")  or "PENDING"
         sc = r.get("sector")  or "UNKNOWN"
         ot = r.get("obligation_type") or "UNKNOWN"
-        status_cnt[s]  = status_cnt.get(s, 0)  + 1
-        sector_cnt[sc] = sector_cnt.get(sc, 0) + 1
-        obtype_cnt[ot] = obtype_cnt.get(ot, 0) + 1
-        if r.get("ai_confidence") is not None:
-            conf_sum += r["ai_confidence"]; conf_cnt += 1
+        # 특수시설 제외하고 집계
+        if sc.upper() not in EXCLUDED_SECTORS:
+            status_cnt[s]  = status_cnt.get(s, 0)  + 1
+            sector_cnt[sc] = sector_cnt.get(sc, 0) + 1
+            obtype_cnt[ot] = obtype_cnt.get(ot, 0) + 1
+            if r.get("ai_confidence") is not None:
+                conf_sum += r["ai_confidence"]; conf_cnt += 1
 
     master_res = supabase.table("master_building_legal_rules").select(
         "source_api", count="exact").eq("source_api", "AI_GENERATED").execute()
