@@ -14,7 +14,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["엔진QA"])
 
-QA_VERSION = "1.0.0"
+QA_VERSION = "1.1.0"  # v1.1.0: 전체 커버 시 100점, DB이슈 감점 방식
 
 # ══════════════════════════════════════════════
 # 테스트 케이스 정의
@@ -267,7 +267,7 @@ def _run_single_test(supabase, tc: Dict[str, Any]) -> Dict[str, Any]:
         facility_ctx, all_rules, sector_raw
     )
 
-    # 분류
+    # 분류 (dedup 포함)
     triggered: Dict[str, list] = {
         "appointment": [], "inspection": [], "notify": [],
         "report": [], "action": [], "not_applicable": [],
@@ -334,7 +334,7 @@ def run_engine_qa():
     """
     법령 엔진 품질 자동 진단
     - 4개 섹터 × 정방향/역방향 테스트 케이스 실행
-    - 조건 정확도, 선임 방향성 점수 산출
+    - 전체 커버 시 100점, DB이슈 발생 시 감점
     - DB 데이터 품질 이슈 자동 탐지
     """
     supabase = get_supabase()
@@ -360,7 +360,7 @@ def run_engine_qa():
     except Exception as e:
         db_issues, sector_counts, total_rules = [{"type": "ERROR", "desc": str(e)}], {}, 0
 
-    # ── 3. 점수 계산 ──
+    # ── 3. 점수 계산 (v1.1.0: 전체 커버 시 100점, DB이슈 감점) ──
     total_cases   = len(test_results)
     passed_cases  = sum(1 for r in test_results if r["passed"])
     forward_total = sum(1 for r in test_results if r["direction"] == "forward")
@@ -371,12 +371,14 @@ def run_engine_qa():
     high_issues   = sum(1 for i in db_issues if i.get("severity") == "HIGH")
     medium_issues = sum(1 for i in db_issues if i.get("severity") == "MEDIUM")
 
-    # 점수 구성:
-    # - 테스트 통과율: 70점 만점
-    # - DB 품질 (이슈 차감): 30점 만점
-    test_score = round(passed_cases / total_cases * 70, 1) if total_cases else 0
-    db_score   = max(0, 30 - high_issues * 5 - medium_issues * 2)
-    total_score = round(test_score + db_score, 1)
+    # 점수 구성 (v1.1.0):
+    # - 전체 커버 시 100점 만점
+    # - DB 이슈 감점: HIGH -5점, MEDIUM -2점
+    # - 최종 = max(0, 테스트점수 - DB이슈감점)
+    test_score  = round(passed_cases / total_cases * 100, 1) if total_cases else 0
+    db_deduct   = high_issues * 5 + medium_issues * 2
+    total_score = max(0, round(test_score - db_deduct, 1))
+    db_score    = max(0, 100 - db_deduct)  # 이슈 없을 때 DB 기준 최대점
 
     # 섹터별 결과
     sector_summary: Dict[str, Dict] = {}
@@ -406,6 +408,7 @@ def run_engine_qa():
             "total":        total_score,
             "grade":        "A" if total_score >= 90 else ("B" if total_score >= 75 else ("C" if total_score >= 60 else "D")),
             "test_score":   test_score,
+            "db_deduct":    db_deduct,
             "db_score":     db_score,
             "passed":       passed_cases,
             "total_cases":  total_cases,
