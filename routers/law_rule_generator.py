@@ -339,6 +339,18 @@ async def get_drafts(
         "page": page, "page_size": page_size}}
 
 
+# ── GET /drafts/{draft_id} — 단건 조회 (수정 모달용) ───────
+
+@router.get("/drafts/{draft_id}")
+async def get_draft(draft_id: str):
+    """단건 초안 조회 — 수정 모달에서 사용"""
+    supabase = get_supabase()
+    res = supabase.table("law_rule_drafts").select("*").eq("id", draft_id).single().execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="초안 없음")
+    return {"status": "success", "data": res.data}
+
+
 # ── PATCH /drafts/{draft_id} ───────────────────────────────
 
 @router.patch("/drafts/{draft_id}")
@@ -453,10 +465,10 @@ async def get_stats():
     return {"status": "success", "data": {
         "model":              CLAUDE_MODEL,
         "total_drafts":       len(rows),
-        "status_breakdown":   status_cnt,   # PENDING / APPROVED / REJECTED / MODIFIED / NEEDS_REVIEW
+        "status_breakdown":   status_cnt,
         "sector_breakdown":   sector_cnt,
         "obtype_breakdown":   obtype_cnt,
         "avg_confidence":     round(conf_sum / conf_cnt, 1) if conf_cnt else 0,
         "approved_in_master": master_res.count or 0,
-        "needs_review":       status_cnt.get("NEEDS_REVIEW", 0),  # 법령개정으로 재검토 필요
+        "needs_review":       status_cnt.get("NEEDS_REVIEW", 0),
     }}
