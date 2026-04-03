@@ -2,15 +2,9 @@
 일정관리 API — inspection_sets 기준일·주기 관리
 prefix: /inspection-schedule
 
-GET   /inspection-schedule/rules                       INSPECT 마스터 룰 목록
-GET   /inspection-schedule/rules/{rule_id}/factories   룰별 시설 생성현황
-POST  /inspection-schedule/generate                    룰+시설 → inspection_sets 일괄생성
-GET   /inspection-schedule/sets/summary-by-rule        룰 커버리지 요약
-GET   /inspection-schedule/summary                     전체 요약 카드
-GET   /inspection-schedule/sets                        목록
-GET   /inspection-schedule/sets/{id}                   단건
-PATCH /inspection-schedule/sets/{id}                   수정
-POST  /inspection-schedule/sets/{id}/confirm-anchor    기준일 확정→활성화
+v1.1 (2026-04-03):
+  anchor_type (FIXED_ANNUAL/HISTORICAL/EVENT) 필드·필터 추가
+  /sets API에 anchor_type 포함, confirm-anchor에 anchor_type PATCH 지원
 """
 from __future__ import annotations
 
@@ -50,7 +44,7 @@ def _serialize_patch_row(d: dict) -> dict:
     return out
 
 
-# ── Pydantic 스키마 ────────────────────────────────────────────────────────────
+# ── Pydantic 스키마 ──────────────────────────────────────────────────────────
 
 class InspectionSetPatch(BaseModel):
     cycle_unit: Optional[str] = None
@@ -66,10 +60,12 @@ class InspectionSetPatch(BaseModel):
     custom_cycle_value: Optional[int] = None
     custom_cycle_unit: Optional[str] = None
     custom_description: Optional[str] = None
+    anchor_type: Optional[str] = None           # FIXED_ANNUAL / HISTORICAL / EVENT
 
 
 class ConfirmAnchorBody(BaseModel):
     anchor_date: date
+    anchor_type: Optional[str] = None           # 확정 시 유형도 함께 저장 가능
 
 
 class GenerateScheduleSetsBody(BaseModel):
@@ -77,7 +73,13 @@ class GenerateScheduleSetsBody(BaseModel):
     factory_ids: List[str] = Field(default_factory=list)
 
 
-# ── 헬퍼 ────────────────────────────────────────────────────────────────────
+# ── 헬퍼 ─────────────────────────────────────────────────────────────────────
+
+ANCHOR_TYPE_LABEL = {
+    "FIXED_ANNUAL": "🗓 년초고정",
+    "HISTORICAL":   "📋 이력일",
+    "EVENT":        "⚡ 이벤트",
+}
 
 def _cycle_label_from_master(m: dict) -> str:
     code = str(m.get("inspection_cycle_unit_code") or "")
@@ -122,7 +124,6 @@ def _build_insert_row(m: dict, company_id: Optional[str], factory_id: str) -> di
 
 
 def _enrich_factory_names(supabase, rows: list) -> None:
-    """factories.name 컬럼 JOIN 보강 (factory_name 컬럼 없음)"""
     ids = list({str(r["factory_id"]) for r in rows if r.get("factory_id")})
     if not ids:
         for r in rows:
@@ -134,13 +135,10 @@ def _enrich_factory_names(supabase, rows: list) -> None:
         r["factory_name"] = mp.get(str(r.get("factory_id")), "-")
 
 
-# ── GET /inspection-schedule/rules ────────────────────────────────────────────
+# ── GET /inspection-schedule/rules ───────────────────────────────────────────
 
 @router.get("/rules")
-def list_inspect_master_rules(
-    sector: Optional[str] = Query(None),
-):
-    """obligation_type=INSPECT 마스터 룰 목록 (탭1 좌측)"""
+def list_inspect_master_rules(sector: Optional[str] = Query(None)):
     supabase = get_supabase()
     res = (
         supabase.table("master_building_legal_rules")
@@ -159,7 +157,6 @@ def list_inspect_master_rules(
         groups = set(get_sector_groups(sector.strip().upper()))
         rows = [r for r in rows if (r.get("sector") or "") in groups]
 
-    # inspection_sets에 이미 생성된 rule_id 집계
     sets_res = (
         supabase.table("inspection_sets")
         .select("legal_rule_id, status_code")
@@ -167,7 +164,7 @@ def list_inspect_master_rules(
         .eq("source", "LEGAL_ENGINE")
         .execute()
     )
-    converted: dict = {}  # rule_id -> [status_codes]
+    converted: dict = {}
     for s in (sets_res.data or []):
         rid = s.get("legal_rule_id") or ""
         converted.setdefault(rid, []).append(s.get("status_code") or "")
@@ -188,97 +185,63 @@ def list_inspect_master_rules(
     return {"status": "success", "data": {"items": items, "total": len(items)}}
 
 
-# ── GET /inspection-schedule/rules/{rule_id}/factories ────────────────────────
+# ── GET /inspection-schedule/rules/{rule_id}/factories ───────────────────────
 
 @router.get("/rules/{rule_id}/factories")
-def list_factories_for_rule(
-    rule_id: str,
-    site_type: Optional[str] = Query(None),
-):
-    """룰별 시설별 inspection_sets 생성 현황 (탭1 우측 테이블)"""
+def list_factories_for_rule(rule_id: str, site_type: Optional[str] = Query(None)):
     supabase = get_supabase()
-
-    # 마스터 룰 확인
     mres = (
         supabase.table("master_building_legal_rules")
         .select("rule_id, law_name, law_article, sector, obligation_summary, "
                 "inspection_cycle_value, inspection_cycle_unit_code, condition_code, condition_value")
-        .eq("rule_id", rule_id)
-        .eq("is_active", True)
-        .limit(1)
-        .execute()
+        .eq("rule_id", rule_id).eq("is_active", True).limit(1).execute()
     )
     if not mres.data:
         raise HTTPException(status_code=404, detail="마스터 룰을 찾을 수 없습니다.")
     master = mres.data[0]
 
-    # 시설 목록 (factories.name 컬럼 사용)
     fq = supabase.table("factories").select("id, name, sector, company_id")
     if site_type:
         fq = fq.eq("sector", site_type)
-    fres = fq.order("name").limit(8000).execute()
-    facs = fres.data or []
+    facs = fq.order("name").limit(8000).execute().data or []
 
-    # 이미 생성된 inspection_sets
     sets_res = (
         supabase.table("inspection_sets")
         .select("id, factory_id, status_code, anchor_confirmed, next_planned_date")
-        .eq("legal_rule_id", rule_id)
-        .eq("is_active", True)
-        .execute()
+        .eq("legal_rule_id", rule_id).eq("is_active", True).execute()
     )
     by_fac = {str(s["factory_id"]): s for s in (sets_res.data or [])}
 
     STATUS_LABEL = {
-        "PENDING_ANCHOR": "기준일 필요",
-        "ACTIVE": "활성",
-        "UPCOMING": "일정예정",
-        "OVERDUE": "연체",
-        "INACTIVE": "비활성",
+        "PENDING_ANCHOR": "기준일 필요", "ACTIVE": "활성",
+        "UPCOMING": "일정예정", "OVERDUE": "연체", "INACTIVE": "비활성",
     }
     items = []
     for f in facs:
         fid = str(f["id"])
         row = by_fac.get(fid)
         if not row:
-            items.append({
-                "factory_id": fid,
-                "factory_name": f.get("name") or "-",
-                "sector": f.get("sector") or "-",
-                "inspection_set_id": None,
-                "status_code": "none",
-                "status_label": "미생성",
-                "next_planned_date": None,
-            })
+            items.append({"factory_id": fid, "factory_name": f.get("name") or "-",
+                          "sector": f.get("sector") or "-", "inspection_set_id": None,
+                          "status_code": "none", "status_label": "미생성", "next_planned_date": None})
         else:
             st = row.get("status_code") or ""
-            items.append({
-                "factory_id": fid,
-                "factory_name": f.get("name") or "-",
-                "sector": f.get("sector") or "-",
-                "inspection_set_id": row.get("id"),
-                "status_code": st,
-                "status_label": STATUS_LABEL.get(st, st),
-                "next_planned_date": row.get("next_planned_date"),
-            })
+            items.append({"factory_id": fid, "factory_name": f.get("name") or "-",
+                          "sector": f.get("sector") or "-", "inspection_set_id": row.get("id"),
+                          "status_code": st, "status_label": STATUS_LABEL.get(st, st),
+                          "next_planned_date": row.get("next_planned_date")})
 
-    return {
-        "status": "success",
-        "data": {
-            "rule": {**master, "cycle_label": _cycle_label_from_master(master)},
-            "items": items,
-            "total": len(items),
-            "generated": len(by_fac),
-            "not_generated": len(facs) - len(by_fac),
-        },
-    }
+    return {"status": "success", "data": {
+        "rule": {**master, "cycle_label": _cycle_label_from_master(master)},
+        "items": items, "total": len(items),
+        "generated": len(by_fac), "not_generated": len(facs) - len(by_fac),
+    }}
 
 
-# ── POST /inspection-schedule/generate ────────────────────────────────────────
+# ── POST /inspection-schedule/generate ───────────────────────────────────────
 
 @router.post("/generate")
 def generate_inspection_sets(body: GenerateScheduleSetsBody):
-    """선택 룰 + 시설 → LEGAL_ENGINE inspection_sets 일괄 생성 (미존재 시만)"""
     supabase = get_supabase()
     rule_id = (body.rule_id or "").strip()
     if not rule_id:
@@ -288,26 +251,18 @@ def generate_inspection_sets(body: GenerateScheduleSetsBody):
         raise HTTPException(status_code=422, detail="factory_ids 필수")
 
     mres = (
-        supabase.table("master_building_legal_rules")
-        .select("*")
-        .eq("rule_id", rule_id)
-        .eq("is_active", True)
-        .eq("obligation_type", "INSPECT")
-        .limit(1)
-        .execute()
+        supabase.table("master_building_legal_rules").select("*")
+        .eq("rule_id", rule_id).eq("is_active", True).eq("obligation_type", "INSPECT")
+        .limit(1).execute()
     )
     if not mres.data:
         raise HTTPException(status_code=404, detail="INSPECT 마스터 룰 없음")
     master = mres.data[0]
 
     existing = (
-        supabase.table("inspection_sets")
-        .select("factory_id")
-        .eq("legal_rule_id", rule_id)
-        .eq("source", "LEGAL_ENGINE")
-        .eq("is_active", True)
-        .in_("factory_id", ids)
-        .execute()
+        supabase.table("inspection_sets").select("factory_id")
+        .eq("legal_rule_id", rule_id).eq("source", "LEGAL_ENGINE").eq("is_active", True)
+        .in_("factory_id", ids).execute()
     )
     have = {str(r["factory_id"]) for r in (existing.data or [])}
 
@@ -317,13 +272,7 @@ def generate_inspection_sets(body: GenerateScheduleSetsBody):
         if fid in have:
             skipped += 1
             continue
-        fac = (
-            supabase.table("factories")
-            .select("company_id")
-            .eq("id", fid)
-            .limit(1)
-            .execute()
-        )
+        fac = supabase.table("factories").select("company_id").eq("id", fid).limit(1).execute()
         if not fac.data:
             skipped += 1
             continue
@@ -334,55 +283,50 @@ def generate_inspection_sets(body: GenerateScheduleSetsBody):
         res = supabase.table("inspection_sets").insert(insert_rows[i:i + 20]).execute()
         created += len(res.data or [])
 
-    return {
-        "status": "success",
-        "message": f"생성 {created}건, 스킵 {skipped}건",
-        "data": {"created": created, "skipped": skipped, "rule_id": rule_id},
-    }
+    return {"status": "success", "message": f"생성 {created}건, 스킵 {skipped}건",
+            "data": {"created": created, "skipped": skipped, "rule_id": rule_id}}
 
 
-# ── GET /inspection-schedule/sets/summary-by-rule ─────────────────────────────
+# ── GET /inspection-schedule/sets/summary-by-rule ────────────────────────────
 
 @router.get("/sets/summary-by-rule")
 def get_sets_summary_by_rule():
-    """상단 요약 카드 — INSPECT 룰 커버리지"""
     supabase = get_supabase()
-
     total_rules = (
         supabase.table("master_building_legal_rules")
         .select("rule_id", count="exact")
-        .eq("obligation_type", "INSPECT")
-        .eq("is_active", True)
-        .not_.in_("sector", ["SPECIAL_FACILITY", "SPECIAL"])
-        .execute()
+        .eq("obligation_type", "INSPECT").eq("is_active", True)
+        .not_.in_("sector", ["SPECIAL_FACILITY", "SPECIAL"]).execute()
     ).count or 0
 
     sets = (
         supabase.table("inspection_sets")
-        .select("legal_rule_id, factory_id, status_code")
-        .eq("source", "LEGAL_ENGINE")
-        .eq("is_active", True)
-        .execute()
+        .select("legal_rule_id, factory_id, status_code, anchor_type")
+        .eq("source", "LEGAL_ENGINE").eq("is_active", True).execute()
     ).data or []
 
     used_rules = {s["legal_rule_id"] for s in sets if s.get("legal_rule_id")}
     pending = sum(1 for s in sets if s.get("status_code") == "PENDING_ANCHOR")
     active = sum(1 for s in sets if s.get("status_code") in ("ACTIVE", "UPCOMING"))
 
-    return {
-        "status": "success",
-        "data": {
-            "total_rules": total_rules,
-            "converted_rules": len(used_rules),
-            "not_converted_rules": total_rules - len(used_rules),
-            "total_sets": len(sets),
-            "pending_anchor": pending,
-            "active": active,
-        },
-    }
+    # anchor_type별 집계
+    by_type = {"FIXED_ANNUAL": 0, "HISTORICAL": 0, "EVENT": 0, "unknown": 0}
+    for s in sets:
+        t = s.get("anchor_type") or "unknown"
+        by_type[t] = by_type.get(t, 0) + 1
+
+    return {"status": "success", "data": {
+        "total_rules": total_rules,
+        "converted_rules": len(used_rules),
+        "not_converted_rules": total_rules - len(used_rules),
+        "total_sets": len(sets),
+        "pending_anchor": pending,
+        "active": active,
+        "by_anchor_type": by_type,
+    }}
 
 
-# ── GET /inspection-schedule/summary ──────────────────────────────────────────
+# ── GET /inspection-schedule/summary ─────────────────────────────────────────
 
 @router.get("/summary")
 def get_summary(
@@ -391,40 +335,25 @@ def get_summary(
 ):
     supabase = get_supabase()
     today = date.today()
-
     q = supabase.table("inspection_sets").select(
         "status_code, next_planned_date, source"
     ).eq("is_active", True)
-    if factory_id:
-        q = q.eq("factory_id", factory_id)
-    if company_id:
-        q = q.eq("company_id", company_id)
-
+    if factory_id: q = q.eq("factory_id", factory_id)
+    if company_id: q = q.eq("company_id", company_id)
     rows = q.execute().data or []
-    total = len(rows)
     pending = sum(1 for r in rows if r.get("status_code") == "PENDING_ANCHOR")
     active = sum(1 for r in rows if r.get("status_code") in ("ACTIVE", "UPCOMING"))
-    overdue = 0
-    for r in rows:
-        if r.get("status_code") not in ("ACTIVE", "UPCOMING"):
-            continue
-        npd = _to_date(r.get("next_planned_date"))
-        if npd and npd < today:
-            overdue += 1
-
-    return {
-        "status": "success",
-        "data": {
-            "total": total,
-            "pending_anchor": pending,
-            "active": active,
-            "overdue": overdue,
-            "upcoming_7d": 0,
-        },
-    }
+    overdue = sum(1 for r in rows
+                  if r.get("status_code") in ("ACTIVE", "UPCOMING")
+                  and _to_date(r.get("next_planned_date")) is not None
+                  and _to_date(r.get("next_planned_date")) < today)
+    return {"status": "success", "data": {
+        "total": len(rows), "pending_anchor": pending,
+        "active": active, "overdue": overdue, "upcoming_7d": 0,
+    }}
 
 
-# ── GET /inspection-schedule/sets ─────────────────────────────────────────────
+# ── GET /inspection-schedule/sets ────────────────────────────────────────────
 
 @router.get("/sets")
 def list_inspection_sets(
@@ -435,6 +364,8 @@ def list_inspection_sets(
     cycle_unit: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
     factory_keyword: Optional[str] = Query(None),
+    anchor_type: Optional[str] = Query(None),          # ★ 유형 필터
+    anchor_type_confidence: Optional[int] = Query(None), # ★ 확신도 필터
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
@@ -444,6 +375,7 @@ def list_inspection_sets(
         "cycle_unit, cycle_value, cycle_base_type, cycle_base_guide, "
         "schedule_anchor_date, schedule_end_date, next_planned_date, last_inspection_date, "
         "status_code, anchor_confirmed, law_name, law_article, legal_rule_id, "
+        "anchor_type, anchor_type_confidence, anchor_type_reason, "   # ★ 유형 필드
         "source, factory_id, company_id, created_at, updated_at"
     ).eq("is_active", True)
 
@@ -453,6 +385,9 @@ def list_inspection_sets(
     if source: q = q.eq("source", source)
     if cycle_unit: q = q.eq("cycle_unit", cycle_unit)
     if keyword: q = q.ilike("inspection_set_name", f"%{keyword}%")
+    if anchor_type: q = q.eq("anchor_type", anchor_type)
+    if anchor_type_confidence is not None:
+        q = q.lte("anchor_type_confidence", anchor_type_confidence)
 
     rows = list(q.limit(_MAX_LIST_FETCH).execute().data or [])
     _enrich_factory_names(supabase, rows)
@@ -466,8 +401,7 @@ def list_inspection_sets(
     def _sort_key(r):
         pend = 0 if r.get("status_code") == "PENDING_ANCHOR" else 1
         npd = r.get("next_planned_date")
-        npd_s = "9999-12-31" if not npd else str(npd)[:10]
-        return (pend, npd_s, r.get("created_at") or "")
+        return (pend, str(npd)[:10] if npd else "9999-12-31", r.get("created_at") or "")
 
     rows.sort(key=_sort_key)
     total = len(rows)
@@ -476,12 +410,13 @@ def list_inspection_sets(
     for r in rows[offset: offset + size]:
         npd = _to_date(r.get("next_planned_date"))
         days = (npd - today).days if npd else None
+        r["anchor_type_label"] = ANCHOR_TYPE_LABEL.get(r.get("anchor_type") or "", "미분류")
         items.append({**r, "days_until_next": days, "is_overdue": days is not None and days < 0})
 
     return {"status": "success", "data": {"items": items, "total": total, "page": page, "size": size}}
 
 
-# ── GET /inspection-schedule/sets/{id} ────────────────────────────────────────
+# ── GET /inspection-schedule/sets/{id} ───────────────────────────────────────
 
 @router.get("/sets/{set_id}")
 def get_inspection_set(set_id: str):
@@ -493,20 +428,16 @@ def get_inspection_set(set_id: str):
     if not res.data:
         raise HTTPException(status_code=404, detail="inspection_set 없음")
     data = dict(res.data[0])
-
-    fac = (
-        supabase.table("factories").select("name")
-        .eq("id", data.get("factory_id")).limit(1).execute()
-    )
+    fac = supabase.table("factories").select("name").eq("id", data.get("factory_id")).limit(1).execute()
     data["factory_name"] = fac.data[0].get("name") if fac.data else "-"
-
+    data["anchor_type_label"] = ANCHOR_TYPE_LABEL.get(data.get("anchor_type") or "", "미분류")
     npd = _to_date(data.get("next_planned_date"))
     data["days_until_next"] = (npd - date.today()).days if npd else None
     data["is_overdue"] = data["days_until_next"] is not None and data["days_until_next"] < 0
     return {"status": "success", "data": data}
 
 
-# ── PATCH /inspection-schedule/sets/{id} ──────────────────────────────────────
+# ── PATCH /inspection-schedule/sets/{id} ─────────────────────────────────────
 
 @router.patch("/sets/{set_id}")
 def patch_inspection_set(set_id: str, body: InspectionSetPatch):
@@ -524,6 +455,7 @@ def patch_inspection_set(set_id: str, body: InspectionSetPatch):
         "cycle_month_day", "is_month_end", "holiday_process_type", "description",
         "schedule_anchor_date", "schedule_end_date",
         "custom_cycle_value", "custom_cycle_unit", "custom_description",
+        "anchor_type",  # ★ 유형 수정 허용
     }
     updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if k in allowed}
     if not updates:
@@ -543,7 +475,7 @@ def patch_inspection_set(set_id: str, body: InspectionSetPatch):
     return {"status": "success", "data": updated.data[0]}
 
 
-# ── POST /inspection-schedule/sets/{id}/confirm-anchor ────────────────────────
+# ── POST /inspection-schedule/sets/{id}/confirm-anchor ───────────────────────
 
 @router.post("/sets/{set_id}/confirm-anchor")
 def confirm_anchor(set_id: str, body: ConfirmAnchorBody):
@@ -561,18 +493,19 @@ def confirm_anchor(set_id: str, body: ConfirmAnchorBody):
     cv = int(cur.get("cycle_value") or 1)
     next_date = _calc_next_date(anchor, str(cu), cv) if cu else None
 
-    supabase.table("inspection_sets").update({
+    patch = {
         "schedule_anchor_date": anchor.isoformat(),
         "anchor_confirmed": True,
         "next_planned_date": next_date.isoformat() if next_date else None,
         "status_code": "ACTIVE",
-    }).eq("id", set_id).execute()
+        "anchor_type_confidence": 100,  # 수동 확정 시 100%
+    }
+    if body.anchor_type:
+        patch["anchor_type"] = body.anchor_type
 
+    supabase.table("inspection_sets").update(patch).eq("id", set_id).execute()
     row = supabase.table("inspection_sets").select("*").eq("id", set_id).limit(1).execute()
     if not row.data:
         raise HTTPException(status_code=500, detail="갱신 후 조회 실패")
-    return {
-        "status": "success",
-        "message": f"기준일 확정 완료. 다음 점검일: {next_date}",
-        "data": row.data[0],
-    }
+    return {"status": "success", "message": f"기준일 확정 완료. 다음 점검일: {next_date}",
+            "data": row.data[0]}
