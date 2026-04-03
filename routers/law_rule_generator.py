@@ -8,10 +8,14 @@ Claude Haiku API로 법령 조문 → 판정룰 초안 자동 생성.
   PENDING → (거부) REJECTED
   PENDING → (수정) MODIFIED → (승인) APPROVED
 
+v1.2.0 (2026-04-03):
+  [FIX] max_articles 백엔드 하드캡 50 → 제거 (UI 값 그대로 사용, 기본 30)
+  [FIX] skip_existing: law_rule_drafts 대신 law_article.ai_parsed_at으로 판단
+        → "의무없음" 조문도 파싱 완료 기록됨 → 재파싱 방지
+  [ADD] parse_batch 파싱 완료 후 law_article.ai_parsed_at 업데이트
+
 v1.1.0 (2026-04-02):
   - SPECIAL_FACILITY 섹터 제외 (용도별 법령 적용 필요 → 나라장터 등록 후 추가 예정)
-  - SYSTEM_PROMPT, USER_PROMPT_TEMPLATE에서 SPECIAL_FACILITY 제거
-  - parse_article, parse_batch에서 SPECIAL_FACILITY 초안 저장 차단
 """
 import os
 import json
@@ -156,17 +160,26 @@ async def get_laws(
     res = q.range(offset, offset + page_size - 1).order("law_name").execute()
 
     article_counts: Dict[str, int] = {}
+    parsed_counts: Dict[str, int] = {}
     for r in (res.data or []):
         try:
             ver = supabase.table("law_version").select("id").eq("law_id", r["id"]).eq("is_current", True).limit(1).execute()
             if ver.data:
-                ac = supabase.table("law_article").select("id", count="exact").eq("law_version_id", ver.data[0]["id"]).execute()
+                vid = ver.data[0]["id"]
+                ac = supabase.table("law_article").select("id", count="exact").eq("law_version_id", vid).execute()
+                pc = supabase.table("law_article").select("id", count="exact").eq("law_version_id", vid).not_.is_("ai_parsed_at", "null").execute()
                 article_counts[r["id"]] = ac.count or 0
+                parsed_counts[r["id"]] = pc.count or 0
         except Exception:
             article_counts[r["id"]] = 0
+            parsed_counts[r["id"]] = 0
 
     return {"status": "success", "data": {
-        "items": [{**r, "article_count": article_counts.get(r["id"], 0)} for r in (res.data or [])],
+        "items": [{
+            **r,
+            "article_count": article_counts.get(r["id"], 0),
+            "parsed_count": parsed_counts.get(r["id"], 0),
+        } for r in (res.data or [])],
         "total": res.count or 0, "page": page, "page_size": page_size,
     }}
 
@@ -181,7 +194,7 @@ async def get_articles(law_id: str):
         raise HTTPException(status_code=404, detail="현재 버전 없음")
 
     arts = supabase.table("law_article").select(
-        "id, article_no, article_sub_no, article_title, article_text"
+        "id, article_no, article_sub_no, article_title, article_text, ai_parsed_at"
     ).eq("law_version_id", ver.data[0]["id"]).order("article_no_sort").execute()
 
     articles = []
@@ -192,6 +205,7 @@ async def get_articles(law_id: str):
         a["has_approved"] = any(d["status"] == "APPROVED"      for d in di)
         a["has_pending"]  = any(d["status"] == "PENDING"       for d in di)
         a["needs_review"] = any(d["status"] == "NEEDS_REVIEW"  for d in di)
+        a["is_parsed"]    = a.get("ai_parsed_at") is not None
         articles.append(a)
 
     return {"status": "success", "data": articles}
@@ -216,6 +230,12 @@ async def parse_article(body: dict):
         raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI 호출 실패: {str(e)}")
+
+    # 파싱 완료 기록 (의무없음이어도 ai_parsed_at 업데이트)
+    if article_id:
+        supabase.table("law_article").update({
+            "ai_parsed_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", article_id).execute()
 
     if not rules:
         return {"status": "success", "data": {"drafts": [], "message": "의무 없는 조문"}}
@@ -258,10 +278,20 @@ async def parse_article(body: dict):
 
 @router.post("/parse-batch")
 async def parse_batch(body: dict):
+    """
+    법령 일괄 파싱.
+
+    [v1.2.0 변경사항]
+    - max_articles 백엔드 상한 제거 (UI에서 전달된 값 그대로 사용)
+    - skip_existing: law_article.ai_parsed_at IS NOT NULL → 파싱 완료 판단
+      (의무없음 조문도 ai_parsed_at 기록 → 재파싱 방지)
+    - 파싱 완료(의무있음/없음) 후 law_article.ai_parsed_at 업데이트
+    """
     supabase = get_supabase()
     law_id        = body.get("law_id")
     skip_existing = body.get("skip_existing", True)
-    max_articles  = min(body.get("max_articles", 30), 50)
+    # ★ max_articles 상한 제거 — UI에서 전달된 값 그대로 사용 (기본 50)
+    max_articles  = int(body.get("max_articles", 50))
 
     if not law_id:
         raise HTTPException(status_code=400, detail="law_id 필수")
@@ -275,30 +305,39 @@ async def parse_batch(body: dict):
     if not ver.data:
         raise HTTPException(status_code=404, detail="현재 버전 없음")
 
-    arts = supabase.table("law_article").select(
+    # ★ skip_existing=True면 ai_parsed_at IS NULL인 조문만 가져옴
+    q = supabase.table("law_article").select(
         "id, article_no, article_sub_no, article_title, article_text"
-    ).eq("law_version_id", ver.data[0]["id"]).not_.is_("article_text", "null")\
-     .order("article_no_sort").limit(max_articles).execute()
+    ).eq("law_version_id", ver.data[0]["id"]).not_.is_("article_text", "null")
+
+    if skip_existing:
+        q = q.is_("ai_parsed_at", "null")  # 미파싱 조문만
+
+    q = q.order("article_no_sort").limit(max_articles)
+    arts = q.execute()
 
     articles = arts.data or []
     results  = {"total": len(articles), "processed": 0, "skipped": 0,
                 "drafts_created": 0, "special_excluded": 0, "errors": []}
+
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     for art in articles:
         try:
             art_text = (art.get("article_text") or "").strip()
             if not art_text or len(art_text) < 20:
                 results["skipped"] += 1
+                # 짧은 조문도 파싱 완료 표시 (재시도 방지)
+                if art.get("id"):
+                    supabase.table("law_article").update({"ai_parsed_at": now_iso}).eq("id", art["id"]).execute()
                 continue
 
-            if skip_existing and art.get("id"):
-                ex = supabase.table("law_rule_drafts").select("id").eq("article_id", art["id"]).limit(1).execute()
-                if ex.data:
-                    results["skipped"] += 1
-                    continue
-
-            label = f"제{art.get('article_no','')}조{art.get('article_title','')}"
+            label = f"제{art.get('article_no', '')}조{art.get('article_title', '')}"
             rules = await call_claude(law_name, art_text)
+
+            # ★ 파싱 완료 기록 — 의무있음/없음 무관하게 ai_parsed_at 업데이트
+            if art.get("id"):
+                supabase.table("law_article").update({"ai_parsed_at": now_iso}).eq("id", art["id"]).execute()
 
             for rule in rules:
                 # ★ 특수시설 섹터 초안 저장 차단
@@ -366,7 +405,6 @@ async def get_drafts(
 
 @router.get("/drafts/{draft_id}")
 async def get_draft(draft_id: str):
-    """단건 초안 조회 — 수정 모달에서 사용"""
     supabase = get_supabase()
     res = supabase.table("law_rule_drafts").select("*").eq("id", draft_id).single().execute()
     if not res.data:
