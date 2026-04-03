@@ -113,9 +113,10 @@ def _build_insert_row(m: dict, company_id: Optional[str], factory_id: str) -> di
         "law_article": law_article,
         "cycle_unit": cycle_unit,
         "cycle_value": cycle_value,
-        "cycle_base_type": "LAST_INSPECTION",
-        "cycle_base_guide": f"마지막 점검일로부터 {cycle_value}{_lbl}마다",
-        "description": (m.get("obligation_summary") or "")[:2000],
+        "cycle_base_type": m.get("cycle_base_type") or "LAST_INSPECTION",
+        "cycle_base_guide": m.get("cycle_base_guide")
+        or (f"마지막 점검일로부터 {cycle_value}{_lbl}마다"),
+        "description": (str(m.get("obligation_summary") or m.get("inspection_required") or ""))[:2000],
         "source": "LEGAL_ENGINE",
         "is_active": True,
         "anchor_confirmed": False,
