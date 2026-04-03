@@ -8,20 +8,22 @@ Claude Haiku API로 법령 조문 → 판정룰 초안 자동 생성.
   PENDING → (거부) REJECTED
   PENDING → (수정) MODIFIED → (승인) APPROVED
 
+v1.3.0 (2026-04-03):
+  [ADD] POST /auto-parse-and-approve — 파싱+고신뢰도 자동승인 일괄 처리
+        ai_confidence >= auto_approve_threshold(기본 80)인 INSPECT 초안 자동 master 등록
+
 v1.2.0 (2026-04-03):
-  [FIX] max_articles 백엔드 하드캡 50 → 제거 (UI 값 그대로 사용, 기본 30)
-  [FIX] skip_existing: law_rule_drafts 대신 law_article.ai_parsed_at으로 판단
-        → "의무없음" 조문도 파싱 완료 기록됨 → 재파싱 방지
-  [ADD] parse_batch 파싱 완료 후 law_article.ai_parsed_at 업데이트
+  [FIX] max_articles 백엔드 하드캡 50 → 제거
+  [FIX] skip_existing: law_article.ai_parsed_at으로 재파싱 방지
 
 v1.1.0 (2026-04-02):
-  - SPECIAL_FACILITY 섹터 제외 (용도별 법령 적용 필요 → 나라장터 등록 후 추가 예정)
+  - SPECIAL_FACILITY 섹터 제외
 """
 import os
 import json
 import re
 from fastapi import APIRouter, HTTPException, Query
-from typing import List, Dict
+from typing import List, Dict, Optional
 from datetime import datetime, timezone
 import httpx
 
@@ -31,8 +33,8 @@ router = APIRouter(prefix="/law-rule-generator", tags=["AI룰생성"])
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL      = "claude-haiku-4-5-20251001"
+INTERNAL_SECRET   = os.environ.get("INTERNAL_API_SECRET", "tai-internal-2026")
 
-# ★ 파싱에서 제외할 섹터 — SPECIAL_FACILITY는 용도별 법령 체계가 달라 별도 처리 예정
 EXCLUDED_SECTORS = {"SPECIAL_FACILITY", "SPECIAL", "CONSTRUCTION_SPECIAL",
                     "MANUFACTURING_SPECIAL", "CONSTRUCTION_MANUFACTURING_SPECIAL"}
 
@@ -142,6 +144,55 @@ async def call_claude(law_name: str, article_text: str) -> List[Dict]:
         return []
 
 
+def _auto_approve_to_master(supabase, draft: dict) -> Optional[str]:
+    """초안 1건을 master에 등록하고 APPROVED 처리. rule_id 반환."""
+    rule_id = draft.get("draft_rule_id") or f"AI-{str(draft['id'])[:8].upper()}"
+    # 중복 체크 — 이미 있으면 -V2 suffix
+    if supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute().data:
+        rule_id = rule_id + "-V2"
+    # 또 충돌이면 스킵
+    if supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute().data:
+        return None
+
+    cond_val = draft.get("condition_value")
+    try:
+        cond_val_num = float(cond_val) if cond_val is not None else None
+    except (TypeError, ValueError):
+        cond_val_num = None
+
+    ins = supabase.table("master_building_legal_rules").insert({
+        "rule_id": rule_id,
+        "sector": draft.get("sector") or "BUILDING",
+        "law_name": draft.get("law_name"),
+        "law_article": draft.get("law_article"),
+        "obligation_type": draft.get("obligation_type"),
+        "obligation_summary": draft.get("obligation_summary"),
+        "penalty_summary": draft.get("penalty_summary"),
+        "appointment_target_code": draft.get("appointment_target"),
+        "condition_code": draft.get("condition_code"),
+        "condition_operator_code": draft.get("condition_operator", "gte"),
+        "condition_value": cond_val_num,
+        "appointment_required": draft.get("obligation_type") == "APPOINT",
+        "inspection_required": draft.get("obligation_type") == "INSPECT",
+        "notify_required": draft.get("obligation_type") == "NOTIFY",
+        "report_required": draft.get("obligation_type") == "REPORT",
+        "action_required": draft.get("obligation_type") == "ACTION",
+        "diagnosis_stage": draft.get("diagnosis_stage", 1),
+        "is_active": True,
+        "source_api": "AI_GENERATED",
+    }).execute()
+
+    if ins.data:
+        supabase.table("law_rule_drafts").update({
+            "status": "APPROVED",
+            "registered_rule_id": rule_id,
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+            "reviewer_note": "자동 승인 (ai_confidence 기준)",
+        }).eq("id", draft["id"]).execute()
+        return rule_id
+    return None
+
+
 # ── GET /laws ──────────────────────────────────────────────
 
 @router.get("/laws")
@@ -231,7 +282,6 @@ async def parse_article(body: dict):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI 호출 실패: {str(e)}")
 
-    # 파싱 완료 기록 (의무없음이어도 ai_parsed_at 업데이트)
     if article_id:
         supabase.table("law_article").update({
             "ai_parsed_at": datetime.now(timezone.utc).isoformat()
@@ -242,7 +292,6 @@ async def parse_article(body: dict):
 
     saved = []
     for rule in rules:
-        # ★ 특수시설 섹터 초안 저장 차단
         rule_sector = (rule.get("sector") or "").strip().upper()
         if rule_sector in EXCLUDED_SECTORS:
             continue
@@ -278,19 +327,9 @@ async def parse_article(body: dict):
 
 @router.post("/parse-batch")
 async def parse_batch(body: dict):
-    """
-    법령 일괄 파싱.
-
-    [v1.2.0 변경사항]
-    - max_articles 백엔드 상한 제거 (UI에서 전달된 값 그대로 사용)
-    - skip_existing: law_article.ai_parsed_at IS NOT NULL → 파싱 완료 판단
-      (의무없음 조문도 ai_parsed_at 기록 → 재파싱 방지)
-    - 파싱 완료(의무있음/없음) 후 law_article.ai_parsed_at 업데이트
-    """
     supabase = get_supabase()
     law_id        = body.get("law_id")
     skip_existing = body.get("skip_existing", True)
-    # ★ max_articles 상한 제거 — UI에서 전달된 값 그대로 사용 (기본 50)
     max_articles  = int(body.get("max_articles", 50))
 
     if not law_id:
@@ -305,13 +344,12 @@ async def parse_batch(body: dict):
     if not ver.data:
         raise HTTPException(status_code=404, detail="현재 버전 없음")
 
-    # ★ skip_existing=True면 ai_parsed_at IS NULL인 조문만 가져옴
     q = supabase.table("law_article").select(
         "id, article_no, article_sub_no, article_title, article_text"
     ).eq("law_version_id", ver.data[0]["id"]).not_.is_("article_text", "null")
 
     if skip_existing:
-        q = q.is_("ai_parsed_at", "null")  # 미파싱 조문만
+        q = q.is_("ai_parsed_at", "null")
 
     q = q.order("article_no_sort").limit(max_articles)
     arts = q.execute()
@@ -327,7 +365,6 @@ async def parse_batch(body: dict):
             art_text = (art.get("article_text") or "").strip()
             if not art_text or len(art_text) < 20:
                 results["skipped"] += 1
-                # 짧은 조문도 파싱 완료 표시 (재시도 방지)
                 if art.get("id"):
                     supabase.table("law_article").update({"ai_parsed_at": now_iso}).eq("id", art["id"]).execute()
                 continue
@@ -335,12 +372,10 @@ async def parse_batch(body: dict):
             label = f"제{art.get('article_no', '')}조{art.get('article_title', '')}"
             rules = await call_claude(law_name, art_text)
 
-            # ★ 파싱 완료 기록 — 의무있음/없음 무관하게 ai_parsed_at 업데이트
             if art.get("id"):
                 supabase.table("law_article").update({"ai_parsed_at": now_iso}).eq("id", art["id"]).execute()
 
             for rule in rules:
-                # ★ 특수시설 섹터 초안 저장 차단
                 rule_sector = (rule.get("sector") or "").strip().upper()
                 if rule_sector in EXCLUDED_SECTORS:
                     results["special_excluded"] += 1
@@ -373,6 +408,139 @@ async def parse_batch(body: dict):
     return {"status": "success", "law_name": law_name, "data": results}
 
 
+# ── POST /auto-parse-and-approve ───────────────────────────
+#
+# 내부 전용 엔드포인트: 파싱 + 고신뢰도 자동승인을 한 번에 처리.
+# Header: X-Internal-Secret 필요 (INTERNAL_API_SECRET 환경변수)
+#
+# 동작:
+#   1. 법령의 미파싱 조문을 max_articles개만큼 파싱
+#   2. obligation_type=INSPECT이고 ai_confidence >= threshold인 초안만 자동 master 등록
+#   3. 나머지는 PENDING 유지 (수동 검토 필요)
+# ──────────────────────────────────────────────────────────
+
+@router.post("/auto-parse-and-approve")
+async def auto_parse_and_approve(body: dict):
+    """
+    파싱 + INSPECT 고신뢰도 자동승인 일괄 처리.
+
+    Parameters:
+        law_id (str): 법령 ID
+        max_articles (int): 법령당 최대 처리 조문 수 (기본 30)
+        auto_approve_threshold (int): 자동승인 ai_confidence 기준 (기본 80)
+        secret (str): 내부 API 시크릿
+    """
+    secret = body.get("secret", "")
+    if secret != INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="내부 전용 엔드포인트")
+
+    supabase = get_supabase()
+    law_id    = body.get("law_id")
+    max_art   = int(body.get("max_articles", 30))
+    threshold = int(body.get("auto_approve_threshold", 80))
+
+    if not law_id:
+        raise HTTPException(status_code=400, detail="law_id 필수")
+
+    lm = supabase.table("law_master").select("law_name").eq("id", law_id).eq("is_active", True).single().execute()
+    if not lm.data:
+        raise HTTPException(status_code=404, detail="법령 없음")
+    law_name = lm.data["law_name"]
+
+    ver = supabase.table("law_version").select("id").eq("law_id", law_id).eq("is_current", True).limit(1).execute()
+    if not ver.data:
+        return {"status": "success", "law_name": law_name, "data": {"skipped": "버전 없음"}}
+
+    # 미파싱 조문만
+    arts = (
+        supabase.table("law_article")
+        .select("id, article_no, article_title, article_text")
+        .eq("law_version_id", ver.data[0]["id"])
+        .is_("ai_parsed_at", "null")
+        .not_.is_("article_text", "null")
+        .order("article_no_sort")
+        .limit(max_art)
+        .execute()
+    )
+    articles = arts.data or []
+
+    results = {
+        "law_name": law_name,
+        "total_articles": len(articles),
+        "parsed": 0,
+        "drafts_created": 0,
+        "auto_approved": 0,
+        "pending_review": 0,
+        "errors": [],
+    }
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for art in articles:
+        try:
+            art_text = (art.get("article_text") or "").strip()
+            if not art_text or len(art_text) < 20:
+                supabase.table("law_article").update({"ai_parsed_at": now_iso}).eq("id", art["id"]).execute()
+                continue
+
+            label = f"제{art.get('article_no', '')}조{art.get('article_title', '') or ''}"
+            rules = await call_claude(law_name, art_text)
+
+            # 파싱 완료 기록
+            supabase.table("law_article").update({"ai_parsed_at": now_iso}).eq("id", art["id"]).execute()
+            results["parsed"] += 1
+
+            for rule in rules:
+                sector = (rule.get("sector") or "").strip().upper()
+                if sector in EXCLUDED_SECTORS:
+                    continue
+
+                conf = int(rule.get("ai_confidence") or 0)
+                ob_type = rule.get("obligation_type", "")
+
+                # 초안 저장
+                ins = supabase.table("law_rule_drafts").insert({
+                    "law_name": law_name, "law_article": label,
+                    "article_id": art.get("id"), "article_text": art_text[:2000],
+                    "draft_rule_id": rule.get("draft_rule_id"),
+                    "obligation_type": ob_type,
+                    "sector": rule.get("sector"),
+                    "condition_code": rule.get("condition_code"),
+                    "condition_operator": rule.get("condition_operator", "gte"),
+                    "condition_value": str(rule["condition_value"]) if rule.get("condition_value") is not None else None,
+                    "obligation_summary": rule.get("obligation_summary"),
+                    "penalty_summary": rule.get("penalty_summary"),
+                    "appointment_target": rule.get("appointment_target"),
+                    "diagnosis_stage": rule.get("diagnosis_stage", 1),
+                    "ai_confidence": conf,
+                    "ai_reasoning": rule.get("ai_reasoning"),
+                    "ai_flags": rule.get("ai_flags"),
+                    "status": "PENDING",
+                }).execute()
+                results["drafts_created"] += 1
+
+                if not ins.data:
+                    continue
+                draft = ins.data[0]
+
+                # INSPECT + 고신뢰도 → 자동 승인
+                if ob_type == "INSPECT" and conf >= threshold:
+                    approved_id = _auto_approve_to_master(supabase, draft)
+                    if approved_id:
+                        results["auto_approved"] += 1
+                    else:
+                        results["pending_review"] += 1
+                else:
+                    results["pending_review"] += 1
+
+        except Exception as e:
+            results["errors"].append({
+                "article": str(art.get("article_no")),
+                "error": str(e)[:100],
+            })
+
+    return {"status": "success", "data": results}
+
+
 # ── GET /drafts ────────────────────────────────────────────
 
 @router.get("/drafts")
@@ -392,7 +560,6 @@ async def get_drafts(
     if ob_type:        q = q.eq("obligation_type", ob_type)
     if law_name:       q = q.ilike("law_name", f"%{law_name}%")
     if confidence_min: q = q.gte("ai_confidence", confidence_min)
-    # ★ 특수시설 섹터 초안 항상 제외
     q = q.not_.in_("sector", list(EXCLUDED_SECTORS))
     offset = (page - 1) * page_size
     res = q.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
@@ -400,8 +567,6 @@ async def get_drafts(
         "items": res.data or [], "total": res.count or 0,
         "page": page, "page_size": page_size}}
 
-
-# ── GET /drafts/{draft_id} — 단건 조회 (수정 모달용) ───────
 
 @router.get("/drafts/{draft_id}")
 async def get_draft(draft_id: str):
@@ -411,8 +576,6 @@ async def get_draft(draft_id: str):
         raise HTTPException(status_code=404, detail="초안 없음")
     return {"status": "success", "data": res.data}
 
-
-# ── PATCH /drafts/{draft_id} ───────────────────────────────
 
 @router.patch("/drafts/{draft_id}")
 async def update_draft(draft_id: str, body: dict):
@@ -430,8 +593,6 @@ async def update_draft(draft_id: str, body: dict):
     return {"status": "success", "data": res.data[0]}
 
 
-# ── POST /drafts/{draft_id}/approve ───────────────────────
-
 @router.post("/drafts/{draft_id}/approve")
 async def approve_draft(draft_id: str, body: dict = None):
     supabase = get_supabase()
@@ -442,13 +603,18 @@ async def approve_draft(draft_id: str, body: dict = None):
         raise HTTPException(status_code=404, detail="초안 없음")
     d = dr.data
 
-    # ★ 특수시설 섹터 초안은 master 등록 차단
     if (d.get("sector") or "").upper() in EXCLUDED_SECTORS:
-        raise HTTPException(status_code=400, detail="특수시설 섹터는 현재 master 등록 불가 (용도별 법령 체계 구축 후 추가 예정)")
+        raise HTTPException(status_code=400, detail="특수시설 섹터는 현재 master 등록 불가")
 
     rule_id = body.get("rule_id") or d.get("draft_rule_id") or f"AI-{draft_id[:8].upper()}"
     if supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute().data:
         rule_id = rule_id + "-V2"
+
+    cond_val = d.get("condition_value")
+    try:
+        cond_val_num = float(cond_val) if cond_val is not None else None
+    except (TypeError, ValueError):
+        cond_val_num = None
 
     ins = supabase.table("master_building_legal_rules").insert({
         "rule_id": rule_id,
@@ -461,7 +627,7 @@ async def approve_draft(draft_id: str, body: dict = None):
         "appointment_target_code": d.get("appointment_target"),
         "condition_code":          d.get("condition_code"),
         "condition_operator_code": d.get("condition_operator", "gte"),
-        "condition_value":         d.get("condition_value"),
+        "condition_value":         cond_val_num,
         "appointment_required": d.get("obligation_type") == "APPOINT",
         "inspection_required":  d.get("obligation_type") == "INSPECT",
         "notify_required":      d.get("obligation_type") == "NOTIFY",
@@ -483,8 +649,6 @@ async def approve_draft(draft_id: str, body: dict = None):
             "message": f"master에 {rule_id}로 등록됐습니다.", "data": ins.data[0]}
 
 
-# ── POST /drafts/{draft_id}/reject ────────────────────────
-
 @router.post("/drafts/{draft_id}/reject")
 async def reject_draft(draft_id: str, body: dict = None):
     supabase = get_supabase()
@@ -499,8 +663,6 @@ async def reject_draft(draft_id: str, body: dict = None):
         raise HTTPException(status_code=404, detail="초안 없음")
     return {"status": "success", "message": "거부 처리 완료"}
 
-
-# ── GET /stats ─────────────────────────────────────────────
 
 @router.get("/stats")
 async def get_stats():
@@ -518,7 +680,6 @@ async def get_stats():
         s  = r.get("status")  or "PENDING"
         sc = r.get("sector")  or "UNKNOWN"
         ot = r.get("obligation_type") or "UNKNOWN"
-        # 특수시설 제외하고 집계
         if sc.upper() not in EXCLUDED_SECTORS:
             status_cnt[s]  = status_cnt.get(s, 0)  + 1
             sector_cnt[sc] = sector_cnt.get(sc, 0) + 1
