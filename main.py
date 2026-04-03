@@ -1,4 +1,5 @@
-# main.py — v5.5.3
+# main.py — v5.5.4
+# v5.5.4: inspection_schedule 라우터 추가 (일정관리 API /inspection-schedule)
 # v5.5.3: engine_document 라우터 추가 (문서메뉴 API 4개)
 # v5.5.2: AI 법령 룰 생성기 라우터 추가 (law_rule_generator)
 # v5.5.1: _classify_rules_db obligation_type 절대 우선 분류 수정
@@ -45,6 +46,7 @@ from routers.teams                   import router as teams_router
 from routers.areas                   import router as areas_router
 from routers.buildings               import router as buildings_router
 from routers.inspection_sets         import router as inspection_sets_router
+from routers.inspection_schedule     import router as inspection_schedule_router  # v5.5.4
 from routers.work_schedules          import router as work_schedules_router
 from routers.inspection_checklist    import router as inspection_router
 from routers.admin_stats             import router as admin_stats_router
@@ -69,7 +71,7 @@ from routers.feature_flags           import router as feature_flags_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.5.3"
+APP_VERSION = "5.5.4"
 
 
 @asynccontextmanager
@@ -156,6 +158,7 @@ app.include_router(teams_router)
 app.include_router(areas_router)
 app.include_router(buildings_router)
 app.include_router(inspection_sets_router)
+app.include_router(inspection_schedule_router)  # v5.5.4: 일정관리 (기준일·주기)
 app.include_router(work_schedules_router)
 app.include_router(inspection_router)
 app.include_router(admin_stats_router)
