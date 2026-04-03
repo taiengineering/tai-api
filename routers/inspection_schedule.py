@@ -6,6 +6,10 @@ prefix: /inspection-schedule
 
 Endpoints
 ---------
+GET   /inspection-schedule/rules                       마스터 룰 목록 (INSPECT)
+GET   /inspection-schedule/rules/{rule_id}/factories   룰별 시설 생성현황
+POST  /inspection-schedule/generate                    선택 룰+시설 → inspection_sets 일괄생성
+GET   /inspection-schedule/sets/summary-by-rule        룰 커버리지 요약 카드
 GET   /inspection-schedule/summary
 GET   /inspection-schedule/sets
 GET   /inspection-schedule/sets/{id}
@@ -17,13 +21,14 @@ POST  /inspection-schedule/sets/{id}/confirm-anchor
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
 from routers.inspection_sets import _calc_next_date
+from routers.legal_engine import CYCLE_CODE_MAP, INSPECTION_CYCLE_UNIT_MAP, get_sector_groups
 
 router = APIRouter(prefix="/inspection-schedule", tags=["inspection-schedule"])
 
@@ -61,11 +66,13 @@ class InspectionSetPatch(BaseModel):
     cycle_unit: Optional[str] = None
     cycle_value: Optional[int] = None
     schedule_anchor_date: Optional[date] = None
+    cycle_base_type: Optional[str] = None
     cycle_weekday: Optional[int] = None
     cycle_month_day: Optional[int] = None
     is_month_end: Optional[bool] = None
     holiday_process_type: Optional[str] = None
     description: Optional[str] = None
+    schedule_end_date: Optional[date] = None
     custom_cycle_value: Optional[int] = None
     custom_cycle_unit: Optional[str] = None
     custom_description: Optional[str] = None
@@ -73,6 +80,287 @@ class InspectionSetPatch(BaseModel):
 
 class ConfirmAnchorBody(BaseModel):
     anchor_date: date
+
+
+class GenerateScheduleSetsBody(BaseModel):
+    rule_id: str = Field(..., description="master_building_legal_rules.rule_id")
+    factory_ids: List[str] = Field(default_factory=list)
+
+
+def _cycle_label_from_master(m: dict) -> str:
+    code = str(m.get("inspection_cycle_unit_code") or "")
+    if code in INSPECTION_CYCLE_UNIT_MAP:
+        return INSPECTION_CYCLE_UNIT_MAP[code]
+    unit_std = (m.get("cycle_unit_std") or "").lower()
+    umap = {"year": "년", "month": "개월", "day": "일", "week": "주"}
+    cv = int(m.get("inspection_cycle_value") or 1)
+    return f"{umap.get(unit_std, unit_std or '주기')} {cv}"
+
+
+def _build_insert_row_from_master(m: dict, company_id: Optional[str], factory_id: str) -> dict:
+    """legal_engine.create_inspection_sets_from_legal 와 동일 단일 룰 행 생성."""
+    law_name = m.get("law_name") or ""
+    law_article = m.get("law_article") or ""
+    cycle_unit_code = str(m.get("inspection_cycle_unit_code") or "")
+    if cycle_unit_code in CYCLE_CODE_MAP:
+        cycle_unit, cycle_value = CYCLE_CODE_MAP[cycle_unit_code]
+    else:
+        cycle_unit_std = (m.get("cycle_unit_std") or "").lower()
+        UNIT_STD_MAP = {"year": "year", "month": "month", "day": "day", "week": "week"}
+        cycle_unit = UNIT_STD_MAP.get(cycle_unit_std, "year")
+        cycle_value = int(m.get("inspection_cycle_value") or 1)
+    _unit_label = "년" if cycle_unit == "year" else "개월"
+    return {
+        "company_id": company_id,
+        "factory_id": factory_id,
+        "inspection_set_name": f"{law_name} 점검",
+        "inspection_set_code": m.get("rule_id"),
+        "legal_rule_id": m.get("rule_id"),
+        "law_name": law_name,
+        "law_article": law_article,
+        "cycle_unit": cycle_unit,
+        "cycle_value": cycle_value,
+        "cycle_base_type": m.get("cycle_base_type") or "LAST_INSPECTION",
+        "cycle_base_guide": m.get("cycle_base_guide")
+        or (f"마지막 점검일로부터 {cycle_value}{_unit_label}마다"),
+        "description": (m.get("inspection_required") or "")[:2000],
+        "source": "LEGAL_ENGINE",
+        "is_active": True,
+        "anchor_confirmed": False,
+        "status_code": "PENDING_ANCHOR",
+    }
+
+
+# ── GET /inspection-schedule/rules (INSPECT 마스터 룰) ────────────────────────
+
+
+@router.get("/rules")
+def list_inspect_master_rules(
+    sector: Optional[str] = Query(
+        None,
+        description="BUILDING | MANUFACTURING | CONSTRUCTION | SPECIAL_FACILITY ... — 해당 섹터군 룰만",
+    ),
+):
+    """obligation_type=INSPECT 인 마스터 룰 목록 (일정 생성 탭 좌측)."""
+    supabase = get_supabase()
+    res = (
+        supabase.table("master_building_legal_rules")
+        .select(
+            "rule_id, law_name, law_article, sector, "
+            "inspection_cycle_value, inspection_cycle_unit_code, cycle_unit_std, "
+            "cycle_base_type, cycle_base_guide, inspection_required"
+        )
+        .eq("is_active", True)
+        .eq("obligation_type", "INSPECT")
+        .execute()
+    )
+    rows = list(res.data or [])
+    if sector:
+        groups = set(get_sector_groups(sector.strip().upper()))
+        rows = [r for r in rows if (r.get("sector") or "") in groups]
+
+    items = []
+    for r in rows:
+        items.append(
+            {
+                **r,
+                "cycle_label": _cycle_label_from_master(r),
+            }
+        )
+    items.sort(key=lambda x: ((x.get("law_name") or ""), (x.get("law_article") or ""), (x.get("rule_id") or "")))
+    return {"status": "success", "data": {"items": items, "total": len(items)}}
+
+
+# ── GET /inspection-schedule/rules/{rule_id}/factories ──────────────────────
+
+
+@router.get("/rules/{rule_id}/factories")
+def list_factories_schedule_status_for_rule(
+    rule_id: str,
+    site_type: Optional[str] = Query(None, description="시설 site_type 필터 (예: INDUSTRY)"),
+):
+    """룰별 시설 목록 + 해당 룰에 대한 inspection_sets 존재 여부."""
+    supabase = get_supabase()
+    mres = (
+        supabase.table("master_building_legal_rules")
+        .select("rule_id")
+        .eq("rule_id", rule_id)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+    if not mres.data:
+        raise HTTPException(status_code=404, detail="마스터 룰을 찾을 수 없습니다.")
+
+    fq = supabase.table("factories").select("id, factory_name, site_type, company_id").eq("is_active", True)
+    if site_type:
+        fq = fq.eq("site_type", site_type)
+    fres = fq.order("factory_name").limit(8000).execute()
+    facs = fres.data or []
+
+    sets_res = (
+        supabase.table("inspection_sets")
+        .select("id, factory_id, status_code")
+        .eq("legal_rule_id", rule_id)
+        .eq("is_active", True)
+        .execute()
+    )
+    by_fac = {str(s["factory_id"]): s for s in (sets_res.data or [])}
+
+    items = []
+    for f in facs:
+        fid = str(f["id"])
+        row = by_fac.get(fid)
+        if not row:
+            items.append(
+                {
+                    "factory_id": fid,
+                    "factory_name": f.get("factory_name") or f.get("name") or "-",
+                    "site_type": f.get("site_type") or "-",
+                    "inspection_set_id": None,
+                    "schedule_status": "none",
+                    "status_label": "미생성",
+                }
+            )
+        else:
+            st = row.get("status_code") or ""
+            items.append(
+                {
+                    "factory_id": fid,
+                    "factory_name": f.get("factory_name") or f.get("name") or "-",
+                    "site_type": f.get("site_type") or "-",
+                    "inspection_set_id": row.get("id"),
+                    "schedule_status": st,
+                    "status_label": "기준일 필요"
+                    if st == "PENDING_ANCHOR"
+                    else ("활성" if st in ("ACTIVE", "UPCOMING") else st),
+                }
+            )
+    return {"status": "success", "data": {"items": items, "total": len(items)}}
+
+
+# ── POST /inspection-schedule/generate ────────────────────────────────────────
+
+
+@router.post("/generate")
+def generate_inspection_sets_for_rule(body: GenerateScheduleSetsBody):
+    """선택 룰 + 시설 → LEGAL_ENGINE inspection_sets 일괄 생성 (미존재 시만)."""
+    supabase = get_supabase()
+    rule_id = (body.rule_id or "").strip()
+    if not rule_id:
+        raise HTTPException(status_code=422, detail="rule_id가 필요합니다.")
+    ids = [str(x).strip() for x in (body.factory_ids or []) if str(x).strip()]
+    if not ids:
+        raise HTTPException(status_code=422, detail="factory_ids가 비었습니다.")
+
+    mres = (
+        supabase.table("master_building_legal_rules")
+        .select("*")
+        .eq("rule_id", rule_id)
+        .eq("is_active", True)
+        .eq("obligation_type", "INSPECT")
+        .limit(1)
+        .execute()
+    )
+    if not mres.data:
+        raise HTTPException(status_code=404, detail="INSPECT 마스터 룰을 찾을 수 없습니다.")
+    master = mres.data[0]
+
+    existing = (
+        supabase.table("inspection_sets")
+        .select("factory_id")
+        .eq("legal_rule_id", rule_id)
+        .eq("source", "LEGAL_ENGINE")
+        .eq("is_active", True)
+        .in_("factory_id", ids)
+        .execute()
+    )
+    have = {str(r["factory_id"]) for r in (existing.data or [])}
+
+    insert_rows: List[dict] = []
+    skipped = 0
+    for fid in ids:
+        if fid in have:
+            skipped += 1
+            continue
+        fac = (
+            supabase.table("factories")
+            .select("company_id")
+            .eq("id", fid)
+            .eq("is_active", True)
+            .limit(1)
+            .execute()
+        )
+        if not fac.data:
+            skipped += 1
+            continue
+        company_id = fac.data[0].get("company_id")
+        insert_rows.append(_build_insert_row_from_master(master, company_id, fid))
+
+    created = 0
+    for i in range(0, len(insert_rows), 20):
+        chunk = insert_rows[i : i + 20]
+        ins = supabase.table("inspection_sets").insert(chunk).execute()
+        created += len(ins.data or [])
+
+    return {
+        "status": "success",
+        "message": f"생성 {created}건, 기존 스킵 {skipped}건",
+        "data": {"created": created, "skipped": skipped, "rule_id": rule_id},
+    }
+
+
+# ── GET /inspection-schedule/sets/summary-by-rule ────────────────────────────
+
+
+@router.get("/sets/summary-by-rule")
+def get_sets_summary_by_rule(
+    company_id: Optional[str] = Query(None),
+):
+    """
+    상단 요약 카드 — 룰 커버리지.
+    INSPECT 마스터 룰 전체 수 vs 실제 inspection_sets 에 사용된 룰 수 비교.
+    """
+    supabase = get_supabase()
+
+    rules_res = (
+        supabase.table("master_building_legal_rules")
+        .select("rule_id", count="exact")
+        .eq("obligation_type", "INSPECT")
+        .eq("is_active", True)
+        .execute()
+    )
+    total_rules = rules_res.count or 0
+
+    q = (
+        supabase.table("inspection_sets")
+        .select("legal_rule_id, factory_id, status_code")
+        .eq("source", "LEGAL_ENGINE")
+        .eq("is_active", True)
+    )
+    if company_id:
+        q = q.eq("company_id", company_id)
+    sets_res = q.execute()
+    sets = sets_res.data or []
+
+    used_rules = {s["legal_rule_id"] for s in sets if s.get("legal_rule_id")}
+    covered_factories = {s["factory_id"] for s in sets if s.get("factory_id")}
+
+    pending = sum(1 for s in sets if s.get("status_code") == "PENDING_ANCHOR")
+    active = sum(1 for s in sets if s.get("status_code") in ("ACTIVE", "UPCOMING"))
+
+    return {
+        "status": "success",
+        "data": {
+            "total_rules": total_rules,
+            "used_rules": len(used_rules),
+            "coverage_pct": round(len(used_rules) / total_rules * 100, 1) if total_rules else 0,
+            "total_sets": len(sets),
+            "pending_anchor": pending,
+            "active": active,
+            "covered_factories": len(covered_factories),
+        },
+    }
 
 
 # ── GET /inspection-schedule/summary ──────────────────────────────────────────
@@ -96,7 +384,7 @@ def get_inspection_schedule_summary(
     today_plus_7 = today + timedelta(days=7)
 
     q = supabase.table("inspection_sets").select(
-        "id, status_code, next_planned_date", count="exact"
+        "id, status_code, next_planned_date, source", count="exact"
     ).eq("is_active", True)
     if factory_id:
         q = q.eq("factory_id", factory_id)
@@ -125,12 +413,15 @@ def get_inspection_schedule_summary(
         if today <= npd <= today_plus_7:
             upcoming_7d += 1
 
+    legal_engine = sum(1 for r in rows if (r.get("source") or "") == "LEGAL_ENGINE")
+
     return {
         "status": "success",
         "data": {
             "total": total,
             "pending_anchor": pending_anchor,
             "active": active,
+            "legal_engine": legal_engine,
             "overdue": overdue,
             "upcoming_7d": upcoming_7d,
         },
@@ -140,12 +431,28 @@ def get_inspection_schedule_summary(
 # ── GET /inspection-schedule/sets ─────────────────────────────────────────────
 
 
+def _enrich_factory_names(supabase, rows: list) -> None:
+    ids = list({str(r["factory_id"]) for r in rows if r.get("factory_id")})
+    if not ids:
+        for r in rows:
+            r["factory_name"] = "-"
+        return
+    fr = supabase.table("factories").select("id, factory_name").in_("id", ids).execute()
+    mp = {str(f["id"]): f.get("factory_name") or "-" for f in (fr.data or [])}
+    for r in rows:
+        r["factory_name"] = mp.get(str(r.get("factory_id")), "-")
+
+
 @router.get("/sets")
 def list_inspection_sets(
     factory_id: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
     status_code: Optional[str] = Query(None, description="PENDING_ANCHOR / ACTIVE / UPCOMING"),
+    active_only: bool = Query(False, description="ACTIVE + UPCOMING 만"),
     keyword: Optional[str] = Query(None),
+    factory_keyword: Optional[str] = Query(None, description="시설명 부분 검색"),
+    source: Optional[str] = Query(None, description="LEGAL_ENGINE / MANUAL 등"),
+    cycle_unit: Optional[str] = Query(None, description="year, half_year, quarter, month, week, day"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
@@ -153,8 +460,8 @@ def list_inspection_sets(
     supabase = get_supabase()
     q = supabase.table("inspection_sets").select(
         "id, inspection_set_name, inspection_set_code, "
-        "inspection_category, cycle_unit, cycle_value, "
-        "schedule_anchor_date, next_planned_date, last_inspection_date, "
+        "inspection_category, cycle_unit, cycle_value, cycle_base_type, cycle_base_guide, "
+        "schedule_anchor_date, schedule_end_date, next_planned_date, last_inspection_date, "
         "status_code, anchor_confirmed, "
         "law_name, law_article, legal_rule_id, source, "
         "factory_id, company_id, created_at, updated_at",
@@ -165,14 +472,27 @@ def list_inspection_sets(
         q = q.eq("factory_id", factory_id)
     if company_id:
         q = q.eq("company_id", company_id)
-    if status_code:
+    if status_code and not active_only:
         q = q.eq("status_code", status_code)
+    if source:
+        q = q.eq("source", source)
+    if cycle_unit:
+        q = q.eq("cycle_unit", cycle_unit)
     if keyword:
         q = q.ilike("inspection_set_name", f"%{keyword}%")
 
     res = q.limit(_MAX_LIST_FETCH).execute()
     rows = list(res.data or [])
-    total = res.count if res.count is not None else len(rows)
+    if active_only:
+        rows = [r for r in rows if (r.get("status_code") or "") in ("ACTIVE", "UPCOMING")]
+
+    _enrich_factory_names(supabase, rows)
+
+    if factory_keyword:
+        fk = factory_keyword.lower().strip()
+        rows = [r for r in rows if fk in (str(r.get("factory_name") or "").lower())]
+
+    total = len(rows)
 
     def _sort_key(r: dict):
         pend = 0 if r.get("status_code") == "PENDING_ANCHOR" else 1
@@ -266,12 +586,14 @@ def patch_inspection_set(set_id: str, body: InspectionSetPatch):
     allowed = {
         "cycle_unit",
         "cycle_value",
+        "cycle_base_type",
         "cycle_weekday",
         "cycle_month_day",
         "is_month_end",
         "holiday_process_type",
         "description",
         "schedule_anchor_date",
+        "schedule_end_date",
         "custom_cycle_value",
         "custom_cycle_unit",
         "custom_description",
