@@ -463,11 +463,17 @@ def patch_inspection_set(set_id: str, body: InspectionSetPatch):
         raise HTTPException(status_code=400, detail="변경할 필드 없음")
 
     if any(k in updates for k in ("cycle_unit", "cycle_value", "schedule_anchor_date")):
-        anchor = _to_date(updates.get("schedule_anchor_date") or cur.get("schedule_anchor_date"))
+        # 명시적으로 null을 보내면 기준일을 비우는 것이므로, 예전 DB 값으로 되살리지 않는다.
+        if "schedule_anchor_date" in updates:
+            anchor = _to_date(updates["schedule_anchor_date"])
+        else:
+            anchor = _to_date(cur.get("schedule_anchor_date"))
         c_unit = updates.get("cycle_unit") or cur.get("cycle_unit")
         c_val = int(updates.get("cycle_value") or cur.get("cycle_value") or 1)
         if anchor and c_unit and c_val:
             updates["next_planned_date"] = _calc_next_date(anchor, str(c_unit), c_val).isoformat()
+        elif "schedule_anchor_date" in updates and updates.get("schedule_anchor_date") is None:
+            updates["next_planned_date"] = None
 
     supabase.table("inspection_sets").update(_serialize_patch_row(updates)).eq("id", set_id).execute()
     updated = supabase.table("inspection_sets").select("*").eq("id", set_id).limit(1).execute()
