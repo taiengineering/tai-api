@@ -1,4 +1,5 @@
-# main.py — v5.5.4
+# main.py — v5.5.5
+# v5.5.5: contract_kmong 라우터 추가 (크몽 법령진단 API 5개)
 # v5.5.4: inspection_schedule 라우터 추가 (일정관리 API /inspection-schedule)
 # v5.5.3: engine_document 라우터 추가 (문서메뉴 API 4개)
 # v5.5.2: AI 법령 룰 생성기 라우터 추가 (law_rule_generator)
@@ -18,6 +19,7 @@ from routers.legal_engine            import router as legal_engine_router
 from routers.engine_qa               import router as engine_qa_router
 from routers.law_rule_generator      import router as law_rule_generator_router  # v5.5.2
 from routers.engine_document         import router as engine_document_router     # v5.5.3
+from routers.contract_kmong          import router as contract_kmong_router      # v5.5.5
 from routers.ksic_engine             import router as ksic_engine_router
 from routers.factory_process_v3      import router as factory_process_router
 from routers.process_management      import router as process_management_router
@@ -71,7 +73,7 @@ from routers.feature_flags           import router as feature_flags_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.5.4"
+APP_VERSION = "5.5.5"
 
 
 @asynccontextmanager
@@ -130,6 +132,7 @@ app.include_router(legal_engine_router)
 app.include_router(engine_qa_router)
 app.include_router(law_rule_generator_router)   # v5.5.2 AI 룰 생성기
 app.include_router(engine_document_router)      # v5.5.3 문서메뉴
+app.include_router(contract_kmong_router)       # v5.5.5 크몽 법령진단
 app.include_router(ksic_engine_router)
 app.include_router(factory_process_router)
 app.include_router(process_management_router)
@@ -158,7 +161,7 @@ app.include_router(teams_router)
 app.include_router(areas_router)
 app.include_router(buildings_router)
 app.include_router(inspection_sets_router)
-app.include_router(inspection_schedule_router)  # v5.5.4: 일정관리 (기준일·주기)
+app.include_router(inspection_schedule_router)  # v5.5.4 일정관리
 app.include_router(work_schedules_router)
 app.include_router(inspection_router)
 app.include_router(admin_stats_router)
