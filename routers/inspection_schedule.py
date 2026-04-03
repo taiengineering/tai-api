@@ -64,7 +64,7 @@ class InspectionSetPatch(BaseModel):
 
 
 class ConfirmAnchorBody(BaseModel):
-    anchor_date: date
+    anchor_date: Optional[date] = None            # 없으면 기준일 없이 활성화(이벤트 등)
     anchor_type: Optional[str] = None           # 확정 시 유형도 함께 저장 가능
 
 
@@ -502,15 +502,25 @@ def confirm_anchor(set_id: str, body: ConfirmAnchorBody):
     anchor = body.anchor_date
     cu = cur.get("cycle_unit")
     cv = int(cur.get("cycle_value") or 1)
-    next_date = _calc_next_date(anchor, str(cu), cv) if cu else None
 
-    patch = {
-        "schedule_anchor_date": anchor.isoformat(),
-        "anchor_confirmed": True,
-        "next_planned_date": next_date.isoformat() if next_date else None,
-        "status_code": "ACTIVE",
-        "anchor_type_confidence": 100,  # 수동 확정 시 100%
-    }
+    if anchor is None:
+        next_date = None
+        patch = {
+            "schedule_anchor_date": None,
+            "anchor_confirmed": True,
+            "next_planned_date": None,
+            "status_code": "ACTIVE",
+            "anchor_type_confidence": 100,  # 수동 확정 시 100%
+        }
+    else:
+        next_date = _calc_next_date(anchor, str(cu), cv) if cu else None
+        patch = {
+            "schedule_anchor_date": anchor.isoformat(),
+            "anchor_confirmed": True,
+            "next_planned_date": next_date.isoformat() if next_date else None,
+            "status_code": "ACTIVE",
+            "anchor_type_confidence": 100,  # 수동 확정 시 100%
+        }
     if body.anchor_type:
         patch["anchor_type"] = body.anchor_type
 
@@ -518,5 +528,10 @@ def confirm_anchor(set_id: str, body: ConfirmAnchorBody):
     row = supabase.table("inspection_sets").select("*").eq("id", set_id).limit(1).execute()
     if not row.data:
         raise HTTPException(status_code=500, detail="갱신 후 조회 실패")
-    return {"status": "success", "message": f"기준일 확정 완료. 다음 점검일: {next_date}",
-            "data": row.data[0]}
+    if anchor is None:
+        msg = "활성화되었습니다. (기준일 미설정)"
+    elif next_date:
+        msg = f"기준일 확정 완료. 다음 점검일: {next_date}"
+    else:
+        msg = "활성화되었습니다."
+    return {"status": "success", "message": msg, "data": row.data[0]}
