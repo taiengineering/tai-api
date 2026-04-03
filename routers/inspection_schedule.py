@@ -462,15 +462,19 @@ def patch_inspection_set(set_id: str, body: InspectionSetPatch):
     if not updates:
         raise HTTPException(status_code=400, detail="변경할 필드 없음")
 
-    if any(k in updates for k in ("cycle_unit", "cycle_value", "schedule_anchor_date")):
+    if any(k in updates for k in ("cycle_unit", "cycle_value", "schedule_anchor_date", "anchor_type")):
         # 명시적으로 null을 보내면 기준일을 비우는 것이므로, 예전 DB 값으로 되살리지 않는다.
         if "schedule_anchor_date" in updates:
             anchor = _to_date(updates["schedule_anchor_date"])
         else:
             anchor = _to_date(cur.get("schedule_anchor_date"))
+        at_eff = updates["anchor_type"] if "anchor_type" in updates else cur.get("anchor_type")
         c_unit = updates.get("cycle_unit") or cur.get("cycle_unit")
         c_val = int(updates.get("cycle_value") or cur.get("cycle_value") or 1)
-        if anchor and c_unit and c_val:
+        # 이벤트 유형은 사건 발생 전까지 기준일이 없을 수 있음 → 다음 예정일 없음
+        if at_eff == "EVENT" and anchor is None:
+            updates["next_planned_date"] = None
+        elif anchor and c_unit and c_val:
             updates["next_planned_date"] = _calc_next_date(anchor, str(c_unit), c_val).isoformat()
         elif "schedule_anchor_date" in updates and updates.get("schedule_anchor_date") is None:
             updates["next_planned_date"] = None
