@@ -200,12 +200,20 @@ async def create_anonymous_diagnosis(body: AnonymousDiagnosisCreate):
     }
 
 
+ADMIN_ALLOWED_STATUS = frozenset({"ACTIVE", "CLAIMED", "EXPIRED"})
+
+
+class AdminAnonDiagPatch(BaseModel):
+    status: Optional[str] = Field(None, description="ACTIVE | CLAIMED | EXPIRED")
+
+
 # ── 관리자: 전체 목록 조회 (/{token} 보다 먼저 등록) ─────────────────
 @router.get("/admin/list")
 def list_anonymous_diagnoses(
     page: int = 1,
     size: int = 20,
     status: Optional[str] = None,
+    keyword: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ):
     if current_user.get("role_code") != "001":
@@ -217,6 +225,9 @@ def list_anonymous_diagnoses(
     )
     if status:
         q = q.eq("status", status)
+    kw = (keyword or "").strip()
+    if kw:
+        q = q.ilike("public_token", f"%{kw}%")
     offset = (page - 1) * size
     res = q.order("created_at", desc=True).range(offset, offset + size - 1).execute()
     return {
@@ -229,6 +240,51 @@ def list_anonymous_diagnoses(
             "total_pages": -(-res.count // size) if res.count else 0,
         },
     }
+
+
+@router.get("/admin/detail/{record_id}")
+def admin_get_anonymous_diagnosis_detail(
+    record_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """관리자: 단건 전체 필드 (partial/full JSON 포함)."""
+    if current_user.get("role_code") != "001":
+        raise HTTPException(status_code=403, detail="관리자만 접근 가능합니다.")
+    supabase = get_supabase()
+    res = (
+        supabase.table("anonymous_diagnosis_results")
+        .select("*")
+        .eq("id", record_id)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="레코드를 찾을 수 없습니다.")
+    return {"status": "success", "data": res.data[0]}
+
+
+@router.patch("/admin/{record_id}")
+def admin_patch_anonymous_diagnosis(
+    record_id: str,
+    body: AdminAnonDiagPatch,
+    current_user: dict = Depends(get_current_user),
+):
+    if current_user.get("role_code") != "001":
+        raise HTTPException(status_code=403, detail="관리자만 접근 가능합니다.")
+    if body.status is None:
+        raise HTTPException(status_code=422, detail="변경할 status가 필요합니다.")
+    if body.status not in ADMIN_ALLOWED_STATUS:
+        raise HTTPException(status_code=422, detail="허용되지 않는 status입니다.")
+    supabase = get_supabase()
+    res = (
+        supabase.table("anonymous_diagnosis_results")
+        .update({"status": body.status})
+        .eq("id", record_id)
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="레코드를 찾을 수 없습니다.")
+    return {"status": "success", "data": res.data[0]}
 
 
 # ── 만료 레코드 일괄 처리 (스케줄러 호출용) ─────────────────────────

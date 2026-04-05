@@ -72,6 +72,7 @@ from routers.alert_messages          import router as alert_messages_router
 from routers.feature_flags           import router as feature_flags_router
 from routers.site_public             import router as site_public_router, admin_router as site_faq_admin_router
 from routers.anonymous_diagnosis     import router as anonymous_diagnosis_router
+from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +185,7 @@ app.include_router(diagnosis_router)
 app.include_router(tbm_router)
 app.include_router(safety_meetings_router)
 app.include_router(risk_assessments_router)
+app.include_router(mail_router)
 
 
 @app.get("/")
