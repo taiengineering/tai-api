@@ -70,6 +70,8 @@ from routers.public                  import router as public_router
 from routers.public_admin            import router as public_admin_router
 from routers.alert_messages          import router as alert_messages_router
 from routers.feature_flags           import router as feature_flags_router
+from routers.site_public             import router as site_public_router, admin_router as site_faq_admin_router
+from routers.anonymous_diagnosis     import router as anonymous_diagnosis_router
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +125,9 @@ app.include_router(public_router)
 app.include_router(public_admin_router)
 app.include_router(alert_messages_router)
 app.include_router(feature_flags_router)
+app.include_router(site_public_router)
+app.include_router(site_faq_admin_router)
+app.include_router(anonymous_diagnosis_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(companies_router)
