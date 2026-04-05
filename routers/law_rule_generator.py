@@ -8,6 +8,12 @@ Claude Haiku API로 법령 조문 → 판정룰 초안 자동 생성.
   PENDING → (거부) REJECTED
   PENDING → (수정) MODIFIED → (승인) APPROVED
 
+v1.5.0 (2026-04-05):
+  [ADD] GET /drafts — has_condition 파라미터 추가
+        has_condition=false → condition_code IS NULL 필터
+        has_condition=true  → condition_code IS NOT NULL 필터
+        has_condition=""    → 전체 (기존 동작)
+
 v1.4.0 (2026-04-03):
   [ADD] POST /bulk-approve-unregistered — APPROVED + 미등록 draft 일괄 master 등록
 
@@ -150,10 +156,8 @@ async def call_claude(law_name: str, article_text: str) -> List[Dict]:
 def _auto_approve_to_master(supabase, draft: dict) -> Optional[str]:
     """초안 1건을 master에 등록하고 APPROVED 처리. rule_id 반환."""
     rule_id = draft.get("draft_rule_id") or f"AI-{str(draft['id'])[:8].upper()}"
-    # 중복 체크 — 이미 있으면 -V2 suffix
     if supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute().data:
         rule_id = rule_id + "-V2"
-    # 또 충돌이면 스킵
     if supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute().data:
         return None
 
@@ -523,8 +527,6 @@ async def auto_parse_and_approve(body: dict):
 
 
 # ── POST /bulk-approve-unregistered ───────────────────────
-# 내부 전용: APPROVED + registered_rule_id IS NULL인 draft를 일괄 master 등록
-# 한 번 호출로 limit개 처리 — 전체 완료까지 반복 호출 필요
 
 @router.post("/bulk-approve-unregistered")
 async def bulk_approve_unregistered(
@@ -536,7 +538,6 @@ async def bulk_approve_unregistered(
 
     supabase = get_supabase()
 
-    # 미등록 APPROVED draft 목록
     res = (
         supabase.table("law_rule_drafts")
         .select("*")
@@ -556,11 +557,9 @@ async def bulk_approve_unregistered(
             continue
         try:
             rule_id = d.get("draft_rule_id") or f"AI-{d['id'][:8].upper()}"
-            # 중복 체크
             if supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute().data:
                 rule_id = rule_id + "-V2"
             if supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute().data:
-                # 이미 등록됨 — registered_rule_id만 업데이트
                 supabase.table("law_rule_drafts").update({
                     "registered_rule_id": rule_id,
                     "reviewed_at": datetime.now(timezone.utc).isoformat(),
@@ -604,7 +603,7 @@ async def bulk_approve_unregistered(
                 ok += 1
             else:
                 fail += 1
-        except Exception as e:
+        except Exception:
             fail += 1
 
     remaining_res = (
@@ -624,7 +623,48 @@ async def bulk_approve_unregistered(
     }}
 
 
+# ── GET /stats ─────────────────────────────────────────────
+
+@router.get("/stats")
+async def get_stats():
+    supabase = get_supabase()
+    res = supabase.table("law_rule_drafts").select(
+        "status, sector, obligation_type, ai_confidence").execute()
+    rows = res.data or []
+
+    status_cnt: Dict[str, int] = {}
+    sector_cnt: Dict[str, int] = {}
+    obtype_cnt: Dict[str, int] = {}
+    conf_sum, conf_cnt = 0, 0
+
+    for r in rows:
+        s  = r.get("status")  or "PENDING"
+        sc = r.get("sector")  or "UNKNOWN"
+        ot = r.get("obligation_type") or "UNKNOWN"
+        if sc.upper() not in EXCLUDED_SECTORS:
+            status_cnt[s]  = status_cnt.get(s, 0)  + 1
+            sector_cnt[sc] = sector_cnt.get(sc, 0) + 1
+            obtype_cnt[ot] = obtype_cnt.get(ot, 0) + 1
+            if r.get("ai_confidence") is not None:
+                conf_sum += r["ai_confidence"]; conf_cnt += 1
+
+    master_res = supabase.table("master_building_legal_rules").select(
+        "source_api", count="exact").eq("source_api", "AI_GENERATED").execute()
+
+    return {"status": "success", "data": {
+        "model":              CLAUDE_MODEL,
+        "total_drafts":       len(rows),
+        "status_breakdown":   status_cnt,
+        "sector_breakdown":   sector_cnt,
+        "obtype_breakdown":   obtype_cnt,
+        "avg_confidence":     round(conf_sum / conf_cnt, 1) if conf_cnt else 0,
+        "approved_in_master": master_res.count or 0,
+        "needs_review":       status_cnt.get("NEEDS_REVIEW", 0),
+    }}
+
+
 # ── GET /drafts ────────────────────────────────────────────
+# 주의: /drafts 는 /drafts/{draft_id} 보다 먼저 선언돼야 함
 
 @router.get("/drafts")
 async def get_drafts(
@@ -633,9 +673,16 @@ async def get_drafts(
     ob_type:        str = Query(""),
     law_name:       str = Query(""),
     confidence_min: int = Query(0),
+    has_condition:  str = Query("", description="true | false | '' (전체)"),  # v1.5.0
     page:           int = Query(1, ge=1),
     page_size:      int = Query(20, ge=1, le=100),
 ):
+    """
+    초안 목록 조회
+    - has_condition=false → condition_code IS NULL (조건 없는 룰)
+    - has_condition=true  → condition_code IS NOT NULL (조건 있는 룰)
+    - has_condition=""    → 전체
+    """
     supabase = get_supabase()
     q = supabase.table("law_rule_drafts").select("*", count="exact")
     if status:         q = q.eq("status", status)
@@ -643,6 +690,11 @@ async def get_drafts(
     if ob_type:        q = q.eq("obligation_type", ob_type)
     if law_name:       q = q.ilike("law_name", f"%{law_name}%")
     if confidence_min: q = q.gte("ai_confidence", confidence_min)
+    # v1.5.0: condition_code 존재 여부 필터
+    if has_condition == "false":
+        q = q.is_("condition_code", "null")
+    elif has_condition == "true":
+        q = q.not_.is_("condition_code", "null")
     q = q.not_.in_("sector", list(EXCLUDED_SECTORS))
     offset = (page - 1) * page_size
     res = q.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
@@ -745,41 +797,3 @@ async def reject_draft(draft_id: str, body: dict = None):
     if not res.data:
         raise HTTPException(status_code=404, detail="초안 없음")
     return {"status": "success", "message": "거부 처리 완료"}
-
-
-@router.get("/stats")
-async def get_stats():
-    supabase = get_supabase()
-    res = supabase.table("law_rule_drafts").select(
-        "status, sector, obligation_type, ai_confidence").execute()
-    rows = res.data or []
-
-    status_cnt: Dict[str, int] = {}
-    sector_cnt: Dict[str, int] = {}
-    obtype_cnt: Dict[str, int] = {}
-    conf_sum, conf_cnt = 0, 0
-
-    for r in rows:
-        s  = r.get("status")  or "PENDING"
-        sc = r.get("sector")  or "UNKNOWN"
-        ot = r.get("obligation_type") or "UNKNOWN"
-        if sc.upper() not in EXCLUDED_SECTORS:
-            status_cnt[s]  = status_cnt.get(s, 0)  + 1
-            sector_cnt[sc] = sector_cnt.get(sc, 0) + 1
-            obtype_cnt[ot] = obtype_cnt.get(ot, 0) + 1
-            if r.get("ai_confidence") is not None:
-                conf_sum += r["ai_confidence"]; conf_cnt += 1
-
-    master_res = supabase.table("master_building_legal_rules").select(
-        "source_api", count="exact").eq("source_api", "AI_GENERATED").execute()
-
-    return {"status": "success", "data": {
-        "model":              CLAUDE_MODEL,
-        "total_drafts":       len(rows),
-        "status_breakdown":   status_cnt,
-        "sector_breakdown":   sector_cnt,
-        "obtype_breakdown":   obtype_cnt,
-        "avg_confidence":     round(conf_sum / conf_cnt, 1) if conf_cnt else 0,
-        "approved_in_master": master_res.count or 0,
-        "needs_review":       status_cnt.get("NEEDS_REVIEW", 0),
-    }}
