@@ -1,0 +1,52 @@
+{
+  "mcps": {
+    "github": [
+      {
+        "name": "github-tai",
+        "service": "GitHub",
+        "repo": "taiengineering/tai-api",
+        "auth": "personal_access_token",
+        "use_case": "Backend (FastAPI, legal_engine, contracts)"
+      },
+      {
+        "name": "github-tai-admin",
+        "service": "GitHub",
+        "repo": "taiengineering/tai-admin",
+        "auth": "personal_access_token",
+        "use_case": "Frontend (Vue HTML, admin panels)"
+      }
+    ],
+    "supabase": [
+      {
+        "name": "supabase-tai",
+        "service": "Supabase",
+        "project_id": "xntdkrjhgcscmqctdzyo",
+        "auth": "service_role_key",
+        "use_case": "Database (all tables)",
+        "shared": true
+      }
+    ]
+  },
+  "window_setup": {
+    "window_1": {
+      "name": "TAI Planning (기획/메모리)",
+      "mcps": ["github-tai", "supabase-tai"],
+      "context_type": "Strategy, Documentation, Session Memory"
+    },
+    "window_2": {
+      "name": "TAI Backend (백엔드 개발)",
+      "mcps": ["github-tai", "supabase-tai"],
+      "context_type": "API development, Database operations"
+    },
+    "window_3": {
+      "name": "TAI Frontend (프론트엔드 개발)",
+      "mcps": ["github-tai-admin", "supabase-tai"],
+      "context_type": "HTML/Vue development, UI design"
+    }
+  },
+  "quick_commands": {
+    "backend_query": "supabase:execute_sql → master_building_legal_rules",
+    "github_push": "github-tai:push_files → tai-api/main",
+    "frontend_update": "github-tai-admin:create_or_update_file → tai-admin"
+  }
+}
