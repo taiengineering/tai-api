@@ -29,9 +29,9 @@ cd ~/TAI
 git init
 echo "   ✅ 완료"
 
-# 4. .gitignore 생성
+# 4. .gitignore 생성 (경로 수정: ~/.TAI → ~/TAI)
 echo "4️⃣ .gitignore 생성..."
-cat > ~/.TAI/.gitignore << 'EOF'
+cat > ~/TAI/.gitignore << 'EOF'
 # IDE
 .vscode/
 .idea/
@@ -132,7 +132,7 @@ echo ""
 echo "✅ 원복 완료!"
 echo ""
 echo "📁 현재 구조:"
-tree -L 2 -a ~/TAI 2>/dev/null || find ~/TAI -maxdepth 2 -type f | head -20
+ls -la ~/TAI/
 echo ""
 echo "🔗 Git 상태:"
 cd ~/TAI && git status
