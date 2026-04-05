@@ -1,21 +1,18 @@
 """
-법령 판정 엔진 라우터 — v5.5.2
+법령 판정 엔진 라우터 — v5.6.0
 =================================
+v5.6.0:
+  - format_rule_result_db: 신규 필드 3개 반환
+    · submit_org_code    — 제출기관 코드 (moel/nfa/kesco/kgs/me/mlit/kosha/self/local_gov)
+    · executor_type_code — 이행자유형 (anyone/qualified/external/appointed)
+    · report_method_std  — 보고방법 표준코드 (api/mail/visit/fax/keep)
+  - ENGINE_VERSION = "5.6.0"
 v5.5.2 (중복 제거):
   - _classify_rules_db: APPOINT 분류 시 appointment_target_code 기준 중복 제거
-    · 같은 선임 대상(에너지관리자, 소방안전관리자 등)이 여러 법령에서 중복 발동되던 문제 해결
-    · 동일 target_code의 첫 번째 룰만 결과에 포함, 나머지는 스킵
-    · 효과: energy_manager(4개→1개), fire_safety_manager(3개→1개) 등 정리
 v5.5.1 (분류 로직 수정):
   - _classify_rules_db: obligation_type 절대 우선 분류
-    · 기존: appointment_required=True이면 obligation_type 무관하게 APPOINT로 분류
-    · 수정: obligation_type이 명시된 경우 반드시 우선 사용, bool 필드는 fallback으로만
-    · 효과: NOTIFY+appointment_required=True 룰이 APPOINT로 잘못 집계되던 문제 해결
-  - DB 조치 병행: condition=NULL 선임 룰 condition 추가, 폐기물/수도 전용 룰 비활성화
 v5.5.0 (sector 구조 개선):
-  - SECTOR_RULE_GROUPS 딕셔너리 도입 (COMMON/CONSTRUCTION_MANUFACTURING/BUILDING_CONSTRUCTION/BUILDING_MANUFACTURING)
-  - diagnose_step1/step2/apply 조회 로직: .eq("sector") → .in_("sector", get_sector_groups())
-  - 법령 개정 시 1곳만 수정 → 모든 해당 섹터 자동 반영
+  - SECTOR_RULE_GROUPS 딕셔너리 도입
 v5.4.2: apply/{factory_id} 섹터 필터 누락 수정
 v5.4.1: _CONSTRUCTION_AMOUNT_THRESHOLDS 단위 오류 수정 (15억→150억)
 v5.4.0: DiagnoseStep1Body CONSTRUCTION 전용 필드 추가, 익명 진단, 점검주기 DB 조회
@@ -36,7 +33,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.5.2"  # v5.5.2: appointment_target_code 기준 중복 제거
+ENGINE_VERSION = "5.6.0"  # v5.6.0: submit_org/executor_type/report_method 반환 추가
 
 
 # ──────────────────────────────────────────────
@@ -92,21 +89,42 @@ CONSTRUCTION_RELEVANT_LAW_PREFIXES = [
     "근로기준", "산업재해보상", "전기안전",
 ]
 
+# ──────────────────────────────────────────────
+# v5.6.0: 이행자유형 / 제출기관 한글 매핑
+# ──────────────────────────────────────────────
+
+EXECUTOR_TYPE_MAP = {
+    "anyone":    "사업주 누구나",
+    "qualified": "자격자만",
+    "external":  "외부기관 위탁",
+    "appointed": "선임된 관리자",
+}
+
+SUBMIT_ORG_MAP = {
+    "moel":      "고용노동부(노동청)",
+    "nfa":       "소방서",
+    "kesco":     "한국전기안전공사",
+    "kgs":       "한국가스안전공사",
+    "me":        "지방환경청(환경부)",
+    "mlit":      "국토교통부(지자체)",
+    "kosha":     "한국산업안전보건공단",
+    "self":      "자체보관",
+    "local_gov": "지방자치단체",
+    "keco":      "한국환경공단",
+}
+
+REPORT_METHOD_MAP = {
+    "api":  "API(온라인시스템)",
+    "mail": "우편",
+    "visit":"방문",
+    "fax":  "팩스",
+    "keep": "자체보관(미제출)",
+}
+
 
 # ──────────────────────────────────────────────
 # v5.5.0: 섹터별 룰 그룹 매핑
 # ──────────────────────────────────────────────
-# sector 값 정의:
-#   COMMON                    : 전 섹터 공통 (건설산업기본법 등)
-#   CONSTRUCTION_MANUFACTURING: 건설+제조 공통 (근로기준법, 산안기준규칙, 산재보험법 등)
-#   BUILDING_CONSTRUCTION     : 건물+건설 공통 (건설기술진흥법 시행규칙 등)
-#   BUILDING_MANUFACTURING    : 건물+제조 공통 (산안법 시행령 50명 기준 등)
-#   BUILDING                  : 건물 전용
-#   MANUFACTURING             : 제조 전용
-#   CONSTRUCTION              : 건설 전용
-#   SPECIAL_FACILITY          : 특수시설 전용
-#
-# 법령 개정 시 COMMON/공용 룰 1곳만 수정 → 모든 해당 섹터 자동 반영
 
 SECTOR_RULE_GROUPS: Dict[str, List[str]] = {
     "BUILDING": [
@@ -128,7 +146,6 @@ SECTOR_RULE_GROUPS: Dict[str, List[str]] = {
 
 
 def get_sector_groups(sector: str) -> List[str]:
-    """섹터 코드 → 해당 섹터에 적용할 sector 값 목록 반환."""
     return SECTOR_RULE_GROUPS.get(sector.strip().upper(), [sector.strip().upper()])
 
 
@@ -399,7 +416,17 @@ def _calc_due_date(due_days) -> dict:
 
 
 def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    v5.6.0: submit_org_code / executor_type_code / report_method_std 필드 추가.
+    진단 결과에서 제출기관·이행자·보고방법을 직접 확인할 수 있도록 반환.
+    """
     desc = (rule.get("obligation_summary") or rule.get("remarks") or "").strip()
+
+    # v5.6.0 신규 필드
+    submit_org_code    = rule.get("submit_org_code") or ""
+    executor_type_code = rule.get("executor_type_code") or ""
+    report_method_std  = rule.get("report_method_std") or ""
+
     return {
         "rule_id":               rule.get("rule_id", ""),
         "rule_type":             str(rule.get("rule_type_code") or ""),
@@ -424,6 +451,14 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
         "due_days":              rule.get("due_days"),
         "due_info":              _calc_due_date(rule.get("due_days")),
         "sector":                rule.get("sector") or "",
+        "diagnosis_stage":       rule.get("diagnosis_stage"),
+        # ── v5.6.0 신규 ──
+        "submit_org_code":       submit_org_code,
+        "submit_org_label":      SUBMIT_ORG_MAP.get(submit_org_code, submit_org_code),
+        "executor_type_code":    executor_type_code,
+        "executor_type_label":   EXECUTOR_TYPE_MAP.get(executor_type_code, executor_type_code),
+        "report_method_std":     report_method_std,
+        "report_method_label":   REPORT_METHOD_MAP.get(report_method_std, report_method_std),
     }
 
 
@@ -458,28 +493,17 @@ def _classify_one(rule: dict, formatted: dict, triggered: dict):
 def _classify_rules_db(rules: List[Dict[str, Any]], triggered: Dict[str, List]) -> None:
     """
     v5.5.2: obligation_type 절대 우선 분류 + appointment_target_code 기준 중복 제거.
-
-    [중복 제거 로직]
-    같은 appointment_target_code를 가진 룰이 여러 법령에 걸쳐 존재하는 경우
-    (예: energy_manager가 에너지이용합리화법·에너지이용합리화법 시행령 등 4개 룰)
-    첫 번째 룰만 결과에 포함하고 나머지는 스킵.
-    이로써 진단 결과에서 동일 선임 의무 중복 표시 문제를 해결.
-
-    [분류 우선순위]
-    obligation_type이 명시되어 있으면 appointment_required 등 bool 필드보다 반드시 우선 사용.
-    obligation_type이 없거나 OTHER인 경우에만 bool 필드를 fallback으로 사용.
     """
-    seen_appoint_targets: set = set()  # ★ v5.5.2: APPOINT 중복 제거용
+    seen_appoint_targets: set = set()
 
     for rule in rules:
         formatted = format_rule_result_db(rule)
         ot = (rule.get("obligation_type") or "").strip().upper()
 
         if ot == "APPOINT":
-            # ★ appointment_target_code 기준 중복 제거
             target = (rule.get("appointment_target_code") or rule.get("rule_id") or "").strip()
             if target and target in seen_appoint_targets:
-                continue  # 이미 같은 선임 의무 있음 → 스킵
+                continue
             if target:
                 seen_appoint_targets.add(target)
             triggered["appointment"].append(formatted)
@@ -493,7 +517,6 @@ def _classify_rules_db(rules: List[Dict[str, Any]], triggered: Dict[str, List]) 
         elif ot == "ACTION":
             triggered["action"].append(formatted)
         else:
-            # obligation_type 없음/OTHER → bool 필드 fallback
             if rule.get("appointment_required"):
                 target = (rule.get("appointment_target_code") or rule.get("rule_id") or "").strip()
                 if target and target in seen_appoint_targets:
@@ -613,7 +636,7 @@ async def apply_legal_engine(
     body: Optional[dict] = None,
     mode: str = Query("all"),
 ):
-    """시설 등록 기반 법령 판정 (v5.5.2)"""
+    """시설 등록 기반 법령 판정 (v5.6.0)"""
     supabase = get_supabase()
     if body and body.get("mode"):
         mode = body["mode"]
@@ -767,7 +790,7 @@ class DiagnoseStep1Body(BaseModel):
     # v5.4.0: CONSTRUCTION 전용 명시적 필드
     construction_type: Optional[str] = Field(None, description="건축 | 토목 | 공통 | 기타")
     direct_workers: Optional[int] = Field(None, description="직영 근로자 수")
-    subcon_workers: Optional[int] = Field(None, description="하도급 근로자 수 (산안법 시행령 제16조③ 포함)")
+    subcon_workers: Optional[int] = Field(None, description="하도급 근로자 수")
     electrical_capacity_kw: Optional[float] = Field(None, description="임시전기 설비 용량(kW)")
     has_tunnel_bridge: Optional[bool] = Field(None, description="터널·교량 공사 포함 여부")
     has_blasting: Optional[bool] = Field(None, description="발파 작업 포함 여부")
@@ -845,7 +868,6 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
         ctx["has_high_pressure_gas"] = 1 if _truthy(inp.get("has_high_pressure_gas")) else 0
         ctx["has_chemical_substance"] = 1 if _truthy(inp.get("has_chemical_substance")) else 0
         ctx["has_boiler"] = 1 if _truthy(inp.get("has_boiler")) else 0
-        # building_area 추가 (제조업 시설 면적 기반 조건용)
         ctx["building_area"] = float(inp.get("building_area") or inp.get("total_floor_area") or inp.get("floor_area") or 0)
         ctx["total_floor_area"] = ctx["building_area"]
     elif sec == "CONSTRUCTION":
@@ -936,10 +958,6 @@ def _db_rule_matches_facility(rule: Dict[str, Any], context: Dict[str, Any]) -> 
 def _evaluate_facility_conditions_db(
     facility_ctx: Dict[str, Any], rules: List[Dict[str, Any]], sector: str = ""
 ) -> tuple:
-    """
-    v5.5.0: COMMON/공용 sector 룰은 조건 없이 applicable 처리.
-            CONSTRUCTION 섹터 특화 로직은 sector='CONSTRUCTION' 룰에만 적용.
-    """
     applicable: List[Dict[str, Any]] = []
     not_applicable: List[Dict[str, Any]] = []
     for rule in rules:
@@ -1564,12 +1582,12 @@ def _create_report_events_from_rules(supabase, factory_id: str, matched_rules: l
 
 
 # ──────────────────────────────────────────────
-# POST /legal-engine/diagnose/step2  v5.5.2
+# POST /legal-engine/diagnose/step2  v5.6.0
 # ──────────────────────────────────────────────
 
 @router.post("/diagnose/step2")
 def diagnose_step2(body: dict):
-    """건설 법령진단 2단계 — 공종별 법령 판정 (v5.5.2)"""
+    """건설 법령진단 2단계 — 공종별 법령 판정 (v5.6.0)"""
     supabase   = get_supabase()
     factory_id = body.get('factory_id')
     diagnosis_id             = body.get('diagnosis_id')
