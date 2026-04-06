@@ -1,5 +1,5 @@
 """
-TAI 법령엔진 단계별(Layer) 무결성 검증 — v1.0
+TAI 법령엔진 단계별(Layer) 무결성 검증 — v1.1
 ================================================
 
 시설/설비/공정/복합 단계별로 엔진이 올바르게 동작하는지 검증합니다.
@@ -25,7 +25,7 @@ TAI 법령엔진 단계별(Layer) 무결성 검증 — v1.0
   - elevator_count는 v5.6.1+ 부터 step1 BUILDING에서 지원
   - step2 공종 필터: 공종 없음=전체, 공종 지정=공통+해당공종만
 
-고정 기준일: 2026-04-06
+고정 기준일: 2026-04-06 (v1.1 — Job4 CI 통합)
 엔진 버전:   v5.6.1 이상 (elevator_count step1 BUILDING 지원)
 
 실행:
@@ -111,12 +111,13 @@ def total_n(data: dict) -> int:
 
 # ══════════════════════════════════════════════
 # L1: 시설단위 — 설비 수치 직접 입력 (정방향)
+# 건물·산업·건설 × 시설,공사장 × 설비,작업
 # ══════════════════════════════════════════════
 
 def test_L1_forward():
     head("L1 시설단위 설비 정방향 — 설비 있으면 관리자 발동")
 
-    sub("승강기 (elevator_count) — v5.6.1+ 지원")
+    sub("건물(BUILDING) — 승강기 (elevator_count)")
     elev1 = diagnose_step1("BUILDING", {"total_floor_area": 3000, "worker_count": 10, "elevator_count": 1})
     elev0 = diagnose_step1("BUILDING", {"total_floor_area": 3000, "worker_count": 10, "elevator_count": 0})
     check(has_appt(elev1, "elevator_safety_manager"),
@@ -125,61 +126,62 @@ def test_L1_forward():
     check(not has_appt(elev0, "elevator_safety_manager"),
           "건물 승강기 0대 → 승강기안전관리자 없음",  "건물 승강기 0대인데 오발동")
 
-    sub("전기 (electric_capacity)")
+    sub("건물(BUILDING) — 전기 (electric_capacity)")
     e500 = diagnose_step1("BUILDING", {"total_floor_area": 3000, "worker_count": 10, "electric_capacity": 500})
     e0   = diagnose_step1("BUILDING", {"total_floor_area": 3000, "worker_count": 10, "electric_capacity": 0})
-    check(has_appt(e500, "electric_safety_manager"),     "건물 전기 500kW → 전기안전관리자 발동", "건물 전기 500kW → 전기안전관리자 미발동")
-    check(not has_appt(e0, "electric_safety_manager"),   "건물 전기 0kW → 전기안전관리자 없음",  "건물 전기 0kW인데 오발동")
+    check(has_appt(e500, "electric_safety_manager"),   "건물 전기 500kW → 전기안전관리자 발동", "건물 전기 500kW → 전기안전관리자 미발동")
+    check(not has_appt(e0, "electric_safety_manager"), "건물 전기 0kW → 전기안전관리자 없음",  "건물 전기 0kW인데 오발동")
 
-    sub("가스/보일러 (불리언 입력)")
+    sub("산업(MANUFACTURING) — 가스/보일러 (불리언)")
     gas_t  = diagnose_step1("MANUFACTURING", {"worker_count": 30, "has_high_pressure_gas": True})
     gas_f  = diagnose_step1("MANUFACTURING", {"worker_count": 30, "has_high_pressure_gas": False})
     boil_t = diagnose_step1("MANUFACTURING", {"worker_count": 30, "has_boiler": True})
     boil_f = diagnose_step1("MANUFACTURING", {"worker_count": 30, "has_boiler": False})
-    check(has_appt(gas_t,  "gas_safety_manager"),    "산업 가스있음 → 가스안전관리자 발동",    "산업 가스있음 → 가스안전관리자 미발동")
-    check(not has_appt(gas_f,  "gas_safety_manager"),"산업 가스없음 → 가스안전관리자 없음",    "산업 가스없음인데 오발동")
-    check(has_appt(boil_t, "energy_manager"),         "산업 보일러있음 → 에너지관리자 발동",    "산업 보일러있음 → 에너지관리자 미발동")
-    check(not has_appt(boil_f, "energy_manager"),     "산업 보일러없음 → 에너지관리자 없음",    "산업 보일러없음인데 오발동")
+    check(has_appt(gas_t,  "gas_safety_manager"),     "산업 가스있음 → 가스안전관리자 발동",  "산업 가스있음 → 가스안전관리자 미발동")
+    check(not has_appt(gas_f, "gas_safety_manager"),  "산업 가스없음 → 가스안전관리자 없음",  "산업 가스없음인데 오발동")
+    check(has_appt(boil_t, "energy_manager"),          "산업 보일러있음 → 에너지관리자 발동",  "산업 보일러있음 → 에너지관리자 미발동")
+    check(not has_appt(boil_f, "energy_manager"),      "산업 보일러없음 → 에너지관리자 없음",  "산업 보일러없음인데 오발동")
 
 
 # ══════════════════════════════════════════════
-# L1: 시설단위 — 설비 수치 역방향 (선택적 소멸)
+# L1: 시설단위 — 역방향 (선택적 소멸)
 # ══════════════════════════════════════════════
 
 def test_L1_reverse():
     head("L1 시설단위 설비 역방향 — 하나 제거 시 해당만 소멸")
 
-    sub("건물: 승강기+전기 복합 역방향")
+    sub("건물(BUILDING) — 승강기+전기 복합 역방향")
     both  = diagnose_step1("BUILDING", {"total_floor_area": 3000, "worker_count": 10, "elevator_count": 1, "electric_capacity": 300})
     no_e  = diagnose_step1("BUILDING", {"total_floor_area": 3000, "worker_count": 10, "elevator_count": 0, "electric_capacity": 300})
     no_ec = diagnose_step1("BUILDING", {"total_floor_area": 3000, "worker_count": 10, "elevator_count": 1, "electric_capacity": 0})
     check(has_appt(both, "elevator_safety_manager") and has_appt(both, "electric_safety_manager"),
-          "건물 승강기+전기 → 둘다 발동",              "건물 승강기+전기 복합 → 일부 미발동")
+          "건물 승강기+전기 → 둘다 발동",         "건물 승강기+전기 복합 → 일부 미발동")
     check(not has_appt(no_e, "elevator_safety_manager") and has_appt(no_e, "electric_safety_manager"),
-          "건물 승강기제거 → 전기만 남음",              "건물 승강기제거 → 선택적 소멸 실패")
+          "건물 승강기제거 → 전기만 남음",         "건물 승강기제거 → 선택적 소멸 실패")
     check(has_appt(no_ec, "elevator_safety_manager") and not has_appt(no_ec, "electric_safety_manager"),
-          "건물 전기제거 → 승강기만 남음",              "건물 전기제거 → 선택적 소멸 실패")
+          "건물 전기제거 → 승강기만 남음",         "건물 전기제거 → 선택적 소멸 실패")
 
-    sub("산업: 가스+위험물 복합 역방향")
-    m_both   = diagnose_step1("MANUFACTURING", {"worker_count": 30, "has_high_pressure_gas": True,  "has_hazardous_material": True})
-    m_nogas  = diagnose_step1("MANUFACTURING", {"worker_count": 30, "has_high_pressure_gas": False, "has_hazardous_material": True})
-    m_nohzm  = diagnose_step1("MANUFACTURING", {"worker_count": 30, "has_high_pressure_gas": True,  "has_hazardous_material": False})
+    sub("산업(MANUFACTURING) — 가스+위험물 복합 역방향")
+    m_both  = diagnose_step1("MANUFACTURING", {"worker_count": 30, "has_high_pressure_gas": True,  "has_hazardous_material": True})
+    m_nogas = diagnose_step1("MANUFACTURING", {"worker_count": 30, "has_high_pressure_gas": False, "has_hazardous_material": True})
+    m_nohzm = diagnose_step1("MANUFACTURING", {"worker_count": 30, "has_high_pressure_gas": True,  "has_hazardous_material": False})
     check(has_appt(m_both, "gas_safety_manager") and has_appt(m_both, "hazardous_material_manager"),
-          "산업 가스+위험물 → 둘다 발동",               "산업 가스+위험물 복합 → 일부 미발동")
+          "산업 가스+위험물 → 둘다 발동",          "산업 가스+위험물 복합 → 일부 미발동")
     check(not has_appt(m_nogas, "gas_safety_manager") and has_appt(m_nogas, "hazardous_material_manager"),
-          "산업 가스제거 → 위험물관리자만 남음",          "산업 가스제거 → 선택적 소멸 실패")
+          "산업 가스제거 → 위험물관리자만 남음",    "산업 가스제거 → 선택적 소멸 실패")
     check(has_appt(m_nohzm, "gas_safety_manager") and not has_appt(m_nohzm, "hazardous_material_manager"),
-          "산업 위험물제거 → 가스안전관리자만 남음",      "산업 위험물제거 → 선택적 소멸 실패")
+          "산업 위험물제거 → 가스안전관리자만 남음", "산업 위험물제거 → 선택적 소멸 실패")
 
 
 # ══════════════════════════════════════════════
-# L2: 공정단위 — step2 건설 공종별 테스트
+# L2: 공정단위 — step2 건설 공종별
+# 공사장 × 공정 × 정방향/역방향
 # ══════════════════════════════════════════════
 
 def test_L2_process():
-    head("L2 공정단위 (step2) — 건설 공종별 법령 필터")
+    head("L2 공정단위 (step2) — 건설 공종별 법령 필터 (정방향+역방향)")
 
-    sub("공종 지정 시 룰 변화 (설계: 공종 없음=전체, 공종 지정=필터)")
+    sub("정방향: 공종 추가할수록 룰 증가")
     s2_none  = diagnose_step2({"sector": "CONSTRUCTION", "construction_work_types": []})
     s2_crane = diagnose_step2({"sector": "CONSTRUCTION", "construction_work_types": ["CRANE"]})
     s2_two   = diagnose_step2({"sector": "CONSTRUCTION", "construction_work_types": ["CRANE", "EXCAVATION"]})
@@ -194,24 +196,23 @@ def test_L2_process():
 
     info(f"공종수별 룰 수: 없음={n0} / 1개={n1} / 2개={n2} / 3개={n3} / 5개={n5}")
 
-    # 공종 없음이 가장 많음 (필터 없이 전체)
-    check(n0 >= n1, f"공종없음({n0}) ≥ 공종1개({n1}) — 미필터=전체", f"공종없음이 공종1개보다 적음 (오류)")
-    # 공종 추가할수록 증가
-    check(n2 >= n1, f"공종2개({n2}) ≥ 공종1개({n1}) — 공종 추가시 증가", f"공종2개가 1개보다 적음 (오류)")
-    check(n3 >= n2, f"공종3개({n3}) ≥ 공종2개({n2}) — 공종 추가시 증가", f"공종3개가 2개보다 적음 (오류)")
-    check(n5 >= n3, f"공종5개({n5}) ≥ 공종3개({n3}) — 공종 추가시 증가", f"공종5개가 3개보다 적음 (오류)")
-    # 역방향: 공종 제거(공종없음) → 가장 많음
-    check(n0 >= n5, f"공종없음({n0}) ≥ 공종5개({n5}) — 공종제거시 최대", f"공종없음이 공종5개보다 적음 (오류)")
+    check(n0 >= n1, f"공종없음({n0}) ≥ 공종1개({n1}) — 미필터=전체",       f"공종없음이 공종1개보다 적음 (오류)")
+    check(n2 >= n1, f"공종2개({n2}) ≥ 공종1개({n1}) — 공종추가시 증가",   f"공종2개가 1개보다 적음 (오류)")
+    check(n3 >= n2, f"공종3개({n3}) ≥ 공종2개({n2}) — 공종추가시 증가",   f"공종3개가 2개보다 적음 (오류)")
+    check(n5 >= n3, f"공종5개({n5}) ≥ 공종3개({n3}) — 공종추가시 증가",   f"공종5개가 3개보다 적음 (오류)")
+
+    sub("역방향: 공종 제거 → 룰 감소 (공종없음이 최대)")
+    check(n0 >= n5, f"공종없음({n0}) ≥ 공종5개({n5}) — 공종제거시 최대",  f"공종없음이 공종5개보다 적음 (오류)")
 
 
 # ══════════════════════════════════════════════
-# L3: 복합 시나리오 — 공정2개+설비100개급
+# L3: 복합 시나리오 — 건물·산업·건설 전체
 # ══════════════════════════════════════════════
 
 def test_L3_complex():
-    head("L3 복합 시나리오 — 공정2개+설비100개급 + 부분미입력 + 역방향")
+    head("L3 복합 시나리오 — 전체조건 정방향 + 부분미입력 + 역방향")
 
-    sub("L3-정방향: 모든 조건 동시 입력")
+    sub("L3-정방향: 산업 모든 설비 동시 입력")
     full = diagnose_step1("MANUFACTURING", {
         "worker_count": 200, "electric_capacity": 2000,
         "has_high_pressure_gas": True, "has_boiler": True,
@@ -220,14 +221,14 @@ def test_L3_complex():
     })
     info(f"복합최대 선임 {appt_n(full)}건: {appt_targets(full)}")
     check(appt_n(full) >= 5,
-          f"공정2개+설비100개급 최대 → 선임 5종 이상 ({appt_n(full)}건)",
-          f"공정2개+설비100개급 최대 → 선임 미달 ({appt_n(full)}건)")
+          f"복합최대 → 선임 5종 이상 ({appt_n(full)}건)",
+          f"복합최대 → 선임 미달 ({appt_n(full)}건)")
     check(has_appt(full, "safety_manager") and has_appt(full, "gas_safety_manager") and
           has_appt(full, "energy_manager") and has_appt(full, "hazardous_material_manager"),
-          "복합최대 → 안전관리자+가스+에너지+위험물 4종 포함",
+          "복합최대 → 안전+가스+에너지+위험물 4종 포함",
           "복합최대 → 4종 중 일부 미발동", str(appt_targets(full)))
 
-    sub("L3-미입력 엔진 견고성: 부분/전체 미입력")
+    sub("L3-견고성: 부분/전체 미입력")
     w_only    = diagnose_step1("MANUFACTURING", {"worker_count": 100})
     empty_mfg = diagnose_step1("MANUFACTURING", {})
     empty_bld = diagnose_step1("BUILDING", {})
@@ -238,51 +239,34 @@ def test_L3_complex():
     check(isinstance(empty_bld, dict) and "summary" in empty_bld,
           "빈입력(건물) → 오류없이 처리", "빈입력(건물) → 예외 발생")
 
-    sub("L3-역방향: 복합 조건에서 하나씩 제거")
-    r_all   = diagnose_step1("MANUFACTURING", {
-        "worker_count": 200, "has_high_pressure_gas": True,
-        "has_boiler": True, "has_hazardous_material": True
-    })
-    r_nogas  = diagnose_step1("MANUFACTURING", {
-        "worker_count": 200, "has_high_pressure_gas": False,   # 가스만 제거
-        "has_boiler": True, "has_hazardous_material": True
-    })
-    r_noboil = diagnose_step1("MANUFACTURING", {
-        "worker_count": 200, "has_high_pressure_gas": True,
-        "has_boiler": False,                                    # 보일러만 제거
-        "has_hazardous_material": True
-    })
-    r_nohzm  = diagnose_step1("MANUFACTURING", {
-        "worker_count": 200, "has_high_pressure_gas": True,
-        "has_boiler": True, "has_hazardous_material": False    # 위험물만 제거
-    })
-    r_none   = diagnose_step1("MANUFACTURING", {"worker_count": 200})  # 전부 제거
+    sub("L3-역방향: 산업 복합조건에서 설비 하나씩 제거")
+    r_all    = diagnose_step1("MANUFACTURING", {"worker_count": 200, "has_high_pressure_gas": True,  "has_boiler": True, "has_hazardous_material": True})
+    r_nogas  = diagnose_step1("MANUFACTURING", {"worker_count": 200, "has_high_pressure_gas": False, "has_boiler": True, "has_hazardous_material": True})
+    r_noboil = diagnose_step1("MANUFACTURING", {"worker_count": 200, "has_high_pressure_gas": True,  "has_boiler": False,"has_hazardous_material": True})
+    r_nohzm  = diagnose_step1("MANUFACTURING", {"worker_count": 200, "has_high_pressure_gas": True,  "has_boiler": True, "has_hazardous_material": False})
+    r_none   = diagnose_step1("MANUFACTURING", {"worker_count": 200})
 
     check(has_appt(r_all, "gas_safety_manager") and has_appt(r_all, "energy_manager") and
           has_appt(r_all, "hazardous_material_manager") and has_appt(r_all, "safety_manager"),
           "전체조건 → 가스+에너지+위험물+안전관리자 발동",
           "전체조건 → 일부 미발동", str(appt_targets(r_all)))
-
     check(not has_appt(r_nogas, "gas_safety_manager") and
           has_appt(r_nogas, "energy_manager") and has_appt(r_nogas, "hazardous_material_manager"),
           "가스만제거 → 가스안전관리자 소멸, 나머지 유지",
           "가스만제거 → 선택적 소멸 실패", str(appt_targets(r_nogas)))
-
     check(not has_appt(r_noboil, "energy_manager") and
           has_appt(r_noboil, "gas_safety_manager") and has_appt(r_noboil, "hazardous_material_manager"),
           "보일러만제거 → 에너지관리자 소멸, 나머지 유지",
           "보일러만제거 → 선택적 소멸 실패", str(appt_targets(r_noboil)))
-
     check(not has_appt(r_nohzm, "hazardous_material_manager") and
           has_appt(r_nohzm, "gas_safety_manager") and has_appt(r_nohzm, "energy_manager"),
           "위험물만제거 → 위험물관리자 소멸, 나머지 유지",
           "위험물만제거 → 선택적 소멸 실패", str(appt_targets(r_nohzm)))
-
     check(not has_appt(r_none, "gas_safety_manager") and
           not has_appt(r_none, "energy_manager") and
           not has_appt(r_none, "hazardous_material_manager") and
           has_appt(r_none, "safety_manager"),
-          "전부제거(근로자만) → 가스+에너지+위험물 소멸, 안전관리자만 남음",
+          "전부제거(근로자만) → 설비 관리자 소멸, 안전관리자만 남음",
           "전부제거 → 소멸 실패", str(appt_targets(r_none)))
 
 
@@ -299,9 +283,9 @@ if __name__ == "__main__":
 
     print(f"{BOLD}")
     print(f"{'═'*60}")
-    print(f"  TAI 법령엔진 단계별(Layer) 무결성 검증 v1.0")
+    print(f"  TAI 법령엔진 단계별(Layer) 무결성 검증 v1.1")
     print(f"  대상: {BASE_URL}")
-    print(f"  L1(설비) + L2(공정step2) + L3(복합+미입력)")
+    print(f"  L1(건물·산업 설비 정/역방향) + L2(건설 공정) + L3(복합)")
     print(f"{'═'*60}{RESET}")
 
     try:
