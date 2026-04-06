@@ -8,10 +8,12 @@ Supabase REST API 직접 호출 (배포 불필요, 약 3초)
   2. APPOINT 룰 전부 target_code 있음
   3. target_code 영문 형식 (한글 잔존 0건)
   4. INSPECT 룰 전부 executor_type_code 있음
-  5. BUILDING INSPECT 4완비율 80% 이상
-  6. MANUFACTURING INSPECT condition 완비율 60% 이상
-  7. sector 값이 허용 범위 내
-  8. obligation_type 값이 허용 범위 내
+  5. BUILDING INSPECT 4완비율 95% 이상
+  6. MANUFACTURING INSPECT condition 완비율 90% 이상
+  7. CONSTRUCTION INSPECT 4완비율 90% 이상
+  8. sector 값이 허용 범위 내
+  9. obligation_type 값이 허용 범위 내 (BEFORE_WORK 포함)
+ 10. BEFORE_WORK 룰 executor_type_code 있음
 
 실행:
   SUPABASE_URL=https://xxx.supabase.co \\
@@ -119,7 +121,7 @@ def main():
         f"executor 없는 {len(no_exec)}건: {[r['rule_id'] for r in no_exec[:5]]}",
     )
 
-    # 5. BUILDING INSPECT 4완비율
+    # 5. BUILDING INSPECT 4완비율 (95% 이상)
     bi = [r for r in inspect if r["sector"] == "BUILDING"]
     bi_ok = [
         r for r in bi
@@ -128,22 +130,36 @@ def main():
     ]
     ratio_bi = int(len(bi_ok) / len(bi) * 100) if bi else 0
     chk(
-        f"BUILDING INSPECT 4완비율 80% 이상 ({ratio_bi}%, {len(bi_ok)}/{len(bi)}건)",
-        ratio_bi >= 80,
+        f"BUILDING INSPECT 4완비율 95% 이상 ({ratio_bi}%, {len(bi_ok)}/{len(bi)}건)",
+        ratio_bi >= 95,
         f"미완비 {len(bi)-len(bi_ok)}건",
     )
 
-    # 6. MANUFACTURING INSPECT condition 완비율
+    # 6. MANUFACTURING INSPECT condition 완비율 (90% 이상)
     mi = [r for r in inspect if r["sector"] == "MANUFACTURING"]
     mi_ok = [r for r in mi if r.get("condition_code")]
     ratio_mi = int(len(mi_ok) / len(mi) * 100) if mi else 0
     chk(
-        f"MANUFACTURING INSPECT condition 완비율 60% 이상 ({ratio_mi}%, {len(mi_ok)}/{len(mi)}건)",
-        ratio_mi >= 60,
+        f"MANUFACTURING INSPECT condition 완비율 90% 이상 ({ratio_mi}%, {len(mi_ok)}/{len(mi)}건)",
+        ratio_mi >= 90,
         f"미설정 {len(mi)-len(mi_ok)}건",
     )
 
-    # 7. sector 범위
+    # 7. CONSTRUCTION INSPECT 4완비율 (90% 이상)
+    ci = [r for r in inspect if r["sector"] == "CONSTRUCTION"]
+    ci_ok = [
+        r for r in ci
+        if r.get("condition_code") and r.get("inspection_cycle_unit_code")
+        and r.get("executor_type_code") and r.get("law_article")
+    ]
+    ratio_ci = int(len(ci_ok) / len(ci) * 100) if ci else 0
+    chk(
+        f"CONSTRUCTION INSPECT 4완비율 90% 이상 ({ratio_ci}%, {len(ci_ok)}/{len(ci)}건)",
+        ratio_ci >= 90,
+        f"미완비 {len(ci)-len(ci_ok)}건",
+    )
+
+    # 8. sector 범위
     allowed_sectors = {
         "BUILDING", "MANUFACTURING", "CONSTRUCTION", "COMMON",
         "BUILDING_MANUFACTURING", "BUILDING_CONSTRUCTION",
@@ -156,13 +172,25 @@ def main():
         f"{len(bad_sector)}건: {list(set(r['sector'] for r in bad_sector[:5]))}",
     )
 
-    # 8. obligation_type 범위
-    allowed_types = {"APPOINT", "INSPECT", "ACTION", "REPORT", "NOTIFY", "DOCUMENT", "OTHER"}
+    # 9. obligation_type 범위 (BEFORE_WORK 포함)
+    allowed_types = {
+        "APPOINT", "INSPECT", "ACTION", "REPORT",
+        "NOTIFY", "DOCUMENT", "OTHER", "BEFORE_WORK",
+    }
     bad_type = [r for r in all_rules if r["obligation_type"] not in allowed_types]
     chk(
-        "obligation_type 값 전부 허용 범위 내",
+        "obligation_type 값 전부 허용 범위 내 (BEFORE_WORK 포함)",
         len(bad_type) == 0,
         f"{len(bad_type)}건: {list(set(r['obligation_type'] for r in bad_type[:5]))}",
+    )
+
+    # 10. BEFORE_WORK executor
+    bw = [r for r in all_rules if r["obligation_type"] == "BEFORE_WORK"]
+    bw_no_exec = [r for r in bw if not r.get("executor_type_code")]
+    chk(
+        f"BEFORE_WORK {len(bw)}건 전부 executor_type_code 있음",
+        len(bw_no_exec) == 0,
+        f"executor 없는 {len(bw_no_exec)}건: {[r['rule_id'] for r in bw_no_exec[:5]]}",
     )
 
     # 결과
