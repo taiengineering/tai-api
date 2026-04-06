@@ -30,6 +30,7 @@ BOLD   = "\033[1m"
 # ── 엔진이 처리할 수 있는 context key 전체 목록 ──
 # routers/legal_engine.py 의 CONDITION_CODE_TO_CONTEXT_KEY 및
 # _input_to_facility_context() 에서 세팅하는 키와 동기화 유지
+# ※ 새 condition_code를 DB에 추가하면 반드시 이 목록에도 추가할 것
 ENGINE_CONTEXT_KEYS = {
     # 공통 수치
     "worker_count", "employee_count",
@@ -47,6 +48,7 @@ ENGINE_CONTEXT_KEYS = {
     "has_high_pressure_gas", "has_boiler",
     "has_hazardous_material", "has_chemical_substance",
     "has_tunnel_bridge", "has_blasting", "has_crane",
+    "has_high_work",      # 고소작업(2m 이상) 여부 — DB: OSHSRULE-333-006-CST
     # 상태 플래그
     "is_hazardous_material", "is_multi_use", "is_factory_registered",
     # 건설 전용
@@ -87,7 +89,7 @@ def main():
     print("  TAI 정적 매핑 커버리지 검증")
     print(f"{'═'*58}{RESET}\n")
 
-    db_codes  = fetch_db_codes()
+    db_codes = fetch_db_codes()
     print(f"  DB condition_code 종류:      {len(db_codes)}개")
     print(f"  엔진 처리 가능 key 종류:     {len(ENGINE_CONTEXT_KEYS)}개\n")
 
