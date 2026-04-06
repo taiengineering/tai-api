@@ -1,4 +1,9 @@
-# main.py — v5.6.1
+# main.py — v5.6.4
+# v5.6.4: legal_engine — has_high_work(고소작업 2m이상) context 추가
+#          height_work → has_high_work DB 정규화
+#          무결성 CI 파이프라인 완비 (DB제약+매핑검증+API78건)
+# v5.6.3: legal_engine — DiagnoseStep1Body 수치 필드 추가 (단계별 점검 정확도 향상)
+# v5.6.2: legal_engine — inspection_cycle 4필드 완비, schedule_type 분류
 # v5.6.1: legal_engine — MANUFACTURING gas/boiler boolean→수치 변환, elevator_count BUILDING 지원
 #          appointment_target_code 한글→영문 런타임 정규화
 # v5.6.0: law_rule_generator v1.5.0 — GET /drafts has_condition 필터 추가
@@ -78,7 +83,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.6.1"
+APP_VERSION = "5.6.4"
 
 
 @asynccontextmanager
