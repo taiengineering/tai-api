@@ -1,12 +1,12 @@
-# main.py — v5.6.0
+# main.py — v5.6.1
+# v5.6.1: legal_engine — MANUFACTURING gas/boiler boolean→수치 변환, elevator_count BUILDING 지원
+#          appointment_target_code 한글→영문 런타임 정규화
 # v5.6.0: law_rule_generator v1.5.0 — GET /drafts has_condition 필터 추가
 #          AI 생성 룰 937개 condition_code 미설정 → is_active=false 처리
 # v5.5.5: contract_kmong 라우터 추가 (크몽 법령진단 API 5개)
 # v5.5.4: inspection_schedule 라우터 추가 (일정관리 API /inspection-schedule)
 # v5.5.3: engine_document 라우터 추가 (문서메뉴 API 4개)
 # v5.5.2: AI 법령 룰 생성기 라우터 추가 (law_rule_generator)
-# v5.5.1: _classify_rules_db obligation_type 절대 우선 분류 수정
-# v5.5.0: SECTOR_RULE_GROUPS 도입 — 공용 법령 구조 개선
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -78,7 +78,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.6.0"
+APP_VERSION = "5.6.1"
 
 
 @asynccontextmanager
@@ -138,7 +138,7 @@ app.include_router(factories_router)
 app.include_router(system_codes_router)
 app.include_router(legal_engine_router)
 app.include_router(engine_qa_router)
-app.include_router(law_rule_generator_router)   # v5.5.2 AI 룰 생성기 (v1.5.0: has_condition)
+app.include_router(law_rule_generator_router)   # v5.5.2 AI 룰 생성기
 app.include_router(engine_document_router)      # v5.5.3 문서메뉴
 app.include_router(contract_kmong_router)       # v5.5.5 크몽 법령진단
 app.include_router(ksic_engine_router)
