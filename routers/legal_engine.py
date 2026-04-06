@@ -1,22 +1,19 @@
 """
-법령 판정 엔진 라우터 — v5.6.1
+법령 판정 엔진 라우터 — v5.6.2
 =================================
-v5.6.1:
-  - _input_to_facility_context MANUFACTURING 분기 수정
-    · has_high_pressure_gas → gas_capacity_kg = 1 변환 추가 (누락으로 가스안전관리자 미발동 버그 수정)
-    · has_boiler → boiler_capacity_kw = 1 변환 추가
-    · is_factory_registered 자동 설정 (ksic C로 시작하면 공장)
-  - appointment_target_code 한글→영문 코드 정규화 (DB 수정과 연동)
-v5.6.0:
-  - format_rule_result_db: submit_org_code / executor_type_code / report_method_std 반환 추가
+v5.6.2:
+  - format_rule_result_db: inspection_cycle 4필드 완비 (스케줄 생성 가능)
+    · inspection_cycle       — 주기 레이블 ("연 1회", "월 1회" 등), 기존 항상 "" → 수정
+    · inspection_cycle_code  — 주기 코드 ("006" 등)
+    · inspection_cycle_unit  — 스케줄러용 단위 ("year", "month", "day")
+    · inspection_cycle_int   — 스케줄러용 정수 (1, 3, 6 등)
+    · schedule_type          — PERIODIC(정기) / BEFORE_WORK(작업전) / ON_DEMAND(수시)
+    · construction_work_type — 작업 전 점검 대상 공종 코드
+  ※ 이 수정으로 법령 판정 → 점검 일정 자동 생성 연계 가능
+v5.6.1: MANUFACTURING gas/boiler boolean→수치 변환, elevator_count BUILDING 지원
+v5.6.0: submit_org_code / executor_type_code / report_method_std 반환 추가
 v5.5.2: appointment_target_code 기준 중복 제거
-v5.5.1: obligation_type 절대 우선 분류
 v5.5.0: SECTOR_RULE_GROUPS 딕셔너리 도입
-v5.4.2: apply/{factory_id} 섹터 필터 누락 수정
-v5.4.1: _CONSTRUCTION_AMOUNT_THRESHOLDS 단위 오류 수정 (15억→150억)
-v5.4.0: DiagnoseStep1Body CONSTRUCTION 전용 필드 추가, 익명 진단, 점검주기 DB 조회
-v5.3.1: CONSTRUCTION 산안법 제16조② worker_count>=50 자동 발동
-v5.3.0: 건설 전용 필드 연동 + 선임 판정 로직 고도화
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -28,7 +25,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.6.1"  # v5.6.1: MANUFACTURING gas/boiler context 변환 누락 수정
+ENGINE_VERSION = "5.6.2"  # v5.6.2: inspection_cycle 4필드 완비 → 스케줄 자동생성 가능
 
 
 # ──────────────────────────────────────────────
@@ -53,7 +50,6 @@ APPOINTMENT_TARGET_MAP = {
     "environmental_manager":      "환경관리인",
 }
 
-# 한글 target_code → 영문 코드 정규화 맵 (DB에 한글이 남아있을 경우 런타임 변환)
 APPOINTMENT_TARGET_NORMALIZE = {
     "소방안전관리자":           "fire_safety_manager",
     "승강기 안전관리자":        "elevator_safety_manager",
@@ -71,6 +67,7 @@ INSPECTION_CYCLE_UNIT_MAP = {
     "013": "5년마다(시설)",
 }
 
+# (unit, value) — 스케줄러가 직접 사용하는 표준 단위
 CYCLE_CODE_MAP = {
     "001": ("day",   1),
     "002": ("week",  1),
@@ -97,10 +94,6 @@ CONSTRUCTION_RELEVANT_LAW_PREFIXES = [
     "근로기준", "산업재해보상", "전기안전",
 ]
 
-# ──────────────────────────────────────────────
-# v5.6.0: 이행자유형 / 제출기관 한글 매핑
-# ──────────────────────────────────────────────
-
 EXECUTOR_TYPE_MAP = {
     "anyone":    "사업주 누구나",
     "qualified": "자격자만",
@@ -122,16 +115,16 @@ SUBMIT_ORG_MAP = {
 }
 
 REPORT_METHOD_MAP = {
-    "api":  "API(온라인시스템)",
-    "mail": "우편",
+    "api":   "API(온라인시스템)",
+    "mail":  "우편",
     "visit": "방문",
-    "fax":  "팩스",
-    "keep": "자체보관(미제출)",
+    "fax":   "팩스",
+    "keep":  "자체보관(미제출)",
 }
 
 
 # ──────────────────────────────────────────────
-# v5.5.0: 섹터별 룰 그룹 매핑
+# 섹터별 룰 그룹 매핑
 # ──────────────────────────────────────────────
 
 SECTOR_RULE_GROUPS: Dict[str, List[str]] = {
@@ -157,13 +150,9 @@ def get_sector_groups(sector: str) -> List[str]:
     return SECTOR_RULE_GROUPS.get(sector.strip().upper(), [sector.strip().upper()])
 
 
-# ──────────────────────────────────────────────
-# v5.4.1: 건설 전용 연산 함수
-# ──────────────────────────────────────────────
-
 _CONSTRUCTION_AMOUNT_THRESHOLDS: Dict[str, int] = {
-    "건축": 15_000_000_000,  # 150억
-    "토목": 12_000_000_000,  # 120억
+    "건축": 15_000_000_000,
+    "토목": 12_000_000_000,
     "공통": 12_000_000_000,
     "기타": 12_000_000_000,
 }
@@ -223,7 +212,6 @@ def _to_int(*vals) -> int:
 
 
 def _normalize_target_code(code: str) -> str:
-    """한글 appointment_target_code → 영문 코드 변환 (런타임 안전망)"""
     if not code:
         return code
     return APPOINTMENT_TARGET_NORMALIZE.get(code, code)
@@ -238,40 +226,40 @@ def _survey_data_to_context(survey_data: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(snap, dict):
         snap = {}
     equip_list = snap.get("equip") or []
-    workers    = _to_int(survey_data.get("employee_count"), snap.get("workers"))
-    area       = _to_float(survey_data.get("floor_area"), snap.get("area"))
-    power_kw   = _to_float(survey_data.get("electrical_kw"), snap.get("elecKw"))
-    floors     = _to_int(snap.get("floors"), survey_data.get("floors_above"))
-    gas_kg     = _to_float(snap.get("gasKg"), survey_data.get("gas_kg"))
-    boiler_th  = _to_float(snap.get("boilerTh"), survey_data.get("boiler_th"))
-    outsource  = _to_int(snap.get("outsource"), survey_data.get("outsource_count"))
-    has_chem   = "chem"   in equip_list or bool(survey_data.get("equip_chemical"))
-    has_elev   = "elev"   in equip_list or bool(survey_data.get("equip_elevator"))
-    has_gas    = "gas"    in equip_list or gas_kg > 0
-    has_boiler = "boiler" in equip_list or boiler_th > 0
+    workers   = _to_int(survey_data.get("employee_count"), snap.get("workers"))
+    area      = _to_float(survey_data.get("floor_area"), snap.get("area"))
+    power_kw  = _to_float(survey_data.get("electrical_kw"), snap.get("elecKw"))
+    floors    = _to_int(snap.get("floors"), survey_data.get("floors_above"))
+    gas_kg    = _to_float(snap.get("gasKg"), survey_data.get("gas_kg"))
+    boiler_th = _to_float(snap.get("boilerTh"), survey_data.get("boiler_th"))
+    outsource = _to_int(snap.get("outsource"), survey_data.get("outsource_count"))
+    has_chem  = "chem"   in equip_list or bool(survey_data.get("equip_chemical"))
+    has_elev  = "elev"   in equip_list or bool(survey_data.get("equip_elevator"))
+    has_gas   = "gas"    in equip_list or gas_kg > 0
+    has_boiler= "boiler" in equip_list or boiler_th > 0
     btype = str(snap.get("btype") or snap.get("bldgUse") or survey_data.get("building_type") or "").strip()
     ksic  = str(survey_data.get("ksic_code") or snap.get("ksic_code") or "").strip()
     is_factory = 1 if (btype.startswith("공장") or btype.startswith("제조") or ksic.upper().startswith("C")) else 0
     cons_eok = _to_float(snap.get("constructionAmt"), survey_data.get("construction_amt"))
     return {
-        "employee_count":          workers,
-        "building_area":           area,
-        "electrical_capacity_kw":  power_kw,
-        "floor_count":             floors,
-        "contractor_count":        outsource,
+        "employee_count":           workers,
+        "building_area":            area,
+        "electrical_capacity_kw":   power_kw,
+        "floor_count":              floors,
+        "contractor_count":         outsource,
         "transformer_capacity_kva": power_kw,
-        "construction_amount":     cons_eok * 100_000_000 if cons_eok > 0 else 0,
-        "gas_capacity_kg":         gas_kg if gas_kg > 0 else (1 if has_gas else 0),
-        "gas_capacity_m3":         1 if has_gas else 0,
-        "boiler_capacity_kw":      boiler_th * 700 if boiler_th > 0 else (1 if has_boiler else 0),
-        "boiler_capacity_th":      boiler_th,
-        "is_hazardous_material":   1 if has_chem else 0,
-        "elevator_count":          1 if has_elev else 0,
-        "is_factory_registered":   is_factory,
-        "is_multi_use":            0,
-        "annual_energy_toe":       0,
-        "building_use_code":       btype,
-        "ksic_code":               ksic,
+        "construction_amount":      cons_eok * 100_000_000 if cons_eok > 0 else 0,
+        "gas_capacity_kg":          gas_kg if gas_kg > 0 else (1 if has_gas else 0),
+        "gas_capacity_m3":          1 if has_gas else 0,
+        "boiler_capacity_kw":       boiler_th * 700 if boiler_th > 0 else (1 if has_boiler else 0),
+        "boiler_capacity_th":       boiler_th,
+        "is_hazardous_material":    1 if has_chem else 0,
+        "elevator_count":           1 if has_elev else 0,
+        "is_factory_registered":    is_factory,
+        "is_multi_use":             0,
+        "annual_energy_toe":        0,
+        "building_use_code":        btype,
+        "ksic_code":                ksic,
     }
 
 
@@ -300,10 +288,10 @@ def _factory_to_context(factory: dict) -> Dict[str, Any]:
     if sec == "CONSTRUCTION":
         effective = get_effective_worker_count(factory)
         threshold = get_construction_amount_threshold(factory)
-        ctx["worker_count"]               = effective
-        ctx["subcontractor_worker_count"]  = int(factory.get("subcontractor_worker_count") or 0)
-        ctx["construction_type"]           = factory.get("construction_type") or "건축"
-        ctx["safety_manager_threshold"]    = threshold
+        ctx["worker_count"]              = effective
+        ctx["subcontractor_worker_count"] = int(factory.get("subcontractor_worker_count") or 0)
+        ctx["construction_type"]          = factory.get("construction_type") or "건축"
+        ctx["safety_manager_threshold"]   = threshold
     else:
         ctx["worker_count"] = ctx["employee_count"]
     return ctx
@@ -344,10 +332,6 @@ def _check_rule_conditions(rule: dict, context: dict) -> bool:
         elif operator in ("in", "contains"): return str(value_str) in str(actual)
         return False
 
-
-# ──────────────────────────────────────────────
-# obligation_type 결정
-# ──────────────────────────────────────────────
 
 def _resolve_obligation_type(rule: dict) -> str:
     ot = (rule.get("obligation_type") or "").strip().upper()
@@ -393,6 +377,20 @@ def _get_inspection_cycle_label(rule: dict) -> str:
     return unit_label
 
 
+def _get_schedule_type(rule: dict) -> str:
+    """
+    v5.6.2: 점검 스케줄 유형 결정
+    - PERIODIC   : 정기점검 — inspection_cycle_unit_code 있음 → 캘린더 반복 일정 생성
+    - BEFORE_WORK: 작업 전 점검 — 공종 코드 있고 주기 없음 → 작업 등록 시 자동 생성
+    - ON_DEMAND  : 수시점검 — 주기/공종 없음 → 수동 트리거
+    """
+    if rule.get("inspection_cycle_unit_code"):
+        return "PERIODIC"
+    if rule.get("construction_work_type"):
+        return "BEFORE_WORK"
+    return "ON_DEMAND"
+
+
 def _get_appointment_target_label(rule: dict) -> str:
     code = rule.get("appointment_target_code", "")
     code = _normalize_target_code(code)
@@ -433,16 +431,27 @@ def _calc_due_date(due_days) -> dict:
 
 
 def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
-    """v5.6.0: submit_org_code / executor_type_code / report_method_std 반환"""
+    """
+    v5.6.2: inspection 4필드 완비 — 스케줄 자동생성 연계 가능
+      언제: inspection_cycle / inspection_cycle_code / inspection_cycle_unit / inspection_cycle_int
+      누가: executor_type_code / executor_type_label
+      무엇: condition_code / condition_value (트리거 조건)
+      어떻게: law_name / law_article / schedule_type
+    """
     desc = (rule.get("obligation_summary") or rule.get("remarks") or "").strip()
 
-    # v5.6.1: appointment_target_code 한글→코드 정규화
-    raw_target = rule.get("appointment_target_code") or ""
+    raw_target  = rule.get("appointment_target_code") or ""
     target_code = _normalize_target_code(raw_target)
 
     submit_org_code    = rule.get("submit_org_code") or ""
     executor_type_code = rule.get("executor_type_code") or ""
     report_method_std  = rule.get("report_method_std") or ""
+
+    # ── v5.6.2: 점검 주기 4필드 ──
+    cycle_code  = rule.get("inspection_cycle_unit_code") or ""
+    cycle_label = _get_inspection_cycle_label(rule)
+    cycle_unit, cycle_int = CYCLE_CODE_MAP.get(cycle_code, ("", 0))
+    schedule_type = _get_schedule_type(rule)
 
     return {
         "rule_id":               rule.get("rule_id", ""),
@@ -453,29 +462,40 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
         "obligation_summary":    desc,
         "appointment_target":    APPOINTMENT_TARGET_MAP.get(target_code, target_code),
         "qualification_required": rule.get("qualification_type") or "",
-        "inspection_cycle":      "",
-        "penalty_amount":        rule.get("penalty_summary") or "",
-        "penalty_summary":       rule.get("penalty_summary") or "",
-        "source_label":          "",
-        "obligation_type":       _resolve_obligation_type(rule),
-        "appointment_required":  bool(rule.get("appointment_required")),
-        "inspection_required":   bool(rule.get("inspection_required")),
-        "action_required":       bool(rule.get("action_required")),
-        "report_required":       bool(rule.get("report_required")),
-        "notify_required":       bool(rule.get("notify_required")),
-        "form_code":             rule.get("form_code") or "",
-        "form_url":              rule.get("form_url") or "",
-        "due_days":              rule.get("due_days"),
-        "due_info":              _calc_due_date(rule.get("due_days")),
-        "sector":                rule.get("sector") or "",
-        "diagnosis_stage":       rule.get("diagnosis_stage"),
-        # ── v5.6.0 신규 ──
-        "submit_org_code":       submit_org_code,
-        "submit_org_label":      SUBMIT_ORG_MAP.get(submit_org_code, submit_org_code),
-        "executor_type_code":    executor_type_code,
-        "executor_type_label":   EXECUTOR_TYPE_MAP.get(executor_type_code, executor_type_code),
-        "report_method_std":     report_method_std,
-        "report_method_label":   REPORT_METHOD_MAP.get(report_method_std, report_method_std),
+        # ── 점검 주기 (언제) — v5.6.2 수정: "" → 실제 값 ──
+        "inspection_cycle":       cycle_label,           # "연 1회", "월 1회" 등
+        "inspection_cycle_code":  cycle_code,            # "006", "003" 등
+        "inspection_cycle_unit":  cycle_unit,            # "year", "month", "day" 등
+        "inspection_cycle_int":   cycle_int,             # 1, 3, 6 등 (스케줄러 직접 사용)
+        # ── 스케줄 유형 (어떻게 만들어야 하나) ──
+        "schedule_type":          schedule_type,         # PERIODIC / BEFORE_WORK / ON_DEMAND
+        "construction_work_type": rule.get("construction_work_type") or "",
+        # ── 수행자 (누가) ──
+        "executor_type_code":     executor_type_code,
+        "executor_type_label":    EXECUTOR_TYPE_MAP.get(executor_type_code, executor_type_code),
+        # ── 트리거 조건 (무엇이 있을 때) ──
+        "condition_code":         rule.get("condition_code") or "",
+        "condition_value":        rule.get("condition_value"),
+        # ── 기존 필드 유지 ──
+        "penalty_amount":         rule.get("penalty_summary") or "",
+        "penalty_summary":        rule.get("penalty_summary") or "",
+        "source_label":           "",
+        "obligation_type":        _resolve_obligation_type(rule),
+        "appointment_required":   bool(rule.get("appointment_required")),
+        "inspection_required":    bool(rule.get("inspection_required")),
+        "action_required":        bool(rule.get("action_required")),
+        "report_required":        bool(rule.get("report_required")),
+        "notify_required":        bool(rule.get("notify_required")),
+        "form_code":              rule.get("form_code") or "",
+        "form_url":               rule.get("form_url") or "",
+        "due_days":               rule.get("due_days"),
+        "due_info":               _calc_due_date(rule.get("due_days")),
+        "sector":                 rule.get("sector") or "",
+        "diagnosis_stage":        rule.get("diagnosis_stage"),
+        "submit_org_code":        submit_org_code,
+        "submit_org_label":       SUBMIT_ORG_MAP.get(submit_org_code, submit_org_code),
+        "report_method_std":      report_method_std,
+        "report_method_label":    REPORT_METHOD_MAP.get(report_method_std, report_method_std),
     }
 
 
@@ -508,7 +528,6 @@ def _classify_one(rule: dict, formatted: dict, triggered: dict):
 
 
 def _classify_rules_db(rules: List[Dict[str, Any]], triggered: Dict[str, List]) -> None:
-    """v5.5.2: obligation_type 절대 우선 분류 + appointment_target_code 기준 중복 제거"""
     seen_appoint_targets: set = set()
 
     for rule in rules:
@@ -523,7 +542,6 @@ def _classify_rules_db(rules: List[Dict[str, Any]], triggered: Dict[str, List]) 
             if target:
                 seen_appoint_targets.add(target)
             triggered["appointment"].append(formatted)
-
         elif ot == "INSPECT":
             triggered["inspection"].append(formatted)
         elif ot == "NOTIFY":
@@ -571,10 +589,14 @@ async def _evaluate_equipment_conditions(factory_id, factory_context, rules, sup
     extra = dict(factory_context)
     for eq in (eq_res.data or []):
         tc = eq.get("equipment_type_code", "")
-        if tc in ("elevator", "elev"): extra["elevator_count"] = max(extra.get("elevator_count", 0), 1)
-        elif tc == "boiler": extra["boiler_capacity_kw"] = max(extra.get("boiler_capacity_kw", 0), _to_float(eq.get("capacity_value")) or 1)
-        elif tc in ("gas", "gas_tank"): extra["gas_capacity_kg"] = max(extra.get("gas_capacity_kg", 0), 1)
-        elif tc in ("hazmat", "chemical"): extra["is_hazardous_material"] = 1
+        if tc in ("elevator", "elev"):
+            extra["elevator_count"] = max(extra.get("elevator_count", 0), 1)
+        elif tc == "boiler":
+            extra["boiler_capacity_kw"] = max(extra.get("boiler_capacity_kw", 0), _to_float(eq.get("capacity_value")) or 1)
+        elif tc in ("gas", "gas_tank"):
+            extra["gas_capacity_kg"] = max(extra.get("gas_capacity_kg", 0), 1)
+        elif tc in ("hazmat", "chemical"):
+            extra["is_hazardous_material"] = 1
         elif tc in ("electric", "transformer"):
             cap = _to_float(eq.get("capacity_value"))
             if cap:
@@ -644,7 +666,7 @@ def _build_result(applicable, not_applicable, all_rules, mode, evaluated_at,
 
 
 # ══════════════════════════════════════════════
-# 기존 API 엔드포인트 (하위 호환)
+# API 엔드포인트
 # ══════════════════════════════════════════════
 
 @router.post("/apply/{factory_id}")
@@ -653,7 +675,6 @@ async def apply_legal_engine(
     body: Optional[dict] = None,
     mode: str = Query("all"),
 ):
-    """시설 등록 기반 법령 판정 (v5.6.1)"""
     supabase = get_supabase()
     if body and body.get("mode"):
         mode = body["mode"]
@@ -665,29 +686,14 @@ async def apply_legal_engine(
     factory = fac_res.data
     factory_sector = str(factory.get("sector") or "BUILDING").upper()
     sector_groups = get_sector_groups(factory_sector)
-    rules_res = supabase.table("master_building_legal_rules") \
-        .select("*") \
-        .eq("is_active", True) \
-        .in_("sector", sector_groups) \
-        .execute()
+    rules_res = supabase.table("master_building_legal_rules").select("*").eq("is_active", True).in_("sector", sector_groups).execute()
     all_rules = rules_res.data or []
     evaluated_at = _now_iso()
     context = _factory_to_context(factory)
-
-    triggered_by_source: Dict[str, Any] = {
-        "factory_condition": 0,
-        "registered_equipment": 0,
-        "process_recommended": 0,
-        "sector_groups": sector_groups,
-    }
+    triggered_by_source: Dict[str, Any] = {"factory_condition": 0, "registered_equipment": 0, "process_recommended": 0, "sector_groups": sector_groups}
     sec = str(factory.get("sector") or factory.get("site_type") or "").upper()
     if sec == "CONSTRUCTION":
-        triggered_by_source.update({
-            "construction_type":   factory.get("construction_type"),
-            "total_worker_count":  get_effective_worker_count(factory),
-            "subcontractor_count": int(factory.get("subcontractor_worker_count") or 0),
-            "threshold_used":      get_construction_amount_threshold(factory),
-        })
+        triggered_by_source.update({"construction_type": factory.get("construction_type"), "total_worker_count": get_effective_worker_count(factory), "subcontractor_count": int(factory.get("subcontractor_worker_count") or 0), "threshold_used": get_construction_amount_threshold(factory)})
 
     if mode == "facility":
         applicable, not_applicable = _evaluate_conditions(context, all_rules)
@@ -702,9 +708,9 @@ async def apply_legal_engine(
         triggered_by_source["registered_equipment"] = len(applicable)
         source_pairs = None
     else:
-        fac_app, _  = _evaluate_conditions(context, all_rules)
+        fac_app, _ = _evaluate_conditions(context, all_rules)
         triggered_by_source["factory_condition"] = len(fac_app)
-        eq_app, _   = await _evaluate_equipment_conditions(factory_id, context, all_rules, supabase)
+        eq_app, _  = await _evaluate_equipment_conditions(factory_id, context, all_rules, supabase)
         triggered_by_source["registered_equipment"] = len(eq_app)
         proc_app, _ = await _evaluate_process_conditions(factory_id, context, all_rules, supabase)
         triggered_by_source["process_recommended"] = len(proc_app)
@@ -716,34 +722,15 @@ async def apply_legal_engine(
         applicable_ids = {r["rule_id"] for r, _ in source_pairs}
         not_applicable = [r for r in all_rules if r["rule_id"] not in applicable_ids]
         applicable     = []
-    result_for_db = _build_result(
-        applicable, not_applicable, all_rules, mode, evaluated_at,
-        source_pairs=source_pairs, include_not_applicable=True,
-        factory_id=factory_id, triggered_by_source=triggered_by_source,
-    )
-    result_for_response = _build_result(
-        applicable, not_applicable, all_rules, mode, evaluated_at,
-        source_pairs=source_pairs, include_not_applicable=False,
-        factory_id=factory_id, triggered_by_source=triggered_by_source,
-    )
+
+    result_for_db = _build_result(applicable, not_applicable, all_rules, mode, evaluated_at, source_pairs=source_pairs, include_not_applicable=True, factory_id=factory_id, triggered_by_source=triggered_by_source)
+    result_for_response = _build_result(applicable, not_applicable, all_rules, mode, evaluated_at, source_pairs=source_pairs, include_not_applicable=False, factory_id=factory_id, triggered_by_source=triggered_by_source)
     try:
-        supabase.table("factories").update({
-            "legal_result_json":      result_for_db,
-            "last_diagnosis_at":      evaluated_at,
-            "diagnosis_status":       "DONE",
-            "legal_applicable_count": result_for_db.get("applicable_count", 0),
-            "updated_at":             evaluated_at,
-        }).eq("id", factory_id).execute()
+        supabase.table("factories").update({"legal_result_json": result_for_db, "last_diagnosis_at": evaluated_at, "diagnosis_status": "DONE", "legal_applicable_count": result_for_db.get("applicable_count", 0), "updated_at": evaluated_at}).eq("id", factory_id).execute()
     except Exception as e:
         print(f"[LEGAL ENGINE] factories 저장 실패: {e}")
     try:
-        supabase.table("legal_applications").upsert({
-            "factory_id":     factory_id,
-            "engine_version": ENGINE_VERSION,
-            "mode":           mode,
-            "result_json":    result_for_db,
-            "evaluated_at":   evaluated_at,
-        }, on_conflict="factory_id,mode").execute()
+        supabase.table("legal_applications").upsert({"factory_id": factory_id, "engine_version": ENGINE_VERSION, "mode": mode, "result_json": result_for_db, "evaluated_at": evaluated_at}, on_conflict="factory_id,mode").execute()
     except Exception as e:
         print(f"[LEGAL ENGINE] legal_applications 저장 실패 (무시): {e}")
     return {"status": "success", "data": result_for_response}
@@ -763,35 +750,18 @@ async def apply_legal_engine_from_quote(quote_id: str):
     all_rules = rules_res.data or []
     evaluated_at = _now_iso()
     applicable, not_applicable = _evaluate_conditions(context, all_rules)
-    result_data = _build_result(
-        applicable, not_applicable, all_rules, "facility", evaluated_at,
-        include_not_applicable=False,
-        quote_id=quote_id, quote_no=qres.data.get("quote_no"),
-        source="quote_survey",
-        not_applicable_total=len(not_applicable),
-        triggered_by_source={"factory_condition": len(applicable)},
-    )
+    result_data = _build_result(applicable, not_applicable, all_rules, "facility", evaluated_at, include_not_applicable=False, quote_id=quote_id, quote_no=qres.data.get("quote_no"), source="quote_survey", not_applicable_total=len(not_applicable), triggered_by_source={"factory_condition": len(applicable)})
     try:
-        supabase.table("quotes").update({
-            "legal_result_json":      result_data,
-            "legal_evaluated_at":     evaluated_at,
-            "legal_applicable_count": result_data["applicable_count"],
-            "updated_at":             evaluated_at,
-        }).eq("id", quote_id).execute()
+        supabase.table("quotes").update({"legal_result_json": result_data, "legal_evaluated_at": evaluated_at, "legal_applicable_count": result_data["applicable_count"], "updated_at": evaluated_at}).eq("id", quote_id).execute()
     except Exception as e:
         print(f"[LEGAL ENGINE] quotes 저장 실패: {e}")
     return {"status": "success", "data": result_data}
 
 
-# ──────────────────────────────────────────────
-# Pydantic 모델
-# ──────────────────────────────────────────────
-
 class DiagnoseStep1Body(BaseModel):
-    factory_id: Optional[str] = Field(None, description="factories.id (없으면 익명 진단)")
-    sector: str = Field(..., description="BUILDING | MANUFACTURING | CONSTRUCTION | SPECIAL_FACILITY")
+    factory_id: Optional[str] = Field(None)
+    sector: str = Field(...)
     input: Optional[Dict[str, Any]] = Field(default_factory=dict)
-
     building_use_type: Optional[str] = None
     employee_count: Optional[int] = None
     floor_area: Optional[float] = None
@@ -802,19 +772,16 @@ class DiagnoseStep1Body(BaseModel):
     contract_amount_eok: Optional[float] = None
     ksic_major: Optional[str] = None
     facility_type: Optional[str] = None
+    construction_type: Optional[str] = None
+    direct_workers: Optional[int] = None
+    subcon_workers: Optional[int] = None
+    electrical_capacity_kw: Optional[float] = None
+    has_tunnel_bridge: Optional[bool] = None
+    has_blasting: Optional[bool] = None
+    has_crane: Optional[bool] = None
 
-    construction_type: Optional[str] = Field(None, description="건축 | 토목 | 공통 | 기타")
-    direct_workers: Optional[int] = Field(None, description="직영 근로자 수")
-    subcon_workers: Optional[int] = Field(None, description="하도급 근로자 수")
-    electrical_capacity_kw: Optional[float] = Field(None, description="임시전기 설비 용량(kW)")
-    has_tunnel_bridge: Optional[bool] = Field(None, description="터널·교량 공사 포함 여부")
-    has_blasting: Optional[bool] = Field(None, description="발파 작업 포함 여부")
-    has_crane: Optional[bool] = Field(None, description="크레인 사용 여부")
 
-
-ALLOWED_DIAGNOSE_SECTORS = frozenset(
-    {"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"}
-)
+ALLOWED_DIAGNOSE_SECTORS = frozenset({"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"})
 
 CONDITION_CODE_TO_CONTEXT_KEY: Dict[str, str] = {
     "employee_count":           "worker_count",
@@ -844,14 +811,10 @@ def _normalize_sector_db(sector: str) -> str:
 
 
 def _truthy(v: Any) -> bool:
-    if v is True:
-        return True
-    if v in (False, None, "", 0):
-        return False
-    if isinstance(v, (int, float)):
-        return v != 0
-    s = str(v).strip().lower()
-    return s in ("1", "true", "yes", "y", "on")
+    if v is True: return True
+    if v in (False, None, "", 0): return False
+    if isinstance(v, (int, float)): return v != 0
+    return str(v).strip().lower() in ("1", "true", "yes", "y", "on")
 
 
 def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, Any]:
@@ -864,78 +827,56 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
         "is_factory_registered": 0, "has_high_pressure_gas": 0,
         "has_hazardous_material": 0, "has_chemical_substance": 0,
         "has_boiler": 0, "has_tunnel_bridge": 0, "hospital_beds": 0, "student_count": 0,
-        "gas_capacity_kg": 0, "gas_capacity_m3": 0,
-        "boiler_capacity_kw": 0, "elevator_count": 0,
-        "annual_energy_toe": 0,
+        "gas_capacity_kg": 0, "gas_capacity_m3": 0, "boiler_capacity_kw": 0,
+        "elevator_count": 0, "annual_energy_toe": 0,
     }
     if sec == "BUILDING":
-        ctx["building_use_code"] = str(inp.get("building_use") or inp.get("building_use_type") or inp.get("building_use_code") or "")
-        ctx["total_floor_area"] = float(inp.get("total_floor_area") or inp.get("floor_area") or 0)
-        ctx["building_area"]    = ctx["total_floor_area"]
-        ctx["floor_count"] = int(inp.get("floor_count") or 0)
-        ctx["worker_count"] = int(inp.get("worker_count") or inp.get("employee_count") or 0)
-        ctx["electric_capacity"] = float(inp.get("electric_capacity") or 0)
+        ctx["building_use_code"]    = str(inp.get("building_use") or inp.get("building_use_type") or inp.get("building_use_code") or "")
+        ctx["total_floor_area"]     = float(inp.get("total_floor_area") or inp.get("floor_area") or 0)
+        ctx["building_area"]        = ctx["total_floor_area"]
+        ctx["floor_count"]          = int(inp.get("floor_count") or 0)
+        ctx["worker_count"]         = int(inp.get("worker_count") or inp.get("employee_count") or 0)
+        ctx["electric_capacity"]    = float(inp.get("electric_capacity") or 0)
         ctx["electrical_capacity_kw"] = ctx["electric_capacity"]
-        ctx["has_high_pressure_gas"] = 1 if _truthy(inp.get("has_high_pressure_gas")) else 0
-        ctx["gas_capacity_kg"] = float(inp.get("gas_capacity_kg") or 0) or ctx["has_high_pressure_gas"]
+        ctx["has_high_pressure_gas"]= 1 if _truthy(inp.get("has_high_pressure_gas")) else 0
+        ctx["gas_capacity_kg"]      = float(inp.get("gas_capacity_kg") or 0) or ctx["has_high_pressure_gas"]
         ctx["has_hazardous_material"] = 1 if _truthy(inp.get("has_hazardous_material")) else 0
-        ctx["is_hazardous_material"] = ctx["has_hazardous_material"]
-        ctx["elevator_count"] = int(inp.get("elevator_count") or 0) or (1 if _truthy(inp.get("has_elevator")) else 0)
-        ctx["annual_energy_toe"] = float(inp.get("annual_energy_toe") or 0)
+        ctx["is_hazardous_material"]  = ctx["has_hazardous_material"]
+        ctx["elevator_count"]       = int(inp.get("elevator_count") or 0) or (1 if _truthy(inp.get("has_elevator")) else 0)
+        ctx["annual_energy_toe"]    = float(inp.get("annual_energy_toe") or 0)
 
     elif sec == "MANUFACTURING":
-        ctx["ksic_code"] = str(inp.get("ksic_major") or inp.get("ksic_code") or "")
+        ctx["ksic_code"]    = str(inp.get("ksic_major") or inp.get("ksic_code") or "")
         ctx["worker_count"] = int(inp.get("worker_count") or inp.get("employee_count") or 0)
-        ctx["electric_capacity"] = float(inp.get("electric_capacity") or 0)
-        ctx["electrical_capacity_kw"] = ctx["electric_capacity"]
-
-        # 위험물
-        ctx["has_hazardous_material"] = 1 if _truthy(inp.get("has_hazardous_material")) else 0
-        ctx["is_hazardous_material"] = ctx["has_hazardous_material"]
-
-        # ── v5.6.1 핵심 수정: 가스/보일러 boolean → 수치 변환 ──
-        ctx["has_high_pressure_gas"] = 1 if _truthy(inp.get("has_high_pressure_gas")) else 0
-        ctx["gas_capacity_kg"] = (
-            float(inp.get("gas_capacity_kg") or 0)
-            or ctx["has_high_pressure_gas"]  # has_high_pressure_gas=True → 1kg (조건: >= 1)
-        )
-        ctx["gas_capacity_m3"] = (
-            float(inp.get("gas_capacity_m3") or 0)
-            or (1 if _truthy(inp.get("has_city_gas")) else 0)
-        )
-        ctx["has_boiler"] = 1 if _truthy(inp.get("has_boiler")) else 0
-        ctx["boiler_capacity_kw"] = (
-            float(inp.get("boiler_capacity_kw") or 0)
-            or (ctx["has_boiler"] * 1)  # has_boiler=True → 1kW (존재 여부 판단용)
-        )
-
-        ctx["has_chemical_substance"] = 1 if _truthy(inp.get("has_chemical_substance")) else 0
-        ctx["elevator_count"] = int(inp.get("elevator_count") or 0) or (1 if _truthy(inp.get("has_elevator")) else 0)
-        ctx["annual_energy_toe"] = float(inp.get("annual_energy_toe") or 0)
-
-        ctx["building_area"] = float(inp.get("building_area") or inp.get("total_floor_area") or inp.get("floor_area") or 0)
-        ctx["total_floor_area"] = ctx["building_area"]
-
-        # 공장등록 여부 (ksic C업종이면 자동 설정)
+        ctx["electric_capacity"]       = float(inp.get("electric_capacity") or 0)
+        ctx["electrical_capacity_kw"]  = ctx["electric_capacity"]
+        ctx["has_hazardous_material"]  = 1 if _truthy(inp.get("has_hazardous_material")) else 0
+        ctx["is_hazardous_material"]   = ctx["has_hazardous_material"]
+        ctx["has_high_pressure_gas"]   = 1 if _truthy(inp.get("has_high_pressure_gas")) else 0
+        ctx["gas_capacity_kg"]         = float(inp.get("gas_capacity_kg") or 0) or ctx["has_high_pressure_gas"]
+        ctx["gas_capacity_m3"]         = float(inp.get("gas_capacity_m3") or 0) or (1 if _truthy(inp.get("has_city_gas")) else 0)
+        ctx["has_boiler"]              = 1 if _truthy(inp.get("has_boiler")) else 0
+        ctx["boiler_capacity_kw"]      = float(inp.get("boiler_capacity_kw") or 0) or ctx["has_boiler"]
+        ctx["has_chemical_substance"]  = 1 if _truthy(inp.get("has_chemical_substance")) else 0
+        ctx["elevator_count"]          = int(inp.get("elevator_count") or 0) or (1 if _truthy(inp.get("has_elevator")) else 0)
+        ctx["annual_energy_toe"]       = float(inp.get("annual_energy_toe") or 0)
+        ctx["building_area"]           = float(inp.get("building_area") or inp.get("total_floor_area") or inp.get("floor_area") or 0)
+        ctx["total_floor_area"]        = ctx["building_area"]
         ksic = ctx["ksic_code"].upper()
-        ctx["is_factory_registered"] = 1 if (
-            _truthy(inp.get("is_factory_registered")) or ksic.startswith("C")
-        ) else 0
+        ctx["is_factory_registered"]   = 1 if (_truthy(inp.get("is_factory_registered")) or ksic.startswith("C")) else 0
 
     elif sec == "CONSTRUCTION":
-        eok = float(inp.get("contract_amount_eok") or 0)
+        eok    = float(inp.get("contract_amount_eok") or 0)
         amount = eok * 100_000_000.0
         ctx["construction_amount"] = amount
         ctx["contract_amount"]     = amount
-
-        raw_site = str(inp.get("construction_type") or inp.get("site_type") or "건축")
-        SITE_KO = {"BUILDING": "건축", "CIVIL": "토목", "SPECIALTY": "공통"}
+        raw_site  = str(inp.get("construction_type") or inp.get("site_type") or "건축")
+        SITE_KO   = {"BUILDING": "건축", "CIVIL": "토목", "SPECIALTY": "공통"}
         site_type = SITE_KO.get(raw_site.upper(), raw_site)
         ctx["construction_type"] = site_type
         ctx["building_use_code"] = site_type
         ctx["is_building"] = 1 if site_type in ("건축", "BUILDING") else 0
         ctx["is_civil"]    = 1 if site_type in ("토목", "CIVIL")    else 0
-
         direct = int(inp.get("direct_workers") or inp.get("worker_count") or inp.get("employee_count") or 0)
         subcon = int(inp.get("subcon_workers") or inp.get("subcontractor_worker_count") or 0)
         ctx["worker_count"]               = direct + subcon
@@ -943,36 +884,29 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
         ctx["direct_workers"]             = direct
         ctx["subcon_workers"]             = subcon
         ctx["subcontractor_worker_count"] = subcon
-
         ctx["has_tunnel_bridge"] = 1 if _truthy(inp.get("has_tunnel_bridge")) else 0
         ctx["has_blasting"]      = 1 if _truthy(inp.get("has_blasting"))      else 0
         ctx["has_crane"]         = 1 if _truthy(inp.get("has_crane"))          else 0
-
         elec_kw = float(inp.get("electrical_capacity_kw") or inp.get("electric_capacity") or 0)
         ctx["electric_capacity"]        = elec_kw
         ctx["electrical_capacity_kw"]   = elec_kw
         ctx["transformer_capacity_kva"] = elec_kw
-
-        fake_factory = {"construction_type": site_type}
-        threshold = get_construction_amount_threshold(fake_factory)
-        ctx["safety_manager_threshold"] = threshold
+        ctx["safety_manager_threshold"] = get_construction_amount_threshold({"construction_type": site_type})
 
     elif sec in ("SPECIAL_FACILITY", "SPECIAL"):
         ctx["building_use_code"] = str(inp.get("facility_type") or "")
-        ctx["total_floor_area"] = float(inp.get("total_floor_area") or inp.get("floor_area") or 0)
-        ctx["hospital_beds"] = int(inp.get("hospital_beds") or 0)
-        ctx["student_count"] = int(inp.get("student_count") or 0)
-        ctx["worker_count"] = int(inp.get("worker_count") or inp.get("employee_count") or 0)
-        ctx["building_area"] = ctx["total_floor_area"]
+        ctx["total_floor_area"]  = float(inp.get("total_floor_area") or inp.get("floor_area") or 0)
+        ctx["hospital_beds"]     = int(inp.get("hospital_beds") or 0)
+        ctx["student_count"]     = int(inp.get("student_count") or 0)
+        ctx["worker_count"]      = int(inp.get("worker_count") or inp.get("employee_count") or 0)
+        ctx["building_area"]     = ctx["total_floor_area"]
 
     return ctx
 
 
 def _risk_level(applicable_count: int, appointment_n: int) -> str:
-    if applicable_count >= 12 or appointment_n >= 4:
-        return "HIGH"
-    if applicable_count >= 5 or appointment_n >= 1:
-        return "MEDIUM"
+    if applicable_count >= 12 or appointment_n >= 4: return "HIGH"
+    if applicable_count >= 5  or appointment_n >= 1: return "MEDIUM"
     return "LOW"
 
 
@@ -981,9 +915,9 @@ def _numeric_compare(actual: float, operator: str, value: float) -> bool:
     try:
         if op in ("gte", ">="): return actual >= value
         if op in ("lte", "<="): return actual <= value
-        if op in ("gt", ">"): return actual > value
-        if op in ("lt", "<"): return actual < value
-        if op in ("eq", "=", "=="): return actual == value
+        if op in ("gt",  ">" ): return actual > value
+        if op in ("lt",  "<" ): return actual < value
+        if op in ("eq",  "=", "=="): return actual == value
     except (TypeError, ValueError):
         return False
     return False
@@ -995,18 +929,17 @@ def _db_rule_matches_facility(rule: Dict[str, Any], context: Dict[str, Any]) -> 
     if not cc or cv is None:
         return False
     ctx_key = CONDITION_CODE_TO_CONTEXT_KEY.get(cc, cc)
-    actual = context.get(ctx_key)
+    actual  = context.get(ctx_key)
     if actual is None:
         actual = context.get(cc)
     if actual is None:
         return False
     try:
         actual_num = float(actual)
-        value_num = float(cv)
+        value_num  = float(cv)
     except (TypeError, ValueError):
         return str(actual) == str(cv) and (rule.get("condition_operator_code") or "eq").lower() in ("eq", "=", "==")
-    op = rule.get("condition_operator_code") or "gte"
-    return _numeric_compare(actual_num, op, value_num)
+    return _numeric_compare(actual_num, rule.get("condition_operator_code") or "gte", value_num)
 
 
 def _evaluate_facility_conditions_db(
@@ -1019,16 +952,13 @@ def _evaluate_facility_conditions_db(
         cc = rule.get("condition_code")
         cv = rule.get("condition_value")
         if not cc or cv is None:
-            if rule_sector in ("COMMON", "CONSTRUCTION_MANUFACTURING",
-                               "BUILDING_CONSTRUCTION", "BUILDING_MANUFACTURING"):
+            if rule_sector in ("COMMON", "CONSTRUCTION_MANUFACTURING", "BUILDING_CONSTRUCTION", "BUILDING_MANUFACTURING"):
                 applicable.append(rule)
             elif sector == "CONSTRUCTION":
                 law             = rule.get("law_name") or ""
                 obligation_type = (rule.get("obligation_type") or "").upper()
                 article         = rule.get("law_article") or ""
-                if (obligation_type in ("APPOINT", "NOTIFY")
-                        and "산업안전보건법" in law
-                        and "16조" in article):
+                if (obligation_type in ("APPOINT", "NOTIFY") and "산업안전보건법" in law and "16조" in article):
                     worker_count = float(facility_ctx.get("worker_count") or 0)
                     if worker_count >= 50:
                         applicable.append(rule)
@@ -1053,42 +983,33 @@ def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
     site_type = str(facility_ctx.get("construction_type") or facility_ctx.get("building_use_code") or "건축")
     subcon    = int(facility_ctx.get("subcon_workers") or facility_ctx.get("subcontractor_worker_count") or 0)
     direct    = int(facility_ctx.get("direct_workers") or (workers - subcon))
-
-    fake = {"construction_type": site_type}
-    threshold   = get_construction_amount_threshold(fake)
+    fake      = {"construction_type": site_type}
+    threshold = get_construction_amount_threshold(fake)
     sm_required = (amount >= threshold) or (workers >= 50)
-
-    SITE_LABEL = {"건축": "건축", "토목": "토목", "공통": "공통", "기타": "기타",
-                  "BUILDING": "건축", "CIVIL": "토목", "SPECIALTY": "공통"}
+    SITE_LABEL = {"건축": "건축", "토목": "토목", "공통": "공통", "기타": "기타", "BUILDING": "건축", "CIVIL": "토목", "SPECIALTY": "공통"}
     site_label = SITE_LABEL.get(site_type, site_type)
-
-    _cmp_label = "이상" if amount >= threshold else "미만"
+    _cmp_label    = "이상" if amount >= threshold else "미만"
     _threshold_eok = int(threshold / 100_000_000)
     basis_parts = [f"{site_label} {_threshold_eok}억원 {_cmp_label}"]
     if workers >= 50:
         basis_parts.append(f"근로자(하도급 포함) {workers}명 >= 50명")
-
     return {
-        "site_type":                site_type,
-        "contract_amount":          amount,
-        "contract_amount_eok":      round(amount / 100_000_000, 2) if amount else 0,
-        "total_workers":            workers,
-        "direct_workers":           direct,
-        "subcon_workers":           subcon,
-        "safety_manager_required":  sm_required,
-        "safety_manager_basis":     ", ".join(basis_parts),
-        "threshold_used":           threshold,
+        "site_type": site_type, "contract_amount": amount,
+        "contract_amount_eok": round(amount / 100_000_000, 2) if amount else 0,
+        "total_workers": workers, "direct_workers": direct, "subcon_workers": subcon,
+        "safety_manager_required": sm_required, "safety_manager_basis": ", ".join(basis_parts),
+        "threshold_used": threshold,
         "key_thresholds_met": {
-            "1억_산업안전보건관리비":        amount >= 100_000_000,
-            "50억_유해위험방지계획서":       amount >= 5_000_000_000,
-            "50억_기초안전보건교육":         amount >= 5_000_000_000,
-            "100억_안전관리계획서":          amount >= 10_000_000_000,
-            "120억_안전관리자선임_토목":     site_type in ("토목", "CIVIL")    and amount >= 12_000_000_000,
-            "150억_안전관리자선임_건축":     site_type in ("건축", "BUILDING") and amount >= 15_000_000_000,
-            "200억_안전보건관리책임자":      amount >= 20_000_000_000,
-            "1000억_건설안전판정사":         amount >= 100_000_000_000,
-            "50명이상_안전관리자선임":       workers >= 50,
-            "300명이상_안전관리자선임":      workers >= 300,
+            "1억_산업안전보건관리비":    amount >= 100_000_000,
+            "50억_유해위험방지계획서":   amount >= 5_000_000_000,
+            "50억_기초안전보건교육":     amount >= 5_000_000_000,
+            "100억_안전관리계획서":      amount >= 10_000_000_000,
+            "120억_안전관리자선임_토목": site_type in ("토목", "CIVIL")    and amount >= 12_000_000_000,
+            "150억_안전관리자선임_건축": site_type in ("건축", "BUILDING") and amount >= 15_000_000_000,
+            "200억_안전보건관리책임자":  amount >= 20_000_000_000,
+            "1000억_건설안전판정사":     amount >= 100_000_000_000,
+            "50명이상_안전관리자선임":   workers >= 50,
+            "300명이상_안전관리자선임":  workers >= 300,
         },
     }
 
@@ -1097,50 +1018,31 @@ def _get_construction_summary(facility_ctx: Dict[str, Any]) -> Dict[str, Any]:
 async def diagnose_step1(body: DiagnoseStep1Body):
     sector_raw = body.sector.strip().upper()
     if sector_raw not in ALLOWED_DIAGNOSE_SECTORS:
-        raise HTTPException(
-            status_code=400,
-            detail="sector는 BUILDING, MANUFACTURING, CONSTRUCTION, SPECIAL_FACILITY 중 하나여야 합니다.",
-        )
+        raise HTTPException(status_code=400, detail="sector는 BUILDING, MANUFACTURING, CONSTRUCTION, SPECIAL_FACILITY 중 하나여야 합니다.")
 
     factory_id = (body.factory_id or "").strip()
-    supabase = get_supabase()
+    supabase   = get_supabase()
 
     if factory_id:
         fac_check = supabase.table("factories").select("id").eq("id", factory_id).limit(1).execute()
         if not fac_check.data:
             raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다.")
 
-    sector_db = _normalize_sector_db(sector_raw)
+    sector_db     = _normalize_sector_db(sector_raw)
     sector_groups = get_sector_groups(sector_db)
-    rules_res = (
-        supabase.table("master_building_legal_rules")
-        .select("*")
-        .eq("is_active", True)
-        .in_("sector", sector_groups)
-        .eq("diagnosis_stage", 1)
-        .execute()
-    )
+    rules_res = supabase.table("master_building_legal_rules").select("*").eq("is_active", True).in_("sector", sector_groups).eq("diagnosis_stage", 1).execute()
     all_rules = rules_res.data or []
 
     inp = dict(body.input or {})
     flat_fields = {
-        "building_use_type":      body.building_use_type,
-        "employee_count":         body.employee_count,
-        "floor_area":             body.floor_area,
-        "worker_count":           body.worker_count,
-        "total_floor_area":       body.total_floor_area,
-        "electric_capacity":      body.electric_capacity,
-        "floor_count":            body.floor_count,
-        "contract_amount_eok":    body.contract_amount_eok,
-        "ksic_major":             body.ksic_major,
-        "facility_type":          body.facility_type,
-        "construction_type":      body.construction_type,
-        "direct_workers":         body.direct_workers,
-        "subcon_workers":         body.subcon_workers,
-        "electrical_capacity_kw": body.electrical_capacity_kw,
-        "has_tunnel_bridge":      body.has_tunnel_bridge,
-        "has_blasting":           body.has_blasting,
-        "has_crane":              body.has_crane,
+        "building_use_type": body.building_use_type, "employee_count": body.employee_count,
+        "floor_area": body.floor_area, "worker_count": body.worker_count,
+        "total_floor_area": body.total_floor_area, "electric_capacity": body.electric_capacity,
+        "floor_count": body.floor_count, "contract_amount_eok": body.contract_amount_eok,
+        "ksic_major": body.ksic_major, "facility_type": body.facility_type,
+        "construction_type": body.construction_type, "direct_workers": body.direct_workers,
+        "subcon_workers": body.subcon_workers, "electrical_capacity_kw": body.electrical_capacity_kw,
+        "has_tunnel_bridge": body.has_tunnel_bridge, "has_blasting": body.has_blasting, "has_crane": body.has_crane,
     }
     for k, v in flat_fields.items():
         if v is not None and k not in inp:
@@ -1148,24 +1050,15 @@ async def diagnose_step1(body: DiagnoseStep1Body):
 
     facility_ctx = _input_to_facility_context(sector_raw, inp)
     evaluated_at = datetime.now().isoformat()
-
     applicable, not_applicable = _evaluate_facility_conditions_db(facility_ctx, all_rules, sector_raw)
 
-    triggered: Dict[str, List] = {
-        "appointment": [], "inspection": [], "notify": [], "report": [], "action": [], "not_applicable": [],
-    }
+    triggered: Dict[str, List] = {"appointment": [], "inspection": [], "notify": [], "report": [], "action": [], "not_applicable": []}
     _classify_rules_db(applicable, triggered)
     for r in not_applicable:
         triggered["not_applicable"].append(format_rule_result_db(r))
 
-    total_applicable = (
-        len(triggered["appointment"]) + len(triggered["inspection"])
-        + len(triggered["notify"]) + len(triggered["report"])
-        + len(triggered["action"])
-    )
-
+    total_applicable = sum(len(triggered[k]) for k in ("appointment", "inspection", "notify", "report", "action"))
     law_names = sorted({x.get("law_name") for x in applicable if x.get("law_name")})
-
     obligations: List[Dict[str, Any]] = []
     for key, label in [("appointment", "선임"), ("inspection", "점검"), ("action", "조치")]:
         if triggered[key]:
@@ -1186,7 +1079,6 @@ async def diagnose_step1(body: DiagnoseStep1Body):
 
     appointment_n = len(triggered["appointment"])
     risk = _risk_level(total_applicable, appointment_n)
-
     law_cats: List[str] = []
     seen: set = set()
     for x in applicable:
@@ -1201,14 +1093,12 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         if t and t not in key_obligations:
             key_obligations.append(t)
 
-    rules_out: List[Dict[str, Any]] = []
-    for x in applicable:
-        rules_out.append({
-            "rule_id":     x.get("rule_id"),
-            "law_name":    x.get("law_name") or "",
-            "law_article": x.get("law_article") or "",
-            "obligation":  (x.get("obligation_summary") or x.get("remarks") or "").strip(),
-        })
+    # v5.6.2: 점검 4필드 완비 요약 (스케줄러 연계용)
+    insp_by_schedule_type = {
+        "PERIODIC":    [r for r in triggered["inspection"] if r.get("schedule_type") == "PERIODIC"],
+        "BEFORE_WORK": [r for r in triggered["inspection"] if r.get("schedule_type") == "BEFORE_WORK"],
+        "ON_DEMAND":   [r for r in triggered["inspection"] if r.get("schedule_type") == "ON_DEMAND"],
+    }
 
     result_data = {
         "factory_id":                factory_id or None,
@@ -1222,7 +1112,6 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         "applicable_law_categories": law_cats,
         "appointment_required_flag": appointment_n > 0,
         "key_obligations":           key_obligations,
-        "rules":                     rules_out,
         "law_badges":                law_names,
         "obligations":               obligations,
         "rules_table":               rules_table,
@@ -1234,6 +1123,14 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         "not_applicable_total":      len(not_applicable),
         "total_rules_checked":       len(all_rules),
         "applicable_count":          total_applicable,
+        # v5.6.2: 스케줄러 직접 사용 가능한 점검 분류
+        "inspection_schedule_ready": {
+            "periodic_count":    len(insp_by_schedule_type["PERIODIC"]),
+            "before_work_count": len(insp_by_schedule_type["BEFORE_WORK"]),
+            "on_demand_count":   len(insp_by_schedule_type["ON_DEMAND"]),
+            "periodic":          insp_by_schedule_type["PERIODIC"],
+            "before_work":       insp_by_schedule_type["BEFORE_WORK"],
+        },
         "summary": {
             "total":       total_applicable,
             "appointment": len(triggered["appointment"]),
@@ -1251,24 +1148,11 @@ async def diagnose_step1(body: DiagnoseStep1Body):
     diagnosis_id = None
     if factory_id:
         try:
-            supabase.table("factory_diagnosis_results") \
-                .update({"is_latest": False}) \
-                .eq("factory_id", factory_id) \
-                .eq("sector", sector_raw) \
-                .eq("is_latest", True) \
-                .execute()
+            supabase.table("factory_diagnosis_results").update({"is_latest": False}).eq("factory_id", factory_id).eq("sector", sector_raw).eq("is_latest", True).execute()
         except Exception:
             pass
         try:
-            save_res = supabase.table("factory_diagnosis_results").insert({
-                "factory_id":      factory_id,
-                "sector":          sector_raw,
-                "diagnosis_stage": 1,
-                "input_data":      inp,
-                "result_data":     result_data,
-                "rule_count":      total_applicable,
-                "is_latest":       True,
-            }).execute()
+            save_res = supabase.table("factory_diagnosis_results").insert({"factory_id": factory_id, "sector": sector_raw, "diagnosis_stage": 1, "input_data": inp, "result_data": result_data, "rule_count": total_applicable, "is_latest": True}).execute()
             if save_res.data:
                 diagnosis_id = save_res.data[0].get("id")
         except Exception as e:
@@ -1278,18 +1162,7 @@ async def diagnose_step1(body: DiagnoseStep1Body):
             try:
                 rule_rows = []
                 for rule in applicable:
-                    rule_rows.append({
-                        "diagnosis_id":    diagnosis_id,
-                        "rule_code":       rule.get("rule_id") or rule.get("rule_code") or "",
-                        "rule_name":       (rule.get("obligation_summary") or rule.get("remarks") or "").strip(),
-                        "law_name":        rule.get("law_name") or "",
-                        "law_article":     rule.get("law_article") or "",
-                        "obligation":      (rule.get("obligation_summary") or "").strip(),
-                        "obligation_type": _resolve_obligation_type(rule),
-                        "due_date":        None,
-                        "status":          "PENDING",
-                        "form_code":       rule.get("form_code") or None,
-                    })
+                    rule_rows.append({"diagnosis_id": diagnosis_id, "rule_code": rule.get("rule_id") or rule.get("rule_code") or "", "rule_name": (rule.get("obligation_summary") or rule.get("remarks") or "").strip(), "law_name": rule.get("law_name") or "", "law_article": rule.get("law_article") or "", "obligation": (rule.get("obligation_summary") or "").strip(), "obligation_type": _resolve_obligation_type(rule), "due_date": None, "status": "PENDING", "form_code": rule.get("form_code") or None})
                 for i in range(0, len(rule_rows), 50):
                     supabase.table("diagnosis_rule_results").insert(rule_rows[i:i + 50]).execute()
             except Exception as e:
@@ -1302,43 +1175,27 @@ async def diagnose_step1(body: DiagnoseStep1Body):
 @router.get("/quote-result/{quote_id}")
 async def get_legal_result_from_quote(quote_id: str):
     supabase = get_supabase()
-    res = supabase.table("quotes").select(
-        "id, quote_no, legal_result_json, legal_evaluated_at, legal_applicable_count"
-    ).eq("id", quote_id).single().execute()
+    res = supabase.table("quotes").select("id, quote_no, legal_result_json, legal_evaluated_at, legal_applicable_count").eq("id", quote_id).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="견적을 찾을 수 없습니다.")
     if not res.data.get("legal_result_json"):
         raise HTTPException(status_code=404, detail="판정 결과 없음.")
-    return {"status": "success", "data": {
-        "quote_id": quote_id, "quote_no": res.data.get("quote_no"),
-        "legal_evaluated_at": res.data.get("legal_evaluated_at"),
-        "legal_applicable_count": res.data.get("legal_applicable_count"),
-        "result": res.data.get("legal_result_json"),
-    }}
+    return {"status": "success", "data": {"quote_id": quote_id, "quote_no": res.data.get("quote_no"), "legal_evaluated_at": res.data.get("legal_evaluated_at"), "legal_applicable_count": res.data.get("legal_applicable_count"), "result": res.data.get("legal_result_json")}}
 
 
 @router.get("/result/{factory_id}")
 async def get_legal_result(factory_id: str, mode: str = Query("all")):
     supabase = get_supabase()
     try:
-        fac = supabase.table("factories").select(
-            "legal_result_json, last_diagnosis_at, legal_applicable_count, diagnosis_status"
-        ).eq("id", factory_id).single().execute()
+        fac = supabase.table("factories").select("legal_result_json, last_diagnosis_at, legal_applicable_count, diagnosis_status").eq("id", factory_id).single().execute()
         if fac.data and fac.data.get("legal_result_json"):
             rj = fac.data["legal_result_json"]
             rj.pop("not_applicable", None)
-            return {"status": "success", "data": {
-                **rj,
-                "last_diagnosis_at":      fac.data.get("last_diagnosis_at"),
-                "legal_applicable_count": fac.data.get("legal_applicable_count"),
-                "diagnosis_status":       fac.data.get("diagnosis_status"),
-            }}
+            return {"status": "success", "data": {**rj, "last_diagnosis_at": fac.data.get("last_diagnosis_at"), "legal_applicable_count": fac.data.get("legal_applicable_count"), "diagnosis_status": fac.data.get("diagnosis_status")}}
     except Exception:
         pass
     try:
-        res = supabase.table("legal_applications").select("*").eq(
-            "factory_id", factory_id
-        ).eq("mode", mode).order("evaluated_at", desc=True).limit(1).execute()
+        res = supabase.table("legal_applications").select("*").eq("factory_id", factory_id).eq("mode", mode).order("evaluated_at", desc=True).limit(1).execute()
         if res.data:
             rj = res.data[0].get("result_json", {})
             rj.pop("not_applicable", None)
@@ -1352,18 +1209,13 @@ async def get_legal_result(factory_id: str, mode: str = Query("all")):
 async def get_legal_summary(factory_id: str):
     supabase = get_supabase()
     try:
-        res = supabase.table("legal_applications").select(
-            "mode, evaluated_at, result_json"
-        ).eq("factory_id", factory_id).order("evaluated_at", desc=True).limit(4).execute()
+        res = supabase.table("legal_applications").select("mode, evaluated_at, result_json").eq("factory_id", factory_id).order("evaluated_at", desc=True).limit(4).execute()
     except Exception:
         return {"status": "success", "data": {"factory_id": factory_id, "results": []}}
     results = []
     for row in (res.data or []):
         rj = row.get("result_json", {})
-        results.append({
-            "mode": row.get("mode", "all"), "evaluated_at": row.get("evaluated_at"),
-            "summary": rj.get("summary", {}), "engine_version": rj.get("engine_version", ""),
-        })
+        results.append({"mode": row.get("mode", "all"), "evaluated_at": row.get("evaluated_at"), "summary": rj.get("summary", {}), "engine_version": rj.get("engine_version", "")})
     return {"status": "success", "data": {"factory_id": factory_id, "results": results}}
 
 
@@ -1387,14 +1239,10 @@ async def create_inspection_sets_from_legal(factory_id: str):
         rule_id = rule.get("rule_id", "")
         if rule_id in existing_rule_ids:
             continue
-        m = rule.get("_master", {})
-        law_name = rule.get("law_name", "")
-        cycle_label = rule.get("inspection_cycle", "")
-        cycle_unit_code = str(m.get("inspection_cycle_unit_code") or "")
-        if cycle_unit_code in CYCLE_CODE_MAP:
-            cycle_unit, cycle_value = CYCLE_CODE_MAP[cycle_unit_code]
-        else:
-            cycle_unit, cycle_value = "year", 1
+        law_name   = rule.get("law_name", "")
+        cycle_code = rule.get("inspection_cycle_code") or ""
+        cycle_unit, cycle_value = CYCLE_CODE_MAP.get(cycle_code, ("year", 1))
+        schedule_type = rule.get("schedule_type") or "PERIODIC"
         _unit_label = "년" if cycle_unit == "year" else "개월"
         insert_rows.append({
             "company_id": company_id, "factory_id": factory_id,
@@ -1403,7 +1251,8 @@ async def create_inspection_sets_from_legal(factory_id: str):
             "law_name": law_name, "law_article": rule.get("law_article", ""),
             "cycle_unit": cycle_unit, "cycle_value": cycle_value,
             "cycle_base_type": "LAST_INSPECTION",
-            "cycle_base_guide": f"마지막 점검일로부터 {cycle_value}{_unit_label}마다",
+            "cycle_base_guide": (f"마지막 점검일로부터 {cycle_value}{_unit_label}마다" if schedule_type == "PERIODIC"
+                                 else f"작업({rule.get('construction_work_type','')}) 시작 전 실시"),
             "description": rule.get("description", ""),
             "source": "LEGAL_ENGINE", "is_active": True,
             "anchor_confirmed": False, "status_code": "PENDING_ANCHOR",
@@ -1431,41 +1280,29 @@ async def debug_quote_context(quote_id: str):
 
 def _evaluate_condition(rule: dict, input_data: dict) -> bool:
     def check(field, operator, value, data):
-        if not field or field not in data:
-            return True
+        if not field or field not in data: return True
         actual = data[field]
-        if actual is None:
-            return False
+        if actual is None: return False
         try:
             if operator == '>=': return float(actual) >= float(value)
             elif operator == '<=': return float(actual) <= float(value)
             elif operator == '>': return float(actual) > float(value)
             elif operator == '<': return float(actual) < float(value)
             elif operator == '==': return str(actual) == str(value)
-            elif operator == 'IN':
-                vals = [v.strip() for v in str(value).split(',')]
-                return str(actual) in vals
-            elif operator == 'NOT_IN':
-                vals = [v.strip() for v in str(value).split(',')]
-                return str(actual) not in vals
+            elif operator == 'IN': return str(actual) in [v.strip() for v in str(value).split(',')]
+            elif operator == 'NOT_IN': return str(actual) not in [v.strip() for v in str(value).split(',')]
             elif operator == '==true': return actual is True or str(actual).lower() == 'true'
             elif operator == '==false': return actual is False or str(actual).lower() == 'false'
-        except Exception:
-            return False
+        except Exception: return False
         return True
-
-    c1_ok = check(rule.get('condition_1_field'), rule.get('condition_1_operator'),
-                  rule.get('condition_1_value'), input_data)
-    if not c1_ok:
-        return False
+    c1_ok = check(rule.get('condition_1_field'), rule.get('condition_1_operator'), rule.get('condition_1_value'), input_data)
+    if not c1_ok: return False
     c2_field = rule.get('condition_2_field')
     if c2_field:
         c2_ok = check(c2_field, rule.get('condition_2_operator'), rule.get('condition_2_value'), input_data)
-        mode = rule.get('condition_mode', 'AND')
-        if mode == 'AND' and not c2_ok:
-            return False
-        if mode == 'OR' and not (c1_ok or c2_ok):
-            return False
+        mode  = rule.get('condition_mode', 'AND')
+        if mode == 'AND' and not c2_ok: return False
+        if mode == 'OR'  and not (c1_ok or c2_ok): return False
     return True
 
 
@@ -1480,26 +1317,12 @@ def _save_diagnosis_result(supabase, factory_id: str, sector: str, stage: int, i
         supabase.table('factory_diagnosis_results').update({'is_latest': False}).eq('factory_id', factory_id).eq('is_latest', True).execute()
     except Exception:
         pass
-    law_categories = list(dict.fromkeys(r.get('law_name', '') for r in matched_rules if r.get('law_name')))
+    law_categories  = list(dict.fromkeys(r.get('law_name', '') for r in matched_rules if r.get('law_name')))
     key_obligations = [r.get('obligation_summary') or r.get('rule_name', '') for r in matched_rules[:5]]
     has_appointment = any(r.get('rule_type') == 'APPOINTMENT' or r.get('appointment_required') for r in matched_rules)
-    result_data = {
-        'applicable_law_categories': law_categories,
-        'appointment_required': has_appointment,
-        'key_obligations': key_obligations,
-        'risk_level': _determine_risk_level(len(matched_rules)),
-        'rules': [{'rule_code': r.get('rule_code') or r.get('rule_id'), 'rule_name': r.get('rule_name') or r.get('remarks', ''),
-                   'law_name': r.get('law_name', ''), 'law_article': r.get('law_article', ''),
-                   'obligation': r.get('obligation_summary') or r.get('rule_name', ''),
-                   'rule_type': r.get('rule_type') or str(r.get('rule_type_code', '')),
-                   'stage': r.get('diagnosis_stage', 1)} for r in matched_rules]
-    }
+    result_data = {'applicable_law_categories': law_categories, 'appointment_required': has_appointment, 'key_obligations': key_obligations, 'risk_level': _determine_risk_level(len(matched_rules)), 'rules': [{'rule_code': r.get('rule_code') or r.get('rule_id'), 'rule_name': r.get('rule_name') or r.get('remarks', ''), 'law_name': r.get('law_name', ''), 'law_article': r.get('law_article', ''), 'obligation': r.get('obligation_summary') or r.get('rule_name', ''), 'rule_type': r.get('rule_type') or str(r.get('rule_type_code', '')), 'stage': r.get('diagnosis_stage', 1)} for r in matched_rules]}
     try:
-        res = supabase.table('factory_diagnosis_results').insert({
-            'factory_id': factory_id, 'sector': sector, 'diagnosis_stage': stage,
-            'input_data': input_data, 'result_data': result_data,
-            'rule_count': len(matched_rules), 'is_latest': True,
-        }).execute()
+        res = supabase.table('factory_diagnosis_results').insert({'factory_id': factory_id, 'sector': sector, 'diagnosis_stage': stage, 'input_data': input_data, 'result_data': result_data, 'rule_count': len(matched_rules), 'is_latest': True}).execute()
         return res.data[0] if res.data else {}
     except Exception as e:
         print(f"[DIAGNOSIS] 결과 저장 실패: {e}")
@@ -1509,46 +1332,38 @@ def _save_diagnosis_result(supabase, factory_id: str, sector: str, stage: int, i
 def _create_report_events_from_rules(supabase, factory_id: str, matched_rules: list):
     for rule in matched_rules:
         form_code = rule.get('form_code')
-        if not form_code:
-            continue
+        if not form_code: continue
         try:
             existing = supabase.table('report_events').select('id').eq('factory_id', factory_id).eq('form_code', form_code).eq('status', 'PENDING').execute()
-            if existing.data:
-                continue
-        except Exception:
-            pass
+            if existing.data: continue
+        except Exception: pass
         due_days = rule.get('due_days') or 14
         due_date = (date.today() + timedelta(days=due_days)).isoformat()
         try:
-            supabase.table('report_events').insert({
-                'factory_id': factory_id, 'rule_code': rule.get('rule_code') or rule.get('rule_id'),
-                'form_code': form_code, 'trigger_date': date.today().isoformat(),
-                'due_date': due_date, 'status': 'PENDING',
-            }).execute()
+            supabase.table('report_events').insert({'factory_id': factory_id, 'rule_code': rule.get('rule_code') or rule.get('rule_id'), 'form_code': form_code, 'trigger_date': date.today().isoformat(), 'due_date': due_date, 'status': 'PENDING'}).execute()
         except Exception as e:
             print(f"[DIAGNOSIS] report_events 생성 실패: {e}")
 
 
 @router.post("/diagnose/step2")
 def diagnose_step2(body: dict):
-    supabase   = get_supabase()
-    factory_id = body.get('factory_id')
-    diagnosis_id = body.get('diagnosis_id')
-    processes = body.get('processes', [])
+    supabase      = get_supabase()
+    factory_id    = body.get('factory_id')
+    diagnosis_id  = body.get('diagnosis_id')
+    processes     = body.get('processes', [])
     construction_types = body.get('construction_types', [])
-    work_types: List[str] = list(body.get('construction_work_types') or [])
+    work_types: List[str]           = list(body.get('construction_work_types') or [])
     work_type_codes_direct: List[str] = body.get('work_type_codes') or []
-    kcsc_process_ids: List[str] = body.get('kcsc_process_ids') or []
+    kcsc_process_ids: List[str]     = body.get('kcsc_process_ids') or []
 
     prev = None
     if diagnosis_id:
         try:
             prev_res = supabase.table('factory_diagnosis_results').select('*').eq('id', diagnosis_id).single().execute()
             prev = prev_res.data
-        except Exception:
-            pass
+        except Exception: pass
 
-    sector = (prev or {}).get('sector', body.get('sector', 'CONSTRUCTION'))
+    sector     = (prev or {}).get('sector', body.get('sector', 'CONSTRUCTION'))
     input_data = dict((prev or {}).get('input_data') or {})
     input_data['processes'] = processes
     input_data['construction_types'] = construction_types
@@ -1556,7 +1371,6 @@ def diagnose_step2(body: dict):
 
     kcsc_processes: List[Dict] = []
     kcsc_process_summary: List[Dict] = []
-
     if kcsc_process_ids:
         try:
             kcsc_res = supabase.table('kcsc_process_master').select('id, process_name, work_type_code, work_type_label, risk_level').in_('id', kcsc_process_ids).eq('is_active', True).execute()
@@ -1567,51 +1381,28 @@ def diagnose_step2(body: dict):
         work_types = list(set(work_types + kcsc_work_types))
         input_data['kcsc_process_ids'] = kcsc_process_ids
         for p in kcsc_processes:
-            kcsc_process_summary.append({
-                'process_id': p['id'], 'process_name': p.get('process_name', ''),
-                'work_type_code': p.get('work_type_code'), 'work_type_label': p.get('work_type_label'),
-                'risk_level': p.get('risk_level', 'MEDIUM'), 'has_legal_rules': p.get('work_type_code') is not None,
-            })
-
+            kcsc_process_summary.append({'process_id': p['id'], 'process_name': p.get('process_name', ''), 'work_type_code': p.get('work_type_code'), 'work_type_label': p.get('work_type_label'), 'risk_level': p.get('risk_level', 'MEDIUM'), 'has_legal_rules': p.get('work_type_code') is not None})
     if work_type_codes_direct:
         work_types = list(set(work_types + work_type_codes_direct))
 
     sector_groups = get_sector_groups(sector)
     q = supabase.table('master_building_legal_rules').select('*').in_('sector', sector_groups).lte('diagnosis_stage', 2).eq('is_active', True)
     if sector == 'CONSTRUCTION' and work_types:
-        work_type_csv = ",".join(work_types)
-        q = q.or_(f"construction_work_type.is.null,construction_work_type.in.({work_type_csv})")
-
-    res = q.execute()
-    rules = res.data or []
+        q = q.or_(f"construction_work_type.is.null,construction_work_type.in.({','.join(work_types)})")
+    res     = q.execute()
+    rules   = res.data or []
     matched = [r for r in rules if _evaluate_condition(r, input_data)]
-
     diagnosis = {}
     if factory_id:
         diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 2, input_data, matched)
         _create_report_events_from_rules(supabase, factory_id, matched)
-
     prev_codes = set()
     if prev:
         prev_rules = (prev.get('result_data') or {}).get('rules', [])
         prev_codes = {r.get('rule_code') for r in prev_rules}
-    added = [r for r in matched if (r.get('rule_code') or r.get('rule_id')) not in prev_codes]
+    added  = [r for r in matched if (r.get('rule_code') or r.get('rule_id')) not in prev_codes]
     result = diagnosis.get('result_data', {})
-
-    return {
-        'status': 'success', 'diagnosis_id': diagnosis.get('id'),
-        'stage': 2, 'engine_version': ENGINE_VERSION, 'sector': sector,
-        'sector_groups': sector_groups, 'rule_count': len(matched), 'added_rule_count': len(added),
-        'kcsc_process_summary': kcsc_process_summary,
-        'summary': {
-            'applicable_law_categories': result.get('applicable_law_categories', []),
-            'appointment_required': result.get('appointment_required', False),
-            'key_obligations': result.get('key_obligations', []),
-            'risk_level': result.get('risk_level', 'LOW'),
-        },
-        'rules': result.get('rules', []),
-        'added_rules': [{'rule_code': r.get('rule_code') or r.get('rule_id'), 'rule_name': r.get('rule_name') or r.get('remarks', ''), 'law_article': r.get('law_article', '')} for r in added],
-    }
+    return {'status': 'success', 'diagnosis_id': diagnosis.get('id'), 'stage': 2, 'engine_version': ENGINE_VERSION, 'sector': sector, 'sector_groups': sector_groups, 'rule_count': len(matched), 'added_rule_count': len(added), 'kcsc_process_summary': kcsc_process_summary, 'summary': {'applicable_law_categories': result.get('applicable_law_categories', []), 'appointment_required': result.get('appointment_required', False), 'key_obligations': result.get('key_obligations', []), 'risk_level': result.get('risk_level', 'LOW')}, 'rules': result.get('rules', []), 'added_rules': [{'rule_code': r.get('rule_code') or r.get('rule_id'), 'rule_name': r.get('rule_name') or r.get('remarks', ''), 'law_article': r.get('law_article', '')} for r in added]}
 
 
 @router.post("/diagnose/step3")
@@ -1621,23 +1412,19 @@ def diagnose_step3(body: dict):
     if not factory_id:
         raise HTTPException(status_code=400, detail='factory_id 필수')
     diagnosis_id = body.get('diagnosis_id')
-    equipments: List[Dict] = list(body.get('equipments') or [])
-    kcsc_work_ids: List[str] = list(body.get('kcsc_work_ids') or [])
-
+    equipments: List[Dict]        = list(body.get('equipments') or [])
+    kcsc_work_ids: List[str]      = list(body.get('kcsc_work_ids') or [])
     prev = None
     if diagnosis_id:
         try:
             prev_res = supabase.table('factory_diagnosis_results').select('*').eq('id', diagnosis_id).single().execute()
             prev = prev_res.data
-        except Exception:
-            pass
-
-    sector = (prev or {}).get('sector', 'MANUFACTURING')
+        except Exception: pass
+    sector     = (prev or {}).get('sector', 'MANUFACTURING')
     input_data = dict((prev or {}).get('input_data') or {})
     input_data['sector'] = sector
     extra_equipment_codes: List[str] = []
-    kcsc_work_summary: List[Dict] = []
-
+    kcsc_work_summary: List[Dict]    = []
     if kcsc_work_ids:
         try:
             kcsc_work_res = supabase.table('kcsc_work_master').select('id, title, is_hazardous, hazard_type, equipment_type_codes, work_type_code').in_('id', kcsc_work_ids).execute()
@@ -1648,28 +1435,19 @@ def diagnose_step3(body: dict):
             extra_equipment_codes = list(set(extra_equipment_codes))
         except Exception as e:
             print(f"[STEP3] kcsc_work_master 조회 실패: {e}")
-
     for code in extra_equipment_codes:
         if not any(e.get('equipment_code') == code for e in equipments):
             equipments.append({'equipment_code': code})
-
     input_data['equipments'] = equipments
     sector_groups_s3 = get_sector_groups(sector)
     q = supabase.table('master_building_legal_rules').select('*').in_('sector', sector_groups_s3).eq('diagnosis_stage', 3).eq('is_active', True)
     if sector == 'CONSTRUCTION' and extra_equipment_codes:
-        eq_csv = ','.join(extra_equipment_codes)
-        q = q.or_(f"construction_work_type.is.null,construction_work_type.in.({eq_csv})")
-
-    res = q.execute()
-    rules = res.data or []
+        q = q.or_(f"construction_work_type.is.null,construction_work_type.in.({','.join(extra_equipment_codes)})")
+    res     = q.execute()
+    rules   = res.data or []
     matched = [r for r in rules if _evaluate_condition(r, input_data)]
     diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 3, input_data, matched)
-
-    return {
-        'status': 'success', 'diagnosis_id': diagnosis.get('id'),
-        'stage': 3, 'sector': sector, 'engine_version': ENGINE_VERSION,
-        'rule_count': len(matched), 'kcsc_work_summary': kcsc_work_summary,
-    }
+    return {'status': 'success', 'diagnosis_id': diagnosis.get('id'), 'stage': 3, 'sector': sector, 'engine_version': ENGINE_VERSION, 'rule_count': len(matched), 'kcsc_work_summary': kcsc_work_summary}
 
 
 @router.get("/diagnose/{factory_id}/latest")
@@ -1680,10 +1458,8 @@ def get_latest_diagnosis(factory_id: str):
         if not res.data:
             raise HTTPException(status_code=404, detail='진단 결과 없음')
         return {'status': 'success', 'data': res.data[0]}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException: raise
+    except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/diagnose/{factory_id}/history")
