@@ -5,7 +5,7 @@ main.py 의 APP_VERSION 을 파싱해서 예상 버전을 알고,
 API 가 해당 버전을 반환할 때까지 폴링합니다.
 
 최대 대기: 5분 (30초 간격 × 10회)
-배포 미완료 시: 경고 후 현재 버전으로 테스트 계속 진행 (차단 안 함)
+배포 미완료 시: 경고 후 현재 버전으로 테스트 계속 진행 (차단하지 않음)
 
 실행:
   API_URL=https://api.taieng.co.kr python tests/wait_for_deploy.py

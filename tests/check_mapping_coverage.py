@@ -2,9 +2,9 @@
 TAI 정적 매핑 커버리지 검증 — GitHub Actions Job 2
 ====================================================
 DB에 실제 사용 중인 condition_code가 엔진의
-_input_to_facility_context() 에서 처리되는지 확인합니다.
+_input_to_facility_context() 에 처리 코드가 있는지 확인합니다.
 
-문제: 새 condition_code를 DB에 추가하고 엔진 코드에 매핑을 빠뜨리면
+문제: 새 condition_code를 DB에 추가하고 엔진 코드에 처리를 빠뜨리면
      룰이 발동 안 되는 버그가 발생하지만 눈에 안 띔.
 
 이 스크립트는 그 격차를 자동으로 탐지합니다.
@@ -39,7 +39,7 @@ ENGINE_CONTEXT_KEYS = {
     "transformer_capacity_kva",
     "annual_energy_toe",
     "contractor_count",
-    # 설비 수치 (직접 입력 가능 — v5.6.3+)
+    # 설비 수치 (직접 입력 — v5.6.3)
     "elevator_count",
     "gas_capacity_kg", "gas_capacity_m3",
     "boiler_capacity_kw", "boiler_capacity_th",
@@ -70,10 +70,10 @@ def fetch_db_codes() -> set:
             "Authorization": f"Bearer {SERVICE_KEY}",
         },
         params={
-            "select":        "condition_code",
-            "is_active":     "eq.true",
+            "select": "condition_code",
+            "is_active": "eq.true",
             "condition_code": "not.is.null",
-            "limit":         2000,
+            "limit": 2000,
         },
         timeout=15,
     )
@@ -87,18 +87,18 @@ def main():
     print("  TAI 정적 매핑 커버리지 검증")
     print(f"{'═'*58}{RESET}\n")
 
-    db_codes = fetch_db_codes()
+    db_codes  = fetch_db_codes()
     print(f"  DB condition_code 종류:      {len(db_codes)}개")
-    print(f"  엔진 매핑 키 종류:           {len(ENGINE_CONTEXT_KEYS)}개\n")
+    print(f"  엔진 처리 가능 key 종류:     {len(ENGINE_CONTEXT_KEYS)}개\n")
 
     # DB에 있는데 엔진에 없음 → 룰 발동 안 됨 (버그)
     missing = db_codes - ENGINE_CONTEXT_KEYS
 
-    # 엔진에 있는데 DB에 없음 → 사용 안 되는 매핑 (경고만)
+    # 엔진에 있는데 DB에 없음 → 미사용 매핑 (경고만)
     unused = ENGINE_CONTEXT_KEYS - db_codes
 
     if missing:
-        print(f"{RED}{BOLD}  ❌ 엔진 매핑 누락 — DB에 있지만 엔진이 처리 못 하는 condition_code:{RESET}")
+        print(f"{RED}{BOLD}  ❌ 엔진 매핑 누락 — 이 condition_code는 DB에 있지만 엔진이 처리 못 함:{RESET}")
         for code in sorted(missing):
             print(f"{RED}     • {code}{RESET}")
         print()
