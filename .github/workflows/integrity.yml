@@ -88,3 +88,29 @@ jobs:
 
       - name: 추가 52건 검증
         run: python tests/test_legal_engine_52.py --url ${{ secrets.API_URL }}
+
+  # ─────────────────────────────────────────────────
+  # Job 4: 단계별(Layer) 무결성 검증
+  # 건물/산업/건설 × 시설/공정/설비/작업 × 정방향/역방향
+  # ─────────────────────────────────────────────────
+  layer-integrity:
+    name: "[4] 단계별 Layer 무결성 (정방향+역방향)"
+    needs: mapping-coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 의존성 설치
+        run: pip install requests
+
+      - name: Railway 배포 완료 대기 (최대 5분)
+        run: python tests/wait_for_deploy.py
+        env:
+          API_URL: ${{ secrets.API_URL }}
+
+      - name: "L1 시설단위 정방향 + 역방향 / L2 공정단위 / L3 복합"
+        run: python tests/test_legal_engine_layer.py --url ${{ secrets.API_URL }}
