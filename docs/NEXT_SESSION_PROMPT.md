@@ -1,114 +1,135 @@
 # TAI Safe 신규 창 시작 프롬프트
-**작성일: 2026-04-06 2차 세션 종료 | 컨텍스트: 법령엔진 무결성 검증 완료 → 점검 스케줄 연계 단계**
+**작성일: 2026-04-06 3차 세션 종료 | 목적: 법령엔진·데이터 고도화**
 
 ---
 
 ## 🎯 현재 상황 요약
 
 ### 완료된 것
-- ✅ 법령엔진 무결성 78건 ALL PASS (정방향 + 역방향 + 복합 + 격리)
-- ✅ 엔진 v5.6.3 GitHub 업로드 완료
-  - inspection_cycle 4필드 완비 (schedule_type: PERIODIC/BEFORE_WORK/ON_DEMAND)
-  - DiagnoseStep1Body 수치 입력 필드 추가 (gas_capacity_kg, boiler_capacity_kw, elevator_count 등)
-- ✅ DB 버그 수정: GASACT-001 조건코드, HAZMAT-015-MFG-V2 target_code, 한글 코드 정규화
-- ✅ 점검 4필드 완비율 분석: 건물 85% / 산업 72% / 건설 12%
+- ✅ 법령엔진 v5.6.4 운영 중 (https://api.taieng.co.kr/ → version: 5.6.4)
+- ✅ GitHub Actions CI 파이프라인 완성 — push 시 자동으로 78건 무결성 검증
+  - `.github/workflows/integrity.yml` (3-Job)
+  - `tests/check_db_integrity.py`, `tests/check_mapping_coverage.py`, `tests/wait_for_deploy.py`
+- ✅ DB 제약조건 5개 추가 (APPOINT target 필수, 영문 형식, INSPECT executor 필수 등)
+- ✅ DB 데이터 수정 (height_work→has_high_work, 비활성화 6건)
+- ✅ 78건 무결성 테스트 ALL PASS 확인
 
-### 미완료 (즉시 해야 할 것)
-- ❌ **Railway v5.6.3 배포 미완료** — GitHub에 코드 있으나 Railway는 v5.5.2 운영 중
-  → Railway 대시보드 접속 → 수동 재배포 필요
-- ❌ 점검 무결성 테스트 (v5.6.3 배포 후 실행)
-  ```bash
-  python tests/test_legal_engine_layer.py
-  ```
-  → 현재 16건 중 8건 실패 (배포 후 14/16 예상)
+### 미완료
+- ⚠️ Railway "Wait for CI" 미활성 — Service → Settings → GitHub → Wait for CI 체크 필요
 
 ---
 
-## 📋 다음 세션 작업순서
+## 📋 이번 세션 목표: 법령엔진·데이터 고도화
 
-### 1️⃣ Railway 재배포 확인 (최우선)
+### 1️⃣ 현황 파악 (시작 시 반드시 실행)
+```sql
+-- 섹터별 INSPECT 4완비율 확인
+SELECT
+  sector,
+  COUNT(*) AS total,
+  COUNT(CASE WHEN condition_code IS NOT NULL
+             AND inspection_cycle_unit_code IS NOT NULL
+             AND executor_type_code IS NOT NULL
+             AND law_article IS NOT NULL THEN 1 END) AS complete_4,
+  ROUND(COUNT(CASE WHEN condition_code IS NOT NULL
+                   AND inspection_cycle_unit_code IS NOT NULL
+                   AND executor_type_code IS NOT NULL
+                   AND law_article IS NOT NULL THEN 1 END)::numeric
+        / COUNT(*) * 100, 1) AS ratio
+FROM master_building_legal_rules
+WHERE obligation_type = 'INSPECT' AND is_active = true
+GROUP BY sector ORDER BY sector;
 ```
-https://api.taieng.co.kr/ → {"version": "5.6.3"} 확인
+
+### 2️⃣ 고도화 대상 (우선순위순)
+
+**BUILDING INSPECT 미완비 18건**
+```sql
+SELECT rule_id, law_name, condition_code, inspection_cycle_unit_code, executor_type_code
+FROM master_building_legal_rules
+WHERE obligation_type='INSPECT' AND sector='BUILDING' AND is_active=true
+  AND (condition_code IS NULL
+    OR inspection_cycle_unit_code IS NULL
+    OR executor_type_code IS NULL)
+ORDER BY law_name;
 ```
 
-### 2️⃣ 점검 4필드 완전 검증 (배포 후)
-아래 테스트 실행:
-```bash
-python tests/test_legal_engine.py       # 26건 기준 (항상 통과해야 함)
-python tests/test_legal_engine_52.py    # 52건 추가
-python tests/test_legal_engine_layer.py # 단계별 (v5.6.3 후 30건 예상)
+**MANUFACTURING INSPECT condition 미설정건**
+```sql
+SELECT rule_id, law_name, obligation_summary, condition_code
+FROM master_building_legal_rules
+WHERE obligation_type='INSPECT' AND sector='MANUFACTURING'
+  AND is_active=true AND condition_code IS NULL
+ORDER BY law_name;
 ```
 
-검증 항목:
-- 승강기: elevator_count=1 → 승강기안전관리법 점검 + 승강기안전관리자 선임 둘다 발동
-- 가스: gas_capacity_kg=1 → >=1 룰 발동, gas_capacity_kg=100 → >=1+>=100 발동
-- inspection_cycle, inspection_cycle_code, inspection_cycle_unit, schedule_type 필드 확인
-- inspection_schedule_ready.periodic / before_work 분류 확인
+**건설 BEFORE_WORK 64건 — 주기 없는 작업전 점검**
+```sql
+SELECT rule_id, law_name, obligation_summary, construction_work_type
+FROM master_building_legal_rules
+WHERE obligation_type='INSPECT' AND sector='CONSTRUCTION'
+  AND is_active=true AND inspection_cycle_unit_code IS NULL
+ORDER BY law_name;
+```
 
-### 3️⃣ 건설 BEFORE_WORK 점검 설계 결정
-건설 INSPECT 73건 중 64건이 주기 없음 (작업 전 점검 구조)
-- BEFORE_WORK 룰 → 작업 등록 시 자동 생성하는 스케줄러 로직 필요
-- master_building_legal_rules에 cycle_type 컬럼 추가 여부 결정 필요
+**PENDING 263개 검토**
+```sql
+SELECT status, COUNT(*) FROM law_rule_drafts GROUP BY status;
+```
 
-### 4️⃣ 점검 → 일정 자동생성 연계 검증
-- POST /legal-engine/create-inspection-sets/{factory_id} 호출
-- inspection_sets 생성 확인 (cycle_unit, cycle_value, schedule_type 정확히 들어가는지)
-
-### 5️⃣ 신고/보고 검증 (ACTION 이후)
-- 신고(REPORT) 144건 / 보고(NOTIFY) 58건 → 언제/누가/무엇 기준 동일하게 검증
+### 3️⃣ 수정 후 필수 검증
+```
+GitHub push → Actions 자동 실행 → 3개 Job 모두 ✅ 확인
+```
+수동 검증이 필요하면:
+```
+https://github.com/taiengineering/tai-api/actions 에서 결과 확인
+```
 
 ---
 
-## 🗄️ 현재 엔진 구조 핵심
+## 📌 엔진 핵심 상수 (변경 금지)
 
-### 점검 분류 (v5.6.2+)
-```python
-# format_rule_result_db()가 반환하는 점검 관련 필드
-{
-  "inspection_cycle":      "연 1회",     # 언제 — 레이블
-  "inspection_cycle_code": "006",        # 언제 — 코드
-  "inspection_cycle_unit": "year",       # 언제 — 스케줄러 단위
-  "inspection_cycle_int":  1,            # 언제 — 스케줄러 정수
-  "schedule_type":         "PERIODIC",   # PERIODIC/BEFORE_WORK/ON_DEMAND
-  "executor_type_code":    "external",   # 누가
-  "condition_code":        "elevator_count",  # 무엇이 있을 때
-  "condition_value":       "1"           # 임계값
-}
+### 가스 단계별 임계값
 ```
-
-### 가스 단계별 임계값 (수정 금지)
-```
-gas_capacity_kg >= 1    → 기본 점검 (선임 등)
-gas_capacity_kg >= 100  → 정기검사 (연1회, 고압가스안전관리법)
+gas_capacity_kg >= 1    → 기본 점검/선임
+gas_capacity_kg >= 100  → 정기검사 (고압가스안전관리법)
 gas_capacity_kg >= 300  → 추가 검사
 gas_capacity_kg >= 1000 → 특별 의무
 ```
+이 값들은 법적 기준값 — 절대 수정 금지
 
-### 진단 입력 (v5.6.3+)
-```json
-{
-  "sector": "BUILDING",
-  "input": {
-    "elevator_count": 3,       ← 승강기 대수 직접
-    "gas_capacity_kg": 250,    ← 가스 용량 직접 (250kg → >=1, >=100 발동)
-    "boiler_capacity_kw": 500, ← 보일러 용량 직접
-    "has_hazardous_material": true,
-    "electric_capacity": 300
-  }
+### ENGINE_CONTEXT_KEYS (check_mapping_coverage.py와 동기화 필수)
+새 condition_code를 DB에 추가하면 반드시:
+1. `routers/legal_engine.py` `CONDITION_CODE_TO_CONTEXT_KEY` 또는 `_input_to_facility_context()`에 추가
+2. `tests/check_mapping_coverage.py` `ENGINE_CONTEXT_KEYS` 셋에 추가
+3. GitHub push → CI 통과 확인
+
+### has_appt() 비교 주의
+엔진이 `appointment_target`을 한글 레이블로 반환하므로 테스트 시:
+```python
+# 반드시 영문코드+한글레이블 둘 다 비교
+APPOINTMENT_TARGET_MAP = {
+  "safety_manager": "안전관리자",
+  "electric_safety_manager": "전기안전관리자",
+  ...
 }
+def has_appt(data, target_code):
+    label = APPOINTMENT_TARGET_MAP.get(target_code, target_code)
+    return any(r.get("appointment_target") in (target_code, label)
+               for r in data.get("appointment_required", []))
 ```
-
----
-
-## 📌 절대 원칙
-1. **무결성 규칙**: 법령/엔진 변경 후 반드시 test_legal_engine.py + test_legal_engine_52.py 통과
-2. **가스 조건값 수정 금지**: 법적 기준값 (100/300/1000 kg)
-3. **배포 전 GitHub 확인**: SHA 항상 최신 조회 후 업데이트
-4. **공지예외주장 기한: 2026-04-28**
 
 ---
 
 ## 🔐 인증
 - **Supabase**: xntdkrjhgcscmqctdzyo
-- **Railway API**: https://api.taieng.co.kr/ (GitHub: v5.6.3 / 운영: v5.5.2)
+- **Railway API**: https://api.taieng.co.kr/ (v5.6.4)
 - **Admin**: hetto@kakao.com (role 001)
+- **GitHub**: taiengineering/tai-api (main branch)
+
+## 📌 주의사항
+1. API 사이즈: `size <= 100`
+2. SHA 필수: create_or_update_file 시 현재 SHA 먼저 조회
+3. 무결성 원칙: 변경 후 CI 통과 확인 필수
+4. **공지예외주장 기한: 2026-04-28** (patent.go.kr)
