@@ -1,180 +1,103 @@
 # TAI Safe 신규 창 시작 프롬프트
-**작성일: 2026-04-03 23:55 | 컨텍스트: 법령 파싱 완료 → 규칙 정제 단계**
+**작성일: 2026-04-06 | 컨텍스트: 데이터 분석 완료 → 데이터 정제 단계**
 
 ---
 
 ## 🎯 현재 상황 요약
 
-**완료 (2026-04-03)**
-- ✅ 법령 파싱: 3,986조문 100% 
-- ✅ PENDING 1,330개 → 전부 APPROVED
-- ✅ master_building_legal_rules: 2,080개 (신규 AI 1,204개)
-- ✅ rule_type_code: 전체 채움
-- ✅ condition_code: 267개 draft에서 매핑
+**완료 (2026-04-06)**
+- ✅ AI 생성 룰 937개 비활성화 (condition_code 미설정)
+- ✅ PENDING 262개 분석 완료
+- ✅ BUILDING 섹터 완성도 점검 완료
+- ✅ inspection_sets 미생성 INSPECT 룰 50건 추출
+- ✅ condition_code 입력 우선순위 목록 작성
+- ✅ main.py v5.6.0 / contract_kmong v1.0.0 / law_rule_generator v1.5.0
 
 **현재 문제**
-- 937개 규칙이 condition_code 없음 → 비활성화 여부 결정 필요
-- PENDING 263개 규칙 수동 검토 필요
-- 일정관리 자동화 미구현
+- rule_type_code=NULL 52개 → 분류 필요 (진단 사용 불가)
+- PENDING 262개 condition_code 미설정 → 우선순위대로 입력 필요
+- inspection_sets 미생성 50건 → 자동 생성 필요
 
 ---
 
 ## 📋 지금부터 할 작업 (우선순위순)
 
-### 1️⃣ Haiku로 condition_code 재추출 (선택사항이지만 권장)
-**목표**: 937개 미매핑 규칙에 대해 Haiku가 자동으로 적절한 condition_code 제안
-
+### 1️⃣ 🚨 rule_type_code=NULL 52개 분류 (최우선)
 ```sql
--- 추출 대상 (937개)
-SELECT id, rule_name, obligation_summary 
-FROM master_building_legal_rules 
-WHERE condition_code IS NULL AND is_active = true
-LIMIT 50; -- 배치로 50개씩
-```
-
-**Haiku 프롬프트**:
-```
-다음 건설업 안전 규칙에 대해 가장 적절한 condition_code를 선택하세요.
-[조건코드 리스트 267개 제공]
-
-규칙명: {rule_name}
-의무내용: {obligation_summary}
-
-적절한 condition_code: 
-설명:
-```
-
-**결과 처리**:
-```python
-# Haiku 응답 → condition_code UPDATE
-UPDATE master_building_legal_rules 
-SET condition_code = '{code}' 
-WHERE id = {rule_id};
-```
-
----
-
-### 2️⃣ 937개 규칙 비활성화 결정
-**옵션**:
-- **A**: 전부 비활성화 (`is_active = false`) → 나중에 필요시 활성화
-- **B**: condition_code 없는 것만 비활성화
-- **C**: Haiku 재추출 후 결정
-
-**추천**: A (먼저 Haiku 재추출 50개 시범 → 결과 보고)
-
----
-
-### 3️⃣ PENDING 263개 규칙 수동 검토
-**확인 항목**:
-1. 법령명 정확성 (띄어쓰기 등)
-2. 의무 내용 적절성
-3. 건설업 특수 로직 필요 여부 (산안법 시행령 제16조③)
-4. obligation_type 재분류
-
-**처리 흐름**:
-```
-PENDING → 검토중 (reviewer_id=001) 
-        → APPROVED / REJECTED (with comment)
-```
-
----
-
-### 4️⃣ 일정관리 "룰→일정 생성" 실행
-**스키마**:
-```sql
--- 의무별 일정 항목 자동 생성
-CREATE TABLE IF NOT EXISTS schedule_items (
-  id UUID PRIMARY KEY,
-  obligation_id UUID REFERENCES legal_obligations(id),
-  title VARCHAR,
-  frequency VARCHAR ('DAILY', 'WEEKLY', 'MONTHLY'),
-  due_date DATE,
-  is_completed BOOLEAN DEFAULT false,
-  created_at TIMESTAMP
-);
-```
-
-**로직**:
-```python
-# legal_obligations 조회
-for obligation in get_all_active_obligations():
-  create_schedule_item(
-    obligation_id=obligation.id,
-    title=obligation.obligation_summary,
-    frequency=determine_frequency(obligation.rule_type_code),
-    due_date=calculate_due_date()
-  )
-```
-
----
-
-## 🗄️ 주요 SQL 쿼리
-
-```sql
--- 1. condition 없는 규칙 확인
-SELECT COUNT(*) FROM master_building_legal_rules 
-WHERE condition_code IS NULL AND is_active = true;
--- 예상: 937
-
--- 2. condition_code 분포
-SELECT condition_code, COUNT(*) as cnt
+SELECT rule_id, law_name, obligation_type, obligation_summary, sector
 FROM master_building_legal_rules
-WHERE condition_code IS NOT NULL
-GROUP BY condition_code
-ORDER BY cnt DESC;
-
--- 3. PENDING 규칙 조회
-SELECT id, rule_name, obligation_summary, status
-FROM master_legal_rules
-WHERE status = 'PENDING'
-LIMIT 30;
-
--- 4. rule_type_code 통계
-SELECT rule_type_code, COUNT(*) FROM master_building_legal_rules
-GROUP BY rule_type_code ORDER BY COUNT(*) DESC;
+WHERE rule_type_code IS NULL AND is_active = true
+ORDER BY law_name;
 ```
+- obligation_type 기준으로 rule_type_code 매핑:
+  - APPOINT → '001'
+  - INSPECT → '002'
+  - NOTIFY  → '003'
+  - REPORT  → '004'
+  - ACTION  → '005'
+
+### 2️⃣ condition_code 일괄 입력 (법령별)
+**우선순위:**
+1. 고압가스 안전관리법 42건 → `gas_capacity_kg`
+2. 시설물 안전법 31건 → `building_area`
+3. 도시가스사업법 28건 → `gas_capacity_m3`
+4. 전기안전관리법 8건 → `electric_capacity`
+5. 에너지이용 합리화법 9건 → `annual_energy_toe`
+
+```sql
+-- 예시: 고압가스 일괄 입력
+UPDATE law_rule_drafts
+SET condition_code = 'gas_capacity_kg'
+WHERE law_name LIKE '%고압가스%'
+  AND condition_code IS NULL
+  AND status = 'PENDING';
+```
+
+### 3️⃣ inspection_sets 자동 생성
+- 승강기 안전관리법 INSPECT 12건 우선 (주기·조건 모두 있음)
+- `POST /inspection-schedule/generate-from-rules` 활용
+
+### 4️⃣ PENDING 262개 검토
+- `GET /law-rule-generator/drafts?status=PENDING&has_condition=false`
+- 법령별로 묶어서 일괄 승인/거부
 
 ---
 
-## 🔧 구현 우선순위
+## 🗄️ 주요 현황 쿼리
 
-| 우선순위 | 작업 | 예상 시간 | 복잡도 |
-|---------|------|---------|-------|
-| 🔴 높음 | Haiku condition 재추출 (배치) | 30분 | 낮음 |
-| 🔴 높음 | 937개 비활성화 결정 | 10분 | 낮음 |
-| 🟡 중간 | PENDING 263개 검토 | 1-2시간 | 중간 |
-| 🟡 중간 | 일정 생성 자동화 | 45분 | 중간 |
+```sql
+-- 1. rule_type_code NULL 현황
+SELECT COUNT(*) FROM master_building_legal_rules
+WHERE rule_type_code IS NULL AND is_active = true;
+-- 예상: 52
+
+-- 2. BUILDING 섹터 완성도
+SELECT rule_type_code, COUNT(*) AS total,
+  COUNT(CASE WHEN condition_code IS NOT NULL THEN 1 END) AS has_cond
+FROM master_building_legal_rules
+WHERE is_active = true AND sector = 'BUILDING'
+GROUP BY rule_type_code;
+
+-- 3. inspection_sets 미생성 INSPECT 룰
+SELECT COUNT(*) FROM master_building_legal_rules r
+LEFT JOIN inspection_sets s ON s.legal_rule_id = r.rule_id
+WHERE r.rule_type_code = '002' AND r.is_active = true AND s.id IS NULL;
+-- 예상: 50+
+```
 
 ---
 
 ## 📌 중요 주의사항
 
-1. **condition_code 재추출 시**:
-   - Haiku 배치: 50개씩, 10배치 = 500 호출
-   - 기존 267개 매핑 데이터는 유지
-   - 신규 매핑도 검토 후 적용 (100% 자동은 위험)
-
-2. **비활성화 전**:
-   - 백업 확인 (master_building_legal_rules_backup)
-   - 데이터 소실 없음 (is_active만 변경)
-
-3. **일정 생성 로직**:
-   - frequency 자동 결정 규칙 명확히 (rule_type_code 기반)
-   - 중복 생성 방지 (idempotent)
+1. **API 사이즈 제한**: `size <= 100` (pagination 필수)
+2. **라우트 순서**: 구체적 경로(/bulk, /stats)를 /{id} 앞에 선언
+3. **SHA 필수**: create_or_update_file 시 현재 SHA 먼저 조회
+4. **공지예외주장 제출 기한: 2026-04-28** (patent.go.kr)
 
 ---
 
 ## 🔐 현재 DB/API 상태
 
 - **Supabase**: xntdkrjhgcscmqctdzyo
-- **Railway API**: https://api.taieng.co.kr/ (v4.2.0)
-- **Admin**: hetto@kakao.com (role 001, ACTIVE)
-
----
-
-## ✨ 마지막 체크
-
-- [ ] Haiku condition 재추출 시작 (배치 50개)
-- [ ] 937개 비활성화 결정 후 UPDATE
-- [ ] PENDING 263개 검토 체크리스트 작성
-- [ ] 일정 생성 스케줄러 구현 시작
+- **Railway API**: https://api.taieng.co.kr/ (v5.6.0)
+- **Admin**: hetto@kakao.com (role 001)
