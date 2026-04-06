@@ -1,7 +1,9 @@
 """
 익명 무료 법령진단 — DB 저장 + public_token + claim
 POST /anonymous-diagnosis          생성 (법령엔진 step1 재사용)
-GET  /anonymous-diagnosis/{token}  조회 (비로그인: partial만, 로그인+귀속 시 full)
+GET  /anonymous-diagnosis/{token}  조회
+  - 기본(Nexas 등): 비로그인 partial만; 로그인+귀속 시 full
+  - 구버전 taieng.co.kr: ?tai_legacy_public=1 로 full (로그인 불필요)
 POST /anonymous-diagnosis/{token}/claim  로그인 사용자 귀속
 """
 from __future__ import annotations
@@ -10,7 +12,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
@@ -355,6 +357,10 @@ def _fetch_row(token: str) -> Dict[str, Any]:
 @router.get("/{token}")
 def get_anonymous_diagnosis(
     token: str,
+    tai_legacy_public: Optional[str] = Query(
+        None,
+        description="구버전 taieng.co.kr 전용: 1 이면 로그인 없이 full_result 반환",
+    ),
     authorization: Optional[str] = Header(None),
 ):
     row = _fetch_row(token)
@@ -362,8 +368,13 @@ def get_anonymous_diagnosis(
     full = row.get("full_result") or {}
     claimed = row.get("claimed_user_id")
 
+    # 구버전 루트 도메인(taieng.co.kr) 정적 사이트만 이 쿼리를 붙여 호출하도록 둔다. Nexas는 붙이지 않음.
+    legacy_public_full = tai_legacy_public == "1"
+
     can_full = False
-    if authorization and authorization.startswith("Bearer "):
+    if legacy_public_full:
+        can_full = True
+    elif authorization and authorization.startswith("Bearer "):
         try:
             user = get_current_user(authorization)
             uid = user.get("id")
