@@ -1,5 +1,5 @@
 """
-TAI 법령엔진 무결성 검증 — 52건 (v1.0)
+TAI 법령엔진 무결성 검증 — 52건 (v1.1)
 ==========================================
 
 기존 26건과 완전히 다른 수치/조건으로 추가 검증합니다.
@@ -14,6 +14,8 @@ TAI 법령엔진 무결성 검증 — 52건 (v1.0)
   python tests/test_legal_engine_52.py --url https://api.taieng.co.kr
 
 이 52건도 항상 통과해야 합니다.
+
+v1.1: has_appt() 영문코드/한글레이블 둘 다 비교
 """
 import requests
 import sys
@@ -26,6 +28,25 @@ RED   = "\033[91m"
 BLUE  = "\033[94m"
 RESET = "\033[0m"
 BOLD  = "\033[1m"
+
+# ── 관리자 영문코드 → 한글레이블 맵 (엔진 APPOINTMENT_TARGET_MAP과 동기화) ──
+APPOINTMENT_TARGET_MAP = {
+    "safety_manager":             "안전관리자",
+    "health_manager":             "보건관리자",
+    "safety_health_director":     "안전보건관리책임자",
+    "safety_health_manager":      "안전보건관리담당자",
+    "fire_safety_manager":        "소방안전관리자",
+    "electric_safety_manager":    "전기안전관리자",
+    "gas_safety_manager":         "가스안전관리자",
+    "elevator_safety_manager":    "승강기안전관리자",
+    "energy_manager":             "에너지관리자",
+    "building_manager":           "건축물관리자(유지관리자)",
+    "hazardous_material_manager": "위험물안전관리자",
+    "city_gas_manager":           "도시가스안전관리자",
+    "chemical_manager":           "유해화학물질관리자",
+    "waste_manager":              "폐기물처리담당자",
+    "environmental_manager":      "환경관리인",
+}
 
 def ok(msg):   print(f"{GREEN}  ✅ {msg}{RESET}")
 def fail(msg): print(f"{RED}  ❌ {msg}{RESET}")
@@ -58,9 +79,14 @@ def diagnose(sector: str, inp: dict) -> dict:
 
 
 def has_appt(data: dict, target_code: str) -> bool:
-    """정확히 일치하는 appointment_target 존재 여부"""
+    """
+    appointment_required 목록에서 해당 관리자 존재 여부.
+    엔진이 appointment_target을 한글 레이블로 반환하므로
+    영문 코드와 한글 레이블 둘 다 비교합니다.
+    """
+    label = APPOINTMENT_TARGET_MAP.get(target_code, target_code)
     return any(
-        r.get("appointment_target") == target_code
+        r.get("appointment_target") in (target_code, label)
         for r in data.get("appointment_required", [])
     )
 
@@ -250,7 +276,7 @@ if __name__ == "__main__":
 
     print(f"{BOLD}")
     print(f"{'═'*60}")
-    print(f"  TAI 법령엔진 무결성 검증 52건 v1.0")
+    print(f"  TAI 법령엔진 무결성 검증 52건 v1.1")
     print(f"  대상: {BASE_URL}")
     print(f"  기준: 정방향26 + 역방향26 = 52건")
     print(f"{'═'*60}{RESET}")
