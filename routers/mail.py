@@ -37,7 +37,8 @@ router = APIRouter(prefix="/mail", tags=["메일관리"])
 # Resend 설정
 # ============================================================
 
-resend_client.api_key = os.environ.get("RESEND_API_KEY", "")
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+resend_client.api_key = RESEND_API_KEY
 
 ALLOWED_FROM = {
     "tai@taieng.co.kr": "TAI Engineering <tai@taieng.co.kr>",
@@ -93,7 +94,7 @@ class FromAddressesResponse(BaseModel):
 
 class BulkDeleteRequest(BaseModel):
     """일괄 삭제 요청 스키마"""
-    ids: list[str]
+    mail_ids: list[str]  # 프론트엔드: { mail_ids: [...] }
 
 
 # ============================================================
@@ -153,7 +154,6 @@ def send_mail(body: MailSendRequest):
     try:
         supabase.table("mail_logs").insert(log_row).execute()
     except Exception:
-        # 로그 저장 실패는 발송 결과에 영향 없음
         pass
 
     if status == "failed":
@@ -183,12 +183,9 @@ def list_mails(
 
     supabase = get_supabase()
 
-    # 전체 건수 조회용 쿼리
     count_query = supabase.table("mail_logs").select("id", count="exact")
-    # 데이터 조회용 쿼리
     data_query = supabase.table("mail_logs").select("*")
 
-    # 공통 필터: direction + deleted=false
     count_query = count_query.eq("direction", direction).eq("deleted", False)
     data_query = data_query.eq("direction", direction).eq("deleted", False)
 
@@ -213,11 +210,9 @@ def list_mails(
         count_query = count_query.lte("created_at", f"{to_date}T23:59:59")
         data_query = data_query.lte("created_at", f"{to_date}T23:59:59")
 
-    # 전체 건수
     count_res = count_query.execute()
     total = count_res.count if count_res.count is not None else 0
 
-    # 페이지네이션 + 정렬
     offset = (page - 1) * size
     data_res = (
         data_query
@@ -292,16 +287,16 @@ def mark_all_as_read():
 @router.patch("/delete-bulk")
 def delete_bulk(body: BulkDeleteRequest):
     """여러 메일을 일괄 소프트 삭제한다."""
-    if not body.ids:
+    if not body.mail_ids:
         raise HTTPException(status_code=400, detail="삭제할 메일 ID가 없습니다.")
 
     supabase = get_supabase()
 
     supabase.table("mail_logs").update({"deleted": True}).in_(
-        "id", body.ids
+        "id", body.mail_ids
     ).execute()
 
-    return {"success": True, "deleted_count": len(body.ids)}
+    return {"success": True, "deleted_count": len(body.mail_ids)}
 
 
 # ============================================================
@@ -310,18 +305,32 @@ def delete_bulk(body: BulkDeleteRequest):
 
 @router.post("/webhook/inbound")
 async def webhook_inbound(request: Request):
-    """Resend 수신 웹훅을 처리하여 mail_logs에 저장한다."""
+    """Resend 수신 웹훅 처리 (email.received 이벤트)
+
+    Resend 웹훅 구조:
+    {
+      "type": "email.received",
+      "created_at": "...",
+      "data": {
+        "email_id": "...",
+        "from": "Name <email@example.com>",
+        "to": ["recipient@taieng.co.kr"],
+        "subject": "..."
+      }
+    }
+    웹훅에는 본문이 없으므로 email_id로 Received emails API를 별도 호출하여 본문을 가져온다.
+    """
     try:
         payload = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="잘못된 요청 본문입니다.")
 
-    # Resend 웹훅 구조: {"type":"email.received","data":{...}}
-    # 웹훅에는 본문 없음 → data.email_id로 Received emails API 별도 호출
+    # Resend 웹훅: type 확인
     event_type = payload.get("type", "")
     if event_type != "email.received":
         return {"ok": True, "skipped": True, "type": event_type}
 
+    # 실제 데이터는 payload["data"] 안에 있음
     data = payload.get("data", {})
     email_id = data.get("email_id", "")
     from_email = data.get("from", "")
@@ -338,13 +347,13 @@ async def webhook_inbound(request: Request):
     if email_id and RESEND_API_KEY:
         try:
             import httpx
-            res = httpx.get(
+            api_res = httpx.get(
                 f"https://api.resend.com/emails/{email_id}",
                 headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
                 timeout=10,
             )
-            if res.status_code == 200:
-                detail = res.json()
+            if api_res.status_code == 200:
+                detail = api_res.json()
                 html_body = detail.get("html", detail.get("text", ""))
         except Exception:
             html_body = "(본문 조회 실패)"
@@ -459,7 +468,6 @@ def get_mail_detail(mail_id: str):
     if not res.data:
         raise HTTPException(status_code=404, detail="메일을 찾을 수 없습니다.")
 
-    # 수신 메일 상세 조회 시 자동으로 읽음 처리
     if res.data.get("direction") == "inbound" and not res.data.get("read"):
         supabase.table("mail_logs").update({"read": True}).eq("id", mail_id).execute()
         res.data["read"] = True
