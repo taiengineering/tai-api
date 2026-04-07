@@ -11,6 +11,7 @@ PATCH  /notification-settings/{trigger}   트리거 설정 수정
 [알림 수신]
 GET    /notifications                      알림 목록
 GET    /notifications/unread-count         미읽은 알림 수
+POST   /notifications/trigger-due-alerts  D-0/D-3/D-7 마감 알림 생성 (크론용)
 PATCH  /notifications/{id}/read           단건 읽음 처리
 PATCH  /notifications/read-all            전체 읽음 처리
 DELETE /notifications/{id}                알림 삭제
@@ -22,7 +23,7 @@ POST   /notifications/send                알림 발송
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from db.supabase_client import get_supabase
 
 router = APIRouter(tags=["notifications"])
@@ -101,7 +102,7 @@ def update_notification_setting(trigger_code: str, req: NotificationSettingUpdat
     res = supabase.table("notification_settings")\
         .update(update_data).eq("trigger_code", trigger_code).execute()
 
-    return {"status": "success", "message": "알림 설정이 저장됐습니다", "data": res.data[0] if res.data else {}}
+    return {"status": "success", "message": "알림 설정이 저장되었습니다", "data": res.data[0] if res.data else {}}
 
 
 # ============================================================
@@ -149,7 +150,7 @@ def get_unread_count(
     user_id:    Optional[str] = Query(default=None),
     company_id: Optional[str] = Query(default=None),
 ):
-    """미읽은 알림 수 조회 (탑바 뱃지용)"""
+    """미읽은 알림 수 조회 (탑바 댜지용)"""
     supabase = get_supabase()
     query = supabase.table("notifications")\
         .select("id", count="exact")\
@@ -172,6 +173,110 @@ def get_unread_count(
     }
 
 
+# ============================================================
+# POST /notifications/trigger-due-alerts
+# 주의: /{notification_id}/read 엔드포인트보다 앞에 선언해야 라우트 충돌 없음
+# ============================================================
+
+@router.post("/notifications/trigger-due-alerts")
+def trigger_due_alerts():
+    """
+    D-0 / D-3 / D-7 기준 work_schedules 마감 알림 생성.
+    매일 오전 8시 크론(DUE_ALERT_DAILY)으로 호출.
+
+    로직:
+    1. 오늘+0/+3/+7 planned_date인 PENDING+active_yn=True 일정 조회
+    2. 동일 link_url + label 중복이면 스킵
+    3. notifications INSERT (trigger_code='DUE_ALERT', channel='SITE')
+    4. 생성 건수 반환
+
+    실제 콸럼: notifications에는 factory_id/schedule_id/due_days/is_sent 콘럼이 없음
+    → link_url에 schedule_id 임베드, title에 label 포함하여 중복 판정
+    """
+    supabase = get_supabase()
+    today = date.today()
+    now   = datetime.now()
+
+    DUE_TARGETS = [
+        (0, "D-0",   "HIGH"),
+        (3, "D-3",   "HIGH"),
+        (7, "D-7",   "NORMAL"),
+    ]
+    total_created = 0
+    total_skipped = 0
+
+    for days, label, priority in DUE_TARGETS:
+        target_date = today + timedelta(days=days)
+
+        # 해당 마감일 PENDING 일정 조회
+        sched_res = (
+            supabase.table("work_schedules")
+            .select("id, factory_id, company_id, assigned_user_id, description, obligation_type, law_name")
+            .eq("planned_date", target_date.isoformat())
+            .eq("status_code", "PENDING")
+            .eq("active_yn", True)
+            .execute()
+        )
+
+        for sched in (sched_res.data or []):
+            sched_id = sched["id"]
+            link_url = f"/work-schedules/{sched_id}"
+
+            # 중복 체크: 동일 schedule link_url + label이 이미 있으면 스킵
+            dup = (
+                supabase.table("notifications")
+                .select("id", count="exact")
+                .eq("trigger_code", "DUE_ALERT")
+                .eq("link_url", link_url)
+                .ilike("title", f"%{label}%")
+                .execute()
+            )
+            if dup.count and dup.count > 0:
+                total_skipped += 1
+                continue
+
+            desc  = (sched.get("description") or "점검 일정").strip()
+            law   = sched.get("law_name") or ""
+            title = f"점검 마감 알림 ({label})"
+            body  = desc
+            if law:
+                body += f"\n법령: {law}"
+            body += f"\n마감: {target_date} ({label})"
+
+            supabase.table("notifications").insert({
+                "company_id":    sched.get("company_id"),
+                "user_id":       sched.get("assigned_user_id"),
+                "trigger_code":  "DUE_ALERT",
+                "trigger_group": "SCHEDULE",
+                "title":         title,
+                "body":          body,
+                "link_url":      link_url,
+                "priority":      priority,
+                "channel":       "SITE",
+                "is_read":       False,
+                "send_status":   "SUCCESS",
+                "sent_at":       now.isoformat(),
+                "created_at":    now.isoformat(),
+            }).execute()
+            total_created += 1
+
+    return {
+        "status": "success",
+        "data": {
+            "created": total_created,
+            "skipped": total_skipped,
+            "checked_dates": [
+                (today + timedelta(days=d)).isoformat() for d in (0, 3, 7)
+            ],
+        },
+    }
+
+
+# ============================================================
+# PATCH /notifications/{notification_id}/read
+# 주의: trigger-due-alerts보다 나중에 선언해야 함
+# ============================================================
+
 @router.patch("/notifications/{notification_id}/read")
 def mark_as_read(notification_id: str):
     """단건 읽음 처리"""
@@ -187,7 +292,7 @@ def mark_as_read(notification_id: str):
         "read_at": datetime.now().isoformat(),
     }).eq("id", notification_id).execute()
 
-    return {"status": "success", "message": "읽음 처리됐습니다"}
+    return {"status": "success", "message": "읽음 처리되었습니다"}
 
 
 @router.patch("/notifications/read-all")
@@ -205,7 +310,7 @@ def mark_all_read(
     if company_id: query = query.eq("company_id", company_id)
 
     query.execute()
-    return {"status": "success", "message": "전체 읽음 처리됐습니다"}
+    return {"status": "success", "message": "전체 읽음 처리되었습니다"}
 
 
 @router.delete("/notifications/{notification_id}")
@@ -219,7 +324,7 @@ def delete_notification(notification_id: str):
         raise HTTPException(status_code=404, detail="알림을 찾을 수 없습니다")
 
     supabase.table("notifications").delete().eq("id", notification_id).execute()
-    return {"status": "success", "message": "알림이 삭제됐습니다"}
+    return {"status": "success", "message": "알림이 삭제되었습니다"}
 
 
 # ============================================================
@@ -230,7 +335,7 @@ def delete_notification(notification_id: str):
 def send_notification(req: NotificationSend):
     """
     알림 발송
-    - 트리거 설정 확인 → 채널별 발송 여부 결정
+    - 트리거 설정 확인 → 체널별 발송 여부 결정
     - 현재: 사이트 알림만 저장 (이메일/카카오/Push는 추후 연동)
     """
     supabase = get_supabase()
@@ -264,22 +369,18 @@ def send_notification(req: NotificationSend):
         }).execute()
         results.append({"channel": "SITE", "status": "SUCCESS"})
 
-    # 이메일 발송 (SMTP 연동 시 구현)
     if setting.data and setting.data[0].get("channel_email"):
-        # TODO: 이메일 발송 로직 추가
         results.append({"channel": "EMAIL", "status": "PENDING"})
 
-    # 카카오/SMS (사업자 등록 후 연동)
     if setting.data and setting.data[0].get("channel_kakao"):
         results.append({"channel": "KAKAO", "status": "DISABLED"})
 
-    # Push (FCM 연동 시 구현)
     if setting.data and setting.data[0].get("channel_push"):
         results.append({"channel": "PUSH", "status": "DISABLED"})
 
     return {
         "status":  "success",
-        "message": "알림이 발송됐습니다",
+        "message": "알림이 발송되었습니다",
         "data":    results,
     }
 
