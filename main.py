@@ -1,17 +1,13 @@
-# main.py — v5.6.4
+# main.py — v5.6.5
+# v5.6.5: schedule_pipeline 라우터 추가
+#          POST /legal-engine/generate-schedules/{factory_id} — 진단→일정 자동생성
+#          POST /notifications/trigger-due-alerts — D-7/D-3/당일 마감 알림
 # v5.6.4: legal_engine — has_high_work(고소작업 2m이상) context 추가
-#          height_work → has_high_work DB 정규화
-#          무결성 CI 파이프라인 완비 (DB제약+매핑검증+API78건)
-# v5.6.3: legal_engine — DiagnoseStep1Body 수치 필드 추가 (단계별 점검 정확도 향상)
+# v5.6.3: legal_engine — DiagnoseStep1Body 수치 필드 추가
 # v5.6.2: legal_engine — inspection_cycle 4필드 완비, schedule_type 분류
-# v5.6.1: legal_engine — MANUFACTURING gas/boiler boolean→수치 변환, elevator_count BUILDING 지원
-#          appointment_target_code 한글→영문 런타임 정규화
-# v5.6.0: law_rule_generator v1.5.0 — GET /drafts has_condition 필터 추가
-#          AI 생성 룰 937개 condition_code 미설정 → is_active=false 처리
-# v5.5.5: contract_kmong 라우터 추가 (크몽 법령진단 API 5개)
-# v5.5.4: inspection_schedule 라우터 추가 (일정관리 API /inspection-schedule)
-# v5.5.3: engine_document 라우터 추가 (문서메뉴 API 4개)
-# v5.5.2: AI 법령 룰 생성기 라우터 추가 (law_rule_generator)
+# v5.6.1: legal_engine — MANUFACTURING gas/boiler boolean→수치 변환
+# v5.6.0: law_rule_generator v1.5.0 — has_condition 필터
+# v5.5.5: contract_kmong 라우터 추가
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -27,6 +23,7 @@ from routers.engine_qa               import router as engine_qa_router
 from routers.law_rule_generator      import router as law_rule_generator_router  # v5.5.2
 from routers.engine_document         import router as engine_document_router     # v5.5.3
 from routers.contract_kmong          import router as contract_kmong_router      # v5.5.5
+from routers.schedule_pipeline       import router as schedule_pipeline_router   # v5.6.5
 from routers.ksic_engine             import router as ksic_engine_router
 from routers.factory_process_v3      import router as factory_process_router
 from routers.process_management      import router as process_management_router
@@ -83,7 +80,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.6.4"
+APP_VERSION = "5.6.5"
 
 
 @asynccontextmanager
@@ -146,6 +143,7 @@ app.include_router(engine_qa_router)
 app.include_router(law_rule_generator_router)   # v5.5.2 AI 룰 생성기
 app.include_router(engine_document_router)      # v5.5.3 문서메뉴
 app.include_router(contract_kmong_router)       # v5.5.5 크몽 법령진단
+app.include_router(schedule_pipeline_router)    # v5.6.5 진단→일정+알림 파이프
 app.include_router(ksic_engine_router)
 app.include_router(factory_process_router)
 app.include_router(process_management_router)
