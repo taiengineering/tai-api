@@ -1,10 +1,8 @@
-# main.py — v5.6.9
+# main.py — v5.7.0
+# v5.7.0: work_schedules.py v1.1.0
+#          PATCH /work-schedules/batch-update   복수 건 일괄 업데이트
+#          POST  /work-schedules/confirm/{factory_id}  검토 확정
 # v5.6.9: 이니시스 INIStdPay 표준결제 연동 (payment.py v1.0.0)
-#          POST /payments/inicis/prepare  결제창 파라미터 생성
-#          POST /payments/inicis/return   returnUrl (승인+계약활성화)
-#          POST /payments/inicis/noti     이니시스 noti 백그라운드 검증
-#          GET  /payments                 결제 이력
-#          POST /payments/manual/confirm  계좌이체 수동 활성화
 # v5.6.8: Phase 3 건설현장 온보딩
 # v5.6.7: legal_engine v5.6.7 CONSTRUCTION 자동트리거
 import logging
@@ -70,7 +68,7 @@ from routers.diagnosis               import router as diagnosis_router
 from routers.tbm                     import router as tbm_router
 from routers.safety_meetings         import router as safety_meetings_router
 from routers.risk_assessments        import router as risk_assessments_router
-from routers.payment                 import router as payment_router          # v5.6.9 이니시스
+from routers.payment                 import router as payment_router
 from routers.public                  import router as public_router
 from routers.public_admin            import router as public_admin_router
 from routers.alert_messages          import router as alert_messages_router
@@ -81,7 +79,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.6.9"
+APP_VERSION = "5.7.0"
 
 
 @asynccontextmanager
@@ -192,7 +190,7 @@ app.include_router(diagnosis_router)
 app.include_router(tbm_router)
 app.include_router(safety_meetings_router)
 app.include_router(risk_assessments_router)
-app.include_router(payment_router)              # v5.6.9 이니시스 결제
+app.include_router(payment_router)
 app.include_router(mail_router)
 
 
