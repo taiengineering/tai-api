@@ -1,6 +1,10 @@
 """
-법령 판정 엔진 라우터 — v5.6.3
+법령 판정 엔진 라우터 — v5.6.7
 =================================
+v5.6.7 (2026-04-07):
+  CONSTRUCTION sector에서 diagnose/step1 완료 시
+  generate_schedules_from_diagnosis(factory_id) 자동 트리거
+
 v5.6.3:
   - DiagnoseStep1Body에 설비 수치 필드 추가 (스케줄 정확도 향상)
     · gas_capacity_kg    — 가스 저장량(kg) 직접 입력 → 100kg/300kg 단계별 점검 판정 가능
@@ -32,7 +36,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.6.4"  # v5.6.4: has_high_work(고소작업) context 추가
+ENGINE_VERSION = "5.6.7"  # v5.6.7: CONSTRUCTION diagnose_step1 완료 시 일정 자동생성 트리거
 
 
 # ──────────────────────────────────────────────
@@ -373,15 +377,15 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
         "description": desc, "obligation_summary": desc,
         "appointment_target": APPOINTMENT_TARGET_MAP.get(target_code, target_code),
         "qualification_required": rule.get("qualification_type") or "",
-        "inspection_cycle": cycle_label,           # 언제 — 레이블
-        "inspection_cycle_code": cycle_code,       # 언제 — 코드
-        "inspection_cycle_unit": cycle_unit,       # 언제 — 스케줄러 단위
-        "inspection_cycle_int": cycle_int,         # 언제 — 스케줄러 정수
-        "schedule_type": schedule_type,            # PERIODIC/BEFORE_WORK/ON_DEMAND
+        "inspection_cycle": cycle_label,
+        "inspection_cycle_code": cycle_code,
+        "inspection_cycle_unit": cycle_unit,
+        "inspection_cycle_int": cycle_int,
+        "schedule_type": schedule_type,
         "construction_work_type": rule.get("construction_work_type") or "",
-        "executor_type_code": executor_type_code,  # 누가
+        "executor_type_code": executor_type_code,
         "executor_type_label": EXECUTOR_TYPE_MAP.get(executor_type_code, executor_type_code),
-        "condition_code": rule.get("condition_code") or "",    # 무엇이 있을 때
+        "condition_code": rule.get("condition_code") or "",
         "condition_value": rule.get("condition_value"),
         "penalty_amount": rule.get("penalty_summary") or "", "penalty_summary": rule.get("penalty_summary") or "",
         "source_label": "", "obligation_type": _resolve_obligation_type(rule),
@@ -572,17 +576,9 @@ async def apply_legal_engine_from_quote(quote_id: str):
 
 
 class DiagnoseStep1Body(BaseModel):
-    """
-    v5.6.3: 설비 수치 필드 추가
-    - gas_capacity_kg, boiler_capacity_kw 등 직접 수치 입력 가능
-    - 수치 입력 우선, 없으면 has_* boolean → 1(최소값) 폴백
-    - 예: gas_capacity_kg=250 → >=1 룰과 >=100 룰 발동, >=300 룰은 미발동
-    """
     factory_id: Optional[str] = Field(None)
     sector: str = Field(...)
     input: Optional[Dict[str, Any]] = Field(default_factory=dict)
-
-    # 공통
     building_use_type: Optional[str] = None
     employee_count: Optional[int] = None
     floor_area: Optional[float] = None
@@ -593,21 +589,15 @@ class DiagnoseStep1Body(BaseModel):
     contract_amount_eok: Optional[float] = None
     ksic_major: Optional[str] = None
     facility_type: Optional[str] = None
-    elevator_count: Optional[int] = Field(None, description="승강기 대수 (직접 입력)")
-
-    # v5.6.3 신규: 설비 수치 필드
-    gas_capacity_kg: Optional[float] = Field(None, description="고압가스 저장량(kg) — 직접 입력 시 단계별 점검 판정 가능")
-    gas_capacity_m3: Optional[float] = Field(None, description="도시가스 사용량(m3)")
-    boiler_capacity_kw: Optional[float] = Field(None, description="보일러 용량(kW) — 직접 입력 시 용량 기반 점검 판정 가능")
-    annual_energy_toe: Optional[float] = Field(None, description="연간 에너지 사용량(TOE)")
-
-    # 설비 보유 불리언 (수치 미입력 시 사용)
-    has_high_pressure_gas: Optional[bool] = Field(None, description="고압가스 보유 여부")
-    has_boiler: Optional[bool] = Field(None, description="보일러 보유 여부")
-    has_hazardous_material: Optional[bool] = Field(None, description="위험물 보유 여부")
-    has_chemical_substance: Optional[bool] = Field(None, description="유해화학물질 보유 여부")
-
-    # 건설 전용
+    elevator_count: Optional[int] = Field(None)
+    gas_capacity_kg: Optional[float] = Field(None)
+    gas_capacity_m3: Optional[float] = Field(None)
+    boiler_capacity_kw: Optional[float] = Field(None)
+    annual_energy_toe: Optional[float] = Field(None)
+    has_high_pressure_gas: Optional[bool] = Field(None)
+    has_boiler: Optional[bool] = Field(None)
+    has_hazardous_material: Optional[bool] = Field(None)
+    has_chemical_substance: Optional[bool] = Field(None)
     construction_type: Optional[str] = None
     direct_workers: Optional[int] = None
     subcon_workers: Optional[int] = None
@@ -615,7 +605,7 @@ class DiagnoseStep1Body(BaseModel):
     has_tunnel_bridge: Optional[bool] = None
     has_blasting: Optional[bool] = None
     has_crane: Optional[bool] = None
-    has_high_work: Optional[bool] = Field(None, description="고소작업(2m 이상) 여부")
+    has_high_work: Optional[bool] = Field(None)
 
 
 ALLOWED_DIAGNOSE_SECTORS = frozenset({"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"})
@@ -655,12 +645,6 @@ def _truthy(v: Any) -> bool:
 
 
 def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    v5.6.3: 수치 입력 우선 원칙
-    - gas_capacity_kg 직접 입력 → 단계별 점검 판정 (100kg, 300kg 구분)
-    - boiler_capacity_kw 직접 입력 → 용량 기반 점검 판정
-    - 수치 없으면 boolean → 최소값(1) 폴백
-    """
     sec = sector.strip().upper()
     ctx: Dict[str, Any] = {
         "worker_count": 0, "total_floor_area": 0.0, "electric_capacity": 0.0,
@@ -681,7 +665,6 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
         ctx["electric_capacity"]     = float(inp.get("electric_capacity") or 0)
         ctx["electrical_capacity_kw"]= ctx["electric_capacity"]
         ctx["has_high_pressure_gas"] = 1 if _truthy(inp.get("has_high_pressure_gas")) else 0
-        # 수치 입력 우선 → boolean 폴백
         ctx["gas_capacity_kg"]       = float(inp.get("gas_capacity_kg") or 0) or ctx["has_high_pressure_gas"]
         ctx["gas_capacity_m3"]       = float(inp.get("gas_capacity_m3") or 0)
         ctx["has_hazardous_material"]= 1 if _truthy(inp.get("has_hazardous_material")) else 0
@@ -690,7 +673,6 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
         ctx["annual_energy_toe"]     = float(inp.get("annual_energy_toe") or 0)
         ctx["has_boiler"]            = 1 if _truthy(inp.get("has_boiler")) else 0
         ctx["boiler_capacity_kw"]    = float(inp.get("boiler_capacity_kw") or 0) or ctx["has_boiler"]
-
     elif sec == "MANUFACTURING":
         ctx["ksic_code"]             = str(inp.get("ksic_major") or inp.get("ksic_code") or "")
         ctx["worker_count"]          = int(inp.get("worker_count") or inp.get("employee_count") or 0)
@@ -699,7 +681,6 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
         ctx["has_hazardous_material"]= 1 if _truthy(inp.get("has_hazardous_material")) else 0
         ctx["is_hazardous_material"] = ctx["has_hazardous_material"]
         ctx["has_high_pressure_gas"] = 1 if _truthy(inp.get("has_high_pressure_gas")) else 0
-        # ── 수치 입력 우선 원칙 ──
         ctx["gas_capacity_kg"]       = float(inp.get("gas_capacity_kg") or 0) or ctx["has_high_pressure_gas"]
         ctx["gas_capacity_m3"]       = float(inp.get("gas_capacity_m3") or 0) or (1 if _truthy(inp.get("has_city_gas")) else 0)
         ctx["has_boiler"]            = 1 if _truthy(inp.get("has_boiler")) else 0
@@ -711,7 +692,6 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
         ctx["total_floor_area"]      = ctx["building_area"]
         ksic = ctx["ksic_code"].upper()
         ctx["is_factory_registered"] = 1 if (_truthy(inp.get("is_factory_registered")) or ksic.startswith("C")) else 0
-
     elif sec == "CONSTRUCTION":
         eok = float(inp.get("contract_amount_eok") or 0)
         amount = eok * 100_000_000.0
@@ -733,7 +713,6 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
         elec_kw = float(inp.get("electrical_capacity_kw") or inp.get("electric_capacity") or 0)
         ctx["electric_capacity"] = elec_kw; ctx["electrical_capacity_kw"] = elec_kw; ctx["transformer_capacity_kva"] = elec_kw
         ctx["safety_manager_threshold"] = get_construction_amount_threshold({"construction_type": site_type})
-
     elif sec in ("SPECIAL_FACILITY", "SPECIAL"):
         ctx["building_use_code"] = str(inp.get("facility_type") or "")
         ctx["total_floor_area"]  = float(inp.get("total_floor_area") or inp.get("floor_area") or 0)
@@ -741,7 +720,6 @@ def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, An
         ctx["student_count"]     = int(inp.get("student_count") or 0)
         ctx["worker_count"]      = int(inp.get("worker_count") or inp.get("employee_count") or 0)
         ctx["building_area"]     = ctx["total_floor_area"]
-
     return ctx
 
 
@@ -848,7 +826,6 @@ async def diagnose_step1(body: DiagnoseStep1Body):
     all_rules = rules_res.data or []
 
     inp = dict(body.input or {})
-    # v5.6.3: 수치 필드 포함 flat_fields
     flat_fields = {
         "building_use_type": body.building_use_type, "employee_count": body.employee_count,
         "floor_area": body.floor_area, "worker_count": body.worker_count,
@@ -856,16 +833,14 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         "floor_count": body.floor_count, "contract_amount_eok": body.contract_amount_eok,
         "ksic_major": body.ksic_major, "facility_type": body.facility_type,
         "elevator_count": body.elevator_count,
-        # 수치 필드 (v5.6.3 신규)
         "gas_capacity_kg": body.gas_capacity_kg, "gas_capacity_m3": body.gas_capacity_m3,
         "boiler_capacity_kw": body.boiler_capacity_kw, "annual_energy_toe": body.annual_energy_toe,
-        # 설비 불리언
         "has_high_pressure_gas": body.has_high_pressure_gas, "has_boiler": body.has_boiler,
         "has_hazardous_material": body.has_hazardous_material, "has_chemical_substance": body.has_chemical_substance,
-        # 건설 전용
         "construction_type": body.construction_type, "direct_workers": body.direct_workers,
         "subcon_workers": body.subcon_workers, "electrical_capacity_kw": body.electrical_capacity_kw,
-        "has_tunnel_bridge": body.has_tunnel_bridge, "has_blasting": body.has_blasting, "has_crane": body.has_crane, "has_high_work": body.has_high_work,
+        "has_tunnel_bridge": body.has_tunnel_bridge, "has_blasting": body.has_blasting,
+        "has_crane": body.has_crane, "has_high_work": body.has_high_work,
     }
     for k, v in flat_fields.items():
         if v is not None and k not in inp: inp[k] = v
@@ -952,6 +927,14 @@ async def diagnose_step1(body: DiagnoseStep1Body):
                 rule_rows = [{"diagnosis_id": diagnosis_id, "rule_code": r.get("rule_id") or r.get("rule_code") or "", "rule_name": (r.get("obligation_summary") or r.get("remarks") or "").strip(), "law_name": r.get("law_name") or "", "law_article": r.get("law_article") or "", "obligation": (r.get("obligation_summary") or "").strip(), "obligation_type": _resolve_obligation_type(r), "due_date": None, "status": "PENDING", "form_code": r.get("form_code") or None} for r in applicable]
                 for i in range(0, len(rule_rows), 50): supabase.table("diagnosis_rule_results").insert(rule_rows[i:i+50]).execute()
             except Exception as e: print(f"[DIAGNOSE STEP1] diagnosis_rule_results 저장 실패: {e}")
+
+    # v5.6.7: CONSTRUCTION sector 법령진단 완료 시 일정 자동생성 트리거
+    if factory_id and sector_raw == "CONSTRUCTION" and diagnosis_id:
+        try:
+            from routers.legal_engine_patch import generate_schedules_from_diagnosis
+            generate_schedules_from_diagnosis(factory_id)
+        except Exception as e:
+            print(f"[AUTO_SCHEDULE] 건설현장 일정 자동생성 실패: {e}")
 
     result_data["diagnosis_id"] = diagnosis_id
     return {"status": "success", "data": result_data}

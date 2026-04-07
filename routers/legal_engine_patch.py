@@ -1,11 +1,13 @@
 """
 legal_engine_patch.py
 =====================
-POST /legal-engine/generate-schedules/{factory_id}
+v1.2.0 (2026-04-07)
+  [ADD] POST /legal-engine/generate-schedules/all
+        CONSTRUCTION sector 전체 factory 일괄 일정 생성 (관리용)
+        ※ /all 라우트는 /{factory_id} 보다 먼저 선언 필수 (라우트 충돌 방지)
 
 v1.1.0 (2026-04-07)
-  [FIX] planned_date = 오늘 날짜 고정 (cycle 계산 제거 — 작업지시서 v2 기준)
-        이전 v1.0.0은 today + cycle_days 계산으로 2027년 등 미래 날짜가 생성됐음
+  [FIX] planned_date = 오늘 날짜 고정 (cycle 계산 제거)
 
 v1.0.0 (2026-04-07)
   - factory_diagnosis_results(is_latest) → work_schedules 자동 INSERT
@@ -19,6 +21,27 @@ from typing import Optional
 from db.supabase_client import get_supabase
 
 router = APIRouter(tags=["법령엔진"])
+
+
+# ──────────────────────────────────────────────
+# 주의: /all 라우트는 /{factory_id} 보다 먼저 선언해야 함
+# ──────────────────────────────────────────────
+
+@router.post("/legal-engine/generate-schedules/all")
+def generate_schedules_all():
+    """
+    v1.2.0: CONSTRUCTION sector 전체 factory 일괄 일정 생성 (관리용 엔드포인트)
+    """
+    supabase = get_supabase()
+    factories = supabase.table("factories").select("id").eq("sector", "CONSTRUCTION").execute()
+    results = []
+    for f in (factories.data or []):
+        try:
+            r = generate_schedules_from_diagnosis(f["id"])
+            results.append({"factory_id": f["id"], "result": r})
+        except Exception as e:
+            results.append({"factory_id": f["id"], "error": str(e)})
+    return {"status": "success", "data": {"processed": len(results), "results": results}}
 
 
 @router.post("/legal-engine/generate-schedules/{factory_id}")
