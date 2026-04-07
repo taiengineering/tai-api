@@ -1,6 +1,8 @@
-# main.py — v5.6.6
+# main.py — v5.6.7
+# v5.6.7: legal_engine v5.6.7 — CONSTRUCTION diagnose/step1 완료 시 일정 자동생성 트리거
+#          legal_engine_patch v1.2.0 — POST /legal-engine/generate-schedules/all 추가
 # v5.6.6: legal_engine_patch 라우터 추가
-#          POST /legal-engine/generate-schedules/{factory_id} — 진단→일정 자동생성 (legal_engine.py 직접 등록)
+#          POST /legal-engine/generate-schedules/{factory_id} — 진단→일정 자동생성
 #          notifications.py — trigger-due-alerts 엔드포인트 추가 (D-0/D-3/D-7)
 # v5.6.5: schedule_pipeline 라우터 추가
 # v5.6.4: legal_engine — has_high_work context 추가
@@ -20,7 +22,7 @@ from routers.companies               import router as companies_router
 from routers.factories               import router as factories_router
 from routers.system_codes            import router as system_codes_router
 from routers.legal_engine            import router as legal_engine_router
-from routers.legal_engine_patch      import router as legal_engine_patch_router  # v5.6.6 generate-schedules
+from routers.legal_engine_patch      import router as legal_engine_patch_router  # v5.6.6+ generate-schedules
 from routers.engine_qa               import router as engine_qa_router
 from routers.law_rule_generator      import router as law_rule_generator_router  # v5.5.2
 from routers.engine_document         import router as engine_document_router     # v5.5.3
@@ -82,7 +84,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.6.6"
+APP_VERSION = "5.6.7"
 
 
 @asynccontextmanager
@@ -141,7 +143,7 @@ app.include_router(companies_router)
 app.include_router(factories_router)
 app.include_router(system_codes_router)
 app.include_router(legal_engine_router)
-app.include_router(legal_engine_patch_router)   # v5.6.6 generate-schedules
+app.include_router(legal_engine_patch_router)   # v5.6.6+ generate-schedules/{id} + /all
 app.include_router(engine_qa_router)
 app.include_router(law_rule_generator_router)   # v5.5.2 AI 룰 생성기
 app.include_router(engine_document_router)      # v5.5.3 문서메뉴
