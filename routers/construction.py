@@ -1,6 +1,12 @@
 """
-건설안전 관리 라우터 — v1.1.0
+건설안전 관리 라우터 — v2.0.0
 =====================================
+v2.0.0 (2026-04-07 현장소장 온보딩 Phase 1):
+  - POST /sites: factories 테이블 자동 생성 (sector='CONSTRUCTION') + construction_sites.factory_id 업데이트
+  - POST /sites: 현장 생성 후 diagnose/step1 자동 실행 + generate_schedules 자동 트리거
+  - user_role '025 현장소장' DB 추가 (migration)
+  - construction_sites.factory_id 컬럼 추가 (migration)
+
 v1.1.0:
   - GET /kcsc/works 전체 위험작업 조회 엔드포인트 추가 (is_hazardous 필터)
   - GET /kcsc/processes 정렬 버그 수정 (process_code → kcs_code)
@@ -16,7 +22,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(tags=["건설안전"])
 
-VERSION = "1.1.0"
+VERSION = "2.0.0"
 
 
 def _now_iso() -> str:
@@ -73,6 +79,185 @@ def calc_safety_manager(site_type: str, contract_amount: float, total_workers: i
     }
 
 
+# ──────────────────────────────────────────────
+# v2.0.0: factories 자동생성 헬퍼
+# ──────────────────────────────────────────────
+
+def _create_factory_for_site(supabase, site: dict) -> Optional[str]:
+    """
+    construction_sites → factories 자동연결
+    sector='CONSTRUCTION', site_type='CONSTRUCTION' factory 생성 후 factory_id 반환.
+    실패 시 None 반환 (현장 등록 자체는 롤백하지 않음).
+    """
+    try:
+        contract_eok = float(site.get("contract_amount") or 0)
+        # factories 컬럼: name, company_id, site_type, sector, construction_amount,
+        #   employee_count, construction_type, subcontractor_worker_count, status_code,
+        #   site_address, is_active, created_at, updated_at
+        factory_data = {
+            "name":                      site.get("site_name", ""),
+            "company_id":                site.get("company_id"),
+            "site_type":                 "CONSTRUCTION",
+            "sector":                    "CONSTRUCTION",
+            "construction_amount":       contract_eok * 100_000_000,  # 억원 → 원
+            "employee_count":            site.get("direct_workers") or site.get("total_workers") or 0,
+            "subcontractor_worker_count": site.get("subcon_workers") or 0,
+            "construction_type":         site.get("site_type") or "건축",  # BUILDING/CIVIL → 건축/토목
+            "site_address":              site.get("site_address"),
+            "status_code":               "ACTIVE",
+            "is_active":                 True,
+            "created_at":                _now_iso(),
+            "updated_at":                _now_iso(),
+        }
+        res = supabase.table("factories").insert(factory_data).execute()
+        if res.data:
+            factory_id = res.data[0]["id"]
+            # construction_sites.factory_id 업데이트
+            supabase.table("construction_sites").update({
+                "factory_id": factory_id,
+                "updated_at": _now_iso(),
+            }).eq("id", site["id"]).execute()
+            return factory_id
+    except Exception as e:
+        print(f"[CONSTRUCTION] factories 자동생성 실패 (무시): {e}")
+    return None
+
+
+def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
+    """
+    v2.0.0: CONSTRUCTION sector → diagnose/step1 자동실행 + generate_schedules 트리거.
+    실패해도 현장 생성 결과에 영향 없음.
+    """
+    result = {"diagnosis": None, "schedules": None}
+    try:
+        contract_eok = float(site.get("contract_amount") or 0)
+        direct = int(site.get("direct_workers") or 0)
+        subcon = int(site.get("subcon_workers") or 0)
+        site_type_raw = site.get("site_type") or "BUILDING"
+
+        # diagnose/step1 내부 로직 직접 실행 (HTTP 자기호출 대신 import)
+        from routers.legal_engine import (
+            _input_to_facility_context,
+            _evaluate_facility_conditions_db,
+            _classify_rules_db,
+            format_rule_result_db,
+            _resolve_obligation_type,
+            _get_construction_summary,
+            get_sector_groups,
+            ENGINE_VERSION,
+        )
+        sector_raw = "CONSTRUCTION"
+        sector_groups = get_sector_groups(sector_raw)
+        rules_res = supabase.table("master_building_legal_rules").select("*") \
+            .eq("is_active", True).in_("sector", sector_groups).eq("diagnosis_stage", 1).execute()
+        all_rules = rules_res.data or []
+
+        inp = {
+            "contract_amount_eok": contract_eok,
+            "direct_workers":      direct,
+            "subcon_workers":      subcon,
+            "construction_type":   site_type_raw,
+        }
+        facility_ctx = _input_to_facility_context(sector_raw, inp)
+        evaluated_at = datetime.now().isoformat()
+        applicable, not_applicable = _evaluate_facility_conditions_db(facility_ctx, all_rules, sector_raw)
+
+        triggered: Dict[str, List] = {"appointment": [], "inspection": [], "notify": [], "report": [], "action": [], "not_applicable": []}
+        _classify_rules_db(applicable, triggered)
+        for r in not_applicable:
+            triggered["not_applicable"].append(format_rule_result_db(r))
+
+        total_applicable = sum(len(triggered[k]) for k in ("appointment", "inspection", "notify", "report", "action"))
+        result_data = {
+            "factory_id": factory_id, "sector": sector_raw, "sector_groups": sector_groups,
+            "step": 1, "engine_version": ENGINE_VERSION, "evaluated_at": evaluated_at,
+            "facility_context": facility_ctx,
+            "appointment_required": triggered["appointment"],
+            "inspection_required":  triggered["inspection"],
+            "action_required":      triggered["action"],
+            "report_required":      triggered["report"] + triggered["notify"],
+            "applicable_count":     total_applicable,
+            "construction_summary": _get_construction_summary(facility_ctx),
+            "summary": {
+                "total": total_applicable,
+                "appointment": len(triggered["appointment"]),
+                "inspection":  len(triggered["inspection"]),
+                "action":      len(triggered["action"]),
+                "report":      len(triggered["report"]),
+                "notify":      len(triggered["notify"]),
+            },
+        }
+
+        # factory_diagnosis_results 저장
+        try:
+            supabase.table("factory_diagnosis_results").update({"is_latest": False}) \
+                .eq("factory_id", factory_id).eq("sector", sector_raw).eq("is_latest", True).execute()
+        except Exception:
+            pass
+        save_res = supabase.table("factory_diagnosis_results").insert({
+            "factory_id":      factory_id,
+            "sector":          sector_raw,
+            "diagnosis_stage": 1,
+            "input_data":      inp,
+            "result_data":     result_data,
+            "rule_count":      total_applicable,
+            "is_latest":       True,
+        }).execute()
+
+        result["diagnosis"] = {"applicable_count": total_applicable}
+
+        # construction_sites 진단 결과 연결
+        if save_res.data:
+            diag_id = save_res.data[0]["id"]
+            supabase.table("construction_sites").update({
+                "diagnosis_step1_id":        diag_id,
+                "last_diagnosis_at":         _now_iso(),
+                "diagnosis_applicable_count": total_applicable,
+                "updated_at":                _now_iso(),
+            }).eq("factory_id", factory_id).execute()
+
+        # generate_schedules 자동 트리거
+        from routers.legal_engine_patch import generate_schedules_from_diagnosis
+        # FastAPI Request 없이 직접 supabase 활용하여 내부 로직 재현
+        inspection_rules = result_data.get("inspection_required") or []
+        existing = supabase.table("work_schedules").select("rule_code") \
+            .eq("factory_id", factory_id).eq("source_type", "LEGAL").eq("status_code", "PENDING").execute()
+        existing_codes = {r["rule_code"] for r in (existing.data or []) if r.get("rule_code")}
+        today_str = date.today().isoformat()
+        company_id_fac = supabase.table("factories").select("company_id").eq("id", factory_id).single().execute()
+        company_id = company_id_fac.data.get("company_id") if company_id_fac.data else None
+        rows = []
+        for rule in inspection_rules:
+            rule_id = (rule.get("rule_id") or rule.get("rule_code") or "").strip()
+            if not rule_id or rule_id in existing_codes:
+                continue
+            rows.append({
+                "factory_id":      factory_id,
+                "company_id":      company_id,
+                "source_type":     "LEGAL",
+                "rule_code":       rule_id,
+                "description":     (rule.get("obligation_summary") or rule.get("description") or "").strip(),
+                "obligation_type": rule.get("obligation_type") or "INSPECT",
+                "law_name":        rule.get("law_name") or "",
+                "law_article":     rule.get("law_article") or "",
+                "form_code":       rule.get("form_code") or None,
+                "planned_date":    today_str,
+                "status_code":     "PENDING",
+                "active_yn":       True,
+            })
+            existing_codes.add(rule_id)
+        created = 0
+        for i in range(0, len(rows), 20):
+            sched_res = supabase.table("work_schedules").insert(rows[i:i+20]).execute()
+            created += len(sched_res.data or [])
+        result["schedules"] = {"created": created, "total_rules": len(inspection_rules)}
+
+    except Exception as e:
+        print(f"[CONSTRUCTION] 자동진단/일정생성 실패 (무시): {e}")
+
+    return result
+
+
 # ══════════════════════════════════════════════
 # Pydantic 모델
 # ══════════════════════════════════════════════
@@ -117,8 +302,8 @@ class SitePatch(BaseModel):
 
 class ProcessCreate(BaseModel):
     process_master_id: Optional[str] = None
-    kcsc_process_id: Optional[str] = None      # v1.1.0: KCSC 공정 마스터 연결
-    work_type_code: Optional[str] = None        # v1.1.0: 법령진단 공종 코드
+    kcsc_process_id: Optional[str] = None
+    work_type_code: Optional[str] = None
     work_type_label: Optional[str] = None
     process_name: str
     construction_type: Optional[str] = None
@@ -148,7 +333,7 @@ class ProcessPatch(BaseModel):
 
 class WorkCreate(BaseModel):
     process_id: Optional[str] = None
-    work_master_id: Optional[str] = None        # kcsc_work_master.id (트리거로 kcsc_work_id 자동 복사)
+    work_master_id: Optional[str] = None
     work_name: str
     work_date: date
     work_time_start: Optional[str] = None
@@ -180,7 +365,7 @@ class WorkPatch(BaseModel):
 
 
 class PtwPatch(BaseModel):
-    ptw_status: str  # APPROVED / REJECTED / CLOSED
+    ptw_status: str
     ptw_approved_by: Optional[str] = None
 
 
@@ -215,7 +400,7 @@ class WorkerPatch(BaseModel):
 
 
 class EntryPatch(BaseModel):
-    entry_status: str  # IN / OUT / OFFSITE
+    entry_status: str
 
 
 class InspectionCreate(BaseModel):
@@ -247,7 +432,7 @@ class InspectionPatch(BaseModel):
 
 
 class CorrectivePatch(BaseModel):
-    corrective_status: str  # IN_PROGRESS / DONE
+    corrective_status: str
     corrective_action: Optional[str] = None
 
 
@@ -290,6 +475,9 @@ async def list_sites(
 
 @router.post("/sites")
 async def create_site(body: SiteCreate):
+    """
+    v2.0.0: 현장 등록 + factories 자동생성(sector=CONSTRUCTION) + 법령진단 자동실행 + 일정 자동생성
+    """
     supabase = get_supabase()
     try:
         data = body.model_dump(exclude_none=True)
@@ -306,10 +494,34 @@ async def create_site(body: SiteCreate):
             data["safety_manager_count"] = sm["count"]
         data["created_at"] = _now_iso()
         data["updated_at"] = _now_iso()
+
+        # construction_sites INSERT
         res = supabase.table("construction_sites").insert(data).execute()
         if not res.data:
             raise HTTPException(status_code=500, detail="등록 실패")
-        return {"status": "success", "data": res.data[0]}
+        site = res.data[0]
+
+        # v2.0.0: factories 자동생성 + factory_id 업데이트
+        factory_id = _create_factory_for_site(supabase, site)
+
+        # v2.0.0: CONSTRUCTION 법령진단 + 일정 자동생성
+        auto_result = {}
+        if factory_id:
+            auto_result = _auto_diagnose_and_schedule(supabase, factory_id, site)
+
+        # 최신 site 데이터 재조회 (factory_id 반영)
+        updated = supabase.table("construction_sites").select("*").eq("id", site["id"]).single().execute()
+        final_site = updated.data if updated.data else site
+
+        return {
+            "status": "success",
+            "data": final_site,
+            "auto": {
+                "factory_id": factory_id,
+                "diagnosis":  auto_result.get("diagnosis"),
+                "schedules":  auto_result.get("schedules"),
+            },
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -374,20 +586,17 @@ async def get_site_stats(site_id: str):
         if not site_res.data:
             raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
         site = site_res.data[0]
-
         proc_res   = supabase.table("construction_site_processes").select("id,status_code", count="exact").eq("site_id", site_id).eq("is_active", True).execute()
         work_res   = supabase.table("construction_works").select("id,status_code,ptw_status", count="exact").eq("site_id", site_id).eq("is_active", True).execute()
         worker_res = supabase.table("construction_workers").select("id,worker_type,entry_status", count="exact").eq("site_id", site_id).eq("is_active", True).execute()
         insp_res   = supabase.table("construction_inspections").select("id,overall_result", count="exact").eq("site_id", site_id).eq("is_active", True).execute()
-
         procs = proc_res.data or []; works = work_res.data or []
         workers = worker_res.data or []; insps = insp_res.data or []
-
         return {"status": "success", "data": {
-            "site_id": site_id,
-            "site_name": site.get("site_name"),
+            "site_id": site_id, "site_name": site.get("site_name"),
             "safety_manager_required": site.get("safety_manager_required"),
             "safety_manager_count": site.get("safety_manager_count"),
+            "factory_id": site.get("factory_id"),
             "processes": {
                 "total": len(procs),
                 "in_progress": sum(1 for p in procs if p.get("status_code") == "IN_PROGRESS"),
@@ -517,21 +726,14 @@ async def list_kcsc_processes(
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
 ):
-    """
-    KCSC 공정 마스터 목록
-    v1.1.0: 정렬 컬럼 process_code → kcs_code 수정 / work_type_code 필터 추가
-    """
     supabase = get_supabase()
     try:
         offset = (page - 1) * size
         q = supabase.table("kcsc_process_master").select("*", count="exact").eq("is_active", True)
-        if search:
-            q = q.ilike("process_name", f"%{search}%")
-        if construction_type:
-            q = q.eq("construction_type", construction_type)
-        if work_type_code:
-            q = q.eq("work_type_code", work_type_code)
-        q = q.order("kcs_code").range(offset, offset + size - 1)  # v1.1.0 버그 수정
+        if search:             q = q.ilike("process_name", f"%{search}%")
+        if construction_type:  q = q.eq("construction_type", construction_type)
+        if work_type_code:     q = q.eq("work_type_code", work_type_code)
+        q = q.order("kcs_code").range(offset, offset + size - 1)
         res = q.execute()
         return {"status": "success", "data": {
             "items": res.data or [], "total": res.count or 0, "page": page, "size": size,
@@ -549,10 +751,6 @@ async def list_kcsc_works_all(
     page: int = Query(1, ge=1),
     size: int = Query(100, ge=1, le=300),
 ):
-    """
-    v1.1.0 신규: KCSC 전체 작업 목록 (is_hazardous 필터 지원)
-    프론트 step3 탭②: 위험작업 직접 선택에서 호출
-    """
     supabase = get_supabase()
     try:
         offset = (page - 1) * size
@@ -561,14 +759,10 @@ async def list_kcsc_works_all(
             "is_work_item, equipment_type_codes, work_type_code, process_id",
             count="exact"
         ).eq("is_active", True)
-        if is_hazardous is not None:
-            q = q.eq("is_hazardous", is_hazardous)
-        if work_type_code:
-            q = q.eq("work_type_code", work_type_code)
-        if hazard_type:
-            q = q.ilike("hazard_type", f"%{hazard_type}%")
-        if search:
-            q = q.ilike("title", f"%{search}%")
+        if is_hazardous is not None: q = q.eq("is_hazardous", is_hazardous)
+        if work_type_code:           q = q.eq("work_type_code", work_type_code)
+        if hazard_type:              q = q.ilike("hazard_type", f"%{hazard_type}%")
+        if search:                   q = q.ilike("title", f"%{search}%")
         q = q.order("sort_order").order("title").range(offset, offset + size - 1)
         res = q.execute()
         return {"status": "success", "data": {
@@ -580,13 +774,10 @@ async def list_kcsc_works_all(
 
 @router.get("/kcsc/works/{process_id}")
 async def list_kcsc_works_by_process(process_id: str):
-    """공정별 KCSC 작업 목록 (v1.1.0: is_active 필터 추가)"""
     supabase = get_supabase()
     try:
         res = supabase.table("kcsc_work_master").select("*") \
-            .eq("process_id", process_id) \
-            .eq("is_active", True) \
-            .order("sort_order").execute()
+            .eq("process_id", process_id).eq("is_active", True).order("sort_order").execute()
         return {"status": "success", "data": res.data or []}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -610,9 +801,9 @@ async def list_works(
         offset = (page - 1) * size
         q = supabase.table("construction_works").select("*", count="exact") \
             .eq("site_id", site_id).eq("is_active", True)
-        if status_code:  q = q.eq("status_code", status_code)
-        if ptw_status:   q = q.eq("ptw_status", ptw_status)
-        if work_date:    q = q.eq("work_date", work_date)
+        if status_code: q = q.eq("status_code", status_code)
+        if ptw_status:  q = q.eq("ptw_status", ptw_status)
+        if work_date:   q = q.eq("work_date", work_date)
         q = q.order("work_date", desc=True).order("created_at", desc=True).range(offset, offset + size - 1)
         res = q.execute()
         return {"status": "success", "data": {
@@ -716,9 +907,9 @@ async def list_workers(
         offset = (page - 1) * size
         q = supabase.table("construction_workers").select("*", count="exact") \
             .eq("site_id", site_id).eq("is_active", True)
-        if worker_type:   q = q.eq("worker_type", worker_type)
-        if entry_status:  q = q.eq("entry_status", entry_status)
-        if search:        q = q.ilike("worker_name", f"%{search}%")
+        if worker_type:  q = q.eq("worker_type", worker_type)
+        if entry_status: q = q.eq("entry_status", entry_status)
+        if search:       q = q.ilike("worker_name", f"%{search}%")
         q = q.order("created_at", desc=True).range(offset, offset + size - 1)
         res = q.execute()
         return {"status": "success", "data": {
@@ -914,11 +1105,5 @@ async def delete_inspection(inspection_id: str):
 
 @router.post("/engine/safety-manager")
 async def engine_safety_manager(body: SafetyManagerBody):
-    """
-    산안법 시행령 제16조 기준 안전관리자 선임 의무 자동 판정
-    - BUILDING: 도급금액 >= 150억
-    - CIVIL: 도급금액 >= 120억
-    - 하도급 포함 상시 근로자 >= 50명
-    """
     result = calc_safety_manager(body.site_type, body.contract_amount, body.total_workers)
     return {"status": "success", "data": result}
