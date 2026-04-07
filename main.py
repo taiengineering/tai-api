@@ -1,10 +1,11 @@
-# main.py — v5.6.5
+# main.py — v5.6.6
+# v5.6.6: legal_engine_patch 라우터 추가
+#          POST /legal-engine/generate-schedules/{factory_id} — 진단→일정 자동생성 (legal_engine.py 직접 등록)
+#          notifications.py — trigger-due-alerts 엔드포인트 추가 (D-0/D-3/D-7)
 # v5.6.5: schedule_pipeline 라우터 추가
-#          POST /legal-engine/generate-schedules/{factory_id} — 진단→일정 자동생성
-#          POST /notifications/trigger-due-alerts — D-7/D-3/당일 마감 알림
-# v5.6.4: legal_engine — has_high_work(고소작업 2m이상) context 추가
+# v5.6.4: legal_engine — has_high_work context 추가
 # v5.6.3: legal_engine — DiagnoseStep1Body 수치 필드 추가
-# v5.6.2: legal_engine — inspection_cycle 4필드 완비, schedule_type 분류
+# v5.6.2: legal_engine — inspection_cycle 4필드 완비
 # v5.6.1: legal_engine — MANUFACTURING gas/boiler boolean→수치 변환
 # v5.6.0: law_rule_generator v1.5.0 — has_condition 필터
 # v5.5.5: contract_kmong 라우터 추가
@@ -19,6 +20,7 @@ from routers.companies               import router as companies_router
 from routers.factories               import router as factories_router
 from routers.system_codes            import router as system_codes_router
 from routers.legal_engine            import router as legal_engine_router
+from routers.legal_engine_patch      import router as legal_engine_patch_router  # v5.6.6 generate-schedules
 from routers.engine_qa               import router as engine_qa_router
 from routers.law_rule_generator      import router as law_rule_generator_router  # v5.5.2
 from routers.engine_document         import router as engine_document_router     # v5.5.3
@@ -80,7 +82,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.6.5"
+APP_VERSION = "5.6.6"
 
 
 @asynccontextmanager
@@ -139,6 +141,7 @@ app.include_router(companies_router)
 app.include_router(factories_router)
 app.include_router(system_codes_router)
 app.include_router(legal_engine_router)
+app.include_router(legal_engine_patch_router)   # v5.6.6 generate-schedules
 app.include_router(engine_qa_router)
 app.include_router(law_rule_generator_router)   # v5.5.2 AI 룰 생성기
 app.include_router(engine_document_router)      # v5.5.3 문서메뉴
