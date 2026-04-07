@@ -1,47 +1,190 @@
 """
 legal_engine_patch.py
 =====================
+v1.3.0 (2026-04-07)
+  [FIX] generate-schedules/all: CONSTRUCTION 한정 → is_active=True 전체 공장으로 확장
+        (진단 결과 없는 공장은 자동 스킵)
+  [ADD] POST /work-schedules/auto-assign
+        PENDING + 미배정 work_schedules → 공장 안전관리자 자동 배정
+        - factory_id 파라미터 (없으면 전체 공장)
+        - users에서 role_code='003'(안전관리자) 또는 '012' 조회
+        - work_assignments INSERT
+
 v1.2.0 (2026-04-07)
   [ADD] POST /legal-engine/generate-schedules/all
-        CONSTRUCTION sector 전체 factory 일괄 일정 생성 (관리용)
-        ※ /all 라우트는 /{factory_id} 보다 먼저 선언 필수 (라우트 충돌 방지)
 
 v1.1.0 (2026-04-07)
   [FIX] planned_date = 오늘 날짜 고정 (cycle 계산 제거)
 
 v1.0.0 (2026-04-07)
   - factory_diagnosis_results(is_latest) → work_schedules 자동 INSERT
-  - 실제 work_schedules 컬럼 기준 (information_schema 확인 완료)
-  - 동일 rule_code + source_type='LEGAL' 존재 시 스킵
 """
-from fastapi import APIRouter, HTTPException
-from datetime import date
-from typing import Optional
+from fastapi import APIRouter, HTTPException, Query
+from datetime import date, datetime, timezone
+from typing import Optional, List
+import uuid
 
 from db.supabase_client import get_supabase
 
 router = APIRouter(tags=["법령엔진"])
 
+SAFETY_MANAGER_ROLES = {"003", "012"}  # 안전관리자 role_code
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
 
 # ──────────────────────────────────────────────
-# 주의: /all 라우트는 /{factory_id} 보다 먼저 선언해야 함
+# 주의: /all, /auto-assign 등 고정 경로는
+#       /{factory_id} 보다 먼저 선언
 # ──────────────────────────────────────────────
 
 @router.post("/legal-engine/generate-schedules/all")
 def generate_schedules_all():
     """
-    v1.2.0: CONSTRUCTION sector 전체 factory 일괄 일정 생성 (관리용 엔드포인트)
+    v1.3.0: is_active=True 전체 공장에 대해 일괄 일정 생성.
+    진단 결과 없는 공장은 에러로 표시하고 계속 진행.
     """
     supabase = get_supabase()
-    factories = supabase.table("factories").select("id").eq("sector", "CONSTRUCTION").execute()
+    factories = supabase.table("factories").select("id, name") \
+        .eq("is_active", True).execute()
     results = []
     for f in (factories.data or []):
         try:
             r = generate_schedules_from_diagnosis(f["id"])
-            results.append({"factory_id": f["id"], "result": r})
+            results.append({"factory_id": f["id"], "name": f.get("name"), "result": r})
+        except HTTPException as e:
+            results.append({"factory_id": f["id"], "name": f.get("name"), "error": e.detail})
         except Exception as e:
-            results.append({"factory_id": f["id"], "error": str(e)})
-    return {"status": "success", "data": {"processed": len(results), "results": results}}
+            results.append({"factory_id": f["id"], "name": f.get("name"), "error": str(e)})
+
+    total_created = sum(
+        r.get("result", {}).get("data", {}).get("created", 0)
+        for r in results if isinstance(r.get("result"), dict)
+    )
+    return {
+        "status": "success",
+        "data": {
+            "processed":     len(results),
+            "total_created": total_created,
+            "results":       results,
+        },
+    }
+
+
+@router.post("/work-schedules/auto-assign")
+def auto_assign_schedules(
+    factory_id: Optional[str] = Query(None, description="특정 공장만 처리 (없으면 전체)"),
+):
+    """
+    v1.3.0: PENDING + assigned_user_id=NULL work_schedules 를
+    공장 안전관리자(role_code 003/012)에게 자동 배정.
+
+    로직:
+    1. PENDING + active_yn=True + assigned_user_id 없는 스케줄 조회
+    2. factory_id별로 그룹핑
+    3. 해당 공장의 안전관리자(role_code IN 003,012) 1명 조회
+    4. work_assignments INSERT + work_schedules.assigned_user_id 업데이트
+    5. 배정 건수 반환
+    """
+    supabase = get_supabase()
+
+    # 미배정 PENDING 스케줄 조회
+    q = supabase.table("work_schedules").select(
+        "id, factory_id, company_id, planned_date, rule_code, description, obligation_type"
+    ).eq("status_code", "PENDING").eq("active_yn", True).is_("assigned_user_id", "null")
+
+    if factory_id:
+        q = q.eq("factory_id", factory_id)
+
+    sched_res = q.execute()
+    schedules = sched_res.data or []
+
+    if not schedules:
+        return {"status": "success", "data": {"assigned": 0, "skipped": 0, "message": "배정할 스케줄 없음"}}
+
+    # factory_id별 그룹핑
+    factory_map: dict = {}
+    for s in schedules:
+        fid = s["factory_id"]
+        if fid not in factory_map:
+            factory_map[fid] = []
+        factory_map[fid].append(s)
+
+    assigned_total = 0
+    skipped_total  = 0
+    today_str = date.today().isoformat()
+    now       = _now_iso()
+
+    for fid, scheds in factory_map.items():
+        # 안전관리자 조회 (role_code 003 우선, 없으면 012)
+        manager_id = None
+        for role in ("003", "012"):
+            u_res = supabase.table("users").select("id").eq("factory_id", fid) \
+                .eq("role_code", role).eq("is_active", True).limit(1).execute()
+            if u_res.data:
+                manager_id = u_res.data[0]["id"]
+                break
+
+        if not manager_id:
+            # company_id로 fallback 시도
+            company_id = scheds[0].get("company_id")
+            if company_id:
+                for role in ("003", "012", "002"):
+                    u_res = supabase.table("users").select("id") \
+                        .eq("company_id", company_id).eq("role_code", role) \
+                        .eq("is_active", True).limit(1).execute()
+                    if u_res.data:
+                        manager_id = u_res.data[0]["id"]
+                        break
+
+        if not manager_id:
+            skipped_total += len(scheds)
+            continue
+
+        # work_assignments INSERT + work_schedules.assigned_user_id 업데이트
+        assign_rows = []
+        sched_ids   = []
+        for s in scheds:
+            assign_rows.append({
+                "schedule_id":      s["id"],
+                "assigned_user_id": manager_id,
+                "scheduled_date":   s.get("planned_date") or today_str,
+                "status_code":      "PENDING",
+                "created_at":       now,
+            })
+            sched_ids.append(s["id"])
+
+        # 배치 INSERT (20건씩)
+        for i in range(0, len(assign_rows), 20):
+            try:
+                supabase.table("work_assignments").insert(assign_rows[i:i+20]).execute()
+            except Exception as e:
+                print(f"[AUTO_ASSIGN] work_assignments insert 실패: {e}")
+                continue
+
+        # work_schedules.assigned_user_id 업데이트
+        for sid in sched_ids:
+            try:
+                supabase.table("work_schedules").update({
+                    "assigned_user_id": manager_id,
+                    "updated_at":       now,
+                }).eq("id", sid).execute()
+            except Exception as e:
+                print(f"[AUTO_ASSIGN] work_schedules update 실패 sid={sid}: {e}")
+
+        assigned_total += len(scheds)
+
+    return {
+        "status": "success",
+        "data": {
+            "assigned":   assigned_total,
+            "skipped":    skipped_total,
+            "factories":  len(factory_map),
+            "message":    f"{assigned_total}건 배정 완료 ({skipped_total}건 안전관리자 미지정으로 스킵)",
+        },
+    }
 
 
 @router.post("/legal-engine/generate-schedules/{factory_id}")
@@ -84,10 +227,7 @@ def generate_schedules_from_diagnosis(factory_id: str):
     if not diag.data:
         raise HTTPException(
             status_code=404,
-            detail=(
-                "해당 시설의 진단 결과가 없습니다. "
-                "/legal-engine/diagnose/step1을 먼저 실행하세요."
-            ),
+            detail="진단 결과 없음 (step1 먼저 실행 필요)",
         )
 
     result_data      = diag.data[0].get("result_data") or {}
@@ -110,7 +250,7 @@ def generate_schedules_from_diagnosis(factory_id: str):
         r["rule_code"] for r in (existing.data or []) if r.get("rule_code")
     }
 
-    today   = date.today()   # planned_date = 오늘 고정 (v1.1.0)
+    today   = date.today()
     rows    = []
     skipped = 0
 
@@ -136,14 +276,14 @@ def generate_schedules_from_diagnosis(factory_id: str):
             "law_name":        rule.get("law_name") or "",
             "law_article":     rule.get("law_article") or "",
             "form_code":       rule.get("form_code") or None,
-            "planned_date":    today.isoformat(),   # 오늘 날짜 고정
+            "planned_date":    today.isoformat(),
             "status_code":     "PENDING",
             "active_yn":       True,
             "cycle_base_guide": (
                 f"{cycle_int}{cycle_unit} 주기" if (cycle_unit and cycle_int) else "주기 미지정"
             ),
         })
-        existing_codes.add(rule_id)  # 루프 내 중복 방지
+        existing_codes.add(rule_id)
 
     # 4. 배치 INSERT (20건씩)
     created = 0
