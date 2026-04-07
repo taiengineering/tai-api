@@ -1,9 +1,11 @@
-# main.py — v5.7.1
-# v5.7.1: corrective_actions.py v1.0.0
-#          GET/POST /corrective-actions, PATCH /corrective-actions/{id}
-#          corrective_actions 테이블 신규 생성
-# v5.7.0: work_schedules.py v1.1.0 batch-update + confirm
-# v5.6.9: 이니시스 INIStdPay 표준결제 연동
+# main.py — v5.7.2
+# v5.7.2: 메세지미 API v2 연동 (messaging.py v1.0.0)
+#          aligo 완전 제거 (기존에 없었음 확인)
+#          POST /messaging/send-sms
+#          POST /messaging/send-alimtalk
+#          POST /messaging/send (알림톡 우선 → 실패 시 SMS fallback)
+# v5.7.1: corrective_actions v1.1.0
+# v5.7.0: work_schedules v1.1.0
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -68,7 +70,8 @@ from routers.tbm                     import router as tbm_router
 from routers.safety_meetings         import router as safety_meetings_router
 from routers.risk_assessments        import router as risk_assessments_router
 from routers.payment                 import router as payment_router
-from routers.corrective_actions      import router as corrective_actions_router   # v5.7.1
+from routers.corrective_actions      import router as corrective_actions_router
+from routers.messaging               import router as messaging_router           # v5.7.2 메세지미
 from routers.public                  import router as public_router
 from routers.public_admin            import router as public_admin_router
 from routers.alert_messages          import router as alert_messages_router
@@ -79,7 +82,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.7.1"
+APP_VERSION = "5.7.2"
 
 
 @asynccontextmanager
@@ -191,7 +194,8 @@ app.include_router(tbm_router)
 app.include_router(safety_meetings_router)
 app.include_router(risk_assessments_router)
 app.include_router(payment_router)
-app.include_router(corrective_actions_router)    # v5.7.1
+app.include_router(corrective_actions_router)
+app.include_router(messaging_router)             # v5.7.2 메세지미
 app.include_router(mail_router)
 
 
