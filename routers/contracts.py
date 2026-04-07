@@ -4,6 +4,11 @@
 TAI Contracts 라우터 - 견적/계약 관리
 전역변수: contract_status / service_type / saas_plan
 
+v2.1.0 (2026-04-07):
+  - PATCH /contracts/{id}/status 래퍼 추가
+    status 값에 따라 activate/suspend/cancel로 분기
+    order-detail.html 프론트엔드 호환용
+
 v2.0.0 (2026-04-01):
   - convert_to_contract: service_type='DIAGNOSIS'이면 quotes.items → contracts.items 복사
   - activate_contract: DIAGNOSIS 계약 활성화 시 status_code='ACTIVE' 처리
@@ -21,6 +26,7 @@ GET    /contracts                계약 목록
 POST   /contracts                계약 직접 등록
 GET    /contracts/{id}           계약 상세
 PATCH  /contracts/{id}           계약 수정
+PATCH  /contracts/{id}/status    상태 변경 래퍼 (ACTIVE/SUSPENDED/CANCELLED) ← v2.1.0
 POST   /contracts/{id}/activate  서비스 활성화 → ACTIVE
 POST   /contracts/{id}/payment   입금 확인
 POST   /contracts/{id}/suspend   일시 정지 → SUSPENDED
@@ -100,6 +106,11 @@ class ContractUpdate(BaseModel):
     max_factory_count: Optional[int] = None
     max_user_count:    Optional[int] = None
     memo:              Optional[str] = None
+
+class ContractStatusUpdate(BaseModel):
+    """v2.1.0: PATCH /contracts/{id}/status 래퍼용"""
+    status:  str               # ACTIVE | SUSPENDED | CANCELLED
+    reason:  Optional[str] = None   # suspend/cancel 시 사유
 
 class PaymentConfirm(BaseModel):
     paid_amount: int
@@ -396,6 +407,101 @@ def update_contract(contract_id: str, req: ContractUpdate):
     return {"status": "success", "message": "계약이 수정됐습니다", "data": res.data[0] if res.data else {}}
 
 
+# ──────────────────────────────────────────────────────────────
+# v2.1.0: PATCH /contracts/{id}/status — 상태 변경 래퍼
+# 주의: 고정경로 (/history, /activate 등)보다 뒤에 선언해야
+#       하지만 /status는 별도 세그먼트이므로 충돌 없음.
+#       order-detail.html 프론트엔드 호환용.
+# ──────────────────────────────────────────────────────────────
+
+@router.patch("/contracts/{contract_id}/status")
+def update_contract_status(contract_id: str, req: ContractStatusUpdate):
+    """
+    계약 상태 변경 래퍼 (프론트엔드 단일 엔드포인트 호환).
+
+    status 값에 따라 내부 처리:
+      ACTIVE    → activate_contract() 로직 (PENDING_PAYMENT 또는 SUSPENDED → ACTIVE)
+      SUSPENDED → suspend_contract() 로직 (ACTIVE → SUSPENDED)
+      CANCELLED → cancel_contract() 로직 (모든 상태 → CANCELLED)
+    """
+    supabase = get_supabase()
+    c = supabase.table("contracts").select("*").eq("id", contract_id).single().execute()
+    if not c.data:
+        raise HTTPException(status_code=404, detail="계약을 찾을 수 없습니다")
+
+    target = req.status.upper()
+    current = c.data["status_code"]
+    now = datetime.now()
+
+    # ── ACTIVE 처리 ──────────────────────────────────────────
+    if target == "ACTIVE":
+        if current not in ("PENDING_PAYMENT", "SUSPENDED"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"입금대기 또는 정지 상태에서만 활성화 가능합니다. (현재: {current})"
+            )
+        supabase.table("contracts").update({
+            "status_code": "ACTIVE",
+            "is_active":   True,
+            "updated_at":  now.isoformat(),
+        }).eq("id", contract_id).execute()
+
+        # SAAS 계약만 회사 상태 변경
+        if c.data.get("service_type") != "DIAGNOSIS":
+            supabase.table("companies").update({
+                "status_code": "ACTIVE",
+                "updated_at":  now.isoformat(),
+            }).eq("id", c.data["company_id"]).execute()
+
+        return {"status": "success", "message": "서비스가 활성화됐습니다 🎉",
+                "data": {"contract_id": contract_id, "status": "ACTIVE"}}
+
+    # ── SUSPENDED 처리 ───────────────────────────────────────
+    elif target == "SUSPENDED":
+        if current != "ACTIVE":
+            raise HTTPException(
+                status_code=400,
+                detail=f"활성화 상태에서만 정지 가능합니다. (현재: {current})"
+            )
+        supabase.table("contracts").update({
+            "status_code":      "SUSPENDED",
+            "suspended_at":     now.isoformat(),
+            "suspended_reason": req.reason or "관리자 정지",
+            "updated_at":       now.isoformat(),
+        }).eq("id", contract_id).execute()
+
+        return {"status": "success", "message": "서비스가 일시정지됐습니다",
+                "data": {"contract_id": contract_id, "status": "SUSPENDED"}}
+
+    # ── CANCELLED 처리 ───────────────────────────────────────
+    elif target == "CANCELLED":
+        if current in ("CANCELLED", "EXPIRED"):
+            raise HTTPException(
+                status_code=400,
+                detail="이미 취소/만료된 계약입니다"
+            )
+        supabase.table("contracts").update({
+            "status_code":  "CANCELLED",
+            "cancelled_at": now.isoformat(),
+            "is_active":    False,
+            "memo":         req.reason or "관리자 취소",
+            "updated_at":   now.isoformat(),
+        }).eq("id", contract_id).execute()
+
+        return {"status": "success", "message": "계약이 취소됐습니다",
+                "data": {"contract_id": contract_id, "status": "CANCELLED"}}
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"지원하지 않는 상태값입니다: {req.status} (ACTIVE/SUSPENDED/CANCELLED 중 하나)"
+        )
+
+
+# ============================================================
+# 기존 개별 액션 엔드포인트 (유지)
+# ============================================================
+
 @router.post("/contracts/{contract_id}/activate")
 def activate_contract(contract_id: str):
     """PENDING_PAYMENT → ACTIVE + 회사 상태 ACTIVE
@@ -415,7 +521,6 @@ def activate_contract(contract_id: str):
         "updated_at":  now.isoformat(),
     }).eq("id", contract_id).execute()
 
-    # SAAS 계약만 회사 상태 변경 (DIAGNOSIS는 기존 회사 상태 유지)
     if c.data.get("service_type") != "DIAGNOSIS":
         supabase.table("companies").update({
             "status_code": "ACTIVE",
