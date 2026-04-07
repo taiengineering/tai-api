@@ -1,16 +1,11 @@
-# main.py — v5.6.7
-# v5.6.7: legal_engine v5.6.7 — CONSTRUCTION diagnose/step1 완료 시 일정 자동생성 트리거
-#          legal_engine_patch v1.2.0 — POST /legal-engine/generate-schedules/all 추가
+# main.py — v5.6.8
+# v5.6.8: Phase 3 건설현장 온보딩
+#          tbm.py v1.1.0 — construction_site_id 필터 지원
+#          risk_assessments.py v1.1.0 — construction_site_id + work_name/risk_factor/evaluator_id 지원
+#          DB migration: tbm_meetings/risk_assessments.construction_site_id 콓럼 추가
+# v5.6.7: legal_engine v5.6.7 — CONSTRUCTION diagnose/step1 일정 자동트리거
 # v5.6.6: legal_engine_patch 라우터 추가
-#          POST /legal-engine/generate-schedules/{factory_id} — 진단→일정 자동생성
-#          notifications.py — trigger-due-alerts 엔드포인트 추가 (D-0/D-3/D-7)
 # v5.6.5: schedule_pipeline 라우터 추가
-# v5.6.4: legal_engine — has_high_work context 추가
-# v5.6.3: legal_engine — DiagnoseStep1Body 수치 필드 추가
-# v5.6.2: legal_engine — inspection_cycle 4필드 완비
-# v5.6.1: legal_engine — MANUFACTURING gas/boiler boolean→수치 변환
-# v5.6.0: law_rule_generator v1.5.0 — has_condition 필터
-# v5.5.5: contract_kmong 라우터 추가
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -22,12 +17,12 @@ from routers.companies               import router as companies_router
 from routers.factories               import router as factories_router
 from routers.system_codes            import router as system_codes_router
 from routers.legal_engine            import router as legal_engine_router
-from routers.legal_engine_patch      import router as legal_engine_patch_router  # v5.6.6+ generate-schedules
+from routers.legal_engine_patch      import router as legal_engine_patch_router
 from routers.engine_qa               import router as engine_qa_router
-from routers.law_rule_generator      import router as law_rule_generator_router  # v5.5.2
-from routers.engine_document         import router as engine_document_router     # v5.5.3
-from routers.contract_kmong          import router as contract_kmong_router      # v5.5.5
-from routers.schedule_pipeline       import router as schedule_pipeline_router   # v5.6.5
+from routers.law_rule_generator      import router as law_rule_generator_router
+from routers.engine_document         import router as engine_document_router
+from routers.contract_kmong          import router as contract_kmong_router
+from routers.schedule_pipeline       import router as schedule_pipeline_router
 from routers.ksic_engine             import router as ksic_engine_router
 from routers.factory_process_v3      import router as factory_process_router
 from routers.process_management      import router as process_management_router
@@ -56,7 +51,7 @@ from routers.teams                   import router as teams_router
 from routers.areas                   import router as areas_router
 from routers.buildings               import router as buildings_router
 from routers.inspection_sets         import router as inspection_sets_router
-from routers.inspection_schedule     import router as inspection_schedule_router  # v5.5.4
+from routers.inspection_schedule     import router as inspection_schedule_router
 from routers.work_schedules          import router as work_schedules_router
 from routers.inspection_checklist    import router as inspection_router
 from routers.admin_stats             import router as admin_stats_router
@@ -84,7 +79,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.6.7"
+APP_VERSION = "5.6.8"
 
 
 @asynccontextmanager
@@ -143,12 +138,12 @@ app.include_router(companies_router)
 app.include_router(factories_router)
 app.include_router(system_codes_router)
 app.include_router(legal_engine_router)
-app.include_router(legal_engine_patch_router)   # v5.6.6+ generate-schedules/{id} + /all
+app.include_router(legal_engine_patch_router)
 app.include_router(engine_qa_router)
-app.include_router(law_rule_generator_router)   # v5.5.2 AI 룰 생성기
-app.include_router(engine_document_router)      # v5.5.3 문서메뉴
-app.include_router(contract_kmong_router)       # v5.5.5 크몽 법령진단
-app.include_router(schedule_pipeline_router)    # v5.6.5 진단→일정+알림 파이프
+app.include_router(law_rule_generator_router)
+app.include_router(engine_document_router)
+app.include_router(contract_kmong_router)
+app.include_router(schedule_pipeline_router)
 app.include_router(ksic_engine_router)
 app.include_router(factory_process_router)
 app.include_router(process_management_router)
@@ -177,7 +172,7 @@ app.include_router(teams_router)
 app.include_router(areas_router)
 app.include_router(buildings_router)
 app.include_router(inspection_sets_router)
-app.include_router(inspection_schedule_router)  # v5.5.4 일정관리
+app.include_router(inspection_schedule_router)
 app.include_router(work_schedules_router)
 app.include_router(inspection_router)
 app.include_router(admin_stats_router)

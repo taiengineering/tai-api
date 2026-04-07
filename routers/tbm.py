@@ -1,5 +1,10 @@
 """
-TBM(작업 전 안전점검회의) 관리 라우터 — v1.0.0
+TBM(작업 전 안전점검회의) 관리 라우터 — v1.1.0
+
+v1.1.0 (2026-04-07 Phase 3):
+  - tbm_meetings.construction_site_id 콓럼 추가 (migration)
+  - GET /tbm: construction_site_id 필터 지원
+  - POST /tbm body: construction_site_id 저장 지원
 
 tbm_meetings, tbm_attendees 테이블 사용
 
@@ -22,7 +27,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/tbm", tags=["tbm"])
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 
 def _now() -> str:
@@ -32,27 +37,29 @@ def _now() -> str:
 # ── Pydantic 모델 ─────────────────────────────────────────────
 
 class TbmCreateBody(BaseModel):
-    factory_id:       str
-    company_id:       Optional[str] = None
-    work_date:        str                        # YYYY-MM-DD
-    work_location:    Optional[str] = None
-    work_description: Optional[str] = None
-    risk_items:       Optional[List[str]] = []   # 위험요인 태그
-    safety_items:     Optional[List[str]] = []   # 안전수칙 태그
-    conductor_name:   Optional[str] = None
-    conductor_id:     Optional[str] = None
-    meeting_title:    Optional[str] = None
+    factory_id:            str
+    company_id:            Optional[str] = None
+    construction_site_id:  Optional[str] = None   # v1.1.0: 건설현장 연결
+    work_date:             str                     # YYYY-MM-DD
+    work_location:         Optional[str] = None
+    work_description:      Optional[str] = None
+    risk_items:            Optional[List[str]] = []  # 위험요인 태그
+    safety_items:          Optional[List[str]] = []  # 안전수칙 태그
+    conductor_name:        Optional[str] = None
+    conductor_id:          Optional[str] = None
+    meeting_title:         Optional[str] = None
 
 
 class TbmUpdateBody(BaseModel):
-    work_date:        Optional[str] = None
-    work_location:    Optional[str] = None
-    work_description: Optional[str] = None
-    risk_items:       Optional[List[str]] = None
-    safety_items:     Optional[List[str]] = None
-    conductor_name:   Optional[str] = None
-    transcript_text:  Optional[str] = None
-    meeting_title:    Optional[str] = None
+    work_date:             Optional[str] = None
+    work_location:         Optional[str] = None
+    work_description:      Optional[str] = None
+    risk_items:            Optional[List[str]] = None
+    safety_items:          Optional[List[str]] = None
+    conductor_name:        Optional[str] = None
+    transcript_text:       Optional[str] = None
+    meeting_title:         Optional[str] = None
+    construction_site_id:  Optional[str] = None
 
 
 class TranscribeBody(BaseModel):
@@ -62,17 +69,17 @@ class TranscribeBody(BaseModel):
 
 
 class AttendeeAddBody(BaseModel):
-    name:       str
-    worker_id:  Optional[str] = None
-    user_id:    Optional[str] = None
-    job_type:   Optional[str] = None
+    name:      str
+    worker_id: Optional[str] = None
+    user_id:   Optional[str] = None
+    job_type:  Optional[str] = None
 
 
 class SignBody(BaseModel):
     signature_url: str
 
 
-# ── 고정경로 먼저 선언 ────────────────────────────────────────
+# ── 고정경로 먼저 선언 ──────────────────────────────────────────
 
 # POST /tbm/transcribe — /{id} 앞에 선언
 @router.post("/transcribe")
@@ -98,12 +105,12 @@ def save_transcript(body: TranscribeBody):
     ).execute()
     return {
         "status":  "success",
-        "message": "STT 텍스트가 저장됐습니다.",
+        "message": "STT 텍스트가 저장되었습니다.",
         "data":    res.data[0] if res.data else {},
     }
 
 
-# ── CRUD ─────────────────────────────────────────────────────
+# ── CRUD ──────────────────────────────────────────────────
 
 @router.post("")
 def create_tbm(body: TbmCreateBody):
@@ -111,7 +118,6 @@ def create_tbm(body: TbmCreateBody):
     supabase = get_supabase()
     now = _now()
 
-    # company_id 없으면 factory에서 조회
     company_id = body.company_id
     if not company_id:
         fac = supabase.table("factories").select("company_id").eq(
@@ -122,51 +128,54 @@ def create_tbm(body: TbmCreateBody):
 
     title = body.meeting_title or f"TBM {body.work_date} {body.work_location or ''}".strip()
     row = {
-        "factory_id":       body.factory_id,
-        "company_id":       company_id,
-        "meeting_title":    title,
-        "work_date":        body.work_date,
-        "work_location":    body.work_location,
-        "work_description": body.work_description,
-        "risk_items":       body.risk_items or [],
-        "safety_items":     body.safety_items or [],
-        "conductor_id":     body.conductor_id,
-        "conductor_name":   body.conductor_name,
-        "status_code":      "DRAFT",
-        "attendee_count":   0,
-        "transcript_status": "NONE",
-        "created_at":       now,
-        "updated_at":       now,
+        "factory_id":           body.factory_id,
+        "company_id":           company_id,
+        "construction_site_id": body.construction_site_id,  # v1.1.0
+        "meeting_title":        title,
+        "work_date":            body.work_date,
+        "work_location":        body.work_location,
+        "work_description":     body.work_description,
+        "risk_items":           body.risk_items or [],
+        "safety_items":         body.safety_items or [],
+        "conductor_id":         body.conductor_id,
+        "conductor_name":       body.conductor_name,
+        "status_code":          "DRAFT",
+        "attendee_count":       0,
+        "transcript_status":    "NONE",
+        "created_at":           now,
+        "updated_at":           now,
     }
     res = supabase.table("tbm_meetings").insert(row).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="TBM 생성에 실패했습니다.")
-    return {"status": "success", "message": "TBM이 생성됐습니다.", "data": res.data[0]}
+    return {"status": "success", "message": "TBM이 생성되었습니다.", "data": res.data[0]}
 
 
 @router.get("")
 def list_tbm(
-    factory_id:  Optional[str] = Query(None),
-    company_id:  Optional[str] = Query(None),
-    status_code: Optional[str] = Query(None),
-    date_from:   Optional[str] = Query(None),
-    date_to:     Optional[str] = Query(None),
+    factory_id:           Optional[str] = Query(None),
+    company_id:           Optional[str] = Query(None),
+    construction_site_id: Optional[str] = Query(None),  # v1.1.0
+    status_code:          Optional[str] = Query(None),
+    date_from:            Optional[str] = Query(None),
+    date_to:              Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
     """TBM 목록 조회."""
     supabase = get_supabase()
     q = supabase.table("tbm_meetings").select(
-        "id, factory_id, company_id, meeting_title, work_date, work_location, "
-        "conductor_name, attendee_count, status_code, transcript_status, "
-        "audio_url, completed_at, created_at",
+        "id, factory_id, company_id, construction_site_id, meeting_title, work_date, "
+        "work_location, conductor_name, attendee_count, status_code, "
+        "transcript_status, audio_url, completed_at, created_at",
         count="exact"
     )
-    if factory_id:  q = q.eq("factory_id",  factory_id)
-    if company_id:  q = q.eq("company_id",  company_id)
-    if status_code: q = q.eq("status_code", status_code)
-    if date_from:   q = q.gte("work_date",  date_from)
-    if date_to:     q = q.lte("work_date",  date_to)
+    if factory_id:           q = q.eq("factory_id",           factory_id)
+    if company_id:           q = q.eq("company_id",           company_id)
+    if construction_site_id: q = q.eq("construction_site_id", construction_site_id)  # v1.1.0
+    if status_code:          q = q.eq("status_code",          status_code)
+    if date_from:            q = q.gte("work_date",           date_from)
+    if date_to:              q = q.lte("work_date",           date_to)
 
     offset = (page - 1) * size
     res = q.order("work_date", desc=True).range(offset, offset + size - 1).execute()
@@ -214,7 +223,7 @@ def update_tbm(tbm_id: str, body: TbmUpdateBody):
     ).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="TBM을 찾을 수 없습니다.")
-    return {"status": "success", "message": "수정됐습니다.", "data": res.data[0]}
+    return {"status": "success", "message": "수정되었습니다.", "data": res.data[0]}
 
 
 @router.post("/{tbm_id}/complete")
@@ -229,10 +238,10 @@ def complete_tbm(tbm_id: str):
     }).eq("id", tbm_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="TBM을 찾을 수 없습니다.")
-    return {"status": "success", "message": "완료 처리됐습니다.", "data": res.data[0]}
+    return {"status": "success", "message": "완료 처리되었습니다.", "data": res.data[0]}
 
 
-# ── 참석자 ────────────────────────────────────────────────────
+# ── 참석자 ─────────────────────────────────────────────────
 
 @router.get("/{tbm_id}/attendees")
 def list_attendees(tbm_id: str):
@@ -248,7 +257,6 @@ def list_attendees(tbm_id: str):
 def add_attendee(tbm_id: str, body: AttendeeAddBody):
     """참석자 추가."""
     supabase = get_supabase()
-    # tbm 존재 확인
     chk = supabase.table("tbm_meetings").select("id").eq(
         "id", tbm_id
     ).limit(1).execute()
@@ -268,7 +276,6 @@ def add_attendee(tbm_id: str, body: AttendeeAddBody):
     if not res.data:
         raise HTTPException(status_code=500, detail="참석자 추가 실패.")
 
-    # attendee_count 업데이트
     try:
         cnt_res = supabase.table("tbm_attendees").select(
             "id", count="exact"
@@ -280,7 +287,7 @@ def add_attendee(tbm_id: str, body: AttendeeAddBody):
     except Exception:
         pass
 
-    return {"status": "success", "message": "참석자가 추가됐습니다.", "data": res.data[0]}
+    return {"status": "success", "message": "참석자가 추가되었습니다.", "data": res.data[0]}
 
 
 @router.patch("/{tbm_id}/attendees/{attendee_id}/sign")
@@ -294,4 +301,4 @@ def register_sign(tbm_id: str, attendee_id: str, body: SignBody):
     }).eq("id", attendee_id).eq("meeting_id", tbm_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="참석자를 찾을 수 없습니다.")
-    return {"status": "success", "message": "서명이 등록됐습니다.", "data": res.data[0]}
+    return {"status": "success", "message": "서명이 등록되었습니다.", "data": res.data[0]}
