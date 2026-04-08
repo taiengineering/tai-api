@@ -1,14 +1,13 @@
 """
-법정점검 세트 관리 라우터 — v1.6.0
+법정점검 세트 관리 라우터 — v1.7.0
+v1.7.0:
+  - GET /inspection-sets: inspection_category, anchor_type, assignee_user_id 필드 추가
+    + legal_rule_id 배치 조회로 obligation_type 응답에 포함
+  - size 상한 le=100 → le=200 으로 상향
+  - PATCH /{id}: 일반 필드 수정 (is_active, schedule_anchor_date,
+      last_inspection_date, assignee_user_id) + 즉시 저장용 경량 엔드포인트
 v1.6.0: inspection_set_items 자동생성 API 추가
-  - POST /{set_id}/generate-items  : 단건 점검세트 → 항목 자동생성
-  - POST /generate-all-items       : 전체 점검세트 일괄 항목 생성
-  법령엔진 룰(obligation_summary, law_name, law_article, obligation_type)을
-  기반으로 점검 항목을 자동 매핑. 이미 항목이 있는 세트는 스킵.
 v1.5.0: Rolling 생성 방식 전환
-  - _build_schedules: 1년치 일괄 → 오늘 이후 첫 번째 planned_date 1건만 생성
-  - end_date 파라미터 제거 (실제 INSERT 불필요)
-  - GET /inspection-sets/preview-schedule: 캘린더 표시용 가상 렌더링 (DB INSERT 없음)
 v1.4.0: 1년치 반복 생성
 v1.3.0: anchor 설정 시 work_schedules 1건 생성
 v1.2.0: MANUAL 점검세트 등록
@@ -17,14 +16,14 @@ v1.0.0: 기본 CRUD
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Any, Dict
 from datetime import date, datetime
 from dateutil.relativedelta import relativedelta
 from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/inspection-sets", tags=["inspection_sets"])
 
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 
 # cycle_unit → relativedelta 매핑
 DELTA_MAP = {
@@ -47,7 +46,7 @@ REPEAT_TYPE_MAP = {
 
 UNIT_KO = {"year": "년", "month": "개월", "quarter": "분기", "half_year": "반기"}
 
-# obligation_type → check_type 분기 (description 접두어로 활용)
+# obligation_type → check_type 분기
 CHECK_TYPE_MAP = {
     "INSPECT":    "PASS_FAIL",
     "APPOINT":    "CHECK",
@@ -66,28 +65,19 @@ def _get_delta(cycle_unit: str, cycle_value: int):
 
 
 def _calc_next_date(anchor: date, cycle_unit: str, cycle_value: int) -> date:
-    """anchor + cycle → next_date."""
     return anchor + _get_delta(cycle_unit, cycle_value)
 
 
 def _next_planned_from(base: date, cycle_unit: str, cycle_value: int) -> date:
-    """
-    base(완료일/anchor) 기준으로 오늘 이후 첫 번째 planned_date 1건 계산.
-    base 자체가 오늘 이후면 base가 첫 번째.
-    """
-    delta    = _get_delta(cycle_unit, cycle_value)
-    cursor   = base + delta           # base 다음 회차부터 시작
-    today    = date.today()
-    while cursor < today:             # 과거 스킵
+    delta  = _get_delta(cycle_unit, cycle_value)
+    cursor = base + delta
+    today  = date.today()
+    while cursor < today:
         cursor += delta
     return cursor
 
 
 def _build_next_schedule_row(iset: dict, base: date) -> dict:
-    """
-    v1.5.0 Rolling 방식:
-    base(완료일 또는 anchor)에서 다음 1건만 생성.
-    """
     cycle_unit  = (iset.get("cycle_unit") or "year").lower()
     cycle_value = int(iset.get("cycle_value") or 1)
     planned     = _next_planned_from(base, cycle_unit, cycle_value)
@@ -107,22 +97,17 @@ def _build_next_schedule_row(iset: dict, base: date) -> dict:
         "obligation_type":   iset.get("inspection_category") or "GENERAL",
         "summary":           iset.get("inspection_set_name") or "",
         "active_yn":         True,
-        "assigned_user_id":  None,   # 배정은 안전관리자가 시행
+        "assigned_user_id":  None,
     }, planned
 
 
 def _build_items_for_set(iset: dict, rule: dict) -> List[dict]:
-    """
-    inspection_set 1건 + 법령룰 1건 → inspection_set_items 행 목록 반환.
-    현재는 룰 1건당 항목 1건 생성.
-    """
     obligation_type = (rule.get("obligation_type") or "INSPECT").upper()
-    check_type = CHECK_TYPE_MAP.get(obligation_type, "PASS_FAIL")
-    summary = (rule.get("obligation_summary") or rule.get("remarks") or "").strip()
-    law_name = (rule.get("law_name") or "").strip()
+    check_type  = CHECK_TYPE_MAP.get(obligation_type, "PASS_FAIL")
+    summary     = (rule.get("obligation_summary") or rule.get("remarks") or "").strip()
+    law_name    = (rule.get("law_name") or "").strip()
     law_article = (rule.get("law_article") or "").strip()
     description = f"[{check_type}] {law_name} {law_article}".strip()
-
     return [{
         "inspection_set_id": iset["id"],
         "item_seq":          1,
@@ -137,7 +122,7 @@ def _build_items_for_set(iset: dict, rule: dict) -> List[dict]:
 
 class AnchorBody(BaseModel):
     anchor_date:          Optional[str] = None
-    schedule_anchor_date: Optional[str] = None   # 하위 호환
+    schedule_anchor_date: Optional[str] = None
     last_inspection_date: Optional[str] = None
 
 
@@ -167,8 +152,17 @@ class ManualInspectionSetBody(BaseModel):
     description:          Optional[str] = None
 
 
+class InspectionSetPatchBody(BaseModel):
+    """v1.7.0 — 일반 필드 수정용 (즉시 자동저장)"""
+    is_active:            Optional[bool] = None
+    schedule_anchor_date: Optional[str]  = None
+    last_inspection_date: Optional[str]  = None
+    assignee_user_id:     Optional[str]  = None
+    description:          Optional[str]  = None
+
+
 # ══════════════════════════════════════════════
-# GET /inspection-sets
+# GET /inspection-sets  v1.7.0
 # ══════════════════════════════════════════════
 
 @router.get("")
@@ -177,27 +171,50 @@ def get_inspection_sets(
     source:           Optional[str]  = Query(None),
     anchor_confirmed: Optional[bool] = Query(None),
     page: int = Query(1, ge=1),
-    size: int = Query(20, ge=1, le=100),
+    size: int = Query(20, ge=1, le=200),   # v1.7.0: le=100 → le=200
 ):
     supabase = get_supabase()
+
+    # v1.7.0: inspection_category, anchor_type, assignee_user_id 포함
     query = supabase.table("inspection_sets").select(
         "id, company_id, factory_id, inspection_set_name, inspection_set_code, "
+        "inspection_category, "               # ← v1.7.0 추가
         "legal_rule_id, law_name, law_article, cycle_unit, cycle_value, "
-        "cycle_base_type, cycle_base_guide, "
+        "cycle_base_type, cycle_base_guide, anchor_type, "  # ← anchor_type 추가
         "schedule_anchor_date, last_inspection_date, next_planned_date, anchor_confirmed, "
-        "description, source, is_active, status_code, created_at, updated_at",
+        "description, source, is_active, status_code, "
+        "assignee_user_id, "                  # ← v1.7.0 추가
+        "created_at, updated_at",
         count="exact"
     )
-    if factory_id:              query = query.eq("factory_id", factory_id)
-    if source:                  query = query.eq("source", source)
+    if factory_id:                   query = query.eq("factory_id", factory_id)
+    if source:                       query = query.eq("source", source)
     if anchor_confirmed is not None: query = query.eq("anchor_confirmed", anchor_confirmed)
 
     offset = (page - 1) * size
     res = query.order("created_at", desc=True).range(offset, offset + size - 1).execute()
+    items: List[Dict] = res.data or []
+
+    # v1.7.0: legal_rule_id 배치 조회 → obligation_type 주입
+    rule_ids = list({r["legal_rule_id"] for r in items if r.get("legal_rule_id")})
+    rules_map: Dict[str, str] = {}
+    if rule_ids:
+        for i in range(0, len(rule_ids), 100):
+            chunk = rule_ids[i:i+100]
+            r_res = supabase.table("master_building_legal_rules").select(
+                "rule_id, obligation_type"
+            ).in_("rule_id", chunk).execute()
+            for row in (r_res.data or []):
+                rules_map[row["rule_id"]] = row.get("obligation_type") or "OTHER"
+
+    for item in items:
+        rule_id = item.get("legal_rule_id")
+        item["obligation_type"] = rules_map.get(rule_id, "OTHER") if rule_id else "OTHER"
+
     return {
         "status": "success",
         "data": {
-            "items": res.data or [], "total": res.count or 0,
+            "items": items, "total": res.count or 0,
             "page": page, "size": size,
             "total_pages": ((res.count or 0) + size - 1) // size if res.count else 0,
         }
@@ -205,12 +222,11 @@ def get_inspection_sets(
 
 
 # ══════════════════════════════════════════════
-# POST /inspection-sets/manual  ← /{id} 앞에 선언
+# POST /inspection-sets/manual
 # ══════════════════════════════════════════════
 
 @router.post("/manual")
 def create_manual_inspection_set(body: ManualInspectionSetBody):
-    """MANUAL 점검세트 등록."""
     supabase = get_supabase()
     if not (body.inspection_set_name or "").strip():
         raise HTTPException(status_code=422, detail="점검 세트명은 필수입니다.")
@@ -247,21 +263,15 @@ def create_manual_inspection_set(body: ManualInspectionSetBody):
 
 
 # ══════════════════════════════════════════════
-# GET /inspection-sets/preview-schedule  v1.5.0 (DB INSERT 없음)
+# GET /inspection-sets/preview-schedule
 # ══════════════════════════════════════════════
 
 @router.get("/preview-schedule")
 def preview_schedule(
-    factory_id: str = Query(..., description="시설 ID"),
-    months:     int = Query(3, ge=1, le=12, description="향후 대상 개월수 (1~12)"),
+    factory_id: str = Query(...),
+    months:     int = Query(3, ge=1, le=12),
 ):
-    """
-    캘린더 표시용 가상 렌더링 (v1.5.0).
-    DB에 INSERT 없이 순수 계산만으로 향후 months개월치 예정일 반환.
-    프론트 캘린더에서 점선/회색 스타일로 표시.
-    """
     supabase = get_supabase()
-
     sets_res = supabase.table("inspection_sets").select(
         "id, inspection_set_name, cycle_unit, cycle_value, "
         "schedule_anchor_date, schedule_end_date, anchor_confirmed, next_planned_date"
@@ -277,18 +287,13 @@ def preview_schedule(
         cycle_value = int(iset.get("cycle_value") or 1)
         delta       = _get_delta(cycle_unit, cycle_value)
         name        = iset.get("inspection_set_name") or ""
-
-        anchor_str = iset.get("schedule_anchor_date")
-        if not anchor_str:
-            continue
-
+        anchor_str  = iset.get("schedule_anchor_date")
+        if not anchor_str: continue
         next_str = iset.get("next_planned_date")
         cursor   = date.fromisoformat(next_str) if next_str else date.fromisoformat(anchor_str) + delta
-
         end_str  = iset.get("schedule_end_date")
         iset_end = date.fromisoformat(end_str) if end_str else end_date
         eff_end  = min(end_date, iset_end)
-
         while cursor <= eff_end:
             preview.append({
                 "inspection_set_id":   iset["id"],
@@ -300,32 +305,23 @@ def preview_schedule(
             cursor += delta
 
     preview.sort(key=lambda x: x["planned_date"])
-
     return {
         "status": "success",
         "data": {
-            "factory_id": factory_id,
-            "from":       today.isoformat(),
-            "to":         end_date.isoformat(),
-            "months":     months,
-            "count":      len(preview),
-            "preview":    preview,
+            "factory_id": factory_id, "from": today.isoformat(),
+            "to": end_date.isoformat(), "months": months,
+            "count": len(preview), "preview": preview,
         }
     }
 
 
 # ══════════════════════════════════════════════
-# POST /inspection-sets/anchor/bulk  ← /{id} 앞에 선언
+# POST /inspection-sets/anchor/bulk
 # ══════════════════════════════════════════════
 
 @router.post("/anchor/bulk")
 def set_anchor_bulk(body: BulkAnchorBody):
-    """
-    factory_id의 PENDING_ANCHOR 상태 inspection_sets 전체에
-    동일 anchor_date 적용 + Rolling 1건 일정 생성.
-    """
     supabase = get_supabase()
-
     sets_res = supabase.table("inspection_sets").select(
         "id, factory_id, company_id, cycle_value, cycle_unit, "
         "inspection_set_name, inspection_category, source"
@@ -346,7 +342,6 @@ def set_anchor_bulk(body: BulkAnchorBody):
         iset_id = iset["id"]
         try:
             row, planned = _build_next_schedule_row(iset, anchor)
-
             supabase.table("inspection_sets").update({
                 "schedule_anchor_date": anchor.isoformat(),
                 "next_planned_date":    planned.isoformat(),
@@ -354,11 +349,9 @@ def set_anchor_bulk(body: BulkAnchorBody):
                 "status_code":          "ACTIVE",
                 "updated_at":           datetime.now().isoformat(),
             }).eq("id", iset_id).execute()
-
             supabase.table("work_schedules").delete().eq(
                 "inspection_set_id", iset_id
             ).eq("status_code", "SCHEDULED").execute()
-
             r = supabase.table("work_schedules").insert(row).execute()
             created = len(r.data or [])
             total_created += created
@@ -371,22 +364,18 @@ def set_anchor_bulk(body: BulkAnchorBody):
         "status":  "success",
         "message": f"{len(sets)}개 세트 처리, 총 {total_created}개 일정 생성",
         "data": {
-            "factory_id":    body.factory_id,
-            "anchor_date":   anchor.isoformat(),
-            "total_sets":    len(sets),
-            "total_created": total_created,
-            "results":       results,
+            "factory_id": body.factory_id, "anchor_date": anchor.isoformat(),
+            "total_sets": len(sets), "total_created": total_created, "results": results,
         },
     }
 
 
 # ══════════════════════════════════════════════
-# PATCH /inspection-sets/anchor/bulk  (하위 호환)
+# PATCH /inspection-sets/anchor/bulk (하위 호환)
 # ══════════════════════════════════════════════
 
 @router.patch("/anchor/bulk")
 def bulk_update_anchor(body: AnchorBulkPatchBody):
-    """items 배열 방식 Rolling 업데이트 (하위 호환)."""
     supabase = get_supabase()
     updated_count, errors = 0, []
 
@@ -432,33 +421,19 @@ def bulk_update_anchor(body: AnchorBulkPatchBody):
 
 # ══════════════════════════════════════════════
 # POST /inspection-sets/generate-all-items  v1.6.0
-# ← /generate-all-items는 /{id} 앞에 반드시 선언
 # ══════════════════════════════════════════════
 
 @router.post("/generate-all-items")
 def generate_all_items(
-    factory_id: Optional[str] = Query(None, description="특정 시설만 처리 (미지정 시 전체)"),
-    dry_run:    bool          = Query(False, description="True면 INSERT 없이 예상 결과만 반환"),
+    factory_id: Optional[str] = Query(None),
+    dry_run:    bool          = Query(False),
 ):
-    """
-    v1.6.0 — inspection_set_items 일괄 자동생성.
-
-    처리 대상:
-    - legal_rule_id가 있는 inspection_sets
-    - 해당 legal_rule_id로 master_building_legal_rules 조회 (is_active=True)
-    - 이미 inspection_set_items가 있는 set_id는 스킵 (덮어쓰지 않음)
-
-    결과: 생성된 items 수, 스킵된 sets 수 반환
-    """
     supabase = get_supabase()
-
-    # 1. 대상 inspection_sets 조회 (legal_rule_id 있는 것만)
     q = supabase.table("inspection_sets").select(
         "id, inspection_set_name, legal_rule_id, factory_id"
     ).not_.is_("legal_rule_id", "null").eq("is_active", True)
     if factory_id:
         q = q.eq("factory_id", factory_id)
-
     sets_res = q.execute()
     sets = sets_res.data or []
 
@@ -469,9 +444,7 @@ def generate_all_items(
             "data": {"total_sets": 0, "created": 0, "skipped": 0, "failed": 0},
         }
 
-    # 2. 이미 items가 있는 set_id 목록 조회 (스킵 대상)
     set_ids = [s["id"] for s in sets]
-    # 100건씩 나눠 조회 (API size limit 100)
     existing_set_ids: set = set()
     for i in range(0, len(set_ids), 100):
         chunk = set_ids[i:i+100]
@@ -481,7 +454,6 @@ def generate_all_items(
         for row in (ex_res.data or []):
             existing_set_ids.add(row["inspection_set_id"])
 
-    # 3. 처리 대상 룰 일괄 조회
     rule_ids = list({s["legal_rule_id"] for s in sets if s.get("legal_rule_id")})
     rules_map: dict = {}
     for i in range(0, len(rule_ids), 100):
@@ -492,29 +464,19 @@ def generate_all_items(
         for rule in (r_res.data or []):
             rules_map[rule["rule_id"]] = rule
 
-    # 4. 항목 생성
     created, skipped, failed = 0, 0, 0
     preview_rows = []
 
     for iset in sets:
-        set_id   = iset["id"]
-        rule_id  = iset.get("legal_rule_id")
-        set_name = iset.get("inspection_set_name", "")
-
-        # 이미 items 있으면 스킵
+        set_id  = iset["id"]
+        rule_id = iset.get("legal_rule_id")
         if set_id in existing_set_ids:
-            skipped += 1
-            continue
-
-        # 룰 없으면 스킵
+            skipped += 1; continue
         rule = rules_map.get(rule_id)
         if not rule:
-            skipped += 1
-            continue
-
+            skipped += 1; continue
         item_rows = _build_items_for_set(iset, rule)
         preview_rows.extend(item_rows)
-
         if not dry_run:
             try:
                 supabase.table("inspection_set_items").insert(item_rows).execute()
@@ -532,31 +494,98 @@ def generate_all_items(
             f"총 {len(sets)}개 세트 처리 — 생성 {created}건, 스킵 {skipped}건, 실패 {failed}건"
         ),
         "data": {
-            "total_sets": len(sets),
-            "created":    created,
-            "skipped":    skipped,
-            "failed":     failed,
-            "dry_run":    dry_run,
-            **({"preview": preview_rows[:20]} if dry_run else {}),
+            "total_sets": len(sets), "created": created,
+            "skipped": skipped, "failed": failed, "dry_run": dry_run,
+            **({  "preview": preview_rows[:20]} if dry_run else {}),
         },
     }
 
 
 # ══════════════════════════════════════════════
-# PATCH /inspection-sets/{id}/anchor  v1.5.0
+# PATCH /inspection-sets/{id}  v1.7.0 — 일반 필드 수정 (즉시 자동저장)
+# ══════════════════════════════════════════════
+
+@router.patch("/{inspection_set_id}")
+def patch_inspection_set(inspection_set_id: str, body: InspectionSetPatchBody):
+    """
+    v1.7.0 — 점검항목관리 페이지 즉시 저장용.
+    - is_active, schedule_anchor_date, last_inspection_date, assignee_user_id 등 수정
+    - schedule_anchor_date 변경 시 next_planned_date 자동 재계산 + work_schedule 재생성
+    """
+    supabase = get_supabase()
+
+    # 현재 레코드 조회
+    res = supabase.table("inspection_sets").select(
+        "id, cycle_value, cycle_unit, factory_id, company_id, "
+        "inspection_set_name, inspection_category, source, schedule_anchor_date"
+    ).eq("id", inspection_set_id).limit(1).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="점검세트를 찾을 수 없습니다.")
+
+    iset = res.data[0]
+    update_data: Dict[str, Any] = {"updated_at": datetime.now().isoformat()}
+
+    if body.is_active is not None:
+        update_data["is_active"] = body.is_active
+
+    if body.last_inspection_date is not None:
+        update_data["last_inspection_date"] = body.last_inspection_date or None
+
+    if body.assignee_user_id is not None:
+        update_data["assignee_user_id"] = body.assignee_user_id or None
+
+    if body.description is not None:
+        update_data["description"] = body.description
+
+    # 기준일 변경 → next_planned_date 재계산 + work_schedule 재생성
+    schedule_updated = False
+    if body.schedule_anchor_date is not None:
+        anchor_str = body.schedule_anchor_date
+        if anchor_str:
+            anchor = date.fromisoformat(anchor_str)
+            row, planned = _build_next_schedule_row(iset, anchor)
+            update_data["schedule_anchor_date"] = anchor_str
+            update_data["next_planned_date"]    = planned.isoformat()
+            update_data["anchor_confirmed"]     = True
+            update_data["status_code"]          = "ACTIVE"
+            schedule_updated = True
+        else:
+            # 기준일 비우기
+            update_data["schedule_anchor_date"] = None
+            update_data["next_planned_date"]    = None
+            update_data["anchor_confirmed"]     = False
+            update_data["status_code"]          = "PENDING_ANCHOR"
+
+    upd = supabase.table("inspection_sets").update(update_data).eq(
+        "id", inspection_set_id
+    ).execute()
+    if not upd.data:
+        raise HTTPException(status_code=500, detail="업데이트 실패")
+
+    # 기준일 변경 시 work_schedule 재생성
+    if schedule_updated:
+        try:
+            supabase.table("work_schedules").delete().eq(
+                "inspection_set_id", inspection_set_id
+            ).eq("status_code", "SCHEDULED").execute()
+            supabase.table("work_schedules").insert(row).execute()
+        except Exception as e:
+            print(f"[PATCH] work_schedules 재생성 실패 id={inspection_set_id}: {e}")
+
+    return {
+        "status":  "success",
+        "message": "저장됐습니다.",
+        "data":    upd.data[0] if upd.data else {},
+    }
+
+
+# ══════════════════════════════════════════════
+# PATCH /inspection-sets/{id}/anchor  v1.5.0 (하위 호환)
 # ══════════════════════════════════════════════
 
 @router.patch("/{inspection_set_id}/anchor")
 def update_inspection_anchor(inspection_set_id: str, body: AnchorBody):
-    """
-    기준일 설정 + Rolling 1건 일정 생성 (v1.5.0).
-
-    - anchor_date / schedule_anchor_date 중 하나 필수
-    - 기존 SCHEDULED 삭제 후 오늘 이후 첫 번째 planned_date 1건 INSERT
-    - COMPLETED 절대 건드리지 않음
-    """
     supabase = get_supabase()
-
     anchor_str = body.anchor_date or body.schedule_anchor_date
     if not anchor_str:
         raise HTTPException(status_code=422, detail="anchor_date 또는 schedule_anchor_date는 필수입니다.")
@@ -569,10 +598,7 @@ def update_inspection_anchor(inspection_set_id: str, body: AnchorBody):
         raise HTTPException(status_code=404, detail="점검 세트를 찾을 수 없습니다.")
 
     iset        = res.data[0]
-    cycle_unit  = (iset.get("cycle_unit") or "year").lower()
-    cycle_value = int(iset.get("cycle_value") or 1)
     anchor      = date.fromisoformat(anchor_str)
-
     row, planned = _build_next_schedule_row(iset, anchor)
 
     end_str = iset.get("schedule_end_date")
@@ -584,8 +610,7 @@ def update_inspection_anchor(inspection_set_id: str, body: AnchorBody):
                 "inspection_set_id": inspection_set_id,
                 "anchor_date":       anchor.isoformat(),
                 "next_planned_date": planned.isoformat(),
-                "anchor_confirmed":  True,
-                "created":           0,
+                "anchor_confirmed":  True, "created": 0,
             },
         }
 
@@ -599,7 +624,9 @@ def update_inspection_anchor(inspection_set_id: str, body: AnchorBody):
     if body.last_inspection_date:
         update_data["last_inspection_date"] = body.last_inspection_date
 
-    upd = supabase.table("inspection_sets").update(update_data).eq("id", inspection_set_id).execute()
+    upd = supabase.table("inspection_sets").update(update_data).eq(
+        "id", inspection_set_id
+    ).execute()
     if not upd.data:
         raise HTTPException(status_code=500, detail="inspection_sets 업데이트 실패")
 
@@ -608,7 +635,6 @@ def update_inspection_anchor(inspection_set_id: str, body: AnchorBody):
         supabase.table("work_schedules").delete().eq(
             "inspection_set_id", inspection_set_id
         ).eq("status_code", "SCHEDULED").execute()
-
         r = supabase.table("work_schedules").insert(row).execute()
         created = len(r.data or [])
     except Exception as e:
@@ -622,7 +648,7 @@ def update_inspection_anchor(inspection_set_id: str, body: AnchorBody):
             "anchor_date":       anchor.isoformat(),
             "next_planned_date": planned.isoformat(),
             "anchor_confirmed":  True,
-            "cycle":             f"{cycle_value} {cycle_unit}",
+            "cycle":             f"{iset.get('cycle_value')} {iset.get('cycle_unit')}",
             "created":           created,
         },
     }
@@ -634,66 +660,38 @@ def update_inspection_anchor(inspection_set_id: str, body: AnchorBody):
 
 @router.post("/{inspection_set_id}/generate-items")
 def generate_items(inspection_set_id: str):
-    """
-    v1.6.0 — 단건 점검세트 → inspection_set_items 자동생성.
-
-    - legal_rule_id가 없으면 422
-    - 이미 items가 있으면 스킵 (409)
-    - 법령룰에서 obligation_summary, obligation_type, law_name, law_article 읽어 항목 생성
-    """
     supabase = get_supabase()
-
-    # 1. 점검세트 조회
     set_res = supabase.table("inspection_sets").select(
         "id, inspection_set_name, legal_rule_id, factory_id"
     ).eq("id", inspection_set_id).limit(1).execute()
-
     if not set_res.data:
         raise HTTPException(status_code=404, detail="점검세트를 찾을 수 없습니다.")
 
     iset    = set_res.data[0]
     rule_id = iset.get("legal_rule_id")
-
     if not rule_id:
-        raise HTTPException(
-            status_code=422,
-            detail="legal_rule_id가 없는 점검세트입니다. MANUAL 등록 건은 항목을 수동으로 추가하세요."
-        )
+        raise HTTPException(status_code=422, detail="legal_rule_id가 없는 점검세트입니다.")
 
-    # 2. 이미 items 있으면 스킵
-    ex_res = supabase.table("inspection_set_items").select(
-        "id"
-    ).eq("inspection_set_id", inspection_set_id).limit(1).execute()
-
+    ex_res = supabase.table("inspection_set_items").select("id").eq(
+        "inspection_set_id", inspection_set_id
+    ).limit(1).execute()
     if ex_res.data:
         return {
             "status":  "skipped",
-            "message": "이미 점검 항목이 존재합니다. 덮어쓰지 않습니다.",
-            "data": {
-                "inspection_set_id": inspection_set_id,
-                "existing_count":    len(ex_res.data),
-                "created":           0,
-            },
+            "message": "이미 점검 항목이 존재합니다.",
+            "data": {"inspection_set_id": inspection_set_id, "existing_count": len(ex_res.data), "created": 0},
         }
 
-    # 3. 법령룰 조회 (is_active=True 필수)
     rule_res = supabase.table("master_building_legal_rules").select(
         "rule_id, obligation_summary, obligation_type, law_name, law_article"
     ).eq("rule_id", rule_id).eq("is_active", True).limit(1).execute()
-
     if not rule_res.data:
-        raise HTTPException(
-            status_code=404,
-            detail=f"법령룰을 찾을 수 없습니다 (rule_id={rule_id}). 비활성화 또는 삭제된 룰일 수 있습니다."
-        )
+        raise HTTPException(status_code=404, detail=f"법령룰을 찾을 수 없습니다 (rule_id={rule_id}).")
 
-    rule = rule_res.data[0]
-
-    # 4. 항목 생성
+    rule      = rule_res.data[0]
     item_rows = _build_items_for_set(iset, rule)
-
-    ins_res = supabase.table("inspection_set_items").insert(item_rows).execute()
-    created = len(ins_res.data or [])
+    ins_res   = supabase.table("inspection_set_items").insert(item_rows).execute()
+    created   = len(ins_res.data or [])
 
     return {
         "status":  "success",
