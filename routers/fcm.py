@@ -1,9 +1,9 @@
 """
-Firebase FCM 토큰 등록 및 테스트 라우터 — v1.0.0
+Firebase FCM 토큰 등록 / 푸시 테스트 라우터 — v1.0.0
 
 API:
-  POST /workers/fcm-token    FCM 토큰 등록 (worker_registry 업데이트)
-  POST /workers/push-test    FCM 단건 테스트 발송
+  POST /workers/fcm-token    FCM 토큰 등록 / 갱신
+  POST /workers/push-test    프네 복다식 학니가 FCM 테스트
 """
 import logging
 from typing import Optional
@@ -20,73 +20,81 @@ router = APIRouter(prefix="/workers", tags=["FCM"])
 VERSION = "1.0.0"
 
 
-# ── Pydantic 모델 ─────────────────────────────────────────
+# ── Pydantic 모델 ────────────────────────────────────────
 
 class FcmTokenBody(BaseModel):
     fcm_token: str
-    platform:  Optional[str] = None   # android | ios
-    phone:     Optional[str] = None   # worker 조회용 (worker_id 없을 때)
-    worker_id: Optional[str] = None   # 직접 worker_id 전달 시 사용
+    platform:  Optional[str] = None    # ios / android / web
+    phone:     Optional[str] = None    # 토큰 소유자 전화번호 (없으면 헤더에서 유저 연결 불가)
+    worker_id: Optional[str] = None    # worker_registry.id 직접 지정 시 연결
 
 
 class PushTestBody(BaseModel):
     fcm_token: str
-    title:     str
-    body:      str
-    data:      Optional[dict] = None
+    title:     str = "TAI Safe 테스트"
+    body:      str = "푸시 알림 테스트입니다."
 
 
-# ── 1. POST /workers/fcm-token ─────────────────────────
+# ── POST /workers/fcm-token ─────────────────────────────
 
 @router.post("/fcm-token")
 def register_fcm_token(body: FcmTokenBody):
     """
-    FCM 토큰 등록.
-    worker_id 또는 phone으로 worker_registry 레코드 조회 후
-    push_token 및 app_installed=True 업데이트.
+    FCM 토큰 등록 / 갱신.
+
+    연결 우선순위:
+    1. worker_id 직접 지정 시 해당 레코드 UPDATE
+    2. phone 제공 시 worker_registry에서 phone 기준 조회
+    3. 둘 다 없으면 404
     """
     supabase = get_supabase()
 
-    worker_id = body.worker_id
+    # 대상 레코드 찾기
+    if body.worker_id:
+        chk = supabase.table("worker_registry").select("id") \
+            .eq("id", body.worker_id).limit(1).execute()
+        if not chk.data:
+            raise HTTPException(status_code=404, detail="작업자를 찾을 수 없습니다.")
+        target_id = body.worker_id
 
-    # worker_id 없으면 phone으로 추적
-    if not worker_id and body.phone:
-        wres = supabase.table("worker_registry").select("id") \
-            .eq("phone", body.phone).limit(1).execute()
-        if wres.data:
-            worker_id = wres.data[0]["id"]
+    elif body.phone:
+        phone_clean = body.phone.replace("-", "").replace(" ", "")
+        chk = supabase.table("worker_registry").select("id") \
+            .eq("phone", phone_clean).limit(1).execute()
+        if not chk.data:
+            raise HTTPException(
+                status_code=404,
+                detail=f"해당 전화번호로 등록된 작업자를 찾을 수 없습니다. ({phone_clean})"
+            )
+        target_id = chk.data[0]["id"]
 
-    if not worker_id:
+    else:
         raise HTTPException(
-            status_code=404,
-            detail="worker_id 또는 phone으로 worker를 찾을 수 없습니다."
+            status_code=422,
+            detail="worker_id 또는 phone 중 하나는 필수입니다."
         )
 
-    payload = {
+    # push_token + app_installed 갱신
+    res = supabase.table("worker_registry").update({
         "push_token":    body.fcm_token,
         "app_installed": True,
-    }
+    }).eq("id", target_id).execute()
 
-    res = supabase.table("worker_registry").update(payload) \
-        .eq("id", worker_id).execute()
+    log.info(f"[FCM] 토큰 등록 worker_id={target_id} platform={body.platform}")
 
-    if not res.data:
-        raise HTTPException(status_code=500, detail="FCM 토큰 등록 실패")
-
-    log.info(f"[FCM] 토큰 등록 worker_id={worker_id} platform={body.platform}")
     return {
-        "status":    "success",
-        "message":   "FCM 토큰이 등록되었습니다.",
-        "worker_id": worker_id,
+        "status":  "success",
+        "message": "FCM 토큰이 등록되었습니다.",
+        "data":    {"worker_id": target_id},
     }
 
 
-# ── 2. POST /workers/push-test ──────────────────────────
+# ── POST /workers/push-test ──────────────────────────────
 
 @router.post("/push-test")
 def push_test(body: PushTestBody):
     """
-    FCM 단건 테스트 발송.
+    FCM 단건 테스트 발송 (관리용).
     """
     try:
         from utils.fcm_utils import send_push
@@ -94,10 +102,13 @@ def push_test(body: PushTestBody):
             fcm_token=body.fcm_token,
             title=body.title,
             body=body.body,
-            data=body.data,
+            data={"type": "test"},
         )
-        return {"status": "success", "message_id": message_id}
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        return {
+            "status":     "success",
+            "message":    "푸시 알림을 발송했습니다.",
+            "message_id": message_id,
+        }
     except Exception as e:
+        log.error(f"[FCM] push-test 실패: {e}")
         raise HTTPException(status_code=502, detail=f"FCM 발송 실패: {e}")

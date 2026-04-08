@@ -1,56 +1,57 @@
-"""
-Firebase FCM 공통 유틸리티 — v1.0.0
+"""Firebase FCM 공통 유틸리티 — v1.0.0
 
 환경변수:
-  FIREBASE_CREDENTIALS — Firebase 서비스 계정 JSON 전체 (Railway Variables)
+  FIREBASE_CREDENTIALS  JSON 문자열 (서비스 계정 키 전체)
 """
 import json
 import logging
 import os
-from typing import Optional
+from typing import Any, Dict, Optional
 
 log = logging.getLogger(__name__)
 
 
 def get_fcm_app():
-    """Firebase 앱 싱글턴 초기화."""
-    try:
-        import firebase_admin
-        from firebase_admin import credentials
+    """
+    firebase_admin 앱 싱글턴 초기화.
+    다중 호출 안전: _apps가 이미 있으면 기존 앱 반환.
+    """
+    import firebase_admin
+    from firebase_admin import credentials
 
-        if not firebase_admin._apps:
-            cred_raw = os.environ.get("FIREBASE_CREDENTIALS", "")
-            if not cred_raw:
-                raise RuntimeError("FIREBASE_CREDENTIALS 환경변수가 없습니다.")
-            cred_json = json.loads(cred_raw)
-            cred = credentials.Certificate(cred_json)
-            firebase_admin.initialize_app(cred)
+    if not firebase_admin._apps:
+        cred_raw = os.environ.get("FIREBASE_CREDENTIALS", "")
+        if not cred_raw:
+            raise RuntimeError(
+                "FIREBASE_CREDENTIALS 환경변수가 설정되지 않았습니다."
+            )
+        cred_json = json.loads(cred_raw)
+        cred = credentials.Certificate(cred_json)
+        firebase_admin.initialize_app(cred)
 
-        return firebase_admin.get_app()
-    except ImportError:
-        raise RuntimeError(
-            "firebase-admin 패키지가 설치되지 않았습니다. "
-            "pip install firebase-admin"
-        )
+    return firebase_admin.get_app()
 
 
 def send_push(
     fcm_token: str,
     title: str,
     body: str,
-    data: Optional[dict] = None,
+    data: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
-    FCM 단건 발송.
+    FCM 단건 푸시 발송.
+
+    Args:
+        fcm_token: 도착지 디바이스 FCM 토큰
+        title: 알림 제목
+        body: 알림 내용
+        data: data payload (str 변환 자동)
 
     Returns:
-        FCM message_id
-    Raises:
-        Exception: 발송 실패 시
+        FCM 메시지 ID
     """
-    from firebase_admin import messaging
-
     get_fcm_app()
+    from firebase_admin import messaging
 
     msg = messaging.Message(
         token=fcm_token,
@@ -63,25 +64,6 @@ def send_push(
             )
         ),
     )
-
-    message_id = messaging.send(msg)
-    log.info(f"[FCM] 전송 성공 token={fcm_token[:20]}... id={message_id}")
-    return message_id
-
-
-def send_push_safe(
-    fcm_token: str,
-    title: str,
-    body: str,
-    data: Optional[dict] = None,
-) -> dict:
-    """
-    FCM 발송 (예외 안전 버전).
-    Returns: {"ok": bool, "message_id": str | None, "error": str | None}
-    """
-    try:
-        mid = send_push(fcm_token, title, body, data)
-        return {"ok": True, "message_id": mid, "error": None}
-    except Exception as e:
-        log.error(f"[FCM] 전송 실패 token={fcm_token[:20]}...: {e}")
-        return {"ok": False, "message_id": None, "error": str(e)}
+    response = messaging.send(msg)
+    log.info(f"[FCM] 발송 성공 token={fcm_token[:20]}... message_id={response}")
+    return response
