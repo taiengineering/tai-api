@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
-from routers.inspection_sets import _calc_next_date
+from routers.inspection_sets import _next_planned_from as _calc_next_date  # ★ fix: 함수명 변경
 from routers.legal_engine import CYCLE_CODE_MAP, INSPECTION_CYCLE_UNIT_MAP, get_sector_groups
 
 router = APIRouter(prefix="/inspection-schedule", tags=["inspection-schedule"])
@@ -310,7 +310,6 @@ def get_sets_summary_by_rule():
     pending = sum(1 for s in sets if s.get("status_code") == "PENDING_ANCHOR")
     active = sum(1 for s in sets if s.get("status_code") in ("ACTIVE", "UPCOMING"))
 
-    # anchor_type별 집계
     by_type = {"FIXED_ANNUAL": 0, "HISTORICAL": 0, "EVENT": 0, "unknown": 0}
     for s in sets:
         t = s.get("anchor_type") or "unknown"
@@ -365,8 +364,8 @@ def list_inspection_sets(
     cycle_unit: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None),
     factory_keyword: Optional[str] = Query(None),
-    anchor_type: Optional[str] = Query(None),          # ★ 유형 필터
-    anchor_type_confidence: Optional[int] = Query(None), # ★ 확신도 필터
+    anchor_type: Optional[str] = Query(None),
+    anchor_type_confidence: Optional[int] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
@@ -376,7 +375,7 @@ def list_inspection_sets(
         "cycle_unit, cycle_value, cycle_base_type, cycle_base_guide, "
         "schedule_anchor_date, schedule_end_date, next_planned_date, last_inspection_date, "
         "status_code, anchor_confirmed, law_name, law_article, legal_rule_id, "
-        "anchor_type, anchor_type_confidence, anchor_type_reason, "   # ★ 유형 필드
+        "anchor_type, anchor_type_confidence, anchor_type_reason, "
         "source, factory_id, company_id, created_at, updated_at"
     ).eq("is_active", True)
 
@@ -456,14 +455,13 @@ def patch_inspection_set(set_id: str, body: InspectionSetPatch):
         "cycle_month_day", "is_month_end", "holiday_process_type", "description",
         "schedule_anchor_date", "schedule_end_date",
         "custom_cycle_value", "custom_cycle_unit", "custom_description",
-        "anchor_type",  # ★ 유형 수정 허용
+        "anchor_type",
     }
     updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if k in allowed}
     if not updates:
         raise HTTPException(status_code=400, detail="변경할 필드 없음")
 
     if any(k in updates for k in ("cycle_unit", "cycle_value", "schedule_anchor_date", "anchor_type")):
-        # 명시적으로 null을 보내면 기준일을 비우는 것이므로, 예전 DB 값으로 되살리지 않는다.
         if "schedule_anchor_date" in updates:
             anchor = _to_date(updates["schedule_anchor_date"])
         else:
@@ -471,7 +469,6 @@ def patch_inspection_set(set_id: str, body: InspectionSetPatch):
         at_eff = updates["anchor_type"] if "anchor_type" in updates else cur.get("anchor_type")
         c_unit = updates.get("cycle_unit") or cur.get("cycle_unit")
         c_val = int(updates.get("cycle_value") or cur.get("cycle_value") or 1)
-        # 이벤트 유형은 사건 발생 전까지 기준일이 없을 수 있음 → 다음 예정일 없음
         if at_eff == "EVENT" and anchor is None:
             updates["next_planned_date"] = None
         elif anchor and c_unit and c_val:
@@ -504,13 +501,12 @@ def confirm_anchor(set_id: str, body: ConfirmAnchorBody):
     cv = int(cur.get("cycle_value") or 1)
 
     if anchor is None:
-        next_date = None
         patch = {
             "schedule_anchor_date": None,
             "anchor_confirmed": True,
             "next_planned_date": None,
             "status_code": "ACTIVE",
-            "anchor_type_confidence": 100,  # 수동 확정 시 100%
+            "anchor_type_confidence": 100,
         }
     else:
         next_date = _calc_next_date(anchor, str(cu), cv) if cu else None
@@ -519,7 +515,7 @@ def confirm_anchor(set_id: str, body: ConfirmAnchorBody):
             "anchor_confirmed": True,
             "next_planned_date": next_date.isoformat() if next_date else None,
             "status_code": "ACTIVE",
-            "anchor_type_confidence": 100,  # 수동 확정 시 100%
+            "anchor_type_confidence": 100,
         }
     if body.anchor_type:
         patch["anchor_type"] = body.anchor_type
@@ -530,7 +526,7 @@ def confirm_anchor(set_id: str, body: ConfirmAnchorBody):
         raise HTTPException(status_code=500, detail="갱신 후 조회 실패")
     if anchor is None:
         msg = "활성화되었습니다. (기준일 미설정)"
-    elif next_date:
+    elif "next_date" in dir() and next_date:
         msg = f"기준일 확정 완료. 다음 점검일: {next_date}"
     else:
         msg = "활성화되었습니다."
