@@ -6,9 +6,11 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/equipment-assets", tags=["equipment_assets"])
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 """
-equipment_assets.py v1.2.0
+equipment_assets.py v1.3.0
+v1.3.0: 설비 마스터 검색 엔드포인트 추가
+  - GET  /model/search   equipment_model_master ILIKE 검색 (법령진단용)
 v1.2.0: QR/RFID 체크인 관련 엔드포인트 추가
   - GET  /scan           QR·RFID 스캔 조회 (인증 불필요)
   - POST /{id}/generate-qr  QR URL 생성·저장
@@ -16,9 +18,10 @@ v1.2.0: QR/RFID 체크인 관련 엔드포인트 추가
 v1.1.0: POST 실행 시 INSTALL 이벤트 트리거 추가
 
 ⚠ 라우팅 순서:
-  /scan          (고정경로) → 먼저 선언
-  /area/{area_id} (고정경로)
-  /{asset_id}    (파라미터) → 마지막에 선언
+  /scan            (고정경로) → 먼저 선언
+  /model/search    (고정경로)
+  /area/{area_id}  (고정경로)
+  /{asset_id}      (파라미터) → 마지막에 선언
 """
 
 
@@ -184,6 +187,48 @@ def scan_equipment(
             "pending_schedules": pending_schedules,
             "scan_method":      "RFID" if rfid else "QR",
         }
+    }
+
+
+# ── v1.3.0: 설비 마스터 검색 (법령진단용) ────────────────────
+# ⚠ /area/{area_id}, /{asset_id} 보다 반드시 먼저 선언
+@router.get("/model/search")
+def search_equipment_model(
+    q:    str            = Query(..., description="설비명 검색어 (ILIKE)"),
+    lv2:  Optional[str] = Query(None, description="카테고리 필터 (전기|기계|가스|안전|환경 등)"),
+    size: int            = Query(20, ge=1, le=100),
+):
+    """
+    equipment_model_master에서 equipment_std ILIKE 검색.
+    법령진단용 설비 직접 등록 시 사용.
+    """
+    supabase = get_supabase()
+    query = supabase.table("equipment_model_master").select(
+        "id, equipment_std, primary_equipment_std, equipment_lv2,"
+        "certification_class, maintenance_cycle_months, risk_score"
+    ).ilike("equipment_std", f"%{q.strip()}%")
+    if lv2:
+        query = query.eq("equipment_lv2", lv2)
+    query = query.order("equipment_std")
+    res = query.limit(size).execute()
+    items = res.data or []
+    # equipment_std 기준 중복 제거
+    seen, unique = set(), []
+    for row in items:
+        key = row["equipment_std"]
+        if key not in seen:
+            seen.add(key)
+            unique.append({
+                "id":           row["id"],
+                "name":         row["equipment_std"],
+                "category":     row.get("equipment_lv2") or "기타",
+                "cert_class":   row.get("certification_class"),
+                "cycle_months": row.get("maintenance_cycle_months"),
+                "risk_score":   row.get("risk_score"),
+            })
+    return {
+        "status": "success",
+        "data": {"q": q, "items": unique, "total": len(unique)}
     }
 
 
