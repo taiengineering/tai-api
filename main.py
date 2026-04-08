@@ -72,6 +72,7 @@ from routers.event_trigger           import router as event_trigger_router
 from routers.worker_registry         import router as worker_registry_router
 from routers.diagnosis               import router as diagnosis_router
 from routers.tbm                     import router as tbm_router
+from routers.tbm_templates           import router as tbm_templates_router
 from routers.safety_meetings         import router as safety_meetings_router
 from routers.risk_assessments        import router as risk_assessments_router
 from routers.payment                 import router as payment_router
@@ -199,6 +200,7 @@ app.include_router(event_trigger_router)
 app.include_router(worker_registry_router)
 app.include_router(diagnosis_router)
 app.include_router(tbm_router)
+app.include_router(tbm_templates_router)
 app.include_router(safety_meetings_router)
 app.include_router(risk_assessments_router)
 app.include_router(payment_router)
