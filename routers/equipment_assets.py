@@ -1,15 +1,24 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
-from datetime import date
+from datetime import date, datetime, timezone
 from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/equipment-assets", tags=["equipment_assets"])
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 """
-equipment_assets.py v1.1.0
+equipment_assets.py v1.2.0
+v1.2.0: QR/RFID 체크인 관련 엔드포인트 추가
+  - GET  /scan           QR·RFID 스캔 조회 (인증 불필요)
+  - POST /{id}/generate-qr  QR URL 생성·저장
+  - POST /{id}/qr-printed   출력 횟수 카운트
 v1.1.0: POST 실행 시 INSTALL 이벤트 트리거 추가
+
+⚠ 라우팅 순서:
+  /scan          (고정경로) → 먼저 선언
+  /area/{area_id} (고정경로)
+  /{asset_id}    (파라미터) → 마지막에 선언
 """
 
 
@@ -93,7 +102,92 @@ def get_assets(
     }
 
 
-# ── 단건 조회 ────────────────────────────────
+# ── v1.2.0: QR/RFID 스캔 조회 (인증 불필요) ─────────────────
+# ⚠ GET /{asset_id} 보다 반드시 먼저 선언해야 라우팅 충돌 없음
+@router.get("/scan")
+def scan_equipment(
+    id:   Optional[str] = Query(None, description="equipment_asset_id"),
+    rfid: Optional[str] = Query(None, description="RFID 태그 ID"),
+):
+    """
+    v1.2.0: QR·RFID 스캔 조회 (인증 불필요 — 공개 API).
+    설비 정보 + 회사·사업장·공정 + 오늘 예정 일정 반환.
+    """
+    supabase = get_supabase()
+
+    if not id and not rfid:
+        raise HTTPException(status_code=422, detail="id 또는 rfid 파라미터가 필요합니다")
+
+    q = supabase.table("equipment_assets").select(
+        "id, asset_name, asset_code, equipment_type_code, equipment_category, "
+        "main_image_url, description, factory_id, factory_process_id, "
+        "rfid_tag, rfid_tag_type, location_detail, qr_code"
+    )
+    if id:
+        q = q.eq("id", id)
+    else:
+        q = q.eq("rfid_tag", rfid)
+
+    asset_res = q.limit(1).execute()
+    if not asset_res.data:
+        raise HTTPException(status_code=404, detail="등록된 설비를 찾을 수 없습니다")
+
+    asset      = asset_res.data[0]
+    factory_id = asset.get("factory_id")
+
+    # 사업장 + 회사 정보
+    factory_info = {}
+    company_info = {}
+    company_id   = None
+    if factory_id:
+        fac = supabase.table("factories").select(
+            "id, name, company_id"
+        ).eq("id", factory_id).limit(1).execute()
+        if fac.data:
+            factory_info = {"id": fac.data[0]["id"], "name": fac.data[0]["name"]}
+            company_id   = fac.data[0].get("company_id")
+            if company_id:
+                comp = supabase.table("companies").select(
+                    "id, name"
+                ).eq("id", company_id).limit(1).execute()
+                if comp.data:
+                    company_info = {"id": comp.data[0]["id"], "name": comp.data[0]["name"]}
+
+    # 공정 정보
+    process_info       = {}
+    factory_process_id = asset.get("factory_process_id")
+    if factory_process_id:
+        proc = supabase.table("factory_process").select(
+            "id, process_path, process_name_manual, process_lv1, process_lv2, process_lv3"
+        ).eq("id", factory_process_id).limit(1).execute()
+        if proc.data:
+            process_info = proc.data[0]
+
+    # 오늘 예정 점검 일정 (미완료)
+    today = date.today().isoformat()
+    pending_schedules = []
+    if factory_id:
+        sched = supabase.table("work_schedules").select(
+            "id, description, planned_date, status_code, law_name, law_article"
+        ).eq("factory_id", factory_id).eq("planned_date", today).neq(
+            "status_code", "DONE"
+        ).limit(10).execute()
+        pending_schedules = sched.data or []
+
+    return {
+        "status": "success",
+        "data": {
+            "equipment":        asset,
+            "factory":          factory_info,
+            "company":          company_info,
+            "process":          process_info,
+            "pending_schedules": pending_schedules,
+            "scan_method":      "RFID" if rfid else "QR",
+        }
+    }
+
+
+# ── area별 조회 (고정경로 — /{asset_id} 보다 앞에 유지) ──────
 @router.get("/area/{area_id}")
 def get_area_assets(area_id: str):
     supabase = get_supabase()
@@ -101,34 +195,33 @@ def get_area_assets(area_id: str):
     return {"status": "success", "data": result.data}
 
 
+# ── 단건 조회 (파라미터 경로 — 모든 고정경로 뒤에 선언) ────────
 @router.get("/{asset_id}")
 def get_asset(asset_id: str):
     supabase = get_supabase()
     result = supabase.table("equipment_assets").select("*").eq(
         "id", asset_id
-    ).single().execute()
+    ).limit(1).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="설비를 찾을 수 없습니다")
-    return {"status": "success", "data": result.data}
+    return {"status": "success", "data": result.data[0]}
 
 
-# ── 설비 등록 (v1.1.0: INSTALL 트리거 추가) ────────────────
+# ── 설비 등록 ────────────────────────────────
 @router.post("")
 async def create_asset(body: EquipmentAssetCreate):
     """
     v1.1.0: 등록 완료 후 INSTALL 이벤트 트리거 자동 호출.
-    설비 신규 등록 시 해당 차느에 대한 설치신고 일정 생성.
     """
     supabase = get_supabase()
 
     if not body.asset_name.strip():
         raise HTTPException(status_code=422, detail="asset_name은 필수입니다.")
 
-    # company_id 자동 조회
     fac = supabase.table("factories").select("company_id").eq(
         "id", body.factory_id
-    ).single().execute()
-    company_id = (fac.data or {}).get("company_id")
+    ).limit(1).execute()
+    company_id = (fac.data[0] if fac.data else {}).get("company_id")
 
     insert_data = {
         "factory_id":          body.factory_id,
@@ -158,7 +251,6 @@ async def create_asset(body: EquipmentAssetCreate):
 
     new_asset = res.data[0]
 
-    # INSTALL 이벤트 트리거
     try:
         from routers.event_trigger import trigger_event_schedules
         await trigger_event_schedules(
@@ -179,6 +271,63 @@ async def create_asset(body: EquipmentAssetCreate):
         "message": f"설비 '{body.asset_name}' 등록 완료",
         "data":    new_asset,
     }
+
+
+# ── v1.2.0: QR URL 생성 (인증 필요) ─────────────────────────
+@router.post("/{asset_id}/generate-qr")
+def generate_qr(asset_id: str):
+    """
+    v1.2.0: 설비 QR 코드 URL 생성 및 DB 저장.
+    QR 내용: safe.taieng.co.kr 체크인 페이지 URL
+    """
+    supabase = get_supabase()
+
+    asset_res = supabase.table("equipment_assets").select(
+        "id, asset_name, asset_code, factory_id"
+    ).eq("id", asset_id).limit(1).execute()
+    if not asset_res.data:
+        raise HTTPException(status_code=404, detail="설비를 찾을 수 없습니다")
+
+    asset   = asset_res.data[0]
+    qr_url  = f"https://safe.taieng.co.kr/checkin?id={asset_id}"
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    supabase.table("equipment_assets").update({
+        "qr_code":               qr_url,
+        "qr_code_generated_at":  now_iso,
+    }).eq("id", asset_id).execute()
+
+    return {
+        "status": "success",
+        "data": {
+            "qr_url":      qr_url,
+            "asset_id":    asset_id,
+            "asset_name":  asset["asset_name"],
+            "asset_code":  asset.get("asset_code"),
+            "generated_at": now_iso,
+        }
+    }
+
+
+# ── v1.2.0: QR 출력 횟수 카운트 (인증 필요) ──────────────────
+@router.post("/{asset_id}/qr-printed")
+def increment_qr_print(asset_id: str):
+    """
+    v1.2.0: QR 프린트 버튼 클릭 시 qr_print_count += 1
+    """
+    supabase = get_supabase()
+    asset_res = supabase.table("equipment_assets").select(
+        "qr_print_count"
+    ).eq("id", asset_id).limit(1).execute()
+    if not asset_res.data:
+        raise HTTPException(status_code=404, detail="설비를 찾을 수 없습니다")
+
+    current = asset_res.data[0].get("qr_print_count") or 0
+    supabase.table("equipment_assets").update({
+        "qr_print_count": current + 1
+    }).eq("id", asset_id).execute()
+
+    return {"status": "success", "qr_print_count": current + 1}
 
 
 # ── 설비 수정 ────────────────────────────────

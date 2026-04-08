@@ -1,10 +1,15 @@
-# main.py — v5.7.3
+# main.py — v5.7.4
+# v5.7.4: QR/RFID 설비 체크인
+#          routers/equipment_assets.py v1.2.0
+#            GET  /equipment-assets/scan        QR·RFID 스캔 조회 (인증 불필요)
+#            POST /equipment-assets/{id}/generate-qr  QR 생성
+#            POST /equipment-assets/{id}/qr-printed   출력 횟수 카운트
+#          routers/equipment_checkins.py v1.0.0 (신규)
+#            POST /equipment-checkins            체크인 제출 (인증 불필요)
+#            GET  /equipment-checkins            이력 조회
+#            GET  /equipment-checkins/{id}       단건 조회
 # v5.7.3: Firebase FCM 연동
-#          utils/fcm_utils.py   FCM 유틸리티 (send_push)
-#          routers/fcm.py       POST /workers/fcm-token, POST /workers/push-test
-#          routers/tbm.py v1.2.0  GET/POST /tbm/{id}/sign-info|sign|request-sign
-# v5.7.2: 메세지미 API v2 연동
-# v5.7.1: corrective_actions v1.1.0
+# v5.7.2: 메세지미 API v2
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -34,6 +39,7 @@ from routers.education               import router as education_router
 from routers.education_assign        import router as education_assign_router
 from routers.notifications           import router as notifications_router
 from routers.equipment_assets        import router as equipment_assets_router
+from routers.equipment_checkins      import router as equipment_checkins_router  # v5.7.4
 from routers.engine_equipment        import router as engine_equipment_router
 from routers.engine_model            import router as engine_model_router
 from routers.engine_legal            import router as engine_legal_router
@@ -71,7 +77,7 @@ from routers.risk_assessments        import router as risk_assessments_router
 from routers.payment                 import router as payment_router
 from routers.corrective_actions      import router as corrective_actions_router
 from routers.messaging               import router as messaging_router
-from routers.fcm                     import router as fcm_router               # v5.7.3 FCM
+from routers.fcm                     import router as fcm_router
 from routers.public                  import router as public_router
 from routers.public_admin            import router as public_admin_router
 from routers.alert_messages          import router as alert_messages_router
@@ -82,7 +88,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.7.3"
+APP_VERSION = "5.7.4"
 
 
 @asynccontextmanager
@@ -117,6 +123,7 @@ app.add_middleware(
         "https://www.taieng.co.kr",
         "https://admin.taieng.co.kr",
         "https://tadmin.taieng.co.kr",
+        "https://safe.taieng.co.kr",
         "http://localhost:5500",
         "http://127.0.0.1:5500",
         "http://localhost:3000",
@@ -159,6 +166,7 @@ app.include_router(education_router)
 app.include_router(education_assign_router)
 app.include_router(notifications_router)
 app.include_router(equipment_assets_router)
+app.include_router(equipment_checkins_router)    # v5.7.4
 app.include_router(engine_equipment_router)
 app.include_router(engine_model_router)
 app.include_router(engine_legal_router)
@@ -196,7 +204,7 @@ app.include_router(risk_assessments_router)
 app.include_router(payment_router)
 app.include_router(corrective_actions_router)
 app.include_router(messaging_router)
-app.include_router(fcm_router)                   # v5.7.3 FCM
+app.include_router(fcm_router)
 app.include_router(mail_router)
 
 
