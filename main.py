@@ -1,15 +1,9 @@
-# main.py — v5.7.4
+# main.py — v5.7.5
+# v5.7.5: 작업자 현장 점검 결과 저장 API
+#          routers/worker_check.py v1.0.0 (신규)
+#            POST /worker-check/submit   점검 결과 저장 (인증 불필요)
+#            GET  /worker-check/recent   최근 점검 이력
 # v5.7.4: QR/RFID 설비 체크인
-#          routers/equipment_assets.py v1.2.0
-#            GET  /equipment-assets/scan        QR·RFID 스캔 조회 (인증 불필요)
-#            POST /equipment-assets/{id}/generate-qr  QR 생성
-#            POST /equipment-assets/{id}/qr-printed   출력 횟수 카운트
-#          routers/equipment_checkins.py v1.0.0 (신규)
-#            POST /equipment-checkins            체크인 제출 (인증 불필요)
-#            GET  /equipment-checkins            이력 조회
-#            GET  /equipment-checkins/{id}       단건 조회
-# v5.7.3: Firebase FCM 연동
-# v5.7.2: 메세지미 API v2
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -39,7 +33,7 @@ from routers.education               import router as education_router
 from routers.education_assign        import router as education_assign_router
 from routers.notifications           import router as notifications_router
 from routers.equipment_assets        import router as equipment_assets_router
-from routers.equipment_checkins      import router as equipment_checkins_router  # v5.7.4
+from routers.equipment_checkins      import router as equipment_checkins_router
 from routers.engine_equipment        import router as engine_equipment_router
 from routers.engine_model            import router as engine_model_router
 from routers.engine_legal            import router as engine_legal_router
@@ -79,6 +73,7 @@ from routers.payment                 import router as payment_router
 from routers.corrective_actions      import router as corrective_actions_router
 from routers.messaging               import router as messaging_router
 from routers.fcm                     import router as fcm_router
+from routers.worker_check            import router as worker_check_router   # v5.7.5
 from routers.public                  import router as public_router
 from routers.public_admin            import router as public_admin_router
 from routers.alert_messages          import router as alert_messages_router
@@ -89,7 +84,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.7.4"
+APP_VERSION = "5.7.5"
 
 
 @asynccontextmanager
@@ -167,7 +162,7 @@ app.include_router(education_router)
 app.include_router(education_assign_router)
 app.include_router(notifications_router)
 app.include_router(equipment_assets_router)
-app.include_router(equipment_checkins_router)    # v5.7.4
+app.include_router(equipment_checkins_router)
 app.include_router(engine_equipment_router)
 app.include_router(engine_model_router)
 app.include_router(engine_legal_router)
@@ -207,6 +202,7 @@ app.include_router(payment_router)
 app.include_router(corrective_actions_router)
 app.include_router(messaging_router)
 app.include_router(fcm_router)
+app.include_router(worker_check_router)              # v5.7.5
 app.include_router(mail_router)
 
 
