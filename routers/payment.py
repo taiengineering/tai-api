@@ -1,18 +1,23 @@
 """
-이니시스 INIStdPay 표준결제 라우터 — v1.2.0
+이니시스 INIStdPay 표준결제 라우터 — v1.3.0
 
-v1.2.0 (2026-04-08):
-  [FIX] PrepareBody company_id Optional로 변경 (비회원/로그인 없는 결제 허용)
-  [FIX] buyername / buyertel Optional로 변경 (기본값 제공)
+v1.3.0 (2026-04-08):
+  [ADD] GET /payments/pricing  결제 페이지 직접 서빙 (카드사 심사용, 인증 불필요)
+  [ADD] GET /payments/result   결제 결과 페이지 직접 서빙
+
+v1.2.0:
+  [FIX] PrepareBody company_id/buyername/buyertel Optional (비회원 결제 허용)
 
 v1.1.0:
-  [ADD] POST /payments/{id}/cancel   결제 취소
-  [FIX] POST /payments/inicis/return 승인 후 프론트 redirect 방식
+  [ADD] POST /payments/{id}/cancel
+  [FIX] POST /payments/inicis/return → 프론트 redirect 방식
 
 API:
+  GET  /payments/pricing               결제 페이지 HTML (인증 불필요)
+  GET  /payments/result                결제 결과 페이지 HTML (인증 불필요)
   POST /payments/inicis/prepare        결제창 파라미터 생성
-  POST /payments/inicis/return         이니시스 returnUrl (승인 + 프론트 redirect)
-  POST /payments/inicis/noti           이니시스 noti (서버→서버)
+  POST /payments/inicis/return         이니시스 returnUrl
+  POST /payments/inicis/noti           이니시스 noti
   GET  /payments                       결제 이력 조회
   POST /payments/manual/confirm        수동 확인
   POST /payments/{id}/cancel           취소
@@ -30,7 +35,7 @@ from uuid import uuid4
 
 import requests as _requests
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
@@ -50,11 +55,11 @@ DEFAULT_RETURN_URL = os.getenv(
 )
 DEFAULT_CLOSE_URL = os.getenv(
     "INICIS_CLOSE_URL",
-    "https://safe.taieng.co.kr/html/payment-return.html?resultCode=CLOSE"
+    "https://api.taieng.co.kr/payments/result?resultCode=CLOSE"
 )
 FRONT_RETURN_URL = os.getenv(
     "INICIS_FRONT_RETURN_URL",
-    "https://safe.taieng.co.kr/html/payment-return.html"
+    "https://api.taieng.co.kr/payments/result"
 )
 
 
@@ -135,13 +140,13 @@ def _call_pay_auth(auth_token: str, mid: str, sign_key: str) -> Dict[str, Any]:
 # ── Pydantic 모델 ──────────────────────────────────────────────
 
 class PrepareBody(BaseModel):
-    company_id:    Optional[str] = None   # v1.2.0: 비회원 결제 허용
+    company_id:    Optional[str] = None
     contract_id:   Optional[str] = None
     quote_id:      Optional[str] = None
     amount:        int
     goodname:      str
-    buyername:     Optional[str] = "고객"      # v1.2.0: 기본값
-    buyertel:      Optional[str] = "00000000000"  # v1.2.0: 기본값
+    buyername:     Optional[str] = "고객"
+    buyertel:      Optional[str] = "00000000000"
     buyeremail:    Optional[str] = None
     return_url:    Optional[str] = None
     close_url:     Optional[str] = None
@@ -159,14 +164,371 @@ class CancelBody(BaseModel):
     cancelled_by: Optional[str] = None
 
 
+# ── 0a. GET /payments/pricing  (카드사 심사용 결제 페이지) ────
+
+_PRICING_HTML = """<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TAI Safe 요금제 | 산업안전 플랫폼</title>
+  <meta name="description" content="TAI Safe 산업안전 플랫폼 요금제 안내" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    * { font-family: 'Noto Sans KR', sans-serif; }
+    body { background: #f8fafc; }
+    .hero { background: linear-gradient(135deg,#1a1f36 0%,#0d6efd 60%,#0a58ca 100%); color:#fff; padding:3.5rem 0 3rem; text-align:center; }
+    .hero h1 { font-size:2.2rem; font-weight:800; margin-bottom:.5rem; }
+    .hero p  { opacity:.85; font-size:1rem; }
+    .period-tabs { display:flex; border-radius:.75rem; overflow:hidden; border:1.5px solid #dee2e6; max-width:520px; margin:0 auto 2.5rem; }
+    .period-tab { flex:1; text-align:center; padding:.65rem .5rem; font-size:.85rem; background:#f8f9fa; color:#6c757d; cursor:pointer; border-right:1px solid #dee2e6; transition:all .15s; user-select:none; }
+    .period-tab:last-child { border-right:none; }
+    .period-tab.active { background:#0d6efd; color:#fff; font-weight:700; }
+    .period-tab .discount { display:block; font-size:.72rem; margin-top:.1rem; }
+    .plan-card { border-radius:1.25rem; border:2px solid #dee2e6; background:#fff; box-shadow:0 6px 30px rgba(0,0,0,.07); transition:transform .18s,border-color .18s; cursor:pointer; overflow:hidden; }
+    .plan-card:hover { transform:translateY(-4px); border-color:#0d6efd; }
+    .plan-card.selected { border-color:#0d6efd; box-shadow:0 0 0 3px rgba(13,110,253,.18); }
+    .plan-card .plan-header { padding:1.75rem 1.5rem 1.25rem; border-bottom:1px solid #f0f0f0; }
+    .plan-card.premium .plan-header { background:linear-gradient(135deg,#0d6efd 0%,#6610f2 100%); color:#fff; }
+    .plan-card.premium .plan-name,.plan-card.premium .plan-price { color:#fff; }
+    .plan-card.premium .plan-desc { color:rgba(255,255,255,.8); }
+    .plan-name { font-size:1.4rem; font-weight:800; }
+    .plan-badge { font-size:.72rem; padding:.25em .65em; border-radius:.5em; background:rgba(255,255,255,.25); color:#fff; vertical-align:middle; margin-left:.4rem; }
+    .plan-price { font-size:2.2rem; font-weight:800; margin:.75rem 0 .25rem; }
+    .plan-price small { font-size:1rem; font-weight:400; }
+    .plan-origin { font-size:.85rem; color:#adb5bd; text-decoration:line-through; }
+    .plan-desc { font-size:.88rem; color:#6c757d; margin-top:.25rem; }
+    .plan-features { padding:1.25rem 1.5rem 1.5rem; }
+    .plan-features li { font-size:.88rem; padding:.3rem 0; border-bottom:1px solid #f5f5f5; display:flex; align-items:center; gap:.5rem; }
+    .plan-features li:last-child { border-bottom:none; }
+    .plan-features li i { color:#0d6efd; flex-shrink:0; }
+    .plan-features.prem-f li i { color:#6610f2; }
+    .btn-pay { background:linear-gradient(90deg,#0d6efd,#6610f2); color:#fff; border:none; border-radius:.75rem; padding:.85rem 2rem; font-size:1rem; font-weight:700; width:100%; cursor:pointer; transition:opacity .15s; }
+    .btn-pay:hover { opacity:.9; } .btn-pay:disabled { opacity:.55; cursor:not-allowed; }
+    .select-indicator { width:22px; height:22px; border-radius:50%; border:2px solid #dee2e6; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+    .plan-card.selected .select-indicator { background:#0d6efd; border-color:#0d6efd; color:#fff; }
+    @media(max-width:576px){.hero h1{font-size:1.6rem;}}
+  </style>
+</head>
+<body>
+<div class="hero">
+  <div class="container">
+    <div class="badge bg-white bg-opacity-25 text-white mb-3" style="font-size:.85rem;padding:.45em 1em;">
+      <i class="ti ti-shield-check me-1"></i>TAI Safe 요금제
+    </div>
+    <h1>안전관리를 더 스마트하게</h1>
+    <p>산업안전보건법 의무를 자동으로 파악하고, 일정·업무를 분배하세요.</p>
+  </div>
+</div>
+<div class="container py-5" style="max-width:900px">
+  <div class="period-tabs">
+    <div class="period-tab active" data-months="1" onclick="selectPeriod(this)">1개월<span class="discount text-body-secondary">정가</span></div>
+    <div class="period-tab" data-months="3" data-discount="5" onclick="selectPeriod(this)">3개월<span class="discount text-success fw-bold">5% 할인</span></div>
+    <div class="period-tab" data-months="6" data-discount="10" onclick="selectPeriod(this)">6개월<span class="discount text-success fw-bold">10% 할인</span></div>
+    <div class="period-tab" data-months="12" data-discount="15" onclick="selectPeriod(this)">12개월<span class="discount text-success fw-bold">15% 할인</span></div>
+  </div>
+  <div class="row g-4 mb-4">
+    <div class="col-md-6">
+      <div class="plan-card selected" id="card-basic" onclick="selectPlan('basic')">
+        <div class="plan-header">
+          <div class="d-flex align-items-center justify-content-between">
+            <div><div class="plan-name">베이직</div><div class="plan-desc">소규모 사업장에 최적</div></div>
+            <div class="select-indicator" id="ind-basic"><i class="ti tabler-check" style="font-size:.85rem;"></i></div>
+          </div>
+          <div class="plan-price" id="price-basic">₩79,000 <small>/월</small></div>
+          <div class="plan-origin" id="origin-basic"></div>
+        </div>
+        <div class="plan-features">
+          <ul class="list-unstyled mb-0">
+            <li><i class="ti ti-check"></i>법령 의무 자동 분석</li>
+            <li><i class="ti ti-check"></i>점검 일정 자동 생성</li>
+            <li><i class="ti ti-check"></i>업무 배분 기능</li>
+            <li><i class="ti ti-check"></i>모바일 앱 (작업자용)</li>
+            <li><i class="ti ti-check"></i>이메일 지원</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="plan-card premium" id="card-premium" onclick="selectPlan('premium')">
+        <div class="plan-header">
+          <div class="d-flex align-items-center justify-content-between">
+            <div>
+              <div class="plan-name">프리미엄<span class="plan-badge">추천</span></div>
+              <div class="plan-desc" style="color:rgba(255,255,255,.75)">중·대규모 현장 최적</div>
+            </div>
+            <div class="select-indicator" id="ind-premium" style="border-color:rgba(255,255,255,.5)"></div>
+          </div>
+          <div class="plan-price" id="price-premium">₩149,000 <small>/월</small></div>
+          <div class="plan-origin" id="origin-premium"></div>
+        </div>
+        <div class="plan-features prem-f">
+          <ul class="list-unstyled mb-0">
+            <li><i class="ti ti-check" style="color:#6610f2"></i>베이직 모든 기능 포함</li>
+            <li><i class="ti ti-check" style="color:#6610f2"></i>건설현장 TBM·위험성평가</li>
+            <li><i class="ti ti-check" style="color:#6610f2"></i>법령 진단 (월 3회)</li>
+            <li><i class="ti ti-check" style="color:#6610f2"></i>안전보건 교육 관리</li>
+            <li><i class="ti ti-check" style="color:#6610f2"></i>신고서식 자동화</li>
+            <li><i class="ti ti-check" style="color:#6610f2"></i>전담 CS 지원</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="card border-0 shadow-sm rounded-3 p-4">
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+      <div>
+        <div class="fw-bold mb-1" id="summaryText">베이직 · 1개월</div>
+        <div class="text-body-secondary small">부가세 포함</div>
+      </div>
+      <div class="text-end">
+        <div class="fw-bold fs-4" id="summaryPrice">₩79,000</div>
+        <div class="text-body-secondary small" id="summaryDiscount"></div>
+      </div>
+    </div>
+    <hr class="my-3" />
+    <button class="btn-pay" onclick="openModal()">
+      <i class="ti ti-credit-card me-1"></i>지금 결제하기
+    </button>
+    <div class="text-center mt-2">
+      <small class="text-body-secondary"><i class="ti ti-lock me-1"></i>이니시스 안전결제 · SSL 암호화</small>
+    </div>
+  </div>
+</div>
+
+<!-- 구매자 정보 모달 -->
+<div class="modal fade" id="buyerModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content" style="border-radius:1.25rem;border:none;">
+      <div class="modal-header border-0 pb-0">
+        <h5 class="modal-title fw-bold">구매자 정보 입력</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body pt-2">
+        <p style="font-size:.88rem;color:#6c757d;">결제 영수증 발송을 위해 아래 정보를 입력해 주세요.</p>
+        <div class="mb-3">
+          <label class="form-label" style="font-size:.88rem;font-weight:500">이름 <span class="text-danger">*</span></label>
+          <input type="text" class="form-control" id="inp_name" placeholder="홍길동" />
+          <div class="text-danger" id="err_name" style="font-size:.8rem"></div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" style="font-size:.88rem;font-weight:500">휴대폰 번호 <span class="text-danger">*</span></label>
+          <input type="tel" class="form-control" id="inp_tel" placeholder="01012345678" />
+          <div class="text-danger" id="err_tel" style="font-size:.8rem"></div>
+        </div>
+        <div class="mb-1">
+          <label class="form-label" style="font-size:.88rem;font-weight:500">이메일 <span style="font-size:.8rem;color:#6c757d">(선택)</span></label>
+          <input type="email" class="form-control" id="inp_email" placeholder="email@example.com" />
+        </div>
+      </div>
+      <div class="modal-footer border-0 pt-0">
+        <button type="button" class="btn btn-light rounded-3" data-bs-dismiss="modal">취소</button>
+        <button type="button" class="btn btn-primary rounded-3 px-4" id="btnPay" onclick="startPayment()">
+          <span class="spinner-border spinner-border-sm d-none me-1" id="paySpinner"></span>결제창 열기
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 이니시스 결제 폼 -->
+<form id="inicisForm" method="POST" accept-charset="euc-kr" style="display:none">
+  <input type="hidden" name="version"      value="1.0" />
+  <input type="hidden" name="gopaymethod"  value="Card" />
+  <input type="hidden" name="mid"          id="f_mid" />
+  <input type="hidden" name="oid"          id="f_oid" />
+  <input type="hidden" name="price"        id="f_price" />
+  <input type="hidden" name="timestamp"    id="f_timestamp" />
+  <input type="hidden" name="signature"    id="f_signature" />
+  <input type="hidden" name="mKey"         id="f_mKey" />
+  <input type="hidden" name="goodname"     id="f_goodname" />
+  <input type="hidden" name="buyername"    id="f_buyername" />
+  <input type="hidden" name="buyertel"     id="f_buyertel" />
+  <input type="hidden" name="buyeremail"   id="f_buyeremail" />
+  <input type="hidden" name="returnUrl"    id="f_returnUrl" />
+  <input type="hidden" name="closeUrl"     id="f_closeUrl" />
+  <input type="hidden" name="currency"     value="WON" />
+  <input type="hidden" name="langtype"     value="KO" />
+  <input type="hidden" name="acceptmethod" value="CARDONLY:CARDPOINT" />
+</form>
+
+<script src="https://stdpay.inicis.com/stdjs/INIStdPay.js" charset="utf-8"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+'use strict';
+var API = 'https://api.taieng.co.kr';
+var BASE = {basic:79000, premium:149000};
+var PNAME = {basic:'TAI Safe 베이직', premium:'TAI Safe 프리미엄'};
+var _plan='basic', _months=1, _disc=0;
+
+function selectPlan(p) {
+  _plan = p;
+  ['basic','premium'].forEach(function(x){
+    document.getElementById('card-'+x).classList.toggle('selected', x===p);
+    var ind = document.getElementById('ind-'+x);
+    if(x===p){ ind.innerHTML='<i class="ti tabler-check" style="font-size:.85rem;"></i>'; ind.style.background='#0d6efd'; ind.style.borderColor='#0d6efd'; ind.style.color='#fff'; }
+    else { ind.innerHTML=''; ind.style.background=''; ind.style.borderColor=x==='premium'?'rgba(255,255,255,.5)':''; ind.style.color=''; }
+  });
+  updatePrices();
+}
+
+function selectPeriod(el) {
+  document.querySelectorAll('.period-tab').forEach(function(t){t.classList.remove('active');});
+  el.classList.add('active');
+  _months = parseInt(el.dataset.months)||1;
+  _disc   = parseInt(el.dataset.discount)||0;
+  updatePrices();
+}
+
+function updatePrices() {
+  ['basic','premium'].forEach(function(p){
+    var m=Math.round(BASE[p]*(1-_disc/100)), t=m*_months, o=BASE[p]*_months;
+    document.getElementById('price-'+p).innerHTML='\\u20a9'+m.toLocaleString()+' <small>/\\uc6d4</small>';
+    document.getElementById('origin-'+p).textContent=_disc>0?'\\uc6d0\\uac00 \\u20a9'+o.toLocaleString()+' (\\u20a9'+(o-t).toLocaleString()+' \\uc808\\uc57d)':'';
+  });
+  var t=Math.round(BASE[_plan]*(1-_disc/100))*_months, s=BASE[_plan]*_months-t;
+  document.getElementById('summaryText').textContent=(_plan==='basic'?'\\ubca0\\uc774\\uc9c1':'\\ud504\\ub9ac\\ubbf8\\uc5c4')+' \\u00b7 '+_months+'\\uac1c\\uc6d4';
+  document.getElementById('summaryPrice').textContent='\\u20a9'+t.toLocaleString();
+  document.getElementById('summaryDiscount').textContent=_disc>0?_disc+'% \\ud560\\uc778 \\uc801\\uc6a9 (\\u20a9'+s.toLocaleString()+' \\uc808\\uc57d)':'';
+}
+
+var _modal;
+function openModal() {
+  document.getElementById('err_name').textContent='';
+  document.getElementById('err_tel').textContent='';
+  try{ var u=JSON.parse(localStorage.getItem('user_info')||'{}'); if(u.name)document.getElementById('inp_name').value=u.name; if(u.phone)document.getElementById('inp_tel').value=u.phone.replace(/-/g,''); if(u.email)document.getElementById('inp_email').value=u.email; }catch(e){}
+  _modal=_modal||new bootstrap.Modal(document.getElementById('buyerModal'));
+  _modal.show();
+}
+
+async function startPayment() {
+  var name=document.getElementById('inp_name').value.trim();
+  var tel=document.getElementById('inp_tel').value.trim().replace(/-/g,'');
+  var email=document.getElementById('inp_email').value.trim();
+  document.getElementById('err_name').textContent='';
+  document.getElementById('err_tel').textContent='';
+  var ok=true;
+  if(!name){document.getElementById('err_name').textContent='\\uc774\\ub984\\uc744 \\uc785\\ub825\\ud574 \\uc8fc\\uc138\\uc694.';ok=false;}
+  if(!tel||tel.length<10){document.getElementById('err_tel').textContent='\\ud654\\ub300\\ud3f0 \\ubc88\\ud638\\ub97c \\uc785\\ub825\\ud574 \\uc8fc\\uc138\\uc694.';ok=false;}
+  if(!ok) return;
+  var btn=document.getElementById('btnPay'), sp=document.getElementById('paySpinner');
+  btn.disabled=true; sp.classList.remove('d-none');
+  try {
+    var total=Math.round(BASE[_plan]*(1-_disc/100))*_months;
+    var goodname=PNAME[_plan]+' '+_months+'\\uac1c\\uc6d4';
+    var token=localStorage.getItem('access_token')||'';
+    var companyId=localStorage.getItem('company_id')||'';
+    var res=await fetch(API+'/payments/inicis/prepare',{
+      method:'POST', headers:{'Content-Type':'application/json','Authorization':token?'Bearer '+token:''},
+      body:JSON.stringify({company_id:companyId||undefined,amount:total,goodname:goodname,buyername:name,buyertel:tel,buyeremail:email||undefined,plan_code:_plan.toUpperCase(),period_months:_months,payment_type:'CARD',return_url:'https://api.taieng.co.kr/payments/inicis/return'})
+    });
+    var d=await res.json().catch(function(){return{};});
+    if(!res.ok) throw new Error(d.detail||d.message||'결제 준비 실패');
+    var p=d.data||d;
+    document.getElementById('f_mid').value=p.mid||'';
+    document.getElementById('f_oid').value=p.oid||'';
+    document.getElementById('f_price').value=p.price||String(total);
+    document.getElementById('f_timestamp').value=p.timestamp||'';
+    document.getElementById('f_signature').value=p.signature||'';
+    document.getElementById('f_mKey').value=p.mKey||'';
+    document.getElementById('f_goodname').value=p.goodname||goodname;
+    document.getElementById('f_buyername').value=name;
+    document.getElementById('f_buyertel').value=tel;
+    document.getElementById('f_buyeremail').value=email||'';
+    document.getElementById('f_returnUrl').value=p.returnUrl||'https://api.taieng.co.kr/payments/inicis/return';
+    document.getElementById('f_closeUrl').value=p.closeUrl||'https://api.taieng.co.kr/payments/result?resultCode=CLOSE';
+    if(_modal) _modal.hide();
+    INIStdPay.pay('inicisForm');
+  } catch(e) {
+    alert('오류: '+e.message);
+  } finally {
+    btn.disabled=false; sp.classList.add('d-none');
+  }
+}
+updatePrices();
+</script>
+</body>
+</html>"""
+
+_RESULT_HTML = """<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>결제 결과 | TAI Safe</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *{font-family:'Noto Sans KR',sans-serif;}
+    body{background:#f8fafc;min-height:100vh;display:flex;align-items:center;justify-content:center;}
+    .result-card{background:#fff;border-radius:1.5rem;box-shadow:0 8px 40px rgba(0,0,0,.1);max-width:480px;width:100%;padding:3rem 2.5rem;text-align:center;}
+    .icon-wrap{width:96px;height:96px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:2.8rem;margin:0 auto 1.75rem;}
+    .icon-wrap.success{background:#e8f5e9;color:#198754;}
+    .icon-wrap.fail{background:#fef2f2;color:#dc3545;}
+    .detail-table{background:#f8fafc;border-radius:.75rem;padding:1rem 1.25rem;text-align:left;font-size:.88rem;}
+    .detail-row{display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid #f0f0f0;}
+    .detail-row:last-child{border-bottom:none;}
+    .detail-label{color:#6c757d;}.detail-value{font-weight:600;}
+    .btn-action{border-radius:.75rem;padding:.75rem 1.5rem;font-size:.95rem;font-weight:700;}
+    .countdown{font-size:.82rem;color:#adb5bd;margin-top:.5rem;}
+  </style>
+</head>
+<body>
+<div class="result-card" id="rc">
+  <div class="d-flex justify-content-center mb-4"><div class="spinner-border text-primary" style="width:3rem;height:3rem;"></div></div>
+  <h5 class="fw-bold mb-2">결제 정보 확인 중...</h5>
+  <p class="text-body-secondary mb-0">잠시만 기다려 주세요.</p>
+</div>
+<script>
+'use strict';
+function getParams(){var p={};new URLSearchParams(location.search).forEach(function(v,k){p[k]=v;});return p;}
+function fmt(n){return n?Number(n).toLocaleString()+'원':'-';}
+function goDash(){var t=localStorage.getItem('access_token');location.href=t?'https://safe.taieng.co.kr/html/horizontal-menu-template/index.html':'https://api.taieng.co.kr/payments/pricing';}
+function renderOk(p){
+  var rc=document.getElementById('rc'),sec=5,ti;
+  rc.innerHTML='<div class="icon-wrap success"><i class="ti tabler-circle-check"></i></div><h4 class="fw-bold mb-2">결제가 완료됐습니다.</h4><p class="text-body-secondary mb-4">서비스를 시작합니다.</p><div class="detail-table mb-4"><div class="detail-row"><span class="detail-label">상품명</span><span class="detail-value">'+(p.goodname||'TAI Safe 이용권')+'</span></div><div class="detail-row"><span class="detail-label">결제금액</span><span class="detail-value">'+fmt(p.price)+'</span></div><div class="detail-row"><span class="detail-label">결제수단</span><span class="detail-value">'+(p.paymethod||'카드')+'</span></div>'+(p.applnum?'<div class="detail-row"><span class="detail-label">승인번호</span><span class="detail-value">'+p.applnum+'</span></div>':'')+'<div class="detail-row"><span class="detail-label">주문번호</span><span class="detail-value" style="font-size:.8rem;word-break:break-all">'+(p.oid||'-')+'</span></div></div><button class="btn btn-primary btn-action w-100" onclick="goDash()">대시보드로 이동</button><div class="countdown" id="cd">'+sec+'초 후 자동 이동합니다</div>';
+  ti=setInterval(function(){sec--;var e=document.getElementById('cd');if(e)e.textContent=sec+'초 후 자동 이동합니다';if(sec<=0){clearInterval(ti);goDash();}},1000);
+}
+function renderFail(msg,oid){
+  var rc=document.getElementById('rc');
+  rc.innerHTML='<div class="icon-wrap fail"><i class="ti tabler-circle-x"></i></div><h4 class="fw-bold mb-2">결제에 실패했습니다.</h4><p class="text-body-secondary mb-3">다시 시도해 주세요.</p><div class="detail-table mb-4"><div class="detail-row"><span class="detail-label">사유</span><span class="detail-value text-danger">'+(msg||'알 수 없는 오류')+'</span></div>'+(oid?'<div class="detail-row"><span class="detail-label">주문번호</span><span class="detail-value" style="font-size:.8rem">'+oid+'</span></div>':'')+'</div><div class="d-flex gap-2"><a href="https://api.taieng.co.kr/payments/pricing" class="btn btn-primary btn-action flex-grow-1">다시 시도하기</a><a href="/" class="btn btn-outline-secondary btn-action">홈으로</a></div>';
+}
+(function(){
+  var p=getParams();
+  if(!p.resultCode){renderFail('결제 파라미터가 없습니다.');return;}
+  if(p.resultCode==='00'||p.resultCode==='0000') renderOk(p);
+  else renderFail(decodeURIComponent(p.msg||'오류코드 '+p.resultCode),p.oid);
+})();
+</script>
+</body>
+</html>"""
+
+
+@router.get("/pricing", response_class=HTMLResponse, include_in_schema=True)
+def payment_pricing_page():
+    """
+    v1.3.0: 결제 페이지 직접 서빙 (인증 불필요).
+    카드사 심사용 URL: https://api.taieng.co.kr/payments/pricing
+    """
+    return HTMLResponse(content=_PRICING_HTML, status_code=200)
+
+
+@router.get("/result", response_class=HTMLResponse, include_in_schema=True)
+def payment_result_page():
+    """
+    v1.3.0: 결제 결과 페이지 직접 서빙 (인증 불필요).
+    이니시스 승인 후 redirect 목적지.
+    """
+    return HTMLResponse(content=_RESULT_HTML, status_code=200)
+
+
 # ── 1. POST /payments/inicis/prepare ──────────────────────────
 
 @router.post("/inicis/prepare")
 def inicis_prepare(body: PrepareBody):
-    """
-    이니시스 결제창 호출 전 준비.
-    v1.2.0: company_id Optional — 로그인 없이도 결제창 호출 가능.
-    """
     supabase  = get_supabase()
     sign_key  = _load_sign_key()
     order_id  = _make_order_id()
@@ -232,7 +594,7 @@ def inicis_prepare(body: PrepareBody):
 
 @router.post("/inicis/return", include_in_schema=True)
 async def inicis_return(request: Request):
-    """이니시스 returnUrl → 승인 처리 → 프론트 payment-return.html redirect."""
+    """이니시스 returnUrl → 승인 처리 → result 페이지 redirect."""
     try:
         form = await request.form()
         data: Dict[str, Any] = dict(form)
@@ -318,7 +680,6 @@ async def inicis_return(request: Request):
 
 @router.post("/inicis/noti", include_in_schema=True)
 async def inicis_noti(request: Request):
-    """이니시스 노티 URL (서버→서버). 응답: "OK" """
     try:
         form = await request.form()
         data: Dict[str, Any] = dict(form)
@@ -422,10 +783,6 @@ def manual_confirm(body: ManualConfirmBody):
 
 @router.post("/{payment_id}/cancel")
 def cancel_payment(payment_id: str, body: CancelBody):
-    """
-    결제 취소 (DB 상태만 CANCELLED 변경).
-    이니시스 실제 환불은 이니시스 관리자 페이지에서 별도 처리 필요.
-    """
     supabase = get_supabase()
     now = _now_iso()
     pay_res = supabase.table("payments").select("id, status_code, contract_id").eq("id", payment_id).limit(1).execute()
