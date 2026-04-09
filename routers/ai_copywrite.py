@@ -1,15 +1,8 @@
 """
-TAI Safe × OpenAI GPT-4o 카피라이팅 API — v1.0.0
-
-GPT-4o를 사용해 taieng.co.kr 홈페이지 각 섹션의
-헤드라인, 서브텍스트, CTA 문구를 자동 생성합니다.
-
-API:
-  POST /ai/copywrite          섹션별 카피 생성
-  POST /ai/copywrite/batch    전체 섹션 일괄 생성
-  POST /ai/slogan             슬로건 생성
+TAI Safe x OpenAI GPT-4o 카피라이팅 API - v1.0.1
 """
 import os
+import json
 import logging
 from typing import Optional, List
 
@@ -19,96 +12,84 @@ from pydantic import BaseModel
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/ai", tags=["AI"])
 
-# =====================================================
-# OpenAI 클라이언트 초기화
-# =====================================================
+# OpenAI 클라이언트
 try:
     from openai import OpenAI
     _client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
 except ImportError:
     _client = None
-    log.warning("openai 패키지 미설치. pip install openai 필요")
+    log.warning("openai 패키지 미설치")
 
-# =====================================================
-# TAI Safe 브랜드 컨텍스트
-# =====================================================
-BRAND_CONTEXT = """
-[TAI Safe 브랜드 컨텍스트]
-- 회사명: TAI Engineering (주)TAI엔지니어링
-- 서비스: 산업안전 법령 기반 SaaS 플랫폼
-- 핸심 가치: 안전관리자 혼자 모든 의무를 처리하는 구조 → 작업자가 직접 참여하는 분산 안전관리
-- 주요 기능: 법령진단 → 점검일정 자동생성 → 작업자 배정 → 알림 발송 → 완료 기록
-- 대상 제품: SaaS(산업/건설/건물), 법령진단, 전문가연결 플랫폼
-- 단가: SaaS 79,000원/월 (Basic), 149,000원/월 (Premium)
-- 특허 출원: 2026-03-29 (조건코드 기반 산업안전 법령 자동 판정 시스템)
-- 주의: 인력소개업 표현 금지, 플랫폼 이용료 모델
-"""
+# 브랜드 컨텍스트
+BRAND_CONTEXT = (
+    "[TAI Safe 브랜드]\n"
+    "- 서비스: 산업안전 법령 기반 SaaS 플랫폼 (taieng.co.kr)\n"
+    "- 핵심 가치: 안전관리자 혼자 처리하는 구조 -> 작업자 분산 안전관리\n"
+    "- 기능: 법령진단 -> 점검일정 자동생성 -> 작업자배정 -> 알림 -> 완료기록\n"
+    "- 제품: SaaS(산업/건설/건물), 법령진단, 전문가연결 플랫폼\n"
+    "- 가격: SaaS 79,000원/월(Basic), 149,000원/월(Premium)\n"
+    "- 특허: 2026-03-29 출원 (조건코드 기반 산업안전 법령 자동 판정 시스템)\n"
+    "- 주의: 인력소개업/알선/소개 표현 절대 금지. 플랫폼이용료 모델."
+)
 
+# 섹션별 프롬프트 (단순 문자열로 작성 — triple-quote 충돌 방지)
 SECTION_PROMPTS = {
-    "hero": """
-메인페이지 히어로 롤링 배너 5개 슬라이드를 작성하세요.
-각 슬라이드는 다른 색당 타겟을 가집니다:
-1. 전체 방문자 대상
-2. 안전관리자 (SA) 대상
-3. 법령진단 원하는 기업 대상
-4. 전문가 연결 필요 기업 대상
-5. 비전/하이라이트 대상
-
-각 슬라이드:
-- headline: 주제 (20자 이내)
-- sub: 부제 (40자 이내)
-- cta: CTA 버튼 문구 (8자 이내)
-- target: 타겟 설명
-""",
-    "diagnosis": """
-법령진단 소개 섹션 컨텐츠를 작성하세요.
-- 상단 위기감 통계 3개 (실제 수치 사용: 중대재해처벨법 위반 적발 347% 증가, 최대 10억 벌금 등)
-- 섹션 헤드라인 (30자 이내)
-- 서브 텍스트 (60자 이내)
-- 3종 진단 버튼 라벨: [건물 무료진단] [산업 무료진단] [건설 무료진단]
-- 무료진단 유도 문야 (1줄)
-""",
-    "saas": """
-SaaS 서비스 소개 섹션 컨텐츠를 작성하세요.
-- 섹션 헤드라인 (30자 이내)
-- 서브 텍스트 (60자 이내)
-- 간단한 동작 방식 설명 (3단계, 각 20자 이내)
-  1. 법령진단 → 일정자동생성
-  2. 작업자에게 배정+알림
-  3. 완료확인+실적및처
-- 각 종류별 카드 타이틀
-  building_title: 건물 안전관리 (20자)
-  industry_title: 산업 안전관리 (20자)
-  construction_title: 건설 안전관리 (20자)
-""",
-    "expert_safety": """
-안전관리 전문가 연결 소개 섹션 컨텐츠를 작성하세요.
-"""인력소개업"", ""알선"", ""소개"" 같은 표현은 절대 사용하지 마세요.
-플랫폼 이용료 모델이며, 수요자와 전문가를 연결하는 환경을 제공하는 서비스입니다.
-- 섹션 헤드라인
-- 수요자용 컨텐츠 3빭릿
-- 전문가용 컨텐츠 3빭릿
-- 수요자 CTA 버튼, 전문가 CTA 버튼
-""",
-    "vision": """
-컨설팅/교육 비전 소개 섹션 컨텐츠를 작성하세요.
-- 섹션 헤드라인 (미래지향적, 30자 이내)
-- 컨설팅 타이틀/서브텍스트
-- 교육 타이틀/서브텍스트
-- 준비 중 배지 문구
-""",
+    "hero": (
+        "메인페이지 히어로 롤링 배너 5개 슬라이드를 작성하세요.\n"
+        "각 슬라이드는 다른 타겟: 전체방문자, 안전관리자, 법령진단희망기업, 전문가연결희망기업, 비전공감자.\n"
+        "JSON: {\"slides\":[{\"target\":\"\",\"headline\":\"(20자이내)\",\"sub\":\"(40자이내)\",\"cta\":\"(8자이내)\"}]}\n"
+        "JSON만 반환."
+    ),
+    "diagnosis": (
+        "법령진단 소개 섹션 카피를 작성하세요.\n"
+        "JSON: {\"headline\":\"(30자이내)\",\"sub\":\"(60자이내)\","
+        "\"stat1\":\"통계문구1\",\"stat2\":\"통계문구2\",\"stat3\":\"통계문구3\","
+        "\"cta_building\":\"건물진단버튼(6자)\",\"cta_industry\":\"산업진단버튼(6자)\","
+        "\"cta_construction\":\"건설진단버튼(6자)\",\"free_guide\":\"무료진단유도문구(40자이내)\"}\n"
+        "JSON만 반환."
+    ),
+    "saas": (
+        "SaaS 서비스 소개 섹션 카피를 작성하세요.\n"
+        "JSON: {\"headline\":\"(30자이내)\",\"sub\":\"(60자이내)\","
+        "\"flow\":[\"1단계(15자)\",\"2단계(15자)\",\"3단계(15자)\"],"
+        "\"building_title\":\"건물카드제목(15자)\",\"building_desc\":\"건물카드설명(30자)\","
+        "\"industry_title\":\"산업카드제목(15자)\",\"industry_desc\":\"산업카드설명(30자)\","
+        "\"construction_title\":\"건설카드제목(15자)\",\"construction_desc\":\"건설카드설명(30자)\"}\n"
+        "JSON만 반환."
+    ),
+    "expert_safety": (
+        "안전관리자 선임 지원 섹션 카피를 작성하세요.\n"
+        "주의: 인력소개업/알선/소개 표현 절대 금지. 플랫폼이용료 모델. 연결신청 표현 사용.\n"
+        "JSON: {\"headline\":\"(30자이내)\","
+        "\"demand_points\":[\"기업혜택1(20자)\",\"기업혜택2(20자)\",\"기업혜택3(20자)\"],"
+        "\"supply_points\":[\"전문가혜택1(20자)\",\"전문가혜택2(20자)\",\"전문가혜택3(20자)\"],"
+        "\"cta_demand\":\"기업CTA(8자)\",\"cta_supply\":\"전문가CTA(8자)\"}\n"
+        "JSON만 반환."
+    ),
+    "vision": (
+        "컨설팅/교육 비전 소개 섹션 카피를 작성하세요.\n"
+        "JSON: {\"headline\":\"(30자이내)\","
+        "\"consulting_title\":\"(15자)\",\"consulting_desc\":\"(40자)\","
+        "\"education_title\":\"(15자)\",\"education_desc\":\"(40자)\","
+        "\"badge\":\"준비중뱃지문구(10자)\"}\n"
+        "JSON만 반환."
+    ),
+    "slogan": (
+        "TAI Safe 대표 슬로건 {count}개를 작성하세요.\n"
+        "조건: 20자 이내, 기억하기 쉽고 전문적.\n"
+        "JSON: {\"slogans\":[\"슬로건1\",\"슬로건2\"...]}\n"
+        "JSON만 반환."
+    ),
 }
 
 
-# =====================================================
-# 모델
-# =====================================================
+# ── 모델 ──
 class CopywriteRequest(BaseModel):
-    section: str                        # hero | diagnosis | saas | expert_safety | vision
-    context: Optional[str] = None       # 추가 컨텍스트
-    tone: Optional[str] = "professional_trust"  # professional_trust | urgent | friendly
-    language: Optional[str] = "ko"     # ko | en
-    variants: Optional[int] = 1         # 생성할 안 개수
+    section: str
+    context: Optional[str] = None
+    tone: Optional[str] = "professional_trust"
+    language: Optional[str] = "ko"
+    variants: Optional[int] = 1
 
 class BatchCopywriteRequest(BaseModel):
     sections: List[str]
@@ -117,94 +98,70 @@ class BatchCopywriteRequest(BaseModel):
 
 class SloganRequest(BaseModel):
     count: Optional[int] = 5
-    focus: Optional[str] = None         # safety | tech | trust | platform
+    focus: Optional[str] = None
 
 
-# =====================================================
-# 티에이시스턴
-# =====================================================
-def _get_tone_desc(tone: str) -> str:
+# ── 헬퍼 ──
+def _tone_desc(tone: str) -> str:
     return {
-        "professional_trust": "전문적이고 신뢰감 있고 직접적. 공포보다 해결 중심.",
-        "urgent": "직접적이고 긴법감 있음. 숫자와 구체적 위험을 강조.",
-        "friendly": "친근하고 쉽게. 파트너 같은 느낙.",
+        "professional_trust": "전문적이고 신뢰감 있고 직접적. 해결 중심.",
+        "urgent": "긴박감 있고 위기의식 자극. 수치 강조.",
+        "friendly": "친근하고 파트너 같은 느낌.",
     }.get(tone, "전문적")
 
 
-async def _call_gpt(system: str, user: str, temperature: float = 0.7) -> str:
+async def _call_gpt(system_msg: str, user_msg: str, temperature: float = 0.7) -> str:
     if not _client:
-        raise HTTPException(status_code=500, detail="OpenAI 클라이언트 초기화 실패. pip install openai")
+        raise HTTPException(status_code=500, detail="openai 패키지 미설치")
     if not os.environ.get("OPENAI_API_KEY"):
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY 환경변수가 설정되지 않았습니다")
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY 미설정")
     try:
         resp = _client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": user},
+                {"role": "system", "content": system_msg},
+                {"role": "user",   "content": user_msg},
             ],
             temperature=temperature,
             response_format={"type": "json_object"},
         )
         return resp.choices[0].message.content
     except Exception as e:
-        log.error(f"GPT 호출 실패: {e}")
-        raise HTTPException(status_code=502, detail=f"GPT 호출 실패: {str(e)}")
+        log.error("GPT 호출 실패: %s", e)
+        raise HTTPException(status_code=502, detail=f"GPT 호출 실패: {e}")
 
 
-# =====================================================
-# 엔드포인트
-# =====================================================
+# ── 엔드포인트 ──
 @router.post("/copywrite")
 async def generate_copy(body: CopywriteRequest):
-    """
-    섹션별 카피 생성.
-    section: hero | diagnosis | saas | expert_safety | vision
-    """
-    section_prompt = SECTION_PROMPTS.get(body.section)
-    if not section_prompt:
-        available = list(SECTION_PROMPTS.keys())
-        raise HTTPException(status_code=400, detail=f"지원하지 않는 섹션입니다. 사용 가능: {available}")
+    prompt = SECTION_PROMPTS.get(body.section)
+    if not prompt:
+        raise HTTPException(
+            status_code=400,
+            detail=f"지원하지 않는 섹션. 가능: {list(SECTION_PROMPTS.keys())}"
+        )
 
-    system = f"""당신은 TAI Safe의 마케팅 컨설턴트입니다.
+    system_msg = (
+        f"당신은 TAI Safe의 마케팅 카피라이터입니다.\n\n"
+        f"{BRAND_CONTEXT}\n\n"
+        f"톤: {_tone_desc(body.tone)}\n"
+        f"언어: {'한국어' if body.language == 'ko' else '영어'}\n"
+        "반드시 JSON만 반환."
+    )
+    extra = f"\n\n추가 컨텍스트: {body.context}" if body.context else ""
+    user_msg = prompt + extra
 
-{BRAND_CONTEXT}
-
-톤: {_get_tone_desc(body.tone)}
-언어: {'한국어' if body.language == 'ko' else '영어'}
-성공적인 SaaS 랜딩페이지 컨텐츠를 JSON 형식으로 반환하세요.
-"""
-
-    user = f"""{section_prompt}
-
-{"웹 컨텍스트: " + body.context if body.context else ""}
-
-{f'{body.variants}가지 안으로 만들어주세요. JSON 배열에 담아주세요.' if body.variants > 1 else ''}
-다른 텝스트 없이 JSON만 반환."""
-
-    content = await _call_gpt(system, user)
-
-    import json
+    raw = await _call_gpt(system_msg, user_msg)
     try:
-        parsed = json.loads(content)
+        parsed = json.loads(raw)
     except Exception:
-        parsed = {"raw": content}
+        parsed = {"raw": raw}
 
-    return {
-        "status": "success",
-        "data": {
-            "section": body.section,
-            "language": body.language,
-            "copy": parsed,
-        }
-    }
+    return {"status": "success", "data": {"section": body.section, "copy": parsed}}
 
 
 @router.post("/copywrite/batch")
 async def generate_batch(body: BatchCopywriteRequest):
-    """
-    여러 섹션 일괄 생성.
-    """
     results = {}
     for section in body.sections:
         prompt = SECTION_PROMPTS.get(section)
@@ -212,16 +169,14 @@ async def generate_batch(body: BatchCopywriteRequest):
             results[section] = {"error": "지원하지 않는 섹션"}
             continue
 
-        system = f"""당신은 TAI Safe의 마케팅 컨설턴트입니다.
-{BRAND_CONTEXT}
-언어: {'한국어' if body.language == 'ko' else '영어'}
-JSON만 반환."""
-        user = prompt + (f"\n\n컨텍스트: {body.context}" if body.context else "")
-
+        system_msg = (
+            f"당신은 TAI Safe의 마케팅 카피라이터입니다.\n{BRAND_CONTEXT}\n"
+            f"언어: {'한국어' if body.language == 'ko' else '영어'}\nJSON만 반환."
+        )
+        user_msg = prompt + (f"\n\n컨텍스트: {body.context}" if body.context else "")
         try:
-            import json
-            content = await _call_gpt(system, user)
-            results[section] = json.loads(content)
+            raw = await _call_gpt(system_msg, user_msg)
+            results[section] = json.loads(raw)
         except Exception as e:
             results[section] = {"error": str(e)}
 
@@ -230,30 +185,25 @@ JSON만 반환."""
 
 @router.post("/slogan")
 async def generate_slogan(body: SloganRequest):
-    """
-    TAI Safe 주요 슬로건 생성.
-    """
     focus_map = {
         "safety": "안전 강조",
         "tech": "기술/자동화 강조",
         "trust": "신뢰/공신력 강조",
         "platform": "플랫폼/연결 강조",
     }
-    focus_desc = focus_map.get(body.focus, "법령과 기술의 결합") if body.focus else "전체적"
+    focus_desc = focus_map.get(body.focus, "전체적") if body.focus else "전체적"
 
-    system = f"""당신은 TAI Safe의 브랜드 슬로건 전문가입니다.
-{BRAND_CONTEXT}
-"""
-    user = f"""강조할 점: {focus_desc}
-한국어로 {body.count}개의 다양한 슬로건을 만들어주세요.
-조건: 20자 이내, 기억하기 쉬운, 전문적
-다른 텍스트 없이 JSON 배열 {{'slogans': [...]}} 형식으로만."""
+    system_msg = f"당신은 TAI Safe의 브랜드 슬로건 전문가입니다.\n{BRAND_CONTEXT}"
+    user_msg = (
+        f"강조: {focus_desc}\n"
+        f"한국어로 {body.count}개 슬로건 (각 20자 이내, 기억하기 쉬운, 전문적).\n"
+        "JSON: {\"slogans\":[...]} 형식만 반환."
+    )
 
-    import json
-    content = await _call_gpt(system, user, temperature=0.9)
+    raw = await _call_gpt(system_msg, user_msg, temperature=0.9)
     try:
-        parsed = json.loads(content)
+        parsed = json.loads(raw)
     except Exception:
-        parsed = {"slogans": [content]}
+        parsed = {"slogans": [raw]}
 
     return {"status": "success", "data": parsed}
