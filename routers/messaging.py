@@ -1,9 +1,11 @@
 """
-메세지미 API v2 기반 SMS/알림톡 라우터 — v1.1.0
+메세지미 API v2 기반 SMS/알림톡 라우터 — v1.2.0
 
+v1.2.0:
+  [ADD] GET /messaging/debug-send?receiver=&message= — 실제 발송 + 메세지미 원본 응답 반환
 v1.1.0:
-  [FIX] 환경변수 런타임 로딩 (모듈 import 시점 → 호출 시점)
-  [ADD] GET /messaging/debug — 환경변수 상태 + 메세지미 실제 응답 확인용
+  [FIX] 환경변수 런타임 로딩
+  [ADD] GET /messaging/debug
 
 환경변수 (Railway):
   MESSAGEME_API_KEY  — API 전송키
@@ -15,7 +17,7 @@ import os
 from typing import Optional
 
 import requests as _req
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 log = logging.getLogger(__name__)
@@ -25,8 +27,6 @@ router = APIRouter(prefix="/messaging", tags=["메시지"])
 SMS_URL      = "https://www.messageme.co.kr/send_api_v2.jsp"
 ALIMTALK_URL = "https://www.messageme.co.kr/alimtalk_api_v2.jsp"
 
-
-# ── 런타임 환경변수 조회 (배포 후 즉시 반영) ────────────────────
 
 def _get_cfg():
     return {
@@ -47,8 +47,6 @@ def _cfg_check():
         )
     return cfg
 
-
-# ── Pydantic 모델 ───────────────────────────────────────────
 
 class SmsSendBody(BaseModel):
     receiver: str
@@ -75,8 +73,6 @@ class UnifiedSendBody(BaseModel):
     fail_msg:      Optional[str] = None
     sender:        Optional[str] = None
 
-
-# ── 내부 헬퍼 ───────────────────────────────────────────
 
 def _msg_type(message: str) -> str:
     return "LMS" if len(message.encode("euc-kr", errors="replace")) > 90 else "SMS"
@@ -141,15 +137,11 @@ def _is_alimtalk_success(result: dict) -> bool:
 
 
 # ══════════════════════════════════════════════
-# GET /messaging/debug — 환경변수 + 발송 테스트
+# GET /messaging/debug — 환경변수 상태 확인
 # ══════════════════════════════════════════════
 
 @router.get("/debug")
 def debug_messaging():
-    """
-    환경변수 설정 상태 확인 + 메세지미 서버 연결 확인.
-    실제 발송은 하지 않음.
-    """
     cfg = _get_cfg()
     env_status = {
         "MESSAGEME_API_KEY": f"{'설정됨 (' + cfg['api_key'][:4] + '***)' if cfg['api_key'] else '❌ 미설정'}",
@@ -157,14 +149,56 @@ def debug_messaging():
         "MESSAGEME_SENDER":  f"{'설정됨 (' + cfg['sender'] + ')' if cfg['sender'] else '❌ 미설정'}",
     }
     all_set = all([cfg["api_key"], cfg["user_id"], cfg["sender"]])
-
     return {
-        "status":      "ready" if all_set else "config_error",
-        "env":         env_status,
-        "all_set":     all_set,
-        "message":     "환경변수 정상. /messaging/send-sms 발송 가능." if all_set
-                       else "❌ 미설정 항목이 있습니다. Railway Variables를 확인하세요.",
+        "status":  "ready" if all_set else "config_error",
+        "env":     env_status,
+        "all_set": all_set,
+        "message": "환경변수 정상." if all_set else "❌ 미설정 항목 있음.",
     }
+
+
+# ══════════════════════════════════════════════
+# GET /messaging/debug-send — 실제 발송 + 원본 응답 확인
+# ══════════════════════════════════════════════
+
+@router.get("/debug-send")
+def debug_send(
+    receiver: str = Query(...),
+    message:  str = Query("TAI Safe 테스트 메시지"),
+):
+    """
+    실제 SMS 발송 후 메세지미 원본 응답을 그대로 반환.
+    result_code=1 이면 성공, 그 외는 실패.
+    """
+    cfg = _cfg_check()
+    msg_type = _msg_type(message)
+    params = {
+        "user_id":  cfg["user_id"],
+        "api_key":  cfg["api_key"],
+        "sender":   cfg["sender"],
+        "receiver": receiver,
+        "msg":      message,
+        "msg_type": msg_type,
+    }
+
+    try:
+        resp = _req.post(SMS_URL, data=params, timeout=15)
+        http_status = resp.status_code
+        raw_text    = resp.text
+        try:
+            parsed = resp.json()
+        except Exception:
+            parsed = None
+
+        return {
+            "http_status": http_status,
+            "raw":         raw_text,
+            "parsed":      parsed,
+            "params_sent": {k: v for k, v in params.items() if k != "api_key"},  # api_key 제외
+            "msg_type":    msg_type,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"메세지미 호출 실패: {e}")
 
 
 # ══════════════════════════════════════════════
