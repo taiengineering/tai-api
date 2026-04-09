@@ -3,17 +3,11 @@
 
 v2.0.0 (2026-04-09) — signature/verification 계산 방식 전면 수정
   [FIX] STEP1 signature: "oid=값&price=값&timestamp=값" 형태로 SHA256
-        이전: SHA256(oid + price + timestamp)  ← 잘못됨
-        수정: SHA256("oid="+oid+"&price="+price+"&timestamp="+ts)
   [FIX] STEP1 verification: "oid=값&price=값&signKey=값&timestamp=값" 형태로 SHA256
   [FIX] STEP3 signature: "authToken=값&timestamp=값" 형태로 SHA256
   [FIX] STEP3 verification: "authToken=값&signKey=값&timestamp=값" 형태로 SHA256
   [FIX] use_chkfake="Y" 복구 (필수 파라미터)
-  [FIX] summaryPrice innerHTML 유지 (v1.9.1)
-
-근거: 이니시스 공식 Java/PHP 샘플 코드
-  PHP: SignatureUtil->makeSignatureByKey("oid=$P_OID&price=$n&timestamp=$ts", $signKey)
-  Java: SignatureUtil.makeSignatureByKey("oid="+oid+"&price="+p+"&timestamp="+ts, signKey)
+  [UI]  pricing 페이지 기간 선택 탭 제거 (1개월 고정)
 """
 from __future__ import annotations
 
@@ -63,17 +57,14 @@ def _now_iso() -> str:
 def _load_sign_key() -> str:
     env_key = os.getenv("INICIS_SIGN_KEY", "").strip()
     if env_key:
-        log.info(f"[INICIS] SignKey source=ENV len={len(env_key)} prefix={env_key[:8]}")
         return env_key
     try:
         with open(os.path.join(INICIS_KEY_PATH, "keypass.enc"), "r", encoding="utf-8") as f:
             key = f.read().strip()
             if key:
-                log.info(f"[INICIS] SignKey source=FILE len={len(key)} prefix={key[:8]}")
                 return key
     except Exception as e:
         log.warning(f"[INICIS] keypass.enc 로드 실패: {e}")
-    log.warning(f"[INICIS] SignKey source=PASSWORD (fallback)")
     return INICIS_KEY_PASSWORD
 
 def _load_mpriv_pem() -> Optional[bytes]:
@@ -106,10 +97,6 @@ def _rsa_sign_sha256(data: str, pem_bytes: bytes, password: str) -> Optional[str
 
 def _call_pay_auth(auth_token: str, auth_url: str, sign_key: str) -> Dict[str, Any]:
     timestamp = _ts_ms()
-
-    # ★ v2.0.0: 이니시스 샘플 기준 계산 방식
-    # signature   = SHA256("authToken=값&timestamp=값")
-    # verification = SHA256("authToken=값&signKey=값&timestamp=값")
     sig_data   = f"authToken={auth_token}&timestamp={timestamp}"
     veri_data  = f"authToken={auth_token}&signKey={sign_key}&timestamp={timestamp}"
     signature    = _sha256(sig_data)
@@ -129,12 +116,6 @@ def _call_pay_auth(auth_token: str, auth_url: str, sign_key: str) -> Dict[str, A
         rsa_sig = _rsa_sign_sha256(auth_token, pem, INICIS_KEY_PASSWORD)
         if rsa_sig:
             params["signData"] = rsa_sig
-
-    log.info(
-        f"[INICIS STEP3] authUrl={auth_url} "
-        f"sig_data='{sig_data[:40]}' "
-        f"signature_prefix={signature[:16]}"
-    )
 
     try:
         resp = _requests.post(auth_url, data=params, timeout=30,
@@ -187,11 +168,6 @@ _PRICING_HTML = """<!doctype html>
     .hero { background: linear-gradient(135deg,#1a1f36 0%,#0d6efd 60%,#0a58ca 100%); color:#fff; padding:3.5rem 0 3rem; text-align:center; }
     .hero h1 { font-size:2.2rem; font-weight:800; margin-bottom:.5rem; }
     .hero p  { opacity:.85; font-size:1rem; }
-    .period-tabs { display:flex; border-radius:.75rem; overflow:hidden; border:1.5px solid #dee2e6; max-width:520px; margin:0 auto 2.5rem; }
-    .period-tab { flex:1; text-align:center; padding:.65rem .5rem; font-size:.85rem; background:#f8f9fa; color:#6c757d; cursor:pointer; border-right:1px solid #dee2e6; transition:all .15s; user-select:none; }
-    .period-tab:last-child { border-right:none; }
-    .period-tab.active { background:#0d6efd; color:#fff; font-weight:700; }
-    .period-tab .discount { display:block; font-size:.72rem; margin-top:.1rem; }
     .plan-card { border-radius:1.25rem; border:2px solid #dee2e6; background:#fff; box-shadow:0 6px 30px rgba(0,0,0,.07); transition:transform .18s,border-color .18s; cursor:pointer; overflow:hidden; }
     .plan-card:hover { transform:translateY(-4px); border-color:#0d6efd; }
     .plan-card.selected { border-color:#0d6efd; box-shadow:0 0 0 3px rgba(13,110,253,.18); }
@@ -202,7 +178,6 @@ _PRICING_HTML = """<!doctype html>
     .plan-name { font-size:1.4rem; font-weight:800; }
     .plan-badge { font-size:.72rem; padding:.25em .65em; border-radius:.5em; background:rgba(255,255,255,.25); color:#fff; vertical-align:middle; margin-left:.4rem; }
     .plan-price { font-size:2.2rem; font-weight:800; margin:.75rem 0 .25rem; }
-    .plan-origin { font-size:.85rem; color:#adb5bd; text-decoration:line-through; }
     .plan-desc { font-size:.88rem; color:#6c757d; margin-top:.25rem; }
     .plan-features { padding:1.25rem 1.5rem 1.5rem; }
     .plan-features li { font-size:.88rem; padding:.3rem 0; border-bottom:1px solid #f5f5f5; display:flex; align-items:center; gap:.5rem; }
@@ -226,12 +201,6 @@ _PRICING_HTML = """<!doctype html>
   </div>
 </div>
 <div class="container py-5" style="max-width:900px">
-  <div class="period-tabs">
-    <div class="period-tab active" data-months="1" onclick="selectPeriod(this)">1개월<span class="discount text-body-secondary">정가</span></div>
-    <div class="period-tab" data-months="3" data-discount="5" onclick="selectPeriod(this)">3개월<span class="discount text-success fw-bold">5% 할인</span></div>
-    <div class="period-tab" data-months="6" data-discount="10" onclick="selectPeriod(this)">6개월<span class="discount text-success fw-bold">10% 할인</span></div>
-    <div class="period-tab" data-months="12" data-discount="15" onclick="selectPeriod(this)">12개월<span class="discount text-success fw-bold">15% 할인</span></div>
-  </div>
   <div class="row g-4 mb-4">
     <div class="col-md-6">
       <div class="plan-card selected" id="card-basic" onclick="selectPlan('basic')">
@@ -241,7 +210,6 @@ _PRICING_HTML = """<!doctype html>
             <div class="select-indicator" id="ind-basic"><i class="ti tabler-check" style="font-size:.85rem;"></i></div>
           </div>
           <div class="plan-price" id="price-basic">&#8361;79,000</div>
-          <div class="plan-origin" id="origin-basic"></div>
         </div>
         <div class="plan-features">
           <ul class="list-unstyled mb-0">
@@ -262,7 +230,6 @@ _PRICING_HTML = """<!doctype html>
             <div class="select-indicator" id="ind-premium" style="border-color:rgba(255,255,255,.5)"></div>
           </div>
           <div class="plan-price" id="price-premium">&#8361;149,000</div>
-          <div class="plan-origin" id="origin-premium"></div>
         </div>
         <div class="plan-features prem-f">
           <ul class="list-unstyled mb-0">
@@ -279,8 +246,8 @@ _PRICING_HTML = """<!doctype html>
   </div>
   <div class="card border-0 shadow-sm rounded-3 p-4">
     <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
-      <div><div class="fw-bold mb-1" id="summaryText">베이직 · 1개월</div><div class="text-body-secondary small">부가세 포함</div></div>
-      <div class="text-end"><div class="fw-bold fs-4" id="summaryPrice">&#8361;79,000</div><div class="text-body-secondary small" id="summaryDiscount"></div></div>
+      <div><div class="fw-bold mb-1" id="summaryText">베이직</div><div class="text-body-secondary small">부가세 포함 · 월 단위 결제</div></div>
+      <div class="text-end"><div class="fw-bold fs-4" id="summaryPrice">&#8361;79,000</div></div>
     </div>
     <hr class="my-3" />
     <button class="btn-pay" id="btnPay" onclick="startPayment()">
@@ -320,7 +287,7 @@ _PRICING_HTML = """<!doctype html>
 var API='https://api.taieng.co.kr';
 var BASE={basic:79000,premium:149000};
 var PNAME={basic:'TAI Safe 베이직',premium:'TAI Safe 프리미엄'};
-var _plan='basic',_months=1,_disc=0;
+var _plan='basic';
 
 function selectPlan(p){
   _plan=p;
@@ -332,35 +299,23 @@ function selectPlan(p){
   });
   updatePrices();
 }
-function selectPeriod(el){
-  document.querySelectorAll('.period-tab').forEach(function(t){t.classList.remove('active');});
-  el.classList.add('active');
-  _months=parseInt(el.dataset.months)||1;
-  _disc=parseInt(el.dataset.discount)||0;
-  updatePrices();
-}
 function updatePrices(){
-  ['basic','premium'].forEach(function(p){
-    var m=Math.round(BASE[p]*(1-_disc/100)),t=m*_months,o=BASE[p]*_months;
-    document.getElementById('price-'+p).innerHTML='&#8361;'+m.toLocaleString();
-    document.getElementById('origin-'+p).textContent=_disc>0?'원가 ₩'+o.toLocaleString()+' (₩'+(o-t).toLocaleString()+' 절약)':'';
-  });
-  var t=Math.round(BASE[_plan]*(1-_disc/100))*_months,s=BASE[_plan]*_months-t;
-  document.getElementById('summaryText').textContent=(_plan==='basic'?'베이직':'프리미엄')+' · '+_months+'개월';
-  document.getElementById('summaryPrice').innerHTML='&#8361;'+t.toLocaleString();
-  document.getElementById('summaryDiscount').textContent=_disc>0?_disc+'% 할인 (₩'+s.toLocaleString()+' 절약)':'';
+  document.getElementById('price-basic').innerHTML='&#8361;'+BASE.basic.toLocaleString();
+  document.getElementById('price-premium').innerHTML='&#8361;'+BASE.premium.toLocaleString();
+  document.getElementById('summaryText').textContent=_plan==='basic'?'베이직':'프리미엄';
+  document.getElementById('summaryPrice').innerHTML='&#8361;'+BASE[_plan].toLocaleString();
 }
 function startPayment(){
   var btn=document.getElementById('btnPay'),sp=document.getElementById('paySpinner'),icon=document.getElementById('payIcon');
   if(btn.disabled) return;
   btn.disabled=true; sp.classList.remove('d-none'); icon.classList.add('d-none');
-  var total=Math.round(BASE[_plan]*(1-_disc/100))*_months;
-  var goodname=PNAME[_plan]+' '+_months+'개월';
+  var total=BASE[_plan];
+  var goodname=PNAME[_plan];
   var token=localStorage.getItem('access_token')||'';
   var companyId=localStorage.getItem('company_id')||'';
   var RETURN_URL=API+'/payments/inicis/return';
   var CLOSE_URL=API+'/payments/result?resultCode=CLOSE';
-  var payload=JSON.stringify({company_id:companyId||undefined,amount:total,goodname:goodname,buyername:'고객',buyertel:'00000000000',plan_code:_plan.toUpperCase(),period_months:_months,payment_type:'CARD',return_url:RETURN_URL,close_url:CLOSE_URL});
+  var payload=JSON.stringify({company_id:companyId||undefined,amount:total,goodname:goodname,buyername:'고객',buyertel:'00000000000',plan_code:_plan.toUpperCase(),period_months:1,payment_type:'CARD',return_url:RETURN_URL,close_url:CLOSE_URL});
   var xhr=new XMLHttpRequest();
   xhr.open('POST',API+'/payments/inicis/prepare',true);
   xhr.setRequestHeader('Content-Type','application/json');
@@ -499,19 +454,12 @@ def inicis_prepare(body: PrepareBody):
 
     mKey = _sha256(sign_key)
 
-    # ★ v2.0.0: 이니시스 샘플 기준 계산 방식
-    # signature   = SHA256("oid=값&price=값&timestamp=값")
-    # verification = SHA256("oid=값&price=값&signKey=값&timestamp=값")
     sig_data   = f"oid={order_id}&price={price_str}&timestamp={timestamp}"
     veri_data  = f"oid={order_id}&price={price_str}&signKey={sign_key}&timestamp={timestamp}"
     signature    = _sha256(sig_data)
     verification = _sha256(veri_data)
 
-    log.info(
-        f"[INICIS STEP1] oid={order_id} price={price_str} "
-        f"sig_data='{sig_data}' "
-        f"mKey_prefix={mKey[:8]}"
-    )
+    log.info(f"[INICIS STEP1] oid={order_id} price={price_str} sig_data='{sig_data}'")
 
     supply_amount = round(body.amount / 1.1)
     vat_amount    = body.amount - supply_amount
@@ -587,11 +535,7 @@ async def inicis_return(request: Request):
     price        = data.get("price", "")
     paymethod    = data.get("paymethod", "카드")
 
-    log.info(
-        f"[INICIS STEP2] resultCode={result_code} oid={order_id} idc={idc_name} "
-        f"authToken_prefix={auth_token[:16] if auth_token else 'EMPTY'} "
-        f"authUrl={auth_url}"
-    )
+    log.info(f"[INICIS STEP2] resultCode={result_code} oid={order_id} idc={idc_name}")
 
     supabase = get_supabase()
 
