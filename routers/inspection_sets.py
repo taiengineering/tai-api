@@ -1,16 +1,19 @@
 """
-법정점검 세트 관리 라우터 — v1.9.0
-v1.9.0:
-  - POST /inspection-sets/generate-schedules/{factory_id}
-    anchor_confirmed=true 세트 전체에 대해 work_schedules 일괄 생성
-    (force=true 시 기존 SCHEDULED 삭제 후 재생성)
-v1.8.0:
-  - GET /inspection-sets 배치 조인 확장:
-    obligation_type + obligation_summary + penalty_summary +
-    form_name + form_url + remarks + cycle_base_guide_rule 응답 포함
-v1.7.0: inspection_category·anchor_type·assignee_user_id 추가, PATCH /{id}
+법정점검 세트 관리 라우터 — v2.0.0
+v2.0.0 (2026-04-09) Pipeline Priority 1:
+  [ADD] POST /inspection-sets/generate-schedules/{factory_id}
+        4조건(기준일+주기+담당자+의무내용) 충족 시 work_schedules 생성
+        source_type='LAW_ENGINE', status_code='PENDING'
+        NOT EXISTS 중복 방지 (inspection_set_id 기준)
+  [ADD] POST /inspection-sets/generate-schedules-all
+        전체 공장 일괄 generate-schedules 실행
+  [KEEP] v1.9.0 generate-schedules/{factory_id}?force → anchor_confirmed 방식 유지
+
+v1.9.0: anchor_confirmed 기반 work_schedules 생성
+v1.8.0: GET 배치 조인 확장
+v1.7.0: assignee_user_id 추가, PATCH /{id}
 v1.6.0: inspection_set_items 자동생성 API
-v1.5.0: Rolling 생성 방식
+v1.5.0: Rolling 생성
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -21,7 +24,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/inspection-sets", tags=["inspection_sets"])
 
-VERSION = "1.9.0"
+VERSION = "2.0.0"
 
 DELTA_MAP = {
     "day":       lambda v: relativedelta(days=v),
@@ -97,7 +100,102 @@ def _build_items_for_set(iset: dict, rule: dict) -> List[dict]:
     }]
 
 
-# ── Pydantic 모델 ──────────────────────────────────────────────────
+# ── v2.0.0: 4조건 체크 + LAW_ENGINE 스케줄 행 빌더 ───────────────────────
+
+def _meets_4_conditions(iset: dict) -> bool:
+    """
+    LAW_ENGINE 스케줄 생성 4조건:
+    1. schedule_anchor_date (기준일)
+    2. cycle_unit (주기)
+    3. assignee_user_id (담당자)
+    4. description 또는 legal_rule_code/legal_rule_id (의무내용)
+    """
+    has_anchor   = bool(iset.get("schedule_anchor_date"))
+    has_cycle    = bool(iset.get("cycle_unit"))
+    has_assignee = bool(iset.get("assignee_user_id"))
+    has_content  = (
+        bool((iset.get("description") or "").strip())
+        or bool(iset.get("legal_rule_code"))
+        or bool(iset.get("legal_rule_id"))
+    )
+    return has_anchor and has_cycle and has_assignee and has_content
+
+
+def _build_law_engine_row(iset: dict) -> dict:
+    """4조건 충족 inspection_set → LAW_ENGINE work_schedule 행"""
+    anchor  = date.fromisoformat(iset["schedule_anchor_date"])
+    planned = _next_planned_from(anchor, iset["cycle_unit"], int(iset.get("cycle_value") or 1))
+    return {
+        "factory_id":        iset["factory_id"],
+        "company_id":        iset.get("company_id"),
+        "inspection_set_id": iset["id"],
+        "assigned_user_id":  iset["assignee_user_id"],
+        "source_type":       "LAW_ENGINE",
+        "description":       (iset.get("description") or iset.get("law_name") or "").strip(),
+        "obligation_type":   iset.get("inspection_category") or "INSPECT",
+        "law_name":          iset.get("law_name") or "",
+        "law_article":       iset.get("law_article") or "",
+        "planned_date":      planned.isoformat(),
+        "status_code":       "PENDING",
+        "active_yn":         True,
+        "rule_code":         iset.get("legal_rule_code") or iset.get("legal_rule_id") or "",
+    }
+
+
+def _run_generate_law_engine(factory_id: str, supabase) -> dict:
+    """
+    단일 factory에 대해 4조건 충족 inspection_sets → LAW_ENGINE 스케줄 생성.
+    반환: {total_sets, created, skipped_dup, skipped_no_condition}
+    """
+    sets_res = supabase.table("inspection_sets").select(
+        "id, factory_id, company_id, schedule_anchor_date, cycle_unit, cycle_value, "
+        "assignee_user_id, description, legal_rule_code, legal_rule_id, "
+        "law_name, law_article, inspection_category"
+    ).eq("factory_id", factory_id).eq("is_active", True).execute()
+    all_sets = sets_res.data or []
+
+    if not all_sets:
+        return {"total_sets": 0, "created": 0, "skipped_dup": 0, "skipped_no_condition": 0}
+
+    # NOT EXISTS: 이미 LAW_ENGINE PENDING 스케줄이 있는 inspection_set_id 조회
+    existing_res = supabase.table("work_schedules").select("inspection_set_id") \
+        .eq("factory_id", factory_id) \
+        .eq("source_type", "LAW_ENGINE") \
+        .eq("status_code", "PENDING") \
+        .execute()
+    existing_ids = {
+        r["inspection_set_id"] for r in (existing_res.data or []) if r.get("inspection_set_id")
+    }
+
+    rows = []
+    skipped_dup = 0
+    skipped_no_cond = 0
+
+    for iset in all_sets:
+        set_id = iset["id"]
+        if set_id in existing_ids:
+            skipped_dup += 1
+            continue
+        if not _meets_4_conditions(iset):
+            skipped_no_cond += 1
+            continue
+        rows.append(_build_law_engine_row(iset))
+        existing_ids.add(set_id)  # 루프 내 중복 방지
+
+    created = 0
+    for i in range(0, len(rows), 20):
+        res = supabase.table("work_schedules").insert(rows[i:i + 20]).execute()
+        created += len(res.data or [])
+
+    return {
+        "total_sets":           len(all_sets),
+        "created":              created,
+        "skipped_dup":          skipped_dup,
+        "skipped_no_condition": skipped_no_cond,
+    }
+
+
+# ── Pydantic 모델 ─────────────────────────────────────────
 
 class AnchorBody(BaseModel):
     anchor_date:          Optional[str] = None
@@ -135,7 +233,7 @@ class InspectionSetPatchBody(BaseModel):
 
 
 # ══════════════════════════════════════════════
-# GET /inspection-sets  v1.8.0
+# GET /inspection-sets
 # ══════════════════════════════════════════════
 
 @router.get("")
@@ -165,7 +263,6 @@ def get_inspection_sets(
     res = query.order("created_at", desc=True).range(offset, offset + size - 1).execute()
     items: List[Dict] = res.data or []
 
-    # v1.8.0: 배치 조인
     rule_ids = list({r["legal_rule_id"] for r in items if r.get("legal_rule_id")})
     rules_map: Dict[str, Dict] = {}
     if rule_ids:
@@ -182,15 +279,15 @@ def get_inspection_sets(
     for item in items:
         rule_id  = item.get("legal_rule_id")
         rule_row = rules_map.get(rule_id, {}) if rule_id else {}
-        item["obligation_type"]    = rule_row.get("obligation_type")    or "OTHER"
-        item["obligation_summary"] = rule_row.get("obligation_summary") or ""
-        item["penalty_summary"]    = rule_row.get("penalty_summary")    or ""
-        item["form_name"]          = rule_row.get("form_name")          or ""
-        item["form_url"]           = rule_row.get("form_url")           or ""
-        item["remarks"]            = rule_row.get("remarks")            or ""
-        item["online_system"]      = rule_row.get("online_system")      or ""
-        item["system_url"]         = rule_row.get("system_url")         or ""
-        item["cycle_base_guide_rule"] = rule_row.get("cycle_base_guide") or ""
+        item["obligation_type"]       = rule_row.get("obligation_type")    or "OTHER"
+        item["obligation_summary"]    = rule_row.get("obligation_summary") or ""
+        item["penalty_summary"]       = rule_row.get("penalty_summary")    or ""
+        item["form_name"]             = rule_row.get("form_name")          or ""
+        item["form_url"]              = rule_row.get("form_url")           or ""
+        item["remarks"]               = rule_row.get("remarks")            or ""
+        item["online_system"]         = rule_row.get("online_system")      or ""
+        item["system_url"]            = rule_row.get("system_url")         or ""
+        item["cycle_base_guide_rule"] = rule_row.get("cycle_base_guide")   or ""
 
     return {
         "status": "success",
@@ -396,22 +493,93 @@ def generate_all_items(
                      **({"preview": preview_rows[:20]} if dry_run else {})}}
 
 
-# ══════════════════════════════════════════════
-# POST /inspection-sets/generate-schedules/{factory_id}  v1.9.0
-# anchor_confirmed=true 세트 전체에 대해 work_schedules 일괄 생성
-# ══════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════
+# ★ POST /inspection-sets/generate-schedules-all  v2.0.0
+#   전체 공장 일괄 LAW_ENGINE 스케줄 생성
+# ══════════════════════════════════════════════════════════
+
+@router.post("/generate-schedules-all")
+def generate_schedules_all():
+    """
+    v2.0.0: 전체 활성 공장에 대해 4조건 충족 inspection_sets → LAW_ENGINE 스케줄 일괄 생성.
+    """
+    supabase = get_supabase()
+    factories_res = supabase.table("factories").select("id").eq("is_active", True).execute()
+    factories = factories_res.data or []
+
+    total_created   = 0
+    total_skipped_d = 0
+    total_skipped_c = 0
+    processed       = 0
+    results         = []
+
+    for fac in factories:
+        factory_id = fac["id"]
+        r = _run_generate_law_engine(factory_id, supabase)
+        if r["total_sets"] == 0:
+            continue
+        processed       += 1
+        total_created   += r["created"]
+        total_skipped_d += r["skipped_dup"]
+        total_skipped_c += r["skipped_no_condition"]
+        results.append({
+            "factory_id":           factory_id,
+            "total_sets":           r["total_sets"],
+            "created":              r["created"],
+            "skipped_dup":          r["skipped_dup"],
+            "skipped_no_condition": r["skipped_no_condition"],
+        })
+
+    return {
+        "status": "success",
+        "message": f"공장 {processed}개 처리 — LAW_ENGINE 스케줄 총 {total_created}건 생성",
+        "data": {
+            "total_factories":          len(factories),
+            "processed":                processed,
+            "total_created":            total_created,
+            "total_skipped_duplicate":  total_skipped_d,
+            "total_skipped_no_condition": total_skipped_c,
+            "results":                  results,
+        },
+    }
+
+
+# ══════════════════════════════════════════════════════════
+# ★ POST /inspection-sets/generate-schedules/{factory_id}  v2.0.0
+#   단일 공장 4조건 충족 → LAW_ENGINE 스케줄 생성
+#   (v1.9.0 anchor_confirmed 방식은 force=true 파라미터로 유지)
+# ══════════════════════════════════════════════════════════
 
 @router.post("/generate-schedules/{factory_id}")
 def generate_schedules_for_factory(
     factory_id: str,
-    force: bool = Query(False, description="true 시 기존 SCHEDULED 삭제 후 재생성"),
+    mode:  str  = Query("law_engine", description="'law_engine'(4조건) 또는 'anchor'(anchor_confirmed 기반)"),
+    force: bool = Query(False, description="anchor 모드에서 기존 SCHEDULED 삭제 후 재생성"),
 ):
     """
-    v1.9.0: anchor_confirmed=true인 inspection_sets에 대해 work_schedules 일괄 생성.
-    - 이미 SCHEDULED 스케줄 있으면 스킵 (force=true 시 재생성)
-    - 응답: { total, created, skipped, results[] }
+    v2.0.0:
+    - mode='law_engine' (기본): 4조건 충족 inspection_sets → LAW_ENGINE 스케줄 생성
+    - mode='anchor': anchor_confirmed=True 세트 → SCHEDULED 스케줄 생성 (v1.9.0 동작 유지)
     """
     supabase = get_supabase()
+
+    # ── LAW_ENGINE 모드 (기본) ──────────────────────────────
+    if mode == "law_engine":
+        r = _run_generate_law_engine(factory_id, supabase)
+        return {
+            "status": "success",
+            "message": f"{r['total_sets']}개 세트 처리 — LAW_ENGINE 스케줄 {r['created']}건 생성",
+            "data": {
+                "factory_id":           factory_id,
+                "mode":                 "law_engine",
+                "total_sets":           r["total_sets"],
+                "created":              r["created"],
+                "skipped_duplicate":    r["skipped_dup"],
+                "skipped_no_condition": r["skipped_no_condition"],
+            },
+        }
+
+    # ── anchor 모드 (v1.9.0 하위 호환) ─────────────────────
     sets_res = supabase.table("inspection_sets").select(
         "id, factory_id, company_id, cycle_value, cycle_unit, "
         "inspection_set_name, inspection_category, source, "
@@ -422,18 +590,17 @@ def generate_schedules_for_factory(
         return {
             "status": "success",
             "message": "생성할 점검세트가 없습니다 (기준일 미설정 또는 없음)",
-            "data": {"factory_id": factory_id, "total": 0, "created": 0, "skipped": 0, "results": []},
+            "data": {"factory_id": factory_id, "mode": "anchor", "total": 0, "created": 0, "skipped": 0},
         }
     created, skipped, results = 0, 0, []
     for iset in sets:
-        set_id    = iset["id"]
-        name      = iset.get("inspection_set_name") or ""
+        set_id     = iset["id"]
+        name       = iset.get("inspection_set_name") or ""
         anchor_str = iset.get("schedule_anchor_date")
         if not anchor_str:
             skipped += 1
             results.append({"id": set_id, "name": name, "status": "skipped", "reason": "기준일 없음"})
             continue
-        # 기존 SCHEDULED 스케줄 존재 여부 확인
         existing = supabase.table("work_schedules").select("id") \
             .eq("inspection_set_id", set_id).eq("status_code", "SCHEDULED").limit(1).execute()
         if existing.data and not force:
@@ -449,27 +616,18 @@ def generate_schedules_for_factory(
             r = supabase.table("work_schedules").insert(row).execute()
             c = len(r.data or [])
             created += c
-            results.append({
-                "id": set_id, "name": name, "status": "created",
-                "planned_date": planned.isoformat(),
-            })
+            results.append({"id": set_id, "name": name, "status": "created", "planned_date": planned.isoformat()})
         except Exception as e:
             results.append({"id": set_id, "name": name, "status": "error", "reason": str(e)})
     return {
         "status": "success",
         "message": f"{len(sets)}개 처리 — 생성 {created}건, 스킵 {skipped}건",
-        "data": {
-            "factory_id": factory_id,
-            "total":   len(sets),
-            "created": created,
-            "skipped": skipped,
-            "results": results,
-        },
+        "data": {"factory_id": factory_id, "mode": "anchor", "total": len(sets), "created": created, "skipped": skipped, "results": results},
     }
 
 
 # ══════════════════════════════════════════════
-# PATCH /inspection-sets/{id}  v1.7.0
+# PATCH /inspection-sets/{id}
 # ══════════════════════════════════════════════
 
 @router.patch("/{inspection_set_id}")
@@ -483,10 +641,10 @@ def patch_inspection_set(inspection_set_id: str, body: InspectionSetPatchBody):
         raise HTTPException(status_code=404, detail="점검세트를 찾을 수 없습니다.")
     iset = res.data[0]
     upd: Dict[str, Any] = {"updated_at": datetime.now().isoformat()}
-    if body.is_active is not None:         upd["is_active"] = body.is_active
+    if body.is_active is not None:            upd["is_active"] = body.is_active
     if body.last_inspection_date is not None: upd["last_inspection_date"] = body.last_inspection_date or None
-    if body.assignee_user_id is not None:  upd["assignee_user_id"] = body.assignee_user_id or None
-    if body.description is not None:       upd["description"] = body.description
+    if body.assignee_user_id is not None:     upd["assignee_user_id"] = body.assignee_user_id or None
+    if body.description is not None:          upd["description"] = body.description
     schedule_updated = False
     if body.schedule_anchor_date is not None:
         a_str = body.schedule_anchor_date
