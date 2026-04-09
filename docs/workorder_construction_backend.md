@@ -1,5 +1,114 @@
 # TAI Safe 건설섹터 백엔드 작업지시서
 
+---
+
+## ★ API v2.1.0 추가 기능 (최우선 반영)
+
+### 1. 법령진단 독립 실행
+
+**엔드포인트**: `POST /construction/sites/{site_id}/diagnose`
+
+**응답 구조 (필수 준수):**
+```json
+{
+  "status": "success",
+  "data": {
+    "site_id": "uuid",
+    "total_rules": 173,
+    "applicable_rules": 47,
+    "inspection_sets_created": 47,
+    "by_obligation_type": {
+      "BEFORE_WORK": 22,
+      "ACTION": 18,
+      "INSPECT": 5,
+      "APPOINT": 2
+    }
+  }
+}
+```
+
+**구현 포인트:**
+- 중복 실행 시 기존 inspection_sets SKIP (NOT EXISTS 패턴 사용)
+- 진단 완료 후 `construction_sites.diagnosis_applicable_count` 업데이트 필수
+- `construction_sites.last_diagnosis_at` = now() 업데이트 필수
+- 에러 시 HTTP 422 + `{ "detail": "공사금액을 먼저 입력해주세요." }` 형식 반환
+
+---
+
+### 2. 작업일정 자동 생성
+
+**엔드포인트**: `POST /construction/sites/{site_id}/generate-schedules`
+
+**응답 구조 (필수 준수):**
+```json
+{
+  "status": "success",
+  "data": {
+    "created": 34,
+    "skipped": 13,
+    "total_rules": 47
+  }
+}
+```
+
+**구현 포인트:**
+- `diagnosis_applicable_count == 0` 인 경우 HTTP 400 반환:
+  ```json
+  { "detail": "법령진단을 먼저 실행하세요." }
+  ```
+- 4조건 미충족 inspection_set → `skipped` 카운트에 포함
+- BEFORE_WORK 의무: `cycle_unit=day, cycle_value=1` 자동 적용
+- 이미 생성된 스케줄은 중복 생성하지 않음 (NOT EXISTS 패턴)
+
+---
+
+### 3. 점검 저장 → FCM 자동 발송
+
+**엔드포인트**: `POST /construction/inspections`
+
+**요청 Body `checklist_items` 배열 형식 (필수 준수):**
+```json
+{
+  "site_id": "uuid",
+  "process_id": "uuid",
+  "inspector_phone": "01047758888",
+  "checklist_items": [
+    { "item_name": "타이어 상태", "result": "ok",  "note": "" },
+    { "item_name": "경적 작동",  "result": "bad", "note": "경적 불량" },
+    { "item_name": "브레이크",   "result": "ok",  "note": "" }
+  ]
+}
+```
+
+**`overall_result` 생략 가능 → API 자동 계산:**
+```python
+overall_result = "ISSUE" if any(i["result"] == "bad" for i in checklist_items) else "PASS"
+defect_count   = sum(1 for i in checklist_items if i["result"] == "bad")
+```
+
+**이상 발생 시 FCM 자동 발송 로직:**
+```python
+if overall_result == "ISSUE":
+    # 현장 안전관리자 FCM 토큰 조회
+    manager = get_site_manager(site_id)  # manager_id → users.push_token
+    if manager and manager.push_token:
+        send_push(
+            fcm_token=manager.push_token,
+            title="⚠️ 건설현장 점검 이상 발생",
+            body=f"{site_name} — 이상 {defect_count}건 발생",
+            data={"type": "inspection", "site_id": site_id, "inspection_id": str(new_id)}
+        )
+```
+
+**`FCM_SERVER_KEY` Railway 설정 방법:**
+```
+Railway Dashboard → 프로젝트 선택 → Variables
+→ FIREBASE_CREDENTIALS = '{"type":"service_account","project_id":"tai-safe",...}'
+(Firebase Console → 프로젝트 설정 → 서비스 계정 → 새 비공개 키 생성 → JSON 전체 내용)
+```
+
+---
+
 ## 현황 분석
 
 ### DB 현황
@@ -53,7 +162,6 @@ DELETE /construction/sites/{id}       건설현장 비활성화
 **자동 계산 로직 (저장 시):**
 ```python
 def calc_safety_manager_required(construction_type, contract_amount):
-    # 건축: 150억 이상, 토목: 120억 이상
     thresholds = {'건축': 15_000_000_000, '토목': 12_000_000_000, '복합': 12_000_000_000}
     threshold = thresholds.get(construction_type, 15_000_000_000)
     return contract_amount >= threshold
@@ -62,39 +170,7 @@ def calc_safety_manager_required(construction_type, contract_amount):
 ---
 
 ### 2. 건설 법령진단 API
-**파일**: `routers/construction.py` 또는 신규 `routers/construction_diagnosis.py`
-
-```
-POST /construction/sites/{site_id}/diagnose
-```
-
-**진단 로직:**
-1. `master_building_legal_rules WHERE sector='CONSTRUCTION'` 전체 조회
-2. `condition_code` 기반 해당 현장 조건 매칭:
-   - `CONTRACT_AMOUNT_GTE_{억}`: 공사금액 조건
-   - `WORKER_COUNT_GTE_{명}`: 근로자 수 조건  
-   - `CONSTRUCTION_TYPE_{건축/토목}`: 공사 유형 조건
-3. 해당 규칙을 `inspection_sets` 에 CONSTRUCTION 섹터로 생성
-4. 결과를 `construction_sites.diagnosis_applicable_count` 업데이트
-
-```python
-# 반환 예시
-{
-  "status": "success",
-  "data": {
-    "site_id": "...",
-    "total_rules": 173,
-    "applicable_rules": 47,  # 조건 매칭된 규칙
-    "inspection_sets_created": 47,
-    "by_obligation_type": {
-      "BEFORE_WORK": 22,
-      "ACTION": 18,
-      "INSPECT": 5,
-      "APPOINT": 2
-    }
-  }
-}
-```
+→ ★ v2.1.0 섹션 참조
 
 ---
 
@@ -102,82 +178,61 @@ POST /construction/sites/{site_id}/diagnose
 **파일**: `routers/construction.py`
 
 ```
-GET  /construction/sites/{site_id}/processes   공정 목록
-POST /construction/sites/{site_id}/processes   공정 등록
-PATCH /construction/sites/{site_id}/processes/{id}  공정 수정 (진행률 포함)
+GET  /construction/sites/{site_id}/processes
+POST /construction/sites/{site_id}/processes
+PATCH /construction/sites/{site_id}/processes/{id}
 DELETE /construction/sites/{site_id}/processes/{id}
 ```
-
-**공정 등록 시 필수:**
-- `process_name`, `construction_type`, `planned_start`, `planned_end` 필수
-- `work_type_code` 필수 (고위험 작업 자동 분류 기준)
-- `is_high_risk` 자동 계산: 고위험 작업 목록 기반
 
 **고위험 작업 분류 (work_type_code 기준):**
 ```python
 HIGH_RISK_TYPES = {
-    'DEMOLITION',    # 해체
-    'EXCAVATION',    # 굴착
-    'HIGH_PLACE',    # 고소작업 (2m 이상)
-    'CRANE',         # 크레인
-    'TUNNEL',        # 터널
-    'COFFERDAM',     # 흙막이
-    'CONCRETE_FORM', # 거푸집 동바리
-    'STEEL_FRAME',   # 철골
+    'DEMOLITION', 'EXCAVATION', 'HIGH_PLACE', 'CRANE',
+    'TUNNEL', 'COFFERDAM', 'CONCRETE_FORM', 'STEEL_FRAME',
 }
 ```
 
 ---
 
 ### 4. 건설 점검 결과 저장 API
-**파일**: `routers/construction.py`
+→ ★ v2.1.0 섹션 참조 (checklist_items 형식, FCM 발송 포함)
 
 ```
-POST /construction/inspections         점검 결과 저장
-GET  /construction/inspections         점검 이력 조회 (site_id 필터)
-GET  /construction/inspections/{id}    점검 단건
-PATCH /construction/inspections/{id}   시정조치 업데이트
+POST /construction/inspections
+GET  /construction/inspections
+GET  /construction/inspections/{id}
+PATCH /construction/inspections/{id}  # 시정조치 업데이트
 ```
-
-**저장 시 자동 처리:**
-- `overall_result`: 이상 항목 1개 이상 → 'ISSUE', 모두 정상 → 'PASS'
-- `defect_count`: checklist_items 중 result='bad' 카운트
-- 이상 발생 시 안전관리자 FCM 알림 자동 발송
 
 ---
 
 ### 5. 건설 작업자 관리 API
-**파일**: `routers/construction.py`
 
 ```
-GET  /construction/sites/{site_id}/workers   현장 작업자 목록
-POST /construction/sites/{site_id}/workers   작업자 등록 (worker_registry 연동)
-DELETE /construction/sites/{site_id}/workers/{id}  작업자 제거
+GET  /construction/sites/{site_id}/workers
+POST /construction/sites/{site_id}/workers
+DELETE /construction/sites/{site_id}/workers/{id}
 ```
 
 ---
 
-### 6. inspection_sets → 작업일정 자동 생성
-**파일**: `routers/construction.py` 또는 `routers/inspection_schedule.py`
+### 6. 작업일정 자동 생성
+→ ★ v2.1.0 섹션 참조 (created/skipped/total_rules 응답 포함)
 
 ```
 POST /construction/sites/{site_id}/generate-schedules
 ```
-
-**조건 검증 (산업 섹터와 동일):**
-- 기준일 있음 + 주기 있음 + 담당자 있음 + 의무내용 있음 → 스케줄 생성
-- 작업 전 점검 (BEFORE_WORK): `cycle_unit=day, cycle_value=1` 자동 설정
 
 ---
 
 ## 구현 순서
 
 ```
-1단계: construction sites CRUD (등록/조회/수정)
-2단계: 건설 법령진단 (condition_code 매칭 → inspection_sets 생성)
-3단계: 공정 등록 (프로세스 CRUD + 고위험 자동 분류)
-4단계: 점검 결과 저장 + FCM 알림
-5단계: 작업일정 자동 생성 파이프라인
+1단계: construction sites CRUD
+2단계: 건설 법령진단 (★ v2.1.0 응답구조 준수)
+3단계: 공정 등록
+4단계: 점검 결과 저장 + FCM 알림 (★ v2.1.0 checklist_items 형식 준수)
+5단계: 작업일정 자동 생성 (★ v2.1.0 created/skipped 응답 준수)
 ```
 
 ---
