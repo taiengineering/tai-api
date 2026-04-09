@@ -1,10 +1,13 @@
 """
-법정점검 세트 관리 라우터 — v1.8.0
+법정점검 세트 관리 라우터 — v1.9.0
+v1.9.0:
+  - POST /inspection-sets/generate-schedules/{factory_id}
+    anchor_confirmed=true 세트 전체에 대해 work_schedules 일괄 생성
+    (force=true 시 기존 SCHEDULED 삭제 후 재생성)
 v1.8.0:
   - GET /inspection-sets 배치 조인 확장:
     obligation_type + obligation_summary + penalty_summary +
     form_name + form_url + remarks + cycle_base_guide_rule 응답 포함
-    (점검항목관리 '무엇을' 열 및 법령원문 모달용)
 v1.7.0: inspection_category·anchor_type·assignee_user_id 추가, PATCH /{id}
 v1.6.0: inspection_set_items 자동생성 API
 v1.5.0: Rolling 생성 방식
@@ -18,7 +21,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/inspection-sets", tags=["inspection_sets"])
 
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 
 DELTA_MAP = {
     "day":       lambda v: relativedelta(days=v),
@@ -94,7 +97,7 @@ def _build_items_for_set(iset: dict, rule: dict) -> List[dict]:
     }]
 
 
-# ── Pydantic 모델 ──────────────────────────────────────────
+# ── Pydantic 모델 ──────────────────────────────────────────────────
 
 class AnchorBody(BaseModel):
     anchor_date:          Optional[str] = None
@@ -162,7 +165,7 @@ def get_inspection_sets(
     res = query.order("created_at", desc=True).range(offset, offset + size - 1).execute()
     items: List[Dict] = res.data or []
 
-    # v1.8.0: 배치 조인 — obligation_type + 법령원문 필드 모두 포함
+    # v1.8.0: 배치 조인
     rule_ids = list({r["legal_rule_id"] for r in items if r.get("legal_rule_id")})
     rules_map: Dict[str, Dict] = {}
     if rule_ids:
@@ -187,7 +190,6 @@ def get_inspection_sets(
         item["remarks"]            = rule_row.get("remarks")            or ""
         item["online_system"]      = rule_row.get("online_system")      or ""
         item["system_url"]         = rule_row.get("system_url")         or ""
-        # cycle_base_guide_rule: 법령룰 원본값 (inspection_sets 자체값과 구분)
         item["cycle_base_guide_rule"] = rule_row.get("cycle_base_guide") or ""
 
     return {
@@ -392,6 +394,78 @@ def generate_all_items(
             "data": {"total_sets": len(sets), "created": created, "skipped": skipped,
                      "failed": failed, "dry_run": dry_run,
                      **({"preview": preview_rows[:20]} if dry_run else {})}}
+
+
+# ══════════════════════════════════════════════
+# POST /inspection-sets/generate-schedules/{factory_id}  v1.9.0
+# anchor_confirmed=true 세트 전체에 대해 work_schedules 일괄 생성
+# ══════════════════════════════════════════════
+
+@router.post("/generate-schedules/{factory_id}")
+def generate_schedules_for_factory(
+    factory_id: str,
+    force: bool = Query(False, description="true 시 기존 SCHEDULED 삭제 후 재생성"),
+):
+    """
+    v1.9.0: anchor_confirmed=true인 inspection_sets에 대해 work_schedules 일괄 생성.
+    - 이미 SCHEDULED 스케줄 있으면 스킵 (force=true 시 재생성)
+    - 응답: { total, created, skipped, results[] }
+    """
+    supabase = get_supabase()
+    sets_res = supabase.table("inspection_sets").select(
+        "id, factory_id, company_id, cycle_value, cycle_unit, "
+        "inspection_set_name, inspection_category, source, "
+        "schedule_anchor_date, next_planned_date"
+    ).eq("factory_id", factory_id).eq("anchor_confirmed", True).eq("is_active", True).execute()
+    sets = sets_res.data or []
+    if not sets:
+        return {
+            "status": "success",
+            "message": "생성할 점검세트가 없습니다 (기준일 미설정 또는 없음)",
+            "data": {"factory_id": factory_id, "total": 0, "created": 0, "skipped": 0, "results": []},
+        }
+    created, skipped, results = 0, 0, []
+    for iset in sets:
+        set_id    = iset["id"]
+        name      = iset.get("inspection_set_name") or ""
+        anchor_str = iset.get("schedule_anchor_date")
+        if not anchor_str:
+            skipped += 1
+            results.append({"id": set_id, "name": name, "status": "skipped", "reason": "기준일 없음"})
+            continue
+        # 기존 SCHEDULED 스케줄 존재 여부 확인
+        existing = supabase.table("work_schedules").select("id") \
+            .eq("inspection_set_id", set_id).eq("status_code", "SCHEDULED").limit(1).execute()
+        if existing.data and not force:
+            skipped += 1
+            results.append({"id": set_id, "name": name, "status": "skipped", "reason": "이미 스케줄 존재"})
+            continue
+        try:
+            anchor = date.fromisoformat(anchor_str)
+            row, planned = _build_next_schedule_row(iset, anchor)
+            if force and existing.data:
+                supabase.table("work_schedules").delete() \
+                    .eq("inspection_set_id", set_id).eq("status_code", "SCHEDULED").execute()
+            r = supabase.table("work_schedules").insert(row).execute()
+            c = len(r.data or [])
+            created += c
+            results.append({
+                "id": set_id, "name": name, "status": "created",
+                "planned_date": planned.isoformat(),
+            })
+        except Exception as e:
+            results.append({"id": set_id, "name": name, "status": "error", "reason": str(e)})
+    return {
+        "status": "success",
+        "message": f"{len(sets)}개 처리 — 생성 {created}건, 스킵 {skipped}건",
+        "data": {
+            "factory_id": factory_id,
+            "total":   len(sets),
+            "created": created,
+            "skipped": skipped,
+            "results": results,
+        },
+    }
 
 
 # ══════════════════════════════════════════════
