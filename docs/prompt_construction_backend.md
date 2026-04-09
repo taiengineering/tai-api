@@ -1,6 +1,6 @@
-# 건설 섹터 백엔드 작업 프롬프트
+# 건설 섹터 백엔드 — Claude 백엔드 창 시작 프롬프트
 
-> 이 파일을 **백엔드 Claude 창**에 그대로 붙여넣으세요.
+> **사용법:** 이 파일 전체를 백엔드 Claude 창에 붙여넣어 시작
 
 ---
 
@@ -11,112 +11,56 @@
 - FastAPI / Python (tai-api)
 - Railway 배포: api.taieng.co.kr
 - Supabase / PostgreSQL (project: xntdkrjhgcscmqctdzyo)
-- GitHub: taiengineering/tai-api
+- GitHub: taiengineering/tai-api (github-tai MCP)
+- 브라우저 테스트 금지 (Claude in Chrome 사용 금지)
+- 모든 테스트는 Supabase MCP 또는 터미널 Python 파일로만
 
-## 오늘 작업: 건설 섹터 백엔드 구현
+## 현재 완료 상태 (routers/construction.py v2.1.0)
 
-작업 파일: routers/construction.py (기존 파일 확인 후 미구현 엔드포인트 추가)
+✅ 완료된 항목 (건드리지 말 것):
+- Sites CRUD (GET/POST/PATCH/DELETE/stats)
+- POST /sites/{id}/diagnose — 법령진단 독립 엔드포인트
+- POST /sites/{id}/generate-schedules — 작업일정 자동 생성
+- Processes CRUD + 고위험 자동 분류
+- Workers CRUD + 출입 상태
+- Inspections CRUD + 이상 시 FCM 자동발송
+- Works/PTW CRUD
+- KCSC 마스터 조회
+- POST /engine/safety-manager
 
----
+## 오늘 작업 지시 내용 확인
 
-### ★ 최우선 스펙 (v2.1.0) — 반드시 준수
+docs/workorder_construction_backend.md 파일을 먼저 읽고 미완료 항목을 파악한 뒤 진행하세요.
 
-#### 1. 법령진단 POST /construction/sites/{site_id}/diagnose
-응답 구조:
-```json
-{
-  "status": "success",
-  "data": {
-    "site_id": "uuid",
-    "total_rules": 173,
-    "applicable_rules": 47,
-    "inspection_sets_created": 47,
-    "by_obligation_type": {
-      "BEFORE_WORK": 22, "ACTION": 18, "INSPECT": 5, "APPOINT": 2
-    }
-  }
-}
-```
-- 중복 실행 시 기존 inspection_sets SKIP (NOT EXISTS 패턴)
-- 완료 후 construction_sites.diagnosis_applicable_count, last_diagnosis_at 업데이트 필수
-- 에러: HTTP 422 + {"detail": "공사금액을 먼저 입력해주세요."}
+## 코드 규칙
 
-#### 2. 작업일정 자동 생성 POST /construction/sites/{site_id}/generate-schedules
-응답 구조:
-```json
-{"status":"success","data":{"created":34,"skipped":13,"total_rules":47}}
-```
-- diagnosis_applicable_count == 0 이면 HTTP 400 + {"detail": "법령진단을 먼저 실행하세요."}
-- BEFORE_WORK 의무: cycle_unit=day, cycle_value=1 자동 설정
-- 이미 생성된 스케줄 중복 생성 금지 (NOT EXISTS)
+1. FastAPI 경로: 구체 경로(/drafts/stats)를 파라미터 경로(/{id}) 앞에 선언
+2. API size 최대값: 100 (le=100)
+3. DB 변경: DDL은 supabase:apply_migration, DML은 supabase:execute_sql
+4. 다중 파일 커밋: github-tai:push_files 사용
+5. 단일 파일 수정: github-tai:create_or_update_file (SHA 먼저 조회 필수)
+6. 커밋 완료 후 Railway 자동 배포 확인 (보통 2-3분 소요)
 
-#### 3. 점검 저장 POST /construction/inspections
-요청 Body:
-```json
-{
-  "site_id": "uuid",
-  "process_id": "uuid",
-  "inspector_phone": "01012345678",
-  "checklist_items": [
-    {"item_name": "타이어 상태", "result": "ok",  "note": ""},
-    {"item_name": "경적 작동",  "result": "bad", "note": "경적 불량"}
-  ]
-}
-```
-- overall_result 생략 가능 → API 자동 계산:
-  - overall_result = "ISSUE" if any result=="bad" else "PASS"
-  - defect_count = bad 항목 수
-- 이상 발생 시 site.manager_id → users.push_token → FCM 자동 발송
-- FIREBASE_CREDENTIALS = Railway Variables에 서비스 계정 JSON 전체 저장
+## 중요 테이블 참고
 
----
+- construction_sites: id, company_id, site_name, site_type, contract_amount,
+  total_workers, direct_workers, subcon_workers, safety_manager_required,
+  safety_manager_count, factory_id, diagnosis_applicable_count, last_diagnosis_at
+- construction_site_processes: id, site_id, process_name, work_type_code, is_high_risk
+- construction_workers: id, site_id, worker_type, entry_status, fcm_token
+- construction_inspections: id, site_id, process_id, checklist_items, overall_result,
+  defect_count, corrective_status
+- master_building_legal_rules WHERE sector='CONSTRUCTION': 173건
 
-### 구현 순서
+## FCM 알림
 
-1단계: construction sites CRUD
-- GET  /construction/sites?company_id={cid}&page=1&size=20
-- POST /construction/sites (필수: site_name, company_id, contract_amount, construction_type, start_date, end_date, total_workers)
-- GET  /construction/sites/{id}
-- PATCH /construction/sites/{id}
-- DELETE /construction/sites/{id} → is_active=False
+- Railway 환경변수: FCM_SERVER_KEY
+- 없으면 무시 (점검 저장에 영향 없음)
+- 경로: site.manager_id → users.fcm_token → FCM 발송
 
-선임 자동 계산 (저장 시):
-```python
-def calc_safety_manager_required(construction_type, contract_amount):
-    thresholds = {"건축": 15_000_000_000, "토목": 12_000_000_000, "복합": 12_000_000_000}
-    return contract_amount >= thresholds.get(construction_type, 15_000_000_000)
-```
+## 작업 완료 후 필수
 
-2단계: 법령진단 API → ★ v2.1.0 스펙 준수
-- master_building_legal_rules WHERE sector='CONSTRUCTION' 전체 조회
-- condition_code 기반 해당 현장 조건 매칭 → inspection_sets 생성
-- applicable_rules, by_obligation_type 응답 필수
-
-3단계: 공정 CRUD
-- GET/POST/PATCH/DELETE /construction/sites/{id}/processes
-- is_high_risk 자동 계산:
-```python
-HIGH_RISK_TYPES = {'DEMOLITION','EXCAVATION','HIGH_PLACE','CRANE','TUNNEL','COFFERDAM','CONCRETE_FORM','STEEL_FRAME'}
-is_high_risk = work_type_code in HIGH_RISK_TYPES
-```
-
-4단계: 점검 저장 + FCM → ★ v2.1.0 스펙 준수
-- POST /construction/inspections
-- GET  /construction/inspections?site_id={id}&page=1&size=20
-- PATCH /construction/inspections/{id}  # 시정조치
-
-5단계: 작업자 관리
-- GET/POST/DELETE /construction/sites/{id}/workers
-
-6단계: 작업일정 자동 생성 → ★ v2.1.0 스펙 준수
-- POST /construction/sites/{id}/generate-schedules
-
----
-
-### 주의사항
-- construction_sites.factory_id는 선택사항 (없어도 됨)
-- total_workers = direct_workers + subcon_workers
-- construction_inspections.process_id로 공정별 이력 추적
-- main.py에 라우터 등록 후 버전 업 (v5.x.x → v5.x.x+1)
-- 완료 후 Railway 자동 배포 확인
+1. Railway 배포 확인
+2. 완료된 API curl 테스트
+3. docs/workorder_construction_backend.md 완료 항목 ✅ 표시
 ```
