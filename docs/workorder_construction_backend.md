@@ -1,246 +1,155 @@
-# TAI Safe 건설섹터 백엔드 작업지시서
+# 건설관리 백엔드 워크오더
+
+> 작성일: 2026-04-09  
+> 기준: `routers/construction.py` v2.1.0  
+> 상태: **완료 — 추가 작업 없음**
 
 ---
 
-## ★ API v2.1.0 추가 기능 (최우선 반영)
+## 현황 요약
 
-### 1. 법령진단 독립 실행
-
-**엔드포인트**: `POST /construction/sites/{site_id}/diagnose`
-
-**응답 구조 (필수 준수):**
-```json
-{
-  "status": "success",
-  "data": {
-    "site_id": "uuid",
-    "total_rules": 173,
-    "applicable_rules": 47,
-    "inspection_sets_created": 47,
-    "by_obligation_type": {
-      "BEFORE_WORK": 22,
-      "ACTION": 18,
-      "INSPECT": 5,
-      "APPOINT": 2
-    }
-  }
-}
-```
-
-**구현 포인트:**
-- 중복 실행 시 기존 inspection_sets SKIP (NOT EXISTS 패턴 사용)
-- 진단 완료 후 `construction_sites.diagnosis_applicable_count` 업데이트 필수
-- `construction_sites.last_diagnosis_at` = now() 업데이트 필수
-- 에러 시 HTTP 422 + `{ "detail": "공사금액을 먼저 입력해주세요." }` 형식 반환
+construction.py v2.1.0은 프론트엔드에서 필요한 모든 API를 포함하고 있습니다.
 
 ---
 
-### 2. 작업일정 자동 생성
+## 완료된 API 목록
 
-**엔드포인트**: `POST /construction/sites/{site_id}/generate-schedules`
-
-**응답 구조 (필수 준수):**
-```json
-{
-  "status": "success",
-  "data": {
-    "created": 34,
-    "skipped": 13,
-    "total_rules": 47
-  }
-}
+### ① 건설현장 (Sites)
+```
+GET    /construction/sites                      현장 목록
+POST   /construction/sites                      현장 등록 (+ 자동진단 + 자동일정)
+GET    /construction/sites/{site_id}            현장 단건
+PATCH  /construction/sites/{site_id}            현장 수정
+DELETE /construction/sites/{site_id}            현장 삭제 (soft)
+GET    /construction/sites/{site_id}/stats      현장 통계
 ```
 
-**구현 포인트:**
-- `diagnosis_applicable_count == 0` 인 경우 HTTP 400 반환:
-  ```json
-  { "detail": "법령진단을 먼저 실행하세요." }
-  ```
-- 4조건 미충족 inspection_set → `skipped` 카운트에 포함
-- BEFORE_WORK 의무: `cycle_unit=day, cycle_value=1` 자동 적용
-- 이미 생성된 스케줄은 중복 생성하지 않음 (NOT EXISTS 패턴)
+### ② 법령진단 독립 실행 (v2.1.0 신규)
+```
+POST   /construction/sites/{site_id}/diagnose
+```
+- CONSTRUCTION sector 173개 규칙 → 현장 조건 매칭
+- `factory_diagnosis_results` 저장 (is_latest=true)
+- `construction_sites.diagnosis_applicable_count` 자동 업데이트
+- 응답: `applicable_rules`, `by_obligation_type`
+
+### ③ 작업일정 자동 생성 (v2.1.0 신규)
+```
+POST   /construction/sites/{site_id}/generate-schedules
+```
+- 최신 진단 결과의 `inspection_required` + `action_required` 조회
+- `work_schedules` 생성 (source_type=LEGAL)
+- 중복 rule_code 자동 스킵
+- 응답: `created`, `skipped`, `total_rules`
+
+### ④ 공정 (Processes)
+```
+GET    /construction/sites/{site_id}/processes
+POST   /construction/sites/{site_id}/processes
+GET    /construction/processes/{process_id}
+PATCH  /construction/processes/{process_id}
+DELETE /construction/processes/{process_id}
+```
+
+### ⑤ KCSC 마스터
+```
+GET    /construction/kcsc/processes    공정 마스터 (자동완성)
+GET    /construction/kcsc/works        작업 마스터
+GET    /construction/kcsc/works/{process_id}
+```
+
+### ⑥ 위험작업/PTW (Works)
+```
+GET    /construction/sites/{site_id}/works
+POST   /construction/sites/{site_id}/works
+GET    /construction/works/{work_id}
+PATCH  /construction/works/{work_id}
+PATCH  /construction/works/{work_id}/ptw    PTW 승인/거절/완료
+DELETE /construction/works/{work_id}
+```
+
+### ⑦ 작업자 (Workers)
+```
+GET    /construction/sites/{site_id}/workers
+POST   /construction/sites/{site_id}/workers
+GET    /construction/workers/{worker_id}
+PATCH  /construction/workers/{worker_id}
+PATCH  /construction/workers/{worker_id}/entry   출입 상태 변경 (IN/OUT/OFFSITE)
+DELETE /construction/workers/{worker_id}
+```
+
+### ⑧ 안전점검 (Inspections) — v2.1.0 FCM 추가
+```
+GET    /construction/sites/{site_id}/inspections
+POST   /construction/sites/{site_id}/inspections   (이상 감지 시 FCM 자동 발송)
+GET    /construction/inspections/{inspection_id}
+PATCH  /construction/inspections/{inspection_id}
+PATCH  /construction/inspections/{inspection_id}/corrective   시정조치 상태
+DELETE /construction/inspections/{inspection_id}
+```
+
+**FCM 동작 (v2.1.0):**
+- `checklist_items` 중 result = `bad/fail/이상/FAIL` → defect_count 자동 집계
+- `overall_result` 자동 판정: defect_count >= 1 → ISSUE, 0 → PASS
+- FAIL/ISSUE + defect_count > 0 → site.manager_id → users.fcm_token 조회 → FCM 발송
+- `FCM_SERVER_KEY` 환경변수 없으면 자동 무시
+
+### ⑨ 안전관리자 판정 엔진
+```
+POST   /construction/engine/safety-manager
+body: { site_type, contract_amount, total_workers }
+```
 
 ---
 
-### 3. 점검 저장 → FCM 자동 발송
+## 환경변수 설정 (Railway)
 
-**엔드포인트**: `POST /construction/inspections`
-
-**요청 Body `checklist_items` 배열 형식 (필수 준수):**
-```json
-{
-  "site_id": "uuid",
-  "process_id": "uuid",
-  "inspector_phone": "01047758888",
-  "checklist_items": [
-    { "item_name": "타이어 상태", "result": "ok",  "note": "" },
-    { "item_name": "경적 작동",  "result": "bad", "note": "경적 불량" },
-    { "item_name": "브레이크",   "result": "ok",  "note": "" }
-  ]
-}
 ```
+FCM_SERVER_KEY = [Firebase 서버 키]
+```
+- 미설정 시 FCM 발송 건너뜀, 점검 저장에는 영향 없음
+- Railway 대시보드 → 해당 서비스 → Variables → 추가
 
-**`overall_result` 생략 가능 → API 자동 계산:**
+---
+
+## DB 테이블 구조
+
+| 테이블 | 용도 |
+|--------|------|
+| `construction_sites` | 현장 (factory_id 자동 생성) |
+| `construction_site_processes` | 공정 |
+| `construction_works` | 작업/PTW |
+| `construction_workers` | 작업자 |
+| `construction_inspections` | 안전점검 |
+| `kcsc_process_master` | KCSC 공정 마스터 |
+| `kcsc_work_master` | KCSC 작업 마스터 |
+| `factories` | 법령진단 연동용 (자동 생성) |
+| `factory_diagnosis_results` | 진단 결과 저장 |
+| `work_schedules` | 자동 생성 작업일정 |
+
+---
+
+## 안전관리자 선임의무 판정 로직
+
 ```python
-overall_result = "ISSUE" if any(i["result"] == "bad" for i in checklist_items) else "PASS"
-defect_count   = sum(1 for i in checklist_items if i["result"] == "bad")
+# 산안법 시행령 제16조
+건축(BUILDING): 도급금액 >= 150억 → 선임
+토목(CIVIL):    도급금액 >= 120억 → 선임
+상시 근로자 >= 50명 → 선임 (도급금액 무관)
 ```
 
-**이상 발생 시 FCM 자동 발송 로직:**
-```python
-if overall_result == "ISSUE":
-    # 현장 안전관리자 FCM 토큰 조회
-    manager = get_site_manager(site_id)  # manager_id → users.push_token
-    if manager and manager.push_token:
-        send_push(
-            fcm_token=manager.push_token,
-            title="⚠️ 건설현장 점검 이상 발생",
-            body=f"{site_name} — 이상 {defect_count}건 발생",
-            data={"type": "inspection", "site_id": site_id, "inspection_id": str(new_id)}
-        )
-```
-
-**`FCM_SERVER_KEY` Railway 설정 방법:**
-```
-Railway Dashboard → 프로젝트 선택 → Variables
-→ FIREBASE_CREDENTIALS = '{"type":"service_account","project_id":"tai-safe",...}'
-(Firebase Console → 프로젝트 설정 → 서비스 계정 → 새 비공개 키 생성 → JSON 전체 내용)
-```
+현장 등록/수정 시 자동 계산되어 `safety_manager_required`, `safety_manager_count` 저장.
 
 ---
 
-## 현황 분석
-
-### DB 현황
-- `construction_sites`: 0건 (테이블 있음, 데이터 없음)
-- `construction_site_processes`: 0건
-- `construction_workers`: 0건
-- `construction_inspections`: 0건
-- `master_building_legal_rules` CONSTRUCTION 섹터: 173건 (모두 condition_code 있음)
-
-### 법령 의무구분 분포
-| obligation_type | 건수 | 비고 |
-|---|---|---|
-| ACTION (조치) | 69 | 가장 많음 |
-| BEFORE_WORK (작업 전 점검) | 60 | 핵심 점검 |
-| REPORT (보고) | 15 | |
-| INSPECT (정기점검) | 13 | |
-| NOTIFY (신고) | 6 | |
-| APPOINT (선임) | 5 | |
-| OTHER | 5 | |
-
-### 산업 섹터와 건설 섹터 핵심 차이
-| 항목 | 산업 (BUILDING/MANUFACTURING) | 건설 (CONSTRUCTION) |
-|---|---|---|
-| 대상 | 시설(factory) + 설비(equipment) | 건설현장(site) + 공정(process) |
-| 법령 적용 단위 | 설비 type 기반 | 공사금액 + 공정 type 기반 |
-| 점검 주체 | 안전관리자 → 작업자 배정 | 감리/안전관리자 현장 순회 |
-| 선임 기준 | 상시 근로자 수 | 공사금액 (건축 150억, 토목 120억) |
-| 하도급 | 없음 | 원청/하도급 구분 필수 |
-| 작업 전 점검 | 설비별 체크리스트 | 공정별 체크리스트 |
-
----
-
-## 백엔드 작업 목록
-
-### 1. construction_sites API 완성
-**파일**: `routers/construction.py` (기존 파일 확인 후 미구현 엔드포인트 추가)
+## 현장 등록 자동화 흐름 (v2.0.0+)
 
 ```
-GET  /construction/sites              건설현장 목록 (company_id 필터)
-POST /construction/sites              건설현장 등록
-GET  /construction/sites/{id}         건설현장 단건 조회
-PATCH /construction/sites/{id}        건설현장 수정
-DELETE /construction/sites/{id}       건설현장 비활성화
+POST /construction/sites
+  └─ construction_sites 저장
+  └─ factories 자동 생성 (sector=CONSTRUCTION)
+  └─ construction_sites.factory_id 업데이트
+  └─ _run_diagnosis() 실행 → factory_diagnosis_results 저장
+  └─ _run_generate_schedules() 실행 → work_schedules 생성
+  └─ 응답 auto.diagnosis, auto.schedules 포함
 ```
-
-**필수 필드 검증:**
-- `site_name`, `company_id`, `contract_amount`, `start_date`, `end_date` 필수
-- `construction_type` (건축/토목/복합) 필수 → 안전관리자 선임 기준 자동 계산
-- `total_workers` 필수 → 안전관리비 기준
-
-**자동 계산 로직 (저장 시):**
-```python
-def calc_safety_manager_required(construction_type, contract_amount):
-    thresholds = {'건축': 15_000_000_000, '토목': 12_000_000_000, '복합': 12_000_000_000}
-    threshold = thresholds.get(construction_type, 15_000_000_000)
-    return contract_amount >= threshold
-```
-
----
-
-### 2. 건설 법령진단 API
-→ ★ v2.1.0 섹션 참조
-
----
-
-### 3. 건설 공정 API
-**파일**: `routers/construction.py`
-
-```
-GET  /construction/sites/{site_id}/processes
-POST /construction/sites/{site_id}/processes
-PATCH /construction/sites/{site_id}/processes/{id}
-DELETE /construction/sites/{site_id}/processes/{id}
-```
-
-**고위험 작업 분류 (work_type_code 기준):**
-```python
-HIGH_RISK_TYPES = {
-    'DEMOLITION', 'EXCAVATION', 'HIGH_PLACE', 'CRANE',
-    'TUNNEL', 'COFFERDAM', 'CONCRETE_FORM', 'STEEL_FRAME',
-}
-```
-
----
-
-### 4. 건설 점검 결과 저장 API
-→ ★ v2.1.0 섹션 참조 (checklist_items 형식, FCM 발송 포함)
-
-```
-POST /construction/inspections
-GET  /construction/inspections
-GET  /construction/inspections/{id}
-PATCH /construction/inspections/{id}  # 시정조치 업데이트
-```
-
----
-
-### 5. 건설 작업자 관리 API
-
-```
-GET  /construction/sites/{site_id}/workers
-POST /construction/sites/{site_id}/workers
-DELETE /construction/sites/{site_id}/workers/{id}
-```
-
----
-
-### 6. 작업일정 자동 생성
-→ ★ v2.1.0 섹션 참조 (created/skipped/total_rules 응답 포함)
-
-```
-POST /construction/sites/{site_id}/generate-schedules
-```
-
----
-
-## 구현 순서
-
-```
-1단계: construction sites CRUD
-2단계: 건설 법령진단 (★ v2.1.0 응답구조 준수)
-3단계: 공정 등록
-4단계: 점검 결과 저장 + FCM 알림 (★ v2.1.0 checklist_items 형식 준수)
-5단계: 작업일정 자동 생성 (★ v2.1.0 created/skipped 응답 준수)
-```
-
----
-
-## 주의사항
-
-1. **건설은 factory_id가 없어도 됨**: `construction_sites.factory_id`는 선택사항
-2. **하도급 근로자 합산**: `total_workers = direct_workers + subcon_workers`
-3. **공사금액 기준 선임**: 법령진단 시 `contract_amount` 기준으로 선임 의무 자동 판단
-4. **공정 기반 점검**: `construction_inspections.process_id`로 공정별 점검 이력 추적
-5. **작업 중단 플로우**: 이상 발생 → 시정조치 요구 → 조치 완료 확인 후 재개

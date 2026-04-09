@@ -1,105 +1,142 @@
-# 건설 섹터 프론트엔드 — Claude 프론트엔드 창 시작 프롬프트
+# 프론트엔드 창 시작 프롬프트 — 건설관리 v2.1.0
 
-> **사용법:** 이 파일 전체를 프론트엔드 Claude 창에 붙여넣어 시작
+> 이 파일을 프론트엔드 Claude 창에 붙여넣어 세션을 시작합니다.
 
 ---
 
-```
-당신은 TAI Safe 프론트엔드 개발자입니다.
+아래 내용을 읽고 즉시 준비됐다고 알려주세요.
 
-## 프로젝트 스택
-- HTML + Bootstrap 5 + Vuexy 템플릿 (tai-admin)
-- Cloudflare Pages 배포
-  - admin.taieng.co.kr → site/full-version/html/ (슈퍼어드민)
-  - safe.taieng.co.kr → 고객어드민 (안전관리자용)
-- GitHub: taiengineering/tai-admin (github-tai-admin MCP)
-- API: https://api.taieng.co.kr
+## 프로젝트 정보
 
-## Vuexy 템플릿 필수 설정
+- **레포**: `taiengineering/tai-admin` (branch: main)
+- **작업 경로**: `tadmin/full-version/html/horizontal-menu-template/`
+- **배포**: Cloudflare Pages → safe.taieng.co.kr
+- **템플릿**: Vuexy Bootstrap 5 (HTML 버전)
 
-HTML 속성: data-skin="default" dir="ltr" data-bs-theme="dark" data-assets-path="../../assets/"
-CSS: iconify-icons.css (remixicon 아님), node-waves.css, core.css
-메뉴 파일: menu-nav.js (admin) / menu-tadmin.js (safe)
-페이지 JS: assets/js/tai/*.page.js
-
-## 프론트엔드 목록 규칙
-
-1. 첫 번째 컬럼 = 전체선택 체크박스
-2. 두 번째 컬럼 = 행 번호 (No.)
-
-## 백엔드 API 현황 (v2.1.0 완료)
-
-### 건설현장 API
-```
-GET  /construction/sites?company_id={cid}       현장 목록
-POST /construction/sites                         현장 등록
-GET  /construction/sites/{id}                    현장 상세
-PATCH /construction/sites/{id}                   현장 수정
-DELETE /construction/sites/{id}                  현장 삭제
-GET  /construction/sites/{id}/stats              현장 통계
-POST /construction/sites/{id}/diagnose           법령진단 실행
-POST /construction/sites/{id}/generate-schedules 작업일정 생성
+## 필수 HTML 속성 (모든 페이지 공통)
+```html
+<html class="layout-navbar-fixed layout-menu-fixed layout-compact"
+  data-assets-path="../../assets/"
+  data-bs-theme="light"
+  data-skin="default"
+  data-template="horizontal-menu-template"
+  dir="ltr" lang="ko">
 ```
 
-### 공정 API
-```
-GET  /construction/sites/{id}/processes
-POST /construction/sites/{id}/processes
-PATCH /construction/processes/{proc_id}
-DELETE /construction/processes/{proc_id}
-```
+## 필수 CSS/JS 로드 순서
+```html
+<!-- HEAD -->
+<script src="../../assets/js/tai/auth-guard.js"></script>
+<link href="../../assets/vendor/fonts/iconify-icons.css" rel="stylesheet"/>
+<link href="../../assets/vendor/libs/node-waves/node-waves.css" rel="stylesheet"/>
+<link href="../../assets/vendor/css/core.css" rel="stylesheet"/>
+<link href="../../assets/css/demo.css" rel="stylesheet"/>
+<link href="../../assets/css/tai/custom.css" rel="stylesheet"/>
+<script src="../../assets/vendor/js/helpers.js"></script>
+<script src="../../assets/vendor/js/template-customizer.js"></script>
+<script src="../../assets/js/config.js"></script>
 
-### 작업자 API
-```
-GET  /construction/sites/{id}/workers
-POST /construction/sites/{id}/workers
-PATCH /construction/workers/{wid}/entry  # 출입 상태: IN/OUT/OFFSITE
-```
-
-### 점검 API
-```
-GET  /construction/sites/{id}/inspections
-POST /construction/sites/{id}/inspections  # checklist_items 배열, overall_result 자동계산
-PATCH /construction/inspections/{iid}/corrective  # 시정조치
-```
-
-### PTW (작업허가서) API
-```
-GET  /construction/sites/{id}/works
-POST /construction/sites/{id}/works
-PATCH /construction/works/{wid}/ptw  # ptw_status: APPROVED/REJECTED/CLOSED
-```
-
-## 오늘 작업 지시 내용 확인
-
-docs/workorder_construction_frontend.md 파일을 먼저 읽고 미완료 항목을 파악한 뒤 진행하세요.
-
-## 화면 목록 (safe.taieng.co.kr 기준)
-
-| 화면 | 파일명 | 상태 |
-|------|--------|------|
-| 건설현장 목록/등록 | construction-sites.html | 작업 필요 |
-| 건설현장 상세/수정 | construction-site-detail.html | 작업 필요 |
-| 공정 관리 | construction-processes.html | 작업 필요 |
-| 작업자 관리 | construction-workers.html | 작업 필요 |
-| 점검 이력 | construction-inspections.html | 작업 필요 |
-| PTW 목록 | construction-works.html | 작업 필요 |
-
-## 코드 규칙
-
-1. 다중 파일: github-tai-admin:push_files 사용
-2. 단일 파일: github-tai-admin:create_or_update_file (SHA 먼저 조회)
-3. 메뉴 추가 시: menu-tadmin.js 수정 필수
-4. API 호출 패턴:
-```javascript
-const API = 'https://api.taieng.co.kr';
-const token = localStorage.getItem('access_token') || '';
-const headers = {'Content-Type':'application/json', 'Authorization':'Bearer '+token};
+<!-- BODY 하단 -->
+<script src="../../assets/vendor/libs/jquery/jquery.js"></script>
+<script src="../../assets/vendor/libs/popper/popper.js"></script>
+<script src="../../assets/vendor/js/bootstrap.js"></script>
+<script src="../../assets/vendor/libs/node-waves/node-waves.js"></script>
+<script src="../../assets/vendor/js/menu.js"></script>
+<script src="../../assets/js/main.js"></script>
+<script src="../../assets/js/utils.js"></script>
+<script src="../../assets/js/tai/api.js"></script>
+<script src="../../assets/js/tai/toast.js"></script>
+<script src="../../assets/js/tai/globals.js"></script>
+<script src="../../assets/js/tai/menu-tadmin.js"></script>
+<script src="../../assets/js/tai/nav-tadmin.js"></script>
+<script src="../../assets/js/tai/notification.js"></script>
+<script>buildMenu('layout-menu');</script>
 ```
 
-## 작업 완료 후 필수
+## 건설관리 API 기본 정보
 
-1. Cloudflare Pages 배포 확인 (safe.taieng.co.kr)
-2. 화면에서 API 동작 확인
-3. docs/workorder_construction_frontend.md 완료 항목 ✅ 표시
+- **기준 API**: `https://api.taieng.co.kr/construction`
+- **현재 API 버전**: v2.1.0 (완전 완료)
+
+### 핵심 구조
 ```
+company → construction_site (현장) → factory_id (자동생성, inspection-sets 연동)
+```
+
+### v2.1.0 신규 API (프론트 구현 필수)
+```
+POST /construction/sites/{id}/diagnose          → 법령진단 재실행 버튼
+POST /construction/sites/{id}/generate-schedules → 일정 생성 버튼
+```
+
+### 점검 저장 시 FCM 자동 발송
+- `overall_result` 생략 가능 → API가 자동 계산
+- ISSUE/FAIL 시 관리자 FCM 자동 발송 (프론트 처리 불필요)
+- 응답의 `overall_result`, `defect_count`만 UI에 표시
+
+### checklist_items 형식
+```json
+[{ "item_name": "PPE 착용", "result": "good", "note": "" }]
+```
+
+## 건설 색상 (시설관리 파란색 대신 주황)
+```css
+background: linear-gradient(135deg, #d97706, #92400e);
+```
+
+## localStorage 키 규칙
+```js
+localStorage.getItem('company_id')                   // 회사 ID
+localStorage.getItem('selectedConstructionSiteId')    // construction_sites.id
+localStorage.getItem('selectedConstructionFactoryId') // factory_id (inspection-sets용)
+```
+
+## 상태코드 배지
+```js
+const STATUS_CLR = { PLANNED:'secondary', IN_PROGRESS:'primary', DONE:'success', SUSPENDED:'warning' };
+const ENTRY_CLR  = { IN:'success', OUT:'secondary', OFFSITE:'warning' };
+const RESULT_CLR = { PASS:'success', ISSUE:'warning', FAIL:'danger' };
+const WORKER_CLR = { DIRECT:'primary', SUBCON:'secondary' };
+```
+
+## 테이블 공통 규칙
+- 1번 컬럼: 전체선택 체크박스
+- 2번 컬럼: No. (1부터)
+
+## 작업 순서 (이 순서대로 진행)
+
+```
+1. construction-site-list.html    ← 전면 재작성 (大)
+2. construction-process.html      ← 신규 (中)
+3. construction-worker-list.html  ← worker-list.html 재활용 (中)
+4. construction-inspection-list.html ← 전면 재작성 (中)
+5. construction-inspection-anchor.html ← inspection-anchor.html 재활용 (小)
+6. worker-check-construction.html ← worker-check.html 재활용 (小)
+```
+
+## 참조 파일 (재활용 원본)
+
+| 파일 | SHA | 용도 |
+|------|-----|------|
+| inspection-anchor.html | 5afb9f1b | #5 재활용 원본 |
+| worker-list.html | eba689f0 | #3 재활용 원본 |
+| worker-check.html | 2535ab23 | #6 재활용 원본 |
+
+## 상세 워크오더
+
+```
+tai-api/docs/workorder_construction_frontend.md
+tai-admin/docs/workorder_construction_frontend.md  (동일)
+```
+
+## 커밋 방법
+
+```js
+// 단일 파일
+github-tai-admin:create_or_update_file (SHA 반드시 확인)
+
+// 다중 파일 (권장)
+github-tai-admin:push_files (SHA 불필요)
+```
+
+준비됐으면 OK라고 알려주세요.

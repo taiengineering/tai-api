@@ -1,316 +1,278 @@
-# TAI Safe 건설섹터 프론트엔드 작업지시서
+# 건설관리 프론트엔드 워크오더
+
+> 작성일: 2026-04-09  
+> 기준 API: `routers/construction.py` v2.1.0  
+> 기준 경로: `tadmin/full-version/html/horizontal-menu-template/`  
+> 메뉴 진입: `safe.taieng.co.kr` → 건설관리
 
 ---
 
-## ★ API v2.1.0 추가 기능 (최우선 반영)
+## ★ API v2.1.0 핵심 기능 (프론트 구현 필수)
 
-### 1. 법령진단 독립 실행 — `construction-site-list.html` 사이드패널
+### 1. `POST /construction/sites/{site_id}/diagnose`
+- CONSTRUCTION 173개 규칙 → 조건 매칭
+- 응답: `applicable_rules`, `by_obligation_type`
+- 버튼 위치: construction-site-list.html 사이드패널
 
-**표시 위치**: 사이드패널 > 법령진단 탭
+### 2. `POST /construction/sites/{site_id}/generate-schedules`
+- 최신 진단 → work_schedules 생성 (중복 스킵)
+- 응답: `created`, `skipped`, `total_rules`
+- `diagnosis_applicable_count=0`이면 버튼 비활성
 
-**버튼 코드 패턴:**
-```javascript
-async function runDiagnosis(siteId) {
-  const btn = document.getElementById('btnDiagnose');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>진단 중...';
-  try {
-    const res = await fetch(`${API_BASE}/construction/sites/${siteId}/diagnose`, {
-      method: 'POST', headers: hdr()
-    });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.detail || '진단 실패');
-    const d = json.data;
-    // 결과 표시
-    document.getElementById('diagnosisResult').innerHTML = `
-      <div class="alert alert-success py-2">
-        <strong>진단 완료</strong> — 적용 의무 ${d.applicable_rules}건
-        <div class="mt-1 small">
-          작업 전 점검 ${d.by_obligation_type?.BEFORE_WORK || 0}건 ·
-          조치 ${d.by_obligation_type?.ACTION || 0}건 ·
-          정기점검 ${d.by_obligation_type?.INSPECT || 0}건
-        </div>
-      </div>`;
-    // 현장 데이터 업데이트
-    const site = _sites.find(s => s.id === siteId);
-    if (site) site.diagnosis_applicable_count = d.applicable_rules;
-    showToast('success', `법령진단 완료 — ${d.applicable_rules}건 적용`);
-  } catch(e) {
-    showToast('error', e.message);
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<i class="ti tabler-stethoscope me-1"></i>법령진단 실행';
-  }
+### 3. 점검 저장 → FCM 자동 발송
+- `overall_result` 생략 가능 → API가 자동 계산
+- ISSUE/FAIL 시 관리자 FCM 자동 발송 (프론트 처리 불필요)
+- 프론트는 응답의 `overall_result`, `defect_count`만 UI 표시
+
+---
+
+## 공통 구조
+
+```
+company → construction_site (현장) → factory_id (자동, inspection-sets 연동)
+```
+
+### API 기본 경로
+```
+https://api.taieng.co.kr/construction
+```
+
+### 현장 셀렉터 공통 패턴 (주황색 배너)
+```html
+<div class="card mb-3" style="background:linear-gradient(135deg,#d97706,#92400e);border:none;">
+  <div class="card-body py-3">
+    <label class="form-label text-white small mb-1" style="opacity:.8">현장 선택</label>
+    <select id="siteSelect" class="form-select" style="max-width:480px" onchange="onSiteChange()">
+      <option value="">현장을 선택하세요</option>
+    </select>
+  </div>
+</div>
+```
+
+### localStorage 키
+```js
+localStorage.getItem('company_id')                     // 회사 ID
+localStorage.getItem('selectedConstructionSiteId')      // construction_sites.id
+localStorage.getItem('selectedConstructionFactoryId')   // factory_id (inspection-sets용)
+```
+
+### 상태코드 배지
+```js
+const STATUS_CLR = { PLANNED:'secondary', IN_PROGRESS:'primary', DONE:'success', SUSPENDED:'warning' };
+const ENTRY_CLR  = { IN:'success', OUT:'secondary', OFFSITE:'warning' };
+const RESULT_CLR = { PASS:'success', ISSUE:'warning', FAIL:'danger' };
+const WORKER_CLR = { DIRECT:'primary', SUBCON:'secondary' };
+```
+
+### 테이블 공통 규칙
+- 1번 컬럼: 전체선택 체크박스
+- 2번 컬럼: No. (1부터)
+
+---
+
+## 화면 목록
+
+| 순서 | 파일 | 방식 | 메뉴 경로 |
+|------|------|------|-----------|
+| 1 | construction-site-list.html | 전면 재작성 | 건설관리 > 현장관리 |
+| 2 | construction-process.html | 신규 | 건설관리 > 공정관리 |
+| 3 | construction-worker-list.html | worker-list.html 재활용 | 건설관리 > 작업관리 |
+| 4 | construction-inspection-list.html | 전면 재작성 | 건설관리 > 점검관리 |
+| 5 | construction-inspection-anchor.html | inspection-anchor.html 재활용 | 건설관리 > 점검항목관리 |
+| 6 | worker-check-construction.html | worker-check.html 재활용 | 작업자 현장점검 제출 |
+
+---
+
+## 1. construction-site-list.html — 현장관리
+
+### API
+```
+GET    /construction/sites?company_id=&status_code=&search=&page=&size=
+POST   /construction/sites
+PATCH  /construction/sites/:site_id
+DELETE /construction/sites/:site_id
+GET    /construction/sites/:site_id/stats
+POST   /construction/sites/:site_id/diagnose         ← 재실행 버튼
+POST   /construction/sites/:site_id/generate-schedules ← 일정 생성 버튼
+```
+
+### 테이블 컬럼
+체크 | No. | 현장명 | 유형 | 도급금액 | 상태 | 안전관리자 | 진단 건수 | 기간 | 액션
+- 안전관리자: `safety_manager_required=true` 시 뱃지
+- 진단 건수: `diagnosis_applicable_count` 또는 `진단 필요` 버튼
+
+### 사이드 패널 (stats)
+```
+현장명 / 주소
+공정: 전체 N / 진행중 N
+작업: 전체 N / PTW승인 N
+작업자: 전체 N / 현장내 N
+점검: 전체 N / 이상 N
+[법령진단 재실행]  [일정 생성]  [현장 수정]
+```
+※ `diagnosis_applicable_count`=0이면 `일정 생성` 비활성
+
+### 등록 모달
+현장명* | 유형(BUILDING/CIVIL)* | 도급금액(억)* | 시작일 | 종료일 | 주소 | 현장소장 | 직영인원 | 하도급인원 | 비고
+
+### 코드 포인트
+```js
+// 등록 후 auto 결과 표시
+const { data, auto } = await res.json();
+if (auto?.diagnosis) showToast('success', `법령 ${auto.diagnosis.applicable_count}건 적용`);
+if (auto?.schedules) showToast('info', `작업일정 ${auto.schedules.created}건 생성`);
+
+// 진단 재실행
+POST /construction/sites/{site_id}/diagnose
+→ showToast('success', `적용 ${j.data.applicable_rules}건 (선임 N, 점검 N)`);
+
+// 일정 생성
+POST /construction/sites/{site_id}/generate-schedules
+→ showToast('info', `${j.data.created}건 생성, ${j.data.skipped}건 스킵`);
+```
+
+---
+
+## 2. construction-process.html — 공정관리
+
+### API
+```
+GET    /construction/sites/:site_id/processes?status_code=&page=&size=
+POST   /construction/sites/:site_id/processes
+PATCH  /construction/processes/:process_id
+DELETE /construction/processes/:process_id
+GET    /construction/kcsc/processes?search=&size=20   ← 자동완성
+```
+
+### 테이블 컬럼
+No. | 공정명 | KCSC코드 | 계획시작 | 계획종료 | 진행율 | 투입인원 | 위험작업 | 상태 | 액션
+- 진행율: 프로그레스 바 (`progress_rate`)
+- 위험작업: `is_high_risk=true` → `⚠️ 위험` 뱃지
+
+### 등록 모달
+공정명* | KCSC 공정 검색 | 계획시작 | 계획종료 | 투입인원 | 위험작업여부 | 비고
+
+---
+
+## 3. construction-worker-list.html — 작업자관리
+
+`worker-list.html` 재활용. **worker_registry → construction_workers** 교체.
+
+### API
+```
+GET    /construction/sites/:site_id/workers?worker_type=&entry_status=&search=&page=&size=
+POST   /construction/sites/:site_id/workers
+PATCH  /construction/workers/:worker_id
+PATCH  /construction/workers/:worker_id/entry   ← 출입 상태 변경
+DELETE /construction/workers/:worker_id
+```
+
+### 테이블 컬럼
+No. | 이름 | 구분(DIRECT/SUBCON) | 소속 | 역할 | 출입상태 | 안전교육일 | 입사일 | 출입변경 | 액션
+
+### 통계 카드
+`[전체 N] [현장내(IN) N] [직영 N] [하도급 N]`
+
+### 코드 포인트
+```js
+async function changeEntry(workerId, status) {
+  await fetch(`${API}/construction/workers/${workerId}/entry`, {
+    method: 'PATCH', headers: hdr(),
+    body: JSON.stringify({ entry_status: status })
+  });
 }
 ```
 
 ---
 
-### 2. 작업일정 자동 생성 버튼
+## 4. construction-inspection-list.html — 점검관리
 
-**`diagnosis_applicable_count == 0` 시 버튼 비활성 조건:**
-```javascript
-function renderScheduleBtn(site) {
-  const hasRules = (site.diagnosis_applicable_count || 0) > 0;
-  return hasRules
-    ? `<button class="btn btn-primary btn-sm" onclick="generateSchedules('${site.id}')">
-         <i class="ti tabler-calendar-plus me-1"></i>일정 생성
-       </button>`
-    : `<button class="btn btn-secondary btn-sm" disabled
-         title="법령진단을 먼저 실행하세요">
-         <i class="ti tabler-lock me-1"></i>일정 생성
-       </button>`;
+### API
+```
+GET    /construction/sites/:site_id/inspections?inspection_type=&overall_result=&page=&size=
+POST   /construction/sites/:site_id/inspections
+PATCH  /construction/inspections/:inspection_id/corrective
+DELETE /construction/inspections/:inspection_id
+```
+
+### 테이블 컬럼
+No. | 점검일시 | 점검유형 | 점검자 | 결과 | 이상건수 | 시정조치 | 마감일 | 액션
+- 결과: PASS=초록, ISSUE=주황, FAIL=빨강
+- 시정조치: PENDING/IN_PROGRESS/DONE + 인라인 변경
+
+### 통계 카드
+`[전체 N건] [이상 N건] [시정완료율 N%] [이번달 N건]`
+
+### 등록 모달 체크리스트
+```js
+// overall_result 생략 → API 자동 계산 (v2.1.0)
+const payload = {
+  inspection_type: 'BEFORE_WORK',
+  checklist_items: items.map(i => ({ item_name:i.name, result:i.result, note:i.note||'' })),
+  // overall_result 생략
+};
+```
+
+---
+
+## 5. construction-inspection-anchor.html — 점검항목관리
+
+`inspection-anchor.html` (SHA: 5afb9f1b) 재활용. **변경 사항만 적용.**
+
+### 변경 사항
+
+```js
+// 1. 타이틀
+'점검항목관리' → '건설 점검항목관리'
+
+// 2. 배너 컬러
+'#1a5fd4,#0c2d5c' → '#d97706,#92400e'
+
+// 3. 셀렉터
+factorySelect → siteSelect
+GET /factories → GET /construction/sites
+
+// 4. 값 매핑 (inspection-sets는 factory_id 기반)
+o.value = s.factory_id;  // ← factory_id
+o.dataset.siteId = s.id; // ← 원본 site_id 보관
+
+// 5. localStorage
+localStorage.setItem('selectedConstructionSiteId', _siteId);
+localStorage.setItem('selectedConstructionFactoryId', _factoryId);
+```
+
+나머지 탭/4조건/법령원문 모달 등 원본 그대로.
+
+---
+
+## 6. worker-check-construction.html — 작업자 현장점검
+
+`worker-check.html` (SHA: 2535ab23) 재활용.
+
+### 변경 사항
+
+```js
+// URL 파라미터
+기존: ?factory_id=xxx&set_id=xxx
+건설: ?site_id=xxx&work_id=xxx
+
+// 기본 체크리스트 (DB 항목 없을 때)
+const DEFAULT_CHECKLIST = [
+  { id:'c1', name:'PPE(안전모/조끼/안전화) 착용 확인' },
+  { id:'c2', name:'작업구역 안전 펜스 설치 확인' },
+  { id:'c3', name:'위험물질 취급 안전 절차 확인' },
+  { id:'c4', name:'비상연락망 및 소화기 위치 확인' },
+  { id:'c5', name:'장비/공구 이상 유무 확인' },
+];
+
+// 제출 API (v2.1.0 — FCM 자동 발송)
+POST /construction/sites/{site_id}/inspections
+body: { inspection_type:'BEFORE_WORK', checklist_items:[{item_name,result,note}] }
+
+// 제출 후
+if (j.data.overall_result === 'ISSUE') {
+  showResult('⚠️ 이상 항목이 감지됐습니다. 관리자에게 자동 보고됐습니다.', 'warning');
+} else {
+  showResult('✅ 점검 완료. 안전하게 작업해주세요!', 'success');
 }
-
-async function generateSchedules(siteId) {
-  try {
-    const res = await fetch(`${API_BASE}/construction/sites/${siteId}/generate-schedules`, {
-      method: 'POST', headers: hdr()
-    });
-    const json = await res.json();
-    if (!res.ok) {
-      // "법령진단을 먼저 실행하세요" 에러 처리
-      if (res.status === 400) {
-        showToast('warning', json.detail || '법령진단을 먼저 실행하세요.');
-        return;
-      }
-      throw new Error(json.detail || '생성 실패');
-    }
-    const d = json.data;
-    showToast('success', `일정 생성 완료 — ${d.created}건 생성, ${d.skipped}건 조건미충족`);
-  } catch(e) {
-    showToast('error', e.message);
-  }
-}
 ```
-
----
-
-### 3. 점검 저장 → 제출 후 결과별 UI 처리
-
-```javascript
-async function submitCheck(siteId, processId, results) {
-  const btn = document.getElementById('submitBtn');
-  btn.disabled = true;
-  btn.textContent = '저장 중...';
-  try {
-    const checklist_items = Object.entries(results).map(([item_name, result]) => ({
-      item_name, result, note: ''
-    }));
-    const res = await fetch(`${API_BASE}/construction/inspections`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        site_id: siteId,
-        process_id: processId,
-        inspector_phone: MY_PHONE,
-        checklist_items   // overall_result 생략 → API 자동 계산
-      })
-    });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.detail || '저장 실패');
-
-    const issues = checklist_items.filter(i => i.result === 'bad');
-    // 결과별 UI 처리
-    document.getElementById('mainContent').style.display = 'none';
-    const success = document.getElementById('successScreen');
-    success.style.display = 'flex';
-    if (issues.length > 0) {
-      success.querySelector('.result-msg').textContent =
-        `이상 항목 ${issues.length}건 — 안전관리자에게 자동 전달됐습니다.`;
-      success.querySelector('.result-icon').textContent = '⚠️';
-    } else {
-      success.querySelector('.result-msg').textContent = '모든 항목 정상입니다.';
-      success.querySelector('.result-icon').textContent = '✅';
-    }
-  } catch(e) {
-    showToast('error', e.message);
-    btn.disabled = false;
-    btn.textContent = '점검 완료';
-  }
-}
-```
-
----
-
-## 구현 화면 목록 (safe.taieng.co.kr — tadmin)
-
----
-
-## 화면 1: 건설현장 목록 (construction-site-list.html)
-
-**경로**: `tadmin/full-version/html/horizontal-menu-template/construction-site-list.html`  
-**메뉴**: 건설관리 > 건설현장
-
-### 레이아웃
-```
-[+ 현장 등록] 버튼
-
-[검색] [상태 필터] [공사유형 필터]
-
-테이블:
-  No. | 현장명 | 공사유형 | 공사금액 | 근로자 | 공기(시작-종료) | 진단 | 일정생성 | 상태
-
-사이드 패널 (등록/상세/수정):
-  기본정보 탭:
-    - 현장명 * (text)
-    - 공사유형 * (select: 건축/토목/복합)
-    - 공사금액 * (number, 원 단위)
-    - 총 근로자 수 * → 직영/하도급 분리 입력
-    - 주소 (주소검색 버튼)
-    - 공사 기간 * (시작일, 종료일)
-    - 안전관리자 선임 필요 여부: [자동계산 뱃지]
-      - 건축 150억 이상 / 토목 120억 이상 → 빨간 뱃지 "선임 필요"
-      - 미만 → 회색 뱃지 "선임 불필요"
-  
-  공정 탭:
-    - 공정 목록 테이블 (공정명, 작업유형, 계획기간, 진행률)
-    - [+ 공정 추가] 버튼
-  
-  법령진단 탭 (★ v2.1.0):
-    - [법령진단 실행] 버튼 → runDiagnosis() 호출
-    - 진단 결과 요약 (applicable_rules, by_obligation_type 표시)
-    - [일정 생성] 버튼 → diagnosis_applicable_count=0 이면 비활성
-    - [점검항목관리로 이동] 링크
-```
-
-### API 연결
-```javascript
-GET  /construction/sites?company_id={cid}&page=1&size=20
-POST /construction/sites
-POST /construction/sites/{id}/diagnose          // ★ v2.1.0
-POST /construction/sites/{id}/generate-schedules // ★ v2.1.0
-GET  /construction/sites/{id}/processes
-```
-
----
-
-## 화면 2: 건설 공정 관리 (construction-process.html)
-
-**경로**: `tadmin/full-version/html/horizontal-menu-template/construction-process.html`  
-**메뉴**: 건설관리 > 공정관리  
-**URL 파라미터**: `?site_id={id}`
-
-### 레이아웃
-```
-[현장명] 배너
-
-공정 목록 테이블:
-  No. | 공정명 | 작업유형 | 고위험 | 계획시작 | 계획종료 | 진행률 | 상태
-  - 고위험: 빨간 뱃지
-  - 진행률: Progress bar
-  - 행 클릭 → 사이드 패널
-
-사이드 패널:
-  - 공정명 *
-  - 작업유형 * (굴착/철골/거푸집/해체/고소작업/크레인/기타)
-  - 고위험 자동 판별 [자동 뱃지]
-  - 계획 기간 * (시작일, 종료일)
-  - 진행률 슬라이더 (0-100)
-  - 현장 근로자 수
-```
-
----
-
-## 화면 3: 건설 점검항목관리 (construction-inspection-anchor.html)
-
-**산업 섹터 inspection-anchor.html 재활용 + 건설 차이점:**
-
-```
-차이점 1: 현장 선택 (factorySelect → siteSelect)
-차이점 2: 공정 연결 컬럼 추가 (BEFORE_WORK → 공정 선택 필수)
-차이점 3: BEFORE_WORK → 주기 자동 '매일', 기준일 = 공정 시작일
-
-4가지 조건 동일:
-  언제 · 누가 · 무엇을 · 어떻게 → 모두 충족 시 스케줄 생성
-```
-
----
-
-## 화면 4: 건설 점검 결과 (construction-inspection-list.html)
-
-```
-[현장 선택] [공정 필터] [기간 필터] [결과 필터]
-
-테이블:
-  No. | 현장 | 공정 | 점검일시 | 점검자 | 이상건수 | 시정상태 | 결과
-
-상세 패널:
-  - 체크항목 목록 (정상/이상)
-  - 이상 항목 사진
-  - 시정조치 입력
-  - [시정완료 처리] 버튼
-
-통계 카드: 전체 | 이번달 | 이상발생 | 시정미완료
-```
-
----
-
-## 화면 5: 건설 작업자 관리 (construction-worker-list.html)
-
-```
-구분 탭: [전체] [직영] [하도급]
-
-테이블:
-  No. | 이름 | 구분 | 업체명 | 직종 | 등록일 | 앱설치 | 상태
-
-등록 패널:
-  - 이름, 연락처 *
-  - 구분: 직영 / 하도급 *
-  - 하도급 시: 업체명 추가
-  - 직종 *
-```
-
----
-
-## 화면 6: 건설 현장 작업자 점검 (worker-check-construction.html)
-
-**★ v2.1.0 checklist_items 형식 + 결과별 UI 처리 적용**
-
-```
-[현장명] 헤더
-
-공정별 그룹화:
-  공정명 (고위험 뱃지)
-  └─ 작업 전 점검 항목
-       [정상] [이상] 버튼
-       이상 → 사진 첨부 영역
-
-[점검 완료] → submitCheck() 호출 (★ v2.1.0 패턴)
-  이상: ⚠️ + "안전관리자에게 즉시 전달됐습니다"
-  정상: ✅ + "모든 항목 정상입니다"
-```
-
----
-
-## 메뉴 연결 (menu-tadmin.js)
-
-```
-건설현장     → construction-site-list.html
-공정관리     → construction-process.html
-점검항목관리 → construction-inspection-anchor.html
-점검이력     → construction-inspection-list.html
-작업자관리   → construction-worker-list.html
-```
-
----
-
-## 구현 순서
-
-```
-1단계: construction-site-list.html (★ v2.1.0 진단 버튼 포함)
-2단계: construction-inspection-anchor.html
-3단계: construction-inspection-list.html
-4단계: construction-process.html
-5단계: construction-worker-list.html
-6단계: worker-check-construction.html (★ v2.1.0 submitCheck 패턴)
-```
-
----
-
-## 중요 비고
-
-1. **건설현장은 factory가 아님**: `site_id` 기반으로 동작
-2. **diagnosis_applicable_count**: 일정생성 버튼 활성화 조건 — 반드시 체크
-3. **overall_result 생략**: API가 자동 계산하므로 프론트에서 보내지 않아도 됨
-4. **공사 완료 현장**: `status_code=COMPLETED` → 읽기전용 표시

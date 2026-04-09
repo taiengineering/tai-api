@@ -1,66 +1,68 @@
-# 건설 섹터 백엔드 — Claude 백엔드 창 시작 프롬프트
+# 백엔드 창 시작 프롬프트 — 건설관리 v2.1.0
 
-> **사용법:** 이 파일 전체를 백엔드 Claude 창에 붙여넣어 시작
+> 이 파일을 백엔드 Claude 창에 붙여넣어 세션을 시작합니다.
 
 ---
 
+아래 내용을 읽고 즉시 준비됐다고 알려주세요.
+
+## 프로젝트 정보
+
+- **레포**: `taiengineering/tai-api` (branch: main)
+- **배포**: Railway → api.taieng.co.kr
+- **DB**: Supabase xntdkrjhgcscmqctdzyo
+- **스택**: FastAPI/Python + Supabase/PostgreSQL
+
+## 현재 상태
+
+`routers/construction.py` v2.1.0 이 **완전히 완료**된 상태입니다.
+
+완료된 기능:
+- POST /construction/sites/{id}/diagnose (법령진단 독립 실행)
+- POST /construction/sites/{id}/generate-schedules (작업일정 자동 생성)
+- 점검 저장 시 FCM 자동 발송 (이상 감지 → 관리자 알림)
+- 전체 CRUD: sites, processes, works, workers, inspections
+
+## 지금 당장 할 일
+
+### 우선순위 1: FCM_SERVER_KEY 환경변수 확인
 ```
-당신은 TAI Safe 백엔드 개발자입니다.
-
-## 프로젝트 스택
-- FastAPI / Python (tai-api)
-- Railway 배포: api.taieng.co.kr
-- Supabase / PostgreSQL (project: xntdkrjhgcscmqctdzyo)
-- GitHub: taiengineering/tai-api (github-tai MCP)
-- 브라우저 테스트 금지 (Claude in Chrome 사용 금지)
-- 모든 테스트는 Supabase MCP 또는 터미널 Python 파일로만
-
-## 현재 완료 상태 (routers/construction.py v2.1.0)
-
-✅ 완료된 항목 (건드리지 말 것):
-- Sites CRUD (GET/POST/PATCH/DELETE/stats)
-- POST /sites/{id}/diagnose — 법령진단 독립 엔드포인트
-- POST /sites/{id}/generate-schedules — 작업일정 자동 생성
-- Processes CRUD + 고위험 자동 분류
-- Workers CRUD + 출입 상태
-- Inspections CRUD + 이상 시 FCM 자동발송
-- Works/PTW CRUD
-- KCSC 마스터 조회
-- POST /engine/safety-manager
-
-## 오늘 작업 지시 내용 확인
-
-docs/workorder_construction_backend.md 파일을 먼저 읽고 미완료 항목을 파악한 뒤 진행하세요.
-
-## 코드 규칙
-
-1. FastAPI 경로: 구체 경로(/drafts/stats)를 파라미터 경로(/{id}) 앞에 선언
-2. API size 최대값: 100 (le=100)
-3. DB 변경: DDL은 supabase:apply_migration, DML은 supabase:execute_sql
-4. 다중 파일 커밋: github-tai:push_files 사용
-5. 단일 파일 수정: github-tai:create_or_update_file (SHA 먼저 조회 필수)
-6. 커밋 완료 후 Railway 자동 배포 확인 (보통 2-3분 소요)
-
-## 중요 테이블 참고
-
-- construction_sites: id, company_id, site_name, site_type, contract_amount,
-  total_workers, direct_workers, subcon_workers, safety_manager_required,
-  safety_manager_count, factory_id, diagnosis_applicable_count, last_diagnosis_at
-- construction_site_processes: id, site_id, process_name, work_type_code, is_high_risk
-- construction_workers: id, site_id, worker_type, entry_status, fcm_token
-- construction_inspections: id, site_id, process_id, checklist_items, overall_result,
-  defect_count, corrective_status
-- master_building_legal_rules WHERE sector='CONSTRUCTION': 173건
-
-## FCM 알림
-
-- Railway 환경변수: FCM_SERVER_KEY
-- 없으면 무시 (점검 저장에 영향 없음)
-- 경로: site.manager_id → users.fcm_token → FCM 발송
-
-## 작업 완료 후 필수
-
-1. Railway 배포 확인
-2. 완료된 API curl 테스트
-3. docs/workorder_construction_backend.md 완료 항목 ✅ 표시
+1. api.taieng.co.kr/health 호출해서 현재 버전 확인
+2. Firebase FCM 서버 키가 Railway 환경변수에 설정되어 있는지 확인
+   (미설정 시 점검 저장은 정상, FCM만 건너뜀)
 ```
+
+### 우선순위 2: construction 엔드포인트 동작 검증
+```bash
+# 현장 목록 조회
+GET https://api.taieng.co.kr/construction/sites?company_id={cid}&size=5
+
+# 법령진단 테스트 (기존 현장 ID 사용)
+POST https://api.taieng.co.kr/construction/sites/{site_id}/diagnose
+
+# 일정 생성 테스트
+POST https://api.taieng.co.kr/construction/sites/{site_id}/generate-schedules
+```
+
+### 우선순위 3: 프론트엔드 지원 API 보강 (필요 시)
+프론트엔드 창에서 요청이 오면:
+- `/construction/sites/{id}/workers` 에서 `users` 테이블 조인 추가
+- `/construction/sites/{id}/processes` 에서 작업 연결 정보 추가
+- 기타 프론트 개발 중 발견되는 누락 필드 보강
+
+## 개발 규칙
+
+- 테스트: 터미널 Python 파일 또는 Supabase MCP
+- 브라우저 테스트 금지
+- DB DDL: `supabase:apply_migration` 사용
+- DB DML/SELECT: `supabase:execute_sql` 사용
+- 커밋: `github-tai:push_files` (다중) 또는 `github-tai:create_or_update_file` (단일)
+
+## 참고 문서
+
+```
+tai-api/docs/workorder_construction_backend.md   ← 백엔드 상세 워크오더
+tai-api/docs/workorder_construction_v21_summary.md ← 전체 요약
+```
+
+준비됐으면 OK라고 알려주세요.
