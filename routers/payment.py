@@ -1,13 +1,15 @@
 """
-이니시스 INIStdPay 표준결제 라우터 — v1.7.0
+이니시스 INIStdPay 표준결제 라우터 — v1.8.0
 
-v1.7.0 (2026-04-09) — 팝업 차단 우회: async/await 제거 → XMLHttpRequest 동기 방식
-  [FIX] _PRICING_HTML startPayment(): async/await → XHR onload 콜백으로 교체
-        브라우저는 await 이후 INIStdPay.pay() 호출을 사용자 제스처로 미인식 → 팝업 차단
-        XHR onload 콜백 내 INIStdPay.pay() = 동일 이벤트 루프 → 팝업 허용
-  [KEEP] _RESULT_HTML goDiagnosis() → /request/v1/ (법령진단 입력폼)
+v1.8.0 (2026-04-09) — V023 closeUrl 도메인 불일치 수정
+  [FIX] closeUrl을 환경변수 무시하고 api.taieng.co.kr 하드코딩
+        Railway INICIS_CLOSE_URL=taieng.co.kr 로 잘못 설정돼 있어
+        이니시스 V023(returnUrl/closeUrl 도메인 불일치) 오류 발생
+  [FIX] returnUrl도 환경변수 무시하고 api.taieng.co.kr 하드코딩
+        이니시스 규칙: returnUrl, closeUrl 모두 결제요청 페이지 도메인과 일치
 
-v1.6.0 (2026-04-09) — 결제 완료 후 법령진단 입력폼으로 이동
+v1.7.0 (2026-04-09) — async/await→XHR onload
+v1.6.0 (2026-04-09) — 결제 완료 후 법령진단 입력폼
 v1.5.0 (2026-04-08) — 이니시스 매뉴얼 기반 전면 수정
 
 Railway 환경변수:
@@ -53,18 +55,12 @@ INICIS_MID          = os.getenv("INICIS_MID", "taieng4350")
 INICIS_KEY_PATH     = os.getenv("INICIS_KEY_PATH", "/app/key/taieng4350")
 INICIS_KEY_PASSWORD = os.getenv("INICIS_KEY_PASSWORD", "1111")
 
-DEFAULT_RETURN_URL = os.getenv(
-    "INICIS_RETURN_URL",
-    "https://api.taieng.co.kr/payments/inicis/return"
-)
-DEFAULT_CLOSE_URL = os.getenv(
-    "INICIS_CLOSE_URL",
-    "https://api.taieng.co.kr/payments/result?resultCode=CLOSE"
-)
-FRONT_RETURN_URL = os.getenv(
-    "INICIS_FRONT_RETURN_URL",
-    "https://api.taieng.co.kr/payments/result"
-)
+# ★ V023 방지: returnUrl / closeUrl 모두 api.taieng.co.kr 고정
+#   이니시스 규칙: 두 URL의 도메인 = 결제요청 페이지 도메인 (api.taieng.co.kr)
+#   Railway 환경변수 INICIS_CLOSE_URL=taieng.co.kr 가 잘못 설정돼 있어 환경변수 무시
+DEFAULT_RETURN_URL = "https://api.taieng.co.kr/payments/inicis/return"
+DEFAULT_CLOSE_URL  = "https://api.taieng.co.kr/payments/result?resultCode=CLOSE"
+FRONT_RETURN_URL   = "https://api.taieng.co.kr/payments/result"
 
 
 def _sha256(data: str) -> str:
@@ -175,11 +171,6 @@ class CancelBody(BaseModel):
     cancelled_by: Optional[str] = None
 
 
-# ── GET /payments/pricing ─────────────────────────────────────
-# ★ v1.7.0: startPayment() async/await → XHR onload 콜백으로 교체
-#    이유: await 이후 INIStdPay.pay() 호출 시 브라우저 팝업 차단
-#    XHR onload는 사용자 클릭 이벤트 체인 유지 → 팝업 허용
-
 _PRICING_HTML = """<!doctype html>
 <html lang="ko">
 <head>
@@ -222,6 +213,8 @@ _PRICING_HTML = """<!doctype html>
     .btn-pay:hover { opacity:.9; } .btn-pay:disabled { opacity:.55; cursor:not-allowed; }
     .select-indicator { width:22px; height:22px; border-radius:50%; border:2px solid #dee2e6; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
     .plan-card.selected .select-indicator { background:#0d6efd; border-color:#0d6efd; color:#fff; }
+    /* ★ Bootstrap .fade 충돌 방지 — 이니시스 overlay opacity:0 문제 */
+    #inicisModalDiv, #inicisModalDiv *, .inipay_modal, .inipay_modal * { opacity:1 !important; }
     @media(max-width:576px){.hero h1{font-size:1.6rem;}}
   </style>
 </head>
@@ -250,7 +243,7 @@ _PRICING_HTML = """<!doctype html>
             <div><div class="plan-name">베이직</div><div class="plan-desc">소규모 사업장에 최적</div></div>
             <div class="select-indicator" id="ind-basic"><i class="ti tabler-check" style="font-size:.85rem;"></i></div>
           </div>
-          <div class="plan-price" id="price-basic">&#8361;79,000 <small>/월</small></div>
+          <div class="plan-price" id="price-basic">&#8361;79,000</div>
           <div class="plan-origin" id="origin-basic"></div>
         </div>
         <div class="plan-features">
@@ -274,14 +267,14 @@ _PRICING_HTML = """<!doctype html>
             </div>
             <div class="select-indicator" id="ind-premium" style="border-color:rgba(255,255,255,.5)"></div>
           </div>
-          <div class="plan-price" id="price-premium">&#8361;149,000 <small>/월</small></div>
+          <div class="plan-price" id="price-premium">&#8361;149,000</div>
           <div class="plan-origin" id="origin-premium"></div>
         </div>
         <div class="plan-features prem-f">
           <ul class="list-unstyled mb-0">
             <li><i class="ti ti-check" style="color:#6610f2"></i>베이직 모든 기능 포함</li>
             <li><i class="ti ti-check" style="color:#6610f2"></i>건설현장 TBM·위험성평가</li>
-            <li><i class="ti ti-check" style="color:#6610f2"></i>법령 진단 (월 3회)</li>
+            <li><i class="ti ti-check" style="color:#6610f2"></i>법령 진단 (3회 제공)</li>
             <li><i class="ti ti-check" style="color:#6610f2"></i>안전보건 교육 관리</li>
             <li><i class="ti ti-check" style="color:#6610f2"></i>신고서식 자동화</li>
             <li><i class="ti ti-check" style="color:#6610f2"></i>전담 CS 지원</li>
@@ -312,7 +305,6 @@ _PRICING_HTML = """<!doctype html>
   </div>
 </div>
 
-<!-- 이니시스 결제 폼 -->
 <form id="inicisForm" method="POST" accept-charset="euc-kr" style="display:none">
   <input type="hidden" name="version"      value="1.0" />
   <input type="hidden" name="gopaymethod"  value="Card" />
@@ -339,10 +331,10 @@ _PRICING_HTML = """<!doctype html>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 'use strict';
-var API='https://api.taieng.co.kr';
-var BASE={basic:79000,premium:149000};
-var PNAME={basic:'TAI Safe 베이직',premium:'TAI Safe 프리미엄'};
-var _plan='basic',_months=1,_disc=0;
+var API  = 'https://api.taieng.co.kr';
+var BASE = {basic:79000, premium:149000};
+var PNAME= {basic:'TAI Safe 베이직', premium:'TAI Safe 프리미엄'};
+var _plan='basic', _months=1, _disc=0;
 
 function selectPlan(p){
   _plan=p;
@@ -365,25 +357,20 @@ function selectPeriod(el){
 
 function updatePrices(){
   ['basic','premium'].forEach(function(p){
-    var m=Math.round(BASE[p]*(1-_disc/100)),t=m*_months,o=BASE[p]*_months;
-    document.getElementById('price-'+p).innerHTML='&#8361;'+m.toLocaleString()+' <small>/\uc6d4</small>';
+    var m=Math.round(BASE[p]*(1-_disc/100)), t=m*_months, o=BASE[p]*_months;
+    document.getElementById('price-'+p).innerHTML='&#8361;'+m.toLocaleString();
     document.getElementById('origin-'+p).textContent=_disc>0?'\uc6d0\uac00 \u20a9'+o.toLocaleString()+' (\u20a9'+(o-t).toLocaleString()+' \uc808\uc57d)':'';
   });
-  var t=Math.round(BASE[_plan]*(1-_disc/100))*_months,s=BASE[_plan]*_months-t;
+  var t=Math.round(BASE[_plan]*(1-_disc/100))*_months, s=BASE[_plan]*_months-t;
   document.getElementById('summaryText').textContent=(_plan==='basic'?'\ubca0\uc774\uc9c1':'\ud504\ub9ac\ubbf8\uc5c4')+' \u00b7 '+_months+'\uac1c\uc6d4';
   document.getElementById('summaryPrice').textContent='&#8361;'+t.toLocaleString();
-  document.getElementById('summaryDiscount').textContent=_disc>0?_disc+'% \ud560\uc778 \uc801\uc6a9 (\u20a9'+s.toLocaleString()+' \uc808\uc57d)':'';
+  document.getElementById('summaryDiscount').textContent=_disc>0?_disc+'% \ud560\uc778 (\u20a9'+s.toLocaleString()+' \uc808\uc57d)':'';
 }
 
-/* ★ v1.7.0 핵심 수정: async/await 제거 → XHR onload 콜백
-   - async 함수 내 await 이후 INIStdPay.pay() = 팝업 차단
-   - XHR onload 콜백은 사용자 클릭 이벤트 체인 유지 → 팝업 허용  */
 function startPayment(){
   var btn=document.getElementById('btnPay');
   var sp=document.getElementById('paySpinner');
   var icon=document.getElementById('payIcon');
-
-  /* 버튼 중복 클릭 방지 */
   if(btn.disabled) return;
   btn.disabled=true;
   sp.classList.remove('d-none');
@@ -394,19 +381,23 @@ function startPayment(){
   var token=localStorage.getItem('access_token')||'';
   var companyId=localStorage.getItem('company_id')||'';
 
+  /* ★ returnUrl / closeUrl 모두 api.taieng.co.kr — V023 방지 */
+  var RETURN_URL = API + '/payments/inicis/return';
+  var CLOSE_URL  = API + '/payments/result?resultCode=CLOSE';
+
   var payload=JSON.stringify({
-    company_id:companyId||undefined,
-    amount:total,
-    goodname:goodname,
-    buyername:'\uace0\uac1d',
-    buyertel:'00000000000',
-    plan_code:_plan.toUpperCase(),
-    period_months:_months,
-    payment_type:'CARD',
-    return_url:'https://api.taieng.co.kr/payments/inicis/return'
+    company_id: companyId||undefined,
+    amount: total,
+    goodname: goodname,
+    buyername: '\uace0\uac1d',
+    buyertel: '00000000000',
+    plan_code: _plan.toUpperCase(),
+    period_months: _months,
+    payment_type: 'CARD',
+    return_url: RETURN_URL,
+    close_url:  CLOSE_URL
   });
 
-  /* XHR — onload 콜백은 클릭 이벤트 체인 유지 */
   var xhr=new XMLHttpRequest();
   xhr.open('POST', API+'/payments/inicis/prepare', true);
   xhr.setRequestHeader('Content-Type','application/json');
@@ -418,21 +409,21 @@ function startPayment(){
       if(xhr.status<200||xhr.status>=300) throw new Error(d.detail||d.message||'\uacb0\uc81c \uc900\ube44 \uc2e4\ud328');
       var p=d.data||d;
 
-      document.getElementById('f_mid').value         =p.mid||'';
-      document.getElementById('f_oid').value         =p.oid||'';
-      document.getElementById('f_price').value       =p.price||String(total);
-      document.getElementById('f_timestamp').value   =p.timestamp||'';
-      document.getElementById('f_signature').value   =p.signature||'';
-      document.getElementById('f_verification').value=p.verification||'';
-      document.getElementById('f_mKey').value        =p.mKey||'';
-      document.getElementById('f_goodname').value    =p.goodname||goodname;
-      document.getElementById('f_buyername').value   ='\uace0\uac1d';
-      document.getElementById('f_buyertel').value    ='00000000000';
-      document.getElementById('f_buyeremail').value  ='';
-      document.getElementById('f_returnUrl').value   =p.returnUrl||'https://api.taieng.co.kr/payments/inicis/return';
-      document.getElementById('f_closeUrl').value    =p.closeUrl||'https://api.taieng.co.kr/payments/result?resultCode=CLOSE';
+      document.getElementById('f_mid').value          = p.mid||'';
+      document.getElementById('f_oid').value          = p.oid||'';
+      document.getElementById('f_price').value        = p.price||String(total);
+      document.getElementById('f_timestamp').value    = p.timestamp||'';
+      document.getElementById('f_signature').value    = p.signature||'';
+      document.getElementById('f_verification').value = p.verification||'';
+      document.getElementById('f_mKey').value         = p.mKey||'';
+      document.getElementById('f_goodname').value     = p.goodname||goodname;
+      document.getElementById('f_buyername').value    = '\uace0\uac1d';
+      document.getElementById('f_buyertel').value     = '00000000000';
+      document.getElementById('f_buyeremail').value   = '';
+      /* ★ 폼에도 api.taieng.co.kr 강제 적용 */
+      document.getElementById('f_returnUrl').value    = RETURN_URL;
+      document.getElementById('f_closeUrl').value     = CLOSE_URL;
 
-      /* 이니시스 표준결제 팝업 호출 */
       INIStdPay.pay('inicisForm');
 
     }catch(e){
@@ -445,7 +436,7 @@ function startPayment(){
   };
 
   xhr.onerror=function(){
-    alert('\ub124\ud2b8\uc6cc\ud06c \uc624\ub958\uac00 \ubc1c\uc0dd\ud588\uc2b5\ub2c8\ub2e4. \ub2e4\uc2dc \uc2dc\ub3c4\ud574 \uc8fc\uc138\uc694.');
+    alert('\ub124\ud2b8\uc6cc\ud06c \uc624\ub958. \ub2e4\uc2dc \uc2dc\ub3c4\ud574 \uc8fc\uc138\uc694.');
     btn.disabled=false;
     sp.classList.add('d-none');
     icon.classList.remove('d-none');
@@ -503,17 +494,17 @@ function renderOk(p){
   var rc=document.getElementById('rc'),sec=5,ti;
   rc.innerHTML='<div class="icon-wrap success"><i class="ti tabler-circle-check"></i></div>'
     +'<h4 class="fw-bold mb-2">\uacb0\uc81c\uac00 \uc644\ub8cc\ub410\uc2b5\ub2c8\ub2e4.</h4>'
-    +'<p class="text-body-secondary mb-4">\uc9c0\uae08 \ubc14\ub85c \ubc95\ub839\uc9c4\ub2e8\uc744 \uc2dc\uc791\ud569\ub2c8\ub2e4.</p>'
+    +'<p class="text-body-secondary mb-4">\ubc95\ub839\uc9c4\ub2e8\uc744 \uc2dc\uc791\ud569\ub2c8\ub2e4.</p>'
     +'<div class="detail-table mb-4">'
-    +'<div class="detail-row"><span class="detail-label">\uc0c1\ud488\uba85</span><span class="detail-value">'+(p.goodname||'TAI Safe \uc774\uc6a9\uad8c')+'</span></div>'
+    +'<div class="detail-row"><span class="detail-label">\uc0c1\ud488\uba85</span><span class="detail-value">'+(p.goodname||'TAI Safe')+'</span></div>'
     +'<div class="detail-row"><span class="detail-label">\uacb0\uc81c\uae08\uc561</span><span class="detail-value">'+fmt(p.price)+'</span></div>'
     +'<div class="detail-row"><span class="detail-label">\uacb0\uc81c\uc218\ub2e8</span><span class="detail-value">'+(p.paymethod||'\uce74\ub4dc')+'</span></div>'
     +(p.applnum?'<div class="detail-row"><span class="detail-label">\uc2b9\uc778\ubc88\ud638</span><span class="detail-value">'+p.applnum+'</span></div>':'')
     +'<div class="detail-row"><span class="detail-label">\uc8fc\ubb38\ubc88\ud638</span><span class="detail-value" style="font-size:.8rem;word-break:break-all">'+(p.oid||'-')+'</span></div>'
     +'</div>'
     +'<button class="btn btn-primary btn-action w-100" onclick="goDiagnosis()">\ubc95\ub839\uc9c4\ub2e8 \uc2dc\uc791\ud558\uae30 \u2192</button>'
-    +'<div class="countdown" id="cd">'+sec+'\ucd08 \ud6c4 \uc790\ub3d9 \uc774\ub3d9\ud569\ub2c8\ub2e4</div>';
-  ti=setInterval(function(){sec--;var e=document.getElementById('cd');if(e)e.textContent=sec+'\ucd08 \ud6c4 \uc790\ub3d9 \uc774\ub3d9\ud569\ub2c8\ub2e4';if(sec<=0){clearInterval(ti);goDiagnosis();}},1000);
+    +'<div class="countdown" id="cd">'+sec+'\ucd08 \ud6c4 \uc790\ub3d9 \uc774\ub3d9</div>';
+  ti=setInterval(function(){sec--;var e=document.getElementById('cd');if(e)e.textContent=sec+'\ucd08 \ud6c4 \uc790\ub3d9 \uc774\ub3d9';if(sec<=0){clearInterval(ti);goDiagnosis();}},1000);
 }
 function renderFail(msg,oid){
   var rc=document.getElementById('rc');
@@ -521,17 +512,17 @@ function renderFail(msg,oid){
     +'<h4 class="fw-bold mb-2">\uacb0\uc81c\uc5d0 \uc2e4\ud328\ud588\uc2b5\ub2c8\ub2e4.</h4>'
     +'<p class="text-body-secondary mb-3">\ub2e4\uc2dc \uc2dc\ub3c4\ud574 \uc8fc\uc138\uc694.</p>'
     +'<div class="detail-table mb-4">'
-    +'<div class="detail-row"><span class="detail-label">\uc0ac\uc720</span><span class="detail-value text-danger">'+(msg||'\uc54c \uc218 \uc5c6\ub294 \uc624\ub958')+'</span></div>'
+    +'<div class="detail-row"><span class="detail-label">\uc0ac\uc720</span><span class="detail-value text-danger">'+(msg||'\uc624\ub958')+'</span></div>'
     +(oid?'<div class="detail-row"><span class="detail-label">\uc8fc\ubb38\ubc88\ud638</span><span class="detail-value" style="font-size:.8rem">'+oid+'</span></div>':'')
     +'</div>'
     +'<div class="d-flex gap-2">'
-    +'<a href="https://api.taieng.co.kr/payments/pricing" class="btn btn-primary btn-action flex-grow-1">\ub2e4\uc2dc \uc2dc\ub3c4\ud558\uae30</a>'
+    +'<a href="https://api.taieng.co.kr/payments/pricing" class="btn btn-primary btn-action flex-grow-1">\ub2e4\uc2dc \uc2dc\ub3c4</a>'
     +'<a href="https://taieng.co.kr" class="btn btn-outline-secondary btn-action">\ud648\uc73c\ub85c</a>'
     +'</div>';
 }
 (function(){
   var p=getParams();
-  if(!p.resultCode){renderFail('\uacb0\uc81c \ud30c\ub77c\ubbf8\ud130\uac00 \uc5c6\uc2b5\ub2c8\ub2e4.');return;}
+  if(!p.resultCode){renderFail('\ud30c\ub77c\ubbf8\ud130 \uc5c6\uc74c');return;}
   if(p.resultCode==='00'||p.resultCode==='0000') renderOk(p);
   else renderFail(decodeURIComponent(p.msg||'\uc624\ub958\ucf54\ub4dc '+p.resultCode),p.oid);
 })();
@@ -589,10 +580,12 @@ def inicis_prepare(body: PrepareBody):
         raise HTTPException(status_code=500, detail="결제 레코드 생성 실패")
 
     payment_id = res.data[0]["id"]
-    return_url = body.return_url or DEFAULT_RETURN_URL
-    close_url  = body.close_url  or DEFAULT_CLOSE_URL
 
-    log.info(f"[INICIS STEP1] oid={order_id} price={price_str}")
+    # ★ V023 방지: 환경변수 무시, 항상 api.taieng.co.kr 고정
+    return_url = DEFAULT_RETURN_URL
+    close_url  = DEFAULT_CLOSE_URL
+
+    log.info(f"[INICIS STEP1] oid={order_id} price={price_str} returnUrl={return_url}")
 
     return {
         "status": "success",
@@ -634,7 +627,7 @@ async def inicis_return(request: Request):
     auth_url     = data.get("authUrl", "")
     idc_name     = data.get("idc_name", "")
     order_id     = data.get("orderNumber") or data.get("oid", "")
-    goodname     = data.get("goodname", "TAI Safe 이용권")
+    goodname     = data.get("goodname", "TAI Safe")
     price        = data.get("price", "")
     paymethod    = data.get("paymethod", "카드")
 
