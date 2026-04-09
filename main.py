@@ -1,9 +1,10 @@
-# main.py — v5.7.5
+# main.py — v5.7.6
+# v5.7.6: OpenAI GPT-4o 카피라이팅 API 연동
+#          routers/ai_copywrite.py v1.0.0 (신규)
+#            POST /ai/copywrite          섹션별 카피 생성
+#            POST /ai/copywrite/batch    전체 섹션 일괄
+#            POST /ai/slogan             슬로건 생성
 # v5.7.5: 작업자 현장 점검 결과 저장 API
-#          routers/worker_check.py v1.0.0 (신규)
-#            POST /worker-check/submit   점검 결과 저장 (인증 불필요)
-#            GET  /worker-check/recent   최근 점검 이력
-# v5.7.4: QR/RFID 설비 체크인
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -73,7 +74,8 @@ from routers.payment                 import router as payment_router
 from routers.corrective_actions      import router as corrective_actions_router
 from routers.messaging               import router as messaging_router
 from routers.fcm                     import router as fcm_router
-from routers.worker_check            import router as worker_check_router   # v5.7.5
+from routers.worker_check            import router as worker_check_router
+from routers.ai_copywrite            import router as ai_copywrite_router    # v5.7.6
 from routers.public                  import router as public_router
 from routers.public_admin            import router as public_admin_router
 from routers.alert_messages          import router as alert_messages_router
@@ -84,7 +86,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.7.5"
+APP_VERSION = "5.7.6"
 
 
 @asynccontextmanager
@@ -202,7 +204,8 @@ app.include_router(payment_router)
 app.include_router(corrective_actions_router)
 app.include_router(messaging_router)
 app.include_router(fcm_router)
-app.include_router(worker_check_router)              # v5.7.5
+app.include_router(worker_check_router)
+app.include_router(ai_copywrite_router)                # v5.7.6
 app.include_router(mail_router)
 
 
