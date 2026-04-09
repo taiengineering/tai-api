@@ -1,13 +1,19 @@
 """
-이니시스 INIStdPay 표준결제 라우터 — v1.9.1
+이니시스 INIStdPay 표준결제 라우터 — v2.0.0
 
-v1.9.1 (2026-04-09)
-  [FIX] summaryPrice: textContent → innerHTML (&#8361; HTML엔티티 렌더링 수정)
-  [FIX] use_chkfake 폼 필드 제거 (이 옵션이 STEP1 verification 서버검증 강제 → Verification 오류 원인)
-  [KEEP] 디버그 로그/DB 저장 (v1.9.0)
+v2.0.0 (2026-04-09) — signature/verification 계산 방식 전면 수정
+  [FIX] STEP1 signature: "oid=값&price=값&timestamp=값" 형태로 SHA256
+        이전: SHA256(oid + price + timestamp)  ← 잘못됨
+        수정: SHA256("oid="+oid+"&price="+price+"&timestamp="+ts)
+  [FIX] STEP1 verification: "oid=값&price=값&signKey=값&timestamp=값" 형태로 SHA256
+  [FIX] STEP3 signature: "authToken=값&timestamp=값" 형태로 SHA256
+  [FIX] STEP3 verification: "authToken=값&signKey=값&timestamp=값" 형태로 SHA256
+  [FIX] use_chkfake="Y" 복구 (필수 파라미터)
+  [FIX] summaryPrice innerHTML 유지 (v1.9.1)
 
-v1.9.0 (2026-04-09) — Verification 오류 디버깅
-v1.8.0 (2026-04-09) — V023 closeUrl 도메인 불일치 수정
+근거: 이니시스 공식 Java/PHP 샘플 코드
+  PHP: SignatureUtil->makeSignatureByKey("oid=$P_OID&price=$n&timestamp=$ts", $signKey)
+  Java: SignatureUtil.makeSignatureByKey("oid="+oid+"&price="+p+"&timestamp="+ts, signKey)
 """
 from __future__ import annotations
 
@@ -97,10 +103,18 @@ def _rsa_sign_sha256(data: str, pem_bytes: bytes, password: str) -> Optional[str
         log.error(f"[INICIS] RSA 서명 실패: {e}")
         return None
 
+
 def _call_pay_auth(auth_token: str, auth_url: str, sign_key: str) -> Dict[str, Any]:
-    timestamp    = _ts_ms()
-    signature    = _sha256(auth_token + timestamp)
-    verification = _sha256(auth_token + sign_key + timestamp)
+    timestamp = _ts_ms()
+
+    # ★ v2.0.0: 이니시스 샘플 기준 계산 방식
+    # signature   = SHA256("authToken=값&timestamp=값")
+    # verification = SHA256("authToken=값&signKey=값&timestamp=값")
+    sig_data   = f"authToken={auth_token}&timestamp={timestamp}"
+    veri_data  = f"authToken={auth_token}&signKey={sign_key}&timestamp={timestamp}"
+    signature    = _sha256(sig_data)
+    verification = _sha256(veri_data)
+
     params: Dict[str, str] = {
         "mid":          INICIS_MID,
         "authToken":    auth_token,
@@ -118,11 +132,8 @@ def _call_pay_auth(auth_token: str, auth_url: str, sign_key: str) -> Dict[str, A
 
     log.info(
         f"[INICIS STEP3] authUrl={auth_url} "
-        f"authToken_prefix={auth_token[:16]} "
-        f"signKey_prefix={sign_key[:8]} "
-        f"signKey_len={len(sign_key)} "
-        f"mKey={_sha256(sign_key)[:16]} "
-        f"verification_prefix={verification[:16]}"
+        f"sig_data='{sig_data[:40]}' "
+        f"signature_prefix={signature[:16]}"
     )
 
     try:
@@ -160,10 +171,6 @@ class CancelBody(BaseModel):
     reason:       Optional[str] = "사용자 요청"
     cancelled_by: Optional[str] = None
 
-
-# ★ v1.9.1:
-#   - summaryPrice innerHTML로 변경 (&#8361; 렌더링)
-#   - use_chkfake 폼 필드 제거 (STEP1 verification 서버검증 강제 옵션 → 오류 원인)
 
 _PRICING_HTML = """<!doctype html>
 <html lang="ko">
@@ -284,7 +291,6 @@ _PRICING_HTML = """<!doctype html>
   </div>
 </div>
 
-<!-- ★ v1.9.1: use_chkfake 제거 (STEP1 verification 서버검증 강제 옵션) -->
 <form id="inicisForm" method="POST" accept-charset="euc-kr" style="display:none">
   <input type="hidden" name="version" value="1.0" />
   <input type="hidden" name="gopaymethod" value="Card" />
@@ -292,6 +298,7 @@ _PRICING_HTML = """<!doctype html>
   <input type="hidden" name="oid" id="f_oid" />
   <input type="hidden" name="price" id="f_price" />
   <input type="hidden" name="timestamp" id="f_timestamp" />
+  <input type="hidden" name="use_chkfake" value="Y" />
   <input type="hidden" name="signature" id="f_signature" />
   <input type="hidden" name="verification" id="f_verification" />
   <input type="hidden" name="mKey" id="f_mKey" />
@@ -340,7 +347,6 @@ function updatePrices(){
   });
   var t=Math.round(BASE[_plan]*(1-_disc/100))*_months,s=BASE[_plan]*_months-t;
   document.getElementById('summaryText').textContent=(_plan==='basic'?'베이직':'프리미엄')+' · '+_months+'개월';
-  /* ★ v1.9.1: innerHTML로 변경 — &#8361; HTML엔티티 정상 렌더링 */
   document.getElementById('summaryPrice').innerHTML='&#8361;'+t.toLocaleString();
   document.getElementById('summaryDiscount').textContent=_disc>0?_disc+'% 할인 (₩'+s.toLocaleString()+' 절약)':'';
 }
@@ -491,9 +497,21 @@ def inicis_prepare(body: PrepareBody):
     timestamp = _ts_ms()
     price_str = str(body.amount)
 
-    mKey         = _sha256(sign_key)
-    signature    = _sha256(order_id + price_str + timestamp)
-    verification = _sha256(order_id + price_str + sign_key + timestamp)
+    mKey = _sha256(sign_key)
+
+    # ★ v2.0.0: 이니시스 샘플 기준 계산 방식
+    # signature   = SHA256("oid=값&price=값&timestamp=값")
+    # verification = SHA256("oid=값&price=값&signKey=값&timestamp=값")
+    sig_data   = f"oid={order_id}&price={price_str}&timestamp={timestamp}"
+    veri_data  = f"oid={order_id}&price={price_str}&signKey={sign_key}&timestamp={timestamp}"
+    signature    = _sha256(sig_data)
+    verification = _sha256(veri_data)
+
+    log.info(
+        f"[INICIS STEP1] oid={order_id} price={price_str} "
+        f"sig_data='{sig_data}' "
+        f"mKey_prefix={mKey[:8]}"
+    )
 
     supply_amount = round(body.amount / 1.1)
     vat_amount    = body.amount - supply_amount
@@ -525,8 +543,6 @@ def inicis_prepare(body: PrepareBody):
     return_url = DEFAULT_RETURN_URL
     close_url  = DEFAULT_CLOSE_URL
 
-    log.info(f"[INICIS STEP1] oid={order_id} price={price_str} mKey_prefix={mKey[:8]}")
-
     return {
         "status": "success",
         "data": {
@@ -542,7 +558,7 @@ def inicis_prepare(body: PrepareBody):
             "timestamp":    timestamp,
             "signature":    signature,
             "verification": verification,
-            # use_chkfake 제거 — v1.9.1
+            "use_chkfake":  "Y",
             "returnUrl":    return_url,
             "closeUrl":     close_url,
             "charset":      "UTF-8",
@@ -597,7 +613,6 @@ async def inicis_return(request: Request):
     if not auth_url:
         return RedirectResponse(f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=authUrl없음&oid={order_id}", status_code=302)
 
-    # 디버그: authToken 앞 32글자를 memo에 저장
     supabase.table("payments").update({
         "memo": f"authToken_prefix={auth_token[:32]} idc={idc_name} authUrl={auth_url[:50]}",
         "updated_at": _now_iso(),
