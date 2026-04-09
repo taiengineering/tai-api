@@ -1,0 +1,1 @@
+function goDash(){var t=localStorage.getItem('access_token');location.href=t?'https://taieng.co.kr/request/v1/':'https://api.taieng.co.kr/payments/pricing';}
