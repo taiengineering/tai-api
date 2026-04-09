@@ -1,6 +1,6 @@
-# 1순위 작업지시 프롬프트 — 산업섹터 파이프라인 연결
+# Pipeline Priority 1 — 백엔드 Claude 창 시작 프롬프트
 
-> 이 파일을 **백엔드 Claude 창**에 그대로 붙여넣으세요.
+> **사용법:** 이 파일 전체를 백엔드 Claude 창에 붙여넣어 시작
 
 ---
 
@@ -11,227 +11,201 @@
 - FastAPI / Python (tai-api)
 - Railway 배포: api.taieng.co.kr
 - Supabase / PostgreSQL (project: xntdkrjhgcscmqctdzyo)
-- GitHub: taiengineering/tai-api
-- Supabase MCP + GitHub MCP 사용 가능
+- GitHub: taiengineering/tai-api (github-tai MCP)
+- 브라우저 테스트 금지 (Claude in Chrome 사용 금지)
+- 모든 테스트: Supabase MCP 또는 터미널 Python 파일
 
----
+## 오늘 작업: inspection_sets → work_schedules 파이프라인
 
-## 오늘 작업: inspection_sets → work_schedules 자동생성 파이프라인 연결
-
-### 현재 DB 상태 (문제 확인됨)
-- inspection_sets 활성: 76개
-- 기준일 있음: 58개
-- 담당자 있음: 0개  ← 핵심 문제
-- 법령엔진 발생 work_schedules: 0건 (전부 MANUAL)
-- inspection_set_items: 67개 (세트당 체크항목)
-
-### 파이프라인 목표
-```
-inspection_sets (4조건 충족)
-  → work_schedules 자동 생성 (source_type='LAW_ENGINE')
-    → work_assignments 배정 (assigned_user_id)
-      → notifications D-3 알림 발송
+### ★ 완료 기준
+```sql
+SELECT source_type, count(*)
+FROM work_schedules
+GROUP BY source_type;
+-- LAW_ENGINE 행이 생겨야 성공
 ```
 
 ---
 
-## 4가지 조건 정의
+## DB 현황 (2026-04-09 기준)
 
-스케줄 생성 가능 조건 (모두 충족해야 함):
-1. `schedule_anchor_date IS NOT NULL` (언제 — 기준일)
-2. `cycle_unit IS NOT NULL` (언제 — 주기)
-3. `assignee_user_id IS NOT NULL` (누가 — 담당자)
-4. `obligation_summary IS NOT NULL` (무엇을 — 의무내용)
-   AND (행정의무이거나 inspection_set_items 1개 이상 존재)
+**inspection_sets 76건:**
+| 조건 | 충족 건수 |
+|------|-----------|
+| schedule_anchor_date (기준일) | 58건 |
+| cycle_unit (주기) | 76건 |
+| assignee_user_id (담당자) | **0건** ← 모두 null |
+| description (의무내용) | 71건 |
 
-행정의무 obligation_type (체크항목 불필요):
-`REPORT`, `DOCUMENT`, `NOTIFY`, `APPOINT`, `ACTION`
+**work_schedules source_type:**
+- MANUAL, LEGAL 등 존재 / LAW_ENGINE 없음 → 생성 목표
 
 ---
 
-## 구현할 API 엔드포인트
+## 작업 1: POST /inspection-sets/generate-schedules/{factory_id}
 
-### 1. inspection_sets → work_schedules 생성
+**파일:** `routers/inspection_sets.py` (v1.8.0 → v1.9.0으로 버전업)
 
-**파일**: `routers/inspection_sets.py` (기존 파일에 엔드포인트 추가)
-
-```
-POST /inspection-sets/generate-schedules/{factory_id}
-```
-
-**로직:**
+### 4조건 체크 로직
 ```python
-# 1. 해당 factory_id의 4조건 충족 inspection_sets 조회
-sets = supabase.table("inspection_sets")
-    .select("*, inspection_set_items(count)")
-    .eq("factory_id", factory_id)
-    .eq("is_active", True)
-    .not_.is_("schedule_anchor_date", "null")
-    .not_.is_("cycle_unit", "null")
-    .not_.is_("assignee_user_id", "null")
-    .not_.is_("obligation_summary", "null")
+# 4조건:
+# 1. schedule_anchor_date IS NOT NULL
+# 2. cycle_unit IS NOT NULL
+# 3. assignee_user_id IS NOT NULL   ← 현재 0건이므로 스킵되더라도 정상
+# 4. (description IS NOT NULL AND description != '') OR legal_rule_code IS NOT NULL
+
+def _meets_4_conditions(iset: dict) -> bool:
+    has_anchor   = bool(iset.get("schedule_anchor_date"))
+    has_cycle    = bool(iset.get("cycle_unit"))
+    has_assignee = bool(iset.get("assignee_user_id"))
+    has_content  = bool((iset.get("description") or "").strip()) or bool(iset.get("legal_rule_code"))
+    return has_anchor and has_cycle and has_assignee and has_content
+```
+
+> **중요:** 담당자(assignee_user_id)가 현재 0건이라 4조건 충족 시 생성, 0건이면 0건 생성이 정상.
+> 완료 기준은 "4조건 충족 시 LAW_ENGINE 스케줄 생성"이지 "무조건 생성"이 아님.
+> 테스트 시 inspection_sets 1건에 assignee_user_id를 임시 설정 후 확인.
+
+### calc_next_date 헬퍼
+기존 `_next_planned_from(base, cycle_unit, cycle_value)` 함수 재사용 (이미 inspection_sets.py에 존재).
+
+### source_type = 'LAW_ENGINE' (기존 'LEGAL'과 다름!)
+
+### 응답 구조
+```json
+{
+  "status": "success",
+  "data": {
+    "factory_id": "uuid",
+    "created": 5,
+    "skipped": 53,
+    "skipped_no_condition": 18,
+    "total_sets": 76
+  }
+}
+```
+
+### NOT EXISTS 중복 방지
+```python
+# 이미 동일 inspection_set_id + source_type='LAW_ENGINE' + status='PENDING' 존재 시 스킵
+existing = supabase.table("work_schedules").select("inspection_set_id") \
+    .eq("factory_id", factory_id) \
+    .eq("source_type", "LAW_ENGINE") \
+    .eq("status_code", "PENDING") \
     .execute()
+existing_set_ids = {r["inspection_set_id"] for r in (existing.data or []) if r.get("inspection_set_id")}
+```
 
-ADMIN_OBL = {'REPORT','DOCUMENT','NOTIFY','APPOINT','ACTION'}
-
-created = 0
-skipped = 0
-
-for iset in sets:
-    obl = iset['obligation_type'] or 'OTHER'
-    is_admin = obl in ADMIN_OBL
-    item_count = iset.get('inspection_set_items', [{}])[0].get('count', 0)
-    
-    # 실물점검인데 체크항목 없으면 SKIP
-    if not is_admin and item_count == 0:
-        skipped += 1
-        continue
-    
-    # 이미 이 inspection_set_id로 PENDING 스케줄 존재 시 SKIP
-    existing = supabase.table("work_schedules")
-        .select("id", count="exact")
-        .eq("inspection_set_id", iset['id'])
-        .eq("status_code", "PENDING")
-        .eq("source_type", "LAW_ENGINE")
-        .execute()
-    if existing.count and existing.count > 0:
-        skipped += 1
-        continue
-    
-    # 주기 기반 planned_date 계산
-    anchor = date.fromisoformat(str(iset['schedule_anchor_date'])[:10])
-    planned = calc_next_date(anchor, iset['cycle_unit'], iset['cycle_value'] or 1)
-    
-    # work_schedules INSERT
-    supabase.table("work_schedules").insert({
-        "factory_id":        factory_id,
-        "company_id":        iset.get('company_id'),
-        "inspection_set_id": iset['id'],
-        "assigned_user_id":  iset['assignee_user_id'],
-        "source_type":       "LAW_ENGINE",
-        "obligation_type":   obl,
-        "law_name":          iset.get('law_name', ''),
-        "law_article":       iset.get('law_article', ''),
-        "description":       iset.get('obligation_summary', ''),
-        "cycle_base_guide":  iset.get('cycle_base_guide', ''),
-        "planned_date":      planned.isoformat(),
-        "status_code":       "PENDING",
-        "active_yn":         True,
-        "rule_code":         iset.get('legal_rule_code', ''),
-    }).execute()
-    created += 1
-
-return {
-    "status": "success",
-    "data": {"created": created, "skipped": skipped, "total": len(sets)}
+### 생성할 work_schedules 행
+```python
+{
+    "factory_id":        iset["factory_id"],
+    "company_id":        iset.get("company_id"),
+    "inspection_set_id": iset["id"],
+    "assigned_user_id":  iset["assignee_user_id"],  # inspection_sets에서 가져옴
+    "source_type":       "LAW_ENGINE",               # ★ 핵심
+    "description":       iset.get("description") or iset.get("law_name") or "",
+    "obligation_type":   iset.get("inspection_category") or "INSPECT",
+    "law_name":          iset.get("law_name") or "",
+    "law_article":       iset.get("law_article") or "",
+    "planned_date":      calc_next_date(...).isoformat(),
+    "status_code":       "PENDING",
+    "active_yn":         True,
+    "rule_code":         iset.get("legal_rule_code") or iset.get("legal_rule_id") or "",
 }
 ```
 
-**calc_next_date 헬퍼:**
-```python
-from datetime import date
-from dateutil.relativedelta import relativedelta
+---
 
-def calc_next_date(anchor: date, cycle_unit: str, cycle_value: int) -> date:
-    u = (cycle_unit or '').lower()
-    v = max(int(cycle_value or 1), 1)
-    if u == 'day':        return anchor + timedelta(days=v)
-    if u == 'week':       return anchor + timedelta(weeks=v)
-    if u == 'month':      return anchor + relativedelta(months=v)
-    if u == 'quarter':    return anchor + relativedelta(months=3)
-    if u == 'half_year':  return anchor + relativedelta(months=6)
-    if u == 'year':       return anchor + relativedelta(years=v)
-    return anchor + relativedelta(years=1)  # 기본 1년
+## 작업 2: POST /inspection-sets/generate-schedules-all
+
+**파일:** `routers/inspection_sets.py`
+
+```
+전체 공장(factories 테이블) 일괄 실행
+→ 각 factory_id에 대해 작업1 로직 실행
+→ 결과 집계 반환
 ```
 
-**응답 구조:**
+### 응답 구조
 ```json
 {
   "status": "success",
   "data": {
-    "created": 34,
-    "skipped": 24,
-    "total": 58
+    "total_factories": 10,
+    "processed": 8,
+    "total_created": 12,
+    "total_skipped": 244,
+    "results": [
+      {"factory_id": "uuid", "created": 3, "skipped": 21},
+      ...
+    ]
   }
 }
 ```
 
 ---
 
-### 2. 전체 공장 일괄 생성
+## 작업 3: schedule_pipeline.py 수정
 
-```
-POST /inspection-sets/generate-schedules-all
-```
+**파일:** `routers/schedule_pipeline.py` (v1.0.0 → v1.1.0으로 버전업)
 
-로직: factories 전체 순회 → 위 함수 호출
+### trigger-due-alerts에 assigned_user_id NULL 필터 추가
 
-```json
-{
-  "status": "success",
-  "data": {
-    "factories_processed": 3,
-    "total_created": 67,
-    "total_skipped": 42
-  }
-}
-```
-
----
-
-### 3. D-3 알림 발송 수정
-
-**파일**: `routers/schedule_pipeline.py` 기존 `/notifications/trigger-due-alerts` 수정
-
-현재 문제: work_schedules에 LAW_ENGINE 일정이 0건이라 알림이 0건
-
-수정사항:
-- `source_type` 필터 제거 (MANUAL + LAW_ENGINE 모두 대상)
-- `assigned_user_id` 있는 일정만 대상
-- FCM push_token 있으면 FCM도 같이 발송
-
+**현재 코드 (수정 전):**
 ```python
-# 수정 후 쿼리
 sched_res = (
     supabase.table("work_schedules")
-    .select("id, factory_id, company_id, assigned_user_id, description, obligation_type, law_name")
+    .select("id, factory_id, company_id, assigned_user_id, description, ...")
     .eq("planned_date", target_date.isoformat())
     .eq("status_code", "PENDING")
     .eq("active_yn", True)
-    .not_.is_("assigned_user_id", "null")  # 담당자 있는 것만
     .execute()
 )
+schedules = sched_res.data or []
+```
+
+**수정 후:**
+```python
+sched_res = (
+    supabase.table("work_schedules")
+    .select("id, factory_id, company_id, assigned_user_id, description, ...")
+    .eq("planned_date", target_date.isoformat())
+    .eq("status_code", "PENDING")
+    .eq("active_yn", True)
+    .not_.is_("assigned_user_id", "null")  # ★ 담당자 없는 일정 알림 발송 안 함
+    .execute()
+)
+schedules = sched_res.data or []
 ```
 
 ---
 
 ## 구현 순서
 
-```
-1. inspection_sets.py — POST /inspection-sets/generate-schedules/{factory_id}
-2. inspection_sets.py — POST /inspection-sets/generate-schedules-all
-3. schedule_pipeline.py — trigger-due-alerts 수정 (담당자 필터 추가)
-4. main.py 버전 업 (v5.7.5 → v5.7.6)
-5. Railway 배포 확인
-6. Supabase에서 결과 확인:
-   SELECT count(*), source_type FROM work_schedules
-   WHERE source_type = 'LAW_ENGINE' GROUP BY source_type;
-```
+1. inspection_sets.py에 `generate-schedules/{factory_id}` 엔드포인트 추가
+2. inspection_sets.py에 `generate-schedules-all` 엔드포인트 추가
+3. schedule_pipeline.py trigger_due_alerts 수정
+4. GitHub push → Railway 재배포 대기 (~2분)
+5. 완료 기준 SQL 실행으로 검증
 
----
-
-## 주의사항
-
-- `NOT EXISTS` 패턴으로 중복 생성 방지 필수
-- `cycle_unit` 값: 'day', 'week', 'month', 'quarter', 'half_year', 'year'
-- `dateutil.relativedelta` 패키지 사용 (requirements.txt 확인)
-- FastAPI route ordering: 구체 경로를 파라미터 경로보다 먼저 선언
-  - `/generate-schedules-all` 을 `/{id}` 보다 앞에
-- 완료 후 GitHub push (taiengineering/tai-api, main 브랜치)
-- 완료 후 다음 SQL로 결과 검증:
+## 완료 검증 SQL
 ```sql
-SELECT source_type, count(*) 
-FROM work_schedules 
-GROUP BY source_type;
+-- 1. LAW_ENGINE 스케줄 생성 확인
+SELECT source_type, COUNT(*) FROM work_schedules GROUP BY source_type;
+
+-- 2. 4조건 충족 inspection_sets 확인 (assignee_user_id 임시 설정 후)
+SELECT COUNT(*) FROM inspection_sets
+WHERE schedule_anchor_date IS NOT NULL
+  AND cycle_unit IS NOT NULL
+  AND assignee_user_id IS NOT NULL
+  AND (description IS NOT NULL OR legal_rule_code IS NOT NULL)
+  AND is_active = true;
 ```
+
+## 코드 규칙
+1. FastAPI 경로: 구체 경로(`/generate-schedules-all`)를 파라미터 경로(`/{id}`) 앞에 선언
+2. 다중 파일 커밋: github-tai:push_files 사용
+3. 단일 파일 수정: github-tai:create_or_update_file (SHA 먼저 조회 필수)
+4. 커밋 후 Railway 자동 배포 확인
 ```
