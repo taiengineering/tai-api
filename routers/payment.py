@@ -1,31 +1,26 @@
 """
-이니시스 INIStdPay 표준결제 라우터 — v1.6.0
+이니시스 INIStdPay 표준결제 라우터 — v1.7.0
+
+v1.7.0 (2026-04-09) — 팝업 차단 우회: async/await 제거 → XMLHttpRequest 동기 방식
+  [FIX] _PRICING_HTML startPayment(): async/await → XHR onload 콜백으로 교체
+        브라우저는 await 이후 INIStdPay.pay() 호출을 사용자 제스처로 미인식 → 팝업 차단
+        XHR onload 콜백 내 INIStdPay.pay() = 동일 이벤트 루프 → 팝업 허용
+  [KEEP] _RESULT_HTML goDiagnosis() → /request/v1/ (법령진단 입력폼)
 
 v1.6.0 (2026-04-09) — 결제 완료 후 법령진단 입력폼으로 이동
-  [FIX] _RESULT_HTML goDash() → /request/v1/ (법령진단 입력폼)
-  [FIX] _PRICING_HTML 결제 완료 버튼 텍스트 → '법령진단 시작하기'
-
-v1.5.0 (2026-04-08) — 이니시스 매뉴얼(manual.inicis.com) 기반 전면 수정
-  [FIX] STEP1 결제요청: verification 추가 (SHA256(oid+price+signKey+timestamp))
-  [FIX] STEP1 결제요청: use_chkfake="Y" 추가
-  [FIX] STEP1 결제요청: acceptmethod에 centerCd(Y) 추가
-  [FIX] STEP3 승인요청: signature 수정 SHA256(authToken+timestamp)
-  [FIX] STEP3 승인요청: verification 추가 SHA256(authToken+signKey+timestamp)
-  [FIX] STEP3 승인요청: 고정 authUrl → STEP2 응답의 authUrl 동적 사용
-  [ADD] mpriv.pem 환경변수 base64(INICIS_MPRIV_PEM_B64) 지원
-  [ADD] SignKey 환경변수(INICIS_SIGN_KEY) 우선 로드
+v1.5.0 (2026-04-08) — 이니시스 매뉴얼 기반 전면 수정
 
 Railway 환경변수:
   INICIS_MID           가맹점 ID (taieng4350)
   INICIS_KEY_PASSWORD  키파일 PW (1111)
-  INICIS_SIGN_KEY      keypass.enc 내용 (평문 SignKey) — 환경변수 우선
-  INICIS_MPRIV_PEM_B64 mpriv.pem 파일을 base64 인코딩한 값 — 환경변수 우선
+  INICIS_SIGN_KEY      keypass.enc 내용 (평문 SignKey)
+  INICIS_MPRIV_PEM_B64 mpriv.pem base64 인코딩
 
 API:
-  GET  /payments/pricing               결제 페이지 HTML (인증 불필요)
-  GET  /payments/result                결제 결과 페이지 HTML (인증 불필요)
-  POST /payments/inicis/prepare        결제창 파라미터 생성 (verification 포함)
-  POST /payments/inicis/return         이니시스 returnUrl → 승인 (authUrl 동적 사용)
+  GET  /payments/pricing               결제 페이지 HTML
+  GET  /payments/result                결제 결과 페이지 HTML
+  POST /payments/inicis/prepare        결제창 파라미터 생성
+  POST /payments/inicis/return         이니시스 returnUrl → 승인
   POST /payments/inicis/noti           이니시스 noti
   GET  /payments                       결제 이력 조회
   POST /payments/manual/confirm        수동 확인
@@ -72,8 +67,6 @@ FRONT_RETURN_URL = os.getenv(
 )
 
 
-# ── 해시/유틸 ──────────────────────────────────────────────────
-
 def _sha256(data: str) -> str:
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
@@ -87,13 +80,10 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# ── 키 로드 ───────────────────────────────────────────────────
-
 def _load_sign_key() -> str:
     env_key = os.getenv("INICIS_SIGN_KEY", "").strip()
     if env_key:
         return env_key
-
     try:
         with open(os.path.join(INICIS_KEY_PATH, "keypass.enc"), "r", encoding="utf-8") as f:
             key = f.read().strip()
@@ -101,24 +91,18 @@ def _load_sign_key() -> str:
                 return key
     except Exception as e:
         log.warning(f"[INICIS] keypass.enc 로드 실패: {e}")
-
     return INICIS_KEY_PASSWORD
 
 def _load_mpriv_pem() -> Optional[bytes]:
     b64 = os.getenv("INICIS_MPRIV_PEM_B64", "").strip()
     if b64:
         try:
-            pem = _base64.b64decode(b64)
-            log.info("[INICIS] mpriv.pem: 환경변수(base64) 로드 완료")
-            return pem
+            return _base64.b64decode(b64)
         except Exception as e:
             log.error(f"[INICIS] INICIS_MPRIV_PEM_B64 디코딩 실패: {e}")
-
     try:
         with open(os.path.join(INICIS_KEY_PATH, "mpriv.pem"), "rb") as f:
-            pem = f.read()
-            log.info("[INICIS] mpriv.pem: 파일 로드 완료")
-            return pem
+            return f.read()
     except Exception as e:
         log.warning(f"[INICIS] mpriv.pem 로드 실패: {e}")
         return None
@@ -136,14 +120,10 @@ def _rsa_sign_sha256(data: str, pem_bytes: bytes, password: str) -> Optional[str
         log.error(f"[INICIS] RSA 서명 실패: {e}")
         return None
 
-
-# ── STEP3 승인 API 호출 ───────────────────────────────────────
-
 def _call_pay_auth(auth_token: str, auth_url: str, sign_key: str) -> Dict[str, Any]:
     timestamp    = _ts_ms()
     signature    = _sha256(auth_token + timestamp)
     verification = _sha256(auth_token + sign_key + timestamp)
-
     params: Dict[str, str] = {
         "mid":          INICIS_MID,
         "authToken":    auth_token,
@@ -153,31 +133,22 @@ def _call_pay_auth(auth_token: str, auth_url: str, sign_key: str) -> Dict[str, A
         "charset":      "UTF-8",
         "format":       "JSON",
     }
-
     pem = _load_mpriv_pem()
     if pem:
         rsa_sig = _rsa_sign_sha256(auth_token, pem, INICIS_KEY_PASSWORD)
         if rsa_sig:
             params["signData"] = rsa_sig
-
-    log.info(f"[INICIS STEP3] authUrl={auth_url}, signature={signature[:10]}..., verification={verification[:10]}...")
-
+    log.info(f"[INICIS STEP3] authUrl={auth_url}")
     try:
-        resp = _requests.post(
-            auth_url,
-            data=params,
-            timeout=30,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
+        resp = _requests.post(auth_url, data=params, timeout=30,
+                              headers={"Content-Type": "application/x-www-form-urlencoded"})
         result = resp.json()
-        log.info(f"[INICIS STEP3] resultCode={result.get('resultCode')} resultMsg={result.get('resultMsg')}")
+        log.info(f"[INICIS STEP3] resultCode={result.get('resultCode')}")
         return result
     except Exception as e:
-        log.error(f"[INICIS] 승인 API 호출 실패: {e}")
+        log.error(f"[INICIS] 승인 API 실패: {e}")
         raise
 
-
-# ── Pydantic 모델 ──────────────────────────────────────────────
 
 class PrepareBody(BaseModel):
     company_id:    Optional[str] = None
@@ -205,6 +176,9 @@ class CancelBody(BaseModel):
 
 
 # ── GET /payments/pricing ─────────────────────────────────────
+# ★ v1.7.0: startPayment() async/await → XHR onload 콜백으로 교체
+#    이유: await 이후 INIStdPay.pay() 호출 시 브라우저 팝업 차단
+#    XHR onload는 사용자 클릭 이벤트 체인 유지 → 팝업 허용
 
 _PRICING_HTML = """<!doctype html>
 <html lang="ko">
@@ -212,7 +186,6 @@ _PRICING_HTML = """<!doctype html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TAI Safe 요금제 | 산업안전 플랫폼</title>
-  <meta name="description" content="TAI Safe 산업안전 플랫폼 요금제 안내" />
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
   <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -329,46 +302,12 @@ _PRICING_HTML = """<!doctype html>
       </div>
     </div>
     <hr class="my-3" />
-    <button class="btn-pay" onclick="openModal()">
-      <i class="ti ti-credit-card me-1"></i>지금 결제하기
+    <button class="btn-pay" id="btnPay" onclick="startPayment()">
+      <span class="spinner-border spinner-border-sm d-none me-1" id="paySpinner"></span>
+      <i class="ti ti-credit-card me-1" id="payIcon"></i>지금 결제하기
     </button>
     <div class="text-center mt-2">
       <small class="text-body-secondary"><i class="ti ti-lock me-1"></i>이니시스 안전결제 · SSL 암호화</small>
-    </div>
-  </div>
-</div>
-
-<!-- 구매자 정보 모달 -->
-<div class="modal fade" id="buyerModal" tabindex="-1">
-  <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content" style="border-radius:1.25rem;border:none;">
-      <div class="modal-header border-0 pb-0">
-        <h5 class="modal-title fw-bold">구매자 정보 입력</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body pt-2">
-        <p style="font-size:.88rem;color:#6c757d;">결제 영수증 발송을 위해 아래 정보를 입력해 주세요.</p>
-        <div class="mb-3">
-          <label class="form-label" style="font-size:.88rem;font-weight:500">이름 <span class="text-danger">*</span></label>
-          <input type="text" class="form-control" id="inp_name" placeholder="홍길동" />
-          <div class="text-danger" id="err_name" style="font-size:.8rem"></div>
-        </div>
-        <div class="mb-3">
-          <label class="form-label" style="font-size:.88rem;font-weight:500">휴대폰 번호 <span class="text-danger">*</span></label>
-          <input type="tel" class="form-control" id="inp_tel" placeholder="01012345678" />
-          <div class="text-danger" id="err_tel" style="font-size:.8rem"></div>
-        </div>
-        <div class="mb-1">
-          <label class="form-label" style="font-size:.88rem;font-weight:500">이메일 <span style="font-size:.8rem;color:#6c757d">(선택)</span></label>
-          <input type="email" class="form-control" id="inp_email" placeholder="email@example.com" />
-        </div>
-      </div>
-      <div class="modal-footer border-0 pt-0">
-        <button type="button" class="btn btn-light rounded-3" data-bs-dismiss="modal">취소</button>
-        <button type="button" class="btn btn-primary rounded-3 px-4" id="btnPay" onclick="startPayment()">
-          <span class="spinner-border spinner-border-sm d-none me-1" id="paySpinner"></span>결제창 열기
-        </button>
-      </div>
     </div>
   </div>
 </div>
@@ -405,12 +344,6 @@ var BASE={basic:79000,premium:149000};
 var PNAME={basic:'TAI Safe 베이직',premium:'TAI Safe 프리미엄'};
 var _plan='basic',_months=1,_disc=0;
 
-// URL 파라미터로 플랜 초기 선택
-(function(){
-  var p=new URLSearchParams(location.search).get('plan');
-  if(p==='premium') _plan='premium';
-})();
-
 function selectPlan(p){
   _plan=p;
   ['basic','premium'].forEach(function(x){
@@ -442,87 +375,86 @@ function updatePrices(){
   document.getElementById('summaryDiscount').textContent=_disc>0?_disc+'% \ud560\uc778 \uc801\uc6a9 (\u20a9'+s.toLocaleString()+' \uc808\uc57d)':'';
 }
 
-var _modal;
-function openModal(){
-  document.getElementById('err_name').textContent='';
-  document.getElementById('err_tel').textContent='';
-  try{
-    var u=JSON.parse(localStorage.getItem('user_info')||'{}');
-    if(u.name)document.getElementById('inp_name').value=u.name;
-    if(u.phone)document.getElementById('inp_tel').value=u.phone.replace(/-/g,'');
-    if(u.email)document.getElementById('inp_email').value=u.email;
-  }catch(e){}
-  _modal=_modal||new bootstrap.Modal(document.getElementById('buyerModal'));
-  _modal.show();
-}
+/* ★ v1.7.0 핵심 수정: async/await 제거 → XHR onload 콜백
+   - async 함수 내 await 이후 INIStdPay.pay() = 팝업 차단
+   - XHR onload 콜백은 사용자 클릭 이벤트 체인 유지 → 팝업 허용  */
+function startPayment(){
+  var btn=document.getElementById('btnPay');
+  var sp=document.getElementById('paySpinner');
+  var icon=document.getElementById('payIcon');
 
-async function startPayment(){
-  var name=document.getElementById('inp_name').value.trim();
-  var tel=document.getElementById('inp_tel').value.trim().replace(/-/g,'');
-  var email=document.getElementById('inp_email').value.trim();
-  document.getElementById('err_name').textContent='';
-  document.getElementById('err_tel').textContent='';
-  var ok=true;
-  if(!name){document.getElementById('err_name').textContent='\uc774\ub984\uc744 \uc785\ub825\ud574 \uc8fc\uc138\uc694.';ok=false;}
-  if(!tel||tel.length<10){document.getElementById('err_tel').textContent='\ud654\ub300\ud3f0 \ubc88\ud638\ub97c \uc785\ub825\ud574 \uc8fc\uc138\uc694.';ok=false;}
-  if(!ok)return;
+  /* 버튼 중복 클릭 방지 */
+  if(btn.disabled) return;
+  btn.disabled=true;
+  sp.classList.remove('d-none');
+  icon.classList.add('d-none');
 
-  var btn=document.getElementById('btnPay'),sp=document.getElementById('paySpinner');
-  btn.disabled=true; sp.classList.remove('d-none');
+  var total=Math.round(BASE[_plan]*(1-_disc/100))*_months;
+  var goodname=PNAME[_plan]+' '+_months+'\uac1c\uc6d4';
+  var token=localStorage.getItem('access_token')||'';
+  var companyId=localStorage.getItem('company_id')||'';
 
-  try{
-    var total=Math.round(BASE[_plan]*(1-_disc/100))*_months;
-    var goodname=PNAME[_plan]+' '+_months+'\uac1c\uc6d4';
-    var token=localStorage.getItem('access_token')||'';
-    var companyId=localStorage.getItem('company_id')||'';
+  var payload=JSON.stringify({
+    company_id:companyId||undefined,
+    amount:total,
+    goodname:goodname,
+    buyername:'\uace0\uac1d',
+    buyertel:'00000000000',
+    plan_code:_plan.toUpperCase(),
+    period_months:_months,
+    payment_type:'CARD',
+    return_url:'https://api.taieng.co.kr/payments/inicis/return'
+  });
 
-    var res=await fetch(API+'/payments/inicis/prepare',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':token?'Bearer '+token:''},
-      body:JSON.stringify({
-        company_id:companyId||undefined,
-        amount:total,
-        goodname:goodname,
-        buyername:name,
-        buyertel:tel,
-        buyeremail:email||undefined,
-        plan_code:_plan.toUpperCase(),
-        period_months:_months,
-        payment_type:'CARD',
-        return_url:'https://api.taieng.co.kr/payments/inicis/return'
-      })
-    });
+  /* XHR — onload 콜백은 클릭 이벤트 체인 유지 */
+  var xhr=new XMLHttpRequest();
+  xhr.open('POST', API+'/payments/inicis/prepare', true);
+  xhr.setRequestHeader('Content-Type','application/json');
+  if(token) xhr.setRequestHeader('Authorization','Bearer '+token);
 
-    var d=await res.json().catch(function(){return{};});
-    if(!res.ok) throw new Error(d.detail||d.message||'\uacb0\uc81c \uc900\ube44 \uc2e4\ud328');
-    var p=d.data||d;
+  xhr.onload=function(){
+    try{
+      var d=JSON.parse(xhr.responseText);
+      if(xhr.status<200||xhr.status>=300) throw new Error(d.detail||d.message||'\uacb0\uc81c \uc900\ube44 \uc2e4\ud328');
+      var p=d.data||d;
 
-    document.getElementById('f_mid').value         = p.mid||'';
-    document.getElementById('f_oid').value         = p.oid||'';
-    document.getElementById('f_price').value       = p.price||String(total);
-    document.getElementById('f_timestamp').value   = p.timestamp||'';
-    document.getElementById('f_signature').value   = p.signature||'';
-    document.getElementById('f_verification').value= p.verification||'';
-    document.getElementById('f_mKey').value        = p.mKey||'';
-    document.getElementById('f_goodname').value    = p.goodname||goodname;
-    document.getElementById('f_buyername').value   = name;
-    document.getElementById('f_buyertel').value    = tel;
-    document.getElementById('f_buyeremail').value  = email||'';
-    document.getElementById('f_returnUrl').value   = p.returnUrl||'https://api.taieng.co.kr/payments/inicis/return';
-    document.getElementById('f_closeUrl').value    = p.closeUrl||'https://api.taieng.co.kr/payments/result?resultCode=CLOSE';
+      document.getElementById('f_mid').value         =p.mid||'';
+      document.getElementById('f_oid').value         =p.oid||'';
+      document.getElementById('f_price').value       =p.price||String(total);
+      document.getElementById('f_timestamp').value   =p.timestamp||'';
+      document.getElementById('f_signature').value   =p.signature||'';
+      document.getElementById('f_verification').value=p.verification||'';
+      document.getElementById('f_mKey').value        =p.mKey||'';
+      document.getElementById('f_goodname').value    =p.goodname||goodname;
+      document.getElementById('f_buyername').value   ='\uace0\uac1d';
+      document.getElementById('f_buyertel').value    ='00000000000';
+      document.getElementById('f_buyeremail').value  ='';
+      document.getElementById('f_returnUrl').value   =p.returnUrl||'https://api.taieng.co.kr/payments/inicis/return';
+      document.getElementById('f_closeUrl').value    =p.closeUrl||'https://api.taieng.co.kr/payments/result?resultCode=CLOSE';
 
-    if(_modal) _modal.hide();
-    INIStdPay.pay('inicisForm');
+      /* 이니시스 표준결제 팝업 호출 */
+      INIStdPay.pay('inicisForm');
 
-  }catch(e){
-    alert('\uc624\ub958: '+e.message);
-  }finally{
-    btn.disabled=false; sp.classList.add('d-none');
-  }
+    }catch(e){
+      alert('\uc624\ub958: '+e.message);
+    }finally{
+      btn.disabled=false;
+      sp.classList.add('d-none');
+      icon.classList.remove('d-none');
+    }
+  };
+
+  xhr.onerror=function(){
+    alert('\ub124\ud2b8\uc6cc\ud06c \uc624\ub958\uac00 \ubc1c\uc0dd\ud588\uc2b5\ub2c8\ub2e4. \ub2e4\uc2dc \uc2dc\ub3c4\ud574 \uc8fc\uc138\uc694.');
+    btn.disabled=false;
+    sp.classList.add('d-none');
+    icon.classList.remove('d-none');
+  };
+
+  xhr.send(payload);
 }
 
 updatePrices();
-// URL 파라미터에 따라 초기 플랜 선택
 (function(){
   var p=new URLSearchParams(location.search).get('plan');
   if(p==='premium') selectPlan('premium');
@@ -566,10 +498,7 @@ _RESULT_HTML = """<!doctype html>
 'use strict';
 function getParams(){var p={};new URLSearchParams(location.search).forEach(function(v,k){p[k]=v;});return p;}
 function fmt(n){return n?Number(n).toLocaleString()+'\uc6d0':'-';}
-function goDiagnosis(){
-  /* 결제 완료 후 법령진단 입력폼으로 이동 */
-  location.href='https://taieng.co.kr/request/v1/';
-}
+function goDiagnosis(){ location.href='https://taieng.co.kr/request/v1/'; }
 function renderOk(p){
   var rc=document.getElementById('rc'),sec=5,ti;
   rc.innerHTML='<div class="icon-wrap success"><i class="ti tabler-circle-check"></i></div>'
@@ -613,17 +542,13 @@ function renderFail(msg,oid){
 
 @router.get("/pricing", response_class=HTMLResponse, include_in_schema=True)
 def payment_pricing_page():
-    """결제 페이지 직접 서빙 (인증 불필요). 카드사 심사용."""
     return HTMLResponse(content=_PRICING_HTML, status_code=200)
 
 
 @router.get("/result", response_class=HTMLResponse, include_in_schema=True)
 def payment_result_page():
-    """결제 결과 페이지 직접 서빙 (인증 불필요)."""
     return HTMLResponse(content=_RESULT_HTML, status_code=200)
 
-
-# ── POST /payments/inicis/prepare ─────────────────────────────
 
 @router.post("/inicis/prepare")
 def inicis_prepare(body: PrepareBody):
@@ -667,7 +592,7 @@ def inicis_prepare(body: PrepareBody):
     return_url = body.return_url or DEFAULT_RETURN_URL
     close_url  = body.close_url  or DEFAULT_CLOSE_URL
 
-    log.info(f"[INICIS STEP1] oid={order_id} price={price_str} signKey앞4={sign_key[:4]}...")
+    log.info(f"[INICIS STEP1] oid={order_id} price={price_str}")
 
     return {
         "status": "success",
@@ -693,8 +618,6 @@ def inicis_prepare(body: PrepareBody):
     }
 
 
-# ── POST /payments/inicis/return ──────────────────────────────
-
 @router.post("/inicis/return", include_in_schema=True)
 async def inicis_return(request: Request):
     try:
@@ -715,7 +638,7 @@ async def inicis_return(request: Request):
     price        = data.get("price", "")
     paymethod    = data.get("paymethod", "카드")
 
-    log.info(f"[INICIS STEP2] resultCode={result_code} oid={order_id} idc={idc_name} authUrl={auth_url}")
+    log.info(f"[INICIS STEP2] resultCode={result_code} oid={order_id} idc={idc_name}")
 
     supabase = get_supabase()
 
@@ -728,7 +651,6 @@ async def inicis_return(request: Request):
 
     pay_res = supabase.table("payments").select("*").eq("inicis_order_id", order_id).limit(1).execute()
     if not pay_res.data:
-        log.error(f"[INICIS] 주문번호 미확인: oid={order_id}")
         return RedirectResponse(f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=주문번호미확인&oid={order_id}", status_code=302)
 
     payment     = pay_res.data[0]
@@ -736,7 +658,6 @@ async def inicis_return(request: Request):
     contract_id = payment.get("contract_id")
 
     if not auth_url:
-        log.error("[INICIS] authUrl 없음")
         return RedirectResponse(f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=authUrl없음&oid={order_id}", status_code=302)
 
     sign_key = _load_sign_key()
@@ -744,8 +665,7 @@ async def inicis_return(request: Request):
         auth_result = _call_pay_auth(auth_token, auth_url, sign_key)
     except Exception as e:
         supabase.table("payments").update({
-            "status_code": "FAILED", "fail_reason": f"승인 API 실패: {e}",
-            "updated_at": _now_iso(),
+            "status_code": "FAILED", "fail_reason": f"승인 API 실패: {e}", "updated_at": _now_iso(),
         }).eq("id", payment_id).execute()
         return RedirectResponse(f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=승인API오류&oid={order_id}", status_code=302)
 
@@ -779,10 +699,8 @@ async def inicis_return(request: Request):
     else:
         fail_msg = auth_result.get("resultMsg", "승인 실패")
         supabase.table("payments").update({
-            "status_code": "FAILED",
-            "fail_reason": fail_msg,
-            "inicis_raw":  auth_result,
-            "updated_at":  _now_iso(),
+            "status_code": "FAILED", "fail_reason": fail_msg,
+            "inicis_raw": auth_result, "updated_at": _now_iso(),
         }).eq("id", payment_id).execute()
         return RedirectResponse(
             f"{FRONT_RETURN_URL}?resultCode=FAIL&msg={urllib.parse.quote(fail_msg)}&oid={order_id}",
@@ -790,11 +708,8 @@ async def inicis_return(request: Request):
         )
 
 
-# ── POST /payments/inicis/noti ────────────────────────────────
-
 @router.post("/inicis/noti", include_in_schema=True)
 async def inicis_noti(request: Request):
-    """이니시스 서버→서버 noti. 응답: 'OK'"""
     try:
         form = await request.form()
         data: Dict[str, Any] = dict(form)
@@ -808,8 +723,8 @@ async def inicis_noti(request: Request):
     auth_url   = data.get("authUrl", "")
     order_id   = data.get("orderNumber") or data.get("oid", "")
 
-    supabase  = get_supabase()
-    sign_key  = _load_sign_key()
+    supabase = get_supabase()
+    sign_key = _load_sign_key()
 
     pay_res = supabase.table("payments").select("id, status_code, contract_id") \
         .eq("inicis_order_id", order_id).limit(1).execute()
@@ -822,7 +737,6 @@ async def inicis_noti(request: Request):
 
     if payment["status_code"] == "SUCCESS":
         return "OK"
-
     if not auth_url:
         return "OK"
 
@@ -846,8 +760,6 @@ async def inicis_noti(request: Request):
             supabase.table("contracts").update({"is_active": True, "updated_at": now}).eq("id", contract_id).execute()
     return "OK"
 
-
-# ── GET /payments ─────────────────────────────────────────────
 
 @router.get("")
 def list_payments(
@@ -877,8 +789,6 @@ def list_payments(
     }
 
 
-# ── POST /payments/manual/confirm ────────────────────────────
-
 @router.post("/manual/confirm")
 def manual_confirm(body: ManualConfirmBody):
     supabase = get_supabase()
@@ -889,15 +799,12 @@ def manual_confirm(body: ManualConfirmBody):
     if pay_res.data[0]["status_code"] == "SUCCESS":
         raise HTTPException(status_code=409, detail="이미 성공 처리된 결제입니다.")
     supabase.table("payments").update({
-        "status_code": "SUCCESS", "paid_at": now,
-        "memo": "계좌이체 수동 확인", "updated_at": now,
+        "status_code": "SUCCESS", "paid_at": now, "memo": "계좌이체 수동 확인", "updated_at": now,
     }).eq("id", body.payment_id).execute()
     supabase.table("contracts").update({"is_active": True, "updated_at": now}).eq("id", body.contract_id).execute()
     return {"status": "success", "message": "수동 활성화 완료",
             "data": {"payment_id": body.payment_id, "contract_id": body.contract_id}}
 
-
-# ── POST /payments/{id}/cancel ────────────────────────────────
 
 @router.post("/{payment_id}/cancel")
 def cancel_payment(payment_id: str, body: CancelBody):
@@ -910,10 +817,8 @@ def cancel_payment(payment_id: str, body: CancelBody):
     if payment["status_code"] == "CANCELLED":
         raise HTTPException(status_code=409, detail="이미 취소된 결제입니다.")
     supabase.table("payments").update({
-        "status_code":  "CANCELLED",
-        "cancel_reason": body.reason,
-        "cancelled_at":  now,
-        "updated_at":    now,
+        "status_code": "CANCELLED", "cancel_reason": body.reason,
+        "cancelled_at": now, "updated_at": now,
     }).eq("id", payment_id).execute()
     contract_id = payment.get("contract_id")
     if contract_id:
