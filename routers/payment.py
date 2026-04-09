@@ -1,32 +1,10 @@
 """
-이니시스 INIStdPay 표준결제 라우터 — v1.8.0
+이니시스 INIStdPay 표준결제 라우터 — v1.9.0
 
-v1.8.0 (2026-04-09) — V023 closeUrl 도메인 불일치 수정
-  [FIX] closeUrl을 환경변수 무시하고 api.taieng.co.kr 하드코딩
-        Railway INICIS_CLOSE_URL=taieng.co.kr 로 잘못 설정돼 있어
-        이니시스 V023(returnUrl/closeUrl 도메인 불일치) 오류 발생
-  [FIX] returnUrl도 환경변수 무시하고 api.taieng.co.kr 하드코딩
-        이니시스 규칙: returnUrl, closeUrl 모두 결제요청 페이지 도메인과 일치
-
-v1.7.0 (2026-04-09) — async/await→XHR onload
-v1.6.0 (2026-04-09) — 결제 완료 후 법령진단 입력폼
-v1.5.0 (2026-04-08) — 이니시스 매뉴얼 기반 전면 수정
-
-Railway 환경변수:
-  INICIS_MID           가맹점 ID (taieng4350)
-  INICIS_KEY_PASSWORD  키파일 PW (1111)
-  INICIS_SIGN_KEY      keypass.enc 내용 (평문 SignKey)
-  INICIS_MPRIV_PEM_B64 mpriv.pem base64 인코딩
-
-API:
-  GET  /payments/pricing               결제 페이지 HTML
-  GET  /payments/result                결제 결과 페이지 HTML
-  POST /payments/inicis/prepare        결제창 파라미터 생성
-  POST /payments/inicis/return         이니시스 returnUrl → 승인
-  POST /payments/inicis/noti           이니시스 noti
-  GET  /payments                       결제 이력 조회
-  POST /payments/manual/confirm        수동 확인
-  POST /payments/{id}/cancel           취소
+v1.9.0 (2026-04-09) — Verification 오류 디버깅
+  [DEBUG] inicis_return에서 authToken, idc_name, auth_url을 DB에 저장
+          (payments.memo 필드 활용 — 임시)
+  [DEBUG] _call_pay_auth 로그 강화 — signKey 앞 8글자, verification 앞 16글자
 """
 from __future__ import annotations
 
@@ -55,9 +33,6 @@ INICIS_MID          = os.getenv("INICIS_MID", "taieng4350")
 INICIS_KEY_PATH     = os.getenv("INICIS_KEY_PATH", "/app/key/taieng4350")
 INICIS_KEY_PASSWORD = os.getenv("INICIS_KEY_PASSWORD", "1111")
 
-# ★ V023 방지: returnUrl / closeUrl 모두 api.taieng.co.kr 고정
-#   이니시스 규칙: 두 URL의 도메인 = 결제요청 페이지 도메인 (api.taieng.co.kr)
-#   Railway 환경변수 INICIS_CLOSE_URL=taieng.co.kr 가 잘못 설정돼 있어 환경변수 무시
 DEFAULT_RETURN_URL = "https://api.taieng.co.kr/payments/inicis/return"
 DEFAULT_CLOSE_URL  = "https://api.taieng.co.kr/payments/result?resultCode=CLOSE"
 FRONT_RETURN_URL   = "https://api.taieng.co.kr/payments/result"
@@ -79,14 +54,17 @@ def _now_iso() -> str:
 def _load_sign_key() -> str:
     env_key = os.getenv("INICIS_SIGN_KEY", "").strip()
     if env_key:
+        log.info(f"[INICIS] SignKey source=ENV len={len(env_key)} prefix={env_key[:8]}")
         return env_key
     try:
         with open(os.path.join(INICIS_KEY_PATH, "keypass.enc"), "r", encoding="utf-8") as f:
             key = f.read().strip()
             if key:
+                log.info(f"[INICIS] SignKey source=FILE len={len(key)} prefix={key[:8]}")
                 return key
     except Exception as e:
         log.warning(f"[INICIS] keypass.enc 로드 실패: {e}")
+    log.warning(f"[INICIS] SignKey source=PASSWORD (fallback)")
     return INICIS_KEY_PASSWORD
 
 def _load_mpriv_pem() -> Optional[bytes]:
@@ -134,12 +112,22 @@ def _call_pay_auth(auth_token: str, auth_url: str, sign_key: str) -> Dict[str, A
         rsa_sig = _rsa_sign_sha256(auth_token, pem, INICIS_KEY_PASSWORD)
         if rsa_sig:
             params["signData"] = rsa_sig
-    log.info(f"[INICIS STEP3] authUrl={auth_url}")
+
+    # ★ 디버그 로그 강화
+    log.info(
+        f"[INICIS STEP3] authUrl={auth_url} "
+        f"authToken_prefix={auth_token[:16]} "
+        f"signKey_prefix={sign_key[:8]} "
+        f"signKey_len={len(sign_key)} "
+        f"mKey={_sha256(sign_key)[:16]} "
+        f"verification_prefix={verification[:16]}"
+    )
+
     try:
         resp = _requests.post(auth_url, data=params, timeout=30,
                               headers={"Content-Type": "application/x-www-form-urlencoded"})
         result = resp.json()
-        log.info(f"[INICIS STEP3] resultCode={result.get('resultCode')}")
+        log.info(f"[INICIS STEP3] resultCode={result.get('resultCode')} resultMsg={result.get('resultMsg')}")
         return result
     except Exception as e:
         log.error(f"[INICIS] 승인 API 실패: {e}")
@@ -201,7 +189,6 @@ _PRICING_HTML = """<!doctype html>
     .plan-name { font-size:1.4rem; font-weight:800; }
     .plan-badge { font-size:.72rem; padding:.25em .65em; border-radius:.5em; background:rgba(255,255,255,.25); color:#fff; vertical-align:middle; margin-left:.4rem; }
     .plan-price { font-size:2.2rem; font-weight:800; margin:.75rem 0 .25rem; }
-    .plan-price small { font-size:1rem; font-weight:400; }
     .plan-origin { font-size:.85rem; color:#adb5bd; text-decoration:line-through; }
     .plan-desc { font-size:.88rem; color:#6c757d; margin-top:.25rem; }
     .plan-features { padding:1.25rem 1.5rem 1.5rem; }
@@ -213,7 +200,6 @@ _PRICING_HTML = """<!doctype html>
     .btn-pay:hover { opacity:.9; } .btn-pay:disabled { opacity:.55; cursor:not-allowed; }
     .select-indicator { width:22px; height:22px; border-radius:50%; border:2px solid #dee2e6; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
     .plan-card.selected .select-indicator { background:#0d6efd; border-color:#0d6efd; color:#fff; }
-    /* ★ Bootstrap .fade 충돌 방지 — 이니시스 overlay opacity:0 문제 */
     #inicisModalDiv, #inicisModalDiv *, .inipay_modal, .inipay_modal * { opacity:1 !important; }
     @media(max-width:576px){.hero h1{font-size:1.6rem;}}
   </style>
@@ -221,9 +207,7 @@ _PRICING_HTML = """<!doctype html>
 <body>
 <div class="hero">
   <div class="container">
-    <div class="badge bg-white bg-opacity-25 text-white mb-3" style="font-size:.85rem;padding:.45em 1em;">
-      <i class="ti ti-shield-check me-1"></i>TAI Safe 요금제
-    </div>
+    <div class="badge bg-white bg-opacity-25 text-white mb-3" style="font-size:.85rem;padding:.45em 1em;"><i class="ti ti-shield-check me-1"></i>TAI Safe 요금제</div>
     <h1>안전관리를 더 스마트하게</h1>
     <p>산업안전보건법 의무를 자동으로 파악하고, 일정·업무를 분배하세요.</p>
   </div>
@@ -261,10 +245,7 @@ _PRICING_HTML = """<!doctype html>
       <div class="plan-card premium" id="card-premium" onclick="selectPlan('premium')">
         <div class="plan-header">
           <div class="d-flex align-items-center justify-content-between">
-            <div>
-              <div class="plan-name">프리미엄<span class="plan-badge">추천</span></div>
-              <div class="plan-desc" style="color:rgba(255,255,255,.75)">중·대규모 현장 최적</div>
-            </div>
+            <div><div class="plan-name">프리미엄<span class="plan-badge">추천</span></div><div class="plan-desc" style="color:rgba(255,255,255,.75)">중·대규모 현장 최적</div></div>
             <div class="select-indicator" id="ind-premium" style="border-color:rgba(255,255,255,.5)"></div>
           </div>
           <div class="plan-price" id="price-premium">&#8361;149,000</div>
@@ -285,45 +266,37 @@ _PRICING_HTML = """<!doctype html>
   </div>
   <div class="card border-0 shadow-sm rounded-3 p-4">
     <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
-      <div>
-        <div class="fw-bold mb-1" id="summaryText">베이직 · 1개월</div>
-        <div class="text-body-secondary small">부가세 포함</div>
-      </div>
-      <div class="text-end">
-        <div class="fw-bold fs-4" id="summaryPrice">&#8361;79,000</div>
-        <div class="text-body-secondary small" id="summaryDiscount"></div>
-      </div>
+      <div><div class="fw-bold mb-1" id="summaryText">베이직 · 1개월</div><div class="text-body-secondary small">부가세 포함</div></div>
+      <div class="text-end"><div class="fw-bold fs-4" id="summaryPrice">&#8361;79,000</div><div class="text-body-secondary small" id="summaryDiscount"></div></div>
     </div>
     <hr class="my-3" />
     <button class="btn-pay" id="btnPay" onclick="startPayment()">
       <span class="spinner-border spinner-border-sm d-none me-1" id="paySpinner"></span>
       <i class="ti ti-credit-card me-1" id="payIcon"></i>지금 결제하기
     </button>
-    <div class="text-center mt-2">
-      <small class="text-body-secondary"><i class="ti ti-lock me-1"></i>이니시스 안전결제 · SSL 암호화</small>
-    </div>
+    <div class="text-center mt-2"><small class="text-body-secondary"><i class="ti ti-lock me-1"></i>이니시스 안전결제 · SSL 암호화</small></div>
   </div>
 </div>
 
 <form id="inicisForm" method="POST" accept-charset="euc-kr" style="display:none">
-  <input type="hidden" name="version"      value="1.0" />
-  <input type="hidden" name="gopaymethod"  value="Card" />
-  <input type="hidden" name="mid"          id="f_mid" />
-  <input type="hidden" name="oid"          id="f_oid" />
-  <input type="hidden" name="price"        id="f_price" />
-  <input type="hidden" name="timestamp"    id="f_timestamp" />
+  <input type="hidden" name="version" value="1.0" />
+  <input type="hidden" name="gopaymethod" value="Card" />
+  <input type="hidden" name="mid" id="f_mid" />
+  <input type="hidden" name="oid" id="f_oid" />
+  <input type="hidden" name="price" id="f_price" />
+  <input type="hidden" name="timestamp" id="f_timestamp" />
   <input type="hidden" name="use_chkfake" value="Y" />
-  <input type="hidden" name="signature"    id="f_signature" />
+  <input type="hidden" name="signature" id="f_signature" />
   <input type="hidden" name="verification" id="f_verification" />
-  <input type="hidden" name="mKey"         id="f_mKey" />
-  <input type="hidden" name="goodname"     id="f_goodname" />
-  <input type="hidden" name="buyername"    id="f_buyername" />
-  <input type="hidden" name="buyertel"     id="f_buyertel" />
-  <input type="hidden" name="buyeremail"   id="f_buyeremail" />
-  <input type="hidden" name="returnUrl"    id="f_returnUrl" />
-  <input type="hidden" name="closeUrl"     id="f_closeUrl" />
-  <input type="hidden" name="currency"     value="WON" />
-  <input type="hidden" name="langtype"     value="KO" />
+  <input type="hidden" name="mKey" id="f_mKey" />
+  <input type="hidden" name="goodname" id="f_goodname" />
+  <input type="hidden" name="buyername" id="f_buyername" />
+  <input type="hidden" name="buyertel" id="f_buyertel" />
+  <input type="hidden" name="buyeremail" id="f_buyeremail" />
+  <input type="hidden" name="returnUrl" id="f_returnUrl" />
+  <input type="hidden" name="closeUrl" id="f_closeUrl" />
+  <input type="hidden" name="currency" value="WON" />
+  <input type="hidden" name="langtype" value="KO" />
   <input type="hidden" name="acceptmethod" value="CARDONLY:CARDPOINT:centerCd(Y)" />
 </form>
 
@@ -331,10 +304,10 @@ _PRICING_HTML = """<!doctype html>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 'use strict';
-var API  = 'https://api.taieng.co.kr';
-var BASE = {basic:79000, premium:149000};
-var PNAME= {basic:'TAI Safe 베이직', premium:'TAI Safe 프리미엄'};
-var _plan='basic', _months=1, _disc=0;
+var API='https://api.taieng.co.kr';
+var BASE={basic:79000,premium:149000};
+var PNAME={basic:'TAI Safe 베이직',premium:'TAI Safe 프리미엄'};
+var _plan='basic',_months=1,_disc=0;
 
 function selectPlan(p){
   _plan=p;
@@ -346,7 +319,6 @@ function selectPlan(p){
   });
   updatePrices();
 }
-
 function selectPeriod(el){
   document.querySelectorAll('.period-tab').forEach(function(t){t.classList.remove('active');});
   el.classList.add('active');
@@ -354,102 +326,65 @@ function selectPeriod(el){
   _disc=parseInt(el.dataset.discount)||0;
   updatePrices();
 }
-
 function updatePrices(){
   ['basic','premium'].forEach(function(p){
-    var m=Math.round(BASE[p]*(1-_disc/100)), t=m*_months, o=BASE[p]*_months;
+    var m=Math.round(BASE[p]*(1-_disc/100)),t=m*_months,o=BASE[p]*_months;
     document.getElementById('price-'+p).innerHTML='&#8361;'+m.toLocaleString();
-    document.getElementById('origin-'+p).textContent=_disc>0?'\uc6d0\uac00 \u20a9'+o.toLocaleString()+' (\u20a9'+(o-t).toLocaleString()+' \uc808\uc57d)':'';
+    document.getElementById('origin-'+p).textContent=_disc>0?'원가 ₩'+o.toLocaleString()+' (₩'+(o-t).toLocaleString()+' 절약)':'';
   });
-  var t=Math.round(BASE[_plan]*(1-_disc/100))*_months, s=BASE[_plan]*_months-t;
-  document.getElementById('summaryText').textContent=(_plan==='basic'?'\ubca0\uc774\uc9c1':'\ud504\ub9ac\ubbf8\uc5c4')+' \u00b7 '+_months+'\uac1c\uc6d4';
+  var t=Math.round(BASE[_plan]*(1-_disc/100))*_months,s=BASE[_plan]*_months-t;
+  document.getElementById('summaryText').textContent=(_plan==='basic'?'베이직':'프리미엄')+' · '+_months+'개월';
   document.getElementById('summaryPrice').textContent='&#8361;'+t.toLocaleString();
-  document.getElementById('summaryDiscount').textContent=_disc>0?_disc+'% \ud560\uc778 (\u20a9'+s.toLocaleString()+' \uc808\uc57d)':'';
+  document.getElementById('summaryDiscount').textContent=_disc>0?_disc+'% 할인 (₩'+s.toLocaleString()+' 절약)':'';
 }
-
 function startPayment(){
-  var btn=document.getElementById('btnPay');
-  var sp=document.getElementById('paySpinner');
-  var icon=document.getElementById('payIcon');
+  var btn=document.getElementById('btnPay'),sp=document.getElementById('paySpinner'),icon=document.getElementById('payIcon');
   if(btn.disabled) return;
-  btn.disabled=true;
-  sp.classList.remove('d-none');
-  icon.classList.add('d-none');
-
+  btn.disabled=true; sp.classList.remove('d-none'); icon.classList.add('d-none');
   var total=Math.round(BASE[_plan]*(1-_disc/100))*_months;
-  var goodname=PNAME[_plan]+' '+_months+'\uac1c\uc6d4';
+  var goodname=PNAME[_plan]+' '+_months+'개월';
   var token=localStorage.getItem('access_token')||'';
   var companyId=localStorage.getItem('company_id')||'';
-
-  /* ★ returnUrl / closeUrl 모두 api.taieng.co.kr — V023 방지 */
-  var RETURN_URL = API + '/payments/inicis/return';
-  var CLOSE_URL  = API + '/payments/result?resultCode=CLOSE';
-
-  var payload=JSON.stringify({
-    company_id: companyId||undefined,
-    amount: total,
-    goodname: goodname,
-    buyername: '\uace0\uac1d',
-    buyertel: '00000000000',
-    plan_code: _plan.toUpperCase(),
-    period_months: _months,
-    payment_type: 'CARD',
-    return_url: RETURN_URL,
-    close_url:  CLOSE_URL
-  });
-
+  var RETURN_URL=API+'/payments/inicis/return';
+  var CLOSE_URL=API+'/payments/result?resultCode=CLOSE';
+  var payload=JSON.stringify({company_id:companyId||undefined,amount:total,goodname:goodname,buyername:'고객',buyertel:'00000000000',plan_code:_plan.toUpperCase(),period_months:_months,payment_type:'CARD',return_url:RETURN_URL,close_url:CLOSE_URL});
   var xhr=new XMLHttpRequest();
-  xhr.open('POST', API+'/payments/inicis/prepare', true);
+  xhr.open('POST',API+'/payments/inicis/prepare',true);
   xhr.setRequestHeader('Content-Type','application/json');
   if(token) xhr.setRequestHeader('Authorization','Bearer '+token);
-
   xhr.onload=function(){
     try{
       var d=JSON.parse(xhr.responseText);
-      if(xhr.status<200||xhr.status>=300) throw new Error(d.detail||d.message||'\uacb0\uc81c \uc900\ube44 \uc2e4\ud328');
+      if(xhr.status<200||xhr.status>=300) throw new Error(d.detail||d.message||'결제 준비 실패');
       var p=d.data||d;
-
-      document.getElementById('f_mid').value          = p.mid||'';
-      document.getElementById('f_oid').value          = p.oid||'';
-      document.getElementById('f_price').value        = p.price||String(total);
-      document.getElementById('f_timestamp').value    = p.timestamp||'';
-      document.getElementById('f_signature').value    = p.signature||'';
-      document.getElementById('f_verification').value = p.verification||'';
-      document.getElementById('f_mKey').value         = p.mKey||'';
-      document.getElementById('f_goodname').value     = p.goodname||goodname;
-      document.getElementById('f_buyername').value    = '\uace0\uac1d';
-      document.getElementById('f_buyertel').value     = '00000000000';
-      document.getElementById('f_buyeremail').value   = '';
-      /* ★ 폼에도 api.taieng.co.kr 강제 적용 */
-      document.getElementById('f_returnUrl').value    = RETURN_URL;
-      document.getElementById('f_closeUrl').value     = CLOSE_URL;
-
+      document.getElementById('f_mid').value=p.mid||'';
+      document.getElementById('f_oid').value=p.oid||'';
+      document.getElementById('f_price').value=p.price||String(total);
+      document.getElementById('f_timestamp').value=p.timestamp||'';
+      document.getElementById('f_signature').value=p.signature||'';
+      document.getElementById('f_verification').value=p.verification||'';
+      document.getElementById('f_mKey').value=p.mKey||'';
+      document.getElementById('f_goodname').value=p.goodname||goodname;
+      document.getElementById('f_buyername').value='고객';
+      document.getElementById('f_buyertel').value='00000000000';
+      document.getElementById('f_buyeremail').value='';
+      document.getElementById('f_returnUrl').value=RETURN_URL;
+      document.getElementById('f_closeUrl').value=CLOSE_URL;
       INIStdPay.pay('inicisForm');
-
     }catch(e){
-      alert('\uc624\ub958: '+e.message);
+      alert('오류: '+e.message);
     }finally{
-      btn.disabled=false;
-      sp.classList.add('d-none');
-      icon.classList.remove('d-none');
+      btn.disabled=false; sp.classList.add('d-none'); icon.classList.remove('d-none');
     }
   };
-
   xhr.onerror=function(){
-    alert('\ub124\ud2b8\uc6cc\ud06c \uc624\ub958. \ub2e4\uc2dc \uc2dc\ub3c4\ud574 \uc8fc\uc138\uc694.');
-    btn.disabled=false;
-    sp.classList.add('d-none');
-    icon.classList.remove('d-none');
+    alert('네트워크 오류. 다시 시도해 주세요.');
+    btn.disabled=false; sp.classList.add('d-none'); icon.classList.remove('d-none');
   };
-
   xhr.send(payload);
 }
-
 updatePrices();
-(function(){
-  var p=new URLSearchParams(location.search).get('plan');
-  if(p==='premium') selectPlan('premium');
-})();
+(function(){var p=new URLSearchParams(location.search).get('plan');if(p==='premium')selectPlan('premium');})();
 </script>
 </body>
 </html>"""
@@ -488,43 +423,43 @@ _RESULT_HTML = """<!doctype html>
 <script>
 'use strict';
 function getParams(){var p={};new URLSearchParams(location.search).forEach(function(v,k){p[k]=v;});return p;}
-function fmt(n){return n?Number(n).toLocaleString()+'\uc6d0':'-';}
-function goDiagnosis(){ location.href='https://taieng.co.kr/request/v1/'; }
+function fmt(n){return n?Number(n).toLocaleString()+'원':'-';}
+function goDiagnosis(){location.href='https://taieng.co.kr/request/v1/';}
 function renderOk(p){
   var rc=document.getElementById('rc'),sec=5,ti;
   rc.innerHTML='<div class="icon-wrap success"><i class="ti tabler-circle-check"></i></div>'
-    +'<h4 class="fw-bold mb-2">\uacb0\uc81c\uac00 \uc644\ub8cc\ub410\uc2b5\ub2c8\ub2e4.</h4>'
-    +'<p class="text-body-secondary mb-4">\ubc95\ub839\uc9c4\ub2e8\uc744 \uc2dc\uc791\ud569\ub2c8\ub2e4.</p>'
+    +'<h4 class="fw-bold mb-2">결제가 완료됐습니다.</h4>'
+    +'<p class="text-body-secondary mb-4">법령진단을 시작합니다.</p>'
     +'<div class="detail-table mb-4">'
-    +'<div class="detail-row"><span class="detail-label">\uc0c1\ud488\uba85</span><span class="detail-value">'+(p.goodname||'TAI Safe')+'</span></div>'
-    +'<div class="detail-row"><span class="detail-label">\uacb0\uc81c\uae08\uc561</span><span class="detail-value">'+fmt(p.price)+'</span></div>'
-    +'<div class="detail-row"><span class="detail-label">\uacb0\uc81c\uc218\ub2e8</span><span class="detail-value">'+(p.paymethod||'\uce74\ub4dc')+'</span></div>'
-    +(p.applnum?'<div class="detail-row"><span class="detail-label">\uc2b9\uc778\ubc88\ud638</span><span class="detail-value">'+p.applnum+'</span></div>':'')
-    +'<div class="detail-row"><span class="detail-label">\uc8fc\ubb38\ubc88\ud638</span><span class="detail-value" style="font-size:.8rem;word-break:break-all">'+(p.oid||'-')+'</span></div>'
+    +'<div class="detail-row"><span class="detail-label">상품명</span><span class="detail-value">'+(p.goodname||'TAI Safe')+'</span></div>'
+    +'<div class="detail-row"><span class="detail-label">결제금액</span><span class="detail-value">'+fmt(p.price)+'</span></div>'
+    +'<div class="detail-row"><span class="detail-label">결제수단</span><span class="detail-value">'+(p.paymethod||'카드')+'</span></div>'
+    +(p.applnum?'<div class="detail-row"><span class="detail-label">승인번호</span><span class="detail-value">'+p.applnum+'</span></div>':'')
+    +'<div class="detail-row"><span class="detail-label">주문번호</span><span class="detail-value" style="font-size:.8rem;word-break:break-all">'+(p.oid||'-')+'</span></div>'
     +'</div>'
-    +'<button class="btn btn-primary btn-action w-100" onclick="goDiagnosis()">\ubc95\ub839\uc9c4\ub2e8 \uc2dc\uc791\ud558\uae30 \u2192</button>'
-    +'<div class="countdown" id="cd">'+sec+'\ucd08 \ud6c4 \uc790\ub3d9 \uc774\ub3d9</div>';
-  ti=setInterval(function(){sec--;var e=document.getElementById('cd');if(e)e.textContent=sec+'\ucd08 \ud6c4 \uc790\ub3d9 \uc774\ub3d9';if(sec<=0){clearInterval(ti);goDiagnosis();}},1000);
+    +'<button class="btn btn-primary btn-action w-100" onclick="goDiagnosis()">법령진단 시작하기 →</button>'
+    +'<div class="countdown" id="cd">'+sec+'초 후 자동 이동</div>';
+  ti=setInterval(function(){sec--;var e=document.getElementById('cd');if(e)e.textContent=sec+'초 후 자동 이동';if(sec<=0){clearInterval(ti);goDiagnosis();}},1000);
 }
 function renderFail(msg,oid){
   var rc=document.getElementById('rc');
   rc.innerHTML='<div class="icon-wrap fail"><i class="ti tabler-circle-x"></i></div>'
-    +'<h4 class="fw-bold mb-2">\uacb0\uc81c\uc5d0 \uc2e4\ud328\ud588\uc2b5\ub2c8\ub2e4.</h4>'
-    +'<p class="text-body-secondary mb-3">\ub2e4\uc2dc \uc2dc\ub3c4\ud574 \uc8fc\uc138\uc694.</p>'
+    +'<h4 class="fw-bold mb-2">결제에 실패했습니다.</h4>'
+    +'<p class="text-body-secondary mb-3">다시 시도해 주세요.</p>'
     +'<div class="detail-table mb-4">'
-    +'<div class="detail-row"><span class="detail-label">\uc0ac\uc720</span><span class="detail-value text-danger">'+(msg||'\uc624\ub958')+'</span></div>'
-    +(oid?'<div class="detail-row"><span class="detail-label">\uc8fc\ubb38\ubc88\ud638</span><span class="detail-value" style="font-size:.8rem">'+oid+'</span></div>':'')
+    +'<div class="detail-row"><span class="detail-label">사유</span><span class="detail-value text-danger">'+(msg||'오류')+'</span></div>'
+    +(oid?'<div class="detail-row"><span class="detail-label">주문번호</span><span class="detail-value" style="font-size:.8rem">'+oid+'</span></div>':'')
     +'</div>'
     +'<div class="d-flex gap-2">'
-    +'<a href="https://api.taieng.co.kr/payments/pricing" class="btn btn-primary btn-action flex-grow-1">\ub2e4\uc2dc \uc2dc\ub3c4</a>'
-    +'<a href="https://taieng.co.kr" class="btn btn-outline-secondary btn-action">\ud648\uc73c\ub85c</a>'
+    +'<a href="https://api.taieng.co.kr/payments/pricing" class="btn btn-primary btn-action flex-grow-1">다시 시도</a>'
+    +'<a href="https://taieng.co.kr" class="btn btn-outline-secondary btn-action">홈으로</a>'
     +'</div>';
 }
 (function(){
   var p=getParams();
-  if(!p.resultCode){renderFail('\ud30c\ub77c\ubbf8\ud130 \uc5c6\uc74c');return;}
+  if(!p.resultCode){renderFail('파라미터 없음');return;}
   if(p.resultCode==='00'||p.resultCode==='0000') renderOk(p);
-  else renderFail(decodeURIComponent(p.msg||'\uc624\ub958\ucf54\ub4dc '+p.resultCode),p.oid);
+  else renderFail(decodeURIComponent(p.msg||'오류코드 '+p.resultCode),p.oid);
 })();
 </script>
 </body>
@@ -580,12 +515,10 @@ def inicis_prepare(body: PrepareBody):
         raise HTTPException(status_code=500, detail="결제 레코드 생성 실패")
 
     payment_id = res.data[0]["id"]
-
-    # ★ V023 방지: 환경변수 무시, 항상 api.taieng.co.kr 고정
     return_url = DEFAULT_RETURN_URL
     close_url  = DEFAULT_CLOSE_URL
 
-    log.info(f"[INICIS STEP1] oid={order_id} price={price_str} returnUrl={return_url}")
+    log.info(f"[INICIS STEP1] oid={order_id} price={price_str} mKey_prefix={mKey[:8]}")
 
     return {
         "status": "success",
@@ -631,7 +564,11 @@ async def inicis_return(request: Request):
     price        = data.get("price", "")
     paymethod    = data.get("paymethod", "카드")
 
-    log.info(f"[INICIS STEP2] resultCode={result_code} oid={order_id} idc={idc_name}")
+    log.info(
+        f"[INICIS STEP2] resultCode={result_code} oid={order_id} idc={idc_name} "
+        f"authToken_prefix={auth_token[:16] if auth_token else 'EMPTY'} "
+        f"authUrl={auth_url}"
+    )
 
     supabase = get_supabase()
 
@@ -652,6 +589,12 @@ async def inicis_return(request: Request):
 
     if not auth_url:
         return RedirectResponse(f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=authUrl없음&oid={order_id}", status_code=302)
+
+    # ★ 디버그: authToken 앞 32글자를 memo에 저장
+    supabase.table("payments").update({
+        "memo": f"authToken_prefix={auth_token[:32]} idc={idc_name} authUrl={auth_url[:50]}",
+        "updated_at": _now_iso(),
+    }).eq("id", payment_id).execute()
 
     sign_key = _load_sign_key()
     try:
@@ -766,7 +709,7 @@ def list_payments(
     q = supabase.table("payments").select(
         "id, company_id, contract_id, payment_method, payment_type, "
         "plan_code, period_months, total_amount, inicis_order_id, "
-        "inicis_tid, inicis_card_name, status_code, paid_at, created_at",
+        "inicis_tid, inicis_card_name, status_code, paid_at, created_at, memo",
         count="exact"
     )
     if company_id:  q = q.eq("company_id",  company_id)
