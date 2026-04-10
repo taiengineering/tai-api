@@ -1,10 +1,6 @@
-# main.py — v5.7.6
+# main.py — v5.7.7
+# v5.7.7: product_pricing API 추가 (어드민 가격·서비스 컨트롤)
 # v5.7.6: OpenAI GPT-4o 카피라이팅 API 연동
-#          routers/ai_copywrite.py v1.0.0 (신규)
-#            POST /ai/copywrite          섹션별 카피 생성
-#            POST /ai/copywrite/batch    전체 섹션 일괄
-#            POST /ai/slogan             슬로건 생성
-# v5.7.5: 작업자 현장 점검 결과 저장 API
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -59,6 +55,7 @@ from routers.law_collector           import router as law_collector_router
 from routers.cron_manager            import router as cron_manager_router
 from routers.byulpyo                 import router as byulpyo_router
 from routers.price_setting           import router as price_setting_router
+from routers.product_pricing         import router as product_pricing_router  # v5.7.7
 from routers.internal_api_registry   import router as internal_api_registry_router
 from routers.report_api_registry     import router as report_api_registry_router
 from routers.construction            import router as construction_router
@@ -75,7 +72,7 @@ from routers.corrective_actions      import router as corrective_actions_router
 from routers.messaging               import router as messaging_router
 from routers.fcm                     import router as fcm_router
 from routers.worker_check            import router as worker_check_router
-from routers.ai_copywrite            import router as ai_copywrite_router    # v5.7.6
+from routers.ai_copywrite            import router as ai_copywrite_router
 from routers.public                  import router as public_router
 from routers.public_admin            import router as public_admin_router
 from routers.alert_messages          import router as alert_messages_router
@@ -86,7 +83,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.7.6"
+APP_VERSION = "5.7.7"
 
 
 @asynccontextmanager
@@ -119,6 +116,7 @@ app.add_middleware(
     allow_origins=[
         "https://taieng.co.kr",
         "https://www.taieng.co.kr",
+        "https://new.taieng.co.kr",
         "https://admin.taieng.co.kr",
         "https://tadmin.taieng.co.kr",
         "https://safe.taieng.co.kr",
@@ -189,6 +187,7 @@ app.include_router(law_collector_router)
 app.include_router(cron_manager_router)
 app.include_router(byulpyo_router)
 app.include_router(price_setting_router)
+app.include_router(product_pricing_router)          # v5.7.7
 app.include_router(internal_api_registry_router)
 app.include_router(report_api_registry_router)
 app.include_router(construction_router, prefix="/construction", tags=["건설안전"])
@@ -205,7 +204,7 @@ app.include_router(corrective_actions_router)
 app.include_router(messaging_router)
 app.include_router(fcm_router)
 app.include_router(worker_check_router)
-app.include_router(ai_copywrite_router)                # v5.7.6
+app.include_router(ai_copywrite_router)
 app.include_router(mail_router)
 
 
