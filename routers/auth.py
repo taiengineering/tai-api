@@ -1,4 +1,6 @@
-# routers/auth.py — v3.4.1
+# routers/auth.py — v3.5.0
+# v3.5.0: PWA 작업자 인증 — POST /auth/send-otp, POST /auth/verify-otp 추가
+#          verify-otp 응답에 sector, factory_id, site_id 포함
 # v3.4.1: get_current_user() Depends 함수 추가 (alert_messages 등에서 사용)
 # v3.4.0: POST /auth/register — business_number, representative_name 필드 추가
 #          companies INSERT 시 사업자번호/대표자명 포함
@@ -41,14 +43,9 @@ def _parse_iso(s: str) -> datetime:
 
 # ══════════════════════════════════════════════
 # v3.4.1: FastAPI Depends용 인증 의존성 함수
-# 다른 라우터에서 from routers.auth import get_current_user 로 사용
 # ══════════════════════════════════════════════
 
 def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
-    """
-    FastAPI Depends 전용 인증 함수.
-    Authorization: Bearer <token> 헤더에서 사용자 정보 반환.
-    """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="토큰이 없습니다")
     token = authorization.replace("Bearer ", "")
@@ -83,11 +80,10 @@ class RegisterRequest(BaseModel):
     role_code:            str = "002"
     company_name:         Optional[str] = None
     company_type_code:    Optional[str] = None
-    # v3.4.0: 신규 필드
-    business_number:      Optional[str] = None   # 사업자등록번호
-    representative_name:  Optional[str] = None   # 대표자명
-    ksic_code:            Optional[str] = None   # 업종코드
-    contact_phone:        Optional[str] = None   # 회사 연락처
+    business_number:      Optional[str] = None
+    representative_name:  Optional[str] = None
+    ksic_code:            Optional[str] = None
+    contact_phone:        Optional[str] = None
 
 class FindPasswordRequest(BaseModel):
     phone: str
@@ -110,12 +106,191 @@ class VerifyEmailRequest(BaseModel):
     email: str
     token: str
 
+# ── v3.5.0: PWA OTP 스키마 ───────────────────
+
+class SendOtpRequest(BaseModel):
+    phone: str
+
+class VerifyOtpRequest(BaseModel):
+    phone: str
+    otp:   str
+
 
 # ── 테스트 ──────────────────────────────────
 
 @router.get("/test")
 def test():
-    return {"message": "auth router alive", "version": "3.4.1"}
+    return {"message": "auth router alive", "version": "3.5.0"}
+
+
+# ══════════════════════════════════════════════
+# v3.5.0: PWA 작업자 인증 — OTP 발송 / 검증
+# ══════════════════════════════════════════════
+
+@router.post("/send-otp")
+def send_otp(req: SendOtpRequest):
+    """
+    작업자 전화번호로 OTP 발송.
+    실제 SMS 연동 전까지는 otp_store(임시)에 저장만 하고
+    개발용 OTP는 항상 생성하여 반환(로그용).
+    SMS 연동 시 이 함수에서 SENS/Solapi 호출.
+    """
+    supabase = get_supabase()
+    phone = normalize_phone(req.phone)
+
+    # 가입 여부 확인 (미가입이어도 OTP 발송 — 첫 로그인 가능하도록)
+    otp_code = str(random.randint(100000, 999999))
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+
+    # otp_store 테이블이 있으면 저장, 없으면 메모리 fallback
+    try:
+        supabase.table("otp_store").upsert({
+            "phone": phone,
+            "otp": otp_code,
+            "expires_at": expires_at.isoformat(),
+            "created_at": _now_iso(),
+        }, on_conflict="phone").execute()
+    except Exception:
+        # 테이블 없으면 users raw_app_meta_data에 임시 저장
+        try:
+            supabase.table("users").update({
+                "raw_app_meta_data": {"otp": otp_code, "otp_exp": expires_at.isoformat()},
+                "updated_at": _now_iso(),
+            }).eq("phone", phone).execute()
+        except Exception:
+            pass
+
+    # TODO: SMS 발송 연동 (SENS / Solapi)
+    # 개발 환경에서는 응답에 otp 포함 (프로덕션에서 제거 필요)
+    return {
+        "status": "success",
+        "message": f"인증번호를 발송했습니다 ({phone})",
+        "dev_otp": otp_code,   # ⚠ 개발용 — 프로덕션 배포 시 제거
+    }
+
+
+@router.post("/verify-otp")
+def verify_otp(req: VerifyOtpRequest):
+    """
+    OTP 검증 후 작업자 사용자 정보 반환.
+    응답 형식: tai_user localStorage 객체 형식
+    {
+      id, phone, name, sector, factory_id, site_id,
+      company, job_type, worker_id
+    }
+    """
+    supabase = get_supabase()
+    phone = normalize_phone(req.phone)
+    otp = req.otp.strip()
+
+    # ── OTP 검증 ──
+    otp_valid = False
+
+    # 1) otp_store 테이블에서 확인
+    try:
+        otp_res = supabase.table("otp_store").select("otp, expires_at").eq("phone", phone).limit(1).execute()
+        if otp_res.data:
+            row = otp_res.data[0]
+            if row["otp"] == otp:
+                exp = _parse_iso(str(row["expires_at"]))
+                if datetime.now(timezone.utc) <= exp:
+                    otp_valid = True
+    except Exception:
+        pass
+
+    # 2) users.raw_app_meta_data fallback
+    if not otp_valid:
+        try:
+            ur = supabase.table("users").select("raw_app_meta_data").eq("phone", phone).limit(1).execute()
+            if ur.data:
+                meta = ur.data[0].get("raw_app_meta_data") or {}
+                if meta.get("otp") == otp:
+                    exp_str = meta.get("otp_exp", "")
+                    if exp_str:
+                        exp = _parse_iso(exp_str)
+                        if datetime.now(timezone.utc) <= exp:
+                            otp_valid = True
+        except Exception:
+            pass
+
+    if not otp_valid:
+        raise HTTPException(status_code=401, detail="인증번호가 올바르지 않거나 만료됐습니다.")
+
+    # ── 사용자 조회 ──
+    u_res = supabase.table("users").select(
+        "id, phone, name, sector, factory_id, company_id, department, position, profile_image_url"
+    ).eq("phone", phone).limit(1).execute()
+
+    if not u_res.data:
+        # 미가입 사용자 — 기본 프로필 반환 (sector=INDUSTRY)
+        return {
+            "id": None,
+            "worker_id": None,
+            "phone": phone,
+            "name": phone,
+            "sector": "INDUSTRY",
+            "factory_id": None,
+            "site_id": None,
+            "company": "",
+            "job_type": "",
+        }
+
+    user = u_res.data[0]
+    sector = user.get("sector") or "INDUSTRY"
+    factory_id = user.get("factory_id")
+    company_id = user.get("company_id")
+
+    # factory 정보
+    factory_name = ""
+    if factory_id:
+        try:
+            f_res = supabase.table("factories").select("name, sector").eq("id", factory_id).limit(1).execute()
+            if f_res.data:
+                factory_name = f_res.data[0].get("name", "")
+                # factory.sector가 있으면 우선 사용
+                if f_res.data[0].get("sector"):
+                    sector = f_res.data[0]["sector"]
+        except Exception:
+            pass
+
+    # company 정보
+    company_name = ""
+    if company_id:
+        try:
+            c_res = supabase.table("companies").select("name").eq("id", company_id).limit(1).execute()
+            if c_res.data:
+                company_name = c_res.data[0].get("name", "")
+        except Exception:
+            pass
+
+    # construction_sites — site_id 조회 (건설 모드용)
+    site_id = None
+    if sector == "CONSTRUCTION":
+        try:
+            s_res = supabase.table("construction_sites").select("id").eq("company_id", company_id).eq("is_active", True).limit(1).execute()
+            if s_res.data:
+                site_id = s_res.data[0]["id"]
+        except Exception:
+            pass
+
+    # OTP 사용 처리 (만료 처리)
+    try:
+        supabase.table("otp_store").delete().eq("phone", phone).execute()
+    except Exception:
+        pass
+
+    return {
+        "id":         user["id"],
+        "worker_id":  user["id"],
+        "phone":      phone,
+        "name":       user.get("name") or phone,
+        "sector":     sector,
+        "factory_id": factory_id,
+        "site_id":    site_id,
+        "company":    company_name or factory_name,
+        "job_type":   user.get("position") or user.get("department") or "",
+        "profile_image_url": user.get("profile_image_url"),
+    }
 
 
 # ── 테스트 계정 시드 (임시) ────────────────────
@@ -385,7 +560,7 @@ def reset_password(req: FindPasswordRequest):
     return {"status": "success", "message": f"재설정 링크를 {masked}로 발송했습니다"}
 
 
-# ── 토큰 검증 (라우터 엔드포인트) ───────────────
+# ── 토큰 검증 ───────────────────────────────
 
 @router.post("/verify-token")
 def verify_token(authorization: Optional[str] = Header(None)):
