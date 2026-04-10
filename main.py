@@ -1,7 +1,7 @@
-# main.py — v5.7.8
-# v5.7.8: price_policy API 추가 (가격정책 확정 문서 기반 DB+API)
+# main.py — v5.7.9
+# v5.7.9: connection_commission API 추가 (선임/수선 연결 수수료)
+# v5.7.8: price_policy API 추가
 # v5.7.7: product_pricing API 추가
-# v5.7.6: OpenAI GPT-4o 카피라이팅 API 연동
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -57,7 +57,8 @@ from routers.cron_manager            import router as cron_manager_router
 from routers.byulpyo                 import router as byulpyo_router
 from routers.price_setting           import router as price_setting_router
 from routers.product_pricing         import router as product_pricing_router
-from routers.price_policy            import router as price_policy_router        # v5.7.8
+from routers.price_policy            import router as price_policy_router
+from routers.connection_commission   import router as connection_commission_router  # v5.7.9
 from routers.internal_api_registry   import router as internal_api_registry_router
 from routers.report_api_registry     import router as report_api_registry_router
 from routers.construction            import router as construction_router
@@ -85,7 +86,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.7.8"
+APP_VERSION = "5.7.9"
 
 
 @asynccontextmanager
@@ -190,7 +191,8 @@ app.include_router(cron_manager_router)
 app.include_router(byulpyo_router)
 app.include_router(price_setting_router)
 app.include_router(product_pricing_router)
-app.include_router(price_policy_router)              # v5.7.8
+app.include_router(price_policy_router)
+app.include_router(connection_commission_router)      # v5.7.9
 app.include_router(internal_api_registry_router)
 app.include_router(report_api_registry_router)
 app.include_router(construction_router, prefix="/construction", tags=["건설안전"])
