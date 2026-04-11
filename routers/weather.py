@@ -1,27 +1,23 @@
 """
-routers/weather.py — v1.0.5
+routers/weather.py — v1.0.6
 
 기상청 API Hub 연동 날씨 라우터
 
-【현재 상태】
-  apihub.kma.go.kr + authKey 인증 성공 (401 해결)
-  403: VilageFcstInfoService_2.0 활용신청 필요
-  → /weather/debug 에서 3개 API 경로 동시 테스트 지원:
-      1. typ02/openApi/VilageFcstInfoService_2.0  (단기예보, 활용신청 필요)
-      2. typ01/url/kma_sfctm2.php                (AWS 지점관측, 신청 불필요 가능)
-      3. typ01/url/kma_wnd.php                   (AWS 풍속, 신청 불필요 가능)
-
 Endpoints:
   GET /weather/work-stop-criteria
-  GET /weather/debug
+  GET /weather/debug     — 3개 API 동시 테스트 (에러 타입 포함)
   GET /weather/now?lat=&lon=
   GET /weather/alert?region_code=
 
 환경변수:
   KMA_SERVICE_KEY  = apihub.kma.go.kr 인증키 (authKey)
+
+v1.0.6:
+  - debug: error_type 포함, asyncio.gather 병렬 실행
+  - timeout 8초 (3개 순차 시 45초 → 병렬 8초)
 """
 from __future__ import annotations
-import os, math, logging, httpx
+import os, math, logging, asyncio, httpx
 from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Query, HTTPException
@@ -30,10 +26,10 @@ from typing import Optional
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/weather", tags=["날씨·기상"])
 
-KMA_HUB    = "https://apihub.kma.go.kr/api"
-ULTRA_URL  = f"{KMA_HUB}/typ02/openApi/VilageFcstInfoService_2.0/getUltraSrtNcst"
-WARN_URL   = f"{KMA_HUB}/typ02/openApi/WarningInfoService/getWthrWrnList"
-AWS_URL    = f"{KMA_HUB}/typ01/url/kma_sfctm2.php"   # 방재기상관측 분자료
+KMA_HUB   = "https://apihub.kma.go.kr/api"
+ULTRA_URL = f"{KMA_HUB}/typ02/openApi/VilageFcstInfoService_2.0/getUltraSrtNcst"
+WARN_URL  = f"{KMA_HUB}/typ02/openApi/WarningInfoService/getWthrWrnList"
+AWS_URL   = f"{KMA_HUB}/typ01/url/kma_sfctm2.php"
 
 _RE=6371.00877;_GRID=5.0;_SLAT1=30.0;_SLAT2=60.0;_OLON=126.0;_OLAT=38.0;_XO=43;_YO=136
 
@@ -67,12 +63,22 @@ def _base_date_time()->tuple[str,str]:
     return now.strftime("%Y%m%d"),now.strftime("%H00")
 
 
-async def _hub_get(base_url:str,params:dict)->httpx.Response:
-    """authKey 직접 URL 포함, 나머지 urlencode"""
+async def _hub_get(base_url:str,params:dict,timeout:int=10)->httpx.Response:
     key=params.pop("authKey")
     url=f"{base_url}?authKey={key}&{urlencode(params)}"
-    async with httpx.AsyncClient(timeout=15,follow_redirects=True) as c:
+    async with httpx.AsyncClient(timeout=timeout,follow_redirects=True) as c:
         return await c.get(url)
+
+
+async def _safe_get(label:str,url:str,params:dict)->dict:
+    """에러 타입 포함한 안전 GET"""
+    try:
+        r=await _hub_get(url,params,timeout=8)
+        try: body=r.json()
+        except: body=r.text[:400]
+        return {"label":label,"status":r.status_code,"body":body}
+    except Exception as e:
+        return {"label":label,"error_type":type(e).__name__,"error_msg":str(e)[:200] or "(no message)"}
 
 
 PTY_CODE={"0":"없음","1":"비","2":"비/눈","3":"눈","5":"빗방울","6":"빗방울눈날림","7":"눈날림"}
@@ -130,48 +136,24 @@ def get_work_stop_criteria():
 
 @router.get("/debug")
 async def weather_debug():
-    """
-    [개발용] 3개 API 경로 동시 테스트.
-    활용신청 없이 바로 사용 가능한 경로 탐색.
-    """
-    key = _auth_key()
-    now = _kst()
-    if now.minute < 45: now -= timedelta(hours=1)
-    bd  = now.strftime("%Y%m%d")
-    bt  = now.strftime("%H00")
-    tm  = now.strftime("%Y%m%d%H%M")   # 분단위
+    """[개발용] 3개 API 경로 병렬 테스트 — error_type 포함"""
+    key=_auth_key()
+    now=_kst()
+    if now.minute<45: now-=timedelta(hours=1)
+    bd=now.strftime("%Y%m%d"); bt=now.strftime("%H00"); tm=now.strftime("%Y%m%d%H%M")
 
-    results = {}
-
-    # 1. typ02 OpenAPI 초단기실황 (활용신청 필요)
-    try:
-        r = await _hub_get(ULTRA_URL, {"authKey":key,"numOfRows":"1","pageNo":"1",
-                                        "dataType":"JSON","base_date":bd,"base_time":bt,"nx":"60","ny":"127"})
-        try: b = r.json()
-        except: b = r.text[:300]
-        results["typ02_ultra"] = {"status": r.status_code, "body": b}
-    except Exception as e:
-        results["typ02_ultra"] = {"error": str(e)[:100]}
-
-    # 2. typ01 AWS 방재기상관측 분자료 (활용신청 불필요 가능)
-    try:
-        r = await _hub_get(AWS_URL, {"authKey":key,"tm":tm,"stn":"108","disp":"1","help":"1"})
-        body = r.text[:500]
-        results["typ01_aws"] = {"status": r.status_code, "body": body}
-    except Exception as e:
-        results["typ01_aws"] = {"error": str(e)[:100]}
-
-    # 3. typ02 기상특보 (활용신청 필요 여부 확인)
-    try:
-        r = await _hub_get(WARN_URL, {"authKey":key,"numOfRows":"1","pageNo":"1",
-                                       "dataType":"JSON","fromTmFc":now.strftime("%Y%m%d0000")})
-        try: b = r.json()
-        except: b = r.text[:300]
-        results["typ02_warn"] = {"status": r.status_code, "body": b}
-    except Exception as e:
-        results["typ02_warn"] = {"error": str(e)[:100]}
-
-    return {"key_prefix": key[:8]+"...", "kst": now.isoformat(), "tests": results}
+    tasks=[
+        _safe_get("typ02_ultra_ncst", ULTRA_URL,
+                  {"authKey":key,"numOfRows":"1","pageNo":"1","dataType":"JSON",
+                   "base_date":bd,"base_time":bt,"nx":"60","ny":"127"}),
+        _safe_get("typ01_aws_sfctm2", AWS_URL,
+                  {"authKey":key,"tm":tm,"stn":"108","disp":"1","help":"1"}),
+        _safe_get("typ02_warn", WARN_URL,
+                  {"authKey":key,"numOfRows":"1","pageNo":"1","dataType":"JSON",
+                   "fromTmFc":now.strftime("%Y%m%d0000")}),
+    ]
+    results=await asyncio.gather(*tasks,return_exceptions=False)
+    return {"key_prefix":key[:8]+"...","kst":now.isoformat(),"tests":results}
 
 
 @router.get("/now")
