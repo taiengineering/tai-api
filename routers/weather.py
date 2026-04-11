@@ -1,20 +1,21 @@
 """
-routers/weather.py — v1.0.1
+routers/weather.py — v1.0.2
 
 기상청 Open API 연동 날씨 라우터
 
 Endpoints:
+  GET /weather/work-stop-criteria     작업중지 기준 목록 (법령 기반)
+  GET /weather/debug                  [개발용] KMA API 원본 응답 확인
   GET /weather/now?lat=&lon=          현재 날씨 + 작업중지 판단
   GET /weather/alert?region_code=     기상특보 조회
-  GET /weather/work-stop-criteria     작업중지 기준 목록 (법령 기반)
 
 환경변수:
   KMA_SERVICE_KEY   기상청 API 인증키 (data.go.kr 발급)
 
-v1.0.1: KMA 인증키 이중 인코딩 버그 수정
-  data.go.kr 발급 키는 이미 URL 인코딩된 상태 (예: %2B 포함).
-  httpx params 딕셔너리에 넣으면 한번 더 인코딩 → 401 발생.
-  urllib.parse.unquote 로 디코딩 후 사용.
+v1.0.2:
+  - /weather/debug 엔드포인트 추가 (401 원인 파악용)
+  - 오류 시 응답 본문 포함하여 반환 (디버깅 용이)
+  - https 로 변경 (http 차단 가능성 대응)
 """
 from __future__ import annotations
 import os, math, logging, httpx
@@ -26,8 +27,8 @@ from typing import Optional
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/weather", tags=["날씨·기상"])
 
-# ── 기상청 API 기본값 ────────────────────────────────────────────────────
-KMA_BASE  = "http://apis.data.go.kr/1360000"
+# ── 기상청 API URL (https) ────────────────────────────────────────────────
+KMA_BASE  = "https://apis.data.go.kr/1360000"
 ULTRA_URL = f"{KMA_BASE}/VilageFcstInfoService_2.0/getUltraSrtNcst"
 WARN_URL  = f"{KMA_BASE}/WarningInfoService/getWthrWrnList"
 
@@ -68,23 +69,30 @@ def _latlon_to_grid(lat: float, lon: float) -> tuple[int, int]:
 
 
 def _kma_key() -> str:
-    """
-    KMA_SERVICE_KEY 환경변수 반환.
-    data.go.kr 인증키는 URL 인코딩 상태로 저장된 경우가 많으므로
-    unquote 후 httpx가 자동 인코딩하도록 디코딩된 형태로 반환.
-    """
     key = os.environ.get("KMA_SERVICE_KEY", "")
     if not key:
         raise HTTPException(status_code=503, detail="KMA_SERVICE_KEY 환경변수 미설정")
-    return unquote(key)   # 이중 인코딩 방지
+    # unquote: data.go.kr 키는 %2B 등 인코딩된 형태로 저장될 수 있음
+    return unquote(key)
 
 
 def _base_date_time() -> tuple[str, str]:
-    """기상청 초단기실황 기준시각 산출 (정시 발표, 45분 이후부터 유효)"""
-    now = datetime.now(timezone(timedelta(hours=9)))  # KST
+    now = datetime.now(timezone(timedelta(hours=9)))
     if now.minute < 45:
         now = now - timedelta(hours=1)
     return now.strftime("%Y%m%d"), now.strftime("%H00")
+
+
+async def _kma_get(url: str, params: dict) -> httpx.Response:
+    """
+    기상청 API GET 요청.
+    serviceKey 이중인코딩 방지: URL에 직접 포함, 나머지 params 딕셔너리로 전달.
+    """
+    key    = params.pop("serviceKey")
+    qs     = urlencode(params)
+    full_url = f"{url}?serviceKey={key}&{qs}"
+    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        return await client.get(full_url)
 
 
 # ── 카테고리 코드 해석 ────────────────────────────────────────────────────
@@ -95,7 +103,6 @@ PTY_CODE = {
 
 
 def _parse_ultra(items: list) -> dict:
-    """초단기실황 카테고리 목록 → 날씨 딕셔너리"""
     d: dict = {}
     for item in items:
         cat = item.get("category", "")
@@ -149,12 +156,10 @@ WORK_STOP_CRITERIA = [
 
 
 def _judge_work_stop(weather: dict) -> list[dict]:
-    """현재 날씨 기준 작업중지 항목 판정"""
     triggered = []
     wind   = weather.get("wind_speed", 0.0)
     rain   = weather.get("rain_1h", 0.0)
     precip = weather.get("precip_type", "없음")
-
     if wind >= 10.0:
         triggered.append({"code": "STRONG_WIND", "name": "강풍",
                           "value": f"{wind}m/s", "threshold": "10m/s"})
@@ -180,16 +185,50 @@ def get_work_stop_criteria():
     }
 
 
+@router.get("/debug")
+async def weather_debug():
+    """
+    [개발용] KMA API 원본 응답 확인.
+    키 설정/인증 문제 진단에 사용.
+    """
+    key = _kma_key()
+    now = datetime.now(timezone(timedelta(hours=9)))
+    if now.minute < 45:
+        now = now - timedelta(hours=1)
+
+    params = {
+        "serviceKey": key,
+        "numOfRows":  "1",
+        "pageNo":     "1",
+        "dataType":   "JSON",
+        "base_date":  now.strftime("%Y%m%d"),
+        "base_time":  now.strftime("%H00"),
+        "nx":         "60",
+        "ny":         "127",
+    }
+
+    try:
+        resp = await _kma_get(ULTRA_URL, params)
+        try:
+            body = resp.json()
+        except Exception:
+            body = resp.text[:500]
+        return {
+            "key_prefix":  key[:8] + "...",  # 앞 8자만 노출
+            "http_status": resp.status_code,
+            "url":         ULTRA_URL,
+            "response":    body,
+        }
+    except Exception as e:
+        return {"error": type(e).__name__, "detail": str(e)[:200]}
+
+
 @router.get("/now")
 async def get_weather_now(
     lat: float = Query(..., description="위도 (예: 37.5665)"),
     lon: float = Query(..., description="경도 (예: 126.9780)"),
 ):
-    """
-    현재 날씨 조회 + 작업중지 판단.
-    위도/경도 → 기상청 격자(nx, ny) 자동 변환.
-    기상청 초단기실황 API (KMA_SERVICE_KEY 필요).
-    """
+    """현재 날씨 조회 + 작업중지 판단 (KMA 초단기실황)"""
     key = _kma_key()
     nx, ny = _latlon_to_grid(lat, lon)
     base_date, base_time = _base_date_time()
@@ -206,26 +245,21 @@ async def get_weather_now(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(ULTRA_URL, params=params)
+        resp = await _kma_get(ULTRA_URL, params)
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="기상청 API 타임아웃")
     except httpx.ConnectError as e:
         raise HTTPException(status_code=503, detail=f"기상청 API 연결 실패: {e}")
 
-    if resp.status_code == 401:
-        # 401 시 디코딩 키 직접 URL 조합 재시도
-        try:
-            qs  = urlencode({k: v for k, v in params.items() if k != "serviceKey"})
-            url = f"{ULTRA_URL}?serviceKey={key}&{qs}"
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(url)
-        except Exception as e:
-            raise HTTPException(status_code=503, detail=f"기상청 API 재시도 실패: {e}")
-
     if resp.status_code != 200:
-        raise HTTPException(status_code=502,
-                            detail=f"기상청 API 오류: HTTP {resp.status_code}")
+        try:
+            err_body = resp.json()
+        except Exception:
+            err_body = resp.text[:300]
+        raise HTTPException(
+            status_code=502,
+            detail=f"기상청 API HTTP {resp.status_code}: {err_body}"
+        )
 
     raw   = resp.json()
     body  = raw.get("response", {}).get("body", {})
@@ -263,10 +297,7 @@ async def get_weather_now(
 async def get_weather_alert(
     region_code: Optional[str] = Query(None, description="지역 코드 (없으면 전국)"),
 ):
-    """
-    기상특보 조회.
-    region_code 미입력 시 전국 특보 반환.
-    """
+    """기상특보 조회. region_code 없으면 전국."""
     key = _kma_key()
     now = datetime.now(timezone(timedelta(hours=9)))
 
@@ -280,25 +311,21 @@ async def get_weather_alert(
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(WARN_URL, params=params)
+        resp = await _kma_get(WARN_URL, params)
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="기상청 API 타임아웃")
     except httpx.ConnectError as e:
         raise HTTPException(status_code=503, detail=f"기상청 API 연결 실패: {e}")
 
-    if resp.status_code == 401:
-        try:
-            qs  = urlencode({k: v for k, v in params.items() if k != "serviceKey"})
-            url = f"{WARN_URL}?serviceKey={key}&{qs}"
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(url)
-        except Exception as e:
-            raise HTTPException(status_code=503, detail=f"기상청 API 재시도 실패: {e}")
-
     if resp.status_code != 200:
-        raise HTTPException(status_code=502,
-                            detail=f"기상청 API 오류: HTTP {resp.status_code}")
+        try:
+            err_body = resp.json()
+        except Exception:
+            err_body = resp.text[:300]
+        raise HTTPException(
+            status_code=502,
+            detail=f"기상청 API HTTP {resp.status_code}: {err_body}"
+        )
 
     raw   = resp.json()
     body  = raw.get("response", {}).get("body", {})
