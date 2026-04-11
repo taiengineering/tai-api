@@ -1,7 +1,7 @@
-# main.py — v5.10.0
-# v5.10.0: juso API 추가 (주소 검색 + 좌표 변환)
+# main.py — v5.11.0
+# v5.11.0: experts API 추가 (전문가 등록 신청 / 현황 / 어드민 승인)
+# v5.10.0: juso API 추가
 # v5.9.0:  weather API 추가
-# v5.8.1:  precedent_api 추가
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -62,7 +62,8 @@ from routers.connection_commission   import router as connection_commission_rout
 from routers.agent_service           import router as agent_service_router
 from routers.precedent_api           import router as precedent_router
 from routers.weather                 import router as weather_router
-from routers.juso                    import router as juso_router             # v5.10.0
+from routers.juso                    import router as juso_router
+from routers.experts                 import router as experts_router             # v5.11.0
 from routers.internal_api_registry   import router as internal_api_registry_router
 from routers.report_api_registry     import router as report_api_registry_router
 from routers.construction            import router as construction_router
@@ -90,7 +91,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.10.0"
+APP_VERSION = "5.11.0"
 
 
 @asynccontextmanager
@@ -200,7 +201,8 @@ app.include_router(connection_commission_router)
 app.include_router(agent_service_router)
 app.include_router(precedent_router)
 app.include_router(weather_router)
-app.include_router(juso_router)                      # v5.10.0
+app.include_router(juso_router)
+app.include_router(experts_router)                   # v5.11.0
 app.include_router(internal_api_registry_router)
 app.include_router(report_api_registry_router)
 app.include_router(construction_router, prefix="/construction", tags=["건설안전"])
