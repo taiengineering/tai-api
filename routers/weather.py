@@ -1,104 +1,40 @@
 """
-routers/weather.py — v1.0.6
+routers/weather.py — v1.1.0
 
-기상청 API Hub 연동 날씨 라우터
+기상청 날씨 API — Supabase Edge Function 프록시 방식
+
+【구조】
+  Railway (api.taieng.co.kr) → Supabase Edge Function (kma-weather) → apihub.kma.go.kr
+  
+  Railway IP 차단 우회: precedent collect 과 동일한 방식
+  KMA_SERVICE_KEY는 Supabase Function Secret 에 설정 필요 (Railway와 동일 값)
 
 Endpoints:
-  GET /weather/work-stop-criteria
-  GET /weather/debug     — 3개 API 동시 테스트 (에러 타입 포함)
-  GET /weather/now?lat=&lon=
-  GET /weather/alert?region_code=
+  GET /weather/work-stop-criteria   법령 기반 작업중지 기준 (Edge Function 불필요)
+  GET /weather/debug                Edge Function 경유 3개 API 동시 테스트
+  GET /weather/now?lat=&lon=        현재 날씨 + 작업중지 판단
+  GET /weather/alert?region_code=   기상특보 조회
 
 환경변수:
-  KMA_SERVICE_KEY  = apihub.kma.go.kr 인증키 (authKey)
-
-v1.0.6:
-  - debug: error_type 포함, asyncio.gather 병렬 실행
-  - timeout 8초 (3개 순차 시 45초 → 병렬 8초)
+  KMA_SERVICE_KEY  — Supabase Function Secret 에 설정 (Railway 환경변수는 참조 안 함)
+  
+  ※ Supabase 대시보드 > Edge Functions > kma-weather > Secrets
+    KMA_SERVICE_KEY = (apihub.kma.go.kr authKey)
 """
 from __future__ import annotations
-import os, math, logging, asyncio, httpx
-from urllib.parse import urlencode
-from datetime import datetime, timedelta, timezone
+import os, logging, httpx
 from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/weather", tags=["날씨·기상"])
 
-KMA_HUB   = "https://apihub.kma.go.kr/api"
-ULTRA_URL = f"{KMA_HUB}/typ02/openApi/VilageFcstInfoService_2.0/getUltraSrtNcst"
-WARN_URL  = f"{KMA_HUB}/typ02/openApi/WarningInfoService/getWthrWrnList"
-AWS_URL   = f"{KMA_HUB}/typ01/url/kma_sfctm2.php"
+EDGE_URL = os.environ.get(
+    "KMA_EDGE_URL",
+    "https://xntdkrjhgcscmqctdzyo.supabase.co/functions/v1/kma-weather"
+)
 
-_RE=6371.00877;_GRID=5.0;_SLAT1=30.0;_SLAT2=60.0;_OLON=126.0;_OLAT=38.0;_XO=43;_YO=136
-
-
-def _latlon_to_grid(lat:float,lon:float)->tuple[int,int]:
-    D=math.pi/180.0;re=_RE/_GRID
-    s1,s2,ol,oa=_SLAT1*D,_SLAT2*D,_OLON*D,_OLAT*D
-    sn=math.log(math.cos(s1)/math.cos(s2))/math.log(math.tan(math.pi*.25+s2*.5)/math.tan(math.pi*.25+s1*.5))
-    sf=math.pow(math.tan(math.pi*.25+s1*.5),sn)*math.cos(s1)/sn
-    ro=re*sf/math.pow(math.tan(math.pi*.25+oa*.5),sn)
-    ra=re*sf/math.pow(math.tan(math.pi*.25+lat*D*.5),sn)
-    th=(lon*D-ol)*sn
-    if th>math.pi:th-=2*math.pi
-    if th<-math.pi:th+=2*math.pi
-    return int(ra*math.sin(th)+_XO+.5),int(ro-ra*math.cos(th)+_YO+.5)
-
-
-def _auth_key()->str:
-    k=os.environ.get("KMA_SERVICE_KEY","")
-    if not k: raise HTTPException(503,detail="KMA_SERVICE_KEY 미설정")
-    return k
-
-
-def _kst()->datetime:
-    return datetime.now(timezone(timedelta(hours=9)))
-
-
-def _base_date_time()->tuple[str,str]:
-    now=_kst()
-    if now.minute<45: now-=timedelta(hours=1)
-    return now.strftime("%Y%m%d"),now.strftime("%H00")
-
-
-async def _hub_get(base_url:str,params:dict,timeout:int=10)->httpx.Response:
-    key=params.pop("authKey")
-    url=f"{base_url}?authKey={key}&{urlencode(params)}"
-    async with httpx.AsyncClient(timeout=timeout,follow_redirects=True) as c:
-        return await c.get(url)
-
-
-async def _safe_get(label:str,url:str,params:dict)->dict:
-    """에러 타입 포함한 안전 GET"""
-    try:
-        r=await _hub_get(url,params,timeout=8)
-        try: body=r.json()
-        except: body=r.text[:400]
-        return {"label":label,"status":r.status_code,"body":body}
-    except Exception as e:
-        return {"label":label,"error_type":type(e).__name__,"error_msg":str(e)[:200] or "(no message)"}
-
-
-PTY_CODE={"0":"없음","1":"비","2":"비/눈","3":"눈","5":"빗방울","6":"빗방울눈날림","7":"눈날림"}
-
-def _parse_ultra(items:list)->dict:
-    d:dict={}
-    for i in items:
-        c,v=i.get("category",""),i.get("obsrValue","")
-        if c=="T1H": d["temperature"]=float(v)
-        elif c=="RN1": d["rain_1h"]=float(v)
-        elif c=="WSD": d["wind_speed"]=float(v)
-        elif c=="VEC": d["wind_direction"]=float(v)
-        elif c=="REH": d["humidity"]=float(v)
-        elif c=="PTY": d["precip_type"]=PTY_CODE.get(v,v)
-        elif c=="UUU": d["wind_u"]=float(v)
-        elif c=="VVV": d["wind_v"]=float(v)
-    return d
-
-
-WORK_STOP_CRITERIA=[
+WORK_STOP_CRITERIA = [
     {"code":"STRONG_WIND","name":"강풍","condition":"순간풍속 초당 10m 이상",
      "threshold":{"type":"wind_speed","value":10.0,"unit":"m/s"},
      "legal_basis":"산업안전보건기준에 관한 규칙 제37조 제1항 제2호",
@@ -117,43 +53,42 @@ WORK_STOP_CRITERIA=[
      "scope":"달비계, 높이 2m 이상 작업발판, 화물취급 작업 등"},
 ]
 
-def _judge_work_stop(weather:dict)->list[dict]:
-    t=[]
-    w=weather.get("wind_speed",0.0);r=weather.get("rain_1h",0.0);p=weather.get("precip_type","없음")
-    if w>=10.0: t.append({"code":"STRONG_WIND","name":"강풍","value":f"{w}m/s","threshold":"10m/s"})
-    if r>=1.0:  t.append({"code":"HEAVY_RAIN","name":"강우","value":f"{r}mm/h","threshold":"1mm/h"})
-    if "눈" in p and r>=1.0: t.append({"code":"HEAVY_SNOW","name":"강설","value":p,"threshold":"1cm/h"})
-    return t
 
+async def _edge_call(payload: dict, timeout: int = 20) -> dict:
+    """Supabase Edge Function 호출 공통 함수"""
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            resp = await c.post(EDGE_URL, json=payload)
+        if resp.status_code >= 400:
+            try: err = resp.json()
+            except: err = resp.text[:200]
+            raise HTTPException(status_code=502,
+                                detail=f"Edge Function {resp.status_code}: {err}")
+        return resp.json()
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Edge Function 타임아웃")
+    except httpx.ConnectError as e:
+        raise HTTPException(status_code=503, detail=f"Edge Function 연결 실패: {e}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {str(e)[:100]}")
 
-# ── 엔드포인트 ─────────────────────────────────────────────────────────
 
 @router.get("/work-stop-criteria")
 def get_work_stop_criteria():
+    """산업안전보건기준에 관한 규칙 제37조 작업중지 기준 목록"""
     return {"status":"success","legal_basis":"산업안전보건기준에 관한 규칙 제37조",
             "total":len(WORK_STOP_CRITERIA),"criteria":WORK_STOP_CRITERIA}
 
 
 @router.get("/debug")
 async def weather_debug():
-    """[개발용] 3개 API 경로 병렬 테스트 — error_type 포함"""
-    key=_auth_key()
-    now=_kst()
-    if now.minute<45: now-=timedelta(hours=1)
-    bd=now.strftime("%Y%m%d"); bt=now.strftime("%H00"); tm=now.strftime("%Y%m%d%H%M")
-
-    tasks=[
-        _safe_get("typ02_ultra_ncst", ULTRA_URL,
-                  {"authKey":key,"numOfRows":"1","pageNo":"1","dataType":"JSON",
-                   "base_date":bd,"base_time":bt,"nx":"60","ny":"127"}),
-        _safe_get("typ01_aws_sfctm2", AWS_URL,
-                  {"authKey":key,"tm":tm,"stn":"108","disp":"1","help":"1"}),
-        _safe_get("typ02_warn", WARN_URL,
-                  {"authKey":key,"numOfRows":"1","pageNo":"1","dataType":"JSON",
-                   "fromTmFc":now.strftime("%Y%m%d0000")}),
-    ]
-    results=await asyncio.gather(*tasks,return_exceptions=False)
-    return {"key_prefix":key[:8]+"...","kst":now.isoformat(),"tests":results}
+    """
+    [개발용] Supabase Edge Function 경유 3개 API 동시 테스트.
+    KMA_SERVICE_KEY 가 Supabase Function Secret 에 설정되어 있어야 합니다.
+    """
+    return await _edge_call({"action": "debug"}, timeout=30)
 
 
 @router.get("/now")
@@ -161,71 +96,16 @@ async def get_weather_now(
     lat: float = Query(..., description="위도 (예: 37.5665)"),
     lon: float = Query(..., description="경도 (예: 126.9780)"),
 ):
-    """현재 날씨 + 작업중지 판단 (API Hub 초단기실황)"""
-    key=_auth_key()
-    nx,ny=_latlon_to_grid(lat,lon)
-    bd,bt=_base_date_time()
-    params={"authKey":key,"numOfRows":"100","pageNo":"1","dataType":"JSON",
-            "base_date":bd,"base_time":bt,"nx":str(nx),"ny":str(ny)}
-    try:
-        resp=await _hub_get(ULTRA_URL,params)
-    except httpx.TimeoutException:
-        raise HTTPException(504,detail="기상청 API 타임아웃")
-    except httpx.ConnectError as e:
-        raise HTTPException(503,detail=f"연결 실패: {e}")
-
-    if resp.status_code!=200:
-        try: err=resp.json()
-        except: err=resp.text[:200]
-        raise HTTPException(502,detail=f"API Hub {resp.status_code}: {err}")
-
-    raw=resp.json()
-    items=raw.get("response",{}).get("body",{}).get("items",{}).get("item",[])
-    if not items:
-        rc=raw.get("response",{}).get("header",{}).get("resultCode","")
-        raise HTTPException(502,detail=f"응답 없음 resultCode={rc}, {bd} {bt}")
-
-    weather=_parse_ultra(items)
-    triggered=_judge_work_stop(weather)
-    ws=bool(triggered)
-    return {
-        "status":"success",
-        "location":{"lat":lat,"lon":lon,"nx":nx,"ny":ny},
-        "observed":{"base_date":bd,"base_time":bt},
-        "weather":weather,
-        "work_stop":{"required":ws,"level":"danger" if ws else "normal","triggered":triggered,
-                     "message":f"작업중지 필요: {', '.join(t['name'] for t in triggered)}" if ws else "작업 진행 가능"},
-    }
+    """현재 날씨 + 작업중지 판단 (Edge Function 경유 → apihub.kma.go.kr)"""
+    return await _edge_call({"action": "now", "lat": str(lat), "lon": str(lon)})
 
 
 @router.get("/alert")
 async def get_weather_alert(
     region_code: Optional[str] = Query(None, description="지역 코드 (없으면 전국)"),
 ):
-    """기상특보 조회 (API Hub)"""
-    key=_auth_key()
-    now=_kst()
-    params={"authKey":key,"numOfRows":"100","pageNo":"1","dataType":"JSON",
-            "stnId":region_code or "","fromTmFc":now.strftime("%Y%m%d0000")}
-    try:
-        resp=await _hub_get(WARN_URL,params)
-    except httpx.TimeoutException:
-        raise HTTPException(504,detail="타임아웃")
-    except httpx.ConnectError as e:
-        raise HTTPException(503,detail=f"연결 실패: {e}")
-
-    if resp.status_code!=200:
-        try: err=resp.json()
-        except: err=resp.text[:200]
-        raise HTTPException(502,detail=f"API Hub {resp.status_code}: {err}")
-
-    raw=resp.json()
-    body=raw.get("response",{}).get("body",{})
-    items=body.get("items",{}).get("item",[]) or []
-    WS={"강풍","호우","대설","태풍","뇌전","풍랑"}
-    alerts=[{"type":i.get("wrnTyp",""),"level":i.get("wrnLvl",""),"region":i.get("areaName",""),
-             "issued_at":i.get("tmFc",""),"expires_at":i.get("tmEf",""),"description":i.get("cntnt",""),
-             "work_stop_related":i.get("wrnTyp","") in WS} for i in items]
-    ws=[a for a in alerts if a["work_stop_related"]]
-    return {"status":"success","region_code":region_code or "전국","observed_at":now.isoformat(),
-            "total":body.get("totalCount",0),"alerts":alerts,"work_stop_alerts":ws,"has_work_stop_alert":bool(ws)}
+    """기상특보 조회 (Edge Function 경유)"""
+    payload: dict = {"action": "alert"}
+    if region_code:
+        payload["region_code"] = region_code
+    return await _edge_call(payload)
