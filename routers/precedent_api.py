@@ -1,22 +1,13 @@
 """
-routers/precedent_api.py — v1.0.2
-산업안전 판례 검색 / 단건 조회 / 안전 키워드 일괄 수집
-
-law.go.kr DRF API 활용:
-  datSrcNm=근로복지공단산재판례  →  산재판례 전용 필터
-  datSrcNm 미포함               →  전체 판례 검색
-  환경변수: LAW_API_OC  (기존 키 재사용)
-
-Endpoints
-  GET  /precedents/search          키워드 + source 필터 검색
-  GET  /precedents/{prec_id}       본문 단건 조회
-  POST /precedents/collect         안전 키워드 일괄 수집 → posts 저장
+routers/precedent_api.py — v1.0.3
 
 source 파라미터:
-  None / '' → datSrcNm 미포함 (전체 판례 검색)
-  'sanjae'  → datSrcNm=근로복지공단산재판례 (산재 전문)
+  None / '' → datSrcNm 미포함 (전체 판례)
+  'sanjae'  → datSrcNm=근로복지공단산재판례
 
-Cron (DB 등록): PRECEDENT_COLLECT_WEEKLY  매주 월 05:00
+v1.0.3 변경:
+  - sort=ddes 제거 (law.go.kr 리질 에러 원인)
+  - safety-keywords 라우트를 /{prec_id} 앞으로 이동 (FastAPI 썸도움 방지)
 """
 from __future__ import annotations
 import os, logging, httpx, asyncio
@@ -28,27 +19,24 @@ from db.supabase_client import get_supabase
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/precedents", tags=["산재판례"])
 
-# ── 상수 ───────────────────────────────────────────────────────────────────
-LAW_BASE   = "https://www.law.go.kr/DRF/lawSearch.do"
-LAW_DETAIL = "https://www.law.go.kr/DRF/lawService.do"
+LAW_BASE       = "https://www.law.go.kr/DRF/lawSearch.do"
+LAW_DETAIL     = "https://www.law.go.kr/DRF/lawService.do"
 DAT_SRC_SANJAE = "근로복지공단산재판례"
 
-# source 파라미터 → datSrcNm 매핑
 SOURCE_MAP = {
-    "sanjae": DAT_SRC_SANJAE,
-    "comwel": DAT_SRC_SANJAE,
+    "sanjae":          DAT_SRC_SANJAE,
+    "comwel":          DAT_SRC_SANJAE,
     "근로복지공단산재판례": DAT_SRC_SANJAE,
 }
 
-# 안전 관련 수집 키워드
 SAFETY_KEYWORDS = [
     "추락", "협착", "전도", "화재", "폭발",
     "질식", "감전", "충돌", "절단", "유해화학물질",
     "안전관리자", "산업재해", "중대재해", "사망",
 ]
 
-DEFAULT_DISPLAY = 20   # 검색 결과 기본 건수
-COLLECT_DISPLAY = 5    # 수집 시 키워드당 최대 건수
+DEFAULT_DISPLAY = 20
+COLLECT_DISPLAY = 5
 
 
 def _oc() -> str:
@@ -59,42 +47,34 @@ def _oc() -> str:
 
 
 def _base_params() -> dict:
-    """공통 파라미터 (datSrcNm 미포함 — 호출부에서 필요 시 추가)"""
     return {"OC": _oc(), "target": "prec", "type": "JSON"}
 
 
-# ── GET /precedents/search ─────────────────────────────────────────────────
+# ── 콘크리트 라우트는 파라미터 라우트보다 먼저 선언 ────────────────
+@router.get("/safety-keywords")
+async def get_safety_keywords():
+    return {"status": "success", "keywords": SAFETY_KEYWORDS}
+
+
 @router.get("/search")
 async def search_precedents(
-    query:   str            = Query(..., description="검색 키워드"),
-    source:  Optional[str]  = Query(None, description="출처 필터: 'sanjae' → 산재 전문, 미입력 → 전체"),
-    page:    int            = Query(1, ge=1),
-    display: int            = Query(DEFAULT_DISPLAY, ge=1, le=100),
-    size:    Optional[int]  = Query(None, description="display 별칭 (프론트 호환)"),
+    query:   str           = Query(...),
+    source:  Optional[str] = Query(None),
+    page:    int           = Query(1, ge=1),
+    display: int           = Query(DEFAULT_DISPLAY, ge=1, le=100),
+    size:    Optional[int] = Query(None),
 ):
-    """
-    산업안전 판례 키워드 검색.
-    - source 미입력: 전체 판례 (datSrcNm 없음)
-    - source='sanjae': 근로복지공단 산재판례 전용
-    """
-    # size 파라미터를 display로 사용 (프론트 호환)
     if size is not None:
         display = min(size, 100)
 
     params = _base_params()
-    params.update({
-        "query":   query,
-        "display": display,
-        "page":    page,
-        "sort":    "ddes",   # 최신순
-    })
+    params.update({"query": query, "display": display, "page": page})
+    # sort 제거 — law.go.kr에서 지원하지 않으면 500 발생
 
-    # source 매핑: 'sanjae' → '근로복지공단산재판례', 없으면 datSrcNm 미포함
     if source:
         dat_src = SOURCE_MAP.get(source.lower().strip())
         if dat_src:
             params["datSrcNm"] = dat_src
-        # 매핑 실패해도 에러 내지 않고 전체 검색으로 fallback
 
     async with httpx.AsyncClient(timeout=20) as client:
         resp = await client.get(LAW_BASE, params=params)
@@ -103,10 +83,10 @@ async def search_precedents(
         raise HTTPException(status_code=502,
                             detail=f"law.go.kr 응답 오류: {resp.status_code}")
 
-    raw  = resp.json()
-    body = raw.get("PrecSearch", {})
+    raw   = resp.json()
+    body  = raw.get("PrecSearch", {})
     items = body.get("prec", [])
-    if isinstance(items, dict):          # 단건이면 list로 감쌈
+    if isinstance(items, dict):
         items = [items]
 
     return {
@@ -120,12 +100,10 @@ async def search_precedents(
     }
 
 
-# ── GET /precedents/{prec_id} ─────────────────────────────────────────────
 @router.get("/{prec_id}")
 async def get_precedent(prec_id: str):
-    """판례일련번호로 본문 단건 조회."""
     params = _base_params()
-    params.update({"ID": prec_id})
+    params["ID"] = prec_id
 
     async with httpx.AsyncClient(timeout=20) as client:
         resp = await client.get(LAW_DETAIL, params=params)
@@ -142,21 +120,8 @@ async def get_precedent(prec_id: str):
     return {"status": "success", "data": data}
 
 
-# ── GET /precedents/safety-keywords ──────────────────────────────────────
-@router.get("/safety-keywords")
-async def get_safety_keywords():
-    """수집에 사용하는 안전 키워드 목록 반환."""
-    return {"status": "success", "keywords": SAFETY_KEYWORDS}
-
-
-# ── POST /precedents/collect ─────────────────────────────────────────────
 @router.post("/collect")
 async def collect_precedents(body: dict = None):
-    """
-    안전 키워드로 산재판례를 일괄 수집해 posts 테이블에 저장.
-    source_id 중복 건은 skip (INSERT 시도 → 오류 무시).
-    크론(PRECEDENT_COLLECT_WEEKLY) 또는 수동 실행 가능.
-    """
     sb      = get_supabase()
     saved   = 0
     skipped = 0
@@ -167,10 +132,10 @@ async def collect_precedents(body: dict = None):
             try:
                 params = _base_params()
                 params.update({
-                    "query":   keyword,
-                    "display": COLLECT_DISPLAY,
-                    "page":    1,
-                    "datSrcNm": DAT_SRC_SANJAE,  # 수집은 산재판례 전용
+                    "query":    keyword,
+                    "display":  COLLECT_DISPLAY,
+                    "page":     1,
+                    "datSrcNm": DAT_SRC_SANJAE,
                 })
                 resp = await client.get(LAW_BASE, params=params)
                 if resp.status_code != 200:
@@ -190,21 +155,20 @@ async def collect_precedents(body: dict = None):
                     if not prec_id or not title:
                         continue
 
-                    # 중복 확인
-                    dup = sb.table("posts") \
-                            .select("id") \
-                            .eq("source", "law_go_kr_prec") \
-                            .eq("source_id", source_id) \
-                            .execute()
+                    dup = (sb.table("posts")
+                             .select("id")
+                             .eq("source", "law_go_kr_prec")
+                             .eq("source_id", source_id)
+                             .execute())
                     if dup.data:
                         skipped += 1
                         continue
 
                     pub_date = item.get("선고일자", "") or item.get("공포일자", "")
                     try:
-                        pub_dt = datetime.strptime(pub_date, "%Y. %m. %d.") \
-                                         .replace(tzinfo=timezone.utc) \
-                                         .isoformat() if pub_date else None
+                        pub_dt = (datetime.strptime(pub_date, "%Y. %m. %d.")
+                                          .replace(tzinfo=timezone.utc)
+                                          .isoformat() if pub_date else None)
                     except ValueError:
                         pub_dt = None
 
@@ -212,7 +176,7 @@ async def collect_precedents(body: dict = None):
                         "category":     "산재판례",
                         "subcategory":  keyword,
                         "title":        title,
-                        "summary":      item.get("판시사항", "")[:500] if item.get("판시사항") else "",
+                        "summary":      (item.get("판시사항", "") or "")[:500],
                         "content":      item.get("판결요지", "") or item.get("전문", ""),
                         "source":       "law_go_kr_prec",
                         "source_id":    source_id,
@@ -222,7 +186,6 @@ async def collect_precedents(body: dict = None):
                         "author_name":  "법령정보시스템",
                         "published_at": pub_dt,
                     }
-
                     try:
                         sb.table("posts").insert(post).execute()
                         saved += 1
@@ -230,7 +193,7 @@ async def collect_precedents(body: dict = None):
                         log.warning(f"[PRECEDENT] INSERT 실패 {source_id}: {e}")
                         errors += 1
 
-                await asyncio.sleep(0.3)   # rate-limit 방지
+                await asyncio.sleep(0.3)
 
             except Exception as e:
                 log.error(f"[PRECEDENT] 키워드={keyword} 오류: {e}")
@@ -238,9 +201,9 @@ async def collect_precedents(body: dict = None):
 
     log.info(f"[PRECEDENT] collect 완료 saved={saved} skipped={skipped} errors={errors}")
     return {
-        "status":  "success",
-        "saved":   saved,
-        "skipped": skipped,
-        "errors":  errors,
+        "status":   "success",
+        "saved":    saved,
+        "skipped":  skipped,
+        "errors":   errors,
         "keywords": len(SAFETY_KEYWORDS),
     }
