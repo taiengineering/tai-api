@@ -1,5 +1,5 @@
 """
-routers/precedent_api.py — v1.0.0
+routers/precedent_api.py — v1.0.1
 산재판례 검색 / 단건 조회 / 안전 키워드 일괄 수집
 
 law.go.kr DRF API 활용:
@@ -18,12 +18,12 @@ import os, logging, httpx, asyncio
 from datetime import datetime, timezone
 from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
-from utils.supabase_client import get_supabase
+from db.supabase_client import get_supabase
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/precedents", tags=["산재판례"])
 
-# ── 상수 ────────────────────────────────────────────────────────────────────
+# ── 상수 ───────────────────────────────────────────────────────────────────
 LAW_BASE   = "https://www.law.go.kr/DRF/lawSearch.do"
 LAW_DETAIL = "https://www.law.go.kr/DRF/lawService.do"
 DAT_SRC    = "근로복지공단산재판례"
@@ -51,7 +51,7 @@ def _law_params(extra: dict) -> dict:
             "datSrcNm": DAT_SRC, **extra}
 
 
-# ── GET /precedents/search ───────────────────────────────────────────────────
+# ── GET /precedents/search ─────────────────────────────────────────────────
 @router.get("/search")
 async def search_precedents(
     query:   str            = Query(..., description="검색 키워드"),
@@ -92,12 +92,11 @@ async def search_precedents(
     }
 
 
-# ── GET /precedents/{prec_id} ────────────────────────────────────────────────
+# ── GET /precedents/{prec_id} ─────────────────────────────────────────────
 @router.get("/{prec_id}")
 async def get_precedent(prec_id: str):
-    """판례 일련번호로 본문 단건 조회."""
+    """판례일련번호로 본문 단건 조회."""
     params = _law_params({"ID": prec_id})
-    # 단건 조회는 target=prec, ID 파라미터 사용
     params["target"] = "prec"
 
     async with httpx.AsyncClient(timeout=20) as client:
@@ -115,12 +114,12 @@ async def get_precedent(prec_id: str):
     return {"status": "success", "data": data}
 
 
-# ── POST /precedents/collect ─────────────────────────────────────────────────
+# ── POST /precedents/collect ─────────────────────────────────────────────
 @router.post("/collect")
 async def collect_precedents(body: dict = None):
     """
     안전 키워드로 산재판례를 일괄 수집해 posts 테이블에 저장.
-    source_id 중복 건은 skip (UPSERT 없이 INSERT 시도 → 오류 무시).
+    source_id 중복 건은 skip (INSERT 시도 → 오류 무시).
     크론(PRECEDENT_COLLECT_WEEKLY) 또는 수동 실행 가능.
     """
     sb      = get_supabase()

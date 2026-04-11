@@ -1,5 +1,5 @@
 """
-TAI Agent 대행 서비스 라우터 — v1.0.0
+TAI Agent 대행 서비스 라우터 — v1.0.1
 
 엔드포인트:
   GET  /agent-service           전체 목록 (sector 필터 가능)
@@ -12,7 +12,7 @@ DB 테이블: agent_service
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 from pydantic import BaseModel
-from utils.supabase_client import get_supabase
+from db.supabase_client import get_supabase
 import logging
 
 log = logging.getLogger(__name__)
