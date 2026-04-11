@@ -1,25 +1,17 @@
 """
-routers/weather.py — v1.1.0
+routers/weather.py — v1.2.0
 
 기상청 날씨 API — Supabase Edge Function 프록시 방식
 
-【구조】
-  Railway (api.taieng.co.kr) → Supabase Edge Function (kma-weather) → apihub.kma.go.kr
-  
-  Railway IP 차단 우회: precedent collect 과 동일한 방식
-  KMA_SERVICE_KEY는 Supabase Function Secret 에 설정 필요 (Railway와 동일 값)
-
 Endpoints:
-  GET /weather/work-stop-criteria   법령 기반 작업중지 기준 (Edge Function 불필요)
-  GET /weather/debug                Edge Function 경유 3개 API 동시 테스트
-  GET /weather/now?lat=&lon=        현재 날씨 + 작업중지 판단
-  GET /weather/alert?region_code=   기상특보 조회
+  GET /weather/work-stop-criteria         법령 기반 작업중지 기준
+  GET /weather/alert-regions              특보구역 코드 목록 조회  ← v1.2.0 추가
+  GET /weather/debug                      Edge Function 테스트
+  GET /weather/now?lat=&lon=             현재 날씨 + 작업중지 판단
+  GET /weather/alert?region_code=        기상특보 조회
 
 환경변수:
-  KMA_SERVICE_KEY  — Supabase Function Secret 에 설정 (Railway 환경변수는 참조 안 함)
-  
-  ※ Supabase 대시보드 > Edge Functions > kma-weather > Secrets
-    KMA_SERVICE_KEY = (apihub.kma.go.kr authKey)
+  KMA_SERVICE_KEY → Supabase Function Secret (kma-weather) 에 설정
 """
 from __future__ import annotations
 import os, logging, httpx
@@ -75,6 +67,8 @@ async def _edge_call(payload: dict, timeout: int = 20) -> dict:
         raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {str(e)[:100]}")
 
 
+# ── 콘크리트 라우트 먼저 선언 (파라미터 라우트보다 앞) ─────────────────────
+
 @router.get("/work-stop-criteria")
 def get_work_stop_criteria():
     """산업안전보건기준에 관한 규칙 제37조 작업중지 기준 목록"""
@@ -82,12 +76,21 @@ def get_work_stop_criteria():
             "total":len(WORK_STOP_CRITERIA),"criteria":WORK_STOP_CRITERIA}
 
 
+@router.get("/alert-regions")
+async def get_alert_regions(
+    reg_type: Optional[str] = Query(None, description="구역 유형 필터 (L=육상, S=해상, 없으면 전체)"),
+):
+    """
+    기상특보 구역 코드 목록 조회.
+    apihub.kma.go.kr 예특보 > 기상특보 > 1.1 특보구역 API 사용.
+    region_code 파라미터에 사용할 REG_ID 목록을 반환합니다.
+    """
+    return await _edge_call({"action": "alert-regions", "reg_type": reg_type or ""})
+
+
 @router.get("/debug")
 async def weather_debug():
-    """
-    [개발용] Supabase Edge Function 경유 3개 API 동시 테스트.
-    KMA_SERVICE_KEY 가 Supabase Function Secret 에 설정되어 있어야 합니다.
-    """
+    """[개발용] Supabase Edge Function 경유 API 테스트"""
     return await _edge_call({"action": "debug"}, timeout=30)
 
 
@@ -102,7 +105,7 @@ async def get_weather_now(
 
 @router.get("/alert")
 async def get_weather_alert(
-    region_code: Optional[str] = Query(None, description="지역 코드 (없으면 전국)"),
+    region_code: Optional[str] = Query(None, description="특보구역 코드 (없으면 전국, /alert-regions 참조)"),
 ):
     """기상특보 조회 (Edge Function 경유)"""
     payload: dict = {"action": "alert"}
