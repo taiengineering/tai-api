@@ -1,15 +1,20 @@
 """
-routers/precedent_api.py — v1.0.1
-산재판례 검색 / 단건 조회 / 안전 키워드 일괄 수집
+routers/precedent_api.py — v1.0.2
+산업안전 판례 검색 / 단건 조회 / 안전 키워드 일괄 수집
 
 law.go.kr DRF API 활용:
   datSrcNm=근로복지공단산재판례  →  산재판례 전용 필터
+  datSrcNm 미포함               →  전체 판례 검색
   환경변수: LAW_API_OC  (기존 키 재사용)
 
 Endpoints
   GET  /precedents/search          키워드 + source 필터 검색
   GET  /precedents/{prec_id}       본문 단건 조회
   POST /precedents/collect         안전 키워드 일괄 수집 → posts 저장
+
+source 파라미터:
+  None / '' → datSrcNm 미포함 (전체 판례 검색)
+  'sanjae'  → datSrcNm=근로복지공단산재판례 (산재 전문)
 
 Cron (DB 등록): PRECEDENT_COLLECT_WEEKLY  매주 월 05:00
 """
@@ -26,7 +31,14 @@ router = APIRouter(prefix="/precedents", tags=["산재판례"])
 # ── 상수 ───────────────────────────────────────────────────────────────────
 LAW_BASE   = "https://www.law.go.kr/DRF/lawSearch.do"
 LAW_DETAIL = "https://www.law.go.kr/DRF/lawService.do"
-DAT_SRC    = "근로복지공단산재판례"
+DAT_SRC_SANJAE = "근로복지공단산재판례"
+
+# source 파라미터 → datSrcNm 매핑
+SOURCE_MAP = {
+    "sanjae": DAT_SRC_SANJAE,
+    "comwel": DAT_SRC_SANJAE,
+    "근로복지공단산재판례": DAT_SRC_SANJAE,
+}
 
 # 안전 관련 수집 키워드
 SAFETY_KEYWORDS = [
@@ -46,27 +58,43 @@ def _oc() -> str:
     return oc
 
 
-def _law_params(extra: dict) -> dict:
-    return {"OC": _oc(), "target": "prec", "type": "JSON",
-            "datSrcNm": DAT_SRC, **extra}
+def _base_params() -> dict:
+    """공통 파라미터 (datSrcNm 미포함 — 호출부에서 필요 시 추가)"""
+    return {"OC": _oc(), "target": "prec", "type": "JSON"}
 
 
 # ── GET /precedents/search ─────────────────────────────────────────────────
 @router.get("/search")
 async def search_precedents(
     query:   str            = Query(..., description="검색 키워드"),
-    source:  Optional[str]  = Query(None, description="출처 필터 (비워두면 산재판례 전체)"),
+    source:  Optional[str]  = Query(None, description="출처 필터: 'sanjae' → 산재 전문, 미입력 → 전체"),
     page:    int            = Query(1, ge=1),
     display: int            = Query(DEFAULT_DISPLAY, ge=1, le=100),
+    size:    Optional[int]  = Query(None, description="display 별칭 (프론트 호환)"),
 ):
-    """산재판례 키워드 검색. source 파라미터로 출처 추가 필터링 가능."""
-    params = _law_params({
+    """
+    산업안전 판례 키워드 검색.
+    - source 미입력: 전체 판례 (datSrcNm 없음)
+    - source='sanjae': 근로복지공단 산재판례 전용
+    """
+    # size 파라미터를 display로 사용 (프론트 호환)
+    if size is not None:
+        display = min(size, 100)
+
+    params = _base_params()
+    params.update({
         "query":   query,
         "display": display,
         "page":    page,
+        "sort":    "ddes",   # 최신순
     })
+
+    # source 매핑: 'sanjae' → '근로복지공단산재판례', 없으면 datSrcNm 미포함
     if source:
-        params["datSrcNm"] = source  # 더 좁은 출처로 오버라이드
+        dat_src = SOURCE_MAP.get(source.lower().strip())
+        if dat_src:
+            params["datSrcNm"] = dat_src
+        # 매핑 실패해도 에러 내지 않고 전체 검색으로 fallback
 
     async with httpx.AsyncClient(timeout=20) as client:
         resp = await client.get(LAW_BASE, params=params)
@@ -84,7 +112,7 @@ async def search_precedents(
     return {
         "status":  "success",
         "query":   query,
-        "source":  source or DAT_SRC,
+        "source":  source or "all",
         "total":   int(body.get("totalCnt", 0)),
         "page":    page,
         "display": display,
@@ -96,8 +124,8 @@ async def search_precedents(
 @router.get("/{prec_id}")
 async def get_precedent(prec_id: str):
     """판례일련번호로 본문 단건 조회."""
-    params = _law_params({"ID": prec_id})
-    params["target"] = "prec"
+    params = _base_params()
+    params.update({"ID": prec_id})
 
     async with httpx.AsyncClient(timeout=20) as client:
         resp = await client.get(LAW_DETAIL, params=params)
@@ -112,6 +140,13 @@ async def get_precedent(prec_id: str):
         raise HTTPException(status_code=404, detail="판례를 찾을 수 없습니다.")
 
     return {"status": "success", "data": data}
+
+
+# ── GET /precedents/safety-keywords ──────────────────────────────────────
+@router.get("/safety-keywords")
+async def get_safety_keywords():
+    """수집에 사용하는 안전 키워드 목록 반환."""
+    return {"status": "success", "keywords": SAFETY_KEYWORDS}
 
 
 # ── POST /precedents/collect ─────────────────────────────────────────────
@@ -130,10 +165,12 @@ async def collect_precedents(body: dict = None):
     async with httpx.AsyncClient(timeout=30) as client:
         for keyword in SAFETY_KEYWORDS:
             try:
-                params = _law_params({
+                params = _base_params()
+                params.update({
                     "query":   keyword,
                     "display": COLLECT_DISPLAY,
                     "page":    1,
+                    "datSrcNm": DAT_SRC_SANJAE,  # 수집은 산재판례 전용
                 })
                 resp = await client.get(LAW_BASE, params=params)
                 if resp.status_code != 200:
