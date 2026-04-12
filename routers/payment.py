@@ -1,14 +1,18 @@
 """
-이니시스 INIStdPay 표준결제 라우터 — v3.1.0
+이니시스 INIStdPay 표준결제 라우터 — v3.2.0
+
+v3.2.0 (2026-04-12)
+  [FEAT] VBANK(가상계좌) 결제 지원 — 연결 서비스 전용
+         - POST /payments/vbank/prepare   : 가상계좌 발급
+         - POST /payments/vbank/noti      : 입금 확인 웹훅
+         - GET  /payments/{id}/vbank-status : 입금 현황 조회
+         - /inicis/return VBANK 분기 처리 추가
+         - matching_contracts.paid_confirmed_at / 상태 자동 업데이트
+         - matching_requests IN_PROGRESS 자동 전이
 
 v3.1.0 (2026-04-12)
-  [FEAT] service_status 추가 — PAID(결제완료) / ACTIVE(서비스중) / ENDED(계약종결)
-         - 결제 성공 + 계약 없음 → PAID
-         - 결제 성공 + 계약 활성화 → ACTIVE
-         - 수동 활성화 → ACTIVE
-         - 취소 → ENDED
-  [FEAT] list_payments → v_payments_list 뷰 사용 (user_name, company_name JOIN 포함)
-  [FEAT] service_status 필터 추가
+  [FEAT] service_status 추가 — PAID / ACTIVE / ENDED
+  [FEAT] list_payments → v_payments_list 뷰 사용
 
 v3.0.0 (2026-04-12)
   [FEAT] user_id 필수값, product_type 필수값, expired_at(SaaS), pg_method
@@ -177,6 +181,29 @@ class PrepareBody(BaseModel):
         }
         if v not in allowed:
             raise ValueError(f"product_type 값이 유효하지 않습니다. 허용: {allowed}")
+        return v
+
+
+class VbankPrepareBody(BaseModel):
+    """VBANK 전용 결제 준비 Body — 연결 서비스(선임/컨설팅/수선) 전용"""
+    user_id:              str
+    product_type:         str                    # EXPERT / CONSULTING / REPAIR
+    amount:               int                    # 계약 전체 금액
+    goodname:             str                    # 상품명
+    matching_contract_id: str                    # matching_contracts.id (필수)
+
+    company_id:          Optional[str] = None
+    buyername:           Optional[str] = "고객"
+    buyertel:            Optional[str] = "00000000000"
+    buyeremail:          Optional[str] = None
+    vbank_expire_min:    int = 4320              # 가상계좌 유효시간 (분, 기본 3일)
+
+    @field_validator("product_type")
+    @classmethod
+    def validate_vbank_product(cls, v: str) -> str:
+        allowed = {"EXPERT", "CONSULTING", "REPAIR"}
+        if v not in allowed:
+            raise ValueError(f"VBANK는 연결 서비스만 가능합니다: {allowed}")
         return v
 
 
@@ -478,6 +505,38 @@ async def inicis_return(request: Request):
         apply_num = auth_result.get("applNum", "")
         pg_method = auth_result.get("payMethod", paymethod) or paymethod
 
+        # ── VBANK: 가상계좌 발급 완료 (아직 입금 전) ─────────────────
+        if pg_method == "Vbank" or pg_method == "VBANK":
+            vbank_number = auth_result.get("vbankNum", "")
+            vbank_bank   = auth_result.get("vbankBankName", "")
+            vbank_expire = auth_result.get("vbankExpireDate", "")
+
+            supabase.table("payments").update({
+                "status_code":     "PENDING",    # 입금 전이므로 PENDING 유지
+                "pg_method":       "VBANK",
+                "vbank_number":    vbank_number,
+                "vbank_bank":      vbank_bank,
+                "inicis_order_id": order_id,
+                "inicis_raw":      auth_result,
+                "memo":            f"가상계좌 발급완료 | {vbank_bank} {vbank_number}",
+                "updated_at":      now,
+            }).eq("id", payment_id).execute()
+
+            qs = urllib.parse.urlencode({
+                "resultCode":    "00",
+                "oid":           order_id,
+                "goodname":      goodname,
+                "price":         price,
+                "paymethod":     "VBANK",
+                "vbank_number":  vbank_number,
+                "vbank_bank":    vbank_bank,
+                "vbank_expire":  vbank_expire,
+                "payment_id":    payment_id,
+            })
+            return RedirectResponse(f"{FRONT_RETURN_URL}?{qs}", status_code=302)
+
+        # ── 카드/기타: 기존 로직 ───────────────────────────────────────
+
         expired_at = None
         if product_type in SAAS_PRODUCT_TYPES and period_months:
             expired_at = _calc_expired_at(now, period_months)
@@ -738,4 +797,270 @@ def cancel_payment(payment_id: str, body: CancelBody):
         "status":  "success",
         "message": "취소 처리되었습니다.",
         "data":    {"payment_id": payment_id, "status_code": "CANCELLED"},
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# VBANK (가상계좌) 결제 — 연결 서비스 전용  (v3.2.0)
+# ════════════════════════════════════════════════════════════════════════
+
+@router.post("/vbank/prepare")
+def vbank_prepare(body: VbankPrepareBody):
+    """
+    연결 서비스 가상계좌 발급
+    POST /payments/vbank/prepare
+
+    이니시스 INIStdPay gopaymethod="Vbank"
+    발급 즉시 가상계좌번호를 반환 → 고객에게 입금 안내.
+
+    ⚠️ 이니시스 카드심사 완료 후 실제 가동 (현재는 구조 완성)
+    """
+    supabase  = get_supabase()
+    sign_key  = _load_sign_key()
+    order_id  = _make_order_id()
+    timestamp = _ts_ms()
+    price_str = str(body.amount)
+    mKey      = _sha256(sign_key)
+
+    sig_data   = f"oid={order_id}&price={price_str}&timestamp={timestamp}"
+    veri_data  = f"oid={order_id}&price={price_str}&signKey={sign_key}&timestamp={timestamp}"
+    signature    = _sha256(sig_data)
+    verification = _sha256(veri_data)
+
+    supply_amount = round(body.amount / 1.1)
+    vat_amount    = body.amount - supply_amount
+    now           = _now_iso()
+
+    vbank_expires_at = (
+        datetime.now(timezone.utc) + timedelta(minutes=body.vbank_expire_min)
+    ).isoformat()
+
+    row: dict = {
+        "user_id":              body.user_id,
+        "product_type":         body.product_type,
+        "payment_method":       "INICIS",
+        "pg_method":            "VBANK",
+        "payment_type":         "VBANK",
+        "supply_amount":        supply_amount,
+        "vat_amount":           vat_amount,
+        "total_amount":         body.amount,
+        "inicis_order_id":      order_id,
+        "status_code":          "PENDING",       # 입금 전
+        "service_status":       "PAID",
+        "vbank_expires_at":     vbank_expires_at,
+        "matching_contract_id": body.matching_contract_id,
+        "created_at":           now,
+        "updated_at":           now,
+    }
+    if body.company_id:
+        row["company_id"] = body.company_id
+
+    res = supabase.table("payments").insert(row).execute()
+    if not res.data:
+        raise HTTPException(status_code=500, detail="결제 레코드 생성 실패")
+
+    payment_id = res.data[0]["id"]
+
+    # matching_contracts에 payment_id 연결
+    supabase.table("matching_contracts").update({
+        "payment_id": payment_id,
+        "updated_at": now,
+    }).eq("id", body.matching_contract_id).execute()
+
+    log.info(f"[VBANK PREPARE] oid={order_id} contract={body.matching_contract_id}")
+
+    return {
+        "status": "success",
+        "data": {
+            "payment_id":    payment_id,
+            "mid":           INICIS_MID,
+            "mKey":          mKey,
+            "oid":           order_id,
+            "price":         price_str,
+            "goodname":      body.goodname,
+            "buyername":     body.buyername or "고객",
+            "buyertel":      body.buyertel  or "00000000000",
+            "buyeremail":    body.buyeremail or "",
+            "timestamp":     timestamp,
+            "signature":     signature,
+            "verification":  verification,
+            "use_chkfake":   "Y",
+            "returnUrl":     DEFAULT_RETURN_URL,
+            "closeUrl":      DEFAULT_CLOSE_URL,
+            "charset":       "UTF-8",
+            "gopaymethod":   "Vbank",
+            "vbankexpire":   body.vbank_expire_min,
+        },
+    }
+
+
+@router.post("/vbank/noti", include_in_schema=True)
+async def vbank_noti(request: Request):
+    """
+    이니시스 VBANK 입금 확인 노티 (웹훅)
+    POST /payments/vbank/noti
+
+    고객 입금 → 이니시스 → 이 URL로 POST.
+    처리 순서:
+      1. payments → SUCCESS 업데이트
+      2. matching_contracts → paid_confirmed_at / ACTIVE
+      3. matching_requests → IN_PROGRESS 자동 전이
+      4. 신청자 알림 발송
+
+    이니시스 설정에 등록 필요:
+      https://api.taieng.co.kr/payments/vbank/noti
+    """
+    try:
+        form = await request.form()
+        data: Dict[str, Any] = dict(form)
+    except Exception:
+        try:
+            data = await request.json()
+        except Exception:
+            return "OK"
+
+    order_id    = data.get("orderNumber") or data.get("oid", "")
+    result_code = data.get("resultCode", "")
+    depositor   = data.get("vbankInputName", "")   # 실제 입금자명
+
+    log.info(f"[VBANK NOTI] oid={order_id} resultCode={result_code}")
+
+    supabase = get_supabase()
+
+    pay_res = (
+        supabase.table("payments")
+        .select("id, status_code, user_id, company_id, total_amount, product_type, matching_contract_id")
+        .eq("inicis_order_id", order_id)
+        .limit(1)
+        .execute()
+    )
+    if not pay_res.data:
+        log.warning(f"[VBANK NOTI] 주문번호 미확인: {order_id}")
+        return "OK"
+
+    payment              = pay_res.data[0]
+    payment_id           = payment["id"]
+    matching_contract_id = payment.get("matching_contract_id")
+
+    # 이미 처리된 경우 스킵 (멱등성)
+    if payment["status_code"] == "SUCCESS":
+        return "OK"
+
+    # 입금 취소/실패
+    if result_code not in ("", "00", "0000"):
+        log.info(f"[VBANK NOTI] 입금 취소: resultCode={result_code}")
+        supabase.table("payments").update({
+            "status_code": "FAILED",
+            "fail_reason": f"VBANK 입금 취소 (resultCode={result_code})",
+            "updated_at":  _now_iso(),
+        }).eq("id", payment_id).execute()
+        return "OK"
+
+    # ── 입금 성공 처리 ──────────────────────────────────────────────
+    now = _now_iso()
+
+    # 1. payments → SUCCESS
+    supabase.table("payments").update({
+        "status_code":        "SUCCESS",
+        "service_status":     "ACTIVE",
+        "vbank_depositor":    depositor,
+        "vbank_confirmed_at": now,
+        "paid_at":            now,
+        "inicis_raw":         data,
+        "updated_at":         now,
+    }).eq("id", payment_id).execute()
+    log.info(f"[VBANK NOTI] 입금 확인 — payment_id={payment_id}")
+
+    # 2. matching_contracts → paid_confirmed_at / ACTIVE
+    if matching_contract_id:
+        supabase.table("matching_contracts").update({
+            "paid_confirmed_at": now,
+            "status":            "ACTIVE",
+            "updated_at":        now,
+        }).eq("id", matching_contract_id).execute()
+
+        # 3. matching_requests → CONTRACTED → IN_PROGRESS 자동 전이
+        contract_res = (
+            supabase.table("matching_contracts")
+            .select("request_id")
+            .eq("id", matching_contract_id)
+            .limit(1)
+            .execute()
+        )
+        if contract_res.data:
+            request_id = contract_res.data[0].get("request_id")
+            if request_id:
+                req_res = (
+                    supabase.table("matching_requests")
+                    .select("id, status, status_history")
+                    .eq("id", request_id)
+                    .limit(1)
+                    .execute()
+                )
+                if req_res.data and req_res.data[0]["status"] == "CONTRACTED":
+                    history = req_res.data[0].get("status_history") or []
+                    history.append({
+                        "status": "IN_PROGRESS",
+                        "at":     now,
+                        "by":     "system",
+                        "memo":   "가상계좌 입금 확인 → 서비스 시작",
+                    })
+                    supabase.table("matching_requests").update({
+                        "status":         "IN_PROGRESS",
+                        "status_history": history,
+                        "updated_at":     now,
+                    }).eq("id", request_id).execute()
+                    log.info(f"[VBANK NOTI] 매칭 → IN_PROGRESS request_id={request_id}")
+
+    # 4. 신청자 알림 발송
+    if payment.get("user_id"):
+        supabase.table("notifications").insert({
+            "user_id":    payment["user_id"],
+            "title":      "계약금 입금 확인",
+            "body":       f"계약금 {int(payment['total_amount']):,}원 입금이 확인되었습니다. 서비스가 시작됩니다.",
+            "type":       "PAYMENT",
+            "is_read":    False,
+            "created_at": now,
+        }).execute()
+
+    return "OK"
+
+
+@router.get("/{payment_id}/vbank-status")
+def get_vbank_status(payment_id: str):
+    """
+    VBANK 입금 대기 현황 조회
+    GET /payments/{payment_id}/vbank-status
+
+    프론트 결제 완료 화면에서 폴링 또는 현황 확인용.
+    """
+    supabase = get_supabase()
+    res = (
+        supabase.table("payments")
+        .select(
+            "id, status_code, total_amount, "
+            "vbank_number, vbank_bank, vbank_expires_at, "
+            "vbank_depositor, vbank_confirmed_at, paid_at"
+        )
+        .eq("id", payment_id)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="결제 정보를 찾을 수 없습니다.")
+
+    p = res.data[0]
+    return {
+        "status": "success",
+        "data": {
+            "payment_id":       payment_id,
+            "status_code":      p["status_code"],
+            "is_paid":          p["status_code"] == "SUCCESS",
+            "total_amount":     p["total_amount"],
+            "vbank_number":     p.get("vbank_number"),
+            "vbank_bank":       p.get("vbank_bank"),
+            "vbank_expires_at": p.get("vbank_expires_at"),
+            "vbank_depositor":  p.get("vbank_depositor"),
+            "confirmed_at":     p.get("vbank_confirmed_at"),
+        },
     }
