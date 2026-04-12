@@ -1,5 +1,7 @@
-# main.py — v5.12.0
-# v5.12.0: identity API 추가 (이니시스 본인인증 — 준비/콜백/어드민)
+# main.py — v5.13.0
+# v5.13.0: experts API v2.0.0 전체 재설계 (전체 데이터 적재 / 활성 테이블 자동 적재)
+# v5.12.1: experts 근무형태·사업자 구분 추가
+# v5.12.0: identity API 추가 (이니시스 본인인증)
 # v5.11.0: experts API 추가 (전문가 등록 신청 / 현황 / 어드민 승인)
 # v5.10.0: juso API 추가
 # v5.9.0:  weather API 추가
@@ -93,7 +95,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.12.0"
+APP_VERSION = "5.13.0"
 
 
 @asynccontextmanager
@@ -204,7 +206,7 @@ app.include_router(agent_service_router)
 app.include_router(precedent_router)
 app.include_router(weather_router)
 app.include_router(juso_router)
-app.include_router(experts_router)                   # v5.11.0
+app.include_router(experts_router, prefix="/experts", tags=["전문가"])  # v5.13.0
 app.include_router(identity_router, prefix="/identity", tags=["본인인증"])  # v5.12.0
 app.include_router(internal_api_registry_router)
 app.include_router(report_api_registry_router)
