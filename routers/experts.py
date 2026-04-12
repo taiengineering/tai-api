@@ -755,3 +755,105 @@ def get_application_documents(
         "status": "success",
         "data": {"items": docs, "total": len(docs)},
     }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 승인된 전문가 통합 목록 / 활성 토글 (v2.2.0)
+# ════════════════════════════════════════════════════════════════════════
+
+# source_table → 실제 DB 테이블명 매핑
+TABLE_MAP: Dict[str, str] = {
+    "personnel": "safety_personnel",
+    "agency":    "safety_agencies",
+    "repair":    "repair_companies",
+}
+
+
+@router.get("/admin/expert-list")
+def admin_expert_list(
+    expert_type:     Optional[str]  = Query(None, description="EXPERT/CONSULTING/REPAIR"),
+    entity_type:     Optional[str]  = Query(None),
+    verified_status: Optional[str]  = Query(None, description="APPROVED 등"),
+    is_active:       Optional[bool] = Query(None),
+    keyword:         Optional[str]  = Query(None, description="이름 또는 회사명"),
+    page: int = Query(1,  ge=1),
+    size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(_require_admin),
+):
+    """
+    어드민: 승인된 전문가 통합 목록
+    GET /experts/admin/expert-list
+
+    v_expert_list 뷰 사용
+    (safety_personnel + safety_agencies + repair_companies UNION)
+    """
+    supabase = get_supabase()
+    q = supabase.table("v_expert_list").select("*", count="exact")
+
+    if expert_type:           q = q.eq("expert_type",     expert_type)
+    if entity_type:           q = q.eq("entity_type",     entity_type)
+    if verified_status:       q = q.eq("verified_status", verified_status)
+    if is_active is not None: q = q.eq("is_active",       is_active)
+    if keyword:
+        q = q.or_(f"expert_name.ilike.%{keyword}%,biz_name.ilike.%{keyword}%")
+
+    offset = (page - 1) * size
+    res    = q.order("created_at", desc=True).range(offset, offset + size - 1).execute()
+    total  = res.count or 0
+
+    return {
+        "status": "success",
+        "data": {
+            "items":       res.data or [],
+            "total":       total,
+            "page":        page,
+            "size":        size,
+            "total_pages": (total + size - 1) // size if total else 0,
+        },
+    }
+
+
+@router.patch("/admin/expert/{source_table}/{expert_id}/toggle")
+def toggle_expert_active(
+    source_table: str,
+    expert_id:    str,
+    is_active:    bool = Query(..., description="true=활성화, false=비활성화"),
+    current_user: dict = Depends(_require_admin),
+):
+    """
+    어드민: 전문가 활성/비활성 토글
+    PATCH /experts/admin/expert/{source_table}/{expert_id}/toggle?is_active=true
+
+    source_table: personnel / agency / repair
+    """
+    table = TABLE_MAP.get(source_table)
+    if not table:
+        raise HTTPException(
+            status_code=400,
+            detail=f"source_table은 {list(TABLE_MAP.keys())} 중 하나여야 합니다.",
+        )
+
+    supabase = get_supabase()
+    now = _now_iso()
+
+    res = supabase.table(table).update({
+        "is_active":  is_active,
+        "updated_at": now,
+    }).eq("id", expert_id).execute()
+
+    if not res.data:
+        raise HTTPException(status_code=404, detail="전문가를 찾을 수 없습니다.")
+
+    log.info(
+        f"[EXPERT TOGGLE] table={table} id={expert_id} "
+        f"is_active={is_active} by={current_user['id']}"
+    )
+    return {
+        "status":  "success",
+        "message": f"{'활성화' if is_active else '비활성화'} 처리되었습니다.",
+        "data": {
+            "source_table": source_table,
+            "expert_id":    expert_id,
+            "is_active":    is_active,
+        },
+    }
