@@ -1,8 +1,10 @@
-# main.py — v5.13.0
-# v5.13.0: experts API v2.0.0 전체 재설계 (전체 데이터 적재 / 활성 테이블 자동 적재)
-# v5.12.1: experts 근무형태·사업자 구분 추가
+# main.py — v5.14.0
+# v5.14.0: matching API 추가 (전문가 매칭 신청 / 상태 관리 / 어드민 통계)
+# v5.13.2: experts 전문가 통합 목록 + 활성 토글
+# v5.13.1: experts Storage 서류 업로드 연동
+# v5.13.0: experts API v2.0.0 전체 재설계
 # v5.12.0: identity API 추가 (이니시스 본인인증)
-# v5.11.0: experts API 추가 (전문가 등록 신청 / 현황 / 어드민 승인)
+# v5.11.0: experts API 추가
 # v5.10.0: juso API 추가
 # v5.9.0:  weather API 추가
 import logging
@@ -67,6 +69,7 @@ from routers.precedent_api           import router as precedent_router
 from routers.weather                 import router as weather_router
 from routers.juso                    import router as juso_router
 from routers.experts                 import router as experts_router             # v5.11.0
+from routers.matching                import router as matching_router             # v5.14.0
 from routers.identity                import router as identity_router             # v5.12.0
 from routers.internal_api_registry   import router as internal_api_registry_router
 from routers.report_api_registry     import router as report_api_registry_router
@@ -95,7 +98,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.13.0"
+APP_VERSION = "5.14.0"
 
 
 @asynccontextmanager
@@ -206,7 +209,8 @@ app.include_router(agent_service_router)
 app.include_router(precedent_router)
 app.include_router(weather_router)
 app.include_router(juso_router)
-app.include_router(experts_router, prefix="/experts", tags=["전문가"])  # v5.13.0
+app.include_router(experts_router,  prefix="/experts",  tags=["전문가"])   # v5.13.0
+app.include_router(matching_router, prefix="/matching", tags=["매칭"])     # v5.14.0
 app.include_router(identity_router, prefix="/identity", tags=["본인인증"])  # v5.12.0
 app.include_router(internal_api_registry_router)
 app.include_router(report_api_registry_router)
