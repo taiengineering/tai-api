@@ -1,8 +1,14 @@
 """
-routers/matching.py — v1.1.0
+routers/matching.py — v1.2.0
 전문가 매칭 신청 / 상태 관리 / 제안서 시스템 / 어드민 통계
 
-v1.1.0: 제안서 시스템 전체 추가
+v1.2.0: 대시보드 + 파이프라인 + price_commission CRUD 추가
+  - GET  /matching/admin/dashboard       매칭 대시보드 통계
+  - GET  /matching/admin/pipeline        진행 중 파이프라인 목록
+  - commission_router: GET/POST/PATCH/DELETE/POST-calculate /price-commission
+
+v1.1.0: 제안서 시스템 전체
+v1.0.0: 기본 매칭 신청·상태·통계
   - POST /matching/results/match                   어드민 전문가 배정
   - POST /matching/results/{id}/notify             전문가 알림 발송
   - POST /matching/results/{id}/view               전문가 신청 열람
@@ -24,7 +30,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -907,3 +913,284 @@ def my_proposals(
             "total_pages": (total + size - 1) // size if total else 0,
         },
     }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 어드민 대시보드 + 파이프라인 (v1.2.0)
+# ════════════════════════════════════════════════════════════════════════
+
+@router.get("/admin/dashboard")
+def admin_dashboard(current_user: dict = Depends(_require_admin)):
+    """
+    어드민 매칭 대시보드 통계
+    GET /matching/admin/dashboard
+
+    - 상태별 건수 / 서비스유형별 건수
+    - 이번달 신규 신청 / 계약 성사 수
+    - 이번달 정산 완료 합계
+    - 정산 대기 건수 + 금액
+    - 어드민 처리 필요 항목별 건수
+    """
+    supabase   = get_supabase()
+    now        = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+    # 1. matching_requests 전체
+    req_res      = supabase.table("matching_requests").select("status, expert_type, created_at").execute()
+    all_requests = req_res.data or []
+    status_count = dict(Counter(r["status"]      for r in all_requests))
+    type_count   = dict(Counter(r["expert_type"] for r in all_requests))
+
+    this_month_new = sum(
+        1 for r in all_requests
+        if r.get("created_at", "") >= month_start
+    )
+    contracted_statuses = {"CONTRACTED", "IN_PROGRESS", "CONFIRMING", "SETTLED", "CLOSED"}
+    this_month_contracted = sum(
+        1 for r in all_requests
+        if r.get("status") in contracted_statuses and r.get("created_at", "") >= month_start
+    )
+
+    # 2. settlements
+    settle_res  = supabase.table("settlements").select("status, net_pay_amount, created_at").execute()
+    settlements = settle_res.data or []
+
+    pending     = [s for s in settlements if s.get("status") == "PENDING"]
+    pending_cnt = len(pending)
+    pending_amt = sum(s.get("net_pay_amount", 0) or 0 for s in pending)
+    this_month_paid = sum(
+        s.get("net_pay_amount", 0) or 0
+        for s in settlements
+        if s.get("status") == "PAID" and s.get("created_at", "") >= month_start
+    )
+
+    # 3. 어드민 처리 필요 항목
+    action_needed = {
+        "matching":    status_count.get("RECEIVED",   0),
+        "proposing":   status_count.get("MATCHING",   0),
+        "contracting": status_count.get("SELECTED",   0),
+        "paying":      status_count.get("CONTRACTED", 0),
+        "settling":    pending_cnt,
+    }
+
+    return {
+        "status": "success",
+        "data": {
+            "total_requests":  len(all_requests),
+            "by_status":       status_count,
+            "by_expert_type":  type_count,
+            "this_month": {
+                "new_requests":   this_month_new,
+                "contracted":     this_month_contracted,
+                "settled_amount": this_month_paid,
+            },
+            "action_needed": action_needed,
+            "settlement": {
+                "pending_count":  pending_cnt,
+                "pending_amount": pending_amt,
+            },
+        },
+    }
+
+
+@router.get("/admin/pipeline")
+def admin_pipeline(
+    expert_type: Optional[str] = Query(None),
+    page: int = Query(1,  ge=1),
+    size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(_require_admin),
+):
+    """
+    어드민: 진행 중 매칭 파이프라인 목록
+    GET /matching/admin/pipeline
+
+    CLOSED / CANCELLED / FAILED / DROPPED 제외한 전체.
+    updated_at 최신 순 정렬.
+    """
+    supabase        = get_supabase()
+    exclude_statuses = ["CLOSED", "CANCELLED", "FAILED", "DROPPED"]
+
+    q = supabase.table("matching_requests").select(
+        "id, expert_type, title, status, source, "
+        "budget_min, budget_max, service_regions, "
+        "created_at, updated_at, matched_at, selected_at",
+        count="exact",
+    ).not_.in_("status", exclude_statuses)
+
+    if expert_type:
+        q = q.eq("expert_type", expert_type)
+
+    offset = (page - 1) * size
+    res    = q.order("updated_at", desc=True).range(offset, offset + size - 1).execute()
+    total  = res.count or 0
+
+    return {
+        "status": "success",
+        "data": {
+            "items": res.data or [],
+            "total": total,
+            "page":  page,
+            "size":  size,
+            "total_pages": (total + size - 1) // size if total else 0,
+        },
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# price_commission CRUD — 별도 라우터로 분리
+# main.py에서: app.include_router(commission_router, prefix="/price-commission")
+# ════════════════════════════════════════════════════════════════════════
+
+commission_router = APIRouter()   # prefix: /price-commission (main.py 지정)
+
+
+class CommissionBody(BaseModel):
+    service_type: str
+    fee_rate:     float
+    period_min:   Optional[int]   = None
+    period_max:   Optional[int]   = None
+    amount_min:   Optional[int]   = None
+    amount_max:   Optional[int]   = None
+    description:  Optional[str]   = None
+    is_active:    bool            = True
+
+    @field_validator("service_type")
+    @classmethod
+    def check_service_type(cls, v: str) -> str:
+        if v not in {"EXPERT", "CONSULTING", "REPAIR"}:
+            raise ValueError("service_type은 EXPERT/CONSULTING/REPAIR 중 하나여야 합니다.")
+        return v
+
+    @field_validator("fee_rate")
+    @classmethod
+    def check_fee_rate(cls, v: float) -> float:
+        if not (0 < v <= 100):
+            raise ValueError("fee_rate는 0 초과 100 이하여야 합니다.")
+        return v
+
+
+class CalcBody(BaseModel):
+    service_type:    str
+    contract_amount: int
+    period_months:   Optional[int] = 1
+
+
+@commission_router.get("")
+def list_commissions(
+    service_type: Optional[str]  = Query(None),
+    is_active:    Optional[bool] = Query(None),
+    current_user: dict = Depends(_require_admin),
+):
+    """어드민: 수수료율 목록 — GET /price-commission"""
+    supabase = get_supabase()
+    q        = supabase.table("price_commission").select("*")
+    if service_type:          q = q.eq("service_type", service_type)
+    if is_active is not None: q = q.eq("is_active",    is_active)
+    res = q.order("service_type").order("period_min").order("amount_min").execute()
+    return {"status": "success", "data": {"items": res.data or []}}
+
+
+@commission_router.post("")
+def create_commission(
+    body:         CommissionBody,
+    current_user: dict = Depends(_require_admin),
+):
+    """수수료율 신규 등록 — POST /price-commission"""
+    supabase = get_supabase()
+    now      = _now_iso()
+    res      = supabase.table("price_commission").insert({
+        "service_type": body.service_type,
+        "fee_rate":     body.fee_rate,
+        "period_min":   body.period_min,
+        "period_max":   body.period_max,
+        "amount_min":   body.amount_min,
+        "amount_max":   body.amount_max,
+        "description":  body.description,
+        "is_active":    body.is_active,
+        "created_at":   now,
+        "updated_at":   now,
+    }).execute()
+    return {"status": "success", "data": res.data[0] if res.data else {}}
+
+
+@commission_router.post("/calculate")
+def calculate_commission(body: CalcBody):
+    """
+    수수료 미리 계산 (로그인 불필요 — 견적 확인용)
+    POST /price-commission/calculate
+    """
+    supabase    = get_supabase()
+    period_days = (body.period_months or 1) * 30
+
+    res = (
+        supabase.table("price_commission")
+        .select("fee_rate, period_min, period_max, amount_min, amount_max, description")
+        .eq("service_type", body.service_type)
+        .eq("is_active", True)
+        .execute()
+    )
+
+    fee_rate = 10.0
+    if res.data:
+        # 기간·금액 조건이 맞는 첫 번째 행 선택
+        matched = False
+        for row in res.data:
+            p_min = row.get("period_min") or 0
+            p_max = row.get("period_max") or 999_999
+            a_min = row.get("amount_min") or 0
+            a_max = row.get("amount_max") or 9_999_999_999
+            if p_min <= period_days <= p_max and a_min <= body.contract_amount <= a_max:
+                fee_rate = float(row["fee_rate"])
+                matched  = True
+                break
+        if not matched:
+            fee_rate = float(res.data[0]["fee_rate"])   # 기본율
+
+    tai_fee    = round(body.contract_amount * fee_rate / 100)
+    expert_amt = body.contract_amount - tai_fee
+
+    return {
+        "status": "success",
+        "data": {
+            "contract_amount": body.contract_amount,
+            "fee_rate":        fee_rate,
+            "tai_fee_amount":  tai_fee,
+            "expert_amount":   expert_amt,
+        },
+    }
+
+
+@commission_router.patch("/{commission_id}")
+def update_commission(
+    commission_id: str,
+    body:          CommissionBody,
+    current_user:  dict = Depends(_require_admin),
+):
+    """수수료율 수정 — PATCH /price-commission/{id}"""
+    supabase = get_supabase()
+    supabase.table("price_commission").update({
+        "service_type": body.service_type,
+        "fee_rate":     body.fee_rate,
+        "period_min":   body.period_min,
+        "period_max":   body.period_max,
+        "amount_min":   body.amount_min,
+        "amount_max":   body.amount_max,
+        "description":  body.description,
+        "is_active":    body.is_active,
+        "updated_at":   _now_iso(),
+    }).eq("id", commission_id).execute()
+    return {"status": "success", "message": "수수료율이 수정되었습니다."}
+
+
+@commission_router.delete("/{commission_id}")
+def deactivate_commission(
+    commission_id: str,
+    current_user:  dict = Depends(_require_admin),
+):
+    """수수료율 비활성화 (소프트 삭제) — DELETE /price-commission/{id}"""
+    supabase = get_supabase()
+    supabase.table("price_commission").update({
+        "is_active":  False,
+        "updated_at": _now_iso(),
+    }).eq("id", commission_id).execute()
+    return {"status": "success", "message": "비활성화 처리되었습니다."}

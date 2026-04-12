@@ -1,6 +1,10 @@
 """
-routers/settlements.py — v1.0.0
+routers/settlements.py — v1.1.0
 정산 시스템 — 최종 리포트 / 신청자 확인 / 정산 생성 / 이체 완료 / 원천세
+
+v1.1.0: 최종 리포트 Storage 업로드 URL 엔드포인트 추가
+  - POST /settlements/final-report-url   : Signed Upload URL 발급
+  - GET  /settlements/final-report/{id}/view : Signed 뷰 URL
 
 파이프라인:
   IN_PROGRESS
@@ -21,6 +25,7 @@ from __future__ import annotations
 import datetime
 import logging
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -30,6 +35,8 @@ from routers.auth import get_current_user
 
 log    = logging.getLogger(__name__)
 router = APIRouter()   # prefix는 main.py에서 지정
+
+FINAL_REPORT_BUCKET = "final-reports"   # 비공개, 50MB
 
 
 # ── 유틸 ──────────────────────────────────────────────────────────────
@@ -661,4 +668,122 @@ def hold_settlement(
     return {
         "status": "success",
         "data":   {"settlement_id": settlement_id, "status": "HOLD"},
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 최종 리포트 Storage 업로드 (v1.1.0)
+# 버킷: final-reports (비공개, 50MB)
+# 경로: {contract_id}/{uuid12}_{filename}
+# ════════════════════════════════════════════════════════════════════════
+
+class ReportUploadUrlBody(BaseModel):
+    contract_id: str
+    file_name:   str
+    file_size:   int   # bytes
+
+
+@router.post("/final-report-url")
+def get_report_upload_url(
+    body:         ReportUploadUrlBody,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    전문가: 최종 리포트 Signed Upload URL 발급
+    POST /settlements/final-report-url
+
+    업로드 순서:
+      1. 이 엔드포인트 → signed_url 발급
+      2. PUT signed_url에 파일 직접 업로드
+      3. POST /settlements/final-report 로 등록
+    """
+    MAX_SIZE = 50 * 1024 * 1024   # 50MB
+    if body.file_size > MAX_SIZE:
+        raise HTTPException(status_code=400, detail="파일 크기는 50MB 이하여야 합니다.")
+
+    supabase = get_supabase()
+    contract = (
+        supabase.table("matching_contracts")
+        .select("id, expert_user_id, status")
+        .eq("id", body.contract_id)
+        .limit(1)
+        .execute()
+    )
+    if not contract.data:
+        raise HTTPException(status_code=404, detail="계약서를 찾을 수 없습니다.")
+
+    c = contract.data[0]
+    if c.get("expert_user_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="담당 전문가만 리포트를 업로드할 수 있습니다.")
+    if c.get("status") not in ("ACTIVE", "IN_PROGRESS", "SIGNED", "CONTRACTED"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"현재 계약 상태({c['status']})에서는 리포트를 업로드할 수 없습니다.",
+        )
+
+    file_uuid = uuid4().hex[:12]
+    safe_name = f"{file_uuid}_{body.file_name}"
+    file_path = f"{body.contract_id}/{safe_name}"
+
+    try:
+        res = supabase.storage.from_(FINAL_REPORT_BUCKET).create_signed_upload_url(file_path)
+    except Exception as e:
+        log.error(f"[FINAL REPORT URL] Storage 오류: {e}")
+        raise HTTPException(status_code=500, detail="업로드 URL 발급 실패")
+
+    return {
+        "status": "success",
+        "data": {
+            "signed_url":  res["signedUrl"],
+            "path":        file_path,
+            "bucket":      FINAL_REPORT_BUCKET,
+            "contract_id": body.contract_id,
+        },
+    }
+
+
+@router.get("/final-report/{contract_id}/view")
+def view_final_report(
+    contract_id:  str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    최종 리포트 Signed 뷰 URL 발급 (24시간)
+    GET /settlements/final-report/{contract_id}/view
+
+    신청자 / 담당 전문가 / 어드민만 접근 가능.
+    """
+    supabase = get_supabase()
+    contract = (
+        supabase.table("matching_contracts")
+        .select("id, client_user_id, expert_user_id, final_report_url")
+        .eq("id", contract_id)
+        .limit(1)
+        .execute()
+    )
+    if not contract.data:
+        raise HTTPException(status_code=404, detail="계약서를 찾을 수 없습니다.")
+
+    c        = contract.data[0]
+    uid      = current_user["id"]
+    is_admin = current_user.get("role_code") == "001"
+    is_party = uid in (c.get("client_user_id"), c.get("expert_user_id"))
+
+    if not (is_admin or is_party):
+        raise HTTPException(status_code=403, detail="접근 권한이 없습니다.")
+    if not c.get("final_report_url"):
+        raise HTTPException(status_code=404, detail="최종 리포트가 아직 등록되지 않았습니다.")
+
+    try:
+        signed   = supabase.storage.from_(FINAL_REPORT_BUCKET).create_signed_url(
+            c["final_report_url"], expires_in=86400
+        )
+        view_url = signed.get("signedURL", "")
+    except Exception as e:
+        log.error(f"[FINAL REPORT VIEW] Signed URL 오류: {e}")
+        raise HTTPException(status_code=500, detail="파일 URL 생성 실패")
+
+    return {
+        "status": "success",
+        "data":   {"view_url": view_url, "expires_in": 86400},
     }

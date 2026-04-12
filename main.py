@@ -1,5 +1,6 @@
-# main.py — v5.17.0
-# v5.17.0: settlements 정산 시스템 (최종리포트/신청자확인/정산처리/이체/원천세)
+# main.py — v5.18.0
+# v5.18.0: 대시보드/파이프라인/price-commission CRUD + 리포트 업로드 URL
+# v5.17.0: settlements 정산 시스템
 # v5.16.0: contracts_engine 추가 (계약서 생성/웹뷰/수정/서명)
 # v5.15.1: matching 제안서 시스템 전체
 # v5.15.0: VBANK(가상계좌) 결제 구조 완성 (prepare/noti/status + matching_contracts 연동)
@@ -74,6 +75,7 @@ from routers.weather                 import router as weather_router
 from routers.juso                    import router as juso_router
 from routers.experts                 import router as experts_router             # v5.11.0
 from routers.matching                import router as matching_router             # v5.14.0
+from routers.matching                import commission_router                      # v5.18.0
 from routers.contracts_engine        import router as contracts_engine_router      # v5.16.0
 from routers.settlements             import router as settlements_router             # v5.17.0
 from routers.identity                import router as identity_router             # v5.12.0
@@ -104,7 +106,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.17.0"
+APP_VERSION = "5.18.0"
 
 
 @asynccontextmanager
@@ -217,6 +219,7 @@ app.include_router(weather_router)
 app.include_router(juso_router)
 app.include_router(experts_router,  prefix="/experts",  tags=["전문가"])   # v5.13.0
 app.include_router(matching_router,          prefix="/matching",          tags=["매칭"])          # v5.14.0
+app.include_router(commission_router,        prefix="/price-commission",  tags=["수수료설정"])      # v5.18.0
 app.include_router(contracts_engine_router,  prefix="/matching/contracts", tags=["계약서"])        # v5.16.0
 app.include_router(settlements_router,       prefix="/settlements",        tags=["정산"])           # v5.17.0
 app.include_router(identity_router, prefix="/identity", tags=["본인인증"])  # v5.12.0
