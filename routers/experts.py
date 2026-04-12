@@ -445,10 +445,14 @@ def admin_list(
     supabase = get_supabase()
     q = supabase.table("expert_applications").select(
         "id, user_id, expert_type, entity_type, status, "
-        "biz_name, biz_number, biz_ceo_name, contact_phone, "
+        "biz_name, biz_number, biz_ceo_name, biz_address, biz_zipcode, contact_phone, "
         "service_regions, expert_fields, work_types, "
-        "license_type, license_number, permit_type, permit_number, "
-        "reject_reason, approved_at, trust_level, created_at, updated_at",
+        "license_type, license_number, license_issued_at, license_issuer, "
+        "permit_type, permit_number, permit_doc_number, "
+        "career_years, career_summary, intro_text, "
+        "identity_verified, terms_agreed, legal_terms_agreed, "
+        "review_note, reject_reason, approved_at, trust_level, "
+        "created_at, updated_at",
         count="exact",
     )
     if status:      q = q.eq("status", status)
