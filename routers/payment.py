@@ -1,13 +1,20 @@
 """
-이니시스 INIStdPay 표준결제 라우터 — v2.0.0
+이니시스 INIStdPay 표준결제 라우터 — v3.0.0
 
-v2.0.0 (2026-04-09) — signature/verification 계산 방식 전면 수정
-  [FIX] STEP1 signature: "oid=값&price=값&timestamp=값" 형태로 SHA256
-  [FIX] STEP1 verification: "oid=값&price=값&signKey=값&timestamp=값" 형태로 SHA256
-  [FIX] STEP3 signature: "authToken=값&timestamp=값" 형태로 SHA256
-  [FIX] STEP3 verification: "authToken=값&signKey=값&timestamp=값" 형태로 SHA256
-  [FIX] use_chkfake="Y" 복구 (필수 파라미터)
-  [UI]  pricing 페이지 기간 선택 탭 제거 (1개월 고정)
+v3.0.0 (2026-04-12)
+  [FEAT] user_id 필수값 — 회원 미로그인 결제 차단
+  [FEAT] product_type 필수값 — payment_product_type 시스템코드 참조
+         (DIAGNOSIS / SAAS_CONSTRUCTION / SAAS_FACILITY / SAAS_BUILDING /
+          EXPERT / REPAIR / CONSULTING / INAPP)
+  [FEAT] SaaS 상품 결제 완료 시 expired_at 자동 계산 (paid_at + period_months)
+  [FEAT] pg_method 저장 — 이니시스 실제 결제수단 코드
+         (CARD / CHKCARD / BANK / VBANK / MOBILE / KAKAO / NAVER / SAMSUNG)
+  [FEAT] list_payments — product_type, plan_code, user_id, pg_method 필터 추가
+  [FEAT] list_payments — expired_at, product_type, user_id 필드 포함 반환
+  [FEAT] GET /payments/expiring — 만료 임박 SaaS 목록 (어드민 관제용)
+
+v2.0.0 (2026-04-09)
+  [FIX] signature/verification 계산 방식 전면 수정
 """
 from __future__ import annotations
 
@@ -17,14 +24,15 @@ import logging
 import os
 import time
 import urllib.parse
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import datetime, timezone, timedelta
+from dateutil.relativedelta import relativedelta
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 import requests as _requests
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from db.supabase_client import get_supabase
 
@@ -40,6 +48,15 @@ DEFAULT_RETURN_URL = "https://api.taieng.co.kr/payments/inicis/return"
 DEFAULT_CLOSE_URL  = "https://api.taieng.co.kr/payments/result?resultCode=CLOSE"
 FRONT_RETURN_URL   = "https://api.taieng.co.kr/payments/result"
 
+# SaaS 상품 — 결제 후 expired_at 계산 대상
+SAAS_PRODUCT_TYPES: List[str] = [
+    "SAAS_CONSTRUCTION",
+    "SAAS_FACILITY",
+    "SAAS_BUILDING",
+]
+
+
+# ── 유틸 ──────────────────────────────────────────────────────────────
 
 def _sha256(data: str) -> str:
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
@@ -53,6 +70,10 @@ def _make_order_id() -> str:
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+def _calc_expired_at(paid_at_iso: str, period_months: int) -> str:
+    """SaaS 만료일 계산: paid_at + period_months (월 단위)"""
+    base = datetime.fromisoformat(paid_at_iso.replace("Z", "+00:00"))
+    return (base + relativedelta(months=period_months)).isoformat()
 
 def _load_sign_key() -> str:
     env_key = os.getenv("INICIS_SIGN_KEY", "").strip()
@@ -94,11 +115,10 @@ def _rsa_sign_sha256(data: str, pem_bytes: bytes, password: str) -> Optional[str
         log.error(f"[INICIS] RSA 서명 실패: {e}")
         return None
 
-
 def _call_pay_auth(auth_token: str, auth_url: str, sign_key: str) -> Dict[str, Any]:
-    timestamp = _ts_ms()
-    sig_data   = f"authToken={auth_token}&timestamp={timestamp}"
-    veri_data  = f"authToken={auth_token}&signKey={sign_key}&timestamp={timestamp}"
+    timestamp    = _ts_ms()
+    sig_data     = f"authToken={auth_token}&timestamp={timestamp}"
+    veri_data    = f"authToken={auth_token}&signKey={sign_key}&timestamp={timestamp}"
     signature    = _sha256(sig_data)
     verification = _sha256(veri_data)
 
@@ -128,30 +148,58 @@ def _call_pay_auth(auth_token: str, auth_url: str, sign_key: str) -> Dict[str, A
         raise
 
 
+# ── Pydantic 모델 ─────────────────────────────────────────────────────
+
 class PrepareBody(BaseModel):
+    # ── 필수값 (v3.0.0) ──
+    user_id:       str                  # 결제 회원 ID (필수 — 미로그인 결제 불가)
+    product_type:  str                  # payment_product_type 시스템코드 (필수)
+    amount:        int                  # 결제금액 (원)
+    goodname:      str                  # 상품명
+
+    # ── 선택값 ──
     company_id:    Optional[str] = None
     contract_id:   Optional[str] = None
     quote_id:      Optional[str] = None
-    amount:        int
-    goodname:      str
+    plan_code:     Optional[str] = None  # contract_plan 시스템코드 (SaaS용)
+    period_months: Optional[int] = None  # 구독기간 개월 수 (SaaS용)
+    payment_type:  Optional[str] = "CARD"  # 이니시스 gopaymethod
     buyername:     Optional[str] = "고객"
     buyertel:      Optional[str] = "00000000000"
     buyeremail:    Optional[str] = None
     return_url:    Optional[str] = None
     close_url:     Optional[str] = None
-    plan_code:     Optional[str] = None
-    period_months: Optional[int] = None
-    payment_type:  Optional[str] = "CARD"
-    created_by:    Optional[str] = None
+
+    @field_validator("user_id")
+    @classmethod
+    def user_id_required(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("user_id는 필수값입니다. 로그인 후 결제해주세요.")
+        return v.strip()
+
+    @field_validator("product_type")
+    @classmethod
+    def product_type_valid(cls, v: str) -> str:
+        allowed = {
+            "DIAGNOSIS", "SAAS_CONSTRUCTION", "SAAS_FACILITY", "SAAS_BUILDING",
+            "EXPERT", "REPAIR", "CONSULTING", "INAPP",
+        }
+        if v not in allowed:
+            raise ValueError(f"product_type 값이 유효하지 않습니다. 허용: {allowed}")
+        return v
+
 
 class ManualConfirmBody(BaseModel):
     payment_id:  str
     contract_id: str
 
+
 class CancelBody(BaseModel):
     reason:       Optional[str] = "사용자 요청"
     cancelled_by: Optional[str] = None
 
+
+# ── HTML 페이지 (변경 없음) ───────────────────────────────────────────
 
 _PRICING_HTML = """<!doctype html>
 <html lang="ko">
@@ -167,14 +215,11 @@ _PRICING_HTML = """<!doctype html>
     body { background: #f8fafc; }
     .hero { background: linear-gradient(135deg,#1a1f36 0%,#0d6efd 60%,#0a58ca 100%); color:#fff; padding:3.5rem 0 3rem; text-align:center; }
     .hero h1 { font-size:2.2rem; font-weight:800; margin-bottom:.5rem; }
-    .hero p  { opacity:.85; font-size:1rem; }
     .plan-card { border-radius:1.25rem; border:2px solid #dee2e6; background:#fff; box-shadow:0 6px 30px rgba(0,0,0,.07); transition:transform .18s,border-color .18s; cursor:pointer; overflow:hidden; }
     .plan-card:hover { transform:translateY(-4px); border-color:#0d6efd; }
     .plan-card.selected { border-color:#0d6efd; box-shadow:0 0 0 3px rgba(13,110,253,.18); }
     .plan-card .plan-header { padding:1.75rem 1.5rem 1.25rem; border-bottom:1px solid #f0f0f0; }
     .plan-card.premium .plan-header { background:linear-gradient(135deg,#0d6efd 0%,#6610f2 100%); color:#fff; }
-    .plan-card.premium .plan-name,.plan-card.premium .plan-price { color:#fff; }
-    .plan-card.premium .plan-desc { color:rgba(255,255,255,.8); }
     .plan-name { font-size:1.4rem; font-weight:800; }
     .plan-badge { font-size:.72rem; padding:.25em .65em; border-radius:.5em; background:rgba(255,255,255,.25); color:#fff; vertical-align:middle; margin-left:.4rem; }
     .plan-price { font-size:2.2rem; font-weight:800; margin:.75rem 0 .25rem; }
@@ -182,14 +227,10 @@ _PRICING_HTML = """<!doctype html>
     .plan-features { padding:1.25rem 1.5rem 1.5rem; }
     .plan-features li { font-size:.88rem; padding:.3rem 0; border-bottom:1px solid #f5f5f5; display:flex; align-items:center; gap:.5rem; }
     .plan-features li:last-child { border-bottom:none; }
-    .plan-features li i { color:#0d6efd; flex-shrink:0; }
-    .plan-features.prem-f li i { color:#6610f2; }
-    .btn-pay { background:linear-gradient(90deg,#0d6efd,#6610f2); color:#fff; border:none; border-radius:.75rem; padding:.85rem 2rem; font-size:1rem; font-weight:700; width:100%; cursor:pointer; transition:opacity .15s; }
-    .btn-pay:hover { opacity:.9; } .btn-pay:disabled { opacity:.55; cursor:not-allowed; }
+    .btn-pay { background:linear-gradient(90deg,#0d6efd,#6610f2); color:#fff; border:none; border-radius:.75rem; padding:.85rem 2rem; font-size:1rem; font-weight:700; width:100%; cursor:pointer; }
+    .btn-pay:disabled { opacity:.55; cursor:not-allowed; }
     .select-indicator { width:22px; height:22px; border-radius:50%; border:2px solid #dee2e6; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
     .plan-card.selected .select-indicator { background:#0d6efd; border-color:#0d6efd; color:#fff; }
-    #inicisModalDiv, #inicisModalDiv *, .inipay_modal, .inipay_modal * { opacity:1 !important; }
-    @media(max-width:576px){.hero h1{font-size:1.6rem;}}
   </style>
 </head>
 <body>
@@ -231,7 +272,7 @@ _PRICING_HTML = """<!doctype html>
           </div>
           <div class="plan-price" id="price-premium">&#8361;149,000</div>
         </div>
-        <div class="plan-features prem-f">
+        <div class="plan-features" style="--ti-color:#6610f2">
           <ul class="list-unstyled mb-0">
             <li><i class="ti ti-check" style="color:#6610f2"></i>베이직 모든 기능 포함</li>
             <li><i class="ti ti-check" style="color:#6610f2"></i>건설현장 TBM·위험성평가</li>
@@ -257,7 +298,6 @@ _PRICING_HTML = """<!doctype html>
     <div class="text-center mt-2"><small class="text-body-secondary"><i class="ti ti-lock me-1"></i>이니시스 안전결제 · SSL 암호화</small></div>
   </div>
 </div>
-
 <form id="inicisForm" method="POST" accept-charset="euc-kr" style="display:none">
   <input type="hidden" name="version" value="1.0" />
   <input type="hidden" name="gopaymethod" value="Card" />
@@ -279,7 +319,6 @@ _PRICING_HTML = """<!doctype html>
   <input type="hidden" name="langtype" value="KO" />
   <input type="hidden" name="acceptmethod" value="CARDONLY:CARDPOINT:centerCd(Y)" />
 </form>
-
 <script src="https://stdpay.inicis.com/stdjs/INIStdPay.js" charset="utf-8"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
@@ -288,7 +327,6 @@ var API='https://api.taieng.co.kr';
 var BASE={basic:79000,premium:149000};
 var PNAME={basic:'TAI Safe 베이직',premium:'TAI Safe 프리미엄'};
 var _plan='basic';
-
 function selectPlan(p){
   _plan=p;
   ['basic','premium'].forEach(function(x){
@@ -306,16 +344,31 @@ function updatePrices(){
   document.getElementById('summaryPrice').innerHTML='&#8361;'+BASE[_plan].toLocaleString();
 }
 function startPayment(){
+  var token=localStorage.getItem('access_token')||'';
+  var userId=localStorage.getItem('user_id')||'';
+  if(!token||!userId){alert('로그인 후 결제해주세요.');return;}
   var btn=document.getElementById('btnPay'),sp=document.getElementById('paySpinner'),icon=document.getElementById('payIcon');
   if(btn.disabled) return;
   btn.disabled=true; sp.classList.remove('d-none'); icon.classList.add('d-none');
   var total=BASE[_plan];
   var goodname=PNAME[_plan];
-  var token=localStorage.getItem('access_token')||'';
   var companyId=localStorage.getItem('company_id')||'';
   var RETURN_URL=API+'/payments/inicis/return';
   var CLOSE_URL=API+'/payments/result?resultCode=CLOSE';
-  var payload=JSON.stringify({company_id:companyId||undefined,amount:total,goodname:goodname,buyername:'고객',buyertel:'00000000000',plan_code:_plan.toUpperCase(),period_months:1,payment_type:'CARD',return_url:RETURN_URL,close_url:CLOSE_URL});
+  var payload=JSON.stringify({
+    user_id:userId,
+    product_type:'SAAS_FACILITY',
+    company_id:companyId||undefined,
+    amount:total,
+    goodname:goodname,
+    buyername:'고객',
+    buyertel:'00000000000',
+    plan_code:_plan.toUpperCase(),
+    period_months:1,
+    payment_type:'CARD',
+    return_url:RETURN_URL,
+    close_url:CLOSE_URL
+  });
   var xhr=new XMLHttpRequest();
   xhr.open('POST',API+'/payments/inicis/prepare',true);
   xhr.setRequestHeader('Content-Type','application/json');
@@ -366,9 +419,8 @@ _RESULT_HTML = """<!doctype html>
   <title>결제 결과 | TAI Safe</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
   <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css" rel="stylesheet" />
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <style>
-    *{font-family:'Noto Sans KR',sans-serif;}
+    *{font-family:sans-serif;}
     body{background:#f8fafc;min-height:100vh;display:flex;align-items:center;justify-content:center;}
     .result-card{background:#fff;border-radius:1.5rem;box-shadow:0 8px 40px rgba(0,0,0,.1);max-width:480px;width:100%;padding:3rem 2.5rem;text-align:center;}
     .icon-wrap{width:96px;height:96px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:2.8rem;margin:0 auto 1.75rem;}
@@ -377,7 +429,6 @@ _RESULT_HTML = """<!doctype html>
     .detail-table{background:#f8fafc;border-radius:.75rem;padding:1rem 1.25rem;text-align:left;font-size:.88rem;}
     .detail-row{display:flex;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid #f0f0f0;}
     .detail-row:last-child{border-bottom:none;}
-    .detail-label{color:#6c757d;}.detail-value{font-weight:600;}
     .btn-action{border-radius:.75rem;padding:.75rem 1.5rem;font-size:.95rem;font-weight:700;}
     .countdown{font-size:.82rem;color:#adb5bd;margin-top:.5rem;}
   </style>
@@ -397,15 +448,16 @@ function renderOk(p){
   var rc=document.getElementById('rc'),sec=5,ti;
   rc.innerHTML='<div class="icon-wrap success"><i class="ti tabler-circle-check"></i></div>'
     +'<h4 class="fw-bold mb-2">결제가 완료됐습니다.</h4>'
-    +'<p class="text-body-secondary mb-4">법령진단을 시작합니다.</p>'
+    +'<p class="text-body-secondary mb-4">서비스를 시작합니다.</p>'
     +'<div class="detail-table mb-4">'
-    +'<div class="detail-row"><span class="detail-label">상품명</span><span class="detail-value">'+(p.goodname||'TAI Safe')+'</span></div>'
-    +'<div class="detail-row"><span class="detail-label">결제금액</span><span class="detail-value">'+fmt(p.price)+'</span></div>'
-    +'<div class="detail-row"><span class="detail-label">결제수단</span><span class="detail-value">'+(p.paymethod||'카드')+'</span></div>'
-    +(p.applnum?'<div class="detail-row"><span class="detail-label">승인번호</span><span class="detail-value">'+p.applnum+'</span></div>':'')
-    +'<div class="detail-row"><span class="detail-label">주문번호</span><span class="detail-value" style="font-size:.8rem;word-break:break-all">'+(p.oid||'-')+'</span></div>'
+    +'<div class="detail-row"><span style="color:#6c757d">상품명</span><span style="font-weight:600">'+(p.goodname||'TAI Safe')+'</span></div>'
+    +'<div class="detail-row"><span style="color:#6c757d">결제금액</span><span style="font-weight:600">'+fmt(p.price)+'</span></div>'
+    +'<div class="detail-row"><span style="color:#6c757d">결제수단</span><span style="font-weight:600">'+(p.paymethod||'카드')+'</span></div>'
+    +(p.applnum?'<div class="detail-row"><span style="color:#6c757d">승인번호</span><span style="font-weight:600">'+p.applnum+'</span></div>':'')
+    +(p.expired_at?'<div class="detail-row"><span style="color:#6c757d">서비스 만료일</span><span style="font-weight:600">'+p.expired_at.slice(0,10)+'</span></div>':'')
+    +'<div class="detail-row"><span style="color:#6c757d">주문번호</span><span style="font-weight:600;font-size:.8rem;word-break:break-all">'+(p.oid||'-')+'</span></div>'
     +'</div>'
-    +'<button class="btn btn-primary btn-action w-100" onclick="goDiagnosis()">법령진단 시작하기 →</button>'
+    +'<button class="btn btn-primary btn-action w-100" onclick="goDiagnosis()">서비스 시작하기 →</button>'
     +'<div class="countdown" id="cd">'+sec+'초 후 자동 이동</div>';
   ti=setInterval(function(){sec--;var e=document.getElementById('cd');if(e)e.textContent=sec+'초 후 자동 이동';if(sec<=0){clearInterval(ti);goDiagnosis();}},1000);
 }
@@ -415,8 +467,8 @@ function renderFail(msg,oid){
     +'<h4 class="fw-bold mb-2">결제에 실패했습니다.</h4>'
     +'<p class="text-body-secondary mb-3">다시 시도해 주세요.</p>'
     +'<div class="detail-table mb-4">'
-    +'<div class="detail-row"><span class="detail-label">사유</span><span class="detail-value text-danger">'+(msg||'오류')+'</span></div>'
-    +(oid?'<div class="detail-row"><span class="detail-label">주문번호</span><span class="detail-value" style="font-size:.8rem">'+oid+'</span></div>':'')
+    +'<div class="detail-row"><span style="color:#6c757d">사유</span><span style="color:#dc3545;font-weight:600">'+(msg||'오류')+'</span></div>'
+    +(oid?'<div class="detail-row"><span style="color:#6c757d">주문번호</span><span style="font-size:.8rem">'+oid+'</span></div>':'')
     +'</div>'
     +'<div class="d-flex gap-2">'
     +'<a href="https://api.taieng.co.kr/payments/pricing" class="btn btn-primary btn-action flex-grow-1">다시 시도</a>'
@@ -434,6 +486,8 @@ function renderFail(msg,oid){
 </html>"""
 
 
+# ── 라우터 ────────────────────────────────────────────────────────────
+
 @router.get("/pricing", response_class=HTMLResponse, include_in_schema=True)
 def payment_pricing_page():
     return HTMLResponse(content=_PRICING_HTML, status_code=200)
@@ -446,26 +500,39 @@ def payment_result_page():
 
 @router.post("/inicis/prepare")
 def inicis_prepare(body: PrepareBody):
+    """
+    결제 준비 — STEP1
+    - user_id, product_type 필수
+    - SaaS 상품은 period_months 필수
+    """
+    # SaaS 상품이면 period_months 필수 검증
+    if body.product_type in SAAS_PRODUCT_TYPES and not body.period_months:
+        raise HTTPException(
+            status_code=400,
+            detail=f"SaaS 상품({body.product_type})은 period_months(구독기간)가 필수입니다."
+        )
+
     supabase  = get_supabase()
     sign_key  = _load_sign_key()
     order_id  = _make_order_id()
     timestamp = _ts_ms()
     price_str = str(body.amount)
-
-    mKey = _sha256(sign_key)
+    mKey      = _sha256(sign_key)
 
     sig_data   = f"oid={order_id}&price={price_str}&timestamp={timestamp}"
     veri_data  = f"oid={order_id}&price={price_str}&signKey={sign_key}&timestamp={timestamp}"
     signature    = _sha256(sig_data)
     verification = _sha256(veri_data)
 
-    log.info(f"[INICIS STEP1] oid={order_id} price={price_str} sig_data='{sig_data}'")
+    log.info(f"[INICIS STEP1] oid={order_id} price={price_str} user_id={body.user_id} product_type={body.product_type}")
 
     supply_amount = round(body.amount / 1.1)
     vat_amount    = body.amount - supply_amount
     now = _now_iso()
 
     row: dict = {
+        "user_id":         body.user_id,          # v3.0.0 — 필수
+        "product_type":    body.product_type,      # v3.0.0 — 필수
         "payment_method":  "INICIS",
         "payment_type":    body.payment_type or "CARD",
         "supply_amount":   supply_amount,
@@ -478,18 +545,15 @@ def inicis_prepare(body: PrepareBody):
     }
     if body.company_id:    row["company_id"]    = body.company_id
     if body.contract_id:   row["contract_id"]   = body.contract_id
-    if body.quote_id:      row["quote_id"]      = body.quote_id
-    if body.plan_code:     row["plan_code"]     = body.plan_code
-    if body.period_months: row["period_months"] = body.period_months
-    if body.created_by:    row["created_by"]    = body.created_by
+    if body.quote_id:      row["quote_id"]       = body.quote_id
+    if body.plan_code:     row["plan_code"]      = body.plan_code
+    if body.period_months: row["period_months"]  = body.period_months
 
     res = supabase.table("payments").insert(row).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="결제 레코드 생성 실패")
 
     payment_id = res.data[0]["id"]
-    return_url = DEFAULT_RETURN_URL
-    close_url  = DEFAULT_CLOSE_URL
 
     return {
         "status": "success",
@@ -507,8 +571,8 @@ def inicis_prepare(body: PrepareBody):
             "signature":    signature,
             "verification": verification,
             "use_chkfake":  "Y",
-            "returnUrl":    return_url,
-            "closeUrl":     close_url,
+            "returnUrl":    DEFAULT_RETURN_URL,
+            "closeUrl":     DEFAULT_CLOSE_URL,
             "charset":      "UTF-8",
             "gopaymethod":  "Card",
         },
@@ -517,6 +581,7 @@ def inicis_prepare(body: PrepareBody):
 
 @router.post("/inicis/return", include_in_schema=True)
 async def inicis_return(request: Request):
+    """결제 인증 콜백 — STEP2→STEP3"""
     try:
         form = await request.form()
         data: Dict[str, Any] = dict(form)
@@ -526,16 +591,16 @@ async def inicis_return(request: Request):
         except Exception:
             return RedirectResponse(f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=파싱실패", status_code=302)
 
-    result_code  = data.get("resultCode", "")
-    auth_token   = data.get("authToken", "")
-    auth_url     = data.get("authUrl", "")
-    idc_name     = data.get("idc_name", "")
-    order_id     = data.get("orderNumber") or data.get("oid", "")
-    goodname     = data.get("goodname", "TAI Safe")
-    price        = data.get("price", "")
-    paymethod    = data.get("paymethod", "카드")
+    result_code = data.get("resultCode", "")
+    auth_token  = data.get("authToken", "")
+    auth_url    = data.get("authUrl", "")
+    idc_name    = data.get("idc_name", "")
+    order_id    = data.get("orderNumber") or data.get("oid", "")
+    goodname    = data.get("goodname", "TAI Safe")
+    price       = data.get("price", "")
+    paymethod   = data.get("paymethod", "카드")  # 이니시스 결제수단 코드
 
-    log.info(f"[INICIS STEP2] resultCode={result_code} oid={order_id} idc={idc_name}")
+    log.info(f"[INICIS STEP2] resultCode={result_code} oid={order_id} paymethod={paymethod}")
 
     supabase = get_supabase()
 
@@ -553,6 +618,8 @@ async def inicis_return(request: Request):
     payment     = pay_res.data[0]
     payment_id  = payment["id"]
     contract_id = payment.get("contract_id")
+    product_type = payment.get("product_type", "")
+    period_months = payment.get("period_months")
 
     if not auth_url:
         return RedirectResponse(f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=authUrl없음&oid={order_id}", status_code=302)
@@ -577,25 +644,42 @@ async def inicis_return(request: Request):
     if is_ok:
         now       = _now_iso()
         apply_num = auth_result.get("applNum", "")
-        supabase.table("payments").update({
+
+        # 이니시스 실제 결제수단 코드 (payMethod 필드)
+        pg_method = auth_result.get("payMethod", paymethod) or paymethod
+
+        # SaaS 상품: expired_at 계산
+        expired_at = None
+        if product_type in SAAS_PRODUCT_TYPES and period_months:
+            expired_at = _calc_expired_at(now, period_months)
+
+        update_row: dict = {
             "status_code":      "SUCCESS",
+            "pg_method":        pg_method,           # v3.0.0 — 실제 결제수단
             "inicis_tid":       auth_result.get("tid", ""),
             "inicis_auth_code": apply_num,
             "inicis_card_name": auth_result.get("P_FN_NM") or auth_result.get("CARD_Num", ""),
             "inicis_raw":       auth_result,
             "paid_at":          now,
             "updated_at":       now,
-        }).eq("id", payment_id).execute()
+        }
+        if expired_at:
+            update_row["expired_at"] = expired_at  # v3.0.0 — SaaS 만료일
+
+        supabase.table("payments").update(update_row).eq("id", payment_id).execute()
+
         if contract_id:
             supabase.table("contracts").update({"is_active": True, "updated_at": now}).eq("id", contract_id).execute()
+
         qs = urllib.parse.urlencode({
-            "resultCode": "00",
-            "oid":        order_id,
-            "goodname":   auth_result.get("goodName", goodname),
-            "price":      auth_result.get("TotPrice", price),
-            "paymethod":  auth_result.get("payMethod", paymethod),
-            "applnum":    apply_num,
-            "payment_id": payment_id,
+            "resultCode":  "00",
+            "oid":         order_id,
+            "goodname":    auth_result.get("goodName", goodname),
+            "price":       auth_result.get("TotPrice", price),
+            "paymethod":   pg_method,
+            "applnum":     apply_num,
+            "payment_id":  payment_id,
+            "expired_at":  expired_at or "",
         })
         return RedirectResponse(f"{FRONT_RETURN_URL}?{qs}", status_code=302)
     else:
@@ -612,6 +696,7 @@ async def inicis_return(request: Request):
 
 @router.post("/inicis/noti", include_in_schema=True)
 async def inicis_noti(request: Request):
+    """이니시스 서버 노티 — STEP2 백업"""
     try:
         form = await request.form()
         data: Dict[str, Any] = dict(form)
@@ -624,18 +709,22 @@ async def inicis_noti(request: Request):
     auth_token = data.get("authToken", "")
     auth_url   = data.get("authUrl", "")
     order_id   = data.get("orderNumber") or data.get("oid", "")
+    paymethod  = data.get("paymethod", "")
 
     supabase = get_supabase()
     sign_key = _load_sign_key()
 
-    pay_res = supabase.table("payments").select("id, status_code, contract_id") \
-        .eq("inicis_order_id", order_id).limit(1).execute()
+    pay_res = supabase.table("payments").select(
+        "id, status_code, contract_id, product_type, period_months"
+    ).eq("inicis_order_id", order_id).limit(1).execute()
     if not pay_res.data:
         return "OK"
 
-    payment     = pay_res.data[0]
-    payment_id  = payment["id"]
-    contract_id = payment.get("contract_id")
+    payment      = pay_res.data[0]
+    payment_id   = payment["id"]
+    contract_id  = payment.get("contract_id")
+    product_type = payment.get("product_type", "")
+    period_months = payment.get("period_months")
 
     if payment["status_code"] == "SUCCESS":
         return "OK"
@@ -649,15 +738,25 @@ async def inicis_noti(request: Request):
 
     if auth_result.get("resultCode") == "0000":
         now = _now_iso()
-        supabase.table("payments").update({
+        pg_method  = auth_result.get("payMethod", paymethod) or paymethod
+        expired_at = None
+        if product_type in SAAS_PRODUCT_TYPES and period_months:
+            expired_at = _calc_expired_at(now, period_months)
+
+        update_row = {
             "status_code":      "SUCCESS",
+            "pg_method":        pg_method,
             "inicis_tid":       auth_result.get("tid", ""),
             "inicis_auth_code": auth_result.get("applNum", ""),
             "inicis_card_name": auth_result.get("P_FN_NM", ""),
             "inicis_raw":       auth_result,
             "paid_at":          now,
             "updated_at":       now,
-        }).eq("id", payment_id).execute()
+        }
+        if expired_at:
+            update_row["expired_at"] = expired_at
+
+        supabase.table("payments").update(update_row).eq("id", payment_id).execute()
         if contract_id:
             supabase.table("contracts").update({"is_active": True, "updated_at": now}).eq("id", contract_id).execute()
     return "OK"
@@ -665,65 +764,153 @@ async def inicis_noti(request: Request):
 
 @router.get("")
 def list_payments(
+    user_id:      Optional[str] = Query(None),
     company_id:   Optional[str] = Query(None),
     contract_id:  Optional[str] = Query(None),
     status_code:  Optional[str] = Query(None),
+    product_type: Optional[str] = Query(None),
+    plan_code:    Optional[str] = Query(None),
+    pg_method:    Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
+    """결제 목록 조회 (어드민용) — v3.0.0 필드 포함"""
     supabase = get_supabase()
     q = supabase.table("payments").select(
-        "id, company_id, contract_id, payment_method, payment_type, "
-        "plan_code, period_months, total_amount, inicis_order_id, "
-        "inicis_tid, inicis_card_name, status_code, paid_at, created_at, memo",
+        "id, user_id, company_id, contract_id, "
+        "product_type, payment_method, pg_method, payment_type, "
+        "plan_code, period_months, "
+        "supply_amount, vat_amount, total_amount, "
+        "inicis_order_id, inicis_tid, inicis_auth_code, inicis_card_name, "
+        "status_code, paid_at, expired_at, "
+        "cancelled_at, cancel_reason, fail_reason, memo, "
+        "created_at, updated_at",
         count="exact"
     )
-    if company_id:  q = q.eq("company_id",  company_id)
-    if contract_id: q = q.eq("contract_id", contract_id)
-    if status_code: q = q.eq("status_code", status_code)
+    if user_id:      q = q.eq("user_id",      user_id)
+    if company_id:   q = q.eq("company_id",   company_id)
+    if contract_id:  q = q.eq("contract_id",  contract_id)
+    if status_code:  q = q.eq("status_code",  status_code)
+    if product_type: q = q.eq("product_type", product_type)
+    if plan_code:    q = q.eq("plan_code",     plan_code)
+    if pg_method:    q = q.eq("pg_method",     pg_method)
+
     offset = (page - 1) * size
     res    = q.order("created_at", desc=True).range(offset, offset + size - 1).execute()
     total  = res.count or 0
     return {
         "status": "success",
-        "data": {"items": res.data or [], "total": total, "page": page, "size": size,
-                 "total_pages": (total + size - 1) // size if total else 0},
+        "data": {
+            "items":       res.data or [],
+            "total":       total,
+            "page":        page,
+            "size":        size,
+            "total_pages": (total + size - 1) // size if total else 0,
+        },
+    }
+
+
+@router.get("/expiring")
+def list_expiring_payments(
+    days: int = Query(30, ge=1, le=90, description="만료 임박 기준 일수"),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+):
+    """
+    SaaS 만료 임박 목록 — 어드민 관제용
+    expired_at이 오늘 ~ days일 이내인 SUCCESS 결제
+    """
+    supabase = get_supabase()
+    now = datetime.now(timezone.utc)
+    deadline = (now + timedelta(days=days)).isoformat()
+
+    q = supabase.table("payments").select(
+        "id, user_id, company_id, product_type, plan_code, period_months, "
+        "total_amount, status_code, paid_at, expired_at, inicis_order_id",
+        count="exact"
+    ).eq("status_code", "SUCCESS").lte("expired_at", deadline).gte("expired_at", now.isoformat())
+
+    offset = (page - 1) * size
+    res    = q.order("expired_at", desc=False).range(offset, offset + size - 1).execute()
+    total  = res.count or 0
+    return {
+        "status": "success",
+        "data": {
+            "items": res.data or [],
+            "total": total,
+            "page":  page,
+            "size":  size,
+            "days_threshold": days,
+        },
     }
 
 
 @router.post("/manual/confirm")
 def manual_confirm(body: ManualConfirmBody):
+    """수동 활성화 — 계좌이체 입금 확인 또는 webhook 실패 복구"""
     supabase = get_supabase()
     now = _now_iso()
-    pay_res = supabase.table("payments").select("id, status_code").eq("id", body.payment_id).limit(1).execute()
+    pay_res = supabase.table("payments").select(
+        "id, status_code, product_type, period_months"
+    ).eq("id", body.payment_id).limit(1).execute()
     if not pay_res.data:
         raise HTTPException(status_code=404, detail="결제 레코드를 찾을 수 없습니다.")
-    if pay_res.data[0]["status_code"] == "SUCCESS":
+
+    payment = pay_res.data[0]
+    if payment["status_code"] == "SUCCESS":
         raise HTTPException(status_code=409, detail="이미 성공 처리된 결제입니다.")
-    supabase.table("payments").update({
-        "status_code": "SUCCESS", "paid_at": now, "memo": "계좌이체 수동 확인", "updated_at": now,
-    }).eq("id", body.payment_id).execute()
+
+    update_row: dict = {
+        "status_code": "SUCCESS",
+        "paid_at":     now,
+        "memo":        "수동 활성화 처리",
+        "updated_at":  now,
+    }
+    # SaaS 상품이면 expired_at 계산
+    product_type  = payment.get("product_type", "")
+    period_months = payment.get("period_months")
+    if product_type in SAAS_PRODUCT_TYPES and period_months:
+        update_row["expired_at"] = _calc_expired_at(now, period_months)
+
+    supabase.table("payments").update(update_row).eq("id", body.payment_id).execute()
     supabase.table("contracts").update({"is_active": True, "updated_at": now}).eq("id", body.contract_id).execute()
-    return {"status": "success", "message": "수동 활성화 완료",
-            "data": {"payment_id": body.payment_id, "contract_id": body.contract_id}}
+
+    return {
+        "status":  "success",
+        "message": "수동 활성화 완료",
+        "data":    {"payment_id": body.payment_id, "contract_id": body.contract_id},
+    }
 
 
 @router.post("/{payment_id}/cancel")
 def cancel_payment(payment_id: str, body: CancelBody):
+    """결제 취소 — 이니시스 실결제 취소는 별도 PG 취소 API 연동 필요"""
     supabase = get_supabase()
     now = _now_iso()
-    pay_res = supabase.table("payments").select("id, status_code, contract_id").eq("id", payment_id).limit(1).execute()
+    pay_res = supabase.table("payments").select(
+        "id, status_code, contract_id"
+    ).eq("id", payment_id).limit(1).execute()
     if not pay_res.data:
         raise HTTPException(status_code=404, detail="결제 레코드를 찾을 수 없습니다.")
+
     payment = pay_res.data[0]
     if payment["status_code"] == "CANCELLED":
         raise HTTPException(status_code=409, detail="이미 취소된 결제입니다.")
+
     supabase.table("payments").update({
-        "status_code": "CANCELLED", "cancel_reason": body.reason,
-        "cancelled_at": now, "updated_at": now,
+        "status_code":  "CANCELLED",
+        "cancel_reason": body.reason,
+        "cancelled_at":  now,
+        "expired_at":    None,   # 취소 시 만료일 초기화
+        "updated_at":    now,
     }).eq("id", payment_id).execute()
+
     contract_id = payment.get("contract_id")
     if contract_id:
         supabase.table("contracts").update({"is_active": False, "updated_at": now}).eq("id", contract_id).execute()
-    return {"status": "success", "message": "취소 처리되었습니다.",
-            "data": {"payment_id": payment_id, "status_code": "CANCELLED"}}
+
+    return {
+        "status":  "success",
+        "message": "취소 처리되었습니다.",
+        "data":    {"payment_id": payment_id, "status_code": "CANCELLED"},
+    }
