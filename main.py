@@ -1,4 +1,5 @@
-# main.py — v5.11.0
+# main.py — v5.12.0
+# v5.12.0: identity API 추가 (이니시스 본인인증 — 준비/콜백/어드민)
 # v5.11.0: experts API 추가 (전문가 등록 신청 / 현황 / 어드민 승인)
 # v5.10.0: juso API 추가
 # v5.9.0:  weather API 추가
@@ -64,6 +65,7 @@ from routers.precedent_api           import router as precedent_router
 from routers.weather                 import router as weather_router
 from routers.juso                    import router as juso_router
 from routers.experts                 import router as experts_router             # v5.11.0
+from routers.identity                import router as identity_router             # v5.12.0
 from routers.internal_api_registry   import router as internal_api_registry_router
 from routers.report_api_registry     import router as report_api_registry_router
 from routers.construction            import router as construction_router
@@ -91,7 +93,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.11.0"
+APP_VERSION = "5.12.0"
 
 
 @asynccontextmanager
@@ -203,6 +205,7 @@ app.include_router(precedent_router)
 app.include_router(weather_router)
 app.include_router(juso_router)
 app.include_router(experts_router)                   # v5.11.0
+app.include_router(identity_router, prefix="/identity", tags=["본인인증"])  # v5.12.0
 app.include_router(internal_api_registry_router)
 app.include_router(report_api_registry_router)
 app.include_router(construction_router, prefix="/construction", tags=["건설안전"])
