@@ -1,6 +1,11 @@
 """
-routers/experts.py — v2.0.0
-전문가 등록 신청 / 현황 / 어드민 승인·반려 / 활성 테이블 자동 적재
+routers/experts.py — v2.1.0
+전문가 등록 신청 / 현황 / 어드민 승인·반려 / 활성 테이블 자동 적재 / Storage 서류 업로드
+
+v2.1.0: Storage 서류 업로드 연동 추가
+  - POST /experts/upload-url             : Signed Upload URL 발급
+  - POST /experts/attach                 : 업로드 완료 후 attachments 등록
+  - GET  /experts/admin/{id}/documents   : 어드민 서류 조회 (Signed URL 재발급)
 
 v2.0.0: 전체 데이터 적재 구조로 재설계
   - ExpertApplyBody 전체 필드 (사업자·자격증·인허가·근무형태)
@@ -20,6 +25,7 @@ import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -560,4 +566,192 @@ def admin_reject(
             "status":         "REJECTED",
             "reason":         body.reason,
         },
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Storage 서류 업로드 — expert-documents 버킷
+# 경로 규칙: {application_id}/{doc_type}/{uuid}_{filename}
+# ════════════════════════════════════════════════════════════════════════
+
+ALLOWED_DOC_TYPES: Dict[str, str] = {
+    "BIZ_REG":   "사업자등록증",
+    "CORP_REG":  "법인등기부등본",
+    "LICENSE":   "자격증",
+    "PERMIT":    "인허가증",
+    "INSURANCE": "배상책임보험",
+    "PORTFOLIO": "포트폴리오",
+}
+STORAGE_BUCKET   = "expert-documents"
+MAX_FILE_SIZE    = 20 * 1024 * 1024   # 20 MB
+
+
+class UploadUrlBody(BaseModel):
+    application_id: str
+    doc_type:       str   # BIZ_REG / CORP_REG / LICENSE / PERMIT / INSURANCE / PORTFOLIO
+    file_name:      str
+    file_size:      int   # bytes
+
+
+class AttachBody(BaseModel):
+    application_id: str
+    doc_type:       str
+    file_path:      str   # Storage 경로 (URL 아님)
+    file_name:      str
+    file_size:      int
+    mime_type:      str
+
+
+@router.post("/upload-url")
+def get_upload_url(
+    body: UploadUrlBody,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Supabase Storage Signed Upload URL 발급
+    POST /experts/upload-url
+
+    프론트에서 반환된 signed_url로 PUT 직접 업로드.
+    업로드 완료 후 /experts/attach 호출하여 attachments 등록.
+    """
+    if body.file_size > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="파일 크기는 20MB 이하여야 합니다.")
+    if body.doc_type not in ALLOWED_DOC_TYPES:
+        raise HTTPException(status_code=400, detail=f"유효하지 않은 doc_type입니다. 허용: {list(ALLOWED_DOC_TYPES.keys())}")
+
+    supabase = get_supabase()
+
+    # 신청서 소유권 확인 (본인 또는 어드민)
+    app_res = (
+        supabase.table("expert_applications")
+        .select("id, user_id")
+        .eq("id", body.application_id)
+        .limit(1)
+        .execute()
+    )
+    if not app_res.data:
+        raise HTTPException(status_code=404, detail="신청서를 찾을 수 없습니다.")
+    if (app_res.data[0]["user_id"] != current_user["id"]
+            and current_user.get("role_code") != "001"):
+        raise HTTPException(status_code=403, detail="권한이 없습니다.")
+
+    # 파일 경로 생성: {application_id}/{doc_type}/{uuid12}_{filename}
+    file_uuid = uuid4().hex[:12]
+    safe_name = f"{file_uuid}_{body.file_name}"
+    file_path = f"{body.application_id}/{body.doc_type}/{safe_name}"
+
+    # Signed Upload URL 발급 (60분 유효)
+    try:
+        res = supabase.storage.from_(STORAGE_BUCKET).create_signed_upload_url(file_path)
+    except Exception as e:
+        log.error(f"[EXPERT UPLOAD] Signed URL 발급 실패: {e}")
+        raise HTTPException(status_code=500, detail="업로드 URL 발급 실패")
+
+    return {
+        "status": "success",
+        "data": {
+            "signed_url": res["signedUrl"],
+            "token":      res.get("token", ""),
+            "path":       file_path,
+            "bucket":     STORAGE_BUCKET,
+            "doc_type":   body.doc_type,
+            "doc_label":  ALLOWED_DOC_TYPES[body.doc_type],
+        },
+    }
+
+
+@router.post("/attach")
+def register_attachment(
+    body: AttachBody,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    업로드 완료 후 attachments 테이블 등록
+    POST /experts/attach
+
+    Storage PUT 업로드 완료 → 이 엔드포인트 호출하여 DB 기록.
+    응답으로 24시간짜리 Signed 뷰 URL 반환 (어드민 검토용).
+    """
+    if body.doc_type not in ALLOWED_DOC_TYPES:
+        raise HTTPException(status_code=400, detail="유효하지 않은 doc_type입니다.")
+
+    supabase = get_supabase()
+
+    # 24시간 Signed 뷰 URL 발급
+    try:
+        signed = supabase.storage.from_(STORAGE_BUCKET).create_signed_url(
+            body.file_path,
+            expires_in=86400,
+        )
+        view_url = signed.get("signedURL", "")
+    except Exception as e:
+        log.warning(f"[EXPERT ATTACH] Signed 뷰 URL 발급 실패 (첨부는 계속 진행): {e}")
+        view_url = ""
+
+    # attachments 테이블 저장
+    supabase.table("attachments").insert({
+        "table_name":    "expert_applications",
+        "record_id":     body.application_id,
+        "file_category": body.doc_type,
+        "file_url":      body.file_path,     # Storage 경로 저장 (URL 아님)
+        "file_name":     body.file_name,
+        "file_size":     body.file_size,
+        "mime_type":     body.mime_type,
+        "description":   ALLOWED_DOC_TYPES.get(body.doc_type, ""),
+        "uploaded_by":   current_user.get("id"),
+        "created_at":    _now_iso(),
+    }).execute()
+
+    return {
+        "status": "success",
+        "data": {
+            "file_path": body.file_path,
+            "doc_type":  body.doc_type,
+            "doc_label": ALLOWED_DOC_TYPES[body.doc_type],
+            "view_url":  view_url,
+        },
+    }
+
+
+@router.get("/admin/{application_id}/documents")
+def get_application_documents(
+    application_id: str,
+    current_user: dict = Depends(_require_admin),
+):
+    """
+    어드민: 신청서 첨부 서류 목록 + Signed 뷰 URL 재발급 (1시간)
+    GET /experts/admin/{application_id}/documents
+    """
+    supabase = get_supabase()
+
+    res = (
+        supabase.table("attachments")
+        .select("*")
+        .eq("table_name", "expert_applications")
+        .eq("record_id", application_id)
+        .order("created_at", desc=False)
+        .execute()
+    )
+
+    docs = []
+    for att in (res.data or []):
+        view_url = ""
+        try:
+            signed = supabase.storage.from_(STORAGE_BUCKET).create_signed_url(
+                att["file_url"],
+                expires_in=3600,   # 1시간
+            )
+            view_url = signed.get("signedURL", "")
+        except Exception as e:
+            log.warning(f"[EXPERT DOCS] Signed URL 실패 path={att.get('file_url')}: {e}")
+
+        docs.append({
+            **att,
+            "doc_label": ALLOWED_DOC_TYPES.get(att.get("file_category", ""), ""),
+            "view_url":  view_url,
+        })
+
+    return {
+        "status": "success",
+        "data": {"items": docs, "total": len(docs)},
     }
