@@ -1,4 +1,4 @@
-# main.py — v5.15.0
+# main.py — v5.15.1
 # v5.15.0: VBANK(가상계좌) 결제 구조 완성 (prepare/noti/status + matching_contracts 연동)
 # v5.14.0: matching API 추가 (전문가 매칭 신청 / 상태 관리 / 어드민 통계)
 # v5.13.2: experts 전문가 통합 목록 + 활성 토글
@@ -99,7 +99,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.15.0"
+APP_VERSION = "5.15.1"
 
 
 @asynccontextmanager
