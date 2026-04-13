@@ -1,0 +1,25 @@
+name: Deploy to Fly.io (Tokyo)
+
+on:
+  push:
+    branches:
+      - main   # main 브랜치 push 시 자동 배포
+  workflow_dispatch:  # 수동 트리거 가능
+
+jobs:
+  deploy:
+    name: Deploy to Fly.io nrt
+    runs-on: ubuntu-latest
+    concurrency: deploy-group  # 동시 배포 방지
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io
+        run: flyctl deploy --remote-only --app tai-api-prod
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

@@ -1,0 +1,40 @@
+# Fly.io 설정 — TAI Safe API (도쿄 nrt)
+# 생성일: 2026-04-13
+
+app = "tai-api-prod"
+primary_region = "nrt"   # 도쿄 (한국 레이턴시 25~35ms)
+kill_signal = "SIGINT"
+kill_timeout = "5s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  ENVIRONMENT = "production"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"   # 트래픽 없을 때 자동 정지 → 비용 절감
+  auto_start_machines = true
+  min_machines_running = 0      # 0 = 최저비용. 첫 요청 cold start ~2~3초
+  # min_machines_running = 1   # 항상 켜놓으려면 이 줄 활성화 (~$5/월 추가)
+
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 100
+    soft_limit = 80
+
+[[vm]]
+  memory = "512mb"              # FastAPI + 의존성 충분, 필요시 1gb로 상향
+  cpu_kind = "shared"
+  cpus = 1
+
+# Health check — UptimeRobot이 /health 를 모니터링 중
+[[http_service.checks]]
+  grace_period = "15s"
+  interval = "30s"
+  method = "GET"
+  path = "/health"
+  timeout = "10s"
