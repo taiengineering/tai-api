@@ -1,19 +1,25 @@
 """
-work_schedules.py — v1.1.0
+work_schedules.py — v1.2.0
+
+v1.2.0 (2026-04-13):
+  [ADD] GET /work-schedules — is_assigned, company_id, factory_id, status_code, page, size 필터 지원
+        - is_assigned=false → assigned_user_id IS NULL (미배정 건 조회)
+        - is_assigned=true  → assigned_user_id IS NOT NULL
+        대시보드 미배정 경고 카드에서 사용
 
 v1.1.0 (2026-04-07):
   [ADD] PATCH /work-schedules/batch-update   — 복수 건 일괄 업데이트
   [ADD] POST  /work-schedules/confirm/{factory_id} — 검토 확정
 
 API:
-  GET   /work-schedules                              전체 목록
+  GET   /work-schedules                              전체 목록 (필터 지원)
   GET   /work-schedules/factory/{factory_id}         공장별 목록
   GET   /work-schedules/inspection-set/{id}          점검세트별 목록
   PATCH /work-schedules/batch-update                 일괄 업데이트  ← v1.1.0
   POST  /work-schedules/confirm/{factory_id}         검토 확정     ← v1.1.0
   GET   /work-schedules/{schedule_id}                단건 조회
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -22,7 +28,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/work-schedules", tags=["work_schedules"])
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 
 def _now() -> str:
@@ -187,15 +193,50 @@ def confirm_schedules(factory_id: str, body: ConfirmBody):
 # ── 기존 CRUD ─────────────────────────────────────────────────
 
 @router.get("")
-def get_work_schedules():
+def get_work_schedules(
+    company_id:   Optional[str]  = Query(None, description="회사 ID 필터"),
+    factory_id:   Optional[str]  = Query(None, description="시설 ID 필터"),
+    status_code:  Optional[str]  = Query(None, description="상태코드 필터"),
+    source_type:  Optional[str]  = Query(None, description="소스 타입 필터 (MANUAL/LAW_ENGINE)"),
+    is_assigned:  Optional[bool] = Query(None, description="배정 여부 필터. false=미배정(assigned_user_id IS NULL), true=배정완료"),
+    page:         int            = Query(1, ge=1, description="페이지 번호"),
+    size:         int            = Query(20, ge=1, le=100, description="페이지 크기"),
+):
+    """
+    v1.2.0: 업무 일정 목록 조회.
+
+    - is_assigned=false → 미배정 건 (assigned_user_id IS NULL)
+    - is_assigned=true  → 배정 완료 건 (assigned_user_id IS NOT NULL)
+    - 대시보드 미배정 경고 카드: GET /work-schedules?is_assigned=false&company_id=xxx
+    """
     supabase = get_supabase()
-    result = (
-        supabase.table("work_schedules")
-        .select("*")
-        .order("created_at", desc=True)
-        .execute()
-    )
-    return result.data
+    q = supabase.table("work_schedules").select("*", count="exact")
+
+    if company_id:   q = q.eq("company_id",  company_id)
+    if factory_id:   q = q.eq("factory_id",  factory_id)
+    if status_code:  q = q.eq("status_code", status_code)
+    if source_type:  q = q.eq("source_type", source_type)
+
+    # is_assigned 필터: assigned_user_id 컬럼 기준
+    if is_assigned is False:
+        q = q.is_("assigned_user_id", "null")
+    elif is_assigned is True:
+        q = q.not_.is_("assigned_user_id", "null")
+
+    offset = (page - 1) * size
+    result = q.order("created_at", desc=True).range(offset, offset + size - 1).execute()
+
+    total = result.count or 0
+    return {
+        "status": "success",
+        "data": {
+            "items":       result.data or [],
+            "total":       total,
+            "page":        page,
+            "size":        size,
+            "total_pages": (total + size - 1) // size if total else 0,
+        },
+    }
 
 
 @router.get("/factory/{factory_id}")
