@@ -1,17 +1,8 @@
-# main.py — v5.18.0
+# main.py — v5.19.0
+# v5.19.0: worker_home 라우터 추가 (오늘의 할일 API + QR 스캔 점검세트)
 # v5.18.0: 대시보드/파이프라인/price-commission CRUD + 리포트 업로드 URL
 # v5.17.0: settlements 정산 시스템
 # v5.16.0: contracts_engine 추가 (계약서 생성/웹뷰/수정/서명)
-# v5.15.1: matching 제안서 시스템 전체
-# v5.15.0: VBANK(가상계좌) 결제 구조 완성 (prepare/noti/status + matching_contracts 연동)
-# v5.14.0: matching API 추가 (전문가 매칭 신청 / 상태 관리 / 어드민 통계)
-# v5.13.2: experts 전문가 통합 목록 + 활성 토글
-# v5.13.1: experts Storage 서류 업로드 연동
-# v5.13.0: experts API v2.0.0 전체 재설계
-# v5.12.0: identity API 추가 (이니시스 본인인증)
-# v5.11.0: experts API 추가
-# v5.10.0: juso API 추가
-# v5.9.0:  weather API 추가
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -95,6 +86,7 @@ from routers.corrective_actions      import router as corrective_actions_router
 from routers.messaging               import router as messaging_router
 from routers.fcm                     import router as fcm_router
 from routers.worker_check            import router as worker_check_router
+from routers.worker_home             import router as worker_home_router          # v5.19.0
 from routers.ai_copywrite            import router as ai_copywrite_router
 from routers.public                  import router as public_router
 from routers.public_admin            import router as public_admin_router
@@ -106,7 +98,7 @@ from routers.mail                    import router as mail_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.18.0"
+APP_VERSION = "5.19.0"
 
 
 @asynccontextmanager
@@ -239,6 +231,7 @@ app.include_router(corrective_actions_router)
 app.include_router(messaging_router)
 app.include_router(fcm_router)
 app.include_router(worker_check_router)
+app.include_router(worker_home_router)    # v5.19.0
 app.include_router(ai_copywrite_router)
 app.include_router(mail_router)
 
