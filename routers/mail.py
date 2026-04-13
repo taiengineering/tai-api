@@ -1,131 +1,161 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI 메일 관리 라우터 (Resend + Supabase)
+TAI 메일 관리 라우터 v2.0.0
 
-[메일 발송]
-POST   /mail/send                  메일 발송 (Resend)
-
-[메일 조회]
-GET    /mail/list                  메일 목록 (방향별 필터, 페이지네이션)
-GET    /mail/unread-count          수신 미읽음 건수 (뱃지용)
-GET    /mail/from-addresses        발신 허용 주소 목록
-GET    /mail/{mail_id}             메일 상세 조회 (수신메일 자동 읽음)
-
-[메일 상태 변경]
-PATCH  /mail/read/{mail_id}        읽음 처리
-PATCH  /mail/unread/{mail_id}      미읽음 처리
-PATCH  /mail/read-all              수신 전체 읽음 처리
-PATCH  /mail/delete/{mail_id}      소프트 삭제
-PATCH  /mail/delete-bulk           일괄 소프트 삭제
-
-[웹훅]
-POST   /mail/webhook/inbound       Resend 수신 웹훅
+v2.0.0:
+  - POST /mail/send        첨부파일(multipart) 지원 (Supabase Storage 업로드 → Resend attachments)
+  - POST /mail/reply/:id   답장
+  - GET  /mail/:id         수신메일 html_body + attachments 완전 반환
+  - GET  /mail/attachment/:mail_id/:filename  첨부파일 다운로드 (서명된 URL 리디렉트)
+  - 인바운드 웹훅: html_body 저장 개선
 """
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, File, UploadFile, Form
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from typing import Optional
-import os
+from typing import Optional, List
+import os, json, uuid, base64
 import resend as resend_client
+import httpx
 
 from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/mail", tags=["메일관리"])
 
-# ============================================================
-# Resend 설정
-# ============================================================
+# ─── 설정 ────────────────────────────────────────────────────
 
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 resend_client.api_key = RESEND_API_KEY
 
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")  # service role key
+
 ALLOWED_FROM = {
-    "tai@taieng.co.kr": "TAI Engineering <tai@taieng.co.kr>",
+    "tai@taieng.co.kr":     "TAI Engineering <tai@taieng.co.kr>",
     "taiwang@taieng.co.kr": "TAI Engineering <taiwang@taieng.co.kr>",
     "contact@taieng.co.kr": "TAI Engineering <contact@taieng.co.kr>",
 }
-DEFAULT_FROM = "tai@taieng.co.kr"
+DEFAULT_FROM    = "tai@taieng.co.kr"
+STORAGE_BUCKET  = "mail-attachments"
+MAX_ATTACH_SIZE = 10 * 1024 * 1024  # 10MB
 
 
-# ============================================================
-# 스키마
-# ============================================================
+# ─── 첨부파일 헬퍼 ───────────────────────────────────────────
+
+async def _upload_attachment(file: UploadFile, mail_id: str) -> dict:
+    """Supabase Storage에 파일 업로드 후 메타정보 반환."""
+    supabase = get_supabase()
+    content = await file.read()
+    if len(content) > MAX_ATTACH_SIZE:
+        raise HTTPException(status_code=400, detail=f"{file.filename}: 파일 크기 초과 (최대 10MB)")
+
+    safe_name = file.filename.replace(" ", "_") if file.filename else f"file_{uuid.uuid4().hex[:8]}"
+    path = f"{mail_id}/{safe_name}"
+
+    try:
+        supabase.storage.from_(STORAGE_BUCKET).upload(
+            path=path,
+            file=content,
+            file_options={"content-type": file.content_type or "application/octet-stream"},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"첨부파일 업로드 실패: {e}")
+
+    return {
+        "name":         safe_name,
+        "path":         path,
+        "size":         len(content),
+        "content_type": file.content_type or "application/octet-stream",
+        "content_b64":  base64.b64encode(content).decode(),  # Resend 전송용
+    }
+
+
+def _build_resend_attachments(attach_metas: list) -> list:
+    """Resend attachments 포맷 구성."""
+    return [
+        {"filename": a["name"], "content": a["content_b64"]}
+        for a in attach_metas
+    ]
+
+
+def _strip_b64(attach_metas: list) -> list:
+    """DB 저장 전 content_b64 제거 (용량 절약)."""
+    return [
+        {k: v for k, v in a.items() if k != "content_b64"}
+        for a in attach_metas
+    ]
+
+
+# ─── 스키마 ──────────────────────────────────────────────────
 
 class MailSendRequest(BaseModel):
-    """메일 발송 요청 스키마"""
-    to: list[str]
-    cc: Optional[list[str]] = None
-    subject: str
-    html: str
+    """JSON 방식 메일 발송 (첨부파일 없을 때)."""
+    to:         List[str]
+    cc:         Optional[List[str]] = None
+    subject:    str
+    html:       str
     from_email: Optional[str] = None
-    sent_by: Optional[str] = None
-
-
-class MailSendResponse(BaseModel):
-    """메일 발송 응답 스키마"""
-    success: bool
-    resend_id: Optional[str] = None
-
-
-class MailListResponse(BaseModel):
-    """메일 목록 응답 스키마"""
-    items: list[dict]
-    total: int
-    page: int
-    size: int
-
-
-class UnreadCountResponse(BaseModel):
-    """수신 미읽음 건수 응답 스키마"""
-    unread_count: int
-
-
-class FromAddressItem(BaseModel):
-    """발신 주소 항목"""
-    email: str
-    display_name: str
-
-
-class FromAddressesResponse(BaseModel):
-    """발신 허용 주소 목록 응답 스키마"""
-    addresses: list[FromAddressItem]
+    sent_by:    Optional[str] = None
 
 
 class BulkDeleteRequest(BaseModel):
-    """일괄 삭제 요청 스키마"""
-    mail_ids: list[str]  # 프론트엔드: { mail_ids: [...] }
+    mail_ids: List[str]
 
 
-# ============================================================
-# POST /mail/send — 메일 발송
-# ============================================================
+# ─── POST /mail/send ─────────────────────────────────────────
 
-@router.post("/send", response_model=MailSendResponse)
-def send_mail(body: MailSendRequest):
-    """Resend를 통해 메일을 발송하고 mail_logs 테이블에 기록한다."""
+@router.post("/send")
+async def send_mail(
+    to:         str         = Form(...,  description="수신자(콤마 구분 가능)"),
+    cc:         Optional[str] = Form(None),
+    subject:    str         = Form(...),
+    html:       str         = Form(...),
+    from_email: Optional[str] = Form(None),
+    sent_by:    Optional[str] = Form(None),
+    files:      List[UploadFile] = File(default=[]),
+):
+    """
+    메일 발송 (첨부파일 지원, multipart/form-data).
+
+    - to: 콤마로 구분된 수신자 목록
+    - files: 첨부파일 (0~N개)
+    """
     supabase = get_supabase()
 
     # 발신 주소 검증
-    from_key = body.from_email or DEFAULT_FROM
+    from_key = from_email or DEFAULT_FROM
     if from_key not in ALLOWED_FROM:
-        raise HTTPException(
-            status_code=400,
-            detail=f"허용되지 않은 발신 주소입니다: {from_key}",
-        )
+        raise HTTPException(status_code=400, detail=f"허용되지 않은 발신 주소: {from_key}")
     from_address = ALLOWED_FROM[from_key]
 
-    # Resend 발송 파라미터 구성
-    send_params: dict = {
-        "from": from_address,
-        "to": body.to,
-        "subject": body.subject,
-        "html": body.html,
-    }
-    if body.cc:
-        send_params["cc"] = body.cc
+    # 수신자 파싱
+    to_list = [e.strip() for e in to.split(",") if e.strip()]
+    cc_list = [e.strip() for e in (cc or "").split(",") if e.strip()]
 
-    # 발송 시도
+    # 임시 mail_id (저장 전 사용)
+    mail_id = str(uuid.uuid4())
+
+    # 첨부파일 업로드
+    attach_metas = []
+    for f in files:
+        if f.filename:
+            meta = await _upload_attachment(f, mail_id)
+            attach_metas.append(meta)
+
+    # Resend 파라미터
+    send_params: dict = {
+        "from":    from_address,
+        "to":      to_list,
+        "subject": subject,
+        "html":    html,
+    }
+    if cc_list:
+        send_params["cc"] = cc_list
+    if attach_metas:
+        send_params["attachments"] = _build_resend_attachments(attach_metas)
+
+    # 발송
     resend_id: Optional[str] = None
     status = "sent"
     error_message: Optional[str] = None
@@ -137,18 +167,20 @@ def send_mail(body: MailSendRequest):
         status = "failed"
         error_message = str(e)
 
-    # mail_logs 테이블에 로그 기록
+    # DB 저장
     log_row = {
-        "to_emails": body.to,
-        "cc_emails": body.cc or [],
-        "subject": body.subject,
-        "html_body": body.html,
-        "status": status,
-        "resend_id": resend_id,
+        "id":          mail_id,
+        "to_emails":   to_list,
+        "cc_emails":   cc_list,
+        "subject":     subject,
+        "html_body":   html,
+        "status":      status,
+        "resend_id":   resend_id,
         "error_message": error_message,
-        "sent_by": body.sent_by,
-        "direction": "outbound",
-        "from_email": from_key,
+        "sent_by":     sent_by,
+        "direction":   "outbound",
+        "from_email":  from_key,
+        "attachments": _strip_b64(attach_metas),
     }
 
     try:
@@ -159,194 +191,252 @@ def send_mail(body: MailSendRequest):
     if status == "failed":
         raise HTTPException(status_code=502, detail=f"메일 발송 실패: {error_message}")
 
-    return MailSendResponse(success=True, resend_id=resend_id)
+    return {"success": True, "resend_id": resend_id, "mail_id": mail_id}
 
 
-# ============================================================
-# GET /mail/list — 메일 목록 조회 (방향별)
-# ============================================================
+# ─── POST /mail/reply/:mail_id ───────────────────────────────
 
-@router.get("/list", response_model=MailListResponse)
-def list_mails(
-    direction: str = Query(..., description="메일 방향 (inbound / outbound)"),
-    page: int = Query(default=1, ge=1, description="페이지 번호"),
-    size: int = Query(default=20, ge=1, le=100, description="페이지 크기"),
-    status: Optional[str] = Query(default=None, description="발송 상태 필터 (sent / failed / pending)"),
-    read: Optional[bool] = Query(default=None, description="읽음 여부 필터"),
-    search: Optional[str] = Query(default=None, description="제목·수신자 검색"),
-    from_date: Optional[str] = Query(default=None, description="시작일 (YYYY-MM-DD)"),
-    to_date: Optional[str] = Query(default=None, description="종료일 (YYYY-MM-DD)"),
+@router.post("/reply/{mail_id}")
+async def reply_mail(
+    mail_id:    str,
+    to:         str            = Form(...),
+    subject:    Optional[str]  = Form(None),
+    html:       str            = Form(...),
+    from_email: Optional[str]  = Form(None),
+    sent_by:    Optional[str]  = Form(None),
+    files:      List[UploadFile] = File(default=[]),
 ):
-    """메일 목록을 방향(inbound/outbound)별로 페이지네이션 조회한다."""
+    """
+    원본 메일에 답장.
+
+    - subject: 없으면 원본 제목에 Re: 접두사 자동 추가
+    - to: 답장 수신자 (보통 원본 발신자 이메일)
+    """
+    supabase = get_supabase()
+
+    # 원본 메일 조회
+    orig = supabase.table("mail_logs").select("*").eq("id", mail_id).single().execute()
+    if not orig.data:
+        raise HTTPException(status_code=404, detail="원본 메일을 찾을 수 없습니다.")
+    original = orig.data
+
+    # 제목 자동 설정
+    orig_subject = original.get("subject", "")
+    reply_subject = subject or (f"Re: {orig_subject}" if not orig_subject.startswith("Re:") else orig_subject)
+
+    # 발신 주소
+    from_key = from_email or DEFAULT_FROM
+    if from_key not in ALLOWED_FROM:
+        raise HTTPException(status_code=400, detail=f"허용되지 않은 발신 주소: {from_key}")
+    from_address = ALLOWED_FROM[from_key]
+
+    to_list = [e.strip() for e in to.split(",") if e.strip()]
+    new_mail_id = str(uuid.uuid4())
+
+    # 첨부파일
+    attach_metas = []
+    for f in files:
+        if f.filename:
+            meta = await _upload_attachment(f, new_mail_id)
+            attach_metas.append(meta)
+
+    # 원본 인용 HTML
+    orig_html = original.get("html_body", "")
+    reply_html = f"""
+{html}
+<br><br>
+<div style="border-left:3px solid #ccc; padding-left:12px; color:#666; margin-top:16px;">
+  <p><b>From:</b> {original.get('from_email','')}<br>
+  <b>To:</b> {', '.join(original.get('to_emails',[]))}<br>
+  <b>Subject:</b> {orig_subject}</p>
+  <div>{orig_html}</div>
+</div>
+"""
+
+    send_params: dict = {
+        "from":    from_address,
+        "to":      to_list,
+        "subject": reply_subject,
+        "html":    reply_html,
+    }
+    if attach_metas:
+        send_params["attachments"] = _build_resend_attachments(attach_metas)
+
+    # In-Reply-To 헤더 (있으면 추가)
+    orig_resend_id = original.get("resend_id")
+    if orig_resend_id:
+        send_params["headers"] = {"In-Reply-To": f"<{orig_resend_id}>"}
+
+    resend_id: Optional[str] = None
+    status = "sent"
+    error_message: Optional[str] = None
+
+    try:
+        result = resend_client.Emails.send(send_params)
+        resend_id = result.get("id") if isinstance(result, dict) else getattr(result, "id", None)
+    except Exception as e:
+        status = "failed"
+        error_message = str(e)
+
+    log_row = {
+        "id":          new_mail_id,
+        "to_emails":   to_list,
+        "cc_emails":   [],
+        "subject":     reply_subject,
+        "html_body":   reply_html,
+        "status":      status,
+        "resend_id":   resend_id,
+        "error_message": error_message,
+        "sent_by":     sent_by,
+        "direction":   "outbound",
+        "from_email":  from_key,
+        "reply_to_id": mail_id,
+        "in_reply_to": orig_resend_id,
+        "attachments": _strip_b64(attach_metas),
+    }
+
+    try:
+        supabase.table("mail_logs").insert(log_row).execute()
+    except Exception:
+        pass
+
+    if status == "failed":
+        raise HTTPException(status_code=502, detail=f"답장 발송 실패: {error_message}")
+
+    return {"success": True, "resend_id": resend_id, "mail_id": new_mail_id}
+
+
+# ─── GET /mail/attachment/:mail_id/:filename ─────────────────
+
+@router.get("/attachment/{mail_id}/{filename}")
+def download_attachment(mail_id: str, filename: str):
+    """
+    첨부파일 다운로드 (서명된 URL로 리디렉트).
+    """
+    supabase = get_supabase()
+    path = f"{mail_id}/{filename}"
+
+    try:
+        res = supabase.storage.from_(STORAGE_BUCKET).create_signed_url(path, expires_in=3600)
+        url = res.get("signedURL") or res.get("signed_url") or (res.get("data") or {}).get("signedUrl", "")
+        if not url:
+            raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다.")
+        return RedirectResponse(url=url)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"첨부파일 URL 생성 실패: {e}")
+
+
+# ─── GET /mail/list ───────────────────────────────────────────
+
+@router.get("/list")
+def list_mails(
+    direction: str           = Query(..., description="inbound / outbound"),
+    page:      int           = Query(default=1, ge=1),
+    size:      int           = Query(default=20, ge=1, le=100),
+    status:    Optional[str] = Query(default=None),
+    read:      Optional[bool]= Query(default=None),
+    search:    Optional[str] = Query(default=None),
+    from_date: Optional[str] = Query(default=None),
+    to_date:   Optional[str] = Query(default=None),
+):
     if direction not in ("inbound", "outbound"):
         raise HTTPException(status_code=400, detail="direction은 inbound 또는 outbound만 허용됩니다.")
 
     supabase = get_supabase()
 
-    count_query = supabase.table("mail_logs").select("id", count="exact")
-    data_query = supabase.table("mail_logs").select("*")
+    def _apply_filters(q):
+        q = q.eq("direction", direction).eq("deleted", False)
+        if status:   q = q.eq("status", status)
+        if read is not None: q = q.eq("read", read)
+        if search:   q = q.or_(f"subject.ilike.%{search}%")
+        if from_date: q = q.gte("created_at", f"{from_date}T00:00:00")
+        if to_date:   q = q.lte("created_at", f"{to_date}T23:59:59")
+        return q
 
-    count_query = count_query.eq("direction", direction).eq("deleted", False)
-    data_query = data_query.eq("direction", direction).eq("deleted", False)
-
-    if status:
-        count_query = count_query.eq("status", status)
-        data_query = data_query.eq("status", status)
-
-    if read is not None:
-        count_query = count_query.eq("read", read)
-        data_query = data_query.eq("read", read)
-
-    if search:
-        filter_str = f"subject.ilike.%{search}%"
-        count_query = count_query.or_(filter_str)
-        data_query = data_query.or_(filter_str)
-
-    if from_date:
-        count_query = count_query.gte("created_at", f"{from_date}T00:00:00")
-        data_query = data_query.gte("created_at", f"{from_date}T00:00:00")
-
-    if to_date:
-        count_query = count_query.lte("created_at", f"{to_date}T23:59:59")
-        data_query = data_query.lte("created_at", f"{to_date}T23:59:59")
-
-    count_res = count_query.execute()
-    total = count_res.count if count_res.count is not None else 0
+    total_res = _apply_filters(supabase.table("mail_logs").select("id", count="exact")).execute()
+    total = total_res.count or 0
 
     offset = (page - 1) * size
-    data_res = (
-        data_query
-        .order("created_at", desc=True)
-        .range(offset, offset + size - 1)
-        .execute()
-    )
+    data_res = _apply_filters(
+        supabase.table("mail_logs").select(
+            "id, subject, from_email, to_emails, cc_emails, direction, status, "
+            "read, deleted, attachments, reply_to_id, created_at"
+        )
+    ).order("created_at", desc=True).range(offset, offset + size - 1).execute()
 
-    return MailListResponse(
-        items=data_res.data or [],
-        total=total,
-        page=page,
-        size=size,
-    )
+    return {"items": data_res.data or [], "total": total, "page": page, "size": size}
 
 
-# ============================================================
-# GET /mail/unread-count — 수신 미읽음 건수
-# ============================================================
+# ─── GET /mail/unread-count ───────────────────────────────────
 
-@router.get("/unread-count", response_model=UnreadCountResponse)
+@router.get("/unread-count")
 def get_unread_count():
-    """수신(inbound) 미읽음 메일 건수를 반환한다 (뱃지 표시용)."""
     supabase = get_supabase()
-
-    res = (
-        supabase.table("mail_logs")
-        .select("id", count="exact")
-        .eq("direction", "inbound")
-        .eq("read", False)
-        .eq("deleted", False)
-        .execute()
-    )
-
-    return UnreadCountResponse(unread_count=res.count if res.count is not None else 0)
+    res = supabase.table("mail_logs").select("id", count="exact").eq(
+        "direction", "inbound").eq("read", False).eq("deleted", False).execute()
+    return {"unread_count": res.count or 0}
 
 
-# ============================================================
-# GET /mail/from-addresses — 발신 허용 주소 목록
-# ============================================================
+# ─── GET /mail/from-addresses ────────────────────────────────
 
-@router.get("/from-addresses", response_model=FromAddressesResponse)
+@router.get("/from-addresses")
 def get_from_addresses():
-    """발신 허용 주소 목록을 반환한다."""
-    addresses = [
-        FromAddressItem(email=email, display_name=display)
-        for email, display in ALLOWED_FROM.items()
-    ]
-    return FromAddressesResponse(addresses=addresses)
+    return {"addresses": [
+        {"email": e, "display_name": d} for e, d in ALLOWED_FROM.items()
+    ]}
 
 
-# ============================================================
-# PATCH /mail/read-all — 수신 전체 읽음 처리
-# ============================================================
+# ─── PATCH /mail/read-all ─────────────────────────────────────
 
 @router.patch("/read-all")
 def mark_all_as_read():
-    """수신(inbound) 미읽음 메일을 모두 읽음 처리한다."""
     supabase = get_supabase()
-
     supabase.table("mail_logs").update({"read": True}).eq(
-        "direction", "inbound"
-    ).eq("read", False).eq("deleted", False).execute()
-
+        "direction", "inbound").eq("read", False).eq("deleted", False).execute()
     return {"success": True}
 
 
-# ============================================================
-# PATCH /mail/delete-bulk — 일괄 소프트 삭제
-# ============================================================
+# ─── PATCH /mail/delete-bulk ──────────────────────────────────
 
 @router.patch("/delete-bulk")
 def delete_bulk(body: BulkDeleteRequest):
-    """여러 메일을 일괄 소프트 삭제한다."""
     if not body.mail_ids:
         raise HTTPException(status_code=400, detail="삭제할 메일 ID가 없습니다.")
-
     supabase = get_supabase()
-
-    supabase.table("mail_logs").update({"deleted": True}).in_(
-        "id", body.mail_ids
-    ).execute()
-
+    supabase.table("mail_logs").update({"deleted": True}).in_("id", body.mail_ids).execute()
     return {"success": True, "deleted_count": len(body.mail_ids)}
 
 
-# ============================================================
-# POST /mail/webhook/inbound — Resend 수신 웹훅
-# ============================================================
+# ─── POST /mail/webhook/inbound ───────────────────────────────
 
 @router.post("/webhook/inbound")
 async def webhook_inbound(request: Request):
-    """Resend 수신 웹훅 처리 (email.received 이벤트)
-
-    Resend 웹훅 구조:
-    {
-      "type": "email.received",
-      "created_at": "...",
-      "data": {
-        "email_id": "...",
-        "from": "Name <email@example.com>",
-        "to": ["recipient@taieng.co.kr"],
-        "subject": "..."
-      }
-    }
-    웹훅에는 본문이 없으므로 email_id로 Received emails API를 별도 호출하여 본문을 가져온다.
-    """
+    """Resend 수신 웹훅 — html_body 완전 저장."""
     try:
         payload = await request.json()
     except Exception:
-        raise HTTPException(status_code=400, detail="잘못된 요청 본문입니다.")
+        raise HTTPException(status_code=400, detail="잘못된 요청 본문")
 
-    # Resend 웹훅: type 확인
     event_type = payload.get("type", "")
     if event_type != "email.received":
         return {"ok": True, "skipped": True, "type": event_type}
 
-    # 실제 데이터는 payload["data"] 안에 있음
-    data = payload.get("data", {})
-    email_id = data.get("email_id", "")
+    data       = payload.get("data", {})
+    email_id   = data.get("email_id", "")
     from_email = data.get("from", "")
-    to_emails = data.get("to", [])
-    if isinstance(to_emails, str):
-        to_emails = [to_emails]
-    cc_emails = data.get("cc", [])
-    if isinstance(cc_emails, str):
-        cc_emails = [cc_emails]
-    subject = data.get("subject", "(제목 없음)")
+    to_emails  = data.get("to", [])
+    if isinstance(to_emails, str): to_emails = [to_emails]
+    cc_emails  = data.get("cc", [])
+    if isinstance(cc_emails, str): cc_emails = [cc_emails]
+    subject    = data.get("subject", "(제목 없음)")
 
-    # 웹훅에는 본문이 없으므로 Resend Received emails API로 본문 조회
-    html_body = ""
+    # Resend Received emails API로 본문 + 첨부파일 조회
+    html_body   = ""
+    attachments = []
     if email_id and RESEND_API_KEY:
         try:
-            import httpx
             api_res = httpx.get(
                 f"https://api.resend.com/emails/{email_id}",
                 headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
@@ -354,122 +444,104 @@ async def webhook_inbound(request: Request):
             )
             if api_res.status_code == 200:
                 detail = api_res.json()
-                html_body = detail.get("html", detail.get("text", ""))
+                html_body = detail.get("html") or detail.get("text") or ""
+                # 수신 첨부파일 메타 (Resend는 파일 URL 제공 안 함 - 메타만)
+                for att in detail.get("attachments", []):
+                    attachments.append({
+                        "name":         att.get("filename", ""),
+                        "content_type": att.get("content-type", ""),
+                        "size":         att.get("size", 0),
+                        "path":         "",  # 수신 첨부는 별도 저장 불가
+                    })
         except Exception:
             html_body = "(본문 조회 실패)"
 
-    log_row = {
-        "from_email": from_email,
-        "to_emails": to_emails,
-        "cc_emails": cc_emails,
-        "subject": subject,
-        "html_body": html_body,
-        "resend_id": email_id,
-        "status": "sent",
-        "direction": "inbound",
-        "read": False,
-        "deleted": False,
-    }
-
     supabase = get_supabase()
+    log_row = {
+        "from_email":  from_email,
+        "to_emails":   to_emails,
+        "cc_emails":   cc_emails,
+        "subject":     subject,
+        "html_body":   html_body,
+        "resend_id":   email_id,
+        "status":      "sent",
+        "direction":   "inbound",
+        "read":        False,
+        "deleted":     False,
+        "attachments": attachments,
+    }
 
     try:
         supabase.table("mail_logs").insert(log_row).execute()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"수신 메일 저장 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"수신 메일 저장 실패: {e}")
 
     return {"success": True}
 
 
-# ============================================================
-# PATCH /mail/read/{mail_id} — 읽음 처리
-# ============================================================
+# ─── PATCH /mail/read/:id ─────────────────────────────────────
 
 @router.patch("/read/{mail_id}")
 def mark_as_read(mail_id: str):
-    """메일을 읽음 처리한다."""
     supabase = get_supabase()
-
-    res = (
-        supabase.table("mail_logs")
-        .update({"read": True})
-        .eq("id", mail_id)
-        .execute()
-    )
-
-    if not res.data:
-        raise HTTPException(status_code=404, detail="메일을 찾을 수 없습니다.")
-
+    res = supabase.table("mail_logs").update({"read": True}).eq("id", mail_id).execute()
+    if not res.data: raise HTTPException(status_code=404, detail="메일을 찾을 수 없습니다.")
     return {"success": True}
 
 
-# ============================================================
-# PATCH /mail/unread/{mail_id} — 미읽음 처리
-# ============================================================
+# ─── PATCH /mail/unread/:id ───────────────────────────────────
 
 @router.patch("/unread/{mail_id}")
 def mark_as_unread(mail_id: str):
-    """메일을 미읽음 처리한다."""
     supabase = get_supabase()
-
-    res = (
-        supabase.table("mail_logs")
-        .update({"read": False})
-        .eq("id", mail_id)
-        .execute()
-    )
-
-    if not res.data:
-        raise HTTPException(status_code=404, detail="메일을 찾을 수 없습니다.")
-
+    res = supabase.table("mail_logs").update({"read": False}).eq("id", mail_id).execute()
+    if not res.data: raise HTTPException(status_code=404, detail="메일을 찾을 수 없습니다.")
     return {"success": True}
 
 
-# ============================================================
-# PATCH /mail/delete/{mail_id} — 소프트 삭제
-# ============================================================
+# ─── PATCH /mail/delete/:id ───────────────────────────────────
 
 @router.patch("/delete/{mail_id}")
 def soft_delete(mail_id: str):
-    """메일을 소프트 삭제한다 (deleted=true)."""
     supabase = get_supabase()
-
-    res = (
-        supabase.table("mail_logs")
-        .update({"deleted": True})
-        .eq("id", mail_id)
-        .execute()
-    )
-
-    if not res.data:
-        raise HTTPException(status_code=404, detail="메일을 찾을 수 없습니다.")
-
+    res = supabase.table("mail_logs").update({"deleted": True}).eq("id", mail_id).execute()
+    if not res.data: raise HTTPException(status_code=404, detail="메일을 찾을 수 없습니다.")
     return {"success": True}
 
 
-# ============================================================
-# GET /mail/{mail_id} — 메일 상세 조회
-# ============================================================
+# ─── GET /mail/:id ────────────────────────────────────────────
 
 @router.get("/{mail_id}")
 def get_mail_detail(mail_id: str):
-    """메일 단건 상세 조회 (수신메일은 자동 읽음 처리)."""
+    """메일 상세 조회 — html_body + attachments 완전 반환, 수신 자동 읽음."""
     supabase = get_supabase()
-
-    res = (
-        supabase.table("mail_logs")
-        .select("*")
-        .eq("id", mail_id)
-        .eq("deleted", False)
-        .single()
-        .execute()
-    )
-
+    res = supabase.table("mail_logs").select("*").eq(
+        "id", mail_id).eq("deleted", False).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="메일을 찾을 수 없습니다.")
 
-    if res.data.get("direction") == "inbound" and not res.data.get("read"):
-        supabase.table("mail_logs").update({"read": True}).eq("id", mail_id).execute()
-        res.data["read"] = True
+    mail = res.data
 
-    return res.data
+    # 수신 메일 자동 읽음
+    if mail.get("direction") == "inbound" and not mail.get("read"):
+        supabase.table("mail_logs").update({"read": True}).eq("id", mail_id).execute()
+        mail["read"] = True
+
+    # html_body 없으면 Resend API 재조회
+    if not mail.get("html_body") and mail.get("resend_id") and RESEND_API_KEY:
+        try:
+            api_res = httpx.get(
+                f"https://api.resend.com/emails/{mail['resend_id']}",
+                headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+                timeout=10,
+            )
+            if api_res.status_code == 200:
+                detail = api_res.json()
+                html_body = detail.get("html") or detail.get("text") or ""
+                if html_body:
+                    supabase.table("mail_logs").update({"html_body": html_body}).eq("id", mail_id).execute()
+                    mail["html_body"] = html_body
+        except Exception:
+            pass
+
+    return mail
