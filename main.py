@@ -1,9 +1,10 @@
-# main.py — v5.20.0
-# v5.20.0: public_pricing(공개 가격 API) + connect_registration(연결 사전등록) 라우터 추가
-# v5.19.0: worker_home 라우터 추가 (오늘의 할일 API + QR 스캔 점검세트)
-# v5.18.0: 대시보드/파이프라인/price-commission CRUD + 리포트 업로드 URL
+# main.py — v5.21.0
+# v5.21.0: admin_connect(연결등록 관리) + admin_pricing(key 기반 가격수정) 라우터 추가
+# v5.20.0: public_pricing + connect_registration 라우터 추가
+# v5.19.0: worker_home 라우터 추가
+# v5.18.0: 대시보드/파이프라인/price-commission CRUD
 # v5.17.0: settlements 정산 시스템
-# v5.16.0: contracts_engine 추가 (계약서 생성/웹뷰/수정/서명)
+# v5.16.0: contracts_engine 추가
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -69,7 +70,7 @@ from routers.experts                 import router as experts_router            
 from routers.matching                import router as matching_router             # v5.14.0
 from routers.matching                import commission_router                      # v5.18.0
 from routers.contracts_engine        import router as contracts_engine_router      # v5.16.0
-from routers.settlements             import router as settlements_router             # v5.17.0
+from routers.settlements             import router as settlements_router           # v5.17.0
 from routers.identity                import router as identity_router             # v5.12.0
 from routers.internal_api_registry   import router as internal_api_registry_router
 from routers.report_api_registry     import router as report_api_registry_router
@@ -98,10 +99,12 @@ from routers.anonymous_diagnosis     import router as anonymous_diagnosis_router
 from routers.mail                    import router as mail_router
 from routers.public_pricing          import router as public_pricing_router       # v5.20.0
 from routers.connect_registration    import router as connect_registration_router  # v5.20.0
+from routers.admin_connect           import router as admin_connect_router         # v5.21.0
+from routers.admin_pricing           import router as admin_pricing_router         # v5.21.0
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.20.0"
+APP_VERSION = "5.21.0"
 
 
 @asynccontextmanager
@@ -149,6 +152,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 공개 엔드포인트 (인증 불필요) — 먼저 등록
 app.include_router(public_router)
 app.include_router(public_admin_router)
 app.include_router(alert_messages_router)
@@ -156,8 +160,12 @@ app.include_router(feature_flags_router)
 app.include_router(site_public_router)
 app.include_router(site_faq_admin_router)
 app.include_router(anonymous_diagnosis_router)
-app.include_router(public_pricing_router)          # v5.20.0 — 인증 불필요
-app.include_router(connect_registration_router)    # v5.20.0 — POST 공개 / GET·PATCH 인증
+app.include_router(public_pricing_router)          # v5.20.0
+app.include_router(connect_registration_router)    # v5.20.0 — POST 공개
+app.include_router(admin_connect_router)           # v5.21.0 — GET/PATCH 관리자
+app.include_router(admin_pricing_router)           # v5.21.0 — PATCH 관리자
+
+# 인증 필요 엔드포인트
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(companies_router)
@@ -214,12 +222,12 @@ app.include_router(agent_service_router)
 app.include_router(precedent_router)
 app.include_router(weather_router)
 app.include_router(juso_router)
-app.include_router(experts_router,  prefix="/experts",  tags=["전문가"])   # v5.13.0
-app.include_router(matching_router,          prefix="/matching",          tags=["매칭"])          # v5.14.0
-app.include_router(commission_router,        prefix="/price-commission",  tags=["수수료설정"])      # v5.18.0
-app.include_router(contracts_engine_router,  prefix="/matching/contracts", tags=["계약서"])        # v5.16.0
-app.include_router(settlements_router,       prefix="/settlements",        tags=["정산"])           # v5.17.0
-app.include_router(identity_router, prefix="/identity", tags=["본인인증"])  # v5.12.0
+app.include_router(experts_router,  prefix="/experts",  tags=["전문가"])
+app.include_router(matching_router,          prefix="/matching",          tags=["매칭"])
+app.include_router(commission_router,        prefix="/price-commission",  tags=["수수료설정"])
+app.include_router(contracts_engine_router,  prefix="/matching/contracts", tags=["계약서"])
+app.include_router(settlements_router,       prefix="/settlements",        tags=["정산"])
+app.include_router(identity_router, prefix="/identity", tags=["본인인증"])
 app.include_router(internal_api_registry_router)
 app.include_router(report_api_registry_router)
 app.include_router(construction_router, prefix="/construction", tags=["건설안전"])
@@ -236,7 +244,7 @@ app.include_router(corrective_actions_router)
 app.include_router(messaging_router)
 app.include_router(fcm_router)
 app.include_router(worker_check_router)
-app.include_router(worker_home_router)    # v5.19.0
+app.include_router(worker_home_router)
 app.include_router(ai_copywrite_router)
 app.include_router(mail_router)
 
