@@ -1,16 +1,15 @@
 # routers/public_pricing.py — 공개 가격 API (인증 불필요)
-# v1.0.0 (2026-04-14): 신규 — 5분 캐시, CORS 허용
+# v1.1.0 (2026-04-14): /saas-plans, /diagnosis-reports 추가 (pricing.js v2 호환)
+# v1.0.0 (2026-04-14): 신규 — 5분 캐시
 import time
-from functools import lru_cache
 from fastapi import APIRouter
-from fastapi.middleware.cors import CORSMiddleware
 from db.database import get_supabase
 
 router = APIRouter(prefix="/public/pricing", tags=["공개 가격"])
 
-# ── 5분 캐시 ──────────────────────────────────────────────────
+# ── 5분 인메모리 캐시 ─────────────────────────────────────────
 _cache: dict = {}
-CACHE_TTL = 300  # 5분
+CACHE_TTL = 300
 
 
 def _get_cached(key: str):
@@ -24,17 +23,66 @@ def _set_cache(key: str, data):
     _cache[key] = {"ts": time.time(), "data": data}
 
 
-# ── SaaS 요금제 공개 API ─────────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+# v2 엔드포인트 — pricing.js v2 호환 (새 URL)
+# ════════════════════════════════════════════════════════════════
+
+@router.get("/saas-plans")
+def get_saas_plans():
+    """
+    SaaS 플랜 가격 목록 (pricing.js v2 호환).
+    반환 필드: plan_code, monthly_base_fee, sector_code
+    sector_code: BUILDING / INDUSTRY / CONSTRUCTION
+    """
+    cached = _get_cached("saas-plans")
+    if cached is not None:
+        return {"success": True, "cached": True, "data": cached}
+
+    sb = get_supabase()
+    res = sb.table("price_saas_plan").select(
+        "plan_code, display_name, sector_code, monthly_base_fee, is_active, sort_order"
+    ).eq("is_active", True).in_(
+        "sector_code", ["BUILDING", "INDUSTRY", "CONSTRUCTION"]
+    ).order("sort_order").execute()
+
+    data = res.data or []
+    _set_cache("saas-plans", data)
+    return {"success": True, "cached": False, "data": data}
+
+
+@router.get("/diagnosis-reports")
+def get_diagnosis_reports():
+    """
+    법령진단 단건 가격 목록 (pricing.js v2 호환).
+    반환 필드: facility_type_code, basic_fee, equipment_fee, total_report_fee
+    facility_type_code: BUILDING_V2 / INDUSTRY_V2 / CONSTRUCTION_V2
+    """
+    cached = _get_cached("diagnosis-reports")
+    if cached is not None:
+        return {"success": True, "cached": True, "data": cached}
+
+    sb = get_supabase()
+    res = sb.table("price_diagnosis_report").select(
+        "facility_type_code, facility_type_name, "
+        "basic_fee, process_fee, equipment_fee, total_report_fee, "
+        "free_fee, is_active, price_version, sort_order"
+    ).eq("is_active", True).eq("price_version", "v2").order("sort_order").execute()
+
+    data = res.data or []
+    _set_cache("diagnosis-reports", data)
+    return {"success": True, "cached": False, "data": data}
+
+
+# ════════════════════════════════════════════════════════════════
+# 기존 엔드포인트 (하위 호환 유지)
+# ════════════════════════════════════════════════════════════════
 
 @router.get("/saas")
 def public_saas_pricing(sector: str = None):
-    """
-    공개 SaaS 요금제 조회.
-    sector: BUILDING | INDUSTRY | CONSTRUCTION (없으면 전체)
-    """
+    """공개 SaaS 요금제 조회 (레거시 — /saas-plans 사용 권장)."""
     cache_key = f"saas:{sector or 'ALL'}"
     cached = _get_cached(cache_key)
-    if cached:
+    if cached is not None:
         return {"status": "success", "cached": True, "data": cached}
 
     sb = get_supabase()
@@ -45,17 +93,10 @@ def public_saas_pricing(sector: str = None):
         "include_task_assign, include_group_mgmt, include_miss_alert,"
         "include_law_alert, include_api_v2, include_safety_content, include_dashboard,"
         "badge_color, sort_order"
-    ).eq("is_active", True)
+    ).eq("is_active", True).in_("sector_code", ["BUILDING", "INDUSTRY", "CONSTRUCTION"])
 
-    # 섹터별 필터: STARTER/PREMIUM/ENTERPRISE 코드만
     if sector:
-        q = q.eq("sector_code", sector.upper()).in_(
-            "plan_code",
-            [f"{sector.upper()}_STARTER", f"{sector.upper()}_PREMIUM", f"{sector.upper()}_ENTERPRISE"]
-        )
-    else:
-        # 공개 노출은 섹터별 신규 플랜만
-        q = q.in_("sector_code", ["BUILDING", "INDUSTRY", "CONSTRUCTION"])
+        q = q.eq("sector_code", sector.upper())
 
     res = q.order("sort_order").execute()
     data = res.data or []
@@ -63,21 +104,18 @@ def public_saas_pricing(sector: str = None):
     return {"status": "success", "cached": False, "data": data}
 
 
-# ── 법령진단 가격 공개 API ───────────────────────────────────
-
 @router.get("/diagnosis")
 def public_diagnosis_pricing():
-    """
-    공개 법령진단 요금 조회 (V2 — 건물/산업/건설 3종).
-    """
+    """공개 법령진단 요금 조회 (레거시 — /diagnosis-reports 사용 권장)."""
     cached = _get_cached("diagnosis:v2")
-    if cached:
+    if cached is not None:
         return {"status": "success", "cached": True, "data": cached}
 
     sb = get_supabase()
     res = sb.table("price_diagnosis_report").select(
         "facility_type_code, facility_type_name, sector_display,"
-        "free_fee, total_report_fee, inquiry_label, price_version, sort_order"
+        "free_fee, basic_fee, equipment_fee, total_report_fee,"
+        "inquiry_label, price_version, sort_order"
     ).eq("is_active", True).eq("price_version", "v2").order("sort_order").execute()
 
     data = res.data or []
@@ -85,20 +123,15 @@ def public_diagnosis_pricing():
     return {"status": "success", "cached": False, "data": data}
 
 
-# ── 전체 가격 (SaaS + 진단) 한번에 ───────────────────────────
-
 @router.get("/all")
 def public_all_pricing(sector: str = None):
-    """
-    pricing.html에서 사용. SaaS + 법령진단 가격 동시 반환.
-    """
+    """SaaS + 법령진단 가격 동시 반환."""
     cached = _get_cached(f"all:{sector or 'ALL'}")
-    if cached:
+    if cached is not None:
         return {"status": "success", "cached": True, **cached}
 
     sb = get_supabase()
 
-    # SaaS
     saas_q = sb.table("price_saas_plan").select(
         "plan_code, display_name, description, sector_code,"
         "monthly_base_fee, annual_base_fee, annual_free_months,"
@@ -110,10 +143,10 @@ def public_all_pricing(sector: str = None):
         saas_q = saas_q.eq("sector_code", sector.upper())
     saas = saas_q.order("sort_order").execute().data or []
 
-    # 진단
     diag = sb.table("price_diagnosis_report").select(
         "facility_type_code, facility_type_name, sector_display,"
-        "free_fee, total_report_fee, inquiry_label, sort_order"
+        "free_fee, basic_fee, equipment_fee, total_report_fee,"
+        "inquiry_label, sort_order"
     ).eq("is_active", True).eq("price_version", "v2").order("sort_order").execute().data or []
 
     payload = {"saas_plans": saas, "diagnosis_plans": diag}
@@ -121,10 +154,8 @@ def public_all_pricing(sector: str = None):
     return {"status": "success", "cached": False, **payload}
 
 
-# ── 캐시 초기화 (관리자용) ───────────────────────────────────
-
 @router.delete("/cache")
 def clear_pricing_cache():
-    """관리자가 가격 변경 후 캐시를 수동으로 초기화합니다."""
+    """가격 변경 후 캐시 수동 초기화 (관리자용)."""
     _cache.clear()
     return {"status": "success", "message": "가격 캐시가 초기화되었습니다"}
