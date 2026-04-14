@@ -1,4 +1,5 @@
-# main.py — v5.21.0
+# main.py — v5.22.0
+# v5.22.0: connect_provider(공급자 서비스 가격 관리) 라우터 추가
 # v5.21.0: admin_connect(연결등록 관리) + admin_pricing(key 기반 가격수정) 라우터 추가
 # v5.20.0: public_pricing + connect_registration 라우터 추가
 # v5.19.0: worker_home 라우터 추가
@@ -66,12 +67,12 @@ from routers.agent_service           import router as agent_service_router
 from routers.precedent_api           import router as precedent_router
 from routers.weather                 import router as weather_router
 from routers.juso                    import router as juso_router
-from routers.experts                 import router as experts_router             # v5.11.0
-from routers.matching                import router as matching_router             # v5.14.0
-from routers.matching                import commission_router                      # v5.18.0
-from routers.contracts_engine        import router as contracts_engine_router      # v5.16.0
-from routers.settlements             import router as settlements_router           # v5.17.0
-from routers.identity                import router as identity_router             # v5.12.0
+from routers.experts                 import router as experts_router
+from routers.matching                import router as matching_router
+from routers.matching                import commission_router
+from routers.contracts_engine        import router as contracts_engine_router
+from routers.settlements             import router as settlements_router
+from routers.identity                import router as identity_router
 from routers.internal_api_registry   import router as internal_api_registry_router
 from routers.report_api_registry     import router as report_api_registry_router
 from routers.construction            import router as construction_router
@@ -88,7 +89,7 @@ from routers.corrective_actions      import router as corrective_actions_router
 from routers.messaging               import router as messaging_router
 from routers.fcm                     import router as fcm_router
 from routers.worker_check            import router as worker_check_router
-from routers.worker_home             import router as worker_home_router          # v5.19.0
+from routers.worker_home             import router as worker_home_router
 from routers.ai_copywrite            import router as ai_copywrite_router
 from routers.public                  import router as public_router
 from routers.public_admin            import router as public_admin_router
@@ -97,14 +98,15 @@ from routers.feature_flags           import router as feature_flags_router
 from routers.site_public             import router as site_public_router, admin_router as site_faq_admin_router
 from routers.anonymous_diagnosis     import router as anonymous_diagnosis_router
 from routers.mail                    import router as mail_router
-from routers.public_pricing          import router as public_pricing_router       # v5.20.0
-from routers.connect_registration    import router as connect_registration_router  # v5.20.0
-from routers.admin_connect           import router as admin_connect_router         # v5.21.0
-from routers.admin_pricing           import router as admin_pricing_router         # v5.21.0
+from routers.public_pricing          import router as public_pricing_router
+from routers.connect_registration    import router as connect_registration_router
+from routers.admin_connect           import router as admin_connect_router
+from routers.admin_pricing           import router as admin_pricing_router
+from routers.connect_provider        import router as connect_provider_router     # v5.22.0
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.21.0"
+APP_VERSION = "5.22.0"
 
 
 @asynccontextmanager
@@ -152,7 +154,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 공개 엔드포인트 (인증 불필요) — 먼저 등록
+# 공개 엔드포인트 (인증 불필요)
 app.include_router(public_router)
 app.include_router(public_admin_router)
 app.include_router(alert_messages_router)
@@ -160,10 +162,10 @@ app.include_router(feature_flags_router)
 app.include_router(site_public_router)
 app.include_router(site_faq_admin_router)
 app.include_router(anonymous_diagnosis_router)
-app.include_router(public_pricing_router)          # v5.20.0
-app.include_router(connect_registration_router)    # v5.20.0 — POST 공개
-app.include_router(admin_connect_router)           # v5.21.0 — GET/PATCH 관리자
-app.include_router(admin_pricing_router)           # v5.21.0 — PATCH 관리자
+app.include_router(public_pricing_router)
+app.include_router(connect_registration_router)
+app.include_router(admin_connect_router)
+app.include_router(admin_pricing_router)
 
 # 인증 필요 엔드포인트
 app.include_router(auth_router)
@@ -247,6 +249,7 @@ app.include_router(worker_check_router)
 app.include_router(worker_home_router)
 app.include_router(ai_copywrite_router)
 app.include_router(mail_router)
+app.include_router(connect_provider_router)   # v5.22.0
 
 
 @app.get("/")
