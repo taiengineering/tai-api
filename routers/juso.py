@@ -1,12 +1,16 @@
-# routers/juso.py — v1.0.0
-# 주소 검색 + 좌표 변환 (카카오 로컬 API)
+# routers/juso.py — v2.0.0
+# v2.0.0 (2026-04-14): 카카오 로컬 API 제거 → 행정안전부 도로명주소 API (juso.go.kr) 교체
+# v1.0.0: 카카오 로컬 API 사용 (제거됨)
 #
 # 환경변수:
-#   KAKAO_REST_API_KEY — 카카오 개발자센터 REST API 키
+#   JUSO_CONFIRM_KEY — 행정안전부 도로명주소 개발자센터 승인키
+#   (기존 KAKAO_REST_API_KEY 삭제 — Fly.io secrets에서도 제거 필요)
 #
-# 엔드포인트:
+# 엔드포인트 (응답 구조 동일 유지):
 #   GET /juso/coord?query=주소   → { success, data: { query, road_address, address, lat, lng } }
 #   GET /juso/search?query=주소  → 동일 (alias)
+#
+# 행안부 API 문서: https://www.juso.go.kr/addrlink/devAddrLinkRequestGuide.do
 
 from __future__ import annotations
 import os
@@ -17,70 +21,93 @@ from fastapi import APIRouter, Query, HTTPException
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/juso", tags=["주소·좌표"])
 
-KAKAO_KEY = os.environ.get("KAKAO_REST_API_KEY", "")
-KAKAO_URL = "https://dapi.kakao.com/v2/local/search/address.json"
+JUSO_KEY = os.environ.get("JUSO_CONFIRM_KEY", "")
+JUSO_URL = "https://www.juso.go.kr/addrlink/addrLinkApi.do"
 
 
-async def _search_kakao(query: str) -> dict:
+async def _search_juso(query: str) -> dict:
     """
-    카카오 로컬 API 호출 → 첫 번째 결과 반환.
+    행정안전부 도로명주소 API 호출 → 첫 번째 결과 반환.
+
     응답 구조:
-      road_address.address_name  → 도로명 주소
-      address.address_name       → 지번 주소
-      x                          → 경도(lng)
-      y                          → 위도(lat)
+      juso[0].roadAddr    → 도로명 주소 (전체)
+      juso[0].jibunAddr   → 지번 주소
+      juso[0].entX        → 경도(lng) WGS84 — 출입구 좌표
+      juso[0].entY        → 위도(lat) WGS84
+      juso[0].zipNo       → 우편번호
+      juso[0].siNm        → 시도명
+      juso[0].sggNm       → 시군구명
+
+    JUSO_CONFIRM_KEY 미설정 시 503 반환.
     """
-    if not KAKAO_KEY:
+    if not JUSO_KEY:
         raise HTTPException(
             status_code=503,
-            detail="KAKAO_REST_API_KEY 환경변수가 설정되지 않았습니다."
+            detail="JUSO_CONFIRM_KEY 환경변수가 설정되지 않았습니다. Fly.io secrets에 추가하세요."
         )
 
-    headers = {"Authorization": f"KakaoAK {KAKAO_KEY}"}
-    params  = {"query": query, "size": 1}
+    params = {
+        "confmKey":     JUSO_KEY,
+        "keyword":      query,
+        "resultType":   "json",
+        "currentPage":  1,
+        "countPerPage": 5,
+    }
 
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(KAKAO_URL, headers=headers, params=params)
+        resp = await client.get(JUSO_URL, params=params)
 
     if resp.status_code != 200:
         raise HTTPException(
             status_code=502,
-            detail=f"카카오 API 오류: HTTP {resp.status_code}"
+            detail=f"행안부 주소 API 오류: HTTP {resp.status_code}"
         )
 
-    body = resp.json()
-    docs = body.get("documents", [])
-    if not docs:
+    body    = resp.json()
+    results = body.get("results", {})
+    common  = results.get("common", {})
+    error_code = common.get("errorCode", "0")
+
+    if error_code != "0":
+        raise HTTPException(
+            status_code=502,
+            detail=f"행안부 API 오류코드 {error_code}: {common.get('errorMessage', '')}"
+        )
+
+    juso_list = results.get("juso", [])
+    if not juso_list:
         raise HTTPException(
             status_code=404,
             detail=f"주소를 찾을 수 없습니다: {query}"
         )
 
-    doc = docs[0]
+    item = juso_list[0]
 
-    # 도로명 주소
-    road_addr = doc.get("road_address")
-    road_address_name = (
-        road_addr.get("address_name", "") if road_addr else ""
-    )
+    road_address = item.get("roadAddr", "") or item.get("roadAddrPart1", "")
+    address      = item.get("jibunAddr", "") or road_address
 
-    # 지번 주소
-    jibun_addr = doc.get("address")
-    address_name = (
-        jibun_addr.get("address_name", "") if jibun_addr else ""
-    )
+    # 행안부 entX/entY — WGS84 좌표 (출입구 기준)
+    # 값이 없는 경우("" 또는 "0") 0.0으로 처리
+    def _coord(val) -> float:
+        try:
+            f = float(val)
+            return f if f != 0.0 else 0.0
+        except (TypeError, ValueError):
+            return 0.0
 
-    # 좌표
-    lng = float(doc.get("x", 0))
-    lat = float(doc.get("y", 0))
+    lng = _coord(item.get("entX"))
+    lat = _coord(item.get("entY"))
 
     return {
         "query":        query,
-        "road_address": road_address_name or address_name,
-        "address":      address_name or road_address_name,
+        "road_address": road_address,
+        "address":      address,
         "lat":          lat,
         "lng":          lng,
-        "raw":          doc,   # 원본 필드 전체 (프론트 디버깅용)
+        "zip_code":     item.get("zipNo", ""),
+        "sido":         item.get("siNm", ""),
+        "sigungu":      item.get("sggNm", ""),
+        "raw":          item,   # 원본 필드 전체 (프론트 디버깅용)
     }
 
 
@@ -91,21 +118,26 @@ async def get_coord(
     """
     주소 → 좌표 + 정규화 주소 반환.
 
+    행정안전부 도로명주소 API 사용 (v2.0.0, 카카오 API 제거).
+
     응답:
     ```json
     {
       "success": true,
       "data": {
         "query": "서울시 강남구 테헤란로",
-        "road_address": "서울 강남구 테헤란로",
-        "address": "서울 강남구 역삼동 735",
+        "road_address": "서울특별시 강남구 테헤란로",
+        "address": "서울특별시 강남구 역삼동 735",
         "lat": 37.5013,
-        "lng": 127.0397
+        "lng": 127.0397,
+        "zip_code": "06236",
+        "sido": "서울특별시",
+        "sigungu": "강남구"
       }
     }
     ```
     """
-    data = await _search_kakao(query)
+    data = await _search_juso(query)
     return {"success": True, "data": data}
 
 
@@ -114,5 +146,5 @@ async def search_address(
     query: str = Query(..., description="검색할 주소"),
 ):
     """GET /juso/coord 와 동일한 응답 — alias."""
-    data = await _search_kakao(query)
+    data = await _search_juso(query)
     return {"success": True, "data": data}
