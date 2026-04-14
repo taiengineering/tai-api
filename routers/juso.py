@@ -1,58 +1,51 @@
 # routers/juso.py — v2.0.0
-# v2.0.0 (2026-04-14): 카카오 로컬 API 제거 → 행정안전부 도로명주소 API (juso.go.kr) 교체
-# v1.0.0: 카카오 로컬 API 사용 (제거됨)
+# 주소 검색 + 좌표 변환 (행정안전부 도로명주소 API)
+# 카카오 API 완전 제거 (2026-04-14)
 #
 # 환경변수:
-#   JUSO_CONFIRM_KEY — 행정안전부 도로명주소 개발자센터 승인키
-#   (기존 KAKAO_REST_API_KEY 삭제, Fly.io secrets에서도 제거 필요)
+#   JUSO_CONFIRM_KEY — 행정안전부 도로명주소 API 승인키
+#     신청: https://business.juso.go.kr/addrlink/openApi/apiReqst.do
 #
-# 엔드포인트 (응답 구조 동일 유지):
-#   GET /juso/coord?query=주소   → { success, data: { query, road_address, address, lat, lng } }
-#   GET /juso/search?query=주소  → 동일 (alias)
-#
-# 행안부 API 문서: https://www.juso.go.kr/addrlink/devAddrLinkRequestGuide.do
+# 엔드포인트:
+#   GET /juso/search?query=주소           → 주소 목록 (최대 10건)
+#   GET /juso/coord?query=주소            → 첫 번째 결과 + 좌표
+#   GET /juso/coord?admCd=&rnMgtSn=&udrtYn=&buldMnnm=&buldSlno= → 좌표만
 
 from __future__ import annotations
 import os
 import logging
 import httpx
 from fastapi import APIRouter, Query, HTTPException
+from typing import Optional
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/juso", tags=["주소·좌표"])
 
 JUSO_KEY = os.environ.get("JUSO_CONFIRM_KEY", "")
-JUSO_URL = "https://www.juso.go.kr/addrlink/addrLinkApi.do"
+JUSO_SEARCH_URL = "https://business.juso.go.kr/addrlink/addrLinkApi.do"
+JUSO_COORD_URL  = "https://business.juso.go.kr/addrlink/addrCoordApi.do"
 
 
-async def _search_juso(query: str) -> dict:
+async def _search_juso(query: str, count: int = 10) -> list[dict]:
     """
-    행정안전부 도로명주소 API 호출 → 첫 번째 결과 반환.
-
-    응답 구조:
-      juso[0].roadAddr    → 도로명 주소 (전체)
-      juso[0].jibunAddr   → 지번 주소
-      juso[0].entX        → 경도(lng) WGS84 — 출입구 좌표
-      juso[0].entY        → 위도(lat) WGS84
-
-    JUSO_CONFIRM_KEY 미설정 시 503 반환.
+    행안부 도로명주소 API 호출 → 주소 목록 반환.
     """
     if not JUSO_KEY:
         raise HTTPException(
             status_code=503,
-            detail="JUSO_CONFIRM_KEY 환경변수가 설정되지 않았습니다. Fly.io secrets에 추가하세요."
+            detail="JUSO_CONFIRM_KEY 환경변수가 설정되지 않았습니다."
         )
 
     params = {
-        "confmKey":     JUSO_KEY,
-        "keyword":      query,
-        "resultType":   "json",
-        "currentPage":  1,
-        "countPerPage": 5,
+        "confmKey":   JUSO_KEY,
+        "keyword":    query,
+        "resultType": "json",
+        "countPerPage": str(count),
+        "currentPage": "1",
     }
 
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(JUSO_URL, params=params)
+        resp = await client.get(JUSO_SEARCH_URL, params=params)
 
     if resp.status_code != 200:
         raise HTTPException(
@@ -63,85 +56,142 @@ async def _search_juso(query: str) -> dict:
     body = resp.json()
     results = body.get("results", {})
     common  = results.get("common", {})
-    error_code = common.get("errorCode", "0")
 
-    if error_code != "0":
+    # 에러 체크
+    err_cd = common.get("errorCode", "0")
+    if err_cd != "0":
+        err_msg = common.get("errorMessage", "알 수 없는 오류")
         raise HTTPException(
-            status_code=502,
-            detail=f"행안부 API 오류코드 {error_code}: {common.get('errorMessage', '')}"
+            status_code=400,
+            detail=f"주소 검색 오류: [{err_cd}] {err_msg}"
         )
 
     juso_list = results.get("juso", [])
     if not juso_list:
+        return []
+
+    # 정규화된 결과 반환
+    return [
+        {
+            "road_address":  j.get("roadAddr", ""),
+            "jibun_address": j.get("jibunAddr", ""),
+            "zip_code":      j.get("zipNo", ""),
+            "building_name": j.get("bdNm", ""),
+            "sido":          j.get("siNm", ""),
+            "sigungu":       j.get("sggNm", ""),
+            # 좌표 API 호출에 필요한 키값들
+            "adm_cd":        j.get("admCd", ""),
+            "rn_mgt_sn":     j.get("rnMgtSn", ""),
+            "udrt_yn":       j.get("udrtYn", ""),
+            "buld_mnnm":     j.get("buldMnnm", ""),
+            "buld_slno":     j.get("buldSlno", ""),
+        }
+        for j in juso_list
+    ]
+
+
+async def _get_coord(adm_cd: str, rn_mgt_sn: str, udrt_yn: str,
+                     buld_mnnm: str, buld_slno: str) -> dict:
+    """
+    행안부 좌표제공 API 호출 → 위경도 반환.
+    """
+    if not JUSO_KEY:
         raise HTTPException(
-            status_code=404,
-            detail=f"주소를 찾을 수 없습니다: {query}"
+            status_code=503,
+            detail="JUSO_CONFIRM_KEY 환경변수가 설정되지 않았습니다."
         )
 
-    item = juso_list[0]
-
-    road_address = item.get("roadAddr", "") or item.get("roadAddrPart1", "")
-    address      = item.get("jibunAddr", "") or road_address
-
-    # 행안부 entX/entY — WGS84 좌표 (출입구 기준)
-    # 값이 없는 경우("" 또는 "0") 0.0으로 처리
-    def _coord(val) -> float:
-        try:
-            f = float(val)
-            return f if f != 0.0 else 0.0
-        except (TypeError, ValueError):
-            return 0.0
-
-    lng = _coord(item.get("entX"))
-    lat = _coord(item.get("entY"))
-
-    return {
-        "query":        query,
-        "road_address": road_address,
-        "address":      address,
-        "lat":          lat,
-        "lng":          lng,
-        "zip_code":     item.get("zipNo", ""),
-        "sido":         item.get("siNm", ""),
-        "sigungu":      item.get("sggNm", ""),
-        "raw":          item,   # 원본 필드 전체 (프론트 디버깅용)
+    params = {
+        "confmKey":   JUSO_KEY,
+        "admCd":      adm_cd,
+        "rnMgtSn":    rn_mgt_sn,
+        "udrtYn":     udrt_yn,
+        "buldMnnm":   buld_mnnm,
+        "buldSlno":   buld_slno,
+        "resultType": "json",
     }
 
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(JUSO_COORD_URL, params=params)
 
-@router.get("/coord")
-async def get_coord(
-    query: str = Query(..., description="검색할 주소 (예: 서울시 강남구 테헤란로)"),
-):
-    """
-    주소 → 좌표 + 정규화 주소 반환.
+    if resp.status_code != 200:
+        return {"lat": None, "lng": None}
 
-    행정안전부 도로명주소 API 사용 (v2.0.0, 카카오 API 제거).
+    body = resp.json()
+    results = body.get("results", {})
+    juso_list = results.get("juso", [])
 
-    응답:
-    ```json
-    {
-      "success": true,
-      "data": {
-        "query": "서울시 강남구 테헤란로",
-        "road_address": "서울특별시 강남구 테헤란로",
-        "address": "서울특별시 강남구 역삼동 735",
-        "lat": 37.5013,
-        "lng": 127.0397,
-        "zip_code": "06236",
-        "sido": "서울특별시",
-        "sigungu": "강남구"
-      }
-    }
-    ```
-    """
-    data = await _search_juso(query)
-    return {"success": True, "data": data}
+    if not juso_list:
+        return {"lat": None, "lng": None}
+
+    j = juso_list[0]
+    lat = j.get("entY") or j.get("y")
+    lng = j.get("entX") or j.get("x")
+
+    try:
+        return {"lat": float(lat), "lng": float(lng)}
+    except (TypeError, ValueError):
+        return {"lat": None, "lng": None}
 
 
 @router.get("/search")
 async def search_address(
-    query: str = Query(..., description="검색할 주소"),
+    query: str = Query(..., description="검색할 주소 (예: 서울시 강남구 테헤란로)"),
+    count: int = Query(10, ge=1, le=20, description="결과 수"),
 ):
-    """GET /juso/coord 와 동일한 응답 — alias."""
-    data = await _search_juso(query)
-    return {"success": True, "data": data}
+    """
+    주소 검색 → 후보 목록 반환.
+    프론트에서 사용자가 선택하면 해당 주소의 키값으로 /juso/coord 호출.
+    """
+    results = await _search_juso(query, count)
+    return {"success": True, "data": results, "count": len(results)}
+
+
+@router.get("/coord")
+async def get_coord(
+    query: Optional[str] = Query(None, description="검색할 주소 (자동으로 첫 번째 결과의 좌표 반환)"),
+    admCd: Optional[str] = Query(None, description="행정구역코드"),
+    rnMgtSn: Optional[str] = Query(None, description="도로명코드"),
+    udrtYn: Optional[str] = Query(None, description="지하여부"),
+    buldMnnm: Optional[str] = Query(None, description="건물본번"),
+    buldSlno: Optional[str] = Query(None, description="건물부번"),
+):
+    """
+    주소 → 좌표 반환.
+
+    사용법 1: query만 전달 → 첫 번째 검색 결과의 좌표 반환
+    사용법 2: admCd, rnMgtSn, udrtYn, buldMnnm, buldSlno 전달 → 해당 주소의 좌표 반환
+    """
+    # 방법 2: 키값으로 직접 좌표 조회
+    if admCd and rnMgtSn:
+        coord = await _get_coord(admCd, rnMgtSn, udrtYn or "0", buldMnnm or "0", buldSlno or "0")
+        return {"success": True, "data": coord}
+
+    # 방법 1: 주소 텍스트로 검색 후 첫 번째 결과의 좌표
+    if not query:
+        raise HTTPException(status_code=400, detail="query 또는 admCd+rnMgtSn 파라미터가 필요합니다.")
+
+    results = await _search_juso(query, 1)
+    if not results:
+        raise HTTPException(status_code=404, detail=f"주소를 찾을 수 없습니다: {query}")
+
+    addr = results[0]
+    coord = await _get_coord(
+        addr["adm_cd"], addr["rn_mgt_sn"], addr["udrt_yn"],
+        addr["buld_mnnm"], addr["buld_slno"]
+    )
+
+    return {
+        "success": True,
+        "data": {
+            "query":        query,
+            "road_address": addr["road_address"],
+            "jibun_address": addr["jibun_address"],
+            "zip_code":     addr["zip_code"],
+            "building_name": addr["building_name"],
+            "sido":         addr["sido"],
+            "sigungu":      addr["sigungu"],
+            "lat":          coord["lat"],
+            "lng":          coord["lng"],
+        }
+    }
