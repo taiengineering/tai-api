@@ -1,9 +1,9 @@
-# routers/juso.py — v2.0.0
+# routers/juso.py — v2.0.1
 # 주소 검색 + 좌표 변환 (행정안전부 도로명주소 API)
 # 카카오 API 완전 제거 (2026-04-14)
 #
 # 환경변수:
-#   JUSO_CONFIRM_KEY — 행정안전부 도로명주소 API 승인키
+#   JUSO_API_KEY — 행정안전부 도로명주소 API 승인키
 #     신청: https://business.juso.go.kr/addrlink/openApi/apiReqst.do
 #
 # 엔드포인트:
@@ -21,7 +21,7 @@ from typing import Optional
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/juso", tags=["주소·좌표"])
 
-JUSO_KEY = os.environ.get("JUSO_CONFIRM_KEY", "")
+JUSO_KEY = os.environ.get("JUSO_API_KEY", "")
 JUSO_SEARCH_URL = "https://business.juso.go.kr/addrlink/addrLinkApi.do"
 JUSO_COORD_URL  = "https://business.juso.go.kr/addrlink/addrCoordApi.do"
 
@@ -33,7 +33,7 @@ async def _search_juso(query: str, count: int = 10) -> list[dict]:
     if not JUSO_KEY:
         raise HTTPException(
             status_code=503,
-            detail="JUSO_CONFIRM_KEY 환경변수가 설정되지 않았습니다."
+            detail="JUSO_API_KEY 환경변수가 설정되지 않았습니다."
         )
 
     params = {
@@ -98,7 +98,7 @@ async def _get_coord(adm_cd: str, rn_mgt_sn: str, udrt_yn: str,
     if not JUSO_KEY:
         raise HTTPException(
             status_code=503,
-            detail="JUSO_CONFIRM_KEY 환경변수가 설정되지 않았습니다."
+            detail="JUSO_API_KEY 환경변수가 설정되지 않았습니다."
         )
 
     params = {
