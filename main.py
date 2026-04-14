@@ -1,4 +1,5 @@
-# main.py — v5.19.0
+# main.py — v5.20.0
+# v5.20.0: public_pricing(공개 가격 API) + connect_registration(연결 사전등록) 라우터 추가
 # v5.19.0: worker_home 라우터 추가 (오늘의 할일 API + QR 스캔 점검세트)
 # v5.18.0: 대시보드/파이프라인/price-commission CRUD + 리포트 업로드 URL
 # v5.17.0: settlements 정산 시스템
@@ -95,10 +96,12 @@ from routers.feature_flags           import router as feature_flags_router
 from routers.site_public             import router as site_public_router, admin_router as site_faq_admin_router
 from routers.anonymous_diagnosis     import router as anonymous_diagnosis_router
 from routers.mail                    import router as mail_router
+from routers.public_pricing          import router as public_pricing_router       # v5.20.0
+from routers.connect_registration    import router as connect_registration_router  # v5.20.0
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.19.0"
+APP_VERSION = "5.20.0"
 
 
 @asynccontextmanager
@@ -153,6 +156,8 @@ app.include_router(feature_flags_router)
 app.include_router(site_public_router)
 app.include_router(site_faq_admin_router)
 app.include_router(anonymous_diagnosis_router)
+app.include_router(public_pricing_router)          # v5.20.0 — 인증 불필요
+app.include_router(connect_registration_router)    # v5.20.0 — POST 공개 / GET·PATCH 인증
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(companies_router)
