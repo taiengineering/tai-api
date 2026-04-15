@@ -1,6 +1,10 @@
 """
-법령 판정 엔진 라우터 — v5.6.7
+법령 판정 엔진 라우터 — v5.6.8
 =================================
+v5.6.8 (2026-04-15):
+  BE-1: diagnose/step1 완료 시 inspection_sets 자동 생성 (모든 섹터)
+  BE-3: contract_amount_eok 필드 설명 추가 (단위: 억원 명확화)
+
 v5.6.7 (2026-04-07):
   CONSTRUCTION sector에서 diagnose/step1 완료 시
   generate_schedules_from_diagnosis(factory_id) 자동 트리거
@@ -36,7 +40,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.6.7"  # v5.6.7: CONSTRUCTION diagnose_step1 완료 시 일정 자동생성 트리거
+ENGINE_VERSION = "5.6.8"  # v5.6.8: diagnose/step1 완료 시 inspection_sets 자동 생성
 
 
 # ──────────────────────────────────────────────
@@ -586,7 +590,12 @@ class DiagnoseStep1Body(BaseModel):
     total_floor_area: Optional[float] = None
     electric_capacity: Optional[float] = None
     floor_count: Optional[int] = None
-    contract_amount_eok: Optional[float] = None
+    # BE-3: 단위 명확화 — 억원(100,000,000원) 단위. 150억 → 150 입력. 원화(원) 입력 시 오판정 발생
+    contract_amount_eok: Optional[float] = Field(
+        None,
+        description="공사금액 단위: 억원(1억=100,000,000원). 예) 150억원 공사 → 150 입력. "
+                    "원화(원) 단위로 입력하면 판정 오류 발생.",
+    )
     ksic_major: Optional[str] = None
     facility_type: Optional[str] = None
     elevator_count: Optional[int] = Field(None)
@@ -817,9 +826,12 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         raise HTTPException(status_code=400, detail="sector는 BUILDING, MANUFACTURING, CONSTRUCTION, SPECIAL_FACILITY 중 하나여야 합니다.")
     factory_id = (body.factory_id or "").strip()
     supabase = get_supabase()
+    _fac_company_id = None  # BE-1: inspection_sets 자동생성용
     if factory_id:
-        fac_check = supabase.table("factories").select("id").eq("id", factory_id).limit(1).execute()
+        # BE-3: company_id도 함께 조회 (inspection_sets 생성에 필요)
+        fac_check = supabase.table("factories").select("id, company_id").eq("id", factory_id).limit(1).execute()
         if not fac_check.data: raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다.")
+        _fac_company_id = fac_check.data[0].get("company_id")
 
     sector_groups = get_sector_groups(_normalize_sector_db(sector_raw))
     rules_res = supabase.table("master_building_legal_rules").select("*").eq("is_active", True).in_("sector", sector_groups).eq("diagnosis_stage", 1).execute()
@@ -935,6 +947,14 @@ async def diagnose_step1(body: DiagnoseStep1Body):
             generate_schedules_from_diagnosis(factory_id)
         except Exception as e:
             print(f"[AUTO_SCHEDULE] 건설현장 일정 자동생성 실패: {e}")
+
+    # v5.6.8 BE-1: inspection_sets 자동 생성 (모든 섹터)
+    if factory_id and diagnosis_id and applicable:
+        try:
+            from routers.inspection_set_auto import auto_create_inspection_sets_from_diagnosis
+            auto_create_inspection_sets_from_diagnosis(supabase, factory_id, _fac_company_id, applicable)
+        except Exception as e:
+            print(f"[AUTO_INSPECT_SETS] inspection_sets 자동생성 실패: {e}")
 
     result_data["diagnosis_id"] = diagnosis_id
     return {"status": "success", "data": result_data}
@@ -1098,8 +1118,7 @@ def diagnose_step2(body: dict):
             prev = prev_res.data
         except Exception: pass
     sector = (prev or {}).get('sector', body.get('sector', 'CONSTRUCTION'))
-    input_data = dict((prev or {}).get('input_data') or {})
-    input_data.update({'processes': body.get('processes', []), 'construction_types': body.get('construction_types', []), 'sector': sector})
+    input_data = dict((prev or {}).get('input_data') or {}); input_data.update({'processes': body.get('processes', []), 'construction_types': body.get('construction_types', []), 'sector': sector})
     kcsc_processes: List[Dict] = []; kcsc_process_summary: List[Dict] = []
     if kcsc_process_ids:
         try:
