@@ -1,10 +1,9 @@
 # main.py — v5.24.0
-# v5.24.0: fix_matching_api 라우터 추가 (POST /matching/requests TAI Fix 서비스요청)
-# v5.23.0: diagnosis_fields 라우터 추가 (법령진단 입력항목 + 가격판단 API)
+# v5.24.0: fix_chat 라우터 추가 (TAI Fix 대화형 입력부)
+# v5.23.0: diagnosis_fields 라우터 추가
 # v5.22.0: fix_providers_api 라우터 추가
 # v5.21.0: admin_connect + admin_pricing 라우터 추가
 # v5.20.0: public_pricing + connect_registration 라우터 추가
-# v5.19.0: worker_home 라우터 추가
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -102,8 +101,8 @@ from routers.connect_registration    import router as connect_registration_route
 from routers.admin_connect           import router as admin_connect_router
 from routers.admin_pricing           import router as admin_pricing_router
 from routers.fix_providers_api       import router as fix_providers_router
-from routers.diagnosis_fields        import router as diagnosis_fields_router     # v5.23.0
-from routers.fix_matching_api        import router as fix_matching_router         # v5.24.0
+from routers.diagnosis_fields        import router as diagnosis_fields_router
+from routers.fix_chat                import router as fix_chat_router             # v5.24.0
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +154,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 공개 엔드포인트 (인증 불필요) — 먼저 등록
+# 공개 엔드포인트
 app.include_router(public_router)
 app.include_router(public_admin_router)
 app.include_router(alert_messages_router)
@@ -168,8 +167,8 @@ app.include_router(connect_registration_router)
 app.include_router(admin_connect_router)
 app.include_router(admin_pricing_router)
 app.include_router(fix_providers_router)
-app.include_router(diagnosis_fields_router)        # v5.23.0 — 공개
-app.include_router(fix_matching_router)            # v5.24.0 — 공개
+app.include_router(diagnosis_fields_router)
+app.include_router(fix_chat_router)                # v5.24.0 — start/message 공개, complete 회원전용
 
 # 인증 필요 엔드포인트
 app.include_router(auth_router)
