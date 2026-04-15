@@ -1,4 +1,5 @@
 # routers/fix_chat.py — TAI Fix 대화형 입력부 API
+# v1.1.1 (2026-04-15): admin/stats 응답에 프론트 호환 편의 필드 추가
 # v1.1.0 (2026-04-15): 어드민 API 3개 추가 (stats, sessions, session detail)
 # v1.0.1 (2026-04-15): 오타 수정
 # v1.0.0 (2026-04-15): 신규
@@ -312,7 +313,9 @@ def admin_stats(current_user: dict = Depends(get_current_user)):
     _require_admin(current_user)
     sb = get_supabase()
 
-    all_res = sb.table("fix_chat_sessions").select("id, status, user_type, intent, current_turn, created_at").execute()
+    all_res = sb.table("fix_chat_sessions").select(
+        "id, status, user_type, intent, current_turn, request_id, created_at"
+    ).execute()
     rows = all_res.data or []
     total = len(rows)
 
@@ -349,6 +352,12 @@ def admin_stats(current_user: dict = Depends(get_current_user)):
     connected = sum(1 for r in rows if r.get("request_id"))
 
     return {
+        # 프론트 호환 편의 필드
+        "total":           total,
+        "active":          by_status.get("ACTIVE", 0),
+        "completed":       connected,
+        "guest":           by_user_type.get("GUEST", 0),
+        # 상세 필드
         "total_sessions":  total,
         "today_sessions":  today_count,
         "total_turns":     total_turns,
