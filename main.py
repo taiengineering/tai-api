@@ -1,11 +1,9 @@
-# main.py — v5.22.0
-# v5.22.0: fix_providers_api 라우터 추가 (TAI Fix 업체등록 API)
+# main.py — v5.23.0
+# v5.23.0: diagnosis_fields 라우터 추가 (법령진단 입력항목 + 가격판단 API)
+# v5.22.0: fix_providers_api 라우터 추가
 # v5.21.0: admin_connect + admin_pricing 라우터 추가
 # v5.20.0: public_pricing + connect_registration 라우터 추가
 # v5.19.0: worker_home 라우터 추가
-# v5.18.0: 대시보드/파이프라인/price-commission CRUD
-# v5.17.0: settlements 정산 시스템
-# v5.16.0: contracts_engine 추가
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -102,11 +100,12 @@ from routers.public_pricing          import router as public_pricing_router
 from routers.connect_registration    import router as connect_registration_router
 from routers.admin_connect           import router as admin_connect_router
 from routers.admin_pricing           import router as admin_pricing_router
-from routers.fix_providers_api       import router as fix_providers_router        # v5.22.0
+from routers.fix_providers_api       import router as fix_providers_router
+from routers.diagnosis_fields        import router as diagnosis_fields_router     # v5.23.0
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.22.0"
+APP_VERSION = "5.23.0"
 
 
 @asynccontextmanager
@@ -166,7 +165,8 @@ app.include_router(public_pricing_router)
 app.include_router(connect_registration_router)
 app.include_router(admin_connect_router)
 app.include_router(admin_pricing_router)
-app.include_router(fix_providers_router)           # v5.22.0 — POST/GET 공개
+app.include_router(fix_providers_router)
+app.include_router(diagnosis_fields_router)        # v5.23.0 — 공개
 
 # 인증 필요 엔드포인트
 app.include_router(auth_router)
