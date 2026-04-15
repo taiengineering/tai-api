@@ -1,17 +1,18 @@
 """
-메세지미 SMS/알림톡 라우터 — v4.0.0
+메세지미 SMS/알림톡 라우터 — v5.0.0
 
-v4.0.0 (2026-04-15):
-  [CHANGE] Fly.io → 메세지미 직접 호출 (137.66.9.95 IP 예외처리 완료)
-  Edge Function 경유 제거
+v5.0.0 (2026-04-15):
+  [CHANGE] Vultr 서울 고정 IP 프록시 경유 (158.247.224.158:3128)
+  구조: Fly.io → Vultr Squid 프록시(고정 IP) → 메세지미
+  OUTBOUND_PROXY 환경변수 미설정 시 직접 호출 fallback
 
-v3.2.0: Supabase Edge Function 경유 방식 (IP 미허가 시 우회)
-
-구조: Fly.io → 메세지미 서버 (직접)
+v4.0.0: Fly.io 직접 호출 (아웃바운드 IP 변동으로 차단됨)
+v3.2.0: Supabase Edge Function 경유 방식
 
 환경변수:
   MESSAGEME_API_KEY  — 메세지미 API 전송키
   MESSAGEME_SENDER   — 발신번호 (사전 등록된 번호)
+  OUTBOUND_PROXY     — 고정 IP 프록시 (예: http://158.247.224.158:3128)
 """
 import logging
 import os
@@ -33,6 +34,7 @@ def _get_cfg():
     return {
         "api_key": os.getenv("MESSAGEME_API_KEY", ""),
         "sender":  os.getenv("MESSAGEME_SENDER", ""),
+        "proxy":   os.getenv("OUTBOUND_PROXY", ""),
     }
 
 
@@ -41,11 +43,27 @@ def _msg_type(message: str) -> str:
 
 
 def _call_messageme(payload: dict, url: str) -> dict:
-    """메세지미에 form-data로 직접 POST"""
+    """
+    메세지미에 form-data POST.
+    OUTBOUND_PROXY 설정 시 Vultr 고정 IP 프록시 경유.
+    미설정 시 직접 호출 (fallback).
+    """
+    cfg = _get_cfg()
+    proxies = None
+    mode = "direct"
+
+    if cfg["proxy"]:
+        proxies = {
+            "http":  cfg["proxy"],
+            "https": cfg["proxy"],
+        }
+        mode = f"proxy({cfg['proxy']})"
+
     resp = _req.post(
         url,
         data=payload,
         headers={"Content-Type": "application/x-www-form-urlencoded"},
+        proxies=proxies,
         timeout=15,
     )
     raw = resp.text
@@ -56,8 +74,8 @@ def _call_messageme(payload: dict, url: str) -> dict:
 
     code    = str(parsed.get("result", parsed.get("code", "")))
     success = (code == "100")
-    log.info(f"[MESSAGING] 직접 호출 결과 (HTTP {resp.status_code}): code={code} raw={raw[:200]}")
-    return {"success": success, "code": code, "raw": raw, "parsed": parsed}
+    log.info(f"[MESSAGING] mode={mode} HTTP {resp.status_code} code={code} raw={raw[:200]}")
+    return {"success": success, "code": code, "raw": raw, "parsed": parsed, "mode": mode}
 
 
 # ── Pydantic 모델 ───────────────────────────────────────────────
@@ -90,11 +108,12 @@ class UnifiedSendBody(BaseModel):
 def debug_messaging():
     cfg = _get_cfg()
     return {
-        "status":    "ready",
-        "mode":      "Fly.io 직접 호출 (메세지미 IP 허가 완료)",
-        "sms_url":   SMS_URL,
-        "api_key":   "설정됨" if cfg["api_key"] else "❌ 미설정",
-        "sender":    cfg["sender"] or "❌ 미설정",
+        "status":  "ready",
+        "mode":    "Vultr 고정 IP 프록시 경유" if cfg["proxy"] else "직접 호출 (프록시 미설정)",
+        "proxy":   cfg["proxy"] or "OUTBOUND_PROXY 미설정",
+        "sms_url": SMS_URL,
+        "api_key": "설정됨" if cfg["api_key"] else "미설정",
+        "sender":  cfg["sender"] or "미설정",
     }
 
 
@@ -112,9 +131,9 @@ def debug_send(receiver: str, message: str = "TAI Safe 테스트 메시지"):
             "msg":      message,
         }
         result = _call_messageme(payload, SMS_URL)
-        return {"mode": "direct", "receiver": receiver, "result": result}
+        return {"receiver": receiver, "result": result}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"메세지미 직접 호출 실패: {e}")
+        raise HTTPException(status_code=502, detail=f"메세지미 호출 실패: {e}")
 
 
 # ── SMS 발송 ────────────────────────────────────────────────────
@@ -182,7 +201,6 @@ def send_unified(body: UnifiedSendBody):
         raise HTTPException(status_code=503, detail="MESSAGEME_API_KEY / MESSAGEME_SENDER 미설정")
     try:
         if body.template_code:
-            # 알림톡
             payload = {
                 "api_key":       cfg["api_key"],
                 "callback":      cfg["sender"],
@@ -198,7 +216,6 @@ def send_unified(body: UnifiedSendBody):
             result = _call_messageme(payload, ALIMTALK_URL)
             msg_type = "alimtalk"
         else:
-            # SMS
             payload = {
                 "api_key":  cfg["api_key"],
                 "callback": cfg["sender"],
