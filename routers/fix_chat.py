@@ -1,4 +1,5 @@
 # routers/fix_chat.py — TAI Fix 대화형 입력부 API
+# v1.0.1 (2026-04-15): 오타 수정 (말씀/어느/걱정/혹시/존댓말)
 # v1.0.0 (2026-04-15): 신규
 #   POST /fix/chat/start    — 대화 세션 생성 (인증 불필요)
 #   POST /fix/chat/message  — 메시지 전송 → Claude API → 응답 (인증 불필요)
@@ -32,7 +33,7 @@ SYSTEM_PROMPT = """당신은 TAI 산업안전 매칭 전문가입니다.
 
 1단계 — 의도 파악 (1~2턴)
   상대방의 첫 말에서 의도를 파악합니다.
-  의도: REPAIR(수선) / APPOINTMENT(선임) / DIAGNOSIS(진단) / CONSULTING(콘설팅)
+  의도: REPAIR(수선) / APPOINTMENT(선임) / DIAGNOSIS(진단) / CONSULTING(컨설팅)
   의도가 불명확하면 한 번만 더 물어봅니다.
 
 2단계 — 의도별 정보 수집 (3~5턴)
@@ -58,7 +59,7 @@ SYSTEM_PROMPT = """당신은 TAI 산업안전 매칭 전문가입니다.
   필수: 시설 유형, 진단 목적, 현장 위치
   선택: 연면적, 준공연도, 이전 진단 이력
 
-[CONSULTING — 콘설팅/법령]
+[CONSULTING — 컨설팅/법령]
   필수: 관련 법령/제도, 업종, 규모
   선택: 현재 관리 체계, 지적사항 이력
 
@@ -74,10 +75,12 @@ SYSTEM_PROMPT = """당신은 TAI 산업안전 매칭 전문가입니다.
 3. 가격을 말하지 않는다.
 
 4. 주제를 벗어나면 부드럽게 돌린다.
+   "저는 산업안전 분야 매칭 전문가라 그 부분은 도움드리기 어렵습니다.
+    혹시 시설 관련해서 도움이 필요하신 부분이 있으신가요?"
 
 5. 필수 정보가 모이면 즉시 연결 제안한다.
 
-6. 공감하되 길지 않게. "걸정되시겠습니다" 한 줄이면 충분.
+6. 공감하되 길지 않게. "걱정되시겠습니다" 한 줄이면 충분.
 
 # 마지막 턴 형식
 
@@ -92,7 +95,7 @@ SYSTEM_PROMPT = """당신은 TAI 산업안전 매칭 전문가입니다.
 
 # 응답 스타일
 
-- 존됓말 사용
+- 존댓말 사용
 - 간결하게 (한 턴 최대 3~4문장)
 - 전문가답되 딱딱하지 않게
 - 이모지 최소 사용 (📋 정리할 때만)
@@ -118,10 +121,10 @@ USER_TYPE_MAX_TURNS = {
     "SUBSCRIBER": 12,
 }
 
-GREETING = "안녕하세요. TAI 매칭 전문가입니다. 어떤 상황인지 편하게 말쏴해주세요."
+GREETING = "안녕하세요. TAI 매칭 전문가입니다. 어떤 상황인지 편하게 말씀해주세요."
 
 GUEST_LIMIT_MSG = (
-    "상황이 어는 정도 파악되었습니다.\n"
+    "상황이 어느 정도 파악되었습니다.\n"
     "전문 업체 매칭을 위해 회원가입이 필요합니다.\n\n"
     "지금까지 대화 내용은 저장되어 있으며,\n"
     "회원가입 후 바로 이어서 진행하실 수 있습니다."
@@ -164,10 +167,10 @@ async def _call_claude(messages: list) -> tuple[str, int]:
 
 @router.post("/start")
 def start_chat(body: StartBody):
-    """\uc0c8 \ub300\ud654 \uc138\uc158 \uc0dd\uc131 \u2014 \uc778\uc99d \ubd88\ud544\uc694 (\ube44\ud68c\uc6d0/\ud68c\uc6d0 \ubaa8\ub450)"""
+    """새 대화 세션 생성 — 인증 불필요 (비회원/회원 모두)"""
     user_type = body.user_type.upper()
     if user_type not in USER_TYPE_MAX_TURNS:
-        raise HTTPException(status_code=400, detail=f"user_type\uc740 {list(USER_TYPE_MAX_TURNS.keys())} \uc911 \ud558\ub098\uc5ec\uc57c \ud569\ub2c8\ub2e4")
+        raise HTTPException(status_code=400, detail=f"user_type은 {list(USER_TYPE_MAX_TURNS.keys())} 중 하나여야 합니다")
 
     sb  = get_supabase()
     res = sb.table("fix_chat_sessions").insert({
@@ -177,7 +180,7 @@ def start_chat(body: StartBody):
     }).execute()
 
     if not res.data:
-        raise HTTPException(status_code=500, detail="\uc138\uc158 \uc0dd\uc131 \uc2e4\ud328")
+        raise HTTPException(status_code=500, detail="세션 생성 실패")
 
     return {
         "session_id":       res.data[0]["id"],
@@ -188,25 +191,25 @@ def start_chat(body: StartBody):
 
 @router.post("/message")
 async def send_message(body: MessageBody):
-    """\uc0ac\uc6a9\uc790 \uba54\uc2dc\uc9c0 \u2192 Claude API \u2192 \uc751\ub2f5 \u2014 \uc778\uc99d \ubd88\ud544\uc694"""
+    """사용자 메시지 → Claude API → 응답 — 인증 불필요"""
     sb = get_supabase()
 
     sess_res = sb.table("fix_chat_sessions").select("*").eq("id", body.session_id).limit(1).execute()
     if not sess_res.data:
-        raise HTTPException(status_code=404, detail="\uc138\uc158\uc744 \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4")
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
 
     sess         = sess_res.data[0]
     current_turn = sess["current_turn"]
     max_turns    = sess["max_turns"]
 
     if sess["status"] != "ACTIVE":
-        raise HTTPException(status_code=400, detail=f"\uc885\ub8cc\ub41c \uc138\uc158\uc785\ub2c8\ub2e4 (status={sess['status']})")
+        raise HTTPException(status_code=400, detail=f"종료된 세션입니다 (status={sess['status']})")
 
     if current_turn >= max_turns:
         if sess["user_type"] == "GUEST":
             return {"reply": GUEST_LIMIT_MSG, "turn_number": current_turn,
                     "remaining_turns": 0, "is_last_turn": True, "is_guest_limit": True}
-        raise HTTPException(status_code=400, detail="\ucd5c\ub300 \ud134 \uc218\ub97c \ucd08\uacfc\ud588\uc2b5\ub2c8\ub2e4")
+        raise HTTPException(status_code=400, detail="최대 턴 수를 초과했습니다")
 
     msgs_res = sb.table("fix_chat_messages").select("role, content").eq(
         "session_id", body.session_id).order("id").execute()
@@ -237,28 +240,28 @@ async def send_message(body: MessageBody):
 
 @router.post("/complete")
 def complete_chat(body: CompleteBody, current_user: dict = Depends(get_current_user)):
-    """\ub300\ud654 \uc644\ub8cc \u2192 matching_requests \uc800\uc7a5 \u2014 \ud68c\uc6d0 \uc778\uc99d \ud544\uc218"""
+    """대화 완료 → matching_requests 저장 — 회원 인증 필수"""
     sb = get_supabase()
 
     sess_res = sb.table("fix_chat_sessions").select("*").eq("id", body.session_id).limit(1).execute()
     if not sess_res.data:
-        raise HTTPException(status_code=404, detail="\uc138\uc158\uc744 \ucc3e\uc744 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4")
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
 
     sess = sess_res.data[0]
     if sess.get("request_id"):
-        raise HTTPException(status_code=409, detail="\uc774\ubbf8 \uc644\ub8cc\ub41c \uc138\uc158\uc785\ub2c8\ub2e4")
+        raise HTTPException(status_code=409, detail="이미 완료된 세션입니다")
 
     msgs_res = sb.table("fix_chat_messages").select("role, content").eq(
         "session_id", body.session_id).order("id").execute()
     messages = msgs_res.data or []
     if not messages:
-        raise HTTPException(status_code=400, detail="\ub300\ud654 \ub0b4\uc6a9\uc774 \uc5c6\uc2b5\ub2c8\ub2e4")
+        raise HTTPException(status_code=400, detail="대화 내용이 없습니다")
 
     last_assistant = next((m["content"] for m in reversed(messages) if m["role"] == "assistant"), "")
     intent    = sess.get("intent") or _parse_intent(last_assistant)
     full_text = "\n".join(f"[{m['role']}] {m['content']}" for m in messages)
     user_msgs = [m["content"] for m in messages if m["role"] == "user"]
-    title     = user_msgs[0][:50] if user_msgs else "\ub9e4\uce6d \uc2e0\uccad"
+    title     = user_msgs[0][:50] if user_msgs else "매칭 신청"
 
     now = _now()
     req_res = sb.table("matching_requests").insert({
@@ -274,7 +277,7 @@ def complete_chat(body: CompleteBody, current_user: dict = Depends(get_current_u
     }).execute()
 
     if not req_res.data:
-        raise HTTPException(status_code=500, detail="\ub9e4\uce6d \uc2e0\uccad \uc800\uc7a5 \uc2e4\ud328")
+        raise HTTPException(status_code=500, detail="매칭 신청 저장 실패")
 
     request_id = req_res.data[0]["id"]
     sb.table("fix_chat_sessions").update({
@@ -286,8 +289,8 @@ def complete_chat(body: CompleteBody, current_user: dict = Depends(get_current_u
 
 def _parse_intent(text: str) -> str:
     t = text.upper()
-    if "REPAIR" in t or "\uc218\uc120" in t or "\uc218\ub9ac" in t: return "REPAIR"
-    if "APPOINTMENT" in t or "\uc120\uc784" in t or "\ub300\ud589" in t: return "APPOINTMENT"
-    if "DIAGNOSIS" in t or "\uc9c4\ub2e8" in t or "\uac80\uc0ac" in t: return "DIAGNOSIS"
-    if "CONSULTING" in t or "\ucf58\uc124\ud305" in t or "\ubc95\ub839" in t: return "CONSULTING"
+    if "REPAIR" in t or "수선" in t or "수리" in t: return "REPAIR"
+    if "APPOINTMENT" in t or "선임" in t or "대행" in t: return "APPOINTMENT"
+    if "DIAGNOSIS" in t or "진단" in t or "검사" in t: return "DIAGNOSIS"
+    if "CONSULTING" in t or "컨설팅" in t or "법령" in t: return "CONSULTING"
     return "REPAIR"
