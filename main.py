@@ -1,6 +1,6 @@
 # main.py — v5.22.0
-# v5.22.0: connect_provider(공급자 서비스 가격 관리) 라우터 추가
-# v5.21.0: admin_connect(연결등록 관리) + admin_pricing(key 기반 가격수정) 라우터 추가
+# v5.22.0: fix_providers_api 라우터 추가 (TAI Fix 업체등록 API)
+# v5.21.0: admin_connect + admin_pricing 라우터 추가
 # v5.20.0: public_pricing + connect_registration 라우터 추가
 # v5.19.0: worker_home 라우터 추가
 # v5.18.0: 대시보드/파이프라인/price-commission CRUD
@@ -102,7 +102,7 @@ from routers.public_pricing          import router as public_pricing_router
 from routers.connect_registration    import router as connect_registration_router
 from routers.admin_connect           import router as admin_connect_router
 from routers.admin_pricing           import router as admin_pricing_router
-from routers.connect_provider        import router as connect_provider_router     # v5.22.0
+from routers.fix_providers_api       import router as fix_providers_router        # v5.22.0
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +154,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 공개 엔드포인트 (인증 불필요)
+# 공개 엔드포인트 (인증 불필요) — 먼저 등록
 app.include_router(public_router)
 app.include_router(public_admin_router)
 app.include_router(alert_messages_router)
@@ -166,6 +166,7 @@ app.include_router(public_pricing_router)
 app.include_router(connect_registration_router)
 app.include_router(admin_connect_router)
 app.include_router(admin_pricing_router)
+app.include_router(fix_providers_router)           # v5.22.0 — POST 공개 / GET 공개
 
 # 인증 필요 엔드포인트
 app.include_router(auth_router)
@@ -249,7 +250,6 @@ app.include_router(worker_check_router)
 app.include_router(worker_home_router)
 app.include_router(ai_copywrite_router)
 app.include_router(mail_router)
-app.include_router(connect_provider_router)   # v5.22.0
 
 
 @app.get("/")
