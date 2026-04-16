@@ -1,5 +1,5 @@
 """
-services/legal_engine_v202604.py — v1.0.0
+services/legal_engine_v202604.py — v1.0.1
 
 BE-06-final: legal_engine.py INSERT 경로 v2026.04 래퍼
 
@@ -11,6 +11,8 @@ BE-06-final: legal_engine.py INSERT 경로 v2026.04 래퍼
   - Pydantic 검증 실패 시 500 오류 + 로깅 (조용한 fallback 금지)
   - evidence[] 결정론적: 알파벳 오름차순, source·factory_id 제외, 상위 5개
   - severity: risk_summary 기반 → rule_count 추정 (100≥=HIGH, 50≥=MEDIUM, else LOW)
+
+v1.0.1: 오타 수정 ('발걸' → '발견')
 """
 from __future__ import annotations
 import logging
@@ -55,7 +57,7 @@ def _build_evidence(input_data: dict | None) -> list:
     결정론적 evidence[] 생성.
     알파벳 오름차순으로 source·factory_id 제외 후 상위 5개를
     "input.{key}={value}" 형식으로 이문화.
-    재실행 시 동일한 결과가 카라포됨 (stable sort).
+    재실행 시 동일한 결과 보장 (stable sort).
     """
     if not input_data or not isinstance(input_data, dict):
         return []
@@ -134,7 +136,7 @@ def wrap_result_to_v202604(
 
     안전장치:
       - 변환 실패 시 HTTPException(500) raise — silently fallback 금지
-      - Pydantic 검증은 코드 모델로 수행 (올라첨 jsonschema 의존성 제거)
+      - Pydantic 검증은 DiagnosisResultV202604 모델로 수행
     """
     from fastapi import HTTPException
 
@@ -169,7 +171,7 @@ def wrap_result_to_v202604(
         headline_msg = (
             legacy_result.get('headline_message')
             or (legacy_result.get('summary', {}) or {}).get('headline')
-            or f'적용된 의무 {rule_count}건 발걸'
+            or f'적용된 의무 {rule_count}건 발견'
         )
 
         # --- Rule 4: obligations 통합 ---
