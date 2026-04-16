@@ -1,20 +1,29 @@
 """
-건설안전 관리 라우터 — v2.2.2
+건설안전 관리 라우터 — v2.2.3
 =====================================
-v2.2.2 (2026-04-16):
-  FS-05 지원: SiteCreate/SitePatch에 latitude/longitude(WGS84) 필드 추가
-    - DB migration 'add_construction_sites_coordinates' 적용 완료
-    - 주소 → 좌표 변환(/juso/coord) 결과를 최초 1회 저장하여 반복 변환 제거
-    - 대시보드 날씨 위젯이 construction_sites.latitude/longitude 직접 사용
+v2.2.3 (2026-04-16):
+  ① 동기화: main v2.2.2 (FS-05) 내용 dev 반영
+     - SiteCreate/SitePatch에 latitude, longitude(WGS84, Optional[float]) 필드 추가
+     - DB migration 'add_construction_sites_coordinates' 이미 적용됨
+     - 대시보드 날씨 위젯이 construction_sites.latitude/longitude 직접 사용
+     - 주소→좌표 변환(/juso/coord) 결과를 최초 1회 저장, 반복 변환 제거
+  ② SB-01 BUG-FIX #3: _auto_diagnose_and_schedule() rule coverage 통일
+     - inspection_required 만 → inspection_required + action_required 둘 다
+     - generate-schedules 엔드포인트와 동일한 커버리지 (177건 수준)
+  ③ SB-02: 모든 print() → utils.logger (get_logger) 교체
+     - silent fail 패턴 유지하되 Fly.io 로그에서 [ERROR] grep 감지 가능
+
+v2.2.2 (2026-04-16 main, FS-05 핫픽스):
+  FS-05: SiteCreate/SitePatch latitude/longitude 추가
 
 v2.2.1 (2026-04-16):
   BUG-FIX #1: _create_factory_for_site() construction_type 매핑
-    - site_type(BUILDING/CIVIL) → factories.construction_type(건축/토목) 매핑
+  BUG-FIX #2 (DB): inspection_sets UNIQUE scope (factory_id, code)
 
 v2.2.0 (2026-04-16):
-  BE-1: _run_diagnosis() 결과 → inspection_sets 자동 생성 (호출 위치 2곳)
-  BE-3: SiteCreate.contract_amount 단위 명확화 (억원)
-  BE-4: GET /kcsc/processes?search= 기존 구현 유지
+  BE-1: inspection_sets 자동 생성 (호출 위치 2곳)
+  BE-3: contract_amount 단위 명확화
+  BE-4: GET /kcsc/processes?search=
 
 v2.1.0 (2026-04-09):
   POST /sites/{site_id}/diagnose, /generate-schedules, 점검 FCM 알림
@@ -29,16 +38,19 @@ from datetime import datetime, date, timezone
 import httpx
 
 from db.supabase_client import get_supabase
+from utils.logger import get_logger
 
+log = get_logger(__name__)
 router = APIRouter(tags=["건설안전"])
 
-VERSION = "2.2.2"
+VERSION = "2.2.3"
 
 FCM_URL = "https://fcm.googleapis.com/fcm/send"
 
 CONSTRUCTION_TYPE_MAP: Dict[str, str] = {
-    "BUILDING": "건축",
-    "CIVIL":    "토목",
+    "BUILDING":  "건축",
+    "CIVIL":     "토목",
+    "SPECIALTY": "공통",
 }
 
 
@@ -47,7 +59,6 @@ def _now_iso() -> str:
 
 
 def _ptw_number(site_id: str, supabase) -> str:
-    """CS-{YYYY}-{5자리 순번} 자동채번"""
     year = datetime.now().year
     res = supabase.table("construction_works") \
         .select("id", count="exact") \
@@ -77,12 +88,8 @@ def calc_safety_manager(site_type: str, contract_amount: float, total_workers: i
         reasons.append(f"상시 근로자(하도급 포함) {total_workers}명 ≥ 50명 (시행령 제16조③)")
 
     return {
-        "required": required,
-        "count": count,
-        "reasons": reasons,
-        "site_type": site_type,
-        "contract_amount": contract_amount,
-        "total_workers": total_workers,
+        "required": required, "count": count, "reasons": reasons,
+        "site_type": site_type, "contract_amount": contract_amount, "total_workers": total_workers,
     }
 
 
@@ -111,12 +118,11 @@ def _create_factory_for_site(supabase, site: dict) -> Optional[str]:
         if res.data:
             factory_id = res.data[0]["id"]
             supabase.table("construction_sites").update({
-                "factory_id": factory_id,
-                "updated_at": _now_iso(),
+                "factory_id": factory_id, "updated_at": _now_iso(),
             }).eq("id", site["id"]).execute()
             return factory_id
     except Exception as e:
-        print(f"[CONSTRUCTION] factories 자동생성 실패 (무시): {e}")
+        log.error("[CONSTRUCTION] factories 자동생성 실패 (무시): %s", e, exc_info=True)
     return None
 
 
@@ -127,13 +133,9 @@ def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
     site_type_raw = site.get("site_type") or "BUILDING"
 
     from routers.legal_engine import (
-        _input_to_facility_context,
-        _evaluate_facility_conditions_db,
-        _classify_rules_db,
-        format_rule_result_db,
-        _get_construction_summary,
-        get_sector_groups,
-        ENGINE_VERSION,
+        _input_to_facility_context, _evaluate_facility_conditions_db,
+        _classify_rules_db, format_rule_result_db, _get_construction_summary,
+        get_sector_groups, ENGINE_VERSION,
     )
     sector_raw = "CONSTRUCTION"
     sector_groups = get_sector_groups(sector_raw)
@@ -142,10 +144,8 @@ def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
     all_rules = rules_res.data or []
 
     inp = {
-        "contract_amount_eok": contract_eok,
-        "direct_workers":      direct,
-        "subcon_workers":      subcon,
-        "construction_type":   site_type_raw,
+        "contract_amount_eok": contract_eok, "direct_workers": direct,
+        "subcon_workers": subcon, "construction_type": site_type_raw,
     }
     facility_ctx = _input_to_facility_context(sector_raw, inp)
     evaluated_at = datetime.now().isoformat()
@@ -187,13 +187,9 @@ def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
         pass
 
     save_res = supabase.table("factory_diagnosis_results").insert({
-        "factory_id":      factory_id,
-        "sector":          sector_raw,
-        "diagnosis_stage": 1,
-        "input_data":      inp,
-        "result_data":     result_data,
-        "rule_count":      total_applicable,
-        "is_latest":       True,
+        "factory_id": factory_id, "sector": sector_raw, "diagnosis_stage": 1,
+        "input_data": inp, "result_data": result_data,
+        "rule_count": total_applicable, "is_latest": True,
     }).execute()
 
     diagnosis_id = save_res.data[0]["id"] if save_res.data else None
@@ -207,11 +203,9 @@ def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
         }).eq("factory_id", factory_id).execute()
 
     return {
-        "applicable_count":  total_applicable,
-        "diagnosis_id":      diagnosis_id,
-        "result_data":       result_data,
-        "by_obligation_type": result_data["summary"],
-        "applicable_rules":  applicable,
+        "applicable_count": total_applicable, "diagnosis_id": diagnosis_id,
+        "result_data": result_data, "by_obligation_type": result_data["summary"],
+        "applicable_rules": applicable,
     }
 
 
@@ -227,18 +221,14 @@ def _run_generate_schedules(supabase, factory_id: str, inspection_rules: list, c
         if not rule_id or rule_id in existing_codes:
             continue
         rows.append({
-            "factory_id":      factory_id,
-            "company_id":      company_id,
-            "source_type":     "LEGAL",
-            "rule_code":       rule_id,
-            "description":     (rule.get("obligation_summary") or rule.get("description") or "").strip(),
+            "factory_id": factory_id, "company_id": company_id,
+            "source_type": "LEGAL", "rule_code": rule_id,
+            "description": (rule.get("obligation_summary") or rule.get("description") or "").strip(),
             "obligation_type": rule.get("obligation_type") or "INSPECT",
-            "law_name":        rule.get("law_name") or "",
-            "law_article":     rule.get("law_article") or "",
-            "form_code":       rule.get("form_code") or None,
-            "planned_date":    today_str,
-            "status_code":     "PENDING",
-            "active_yn":       True,
+            "law_name": rule.get("law_name") or "",
+            "law_article": rule.get("law_article") or "",
+            "form_code": rule.get("form_code") or None,
+            "planned_date": today_str, "status_code": "PENDING", "active_yn": True,
         })
         existing_codes.add(rule_id)
 
@@ -252,6 +242,9 @@ def _run_generate_schedules(supabase, factory_id: str, inspection_rules: list, c
 
 
 def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
+    """
+    v2.2.3 SB-01 BUG-FIX #3: inspection + action 모두 스케줄화 (이전: inspection만).
+    """
     result = {"diagnosis": None, "schedules": None}
     try:
         diag = _run_diagnosis(supabase, factory_id, site)
@@ -259,8 +252,11 @@ def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
 
         company_res = supabase.table("factories").select("company_id").eq("id", factory_id).single().execute()
         company_id = company_res.data.get("company_id") if company_res.data else None
+
         inspection_rules = diag["result_data"].get("inspection_required") or []
-        sched = _run_generate_schedules(supabase, factory_id, inspection_rules, company_id)
+        action_rules     = diag["result_data"].get("action_required") or []
+        all_rules = inspection_rules + action_rules
+        sched = _run_generate_schedules(supabase, factory_id, all_rules, company_id)
         result["schedules"] = sched
 
         try:
@@ -270,10 +266,10 @@ def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
                 diag.get("applicable_rules") or [],
             )
         except Exception as e:
-            print(f"[AUTO_INSPECT_SETS] construction 현장등록 자동생성 실패 (무시): {e}")
+            log.error("[AUTO_INSPECT_SETS] 현장등록 자동생성 실패 (무시): %s", e, exc_info=True)
 
     except Exception as e:
-        print(f"[CONSTRUCTION] 자동진단/일정생성 실패 (무시): {e}")
+        log.error("[CONSTRUCTION] 자동진단/일정생성 실패 (무시): %s", e, exc_info=True)
     return result
 
 
@@ -303,10 +299,8 @@ async def _send_fcm_inspection_alert(supabase, site_id: str, inspection_id: str,
                 "sound": "default",
             },
             "data": {
-                "type":          "INSPECTION_FAIL",
-                "site_id":       site_id,
-                "inspection_id": inspection_id,
-                "defect_count":  str(defect_count),
+                "type": "INSPECTION_FAIL", "site_id": site_id,
+                "inspection_id": inspection_id, "defect_count": str(defect_count),
             },
         }
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -315,7 +309,7 @@ async def _send_fcm_inspection_alert(supabase, site_id: str, inspection_id: str,
                 headers={"Authorization": f"key={fcm_server_key}", "Content-Type": "application/json"},
             )
     except Exception as e:
-        print(f"[FCM] 점검 알림 발송 실패 (무시): {e}")
+        log.warning("[FCM] 점검 알림 발송 실패 (무시): %s", e)
 
 
 # ══════════════════════════════════════════════
@@ -340,7 +334,6 @@ class SiteCreate(BaseModel):
     site_address_detail: Optional[str] = None
     site_sido: Optional[str] = None
     site_sigungu: Optional[str] = None
-    # v2.2.2: 날씨 위젯용 WGS84 좌표 (선택)
     latitude: Optional[float] = Field(None, description="WGS84 위도 (예: 37.5665)")
     longitude: Optional[float] = Field(None, description="WGS84 경도 (예: 126.9780)")
     start_date: Optional[date] = None
@@ -361,7 +354,6 @@ class SitePatch(BaseModel):
     site_address_detail: Optional[str] = None
     site_sido: Optional[str] = None
     site_sigungu: Optional[str] = None
-    # v2.2.2: 날씨 위젯용 WGS84 좌표 (선택)
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     start_date: Optional[date] = None
@@ -546,6 +538,7 @@ async def list_sites(
 
 @router.post("/sites")
 async def create_site(body: SiteCreate):
+    """현장 등록 + factories 자동생성 + 법령진단 자동실행 + 일정/inspection_sets 자동생성"""
     supabase = get_supabase()
     try:
         data = body.model_dump(exclude_none=True)
@@ -554,9 +547,7 @@ async def create_site(body: SiteCreate):
                 data[key] = data[key].isoformat()
         if body.contract_amount is not None:
             sm = calc_safety_manager(
-                body.site_type,
-                float(body.contract_amount),
-                body.total_workers or 0,
+                body.site_type, float(body.contract_amount), body.total_workers or 0,
             )
             data["safety_manager_required"] = sm["required"]
             data["safety_manager_count"] = sm["count"]
@@ -578,8 +569,7 @@ async def create_site(body: SiteCreate):
         final_site = updated.data if updated.data else site
 
         return {
-            "status": "success",
-            "data": final_site,
+            "status": "success", "data": final_site,
             "auto": {
                 "factory_id": factory_id,
                 "diagnosis":  auto_result.get("diagnosis"),
@@ -692,7 +682,7 @@ async def get_site_stats(site_id: str):
 
 
 # ══════════════════════════════════════════════
-# ② 건설 법령진단 (독립 엔드포인트)
+# ② 건설 법령진단
 # ══════════════════════════════════════════════
 
 @router.post("/sites/{site_id}/diagnose")
@@ -721,15 +711,14 @@ async def diagnose_site(site_id: str):
                 diag.get("applicable_rules") or [],
             )
         except Exception as e:
-            print(f"[AUTO_INSPECT_SETS] diagnose_site 자동생성 실패 (무시): {e}")
+            log.error("[AUTO_INSPECT_SETS] diagnose_site 자동생성 실패 (무시): %s", e, exc_info=True)
 
         return {
             "status": "success",
             "data": {
-                "site_id":            site_id,
-                "factory_id":         factory_id,
-                "applicable_rules":   diag["applicable_count"],
-                "diagnosis_id":       diag["diagnosis_id"],
+                "site_id": site_id, "factory_id": factory_id,
+                "applicable_rules": diag["applicable_count"],
+                "diagnosis_id": diag["diagnosis_id"],
                 "by_obligation_type": diag["by_obligation_type"],
             },
         }
@@ -738,10 +727,6 @@ async def diagnose_site(site_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# ══════════════════════════════════════════════
-# ③ 작업일정 자동 생성 (독립 엔드포인트)
-# ══════════════════════════════════════════════
 
 @router.post("/sites/{site_id}/generate-schedules")
 async def generate_schedules(site_id: str):
@@ -777,12 +762,10 @@ async def generate_schedules(site_id: str):
         return {
             "status": "success",
             "data": {
-                "site_id":     site_id,
-                "factory_id":  factory_id,
-                "created":     sched["created"],
-                "skipped":     sched["skipped"],
+                "site_id": site_id, "factory_id": factory_id,
+                "created": sched["created"], "skipped": sched["skipped"],
                 "total_rules": sched["total_rules"],
-                "message":     f"{sched['created']}건 일정 생성, {sched['skipped']}건 중복 스킵",
+                "message": f"{sched['created']}건 일정 생성, {sched['skipped']}건 중복 스킵",
             },
         }
     except HTTPException:
@@ -1190,6 +1173,7 @@ async def list_inspections(
 
 @router.post("/sites/{site_id}/inspections")
 async def create_inspection(site_id: str, body: InspectionCreate):
+    """점검 저장 시 이상(FAIL/ISSUE) 감지 → 안전관리자 FCM 자동 발송"""
     supabase = get_supabase()
     try:
         data = body.model_dump(exclude_none=True)
@@ -1218,8 +1202,7 @@ async def create_inspection(site_id: str, body: InspectionCreate):
 
         if data.get("overall_result") in ("FAIL", "ISSUE") and data.get("defect_count", 0) > 0:
             await _send_fcm_inspection_alert(
-                supabase,
-                site_id=site_id,
+                supabase, site_id=site_id,
                 inspection_id=inspection["id"],
                 defect_count=data.get("defect_count", 1),
             )
