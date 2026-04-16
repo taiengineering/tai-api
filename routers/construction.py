@@ -1,6 +1,18 @@
 """
-건설안전 관리 라우터 — v2.2.0
+건설안전 관리 라우터 — v2.2.1
 =====================================
+v2.2.1 (2026-04-16):
+  BUG-FIX #1: _create_factory_for_site() construction_type 매핑
+    - site_type(BUILDING/CIVIL) → factories.construction_type(건축/토목) 매핑
+    - 기존: site_type 그대로 삽입 → DB check constraint 'factories_construction_type_check' 위반
+    - 영향: 이 버그로 프로덕션에서 건설현장 등록 시 factories INSERT가 실패했고
+            _auto_diagnose_and_schedule() 전체가 try/except로 조용히 스킵되어
+            factory_diagnosis_results / work_schedules(LEGAL) / inspection_sets가
+            생성되지 않는 치명적 결과 발생
+  BUG-FIX #2 (DB): inspection_sets.inspection_set_code UNIQUE scope를 (factory_id, code)로 변경
+    - Supabase migration 'fix_inspection_sets_code_unique_scope_to_factory' 이미 적용됨
+    - 백엔드 코드 수정 없음 (inspection_set_auto.py 이미 factory 범위로 중복체크)
+
 v2.2.0 (2026-04-16):
   BE-1: _run_diagnosis() 결과 → inspection_sets 자동 생성 (호출 위치 2곳)
         - _auto_diagnose_and_schedule() 내부 (현장 등록 시 자동)  [위치 1]
@@ -28,9 +40,17 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(tags=["건설안전"])
 
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 
 FCM_URL = "https://fcm.googleapis.com/fcm/send"
+
+# v2.2.1 BUG-FIX #1: site_type → construction_type 매핑
+# factories.construction_type CHECK 제약: '건축' | '토목' | '공통' | '기타'
+# SiteCreate.site_type 허용값:           'BUILDING' | 'CIVIL'
+CONSTRUCTION_TYPE_MAP: Dict[str, str] = {
+    "BUILDING": "건축",
+    "CIVIL":    "토목",
+}
 
 
 def _now_iso() -> str:
@@ -83,11 +103,17 @@ def calc_safety_manager(site_type: str, contract_amount: float, total_workers: i
 
 # ──────────────────────────────────────────────
 # v2.0.0: factories 자동생성 헬퍼
+# v2.2.1: BUG-FIX #1 construction_type 매핑
 # ──────────────────────────────────────────────
 
 def _create_factory_for_site(supabase, site: dict) -> Optional[str]:
     try:
         contract_eok = float(site.get("contract_amount") or 0)
+
+        # v2.2.1 BUG-FIX #1: site_type(BUILDING/CIVIL) → construction_type(건축/토목) 매핑
+        site_type_raw = (site.get("site_type") or "BUILDING").upper()
+        construction_type_label = CONSTRUCTION_TYPE_MAP.get(site_type_raw, "건축")
+
         factory_data = {
             "name":                      site.get("site_name", ""),
             "company_id":                site.get("company_id"),
@@ -96,7 +122,7 @@ def _create_factory_for_site(supabase, site: dict) -> Optional[str]:
             "construction_amount":       contract_eok * 100_000_000,
             "employee_count":            site.get("direct_workers") or site.get("total_workers") or 0,
             "subcontractor_worker_count": site.get("subcon_workers") or 0,
-            "construction_type":         site.get("site_type") or "건축",
+            "construction_type":         construction_type_label,  # v2.2.1 FIX
             "site_address":              site.get("site_address"),
             "status_code":               "ACTIVE",
             "is_active":                 True,
@@ -221,13 +247,9 @@ def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
         "diagnosis_id":      diagnosis_id,
         "result_data":       result_data,
         "by_obligation_type": result_data["summary"],
-        "applicable_rules":  applicable,  # v2.2.0 BE-1: inspection_sets 자동생성용 raw rules
+        "applicable_rules":  applicable,
     }
 
-
-# ──────────────────────────────────────────────
-# v2.0.0: 내부 스케줄 생성 함수
-# ──────────────────────────────────────────────
 
 def _run_generate_schedules(supabase, factory_id: str, inspection_rules: list, company_id: Optional[str]) -> dict:
     existing = supabase.table("work_schedules").select("rule_code") \
@@ -266,7 +288,6 @@ def _run_generate_schedules(supabase, factory_id: str, inspection_rules: list, c
 
 
 def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
-    """v2.0.0: 현장 등록 시 자동 진단 + 스케줄 생성 (실패 무시)"""
     result = {"diagnosis": None, "schedules": None}
     try:
         diag = _run_diagnosis(supabase, factory_id, site)
@@ -278,7 +299,6 @@ def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
         sched = _run_generate_schedules(supabase, factory_id, inspection_rules, company_id)
         result["schedules"] = sched
 
-        # v2.2.0 BE-1: inspection_sets 자동생성 [호출 위치 1 — 현장 등록 시]
         try:
             from routers.inspection_set_auto import auto_create_inspection_sets_from_diagnosis
             auto_create_inspection_sets_from_diagnosis(
@@ -292,10 +312,6 @@ def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
         print(f"[CONSTRUCTION] 자동진단/일정생성 실패 (무시): {e}")
     return result
 
-
-# ──────────────────────────────────────────────
-# v2.1.0: FCM 알림 헬퍼
-# ──────────────────────────────────────────────
 
 async def _send_fcm_inspection_alert(supabase, site_id: str, inspection_id: str, defect_count: int):
     import os
@@ -347,8 +363,6 @@ class SiteCreate(BaseModel):
     site_name: str
     site_code: Optional[str] = None
     site_type: str = "BUILDING"
-    # BE-3: 단위 명확화 — 억원(100,000,000원) 단위
-    # 150억원 공사 → 150 입력. 원화(원) 입력 시 안전관리자 선임 의무 판정 오류 발생.
     contract_amount: Optional[float] = Field(
         None,
         description="공사 도급금액. 단위: 억원(1억=100,000,000원). "
@@ -562,7 +576,6 @@ async def list_sites(
 
 @router.post("/sites")
 async def create_site(body: SiteCreate):
-    """v2.0.0: 현장 등록 + factories 자동생성 + 법령진단 자동실행 + 일정 자동생성"""
     supabase = get_supabase()
     try:
         data = body.model_dump(exclude_none=True)
@@ -714,10 +727,6 @@ async def get_site_stats(site_id: str):
 
 @router.post("/sites/{site_id}/diagnose")
 async def diagnose_site(site_id: str):
-    """
-    v2.1.0: 건설현장 법령진단 독립 실행
-    v2.2.0 BE-1: 진단 완료 후 inspection_sets 자동 생성 [호출 위치 2]
-    """
     supabase = get_supabase()
     try:
         site_res = supabase.table("construction_sites").select("*").eq("id", site_id).eq("is_active", True).limit(1).execute()
@@ -733,7 +742,6 @@ async def diagnose_site(site_id: str):
 
         diag = _run_diagnosis(supabase, factory_id, site)
 
-        # v2.2.0 BE-1: inspection_sets 자동생성 [호출 위치 2 — 독립 진단 실행 시]
         try:
             from routers.inspection_set_auto import auto_create_inspection_sets_from_diagnosis
             company_res = supabase.table("factories").select("company_id").eq("id", factory_id).limit(1).execute()
@@ -906,18 +914,12 @@ async def delete_process(process_id: str):
 
 @router.get("/kcsc/processes")
 async def list_kcsc_processes(
-    search: Optional[str] = Query(None, description="공정명 검색 (부분일치). 예) 굴착"),
-    construction_type: Optional[str] = Query(None, description="BUILDING / CIVIL / COMMON"),
-    work_type_code: Optional[str] = Query(None, description="작업 유형 코드. 예) EXCAVATION"),
+    search: Optional[str] = Query(None),
+    construction_type: Optional[str] = Query(None),
+    work_type_code: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
 ):
-    """
-    BE-4: KCSC 공정 마스터 검색 API
-    - GET /construction/kcsc/processes?search=굴착
-    - GET /construction/kcsc/processes?construction_type=BUILDING
-    - GET /construction/kcsc/processes?work_type_code=EXCAVATION
-    """
     supabase = get_supabase()
     try:
         offset = (page - 1) * size
@@ -1218,7 +1220,6 @@ async def list_inspections(
 
 @router.post("/sites/{site_id}/inspections")
 async def create_inspection(site_id: str, body: InspectionCreate):
-    """v2.1.0: 점검 저장 시 이상(FAIL/ISSUE) 감지 → 안전관리자 FCM 자동 발송"""
     supabase = get_supabase()
     try:
         data = body.model_dump(exclude_none=True)
