@@ -1,4 +1,5 @@
-# main.py — v5.24.1
+# main.py — v5.25.0
+# v5.25.0: diagnosis_autofill 라우터 등록 (건축물대장·사업자·도로명주소 자동조회)
 # v5.24.1: fix_chat 라우터 등록 (대화형 입력부 + 어드민 API)
 # v5.23.0: diagnosis_fields 라우터 추가 (법령진단 입력항목 + 가격판단 API)
 # v5.22.0: fix_providers_api 라우터 추가
@@ -104,10 +105,11 @@ from routers.admin_pricing           import router as admin_pricing_router
 from routers.fix_providers_api       import router as fix_providers_router
 from routers.diagnosis_fields        import router as diagnosis_fields_router     # v5.23.0
 from routers.fix_chat                import router as fix_chat_router             # v5.24.1
+from routers.diagnosis_autofill      import router as diagnosis_autofill_router   # v5.25.0
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.24.1"
+APP_VERSION = "5.25.0"
 
 
 @asynccontextmanager
@@ -169,7 +171,8 @@ app.include_router(admin_connect_router)
 app.include_router(admin_pricing_router)
 app.include_router(fix_providers_router)
 app.include_router(diagnosis_fields_router)        # v5.23.0 — 공개
-app.include_router(fix_chat_router)                # v5.24.1 — /fix/chat/* (start/message는 공개, admin은 내부 인증)
+app.include_router(fix_chat_router)                # v5.24.1 — 공개(start/message) + 내부(admin)
+app.include_router(diagnosis_autofill_router)      # v5.25.0 — 공개 (외부 API 프록시)
 
 # 인증 필요 엔드포인트
 app.include_router(auth_router)
