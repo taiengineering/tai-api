@@ -3,30 +3,27 @@
 =====================================
 v2.2.2 (2026-04-16):
   BUG-FIX #3 (SB-01): _auto_diagnose_and_schedule() rule coverage 통일
-    - POST /sites 자동 스케줄: inspection_required 만 처리하던 것을
-      inspection_required + action_required 둘 다 처리하도록 수정
-    - POST /sites/{id}/generate-schedules와 동일한 커버리지 (177건 수준)
+    - inspection_required 만 처리 → inspection_required + action_required 둘 다 처리
+    - generate-schedules 엔드포인트와 동일한 커버리지 (177건 수준)
+  SB-02: 모든 print() → utils.logger (get_logger) 교체
+    - silent fail 패턴 유지하되 Fly.io 로그에서 [ERROR] grep 감지 가능
 
 v2.2.1 (2026-04-16):
   BUG-FIX #1: _create_factory_for_site() construction_type 매핑
-    - site_type(BUILDING/CIVIL) → factories.construction_type(건축/토목) 매핑
-    - 기존: site_type 그대로 삽입 → DB check constraint 위반으로 factory INSERT 실패
-  BUG-FIX #2 (DB): inspection_sets.inspection_set_code UNIQUE scope를 (factory_id, code)로 변경
-    - Supabase migration 별도 적용 완료
+  BUG-FIX #2 (DB): inspection_sets UNIQUE scope (factory_id, code)
 
 v2.2.0 (2026-04-16):
-  BE-1: _run_diagnosis() 결과 → inspection_sets 자동 생성 (호출 위치 2곳)
-  BE-3: SiteCreate.contract_amount 단위 명확화 (억원, Pydantic Field description)
-  BE-4: GET /kcsc/processes?search= description 추가
+  BE-1: inspection_sets 자동 생성 (호출 위치 2곳)
+  BE-3: contract_amount 단위 명확화
+  BE-4: GET /kcsc/processes?search=
 
 v2.1.0 (2026-04-09):
-  [ADD] POST /sites/{site_id}/diagnose  — 건설 법령진단 독립 엔드포인트
-  [ADD] POST /sites/{site_id}/generate-schedules — 작업일정 자동 생성 독립 엔드포인트
-  [ADD] 점검 저장 시 이상(FAIL/ISSUE) 감지 → 안전관리자 FCM 알림 자동 발송
+  [ADD] POST /sites/{site_id}/diagnose
+  [ADD] POST /sites/{site_id}/generate-schedules
+  [ADD] 점검 이상 → FCM 알림
 
-v2.0.0 (2026-04-07 현장소장 온보딩 Phase 1):
-  - POST /sites: factories 테이블 자동 생성 (sector='CONSTRUCTION')
-  - POST /sites: 현장 생성 후 diagnose/step1 자동 실행 + generate_schedules 자동 트리거
+v2.0.0 (2026-04-07):
+  POST /sites → factories 자동생성 + 자동 진단/일정
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -35,7 +32,9 @@ from datetime import datetime, date, timezone
 import httpx
 
 from db.supabase_client import get_supabase
+from utils.logger import get_logger
 
+log = get_logger(__name__)
 router = APIRouter(tags=["건설안전"])
 
 VERSION = "2.2.2"
@@ -44,7 +43,6 @@ FCM_URL = "https://fcm.googleapis.com/fcm/send"
 
 # v2.2.1 BUG-FIX #1: site_type → construction_type 매핑
 # factories.construction_type CHECK 제약: '건축' | '토목' | '공통' | '기타'
-# SiteCreate.site_type 허용값:           'BUILDING' | 'CIVIL'
 CONSTRUCTION_TYPE_MAP: Dict[str, str] = {
     "BUILDING":  "건축",
     "CIVIL":     "토목",
@@ -108,8 +106,6 @@ def calc_safety_manager(site_type: str, contract_amount: float, total_workers: i
 def _create_factory_for_site(supabase, site: dict) -> Optional[str]:
     try:
         contract_eok = float(site.get("contract_amount") or 0)
-
-        # v2.2.1 BUG-FIX #1: site_type(BUILDING/CIVIL) → construction_type(건축/토목) 매핑
         site_type_raw = (site.get("site_type") or "BUILDING").upper()
         construction_type_label = CONSTRUCTION_TYPE_MAP.get(site_type_raw, "건축")
 
@@ -121,7 +117,7 @@ def _create_factory_for_site(supabase, site: dict) -> Optional[str]:
             "construction_amount":       contract_eok * 100_000_000,
             "employee_count":            site.get("direct_workers") or site.get("total_workers") or 0,
             "subcontractor_worker_count": site.get("subcon_workers") or 0,
-            "construction_type":         construction_type_label,  # v2.2.1 FIX
+            "construction_type":         construction_type_label,
             "site_address":              site.get("site_address"),
             "status_code":               "ACTIVE",
             "is_active":                 True,
@@ -137,7 +133,7 @@ def _create_factory_for_site(supabase, site: dict) -> Optional[str]:
             }).eq("id", site["id"]).execute()
             return factory_id
     except Exception as e:
-        print(f"[CONSTRUCTION] factories 자동생성 실패 (무시): {e}")
+        log.error("[CONSTRUCTION] factories 자동생성 실패 (무시): %s", e, exc_info=True)
     return None
 
 
@@ -148,13 +144,7 @@ def _create_factory_for_site(supabase, site: dict) -> Optional[str]:
 def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
     """
     CONSTRUCTION sector 법령진단 실행.
-    반환: {
-        "applicable_count": int,
-        "diagnosis_id": str,
-        "result_data": dict,
-        "by_obligation_type": dict,
-        "applicable_rules": list,  # v2.2.0 BE-1: raw rules (inspection_sets 자동생성용)
-    }
+    반환: applicable_count / diagnosis_id / result_data / by_obligation_type / applicable_rules
     """
     contract_eok = float(site.get("contract_amount") or 0)
     direct = int(site.get("direct_workers") or 0)
@@ -246,7 +236,7 @@ def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
         "diagnosis_id":      diagnosis_id,
         "result_data":       result_data,
         "by_obligation_type": result_data["summary"],
-        "applicable_rules":  applicable,  # v2.2.0 BE-1: inspection_sets 자동생성용 raw rules
+        "applicable_rules":  applicable,
     }
 
 
@@ -292,10 +282,9 @@ def _run_generate_schedules(supabase, factory_id: str, inspection_rules: list, c
 
 def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
     """
-    v2.0.0: 현장 등록 시 자동 진단 + 스케줄 생성 (실패 무시)
-    v2.2.2 BUG-FIX #3: inspection_required 만 처리하던 것을
-                       inspection_required + action_required 둘 다 처리하도록 수정
-                       (generate-schedules 엔드포인트와 동일한 커버리지)
+    v2.0.0: 현장 등록 시 자동 진단 + 스케줄 생성.
+    v2.2.2 BUG-FIX #3: inspection + action 모두 스케줄화 (이전: inspection 만).
+    실패 시 logger.error 기록 후 무시 (현장 등록 자체는 성공 처리).
     """
     result = {"diagnosis": None, "schedules": None}
     try:
@@ -305,14 +294,14 @@ def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
         company_res = supabase.table("factories").select("company_id").eq("id", factory_id).single().execute()
         company_id = company_res.data.get("company_id") if company_res.data else None
 
-        # v2.2.2 BUG-FIX #3: inspection + action 모두 스케줄화 (이전: inspection 만)
+        # v2.2.2 BUG-FIX #3: inspection + action 둘 다
         inspection_rules = diag["result_data"].get("inspection_required") or []
         action_rules     = diag["result_data"].get("action_required") or []
         all_rules = inspection_rules + action_rules
         sched = _run_generate_schedules(supabase, factory_id, all_rules, company_id)
         result["schedules"] = sched
 
-        # v2.2.0 BE-1: inspection_sets 자동생성 [호출 위치 1 — 현장 등록 시]
+        # v2.2.0 BE-1: inspection_sets 자동생성 [호출 위치 1]
         try:
             from routers.inspection_set_auto import auto_create_inspection_sets_from_diagnosis
             auto_create_inspection_sets_from_diagnosis(
@@ -320,10 +309,10 @@ def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
                 diag.get("applicable_rules") or [],
             )
         except Exception as e:
-            print(f"[AUTO_INSPECT_SETS] construction 현장등록 자동생성 실패 (무시): {e}")
+            log.error("[AUTO_INSPECT_SETS] 현장등록 자동생성 실패 (무시): %s", e, exc_info=True)
 
     except Exception as e:
-        print(f"[CONSTRUCTION] 자동진단/일정생성 실패 (무시): {e}")
+        log.error("[CONSTRUCTION] 자동진단/일정생성 실패 (무시): %s", e, exc_info=True)
     return result
 
 
@@ -369,7 +358,7 @@ async def _send_fcm_inspection_alert(supabase, site_id: str, inspection_id: str,
                 headers={"Authorization": f"key={fcm_server_key}", "Content-Type": "application/json"},
             )
     except Exception as e:
-        print(f"[FCM] 점검 알림 발송 실패 (무시): {e}")
+        log.warning("[FCM] 점검 알림 발송 실패 (무시): %s", e)
 
 
 # ══════════════════════════════════════════════
@@ -381,7 +370,6 @@ class SiteCreate(BaseModel):
     site_name: str
     site_code: Optional[str] = None
     site_type: str = "BUILDING"
-    # BE-3: 단위 명확화 — 억원(100,000,000원) 단위
     contract_amount: Optional[float] = Field(
         None,
         description="공사 도급금액. 단위: 억원(1억=100,000,000원). "
@@ -595,7 +583,7 @@ async def list_sites(
 
 @router.post("/sites")
 async def create_site(body: SiteCreate):
-    """v2.0.0: 현장 등록 + factories 자동생성 + 법령진단 자동실행 + 일정 자동생성"""
+    """현장 등록 + factories 자동생성 + 법령진단 자동실행 + 일정/inspection_sets 자동생성"""
     supabase = get_supabase()
     try:
         data = body.model_dump(exclude_none=True)
@@ -748,7 +736,7 @@ async def get_site_stats(site_id: str):
 @router.post("/sites/{site_id}/diagnose")
 async def diagnose_site(site_id: str):
     """
-    v2.1.0: 건설현장 법령진단 독립 실행
+    건설현장 법령진단 독립 실행.
     v2.2.0 BE-1: 진단 완료 후 inspection_sets 자동 생성 [호출 위치 2]
     """
     supabase = get_supabase()
@@ -766,7 +754,6 @@ async def diagnose_site(site_id: str):
 
         diag = _run_diagnosis(supabase, factory_id, site)
 
-        # v2.2.0 BE-1: inspection_sets 자동생성 [호출 위치 2 — 독립 진단 실행 시]
         try:
             from routers.inspection_set_auto import auto_create_inspection_sets_from_diagnosis
             company_res = supabase.table("factories").select("company_id").eq("id", factory_id).limit(1).execute()
@@ -776,7 +763,7 @@ async def diagnose_site(site_id: str):
                 diag.get("applicable_rules") or [],
             )
         except Exception as e:
-            print(f"[AUTO_INSPECT_SETS] diagnose_site 자동생성 실패 (무시): {e}")
+            log.error("[AUTO_INSPECT_SETS] diagnose_site 자동생성 실패 (무시): %s", e, exc_info=True)
 
         return {
             "status": "success",
@@ -1246,7 +1233,7 @@ async def list_inspections(
 
 @router.post("/sites/{site_id}/inspections")
 async def create_inspection(site_id: str, body: InspectionCreate):
-    """v2.1.0: 점검 저장 시 이상(FAIL/ISSUE) 감지 → 안전관리자 FCM 자동 발송"""
+    """점검 저장 시 이상(FAIL/ISSUE) 감지 → 안전관리자 FCM 자동 발송"""
     supabase = get_supabase()
     try:
         data = body.model_dump(exclude_none=True)
