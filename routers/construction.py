@@ -1,34 +1,26 @@
 """
-건설안전 관리 라우터 — v2.2.1
+건설안전 관리 라우터 — v2.2.2
 =====================================
+v2.2.2 (2026-04-16):
+  FS-05 지원: SiteCreate/SitePatch에 latitude/longitude(WGS84) 필드 추가
+    - DB migration 'add_construction_sites_coordinates' 적용 완료
+    - 주소 → 좌표 변환(/juso/coord) 결과를 최초 1회 저장하여 반복 변환 제거
+    - 대시보드 날씨 위젯이 construction_sites.latitude/longitude 직접 사용
+
 v2.2.1 (2026-04-16):
   BUG-FIX #1: _create_factory_for_site() construction_type 매핑
     - site_type(BUILDING/CIVIL) → factories.construction_type(건축/토목) 매핑
-    - 기존: site_type 그대로 삽입 → DB check constraint 'factories_construction_type_check' 위반
-    - 영향: 이 버그로 프로덕션에서 건설현장 등록 시 factories INSERT가 실패했고
-            _auto_diagnose_and_schedule() 전체가 try/except로 조용히 스킵되어
-            factory_diagnosis_results / work_schedules(LEGAL) / inspection_sets가
-            생성되지 않는 치명적 결과 발생
-  BUG-FIX #2 (DB): inspection_sets.inspection_set_code UNIQUE scope를 (factory_id, code)로 변경
-    - Supabase migration 'fix_inspection_sets_code_unique_scope_to_factory' 이미 적용됨
-    - 백엔드 코드 수정 없음 (inspection_set_auto.py 이미 factory 범위로 중복체크)
 
 v2.2.0 (2026-04-16):
   BE-1: _run_diagnosis() 결과 → inspection_sets 자동 생성 (호출 위치 2곳)
-        - _auto_diagnose_and_schedule() 내부 (현장 등록 시 자동)  [위치 1]
-        - diagnose_site() 독립 엔드포인트 실행 시                  [위치 2]
-        raw applicable_rules 반환 추가 → inspection_set_auto 연결
-  BE-3: SiteCreate.contract_amount 단위 명확화 (억원, Pydantic Field description)
-  BE-4: GET /kcsc/processes?search= v2.1.0 기존 구현 유지 (완료)
+  BE-3: SiteCreate.contract_amount 단위 명확화 (억원)
+  BE-4: GET /kcsc/processes?search= 기존 구현 유지
 
-v2.1.0 (2026-04-09) 워크오더 미구현 항목 완성:
-  [ADD] POST /sites/{site_id}/diagnose  — 건설 법령진단 독립 엔드포인트
-  [ADD] POST /sites/{site_id}/generate-schedules — 작업일정 자동 생성 독립 엔드포인트
-  [ADD] 점검 저장 시 이상(FAIL/ISSUE) 감지 → 안전관리자 FCM 알림 자동 발송
+v2.1.0 (2026-04-09):
+  POST /sites/{site_id}/diagnose, /generate-schedules, 점검 FCM 알림
 
-v2.0.0 (2026-04-07 현장소장 온보딩 Phase 1):
-  - POST /sites: factories 테이블 자동 생성 (sector='CONSTRUCTION') + construction_sites.factory_id 업데이트
-  - POST /sites: 현장 생성 후 diagnose/step1 자동 실행 + generate_schedules 자동 트리거
+v2.0.0 (2026-04-07):
+  POST /sites: factories 자동 생성 + 자동 진단/일정
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -40,13 +32,10 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(tags=["건설안전"])
 
-VERSION = "2.2.1"
+VERSION = "2.2.2"
 
 FCM_URL = "https://fcm.googleapis.com/fcm/send"
 
-# v2.2.1 BUG-FIX #1: site_type → construction_type 매핑
-# factories.construction_type CHECK 제약: '건축' | '토목' | '공통' | '기타'
-# SiteCreate.site_type 허용값:           'BUILDING' | 'CIVIL'
 CONSTRUCTION_TYPE_MAP: Dict[str, str] = {
     "BUILDING": "건축",
     "CIVIL":    "토목",
@@ -67,10 +56,6 @@ def _ptw_number(site_id: str, supabase) -> str:
     seq = (res.count or 0) + 1
     return f"CS-{year}-{seq:05d}"
 
-
-# ──────────────────────────────────────────────
-# 안전관리자 선임 의무 판정 엔진
-# ──────────────────────────────────────────────
 
 def calc_safety_manager(site_type: str, contract_amount: float, total_workers: int) -> Dict[str, Any]:
     required = False
@@ -101,16 +86,9 @@ def calc_safety_manager(site_type: str, contract_amount: float, total_workers: i
     }
 
 
-# ──────────────────────────────────────────────
-# v2.0.0: factories 자동생성 헬퍼
-# v2.2.1: BUG-FIX #1 construction_type 매핑
-# ──────────────────────────────────────────────
-
 def _create_factory_for_site(supabase, site: dict) -> Optional[str]:
     try:
         contract_eok = float(site.get("contract_amount") or 0)
-
-        # v2.2.1 BUG-FIX #1: site_type(BUILDING/CIVIL) → construction_type(건축/토목) 매핑
         site_type_raw = (site.get("site_type") or "BUILDING").upper()
         construction_type_label = CONSTRUCTION_TYPE_MAP.get(site_type_raw, "건축")
 
@@ -122,7 +100,7 @@ def _create_factory_for_site(supabase, site: dict) -> Optional[str]:
             "construction_amount":       contract_eok * 100_000_000,
             "employee_count":            site.get("direct_workers") or site.get("total_workers") or 0,
             "subcontractor_worker_count": site.get("subcon_workers") or 0,
-            "construction_type":         construction_type_label,  # v2.2.1 FIX
+            "construction_type":         construction_type_label,
             "site_address":              site.get("site_address"),
             "status_code":               "ACTIVE",
             "is_active":                 True,
@@ -142,21 +120,7 @@ def _create_factory_for_site(supabase, site: dict) -> Optional[str]:
     return None
 
 
-# ──────────────────────────────────────────────
-# v2.0.0: 내부 진단 실행 함수
-# ──────────────────────────────────────────────
-
 def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
-    """
-    CONSTRUCTION sector 법령진단 실행.
-    반환: {
-        "applicable_count": int,
-        "diagnosis_id": str,
-        "result_data": dict,
-        "by_obligation_type": dict,
-        "applicable_rules": list,  # v2.2.0 BE-1: raw rules (inspection_sets 자동생성용)
-    }
-    """
     contract_eok = float(site.get("contract_amount") or 0)
     direct = int(site.get("direct_workers") or 0)
     subcon = int(site.get("subcon_workers") or 0)
@@ -376,6 +340,9 @@ class SiteCreate(BaseModel):
     site_address_detail: Optional[str] = None
     site_sido: Optional[str] = None
     site_sigungu: Optional[str] = None
+    # v2.2.2: 날씨 위젯용 WGS84 좌표 (선택)
+    latitude: Optional[float] = Field(None, description="WGS84 위도 (예: 37.5665)")
+    longitude: Optional[float] = Field(None, description="WGS84 경도 (예: 126.9780)")
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     manager_id: Optional[str] = None
@@ -394,6 +361,9 @@ class SitePatch(BaseModel):
     site_address_detail: Optional[str] = None
     site_sido: Optional[str] = None
     site_sigungu: Optional[str] = None
+    # v2.2.2: 날씨 위젯용 WGS84 좌표 (선택)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     manager_id: Optional[str] = None
@@ -909,7 +879,7 @@ async def delete_process(process_id: str):
 
 
 # ══════════════════════════════════════════════
-# ⑤ KCSC 마스터 (BE-4)
+# ⑤ KCSC 마스터
 # ══════════════════════════════════════════════
 
 @router.get("/kcsc/processes")
