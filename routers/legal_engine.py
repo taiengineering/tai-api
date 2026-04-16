@@ -1,6 +1,13 @@
 """
-법령 판정 엔진 라우터 — v5.6.7
+법령 판정 엔진 라우터 — v5.6.8
 =================================
+v5.6.8 (2026-04-16): BE-06-final
+  - diagnose_step1 INSERT → v2026.04 형식 자동 변환
+  - _save_diagnosis_result(step2/step3) INSERT → v2026.04 형식 자동 변환
+  - services/legal_engine_v202604.wrap_result_to_v202604() 호출
+  - Pydantic DiagnosisResultV202604 검증 실패 시 500 에러 (silently fallback 금지)
+  - schema_version='2026.04' INSERT 컬럼에 하드코딩
+
 v5.6.7 (2026-04-07):
   CONSTRUCTION sector에서 diagnose/step1 완료 시
   generate_schedules_from_diagnosis(factory_id) 자동 트리거
@@ -33,10 +40,11 @@ from datetime import datetime, timezone, date, timedelta
 import json
 
 from db.supabase_client import get_supabase
+from services.legal_engine_v202604 import wrap_result_to_v202604 as _wrap_v202604  # BE-06-final
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.6.7"  # v5.6.7: CONSTRUCTION diagnose_step1 완료 시 일정 자동생성 트리거
+ENGINE_VERSION = "5.6.8"  # v5.6.8: BE-06-final v2026.04 INSERT 전환
 
 
 # ──────────────────────────────────────────────
@@ -919,9 +927,11 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         try: supabase.table("factory_diagnosis_results").update({"is_latest": False}).eq("factory_id", factory_id).eq("sector", sector_raw).eq("is_latest", True).execute()
         except Exception: pass
         try:
-            save_res = supabase.table("factory_diagnosis_results").insert({"factory_id": factory_id, "sector": sector_raw, "diagnosis_stage": 1, "input_data": inp, "result_data": result_data, "rule_count": total_applicable, "is_latest": True}).execute()
+            # BE-06-final: v2026.04 변환 + Pydantic 검증 후 INSERT
+            result_data_v2 = _wrap_v202604(sector_raw, 1, inp, result_data, total_applicable)
+            save_res = supabase.table("factory_diagnosis_results").insert({"factory_id": factory_id, "sector": sector_raw, "diagnosis_stage": 1, "input_data": inp, "result_data": result_data_v2, "rule_count": total_applicable, "is_latest": True, "schema_version": "2026.04"}).execute()
             if save_res.data: diagnosis_id = save_res.data[0].get("id")
-        except Exception as e: print(f"[DIAGNOSE STEP1] factory_diagnosis_results 저장 실패: {e}")
+        except Exception as e: raise
         if diagnosis_id and applicable:
             try:
                 rule_rows = [{"diagnosis_id": diagnosis_id, "rule_code": r.get("rule_id") or r.get("rule_code") or "", "rule_name": (r.get("obligation_summary") or r.get("remarks") or "").strip(), "law_name": r.get("law_name") or "", "law_article": r.get("law_article") or "", "obligation": (r.get("obligation_summary") or "").strip(), "obligation_type": _resolve_obligation_type(r), "due_date": None, "status": "PENDING", "form_code": r.get("form_code") or None} for r in applicable]
@@ -1067,7 +1077,9 @@ def _save_diagnosis_result(supabase, factory_id: str, sector: str, stage: int, i
     has_appointment = any(r.get('rule_type') == 'APPOINTMENT' or r.get('appointment_required') for r in matched_rules)
     result_data = {'applicable_law_categories': law_categories, 'appointment_required': has_appointment, 'key_obligations': key_obligations, 'risk_level': _determine_risk_level(len(matched_rules)), 'rules': [{'rule_code': r.get('rule_code') or r.get('rule_id'), 'rule_name': r.get('rule_name') or r.get('remarks', ''), 'law_name': r.get('law_name', ''), 'law_article': r.get('law_article', ''), 'obligation': r.get('obligation_summary') or r.get('rule_name', ''), 'rule_type': r.get('rule_type') or str(r.get('rule_type_code', '')), 'stage': r.get('diagnosis_stage', 1)} for r in matched_rules]}
     try:
-        res = supabase.table('factory_diagnosis_results').insert({'factory_id': factory_id, 'sector': sector, 'diagnosis_stage': stage, 'input_data': input_data, 'result_data': result_data, 'rule_count': len(matched_rules), 'is_latest': True}).execute()
+        # BE-06-final: v2026.04 변환 + Pydantic 검증 후 INSERT
+        result_data_v2 = _wrap_v202604(sector, stage, input_data, result_data, len(matched_rules))
+        res = supabase.table('factory_diagnosis_results').insert({'factory_id': factory_id, 'sector': sector, 'diagnosis_stage': stage, 'input_data': input_data, 'result_data': result_data_v2, 'rule_count': len(matched_rules), 'is_latest': True, 'schema_version': '2026.04'}).execute()
         return res.data[0] if res.data else {}
     except Exception as e: print(f"[DIAGNOSIS] 결과 저장 실패: {e}"); return {'result_data': result_data}
 
