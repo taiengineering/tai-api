@@ -1,12 +1,20 @@
 """
-건설안전 관리 라우터 — v2.2.2
+건설안전 관리 라우터 — v2.2.3
 =====================================
-v2.2.2 (2026-04-16):
-  BUG-FIX #3 (SB-01): _auto_diagnose_and_schedule() rule coverage 통일
-    - inspection_required 만 처리 → inspection_required + action_required 둘 다 처리
-    - generate-schedules 엔드포인트와 동일한 커버리지 (177건 수준)
-  SB-02: 모든 print() → utils.logger (get_logger) 교체
-    - silent fail 패턴 유지하되 Fly.io 로그에서 [ERROR] grep 감지 가능
+v2.2.3 (2026-04-16):
+  ① 동기화: main v2.2.2 (FS-05) 내용 dev 반영
+     - SiteCreate/SitePatch에 latitude, longitude(WGS84, Optional[float]) 필드 추가
+     - DB migration 'add_construction_sites_coordinates' 이미 적용됨
+     - 대시보드 날씨 위젯이 construction_sites.latitude/longitude 직접 사용
+     - 주소→좌표 변환(/juso/coord) 결과를 최초 1회 저장, 반복 변환 제거
+  ② SB-01 BUG-FIX #3: _auto_diagnose_and_schedule() rule coverage 통일
+     - inspection_required 만 → inspection_required + action_required 둘 다
+     - generate-schedules 엔드포인트와 동일한 커버리지 (177건 수준)
+  ③ SB-02: 모든 print() → utils.logger (get_logger) 교체
+     - silent fail 패턴 유지하되 Fly.io 로그에서 [ERROR] grep 감지 가능
+
+v2.2.2 (2026-04-16 main, FS-05 핫픽스):
+  FS-05: SiteCreate/SitePatch latitude/longitude 추가
 
 v2.2.1 (2026-04-16):
   BUG-FIX #1: _create_factory_for_site() construction_type 매핑
@@ -18,12 +26,10 @@ v2.2.0 (2026-04-16):
   BE-4: GET /kcsc/processes?search=
 
 v2.1.0 (2026-04-09):
-  [ADD] POST /sites/{site_id}/diagnose
-  [ADD] POST /sites/{site_id}/generate-schedules
-  [ADD] 점검 이상 → FCM 알림
+  POST /sites/{site_id}/diagnose, /generate-schedules, 점검 FCM 알림
 
 v2.0.0 (2026-04-07):
-  POST /sites → factories 자동생성 + 자동 진단/일정
+  POST /sites: factories 자동 생성 + 자동 진단/일정
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -37,7 +43,7 @@ from utils.logger import get_logger
 log = get_logger(__name__)
 router = APIRouter(tags=["건설안전"])
 
-VERSION = "2.2.2"
+VERSION = "2.2.3"
 
 FCM_URL = "https://fcm.googleapis.com/fcm/send"
 
@@ -283,7 +289,7 @@ def _run_generate_schedules(supabase, factory_id: str, inspection_rules: list, c
 def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
     """
     v2.0.0: 현장 등록 시 자동 진단 + 스케줄 생성.
-    v2.2.2 BUG-FIX #3: inspection + action 모두 스케줄화 (이전: inspection 만).
+    v2.2.3 SB-01 BUG-FIX #3: inspection + action 모두 스케줄화 (이전: inspection만).
     실패 시 logger.error 기록 후 무시 (현장 등록 자체는 성공 처리).
     """
     result = {"diagnosis": None, "schedules": None}
@@ -294,7 +300,7 @@ def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
         company_res = supabase.table("factories").select("company_id").eq("id", factory_id).single().execute()
         company_id = company_res.data.get("company_id") if company_res.data else None
 
-        # v2.2.2 BUG-FIX #3: inspection + action 둘 다
+        # SB-01 BUG-FIX #3: inspection + action 둘 다
         inspection_rules = diag["result_data"].get("inspection_required") or []
         action_rules     = diag["result_data"].get("action_required") or []
         all_rules = inspection_rules + action_rules
@@ -383,6 +389,10 @@ class SiteCreate(BaseModel):
     site_address_detail: Optional[str] = None
     site_sido: Optional[str] = None
     site_sigungu: Optional[str] = None
+    # v2.2.3 (FS-05): 날씨 위젯용 WGS84 좌표 (선택)
+    # /juso/coord 변환 결과를 최초 1회 저장하여 반복 변환 제거
+    latitude: Optional[float] = Field(None, description="WGS84 위도 (예: 37.5665)")
+    longitude: Optional[float] = Field(None, description="WGS84 경도 (예: 126.9780)")
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     manager_id: Optional[str] = None
@@ -401,6 +411,9 @@ class SitePatch(BaseModel):
     site_address_detail: Optional[str] = None
     site_sido: Optional[str] = None
     site_sigungu: Optional[str] = None
+    # v2.2.3 (FS-05): 날씨 위젯용 WGS84 좌표 (선택)
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     manager_id: Optional[str] = None
