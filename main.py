@@ -1,4 +1,5 @@
-# main.py — v5.25.0
+# main.py — v5.26.0
+# v5.26.0: diagnosis_roi 라우터 등록 (ROI 집계 API)
 # v5.25.0: diagnosis_autofill 라우터 등록 (건축물대장·사업자·도로명주소 자동조회)
 # v5.24.1: fix_chat 라우터 등록 (대화형 입력부 + 어드민 API)
 # v5.23.0: diagnosis_fields 라우터 추가 (법령진단 입력항목 + 가격판단 API)
@@ -106,10 +107,11 @@ from routers.fix_providers_api       import router as fix_providers_router
 from routers.diagnosis_fields        import router as diagnosis_fields_router     # v5.23.0
 from routers.fix_chat                import router as fix_chat_router             # v5.24.1
 from routers.diagnosis_autofill      import router as diagnosis_autofill_router   # v5.25.0
+from routers.diagnosis_roi           import router as diagnosis_roi_router         # v5.26.0
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.25.0"
+APP_VERSION = "5.26.0"
 
 
 @asynccontextmanager
@@ -244,6 +246,7 @@ app.include_router(safety_template_router)
 app.include_router(event_trigger_router)
 app.include_router(worker_registry_router)
 app.include_router(diagnosis_router)
+app.include_router(diagnosis_roi_router)           # v5.26.0 — diagnosis prefix 포함
 app.include_router(tbm_router)
 app.include_router(tbm_templates_router)
 app.include_router(safety_meetings_router)
