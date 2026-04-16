@@ -1,12 +1,9 @@
 """
 법령 판정 엔진 라우터 — v5.6.8
 =================================
-v5.6.8 (2026-04-16): BE-06-final
-  - diagnose_step1 INSERT → v2026.04 형식 자동 변환
-  - _save_diagnosis_result(step2/step3) INSERT → v2026.04 형식 자동 변환
-  - services/legal_engine_v202604.wrap_result_to_v202604() 호출
-  - Pydantic DiagnosisResultV202604 검증 실패 시 500 에러 (silently fallback 금지)
-  - schema_version='2026.04' INSERT 컬럼에 하드코딩
+v5.6.8 (2026-04-15):
+  BE-1: diagnose/step1 완료 시 inspection_sets 자동 생성 (모든 섹터)
+  BE-3: contract_amount_eok 필드 설명 추가 (단위: 억원 명확화)
 
 v5.6.7 (2026-04-07):
   CONSTRUCTION sector에서 diagnose/step1 완료 시
@@ -40,11 +37,10 @@ from datetime import datetime, timezone, date, timedelta
 import json
 
 from db.supabase_client import get_supabase
-from services.legal_engine_v202604 import wrap_result_to_v202604 as _wrap_v202604  # BE-06-final
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.6.8"  # v5.6.8: BE-06-final v2026.04 INSERT 전환
+ENGINE_VERSION = "5.6.8"  # v5.6.8: diagnose/step1 완료 시 inspection_sets 자동 생성
 
 
 # ──────────────────────────────────────────────
@@ -594,7 +590,12 @@ class DiagnoseStep1Body(BaseModel):
     total_floor_area: Optional[float] = None
     electric_capacity: Optional[float] = None
     floor_count: Optional[int] = None
-    contract_amount_eok: Optional[float] = None
+    # BE-3: 단위 명확화 — 억원(100,000,000원) 단위. 150억 → 150 입력. 원화(원) 입력 시 오판정 발생
+    contract_amount_eok: Optional[float] = Field(
+        None,
+        description="공사금액 단위: 억원(1억=100,000,000원). 예) 150억원 공사 → 150 입력. "
+                    "원화(원) 단위로 입력하면 판정 오류 발생.",
+    )
     ksic_major: Optional[str] = None
     facility_type: Optional[str] = None
     elevator_count: Optional[int] = Field(None)
@@ -825,9 +826,12 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         raise HTTPException(status_code=400, detail="sector는 BUILDING, MANUFACTURING, CONSTRUCTION, SPECIAL_FACILITY 중 하나여야 합니다.")
     factory_id = (body.factory_id or "").strip()
     supabase = get_supabase()
+    _fac_company_id = None  # BE-1: inspection_sets 자동생성용
     if factory_id:
-        fac_check = supabase.table("factories").select("id").eq("id", factory_id).limit(1).execute()
+        # BE-3: company_id도 함께 조회 (inspection_sets 생성에 필요)
+        fac_check = supabase.table("factories").select("id, company_id").eq("id", factory_id).limit(1).execute()
         if not fac_check.data: raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다.")
+        _fac_company_id = fac_check.data[0].get("company_id")
 
     sector_groups = get_sector_groups(_normalize_sector_db(sector_raw))
     rules_res = supabase.table("master_building_legal_rules").select("*").eq("is_active", True).in_("sector", sector_groups).eq("diagnosis_stage", 1).execute()
@@ -927,11 +931,9 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         try: supabase.table("factory_diagnosis_results").update({"is_latest": False}).eq("factory_id", factory_id).eq("sector", sector_raw).eq("is_latest", True).execute()
         except Exception: pass
         try:
-            # BE-06-final: v2026.04 변환 + Pydantic 검증 후 INSERT
-            result_data_v2 = _wrap_v202604(sector_raw, 1, inp, result_data, total_applicable)
-            save_res = supabase.table("factory_diagnosis_results").insert({"factory_id": factory_id, "sector": sector_raw, "diagnosis_stage": 1, "input_data": inp, "result_data": result_data_v2, "rule_count": total_applicable, "is_latest": True, "schema_version": "2026.04"}).execute()
+            save_res = supabase.table("factory_diagnosis_results").insert({"factory_id": factory_id, "sector": sector_raw, "diagnosis_stage": 1, "input_data": inp, "result_data": result_data, "rule_count": total_applicable, "is_latest": True}).execute()
             if save_res.data: diagnosis_id = save_res.data[0].get("id")
-        except Exception as e: raise
+        except Exception as e: print(f"[DIAGNOSE STEP1] factory_diagnosis_results 저장 실패: {e}")
         if diagnosis_id and applicable:
             try:
                 rule_rows = [{"diagnosis_id": diagnosis_id, "rule_code": r.get("rule_id") or r.get("rule_code") or "", "rule_name": (r.get("obligation_summary") or r.get("remarks") or "").strip(), "law_name": r.get("law_name") or "", "law_article": r.get("law_article") or "", "obligation": (r.get("obligation_summary") or "").strip(), "obligation_type": _resolve_obligation_type(r), "due_date": None, "status": "PENDING", "form_code": r.get("form_code") or None} for r in applicable]
@@ -945,6 +947,14 @@ async def diagnose_step1(body: DiagnoseStep1Body):
             generate_schedules_from_diagnosis(factory_id)
         except Exception as e:
             print(f"[AUTO_SCHEDULE] 건설현장 일정 자동생성 실패: {e}")
+
+    # v5.6.8 BE-1: inspection_sets 자동 생성 (모든 섹터)
+    if factory_id and diagnosis_id and applicable:
+        try:
+            from routers.inspection_set_auto import auto_create_inspection_sets_from_diagnosis
+            auto_create_inspection_sets_from_diagnosis(supabase, factory_id, _fac_company_id, applicable)
+        except Exception as e:
+            print(f"[AUTO_INSPECT_SETS] inspection_sets 자동생성 실패: {e}")
 
     result_data["diagnosis_id"] = diagnosis_id
     return {"status": "success", "data": result_data}
@@ -1077,9 +1087,7 @@ def _save_diagnosis_result(supabase, factory_id: str, sector: str, stage: int, i
     has_appointment = any(r.get('rule_type') == 'APPOINTMENT' or r.get('appointment_required') for r in matched_rules)
     result_data = {'applicable_law_categories': law_categories, 'appointment_required': has_appointment, 'key_obligations': key_obligations, 'risk_level': _determine_risk_level(len(matched_rules)), 'rules': [{'rule_code': r.get('rule_code') or r.get('rule_id'), 'rule_name': r.get('rule_name') or r.get('remarks', ''), 'law_name': r.get('law_name', ''), 'law_article': r.get('law_article', ''), 'obligation': r.get('obligation_summary') or r.get('rule_name', ''), 'rule_type': r.get('rule_type') or str(r.get('rule_type_code', '')), 'stage': r.get('diagnosis_stage', 1)} for r in matched_rules]}
     try:
-        # BE-06-final: v2026.04 변환 + Pydantic 검증 후 INSERT
-        result_data_v2 = _wrap_v202604(sector, stage, input_data, result_data, len(matched_rules))
-        res = supabase.table('factory_diagnosis_results').insert({'factory_id': factory_id, 'sector': sector, 'diagnosis_stage': stage, 'input_data': input_data, 'result_data': result_data_v2, 'rule_count': len(matched_rules), 'is_latest': True, 'schema_version': '2026.04'}).execute()
+        res = supabase.table('factory_diagnosis_results').insert({'factory_id': factory_id, 'sector': sector, 'diagnosis_stage': stage, 'input_data': input_data, 'result_data': result_data, 'rule_count': len(matched_rules), 'is_latest': True}).execute()
         return res.data[0] if res.data else {}
     except Exception as e: print(f"[DIAGNOSIS] 결과 저장 실패: {e}"); return {'result_data': result_data}
 
@@ -1110,8 +1118,7 @@ def diagnose_step2(body: dict):
             prev = prev_res.data
         except Exception: pass
     sector = (prev or {}).get('sector', body.get('sector', 'CONSTRUCTION'))
-    input_data = dict((prev or {}).get('input_data') or {})
-    input_data.update({'processes': body.get('processes', []), 'construction_types': body.get('construction_types', []), 'sector': sector})
+    input_data = dict((prev or {}).get('input_data') or {}); input_data.update({'processes': body.get('processes', []), 'construction_types': body.get('construction_types', []), 'sector': sector})
     kcsc_processes: List[Dict] = []; kcsc_process_summary: List[Dict] = []
     if kcsc_process_ids:
         try:
