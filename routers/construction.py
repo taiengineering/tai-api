@@ -53,12 +53,6 @@ def _ptw_number(site_id: str, supabase) -> str:
 # ──────────────────────────────────────────────
 
 def calc_safety_manager(site_type: str, contract_amount: float, total_workers: int) -> Dict[str, Any]:
-    """
-    산안법 시행령 제16조 기준
-    - 건축(BUILDING): 도급금액 >= 150억 → 선임 의무
-    - 토목(CIVIL):    도급금액 >= 120억 → 선임 의무
-    - 상시 근로자(하도급 포함) >= 50명 → 선임 의무 (도급금액 무관)
-    """
     required = False
     count = 0
     reasons = []
@@ -123,18 +117,18 @@ def _create_factory_for_site(supabase, site: dict) -> Optional[str]:
 
 
 # ──────────────────────────────────────────────
-# v2.0.0: 내부 진단 실행 함수 (재사용)
+# v2.0.0: 내부 진단 실행 함수
 # ──────────────────────────────────────────────
 
 def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
     """
     CONSTRUCTION sector 법령진단 실행.
-    factory_diagnosis_results 저장 + construction_sites 업데이트.
     반환: {
         "applicable_count": int,
         "diagnosis_id": str,
         "result_data": dict,
-        "applicable_rules": list,   # v2.2.0 BE-1: raw rules (inspection_sets 자동생성용)
+        "by_obligation_type": dict,
+        "applicable_rules": list,  # v2.2.0 BE-1: raw rules (inspection_sets 자동생성용)
     }
     """
     contract_eok = float(site.get("contract_amount") or 0)
@@ -223,23 +217,19 @@ def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
         }).eq("factory_id", factory_id).execute()
 
     return {
-        "applicable_count": total_applicable,
-        "diagnosis_id":     diagnosis_id,
-        "result_data":      result_data,
+        "applicable_count":  total_applicable,
+        "diagnosis_id":      diagnosis_id,
+        "result_data":       result_data,
         "by_obligation_type": result_data["summary"],
-        "applicable_rules": applicable,  # v2.2.0 BE-1: inspection_sets 자동생성용 raw rules
+        "applicable_rules":  applicable,  # v2.2.0 BE-1: inspection_sets 자동생성용 raw rules
     }
 
 
 # ──────────────────────────────────────────────
-# v2.0.0: 내부 스케줄 생성 함수 (재사용)
+# v2.0.0: 내부 스케줄 생성 함수
 # ──────────────────────────────────────────────
 
 def _run_generate_schedules(supabase, factory_id: str, inspection_rules: list, company_id: Optional[str]) -> dict:
-    """
-    inspection_rules → work_schedules 생성 (LEGAL source, 중복 skip).
-    반환: {"created": int, "skipped": int, "total_rules": int}
-    """
     existing = supabase.table("work_schedules").select("rule_code") \
         .eq("factory_id", factory_id).eq("source_type", "LEGAL").eq("status_code", "PENDING").execute()
     existing_codes = {r["rule_code"] for r in (existing.data or []) if r.get("rule_code")}
@@ -308,16 +298,10 @@ def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
 # ──────────────────────────────────────────────
 
 async def _send_fcm_inspection_alert(supabase, site_id: str, inspection_id: str, defect_count: int):
-    """
-    점검 이상 발생 시 안전관리자 FCM 알림.
-    site.manager_id → users.fcm_token 조회 후 발송.
-    실패 시 무시 (점검 저장에 영향 없음).
-    """
     import os
     fcm_server_key = os.getenv("FCM_SERVER_KEY", "")
     if not fcm_server_key:
         return
-
     try:
         site_res = supabase.table("construction_sites").select("site_name, manager_id").eq("id", site_id).limit(1).execute()
         if not site_res.data:
@@ -326,14 +310,11 @@ async def _send_fcm_inspection_alert(supabase, site_id: str, inspection_id: str,
         manager_id = site.get("manager_id")
         if not manager_id:
             return
-
         user_res = supabase.table("users").select("fcm_token, name").eq("id", manager_id).limit(1).execute()
         if not user_res.data or not user_res.data[0].get("fcm_token"):
             return
-
         fcm_token = user_res.data[0]["fcm_token"]
         site_name = site.get("site_name", "현장")
-
         payload = {
             "to": fcm_token,
             "notification": {
@@ -350,12 +331,8 @@ async def _send_fcm_inspection_alert(supabase, site_id: str, inspection_id: str,
         }
         async with httpx.AsyncClient(timeout=10.0) as client:
             await client.post(
-                FCM_URL,
-                json=payload,
-                headers={
-                    "Authorization": f"key={fcm_server_key}",
-                    "Content-Type":  "application/json",
-                },
+                FCM_URL, json=payload,
+                headers={"Authorization": f"key={fcm_server_key}", "Content-Type": "application/json"},
             )
     except Exception as e:
         print(f"[FCM] 점검 알림 발송 실패 (무시): {e}")
@@ -732,7 +709,7 @@ async def get_site_stats(site_id: str):
 
 
 # ══════════════════════════════════════════════
-# ② 건설 법령진단 (독립 엔드포인트) — v2.1.0 신규
+# ② 건설 법령진단 (독립 엔드포인트)
 # ══════════════════════════════════════════════
 
 @router.post("/sites/{site_id}/diagnose")
@@ -771,10 +748,10 @@ async def diagnose_site(site_id: str):
         return {
             "status": "success",
             "data": {
-                "site_id":          site_id,
-                "factory_id":       factory_id,
-                "applicable_rules": diag["applicable_count"],
-                "diagnosis_id":     diag["diagnosis_id"],
+                "site_id":            site_id,
+                "factory_id":         factory_id,
+                "applicable_rules":   diag["applicable_count"],
+                "diagnosis_id":       diag["diagnosis_id"],
                 "by_obligation_type": diag["by_obligation_type"],
             },
         }
@@ -785,14 +762,11 @@ async def diagnose_site(site_id: str):
 
 
 # ══════════════════════════════════════════════
-# ③ 작업일정 자동 생성 (독립 엔드포인트) — v2.1.0 신규
+# ③ 작업일정 자동 생성 (독립 엔드포인트)
 # ══════════════════════════════════════════════
 
 @router.post("/sites/{site_id}/generate-schedules")
 async def generate_schedules(site_id: str):
-    """
-    v2.1.0: 건설현장 → 최신 법령진단 결과 기반 작업일정 자동 생성
-    """
     supabase = get_supabase()
     try:
         site_res = supabase.table("construction_sites").select("factory_id, company_id").eq("id", site_id).eq("is_active", True).limit(1).execute()
@@ -927,22 +901,22 @@ async def delete_process(process_id: str):
 
 
 # ══════════════════════════════════════════════
-# ⑤ KCSC 마스터
+# ⑤ KCSC 마스터 (BE-4)
 # ══════════════════════════════════════════════
 
 @router.get("/kcsc/processes")
 async def list_kcsc_processes(
-    search: Optional[str] = Query(None, description="공정명 검색 (부분일치)"),
+    search: Optional[str] = Query(None, description="공정명 검색 (부분일치). 예) 굴착"),
     construction_type: Optional[str] = Query(None, description="BUILDING / CIVIL / COMMON"),
-    work_type_code: Optional[str] = Query(None, description="작업 유형 코드"),
+    work_type_code: Optional[str] = Query(None, description="작업 유형 코드. 예) EXCAVATION"),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
 ):
     """
     BE-4: KCSC 공정 마스터 검색 API
-    GET /construction/kcsc/processes?search=굴착
-    GET /construction/kcsc/processes?construction_type=BUILDING
-    GET /construction/kcsc/processes?work_type_code=EXCAVATION
+    - GET /construction/kcsc/processes?search=굴착
+    - GET /construction/kcsc/processes?construction_type=BUILDING
+    - GET /construction/kcsc/processes?work_type_code=EXCAVATION
     """
     supabase = get_supabase()
     try:
@@ -1213,7 +1187,7 @@ async def delete_worker(worker_id: str):
 
 
 # ══════════════════════════════════════════════
-# ⑧ 안전점검 (Inspections) — v2.1.0: FCM 알림 추가
+# ⑧ 안전점검 (Inspections)
 # ══════════════════════════════════════════════
 
 @router.get("/sites/{site_id}/inspections")
@@ -1244,9 +1218,7 @@ async def list_inspections(
 
 @router.post("/sites/{site_id}/inspections")
 async def create_inspection(site_id: str, body: InspectionCreate):
-    """
-    v2.1.0: 점검 저장 시 이상(FAIL/ISSUE) 감지 → 안전관리자 FCM 자동 발송
-    """
+    """v2.1.0: 점검 저장 시 이상(FAIL/ISSUE) 감지 → 안전관리자 FCM 자동 발송"""
     supabase = get_supabase()
     try:
         data = body.model_dump(exclude_none=True)
