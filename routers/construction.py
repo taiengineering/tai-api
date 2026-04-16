@@ -1,18 +1,25 @@
 """
-건설안전 관리 라우터 — v2.1.0
+건설안전 관리 라우터 — v2.2.0
 =====================================
+v2.2.0 (2026-04-16):
+  BE-1: _run_diagnosis() 결과 → inspection_sets 자동 생성 (호출 위치 2곳)
+        - _auto_diagnose_and_schedule() 내부 (현장 등록 시 자동)  [위치 1]
+        - diagnose_site() 독립 엔드포인트 실행 시                  [위치 2]
+        raw applicable_rules 반환 추가 → inspection_set_auto 연결
+  BE-3: SiteCreate.contract_amount 단위 명확화 (억원, Pydantic Field description)
+  BE-4: GET /kcsc/processes?search= v2.1.0 기존 구현 유지 (완료)
+
 v2.1.0 (2026-04-09) 워크오더 미구현 항목 완성:
   [ADD] POST /sites/{site_id}/diagnose  — 건설 법령진단 독립 엔드포인트
   [ADD] POST /sites/{site_id}/generate-schedules — 작업일정 자동 생성 독립 엔드포인트
   [ADD] 점검 저장 시 이상(FAIL/ISSUE) 감지 → 안전관리자 FCM 알림 자동 발송
-        (users 테이블 fcm_token 기반, manager_id → site.manager_id 우선)
 
 v2.0.0 (2026-04-07 현장소장 온보딩 Phase 1):
   - POST /sites: factories 테이블 자동 생성 (sector='CONSTRUCTION') + construction_sites.factory_id 업데이트
   - POST /sites: 현장 생성 후 diagnose/step1 자동 실행 + generate_schedules 자동 트리거
 """
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, Any, Dict, List
 from datetime import datetime, date, timezone
 import httpx
@@ -21,7 +28,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(tags=["건설안전"])
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 FCM_URL = "https://fcm.googleapis.com/fcm/send"
 
@@ -123,7 +130,12 @@ def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
     """
     CONSTRUCTION sector 법령진단 실행.
     factory_diagnosis_results 저장 + construction_sites 업데이트.
-    반환: {"applicable_count": int, "diagnosis_id": str, "result_data": dict}
+    반환: {
+        "applicable_count": int,
+        "diagnosis_id": str,
+        "result_data": dict,
+        "applicable_rules": list,   # v2.2.0 BE-1: raw rules (inspection_sets 자동생성용)
+    }
     """
     contract_eok = float(site.get("contract_amount") or 0)
     direct = int(site.get("direct_workers") or 0)
@@ -215,6 +227,7 @@ def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
         "diagnosis_id":     diagnosis_id,
         "result_data":      result_data,
         "by_obligation_type": result_data["summary"],
+        "applicable_rules": applicable,  # v2.2.0 BE-1: inspection_sets 자동생성용 raw rules
     }
 
 
@@ -274,6 +287,17 @@ def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
         inspection_rules = diag["result_data"].get("inspection_required") or []
         sched = _run_generate_schedules(supabase, factory_id, inspection_rules, company_id)
         result["schedules"] = sched
+
+        # v2.2.0 BE-1: inspection_sets 자동생성 [호출 위치 1 — 현장 등록 시]
+        try:
+            from routers.inspection_set_auto import auto_create_inspection_sets_from_diagnosis
+            auto_create_inspection_sets_from_diagnosis(
+                supabase, factory_id, company_id,
+                diag.get("applicable_rules") or [],
+            )
+        except Exception as e:
+            print(f"[AUTO_INSPECT_SETS] construction 현장등록 자동생성 실패 (무시): {e}")
+
     except Exception as e:
         print(f"[CONSTRUCTION] 자동진단/일정생성 실패 (무시): {e}")
     return result
@@ -346,7 +370,14 @@ class SiteCreate(BaseModel):
     site_name: str
     site_code: Optional[str] = None
     site_type: str = "BUILDING"
-    contract_amount: Optional[float] = None
+    # BE-3: 단위 명확화 — 억원(100,000,000원) 단위
+    # 150억원 공사 → 150 입력. 원화(원) 입력 시 안전관리자 선임 의무 판정 오류 발생.
+    contract_amount: Optional[float] = Field(
+        None,
+        description="공사 도급금액. 단위: 억원(1억=100,000,000원). "
+                    "예) 150억원 공사 → 150 입력. "
+                    "원화(원) 단위 입력 시 안전관리자 선임 의무 판정 오류 발생.",
+    )
     total_workers: Optional[int] = 0
     direct_workers: Optional[int] = 0
     subcon_workers: Optional[int] = 0
@@ -708,9 +739,7 @@ async def get_site_stats(site_id: str):
 async def diagnose_site(site_id: str):
     """
     v2.1.0: 건설현장 법령진단 독립 실행
-    - CONSTRUCTION sector 173개 규칙 중 현장 조건 매칭
-    - factory_diagnosis_results 저장
-    - construction_sites.diagnosis_applicable_count 업데이트
+    v2.2.0 BE-1: 진단 완료 후 inspection_sets 자동 생성 [호출 위치 2]
     """
     supabase = get_supabase()
     try:
@@ -721,19 +750,29 @@ async def diagnose_site(site_id: str):
 
         factory_id = site.get("factory_id")
         if not factory_id:
-            # factory가 없으면 자동 생성
             factory_id = _create_factory_for_site(supabase, site)
             if not factory_id:
                 raise HTTPException(status_code=500, detail="factory 연결 실패")
 
         diag = _run_diagnosis(supabase, factory_id, site)
 
+        # v2.2.0 BE-1: inspection_sets 자동생성 [호출 위치 2 — 독립 진단 실행 시]
+        try:
+            from routers.inspection_set_auto import auto_create_inspection_sets_from_diagnosis
+            company_res = supabase.table("factories").select("company_id").eq("id", factory_id).limit(1).execute()
+            company_id = company_res.data[0].get("company_id") if company_res.data else None
+            auto_create_inspection_sets_from_diagnosis(
+                supabase, factory_id, company_id,
+                diag.get("applicable_rules") or [],
+            )
+        except Exception as e:
+            print(f"[AUTO_INSPECT_SETS] diagnose_site 자동생성 실패 (무시): {e}")
+
         return {
             "status": "success",
             "data": {
                 "site_id":          site_id,
                 "factory_id":       factory_id,
-                "total_rules":      173,
                 "applicable_rules": diag["applicable_count"],
                 "diagnosis_id":     diag["diagnosis_id"],
                 "by_obligation_type": diag["by_obligation_type"],
@@ -753,9 +792,6 @@ async def diagnose_site(site_id: str):
 async def generate_schedules(site_id: str):
     """
     v2.1.0: 건설현장 → 최신 법령진단 결과 기반 작업일정 자동 생성
-    - factory_diagnosis_results (is_latest=True) 조회
-    - inspection_required 규칙 → work_schedules 생성 (중복 skip)
-    - 4조건: 기준일·주기·담당자·의무내용 중 최소 의무내용+기준일만 있어도 PENDING으로 생성
     """
     supabase = get_supabase()
     try:
@@ -769,7 +805,6 @@ async def generate_schedules(site_id: str):
         if not factory_id:
             raise HTTPException(status_code=400, detail="법령진단을 먼저 실행하세요 (factory_id 없음)")
 
-        # 최신 진단 결과 조회
         diag_res = supabase.table("factory_diagnosis_results") \
             .select("result_data") \
             .eq("factory_id", factory_id) \
@@ -897,12 +932,18 @@ async def delete_process(process_id: str):
 
 @router.get("/kcsc/processes")
 async def list_kcsc_processes(
-    search: Optional[str] = Query(None),
-    construction_type: Optional[str] = Query(None),
-    work_type_code: Optional[str] = Query(None),
+    search: Optional[str] = Query(None, description="공정명 검색 (부분일치)"),
+    construction_type: Optional[str] = Query(None, description="BUILDING / CIVIL / COMMON"),
+    work_type_code: Optional[str] = Query(None, description="작업 유형 코드"),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
 ):
+    """
+    BE-4: KCSC 공정 마스터 검색 API
+    GET /construction/kcsc/processes?search=굴착
+    GET /construction/kcsc/processes?construction_type=BUILDING
+    GET /construction/kcsc/processes?work_type_code=EXCAVATION
+    """
     supabase = get_supabase()
     try:
         offset = (page - 1) * size
@@ -1205,14 +1246,12 @@ async def list_inspections(
 async def create_inspection(site_id: str, body: InspectionCreate):
     """
     v2.1.0: 점검 저장 시 이상(FAIL/ISSUE) 감지 → 안전관리자 FCM 자동 발송
-    overall_result 계산: checklist_items 중 result='bad' 1개 이상 → ISSUE, 없으면 PASS
     """
     supabase = get_supabase()
     try:
         data = body.model_dump(exclude_none=True)
         data["site_id"] = site_id
 
-        # overall_result 자동 계산
         checklist = data.get("checklist_items") or []
         if isinstance(checklist, list):
             bad_items = [item for item in checklist if isinstance(item, dict) and item.get("result") in ("bad", "fail", "이상", "FAIL")]
@@ -1234,7 +1273,6 @@ async def create_inspection(site_id: str, body: InspectionCreate):
 
         inspection = res.data[0]
 
-        # ★ v2.1.0: 이상 발생 시 FCM 알림
         if data.get("overall_result") in ("FAIL", "ISSUE") and data.get("defect_count", 0) > 0:
             await _send_fcm_inspection_alert(
                 supabase,
