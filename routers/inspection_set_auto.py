@@ -1,6 +1,11 @@
 """
-inspection_sets 자동 생성 모듈 — v1.0.0
+inspection_sets 자동 생성 모듈 — v1.0.1
 ==========================================
+v1.0.1 (2026-04-16):
+  - inspection_cycle_unit_code OR inspection_cycle_code 두 필드 모두 지원
+    (construction.py _run_diagnosis의 raw rules 및
+     legal_engine.py format_rule_result_db() 교 모두 수용)
+
 v1.0.0 (2026-04-15):
   BE-1: diagnose/step1 완료 시 inspection_sets 자동 생성
   - master_building_legal_rules의 inspection_required / obligation_type 기준으로
@@ -37,7 +42,7 @@ CYCLE_UNIT_LABEL = {
 
 def _get_schedule_type_raw(rule: dict) -> str:
     """raw DB 룰(master_building_legal_rules)에서 schedule_type 판단"""
-    if rule.get("inspection_cycle_unit_code"):
+    if rule.get("inspection_cycle_unit_code") or rule.get("inspection_cycle_code"):
         return "PERIODIC"
     if rule.get("construction_work_type"):
         return "BEFORE_WORK"
@@ -59,6 +64,11 @@ def auto_create_inspection_sets_from_diagnosis(
 
     중복 생성 방지:
       - factory_id + source='LEGAL_ENGINE' + legal_rule_id 기준으로 기존 레코드 확인
+
+    입력 호환성:
+      - raw DB 룰 (master_building_legal_rules 레코드)
+      - format_rule_result_db() 처리된 포맷단 모두 수용
+        (inspection_cycle_unit_code OR inspection_cycle_code, rule_id OR id)
 
     Returns:
         생성된 레코드 수
@@ -94,17 +104,30 @@ def auto_create_inspection_sets_from_diagnosis(
     # 3. 삽입 데이터 구성
     insert_rows = []
     for rule in insp_rules:
-        rule_id = str(rule.get("rule_id") or "").strip()
+        # rule_id: raw rule은 rule_id, 포맷단도 rule_id 지원 (id fallback)
+        rule_id = str(
+            rule.get("rule_id") or rule.get("id") or ""
+        ).strip()
         if not rule_id or rule_id in existing_rule_ids:
             continue
 
-        law_name       = rule.get("law_name") or ""
+        law_name        = rule.get("law_name") or ""
         obligation_type = (rule.get("obligation_type") or "INSPECT").upper()
-        cycle_code     = rule.get("inspection_cycle_unit_code") or ""
+        # v1.0.1: inspection_cycle_unit_code(raw) OR inspection_cycle_code(formatted) 두 지월
+        cycle_code      = (
+            rule.get("inspection_cycle_unit_code")
+            or rule.get("inspection_cycle_code")
+            or ""
+        )
         cycle_unit, cycle_value = CYCLE_CODE_MAP.get(cycle_code, ("year", 1))
-        schedule_type  = _get_schedule_type_raw(rule)
-        unit_label     = CYCLE_UNIT_LABEL.get(cycle_unit, "")
-        description    = (rule.get("obligation_summary") or rule.get("remarks") or "").strip()
+        schedule_type   = _get_schedule_type_raw(rule)
+        unit_label      = CYCLE_UNIT_LABEL.get(cycle_unit, "")
+        description     = (
+            rule.get("obligation_summary")
+            or rule.get("description")
+            or rule.get("remarks")
+            or ""
+        ).strip()
 
         cycle_guide = (
             f"마지막 점검일로부터 {cycle_value}{unit_label}마다"
@@ -134,7 +157,10 @@ def auto_create_inspection_sets_from_diagnosis(
         })
 
     if not insert_rows:
-        print(f"[AUTO_INSPECT_SETS] factory={factory_id} 신규 생성 대상 없음 (기존={len(existing_rule_ids)}개)")
+        print(
+            f"[AUTO_INSPECT_SETS] factory={factory_id} 신규 생성 대상 없음 "
+            f"(기존={len(existing_rule_ids)}개)"
+        )
         return 0
 
     # 4. 배치 삽입 (20건씩)
