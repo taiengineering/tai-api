@@ -1,180 +1,184 @@
-# FN-06: 법령진단 결과 렌더러 + 리포트 페이지
+# FN-06 워크오더 (상세) — diagnosis-result-v2.html
 
-> **작성일**: 2026-04-17  
-> **대상 레포**: taiengineering/tai-admin (프론트엔드, safe.taieng.co.kr)  
-> **의존**: BE-08 (diagnosis_transform.py) 완료 후 진행
+**저장소:** tai-admin  
+**브랜치:** main (기존 패턴 따름)  
+**의존:** BE-08 Transform API 완료 후 착수  
+**우선순위:** P1
 
 ---
 
 ## 배경
 
-현재 `result_html`과 `result_pdf_url`이 전부 NULL.
-법령진단 결과를 사용자에게 보여주는 페이지가 없음.
-BE-08의 Transform API(`/diagnosis/transform/latest/{factory_id}`)를 호출하여 표준화된 결과를 렌더링.
+기존 `diagnosis-result.html`은 원시 법령엔진 JSON을 직접 파싱해 렌더링하는 구조였으나,
+BE-08에서 Transform API(`GET /diagnosis/{id}/result/transformed`)가 완성됨에 따라
+클라이언트 파싱 로직을 전면 제거하고 Transform API 응답만 소비하는 v2 렌더러 신규 제작.
 
 ---
 
-## 작업 1: `diagnosis-result-v2.html` 신규 생성
-
-### 경로
-```
-tadmin/full-version/html/horizontal-menu-template/diagnosis-result-v2.html
-```
-
-### 진입점
-- URL: `diagnosis-result-v2.html?factory_id={uuid}`
-- 또는: `diagnosis-result-v2.html?diagnosis_id={uuid}`
-
-### 레이아웃 구조
+## API 계약 (BE-08 기준)
 
 ```
-┌─────────────────────────────────────────────────┐
-│ 헤드라인 카드                                      │
-│ ┌─────────┬─────────┬──────────┬──────────┐      │
-│ │ 위험등급  │ 의무건수  │ 적용법령수  │ 과태료노출  │      │
-│ │ HIGH 🔴 │ 95건    │ 12개     │ 2,600만원 │      │
-│ └─────────┴─────────┴──────────┴──────────┘      │
-├─────────────────────────────────────────────────┤
-│ ⚠️ 경고 배너 (threshold_near 등)                   │
-├──────────────────────┬──────────────────────────┤
-│ 의무사항 탭 (좌 65%)   │ ROI + 요약 (우 35%)        │
-│                      │                          │
-│ [선임] [점검] [조치]   │ 연 구독료: 948,000원       │
-│ [신고] [보고]         │ 과태료 노출: 26,000,000원   │
-│                      │ ROI: 27.4배               │
-│ ┌──────────────────┐ │                          │
-│ │ 산안법 §16       │ │ ┌──────────────────────┐│
-│ │ 안전관리자 선임   │ │ │ SaaS 구독 전환 CTA   ││
-│ │ 자격: 산업안전기사 │ │ │ [월 79,000원 시작]    ││
-│ │ 과태료: 500만원   │ │ └──────────────────────┘│
-│ └──────────────────┘ │                          │
-│ ...                  │ 점검 스케줄 요약           │
-│                      │ - 정기 15건               │
-│                      │ - 작업전 3건              │
-│                      │ - 수시 5건                │
-├──────────────────────┴──────────────────────────┤
-│ 하단 액션 버튼                                     │
-│ [PDF 다운로드] [SaaS 구독] [재진단]                 │
-└─────────────────────────────────────────────────┘
+GET /diagnosis/{id}/result/transformed
+Authorization: Bearer {token}
+
+Response 200:
+{
+  "diagnosis_id": "uuid",
+  "sector": "BUILDING|INDUSTRY|CONSTRUCTION",
+  "tier": "FREE|PAID1|PAID2|PAID3",
+  "company_name": "string",
+  "generated_at": "ISO8601",
+  "schema_version": "v2026.04",
+  "headline": {
+    "summary": "string",
+    "severity": "LOW|MEDIUM|HIGH|CRITICAL"
+  },
+  "obligations": [
+    {
+      "id": "uuid",
+      "category": "선임|점검|신고|교육|서류",
+      "title": "string",
+      "risk_level": "LOW|MEDIUM|HIGH|CRITICAL",
+      "description": "string",
+      "evidence": ["string"],
+      "action_url": "string|null",
+      "auto_schedulable": bool
+    }
+  ],
+  "warnings": [
+    { "level": "INFO|WARN|DANGER", "message": "string" }
+  ],
+  "roi": {
+    "penalty_max_krw": number,
+    "subscription_annual_krw": number,   // DB에서 조회, 하드코딩 금지
+    "roi_ratio": number,
+    "breakeven_days": number
+  },
+  "inspection_schedule": [
+    { "month": 1-12, "count": number, "items": ["string"] }
+  ],
+  "next_actions": [
+    { "label": "string", "url": "string", "type": "primary|secondary" }
+  ]
+}
 ```
 
-### API 호출
+> **엔진 API 직접 호출 절대 금지.** 모든 데이터는 Transform API 단일 호출로만 취득.
 
-```javascript
-const API = localStorage.getItem('api_base') || 'https://api.taieng.co.kr';
+---
 
-// factory_id로 최신 결과 조회
-const res = await fetch(`${API}/diagnosis/transform/latest/${factoryId}`, {
-  headers: { 'Authorization': `Bearer ${token}` }
-});
-const { data } = await res.json();
+## 레이아웃 명세
 
-// data.headline → 상단 카드
-// data.obligations → 탭 콘텐츠
-// data.warnings → 경고 배너
-// data.exposure → 과태료 합산
-// data.roi → ROI 카드
-// data.inspection_schedule → 점검 스케줄 요약
 ```
+[상단] 헤드라인 카드 (severity 배지 + summary + company_name + generated_at)
+[경고] warnings 배너 행 (level별 색상: INFO=blue, WARN=yellow, DANGER=red)
 
-### 의무사항 탭 UI
+[2열 그리드 65/35]
+┌─────────────────────────────────┬──────────────────────┐
+│ 좌: 의무사항 5탭                │ 우: ROI 카드         │
+│  탭: 선임/점검/신고/교육/서류   │     스케줄 히트맵    │
+│  카드 리스트 (risk_level 정렬)  │     SaaS CTA         │
+│  evidence 접힘 패널             │                      │
+└─────────────────────────────────┴──────────────────────┘
 
-| 탭 | 아이콘 | 데이터 소스 |
-|---|---|---|
-| 선임 | 👤 | obligations[category=appointment].items |
-| 점검 | 🔍 | obligations[category=inspection].items |
-| 조치 | ⚡ | obligations[category=action].items |
-| 신고 | 📋 | obligations[category=report].items |
-| 보고 | 📤 | obligations[category=notify].items |
-
-### 각 의무 카드 구성
-
-```html
-<div class="obligation-card">
-  <div class="law-badge">산안법 §16</div>
-  <h5>안전관리자 선임</h5>
-  <p class="desc">상시 근로자 50인 이상 사업장...</p>
-  <div class="meta-row">
-    <span class="cycle">연 1회</span>
-    <span class="executor">자격자만</span>
-    <span class="penalty text-danger">과태료 500만원</span>
-  </div>
-  <div class="form-link" data-form-code="FORM_001">
-    <a href="#">📄 서식 다운로드</a>
-  </div>
-</div>
+[하단] next_actions 버튼 행
 ```
 
 ---
 
-## 작업 2: 경고 배너 컴포넌트
+## 구현 상세
 
-```html
-<!-- warnings 배열 순회 -->
-<div class="alert alert-warning d-flex align-items-center" role="alert">
-  <i class="bx bx-error-circle me-2 fs-4"></i>
-  <div>
-    <strong>경계값 경고</strong><br>
-    근로자 49명 — 50명 도달 시 중대재해법 적용 (1명 차이)
-  </div>
-</div>
+### 1) 헤드라인 카드
+- severity → 배지 색상: LOW=secondary, MEDIUM=warning, HIGH=danger, CRITICAL=dark+빨강테두리
+- company_name + sector + tier 표시
+- generated_at 포맷: `YYYY년 MM월 DD일 HH:mm`
+
+### 2) 경고 배너
+- `warnings` 배열 순회. level별 `alert-info / alert-warning / alert-danger`
+- 0건이면 배너 섹션 숨김
+
+### 3) 의무사항 탭 (좌측 65%)
+- 탭: 선임 / 점검 / 신고 / 교육 / 서류 (5개 고정)
+- 각 탭 카운트 배지: `category` 필드 기준 분류
+- 카드 내부: risk_level 아이콘 + title + description
+- evidence 접힘: `<details>` 또는 Bootstrap collapse
+- `auto_schedulable=true`이면 "자동일정 등록 가능" 배지 표시
+- `action_url` 있으면 "해결하기" 버튼 노출 (없으면 숨김)
+- 탭 내 카드가 0개이면 "해당 의무 없음" 빈 상태
+
+### 4) ROI 카드 (우측 35%)
+- `roi.penalty_max_krw` 강조 (font-size ≥ 32px, color #dc2626)
+- `roi.subscription_annual_krw` 대비 절감액/비율 표시
+- **가격 하드코딩 절대 금지** — API 응답값만 사용
+- `roi.breakeven_days` → "손익분기 {N}일" chip
+- "ROI 상세 보기" → `diagnosis-roi-dashboard.html?diagnosis_id={id}`
+
+### 5) 스케줄 히트맵
+- `inspection_schedule` 12개월 히트맵
+- count 0=회색, 1-2=연파랑, 3-5=파랑, 6+=진파랑
+- 클릭 시 해당 월 items 툴팁
+
+### 6) SaaS CTA
+- 비구독자: "구독 시 자동 처리" 배지 + 요금제 링크
+- 구독자: "일정 자동 등록" 버튼 → work-schedule-list.html
+- 구독 여부: `localStorage.get('contract_level')` 기준
+
+### 7) next_actions
+- `type=primary` → `btn-primary`, `type=secondary` → `btn-outline-secondary`
+- 버튼 행, 우측 정렬
+
+---
+
+## 엣지 케이스
+
+| 케이스 | 처리 |
+|--------|------|
+| `schema_version` != `v2026.04` | 상단 경고 배너 + 재진단 유도 CTA, 렌더링 중단 |
+| `obligations` 빈 배열 | "적용 의무 없음" 카드 표시 |
+| `roi` null | ROI 카드 섹션 숨김, 대신 "진단 업그레이드" CTA |
+| API 404 | "진단 결과를 찾을 수 없습니다" + 목록 이동 버튼 |
+| API 403 | 로그인 페이지 리다이렉트 |
+| API 500 | 에러 메시지 + 재시도 버튼 |
+
+---
+
+## 파일 경로
+
+```
+tai-admin/
+  tadmin/full-version/html/horizontal-menu-template/
+    diagnosis-result-v2.html          ← 신규
 ```
 
+기존 `diagnosis-result.html`은 삭제하지 않고 유지 (하위 호환).
+
 ---
 
-## 작업 3: ROI 카드
+## 완료 조건
 
-```html
-<div class="card bg-dark text-white">
-  <div class="card-body text-center">
-    <h6 class="text-white-50">과태료 리스크</h6>
-    <h2 class="text-danger">2,600만원</h2>
-    <hr class="border-secondary">
-    <h6 class="text-white-50">TAI Safe 연 구독료</h6>
-    <h2 class="text-success">948,000원</h2>
-    <div class="mt-3">
-      <span class="badge bg-success fs-5">ROI 27.4배</span>
-    </div>
-    <a href="pricing.html" class="btn btn-success btn-lg mt-3 w-100">
-      월 79,000원부터 시작하기
-    </a>
-  </div>
-</div>
+- [ ] Transform API 단일 호출로 전체 렌더링 (엔진 API 직접 호출 0건)
+- [ ] 5탭 모두 정상 분류 (탭별 빈 상태 처리 포함)
+- [ ] ROI 수치 API 응답 기반 (하드코딩 0건)
+- [ ] schema_version 불일치 시 graceful fallback
+- [ ] 모바일 360px 가독성
+- [ ] 인쇄(@media print) 기본 지원
+
+---
+
+## 금기
+
+- 엔진 API(`/diagnosis/run`, `/legal/engine` 등) 직접 호출 금지
+- 가격/비율 하드코딩 금지 (`roi` 객체 필드만 사용)
+- 카카오 공유 금지
+- v2026.04 미준수 JSON 임의 보완 렌더링 금지
+
+---
+
+## 실행 프롬프트
+
 ```
-
----
-
-## 작업 4: 메뉴 연결
-
-`menu-tadmin.js`에 결과 페이지 링크 추가:
-- 법령진단 > 진단결과 → `diagnosis-result-v2.html`
-
----
-
-## 작업 5: 기존 `diagnosis-result.html` 유지
-
-기존 페이지는 삭제하지 않고 유지. 새 v2 페이지가 안정화되면 리다이렉트.
-
----
-
-## 체크리스트
-
-- [ ] `diagnosis-result-v2.html` 생성
-- [ ] BE-08 API (`/diagnosis/transform/latest/{factory_id}`) 연동
-- [ ] 헤드라인 카드 (위험등급, 의무건수, 법령수, 과태료)
-- [ ] 경고 배너 (threshold 경계값)
-- [ ] 의무사항 5탭 (선임/점검/조치/신고/보고)
-- [ ] ROI 카드 + SaaS CTA
-- [ ] 점검 스케줄 요약
-- [ ] PDF 다운로드 버튼 (FN-05, 후속)
-- [ ] 메뉴 연결
-- [ ] Vuexy dark theme, data-bs-theme="dark" 준수
-- [ ] 모바일 반응형 (65/35 → 100% 스택)
-
----
-
-## 🔴 금지사항
-
-1. 엔진 API (`/legal-engine/diagnose/step1`) 직접 호출하여 result_data 구조 가정 금지
-2. Transform API (`/diagnosis/transform/`) 응답만 사용
-3. 하드코딩 가격 금지 — Transform API의 roi 필드 사용
+FN-06 착수. BE-08 완료 확인 후.
+참고: tai-api/docs/workorder-FN06-result-renderer.md
+신규 파일: diagnosis-result-v2.html
+Transform API만 사용. 엔진 API 직접 호출 금지. 가격 하드코딩 금지.
+```
