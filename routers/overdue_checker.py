@@ -1,25 +1,19 @@
 """
-routers/overdue_checker.py — v1.0.0
+routers/overdue_checker.py — v1.1.0
 
-BE-10: 업무 지연 에스켈레이션 라우터
+v1.1.0 (2026-04-17):
+  [ADD] 현장별 notification_time 필터 — factories.notification_time 설정 시간 도달한 현장만 처리
+  [ADD] cron 30분 간격 실행 (06:00~09:30) → 현장별 설정 시간에 맞춰 알림 발송
+  기존 overdue_level 체크로 중복 발송 방지
 
-에스켈레이션 단계:
-  D-1  (overdue_level=1): 리마인더  → 작업자 SMS
-  D+1  (overdue_level=2): 작업자 경고 → 작업자 SMS + FCM
-  D+2  (overdue_level=3): 관리자 알림 → 관리자/안전관리자 SMS + FCM
-  D+7  (overdue_level=4): OVERDUE 전환 → status_code='OVERDUE' + notifications
-
-API:
-  POST /overdue/check               수동 실행 (cron-job.org 또는 수동)
-  GET  /overdue/summary             지연 현황 요약
-  GET  /overdue/history             에스켈레이션 이력 조회
-  POST /overdue/resolve/{history_id} 지연 해소
+v1.0.0: 초기 구현 (D-1/D+1/D+2/D+7 에스컬레이션)
 """
 from __future__ import annotations
 import logging
 import os
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta, time as dt_time
 from typing import Optional, Any
+from zoneinfo import ZoneInfo
 
 import requests as _req
 from fastapi import APIRouter, HTTPException, Query
@@ -30,7 +24,8 @@ from db.supabase_client import get_supabase
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/overdue", tags=["업무지연에스켈레이션"])
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
+KST = ZoneInfo("Asia/Seoul")
 
 _SMS_EDGE = "https://xntdkrjhgcscmqctdzyo.supabase.co/functions/v1/send-sms"
 _FCM_EDGE = os.getenv(
@@ -47,7 +42,11 @@ _LEVELS = [
 
 
 def _today() -> date:
-    return datetime.now(timezone.utc).date()
+    return datetime.now(KST).date()
+
+
+def _now_kst_time() -> dt_time:
+    return datetime.now(KST).time()
 
 
 def _effective_due(wa: dict) -> Optional[date]:
@@ -60,6 +59,32 @@ def _effective_due(wa: dict) -> Optional[date]:
         return date.fromisoformat(str(d)[:10])
     except ValueError:
         return None
+
+
+def _parse_time(t) -> dt_time:
+    """DB의 TIME 값을 파이썬 time으로 변환. 실패 시 기본 07:00."""
+    if isinstance(t, dt_time):
+        return t
+    if not t:
+        return dt_time(7, 0)
+    try:
+        parts = str(t).split(":")
+        return dt_time(int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
+    except (ValueError, IndexError):
+        return dt_time(7, 0)
+
+
+def _load_factory_notification_times(sb) -> dict:
+    """전체 factories의 notification_time을 {factory_id: time} dict로 로드."""
+    try:
+        res = sb.table("factories").select("id, notification_time").execute()
+        return {
+            r["id"]: _parse_time(r.get("notification_time"))
+            for r in (res.data or [])
+        }
+    except Exception as e:
+        log.warning("[OVERDUE] factory notification_time 로드 실패: %s", e)
+        return {}
 
 
 def _send_sms(phone: str, message: str) -> bool:
@@ -257,10 +282,20 @@ def _process_one(sb, wa: dict, today: date) -> dict:
 def run_overdue_check(
     factory_id:  Optional[str] = Query(None),
     dry_run:     bool          = Query(False),
-    limit:       int           = Query(200, ge=1, le=1000),
+    limit:       int           = Query(500, ge=1, le=2000),
 ):
+    """
+    에스켈레이션 실행.
+    v1.1.0: 현장별 notification_time 체크 — 설정 시간 미도달 현장은 스킵.
+    cron 30분 간격 (06:00~09:30) 실행, 각 현장의 알림 시각에 맞춰 발송.
+    기존 overdue_level 체크로 이미 발송된 건은 재발송 안함.
+    """
     supabase = get_supabase()
     today    = _today()
+    now_time = _now_kst_time()
+
+    # 현장별 notification_time 로드
+    factory_times = _load_factory_notification_times(supabase)
 
     q = (
         supabase.table("work_assignments")
@@ -277,8 +312,16 @@ def run_overdue_check(
     results = []
     acted = 0
     skipped_cnt = 0
+    skipped_not_time = 0
 
     for wa in assignments:
+        # v1.1.0: 현장별 notification_time 체크
+        fid = wa.get("factory_id")
+        notif_time = factory_times.get(fid, dt_time(7, 0))  # 기본 07:00
+        if now_time < notif_time:
+            skipped_not_time += 1
+            continue
+
         if dry_run:
             due = _effective_due(wa)
             if not due:
@@ -290,7 +333,8 @@ def run_overdue_check(
             results.append({"id": wa["id"], "delta": delta,
                             "current_level": wa.get("overdue_level", 0),
                             "target_level": target_level,
-                            "would_act": target_level > (wa.get("overdue_level") or 0)})
+                            "would_act": target_level > (wa.get("overdue_level") or 0),
+                            "factory_notif_time": str(notif_time)})
         else:
             r = _process_one(supabase, wa, today)
             results.append(r)
@@ -301,9 +345,14 @@ def run_overdue_check(
 
     return {
         "status": "dry_run" if dry_run else "success",
-        "date": today.isoformat(), "checked": len(assignments),
-        "acted": acted, "skipped": skipped_cnt,
-        "version": VERSION, "results": results,
+        "version": VERSION,
+        "date": today.isoformat(),
+        "current_kst_time": str(now_time)[:5],
+        "checked": len(assignments),
+        "acted": acted,
+        "skipped": skipped_cnt,
+        "skipped_not_time": skipped_not_time,
+        "results": results,
     }
 
 
