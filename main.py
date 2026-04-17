@@ -1,4 +1,5 @@
-# main.py — v5.24.0
+# main.py — v5.25.0
+# v5.25.0: diagnosis_transform (BE-08) 라우터 추가
 # v5.24.0: fix_chat 라우터 추가 (TAI Fix 대화형 입력부)
 # v5.23.0: diagnosis_fields 라우터 추가
 # v5.22.0: fix_providers_api 라우터 추가
@@ -103,10 +104,11 @@ from routers.admin_pricing           import router as admin_pricing_router
 from routers.fix_providers_api       import router as fix_providers_router
 from routers.diagnosis_fields        import router as diagnosis_fields_router
 from routers.fix_chat                import router as fix_chat_router             # v5.24.0
+from routers.diagnosis_transform     import router as diagnosis_transform_router  # v5.25.0 BE-08
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.24.0"
+APP_VERSION = "5.25.0"
 
 
 @asynccontextmanager
@@ -168,7 +170,7 @@ app.include_router(admin_connect_router)
 app.include_router(admin_pricing_router)
 app.include_router(fix_providers_router)
 app.include_router(diagnosis_fields_router)
-app.include_router(fix_chat_router)                # v5.24.0 — start/message 공개, complete 회원전용
+app.include_router(fix_chat_router)
 
 # 인증 필요 엔드포인트
 app.include_router(auth_router)
@@ -240,6 +242,7 @@ app.include_router(safety_template_router)
 app.include_router(event_trigger_router)
 app.include_router(worker_registry_router)
 app.include_router(diagnosis_router)
+app.include_router(diagnosis_transform_router)  # v5.25.0 BE-08
 app.include_router(tbm_router)
 app.include_router(tbm_templates_router)
 app.include_router(safety_meetings_router)
