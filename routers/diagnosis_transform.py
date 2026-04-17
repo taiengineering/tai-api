@@ -1,23 +1,30 @@
 """
 routers/diagnosis_transform.py — v1.0.0
 
-BE-08: 진단 결과 Transform 레이어
+BE-08: 진단 결과 읽기 전용 Transform 레이어
 
 원칙:
-  - legal_engine.py 코드 절대 미수정
+  - legal_engine.py 코드 미수정
   - DB result_data JSONB 읽기 전용 (쓰기 금지)
-  - 엔진 출력을 표준화하여 FN 레이어에 단일 스키마 제공
+  - 엔진 출력을 표준 스키마로 가공하는 별도 레이어
 
-제공 API:
+API:
   GET /diagnosis/transform/{diagnosis_id}
   GET /diagnosis/transform/latest/{factory_id}
+
+표준 출력 스키마:
+  headline / obligations / warnings / exposure / inspection_schedule / roi
+
+신규 DB 코럼 (Migration: be08_diagnosis_transform_columns):
+  factory_diagnosis_results.expires_at
+  factory_diagnosis_results.refund_at
+  factory_diagnosis_results.refund_reason
+  master_building_legal_rules.is_retroactive
 """
 from __future__ import annotations
-
 import logging
-from datetime import datetime, timezone
+import math
 from typing import Any, Optional
-
 from fastapi import APIRouter, HTTPException, Query
 
 from db.supabase_client import get_supabase
@@ -28,405 +35,344 @@ router = APIRouter(prefix="/diagnosis", tags=["Transform"])
 VERSION = "1.0.0"
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# 소그 Transform 함수·유틸
-# ─────────────────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────────────────────
+# 내부 도우미 함수
+# ──────────────────────────────────────────────────────────────────────────
 
-def _safe_list(val: Any) -> list:
-    return val if isinstance(val, list) else []
-
-
-def _safe_dict(val: Any) -> dict:
-    return val if isinstance(val, dict) else {}
+def _safe_int(v: Any, default: int = 0) -> int:
+    try: return int(v) if v is not None else default
+    except (TypeError, ValueError): return default
 
 
-def _safe_int(val: Any, default: int = 0) -> int:
-    try:
-        return int(val or default)
-    except (TypeError, ValueError):
-        return default
+def _safe_float(v: Any, default: float = 0.0) -> float:
+    try: return float(v) if v is not None else default
+    except (TypeError, ValueError): return default
 
 
-def _safe_str(val: Any, default: str = "") -> str:
-    return str(val) if val is not None else default
+def _safe_list(v: Any) -> list:
+    return v if isinstance(v, list) else []
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _safe_dict(v: Any) -> dict:
+    return v if isinstance(v, dict) else {}
 
 
-# ── 1. headline 정제 ───────────────────────────────────────────────────────────────
-
-def _transform_headline(rd: dict, rule_count: int) -> dict:
+def _extract_headline(rd: dict, rule_count: int) -> dict:
     """
-    result_data 내 headline 추출
-    v2026.04: headline.{summary, severity}
-    legacy:   headline_message 또는 summary.headline 또는 자동 생성
+    result_data에서 headline 추출.
+    키 우선순위: headline > headline_message > summary > 자동생성
     """
-    headline = _safe_dict(rd.get("headline"))
-    if headline.get("summary"):
-        severity = str(headline.get("severity") or "LOW").upper()
-        if severity not in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
-            severity = "LOW"
-        return {"summary": headline["summary"], "severity": severity}
+    h = rd.get("headline")
+    if isinstance(h, dict):
+        return {
+            "summary":  str(h.get("summary") or ""),
+            "severity": str(h.get("severity") or _infer_severity(rd, rule_count)),
+        }
 
-    # legacy 폴백
-    summary = (
+    msg = (
         rd.get("headline_message")
-        or _safe_dict(rd.get("summary")).get("headline")
-        or f"적용된 의무 {rule_count}건"
+        or (_safe_dict(rd.get("summary")).get("headline"))
+        or f"적용된 의무 {rule_count}건 발견"
     )
+    return {
+        "summary":  str(msg),
+        "severity": _infer_severity(rd, rule_count),
+    }
+
+
+def _infer_severity(rd: dict, rule_count: int) -> str:
     rs = _safe_dict(rd.get("risk_summary"))
-    if _safe_int(rs.get("critical")) > 0: severity = "CRITICAL"
-    elif _safe_int(rs.get("high"))  > 0: severity = "HIGH"
-    elif _safe_int(rs.get("medium"))> 0: severity = "MEDIUM"
-    else: severity = "LOW"
-    return {"summary": _safe_str(summary), "severity": severity}
+    if _safe_int(rs.get("critical")) > 0: return "CRITICAL"
+    if _safe_int(rs.get("high"))     > 0: return "HIGH"
+    if _safe_int(rs.get("medium"))   > 0: return "MEDIUM"
+    if _safe_int(rs.get("low"))      > 0: return "LOW"
+    rc = rule_count or 0
+    if rc >= 100: return "HIGH"
+    if rc >= 50:  return "MEDIUM"
+    return "LOW"
 
 
-# ── 2. obligations 정제 ───────────────────────────────────────────────────────────
-
-def _transform_obligations(rd: dict) -> list:
+def _extract_obligations(rd: dict) -> list:
     """
-    obligations / key_obligations / mandatory_obligations / critical_obligations
-    우선순위 수집, 각 항목에 is_retroactive 포함
-    is_retroactive는 obligation 객체 내에 이미 있으면 사용, 없으면 false
+    obligations / key_obligations / mandatory_obligations / critical_obligations 우선순위로 수집.
+    is_retroactive 필드는 master_building_legal_rules에서 옵.
+    legacy 형식(category/items 구조)도 평탄화.
     """
-    raw: list = []
-    for key in ("obligations", "key_obligations",
-                "mandatory_obligations", "critical_obligations"):
+    for key in ("obligations", "key_obligations", "mandatory_obligations", "critical_obligations"):
         val = rd.get(key)
         if isinstance(val, list) and val:
-            raw = val
-            break
-
-    result = []
-    for obl in raw:
-        if not isinstance(obl, dict):
-            continue
-        item: dict = dict(obl)
-        # is_retroactive 기본값 보종
-        item.setdefault("is_retroactive", False)
-        # penalty 정제
-        pen = _safe_dict(item.get("penalty"))
-        if pen:
-            item["penalty"] = {
-                "krw":      _safe_int(pen.get("krw")),
-                "criminal": pen.get("criminal"),
-                "type":     pen.get("type"),
-            }
-        result.append(item)
-    return result
+            # category/items 랜로 문자라면 평탄화
+            flat: list = []
+            for item in val:
+                if isinstance(item, dict) and "items" in item:
+                    # legacy: {category, label, items: [...]}
+                    flat.extend(item["items"] if isinstance(item["items"], list) else [])
+                else:
+                    flat.append(item)
+            return flat
+    return []
 
 
-# ── 3. warnings 정제 ──────────────────────────────────────────────────────────────
-
-def _transform_warnings(rd: dict) -> list:
+def _extract_warnings(rd: dict) -> list:
     """
-    v2026.04 warnings[] + legacy urgent_action_items / construction_specific_tips
-    / age_warnings 데이터 통합
-    각 항목을 {code, message, level} 구조로 표준화
+    warnings / urgent_action_items / construction_specific_tips / age_warnings 통합.
+    이미 v2026.04로 변환된 데이터라면 warnings에 통합되어 있음.
     """
-    merged: list = []
+    result: list = list(_safe_list(rd.get("warnings")))
 
-    # 이미 v2026.04 형식으로 변환된 warnings[]
-    for item in _safe_list(rd.get("warnings")):
-        if isinstance(item, dict):
-            merged.append({
-                "code":    _safe_str(item.get("code"),  "WARN"),
-                "message": _safe_str(item.get("message")),
-                "level":   _safe_str(item.get("level"), "INFO"),
-            })
-        elif isinstance(item, str):
-            merged.append({"code": "WARN", "message": item, "level": "INFO"})
-
-    # legacy urgent_action_items
     for item in _safe_list(rd.get("urgent_action_items")):
-        merged.append({"code": "URGENT", "message": str(item), "level": "HIGH"})
+        if isinstance(item, str):
+            result.append({"code": "URGENT", "message": item, "level": "HIGH"})
+        elif isinstance(item, dict):
+            result.append(item)
 
-    # legacy construction_specific_tips
     for item in _safe_list(rd.get("construction_specific_tips")):
-        merged.append({"code": "CONSTRUCTION_TIP", "message": str(item), "level": "INFO"})
+        result.append({"code": "CONSTRUCTION_TIP", "message": str(item), "level": "INFO"})
 
-    # legacy age_warnings (object 또는 list)
     age = rd.get("age_warnings")
     if isinstance(age, list):
         for item in age:
-            merged.append({"code": "AGE_WARNING", "message": str(item), "level": "HIGH"})
+            result.append({"code": "AGE_WARNING", "message": str(item), "level": "HIGH"})
     elif isinstance(age, dict):
         for k, v in age.items():
             if k != "age_years" and v is not None:
-                merged.append({"code": "AGE_WARNING", "message": f"{k}: {v}", "level": "HIGH"})
+                result.append({"code": "AGE_WARNING", "message": f"{k}: {v}", "level": "HIGH"})
 
-    return merged
+    return result
 
 
-# ── 4. exposure 정제 ──────────────────────────────────────────────────────────────
-
-def _transform_exposure(rd: dict, rule_count: int) -> dict:
+def _extract_exposure(rd: dict, rule_count: int) -> dict:
     """
-    exposure 상실 점수 보리
-    v2026.04: exposure.{penalty_max_krw, criminal_risk, current_exposure}
-    legacy: penalty_risk.max_fine_krw 또는 total_exposure_krw 또는 roi.annual_penalty_risk_krw
+    볈사rc 노출 정보 추출.
+    우선순위: exposure > penalty_risk > roi.annual_penalty_risk_krw > rule_count 추정
     """
-    exposure = _safe_dict(rd.get("exposure"))
-    if exposure.get("penalty_max_krw"):
+    # 1순위: 직접 exposure
+    exp = rd.get("exposure")
+    if isinstance(exp, dict) and exp.get("penalty_max_krw"):
         return {
-            "penalty_max_krw":   _safe_int(exposure["penalty_max_krw"]),
-            "criminal_risk":     exposure.get("criminal_risk"),
-            "current_exposure":  exposure.get("current_exposure"),
-            "source":            "exposure",
+            "penalty_max_krw":  _safe_int(exp["penalty_max_krw"]),
+            "criminal_risk":    str(exp.get("criminal_risk") or ""),
+            "current_exposure": str(exp.get("current_exposure") or ""),
+            "source":           "exposure",
         }
 
-    # legacy penalty_risk
-    penalty_risk = _safe_dict(rd.get("penalty_risk"))
-    if penalty_risk.get("max_fine_krw"):
+    # 2순위: penalty_risk (legacy PAID2+ 부층 데이터)
+    pr = _safe_dict(rd.get("penalty_risk"))
+    if pr.get("max_fine_krw"):
+        max_fine = _safe_int(pr["max_fine_krw"])
         return {
-            "penalty_max_krw":  _safe_int(penalty_risk["max_fine_krw"]),
-            "criminal_risk":    penalty_risk.get("criminal_risk"),
-            "current_exposure": None,
+            "penalty_max_krw":  max_fine,
+            "criminal_risk":    str(pr.get("criminal_risk") or ""),
+            "current_exposure": "높음" if max_fine >= 50_000_000 else "중간",
             "source":           "penalty_risk",
         }
 
-    # legacy total_exposure_krw
-    total = rd.get("total_exposure_krw")
-    if total:
-        try:
-            return {
-                "penalty_max_krw":  int(total),
-                "criminal_risk":    None,
-                "current_exposure": None,
-                "source":           "total_exposure_krw",
-            }
-        except (TypeError, ValueError):
-            pass
+    # 3순위: total_exposure_krw (legacy)
+    texp = rd.get("total_exposure_krw")
+    if texp:
+        amount = _safe_int(texp)
+        return {
+            "penalty_max_krw":  amount,
+            "criminal_risk":    "",
+            "current_exposure": "높음" if amount >= 50_000_000 else "중간",
+            "source":           "total_exposure_krw",
+        }
 
-    # roi 기반 추정
+    # 4순위: roi에서
     roi = _safe_dict(rd.get("roi"))
     if roi.get("annual_penalty_risk_krw"):
+        amount = _safe_int(roi["annual_penalty_risk_krw"])
         return {
-            "penalty_max_krw":  _safe_int(roi["annual_penalty_risk_krw"]),
-            "criminal_risk":    None,
-            "current_exposure": "추정치",
+            "penalty_max_krw":  amount,
+            "criminal_risk":    "",
+            "current_exposure": "높음" if amount >= 50_000_000 else "중간",
             "source":           "roi_estimate",
         }
 
-    # 없으면 rule_count 기반 보수적 추정
+    # 5순위: rule_count 추정
+    estimate = (rule_count or 0) * 3_000_000
     return {
-        "penalty_max_krw":  rule_count * 3_000_000,
-        "criminal_risk":    None,
-        "current_exposure": "추정치(룰 수 기반)",
+        "penalty_max_krw":  estimate,
+        "criminal_risk":    "",
+        "current_exposure": "높음" if estimate >= 50_000_000 else "중간",
         "source":           "rule_count_estimate",
     }
 
 
-# ── 5. inspection_schedule 정제 ────────────────────────────────────────────────────────
-
-def _transform_inspection_schedule(rd: dict) -> dict:
+def _extract_inspection_schedule(rd: dict) -> dict:
     """
-    점검일정 요약 순서:
-      1. result_data.inspection_schedule (v2026.04 표준 dict)
-      2. result_data.inspection_schedule_ready (diagnose_step1 출력)
-      3. result_data.inspection_schedule_summary (stage2 legacy)
-    표준 출력:
-      {daily, weekly, monthly, quarterly, semiannual, annual, onetime,
-       periodic_count, before_work_count, on_demand_count}
+    점검 일정 요약 추출.
+    우선순위: inspection_schedule > inspection_schedule_ready > inspection_schedule_summary
     """
-    # 1순위: 직접 inspection_schedule
-    insp = _safe_dict(rd.get("inspection_schedule"))
-    if insp:
-        return {
-            "daily":           _safe_int(insp.get("daily")),
-            "weekly":          _safe_int(insp.get("weekly")),
-            "monthly":         _safe_int(insp.get("monthly")),
-            "quarterly":       _safe_int(insp.get("quarterly")),
-            "semiannual":      _safe_int(insp.get("semiannual")),
-            "annual":          _safe_int(insp.get("annual")),
-            "onetime":         _safe_int(insp.get("onetime")),
-            "periodic_count":  _safe_int(insp.get("periodic_count")),
-            "before_work_count": _safe_int(insp.get("before_work_count")),
-            "on_demand_count": _safe_int(insp.get("on_demand_count")),
-            "source":          "inspection_schedule",
-        }
+    # v2026.04 표준 필드
+    isch = rd.get("inspection_schedule")
+    if isinstance(isch, dict) and isch:
+        return isch
 
-    # 2순위: inspection_schedule_ready (step1 출력)
+    # legal_engine.py diagnose_step1 출력 (inspection_schedule_ready)
     ready = _safe_dict(rd.get("inspection_schedule_ready"))
     if ready:
-        periodic  = _safe_list(ready.get("periodic"))
-        before_wk = _safe_list(ready.get("before_work"))
         return {
-            "daily":           0,
-            "weekly":          sum(1 for r in periodic if _safe_str(r.get("inspection_cycle_code")) == "002"),
-            "monthly":         sum(1 for r in periodic if _safe_str(r.get("inspection_cycle_code")) == "003"),
-            "quarterly":       sum(1 for r in periodic if _safe_str(r.get("inspection_cycle_code")) == "004"),
-            "semiannual":      sum(1 for r in periodic if _safe_str(r.get("inspection_cycle_code")) == "005"),
-            "annual":          sum(1 for r in periodic if _safe_str(r.get("inspection_cycle_code")) == "006"),
-            "onetime":         0,
-            "periodic_count":  _safe_int(ready.get("periodic_count",  len(periodic))),
-            "before_work_count": _safe_int(ready.get("before_work_count", len(before_wk))),
-            "on_demand_count": _safe_int(ready.get("on_demand_count")),
-            "source":          "inspection_schedule_ready",
+            "daily":      0,
+            "weekly":     0,
+            "monthly":    0,
+            "quarterly":  0,
+            "semiannual": 0,
+            "annual":     0,
+            "onetime":    0,
+            "periodic_count":    _safe_int(ready.get("periodic_count")),
+            "before_work_count": _safe_int(ready.get("before_work_count")),
+            "on_demand_count":   _safe_int(ready.get("on_demand_count")),
         }
 
-    # 3순위: inspection_schedule_summary (legacy stage2)
+    # legacy PAID2+ (inspection_schedule_summary)
     summary = _safe_dict(rd.get("inspection_schedule_summary"))
     if summary:
         return {
-            "daily":           _safe_int(summary.get("daily")),
-            "weekly":          _safe_int(summary.get("weekly")),
-            "monthly":         _safe_int(summary.get("monthly")),
-            "quarterly":       _safe_int(summary.get("quarterly")),
-            "semiannual":      _safe_int(summary.get("semi_annual") or summary.get("semiannual")),
-            "annual":          _safe_int(summary.get("annual")),
-            "onetime":         _safe_int(summary.get("one_time") or summary.get("onetime")),
-            "periodic_count":  _safe_int(summary.get("total_periodic")),
-            "before_work_count": _safe_int(summary.get("before_work")),
-            "on_demand_count": _safe_int(summary.get("on_demand")),
-            "source":          "inspection_schedule_summary",
+            "daily":      _safe_int(summary.get("daily")),
+            "weekly":     _safe_int(summary.get("weekly")),
+            "monthly":    _safe_int(summary.get("monthly")),
+            "quarterly":  _safe_int(summary.get("quarterly")),
+            "semiannual": _safe_int(summary.get("semiannual")),
+            "annual":     _safe_int(summary.get("annual")),
+            "onetime":    _safe_int(summary.get("onetime")),
         }
 
-    # 없음: 빈 객체
-    return {
-        "daily": 0, "weekly": 0, "monthly": 0, "quarterly": 0,
-        "semiannual": 0, "annual": 0, "onetime": 0,
-        "periodic_count": 0, "before_work_count": 0, "on_demand_count": 0,
-        "source": None,
-    }
+    return {}
 
 
-# ── 6. roi 정제 ───────────────────────────────────────────────────────────────────
-
-def _transform_roi(rd: dict, rule_count: int) -> dict:
-    """
-    roi 정제
-    v2026.04: roi.{annual_penalty_risk_krw, tai_safe_annual_cost_krw,
-                    payback_days, risk_reduction_percent, penalty_source}
-    변환 없이 구조만 브리지
-    """
+def _extract_roi(rd: dict) -> dict:
+    """roi 필드 추출 (v2026.04/legacy 도일하게 복원)."""
     roi = _safe_dict(rd.get("roi"))
-    if roi:
-        return {
-            "annual_penalty_risk_krw":  _safe_int(roi.get("annual_penalty_risk_krw")),
-            "tai_safe_annual_cost_krw": _safe_int(roi.get("tai_safe_annual_cost_krw")),
-            "payback_days":             _safe_int(roi.get("payback_days")),
-            "risk_reduction_percent":   roi.get("risk_reduction_percent"),
-            "penalty_source":           roi.get("penalty_source", "roi"),
-            "calculated_at":            roi.get("calculated_at"),
-        }
+    if not roi:
+        return {}
     return {
-        "annual_penalty_risk_krw":  rule_count * 3_000_000,
-        "tai_safe_annual_cost_krw": None,
-        "payback_days":             None,
-        "risk_reduction_percent":   None,
-        "penalty_source":           "rule_count_estimate",
-        "calculated_at":            None,
+        "annual_penalty_risk_krw":   _safe_int(roi.get("annual_penalty_risk_krw")),
+        "tai_safe_annual_cost_krw":  _safe_int(roi.get("tai_safe_annual_cost_krw")),
+        "payback_days":              _safe_int(roi.get("payback_days")),
+        "risk_reduction_percent":    _safe_float(roi.get("risk_reduction_percent")),
+        "penalty_source":            str(roi.get("penalty_source") or "rule_count_estimate"),
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# 진단 레코드 → 완성 Transform 응답
-# ─────────────────────────────────────────────────────────────────────────
-
-def _build_transform_response(row: dict) -> dict:
+def _build_transform(diag: dict, factory: dict) -> dict:
     """
-    DB 레코드 한 행을 받아 Transform 응답 dict 반환.
-    result_data JSONB 라이트원치(raw) 읽기 전용.
+    factory_diagnosis_results 레코드 하나를 받아
+    표준 Transform 응답 dict 반환.
+    result_data를 읽기만 하고 쓰기는 절대 없음.
     """
-    rd: dict = row.get("result_data") or {}
-    rule_count: int = _safe_int(row.get("rule_count"))
-
-    # schema_version: column 또는 JSONB 내 키 검상
-    schema_version = (
-        row.get("schema_version")
-        or rd.get("schema_version")
-        or "legacy"
-    )
+    rd: dict = _safe_dict(diag.get("result_data"))
+    rule_count: int = _safe_int(diag.get("rule_count"))
 
     return {
-        "meta": {
-            "diagnosis_id":    str(row.get("id", "")),
-            "factory_id":      str(row.get("factory_id", "")),
-            "sector":          row.get("sector") or rd.get("sector", ""),
-            "diagnosis_stage": row.get("diagnosis_stage"),
-            "rule_count":      rule_count,
-            "is_latest":       row.get("is_latest", False),
-            "schema_version":  schema_version,
-            "created_at":      str(row.get("created_at", "")),
-            # BE-08 신규 컨테스트 코드
-            "expires_at":      str(row["expires_at"]) if row.get("expires_at") else None,
-            "refund_at":       str(row["refund_at"])  if row.get("refund_at")  else None,
-            "refund_reason":   row.get("refund_reason"),
-            "transform_version": VERSION,
-            "transformed_at":  _now_iso(),
+        "diagnosis_id":    str(diag["id"]),
+        "factory_id":      str(diag["factory_id"]),
+        "sector":          str(diag.get("sector") or ""),
+        "diagnosis_stage": _safe_int(diag.get("diagnosis_stage")),
+        "schema_version":  str(rd.get("schema_version") or diag.get("schema_version") or "legacy"),
+        "created_at":      str(diag.get("created_at") or ""),
+        "expires_at":      diag.get("expires_at"),
+        "refund_at":       diag.get("refund_at"),
+        "refund_reason":   diag.get("refund_reason"),
+        "rule_count":      rule_count,
+
+        # 그룹 A: 표준 스키마 섹션
+        "headline":            _extract_headline(rd, rule_count),
+        "obligations":         _extract_obligations(rd),
+        "warnings":            _extract_warnings(rd),
+        "exposure":            _extract_exposure(rd, rule_count),
+        "inspection_schedule": _extract_inspection_schedule(rd),
+        "roi":                 _extract_roi(rd),
+
+        # 그룹 B: 보조 필드 (FN 렌더러 편의용)
+        "risk_summary":     _safe_dict(rd.get("risk_summary")),
+        "applicable_laws":  rd.get("applicable_laws") or [],
+        "next_actions":     rd.get("next_actions") or [],
+        "evidence":         rd.get("evidence") or [],
+        "tier":             str(rd.get("tier") or ""),
+
+        # 그룹 C: 시설 요약
+        "factory": {
+            "id":             str(factory.get("id") or ""),
+            "name":           str(factory.get("name") or ""),
+            "sector":         str(factory.get("sector") or ""),
+            "employee_count": factory.get("employee_count"),
         },
-        "headline":            _transform_headline(rd, rule_count),
-        "obligations":         _transform_obligations(rd),
-        "warnings":            _transform_warnings(rd),
-        "exposure":            _transform_exposure(rd, rule_count),
-        "inspection_schedule": _transform_inspection_schedule(rd),
-        "roi":                 _transform_roi(rd, rule_count),
-        "risk_summary":        {
-            "critical": _safe_int(_safe_dict(rd.get("risk_summary")).get("critical")),
-            "high":     _safe_int(_safe_dict(rd.get("risk_summary")).get("high")),
-            "medium":   _safe_int(_safe_dict(rd.get("risk_summary")).get("medium")),
-            "low":      _safe_int(_safe_dict(rd.get("risk_summary")).get("low")),
-        },
-        "applicable_laws":  _safe_list(rd.get("applicable_laws")),
-        "next_actions":     _safe_list(rd.get("next_actions")),
-        "evidence":         _safe_list(rd.get("evidence")),
+
+        "transform_version": VERSION,
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# 엔드포인트
-# ─────────────────────────────────────────────────────────────────────────
-
-SELECT_COLS = (
-    "id, factory_id, sector, diagnosis_stage, rule_count, "
-    "is_latest, result_data, created_at, "
-    "schema_version, expires_at, refund_at, refund_reason"
-)
-
-
-@router.get("/transform/{diagnosis_id}")
-def get_transform_by_id(diagnosis_id: str):
-    """
-    단일 진단 결과 Transform.
-    result_data JSONB 읽기 전용 — DB 쓰기 없음.
-    """
-    supabase = get_supabase()
-    res = (
+def _fetch_diag_and_factory(supabase, diagnosis_id: str) -> tuple[dict, dict]:
+    """diagnosis_id 기반으로 diagnosis + factory 레코드 동시 조회."""
+    diag_res = (
         supabase.table("factory_diagnosis_results")
-        .select(SELECT_COLS)
+        .select(
+            "id, factory_id, sector, diagnosis_stage, rule_count, "
+            "result_data, schema_version, created_at, "
+            "expires_at, refund_at, refund_reason"
+        )
         .eq("id", diagnosis_id)
         .limit(1)
         .execute()
     )
-    if not res.data:
+    if not diag_res.data:
         raise HTTPException(status_code=404, detail="진단 레코드를 찾을 수 없습니다.")
 
-    data = _build_transform_response(res.data[0])
-    return {"status": "success", "data": data}
+    diag = diag_res.data[0]
+    fac_res = (
+        supabase.table("factories")
+        .select("id, name, sector, employee_count")
+        .eq("id", diag["factory_id"])
+        .limit(1)
+        .execute()
+    )
+    factory = fac_res.data[0] if fac_res.data else {}
+    return diag, factory
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# GET /diagnosis/transform/{diagnosis_id}
+# ──────────────────────────────────────────────────────────────────────────
+@router.get("/transform/{diagnosis_id}")
+def get_transform_by_id(diagnosis_id: str):
+    """
+    진단 ID 기반 Transform 응답.
+
+    result_data JSONB를 읽기 전용으로 참조하여
+    headline / obligations / warnings / exposure / inspection_schedule / roi
+    표준 스키마로 원타임에 가공하여 반환.
+    """
+    supabase = get_supabase()
+    diag, factory = _fetch_diag_and_factory(supabase, diagnosis_id)
+    return {"status": "success", "data": _build_transform(diag, factory)}
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# GET /diagnosis/transform/latest/{factory_id}
+# ──────────────────────────────────────────────────────────────────────────
 @router.get("/transform/latest/{factory_id}")
 def get_transform_latest(
     factory_id: str,
-    sector: Optional[str] = Query(None, description="BUILDING|INDUSTRY|CONSTRUCTION (생략 시 최근 1건)"),
-    stage:  Optional[int] = Query(None, description="진단 단계 필터 (1~4)"),
+    sector: Optional[str] = Query(None, description="섹터 필터 (BUILDING/INDUSTRY/CONSTRUCTION)"),
+    stage: Optional[int]  = Query(None, description="진단 단계 필터 (1~4)"),
 ):
     """
-    시설의 최신 진단 결과 Transform.
-    sector/stage 필터 선택 가능.
-    result_data JSONB 읽기 전용 — DB 쓰기 없음.
+    특정 시설의 최신 진단 원타임 Transform.
+
+    sector / stage 쿼리파라미터로 필터 가능.
+    필터 없으면 created_at DESC 최신 1건 반환.
     """
     supabase = get_supabase()
 
     q = (
         supabase.table("factory_diagnosis_results")
-        .select(SELECT_COLS)
+        .select(
+            "id, factory_id, sector, diagnosis_stage, rule_count, "
+            "result_data, schema_version, created_at, "
+            "expires_at, refund_at, refund_reason"
+        )
         .eq("factory_id", factory_id)
-        .eq("is_latest", True)
         .order("created_at", desc=True)
     )
     if sector:
@@ -436,10 +382,16 @@ def get_transform_latest(
 
     res = q.limit(1).execute()
     if not res.data:
-        raise HTTPException(
-            status_code=404,
-            detail="해당 조건에 맞는 진단 결과를 찾을 수 없습니다."
-        )
+        raise HTTPException(status_code=404, detail="진단 레코드를 찾을 수 없습니다.")
 
-    data = _build_transform_response(res.data[0])
-    return {"status": "success", "data": data}
+    diag = res.data[0]
+    fac_res = (
+        supabase.table("factories")
+        .select("id, name, sector, employee_count")
+        .eq("id", factory_id)
+        .limit(1)
+        .execute()
+    )
+    factory = fac_res.data[0] if fac_res.data else {}
+
+    return {"status": "success", "data": _build_transform(diag, factory)}
