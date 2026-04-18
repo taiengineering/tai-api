@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     libffi-dev \
     gcc \
     fonts-nanum \
+    fontconfig \
     && rm -rf /var/lib/apt/lists/* \
     && fc-cache -fv
 
