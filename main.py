@@ -1,4 +1,5 @@
-# main.py — v5.25.1
+# main.py — v5.26.0
+# v5.26.0: diagnosis_integrated 라우터 추가 (진단통합 엔드포인트)
 # v5.25.1: overdue_checker 라우터 추가 (BE-10 점검 미이행 에스컬레이션)
 # v5.25.0: diagnosis_transform (BE-08) 라우터 추가
 # v5.24.0: fix_chat 라우터 추가 (TAI Fix 대화형 입력부)
@@ -105,10 +106,11 @@ from routers.diagnosis_fields        import router as diagnosis_fields_router
 from routers.fix_chat                import router as fix_chat_router             # v5.24.0
 from routers.diagnosis_transform     import router as diagnosis_transform_router  # v5.25.0 BE-08
 from routers.overdue_checker         import router as overdue_checker_router      # v5.25.1 BE-10
+from routers.diagnosis_integrated    import router as diagnosis_integrated_router # v5.26.0
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.25.1"
+APP_VERSION = "5.26.0"
 
 
 @asynccontextmanager
@@ -243,6 +245,7 @@ app.include_router(event_trigger_router)
 app.include_router(worker_registry_router)
 app.include_router(diagnosis_router)
 app.include_router(diagnosis_transform_router)  # v5.25.0 BE-08
+app.include_router(diagnosis_integrated_router)  # v5.26.0
 app.include_router(overdue_checker_router)      # v5.25.1 BE-10
 app.include_router(tbm_router)
 app.include_router(tbm_templates_router)
