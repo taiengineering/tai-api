@@ -21,17 +21,18 @@ v1.3.0 (기존):
   TAI_COLLECT_SECRET         Edge Function 호출 인증키
 """
 from __future__ import annotations
-import os, logging, httpx, re
+import os, logging, httpx
 from fastapi import APIRouter, Query, HTTPException
-from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
+from typing import Optional
 from db.supabase_client import get_supabase
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/precedents", tags=["산재판례"])
 
-LAW_API_OC = os.environ.get("LAW_API_OC", "")
-LAW_API_BASE = "https://www.law.go.kr/DRF/lawSearch.do"
+EDGE_COLLECT_URL = os.environ.get(
+    "SUPABASE_EDGE_COLLECT_URL",
+    "https://xntdkrjhgcscmqctdzyo.supabase.co/functions/v1/collect-precedents"
+)
 
 DEFAULT_DISPLAY = 20
 VALID_SECTORS = {"BUILDING", "INDUSTRY", "CONSTRUCTION", "ALL"}
@@ -141,10 +142,17 @@ def search_iap(
 
 @router.get("/{prec_id}")
 def get_precedent(prec_id: str):
-    sb = get_supabase()
-    res = sb.table("posts").select("*").eq("source", "law_go_kr_prec").eq("source_id", f"PREC_{prec_id}").execute()
+    """source_id=PREC_{prec_id} 로 posts 테이블 단건 조회."""
+    sb  = get_supabase()
+    res = (sb.table("posts")
+             .select("*")
+             .eq("source", "law_go_kr_prec")
+             .eq("source_id", f"PREC_{prec_id}")
+             .execute())
+
     if not res.data:
-        raise HTTPException(status_code=404, detail=f"판례를 찾을 수 없습니다.")
+        raise HTTPException(status_code=404,
+                            detail=f"판례를 찾을 수 없습니다. (ID: {prec_id})")
     return {"status": "success", "data": res.data[0]}
 
 
@@ -179,25 +187,16 @@ async def _call_collect_edge() -> dict:
     if secret:
         headers["x-tai-secret"] = secret
 
-    keywords = (body or {}).get("keywords") or SAFETY_KEYWORDS
-    total_saved = 0
-    total_skipped = 0
-    errors = []
-    debug_info = []
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(EDGE_COLLECT_URL, headers=headers, json={})
 
-    for kw in keywords:
-        try:
-            items, note = await _fetch_precedents_from_law(kw, display=20)
-            if not items:
-                debug_info.append({"keyword": kw, "fetched": 0, "note": note or "결과 없음"})
-                continue
-            result = await _save_precedents_to_db(items, kw)
-            total_saved += result["saved"]
-            total_skipped += result["skipped"]
-            debug_info.append({"keyword": kw, "fetched": len(items),
-                               "saved": result["saved"], "skipped": result["skipped"]})
-        except Exception as e:
-            errors.append({"keyword": kw, "error": str(e)})
+        if resp.status_code == 401:
+            raise HTTPException(status_code=503,
+                                detail="Edge Function 인증 실패. TAI_COLLECT_SECRET 확인 필요.")
+        if resp.status_code >= 400:
+            raise HTTPException(status_code=502,
+                                detail=f"Edge Function 오류: {resp.status_code} — {resp.text[:200]}")
 
         result = resp.json()
         log.info("[PRECEDENT] Edge collect 완료: %s", result)
