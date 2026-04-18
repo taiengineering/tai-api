@@ -340,18 +340,20 @@ def _get_inspection_cycle_label(rule: dict) -> str:
 
     val = int(float(val))
 
+    _SHORT = {
+        "year": "연 1회", "half_year": "반기 1회", "quarter": "분기 1회",
+        "month": "월 1회", "week": "주 1회", "day": "매일",
+    }
+
     if val == 1:
-        _SHORT = {
-            "year": "연 1회", "half_year": "반기 1회", "quarter": "분기 1회",
-            "month": "월 1회", "week": "주 1회", "day": "매일",
-        }
         return _SHORT.get(unit, f"1{unit}")
-    else:
-        _UNIT_LABELS = {
-            "year": "년", "half_year": "반기", "quarter": "분기",
-            "month": "개월", "week": "주", "day": "일",
-        }
-        return f"{val}{_UNIT_LABELS.get(unit, unit)}마다"
+
+    # val > 1: year만 기간 모델("N년마다"), 나머지는 빈도 모델("X N회")
+    if unit == "year":
+        return f"{val}년마다"
+    # half_year/quarter/month 등: "반기 2회", "분기 3회", "월 2회"
+    base = _SHORT.get(unit, unit)
+    return base.replace("1회", f"{val}회")
 
 
 def _get_schedule_type(rule: dict) -> str:
