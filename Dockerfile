@@ -6,7 +6,9 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     libffi-dev \
     gcc \
-    && rm -rf /var/lib/apt/lists/*
+    fonts-nanum \
+    && rm -rf /var/lib/apt/lists/* \
+    && fc-cache -fv
 
 WORKDIR /app
 COPY requirements.txt .
