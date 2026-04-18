@@ -1,5 +1,5 @@
 """
-routers/diagnosis_integrated.py — v1.0.0
+routers/diagnosis_integrated.py — v1.0.1
 
 BE-10: 법령진단 통합 백엔드
   TASK 1: POST /diagnosis/auth/prepare   이니시스 팝업 파라미터 생성
@@ -8,7 +8,14 @@ BE-10: 법령진단 통합 백엔드
   TASK 3: POST /diagnosis/run            통합 진단 실행 (무료/유료 동일 API)
   TASK 4: GET  /diagnosis/price-tier     가격 자동 판정
   TASK 5: POST /diagnosis/upgrade        업그레이드 차액 결제
-  TASK 6: POST /diagnosis/disclaimer     면접 동의 저장
+  TASK 6: POST /diagnosis/disclaimer     면책 동의 저장
+
+v1.0.1 수정:
+  FIX-1: "면접" → "면책" 오타 전체 수정
+  FIX-2: DISCLAIMER_TEXT 확정 문구 교체
+  FIX-3: 가격 판정 설명 오타 4곳 수정
+  FIX-4: callback docstring 인코딩 정상화
+  FIX-5: CI 평문 저장 제거 (ci_hash만 사용)
 
 주요 설계 원칙:
   - CI 노출 금지: auth_token(UUID)로 세션 관리, CI는 내부 해시만 사용
@@ -43,7 +50,7 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/diagnosis", tags=["진단통합"])
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 # 이니시스 환경변수
 INICIS_MID      = os.getenv("INICIS_VERIFY_MID", "")
@@ -54,11 +61,15 @@ INICIS_RETURN_URL = os.getenv(
     "https://api.taieng.co.kr/diagnosis/auth/callback"
 )
 
-# 면접 확정 문구 (TASK 6)
+# FIX-2: 면책 확정 문구 (TASK 6) — 확정 문구로 교체
 DISCLAIMER_TEXT = (
-    "이 진단 결과는 입력하신 사업장 정보를 기반으로 정밀 분석하여 도출된 참고 자료입니다. "
-    "최종 법적 해석 및 준수 여부는 담당 안전관리자 또는 전문가와 함께 확인하시기 바랍니다. "
-    "TAI Engineering은 이 진단 결과로 인한 직·간접적 손해에 대하여 재임을 지지 않습니다."
+    "본 진단 결과는 현행 법령과 사업장 정보를 정밀 분석하여 "
+    "적용 가능한 법적 의무를 도출한 것입니다. "
+    "본 서비스는 법률 상담·자문·의견 제공이 아니며, "
+    "개별 사안에 대한 법적 판단이나 해석을 포함하지 않습니다. "
+    "실제 행정 처분·감독 기준은 관할 기관의 판단에 따라 "
+    "달라질 수 있으므로, 구체적 법률 적용이 필요한 경우 "
+    "관할 행정기관 또는 법률 전문가에게 확인하시기 바랍니다."
 )
 
 # 다음 TIER구도 동일 페이지 접수용 가격 테이블
@@ -165,7 +176,7 @@ def prepare_diagnosis_auth():
 async def diagnosis_auth_callback(request: Request):
     """
     TASK 1: 이니시스 통합인증 콜백.
-    CI 추출 → diagnosis_auth_log upsert → auth_token HTML로 파씹 후 쿅업 닫기.
+    CI 추출 → diagnosis_auth_log upsert → auth_token을 HTML postMessage로 전달 후 팝업 닫기.
 
     FE는 window.addEventListener('message') 로 auth_token을 받음.
     """
@@ -239,9 +250,9 @@ async def diagnosis_auth_callback(request: Request):
         free_remaining = max(0, (row.get("free_limit") or 3) - (row.get("free_count") or 0))
         auth_token = new_token
     else:
-        # 신규 CI — INSERT
+        # 신규 CI — INSERT (FIX-5: CI 평문 저장 안 함, ci_hash만 사용)
         ins = supabase.table("diagnosis_auth_log").insert({
-            "ci":          ci,
+            "ci":          "",           # CI 평문 저장 안 함
             "ci_hash":     ci_hash,
             "name":        name,
             "phone":       phone,
@@ -315,17 +326,18 @@ def get_price_tier(
     is_free   = tier_code in FREE_TIER_CODES
     auto_det  = sector in ("BUILDING", "CONSTRUCTION")
 
+    # FIX-3: 가격 판정 설명 오타 4곳 수정
     determination_note = ""
     if sector == "BUILDING":
         if floor_area >= 5000:
-            determination_note = f"입력 면적 {floor_area:,.0f}㎡ ≥ 5,000㎡ → 대형건물으로 자동 판정"
+            determination_note = f"입력 면적 {floor_area:,.0f}㎡ ≥ 5,000㎡ → 대형건물로 자동 판정"
         else:
-            determination_note = f"입력 면적 {floor_area:,.0f}㎡ < 5,000㎡ → 소형건물으로 자동 판정"
+            determination_note = f"입력 면적 {floor_area:,.0f}㎡ < 5,000㎡ → 소형건물로 자동 판정"
     elif sector == "CONSTRUCTION":
         if contract_amount_eok >= 50:
-            determination_note = f"공사금액 {contract_amount_eok}억 ≥ 50억 → 종합권로 자동 판정"
+            determination_note = f"공사금액 {contract_amount_eok}억 ≥ 50억 → 종합으로 자동 판정"
         else:
-            determination_note = f"공사금액 {contract_amount_eok}억 < 50억 → 기본권로 자동 판정"
+            determination_note = f"공사금액 {contract_amount_eok}억 < 50억 → 기본으로 자동 판정"
     else:
         determination_note = "산업 섹터는 사용자가 직접 등급을 선택합니다"
 
@@ -341,7 +353,7 @@ def get_price_tier(
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# TASK 6: POST /diagnosis/disclaimer — 면접 동의 저장
+# TASK 6: POST /diagnosis/disclaimer — 면책 동의 저장
 # ───────────────────────────────────────────────────────────────────────────
 
 class DisclaimerBody(BaseModel):
@@ -354,14 +366,14 @@ class DisclaimerBody(BaseModel):
 @router.post("/disclaimer")
 def save_disclaimer(body: DisclaimerBody, request: Request):
     """
-    TASK 6: 진단 실행 직전 면접 동의 저장.
+    TASK 6: 진단 실행 직전 면책 동의 저장.
     agreed=true여야만 disclaimer_log_id를 반환.
     클라이언트는 이 id를 POST /diagnosis/run에 제출해야 진단 실행 가능.
     """
     if not body.agreed:
         raise HTTPException(
             status_code=400,
-            detail="면접 동의 시 선택을 확인이 필요합니다."
+            detail="면책 동의를 체크해 주세요."  # FIX-1
         )
     supabase = get_supabase()
     auth_row = _resolve_auth_log(supabase, body.auth_token)
@@ -396,7 +408,7 @@ def save_disclaimer(body: DisclaimerBody, request: Request):
 
 class DiagnosisRunBody(BaseModel):
     auth_token:       str   = Field(..., description="본인인증 auth_token")
-    disclaimer_log_id: str  = Field(..., description="면접 동의 ID (POST /diagnosis/disclaimer 반환값)")
+    disclaimer_log_id: str  = Field(..., description="면책 동의 ID (POST /diagnosis/disclaimer 반환값)")  # FIX-1
     sector:           str   = Field(..., description="BUILDING | INDUSTRY | CONSTRUCTION")
     # 가격 자동판정용
     floor_area:          Optional[float] = Field(None, description="바닥면적(㎡) — BUILDING")
@@ -423,7 +435,7 @@ async def run_diagnosis(body: DiagnosisRunBody):
 
     흐름:
       1. auth_token 검증
-      2. disclaimer_log_id 검증
+      2. 면책 동의 검증
       3. 섹터 정규화 + tier 자동 판정 (TASK 4 로직 재사용)
       4. 무료: 횟수 제한 확인
       5. 유료: payment_ref 존재 확인 (추후 KG이니시스 결제 실시간 검증로 교체)
@@ -439,7 +451,7 @@ async def run_diagnosis(body: DiagnosisRunBody):
     # 1. 인증 세션 검증
     auth_row = _resolve_auth_log(supabase, body.auth_token)
 
-    # 2. 면접 동의 검증
+    # 2. 면책 동의 검증 (FIX-1)
     disc_res = (
         supabase.table("diagnosis_disclaimer_log")
         .select("id, ci_hash, agreed")
@@ -449,7 +461,7 @@ async def run_diagnosis(body: DiagnosisRunBody):
         .execute()
     )
     if not disc_res.data or not disc_res.data[0].get("agreed"):
-        raise HTTPException(status_code=400, detail="면접 동의가 필요합니다.")
+        raise HTTPException(status_code=400, detail="면책 동의가 필요합니다.")  # FIX-1
 
     # 3. 섹터 + tier 판정
     sector = body.sector.strip().upper()
@@ -478,7 +490,7 @@ async def run_diagnosis(body: DiagnosisRunBody):
             price = PAID_TIER_PRICES.get(tier_code, 0)
             raise HTTPException(
                 status_code=402,
-                detail=f"\uc720\ub8cc \uc9c4\ub2e8\uc785\ub2c8\ub2e4. \uacb0\uc81c \uc644\ub8cc \ud6c4 payment_ref\ub97c \ud3ec\ud568\ud574 \uc8fc\uc138\uc694. (가\uaca9: {price:,}\uc6d0)"
+                detail=f"유료 진단입니다. 결제 완료 후 payment_ref를 포함해 주세요. (가격: {price:,}원)"
             )
 
     # 5. 엔진 입력 구성
