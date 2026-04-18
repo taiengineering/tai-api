@@ -1,7 +1,8 @@
 """
-routers/diagnosis_proposal.py — v1.0.2
+routers/diagnosis_proposal.py — v1.0.3
 기안용 PDF 생성 — 결재권자용 3페이지 리스크 보고서
 
+v1.0.3 (2026-04-18): xhtml2pdf 한글 폰트(NanumGothic) @font-face 주입
 v1.0.2 (2026-04-18): str 타입 규칙 항목 처리 (AttributeError 수정)
 v1.0.1 (2026-04-18): penalty_summary 한국어 텍스트 파싱 (ValueError 수정)
 v1.0.0 (2026-04-18): 최초 생성
@@ -23,7 +24,7 @@ from db.supabase_client import get_supabase
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/diagnosis", tags=["기안PDF"])
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 
 SECTOR_LABEL: Dict[str, str] = {
     "INDUSTRY": "산업(제조)", "BUILDING": "건물·시설", "CONSTRUCTION": "건설",
@@ -45,6 +46,19 @@ _PLANS: Dict[str, Dict[str, Any]] = {
 }
 _AGENCY_MONTHLY_LOW  = 1_500_000
 _AGENCY_MONTHLY_HIGH = 3_000_000
+
+# xhtml2pdf 한글 폰트 — Dockerfile에서 fonts-nanum 설치 필요
+_FONT_FACE_CSS = """
+@font-face {
+    font-family: 'NanumGothic';
+    src: url('/usr/share/fonts/truetype/nanum/NanumGothic.ttf');
+}
+@font-face {
+    font-family: 'NanumGothic';
+    font-weight: bold;
+    src: url('/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf');
+}
+"""
 
 
 def _now() -> datetime:
@@ -86,7 +100,6 @@ def _format_penalty(amount: float) -> str:
 
 
 def _get_penalty_from_rule(r) -> float:
-    """규칙 dict/str에서 과태료 금액 추출."""
     if not isinstance(r, dict):
         return _parse_penalty_krw(r) if isinstance(r, str) else 0.0
     amt = r.get("penalty_amount")
@@ -201,7 +214,6 @@ def _build_context(row: Dict[str, Any]) -> Dict[str, Any]:
     risk_level = str(partial.get("risk_level") or full.get("risk_level") or "MEDIUM").upper()
     law_count  = len(partial.get("law_badges") or full.get("law_badges") or [])
 
-    # 최대 과태료 — str 항목 제외
     all_rules_flat: List[Dict[str, Any]] = []
     for key in ("appointment_required", "inspection_required", "action_required", "report_required"):
         items = full.get(key) or []
@@ -253,7 +265,15 @@ def _render_html(context: Dict[str, Any]) -> str:
         )
         env = Environment(loader=FileSystemLoader(templates_dir), autoescape=False)
         template = env.get_template("proposal_pdf.html")
-        return template.render(**context)
+        html = template.render(**context)
+
+        # xhtml2pdf 한글 폰트 주입: @font-face + body font-family 교체
+        html = html.replace("</style>", _FONT_FACE_CSS + "\n</style>")
+        html = html.replace(
+            'font-family: "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", Arial, sans-serif;',
+            'font-family: "NanumGothic", sans-serif;',
+        )
+        return html
     except Exception as e:
         log.error(f"[proposal-pdf] 템플릿 렌더링 실패: {e}")
         raise HTTPException(status_code=500, detail=f"템플릿 렌더링 실패: {e}")
