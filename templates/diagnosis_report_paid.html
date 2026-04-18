@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>산업안전 법적의무 상세 진단 리포트 — {{ company_name }}</title>
+<style>
+/* ═══════════════════════════════════════════════════
+   TAI 유료 상세 진단 리포트 — design system v1.0
+   A4 (210mm × 297mm), Noto Sans KR, 인쇄 최적화
+   TAI 브랜드 블루 #1A5FD4 기반
+═══════════════════════════════════════════════════ */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap');
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Noto Sans KR', 'Apple SD Gothic Neo', sans-serif;
+  font-size: 9pt;
+  color: #0f172a;
+  background: #fff;
+  line-height: 1.55;
+}
+
+/* ── 변수 ── */
+:root {
+  --blue:      #1A5FD4;
+  --blue-dark: #1248a8;
+  --blue-light:#e8f0fc;
+  --red:       #dc2626;
+  --red-light: #fef2f2;
+  --green:     #15803d;
+  --green-light:#f0fdf4;
+  --yellow:    #d97706;
+  --yellow-light:#fffbeb;
+  --ink:       #0f172a;
+  --sub:       #64748b;
+  --border:    #e2e8f0;
+  --gray-bg:   #f8fafc;
+}
+
+/* ── 페이지 레이아웃 ── */
+.page {
+  width: 210mm;
+  min-height: 297mm;
+  padding: 18mm 18mm 22mm;
+  position: relative;
+  page-break-after: always;
+}
+.page:last-child { page-break-after: auto; }
+
+/* ── 헤더 (모든 페이지) ── */
+.rpt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 2px solid var(--blue);
+  padding-bottom: 6px;
+  margin-bottom: 14px;
+}
+.rpt-header .logo-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rpt-header .logo-text {
+  font-size: 13pt;
+  font-weight: 900;
+  color: var(--blue);
+  letter-spacing: -0.02em;
+}
+.rpt-header .doc-meta {
+  font-size: 7.5pt;
+  color: var(--sub);
+  text-align: right;
+  line-height: 1.6;
+}
+
+/* ── 푸터 (모든 페이지) ── */
+.rpt-footer {
+  position: absolute;
+  bottom: 10mm;
+  left: 18mm;
+  right: 18mm;
+  border-top: 1px solid var(--border);
+  padding-top: 5px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 7pt;
+  color: var(--sub);
+}
+
+/* ── 공통 섹션 타이틀 ── */
+.sec-tag {
+  display: inline-block;
+  background: var(--blue);
+  color: #fff;
+  font-size: 7pt;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 3px;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+.sec-title {
+  font-size: 14pt;
+  font-weight: 900;
+  color: var(--ink);
+  line-height: 1.25;
+  margin-bottom: 4px;
+}
+.sec-subtitle {
+  font-size: 8.5pt;
+  color: var(--sub);
+  margin-bottom: 14px;
+}
+
+/* ── 카드 ── */
+.card {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.card-blue {
+  background: var(--blue-light);
+  border: 1.5px solid var(--blue);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.card-red {
+  background: var(--red-light);
+  border: 1.5px solid var(--red);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+/* ── 표 공통 ── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 8pt;
+  margin-bottom: 10px;
+}
+th {
+  background: var(--blue);
+  color: #fff;
+  font-weight: 700;
+  padding: 6px 8px;
+  text-align: left;
+  font-size: 7.5pt;
+}
+td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  line-height: 1.45;
+}
+tr:nth-child(even) td { background: var(--gray-bg); }
+tr:last-child td { border-bottom: none; }
+
+/* ── 의무유형 배지 ── */
+.ob {
+  display: inline-block;
+  font-size: 7pt;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.ob-APPOINT { background: #dbeafe; color: #1e40af; }
+.ob-INSPECT { background: #dcfce7; color: #15803d; }
+.ob-ACTION  { background: #fee2e2; color: #991b1b; }
+.ob-REPORT  { background: #fef9c3; color: #854d0e; }
+.ob-NOTIFY  { background: #f1f5f9; color: #475569; }
+
+/* ── 위험도 배지 ── */
+.risk-chip {
+  display: inline-block;
+  font-size: 9pt;
+  font-weight: 800;
+  padding: 3px 12px;
+  border-radius: 4px;
+}
+.risk-HIGH   { background: var(--red);    color: #fff; }
+.risk-MEDIUM { background: var(--yellow); color: #fff; }
+.risk-LOW    { background: var(--green);  color: #fff; }
+
+/* ── 숫자 강조 ── */
+.big-num {
+  font-size: 26pt;
+  font-weight: 900;
+  color: var(--blue);
+  line-height: 1;
+}
+.num-label {
+  font-size: 7.5pt;
+  color: var(--sub);
+  margin-top: 2px;
+}
+
+/* ── 4컬럼 요약 그리드 ── */
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.summary-box {
+  background: var(--gray-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  text-align: center;
+}
+.summary-box.hl { background: var(--blue-light); border-color: var(--blue); }
+.summary-box .sn { font-size: 20pt; font-weight: 900; color: var(--blue); line-height: 1; }
+.summary-box.hl .sn { color: var(--blue-dark); }
+.summary-box .sl { font-size: 7pt; color: var(--sub); font-weight: 700; margin-top: 3px; }
+
+/* ── TOP5 리스크 ── */
+.risk-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+.risk-row:last-child { border-bottom: none; }
+.risk-rank {
+  width: 22px;
+  height: 22px;
+  background: var(--blue);
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8pt;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.risk-content .rc-title { font-size: 8.5pt; font-weight: 700; color: var(--ink); margin-bottom: 1px; }
+.risk-content .rc-law   { font-size: 7.5pt; color: var(--sub); }
+
+/* ── 법령 그룹 헤더 ── */
+.law-group-header {
+  background: var(--blue);
+  color: #fff;
+  padding: 7px 12px;
+  border-radius: 4px 4px 0 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+}
+.law-group-header .lgh-name { font-size: 9.5pt; font-weight: 800; }
+.law-group-header .lgh-count { font-size: 8pt; opacity: 0.85; }
+.law-group-table { margin-bottom: 0; }
+.law-group-table th { background: #2563eb; }
+
+/* ── 부록 테이블 ── */
+.appendix-table th { background: var(--ink); font-size: 7pt; }
+.appendix-table td { font-size: 7.5pt; padding: 4px 6px; }
+
+/* ── p9 SaaS 페이지 ── */
+.saas-page-head {
+  background: linear-gradient(135deg, #1248a8, #1A5FD4);
+  color: #fff;
+  border-radius: 8px;
+  padding: 18px 20px;
+  margin-bottom: 14px;
+  text-align: center;
+}
+.saas-page-head h2 { font-size: 14pt; font-weight: 900; margin-bottom: 6px; }
+.saas-page-head p  { font-size: 8.5pt; opacity: 0.85; }
+.saas-plans {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 12px;
+}
+.saas-plan-card {
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  text-align: center;
+}
+.saas-plan-card .sp-sector { font-size: 7pt; font-weight: 700; color: var(--sub); }
+.saas-plan-card .sp-price  { font-size: 12pt; font-weight: 900; color: var(--blue); margin: 4px 0; }
+.saas-plan-card .sp-label  { font-size: 7pt; color: var(--sub); }
+.saas-plan-recommended {
+  border-color: var(--blue);
+  background: var(--blue-light);
+}
+
+/* ── 목차 ── */
+.toc-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 5px 0;
+  border-bottom: 1px dotted var(--border);
+  font-size: 9pt;
+}
+.toc-row.toc-main { font-weight: 700; color: var(--blue); }
+.toc-row.toc-appendix { color: var(--sub); font-size: 8.5pt; }
+
+/* ── 시설 개요 그리드 ── */
+.overview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.ov-item {
+  background: var(--gray-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 7px 10px;
+}
+.ov-label { font-size: 7pt; color: var(--sub); font-weight: 700; margin-bottom: 2px; }
+.ov-value { font-size: 9pt; font-weight: 700; color: var(--ink); }
+
+/* ── 처벌 박스 ── */
+.penalty-warn {
+  background: #fff7ed;
+  border: 1.5px solid #fdba74;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.penalty-warn .pw-title { font-size: 9pt; font-weight: 800; color: #c2410c; margin-bottom: 5px; }
+.penalty-warn .pw-body  { font-size: 8pt; color: #92400e; line-height: 1.6; }
+
+/* ── 구분선 ── */
+.divider { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+
+/* ── 인쇄 설정 ── */
+@media print {
+  body { background: #fff; }
+  .page { page-break-after: always; }
+  .page:last-child { page-break-after: auto; }
+  .no-break { page-break-inside: avoid; }
+  .law-group-header { page-break-inside: avoid; }
+  tr { page-break-inside: avoid; }
+}
+@page {
+  size: A4;
+  margin: 0;
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════
+     P1: 표지
+═══════════════════════════════════════════ -->
+<div class="page" style="background: linear-gradient(160deg, #0d1b2a 0%, #1A5FD4 100%); color: #fff; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
+  <div style="margin-bottom: 32px;">
+    <div style="font-size: 18pt; font-weight: 900; letter-spacing: -0.02em; margin-bottom: 6px;">TAI Engineering</div>
+    <div style="font-size: 9pt; opacity: 0.7; letter-spacing: 0.1em; text-transform: uppercase;">산업안전 전문 플랫폼</div>
+  </div>
+
+  <div style="background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.25); border-radius: 10px; padding: 28px 40px; margin-bottom: 32px; max-width: 140mm;">
+    <div style="font-size: 8pt; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.7; margin-bottom: 10px;">{{ report_type | default('산업안전 법적의무 진단') }}</div>
+    <div style="font-size: 20pt; font-weight: 900; line-height: 1.25; margin-bottom: 8px;">산업안전 법적의무<br>상세 진단 리포트</div>
+    <div style="font-size: 10pt; opacity: 0.85;">{{ sector_label }}</div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; width: 140mm; margin-bottom: 32px; text-align: center;">
+    <div style="background: rgba(255,255,255,0.08); border-radius: 6px; padding: 10px 6px;">
+      <div style="font-size: 7pt; opacity: 0.65; margin-bottom: 4px;">법령 기반 정밀 분석</div>
+      <div style="font-size: 8.5pt; font-weight: 700;">조건코드 엔진</div>
+    </div>
+    <div style="background: rgba(255,255,255,0.08); border-radius: 6px; padding: 10px 6px;">
+      <div style="font-size: 7pt; opacity: 0.65; margin-bottom: 4px;">AI 엔진 분석</div>
+      <div style="font-size: 8.5pt; font-weight: 700;">자동 판정</div>
+    </div>
+    <div style="background: rgba(255,255,255,0.08); border-radius: 6px; padding: 10px 6px;">
+      <div style="font-size: 7pt; opacity: 0.65; margin-bottom: 4px;">전문가 검토 포함</div>
+      <div style="font-size: 8.5pt; font-weight: 700;">TAI 법령팀</div>
+    </div>
+  </div>
+
+  <div style="font-size: 8pt; opacity: 0.55; line-height: 2;">
+    <div>회사명: <strong style="opacity: 1;">{{ company_name }}</strong></div>
+    <div>진단일: {{ report_date }}</div>
+    <div>접수번호: {{ receipt_no }}</div>
+  </div>
+
+  <div style="position: absolute; bottom: 14mm; left: 0; right: 0; text-align: center; font-size: 7pt; opacity: 0.45;">
+    본 문서는 TAI Engineering이 제공하는 법령 기반 진단 보고서입니다. 법률 자문이 아닌 참고 자료로만 활용하시기 바랍니다.
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════
+     P2: 경영진 요약 (Executive Summary)
+═══════════════════════════════════════════ -->
+<div class="page">
+  <div class="rpt-header">
+    <div class="logo-area">
+      <span class="logo-text">TAI</span>
+      <span style="font-size: 8pt; color: var(--sub);">산업안전 법적의무 상세 진단 리포트</span>
+    </div>
+    <div class="doc-meta">{{ company_name }}<br>접수번호 {{ receipt_no }}</div>
+  </div>
+
+  <div class="sec-tag">EXECUTIVE SUMMARY</div>
+  <div class="sec-title">경영진 요약</div>
+  <div class="sec-subtitle">결재권자를 위한 핵심 요약 — 전체 내역은 본문 및 부록 참조</div>
+
+  <!-- 핵심 숫자 3개 -->
+  <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px;">
+    <div class="card" style="text-align: center;">
+      <div class="big-num">{{ total }}</div>
+      <div class="num-label">법적 의무 총 건수</div>
+    </div>
+    <div class="card" style="text-align: center; border-color: var(--blue);">
+      <div class="big-num" style="color: var(--red);">{{ appointment_count }}</div>
+      <div class="num-label">선임 의무 (미이행 시 즉시 과태료)</div>
+    </div>
+    <div class="card" style="text-align: center;">
+      <div class="big-num">{{ law_count }}</div>
+      <div class="num-label">적용 법령 수</div>
+    </div>
+  </div>
+
+  <!-- 위험도 카드 4칸 -->
+  <div class="summary-grid" style="margin-bottom: 14px;">
+    <div class="summary-box hl">
+      <div class="sn">{{ appointment_count }}</div>
+      <div class="sl">선임 의무</div>
+    </div>
+    <div class="summary-box">
+      <div class="sn">{{ inspection_count }}</div>
+      <div class="sl">점검·검사</div>
+    </div>
+    <div class="summary-box">
+      <div class="sn">{{ action_count }}</div>
+      <div class="sl">조치 의무</div>
+    </div>
+    <div class="summary-box">
+      <div class="sn">{{ report_notify_count }}</div>
+      <div class="sl">보고·신고</div>
+    </div>
+  </div>
+
+  <!-- TOP 5 리스크 -->
+  <div class="card">
+    <div style="font-size: 9pt; font-weight: 800; color: var(--ink); margin-bottom: 8px;">⚠ 주요 리스크 TOP {{ top5_risks | length }}</div>
+    {% for r in top5_risks %}
+    <div class="risk-row">
+      <div class="risk-rank">{{ loop.index }}</div>
+      <div class="risk-content">
+        <div class="rc-title">{{ r.title }}</div>
+        <div class="rc-law">{{ r.law_ref }}{%- if r.penalty_summary %} · {{ r.penalty_summary }}{% endif %}</div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- 미이행 시 최대 과태료 -->
+  {% if max_penalty_text %}
+  <div class="card-red">
+    <div style="font-size: 8.5pt; font-weight: 800; color: var(--red); margin-bottom: 4px;">미이행 시 최대 과태료</div>
+    <div style="font-size: 9pt; font-weight: 700; color: var(--ink);">{{ max_penalty_text }}</div>
+    {% if csia_applicable %}
+    <div style="font-size: 7.5pt; color: var(--red); margin-top: 4px;">* 중대재해처벌법 적용 사업장 — 사망사고 발생 시 경영책임자 형사처벌</div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div style="font-size: 7.5pt; color: var(--sub); margin-top: 8px;">
+    상세 내역은 본문 SECTION 02 및 부록 A·B·C를 참조하시기 바랍니다.
+  </div>
+
+  <div class="rpt-footer">
+    <span>본 문서는 TAI Engineering의 법령 기반 진단 결과이며 법률 자문이 아닙니다.</span>
+    <span>p.2</span>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════
+     P3: 목차 + 면책조항
+═══════════════════════════════════════════ -->
+<div class="page">
+  <div class="rpt-header">
+    <div class="logo-area">
+      <span class="logo-text">TAI</span>
+      <span style="font-size: 8pt; color: var(--sub);">목차 / 면책조항</span>
+    </div>
+    <div class="doc-meta">{{ company_name }}<br>접수번호 {{ receipt_no }}</div>
+  </div>
+
+  <div class="sec-tag">TABLE OF CONTENTS</div>
+  <div class="sec-title">목차</div>
+
+  <div style="margin: 12px 0 20px;">
+    <div class="toc-row toc-main"><span>표지</span><span>p.1</span></div>
+    <div class="toc-row toc-main"><span>경영진 요약 (Executive Summary)</span><span>p.2</span></div>
+    <div class="toc-row toc-main"><span>목차 / 면책조항</span><span>p.3</span></div>
+    <div class="toc-row toc-main"><span>SECTION 01. 시설 개요</span><span>p.4</span></div>
+    <div class="toc-row toc-main"><span>SECTION 02. 법률별 의무 분석</span><span>p.5~</span></div>
+    <div class="toc-row toc-main"><span>SECTION 03. 처벌 조항 및 리스크</span><span>p.8</span></div>
+    <div class="toc-row toc-main" style="color: var(--blue); font-weight: 900;"><span>SECTION 04. 결론 및 관리 방안</span><span>p.9</span></div>
+    <div style="height: 8px;"></div>
+    <div class="toc-row toc-appendix"><span>부록 A. 전체 의무 규칙 테이블 ({{ all_rules | length }}건)</span><span>A-1</span></div>
+    <div class="toc-row toc-appendix"><span>부록 B. 점검 일정 요약 ({{ inspection_rules | length }}건)</span><span>B-1</span></div>
+    <div class="toc-row toc-appendix"><span>부록 C. 선임 의무 상세 ({{ appointment_rules | length }}건)</span><span>C-1</span></div>
+    <div class="toc-row toc-appendix"><span>부록 D. 용어 및 참고 법령</span><span>D-1</span></div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="sec-tag">면책조항</div>
+  <div style="margin-top: 8px;">
+    <div class="card" style="background: var(--gray-bg);">
+      <div style="font-size: 8.5pt; font-weight: 800; color: var(--ink); margin-bottom: 6px;">본 리포트에 관하여</div>
+      <div style="font-size: 8pt; color: var(--sub); line-height: 1.8;">
+        본 진단 결과는 현행 법령과 귀 사업장 정보를 정밀 분석하여 적용 가능한 법적 의무를 도출한 것입니다.
+        본 서비스는 법률 상담·자문·의견 제공이 아니며, 개별 사안에 대한 법적 판단이나 해석을 포함하지 않습니다.
+        실제 행정 처분·감독 기준은 관할 기관의 판단에 따라 달라질 수 있으므로,
+        구체적 법률 적용이 필요한 경우 관할 행정기관 또는 법률 전문가에게 확인하시기 바랍니다.
+      </div>
+      <div class="divider"></div>
+      <div style="font-size: 8pt; color: var(--sub); line-height: 1.8;">
+        <strong style="color: var(--ink);">작성 기준</strong><br>
+        진단일: {{ report_date }} | 엔진 버전: {{ engine_version | default('v1') }}<br>
+        수록 데이터는 진단 시점 기준이며, 법령 개정 시 내용이 달라질 수 있습니다.
+      </div>
+    </div>
+  </div>
+
+  <div class="rpt-footer">
+    <span>본 문서는 TAI Engineering의 법령 기반 진단 결과이며 법률 자문이 아닙니다.</span>
+    <span>p.3</span>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════
+     P4: SECTION 01 — 시설 개요
+═══════════════════════════════════════════ -->
+<div class="page">
+  <div class="rpt-header">
+    <div class="logo-area">
+      <span class="logo-text">TAI</span>
+      <span style="font-size: 8pt; color: var(--sub);">SECTION 01. 시설 개요</span>
+    </div>
+    <div class="doc-meta">{{ company_name }}<br>접수번호 {{ receipt_no }}</div>
+  </div>
+
+  <div class="sec-tag">SECTION 01</div>
+  <div class="sec-title">시설 개요</div>
+  <div class="sec-subtitle">진단에 사용된 사업장 기본 정보</div>
+
+  <div class="overview-grid">
+    <div class="ov-item">
+      <div class="ov-label">사업장명</div>
+      <div class="ov-value">{{ company_name }}</div>
+    </div>
+    <div class="ov-item">
+      <div class="ov-label">섹터</div>
+      <div class="ov-value">{{ sector_label }}</div>
+    </div>
+    {% if business_no %}
+    <div class="ov-item">
+      <div class="ov-label">사업자번호</div>
+      <div class="ov-value">{{ business_no }}</div>
+    </div>
+    {% endif %}
+    {% if ceo_name %}
+    <div class="ov-item">
+      <div class="ov-label">대표자</div>
+      <div class="ov-value">{{ ceo_name }}</div>
+    </div>
+    {% endif %}
+    {% if address %}
+    <div class="ov-item" style="grid-column: 1 / -1;">
+      <div class="ov-label">주소</div>
+      <div class="ov-value">{{ address }}</div>
+    </div>
+    {% endif %}
+    {% if industry_type %}
+    <div class="ov-item">
+      <div class="ov-label">업종</div>
+      <div class="ov-value">{{ industry_type }}</div>
+    </div>
+    {% endif %}
+    {% if worker_count %}
+    <div class="ov-item">
+      <div class="ov-label">상시근로자</div>
+      <div class="ov-value">{{ worker_count }}명</div>
+    </div>
+    {% endif %}
+    {% if area %}
+    <div class="ov-item">
+      <div class="ov-label">면적</div>
+      <div class="ov-value">{{ area }}㎡</div>
+    </div>
+    {% endif %}
+    {% if floors %}
+    <div class="ov-item">
+      <div class="ov-label">층수</div>
+      <div class="ov-value">{{ floors }}층</div>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if equip_summary %}
+  <div class="card" style="margin-bottom: 10px;">
+    <div style="font-size: 8pt; font-weight: 700; color: var(--sub); margin-bottom: 4px;">주요 설비·시설</div>
+    <div style="font-size: 8.5pt;">{{ equip_summary }}</div>
+  </div>
+  {% endif %}
+
+  {% if hazard_summary %}
+  <div class="card" style="margin-bottom: 10px;">
+    <div style="font-size: 8pt; font-weight: 700; color: var(--sub); margin-bottom: 4px;">위험 요소</div>
+    <div style="font-size: 8.5pt;">{{ hazard_summary }}</div>
+  </div>
+  {% endif %}
+
+  <!-- 중대재해법 박스 -->
+  {% if csia_applicable %}
+  <div class="card-red" style="margin-top: 10px;">
+    <div style="font-size: 9pt; font-weight: 800; color: var(--red); margin-bottom: 5px;">⚠ 중대재해처벌법 적용 사업장</div>
+    <div style="font-size: 8pt; color: #7f1d1d; line-height: 1.6;">
+      상시근로자 5인 이상 사업장으로 중대재해처벌법이 적용됩니다.<br>
+      중대산업재해 발생 시 경영책임자는 1년 이상 징역 또는 10억원 이하 벌금에 처할 수 있습니다.<br>
+      안전보건관리체계 구축·이행이 법적 의무입니다.
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="rpt-footer">
+    <span>본 문서는 TAI Engineering의 법령 기반 진단 결과이며 법률 자문이 아닙니다.</span>
+    <span>p.4</span>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════
+     P5~7: SECTION 02 — 법률별 의무 분석
+═══════════════════════════════════════════ -->
+<div class="page">
+  <div class="rpt-header">
+    <div class="logo-area">
+      <span class="logo-text">TAI</span>
+      <span style="font-size: 8pt; color: var(--sub);">SECTION 02. 법률별 의무 분석</span>
+    </div>
+    <div class="doc-meta">{{ company_name }}<br>접수번호 {{ receipt_no }}</div>
+  </div>
+
+  <div class="sec-tag">SECTION 02</div>
+  <div class="sec-title">법률별 의무 분석</div>
+  <div class="sec-subtitle">건수 상위 법령 요약 — 전체 {{ all_rules | length }}건은 부록 A 참조</div>
+
+  {% for group in law_groups %}
+  <div class="no-break">
+    <div class="law-group-header">
+      <span class="lgh-name">{{ group.law_name }}</span>
+      <span class="lgh-count">{{ group.rules | length }}건</span>
+    </div>
+    <table class="law-group-table">
+      <thead>
+        <tr>
+          <th style="width:14%;">의무유형</th>
+          <th style="width:12%;">조항</th>
+          <th style="width:40%;">내용</th>
+          <th style="width:18%;">주기</th>
+          <th style="width:16%;">제출기관</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in group.rules %}
+        <tr>
+          <td><span class="ob ob-{{ r.obligation_type }}">{{ r.ob_label }}</span></td>
+          <td>{{ r.law_article }}</td>
+          <td>{{ r.obligation_summary }}</td>
+          <td>{{ r.inspection_cycle or '–' }}</td>
+          <td>{{ r.submit_org_label or '–' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endfor %}
+
+  {% if remaining_law_count is defined and remaining_law_count > 0 %}
+  <div style="text-align: center; font-size: 8pt; color: var(--sub); margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 10px;">
+    나머지 {{ remaining_law_count }}개 법령의 상세 내역은 <strong>부록 A (전체 테이블)</strong>을 참조하시기 바랍니다.
+  </div>
+  {% endif %}
+
+  <div class="rpt-footer">
+    <span>본 문서는 TAI Engineering의 법령 기반 진단 결과이며 법률 자문이 아닙니다.</span>
+    <span>p.5~</span>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════
+     P8: SECTION 03 — 처벌 조항 및 리스크
+═══════════════════════════════════════════ -->
+<div class="page">
+  <div class="rpt-header">
+    <div class="logo-area">
+      <span class="logo-text">TAI</span>
+      <span style="font-size: 8pt; color: var(--sub);">SECTION 03. 처벌 조항 및 리스크</span>
+    </div>
+    <div class="doc-meta">{{ company_name }}<br>접수번호 {{ receipt_no }}</div>
+  </div>
+
+  <div class="sec-tag">SECTION 03</div>
+  <div class="sec-title">처벌 조항 및 리스크</div>
+  <div class="sec-subtitle">미이행 시 법적 제재 항목 — penalty_amount 기재 규칙 기준</div>
+
+  <!-- 중대재해법 경고 박스 -->
+  {% if csia_applicable %}
+  <div class="penalty-warn">
+    <div class="pw-title">⚠ 중대재해처벌법 — 경영책임자 형사처벌</div>
+    <div class="pw-body">
+      안전보건관리체계 미구축 등 의무 위반으로 중대산업재해 발생 시:<br>
+      경영책임자 → 1년 이상 징역 또는 10억원 이하 벌금<br>
+      법인 → 50억원 이하 벌금 (양벌규정)<br>
+      <strong>즉각적인 체계 구축이 필요합니다.</strong>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- 과태료 있는 규칙 테이블 -->
+  {% set penalty_rules = all_rules | selectattr('penalty_summary') | list %}
+  {% if penalty_rules %}
+  <table>
+    <thead>
+      <tr>
+        <th style="width:22%;">법령</th>
+        <th style="width:12%;">조항</th>
+        <th style="width:14%;">유형</th>
+        <th style="width:30%;">의무 내용</th>
+        <th style="width:22%;">벌칙</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in penalty_rules[:20] %}
+      <tr>
+        <td>{{ r.law_name }}</td>
+        <td>{{ r.law_article }}</td>
+        <td><span class="ob ob-{{ r.obligation_type }}">{{ r.ob_label }}</span></td>
+        <td>{{ r.obligation_summary }}</td>
+        <td style="color: var(--red); font-weight: 700;">{{ r.penalty_summary }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if penalty_rules | length > 20 %}
+  <div style="font-size: 7.5pt; color: var(--sub); text-align: center;">
+    상위 20건만 표시 — 전체 {{ penalty_rules | length }}건은 부록 A 참조
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="card" style="text-align: center; color: var(--sub);">과태료 정보가 수록된 규칙이 없습니다.</div>
+  {% endif %}
+
+  <div class="rpt-footer">
+    <span>본 문서는 TAI Engineering의 법령 기반 진단 결과이며 법률 자문이 아닙니다.</span>
+    <span>p.8</span>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════
+     P9: SECTION 04 — 결론 = SaaS 안내 ★ 핵심
+     결재권자가 반드시 도달하는 마지막 페이지
+═══════════════════════════════════════════ -->
+<div class="page">
+  <div class="rpt-header">
+    <div class="logo-area">
+      <span class="logo-text">TAI</span>
+      <span style="font-size: 8pt; color: var(--sub);">SECTION 04. 결론 및 관리 방안</span>
+    </div>
+    <div class="doc-meta">{{ company_name }}<br>접수번호 {{ receipt_no }}</div>
+  </div>
+
+  <div class="sec-tag">SECTION 04</div>
+  <div class="sec-title">이 의무를 어떻게 관리할 것인가</div>
+  <div class="sec-subtitle">{{ total }}건의 법적 의무, 체계적 관리 방안</div>
+
+  <!-- 비포애프터 다이어그램 -->
+  <div style="text-align: center; margin-bottom: 12px;">
+    <img
+      src="https://xntdkrjhgcscmqctdzyo.supabase.co/storage/v1/object/public/diagrams/11-%EC%97%85%EB%AC%B4%EB%B6%84%EC%82%B0-%EB%B9%84%ED%8F%AC%EC%95%A0%ED%94%84%ED%84%B0.svg"
+      style="max-width: 160mm; height: auto;"
+      alt="업무 분산 비포애프터 — TAI Safe 도입 전후"
+    >
+  </div>
+
+  <!-- SaaS 소개 -->
+  <div class="saas-page-head">
+    <h2>TAI Safe — 산업안전 관리 플랫폼</h2>
+    <p>{{ total }}건의 의무를 자동으로 배분·추적·증빙합니다<br>
+    안전관리자 1인 집중 구조 → 전 작업자 참여 분산 구조</p>
+  </div>
+
+  <div class="saas-plans">
+    <div class="saas-plan-card">
+      <div class="sp-sector">건물</div>
+      <div class="sp-price">59,000원~</div>
+      <div class="sp-label">/월 · VAT 별도</div>
+    </div>
+    <div class="saas-plan-card {% if recommended_plan_name == 'INDUSTRY' %}saas-plan-recommended{% endif %}">
+      <div class="sp-sector">산업</div>
+      <div class="sp-price">79,000원~</div>
+      <div class="sp-label">/월 · VAT 별도</div>
+    </div>
+    <div class="saas-plan-card">
+      <div class="sp-sector">건설</div>
+      <div class="sp-price">145,000원~</div>
+      <div class="sp-label">/월 · VAT 별도</div>
+    </div>
+  </div>
+
+  {% if recommended_plan_name %}
+  <div class="card-blue" style="margin-top: 10px; text-align: center;">
+    <div style="font-size: 8pt; color: var(--sub); margin-bottom: 4px;">귀 사업장 추천 플랜</div>
+    <div style="font-size: 12pt; font-weight: 900; color: var(--blue-dark);">{{ recommended_plan_name }}</div>
+    {% if recommended_plan_price %}
+    <div style="font-size: 10pt; font-weight: 700; color: var(--blue);">{{ recommended_plan_price }}</div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div class="card" style="margin-top: 10px; text-align: center;">
+    <div style="font-size: 9pt; font-weight: 700; color: var(--ink); margin-bottom: 8px;">지금 바로 시작하기</div>
+    <div style="font-size: 8.5pt; color: var(--sub); line-height: 1.8;">
+      📧 contact@taieng.co.kr<br>
+      🌐 safe.taieng.co.kr<br>
+      📍 강남구 테헤란로79길 6 JS타워 3F
+    </div>
+  </div>
+
+  <div class="rpt-footer">
+    <span>본 문서는 TAI Engineering의 법령 기반 진단 결과이며 법률 자문이 아닙니다.</span>
+    <span>p.9</span>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════
+     부록 A: 전체 규칙 테이블
+     "돈 받고 파는 값어치" — 안전관리자 실무 도구
+═══════════════════════════════════════════ -->
+<div class="page">
+  <div class="rpt-header">
+    <div class="logo-area">
+      <span class="logo-text">TAI</span>
+      <span style="font-size: 8pt; color: var(--sub);">부록 A. 전체 의무 규칙 테이블</span>
+    </div>
+    <div class="doc-meta">{{ company_name }}<br>접수번호 {{ receipt_no }}</div>
+  </div>
+
+  <div class="sec-tag">부록 A</div>
+  <div class="sec-title">전체 의무 규칙 테이블</div>
+  <div class="sec-subtitle">총 {{ all_rules | length }}건 — 안전관리자 실무 관리용 완전 목록</div>
+
+  <table class="appendix-table">
+    <thead>
+      <tr>
+        <th style="width:4%;">No.</th>
+        <th style="width:16%;">법령</th>
+        <th style="width:9%;">조항</th>
+        <th style="width:10%;">의무유형</th>
+        <th style="width:30%;">내용</th>
+        <th style="width:14%;">주기</th>
+        <th style="width:17%;">제출기관</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in all_rules %}
+      <tr class="no-break">
+        <td style="text-align:center; color: var(--sub);">{{ loop.index }}</td>
+        <td>{{ r.law_name }}</td>
+        <td>{{ r.law_article }}</td>
+        <td><span class="ob ob-{{ r.obligation_type }}">{{ r.ob_label }}</span></td>
+        <td>{{ r.obligation_summary }}</td>
+        <td>{{ r.inspection_cycle or '–' }}</td>
+        <td>{{ r.submit_org_label or '–' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="rpt-footer">
+    <span>부록 A — 전체 의무 테이블</span>
+    <span>A-1</span>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════
+     부록 B: 점검 일정 요약
+═══════════════════════════════════════════ -->
+<div class="page">
+  <div class="rpt-header">
+    <div class="logo-area">
+      <span class="logo-text">TAI</span>
+      <span style="font-size: 8pt; color: var(--sub);">부록 B. 점검 일정 요약</span>
+    </div>
+    <div class="doc-meta">{{ company_name }}<br>접수번호 {{ receipt_no }}</div>
+  </div>
+
+  <div class="sec-tag">부록 B</div>
+  <div class="sec-title">점검 일정 요약</div>
+  <div class="sec-subtitle">총 {{ inspection_rules | length }}건 — inspection_required 항목</div>
+
+  <table class="appendix-table">
+    <thead>
+      <tr>
+        <th style="width:4%;">No.</th>
+        <th style="width:18%;">법령</th>
+        <th style="width:9%;">조항</th>
+        <th style="width:30%;">점검 항목</th>
+        <th style="width:14%;">주기</th>
+        <th style="width:16%;">기준점</th>
+        <th style="width:9%;">제출기관</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in inspection_rules %}
+      <tr class="no-break">
+        <td style="text-align:center; color: var(--sub);">{{ loop.index }}</td>
+        <td>{{ r.law_name }}</td>
+        <td>{{ r.law_article }}</td>
+        <td>{{ r.obligation_summary }}</td>
+        <td><strong>{{ r.inspection_cycle or '–' }}</strong></td>
+        <td style="font-size: 7pt;">{{ r.cycle_base_guide or '–' }}</td>
+        <td>{{ r.submit_org_label or '–' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="rpt-footer">
+    <span>부록 B — 점검 일정 요약</span>
+    <span>B-1</span>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════
+     부록 C: 선임 의무 상세
+═══════════════════════════════════════════ -->
+<div class="page">
+  <div class="rpt-header">
+    <div class="logo-area">
+      <span class="logo-text">TAI</span>
+      <span style="font-size: 8pt; color: var(--sub);">부록 C. 선임 의무 상세</span>
+    </div>
+    <div class="doc-meta">{{ company_name }}<br>접수번호 {{ receipt_no }}</div>
+  </div>
+
+  <div class="sec-tag">부록 C</div>
+  <div class="sec-title">선임 의무 상세</div>
+  <div class="sec-subtitle">총 {{ appointment_rules | length }}건 — appointment_required 항목</div>
+
+  <table class="appendix-table">
+    <thead>
+      <tr>
+        <th style="width:4%;">No.</th>
+        <th style="width:28%;">선임 대상</th>
+        <th style="width:20%;">근거 법령</th>
+        <th style="width:10%;">조항</th>
+        <th style="width:22%;">자격요건</th>
+        <th style="width:16%;">제출기관</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in appointment_rules %}
+      <tr class="no-break">
+        <td style="text-align:center; color: var(--sub);">{{ loop.index }}</td>
+        <td><strong>{{ r.obligation_summary }}</strong></td>
+        <td>{{ r.law_name }}</td>
+        <td>{{ r.law_article }}</td>
+        <td>{{ r.qualification_required or '–' }}</td>
+        <td>{{ r.submit_org_label or '–' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="rpt-footer">
+    <span>부록 C — 선임 의무 상세</span>
+    <span>C-1</span>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════════════════════════
+     부록 D: 용어 + 참고법령
+═══════════════════════════════════════════ -->
+<div class="page">
+  <div class="rpt-header">
+    <div class="logo-area">
+      <span class="logo-text">TAI</span>
+      <span style="font-size: 8pt; color: var(--sub);">부록 D. 용어 및 참고 법령</span>
+    </div>
+    <div class="doc-meta">{{ company_name }}<br>접수번호 {{ receipt_no }}</div>
+  </div>
+
+  <div class="sec-tag">부록 D</div>
+  <div class="sec-title">용어 및 참고 법령</div>
+
+  <div class="card" style="margin-bottom: 10px;">
+    <div style="font-size: 9pt; font-weight: 800; color: var(--ink); margin-bottom: 8px;">주요 용어 정의</div>
+    <table style="margin-bottom: 0;">
+      <thead><tr><th style="width:25%;">용어</th><th>정의</th></tr></thead>
+      <tbody>
+        <tr><td><strong>과태료</strong></td><td>행정법상 의무 위반에 대해 부과하는 금전적 제재. 형사처벌과 병과 가능.</td></tr>
+        <tr><td><strong>중대재해</strong></td><td>사망자 1명 이상, 부상자 2개월 이상 치료 필요 2명 이상, 질병자 10명 이상 발생한 재해.</td></tr>
+        <tr><td><strong>위험성평가</strong></td><td>사업장 유해·위험요인을 파악하고 위험성을 결정하는 절차. 연 1회 이상 실시 의무.</td></tr>
+        <tr><td><strong>선임 의무</strong></td><td>법령에서 정한 자격을 갖춘 자를 특정 직위에 배치해야 하는 의무.</td></tr>
+        <tr><td><strong>안전관리자</strong></td><td>산업안전보건법에 따라 사업주가 선임해야 하는 안전 담당자. 자격 요건 있음.</td></tr>
+        <tr><td><strong>법정 점검</strong></td><td>법령에서 정한 주기·방법에 따라 반드시 실시해야 하는 점검. 기록 보존 의무.</td></tr>
+        <tr><td><strong>inspection_cycle</strong></td><td>정규화된 한글 주기 라벨 (예: "2년마다", "반기 1회", "월 1회").</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div style="font-size: 9pt; font-weight: 800; color: var(--ink); margin-bottom: 8px;">참고 법령 (law.go.kr)</div>
+    <table style="margin-bottom: 0;">
+      <thead><tr><th style="width:35%;">법령명</th><th>법제처 링크</th></tr></thead>
+      <tbody>
+        <tr><td>산업안전보건법</td><td style="font-size: 7.5pt;">https://www.law.go.kr/법령/산업안전보건법</td></tr>
+        <tr><td>중대재해처벌법</td><td style="font-size: 7.5pt;">https://www.law.go.kr/법령/중대재해처벌법</td></tr>
+        <tr><td>소방시설법</td><td style="font-size: 7.5pt;">https://www.law.go.kr/법령/소방시설설치및관리에관한법률</td></tr>
+        <tr><td>건축법</td><td style="font-size: 7.5pt;">https://www.law.go.kr/법령/건축법</td></tr>
+        <tr><td>산업안전보건기준에관한규칙</td><td style="font-size: 7.5pt;">https://www.law.go.kr/법령/산업안전보건기준에관한규칙</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card" style="margin-top: 10px; text-align: center;">
+    <div style="font-size: 9pt; font-weight: 700; color: var(--ink); margin-bottom: 6px;">TAI Engineering 연락처</div>
+    <div style="font-size: 8.5pt; color: var(--sub); line-height: 1.9;">
+      📧 contact@taieng.co.kr &nbsp;|&nbsp; 🌐 www.taieng.co.kr<br>
+      🔒 safe.taieng.co.kr &nbsp;|&nbsp; 📍 강남구 테헤란로79길 6 JS타워 3F<br>
+      사업자등록번호: 723-39-01422
+    </div>
+  </div>
+
+  <div class="rpt-footer">
+    <span>부록 D — 용어 및 참고 법령 | © 2026 TAI Engineering. All rights reserved.</span>
+    <span>D-1</span>
+  </div>
+</div>
+
+</body>
+</html>

@@ -1,16 +1,15 @@
 # routers/fix_chat.py — TAI Fix 대화형 입력부 API
-# v1.0.1 (2026-04-15): 오타 수정 (말씀/어느/걱정/혹시/존댓말)
+# v1.1.1 (2026-04-15): admin/stats 응답에 프론트 호환 편의 필드 추가
+# v1.1.0 (2026-04-15): 어드민 API 3개 추가 (stats, sessions, session detail)
+# v1.0.1 (2026-04-15): 오타 수정
 # v1.0.0 (2026-04-15): 신규
-#   POST /fix/chat/start    — 대화 세션 생성 (인증 불필요)
-#   POST /fix/chat/message  — 메시지 전송 → Claude API → 응답 (인증 불필요)
-#   POST /fix/chat/complete — 대화 완료 → matching_requests 저장 (회원 인증 필수)
 import os
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
 
 from db.database import get_supabase
@@ -135,6 +134,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _require_admin(current_user: dict):
+    """role_code 001이 아니면 403"""
+    role = current_user.get("role_code") or current_user.get("role", "")
+    if role != "001":
+        raise HTTPException(status_code=403, detail="관리자 권한이 필요합니다")
+
+
 async def _call_claude(messages: list) -> tuple[str, int]:
     if not ANTHROPIC_KEY:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY 미설정")
@@ -164,6 +170,10 @@ async def _call_claude(messages: list) -> tuple[str, int]:
     tokens = data.get("usage", {}).get("output_tokens", 0)
     return reply, tokens
 
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 공개 API (인증 불필요)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 @router.post("/start")
 def start_chat(body: StartBody):
@@ -225,10 +235,16 @@ async def send_message(body: MessageBody):
     ]).execute()
 
     is_last = (new_turn >= max_turns)
-    sb.table("fix_chat_sessions").update({
-        "current_turn": new_turn,
-        "status": "COMPLETED" if is_last else "ACTIVE",
-    }).eq("id", body.session_id).execute()
+    update_data = {"current_turn": new_turn}
+    if is_last:
+        update_data["status"] = "COMPLETED"
+    # 의도 파싱 (첫 응답에서 시도)
+    if not sess.get("intent") and new_turn >= 1:
+        parsed = _parse_intent(reply)
+        if parsed:
+            update_data["intent"] = parsed
+
+    sb.table("fix_chat_sessions").update(update_data).eq("id", body.session_id).execute()
 
     return {
         "reply":           reply,
@@ -285,6 +301,169 @@ def complete_chat(body: CompleteBody, current_user: dict = Depends(get_current_u
     }).eq("id", body.session_id).execute()
 
     return {"status": "success", "request_id": request_id, "summary": last_assistant[:500]}
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 어드민 API (role_code=001 필수)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@router.get("/admin/stats")
+def admin_stats(current_user: dict = Depends(get_current_user)):
+    """상담 통계 — 전체/상태별/의도별/오늘/토큰"""
+    _require_admin(current_user)
+    sb = get_supabase()
+
+    all_res = sb.table("fix_chat_sessions").select(
+        "id, status, user_type, intent, current_turn, request_id, created_at"
+    ).execute()
+    rows = all_res.data or []
+    total = len(rows)
+
+    # 상태별
+    by_status = {}
+    for r in rows:
+        s = r.get("status") or "UNKNOWN"
+        by_status[s] = by_status.get(s, 0) + 1
+
+    # 의도별
+    by_intent = {}
+    for r in rows:
+        i = r.get("intent") or "UNKNOWN"
+        by_intent[i] = by_intent.get(i, 0) + 1
+
+    # 사용자 유형별
+    by_user_type = {}
+    for r in rows:
+        ut = r.get("user_type") or "UNKNOWN"
+        by_user_type[ut] = by_user_type.get(ut, 0) + 1
+
+    # 오늘
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_count = sum(1 for r in rows if (r.get("created_at") or "")[:10] == today_str)
+
+    # 총 턴 수
+    total_turns = sum(r.get("current_turn", 0) for r in rows)
+
+    # 토큰 합계
+    token_res = sb.table("fix_chat_messages").select("token_count").not_.is_("token_count", "null").execute()
+    total_tokens = sum(m.get("token_count", 0) for m in (token_res.data or []))
+
+    # 매칭 연결 수 (request_id가 있는 세션)
+    connected = sum(1 for r in rows if r.get("request_id"))
+
+    return {
+        # 프론트 호환 편의 필드
+        "total":           total,
+        "active":          by_status.get("ACTIVE", 0),
+        "completed":       connected,
+        "guest":           by_user_type.get("GUEST", 0),
+        # 상세 필드
+        "total_sessions":  total,
+        "today_sessions":  today_count,
+        "total_turns":     total_turns,
+        "total_tokens":    total_tokens,
+        "connected":       connected,
+        "by_status":       by_status,
+        "by_intent":       by_intent,
+        "by_user_type":    by_user_type,
+    }
+
+
+@router.get("/admin/sessions")
+def admin_sessions(
+    status:    Optional[str] = Query(None, description="ACTIVE / COMPLETED / EXPIRED"),
+    user_type: Optional[str] = Query(None, description="GUEST / MEMBER / SUBSCRIBER"),
+    intent:    Optional[str] = Query(None, description="REPAIR / APPOINTMENT / DIAGNOSIS / CONSULTING"),
+    page:      int           = Query(1, ge=1),
+    size:      int           = Query(20, ge=1, le=100),
+    current_user: dict       = Depends(get_current_user),
+):
+    """상담 세션 목록 — 필터/페이징"""
+    _require_admin(current_user)
+    sb = get_supabase()
+
+    q = sb.table("fix_chat_sessions").select(
+        "id, user_id, user_type, status, intent, current_turn, max_turns, request_id, created_at",
+        count="exact"
+    )
+
+    if status:
+        q = q.eq("status", status.upper())
+    if user_type:
+        q = q.eq("user_type", user_type.upper())
+    if intent:
+        q = q.eq("intent", intent.upper())
+
+    offset = (page - 1) * size
+    q = q.order("created_at", desc=True).range(offset, offset + size - 1)
+
+    res = q.execute()
+    items = res.data or []
+    total_count = res.count if res.count is not None else len(items)
+
+    # 각 세션의 첫 사용자 메시지 가져오기 (미리보기용)
+    session_ids = [it["id"] for it in items]
+    previews = {}
+    if session_ids:
+        for sid in session_ids:
+            msg_res = sb.table("fix_chat_messages").select("content").eq(
+                "session_id", sid
+            ).eq("role", "user").order("id").limit(1).execute()
+            if msg_res.data:
+                previews[sid] = msg_res.data[0]["content"][:80]
+
+    for it in items:
+        it["preview"] = previews.get(it["id"], "")
+
+    return {
+        "items":       items,
+        "total":       total_count,
+        "page":        page,
+        "size":        size,
+        "total_pages": max(1, (total_count + size - 1) // size),
+    }
+
+
+@router.get("/admin/sessions/{session_id}")
+def admin_session_detail(
+    session_id:   str,
+    current_user: dict = Depends(get_current_user),
+):
+    """상담 세션 상세 + 전체 메시지"""
+    _require_admin(current_user)
+    sb = get_supabase()
+
+    sess_res = sb.table("fix_chat_sessions").select("*").eq("id", session_id).limit(1).execute()
+    if not sess_res.data:
+        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다")
+
+    session = sess_res.data[0]
+
+    msgs_res = sb.table("fix_chat_messages").select(
+        "id, role, content, token_count, created_at"
+    ).eq("session_id", session_id).order("id").execute()
+
+    messages = msgs_res.data or []
+
+    # 총 토큰
+    total_tokens = sum(m.get("token_count", 0) for m in messages if m.get("token_count"))
+
+    # 연결된 매칭 요청 정보
+    matching_request = None
+    if session.get("request_id"):
+        mr_res = sb.table("matching_requests").select(
+            "id, expert_type, title, status, created_at"
+        ).eq("id", session["request_id"]).limit(1).execute()
+        if mr_res.data:
+            matching_request = mr_res.data[0]
+
+    return {
+        "session":          session,
+        "messages":         messages,
+        "message_count":    len(messages),
+        "total_tokens":     total_tokens,
+        "matching_request": matching_request,
+    }
 
 
 def _parse_intent(text: str) -> str:

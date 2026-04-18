@@ -47,6 +47,8 @@ VERSION = "2.2.3"
 
 FCM_URL = "https://fcm.googleapis.com/fcm/send"
 
+# v2.2.1 BUG-FIX #1: site_type → construction_type 매핑
+# factories.construction_type CHECK 제약: '건축' | '토목' | '공통' | '기타'
 CONSTRUCTION_TYPE_MAP: Dict[str, str] = {
     "BUILDING":  "건축",
     "CIVIL":     "토목",
@@ -93,6 +95,11 @@ def calc_safety_manager(site_type: str, contract_amount: float, total_workers: i
     }
 
 
+# ──────────────────────────────────────────────
+# v2.0.0: factories 자동생성 헬퍼
+# v2.2.1: BUG-FIX #1 construction_type 매핑
+# ──────────────────────────────────────────────
+
 def _create_factory_for_site(supabase, site: dict) -> Optional[str]:
     try:
         contract_eok = float(site.get("contract_amount") or 0)
@@ -126,7 +133,15 @@ def _create_factory_for_site(supabase, site: dict) -> Optional[str]:
     return None
 
 
+# ──────────────────────────────────────────────
+# v2.0.0: 내부 진단 실행 함수
+# ──────────────────────────────────────────────
+
 def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
+    """
+    CONSTRUCTION sector 법령진단 실행.
+    반환: applicable_count / diagnosis_id / result_data / by_obligation_type / applicable_rules
+    """
     contract_eok = float(site.get("contract_amount") or 0)
     direct = int(site.get("direct_workers") or 0)
     subcon = int(site.get("subcon_workers") or 0)
@@ -203,11 +218,17 @@ def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
         }).eq("factory_id", factory_id).execute()
 
     return {
-        "applicable_count": total_applicable, "diagnosis_id": diagnosis_id,
-        "result_data": result_data, "by_obligation_type": result_data["summary"],
-        "applicable_rules": applicable,
+        "applicable_count":  total_applicable,
+        "diagnosis_id":      diagnosis_id,
+        "result_data":       result_data,
+        "by_obligation_type": result_data["summary"],
+        "applicable_rules":  applicable,
     }
 
+
+# ──────────────────────────────────────────────
+# v2.0.0: 내부 스케줄 생성 함수
+# ──────────────────────────────────────────────
 
 def _run_generate_schedules(supabase, factory_id: str, inspection_rules: list, company_id: Optional[str]) -> dict:
     existing = supabase.table("work_schedules").select("rule_code") \
@@ -243,7 +264,9 @@ def _run_generate_schedules(supabase, factory_id: str, inspection_rules: list, c
 
 def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
     """
+    v2.0.0: 현장 등록 시 자동 진단 + 스케줄 생성.
     v2.2.3 SB-01 BUG-FIX #3: inspection + action 모두 스케줄화 (이전: inspection만).
+    실패 시 logger.error 기록 후 무시 (현장 등록 자체는 성공 처리).
     """
     result = {"diagnosis": None, "schedules": None}
     try:
@@ -253,12 +276,14 @@ def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
         company_res = supabase.table("factories").select("company_id").eq("id", factory_id).single().execute()
         company_id = company_res.data.get("company_id") if company_res.data else None
 
+        # SB-01 BUG-FIX #3: inspection + action 둘 다
         inspection_rules = diag["result_data"].get("inspection_required") or []
         action_rules     = diag["result_data"].get("action_required") or []
         all_rules = inspection_rules + action_rules
         sched = _run_generate_schedules(supabase, factory_id, all_rules, company_id)
         result["schedules"] = sched
 
+        # v2.2.0 BE-1: inspection_sets 자동생성 [호출 위치 1]
         try:
             from routers.inspection_set_auto import auto_create_inspection_sets_from_diagnosis
             auto_create_inspection_sets_from_diagnosis(
@@ -334,6 +359,8 @@ class SiteCreate(BaseModel):
     site_address_detail: Optional[str] = None
     site_sido: Optional[str] = None
     site_sigungu: Optional[str] = None
+    # v2.2.3 (FS-05): 날씨 위젯용 WGS84 좌표 (선택)
+    # /juso/coord 변환 결과를 최초 1회 저장하여 반복 변환 제거
     latitude: Optional[float] = Field(None, description="WGS84 위도 (예: 37.5665)")
     longitude: Optional[float] = Field(None, description="WGS84 경도 (예: 126.9780)")
     start_date: Optional[date] = None
@@ -354,6 +381,7 @@ class SitePatch(BaseModel):
     site_address_detail: Optional[str] = None
     site_sido: Optional[str] = None
     site_sigungu: Optional[str] = None
+    # v2.2.3 (FS-05): 날씨 위젯용 WGS84 좌표 (선택)
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     start_date: Optional[date] = None
@@ -682,11 +710,15 @@ async def get_site_stats(site_id: str):
 
 
 # ══════════════════════════════════════════════
-# ② 건설 법령진단
+# ② 건설 법령진단 (독립 엔드포인트)
 # ══════════════════════════════════════════════
 
 @router.post("/sites/{site_id}/diagnose")
 async def diagnose_site(site_id: str):
+    """
+    건설현장 법령진단 독립 실행.
+    v2.2.0 BE-1: 진단 완료 후 inspection_sets 자동 생성 [호출 위치 2]
+    """
     supabase = get_supabase()
     try:
         site_res = supabase.table("construction_sites").select("*").eq("id", site_id).eq("is_active", True).limit(1).execute()
@@ -716,9 +748,10 @@ async def diagnose_site(site_id: str):
         return {
             "status": "success",
             "data": {
-                "site_id": site_id, "factory_id": factory_id,
-                "applicable_rules": diag["applicable_count"],
-                "diagnosis_id": diag["diagnosis_id"],
+                "site_id":            site_id,
+                "factory_id":         factory_id,
+                "applicable_rules":   diag["applicable_count"],
+                "diagnosis_id":       diag["diagnosis_id"],
                 "by_obligation_type": diag["by_obligation_type"],
             },
         }
@@ -727,6 +760,10 @@ async def diagnose_site(site_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ══════════════════════════════════════════════
+# ③ 작업일정 자동 생성 (독립 엔드포인트)
+# ══════════════════════════════════════════════
 
 @router.post("/sites/{site_id}/generate-schedules")
 async def generate_schedules(site_id: str):
@@ -862,17 +899,18 @@ async def delete_process(process_id: str):
 
 
 # ══════════════════════════════════════════════
-# ⑤ KCSC 마스터
+# ⑤ KCSC 마스터 (BE-4)
 # ══════════════════════════════════════════════
 
 @router.get("/kcsc/processes")
 async def list_kcsc_processes(
-    search: Optional[str] = Query(None),
-    construction_type: Optional[str] = Query(None),
-    work_type_code: Optional[str] = Query(None),
+    search: Optional[str] = Query(None, description="공정명 검색 (부분일치). 예) 굴착"),
+    construction_type: Optional[str] = Query(None, description="BUILDING / CIVIL / COMMON"),
+    work_type_code: Optional[str] = Query(None, description="작업 유형 코드. 예) EXCAVATION"),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
 ):
+    """BE-4: KCSC 공정 마스터 검색 API"""
     supabase = get_supabase()
     try:
         offset = (page - 1) * size

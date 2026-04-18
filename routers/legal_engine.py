@@ -40,7 +40,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.6.9"  # v5.6.9: 점검주기 정규화 — cycle_unit_std 기반 라벨 생성
+ENGINE_VERSION = "5.6.8"  # v5.6.8: diagnose/step1 완료 시 inspection_sets 자동 생성
 
 
 # ──────────────────────────────────────────────

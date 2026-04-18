@@ -1,5 +1,5 @@
 # routers/fix_providers_api.py — TAI Fix 업체 등록/조회 API
-# v1.1.0 (2026-04-15): fix_provider_overview 뷰 컬럼명 provider_id 반영, FK JOIN 컬럼명 수정
+# v1.1.0 (2026-04-15): fix_provider_overview 뷰 코드 코드에 provider_id 코드 적용
 # v1.0.0: 신규
 #   POST /connect/providers        — 업체 등록 (공개, 트랜잭션)
 #   GET  /connect/providers        — 업체 목록 (fix_provider_overview 뷰)
@@ -75,21 +75,21 @@ def create_provider(body: ProviderCreate):
 
     # ① 업체 기본 정보 INSERT
     provider_data = {
-        "company_name":     body.company_name.strip(),
-        "business_number":  body.business_number,
-        "representative":   body.representative,
-        "phone":            body.phone.strip(),
-        "email":            body.email.strip(),
-        "address":          body.address,
-        "latitude":         body.latitude,
-        "longitude":        body.longitude,
+        "company_name":    body.company_name.strip(),
+        "business_number": body.business_number,
+        "representative":  body.representative,
+        "phone":           body.phone.strip(),
+        "email":           body.email.strip(),
+        "address":         body.address,
+        "latitude":        body.latitude,
+        "longitude":       body.longitude,
         "established_year": body.established_year,
-        "employee_count":   body.employee_count,
-        "service_regions":  body.service_regions or [],
-        "description":      body.description,
-        "status":           "PENDING",
-        "created_at":       _now(),
-        "updated_at":       _now(),
+        "employee_count":  body.employee_count,
+        "service_regions": body.service_regions or [],
+        "description":     body.description,
+        "status":          "PENDING",
+        "created_at":      _now(),
+        "updated_at":      _now(),
     }
 
     try:

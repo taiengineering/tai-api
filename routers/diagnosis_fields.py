@@ -12,7 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from db.database import get_supabase
 
-router = APIRouter(prefix="/diagnosis", tags=["법령진단 입력항목"])
+router = APIRouter(prefix="/diagnosis", tags=["다에진 입력항목"])
 
 VALID_SECTORS = {"BUILDING", "INDUSTRY", "CONSTRUCTION"}
 
@@ -59,6 +59,7 @@ def get_diagnosis_fields(
 
     rows = res.data or []
 
+    # field_group 물로의 가닥 성을 고려한 정렬된 그룹핑
     group_order: list = []
     group_map: dict = defaultdict(list)
     seen_groups: set = set()
@@ -87,11 +88,11 @@ def get_diagnosis_fields(
     return {
         "success": True,
         "data": {
-            "sector":        sector,
-            "tier":          tier,
+            "sector":      sector,
+            "tier":        tier,
             "tiers_fetched": tiers_to_fetch,
-            "field_count":   total_fields,
-            "groups":        groups,
+            "field_count": total_fields,
+            "groups":      groups,
         },
     }
 
@@ -100,15 +101,15 @@ def get_diagnosis_fields(
 
 @router.get("/pricing")
 def get_diagnosis_pricing(
-    sector:           str           = Query(..., description="BUILDING | INDUSTRY | CONSTRUCTION"),
+    sector:           str = Query(..., description="BUILDING | INDUSTRY | CONSTRUCTION"),
     total_floor_area: Optional[float] = Query(None, description="연면적(㎡) — BUILDING 에서 필수"),
-    tier:             Optional[str]   = Query(None, description="INDUSTRY 에서 PAID1|PAID2|PAID3"),
+    tier:             Optional[str]  = Query(None, description="INDUSTRY 에서 PAID1|PAID2|PAID3"),
 ):
     """
     섭터 + 조건별 진단 가격 자동 판단.
 
     BUILDING: total_floor_area >= 5000 → 249,000원 / < 5000 → 99,000원
-    INDUSTRY: tier=PAID1 → 79K / PAID2 → 149K / PAID3 → 249K
+    INDUSTRY: tier=PAID1 →79K / PAID2 →149K / PAID3 →249K
     CONSTRUCTION: 199,000원 고정
 
     인증 불필요 (공개 API).
@@ -166,8 +167,8 @@ def get_diagnosis_pricing(
 
         p = row.data[0]
         TIER_MAP = {
-            "PAID1": {"fee": int(p["process_fee"]),     "label": "산업 PAID1 (기준)"},
-            "PAID2": {"fee": int(p["equipment_fee"]),   "label": "산업 PAID2 (확장)"},
+            "PAID1": {"fee": int(p["process_fee"]),   "label": "산업 PAID1 (기준)"},
+            "PAID2": {"fee": int(p["equipment_fee"]),  "label": "산업 PAID2 (확장)"},
             "PAID3": {"fee": int(p["total_report_fee"]), "label": "산업 PAID3 (종합)"},
         }
         if tier not in TIER_MAP:

@@ -1,10 +1,10 @@
-# main.py — v5.26.0
-# v5.26.0: diagnosis_integrated 라우터 추가 (진단통합 엔드포인트)
-# v5.25.1: overdue_checker 라우터 추가 (BE-10 점검 미이행 에스컬레이션)
-# v5.25.0: diagnosis_transform (BE-08) 라우터 추가
-# v5.24.0: fix_chat 라우터 추가 (TAI Fix 대화형 입력부)
-# v5.23.0: diagnosis_fields 라우터 추가
-# v5.22.0: fix_providers_api 라우터 추가
+# main.py — v5.31.0
+# v5.31.0: diagnosis_report 라우터 등록 (GET /diagnosis/report-pdf/{public_token})
+# v5.30.0: diagnosis_integrated 라우터 등록 (BE-10 진단통합 백엔드)
+# v5.29.0: diagnosis_plan_recommend 라우터 등록 (BE-08 진단 기반 플랜 추천)
+# v5.28.0: overdue_checker 라우터 등록 (BE-10 업무지연 에스켈레이션)
+# v5.27.0: diagnosis_transform 라우터 등록
+# v5.26.0: diagnosis_roi 라우터 등록
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -103,14 +103,18 @@ from routers.admin_connect           import router as admin_connect_router
 from routers.admin_pricing           import router as admin_pricing_router
 from routers.fix_providers_api       import router as fix_providers_router
 from routers.diagnosis_fields        import router as diagnosis_fields_router
-from routers.fix_chat                import router as fix_chat_router             # v5.24.0
-from routers.diagnosis_transform     import router as diagnosis_transform_router  # v5.25.0 BE-08
-from routers.overdue_checker         import router as overdue_checker_router      # v5.25.1 BE-10
-from routers.diagnosis_integrated    import router as diagnosis_integrated_router # v5.26.0
+from routers.fix_chat                import router as fix_chat_router
+from routers.diagnosis_autofill      import router as diagnosis_autofill_router
+from routers.diagnosis_roi           import router as diagnosis_roi_router
+from routers.diagnosis_transform     import router as diagnosis_transform_router
+from routers.overdue_checker         import router as overdue_checker_router
+from routers.diagnosis_plan_recommend import router as plan_recommend_router
+from routers.diagnosis_integrated    import router as diagnosis_integrated_router   # v5.30.0
+from routers.diagnosis_report        import router as diagnosis_report_router        # v5.31.0
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.26.0"
+APP_VERSION = "5.31.0"
 
 
 @asynccontextmanager
@@ -173,6 +177,10 @@ app.include_router(admin_pricing_router)
 app.include_router(fix_providers_router)
 app.include_router(diagnosis_fields_router)
 app.include_router(fix_chat_router)
+app.include_router(diagnosis_autofill_router)
+app.include_router(plan_recommend_router)           # 공개: 진단 결과 페이지 소비
+app.include_router(diagnosis_integrated_router)    # v5.30.0 — 공개: 마케팅사이트 익명 사용자
+app.include_router(diagnosis_report_router)        # v5.31.0 — 공개: 유료 PDF 온디맨드 생성
 
 # 인증 필요 엔드포인트
 app.include_router(auth_router)
@@ -244,9 +252,9 @@ app.include_router(safety_template_router)
 app.include_router(event_trigger_router)
 app.include_router(worker_registry_router)
 app.include_router(diagnosis_router)
-app.include_router(diagnosis_transform_router)  # v5.25.0 BE-08
-app.include_router(diagnosis_integrated_router)  # v5.26.0
-app.include_router(overdue_checker_router)      # v5.25.1 BE-10
+app.include_router(diagnosis_roi_router)
+app.include_router(diagnosis_transform_router)
+app.include_router(overdue_checker_router)
 app.include_router(tbm_router)
 app.include_router(tbm_templates_router)
 app.include_router(safety_meetings_router)

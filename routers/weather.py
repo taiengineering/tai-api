@@ -96,7 +96,7 @@ async def _edge_call(payload: dict, timeout: int = 20) -> dict:
         raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {str(e)[:100]}")
 
 
-def _resolve_lat_lon(site: dict) -> tuple:
+def _resolve_lat_lon(site: dict) -> tuple[float, float]:
     """
     construction_sites 레코드에서 위경도를 추출.
     우선순위: lat/lon 컬럼 → site_sido 매핑 → 서울 기본값
@@ -111,6 +111,7 @@ def _resolve_lat_lon(site: dict) -> tuple:
         if key in sido:
             return slat, slon
 
+    # 기본값: 서울
     return 37.5665, 126.9780
 
 
@@ -129,6 +130,10 @@ async def get_work_stoppage_by_site(
 ):
     """
     v1.3.0 SB-03: 건설현장 기준 작업중지 판정 (FE-SAFE-02 연동).
+
+    construction_sites → site_sido/lat/lon → Edge Function(/weather/now) 호출
+    → 법령 기준 작업중지 여부 + 상세 판정 근거 반환.
+    현장 정보가 없으면 404. Edge Function 오류 시 503.
     """
     supabase = get_supabase()
     try:
@@ -144,6 +149,7 @@ async def get_work_stoppage_by_site(
     site = site_res.data[0]
     lat, lon = _resolve_lat_lon(site)
 
+    # Edge Function 호출 (weather/now 액션)
     weather_data = await _edge_call({"action": "now", "lat": str(lat), "lon": str(lon)})
 
     return {
@@ -165,7 +171,10 @@ async def get_work_stoppage_by_site(
 async def get_alert_regions(
     reg_type: Optional[str] = Query(None, description="구역 유형 필터 (L=육상, S=해상, 없으면 전체)"),
 ):
-    """기상특보 구역 코드 목록 조회."""
+    """
+    기상특보 구역 코드 목록 조회.
+    apihub.kma.go.kr 예특보 > 기상특보 > 1.1 특보구역 API 사용.
+    """
     return await _edge_call({"action": "alert-regions", "reg_type": reg_type or ""})
 
 

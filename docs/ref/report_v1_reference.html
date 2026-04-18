@@ -1,0 +1,51 @@
+<!-- 초창기 리포트 템플릿 (참고용) - Jinja2 + WeasyPrint 기반 -->
+<!-- 2026-04-18 기획창 세션5에서 참고자료로 등록 -->
+<!-- 재사용 가능: CSS 디자인 시스템, 페이지 레이아웃, 컴포넌트 스타일 -->
+<!-- 파일 위치: 원본은 대표님 로컬 report_v1.html -->
+
+<!-- 참고: 실제 파일은 1076줄, 여기에는 구조만 기록 -->
+<!-- 전체 파일은 대표님 로컬에 보관 중 -->
+
+<!--
+=== 구조 요약 ===
+PAGE 1: 표지 (Cover) — 네이비/다크 그라데이션, 회사정보 테이블
+PAGE 2: 목차 + 면책조항
+PAGE 3: SECTION 01 시설 개요 (기본정보/설비현황/운영현황)
+PAGE 4: SECTION 02 적용 법령 및 사회적 배경
+PAGE 5: SECTION 03 법적 의무 사항 진단 결과 (선임/점검)
+PAGE 6: SECTION 04 처벌 조항 및 리스크 분석
+PAGE 7: SECTION 05 사고 통계 및 위험 현황
+PAGE 8: SECTION 06 개선 권고사항 및 컨설팅 제안
+
+=== 재사용 가능 CSS 컴포넌트 ===
+- .cover, .cover-top, .cover-bottom — 표지 레이아웃
+- .ph, .pf — 헤더/푸터
+- .sh, .sh-accent, .sh-body — 섹션 헤더
+- .ss — 서브섹션 제목
+- .sc-wrap, .sc — 요약 카드 4열
+- .badge (.b-high, .b-med, .b-low, .b-urgent) — 위험도 뱃지
+- .ib (.blue, .gray, .red, .orange, .green) — 정보 박스
+- .wb — 경고 박스
+- .pb, .pb-row — 처벌 하이라이트
+- .rc-wrap, .rc — 권고사항 카드
+- .stat-hl, .shl-item — 통계 하이라이트
+- .toc, .toc-row — 목차
+- .bt — 본문 텍스트
+- table (.th-dark, .th-blue, .th-red) — 테이블 스타일
+- .td-label, .td-val, .td-red, .td-green — 셀 스타일
+- @media print — 인쇄 최적화
+
+=== Jinja2 변수 (25개) ===
+company_name, building_type, report_date, receipt_no, report_type
+business_no, ceo_name, address, industry_type, worker_count
+area, floors, equip_summary, hazard_summary, work_hours
+laws_count, appointment_count, inspection_count, urgent_count
+csia_applicable (조건문)
+laws_list, appointment_list, penalty_list (반복문)
+urgent_actions, mid_actions (반복문)
+
+=== 기술 스택 ===
+Jinja2 템플릿 → WeasyPrint HTML→PDF 변환
+Noto Sans KR + DM Sans 폰트
+A4 (210mm × 297mm) 레이아웃
+-->

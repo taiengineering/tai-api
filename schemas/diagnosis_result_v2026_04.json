@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://api.taieng.co.kr/schemas/diagnosis_result_v2026_04.json",
+  "title": "TAI Safe 법령진단 결과 스키마 v2026.04",
+  "description": "factory_diagnosis_results.result_data 표준 스키마. 기획창 승인 없이 변경 금지.",
+  "type": "object",
+  "required": ["schema_version", "tier", "sector", "generated_at", "obligations", "risk_summary"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "2026.04",
+      "description": "스키마 버전 고정값"
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["FREE", "PAID", "PAID1", "PAID2", "PAID3"]
+    },
+    "sector": {
+      "type": "string",
+      "enum": ["BUILDING", "INDUSTRY", "CONSTRUCTION"]
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "진단 생성 시각 (ISO 8601)"
+    },
+    "valid_until": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "진단 유효 기간 종료 시각"
+    },
+    "headline": {
+      "type": "object",
+      "required": ["summary", "severity"],
+      "properties": {
+        "summary": { "type": "string" },
+        "severity": {
+          "type": "string",
+          "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+        }
+      }
+    },
+    "applicable_laws": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "name", "applicable"],
+        "properties": {
+          "code":          { "type": "string" },
+          "name":          { "type": "string" },
+          "applicable":    { "type": "boolean" },
+          "threshold_hit": { "type": ["boolean", "null"] }
+        }
+      }
+    },
+    "obligations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "risk_level"],
+        "properties": {
+          "id":       { "type": "string" },
+          "law_ref":  { "type": ["string", "null"] },
+          "title":    { "type": "string" },
+          "due": {
+            "type": ["object", "null"],
+            "properties": {
+              "type":    { "type": "string", "enum": ["DAYS", "MONTHS", "ANNUAL", "ONETIME", "ONGOING"] },
+              "value":   { "type": ["number", "null"] },
+              "display": { "type": "string" }
+            }
+          },
+          "penalty": {
+            "type": ["object", "null"],
+            "properties": {
+              "krw":      { "type": ["integer", "null"] },
+              "criminal": { "type": ["boolean", "null"] },
+              "type":     { "type": ["string", "null"] }
+            }
+          },
+          "risk_level": {
+            "type": "string",
+            "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+          },
+          "is_retroactive": { "type": ["boolean", "null"] },
+          "evidence":       { "type": "array", "items": { "type": "string" } },
+          "action_url":     { "type": ["string", "null"] }
+        }
+      }
+    },
+    "risk_summary": {
+      "type": "object",
+      "required": ["critical", "high", "medium", "low"],
+      "properties": {
+        "critical": { "type": "integer", "minimum": 0 },
+        "high":     { "type": "integer", "minimum": 0 },
+        "medium":   { "type": "integer", "minimum": 0 },
+        "low":      { "type": "integer", "minimum": 0 }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "description": "단일 warnings 키로 통합 (urgent_action_items/construction_specific_tips/edge_case_warning 폐기)",
+      "items": {
+        "type": "object",
+        "required": ["code", "message", "level"],
+        "properties": {
+          "code":    { "type": "string" },
+          "message": { "type": "string" },
+          "level":   { "type": "string", "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"] }
+        }
+      }
+    },
+    "inspection_schedule": {
+      "type": ["object", "null"],
+      "properties": {
+        "daily":      { "type": ["integer", "null"] },
+        "weekly":     { "type": ["integer", "null"] },
+        "monthly":    { "type": ["integer", "null"] },
+        "quarterly":  { "type": ["integer", "null"] },
+        "semiannual": { "type": ["integer", "null"] },
+        "annual":     { "type": ["integer", "null"] },
+        "onetime":    { "type": ["integer", "null"] }
+      }
+    },
+    "exposure": {
+      "type": ["object", "null"],
+      "properties": {
+        "penalty_max_krw":   { "type": ["integer", "null"] },
+        "criminal_risk":     { "type": ["boolean", "null"] },
+        "current_exposure":  { "type": ["string", "null"], "enum": ["HIGH", "MEDIUM", "LOW", null] }
+      }
+    },
+    "next_actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "label"],
+        "properties": {
+          "type":    { "type": "string" },
+          "label":   { "type": "string" },
+          "benefit": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "roi": {
+      "type": ["object", "null"],
+      "properties": {
+        "annual_penalty_risk_krw":   { "type": ["integer", "null"] },
+        "tai_safe_annual_cost_krw":  { "type": ["integer", "null"] },
+        "payback_days":              { "type": ["integer", "null"] },
+        "risk_reduction_percent":    { "type": ["number", "null"] }
+      }
+    },
+    "rule_count_total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "전체 법령 룰 수 (조건 미충족 포함)"
+    },
+    "rule_count_shown": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "해당 시설에 적용되는 룰 수 (obligations 배열 길이와 일치)"
+    }
+  },
+  "additionalProperties": true,
+  "$comment": "additionalProperties=true: 기존 legacy 키(appointment_required 등) 허용. 신규 필드는 반드시 기획창 승인 후 스키마에 추가."
+}
