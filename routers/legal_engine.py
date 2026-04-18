@@ -40,7 +40,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.6.8"  # v5.6.8: diagnose/step1 완료 시 inspection_sets 자동 생성
+ENGINE_VERSION = "5.6.9"  # v5.6.9: 점검주기 정규화 — cycle_unit_std 기반 라벨 생성
 
 
 # ──────────────────────────────────────────────
@@ -319,21 +319,44 @@ def _is_report(rule: dict) -> bool:
 
 
 def _get_inspection_cycle_label(rule: dict) -> str:
-    val  = rule.get("inspection_cycle_value")
-    unit = rule.get("inspection_cycle_unit_code", "")
-    if not val and not unit: return ""
-    unit_label = INSPECTION_CYCLE_UNIT_MAP.get(str(unit), f"코드({unit})")
-    # unit_code 007~013: 이미 "2년마다" 등 숫자 포함 → 그대로 반환
-    if str(unit) not in ("001", "002", "003", "004", "005", "006"):
-        return unit_label
-    # unit_code 001~006: "월 1회" 등 → val!=1이면 "1회"를 "N회"로 교체
-    if val and str(val) != "1":
-        return unit_label.replace("1회", f"{val}회")
-    return unit_label
+    """정규화된 주기 라벨 생성 (cycle_unit_std 기반, unit_code fallback)."""
+    val = rule.get("inspection_cycle_value")
+    unit = rule.get("cycle_unit_std") or ""
+    schedule = _get_schedule_type(rule)
+
+    # cycle_unit_std 없으면 unit_code에서 역산
+    if not unit:
+        code = str(rule.get("inspection_cycle_unit_code") or "")
+        _CODE_TO_UNIT = {
+            "001": "day", "002": "week", "003": "month",
+            "004": "quarter", "005": "half_year", "006": "year",
+            "007": "year", "008": "year", "009": "year",
+            "010": "year", "011": "year", "012": "year", "013": "year",
+        }
+        unit = _CODE_TO_UNIT.get(code, "")
+
+    if not val:
+        return ""
+
+    val = int(float(val))
+
+    if val == 1:
+        _SHORT = {
+            "year": "연 1회", "half_year": "반기 1회", "quarter": "분기 1회",
+            "month": "월 1회", "week": "주 1회", "day": "매일",
+        }
+        return _SHORT.get(unit, f"1{unit}")
+    else:
+        _UNIT_LABELS = {
+            "year": "년", "half_year": "반기", "quarter": "분기",
+            "month": "개월", "week": "주", "day": "일",
+        }
+        return f"{val}{_UNIT_LABELS.get(unit, unit)}마다"
 
 
 def _get_schedule_type(rule: dict) -> str:
-    if rule.get("inspection_cycle_unit_code"): return "PERIODIC"
+    if rule.get("inspection_cycle_unit_code") or rule.get("cycle_unit_std"):
+        return "PERIODIC"
     if rule.get("construction_work_type"): return "BEFORE_WORK"
     return "ON_DEMAND"
 
@@ -377,7 +400,14 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
     report_method_std  = rule.get("report_method_std") or ""
     cycle_code  = rule.get("inspection_cycle_unit_code") or ""
     cycle_label = _get_inspection_cycle_label(rule)
-    cycle_unit, cycle_int = CYCLE_CODE_MAP.get(cycle_code, ("", 0))
+    # cycle_unit_std 우선, unit_code fallback
+    _std = rule.get("cycle_unit_std") or ""
+    if _std:
+        _STD_TO_UNIT = {"year": "year", "half_year": "half_year", "quarter": "quarter", "month": "month", "week": "week", "day": "day"}
+        cycle_unit = _STD_TO_UNIT.get(_std, _std)
+        cycle_int = int(rule.get("inspection_cycle_value") or 0)
+    else:
+        cycle_unit, cycle_int = CYCLE_CODE_MAP.get(cycle_code, ("", 0))
     schedule_type = _get_schedule_type(rule)
     return {
         "rule_id": rule.get("rule_id", ""), "rule_type": str(rule.get("rule_type_code") or ""),
@@ -390,6 +420,8 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
         "inspection_cycle_unit": cycle_unit,
         "inspection_cycle_int": cycle_int,
         "schedule_type": schedule_type,
+        "cycle_base_type": rule.get("cycle_base_type") or "",
+        "cycle_base_guide": rule.get("cycle_base_guide") or "",
         "construction_work_type": rule.get("construction_work_type") or "",
         "executor_type_code": executor_type_code,
         "executor_type_label": EXECUTOR_TYPE_MAP.get(executor_type_code, executor_type_code),
