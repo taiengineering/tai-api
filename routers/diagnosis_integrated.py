@@ -1,5 +1,5 @@
 """
-routers/diagnosis_integrated.py — v1.0.1
+routers/diagnosis_integrated.py — v1.1.0
 
 BE-10: 법령진단 통합 백엔드
   TASK 1: POST /diagnosis/auth/prepare   이니시스 팝업 파라미터 생성
@@ -9,6 +9,10 @@ BE-10: 법령진단 통합 백엔드
   TASK 4: GET  /diagnosis/price-tier     가격 자동 판정
   TASK 5: POST /diagnosis/upgrade        업그레이드 차액 결제
   TASK 6: POST /diagnosis/disclaimer     면책 동의 저장
+
+v1.1.0 수정:
+  FIX-6: FREE 티어 지원 — FE tier='FREE' 전달 시 _auto_tier 우회하여 {sector}_FREE 적용
+  FIX-7: form_data 필드 매핑 — FE 폼 데이터(area, worker_count 등)를 개별 필드로 변환
 
 v1.0.1 수정:
   FIX-1: "면접" → "면책" 오타 전체 수정
@@ -50,7 +54,7 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/diagnosis", tags=["진단통합"])
 
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 
 # 이니시스 환경변수
 INICIS_MID      = os.getenv("INICIS_VERIFY_MID", "")
@@ -424,6 +428,9 @@ class DiagnosisRunBody(BaseModel):
     building_use_type: Optional[str]   = None
     construction_type: Optional[str]   = Field(None, description="음/토/건축/기능 등")
     region:            Optional[str]   = None
+    # FE 전달 필드
+    tier:              Optional[str]   = Field(None, description="FREE | PAID 등 FE 전달 티어")
+    form_data:         Optional[dict]  = Field(None, description="FE 폼 데이터 (개별 필드로 매핑)")
     # 유료 결제 정보
     payment_ref:       Optional[str]   = Field(None, description="유료 결제 참조 번호 (무료이면 생략)")
 
@@ -463,16 +470,35 @@ async def run_diagnosis(body: DiagnosisRunBody):
     if not disc_res.data or not disc_res.data[0].get("agreed"):
         raise HTTPException(status_code=400, detail="면책 동의가 필요합니다.")  # FIX-1
 
+    # 2.5. form_data → 개별 필드 매핑 (FE 폼 데이터 지원)
+    if body.form_data:
+        fd = body.form_data
+        if not body.floor_area and fd.get("area"):
+            body.floor_area = float(fd["area"])
+        if not body.total_floor_area and fd.get("total_floor_area"):
+            body.total_floor_area = float(fd["total_floor_area"])
+        if not body.worker_count and fd.get("worker_count"):
+            body.worker_count = int(fd["worker_count"])
+        if not body.building_use_type and fd.get("building_use_type"):
+            body.building_use_type = fd["building_use_type"]
+        if not body.region and fd.get("address"):
+            body.region = fd["address"]
+
     # 3. 섹터 + tier 판정
     sector = body.sector.strip().upper()
     # INDUSTRY 내부에서는 MANUFACTURING 사용
     engine_sector = "MANUFACTURING" if sector == "INDUSTRY" else sector
-    tier_code = _auto_tier(
-        sector,
-        floor_area=body.floor_area or 0.0,
-        contract_amount_eok=body.contract_amount_eok or 0.0,
-        user_tier=body.user_tier,
-    )
+
+    # FE에서 tier='FREE'로 보내면 무료 티어 사용
+    if body.tier and body.tier.upper() == "FREE":
+        tier_code = f"{sector}_FREE"
+    else:
+        tier_code = _auto_tier(
+            sector,
+            floor_area=body.floor_area or 0.0,
+            contract_amount_eok=body.contract_amount_eok or 0.0,
+            user_tier=body.user_tier,
+        )
     is_free = tier_code in FREE_TIER_CODES
 
     # 4. 무료 횟수 제한
