@@ -5,6 +5,7 @@ GET  /anonymous-diagnosis/{token}  조회
   - 기본(Nexas 등): 비로그인 partial만; 로그인+귀속 시 full
   - 구버전 taieng.co.kr: ?tai_legacy_public=1 로 full (로그인 불필요)
 POST /anonymous-diagnosis/{token}/claim  로그인 사용자 귀속
+GET  /anonymous-diagnosis/{token}/recommend-plan  BE-09 플랜 추천
 """
 from __future__ import annotations
 
@@ -20,11 +21,30 @@ from routers.auth import get_current_user
 from routers.legal_engine import DiagnoseStep1Body, diagnose_step1
 from routers.legal_engine import ENGINE_VERSION as LEGAL_ENGINE_VERSION
 
+# BE-09: BE-08 추천 함수 재사용 (코드 중복 금지)
+from routers.diagnosis_plan_recommend import (
+    _recommend_industry,
+    _recommend_building,
+    _recommend_construction,
+    _build_alternatives,
+    _build_comparison,
+    _effective_obligation_count,
+    VERSION as PLAN_RECOMMEND_VERSION,
+)
+
 router = APIRouter(prefix="/anonymous-diagnosis", tags=["익명 무료진단"])
 
 RULE_VERSION = "master_building_legal_rules:v1"
 SOURCE_TYPE_DEFAULT = "site_free"
 TTL_DAYS = 7
+
+# BE-09: 익명 진단 sector → 추천 엔진 sector 정규화 매핑
+# MANUFACTURING(법령엔진 내부 코드) → INDUSTRY(추천 엔진)
+# SPECIAL_FACILITY(기타시설)        → BUILDING(추천 엔진)
+_SECTOR_NORMALIZE: Dict[str, str] = {
+    "MANUFACTURING":   "INDUSTRY",
+    "SPECIAL_FACILITY": "BUILDING",
+}
 
 
 def _now() -> datetime:
@@ -352,6 +372,110 @@ def _fetch_row(token: str) -> Dict[str, Any]:
         except Exception:
             pass
     return row
+
+
+# ── BE-09: 토큰 기반 플랜 추천 (/{token} 보다 먼저 등록) ─────────────
+@router.get("/{token}/recommend-plan")
+def recommend_plan_by_token(token: str):
+    """
+    BE-09: 익명 진단 토큰 기반 SaaS 플랜 추천.
+
+    BE-08(_recommend_* 함수)을 그대로 재사용하며 추가 코드 중복 없음.
+
+    sector 보정:
+      MANUFACTURING   → INDUSTRY  (법령엔진 내부 코드 → 추천 엔진 코드)
+      SPECIAL_FACILITY → BUILDING (기타시설 → 건물 플랜)
+
+    입력 데이터 소스:
+      full_result.headline.severity (없으면 risk_level)
+      full_result.key_obligations[] 길이 (없으면 applicable_count)
+      input_data.workers
+      full_result.roi.annual_penalty_risk_krw
+    """
+    row = _fetch_row(token)
+
+    full: Dict[str, Any] = row.get("full_result") or {}
+    input_data: Dict[str, Any] = row.get("input_data") or {}
+
+    # ── sector 추출 & 보정 ──────────────────────────────────────────
+    raw_sector = str(
+        input_data.get("sector")
+        or full.get("sector")
+        or ""
+    ).upper()
+    sector = _SECTOR_NORMALIZE.get(raw_sector, raw_sector)
+
+    if sector not in ("INDUSTRY", "BUILDING", "CONSTRUCTION"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"추천을 지원하지 않는 섹터입니다: '{raw_sector}'. "
+                "무료 진단 후 결과를 확인해 주세요."
+            ),
+        )
+
+    # ── 입력 변수 추출 ──────────────────────────────────────────────
+    # severity: headline.severity 우선, 없으면 risk_level
+    headline: Dict[str, Any] = full.get("headline") or {}
+    severity: str = str(
+        headline.get("severity")
+        or full.get("risk_level")
+        or "LOW"
+    ).upper()
+
+    # obl_cnt: key_obligations 배열 길이 우선, 없으면 applicable_count
+    key_obl = full.get("key_obligations") or []
+    obl_cnt: int = (
+        len(key_obl)
+        if key_obl
+        else int(full.get("applicable_count") or 0)
+    )
+
+    workers: int = int(input_data.get("workers") or 0)
+
+    penalty_risk_krw: int = int(
+        (full.get("roi") or {}).get("annual_penalty_risk_krw") or 0
+    )
+
+    # ── BE-08 추천 함수 재사용 ──────────────────────────────────────
+    if sector == "INDUSTRY":
+        plan_code, reasons = _recommend_industry(severity, obl_cnt, workers)
+    elif sector == "BUILDING":
+        plan_code, reasons = _recommend_building(severity, obl_cnt, workers)
+    else:  # CONSTRUCTION
+        plan_code, reasons = _recommend_construction(severity, obl_cnt, workers)
+
+    from routers.diagnosis_plan_recommend import _PLANS  # 지역 import (순환 방지)
+    plan_info = _PLANS[plan_code]
+
+    return {
+        "status": "success",
+        "version": PLAN_RECOMMEND_VERSION,
+        "source": "anonymous_token",
+        "token": token,
+        "sector": sector,
+        "sector_raw": raw_sector,
+        "input_summary": {
+            "severity":  severity,
+            "obl_count": obl_cnt,
+            "workers":   workers,
+        },
+        "recommended": {
+            "plan_code":  plan_code,
+            "plan_name":  plan_info["name"],
+            "monthly_krw": plan_info["monthly"] if not plan_info["is_custom"] else None,
+            "is_custom":  plan_info["is_custom"],
+            "pricing_note": "맞춤 견적 문의" if plan_info["is_custom"] else f"월 {plan_info['monthly']:,}원 (부가세 별도)",
+        },
+        "reasons":      reasons,
+        "alternatives": _build_alternatives(sector, plan_code),
+        "comparison":   _build_comparison(plan_code, penalty_risk_krw),
+        "cta": {
+            "primary":   {"label": "지금 시작하기",       "action": "go_pricing", "plan_code": plan_code},
+            "secondary": {"label": "전체 요금제 비교하기", "action": "go_pricing_all"},
+            "signup":    {"label": "회원가입 후 상세 진단", "action": "go_register"},
+        },
+    }
 
 
 @router.get("/{token}")
