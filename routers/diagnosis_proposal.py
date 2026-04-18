@@ -1,22 +1,20 @@
 """
-routers/diagnosis_proposal.py — v1.0.0
+routers/diagnosis_proposal.py — v1.0.1
 기안용 PDF 생성 — 결재권자용 3페이지 리스크 보고서
+
+v1.0.1 (2026-04-18):
+  - penalty_summary 한국어 텍스트 파싱 수정 (ValueError 해결)
+  - penalty_amount 없을 때 penalty_summary에서 금액 추출
 
 v1.0.0 (2026-04-18):
   GET /diagnosis/proposal-pdf/{public_token}
-  - anonymous_diagnosis_results 테이블에서 public_token으로 조회
-  - Jinja2 렌더링 (templates/proposal_pdf.html)
-  - xhtml2pdf PDF 생성
-  - StreamingResponse(application/pdf) 반환
-  - 공개 엔드포인트: public_token 자체가 접근 제어
-  - SVG 미사용 (xhtml2pdf 호환성): HTML 테이블·바차트로 대체
-  - 플랜 추천: diagnosis_plan_recommend.py 함수 재사용
 """
 from __future__ import annotations
 
 import io
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -28,7 +26,7 @@ from db.supabase_client import get_supabase
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/diagnosis", tags=["기안PDF"])
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 # ─── 상수 ───────────────────────────────────────────────────────────────────
 
@@ -45,7 +43,6 @@ SECTOR_NORMALIZE: Dict[str, str] = {
     "SPECIAL_FACILITY": "BUILDING",
 }
 
-# 가격은 PRICING_FINAL.md 기준 (diagnosis_plan_recommend._PLANS와 동기화)
 _PLANS: Dict[str, Dict[str, Any]] = {
     "INDUSTRY_STARTER_V2":      {"name": "산업 STARTER",  "monthly": 79000},
     "INDUSTRY_BUSINESS_V2":     {"name": "산업 BUSINESS", "monthly": 149000},
@@ -59,8 +56,8 @@ _PLANS: Dict[str, Dict[str, Any]] = {
     "CONSTRUCTION_CUSTOM_V2":   {"name": "건설 CUSTOM",    "monthly": None},
 }
 
-_AGENCY_MONTHLY_LOW  = 1_500_000   # 대행사 하한
-_AGENCY_MONTHLY_HIGH = 3_000_000   # 대행사 상한
+_AGENCY_MONTHLY_LOW  = 1_500_000
+_AGENCY_MONTHLY_HIGH = 3_000_000
 
 
 # ─── 유틸 ───────────────────────────────────────────────────────────────────
@@ -69,8 +66,46 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _parse_penalty_krw(text: Any) -> float:
+    """한국어 과태료·벌금 텍스트에서 원(₩) 금액 추출.
+    Examples:
+        '300만원 이하 과태료'       → 3_000_000
+        '1,500만원 이하 과태료'     → 15_000_000
+        '10억원 이하 벌금'          → 1_000_000_000
+        '징역 1년 또는 10억원 이하' → 1_000_000_000
+        '미보존 시 과태료 200만원'  → 2_000_000
+        None / '' / 0              → 0
+    """
+    if text is None:
+        return 0.0
+    if isinstance(text, (int, float)):
+        return float(text)
+    s = str(text).strip()
+    if not s:
+        return 0.0
+
+    # 이미 숫자면 그대로
+    try:
+        return float(s)
+    except ValueError:
+        pass
+
+    best = 0.0
+
+    # '억원' 패턴
+    for m in re.finditer(r'([0-9,]+(?:\.[0-9]+)?)\s*억\s*원?', s):
+        v = float(m.group(1).replace(',', ''))
+        best = max(best, v * 100_000_000)
+
+    # '만원' 패턴
+    for m in re.finditer(r'([0-9,]+(?:\.[0-9]+)?)\s*만\s*원?', s):
+        v = float(m.group(1).replace(',', ''))
+        best = max(best, v * 10_000)
+
+    return best
+
+
 def _format_penalty(amount: float) -> str:
-    """과태료 금액을 한국어 단위로 표시."""
     if amount <= 0:
         return "법령 기준"
     if amount >= 100_000_000:
@@ -80,6 +115,16 @@ def _format_penalty(amount: float) -> str:
         v = amount / 10_000
         return f"{int(v):,}만원"
     return f"{int(amount):,}원"
+
+
+def _get_penalty_from_rule(r: Dict[str, Any]) -> float:
+    """규칙 dict에서 과태료 금액 추출 (penalty_amount → penalty_summary 폴백)."""
+    amt = r.get("penalty_amount")
+    if amt is not None:
+        parsed = _parse_penalty_krw(amt)
+        if parsed > 0:
+            return parsed
+    return _parse_penalty_krw(r.get("penalty_summary") or r.get("penalty_text") or "")
 
 
 # ─── DB 조회 ────────────────────────────────────────────────────────────────
@@ -115,49 +160,43 @@ def _fetch_row(token: str) -> Dict[str, Any]:
 # ─── TOP 5 리스크 추출 ──────────────────────────────────────────────────────
 
 def _get_top5(full: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    penalty_amount 기준 TOP 5 리스크 추출.
-    우선순위: rules_table → key_obligations → 카테고리별 required 리스트
-    """
     def _parse_items(items: Optional[list]) -> List[Dict[str, Any]]:
         result = []
         for r in (items or []):
             if not isinstance(r, dict):
                 continue
-            amt = float(r.get("penalty_amount") or 0)
+            amt = _get_penalty_from_rule(r)
+            penalty_text = (
+                r.get("penalty_text") or r.get("penalty_summary") or
+                (_format_penalty(amt) if amt > 0 else "-")
+            )
             result.append({
                 "title": (
                     r.get("rule_name") or r.get("title") or
-                    r.get("obligation") or r.get("name") or "법적 의무 사항"
+                    r.get("obligation_summary") or r.get("obligation") or
+                    r.get("name") or "법적 의무 사항"
                 ),
                 "law": (
                     r.get("law_name") or r.get("law") or
                     r.get("law_short_name") or "-"
                 ),
-                "penalty": (
-                    r.get("penalty_text") or r.get("punishment") or
-                    (_format_penalty(amt) if amt > 0 else "-")
-                ),
+                "penalty": penalty_text,
                 "amount": amt,
             })
         return result
 
     candidates: List[Dict[str, Any]] = []
 
-    # 1순위: rules_table
     candidates = _parse_items(full.get("rules_table"))
 
-    # 2순위: key_obligations
     if not candidates:
         candidates = _parse_items(full.get("key_obligations"))
 
-    # 3순위: 카테고리별 required 리스트
     if not candidates:
         for key in ("appointment_required", "inspection_required",
                     "action_required", "report_required"):
             candidates.extend(_parse_items(full.get(key)))
 
-    # 중복 제거 (title 앞 30자 기준)
     seen: set = set()
     deduped: List[Dict[str, Any]] = []
     for c in candidates:
@@ -178,7 +217,6 @@ def _recommend_plan(
     obl_cnt: int,
     workers: int,
 ) -> Tuple[str, Dict[str, Any]]:
-    """diagnosis_plan_recommend.py 함수 재사용 (코드 중복 0줄)."""
     try:
         from routers.diagnosis_plan_recommend import (
             _recommend_industry,
@@ -206,7 +244,6 @@ def _build_context(row: Dict[str, Any]) -> Dict[str, Any]:
     partial:    Dict[str, Any] = row.get("partial_result") or {}
     full:       Dict[str, Any] = row.get("full_result") or {}
 
-    # 섹터 정규화
     raw_sector = str(
         input_data.get("sector") or
         full.get("sector") or
@@ -216,7 +253,6 @@ def _build_context(row: Dict[str, Any]) -> Dict[str, Any]:
     sector       = SECTOR_NORMALIZE.get(raw_sector, raw_sector)
     sector_label = SECTOR_LABEL.get(raw_sector, "산업")
 
-    # 기본 정보
     company_name = (
         input_data.get("company_name") or
         input_data.get("site_kind") or
@@ -229,7 +265,6 @@ def _build_context(row: Dict[str, Any]) -> Dict[str, Any]:
         0
     )
 
-    # 요약 수치
     summary      = partial.get("summary") or full.get("summary") or {}
     total        = int(summary.get("total")   or full.get("applicable_count") or 0)
     appointment  = int(summary.get("appointment") or 0)
@@ -240,7 +275,6 @@ def _build_context(row: Dict[str, Any]) -> Dict[str, Any]:
         int(summary.get("notify") or 0)
     )
 
-    # 위험도·법령 수
     risk_level = str(
         partial.get("risk_level") or full.get("risk_level") or "MEDIUM"
     ).upper()
@@ -248,7 +282,7 @@ def _build_context(row: Dict[str, Any]) -> Dict[str, Any]:
         partial.get("law_badges") or full.get("law_badges") or []
     )
 
-    # 최대 과태료 산출
+    # 최대 과태료 산출 — 한국어 텍스트 파싱
     all_rules_flat: List[Dict[str, Any]] = []
     for key in ("appointment_required", "inspection_required",
                 "action_required", "report_required"):
@@ -256,31 +290,26 @@ def _build_context(row: Dict[str, Any]) -> Dict[str, Any]:
     all_rules_flat.extend(full.get("rules_table") or [])
     all_rules_flat.extend(full.get("key_obligations") or [])
     max_penalty = max(
-        (float(r.get("penalty_amount") or 0) for r in all_rules_flat),
+        (_get_penalty_from_rule(r) for r in all_rules_flat),
         default=0.0,
     )
     max_penalty_text = _format_penalty(max_penalty)
 
-    # TOP 5
     top5 = _get_top5(full)
 
-    # 중대재해법
     csia_applicable = workers >= 50
 
-    # 플랜 추천
     plan_code, plan_info = _recommend_plan(
         sector, risk_level, total, workers
     )
     monthly = plan_info.get("monthly")
     plan_price = f"월 {monthly:,}원" if monthly else "맞춤 견적"
 
-    # 연간 절감액 (대행사 대비)
     monthly_plan = monthly or 149_000
     annual_savings_low  = max(0, int((_AGENCY_MONTHLY_LOW  - monthly_plan) * 12 / 10_000))
     annual_savings_high = max(0, int((_AGENCY_MONTHLY_HIGH - monthly_plan) * 12 / 10_000))
 
     return {
-        # 기본
         "company_name": company_name,
         "report_date":  report_date,
         "sector_label": sector_label,
@@ -288,7 +317,6 @@ def _build_context(row: Dict[str, Any]) -> Dict[str, Any]:
         "risk_level":   risk_level,
         "workers":      workers,
         "report_no":    str(row.get("public_token", ""))[:8].upper(),
-        # 요약
         "total":         total,
         "appointment":   appointment,
         "inspection":    inspection,
@@ -296,16 +324,12 @@ def _build_context(row: Dict[str, Any]) -> Dict[str, Any]:
         "report_notify": report_notify,
         "law_count":     law_count,
         "max_penalty_text": max_penalty_text,
-        # 리스크
         "top5": top5,
-        # 중처법
         "csia_applicable": csia_applicable,
-        # 플랜
         "recommended_plan_name":    plan_info.get("name", ""),
         "recommended_plan_price":   plan_price,
         "recommended_plan_monthly": monthly or 0,
         "plan_code": plan_code,
-        # 비용 비교
         "annual_savings_low":  annual_savings_low,
         "annual_savings_high": annual_savings_high,
     }
@@ -366,15 +390,9 @@ def get_proposal_pdf(public_token: str):
     """
     기안용 PDF 생성 — 결재권자용 3페이지 리스크 보고서
 
-    공개 엔드포인트 (인증 불필요).
-    public_token 자체가 접근 제어 역할을 합니다.
-
     Page 1: 경영진 요약 + 위험도 + TOP 5 리스크
     Page 2: 비용 비교 + 중대재해법 경고
     Page 3: TAI 소개 + 도입 4단계 + 추천 플랜 견적
-
-    Returns:
-        application/pdf — StreamingResponse
     """
     row     = _fetch_row(public_token)
     context = _build_context(row)
