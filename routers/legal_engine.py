@@ -323,8 +323,12 @@ def _get_inspection_cycle_label(rule: dict) -> str:
     unit = rule.get("inspection_cycle_unit_code", "")
     if not val and not unit: return ""
     unit_label = INSPECTION_CYCLE_UNIT_MAP.get(str(unit), f"코드({unit})")
+    # unit_code 007~013: 이미 "2년마다" 등 숫자 포함 → 그대로 반환
+    if str(unit) not in ("001", "002", "003", "004", "005", "006"):
+        return unit_label
+    # unit_code 001~006: "월 1회" 등 → val!=1이면 "1회"를 "N회"로 교체
     if val and str(val) != "1":
-        return f"연 {val}회" if unit_label == "연 1회" else f"{val}{unit_label}"
+        return unit_label.replace("1회", f"{val}회")
     return unit_label
 
 
