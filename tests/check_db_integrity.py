@@ -81,6 +81,7 @@ def main():
         "master_building_legal_rules",
         "rule_id,obligation_type,sector,appointment_target_code,"
         "condition_code,condition_value,inspection_cycle_unit_code,"
+        "cycle_unit_std,inspection_cycle_value,"
         "executor_type_code,law_article",
         {"is_active": "eq.true"},
         limit=2000,
@@ -125,7 +126,7 @@ def main():
     bi = [r for r in inspect if r["sector"] == "BUILDING"]
     bi_ok = [
         r for r in bi
-        if r.get("condition_code") and r.get("inspection_cycle_unit_code")
+        if r.get("condition_code") and (r.get("cycle_unit_std") or r.get("inspection_cycle_unit_code"))
         and r.get("executor_type_code") and r.get("law_article")
     ]
     ratio_bi = int(len(bi_ok) / len(bi) * 100) if bi else 0
@@ -149,7 +150,7 @@ def main():
     ci = [r for r in inspect if r["sector"] == "CONSTRUCTION"]
     ci_ok = [
         r for r in ci
-        if r.get("condition_code") and r.get("inspection_cycle_unit_code")
+        if r.get("condition_code") and (r.get("cycle_unit_std") or r.get("inspection_cycle_unit_code"))
         and r.get("executor_type_code") and r.get("law_article")
     ]
     ratio_ci = int(len(ci_ok) / len(ci) * 100) if ci else 0

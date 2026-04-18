@@ -82,26 +82,53 @@ ANCHOR_TYPE_LABEL = {
 }
 
 def _cycle_label_from_master(m: dict) -> str:
-    code = str(m.get("inspection_cycle_unit_code") or "")
-    if code in INSPECTION_CYCLE_UNIT_MAP:
-        return INSPECTION_CYCLE_UNIT_MAP[code]
+    """cycle_unit_std 기반 라벨 생성 (unit_code fallback)."""
     unit_std = (m.get("cycle_unit_std") or "").lower()
-    umap = {"year": "년", "month": "개월", "day": "일", "week": "주"}
-    cv = int(m.get("inspection_cycle_value") or 1)
-    return f"{umap.get(unit_std, unit_std or '주기')} {cv}"
+    val = int(m.get("inspection_cycle_value") or 0)
+
+    # cycle_unit_std 없으면 unit_code에서 역산
+    if not unit_std:
+        code = str(m.get("inspection_cycle_unit_code") or "")
+        _CODE_TO_UNIT = {
+            "001": "day", "002": "week", "003": "month",
+            "004": "quarter", "005": "half_year", "006": "year",
+            "007": "year", "008": "year", "009": "year",
+            "010": "year", "011": "year", "012": "year", "013": "year",
+        }
+        unit_std = _CODE_TO_UNIT.get(code, "")
+
+    if not val:
+        return ""
+
+    _SHORT = {
+        "year": "연 1회", "half_year": "반기 1회", "quarter": "분기 1회",
+        "month": "월 1회", "week": "주 1회", "day": "매일",
+    }
+    if val == 1:
+        return _SHORT.get(unit_std, f"1{unit_std}")
+    if unit_std == "year":
+        return f"{val}년마다"
+    base = _SHORT.get(unit_std, unit_std)
+    return base.replace("1회", f"{val}회")
 
 
 def _build_insert_row(m: dict, company_id: Optional[str], factory_id: str) -> dict:
     law_name = m.get("law_name") or ""
     law_article = m.get("law_article") or ""
-    code = str(m.get("inspection_cycle_unit_code") or "")
-    if code in CYCLE_CODE_MAP:
-        cycle_unit, cycle_value = CYCLE_CODE_MAP[code]
+    # cycle_unit_std 우선, unit_code fallback
+    unit_std = (m.get("cycle_unit_std") or "").lower()
+    if unit_std:
+        _STD_MAP = {"year": "year", "half_year": "month", "quarter": "month", "month": "month", "week": "week", "day": "day"}
+        _STD_VAL = {"half_year": 6, "quarter": 3}
+        cycle_unit = _STD_MAP.get(unit_std, "year")
+        cycle_value = _STD_VAL.get(unit_std, int(m.get("inspection_cycle_value") or 1))
     else:
-        unit_std = (m.get("cycle_unit_std") or "").lower()
-        UNIT_MAP = {"year": "year", "month": "month", "day": "day", "week": "week"}
-        cycle_unit = UNIT_MAP.get(unit_std, "year")
-        cycle_value = int(m.get("inspection_cycle_value") or 1)
+        code = str(m.get("inspection_cycle_unit_code") or "")
+        if code in CYCLE_CODE_MAP:
+            cycle_unit, cycle_value = CYCLE_CODE_MAP[code]
+        else:
+            cycle_unit = "year"
+            cycle_value = int(m.get("inspection_cycle_value") or 1)
     _lbl = "년" if cycle_unit == "year" else "개월"
     return {
         "company_id": company_id,

@@ -1,5 +1,5 @@
 """
-inspection_sets 자동 생성 모듈 — v1.0.1
+inspection_sets 자동 생성 모듈 — v1.1.0
 ==========================================
 v1.0.1 (2026-04-16):
   - inspection_cycle_unit_code OR inspection_cycle_code 두 필드 모두 지원
@@ -42,7 +42,7 @@ CYCLE_UNIT_LABEL = {
 
 def _get_schedule_type_raw(rule: dict) -> str:
     """raw DB 룰(master_building_legal_rules)에서 schedule_type 판단"""
-    if rule.get("inspection_cycle_unit_code") or rule.get("inspection_cycle_code"):
+    if rule.get("cycle_unit_std") or rule.get("inspection_cycle_unit_code") or rule.get("inspection_cycle_code"):
         return "PERIODIC"
     if rule.get("construction_work_type"):
         return "BEFORE_WORK"
@@ -113,13 +113,20 @@ def auto_create_inspection_sets_from_diagnosis(
 
         law_name        = rule.get("law_name") or ""
         obligation_type = (rule.get("obligation_type") or "INSPECT").upper()
-        # v1.0.1: inspection_cycle_unit_code(raw) OR inspection_cycle_code(formatted) 두 지월
-        cycle_code      = (
-            rule.get("inspection_cycle_unit_code")
-            or rule.get("inspection_cycle_code")
-            or ""
-        )
-        cycle_unit, cycle_value = CYCLE_CODE_MAP.get(cycle_code, ("year", 1))
+        # v1.1.0: cycle_unit_std 우선, unit_code fallback
+        _std = rule.get("cycle_unit_std") or ""
+        if _std:
+            _STD_MAP = {"year": "year", "half_year": "month", "quarter": "month", "month": "month", "week": "week", "day": "day"}
+            _STD_VAL = {"half_year": 6, "quarter": 3}
+            cycle_unit = _STD_MAP.get(_std, "year")
+            cycle_value = _STD_VAL.get(_std, int(rule.get("inspection_cycle_value") or 1))
+        else:
+            cycle_code = (
+                rule.get("inspection_cycle_unit_code")
+                or rule.get("inspection_cycle_code")
+                or ""
+            )
+            cycle_unit, cycle_value = CYCLE_CODE_MAP.get(cycle_code, ("year", 1))
         schedule_type   = _get_schedule_type_raw(rule)
         unit_label      = CYCLE_UNIT_LABEL.get(cycle_unit, "")
         description     = (
