@@ -11,6 +11,7 @@ python-multipart
 resend
 tenacity
 xhtml2pdf
+jinja2
 python-dateutil>=2.8.2
 firebase-admin
 openai>=1.0.0
