@@ -613,6 +613,7 @@ async def search_building(
             "bdmgtsn":                    bdmgtsn,
             "main_purpose_name":          main_purpose_name,
             "building_use_code":          main_purpose_name,
+            "main_structure":             (title.get("strctCdNm") or "").strip() or None,
             "floor_count":                _safe_int(title.get("grndFlrCnt")),
             "underground_floor_count":    _safe_int(title.get("ugrndFlrCnt")),
             "building_area":              _safe_float(title.get("totArea")),
