@@ -337,7 +337,7 @@ def _render_html(context: Dict[str, Any]) -> str:
 async def _generate_pdf(html: str) -> bytes:
     """Gotenberg Chromium PDF \uc5d4\uc9c4\uc73c\ub85c HTML \u2192 PDF \ubcc0\ud658."""
     url = f"{GOTENBERG_URL}/forms/chromium/convert/html"
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
             url,
             files={"files": ("index.html", html.encode("utf-8"), "text/html")},
