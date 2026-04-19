@@ -56,12 +56,12 @@ def s3():
     assert r.status_code == 200
 check("S3 auth/login", s3)
 
-# S4: Diagnosis
+# S4: Diagnosis (60s timeout - cold start + law engine)
 def s4():
     r = httpx.post(f"{API}/diagnosis/free",
         json={"sector": "BUILDING", "area": 500,
               "building_use": "OFFICE", "completion_year": 2010},
-        timeout=30)
+        timeout=60)
     assert r.status_code == 200
 check("S4 diagnosis/free", s4)
 
