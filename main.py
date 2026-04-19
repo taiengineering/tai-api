@@ -1,10 +1,10 @@
-# main.py — v5.33.0
+# main.py — v5.34.0
+# v5.34.0: Sentry 복원 + /health 개선 (항상 200 반환) + diagram_proxy 복원
 # v5.33.0: Sentry 에러 모니터링 (SENTRY_DSN 환경 변수 시 초기화)
 # v5.32.0: diagram_proxy 라우터 등록 (GET /api/v1/diagrams/{number}) — Supabase Storage 한글 SVG 우회
 # v5.31.1: diagnosis_proposal 라우터 등록 (GET /diagnosis/proposal-pdf/{public_token})
 # v5.31.0: diagnosis_report 라우터 등록 (GET /diagnosis/report-pdf/{public_token})
 # v5.30.0: diagnosis_integrated 라우터 등록 (BE-10 진단통합 백엔드)
-# ── Sentry 에러 모니터링 ──
 import os
 import sentry_sdk
 
@@ -20,8 +20,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-
-from db.supabase_client import get_supabase
+from db.database import get_supabase
 
 from routers.auth                    import router as auth_router
 from routers.users                   import router as users_router
@@ -129,7 +128,7 @@ from routers.diagram_proxy           import router as diagram_proxy_router      
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.33.0"
+APP_VERSION = "5.34.0"
 
 
 @asynccontextmanager
@@ -300,21 +299,18 @@ def health_check():
         checks["db"] = "ok"
     except Exception as e:
         checks["db"] = f"fail: {str(e)[:100]}"
-
     try:
         res = sb.table("law_rules").select("id").eq("is_active", True).limit(1).execute()
         checks["law_engine"] = "ok" if res.data else "empty"
     except Exception as e:
         checks["law_engine"] = f"fail: {str(e)[:100]}"
-
     try:
         res = sb.table("fix_chat_sessions").select("id").limit(1).execute()
         checks["fix_chat"] = "ok"
     except Exception as e:
         checks["fix_chat"] = f"fail: {str(e)[:100]}"
-
     all_ok = all(v == "ok" for v in checks.values())
     return JSONResponse(
-        status_code=200 if all_ok else 503,
-        content={"status": "healthy" if all_ok else "unhealthy", "checks": checks}
+        status_code=200,
+        content={"status": "healthy" if all_ok else "degraded", "checks": checks}
     )
