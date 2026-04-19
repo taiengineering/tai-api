@@ -300,7 +300,7 @@ def health_check():
     except Exception as e:
         checks["db"] = f"fail: {str(e)[:100]}"
     try:
-        res = sb.table("law_rules").select("id").eq("is_active", True).limit(1).execute()
+        res = sb.table("master_legal_inspection_rules").select("id").eq("is_active", True).limit(1).execute()
         checks["law_engine"] = "ok" if res.data else "empty"
     except Exception as e:
         checks["law_engine"] = f"fail: {str(e)[:100]}"
