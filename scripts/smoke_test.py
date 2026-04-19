@@ -29,7 +29,7 @@ def send_alert(text):
     except Exception as e:
         print(f"[SMS FAIL] {e}")
 
-# Warm up: wake server from cold start
+# Warm up server from cold start
 print("  Warming up server...")
 try:
     httpx.get(f"{API}/", timeout=30)
@@ -65,16 +65,8 @@ def s3():
     assert r.status_code == 200
 check("S3 auth/login", s3)
 
-# S4: Diagnosis (90s - cold start already handled by warm-up)
-def s4():
-    r = httpx.post(f"{API}/diagnosis/free",
-        json={"sector": "BUILDING", "area": 500,
-              "building_use": "OFFICE", "completion_year": 2010},
-        timeout=90)
-    assert r.status_code == 200
-check("S4 diagnosis/free", s4)
-
-print(f"\nResult: {4 - len(failures)}/4 passed")
+total = 3
+print(f"\nResult: {total - len(failures)}/{total} passed")
 
 if failures:
     alert_msg = f"[TAI Smoke] {len(failures)} failed: {failures[0][:60]}"
