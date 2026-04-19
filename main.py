@@ -1,8 +1,20 @@
-# main.py — v5.32.0
+# main.py — v5.33.0
+# v5.33.0: Sentry 에러 모니터링 (SENTRY_DSN 환경 변수 시 초기화)
 # v5.32.0: diagram_proxy 라우터 등록 (GET /api/v1/diagrams/{number}) — Supabase Storage 한글 SVG 우회
 # v5.31.1: diagnosis_proposal 라우터 등록 (GET /diagnosis/proposal-pdf/{public_token})
 # v5.31.0: diagnosis_report 라우터 등록 (GET /diagnosis/report-pdf/{public_token})
 # v5.30.0: diagnosis_integrated 라우터 등록 (BE-10 진단통합 백엔드)
+# ── Sentry 에러 모니터링 ──
+import os
+import sentry_sdk
+
+_sentry_dsn = os.getenv("SENTRY_DSN", "")
+if _sentry_dsn:
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        traces_sample_rate=0.1,
+        environment="production",
+    )
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -114,7 +126,7 @@ from routers.diagram_proxy           import router as diagram_proxy_router      
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.32.0"
+APP_VERSION = "5.33.0"
 
 
 @asynccontextmanager
