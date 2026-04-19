@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<style>
+/* ============================================================
+   TAI Safe — 기안용 PDF 템플릿 (결재권자용)
+   Stack: Jinja2 + xhtml2pdf
+   xhtml2pdf 호환: 테이블 레이아웃, inline-block 최소화
+   SVG 미사용: HTML 테이블·CSS 바 차트로 대체
+   ============================================================ */
+
+@page {
+    size: A4 portrait;
+    margin: 14mm 12mm 16mm 12mm;
+}
+
+body {
+    font-family: "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", Arial, sans-serif;
+    font-size: 9.5pt;
+    color: #0f172a;
+    line-height: 1.5;
+    margin: 0;
+    padding: 0;
+}
+
+/* ---- 페이지 구분 ---- */
+.page      { page-break-after: always; }
+.page-last { /* no break */ }
+
+/* ---- 섹션 헤더 ---- */
+.sh {
+    border-left: 4px solid #1A5FD4;
+    padding: 0 0 0 8px;
+    margin: 12px 0 7px 0;
+}
+.sh h2 {
+    margin: 0;
+    font-size: 12pt;
+    color: #1A5FD4;
+    font-weight: bold;
+}
+.sh p {
+    margin: 2px 0 0;
+    font-size: 8pt;
+    color: #64748b;
+}
+
+/* ---- 뱃지 ---- */
+.badge {
+    padding: 2px 9px;
+    border-radius: 10px;
+    font-weight: bold;
+    font-size: 10pt;
+}
+.b-high     { background: #fef2f2; color: #dc2626; border: 1px solid #dc2626; }
+.b-med      { background: #fffbeb; color: #b45309; border: 1px solid #b45309; }
+.b-low      { background: #f0fdf4; color: #16a34a; border: 1px solid #16a34a; }
+.b-critical { background: #dc2626; color: #fff; }
+
+/* ---- 요약 카드 그리드 (4열 테이블) ---- */
+.sc {
+    background: #f1f5f9;
+    padding: 9px 6px;
+    text-align: center;
+    border-radius: 3px;
+}
+.sc .k { font-size: 7.5pt; color: #64748b; }
+.sc .v { font-size: 18pt; font-weight: bold; color: #1A5FD4; margin: 3px 0; }
+
+/* ---- 경영진 요약 박스 ---- */
+.exec-box {
+    background: #0f172a;
+    color: #fff;
+    border-radius: 3px;
+    padding: 11px 13px;
+    margin: 10px 0;
+}
+.exec-main {
+    font-size: 11.5pt;
+    font-weight: bold;
+    margin-bottom: 8px;
+}
+.exec-num-val   { font-size: 20pt; font-weight: bold; color: #60a5fa; }
+.exec-num-label { font-size: 7.5pt; color: rgba(255,255,255,0.65); }
+
+/* ---- TOP 5 테이블 ---- */
+table.top5-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 5px;
+}
+table.top5-table th {
+    background: #1e293b;
+    color: #fff;
+    padding: 5px 7px;
+    font-size: 8pt;
+    text-align: left;
+}
+table.top5-table td {
+    padding: 5px 7px;
+    border-bottom: 1px solid #e2e8f0;
+    font-size: 8.5pt;
+    vertical-align: top;
+}
+table.top5-table tr:nth-child(even) td { background: #f8fafc; }
+
+/* ---- 비용 비교 테이블 ---- */
+table.cost-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+table.cost-table th {
+    background: #0f172a;
+    color: #fff;
+    padding: 6px 8px;
+    font-size: 8.5pt;
+    text-align: left;
+}
+table.cost-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid #e2e8f0;
+    font-size: 8.5pt;
+    vertical-align: top;
+}
+.tai-row td {
+    background: #eff6ff;
+    font-weight: bold;
+}
+.tai-row td:first-child { border-left: 3px solid #1A5FD4; }
+
+/* ---- 리스크 바 차트 ---- */
+table.risk-bar-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 6px;
+}
+table.risk-bar-table td { padding: 3px 4px; font-size: 8pt; }
+.bar-danger  { background: #dc2626; height: 14px; border-radius: 2px; }
+.bar-warning { background: #f97316; height: 14px; border-radius: 2px; }
+.bar-neutral { background: #94a3b8; height: 14px; border-radius: 2px; }
+.bar-good    { background: #1A5FD4; height: 14px; border-radius: 2px; }
+
+/* ---- 경고 박스 ---- */
+.wb {
+    background: #fef2f2;
+    border: 2px solid #dc2626;
+    border-radius: 3px;
+    padding: 9px 11px;
+    margin: 8px 0;
+}
+.wb-title { font-weight: bold; color: #dc2626; font-size: 10.5pt; margin-bottom: 6px; }
+.csia-row td {
+    padding: 4px;
+    vertical-align: top;
+    width: 33%;
+}
+.csia-cell {
+    background: #fff;
+    border: 1px solid #fca5a5;
+    border-radius: 3px;
+    padding: 7px;
+    text-align: center;
+}
+.csia-cell .label { font-size: 8pt; color: #64748b; margin-bottom: 3px; }
+.csia-cell .val   { font-weight: bold; color: #dc2626; font-size: 9.5pt; }
+.csia-cell .sub   { font-size: 7.5pt; color: #dc2626; }
+.csia-banner {
+    background: #7f1d1d;
+    color: #fff;
+    padding: 7px 10px;
+    border-radius: 3px;
+    margin-top: 7px;
+    text-align: center;
+    font-weight: bold;
+    font-size: 10.5pt;
+}
+
+/* ---- 도입 4단계 ---- */
+table.step-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+table.step-table td { padding: 3px; vertical-align: top; }
+.step-box {
+    background: #eff6ff;
+    border-top: 3px solid #1A5FD4;
+    padding: 9px 6px;
+    text-align: center;
+}
+.step-num   { font-size: 18pt; font-weight: bold; color: #1A5FD4; }
+.step-title { font-weight: bold; font-size: 8.5pt; margin: 3px 0; }
+.step-desc  { font-size: 7.5pt; color: #64748b; }
+.step-arrow { text-align: center; vertical-align: middle; font-size: 14pt; color: #1A5FD4; padding: 3px 2px; }
+
+/* ---- 전후 비교 ---- */
+table.ba-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+table.ba-table td { padding: 4px; vertical-align: top; }
+.ba-before {
+    background: #fef2f2;
+    border: 1px solid #fca5a5;
+    border-radius: 3px;
+    padding: 8px 10px;
+}
+.ba-after {
+    background: #f0fdf4;
+    border: 1px solid #86efac;
+    border-radius: 3px;
+    padding: 8px 10px;
+}
+.ba-title { font-weight: bold; font-size: 9.5pt; margin-bottom: 5px; }
+.ba-item  { font-size: 8pt; margin: 2px 0; color: #374151; }
+
+/* ---- 추천 플랜 박스 ---- */
+.plan-box {
+    background: #1A5FD4;
+    color: #fff;
+    border-radius: 3px;
+    padding: 11px 13px;
+    margin: 8px 0;
+}
+.plan-name  { font-size: 13pt; font-weight: bold; }
+.plan-price { font-size: 10.5pt; margin: 4px 0; opacity: 0.9; }
+.plan-note  { font-size: 8pt; opacity: 0.8; margin-top: 4px; }
+
+/* ---- 정보 박스 ---- */
+.ib {
+    background: #eff6ff;
+    border-left: 4px solid #1A5FD4;
+    padding: 7px 10px;
+    margin: 7px 0;
+    font-size: 8.5pt;
+}
+
+/* ---- 푸터 ---- */
+.pf {
+    border-top: 1px solid #e2e8f0;
+    padding-top: 5px;
+    margin-top: 10px;
+    font-size: 7pt;
+    color: #94a3b8;
+}
+
+/* ---- 유틸 ---- */
+.text-blue { color: #1A5FD4; font-weight: bold; }
+.text-red  { color: #dc2626; font-weight: bold; }
+.text-warn { color: #b45309; }
+.text-gray { color: #64748b; }
+</style>
+</head>
+<body>
+
+<!-- ================================================================
+     PAGE 1 : 표지 + 경영진 요약 + 의무 요약 + TOP 5 리스크
+================================================================ -->
+<div class="page">
+
+<!-- 보고서 헤더 -->
+<table style="width:100%; border-bottom: 3px solid #1A5FD4; padding-bottom: 7px; margin-bottom: 13px; border-collapse: collapse;">
+<tr>
+  <td style="vertical-align: middle;">
+    <span style="font-size:17pt; font-weight:bold; color:#1A5FD4;">TAI</span>
+    <span style="font-size:9pt; color:#64748b; margin-left:5px;">Engineering · safe.taieng.co.kr</span>
+  </td>
+  <td style="text-align:right; vertical-align: middle;">
+    <span style="font-size:13.5pt; font-weight:bold; color:#0f172a;">산업안전 법적의무 리스크 보고서</span><br/>
+    <span style="font-size:7.5pt; color:#64748b;">Occupational Safety Legal Compliance Report</span>
+  </td>
+</tr>
+</table>
+
+<!-- 진단 정보 2열 -->
+<table style="width:100%; border-collapse: collapse; margin-bottom: 13px;">
+<tr>
+  <td style="width:49%; padding-right: 5px; vertical-align: top;">
+    <table style="width:100%; border-collapse: collapse; border: 1px solid #e2e8f0;">
+      <tr>
+        <td style="background:#f1f5f9; padding:5px 8px; font-size:7.5pt; color:#64748b; width:33%;">진단 대상</td>
+        <td style="padding:5px 8px; font-size:10pt; font-weight:bold;">{{ company_name }}</td>
+      </tr>
+      <tr>
+        <td style="background:#f1f5f9; padding:5px 8px; font-size:7.5pt; color:#64748b; border-top:1px solid #e2e8f0;">보고서 일자</td>
+        <td style="padding:5px 8px; font-size:8.5pt; border-top:1px solid #e2e8f0;">{{ report_date }}</td>
+      </tr>
+      <tr>
+        <td style="background:#f1f5f9; padding:5px 8px; font-size:7.5pt; color:#64748b; border-top:1px solid #e2e8f0;">사업장 유형</td>
+        <td style="padding:5px 8px; font-size:8.5pt; border-top:1px solid #e2e8f0;">{{ sector_label }}</td>
+      </tr>
+    </table>
+  </td>
+  <td style="width:49%; padding-left: 5px; vertical-align: top;">
+    <table style="width:100%; border-collapse: collapse; border: 1px solid #e2e8f0;">
+      <tr>
+        <td style="background:#f1f5f9; padding:5px 8px; font-size:7.5pt; color:#64748b; width:33%;">보고서 번호</td>
+        <td style="padding:5px 8px; font-size:8.5pt;">{{ report_no }}</td>
+      </tr>
+      <tr>
+        <td style="background:#f1f5f9; padding:5px 8px; font-size:7.5pt; color:#64748b; border-top:1px solid #e2e8f0;">상시 인원</td>
+        <td style="padding:5px 8px; font-size:8.5pt; border-top:1px solid #e2e8f0;">
+          {{ workers }}명
+          {% if workers >= 50 %}<span style="color:#dc2626; font-weight:bold;"> (중대재해법 적용)</span>{% endif %}
+        </td>
+      </tr>
+      <tr>
+        <td style="background:#f1f5f9; padding:5px 8px; font-size:7.5pt; color:#64748b; border-top:1px solid #e2e8f0;">위험도</td>
+        <td style="padding:5px 8px; border-top:1px solid #e2e8f0;">
+          {% if risk_level == 'CRITICAL' %}<span class="badge b-critical">매우높음 (CRITICAL)</span>
+          {% elif risk_level == 'HIGH' %}<span class="badge b-high">높음 (HIGH)</span>
+          {% elif risk_level == 'MEDIUM' %}<span class="badge b-med">보통 (MEDIUM)</span>
+          {% else %}<span class="badge b-low">낮음 (LOW)</span>{% endif %}
+        </td>
+      </tr>
+    </table>
+  </td>
+</tr>
+</table>
+
+<!-- 경영진 요약 박스 -->
+<div class="exec-box">
+  <div class="exec-main">
+    귀 사업장에 <span style="color:#f59e0b;">{{ total }}건</span>의 법적 의무 사항이 확인되었습니다.
+  </div>
+  <table style="width:100%; border-collapse: collapse;">
+  <tr>
+    <td style="text-align:center; padding: 4px 6px; border-right: 1px solid rgba(255,255,255,0.2);">
+      <div class="exec-num-val">{{ law_count }}</div>
+      <div class="exec-num-label">적용 법령 수</div>
+    </td>
+    <td style="text-align:center; padding: 4px 6px; border-right: 1px solid rgba(255,255,255,0.2);">
+      <div class="exec-num-val">{{ total }}</div>
+      <div class="exec-num-label">법적 의무 총계</div>
+    </td>
+    <td style="text-align:center; padding: 4px 6px;">
+      <div class="exec-num-val" style="color:#f87171;">{{ max_penalty_text }}</div>
+      <div class="exec-num-label">미이행 시 최대 과태료</div>
+    </td>
+  </tr>
+  </table>
+</div>
+
+<!-- 의무 유형별 요약 카드 -->
+<div class="sh"><h2>법적 의무 유형별 요약</h2></div>
+<table style="width:100%; border-collapse: collapse;">
+<tr>
+  <td style="width:25%; padding: 3px;">
+    <div class="sc"><div class="k">선임 의무</div><div class="v">{{ appointment }}</div><div class="k">건</div></div>
+  </td>
+  <td style="width:25%; padding: 3px;">
+    <div class="sc"><div class="k">점검·검사</div><div class="v">{{ inspection }}</div><div class="k">건</div></div>
+  </td>
+  <td style="width:25%; padding: 3px;">
+    <div class="sc"><div class="k">조치 의무</div><div class="v">{{ action }}</div><div class="k">건</div></div>
+  </td>
+  <td style="width:25%; padding: 3px;">
+    <div class="sc"><div class="k">보고·신고</div><div class="v">{{ report_notify }}</div><div class="k">건</div></div>
+  </td>
+</tr>
+</table>
+
+<!-- TOP 5 리스크 -->
+<div class="sh" style="margin-top:13px;"><h2>주요 리스크 TOP 5</h2><p>과태료 금액 기준 상위 5건 — 법령을 정밀 분석하여 도출</p></div>
+
+<table class="top5-table">
+<thead>
+<tr>
+  <th style="width:6%;">순위</th>
+  <th style="width:42%;">위반 사항</th>
+  <th style="width:31%;">근거 법령</th>
+  <th style="width:21%;">처벌 내용</th>
+</tr>
+</thead>
+<tbody>
+{% if top5 %}
+  {% for item in top5 %}
+  <tr>
+    <td style="text-align:center; font-weight:bold; color:#1A5FD4;">{{ loop.index }}위</td>
+    <td>{{ item.title }}</td>
+    <td style="color:#64748b; font-size:8pt;">{{ item.law }}</td>
+    <td style="color:#dc2626; font-weight:bold;">{{ item.penalty }}</td>
+  </tr>
+  {% endfor %}
+{% else %}
+  <tr>
+    <td colspan="4" style="text-align:center; color:#64748b; padding:12px; font-size:8.5pt;">
+      법령엔진이 정밀 분석하여 도출한 주요 리스크가 이 목록에 표시됩니다.
+    </td>
+  </tr>
+{% endif %}
+</tbody>
+</table>
+
+<!-- 1페이지 푸터 -->
+<div class="pf">
+  <table style="width:100%; border-collapse:collapse;">
+  <tr>
+    <td>TAI Engineering &middot; safe.taieng.co.kr &middot; contact@taieng.co.kr &middot; 사업자 723-39-01422</td>
+    <td style="text-align:right;">1 / 3</td>
+  </tr>
+  </table>
+</div>
+
+</div><!-- /page1 -->
+
+
+<!-- ================================================================
+     PAGE 2 : 비용 비교 + 리스크 시각화 + 중대재해법 경고
+================================================================ -->
+<div class="page">
+
+<!-- 헤더 -->
+<table style="width:100%; border-collapse:collapse; border-bottom:2px solid #1A5FD4; padding-bottom:5px; margin-bottom:12px;">
+<tr>
+  <td><span style="font-size:12pt; font-weight:bold; color:#1A5FD4;">TAI</span> <span style="font-size:7.5pt; color:#64748b;">산업안전 법적의무 리스크 보고서</span></td>
+  <td style="text-align:right; font-size:8pt; color:#64748b;">{{ company_name }} &middot; {{ report_date }}</td>
+</tr>
+</table>
+
+<!-- 안전관리 방법별 비용·리스크 비교 -->
+<div class="sh"><h2>안전관리 방법별 비용·리스크 비교</h2><p>방치 대비 TAI Safe 도입 시 비용 효율 및 법적 리스크 분석</p></div>
+
+<table class="cost-table">
+<thead>
+<tr>
+  <th style="width:23%;">관리 방법</th>
+  <th style="width:20%;">월 비용</th>
+  <th style="width:30%;">법적 리스크</th>
+  <th style="width:27%;">관리 수준</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><strong>방치 (미조치)</strong></td>
+  <td style="color:#16a34a;">0원</td>
+  <td style="color:#dc2626;">과태료 수천만원 + 형사처벌 + 영업정지</td>
+  <td style="color:#dc2626;">법적 의무 미이행 — 처벌 위험 상존</td>
+</tr>
+<tr>
+  <td><strong>엑셀·수기 관리</strong></td>
+  <td style="color:#16a34a;">0원</td>
+  <td style="color:#b45309;">누락·오기 발생 시 방치와 동일</td>
+  <td style="color:#b45309;">담당자 부재 시 관리 공백</td>
+</tr>
+<tr>
+  <td><strong>안전관리 대행</strong></td>
+  <td>150 ~ 300만원</td>
+  <td style="color:#64748b;">사고 발생 시 책임 분산 한계</td>
+  <td>외부 의존도 높음</td>
+</tr>
+<tr class="tai-row">
+  <td><strong>TAI Safe</strong> ★ 추천</td>
+  <td><span class="text-blue">{{ recommended_plan_price }}</span><br/><span style="font-size:7.5pt; color:#64748b;">부가세 별도</span></td>
+  <td style="color:#1A5FD4;">자동화로 누락 최소화<br/>실시간 이상 감지</td>
+  <td style="color:#1A5FD4;">법적 의무 {{ total }}건 자동 추적</td>
+</tr>
+</tbody>
+</table>
+
+<div class="ib" style="margin-top:9px;">
+  <strong>핵심 비교:</strong> 안전관리 대행(월 150~300만원) 대비, TAI Safe는 <strong class="text-blue">{{ recommended_plan_price }}</strong>로
+  동일한 법적 의무 {{ total }}건을 자동으로 추적·관리합니다.
+  연간 절감 가능 비용: 약 <strong>{{ annual_savings_low }}만원 ~ {{ annual_savings_high }}만원</strong> (대행사 대비 기준)
+</div>
+
+<!-- 리스크 수준 시각화 (HTML 바 차트 — SVG #23 대체) -->
+<div class="sh" style="margin-top:13px;"><h2>관리 방식별 법적 리스크 수준</h2><p>막대가 길수록 처벌·사고 위험이 큰 방식</p></div>
+
+<table class="risk-bar-table">
+<tr>
+  <td style="width:18%; text-align:right; color:#64748b;">방치</td>
+  <td style="width:74%;">
+    <table style="width:100%; border-collapse:collapse;"><tr><td style="width:100%;"><div class="bar-danger"></div></td></tr></table>
+  </td>
+  <td style="width:8%; color:#dc2626; font-weight:bold; padding-left:4px;">위험</td>
+</tr>
+<tr>
+  <td style="text-align:right; color:#64748b;">엑셀 관리</td>
+  <td>
+    <table style="width:100%; border-collapse:collapse;"><tr><td style="width:88%;"><div class="bar-warning"></div></td><td style="width:12%;"></td></tr></table>
+  </td>
+  <td style="color:#f97316; font-weight:bold; padding-left:4px;">높음</td>
+</tr>
+<tr>
+  <td style="text-align:right; color:#64748b;">안전 대행</td>
+  <td>
+    <table style="width:100%; border-collapse:collapse;"><tr><td style="width:42%;"><div class="bar-neutral"></div></td><td style="width:58%;"></td></tr></table>
+  </td>
+  <td style="color:#94a3b8; font-weight:bold; padding-left:4px;">보통</td>
+</tr>
+<tr>
+  <td style="text-align:right; color:#1A5FD4; font-weight:bold;">TAI Safe</td>
+  <td>
+    <table style="width:100%; border-collapse:collapse;"><tr><td style="width:14%;"><div class="bar-good"></div></td><td style="width:86%;"></td></tr></table>
+  </td>
+  <td style="color:#1A5FD4; font-weight:bold; padding-left:4px;">최소</td>
+</tr>
+</table>
+
+<!-- 중대재해처벌법 경고 -->
+<div class="sh" style="margin-top:13px;"><h2>중대재해처벌법 (중처법) 리스크</h2></div>
+
+{% if csia_applicable %}
+<div class="wb">
+  <div class="wb-title">&#9888; 귀 사업장은 중대재해처벌법 적용 대상입니다 (상시 {{ workers }}인 이상)</div>
+  <table style="width:100%; border-collapse:collapse;" class="csia-row">
+  <tr>
+    <td>
+      <div class="csia-cell">
+        <div class="label">사망사고 시</div>
+        <div class="val">1년 이상 징역</div>
+        <div class="sub">또는 10억 이하 벌금</div>
+      </div>
+    </td>
+    <td>
+      <div class="csia-cell">
+        <div class="label">부상·질병 시</div>
+        <div class="val">7년 이하 징역</div>
+        <div class="sub">또는 1억 이하 벌금</div>
+      </div>
+    </td>
+    <td>
+      <div class="csia-cell">
+        <div class="label">양벌규정 (법인)</div>
+        <div class="val">50억 이하 벌금</div>
+        <div class="sub">법인 형사처벌</div>
+      </div>
+    </td>
+  </tr>
+  </table>
+  <div class="csia-banner">&#9889; 경영책임자 개인이 처벌 대상입니다</div>
+</div>
+{% else %}
+<div style="background:#fffbeb; border:1px solid #fcd34d; border-radius:3px; padding:9px 11px; margin:6px 0;">
+  <strong style="color:#b45309;">현재 {{ workers }}인 미만 — 중대재해처벌법 즉시 적용 대상은 아닙니다</strong><br/>
+  <span style="font-size:8.5pt; color:#92400e;">
+    단, 인원 증가 시 즉시 적용됩니다. 5인 이상 사업장도 산업안전보건법 처벌 대상이므로 사전 대비가 필요합니다.
+  </span>
+</div>
+{% endif %}
+
+<!-- 2페이지 푸터 -->
+<div class="pf">
+  <table style="width:100%; border-collapse:collapse;">
+  <tr>
+    <td>TAI Engineering &middot; safe.taieng.co.kr &middot; contact@taieng.co.kr</td>
+    <td style="text-align:right;">2 / 3</td>
+  </tr>
+  </table>
+</div>
+
+</div><!-- /page2 -->
+
+
+<!-- ================================================================
+     PAGE 3 : TAI 소개 + 도입 4단계 + 업무 분산 구조 + 추천 플랜 견적
+================================================================ -->
+<div class="page-last">
+
+<!-- 헤더 -->
+<table style="width:100%; border-collapse:collapse; border-bottom:2px solid #1A5FD4; padding-bottom:5px; margin-bottom:12px;">
+<tr>
+  <td><span style="font-size:12pt; font-weight:bold; color:#1A5FD4;">TAI</span> <span style="font-size:7.5pt; color:#64748b;">산업안전 법적의무 리스크 보고서</span></td>
+  <td style="text-align:right; font-size:8pt; color:#64748b;">{{ company_name }} &middot; {{ report_date }}</td>
+</tr>
+</table>
+
+<!-- 도입 4단계 (HTML 테이블 — SVG #24 대체) -->
+<div class="sh"><h2>TAI Safe 도입 4단계</h2><p>법령진단 완료 후 당일 운영 시작 가능 · 초기 세팅 1일 이내</p></div>
+
+<table class="step-table">
+<tr>
+  <td style="width:22%;">
+    <div class="step-box">
+      <div class="step-num">1</div>
+      <div class="step-title">법령 진단</div>
+      <div class="step-desc">AI가 사업장 특성을 정밀 분석하여 적용 법령 자동 도출</div>
+    </div>
+  </td>
+  <td class="step-arrow" style="width:4%;">&#8594;</td>
+  <td style="width:22%;">
+    <div class="step-box">
+      <div class="step-num">2</div>
+      <div class="step-title">초기 세팅</div>
+      <div class="step-desc">안전관리자가 설비·인원 등록 (1일 이내 완료)</div>
+    </div>
+  </td>
+  <td class="step-arrow" style="width:4%;">&#8594;</td>
+  <td style="width:22%;">
+    <div class="step-box">
+      <div class="step-num">3</div>
+      <div class="step-title">운영 시작</div>
+      <div class="step-desc">점검 일정 자동 생성 · 담당자 배정 · D-3 사전 알림</div>
+    </div>
+  </td>
+  <td class="step-arrow" style="width:4%;">&#8594;</td>
+  <td style="width:22%;">
+    <div class="step-box">
+      <div class="step-num">4</div>
+      <div class="step-title">자동 모니터링</div>
+      <div class="step-desc">법령 변경 감지 · 이행 현황 실시간 추적 · 월간 리포트</div>
+    </div>
+  </td>
+</tr>
+</table>
+
+<!-- 업무 분산 구조 (HTML 테이블 — SVG #25 대체) -->
+<div class="sh" style="margin-top:13px;"><h2>안전관리 업무 구조 전환</h2><p>안전관리자 1인 집중 &#8594; 전원 참여 체계 · TAI의 핵심 설계 철학</p></div>
+
+<table class="ba-table">
+<tr>
+  <td style="width:45%;">
+    <div class="ba-before">
+      <div class="ba-title" style="color:#dc2626;">&#10007; 도입 전 (현재)</div>
+      <div class="ba-item">&#183; 안전관리자 1인이 모든 업무 직접 처리</div>
+      <div class="ba-item">&#183; 수기 기록 &#8594; 누락·오기 빈번히 발생</div>
+      <div class="ba-item">&#183; 담당자 부재 시 전체 관리 공백</div>
+      <div class="ba-item">&#183; 법령 변경 인지 지연 &#8594; 불이행 위험</div>
+      <div class="ba-item">&#183; 사고 발생 후 대응 &#8594; 처벌 위험 상존</div>
+    </div>
+  </td>
+  <td style="width:10%; text-align:center; vertical-align:middle; font-size:16pt; color:#1A5FD4;">&#8594;</td>
+  <td style="width:45%;">
+    <div class="ba-after">
+      <div class="ba-title" style="color:#16a34a;">&#10003; TAI Safe 도입 후</div>
+      <div class="ba-item">&#183; 업무가 담당자별로 자동 배분·알림</div>
+      <div class="ba-item">&#183; 모바일 점검 &#8594; 실시간 기록·저장</div>
+      <div class="ba-item">&#183; D-3 사전 알림으로 누락 방지</div>
+      <div class="ba-item">&#183; 법령 변경 자동 감지·즉시 적용</div>
+      <div class="ba-item">&#183; 예방 중심 운영 &#8594; 처벌 위험 최소화</div>
+    </div>
+  </td>
+</tr>
+</table>
+
+<!-- 추천 플랜 + 견적 -->
+<div class="sh" style="margin-top:13px;"><h2>추천 플랜 및 도입 견적</h2><p>{{ total }}건의 법적 의무를 자동 관리하는 최적 플랜</p></div>
+
+<div class="plan-box">
+  <table style="width:100%; border-collapse:collapse;">
+  <tr>
+    <td style="vertical-align:top; width:58%;">
+      <div class="plan-name">{{ recommended_plan_name }}</div>
+      <div class="plan-price">{{ recommended_plan_price }} <span style="font-size:8pt; opacity:0.8;">(부가세 별도)</span></div>
+      <div class="plan-note">
+        &#183; 기본 10명 포함 &middot; 초과 인원 3,000원/명<br/>
+        &#183; 법적 의무 {{ total }}건 자동 추적 관리<br/>
+        &#183; 법령 변경 알림 + 점검 일정 자동 생성<br/>
+        &#183; D-3 이행 알림 + 누락 에스칼레이션 + 월간 리포트
+      </div>
+    </td>
+    <td style="vertical-align:middle; text-align:center; width:42%; border-left:1px solid rgba(255,255,255,0.3); padding-left:10px;">
+      <div style="font-size:8.5pt; margin-bottom:5px;">지금 바로 무료 진단 결과 확인</div>
+      <div style="font-size:11pt; font-weight:bold;">safe.taieng.co.kr</div>
+      <div style="font-size:8.5pt; margin-top:5px;">contact@taieng.co.kr</div>
+      <div style="font-size:8.5pt;">www.taieng.co.kr</div>
+      <div style="margin-top:8px; background:rgba(255,255,255,0.15); border-radius:3px; padding:5px 8px; font-size:8pt;">
+        무료 진단 후 즉시 도입 가능<br/>별도 설치 없이 웹 브라우저로 사용
+      </div>
+    </td>
+  </tr>
+  </table>
+</div>
+
+<!-- TAI Engineering 소개 -->
+<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:3px; padding:8px 10px; margin-top:9px;">
+  <table style="width:100%; border-collapse:collapse;">
+  <tr>
+    <td style="vertical-align:top; width:50%; padding-right:8px;">
+      <strong style="font-size:9pt;">TAI Engineering이란?</strong><br/>
+      <span style="font-size:8pt; color:#475569; line-height:1.6;">
+        산업안전보건법·중대재해처벌법 대응을 위한 B2B 안전관리 SaaS입니다.
+        안전관리자 1인이 집중 처리하던 구조를 전 직원 분산 참여 체계로 전환하여
+        법적 의무 누락을 근본적으로 방지합니다.
+      </span>
+    </td>
+    <td style="vertical-align:top; width:50%; padding-left:8px; border-left:1px solid #e2e8f0;">
+      <strong style="font-size:9pt;">기술력 및 특허</strong><br/>
+      <span style="font-size:8pt; color:#475569; line-height:1.6;">
+        법령 자동진단 엔진 특허 출원 8건 · 상표 등록<br/>
+        산업안전보건법·소방법·전기안전법 등 통합 분석<br/>
+        건물·산업·건설 3개 섹터 전문 지원
+      </span>
+    </td>
+  </tr>
+  </table>
+</div>
+
+<!-- 3페이지 푸터 + 면책 -->
+<div class="pf" style="margin-top:12px;">
+  <table style="width:100%; border-collapse:collapse;">
+  <tr>
+    <td style="font-size:7pt; color:#94a3b8;">
+      &#8251; 본 보고서는 공개된 법령을 기반으로 정밀 분석하여 도출한 참고 자료이며 법적 효력이 없습니다. 실제 적용 여부는 전문가와 확인하시기 바랍니다.
+    </td>
+    <td style="text-align:right; white-space:nowrap;">3 / 3</td>
+  </tr>
+  </table>
+  <div style="text-align:center; margin-top:3px; font-size:7pt; color:#94a3b8;">
+    TAI Engineering &middot; 서울특별시 강남구 테헤란로79길 6 JS타워 3층 V1314 &middot; 사업자등록번호 723-39-01422
+  </div>
+</div>
+
+</div><!-- /page3/page-last -->
+
+</body>
+</html>

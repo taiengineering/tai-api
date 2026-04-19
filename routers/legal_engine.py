@@ -1,6 +1,14 @@
 """
-법령 판정 엔진 라우터 — v5.6.8
+법령 판정 엔진 라우터 — v5.7.0
 =================================
+v5.7.0 (2026-04-19):
+  BE-11: 무료 진단 결과 데이터 품질 개선
+  Task 1: remarks 우선 → obligation_summary 폴백 (사람 언어 표시)
+  Task 2: penalty_summary 빈 값 시 의무 유형별 기본 문구 (_get_penalty_fallback)
+  Task 3: 건축법 제35조 중복 → remarks 우선으로 각 의무 구분 자동 해결
+  Task 4: cycle_unit_std 있는 상시의무 → due_info: {} (D-day 미표시)
+  Task 5: result_data에 risk_reason 필드 추가
+
 v5.6.8 (2026-04-15):
   BE-1: diagnose/step1 완료 시 inspection_sets 자동 생성 (모든 섹터)
   BE-3: contract_amount_eok 필드 설명 추가 (단위: 억원 명확화)
@@ -40,7 +48,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.6.8"  # v5.6.8: diagnose/step1 완료 시 inspection_sets 자동 생성
+ENGINE_VERSION = "5.7.0"  # v5.7.0: BE-11 데이터 품질 개선
 
 
 # ──────────────────────────────────────────────
@@ -364,9 +372,37 @@ def _calc_due_date(due_days) -> dict:
             "urgency": "IMMEDIATE" if d <= 3 else ("URGENT" if d <= 14 else "NORMAL")}
 
 
+# ── BE-11 Task 2: penalty_summary 빈 값 시 의무 유형별 기본 문구 ──────────
+def _get_penalty_fallback(obligation_type: str) -> str:
+    """
+    penalty_summary 빈 문자열일 때 의무 유형에 따라 기본 안내 문구 반환.
+
+    실제 법적 벌칙이 없는 의무(행정지도 대상)와 구분하기 위해
+    obligation_type별로 다른 문구를 사용한다.
+    """
+    _MAP = {
+        "DOCUMENT":    "미보존 시 과태료 부과 가능",
+        "APPOINT":     "미선임 시 과태료 부과 가능",
+        "INSPECT":     "미실시 시 과태료 부과 가능",
+        "REPORT":      "미신고 시 과태료 부과 가능",
+        "NOTIFY":      "미신고 시 과태료 부과 가능",
+        "BEFORE_WORK": "미이행 시 과태료 부과 가능",
+        "ACTION":      "관련 벌칙 확인 필요",
+        "OTHER":       "관련 벌칙 확인 필요",
+    }
+    return _MAP.get((obligation_type or "").upper(), "관련 벌칙 확인 필요")
+
+
 def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
-    """v5.6.2: inspection 4필드(언제/누가/무엇/어떻게) 완비"""
-    desc = (rule.get("obligation_summary") or rule.get("remarks") or "").strip()
+    """
+    v5.7.0: BE-11 데이터 품질 개선
+      - Task 1: remarks 우선 → obligation_summary 폴백 (사람 언어)
+      - Task 2: penalty_summary 빈 값 시 _get_penalty_fallback 적용
+      - Task 4: cycle_unit_std 있으면 due_info: {} (상시 의무 D-day 미표시)
+    """
+    # Task 1: remarks 우선, obligation_summary 폴백
+    desc = (rule.get("remarks") or rule.get("obligation_summary") or "").strip()
+
     target_code = _normalize_target_code(rule.get("appointment_target_code") or "")
     submit_org_code    = rule.get("submit_org_code") or ""
     executor_type_code = rule.get("executor_type_code") or ""
@@ -375,6 +411,15 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
     cycle_label = _get_inspection_cycle_label(rule)
     cycle_unit, cycle_int = CYCLE_CODE_MAP.get(cycle_code, ("", 0))
     schedule_type = _get_schedule_type(rule)
+
+    # Task 2: penalty_summary 빈 값 처리
+    _obl_type = _resolve_obligation_type(rule)
+    _pen_raw  = rule.get("penalty_summary") or ""
+    _penalty  = _pen_raw.strip() if _pen_raw.strip() else _get_penalty_fallback(_obl_type)
+
+    # Task 4: 상시 의무(cycle_unit_std 있음)는 due_info 억제
+    _is_recurring = bool(rule.get("cycle_unit_std"))
+
     return {
         "rule_id": rule.get("rule_id", ""), "rule_type": str(rule.get("rule_type_code") or ""),
         "law_name": rule.get("law_name") or "", "law_article": rule.get("law_article") or "",
@@ -391,15 +436,17 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
         "executor_type_label": EXECUTOR_TYPE_MAP.get(executor_type_code, executor_type_code),
         "condition_code": rule.get("condition_code") or "",
         "condition_value": rule.get("condition_value"),
-        "penalty_amount": rule.get("penalty_summary") or "", "penalty_summary": rule.get("penalty_summary") or "",
-        "source_label": "", "obligation_type": _resolve_obligation_type(rule),
+        "penalty_amount": _penalty, "penalty_summary": _penalty,
+        "source_label": "", "obligation_type": _obl_type,
         "appointment_required": bool(rule.get("appointment_required")),
         "inspection_required": bool(rule.get("inspection_required")),
         "action_required": bool(rule.get("action_required")),
         "report_required": bool(rule.get("report_required")),
         "notify_required": bool(rule.get("notify_required")),
         "form_code": rule.get("form_code") or "", "form_url": rule.get("form_url") or "",
-        "due_days": rule.get("due_days"), "due_info": _calc_due_date(rule.get("due_days")),
+        "due_days": rule.get("due_days"),
+        "is_recurring": _is_recurring,                                      # Task 4
+        "due_info": {} if _is_recurring else _calc_due_date(rule.get("due_days")),  # Task 4
         "sector": rule.get("sector") or "", "diagnosis_stage": rule.get("diagnosis_stage"),
         "submit_org_code": submit_org_code,
         "submit_org_label": SUBMIT_ORG_MAP.get(submit_org_code, submit_org_code),
@@ -885,9 +932,11 @@ async def diagnose_step1(body: DiagnoseStep1Body):
     for x in applicable:
         c = (x.get("law_category_code") or x.get("law_name") or "").strip()
         if c and c not in seen: seen.add(c); law_cats.append(c)
+
+    # Task 1: remarks 우선 → obligation_summary 폴백 (사람 언어 표시)
     key_obligations: List[str] = []
     for x in applicable[:20]:
-        t = (x.get("obligation_summary") or x.get("remarks") or "").strip()
+        t = (x.get("remarks") or x.get("obligation_summary") or "").strip()
         if t and t not in key_obligations: key_obligations.append(t)
 
     insp_by_type = {
@@ -896,10 +945,31 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         "ON_DEMAND":   [r for r in triggered["inspection"] if r.get("schedule_type") == "ON_DEMAND"],
     }
 
+    # Task 5: risk_reason 필드 생성
+    all_items_flat = (
+        triggered["appointment"] + triggered["inspection"] +
+        triggered["action"] + triggered["report"] + triggered["notify"]
+    )
+    urgent_count = len([r for r in all_items_flat if (r.get("due_info") or {}).get("urgency") == "URGENT"])
+    _max_pen = next(
+        (r.get("penalty_summary") or r.get("penalty_amount") or ""
+         for r in all_items_flat
+         if (r.get("penalty_summary") or r.get("penalty_amount") or "").strip()
+         and "확인 필요" not in (r.get("penalty_summary") or "")
+         and "부과 가능" not in (r.get("penalty_summary") or "")),
+        ""
+    )
+    risk_reason = f"적용 법령 {len(law_names)}개, 법적 의무 {total_applicable}건"
+    if urgent_count > 0:
+        risk_reason += f", 긴급 이행 {urgent_count}건"
+    if _max_pen:
+        risk_reason += f", 최대 {_max_pen}"
+
     result_data = {
         "factory_id": factory_id or None, "sector": sector_raw, "sector_groups": sector_groups,
         "step": 1, "engine_version": ENGINE_VERSION, "evaluated_at": evaluated_at,
         "facility_context": facility_ctx, "risk_level": risk,
+        "risk_reason": risk_reason,  # Task 5
         "applicable_law_categories": law_cats, "appointment_required_flag": appointment_n > 0,
         "key_obligations": key_obligations, "law_badges": law_names,
         "obligations": obligations, "rules_table": rules_table,
@@ -936,7 +1006,7 @@ async def diagnose_step1(body: DiagnoseStep1Body):
         except Exception as e: print(f"[DIAGNOSE STEP1] factory_diagnosis_results 저장 실패: {e}")
         if diagnosis_id and applicable:
             try:
-                rule_rows = [{"diagnosis_id": diagnosis_id, "rule_code": r.get("rule_id") or r.get("rule_code") or "", "rule_name": (r.get("obligation_summary") or r.get("remarks") or "").strip(), "law_name": r.get("law_name") or "", "law_article": r.get("law_article") or "", "obligation": (r.get("obligation_summary") or "").strip(), "obligation_type": _resolve_obligation_type(r), "due_date": None, "status": "PENDING", "form_code": r.get("form_code") or None} for r in applicable]
+                rule_rows = [{"diagnosis_id": diagnosis_id, "rule_code": r.get("rule_id") or r.get("rule_code") or "", "rule_name": (r.get("remarks") or r.get("obligation_summary") or "").strip(), "law_name": r.get("law_name") or "", "law_article": r.get("law_article") or "", "obligation": (r.get("remarks") or r.get("obligation_summary") or "").strip(), "obligation_type": _resolve_obligation_type(r), "due_date": None, "status": "PENDING", "form_code": r.get("form_code") or None} for r in applicable]
                 for i in range(0, len(rule_rows), 50): supabase.table("diagnosis_rule_results").insert(rule_rows[i:i+50]).execute()
             except Exception as e: print(f"[DIAGNOSE STEP1] diagnosis_rule_results 저장 실패: {e}")
 
@@ -1083,9 +1153,9 @@ def _save_diagnosis_result(supabase, factory_id: str, sector: str, stage: int, i
     try: supabase.table('factory_diagnosis_results').update({'is_latest': False}).eq('factory_id', factory_id).eq('is_latest', True).execute()
     except Exception: pass
     law_categories = list(dict.fromkeys(r.get('law_name', '') for r in matched_rules if r.get('law_name')))
-    key_obligations = [r.get('obligation_summary') or r.get('rule_name', '') for r in matched_rules[:5]]
+    key_obligations = [r.get('remarks') or r.get('obligation_summary') or r.get('rule_name', '') for r in matched_rules[:5]]
     has_appointment = any(r.get('rule_type') == 'APPOINTMENT' or r.get('appointment_required') for r in matched_rules)
-    result_data = {'applicable_law_categories': law_categories, 'appointment_required': has_appointment, 'key_obligations': key_obligations, 'risk_level': _determine_risk_level(len(matched_rules)), 'rules': [{'rule_code': r.get('rule_code') or r.get('rule_id'), 'rule_name': r.get('rule_name') or r.get('remarks', ''), 'law_name': r.get('law_name', ''), 'law_article': r.get('law_article', ''), 'obligation': r.get('obligation_summary') or r.get('rule_name', ''), 'rule_type': r.get('rule_type') or str(r.get('rule_type_code', '')), 'stage': r.get('diagnosis_stage', 1)} for r in matched_rules]}
+    result_data = {'applicable_law_categories': law_categories, 'appointment_required': has_appointment, 'key_obligations': key_obligations, 'risk_level': _determine_risk_level(len(matched_rules)), 'rules': [{'rule_code': r.get('rule_code') or r.get('rule_id'), 'rule_name': r.get('remarks') or r.get('rule_name') or r.get('obligation_summary', ''), 'law_name': r.get('law_name', ''), 'law_article': r.get('law_article', ''), 'obligation': r.get('remarks') or r.get('obligation_summary') or r.get('rule_name', ''), 'rule_type': r.get('rule_type') or str(r.get('rule_type_code', '')), 'stage': r.get('diagnosis_stage', 1)} for r in matched_rules]}
     try:
         res = supabase.table('factory_diagnosis_results').insert({'factory_id': factory_id, 'sector': sector, 'diagnosis_stage': stage, 'input_data': input_data, 'result_data': result_data, 'rule_count': len(matched_rules), 'is_latest': True}).execute()
         return res.data[0] if res.data else {}
@@ -1141,7 +1211,7 @@ def diagnose_step2(body: dict):
     prev_codes = {r.get('rule_code') for r in (prev or {}).get('result_data', {}).get('rules', []) if prev} if prev else set()
     added = [r for r in matched if (r.get('rule_code') or r.get('rule_id')) not in prev_codes]
     result = diagnosis.get('result_data', {})
-    return {'status': 'success', 'diagnosis_id': diagnosis.get('id'), 'stage': 2, 'engine_version': ENGINE_VERSION, 'sector': sector, 'sector_groups': sector_groups, 'rule_count': len(matched), 'added_rule_count': len(added), 'kcsc_process_summary': kcsc_process_summary, 'summary': {'applicable_law_categories': result.get('applicable_law_categories', []), 'appointment_required': result.get('appointment_required', False), 'key_obligations': result.get('key_obligations', []), 'risk_level': result.get('risk_level', 'LOW')}, 'rules': result.get('rules', []), 'added_rules': [{'rule_code': r.get('rule_code') or r.get('rule_id'), 'rule_name': r.get('rule_name') or r.get('remarks', ''), 'law_article': r.get('law_article', '')} for r in added]}
+    return {'status': 'success', 'diagnosis_id': diagnosis.get('id'), 'stage': 2, 'engine_version': ENGINE_VERSION, 'sector': sector, 'sector_groups': sector_groups, 'rule_count': len(matched), 'added_rule_count': len(added), 'kcsc_process_summary': kcsc_process_summary, 'summary': {'applicable_law_categories': result.get('applicable_law_categories', []), 'appointment_required': result.get('appointment_required', False), 'key_obligations': result.get('key_obligations', []), 'risk_level': result.get('risk_level', 'LOW')}, 'rules': result.get('rules', []), 'added_rules': [{'rule_code': r.get('rule_code') or r.get('rule_id'), 'rule_name': r.get('remarks') or r.get('rule_name') or r.get('obligation_summary', ''), 'law_article': r.get('law_article', '')} for r in added]}
 
 
 @router.post("/diagnose/step3")
