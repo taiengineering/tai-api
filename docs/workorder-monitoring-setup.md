@@ -8,54 +8,17 @@
 
 ## 작업 순서
 
-### STEP 1: Sentry 연동 (30분)
+### STEP 1: Sentry 연동 — ✅ 완료
 
-#### 1-1. Sentry 가입 + 프로젝트 생성
-- https://sentry.io 가입 (GitHub 계정 연동)
-- 새 프로젝트 생성: Platform = Python, Project Name = `tai-api`
-- DSN 복사 (예: `https://xxx@o123.ingest.sentry.io/456`)
-
-#### 1-2. Fly.io에 DSN 등록
-```bash
-fly secrets set SENTRY_DSN="https://xxx@o123.ingest.sentry.io/456" -a tai-api-prod
-```
-
-#### 1-3. requirements.txt 추가
-```
-sentry-sdk[fastapi]
-```
-
-#### 1-4. main.py 수정 (상단에 추가)
-```python
-import sentry_sdk
-import os
-
-sentry_dsn = os.getenv("SENTRY_DSN", "")
-if sentry_dsn:
-    sentry_sdk.init(
-        dsn=sentry_dsn,
-        traces_sample_rate=0.1,  # 성능 영향 최소화
-        environment="production",
-    )
-```
-
-#### 1-5. Sentry Alert 설정
-- Sentry 대시보드 → Alerts → Create Alert
-- 조건: `When an event is seen` (every new error)
-- 알림: Email (hetto@kakao.com)
-- 향후 Webhook → MessageMi SMS 연동 가능
-
-#### 1-6. 테스트
-```python
-# Sentry 동작 확인용 (배포 후 1회 실행, 삭제)
-sentry_sdk.capture_message("TAI Sentry 연동 테스트")
-```
+- Sentry 가입, DSN 발급, Fly.io secrets 등록, main.py v5.33.0 연동 완료
+- 에러 자동 수집 확인 완료 (APIError: invalid input syntax for type uuid)
 
 ---
 
-### STEP 2: /health 엔드포인트 + UptimeRobot (1시간)
+### STEP 2: /health 엔드포인트 개선 + UptimeRobot (1시간)
 
-#### 2-1. main.py에 /health 엔드포인트 추가
+#### 2-1. main.py의 기존 /health 엔드포인트를 아래로 교체
+
 ```python
 from fastapi.responses import JSONResponse
 
@@ -88,14 +51,15 @@ def health_check():
     )
 ```
 
-#### 2-2. UptimeRobot 모니터 추가
+🔒 기존 /health 함수를 위 코드로 교체. 기존 root() 함수는 건드리지 않음.
+
+#### 2-2. UptimeRobot 모니터 추가 (수동)
 - https://uptimerobot.com 로그인
 - New Monitor → Monitor Type: Keyword
 - URL: `https://api.taieng.co.kr/health`
 - Keyword: `healthy`
 - Keyword Type: Exists
 - Monitoring Interval: 5 minutes
-- Alert Contact: 기존 SMS 설정 사용
 
 #### 2-3. 테스트
 ```bash
@@ -107,11 +71,7 @@ curl https://api.taieng.co.kr/health
 
 ### STEP 3: API Smoke Test — GitHub Actions (2시간)
 
-#### 3-1. 테스트 계정 준비
-- Supabase에 테스트용 사용자 레코드 확인 (또는 생성)
-- 테스트 이메일/비밀번호 확보
-
-#### 3-2. GitHub Secrets 등록
+#### 3-1. GitHub Secrets 등록 (수동)
 - tai-api 리포 → Settings → Secrets and variables → Actions
 - 추가:
   - `SMOKE_API_URL` = `https://api.taieng.co.kr`
@@ -120,7 +80,7 @@ curl https://api.taieng.co.kr/health
   - `MESSAGEMI_API_KEY` = MessageMi API 키
   - `ALERT_PHONE` = 대표님 전화번호
 
-#### 3-3. 파일 생성: `.github/workflows/smoke-test.yml`
+#### 3-2. 파일 생성: `.github/workflows/smoke-test.yml`
 ```yaml
 name: API Smoke Test
 on:
@@ -146,7 +106,7 @@ jobs:
           ALERT_PHONE: ${{ secrets.ALERT_PHONE }}
 ```
 
-#### 3-4. 파일 생성: `scripts/smoke_test.py`
+#### 3-3. 파일 생성: `scripts/smoke_test.py`
 ```python
 import os
 import sys
@@ -158,10 +118,10 @@ failures = []
 def check(name, fn):
     try:
         fn()
-        print(f"  ✓ {name}")
+        print(f"  \u2713 {name}")
     except Exception as e:
         msg = f"{name}: {e}"
-        print(f"  ✗ {msg}")
+        print(f"  \u2717 {msg}")
         failures.append(msg)
 
 def send_alert(text):
@@ -196,7 +156,7 @@ def s3():
     email = os.environ.get("TEST_EMAIL")
     pw = os.environ.get("TEST_PASSWORD")
     if not email:
-        return  # 테스트 계정 없으면 skip
+        return
     r = httpx.post(f"{API}/auth/login",
         json={"email": email, "password": pw}, timeout=10)
     assert r.status_code == 200
@@ -211,143 +171,31 @@ def s4():
     assert r.status_code == 200
 check("S4 diagnosis/free", s4)
 
-print(f"\n결과: {4 - len(failures)}/4 성공")
+print(f"\n\uacb0\uacfc: {4 - len(failures)}/4 \uc131\uacf5")
 
 if failures:
-    alert_msg = f"[TAI Smoke] {len(failures)}건 실패: {failures[0][:60]}"
+    alert_msg = f"[TAI Smoke] {len(failures)}\uac74 \uc2e4\ud328: {failures[0][:60]}"
     send_alert(alert_msg)
     sys.exit(1)
 ```
 
-#### 3-5. 테스트
+#### 3-4. 테스트
 - GitHub Actions → Actions 탭 → "API Smoke Test" → Run workflow
 - 4/4 성공 확인
 
 ---
 
-### STEP 4: pg_cron 비즈니스 점검 (2시간)
+### STEP 4: pg_cron 비즈니스 점검 — 별도 안내 예정
 
-#### 4-1. Supabase Edge Function 생성: `daily-health-check`
-
-```typescript
-// supabase/functions/daily-health-check/index.ts
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-
-const supabase = createClient(
-  Deno.env.get('SUPABASE_URL')!,
-  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-)
-
-Deno.serve(async () => {
-  const alerts: string[] = []
-
-  // 1) fix_chat: 24시간 내 세션 중 current_turn=0 비율
-  const { data: sessions } = await supabase
-    .from('fix_chat_sessions')
-    .select('id, current_turn')
-    .gte('created_at', new Date(Date.now() - 86400000).toISOString())
-  
-  if (sessions && sessions.length > 0) {
-    const abandoned = sessions.filter(s => s.current_turn === 0).length
-    const rate = abandoned / sessions.length
-    if (rate > 0.8) {
-      alerts.push(`채팅 이탈율 ${Math.round(rate*100)}% (${abandoned}/${sessions.length})`)
-    }
-  }
-
-  // 2) 법령진단 빈 결과
-  const { data: emptyDiag } = await supabase
-    .from('diagnosis_results')
-    .select('id')
-    .eq('rules_count', 0)
-    .gte('created_at', new Date(Date.now() - 86400000).toISOString())
-  
-  if (emptyDiag && emptyDiag.length > 0) {
-    alerts.push(`법령진단 빈결과 ${emptyDiag.length}건`)
-  }
-
-  // 3) D-3 알림 미발송 (향후 work_assignments 테이블 활성화 후)
-  // 현재는 skip
-
-  // 알림 발송
-  if (alerts.length > 0) {
-    const msg = `[TAI Daily] ${alerts.join(' / ')}`
-    const MESSAGEMI_KEY = Deno.env.get('MESSAGEMI_API_KEY')
-    const ALERT_PHONE = Deno.env.get('ALERT_PHONE')
-    
-    if (MESSAGEMI_KEY && ALERT_PHONE) {
-      await fetch('https://api.messagemi.com/v1/send', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${MESSAGEMI_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ to: ALERT_PHONE, content: msg.slice(0, 90) })
-      })
-    }
-    return new Response(JSON.stringify({ alerts }), { status: 200 })
-  }
-
-  return new Response(JSON.stringify({ status: 'all_clear' }), { status: 200 })
-})
-```
-
-#### 4-2. pg_cron 설정
-```sql
--- Supabase SQL Editor에서 실행
-SELECT cron.schedule(
-  'daily-health-check',
-  '0 0 * * *',  -- 매일 UTC 00:00 = KST 09:00
-  $$
-  SELECT net.http_post(
-    url := 'https://xntdkrjhgcscmqctdzyo.supabase.co/functions/v1/daily-health-check',
-    headers := jsonb_build_object(
-      'Authorization', 'Bearer ' || current_setting('app.settings.service_role_key')
-    )
-  );
-  $$
-);
-```
-
-#### 4-3. Edge Function 배포
-```bash
-supabase functions deploy daily-health-check --project-ref xntdkrjhgcscmqctdzyo
-```
-
-#### 4-4. Edge Function Secrets 등록
-```bash
-supabase secrets set MESSAGEMI_API_KEY="xxx" ALERT_PHONE="01012345678" --project-ref xntdkrjhgcscmqctdzyo
-```
-
-#### 4-5. 테스트
-```bash
-curl -X POST https://xntdkrjhgcscmqctdzyo.supabase.co/functions/v1/daily-health-check \
-  -H "Authorization: Bearer {service_role_key}"
-# 예상: {"status":"all_clear"} 또는 {"alerts":[...]}
-```
+Supabase Edge Function + pg_cron 설정이 필요하여 STEP 2~3 완료 후 별도 진행.
 
 ---
 
-## 완료 기준
-
-| 단계 | 확인 방법 | 완료 |
-|------|----------|------|
-| 1 | Sentry 대시보드에 테스트 메시지 표시 | ☐ |
-| 2 | `curl /health` → `{"status":"healthy"}` + UptimeRobot 모니터 추가 | ☐ |
-| 3 | GitHub Actions 수동 실행 → 4/4 성공 | ☐ |
-| 4 | Edge Function 수동 호출 → `all_clear` 응답 | ☐ |
-
 ## 절대 규칙
 
-- 🔒 알림은 MessageMi SMS만 (카카오 알림톡 금지)
-- 🔒 Smoke Test에서 실제 사용자 데이터 건드리지 않음 (테스트 전용 계정 사용)
-- 🔒 pg_cron 점검은 SELECT만 (INSERT/UPDATE/DELETE 금지)
-- 🔒 모니터링 자체가 서비스에 부하를 주지 않도록 (매시간 5건 이내 API 호출)
-- 🔒 기존 main.py, fix_chat.py 로직 변경 금지 (추가만)
-
-## 향후 확장
-
-로직 확정되는 기능이 생길 때마다:
-1. smoke_test.py에 해당 API 검증 항목 추가 (S5, S6, ...)
-2. daily-health-check Edge Function에 비즈니스 쿼리 추가
-3. /health 엔드포인트에 해당 테이블 체크 추가
+- 🔒 기존 main.py의 Sentry 초기화 코드 건드리지 않음 (STEP 1 완료)
+- 🔒 기존 root() 함수 건드리지 않음
+- 🔒 기존 fix_chat.py 로직 변경 금지
+- 🔒 모든 커밋은 dev 브랜치에
+- 🔒 파일 생성 후 python3 -m py_compile로 검증
+- 🔒 의문이 있으면 구현하지 말고 질문
