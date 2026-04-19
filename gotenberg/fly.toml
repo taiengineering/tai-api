@@ -8,6 +8,8 @@ kill_timeout = "5s"
 
 [env]
   CHROMIUM_DISABLE_ROUTES = "false"
+  CHROMIUM_AUTO_START = "true"
+  CHROMIUM_START_TIMEOUT = "60s"
   LOG_LEVEL = "info"
 
 [http_service]
@@ -28,7 +30,7 @@ kill_timeout = "5s"
   cpus = 1
 
 [[http_service.checks]]
-  grace_period = "30s"
+  grace_period = "60s"
   interval = "30s"
   method = "GET"
   path = "/health"
