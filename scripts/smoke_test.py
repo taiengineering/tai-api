@@ -29,9 +29,18 @@ def send_alert(text):
     except Exception as e:
         print(f"[SMS FAIL] {e}")
 
+# Warm up: wake server from cold start
+print("  Warming up server...")
+try:
+    httpx.get(f"{API}/", timeout=30)
+    import time; time.sleep(5)
+    print("  Server ready")
+except Exception:
+    print("  Warm-up timeout, proceeding anyway")
+
 # S1: Health
 def s1():
-    r = httpx.get(f"{API}/health", timeout=10)
+    r = httpx.get(f"{API}/health", timeout=15)
     assert r.status_code == 200
     status = r.json()["status"]
     assert status in ("healthy", "degraded"), f"unexpected status: {status}"
@@ -40,7 +49,7 @@ check("S1 /health", s1)
 # S2: Fix Chat session
 def s2():
     r = httpx.post(f"{API}/fix/chat/start",
-        json={"user_type": "GUEST"}, timeout=10)
+        json={"user_type": "GUEST"}, timeout=15)
     assert r.status_code == 200
     assert r.json().get("session_id")
 check("S2 fix/chat/start", s2)
@@ -52,16 +61,16 @@ def s3():
     if not email:
         return
     r = httpx.post(f"{API}/auth/login",
-        json={"email": email, "password": pw}, timeout=10)
+        json={"email": email, "password": pw}, timeout=15)
     assert r.status_code == 200
 check("S3 auth/login", s3)
 
-# S4: Diagnosis (60s timeout - cold start + law engine)
+# S4: Diagnosis (90s - cold start already handled by warm-up)
 def s4():
     r = httpx.post(f"{API}/diagnosis/free",
         json={"sector": "BUILDING", "area": 500,
               "building_use": "OFFICE", "completion_year": 2010},
-        timeout=60)
+        timeout=90)
     assert r.status_code == 200
 check("S4 diagnosis/free", s4)
 
