@@ -15,16 +15,19 @@ def check(name, fn):
         failures.append(msg)
 
 def send_alert(text):
-    key = os.environ.get("MESSAGEMI_KEY")
     phone = os.environ.get("ALERT_PHONE")
-    if not key or not phone:
+    if not phone:
         print(f"[ALERT] {text}")
         return
-    httpx.post(
-        "https://api.messagemi.com/v1/send",
-        headers={"Authorization": f"Bearer {key}"},
-        json={"to": phone, "content": text[:90]}
-    )
+    try:
+        r = httpx.get(
+            f"{API}/messaging/debug-send",
+            params={"receiver": phone, "message": text[:90]},
+            timeout=15,
+        )
+        print(f"[SMS] status={r.status_code}")
+    except Exception as e:
+        print(f"[SMS FAIL] {e}")
 
 # S1: Health
 def s1():
