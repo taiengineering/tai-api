@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI 메일 관리 라우터 v2.0.0
+TAI 메일 관리 라우터 v2.1.0
 
+v2.1.0:
+  - 인바운드 웹훅: payload에서 html/text 직접 추출 (API 재조회 fallback)
+  - 첨부파일 메타 직접 추출
+  - text_body 저장 (컬럼 없으면 자동 제외 후 재시도)
 v2.0.0:
-  - POST /mail/send        첨부파일(multipart) 지원 (Supabase Storage 업로드 → Resend attachments)
+  - POST /mail/send        첨부파일(multipart) 지원
   - POST /mail/reply/:id   답장
   - GET  /mail/:id         수신메일 html_body + attachments 완전 반환
-  - GET  /mail/attachment/:mail_id/:filename  첨부파일 다운로드 (서명된 URL 리디렉트)
-  - 인바운드 웹훅: html_body 저장 개선
+  - GET  /mail/attachment/:mail_id/:filename  첨부파일 다운로드
 """
 
 from fastapi import APIRouter, HTTPException, Query, Request, File, UploadFile, Form
@@ -29,7 +32,7 @@ RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 resend_client.api_key = RESEND_API_KEY
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")  # service role key
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
 ALLOWED_FROM = {
     "tai@taieng.co.kr":     "TAI Engineering <tai@taieng.co.kr>",
@@ -38,13 +41,12 @@ ALLOWED_FROM = {
 }
 DEFAULT_FROM    = "tai@taieng.co.kr"
 STORAGE_BUCKET  = "mail-attachments"
-MAX_ATTACH_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_ATTACH_SIZE = 10 * 1024 * 1024
 
 
 # ─── 첨부파일 헬퍼 ───────────────────────────────────────────
 
 async def _upload_attachment(file: UploadFile, mail_id: str) -> dict:
-    """Supabase Storage에 파일 업로드 후 메타정보 반환."""
     supabase = get_supabase()
     content = await file.read()
     if len(content) > MAX_ATTACH_SIZE:
@@ -67,12 +69,11 @@ async def _upload_attachment(file: UploadFile, mail_id: str) -> dict:
         "path":         path,
         "size":         len(content),
         "content_type": file.content_type or "application/octet-stream",
-        "content_b64":  base64.b64encode(content).decode(),  # Resend 전송용
+        "content_b64":  base64.b64encode(content).decode(),
     }
 
 
 def _build_resend_attachments(attach_metas: list) -> list:
-    """Resend attachments 포맷 구성."""
     return [
         {"filename": a["name"], "content": a["content_b64"]}
         for a in attach_metas
@@ -80,7 +81,6 @@ def _build_resend_attachments(attach_metas: list) -> list:
 
 
 def _strip_b64(attach_metas: list) -> list:
-    """DB 저장 전 content_b64 제거 (용량 절약)."""
     return [
         {k: v for k, v in a.items() if k != "content_b64"}
         for a in attach_metas
@@ -90,7 +90,6 @@ def _strip_b64(attach_metas: list) -> list:
 # ─── 스키마 ──────────────────────────────────────────────────
 
 class MailSendRequest(BaseModel):
-    """JSON 방식 메일 발송 (첨부파일 없을 때)."""
     to:         List[str]
     cc:         Optional[List[str]] = None
     subject:    str
@@ -115,35 +114,24 @@ async def send_mail(
     sent_by:    Optional[str] = Form(None),
     files:      List[UploadFile] = File(default=[]),
 ):
-    """
-    메일 발송 (첨부파일 지원, multipart/form-data).
-
-    - to: 콤마로 구분된 수신자 목록
-    - files: 첨부파일 (0~N개)
-    """
     supabase = get_supabase()
 
-    # 발신 주소 검증
     from_key = from_email or DEFAULT_FROM
     if from_key not in ALLOWED_FROM:
         raise HTTPException(status_code=400, detail=f"허용되지 않은 발신 주소: {from_key}")
     from_address = ALLOWED_FROM[from_key]
 
-    # 수신자 파싱
     to_list = [e.strip() for e in to.split(",") if e.strip()]
     cc_list = [e.strip() for e in (cc or "").split(",") if e.strip()]
 
-    # 임시 mail_id (저장 전 사용)
     mail_id = str(uuid.uuid4())
 
-    # 첨부파일 업로드
     attach_metas = []
     for f in files:
         if f.filename:
             meta = await _upload_attachment(f, mail_id)
             attach_metas.append(meta)
 
-    # Resend 파라미터
     send_params: dict = {
         "from":    from_address,
         "to":      to_list,
@@ -155,7 +143,6 @@ async def send_mail(
     if attach_metas:
         send_params["attachments"] = _build_resend_attachments(attach_metas)
 
-    # 발송
     resend_id: Optional[str] = None
     status = "sent"
     error_message: Optional[str] = None
@@ -167,7 +154,6 @@ async def send_mail(
         status = "failed"
         error_message = str(e)
 
-    # DB 저장
     log_row = {
         "id":          mail_id,
         "to_emails":   to_list,
@@ -206,25 +192,16 @@ async def reply_mail(
     sent_by:    Optional[str]  = Form(None),
     files:      List[UploadFile] = File(default=[]),
 ):
-    """
-    원본 메일에 답장.
-
-    - subject: 없으면 원본 제목에 Re: 접두사 자동 추가
-    - to: 답장 수신자 (보통 원본 발신자 이메일)
-    """
     supabase = get_supabase()
 
-    # 원본 메일 조회
     orig = supabase.table("mail_logs").select("*").eq("id", mail_id).single().execute()
     if not orig.data:
         raise HTTPException(status_code=404, detail="원본 메일을 찾을 수 없습니다.")
     original = orig.data
 
-    # 제목 자동 설정
     orig_subject = original.get("subject", "")
     reply_subject = subject or (f"Re: {orig_subject}" if not orig_subject.startswith("Re:") else orig_subject)
 
-    # 발신 주소
     from_key = from_email or DEFAULT_FROM
     if from_key not in ALLOWED_FROM:
         raise HTTPException(status_code=400, detail=f"허용되지 않은 발신 주소: {from_key}")
@@ -233,14 +210,12 @@ async def reply_mail(
     to_list = [e.strip() for e in to.split(",") if e.strip()]
     new_mail_id = str(uuid.uuid4())
 
-    # 첨부파일
     attach_metas = []
     for f in files:
         if f.filename:
             meta = await _upload_attachment(f, new_mail_id)
             attach_metas.append(meta)
 
-    # 원본 인용 HTML
     orig_html = original.get("html_body", "")
     reply_html = f"""
 {html}
@@ -262,7 +237,6 @@ async def reply_mail(
     if attach_metas:
         send_params["attachments"] = _build_resend_attachments(attach_metas)
 
-    # In-Reply-To 헤더 (있으면 추가)
     orig_resend_id = original.get("resend_id")
     if orig_resend_id:
         send_params["headers"] = {"In-Reply-To": f"<{orig_resend_id}>"}
@@ -310,9 +284,6 @@ async def reply_mail(
 
 @router.get("/attachment/{mail_id}/{filename}")
 def download_attachment(mail_id: str, filename: str):
-    """
-    첨부파일 다운로드 (서명된 URL로 리디렉트).
-    """
     supabase = get_supabase()
     path = f"{mail_id}/{filename}"
 
@@ -413,7 +384,7 @@ def delete_bulk(body: BulkDeleteRequest):
 
 @router.post("/webhook/inbound")
 async def webhook_inbound(request: Request):
-    """Resend 수신 웹훅 — html_body 완전 저장."""
+    """Resend 수신 웹훅 — webhook payload에서 본문 직접 추출 (v2.1.0)."""
     try:
         payload = await request.json()
     except Exception:
@@ -424,7 +395,7 @@ async def webhook_inbound(request: Request):
         return {"ok": True, "skipped": True, "type": event_type}
 
     data       = payload.get("data", {})
-    email_id   = data.get("email_id", "")
+    email_id   = data.get("email_id", "") or data.get("id", "")
     from_email = data.get("from", "")
     to_emails  = data.get("to", [])
     if isinstance(to_emails, str): to_emails = [to_emails]
@@ -432,10 +403,14 @@ async def webhook_inbound(request: Request):
     if isinstance(cc_emails, str): cc_emails = [cc_emails]
     subject    = data.get("subject", "(제목 없음)")
 
-    # Resend Received emails API로 본문 + 첨부파일 조회
-    html_body   = ""
-    attachments = []
-    if email_id and RESEND_API_KEY:
+    html_body = data.get("html") or ""
+    text_body = data.get("text") or ""
+
+    if not html_body and text_body:
+        import html as html_escape
+        html_body = f"<pre style='white-space:pre-wrap;font-family:inherit;margin:0;'>{html_escape.escape(text_body)}</pre>"
+
+    if not html_body and email_id and RESEND_API_KEY:
         try:
             api_res = httpx.get(
                 f"https://api.resend.com/emails/{email_id}",
@@ -445,16 +420,17 @@ async def webhook_inbound(request: Request):
             if api_res.status_code == 200:
                 detail = api_res.json()
                 html_body = detail.get("html") or detail.get("text") or ""
-                # 수신 첨부파일 메타 (Resend는 파일 URL 제공 안 함 - 메타만)
-                for att in detail.get("attachments", []):
-                    attachments.append({
-                        "name":         att.get("filename", ""),
-                        "content_type": att.get("content-type", ""),
-                        "size":         att.get("size", 0),
-                        "path":         "",  # 수신 첨부는 별도 저장 불가
-                    })
         except Exception:
-            html_body = "(본문 조회 실패)"
+            pass
+
+    attachments = []
+    for att in data.get("attachments", []) or []:
+        attachments.append({
+            "name":         att.get("filename") or att.get("name", ""),
+            "content_type": att.get("content_type") or att.get("content-type", ""),
+            "size":         att.get("size", 0),
+            "path":         "",
+        })
 
     supabase = get_supabase()
     log_row = {
@@ -463,6 +439,7 @@ async def webhook_inbound(request: Request):
         "cc_emails":   cc_emails,
         "subject":     subject,
         "html_body":   html_body,
+        "text_body":   text_body,
         "resend_id":   email_id,
         "status":      "sent",
         "direction":   "inbound",
@@ -474,7 +451,14 @@ async def webhook_inbound(request: Request):
     try:
         supabase.table("mail_logs").insert(log_row).execute()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"수신 메일 저장 실패: {e}")
+        if "text_body" in str(e):
+            log_row.pop("text_body", None)
+            try:
+                supabase.table("mail_logs").insert(log_row).execute()
+            except Exception as e2:
+                raise HTTPException(status_code=500, detail=f"수신 메일 저장 실패: {e2}")
+        else:
+            raise HTTPException(status_code=500, detail=f"수신 메일 저장 실패: {e}")
 
     return {"success": True}
 
@@ -513,7 +497,6 @@ def soft_delete(mail_id: str):
 
 @router.get("/{mail_id}")
 def get_mail_detail(mail_id: str):
-    """메일 상세 조회 — html_body + attachments 완전 반환, 수신 자동 읽음."""
     supabase = get_supabase()
     res = supabase.table("mail_logs").select("*").eq(
         "id", mail_id).eq("deleted", False).single().execute()
@@ -522,12 +505,10 @@ def get_mail_detail(mail_id: str):
 
     mail = res.data
 
-    # 수신 메일 자동 읽음
     if mail.get("direction") == "inbound" and not mail.get("read"):
         supabase.table("mail_logs").update({"read": True}).eq("id", mail_id).execute()
         mail["read"] = True
 
-    # html_body 없으면 Resend API 재조회
     if not mail.get("html_body") and mail.get("resend_id") and RESEND_API_KEY:
         try:
             api_res = httpx.get(
