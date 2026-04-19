@@ -413,7 +413,7 @@ def delete_bulk(body: BulkDeleteRequest):
 
 @router.post("/webhook/inbound")
 async def webhook_inbound(request: Request):
-    """Resend 수신 웹훅 — html_body 완전 저장."""
+    """Resend 수신 웹훅 — webhook payload에서 본문 직접 추출 (v2.1.0)."""
     try:
         payload = await request.json()
     except Exception:
@@ -424,7 +424,7 @@ async def webhook_inbound(request: Request):
         return {"ok": True, "skipped": True, "type": event_type}
 
     data       = payload.get("data", {})
-    email_id   = data.get("email_id", "")
+    email_id   = data.get("email_id", "") or data.get("id", "")
     from_email = data.get("from", "")
     to_emails  = data.get("to", [])
     if isinstance(to_emails, str): to_emails = [to_emails]
@@ -432,10 +432,31 @@ async def webhook_inbound(request: Request):
     if isinstance(cc_emails, str): cc_emails = [cc_emails]
     subject    = data.get("subject", "(제목 없음)")
 
-    # Resend Received emails API로 본문 + 첨부파일 조회
-    html_body   = ""
-    attachments = []
-    if email_id and RESEND_API_KEY:
+    # ── v2.1.0: webhook payload에서 본문 직접 추출 ──────────────────────────
+    # Resend inbound webhook payload 구조 예시:
+    #   {
+    #     "type": "email.received",
+    #     "data": {
+    #       "email_id": "...",
+    #       "from": "sender@x.com",
+    #       "to": ["tai@taieng.co.kr"],
+    #       "subject": "...",
+    #       "html": "<html>...</html>",    ← 이걸 쓰면 됨
+    #       "text": "...",                 ← fallback
+    #       "headers": [...],
+    #       "attachments": [...]
+    #     }
+    #   }
+    html_body = data.get("html") or ""
+    text_body = data.get("text") or ""
+
+    # html 없으면 text를 <pre>로 감싸서 html_body에 저장 (프론트 호환성)
+    if not html_body and text_body:
+        import html as html_escape
+        html_body = f"<pre style='white-space:pre-wrap;font-family:inherit;margin:0;'>{html_escape.escape(text_body)}</pre>"
+
+    # ── fallback: payload에 본문 없으면 Resend API 재조회 시도 ──
+    if not html_body and email_id and RESEND_API_KEY:
         try:
             api_res = httpx.get(
                 f"https://api.resend.com/emails/{email_id}",
@@ -445,16 +466,18 @@ async def webhook_inbound(request: Request):
             if api_res.status_code == 200:
                 detail = api_res.json()
                 html_body = detail.get("html") or detail.get("text") or ""
-                # 수신 첨부파일 메타 (Resend는 파일 URL 제공 안 함 - 메타만)
-                for att in detail.get("attachments", []):
-                    attachments.append({
-                        "name":         att.get("filename", ""),
-                        "content_type": att.get("content-type", ""),
-                        "size":         att.get("size", 0),
-                        "path":         "",  # 수신 첨부는 별도 저장 불가
-                    })
         except Exception:
-            html_body = "(본문 조회 실패)"
+            pass  # fallback 실패해도 계속 진행
+
+    # 첨부파일 (webhook payload에서 직접)
+    attachments = []
+    for att in data.get("attachments", []) or []:
+        attachments.append({
+            "name":         att.get("filename") or att.get("name", ""),
+            "content_type": att.get("content_type") or att.get("content-type", ""),
+            "size":         att.get("size", 0),
+            "path":         "",  # inbound 첨부는 현재 별도 저장 안 함
+        })
 
     supabase = get_supabase()
     log_row = {
@@ -463,6 +486,7 @@ async def webhook_inbound(request: Request):
         "cc_emails":   cc_emails,
         "subject":     subject,
         "html_body":   html_body,
+        "text_body":   text_body,   # ← 컬럼 있으면 저장, 없으면 Supabase가 무시
         "resend_id":   email_id,
         "status":      "sent",
         "direction":   "inbound",
@@ -474,7 +498,15 @@ async def webhook_inbound(request: Request):
     try:
         supabase.table("mail_logs").insert(log_row).execute()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"수신 메일 저장 실패: {e}")
+        # text_body 컬럼 없어서 실패했을 수 있으므로 제외 후 재시도
+        if "text_body" in str(e):
+            log_row.pop("text_body", None)
+            try:
+                supabase.table("mail_logs").insert(log_row).execute()
+            except Exception as e2:
+                raise HTTPException(status_code=500, detail=f"수신 메일 저장 실패: {e2}")
+        else:
+            raise HTTPException(status_code=500, detail=f"수신 메일 저장 실패: {e}")
 
     return {"success": True}
 
