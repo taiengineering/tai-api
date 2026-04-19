@@ -1,6 +1,14 @@
-# routers/report_forms.py v2.0.2
-# fix: WeasyPrint(GTK 의존) → xhtml2pdf(순수Python) 전환
-#      libgobject-2.0-0 Railway 환경 오류 해결
+# routers/report_forms.py v2.1.0
+# v2.1.0: Supabase 스토리지 분리 적용
+#   - HTML 템플릿: GitHub filesystem → form-templates 버킷 (동적 로드)
+#   - PDF 출력물: form-outputs 버킷 업로드 후 signed URL 반환
+#   - TEMPLATE_MAP 하드코딩 → DB html_storage_path 우선, 로컬 fallback
+# v2.0.2: WeasyPrint → xhtml2pdf 전환
+#
+# 버킷 구조:
+#   form-originals/{form_code}/original.hwp  — HWP 원본
+#   form-templates/{form_code}/template.html — HTML 변환본
+#   form-outputs/{factory_id}/{submission_id}.pdf — 생성 PDF
 #
 # 엔드포인트:
 #   GET  /report-forms/templates
@@ -16,6 +24,7 @@
 #   PATCH /report-forms/submissions/{id}
 #   POST /report-forms/submissions/preview-pdf
 #   POST /report-forms/submissions/{id}/pdf
+#   GET  /report-forms/storage/signed-url/{submission_id}
 #   GET  /report-forms/dashboard/{factory_id}
 #   GET  /report-forms/test
 
@@ -23,6 +32,7 @@ from fastapi import APIRouter, HTTPException, Query, Body
 from fastapi.responses import StreamingResponse, JSONResponse
 from typing import Optional
 from datetime import datetime, date, timedelta
+from pathlib import Path
 import os, io, re
 from supabase import create_client
 
@@ -31,19 +41,56 @@ router = APIRouter(prefix="/report-forms", tags=["신고서식"])
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-TEMPLATE_MAP = {
+# 로컬 fallback — storage에 없을 때 GitHub 파일로 대체
+# 신규 서식은 form-templates 버킷에만 올리면 자동 인식됨
+LOCAL_TEMPLATE_FALLBACK = {
     "OSHACT-FORM-002": "templates/forms/OSHACT_FORM_002.html",
 }
+
+BUCKET_TEMPLATES = "form-templates"
+BUCKET_OUTPUTS   = "form-outputs"
+BUCKET_ORIGINALS = "form-originals"
 
 
 def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-def _render_html_template(template_path: str, form_data: dict) -> str:
+# ============================================================
+# 템플릿 로드 (스토리지 우선 → 로컬 fallback)
+# ============================================================
+
+def _load_html_template(form_code: str) -> str:
+    """
+    우선순위:
+    1) form_templates.html_storage_path → form-templates 버킷에서 다운로드
+    2) LOCAL_TEMPLATE_FALLBACK → 로컬 파일 읽기
+    """
+    supabase = get_supabase()
+
+    # 1) DB에서 storage path 확인
+    try:
+        res = supabase.table("form_templates").select(
+            "html_storage_path"
+        ).eq("form_code", form_code).eq("is_active", True).maybe_single().execute()
+
+        if res.data and res.data.get("html_storage_path"):
+            storage_path = res.data["html_storage_path"]
+            file_bytes = supabase.storage.from_(BUCKET_TEMPLATES).download(storage_path)
+            return file_bytes.decode("utf-8")
+    except Exception:
+        pass  # storage 실패 시 fallback으로
+
+    # 2) 로컬 fallback
+    local_path = LOCAL_TEMPLATE_FALLBACK.get(form_code)
+    if local_path and Path(local_path).exists():
+        return Path(local_path).read_text(encoding="utf-8")
+
+    raise HTTPException(status_code=404, detail=f"HTML 템플릿 없음: {form_code}. form-templates 버킷에 {form_code}/template.html 을 업로드하세요.")
+
+
+def _render_html(html: str, form_data: dict) -> str:
     """{{ key }} 치환으로 HTML 렌더링"""
-    from pathlib import Path
-    html = Path(template_path).read_text(encoding="utf-8")
     for k, v in form_data.items():
         html = html.replace("{{ " + k + " }}", str(v) if v is not None else "")
     html = re.sub(r"\{\{\s*\w+\s*\}\}", "", html)
@@ -51,24 +98,100 @@ def _render_html_template(template_path: str, form_data: dict) -> str:
 
 
 def _generate_pdf_bytes(html_content: str) -> bytes:
-    """
-    xhtml2pdf (순수 Python, 시스템 라이브러리 불필요) 사용.
-    WeasyPrint 제거 — Railway 환경에서 GTK 라이브러리 의존성 문제 해결.
-    """
+    """xhtml2pdf (순수 Python) — 한글 UTF-8 지원"""
     try:
         from xhtml2pdf import pisa
         buf = io.BytesIO()
-        # encoding='UTF-8' 명시 (한글 지원)
-        pisa_status = pisa.CreatePDF(
-            io.StringIO(html_content),
-            dest=buf,
-            encoding='UTF-8'
-        )
+        pisa_status = pisa.CreatePDF(io.StringIO(html_content), dest=buf, encoding="UTF-8")
         if pisa_status.err:
-            raise RuntimeError(f"xhtml2pdf 변환 오류: {pisa_status.err}")
+            raise RuntimeError(f"xhtml2pdf 오류: {pisa_status.err}")
         return buf.getvalue()
     except ImportError:
         raise ImportError("xhtml2pdf 미설치 — pip install xhtml2pdf")
+
+
+def _upload_pdf_to_storage(supabase, factory_id: str, submission_id: str, pdf_bytes: bytes) -> str:
+    """
+    form-outputs/{factory_id}/{submission_id}.pdf 업로드.
+    반환: 버킷 내 경로 (storage_path)
+    """
+    storage_path = f"{factory_id}/{submission_id}.pdf"
+    supabase.storage.from_(BUCKET_OUTPUTS).upload(
+        path=storage_path,
+        file=pdf_bytes,
+        file_options={"content-type": "application/pdf", "upsert": "true"},
+    )
+    return storage_path
+
+
+def _get_signed_url(supabase, storage_path: str, expires_in: int = 3600) -> str:
+    """form-outputs 버킷 signed URL (1시간 유효)"""
+    res = supabase.storage.from_(BUCKET_OUTPUTS).create_signed_url(storage_path, expires_in)
+    return res.get("signedURL") or res.get("signedUrl", "")
+
+
+# ============================================================
+# 스토리지 관리 엔드포인트
+# ============================================================
+
+@router.get("/storage/signed-url/{submission_id}")
+def get_pdf_signed_url(submission_id: str, expires_in: int = Query(3600, ge=60, le=86400)):
+    """저장된 서류 PDF의 임시 다운로드 URL 발급 (기본 1시간)"""
+    supabase = get_supabase()
+    res = supabase.table("form_submissions").select(
+        "factory_id, pdf_url, form_code"
+    ).eq("id", submission_id).single().execute()
+    if not res.data or not res.data.get("pdf_url"):
+        raise HTTPException(status_code=404, detail="PDF가 없습니다. 먼저 PDF를 생성하세요.")
+
+    sub = res.data
+    # pdf_url이 버킷 내 경로면 signed URL 발급, 외부 URL이면 그대로 반환
+    pdf_url = sub["pdf_url"]
+    if pdf_url.startswith("http"):
+        return {"status": "success", "url": pdf_url, "type": "external"}
+
+    signed = _get_signed_url(supabase, pdf_url, expires_in)
+    return {
+        "status": "success",
+        "url": signed,
+        "type": "storage",
+        "expires_in": expires_in,
+        "storage_path": pdf_url,
+    }
+
+
+@router.post("/storage/upload-template")
+def upload_html_template(body: dict = Body(...)):
+    """
+    HTML 템플릿을 form-templates 버킷에 업로드.
+    body: { form_code, html_content }
+    경로: {form_code}/template.html
+    """
+    form_code    = body.get("form_code")
+    html_content = body.get("html_content")
+    if not form_code or not html_content:
+        raise HTTPException(status_code=400, detail="form_code, html_content 필수")
+
+    supabase     = get_supabase()
+    storage_path = f"{form_code}/template.html"
+
+    supabase.storage.from_(BUCKET_TEMPLATES).upload(
+        path=storage_path,
+        file=html_content.encode("utf-8"),
+        file_options={"content-type": "text/html; charset=utf-8", "upsert": "true"},
+    )
+
+    # form_templates DB에 경로 업데이트
+    supabase.table("form_templates").update({
+        "html_storage_path": storage_path,
+        "updated_at": datetime.now().isoformat(),
+    }).eq("form_code", form_code).execute()
+
+    return {
+        "status": "success",
+        "message": f"form-templates/{storage_path} 업로드 완료",
+        "storage_path": storage_path,
+    }
 
 
 # ============================================================
@@ -88,7 +211,8 @@ def get_form_templates(
 
     q = supabase.table("form_templates").select(
         "id, form_code, form_no, form_name, law_code, "
-        "submit_to, submit_timing, trigger_event, bylseq, hwp_url, is_active",
+        "submit_to, submit_timing, trigger_event, bylseq, "
+        "hwp_url, html_storage_path, original_storage_path, is_active",
         count="exact"
     ).eq("is_active", is_active)
 
@@ -98,10 +222,18 @@ def get_form_templates(
     q = q.order("form_code").range(offset, offset + page_size - 1)
     res = q.execute()
 
+    # 템플릿 준비 여부 플래그 추가
+    items = res.data or []
+    for item in items:
+        item["has_html_template"] = bool(
+            item.get("html_storage_path") or
+            item.get("form_code") in LOCAL_TEMPLATE_FALLBACK
+        )
+
     return {
         "status": "success",
         "data": {
-            "items":     res.data or [],
+            "items":     items,
             "total":     res.count or 0,
             "page":      page,
             "page_size": page_size,
@@ -111,14 +243,18 @@ def get_form_templates(
 
 @router.get("/templates/{form_code}")
 def get_form_template(form_code: str):
-    """서식 템플릿 상세 조회 (form_json 포함)"""
+    """서식 템플릿 상세 조회"""
     supabase = get_supabase()
     res = supabase.table("form_templates").select("*").eq(
         "form_code", form_code
     ).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="서식을 찾을 수 없습니다")
-    return {"status": "success", "data": res.data}
+    data = res.data
+    data["has_html_template"] = bool(
+        data.get("html_storage_path") or form_code in LOCAL_TEMPLATE_FALLBACK
+    )
+    return {"status": "success", "data": data}
 
 
 # ============================================================
@@ -318,12 +454,14 @@ def get_form_submission(submission_id: str):
 
 @router.post("/submissions")
 def create_form_submission(body: dict):
-    supabase = get_supabase()
+    supabase   = get_supabase()
     factory_id = body.get("factory_id")
     form_code  = body.get("form_code")
     form_data  = body.get("form_data", {})
     if not factory_id or not form_code:
         raise HTTPException(status_code=400, detail="factory_id, form_code 필수")
+
+    # 사업장 기본정보 자동채움
     fac_res = supabase.table("factories").select(
         "name, address_road, address_jibun, ksic_code, ksic_name, worker_count, "
         "companies(name, business_number, representative_name)"
@@ -341,6 +479,7 @@ def create_form_submission(body: dict):
         }
         for k, v in auto_filled.items():
             if k not in form_data or not form_data[k]: form_data[k] = v
+
     res = supabase.table("form_submissions").insert({
         "factory_id": factory_id, "form_code": form_code,
         "event_id":   body.get("event_id"), "form_data": form_data,
@@ -360,7 +499,7 @@ def create_form_submission(body: dict):
 @router.patch("/submissions/{submission_id}")
 def update_form_submission(submission_id: str, body: dict):
     supabase = get_supabase()
-    allowed = {"form_data", "pdf_url", "submitted_at"}
+    allowed  = {"form_data", "pdf_url", "submitted_at"}
     update_data = {k: v for k, v in body.items() if k in allowed}
     update_data["updated_at"] = datetime.now().isoformat()
     if not update_data:
@@ -379,18 +518,18 @@ def update_form_submission(submission_id: str, body: dict):
 
 
 # ============================================================
-# 5. PDF 생성 (xhtml2pdf 사용)
+# 5. PDF 생성 (스토리지 업로드 포함)
 # ============================================================
 
 @router.post("/submissions/preview-pdf")
 def preview_pdf(body: dict = Body(...)):
-    """즉시 PDF 스트림 반환 (DB 저장 없음)"""
+    """즉시 PDF 스트림 반환 (DB·스토리지 저장 없음)"""
     form_code = body.get("form_code", "OSHACT-FORM-002")
     form_data = body.get("form_data", {})
-    template_path = TEMPLATE_MAP.get(form_code)
-    if not template_path:
-        raise HTTPException(status_code=404, detail=f"템플릿 없음: {form_code}")
-    html_content = _render_html_template(template_path, form_data)
+
+    html_raw     = _load_html_template(form_code)
+    html_content = _render_html(html_raw, form_data)
+
     try:
         pdf_bytes = _generate_pdf_bytes(html_content)
         return StreamingResponse(
@@ -406,26 +545,36 @@ def preview_pdf(body: dict = Body(...)):
 
 @router.post("/submissions/{submission_id}/pdf")
 def generate_and_save_pdf(submission_id: str):
-    """저장된 서류 PDF 생성 → pdf_url 업데이트 → PDF 스트림 반환"""
+    """
+    저장된 서류 → PDF 생성 → form-outputs 버킷 업로드
+    → form_submissions.pdf_url 업데이트 (버킷 내 경로)
+    → PDF 스트림 반환
+    """
     supabase = get_supabase()
     res = supabase.table("form_submissions").select(
-        "*, form_templates(form_code, form_json)"
+        "factory_id, form_code, form_data"
     ).eq("id", submission_id).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="서류를 찾을 수 없습니다")
-    sub       = res.data
-    form_code = sub.get("form_code", "OSHACT-FORM-002")
-    form_data = sub.get("form_data", {})
-    template_path = TEMPLATE_MAP.get(form_code)
-    if not template_path:
-        raise HTTPException(status_code=404, detail=f"템플릿 없음: {form_code}")
-    html_content = _render_html_template(template_path, form_data)
+
+    sub        = res.data
+    form_code  = sub.get("form_code", "OSHACT-FORM-002")
+    form_data  = sub.get("form_data", {})
+    factory_id = sub.get("factory_id", "unknown")
+
+    html_raw     = _load_html_template(form_code)
+    html_content = _render_html(html_raw, form_data)
+
     try:
-        pdf_bytes = _generate_pdf_bytes(html_content)
-        pdf_url = f"generated/{form_code}_{submission_id}.pdf"
-        supabase.table("form_submissions").update(
-            {"pdf_url": pdf_url, "updated_at": datetime.now().isoformat()}
-        ).eq("id", submission_id).execute()
+        pdf_bytes    = _generate_pdf_bytes(html_content)
+        storage_path = _upload_pdf_to_storage(supabase, factory_id, submission_id, pdf_bytes)
+
+        # pdf_url을 버킷 내 경로로 저장 (외부 URL 아님)
+        supabase.table("form_submissions").update({
+            "pdf_url":    storage_path,
+            "updated_at": datetime.now().isoformat(),
+        }).eq("id", submission_id).execute()
+
         return StreamingResponse(
             io.BytesIO(pdf_bytes),
             media_type="application/pdf",
@@ -434,7 +583,7 @@ def generate_and_save_pdf(submission_id: str):
     except ImportError as e:
         raise HTTPException(status_code=501, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"PDF 생성 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"PDF 생성/업로드 실패: {str(e)}")
 
 
 # ============================================================
@@ -485,4 +634,13 @@ def get_report_dashboard(factory_id: str):
 
 @router.get("/test")
 def test():
-    return {"status": "ok", "message": "report-forms API v2.0.2 (xhtml2pdf)"}
+    return {
+        "status": "ok",
+        "message": "report-forms API v2.1.0 (Supabase 스토리지 분리)",
+        "buckets": {
+            "originals":  BUCKET_ORIGINALS,
+            "templates":  BUCKET_TEMPLATES,
+            "outputs":    BUCKET_OUTPUTS,
+        },
+        "local_fallback": list(LOCAL_TEMPLATE_FALLBACK.keys()),
+    }

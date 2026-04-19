@@ -1,4 +1,5 @@
-# main.py — v5.31.0
+# main.py — v5.31.1
+# v5.31.1: diagnosis_proposal 라우터 등록 (GET /diagnosis/proposal-pdf/{public_token})
 # v5.31.0: diagnosis_report 라우터 등록 (GET /diagnosis/report-pdf/{public_token})
 # v5.30.0: diagnosis_integrated 라우터 등록 (BE-10 진단통합 백엔드)
 # v5.29.0: diagnosis_plan_recommend 라우터 등록 (BE-08 진단 기반 플랜 추천)
@@ -111,10 +112,11 @@ from routers.overdue_checker         import router as overdue_checker_router
 from routers.diagnosis_plan_recommend import router as plan_recommend_router
 from routers.diagnosis_integrated    import router as diagnosis_integrated_router   # v5.30.0
 from routers.diagnosis_report        import router as diagnosis_report_router        # v5.31.0
+from routers.diagnosis_proposal      import router as diagnosis_proposal_router      # v5.31.1
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.31.0"
+APP_VERSION = "5.31.1"
 
 
 @asynccontextmanager
@@ -162,7 +164,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 공개 엔드포인트 (인증 불필요) — 먼저 등록
+# 공개 엔드포인트
 app.include_router(public_router)
 app.include_router(public_admin_router)
 app.include_router(alert_messages_router)
@@ -181,6 +183,7 @@ app.include_router(diagnosis_autofill_router)
 app.include_router(plan_recommend_router)           # 공개: 진단 결과 페이지 소비
 app.include_router(diagnosis_integrated_router)    # v5.30.0 — 공개: 마케팅사이트 익명 사용자
 app.include_router(diagnosis_report_router)        # v5.31.0 — 공개: 유료 PDF 온디맨드 생성
+app.include_router(diagnosis_proposal_router)       # v5.31.1 — 공개: 기안용 proposal PDF
 
 # 인증 필요 엔드포인트
 app.include_router(auth_router)

@@ -7,9 +7,9 @@ from db.database import get_supabase
 
 router = APIRouter(prefix="/public/pricing", tags=["공개 가격"])
 
-# ── 5분 캐시 ──────────────────────────────────────────────────
+# ── 5분 인메모리 캐시 ─────────────────────────────────────────
 _cache: dict = {}
-CACHE_TTL = 300  # 5분
+CACHE_TTL = 300
 
 
 def _get_cached(key: str):
@@ -89,7 +89,7 @@ def public_saas_pricing(sector: str = None):
     """공개 SaaS 요금제 조회 (레거시 — /saas-plans 사용 권장)."""
     cache_key = f"saas:{sector or 'ALL'}"
     cached = _get_cached(cache_key)
-    if cached:
+    if cached is not None:
         return {"status": "success", "cached": True, "data": cached}
 
     sb = get_supabase()
@@ -112,7 +112,7 @@ def public_saas_pricing(sector: str = None):
 def public_diagnosis_pricing():
     """공개 법령진단 요금 조회 (레거시 — /diagnosis-reports 사용 권장)."""
     cached = _get_cached("diagnosis:v2")
-    if cached:
+    if cached is not None:
         return {"status": "success", "cached": True, "data": cached}
 
     sb = get_supabase()
@@ -131,7 +131,7 @@ def public_diagnosis_pricing():
 def public_all_pricing(sector: str = None):
     """pricing.html에서 사용. SaaS + 법령진단 가격 동시 반환."""
     cached = _get_cached(f"all:{sector or 'ALL'}")
-    if cached:
+    if cached is not None:
         return {"status": "success", "cached": True, **cached}
 
     sb = get_supabase()
@@ -158,6 +158,6 @@ def public_all_pricing(sector: str = None):
 
 @router.delete("/cache")
 def clear_pricing_cache():
-    """관리자가 가격 변경 후 캐시를 수동으로 초기화합니다."""
+    """가격 변경 후 캐시 수동 초기화 (관리자용)."""
     _cache.clear()
     return {"status": "success", "message": "가격 캐시가 초기화되었습니다"}

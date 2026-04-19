@@ -1,22 +1,18 @@
 """
-routers/diagnosis_proposal.py — v1.0.0
+routers/diagnosis_proposal.py — v1.0.3
 기안용 PDF 생성 — 결재권자용 3페이지 리스크 보고서
 
-v1.0.0 (2026-04-18):
-  GET /diagnosis/proposal-pdf/{public_token}
-  - anonymous_diagnosis_results 테이블에서 public_token으로 조회
-  - Jinja2 렌더링 (templates/proposal_pdf.html)
-  - xhtml2pdf PDF 생성
-  - StreamingResponse(application/pdf) 반환
-  - 공개 엔드포인트: public_token 자체가 접근 제어
-  - SVG 미사용 (xhtml2pdf 호환성): HTML 테이블·바차트로 대체
-  - 플랜 추천: diagnosis_plan_recommend.py 함수 재사용
+v1.0.3 (2026-04-18): xhtml2pdf 한글 폰트(NanumGothic) @font-face 주입
+v1.0.2 (2026-04-18): str 타입 규칙 항목 처리 (AttributeError 수정)
+v1.0.1 (2026-04-18): penalty_summary 한국어 텍스트 파싱 (ValueError 수정)
+v1.0.0 (2026-04-18): 최초 생성
 """
 from __future__ import annotations
 
 import io
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -28,24 +24,14 @@ from db.supabase_client import get_supabase
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/diagnosis", tags=["기안PDF"])
 
-VERSION = "1.0.0"
-
-# ─── 상수 ───────────────────────────────────────────────────────────────────
+VERSION = "1.0.3"
 
 SECTOR_LABEL: Dict[str, str] = {
-    "INDUSTRY":       "산업(제조)",
-    "BUILDING":       "건물·시설",
-    "CONSTRUCTION":   "건설",
-    "MANUFACTURING":  "산업(제조)",
-    "SPECIAL_FACILITY": "건물·시설",
+    "INDUSTRY": "산업(제조)", "BUILDING": "건물·시설", "CONSTRUCTION": "건설",
+    "MANUFACTURING": "산업(제조)", "SPECIAL_FACILITY": "건물·시설",
 }
+SECTOR_NORMALIZE: Dict[str, str] = {"MANUFACTURING": "INDUSTRY", "SPECIAL_FACILITY": "BUILDING"}
 
-SECTOR_NORMALIZE: Dict[str, str] = {
-    "MANUFACTURING":    "INDUSTRY",
-    "SPECIAL_FACILITY": "BUILDING",
-}
-
-# 가격은 PRICING_FINAL.md 기준 (diagnosis_plan_recommend._PLANS와 동기화)
 _PLANS: Dict[str, Dict[str, Any]] = {
     "INDUSTRY_STARTER_V2":      {"name": "산업 STARTER",  "monthly": 79000},
     "INDUSTRY_BUSINESS_V2":     {"name": "산업 BUSINESS", "monthly": 149000},
@@ -58,19 +44,50 @@ _PLANS: Dict[str, Dict[str, Any]] = {
     "CONSTRUCTION_PREMIUM_V2":  {"name": "건설 PREMIUM",   "monthly": 385000},
     "CONSTRUCTION_CUSTOM_V2":   {"name": "건설 CUSTOM",    "monthly": None},
 }
+_AGENCY_MONTHLY_LOW  = 1_500_000
+_AGENCY_MONTHLY_HIGH = 3_000_000
 
-_AGENCY_MONTHLY_LOW  = 1_500_000   # 대행사 하한
-_AGENCY_MONTHLY_HIGH = 3_000_000   # 대행사 상한
+# xhtml2pdf 한글 폰트 — Dockerfile에서 fonts-nanum 설치 필요
+_FONT_FACE_CSS = """
+@font-face {
+    font-family: 'NanumGothic';
+    src: url('/usr/share/fonts/truetype/nanum/NanumGothic.ttf');
+}
+@font-face {
+    font-family: 'NanumGothic';
+    font-weight: bold;
+    src: url('/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf');
+}
+"""
 
-
-# ─── 유틸 ───────────────────────────────────────────────────────────────────
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _parse_penalty_krw(text: Any) -> float:
+    if text is None:
+        return 0.0
+    if isinstance(text, (int, float)):
+        return float(text)
+    s = str(text).strip()
+    if not s:
+        return 0.0
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    best = 0.0
+    for m in re.finditer(r'([0-9,]+(?:\.[0-9]+)?)\s*억\s*원?', s):
+        v = float(m.group(1).replace(',', ''))
+        best = max(best, v * 100_000_000)
+    for m in re.finditer(r'([0-9,]+(?:\.[0-9]+)?)\s*만\s*원?', s):
+        v = float(m.group(1).replace(',', ''))
+        best = max(best, v * 10_000)
+    return best
+
+
 def _format_penalty(amount: float) -> str:
-    """과태료 금액을 한국어 단위로 표시."""
     if amount <= 0:
         return "법령 기준"
     if amount >= 100_000_000:
@@ -82,21 +99,23 @@ def _format_penalty(amount: float) -> str:
     return f"{int(amount):,}원"
 
 
-# ─── DB 조회 ────────────────────────────────────────────────────────────────
+def _get_penalty_from_rule(r) -> float:
+    if not isinstance(r, dict):
+        return _parse_penalty_krw(r) if isinstance(r, str) else 0.0
+    amt = r.get("penalty_amount")
+    if amt is not None:
+        parsed = _parse_penalty_krw(amt)
+        if parsed > 0:
+            return parsed
+    return _parse_penalty_krw(r.get("penalty_summary") or r.get("penalty_text") or "")
+
 
 def _fetch_row(token: str) -> Dict[str, Any]:
     sb = get_supabase()
-    res = (
-        sb.table("anonymous_diagnosis_results")
-        .select("*")
-        .eq("public_token", token)
-        .limit(1)
-        .execute()
-    )
+    res = sb.table("anonymous_diagnosis_results").select("*").eq("public_token", token).limit(1).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="진단 결과를 찾을 수 없습니다.")
     row = res.data[0]
-
     exp = row.get("expires_at")
     if exp:
         try:
@@ -112,52 +131,36 @@ def _fetch_row(token: str) -> Dict[str, Any]:
     return row
 
 
-# ─── TOP 5 리스크 추출 ──────────────────────────────────────────────────────
-
 def _get_top5(full: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """
-    penalty_amount 기준 TOP 5 리스크 추출.
-    우선순위: rules_table → key_obligations → 카테고리별 required 리스트
-    """
     def _parse_items(items: Optional[list]) -> List[Dict[str, Any]]:
         result = []
         for r in (items or []):
             if not isinstance(r, dict):
                 continue
-            amt = float(r.get("penalty_amount") or 0)
+            amt = _get_penalty_from_rule(r)
+            penalty_text = (
+                r.get("penalty_text") or r.get("penalty_summary") or
+                (_format_penalty(amt) if amt > 0 else "-")
+            )
             result.append({
                 "title": (
                     r.get("rule_name") or r.get("title") or
-                    r.get("obligation") or r.get("name") or "법적 의무 사항"
+                    r.get("obligation_summary") or r.get("obligation") or
+                    r.get("name") or "법적 의무 사항"
                 ),
-                "law": (
-                    r.get("law_name") or r.get("law") or
-                    r.get("law_short_name") or "-"
-                ),
-                "penalty": (
-                    r.get("penalty_text") or r.get("punishment") or
-                    (_format_penalty(amt) if amt > 0 else "-")
-                ),
+                "law": r.get("law_name") or r.get("law") or r.get("law_short_name") or "-",
+                "penalty": penalty_text,
                 "amount": amt,
             })
         return result
 
-    candidates: List[Dict[str, Any]] = []
-
-    # 1순위: rules_table
-    candidates = _parse_items(full.get("rules_table"))
-
-    # 2순위: key_obligations
+    candidates: List[Dict[str, Any]] = _parse_items(full.get("rules_table"))
     if not candidates:
         candidates = _parse_items(full.get("key_obligations"))
-
-    # 3순위: 카테고리별 required 리스트
     if not candidates:
-        for key in ("appointment_required", "inspection_required",
-                    "action_required", "report_required"):
+        for key in ("appointment_required", "inspection_required", "action_required", "report_required"):
             candidates.extend(_parse_items(full.get(key)))
 
-    # 중복 제거 (title 앞 30자 기준)
     seen: set = set()
     deduped: List[Dict[str, Any]] = []
     for c in candidates:
@@ -165,25 +168,14 @@ def _get_top5(full: Dict[str, Any]) -> List[Dict[str, Any]]:
         if key not in seen:
             seen.add(key)
             deduped.append(c)
-
     deduped.sort(key=lambda x: x["amount"], reverse=True)
     return deduped[:5]
 
 
-# ─── 플랜 추천 ──────────────────────────────────────────────────────────────
-
-def _recommend_plan(
-    sector: str,
-    severity: str,
-    obl_cnt: int,
-    workers: int,
-) -> Tuple[str, Dict[str, Any]]:
-    """diagnosis_plan_recommend.py 함수 재사용 (코드 중복 0줄)."""
+def _recommend_plan(sector: str, severity: str, obl_cnt: int, workers: int) -> Tuple[str, Dict[str, Any]]:
     try:
         from routers.diagnosis_plan_recommend import (
-            _recommend_industry,
-            _recommend_building,
-            _recommend_construction,
+            _recommend_industry, _recommend_building, _recommend_construction,
         )
         if sector == "INDUSTRY":
             code, _ = _recommend_industry(severity, obl_cnt, workers)
@@ -199,183 +191,110 @@ def _recommend_plan(
     return code, _PLANS.get(code, {"name": "맞춤 플랜", "monthly": None})
 
 
-# ─── Jinja2 컨텍스트 빌드 ───────────────────────────────────────────────────
-
 def _build_context(row: Dict[str, Any]) -> Dict[str, Any]:
-    input_data: Dict[str, Any] = row.get("input_data") or {}
-    partial:    Dict[str, Any] = row.get("partial_result") or {}
-    full:       Dict[str, Any] = row.get("full_result") or {}
+    input_data = row.get("input_data") or {}
+    partial    = row.get("partial_result") or {}
+    full       = row.get("full_result") or {}
 
-    # 섹터 정규화
-    raw_sector = str(
-        input_data.get("sector") or
-        full.get("sector") or
-        partial.get("sector") or
-        "INDUSTRY"
-    ).upper()
+    raw_sector = str(input_data.get("sector") or full.get("sector") or partial.get("sector") or "INDUSTRY").upper()
     sector       = SECTOR_NORMALIZE.get(raw_sector, raw_sector)
     sector_label = SECTOR_LABEL.get(raw_sector, "산업")
 
-    # 기본 정보
-    company_name = (
-        input_data.get("company_name") or
-        input_data.get("site_kind") or
-        "귀 사업장"
-    )
-    report_date = _now().strftime("%Y년 %m월 %d일")
-    workers     = int(
-        input_data.get("workers") or
-        input_data.get("worker_count") or
-        0
-    )
+    company_name = input_data.get("company_name") or input_data.get("site_kind") or "귀 사업장"
+    report_date  = _now().strftime("%Y년 %m월 %d일")
+    workers      = int(input_data.get("workers") or input_data.get("worker_count") or 0)
 
-    # 요약 수치
-    summary      = partial.get("summary") or full.get("summary") or {}
-    total        = int(summary.get("total")   or full.get("applicable_count") or 0)
-    appointment  = int(summary.get("appointment") or 0)
-    inspection   = int(summary.get("inspection")  or 0)
-    action       = int(summary.get("action")       or 0)
-    report_notify = (
-        int(summary.get("report") or 0) +
-        int(summary.get("notify") or 0)
-    )
+    summary       = partial.get("summary") or full.get("summary") or {}
+    total         = int(summary.get("total") or full.get("applicable_count") or 0)
+    appointment   = int(summary.get("appointment") or 0)
+    inspection    = int(summary.get("inspection") or 0)
+    action        = int(summary.get("action") or 0)
+    report_notify = int(summary.get("report") or 0) + int(summary.get("notify") or 0)
 
-    # 위험도·법령 수
-    risk_level = str(
-        partial.get("risk_level") or full.get("risk_level") or "MEDIUM"
-    ).upper()
-    law_count = len(
-        partial.get("law_badges") or full.get("law_badges") or []
-    )
+    risk_level = str(partial.get("risk_level") or full.get("risk_level") or "MEDIUM").upper()
+    law_count  = len(partial.get("law_badges") or full.get("law_badges") or [])
 
-    # 최대 과태료 산출
     all_rules_flat: List[Dict[str, Any]] = []
-    for key in ("appointment_required", "inspection_required",
-                "action_required", "report_required"):
-        all_rules_flat.extend(full.get(key) or [])
-    all_rules_flat.extend(full.get("rules_table") or [])
-    all_rules_flat.extend(full.get("key_obligations") or [])
+    for key in ("appointment_required", "inspection_required", "action_required", "report_required"):
+        items = full.get(key) or []
+        all_rules_flat.extend(r for r in items if isinstance(r, dict))
+    for key in ("rules_table", "key_obligations"):
+        items = full.get(key) or []
+        all_rules_flat.extend(r for r in items if isinstance(r, dict))
+
     max_penalty = max(
-        (float(r.get("penalty_amount") or 0) for r in all_rules_flat),
+        (_get_penalty_from_rule(r) for r in all_rules_flat),
         default=0.0,
     )
     max_penalty_text = _format_penalty(max_penalty)
 
-    # TOP 5
     top5 = _get_top5(full)
-
-    # 중대재해법
     csia_applicable = workers >= 50
 
-    # 플랜 추천
-    plan_code, plan_info = _recommend_plan(
-        sector, risk_level, total, workers
-    )
+    plan_code, plan_info = _recommend_plan(sector, risk_level, total, workers)
     monthly = plan_info.get("monthly")
     plan_price = f"월 {monthly:,}원" if monthly else "맞춤 견적"
 
-    # 연간 절감액 (대행사 대비)
     monthly_plan = monthly or 149_000
     annual_savings_low  = max(0, int((_AGENCY_MONTHLY_LOW  - monthly_plan) * 12 / 10_000))
     annual_savings_high = max(0, int((_AGENCY_MONTHLY_HIGH - monthly_plan) * 12 / 10_000))
 
     return {
-        # 기본
-        "company_name": company_name,
-        "report_date":  report_date,
-        "sector_label": sector_label,
-        "sector":       sector,
-        "risk_level":   risk_level,
-        "workers":      workers,
-        "report_no":    str(row.get("public_token", ""))[:8].upper(),
-        # 요약
-        "total":         total,
-        "appointment":   appointment,
-        "inspection":    inspection,
-        "action":        action,
-        "report_notify": report_notify,
-        "law_count":     law_count,
-        "max_penalty_text": max_penalty_text,
-        # 리스크
-        "top5": top5,
-        # 중처법
-        "csia_applicable": csia_applicable,
-        # 플랜
-        "recommended_plan_name":    plan_info.get("name", ""),
-        "recommended_plan_price":   plan_price,
+        "company_name": company_name, "report_date": report_date,
+        "sector_label": sector_label, "sector": sector,
+        "risk_level": risk_level, "workers": workers,
+        "report_no": str(row.get("public_token", ""))[:8].upper(),
+        "total": total, "appointment": appointment, "inspection": inspection,
+        "action": action, "report_notify": report_notify,
+        "law_count": law_count, "max_penalty_text": max_penalty_text,
+        "top5": top5, "csia_applicable": csia_applicable,
+        "recommended_plan_name": plan_info.get("name", ""),
+        "recommended_plan_price": plan_price,
         "recommended_plan_monthly": monthly or 0,
         "plan_code": plan_code,
-        # 비용 비교
-        "annual_savings_low":  annual_savings_low,
+        "annual_savings_low": annual_savings_low,
         "annual_savings_high": annual_savings_high,
     }
 
-
-# ─── Jinja2 렌더링 ──────────────────────────────────────────────────────────
 
 def _render_html(context: Dict[str, Any]) -> str:
     try:
         from jinja2 import Environment, FileSystemLoader
         templates_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "templates",
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates",
         )
-        env = Environment(
-            loader=FileSystemLoader(templates_dir),
-            autoescape=False,
-        )
+        env = Environment(loader=FileSystemLoader(templates_dir), autoescape=False)
         template = env.get_template("proposal_pdf.html")
-        return template.render(**context)
+        html = template.render(**context)
+
+        # xhtml2pdf 한글 폰트 주입: @font-face + body font-family 교체
+        html = html.replace("</style>", _FONT_FACE_CSS + "\n</style>")
+        html = html.replace(
+            'font-family: "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", Arial, sans-serif;',
+            'font-family: "NanumGothic", sans-serif;',
+        )
+        return html
     except Exception as e:
         log.error(f"[proposal-pdf] 템플릿 렌더링 실패: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"템플릿 렌더링 실패: {e}",
-        )
+        raise HTTPException(status_code=500, detail=f"템플릿 렌더링 실패: {e}")
 
-
-# ─── xhtml2pdf PDF 생성 ─────────────────────────────────────────────────────
 
 def _generate_pdf(html: str) -> bytes:
     try:
         from xhtml2pdf import pisa
     except ImportError:
-        raise HTTPException(
-            status_code=500,
-            detail="xhtml2pdf 라이브러리가 설치되어 있지 않습니다.",
-        )
+        raise HTTPException(status_code=500, detail="xhtml2pdf 라이브러리가 설치되어 있지 않습니다.")
 
     buf = io.BytesIO()
-    result = pisa.pisaDocument(
-        io.BytesIO(html.encode("utf-8")),
-        buf,
-        encoding="utf-8",
-    )
+    result = pisa.pisaDocument(io.BytesIO(html.encode("utf-8")), buf, encoding="utf-8")
     if result.err:
-        raise HTTPException(
-            status_code=500,
-            detail=f"PDF 생성 실패: {result.err}",
-        )
+        raise HTTPException(status_code=500, detail=f"PDF 생성 실패: {result.err}")
     return buf.getvalue()
 
 
-# ─── 엔드포인트 ─────────────────────────────────────────────────────────────
-
 @router.get("/proposal-pdf/{public_token}")
 def get_proposal_pdf(public_token: str):
-    """
-    기안용 PDF 생성 — 결재권자용 3페이지 리스크 보고서
-
-    공개 엔드포인트 (인증 불필요).
-    public_token 자체가 접근 제어 역할을 합니다.
-
-    Page 1: 경영진 요약 + 위험도 + TOP 5 리스크
-    Page 2: 비용 비교 + 중대재해법 경고
-    Page 3: TAI 소개 + 도입 4단계 + 추천 플랜 견적
-
-    Returns:
-        application/pdf — StreamingResponse
-    """
+    """기안용 PDF — 결재권자용 3페이지 리스크 보고서 (공개 엔드포인트)."""
     row     = _fetch_row(public_token)
     context = _build_context(row)
     html    = _render_html(context)

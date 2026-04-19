@@ -61,7 +61,6 @@ def _now_iso() -> str:
 
 
 def _ptw_number(site_id: str, supabase) -> str:
-    """CS-{YYYY}-{5자리 순번} 자동채번"""
     year = datetime.now().year
     res = supabase.table("construction_works") \
         .select("id", count="exact") \
@@ -70,10 +69,6 @@ def _ptw_number(site_id: str, supabase) -> str:
     seq = (res.count or 0) + 1
     return f"CS-{year}-{seq:05d}"
 
-
-# ──────────────────────────────────────────────
-# 안전관리자 선임 의무 판정 엔진
-# ──────────────────────────────────────────────
 
 def calc_safety_manager(site_type: str, contract_amount: float, total_workers: int) -> Dict[str, Any]:
     required = False
@@ -95,12 +90,8 @@ def calc_safety_manager(site_type: str, contract_amount: float, total_workers: i
         reasons.append(f"상시 근로자(하도급 포함) {total_workers}명 ≥ 50명 (시행령 제16조③)")
 
     return {
-        "required": required,
-        "count": count,
-        "reasons": reasons,
-        "site_type": site_type,
-        "contract_amount": contract_amount,
-        "total_workers": total_workers,
+        "required": required, "count": count, "reasons": reasons,
+        "site_type": site_type, "contract_amount": contract_amount, "total_workers": total_workers,
     }
 
 
@@ -134,8 +125,7 @@ def _create_factory_for_site(supabase, site: dict) -> Optional[str]:
         if res.data:
             factory_id = res.data[0]["id"]
             supabase.table("construction_sites").update({
-                "factory_id": factory_id,
-                "updated_at": _now_iso(),
+                "factory_id": factory_id, "updated_at": _now_iso(),
             }).eq("id", site["id"]).execute()
             return factory_id
     except Exception as e:
@@ -158,13 +148,9 @@ def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
     site_type_raw = site.get("site_type") or "BUILDING"
 
     from routers.legal_engine import (
-        _input_to_facility_context,
-        _evaluate_facility_conditions_db,
-        _classify_rules_db,
-        format_rule_result_db,
-        _get_construction_summary,
-        get_sector_groups,
-        ENGINE_VERSION,
+        _input_to_facility_context, _evaluate_facility_conditions_db,
+        _classify_rules_db, format_rule_result_db, _get_construction_summary,
+        get_sector_groups, ENGINE_VERSION,
     )
     sector_raw = "CONSTRUCTION"
     sector_groups = get_sector_groups(sector_raw)
@@ -173,10 +159,8 @@ def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
     all_rules = rules_res.data or []
 
     inp = {
-        "contract_amount_eok": contract_eok,
-        "direct_workers":      direct,
-        "subcon_workers":      subcon,
-        "construction_type":   site_type_raw,
+        "contract_amount_eok": contract_eok, "direct_workers": direct,
+        "subcon_workers": subcon, "construction_type": site_type_raw,
     }
     facility_ctx = _input_to_facility_context(sector_raw, inp)
     evaluated_at = datetime.now().isoformat()
@@ -218,13 +202,9 @@ def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
         pass
 
     save_res = supabase.table("factory_diagnosis_results").insert({
-        "factory_id":      factory_id,
-        "sector":          sector_raw,
-        "diagnosis_stage": 1,
-        "input_data":      inp,
-        "result_data":     result_data,
-        "rule_count":      total_applicable,
-        "is_latest":       True,
+        "factory_id": factory_id, "sector": sector_raw, "diagnosis_stage": 1,
+        "input_data": inp, "result_data": result_data,
+        "rule_count": total_applicable, "is_latest": True,
     }).execute()
 
     diagnosis_id = save_res.data[0]["id"] if save_res.data else None
@@ -262,18 +242,14 @@ def _run_generate_schedules(supabase, factory_id: str, inspection_rules: list, c
         if not rule_id or rule_id in existing_codes:
             continue
         rows.append({
-            "factory_id":      factory_id,
-            "company_id":      company_id,
-            "source_type":     "LEGAL",
-            "rule_code":       rule_id,
-            "description":     (rule.get("obligation_summary") or rule.get("description") or "").strip(),
+            "factory_id": factory_id, "company_id": company_id,
+            "source_type": "LEGAL", "rule_code": rule_id,
+            "description": (rule.get("obligation_summary") or rule.get("description") or "").strip(),
             "obligation_type": rule.get("obligation_type") or "INSPECT",
-            "law_name":        rule.get("law_name") or "",
-            "law_article":     rule.get("law_article") or "",
-            "form_code":       rule.get("form_code") or None,
-            "planned_date":    today_str,
-            "status_code":     "PENDING",
-            "active_yn":       True,
+            "law_name": rule.get("law_name") or "",
+            "law_article": rule.get("law_article") or "",
+            "form_code": rule.get("form_code") or None,
+            "planned_date": today_str, "status_code": "PENDING", "active_yn": True,
         })
         existing_codes.add(rule_id)
 
@@ -322,10 +298,6 @@ def _auto_diagnose_and_schedule(supabase, factory_id: str, site: dict) -> dict:
     return result
 
 
-# ──────────────────────────────────────────────
-# v2.1.0: FCM 알림 헬퍼
-# ──────────────────────────────────────────────
-
 async def _send_fcm_inspection_alert(supabase, site_id: str, inspection_id: str, defect_count: int):
     import os
     fcm_server_key = os.getenv("FCM_SERVER_KEY", "")
@@ -352,10 +324,8 @@ async def _send_fcm_inspection_alert(supabase, site_id: str, inspection_id: str,
                 "sound": "default",
             },
             "data": {
-                "type":          "INSPECTION_FAIL",
-                "site_id":       site_id,
-                "inspection_id": inspection_id,
-                "defect_count":  str(defect_count),
+                "type": "INSPECTION_FAIL", "site_id": site_id,
+                "inspection_id": inspection_id, "defect_count": str(defect_count),
             },
         }
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -605,9 +575,7 @@ async def create_site(body: SiteCreate):
                 data[key] = data[key].isoformat()
         if body.contract_amount is not None:
             sm = calc_safety_manager(
-                body.site_type,
-                float(body.contract_amount),
-                body.total_workers or 0,
+                body.site_type, float(body.contract_amount), body.total_workers or 0,
             )
             data["safety_manager_required"] = sm["required"]
             data["safety_manager_count"] = sm["count"]
@@ -629,8 +597,7 @@ async def create_site(body: SiteCreate):
         final_site = updated.data if updated.data else site
 
         return {
-            "status": "success",
-            "data": final_site,
+            "status": "success", "data": final_site,
             "auto": {
                 "factory_id": factory_id,
                 "diagnosis":  auto_result.get("diagnosis"),
@@ -832,12 +799,10 @@ async def generate_schedules(site_id: str):
         return {
             "status": "success",
             "data": {
-                "site_id":     site_id,
-                "factory_id":  factory_id,
-                "created":     sched["created"],
-                "skipped":     sched["skipped"],
+                "site_id": site_id, "factory_id": factory_id,
+                "created": sched["created"], "skipped": sched["skipped"],
                 "total_rules": sched["total_rules"],
-                "message":     f"{sched['created']}건 일정 생성, {sched['skipped']}건 중복 스킵",
+                "message": f"{sched['created']}건 일정 생성, {sched['skipped']}건 중복 스킵",
             },
         }
     except HTTPException:
@@ -1275,8 +1240,7 @@ async def create_inspection(site_id: str, body: InspectionCreate):
 
         if data.get("overall_result") in ("FAIL", "ISSUE") and data.get("defect_count", 0) > 0:
             await _send_fcm_inspection_alert(
-                supabase,
-                site_id=site_id,
+                supabase, site_id=site_id,
                 inspection_id=inspection["id"],
                 defect_count=data.get("defect_count", 1),
             )

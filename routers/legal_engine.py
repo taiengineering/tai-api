@@ -327,17 +327,46 @@ def _is_report(rule: dict) -> bool:
 
 
 def _get_inspection_cycle_label(rule: dict) -> str:
-    val  = rule.get("inspection_cycle_value")
-    unit = rule.get("inspection_cycle_unit_code", "")
-    if not val and not unit: return ""
-    unit_label = INSPECTION_CYCLE_UNIT_MAP.get(str(unit), f"코드({unit})")
-    if val and str(val) != "1":
-        return f"연 {val}회" if unit_label == "연 1회" else f"{val}{unit_label}"
-    return unit_label
+    """정규화된 주기 라벨 생성 (cycle_unit_std 기반, unit_code fallback)."""
+    val = rule.get("inspection_cycle_value")
+    unit = rule.get("cycle_unit_std") or ""
+    schedule = _get_schedule_type(rule)
+
+    # cycle_unit_std 없으면 unit_code에서 역산
+    if not unit:
+        code = str(rule.get("inspection_cycle_unit_code") or "")
+        _CODE_TO_UNIT = {
+            "001": "day", "002": "week", "003": "month",
+            "004": "quarter", "005": "half_year", "006": "year",
+            "007": "year", "008": "year", "009": "year",
+            "010": "year", "011": "year", "012": "year", "013": "year",
+        }
+        unit = _CODE_TO_UNIT.get(code, "")
+
+    if not val:
+        return ""
+
+    val = int(float(val))
+
+    _SHORT = {
+        "year": "연 1회", "half_year": "반기 1회", "quarter": "분기 1회",
+        "month": "월 1회", "week": "주 1회", "day": "매일",
+    }
+
+    if val == 1:
+        return _SHORT.get(unit, f"1{unit}")
+
+    # val > 1: year만 기간 모델("N년마다"), 나머지는 빈도 모델("X N회")
+    if unit == "year":
+        return f"{val}년마다"
+    # half_year/quarter/month 등: "반기 2회", "분기 3회", "월 2회"
+    base = _SHORT.get(unit, unit)
+    return base.replace("1회", f"{val}회")
 
 
 def _get_schedule_type(rule: dict) -> str:
-    if rule.get("inspection_cycle_unit_code"): return "PERIODIC"
+    if rule.get("inspection_cycle_unit_code") or rule.get("cycle_unit_std"):
+        return "PERIODIC"
     if rule.get("construction_work_type"): return "BEFORE_WORK"
     return "ON_DEMAND"
 
@@ -409,7 +438,14 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
     report_method_std  = rule.get("report_method_std") or ""
     cycle_code  = rule.get("inspection_cycle_unit_code") or ""
     cycle_label = _get_inspection_cycle_label(rule)
-    cycle_unit, cycle_int = CYCLE_CODE_MAP.get(cycle_code, ("", 0))
+    # cycle_unit_std 우선, unit_code fallback
+    _std = rule.get("cycle_unit_std") or ""
+    if _std:
+        _STD_TO_UNIT = {"year": "year", "half_year": "half_year", "quarter": "quarter", "month": "month", "week": "week", "day": "day"}
+        cycle_unit = _STD_TO_UNIT.get(_std, _std)
+        cycle_int = int(rule.get("inspection_cycle_value") or 0)
+    else:
+        cycle_unit, cycle_int = CYCLE_CODE_MAP.get(cycle_code, ("", 0))
     schedule_type = _get_schedule_type(rule)
 
     # Task 2: penalty_summary 빈 값 처리
@@ -431,6 +467,8 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
         "inspection_cycle_unit": cycle_unit,
         "inspection_cycle_int": cycle_int,
         "schedule_type": schedule_type,
+        "cycle_base_type": rule.get("cycle_base_type") or "",
+        "cycle_base_guide": rule.get("cycle_base_guide") or "",
         "construction_work_type": rule.get("construction_work_type") or "",
         "executor_type_code": executor_type_code,
         "executor_type_label": EXECUTOR_TYPE_MAP.get(executor_type_code, executor_type_code),
