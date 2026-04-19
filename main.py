@@ -1,27 +1,15 @@
-# main.py — v5.33.0
-# v5.33.0: Sentry 에러 모니터링 (SENTRY_DSN 환경 변수 시 초기화)
-# v5.32.0: diagram_proxy 라우터 등록 (GET /api/v1/diagrams/{number}) — Supabase Storage 한글 SVG 우회
+# main.py — v5.31.1
 # v5.31.1: diagnosis_proposal 라우터 등록 (GET /diagnosis/proposal-pdf/{public_token})
 # v5.31.0: diagnosis_report 라우터 등록 (GET /diagnosis/report-pdf/{public_token})
 # v5.30.0: diagnosis_integrated 라우터 등록 (BE-10 진단통합 백엔드)
-# ── Sentry 에러 모니터링 ──
-import os
-import sentry_sdk
-
-_sentry_dsn = os.getenv("SENTRY_DSN", "")
-if _sentry_dsn:
-    sentry_sdk.init(
-        dsn=_sentry_dsn,
-        traces_sample_rate=0.1,
-        environment="production",
-    )
+# v5.29.0: diagnosis_plan_recommend 라우터 등록 (BE-08 진단 기반 플랜 추천)
+# v5.28.0: overdue_checker 라우터 등록 (BE-10 업무지연 에스켈레이션)
+# v5.27.0: diagnosis_transform 라우터 등록
+# v5.26.0: diagnosis_roi 라우터 등록
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-
-from db.supabase_client import get_supabase
 
 from routers.auth                    import router as auth_router
 from routers.users                   import router as users_router
@@ -125,11 +113,10 @@ from routers.diagnosis_plan_recommend import router as plan_recommend_router
 from routers.diagnosis_integrated    import router as diagnosis_integrated_router   # v5.30.0
 from routers.diagnosis_report        import router as diagnosis_report_router        # v5.31.0
 from routers.diagnosis_proposal      import router as diagnosis_proposal_router      # v5.31.1
-from routers.diagram_proxy           import router as diagram_proxy_router           # v5.32.0
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.33.0"
+APP_VERSION = "5.31.1"
 
 
 @asynccontextmanager
@@ -197,7 +184,6 @@ app.include_router(plan_recommend_router)           # 공개: 진단 결과 페�
 app.include_router(diagnosis_integrated_router)    # v5.30.0 — 공개: 마케팅사이트 익명 사용자
 app.include_router(diagnosis_report_router)        # v5.31.0 — 공개: 유료 PDF 온디맨드 생성
 app.include_router(diagnosis_proposal_router)       # v5.31.1 — 공개: 기안용 proposal PDF
-app.include_router(diagram_proxy_router)            # v5.32.0 — 공개: SVG 다이어그램 프록시 (한글 파일명 우회)
 
 # 인증 필요 엔드포인트
 app.include_router(auth_router)
@@ -292,29 +278,15 @@ def root():
 
 
 @app.get("/health")
-def health_check():
-    checks = {}
+def health():
+    import requests as req
     try:
-        sb = get_supabase()
-        sb.table("system_codes").select("code").limit(1).execute()
-        checks["db"] = "ok"
+        ip = req.get("https://api.ipify.org", timeout=5).text
     except Exception as e:
-        checks["db"] = f"fail: {str(e)[:100]}"
-
+        ip = f"확인불가: {e}"
     try:
-        res = sb.table("law_rules").select("id").eq("is_active", True).limit(1).execute()
-        checks["law_engine"] = "ok" if res.data else "empty"
-    except Exception as e:
-        checks["law_engine"] = f"fail: {str(e)[:100]}"
-
-    try:
-        res = sb.table("fix_chat_sessions").select("id").limit(1).execute()
-        checks["fix_chat"] = "ok"
-    except Exception as e:
-        checks["fix_chat"] = f"fail: {str(e)[:100]}"
-
-    all_ok = all(v == "ok" for v in checks.values())
-    return JSONResponse(
-        status_code=200 if all_ok else 503,
-        content={"status": "healthy" if all_ok else "unhealthy", "checks": checks}
-    )
+        from scheduler import scheduler
+        cron_status = f"{len(scheduler.get_jobs())}개 등록" if scheduler.running else "중지"
+    except Exception:
+        cron_status = "미초기화"
+    return {"status": "healthy", "server_ip": ip, "version": APP_VERSION, "cron": cron_status}
