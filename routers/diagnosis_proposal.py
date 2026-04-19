@@ -1,7 +1,8 @@
 """
-routers/diagnosis_proposal.py — v2.0.0
-기안 PDF — 품의서 쳊부용 분석보고서 (v6 콘텐츠 + Storage 캐싱)
+routers/diagnosis_proposal.py — v2.1.0
+기안 PDF — 품의서 첨부용 분석보고서 (v6 콘텐츠 + Storage 캐싱 + Gotenberg Chromium)
 
+v2.1.0 (2026-04-19): Gotenberg Chromium PDF 엔진 적용 (xhtml2pdf 제거)
 v2.0.0 (2026-04-19): v6 콘텐츠 개편, Storage 캐싱, penalty_sum/paid_tiers 신규
 v1.0.3 (2026-04-18): xhtml2pdf 한글 폰트(NanumGothic) @font-face 주입
 v1.0.2 (2026-04-18): str 타입 규칙 항목 처리 (AttributeError 수정)
@@ -17,6 +18,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
 
@@ -25,7 +27,9 @@ from db.supabase_client import get_supabase
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/diagnosis", tags=["기안PDF"])
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
+
+GOTENBERG_URL = os.getenv("GOTENBERG_URL", "http://tai-gotenberg.internal:3000")
 
 SECTOR_LABEL: Dict[str, str] = {
     "INDUSTRY": "산업(제조)", "BUILDING": "건물·시설", "CONSTRUCTION": "건설",
@@ -36,18 +40,6 @@ SECTOR_NORMALIZE: Dict[str, str] = {
     "SPECIAL_FACILITY": "BUILDING",
 }
 
-# xhtml2pdf 한글 폰트 — Dockerfile에서 fonts-nanum 설치 필요
-_FONT_FACE_CSS = """
-@font-face {
-    font-family: 'NanumGothic';
-    src: url('/usr/share/fonts/truetype/nanum/NanumGothic.ttf');
-}
-@font-face {
-    font-family: 'NanumGothic';
-    font-weight: bold;
-    src: url('/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf');
-}
-"""
 
 
 def _now() -> datetime:
@@ -336,35 +328,38 @@ def _render_html(context: Dict[str, Any]) -> str:
         )
         env = Environment(loader=FileSystemLoader(templates_dir), autoescape=False)
         template = env.get_template("proposal_pdf.html")
-        html = template.render(**context)
-
-        # xhtml2pdf \ud55c\uae00 \ud3f0\ud2b8 \uc8fc\uc785
-        html = html.replace("</style>", _FONT_FACE_CSS + "\n</style>")
-        html = html.replace(
-            'font-family: "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", Arial, sans-serif;',
-            'font-family: "NanumGothic", sans-serif;',
-        )
-        return html
+        return template.render(**context)
     except Exception as e:
         log.error(f"[proposal-pdf] \ud15c\ud50c\ub9bf \ub80c\ub354\ub9c1 \uc2e4\ud328: {e}")
         raise HTTPException(status_code=500, detail=f"\ud15c\ud50c\ub9bf \ub80c\ub354\ub9c1 \uc2e4\ud328: {e}")
 
 
-def _generate_pdf(html: str) -> bytes:
-    try:
-        from xhtml2pdf import pisa
-    except ImportError:
-        raise HTTPException(status_code=500, detail="xhtml2pdf \ub77c\uc774\ube0c\ub7ec\ub9ac\uac00 \uc124\uce58\ub418\uc5b4 \uc788\uc9c0 \uc54a\uc2b5\ub2c8\ub2e4.")
-
-    buf = io.BytesIO()
-    result = pisa.pisaDocument(io.BytesIO(html.encode("utf-8")), buf, encoding="utf-8")
-    if result.err:
-        raise HTTPException(status_code=500, detail=f"PDF \uc0dd\uc131 \uc2e4\ud328: {result.err}")
-    return buf.getvalue()
+async def _generate_pdf(html: str) -> bytes:
+    """Gotenberg Chromium PDF \uc5d4\uc9c4\uc73c\ub85c HTML \u2192 PDF \ubcc0\ud658."""
+    url = f"{GOTENBERG_URL}/forms/chromium/convert/html"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            url,
+            files={"files": ("index.html", html.encode("utf-8"), "text/html")},
+            data={
+                "paperWidth": "8.27",
+                "paperHeight": "11.69",
+                "marginTop": "0",
+                "marginBottom": "0",
+                "marginLeft": "0",
+                "marginRight": "0",
+                "printBackground": "true",
+                "scale": "1",
+            },
+        )
+    if response.status_code != 200:
+        log.error(f"[proposal-pdf] Gotenberg \uc624\ub958: {response.status_code} {response.text[:200]}")
+        raise HTTPException(status_code=500, detail=f"PDF \uc0dd\uc131 \uc2e4\ud328: Gotenberg {response.status_code}")
+    return response.content
 
 
 @router.get("/proposal-pdf/{public_token}")
-def get_proposal_pdf(public_token: str):
+async def get_proposal_pdf(public_token: str):
     """\uae30\uc548\uc6a9 PDF \u2014 \ud488\uc758\uc11c \uccca\ubd80 \uadfc\uac70\uc790\ub8cc (\uacf5\uac1c \uc5d4\ub4dc\ud3ec\uc778\ud2b8, Storage \uce90\uc2f1 \uc801\uc6a9)."""
     row = _fetch_row(public_token)
 
@@ -377,7 +372,7 @@ def get_proposal_pdf(public_token: str):
     # PDF \uc0dd\uc131
     context  = _build_context(row)
     html     = _render_html(context)
-    pdf      = _generate_pdf(html)
+    pdf      = await _generate_pdf(html)
     filename = f"TAI_proposal_{context['report_no']}.pdf"
 
     # Storage \uc5c5\ub85c\ub4dc \ud6c4 DB\uc5d0 URL \uae30\ub85d (\uc2e4\ud328 \uc2dc \uc9c1\uc811 \uc2a4\ud2b8\ub9ac\ubc0d fallback)
