@@ -19,6 +19,9 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from db.supabase_client import get_supabase
 
 from routers.auth                    import router as auth_router
 from routers.users                   import router as users_router
@@ -289,15 +292,29 @@ def root():
 
 
 @app.get("/health")
-def health():
-    import requests as req
+def health_check():
+    checks = {}
     try:
-        ip = req.get("https://api.ipify.org", timeout=5).text
+        sb = get_supabase()
+        sb.table("system_codes").select("code").limit(1).execute()
+        checks["db"] = "ok"
     except Exception as e:
-        ip = f"확인불가: {e}"
+        checks["db"] = f"fail: {str(e)[:100]}"
+
     try:
-        from scheduler import scheduler
-        cron_status = f"{len(scheduler.get_jobs())}개 등록" if scheduler.running else "중지"
-    except Exception:
-        cron_status = "미초기화"
-    return {"status": "healthy", "server_ip": ip, "version": APP_VERSION, "cron": cron_status}
+        res = sb.table("law_rules").select("id").eq("is_active", True).limit(1).execute()
+        checks["law_engine"] = "ok" if res.data else "empty"
+    except Exception as e:
+        checks["law_engine"] = f"fail: {str(e)[:100]}"
+
+    try:
+        res = sb.table("fix_chat_sessions").select("id").limit(1).execute()
+        checks["fix_chat"] = "ok"
+    except Exception as e:
+        checks["fix_chat"] = f"fail: {str(e)[:100]}"
+
+    all_ok = all(v == "ok" for v in checks.values())
+    return JSONResponse(
+        status_code=200 if all_ok else 503,
+        content={"status": "healthy" if all_ok else "unhealthy", "checks": checks}
+    )

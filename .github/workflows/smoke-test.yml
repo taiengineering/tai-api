@@ -1,0 +1,22 @@
+name: API Smoke Test
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install httpx
+      - run: python scripts/smoke_test.py
+        env:
+          API_URL: ${{ secrets.SMOKE_API_URL }}
+          TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
+          TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+          MESSAGEMI_KEY: ${{ secrets.MESSAGEMI_API_KEY }}
+          ALERT_PHONE: ${{ secrets.ALERT_PHONE }}
