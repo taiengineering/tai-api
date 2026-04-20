@@ -1,9 +1,12 @@
 """
-routers/diagnosis_report.py — v1.0.1
+routers/diagnosis_report.py — v2.0.0
 
 유료 진단 상세 PDF 생성 엔드포인트
   GET /diagnosis/report-pdf/{public_token}
 
+v2.0.0 (2026-04-20):
+  - xhtml2pdf → Gotenberg Chromium PDF 엔진 전환
+  - _replace_css_vars() 제거 (Gotenberg는 CSS 변수 지원)
 v1.0.1 (2026-04-19):
   - xhtml2pdf CSS 변수(var()) 미지원 → _replace_css_vars() 자동 치환
   - _extract_max_penalty 징역 우선 로직 유지
@@ -12,12 +15,12 @@ v1.0.0 (2026-04-18):
 """
 from __future__ import annotations
 
-import io
 import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
@@ -27,7 +30,9 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/diagnosis", tags=["진단리포트"])
 
-VERSION = "1.0.1"
+VERSION = "2.0.0"
+
+GOTENBERG_URL = os.getenv("GOTENBERG_URL", "http://tai-gotenberg.internal:3000")
 
 # 무료 tier — PDF 생성 차단 대상
 FREE_TIER_CODES = frozenset({
@@ -63,23 +68,6 @@ RECOMMEND_PLAN: Dict[str, Dict[str, str]] = {
     "CONSTRUCTION_PREMIUM": {"name": "건설 PREMIUM",   "price": "월 385,000원~"},
 }
 
-# xhtml2pdf CSS 변수 치환 맵 (var() 미지원)
-_CSS_VAR_MAP: Dict[str, str] = {
-    "var(--blue)":        "#1A5FD4",
-    "var(--blue-dark)":   "#1248a8",
-    "var(--blue-light)":  "#e8f0fc",
-    "var(--red)":         "#dc2626",
-    "var(--red-light)":   "#fef2f2",
-    "var(--green)":       "#15803d",
-    "var(--green-light)": "#f0fdf4",
-    "var(--yellow)":      "#d97706",
-    "var(--yellow-light)": "#fffbeb",
-    "var(--ink)":         "#0f172a",
-    "var(--sub)":         "#64748b",
-    "var(--border)":      "#e2e8f0",
-    "var(--gray-bg)":     "#f8fafc",
-}
-
 
 # ───────────────────────────────────────────────────────────
 # 헬퍼
@@ -95,13 +83,6 @@ def _report_date_str() -> str:
 
 def _ob_label(ob_type: str) -> str:
     return OB_LABEL.get(ob_type, ob_type)
-
-
-def _replace_css_vars(html: str) -> str:
-    """xhtml2pdf가 CSS 변수(var())를 지원하지 않으므로 실제 색상값으로 치환."""
-    for var_expr, value in _CSS_VAR_MAP.items():
-        html = html.replace(var_expr, value)
-    return html
 
 
 def _enrich_rules(rules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -205,31 +186,35 @@ def _render_html(template_vars: Dict[str, Any]) -> str:
     return template.render(**template_vars)
 
 
-def _html_to_pdf(html: str) -> bytes:
-    """xhtml2pdf로 HTML → PDF bytes 변환."""
-    try:
-        from xhtml2pdf import pisa
-    except ImportError:
+async def _generate_pdf(html: str) -> bytes:
+    """Gotenberg Chromium PDF 엔진으로 HTML → PDF 변환."""
+    url = f"{GOTENBERG_URL}/forms/chromium/convert/html"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(
+            url,
+            files={"files": ("index.html", html.encode("utf-8"), "text/html")},
+            data={
+                "paperWidth": "8.27",
+                "paperHeight": "11.69",
+                "marginTop": "0",
+                "marginBottom": "0",
+                "marginLeft": "0",
+                "marginRight": "0",
+                "printBackground": "true",
+                "scale": "1",
+            },
+        )
+    if response.status_code != 200:
+        log.error(
+            "[REPORT PDF] Gotenberg 오류: %s %s",
+            response.status_code,
+            response.text[:200],
+        )
         raise HTTPException(
             status_code=500,
-            detail="xhtml2pdf 라이브러리가 설치되어 있지 않습니다. pip install xhtml2pdf"
+            detail=f"PDF 생성 실패: Gotenberg {response.status_code}",
         )
-
-    # xhtml2pdf는 CSS 변수(var())를 지원하지 않음 → 실제 값으로 치환
-    html = _replace_css_vars(html)
-
-    buf = io.BytesIO()
-    result = pisa.pisaDocument(
-        io.BytesIO(html.encode("utf-8")),
-        buf,
-        encoding="utf-8",
-    )
-    if result.err:
-        raise HTTPException(
-            status_code=500,
-            detail=f"PDF 생성 실패 (xhtml2pdf 오류 코드: {result.err})"
-        )
-    return buf.getvalue()
+    return response.content
 
 
 # ───────────────────────────────────────────────────────────
@@ -237,7 +222,7 @@ def _html_to_pdf(html: str) -> bytes:
 # ───────────────────────────────────────────────────────────
 
 @router.get("/report-pdf/{public_token}")
-def get_paid_report_pdf(public_token: str):
+async def get_paid_report_pdf(public_token: str):
     """
     GET /diagnosis/report-pdf/{public_token}
 
@@ -385,7 +370,7 @@ def get_paid_report_pdf(public_token: str):
 
     # 8. PDF 생성
     try:
-        pdf_bytes = _html_to_pdf(html)
+        pdf_bytes = await _generate_pdf(html)
     except HTTPException:
         raise
     except Exception as e:
