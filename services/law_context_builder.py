@@ -170,7 +170,7 @@ async def build_full_context(law_name: str, law_article: str, article_id: str = 
             # 3) 별표/서식 목록 (시행령 포함)
             att_res = (
                 supabase.table("law_attachment")
-                .select("attachment_no, title")
+                .select("attachment_no, attachment_title")
                 .eq("law_version_id", decree_vid)
                 .order("attachment_no")
                 .limit(20)
@@ -180,14 +180,14 @@ async def build_full_context(law_name: str, law_article: str, article_id: str = 
                 att_lines = []
                 for a in att_res.data:
                     no = a.get("attachment_no") or "-"
-                    title = (a.get("title") or "").strip()
+                    title = (a.get("attachment_title") or "").strip()
                     att_lines.append(f"- [{no}] {title}")
                 parts.append("[시행령 별표/서식 목록]\n" + "\n".join(att_lines))
 
     # 본법 별표/서식
     att_main = (
         supabase.table("law_attachment")
-        .select("attachment_no, title")
+        .select("attachment_no, attachment_title")
         .eq("law_version_id", version_id)
         .order("attachment_no")
         .limit(20)
@@ -197,7 +197,7 @@ async def build_full_context(law_name: str, law_article: str, article_id: str = 
         att_lines = []
         for a in att_main.data:
             no = a.get("attachment_no") or "-"
-            title = (a.get("title") or "").strip()
+            title = (a.get("attachment_title") or "").strip()
             att_lines.append(f"- [{no}] {title}")
         parts.append("[본법 별표/서식 목록]\n" + "\n".join(att_lines))
 
