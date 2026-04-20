@@ -102,6 +102,69 @@ class BulkDeleteRequest(BaseModel):
     mail_ids: List[str]
 
 
+class SystemMailRequest(BaseModel):
+    to: str
+    subject: str
+    body: str
+
+
+# ─── POST /mail/send-system ──────────────────────────────────
+
+@router.post("/send-system")
+async def send_system_mail(req: SystemMailRequest):
+    """
+    pg_cron 자동QA 등 내부 시스템에서 JSON으로 호출하는 메일 발송.
+    인증 불필요 (내부 Supabase pg_net 전용).
+    """
+    supabase = get_supabase()
+
+    to_list = [e.strip() for e in req.to.split(",") if e.strip()]
+    if not to_list:
+        raise HTTPException(status_code=400, detail="수신자(to)가 비어 있습니다.")
+
+    mail_id = str(uuid.uuid4())
+    from_key = "system@taieng.co.kr"
+
+    resend_id: Optional[str] = None
+    status = "sent"
+    error_message: Optional[str] = None
+    try:
+        result = resend_client.Emails.send({
+            "from": f"TAI System <{from_key}>",
+            "to": to_list,
+            "subject": req.subject,
+            "text": req.body,
+        })
+        resend_id = result.get("id") if isinstance(result, dict) else getattr(result, "id", None)
+    except Exception as e:
+        status = "failed"
+        error_message = str(e)
+
+    log_row = {
+        "id": mail_id,
+        "to_emails": to_list,
+        "cc_emails": [],
+        "subject": req.subject,
+        "html_body": f"<pre style='white-space:pre-wrap;font-family:inherit;margin:0;'>{req.body}</pre>",
+        "status": status,
+        "resend_id": resend_id,
+        "error_message": error_message,
+        "sent_by": "system",
+        "direction": "outbound",
+        "from_email": from_key,
+        "attachments": [],
+    }
+    try:
+        supabase.table("mail_logs").insert(log_row).execute()
+    except Exception:
+        pass
+
+    if status == "failed":
+        raise HTTPException(status_code=502, detail=f"메일 발송 실패: {error_message}")
+
+    return {"ok": True}
+
+
 # ─── POST /mail/send ─────────────────────────────────────────
 
 @router.post("/send")
