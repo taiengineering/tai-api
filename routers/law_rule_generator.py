@@ -8,6 +8,13 @@ Claude Haiku API로 법령 조문 → 판정룰 초안 자동 생성.
   PENDING → (거부) REJECTED
   PENDING → (수정) MODIFIED → (승인) APPROVED
 
+v1.6.0 (2026-04-20):
+  [FIX] POST /reparse-master — BackgroundTasks 비동기 전환 (서버 타임아웃 방지)
+        즉시 {status: "accepted", job_id} 반환 + 백그라운드 1건씩 처리
+  [ADD] GET /reparse-master/status/{job_id} — 진행률 조회
+  [ADD] GET /reparse-master/jobs — 최근 작업 목록
+  [ADD] reparse_job_log 테이블 (DDL: sql/20260420_reparse_job_log.sql)
+
 v1.5.0 (2026-04-05):
   [ADD] GET /drafts — has_condition 파라미터 추가
         has_condition=false → condition_code IS NULL 필터
@@ -31,7 +38,10 @@ v1.1.0 (2026-04-02):
 import os
 import json
 import re
-from fastapi import APIRouter, HTTPException, Query
+import uuid
+import asyncio
+import logging
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from typing import List, Dict, Optional, Any
 from datetime import datetime, timezone
 import httpx
@@ -237,11 +247,11 @@ def _extract_json_payload(raw: str) -> Any:
     return None
 
 
-async def _call_claude_messages(system_prompt: str, user_prompt: str, model: str, max_tokens: int = 2200) -> Any:
+async def _call_claude_messages(system_prompt: str, user_prompt: str, model: str, max_tokens: int = 2200, timeout: int = 60) -> Any:
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다.")
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers={"x-api-key": ANTHROPIC_API_KEY,
@@ -891,97 +901,240 @@ def _pick_reparse_targets(rows: List[dict], limit: int) -> List[dict]:
     return rows_sorted[:limit]
 
 
+_reparse_logger = logging.getLogger("reparse-master")
+
+
+async def _run_reparse_background(
+    job_id: str, sector: str, limit_count: int,
+    fill_empty_only: bool, rule_ids: List[str],
+):
+    """백그라운드에서 master 룰을 1건씩 Sonnet으로 재파싱."""
+    supabase = get_supabase()
+
+    try:
+        q = supabase.table("master_building_legal_rules").select("*").eq("is_active", True)
+        if sector and sector != "ALL":
+            q = q.eq("sector", sector)
+        if rule_ids:
+            q = q.in_("rule_id", rule_ids)
+        rows = q.limit(max(limit_count * 3, 50)).execute().data or []
+        targets = _pick_reparse_targets(rows, limit_count)
+
+        supabase.table("reparse_job_log").update({
+            "total_targeted": len(targets),
+        }).eq("job_id", job_id).execute()
+
+        processed = 0
+        updated = 0
+        skipped = 0
+        errors_count = 0
+        error_details: List[dict] = []
+        changed_fields_total: Dict[str, int] = {}
+
+        for row in targets:
+            rid = row.get("rule_id") or ""
+            law_name = row.get("law_name") or ""
+            law_article = row.get("law_article") or ""
+
+            if not law_name or not law_article:
+                skipped += 1
+                processed += 1
+                supabase.table("reparse_job_log").update({
+                    "processed": processed, "skipped": skipped,
+                }).eq("job_id", job_id).execute()
+                await asyncio.sleep(3)
+                continue
+
+            try:
+                # 1. build_full_context (DB 조회)
+                full_context = await build_full_context(law_name, law_article)
+                few_shots = await _fetch_few_shot_examples(supabase, law_name, limit=3)
+                prompt = _build_reparse_prompt(row, full_context, few_shots)
+
+                # 2. Claude Sonnet 호출 (timeout=90s)
+                parsed = await _call_claude_messages(
+                    "빈 필드 보강 전용 리라이팅 모델입니다. JSON object 1개만 반환하세요.",
+                    prompt,
+                    CLAUDE_SONNET_MODEL,
+                    max_tokens=1800,
+                    timeout=90,
+                )
+                if not isinstance(parsed, dict):
+                    skipped += 1
+                    processed += 1
+                    supabase.table("reparse_job_log").update({
+                        "processed": processed, "skipped": skipped,
+                    }).eq("job_id", job_id).execute()
+                    await asyncio.sleep(3)
+                    continue
+
+                # 3. DB UPDATE
+                patch: Dict[str, Any] = {}
+                for key, value in parsed.items():
+                    if key not in row:
+                        continue
+                    if fill_empty_only and not _is_blank(row.get(key)):
+                        continue
+                    if _is_blank(value):
+                        continue
+                    if row.get(key) != value:
+                        patch[key] = value
+                        changed_fields_total[key] = changed_fields_total.get(key, 0) + 1
+
+                if "submit_org_code" in patch:
+                    patch["submit_org_code"] = _normalize_submit_org_code(patch["submit_org_code"])
+                    if not patch["submit_org_code"]:
+                        patch.pop("submit_org_code", None)
+
+                if patch:
+                    patch["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    supabase.table("master_building_legal_rules").update(patch).eq("id", row["id"]).execute()
+                    updated += 1
+                else:
+                    skipped += 1
+
+                processed += 1
+
+            except Exception as e:
+                errors_count += 1
+                processed += 1
+                error_details.append({"rule_id": rid, "error": str(e)[:200]})
+                _reparse_logger.warning(f"[reparse] {rid} 에러: {e}")
+
+            # 4. reparse_job_log UPDATE (매 건)
+            supabase.table("reparse_job_log").update({
+                "processed": processed,
+                "updated": updated,
+                "skipped": skipped,
+                "errors": errors_count,
+                "error_details": error_details[-20:],
+                "changed_fields": changed_fields_total,
+            }).eq("job_id", job_id).execute()
+
+            # 5. 서버 부하 방지
+            await asyncio.sleep(3)
+
+        # 전체 완료 → validate-master 실행
+        validate_data = None
+        try:
+            validate_result = await validate_master({"sector": sector or "ALL"})
+            validate_data = validate_result.get("data")
+        except Exception as e:
+            _reparse_logger.warning(f"[reparse] validate-master 실패: {e}")
+
+        supabase.table("reparse_job_log").update({
+            "status": "COMPLETED",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "processed": processed,
+            "updated": updated,
+            "skipped": skipped,
+            "errors": errors_count,
+            "error_details": error_details,
+            "changed_fields": {
+                **changed_fields_total,
+                "_validation": validate_data or {},
+            },
+        }).eq("job_id", job_id).execute()
+
+        _reparse_logger.info(
+            f"[reparse] job {job_id} 완료: {processed}/{len(targets)} 처리, "
+            f"{updated} 수정, {errors_count} 에러"
+        )
+
+    except Exception as e:
+        _reparse_logger.error(f"[reparse] job {job_id} 실패: {e}")
+        try:
+            supabase.table("reparse_job_log").update({
+                "status": "FAILED",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "error_details": [{"error": str(e)[:500]}],
+            }).eq("job_id", job_id).execute()
+        except Exception:
+            pass
+
+
 @router.post("/reparse-master")
-async def reparse_master(body: dict):
+async def reparse_master(body: dict, background_tasks: BackgroundTasks):
+    """master 룰을 Sonnet으로 재파싱 (백그라운드 처리).
+    즉시 job_id 반환, 진행률은 GET /reparse-master/status/{job_id}."""
     secret = body.get("secret", "")
     if secret != INTERNAL_SECRET:
         raise HTTPException(status_code=403, detail="내부 전용 엔드포인트")
 
-    supabase = get_supabase()
     sector = (body.get("sector") or "").strip().upper()
-    limit = int(body.get("limit", 50))
+    limit_count = int(body.get("limit", 50))
     fill_empty_only = bool(body.get("fill_empty_only", True))
     rule_ids = body.get("rule_ids") or []
 
-    q = supabase.table("master_building_legal_rules").select("*").eq("is_active", True)
-    if sector and sector != "ALL":
-        q = q.eq("sector", sector)
-    if rule_ids:
-        q = q.in_("rule_id", rule_ids)
-    rows = q.limit(max(limit * 3, 50)).execute().data or []
-    targets = _pick_reparse_targets(rows, limit)
+    job_id = str(uuid.uuid4())
 
-    updated = 0
-    skipped = 0
-    errors: List[dict] = []
-    changed_fields_total: Dict[str, int] = {}
-    processed_rule_ids: List[str] = []
+    # job_log 생성
+    supabase = get_supabase()
+    supabase.table("reparse_job_log").insert({
+        "job_id": job_id,
+        "sector": sector or "ALL",
+        "status": "RUNNING",
+    }).execute()
 
-    for row in targets:
-        rid = row.get("rule_id") or ""
-        law_name = row.get("law_name") or ""
-        law_article = row.get("law_article") or ""
-        if not law_name or not law_article:
-            skipped += 1
-            continue
+    background_tasks.add_task(
+        _run_reparse_background, job_id, sector, limit_count,
+        fill_empty_only, rule_ids,
+    )
 
-        try:
-            full_context = await build_full_context(law_name, law_article)
-            few_shots = await _fetch_few_shot_examples(supabase, law_name, limit=5)
-            prompt = _build_reparse_prompt(row, full_context, few_shots)
-            parsed = await _call_claude_messages(
-                "빈 필드 보강 전용 리라이팅 모델입니다. JSON object 1개만 반환하세요.",
-                prompt,
-                CLAUDE_SONNET_MODEL,
-                max_tokens=1800,
-            )
-            if not isinstance(parsed, dict):
-                skipped += 1
-                continue
+    return {
+        "status": "accepted",
+        "job_id": job_id,
+        "message": f"재파싱 작업이 시작됐습니다. sector={sector or 'ALL'}, limit={limit_count}",
+        "check_status": f"/law-rule-generator/reparse-master/status/{job_id}",
+    }
 
-            patch: Dict[str, Any] = {}
-            for key, value in parsed.items():
-                if key not in row:
-                    continue
-                if fill_empty_only and not _is_blank(row.get(key)):
-                    continue
-                if _is_blank(value):
-                    continue
-                if row.get(key) != value:
-                    patch[key] = value
-                    changed_fields_total[key] = changed_fields_total.get(key, 0) + 1
 
-            if "submit_org_code" in patch:
-                patch["submit_org_code"] = _normalize_submit_org_code(patch["submit_org_code"])
-                if not patch["submit_org_code"]:
-                    patch.pop("submit_org_code", None)
+@router.get("/reparse-master/status/{job_id}")
+async def reparse_master_status(job_id: str):
+    """재파싱 작업 진행률 조회."""
+    supabase = get_supabase()
+    res = supabase.table("reparse_job_log").select("*").eq(
+        "job_id", job_id).order("created_at", desc=True).limit(1).execute()
 
-            if patch:
-                patch["updated_at"] = datetime.now(timezone.utc).isoformat()
-                supabase.table("master_building_legal_rules").update(patch).eq("id", row["id"]).execute()
-                updated += 1
-                if rid:
-                    processed_rule_ids.append(rid)
-            else:
-                skipped += 1
-        except Exception as e:
-            errors.append({"rule_id": rid, "error": str(e)[:200]})
+    if not res.data:
+        raise HTTPException(status_code=404, detail="해당 job_id를 찾을 수 없습니다")
 
-    validate_result = await validate_master({"sector": sector or "ALL"})
+    job = res.data[0]
+    total = job.get("total_targeted", 0)
+    processed = job.get("processed", 0)
+    progress_pct = round((processed / total) * 100, 1) if total > 0 else 0
+
     return {
         "status": "success",
         "data": {
-            "sector": sector or "ALL",
-            "model": CLAUDE_SONNET_MODEL,
-            "targeted": len(targets),
-            "updated": updated,
-            "skipped": skipped,
-            "errors": errors,
-            "changed_fields": changed_fields_total,
-            "processed_rule_ids": processed_rule_ids[:50],
-            "validation": validate_result.get("data"),
+            "job_id": job_id,
+            "job_status": job.get("status"),
+            "sector": job.get("sector"),
+            "total_targeted": total,
+            "processed": processed,
+            "updated": job.get("updated", 0),
+            "skipped": job.get("skipped", 0),
+            "errors": job.get("errors", 0),
+            "progress_pct": progress_pct,
+            "changed_fields": job.get("changed_fields", {}),
+            "error_details": job.get("error_details", []),
+            "started_at": job.get("started_at"),
+            "completed_at": job.get("completed_at"),
         },
     }
+
+
+@router.get("/reparse-master/jobs")
+async def reparse_master_jobs(
+    limit: int = Query(default=10, le=50),
+):
+    """최근 재파싱 작업 목록 조회."""
+    supabase = get_supabase()
+    res = supabase.table("reparse_job_log").select(
+        "job_id, sector, total_targeted, processed, updated, skipped, errors, status, started_at, completed_at"
+    ).order("created_at", desc=True).limit(limit).execute()
+
+    return {"status": "success", "data": res.data or []}
 
 
 # ── GET /stats ─────────────────────────────────────────────
