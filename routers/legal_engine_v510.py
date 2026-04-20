@@ -332,7 +332,7 @@ async def diagnose_step1_v510(body: DiagnoseStep1Body):
 
     key_obligations: List[str] = []
     for x in applicable[:20]:
-        t = (x.get("obligation_summary") or x.get("remarks") or "").strip()
+        t = (x.get("remarks") or x.get("obligation_summary") or "").strip()
         if t and t not in key_obligations:
             key_obligations.append(t)
 
@@ -343,6 +343,8 @@ async def diagnose_step1_v510(body: DiagnoseStep1Body):
             "law_name":    x.get("law_name") or "",
             "law_article": x.get("law_article") or "",
             "obligation":  (x.get("obligation_summary") or x.get("remarks") or "").strip(),
+            "remarks":     (x.get("remarks") or "").strip(),
+            "obligation_summary": (x.get("obligation_summary") or "").strip(),
         })
 
     result_data = {
