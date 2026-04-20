@@ -32,23 +32,79 @@ import os
 import json
 import re
 from fastapi import APIRouter, HTTPException, Query
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from datetime import datetime, timezone
 import httpx
 
 from db.supabase_client import get_supabase
+from services.law_context_builder import build_full_context
 
 router = APIRouter(prefix="/law-rule-generator", tags=["AI룰생성"])
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL      = "claude-haiku-4-5-20251001"
+CLAUDE_SONNET_MODEL = "claude-sonnet-4-20250514"
 INTERNAL_SECRET   = os.environ.get("INTERNAL_API_SECRET", "tai-internal-2026")
 
 EXCLUDED_SECTORS = {"SPECIAL_FACILITY", "SPECIAL", "CONSTRUCTION_SPECIAL",
                     "MANUFACTURING_SPECIAL", "CONSTRUCTION_MANUFACTURING_SPECIAL"}
 
+VALID_CONDITION_CODES = {
+    "building_area", "worker_count", "electric_capacity", "gas_capacity_kg",
+    "gas_capacity_m3", "boiler_capacity_kw", "elevator_count", "is_hazardous_material",
+    "annual_energy_toe", "construction_amount", "floor_count", "is_factory_registered",
+    "employee_count", "contract_amount", "has_chemical_substance", "is_multi_use",
+    "contractor_count", "has_high_pressure_gas", "transformer_capacity_kva",
+    "has_boiler", "electrical_capacity_kw", "boiler_capacity_th", "hospital_beds",
+    "student_count",
+}
+
+SUBMIT_ORG_LABELS = {
+    "kosha": "한국산업안전보건공단 (관할 지역본부)",
+    "local_gov": "관할 시·군·구청",
+    "moel": "관할 지방고용노동관서",
+    "me": "관할 지방환경관서",
+    "kgs": "한국가스안전공사 (관할 지사)",
+    "mlit": "관할 지방국토관리청",
+    "nfa": "관할 소방서",
+    "kesco": "한국전기안전공사 (관할 지사)",
+}
+
+FEW_SHOT_RULE = {
+    "draft_rule_id": "FIREACT-001-BLD",
+    "obligation_type": "APPOINT",
+    "sector": "BUILDING",
+    "condition_code": "building_area",
+    "condition_operator": "gte",
+    "condition_value": "400",
+    "obligation_summary": "소방안전관리자 선임 의무",
+    "penalty_summary": "미선임 시 300만원 이하 과태료 (제53조)",
+    "penalty_value": 300,
+    "form_code": "NFA-별지제5호",
+    "form_name": "소방안전관리자 선임신고서",
+    "submit_org_code": "nfa",
+    "due_days": 14,
+    "report_method_code": "online",
+    "report_method_std": "api",
+    "appointment_target": "소방안전관리자",
+    "appointment_qualification_code": "fire_safety_1",
+    "appointment_qualification_level_code": "grade1",
+    "appointment_count_value": 1,
+    "inspection_cycle_value": 6,
+    "inspection_cycle_unit_code": "month",
+    "cycle_base_guide": "최초 선임일로부터 6개월마다",
+    "online_system": "소방청 민원 시스템",
+    "system_url": "https://www.safetykorea.go.kr",
+    "tai_feature_code": "APPOINTMENT",
+    "remarks": "연면적 400㎡ 이상 특정소방대상물",
+    "diagnosis_stage": 1,
+    "ai_confidence": 95,
+    "ai_reasoning": "화재예방법 제24조 + 시행령 제22조 별표4 기준",
+    "ai_flags": [],
+}
+
 SYSTEM_PROMPT = """당신은 한국 산업안전 법령 전문가입니다.
-법령 조문 텍스트를 분석하여 안전관리 시스템의 판정 룰을 JSON 형식으로 추출합니다.
+법령 원문(본조+시행령+별표+벌칙)을 분석하여 안전관리 시스템의 판정 룰을 JSON 형식으로 추출합니다.
 
 추출 대상 의무 유형:
 - APPOINT: 안전관리자·소방안전관리자 등 선임 의무
@@ -57,19 +113,31 @@ SYSTEM_PROMPT = """당신은 한국 산업안전 법령 전문가입니다.
 - REPORT: 기록·보존 의무
 - ACTION: 조치·설치·이행 의무
 
-조건 코드 (condition_code) 목록:
+조건 코드 (condition_code) 목록 (정확히 아래에서만 선택):
 - building_area: 건물 연면적 (㎡)
 - worker_count: 근로자 수 (명)
 - electric_capacity: 전기 수전용량 (kW)
+- electrical_capacity_kw: 전기 수전용량 (kW, 동의어)
 - gas_capacity_kg: LPG 저장량 (kg)
 - gas_capacity_m3: 도시가스 사용량 (㎥/시)
 - boiler_capacity_kw: 보일러 용량 (kW)
+- boiler_capacity_th: 보일러 용량 (ton/hr)
 - elevator_count: 승강기 대수
 - is_hazardous_material: 위험물 취급 여부 (0/1)
 - annual_energy_toe: 연간 에너지 사용량 (TOE)
 - construction_amount: 공사금액 (원)
 - floor_count: 건물 층수
 - is_factory_registered: 공장등록 여부 (0/1)
+- employee_count: 상시근로자 수 (명)
+- contract_amount: 공사금액 (원, 동의어)
+- has_chemical_substance: 화학물질 취급 여부 (0/1)
+- is_multi_use: 다중이용업소 여부 (0/1)
+- contractor_count: 수급업체 수
+- has_high_pressure_gas: 고압가스 취급 여부 (0/1)
+- transformer_capacity_kva: 변압기 용량 (kVA)
+- has_boiler: 보일러 보유 여부 (0/1)
+- hospital_beds: 병상 수
+- student_count: 학생 수
 
 섹터 코드 (반드시 아래 4가지 중 하나만 사용):
 - BUILDING: 건물·시설 (업무용·판매용·숙박·근린생활 등 일반 건축물)
@@ -81,13 +149,28 @@ SYSTEM_PROMPT = """당신은 한국 산업안전 법령 전문가입니다.
 ⚠️ 주의: 학교·병원·사회복지시설 등 특수시설 전용 법령은 건너뜁니다.
   해당 법령(의료법·학교안전법·사회복지사업법 등)의 조문에서 의무가 발견되면 []을 반환하세요.
 
-응답은 반드시 순수 JSON 배열만 출력하세요. 마크다운이나 설명 없이 JSON만 출력합니다.
-의무가 없는 조문(정의, 목적, 용어해설 등)은 빈 배열 []을 반환하세요."""
+submit_org_code는 반드시 아래 중 하나만 사용:
+- kosha, local_gov, moel, me, kgs, mlit, nfa, kesco
+
+condition_code가 있으면 condition_operator + condition_value를 함께 채웁니다.
+inspection_required=true이면 inspection_cycle_value + inspection_cycle_unit_code를 채웁니다.
+report_required=true이면 report_method_code를 채웁니다.
+appointment_required=true이면 appointment_qualification_code를 채웁니다.
+penalty_summary가 있으면 penalty_value(만원)를 가능한 범위에서 채웁니다.
+
+응답은 반드시 순수 JSON 배열만 출력하세요. 마크다운/설명 금지.
+의무가 없는 조문은 빈 배열 []을 반환하세요."""
 
 USER_PROMPT_TEMPLATE = """다음 법령 조문을 분석하여 판정 룰을 추출해주세요.
 
 법령명: {law_name}
-조문: {article_text}
+핵심 조문: {article_text}
+
+[풀 컨텍스트]
+{full_context}
+
+[좋은 예시 1개]
+{few_shot}
 
 위 조문에서 안전관리 의무(선임·점검·신고·보고·조치)를 추출하여 다음 JSON 형식으로 반환하세요.
 의무가 없는 조문이면 []을 반환하세요.
@@ -101,8 +184,30 @@ USER_PROMPT_TEMPLATE = """다음 법령 조문을 분석하여 판정 룰을 추
     "condition_operator": "gte|lte|gt|lt|eq",
     "condition_value": "숫자 문자열 또는 null",
     "obligation_summary": "의무 내용 1줄 요약 (최대 100자)",
+    "remarks": "맥락 설명 (최대 100자)",
     "penalty_summary": "위반 시 벌칙 요약 또는 null",
+    "penalty_value": "과태료 숫자 (만원 단위) 또는 null",
+    "form_code": "별지서식 번호 또는 null",
+    "form_name": "서식명 또는 null",
+    "submit_org_code": "kosha|local_gov|moel|me|kgs|mlit|nfa|kesco 중 선택 또는 null",
+    "due_days": "기한 일수 숫자 또는 null",
+    "report_method_code": "online|offline|both 또는 null",
+    "report_method_std": "api|paper|keep 또는 null",
+    "online_system": "온라인 시스템명 또는 null",
+    "system_url": "시스템 URL 또는 null",
+    "appointment_qualification_code": "자격 코드 또는 null",
+    "appointment_qualification_level_code": "자격 등급 또는 null",
+    "appointment_count_value": "선임 인원수 또는 null",
+    "inspection_cycle_value": "점검 주기 숫자 또는 null",
+    "inspection_cycle_unit_code": "day|week|month|quarter|half_year|year 또는 null",
+    "cycle_base_guide": "주기 설명 (최대 50자) 또는 null",
+    "tai_feature_code": "APPOINTMENT|INSPECTION|REPORT|EDUCATION|DOCUMENT|FIX|CHECKLIST 또는 null",
     "appointment_target": "선임 대상자명 (APPOINT인 경우만) 또는 null",
+    "appointment_required": "true|false",
+    "inspection_required": "true|false",
+    "notify_required": "true|false",
+    "report_required": "true|false",
+    "action_required": "true|false",
     "diagnosis_stage": 1,
     "ai_confidence": 0~100,
     "ai_reasoning": "판단 근거 1~2줄",
@@ -111,12 +216,30 @@ USER_PROMPT_TEMPLATE = """다음 법령 조문을 분석하여 판정 룰을 추
 ]"""
 
 
-async def call_claude(law_name: str, article_text: str) -> List[Dict]:
+def _extract_json_payload(raw: str) -> Any:
+    cleaned = re.sub(r"```json\s*", "", raw.strip())
+    cleaned = re.sub(r"```\s*", "", cleaned).strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        m_arr = re.search(r"\[.*\]", cleaned, re.DOTALL)
+        if m_arr:
+            try:
+                return json.loads(m_arr.group())
+            except Exception:
+                pass
+        m_obj = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if m_obj:
+            try:
+                return json.loads(m_obj.group())
+            except Exception:
+                pass
+    return None
+
+
+async def _call_claude_messages(system_prompt: str, user_prompt: str, model: str, max_tokens: int = 2200) -> Any:
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다.")
-
-    user_prompt = USER_PROMPT_TEMPLATE.format(
-        law_name=law_name, article_text=article_text[:3000])
 
     async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.post(
@@ -124,8 +247,8 @@ async def call_claude(law_name: str, article_text: str) -> List[Dict]:
             headers={"x-api-key": ANTHROPIC_API_KEY,
                      "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
-            json={"model": CLAUDE_MODEL, "max_tokens": 1500,
-                  "system": SYSTEM_PROMPT,
+            json={"model": model, "max_tokens": max_tokens,
+                  "system": system_prompt,
                   "messages": [{"role": "user", "content": user_prompt}]},
         )
 
@@ -136,21 +259,121 @@ async def call_claude(law_name: str, article_text: str) -> List[Dict]:
     for block in resp.json().get("content", []):
         if block.get("type") == "text":
             raw += block["text"]
+    return _extract_json_payload(raw)
 
-    raw = re.sub(r"```json\s*", "", raw.strip())
-    raw = re.sub(r"```\s*", "", raw).strip()
 
+async def call_claude(law_name: str, article_text: str, full_context: str = "") -> List[Dict]:
+    user_prompt = USER_PROMPT_TEMPLATE.format(
+        law_name=law_name,
+        article_text=article_text[:3000],
+        full_context=(full_context or "")[:15000],
+        few_shot=json.dumps(FEW_SHOT_RULE, ensure_ascii=False),
+    )
+    parsed = await _call_claude_messages(SYSTEM_PROMPT, user_prompt, CLAUDE_MODEL)
+    return parsed if isinstance(parsed, list) else []
+
+
+def _normalize_submit_org_code(code: Any) -> Optional[str]:
+    value = (str(code or "").strip().lower())
+    if value in SUBMIT_ORG_LABELS:
+        return value
+    return None
+
+
+def _to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "y", "yes"}
+    if isinstance(value, (int, float)):
+        return value != 0
+    return False
+
+
+def _safe_float(value: Any) -> Optional[float]:
     try:
-        parsed = json.loads(raw)
-        return parsed if isinstance(parsed, list) else []
-    except json.JSONDecodeError:
-        m = re.search(r"\[.*\]", raw, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group())
-            except Exception:
-                pass
-        return []
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        if value is None or value == "":
+            return None
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_master_payload(row: dict, rule_id: str) -> dict:
+    ob_type = row.get("obligation_type")
+    cond_val_num = _safe_float(row.get("condition_value"))
+    submit_org_code = _normalize_submit_org_code(row.get("submit_org_code"))
+    return {
+        "rule_id": rule_id,
+        "sector": row.get("sector") or "BUILDING",
+        "law_name": row.get("law_name"),
+        "law_article": row.get("law_article"),
+        "obligation_type": ob_type,
+        "obligation_summary": row.get("obligation_summary"),
+        "remarks": row.get("remarks"),
+        "penalty_summary": row.get("penalty_summary"),
+        "penalty_value": _safe_int(row.get("penalty_value")),
+        "appointment_target_code": row.get("appointment_target"),
+        "appointment_qualification_code": row.get("appointment_qualification_code"),
+        "appointment_qualification_level_code": row.get("appointment_qualification_level_code"),
+        "appointment_count_value": _safe_int(row.get("appointment_count_value")),
+        "condition_code": row.get("condition_code"),
+        "condition_operator_code": row.get("condition_operator", "gte"),
+        "condition_value": cond_val_num,
+        "inspection_cycle_value": _safe_int(row.get("inspection_cycle_value")),
+        "inspection_cycle_unit_code": row.get("inspection_cycle_unit_code"),
+        "cycle_base_guide": row.get("cycle_base_guide"),
+        "form_code": row.get("form_code"),
+        "form_name": row.get("form_name"),
+        "submit_org_code": submit_org_code,
+        "report_method_code": row.get("report_method_code"),
+        "report_method_std": row.get("report_method_std"),
+        "online_system": row.get("online_system"),
+        "system_url": row.get("system_url"),
+        "tai_feature_code": row.get("tai_feature_code"),
+        "due_days": _safe_int(row.get("due_days")),
+        "appointment_required": _to_bool(row.get("appointment_required")) or ob_type == "APPOINT",
+        "inspection_required": _to_bool(row.get("inspection_required")) or ob_type == "INSPECT",
+        "notify_required": _to_bool(row.get("notify_required")) or ob_type == "NOTIFY",
+        "report_required": _to_bool(row.get("report_required")) or ob_type == "REPORT",
+        "action_required": _to_bool(row.get("action_required")) or ob_type == "ACTION",
+        "diagnosis_stage": _safe_int(row.get("diagnosis_stage")) or 1,
+        "is_active": True,
+        "source_api": "AI_GENERATED",
+    }
+
+
+def _build_reparse_prompt(rule: dict, full_context: str, few_shot_examples: List[dict]) -> str:
+    return f"""다음 기존 master 룰의 빈 필드(null/빈문자)만 보강하세요.
+기존 값이 있는 필드는 그대로 유지하세요.
+출력은 JSON object 1개만 반환하세요.
+
+[기존 룰]
+{json.dumps(rule, ensure_ascii=False)}
+
+[같은 법령의 잘 채워진 예시]
+{json.dumps(few_shot_examples[:5], ensure_ascii=False)}
+
+[법령 원문 풀 컨텍스트]
+{(full_context or "")[:18000]}
+
+반드시 아래 키를 포함한 JSON object를 반환:
+penalty_summary, penalty_value, form_code, form_name, submit_org_code,
+due_days, report_method_code, report_method_std, appointment_qualification_code,
+appointment_qualification_level_code, appointment_count_value,
+inspection_cycle_value, inspection_cycle_unit_code, cycle_base_guide,
+online_system, system_url, tai_feature_code, remarks, condition_code,
+condition_operator_code, condition_value
+"""
 
 
 def _auto_approve_to_master(supabase, draft: dict) -> Optional[str]:
@@ -160,34 +383,9 @@ def _auto_approve_to_master(supabase, draft: dict) -> Optional[str]:
         rule_id = rule_id + "-V2"
     if supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute().data:
         return None
-
-    cond_val = draft.get("condition_value")
-    try:
-        cond_val_num = float(cond_val) if cond_val is not None else None
-    except (TypeError, ValueError):
-        cond_val_num = None
-
-    ins = supabase.table("master_building_legal_rules").insert({
-        "rule_id": rule_id,
-        "sector": draft.get("sector") or "BUILDING",
-        "law_name": draft.get("law_name"),
-        "law_article": draft.get("law_article"),
-        "obligation_type": draft.get("obligation_type"),
-        "obligation_summary": draft.get("obligation_summary"),
-        "penalty_summary": draft.get("penalty_summary"),
-        "appointment_target_code": draft.get("appointment_target"),
-        "condition_code": draft.get("condition_code"),
-        "condition_operator_code": draft.get("condition_operator", "gte"),
-        "condition_value": cond_val_num,
-        "appointment_required": draft.get("obligation_type") == "APPOINT",
-        "inspection_required": draft.get("obligation_type") == "INSPECT",
-        "notify_required": draft.get("obligation_type") == "NOTIFY",
-        "report_required": draft.get("obligation_type") == "REPORT",
-        "action_required": draft.get("obligation_type") == "ACTION",
-        "diagnosis_stage": draft.get("diagnosis_stage", 1),
-        "is_active": True,
-        "source_api": "AI_GENERATED",
-    }).execute()
+    ins = supabase.table("master_building_legal_rules").insert(
+        _build_master_payload(draft, rule_id)
+    ).execute()
 
     if ins.data:
         supabase.table("law_rule_drafts").update({
@@ -198,6 +396,29 @@ def _auto_approve_to_master(supabase, draft: dict) -> Optional[str]:
         }).eq("id", draft["id"]).execute()
         return rule_id
     return None
+
+
+def _build_draft_row(law_name: str, law_article: str, article_id: Optional[str], article_text: str, rule: Dict[str, Any]) -> dict:
+    return {
+        "law_name": law_name,
+        "law_article": law_article,
+        "article_id": article_id,
+        "article_text": article_text[:2000],
+        "draft_rule_id": rule.get("draft_rule_id"),
+        "obligation_type": rule.get("obligation_type"),
+        "sector": rule.get("sector"),
+        "condition_code": rule.get("condition_code"),
+        "condition_operator": rule.get("condition_operator", "gte"),
+        "condition_value": str(rule["condition_value"]) if rule.get("condition_value") is not None else None,
+        "obligation_summary": rule.get("obligation_summary"),
+        "penalty_summary": rule.get("penalty_summary"),
+        "appointment_target": rule.get("appointment_target"),
+        "diagnosis_stage": rule.get("diagnosis_stage", 1),
+        "ai_confidence": rule.get("ai_confidence"),
+        "ai_reasoning": rule.get("ai_reasoning"),
+        "ai_flags": rule.get("ai_flags"),
+        "status": "PENDING",
+    }
 
 
 # ── GET /laws ──────────────────────────────────────────────
@@ -283,7 +504,8 @@ async def parse_article(body: dict):
         raise HTTPException(status_code=400, detail="law_name, article_text 필수")
 
     try:
-        rules = await call_claude(law_name, article_text)
+        full_context = await build_full_context(law_name, law_article, article_id)
+        rules = await call_claude(law_name, article_text, full_context=full_context)
     except HTTPException:
         raise
     except Exception as e:
@@ -303,24 +525,7 @@ async def parse_article(body: dict):
         if rule_sector in EXCLUDED_SECTORS:
             continue
 
-        row = {
-            "law_name": law_name, "law_article": law_article,
-            "article_id": article_id, "article_text": article_text[:2000],
-            "draft_rule_id": rule.get("draft_rule_id"),
-            "obligation_type": rule.get("obligation_type"),
-            "sector": rule.get("sector"),
-            "condition_code": rule.get("condition_code"),
-            "condition_operator": rule.get("condition_operator", "gte"),
-            "condition_value": str(rule["condition_value"]) if rule.get("condition_value") is not None else None,
-            "obligation_summary": rule.get("obligation_summary"),
-            "penalty_summary": rule.get("penalty_summary"),
-            "appointment_target": rule.get("appointment_target"),
-            "diagnosis_stage": rule.get("diagnosis_stage", 1),
-            "ai_confidence": rule.get("ai_confidence"),
-            "ai_reasoning": rule.get("ai_reasoning"),
-            "ai_flags": rule.get("ai_flags"),
-            "status": "PENDING",
-        }
+        row = _build_draft_row(law_name, law_article, article_id, article_text, rule)
         ins = supabase.table("law_rule_drafts").insert(row).execute()
         if ins.data:
             saved.append(ins.data[0])
@@ -377,7 +582,9 @@ async def parse_batch(body: dict):
                 continue
 
             label = f"제{art.get('article_no', '')}조{art.get('article_title', '')}"
-            rules = await call_claude(law_name, art_text)
+            law_article_label = f"제{art.get('article_no', '')}조{art.get('article_title', '')}"
+            full_context = await build_full_context(law_name, law_article_label, art.get("id"))
+            rules = await call_claude(law_name, art_text, full_context=full_context)
 
             if art.get("id"):
                 supabase.table("law_article").update({"ai_parsed_at": now_iso}).eq("id", art["id"]).execute()
@@ -388,24 +595,9 @@ async def parse_batch(body: dict):
                     results["special_excluded"] += 1
                     continue
 
-                supabase.table("law_rule_drafts").insert({
-                    "law_name": law_name, "law_article": label,
-                    "article_id": art.get("id"), "article_text": art_text[:2000],
-                    "draft_rule_id": rule.get("draft_rule_id"),
-                    "obligation_type": rule.get("obligation_type"),
-                    "sector": rule.get("sector"),
-                    "condition_code": rule.get("condition_code"),
-                    "condition_operator": rule.get("condition_operator", "gte"),
-                    "condition_value": str(rule["condition_value"]) if rule.get("condition_value") is not None else None,
-                    "obligation_summary": rule.get("obligation_summary"),
-                    "penalty_summary": rule.get("penalty_summary"),
-                    "appointment_target": rule.get("appointment_target"),
-                    "diagnosis_stage": rule.get("diagnosis_stage", 1),
-                    "ai_confidence": rule.get("ai_confidence"),
-                    "ai_reasoning": rule.get("ai_reasoning"),
-                    "ai_flags": rule.get("ai_flags"),
-                    "status": "PENDING",
-                }).execute()
+                supabase.table("law_rule_drafts").insert(
+                    _build_draft_row(law_name, label, art.get("id"), art_text, rule)
+                ).execute()
                 results["drafts_created"] += 1
 
             results["processed"] += 1
@@ -471,7 +663,8 @@ async def auto_parse_and_approve(body: dict):
                 continue
 
             label = f"제{art.get('article_no', '')}조{art.get('article_title', '') or ''}"
-            rules = await call_claude(law_name, art_text)
+            full_context = await build_full_context(law_name, label, art.get("id"))
+            rules = await call_claude(law_name, art_text, full_context=full_context)
 
             supabase.table("law_article").update({"ai_parsed_at": now_iso}).eq("id", art["id"]).execute()
             results["parsed"] += 1
@@ -484,24 +677,9 @@ async def auto_parse_and_approve(body: dict):
                 conf = int(rule.get("ai_confidence") or 0)
                 ob_type = rule.get("obligation_type", "")
 
-                ins = supabase.table("law_rule_drafts").insert({
-                    "law_name": law_name, "law_article": label,
-                    "article_id": art.get("id"), "article_text": art_text[:2000],
-                    "draft_rule_id": rule.get("draft_rule_id"),
-                    "obligation_type": ob_type,
-                    "sector": rule.get("sector"),
-                    "condition_code": rule.get("condition_code"),
-                    "condition_operator": rule.get("condition_operator", "gte"),
-                    "condition_value": str(rule["condition_value"]) if rule.get("condition_value") is not None else None,
-                    "obligation_summary": rule.get("obligation_summary"),
-                    "penalty_summary": rule.get("penalty_summary"),
-                    "appointment_target": rule.get("appointment_target"),
-                    "diagnosis_stage": rule.get("diagnosis_stage", 1),
-                    "ai_confidence": conf,
-                    "ai_reasoning": rule.get("ai_reasoning"),
-                    "ai_flags": rule.get("ai_flags"),
-                    "status": "PENDING",
-                }).execute()
+                row = _build_draft_row(law_name, label, art.get("id"), art_text, rule)
+                row["ai_confidence"] = conf
+                ins = supabase.table("law_rule_drafts").insert(row).execute()
                 results["drafts_created"] += 1
 
                 if not ins.data:
@@ -567,33 +745,9 @@ async def bulk_approve_unregistered(
                 skipped += 1
                 continue
 
-            cond_val = d.get("condition_value")
-            try:
-                cond_val_num = float(cond_val) if cond_val is not None else None
-            except (TypeError, ValueError):
-                cond_val_num = None
-
-            ins = supabase.table("master_building_legal_rules").insert({
-                "rule_id": rule_id,
-                "sector":  d.get("sector") or "BUILDING",
-                "law_name":    d.get("law_name"),
-                "law_article": d.get("law_article"),
-                "obligation_type":         d.get("obligation_type"),
-                "obligation_summary":      d.get("obligation_summary"),
-                "penalty_summary":         d.get("penalty_summary"),
-                "appointment_target_code": d.get("appointment_target"),
-                "condition_code":          d.get("condition_code"),
-                "condition_operator_code": d.get("condition_operator", "gte"),
-                "condition_value":         cond_val_num,
-                "appointment_required": d.get("obligation_type") == "APPOINT",
-                "inspection_required":  d.get("obligation_type") == "INSPECT",
-                "notify_required":      d.get("obligation_type") == "NOTIFY",
-                "report_required":      d.get("obligation_type") == "REPORT",
-                "action_required":      d.get("obligation_type") == "ACTION",
-                "diagnosis_stage": d.get("diagnosis_stage", 1),
-                "is_active": True,
-                "source_api": "AI_GENERATED",
-            }).execute()
+            ins = supabase.table("master_building_legal_rules").insert(
+                _build_master_payload(d, rule_id)
+            ).execute()
 
             if ins.data:
                 supabase.table("law_rule_drafts").update({
@@ -621,6 +775,213 @@ async def bulk_approve_unregistered(
         "remaining": remaining,
         "done": remaining == 0,
     }}
+
+
+def _is_blank(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and value.strip() == "")
+
+
+def _validate_rule_row(row: dict) -> List[str]:
+    errors: List[str] = []
+    cond_code = row.get("condition_code")
+    cond_op = row.get("condition_operator_code")
+    cond_val = row.get("condition_value")
+    if cond_code:
+        if cond_code not in VALID_CONDITION_CODES:
+            errors.append("invalid_condition_code")
+        if _is_blank(cond_op) or cond_val is None:
+            errors.append("condition_incomplete")
+
+    if _to_bool(row.get("inspection_required")):
+        if _is_blank(row.get("inspection_cycle_value")) or _is_blank(row.get("inspection_cycle_unit_code")):
+            errors.append("missing_inspection_cycle")
+
+    if _to_bool(row.get("report_required")) and _is_blank(row.get("report_method_code")):
+        errors.append("missing_report_method")
+
+    if _to_bool(row.get("appointment_required")) and _is_blank(row.get("appointment_qualification_code")):
+        errors.append("missing_qualification")
+
+    if row.get("penalty_summary") and _is_blank(row.get("penalty_value")):
+        errors.append("missing_penalty_value")
+
+    if _is_blank(row.get("obligation_summary")):
+        errors.append("missing_obligation_summary")
+
+    return errors
+
+
+@router.post("/validate-master")
+async def validate_master(body: dict = None):
+    body = body or {}
+    sector = (body.get("sector") or "ALL").strip().upper()
+    supabase = get_supabase()
+
+    q = supabase.table("master_building_legal_rules").select("*").eq("is_active", True)
+    if sector and sector != "ALL":
+        q = q.eq("sector", sector)
+    rows = q.execute().data or []
+
+    failures: Dict[str, int] = {}
+    samples: Dict[str, List[str]] = {}
+    rule_ids: Dict[str, int] = {}
+
+    for row in rows:
+        rid = row.get("rule_id") or ""
+        if rid:
+            rule_ids[rid] = rule_ids.get(rid, 0) + 1
+        errs = _validate_rule_row(row)
+        for err in errs:
+            failures[err] = failures.get(err, 0) + 1
+            samples.setdefault(err, [])
+            if rid and len(samples[err]) < 8 and rid not in samples[err]:
+                samples[err].append(rid)
+
+    dup_ids = [rid for rid, cnt in rule_ids.items() if cnt > 1]
+    if dup_ids:
+        failures["duplicate_rule_id"] = len(dup_ids)
+        samples["duplicate_rule_id"] = dup_ids[:8]
+
+    failed_rows = set()
+    for key, ids in samples.items():
+        if key == "duplicate_rule_id":
+            continue
+        failed_rows.update(ids)
+
+    return {
+        "status": "success",
+        "data": {
+            "sector": sector,
+            "total": len(rows),
+            "failed": sum(failures.values()),
+            "passed": max(0, len(rows) - len(failed_rows)),
+            "failures": failures,
+            "samples": samples,
+            "submit_org_labels": SUBMIT_ORG_LABELS,
+        },
+    }
+
+
+async def _fetch_few_shot_examples(supabase, law_name: str, limit: int = 5) -> List[dict]:
+    rows = (
+        supabase.table("master_building_legal_rules")
+        .select("*")
+        .eq("is_active", True)
+        .eq("law_name", law_name)
+        .not_.is_("obligation_summary", "null")
+        .not_.is_("remarks", "null")
+        .not_.is_("submit_org_code", "null")
+        .limit(limit)
+        .execute()
+    ).data or []
+    return rows
+
+
+def _pick_reparse_targets(rows: List[dict], limit: int) -> List[dict]:
+    def _blank_score(r: dict) -> int:
+        fields = [
+            "penalty_summary", "penalty_value", "form_code", "form_name", "submit_org_code",
+            "report_method_code", "appointment_qualification_code",
+            "inspection_cycle_value", "inspection_cycle_unit_code",
+            "cycle_base_guide", "remarks",
+        ]
+        return sum(1 for f in fields if _is_blank(r.get(f)))
+
+    rows_sorted = sorted(rows, key=_blank_score, reverse=True)
+    return rows_sorted[:limit]
+
+
+@router.post("/reparse-master")
+async def reparse_master(body: dict):
+    secret = body.get("secret", "")
+    if secret != INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="내부 전용 엔드포인트")
+
+    supabase = get_supabase()
+    sector = (body.get("sector") or "").strip().upper()
+    limit = int(body.get("limit", 50))
+    fill_empty_only = bool(body.get("fill_empty_only", True))
+    rule_ids = body.get("rule_ids") or []
+
+    q = supabase.table("master_building_legal_rules").select("*").eq("is_active", True)
+    if sector and sector != "ALL":
+        q = q.eq("sector", sector)
+    if rule_ids:
+        q = q.in_("rule_id", rule_ids)
+    rows = q.limit(max(limit * 3, 50)).execute().data or []
+    targets = _pick_reparse_targets(rows, limit)
+
+    updated = 0
+    skipped = 0
+    errors: List[dict] = []
+    changed_fields_total: Dict[str, int] = {}
+    processed_rule_ids: List[str] = []
+
+    for row in targets:
+        rid = row.get("rule_id") or ""
+        law_name = row.get("law_name") or ""
+        law_article = row.get("law_article") or ""
+        if not law_name or not law_article:
+            skipped += 1
+            continue
+
+        try:
+            full_context = await build_full_context(law_name, law_article)
+            few_shots = await _fetch_few_shot_examples(supabase, law_name, limit=5)
+            prompt = _build_reparse_prompt(row, full_context, few_shots)
+            parsed = await _call_claude_messages(
+                "빈 필드 보강 전용 리라이팅 모델입니다. JSON object 1개만 반환하세요.",
+                prompt,
+                CLAUDE_SONNET_MODEL,
+                max_tokens=1800,
+            )
+            if not isinstance(parsed, dict):
+                skipped += 1
+                continue
+
+            patch: Dict[str, Any] = {}
+            for key, value in parsed.items():
+                if key not in row:
+                    continue
+                if fill_empty_only and not _is_blank(row.get(key)):
+                    continue
+                if _is_blank(value):
+                    continue
+                if row.get(key) != value:
+                    patch[key] = value
+                    changed_fields_total[key] = changed_fields_total.get(key, 0) + 1
+
+            if "submit_org_code" in patch:
+                patch["submit_org_code"] = _normalize_submit_org_code(patch["submit_org_code"])
+                if not patch["submit_org_code"]:
+                    patch.pop("submit_org_code", None)
+
+            if patch:
+                patch["updated_at"] = datetime.now(timezone.utc).isoformat()
+                supabase.table("master_building_legal_rules").update(patch).eq("id", row["id"]).execute()
+                updated += 1
+                if rid:
+                    processed_rule_ids.append(rid)
+            else:
+                skipped += 1
+        except Exception as e:
+            errors.append({"rule_id": rid, "error": str(e)[:200]})
+
+    validate_result = await validate_master({"sector": sector or "ALL"})
+    return {
+        "status": "success",
+        "data": {
+            "sector": sector or "ALL",
+            "model": CLAUDE_SONNET_MODEL,
+            "targeted": len(targets),
+            "updated": updated,
+            "skipped": skipped,
+            "errors": errors,
+            "changed_fields": changed_fields_total,
+            "processed_rule_ids": processed_rule_ids[:50],
+            "validation": validate_result.get("data"),
+        },
+    }
 
 
 # ── GET /stats ─────────────────────────────────────────────
@@ -745,32 +1106,9 @@ async def approve_draft(draft_id: str, body: dict = None):
     if supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute().data:
         rule_id = rule_id + "-V2"
 
-    cond_val = d.get("condition_value")
-    try:
-        cond_val_num = float(cond_val) if cond_val is not None else None
-    except (TypeError, ValueError):
-        cond_val_num = None
-
-    ins = supabase.table("master_building_legal_rules").insert({
-        "rule_id": rule_id,
-        "sector":  d.get("sector") or "BUILDING",
-        "law_name":    d.get("law_name"),
-        "law_article": d.get("law_article"),
-        "obligation_type":         d.get("obligation_type"),
-        "obligation_summary":      d.get("obligation_summary"),
-        "penalty_summary":         d.get("penalty_summary"),
-        "appointment_target_code": d.get("appointment_target"),
-        "condition_code":          d.get("condition_code"),
-        "condition_operator_code": d.get("condition_operator", "gte"),
-        "condition_value":         cond_val_num,
-        "appointment_required": d.get("obligation_type") == "APPOINT",
-        "inspection_required":  d.get("obligation_type") == "INSPECT",
-        "notify_required":      d.get("obligation_type") == "NOTIFY",
-        "report_required":      d.get("obligation_type") == "REPORT",
-        "action_required":      d.get("obligation_type") == "ACTION",
-        "diagnosis_stage": d.get("diagnosis_stage", 1),
-        "is_active": True, "source_api": "AI_GENERATED",
-    }).execute()
+    ins = supabase.table("master_building_legal_rules").insert(
+        _build_master_payload(d, rule_id)
+    ).execute()
     if not ins.data:
         raise HTTPException(status_code=500, detail="master 등록 실패")
 
