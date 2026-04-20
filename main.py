@@ -66,6 +66,7 @@ from routers.inspection_sets         import router as inspection_sets_router
 from routers.inspection_schedule     import router as inspection_schedule_router
 from routers.work_schedules          import router as work_schedules_router
 from routers.inspection_checklist    import router as inspection_router
+from routers.inspection_setup        import router as inspection_setup_router
 from routers.admin_stats             import router as admin_stats_router
 from routers.law_collector           import router as law_collector_router
 from routers.cron_manager            import router as cron_manager_router
@@ -243,6 +244,7 @@ app.include_router(inspection_sets_router)
 app.include_router(inspection_schedule_router)
 app.include_router(work_schedules_router)
 app.include_router(inspection_router)
+app.include_router(inspection_setup_router)
 app.include_router(admin_stats_router)
 app.include_router(law_collector_router)
 app.include_router(cron_manager_router)
