@@ -683,7 +683,7 @@ tr:last-child td { border-bottom: none; }
         <tr>
           <td><span class="ob ob-{{ r.obligation_type }}">{{ r.ob_label }}</span></td>
           <td>{{ r.law_article }}</td>
-          <td>{{ r.obligation_summary }}</td>
+          <td>{{ r.remarks or r.obligation_summary }}</td>
           <td>{{ r.inspection_cycle or '–' }}</td>
           <td>{{ r.submit_org_label or '–' }}</td>
         </tr>
@@ -754,7 +754,7 @@ tr:last-child td { border-bottom: none; }
         <td>{{ r.law_name }}</td>
         <td>{{ r.law_article }}</td>
         <td><span class="ob ob-{{ r.obligation_type }}">{{ r.ob_label }}</span></td>
-        <td>{{ r.obligation_summary }}</td>
+        <td>{{ r.remarks or r.obligation_summary }}</td>
         <td style="color: var(--red); font-weight: 700;">{{ r.penalty_summary }}</td>
       </tr>
       {% endfor %}
@@ -889,7 +889,7 @@ tr:last-child td { border-bottom: none; }
         <td>{{ r.law_name }}</td>
         <td>{{ r.law_article }}</td>
         <td><span class="ob ob-{{ r.obligation_type }}">{{ r.ob_label }}</span></td>
-        <td>{{ r.obligation_summary }}</td>
+        <td>{{ r.remarks or r.obligation_summary }}</td>
         <td>{{ r.inspection_cycle or '–' }}</td>
         <td>{{ r.submit_org_label or '–' }}</td>
       </tr>
@@ -938,7 +938,7 @@ tr:last-child td { border-bottom: none; }
         <td style="text-align:center; color: var(--sub);">{{ loop.index }}</td>
         <td>{{ r.law_name }}</td>
         <td>{{ r.law_article }}</td>
-        <td>{{ r.obligation_summary }}</td>
+        <td>{{ r.remarks or r.obligation_summary }}</td>
         <td><strong>{{ r.inspection_cycle or '–' }}</strong></td>
         <td style="font-size: 7pt;">{{ r.cycle_base_guide or '–' }}</td>
         <td>{{ r.submit_org_label or '–' }}</td>
@@ -985,7 +985,7 @@ tr:last-child td { border-bottom: none; }
       {% for r in appointment_rules %}
       <tr class="no-break">
         <td style="text-align:center; color: var(--sub);">{{ loop.index }}</td>
-        <td><strong>{{ r.obligation_summary }}</strong></td>
+        <td><strong>{{ r.remarks or r.obligation_summary }}</strong></td>
         <td>{{ r.law_name }}</td>
         <td>{{ r.law_article }}</td>
         <td>{{ r.qualification_required or '–' }}</td>

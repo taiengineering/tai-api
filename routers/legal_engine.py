@@ -429,8 +429,10 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
       - Task 2: penalty_summary 빈 값 시 _get_penalty_fallback 적용
       - Task 4: cycle_unit_std 있으면 due_info: {} (상시 의무 D-day 미표시)
     """
-    # Task 1: remarks 우선, obligation_summary 폴백
-    desc = (rule.get("remarks") or rule.get("obligation_summary") or "").strip()
+    # Task 1: DB 원문 유지 + description은 remarks 우선(사람 언어)
+    obl_summary = (rule.get("obligation_summary") or "").strip()
+    remarks_txt = (rule.get("remarks") or "").strip()
+    desc = remarks_txt or obl_summary
 
     target_code = _normalize_target_code(rule.get("appointment_target_code") or "")
     submit_org_code    = rule.get("submit_org_code") or ""
@@ -459,7 +461,9 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "rule_id": rule.get("rule_id", ""), "rule_type": str(rule.get("rule_type_code") or ""),
         "law_name": rule.get("law_name") or "", "law_article": rule.get("law_article") or "",
-        "description": desc, "obligation_summary": desc,
+        "description": desc,
+        "obligation_summary": obl_summary,
+        "remarks": remarks_txt,
         "appointment_target": APPOINTMENT_TARGET_MAP.get(target_code, target_code),
         "qualification_required": rule.get("qualification_type") or "",
         "inspection_cycle": cycle_label,
