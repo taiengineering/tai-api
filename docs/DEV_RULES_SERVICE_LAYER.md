@@ -1,6 +1,7 @@
 # TAI 개발 규칙 — 서비스 계층 분리
 
 > 작성일: 2026-04-21
+> 최종 수정: 2026-04-21 (v2 — 테스트 우선 원칙 추가)
 > 상태: **필수 적용** (모든 개발 창에서 준수)
 > 적용 시점: 20KB 이상 라우터 파일을 수정할 때 선행 적용. 신규 파일은 처음부터 적용.
 
@@ -9,10 +10,34 @@
 ## 핵심 원칙
 
 ```
-"한 파일에 모든 것을 넣지 않는다."
-"수정할 때마다 분리한다."
-"새로 만들 때는 처음부터 분리한다."
+1. "테스트가 먼저다."
+   → 분리 전에 현재 동작을 테스트로 기록한다.
+   → 테스트가 없으면 뭐가 깨졌는지 모른다.
+   → 테스트가 통과하면 분리가 정확한 것이다.
+
+2. "한 파일 = 한 가지 책임"
+   → 파일 크기는 신호등일 뿐. 진짜 기준은 책임 분리.
+   → HTTP 처리 / 비즈니스 로직 / 검증 / AI 호출은 각각 다른 파일.
+
+3. "수정할 때마다 분리한다."
+   → 새로 만들 때는 처음부터 분리한다.
 ```
+
+---
+
+## 왜 분리하는가
+
+파일 크기를 줄이는 건 수단이다. 실제 목적:
+
+| 분리 기준 | 효과 |
+|---|---|
+| HTTP ↔ 비즈니스 로직 | API 경로 바꿔도 로직 안 깨짐 |
+| AI 호출 ↔ 데이터 가공 | 모델 교체해도 나머지 안 바뀜 |
+| 검증 ↔ 실행 | 검증 규칙만 독립 테스트 가능 |
+| 프롬프트 ↔ 로직 | 프롬프트 수정이 코드 변경 아님 |
+
+**그리고 이 모든 것의 전제는 테스트.**
+테스트 없이 분리하면 코드 정리일 뿐, 안전성은 0이다.
 
 ---
 
@@ -20,10 +45,10 @@
 
 | 계층 | 역할 | 규칙 |
 |---|---|---|
+| **Tests** | 현재 동작 기록 + 변경 시 깨짐 감지 | **가장 먼저 작성. 분리의 전제조건.** |
 | **Router** | HTTP 받고 → 서비스 호출 → 응답 반환 | if문/SQL 금지. 서비스 호출만 |
 | **Service** | 비즈니스 로직 집중 | HTTP를 모름. 순수 함수 위주. `from fastapi import` 금지 |
 | **Schema** | Pydantic으로 입력/출력 검증 | 필드별 자동 검증. if문 불필요 |
-| **Tests** | 서비스 함수 단위 테스트 | 수정 후 pytest로 깨짐 확인 |
 
 ---
 
@@ -50,73 +75,79 @@ tai-api/
 
 ---
 
-## 분리 실행 순서 (5단계)
+## 분리 실행 순서 (6단계)
 
-**매 단계마다 API 응답이 동일해야 합니다. 중간에 멈춰도 안전합니다.**
+**STEP 0이 가장 중요합니다. 테스트 없이 STEP 1로 넘어가지 마세요.**
+
+### STEP 0. 테스트 먼저 작성 (필수 — 분리의 전제조건)
+
+분리하기 **전에** 현재 코드의 동작을 테스트로 기록합니다.
+
+```
+tests/test_{모듈}_current.py  ← 현재 동작 스냅샷
+```
+
+**작성 대상:**
+- 핵심 비즈니스 함수의 입출력 (실제 DB 없이 mock 가능한 것)
+- 헬퍼/유틸 함수의 순수 테스트
+- 주요 엔드포인트의 응답 구조 (HTTP 200 + 필수 필드)
+
+**기준:** 최소 5개 테스트. 분리 전에 `pytest tests/test_{모듈}_current.py -v` 전부 PASS.
+
+**왜 먼저?**
+- 테스트가 있어야 분리 후 뭐가 깨졌는지 안다
+- 테스트가 통과하면 분리가 정확하다는 증거
+- 테스트 작성 과정에서 코드 구조를 이해하게 됨
 
 ### STEP 1. 패키지 생성 + 헬퍼 분리
 
 가장 안전한 첫 걸음. 순수 함수를 먼저 빼면 아무것도 안 깨지면서 파일이 즉시 작아집니다.
 
 ```
-services/__init__.py           ← 빈 파일 생성
-services/legal_helpers.py      ← _to_float, _to_int, _now_iso 등 순수 유틸
-services/legal_context.py      ← _survey_data_to_context, _factory_to_context 등
+services/__init__.py           ← 빈 파일 생성 (이미 존재)
+services/{module}_helpers.py   ← 순수 유틸 함수
 ```
 
 **기준**: DB 호출 없이 입력→출력만 하는 함수 = 헬퍼.
-**확인**: 라우터에서 `from services.legal_helpers import ...` 으로 교체 후 API 응답 동일 확인.
+**확인**: `pytest tests/test_{모듈}_current.py -v` 전부 PASS + API 응답 동일.
 
 ### STEP 2. 스키마 분리
 
 기계적 작업. 라우터에 인라인으로 있는 Pydantic 모델을 schemas/로 이동.
 
 ```
-schemas/legal_engine.py        ← 모든 Request/Response 모델
+schemas/{module}.py            ← 모든 Request/Response 모델
 ```
 
-**확인**: import 경로만 바뀜. API 응답 동일.
+**확인**: import 경로만 바뀜. 테스트 PASS. API 응답 동일.
 
 ### STEP 3. 서비스 분리
 
-핵심 분리. 라우터에 있는 비즈니스 로직(DB 호출 + 판정 로직)을 services/로 이동.
+핵심 분리. 라우터에 있는 비즈니스 로직을 services/로 이동.
 
 ```
-services/legal_engine_svc.py   ← apply, diagnose 오케스트레이션
-services/legal_rules.py        ← _check_rule_conditions, 의무판정
-services/legal_format.py       ← format_rule_result, format_rule_result_db
+services/{module}_svc.py       ← 핵심 비즈니스 로직
 ```
 
 **기준**: `from fastapi import` 가 없으면 서비스로 이동 가능.
-**확인**: 라우터가 서비스 호출만 하게 된 후 API 응답 동일.
+**확인**: 테스트 PASS. API 응답 동일.
 
 ### STEP 4. 라우터 슬림화
 
-마지막 정리. 라우터에 남은 잔여 로직을 서비스로 이동하고, 각 엔드포인트를 5줄 이내로.
+라우터에 남은 잔여 로직을 서비스로 이동하고, 각 엔드포인트를 5줄 이내로.
 
-```python
-# 최종 라우터 형태
-@router.post("/apply/{factory_id}")
-async def apply_legal_engine(factory_id: str, user=Depends(get_current_user)):
-    result = await legal_engine_svc.apply(factory_id, user.id)
-    return {"status": "success", "data": result}
-```
+**확인**: 라우터 파일이 15KB(400줄) 이내. 테스트 PASS. API 응답 동일.
 
-**확인**: 라우터 파일이 15KB(400줄) 이내. API 응답 동일.
+### STEP 5. 테스트 보강
 
-### STEP 5. 테스트 작성
-
-서비스가 순수 함수로 분리되어야 테스트 작성이 가능합니다.
+분리된 서비스별 세분화 테스트 추가.
 
 ```
-tests/test_legal_helpers.py    ← _to_float, _to_int 등 유틸 테스트
-tests/test_legal_rules.py      ← 조건코드 매칭 단위 테스트
-tests/test_legal_format.py     ← 결과 포맷 테스트
+tests/test_{module}_helpers.py
+tests/test_{module}_svc.py
 ```
 
-**테스트 대상**: Service 함수만. Router는 테스트하지 않음 (통합 테스트는 별도).
-**실행**: `pytest tests/test_legal_rules.py -v`
-**확인**: 모든 테스트 통과 후 수정 완료.
+**확인**: 모든 테스트 통과. 커버리지 핵심 함수 80% 이상.
 
 ---
 
@@ -126,13 +157,13 @@ tests/test_legal_format.py     ← 결과 포맷 테스트
 
 ```
 파일 크기 < 20KB  → 기존 구조 유지 (분리 불필요)
-파일 크기 >= 20KB → 5단계 분리를 선행한 후 수정
+파일 크기 >= 20KB → STEP 0(테스트)부터 시작하여 분리 선행 후 수정
 ```
 
 ### 신규 파일 생성 시
 
 ```
-처음부터 Router / Service / Schema 분리하여 생성
+처음부터 Router / Service / Schema / Tests 분리하여 생성
 ```
 
 ### 파일 크기 제한
@@ -194,42 +225,40 @@ from fastapi import Request, Response  # 금지!
 
 ---
 
-## 우선 분리 대상 (위험도 순)
+## 분리 대상 현황
 
-| 순위 | 파일 | 크기 | 함수 수 | 트리거 |
+| 순위 | 파일 | 크기 | 상태 | 테스트 |
 |---|---|---|---|---|
-| 1 | legal_engine.py | 77KB | 53개 | 법령엔진 수정 시 (선제 분리 결정) |
-| 2 | construction.py | 58KB | — | 건설 로직 수정 시 |
-| 3 | payment.py | 52KB | — | 정기결제 MID 추가 시 |
-| 4 | law_rule_generator.py | 46KB | — | AI 파싱 수정 시 |
-| 5 | matching.py | 42KB | — | 매칭 로직 수정 시 |
-| 6 | inspection_sets.py | 38KB | — | 점검세트 수정 시 |
+| ~~1~~ | ~~legal_engine.py~~ | ~~77KB~~ → 5KB | ✅ 완료 (#27) | ✅ 6개 |
+| ~~2~~ | ~~law_rule_generator.py~~ | ~~46KB~~ → 16KB | ✅ 완료 | ✅ 2개 |
+| 3 | construction.py | 58KB | 🔴 미착수 | ❌ 없음 |
+| 4 | payment.py | 52KB | 🔴 미착수 | ❌ 없음 |
+| 5 | matching.py | 42KB | 🔴 미착수 | ❌ 없음 |
+| 6 | inspection_sets.py | 38KB | 🔴 미착수 | ❌ 없음 |
 
 ---
 
-## Cursor 프롬프트 필수 포함 규칙
+## Cursor / Claude Code 작업지시서 필수 포함 규칙
 
-모든 Cursor 작업지시서에 아래를 포함:
+모든 작업지시서에 아래를 포함:
 
 ```
 [TAI 개발 규칙 — 서비스 계층 분리]
 문서: docs/DEV_RULES_SERVICE_LAYER.md
 
-이 파일이 20KB 이상이면 아래 5단계를 선행:
-  STEP 1: 패키지 생성 + 헬퍼 분리 (services/__init__.py, *_helpers.py)
-  STEP 2: 스키마 분리 (schemas/*.py)
-  STEP 3: 서비스 분리 (services/*_svc.py)
-  STEP 4: 라우터 슬림화 (routers/*.py → 엔드포인트만)
-  STEP 5: 테스트 작성 (tests/test_*.py)
+이 파일이 20KB 이상이면 아래 6단계를 선행:
+  STEP 0: 테스트 먼저 작성 (현재 동작 기록, 최소 5개, 전부 PASS 확인)
+  STEP 1: 패키지 생성 + 헬퍼 분리
+  STEP 2: 스키마 분리
+  STEP 3: 서비스 분리
+  STEP 4: 라우터 슬림화
+  STEP 5: 테스트 보강
 
-매 단계마다 API 응답이 동일한지 확인.
-중간에 멈춰도 안전해야 함.
-
-이 파일이 20KB 미만이면:
-- 신규 코드가 추가되어 20KB를 초과할 경우 분리 적용
-- 단순 버그 수정은 기존 구조 유지 가능
+★ STEP 0 없이 STEP 1로 넘어가지 말 것!
+★ 매 단계마다 기존 테스트 PASS + API 응답 동일 확인!
 
 절대 하지 말 것:
+- 테스트 없이 분리 시작
 - 라우터에서 직접 SQL 실행 (services에서만)
 - 서비스에서 Request/Response 객체 사용
 - 한 파일에 400줄 이상 작성
@@ -243,7 +272,8 @@ from fastapi import Request, Response  # 금지!
 | 현재 문제 | 해결 |
 |---|---|
 | 77KB 파일을 통째로 덮어씀 | 5KB 서비스 파일만 수정 |
-| 한 줄 고치면 다른 곳 깨짐 | 함수가 독립적 → 영향 범위 제한 |
-| 에러 원인을 모름 | 테스트가 즉시 알려줌 |
+| 한 줄 고치면 다른 곳 깨짐 | 테스트가 즉시 깨짐을 알려줌 |
+| 에러 원인을 모름 | 단위 테스트가 어디서 깨졌는지 특정 |
+| 분리했는데 뭐가 달라졌는지 모름 | STEP 0 테스트가 변경 전 동작을 보장 |
 | 검증 누락 | Pydantic 스키마가 자동 검증 |
 | 엔진 수정이 두려움 | 계산 함수만 테스트하고 수정 가능 |
