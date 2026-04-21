@@ -17,21 +17,23 @@ from pydantic import BaseModel, Field
 from typing import Optional, Any, Dict, List
 from datetime import datetime, date, timedelta
 from db.supabase_client import get_supabase
-
-# 필요한 헬퍼는 legal_engine에서 import
-from routers.legal_engine import (
-    _truthy, _to_float, _to_int,
-    _classify_rules_db, format_rule_result_db,
-    _resolve_obligation_type, _risk_level,
-    DiagnoseStep1Body, ALLOWED_DIAGNOSE_SECTORS,
-    _normalize_sector_db,
-    _save_diagnosis_result, _evaluate_condition,
-    _create_report_events_from_rules, _determine_risk_level,
+from schemas.legal_engine import DiagnoseStep1Body
+from services.legal_context import _truthy
+from services.legal_format import _classify_rules_db, format_rule_result_db
+from services.legal_helpers import _to_float, _to_int
+from services.legal_rules import (
+    _determine_risk_level,
+    _evaluate_condition,
+    _resolve_obligation_type,
+    _risk_level,
+    normalize_sector_db as _normalize_sector_db,
 )
+from services.legal_runtime import _create_report_events_from_rules, _save_diagnosis_result
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진v510"])
 
 ENGINE_VERSION = "5.1.0"
+ALLOWED_DIAGNOSE_SECTORS = frozenset({"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"})
 
 # 건설 관련 주요 법령명 프리픽스
 CONSTRUCTION_RELEVANT_LAW_PREFIXES = [

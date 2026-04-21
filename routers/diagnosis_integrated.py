@@ -45,12 +45,19 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
+from schemas.legal_engine import DiagnoseStep1Body
+from services import legal_engine_svc
+from services.legal_context import _input_to_facility_context
+from services.legal_format import _classify_rules_db, format_rule_result_db
+from services.legal_rules import normalize_sector_db, risk_level
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/diagnosis", tags=["진단통합"])
 
 VERSION = "1.0.1"
+ENGINE_VERSION = "5.7.0"
+_ALLOWED_DIAGNOSE_SECTORS = frozenset({"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"})
 
 # 이니시스 환경변수
 INICIS_MID      = os.getenv("INICIS_VERIFY_MID", "")
@@ -94,6 +101,24 @@ FREE_TIER_CODES = frozenset({
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _run_step1_via_service(supabase, step1_body: DiagnoseStep1Body) -> Dict[str, Any]:
+    diag = legal_engine_svc.run_diagnose_step1(
+        supabase,
+        step1_body,
+        ENGINE_VERSION,
+        _ALLOWED_DIAGNOSE_SECTORS,
+        normalize_sector_db,
+        _input_to_facility_context,
+        legal_engine_svc.evaluate_facility_conditions_db,
+        _classify_rules_db,
+        format_rule_result_db,
+        risk_level,
+        legal_engine_svc.get_construction_summary,
+    )
+    final = legal_engine_svc.finalize_diagnose_step1(supabase, diag)
+    return {"status": "success", "data": final["result_data"]}
 
 
 def _sha256(data: str) -> str:
@@ -443,9 +468,6 @@ async def run_diagnosis(body: DiagnosisRunBody):
       7. anonymous_diagnosis_results 저장
       8. 무료면 free_count+1
     """
-    from routers.legal_engine import DiagnoseStep1Body, diagnose_step1
-    from routers.legal_engine import ENGINE_VERSION
-
     supabase = get_supabase()
 
     # 1. 인증 세션 검증
@@ -540,7 +562,7 @@ async def run_diagnosis(body: DiagnosisRunBody):
         )
 
     # 6. 엔진 실행
-    eng = await diagnose_step1(step1_body)
+    eng = _run_step1_via_service(supabase, step1_body)
     if eng.get("status") != "success":
         raise HTTPException(status_code=500, detail="진단 실행에 실패했습니다.")
 
@@ -636,9 +658,6 @@ async def upgrade_diagnosis(body: UpgradeBody):
       4. 엔진 재실행 — 같은 입력으로 tier만 변경
       5. 기존 레코드 업데이트 (full_result, tier_code, paid_amount)
     """
-    from routers.legal_engine import DiagnoseStep1Body, diagnose_step1
-    from routers.legal_engine import ENGINE_VERSION
-
     supabase  = get_supabase()
     auth_row  = _resolve_auth_log(supabase, body.auth_token)
 
@@ -700,7 +719,7 @@ async def upgrade_diagnosis(body: UpgradeBody):
             floor_area=floor_area, total_floor_area=floor_area, ksic_major="",
         )
 
-    eng = await diagnose_step1(step1_body)
+    eng = _run_step1_via_service(supabase, step1_body)
     if eng.get("status") != "success":
         raise HTTPException(status_code=500, detail="엔진 재실행에 실패했습니다.")
 
