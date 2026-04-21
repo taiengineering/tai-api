@@ -5,12 +5,23 @@ on:
     branches: [main]
     paths:
       - 'routers/legal_engine.py'
+      - 'services/legal_*.py'
+      - 'schemas/legal_engine.py'
       - 'main.py'
       - 'tests/test_legal_engine*.py'
+      - 'tests/test_legal_format.py'
+      - 'tests/test_legal_helpers.py'
+      - 'tests/test_legal_rules.py'
       - 'tests/check_db_integrity.py'
       - 'tests/check_mapping_coverage.py'
   pull_request:
     branches: [main]
+    paths:
+      - 'routers/legal_engine.py'
+      - 'services/legal_*.py'
+      - 'schemas/legal_engine.py'
+      - 'main.py'
+      - 'tests/**'
 
 jobs:
   # ─────────────────────────────────────────────────
