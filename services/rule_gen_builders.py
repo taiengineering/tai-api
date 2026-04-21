@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from services.rule_gen_helpers import _is_blank, _normalize_submit_org_code, _safe_float, _safe_int, _to_bool
+from services.rule_gen_helpers import _is_blank, _normalize_submit_org_code, _safe_float, _safe_int, _to_bool, sanitize_master_patch
 
 
 def _build_master_payload(row: dict, rule_id: str) -> dict:
     ob_type = row.get("obligation_type")
     cond_val_num = _safe_float(row.get("condition_value"))
     submit_org_code = _normalize_submit_org_code(row.get("submit_org_code"))
-    return {
+    payload = {
         "rule_id": rule_id,
         "sector": row.get("sector") or "BUILDING",
         "law_name": row.get("law_name"),
@@ -48,6 +48,7 @@ def _build_master_payload(row: dict, rule_id: str) -> dict:
         "is_active": True,
         "source_api": "AI_GENERATED",
     }
+    return sanitize_master_patch(payload)
 
 
 def _build_reparse_prompt(rule: dict, full_context: str, few_shot_examples: List[dict]) -> str:

@@ -95,6 +95,44 @@ def _is_blank(value: Any) -> bool:
     return value is None or (isinstance(value, str) and value.strip() == "")
 
 
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
+def _is_valid_uuid(val: Any) -> bool:
+    return bool(val and _UUID_RE.match(str(val)))
+
+
+_VARCHAR_30_FIELDS = frozenset([
+    "condition_code", "condition_operator_code", "cycle_unit_std",
+    "inspection_cycle_unit_code", "executor_type_code",
+    "appointment_target_code", "submit_org_code",
+])
+
+
+def sanitize_master_patch(patch: dict) -> dict:
+    """master_building_legal_rules UPDATE 전 타입 안전 검증.
+    - updated_by/created_by: UUID 아니면 제거
+    - condition_value: numeric 변환 실패 시 제거
+    - varchar(30) 초과 시 truncate
+    """
+    for uuid_field in ("updated_by", "created_by"):
+        if uuid_field in patch:
+            if not _is_valid_uuid(patch[uuid_field]):
+                patch.pop(uuid_field)
+
+    if "condition_value" in patch and patch["condition_value"] is not None:
+        try:
+            patch["condition_value"] = float(patch["condition_value"])
+        except (ValueError, TypeError):
+            patch.pop("condition_value")
+
+    for f in _VARCHAR_30_FIELDS:
+        if f in patch and patch[f] is not None and len(str(patch[f])) > 30:
+            patch[f] = str(patch[f])[:30]
+
+    return patch
+
+
 def _validate_rule_row(row: dict) -> List[str]:
     errors: List[str] = []
     cond_code = row.get("condition_code")

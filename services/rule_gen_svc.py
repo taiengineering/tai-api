@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from services.rule_gen_ai import _call_claude_messages, _fetch_few_shot_examples, call_claude
 from services.rule_gen_builders import _build_draft_row, _build_master_payload, _build_reparse_prompt, _pick_reparse_targets
-from services.rule_gen_helpers import _is_blank, _normalize_submit_org_code, _validate_rule_row
+from services.rule_gen_helpers import _is_blank, _normalize_submit_org_code, _validate_rule_row, sanitize_master_patch
 
 
 def _auto_approve_to_master(supabase, draft: dict) -> Optional[str]:
@@ -297,6 +297,7 @@ async def _run_reparse_background(job_id: str, sector: str, limit_count: int, fi
                         patch.pop("submit_org_code", None)
                 if patch:
                     patch["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    sanitize_master_patch(patch)
                     supabase.table("master_building_legal_rules").update(patch).eq("id", row["id"]).execute()
                     updated += 1
                 else:
