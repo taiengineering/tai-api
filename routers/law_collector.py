@@ -13,6 +13,7 @@ from datetime import datetime, date
 from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from db.database import get_supabase
+from routers.messaging import SMS_URL, _call_messageme, _get_cfg
 
 router = APIRouter(prefix="/law-collector", tags=["법령 수집기"])
 
@@ -337,6 +338,103 @@ def mark_rules_needs_review(law_name: str, change_summary: str, supabase) -> int
     return count
 
 
+def _publish_law_revision_board(law_id: str, law_name: str, change_summary: str, supabase) -> None:
+    try:
+        now_iso = datetime.now().isoformat()
+        supabase.table("law_revision_board").insert({
+            "law_id": law_id,
+            "law_name": law_name,
+            "title": f"[법령개정] {law_name}",
+            "body": f"{law_name} 개정 감지: {change_summary}",
+            "status": "PUBLISHED",
+            "is_public": True,
+            "published_at": now_iso,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }).execute()
+    except Exception as e:
+        print(f"[LAW_UPDATE] law_revision_board INSERT 실패: {e}")
+
+
+def _notify_safety_managers_by_law_change(law_name: str, change_summary: str, supabase) -> int:
+    notified = 0
+    try:
+        sets_res = supabase.table("inspection_sets") \
+            .select("id, company_id") \
+            .eq("is_active", True) \
+            .ilike("law_name", f"%{law_name}%") \
+            .execute()
+        company_ids = sorted({r.get("company_id") for r in (sets_res.data or []) if r.get("company_id")})
+        if not company_ids:
+            return 0
+
+        users_res = supabase.table("users") \
+            .select("id, company_id, phone, allow_sms") \
+            .in_("company_id", company_ids) \
+            .in_("role_code", ["003", "012"]) \
+            .eq("is_active", True) \
+            .execute()
+        users = users_res.data or []
+        if not users:
+            return 0
+
+        title = "법령 개정으로 점검 재검토가 필요합니다"
+        body = f"{law_name} 개정 감지: {change_summary}"
+        cfg = _get_cfg()
+        for u in users:
+            try:
+                supabase.table("notifications").insert({
+                    "user_id": u["id"],
+                    "company_id": u.get("company_id"),
+                    "trigger_code": "LAW_CHANGED",
+                    "trigger_group": "LAW",
+                    "title": title,
+                    "body": body,
+                    "priority": "HIGH",
+                    "is_read": False,
+                    "channel": "push",
+                    "send_status": "SENT",
+                    "sent_at": datetime.now().isoformat(),
+                }).execute()
+            except Exception as e:
+                print(f"[LAW_UPDATE] notifications INSERT 실패 user={u.get('id')}: {e}")
+
+            if cfg["api_key"] and cfg["sender"] and u.get("allow_sms") and u.get("phone"):
+                try:
+                    _call_messageme({
+                        "api_key": cfg["api_key"],
+                        "callback": cfg["sender"],
+                        "dstaddr": u["phone"],
+                        "msg": f"[TAI] {law_name} 개정 감지. 점검/법령 항목을 확인해 주세요.",
+                    }, SMS_URL)
+                except Exception as e:
+                    print(f"[LAW_UPDATE] MessageMi SMS 실패 user={u.get('id')}: {e}")
+            notified += 1
+    except Exception as e:
+        print(f"[LAW_UPDATE] 안전관리자 알림 처리 실패: {e}")
+    return notified
+
+
+def _mark_inspection_items_law_changed(law_name: str, supabase) -> int:
+    try:
+        sets_res = supabase.table("inspection_sets") \
+            .select("id") \
+            .eq("is_active", True) \
+            .ilike("law_name", f"%{law_name}%") \
+            .execute()
+        set_ids = [r["id"] for r in (sets_res.data or []) if r.get("id")]
+        if not set_ids:
+            return 0
+        upd = supabase.table("inspection_set_items").update({
+            "is_law_changed": True,
+            "updated_at": datetime.now().isoformat(),
+        }).in_("inspection_set_id", set_ids).execute()
+        return len(upd.data or [])
+    except Exception as e:
+        print(f"[LAW_UPDATE] inspection_set_items 변경표시 실패: {e}")
+        return 0
+
+
 def check_law_update(law_tracking: dict, supabase) -> dict:
     """법령 개정 여부 확인 → 변경 시 재수집 + AI 룰 NEEDS_REVIEW 표시"""
     law_id      = law_tracking["law_id"]
@@ -403,6 +501,9 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
 
     # ★ AI 룰 NEEDS_REVIEW 표시 (핵심)
     needs_review_count = mark_rules_needs_review(law_name, change_summary, supabase)
+    _publish_law_revision_board(law_id, law_name, change_summary, supabase)
+    notified_count = _notify_safety_managers_by_law_change(law_name, change_summary, supabase)
+    law_changed_items = _mark_inspection_items_law_changed(law_name, supabase)
 
     supabase.table("law_update_tracking").update({
         "last_checked_at": datetime.now().isoformat(),
@@ -420,6 +521,8 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
         "new_mst_no":         current_mst_no,
         "articles":           save_result["article_count"],
         "needs_review_rules": needs_review_count,
+        "notified_safety_managers": notified_count,
+        "inspection_items_law_changed": law_changed_items,
     }
 
 
