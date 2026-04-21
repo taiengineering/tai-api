@@ -147,11 +147,10 @@ def _run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
     subcon = int(site.get("subcon_workers") or 0)
     site_type_raw = site.get("site_type") or "BUILDING"
 
-    from routers.legal_engine import (
-        _input_to_facility_context, _evaluate_facility_conditions_db,
-        _classify_rules_db, format_rule_result_db, _get_construction_summary,
-        get_sector_groups, ENGINE_VERSION,
-    )
+    from services.legal_context import _input_to_facility_context
+    from services.legal_engine_svc import ENGINE_VERSION, _evaluate_facility_conditions_db, get_construction_summary as _get_construction_summary
+    from services.legal_format import _classify_rules_db, format_rule_result_db
+    from services.legal_helpers import get_sector_groups
     sector_raw = "CONSTRUCTION"
     sector_groups = get_sector_groups(sector_raw)
     rules_res = supabase.table("master_building_legal_rules").select("*") \

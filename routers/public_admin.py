@@ -158,14 +158,10 @@ def run_diagnosis(req_id: str):
     request_type    = req.get("request_type", "v1")
 
     try:
-        from routers.legal_engine import (
-            _input_to_facility_context,
-            _evaluate_facility_conditions_db,
-            _classify_rules_db,
-            _resolve_obligation_type,
-            _get_construction_summary,
-            ENGINE_VERSION,
-        )
+        from services.legal_context import _input_to_facility_context
+        from services.legal_engine_svc import ENGINE_VERSION, _evaluate_facility_conditions_db, get_construction_summary as _get_construction_summary
+        from services.legal_format import _classify_rules_db
+        from services.legal_rules import _resolve_obligation_type
         from datetime import datetime
 
         all_rules_res = supabase.table("master_building_legal_rules") \

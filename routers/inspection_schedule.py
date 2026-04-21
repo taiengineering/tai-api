@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
 from routers.inspection_sets import _next_planned_from as _calc_next_date  # ★ fix: 함수명 변경
-from routers.legal_engine import CYCLE_CODE_MAP, INSPECTION_CYCLE_UNIT_MAP, get_sector_groups
+from services.legal_format import CYCLE_CODE_MAP, INSPECTION_CYCLE_UNIT_MAP
+from services.legal_helpers import get_sector_groups
 
 router = APIRouter(prefix="/inspection-schedule", tags=["inspection-schedule"])
 _MAX_LIST_FETCH = 10000

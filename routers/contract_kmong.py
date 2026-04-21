@@ -20,15 +20,10 @@ import os
 
 from db.supabase_client import get_supabase
 
-# legal_engine 내부 함수 임포트
-from routers.legal_engine import (
-    _input_to_facility_context,
-    _evaluate_facility_conditions_db,
-    _classify_rules_db,
-    format_rule_result_db,
-    _risk_level,
-    ENGINE_VERSION,
-)
+from services.legal_context import _input_to_facility_context
+from services.legal_engine_svc import ENGINE_VERSION, _evaluate_facility_conditions_db
+from services.legal_format import _classify_rules_db, format_rule_result_db
+from services.legal_rules import _risk_level
 
 router = APIRouter(prefix="/contract/kmong", tags=["contract-kmong"])
 

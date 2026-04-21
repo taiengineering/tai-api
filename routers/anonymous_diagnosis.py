@@ -19,8 +19,12 @@ from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
-from routers.legal_engine import DiagnoseStep1Body, diagnose_step1
-from routers.legal_engine import ENGINE_VERSION as LEGAL_ENGINE_VERSION
+from schemas.legal_engine import DiagnoseStep1Body
+from services import legal_engine_svc
+from services.legal_context import _input_to_facility_context
+from services.legal_format import _classify_rules_db, format_rule_result_db
+from services.legal_helpers import _now_iso
+from services.legal_rules import normalize_sector_db, risk_level
 
 # BE-09: BE-08 추천 함수 재사용 (코드 중복 금지)
 from routers.diagnosis_plan_recommend import (
@@ -49,6 +53,8 @@ router = APIRouter(prefix="/anonymous-diagnosis", tags=["익명 무료진단"])
 RULE_VERSION = "master_building_legal_rules:v1"
 SOURCE_TYPE_DEFAULT = "site_free"
 TTL_DAYS = 7
+LEGAL_ENGINE_VERSION = "5.7.0"
+_ALLOWED_DIAGNOSE_SECTORS = frozenset({"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"})
 
 # sector 정규화 매핑
 # MANUFACTURING(법령엔진 내부 코드) → INDUSTRY
@@ -61,6 +67,24 @@ _SECTOR_NORMALIZE: Dict[str, str] = {
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _run_step1_via_service(supabase, step1_body: DiagnoseStep1Body) -> Dict[str, Any]:
+    diag = legal_engine_svc.run_diagnose_step1(
+        supabase,
+        step1_body,
+        LEGAL_ENGINE_VERSION,
+        _ALLOWED_DIAGNOSE_SECTORS,
+        normalize_sector_db,
+        _input_to_facility_context,
+        legal_engine_svc.evaluate_facility_conditions_db,
+        _classify_rules_db,
+        format_rule_result_db,
+        risk_level,
+        legal_engine_svc.get_construction_summary,
+    )
+    final = legal_engine_svc.finalize_diagnose_step1(supabase, diag)
+    return {"status": "success", "data": final["result_data"]}
 
 
 def _partial_from_full(full: Dict[str, Any]) -> Dict[str, Any]:
@@ -148,7 +172,7 @@ def _build_step1_body(body: AnonymousDiagnosisCreate) -> DiagnoseStep1Body:
 @router.post("")
 async def create_anonymous_diagnosis(body: AnonymousDiagnosisCreate):
     step1_body = _build_step1_body(body)
-    eng = await diagnose_step1(step1_body)
+    eng = _run_step1_via_service(supabase, step1_body)
     if eng.get("status") != "success":
         raise HTTPException(status_code=500, detail="진단 실행 실패")
     full_result = eng["data"]

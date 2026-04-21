@@ -215,11 +215,11 @@ def _run_db_quality_checks(supabase) -> List[Dict[str, Any]]:
 
 def _run_single_test(supabase, tc: Dict[str, Any]) -> Dict[str, Any]:
     """테스트 케이스 1건 실행 — diagnose/step1 로직 직접 호출"""
-    from routers.legal_engine import (
-        get_sector_groups, _normalize_sector_db,
-        _input_to_facility_context, _evaluate_facility_conditions_db,
-        _classify_rules_db, format_rule_result_db, _get_construction_summary
-    )
+    from services.legal_context import _input_to_facility_context
+    from services.legal_engine_svc import _evaluate_facility_conditions_db, get_construction_summary as _get_construction_summary
+    from services.legal_format import _classify_rules_db, format_rule_result_db
+    from services.legal_helpers import get_sector_groups
+    from services.legal_rules import normalize_sector_db as _normalize_sector_db
 
     sector_raw = tc["sector"]
     inp = dict(tc["input"])
