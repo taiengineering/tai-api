@@ -1,0 +1,373 @@
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Dict, Optional
+
+from fastapi import HTTPException, Request
+
+from schemas.legal_engine import DiagnoseStep1Body
+
+log = logging.getLogger(__name__)
+
+
+def resolve_auth_log(supabase, auth_token: str) -> dict:
+    res = (
+        supabase.table("diagnosis_auth_log")
+        .select("id, ci_hash, name, phone, free_count, free_limit, status")
+        .eq("auth_token", auth_token)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=401, detail="인증 세션이 유효하지 않습니다. 본인인증을 다시 시도해 주세요.")
+    row = res.data[0]
+    if row.get("status") != "ACTIVE":
+        raise HTTPException(status_code=403, detail="사용할 수 없는 인증 세션입니다.")
+    return row
+
+
+def check_free_usage(supabase, auth_token: str) -> Dict[str, Any]:
+    row = resolve_auth_log(supabase, auth_token)
+    used = row.get("free_count") or 0
+    limit_cnt = row.get("free_limit") or 3
+    remaining = max(0, limit_cnt - used)
+    return {
+        "status": "success",
+        "can_free": remaining > 0,
+        "free_used": used,
+        "free_limit": limit_cnt,
+        "free_remaining": remaining,
+        "name": row.get("name"),
+    }
+
+
+def get_price_tier_payload(
+    sector: str,
+    floor_area: float,
+    contract_amount_eok: float,
+    user_tier: Optional[str],
+    auto_tier_func: Callable[[str, float, float, Optional[str]], str],
+    paid_tier_prices: Dict[str, int],
+    free_tier_codes,
+) -> Dict[str, Any]:
+    sector = sector.strip().upper()
+    tier_code = auto_tier_func(sector, floor_area, contract_amount_eok, user_tier)
+
+    price = paid_tier_prices.get(tier_code, 0)
+    is_free = tier_code in free_tier_codes
+    auto_det = sector in ("BUILDING", "CONSTRUCTION")
+
+    determination_note = ""
+    if sector == "BUILDING":
+        if floor_area >= 5000:
+            determination_note = f"입력 면적 {floor_area:,.0f}㎡ ≥ 5,000㎡ → 대형건물로 자동 판정"
+        else:
+            determination_note = f"입력 면적 {floor_area:,.0f}㎡ < 5,000㎡ → 소형건물로 자동 판정"
+    elif sector == "CONSTRUCTION":
+        if contract_amount_eok >= 50:
+            determination_note = f"공사금액 {contract_amount_eok}억 ≥ 50억 → 종합으로 자동 판정"
+        else:
+            determination_note = f"공사금액 {contract_amount_eok}억 < 50억 → 기본으로 자동 판정"
+    else:
+        determination_note = "산업 섹터는 사용자가 직접 등급을 선택합니다"
+
+    return {
+        "status": "success",
+        "sector": sector,
+        "tier_code": tier_code,
+        "price_krw": price,
+        "is_free": is_free,
+        "auto_determined": auto_det,
+        "determination_note": determination_note,
+    }
+
+
+def save_disclaimer(
+    supabase,
+    auth_token: str,
+    agreed: bool,
+    ip_address: Optional[str],
+    user_agent: Optional[str],
+    request: Request,
+    disclaimer_text: str,
+) -> Dict[str, Any]:
+    if not agreed:
+        raise HTTPException(status_code=400, detail="면책 동의를 체크해 주세요.")
+    auth_row = resolve_auth_log(supabase, auth_token)
+
+    ip = ip_address or (request.client.host if request.client else None)
+    ua = user_agent or request.headers.get("user-agent", "")
+
+    res = (
+        supabase.table("diagnosis_disclaimer_log")
+        .insert(
+            {
+                "ci_hash": auth_row["ci_hash"],
+                "auth_log_id": auth_row["id"],
+                "disclaimer_text": disclaimer_text,
+                "agreed": True,
+                "ip_address": ip,
+                "user_agent": ua[:500] if ua else None,
+            }
+        )
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=500, detail="동의 저장에 실패했습니다.")
+
+    return {
+        "status": "success",
+        "disclaimer_log_id": res.data[0]["id"],
+        "agreed_at": res.data[0].get("agreed_at"),
+        "disclaimer_text": disclaimer_text,
+    }
+
+
+def run_diagnosis(
+    supabase,
+    body,
+    run_step1_func: Callable[[Any, DiagnoseStep1Body], Dict[str, Any]],
+    auto_tier_func: Callable[[str, float, float, Optional[str]], str],
+    build_partial_func: Callable[[dict], dict],
+    now_func: Callable[[], str],
+    paid_tier_prices: Dict[str, int],
+    free_tier_codes,
+    engine_version: str,
+) -> Dict[str, Any]:
+    auth_row = resolve_auth_log(supabase, body.auth_token)
+    disc_res = (
+        supabase.table("diagnosis_disclaimer_log")
+        .select("id, ci_hash, agreed")
+        .eq("id", body.disclaimer_log_id)
+        .eq("ci_hash", auth_row["ci_hash"])
+        .limit(1)
+        .execute()
+    )
+    if not disc_res.data or not disc_res.data[0].get("agreed"):
+        raise HTTPException(status_code=400, detail="면책 동의가 필요합니다.")
+
+    sector = body.sector.strip().upper()
+    engine_sector = "MANUFACTURING" if sector == "INDUSTRY" else sector
+    tier_code = auto_tier_func(
+        sector,
+        floor_area=body.floor_area or 0.0,
+        contract_amount_eok=body.contract_amount_eok or 0.0,
+        user_tier=body.user_tier,
+    )
+    is_free = tier_code in free_tier_codes
+
+    if is_free:
+        used = auth_row.get("free_count") or 0
+        limit_cnt = auth_row.get("free_limit") or 3
+        if used >= limit_cnt:
+            raise HTTPException(status_code=402, detail=f"무료 진단 횟수({limit_cnt}회)를 모두 사용하셨습니다. 유료 진단을 이용해 주세요.")
+    elif not body.payment_ref:
+        price = paid_tier_prices.get(tier_code, 0)
+        raise HTTPException(status_code=402, detail=f"유료 진단입니다. 결제 완료 후 payment_ref를 포함해 주세요. (가격: {price:,}원)")
+
+    inp: dict = {"region": body.region or "", "anonymous_flow": True, "tier_code": tier_code}
+    workers = body.worker_count or body.direct_workers or 0
+    employees = body.employee_count or workers
+    floor_area = body.floor_area or 400.0
+    total_floor_area = body.total_floor_area or floor_area
+    contract_eok = body.contract_amount_eok or 1.0
+
+    if engine_sector == "CONSTRUCTION":
+        step1_body = DiagnoseStep1Body(
+            factory_id=None,
+            sector=engine_sector,
+            input=inp,
+            construction_type=body.construction_type or "건축",
+            contract_amount_eok=float(contract_eok),
+            direct_workers=body.direct_workers or workers,
+            subcon_workers=body.subcon_workers or 0,
+        )
+    elif engine_sector == "BUILDING":
+        step1_body = DiagnoseStep1Body(
+            factory_id=None,
+            sector=engine_sector,
+            input=inp,
+            building_use_type=body.building_use_type or "사무실",
+            floor_area=float(floor_area),
+            total_floor_area=float(total_floor_area),
+            worker_count=workers,
+            employee_count=employees,
+            floor_count=5,
+        )
+    else:
+        step1_body = DiagnoseStep1Body(
+            factory_id=None,
+            sector=engine_sector,
+            input=inp,
+            worker_count=workers,
+            employee_count=employees,
+            floor_area=float(floor_area),
+            total_floor_area=float(total_floor_area),
+            ksic_major=body.ksic_major or "",
+        )
+
+    eng = run_step1_func(supabase, step1_body)
+    if eng.get("status") != "success":
+        raise HTTPException(status_code=500, detail="진단 실행에 실패했습니다.")
+
+    full_result = eng["data"]
+    public_token = str(uuid.uuid4())
+    expires_at = None
+    if is_free:
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+
+    row = {
+        "public_token": public_token,
+        "input_data": {
+            "sector": sector,
+            "tier_code": tier_code,
+            "floor_area": floor_area,
+            "contract_amount_eok": contract_eok,
+            "workers": workers,
+        },
+        "partial_result": build_partial_func(full_result),
+        "full_result": full_result,
+        "expires_at": expires_at,
+        "status": "ACTIVE",
+        "source_type": "free_diag" if is_free else "paid_diag",
+        "engine_version": engine_version,
+        "ci_hash": auth_row["ci_hash"],
+        "auth_log_id": auth_row["id"],
+        "disclaimer_log_id": body.disclaimer_log_id,
+        "tier_code": tier_code,
+        "paid_amount": 0 if is_free else paid_tier_prices.get(tier_code, 0),
+        "payment_ref": body.payment_ref,
+    }
+
+    ins = supabase.table("anonymous_diagnosis_results").insert(row).execute()
+    if not ins.data:
+        raise HTTPException(status_code=500, detail="결과 저장에 실패했습니다.")
+
+    if is_free:
+        supabase.table("diagnosis_auth_log").update(
+            {
+                "free_count": (auth_row.get("free_count") or 0) + 1,
+                "last_free_at": now_func(),
+                "updated_at": now_func(),
+            }
+        ).eq("id", auth_row["id"]).execute()
+
+    remaining_after = 0
+    if is_free:
+        remaining_after = max(0, (auth_row.get("free_limit") or 3) - ((auth_row.get("free_count") or 0) + 1))
+
+    return {
+        "status": "success",
+        "public_token": public_token,
+        "tier_code": tier_code,
+        "is_free": is_free,
+        "expires_at": expires_at,
+        "free_remaining_after": remaining_after if is_free else None,
+        "result": full_result,
+    }
+
+
+def upgrade_diagnosis(
+    supabase,
+    body,
+    run_step1_func: Callable[[Any, DiagnoseStep1Body], Dict[str, Any]],
+    build_partial_func: Callable[[dict], dict],
+    paid_tier_prices: Dict[str, int],
+) -> Dict[str, Any]:
+    auth_row = resolve_auth_log(supabase, body.auth_token)
+    existing = (
+        supabase.table("anonymous_diagnosis_results")
+        .select("id, ci_hash, tier_code, input_data, paid_amount, status")
+        .eq("public_token", body.public_token)
+        .limit(1)
+        .execute()
+    )
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="진단 레코드를 찾을 수 없습니다.")
+
+    rec = existing.data[0]
+    if rec["ci_hash"] != auth_row["ci_hash"]:
+        raise HTTPException(status_code=403, detail="자신의 진단만 업그레이드할 수 있습니다.")
+
+    current_tier = rec.get("tier_code") or ""
+    target_tier = body.target_tier_code
+    current_price = paid_tier_prices.get(current_tier, 0)
+    target_price = paid_tier_prices.get(target_tier)
+
+    if target_price is None:
+        raise HTTPException(status_code=422, detail=f"업그레이드 불가 티어: {target_tier}")
+    if target_price <= current_price:
+        raise HTTPException(status_code=422, detail="더 높은 등급으로만 업그레이드 가능합니다.")
+
+    diff_price = target_price - current_price
+    log.info("[UPGRADE] %s → %s, diff=%d, payment_ref=%s", current_tier, target_tier, diff_price, body.payment_ref)
+
+    input_data = rec.get("input_data") or {}
+    inp = {"tier_code": target_tier, "anonymous_flow": True, "upgrade": True}
+    sector = (input_data.get("sector") or "").upper()
+    engine_sector = "MANUFACTURING" if sector == "INDUSTRY" else sector
+    workers = int(input_data.get("workers") or 0)
+    floor_area = float(input_data.get("floor_area") or 400.0)
+    contract_eok = float(input_data.get("contract_amount_eok") or 1.0)
+
+    if engine_sector == "CONSTRUCTION":
+        step1_body = DiagnoseStep1Body(
+            factory_id=None,
+            sector=engine_sector,
+            input=inp,
+            construction_type="건축",
+            contract_amount_eok=contract_eok,
+            direct_workers=workers,
+            subcon_workers=0,
+        )
+    elif engine_sector == "BUILDING":
+        step1_body = DiagnoseStep1Body(
+            factory_id=None,
+            sector=engine_sector,
+            input=inp,
+            building_use_type="사무실",
+            floor_area=floor_area,
+            total_floor_area=floor_area,
+            worker_count=workers,
+            employee_count=workers,
+            floor_count=5,
+        )
+    else:
+        step1_body = DiagnoseStep1Body(
+            factory_id=None,
+            sector=engine_sector,
+            input=inp,
+            worker_count=workers,
+            employee_count=workers,
+            floor_area=floor_area,
+            total_floor_area=floor_area,
+            ksic_major="",
+        )
+
+    eng = run_step1_func(supabase, step1_body)
+    if eng.get("status") != "success":
+        raise HTTPException(status_code=500, detail="엔진 재실행에 실패했습니다.")
+
+    new_full = eng["data"]
+    supabase.table("anonymous_diagnosis_results").update(
+        {
+            "full_result": new_full,
+            "partial_result": build_partial_func(new_full),
+            "tier_code": target_tier,
+            "paid_amount": int(rec.get("paid_amount") or 0) + diff_price,
+            "payment_ref": body.payment_ref,
+            "status": "ACTIVE",
+            "expires_at": None,
+        }
+    ).eq("id", rec["id"]).execute()
+
+    return {
+        "status": "success",
+        "public_token": body.public_token,
+        "prev_tier": current_tier,
+        "new_tier": target_tier,
+        "diff_paid_krw": diff_price,
+        "result": new_full,
+    }
