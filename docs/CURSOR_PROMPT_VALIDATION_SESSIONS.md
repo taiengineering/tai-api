@@ -112,6 +112,9 @@ Pilot 1 대상이므로 사전 파악 필수. 같은 방식으로 raw XML 조회
 
 ## 🎯 SESSION 2: **Pilot 1** — 산업안전보건법 1건 재수집 🛑
 
+> **Cursor 복사:** 아래 코드펜스 **전체**를 채팅에 붙여넣기 (첫 줄 `## SESSION 1 판정`부터 마지막 `시작해줘.`까지).  
+> 내부 예시(SQL/쉘)는 `~~~` 펜스라 바깥 ` ``` ` 와 충돌하지 않음.
+
 ```
 ## SESSION 1 판정: GO (기획창 확인 완료)
 
@@ -196,7 +199,7 @@ Pilot 1 시작. 산업안전보건법 1건만 전체 플로우 검증.
 - scripts/reconnect_fk.py: 구→신 article_id 매핑 후 참조 업데이트
 
 ### STEP 3: Pilot 1 실행 — 산업안전보건법만
-```
+~~~
 # 1. 기존 산안법 version 백업 (Supabase SQL)
 #    SELECT * FROM law_version WHERE law_id = (산안법 ID) AND is_current=true
 #    → JSON으로 로컬 저장
@@ -206,13 +209,13 @@ curl -X POST "https://api.taieng.co.kr/law-collector/collect/산업안전보건�
 
 # 3. FK 재연결
 python3 scripts/reconnect_fk.py --law-name "산업안전보건법"
-```
+~~~
 
 ### STEP 4: Pilot 1 검증 (🛑 Go/No-Go 결정)
 
 아래 검증 쿼리를 실행한다 (기준은 상단 **Pilot 1 검증 기준 조정** 참고).
 
-```
+~~~
 -- 4-1. valid_articles 비율 (article_text = 조문내용+항+호+목 합성 후)
 SELECT 
   COUNT(*) AS total,
@@ -276,14 +279,14 @@ SELECT * FROM law_revision_board
 WHERE created_at > NOW() - INTERVAL '1 hour'
 ORDER BY created_at DESC;
 -- 🎯 기준: 빈 결과 (알림 안 감)
-```
+~~~
 
 ### STEP 5: 샘플 눈으로 확인
 재수집된 산안법 조문 10개를 랜덤 추출해서 화면에 표시.
 본인(기획창)이 "이 조문이 정상적으로 파싱됐는지" 판단 가능한 형식.
 
 ## 완료 후 기획창 보고 (🛑 Go/No-Go 판단용)
-```
+~~~
 ✅ Pilot 1 완료 (SESSION 2)
 
 ### 기술 검증 (쿼리 결과)
@@ -308,7 +311,7 @@ ORDER BY created_at DESC;
 - 위 기준 모두 통과? [Y/N]
 - 샘플 품질 OK? [Y/N]
 - 총평: [Go to Pilot 2 / No-Go, 원인 파악 필요]
-```
+~~~
 
 기획창이 "GO" 판정 주기 전까지 SESSION 3 절대 시작하지 말 것.
 
