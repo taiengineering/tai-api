@@ -1,17 +1,20 @@
-# routers/law_collector_admrul.py v1.3
+# routers/law_collector_admrul.py v1.4
 # 행정규칙(NFTC/NFPC 등) 수집용 헬퍼
 #
 # 법제처 행정규칙 API:
 #   검색: http://www.law.go.kr/DRF/lawSearch.do?target=admrul
 #   본문: http://www.law.go.kr/DRF/lawService.do?target=admrul&LID={행정규칙ID}
 #
-# ⚠️ 행정규칙 XML 구조는 일반 법령과 다름:
-#   일반 법령: <조문><조문단위><항><호><목>
-#   행정규칙:  <조문내용> 단일 태그 + 내부는 "1. / 1.1 / 1.1.1" 계층 번호 텍스트
+# ⚠️ 행정규칙 XML 구조는 다양함:
+#   패턴 A (NFTC/NFPC):    <조문내용>에 "1./1.1/1.1.1" 계층 번호 텍스트 통째
+#   패턴 B (전기설비기준): <조문내용>에 "제1장 총칙"만 있고
+#                         본문은 <제YYYY-NN호,날짜> 등 개정이력 태그에 분산
 #
-# v1.3 (2026-04-23): article_internal_key에 순차 idx 포함 → 섹션 번호 중복시에도 UNIQUE 보장
-# v1.2 (2026-04-22): "가상 조문" 전략 도입 (1.1, 1.2 단위로 분할)
-# v1.1 (2026-04-22): LID 파라미터 수정
+# v1.4 (2026-04-23): 조문내용이 50자 미만이면 itertext() 폴백 강제 발동
+#                    → 전기설비기술기준, 한국전기설비규정 등 특수 구조 대응
+# v1.3: article_internal_key에 순차 idx 포함
+# v1.2: 가상 조문 전략 도입
+# v1.1: LID 파라미터 수정
 
 import re
 import requests
@@ -28,7 +31,7 @@ from routers.law_collector import (
 
 
 # ============================================================
-# 행정규칙 검색/본문 API (law.go.kr target=admrul)
+# 행정규칙 검색/본문 API
 # ============================================================
 
 def fetch_admrul_list(query: str, display: int = 20, page: int = 1) -> dict:
@@ -55,9 +58,7 @@ def fetch_admrul_list(query: str, display: int = 20, page: int = 1) -> dict:
 def fetch_admrul_content(admrul_id: str) -> dict:
     """
     행정규칙 본문 조회.
-    
     ⚠️ 파라미터는 "LID" (ID 아님!)
-    검색 결과의 <행정규칙ID>값을 LID로 넘김 (예: LID=83615)
     """
     url = f"{LAW_API_BASE}/lawService.do"
     params = {
@@ -110,11 +111,57 @@ def parse_admrul_list_xml(xml_text: str) -> list:
 
 
 # ============================================================
-# 행정규칙 본문 XML 파싱 — "가상 조문" 전략
+# 행정규칙 본문 XML 파싱 (v1.4: 강화된 폴백)
 # ============================================================
 
+# 본문 이외 메타데이터 태그 (폴백 시 제외)
+_META_TAGS_EXCLUDE = {
+    "행정규칙기본정보", "기본정보",
+    "행정규칙ID", "행정규칙일련번호", "행정규칙명",
+    "행정규칙종류", "행정규칙종류코드", "발령번호", "발령일자",
+    "시행일자", "생성일자", "현행여부", "조문형식여부",
+    "소관부처명", "소관부처코드", "상위부처명",
+    "담당부서기관명", "담당부서기관코드", "담당자명", "전화번호",
+    "제개정구분명", "제개정구분코드",
+    "첨부파일", "첨부파일링크", "첨부파일명",
+}
+
+
+def _collect_full_text_fallback(root: ET.Element) -> str:
+    """
+    <조문내용>이 너무 짧을 때 사용하는 폴백.
+    메타데이터 태그는 제외하고 나머지 전체 텍스트 수집.
+    """
+    texts: List[str] = []
+    
+    def _should_skip(elem: ET.Element) -> bool:
+        """이 요소를 건너뛸지 결정."""
+        return elem.tag in _META_TAGS_EXCLUDE
+    
+    def _walk(elem: ET.Element):
+        if _should_skip(elem):
+            return
+        if elem.text and elem.text.strip():
+            texts.append(elem.text.strip())
+        for child in elem:
+            _walk(child)
+        if elem.tail and elem.tail.strip():
+            texts.append(elem.tail.strip())
+    
+    # root의 직속 자식부터 순회 (root의 text는 보통 빈 줄)
+    for child in root:
+        _walk(child)
+    
+    return "\n".join(texts)
+
+
 def parse_admrul_content_xml(xml_text: str) -> dict:
-    """행정규칙 본문 XML 파싱. NFTC/NFPC는 섹션 번호로 분할."""
+    """
+    행정규칙 본문 XML 파싱.
+    
+    v1.4: <조문내용>이 50자 미만이면 폴백 강제 발동.
+          전기설비기술기준 같이 본문이 <제YYYY-NN호> 태그에 분산된 경우 대응.
+    """
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as e:
@@ -156,21 +203,24 @@ def parse_admrul_content_xml(xml_text: str) -> dict:
             "revision_type":     basic.findtext("제개정구분명", "") or basic.findtext("제개정구분", ""),
         }
     
-    # 본문 추출
-    full_text = root.findtext("조문내용", "") or ""
-    if not full_text.strip():
-        full_text = "\n".join(
-            (t or "").strip()
-            for t in root.itertext()
-            if (t or "").strip()
-        )
+    # ─── 본문 추출 (v1.4 강화) ─────────────────────────────
+    # 1차: <조문내용> 시도
+    content_text = (root.findtext("조문내용", "") or "").strip()
     
-    full_text = full_text.strip()
+    # 2차: <조문내용>이 너무 짧으면 폴백
+    # NFTC 102 = 16663자 정상 / 전기설비기술기준 = "제1장 총칙" 7자 이상 현상
+    MIN_CONTENT_LENGTH = 50
     
-    # 계층 번호 기반 섹션 분할
+    if len(content_text) < MIN_CONTENT_LENGTH:
+        # 폴백: 메타데이터 제외한 전체 텍스트 수집
+        content_text = _collect_full_text_fallback(root)
+    
+    full_text = content_text.strip()
+    
+    # ─── 계층 번호 기반 섹션 분할 ──────────────────────────
     articles = _split_admrul_by_sections(full_text)
     
-    # 아무것도 추출 안 되면 전체를 조문 1개로
+    # 섹션 분할도 안 되면 전체를 조문 1개로
     if not articles and full_text:
         articles = [{
             "article_internal_key": "admrul-idx-001-full",
@@ -189,9 +239,8 @@ def parse_admrul_content_xml(xml_text: str) -> dict:
 
 def _split_admrul_by_sections(text: str) -> List[dict]:
     """
-    NFTC/NFPC 본문을 계층 번호(1.1, 1.2, 2.1 등)로 분할.
-    
-    ⭐ v1.3: article_internal_key에 순차 idx 포함 → 같은 섹션 번호 중복시에도 UNIQUE 보장
+    본문을 계층 번호(1.1, 1.2, 2.1 등)로 분할.
+    v1.3: article_internal_key에 순차 idx 포함 → UNIQUE 보장
     """
     if not text or not text.strip():
         return []
@@ -238,21 +287,20 @@ def _split_admrul_by_sections(text: str) -> List[dict]:
                 "content": content,
             })
     
-    # 가상 조문 변환 (⭐ v1.3: idx 포함해서 UNIQUE 보장)
+    # 가상 조문 변환 (v1.3: idx 포함)
     articles = []
     for idx, sec in enumerate(sections, start=1):
         section_no = f"{sec['major']}.{sec['minor']}"
         full_title = f"{section_no} {sec['title']}".strip()
-        full_text = f"{full_title}\n{sec['content']}".strip()
+        full_text_val = f"{full_title}\n{sec['content']}".strip()
         
         articles.append({
-            # ⭐ v1.3: idx 포함. 같은 "1.1"이 두 번 나와도 idx가 달라서 UNIQUE 보장
             "article_internal_key": f"admrul-idx-{idx:03d}-sec-{section_no}",
             "article_no":           idx,
             "article_sub_no":       None,
             "article_type":         "본칙",
             "article_title":        full_title[:200],
-            "article_text":         full_text[:30000],
+            "article_text":         full_text_val[:30000],
             "enforcement_date":     None,
             "is_changed":           False,
             "paragraphs":           [],
