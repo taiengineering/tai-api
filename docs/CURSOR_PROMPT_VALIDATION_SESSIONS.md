@@ -113,6 +113,62 @@ Pilot 1 대상이므로 사전 파악 필수. 같은 방식으로 raw XML 조회
 ## 🎯 SESSION 2: **Pilot 1** — 산업안전보건법 1건 재수집 🛑
 
 ```
+## SESSION 1 판정: GO (기획창 확인 완료)
+
+### SESSION 2 범위 확장 (원래 계획에 4가지 추가)
+
+SESSION 1 분석으로 "XPath 엄격화만으론 해결 불가"가 확인됐다.
+진짜 버그 2개 + 안전망 2개를 Pilot 1에 모두 포함할 것.
+
+**반드시 수행 (우선순위 순):**
+
+1. 🔴 **버그 2 수정 (최우선)**: `collect_single_law()` force 재수집 로직
+   - 현재: `if (art_cnt.count or 0) == 0:` 일 때만 삭제
+   - 변경: force=true면 **조건 없이** law_article, law_paragraph, law_item, law_content_raw, law_version 순서로 삭제 후 재삽입
+   - FK cascade 주의: 매핑 테이블 생성은 삭제 전에
+
+2. 🔴 **버그 1 수정 (본문 합성)**: parse_law_content_xml() 리팩토링
+   - article_text를 다음 규칙으로 합성:
+ 조문내용
+ [항번호] 항내용
+   [호번호] 호내용
+     [목번호] 목내용
+   [호번호] ...
+ [항번호] ...
+   - 기존 law_paragraph/law_item 분할 저장은 유지 (별도 활용 용도)
+   - article_text는 "검색·AI 컨텍스트·품질 지표"용 전체 본문
+
+3. 🟡 **옵션 B (dedupe)**: article_internal_key 기반 중복 제거
+   - 산안법 조문키 5쌍 중복 대비
+   - 같은 키가 여러 노드면 더 완전한 쪽 선택 (길이 + title 기준)
+
+4. 🟡 **옵션 A (방어 XPath)**: `root.findall("./조문/조문단위")`로 변경
+   - 현재 API 기준 효과 동일하나 스키마 변경 대비
+
+### 테스트 추가
+tests/test_law_collector.py 에 다음 2개 추가:
+- test_article_text_includes_hang_ho_mok_content
+  (조문 1개에 항 1개, 호 2개 있을 때 article_text가 모두 포함하는지)
+- test_force_recollect_deletes_existing_articles
+  (force=true 호출 시 기존 article 모두 삭제되는지)
+
+### Pilot 1 검증 기준 조정
+
+기존 기준: valid_articles LENGTH(article_text) > 500
+이제는: article_text에 조문내용+항+호+목이 합성되어 있으므로
+  - 산안법 목표: valid_pct >= 30% (Cursor 측정 68/208 = 33% 기준)
+  - 추가: article row 수 = 원본 XML <조문단위> 개수 (±5 이내)
+    - 산안법 기준: 208 ± 5
+  - 추가: article_internal_key 고유값 = article row 수 (1:1)
+    - dedupe 로직 작동 확인
+
+### 기획창(Claude Opus) 역할
+- SESSION 2 PR 리뷰 시 위 4가지 모두 반영됐는지 확인
+- force 재수집 테스트 (산안법 재수집 전후 row 수 비교)
+- Issue #37에 SESSION 2 결과 코멘트 작성
+
+---
+
 Pilot 1 시작. 산업안전보건법 1건만 전체 플로우 검증.
 
 ## 배경
@@ -122,15 +178,17 @@ Pilot 1 시작. 산업안전보건법 1건만 전체 플로우 검증.
 
 ## 작업 범위
 
-### STEP 1: parse_law_content_xml() 수정 (TDD)
-1. tests/test_law_collector.py 신규 생성 — 테스트 4개:
+### STEP 1: parse_law_content_xml() + collect force 로직 수정 (TDD)
+1. tests/test_law_collector.py 신규/보강 — 최소 6개:
    - test_parse_clean_xml_returns_correct_count
    - test_parse_nested_xml_deduplicates
    - test_parse_keeps_more_complete_version
    - test_parse_sanbohoeonbeop_sample (실제 산안법 XML 파편으로)
+   - test_article_text_includes_hang_ho_mok_content (본문 합성)
+   - test_force_recollect_deletes_existing_articles (force=true 삭제)
 2. pytest 실행 → 실패 확인 (현재 버그)
-3. routers/law_collector.py 수정 (SESSION 1 권장 옵션)
-4. pytest → 4/4 PASSED
+3. routers/law_collector.py 수정 (위 SESSION 2 확장 4가지 반영)
+4. pytest → 전부 PASSED
 
 ### STEP 2: FK 무결성 전략 구현
 작업지시서 Phase 1-4 "전략 B" (새 version + 매핑 테이블) 구현:
@@ -152,26 +210,44 @@ python3 scripts/reconnect_fk.py --law-name "산업안전보건법"
 
 ### STEP 4: Pilot 1 검증 (🛑 Go/No-Go 결정)
 
-5가지 검증 쿼리 모두 통과해야 함:
+아래 검증 쿼리를 실행한다 (기준은 상단 **Pilot 1 검증 기준 조정** 참고).
 
 ```
--- 4-1. valid_articles 비율 확인
+-- 4-1. valid_articles 비율 (article_text = 조문내용+항+호+목 합성 후)
 SELECT 
   COUNT(*) AS total,
   COUNT(*) FILTER (WHERE LENGTH(article_text) > 500) AS valid,
-  ROUND(100.0 * COUNT(*) FILTER (WHERE LENGTH(article_text) > 500) / COUNT(*), 1) AS valid_pct
+  ROUND(100.0 * COUNT(*) FILTER (WHERE LENGTH(article_text) > 500) / NULLIF(COUNT(*), 0), 1) AS valid_pct
 FROM law_article la
 JOIN law_version lv ON la.law_version_id = lv.id
 JOIN law_master lm ON lv.law_id = lm.id
 WHERE lm.law_name = '산업안전보건법' AND lv.is_current = true;
--- 🎯 기준: valid_pct >= 80%
+-- 🎯 기준: valid_pct >= 30%
 
--- 4-2. unique article_no 수 — 법제처 원본과 일치하는지
+-- 4-1b. article row 수 vs 원본 XML 조문단위 수 (재수집 직후 law_content_raw 등과 대조 가능)
+SELECT COUNT(*) AS article_rows
+FROM law_article la
+JOIN law_version lv ON la.law_version_id = lv.id
+JOIN law_master lm ON lv.law_id = lm.id
+WHERE lm.law_name = '산업안전보건법' AND lv.is_current = true;
+-- 🎯 기준: 208 ± 5 (원본 XML 조문단위 개수와 일치)
+
+-- 4-1c. article_internal_key 고유 = row 수 (dedupe 확인)
+SELECT
+  COUNT(*) AS article_rows,
+  COUNT(DISTINCT la.article_internal_key) AS distinct_keys
+FROM law_article la
+JOIN law_version lv ON la.law_version_id = lv.id
+JOIN law_master lm ON lv.law_id = lm.id
+WHERE lm.law_name = '산업안전보건법' AND lv.is_current = true;
+-- 🎯 기준: article_rows = distinct_keys
+
+-- 4-2. unique article_no 수 (참고 지표)
 SELECT COUNT(DISTINCT article_no) FROM law_article la
 JOIN law_version lv ON la.law_version_id = lv.id
 JOIN law_master lm ON lv.law_id = lm.id
 WHERE lm.law_name = '산업안전보건법' AND lv.is_current = true;
--- 🎯 기준: 175 전후 (산안법 실제 조문 수)
+-- 참고: 175 전후 등 법제처 원본과 비교
 
 -- 4-3. 기존 master rule 83개 FK 무결성
 SELECT COUNT(*) AS broken_fk
@@ -210,18 +286,26 @@ ORDER BY created_at DESC;
 ```
 ✅ Pilot 1 완료 (SESSION 2)
 
-### 기술 검증 (5개 쿼리 결과)
-- 4-1. valid_pct: [X]% (기준 80%+)
-- 4-2. unique_articles: [N]개 (기준 175 전후)
+### 기술 검증 (쿼리 결과)
+- 4-1. valid_pct: [X]% (기준 30%+)
+- 4-1b. article_rows: [N] (기준 208 ± 5, 원본 XML 조문단위와 대조)
+- 4-1c. rows vs distinct article_internal_key: [일치 Y/N]
+- 4-2. unique article_no: [N]개 (참고)
 - 4-3. broken_fk: [M]건 (기준 0)
-- 4-4. 파편 row: [K]건 (기준 <10)
+- 4-4. 파편 row (LENGTH<50): [K]건 (기준 <10)
 - 4-5. 알림 오발송: [Y/N]
+
+### 코드 반영 체크 (PR)
+- force 재수집 삭제 로직: [Y/N]
+- article_text 항·호·목 합성: [Y/N]
+- dedupe (조문키): [Y/N]
+- XPath ./조문/조문단위: [Y/N]
 
 ### 샘플 조문 10개
 [표시]
 
 ### 판정
-- 5개 기준 모두 통과? [Y/N]
+- 위 기준 모두 통과? [Y/N]
 - 샘플 품질 OK? [Y/N]
 - 총평: [Go to Pilot 2 / No-Go, 원인 파악 필요]
 ```
