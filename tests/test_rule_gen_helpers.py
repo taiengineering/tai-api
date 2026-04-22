@@ -6,6 +6,7 @@ from services.rule_gen_helpers import (
     _safe_int,
     _to_bool,
     _validate_rule_row,
+    sanitize_master_patch,
 )
 
 
@@ -49,3 +50,51 @@ def test_validate_rule_row_errors():
     assert "missing_qualification" in errs
     assert "missing_penalty_value" in errs
     assert "missing_obligation_summary" in errs
+
+
+def test_sanitize_master_patch_uuid_removal():
+    """updated_by/created_by 컬럼에서 UUID 아닌 값은 제거된다."""
+    for bad_value in ["system", "SYSTEM", "system_import", "", "admin", "SYSTEM_USER"]:
+        patch = {"updated_by": bad_value, "law_name": "X"}
+        sanitize_master_patch(patch)
+        assert "updated_by" not in patch, f"sanitize가 '{bad_value}' 제거 실패"
+
+    valid_uuid = "12345678-1234-1234-1234-123456789012"
+    patch = {"updated_by": valid_uuid, "created_by": valid_uuid}
+    sanitize_master_patch(patch)
+    assert patch["updated_by"] == valid_uuid
+    assert patch["created_by"] == valid_uuid
+
+
+def test_sanitize_master_patch_numeric_coercion():
+    """condition_value, penalty_value 등 numeric 컬럼은 변환 or 제거."""
+    patch = {"condition_value": "50"}
+    sanitize_master_patch(patch)
+    assert patch["condition_value"] == 50.0
+
+    for bad_value in ["과태료 최대 500만원", "true", "charging_business,group_supply_business"]:
+        patch = {"penalty_value": bad_value}
+        sanitize_master_patch(patch)
+        if "penalty_value" in patch:
+            assert isinstance(patch["penalty_value"], (int, float)), (
+                f"'{bad_value}' 처리 후 잘못된 타입: {type(patch['penalty_value'])}"
+            )
+
+
+def test_sanitize_master_patch_varchar_truncate():
+    long_value = "A" * 50
+    patch = {"condition_code": long_value}
+    sanitize_master_patch(patch)
+    assert len(patch["condition_code"]) == 30
+
+
+def test_sanitize_master_patch_preserves_valid_fields():
+    patch = {
+        "law_name": "건축법",
+        "law_article": "제12조",
+        "obligation_summary": "2년마다 안전점검 실시",
+        "condition_code": "floor_count",
+    }
+    original = dict(patch)
+    sanitize_master_patch(patch)
+    assert patch == original
