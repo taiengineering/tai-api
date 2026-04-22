@@ -54,7 +54,11 @@ router = APIRouter(prefix="/law-rule-generator", tags=["AI룰생성"])
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL      = "claude-haiku-4-5-20251001"
 CLAUDE_SONNET_MODEL = "claude-sonnet-4-20250514"
-INTERNAL_SECRET   = os.environ.get("INTERNAL_API_SECRET", "tai-internal-2026")
+INTERNAL_SECRET = os.environ.get("INTERNAL_API_SECRET")
+if not INTERNAL_SECRET:
+    raise RuntimeError(
+        "INTERNAL_API_SECRET 환경변수 필수. Railway Variables에 설정 필요."
+    )
 
 EXCLUDED_SECTORS = {"SPECIAL_FACILITY", "SPECIAL", "CONSTRUCTION_SPECIAL",
                     "MANUFACTURING_SPECIAL", "CONSTRUCTION_MANUFACTURING_SPECIAL"}

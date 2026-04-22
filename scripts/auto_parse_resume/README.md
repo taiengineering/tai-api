@@ -22,14 +22,19 @@
 ```bash
 cd scripts/auto_parse_resume/
 
-# INTERNAL_SECRET 설정 (Railway 환경변수)
-export TAI_INTERNAL_SECRET="tai-internal-2026"
+# INTERNAL_API_SECRET 값을 Railway Variables에서 확인 후 export
+# (이 값은 절대 커밋/채팅/이슈에 붙여넣지 마세요)
+export TAI_INTERNAL_SECRET="<Railway Variables의 INTERNAL_API_SECRET 값>"
 export TAI_API_URL="https://api.taieng.co.kr"
 ```
+
+> 🔒 **보안 주의**: `INTERNAL_API_SECRET`은 Railway 대시보드 → Variables에만 저장됩니다.
+> Secret이 노출된 것 같으면 즉시 재발급: `openssl rand -hex 32` 로 새 값 생성 후 Railway에 갱신.
 
 ### 2단계: 테스트 실행 (드라이런)
 
 ```bash
+# secret 없이도 실행 가능 — 계획만 출력
 python3 auto_parse_worker.py --dry-run --max-laws 5
 ```
 
@@ -94,10 +99,13 @@ curl -X POST "https://api.taieng.co.kr/law-rule-generator/bulk-approve-unregiste
 ## 🐞 트러블슈팅
 
 ### "TAI_INTERNAL_SECRET 환경변수 필요"
-`export TAI_INTERNAL_SECRET="실제값"` 후 재실행.
+Railway Variables에서 `INTERNAL_API_SECRET` 값 확인 → `export TAI_INTERNAL_SECRET="<값>"` 후 재실행.
 
 ### HTTP 403 "내부 전용 엔드포인트"
-SECRET 값이 Railway `INTERNAL_API_SECRET`과 일치해야 함.
+로컬 `TAI_INTERNAL_SECRET`이 Railway `INTERNAL_API_SECRET`과 일치해야 함. Railway에서 다시 복사해오세요.
+
+### 서버가 RuntimeError로 기동 실패
+Railway Variables에 `INTERNAL_API_SECRET`이 아예 없는 경우. 랜덤 값 생성(`openssl rand -hex 32`) 후 Railway에 추가.
 
 ### 진행률 확인
 ```bash
