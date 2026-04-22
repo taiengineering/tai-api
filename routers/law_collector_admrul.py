@@ -1,4 +1,4 @@
-# routers/law_collector_admrul.py v1.2
+# routers/law_collector_admrul.py v1.3
 # 행정규칙(NFTC/NFPC 등) 수집용 헬퍼
 #
 # 법제처 행정규칙 API:
@@ -9,8 +9,9 @@
 #   일반 법령: <조문><조문단위><항><호><목>
 #   행정규칙:  <조문내용> 단일 태그 + 내부는 "1. / 1.1 / 1.1.1" 계층 번호 텍스트
 #
-# → 현재는 전체 본문을 "가상 조문 1개"로 저장하고 원본 XML도 보존.
-#   세세한 계층 파싱은 Phase 3 작업으로 분리.
+# v1.3 (2026-04-23): article_internal_key에 순차 idx 포함 → 섹션 번호 중복시에도 UNIQUE 보장
+# v1.2 (2026-04-22): "가상 조문" 전략 도입 (1.1, 1.2 단위로 분할)
+# v1.1 (2026-04-22): LID 파라미터 수정
 
 import re
 import requests
@@ -80,12 +81,7 @@ def fetch_admrul_content(admrul_id: str) -> dict:
 # ============================================================
 
 def parse_admrul_list_xml(xml_text: str) -> list:
-    """
-    행정규칙 검색 결과 XML 파싱.
-    
-    루트: <AdmRulSearch>
-    항목: <admrul id="1"> ... </admrul>
-    """
+    """행정규칙 검색 결과 XML 파싱."""
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError:
@@ -93,8 +89,8 @@ def parse_admrul_list_xml(xml_text: str) -> list:
     
     rules = []
     for rul in root.findall(".//admrul") + root.findall(".//행정규칙"):
-        admrul_id_short = rul.findtext("행정규칙ID", "")      # 83615
-        admrul_seq_long = rul.findtext("행정규칙일련번호", "")  # 2100000216245
+        admrul_id_short = rul.findtext("행정규칙ID", "")
+        admrul_seq_long = rul.findtext("행정규칙일련번호", "")
         
         rules.append({
             "law_api_id":        admrul_id_short or admrul_seq_long,
@@ -114,36 +110,19 @@ def parse_admrul_list_xml(xml_text: str) -> list:
 
 
 # ============================================================
-# 행정규칙 본문 XML 파싱 — "가상 조문 1개" 전략
+# 행정규칙 본문 XML 파싱 — "가상 조문" 전략
 # ============================================================
 
 def parse_admrul_content_xml(xml_text: str) -> dict:
-    """
-    행정규칙 본문 XML 파싱.
-    
-    ⚠️ NFTC/NFPC는 일반 법령과 달리 조문 단위 구분이 없음.
-    전체 본문을 <조문내용> 하나에 담고 있음.
-    
-    전략: "1. / 1.1 / 1.1.1" 계층 번호를 기반으로 섹션 분할.
-    각 "1.1 ..." 같은 중분류 단위를 가상 조문 1개로 처리.
-    
-    예시:
-      "1. 일반사항"         → 스킵 (대분류)
-      "1.1 적용범위"        → 가상 조문 1개
-      "1.1.1 이 기준은..."  → 1.1의 본문
-      "1.2 기준의 효력"     → 가상 조문 2개
-      ...
-    """
+    """행정규칙 본문 XML 파싱. NFTC/NFPC는 섹션 번호로 분할."""
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as e:
         raise RuntimeError(f"행정규칙 XML 파싱 실패: {e}")
     
-    # 에러 응답 감지
     if root.tag == "Law" and (root.text or "").strip().startswith("일치하는"):
         raise RuntimeError(f"행정규칙 본문 API: {root.text.strip()}")
     
-    # ─── 기본정보 ───────────────────────────────────────────
     basic = root.find("행정규칙기본정보") or root.find("기본정보")
     info = {}
     if basic is not None:
@@ -177,11 +156,9 @@ def parse_admrul_content_xml(xml_text: str) -> dict:
             "revision_type":     basic.findtext("제개정구분명", "") or basic.findtext("제개정구분", ""),
         }
     
-    # ─── 본문 추출 ──────────────────────────────────────────
-    # <조문내용> 또는 <조문> 아래에 전체 텍스트가 들어있음
+    # 본문 추출
     full_text = root.findtext("조문내용", "") or ""
     if not full_text.strip():
-        # 폴백: 모든 텍스트 수집
         full_text = "\n".join(
             (t or "").strip()
             for t in root.itertext()
@@ -190,18 +167,18 @@ def parse_admrul_content_xml(xml_text: str) -> dict:
     
     full_text = full_text.strip()
     
-    # ─── 계층 번호 기반 섹션 분할 ──────────────────────────
+    # 계층 번호 기반 섹션 분할
     articles = _split_admrul_by_sections(full_text)
     
-    # 아무것도 추출 안 되면 전체를 조문 1개로 저장 (절대 빈 채로 두지 않음)
+    # 아무것도 추출 안 되면 전체를 조문 1개로
     if not articles and full_text:
         articles = [{
-            "article_internal_key": "admrul-full",
+            "article_internal_key": "admrul-idx-001-full",
             "article_no":           1,
             "article_sub_no":       None,
             "article_type":         "본칙",
             "article_title":        "전문",
-            "article_text":         full_text[:30000],  # 너무 길면 자르기
+            "article_text":         full_text[:30000],
             "enforcement_date":     None,
             "is_changed":           False,
             "paragraphs":           [],
@@ -212,33 +189,12 @@ def parse_admrul_content_xml(xml_text: str) -> dict:
 
 def _split_admrul_by_sections(text: str) -> List[dict]:
     """
-    NFTC/NFPC 본문을 계층 번호(1.1, 1.2, 2.1 등)로 분할하여 가상 조문 리스트 생성.
+    NFTC/NFPC 본문을 계층 번호(1.1, 1.2, 2.1 등)로 분할.
     
-    규칙:
-      - 줄 시작이 "N.N" 또는 "N.N.N" 패턴이면 섹션 구분
-      - "N." (단일 번호)는 대분류 → 섹션 시작 안 함 (제목만 됨)
-      - "N.N"을 기준으로 하나의 가상 조문 생성
-      - "N.N.N" 내용은 해당 "N.N" 조문에 포함
-    
-    예시 입력:
-      1. 일반사항
-      1.1 적용범위
-      1.1.1 이 기준은 ...
-      1.2 기준의 효력
-      1.2.1 이 기준은 ...
-      
-    예시 출력 (2개 조문):
-      [
-        {article_no: 11, article_title: "1.1 적용범위", article_text: "..."},
-        {article_no: 12, article_title: "1.2 기준의 효력", article_text: "..."},
-      ]
+    ⭐ v1.3: article_internal_key에 순차 idx 포함 → 같은 섹션 번호 중복시에도 UNIQUE 보장
     """
     if not text or not text.strip():
         return []
-    
-    # 패턴: 줄 시작에서 "숫자.숫자" (예: "1.1 적용범위", "2.3 배관")
-    # "1.1.1" 같은 3단계 번호는 섹션 경계가 아니라 내용의 일부
-    SECTION_RE = re.compile(r'^(\d+)\.(\d+)(?!\.\d)\s+(.*?)$', re.MULTILINE)
     
     lines = text.split("\n")
     sections = []
@@ -253,10 +209,9 @@ def _split_admrul_by_sections(text: str) -> List[dict]:
                 current_content_lines.append("")
             continue
         
-        # "N.N 제목" 형태 매칭 (단, "N.N.N"은 제외)
+        # "N.N 제목" 패턴 ("N.N.N"은 제외)
         m = re.match(r'^(\d+)\.(\d+)(?!\.\d)\s*(.*)$', line_stripped)
         if m:
-            # 이전 섹션 저장
             if current_section is not None:
                 content = "\n".join(current_content_lines).strip()
                 if content or current_title:
@@ -267,15 +222,12 @@ def _split_admrul_by_sections(text: str) -> List[dict]:
                         "content": content,
                     })
             
-            # 새 섹션 시작
             current_section = (int(m.group(1)), int(m.group(2)))
             current_title = m.group(3).strip()
             current_content_lines = []
         elif current_section is not None:
-            # 현재 섹션의 내용
             current_content_lines.append(line_stripped)
     
-    # 마지막 섹션 저장
     if current_section is not None:
         content = "\n".join(current_content_lines).strip()
         if content or current_title:
@@ -286,7 +238,7 @@ def _split_admrul_by_sections(text: str) -> List[dict]:
                 "content": content,
             })
     
-    # ─── 가상 조문 변환 ─────────────────────────────────────
+    # 가상 조문 변환 (⭐ v1.3: idx 포함해서 UNIQUE 보장)
     articles = []
     for idx, sec in enumerate(sections, start=1):
         section_no = f"{sec['major']}.{sec['minor']}"
@@ -294,12 +246,13 @@ def _split_admrul_by_sections(text: str) -> List[dict]:
         full_text = f"{full_title}\n{sec['content']}".strip()
         
         articles.append({
-            "article_internal_key": f"admrul-sec-{section_no}",
-            "article_no":           idx,  # DB CHECK 제약: integer 필요
+            # ⭐ v1.3: idx 포함. 같은 "1.1"이 두 번 나와도 idx가 달라서 UNIQUE 보장
+            "article_internal_key": f"admrul-idx-{idx:03d}-sec-{section_no}",
+            "article_no":           idx,
             "article_sub_no":       None,
             "article_type":         "본칙",
-            "article_title":        full_title[:200],  # 제목 너무 길지 않게
-            "article_text":         full_text[:30000],  # 본문 길이 제한
+            "article_title":        full_title[:200],
+            "article_text":         full_text[:30000],
             "enforcement_date":     None,
             "is_changed":           False,
             "paragraphs":           [],
