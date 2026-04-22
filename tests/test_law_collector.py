@@ -310,16 +310,41 @@ def test_nullify_refs_chunks_large_lists():
     law_rule_drafts.update.return_value.in_.return_value.execute.return_value = MagicMock()
     inspection_set_items = MagicMock()
     inspection_set_items.update.return_value.in_.return_value.execute.return_value = MagicMock()
+    law_rule_source_map = MagicMock()
+    law_rule_source_map.update.return_value.in_.return_value.execute.return_value = MagicMock()
     sb = MagicMock()
     sb.table.side_effect = lambda name, *a, **k: {
         "law_rule_drafts": law_rule_drafts,
         "inspection_set_items": inspection_set_items,
+        "law_rule_source_map": law_rule_source_map,
     }[name]
 
     _nullify_dependent_article_refs(sb, art_ids)
 
     assert law_rule_drafts.update.return_value.in_.call_count == 3
     assert inspection_set_items.update.return_value.in_.call_count == 3
+    assert law_rule_source_map.update.return_value.in_.call_count == 3
+
+
+def test_nullify_refs_includes_law_rule_source_map():
+    art_ids = [f"uuid-{i}" for i in range(10)]
+    law_rule_drafts = MagicMock()
+    law_rule_drafts.update.return_value.in_.return_value.execute.return_value = MagicMock()
+    inspection_set_items = MagicMock()
+    inspection_set_items.update.return_value.in_.return_value.execute.return_value = MagicMock()
+    law_rule_source_map = MagicMock()
+    law_rule_source_map.update.return_value.in_.return_value.execute.return_value = MagicMock()
+    sb = MagicMock()
+    sb.table.side_effect = lambda name, *a, **k: {
+        "law_rule_drafts": law_rule_drafts,
+        "inspection_set_items": inspection_set_items,
+        "law_rule_source_map": law_rule_source_map,
+    }[name]
+
+    _nullify_dependent_article_refs(sb, art_ids)
+
+    names = [c.args[0] for c in sb.table.call_args_list if c.args]
+    assert "law_rule_source_map" in names
 
 
 def test_cascade_delete_handles_834_articles():
@@ -341,6 +366,8 @@ def test_cascade_delete_handles_834_articles():
     law_rule_drafts.update.return_value.in_.return_value.execute.return_value = MagicMock()
     inspection_set_items = MagicMock()
     inspection_set_items.update.return_value.in_.return_value.execute.return_value = MagicMock()
+    law_rule_source_map = MagicMock()
+    law_rule_source_map.update.return_value.in_.return_value.execute.return_value = MagicMock()
 
     tables = {
         "law_article": law_article,
@@ -354,7 +381,7 @@ def test_cascade_delete_handles_834_articles():
         "law_update_tracking": _generic_version_dep_mock(),
         "law_article_diff": _generic_version_dep_mock(),
         "law_change_log": _generic_version_dep_mock(),
-        "law_rule_source_map": _generic_version_dep_mock(),
+        "law_rule_source_map": law_rule_source_map,
     }
     sb = MagicMock()
     sb.table.side_effect = lambda name, *a, **k: tables[name]
@@ -363,3 +390,41 @@ def test_cascade_delete_handles_834_articles():
 
     assert law_paragraph.select.return_value.in_.call_count == 9
     assert law_version.delete.called
+
+
+def test_cascade_delete_handles_source_map_article_id():
+    law_article = MagicMock()
+    law_article.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[{"id": "art-1"}])
+    law_article.delete.return_value.eq.return_value.execute.return_value = MagicMock()
+    law_paragraph = MagicMock()
+    law_paragraph.select.return_value.in_.return_value.execute.return_value = MagicMock(data=[])
+    law_paragraph.delete.return_value.in_.return_value.execute.return_value = MagicMock()
+    law_content_raw = MagicMock()
+    law_content_raw.delete.return_value.eq.return_value.execute.return_value = MagicMock()
+    law_version = MagicMock()
+    law_version.delete.return_value.eq.return_value.execute.return_value = MagicMock()
+    law_rule_source_map = MagicMock()
+    law_rule_source_map.update.return_value.in_.return_value.execute.return_value = MagicMock()
+    law_rule_source_map.delete.return_value.eq.return_value.execute.return_value = MagicMock()
+
+    tables = {
+        "law_article": law_article,
+        "law_paragraph": law_paragraph,
+        "law_content_raw": law_content_raw,
+        "law_version": law_version,
+        "law_rule_drafts": _generic_version_dep_mock(),
+        "inspection_set_items": _generic_version_dep_mock(),
+        "law_parsing_result": _generic_version_dep_mock(),
+        "law_attachment": _generic_version_dep_mock(),
+        "law_update_tracking": _generic_version_dep_mock(),
+        "law_article_diff": _generic_version_dep_mock(),
+        "law_change_log": _generic_version_dep_mock(),
+        "law_rule_source_map": law_rule_source_map,
+    }
+    sb = MagicMock()
+    sb.table.side_effect = lambda name, *a, **k: tables[name]
+
+    delete_law_version_cascade_for_recollect(sb, "ver-source-map")
+
+    law_rule_source_map.update.return_value.in_.assert_called()
+    law_version.delete.assert_called()
