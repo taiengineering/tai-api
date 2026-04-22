@@ -10,7 +10,7 @@
   2) 현행 law_version id 조회
   3) map 행별로 new_article_id 가 비어 있으면, 동일 article_internal_key 의
      현행 버전 law_article id 를 찾아 채움
-  4) law_rule_drafts.article_id, inspection_set_items.law_article_id 업데이트
+  4) law_rule_drafts.article_id 업데이트 (inspection_set_items.law_article_id 는 스키마에 없을 수 있어 try/except)
 """
 from __future__ import annotations
 
@@ -52,8 +52,13 @@ def reconnect_for_law(law_name: str) -> dict:
         sb.table("law_article_key_map").update({"new_article_id": new_id}).eq("id", row["id"]).execute()
         d = sb.table("law_rule_drafts").update({"article_id": new_id}).eq("article_id", old_id).execute()
         updated_drafts += len(d.data or [])
-        i = sb.table("inspection_set_items").update({"law_article_id": new_id}).eq("law_article_id", old_id).execute()
-        updated_items += len(i.data or [])
+        try:
+            i = sb.table("inspection_set_items").update({"law_article_id": new_id}).eq(
+                "law_article_id", old_id
+            ).execute()
+            updated_items += len(i.data or [])
+        except Exception:
+            pass
 
     return {
         "law_name": law_name,

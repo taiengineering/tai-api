@@ -12,6 +12,13 @@ from routers.law_collector import (
 )
 
 
+def _generic_version_dep_mock() -> MagicMock:
+    m = MagicMock()
+    m.delete.return_value.eq.return_value.execute.return_value = MagicMock()
+    m.update.return_value.eq.return_value.execute.return_value = MagicMock()
+    return m
+
+
 SAMPLE_XML_CLEAN = """<?xml version="1.0" encoding="UTF-8"?>
 <법령>
   <기본정보>
@@ -204,6 +211,12 @@ def test_force_recollect_deletes_existing_articles():
         "law_version": law_version,
         "law_rule_drafts": law_rule_drafts,
         "inspection_set_items": inspection_set_items,
+        "law_parsing_result": _generic_version_dep_mock(),
+        "law_attachment": _generic_version_dep_mock(),
+        "law_update_tracking": _generic_version_dep_mock(),
+        "law_article_diff": _generic_version_dep_mock(),
+        "law_change_log": _generic_version_dep_mock(),
+        "law_rule_source_map": _generic_version_dep_mock(),
     }
     sb = MagicMock()
     sb.table.side_effect = lambda name, *a, **k: tables[name]
@@ -215,10 +228,11 @@ def test_force_recollect_deletes_existing_articles():
     assert "law_paragraph" in names
     assert "law_version" in names
     assert "law_content_raw" in names
+    assert "law_parsing_result" in names
+    assert "law_attachment" in names
 
 
 def test_delete_cascade_no_articles():
-    sb = MagicMock()
     law_article = MagicMock()
     law_article.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
     law_content_raw = MagicMock()
@@ -229,7 +243,61 @@ def test_delete_cascade_no_articles():
         "law_article": law_article,
         "law_content_raw": law_content_raw,
         "law_version": law_version,
+        "law_parsing_result": _generic_version_dep_mock(),
+        "law_attachment": _generic_version_dep_mock(),
+        "law_update_tracking": _generic_version_dep_mock(),
+        "law_article_diff": _generic_version_dep_mock(),
+        "law_change_log": _generic_version_dep_mock(),
+        "law_rule_source_map": _generic_version_dep_mock(),
     }
+    sb = MagicMock()
     sb.table.side_effect = lambda name, *a, **k: tables[name]
     delete_law_version_cascade_for_recollect(sb, "ver-empty")
     assert law_version.delete.called
+
+
+def test_cascade_delete_handles_law_parsing_result():
+    law_parsing_result = MagicMock()
+    law_parsing_result.delete.return_value.eq.return_value.execute.return_value = MagicMock()
+    law_attachment = _generic_version_dep_mock()
+    law_article = MagicMock()
+    law_article.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+    tables = {
+        "law_article": law_article,
+        "law_parsing_result": law_parsing_result,
+        "law_attachment": law_attachment,
+        "law_update_tracking": _generic_version_dep_mock(),
+        "law_article_diff": _generic_version_dep_mock(),
+        "law_change_log": _generic_version_dep_mock(),
+        "law_rule_source_map": _generic_version_dep_mock(),
+        "law_content_raw": _generic_version_dep_mock(),
+        "law_version": _generic_version_dep_mock(),
+    }
+    sb = MagicMock()
+    sb.table.side_effect = lambda name, *a, **k: tables[name]
+    delete_law_version_cascade_for_recollect(sb, "vid-parsing")
+    law_parsing_result.delete.assert_called()
+    law_parsing_result.delete.return_value.eq.assert_called_with("law_version_id", "vid-parsing")
+
+
+def test_cascade_delete_handles_law_attachment():
+    law_attachment = MagicMock()
+    law_attachment.delete.return_value.eq.return_value.execute.return_value = MagicMock()
+    law_article = MagicMock()
+    law_article.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+    tables = {
+        "law_article": law_article,
+        "law_parsing_result": _generic_version_dep_mock(),
+        "law_attachment": law_attachment,
+        "law_update_tracking": _generic_version_dep_mock(),
+        "law_article_diff": _generic_version_dep_mock(),
+        "law_change_log": _generic_version_dep_mock(),
+        "law_rule_source_map": _generic_version_dep_mock(),
+        "law_content_raw": _generic_version_dep_mock(),
+        "law_version": _generic_version_dep_mock(),
+    }
+    sb = MagicMock()
+    sb.table.side_effect = lambda name, *a, **k: tables[name]
+    delete_law_version_cascade_for_recollect(sb, "vid-attach")
+    law_attachment.delete.assert_called()
+    law_attachment.delete.return_value.eq.assert_called_with("law_version_id", "vid-attach")

@@ -214,6 +214,53 @@ def _nullify_dependent_article_refs(supabase: Any, art_ids: List[str]) -> None:
             print(f"[law_collector] {table}.{col} nullify skip: {e}")
 
 
+def _clear_law_version_fk_dependents(supabase: Any, version_id: str) -> None:
+    """law_version 삭제 직전: 해당 version_id 를 참조하는 테이블 정리 (환경별 스키마 차이는 try/except)."""
+    try:
+        supabase.table("law_parsing_result").delete().eq("law_version_id", version_id).execute()
+    except Exception as e:
+        print(f"[law_collector] law_parsing_result delete skip: {e}")
+
+    try:
+        supabase.table("law_attachment").delete().eq("law_version_id", version_id).execute()
+    except Exception as e:
+        print(f"[law_collector] law_attachment delete skip: {e}")
+
+    try:
+        supabase.table("law_update_tracking").update({
+            "last_collected_version_id": None,
+        }).eq("last_collected_version_id", version_id).execute()
+    except Exception as e:
+        print(f"[law_collector] law_update_tracking nullify skip: {e}")
+
+    try:
+        supabase.table("law_article_diff").delete().eq("new_version_id", version_id).execute()
+    except Exception as e:
+        print(f"[law_collector] law_article_diff delete new_version_id skip: {e}")
+    try:
+        supabase.table("law_article_diff").delete().eq("old_version_id", version_id).execute()
+    except Exception as e:
+        print(f"[law_collector] law_article_diff delete old_version_id skip: {e}")
+
+    try:
+        supabase.table("law_change_log").update({"new_version_id": None}).eq(
+            "new_version_id", version_id
+        ).execute()
+    except Exception as e:
+        print(f"[law_collector] law_change_log new_version_id nullify skip: {e}")
+    try:
+        supabase.table("law_change_log").update({"old_version_id": None}).eq(
+            "old_version_id", version_id
+        ).execute()
+    except Exception as e:
+        print(f"[law_collector] law_change_log old_version_id nullify skip: {e}")
+
+    try:
+        supabase.table("law_rule_source_map").delete().eq("law_version_id", version_id).execute()
+    except Exception as e:
+        print(f"[law_collector] law_rule_source_map delete skip: {e}")
+
+
 def delete_law_version_cascade_for_recollect(supabase: Any, version_id: str) -> None:
     """force 재수집: 버전 하위 전부 삭제 후 law_version 행 제거."""
     arts = supabase.table("law_article").select("id").eq("law_version_id", version_id).execute().data or []
@@ -232,6 +279,7 @@ def delete_law_version_cascade_for_recollect(supabase: Any, version_id: str) -> 
             supabase.table("law_item").delete().in_("paragraph_id", para_ids).execute()
         supabase.table("law_paragraph").delete().in_("article_id", art_ids).execute()
         supabase.table("law_article").delete().eq("law_version_id", version_id).execute()
+    _clear_law_version_fk_dependents(supabase, version_id)
     supabase.table("law_content_raw").delete().eq("law_version_id", version_id).execute()
     supabase.table("law_version").delete().eq("id", version_id).execute()
 
