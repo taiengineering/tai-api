@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from routers.law_collector import (
+    _nullify_dependent_article_refs,
     delete_law_version_cascade_for_recollect,
     parse_law_content_xml,
 )
@@ -301,3 +302,64 @@ def test_cascade_delete_handles_law_attachment():
     delete_law_version_cascade_for_recollect(sb, "vid-attach")
     law_attachment.delete.assert_called()
     law_attachment.delete.return_value.eq.assert_called_with("law_version_id", "vid-attach")
+
+
+def test_nullify_refs_chunks_large_lists():
+    art_ids = [f"uuid-{i}" for i in range(300)]
+    law_rule_drafts = MagicMock()
+    law_rule_drafts.update.return_value.in_.return_value.execute.return_value = MagicMock()
+    inspection_set_items = MagicMock()
+    inspection_set_items.update.return_value.in_.return_value.execute.return_value = MagicMock()
+    sb = MagicMock()
+    sb.table.side_effect = lambda name, *a, **k: {
+        "law_rule_drafts": law_rule_drafts,
+        "inspection_set_items": inspection_set_items,
+    }[name]
+
+    _nullify_dependent_article_refs(sb, art_ids)
+
+    assert law_rule_drafts.update.return_value.in_.call_count == 3
+    assert inspection_set_items.update.return_value.in_.call_count == 3
+
+
+def test_cascade_delete_handles_834_articles():
+    art_ids = [{"id": f"art-{i}"} for i in range(834)]
+    law_article = MagicMock()
+    law_article.select.return_value.eq.return_value.execute.return_value = MagicMock(data=art_ids)
+    law_article.delete.return_value.eq.return_value.execute.return_value = MagicMock()
+
+    law_paragraph = MagicMock()
+    law_paragraph.select.return_value.in_.return_value.execute.return_value = MagicMock(data=[])
+    law_paragraph.delete.return_value.in_.return_value.execute.return_value = MagicMock()
+
+    law_content_raw = MagicMock()
+    law_content_raw.delete.return_value.eq.return_value.execute.return_value = MagicMock()
+    law_version = MagicMock()
+    law_version.delete.return_value.eq.return_value.execute.return_value = MagicMock()
+
+    law_rule_drafts = MagicMock()
+    law_rule_drafts.update.return_value.in_.return_value.execute.return_value = MagicMock()
+    inspection_set_items = MagicMock()
+    inspection_set_items.update.return_value.in_.return_value.execute.return_value = MagicMock()
+
+    tables = {
+        "law_article": law_article,
+        "law_paragraph": law_paragraph,
+        "law_content_raw": law_content_raw,
+        "law_version": law_version,
+        "law_rule_drafts": law_rule_drafts,
+        "inspection_set_items": inspection_set_items,
+        "law_parsing_result": _generic_version_dep_mock(),
+        "law_attachment": _generic_version_dep_mock(),
+        "law_update_tracking": _generic_version_dep_mock(),
+        "law_article_diff": _generic_version_dep_mock(),
+        "law_change_log": _generic_version_dep_mock(),
+        "law_rule_source_map": _generic_version_dep_mock(),
+    }
+    sb = MagicMock()
+    sb.table.side_effect = lambda name, *a, **k: tables[name]
+
+    delete_law_version_cascade_for_recollect(sb, "ver-834")
+
+    assert law_paragraph.select.return_value.in_.call_count == 9
+    assert law_version.delete.called

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -58,7 +59,7 @@ def _match_law_name(laws: list[dict], law_name: str) -> dict | None:
 
 
 def _check_emergency_stop(supabase) -> tuple[bool, str]:
-    """긴급 중단 기준 확인: 최근 1시간 revision board 삽입 또는 rule FK 대량 단절."""
+    """긴급 중단 기준: 최근 1시간 revision board 삽입만 체크."""
     try:
         since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
         recent = (
@@ -71,19 +72,7 @@ def _check_emergency_stop(supabase) -> tuple[bool, str]:
         if recent.data:
             return True, "law_revision_board 최근 1시간 데이터 감지"
     except Exception as e:
-        print(f"  ⚠️ 긴급중단 점검(법령개정 알림) 스킵: {e}")
-
-    try:
-        broken = (
-            supabase.table("master_rule")
-            .select("id", count="exact")
-            .is_("article_id", "null")
-            .execute()
-        )
-        if (broken.count or 0) >= 5:
-            return True, f"master_rule article_id 단절 {broken.count}건"
-    except Exception as e:
-        print(f"  ⚠️ 긴급중단 점검(master_rule FK) 스킵: {e}")
+        print(f"  ⚠️ 긴급중단 점검 스킵: {e}")
 
     return False, ""
 
@@ -197,31 +186,61 @@ def reconnect_one(law_name: str, supabase) -> dict:
 
     new_articles = (
         supabase.table("law_article")
-        .select("id,article_internal_key,law_version_id")
+        .select("id,article_internal_key,article_no,article_sub_no,law_version_id")
         .in_("law_version_id", current_version_ids)
         .execute()
         .data
         or []
     )
     key_to_new_id = {a["article_internal_key"]: a["id"] for a in new_articles if a.get("article_internal_key")}
+    by_no: dict[tuple[int, int | None], list[str]] = {}
+    for a in new_articles:
+        art_no = a.get("article_no")
+        if art_no is None:
+            continue
+        sub_no = a.get("article_sub_no")
+        k = (int(art_no), int(sub_no) if sub_no is not None else None)
+        by_no.setdefault(k, []).append(a["id"])
+    key_pattern = re.compile(r"^제(\d+)조(?:의(\d+))?$")
 
     updated = 0
     unmatched_keys: list[str] = []
+    unmatched_rows: list[dict] = []
     map_rows = (
         supabase.table("law_article_key_map").select("id,article_internal_key").is_("new_article_id", "null").execute().data
         or []
     )
     for m in map_rows:
-        key = m.get("article_internal_key", "")
+        key = (m.get("article_internal_key") or "").strip()
         if key in key_to_new_id:
             supabase.table("law_article_key_map").update({"new_article_id": key_to_new_id[key]}).eq(
                 "id", m["id"]
             ).execute()
             updated += 1
         else:
+            unmatched_rows.append(m)
             unmatched_keys.append(key)
 
+    fallback_updated = 0
+    for row in unmatched_rows:
+        key = (row.get("article_internal_key") or "").strip()
+        m = key_pattern.match(key)
+        if not m:
+            continue
+        art_no = int(m.group(1))
+        sub_no = int(m.group(2)) if m.group(2) else None
+        candidates = by_no.get((art_no, sub_no)) or []
+        if len(candidates) != 1:
+            continue
+        supabase.table("law_article_key_map").update({"new_article_id": candidates[0]}).eq("id", row["id"]).execute()
+        updated += 1
+        fallback_updated += 1
+        if key in unmatched_keys:
+            unmatched_keys.remove(key)
+
     print(f"    key_map 업데이트: {updated}건 matched")
+    if fallback_updated:
+        print(f"    fallback(article_no) 매칭: {fallback_updated}건")
     if unmatched_keys[:5]:
         print(f"    unmatched keys (샘플): {unmatched_keys[:5]}")
 

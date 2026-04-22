@@ -33,6 +33,9 @@ DEFAULT_HEADERS = {
     "Accept": "application/xml,text/xml,*/*",
 }
 
+# PostgREST URL 길이 한계 대응. 100이면 UUID 36자 × 100 = 3600자 수준으로 안전
+_CHUNK_SIZE = 100
+
 
 def _b64(text: str) -> str:
     return base64.b64encode(text.encode("utf-8")).decode("ascii")
@@ -203,13 +206,20 @@ def snapshot_article_key_map_for_version(supabase: Any, version_id: str) -> None
         return
 
 
+def _chunked(seq, size: int = _CHUNK_SIZE):
+    """긴 리스트를 size 단위로 나눠서 yield."""
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+
 def _nullify_dependent_article_refs(supabase: Any, art_ids: List[str]) -> None:
     """law_article 삭제 전 FK 참조 해제 (재수집 후 reconnect_fk로 복구)."""
     if not art_ids:
         return
     for table, col in (("law_rule_drafts", "article_id"), ("inspection_set_items", "law_article_id")):
         try:
-            supabase.table(table).update({col: None}).in_(col, art_ids).execute()
+            for chunk in _chunked(art_ids):
+                supabase.table(table).update({col: None}).in_(col, chunk).execute()
         except Exception as e:
             print(f"[law_collector] {table}.{col} nullify skip: {e}")
 
@@ -267,17 +277,25 @@ def delete_law_version_cascade_for_recollect(supabase: Any, version_id: str) -> 
     art_ids = [r["id"] for r in arts]
     if art_ids:
         _nullify_dependent_article_refs(supabase, art_ids)
-        paras = supabase.table("law_paragraph").select("id").in_("article_id", art_ids).execute().data or []
-        para_ids = [p["id"] for p in paras]
+        para_ids: list[str] = []
+        for chunk in _chunked(art_ids):
+            paras = supabase.table("law_paragraph").select("id").in_("article_id", chunk).execute().data or []
+            para_ids.extend(p["id"] for p in paras)
         if para_ids:
-            items = supabase.table("law_item").select("id,parent_item_id").in_(
-                "paragraph_id", para_ids
-            ).execute().data or []
-            child_ids = [i["id"] for i in items if i.get("parent_item_id")]
+            all_items: list[dict] = []
+            for chunk in _chunked(para_ids):
+                items = supabase.table("law_item").select("id,parent_item_id").in_(
+                    "paragraph_id", chunk
+                ).execute().data or []
+                all_items.extend(items)
+            child_ids = [i["id"] for i in all_items if i.get("parent_item_id")]
             if child_ids:
-                supabase.table("law_item").delete().in_("id", child_ids).execute()
-            supabase.table("law_item").delete().in_("paragraph_id", para_ids).execute()
-        supabase.table("law_paragraph").delete().in_("article_id", art_ids).execute()
+                for chunk in _chunked(child_ids):
+                    supabase.table("law_item").delete().in_("id", chunk).execute()
+            for chunk in _chunked(para_ids):
+                supabase.table("law_item").delete().in_("paragraph_id", chunk).execute()
+        for chunk in _chunked(art_ids):
+            supabase.table("law_paragraph").delete().in_("article_id", chunk).execute()
         supabase.table("law_article").delete().eq("law_version_id", version_id).execute()
     _clear_law_version_fk_dependents(supabase, version_id)
     supabase.table("law_content_raw").delete().eq("law_version_id", version_id).execute()
