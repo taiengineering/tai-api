@@ -3,7 +3,7 @@
 TAI 법령엔진 auto-parse 재개용 worker (크롬 탭 대체)
 
 사용법:
-  export TAI_INTERNAL_SECRET="tai-internal-2026"   # .env에 있는 그 값
+  export TAI_INTERNAL_SECRET="<Railway INTERNAL_API_SECRET 과 동일 값>"
   export TAI_API_URL="https://api.taieng.co.kr"    # 기본값 사용 시 생략 가능
   python3 auto_parse_worker.py
 
