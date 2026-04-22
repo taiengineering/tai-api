@@ -216,7 +216,11 @@ def _nullify_dependent_article_refs(supabase: Any, art_ids: List[str]) -> None:
     """law_article 삭제 전 FK 참조 해제 (재수집 후 reconnect_fk로 복구)."""
     if not art_ids:
         return
-    for table, col in (("law_rule_drafts", "article_id"), ("inspection_set_items", "law_article_id")):
+    for table, col in (
+        ("law_rule_drafts", "article_id"),
+        ("inspection_set_items", "law_article_id"),
+        ("law_rule_source_map", "article_id"),
+    ):
         try:
             for chunk in _chunked(art_ids):
                 supabase.table(table).update({col: None}).in_(col, chunk).execute()
