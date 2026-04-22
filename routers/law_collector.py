@@ -10,7 +10,7 @@ import requests
 import traceback
 import xml.etree.ElementTree as ET
 from datetime import datetime, date
-from typing import Optional
+from typing import Any, List, Optional, Tuple
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from db.database import get_supabase
 from routers.messaging import SMS_URL, _call_messageme, _get_cfg
@@ -77,6 +77,163 @@ def law_type_name_to_code(name: str) -> str:
         if key in name:
             return code
     return "OTHER"
+
+
+def _synthesize_article_text(jo: ET.Element) -> str:
+    """조문내용 + 항/호/목 본문을 한 덩어리 텍스트로 합성 (검색·AI·품질 지표용)."""
+    lines: List[str] = []
+    head = clean_cdata(jo.findtext("조문내용", ""))
+    if head.strip():
+        lines.append(head.strip())
+    for hang in jo.findall("항"):
+        hno = clean_cdata(hang.findtext("항번호", ""))
+        htext = clean_cdata(hang.findtext("항내용", ""))
+        if hno and htext:
+            lines.append(f"[{hno}] {htext}")
+        elif htext:
+            lines.append(htext)
+        elif hno:
+            lines.append(f"[{hno}]")
+        for ho in hang.findall("호"):
+            hon = clean_cdata(ho.findtext("호번호", ""))
+            hot = clean_cdata(ho.findtext("호내용", ""))
+            if hon and hot:
+                lines.append(f"  [{hon}] {hot}")
+            elif hot:
+                lines.append(f"  {hot}")
+            elif hon:
+                lines.append(f"  [{hon}]")
+            for mok in ho.findall("목"):
+                mn = clean_cdata(mok.findtext("목번호", ""))
+                mt = clean_cdata(mok.findtext("목내용", ""))
+                if mn and mt:
+                    lines.append(f"    [{mn}] {mt}")
+                elif mt:
+                    lines.append(f"    {mt}")
+                elif mn:
+                    lines.append(f"    [{mn}]")
+    return "\n".join(lines).strip()
+
+
+def _article_completeness_score(article: dict) -> Tuple[int, int, int]:
+    text = article.get("article_text") or ""
+    title = article.get("article_title") or ""
+    paras = article.get("paragraphs") or []
+    return (len(text), len(title), len(paras))
+
+
+def _iter_jo_units(root: ET.Element) -> List[ET.Element]:
+    """최상위 조문의 조문단위 우선; 없으면 descendant 폴백."""
+    strict = root.findall("./조문/조문단위")
+    if strict:
+        return strict
+    return root.findall(".//조문단위")
+
+
+def _parse_article_from_jo(jo: ET.Element) -> dict:
+    article = {
+        "article_internal_key": jo.get("조문키", ""),
+        "article_no":           _safe_int(jo.findtext("조문번호", "")),
+        "article_sub_no":       _safe_int(jo.findtext("조문가지번호", "")),
+        "article_type":         jo.findtext("조문여부", ""),
+        "article_title":        clean_cdata(jo.findtext("조문제목", "")),
+        "article_text":         _synthesize_article_text(jo),
+        "enforcement_date":     parse_date(jo.findtext("조문시행일자", "")),
+        "is_changed":           jo.findtext("조문변경여부", "N") == "Y",
+        "paragraphs":           [],
+    }
+    for hang in jo.findall("항"):
+        paragraph = {
+            "paragraph_no":   clean_cdata(hang.findtext("항번호", "")),
+            "paragraph_text": clean_cdata(hang.findtext("항내용", "")),
+            "items":          [],
+        }
+        for ho in hang.findall("호"):
+            item = {
+                "item_level_code": "HO",
+                "item_no":         clean_cdata(ho.findtext("호번호", "")),
+                "item_text":       clean_cdata(ho.findtext("호내용", "")),
+                "sub_items":       [],
+            }
+            for mok in ho.findall("목"):
+                item["sub_items"].append({
+                    "item_level_code": "MOK",
+                    "item_no":         clean_cdata(mok.findtext("목번호", "")),
+                    "item_text":       clean_cdata(mok.findtext("목내용", "")),
+                })
+            paragraph["items"].append(item)
+        article["paragraphs"].append(paragraph)
+    return article
+
+
+def _dedupe_articles_by_internal_key(articles: List[dict]) -> List[dict]:
+    """조문키 기준 중복 제거. 동일 키는 본문·제목·항 개수가 더 큰 쪽 유지."""
+    by_key: dict[str, dict] = {}
+    for idx, art in enumerate(articles):
+        k = (art.get("article_internal_key") or "").strip()
+        if not k:
+            art = {**art, "article_internal_key": f"__noid_{idx}"}
+            k = art["article_internal_key"]
+        cur = by_key.get(k)
+        if cur is None or _article_completeness_score(art) > _article_completeness_score(cur):
+            by_key[k] = art
+    merged = list(by_key.values())
+    merged.sort(key=lambda a: (
+        a.get("article_no") is None,
+        a.get("article_no") or 0,
+        a.get("article_sub_no") or 0,
+    ))
+    return merged
+
+
+def snapshot_article_key_map_for_version(supabase: Any, version_id: str) -> None:
+    """삭제 전 old article_id 스냅샷. 테이블 없으면 조용히 스킵."""
+    try:
+        arts = supabase.table("law_article").select("id,article_internal_key").eq(
+            "law_version_id", version_id
+        ).execute().data or []
+        for a in arts:
+            supabase.table("law_article_key_map").insert({
+                "old_article_id": a["id"],
+                "new_article_id": None,
+                "article_internal_key": a.get("article_internal_key") or "",
+                "law_version_id": version_id,
+            }).execute()
+    except Exception:
+        return
+
+
+def _nullify_dependent_article_refs(supabase: Any, art_ids: List[str]) -> None:
+    """law_article 삭제 전 FK 참조 해제 (재수집 후 reconnect_fk로 복구)."""
+    if not art_ids:
+        return
+    for table, col in (("law_rule_drafts", "article_id"), ("inspection_set_items", "law_article_id")):
+        try:
+            supabase.table(table).update({col: None}).in_(col, art_ids).execute()
+        except Exception as e:
+            print(f"[law_collector] {table}.{col} nullify skip: {e}")
+
+
+def delete_law_version_cascade_for_recollect(supabase: Any, version_id: str) -> None:
+    """force 재수집: 버전 하위 전부 삭제 후 law_version 행 제거."""
+    arts = supabase.table("law_article").select("id").eq("law_version_id", version_id).execute().data or []
+    art_ids = [r["id"] for r in arts]
+    if art_ids:
+        _nullify_dependent_article_refs(supabase, art_ids)
+        paras = supabase.table("law_paragraph").select("id").in_("article_id", art_ids).execute().data or []
+        para_ids = [p["id"] for p in paras]
+        if para_ids:
+            items = supabase.table("law_item").select("id,parent_item_id").in_(
+                "paragraph_id", para_ids
+            ).execute().data or []
+            child_ids = [i["id"] for i in items if i.get("parent_item_id")]
+            if child_ids:
+                supabase.table("law_item").delete().in_("id", child_ids).execute()
+            supabase.table("law_item").delete().in_("paragraph_id", para_ids).execute()
+        supabase.table("law_paragraph").delete().in_("article_id", art_ids).execute()
+        supabase.table("law_article").delete().eq("law_version_id", version_id).execute()
+    supabase.table("law_content_raw").delete().eq("law_version_id", version_id).execute()
+    supabase.table("law_version").delete().eq("id", version_id).execute()
 
 
 # ============================================================
@@ -167,41 +324,12 @@ def parse_law_content_xml(xml_text: str) -> dict:
             "revision_type":     basic.findtext("제개정구분", ""),
         }
 
-    articles = []
-    for jo in root.findall(".//조문단위"):
-        article = {
-            "article_internal_key": jo.get("조문키", ""),
-            "article_no":           _safe_int(jo.findtext("조문번호", "")),
-            "article_sub_no":       _safe_int(jo.findtext("조문가지번호", "")),
-            "article_type":         jo.findtext("조문여부", ""),
-            "article_title":        clean_cdata(jo.findtext("조문제목", "")),
-            "article_text":         clean_cdata(jo.findtext("조문내용", "")),
-            "enforcement_date":     parse_date(jo.findtext("조문시행일자", "")),
-            "is_changed":           jo.findtext("조문변경여부", "N") == "Y",
-            "paragraphs":           [],
-        }
-        for hang in jo.findall("항"):
-            paragraph = {
-                "paragraph_no":   clean_cdata(hang.findtext("항번호", "")),
-                "paragraph_text": clean_cdata(hang.findtext("항내용", "")),
-                "items":          [],
-            }
-            for ho in hang.findall("호"):
-                item = {
-                    "item_level_code": "HO",
-                    "item_no":         clean_cdata(ho.findtext("호번호", "")),
-                    "item_text":       clean_cdata(ho.findtext("호내용", "")),
-                    "sub_items":       [],
-                }
-                for mok in ho.findall("목"):
-                    item["sub_items"].append({
-                        "item_level_code": "MOK",
-                        "item_no":         clean_cdata(mok.findtext("목번호", "")),
-                        "item_text":       clean_cdata(mok.findtext("목내용", "")),
-                    })
-                paragraph["items"].append(item)
-            article["paragraphs"].append(paragraph)
-        articles.append(article)
+    raw_articles = [_parse_article_from_jo(jo) for jo in _iter_jo_units(root)]
+    articles = _dedupe_articles_by_internal_key(raw_articles)
+    for art in articles:
+        ik = art.get("article_internal_key") or ""
+        if ik.startswith("__noid_"):
+            art["article_internal_key"] = ""
 
     return {"info": info, "articles": articles, "raw_xml": xml_text}
 
@@ -644,11 +772,8 @@ async def collect_single_law(law_name: str, force: bool = False):
                     .select("id").eq("law_id", existing_law_id).eq("law_mst_no", law_mst_no).execute()
                 if ev.data:
                     old_vid = ev.data[0]["id"]
-                    art_cnt = supabase.table("law_article")\
-                        .select("id", count="exact").eq("law_version_id", old_vid).execute()
-                    if (art_cnt.count or 0) == 0:
-                        supabase.table("law_content_raw").delete().eq("law_version_id", old_vid).execute()
-                        supabase.table("law_version").delete().eq("id", old_vid).execute()
+                    snapshot_article_key_map_for_version(supabase, old_vid)
+                    delete_law_version_cascade_for_recollect(supabase, old_vid)
 
         law_info = {**parsed["info"], "law_mst_no": matched["law_mst_no"],
                     "law_name_short": matched.get("law_name_short", ""),
