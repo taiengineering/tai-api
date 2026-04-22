@@ -123,8 +123,9 @@ def main():
     args = parser.parse_args()
 
     if not SECRET and not args.dry_run:
-        log.error("❌ TAI_INTERNAL_SECRET 환경변수 필요. `export TAI_INTERNAL_SECRET=\"...\"`")
-        sys.exit(1)
+        raise RuntimeError(
+            "TAI_INTERNAL_SECRET 환경변수 필수 (--dry-run 제외)"
+        )
 
     if not os.path.exists(args.laws_file):
         log.error(f"❌ {args.laws_file} 파일이 없습니다. 같은 폴더에 두세요.")
