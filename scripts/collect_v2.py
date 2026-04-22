@@ -1,37 +1,24 @@
 #!/usr/bin/env python3
 """
-법령 수집 v2 — 재수집 통합 스크립트
+법령 수집 v2 — 재수집 통합 스크립트 (행정규칙 지원 버전)
 
 설계 문서: docs/LAW_COLLECTION_STORAGE_DESIGN_2026-04-22.md
 타겟 테이블: law_collection_target_new (184개)
-저장 테이블: law_master_new, law_version_new, law_content_raw_new,
-            law_article_new, law_paragraph_new, law_item_new, law_attachment_new
 
-핵심 설계:
-  - 기존 routers/law_collector.py의 파싱 로직 재사용
-  - _new 테이블에 저장 (기존 테이블 영향 없음)
-  - 원본 XML 먼저 저장 (TX1) → 파싱 결과는 재파싱 가능
-  - 파싱 결과는 cascade delete 후 재삽입 (TX2)
-  - collection_status로 진행 추적 (재실행 가능)
+v2.1 업데이트 (2026-04-22):
+  - NFTC/NFPC (행정규칙 STANDARD/NOTICE) 지원 추가
+  - law_type_code에 따라 law / admrul API 자동 분기
+  - routers/law_collector_admrul.py 사용
 
 사용법:
     cd ~/dev/tai-api
     set -a; source .env; set +a
     
-    # 1. 단일 법령 테스트 (권장: 전체 실행 전)
     python3 scripts/collect_v2.py test "산업안전보건법"
-    
-    # 2. PENDING 상태 전체 수집 (실패 시 FAILED로 기록)
     python3 scripts/collect_v2.py all
-    
-    # 3. 실시간 모니터링 (다른 터미널에서)
-    python3 scripts/collect_v2.py monitor
-    
-    # 4. FAILED만 재시도
     python3 scripts/collect_v2.py retry
-    
-    # 5. 특정 도메인만 수집
-    python3 scripts/collect_v2.py domain BUILDING
+    python3 scripts/collect_v2.py domain FIRE
+    python3 scripts/collect_v2.py monitor
 """
 from __future__ import annotations
 
@@ -57,6 +44,35 @@ from routers.law_collector import (
     law_type_name_to_code,
     make_hash,
 )
+# ⭐ 신규: 행정규칙 지원
+from routers.law_collector_admrul import (
+    fetch_admrul_list,
+    fetch_admrul_content,
+    parse_admrul_list_xml,
+    parse_admrul_content_xml,
+)
+
+
+# ═══════════════════════════════════════════════════════════
+# 유틸: API 분기 (law vs admrul)
+# ═══════════════════════════════════════════════════════════
+
+def _is_admrul(target: dict) -> bool:
+    """
+    행정규칙 여부 판별.
+    
+    판정 기준:
+      1. law_type_code가 STANDARD(기술기준) 또는 NOTICE(고시)
+      2. 법령명에 NFTC / NFPC 포함
+    """
+    type_code = target.get("law_type_code", "")
+    name = target.get("law_name", "") or ""
+    
+    if type_code in ("STANDARD", "NOTICE"):
+        return True
+    if "NFTC" in name or "NFPC" in name:
+        return True
+    return False
 
 
 # ═══════════════════════════════════════════════════════════
@@ -64,13 +80,6 @@ from routers.law_collector import (
 # ═══════════════════════════════════════════════════════════
 
 def get_targets(supabase, filter_type: str = "pending", value: str = None) -> list[dict]:
-    """
-    law_collection_target_new 에서 타겟 조회.
-    
-    Args:
-        filter_type: 'pending' | 'all' | 'failed' | 'domain' | 'name'
-        value: filter_type='domain'일 때 도메인 코드, 'name'일 때 법령명
-    """
     query = supabase.table("law_collection_target_new") \
         .select("*") \
         .eq("is_active", True)
@@ -83,7 +92,6 @@ def get_targets(supabase, filter_type: str = "pending", value: str = None) -> li
         query = query.eq("domain_code", value)
     elif filter_type == "name":
         query = query.ilike("law_name", f"%{value}%")
-    # 'all'은 추가 필터 없음
     
     result = query.order("collection_priority") \
         .order("added_in_phase") \
@@ -102,7 +110,6 @@ def update_target_status(
     checklist: Optional[dict] = None,
     error: Optional[str] = None,
 ) -> None:
-    """law_collection_target_new 상태 업데이트."""
     update_data = {
         "collection_status": status,
         "updated_at": datetime.now().isoformat(),
@@ -115,7 +122,6 @@ def update_target_status(
         update_data["last_collection_result"] = json.dumps(checklist, ensure_ascii=False, default=str)
         update_data["verification_checklist"] = json.dumps(checklist, ensure_ascii=False, default=str)
     
-    # error를 remarks에 append
     if error:
         target = supabase.table("law_collection_target_new") \
             .select("remarks").eq("id", target_id).single().execute()
@@ -142,17 +148,6 @@ def save_law_to_new_db(
     articles: list,
     supabase: Any,
 ) -> dict:
-    """
-    법령을 _new 테이블에 저장.
-    
-    저장 전략:
-      TX1: law_master_new + law_version_new + law_content_raw_new
-      TX2: law_article_new + law_paragraph_new + law_item_new
-           (기존 version의 article들 cascade delete 후 재삽입)
-    
-    Returns:
-      {law_id, version_id, is_new_version, article_count, paragraph_count, item_count}
-    """
     law_mst_no = matched.get("law_mst_no", "") or law_info.get("law_mst_no", "")
     law_api_id = matched.get("law_api_id", "") or law_info.get("law_api_id", "")
     law_name = law_info.get("law_name", "") or target.get("law_name", "")
@@ -179,7 +174,9 @@ def save_law_to_new_db(
         "law_status_code": "ACTIVE",
         "announcement_date": str(law_info.get("announcement_date")) if law_info.get("announcement_date") else None,
         "enforcement_date": str(law_info.get("enforcement_date")) if law_info.get("enforcement_date") else None,
-        "source_system": "data.go.kr/law" if os.environ.get("DATA_GOV_SERVICE_KEY") else "law.go.kr",
+        "source_system": "law.go.kr/admrul" if _is_admrul(target) else (
+            "data.go.kr/law" if os.environ.get("DATA_GOV_SERVICE_KEY") else "law.go.kr"
+        ),
         "is_active": True,
         "updated_at": datetime.now().isoformat(),
     }, on_conflict="law_key").execute()
@@ -189,7 +186,6 @@ def save_law_to_new_db(
     law_id = master_res.data[0]["id"]
     
     # ─── TX1-2: law_version_new UPSERT ─────────────────────
-    # 기존 버전 확인
     existing_version = supabase.table("law_version_new") \
         .select("id") \
         .eq("law_id", law_id) \
@@ -198,7 +194,6 @@ def save_law_to_new_db(
     
     if existing_version.data:
         version_id = existing_version.data[0]["id"]
-        # 업데이트
         supabase.table("law_version_new").update({
             "law_mst_no": law_mst_no,
             "revision_type_code": matched.get("revision_type", "") or law_info.get("revision_type", ""),
@@ -228,7 +223,6 @@ def save_law_to_new_db(
         version_id = version_res.data[0]["id"]
         is_new_version = True
     
-    # is_current 다른 버전 false 처리
     if is_new_version:
         supabase.table("law_version_new") \
             .update({"is_current": False}) \
@@ -236,15 +230,13 @@ def save_law_to_new_db(
             .neq("id", version_id) \
             .execute()
     
-    # law_master_new.current_version_id 업데이트
     supabase.table("law_master_new").update({
         "current_version_id": version_id,
         "current_version_no": version_no,
         "updated_at": datetime.now().isoformat(),
     }).eq("id", law_id).execute()
     
-    # ─── TX1-3: law_content_raw_new (원본 XML) ──────────────
-    # 기존 원본 삭제 후 재삽입 (UNIQUE: law_version_id)
+    # ─── TX1-3: law_content_raw_new ────────────────────────
     supabase.table("law_content_raw_new").delete().eq("law_version_id", version_id).execute()
     supabase.table("law_content_raw_new").insert({
         "law_version_id": version_id,
@@ -254,8 +246,7 @@ def save_law_to_new_db(
         "updated_at": datetime.now().isoformat(),
     }).execute()
     
-    # ─── TX2: 기존 article cascade delete + 새 파싱 결과 삽입 ──
-    # CASCADE FK로 paragraph/item도 자동 삭제됨
+    # ─── TX2: 조문/항/호/목 저장 ────────────────────────────
     supabase.table("law_article_new").delete().eq("law_version_id", version_id).execute()
     
     article_count = 0
@@ -281,7 +272,6 @@ def save_law_to_new_db(
         article_count += 1
         
         for p_idx, para in enumerate(art["paragraphs"]):
-            # paragraph_internal_key 생성 (기존 파서가 안 주므로)
             para_internal_key = f"{art['article_internal_key']}-P{para['paragraph_no']}" if art['article_internal_key'] else ""
             
             para_res = supabase.table("law_paragraph_new").insert({
@@ -297,7 +287,6 @@ def save_law_to_new_db(
             paragraph_count += 1
             
             for i_idx, item in enumerate(para["items"]):
-                # item_internal_key 생성
                 item_internal_key = f"{para_internal_key}-H{item['item_no']}" if para_internal_key else ""
                 
                 item_res = supabase.table("law_item_new").insert({
@@ -344,16 +333,9 @@ def save_law_to_new_db(
 # ═══════════════════════════════════════════════════════════
 
 def verify_one_law(target: dict, save_result: dict, parsed: dict, supabase) -> dict:
-    """
-    수집된 법령의 품질 검증.
-    
-    Returns:
-      체크리스트 dict (JSONB 저장용)
-    """
     version_id = save_result["version_id"]
     article_count = save_result["article_count"]
     
-    # valid_pct 계산: article_text 길이 20자 이상인 비율
     valid_query = supabase.table("law_article_new") \
         .select("id,article_text", count="exact") \
         .eq("law_version_id", version_id) \
@@ -366,12 +348,10 @@ def verify_one_law(target: dict, save_result: dict, parsed: dict, supabase) -> d
     )
     valid_pct = round(valid_articles * 100.0 / total_articles, 1) if total_articles > 0 else 0.0
     
-    # expected_article_count와 비교 (있으면)
     expected = target.get("expected_article_count")
     if expected and expected > 0:
         article_count_reasonable = article_count >= (expected * 0.5)
     else:
-        # 최소 1개 이상
         article_count_reasonable = article_count > 0
     
     checklist = {
@@ -386,12 +366,12 @@ def verify_one_law(target: dict, save_result: dict, parsed: dict, supabase) -> d
         "valid_pct": valid_pct,
         "article_count_reasonable": article_count_reasonable,
         "valid_pct_above_30": valid_pct >= 30.0,
-        "no_duplicate_created": True,  # UPSERT 사용 = 중복 불가
+        "no_duplicate_created": True,
         "is_new_version": save_result.get("is_new_version", False),
+        "is_admrul": _is_admrul(target),
         "checked_at": datetime.now().isoformat(),
     }
     
-    # 전체 통과 여부
     required_checks = [
         "api_call_success",
         "xml_saved",
@@ -399,35 +379,21 @@ def verify_one_law(target: dict, save_result: dict, parsed: dict, supabase) -> d
         "article_count_reasonable",
     ]
     checklist["all_pass"] = all(checklist.get(k, False) for k in required_checks)
-    # valid_pct_above_30은 경고 수준 (실패로 안 치지만 기록은 함)
     checklist["valid_pct_warning"] = not checklist["valid_pct_above_30"]
     
     return checklist
 
 
 # ═══════════════════════════════════════════════════════════
-# 핵심: 1개 법령 수집 (유닛)
+# 핵심: 1개 법령 수집 (유닛) — law/admrul 자동 분기
 # ═══════════════════════════════════════════════════════════
 
 def collect_one_law(target: dict, supabase) -> dict:
-    """
-    1개 법령 수집 — 완전한 유닛.
-    
-    흐름:
-      1. 상태 PENDING → IN_PROGRESS
-      2. API 호출 (search → content)
-      3. TX1: 원본 XML 저장 (law_master_new + law_version_new + law_content_raw_new)
-      4. TX2: 파싱 결과 저장 (article + paragraph + item)
-      5. 검증 체크리스트
-      6. 상태 SUCCESS/FAILED 업데이트
-    
-    Returns:
-      {target_id, law_name, status, error, checklist, save_result}
-    """
     target_id = target["id"]
     law_name = target["law_name"]
     law_api_id = target.get("law_api_id")
     law_api_mst_no = target.get("law_api_mst_no")
+    is_admrul = _is_admrul(target)
     
     result = {
         "target_id": target_id,
@@ -437,82 +403,43 @@ def collect_one_law(target: dict, supabase) -> dict:
         "checklist": {},
         "save_result": None,
         "started_at": datetime.now().isoformat(),
+        "source_type": "admrul" if is_admrul else "law",
     }
     
     print(f"\n{'─' * 70}")
     print(f"🎯 {law_name}")
-    print(f"   도메인: {target.get('domain_code')} | 유형: {target['law_type_code']}")
+    print(f"   도메인: {target.get('domain_code')} | 유형: {target['law_type_code']} | "
+          f"API: {'admrul (행정규칙)' if is_admrul else 'law (법령)'}")
     print(f"   API_ID: {law_api_id or '(없음, 검색 필요)'}")
     
-    # Step 0: IN_PROGRESS
     update_target_status(supabase, target_id, "IN_PROGRESS")
     
     try:
-        # Step 1: API 호출
-        #   - law_api_mst_no가 있으면 직접 본문 API
-        #   - 없으면 검색 API부터 (이름 기반)
-        
-        if law_api_mst_no:
-            # 마스터번호 있으면 바로 본문 조회
-            print(f"   ▶ MST 직접 조회: {law_api_mst_no}")
-            content_result = fetch_law_content(law_api_mst_no)
-            matched = {
-                "law_mst_no": law_api_mst_no,
-                "law_api_id": law_api_id,
-                "law_name": law_name,
-                "law_name_short": "",
-                "revision_type": "",
-            }
-        else:
-            # 이름으로 검색 → 매칭 → 본문
-            print(f"   ▶ 이름 검색")
-            list_result = fetch_law_list(query=law_name, display=15)
-            if not list_result["ok"]:
-                raise RuntimeError(f"검색 API 실패: HTTP {list_result['status']}")
-            
-            laws = parse_law_list_xml(list_result["xml"])
-            if not laws:
-                raise RuntimeError("검색 결과 없음")
-            
-            # 정확 매칭 우선
-            matched = next(
-                (l for l in laws if (l.get("law_name") or "").strip() == law_name),
-                None
+        # ─── Step 1: API 호출 (법령 vs 행정규칙 분기) ───
+        if is_admrul:
+            content_result, matched, parsed = _fetch_and_parse_admrul(
+                target, law_name, law_api_id, law_api_mst_no
             )
-            if not matched:
-                # 부분 매칭
-                matched = next(
-                    (l for l in laws if law_name in (l.get("law_name") or "")),
-                    laws[0]
-                )
-            
-            print(f"   ▶ 매칭: {matched['law_name']} | MST={matched['law_mst_no']}")
-            
-            content_result = fetch_law_content(matched["law_mst_no"])
-        
-        if not content_result["ok"]:
-            raise RuntimeError(f"본문 API 실패: HTTP {content_result['status']}")
+        else:
+            content_result, matched, parsed = _fetch_and_parse_law(
+                target, law_name, law_api_id, law_api_mst_no
+            )
         
         raw_xml = content_result["xml"]
-        if not raw_xml or len(raw_xml) < 100:
-            raise RuntimeError(f"응답 너무 짧음: {len(raw_xml)} bytes")
-        
         print(f"   ▶ XML 수신: {len(raw_xml):,} bytes")
+        print(f"   ▶ 파싱: {len(parsed['articles'])}개 조문")
+        
         result["checklist"]["api_call_success"] = True
         result["checklist"]["response_size"] = len(raw_xml)
         
-        # Step 2: 파싱
-        parsed = parse_law_content_xml(raw_xml)
-        print(f"   ▶ 파싱: {len(parsed['articles'])}개 조문")
-        
-        # law_api_mst_no가 비어있으면 검색 결과에서 가져온 것으로 업데이트
+        # law_api_mst_no 업데이트 (없었던 경우)
         if not law_api_mst_no and matched.get("law_mst_no"):
             supabase.table("law_collection_target_new").update({
                 "law_api_mst_no": matched["law_mst_no"],
                 "law_api_id": matched.get("law_api_id") or law_api_id,
             }).eq("id", target_id).execute()
         
-        # Step 3: _new 테이블 저장
+        # ─── Step 2: DB 저장 ───
         law_info = {
             **parsed["info"],
             "law_mst_no": matched["law_mst_no"],
@@ -528,11 +455,10 @@ def collect_one_law(target: dict, supabase) -> dict:
         print(f"   ▶ DB 저장: article={save_result['article_count']}, "
               f"paragraph={save_result['paragraph_count']}, item={save_result['item_count']}")
         
-        # Step 4: 검증 체크리스트
+        # ─── Step 3: 검증 ───
         checklist = verify_one_law(target, save_result, parsed, supabase)
         result["checklist"] = checklist
         
-        # Step 5: 상태 업데이트
         if checklist["all_pass"]:
             result["status"] = "SUCCESS"
             update_target_status(supabase, target_id, "SUCCESS", checklist=checklist)
@@ -563,12 +489,114 @@ def collect_one_law(target: dict, supabase) -> dict:
     return result
 
 
+def _fetch_and_parse_law(target, law_name, law_api_id, law_api_mst_no):
+    """일반 법령 (법률/시행령/시행규칙) API 호출 + 파싱."""
+    if law_api_mst_no:
+        print(f"   ▶ MST 직접 조회: {law_api_mst_no}")
+        content_result = fetch_law_content(law_api_mst_no)
+        matched = {
+            "law_mst_no": law_api_mst_no,
+            "law_api_id": law_api_id,
+            "law_name": law_name,
+            "law_name_short": "",
+            "revision_type": "",
+        }
+    else:
+        print(f"   ▶ 이름 검색 (law)")
+        list_result = fetch_law_list(query=law_name, display=15)
+        if not list_result["ok"]:
+            raise RuntimeError(f"검색 API 실패: HTTP {list_result['status']}")
+        
+        laws = parse_law_list_xml(list_result["xml"])
+        if not laws:
+            raise RuntimeError("검색 결과 없음")
+        
+        matched = next(
+            (l for l in laws if (l.get("law_name") or "").strip() == law_name),
+            None
+        )
+        if not matched:
+            matched = next(
+                (l for l in laws if law_name in (l.get("law_name") or "")),
+                laws[0]
+            )
+        
+        print(f"   ▶ 매칭: {matched['law_name']} | MST={matched['law_mst_no']}")
+        content_result = fetch_law_content(matched["law_mst_no"])
+    
+    if not content_result["ok"]:
+        raise RuntimeError(f"본문 API 실패: HTTP {content_result['status']}")
+    if not content_result["xml"] or len(content_result["xml"]) < 100:
+        raise RuntimeError(f"응답 너무 짧음: {len(content_result['xml'])} bytes")
+    
+    parsed = parse_law_content_xml(content_result["xml"])
+    return content_result, matched, parsed
+
+
+def _fetch_and_parse_admrul(target, law_name, law_api_id, law_api_mst_no):
+    """행정규칙 (NFTC/NFPC) API 호출 + 파싱."""
+    # 행정규칙은 ID로 본문 조회 (MST는 보통 없음)
+    if law_api_id:
+        print(f"   ▶ ID 직접 조회 (admrul): {law_api_id}")
+        content_result = fetch_admrul_content(law_api_id)
+        matched = {
+            "law_mst_no": law_api_mst_no or law_api_id,
+            "law_api_id": law_api_id,
+            "law_name": law_name,
+            "law_name_short": "",
+            "revision_type": "",
+        }
+    else:
+        # 이름 검색 (NFTC XXX 패턴)
+        print(f"   ▶ 이름 검색 (admrul)")
+        list_result = fetch_admrul_list(query=law_name, display=15)
+        if not list_result["ok"]:
+            raise RuntimeError(f"admrul 검색 API 실패: HTTP {list_result['status']}")
+        
+        rules = parse_admrul_list_xml(list_result["xml"])
+        if not rules:
+            raise RuntimeError("admrul 검색 결과 없음")
+        
+        # 정확 매칭 (괄호/공백 정규화)
+        norm_target = law_name.replace(" ", "").replace("(", "").replace(")", "")
+        matched = next(
+            (r for r in rules if r.get("law_name", "").replace(" ", "").replace("(", "").replace(")", "") == norm_target),
+            None
+        )
+        if not matched:
+            # 부분 매칭 (NFTC/NFPC 번호 포함)
+            for keyword in ("NFTC", "NFPC"):
+                if keyword in law_name:
+                    # NFTC 101, NFPC 203 같은 번호 추출
+                    parts = law_name.split(keyword)
+                    if len(parts) > 1:
+                        num_part = parts[-1].replace(")", "").strip()
+                        matched = next(
+                            (r for r in rules if keyword in (r.get("law_name") or "") and num_part in (r.get("law_name") or "")),
+                            None
+                        )
+                        if matched:
+                            break
+        if not matched:
+            matched = rules[0]
+        
+        print(f"   ▶ 매칭: {matched['law_name']} | ID={matched['law_api_id']}")
+        content_result = fetch_admrul_content(matched["law_api_id"])
+    
+    if not content_result["ok"]:
+        raise RuntimeError(f"admrul 본문 API 실패: HTTP {content_result['status']}")
+    if not content_result["xml"] or len(content_result["xml"]) < 100:
+        raise RuntimeError(f"응답 너무 짧음: {len(content_result['xml'])} bytes")
+    
+    parsed = parse_admrul_content_xml(content_result["xml"])
+    return content_result, matched, parsed
+
+
 # ═══════════════════════════════════════════════════════════
-# 명령 핸들러: test (단일 수집 테스트)
+# 명령 핸들러들
 # ═══════════════════════════════════════════════════════════
 
 def cmd_test(law_name: str) -> int:
-    """단일 법령 수집 테스트. 전체 실행 전 검증용."""
     supabase = get_supabase()
     
     print(f"\n{'=' * 70}")
@@ -578,7 +606,6 @@ def cmd_test(law_name: str) -> int:
     targets = get_targets(supabase, filter_type="name", value=law_name)
     if not targets:
         print(f"❌ 타겟 없음: {law_name}")
-        print(f"   law_collection_target_new에 {law_name}을 포함하는 법령이 없습니다.")
         return 1
     
     if len(targets) > 1:
@@ -598,12 +625,7 @@ def cmd_test(law_name: str) -> int:
     return 0 if result["status"] == "SUCCESS" else 1
 
 
-# ═══════════════════════════════════════════════════════════
-# 명령 핸들러: all (PENDING 전체 수집)
-# ═══════════════════════════════════════════════════════════
-
 def cmd_all(rate_limit_sec: float = 0.5) -> int:
-    """PENDING 상태 전체 수집. rate_limit_sec 초 대기."""
     supabase = get_supabase()
     
     print(f"\n{'=' * 70}")
@@ -614,13 +636,11 @@ def cmd_all(rate_limit_sec: float = 0.5) -> int:
     total = len(targets)
     
     if total == 0:
-        print("✅ PENDING 상태 타겟이 없습니다. (이미 전부 수집됨)")
-        print("\n재시도하려면: python3 scripts/collect_v2.py retry")
+        print("✅ PENDING 상태 타겟이 없습니다.")
         return 0
     
     print(f"총 {total}개 타겟 수집 시작...")
-    print(f"Rate limit: {rate_limit_sec}초/요청")
-    print(f"예상 시간: 약 {total * (3 + rate_limit_sec) / 60:.1f}분\n")
+    print(f"Rate limit: {rate_limit_sec}초/요청\n")
     
     success_count = 0
     fail_count = 0
@@ -635,7 +655,6 @@ def cmd_all(rate_limit_sec: float = 0.5) -> int:
         else:
             fail_count += 1
         
-        # 진행률 표시
         elapsed = time.time() - start_time
         avg_time = elapsed / idx
         eta = avg_time * (total - idx)
@@ -643,7 +662,6 @@ def cmd_all(rate_limit_sec: float = 0.5) -> int:
               f"성공 {success_count} / 실패 {fail_count} | "
               f"ETA {eta/60:.1f}분")
         
-        # Rate limit
         if idx < total:
             time.sleep(rate_limit_sec)
     
@@ -654,18 +672,11 @@ def cmd_all(rate_limit_sec: float = 0.5) -> int:
     print(f"{'=' * 70}")
     print(f"총 {total}개 중 성공 {success_count}, 실패 {fail_count}")
     print(f"소요 시간: {total_elapsed/60:.1f}분")
-    print(f"\n실패 목록 확인: python3 scripts/collect_v2.py monitor")
-    print(f"재시도: python3 scripts/collect_v2.py retry")
     
     return 0 if fail_count == 0 else 1
 
 
-# ═══════════════════════════════════════════════════════════
-# 명령 핸들러: retry (FAILED 재시도)
-# ═══════════════════════════════════════════════════════════
-
 def cmd_retry(rate_limit_sec: float = 0.5) -> int:
-    """FAILED 상태 타겟만 재시도."""
     supabase = get_supabase()
     
     print(f"\n{'=' * 70}")
@@ -681,14 +692,12 @@ def cmd_retry(rate_limit_sec: float = 0.5) -> int:
     
     print(f"FAILED {total}개 재시도...\n")
     
-    # FAILED를 PENDING으로 리셋
     for t in failed_targets:
         supabase.table("law_collection_target_new").update({
             "collection_status": "PENDING",
             "updated_at": datetime.now().isoformat(),
         }).eq("id", t["id"]).execute()
     
-    # all과 동일하게 진행
     success_count = 0
     fail_count = 0
     
@@ -706,12 +715,7 @@ def cmd_retry(rate_limit_sec: float = 0.5) -> int:
     return 0 if fail_count == 0 else 1
 
 
-# ═══════════════════════════════════════════════════════════
-# 명령 핸들러: domain (특정 도메인만)
-# ═══════════════════════════════════════════════════════════
-
 def cmd_domain(domain_code: str, rate_limit_sec: float = 0.5) -> int:
-    """특정 도메인 타겟만 수집 (PENDING 상태만)."""
     supabase = get_supabase()
     
     valid_domains = [
@@ -728,18 +732,12 @@ def cmd_domain(domain_code: str, rate_limit_sec: float = 0.5) -> int:
     print(f"{'=' * 70}")
     
     targets = get_targets(supabase, filter_type="domain", value=domain_code)
-    total = len(targets)
-    
-    if total == 0:
-        print(f"✅ {domain_code} 도메인에 타겟이 없습니다.")
-        return 0
-    
-    # PENDING만 필터
     pending = [t for t in targets if t["collection_status"] == "PENDING"]
-    print(f"{domain_code}: 전체 {total}개 중 PENDING {len(pending)}개 수집\n")
+    
+    print(f"{domain_code}: 전체 {len(targets)}개 중 PENDING {len(pending)}개 수집\n")
     
     if not pending:
-        print("✅ PENDING 타겟 없음 (전부 이미 수집됨)")
+        print("✅ PENDING 타겟 없음")
         return 0
     
     success_count = 0
@@ -758,30 +756,23 @@ def cmd_domain(domain_code: str, rate_limit_sec: float = 0.5) -> int:
     return 0 if fail_count == 0 else 1
 
 
-# ═══════════════════════════════════════════════════════════
-# 명령 핸들러: monitor (진행상황 확인)
-# ═══════════════════════════════════════════════════════════
-
 def cmd_monitor() -> int:
-    """전체 수집 진행상황 모니터링."""
     supabase = get_supabase()
     
     print(f"\n{'=' * 70}")
     print(f"📊 법령 수집 진행상황 ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
     print(f"{'=' * 70}\n")
     
-    # 전체 통계
     all_targets = supabase.table("law_collection_target_new") \
-        .select("collection_status,domain_code,added_in_phase,law_name,remarks") \
+        .select("collection_status,domain_code,added_in_phase,law_name,law_type_code,remarks") \
         .eq("is_active", True) \
         .execute()
     
     total = len(all_targets.data or [])
     if total == 0:
-        print("❌ 타겟이 없습니다. law_collection_target_new 확인 필요")
+        print("❌ 타겟이 없습니다.")
         return 1
     
-    # 상태별 집계
     by_status = {}
     for t in all_targets.data:
         s = t.get("collection_status", "UNKNOWN")
@@ -794,7 +785,6 @@ def cmd_monitor() -> int:
         bar = "█" * int(pct / 2) + "░" * (50 - int(pct / 2))
         print(f"  {status:12} {count:4}/{total} ({pct:5.1f}%) {bar}")
     
-    # 도메인별 현황
     print(f"\n🏛️  도메인별 현황:")
     domain_stats = {}
     for t in all_targets.data:
@@ -814,25 +804,18 @@ def cmd_monitor() -> int:
         print(f"  {domain:<20} {s['total']:>5} {s['SUCCESS']:>5} {s['FAILED']:>5} "
               f"{s['PENDING']:>5} {s['IN_PROGRESS']:>5} {success_rate:>6.1f}%")
     
-    # 최근 FAILED 10개
     failed = [t for t in all_targets.data if t.get("collection_status") == "FAILED"]
     if failed:
-        print(f"\n❌ 최근 실패 목록 (최대 10개):")
+        print(f"\n❌ 실패 목록 (최대 10개):")
         for t in failed[:10]:
             remarks = (t.get("remarks") or "").split("|")[-1].strip()[:80]
             print(f"  - [{t['domain_code']}] {t['law_name']}")
             if remarks:
                 print(f"    └─ {remarks}")
     
-    # 통계 요약
     print(f"\n📌 전체: {total} | 성공률: {by_status.get('SUCCESS', 0)*100/total:.1f}%")
-    
     return 0
 
-
-# ═══════════════════════════════════════════════════════════
-# 메인
-# ═══════════════════════════════════════════════════════════
 
 def print_usage():
     print(__doc__)
@@ -850,26 +833,20 @@ def main() -> int:
             print("❌ 사용법: python3 scripts/collect_v2.py test \"법령명\"")
             return 1
         return cmd_test(sys.argv[2])
-    
     elif command == "all":
         return cmd_all()
-    
     elif command == "retry":
         return cmd_retry()
-    
     elif command == "domain":
         if len(sys.argv) < 3:
-            print("❌ 사용법: python3 scripts/collect_v2.py domain BUILDING")
+            print("❌ 사용법: python3 scripts/collect_v2.py domain FIRE")
             return 1
         return cmd_domain(sys.argv[2].upper())
-    
     elif command == "monitor":
         return cmd_monitor()
-    
     elif command in ("help", "--help", "-h"):
         print_usage()
         return 0
-    
     else:
         print(f"❌ 알 수 없는 명령: {command}")
         print_usage()
