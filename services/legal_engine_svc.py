@@ -35,7 +35,7 @@ from services.legal_evaluator import (
     run_get_legal_summary,
 )
 
-ENGINE_VERSION = "5.7.0"
+ENGINE_VERSION = "5.8.0"  # v5.8.0 (2026-04-23): 조문 본문 연결 (rule_article_mapping 활용)
 ALLOWED_DIAGNOSE_SECTORS = frozenset({"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"})
 
 
@@ -114,6 +114,7 @@ def run_diagnose_step2(supabase, body, engine_version: str) -> Dict[str, Any]:
             "risk_level": result.get("risk_level", "LOW"),
         },
         "rules": result.get("rules", []),
+        "article_mapping_stats": result.get("article_mapping_stats", {}),  # v5.8.0
         "added_rules": [
             {
                 "rule_code": r.get("rule_code") or r.get("rule_id"),
@@ -185,6 +186,7 @@ def run_diagnose_step3(supabase, body, engine_version: str) -> Dict[str, Any]:
         "engine_version": engine_version,
         "rule_count": len(matched),
         "kcsc_work_summary": kcsc_work_summary,
+        "article_mapping_stats": (diagnosis.get("result_data") or {}).get("article_mapping_stats", {}),  # v5.8.0
     }
 
 
@@ -264,6 +266,7 @@ def run_diagnose_step1(
     evaluated_at = datetime.now().isoformat()
     applicable, not_applicable = evaluate_facility_fn(facility_ctx, all_rules, sector_raw)
 
+    # v5.8.0: supabase 전달하여 조문 본문 포함
     result_data = build_step1_result_data(
         sector_raw,
         sector_groups,
@@ -276,6 +279,7 @@ def run_diagnose_step1(
         format_rule_result_db_fn,
         risk_level_fn,
         construction_summary_fn,
+        supabase=supabase,
     )
     result_data["factory_id"] = factory_id or None
     return {"result_data": result_data, "factory_id": factory_id, "sector_raw": sector_raw, "inp": inp, "applicable": applicable, "fac_company_id": fac_company_id}

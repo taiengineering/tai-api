@@ -16,7 +16,11 @@ from services.legal_helpers import (
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 
-ENGINE_VERSION = "5.7.0"  # v5.7.0: BE-11 데이터 품질 개선
+# v5.8.0 (2026-04-23): 조문 본문 연결 (rule_article_mapping 활용)
+#   - Phase A-1: fetch_article_contexts 헬퍼 + format_rule_result_db 확장
+#   - Phase A-2: legal_runtime + legal_step1_builder 통합
+# v5.7.0: BE-11 데이터 품질 개선
+ENGINE_VERSION = "5.8.0"
 
 
 @router.post("/apply/{factory_id}")

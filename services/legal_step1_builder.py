@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+from services.legal_article_loader import fetch_article_contexts
 
 
 def build_step1_result_data(
@@ -15,9 +17,34 @@ def build_step1_result_data(
     format_rule_result_db_fn,
     risk_level_fn,
     construction_summary_fn,
+    supabase=None,  # v5.8.0: 조문 본문 조회용
 ):
+    """
+    v5.8.0 (2026-04-23): supabase 전달 시 조문 본문 자동 포함.
+      - applicable rules의 rule_id들을 배치 조회
+      - classify_rules_db_fn에 article_contexts 주입
+      - not_applicable은 본문 불필요 (조문 매칭 안 됨)
+    """
     triggered: Dict[str, List] = {"appointment": [], "inspection": [], "notify": [], "report": [], "action": [], "not_applicable": []}
-    classify_rules_db_fn(applicable, triggered)
+    
+    # v5.8.0: 조문 본문 배치 조회
+    article_ctx: Optional[Dict[str, Any]] = None
+    if supabase is not None:
+        try:
+            rule_ids = [r.get("rule_id") for r in applicable if r.get("rule_id")]
+            if rule_ids:
+                article_ctx = fetch_article_contexts(supabase, rule_ids)
+        except Exception as e:
+            print(f"[STEP1_BUILDER] 조문 본문 조회 실패 (무시): {e}")
+            article_ctx = None
+    
+    # article_contexts 주입 (있으면)
+    try:
+        classify_rules_db_fn(applicable, triggered, article_ctx)
+    except TypeError:
+        # 하위 호환: article_contexts 파라미터 없는 구 함수
+        classify_rules_db_fn(applicable, triggered)
+    
     for r in not_applicable:
         triggered["not_applicable"].append(format_rule_result_db_fn(r))
     total_applicable = sum(len(triggered[k]) for k in ("appointment", "inspection", "notify", "report", "action"))
@@ -74,6 +101,15 @@ def build_step1_result_data(
         risk_reason += f", 긴급 이행 {urgent_count}건"
     if max_pen:
         risk_reason += f", 최대 {max_pen}"
+    
+    # v5.8.0: 조문 매핑 통계 추가
+    mapped_count = sum(1 for item in all_items_flat if item.get("has_article_text"))
+    article_mapping_stats = {
+        "total_rules": total_applicable,
+        "mapped_rules": mapped_count,
+        "coverage_pct": round(mapped_count * 100.0 / total_applicable, 1) if total_applicable else 0,
+    }
+    
     result_data = {
         "sector": sector_raw,
         "sector_groups": sector_groups,
@@ -97,6 +133,7 @@ def build_step1_result_data(
         "not_applicable_total": len(not_applicable),
         "total_rules_checked": len(applicable) + len(not_applicable),
         "applicable_count": total_applicable,
+        "article_mapping_stats": article_mapping_stats,  # v5.8.0
         "inspection_schedule_ready": {
             "periodic_count": len(insp_by_type["PERIODIC"]),
             "before_work_count": len(insp_by_type["BEFORE_WORK"]),

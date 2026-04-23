@@ -6,33 +6,71 @@ from services.legal_helpers import _to_float
 from services.legal_format import build_result
 from services.legal_helpers import get_sector_groups
 from services.legal_rules import _determine_risk_level, _evaluate_condition, _evaluate_conditions
+from services.legal_article_loader import fetch_article_contexts
 
 
 def _save_diagnosis_result(supabase, factory_id: str, sector: str, stage: int, input_data: dict, matched_rules: list) -> dict:
+    """
+    진단 결과를 factory_diagnosis_results 테이블에 저장.
+    
+    v5.8.0 (2026-04-23): 조문 본문 포함
+      - rule_article_mapping 통해 각 rule의 article_text 배치 조회
+      - result_data.rules[].article_text, article_internal_key 추가
+      - 베테랑이 조문 본문을 바로 확인 가능
+    """
     try:
         supabase.table("factory_diagnosis_results").update({"is_latest": False}).eq("factory_id", factory_id).eq("is_latest", True).execute()
     except Exception:
         pass
+    
+    # v5.8.0: 조문 본문 배치 조회
+    rule_ids = [r.get("rule_id") for r in matched_rules if r.get("rule_id")]
+    article_ctx = fetch_article_contexts(supabase, rule_ids) if rule_ids else {}
+    
     law_categories = list(dict.fromkeys(r.get("law_name", "") for r in matched_rules if r.get("law_name")))
     key_obligations = [r.get("remarks") or r.get("obligation_summary") or r.get("rule_name", "") for r in matched_rules[:5]]
     has_appointment = any(r.get("rule_type") == "APPOINTMENT" or r.get("appointment_required") for r in matched_rules)
+    
+    # v5.8.0: rules 리스트에 조문 본문 포함
+    rules_with_article = []
+    for r in matched_rules:
+        rid = r.get("rule_code") or r.get("rule_id") or ""
+        # rule_id(표시용) vs rule_id(매핑 키) 분리 주의
+        mapping_key = r.get("rule_id") or rid
+        art = article_ctx.get(mapping_key) or {}
+        rules_with_article.append({
+            "rule_code":             rid,
+            "rule_name":             r.get("remarks") or r.get("rule_name") or r.get("obligation_summary", ""),
+            "law_name":              r.get("law_name", ""),
+            "law_article":           r.get("law_article", ""),
+            "obligation":            r.get("remarks") or r.get("obligation_summary") or r.get("rule_name", ""),
+            "rule_type":             r.get("rule_type") or str(r.get("rule_type_code", "")),
+            "stage":                 r.get("diagnosis_stage", 1),
+            # v5.8.0 조문 본문 필드
+            "article_id":            art.get("article_id"),
+            "article_internal_key":  art.get("article_internal_key", ""),
+            "article_title":         art.get("article_title", ""),
+            "article_text":          art.get("article_text", ""),
+            "article_type":          art.get("article_type", ""),
+            "law_system":            art.get("law_system", "NOT_MAPPED"),
+            "has_article_text":      bool(art.get("article_text")),
+        })
+    
     result_data = {
         "applicable_law_categories": law_categories,
         "appointment_required": has_appointment,
         "key_obligations": key_obligations,
         "risk_level": _determine_risk_level(len(matched_rules)),
-        "rules": [
-            {
-                "rule_code": r.get("rule_code") or r.get("rule_id"),
-                "rule_name": r.get("remarks") or r.get("rule_name") or r.get("obligation_summary", ""),
-                "law_name": r.get("law_name", ""),
-                "law_article": r.get("law_article", ""),
-                "obligation": r.get("remarks") or r.get("obligation_summary") or r.get("rule_name", ""),
-                "rule_type": r.get("rule_type") or str(r.get("rule_type_code", "")),
-                "stage": r.get("diagnosis_stage", 1),
-            }
-            for r in matched_rules
-        ],
+        "rules": rules_with_article,
+        # v5.8.0 메타
+        "article_mapping_stats": {
+            "total_rules": len(matched_rules),
+            "mapped_rules": sum(1 for r in rules_with_article if r["has_article_text"]),
+            "coverage_pct": round(
+                (sum(1 for r in rules_with_article if r["has_article_text"]) * 100.0 / len(matched_rules))
+                if matched_rules else 0, 1
+            ),
+        },
     }
     try:
         res = (
@@ -157,6 +195,9 @@ async def run_apply_engine_runtime(
     get_effective_worker_count_fn,
     get_construction_amount_threshold_fn,
 ):
+    """
+    v5.8.0: build_result 호출 시 supabase 전달하여 조문 본문 포함.
+    """
     if mode not in ("facility", "process", "equipment", "all"):
         raise ValueError("mode는 facility/process/equipment/all 중 하나여야 합니다.")
     fac_res = supabase.table("factories").select("*").eq("id", factory_id).single().execute()
@@ -208,8 +249,20 @@ async def run_apply_engine_runtime(
         applicable_ids = {r["rule_id"] for r, _ in source_pairs}
         not_applicable = [r for r in all_rules if r["rule_id"] not in applicable_ids]
         applicable = []
-    result_for_db = build_result(applicable, not_applicable, all_rules, mode, evaluated_at, engine_version, source_pairs=source_pairs, include_not_applicable=True, factory_id=factory_id, triggered_by_source=triggered_by_source)
-    result_for_response = build_result(applicable, not_applicable, all_rules, mode, evaluated_at, engine_version, source_pairs=source_pairs, include_not_applicable=False, factory_id=factory_id, triggered_by_source=triggered_by_source)
+    
+    # v5.8.0: build_result에 supabase 전달 (조문 본문 조회)
+    result_for_db = build_result(
+        applicable, not_applicable, all_rules, mode, evaluated_at, engine_version,
+        source_pairs=source_pairs, include_not_applicable=True,
+        factory_id=factory_id, triggered_by_source=triggered_by_source,
+        supabase=supabase,
+    )
+    result_for_response = build_result(
+        applicable, not_applicable, all_rules, mode, evaluated_at, engine_version,
+        source_pairs=source_pairs, include_not_applicable=False,
+        factory_id=factory_id, triggered_by_source=triggered_by_source,
+        supabase=supabase,
+    )
     try:
         supabase.table("factories").update({"legal_result_json": result_for_db, "last_diagnosis_at": evaluated_at, "diagnosis_status": "DONE", "legal_applicable_count": result_for_db.get("applicable_count", 0), "updated_at": evaluated_at}).eq("id", factory_id).execute()
     except Exception as e:
@@ -222,6 +275,7 @@ async def run_apply_engine_runtime(
 
 
 def run_apply_quote_runtime(supabase, quote_id: str, engine_version: str, parse_survey_data_fn, survey_to_context_fn, now_iso_fn):
+    """v5.8.0: build_result에 supabase 전달."""
     qres = supabase.table("quotes").select("id, quote_no, survey_data").eq("id", quote_id).single().execute()
     if not qres.data:
         raise LookupError("견적을 찾을 수 없습니다.")
@@ -232,7 +286,14 @@ def run_apply_quote_runtime(supabase, quote_id: str, engine_version: str, parse_
     all_rules = supabase.table("master_building_legal_rules").select("*").eq("is_active", True).execute().data or []
     evaluated_at = now_iso_fn()
     applicable, not_applicable = _evaluate_conditions(context, all_rules)
-    result_data = build_result(applicable, not_applicable, all_rules, "facility", evaluated_at, engine_version, include_not_applicable=False, quote_id=quote_id, quote_no=qres.data.get("quote_no"), source="quote_survey", not_applicable_total=len(not_applicable), triggered_by_source={"factory_condition": len(applicable)})
+    result_data = build_result(
+        applicable, not_applicable, all_rules, "facility", evaluated_at, engine_version,
+        include_not_applicable=False,
+        quote_id=quote_id, quote_no=qres.data.get("quote_no"), source="quote_survey",
+        not_applicable_total=len(not_applicable),
+        triggered_by_source={"factory_condition": len(applicable)},
+        supabase=supabase,
+    )
     try:
         supabase.table("quotes").update({"legal_result_json": result_data, "legal_evaluated_at": evaluated_at, "legal_applicable_count": result_data["applicable_count"], "updated_at": evaluated_at}).eq("id", quote_id).execute()
     except Exception as e:
