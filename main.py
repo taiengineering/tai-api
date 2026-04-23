@@ -1,4 +1,5 @@
-# main.py — v5.34.0
+# main.py — v5.35.0
+# v5.35.0: payment_billing 라우터 등록 (POST /payments/inicis/billing/*, /payments/subscriptions/{id}/cancel)
 # v5.34.0: Sentry 복원 + /health 개선 (항상 200 반환) + diagram_proxy 복원
 # v5.33.0: Sentry 에러 모니터링 (SENTRY_DSN 환경 변수 시 초기화)
 # v5.32.0: diagram_proxy 라우터 등록 (GET /api/v1/diagrams/{number}) — Supabase Storage 한글 SVG 우회
@@ -97,6 +98,7 @@ from routers.tbm_templates           import router as tbm_templates_router
 from routers.safety_meetings         import router as safety_meetings_router
 from routers.risk_assessments        import router as risk_assessments_router
 from routers.payment                 import router as payment_router
+from routers.payment_billing         import router as payment_billing_router   # v5.35.0 정기결제
 from routers.corrective_actions      import router as corrective_actions_router
 from routers.messaging               import router as messaging_router
 from routers.fcm                     import router as fcm_router
@@ -129,7 +131,7 @@ from routers.diagram_proxy           import router as diagram_proxy_router      
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.34.0"
+APP_VERSION = "5.35.0"
 
 
 @asynccontextmanager
@@ -278,6 +280,7 @@ app.include_router(tbm_templates_router)
 app.include_router(safety_meetings_router)
 app.include_router(risk_assessments_router)
 app.include_router(payment_router)
+app.include_router(payment_billing_router)                                        # v5.35.0 정기결제
 app.include_router(corrective_actions_router)
 app.include_router(messaging_router)
 app.include_router(fcm_router)
