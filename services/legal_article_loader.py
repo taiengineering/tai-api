@@ -1,0 +1,155 @@
+"""services/legal_article_loader.py
+
+rule_id 리스트를 받아서 rule_article_mapping을 통해 law_article 본문을
+배치로 조회하는 헬퍼. N+1 쿼리 방지를 위해 2회 쿼리로 처리.
+
+사용:
+    from services.legal_article_loader import fetch_article_contexts
+    
+    rule_ids = [r['rule_id'] for r in matched_rules]
+    article_ctx = fetch_article_contexts(supabase, rule_ids)
+    
+    for rule in matched_rules:
+        formatted = format_rule_result_db(rule, article_ctx.get(rule['rule_id']))
+
+반환 형식:
+    {
+        "rule_id_1": {
+            "article_id": "uuid",
+            "article_internal_key": "0050001" | "nfpc-art-038" | "nftc-sec-1.7.1.11",
+            "article_title": "...",
+            "article_text": "...",
+            "confidence": 0.95,
+            "law_system": "LEGAL" | "NFPC" | "NFTC" | "OTHER"
+        },
+        ...
+    }
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+
+def classify_law_system(article_internal_key: str) -> str:
+    """article_internal_key로 법령 체계 분류."""
+    if not article_internal_key:
+        return "UNKNOWN"
+    key = article_internal_key.strip()
+    # 체계 A: 법제처 공식 7자리 숫자 (예: 0050001)
+    if len(key) == 7 and key.isdigit():
+        return "LEGAL"
+    if key.startswith("nfpc-"):
+        return "NFPC"
+    if key.startswith("nftc-"):
+        return "NFTC"
+    if key.startswith("admrul-"):
+        return "ADMRUL_FALLBACK"
+    return "OTHER"
+
+
+def fetch_article_contexts(supabase, rule_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+    """
+    rule_id 리스트 → {rule_id: article_info} 매핑 반환.
+    
+    내부 구현:
+      1) rule_article_mapping에서 rule_id → article_id 조회 (in_ 배치)
+      2) law_article에서 article_id → 본문 조회 (in_ 배치)
+      3) dict 합쳐서 반환
+    
+    rule_id가 매핑 안 된 경우 해당 rule_id는 결과 dict에 없음.
+    호출자는 result.get(rule_id)로 접근.
+    """
+    if not rule_ids:
+        return {}
+    
+    # 중복 제거
+    unique_rule_ids = list(set(filter(None, rule_ids)))
+    if not unique_rule_ids:
+        return {}
+    
+    try:
+        # Step 1: rule_article_mapping 조회
+        mapping_result = (
+            supabase.table("rule_article_mapping")
+            .select("rule_id, article_id, article_internal_key, confidence_score")
+            .in_("rule_id", unique_rule_ids)
+            .execute()
+        )
+        mappings = mapping_result.data or []
+    except Exception as e:
+        print(f"[LEGAL_ARTICLE_LOADER] rule_article_mapping 조회 실패: {e}")
+        return {}
+    
+    if not mappings:
+        return {}
+    
+    # 매핑된 article_id 목록 (하나의 rule에 여러 article이 매칭될 수 있음)
+    article_ids = list(set(
+        m["article_id"] for m in mappings
+        if m.get("article_id")
+    ))
+    
+    if not article_ids:
+        return {}
+    
+    try:
+        # Step 2: law_article 본문 배치 조회
+        article_result = (
+            supabase.table("law_article")
+            .select(
+                "id, article_internal_key, article_no, article_sub_no, "
+                "article_type, article_title, article_text, "
+                "article_status_code, law_id"
+            )
+            .in_("id", article_ids)
+            .eq("article_status_code", "ACTIVE")
+            .execute()
+        )
+        articles = article_result.data or []
+    except Exception as e:
+        print(f"[LEGAL_ARTICLE_LOADER] law_article 조회 실패: {e}")
+        return {}
+    
+    # article_id → article 정보 인덱싱
+    article_by_id = {a["id"]: a for a in articles}
+    
+    # Step 3: rule_id 기준으로 집계
+    # 한 rule에 여러 매핑이 있으면 confidence_score 가장 높은 것 선택
+    result: Dict[str, Dict[str, Any]] = {}
+    
+    for m in mappings:
+        rid = m.get("rule_id")
+        aid = m.get("article_id")
+        if not rid or not aid or aid not in article_by_id:
+            continue
+        
+        article = article_by_id[aid]
+        confidence = float(m.get("confidence_score") or 0)
+        
+        # 이미 더 높은 confidence 매핑이 있으면 건너뜀
+        existing = result.get(rid)
+        if existing and existing.get("confidence", 0) >= confidence:
+            continue
+        
+        internal_key = article.get("article_internal_key") or ""
+        
+        result[rid] = {
+            "article_id":            article["id"],
+            "article_internal_key":  internal_key,
+            "article_no":            article.get("article_no"),
+            "article_sub_no":        article.get("article_sub_no"),
+            "article_type":          article.get("article_type", ""),
+            "article_title":         article.get("article_title", ""),
+            "article_text":          article.get("article_text", ""),
+            "law_id":                article.get("law_id"),
+            "confidence":            confidence,
+            "law_system":            classify_law_system(internal_key),
+        }
+    
+    return result
+
+
+def fetch_single_article_context(supabase, rule_id: str) -> Optional[Dict[str, Any]]:
+    """단일 rule_id 조회 (편의 함수)."""
+    ctx_map = fetch_article_contexts(supabase, [rule_id])
+    return ctx_map.get(rule_id)

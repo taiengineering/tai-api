@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from services.legal_helpers import _normalize_target_code
 from services.legal_rules import _is_notify, _resolve_obligation_type
@@ -112,7 +112,15 @@ def _get_penalty_fallback(obligation_type: str) -> str:
     return _map.get((obligation_type or "").upper(), "관련 벌칙 확인 필요")
 
 
-def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
+def format_rule_result_db(rule: Dict[str, Any], article_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    룰 → 결과 dict 포맷.
+    
+    v5.8.0 (2026-04-23): article_info 파라미터 추가
+      - rule_article_mapping을 통해 연결된 law_article 정보를 주입
+      - 조문 본문(article_text), 내부 키, 체계(LEGAL/NFPC/NFTC) 포함
+      - article_info가 None이면 has_article_text=False (기존 호환)
+    """
     obl_summary = (rule.get("obligation_summary") or "").strip()
     remarks_txt = (rule.get("remarks") or "").strip()
     desc = remarks_txt or obl_summary
@@ -134,7 +142,8 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
     _pen_raw = rule.get("penalty_summary") or ""
     _penalty = _pen_raw.strip() if _pen_raw.strip() else _get_penalty_fallback(_obl_type)
     _is_recurring = bool(rule.get("cycle_unit_std"))
-    return {
+    
+    result = {
         "rule_id": rule.get("rule_id", ""),
         "rule_type": str(rule.get("rule_type_code") or ""),
         "law_name": rule.get("law_name") or "",
@@ -177,6 +186,32 @@ def format_rule_result_db(rule: Dict[str, Any]) -> Dict[str, Any]:
         "report_method_std": report_method_std,
         "report_method_label": REPORT_METHOD_MAP.get(report_method_std, report_method_std),
     }
+    
+    # v5.8.0 조문 본문 필드 추가
+    if article_info:
+        result.update({
+            "article_id":             article_info.get("article_id"),
+            "article_internal_key":   article_info.get("article_internal_key") or "",
+            "article_title":          article_info.get("article_title") or "",
+            "article_text":           article_info.get("article_text") or "",
+            "article_type":           article_info.get("article_type") or "",
+            "law_system":             article_info.get("law_system") or "UNKNOWN",
+            "article_confidence":     article_info.get("confidence", 0),
+            "has_article_text":       bool(article_info.get("article_text")),
+        })
+    else:
+        result.update({
+            "article_id":             None,
+            "article_internal_key":   "",
+            "article_title":          "",
+            "article_text":           "",
+            "article_type":           "",
+            "law_system":             "NOT_MAPPED",
+            "article_confidence":     0,
+            "has_article_text":       False,
+        })
+    
+    return result
 
 
 def _classify_rules(rules: list, triggered: dict):
@@ -202,11 +237,34 @@ def _classify_one(rule: dict, formatted: dict, triggered: dict):
         triggered.get(RULE_TYPE_MAP.get(str(rule.get("rule_type_code", "")), "action"), triggered["action"]).append(formatted)
 
 
-def _classify_rules_db(rules: List[Dict[str, Any]], triggered: Dict[str, List]) -> None:
+def _classify_rules_db(
+    rules: List[Dict[str, Any]],
+    triggered: Dict[str, List],
+    article_contexts: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> None:
+    """
+    룰을 의무 유형별로 분류하여 triggered dict에 저장.
+    
+    v5.8.0: article_contexts 파라미터 추가
+      - {rule_id: article_info} 형태의 dict
+      - format_rule_result_db에 article_info 주입
+      - None이면 조문 본문 없이 처리 (기존 동작)
+    
+    사용:
+        from services.legal_article_loader import fetch_article_contexts
+        rule_ids = [r.get("rule_id") for r in matched_rules]
+        article_ctx = fetch_article_contexts(supabase, rule_ids)
+        _classify_rules_db(matched_rules, triggered, article_ctx)
+    """
     seen_appoint: set = set()
+    ctx_map = article_contexts or {}
+    
     for rule in rules:
-        formatted = format_rule_result_db(rule)
+        rule_id = rule.get("rule_id", "")
+        article_info = ctx_map.get(rule_id)
+        formatted = format_rule_result_db(rule, article_info)
         ot = (rule.get("obligation_type") or "").strip().upper()
+        
         if ot == "APPOINT":
             target = _normalize_target_code((rule.get("appointment_target_code") or rule.get("rule_id") or "").strip())
             if target and target in seen_appoint:
@@ -276,5 +334,3 @@ def build_result(applicable, not_applicable, all_rules, mode, evaluated_at, engi
     if include_not_applicable:
         result["not_applicable"] = [format_rule_result(r) for r in not_applicable]
     return result
-
-
