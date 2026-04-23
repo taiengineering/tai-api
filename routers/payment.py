@@ -1,5 +1,11 @@
 """
-이니시스 INIStdPay 표준결제 라우터 — v3.3.0
+이니시스 INIStdPay 표준결제 라우터 — v3.4.0
+
+v3.4.0 (2026-04-23)
+  [FEAT] /payments/billing/terms — 구독 이용 안내 페이지 추가 (이니시스 심사용)
+         - 공개 HTML 페이지 (로그인 불필요)
+         - 결제 주기/해지 방법/환불 정책/문의처 명시
+         - /payments/pricing?type=billing 배너에서 링크
 
 v3.3.0 (2026-04-23)
   [FEAT] /payments/pricing 에 단건/정기 토글 추가 (?type=billing)
@@ -283,6 +289,11 @@ _PRICING_HTML = """<!doctype html>
     <div>
       <strong>매월 자동 결제</strong>로 진행됩니다. 첫 결제는 즉시 이루어지며, 이후 매월 같은 날짜에 자동 청구됩니다.
       등록한 카드는 안전하게 이니시스에 저장되고, 언제든 구독을 해지할 수 있습니다.
+      <div class="mt-2">
+        <a href="/payments/billing/terms" target="_blank" style="color:#1e40af;font-weight:600;text-decoration:underline;">
+          <i class="ti ti-file-text me-1"></i>구독 이용 안내 전문 보기
+        </a>
+      </div>
     </div>
   </div>
 
@@ -1254,3 +1265,181 @@ def get_vbank_status(payment_id: str):
             "confirmed_at":     p.get("vbank_confirmed_at"),
         },
     }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 구독 이용 안내 페이지 — 이니시스 정기결제 심사용 (v3.4.0)
+# ════════════════════════════════════════════════════════════════════════
+
+_BILLING_TERMS_HTML = """<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>구독 이용 안내 | TAI Safe</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    * { font-family: 'Noto Sans KR', sans-serif; }
+    body { background:#f8fafc; color:#1f2937; line-height:1.7; }
+    .page-hero { background:linear-gradient(135deg,#1a1f36 0%,#0d6efd 60%,#0a58ca 100%); color:#fff; padding:2.5rem 0; text-align:center; }
+    .page-hero h1 { font-size:1.8rem; font-weight:800; margin-bottom:.25rem; }
+    .page-hero p  { opacity:.85; margin-bottom:0; font-size:.95rem; }
+    .content-card { background:#fff; border-radius:1rem; box-shadow:0 6px 30px rgba(0,0,0,.06); padding:2rem 2.2rem; margin-bottom:1rem; }
+    section h2 { font-size:1.15rem; font-weight:800; color:#0d6efd; margin-top:1.75rem; margin-bottom:.75rem; display:flex; align-items:center; gap:.5rem; }
+    section h2:first-of-type { margin-top:0; }
+    section h2 .num { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:50%; background:#eff6ff; color:#0d6efd; font-size:.85rem; font-weight:800; }
+    .kv-table { width:100%; border-collapse:collapse; margin:.5rem 0; }
+    .kv-table th, .kv-table td { border-bottom:1px solid #f0f0f0; padding:.65rem .5rem; text-align:left; vertical-align:top; font-size:.93rem; }
+    .kv-table th { width:32%; color:#6b7280; font-weight:600; background:#fafafa; }
+    .callout { background:#eff6ff; border-left:4px solid #0d6efd; border-radius:.5rem; padding:.85rem 1rem; margin:.75rem 0; font-size:.92rem; color:#1e40af; }
+    .callout.warn { background:#fff7ed; border-left-color:#f59e0b; color:#9a3412; }
+    ul.plain { padding-left:1.2rem; }
+    ul.plain li { margin:.3rem 0; font-size:.93rem; }
+    .contact-box { background:#f8fafc; border-radius:.75rem; padding:1.25rem; text-align:center; margin-top:1rem; }
+    .contact-box .email { font-size:1.05rem; font-weight:700; color:#0d6efd; }
+    .footer-nav { text-align:center; padding:1.5rem 0 2rem; }
+    .footer-nav a { color:#6b7280; font-size:.88rem; text-decoration:none; margin:0 .5rem; }
+    .footer-nav a:hover { color:#0d6efd; text-decoration:underline; }
+    .updated-at { color:#9ca3af; font-size:.82rem; text-align:right; margin-bottom:1rem; }
+  </style>
+</head>
+<body>
+
+<div class="page-hero">
+  <div class="container">
+    <div class="badge bg-white bg-opacity-25 text-white mb-2" style="font-size:.78rem;padding:.35em .9em;">
+      <i class="ti ti-file-text me-1"></i>TAI Safe 정기결제
+    </div>
+    <h1>구독 이용 안내</h1>
+    <p>매월 자동결제 서비스 이용 전 꼭 확인해 주세요.</p>
+  </div>
+</div>
+
+<div class="container py-4" style="max-width:820px">
+  <div class="updated-at">최종 업데이트: 2026년 4월 23일</div>
+
+  <div class="content-card">
+
+    <section>
+      <h2><span class="num">1</span>서비스 개요</h2>
+      <p>
+        <strong>TAI Safe</strong>는 주식회사 타이엔지니어링(이하 '회사')이 제공하는 산업안전 관리 SaaS 서비스입니다.
+        본 페이지는 정기결제(자동결제) 방식으로 TAI Safe를 이용하실 경우의 결제·해지·환불에 관한 안내입니다.
+      </p>
+    </section>
+
+    <section>
+      <h2><span class="num">2</span>상품 및 요금</h2>
+      <table class="kv-table">
+        <tr><th>상품명</th><td>TAI Safe 베이직 / 프리미엄</td></tr>
+        <tr><th>결제 금액</th><td>베이직 월 79,000원 / 프리미엄 월 149,000원 <span style="color:#6b7280;font-size:.85rem;">(부가세 포함)</span></td></tr>
+        <tr><th>결제 주기</th><td>매월 1회 자동 결제</td></tr>
+        <tr><th>결제 수단</th><td>신용카드 / 체크카드 (KG이니시스 빌링키 방식)</td></tr>
+      </table>
+      <div class="callout">
+        표시된 금액은 고지 시점의 가격이며, 추후 요금 변경 시 최소 30일 전에 이메일 및 서비스 내 공지로 안내합니다.
+        변경된 요금에 동의하지 않으실 경우 다음 결제일 전까지 해지하시면 추가 결제가 발생하지 않습니다.
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="num">3</span>결제 방식 및 자동 갱신</h2>
+      <ul class="plain">
+        <li><strong>최초 결제</strong>: 결제 페이지에서 카드 등록을 완료하시면 즉시 첫 달 요금이 결제되며, 서비스가 즉시 시작됩니다.</li>
+        <li><strong>자동 갱신</strong>: 최초 결제일을 기준으로 <strong>매월 같은 날짜</strong>에 등록된 카드로 동일 금액이 자동 결제됩니다.</li>
+        <li><strong>결제 실패 시</strong>: 카드 한도 초과·유효기간 만료 등으로 결제가 실패할 경우 최대 3회 재시도하며, 그래도 실패하면 서비스가 일시 정지됩니다. 고객님께는 이메일로 별도 안내드립니다.</li>
+        <li><strong>영수증</strong>: 결제 완료 시 등록된 이메일로 전자영수증이 발송됩니다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2><span class="num">4</span>카드 정보 보관</h2>
+      <p>
+        고객님의 카드 정보는 <strong>회사 서버에 저장되지 않으며</strong>,
+        전자금융거래법 및 관련 규정에 따라 전자지급결제대행사(PG)인 <strong>KG이니시스</strong>의
+        PCI-DSS 인증 시스템에 안전하게 보관됩니다.
+        회사는 KG이니시스가 발급한 빌링키(BillKey)만을 보유하며, 이 빌링키로 정기 결제를 진행합니다.
+      </p>
+    </section>
+
+    <section>
+      <h2><span class="num">5</span>구독 해지 방법</h2>
+      <div class="callout">
+        구독은 <strong>언제든지 해지</strong> 가능하며, 해지 위약금이나 추가 비용은 발생하지 않습니다.
+      </div>
+      <p><strong>해지 절차</strong>:</p>
+      <ul class="plain">
+        <li>아래 고객센터로 <strong>해지 요청 이메일</strong>을 보내주세요.</li>
+        <li>영업일 기준 1–2일 내에 확인 후 처리해 드립니다.</li>
+        <li>해지 완료 시 결제 이메일로 해지 확인 안내를 발송합니다.</li>
+        <li>해지 이후 <strong>차월부터 자동 결제가 즉시 중단</strong>됩니다.</li>
+      </ul>
+      <div class="callout warn">
+        다음 결제일 이전에 해지하시면 다음 달 요금은 청구되지 않습니다.
+        이미 결제된 당월 요금은 이용기간 일할 기준에 따라 환불 여부가 결정됩니다. (아래 '6. 환불 정책' 참고)
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="num">6</span>환불 정책</h2>
+      <ul class="plain">
+        <li><strong>원칙</strong>: 이미 결제된 요금은 <strong>이용기간 일할 계산</strong>하여, 이용하지 않은 잔여 기간에 대해 환불해 드립니다.</li>
+        <li><strong>계산 방식</strong>: (월 결제금액 ÷ 해당 월 일수) × (해지일 이후 잔여 일수)</li>
+        <li><strong>환불 기간</strong>: 해지 확인 후 영업일 기준 5–7일 이내에 결제 카드로 부분 취소 처리됩니다.</li>
+        <li><strong>환불 예외</strong>: 서비스 이용약관 위반 등 회사의 귀책이 없는 사유로 회원 자격이 정지된 경우 환불이 제한될 수 있습니다.</li>
+      </ul>
+      <div class="callout">
+        <strong>예시</strong>: 4월 1일에 결제 후 4월 11일에 해지하신 경우,
+        이용일 10일(1일∼10일) 제외한 20일치를 일할 계산해 환불해 드립니다.
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="num">7</span>결제 정보 변경</h2>
+      <p>
+        카드 번호 변경, 카드 만료일 갱신 등 결제 정보 변경이 필요하신 경우 고객센터로 문의해 주세요.
+        기존 구독을 해지하지 않고도 결제 카드를 교체하실 수 있습니다.
+      </p>
+    </section>
+
+    <section>
+      <h2><span class="num">8</span>고객센터 문의</h2>
+      <div class="contact-box">
+        <div style="font-size:.9rem;color:#6b7280;margin-bottom:.4rem;">해지·환불·결제 정보 변경 문의</div>
+        <div class="email">
+          <i class="ti ti-mail me-1"></i>taiengcokr@gmail.com
+        </div>
+        <div style="font-size:.85rem;color:#6b7280;margin-top:.5rem;">
+          평일 10:00 – 18:00 · 영업일 기준 1–2일 내 회신
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="num">9</span>기타 사항</h2>
+      <ul class="plain">
+        <li>본 안내 내용은 서비스 개선 등 필요에 따라 변경될 수 있으며, 변경 시 사전 공지합니다.</li>
+        <li>본 안내에서 명시되지 않은 사항은 회사의 <a href="https://taieng.co.kr" target="_blank" style="color:#0d6efd;">서비스 이용약관</a> 및 관련 법령(전자상거래법·콘텐츠산업진흥법 등)에 따릅니다.</li>
+        <li>결제대행사 문의: KG이니시스 고객센터 1588-4954</li>
+      </ul>
+    </section>
+
+  </div>
+
+  <div class="footer-nav">
+    <a href="/payments/pricing?type=billing"><i class="ti ti-arrow-left me-1"></i>요금제 페이지로</a>
+    <span style="color:#e5e7eb;">|</span>
+    <a href="https://taieng.co.kr" target="_blank"><i class="ti ti-external-link me-1"></i>TAI Safe 홈</a>
+  </div>
+</div>
+
+</body>
+</html>"""
+
+
+@router.get("/billing/terms", response_class=HTMLResponse, include_in_schema=True)
+def payment_billing_terms_page():
+    """구독 이용 안내 페이지 — 이니시스 정기결제 심사용 공개 페이지"""
+    return HTMLResponse(content=_BILLING_TERMS_HTML, status_code=200)
