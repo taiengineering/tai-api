@@ -37,17 +37,34 @@ v1.1.0 (2026-04-02):
 """
 import os
 import json
-import re
 import uuid
 import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from typing import List, Dict, Optional, Any
 from datetime import datetime, timezone
-import httpx
 
 from db.supabase_client import get_supabase
 from services.law_context_builder import build_full_context
+from services.rule_gen_ai import (
+    _call_claude_messages as call_claude_messages_ai,
+    _fetch_few_shot_examples,
+    call_claude as call_claude_ai,
+)
+from services.rule_gen_builders import (
+    _build_draft_row,
+    _build_master_payload,
+    _build_reparse_prompt,
+    _pick_reparse_targets,
+)
+from services.rule_gen_helpers import (
+    _extract_json_payload,
+    _is_blank,
+    _normalize_submit_org_code,
+    _to_bool,
+    _validate_rule_row,
+)
+from services.rule_gen_svc import _auto_approve_to_master
 
 router = APIRouter(prefix="/law-rule-generator", tags=["AI룰생성"])
 
@@ -230,209 +247,25 @@ USER_PROMPT_TEMPLATE = """다음 법령 조문을 분석하여 판정 룰을 추
 ]"""
 
 
-def _extract_json_payload(raw: str) -> Any:
-    cleaned = re.sub(r"```json\s*", "", raw.strip())
-    cleaned = re.sub(r"```\s*", "", cleaned).strip()
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        m_arr = re.search(r"\[.*\]", cleaned, re.DOTALL)
-        if m_arr:
-            try:
-                return json.loads(m_arr.group())
-            except Exception:
-                pass
-        m_obj = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        if m_obj:
-            try:
-                return json.loads(m_obj.group())
-            except Exception:
-                pass
-    return None
-
-
-async def _call_claude_messages(system_prompt: str, user_prompt: str, model: str, max_tokens: int = 2200, timeout: int = 60) -> Any:
-    if not ANTHROPIC_API_KEY:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다.")
-
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": ANTHROPIC_API_KEY,
-                     "anthropic-version": "2023-06-01",
-                     "content-type": "application/json"},
-            json={"model": model, "max_tokens": max_tokens,
-                  "system": system_prompt,
-                  "messages": [{"role": "user", "content": user_prompt}]},
-        )
-
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Claude API 오류: {resp.text[:200]}")
-
-    raw = ""
-    for block in resp.json().get("content", []):
-        if block.get("type") == "text":
-            raw += block["text"]
-    return _extract_json_payload(raw)
-
-
 async def call_claude(law_name: str, article_text: str, full_context: str = "") -> List[Dict]:
-    user_prompt = USER_PROMPT_TEMPLATE.format(
-        law_name=law_name,
-        article_text=article_text[:3000],
-        full_context=(full_context or "")[:15000],
-        few_shot=json.dumps(FEW_SHOT_RULE, ensure_ascii=False),
-    )
-    parsed = await _call_claude_messages(SYSTEM_PROMPT, user_prompt, CLAUDE_MODEL)
-    return parsed if isinstance(parsed, list) else []
-
-
-def _normalize_submit_org_code(code: Any) -> Optional[str]:
-    value = (str(code or "").strip().lower())
-    if value in SUBMIT_ORG_LABELS:
-        return value
-    return None
-
-
-def _to_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "y", "yes"}
-    if isinstance(value, (int, float)):
-        return value != 0
-    return False
-
-
-def _safe_float(value: Any) -> Optional[float]:
+    """조문 파싱용 Claude 호출. 서비스 레이어 오류를 HTTP 예외로 변환."""
     try:
-        if value is None or value == "":
-            return None
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _safe_int(value: Any) -> Optional[int]:
-    try:
-        if value is None or value == "":
-            return None
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _build_master_payload(row: dict, rule_id: str) -> dict:
-    ob_type = row.get("obligation_type")
-    cond_val_num = _safe_float(row.get("condition_value"))
-    submit_org_code = _normalize_submit_org_code(row.get("submit_org_code"))
-    return {
-        "rule_id": rule_id,
-        "sector": row.get("sector") or "BUILDING",
-        "law_name": row.get("law_name"),
-        "law_article": row.get("law_article"),
-        "obligation_type": ob_type,
-        "obligation_summary": row.get("obligation_summary"),
-        "remarks": row.get("remarks"),
-        "penalty_summary": row.get("penalty_summary"),
-        "penalty_value": _safe_int(row.get("penalty_value")),
-        "appointment_target_code": row.get("appointment_target"),
-        "appointment_qualification_code": row.get("appointment_qualification_code"),
-        "appointment_qualification_level_code": row.get("appointment_qualification_level_code"),
-        "appointment_count_value": _safe_int(row.get("appointment_count_value")),
-        "condition_code": row.get("condition_code"),
-        "condition_operator_code": row.get("condition_operator", "gte"),
-        "condition_value": cond_val_num,
-        "inspection_cycle_value": _safe_int(row.get("inspection_cycle_value")),
-        "inspection_cycle_unit_code": row.get("inspection_cycle_unit_code"),
-        "cycle_base_guide": row.get("cycle_base_guide"),
-        "form_code": row.get("form_code"),
-        "form_name": row.get("form_name"),
-        "submit_org_code": submit_org_code,
-        "report_method_code": row.get("report_method_code"),
-        "report_method_std": row.get("report_method_std"),
-        "online_system": row.get("online_system"),
-        "system_url": row.get("system_url"),
-        "tai_feature_code": row.get("tai_feature_code"),
-        "due_days": _safe_int(row.get("due_days")),
-        "appointment_required": _to_bool(row.get("appointment_required")) or ob_type == "APPOINT",
-        "inspection_required": _to_bool(row.get("inspection_required")) or ob_type == "INSPECT",
-        "notify_required": _to_bool(row.get("notify_required")) or ob_type == "NOTIFY",
-        "report_required": _to_bool(row.get("report_required")) or ob_type == "REPORT",
-        "action_required": _to_bool(row.get("action_required")) or ob_type == "ACTION",
-        "diagnosis_stage": _safe_int(row.get("diagnosis_stage")) or 1,
-        "is_active": True,
-        "source_api": "AI_GENERATED",
-    }
-
-
-def _build_reparse_prompt(rule: dict, full_context: str, few_shot_examples: List[dict]) -> str:
-    return f"""다음 기존 master 룰의 빈 필드(null/빈문자)만 보강하세요.
-기존 값이 있는 필드는 그대로 유지하세요.
-출력은 JSON object 1개만 반환하세요.
-
-[기존 룰]
-{json.dumps(rule, ensure_ascii=False)}
-
-[같은 법령의 잘 채워진 예시]
-{json.dumps(few_shot_examples[:5], ensure_ascii=False)}
-
-[법령 원문 풀 컨텍스트]
-{(full_context or "")[:18000]}
-
-반드시 아래 키를 포함한 JSON object를 반환:
-penalty_summary, penalty_value, form_code, form_name, submit_org_code,
-due_days, report_method_code, report_method_std, appointment_qualification_code,
-appointment_qualification_level_code, appointment_count_value,
-inspection_cycle_value, inspection_cycle_unit_code, cycle_base_guide,
-online_system, system_url, tai_feature_code, remarks, condition_code,
-condition_operator_code, condition_value
-"""
-
-
-def _auto_approve_to_master(supabase, draft: dict) -> Optional[str]:
-    """초안 1건을 master에 등록하고 APPROVED 처리. rule_id 반환."""
-    rule_id = draft.get("draft_rule_id") or f"AI-{str(draft['id'])[:8].upper()}"
-    if supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute().data:
-        rule_id = rule_id + "-V2"
-    if supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute().data:
-        return None
-    ins = supabase.table("master_building_legal_rules").insert(
-        _build_master_payload(draft, rule_id)
-    ).execute()
-
-    if ins.data:
-        supabase.table("law_rule_drafts").update({
-            "status": "APPROVED",
-            "registered_rule_id": rule_id,
-            "reviewed_at": datetime.now(timezone.utc).isoformat(),
-            "reviewer_note": "자동 승인 (ai_confidence 기준)",
-        }).eq("id", draft["id"]).execute()
-        return rule_id
-    return None
-
-
-def _build_draft_row(law_name: str, law_article: str, article_id: Optional[str], article_text: str, rule: Dict[str, Any]) -> dict:
-    return {
-        "law_name": law_name,
-        "law_article": law_article,
-        "article_id": article_id,
-        "article_text": article_text[:2000],
-        "draft_rule_id": rule.get("draft_rule_id"),
-        "obligation_type": rule.get("obligation_type"),
-        "sector": rule.get("sector"),
-        "condition_code": rule.get("condition_code"),
-        "condition_operator": rule.get("condition_operator", "gte"),
-        "condition_value": str(rule["condition_value"]) if rule.get("condition_value") is not None else None,
-        "obligation_summary": rule.get("obligation_summary"),
-        "penalty_summary": rule.get("penalty_summary"),
-        "appointment_target": rule.get("appointment_target"),
-        "diagnosis_stage": rule.get("diagnosis_stage", 1),
-        "ai_confidence": rule.get("ai_confidence"),
-        "ai_reasoning": rule.get("ai_reasoning"),
-        "ai_flags": rule.get("ai_flags"),
-        "status": "PENDING",
-    }
+        return await call_claude_ai(
+            law_name,
+            article_text,
+            full_context,
+            USER_PROMPT_TEMPLATE,
+            FEW_SHOT_RULE,
+            SYSTEM_PROMPT,
+            CLAUDE_MODEL,
+            _extract_json_payload,
+            ANTHROPIC_API_KEY,
+        )
+    except RuntimeError as e:
+        msg = str(e)
+        if "ANTHROPIC_API_KEY" in msg:
+            raise HTTPException(status_code=500, detail=msg)
+        raise HTTPException(status_code=502, detail=msg)
 
 
 # ── GET /laws ──────────────────────────────────────────────
@@ -791,40 +624,6 @@ async def bulk_approve_unregistered(
     }}
 
 
-def _is_blank(value: Any) -> bool:
-    return value is None or (isinstance(value, str) and value.strip() == "")
-
-
-def _validate_rule_row(row: dict) -> List[str]:
-    errors: List[str] = []
-    cond_code = row.get("condition_code")
-    cond_op = row.get("condition_operator_code")
-    cond_val = row.get("condition_value")
-    if cond_code:
-        if cond_code not in VALID_CONDITION_CODES:
-            errors.append("invalid_condition_code")
-        if _is_blank(cond_op) or cond_val is None:
-            errors.append("condition_incomplete")
-
-    if _to_bool(row.get("inspection_required")):
-        if _is_blank(row.get("inspection_cycle_value")) or _is_blank(row.get("inspection_cycle_unit_code")):
-            errors.append("missing_inspection_cycle")
-
-    if _to_bool(row.get("report_required")) and _is_blank(row.get("report_method_code")):
-        errors.append("missing_report_method")
-
-    if _to_bool(row.get("appointment_required")) and _is_blank(row.get("appointment_qualification_code")):
-        errors.append("missing_qualification")
-
-    if row.get("penalty_summary") and _is_blank(row.get("penalty_value")):
-        errors.append("missing_penalty_value")
-
-    if _is_blank(row.get("obligation_summary")):
-        errors.append("missing_obligation_summary")
-
-    return errors
-
-
 @router.post("/validate-master")
 async def validate_master(body: dict = None):
     body = body or {}
@@ -874,35 +673,6 @@ async def validate_master(body: dict = None):
             "submit_org_labels": SUBMIT_ORG_LABELS,
         },
     }
-
-
-async def _fetch_few_shot_examples(supabase, law_name: str, limit: int = 5) -> List[dict]:
-    rows = (
-        supabase.table("master_building_legal_rules")
-        .select("*")
-        .eq("is_active", True)
-        .eq("law_name", law_name)
-        .not_.is_("obligation_summary", "null")
-        .not_.is_("remarks", "null")
-        .not_.is_("submit_org_code", "null")
-        .limit(limit)
-        .execute()
-    ).data or []
-    return rows
-
-
-def _pick_reparse_targets(rows: List[dict], limit: int) -> List[dict]:
-    def _blank_score(r: dict) -> int:
-        fields = [
-            "penalty_summary", "penalty_value", "form_code", "form_name", "submit_org_code",
-            "report_method_code", "appointment_qualification_code",
-            "inspection_cycle_value", "inspection_cycle_unit_code",
-            "cycle_base_guide", "remarks",
-        ]
-        return sum(1 for f in fields if _is_blank(r.get(f)))
-
-    rows_sorted = sorted(rows, key=_blank_score, reverse=True)
-    return rows_sorted[:limit]
 
 
 _reparse_logger = logging.getLogger("reparse-master")
@@ -956,10 +726,12 @@ async def _run_reparse_background(
                 prompt = _build_reparse_prompt(row, full_context, few_shots)
 
                 # 2. Claude Sonnet 호출 (timeout=90s)
-                parsed = await _call_claude_messages(
+                parsed = await call_claude_messages_ai(
                     "빈 필드 보강 전용 리라이팅 모델입니다. JSON object 1개만 반환하세요.",
                     prompt,
                     CLAUDE_SONNET_MODEL,
+                    _extract_json_payload,
+                    ANTHROPIC_API_KEY,
                     max_tokens=1800,
                     timeout=90,
                 )
