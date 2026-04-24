@@ -22,9 +22,10 @@ jobs:
 
       - name: 의존성 설치
         run: |
-          pip install -r requirements.txt
-          pip install pytest
-        continue-on-error: false
+          pip install fastapi uvicorn supabase python-dotenv requests \
+                     httpx python-multipart jinja2 python-dateutil \
+                     tenacity pandas openpyxl apscheduler resend \
+                     openai sentry-sdk pytest
 
       - name: pytest 실행
         run: |
