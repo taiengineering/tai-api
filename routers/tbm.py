@@ -30,7 +30,7 @@ import logging
 from typing import List, Optional
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
@@ -168,10 +168,31 @@ def get_sign_info(
     }
 
 
+def _optional_tbm_auth(authorization: Optional[str] = Header(None)) -> Optional[dict]:
+    """Authorization이 있으면 검증 (401), 없으면 None (비공개 링크 방식 허용)."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization.replace("Bearer ", "")
+    supabase = get_supabase()
+    try:
+        ur = supabase.auth.get_user(token)
+        if not ur or not ur.user:
+            raise HTTPException(status_code=401, detail="유효하지 않은 토큰")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="토큰 검증 실패")
+    return {"auth_id": str(ur.user.id)}
+
+
 @router.post("/{tbm_id}/sign")
-def submit_sign(tbm_id: str, body: MobileSignBody):
+def submit_sign(
+    tbm_id: str,
+    body: MobileSignBody,
+    _auth: Optional[dict] = Depends(_optional_tbm_auth),
+):
     """
-    v1.2.0: 전자서명 저장 (JWT 불필요).
+    v1.2.0: 전자서명 저장. v1.3.0: Authorization 검증 추가 (Optional).
 
     1. base64 데코딩 (data URI 포함 가능)
     2. Supabase Storage 'signatures' 버킷에 업로드

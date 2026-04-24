@@ -1,7 +1,10 @@
 """
-작업자 현장 점검 제출 API — v1.0.0
+작업자 현장 점검 제출 API — v1.1.0
 
-인증 없이 전화번호로 제출 가능 (작업자는 로그인 없이 페이지 사용)
+v1.1.0 (2026-04-24):
+  [ADD] Authorization 검증 (Optional — 있으면 검증, 없으면 phone 기반)
+  [ADD] items[].photo_urls 필드 수용
+  [ADD] worker_id, factory_id, schedule_id, inspection_type 필드
 
 API:
   POST /worker-check/submit   점검 결과 저장
@@ -11,7 +14,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
@@ -20,21 +23,51 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/worker-check", tags=["WorkerCheck"])
 
 
+def _optional_auth(authorization: Optional[str] = Header(None)) -> Optional[dict]:
+    """Authorization이 있으면 검증, 없으면 None 반환."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization.replace("Bearer ", "")
+    supabase = get_supabase()
+    try:
+        ur = supabase.auth.get_user(token)
+        if not ur or not ur.user:
+            raise HTTPException(status_code=401, detail={"error": "AUTH_EXPIRED"})
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail={"error": "AUTH_EXPIRED"})
+    res = supabase.table("users").select("*").eq("auth_id", str(ur.user.id)).limit(1).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+    return res.data[0]
+
+
 class CheckItem(BaseModel):
     name: str
     result: str            # ok | bad
-    note: Optional[str] = None
+    memo: Optional[str] = None
+    note: Optional[str] = None       # 구버전 호환
+    photo_urls: Optional[List[str]] = None
 
 
 class CheckSubmitBody(BaseModel):
     phone: str             # 점검자 전화번호
-    asset_name: str        # 설비명 (ex: 지게차 3톤 전동식)
+    worker_id: Optional[str] = None
+    factory_id: Optional[str] = None
+    schedule_id: Optional[str] = None
+    inspection_type: Optional[str] = None  # BEFORE_WORK | BEFORE_WORK_CON
+    asset_name: Optional[str] = None       # 설비명
     items: List[CheckItem]
     factory_name: Optional[str] = None
+    submitted_at: Optional[str] = None
 
 
 @router.post("/submit")
-def submit_check(body: CheckSubmitBody):
+def submit_check(
+    body: CheckSubmitBody,
+    current_user: Optional[dict] = Depends(_optional_auth),
+):
     """
     작업자 점검 제출.
     1. users 테이블에서 전화번호로 inspector_id 조회
@@ -82,14 +115,17 @@ def submit_check(body: CheckSubmitBody):
     # 3. 항목별 결과 저장
     result_rows = []
     for item in body.items:
-        result_rows.append({
+        row_data = {
             "inspection_id": inspection_id,
             "item_name": item.name,
             "result_code": "NORMAL" if item.result == "ok" else "ABNORMAL",
             "value_text": item.result,
-            "note": item.note or "",
+            "note": item.memo or item.note or "",
             "checked_at": now,
-        })
+        }
+        if item.photo_urls:
+            row_data["photo_urls"] = item.photo_urls
+        result_rows.append(row_data)
 
     if result_rows:
         supabase.table("safety_inspection_results").insert(result_rows).execute()

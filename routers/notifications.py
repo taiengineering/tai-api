@@ -114,20 +114,36 @@ def get_notifications(
     page:          int  = Query(default=1, ge=1),
     size:          int  = Query(default=20, ge=1, le=100),
     user_id:       Optional[str] = Query(default=None),
+    worker_id:     Optional[str] = Query(default=None),
+    phone:         Optional[str] = Query(default=None),
     company_id:    Optional[str] = Query(default=None),
     trigger_group: Optional[str] = Query(default=None),
     is_read:       Optional[bool] = Query(default=None),
     priority:      Optional[str] = Query(default=None),
 ):
-    """알림 목록 조회"""
+    """알림 목록 조회 (worker_id, phone 파라미터 추가)"""
     supabase = get_supabase()
+
+    # phone → user_id 변환
+    resolved_user_id = user_id
+    if not resolved_user_id and phone:
+        clean = phone.replace("-", "").replace(" ", "")
+        u = supabase.table("users").select("id").eq("phone", clean).limit(1).execute()
+        if not u.data:
+            fmt = f"{clean[:3]}-{clean[3:7]}-{clean[7:]}"
+            u = supabase.table("users").select("id").eq("phone", fmt).limit(1).execute()
+        if u.data:
+            resolved_user_id = u.data[0]["id"]
+    if not resolved_user_id and worker_id:
+        resolved_user_id = worker_id
+
     query = supabase.table("notifications").select("*", count="exact")
 
-    if user_id:       query = query.eq("user_id", user_id)
-    if company_id:    query = query.eq("company_id", company_id)
-    if trigger_group: query = query.eq("trigger_group", trigger_group)
+    if resolved_user_id: query = query.eq("user_id", resolved_user_id)
+    if company_id:       query = query.eq("company_id", company_id)
+    if trigger_group:    query = query.eq("trigger_group", trigger_group)
     if is_read is not None: query = query.eq("is_read", is_read)
-    if priority:      query = query.eq("priority", priority)
+    if priority:         query = query.eq("priority", priority)
 
     offset = (page - 1) * size
     res = query.order("created_at", desc=True)\

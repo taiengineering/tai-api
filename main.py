@@ -128,6 +128,9 @@ from routers.diagnosis_integrated    import router as diagnosis_integrated_route
 from routers.diagnosis_report        import router as diagnosis_report_router        # v5.31.0
 from routers.diagnosis_proposal      import router as diagnosis_proposal_router      # v5.31.1
 from routers.diagram_proxy           import router as diagram_proxy_router           # v5.32.0
+from routers.uploads                 import router as uploads_router                  # v5.36.0 사진업로드
+from routers.emergency_report        import router as emergency_report_router         # v5.36.0 긴급신고
+from routers.safety_reports          import router as safety_reports_router            # v5.36.0 이상신고
 
 logger = logging.getLogger(__name__)
 
@@ -288,6 +291,9 @@ app.include_router(worker_check_router)
 app.include_router(worker_home_router)
 app.include_router(ai_copywrite_router)
 app.include_router(mail_router)
+app.include_router(uploads_router)
+app.include_router(emergency_report_router)
+app.include_router(safety_reports_router)
 
 
 @app.get("/")

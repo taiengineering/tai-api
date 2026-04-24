@@ -14,7 +14,7 @@ API:
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
@@ -79,10 +79,30 @@ def _find_token_by_phone(supabase, phone: str) -> Optional[str]:
 
 # ── POST /workers/fcm-token ─────────────────────────────
 
+def _optional_fcm_auth(authorization: Optional[str] = Header(None)) -> Optional[dict]:
+    """Authorization이 있으면 검증, 없으면 None (하위호환)."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization.replace("Bearer ", "")
+    supabase = get_supabase()
+    try:
+        ur = supabase.auth.get_user(token)
+        if not ur or not ur.user:
+            raise HTTPException(status_code=401, detail="유효하지 않은 토큰")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="토큰 검증 실패")
+    return {"auth_id": str(ur.user.id)}
+
+
 @router.post("/fcm-token")
-def register_fcm_token(body: FcmTokenBody):
+def register_fcm_token(
+    body: FcmTokenBody,
+    _auth: Optional[dict] = Depends(_optional_fcm_auth),
+):
     """
-    FCM 토큰 등록 / 갱신.
+    FCM 토큰 등록 / 갱신. v1.2.0: Authorization 검증 추가 (Optional).
     1. worker_id 직접 지정 → worker_registry UPDATE
     2. phone → worker_registry 검색 → 없으면 users 검색
     3. 모두 없으면 422
