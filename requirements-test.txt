@@ -1,0 +1,4 @@
+# CI / 로컬 pytest — 앱 의존성 + 테스트 러너
+# (xhtml2pdf → pycairo 빌드: Ubuntu는 workflow에서 libcairo2-dev 설치)
+-r requirements.txt
+pytest>=8.0.0
