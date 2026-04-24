@@ -1,5 +1,20 @@
 """
-이니시스 INIStdPay 표준결제 라우터 — v3.2.0
+이니시스 INIStdPay 표준결제 라우터 — v3.4.0
+
+v3.4.0 (2026-04-23)
+  [FEAT] /payments/billing/terms — 구독 이용 안내 페이지 추가 (이니시스 심사용)
+         - 공개 HTML 페이지 (로그인 불필요)
+         - 결제 주기/해지 방법/환불 정책/문의처 명시
+         - /payments/pricing?type=billing 배너에서 링크
+
+v3.3.0 (2026-04-23)
+  [FEAT] /payments/pricing 에 단건/정기 토글 추가 (?type=billing)
+         - 기본은 단건결제 (기존과 동일)
+         - ?type=billing 또는 상단 탭 선택 시 /inicis/billing/prepare 호출
+         - 정기결제 UI 안내 문구, /월 단위 표시, 버튼 라벨 분기
+         - 이니시스 form 파라미터 분기:
+           단건: gopaymethod=Card,    acceptmethod=CARDONLY:CARDPOINT:centerCd(Y)
+           정기: gopaymethod=(빈값),  acceptmethod=centerCd(Y):BILLAUTH(Card)
 
 v3.2.0 (2026-04-12)
   [FEAT] VBANK(가상계좌) 결제 지원 — 연결 서비스 전용
@@ -232,6 +247,10 @@ _PRICING_HTML = """<!doctype html>
     * { font-family: 'Noto Sans KR', sans-serif; } body { background: #f8fafc; }
     .hero { background: linear-gradient(135deg,#1a1f36 0%,#0d6efd 60%,#0a58ca 100%); color:#fff; padding:3.5rem 0 3rem; text-align:center; }
     .hero h1 { font-size:2.2rem; font-weight:800; margin-bottom:.5rem; }
+    .type-toggle { display:inline-flex; background:#fff; border-radius:999px; padding:.3rem; box-shadow:0 4px 20px rgba(0,0,0,.08); margin-top:1rem; }
+    .type-toggle button { border:none; background:transparent; padding:.55rem 1.4rem; border-radius:999px; font-size:.92rem; font-weight:700; color:#64748b; cursor:pointer; transition:.2s; }
+    .type-toggle button.active { background:linear-gradient(90deg,#0d6efd,#6610f2); color:#fff; box-shadow:0 4px 14px rgba(13,110,253,.35); }
+    .type-toggle .save-badge { display:inline-block; margin-left:.35rem; padding:.08em .5em; font-size:.68rem; background:#fbbf24; color:#78350f; border-radius:.4em; vertical-align:middle; }
     .plan-card { border-radius:1.25rem; border:2px solid #dee2e6; background:#fff; box-shadow:0 6px 30px rgba(0,0,0,.07); transition:transform .18s,border-color .18s; cursor:pointer; overflow:hidden; }
     .plan-card:hover { transform:translateY(-4px); border-color:#0d6efd; }
     .plan-card.selected { border-color:#0d6efd; box-shadow:0 0 0 3px rgba(13,110,253,.18); }
@@ -240,6 +259,8 @@ _PRICING_HTML = """<!doctype html>
     .plan-name { font-size:1.4rem; font-weight:800; }
     .plan-badge { font-size:.72rem; padding:.25em .65em; border-radius:.5em; background:rgba(255,255,255,.25); color:#fff; vertical-align:middle; margin-left:.4rem; }
     .plan-price { font-size:2.2rem; font-weight:800; margin:.75rem 0 .25rem; }
+    .plan-price .unit { font-size:.9rem; font-weight:500; color:#9ca3af; margin-left:.25rem; }
+    .plan-card.premium .plan-price .unit { color:rgba(255,255,255,.7); }
     .plan-desc { font-size:.88rem; color:#6c757d; margin-top:.25rem; }
     .plan-features { padding:1.25rem 1.5rem 1.5rem; }
     .plan-features li { font-size:.88rem; padding:.3rem 0; border-bottom:1px solid #f5f5f5; display:flex; align-items:center; gap:.5rem; }
@@ -248,15 +269,34 @@ _PRICING_HTML = """<!doctype html>
     .btn-pay:disabled { opacity:.55; cursor:not-allowed; }
     .select-indicator { width:22px; height:22px; border-radius:50%; border:2px solid #dee2e6; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
     .plan-card.selected .select-indicator { background:#0d6efd; border-color:#0d6efd; color:#fff; }
+    .billing-notice { background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af; border-radius:.75rem; padding:.75rem 1rem; font-size:.85rem; display:none; align-items:flex-start; gap:.5rem; }
+    .billing-notice.show { display:flex; }
   </style>
 </head>
 <body>
 <div class="hero"><div class="container">
   <div class="badge bg-white bg-opacity-25 text-white mb-3" style="font-size:.85rem;padding:.45em 1em;"><i class="ti ti-shield-check me-1"></i>TAI Safe 요금제</div>
   <h1>안전관리를 더 스마트하게</h1>
-  <p>산업안전보건법 의무를 자동으로 파악하고, 일정·업무를 분배하세요.</p>
+  <p class="mb-0">산업안전보건법 의무를 자동으로 파악하고, 일정·업무를 분배하세요.</p>
+  <div class="type-toggle" role="tablist" aria-label="결제 유형">
+    <button type="button" id="tab-single" class="active" onclick="selectType('single')"><i class="ti ti-coin me-1"></i>단건결제</button>
+    <button type="button" id="tab-billing" onclick="selectType('billing')"><i class="ti ti-repeat me-1"></i>정기결제<span class="save-badge">매월 자동</span></button>
+  </div>
 </div></div>
 <div class="container py-5" style="max-width:900px">
+  <div id="billingNotice" class="billing-notice mb-4">
+    <i class="ti ti-info-circle" style="font-size:1.1rem;flex-shrink:0;margin-top:.1rem;"></i>
+    <div>
+      <strong>매월 자동 결제</strong>로 진행됩니다. 첫 결제는 즉시 이루어지며, 이후 매월 같은 날짜에 자동 청구됩니다.
+      등록한 카드는 안전하게 이니시스에 저장되고, 언제든 구독을 해지할 수 있습니다.
+      <div class="mt-2">
+        <a href="/payments/billing/terms" target="_blank" style="color:#1e40af;font-weight:600;text-decoration:underline;">
+          <i class="ti ti-file-text me-1"></i>구독 이용 안내 전문 보기
+        </a>
+      </div>
+    </div>
+  </div>
+
   <div class="row g-4 mb-4">
     <div class="col-md-6">
       <div class="plan-card selected" id="card-basic" onclick="selectPlan('basic')">
@@ -265,7 +305,7 @@ _PRICING_HTML = """<!doctype html>
             <div><div class="plan-name">베이직</div><div class="plan-desc">소규모 사업장에 최적</div></div>
             <div class="select-indicator" id="ind-basic"><i class="ti tabler-check" style="font-size:.85rem;"></i></div>
           </div>
-          <div class="plan-price" id="price-basic">&#8361;79,000</div>
+          <div class="plan-price"><span id="price-basic">&#8361;79,000</span><span class="unit" id="unit-basic"></span></div>
         </div>
         <div class="plan-features"><ul class="list-unstyled mb-0">
           <li><i class="ti ti-check"></i>법령 의무 자동 분석</li>
@@ -283,7 +323,7 @@ _PRICING_HTML = """<!doctype html>
             <div><div class="plan-name">프리미엄<span class="plan-badge">추천</span></div><div class="plan-desc" style="color:rgba(255,255,255,.75)">중·대규모 현장 최적</div></div>
             <div class="select-indicator" id="ind-premium" style="border-color:rgba(255,255,255,.5)"></div>
           </div>
-          <div class="plan-price" id="price-premium">&#8361;149,000</div>
+          <div class="plan-price"><span id="price-premium">&#8361;149,000</span><span class="unit" id="unit-premium"></span></div>
         </div>
         <div class="plan-features"><ul class="list-unstyled mb-0">
           <li><i class="ti ti-check" style="color:#6610f2"></i>베이직 모든 기능 포함</li>
@@ -298,19 +338,20 @@ _PRICING_HTML = """<!doctype html>
   </div>
   <div class="card border-0 shadow-sm rounded-3 p-4">
     <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
-      <div><div class="fw-bold mb-1" id="summaryText">베이직</div><div class="text-body-secondary small">부가세 포함 · 월 단위 결제</div></div>
+      <div><div class="fw-bold mb-1" id="summaryText">베이직</div><div class="text-body-secondary small" id="summarySub">부가세 포함 · 이번 한 번만 결제</div></div>
       <div class="text-end"><div class="fw-bold fs-4" id="summaryPrice">&#8361;79,000</div></div>
     </div>
     <hr class="my-3" />
     <button class="btn-pay" id="btnPay" onclick="startPayment()">
       <span class="spinner-border spinner-border-sm d-none me-1" id="paySpinner"></span>
-      <i class="ti ti-credit-card me-1" id="payIcon"></i>지금 결제하기
+      <i class="ti ti-credit-card me-1" id="payIcon"></i><span id="payLabel">지금 결제하기</span>
     </button>
     <div class="text-center mt-2"><small class="text-body-secondary"><i class="ti ti-lock me-1"></i>이니시스 안전결제 · SSL 암호화</small></div>
   </div>
 </div>
 <form id="inicisForm" method="POST" accept-charset="euc-kr" style="display:none">
-  <input type="hidden" name="version" value="1.0" /><input type="hidden" name="gopaymethod" value="Card" />
+  <input type="hidden" name="version" value="1.0" />
+  <input type="hidden" name="gopaymethod" id="f_gopaymethod" value="Card" />
   <input type="hidden" name="mid" id="f_mid" /><input type="hidden" name="oid" id="f_oid" />
   <input type="hidden" name="price" id="f_price" /><input type="hidden" name="timestamp" id="f_timestamp" />
   <input type="hidden" name="use_chkfake" value="Y" /><input type="hidden" name="signature" id="f_signature" />
@@ -319,17 +360,177 @@ _PRICING_HTML = """<!doctype html>
   <input type="hidden" name="buyertel" id="f_buyertel" /><input type="hidden" name="buyeremail" id="f_buyeremail" />
   <input type="hidden" name="returnUrl" id="f_returnUrl" /><input type="hidden" name="closeUrl" id="f_closeUrl" />
   <input type="hidden" name="currency" value="WON" /><input type="hidden" name="langtype" value="KO" />
-  <input type="hidden" name="acceptmethod" value="CARDONLY:CARDPOINT:centerCd(Y)" />
+  <input type="hidden" name="acceptmethod" id="f_acceptmethod" value="CARDONLY:CARDPOINT:centerCd(Y)" />
 </form>
 <script src="https://stdpay.inicis.com/stdjs/INIStdPay.js" charset="utf-8"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 'use strict';
-var API='https://api.taieng.co.kr',BASE={basic:79000,premium:149000},PNAME={basic:'TAI Safe 베이직',premium:'TAI Safe 프리미엄'},_plan='basic';
-function selectPlan(p){_plan=p;['basic','premium'].forEach(function(x){document.getElementById('card-'+x).classList.toggle('selected',x===p);var ind=document.getElementById('ind-'+x);if(x===p){ind.innerHTML='<i class="ti tabler-check" style="font-size:.85rem;"></i>';ind.style.background='#0d6efd';ind.style.borderColor='#0d6efd';ind.style.color='#fff';}else{ind.innerHTML='';ind.style.background='';ind.style.borderColor=x==='premium'?'rgba(255,255,255,.5)':'';ind.style.color='';}});updatePrices();}
-function updatePrices(){document.getElementById('price-basic').innerHTML='&#8361;'+BASE.basic.toLocaleString();document.getElementById('price-premium').innerHTML='&#8361;'+BASE.premium.toLocaleString();document.getElementById('summaryText').textContent=_plan==='basic'?'베이직':'프리미엄';document.getElementById('summaryPrice').innerHTML='&#8361;'+BASE[_plan].toLocaleString();}
-function startPayment(){var token=localStorage.getItem('access_token')||'',userId=localStorage.getItem('user_id')||'';if(!token||!userId){alert('로그인 후 결제해주세요.');return;}var btn=document.getElementById('btnPay'),sp=document.getElementById('paySpinner'),icon=document.getElementById('payIcon');if(btn.disabled)return;btn.disabled=true;sp.classList.remove('d-none');icon.classList.add('d-none');var total=BASE[_plan],goodname=PNAME[_plan],companyId=localStorage.getItem('company_id')||'',RETURN_URL=API+'/payments/inicis/return',CLOSE_URL=API+'/payments/result?resultCode=CLOSE';var payload=JSON.stringify({user_id:userId,product_type:'SAAS_FACILITY',company_id:companyId||undefined,amount:total,goodname:goodname,buyername:'고객',buyertel:'00000000000',plan_code:_plan.toUpperCase(),period_months:1,payment_type:'CARD',return_url:RETURN_URL,close_url:CLOSE_URL});var xhr=new XMLHttpRequest();xhr.open('POST',API+'/payments/inicis/prepare',true);xhr.setRequestHeader('Content-Type','application/json');if(token)xhr.setRequestHeader('Authorization','Bearer '+token);xhr.onload=function(){try{var d=JSON.parse(xhr.responseText);if(xhr.status<200||xhr.status>=300)throw new Error(d.detail||d.message||'결제 준비 실패');var p=d.data||d;document.getElementById('f_mid').value=p.mid||'';document.getElementById('f_oid').value=p.oid||'';document.getElementById('f_price').value=p.price||String(total);document.getElementById('f_timestamp').value=p.timestamp||'';document.getElementById('f_signature').value=p.signature||'';document.getElementById('f_verification').value=p.verification||'';document.getElementById('f_mKey').value=p.mKey||'';document.getElementById('f_goodname').value=p.goodname||goodname;document.getElementById('f_buyername').value='고객';document.getElementById('f_buyertel').value='00000000000';document.getElementById('f_buyeremail').value='';document.getElementById('f_returnUrl').value=RETURN_URL;document.getElementById('f_closeUrl').value=CLOSE_URL;INIStdPay.pay('inicisForm');}catch(e){alert('오류: '+e.message);}finally{btn.disabled=false;sp.classList.add('d-none');icon.classList.remove('d-none');}};xhr.onerror=function(){alert('네트워크 오류. 다시 시도해 주세요.');btn.disabled=false;sp.classList.add('d-none');icon.classList.remove('d-none');};xhr.send(payload);}
-updatePrices();(function(){var p=new URLSearchParams(location.search).get('plan');if(p==='premium')selectPlan('premium');})();
+var API='https://api.taieng.co.kr',
+    BASE={basic:79000,premium:149000},
+    PNAME={basic:'TAI Safe 베이직',premium:'TAI Safe 프리미엄'},
+    _plan='basic',
+    _type='single';   // 'single' | 'billing'
+
+function selectType(t){
+  if(t!=='single' && t!=='billing') return;
+  _type=t;
+  document.getElementById('tab-single').classList.toggle('active', t==='single');
+  document.getElementById('tab-billing').classList.toggle('active', t==='billing');
+  document.getElementById('billingNotice').classList.toggle('show', t==='billing');
+
+  // 하단 요약 문구
+  document.getElementById('summarySub').textContent =
+    t==='billing' ? '부가세 포함 · 매월 자동결제 (언제든 해지 가능)'
+                  : '부가세 포함 · 이번 한 번만 결제';
+  // 카드 단위 표시 (정기결제일 때만 "/월")
+  var u = t==='billing' ? ' /월' : '';
+  document.getElementById('unit-basic').textContent   = u;
+  document.getElementById('unit-premium').textContent = u;
+
+  // 버튼 라벨
+  document.getElementById('payLabel').textContent =
+    t==='billing' ? '매월 정기결제 시작하기' : '지금 결제하기';
+}
+
+function selectPlan(p){
+  _plan=p;
+  ['basic','premium'].forEach(function(x){
+    document.getElementById('card-'+x).classList.toggle('selected',x===p);
+    var ind=document.getElementById('ind-'+x);
+    if(x===p){
+      ind.innerHTML='<i class="ti tabler-check" style="font-size:.85rem;"></i>';
+      ind.style.background='#0d6efd'; ind.style.borderColor='#0d6efd'; ind.style.color='#fff';
+    }else{
+      ind.innerHTML=''; ind.style.background='';
+      ind.style.borderColor=x==='premium'?'rgba(255,255,255,.5)':''; ind.style.color='';
+    }
+  });
+  updatePrices();
+}
+
+function updatePrices(){
+  document.getElementById('price-basic').innerHTML   = '&#8361;'+BASE.basic.toLocaleString();
+  document.getElementById('price-premium').innerHTML = '&#8361;'+BASE.premium.toLocaleString();
+  document.getElementById('summaryText').textContent = _plan==='basic'?'베이직':'프리미엄';
+  document.getElementById('summaryPrice').innerHTML  = '&#8361;'+BASE[_plan].toLocaleString();
+}
+
+function startPayment(){
+  var token=localStorage.getItem('access_token')||'';
+  var userId=localStorage.getItem('user_id')||'';
+  if(!token||!userId){ alert('로그인 후 결제해주세요.'); return; }
+
+  var btn=document.getElementById('btnPay');
+  var sp=document.getElementById('paySpinner');
+  var icon=document.getElementById('payIcon');
+  if(btn.disabled) return;
+  btn.disabled=true; sp.classList.remove('d-none'); icon.classList.add('d-none');
+
+  var total=BASE[_plan];
+  var goodname=PNAME[_plan];
+  var companyId=localStorage.getItem('company_id')||'';
+  var isBilling=(_type==='billing');
+
+  // 분기 1: 엔드포인트
+  var endpoint = isBilling
+      ? (API+'/payments/inicis/billing/prepare')
+      : (API+'/payments/inicis/prepare');
+
+  // 분기 2: returnUrl (콜백 경로가 다름)
+  var RETURN_URL = isBilling
+      ? (API+'/payments/inicis/billing/return')
+      : (API+'/payments/inicis/return');
+  var CLOSE_URL = API+'/payments/result?resultCode=CLOSE';
+
+  // 분기 3: 요청 body 구조
+  var payload;
+  if(isBilling){
+    payload = JSON.stringify({
+      user_id:      userId,
+      product_type: 'SAAS_FACILITY',
+      plan_code:    _plan.toUpperCase(),
+      plan_name:    goodname,
+      amount:       total,
+      company_id:   companyId || undefined,
+      buyername:    '고객',
+      buyertel:     '00000000000',
+      return_url:   RETURN_URL,
+      close_url:    CLOSE_URL
+    });
+  } else {
+    payload = JSON.stringify({
+      user_id:       userId,
+      product_type: 'SAAS_FACILITY',
+      company_id:    companyId || undefined,
+      amount:        total,
+      goodname:      goodname,
+      buyername:     '고객',
+      buyertel:      '00000000000',
+      plan_code:     _plan.toUpperCase(),
+      period_months: 1,
+      payment_type:  'CARD',
+      return_url:    RETURN_URL,
+      close_url:     CLOSE_URL
+    });
+  }
+
+  var xhr=new XMLHttpRequest();
+  xhr.open('POST', endpoint, true);
+  xhr.setRequestHeader('Content-Type','application/json');
+  if(token) xhr.setRequestHeader('Authorization','Bearer '+token);
+
+  xhr.onload=function(){
+    try{
+      var d=JSON.parse(xhr.responseText);
+      if(xhr.status<200||xhr.status>=300){
+        throw new Error(d.detail||d.message||'결제 준비 실패');
+      }
+      var p=d.data||d;
+
+      // 이니시스 form 공통 필드
+      document.getElementById('f_mid').value          = p.mid||'';
+      document.getElementById('f_oid').value          = p.oid||'';
+      document.getElementById('f_price').value        = p.price||String(total);
+      document.getElementById('f_timestamp').value    = p.timestamp||'';
+      document.getElementById('f_signature').value    = p.signature||'';
+      document.getElementById('f_verification').value = p.verification||'';
+      document.getElementById('f_mKey').value         = p.mKey||'';
+      document.getElementById('f_goodname').value     = p.goodname||goodname;
+      document.getElementById('f_buyername').value    = '고객';
+      document.getElementById('f_buyertel').value     = '00000000000';
+      document.getElementById('f_buyeremail').value   = '';
+      document.getElementById('f_returnUrl').value    = p.returnUrl || RETURN_URL;
+      document.getElementById('f_closeUrl').value     = p.closeUrl  || CLOSE_URL;
+
+      // 정기결제: gopaymethod=""(빈값) + acceptmethod="centerCd(Y):BILLAUTH(Card)"
+      // 단건  : gopaymethod="Card"   + acceptmethod="CARDONLY:CARDPOINT:centerCd(Y)"
+      document.getElementById('f_gopaymethod').value  = (p.gopaymethod!==undefined ? p.gopaymethod : 'Card');
+      document.getElementById('f_acceptmethod').value = (p.acceptmethod || 'CARDONLY:CARDPOINT:centerCd(Y)');
+
+      INIStdPay.pay('inicisForm');
+    } catch(e){
+      alert('오류: '+e.message);
+    } finally {
+      btn.disabled=false; sp.classList.add('d-none'); icon.classList.remove('d-none');
+    }
+  };
+  xhr.onerror=function(){
+    alert('네트워크 오류. 다시 시도해 주세요.');
+    btn.disabled=false; sp.classList.add('d-none'); icon.classList.remove('d-none');
+  };
+  xhr.send(payload);
+}
+
+// 초기화: URL 쿼리스트링 해석
+updatePrices();
+(function(){
+  var qs = new URLSearchParams(location.search);
+  var t  = qs.get('type');
+  if(t==='billing') selectType('billing');
+  var p = qs.get('plan');
+  if(p==='premium') selectPlan('premium');
+})();
 </script>
 </body></html>"""
 
@@ -882,8 +1083,8 @@ def vbank_prepare(body: VbankPrepareBody):
             "buyertel":      body.buyertel  or "00000000000",
             "buyeremail":    body.buyeremail or "",
             "timestamp":     timestamp,
-            "signature":     signature,
             "verification":  verification,
+            "signature":     signature,
             "use_chkfake":   "Y",
             "returnUrl":     DEFAULT_RETURN_URL,
             "closeUrl":      DEFAULT_CLOSE_URL,
@@ -1064,3 +1265,181 @@ def get_vbank_status(payment_id: str):
             "confirmed_at":     p.get("vbank_confirmed_at"),
         },
     }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 구독 이용 안내 페이지 — 이니시스 정기결제 심사용 (v3.4.0)
+# ════════════════════════════════════════════════════════════════════════
+
+_BILLING_TERMS_HTML = """<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>구독 이용 안내 | TAI Safe</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    * { font-family: 'Noto Sans KR', sans-serif; }
+    body { background:#f8fafc; color:#1f2937; line-height:1.7; }
+    .page-hero { background:linear-gradient(135deg,#1a1f36 0%,#0d6efd 60%,#0a58ca 100%); color:#fff; padding:2.5rem 0; text-align:center; }
+    .page-hero h1 { font-size:1.8rem; font-weight:800; margin-bottom:.25rem; }
+    .page-hero p  { opacity:.85; margin-bottom:0; font-size:.95rem; }
+    .content-card { background:#fff; border-radius:1rem; box-shadow:0 6px 30px rgba(0,0,0,.06); padding:2rem 2.2rem; margin-bottom:1rem; }
+    section h2 { font-size:1.15rem; font-weight:800; color:#0d6efd; margin-top:1.75rem; margin-bottom:.75rem; display:flex; align-items:center; gap:.5rem; }
+    section h2:first-of-type { margin-top:0; }
+    section h2 .num { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:50%; background:#eff6ff; color:#0d6efd; font-size:.85rem; font-weight:800; }
+    .kv-table { width:100%; border-collapse:collapse; margin:.5rem 0; }
+    .kv-table th, .kv-table td { border-bottom:1px solid #f0f0f0; padding:.65rem .5rem; text-align:left; vertical-align:top; font-size:.93rem; }
+    .kv-table th { width:32%; color:#6b7280; font-weight:600; background:#fafafa; }
+    .callout { background:#eff6ff; border-left:4px solid #0d6efd; border-radius:.5rem; padding:.85rem 1rem; margin:.75rem 0; font-size:.92rem; color:#1e40af; }
+    .callout.warn { background:#fff7ed; border-left-color:#f59e0b; color:#9a3412; }
+    ul.plain { padding-left:1.2rem; }
+    ul.plain li { margin:.3rem 0; font-size:.93rem; }
+    .contact-box { background:#f8fafc; border-radius:.75rem; padding:1.25rem; text-align:center; margin-top:1rem; }
+    .contact-box .email { font-size:1.05rem; font-weight:700; color:#0d6efd; }
+    .footer-nav { text-align:center; padding:1.5rem 0 2rem; }
+    .footer-nav a { color:#6b7280; font-size:.88rem; text-decoration:none; margin:0 .5rem; }
+    .footer-nav a:hover { color:#0d6efd; text-decoration:underline; }
+    .updated-at { color:#9ca3af; font-size:.82rem; text-align:right; margin-bottom:1rem; }
+  </style>
+</head>
+<body>
+
+<div class="page-hero">
+  <div class="container">
+    <div class="badge bg-white bg-opacity-25 text-white mb-2" style="font-size:.78rem;padding:.35em .9em;">
+      <i class="ti ti-file-text me-1"></i>TAI Safe 정기결제
+    </div>
+    <h1>구독 이용 안내</h1>
+    <p>매월 자동결제 서비스 이용 전 꼭 확인해 주세요.</p>
+  </div>
+</div>
+
+<div class="container py-4" style="max-width:820px">
+  <div class="updated-at">최종 업데이트: 2026년 4월 23일</div>
+
+  <div class="content-card">
+
+    <section>
+      <h2><span class="num">1</span>서비스 개요</h2>
+      <p>
+        <strong>TAI Safe</strong>는 주식회사 타이엔지니어링(이하 '회사')이 제공하는 산업안전 관리 SaaS 서비스입니다.
+        본 페이지는 정기결제(자동결제) 방식으로 TAI Safe를 이용하실 경우의 결제·해지·환불에 관한 안내입니다.
+      </p>
+    </section>
+
+    <section>
+      <h2><span class="num">2</span>상품 및 요금</h2>
+      <table class="kv-table">
+        <tr><th>상품명</th><td>TAI Safe 베이직 / 프리미엄</td></tr>
+        <tr><th>결제 금액</th><td>베이직 월 79,000원 / 프리미엄 월 149,000원 <span style="color:#6b7280;font-size:.85rem;">(부가세 포함)</span></td></tr>
+        <tr><th>결제 주기</th><td>매월 1회 자동 결제</td></tr>
+        <tr><th>결제 수단</th><td>신용카드 / 체크카드 (KG이니시스 빌링키 방식)</td></tr>
+      </table>
+      <div class="callout">
+        표시된 금액은 고지 시점의 가격이며, 추후 요금 변경 시 최소 30일 전에 이메일 및 서비스 내 공지로 안내합니다.
+        변경된 요금에 동의하지 않으실 경우 다음 결제일 전까지 해지하시면 추가 결제가 발생하지 않습니다.
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="num">3</span>결제 방식 및 자동 갱신</h2>
+      <ul class="plain">
+        <li><strong>최초 결제</strong>: 결제 페이지에서 카드 등록을 완료하시면 즉시 첫 달 요금이 결제되며, 서비스가 즉시 시작됩니다.</li>
+        <li><strong>자동 갱신</strong>: 최초 결제일을 기준으로 <strong>매월 같은 날짜</strong>에 등록된 카드로 동일 금액이 자동 결제됩니다.</li>
+        <li><strong>결제 실패 시</strong>: 카드 한도 초과·유효기간 만료 등으로 결제가 실패할 경우 최대 3회 재시도하며, 그래도 실패하면 서비스가 일시 정지됩니다. 고객님께는 이메일로 별도 안내드립니다.</li>
+        <li><strong>영수증</strong>: 결제 완료 시 등록된 이메일로 전자영수증이 발송됩니다.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2><span class="num">4</span>카드 정보 보관</h2>
+      <p>
+        고객님의 카드 정보는 <strong>회사 서버에 저장되지 않으며</strong>,
+        전자금융거래법 및 관련 규정에 따라 전자지급결제대행사(PG)인 <strong>KG이니시스</strong>의
+        PCI-DSS 인증 시스템에 안전하게 보관됩니다.
+        회사는 KG이니시스가 발급한 빌링키(BillKey)만을 보유하며, 이 빌링키로 정기 결제를 진행합니다.
+      </p>
+    </section>
+
+    <section>
+      <h2><span class="num">5</span>구독 해지 방법</h2>
+      <div class="callout">
+        구독은 <strong>언제든지 해지</strong> 가능하며, 해지 위약금이나 추가 비용은 발생하지 않습니다.
+      </div>
+      <p><strong>해지 절차</strong>:</p>
+      <ul class="plain">
+        <li>아래 고객센터로 <strong>해지 요청 이메일</strong>을 보내주세요.</li>
+        <li>영업일 기준 1–2일 내에 확인 후 처리해 드립니다.</li>
+        <li>해지 완료 시 결제 이메일로 해지 확인 안내를 발송합니다.</li>
+        <li>해지 이후 <strong>차월부터 자동 결제가 즉시 중단</strong>됩니다.</li>
+      </ul>
+      <div class="callout warn">
+        다음 결제일 이전에 해지하시면 다음 달 요금은 청구되지 않습니다.
+        이미 결제된 당월 요금은 이용기간 일할 기준에 따라 환불 여부가 결정됩니다. (아래 '6. 환불 정책' 참고)
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="num">6</span>환불 정책</h2>
+      <ul class="plain">
+        <li><strong>원칙</strong>: 이미 결제된 요금은 <strong>이용기간 일할 계산</strong>하여, 이용하지 않은 잔여 기간에 대해 환불해 드립니다.</li>
+        <li><strong>계산 방식</strong>: (월 결제금액 ÷ 해당 월 일수) × (해지일 이후 잔여 일수)</li>
+        <li><strong>환불 기간</strong>: 해지 확인 후 영업일 기준 5–7일 이내에 결제 카드로 부분 취소 처리됩니다.</li>
+        <li><strong>환불 예외</strong>: 서비스 이용약관 위반 등 회사의 귀책이 없는 사유로 회원 자격이 정지된 경우 환불이 제한될 수 있습니다.</li>
+      </ul>
+      <div class="callout">
+        <strong>예시</strong>: 4월 1일에 결제 후 4월 11일에 해지하신 경우,
+        이용일 10일(1일∼10일) 제외한 20일치를 일할 계산해 환불해 드립니다.
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="num">7</span>결제 정보 변경</h2>
+      <p>
+        카드 번호 변경, 카드 만료일 갱신 등 결제 정보 변경이 필요하신 경우 고객센터로 문의해 주세요.
+        기존 구독을 해지하지 않고도 결제 카드를 교체하실 수 있습니다.
+      </p>
+    </section>
+
+    <section>
+      <h2><span class="num">8</span>고객센터 문의</h2>
+      <div class="contact-box">
+        <div style="font-size:.9rem;color:#6b7280;margin-bottom:.4rem;">해지·환불·결제 정보 변경 문의</div>
+        <div class="email">
+          <i class="ti ti-mail me-1"></i>taiengcokr@gmail.com
+        </div>
+        <div style="font-size:.85rem;color:#6b7280;margin-top:.5rem;">
+          평일 10:00 – 18:00 · 영업일 기준 1–2일 내 회신
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="num">9</span>기타 사항</h2>
+      <ul class="plain">
+        <li>본 안내 내용은 서비스 개선 등 필요에 따라 변경될 수 있으며, 변경 시 사전 공지합니다.</li>
+        <li>본 안내에서 명시되지 않은 사항은 회사의 <a href="https://taieng.co.kr" target="_blank" style="color:#0d6efd;">서비스 이용약관</a> 및 관련 법령(전자상거래법·콘텐츠산업진흥법 등)에 따릅니다.</li>
+        <li>결제대행사 문의: KG이니시스 고객센터 1588-4954</li>
+      </ul>
+    </section>
+
+  </div>
+
+  <div class="footer-nav">
+    <a href="/payments/pricing?type=billing"><i class="ti ti-arrow-left me-1"></i>요금제 페이지로</a>
+    <span style="color:#e5e7eb;">|</span>
+    <a href="https://taieng.co.kr" target="_blank"><i class="ti ti-external-link me-1"></i>TAI Safe 홈</a>
+  </div>
+</div>
+
+</body>
+</html>"""
+
+
+@router.get("/billing/terms", response_class=HTMLResponse, include_in_schema=True)
+def payment_billing_terms_page():
+    """구독 이용 안내 페이지 — 이니시스 정기결제 심사용 공개 페이지"""
+    return HTMLResponse(content=_BILLING_TERMS_HTML, status_code=200)

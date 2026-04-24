@@ -7,8 +7,12 @@ on:
     branches: [main, dev]
 
 jobs:
-  pytest:
+  test:
+    name: "pytest (unit tests)"
     runs-on: ubuntu-latest
+    env:
+      INTERNAL_API_SECRET: test
+      ANTHROPIC_API_KEY: test
     steps:
       - uses: actions/checkout@v4
 
@@ -28,11 +32,8 @@ jobs:
         run: pip install -r requirements-test.txt
 
       - name: Run pytest
-        env:
-          INTERNAL_API_SECRET: test
-          ANTHROPIC_API_KEY: test
         run: |
-          pytest tests/ -v \
+          pytest tests/ -v --tb=short \
             --ignore=tests/check_db_integrity.py \
             --ignore=tests/check_mapping_coverage.py \
             --ignore=tests/test_legal_engine.py \
