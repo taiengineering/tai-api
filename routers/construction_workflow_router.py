@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -42,6 +43,14 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _validate_uuid(value: str) -> str:
+    try:
+        uuid.UUID(value)
+        return value
+    except ValueError:
+        raise HTTPException(status_code=400, detail="유효하지 않은 ID 형식입니다.")
+
+
 def _ptw_number(site_id: str, supabase) -> str:
     year = datetime.now().year
     res = supabase.table("construction_works").select("id", count="exact").eq("site_id", site_id).execute()
@@ -56,6 +65,7 @@ async def list_processes(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
+    site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
         data = run_list_query(
@@ -73,6 +83,7 @@ async def list_processes(
 
 @router.post("/sites/{site_id}/processes")
 async def create_process(site_id: str, body: ProcessCreate):
+    site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
         data = body.model_dump(exclude_none=True)
@@ -133,6 +144,7 @@ async def list_works(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
+    site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
         data = run_list_query(
@@ -150,6 +162,7 @@ async def list_works(
 
 @router.post("/sites/{site_id}/works")
 async def create_work(site_id: str, body: WorkCreate):
+    site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
         data = body.model_dump(exclude_none=True)
@@ -225,6 +238,7 @@ async def list_workers(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
+    site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
         data = run_list_query(
@@ -248,6 +262,7 @@ async def list_workers(
 
 @router.post("/sites/{site_id}/workers")
 async def create_worker(site_id: str, body: WorkerCreate):
+    site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
         data = body.model_dump(exclude_none=True)
@@ -321,6 +336,7 @@ async def list_inspections(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
+    site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
         data = run_list_query(
@@ -344,6 +360,7 @@ async def list_inspections(
 
 @router.post("/sites/{site_id}/inspections")
 async def create_inspection(site_id: str, body: InspectionCreate):
+    site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
         data = prepare_inspection_payload(body.model_dump(exclude_none=True), _now_iso)

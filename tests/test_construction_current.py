@@ -1,6 +1,12 @@
 from types import SimpleNamespace
 
+import pytest
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+
 from routers import construction
+from routers.construction_sites_router import _validate_uuid, router as construction_sites_router
+from routers.construction_workflow_router import router as construction_workflow_router
 from services import construction_svc
 
 
@@ -130,6 +136,31 @@ def test_auto_diagnose_and_schedule_merges_inspection_and_action(monkeypatch):
     )
     assert called["rule_ids"] == ["I-1", "A-1"]
     assert out["schedules"]["total_rules"] == 2
+
+
+def test_invalid_uuid_returns_400_not_500():
+    """비-UUID site_id → HTTPException(400) (Supabase 500 유발 방지)."""
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_uuid("not-a-uuid")
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "유효하지 않은 ID 형식입니다."
+
+
+def test_invalid_site_id_get_returns_400():
+    app = FastAPI()
+    app.include_router(construction_sites_router, prefix="/construction")
+    client = TestClient(app)
+    r = client.get("/construction/sites/not-a-uuid")
+    assert r.status_code == 400
+    assert r.json().get("detail") == "유효하지 않은 ID 형식입니다."
+
+
+def test_invalid_site_id_workflow_returns_400():
+    app = FastAPI()
+    app.include_router(construction_workflow_router, prefix="/construction")
+    client = TestClient(app)
+    r = client.get("/construction/sites/bad-id/processes")
+    assert r.status_code == 400
 
 
 def test_penalty_like_fail_count_in_inspection_payload():

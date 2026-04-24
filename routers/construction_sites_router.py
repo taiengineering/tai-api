@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -27,6 +28,14 @@ router = APIRouter(tags=["건설안전"])
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _validate_uuid(value: str) -> str:
+    try:
+        uuid.UUID(value)
+        return value
+    except ValueError:
+        raise HTTPException(status_code=400, detail="유효하지 않은 ID 형식입니다.")
 
 
 @router.get("/sites")
@@ -68,6 +77,7 @@ async def create_site(body: SiteCreate):
 
 @router.get("/sites/{site_id}")
 async def get_site(site_id: str):
+    site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     res = supabase.table("construction_sites").select("*").eq("id", site_id).eq("is_active", True).limit(1).execute()
     if not res.data:
@@ -77,6 +87,7 @@ async def get_site(site_id: str):
 
 @router.patch("/sites/{site_id}")
 async def update_site(site_id: str, body: SitePatch):
+    site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
         data = body.model_dump(exclude_none=True)
@@ -97,6 +108,7 @@ async def update_site(site_id: str, body: SitePatch):
 
 @router.delete("/sites/{site_id}")
 async def delete_site(site_id: str):
+    site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     res = supabase.table("construction_sites").update({"is_active": False, "updated_at": _now_iso()}).eq("id", site_id).execute()
     if not res.data:
@@ -106,6 +118,7 @@ async def delete_site(site_id: str):
 
 @router.get("/sites/{site_id}/stats")
 async def get_site_stats(site_id: str):
+    site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
         site_res = supabase.table("construction_sites").select("*").eq("id", site_id).limit(1).execute()
@@ -125,6 +138,7 @@ async def get_site_stats(site_id: str):
 
 @router.post("/sites/{site_id}/diagnose")
 async def diagnose_site(site_id: str):
+    site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
         _, factory_id, diag = run_diagnose_site(
@@ -154,6 +168,7 @@ async def diagnose_site(site_id: str):
 
 @router.post("/sites/{site_id}/generate-schedules")
 async def generate_schedules(site_id: str):
+    site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
         factory_id, sched = run_generate_site_schedules(supabase, site_id, run_generate_schedules)
