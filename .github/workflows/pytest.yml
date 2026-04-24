@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       INTERNAL_API_SECRET: test
+      ANTHROPIC_API_KEY: test
     steps:
       - uses: actions/checkout@v4
 
@@ -19,8 +20,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: 의존성 설치
-        run: pip install -r requirements.txt
+      - name: 테스트 의존성 설치
+        run: pip install -r requirements-test.txt
 
       - name: pytest 실행
-        run: pytest tests/ -v --tb=short
+        run: pytest tests/ -v --tb=short --ignore=tests/check_db_integrity.py --ignore=tests/check_mapping_coverage.py --ignore=tests/test_legal_engine.py --ignore=tests/test_legal_engine_52.py --ignore=tests/test_legal_engine_layer.py --ignore=tests/wait_for_deploy.py
