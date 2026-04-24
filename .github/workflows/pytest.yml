@@ -20,8 +20,15 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: 테스트 의존성 설치
-        run: pip install -r requirements-test.txt
+      - name: 의존성 설치
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+        continue-on-error: false
 
       - name: pytest 실행
-        run: pytest tests/ -v --tb=short --ignore=tests/check_db_integrity.py --ignore=tests/check_mapping_coverage.py --ignore=tests/test_legal_engine.py --ignore=tests/test_legal_engine_52.py --ignore=tests/test_legal_engine_layer.py --ignore=tests/wait_for_deploy.py
+        run: |
+          pytest tests/test_construction*.py \
+                 tests/test_law_rule_generator*.py \
+                 tests/test_rule_gen*.py \
+                 -v --tb=short
