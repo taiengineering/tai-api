@@ -201,11 +201,13 @@ class PrepareBody(BaseModel):
 
 class VbankPrepareBody(BaseModel):
     """VBANK 전용 결제 준비 Body — 연결 서비스(선임/컨설팅/수선) 전용"""
-    user_id:              str
-    product_type:         str                    # EXPERT / CONSULTING / REPAIR
+    user_id:              Optional[str] = None
+    auth_token:           Optional[str] = None   # DIAGNOSIS 비회원 토큰
+    public_token:         Optional[str] = None   # DIAGNOSIS 결과 토큰
+    product_type:         str                    # EXPERT / CONSULTING / REPAIR / DIAGNOSIS
     amount:               int                    # 계약 전체 금액
     goodname:             str                    # 상품명
-    matching_contract_id: str                    # matching_contracts.id (필수)
+    matching_contract_id: Optional[str] = None   # 연결 서비스 결제 시 필수
 
     company_id:          Optional[str] = None
     buyername:           Optional[str] = "고객"
@@ -216,10 +218,24 @@ class VbankPrepareBody(BaseModel):
     @field_validator("product_type")
     @classmethod
     def validate_vbank_product(cls, v: str) -> str:
-        allowed = {"EXPERT", "CONSULTING", "REPAIR"}
+        allowed = {"EXPERT", "CONSULTING", "REPAIR", "DIAGNOSIS"}
         if v not in allowed:
-            raise ValueError(f"VBANK는 연결 서비스만 가능합니다: {allowed}")
+            raise ValueError(f"VBANK product_type 허용: {allowed}")
         return v
+
+
+class DiagnosisVbankPrepareBody(BaseModel):
+    """유료 진단 가상계좌 발급 준비."""
+    auth_token: Optional[str] = None
+    public_token: Optional[str] = None
+    amount: int
+    goodname: str = "유료 법령진단"
+    buyername: Optional[str] = "고객"
+    buyertel: Optional[str] = "00000000000"
+    buyeremail: Optional[str] = None
+    invoice_requested: bool = False
+    invoice_biz_no: Optional[str] = None
+    invoice_email: Optional[str] = None
 
 
 class ManualConfirmBody(BaseModel):
@@ -1036,6 +1052,11 @@ def vbank_prepare(body: VbankPrepareBody):
         datetime.now(timezone.utc) + timedelta(minutes=body.vbank_expire_min)
     ).isoformat()
 
+    if body.product_type != "DIAGNOSIS" and not body.matching_contract_id:
+        raise HTTPException(status_code=400, detail="matching_contract_id는 연결 서비스 결제 시 필수입니다.")
+    if body.product_type == "DIAGNOSIS" and not (body.user_id or body.auth_token or body.public_token):
+        raise HTTPException(status_code=400, detail="DIAGNOSIS는 user_id 또는 auth_token/public_token 중 하나가 필요합니다.")
+
     row: dict = {
         "user_id":              body.user_id,
         "product_type":         body.product_type,
@@ -1049,12 +1070,18 @@ def vbank_prepare(body: VbankPrepareBody):
         "status_code":          "PENDING",       # 입금 전
         "service_status":       "PAID",
         "vbank_expires_at":     vbank_expires_at,
-        "matching_contract_id": body.matching_contract_id,
         "created_at":           now,
         "updated_at":           now,
     }
+    if body.matching_contract_id:
+        row["matching_contract_id"] = body.matching_contract_id
     if body.company_id:
         row["company_id"] = body.company_id
+    if body.auth_token or body.public_token:
+        row["memo"] = (
+            f"diag_auth_token={body.auth_token or ''} "
+            f"diag_public_token={body.public_token or ''}"
+        ).strip()
 
     res = supabase.table("payments").insert(row).execute()
     if not res.data:
@@ -1062,13 +1089,14 @@ def vbank_prepare(body: VbankPrepareBody):
 
     payment_id = res.data[0]["id"]
 
-    # matching_contracts에 payment_id 연결
-    supabase.table("matching_contracts").update({
-        "payment_id": payment_id,
-        "updated_at": now,
-    }).eq("id", body.matching_contract_id).execute()
+    # 연결 서비스인 경우 matching_contracts에 payment_id 연결
+    if body.matching_contract_id:
+        supabase.table("matching_contracts").update({
+            "payment_id": payment_id,
+            "updated_at": now,
+        }).eq("id", body.matching_contract_id).execute()
 
-    log.info(f"[VBANK PREPARE] oid={order_id} contract={body.matching_contract_id}")
+    log.info(f"[VBANK PREPARE] oid={order_id} product={body.product_type} contract={body.matching_contract_id}")
 
     return {
         "status": "success",
@@ -1093,6 +1121,44 @@ def vbank_prepare(body: VbankPrepareBody):
             "vbankexpire":   body.vbank_expire_min,
         },
     }
+
+
+@router.post("/diagnosis/vbank-prepare")
+def diagnosis_vbank_prepare(body: DiagnosisVbankPrepareBody):
+    """유료 진단 전용 가상계좌 발급 준비 (비회원 토큰 허용)."""
+    proxy_body = VbankPrepareBody(
+        user_id=None,
+        auth_token=body.auth_token,
+        public_token=body.public_token,
+        product_type="DIAGNOSIS",
+        amount=body.amount,
+        goodname=body.goodname,
+        matching_contract_id=None,
+        buyername=body.buyername,
+        buyertel=body.buyertel,
+        buyeremail=body.buyeremail,
+    )
+    result = vbank_prepare(proxy_body)
+
+    # 세금계산서 요청 정보는 diagnosis_purchases에 별도 기록 (best-effort)
+    if body.invoice_requested and (body.invoice_biz_no or body.invoice_email):
+        try:
+            supabase = get_supabase()
+            payment_id = (result.get("data") or {}).get("payment_id")
+            if payment_id:
+                supabase.table("diagnosis_purchases").insert(
+                    {
+                        "payment_ref": payment_id,
+                        "invoice_requested": True,
+                        "invoice_biz_no": body.invoice_biz_no,
+                        "invoice_email": body.invoice_email,
+                        "created_at": _now_iso(),
+                    }
+                ).execute()
+        except Exception as e:
+            log.warning("[diagnosis vbank] invoice save failed: %s", e)
+
+    return result
 
 
 @router.post("/vbank/noti", include_in_schema=True)

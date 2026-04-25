@@ -27,6 +27,10 @@ class DiagnosisRunBody(BaseModel):
     construction_type: Optional[str] = Field(None, description="음/토/건축/기능 등")
     region: Optional[str] = None
     payment_ref: Optional[str] = Field(None, description="유료 결제 참조 번호 (무료이면 생략)")
+    invoice_requested: bool = Field(False, description="세금계산서 요청 여부")
+    invoice_biz_no: Optional[str] = Field(None, description="세금계산서 사업자등록번호")
+    invoice_email: Optional[str] = Field(None, description="세금계산서 수신 이메일")
+    invoice_company_name: Optional[str] = Field(None, description="세금계산서 상호")
 
 
 class UpgradeBody(BaseModel):
@@ -34,3 +38,7 @@ class UpgradeBody(BaseModel):
     public_token: str = Field(..., description="기존 진단 public_token")
     target_tier_code: str = Field(..., description="업그레이드 목표 티어")
     payment_ref: str = Field(..., description="결제 참조 번호")
+    invoice_requested: bool = Field(False, description="세금계산서 요청 여부")
+    invoice_biz_no: Optional[str] = Field(None, description="세금계산서 사업자등록번호")
+    invoice_email: Optional[str] = Field(None, description="세금계산서 수신 이메일")
+    invoice_company_name: Optional[str] = Field(None, description="세금계산서 상호")

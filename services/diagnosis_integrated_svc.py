@@ -12,6 +12,37 @@ from schemas.legal_engine import DiagnoseStep1Body
 log = logging.getLogger(__name__)
 
 
+def _save_diagnosis_purchase(
+    supabase,
+    *,
+    auth_log_id: str,
+    public_token: str,
+    tier_code: str,
+    paid_amount: int,
+    payment_ref: Optional[str],
+    invoice_requested: bool,
+    invoice_biz_no: Optional[str],
+    invoice_email: Optional[str],
+) -> None:
+    """유료 진단 결제 메타를 diagnosis_purchases에 기록한다."""
+    try:
+        supabase.table("diagnosis_purchases").insert(
+            {
+                "auth_log_id": auth_log_id,
+                "public_token": public_token,
+                "tier_code": tier_code,
+                "paid_amount": paid_amount,
+                "payment_ref": payment_ref,
+                "invoice_requested": invoice_requested,
+                "invoice_biz_no": invoice_biz_no,
+                "invoice_email": invoice_email,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).execute()
+    except Exception as e:
+        log.warning("[diagnosis_purchases] save failed: %s", e)
+
+
 def resolve_auth_log(supabase, auth_token: str) -> dict:
     res = (
         supabase.table("diagnosis_auth_log")
@@ -244,6 +275,7 @@ def run_diagnosis(
     ins = supabase.table("anonymous_diagnosis_results").insert(row).execute()
     if not ins.data:
         raise HTTPException(status_code=500, detail="결과 저장에 실패했습니다.")
+    created = ins.data[0]
 
     if is_free:
         supabase.table("diagnosis_auth_log").update(
@@ -257,6 +289,18 @@ def run_diagnosis(
     remaining_after = 0
     if is_free:
         remaining_after = max(0, (auth_row.get("free_limit") or 3) - ((auth_row.get("free_count") or 0) + 1))
+    else:
+        _save_diagnosis_purchase(
+            supabase,
+            auth_log_id=auth_row["id"],
+            public_token=created.get("public_token") or public_token,
+            tier_code=tier_code,
+            paid_amount=paid_tier_prices.get(tier_code, 0),
+            payment_ref=body.payment_ref,
+            invoice_requested=bool(getattr(body, "invoice_requested", False)),
+            invoice_biz_no=(getattr(body, "invoice_biz_no", None) or None),
+            invoice_email=(getattr(body, "invoice_email", None) or None),
+        )
 
     return {
         "status": "success",
@@ -362,6 +406,18 @@ def upgrade_diagnosis(
             "expires_at": None,
         }
     ).eq("id", rec["id"]).execute()
+
+    _save_diagnosis_purchase(
+        supabase,
+        auth_log_id=auth_row["id"],
+        public_token=body.public_token,
+        tier_code=target_tier,
+        paid_amount=diff_price,
+        payment_ref=body.payment_ref,
+        invoice_requested=bool(getattr(body, "invoice_requested", False)),
+        invoice_biz_no=(getattr(body, "invoice_biz_no", None) or None),
+        invoice_email=(getattr(body, "invoice_email", None) or None),
+    )
 
     return {
         "status": "success",
