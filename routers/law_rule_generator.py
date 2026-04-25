@@ -1021,8 +1021,10 @@ async def _run_reparse_background(
     job_id: str, sector: str, limit_count: int,
     fill_empty_only: bool, rule_ids: List[str],
 ):
-    """백그라운드에서 master 룰을 1건씩 Sonnet으로 재파싱."""
+    """백그라운드에서 master 룰을 5건씩 병렬로 Sonnet 재파싱.
+    v1.11.0: 순차 → 병렬 5건, sleep 단축, 컨텍스트 캐시."""
     supabase = get_supabase()
+    CONCURRENCY = 5
 
     try:
         q = supabase.table("master_building_legal_rules").select("*").eq("is_active", True)
@@ -1043,24 +1045,30 @@ async def _run_reparse_background(
         errors_count = 0
         error_details: List[dict] = []
         changed_fields_total: Dict[str, int] = {}
+        _context_cache: Dict[str, str] = {}  # law_name+law_article → context
+        _few_shot_cache: Dict[str, list] = {}  # law_name → few_shots
 
-        for row in targets:
+        async def _process_one(row: dict) -> dict:
+            """단일 룰 재파싱. 결과를 dict로 반환."""
             rid = row.get("rule_id") or ""
             law_name = row.get("law_name") or ""
             law_article = row.get("law_article") or ""
+            result = {"status": "skip", "rid": rid, "saved": 0, "failed": 0}
 
             if not law_name or not law_article:
-                skipped += 1
-                processed += 1
-                supabase.table("reparse_job_log").update({
-                    "processed": processed, "skipped": skipped,
-                }).eq("job_id", job_id).execute()
-                await asyncio.sleep(3)
-                continue
+                return result
 
             try:
-                full_context = await build_full_context(law_name, law_article)
-                few_shots = await _fetch_few_shot_examples(supabase, law_name, limit=3)
+                # 컨텍스트 캐시
+                cache_key = f"{law_name}|{law_article}"
+                if cache_key not in _context_cache:
+                    _context_cache[cache_key] = await build_full_context(law_name, law_article)
+                full_context = _context_cache[cache_key]
+
+                if law_name not in _few_shot_cache:
+                    _few_shot_cache[law_name] = await _fetch_few_shot_examples(supabase, law_name, limit=3)
+                few_shots = _few_shot_cache[law_name]
+
                 prompt = _build_reparse_prompt(row, full_context, few_shots)
 
                 parsed = await call_claude_messages_ai(
@@ -1073,15 +1081,10 @@ async def _run_reparse_background(
                     timeout=90,
                 )
                 if not isinstance(parsed, dict):
-                    skipped += 1
-                    processed += 1
-                    supabase.table("reparse_job_log").update({
-                        "processed": processed, "skipped": skipped,
-                    }).eq("job_id", job_id).execute()
-                    await asyncio.sleep(3)
-                    continue
+                    return result
 
                 patch: Dict[str, Any] = {}
+                changed: Dict[str, int] = {}
                 for key, value in parsed.items():
                     if key not in row:
                         continue
@@ -1091,47 +1094,78 @@ async def _run_reparse_background(
                         continue
                     if row.get(key) != value:
                         patch[key] = value
-                        changed_fields_total[key] = changed_fields_total.get(key, 0) + 1
+                        changed[key] = 1
 
                 if "submit_org_code" in patch:
                     patch["submit_org_code"] = _normalize_submit_org_code(patch["submit_org_code"])
                     if not patch["submit_org_code"]:
                         patch.pop("submit_org_code", None)
+                        changed.pop("submit_org_code", None)
 
                 if patch:
                     any_saved, s_count, f_count = safe_update_master(
                         supabase, row["id"], patch, rule_id=rid)
                     if any_saved:
-                        updated += 1
+                        result["status"] = "updated"
+                        result["saved"] = s_count
+                        result["failed"] = f_count
+                        result["changed"] = changed
                     else:
-                        skipped += 1
+                        result["status"] = "skip"
                     if f_count > 0:
-                        error_details.append({
-                            "rule_id": rid,
-                            "error": f"partial: {s_count} saved, {f_count} type errors skipped"
-                        })
+                        result["error"] = f"partial: {s_count} saved, {f_count} type errors skipped"
+                else:
+                    result["status"] = "skip"
+
+            except Exception as e:
+                result["status"] = "error"
+                result["error"] = str(e)[:200]
+                _reparse_logger.warning(f"[reparse] {rid} 에러: {e}")
+
+            return result
+
+        # 배치 처리: CONCURRENCY건씩 병렬
+        for i in range(0, len(targets), CONCURRENCY):
+            batch = targets[i:i + CONCURRENCY]
+            results = await asyncio.gather(
+                *[_process_one(row) for row in batch],
+                return_exceptions=True,
+            )
+
+            for res in results:
+                processed += 1
+                if isinstance(res, Exception):
+                    errors_count += 1
+                    error_details.append({"error": str(res)[:200]})
+                    continue
+                if res["status"] == "updated":
+                    updated += 1
+                    for k, v in res.get("changed", {}).items():
+                        changed_fields_total[k] = changed_fields_total.get(k, 0) + v
+                elif res["status"] == "error":
+                    errors_count += 1
+                    error_details.append({"rule_id": res["rid"], "error": res.get("error", "")})
                 else:
                     skipped += 1
 
-                processed += 1
+                if res.get("error") and res["status"] != "error":
+                    error_details.append({"rule_id": res["rid"], "error": res["error"]})
 
-            except Exception as e:
-                errors_count += 1
-                processed += 1
-                error_details.append({"rule_id": rid, "error": str(e)[:200]})
-                _reparse_logger.warning(f"[reparse] {rid} 에러: {e}")
+            # 10건마다 진행률 업데이트
+            if processed % 10 == 0 or processed == len(targets):
+                supabase.table("reparse_job_log").update({
+                    "processed": processed,
+                    "updated": updated,
+                    "skipped": skipped,
+                    "errors": errors_count,
+                    "error_details": error_details[-20:],
+                    "changed_fields": changed_fields_total,
+                }).eq("job_id", job_id).execute()
 
-            supabase.table("reparse_job_log").update({
-                "processed": processed,
-                "updated": updated,
-                "skipped": skipped,
-                "errors": errors_count,
-                "error_details": error_details[-20:],
-                "changed_fields": changed_fields_total,
-            }).eq("job_id", job_id).execute()
+            # 배치 간 sleep (서버 부하 방지)
+            await asyncio.sleep(0.5)
 
-            await asyncio.sleep(3)
-
+        # 전체 완료 → validate-master 실행
         validate_data = None
         try:
             validate_result = await validate_master({"sector": sector or "ALL"})
