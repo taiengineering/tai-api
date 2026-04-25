@@ -40,11 +40,24 @@ from __future__ import annotations
 
 import os
 import sys
+
+# ──── 인코딩 강제 (macOS LANG 미설정 환경 보호) ────
+# 한글 + 비표준 유니코드(\u2028 등) 출력 시 ASCII 폭발 방지
+os.environ["PYTHONIOENCODING"] = "utf-8"
+os.environ.setdefault("LANG", "en_US.UTF-8")
+os.environ.setdefault("LC_ALL", "en_US.UTF-8")
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass  # Python 3.6 이하 또는 비표준 stream
+
 import json
 import re
 import asyncio
 import argparse
 import logging
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -125,6 +138,15 @@ def mask(s: str, n: int = 12) -> str:
     if not s:
         return "(없음)"
     return s[:n] + "..." if len(s) > n else s
+
+
+def safe_str(v: Any) -> str:
+    """ASCII 폭발 방지 — 비표준 유니코드 제거."""
+    if v is None:
+        return ""
+    s = str(v)
+    # \u2028 (LINE SEPARATOR), \u2029 (PARAGRAPH SEPARATOR) 등 제거
+    return re.sub(r"[\u2028\u2029\x00-\x08\x0b-\x0c\x0e-\x1f]", " ", s)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -235,6 +257,11 @@ async def fetch_pending_articles(supabase: Client, limit: int | None = None) -> 
     # 길이 >= 20 필터 (Python 단)
     articles = [a for a in articles if a.get("article_text") and len(a["article_text"]) >= 20]
 
+    # 비표준 유니코드 제거 (텍스트 필드에 있을 수 있음)
+    for a in articles:
+        a["article_title"] = safe_str(a.get("article_title"))
+        a["article_text"] = safe_str(a.get("article_text"))
+
     # law_name 매핑 (version_id → law_master.law_name)
     if not articles:
         return []
@@ -257,7 +284,7 @@ async def fetch_pending_articles(supabase: Client, limit: int | None = None) -> 
         or []
     )
     v_to_law = {v["id"]: v["law_id"] for v in versions}
-    l_to_name = {l["id"]: l["law_name"] for l in laws}
+    l_to_name = {l["id"]: safe_str(l["law_name"]) for l in laws}
     for a in articles:
         a["law_name"] = l_to_name.get(v_to_law.get(a["law_version_id"], ""), "(unknown)")
 
@@ -332,12 +359,12 @@ def write_drafts_and_master(
             "condition_code": cond_code,
             "condition_operator": r.get("condition_operator"),
             "condition_value": str(r.get("condition_value")) if r.get("condition_value") is not None else None,
-            "obligation_summary": r.get("obligation_summary"),
-            "penalty_summary": r.get("penalty_summary"),
-            "appointment_target": r.get("appointment_target"),
+            "obligation_summary": safe_str(r.get("obligation_summary")),
+            "penalty_summary": safe_str(r.get("penalty_summary")),
+            "appointment_target": safe_str(r.get("appointment_target")),
             "diagnosis_stage": r.get("diagnosis_stage"),
             "ai_confidence": int(confidence),
-            "ai_reasoning": r.get("ai_reasoning"),
+            "ai_reasoning": safe_str(r.get("ai_reasoning")),
             "raw_ai_response": json.dumps(r, ensure_ascii=False),
             "status": "APPROVED" if auto_approve else "PENDING",
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -369,9 +396,9 @@ def write_drafts_and_master(
                 "condition_code": cond_code,
                 "condition_operator_code": r.get("condition_operator"),
                 "condition_value": safe_numeric(r.get("condition_value")),
-                "obligation_summary": r.get("obligation_summary"),
-                "penalty_summary": r.get("penalty_summary"),
-                "remarks": r.get("ai_reasoning") or r.get("obligation_summary"),
+                "obligation_summary": draft_payload["obligation_summary"],
+                "penalty_summary": draft_payload["penalty_summary"],
+                "remarks": draft_payload["ai_reasoning"] or draft_payload["obligation_summary"],
                 "executor_type_code": "SAFETY_MANAGER",
                 "is_active": True,
                 "needs_review": False,
@@ -550,17 +577,17 @@ def snapshot(supabase: Client) -> dict:
         .execute()
         .count
     )
-    out["커버 법령"] = len(
-        {
-            r["law_name"]
-            for r in supabase.table("master_building_legal_rules")
-            .select("law_name")
-            .eq("is_active", True)
-            .execute()
-            .data
-            or []
-        }
+    # 커버 법령 — law_name에 비표준 유니코드 있을 수 있어 safe_str
+    law_names_data = (
+        supabase.table("master_building_legal_rules")
+        .select("law_name")
+        .eq("is_active", True)
+        .execute()
+        .data
+        or []
     )
+    out["커버 법령"] = len({safe_str(r["law_name"]) for r in law_names_data})
+
     rules = (
         supabase.table("master_building_legal_rules")
         .select("penalty_summary, condition_code, executor_type_code")
@@ -587,6 +614,23 @@ def snapshot(supabase: Client) -> dict:
     return out
 
 
+def safe_snapshot(supabase: Client, label: str) -> dict:
+    """스냅샷 실패해도 메인 작업은 진행되도록 안전 처리."""
+    log.info(f"\n=== {label} 스냅샷 ===")
+    try:
+        snap = snapshot(supabase)
+        for k, v in snap.items():
+            try:
+                log.info(f"  {k}: {v}")
+            except UnicodeEncodeError:
+                log.info(f"  {k}: <인코딩 출력 실패, 값 길이 {len(str(v))}>")
+        return snap
+    except Exception as e:
+        log.warning(f"{label} 스냅샷 실패 (메인 작업은 진행): {type(e).__name__}: {e}")
+        log.debug(traceback.format_exc())
+        return {}
+
+
 # ──────────────────────────────────────────────────────────────
 # main
 # ──────────────────────────────────────────────────────────────
@@ -595,6 +639,7 @@ async def main_async(args):
     log.info(f"finalize_law_pipeline 시작 (run_ts={RUN_TS})")
     log.info(f"phase={args.phase} dry_run={args.dry_run} limit={args.limit} concurrency={args.concurrency}")
     log.info(f"로그 파일: {LOG_FILE}")
+    log.info(f"인코딩: stdout={sys.stdout.encoding} LANG={os.environ.get('LANG')}")
     log.info("=" * 60)
 
     # 환경변수 (여러 이름 폴백)
@@ -605,15 +650,8 @@ async def main_async(args):
 
     supabase: Client = create_client(sb_url, sb_key)
 
-    log.info("\n=== BEFORE 스냅샷 ===")
-    try:
-        before = snapshot(supabase)
-        for k, v in before.items():
-            log.info(f"  {k}: {v}")
-    except Exception as e:
-        log.error(f"스냅샷 실패 (Supabase 연결 또는 권한 확인): {e}")
-        log.error("→ SUPABASE_KEY 가 service_role 인지 확인하세요. anon 키는 RLS 때문에 master 쓰기 불가.")
-        return 1
+    # BEFORE 스냅샷 (실패해도 진행)
+    before = safe_snapshot(supabase, "BEFORE")
 
     tasks = []
     if args.phase in ("1", "all"):
@@ -642,19 +680,22 @@ async def main_async(args):
         else:
             log.info(f"[{name}] {res}")
 
-    log.info("\n=== AFTER 스냅샷 ===")
-    after = snapshot(supabase)
-    for k, v in after.items():
-        b = before.get(k)
-        diff = ""
-        try:
-            if isinstance(v, int) and isinstance(b, int):
-                diff = f" ({v - b:+d})"
-            elif isinstance(v, str) and v.endswith("%") and isinstance(b, str) and b.endswith("%"):
-                diff = f" ({float(v[:-1]) - float(b[:-1]):+.1f}%p)"
-        except Exception:
-            pass
-        log.info(f"  {k}: {b} → {v}{diff}")
+    # AFTER 스냅샷 (실패해도 진행)
+    after = safe_snapshot(supabase, "AFTER")
+
+    if before and after:
+        log.info("\n=== 변동 ===")
+        for k, v in after.items():
+            b = before.get(k)
+            diff = ""
+            try:
+                if isinstance(v, int) and isinstance(b, int):
+                    diff = f" ({v - b:+d})"
+                elif isinstance(v, str) and v.endswith("%") and isinstance(b, str) and b.endswith("%"):
+                    diff = f" ({float(v[:-1]) - float(b[:-1]):+.1f}%p)"
+            except Exception:
+                pass
+            log.info(f"  {k}: {b} → {v}{diff}")
 
     log.info(f"\n완료. 로그: {LOG_FILE}")
     return 0
