@@ -77,11 +77,12 @@ from services.rule_gen_helpers import (
     _validate_rule_row,
 )
 from services.rule_gen_svc import _auto_approve_to_master
+from services.safe_db_update import safe_update_master
 
 router = APIRouter(prefix="/law-rule-generator", tags=["AI룰생성"])
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL      = "claude-haiku-4-5-20251001"
+CLAUDE_MODEL      = "claude-sonnet-4-20250514"
 CLAUDE_SONNET_MODEL = "claude-sonnet-4-20250514"
 INTERNAL_SECRET = os.environ.get("INTERNAL_API_SECRET")
 if not INTERNAL_SECRET:
@@ -1098,9 +1099,17 @@ async def _run_reparse_background(
                         patch.pop("submit_org_code", None)
 
                 if patch:
-                    patch["updated_at"] = datetime.now(timezone.utc).isoformat()
-                    supabase.table("master_building_legal_rules").update(patch).eq("id", row["id"]).execute()
-                    updated += 1
+                    any_saved, s_count, f_count = safe_update_master(
+                        supabase, row["id"], patch, rule_id=rid)
+                    if any_saved:
+                        updated += 1
+                    else:
+                        skipped += 1
+                    if f_count > 0:
+                        error_details.append({
+                            "rule_id": rid,
+                            "error": f"partial: {s_count} saved, {f_count} type errors skipped"
+                        })
                 else:
                     skipped += 1
 
