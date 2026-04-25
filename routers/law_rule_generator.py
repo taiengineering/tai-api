@@ -8,6 +8,13 @@ Claude Haiku API로 법령 조문 → 판정룰 초안 자동 생성.
   PENDING → (거부) REJECTED
   PENDING → (수정) MODIFIED → (승인) APPROVED
 
+v1.8.0 (2026-04-25):
+  [ADD] POST /auto-parse-all — 모든 미파싱 법령 일괄 처리 (백그라운드)
+        로컬 스크립트(scripts/auto_parse_all.py) Railway 내장 endpoint 화
+        환경변수 의존 0, 인코딩 문제 0, curl 1회로 시작
+  [REUSE] reparse_job_log 테이블 재사용 (sector="AUTO_PARSE_ALL" 마커)
+          진행률은 기존 GET /reparse-master/status/{job_id} 그대로 사용
+
 v1.7.0 (2026-04-25):
   [FIX] SYSTEM_PROMPT 5영역 확장 — "산업안전" 한정 편향 제거
         재난·환경·근로자보호·시설·산안 모두 추출 대상
@@ -20,23 +27,18 @@ v1.7.0 (2026-04-25):
 
 v1.6.0 (2026-04-20):
   [FIX] POST /reparse-master — BackgroundTasks 비동기 전환 (서버 타임아웃 방지)
-        즉시 {status: "accepted", job_id} 반환 + 백그라운드 1건씩 처리
   [ADD] GET /reparse-master/status/{job_id} — 진행률 조회
   [ADD] GET /reparse-master/jobs — 최근 작업 목록
   [ADD] reparse_job_log 테이블 (DDL: sql/20260420_reparse_job_log.sql)
 
 v1.5.0 (2026-04-05):
   [ADD] GET /drafts — has_condition 파라미터 추가
-        has_condition=false → condition_code IS NULL 필터
-        has_condition=true  → condition_code IS NOT NULL 필터
-        has_condition=""    → 전체 (기존 동작)
 
 v1.4.0 (2026-04-03):
-  [ADD] POST /bulk-approve-unregistered — APPROVED + 미등록 draft 일괄 master 등록
+  [ADD] POST /bulk-approve-unregistered
 
 v1.3.0 (2026-04-03):
-  [ADD] POST /auto-parse-and-approve — 파싱+고신뢰도 자동승인 일괄 처리
-        ai_confidence >= auto_approve_threshold(기본 80)인 INSPECT 초안 자동 master 등록
+  [ADD] POST /auto-parse-and-approve
 
 v1.2.0 (2026-04-03):
   [FIX] max_articles 백엔드 하드캡 50 → 제거
@@ -556,9 +558,6 @@ async def auto_parse_and_approve(body: dict):
                 draft = ins.data[0]
 
                 # v1.7.0: 자동승인 조건 확장
-                # 기존: INSPECT만
-                # 변경: APPOINT/INSPECT/NOTIFY/REPORT/ACTION 5개 모두
-                #       + condition_code 있어야 자동승인 (4/24 학습 — 범용 룰은 수동 검토)
                 has_condition = bool(rule.get("condition_code"))
                 if (
                     ob_type in AUTO_APPROVE_ELIGIBLE_TYPES
@@ -709,6 +708,314 @@ async def validate_master(body: dict = None):
 _reparse_logger = logging.getLogger("reparse-master")
 
 
+# ── v1.8.0: POST /auto-parse-all (백그라운드) ─────────────────────────────
+
+async def _process_one_law_for_auto_parse(
+    supabase, law_id: str, law_name: str,
+    max_articles: int, threshold: int,
+) -> Dict[str, int]:
+    """단일 법령의 미파싱 article 처리 + 고신뢰도 자동승인.
+    auto_parse_and_approve 라우터 핵심 로직과 동일."""
+    stats = {"drafts": 0, "approved": 0, "errors": 0}
+
+    ver = supabase.table("law_version").select("id").eq(
+        "law_id", law_id).eq("is_current", True).limit(1).execute()
+    if not ver.data:
+        return stats
+
+    arts = (
+        supabase.table("law_article")
+        .select("id, article_no, article_title, article_text")
+        .eq("law_version_id", ver.data[0]["id"])
+        .is_("ai_parsed_at", "null")
+        .not_.is_("article_text", "null")
+        .order("article_no_sort")
+        .limit(max_articles)
+        .execute()
+    )
+    articles = arts.data or []
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for art in articles:
+        try:
+            art_text = (art.get("article_text") or "").strip()
+            if not art_text or len(art_text) < 20:
+                supabase.table("law_article").update({
+                    "ai_parsed_at": now_iso}).eq("id", art["id"]).execute()
+                continue
+
+            label = f"제{art.get('article_no', '')}조{art.get('article_title', '') or ''}"
+            full_context = await build_full_context(law_name, label, art.get("id"))
+            rules = await call_claude(law_name, art_text, full_context=full_context)
+
+            supabase.table("law_article").update({
+                "ai_parsed_at": now_iso}).eq("id", art["id"]).execute()
+
+            for rule in rules:
+                sector = (rule.get("sector") or "").strip().upper()
+                if sector in EXCLUDED_SECTORS:
+                    continue
+
+                conf = int(rule.get("ai_confidence") or 0)
+                ob_type = rule.get("obligation_type", "")
+                has_condition = bool(rule.get("condition_code"))
+
+                row = _build_draft_row(
+                    law_name, label, art.get("id"), art_text, rule)
+                row["ai_confidence"] = conf
+                ins = supabase.table("law_rule_drafts").insert(row).execute()
+                if not ins.data:
+                    continue
+                stats["drafts"] += 1
+                draft = ins.data[0]
+
+                if (
+                    ob_type in AUTO_APPROVE_ELIGIBLE_TYPES
+                    and conf >= threshold
+                    and has_condition
+                ):
+                    approved_id = _auto_approve_to_master(supabase, draft)
+                    if approved_id:
+                        stats["approved"] += 1
+        except Exception as e:
+            stats["errors"] += 1
+            _reparse_logger.warning(
+                f"[auto-parse-all] {law_name[:20]}/제{art.get('article_no')}조 에러: {str(e)[:120]}")
+
+    return stats
+
+
+def _bulk_approve_remaining(supabase) -> int:
+    """APPROVED + 미등록 draft를 master 테이블에 일괄 등록.
+    bulk_approve_unregistered 라우터 로직과 동일, 5회 반복."""
+    total_added = 0
+    for _ in range(5):
+        res = (
+            supabase.table("law_rule_drafts")
+            .select("*")
+            .eq("status", "APPROVED")
+            .is_("registered_rule_id", "null")
+            .order("created_at")
+            .limit(500)
+            .execute()
+        )
+        drafts = res.data or []
+        if not drafts:
+            break
+
+        added_in_round = 0
+        for d in drafts:
+            sector = (d.get("sector") or "").upper()
+            if sector in EXCLUDED_SECTORS:
+                continue
+            try:
+                rule_id = d.get("draft_rule_id") or f"AI-{d['id'][:8].upper()}"
+                if supabase.table("master_building_legal_rules").select(
+                    "rule_id").eq("rule_id", rule_id).execute().data:
+                    rule_id = rule_id + "-V2"
+                if supabase.table("master_building_legal_rules").select(
+                    "rule_id").eq("rule_id", rule_id).execute().data:
+                    supabase.table("law_rule_drafts").update({
+                        "registered_rule_id": rule_id,
+                        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                    }).eq("id", d["id"]).execute()
+                    continue
+
+                ins = supabase.table("master_building_legal_rules").insert(
+                    _build_master_payload(d, rule_id)
+                ).execute()
+
+                if ins.data:
+                    supabase.table("law_rule_drafts").update({
+                        "registered_rule_id": rule_id,
+                        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                    }).eq("id", d["id"]).execute()
+                    added_in_round += 1
+            except Exception:
+                pass
+
+        total_added += added_in_round
+        if added_in_round == 0:
+            break
+
+    return total_added
+
+
+async def _run_auto_parse_all_background(
+    job_id: str, max_articles_per_law: int, threshold: int,
+):
+    """백그라운드로 모든 미파싱 법령 순차 처리 + bulk-approve."""
+    supabase = get_supabase()
+
+    try:
+        # 1. 미파싱 article 있는 법령만 추출 (article_count > parsed_count)
+        laws_q = (
+            supabase.table("law_master")
+            .select("id, law_name")
+            .eq("is_active", True)
+            .order("law_name")
+            .execute()
+        )
+        all_laws = laws_q.data or []
+
+        target_laws = []
+        for law in all_laws:
+            ver = supabase.table("law_version").select("id").eq(
+                "law_id", law["id"]).eq("is_current", True).limit(1).execute()
+            if not ver.data:
+                continue
+            unparsed = supabase.table("law_article").select(
+                "id", count="exact"
+            ).eq("law_version_id", ver.data[0]["id"]
+            ).is_("ai_parsed_at", "null"
+            ).not_.is_("article_text", "null").execute()
+            n = unparsed.count or 0
+            if n > 0:
+                target_laws.append({
+                    "law_id": law["id"],
+                    "law_name": law["law_name"],
+                    "unparsed": n,
+                })
+
+        # 작은 법령부터 처리 (실패 시 영향 범위 최소화)
+        target_laws.sort(key=lambda x: x["unparsed"])
+
+        supabase.table("reparse_job_log").update({
+            "total_targeted": len(target_laws),
+        }).eq("job_id", job_id).execute()
+
+        processed_laws = 0
+        failed_laws = 0
+        total_drafts = 0
+        total_approved = 0
+        total_article_errors = 0
+        errors_list: List[dict] = []
+
+        # 2. 법령별 순차 처리
+        for law in target_laws:
+            try:
+                stats = await _process_one_law_for_auto_parse(
+                    supabase, law["law_id"], law["law_name"],
+                    max_articles_per_law, threshold,
+                )
+                total_drafts += stats["drafts"]
+                total_approved += stats["approved"]
+                total_article_errors += stats["errors"]
+                processed_laws += 1
+            except Exception as e:
+                failed_laws += 1
+                processed_laws += 1
+                errors_list.append({
+                    "law": law["law_name"][:40],
+                    "error": str(e)[:200],
+                })
+                _reparse_logger.warning(
+                    f"[auto-parse-all] {law['law_name'][:20]} 실패: {e}")
+
+            # 진행률 업데이트
+            supabase.table("reparse_job_log").update({
+                "processed": processed_laws,
+                "updated": total_drafts,
+                "skipped": failed_laws,
+                "errors": total_article_errors + failed_laws,
+                "error_details": errors_list[-20:],
+                "changed_fields": {
+                    "drafts_created": total_drafts,
+                    "auto_approved": total_approved,
+                    "law_failed": failed_laws,
+                    "article_errors": total_article_errors,
+                    "current_law": law["law_name"][:40],
+                },
+            }).eq("job_id", job_id).execute()
+
+            # 서버 부하 방지
+            await asyncio.sleep(1)
+
+        # 3. bulk-approve 잔여
+        try:
+            bulk_added = _bulk_approve_remaining(supabase)
+        except Exception as e:
+            bulk_added = 0
+            _reparse_logger.warning(f"[auto-parse-all] bulk-approve 실패: {e}")
+
+        # 4. 완료 마킹
+        supabase.table("reparse_job_log").update({
+            "status": "COMPLETED",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "processed": processed_laws,
+            "updated": total_drafts,
+            "skipped": failed_laws,
+            "errors": total_article_errors + failed_laws,
+            "error_details": errors_list,
+            "changed_fields": {
+                "drafts_created": total_drafts,
+                "auto_approved": total_approved,
+                "bulk_approve_added": bulk_added,
+                "law_failed": failed_laws,
+                "article_errors": total_article_errors,
+                "total_master_added": total_approved + bulk_added,
+            },
+        }).eq("job_id", job_id).execute()
+
+        _reparse_logger.info(
+            f"[auto-parse-all] job {job_id} 완료: "
+            f"법령 {processed_laws}/{len(target_laws)}, "
+            f"draft+{total_drafts}, 자동승인+{total_approved}, "
+            f"bulk+{bulk_added}, 법령실패 {failed_laws}, 조문에러 {total_article_errors}"
+        )
+
+    except Exception as e:
+        _reparse_logger.error(f"[auto-parse-all] job {job_id} 실패: {e}")
+        try:
+            supabase.table("reparse_job_log").update({
+                "status": "FAILED",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "error_details": [{"error": str(e)[:500]}],
+            }).eq("job_id", job_id).execute()
+        except Exception:
+            pass
+
+
+@router.post("/auto-parse-all")
+async def auto_parse_all_endpoint(body: dict, background_tasks: BackgroundTasks):
+    """모든 미파싱 법령을 순차 처리 + bulk-approve (백그라운드).
+    즉시 job_id 반환, 진행률은 GET /reparse-master/status/{job_id}.
+
+    body:
+      secret: INTERNAL_API_SECRET (필수)
+      max_articles_per_law: 법령당 처리 article 수 (기본 80)
+      auto_approve_threshold: 자동승인 신뢰도 임계값 (기본 80)
+    """
+    secret = body.get("secret", "")
+    if secret != INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="내부 전용 엔드포인트")
+
+    max_articles_per_law = int(body.get("max_articles_per_law", 80))
+    threshold = int(body.get("auto_approve_threshold", 80))
+
+    job_id = str(uuid.uuid4())
+
+    supabase = get_supabase()
+    supabase.table("reparse_job_log").insert({
+        "job_id": job_id,
+        "sector": "AUTO_PARSE_ALL",
+        "status": "RUNNING",
+    }).execute()
+
+    background_tasks.add_task(
+        _run_auto_parse_all_background, job_id, max_articles_per_law, threshold,
+    )
+
+    return {
+        "status": "accepted",
+        "job_id": job_id,
+        "message": "전체 자동 파싱 작업이 시작됐습니다.",
+        "check_status": f"/law-rule-generator/reparse-master/status/{job_id}",
+    }
+
+
+# ── reparse-master (v1.6.0) ────────────────────────────────────────────────
+
 async def _run_reparse_background(
     job_id: str, sector: str, limit_count: int,
     fill_empty_only: bool, rule_ids: List[str],
@@ -751,12 +1058,10 @@ async def _run_reparse_background(
                 continue
 
             try:
-                # 1. build_full_context (DB 조회)
                 full_context = await build_full_context(law_name, law_article)
                 few_shots = await _fetch_few_shot_examples(supabase, law_name, limit=3)
                 prompt = _build_reparse_prompt(row, full_context, few_shots)
 
-                # 2. Claude Sonnet 호출 (timeout=90s)
                 parsed = await call_claude_messages_ai(
                     "빈 필드 보강 전용 리라이팅 모델입니다. JSON object 1개만 반환하세요.",
                     prompt,
@@ -775,7 +1080,6 @@ async def _run_reparse_background(
                     await asyncio.sleep(3)
                     continue
 
-                # 3. DB UPDATE
                 patch: Dict[str, Any] = {}
                 for key, value in parsed.items():
                     if key not in row:
@@ -808,7 +1112,6 @@ async def _run_reparse_background(
                 error_details.append({"rule_id": rid, "error": str(e)[:200]})
                 _reparse_logger.warning(f"[reparse] {rid} 에러: {e}")
 
-            # 4. reparse_job_log UPDATE (매 건)
             supabase.table("reparse_job_log").update({
                 "processed": processed,
                 "updated": updated,
@@ -818,10 +1121,8 @@ async def _run_reparse_background(
                 "changed_fields": changed_fields_total,
             }).eq("job_id", job_id).execute()
 
-            # 5. 서버 부하 방지
             await asyncio.sleep(3)
 
-        # 전체 완료 → validate-master 실행
         validate_data = None
         try:
             validate_result = await validate_master({"sector": sector or "ALL"})
@@ -862,8 +1163,7 @@ async def _run_reparse_background(
 
 @router.post("/reparse-master")
 async def reparse_master(body: dict, background_tasks: BackgroundTasks):
-    """master 룰을 Sonnet으로 재파싱 (백그라운드 처리).
-    즉시 job_id 반환, 진행률은 GET /reparse-master/status/{job_id}."""
+    """master 룰을 Sonnet으로 재파싱 (백그라운드 처리)."""
     secret = body.get("secret", "")
     if secret != INTERNAL_SECRET:
         raise HTTPException(status_code=403, detail="내부 전용 엔드포인트")
@@ -875,7 +1175,6 @@ async def reparse_master(body: dict, background_tasks: BackgroundTasks):
 
     job_id = str(uuid.uuid4())
 
-    # job_log 생성
     supabase = get_supabase()
     supabase.table("reparse_job_log").insert({
         "job_id": job_id,
@@ -898,7 +1197,7 @@ async def reparse_master(body: dict, background_tasks: BackgroundTasks):
 
 @router.get("/reparse-master/status/{job_id}")
 async def reparse_master_status(job_id: str):
-    """재파싱 작업 진행률 조회."""
+    """재파싱 작업 진행률 조회 (auto-parse-all 도 동일 endpoint 사용)."""
     supabase = get_supabase()
     res = supabase.table("reparse_job_log").select("*").eq(
         "job_id", job_id).order("created_at", desc=True).limit(1).execute()
@@ -935,7 +1234,7 @@ async def reparse_master_status(job_id: str):
 async def reparse_master_jobs(
     limit: int = Query(default=10, le=50),
 ):
-    """최근 재파싱 작업 목록 조회."""
+    """최근 작업 목록 조회 (reparse / auto-parse-all 모두 포함)."""
     supabase = get_supabase()
     res = supabase.table("reparse_job_log").select(
         "job_id, sector, total_targeted, processed, updated, skipped, errors, status, started_at, completed_at"
@@ -985,7 +1284,6 @@ async def get_stats():
 
 
 # ── GET /drafts ────────────────────────────────────────────
-# 주의: /drafts 는 /drafts/{draft_id} 보다 먼저 선언돼야 함
 
 @router.get("/drafts")
 async def get_drafts(
@@ -994,16 +1292,10 @@ async def get_drafts(
     ob_type:        str = Query(""),
     law_name:       str = Query(""),
     confidence_min: int = Query(0),
-    has_condition:  str = Query("", description="true | false | '' (전체)"),  # v1.5.0
+    has_condition:  str = Query("", description="true | false | '' (전체)"),
     page:           int = Query(1, ge=1),
     page_size:      int = Query(20, ge=1, le=100),
 ):
-    """
-    초안 목록 조회
-    - has_condition=false → condition_code IS NULL (조건 없는 룰)
-    - has_condition=true  → condition_code IS NOT NULL (조건 있는 룰)
-    - has_condition=""    → 전체
-    """
     supabase = get_supabase()
     q = supabase.table("law_rule_drafts").select("*", count="exact")
     if status:         q = q.eq("status", status)
@@ -1011,7 +1303,6 @@ async def get_drafts(
     if ob_type:        q = q.eq("obligation_type", ob_type)
     if law_name:       q = q.ilike("law_name", f"%{law_name}%")
     if confidence_min: q = q.gte("ai_confidence", confidence_min)
-    # v1.5.0: condition_code 존재 여부 필터
     if has_condition == "false":
         q = q.is_("condition_code", "null")
     elif has_condition == "true":
