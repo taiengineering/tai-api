@@ -8,6 +8,16 @@ Claude Haiku API로 법령 조문 → 판정룰 초안 자동 생성.
   PENDING → (거부) REJECTED
   PENDING → (수정) MODIFIED → (승인) APPROVED
 
+v1.7.0 (2026-04-25):
+  [FIX] SYSTEM_PROMPT 5영역 확장 — "산업안전" 한정 편향 제거
+        재난·환경·근로자보호·시설·산안 모두 추출 대상
+  [FIX] USER_PROMPT_TEMPLATE — "안전관리 의무" → "사업장 의무"
+  [FIX] auto-parse-and-approve 자동승인 조건 확장
+        기존: INSPECT만 자동 master 등록
+        변경: APPOINT/INSPECT/NOTIFY/REPORT/ACTION 5개 모두
+              + condition_code 게이트 (4/24 학습)
+  [KEEP] 학교·병원·사회복지시설 건너뛰기 룰 유지
+
 v1.6.0 (2026-04-20):
   [FIX] POST /reparse-master — BackgroundTasks 비동기 전환 (서버 타임아웃 방지)
         즉시 {status: "accepted", job_id} 반환 + 백그라운드 1건씩 처리
@@ -90,6 +100,9 @@ VALID_CONDITION_CODES = {
     "student_count",
 }
 
+# v1.7.0: 자동승인 가능 의무 유형 (INSPECT 한정 → 5개 모두)
+AUTO_APPROVE_ELIGIBLE_TYPES = {"INSPECT", "APPOINT", "NOTIFY", "REPORT", "ACTION"}
+
 SUBMIT_ORG_LABELS = {
     "kosha": "한국산업안전보건공단 (관할 지역본부)",
     "local_gov": "관할 시·군·구청",
@@ -134,15 +147,23 @@ FEW_SHOT_RULE = {
     "ai_flags": [],
 }
 
-SYSTEM_PROMPT = """당신은 한국 산업안전 법령 전문가입니다.
-법령 원문(본조+시행령+별표+벌칙)을 분석하여 안전관리 시스템의 판정 룰을 JSON 형식으로 추출합니다.
+# v1.7.0: SYSTEM_PROMPT 5영역 확장
+SYSTEM_PROMPT = """당신은 한국 사업장 의무 법령 전문가입니다.
+법령 원문(본조+시행령+별표+벌칙)을 분석하여 사업장이 이행해야 할 판정 룰을 JSON 형식으로 추출합니다.
+
+추출 대상 영역 (모든 사업장 의무 — 산업안전 외 영역도 포함):
+1. 산업안전·보건 의무 (산안법, 산안기준규칙, 화학물질관리법 등)
+2. 재난·안전관리 의무 (재난기본법 — 모든 사업장 재난 대비 의무)
+3. 환경관리 의무 (탄소중립·녹색성장 기본법, 토양환경보전법, 잔류성오염물질 관리법, 악취방지법, 소음·진동관리법)
+4. 근로자 보호 의무 (파견근로자보호법, 근로기준법)
+5. 시설·건물 관리 의무 (주택법, 건축법, 화재예방법, 소방시설법, 다중이용업소법 등)
 
 추출 대상 의무 유형:
-- APPOINT: 안전관리자·소방안전관리자 등 선임 의무
-- INSPECT: 정기점검·안전검사 의무
-- NOTIFY: 신고·보고·제출 의무
+- APPOINT: 안전관리자·재난관리책임자·환경관리자·소방안전관리자 등 선임 의무
+- INSPECT: 정기점검·안전검사·환경측정 의무
+- NOTIFY: 신고·보고·제출 의무 (재난신고·환경신고 포함)
 - REPORT: 기록·보존 의무
-- ACTION: 조치·설치·이행 의무
+- ACTION: 조치·설치·이행 의무 (재난대비·환경기준 준수 포함)
 
 조건 코드 (condition_code) 목록 (정확히 아래에서만 선택):
 - building_area: 건물 연면적 (㎡)
@@ -170,7 +191,7 @@ SYSTEM_PROMPT = """당신은 한국 산업안전 법령 전문가입니다.
 - hospital_beds: 병상 수
 - student_count: 학생 수
 
-섹터 코드 (반드시 아래 4가지 중 하나만 사용):
+섹터 코드 (반드시 아래 5가지 중 하나만 사용):
 - BUILDING: 건물·시설 (업무용·판매용·숙박·근린생활 등 일반 건축물)
 - MANUFACTURING: 공장·제조업
 - CONSTRUCTION: 건설현장
@@ -192,6 +213,7 @@ penalty_summary가 있으면 penalty_value(만원)를 가능한 범위에서 채
 응답은 반드시 순수 JSON 배열만 출력하세요. 마크다운/설명 금지.
 의무가 없는 조문은 빈 배열 []을 반환하세요."""
 
+# v1.7.0: USER_PROMPT_TEMPLATE — "안전관리 의무" → "사업장 의무"
 USER_PROMPT_TEMPLATE = """다음 법령 조문을 분석하여 판정 룰을 추출해주세요.
 
 법령명: {law_name}
@@ -203,8 +225,8 @@ USER_PROMPT_TEMPLATE = """다음 법령 조문을 분석하여 판정 룰을 추
 [좋은 예시 1개]
 {few_shot}
 
-위 조문에서 안전관리 의무(선임·점검·신고·보고·조치)를 추출하여 다음 JSON 형식으로 반환하세요.
-의무가 없는 조문이면 []을 반환하세요.
+위 조문에서 사업장 의무(선임·점검·신고·보고·조치)를 추출하여 다음 JSON 형식으로 반환하세요.
+사업장이 직접 이행할 의무가 없는 조문이면 []을 반환하세요.
 
 [
   {{
@@ -533,7 +555,16 @@ async def auto_parse_and_approve(body: dict):
                     continue
                 draft = ins.data[0]
 
-                if ob_type == "INSPECT" and conf >= threshold:
+                # v1.7.0: 자동승인 조건 확장
+                # 기존: INSPECT만
+                # 변경: APPOINT/INSPECT/NOTIFY/REPORT/ACTION 5개 모두
+                #       + condition_code 있어야 자동승인 (4/24 학습 — 범용 룰은 수동 검토)
+                has_condition = bool(rule.get("condition_code"))
+                if (
+                    ob_type in AUTO_APPROVE_ELIGIBLE_TYPES
+                    and conf >= threshold
+                    and has_condition
+                ):
                     approved_id = _auto_approve_to_master(supabase, draft)
                     if approved_id:
                         results["auto_approved"] += 1
