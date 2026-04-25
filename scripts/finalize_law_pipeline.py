@@ -19,22 +19,22 @@ Phase 2 (갭 E):
 실행:
   cd ~/Desktop/tai-engineering/tai-api
   git pull origin dev
-  pip3 install anthropic supabase httpx tqdm  # 한 번만
+  pip3 install anthropic supabase httpx tqdm python-dotenv  # 한 번만
 
-  # .env 파일 또는 셸에서:
-  export ANTHROPIC_API_KEY=...
-  export SUPABASE_URL=https://xntdkrjhgcscmqctdzyo.supabase.co
-  export SUPABASE_SERVICE_KEY=...   # service_role key (anon 아님)
-  export INTERNAL_API_SECRET=...    # Railway reparse 호출용
+  # .env 파일 (프로젝트 루트):
+  ANTHROPIC_API_KEY=sk-ant-...
+  SUPABASE_URL=https://xntdkrjhgcscmqctdzyo.supabase.co
+  SUPABASE_KEY=eyJh...                # 또는 SUPABASE_SERVICE_KEY (service_role 권장)
+  INTERNAL_API_SECRET=...
 
-  # 실행 (두 페이즈 동시, 약 35-45분)
+  # 실행 (.env 자동 로드, 두 페이즈 동시, 약 35-45분)
   python3 scripts/finalize_law_pipeline.py
 
   # 옵션
   python3 scripts/finalize_law_pipeline.py --phase 1     # Phase 1 만
   python3 scripts/finalize_law_pipeline.py --phase 2     # Phase 2 만
-  python3 scripts/finalize_law_pipeline.py --dry-run     # DB 쓰기 없이 5건만
-  python3 scripts/finalize_law_pipeline.py --concurrency 3   # 동시 호출 수
+  python3 scripts/finalize_law_pipeline.py --dry-run --limit 3 --phase 1
+  python3 scripts/finalize_law_pipeline.py --concurrency 3
 """
 from __future__ import annotations
 
@@ -46,7 +46,19 @@ import asyncio
 import argparse
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+
+# ──── .env 자동 로드 (project root) ────
+try:
+    from dotenv import load_dotenv
+    _here = Path(__file__).resolve().parent
+    for cand in [_here.parent / ".env", _here / ".env", Path.cwd() / ".env"]:
+        if cand.exists():
+            load_dotenv(cand)
+            break
+except ImportError:
+    pass  # python-dotenv 없으면 OS 환경변수만
 
 try:
     from anthropic import AsyncAnthropic
@@ -91,6 +103,28 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger("finalize")
+
+
+# ──────────────────────────────────────────────────────────────
+# 환경변수 로딩 (여러 이름 폴백)
+# ──────────────────────────────────────────────────────────────
+def env_first(*keys: str, required: bool = True) -> str | None:
+    """여러 환경변수명 중 첫 매치 반환."""
+    for k in keys:
+        v = os.environ.get(k, "").strip()
+        if v:
+            return v
+    if required:
+        log.error(f"환경변수 필요: {' 또는 '.join(keys)}")
+        log.error("'.env' 파일을 프로젝트 루트에 두거나, export 로 설정하세요.")
+        sys.exit(1)
+    return None
+
+
+def mask(s: str, n: int = 12) -> str:
+    if not s:
+        return "(없음)"
+    return s[:n] + "..." if len(s) > n else s
 
 
 # ──────────────────────────────────────────────────────────────
@@ -157,14 +191,6 @@ PHASE1_USER_TEMPLATE = """다음 법령 조문에서 사업장 의무를 추출�
 # ──────────────────────────────────────────────────────────────
 # 유틸
 # ──────────────────────────────────────────────────────────────
-def env_or_die(key: str) -> str:
-    v = os.environ.get(key, "").strip()
-    if not v:
-        log.error(f"환경변수 {key} 필요")
-        sys.exit(1)
-    return v
-
-
 def extract_json_array(text: str) -> list[dict]:
     """Claude 응답에서 JSON 배열 추출 (마크다운 안전)."""
     text = text.strip()
@@ -202,7 +228,7 @@ async def fetch_pending_articles(supabase: Client, limit: int | None = None) -> 
         .is_("ai_parsed_at", "null")
     )
     if limit:
-        q = q.limit(limit * 2)  # 길이 필터로 일부 빠질 수 있어 여유 잡기
+        q = q.limit(limit * 3)  # 길이 필터로 일부 빠질 수 있어 여유 잡기
     res = q.execute()
     articles = res.data or []
 
@@ -319,7 +345,7 @@ def write_drafts_and_master(
         }
 
         if dry_run:
-            log.info(f"[DRY-RUN] draft={draft_payload['draft_rule_id']} status={draft_payload['status']}")
+            log.info(f"[DRY-RUN] draft={draft_payload['draft_rule_id']} status={draft_payload['status']} type={r.get('obligation_type')} sector={r.get('sector')}")
             stats["drafts"] += 1
             if auto_approve:
                 stats["approved"] += 1
@@ -571,24 +597,35 @@ async def main_async(args):
     log.info(f"로그 파일: {LOG_FILE}")
     log.info("=" * 60)
 
-    sb_url = env_or_die("SUPABASE_URL")
-    sb_key = env_or_die("SUPABASE_SERVICE_KEY")
+    # 환경변수 (여러 이름 폴백)
+    sb_url = env_first("SUPABASE_URL")
+    sb_key = env_first("SUPABASE_SERVICE_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_KEY")
+    log.info(f"Supabase URL: {sb_url}")
+    log.info(f"Supabase Key: {mask(sb_key)} (앞 12자만 표시)")
+
     supabase: Client = create_client(sb_url, sb_key)
 
-    log.info("=== BEFORE 스냅샷 ===")
-    before = snapshot(supabase)
-    for k, v in before.items():
-        log.info(f"  {k}: {v}")
+    log.info("\n=== BEFORE 스냅샷 ===")
+    try:
+        before = snapshot(supabase)
+        for k, v in before.items():
+            log.info(f"  {k}: {v}")
+    except Exception as e:
+        log.error(f"스냅샷 실패 (Supabase 연결 또는 권한 확인): {e}")
+        log.error("→ SUPABASE_KEY 가 service_role 인지 확인하세요. anon 키는 RLS 때문에 master 쓰기 불가.")
+        return 1
 
     tasks = []
     if args.phase in ("1", "all"):
-        ant_key = env_or_die("ANTHROPIC_API_KEY")
+        ant_key = env_first("ANTHROPIC_API_KEY")
+        log.info(f"Anthropic Key: {mask(ant_key)}")
         claude = AsyncAnthropic(api_key=ant_key)
         tasks.append(
             ("phase1", run_phase1(supabase, claude, args.concurrency, args.dry_run, args.limit))
         )
     if args.phase in ("2", "all"):
-        secret = env_or_die("INTERNAL_API_SECRET")
+        secret = env_first("INTERNAL_API_SECRET")
+        log.info(f"Internal Secret: {mask(secret)}")
         tasks.append(("phase2", run_phase2(secret, args.dry_run)))
 
     if not tasks:
