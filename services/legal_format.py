@@ -142,6 +142,10 @@ def format_rule_result_db(rule: Dict[str, Any], article_info: Optional[Dict[str,
     _pen_raw = rule.get("penalty_summary") or ""
     _penalty = _pen_raw.strip() if _pen_raw.strip() else _get_penalty_fallback(_obl_type)
     _is_recurring = bool(rule.get("cycle_unit_std"))
+    try:
+        _due_days = int(float(rule.get("due_days") or 0))
+    except (TypeError, ValueError):
+        _due_days = 0
     
     result = {
         "rule_id": rule.get("rule_id", ""),
@@ -175,8 +179,13 @@ def format_rule_result_db(rule: Dict[str, Any], article_info: Optional[Dict[str,
         "report_required": bool(rule.get("report_required")),
         "notify_required": bool(rule.get("notify_required")),
         "form_code": rule.get("form_code") or "",
+        "form_name": rule.get("form_name") or "",
         "form_url": rule.get("form_url") or "",
-        "due_days": rule.get("due_days"),
+        "online_system": rule.get("online_system") or "",
+        "system_url": rule.get("system_url") or "",
+        "tai_feature_code": rule.get("tai_feature_code") or "",
+        "qualification_code": rule.get("appointment_qualification_code") or "",
+        "due_days": _due_days,
         "is_recurring": _is_recurring,
         "due_info": {} if _is_recurring else _calc_due_date(rule.get("due_days")),
         "sector": rule.get("sector") or "",

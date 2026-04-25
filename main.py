@@ -128,6 +128,7 @@ from routers.diagnosis_integrated    import router as diagnosis_integrated_route
 from routers.diagnosis_report        import router as diagnosis_report_router        # v5.31.0
 from routers.diagnosis_proposal      import router as diagnosis_proposal_router      # v5.31.1
 from routers.diagnosis_result_web    import router as diagnosis_result_web_router    # v5.37.0
+from routers.law_viewer              import router as law_viewer_router               # v5.38.0 조문조회
 from routers.diagram_proxy           import router as diagram_proxy_router           # v5.32.0
 from routers.uploads                 import router as uploads_router                  # v5.36.0 사진업로드
 from routers.emergency_report        import router as emergency_report_router         # v5.36.0 긴급신고
@@ -204,6 +205,7 @@ app.include_router(diagnosis_integrated_router)
 app.include_router(diagnosis_report_router)
 app.include_router(diagnosis_proposal_router)
 app.include_router(diagnosis_result_web_router)
+app.include_router(law_viewer_router)
 app.include_router(diagram_proxy_router)
 
 # 인증 필요 엔드포인트
