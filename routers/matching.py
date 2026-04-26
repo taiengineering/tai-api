@@ -34,10 +34,17 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, field_validator
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
+from schemas.matching import (
+    CalcBody,
+    CommissionBody,
+    MatchResultCreateBody,
+    MatchingRequestBody,
+    ProposalBody,
+    StatusUpdateBody,
+)
 
 log    = logging.getLogger(__name__)
 router = APIRouter()   # prefix는 main.py에서 지정
@@ -109,38 +116,6 @@ def calc_commission(
         "tai_fee_amount": tai_fee_amount,
         "expert_amount":  expert_amount,
     }
-
-
-# ── Pydantic 모델 ──────────────────────────────────────────────────────
-class MatchingRequestBody(BaseModel):
-    # 필수
-    user_id:     str
-    expert_type: str
-    title:       str
-
-    # 선택
-    company_id:      Optional[str]       = None
-    factory_id:      Optional[str]       = None
-    service_regions: Optional[List[str]] = None
-    budget_min:      Optional[int]       = None
-    budget_max:      Optional[int]       = None
-    start_date:      Optional[str]       = None   # YYYY-MM-DD
-    duration_months: Optional[int]       = None
-    description:     Optional[str]       = None
-    requirements:    Optional[dict]      = None
-    source:          Optional[str]       = "SITE"  # SITE / SAAS / DIAGNOSIS_REPORT
-
-    @field_validator("expert_type")
-    @classmethod
-    def check_expert_type(cls, v: str) -> str:
-        if v not in {"EXPERT", "CONSULTING", "REPAIR"}:
-            raise ValueError("expert_type은 EXPERT/CONSULTING/REPAIR 중 하나여야 합니다.")
-        return v
-
-
-class StatusUpdateBody(BaseModel):
-    status: str
-    memo:   Optional[str] = None
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -444,23 +419,6 @@ def admin_stats(current_user: dict = Depends(_require_admin)):
 # 제안서 시스템 (v1.1.0)
 # 플로우: MATCHED → NOTIFIED → VIEWED → PROPOSED → SELECTED
 # ════════════════════════════════════════════════════════════════════════
-
-class MatchResultCreateBody(BaseModel):
-    request_id:     str
-    expert_user_id: str              # 전문가 user_id
-    supplier_type:  str              # personnel / agency / repair
-    supplier_id:    str              # 해당 테이블 ID
-    rank_no:        int = 1
-    match_score:    Optional[float] = None
-
-
-class ProposalBody(BaseModel):
-    proposal_title:   str
-    proposal_content: str
-    proposal_amount:  int            # 원
-    proposal_period:  int            # 개월
-    proposal_note:    Optional[str] = None
-
 
 @router.post("/results/match")
 def create_match_result(
@@ -1042,37 +1000,6 @@ def admin_pipeline(
 # ════════════════════════════════════════════════════════════════════════
 
 commission_router = APIRouter()   # prefix: /price-commission (main.py 지정)
-
-
-class CommissionBody(BaseModel):
-    service_type: str
-    fee_rate:     float
-    period_min:   Optional[int]   = None
-    period_max:   Optional[int]   = None
-    amount_min:   Optional[int]   = None
-    amount_max:   Optional[int]   = None
-    description:  Optional[str]   = None
-    is_active:    bool            = True
-
-    @field_validator("service_type")
-    @classmethod
-    def check_service_type(cls, v: str) -> str:
-        if v not in {"EXPERT", "CONSULTING", "REPAIR"}:
-            raise ValueError("service_type은 EXPERT/CONSULTING/REPAIR 중 하나여야 합니다.")
-        return v
-
-    @field_validator("fee_rate")
-    @classmethod
-    def check_fee_rate(cls, v: float) -> float:
-        if not (0 < v <= 100):
-            raise ValueError("fee_rate는 0 초과 100 이하여야 합니다.")
-        return v
-
-
-class CalcBody(BaseModel):
-    service_type:    str
-    contract_amount: int
-    period_months:   Optional[int] = 1
 
 
 @commission_router.get("")

@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from routers import matching as m
+from schemas.matching import CommissionBody, MatchingRequestBody
 
 
 def test_status_transitions_received_to_matching_allowed():
@@ -22,7 +23,7 @@ def test_status_transitions_received_to_in_progress_not_allowed():
 
 
 def test_matching_request_body_expert_type_valid():
-    body = m.MatchingRequestBody(
+    body = MatchingRequestBody(
         user_id="u1",
         expert_type="EXPERT",
         title="테스트",
@@ -32,7 +33,7 @@ def test_matching_request_body_expert_type_valid():
 
 def test_matching_request_body_expert_type_invalid():
     with pytest.raises(ValidationError):
-        m.MatchingRequestBody(
+        MatchingRequestBody(
             user_id="u1",
             expert_type="INVALID",
             title="테스트",
@@ -40,12 +41,12 @@ def test_matching_request_body_expert_type_invalid():
 
 
 def test_commission_body_fee_rate_range():
-    ok = m.CommissionBody(service_type="EXPERT", fee_rate=10.0)
+    ok = CommissionBody(service_type="EXPERT", fee_rate=10.0)
     assert ok.fee_rate == 10.0
     with pytest.raises(ValidationError):
-        m.CommissionBody(service_type="EXPERT", fee_rate=0)
+        CommissionBody(service_type="EXPERT", fee_rate=0)
     with pytest.raises(ValidationError):
-        m.CommissionBody(service_type="EXPERT", fee_rate=101)
+        CommissionBody(service_type="EXPERT", fee_rate=101)
 
 
 def test_calc_commission_default_ten_percent_when_db_empty():
