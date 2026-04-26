@@ -7,12 +7,13 @@ from __future__ import annotations
 import base64 as _base64
 import logging
 import os
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional
 
 import requests as _requests
 
 from db.supabase_client import get_supabase
-from schemas.payment import PrepareBody
+from schemas.payment import PrepareBody, VbankPrepareBody
 from services.payment_helpers import (
     DEFAULT_CLOSE_URL,
     DEFAULT_RETURN_URL,
@@ -20,8 +21,10 @@ from services.payment_helpers import (
     INICIS_KEY_PATH,
     INICIS_MID,
     SAAS_PRODUCT_TYPES,
+    calc_expired_at,
     make_order_id,
     now_iso,
+    service_status_after_card_pay,
     sha256,
     split_supply_vat,
     ts_ms,
@@ -191,3 +194,324 @@ def run_inicis_prepare(body: PrepareBody) -> dict:
             "gopaymethod": "Card",
         },
     }
+
+
+def process_auth_failure(payment_id: str, fail_msg: str, auth_result: dict) -> None:
+    """승인 실패 또는 승인 API 오류 — payments FAILED 업데이트."""
+    supabase = get_supabase()
+    row: Dict[str, Any] = {
+        "status_code": "FAILED",
+        "fail_reason": fail_msg,
+        "updated_at": now_iso(),
+    }
+    if auth_result:
+        row["inicis_raw"] = auth_result
+    supabase.table("payments").update(row).eq("id", payment_id).execute()
+
+
+def process_vbank_issued(
+    payment_id: str,
+    order_id: str,
+    auth_result: dict,
+    *,
+    goodname: str,
+    price: str,
+) -> dict[str, Any]:
+    """가상계좌 발급 완료(입금 전) — DB UPDATE 후 프론트 리다이렉트용 쿼리."""
+    supabase = get_supabase()
+    now = now_iso()
+    vbank_number = auth_result.get("vbankNum", "")
+    vbank_bank = auth_result.get("vbankBankName", "")
+    vbank_expire = auth_result.get("vbankExpireDate", "")
+
+    supabase.table("payments").update(
+        {
+            "status_code": "PENDING",
+            "pg_method": "VBANK",
+            "vbank_number": vbank_number,
+            "vbank_bank": vbank_bank,
+            "inicis_order_id": order_id,
+            "inicis_raw": auth_result,
+            "memo": f"가상계좌 발급완료 | {vbank_bank} {vbank_number}",
+            "updated_at": now,
+        }
+    ).eq("id", payment_id).execute()
+
+    return {
+        "qs_params": {
+            "resultCode": "00",
+            "oid": order_id,
+            "goodname": goodname,
+            "price": price,
+            "paymethod": "VBANK",
+            "vbank_number": vbank_number,
+            "vbank_bank": vbank_bank,
+            "vbank_expire": vbank_expire,
+            "payment_id": payment_id,
+        }
+    }
+
+
+def process_card_success(
+    payment: dict,
+    auth_result: dict,
+    paymethod: str,
+    *,
+    order_id: str,
+    goodname: str,
+    price: str,
+    with_redirect_qs: bool = True,
+) -> Optional[dict[str, Any]]:
+    """카드 등 승인 성공 — payments UPDATE + 계약 활성화. inicis_return 시 리다이렉트 쿼리 dict."""
+    supabase = get_supabase()
+    now = now_iso()
+    payment_id = payment["id"]
+    contract_id = payment.get("contract_id")
+    product_type = payment.get("product_type", "")
+    period_months = payment.get("period_months")
+    apply_num = auth_result.get("applNum", "")
+
+    expired_at: Optional[str] = None
+    if product_type in SAAS_PRODUCT_TYPES and period_months:
+        expired_at = calc_expired_at(now, period_months)
+
+    service_status = service_status_after_card_pay(contract_id)
+
+    update_row: dict[str, Any] = {
+        "status_code": "SUCCESS",
+        "service_status": service_status,
+        "pg_method": paymethod,
+        "inicis_tid": auth_result.get("tid", ""),
+        "inicis_auth_code": apply_num,
+        "inicis_card_name": auth_result.get("P_FN_NM") or auth_result.get("CARD_Num", ""),
+        "inicis_raw": auth_result,
+        "paid_at": now,
+        "updated_at": now,
+    }
+
+    if expired_at:
+        update_row["expired_at"] = expired_at
+
+    supabase.table("payments").update(update_row).eq("id", payment_id).execute()
+
+    if contract_id:
+        supabase.table("contracts").update({"is_active": True, "updated_at": now}).eq("id", contract_id).execute()
+
+    if not with_redirect_qs:
+        return None
+
+    return {
+        "qs_params": {
+            "resultCode": "00",
+            "oid": order_id,
+            "goodname": auth_result.get("goodName", goodname),
+            "price": auth_result.get("TotPrice", price),
+            "paymethod": paymethod,
+            "applnum": apply_num,
+            "payment_id": payment_id,
+            "expired_at": expired_at or "",
+        }
+    }
+
+
+def create_vbank_record(body: VbankPrepareBody, sign_key: str) -> dict:
+    """vbank_prepare — DB INSERT + 서명 파라미터 + matching_contracts 연결."""
+    if body.product_type != "DIAGNOSIS" and not body.matching_contract_id:
+        raise PaymentPrepareError(400, "matching_contract_id는 연결 서비스 결제 시 필수입니다.")
+    if body.product_type == "DIAGNOSIS" and not (body.user_id or body.auth_token or body.public_token):
+        raise PaymentPrepareError(400, "DIAGNOSIS는 user_id 또는 auth_token/public_token 중 하나가 필요합니다.")
+
+    supabase = get_supabase()
+    order_id = make_order_id()
+    timestamp = ts_ms()
+    price_str = str(body.amount)
+    m_key = sha256(sign_key)
+    sig_data = f"oid={order_id}&price={price_str}&timestamp={timestamp}"
+    veri_data = f"oid={order_id}&price={price_str}&signKey={sign_key}&timestamp={timestamp}"
+    signature = sha256(sig_data)
+    verification = sha256(veri_data)
+
+    supply_amount, vat_amount = split_supply_vat(body.amount)
+    now = now_iso()
+
+    vbank_expires_at = (
+        datetime.now(timezone.utc) + timedelta(minutes=body.vbank_expire_min)
+    ).isoformat()
+
+    row: dict[str, Any] = {
+        "user_id": body.user_id,
+        "product_type": body.product_type,
+        "payment_method": "INICIS",
+        "pg_method": "VBANK",
+        "payment_type": "VBANK",
+        "supply_amount": supply_amount,
+        "vat_amount": vat_amount,
+        "total_amount": body.amount,
+        "inicis_order_id": order_id,
+        "status_code": "PENDING",
+        "service_status": "PAID",
+        "vbank_expires_at": vbank_expires_at,
+        "created_at": now,
+        "updated_at": now,
+    }
+    if body.matching_contract_id:
+        row["matching_contract_id"] = body.matching_contract_id
+    if body.company_id:
+        row["company_id"] = body.company_id
+    if body.auth_token or body.public_token:
+        row["memo"] = (
+            f"diag_auth_token={body.auth_token or ''} "
+            f"diag_public_token={body.public_token or ''}"
+        ).strip()
+
+    res = supabase.table("payments").insert(row).execute()
+    if not res.data:
+        raise PaymentPrepareError(500, "결제 레코드 생성 실패")
+
+    payment_id = res.data[0]["id"]
+
+    if body.matching_contract_id:
+        supabase.table("matching_contracts").update(
+            {"payment_id": payment_id, "updated_at": now}
+        ).eq("id", body.matching_contract_id).execute()
+
+    log.info(f"[VBANK PREPARE] oid={order_id} product={body.product_type} contract={body.matching_contract_id}")
+
+    return {
+        "status": "success",
+        "data": {
+            "payment_id": payment_id,
+            "mid": INICIS_MID,
+            "mKey": m_key,
+            "oid": order_id,
+            "price": price_str,
+            "goodname": body.goodname,
+            "buyername": body.buyername or "고객",
+            "buyertel": body.buyertel or "00000000000",
+            "buyeremail": body.buyeremail or "",
+            "timestamp": timestamp,
+            "verification": verification,
+            "signature": signature,
+            "use_chkfake": "Y",
+            "returnUrl": DEFAULT_RETURN_URL,
+            "closeUrl": DEFAULT_CLOSE_URL,
+            "charset": "UTF-8",
+            "gopaymethod": "Vbank",
+            "vbankexpire": body.vbank_expire_min,
+        },
+    }
+
+
+def process_vbank_deposit(
+    order_id: str,
+    result_code: str,
+    depositor: str,
+    raw_data: dict,
+) -> str:
+    """VBANK 입금 노티 — payments / matching_contracts / matching_requests / notifications."""
+    supabase = get_supabase()
+
+    pay_res = (
+        supabase.table("payments")
+        .select(
+            "id, status_code, user_id, company_id, total_amount, product_type, matching_contract_id"
+        )
+        .eq("inicis_order_id", order_id)
+        .limit(1)
+        .execute()
+    )
+    if not pay_res.data:
+        log.warning(f"[VBANK NOTI] 주문번호 미확인: {order_id}")
+        return "OK"
+
+    payment = pay_res.data[0]
+    payment_id = payment["id"]
+    matching_contract_id = payment.get("matching_contract_id")
+
+    if payment["status_code"] == "SUCCESS":
+        return "OK"
+
+    if result_code not in ("", "00", "0000"):
+        log.info(f"[VBANK NOTI] 입금 취소: resultCode={result_code}")
+        supabase.table("payments").update(
+            {
+                "status_code": "FAILED",
+                "fail_reason": f"VBANK 입금 취소 (resultCode={result_code})",
+                "updated_at": now_iso(),
+            }
+        ).eq("id", payment_id).execute()
+        return "OK"
+
+    now = now_iso()
+
+    supabase.table("payments").update(
+        {
+            "status_code": "SUCCESS",
+            "service_status": "ACTIVE",
+            "vbank_depositor": depositor,
+            "vbank_confirmed_at": now,
+            "paid_at": now,
+            "inicis_raw": raw_data,
+            "updated_at": now,
+        }
+    ).eq("id", payment_id).execute()
+    log.info(f"[VBANK NOTI] 입금 확인 — payment_id={payment_id}")
+
+    if matching_contract_id:
+        supabase.table("matching_contracts").update(
+            {
+                "paid_confirmed_at": now,
+                "status": "ACTIVE",
+                "updated_at": now,
+            }
+        ).eq("id", matching_contract_id).execute()
+
+        contract_res = (
+            supabase.table("matching_contracts")
+            .select("request_id")
+            .eq("id", matching_contract_id)
+            .limit(1)
+            .execute()
+        )
+        if contract_res.data:
+            request_id = contract_res.data[0].get("request_id")
+            if request_id:
+                req_res = (
+                    supabase.table("matching_requests")
+                    .select("id, status, status_history")
+                    .eq("id", request_id)
+                    .limit(1)
+                    .execute()
+                )
+                if req_res.data and req_res.data[0]["status"] == "CONTRACTED":
+                    history = req_res.data[0].get("status_history") or []
+                    history.append(
+                        {
+                            "status": "IN_PROGRESS",
+                            "at": now,
+                            "by": "system",
+                            "memo": "가상계좌 입금 확인 → 서비스 시작",
+                        }
+                    )
+                    supabase.table("matching_requests").update(
+                        {
+                            "status": "IN_PROGRESS",
+                            "status_history": history,
+                            "updated_at": now,
+                        }
+                    ).eq("id", request_id).execute()
+                    log.info(f"[VBANK NOTI] 매칭 → IN_PROGRESS request_id={request_id}")
+
+    if payment.get("user_id"):
+        supabase.table("notifications").insert(
+            {
+                "user_id": payment["user_id"],
+                "title": "계약금 입금 확인",
+                "body": f"계약금 {int(payment['total_amount']):,}원 입금이 확인되었습니다. 서비스가 시작됩니다.",
+                "type": "PAYMENT",
+                "is_read": False,
+                "created_at": now,
+            }
+        ).execute()
+
+    return "OK"

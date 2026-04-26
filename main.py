@@ -99,6 +99,7 @@ from routers.tbm_templates           import router as tbm_templates_router
 from routers.safety_meetings         import router as safety_meetings_router
 from routers.risk_assessments        import router as risk_assessments_router
 from routers.payment                 import router as payment_router
+from routers.payment_ops             import router as payment_ops_router
 from routers.payment_billing         import router as payment_billing_router   # v5.35.0 정기결제
 from routers.corrective_actions      import router as corrective_actions_router
 from routers.messaging               import router as messaging_router
@@ -283,6 +284,7 @@ app.include_router(tbm_templates_router)
 app.include_router(safety_meetings_router)
 app.include_router(risk_assessments_router)
 app.include_router(payment_router)
+app.include_router(payment_ops_router)
 app.include_router(payment_billing_router)                                        # v5.35.0 정기결제
 app.include_router(corrective_actions_router)
 app.include_router(messaging_router)

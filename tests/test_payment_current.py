@@ -20,22 +20,23 @@ from pydantic import ValidationError
 from main import app
 from routers import payment as pay
 from schemas.payment import PrepareBody
+from services import payment_helpers as ph
 
 
 def test_sha256_matches_known_vector():
-    assert pay._sha256("abc") == hashlib.sha256(b"abc").hexdigest()
+    assert ph.sha256("abc") == hashlib.sha256(b"abc").hexdigest()
 
 
 def test_calc_expired_at_adds_months_utc():
     base = "2026-01-15T12:00:00+00:00"
-    out = pay._calc_expired_at(base, 1)
+    out = ph.calc_expired_at(base, 1)
     dt = datetime.fromisoformat(out.replace("Z", "+00:00"))
     assert dt.month == 2
     assert dt.day == 15
 
 
 def test_make_order_id_shape():
-    oid = pay._make_order_id()
+    oid = ph.make_order_id()
     assert oid.startswith("TAI")
     assert len(oid) >= 20
 
@@ -72,8 +73,8 @@ def test_prepare_body_rejects_invalid_product_type():
 
 
 def test_saas_product_types_snapshot():
-    assert "SAAS_BUILDING" in pay.SAAS_PRODUCT_TYPES
-    assert "SAAS_FACILITY" in pay.SAAS_PRODUCT_TYPES
+    assert "SAAS_BUILDING" in ph.SAAS_PRODUCT_TYPES
+    assert "SAAS_FACILITY" in ph.SAAS_PRODUCT_TYPES
 
 
 def test_pricing_page_returns_html_200():
