@@ -1,7 +1,7 @@
 # TAI 개발 규칙 — 서비스 계층 분리
 
 > 작성일: 2026-04-21
-> 최종 수정: 2026-04-26 (v3 — payment·matching 분리 완료 반영, construction 완료 확인)
+> 최종 수정: 2026-04-26 (v4 — 분리 대상 6건 전부 완료)
 > 상태: **필수 적용** (모든 개발 창에서 준수)
 > 적용 시점: 20KB 이상 라우터 파일을 수정할 때 선행 적용. 신규 파일은 처음부터 적용.
 
@@ -94,22 +94,13 @@ tests/test_{모듈}_current.py  ← 현재 동작 스냅샷
 
 **기준:** 최소 5개 테스트. 분리 전에 `pytest tests/test_{모듈}_current.py -v` 전부 PASS.
 
-**왜 먼저?**
-- 테스트가 있어야 분리 후 뭐가 깨졌는지 안다
-- 테스트가 통과하면 분리가 정확하다는 증거
-- 테스트 작성 과정에서 코드 구조를 이해하게 됨
-
 ### STEP 1. 패키지 생성 + 헬퍼 분리
 
 가장 안전한 첫 걸음. 순수 함수를 먼저 빼면 아무것도 안 깨지면서 파일이 즉시 작아집니다.
 
 ```
-services/__init__.py           ← 빈 파일 생성 (이미 존재)
 services/{module}_helpers.py   ← 순수 유틸 함수
 ```
-
-**기준**: DB 호출 없이 입력→출력만 하는 함수 = 헬퍼.
-**확인**: `pytest tests/test_{모듈}_current.py -v` 전부 PASS + API 응답 동일.
 
 ### STEP 2. 스키마 분리
 
@@ -119,8 +110,6 @@ services/{module}_helpers.py   ← 순수 유틸 함수
 schemas/{module}.py            ← 모든 Request/Response 모델
 ```
 
-**확인**: import 경로만 바뀜. 테스트 PASS. API 응답 동일.
-
 ### STEP 3. 서비스 분리
 
 핵심 분리. 라우터에 있는 비즈니스 로직을 services/로 이동.
@@ -129,25 +118,15 @@ schemas/{module}.py            ← 모든 Request/Response 모델
 services/{module}_svc.py       ← 핵심 비즈니스 로직
 ```
 
-**기준**: `from fastapi import` 가 없으면 서비스로 이동 가능.
-**확인**: 테스트 PASS. API 응답 동일.
-
 ### STEP 4. 라우터 슬림화
 
 라우터에 남은 잔여 로직을 서비스로 이동하고, 각 엔드포인트를 5줄 이내로.
 
-**확인**: 라우터 파일이 15KB(400줄) 이내. 테스트 PASS. API 응답 동일.
+**확인**: 라우터 파일이 15KB(400줄) 이내.
 
 ### STEP 5. 테스트 보강
 
 분리된 서비스별 세분화 테스트 추가.
-
-```
-tests/test_{module}_helpers.py
-tests/test_{module}_svc.py
-```
-
-**확인**: 모든 테스트 통과. 커버리지 핵심 함수 80% 이상.
 
 ---
 
@@ -175,13 +154,10 @@ tests/test_{module}_svc.py
 
 ---
 
-## Router 작성 규칙
+## Router / Service 작성 규칙
 
 ```python
-# ✅ 올바른 라우터
-from services.legal_engine_svc import run_diagnosis
-from schemas.legal_engine import DiagnosisRequest, DiagnosisResponse
-
+# ✅ 올바른 라우터 — 서비스 호출만
 @router.post("/diagnosis", response_model=DiagnosisResponse)
 async def diagnose(req: DiagnosisRequest, user=Depends(get_current_user)):
     result = await run_diagnosis(req, user.id)
@@ -189,52 +165,32 @@ async def diagnose(req: DiagnosisRequest, user=Depends(get_current_user)):
 ```
 
 ```python
-# ❌ 금지 — 라우터에서 직접 SQL 실행
-@router.post("/diagnosis")
-async def diagnose(req: Request):
-    body = await req.json()
-    supabase = get_supabase()
-    result = supabase.table("rules").select("*").eq("facility_type", body["type"]).execute()
-    # ... 200줄의 비즈니스 로직 ...
-```
-
----
-
-## Service 작성 규칙
-
-```python
-# ✅ 올바른 서비스
-from db.supabase_client import get_supabase
-from schemas.legal_engine import DiagnosisRequest
-
+# ✅ 올바른 서비스 — HTTP를 모름
 async def run_diagnosis(req: DiagnosisRequest, user_id: str) -> dict:
-    """법령진단 실행. HTTP를 모름. 순수 비즈니스 로직."""
     rules = await fetch_matching_rules(req.facility_type, req.worker_count)
     penalties = calculate_penalties(rules)
     return {"rules": rules, "penalties": penalties}
-
-def calculate_penalties(rules: list) -> int:
-    """순수 함수 — DB 호출 없음, 테스트 가능"""
-    return sum(r["penalty_amount"] for r in rules if r.get("penalty_amount"))
 ```
 
 ```python
-# ❌ 금지 — 서비스에서 FastAPI 객체 사용
-from fastapi import Request, Response  # 금지!
+# ❌ 금지 — 라우터에서 직접 SQL
+# ❌ 금지 — 서비스에서 from fastapi import
 ```
 
 ---
 
-## 분리 대상 현황
+## 분리 대상 현황 — ✅ 전부 완료
 
-| 순위 | 파일 | 원본 → 현재 | 상태 | 테스트 |
+| 순위 | 파일 | 원본 → 현재 | 완료일 | 테스트 |
 |---|---|---|---|---|
-| ~~1~~ | ~~legal_engine.py~~ | 77KB → 5KB | ✅ 완료 | ✅ 6개 |
-| ~~2~~ | ~~law_rule_generator.py~~ | 46KB → 16KB | ✅ 완료 | ✅ 2개 |
-| ~~3~~ | ~~construction.py~~ | 58KB → 1.8KB | ✅ 완료 | — |
-| ~~4~~ | ~~payment.py~~ | 72KB → 12KB | ✅ 완료 (2026-04-26) | ✅ 16개 |
-| ~~5~~ | ~~matching.py~~ | 42KB → 5.3KB | ✅ 완료 (2026-04-26) | ✅ 11개 |
-| 6 | inspection_sets.py | 38KB | 🔴 미착수 | ❌ 없음 |
+| ~~1~~ | ~~legal_engine.py~~ | 77KB → 5KB | 완료 | ✅ 6개 |
+| ~~2~~ | ~~law_rule_generator.py~~ | 46KB → 16KB | 완료 | ✅ 2개 |
+| ~~3~~ | ~~construction.py~~ | 58KB → 1.8KB | 완료 | — |
+| ~~4~~ | ~~payment.py~~ | 72KB → 12KB | 2026-04-26 | ✅ 16개 |
+| ~~5~~ | ~~matching.py~~ | 42KB → 5.3KB | 2026-04-26 | ✅ 11개 |
+| ~~6~~ | ~~inspection_sets.py~~ | 38KB → 3.2KB | 2026-04-26 | ✅ 11개 |
+
+**총 축소: 333KB → 43KB (87% 감소), 테스트 46개 추가**
 
 ### 추가 20KB 초과 파일 (수정 시 분리 필요)
 
@@ -270,13 +226,6 @@ from fastapi import Request, Response  # 금지!
 
 ★ STEP 0 없이 STEP 1로 넘어가지 말 것!
 ★ 매 단계마다 기존 테스트 PASS + API 응답 동일 확인!
-
-절대 하지 말 것:
-- 테스트 없이 분리 시작
-- 라우터에서 직접 SQL 실행 (services에서만)
-- 서비스에서 Request/Response 객체 사용
-- 한 파일에 400줄 이상 작성
-- 20KB 이상 파일을 통째로 덮어쓰기
 ```
 
 ---
