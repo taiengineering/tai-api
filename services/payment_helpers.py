@@ -8,6 +8,7 @@ import hashlib
 import os
 import time
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import List
 from uuid import uuid4
 
@@ -35,6 +36,16 @@ FRONT_RETURN_URL = os.getenv(
     "INICIS_FRONT_RETURN_URL",
     "https://api.taieng.co.kr/payments/result",
 )
+
+_TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "..", "templates", "payment")
+
+
+@lru_cache(maxsize=4)
+def load_template(name: str) -> str:
+    """templates/payment/{name} 파일을 읽어 문자열로 반환. 최초 1회만 디스크 IO."""
+    path = os.path.join(_TEMPLATE_DIR, name)
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
 
 
 def sha256(data: str) -> str:

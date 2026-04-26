@@ -1,8 +1,14 @@
-# main.py — v5.37.0
+# main.py — v5.38.0
+# v5.38.0: payment_ops + 결제 서비스 레이어 분리 (origin/dev 병합)
 # v5.37.0: kosha_collect 라우터 등록 (POST /kosha-collect/run, /kosha-collect/{target})
 # v5.36.1: pw_reset 라우터 등록 (POST /auth/pw-reset/request, /auth/pw-reset/confirm)
 # v5.35.0: payment_billing 라우터 등록 (POST /payments/inicis/billing/*, /payments/subscriptions/{id}/cancel)
 # v5.34.0: Sentry 복원 + /health 개선 (항상 200 반환) + diagram_proxy 복원
+# v5.33.0: Sentry 에러 모니터링 (SENTRY_DSN 환경 변수 시 초기화)
+# v5.32.0: diagram_proxy 라우터 등록 (GET /api/v1/diagrams/{number}) — Supabase Storage 한글 SVG 우회
+# v5.31.1: diagnosis_proposal 라우터 등록 (GET /diagnosis/proposal-pdf/{public_token})
+# v5.31.0: diagnosis_report 라우터 등록 (GET /diagnosis/report-pdf/{public_token})
+# v5.30.0: diagnosis_integrated 라우터 등록 (BE-10 진단통합 백엔드)
 import os
 import sentry_sdk
 
@@ -96,6 +102,7 @@ from routers.tbm_templates           import router as tbm_templates_router
 from routers.safety_meetings         import router as safety_meetings_router
 from routers.risk_assessments        import router as risk_assessments_router
 from routers.payment                 import router as payment_router
+from routers.payment_ops             import router as payment_ops_router
 from routers.payment_billing         import router as payment_billing_router   # v5.35.0 정기결제
 from routers.corrective_actions      import router as corrective_actions_router
 from routers.messaging               import router as messaging_router
@@ -135,7 +142,7 @@ from routers.pw_reset                import router as pw_reset_router           
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.37.0"
+APP_VERSION = "5.38.0"
 
 
 @asynccontextmanager
@@ -291,6 +298,7 @@ app.include_router(tbm_templates_router)
 app.include_router(safety_meetings_router)
 app.include_router(risk_assessments_router)
 app.include_router(payment_router)
+app.include_router(payment_ops_router)
 app.include_router(payment_billing_router)                                        # v5.35.0 정기결제
 app.include_router(corrective_actions_router)
 app.include_router(messaging_router)

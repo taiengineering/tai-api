@@ -30,6 +30,7 @@ def _now_iso() -> str:
 
 
 def _send_sms(receiver: str, message: str) -> dict:
+    """messaging 모듈의 _call_messageme 직접 호출"""
     try:
         from routers.messaging import _call_messageme, SMS_URL, _get_cfg
         cfg = _get_cfg()
@@ -48,6 +49,8 @@ def _send_sms(receiver: str, message: str) -> dict:
         return {"success": False, "reason": str(e)}
 
 
+# ── 스키마 ────────────────────────────────────
+
 class PwResetRequest(BaseModel):
     phone: str
 
@@ -58,31 +61,45 @@ class PwResetConfirm(BaseModel):
     new_password: str
 
 
+# ── 1) OTP 발송 ──────────────────────────────
+
 @router.post("/request")
 def pw_reset_request(req: PwResetRequest):
     supabase = _get_supabase()
     phone = _normalize_phone(req.phone)
     if len(phone) < 10:
         raise HTTPException(status_code=400, detail="올바른 전화번호를 입력하세요.")
+
+    # 사용자 존재 확인
     user_res = supabase.table("users").select("id, name").eq("phone", phone).limit(1).execute()
     if not user_res.data:
         raise HTTPException(status_code=404, detail="가입되지 않은 전화번호입니다.")
+
+    # OTP 생성 + 저장
     otp_code = str(random.randint(100000, 999999))
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
     try:
         supabase.table("otp_store").upsert({
-            "phone": phone, "otp": otp_code,
-            "expires_at": expires_at.isoformat(), "created_at": _now_iso(),
+            "phone": phone,
+            "otp": otp_code,
+            "expires_at": expires_at.isoformat(),
+            "created_at": _now_iso(),
         }, on_conflict="phone").execute()
     except Exception as e:
         log.error(f"[PW_RESET] OTP 저장 실패: {e}")
         raise HTTPException(status_code=500, detail="인증번호 생성에 실패했습니다.")
+
+    # SMS 발송
     sms_msg = f"[TAI Safe] 비밀번호 재설정 인증번호: {otp_code} (5분 이내 입력)"
     sms_result = _send_sms(phone, sms_msg)
+
     if not sms_result.get("success"):
         log.warning(f"[PW_RESET] SMS 발송 실패 phone={phone} result={sms_result}")
+        # SMS 실패해도 OTP는 저장됨 — 개발환경에서 dev_otp로 테스트 가능
+
     user_name = user_res.data[0].get("name", "")
     masked_phone = phone[:3] + "****" + phone[-4:] if len(phone) >= 8 else phone
+
     return {
         "status": "success",
         "message": f"인증번호를 {masked_phone}으로 발송했습니다.",
@@ -91,14 +108,19 @@ def pw_reset_request(req: PwResetRequest):
     }
 
 
+# ── 2) OTP 검증 + 비밀번호 변경 ───────────────
+
 @router.post("/confirm")
 def pw_reset_confirm(req: PwResetConfirm):
     supabase = _get_supabase()
     phone = _normalize_phone(req.phone)
     otp = req.otp.strip()
     new_pw = req.new_password
+
     if len(new_pw) < 6:
         raise HTTPException(status_code=400, detail="비밀번호는 6자 이상이어야 합니다.")
+
+    # OTP 검증
     otp_valid = False
     try:
         otp_res = supabase.table("otp_store").select("otp, expires_at").eq("phone", phone).limit(1).execute()
@@ -120,22 +142,34 @@ def pw_reset_confirm(req: PwResetConfirm):
         raise
     except Exception as e:
         log.error(f"[PW_RESET] OTP 검증 오류: {e}")
+
     if not otp_valid:
         raise HTTPException(status_code=401, detail="인증번호가 올바르지 않습니다.")
+
+    # 사용자 조회 → auth_id 확인
     user_res = supabase.table("users").select("id, auth_id, email").eq("phone", phone).limit(1).execute()
     if not user_res.data:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
+
     user = user_res.data[0]
     auth_id = user.get("auth_id")
     if not auth_id:
         raise HTTPException(status_code=400, detail="인증 계정이 연결되지 않은 사용자입니다. 관리자에게 문의하세요.")
+
+    # Supabase Auth 비밀번호 변경
     try:
         supabase.auth.admin.update_user_by_id(auth_id, {"password": new_pw})
     except Exception as e:
         log.error(f"[PW_RESET] 비밀번호 변경 실패: {e}")
-        raise HTTPException(status_code=500, detail="비밀번호 변경에 실패했습니다.")
+        raise HTTPException(status_code=500, detail="비밀번호 변경에 실패했습니다. 잠시 후 다시 시도해주세요.")
+
+    # OTP 삭제 (재사용 방지)
     try:
         supabase.table("otp_store").delete().eq("phone", phone).execute()
     except Exception:
         pass
-    return {"status": "success", "message": "비밀번호가 변경되었습니다. 새 비밀번호로 로그인해주세요."}
+
+    return {
+        "status": "success",
+        "message": "비밀번호가 변경되었습니다. 새 비밀번호로 로그인해주세요."
+    }
