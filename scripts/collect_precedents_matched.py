@@ -10,14 +10,12 @@ master_building_legal_rules의 (법령명 + 조문번호)를 검색 키로
 사용법:
   cd ~/Desktop/tai-engineering/tai-api
   export INTERNAL_API_SECRET=...
-
-  python3 scripts/collect_precedents_matched.py --dry-run     # 검색만
-  python3 scripts/collect_precedents_matched.py               # 전체 수집
-  python3 scripts/collect_precedents_matched.py --limit 10    # 10개 키만
+  python3 scripts/collect_precedents_matched.py --dry-run
+  python3 scripts/collect_precedents_matched.py
+  python3 scripts/collect_precedents_matched.py --limit 10
 """
 import os
 import sys
-import json
 import time
 import re
 import argparse
@@ -25,7 +23,6 @@ import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
-# ──── 설정 ────
 LAW_OC = "taieng"
 LAW_SEARCH_URL = "http://www.law.go.kr/DRF/lawSearch.do"
 LAW_DETAIL_URL = "http://www.law.go.kr/DRF/lawService.do"
@@ -34,7 +31,6 @@ INTERNAL_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
 
 
 def parse_date(raw):
-    """선고일자 변환: '2026.01.29' 또는 '20260129' → '2026-01-29'"""
     if not raw:
         return None
     raw = raw.strip()
@@ -48,7 +44,6 @@ def parse_date(raw):
 
 
 def get_master_keys():
-    """Railway API에서 master 검색 키 조회"""
     try:
         resp = requests.get(
             f"{API_URL}/precedents/master-keys",
@@ -56,22 +51,16 @@ def get_master_keys():
             timeout=30,
         )
         resp.raise_for_status()
-        data = resp.json()
-        return data.get("keys", [])
+        return resp.json().get("keys", [])
     except Exception as e:
         print(f"[ERROR] master-keys 조회 실패: {e}")
         return []
 
 
 def search_by_ref(query, display=100):
-    """법제처 참조조문 검색 (search=3)"""
     params = {
-        "OC": LAW_OC,
-        "target": "prec",
-        "type": "XML",
-        "query": query,
-        "display": display,
-        "search": 3,  # 참조조문 검색
+        "OC": LAW_OC, "target": "prec", "type": "XML",
+        "query": query, "display": display, "search": 3,
     }
     try:
         resp = requests.get(LAW_SEARCH_URL, params=params, timeout=20)
@@ -96,12 +85,10 @@ def search_by_ref(query, display=100):
             el = node.find(field)
             item[field] = el.text.strip() if el is not None and el.text else None
         items.append(item)
-
     return items, total
 
 
 def fetch_detail(prec_seq):
-    """판례 상세 조회"""
     params = {"OC": LAW_OC, "target": "prec", "type": "XML", "ID": prec_seq}
     try:
         resp = requests.get(LAW_DETAIL_URL, params=params, timeout=20)
@@ -110,7 +97,6 @@ def fetch_detail(prec_seq):
         root = ET.fromstring(resp.text)
     except Exception:
         return {}
-
     detail = {}
     for field in ["판시사항", "판결요지", "참조조문", "참조판례", "판례내용"]:
         el = root.find(f".//{field}")
@@ -120,15 +106,10 @@ def fetch_detail(prec_seq):
 
 
 def save_matched(payload, rule_ids):
-    """Railway API로 저장 + rule_id 연결"""
     try:
         resp = requests.post(
             f"{API_URL}/precedents/save-matched",
-            json={
-                "secret": INTERNAL_SECRET,
-                "precedent": payload,
-                "rule_ids": rule_ids,
-            },
+            json={"secret": INTERNAL_SECRET, "precedent": payload, "rule_ids": rule_ids},
             timeout=15,
         )
         if resp.status_code == 200:
@@ -142,32 +123,29 @@ def save_matched(payload, rule_ids):
 
 def main():
     parser = argparse.ArgumentParser(description="master 기반 판례 수집")
-    parser.add_argument("--dry-run", action="store_true", help="검색만, 저장 안 함")
-    parser.add_argument("--limit", type=int, default=0, help="검색 키 수 제한 (0=전체)")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--limit", type=int, default=0)
     args = parser.parse_args()
 
     if not INTERNAL_SECRET:
         print("[ERROR] export INTERNAL_API_SECRET=... 필요")
         sys.exit(1)
 
-    # 1. master에서 검색 키 가져오기
     print("[1/3] master 검색 키 조회...")
     keys = get_master_keys()
     if not keys:
         print("[ERROR] 검색 키 없음")
         return
-
     if args.limit:
         keys = keys[:args.limit]
     print(f"  검색 키: {len(keys)}개")
 
-    # 2. 각 키별 참조조문 검색 + 저장
     print(f"\n[2/3] 법제처 참조조문 검색 시작")
     total_found = 0
     total_saved = 0
     total_links = 0
     total_skipped = 0
-    seen_seqs = set()  # 중복 방지 (같은 판례가 여러 조문에서 검색될 수 있음)
+    seen_seqs = set()
 
     for i, key in enumerate(keys, 1):
         query = key["search_query"]
@@ -184,45 +162,59 @@ def main():
 
         for item in items:
             prec_seq = item.get("판례일련번호")
+            case_number = item.get("사건번호")
+
+            # prec_seq 또는 case_number 없으면 skip
             if not prec_seq:
                 continue
+            if not case_number:
+                # case_number가 없으면 사건명에서 추출 시도, 안 되면 prec_seq 사용
+                case_name = item.get("사건명", "")
+                m = re.search(r"(\d{2,4}[가-힣]+\d+)", case_name)
+                case_number = m.group(1) if m else f"PREC-{prec_seq}"
 
-            # 이미 처리한 판례면 rule_id 추가 연결만
             already_saved = prec_seq in seen_seqs
             seen_seqs.add(prec_seq)
 
             if args.dry_run:
                 if not already_saved:
-                    print(f"  {item.get('사건번호', '?')} | {item.get('법원명', '?')} | "
-                          f"→ rule {rule_count}개 연결")
+                    print(f"  {case_number} | {item.get('법원명', '?')} | → rule {rule_count}개")
                 continue
 
-            # 상세 조회 (새 판례만)
             detail = {}
             if not already_saved:
                 detail = fetch_detail(prec_seq)
                 time.sleep(0.3)
 
-            # payload 구성
             payload = {
-                "case_number": item.get("사건번호"),
+                "case_number": case_number,
                 "case_name": item.get("사건명"),
                 "court_name": item.get("법원명"),
                 "decision_date": parse_date(item.get("선고일자", "")),
                 "case_type": item.get("사건종류명"),
-                "prec_seq": prec_seq,
+                "prec_seq": str(prec_seq),
                 "source": "law_go_kr",
                 "source_url": f"https://www.law.go.kr/precInfoP.do?precSeq={prec_seq}",
-                "summary": (detail.get("판결요지") or "")[:3000] if detail else None,
-                "full_text": detail.get("판례내용") if detail else None,
-                "judicial_summary": (detail.get("판시사항") or "")[:2000] if detail else None,
-                "violation_laws_raw": detail.get("참조조문") if detail else None,
-                "keywords": [key["law_name"]],
-                "collected_at": datetime.now(timezone.utc).isoformat(),
                 "is_active": True,
             }
 
-            # 저장 + rule_id 연결
+            # 상세 데이터 (새 판례만)
+            if detail:
+                summary = detail.get("판결요지", "")
+                if summary:
+                    payload["summary"] = summary[:3000]
+                full_text = detail.get("판례내용", "")
+                if full_text:
+                    payload["full_text"] = full_text
+                judicial = detail.get("판시사항", "")
+                if judicial:
+                    payload["judicial_summary"] = judicial[:2000]
+                ref_laws = detail.get("참조조문", "")
+                if ref_laws:
+                    payload["violation_laws_raw"] = ref_laws
+                payload["keywords"] = [key["law_name"]]
+                payload["collected_at"] = datetime.now(timezone.utc).isoformat()
+
             ok, action, links = save_matched(payload, rule_ids)
             if ok:
                 if not already_saved:
@@ -231,11 +223,10 @@ def main():
             else:
                 total_skipped += 1
                 if not already_saved:
-                    print(f"  [WARN] {item.get('사건번호')}: {action}")
+                    print(f"  [WARN] {case_number}: {action}")
 
-        time.sleep(0.5)  # 법령 간 대기
+        time.sleep(0.5)
 
-    # 3. 결과
     print(f"\n{'='*50}")
     print(f"[3/3] 수집 완료")
     print(f"  검색 키: {len(keys)}개")
