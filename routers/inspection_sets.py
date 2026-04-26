@@ -16,11 +16,17 @@ v1.6.0: inspection_set_items 자동생성 API
 v1.5.0: Rolling 생성
 """
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
 from typing import Optional, List, Any, Dict
 from datetime import date, datetime
 from dateutil.relativedelta import relativedelta
 from db.supabase_client import get_supabase
+from schemas.inspection_sets import (
+    AnchorBody,
+    AnchorBulkPatchBody,
+    BulkAnchorBody,
+    InspectionSetPatchBody,
+    ManualInspectionSetBody,
+)
 
 router = APIRouter(prefix="/inspection-sets", tags=["inspection_sets"])
 
@@ -193,43 +199,6 @@ def _run_generate_law_engine(factory_id: str, supabase) -> dict:
         "skipped_dup":          skipped_dup,
         "skipped_no_condition": skipped_no_cond,
     }
-
-
-# ── Pydantic 모델 ─────────────────────────────────────────
-
-class AnchorBody(BaseModel):
-    anchor_date:          Optional[str] = None
-    schedule_anchor_date: Optional[str] = None
-    last_inspection_date: Optional[str] = None
-
-class BulkAnchorBody(BaseModel):
-    factory_id: str
-    anchor_date: str
-
-class AnchorBulkItem(BaseModel):
-    id: str
-    schedule_anchor_date: str
-    last_inspection_date: Optional[str] = None
-
-class AnchorBulkPatchBody(BaseModel):
-    items: List[AnchorBulkItem]
-
-class ManualInspectionSetBody(BaseModel):
-    factory_id:          str
-    inspection_set_name: str
-    inspection_category: str = "GENERAL"
-    template_id:         Optional[str] = None
-    cycle_value:         int = 1
-    cycle_unit:          str = "month"
-    cycle_base_type:     str = "LAST_INSPECTION"
-    description:         Optional[str] = None
-
-class InspectionSetPatchBody(BaseModel):
-    is_active:            Optional[bool] = None
-    schedule_anchor_date: Optional[str]  = None
-    last_inspection_date: Optional[str]  = None
-    assignee_user_id:     Optional[str]  = None
-    description:          Optional[str]  = None
 
 
 # ══════════════════════════════════════════════

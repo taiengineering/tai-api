@@ -10,6 +10,7 @@ from dateutil.relativedelta import relativedelta
 from pydantic import ValidationError
 
 from routers import inspection_sets as isets
+from schemas.inspection_sets import ManualInspectionSetBody
 
 
 def test_get_delta_month_3():
@@ -72,8 +73,8 @@ def test_build_law_engine_row_contains_required_fields():
 
 
 def test_manual_inspection_set_body_required_fields():
-    body = isets.ManualInspectionSetBody(factory_id="f1", inspection_set_name="정기 점검")
+    body = ManualInspectionSetBody(factory_id="f1", inspection_set_name="정기 점검")
     assert body.factory_id == "f1"
     assert body.cycle_unit == "month"
     with pytest.raises(ValidationError):
-        isets.ManualInspectionSetBody(factory_id="f1")
+        ManualInspectionSetBody(factory_id="f1")
