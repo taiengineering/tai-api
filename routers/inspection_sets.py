@@ -36,61 +36,9 @@ from services.inspection_sets_helpers import (
     _meets_4_conditions,
     _next_planned_from,
 )
+from services import inspection_sets_svc as inspection_sets_svc
 
 router = APIRouter(prefix="/inspection-sets", tags=["inspection_sets"])
-
-def _run_generate_law_engine(factory_id: str, supabase) -> dict:
-    """
-    단일 factory에 대해 4조건 충족 inspection_sets → LAW_ENGINE 스케줄 생성.
-    반환: {total_sets, created, skipped_dup, skipped_no_condition}
-    """
-    sets_res = supabase.table("inspection_sets").select(
-        "id, factory_id, company_id, schedule_anchor_date, cycle_unit, cycle_value, "
-        "assignee_user_id, description, legal_rule_code, legal_rule_id, "
-        "law_name, law_article, inspection_category"
-    ).eq("factory_id", factory_id).eq("is_active", True).execute()
-    all_sets = sets_res.data or []
-
-    if not all_sets:
-        return {"total_sets": 0, "created": 0, "skipped_dup": 0, "skipped_no_condition": 0}
-
-    # NOT EXISTS: 이미 LAW_ENGINE PENDING 스케줄이 있는 inspection_set_id 조회
-    existing_res = supabase.table("work_schedules").select("inspection_set_id") \
-        .eq("factory_id", factory_id) \
-        .eq("source_type", "LAW_ENGINE") \
-        .eq("status_code", "PENDING") \
-        .execute()
-    existing_ids = {
-        r["inspection_set_id"] for r in (existing_res.data or []) if r.get("inspection_set_id")
-    }
-
-    rows = []
-    skipped_dup = 0
-    skipped_no_cond = 0
-
-    for iset in all_sets:
-        set_id = iset["id"]
-        if set_id in existing_ids:
-            skipped_dup += 1
-            continue
-        if not _meets_4_conditions(iset):
-            skipped_no_cond += 1
-            continue
-        rows.append(_build_law_engine_row(iset))
-        existing_ids.add(set_id)  # 루프 내 중복 방지
-
-    created = 0
-    for i in range(0, len(rows), 20):
-        res = supabase.table("work_schedules").insert(rows[i:i + 20]).execute()
-        created += len(res.data or [])
-
-    return {
-        "total_sets":           len(all_sets),
-        "created":              created,
-        "skipped_dup":          skipped_dup,
-        "skipped_no_condition": skipped_no_cond,
-    }
-
 
 # ══════════════════════════════════════════════
 # GET /inspection-sets
@@ -375,7 +323,7 @@ def generate_schedules_all():
 
     for fac in factories:
         factory_id = fac["id"]
-        r = _run_generate_law_engine(factory_id, supabase)
+        r = inspection_sets_svc.run_generate_law_engine(factory_id, supabase)
         if r["total_sets"] == 0:
             continue
         processed       += 1
@@ -425,7 +373,7 @@ def generate_schedules_for_factory(
 
     # ── LAW_ENGINE 모드 (기본) ──────────────────────────────
     if mode == "law_engine":
-        r = _run_generate_law_engine(factory_id, supabase)
+        r = inspection_sets_svc.run_generate_law_engine(factory_id, supabase)
         return {
             "status": "success",
             "message": f"{r['total_sets']}개 세트 처리 — LAW_ENGINE 스케줄 {r['created']}건 생성",
