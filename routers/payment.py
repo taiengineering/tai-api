@@ -34,218 +34,47 @@ v3.0.0 (2026-04-12)
 """
 from __future__ import annotations
 
-import base64 as _base64
-import hashlib
 import logging
 import os
-import time
 import urllib.parse
 from datetime import datetime, timezone, timedelta
-from dateutil.relativedelta import relativedelta
 from typing import Any, Dict, List, Optional
-from uuid import uuid4
 
-import requests as _requests
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel, field_validator
 
 from db.supabase_client import get_supabase
+from schemas.payment import (
+    CancelBody,
+    DiagnosisVbankPrepareBody,
+    ManualConfirmBody,
+    PrepareBody,
+    VbankPrepareBody,
+)
+from services.payment_svc import (
+    PaymentPrepareError,
+    call_pay_auth,
+    load_sign_key,
+    run_inicis_prepare,
+)
+from services.payment_helpers import (
+    SAAS_PRODUCT_TYPES,
+    INICIS_MID,
+    DEFAULT_CLOSE_URL,
+    DEFAULT_RETURN_URL,
+    FRONT_RETURN_URL,
+    calc_expired_at as _calc_expired_at,
+    make_order_id as _make_order_id,
+    now_iso as _now_iso,
+    sha256 as _sha256,
+    service_status_after_card_pay,
+    split_supply_vat,
+    ts_ms as _ts_ms,
+)
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/payments", tags=["결제"])
-
-INICIS_MID          = os.getenv("INICIS_MID", "taieng4350")
-INICIS_KEY_PATH     = os.getenv("INICIS_KEY_PATH", "/app/key/taieng4350")
-INICIS_KEY_PASSWORD = os.getenv("INICIS_KEY_PASSWORD", "1111")
-
-DEFAULT_RETURN_URL = "https://api.taieng.co.kr/payments/inicis/return"
-DEFAULT_CLOSE_URL  = "https://api.taieng.co.kr/payments/result?resultCode=CLOSE"
-FRONT_RETURN_URL   = "https://api.taieng.co.kr/payments/result"
-
-# SaaS 상품 — 결제 후 expired_at 계산 대상
-SAAS_PRODUCT_TYPES: List[str] = [
-    "SAAS_CONSTRUCTION",
-    "SAAS_FACILITY",
-    "SAAS_BUILDING",
-]
-
-
-# ── 유틸 ──────────────────────────────────────────────────────────────
-
-def _sha256(data: str) -> str:
-    return hashlib.sha256(data.encode("utf-8")).hexdigest()
-
-def _ts_ms() -> str:
-    return str(int(time.time() * 1000))
-
-def _make_order_id() -> str:
-    return f"TAI{datetime.now():%Y%m%d%H%M%S}{uuid4().hex[:6].upper()}"
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-def _calc_expired_at(paid_at_iso: str, period_months: int) -> str:
-    base = datetime.fromisoformat(paid_at_iso.replace("Z", "+00:00"))
-    return (base + relativedelta(months=period_months)).isoformat()
-
-def _load_sign_key() -> str:
-    env_key = os.getenv("INICIS_SIGN_KEY", "").strip()
-    if env_key:
-        return env_key
-    try:
-        with open(os.path.join(INICIS_KEY_PATH, "keypass.enc"), "r", encoding="utf-8") as f:
-            key = f.read().strip()
-            if key:
-                return key
-    except Exception as e:
-        log.warning(f"[INICIS] keypass.enc 로드 실패: {e}")
-    return INICIS_KEY_PASSWORD
-
-def _load_mpriv_pem() -> Optional[bytes]:
-    b64 = os.getenv("INICIS_MPRIV_PEM_B64", "").strip()
-    if b64:
-        try:
-            return _base64.b64decode(b64)
-        except Exception as e:
-            log.error(f"[INICIS] INICIS_MPRIV_PEM_B64 디코딩 실패: {e}")
-    try:
-        with open(os.path.join(INICIS_KEY_PATH, "mpriv.pem"), "rb") as f:
-            return f.read()
-    except Exception as e:
-        log.warning(f"[INICIS] mpriv.pem 로드 실패: {e}")
-        return None
-
-def _rsa_sign_sha256(data: str, pem_bytes: bytes, password: str) -> Optional[str]:
-    try:
-        from Crypto.PublicKey import RSA
-        from Crypto.Signature import pkcs1_15
-        from Crypto.Hash import SHA256 as _SHA256
-        key = RSA.import_key(pem_bytes, passphrase=password)
-        h   = _SHA256.new(data.encode("utf-8"))
-        sig = pkcs1_15.new(key).sign(h)
-        return _base64.b64encode(sig).decode("utf-8")
-    except Exception as e:
-        log.error(f"[INICIS] RSA 서명 실패: {e}")
-        return None
-
-def _call_pay_auth(auth_token: str, auth_url: str, sign_key: str) -> Dict[str, Any]:
-    timestamp    = _ts_ms()
-    sig_data     = f"authToken={auth_token}&timestamp={timestamp}"
-    veri_data    = f"authToken={auth_token}&signKey={sign_key}&timestamp={timestamp}"
-    signature    = _sha256(sig_data)
-    verification = _sha256(veri_data)
-    params: Dict[str, str] = {
-        "mid":          INICIS_MID,
-        "authToken":    auth_token,
-        "timestamp":    timestamp,
-        "signature":    signature,
-        "verification": verification,
-        "charset":      "UTF-8",
-        "format":       "JSON",
-    }
-    pem = _load_mpriv_pem()
-    if pem:
-        rsa_sig = _rsa_sign_sha256(auth_token, pem, INICIS_KEY_PASSWORD)
-        if rsa_sig:
-            params["signData"] = rsa_sig
-    try:
-        resp = _requests.post(auth_url, data=params, timeout=30,
-                              headers={"Content-Type": "application/x-www-form-urlencoded"})
-        result = resp.json()
-        log.info(f"[INICIS STEP3] resultCode={result.get('resultCode')} resultMsg={result.get('resultMsg')}")
-        return result
-    except Exception as e:
-        log.error(f"[INICIS] 승인 API 실패: {e}")
-        raise
-
-
-# ── Pydantic 모델 ─────────────────────────────────────────────────────
-
-class PrepareBody(BaseModel):
-    user_id:       str
-    product_type:  str
-    amount:        int
-    goodname:      str
-    company_id:    Optional[str] = None
-    contract_id:   Optional[str] = None
-    quote_id:      Optional[str] = None
-    plan_code:     Optional[str] = None
-    period_months: Optional[int] = None
-    payment_type:  Optional[str] = "CARD"
-    buyername:     Optional[str] = "고객"
-    buyertel:      Optional[str] = "00000000000"
-    buyeremail:    Optional[str] = None
-    return_url:    Optional[str] = None
-    close_url:     Optional[str] = None
-
-    @field_validator("user_id")
-    @classmethod
-    def user_id_required(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError("user_id는 필수값입니다. 로그인 후 결제해주세요.")
-        return v.strip()
-
-    @field_validator("product_type")
-    @classmethod
-    def product_type_valid(cls, v: str) -> str:
-        allowed = {
-            "DIAGNOSIS", "SAAS_CONSTRUCTION", "SAAS_FACILITY", "SAAS_BUILDING",
-            "EXPERT", "REPAIR", "CONSULTING", "INAPP",
-        }
-        if v not in allowed:
-            raise ValueError(f"product_type 값이 유효하지 않습니다. 허용: {allowed}")
-        return v
-
-
-class VbankPrepareBody(BaseModel):
-    """VBANK 전용 결제 준비 Body — 연결 서비스(선임/컨설팅/수선) 전용"""
-    user_id:              Optional[str] = None
-    auth_token:           Optional[str] = None   # DIAGNOSIS 비회원 토큰
-    public_token:         Optional[str] = None   # DIAGNOSIS 결과 토큰
-    product_type:         str                    # EXPERT / CONSULTING / REPAIR / DIAGNOSIS
-    amount:               int                    # 계약 전체 금액
-    goodname:             str                    # 상품명
-    matching_contract_id: Optional[str] = None   # 연결 서비스 결제 시 필수
-
-    company_id:          Optional[str] = None
-    buyername:           Optional[str] = "고객"
-    buyertel:            Optional[str] = "00000000000"
-    buyeremail:          Optional[str] = None
-    vbank_expire_min:    int = 4320              # 가상계좌 유효시간 (분, 기본 3일)
-
-    @field_validator("product_type")
-    @classmethod
-    def validate_vbank_product(cls, v: str) -> str:
-        allowed = {"EXPERT", "CONSULTING", "REPAIR", "DIAGNOSIS"}
-        if v not in allowed:
-            raise ValueError(f"VBANK product_type 허용: {allowed}")
-        return v
-
-
-class DiagnosisVbankPrepareBody(BaseModel):
-    """유료 진단 가상계좌 발급 준비."""
-    auth_token: Optional[str] = None
-    public_token: Optional[str] = None
-    amount: int
-    goodname: str = "유료 법령진단"
-    buyername: Optional[str] = "고객"
-    buyertel: Optional[str] = "00000000000"
-    buyeremail: Optional[str] = None
-    invoice_requested: bool = False
-    invoice_biz_no: Optional[str] = None
-    invoice_email: Optional[str] = None
-
-
-class ManualConfirmBody(BaseModel):
-    payment_id:  str
-    contract_id: str
-
-
-class CancelBody(BaseModel):
-    reason:       Optional[str] = "사용자 요청"
-    cancelled_by: Optional[str] = None
 
 
 # ── HTML 페이지 ───────────────────────────────────────────────────────
@@ -590,71 +419,10 @@ def payment_result_page():
 @router.post("/inicis/prepare")
 def inicis_prepare(body: PrepareBody):
     """결제 준비 — STEP1 (user_id, product_type 필수)"""
-    if body.product_type in SAAS_PRODUCT_TYPES and not body.period_months:
-        raise HTTPException(status_code=400, detail=f"SaaS 상품은 period_months가 필수입니다.")
-
-    supabase  = get_supabase()
-    sign_key  = _load_sign_key()
-    order_id  = _make_order_id()
-    timestamp = _ts_ms()
-    price_str = str(body.amount)
-    mKey      = _sha256(sign_key)
-    sig_data   = f"oid={order_id}&price={price_str}&timestamp={timestamp}"
-    veri_data  = f"oid={order_id}&price={price_str}&signKey={sign_key}&timestamp={timestamp}"
-    signature    = _sha256(sig_data)
-    verification = _sha256(veri_data)
-    log.info(f"[INICIS STEP1] oid={order_id} user={body.user_id} product={body.product_type}")
-
-    supply_amount = round(body.amount / 1.1)
-    vat_amount    = body.amount - supply_amount
-    now = _now_iso()
-
-    row: dict = {
-        "user_id":         body.user_id,
-        "product_type":    body.product_type,
-        "payment_method":  "INICIS",
-        "payment_type":    body.payment_type or "CARD",
-        "supply_amount":   supply_amount,
-        "vat_amount":      vat_amount,
-        "total_amount":    body.amount,
-        "inicis_order_id": order_id,
-        "status_code":     "PENDING",
-        "service_status":  None,   # 결제 완료 후 설정
-        "created_at":      now,
-        "updated_at":      now,
-    }
-    if body.company_id:    row["company_id"]   = body.company_id
-    if body.contract_id:   row["contract_id"]  = body.contract_id
-    if body.quote_id:      row["quote_id"]      = body.quote_id
-    if body.plan_code:     row["plan_code"]     = body.plan_code
-    if body.period_months: row["period_months"] = body.period_months
-
-    res = supabase.table("payments").insert(row).execute()
-    if not res.data:
-        raise HTTPException(status_code=500, detail="결제 레코드 생성 실패")
-
-    return {
-        "status": "success",
-        "data": {
-            "payment_id":   res.data[0]["id"],
-            "mid":          INICIS_MID,
-            "mKey":         mKey,
-            "oid":          order_id,
-            "price":        price_str,
-            "goodname":     body.goodname,
-            "buyername":    body.buyername or "고객",
-            "buyertel":     body.buyertel  or "00000000000",
-            "buyeremail":   body.buyeremail or "",
-            "timestamp":    timestamp,
-            "signature":    signature,
-            "verification": verification,
-            "use_chkfake":  "Y",
-            "returnUrl":    DEFAULT_RETURN_URL,
-            "closeUrl":     DEFAULT_CLOSE_URL,
-            "charset":      "UTF-8",
-            "gopaymethod":  "Card",
-        },
-    }
+    try:
+        return run_inicis_prepare(body)
+    except PaymentPrepareError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
 @router.post("/inicis/return", include_in_schema=True)
@@ -706,9 +474,9 @@ async def inicis_return(request: Request):
         "updated_at": _now_iso(),
     }).eq("id", payment_id).execute()
 
-    sign_key = _load_sign_key()
+    sign_key = load_sign_key()
     try:
-        auth_result = _call_pay_auth(auth_token, auth_url, sign_key)
+        auth_result = call_pay_auth(auth_token, auth_url, sign_key)
     except Exception as e:
         supabase.table("payments").update({
             "status_code": "FAILED", "fail_reason": f"승인 API 실패: {e}", "updated_at": _now_iso(),
@@ -758,8 +526,7 @@ async def inicis_return(request: Request):
         if product_type in SAAS_PRODUCT_TYPES and period_months:
             expired_at = _calc_expired_at(now, period_months)
 
-        # service_status: 계약 연결 → ACTIVE(서비스중), 미연결 → PAID(결제완료)
-        service_status = "ACTIVE" if contract_id else "PAID"
+        service_status = service_status_after_card_pay(contract_id)
 
         update_row: dict = {
             "status_code":      "SUCCESS",
@@ -820,7 +587,7 @@ async def inicis_noti(request: Request):
     order_id     = data.get("orderNumber") or data.get("oid", "")
     paymethod    = data.get("paymethod", "")
     supabase     = get_supabase()
-    sign_key     = _load_sign_key()
+    sign_key     = load_sign_key()
 
     pay_res = supabase.table("payments").select(
         "id, status_code, contract_id, product_type, period_months"
@@ -838,7 +605,7 @@ async def inicis_noti(request: Request):
         return "OK"
 
     try:
-        auth_result = _call_pay_auth(auth_token, auth_url, sign_key)
+        auth_result = call_pay_auth(auth_token, auth_url, sign_key)
     except Exception:
         return "OK"
 
@@ -848,18 +615,18 @@ async def inicis_noti(request: Request):
         expired_at = None
         if product_type in SAAS_PRODUCT_TYPES and period_months:
             expired_at = _calc_expired_at(now, period_months)
-        service_status = "ACTIVE" if contract_id else "PAID"
+        service_status = service_status_after_card_pay(contract_id)
 
         update_row: dict = {
-            "status_code":      "SUCCESS",
-            "service_status":   service_status,
-            "pg_method":        pg_method,
-            "inicis_tid":       auth_result.get("tid", ""),
+            "status_code": "SUCCESS",
+            "service_status": service_status,
+            "pg_method": pg_method,
+            "inicis_tid": auth_result.get("tid", ""),
             "inicis_auth_code": auth_result.get("applNum", ""),
             "inicis_card_name": auth_result.get("P_FN_NM", ""),
-            "inicis_raw":       auth_result,
-            "paid_at":          now,
-            "updated_at":       now,
+            "inicis_raw": auth_result,
+            "paid_at": now,
+            "updated_at": now,
         }
         if expired_at:
             update_row["expired_at"] = expired_at
@@ -1033,7 +800,7 @@ def vbank_prepare(body: VbankPrepareBody):
     ⚠️ 이니시스 카드심사 완료 후 실제 가동 (현재는 구조 완성)
     """
     supabase  = get_supabase()
-    sign_key  = _load_sign_key()
+    sign_key  = load_sign_key()
     order_id  = _make_order_id()
     timestamp = _ts_ms()
     price_str = str(body.amount)
@@ -1044,8 +811,7 @@ def vbank_prepare(body: VbankPrepareBody):
     signature    = _sha256(sig_data)
     verification = _sha256(veri_data)
 
-    supply_amount = round(body.amount / 1.1)
-    vat_amount    = body.amount - supply_amount
+    supply_amount, vat_amount = split_supply_vat(body.amount)
     now           = _now_iso()
 
     vbank_expires_at = (
