@@ -1,4 +1,5 @@
-# main.py — v5.35.0
+# main.py — v5.36.0
+# v5.36.0: pw_reset 라우터 등록 (POST /auth/pw-reset/request, /auth/pw-reset/confirm)
 # v5.35.0: payment_billing 라우터 등록 (POST /payments/inicis/billing/*, /payments/subscriptions/{id}/cancel)
 # v5.34.0: Sentry 복원 + /health 개선 (항상 200 반환) + diagram_proxy 복원
 # v5.33.0: Sentry 에러 모니터링 (SENTRY_DSN 환경 변수 시 초기화)
@@ -128,10 +129,11 @@ from routers.diagnosis_integrated    import router as diagnosis_integrated_route
 from routers.diagnosis_report        import router as diagnosis_report_router        # v5.31.0
 from routers.diagnosis_proposal      import router as diagnosis_proposal_router      # v5.31.1
 from routers.diagram_proxy           import router as diagram_proxy_router           # v5.32.0
+from routers.pw_reset                import router as pw_reset_router                # v5.36.0 비밀번호재설정
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.35.0"
+APP_VERSION = "5.36.0"
 
 
 @asynccontextmanager
@@ -203,6 +205,7 @@ app.include_router(diagram_proxy_router)
 
 # 인증 필요 엔드포인트
 app.include_router(auth_router)
+app.include_router(pw_reset_router)
 app.include_router(users_router)
 app.include_router(companies_router)
 app.include_router(factories_router)
