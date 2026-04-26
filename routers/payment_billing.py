@@ -43,17 +43,16 @@ from pydantic import BaseModel, field_validator
 
 from db.supabase_client import get_supabase
 
-# payment.py에 정의된 공통 유틸/상수 재사용
-from routers.payment import (
+from services.payment_helpers import (
     DEFAULT_CLOSE_URL,
     FRONT_RETURN_URL,
     SAAS_PRODUCT_TYPES,
-    _sha256,
-    _ts_ms,
-    _now_iso,
-    _calc_expired_at,
-    _call_pay_auth,
+    calc_expired_at as _calc_expired_at,
+    now_iso as _now_iso,
+    sha256 as _sha256,
+    ts_ms as _ts_ms,
 )
+from services.payment_svc import call_pay_auth as _call_pay_auth
 
 log = logging.getLogger(__name__)
 
