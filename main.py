@@ -1,12 +1,8 @@
-# main.py — v5.36.1
+# main.py — v5.37.0
+# v5.37.0: kosha_collect 라우터 등록 (POST /kosha-collect/run, /kosha-collect/{target})
 # v5.36.1: pw_reset 라우터 등록 (POST /auth/pw-reset/request, /auth/pw-reset/confirm)
 # v5.35.0: payment_billing 라우터 등록 (POST /payments/inicis/billing/*, /payments/subscriptions/{id}/cancel)
 # v5.34.0: Sentry 복원 + /health 개선 (항상 200 반환) + diagram_proxy 복원
-# v5.33.0: Sentry 에러 모니터링 (SENTRY_DSN 환경 변수 시 초기화)
-# v5.32.0: diagram_proxy 라우터 등록 (GET /api/v1/diagrams/{number}) — Supabase Storage 한글 SVG 우회
-# v5.31.1: diagnosis_proposal 라우터 등록 (GET /diagnosis/proposal-pdf/{public_token})
-# v5.31.0: diagnosis_report 라우터 등록 (GET /diagnosis/report-pdf/{public_token})
-# v5.30.0: diagnosis_integrated 라우터 등록 (BE-10 진단통합 백엔드)
 import os
 import sentry_sdk
 
@@ -56,6 +52,7 @@ from routers.personnel               import router as personnel_router
 from routers.repair                  import router as repair_router
 from routers.biz_verify              import router as biz_verify_router
 from routers.kosha_apis              import router as kosha_router
+from routers.kosha_collect           import router as kosha_collect_router    # v5.37.0
 from routers.fire_hazmat             import router as fire_hazmat_router
 from routers.safety_info             import router as safety_info_router
 from routers.posts                   import router as posts_router
@@ -138,7 +135,7 @@ from routers.pw_reset                import router as pw_reset_router           
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.36.1"
+APP_VERSION = "5.37.0"
 
 
 @asynccontextmanager
@@ -247,6 +244,7 @@ app.include_router(personnel_router)
 app.include_router(repair_router)
 app.include_router(biz_verify_router)
 app.include_router(kosha_router)
+app.include_router(kosha_collect_router)                                           # v5.37.0
 app.include_router(fire_hazmat_router)
 app.include_router(safety_info_router)
 app.include_router(posts_router)
