@@ -9,17 +9,17 @@ import pytest
 from dateutil.relativedelta import relativedelta
 from pydantic import ValidationError
 
-from routers import inspection_sets as isets
 from schemas.inspection_sets import ManualInspectionSetBody
+from services import inspection_sets_helpers as ish
 
 
 def test_get_delta_month_3():
-    assert isets._get_delta("month", 3) == relativedelta(months=3)
+    assert ish._get_delta("month", 3) == relativedelta(months=3)
 
 
 def test_next_planned_from_past_base_returns_future_or_today():
     base = date.today() - relativedelta(months=14)
-    planned = isets._next_planned_from(base, "month", 3)
+    planned = ish._next_planned_from(base, "month", 3)
     assert planned >= date.today()
 
 
@@ -32,7 +32,7 @@ def test_meets_4_conditions_all_true():
         "legal_rule_code": None,
         "legal_rule_id": None,
     }
-    assert isets._meets_4_conditions(row) is True
+    assert ish._meets_4_conditions(row) is True
 
 
 def test_meets_4_conditions_missing_assignee_false():
@@ -44,7 +44,7 @@ def test_meets_4_conditions_missing_assignee_false():
         "legal_rule_code": "L-1",
         "legal_rule_id": None,
     }
-    assert isets._meets_4_conditions(row) is False
+    assert ish._meets_4_conditions(row) is False
 
 
 def test_build_law_engine_row_contains_required_fields():
@@ -63,7 +63,7 @@ def test_build_law_engine_row_contains_required_fields():
         "legal_rule_code": "R001",
         "legal_rule_id": "RID001",
     }
-    out = isets._build_law_engine_row(row)
+    out = ish._build_law_engine_row(row)
     assert out["factory_id"] == "fac-1"
     assert out["inspection_set_id"] == "set-1"
     assert out["assigned_user_id"] == "u1"
