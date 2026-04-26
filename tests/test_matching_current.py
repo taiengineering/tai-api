@@ -10,15 +10,16 @@ from pydantic import ValidationError
 
 from routers import matching as m
 from schemas.matching import CommissionBody, MatchingRequestBody
+from services import matching_helpers as mh
 
 
 def test_status_transitions_received_to_matching_allowed():
-    allowed = m.STATUS_TRANSITIONS["RECEIVED"]
+    allowed = mh.STATUS_TRANSITIONS["RECEIVED"]
     assert "MATCHING" in allowed
 
 
 def test_status_transitions_received_to_in_progress_not_allowed():
-    allowed = m.STATUS_TRANSITIONS["RECEIVED"]
+    allowed = mh.STATUS_TRANSITIONS["RECEIVED"]
     assert "IN_PROGRESS" not in allowed
 
 

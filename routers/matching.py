@@ -37,6 +37,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
+from services.matching_helpers import (
+    STATUS_TIMESTAMP_MAP,
+    now_iso,
+    validate_status_transition,
+)
 from schemas.matching import (
     CalcBody,
     CommissionBody,
@@ -50,32 +55,7 @@ log    = logging.getLogger(__name__)
 router = APIRouter()   # prefix는 main.py에서 지정
 
 
-# ── 상태 전이 규칙 ──────────────────────────────────────────────────────
-STATUS_TRANSITIONS: Dict[str, set] = {
-    "RECEIVED":    {"MATCHING", "CANCELLED"},
-    "MATCHING":    {"PROPOSED", "FAILED", "CANCELLED"},
-    "PROPOSED":    {"SELECTED", "CANCELLED"},
-    "SELECTED":    {"CONTRACTING", "DROPPED"},
-    "CONTRACTING": {"CONTRACTED", "DROPPED"},
-    "CONTRACTED":  {"IN_PROGRESS"},
-    "IN_PROGRESS": {"CONFIRMING"},
-    "CONFIRMING":  {"SETTLED"},
-    "SETTLED":     {"CLOSED"},
-}
-
-# 상태 전이 시 자동 기록할 타임스탬프 컬럼
-STATUS_TIMESTAMP_MAP: Dict[str, str] = {
-    "MATCHING":  "matched_at",
-    "SELECTED":  "selected_at",
-    "CANCELLED": "cancelled_at",
-}
-
-
 # ── 유틸 ──────────────────────────────────────────────────────────────
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _require_admin(current_user: dict = Depends(get_current_user)) -> dict:
     if current_user.get("role_code") != "001":
         raise HTTPException(status_code=403, detail="어드민만 접근 가능합니다.")
@@ -140,7 +120,7 @@ def create_request(
         raise HTTPException(status_code=403, detail="본인인증이 필요합니다.")
 
     supabase = get_supabase()
-    now      = _now_iso()
+    now      = now_iso()
 
     status_history = [{"status": "RECEIVED", "at": now, "by": current_user["id"]}]
 
@@ -350,16 +330,12 @@ def update_status(
         raise HTTPException(status_code=404, detail="신청을 찾을 수 없습니다.")
 
     current_status = req_res.data[0]["status"]
-    allowed        = STATUS_TRANSITIONS.get(current_status, set())
+    try:
+        validate_status_transition(current_status, body.status)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
-    if body.status not in allowed:
-        raise HTTPException(
-            status_code=400,
-            detail=f"'{current_status}' 상태에서 '{body.status}'로 변경할 수 없습니다. "
-                   f"허용 전이: {allowed}",
-        )
-
-    now     = _now_iso()
+    now     = now_iso()
     history = req_res.data[0].get("status_history") or []
     history.append({
         "status": body.status,
@@ -433,7 +409,7 @@ def create_match_result(
     최초 배정 시 matching_requests → MATCHING 자동 전이.
     """
     supabase = get_supabase()
-    now      = _now_iso()
+    now      = now_iso()
 
     # 중복 매칭 방지
     dup = (
@@ -513,7 +489,7 @@ def notify_expert(
     if result["status"] not in ("MATCHED",):
         raise HTTPException(status_code=400, detail="MATCHED 상태인 건만 알림 발송 가능합니다.")
 
-    now = _now_iso()
+    now = now_iso()
 
     supabase.table("notifications").insert({
         "user_id":    result["expert_user_id"],
@@ -560,7 +536,7 @@ def mark_viewed(
     if result["expert_user_id"] != current_user["id"]:
         raise HTTPException(status_code=403, detail="권한이 없습니다.")
 
-    now         = _now_iso()
+    now         = now_iso()
     update_data: Dict[str, Any] = {"viewed_at": now}
 
     if result["status"] not in ("PROPOSED", "SELECTED", "REJECTED"):
@@ -618,7 +594,7 @@ def submit_proposal(
     if result["status"] not in ("MATCHED", "NOTIFIED", "VIEWED"):
         raise HTTPException(status_code=400, detail=f"제안서를 발송할 수 없는 상태입니다: {result['status']}")
 
-    now        = _now_iso()
+    now        = now_iso()
     request_id = result["request_id"]
 
     # 1. 제안서 저장
@@ -779,7 +755,7 @@ def select_expert(
     if current_user.get("role_code") != "001" and req_data.get("user_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="권한이 없습니다.")
 
-    now = _now_iso()
+    now = now_iso()
 
     # 1. 선택 result → SELECTED
     supabase.table("matching_results").update({
@@ -1024,7 +1000,7 @@ def create_commission(
 ):
     """수수료율 신규 등록 — POST /price-commission"""
     supabase = get_supabase()
-    now      = _now_iso()
+    now      = now_iso()
     res      = supabase.table("price_commission").insert({
         "service_type": body.service_type,
         "fee_rate":     body.fee_rate,
@@ -1104,7 +1080,7 @@ def update_commission(
         "amount_max":   body.amount_max,
         "description":  body.description,
         "is_active":    body.is_active,
-        "updated_at":   _now_iso(),
+        "updated_at":   now_iso(),
     }).eq("id", commission_id).execute()
     return {"status": "success", "message": "수수료율이 수정되었습니다."}
 
@@ -1118,6 +1094,6 @@ def deactivate_commission(
     supabase = get_supabase()
     supabase.table("price_commission").update({
         "is_active":  False,
-        "updated_at": _now_iso(),
+        "updated_at": now_iso(),
     }).eq("id", commission_id).execute()
     return {"status": "success", "message": "비활성화 처리되었습니다."}
