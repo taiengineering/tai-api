@@ -8,9 +8,9 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import ValidationError
 
-from routers import matching as m
 from schemas.matching import CommissionBody, MatchingRequestBody
 from services import matching_helpers as mh
+from services import matching_svc as ms
 
 
 def test_status_transitions_received_to_matching_allowed():
@@ -55,7 +55,7 @@ def test_calc_commission_default_ten_percent_when_db_empty():
     supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
         data=[]
     )
-    out = m.calc_commission(supabase, "EXPERT", 1_000_000, 12)
+    out = ms.calc_commission(supabase, "EXPERT", 1_000_000, 12)
     assert out["fee_rate"] == 10.0
     assert out["tai_fee_amount"] == 100_000
     assert out["expert_amount"] == 900_000
