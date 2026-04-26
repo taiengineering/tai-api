@@ -1,12 +1,13 @@
 """
-routers/precedent_api.py — v1.7.1
+routers/precedent_api.py — v1.7.2
 
-v1.7.1 (2026-04-26):
-  [FIX] POST /save-matched — upsert 오류 수정, rule_links 중복 체크 방식 변경
+v1.7.2 (2026-04-26):
+  [FIX] GET /master-keys — 시행령/시행규칙 포함 (모법만 → 전체)
+        NFTC/NFPC/고시/기준만 제외. 검색 키 172 → 385개로 확대
+        rule 커버리지 극대화 목적
 
+v1.7.1: save-matched upsert 오류 수정
 v1.7.0: GET /master-keys + POST /save-matched
-v1.5.0: GET /test-api
-v1.4.0: sector/year 필터, /sync, /iap/search
 """
 from __future__ import annotations
 import os, logging, re, httpx
@@ -26,7 +27,10 @@ EDGE_COLLECT_URL = os.environ.get(
 INTERNAL_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
 DEFAULT_DISPLAY = 20
 VALID_SECTORS = {"BUILDING", "INDUSTRY", "CONSTRUCTION", "ALL"}
-_CHILD_LAW_PATTERNS = ["시행령", "시행규칙", "NFTC", "NFPC", "고시", "통합고시", "기준", "세칙", "규정"]
+
+# NFTC/NFPC/고시/기준만 제외 (시행령/시행규칙은 포함)
+_EXCLUDE_PATTERNS = ["NFTC", "NFPC", "고시", "통합고시", "세칙", "규정",
+                     "기술기준", "성능기준", "안전기준", "세부기준", "기준통합"]
 
 
 # ── GET /precedents/master-keys ────────────────────────────
@@ -45,7 +49,8 @@ async def get_master_search_keys(secret: str = Query("")):
     for row in (rows.data or []):
         law_name = row.get("law_name", "")
         law_article = row.get("law_article", "")
-        if any(p in law_name for p in _CHILD_LAW_PATTERNS):
+        # NFTC/NFPC/고시/기준만 제외
+        if any(p in law_name for p in _EXCLUDE_PATTERNS):
             continue
         m = re.match(r"제(\d+)조", law_article)
         if not m:
@@ -91,7 +96,6 @@ async def save_matched_precedent(body: dict):
     now_iso = datetime.now(timezone.utc).isoformat()
 
     try:
-        # 1. 판례 upsert
         existing = sb.table("industrial_accident_precedents").select(
             "id"
         ).eq("prec_seq", str(prec["prec_seq"])).execute()
@@ -114,12 +118,10 @@ async def save_matched_precedent(body: dict):
                 prec_id = ins.data[0]["id"]
             action = "inserted"
 
-        # 2. rule_ids 연결
         links_created = 0
         if prec_id:
             for rule_id in rule_ids:
                 try:
-                    # 중복 체크
                     ex = sb.table("precedent_rule_links").select("id").eq(
                         "precedent_id", prec_id
                     ).eq("rule_id", rule_id).execute()
@@ -136,12 +138,9 @@ async def save_matched_precedent(body: dict):
                     log.warning(f"[PREC] link 실패 ({rule_id}): {e}")
 
         return {
-            "status": "success",
-            "action": action,
-            "prec_seq": prec["prec_seq"],
-            "links_created": links_created,
+            "status": "success", "action": action,
+            "prec_seq": prec["prec_seq"], "links_created": links_created,
         }
-
     except Exception as e:
         log.error(f"[PREC] save-matched 에러: {e}")
         raise HTTPException(status_code=500, detail=str(e)[:200])
@@ -151,10 +150,8 @@ async def save_matched_precedent(body: dict):
 
 @router.get("/search")
 def search_precedents(
-    query: str = Query(...),
-    sector: Optional[str] = Query(None),
-    year: Optional[int] = Query(None),
-    page: int = Query(1, ge=1),
+    query: str = Query(...), sector: Optional[str] = Query(None),
+    year: Optional[int] = Query(None), page: int = Query(1, ge=1),
     display: int = Query(DEFAULT_DISPLAY, ge=1, le=100),
     size: Optional[int] = Query(None),
 ):
@@ -164,9 +161,7 @@ def search_precedents(
     offset = (page - 1) * display
     q = (sb.table("posts")
            .select("id, title, summary, source_id, external_url, tags, published_at, subcategory")
-           .ilike("title", f"%{query}%")
-           .eq("status", "published")
-           .eq("category", "산재판례"))
+           .ilike("title", f"%{query}%").eq("status", "published").eq("category", "산재판례"))
     if sector and sector.upper() in VALID_SECTORS and sector.upper() != "ALL":
         q = q.eq("subcategory", sector.upper())
     if year:
@@ -187,24 +182,18 @@ def search_precedents(
 
 @router.get("/iap/search")
 def search_iap(
-    query: str = Query(...),
-    sector: Optional[str] = Query(None),
-    hazard_type: Optional[str] = Query(None),
-    year: Optional[int] = Query(None),
-    page: int = Query(1, ge=1),
-    size: int = Query(DEFAULT_DISPLAY, ge=1, le=100),
+    query: str = Query(...), sector: Optional[str] = Query(None),
+    hazard_type: Optional[str] = Query(None), year: Optional[int] = Query(None),
+    page: int = Query(1, ge=1), size: int = Query(DEFAULT_DISPLAY, ge=1, le=100),
 ):
     sb = get_supabase()
     offset = (page - 1) * size
     q = sb.table("industrial_accident_precedents") \
           .select("id, case_number, case_name, court_name, decision_date, sector, hazard_type, summary, source_url") \
           .ilike("case_name", f"%{query}%")
-    if sector:
-        q = q.eq("sector", sector.upper())
-    if hazard_type:
-        q = q.ilike("hazard_type", f"%{hazard_type}%")
-    if year:
-        q = q.gte("decision_date", f"{year}-01-01").lte("decision_date", f"{year}-12-31")
+    if sector: q = q.eq("sector", sector.upper())
+    if hazard_type: q = q.ilike("hazard_type", f"%{hazard_type}%")
+    if year: q = q.gte("decision_date", f"{year}-01-01").lte("decision_date", f"{year}-12-31")
     res = q.order("decision_date", desc=True).range(offset, offset + size - 1).execute()
     return {"status": "success", "query": query, "total": len(res.data or []),
             "page": page, "size": size, "items": res.data or []}
@@ -216,8 +205,7 @@ def search_iap(
 def get_precedent(prec_id: str):
     sb = get_supabase()
     res = (sb.table("posts").select("*")
-             .eq("source", "law_go_kr_prec")
-             .eq("source_id", f"PREC_{prec_id}").execute())
+             .eq("source", "law_go_kr_prec").eq("source_id", f"PREC_{prec_id}").execute())
     if not res.data:
         raise HTTPException(status_code=404, detail="판례를 찾을 수 없습니다.")
     return {"status": "success", "data": res.data[0]}
@@ -236,8 +224,7 @@ async def sync_precedents():
 async def _call_collect_edge() -> dict:
     secret = os.environ.get("TAI_COLLECT_SECRET", "")
     headers = {"Content-Type": "application/json"}
-    if secret:
-        headers["x-tai-secret"] = secret
+    if secret: headers["x-tai-secret"] = secret
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(EDGE_COLLECT_URL, headers=headers, json={})
