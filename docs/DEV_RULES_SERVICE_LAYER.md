@@ -1,7 +1,7 @@
 # TAI 개발 규칙 — 서비스 계층 분리
 
 > 작성일: 2026-04-21
-> 최종 수정: 2026-04-21 (v2 — 테스트 우선 원칙 추가)
+> 최종 수정: 2026-04-26 (v3 — payment·matching 분리 완료 반영, construction 완료 확인)
 > 상태: **필수 적용** (모든 개발 창에서 준수)
 > 적용 시점: 20KB 이상 라우터 파일을 수정할 때 선행 적용. 신규 파일은 처음부터 적용.
 
@@ -227,14 +227,28 @@ from fastapi import Request, Response  # 금지!
 
 ## 분리 대상 현황
 
-| 순위 | 파일 | 크기 | 상태 | 테스트 |
+| 순위 | 파일 | 원본 → 현재 | 상태 | 테스트 |
 |---|---|---|---|---|
-| ~~1~~ | ~~legal_engine.py~~ | ~~77KB~~ → 5KB | ✅ 완료 (#27) | ✅ 6개 |
-| ~~2~~ | ~~law_rule_generator.py~~ | ~~46KB~~ → 16KB | ✅ 완료 | ✅ 2개 |
-| 3 | construction.py | 58KB | 🔴 미착수 | ❌ 없음 |
-| 4 | payment.py | 52KB | 🔴 미착수 | ❌ 없음 |
-| 5 | matching.py | 42KB | 🔴 미착수 | ❌ 없음 |
+| ~~1~~ | ~~legal_engine.py~~ | 77KB → 5KB | ✅ 완료 | ✅ 6개 |
+| ~~2~~ | ~~law_rule_generator.py~~ | 46KB → 16KB | ✅ 완료 | ✅ 2개 |
+| ~~3~~ | ~~construction.py~~ | 58KB → 1.8KB | ✅ 완료 | — |
+| ~~4~~ | ~~payment.py~~ | 72KB → 12KB | ✅ 완료 (2026-04-26) | ✅ 16개 |
+| ~~5~~ | ~~matching.py~~ | 42KB → 5.3KB | ✅ 완료 (2026-04-26) | ✅ 11개 |
 | 6 | inspection_sets.py | 38KB | 🔴 미착수 | ❌ 없음 |
+
+### 추가 20KB 초과 파일 (수정 시 분리 필요)
+
+| 파일 | 크기 | 비고 |
+|---|---|---|
+| payment_billing.py | 31KB | payment와 연관 |
+| education.py | 29KB | |
+| auth.py | 27KB | |
+| companies.py | 27KB | |
+| inspection_checklist.py | 26KB | |
+| contracts.py | 25KB | |
+| report_forms.py | 25KB | |
+| personnel.py | 25KB | |
+| inspection_schedule.py | 23KB | |
 
 ---
 
