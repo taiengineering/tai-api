@@ -83,7 +83,7 @@ from routers.weather                 import router as weather_router
 from routers.juso                    import router as juso_router
 from routers.experts                 import router as experts_router
 from routers.matching                import router as matching_router
-from routers.matching                import commission_router
+from routers.matching_commission     import commission_router
 from routers.contracts_engine        import router as contracts_engine_router
 from routers.settlements             import router as settlements_router
 from routers.identity                import router as identity_router
