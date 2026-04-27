@@ -7,8 +7,10 @@ from __future__ import annotations
 import base64 as _base64
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Optional
+from uuid import uuid4
 
 import requests as _requests
 
@@ -515,3 +517,239 @@ def process_vbank_deposit(
         ).execute()
 
     return "OK"
+
+
+@dataclass(frozen=True)
+class BillingConfig:
+    mid: str
+    sign_key: str
+    api_url: str
+
+
+def _load_billing_config() -> BillingConfig:
+    mid = os.getenv("INICIS_BILLING_MID", "").strip()
+    sign_key = os.getenv("INICIS_BILLING_SIGN_KEY", "").strip()
+    api_url = os.getenv("INICIS_BILLING_API_URL", "https://api.inicis.com/api/v1/billing").strip()
+    if not mid:
+        raise PaymentPrepareError(500, "INICIS_BILLING_MID 환경변수 필수")
+    if not sign_key:
+        raise PaymentPrepareError(500, "INICIS_BILLING_SIGN_KEY 환경변수 필수")
+    return BillingConfig(mid=mid, sign_key=sign_key, api_url=api_url.rstrip("/"))
+
+
+def _billing_api_post(path: str, payload: Dict[str, Any], cfg: BillingConfig) -> Dict[str, Any]:
+    url = f"{cfg.api_url}/{path.lstrip('/')}"
+    try:
+        res = _requests.post(url, json=payload, timeout=30)
+        data = res.json()
+    except Exception as e:
+        raise PaymentPrepareError(502, f"빌링 API 호출 실패: {e}") from e
+    if str(data.get("resultCode", "")) not in {"0000", "00"}:
+        raise PaymentPrepareError(400, data.get("resultMsg", "빌링 API 실패"))
+    return data
+
+
+def run_billing_prepare(body) -> Dict[str, Any]:
+    cfg = _load_billing_config()
+    supabase = get_supabase()
+    now = now_iso()
+    oid = f"TAI-BIL-{datetime.now():%Y%m%d%H%M%S}-{uuid4().hex[:6].upper()}"
+    timestamp = ts_ms()
+    price_str = str(body.amount)
+    signature = sha256(f"oid={oid}&price={price_str}&timestamp={timestamp}")
+    verification = sha256(f"oid={oid}&price={price_str}&signKey={cfg.sign_key}&timestamp={timestamp}")
+
+    row: Dict[str, Any] = {
+        "user_id": body.user_id,
+        "company_id": body.company_id,
+        "plan_code": body.plan_code,
+        "product_type": body.product_type,
+        "status": "PENDING",
+        "period_months": body.period_months,
+        "price": body.amount,
+        "currency": "WON",
+        "inicis_order_id": oid,
+        "created_at": now,
+        "updated_at": now,
+    }
+    ins = supabase.table("subscriptions").insert(row).execute()
+    if not ins.data:
+        raise PaymentPrepareError(500, "구독 생성 실패")
+    sub = ins.data[0]
+
+    return {
+        "status": "success",
+        "data": {
+            "subscription_id": sub["id"],
+            "mid": cfg.mid,
+            "mKey": sha256(cfg.sign_key),
+            "oid": oid,
+            "price": price_str,
+            "goodname": body.goodname,
+            "buyername": body.buyername or "고객",
+            "buyertel": body.buyertel or "00000000000",
+            "buyeremail": body.buyeremail or "",
+            "timestamp": timestamp,
+            "signature": signature,
+            "verification": verification,
+            "gopaymethod": "CardBilling",
+        },
+    }
+
+
+def run_billing_return(body) -> Dict[str, Any]:
+    cfg = _load_billing_config()
+    supabase = get_supabase()
+    if body.resultCode and body.resultCode not in {"0000", "00"}:
+        raise PaymentPrepareError(400, body.resultMsg or "빌링 인증 실패")
+
+    sub_res = (
+        supabase.table("subscriptions")
+        .select("*")
+        .eq("inicis_order_id", body.oid)
+        .limit(1)
+        .execute()
+    )
+    if not sub_res.data:
+        raise PaymentPrepareError(404, "구독 주문번호를 찾을 수 없습니다.")
+    subscription = sub_res.data[0]
+    now = now_iso()
+
+    auth_payload = {
+        "mid": cfg.mid,
+        "authToken": body.authToken,
+        "timestamp": ts_ms(),
+        "signature": sha256(f"authToken={body.authToken}&timestamp={ts_ms()}"),
+        "charset": "UTF-8",
+        "format": "JSON",
+    }
+    auth_result = _billing_api_post("billkey", auth_payload, cfg)
+    bill_key = auth_result.get("billKey") or auth_result.get("BILL_KEY") or ""
+    if not bill_key:
+        raise PaymentPrepareError(400, "빌링키 발급 실패")
+
+    supabase.table("billing_keys").insert(
+        {
+            "subscription_id": subscription["id"],
+            "user_id": subscription.get("user_id"),
+            "company_id": subscription.get("company_id"),
+            "inicis_order_id": body.oid,
+            "bill_key": bill_key,
+            "status": "ACTIVE",
+            "failure_count": 0,
+            "card_number_masked": body.cardNumber,
+            "card_code": body.cardCode,
+            "raw_data": auth_result,
+            "created_at": now,
+            "updated_at": now,
+        }
+    ).execute()
+    supabase.table("subscriptions").update({"status": "ACTIVE", "updated_at": now}).eq("id", subscription["id"]).execute()
+
+    charge_body = type("obj", (), {"subscription_id": subscription["id"], "amount": None, "goodname": None})
+    charge_res = run_billing_charge(charge_body)
+    return {"status": "success", "data": {"subscription_id": subscription["id"], "bill_key_issued": True, "first_charge": charge_res.get("data")}}
+
+
+def run_billing_charge(body) -> Dict[str, Any]:
+    cfg = _load_billing_config()
+    supabase = get_supabase()
+    now = now_iso()
+    sub_res = supabase.table("subscriptions").select("*").eq("id", body.subscription_id).limit(1).execute()
+    if not sub_res.data:
+        raise PaymentPrepareError(404, "구독을 찾을 수 없습니다.")
+    sub = sub_res.data[0]
+    key_res = (
+        supabase.table("billing_keys")
+        .select("*")
+        .eq("subscription_id", body.subscription_id)
+        .eq("status", "ACTIVE")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not key_res.data:
+        raise PaymentPrepareError(404, "활성 빌링키가 없습니다.")
+    key_row = key_res.data[0]
+
+    amount = int(body.amount or sub.get("price") or 0)
+    if amount <= 0:
+        raise PaymentPrepareError(400, "청구 금액이 올바르지 않습니다.")
+    oid = f"TAI-BIL-CHG-{datetime.now():%Y%m%d%H%M%S}-{uuid4().hex[:6].upper()}"
+    payload = {
+        "mid": cfg.mid,
+        "billKey": key_row["bill_key"],
+        "oid": oid,
+        "price": str(amount),
+        "goodName": body.goodname or sub.get("product_type") or "TAI Safe 정기결제",
+        "timestamp": ts_ms(),
+    }
+    try:
+        result = _billing_api_post("payment", payload, cfg)
+    except PaymentPrepareError as e:
+        fc = int(key_row.get("failure_count") or 0) + 1
+        key_update = {"failure_count": fc, "updated_at": now}
+        sub_update = {"updated_at": now}
+        if fc >= 3:
+            key_update["status"] = "PAUSED"
+            sub_update["status"] = "PAUSED"
+        supabase.table("billing_keys").update(key_update).eq("id", key_row["id"]).execute()
+        supabase.table("subscriptions").update(sub_update).eq("id", sub["id"]).execute()
+        raise e
+
+    supabase.table("payments").insert(
+        {
+            "user_id": sub.get("user_id"),
+            "company_id": sub.get("company_id"),
+            "product_type": sub.get("product_type"),
+            "plan_code": sub.get("plan_code"),
+            "payment_method": "INICIS_BILLING",
+            "payment_type": "BILLING",
+            "total_amount": amount,
+            "supply_amount": split_supply_vat(amount)[0],
+            "vat_amount": split_supply_vat(amount)[1],
+            "inicis_order_id": oid,
+            "status_code": "SUCCESS",
+            "service_status": "ACTIVE",
+            "inicis_tid": result.get("tid", ""),
+            "inicis_raw": result,
+            "paid_at": now,
+            "created_at": now,
+            "updated_at": now,
+        }
+    ).execute()
+    supabase.table("billing_keys").update({"failure_count": 0, "updated_at": now}).eq("id", key_row["id"]).execute()
+    supabase.table("subscriptions").update({"status": "ACTIVE", "updated_at": now}).eq("id", sub["id"]).execute()
+    return {"status": "success", "data": {"subscription_id": sub["id"], "charged_amount": amount, "oid": oid}}
+
+
+def run_billing_cancel(subscription_id: str, reason: str = "사용자 요청", cancelled_by: Optional[str] = None) -> Dict[str, Any]:
+    cfg = _load_billing_config()
+    supabase = get_supabase()
+    now = now_iso()
+    sub_res = supabase.table("subscriptions").select("*").eq("id", subscription_id).limit(1).execute()
+    if not sub_res.data:
+        raise PaymentPrepareError(404, "구독을 찾을 수 없습니다.")
+    key_res = (
+        supabase.table("billing_keys")
+        .select("*")
+        .eq("subscription_id", subscription_id)
+        .eq("status", "ACTIVE")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not key_res.data:
+        raise PaymentPrepareError(404, "활성 빌링키가 없습니다.")
+    key_row = key_res.data[0]
+
+    payload = {"mid": cfg.mid, "billKey": key_row["bill_key"], "reason": reason, "timestamp": ts_ms()}
+    _billing_api_post("billkey/revoke", payload, cfg)
+
+    supabase.table("billing_keys").update(
+        {"status": "REVOKED", "revoked_at": now, "revoke_reason": reason, "updated_at": now}
+    ).eq("id", key_row["id"]).execute()
+    supabase.table("subscriptions").update(
+        {"status": "CANCELLED", "cancelled_at": now, "cancelled_by": cancelled_by, "updated_at": now}
+    ).eq("id", subscription_id).execute()
+    return {"status": "success", "data": {"subscription_id": subscription_id, "status": "CANCELLED"}}

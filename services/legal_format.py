@@ -194,6 +194,11 @@ def format_rule_result_db(rule: Dict[str, Any], article_info: Optional[Dict[str,
         "submit_org_label": SUBMIT_ORG_MAP.get(submit_org_code, submit_org_code),
         "report_method_std": report_method_std,
         "report_method_label": REPORT_METHOD_MAP.get(report_method_std, report_method_std),
+        "form_name": rule.get("form_name") or "",
+        "online_system": rule.get("online_system") or "",
+        "system_url": rule.get("system_url") or "",
+        "tai_feature_code": rule.get("tai_feature_code") or "",
+        "qualification_code": rule.get("appointment_qualification_code") or "",
     }
     
     # v5.8.0 조문 본문 필드 추가
