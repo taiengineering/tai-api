@@ -1,43 +1,33 @@
 """
-이니시스 INIStdPay 표준결제 라우터 — v3.4.0
+이니시스 INIStdPay 표준결제 라우터 — v4.0.0
+
+v4.0.0 (2026-04-27)
+  매뉴얼 기반 전면 재작성 — docs/INICIS_INTEGRATION_SPEC.md 참조
+  - 빌링 return: form POST 수신 (이니시스는 JSON이 아닌 form으로 전송)
+  - 전체취소: POST /payments/{payment_id}/refund
+  - 부분취소: POST /payments/{payment_id}/partial-refund
+  - 빌링키 발급 결과 form 파싱
 
 v3.4.0 (2026-04-23)
-  [FEAT] /payments/billing/terms — 구독 이용 안내 페이지 추가 (이니시스 심사용)
-         - 공개 HTML 페이지 (로그인 불필요)
-         - 결제 주기/해지 방법/환불 정책/문의처 명시
-         - /payments/pricing?type=billing 배너에서 링크
+  [FEAT] /payments/billing/terms — 구독 이용 안내 페이지 추가
 
 v3.3.0 (2026-04-23)
-  [FEAT] /payments/pricing 에 단건/정기 토글 추가 (?type=billing)
-         - 기본은 단건결제 (기존과 동일)
-         - ?type=billing 또는 상단 탭 선택 시 /inicis/billing/prepare 호출
-         - 정기결제 UI 안내 문구, /월 단위 표시, 버튼 라벨 분기
-         - 이니시스 form 파라미터 분기:
-           단건: gopaymethod=Card,    acceptmethod=CARDONLY:CARDPOINT:centerCd(Y)
-           정기: gopaymethod=(빈값),  acceptmethod=centerCd(Y):BILLAUTH(Card)
+  [FEAT] /payments/pricing 단건/정기 토글 추가
 
 v3.2.0 (2026-04-12)
-  [FEAT] VBANK(가상계좌) 결제 지원 — 연결 서비스 전용
-         - POST /payments/vbank/prepare   : 가상계좌 발급
-         - POST /payments/vbank/noti      : 입금 확인 웹훅
-         - GET  /payments/{id}/vbank-status : 입금 현황 조회
-         - /inicis/return VBANK 분기 처리 추가
-         - matching_contracts.paid_confirmed_at / 상태 자동 업데이트
-         - matching_requests IN_PROGRESS 자동 전이
+  [FEAT] VBANK(가상계좌) 결제 지원
 
 v3.1.0 (2026-04-12)
-  [FEAT] service_status 추가 — PAID / ACTIVE / ENDED
-  [FEAT] list_payments → v_payments_list 뷰 사용
+  [FEAT] service_status 추가
 
 v3.0.0 (2026-04-12)
-  [FEAT] user_id 필수값, product_type 필수값, expired_at(SaaS), pg_method
+  [FEAT] user_id 필수값, product_type 필수값
 """
 from __future__ import annotations
 
 import logging
-import os
 import urllib.parse
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -49,7 +39,9 @@ from schemas.payment import (
     BillingPrepareBody,
     BillingReturnBody,
     DiagnosisVbankPrepareBody,
+    PartialRefundBody,
     PrepareBody,
+    RefundBody,
     VbankPrepareBody,
 )
 from services.payment_svc import (
@@ -66,6 +58,8 @@ from services.payment_svc import (
     run_billing_prepare,
     run_billing_return,
     run_inicis_prepare,
+    run_partial_refund,
+    run_refund,
 )
 from services.payment_helpers import FRONT_RETURN_URL, load_template, now_iso as _now_iso
 
@@ -74,9 +68,7 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/payments", tags=["결제"])
 
 
-# HTML: templates/payment/*.html — services.payment_helpers.load_template
-
-# ── 라우터 ────────────────────────────────────────────────────────────
+# ── HTML 페이지 ────────────────────────────────────────────────────────
 
 @router.get("/pricing", response_class=HTMLResponse, include_in_schema=True)
 def payment_pricing_page():
@@ -87,6 +79,14 @@ def payment_pricing_page():
 def payment_result_page():
     return HTMLResponse(content=load_template("result.html"), status_code=200)
 
+
+@router.get("/billing/terms", response_class=HTMLResponse, include_in_schema=True)
+def payment_billing_terms_page():
+    """구독 이용 안내 페이지 — 이니시스 정기결제 심사용 공개 페이지"""
+    return HTMLResponse(content=load_template("billing_terms.html"), status_code=200)
+
+
+# ── 단건결제 ───────────────────────────────────────────────────────────
 
 @router.post("/inicis/prepare")
 def inicis_prepare(body: PrepareBody):
@@ -155,25 +155,12 @@ async def inicis_return(request: Request):
     if is_ok:
         pg_method = auth_result.get("payMethod", paymethod) or paymethod
 
-        if pg_method == "Vbank" or pg_method == "VBANK":
-            out = process_vbank_issued(
-                payment_id,
-                order_id,
-                auth_result,
-                goodname=goodname,
-                price=price,
-            )
+        if pg_method in ("Vbank", "VBANK"):
+            out = process_vbank_issued(payment_id, order_id, auth_result, goodname=goodname, price=price)
             qs = urllib.parse.urlencode(out["qs_params"])
             return RedirectResponse(f"{FRONT_RETURN_URL}?{qs}", status_code=302)
 
-        out = process_card_success(
-            payment,
-            auth_result,
-            pg_method,
-            order_id=order_id,
-            goodname=goodname,
-            price=price,
-        )
+        out = process_card_success(payment, auth_result, pg_method, order_id=order_id, goodname=goodname, price=price)
         qs = urllib.parse.urlencode(out["qs_params"])
         return RedirectResponse(f"{FRONT_RETURN_URL}?{qs}", status_code=302)
 
@@ -210,12 +197,7 @@ async def inicis_noti(request: Request):
     if not pay_res.data:
         return "OK"
 
-    payment       = pay_res.data[0]
-    payment_id    = payment["id"]
-    contract_id   = payment.get("contract_id")
-    product_type  = payment.get("product_type", "")
-    period_months = payment.get("period_months")
-
+    payment = pay_res.data[0]
     if payment["status_code"] == "SUCCESS" or not auth_url:
         return "OK"
 
@@ -227,32 +209,18 @@ async def inicis_noti(request: Request):
     if auth_result.get("resultCode") == "0000":
         pg_method = auth_result.get("payMethod", paymethod) or paymethod
         process_card_success(
-            payment,
-            auth_result,
-            pg_method,
-            order_id="",
-            goodname="",
-            price="",
+            payment, auth_result, pg_method,
+            order_id="", goodname="", price="",
             with_redirect_qs=False,
         )
     return "OK"
 
 
-# ════════════════════════════════════════════════════════════════════════
-# VBANK (가상계좌) 결제 — 연결 서비스 전용  (v3.2.0)
-# ════════════════════════════════════════════════════════════════════════
+# ── VBANK (가상계좌) ───────────────────────────────────────────────────
 
 @router.post("/vbank/prepare")
 def vbank_prepare(body: VbankPrepareBody):
-    """
-    연결 서비스 가상계좌 발급
-    POST /payments/vbank/prepare
-
-    이니시스 INIStdPay gopaymethod="Vbank"
-    발급 즉시 가상계좌번호를 반환 → 고객에게 입금 안내.
-
-    ⚠️ 이니시스 카드심사 완료 후 실제 가동 (현재는 구조 완성)
-    """
+    """연결 서비스 가상계좌 발급"""
     try:
         return create_vbank_record(body, load_sign_key())
     except PaymentPrepareError as e:
@@ -276,21 +244,18 @@ def diagnosis_vbank_prepare(body: DiagnosisVbankPrepareBody):
     )
     result = vbank_prepare(proxy_body)
 
-    # 세금계산서 요청 정보는 diagnosis_purchases에 별도 기록 (best-effort)
     if body.invoice_requested and (body.invoice_biz_no or body.invoice_email):
         try:
             supabase = get_supabase()
             payment_id = (result.get("data") or {}).get("payment_id")
             if payment_id:
-                supabase.table("diagnosis_purchases").insert(
-                    {
-                        "payment_ref": payment_id,
-                        "invoice_requested": True,
-                        "invoice_biz_no": body.invoice_biz_no,
-                        "invoice_email": body.invoice_email,
-                        "created_at": _now_iso(),
-                    }
-                ).execute()
+                supabase.table("diagnosis_purchases").insert({
+                    "payment_ref": payment_id,
+                    "invoice_requested": True,
+                    "invoice_biz_no": body.invoice_biz_no,
+                    "invoice_email": body.invoice_email,
+                    "created_at": _now_iso(),
+                }).execute()
         except Exception as e:
             log.warning("[diagnosis vbank] invoice save failed: %s", e)
 
@@ -299,20 +264,7 @@ def diagnosis_vbank_prepare(body: DiagnosisVbankPrepareBody):
 
 @router.post("/vbank/noti", include_in_schema=True)
 async def vbank_noti(request: Request):
-    """
-    이니시스 VBANK 입금 확인 노티 (웹훅)
-    POST /payments/vbank/noti
-
-    고객 입금 → 이니시스 → 이 URL로 POST.
-    처리 순서:
-      1. payments → SUCCESS 업데이트
-      2. matching_contracts → paid_confirmed_at / ACTIVE
-      3. matching_requests → IN_PROGRESS 자동 전이
-      4. 신청자 알림 발송
-
-    이니시스 설정에 등록 필요:
-      https://api.taieng.co.kr/payments/vbank/noti
-    """
+    """이니시스 VBANK 입금 확인 노티 (웹훅)"""
     try:
         form = await request.form()
         data: Dict[str, Any] = dict(form)
@@ -325,38 +277,82 @@ async def vbank_noti(request: Request):
     order_id = data.get("orderNumber") or data.get("oid", "")
     result_code = data.get("resultCode", "")
     depositor = data.get("vbankInputName", "")
-
     log.info(f"[VBANK NOTI] oid={order_id} resultCode={result_code}")
 
     return process_vbank_deposit(order_id, result_code, depositor, data)
 
 
-# 구독 이용 안내 HTML: templates/payment/billing_terms.html
-
-@router.get("/billing/terms", response_class=HTMLResponse, include_in_schema=True)
-def payment_billing_terms_page():
-    """구독 이용 안내 페이지 — 이니시스 정기결제 심사용 공개 페이지"""
-    return HTMLResponse(content=load_template("billing_terms.html"), status_code=200)
-
+# ── 빌링(구독결제) ─────────────────────────────────────────────────────
 
 @router.post("/inicis/billing/prepare")
 def billing_prepare(body: BillingPrepareBody):
+    """빌링키 발급 준비 — 프론트에서 form POST할 파라미터 생성"""
     try:
         return run_billing_prepare(body)
     except PaymentPrepareError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
-@router.post("/inicis/billing/return")
-def billing_return(body: BillingReturnBody):
+@router.post("/inicis/billing/return", include_in_schema=True)
+async def billing_return(request: Request):
+    """빌링키 발급 결과 — 이니시스가 returnUrl로 form POST.
+
+    이니시스 빌키발급 결과는 JSON이 아닌 form POST로 전달됨.
+    resultCode = "SUCCESS" (단건의 "0000"과 다름!)
+    """
     try:
-        return run_billing_return(body)
+        form = await request.form()
+        data: Dict[str, Any] = dict(form)
+    except Exception:
+        try:
+            data = await request.json()
+        except Exception:
+            return RedirectResponse(
+                f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=빌키결과파싱실패",
+                status_code=302,
+            )
+
+    log.info(f"[BILLING RETURN] resultCode={data.get('resultCode')} orderId={data.get('orderId')}")
+
+    body = BillingReturnBody(
+        resultCode=data.get("resultCode", ""),
+        resultMessage=data.get("resultMessage", ""),
+        mid=data.get("mid", ""),
+        orderId=data.get("orderId", ""),
+        authkey=data.get("authkey", ""),
+        tid=data.get("tid", ""),
+        merchantRedirectData=data.get("merchantRedirectData", ""),
+        billkey=data.get("billkey", ""),
+        billkeyDate=data.get("billkeyDate", ""),
+        billkeyTime=data.get("billkeyTime", ""),
+        cardNumber=data.get("cardNumber", ""),
+        cardCode=data.get("cardCode", ""),
+        cardCompanyName=data.get("cardCompanyName", ""),
+        cardType=data.get("cardType", ""),
+        cardTypeName=data.get("cardTypeName", ""),
+        cardKind=data.get("cardKind", ""),
+        cardKindName=data.get("cardKindName", ""),
+        hashData=data.get("hashData", ""),
+    )
+
+    try:
+        result = run_billing_return(body)
+        sub_id = (result.get("data") or {}).get("subscription_id", "")
+        card = (result.get("data") or {}).get("card_name", "")
+        return RedirectResponse(
+            f"{FRONT_RETURN_URL}?resultCode=00&msg=빌링키발급성공&subscription_id={sub_id}&card={urllib.parse.quote(card or '')}",
+            status_code=302,
+        )
     except PaymentPrepareError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+        return RedirectResponse(
+            f"{FRONT_RETURN_URL}?resultCode=FAIL&msg={urllib.parse.quote(e.detail)}",
+            status_code=302,
+        )
 
 
 @router.post("/inicis/billing/charge")
 def billing_charge(body: BillingChargeBody):
+    """빌링 승인(과금) 요청"""
     try:
         return run_billing_charge(body)
     except PaymentPrepareError as e:
@@ -365,7 +361,28 @@ def billing_charge(body: BillingChargeBody):
 
 @router.post("/subscriptions/{subscription_id}/cancel")
 def cancel_subscription(subscription_id: str, body: BillingCancelBody):
+    """구독 해지"""
     try:
         return run_billing_cancel(subscription_id, body.reason or "사용자 요청", body.cancelled_by)
+    except PaymentPrepareError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+# ── 취소/환불 ──────────────────────────────────────────────────────────
+
+@router.post("/{payment_id}/refund")
+def refund_payment(payment_id: str, body: RefundBody):
+    """전체 취소 — iniapi.inicis.com/api/v1/refund"""
+    try:
+        return run_refund(payment_id, body.reason, body.cancelled_by)
+    except PaymentPrepareError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/{payment_id}/partial-refund")
+def partial_refund_payment(payment_id: str, body: PartialRefundBody):
+    """부분 취소 — iniapi.inicis.com/api/v1/refund (PartialRefund)"""
+    try:
+        return run_partial_refund(payment_id, body.amount, body.reason)
     except PaymentPrepareError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
