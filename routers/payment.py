@@ -1,27 +1,12 @@
 """
-이니시스 INIStdPay 표준결제 라우터 — v4.0.0
+이니시스 INIStdPay 표준결제 라우터 — v4.1.0
+
+v4.1.0 (2026-04-27)
+  [FEAT] /payments/billing/pay — 빌링 결제 전용 페이지 추가
+         SaaS 페이지에서 이 URL로 리다이렉트하면 inilitepay.inicis.com 빌키발급 시작
 
 v4.0.0 (2026-04-27)
-  매뉴얼 기반 전면 재작성 — docs/INICIS_INTEGRATION_SPEC.md 참조
-  - 빌링 return: form POST 수신 (이니시스는 JSON이 아닌 form으로 전송)
-  - 전체취소: POST /payments/{payment_id}/refund
-  - 부분취소: POST /payments/{payment_id}/partial-refund
-  - 빌링키 발급 결과 form 파싱
-
-v3.4.0 (2026-04-23)
-  [FEAT] /payments/billing/terms — 구독 이용 안내 페이지 추가
-
-v3.3.0 (2026-04-23)
-  [FEAT] /payments/pricing 단건/정기 토글 추가
-
-v3.2.0 (2026-04-12)
-  [FEAT] VBANK(가상계좌) 결제 지원
-
-v3.1.0 (2026-04-12)
-  [FEAT] service_status 추가
-
-v3.0.0 (2026-04-12)
-  [FEAT] user_id 필수값, product_type 필수값
+  매뉴얼 기반 전면 재작성
 """
 from __future__ import annotations
 
@@ -82,8 +67,30 @@ def payment_result_page():
 
 @router.get("/billing/terms", response_class=HTMLResponse, include_in_schema=True)
 def payment_billing_terms_page():
-    """구독 이용 안내 페이지 — 이니시스 정기결제 심사용 공개 페이지"""
+    """구독 이용 안내 페이지 — 이니시스 정기결제 심사용"""
     return HTMLResponse(content=load_template("billing_terms.html"), status_code=200)
+
+
+@router.get("/billing/pay", response_class=HTMLResponse, include_in_schema=True)
+def payment_billing_pay_page():
+    """빌링 결제 전용 페이지 — SaaS 구독 결제 시작점.
+
+    사용법: SaaS 페이지에서 아래 URL로 리다이렉트
+    https://api.taieng.co.kr/payments/billing/pay
+      ?user_id={userId}
+      &amount={amount}
+      &product_type=SAAS_FACILITY
+      &goodname=TAI Safe 산업 STARTER
+      &plan_code=IND_STARTER
+      &company_id={companyId}
+      &buyername={name}
+      &buyertel={tel}
+      &buyeremail={email}
+
+    이 페이지가 /payments/inicis/billing/prepare API를 호출하고,
+    응답 파라미터로 inilitepay.inicis.com 빌키발급 폼을 자동 제출합니다.
+    """
+    return HTMLResponse(content=load_template("billing_pay.html"), status_code=200)
 
 
 # ── 단건결제 ───────────────────────────────────────────────────────────
@@ -295,11 +302,7 @@ def billing_prepare(body: BillingPrepareBody):
 
 @router.post("/inicis/billing/return", include_in_schema=True)
 async def billing_return(request: Request):
-    """빌링키 발급 결과 — 이니시스가 returnUrl로 form POST.
-
-    이니시스 빌키발급 결과는 JSON이 아닌 form POST로 전달됨.
-    resultCode = "SUCCESS" (단건의 "0000"과 다름!)
-    """
+    """빌링키 발급 결과 — 이니시스가 returnUrl로 form POST."""
     try:
         form = await request.form()
         data: Dict[str, Any] = dict(form)
