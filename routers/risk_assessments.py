@@ -29,6 +29,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone, date, timedelta
 from db.supabase_client import get_supabase
+from services.health_registry import register_probe
 
 router = APIRouter(prefix="/risk-assessments", tags=["risk_assessments"])
 
@@ -360,3 +361,12 @@ def complete_assessment(assessment_id: str):
     if not res.data:
         raise HTTPException(status_code=404, detail="위험성평가를 찾을 수 없습니다.")
     return {"status": "success", "message": "완료 처리되었습니다.", "data": res.data[0]}
+
+
+async def _probe_risk():
+    sb = get_supabase()
+    r = sb.table("risk_assessments").select("id", count="exact").limit(1).execute()
+    return {"assessments_count": r.count or 0}
+
+
+register_probe("risk", _probe_risk, critical=False, desc_ko="위험성평가")

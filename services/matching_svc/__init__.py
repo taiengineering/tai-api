@@ -1,4 +1,6 @@
 """매칭 서비스 패키지 — 라우터는 `import services.matching_svc as ms` 유지."""
+from db.supabase_client import get_supabase as _health_get_supabase
+from services.health_registry import register_probe
 from .dashboard import get_dashboard_stats, get_pipeline
 from .errors import MatchingSvcError
 from .request import (
@@ -39,3 +41,12 @@ __all__ = [
     "get_dashboard_stats",
     "get_pipeline",
 ]
+
+
+async def _probe_matching():
+    sb = _health_get_supabase()
+    r = sb.table("fix_chat_sessions").select("id", count="exact").limit(1).execute()
+    return {"sessions_count": r.count or 0}
+
+
+register_probe("matching", _probe_matching, critical=False, desc_ko="전문가 매칭")

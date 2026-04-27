@@ -10,6 +10,7 @@ from typing import Optional
 from datetime import datetime, timezone, timedelta
 import os, re, random
 from supabase import create_client
+from services.health_registry import register_probe
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -623,3 +624,12 @@ async def verify_email(req: VerifyEmailRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _probe_auth():
+    sb = get_supabase()
+    r = sb.table("users").select("id", count="exact").limit(1).execute()
+    return {"users_count": r.count or 0}
+
+
+register_probe("auth", _probe_auth, critical=True, desc_ko="인증 서비스")

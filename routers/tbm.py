@@ -34,6 +34,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from services.health_registry import register_probe
 
 log = logging.getLogger(__name__)
 
@@ -489,3 +490,12 @@ def register_sign(tbm_id: str, attendee_id: str, body: SignBody):
     if not res.data:
         raise HTTPException(status_code=404, detail="참석자를 찾을 수 없습니다.")
     return {"status": "success", "message": "서명이 등록되었습니다.", "data": res.data[0]}
+
+
+async def _probe_tbm():
+    sb = get_supabase()
+    r = sb.table("tbm_meetings").select("id", count="exact").limit(1).execute()
+    return {"sessions_count": r.count or 0}
+
+
+register_probe("tbm", _probe_tbm, critical=False, desc_ko="TBM 관리")

@@ -13,6 +13,7 @@ from datetime import datetime, date
 import os
 import uuid
 from supabase import create_client, Client
+from services.health_registry import register_probe
 
 router = APIRouter()
 
@@ -740,3 +741,12 @@ def delete_education_file(
     # DB에서 삭제
     supabase.table("education_files").delete().eq("id", file_id).execute()
     return {"success": True, "message": "파일이 삭제되었습니다."}
+
+
+async def _probe_education():
+    sb = get_supabase()
+    r = sb.table("education_history").select("id", count="exact").limit(1).execute()
+    return {"records_count": r.count or 0}
+
+
+register_probe("education", _probe_education, critical=False, desc_ko="교육 관리")
