@@ -1,22 +1,14 @@
 """payment 모듈 순수 유틸·상수 (HTTP·DB 없음).
 
-규칙: docs/DEV_RULES_SERVICE_LAYER.md STEP 1
-
-v2.2 (2026-04-27)
-  [FIX] get_server_ip() → INICIS_CLIENT_IP 환경변수 우선 사용
-        Railway 서버 IP: 115.68.227.222
-
-v2.1 (2026-04-27)
-  [FIX] returnUrl/closeUrl → new.taieng.co.kr/_api 프록시 경유
-
-v2.0 (2026-04-27)
-  매뉴얼 기반 전면 재정리
+v2.3 (2026-04-27)
+  [FIX] returnUrl → api.taieng.co.kr 직접 (프록시 불필요)
+        결제 페이지를 api.taieng.co.kr/payments/checkout 에서 서비스하므로
+        returnUrl도 api.taieng.co.kr로 통일 — 도메인 일치
 """
 from __future__ import annotations
 
 import hashlib
 import os
-import socket
 import time
 from base64 import b64decode
 from datetime import datetime, timezone
@@ -27,15 +19,12 @@ from uuid import uuid4
 
 from dateutil.relativedelta import relativedelta
 
-# ── 상품 유형 ──────────────────────────────────────────────────────────
-
 SAAS_PRODUCT_TYPES: List[str] = [
     "SAAS_CONSTRUCTION",
     "SAAS_FACILITY",
     "SAAS_BUILDING",
 ]
 
-# ── 키 체계 (docs/INICIS_INTEGRATION_SPEC.md §1) ─────────────────────
 INICIS_MID = os.getenv("INICIS_MID", "taieng4350")
 INICIS_KEY_PATH = os.getenv("INICIS_KEY_PATH", "/app/key/taieng4350")
 INICIS_KEY_PASSWORD = os.getenv("INICIS_KEY_PASSWORD", "1111")
@@ -44,10 +33,8 @@ INICIS_BILLING_MID = os.getenv("INICIS_BILLING_MID", "")
 INICIS_INILITE_KEY = os.getenv("INICIS_INILITE_KEY", "")
 INICIS_INIAPI_KEY = os.getenv("INICIS_INIAPI_KEY", "")
 
-# ── 서버 IP (빌링승인/취소 API clientIp) ───────────────────────────────
 INICIS_CLIENT_IP = os.getenv("INICIS_CLIENT_IP", "115.68.227.222")
 
-# ── API URL ────────────────────────────────────────────────────────────
 BILLING_ISSUE_URL = "https://inilitepay.inicis.com/pay/card/billing"
 BILLING_CHARGE_URL = os.getenv(
     "INICIS_BILLING_CHARGE_URL",
@@ -59,25 +46,25 @@ REFUND_URL = os.getenv(
 )
 
 # ── Return/Close URL ──────────────────────────────────────────────────
-# ⚠️ 이니시스 V023: returnUrl은 결제요청 페이지(new.taieng.co.kr)와 동일 도메인 필수
+# 결제 페이지(checkout.html)가 api.taieng.co.kr에서 서비스되므로
+# returnUrl도 api.taieng.co.kr로 통일 → 도메인 일치
 DEFAULT_RETURN_URL = os.getenv(
     "INICIS_DEFAULT_RETURN_URL",
-    "https://new.taieng.co.kr/_api/payments/inicis/return",
+    "https://api.taieng.co.kr/payments/inicis/return",
 )
 DEFAULT_CLOSE_URL = os.getenv(
     "INICIS_DEFAULT_CLOSE_URL",
-    "https://new.taieng.co.kr/_api/payments/result?resultCode=CLOSE",
+    "https://api.taieng.co.kr/payments/result?resultCode=CLOSE",
 )
 FRONT_RETURN_URL = os.getenv(
     "INICIS_FRONT_RETURN_URL",
-    "https://new.taieng.co.kr/_api/payments/result",
+    "https://api.taieng.co.kr/payments/result",
 )
 BILLING_RETURN_URL = os.getenv(
     "INICIS_BILLING_RETURN_URL",
-    "https://new.taieng.co.kr/_api/payments/inicis/billing/return",
+    "https://api.taieng.co.kr/payments/inicis/billing/return",
 )
 
-# ── 템플릿 ─────────────────────────────────────────────────────────────
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "..", "templates", "payment")
 
 
@@ -88,8 +75,6 @@ def load_template(name: str) -> str:
         return f.read()
 
 
-# ── 해시 유틸 ──────────────────────────────────────────────────────────
-
 def sha256(data: str) -> str:
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
@@ -97,8 +82,6 @@ def sha256(data: str) -> str:
 def sha512(data: str) -> str:
     return hashlib.sha512(data.encode("utf-8")).hexdigest()
 
-
-# ── 타임스탬프 ─────────────────────────────────────────────────────────
 
 def ts_ms() -> str:
     return str(int(time.time() * 1000))
@@ -108,13 +91,9 @@ def ts_yyyymmddhhmmss() -> str:
     return datetime.now().strftime("%Y%m%d%H%M%S")
 
 
-# ── 주문번호 ───────────────────────────────────────────────────────────
-
 def make_order_id() -> str:
     return f"TAI{datetime.now():%Y%m%d%H%M%S}{uuid4().hex[:6].upper()}"
 
-
-# ── 시간 유틸 ──────────────────────────────────────────────────────────
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -125,21 +104,15 @@ def calc_expired_at(paid_at_iso: str, period_months: int) -> str:
     return (base + relativedelta(months=period_months)).isoformat()
 
 
-# ── 금액 유틸 ──────────────────────────────────────────────────────────
-
 def split_supply_vat(total_amount: int) -> tuple[int, int]:
     supply = round(total_amount / 1.1)
     vat = total_amount - supply
     return supply, vat
 
 
-# ── 서비스 상태 ────────────────────────────────────────────────────────
-
 def service_status_after_card_pay(contract_id: str | None) -> str:
     return "ACTIVE" if contract_id else "PAID"
 
-
-# ── AES256 빌링키 복호화 ───────────────────────────────────────────────
 
 def decrypt_billkey(encrypted: str, inilite_key: str) -> Optional[str]:
     try:
@@ -157,8 +130,5 @@ def decrypt_billkey(encrypted: str, inilite_key: str) -> Optional[str]:
         return None
 
 
-# ── 서버 IP ────────────────────────────────────────────────────────────
-
 def get_server_ip() -> str:
-    """빌링승인/취소 API clientIp — INICIS_CLIENT_IP 환경변수 우선."""
     return INICIS_CLIENT_IP
