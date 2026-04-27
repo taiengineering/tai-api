@@ -1,9 +1,9 @@
 """payment 모듈 순수 유틸·상수 (HTTP·DB 없음).
 
-v2.3 (2026-04-27)
-  [FIX] returnUrl → api.taieng.co.kr 직접 (프록시 불필요)
-        결제 페이지를 api.taieng.co.kr/payments/checkout 에서 서비스하므로
-        returnUrl도 api.taieng.co.kr로 통일 — 도메인 일치
+v2.4 (2026-04-28)
+  [FIX] returnUrl → taieng.co.kr/_api 프록시 경유
+        taieng.co.kr이 taieng-new Pages 프로젝트에 custom domain으로 등록됨
+        이니시스 MID 등록 도메인(taieng.co.kr)과 일치
 """
 from __future__ import annotations
 
@@ -46,23 +46,24 @@ REFUND_URL = os.getenv(
 )
 
 # ── Return/Close URL ──────────────────────────────────────────────────
-# 결제 페이지(checkout.html)가 api.taieng.co.kr에서 서비스되므로
-# returnUrl도 api.taieng.co.kr로 통일 → 도메인 일치
+# ⚠️ 이니시스: returnUrl은 결제요청 페이지와 동일 도메인 필수
+# taieng.co.kr = 이니시스 MID 등록 도메인 = 결제 페이지 도메인
+# Cloudflare Pages Function: taieng.co.kr/_api/* → api.taieng.co.kr/* 프록시
 DEFAULT_RETURN_URL = os.getenv(
     "INICIS_DEFAULT_RETURN_URL",
-    "https://api.taieng.co.kr/payments/inicis/return",
+    "https://taieng.co.kr/_api/payments/inicis/return",
 )
 DEFAULT_CLOSE_URL = os.getenv(
     "INICIS_DEFAULT_CLOSE_URL",
-    "https://api.taieng.co.kr/payments/result?resultCode=CLOSE",
+    "https://taieng.co.kr/_api/payments/result?resultCode=CLOSE",
 )
 FRONT_RETURN_URL = os.getenv(
     "INICIS_FRONT_RETURN_URL",
-    "https://api.taieng.co.kr/payments/result",
+    "https://taieng.co.kr/_api/payments/result",
 )
 BILLING_RETURN_URL = os.getenv(
     "INICIS_BILLING_RETURN_URL",
-    "https://api.taieng.co.kr/payments/inicis/billing/return",
+    "https://taieng.co.kr/_api/payments/inicis/billing/return",
 )
 
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "..", "templates", "payment")
