@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from typing import Optional
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, field_validator
 
@@ -31,7 +32,13 @@ class PrepareBody(BaseModel):
     def user_id_required(cls, v: str) -> str:
         if not v or not v.strip():
             raise ValueError("user_id는 필수값입니다. 로그인 후 결제해주세요.")
-        return v.strip()
+        v = v.strip()
+        # 비회원(게스트) 결제: UUID가 아닌 값은 새 UUID로 교체
+        try:
+            UUID(v)
+        except (ValueError, AttributeError):
+            v = str(uuid4())
+        return v
 
     @field_validator("product_type")
     @classmethod
