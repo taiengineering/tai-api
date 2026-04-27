@@ -1,87 +1,105 @@
-# 세션 로그 — 2026-04-27 (모니터링 파이프라인 + SaaS 점검 + 가격 정합성)
+# 세션 로그 — 2026-04-27 (기획창 + Cursor 협업)
 
-## 완료 작업
+## 1. 서비스 레이어 분리 — DEV_RULES 6건 전부 완료
 
-### 1. SaaS 플랜 데이터 정합성 수정
-- Enterprise SMS/카카오/문서/저장 → -1(무제한)
-- extra_user_fee_v2 → 0 (전 활성 플랜)
-- INDUSTRY_STARTER storage → -1 (기능 동일 원칙)
-- input_scope 컬럼 추가 (facility_only/with_process/with_equipment)
-- area_threshold / amount_threshold 컬럼 추가
-- subscriptions.factory_id 추가
-- revision_type_code 빈 값 보정
+### payment.py (72KB → 12KB)
+- 1차: helpers + schemas + svc 분리 (72→62KB)
+- 2차: HTML 3개 templates/payment/ 분리 (62→30KB)
+- 3차: 잔여 로직 + payment_ops.py 분리 (30→12KB)
+- 테스트 16개 PASS
 
-### 2. 정기결제 빌링키 엔드포인트 4개 (커밋 9a3f501)
-- POST /payments/inicis/billing/prepare
-- POST /payments/inicis/billing/return
-- POST /payments/inicis/billing/charge
-- POST /payments/subscriptions/{id}/cancel
+### matching.py (42KB → 5.3KB)
+- matching_svc/ 패키지 (request, results, dashboard, errors)
+- matching_commission.py 별도 라우터 + matching_deps.py
+- main.py commission_router import 경로 변경
+- 테스트 11개 PASS
 
-### 3. 15시간 배포 실패 원인 수정 (커밋 0a91dc1)
-- 원인: `_next_planned_from` (밑줄 private) vs `next_planned_from` (import 시 밑줄 없음)
-- inspection_sets_helpers.py에 public alias 추가
-- Railway 배포 성공 (15시간 만에 첫 성공)
+### inspection_sets.py (38KB → 3.2KB)
+- inspection_sets_svc/ 패키지 (law_engine, queries, anchors, schedules, errors)
+- 테스트 11개 PASS
+- ⚠️ inspection_schedule.py import 경로 누락 발견 → 핫픽스 완료
 
-### 4. 모니터링 파이프라인 구축
+### 최종 성과
+| 파일 | 원본 | 현재 | 축소율 |
+|---|---|---|---|
+| legal_engine | 77KB | 5KB | 93% |
+| construction | 58KB | 1.8KB | 97% |
+| payment | 72KB | 12KB | 83% |
+| law_rule_generator | 46KB | 16KB | 65% |
+| matching | 42KB | 5.3KB | 87% |
+| inspection_sets | 38KB | 3.2KB | 92% |
+| **합계** | **333KB** | **43KB** | **87%** |
 
-#### 자체 등록형 프로브 시스템
-- `services/health_registry.py` — register_probe 모듈
-- `services/health_probes.py` — 인프라 프로브 (DB, PDF, SMS, Storage, 프론트 2개)
-- `routers/health.py` — /health + /health/deep 엔드포인트
-- 서비스별 프로브: auth, law_engine, payment, construction, education, inspection, matching, tbm, risk
-- 총 15개 프로브 배포 완료
+---
 
-#### /health/deep 응답 구조
-```json
-{
-  "status": "degraded",
-  "status_ko": "⚠️ 일부 서비스가 정상적이지 않습니다.",
-  "probe_count": 15,
-  "fail_count": 0,
-  "warn_count": 1,
-  "probes": { ... },
-  "alert_ko": "한글 상세 알림",
-  "sms_ko": "90자 SMS 메시지"
-}
-```
+## 2. safe.taieng.co.kr 치명적 이슈 수정
 
-#### 프로브 메타 정보 (커밋 31049cc)
-- 각 프로브에 impacts(영향범위), fix_links(수정링크), api, code 포함
-- 대시보드에서 "어디서 문제 → 어디로 가서 수정" 즉시 파악
+| 이슈 | 수정 |
+|---|---|
+| BUILDING→FACILITY 섹터 매핑 | auth-login-cover.html PLAN_MAP 수정 |
+| 비밀번호 찾기 API 미연동 | pw_reset.py 신규 + 프론트 모달 연동 |
+| STANDARD plan_code 미등록 | PLAN_MAP legacy 호환 + DB null→INDUSTRY_STARTER_V2 |
+| 로고 404 | tai-logo.png → branding/logo.png |
+| 통계 473→3,820 | 반영 |
 
-#### DB 테이블
-- health_checks: 체크 결과 저장 (pg_cron 30일 자동 정리)
-- health_alerts: 알림 기록 (중복 방지)
+---
 
-### 5. auto-qa-dashboard 재설계 (커밋 5dd5acc)
-- /health/deep 단일 소스 기반으로 전면 교체
-- 기존 auto_qa_checks(86개) 기반 → /health/deep(15개) 기반
-- 상단 Hero (정상/경고/장애)
-- 이슈 카드: 실패/경고만 표시 (영향범위 + 수정링크 + 재체크)
-- 전체 프로브 그리드 (접기)
-- 30초 자동 새로고침
-- 24시간 히스토리
+## 3. QA 대시보드 테스트 등록
+- auto_qa_checks 테이블에 29건 INSERT (T-01~T-29)
+- 대시보드 전체 체크: 57 → 86, 활성화: 11 → 40
 
-### 6. GitHub Actions CI/CD 재설계
-- 삭제: smoke-test.yml(매시간 cron), pytest.yml, integrity.yml, fly-deploy.yml
-- 신규: ci.yml (dev push + PR), service-check.yml (6시간), post-deploy.yml (수동)
-- 예상 메일: 40~60통/일 → 정상 시 0통
+---
 
-### 7. safe.taieng.co.kr 기능 점검
-- 건물 설비관리 메뉴 노출 (menu-tadmin v5.4.0, 커밋 f8414ec)
-- plan-gate.js 모듈 배포 (커밋 843afc9)
-- RLS 8개 민감 테이블 활성화
+## 4. Supabase 서울 리전 이전 ✅
 
-### 8. 문서화
-- docs/INSPECTION_PRINCIPLES.md — 서비스 점검 원칙
-- docs/PRICING_FINAL.md — 가격 정책 (3회 업데이트)
-- docs/WORK_PLAN_20260427.md — 작업계획
-- services/README_HEALTH_PROBE.md — 프로브 작성 가이드
+### 이전 현황
+| 항목 | 상태 |
+|---|---|
+| 새 프로젝트 생성 (ap-northeast-2 서울) | ✅ vwlahtguyggrhvslabax |
+| IPv4 활성화 (양쪽) | ✅ |
+| Extensions (pgroonga 포함) | ✅ |
+| pg_dump + pg_restore (1.5GB) | ✅ |
+| Auth 유저 (10명) | ✅ |
+| Users 테이블 (18명) | ✅ (수동 INSERT 우회) |
+| Edge Functions 6개 배포 | ✅ |
+| Storage 버킷 16개 | ✅ |
+| pg_cron 10개 | ✅ |
+| Railway 환경변수 교체 | ✅ (서울 DB 전환 완료) |
+| /health 검증 | ✅ healthy |
 
-## 이슈 등록
-| 레포 | # | 제목 |
-|---|---|---|
-| tai-api | #59 | SaaS 플랜 데이터 정합성 수정 + 중기 구조 개선 |
-| tai-api | #60 | 자체 등록형 헬스체크 + 한글 알림 + CI/CD 재설계 |
-| tai-api | #61 | 멀티테넌시 RLS 전체 적용 — 고객 데이터 격리 |
-| tai-admin | #4 | safe.taieng.co.kr 전체 기능 분석 |
+### 남은 작업 (다음 세션)
+| 항목 | 설명 |
+|---|---|
+| Edge Function Secrets | 기존 프로젝트에서 새 프로젝트로 6개 시크릿 복사 |
+| 프론트엔드 URL 교체 | xntdkrjhgcscmqctdzyo → vwlahtguyggrhvslabax (tai-admin JS/HTML) |
+| Storage 파일 51개 이전 | diagrams SVG 등 — 서비스 운영 필수는 아님 |
+| 기존 프로젝트 IPv4 비활성화 | $4/월 절약 (이전 완료 확인 후) |
+| Supabase MCP 프로젝트 ID 교체 | Claude 프로젝트 설정 변경 |
+
+---
+
+## 5. 이슈 처리
+| 이슈 | 상태 |
+|---|---|
+| #29 서비스 레이어 분리 6건 | ✅ closed |
+| #53 갭 B 편향 교정 PR | ✅ closed (merged) |
+| inspection_schedule.py import 경로 누락 | ✅ 핫픽스 완료 |
+
+---
+
+## 6. 커밋 이력 (주요)
+- `bac91ea` pw_reset.py main 배포
+- `c59d2fd` payment 서비스 분리
+- `ec92805` payment HTML 분리
+- `a5d6077` payment 잔여 로직 분리
+- `3ad2162` matching 서비스 분리
+- `30daf9e` inspection_sets 서비스 분리
+- `6d81692` inspection_schedule import 핫픽스
+- `63e6e97` DEV_RULES v4
+- `94599315` Supabase 서울 이전 작업지시서
+
+## 7. 새 Supabase 프로젝트 정보
+- 프로젝트 ID: vwlahtguyggrhvslabax
+- URL: https://vwlahtguyggrhvslabax.supabase.co
+- 리전: ap-northeast-2 (서울)
+- DB 비밀번호: Dmgmgj!@345
