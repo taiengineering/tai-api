@@ -5,7 +5,7 @@ from typing import List
 
 from dateutil.relativedelta import relativedelta
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 
 DELTA_MAP = {
     "day":       lambda v: relativedelta(days=v),
@@ -39,6 +39,10 @@ def _next_planned_from(base: date, cycle_unit: str, cycle_value: int) -> date:
     while cursor < today:
         cursor += delta
     return cursor
+
+
+# public alias — inspection_schedule.py 등 외부에서 import 가능
+next_planned_from = _next_planned_from
 
 
 def _build_next_schedule_row(iset: dict, base: date):
