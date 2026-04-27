@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TAI Safe 결제</title>
+  <script src="https://stdpay.inicis.com/stdjs/INIStdPay.js" charset="utf-8"></script>
+  <style>
+    body{margin:0;font-family:'Pretendard',sans-serif;background:#f8fafc;display:flex;justify-content:center;align-items:center;min-height:100vh}
+    .box{text-align:center;padding:40px}
+    .spinner{width:48px;height:48px;border:4px solid #e2e8f0;border-top:4px solid #0f172a;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 20px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    h2{color:#0f172a;font-size:20px;margin:0 0 8px}
+    p{color:#64748b;font-size:14px;margin:0}
+    .err{color:#dc2626;background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:16px;margin-top:20px;display:none}
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="spinner" id="spinner"></div>
+    <h2>결제창을 준비하고 있습니다...</h2>
+    <p>잠시만 기다려주세요.</p>
+    <div class="err" id="errBox"></div>
+  </div>
+
+  <form id="SendPayForm_id" method="POST" accept-charset="UTF-8">
+    <input type="hidden" name="version" value="1.0">
+    <input type="hidden" name="gopaymethod" value="Card">
+    <input type="hidden" name="mid" value="">
+    <input type="hidden" name="oid" value="">
+    <input type="hidden" name="price" value="">
+    <input type="hidden" name="timestamp" value="">
+    <input type="hidden" name="use_chkfake" value="Y">
+    <input type="hidden" name="signature" value="">
+    <input type="hidden" name="verification" value="">
+    <input type="hidden" name="mKey" value="">
+    <input type="hidden" name="currency" value="WON">
+    <input type="hidden" name="goodname" value="">
+    <input type="hidden" name="buyername" value="">
+    <input type="hidden" name="buyertel" value="">
+    <input type="hidden" name="buyeremail" value="">
+    <input type="hidden" name="returnUrl" value="">
+    <input type="hidden" name="closeUrl" value="">
+    <input type="hidden" name="acceptmethod" value="centerCd(Y)">
+  </form>
+
+  <script>
+    (function() {
+      var API = 'https://api.taieng.co.kr';
+      var params = new URLSearchParams(window.location.search);
+
+      var userId = params.get('user_id') || '';
+      var productType = params.get('product_type') || 'DIAGNOSIS';
+      var amount = parseInt(params.get('amount') || '0');
+      var goodname = params.get('goodname') || 'TAI Safe';
+      var buyername = params.get('buyername') || '고객';
+      var buyertel = params.get('buyertel') || '00000000000';
+      var buyeremail = params.get('buyeremail') || 'noreply@taieng.co.kr';
+      var planCode = params.get('plan_code') || '';
+      var companyId = params.get('company_id') || '';
+      var contractId = params.get('contract_id') || '';
+      var periodMonths = params.get('period_months') || '';
+
+      if (!amount) { showError('결제 금액이 없습니다.'); return; }
+
+      var body = {
+        user_id: userId || '00000000-0000-0000-0000-000000000001',
+        product_type: productType,
+        amount: amount,
+        goodname: goodname,
+        buyername: buyername,
+        buyertel: buyertel,
+        buyeremail: buyeremail
+      };
+      if (planCode) body.plan_code = planCode;
+      if (companyId) body.company_id = companyId;
+      if (contractId) body.contract_id = contractId;
+      if (periodMonths) body.period_months = parseInt(periodMonths);
+
+      fetch(API + '/payments/inicis/prepare', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(res) {
+        if (res.status !== 'success' || !res.data) {
+          showError(res.detail || '결제 준비 실패');
+          return;
+        }
+        var d = res.data;
+        var f = document.getElementById('SendPayForm_id');
+        f.elements['mid'].value = d.mid;
+        f.elements['oid'].value = d.oid;
+        f.elements['price'].value = d.price;
+        f.elements['timestamp'].value = d.timestamp;
+        f.elements['signature'].value = d.signature;
+        f.elements['verification'].value = d.verification;
+        f.elements['mKey'].value = d.mKey;
+        f.elements['goodname'].value = d.goodname;
+        f.elements['buyername'].value = d.buyername;
+        f.elements['buyertel'].value = d.buyertel;
+        f.elements['buyeremail'].value = d.buyeremail || 'noreply@taieng.co.kr';
+        f.elements['returnUrl'].value = 'https://api.taieng.co.kr/payments/inicis/return';
+        f.elements['closeUrl'].value = 'https://api.taieng.co.kr/payments/result?resultCode=CLOSE';
+
+        document.getElementById('spinner').style.display = 'none';
+        document.querySelector('h2').textContent = '결제창을 여는 중...';
+
+        setTimeout(function() {
+          INIStdPay.pay('SendPayForm_id');
+        }, 300);
+      })
+      .catch(function(err) {
+        showError('결제 준비 중 오류: ' + err.message);
+      });
+
+      function showError(msg) {
+        document.getElementById('spinner').style.display = 'none';
+        document.querySelector('h2').textContent = '결제 오류';
+        var box = document.getElementById('errBox');
+        box.textContent = msg;
+        box.style.display = 'block';
+      }
+    })();
+  </script>
+</body>
+</html>
