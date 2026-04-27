@@ -355,3 +355,25 @@ def run_diagnose_step1_endpoint(supabase, body) -> Dict[str, Any]:
         except Exception as e:
             print(f"[AUTO_INSPECT_SETS] inspection_sets 자동생성 실패: {e}")
     return {"status": "success", "data": result_data}
+
+
+from db.supabase_client import get_supabase as _health_get_supabase
+from services.health_registry import register_probe
+
+
+async def _probe_law_engine():
+    sb = _health_get_supabase()
+    r = (
+        sb.table("master_building_legal_rules")
+        .select("rule_id", count="exact")
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+    count = r.count or 0
+    if count < 1000:
+        return {"status": "warn", "rules_count": count, "detail": f"규칙 {count}건 (1000건 미만)"}
+    return {"rules_count": count}
+
+
+register_probe("law_engine", _probe_law_engine, critical=True, desc_ko="법령 엔진")
