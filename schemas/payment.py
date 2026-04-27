@@ -36,6 +36,9 @@ class PrepareBody(BaseModel):
     @field_validator("product_type")
     @classmethod
     def product_type_valid(cls, v: str) -> str:
+        # 프론트 호환: DIAG_BUILDING/DIAG_INDUSTRY/DIAG_CONSTRUCTION → DIAGNOSIS
+        if v.startswith("DIAG_"):
+            v = "DIAGNOSIS"
         allowed = {
             "DIAGNOSIS",
             "SAAS_CONSTRUCTION",
