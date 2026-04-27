@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
-from routers.inspection_sets import _next_planned_from as _calc_next_date  # ★ fix: 함수명 변경
+from services.inspection_sets_helpers import next_planned_from as _calc_next_date  # ★ 서비스 분리 후 경로 변경
 from services.legal_format import CYCLE_CODE_MAP, INSPECTION_CYCLE_UNIT_MAP
 from services.legal_helpers import get_sector_groups
 
