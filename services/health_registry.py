@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 _probes: dict = {}
 
 
-def register_probe(name, fn, critical=False, desc_ko=""):
+def register_probe(name, fn, critical=False, desc_ko="", meta=None):
     """
     헬스체크 프로브 등록.
 
@@ -34,6 +34,7 @@ def register_probe(name, fn, critical=False, desc_ko=""):
         "fn": fn,
         "critical": critical,
         "desc_ko": desc_ko or name,
+        "meta": meta or {},
     }
 
 
@@ -143,6 +144,7 @@ async def run_all_probes():
                 "status": result.get("status", "ok"),
                 "latency_ms": ms,
                 "desc_ko": probe["desc_ko"],
+                "meta": probe.get("meta", {}),
                 **{k: v for k, v in result.items() if k != "status"},
             }
         except Exception as e:
@@ -151,6 +153,7 @@ async def run_all_probes():
                 "error": str(e)[:100],
                 "critical": probe["critical"],
                 "desc_ko": probe["desc_ko"],
+                "meta": probe.get("meta", {}),
                 "message_ko": get_error_message_ko(name, str(e)),
             }
 

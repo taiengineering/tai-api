@@ -376,4 +376,22 @@ async def _probe_law_engine():
     return {"rules_count": count}
 
 
-register_probe("law_engine", _probe_law_engine, critical=True, desc_ko="법령 엔진")
+register_probe(
+    "law_engine",
+    _probe_law_engine,
+    critical=True,
+    desc_ko="법령 엔진",
+    meta={
+        "impacts": [
+            {"name": "무료 진단", "url": "https://new.taieng.co.kr/free-diagnosis.html"},
+            {"name": "유료 진단", "url": "https://new.taieng.co.kr/paid-diagnosis-result.html"},
+            {"name": "SaaS 법적 의무", "page": "safe > 점검관리"},
+        ],
+        "fix_links": [
+            {"name": "Railway 로그", "url": "https://railway.com/project/7c3ab53b-feb6-40a4-a4f0-7ade3f6e524b/service/4cf52678-1fbf-42f4-8bd7-f59fab98c3ae"},
+            {"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/xntdkrjhgcscmqctdzyo"},
+        ],
+        "api": "POST /legal-engine/run",
+        "code": "services/legal_engine_svc.py",
+    },
+)

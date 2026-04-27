@@ -24,7 +24,20 @@ async def _probe_db():
     return {"active_plans": r.count or 0}
 
 
-register_probe("db", _probe_db, critical=True, desc_ko="데이터베이스")
+register_probe(
+    "db",
+    _probe_db,
+    critical=True,
+    desc_ko="데이터베이스",
+    meta={
+        "impacts": [{"name": "모든 서비스", "page": "전체"}],
+        "fix_links": [
+            {"name": "Supabase 대시보드", "url": "https://supabase.com/dashboard/project/xntdkrjhgcscmqctdzyo"},
+        ],
+        "api": "전체 (DB 의존)",
+        "code": "db/supabase_client.py",
+    },
+)
 
 
 async def _probe_pdf():
@@ -36,7 +49,23 @@ async def _probe_pdf():
     return {}
 
 
-register_probe("pdf_engine", _probe_pdf, critical=True, desc_ko="PDF 생성 엔진")
+register_probe(
+    "pdf_engine",
+    _probe_pdf,
+    critical=True,
+    desc_ko="PDF 생성 엔진",
+    meta={
+        "impacts": [
+            {"name": "유료 진단 PDF", "url": "https://new.taieng.co.kr/paid-diagnosis-result.html"},
+            {"name": "기안 PDF", "page": "SaaS > 문서관리"},
+        ],
+        "fix_links": [
+            {"name": "Railway Gotenberg", "url": "https://railway.com/project/7c3ab53b-feb6-40a4-a4f0-7ade3f6e524b"},
+        ],
+        "api": "POST /diagnosis/report-pdf, POST /proposals/{id}/pdf",
+        "code": "services/diagnosis_report.py, services/diagnosis_proposal.py",
+    },
+)
 
 
 async def _probe_sms():
@@ -49,7 +78,21 @@ async def _probe_sms():
     return {"proxy": proxy[:20] + "..."}
 
 
-register_probe("sms", _probe_sms, critical=False, desc_ko="SMS 발송")
+register_probe(
+    "sms",
+    _probe_sms,
+    critical=False,
+    desc_ko="SMS 발송",
+    meta={
+        "impacts": [{"name": "알림 발송", "page": "전체 알림"}],
+        "fix_links": [
+            {"name": "Railway 환경변수", "url": "https://railway.com/project/7c3ab53b-feb6-40a4-a4f0-7ade3f6e524b/variables"},
+            {"name": "iwinv 프록시", "url": ""},
+        ],
+        "api": "POST /messaging/send",
+        "code": "services/messaging_svc.py",
+    },
+)
 
 
 async def _probe_storage():
@@ -60,7 +103,23 @@ async def _probe_storage():
     return {"file_count": len(files)}
 
 
-register_probe("storage", _probe_storage, critical=False, desc_ko="파일 저장소")
+register_probe(
+    "storage",
+    _probe_storage,
+    critical=False,
+    desc_ko="파일 저장소",
+    meta={
+        "impacts": [
+            {"name": "다이어그램", "url": "https://new.taieng.co.kr/service/saas.html"},
+            {"name": "문서 관리", "page": "SaaS > 문서관리"},
+        ],
+        "fix_links": [
+            {"name": "Supabase Storage", "url": "https://supabase.com/dashboard/project/xntdkrjhgcscmqctdzyo/storage"},
+        ],
+        "api": "Supabase Storage API",
+        "code": "services/document_svc.py",
+    },
+)
 
 
 async def _probe_frontend_safe():
@@ -71,7 +130,21 @@ async def _probe_frontend_safe():
     return {}
 
 
-register_probe("frontend_safe", _probe_frontend_safe, critical=True, desc_ko="SaaS 사이트")
+register_probe(
+    "frontend_safe",
+    _probe_frontend_safe,
+    critical=True,
+    desc_ko="SaaS 사이트",
+    meta={
+        "impacts": [{"name": "SaaS 전체", "url": "https://safe.taieng.co.kr"}],
+        "fix_links": [
+            {"name": "Cloudflare Pages", "url": "https://dash.cloudflare.com"},
+            {"name": "tai-admin 레포", "url": "https://github.com/taiengineering/tai-admin"},
+        ],
+        "api": "Cloudflare Pages",
+        "code": "tai-admin 레포",
+    },
+)
 
 
 async def _probe_frontend_marketing():
@@ -87,4 +160,13 @@ register_probe(
     _probe_frontend_marketing,
     critical=False,
     desc_ko="마케팅 사이트",
+    meta={
+        "impacts": [{"name": "마케팅 사이트", "url": "https://new.taieng.co.kr"}],
+        "fix_links": [
+            {"name": "Cloudflare Pages", "url": "https://dash.cloudflare.com"},
+            {"name": "taieng 레포", "url": "https://github.com/taiengineering/taieng"},
+        ],
+        "api": "Cloudflare Pages",
+        "code": "taieng 레포",
+    },
 )

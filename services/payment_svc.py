@@ -765,4 +765,21 @@ async def _probe_payment():
     return {"inicis_mid": mid[:4] + "****"}
 
 
-register_probe("payment", _probe_payment, critical=True, desc_ko="결제 시스템")
+register_probe(
+    "payment",
+    _probe_payment,
+    critical=True,
+    desc_ko="결제 시스템",
+    meta={
+        "impacts": [
+            {"name": "법령진단 결제", "url": "https://new.taieng.co.kr/service/diagnosis.html"},
+            {"name": "SaaS 구독", "url": "https://new.taieng.co.kr/service/saas.html"},
+        ],
+        "fix_links": [
+            {"name": "Railway 환경변수", "url": "https://railway.com/project/7c3ab53b-feb6-40a4-a4f0-7ade3f6e524b/variables"},
+            {"name": "KG이니시스 관리자", "url": "https://iniweb.inicis.com"},
+        ],
+        "api": "POST /payments/prepare, POST /payments/verify",
+        "code": "services/payment_svc.py",
+    },
+)

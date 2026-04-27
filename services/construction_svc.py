@@ -380,4 +380,20 @@ async def _probe_construction():
     return {"sites_count": r.count or 0}
 
 
-register_probe("construction", _probe_construction, critical=False, desc_ko="건설 관리")
+register_probe(
+    "construction",
+    _probe_construction,
+    critical=False,
+    desc_ko="건설 관리",
+    meta={
+        "impacts": [
+            {"name": "건설 현장관리", "page": "safe > 건설관리 > 현장관리"},
+            {"name": "건설 점검", "page": "safe > 건설관리 > 점검관리"},
+        ],
+        "fix_links": [
+            {"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/xntdkrjhgcscmqctdzyo"},
+        ],
+        "api": "GET /construction/sites",
+        "code": "services/construction_svc.py",
+    },
+)

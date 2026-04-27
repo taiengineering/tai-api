@@ -749,4 +749,15 @@ async def _probe_education():
     return {"records_count": r.count or 0}
 
 
-register_probe("education", _probe_education, critical=False, desc_ko="교육 관리")
+register_probe(
+    "education",
+    _probe_education,
+    critical=False,
+    desc_ko="교육 관리",
+    meta={
+        "impacts": [{"name": "교육 관리", "page": "safe > 교육관리 > 교육목록"}],
+        "fix_links": [{"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/xntdkrjhgcscmqctdzyo"}],
+        "api": "GET /education",
+        "code": "routers/education.py",
+    },
+)

@@ -498,4 +498,15 @@ async def _probe_tbm():
     return {"sessions_count": r.count or 0}
 
 
-register_probe("tbm", _probe_tbm, critical=False, desc_ko="TBM 관리")
+register_probe(
+    "tbm",
+    _probe_tbm,
+    critical=False,
+    desc_ko="TBM 관리",
+    meta={
+        "impacts": [{"name": "TBM 관리", "page": "safe > TBM관리 > TBM관리"}],
+        "fix_links": [{"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/xntdkrjhgcscmqctdzyo"}],
+        "api": "GET /tbm",
+        "code": "routers/tbm.py",
+    },
+)

@@ -49,4 +49,15 @@ async def _probe_matching():
     return {"sessions_count": r.count or 0}
 
 
-register_probe("matching", _probe_matching, critical=False, desc_ko="전문가 매칭")
+register_probe(
+    "matching",
+    _probe_matching,
+    critical=False,
+    desc_ko="전문가 매칭",
+    meta={
+        "impacts": [{"name": "전문가 매칭", "page": "safe > 연결 서비스 > 전문가 매칭"}],
+        "fix_links": [{"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/xntdkrjhgcscmqctdzyo"}],
+        "api": "POST /fix/chat/start",
+        "code": "services/matching_svc/__init__.py",
+    },
+)

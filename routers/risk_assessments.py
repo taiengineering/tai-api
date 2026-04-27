@@ -369,4 +369,15 @@ async def _probe_risk():
     return {"assessments_count": r.count or 0}
 
 
-register_probe("risk", _probe_risk, critical=False, desc_ko="위험성평가")
+register_probe(
+    "risk",
+    _probe_risk,
+    critical=False,
+    desc_ko="위험성평가",
+    meta={
+        "impacts": [{"name": "위험성평가", "page": "safe > 위험관리 > 위험성평가"}],
+        "fix_links": [{"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/xntdkrjhgcscmqctdzyo"}],
+        "api": "GET /risk-assessments",
+        "code": "routers/risk_assessments.py",
+    },
+)

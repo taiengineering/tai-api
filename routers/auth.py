@@ -632,4 +632,20 @@ async def _probe_auth():
     return {"users_count": r.count or 0}
 
 
-register_probe("auth", _probe_auth, critical=True, desc_ko="인증 서비스")
+register_probe(
+    "auth",
+    _probe_auth,
+    critical=True,
+    desc_ko="인증 서비스",
+    meta={
+        "impacts": [
+            {"name": "로그인", "url": "https://safe.taieng.co.kr/html/horizontal-menu-template/auth-login-cover"},
+            {"name": "회원가입", "page": "전체 인증"},
+        ],
+        "fix_links": [
+            {"name": "Supabase Auth", "url": "https://supabase.com/dashboard/project/xntdkrjhgcscmqctdzyo/auth/users"},
+        ],
+        "api": "POST /auth/login, POST /auth/token",
+        "code": "routers/auth.py",
+    },
+)
