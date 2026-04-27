@@ -1,16 +1,23 @@
 """결제 API Pydantic 스키마.
 
 규칙: docs/DEV_RULES_SERVICE_LAYER.md STEP 2
+
+v2.0 (2026-04-27)
+  매뉴얼 기반 전면 재정리 — docs/INICIS_INTEGRATION_SPEC.md 참조
+  - BillingReturnBody: 이니시스 빌키발급 결과 파라미터 반영
+  - RefundBody: 취소/환불 API용 스키마 추가
+  - PartialRefundBody: 부분취소 스키마 추가
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, Optional
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, field_validator
 
 
 class PrepareBody(BaseModel):
+    """단건결제 준비 — POST /payments/inicis/prepare"""
     user_id: str
     product_type: str
     amount: int
@@ -33,7 +40,6 @@ class PrepareBody(BaseModel):
         if not v or not v.strip():
             raise ValueError("user_id는 필수값입니다. 로그인 후 결제해주세요.")
         v = v.strip()
-        # 비회원(게스트) 결제: UUID가 아닌 값은 새 UUID로 교체
         try:
             UUID(v)
         except (ValueError, AttributeError):
@@ -43,7 +49,6 @@ class PrepareBody(BaseModel):
     @field_validator("product_type")
     @classmethod
     def product_type_valid(cls, v: str) -> str:
-        # 프론트 호환: DIAG_BUILDING/DIAG_INDUSTRY/DIAG_CONSTRUCTION → DIAGNOSIS
         if v.startswith("DIAG_"):
             v = "DIAGNOSIS"
         allowed = {
@@ -62,8 +67,7 @@ class PrepareBody(BaseModel):
 
 
 class VbankPrepareBody(BaseModel):
-    """VBANK 전용 결제 준비 Body — 연결 서비스(선임/컨설팅/수선) 전용"""
-
+    """VBANK 전용 결제 준비 — 연결 서비스(선임/컨설팅/수선) 전용"""
     user_id: Optional[str] = None
     auth_token: Optional[str] = None
     public_token: Optional[str] = None
@@ -71,7 +75,6 @@ class VbankPrepareBody(BaseModel):
     amount: int
     goodname: str
     matching_contract_id: Optional[str] = None
-
     company_id: Optional[str] = None
     buyername: Optional[str] = "고객"
     buyertel: Optional[str] = "00000000000"
@@ -89,7 +92,6 @@ class VbankPrepareBody(BaseModel):
 
 class DiagnosisVbankPrepareBody(BaseModel):
     """유료 진단 가상계좌 발급 준비."""
-
     auth_token: Optional[str] = None
     public_token: Optional[str] = None
     amount: int
@@ -102,17 +104,10 @@ class DiagnosisVbankPrepareBody(BaseModel):
     invoice_email: Optional[str] = None
 
 
-class ManualConfirmBody(BaseModel):
-    payment_id: str
-    contract_id: str
-
-
-class CancelBody(BaseModel):
-    reason: Optional[str] = "사용자 요청"
-    cancelled_by: Optional[str] = None
-
+# ── 구독(빌링) 스키마 ──────────────────────────────────────────────────
 
 class BillingPrepareBody(BaseModel):
+    """빌링키 발급 준비 — POST /payments/inicis/billing/prepare"""
     user_id: str
     product_type: str
     amount: int
@@ -120,27 +115,77 @@ class BillingPrepareBody(BaseModel):
     plan_code: Optional[str] = None
     period_months: int = 1
     company_id: Optional[str] = None
+    factory_id: Optional[str] = None
     buyername: Optional[str] = "고객"
     buyertel: Optional[str] = "00000000000"
     buyeremail: Optional[str] = None
 
 
 class BillingReturnBody(BaseModel):
-    oid: str
-    authToken: str
-    authUrl: str
-    resultCode: Optional[str] = None
-    resultMsg: Optional[str] = None
+    """빌링키 발급 결과 — 이니시스 returnUrl POST 파라미터.
+
+    매뉴얼: https://manual.inicis.com/pay/bill.html STEP2
+    resultCode: "SUCCESS" = 성공 (단건 "0000"과 다름)
+    billkey: AES256 암호화된 빌링키 → 복호화 필요
+    """
+    resultCode: str
+    resultMessage: Optional[str] = None
+    mid: Optional[str] = None
+    orderId: Optional[str] = None
+    authkey: Optional[str] = None
+    tid: Optional[str] = None
+    merchantRedirectData: Optional[str] = None
+    billkey: Optional[str] = None
+    billkeyDate: Optional[str] = None
+    billkeyTime: Optional[str] = None
     cardNumber: Optional[str] = None
     cardCode: Optional[str] = None
+    cardCompanyName: Optional[str] = None
+    cardType: Optional[str] = None
+    cardTypeName: Optional[str] = None
+    cardKind: Optional[str] = None
+    cardKindName: Optional[str] = None
+    hashData: Optional[str] = None
 
 
 class BillingChargeBody(BaseModel):
+    """빌링 승인(과금) 요청 — POST /payments/inicis/billing/charge"""
     subscription_id: str
     amount: Optional[int] = None
     goodname: Optional[str] = None
 
 
 class BillingCancelBody(BaseModel):
+    """구독 해지 — POST /subscriptions/{id}/cancel"""
+    reason: Optional[str] = "사용자 요청"
+    cancelled_by: Optional[str] = None
+
+
+# ── 취소/환불 스키마 ───────────────────────────────────────────────────
+
+class RefundBody(BaseModel):
+    """전체 취소 — POST /payments/{payment_id}/refund
+
+    매뉴얼: https://manual.inicis.com/pay/cancel.html
+    """
+    reason: str = "사용자 요청"
+    cancelled_by: Optional[str] = None
+
+
+class PartialRefundBody(BaseModel):
+    """부분 취소 — POST /payments/{payment_id}/partial-refund"""
+    amount: int
+    reason: str = "사용자 요청"
+    cancelled_by: Optional[str] = None
+
+
+# ── 기타 ──────────────────────────────────────────────────────────────
+
+class ManualConfirmBody(BaseModel):
+    payment_id: str
+    contract_id: str
+
+
+class CancelBody(BaseModel):
     reason: Optional[str] = "사용자 요청"
     cancelled_by: Optional[str] = None
