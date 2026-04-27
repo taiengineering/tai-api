@@ -100,3 +100,37 @@ class ManualConfirmBody(BaseModel):
 class CancelBody(BaseModel):
     reason: Optional[str] = "사용자 요청"
     cancelled_by: Optional[str] = None
+
+
+class BillingPrepareBody(BaseModel):
+    user_id: str
+    product_type: str
+    amount: int
+    goodname: str
+    plan_code: Optional[str] = None
+    period_months: int = 1
+    company_id: Optional[str] = None
+    buyername: Optional[str] = "고객"
+    buyertel: Optional[str] = "00000000000"
+    buyeremail: Optional[str] = None
+
+
+class BillingReturnBody(BaseModel):
+    oid: str
+    authToken: str
+    authUrl: str
+    resultCode: Optional[str] = None
+    resultMsg: Optional[str] = None
+    cardNumber: Optional[str] = None
+    cardCode: Optional[str] = None
+
+
+class BillingChargeBody(BaseModel):
+    subscription_id: str
+    amount: Optional[int] = None
+    goodname: Optional[str] = None
+
+
+class BillingCancelBody(BaseModel):
+    reason: Optional[str] = "사용자 요청"
+    cancelled_by: Optional[str] = None

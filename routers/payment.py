@@ -43,7 +43,15 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from db.supabase_client import get_supabase
-from schemas.payment import DiagnosisVbankPrepareBody, PrepareBody, VbankPrepareBody
+from schemas.payment import (
+    BillingCancelBody,
+    BillingChargeBody,
+    BillingPrepareBody,
+    BillingReturnBody,
+    DiagnosisVbankPrepareBody,
+    PrepareBody,
+    VbankPrepareBody,
+)
 from services.payment_svc import (
     PaymentPrepareError,
     call_pay_auth,
@@ -53,6 +61,10 @@ from services.payment_svc import (
     process_card_success,
     process_vbank_deposit,
     process_vbank_issued,
+    run_billing_cancel,
+    run_billing_charge,
+    run_billing_prepare,
+    run_billing_return,
     run_inicis_prepare,
 )
 from services.payment_helpers import FRONT_RETURN_URL, load_template, now_iso as _now_iso
@@ -325,3 +337,35 @@ async def vbank_noti(request: Request):
 def payment_billing_terms_page():
     """구독 이용 안내 페이지 — 이니시스 정기결제 심사용 공개 페이지"""
     return HTMLResponse(content=load_template("billing_terms.html"), status_code=200)
+
+
+@router.post("/inicis/billing/prepare")
+def billing_prepare(body: BillingPrepareBody):
+    try:
+        return run_billing_prepare(body)
+    except PaymentPrepareError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/inicis/billing/return")
+def billing_return(body: BillingReturnBody):
+    try:
+        return run_billing_return(body)
+    except PaymentPrepareError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/inicis/billing/charge")
+def billing_charge(body: BillingChargeBody):
+    try:
+        return run_billing_charge(body)
+    except PaymentPrepareError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/subscriptions/{subscription_id}/cancel")
+def cancel_subscription(subscription_id: str, body: BillingCancelBody):
+    try:
+        return run_billing_cancel(subscription_id, body.reason or "사용자 요청", body.cancelled_by)
+    except PaymentPrepareError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
