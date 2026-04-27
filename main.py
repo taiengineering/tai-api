@@ -23,8 +23,7 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from db.database import get_supabase
+import services.health_probes  # noqa: F401  # register infra health probes (import side effects)
 
 from routers.auth                    import router as auth_router
 from routers.users                   import router as users_router
@@ -124,6 +123,7 @@ from routers.admin_pricing           import router as admin_pricing_router
 from routers.fix_providers_api       import router as fix_providers_router
 from routers.diagnosis_fields        import router as diagnosis_fields_router
 from routers.fix_chat                import router as fix_chat_router
+from routers.health                  import router as health_router
 from routers.diagnosis_autofill      import router as diagnosis_autofill_router
 from routers.diagnosis_roi           import router as diagnosis_roi_router
 from routers.diagnosis_transform     import router as diagnosis_transform_router
@@ -195,6 +195,7 @@ app.add_middleware(
 
 # 공개 엔드포인트
 app.include_router(public_router)
+app.include_router(health_router)
 app.include_router(public_admin_router)
 app.include_router(alert_messages_router)
 app.include_router(feature_flags_router)
@@ -317,27 +318,3 @@ def root():
     return {"status": "ok", "service": "TAI API", "version": APP_VERSION}
 
 
-@app.get("/health")
-def health_check():
-    checks = {}
-    try:
-        sb = get_supabase()
-        sb.table("system_codes").select("code").limit(1).execute()
-        checks["db"] = "ok"
-    except Exception as e:
-        checks["db"] = f"fail: {str(e)[:100]}"
-    try:
-        res = sb.table("master_building_legal_rules").select("id").eq("is_active", True).limit(1).execute()
-        checks["law_engine"] = "ok" if res.data else "empty"
-    except Exception as e:
-        checks["law_engine"] = f"fail: {str(e)[:100]}"
-    try:
-        res = sb.table("fix_chat_sessions").select("id").limit(1).execute()
-        checks["fix_chat"] = "ok"
-    except Exception as e:
-        checks["fix_chat"] = f"fail: {str(e)[:100]}"
-    all_ok = all(v == "ok" for v in checks.values())
-    return JSONResponse(
-        status_code=200,
-        content={"status": "healthy" if all_ok else "degraded", "checks": checks}
-    )

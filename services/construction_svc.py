@@ -368,3 +368,16 @@ async def send_fcm_inspection_alert(supabase, site_id: str, inspection_id: str, 
             )
     except Exception as e:
         log.warning("[FCM] 점검 알림 발송 실패 (무시): %s", e)
+
+
+from db.supabase_client import get_supabase as _health_get_supabase
+from services.health_registry import register_probe
+
+
+async def _probe_construction():
+    sb = _health_get_supabase()
+    r = sb.table("construction_sites").select("id", count="exact").limit(1).execute()
+    return {"sites_count": r.count or 0}
+
+
+register_probe("construction", _probe_construction, critical=False, desc_ko="건설 관리")

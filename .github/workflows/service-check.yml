@@ -1,0 +1,53 @@
+name: Service Health Check
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  deep-check:
+    name: Deep Health Check
+    runs-on: ubuntu-latest
+    env:
+      HEALTH_DEEP_SECRET: ${{ secrets.HEALTH_DEEP_SECRET }}
+      ALERT_PHONE: ${{ secrets.ALERT_PHONE }}
+    steps:
+      - name: 서비스 상태 확인
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESULT=$(
+            curl -sfS "https://api.taieng.co.kr/health/deep?secret=${HEALTH_DEEP_SECRET}" \
+              || echo '{"status":"unreachable","fail_count":99,"probe_count":0,"probes":{},"sms_ko":"","alert_ko":""}'
+          )
+          STATUS=$(echo "$RESULT" | jq -r '.status // "unreachable"')
+          FAILS=$(echo "$RESULT" | jq -r '.fail_count // 0')
+          PROBES=$(echo "$RESULT" | jq -r '.probe_count // 0')
+          SMS_MSG=$(echo "$RESULT" | jq -r '.sms_ko // empty' | tr '\n' ' ' | head -c 200)
+          ALERT_MSG=$(echo "$RESULT" | jq -r '.alert_ko // empty' | tr '\n' ' ')
+
+          echo "═══════════════════════════════════"
+          echo "상태: $STATUS | 프로브: $PROBES | 실패: $FAILS"
+          echo "═══════════════════════════════════"
+
+          if [ "$STATUS" = "critical" ] || [ "$STATUS" = "unreachable" ]; then
+            echo ""
+            echo "$ALERT_MSG"
+            echo ""
+            echo "::error::$SMS_MSG"
+            if [ -n "${ALERT_PHONE:-}" ] && [ -n "$SMS_MSG" ]; then
+              curl -sfS -G "https://api.taieng.co.kr/messaging/debug-send" \
+                --data-urlencode "receiver=${ALERT_PHONE}" \
+                --data-urlencode "message=${SMS_MSG}" || true
+            fi
+            exit 1
+          elif [ "$STATUS" = "degraded" ]; then
+            echo ""
+            echo "$ALERT_MSG"
+            echo "::warning::$SMS_MSG"
+          fi
+
+      - name: 체크 완료
+        if: always()
+        run: echo "체크 완료"

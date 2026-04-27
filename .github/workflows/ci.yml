@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-test:
+    name: "Unit Tests"
+    runs-on: ubuntu-latest
+    env:
+      INTERNAL_API_SECRET: test
+      ANTHROPIC_API_KEY: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system packages (pycairo / xhtml2pdf)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libcairo2-dev pkg-config python3-dev libffi-dev gcc
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-test.txt
+
+      - name: Install Python dependencies
+        run: pip install -r requirements-test.txt
+
+      - name: Run pytest
+        run: |
+          pytest tests/ -v --tb=short \
+            --ignore=tests/check_db_integrity.py \
+            --ignore=tests/check_mapping_coverage.py \
+            --ignore=tests/test_legal_engine.py \
+            --ignore=tests/test_legal_engine_52.py \
+            --ignore=tests/test_legal_engine_layer.py \
+            --ignore=tests/wait_for_deploy.py
+
+  db-integrity:
+    name: "DB Integrity"
+    if: github.event_name == 'pull_request'
+    needs: unit-test
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ secrets.SUPABASE_URL == '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: DB 무결성 검증
+        run: python tests/check_db_integrity.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+  mapping-coverage:
+    name: "Mapping Coverage"
+    if: github.event_name == 'pull_request'
+    needs: unit-test
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ secrets.SUPABASE_URL == '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: 매핑 커버리지 검증
+        run: python tests/check_mapping_coverage.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

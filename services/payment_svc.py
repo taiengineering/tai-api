@@ -753,3 +753,16 @@ def run_billing_cancel(subscription_id: str, reason: str = "사용자 요청", c
         {"status": "CANCELLED", "cancelled_at": now, "cancelled_by": cancelled_by, "updated_at": now}
     ).eq("id", subscription_id).execute()
     return {"status": "success", "data": {"subscription_id": subscription_id, "status": "CANCELLED"}}
+
+
+from services.health_registry import register_probe
+
+
+async def _probe_payment():
+    mid = os.environ.get("INICIS_MID", "")
+    if not mid:
+        return {"status": "warn", "detail": "INICIS_MID 미설정"}
+    return {"inicis_mid": mid[:4] + "****"}
+
+
+register_probe("payment", _probe_payment, critical=True, desc_ko="결제 시스템")
