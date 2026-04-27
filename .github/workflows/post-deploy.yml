@@ -1,7 +1,6 @@
-name: API Smoke Test
+name: Post-Deploy Smoke Test
+
 on:
-  schedule:
-    - cron: '0 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -9,11 +8,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
+
       - run: pip install httpx
-      - run: python scripts/smoke_test.py
+
+      - name: Health Check
+        run: |
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" https://api.taieng.co.kr/health)
+          echo "Health: $STATUS"
+          [ "$STATUS" = "200" ] || exit 1
+
+      - name: Smoke Test
+        if: ${{ secrets.SMOKE_API_URL != '' }}
+        run: python scripts/smoke_test.py
         env:
           API_URL: ${{ secrets.SMOKE_API_URL }}
           TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
