@@ -2,10 +2,12 @@
 
 규칙: docs/DEV_RULES_SERVICE_LAYER.md STEP 1
 
+v2.2 (2026-04-27)
+  [FIX] get_server_ip() → INICIS_CLIENT_IP 환경변수 우선 사용
+        Railway 서버 IP: 115.68.227.222
+
 v2.1 (2026-04-27)
   [FIX] returnUrl/closeUrl → new.taieng.co.kr/_api 프록시 경유
-        이니시스 V023 에러 방지: 결제요청 페이지와 returnUrl 동일 도메인 필수
-        Cloudflare Pages Function: functions/_api/[[path]].js → api.taieng.co.kr 프록시
 
 v2.0 (2026-04-27)
   매뉴얼 기반 전면 재정리
@@ -42,6 +44,9 @@ INICIS_BILLING_MID = os.getenv("INICIS_BILLING_MID", "")
 INICIS_INILITE_KEY = os.getenv("INICIS_INILITE_KEY", "")
 INICIS_INIAPI_KEY = os.getenv("INICIS_INIAPI_KEY", "")
 
+# ── 서버 IP (빌링승인/취소 API clientIp) ───────────────────────────────
+INICIS_CLIENT_IP = os.getenv("INICIS_CLIENT_IP", "115.68.227.222")
+
 # ── API URL ────────────────────────────────────────────────────────────
 BILLING_ISSUE_URL = "https://inilitepay.inicis.com/pay/card/billing"
 BILLING_CHARGE_URL = os.getenv(
@@ -55,7 +60,6 @@ REFUND_URL = os.getenv(
 
 # ── Return/Close URL ──────────────────────────────────────────────────
 # ⚠️ 이니시스 V023: returnUrl은 결제요청 페이지(new.taieng.co.kr)와 동일 도메인 필수
-# Cloudflare Pages Function: new.taieng.co.kr/_api/* → api.taieng.co.kr/* 프록시
 DEFAULT_RETURN_URL = os.getenv(
     "INICIS_DEFAULT_RETURN_URL",
     "https://new.taieng.co.kr/_api/payments/inicis/return",
@@ -64,7 +68,6 @@ DEFAULT_CLOSE_URL = os.getenv(
     "INICIS_DEFAULT_CLOSE_URL",
     "https://new.taieng.co.kr/_api/payments/result?resultCode=CLOSE",
 )
-# 프론트 결과 페이지 (승인 성공/실패 후 리다이렉트 대상)
 FRONT_RETURN_URL = os.getenv(
     "INICIS_FRONT_RETURN_URL",
     "https://new.taieng.co.kr/_api/payments/result",
@@ -80,7 +83,6 @@ _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "..", "templates", "paym
 
 @lru_cache(maxsize=8)
 def load_template(name: str) -> str:
-    """templates/payment/{name} 파일을 읽어 문자열로 반환."""
     path = os.path.join(_TEMPLATE_DIR, name)
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
@@ -158,11 +160,5 @@ def decrypt_billkey(encrypted: str, inilite_key: str) -> Optional[str]:
 # ── 서버 IP ────────────────────────────────────────────────────────────
 
 def get_server_ip() -> str:
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except Exception:
-        return "127.0.0.1"
+    """빌링승인/취소 API clientIp — INICIS_CLIENT_IP 환경변수 우선."""
+    return INICIS_CLIENT_IP
