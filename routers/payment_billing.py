@@ -41,6 +41,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, field_validator, model_validator
 
+from db.direct_sql import (
+    find_subscription_by_oid,
+    insert_subscription,
+    update_subscription_by_oid,
+)
 from db.supabase_client import get_supabase
 
 from services.payment_helpers import (
@@ -441,12 +446,12 @@ def _fail_subscription_by_oid(supabase, oid: str, reason: str) -> None:
     """prepare/return 단계에서 실패한 구독을 FAILED로 마킹."""
     if not oid:
         return
-    supabase.table("subscriptions").update({
+    update_subscription_by_oid(oid, {
         "status":              "FAILED",
         "last_failure_at":     _now_iso(),
         "last_failure_reason": (reason or "")[:500],
         "updated_at":          _now_iso(),
-    }).eq("inicis_order_id", oid).execute()
+    })
 
 
 # ── 엔드포인트 ────────────────────────────────────────────────────────
@@ -491,11 +496,11 @@ def billing_prepare(body: BillingPrepareBody):
     if body.company_id:
         sub_row["company_id"] = body.company_id
 
-    res = supabase.table("subscriptions").insert(sub_row).execute()
-    if not res.data:
+    created_sub = insert_subscription(sub_row)
+    if not created_sub:
         raise HTTPException(status_code=500, detail="구독 레코드 생성 실패")
 
-    subscription_id = res.data[0]["id"]
+    subscription_id = created_sub["id"]
     log.info(f"[BILLING PREPARE] oid={oid} subscription_id={subscription_id} user={body.user_id}")
 
     return {
@@ -558,19 +563,12 @@ async def billing_return(request: Request):
         )
 
     # 구독 조회
-    sub_res = (
-        supabase.table("subscriptions")
-        .select("*")
-        .eq("inicis_order_id", order_id)
-        .limit(1)
-        .execute()
-    )
-    if not sub_res.data:
+    subscription = find_subscription_by_oid(order_id)
+    if not subscription:
         return RedirectResponse(
             f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=구독정보없음&oid={order_id}",
             status_code=302,
         )
-    subscription    = sub_res.data[0]
     subscription_id = subscription["id"]
 
     # 멱등: 이미 처리됨
