@@ -22,7 +22,7 @@
     <div class="err" id="errBox"></div>
   </div>
 
-  <!-- INIStdPay 빌링 결제 폼 (Inicis 매뉴얼 필드명 그대로) -->
+  <!-- INIStdPay 빌링 결제 폼 -->
   <form id="SendPayForm_id" style="display:none">
     <input type="hidden" name="version" value="1.0">
     <input type="hidden" name="mid">
@@ -45,7 +45,6 @@
     <input type="hidden" name="charset" value="UTF-8">
   </form>
 
-  <!-- 이니시스 INIStdPay JS SDK -->
   <script src="https://stdpay.inicis.com/stdjs/INIStdPay.js" charset="UTF-8"></script>
 
   <script>
@@ -94,10 +93,9 @@
         var d = res.data;
         var f = document.getElementById('SendPayForm_id');
 
-        // API 응답 필드를 폼에 설정
         var fields = ['mid','oid','price','goodname','buyername','buyertel',
                       'buyeremail','timestamp','signature','mKey','verification',
-                      'use_chkfake','returnUrl','closeUrl','gopaymethod','acceptmethod'];
+                      'use_chkfake','returnUrl','gopaymethod','acceptmethod'];
 
         fields.forEach(function(key) {
           var el = f.elements[key];
@@ -105,6 +103,10 @@
             el.value = (d[key] !== undefined && d[key] !== null) ? String(d[key]) : '';
           }
         });
+
+        // closeUrl은 현재 페이지 도메인과 동일해야 함 (INIStdPay 요구사항)
+        var origin = window.location.origin || API;
+        f.elements['closeUrl'].value = origin + '/payments/result?resultCode=CLOSE';
 
         document.getElementById('statusText').textContent = '결제창을 여는 중...';
         setTimeout(function() {
