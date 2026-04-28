@@ -1,4 +1,5 @@
-# routers/auth.py — v3.6.0
+# routers/auth.py — v3.7.0
+# v3.7.0: #65 RLS bypass — get_supabase()를 service_role key로 변경 (모든 테이블 조작 정상화)
 # v3.6.0: GET /auth/me 에 identity_verified + expert_status 포함
 # v3.5.0: PWA 작업자 인증 — POST /auth/send-otp, POST /auth/verify-otp 추가
 # v3.4.1: get_current_user() Depends 함수 추가
@@ -20,7 +21,8 @@ SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 
 def get_supabase():
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+    """v3.7.0: auth.py는 백엔드 라우터 — service_role key로 RLS bypass"""
+    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 def get_supabase_admin():
     return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
@@ -122,7 +124,7 @@ class VerifyOtpRequest(BaseModel):
 
 @router.get("/test")
 def test():
-    return {"message": "auth router alive", "version": "3.6.0"}
+    return {"message": "auth router alive", "version": "3.7.0"}
 
 
 # ════════════════════════════════════════════
@@ -195,7 +197,7 @@ def verify_otp(req: VerifyOtpRequest):
             pass
 
     if not otp_valid:
-        raise HTTPException(status_code=401, detail="인증번호가 올바르지 않거나 만료딌습니다.")
+        raise HTTPException(status_code=401, detail="인증번호가 올바르지 않거나 만료되었습니다.")
 
     u_res = supabase.table("users").select(
         "id, phone, name, sector, factory_id, company_id, department, position, profile_image_url"
@@ -423,7 +425,7 @@ def register(req: RegisterRequest):
         }).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"사용자 저장 실패: {str(e)}")
-    return {"status": "success", "message": "회원가입이 완료딌습니다.",
+    return {"status": "success", "message": "회원가입이 완료되었습니다.",
             "data": {"user_id": ur.data[0]["id"], "phone": phone_normalized, "name": req.name, "company_id": company_id}}
 
 
@@ -433,7 +435,7 @@ def register(req: RegisterRequest):
 def logout(authorization: Optional[str] = Header(None)):
     try: get_supabase().auth.sign_out()
     except Exception: pass
-    return {"status": "success", "message": "로그아웃딌습니다"}
+    return {"status": "success", "message": "로그아웃되었습니다"}
 
 
 # ── 전화번호 중복 확인 ────────────────────────────
@@ -617,7 +619,7 @@ async def verify_email(req: VerifyEmailRequest):
             try:
                 sent_at = _parse_iso(str(sent_at_str))
                 if datetime.now(timezone.utc) - sent_at > timedelta(minutes=10):
-                    raise HTTPException(status_code=400, detail="인증 코드가 만료딌습니다.")
+                    raise HTTPException(status_code=400, detail="인증 코드가 만료되었습니다.")
             except HTTPException:
                 raise
             except Exception:
@@ -627,7 +629,7 @@ async def verify_email(req: VerifyEmailRequest):
             "email_verified": True, "email_verified_at": now,
             "email_verify_token": None, "updated_at": now,
         }).eq("email", req.email).execute()
-        return {"status": "success", "message": "이메일 인증이 완료딌습니다.",
+        return {"status": "success", "message": "이메일 인증이 완료되었습니다.",
                 "data": {"email": req.email, "email_verified": True, "email_verified_at": now}}
     except HTTPException:
         raise
@@ -652,7 +654,7 @@ register_probe(
             {"name": "회원가입", "page": "전체 인증"},
         ],
         "fix_links": [
-            {"name": "Supabase Auth", "url": "https://supabase.com/dashboard/project/xntdkrjhgcscmqctdzyo/auth/users"},
+            {"name": "Supabase Auth", "url": "https://supabase.com/dashboard/project/vwlahtguyggrhvslabax/auth/users"},
         ],
         "api": "POST /auth/login, POST /auth/token",
         "code": "routers/auth.py",
