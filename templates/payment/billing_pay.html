@@ -54,7 +54,7 @@
 
       var userId = params.get('user_id');
       var productType = params.get('product_type') || 'SAAS_FACILITY';
-      var amount = parseInt(params.get('amount') || '0');
+      var rawAmount = parseInt(params.get('amount') || '0');
       var goodname = params.get('goodname') || 'TAI Safe 구독';
       var planCode = params.get('plan_code') || '';
       var companyId = params.get('company_id') || '';
@@ -63,7 +63,12 @@
       var buyertel = params.get('buyertel') || '00000000000';
       var buyeremail = params.get('buyeremail') || '';
 
-      if (!userId || !amount) {
+      // 부가세별도 → 부가세 포함 금액으로 변환
+      // vat_inclusive=true 파라미터가 있으면 이미 포함된 금액
+      var vatInclusive = params.get('vat_inclusive') === 'true';
+      var amount = vatInclusive ? rawAmount : Math.round(rawAmount * 1.1);
+
+      if (!userId || !rawAmount) {
         showError('필수 파라미터가 누락되었습니다. (user_id, amount)');
         return;
       }
@@ -104,7 +109,7 @@
           }
         });
 
-        // returnUrl, closeUrl은 현재 페이지 도메인과 동일해야 함 (INIStdPay 요구사항)
+        // returnUrl, closeUrl은 현재 페이지 도메인과 동일해야 함
         f.elements['returnUrl'].value = ORIGIN + '/payments/inicis/billing/return';
         f.elements['closeUrl'].value = ORIGIN + '/payments/result?resultCode=CLOSE';
 
