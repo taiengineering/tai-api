@@ -22,7 +22,6 @@
     <div class="err" id="errBox"></div>
   </div>
 
-  <!-- INIStdPay 빌링 결제 폼 -->
   <form id="SendPayForm_id" style="display:none">
     <input type="hidden" name="version" value="1.0">
     <input type="hidden" name="mid">
@@ -50,6 +49,7 @@
   <script>
     (function() {
       var API = 'https://api.taieng.co.kr';
+      var ORIGIN = window.location.origin || API;
       var params = new URLSearchParams(window.location.search);
 
       var userId = params.get('user_id');
@@ -95,7 +95,7 @@
 
         var fields = ['mid','oid','price','goodname','buyername','buyertel',
                       'buyeremail','timestamp','signature','mKey','verification',
-                      'use_chkfake','returnUrl','gopaymethod','acceptmethod'];
+                      'use_chkfake','gopaymethod','acceptmethod'];
 
         fields.forEach(function(key) {
           var el = f.elements[key];
@@ -104,9 +104,9 @@
           }
         });
 
-        // closeUrl은 현재 페이지 도메인과 동일해야 함 (INIStdPay 요구사항)
-        var origin = window.location.origin || API;
-        f.elements['closeUrl'].value = origin + '/payments/result?resultCode=CLOSE';
+        // returnUrl, closeUrl은 현재 페이지 도메인과 동일해야 함 (INIStdPay 요구사항)
+        f.elements['returnUrl'].value = ORIGIN + '/payments/inicis/billing/return';
+        f.elements['closeUrl'].value = ORIGIN + '/payments/result?resultCode=CLOSE';
 
         document.getElementById('statusText').textContent = '결제창을 여는 중...';
         setTimeout(function() {
