@@ -2,6 +2,10 @@
 
 규칙: docs/DEV_RULES_SERVICE_LAYER.md STEP 2
 
+v2.1 (2026-04-28)
+  - BillingPrepareBody: plan_name + model_validator(goodname→plan_name) 추가
+  - plan_code를 str 필수로 변경 (subscriptions.plan_code NOT NULL)
+
 v2.0 (2026-04-27)
   매뉴얼 기반 전면 재정리 — docs/INICIS_INTEGRATION_SPEC.md 참조
   - BillingReturnBody: 이니시스 빌키발급 결과 파라미터 반영
@@ -13,7 +17,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 
 class PrepareBody(BaseModel):
@@ -56,6 +60,7 @@ class PrepareBody(BaseModel):
             "SAAS_CONSTRUCTION",
             "SAAS_FACILITY",
             "SAAS_BUILDING",
+            "SAAS_INDUSTRY",
             "EXPERT",
             "REPAIR",
             "CONSULTING",
@@ -107,18 +112,30 @@ class DiagnosisVbankPrepareBody(BaseModel):
 # ── 구독(빌링) 스키마 ──────────────────────────────────────────────────
 
 class BillingPrepareBody(BaseModel):
-    """빌링키 발급 준비 — POST /payments/inicis/billing/prepare"""
+    """빌링키 발급 준비 — POST /payments/inicis/billing/prepare
+
+    v2.1: goodname → plan_name fallback 추가.
+    프론트 결제 페이지가 goodname을 보내므로 plan_name으로 자동 매핑.
+    """
     user_id: str
     product_type: str
     amount: int
     goodname: str
-    plan_code: Optional[str] = None
+    plan_code: str = "BASIC"
+    plan_name: Optional[str] = None
     period_months: int = 1
     company_id: Optional[str] = None
     factory_id: Optional[str] = None
     buyername: Optional[str] = "고객"
     buyertel: Optional[str] = "00000000000"
     buyeremail: Optional[str] = None
+
+    @model_validator(mode="after")
+    def resolve_plan_name(self):
+        """goodname → plan_name fallback. 핸들러가 body.plan_name을 참조."""
+        if not self.plan_name and self.goodname:
+            self.plan_name = self.goodname
+        return self
 
 
 class BillingReturnBody(BaseModel):
