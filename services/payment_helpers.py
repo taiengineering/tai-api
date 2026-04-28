@@ -1,9 +1,8 @@
 """payment 모듈 순수 유틸·상수 (HTTP·DB 없음).
 
-v2.4 (2026-04-28)
+v2.5 (2026-04-28)
+  [ADD] add_vat() — 공급가액에 VAT 10% 추가하여 결제금액 반환
   [FIX] returnUrl → taieng.co.kr/_api 프록시 경유
-        taieng.co.kr이 taieng-new Pages 프로젝트에 custom domain으로 등록됨
-        이니시스 MID 등록 도메인(taieng.co.kr)과 일치
 """
 from __future__ import annotations
 
@@ -105,7 +104,22 @@ def calc_expired_at(paid_at_iso: str, period_months: int) -> str:
     return (base + relativedelta(months=period_months)).isoformat()
 
 
+def add_vat(supply_amount: int) -> int:
+    """공급가액에 VAT 10% 추가하여 결제금액(총액) 반환.
+
+    DB price_diagnosis_report.total_report_fee = 공급가액(부가세 별도)
+    이니시스 결제 price = 공급가액 + VAT = 총액
+
+    예: 99,000(공급) → 108,900(결제), 249,000 → 273,900
+    """
+    return int(supply_amount * 1.1)
+
+
 def split_supply_vat(total_amount: int) -> tuple[int, int]:
+    """총액(VAT 포함)에서 공급가액과 VAT를 역산.
+
+    예: 108,900(총액) → supply=99,000, vat=9,900
+    """
     supply = round(total_amount / 1.1)
     vat = total_amount - supply
     return supply, vat
