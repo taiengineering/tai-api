@@ -167,7 +167,7 @@ def verify_otp(req: VerifyOtpRequest):
     otp_valid = False
 
     # Google Play 심사용 테스트 계정 (고정 OTP 우회)
-    TEST_BYPASS = {"01047758888": "123456"}
+    TEST_BYPASS = {"01047758888": "123456", "01083994168": "000000"}
     if phone in TEST_BYPASS and otp == TEST_BYPASS[phone]:
         otp_valid = True
 
