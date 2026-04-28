@@ -125,6 +125,12 @@ def split_supply_vat(total_amount: int) -> tuple[int, int]:
     return supply, vat
 
 
+def add_vat(supply_amount: int) -> int:
+    """공급가액(원)에 부가세 10%를 더한 총 청구액."""
+    vat = int(round(supply_amount * 0.1))
+    return supply_amount + vat
+
+
 def service_status_after_card_pay(contract_id: str | None) -> str:
     return "ACTIVE" if contract_id else "PAID"
 
