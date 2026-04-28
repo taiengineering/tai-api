@@ -19,10 +19,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from db.supabase_client import get_supabase
 from schemas.payment import (
-    BillingCancelBody,
-    BillingChargeBody,
-    BillingPrepareBody,
-    BillingReturnBody,
     DiagnosisVbankPrepareBody,
     PartialRefundBody,
     PrepareBody,
@@ -38,10 +34,6 @@ from services.payment_svc import (
     process_card_success,
     process_vbank_deposit,
     process_vbank_issued,
-    run_billing_cancel,
-    run_billing_charge,
-    run_billing_prepare,
-    run_billing_return,
     run_inicis_prepare,
     run_partial_refund,
     run_refund,
@@ -287,88 +279,6 @@ async def vbank_noti(request: Request):
     log.info(f"[VBANK NOTI] oid={order_id} resultCode={result_code}")
 
     return process_vbank_deposit(order_id, result_code, depositor, data)
-
-
-# ── 빌링(구독결제) ─────────────────────────────────────────────────────
-
-@router.post("/inicis/billing/prepare")
-def billing_prepare(body: BillingPrepareBody):
-    """빌링키 발급 준비 — 프론트에서 form POST할 파라미터 생성"""
-    try:
-        return run_billing_prepare(body)
-    except PaymentPrepareError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
-
-
-@router.post("/inicis/billing/return", include_in_schema=True)
-async def billing_return(request: Request):
-    """빌링키 발급 결과 — 이니시스가 returnUrl로 form POST."""
-    try:
-        form = await request.form()
-        data: Dict[str, Any] = dict(form)
-    except Exception:
-        try:
-            data = await request.json()
-        except Exception:
-            return RedirectResponse(
-                f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=빌키결과파싱실패",
-                status_code=302,
-            )
-
-    log.info(f"[BILLING RETURN] resultCode={data.get('resultCode')} orderId={data.get('orderId')}")
-
-    body = BillingReturnBody(
-        resultCode=data.get("resultCode", ""),
-        resultMessage=data.get("resultMessage", ""),
-        mid=data.get("mid", ""),
-        orderId=data.get("orderId", ""),
-        authkey=data.get("authkey", ""),
-        tid=data.get("tid", ""),
-        merchantRedirectData=data.get("merchantRedirectData", ""),
-        billkey=data.get("billkey", ""),
-        billkeyDate=data.get("billkeyDate", ""),
-        billkeyTime=data.get("billkeyTime", ""),
-        cardNumber=data.get("cardNumber", ""),
-        cardCode=data.get("cardCode", ""),
-        cardCompanyName=data.get("cardCompanyName", ""),
-        cardType=data.get("cardType", ""),
-        cardTypeName=data.get("cardTypeName", ""),
-        cardKind=data.get("cardKind", ""),
-        cardKindName=data.get("cardKindName", ""),
-        hashData=data.get("hashData", ""),
-    )
-
-    try:
-        result = run_billing_return(body)
-        sub_id = (result.get("data") or {}).get("subscription_id", "")
-        card = (result.get("data") or {}).get("card_name", "")
-        return RedirectResponse(
-            f"{FRONT_RETURN_URL}?resultCode=00&msg=빌링키발급성공&subscription_id={sub_id}&card={urllib.parse.quote(card or '')}",
-            status_code=302,
-        )
-    except PaymentPrepareError as e:
-        return RedirectResponse(
-            f"{FRONT_RETURN_URL}?resultCode=FAIL&msg={urllib.parse.quote(e.detail)}",
-            status_code=302,
-        )
-
-
-@router.post("/inicis/billing/charge")
-def billing_charge(body: BillingChargeBody):
-    """빌링 승인(과금) 요청"""
-    try:
-        return run_billing_charge(body)
-    except PaymentPrepareError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
-
-
-@router.post("/subscriptions/{subscription_id}/cancel")
-def cancel_subscription(subscription_id: str, body: BillingCancelBody):
-    """구독 해지"""
-    try:
-        return run_billing_cancel(subscription_id, body.reason or "사용자 요청", body.cancelled_by)
-    except PaymentPrepareError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
 # ── 취소/환불 ──────────────────────────────────────────────────────────
