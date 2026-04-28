@@ -1,10 +1,12 @@
-"""임시 디버그 — billing 500 에러 진단 + RPC 우회 테스트. 해결 후 삭제."""
+"""임시 디버그 — PostgREST 우회 방식 테스트. 해결 후 삭제."""
 import os
 import traceback
-import json as _json
+from datetime import datetime
+from uuid import uuid4
 from fastapi import APIRouter
 from pydantic import BaseModel
 from db.supabase_client import get_supabase
+from services.payment_helpers import now_iso, sha256, ts_ms
 
 router = APIRouter(tags=["debug"])
 
@@ -23,36 +25,21 @@ def debug_env_check():
     return {
         "SUPABASE_URL": supabase_url[:40] + "..." if len(supabase_url) > 40 else supabase_url,
         "SUPABASE_URL_contains_vwlahtg": "vwlahtg" in supabase_url,
-        "SUPABASE_URL_contains_xntdkrj": "xntdkrj" in supabase_url,
-        "SUPABASE_SERVICE_KEY": "SET" if os.environ.get("SUPABASE_SERVICE_KEY") else "NOT_SET",
-        "SUPABASE_KEY": "SET" if os.environ.get("SUPABASE_KEY") else "NOT_SET",
-        "INICIS_BILLING_MID": os.environ.get("INICIS_BILLING_MID", "NOT_SET")[:6] + "..." if os.environ.get("INICIS_BILLING_MID") else "NOT_SET",
-        "INICIS_BILLING_SIGN_KEY": "SET" if os.environ.get("INICIS_BILLING_SIGN_KEY") else "NOT_SET",
-        "INICIS_BILLING_INIAPI_KEY": "SET" if os.environ.get("INICIS_BILLING_INIAPI_KEY") else "NOT_SET",
-        "INICIS_CLIENT_IP": os.environ.get("INICIS_CLIENT_IP", "NOT_SET"),
+        "INICIS_BILLING_MID": (os.environ.get("INICIS_BILLING_MID") or "NOT_SET")[:6] + "...",
     }
 
 
 @router.post("/debug/billing-test")
 def debug_billing_test(body: DebugBillingBody):
-    """RPC 방식으로 빌링 prepare 테스트 (PostgREST 캐시 우회)"""
+    """PostgREST 우회: inicis_order_id 없이 INSERT → RPC로 업데이트"""
     try:
-        from services.payment_helpers import now_iso, sha256, ts_ms
-        from datetime import datetime
-        from uuid import uuid4
-
         supabase = get_supabase()
-
-        mid = os.environ.get("INICIS_BILLING_MID", "")
-        sign_key = os.environ.get("INICIS_BILLING_SIGN_KEY", "")
-        if not mid or not sign_key:
-            return {"status": "error", "error_msg": "INICIS_BILLING_MID or SIGN_KEY not set"}
-
         oid = f"TAI-BIL-{datetime.now():%Y%m%d%H%M%S}-{uuid4().hex[:6].upper()}"
         now = now_iso()
         supply_amount = round(body.amount / 1.1)
         vat_amount = body.amount - supply_amount
 
+        # STEP 1: inicis_order_id 없이 INSERT (PostgREST가 아는 컬럼만)
         sub_row = {
             "user_id": body.user_id,
             "product_type": body.product_type,
@@ -63,27 +50,29 @@ def debug_billing_test(body: DebugBillingBody):
             "vat_amount": vat_amount,
             "billing_cycle": "monthly",
             "status": "PENDING",
-            "inicis_order_id": oid,
             "created_at": now,
             "updated_at": now,
         }
 
-        # RPC 방식으로 INSERT (PostgREST 스키마 캐시 우회)
-        rpc_res = supabase.rpc("create_subscription", {"data": sub_row}).execute()
-        rpc_data = rpc_res.data
+        res = supabase.table("subscriptions").insert(sub_row).execute()
+        if not res.data:
+            return {"status": "error", "step": 1, "error_msg": "INSERT returned empty"}
 
-        if not rpc_data:
-            return {"status": "error", "error_msg": "RPC returned empty"}
+        subscription_id = res.data[0]["id"]
 
-        subscription_id = rpc_data.get("id") if isinstance(rpc_data, dict) else rpc_data
+        # STEP 2: inicis_order_id를 RPC로 업데이트 (PostgREST 캐시 우회)
+        update_res = supabase.rpc("update_subscription_oid", {
+            "sub_id": subscription_id,
+            "oid": oid,
+        }).execute()
 
-        # 테스트 데이터 정리 (PENDING 상태로 남겨두면 문제없음)
         return {
             "status": "success",
-            "method": "RPC (PostgREST cache bypass)",
+            "method": "2-step: INSERT without oid + RPC update",
             "subscription_id": subscription_id,
             "oid": oid,
-            "rpc_data": rpc_data,
+            "step1_insert": "OK",
+            "step2_rpc_update": update_res.data,
         }
     except Exception as e:
         tb = traceback.format_exc()
