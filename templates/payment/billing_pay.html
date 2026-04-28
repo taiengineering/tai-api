@@ -50,6 +50,8 @@
     (function() {
       var API = 'https://api.taieng.co.kr';
       var ORIGIN = window.location.origin || API;
+      // taieng.co.kr 프록시 경유 시 /_api/ 프리픽스 필요
+      var API_PREFIX = (ORIGIN.indexOf('api.taieng.co.kr') !== -1) ? '' : '/_api';
       var params = new URLSearchParams(window.location.search);
 
       var userId = params.get('user_id');
@@ -64,7 +66,6 @@
       var buyeremail = params.get('buyeremail') || '';
 
       // 부가세별도 → 부가세 포함 금액으로 변환
-      // vat_inclusive=true 파라미터가 있으면 이미 포함된 금액
       var vatInclusive = params.get('vat_inclusive') === 'true';
       var amount = vatInclusive ? rawAmount : Math.round(rawAmount * 1.1);
 
@@ -109,9 +110,9 @@
           }
         });
 
-        // returnUrl, closeUrl은 현재 페이지 도메인과 동일해야 함
-        f.elements['returnUrl'].value = ORIGIN + '/payments/inicis/billing/return';
-        f.elements['closeUrl'].value = ORIGIN + '/payments/result?resultCode=CLOSE';
+        // returnUrl, closeUrl: 현재 도메인 + 프록시 프리픽스 자동 적용
+        f.elements['returnUrl'].value = ORIGIN + API_PREFIX + '/payments/inicis/billing/return';
+        f.elements['closeUrl'].value = ORIGIN + API_PREFIX + '/payments/result?resultCode=CLOSE';
 
         document.getElementById('statusText').textContent = '결제창을 여는 중...';
         setTimeout(function() {
