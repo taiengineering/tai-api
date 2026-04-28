@@ -1,10 +1,11 @@
-"""임시 디버그 — billing_prepare 500 에러 traceback 캡처. 해결 후 삭제."""
+"""임시 디버그 — billing_prepare 500 에러 traceback 캡처 + Supabase URL 확인. 해결 후 삭제."""
+import os
 import traceback
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from pydantic import BaseModel
-from typing import Optional
 
 router = APIRouter(tags=["debug"])
+
 
 class DebugBillingBody(BaseModel):
     user_id: str = "e6d6da1b-ec93-4a69-a570-a6dae9959427"
@@ -12,6 +13,24 @@ class DebugBillingBody(BaseModel):
     amount: int = 1000
     goodname: str = "debug test"
     plan_code: str = "TEST"
+
+
+@router.get("/debug/env-check")
+def debug_env_check():
+    """Railway 환경변수 확인 (값은 마스킹). 해결 후 삭제."""
+    supabase_url = os.environ.get("SUPABASE_URL", "NOT_SET")
+    return {
+        "SUPABASE_URL": supabase_url[:40] + "..." if len(supabase_url) > 40 else supabase_url,
+        "SUPABASE_URL_contains_vwlahtg": "vwlahtg" in supabase_url,
+        "SUPABASE_URL_contains_xntdkrj": "xntdkrj" in supabase_url,
+        "SUPABASE_SERVICE_KEY": "SET" if os.environ.get("SUPABASE_SERVICE_KEY") else "NOT_SET",
+        "SUPABASE_KEY": "SET" if os.environ.get("SUPABASE_KEY") else "NOT_SET",
+        "INICIS_BILLING_MID": os.environ.get("INICIS_BILLING_MID", "NOT_SET")[:6] + "..." if os.environ.get("INICIS_BILLING_MID") else "NOT_SET",
+        "INICIS_BILLING_SIGN_KEY": "SET" if os.environ.get("INICIS_BILLING_SIGN_KEY") else "NOT_SET",
+        "INICIS_BILLING_INIAPI_KEY": "SET" if os.environ.get("INICIS_BILLING_INIAPI_KEY") else "NOT_SET",
+        "INICIS_CLIENT_IP": os.environ.get("INICIS_CLIENT_IP", "NOT_SET"),
+    }
+
 
 @router.post("/debug/billing-test")
 def debug_billing_test(body: DebugBillingBody):
