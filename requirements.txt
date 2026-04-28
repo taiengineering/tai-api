@@ -16,3 +16,4 @@ python-dateutil>=2.8.2
 firebase-admin
 openai>=1.0.0
 sentry-sdk[fastapi]
+psycopg2-binary
