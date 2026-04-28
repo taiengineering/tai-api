@@ -20,6 +20,7 @@ from dateutil.relativedelta import relativedelta
 
 SAAS_PRODUCT_TYPES: List[str] = [
     "SAAS_CONSTRUCTION",
+    "SAAS_INDUSTRY",
     "SAAS_FACILITY",
     "SAAS_BUILDING",
 ]

@@ -39,7 +39,7 @@ from uuid import uuid4
 import requests as _requests
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from db.supabase_client import get_supabase
 
@@ -209,7 +209,8 @@ class BillingPrepareBody(BaseModel):
     user_id:      str
     product_type: str
     plan_code:    str
-    plan_name:    str
+    plan_name:    Optional[str] = None
+    goodname:     Optional[str] = None
     amount:       int
     company_id:   Optional[str] = None
     buyername:    Optional[str] = "고객"
@@ -231,6 +232,12 @@ class BillingPrepareBody(BaseModel):
         if v not in SAAS_PRODUCT_TYPES:
             raise ValueError(f"정기결제는 SaaS 상품에만 가능합니다: {SAAS_PRODUCT_TYPES}")
         return v
+
+    @model_validator(mode="after")
+    def normalize_plan_name(self):
+        if not self.plan_name and self.goodname:
+            self.plan_name = self.goodname
+        return self
 
 
 class BillingChargeBody(BaseModel):

@@ -298,9 +298,9 @@ app.include_router(tbm_router)
 app.include_router(tbm_templates_router)
 app.include_router(safety_meetings_router)
 app.include_router(risk_assessments_router)
+app.include_router(payment_billing_router)                                        # v5.35.0 정기결제
 app.include_router(payment_router)
 app.include_router(payment_ops_router)
-app.include_router(payment_billing_router)                                        # v5.35.0 정기결제
 app.include_router(corrective_actions_router)
 app.include_router(messaging_router)
 app.include_router(fcm_router)
