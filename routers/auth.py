@@ -366,7 +366,7 @@ def login(req: LoginRequest):
 
 @router.post("/register")
 def register(req: RegisterRequest):
-    supabase = get_supabase_admin()
+    supabase = get_supabase()
     phone_normalized = normalize_phone(req.phone)
     existing = supabase.table("users").select("id").eq("phone", phone_normalized).limit(1).execute()
     if existing.data:
@@ -375,10 +375,15 @@ def register(req: RegisterRequest):
     if email_dup.data:
         raise HTTPException(status_code=400, detail="이미 가입된 이메일입니다")
     try:
-        auth_res = supabase.auth.admin.create_user({
-            "email": req.email, "password": req.password, "email_confirm": True,
-            "user_metadata": {"name": req.name, "phone": phone_normalized, "role_code": req.role_code}
-        })
+        auth_res = supabase.auth.sign_up(
+            {
+                "email": req.email,
+                "password": req.password,
+                "options": {
+                    "data": {"name": req.name, "phone": phone_normalized, "role_code": req.role_code}
+                },
+            }
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"계정 생성 실패: {str(e)}")
     if not auth_res.user:
