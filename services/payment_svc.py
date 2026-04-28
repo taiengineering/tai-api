@@ -766,6 +766,11 @@ def run_partial_refund(payment_id: str, amount: int, reason: str) -> dict:
     raise PaymentPrepareError(501, "부분 환불 기능은 아직 구현되지 않았습니다.")
 
 
+def run_refund(payment_id: str, reason: str = "") -> dict:
+    """전체 환불 — TODO: 구현 예정."""
+    raise PaymentPrepareError(501, "환불 기능은 아직 구현되지 않았습니다.")
+
+
 from services.health_registry import register_probe
 
 
