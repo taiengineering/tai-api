@@ -17,31 +17,40 @@
 <body>
   <div class="box">
     <div class="spinner" id="spinner"></div>
-    <h2>이니시스 결제창으로 이동 중...</h2>
+    <h2 id="statusText">이니시스 결제창으로 이동 중...</h2>
     <p>잠시만 기다려주세요.</p>
     <div class="err" id="errBox"></div>
   </div>
 
-  <!-- 빌링키 발급 폼 (inilitepay.inicis.com 으로 POST) -->
-  <form id="billingForm" method="POST" accept-charset="UTF-8" style="display:none">
-    <input name="mid" type="hidden">
-    <input name="goodName" type="hidden">
-    <input name="buyerName" type="hidden">
-    <input name="buyerTel" type="hidden">
-    <input name="buyerEmail" type="hidden">
-    <input name="orderId" type="hidden">
-    <input name="price" type="hidden">
-    <input name="timestamp" type="hidden">
-    <input name="hashData" type="hidden">
-    <input name="returnUrl" type="hidden">
+  <!-- INIStdPay 빌링 결제 폼 -->
+  <form id="SendPayForm_id" style="display:none">
+    <input type="hidden" name="mid">
+    <input type="hidden" name="oid">
+    <input type="hidden" name="price">
+    <input type="hidden" name="goodname">
+    <input type="hidden" name="buyername">
+    <input type="hidden" name="buyertel">
+    <input type="hidden" name="buyeremail">
+    <input type="hidden" name="timestamp">
+    <input type="hidden" name="signature">
+    <input type="hidden" name="mKey">
+    <input type="hidden" name="verification">
+    <input type="hidden" name="use_chkfake">
+    <input type="hidden" name="returnUrl">
+    <input type="hidden" name="closeUrl">
+    <input type="hidden" name="gopaymethod">
+    <input type="hidden" name="acceptmethod">
+    <input type="hidden" name="charset" value="UTF-8">
   </form>
+
+  <!-- 이니시스 INIStdPay JS SDK -->
+  <script src="https://stdpay.inicis.com/stdjs/INIStdPay.js" charset="UTF-8"></script>
 
   <script>
     (function() {
       var API = 'https://api.taieng.co.kr';
       var params = new URLSearchParams(window.location.search);
 
-      // 필수 파라미터 확인
       var userId = params.get('user_id');
       var productType = params.get('product_type') || 'SAAS_FACILITY';
       var amount = parseInt(params.get('amount') || '0');
@@ -58,7 +67,7 @@
         return;
       }
 
-      // 1. 백엔드 API 호출: 빌링 준비
+      // 1. 백엔드 billing prepare API 호출
       fetch(API + '/payments/inicis/billing/prepare', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -83,22 +92,27 @@
         }
         var d = res.data;
 
-        // 2. 폼 필드 설정
-        var f = document.getElementById('billingForm');
-        f.action = d.billing_issue_url;
-        f.elements['mid'].value = d.mid;
-        f.elements['goodName'].value = d.goodName;
-        f.elements['buyerName'].value = d.buyerName;
-        f.elements['buyerTel'].value = d.buyerTel;
-        f.elements['buyerEmail'].value = d.buyerEmail;
-        f.elements['orderId'].value = d.orderId;
-        f.elements['price'].value = d.price;
-        f.elements['timestamp'].value = d.timestamp;
-        f.elements['hashData'].value = d.hashData;
-        f.elements['returnUrl'].value = d.returnUrl;
+        // 2. INIStdPay 폼 필드 설정 (API 응답 필드명 그대로)
+        var f = document.getElementById('SendPayForm_id');
+        var fields = ['mid','oid','price','goodname','buyername','buyertel',
+                      'buyeremail','timestamp','signature','mKey','verification',
+                      'use_chkfake','returnUrl','closeUrl','gopaymethod','acceptmethod','charset'];
 
-        // 3. 자동 제출 (이니시스 빌키발급 페이지로 이동)
-        setTimeout(function() { f.submit(); }, 500);
+        fields.forEach(function(key) {
+          if (f.elements[key] && d[key] !== undefined) {
+            f.elements[key].value = d[key];
+          }
+        });
+
+        // 3. INIStdPay 결제창 호출
+        document.getElementById('statusText').textContent = '결제창을 여는 중...';
+        setTimeout(function() {
+          try {
+            INIStdPay.pay('SendPayForm_id');
+          } catch(e) {
+            showError('결제창 열기 실패: ' + e.message);
+          }
+        }, 300);
       })
       .catch(function(err) {
         showError('결제 준비 중 오류: ' + err.message);
@@ -106,6 +120,7 @@
 
       function showError(msg) {
         document.getElementById('spinner').style.display = 'none';
+        document.getElementById('statusText').textContent = '결제 오류';
         var box = document.getElementById('errBox');
         box.textContent = msg;
         box.style.display = 'block';
