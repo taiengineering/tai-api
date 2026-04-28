@@ -1,71 +1,67 @@
 # 세션 로그 — 2026-04-28 (기획창)
 
-## Supabase 서울 이전 마무리 작업 (#58)
+## 1. Supabase 서울 이전 마무리 (#58)
 
-NEXT_SESSION_PROMPT.md 기반 잔여 작업 전부 완료.
-
-### 1. 프론트엔드 Supabase URL+키 교체 (tai-admin)
-
-검색 결과 운영 파일 5개 확인, 3커밋으로 교체 완료.
-
-| 파일 | 변경 내용 | 커밋 |
+### 프론트엔드 Supabase URL+키 교체 (tai-admin, 3커밋)
+| 파일 | 변경 | 커밋 |
 |---|---|---|
-| `admin/full-version/config.js` | URL + sb_publishable key | c2e09db |
-| `tadmin/full-version/config.js` | URL + sb_publishable key | c2e09db |
-| `admin/full-version/assets/js/tai/supabase-config.js` | URL + JWT anon key | c2e09db |
-| `auto-qa-dashboard.html` | 인라인 SB_URL + SB_KEY | c44a303 |
-| `diagram-gallery.html` | 폴백 URL | b8f810c |
+| admin/config.js | URL + sb_publishable key | c2e09db |
+| tadmin/config.js | URL + sb_publishable key | c2e09db |
+| supabase-config.js | URL + JWT anon key | c2e09db |
+| auto-qa-dashboard.html | 인라인 SB_URL+SB_KEY | c44a303 |
+| diagram-gallery.html | 폴백 URL | b8f810c |
 
-교체 값:
-- URL: `xntdkrjhgcscmqctdzyo.supabase.co` → `vwlahtguyggrhvslabax.supabase.co`
-- sb_publishable: `pUs9aJ...` → `r0qsGe...`
-- JWT anon: 구 프로젝트 ref → 신 프로젝트 ref
+### Edge Function Secrets 6개 — 대표 수동 완료
 
-### 2. Edge Function Secrets 6개 — 대표 수동 완료
-
-새 프로젝트 대시보드에서 수동 입력 완료:
-- MESSAGEME_API_KEY, MESSAGEME_SENDER, TAI_INTERNAL_KEY
-- KMA_SERVICE_KEY, LAW_API_OC, TAI_COLLECT_SECRET
-
-### 3. Storage 파일 51개 이전
-
-Chrome JavaScript로 구 프로젝트 public URL → 신 프로젝트 Storage API 업로드.
-
+### Storage 파일 51개 이전 (Chrome JS)
 | 버킷 | 파일 수 | 결과 |
 |---|---|---|
 | diagrams | 28 | ✅ |
 | site-assets | 17 | ✅ |
 | app | 4 | ✅ |
 | proposals | 2 | ✅ |
-| **합계** | **51** | **51/51 성공, 0 실패** |
+| **합계** | **51** | **51/51 성공** |
 
-`diagram_templates.public_url` 25건도 신 프로젝트 URL로 PATCH 갱신 완료.
+diagram_templates.public_url 25건 신 프로젝트 URL로 PATCH 갱신 완료.
 
-### 4. 기존 프로젝트 IPv4 비활성화 — 대표 수동 완료
+### 기존 프로젝트 IPv4 비활성화 — 대표 수동 완료
 
-$4/월 절약.
+### Claude Supabase MCP 프로젝트 ID 교체 — 대표 수동 완료
 
-### 5. Claude 프로젝트 Supabase MCP 프로젝트 ID 교체 — 대표 수동 완료
+---
 
-단, 이 대화 세션에서는 캐시로 인해 구 프로젝트 응답이 유지됨.
-다음 대화부터 `vwlahtguyggrhvslabax` 정상 반영 예상.
+## 2. 작업자 웹앱 라우팅 시도 → 원복 (tai-admin #5)
 
-### 6. 구 프로젝트 정리 사항
+### 시도한 작업
+- auth-login-cover.html에 role 분기 추가 (014/022 → worker-home)
+- auth-guard.js에 작업자 화이트리스트 추가
+- worker-home.html, schedule-review.html, tbm-list.html, notification-list.html 복사/생성
+- worker-home.html에 로그아웃 버튼 추가
 
-- `copy-storage` Edge Function이 구 프로젝트에 잘못 배포됨 (MCP 캐시 이슈) → 삭제 필요
-- 구 프로젝트 전체 삭제: 1주일 후 (2026-05-04 이후)
+### 발생한 문제
+1. 하단 탭바 링크 페이지(schedule-review, tbm-list, notification-list)가 tadmin 경로에 없어 404 발생
+2. auth-guard가 작업자를 worker- 패턴 외 페이지에서 되돌려보냄
+3. 복사된 페이지들이 원본 site/ 경로의 기존 디자인/기능과 달라진 상태
+
+### 원복 조치 (b27c59b)
+- auth-login-cover.html → b6334c0 상태로 원복 (원본 APP_ONLY_ROLES, 원본 리다이렉트)
+- auth-guard.js → b6334c0 상태로 원복 (토큰 유무만 확인)
+- 추가된 파일(worker-home, schedule-review, tbm-list, notification-list)은 레포에 남아있으나 어디에서도 링크하지 않음
+
+### 교훈
+- tadmin(SaaS)과 site(앱)은 별도 도메인/경로이므로 단순 복사로는 동작하지 않음
+- 작업자 웹앱 라우팅은 site/ 경로의 기존 구조를 충분히 파악한 후 별도 세션에서 설계부터 접근해야 함
+
+---
+
+## 3. 기타
+- 작업자 테스트 계정 비밀번호 리셋: worker@tai.com / Tai1234!
+- 구 프로젝트에 잘못 배포된 copy-storage Edge Function 삭제 필요
 
 ---
 
 ## 이슈 처리
-
-| 이슈 | 상태 |
-|---|---|
-| #58 Supabase 서울 이전 | ✅ 전체 완료 (삭제만 1주 후) |
-
----
-
-## 메모리 업데이트
-
-- #12: 인프라 현황 → Supabase 서울 이전 완료 반영, project ID: vwlahtguyggrhvslabax
-- #30: diagrams 버킷 URL → 신 프로젝트 URL 패턴으로 변경, Storage 이전 필요 표시 → 완료
+| 이슈 | 레포 | 상태 |
+|---|---|---|
+| #58 Supabase 서울 이전 | tai-api | ✅ 완료 (삭제만 1주 후) |
+| #5 작업자 라우팅 | tai-admin | ❌ closed → 원복됨, 재설계 필요 |
