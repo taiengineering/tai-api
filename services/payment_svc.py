@@ -761,6 +761,11 @@ def run_billing_cancel(subscription_id: str, reason: str = "사용자 요청", c
     return {"status": "success", "data": {"subscription_id": subscription_id, "status": "CANCELLED"}}
 
 
+def run_partial_refund(payment_id: str, amount: int, reason: str) -> dict:
+    """부분 환불 — TODO: 구현 예정."""
+    raise PaymentPrepareError(501, "부분 환불 기능은 아직 구현되지 않았습니다.")
+
+
 from services.health_registry import register_probe
 
 
