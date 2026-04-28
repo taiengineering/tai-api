@@ -1,4 +1,5 @@
-# main.py — v5.38.0
+# main.py — v5.38.1
+# v5.38.1: 임시 디버그 엔드포인트 등록 (billing 500 traceback 캡처)
 # v5.38.0: payment_ops + 결제 서비스 레이어 분리 (origin/dev 병합)
 # v5.37.0: kosha_collect 라우터 등록 (POST /kosha-collect/run, /kosha-collect/{target})
 # v5.36.1: pw_reset 라우터 등록 (POST /auth/pw-reset/request, /auth/pw-reset/confirm)
@@ -139,10 +140,11 @@ from routers.uploads                 import router as uploads_router            
 from routers.emergency_report        import router as emergency_report_router         # v5.36.0 긴급신고
 from routers.safety_reports          import router as safety_reports_router            # v5.36.0 이상신고
 from routers.pw_reset                import router as pw_reset_router                # v5.36.1 비밀번호재설정
+from routers.debug                   import router as debug_router                   # 임시 디버그
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.38.0"
+APP_VERSION = "5.38.1"
 
 
 @asynccontextmanager
@@ -217,6 +219,7 @@ app.include_router(diagnosis_proposal_router)
 app.include_router(diagnosis_result_web_router)
 app.include_router(law_viewer_router)
 app.include_router(diagram_proxy_router)
+app.include_router(debug_router)                                                   # 임시 디버그
 
 # 인증 필요 엔드포인트
 app.include_router(auth_router)
@@ -316,5 +319,3 @@ app.include_router(safety_reports_router)
 @app.get("/")
 def root():
     return {"status": "ok", "service": "TAI API", "version": APP_VERSION}
-
-
