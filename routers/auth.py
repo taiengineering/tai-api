@@ -16,10 +16,14 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 
 def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def get_supabase_admin():
+    return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 def normalize_phone(phone: str) -> str:
     return re.sub(r'[^0-9]', '', phone)
@@ -253,7 +257,7 @@ def verify_otp(req: VerifyOtpRequest):
 
 @router.post("/seed-test-accounts")
 def seed_test_accounts():
-    supabase = get_supabase()
+    supabase = get_supabase_admin()
     TEST_ACCOUNTS = [
         {"email": "admin@tai.com",                  "password": "tai1234!"},
         {"email": "safety-mgr@korean-safe.co.kr",   "password": "tai1234!"},
@@ -362,7 +366,7 @@ def login(req: LoginRequest):
 
 @router.post("/register")
 def register(req: RegisterRequest):
-    supabase = get_supabase()
+    supabase = get_supabase_admin()
     phone_normalized = normalize_phone(req.phone)
     existing = supabase.table("users").select("id").eq("phone", phone_normalized).limit(1).execute()
     if existing.data:
