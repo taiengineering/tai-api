@@ -1,4 +1,4 @@
-"""임시 디버그 — direct_sql 모듈 테스트. 해결 후 삭제."""
+"""임시 디버그 — psycopg2 직접 SQL 테스트. 해결 후 삭제."""
 import os
 import traceback
 from datetime import datetime
@@ -27,6 +27,44 @@ def debug_env_check():
     }
 
 
+@router.get("/debug/db-columns")
+def debug_db_columns():
+    """psycopg2로 실제 DB에서 subscriptions 컨럼 확인"""
+    try:
+        import psycopg2
+        import psycopg2.extras
+        url = os.environ.get("DATABASE_URL", "")
+        conn = psycopg2.connect(url)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT column_name, data_type, is_nullable 
+                FROM information_schema.columns 
+                WHERE table_schema = 'public' AND table_name = 'subscriptions'
+                ORDER BY ordinal_position
+            """)
+            cols = [dict(zip(['column_name','data_type','is_nullable'], r)) for r in cur.fetchall()]
+
+            # inicis_order_id 없으면 자동 생성
+            col_names = [c['column_name'] for c in cols]
+            added = []
+            if 'inicis_order_id' not in col_names:
+                cur.execute("ALTER TABLE public.subscriptions ADD COLUMN inicis_order_id text")
+                conn.commit()
+                added.append('inicis_order_id')
+
+            # billing_key_id NOT NULL 확인 및 수정
+            bk = next((c for c in cols if c['column_name'] == 'billing_key_id'), None)
+            if bk and bk['is_nullable'] == 'NO':
+                cur.execute("ALTER TABLE public.subscriptions ALTER COLUMN billing_key_id DROP NOT NULL")
+                conn.commit()
+                added.append('billing_key_id_now_nullable')
+
+        conn.close()
+        return {"status": "ok", "columns": col_names, "auto_fixed": added}
+    except Exception as e:
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+
+
 @router.post("/debug/billing-test")
 def debug_billing_test(body: DebugBillingBody):
     """psycopg2 직접 SQL로 subscriptions INSERT/SELECT 테스트"""
@@ -39,7 +77,6 @@ def debug_billing_test(body: DebugBillingBody):
         supply = round(body.amount / 1.1)
         vat = body.amount - supply
 
-        # STEP 1: 직접 SQL INSERT (PostgREST 우회)
         row = insert_subscription({
             "user_id": body.user_id,
             "product_type": body.product_type,
@@ -56,17 +93,15 @@ def debug_billing_test(body: DebugBillingBody):
         })
         sub_id = str(row.get("id", ""))
 
-        # STEP 2: 직접 SQL SELECT by inicis_order_id
         found = find_subscription_by_oid(oid)
         lookup_ok = found and str(found["id"]) == sub_id
 
-        # STEP 3: PostgREST로 id 기반 삭제 (이건 된다)
         supabase = get_supabase()
         supabase.table("subscriptions").delete().eq("id", sub_id).execute()
 
         return {
             "status": "success",
-            "method": "psycopg2 direct SQL (PostgREST bypass)",
+            "method": "psycopg2 direct SQL",
             "step1_insert": "OK",
             "step2_lookup": "OK" if lookup_ok else "FAIL",
             "step3_cleanup": "deleted",
