@@ -89,14 +89,16 @@ def rsa_sign_sha256(data: str, pem_bytes: bytes, password: str) -> Optional[str]
         return None
 
 
-def call_pay_auth(auth_token: str, auth_url: str, sign_key: str) -> Dict[str, Any]:
+def call_pay_auth(auth_token: str, auth_url: str, sign_key: str, *, mid: str = "") -> Dict[str, Any]:
+    """STEP3 승인 요청. mid 미지정 시 단건결제 INICIS_MID 사용."""
+    actual_mid = mid or INICIS_MID
     timestamp = ts_ms()
     sig_data = f"authToken={auth_token}&timestamp={timestamp}"
     veri_data = f"authToken={auth_token}&signKey={sign_key}&timestamp={timestamp}"
     signature = sha256(sig_data)
     verification = sha256(veri_data)
     params: Dict[str, str] = {
-        "mid": INICIS_MID,
+        "mid": actual_mid,
         "authToken": auth_token,
         "timestamp": timestamp,
         "signature": signature,

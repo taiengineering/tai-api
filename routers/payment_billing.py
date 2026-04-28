@@ -587,10 +587,11 @@ async def billing_return(request: Request):
             status_code=302,
         )
 
-    # STEP3: BillKey 발급 요청 (SHA256 + signKey — 단건결제와 동일 패턴)
+    # STEP3: BillKey 발급 요청 (SHA256 + signKey — 빌링 MID 사용)
     sign_key = _load_billing_sign_key()
+    billing_mid = _load_billing_mid()
     try:
-        auth_result = _call_pay_auth(auth_token, auth_url, sign_key)
+        auth_result = _call_pay_auth(auth_token, auth_url, sign_key, mid=billing_mid)
     except Exception as e:
         _fail_subscription_by_oid(supabase, order_id, f"STEP3 호출 실패: {e}")
         return RedirectResponse(
