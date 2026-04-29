@@ -391,7 +391,7 @@ register_probe(
             {"name": "건설 점검", "page": "safe > 건설관리 > 점검관리"},
         ],
         "fix_links": [
-            {"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/xntdkrjhgcscmqctdzyo"},
+            {"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/vwlahtguyggrhvslabax"},
         ],
         "api": "GET /construction/sites",
         "code": "services/construction_svc.py",

@@ -505,7 +505,7 @@ register_probe(
     desc_ko="TBM 관리",
     meta={
         "impacts": [{"name": "TBM 관리", "page": "safe > TBM관리 > TBM관리"}],
-        "fix_links": [{"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/xntdkrjhgcscmqctdzyo"}],
+        "fix_links": [{"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/vwlahtguyggrhvslabax"}],
         "api": "GET /tbm",
         "code": "routers/tbm.py",
     },

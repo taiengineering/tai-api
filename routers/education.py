@@ -756,7 +756,7 @@ register_probe(
     desc_ko="교육 관리",
     meta={
         "impacts": [{"name": "교육 관리", "page": "safe > 교육관리 > 교육목록"}],
-        "fix_links": [{"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/xntdkrjhgcscmqctdzyo"}],
+        "fix_links": [{"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/vwlahtguyggrhvslabax"}],
         "api": "GET /education",
         "code": "routers/education.py",
     },

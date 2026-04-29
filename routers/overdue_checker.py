@@ -41,12 +41,12 @@ router = APIRouter(prefix="/overdue", tags=["\uc5c5\ubb34\uc9c0\uc5f0\uc5d0\uc2a
 VERSION = "1.0.0"
 
 # Edge Function URL (messaging.py와 동일)
-_SMS_EDGE = "https://xntdkrjhgcscmqctdzyo.supabase.co/functions/v1/send-sms"
+_SMS_EDGE = "https://vwlahtguyggrhvslabax.supabase.co/functions/v1/send-sms"
 
 # FCM Edge Function URL
 _FCM_EDGE = os.getenv(
     "FCM_EDGE_URL",
-    "https://xntdkrjhgcscmqctdzyo.supabase.co/functions/v1/send-push"
+    "https://vwlahtguyggrhvslabax.supabase.co/functions/v1/send-push"
 )
 
 # 에스켈레이션 단계 정의

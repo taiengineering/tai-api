@@ -49,7 +49,7 @@ register_probe(
             {"name": "점검 항목", "page": "safe > 점검관리 > 점검항목관리"},
             {"name": "점검 캘린더", "page": "safe > 점검관리 > 점검 캘린더"},
         ],
-        "fix_links": [{"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/xntdkrjhgcscmqctdzyo"}],
+        "fix_links": [{"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/vwlahtguyggrhvslabax"}],
         "api": "GET /inspection-sets",
         "code": "services/inspection_sets_svc/__init__.py",
     },

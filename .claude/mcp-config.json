@@ -20,7 +20,7 @@
       {
         "name": "supabase-tai",
         "service": "Supabase",
-        "project_id": "xntdkrjhgcscmqctdzyo",
+        "project_id": "vwlahtguyggrhvslabax",
         "auth": "service_role_key",
         "use_case": "Database (all tables)",
         "shared": true

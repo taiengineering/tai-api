@@ -5,7 +5,7 @@ routers/weather.py — v1.3.1
 
 v1.3.1 (2026-04-29):
   [FIX] KMA_EDGE_URL 기본값을 서울 프로젝트(vwlahtguyggrhvslabax)로 변경
-  구 프로젝트(xntdkrjhgcscmqctdzyo) 삭제 대비
+  구 프로젝트(vwlahtguyggrhvslabax) 삭제 대비
 
 v1.3.0 (2026-04-16 SB-03):
   [ADD] GET /weather/work-stoppage?site_id=

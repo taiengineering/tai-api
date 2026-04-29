@@ -389,7 +389,7 @@ register_probe(
         ],
         "fix_links": [
             {"name": "Railway 로그", "url": "https://railway.com/project/7c3ab53b-feb6-40a4-a4f0-7ade3f6e524b/service/4cf52678-1fbf-42f4-8bd7-f59fab98c3ae"},
-            {"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/xntdkrjhgcscmqctdzyo"},
+            {"name": "Supabase DB", "url": "https://supabase.com/dashboard/project/vwlahtguyggrhvslabax"},
         ],
         "api": "POST /legal-engine/run",
         "code": "services/legal_engine_svc.py",

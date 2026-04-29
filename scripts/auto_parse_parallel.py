@@ -11,7 +11,7 @@ Supabase + Claude API 직접 호출, asyncio 병렬 처리.
 
 환경변수:
   WORKERS=10              # 동시 처리 수 (기본 10)
-  SUPABASE_URL=https://xntdkrjhgcscmqctdzyo.supabase.co
+  SUPABASE_URL=https://vwlahtguyggrhvslabax.supabase.co
   DRY_RUN=1               # 테스트 모드
 """
 import os, sys, json, time, re, asyncio, logging
@@ -23,7 +23,7 @@ try:
 except ImportError:
     print("pip3 install httpx supabase"); sys.exit(1)
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xntdkrjhgcscmqctdzyo.supabase.co")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://vwlahtguyggrhvslabax.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 WORKERS = int(os.environ.get("WORKERS", "10"))
