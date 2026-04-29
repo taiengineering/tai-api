@@ -2,6 +2,7 @@
 KOSHA 데이터 수집 — DB 저장 + 크론 갱신
 prefix: /kosha-collect
 
+v1.3.1: _log() 잘못된 키워드인자(since_date=) 버그 수정
 v1.3.0 (포털 문서 기반 수정):
   - safety-materials:          callApiId=1030 필수 추가
   - construction-accidents:    callApiId=1010 필수 추가
@@ -226,7 +227,8 @@ async def _collect_construction_accidents(since_date: str = INIT_DATE, full_refr
             sb.table("kosha_construction_accidents").upsert(rows, on_conflict="id").execute()
             total_upserted += len(rows)
         if stop_early or len(items) < MAX_ROWS: break
-    _log("construction_accidents", "success", total_upserted, since_date=since)
+    # ★ 수정: since_date= 잘못된 키워드인자 제거
+    _log("construction_accidents", "success", total_upserted)
     return {"target": "construction_accidents", "since": since, "upserted": total_upserted}
 
 
