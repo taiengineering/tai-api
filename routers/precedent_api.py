@@ -1,11 +1,10 @@
 """
-routers/precedent_api.py — v1.7.2
+routers/precedent_api.py — v1.7.3
 
-v1.7.2 (2026-04-26):
-  [FIX] GET /master-keys — 시행령/시행규칙 포함 (모법만 → 전체)
-        NFTC/NFPC/고시/기준만 제외. 검색 키 172 → 385개로 확대
-        rule 커버리지 극대화 목적
+v1.7.3 (2026-04-29):
+  [FIX] EDGE_COLLECT_URL 기본값을 서울 프로젝트로 변경 (구 프로젝트 삭제 대비)
 
+v1.7.2: GET /master-keys 시행령/시행규칙 포함
 v1.7.1: save-matched upsert 오류 수정
 v1.7.0: GET /master-keys + POST /save-matched
 """
@@ -20,36 +19,32 @@ from db.supabase_client import get_supabase
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/precedents", tags=["산재판례"])
 
+# 서울 프로젝트 기반 기본값, 환경변수로 오버라이드 가능
+_sb_url = os.environ.get("SUPABASE_URL", "https://vwlahtguyggrhvslabax.supabase.co")
 EDGE_COLLECT_URL = os.environ.get(
     "SUPABASE_EDGE_COLLECT_URL",
-    "https://xntdkrjhgcscmqctdzyo.supabase.co/functions/v1/collect-precedents"
+    f"{_sb_url}/functions/v1/collect-precedents"
 )
 INTERNAL_SECRET = os.environ.get("INTERNAL_API_SECRET", "")
 DEFAULT_DISPLAY = 20
 VALID_SECTORS = {"BUILDING", "INDUSTRY", "CONSTRUCTION", "ALL"}
 
-# NFTC/NFPC/고시/기준만 제외 (시행령/시행규칙은 포함)
 _EXCLUDE_PATTERNS = ["NFTC", "NFPC", "고시", "통합고시", "세칙", "규정",
                      "기술기준", "성능기준", "안전기준", "세부기준", "기준통합"]
 
-
-# ── GET /precedents/master-keys ────────────────────────────
 
 @router.get("/master-keys")
 async def get_master_search_keys(secret: str = Query("")):
     if secret != INTERNAL_SECRET:
         raise HTTPException(status_code=403, detail="내부 전용")
-
     sb = get_supabase()
     rows = sb.table("master_building_legal_rules").select(
         "rule_id, law_name, law_article"
     ).eq("is_active", True).not_.is_("law_article", "null").execute()
-
     groups = {}
     for row in (rows.data or []):
         law_name = row.get("law_name", "")
         law_article = row.get("law_article", "")
-        # NFTC/NFPC/고시/기준만 제외
         if any(p in law_name for p in _EXCLUDE_PATTERNS):
             continue
         m = re.match(r"제(\d+)조", law_article)
@@ -59,47 +54,36 @@ async def get_master_search_keys(secret: str = Query("")):
         key = f"{law_name}|{article_no}"
         if key not in groups:
             groups[key] = {
-                "law_name": law_name,
-                "article_no": article_no,
-                "search_query": f"{law_name} 제{article_no}조",
-                "rule_ids": [],
+                "law_name": law_name, "article_no": article_no,
+                "search_query": f"{law_name} 제{article_no}조", "rule_ids": [],
             }
         groups[key]["rule_ids"].append(row["rule_id"])
-
     result = []
     for g in groups.values():
         g["rule_ids"] = list(set(g["rule_ids"]))
         g["rule_count"] = len(g["rule_ids"])
         result.append(g)
     result.sort(key=lambda x: x["rule_count"], reverse=True)
-
     return {"status": "success", "total_keys": len(result), "keys": result}
 
-
-# ── POST /precedents/save-matched ─────────────────────────
 
 @router.post("/save-matched")
 async def save_matched_precedent(body: dict):
     secret = body.get("secret", "")
     if secret != INTERNAL_SECRET:
         raise HTTPException(status_code=403, detail="내부 전용")
-
     prec = body.get("precedent", {})
     rule_ids = body.get("rule_ids", [])
-
     if not prec.get("prec_seq"):
         raise HTTPException(status_code=400, detail="prec_seq 필수")
     if not rule_ids:
         raise HTTPException(status_code=400, detail="rule_ids 필수")
-
     sb = get_supabase()
     now_iso = datetime.now(timezone.utc).isoformat()
-
     try:
         existing = sb.table("industrial_accident_precedents").select(
             "id"
         ).eq("prec_seq", str(prec["prec_seq"])).execute()
-
         prec_id = None
         if existing.data:
             prec_id = existing.data[0]["id"]
@@ -117,7 +101,6 @@ async def save_matched_precedent(body: dict):
             if ins.data:
                 prec_id = ins.data[0]["id"]
             action = "inserted"
-
         links_created = 0
         if prec_id:
             for rule_id in rule_ids:
@@ -128,25 +111,18 @@ async def save_matched_precedent(body: dict):
                     if ex.data:
                         continue
                     sb.table("precedent_rule_links").insert({
-                        "precedent_id": prec_id,
-                        "rule_id": rule_id,
-                        "relevance_score": 90,
-                        "link_type": "violation",
+                        "precedent_id": prec_id, "rule_id": rule_id,
+                        "relevance_score": 90, "link_type": "violation",
                     }).execute()
                     links_created += 1
                 except Exception as e:
                     log.warning(f"[PREC] link 실패 ({rule_id}): {e}")
-
-        return {
-            "status": "success", "action": action,
-            "prec_seq": prec["prec_seq"], "links_created": links_created,
-        }
+        return {"status": "success", "action": action,
+                "prec_seq": prec["prec_seq"], "links_created": links_created}
     except Exception as e:
         log.error(f"[PREC] save-matched 에러: {e}")
         raise HTTPException(status_code=500, detail=str(e)[:200])
 
-
-# ── GET /precedents/search ──────────────────────────────────
 
 @router.get("/search")
 def search_precedents(
@@ -178,8 +154,6 @@ def search_precedents(
             "page": page, "display": display, "items": res.data or []}
 
 
-# ── GET /precedents/iap/search ──────────────────────────────
-
 @router.get("/iap/search")
 def search_iap(
     query: str = Query(...), sector: Optional[str] = Query(None),
@@ -199,8 +173,6 @@ def search_iap(
             "page": page, "size": size, "items": res.data or []}
 
 
-# ── GET /precedents/{prec_id} ───────────────────────────────
-
 @router.get("/{prec_id}")
 def get_precedent(prec_id: str):
     sb = get_supabase()
@@ -210,8 +182,6 @@ def get_precedent(prec_id: str):
         raise HTTPException(status_code=404, detail="판례를 찾을 수 없습니다.")
     return {"status": "success", "data": res.data[0]}
 
-
-# ── POST /precedents/collect + /sync ────────────────────────
 
 @router.post("/collect")
 async def collect_precedents(body: dict = None):
