@@ -1,22 +1,17 @@
 """
-routers/weather.py — v1.3.0
+routers/weather.py — v1.3.1
 
 기상청 날씨 API — Supabase Edge Function 프록시 방식
 
+v1.3.1 (2026-04-29):
+  [FIX] KMA_EDGE_URL 기본값을 서울 프로젝트(vwlahtguyggrhvslabax)로 변경
+  구 프로젝트(xntdkrjhgcscmqctdzyo) 삭제 대비
+
 v1.3.0 (2026-04-16 SB-03):
   [ADD] GET /weather/work-stoppage?site_id=
-        - construction_sites 조회 → 현장 주소 기반 위경도 추정 → Edge Function 호출
-        - 법령 기준 작업중지 여부 + 판정 근거 반환
-        - 프론트 safe 대시보드 FE-SAFE-02에서 소비 예정
-
-v1.2.0 (기존):
-  [ADD] GET /weather/alert-regions — 특보구역 코드 목록 조회
-  GET /weather/work-stop-criteria  — 법령 기반 작업중지 기준
-  GET /weather/debug               — Edge Function 테스트
-  GET /weather/now?lat=&lon=       — 현재 날씨 + 작업중지 판단
-  GET /weather/alert?region_code=  — 기상특보 조회
 
 환경변수:
+  KMA_EDGE_URL → 미설정 시 SUPABASE_URL 기반 자동 생성
   KMA_SERVICE_KEY → Supabase Function Secret (kma-weather) 에 설정
 """
 from __future__ import annotations
@@ -29,10 +24,11 @@ from db.supabase_client import get_supabase
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/weather", tags=["날씨·기상"])
 
-EDGE_URL = os.environ.get(
-    "KMA_EDGE_URL",
-    "https://xntdkrjhgcscmqctdzyo.supabase.co/functions/v1/kma-weather"
-)
+# KMA_EDGE_URL 최우선, 없으면 SUPABASE_URL 기반 생성
+EDGE_URL = os.environ.get("KMA_EDGE_URL", "")
+if not EDGE_URL:
+    _sb = os.environ.get("SUPABASE_URL", "https://vwlahtguyggrhvslabax.supabase.co")
+    EDGE_URL = f"{_sb}/functions/v1/kma-weather"
 
 # 시·도별 대표 위경도 (기상청 단기예보 격자 기반 근사값)
 SIDO_LAT_LON = {
@@ -130,10 +126,6 @@ async def get_work_stoppage_by_site(
 ):
     """
     v1.3.0 SB-03: 건설현장 기준 작업중지 판정 (FE-SAFE-02 연동).
-
-    construction_sites → site_sido/lat/lon → Edge Function(/weather/now) 호출
-    → 법령 기준 작업중지 여부 + 상세 판정 근거 반환.
-    현장 정보가 없으면 404. Edge Function 오류 시 503.
     """
     supabase = get_supabase()
     try:
@@ -171,10 +163,7 @@ async def get_work_stoppage_by_site(
 async def get_alert_regions(
     reg_type: Optional[str] = Query(None, description="구역 유형 필터 (L=육상, S=해상, 없으면 전체)"),
 ):
-    """
-    기상특보 구역 코드 목록 조회.
-    apihub.kma.go.kr 예특보 > 기상특보 > 1.1 특보구역 API 사용.
-    """
+    """기상특보 구역 코드 목록 조회."""
     return await _edge_call({"action": "alert-regions", "reg_type": reg_type or ""})
 
 
