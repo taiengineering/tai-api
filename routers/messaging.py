@@ -1,19 +1,19 @@
 """
-메세지미 SMS/알림톡 라우터 — v6.0.0
+메세지미 SMS/알림톡 라우터 — v6.1.0
 
-v6.0.0 (2026-04-29):
-  [CHANGE] Supabase Edge Function(서울) 경유로 전환
-  구조: Railway(싱가포르) → Supabase Edge Function(서울) → 메세지미(한국)
-  메세지미는 국외 IP 차단 → 한국 리전 Edge Function에서 호출
+v6.1.0 (2026-04-29):
+  [FIX] TAI_EDGE_SMS_URL 전용 환경변수 지원 + SUPABASE_URL fallback
+  구 프로젝트 삭제 시 TAI_EDGE_SMS_URL만 변경하면 됨
 
-v5.0.0: Vultr 프록시 경유 (프록시 서버 종료로 폐기)
-v4.0.0: 직접 호출 (국외 IP 차단으로 폐기)
+v6.0.0: Supabase Edge Function(서울) 경유로 전환
+v5.0.0: Vultr 프록시 경유 (폐기)
 
 환경변수:
-  SUPABASE_URL       — Supabase 프로젝트 URL (이미 설정됨)
-  TAI_INTERNAL_KEY   — Edge Function 인증키 (Railway + Supabase 양쪽 동일값)
-  MESSAGEME_API_KEY  — 메세지미 API 전송키 (debug 표시용, 실제 발송은 Edge Function)
-  MESSAGEME_SENDER   — 발신번호 (debug 표시용)
+  TAI_EDGE_SMS_URL   — Edge Function URL (최우선, 선택)
+  SUPABASE_URL       — TAI_EDGE_SMS_URL 미설정 시 이 URL + /functions/v1/send-sms
+  TAI_INTERNAL_KEY   — Edge Function 인증키 (선택)
+  MESSAGEME_API_KEY  — debug 표시용
+  MESSAGEME_SENDER   — debug 표시용
 """
 import logging
 import os
@@ -27,8 +27,12 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/messaging", tags=["메시지"])
 
-SUPABASE_URL      = os.getenv("SUPABASE_URL", "")
-EDGE_FUNCTION_URL = f"{SUPABASE_URL}/functions/v1/send-sms" if SUPABASE_URL else ""
+# TAI_EDGE_SMS_URL 최우선, 없으면 SUPABASE_URL 기반 생성
+EDGE_SMS_URL = os.getenv("TAI_EDGE_SMS_URL", "")
+if not EDGE_SMS_URL:
+    _sb = os.getenv("SUPABASE_URL", "")
+    if _sb:
+        EDGE_SMS_URL = f"{_sb}/functions/v1/send-sms"
 
 
 def _get_cfg():
@@ -36,7 +40,7 @@ def _get_cfg():
         "api_key":      os.getenv("MESSAGEME_API_KEY", ""),
         "sender":       os.getenv("MESSAGEME_SENDER", ""),
         "internal_key": os.getenv("TAI_INTERNAL_KEY", ""),
-        "edge_url":     EDGE_FUNCTION_URL,
+        "edge_url":     EDGE_SMS_URL,
     }
 
 
@@ -51,7 +55,7 @@ def _call_edge_function(payload: dict) -> dict:
     """
     cfg = _get_cfg()
     if not cfg["edge_url"]:
-        raise Exception("SUPABASE_URL 미설정 — Edge Function URL을 구성할 수 없습니다")
+        raise Exception("TAI_EDGE_SMS_URL 또는 SUPABASE_URL 미설정")
 
     headers = {
         "Content-Type": "application/json",
@@ -109,10 +113,10 @@ def debug_messaging():
     return {
         "status":       "ready",
         "mode":         "Supabase Edge Function (서울) 경유",
-        "edge_url":     cfg["edge_url"] or "SUPABASE_URL 미설정",
-        "internal_key": "설정됨" if cfg["internal_key"] else "미설정",
-        "api_key":      "설정됨" if cfg["api_key"] else "미설정 (Edge Function 환경변수에서 관리)",
-        "sender":       cfg.get("sender") or "미설정",
+        "edge_url":     cfg["edge_url"] or "미설정",
+        "internal_key": "설정됨" if cfg["internal_key"] else "미설정 (선택)",
+        "api_key":      "설정됨" if cfg["api_key"] else "Edge Function에서 관리",
+        "sender":       cfg.get("sender") or "Edge Function에서 관리",
     }
 
 
