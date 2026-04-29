@@ -1,8 +1,12 @@
 """
-KOSHA 공공 API 라우터 — v1.6.0
+KOSHA 공공 API 라우터 — v1.7.0
 prefix: /kosha
 
-v1.6.0: raw 디버그 엔드포인트 추가, 응답 파싱 개선
+v1.7.0:
+  - construction-safety-light 경로 수정: constructSafety/getConstructSafetySignal → constplan/getconstplan
+  - safety-materials callApiId 추가 테스트
+  - debug-raw 엔드포인트 유지
+v1.6.0: debug-raw 엔드포인트 추가
 v1.5.1: SERVICE_KEY 우선순위 수정
 """
 from fastapi import APIRouter, HTTPException, Query
@@ -35,8 +39,29 @@ MSDS_SECTIONS = {
 }
 
 
+def _xml_items(root: ET.Element) -> list:
+    """XML 루트에서 items > item 수집. 다양한 태그 이름 대응."""
+    items = []
+    # 표준: items > item
+    for items_el in root.findall(".//items"):
+        for item_el in items_el:
+            item = {c.tag: c.text or "" for c in item_el}
+            if item:
+                items.append(item)
+    if items:
+        return items
+    # 폴백: body 하위 구조가 다를 때 — 맨 첫 번째 반복 자식 요소
+    body_el = root.find(".//body")
+    if body_el is not None:
+        for child in body_el:
+            for sub in child:
+                item = {c.tag: c.text or "" for c in sub}
+                if item:
+                    items.append(item)
+    return items
+
+
 def _parse_xml_response(text: str) -> dict:
-    """XML 응답 → dict. items 태그가 없으면 body 전체 구조를 그대로 반환."""
     try:
         root = ET.fromstring(text)
         result_code = root.findtext(".//resultCode") or "00"
@@ -44,29 +69,7 @@ def _parse_xml_response(text: str) -> dict:
         total_count = root.findtext(".//totalCount")
         page_no     = root.findtext(".//pageNo")
         num_of_rows = root.findtext(".//numOfRows")
-
-        # items/item 찾기 (표준 구조)
-        items = []
-        items_el = root.find(".//items")
-        if items_el is not None:
-            for item_el in items_el.findall("item"):
-                item = {child.tag: child.text or "" for child in item_el}
-                if item:
-                    items.append(item)
-
-        # 표준 구조가 아닌 경우 body 자식 요소를 직접 dict로
-        if not items:
-            body_el = root.find(".//body")
-            if body_el is not None:
-                # body 하위 요소들을 dict로
-                for child in body_el:
-                    if child.tag != "items":
-                        continue
-                    for item_el in child:
-                        item = {c.tag: c.text or "" for c in item_el}
-                        if item:
-                            items.append(item)
-
+        items = _xml_items(root)
         return {
             "header": {"resultCode": result_code, "resultMsg": result_msg},
             "body": {
@@ -75,14 +78,12 @@ def _parse_xml_response(text: str) -> dict:
                 "pageNo":     int(page_no)     if page_no     else 1,
                 "numOfRows":  int(num_of_rows) if num_of_rows else 10,
             },
-            "_raw_xml_snippet": text[:500],  # 디버깅용
         }
     except Exception as e:
         return {"raw_xml": text[:3000], "parse_error": str(e)}
 
 
-async def _kosha_get_raw(path: str, params: dict) -> tuple[str, int]:
-    """raw text + status 반환 (디버그용)"""
+async def _kosha_get_raw(path: str, params: dict) -> tuple:
     params["serviceKey"] = _get_service_key()
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.get(f"{KOSHA_BASE}/{path}", params=params)
@@ -98,7 +99,6 @@ async def _kosha_get(path: str, params: dict) -> dict:
             text = resp.text
             try:
                 data = json.loads(text)
-                # JSON 응답: response 키가 있으면 unwrap
                 if "response" in data and isinstance(data["response"], dict):
                     return data["response"]
                 return data
@@ -113,39 +113,36 @@ async def _kosha_get(path: str, params: dict) -> dict:
         raise HTTPException(status_code=502, detail=f"KOSHA API 연결 실패: {str(e)}")
 
 
-# ── 디버그 엔드포인트 (raw 응답 확인) ──────────────────────────────
+# ── 디버그 raw 엔드포인트 ──────────────────────────────────────
 
 @router.get("/debug-raw/safety-materials")
 async def debug_raw_safety_materials(page_no: int = Query(1), num_of_rows: int = Query(2)):
-    """안전보건자료 API raw 응답 확인"""
     text, status = await _kosha_get_raw("selectMediaList01/getselectMediaList01",
                                         {"pageNo": page_no, "numOfRows": num_of_rows})
     return {"http_status": status, "raw": text[:3000]}
 
 @router.get("/debug-raw/construction-accidents")
 async def debug_raw_const_acc(page_no: int = Query(1), num_of_rows: int = Query(2)):
-    """건설 중대재해 API raw 응답 확인"""
     text, status = await _kosha_get_raw("constDsstr01/getconstDsstr01",
                                         {"pageNo": page_no, "numOfRows": num_of_rows})
     return {"http_status": status, "raw": text[:3000]}
 
 @router.get("/debug-raw/safety-light")
 async def debug_raw_safety_light(page_no: int = Query(1), num_of_rows: int = Query(2)):
-    """건설현장 신호등 API raw 응답 확인"""
-    text, status = await _kosha_get_raw("constructSafety/getConstructSafetySignal",
+    """수정된 전맴: constplan/getconstplan"""
+    text, status = await _kosha_get_raw("constplan/getconstplan",
                                         {"pageNo": page_no, "numOfRows": num_of_rows})
     return {"http_status": status, "raw": text[:3000]}
 
 @router.get("/debug-raw/kosha-guide")
 async def debug_raw_kosha_guide(page_no: int = Query(1), num_of_rows: int = Query(2)):
-    """KOSHA GUIDE API raw 응답 확인"""
     text, status = await _kosha_get_raw("koshaguide/getKoshaGuide",
                                         {"pageNo": page_no, "numOfRows": num_of_rows,
                                          "returnType": "json"})
     return {"http_status": status, "raw": text[:3000]}
 
 
-# ── 정식 엔드포인트 ────────────────────────────────────────────────
+# ── 정식 엔드포인트 ───────────────────────────────────────────────
 
 @router.get("/law-search")
 async def law_search(
@@ -233,12 +230,13 @@ async def construction_safety_light(
     page_no: int = Query(1, ge=1),
     num_of_rows: int = Query(20, ge=1, le=100),
 ):
+    """건설현장 안전 신호등 — 코드: constplan/getconstplan"""
     params: dict = {"pageNo": page_no, "numOfRows": num_of_rows}
     if sido:    params["sido"]    = sido
     if sigungu: params["sigungu"] = sigungu
     if site_nm: params["siteNm"]  = site_nm
     if signal:  params["signal"]  = signal
-    result = await _kosha_get("constructSafety/getConstructSafetySignal", params)
+    result = await _kosha_get("constplan/getconstplan", params)
     return {"status": "success", "endpoint": "건설현장 안전 신호등", "data": result}
 
 
