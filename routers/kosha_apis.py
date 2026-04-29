@@ -1,22 +1,9 @@
 """
-한국산업안전보건공단(KOSHA) 공공 API 라우터 — v1.5.1
+KOSHA 공공 API 라우터 — v1.6.0
 prefix: /kosha
 
-v1.5.1: SERVICE_KEY 우선순위 → DATA_GO_KR_SERVICE_KEY > KOSHA_SERVICE_KEY > BUILDING_API_KEY
-v1.5.0: 건설현장 안전 신호등 + 위험성평가 인정사업장 엔드포인트 추가
-
-대상 외부 API (apis.data.go.kr/B552468):
-  GET /kosha/law-search
-  GET /kosha/accident-cases
-  GET /kosha/accident-cases/attachments
-  GET /kosha/safety-materials
-  GET /kosha/construction-accidents
-  GET /kosha/construction-safety-light
-  GET /kosha/risk-assessment-accredited
-  GET /kosha/msds
-  GET /kosha/msds/sections
-  GET /kosha/msds/{kmc_no}/detail
-  GET /kosha/kosha-guide
+v1.6.0: raw 디버그 엔드포인트 추가, 응답 파싱 개선
+v1.5.1: SERVICE_KEY 우선순위 수정
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
@@ -27,9 +14,6 @@ import xml.etree.ElementTree as ET
 
 router = APIRouter(prefix="/kosha", tags=["KOSHA공공API"])
 
-VERSION = "1.5.1"
-
-# DATA_GO_KR_SERVICE_KEY 우선 (공공데이터포털 통합키)
 def _get_service_key() -> str:
     return (
         os.getenv("DATA_GO_KR_SERVICE_KEY")
@@ -40,26 +24,19 @@ def _get_service_key() -> str:
 KOSHA_BASE = "https://apis.data.go.kr/B552468"
 
 MSDS_SECTIONS = {
-    "01": "화학제품과 회사에 관한 정보",
-    "02": "유해성·위험성",
-    "03": "구성성분의 명칭 및 함유량",
-    "04": "응급조치요령",
-    "05": "폭발·화재시 대처방법",
-    "06": "누출사고시 대처방법",
-    "07": "취급 및 저장방법",
-    "08": "노출방지 및 개인보호구",
-    "09": "물리화학적 특성",
-    "10": "안정성 및 반응성",
-    "11": "독성에 관한 정보",
-    "12": "환경에 미치는 영향",
-    "13": "폐기시 주의사항",
-    "14": "운송에 관한 정보",
-    "15": "법적 규제현황",
-    "16": "기타 참고사항",
+    "01": "화학제품과 회사에 관한 정보", "02": "유해성·위험성",
+    "03": "구성성분의 명칭 및 함유량", "04": "응급조치요령",
+    "05": "폭발·화재시 대처방법", "06": "누출사고시 대처방법",
+    "07": "취급 및 저장방법", "08": "노출방지 및 개인보호구",
+    "09": "물리화학적 특성", "10": "안정성 및 반응성",
+    "11": "독성에 관한 정보", "12": "환경에 미치는 영향",
+    "13": "폐기시 주의사항", "14": "운송에 관한 정보",
+    "15": "법적 규제현황", "16": "기타 참고사항",
 }
 
 
 def _parse_xml_response(text: str) -> dict:
+    """XML 응답 → dict. items 태그가 없으면 body 전체 구조를 그대로 반환."""
     try:
         root = ET.fromstring(text)
         result_code = root.findtext(".//resultCode") or "00"
@@ -67,14 +44,29 @@ def _parse_xml_response(text: str) -> dict:
         total_count = root.findtext(".//totalCount")
         page_no     = root.findtext(".//pageNo")
         num_of_rows = root.findtext(".//numOfRows")
+
+        # items/item 찾기 (표준 구조)
         items = []
         items_el = root.find(".//items")
         if items_el is not None:
             for item_el in items_el.findall("item"):
-                item = {}
-                for child in item_el:
-                    item[child.tag] = child.text or ""
-                items.append(item)
+                item = {child.tag: child.text or "" for child in item_el}
+                if item:
+                    items.append(item)
+
+        # 표준 구조가 아닌 경우 body 자식 요소를 직접 dict로
+        if not items:
+            body_el = root.find(".//body")
+            if body_el is not None:
+                # body 하위 요소들을 dict로
+                for child in body_el:
+                    if child.tag != "items":
+                        continue
+                    for item_el in child:
+                        item = {c.tag: c.text or "" for c in item_el}
+                        if item:
+                            items.append(item)
+
         return {
             "header": {"resultCode": result_code, "resultMsg": result_msg},
             "body": {
@@ -82,10 +74,19 @@ def _parse_xml_response(text: str) -> dict:
                 "totalCount": int(total_count) if total_count else 0,
                 "pageNo":     int(page_no)     if page_no     else 1,
                 "numOfRows":  int(num_of_rows) if num_of_rows else 10,
-            }
+            },
+            "_raw_xml_snippet": text[:500],  # 디버깅용
         }
     except Exception as e:
         return {"raw_xml": text[:3000], "parse_error": str(e)}
+
+
+async def _kosha_get_raw(path: str, params: dict) -> tuple[str, int]:
+    """raw text + status 반환 (디버그용)"""
+    params["serviceKey"] = _get_service_key()
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(f"{KOSHA_BASE}/{path}", params=params)
+        return resp.text, resp.status_code
 
 
 async def _kosha_get(path: str, params: dict) -> dict:
@@ -97,6 +98,7 @@ async def _kosha_get(path: str, params: dict) -> dict:
             text = resp.text
             try:
                 data = json.loads(text)
+                # JSON 응답: response 키가 있으면 unwrap
                 if "response" in data and isinstance(data["response"], dict):
                     return data["response"]
                 return data
@@ -111,32 +113,63 @@ async def _kosha_get(path: str, params: dict) -> dict:
         raise HTTPException(status_code=502, detail=f"KOSHA API 연결 실패: {str(e)}")
 
 
+# ── 디버그 엔드포인트 (raw 응답 확인) ──────────────────────────────
+
+@router.get("/debug-raw/safety-materials")
+async def debug_raw_safety_materials(page_no: int = Query(1), num_of_rows: int = Query(2)):
+    """안전보건자료 API raw 응답 확인"""
+    text, status = await _kosha_get_raw("selectMediaList01/getselectMediaList01",
+                                        {"pageNo": page_no, "numOfRows": num_of_rows})
+    return {"http_status": status, "raw": text[:3000]}
+
+@router.get("/debug-raw/construction-accidents")
+async def debug_raw_const_acc(page_no: int = Query(1), num_of_rows: int = Query(2)):
+    """건설 중대재해 API raw 응답 확인"""
+    text, status = await _kosha_get_raw("constDsstr01/getconstDsstr01",
+                                        {"pageNo": page_no, "numOfRows": num_of_rows})
+    return {"http_status": status, "raw": text[:3000]}
+
+@router.get("/debug-raw/safety-light")
+async def debug_raw_safety_light(page_no: int = Query(1), num_of_rows: int = Query(2)):
+    """건설현장 신호등 API raw 응답 확인"""
+    text, status = await _kosha_get_raw("constructSafety/getConstructSafetySignal",
+                                        {"pageNo": page_no, "numOfRows": num_of_rows})
+    return {"http_status": status, "raw": text[:3000]}
+
+@router.get("/debug-raw/kosha-guide")
+async def debug_raw_kosha_guide(page_no: int = Query(1), num_of_rows: int = Query(2)):
+    """KOSHA GUIDE API raw 응답 확인"""
+    text, status = await _kosha_get_raw("koshaguide/getKoshaGuide",
+                                        {"pageNo": page_no, "numOfRows": num_of_rows,
+                                         "returnType": "json"})
+    return {"http_status": status, "raw": text[:3000]}
+
+
+# ── 정식 엔드포인트 ────────────────────────────────────────────────
+
 @router.get("/law-search")
 async def law_search(
-    keyword:     str = Query(...),
-    page_no:     int = Query(1,  ge=1),
+    keyword: str = Query(...),
+    page_no: int = Query(1, ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
     result = await _kosha_get("srch/smartSearch", {
-        "keyword":    keyword,
-        "pageNo":     page_no,
-        "numOfRows":  num_of_rows,
-        "returnType": "json",
+        "keyword": keyword, "pageNo": page_no,
+        "numOfRows": num_of_rows, "returnType": "json",
     })
     return {"status": "success", "data": result}
 
 
 @router.get("/accident-cases")
 async def accident_cases(
-    business:    Optional[str] = Query(None),
-    keyword:     Optional[str] = Query(None),
-    page_no:     int = Query(1,  ge=1),
+    business: Optional[str] = Query(None),
+    keyword:  Optional[str] = Query(None),
+    page_no:  int = Query(1, ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
     params: dict = {
         "callApiId": "국내재해사례 게시판 조회",
-        "pageNo":    page_no,
-        "numOfRows": num_of_rows,
+        "pageNo": page_no, "numOfRows": num_of_rows,
     }
     if business: params["business"] = business
     if keyword:  params["keyword"]  = keyword
@@ -146,15 +179,13 @@ async def accident_cases(
 
 @router.get("/accident-cases/attachments")
 async def accident_case_attachments(
-    board_no:    str = Query(...),
-    page_no:     int = Query(1,  ge=1),
+    board_no: str = Query(...),
+    page_no:  int = Query(1, ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
     result = await _kosha_get("disaster_attach_api02/Disaster_attach_api02", {
         "callApiId": "국내재해사례 게시판 첨부파일 조회",
-        "boardno":   board_no,
-        "pageNo":    page_no,
-        "numOfRows": num_of_rows,
+        "boardno": board_no, "pageNo": page_no, "numOfRows": num_of_rows,
     })
     return {"status": "success", "data": result}
 
@@ -165,8 +196,8 @@ async def safety_materials(
     industry:         Optional[str] = Query(None),
     accident_type:    Optional[str] = Query(None),
     foreign_language: Optional[str] = Query(None),
-    page_no:          int = Query(1,  ge=1),
-    num_of_rows:      int = Query(10, ge=1, le=100),
+    page_no:  int = Query(1, ge=1),
+    num_of_rows: int = Query(10, ge=1, le=100),
 ):
     params: dict = {"pageNo": page_no, "numOfRows": num_of_rows}
     if product_type:     params["productType"]    = product_type
@@ -179,10 +210,10 @@ async def safety_materials(
 
 @router.get("/construction-accidents")
 async def construction_accidents(
-    year:        Optional[str] = Query(None),
-    month:       Optional[str] = Query(None),
-    day:         Optional[str] = Query(None),
-    page_no:     int = Query(1,  ge=1),
+    year:  Optional[str] = Query(None),
+    month: Optional[str] = Query(None),
+    day:   Optional[str] = Query(None),
+    page_no: int = Query(1, ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
     params: dict = {"pageNo": page_no, "numOfRows": num_of_rows}
@@ -195,11 +226,11 @@ async def construction_accidents(
 
 @router.get("/construction-safety-light")
 async def construction_safety_light(
-    sido:        Optional[str] = Query(None),
-    sigungu:     Optional[str] = Query(None),
-    site_nm:     Optional[str] = Query(None),
-    signal:      Optional[str] = Query(None),
-    page_no:     int = Query(1,  ge=1),
+    sido:    Optional[str] = Query(None),
+    sigungu: Optional[str] = Query(None),
+    site_nm: Optional[str] = Query(None),
+    signal:  Optional[str] = Query(None),
+    page_no: int = Query(1, ge=1),
     num_of_rows: int = Query(20, ge=1, le=100),
 ):
     params: dict = {"pageNo": page_no, "numOfRows": num_of_rows}
@@ -213,10 +244,10 @@ async def construction_safety_light(
 
 @router.get("/risk-assessment-accredited")
 async def risk_assessment_accredited(
-    company_nm:  Optional[str] = Query(None),
-    sido:        Optional[str] = Query(None),
-    industry:    Optional[str] = Query(None),
-    page_no:     int = Query(1,  ge=1),
+    company_nm: Optional[str] = Query(None),
+    sido:       Optional[str] = Query(None),
+    industry:   Optional[str] = Query(None),
+    page_no:    int = Query(1, ge=1),
     num_of_rows: int = Query(20, ge=1, le=100),
 ):
     params: dict = {"pageNo": page_no, "numOfRows": num_of_rows}
@@ -234,9 +265,9 @@ async def msds_sections():
 
 @router.get("/msds")
 async def msds_list(
-    chem_nm:     Optional[str] = Query(None),
-    cas_no:      Optional[str] = Query(None),
-    page_no:     int = Query(1,  ge=1),
+    chem_nm: Optional[str] = Query(None),
+    cas_no:  Optional[str] = Query(None),
+    page_no: int = Query(1, ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
     params: dict = {"pageNo": page_no, "numOfRows": num_of_rows}
@@ -247,10 +278,7 @@ async def msds_list(
 
 
 @router.get("/msds/{kmc_no}/detail")
-async def msds_detail(
-    kmc_no:  str,
-    section: str = Query("01"),
-):
+async def msds_detail(kmc_no: str, section: str = Query("01")):
     section = section.zfill(2)
     if section not in MSDS_SECTIONS:
         raise HTTPException(status_code=400, detail="section은 01~16 범위")
@@ -261,10 +289,10 @@ async def msds_detail(
 
 @router.get("/kosha-guide")
 async def kosha_guide(
-    keyword:     Optional[str] = Query(None),
-    guide_no:    Optional[str] = Query(None),
-    category:    Optional[str] = Query(None),
-    page_no:     int = Query(1,  ge=1),
+    keyword:  Optional[str] = Query(None),
+    guide_no: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    page_no:  int = Query(1, ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
     params: dict = {"pageNo": page_no, "numOfRows": num_of_rows, "returnType": "json"}
