@@ -36,6 +36,7 @@ from routers.legal_engine_patch      import router as legal_engine_patch_router
 from routers.engine_qa               import router as engine_qa_router
 from routers.law_rule_generator      import router as law_rule_generator_router
 from routers.engine_document         import router as engine_document_router
+from routers.document_forms          import router as document_forms_router
 from routers.contract_kmong          import router as contract_kmong_router
 from routers.schedule_pipeline       import router as schedule_pipeline_router
 from routers.ksic_engine             import router as ksic_engine_router
@@ -233,6 +234,7 @@ app.include_router(legal_engine_patch_router)
 app.include_router(engine_qa_router)
 app.include_router(law_rule_generator_router)
 app.include_router(engine_document_router)
+app.include_router(document_forms_router)
 app.include_router(contract_kmong_router)
 app.include_router(schedule_pipeline_router)
 app.include_router(ksic_engine_router)
