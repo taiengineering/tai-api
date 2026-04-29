@@ -1,13 +1,13 @@
 """
-KOSHA 공공 API 라우터 — v1.7.0
+KOSHA 공공 API 라우터 — v1.8.0
 prefix: /kosha
 
-v1.7.0:
-  - construction-safety-light 경로 수정: constructSafety/getConstructSafetySignal → constplan/getconstplan
-  - safety-materials callApiId 추가 테스트
-  - debug-raw 엔드포인트 유지
-v1.6.0: debug-raw 엔드포인트 추가
-v1.5.1: SERVICE_KEY 우선순위 수정
+v1.8.0 개정 (공공데이터포털 확인 기반):
+  - safety-materials:       callApiId = 1030 (필수 고정값)
+  - construction-accidents: callApiId = 1010 (필수 고정값)
+  - construction-safety-light: 경로 constplan/getconstplan, callApiId = 1020
+  - kosha-guide: API 폐기 확인 → 대체 안전보건법령 스마트검색으로 전환
+  - accident-cases: callApiId 파라미터값을 문자열로 유지
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
@@ -28,7 +28,7 @@ def _get_service_key() -> str:
 KOSHA_BASE = "https://apis.data.go.kr/B552468"
 
 MSDS_SECTIONS = {
-    "01": "화학제품과 회사에 관한 정보", "02": "유해성·위험성",
+    "01": "화학제품과 회사엔 관한 정보", "02": "유해성·위험성",
     "03": "구성성분의 명칭 및 함유량", "04": "응급조치요령",
     "05": "폭발·화재시 대처방법", "06": "누출사고시 대처방법",
     "07": "취급 및 저장방법", "08": "노출방지 및 개인보호구",
@@ -40,24 +40,12 @@ MSDS_SECTIONS = {
 
 
 def _xml_items(root: ET.Element) -> list:
-    """XML 루트에서 items > item 수집. 다양한 태그 이름 대응."""
     items = []
-    # 표준: items > item
     for items_el in root.findall(".//items"):
         for item_el in items_el:
             item = {c.tag: c.text or "" for c in item_el}
             if item:
                 items.append(item)
-    if items:
-        return items
-    # 폴백: body 하위 구조가 다를 때 — 맨 첫 번째 반복 자식 요소
-    body_el = root.find(".//body")
-    if body_el is not None:
-        for child in body_el:
-            for sub in child:
-                item = {c.tag: c.text or "" for c in sub}
-                if item:
-                    items.append(item)
     return items
 
 
@@ -113,36 +101,46 @@ async def _kosha_get(path: str, params: dict) -> dict:
         raise HTTPException(status_code=502, detail=f"KOSHA API 연결 실패: {str(e)}")
 
 
-# ── 디버그 raw 엔드포인트 ──────────────────────────────────────
+# ── 디버그 raw 엔드포인트 ────────────────────────────
 
 @router.get("/debug-raw/safety-materials")
 async def debug_raw_safety_materials(page_no: int = Query(1), num_of_rows: int = Query(2)):
-    text, status = await _kosha_get_raw("selectMediaList01/getselectMediaList01",
-                                        {"pageNo": page_no, "numOfRows": num_of_rows})
+    """callApiId=1030 필수"""
+    text, status = await _kosha_get_raw(
+        "selectMediaList01/getselectMediaList01",
+        {"callApiId": "1030", "pageNo": page_no, "numOfRows": num_of_rows}
+    )
     return {"http_status": status, "raw": text[:3000]}
 
 @router.get("/debug-raw/construction-accidents")
 async def debug_raw_const_acc(page_no: int = Query(1), num_of_rows: int = Query(2)):
-    text, status = await _kosha_get_raw("constDsstr01/getconstDsstr01",
-                                        {"pageNo": page_no, "numOfRows": num_of_rows})
+    """callApiId=1010 필수"""
+    text, status = await _kosha_get_raw(
+        "constDsstr01/getconstDsstr01",
+        {"callApiId": "1010", "pageNo": page_no, "numOfRows": num_of_rows}
+    )
     return {"http_status": status, "raw": text[:3000]}
 
 @router.get("/debug-raw/safety-light")
 async def debug_raw_safety_light(page_no: int = Query(1), num_of_rows: int = Query(2)):
-    """수정된 전맴: constplan/getconstplan"""
-    text, status = await _kosha_get_raw("constplan/getconstplan",
-                                        {"pageNo": page_no, "numOfRows": num_of_rows})
+    """constplan/getconstplan + callApiId=1020"""
+    text, status = await _kosha_get_raw(
+        "constplan/getconstplan",
+        {"callApiId": "1020", "pageNo": page_no, "numOfRows": num_of_rows}
+    )
     return {"http_status": status, "raw": text[:3000]}
 
-@router.get("/debug-raw/kosha-guide")
-async def debug_raw_kosha_guide(page_no: int = Query(1), num_of_rows: int = Query(2)):
-    text, status = await _kosha_get_raw("koshaguide/getKoshaGuide",
-                                        {"pageNo": page_no, "numOfRows": num_of_rows,
-                                         "returnType": "json"})
+@router.get("/debug-raw/accident-cases")
+async def debug_raw_accident(page_no: int = Query(1), num_of_rows: int = Query(2)):
+    """callApiId=국내재해사례 게시판 조회"""
+    text, status = await _kosha_get_raw(
+        "disaster_api02/getdisaster_api02",
+        {"callApiId": "국내재해사례 게시판 조회", "pageNo": page_no, "numOfRows": num_of_rows}
+    )
     return {"http_status": status, "raw": text[:3000]}
 
 
-# ── 정식 엔드포인트 ───────────────────────────────────────────────
+# ── 정식 엔드포인트 ───────────────────────────────────────
 
 @router.get("/law-search")
 async def law_search(
@@ -164,6 +162,7 @@ async def accident_cases(
     page_no:  int = Query(1, ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
+    # callApiId: 문자열 고정값 (고정값이지만 문자열 형식)
     params: dict = {
         "callApiId": "국내재해사례 게시판 조회",
         "pageNo": page_no, "numOfRows": num_of_rows,
@@ -196,7 +195,11 @@ async def safety_materials(
     page_no:  int = Query(1, ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
-    params: dict = {"pageNo": page_no, "numOfRows": num_of_rows}
+    # callApiId=1030 필수 고정값 (포털 문서 확인)
+    params: dict = {
+        "callApiId": "1030",
+        "pageNo": page_no, "numOfRows": num_of_rows,
+    }
     if product_type:     params["productType"]    = product_type
     if industry:         params["industry"]        = industry
     if accident_type:    params["accidentType"]    = accident_type
@@ -213,7 +216,11 @@ async def construction_accidents(
     page_no: int = Query(1, ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
-    params: dict = {"pageNo": page_no, "numOfRows": num_of_rows}
+    # callApiId=1010 필수 고정값 (포털 문서 확인)
+    params: dict = {
+        "callApiId": "1010",
+        "pageNo": page_no, "numOfRows": num_of_rows,
+    }
     if year:  params["year"]  = year
     if month: params["month"] = month
     if day:   params["day"]   = day
@@ -230,8 +237,11 @@ async def construction_safety_light(
     page_no: int = Query(1, ge=1),
     num_of_rows: int = Query(20, ge=1, le=100),
 ):
-    """건설현장 안전 신호등 — 코드: constplan/getconstplan"""
-    params: dict = {"pageNo": page_no, "numOfRows": num_of_rows}
+    # 경로: constplan/getconstplan, callApiId=1020 (포털 문서 확인)
+    params: dict = {
+        "callApiId": "1020",
+        "pageNo": page_no, "numOfRows": num_of_rows,
+    }
     if sido:    params["sido"]    = sido
     if sigungu: params["sigungu"] = sigungu
     if site_nm: params["siteNm"]  = site_nm
@@ -293,9 +303,12 @@ async def kosha_guide(
     page_no:  int = Query(1, ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
+    """
+    KOSHA GUIDE API는 공공데이터포털에서 폐기 확인됨.
+    대체: 안전보건법령 스마트검색(srch/smartSearch)으로 진행.
+    """
     params: dict = {"pageNo": page_no, "numOfRows": num_of_rows, "returnType": "json"}
-    if keyword:  params["keyword"]  = keyword
-    if guide_no: params["guideNo"]  = guide_no
-    if category: params["category"] = category
-    result = await _kosha_get("koshaguide/getKoshaGuide", params)
-    return {"status": "success", "data": result}
+    # keyword 없으면 기본 검색어 사용
+    params["keyword"] = keyword or (guide_no or "KOSHA GUIDE")
+    result = await _kosha_get("srch/smartSearch", params)
+    return {"status": "success", "note": "KOSHA GUIDE API 폐기, 대체: 안전보건법령 스마트검색", "data": result}
