@@ -1,4 +1,5 @@
-# main.py — v5.39.0
+# main.py — v5.40.0
+# v5.40.0: tbm_issue 라우터 등록 (PATCH /tbm/{id}/attendees/{aid}/issue — 이상 표시)
 # v5.39.0: document_engine 라우터 등록 (문서 자동생성 엔진 — preview/generate)
 # v5.38.1: 임시 디버그 엔드포인트 등록 (billing 500 traceback 캡처)
 # v5.38.0: payment_ops + 결제 서비스 레이어 분리 (origin/dev 병합)
@@ -100,6 +101,7 @@ from routers.event_trigger           import router as event_trigger_router
 from routers.worker_registry         import router as worker_registry_router
 from routers.diagnosis               import router as diagnosis_router
 from routers.tbm                     import router as tbm_router
+from routers.tbm_issue               import router as tbm_issue_router                # v5.40.0 TBM이상표시
 from routers.tbm_templates           import router as tbm_templates_router
 from routers.safety_meetings         import router as safety_meetings_router
 from routers.risk_assessments        import router as risk_assessments_router
@@ -147,7 +149,7 @@ from routers.document_engine         import router as document_engine_api_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.39.0"
+APP_VERSION = "5.40.0"
 
 
 @asynccontextmanager
@@ -303,6 +305,7 @@ app.include_router(diagnosis_roi_router)
 app.include_router(diagnosis_transform_router)
 app.include_router(overdue_checker_router)
 app.include_router(tbm_router)
+app.include_router(tbm_issue_router)                                               # v5.40.0 TBM이상표시
 app.include_router(tbm_templates_router)
 app.include_router(safety_meetings_router)
 app.include_router(risk_assessments_router)
