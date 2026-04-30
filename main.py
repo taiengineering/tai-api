@@ -1,4 +1,5 @@
-# main.py — v5.38.1
+# main.py — v5.39.0
+# v5.39.0: document_engine 라우터 등록 (문서 자동생성 엔진 — preview/generate)
 # v5.38.1: 임시 디버그 엔드포인트 등록 (billing 500 traceback 캡처)
 # v5.38.0: payment_ops + 결제 서비스 레이어 분리 (origin/dev 병합)
 # v5.37.0: kosha_collect 라우터 등록 (POST /kosha-collect/run, /kosha-collect/{target})
@@ -142,10 +143,11 @@ from routers.emergency_report        import router as emergency_report_router   
 from routers.safety_reports          import router as safety_reports_router            # v5.36.0 이상신고
 from routers.pw_reset                import router as pw_reset_router                # v5.36.1 비밀번호재설정
 from routers.debug                   import router as debug_router                   # 임시 디버그
+from routers.document_engine         import router as document_engine_api_router      # v5.39.0 문서엔진
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.38.1"
+APP_VERSION = "5.39.0"
 
 
 @asynccontextmanager
@@ -235,6 +237,7 @@ app.include_router(engine_qa_router)
 app.include_router(law_rule_generator_router)
 app.include_router(engine_document_router)
 app.include_router(document_forms_router)
+app.include_router(document_engine_api_router)                                     # v5.39.0 문서엔진
 app.include_router(contract_kmong_router)
 app.include_router(schedule_pipeline_router)
 app.include_router(ksic_engine_router)
