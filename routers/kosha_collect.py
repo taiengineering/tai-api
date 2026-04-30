@@ -2,15 +2,16 @@
 KOSHA 데이터 수집 — DB 저장 + 크론 갱신
 prefix: /kosha-collect
 
-v1.3.1: _log() 잘못된 키워드인자(since_date=) 버그 수정
-v1.3.0 (포털 문서 기반 수정):
-  - safety-materials:          callApiId=1030 필수 추가
-  - construction-accidents:    callApiId=1010 필수 추가
-  - construction-safety-light: 경로 constplan/getconstplan, callApiId=1020
-  - guide: KOSHA GUIDE API 폐기 확인 → srch/smartSearch 대체
+v1.4.0 (2026-04-30):
+  [FIX] KoshaAPI.items() — KOSHA API가 {"items":{"item":[...]}} 구조로 반환하는 문제 해결
+  [FIX] safety-materials 필드명 변경 대응 (MED_SJ_NM, MED_URL, MED_COMPY_DY)
+  [FIX] accident-cases callApiId 구조 변경 대응
+
+v1.3.1: _log() 잘못된 키워드인자 버그 수정
+v1.3.0: 포털 문서 기반 callApiId 추가
 """
 from __future__ import annotations
-import os, logging, httpx, json
+import os, logging, httpx, json, hashlib
 from datetime import datetime, timezone
 from fastapi import APIRouter, Query, BackgroundTasks
 from typing import Optional
@@ -65,10 +66,20 @@ class KoshaAPI:
 
     @staticmethod
     def items(resp: dict) -> list:
+        """v1.4.0: KOSHA API가 {"items":{"item":[...]}} 구조로 반환하는 경우 처리"""
         body = resp.get("body") or resp.get("data") or {}
         if isinstance(body, dict):
             it = body.get("items", [])
-            return it if isinstance(it, list) else []
+            if isinstance(it, list):
+                return it
+            if isinstance(it, dict):
+                # {"item": [...]} 또는 {"item": {...}} 패턴
+                inner = it.get("item", [])
+                if isinstance(inner, list):
+                    return inner
+                if isinstance(inner, dict):
+                    return [inner]  # 단일 객체
+                return []
         return []
 
     @staticmethod
@@ -120,51 +131,66 @@ def _after_since(date_str: str, since_date: str) -> bool:
     return d >= since_date
 
 
+def _make_id(prefix: str, *parts) -> str:
+    """URL 등으로부터 안정적인 ID 생성"""
+    raw = "|".join(str(p) for p in parts if p)
+    if raw:
+        return hashlib.md5(raw.encode()).hexdigest()[:16]
+    return f"{prefix}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+
 # ─────────────────────────────────────────────────────
 # 수집함수
 # ─────────────────────────────────────────────────────
 
 async def _collect_accident_cases(since_date: str = INIT_DATE, full_refresh: bool = False) -> dict:
+    """
+    국내재해사례 게시판 조회서비스
+    data.go.kr에서 활용신청 필요 (APICODE_ERROR 90 발생 시)
+    """
     sb = get_supabase()
     since = INIT_DATE if full_refresh else since_date
-    businesses = ["", "제조업", "건설업", "조선업", "서비스업", "기타"]
     total_upserted = 0
-    for biz in businesses:
-        for page in range(1, MAX_PAGES + 1):
-            params = {
-                "callApiId": "국내재해사례 게시판 조회",
-                "pageNo": page, "numOfRows": MAX_ROWS
-            }
-            if biz: params["business"] = biz
-            resp  = await KoshaAPI.get("disaster_api02/getdisaster_api02", params)
-            items = KoshaAPI.items(resp)
-            if not items: break
-            rows, stop_early = [], False
-            for i, it in enumerate(items):
-                dt = str(it.get("regDt") or it.get("writeDate") or "")
-                if dt and not _after_since(dt, since):
-                    stop_early = True
-                    continue
-                rid = str(it.get("boardNo") or it.get("bbsNo") or f"{biz or 'ALL'}_{page}_{i}")
-                rows.append({
-                    "id": rid,
-                    "title": it.get("title") or it.get("bbsTitle") or "",
-                    "business": it.get("business") or biz,
-                    "content": it.get("content") or it.get("bbsContent") or "",
-                    "board_no": str(it.get("boardNo") or it.get("bbsNo") or ""),
-                    "reg_dt": dt, "file_url": it.get("fileUrl") or "",
-                    "raw_json": it,
-                })
-            if rows:
-                sb.table("kosha_accident_cases").upsert(rows, on_conflict="id").execute()
-                total_upserted += len(rows)
-            if stop_early or len(items) < MAX_ROWS: break
+    for page in range(1, MAX_PAGES + 1):
+        params = {
+            "pageNo": page, "numOfRows": MAX_ROWS
+        }
+        resp  = await KoshaAPI.get("disaster_api02/getdisaster_api02", params)
+        items = KoshaAPI.items(resp)
+        if not items: break
+        rows, stop_early = [], False
+        for i, it in enumerate(items):
+            # 필드명이 대문자로 변경되었을 수 있으므로 둘 다 체크
+            dt = str(it.get("regDt") or it.get("REG_DT") or it.get("writeDate") or "")
+            if dt and not _after_since(dt, since):
+                stop_early = True
+                continue
+            rid = str(it.get("boardNo") or it.get("BOARD_NO") or it.get("bbsNo") or _make_id("ac", page, i))
+            rows.append({
+                "id": rid,
+                "title": it.get("title") or it.get("TITLE") or it.get("bbsTitle") or it.get("BBS_TITLE") or "",
+                "business": it.get("business") or it.get("BUSINESS") or "",
+                "content": it.get("content") or it.get("CONTENT") or it.get("bbsContent") or "",
+                "board_no": rid,
+                "reg_dt": dt,
+                "file_url": it.get("fileUrl") or it.get("FILE_URL") or "",
+                "raw_json": it,
+            })
+        if rows:
+            sb.table("kosha_accident_cases").upsert(rows, on_conflict="id").execute()
+            total_upserted += len(rows)
+        if stop_early or len(items) < MAX_ROWS: break
     _log("accident_cases", "success", total_upserted)
     return {"target": "accident_cases", "since": since, "upserted": total_upserted}
 
 
 async def _collect_safety_materials(since_date: str = INIT_DATE, full_refresh: bool = False) -> dict:
-    """callApiId=1030 필수 (포털 문서 확인)"""
+    """
+    v1.4.0: 필드명 변경 대응
+    기존: mediaId, title, productType, industry, accidentType, url
+    변경: MED_SJ_NM(제목), MED_URL(URL), MED_COMPY_DY(등록일)
+    callApiId=1030
+    """
     sb = get_supabase()
     total_upserted = 0
     for page in range(1, MAX_PAGES + 1):
@@ -176,14 +202,18 @@ async def _collect_safety_materials(since_date: str = INIT_DATE, full_refresh: b
         if not items: break
         rows = []
         for i, it in enumerate(items):
-            rid = str(it.get("mediaId") or it.get("id") or f"mat_{page}_{i}")
+            # 새 필드명 (MED_*) + 기존 필드명 모두 체크
+            title = it.get("MED_SJ_NM") or it.get("title") or it.get("mediaTitle") or ""
+            url   = it.get("MED_URL") or it.get("url") or it.get("mediaUrl") or ""
+            reg_dt = it.get("MED_COMPY_DY") or it.get("regDt") or ""
+            rid = it.get("mediaId") or it.get("MED_SEQ") or _make_id("mat", url, title)
             rows.append({
-                "id": rid,
-                "title": it.get("title") or it.get("mediaTitle") or "",
-                "product_type": it.get("productType") or "",
+                "id": str(rid),
+                "title": title,
+                "product_type": it.get("productType") or it.get("MED_CL_NM") or "",
                 "industry": it.get("industry") or "",
                 "accident_type": it.get("accidentType") or "",
-                "url": it.get("url") or it.get("mediaUrl") or "",
+                "url": url,
                 "raw_json": it,
             })
         if rows:
@@ -195,7 +225,7 @@ async def _collect_safety_materials(since_date: str = INIT_DATE, full_refresh: b
 
 
 async def _collect_construction_accidents(since_date: str = INIT_DATE, full_refresh: bool = False) -> dict:
-    """callApiId=1010 필수 (포털 문서 확인)"""
+    """callApiId=1010"""
     sb = get_supabase()
     since = INIT_DATE if full_refresh else since_date
     total_upserted = 0
@@ -208,32 +238,31 @@ async def _collect_construction_accidents(since_date: str = INIT_DATE, full_refr
         if not items: break
         rows, stop_early = [], False
         for i, it in enumerate(items):
-            dt = str(it.get("occurrenceDate") or it.get("dsstrDt") or "")
+            dt = str(it.get("occurrenceDate") or it.get("dsstrDt") or it.get("DSSTR_DT") or "")
             if dt and not _after_since(dt, since):
                 stop_early = True
                 continue
-            rid = str(it.get("id") or it.get("seq") or f"ca_{page}_{i}")
+            rid = str(it.get("id") or it.get("seq") or it.get("SEQ") or _make_id("ca", page, i))
             rows.append({
                 "id": rid,
-                "accident_type": it.get("accidentType") or it.get("dsstrKnd") or "",
-                "work_type": it.get("workType") or it.get("workKnd") or "",
-                "causative": it.get("causative") or it.get("crtrFtr") or "",
-                "occurrence_date": it.get("occurrenceDate") or it.get("dsstrDt") or "",
-                "accident_summary": it.get("accidentSummary") or it.get("dsstrOutl") or "",
-                "risk_reduction": it.get("riskReduction") or it.get("rskRdcMsr") or "",
+                "accident_type": it.get("accidentType") or it.get("dsstrKnd") or it.get("DSSTR_KND") or "",
+                "work_type": it.get("workType") or it.get("workKnd") or it.get("WORK_KND") or "",
+                "causative": it.get("causative") or it.get("crtrFtr") or it.get("CRTR_FTR") or "",
+                "occurrence_date": dt,
+                "accident_summary": it.get("accidentSummary") or it.get("dsstrOutl") or it.get("DSSTR_OUTL") or "",
+                "risk_reduction": it.get("riskReduction") or it.get("rskRdcMsr") or it.get("RSK_RDC_MSR") or "",
                 "raw_json": it,
             })
         if rows:
             sb.table("kosha_construction_accidents").upsert(rows, on_conflict="id").execute()
             total_upserted += len(rows)
         if stop_early or len(items) < MAX_ROWS: break
-    # ★ 수정: since_date= 잘못된 키워드인자 제거
     _log("construction_accidents", "success", total_upserted)
     return {"target": "construction_accidents", "since": since, "upserted": total_upserted}
 
 
 async def _collect_safety_light(full_refresh: bool = True) -> dict:
-    """constplan/getconstplan + callApiId=1020 (포털 문서 확인)"""
+    """constplan/getconstplan + callApiId=1020"""
     sb = get_supabase()
     rows_all: list[dict] = []
     for page in range(1, MAX_PAGES + 1):
@@ -244,15 +273,15 @@ async def _collect_safety_light(full_refresh: bool = True) -> dict:
         items = KoshaAPI.items(resp)
         if not items: break
         for i, it in enumerate(items):
-            rid = str(it.get("id") or it.get("siteId") or it.get("sno") or f"sl_{page}_{i}")
+            rid = str(it.get("id") or it.get("siteId") or it.get("SITE_ID") or it.get("sno") or _make_id("sl", page, i))
             rows_all.append({
                 "id": rid,
-                "site_nm": it.get("siteNm") or it.get("siteName") or "",
-                "sido": it.get("sido") or "",
-                "sigungu": it.get("sigungu") or "",
-                "signal": it.get("signal") or it.get("signalColor") or "",
-                "guide_dt": it.get("guideDt") or it.get("inspDate") or "",
-                "guide_org": it.get("guideOrg") or it.get("orgName") or "",
+                "site_nm": it.get("siteNm") or it.get("SITE_NM") or it.get("siteName") or "",
+                "sido": it.get("sido") or it.get("SIDO") or "",
+                "sigungu": it.get("sigungu") or it.get("SIGUNGU") or "",
+                "signal": it.get("signal") or it.get("SIGNAL") or it.get("signalColor") or "",
+                "guide_dt": it.get("guideDt") or it.get("GUIDE_DT") or it.get("inspDate") or "",
+                "guide_org": it.get("guideOrg") or it.get("GUIDE_ORG") or it.get("orgName") or "",
                 "raw_json": it,
             })
         if len(items) < MAX_ROWS: break
@@ -278,19 +307,19 @@ async def _collect_risk_assessment(since_date: str = INIT_DATE, full_refresh: bo
         if not items: break
         rows, stop_early = [], False
         for i, it in enumerate(items):
-            dt = str(it.get("certDate") or it.get("acptDt") or "")
+            dt = str(it.get("certDate") or it.get("acptDt") or it.get("ACPT_DT") or "")
             if dt and not _after_since(dt, since):
                 stop_early = True
                 continue
-            rid = str(it.get("id") or it.get("seq") or f"ra_{page}_{i}")
+            rid = str(it.get("id") or it.get("seq") or it.get("SEQ") or _make_id("ra", page, i))
             rows.append({
                 "id": rid,
-                "company_nm": it.get("companyNm") or it.get("siteNm") or "",
-                "sido": it.get("sido") or "",
+                "company_nm": it.get("companyNm") or it.get("COMPANY_NM") or it.get("siteNm") or "",
+                "sido": it.get("sido") or it.get("SIDO") or "",
                 "cert_date": dt,
-                "expiry_date": it.get("expiryDate") or it.get("vlddDt") or "",
-                "industry": it.get("industry") or "",
-                "labor_office": it.get("laborOffice") or "",
+                "expiry_date": it.get("expiryDate") or it.get("vlddDt") or it.get("VLDD_DT") or "",
+                "industry": it.get("industry") or it.get("INDUSTRY") or "",
+                "labor_office": it.get("laborOffice") or it.get("LABOR_OFFICE") or "",
                 "raw_json": it,
             })
         if rows:
@@ -303,7 +332,7 @@ async def _collect_risk_assessment(since_date: str = INIT_DATE, full_refresh: bo
 
 async def _collect_guide(full_refresh: bool = False) -> dict:
     """
-    KOSHA GUIDE API 폐기 확인 (2025년 공공데이터포털에서 검색되지 않음).
+    KOSHA GUIDE API 폐기 확인.
     대체: 안전보건법령 스마트검색(srch/smartSearch)으로 KOSHA GUIDE 질의 수집.
     """
     sb = get_supabase()
@@ -319,7 +348,7 @@ async def _collect_guide(full_refresh: bool = False) -> dict:
             if not items: break
             rows = []
             for i, it in enumerate(items):
-                rid = str(it.get("guideNo") or it.get("docNo") or it.get("id") or f"guide_{kw}_{page}_{i}")
+                rid = str(it.get("guideNo") or it.get("docNo") or it.get("id") or _make_id("guide", kw, page, i))
                 rows.append({
                     "id": rid,
                     "guide_no": it.get("guideNo") or it.get("docNo") or "",
