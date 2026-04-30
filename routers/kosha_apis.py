@@ -1,13 +1,9 @@
 """
-KOSHA 공공 API 라우터 — v1.8.0
+KOSHA 공공 API 라우터 — v1.8.1
 prefix: /kosha
 
-v1.8.0 개정 (공공데이터포털 확인 기반):
-  - safety-materials:       callApiId = 1030 (필수 고정값)
-  - construction-accidents: callApiId = 1010 (필수 고정값)
-  - construction-safety-light: 경로 constplan/getconstplan, callApiId = 1020
-  - kosha-guide: API 폐기 확인 → 대체 안전보건법령 스마트검색으로 전환
-  - accident-cases: callApiId 파라미터값을 문자열로 유지
+v1.8.1: debug-raw/test 엔드포인트 추가 — callApiId 탐색용
+v1.8.0: callApiId 고정값 적용, KOSHA GUIDE 폐기 대체
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
@@ -103,9 +99,28 @@ async def _kosha_get(path: str, params: dict) -> dict:
 
 # ── 디버그 raw 엔드포인트 ────────────────────────────
 
+@router.get("/debug-raw/test")
+async def debug_raw_test(
+    path: str = Query("disaster_api02/getdisaster_api02"),
+    call_api_id: str = Query(""),
+    page_no: int = Query(1),
+    num_of_rows: int = Query(2),
+):
+    """callApiId 탐색용 테스트 엔드포인트"""
+    params = {"pageNo": page_no, "numOfRows": num_of_rows}
+    if call_api_id:
+        params["callApiId"] = call_api_id
+    text, status = await _kosha_get_raw(path, params)
+    return {
+        "path": path,
+        "callApiId": call_api_id or "(없음)",
+        "http_status": status,
+        "raw": text[:3000],
+    }
+
+
 @router.get("/debug-raw/safety-materials")
 async def debug_raw_safety_materials(page_no: int = Query(1), num_of_rows: int = Query(2)):
-    """callApiId=1030 필수"""
     text, status = await _kosha_get_raw(
         "selectMediaList01/getselectMediaList01",
         {"callApiId": "1030", "pageNo": page_no, "numOfRows": num_of_rows}
@@ -114,7 +129,6 @@ async def debug_raw_safety_materials(page_no: int = Query(1), num_of_rows: int =
 
 @router.get("/debug-raw/construction-accidents")
 async def debug_raw_const_acc(page_no: int = Query(1), num_of_rows: int = Query(2)):
-    """callApiId=1010 필수"""
     text, status = await _kosha_get_raw(
         "constDsstr01/getconstDsstr01",
         {"callApiId": "1010", "pageNo": page_no, "numOfRows": num_of_rows}
@@ -123,7 +137,6 @@ async def debug_raw_const_acc(page_no: int = Query(1), num_of_rows: int = Query(
 
 @router.get("/debug-raw/safety-light")
 async def debug_raw_safety_light(page_no: int = Query(1), num_of_rows: int = Query(2)):
-    """constplan/getconstplan + callApiId=1020"""
     text, status = await _kosha_get_raw(
         "constplan/getconstplan",
         {"callApiId": "1020", "pageNo": page_no, "numOfRows": num_of_rows}
@@ -132,7 +145,6 @@ async def debug_raw_safety_light(page_no: int = Query(1), num_of_rows: int = Que
 
 @router.get("/debug-raw/accident-cases")
 async def debug_raw_accident(page_no: int = Query(1), num_of_rows: int = Query(2)):
-    """callApiId=국내재해사례 게시판 조회"""
     text, status = await _kosha_get_raw(
         "disaster_api02/getdisaster_api02",
         {"callApiId": "국내재해사례 게시판 조회", "pageNo": page_no, "numOfRows": num_of_rows}
@@ -162,7 +174,6 @@ async def accident_cases(
     page_no:  int = Query(1, ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
-    # callApiId: 문자열 고정값 (고정값이지만 문자열 형식)
     params: dict = {
         "callApiId": "국내재해사례 게시판 조회",
         "pageNo": page_no, "numOfRows": num_of_rows,
@@ -195,7 +206,6 @@ async def safety_materials(
     page_no:  int = Query(1, ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
-    # callApiId=1030 필수 고정값 (포털 문서 확인)
     params: dict = {
         "callApiId": "1030",
         "pageNo": page_no, "numOfRows": num_of_rows,
@@ -216,7 +226,6 @@ async def construction_accidents(
     page_no: int = Query(1, ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
-    # callApiId=1010 필수 고정값 (포털 문서 확인)
     params: dict = {
         "callApiId": "1010",
         "pageNo": page_no, "numOfRows": num_of_rows,
@@ -237,7 +246,6 @@ async def construction_safety_light(
     page_no: int = Query(1, ge=1),
     num_of_rows: int = Query(20, ge=1, le=100),
 ):
-    # 경로: constplan/getconstplan, callApiId=1020 (포털 문서 확인)
     params: dict = {
         "callApiId": "1020",
         "pageNo": page_no, "numOfRows": num_of_rows,
@@ -303,12 +311,7 @@ async def kosha_guide(
     page_no:  int = Query(1, ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
-    """
-    KOSHA GUIDE API는 공공데이터포털에서 폐기 확인됨.
-    대체: 안전보건법령 스마트검색(srch/smartSearch)으로 진행.
-    """
     params: dict = {"pageNo": page_no, "numOfRows": num_of_rows, "returnType": "json"}
-    # keyword 없으면 기본 검색어 사용
     params["keyword"] = keyword or (guide_no or "KOSHA GUIDE")
     result = await _kosha_get("srch/smartSearch", params)
     return {"status": "success", "note": "KOSHA GUIDE API 폐기, 대체: 안전보건법령 스마트검색", "data": result}
