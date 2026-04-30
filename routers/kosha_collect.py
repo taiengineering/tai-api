@@ -2,19 +2,19 @@
 KOSHA 데이터 수집 — DB 저장 + 크론 갱신
 prefix: /kosha-collect
 
-v1.4.0 (2026-04-30):
-  [FIX] KoshaAPI.items() — KOSHA API가 {"items":{"item":[...]}} 구조로 반환하는 문제 해결
-  [FIX] safety-materials 필드명 변경 대응 (MED_SJ_NM, MED_URL, MED_COMPY_DY)
-  [FIX] accident-cases callApiId 구조 변경 대응
+v1.5.0 (2026-04-30):
+  [ADD] _classify_material() — 제목 기반 자동 카테고리/업종 분류
+  [ADD] _collect_safety_materials()에 수집 시 category/sector 자동 적용
 
-v1.3.1: _log() 잘못된 키워드인자 버그 수정
-v1.3.0: 포털 문서 기반 callApiId 추가
+v1.4.0: KoshaAPI.items() 파싱 + 필드명 변경 대응
+v1.3.1: _log() 버그 수정
+v1.3.0: callApiId 추가
 """
 from __future__ import annotations
-import os, logging, httpx, json, hashlib
+import os, logging, httpx, json, hashlib, re
 from datetime import datetime, timezone
 from fastapi import APIRouter, Query, BackgroundTasks
-from typing import Optional
+from typing import Optional, Tuple
 from db.supabase_client import get_supabase
 
 log    = logging.getLogger(__name__)
@@ -31,6 +31,66 @@ BASE      = "https://apis.data.go.kr/B552468"
 MAX_ROWS  = 100
 MAX_PAGES = 100
 INIT_DATE = "2024-01-01"
+
+
+# ─────────────────────────────────────────────────────
+# 자동 분류 — v1.5.0
+# ─────────────────────────────────────────────────────
+
+# 카테고리 분류 규칙 (우선순위 순)
+_CATEGORY_RULES: list[Tuple[str, str]] = [
+    # 외국인자료 (다른 카테고리와 중복되므로 먼저)
+    (r'(외국인|다문화|foreign)', 'FOREIGN'),
+    (r'\((몽골|라오스|미얀마|캄보디아|키르기스|네팔|태국|베트남|중국|우즈베|필리핀|인도네|파키스|방글라|스리랑카|티모르|영어|일본|러시아)', 'FOREIGN'),
+    # 영상·VR
+    (r'(VR|메타버스|HMD용|동영상|숙폼|현장르포|당신의 선택|UCC)', 'VIDEO_VR'),
+    # 교육자료
+    (r'(SIF 교안|SIF교안|\(교안\)|교재|교육과정|위탁과정|교육프로그램|관리자용|이러닝|e-learning)', 'EDUCATION'),
+    # 사고사례
+    (r'(OPL|스토리텔링|사고사례|재해사례|재해예방 OPS|\[OPS\])', 'CASE_STUDY'),
+    # 포스터·홍보물
+    (r'(포스터|스티커|픽토그램|안전보건표지|리플릿|리플렛|브로슈어|홍보물|배너|현수막)', 'POSTER'),
+    # 가이드·매뉴얼
+    (r'(가이드|GUIDE|guide|매뉴얼|manual|안전수칙|작업절차|바로알기|편람)', 'GUIDE'),
+    # 체크리스트
+    (r'(체크리스트|점검표|자율점검)', 'CHECKLIST'),
+    # 연구·보고서
+    (r'(연구|보고서|논문|학술|조사|분석|평가|검토|통계|현황|연보|연감|요약집)', 'RESEARCH'),
+    # 보건·건강
+    (r'(건강|보건|검진|직업병|질환|화학물질|유해물질|MSDS|작업환경|소음|분진|석면)', 'HEALTH'),
+    # 법령
+    (r'(법령|규정|고시|시행령|시행규칙)', 'REGULATION'),
+    # 교육 (넓은 범위)
+    (r'(교육|교안|학습)', 'EDUCATION'),
+    # 사고·재해 관련
+    (r'(사고|사례|재해|재해예방)', 'CASE_STUDY'),
+]
+
+# 업종 분류 규칙
+_SECTOR_RULES: list[Tuple[str, str]] = [
+    (r'(건설|건설업|건설현장|콘크리트|타워크레인|비계|거푸집|굴착|항타|갱폼|공사)', 'CONSTRUCTION'),
+    (r'(제조|제조업|프레스|선반|절단기|용접|사출|전단기|절곡기|컨베이어|크레인|지게차|보일러|압력용기)', 'MANUFACTURING'),
+    (r'(서비스|배달|이륨차|물류|운반|운송|택배|청소|조리)', 'SERVICE'),
+]
+
+
+def _classify_material(title: str) -> Tuple[str, str]:
+    """
+    제목 기반 카테고리 + 업종 자동 분류.
+    Returns (category, sector)
+    """
+    t = title or ""
+    category = "OTHER"
+    sector = "COMMON"
+    for pattern, cat in _CATEGORY_RULES:
+        if re.search(pattern, t):
+            category = cat
+            break
+    for pattern, sec in _SECTOR_RULES:
+        if re.search(pattern, t):
+            sector = sec
+            break
+    return category, sector
 
 
 class KoshaAPI:
@@ -66,19 +126,17 @@ class KoshaAPI:
 
     @staticmethod
     def items(resp: dict) -> list:
-        """v1.4.0: KOSHA API가 {"items":{"item":[...]}} 구조로 반환하는 경우 처리"""
         body = resp.get("body") or resp.get("data") or {}
         if isinstance(body, dict):
             it = body.get("items", [])
             if isinstance(it, list):
                 return it
             if isinstance(it, dict):
-                # {"item": [...]} 또는 {"item": {...}} 패턴
                 inner = it.get("item", [])
                 if isinstance(inner, list):
                     return inner
                 if isinstance(inner, dict):
-                    return [inner]  # 단일 객체
+                    return [inner]
                 return []
         return []
 
@@ -132,7 +190,6 @@ def _after_since(date_str: str, since_date: str) -> bool:
 
 
 def _make_id(prefix: str, *parts) -> str:
-    """URL 등으로부터 안정적인 ID 생성"""
     raw = "|".join(str(p) for p in parts if p)
     if raw:
         return hashlib.md5(raw.encode()).hexdigest()[:16]
@@ -144,23 +201,16 @@ def _make_id(prefix: str, *parts) -> str:
 # ─────────────────────────────────────────────────────
 
 async def _collect_accident_cases(since_date: str = INIT_DATE, full_refresh: bool = False) -> dict:
-    """
-    국내재해사례 게시판 조회서비스
-    data.go.kr에서 활용신청 필요 (APICODE_ERROR 90 발생 시)
-    """
     sb = get_supabase()
     since = INIT_DATE if full_refresh else since_date
     total_upserted = 0
     for page in range(1, MAX_PAGES + 1):
-        params = {
-            "pageNo": page, "numOfRows": MAX_ROWS
-        }
+        params = {"pageNo": page, "numOfRows": MAX_ROWS}
         resp  = await KoshaAPI.get("disaster_api02/getdisaster_api02", params)
         items = KoshaAPI.items(resp)
         if not items: break
         rows, stop_early = [], False
         for i, it in enumerate(items):
-            # 필드명이 대문자로 변경되었을 수 있으므로 둘 다 체크
             dt = str(it.get("regDt") or it.get("REG_DT") or it.get("writeDate") or "")
             if dt and not _after_since(dt, since):
                 stop_early = True
@@ -185,12 +235,7 @@ async def _collect_accident_cases(since_date: str = INIT_DATE, full_refresh: boo
 
 
 async def _collect_safety_materials(since_date: str = INIT_DATE, full_refresh: bool = False) -> dict:
-    """
-    v1.4.0: 필드명 변경 대응
-    기존: mediaId, title, productType, industry, accidentType, url
-    변경: MED_SJ_NM(제목), MED_URL(URL), MED_COMPY_DY(등록일)
-    callApiId=1030
-    """
+    """v1.5.0: 수집 시 category/sector 자동 분류 적용"""
     sb = get_supabase()
     total_upserted = 0
     for page in range(1, MAX_PAGES + 1):
@@ -202,11 +247,10 @@ async def _collect_safety_materials(since_date: str = INIT_DATE, full_refresh: b
         if not items: break
         rows = []
         for i, it in enumerate(items):
-            # 새 필드명 (MED_*) + 기존 필드명 모두 체크
             title = it.get("MED_SJ_NM") or it.get("title") or it.get("mediaTitle") or ""
             url   = it.get("MED_URL") or it.get("url") or it.get("mediaUrl") or ""
-            reg_dt = it.get("MED_COMPY_DY") or it.get("regDt") or ""
-            rid = it.get("mediaId") or it.get("MED_SEQ") or _make_id("mat", url, title)
+            rid   = it.get("mediaId") or it.get("MED_SEQ") or _make_id("mat", url, title)
+            category, sector = _classify_material(title)
             rows.append({
                 "id": str(rid),
                 "title": title,
@@ -214,6 +258,8 @@ async def _collect_safety_materials(since_date: str = INIT_DATE, full_refresh: b
                 "industry": it.get("industry") or "",
                 "accident_type": it.get("accidentType") or "",
                 "url": url,
+                "category": category,
+                "sector": sector,
                 "raw_json": it,
             })
         if rows:
@@ -225,7 +271,6 @@ async def _collect_safety_materials(since_date: str = INIT_DATE, full_refresh: b
 
 
 async def _collect_construction_accidents(since_date: str = INIT_DATE, full_refresh: bool = False) -> dict:
-    """callApiId=1010"""
     sb = get_supabase()
     since = INIT_DATE if full_refresh else since_date
     total_upserted = 0
@@ -262,7 +307,6 @@ async def _collect_construction_accidents(since_date: str = INIT_DATE, full_refr
 
 
 async def _collect_safety_light(full_refresh: bool = True) -> dict:
-    """constplan/getconstplan + callApiId=1020"""
     sb = get_supabase()
     rows_all: list[dict] = []
     for page in range(1, MAX_PAGES + 1):
@@ -331,10 +375,6 @@ async def _collect_risk_assessment(since_date: str = INIT_DATE, full_refresh: bo
 
 
 async def _collect_guide(full_refresh: bool = False) -> dict:
-    """
-    KOSHA GUIDE API 폐기 확인.
-    대체: 안전보건법령 스마트검색(srch/smartSearch)으로 KOSHA GUIDE 질의 수집.
-    """
     sb = get_supabase()
     total_upserted = 0
     keywords = ["KOSHA GUIDE", "안전보건기술지침"]
