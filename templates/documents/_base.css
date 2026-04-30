@@ -1,0 +1,259 @@
+/* TAI Document Engine — Base CSS v1.0.0
+ * 29건 전체 문서 공통 스타일
+ * 결재란 없음 (회사마다 다르므로 제외)
+ * 헤더: 회사명 + 시설명
+ * 푸터: Powered by TAI Safe
+ * 폰트: Pretendard Variable (CDN subset)
+ */
+
+@page {
+  size: A4 portrait;
+  margin: 16mm 14mm 14mm 14mm;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Pretendard Variable', 'Pretendard', -apple-system, 'Noto Sans KR', sans-serif;
+  font-size: 9.5pt;
+  color: #1e293b;
+  line-height: 1.55;
+  background: #fff;
+  max-width: 210mm;
+  margin: 0 auto;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* ── 문서 헤더 ── */
+.doc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding-bottom: 8px;
+  border-bottom: 2.5px solid #0f172a;
+  margin-bottom: 14px;
+}
+.doc-header-left {}
+.doc-company {
+  font-size: 9.5pt;
+  font-weight: 600;
+  color: #334155;
+}
+.doc-facility {
+  font-size: 8pt;
+  color: #64748b;
+  margin-top: 1px;
+}
+.doc-title {
+  font-size: 16pt;
+  font-weight: 800;
+  color: #0f172a;
+  margin-top: 6px;
+  line-height: 1.25;
+}
+.doc-law {
+  font-size: 7.5pt;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+.doc-header-right {
+  text-align: right;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+.doc-header-right img.logo {
+  max-height: 32px;
+  max-width: 100px;
+  object-fit: contain;
+}
+.doc-header-right .doc-code {
+  font-size: 7.5pt;
+  color: #94a3b8;
+  margin-top: 4px;
+  font-family: 'Pretendard Variable', monospace;
+}
+
+/* ── 정보 테이블 ── */
+.info-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 12px;
+}
+.info-table th,
+.info-table td {
+  border: 1px solid #cbd5e1;
+  padding: 4px 8px;
+  font-size: 9pt;
+  vertical-align: middle;
+}
+.info-table th {
+  background: #f8fafc;
+  font-weight: 700;
+  width: 76px;
+  text-align: center;
+  color: #334155;
+  white-space: nowrap;
+}
+
+/* ── 섹션 제목 ── */
+.section-title {
+  font-size: 10pt;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 14px 0 5px;
+  padding: 3px 0 3px 7px;
+  border-left: 3px solid #3b82f6;
+  background: #f8fafc;
+}
+
+/* ── 데이터 테이블 ── */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 10px;
+}
+.data-table th,
+.data-table td {
+  border: 1px solid #cbd5e1;
+  padding: 3px 6px;
+  font-size: 9pt;
+  vertical-align: middle;
+}
+.data-table th {
+  background: #f8fafc;
+  font-weight: 700;
+  text-align: center;
+  color: #334155;
+}
+.data-table td.c { text-align: center; }
+.data-table td.num { text-align: center; color: #64748b; font-size: 8.5pt; }
+
+/* ── 뱃지 ── */
+.b {
+  display: inline-block;
+  border-radius: 2px;
+  padding: 0 4px;
+  font-size: 7.5pt;
+  font-weight: 700;
+}
+.b-r { background: #fef2f2; color: #dc2626; }
+.b-w { background: #fffbeb; color: #b45309; }
+.b-g { background: #f0fdf4; color: #15803d; }
+.b-i { background: #eff6ff; color: #1d4ed8; }
+.b-x { background: #f1f5f9; color: #64748b; }
+
+/* ── 메모/전달사항 ── */
+.note-label {
+  font-size: 7.5pt;
+  font-weight: 700;
+  color: #64748b;
+  margin: 4px 0 2px;
+}
+.note-box {
+  border: 1px solid #cbd5e1;
+  padding: 4px 8px;
+  font-size: 8.5pt;
+  margin-bottom: 6px;
+  min-height: 24px;
+  line-height: 1.55;
+  color: #334155;
+}
+
+/* ── 기상 정보 ── */
+.weather-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.weather-item {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 8pt;
+  color: #475569;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 3px;
+  padding: 1px 7px;
+}
+.weather-item strong { color: #1e293b; }
+
+/* ── 서명 테이블 ── */
+.sign-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+.sign-table th,
+.sign-table td {
+  border: 1px solid #cbd5e1;
+  padding: 3px 6px;
+  font-size: 8.5pt;
+  text-align: center;
+  vertical-align: middle;
+}
+.sign-table th {
+  background: #f8fafc;
+  font-weight: 700;
+  color: #334155;
+}
+.sign-table td.name-col { font-weight: 600; text-align: left; padding-left: 6px; }
+.sign-table td.sign-col { height: 26px; min-width: 44px; }
+
+/* ── 이상 표시 ── */
+.issue-row {
+  background: #fef2f2;
+}
+.issue-row td {
+  color: #991b1b;
+}
+
+/* ── 하단 서명란 (진행자/관리감독자) ── */
+.sign-area {
+  display: flex;
+  justify-content: flex-end;
+  gap: 28px;
+  margin-top: 16px;
+}
+.sign-box {
+  text-align: center;
+  min-width: 90px;
+}
+.sign-box .role {
+  font-size: 7.5pt;
+  color: #64748b;
+  margin-bottom: 2px;
+}
+.sign-box .sign-line {
+  border-bottom: 1px solid #334155;
+  height: 34px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 2px;
+  font-weight: 600;
+  font-size: 9pt;
+  color: #1e293b;
+}
+.sign-box .sign-name {
+  font-size: 8pt;
+  margin-top: 2px;
+  color: #334155;
+}
+
+/* ── 푸터 ── */
+.doc-footer {
+  margin-top: 16px;
+  padding-top: 5px;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: space-between;
+  font-size: 7pt;
+  color: #94a3b8;
+}
+
+@media print {
+  body { padding: 0; max-width: none; }
+}

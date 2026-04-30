@@ -3,324 +3,158 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TBM 기록 — {{ factory_name }}</title>
-<style>
-  @page { size: A4; margin: 15mm; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: 'Pretendard', 'Noto Sans KR', sans-serif;
-    font-size: 11pt;
-    color: #1a1a1a;
-    line-height: 1.5;
-    background: #fff;
-  }
-
-  .doc-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    border-bottom: 3px solid #0f172a;
-    padding-bottom: 12px;
-    margin-bottom: 16px;
-  }
-  .doc-title {
-    font-size: 20pt;
-    font-weight: 800;
-    color: #0f172a;
-  }
-  .doc-subtitle {
-    font-size: 10pt;
-    color: #64748b;
-    margin-top: 4px;
-  }
-  .doc-logo {
-    text-align: right;
-    font-size: 9pt;
-    color: #94a3b8;
-  }
-  .doc-logo img { height: 28px; }
-
-  /* 정보 테이블 */
-  .info-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-bottom: 16px;
-  }
-  .info-table th, .info-table td {
-    border: 1px solid #cbd5e1;
-    padding: 6px 10px;
-    font-size: 10pt;
-  }
-  .info-table th {
-    background: #f1f5f9;
-    font-weight: 700;
-    width: 110px;
-    text-align: left;
-    color: #334155;
-  }
-
-  /* 섹션 */
-  .section-title {
-    font-size: 12pt;
-    font-weight: 800;
-    color: #0f172a;
-    margin: 18px 0 8px;
-    padding-left: 8px;
-    border-left: 4px solid #3b82f6;
-  }
-
-  /* 위험/안전 리스트 */
-  .item-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-bottom: 12px;
-  }
-  .item-table th, .item-table td {
-    border: 1px solid #cbd5e1;
-    padding: 5px 8px;
-    font-size: 10pt;
-  }
-  .item-table th {
-    background: #f1f5f9;
-    font-weight: 700;
-    text-align: center;
-    color: #334155;
-  }
-  .item-table td.center { text-align: center; }
-  .badge-risk {
-    display: inline-block;
-    background: #fef2f2;
-    color: #dc2626;
-    border-radius: 4px;
-    padding: 1px 6px;
-    font-size: 9pt;
-    font-weight: 700;
-  }
-  .badge-safe {
-    display: inline-block;
-    background: #f0fdf4;
-    color: #16a34a;
-    border-radius: 4px;
-    padding: 1px 6px;
-    font-size: 9pt;
-    font-weight: 700;
-  }
-
-  /* 참석자 */
-  .attendee-grid {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 0;
-    border: 1px solid #cbd5e1;
-    margin-bottom: 12px;
-  }
-  .attendee-cell {
-    border: 1px solid #e2e8f0;
-    padding: 8px 6px;
-    text-align: center;
-    font-size: 9pt;
-  }
-  .attendee-cell .name { font-weight: 700; font-size: 10pt; }
-  .attendee-cell .job { color: #64748b; margin-top: 2px; }
-  .attendee-cell .sign {
-    margin-top: 4px;
-    height: 30px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .attendee-cell .sign img { max-height: 28px; max-width: 60px; }
-  .attendee-cell .sign .no-sign { color: #cbd5e1; font-size: 8pt; }
-  .attendee-header {
-    background: #f1f5f9;
-    font-weight: 700;
-    color: #334155;
-  }
-
-  /* 푸터 */
-  .doc-footer {
-    margin-top: 24px;
-    padding-top: 10px;
-    border-top: 1px solid #e2e8f0;
-    display: flex;
-    justify-content: space-between;
-    font-size: 9pt;
-    color: #94a3b8;
-  }
-
-  /* 서명란 */
-  .sign-area {
-    display: flex;
-    justify-content: flex-end;
-    gap: 32px;
-    margin-top: 20px;
-  }
-  .sign-box {
-    text-align: center;
-    min-width: 100px;
-  }
-  .sign-box .role {
-    font-size: 9pt;
-    color: #64748b;
-    margin-bottom: 4px;
-  }
-  .sign-box .sign-line {
-    border-bottom: 1px solid #334155;
-    height: 40px;
-    display: flex;
-    align-items: flex-end;
-    justify-content: center;
-    padding-bottom: 2px;
-  }
-  .sign-box .sign-line img { max-height: 36px; }
-  .sign-box .sign-name {
-    font-size: 9pt;
-    margin-top: 2px;
-    color: #334155;
-  }
-
-  @media print {
-    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  }
-</style>
+<title>TBM 기록 — {{ company_name }}</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" rel="stylesheet">
+<link rel="stylesheet" href="_base.css">
 </head>
 <body>
 
+<!-- ═══ 헤더 ═══ -->
 <div class="doc-header">
-  <div>
+  <div class="doc-header-left">
+    <div class="doc-company">{{ company_name }}</div>
+    <div class="doc-facility">{{ factory_name }}{% if factory_address %} · {{ factory_address }}{% endif %}</div>
     <div class="doc-title">TBM(Tool Box Meeting) 기록</div>
-    <div class="doc-subtitle">산업안전보건법 제38조 | 자체보관 | DOC-OSH-056</div>
+    <div class="doc-law">{{ law_ref }} · {{ doc_number }}</div>
   </div>
-  <div class="doc-logo">
-    <div>TAI Safe</div>
-    <div>자동생성 문서</div>
+  <div class="doc-header-right">
+    {% if company_logo %}
+    <img class="logo" src="{{ company_logo }}" alt="{{ company_name }}">
+    {% endif %}
+    <div class="doc-code">{{ doc_id }}</div>
   </div>
 </div>
 
-<!-- 기본 정보 -->
+<!-- ═══ 1. 기본 정보 ═══ -->
 <table class="info-table">
-  <tr>
-    <th>사업장</th>
-    <td>{{ factory_name }}</td>
-    <th>작업일자</th>
-    <td>{{ work_date }}</td>
-  </tr>
-  <tr>
-    <th>작업장소</th>
-    <td>{{ work_location }}</td>
-    <th>진행자</th>
-    <td>{{ conductor_name }}</td>
-  </tr>
-  <tr>
-    <th>작업내용</th>
-    <td colspan="3">{{ work_description }}</td>
-  </tr>
-  <tr>
-    <th>참석인원</th>
-    <td>{{ attendee_count }}명</td>
-    <th>회의시간</th>
-    <td>{{ meeting_time }}</td>
-  </tr>
+  <tr><th>작업일자</th><td>{{ work_date }}</td><th>작업시간</th><td>{{ work_time }}</td></tr>
+  <tr><th>작업장소</th><td>{{ work_location }}</td><th>공종</th><td>{{ work_type }}</td></tr>
+  <tr><th>진행자</th><td>{{ conductor_name }}</td><th>참석인원</th><td>{{ attendee_count }}명</td></tr>
+  <tr><th>작업내용</th><td colspan="3">{{ work_description }}</td></tr>
 </table>
 
-<!-- 위험요인 -->
-<div class="section-title">위험요인 확인</div>
-<table class="item-table">
-  <thead>
-    <tr>
-      <th style="width:40px">No.</th>
-      <th>위험요인</th>
-      <th style="width:80px">위험등급</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for risk in risk_items %}
-    <tr>
-      <td class="center">{{ loop.index }}</td>
-      <td>{{ risk.description }}</td>
-      <td class="center"><span class="badge-risk">{{ risk.level | default('주의') }}</span></td>
-    </tr>
-    {% endfor %}
-    {% if not risk_items %}
-    <tr>
-      <td colspan="3" style="text-align:center; color:#94a3b8;">등록된 위험요인 없음</td>
-    </tr>
-    {% endif %}
-  </tbody>
-</table>
-
-<!-- 안전조치사항 -->
-<div class="section-title">안전조치사항</div>
-<table class="item-table">
-  <thead>
-    <tr>
-      <th style="width:40px">No.</th>
-      <th>안전조치 내용</th>
-      <th style="width:80px">확인</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for safe in safety_items %}
-    <tr>
-      <td class="center">{{ loop.index }}</td>
-      <td>{{ safe.description }}</td>
-      <td class="center"><span class="badge-safe">확인</span></td>
-    </tr>
-    {% endfor %}
-    {% if not safety_items %}
-    <tr>
-      <td colspan="3" style="text-align:center; color:#94a3b8;">등록된 안전조치 없음</td>
-    </tr>
-    {% endif %}
-  </tbody>
-</table>
-
-<!-- 참석자 서명 -->
-<div class="section-title">참석자 확인 (서명)</div>
-<div class="attendee-grid">
-  <!-- 헤더 -->
-  <div class="attendee-cell attendee-header">이름</div>
-  <div class="attendee-cell attendee-header">직종</div>
-  <div class="attendee-cell attendee-header">소속</div>
-  <div class="attendee-cell attendee-header">서명</div>
-  <div class="attendee-cell attendee-header">서명시간</div>
-  <!-- 참석자 데이터 -->
-  {% for att in attendees %}
-  <div class="attendee-cell"><span class="name">{{ att.name }}</span></div>
-  <div class="attendee-cell">{{ att.job_type | default('-') }}</div>
-  <div class="attendee-cell">{{ att.subcontractor_name | default(factory_name) }}</div>
-  <div class="attendee-cell sign">
-    {% if att.signature_url %}
-    <img src="{{ att.signature_url }}" alt="서명">
-    {% else %}
-    <span class="no-sign">(미서명)</span>
-    {% endif %}
-  </div>
-  <div class="attendee-cell">{{ att.signed_at | default('-') }}</div>
-  {% endfor %}
+<!-- ═══ 2. 기상 정보 ═══ -->
+{% if weather %}
+<div class="section-title">기상 정보</div>
+<div class="weather-row">
+  <div class="weather-item">날씨 <strong>{{ weather.condition }}</strong></div>
+  <div class="weather-item">기온 <strong>{{ weather.temperature }}℃</strong></div>
+  <div class="weather-item">풍속 <strong>{{ weather.wind_speed }}m/s</strong></div>
+  {% if weather.precipitation %}<div class="weather-item">강수량 <strong>{{ weather.precipitation }}mm</strong></div>{% endif %}
+  {% if weather.warning %}
+  <div class="weather-item" style="background:#fef2f2;border-color:#fca5a5;">⚠ <strong style="color:#dc2626;">{{ weather.warning }}</strong></div>
+  {% endif %}
 </div>
+{% endif %}
 
-<!-- 진행자 서명 -->
+<!-- ═══ 3. 위험요인 + 안전대책 ═══ -->
+<div class="section-title">위험요인 파악 및 안전대책</div>
+<table class="data-table">
+  <thead>
+    <tr><th style="width:26px">No</th><th>위험요인</th><th style="width:48px">등급</th><th>안전대책</th></tr>
+  </thead>
+  <tbody>
+    {% for item in risk_items %}
+    <tr>
+      <td class="num">{{ loop.index }}</td>
+      <td>{{ item.description }}</td>
+      <td class="c">
+        {% if item.level == '상' or item.level == '위험' %}<span class="b b-r">{{ item.level }}</span>
+        {% elif item.level == '중' or item.level == '주의' %}<span class="b b-w">{{ item.level }}</span>
+        {% else %}<span class="b b-i">{{ item.level }}</span>{% endif %}
+      </td>
+      <td>{{ item.countermeasure }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<!-- ═══ 4. 참석자 확인 ═══ -->
+<div class="section-title">참석자 확인</div>
+<table class="sign-table">
+  <thead>
+    <tr>
+      <th style="width:24px">No</th>
+      <th style="min-width:48px">이름</th>
+      <th style="min-width:64px">직종</th>
+      <th>소속</th>
+      <th style="width:50px">상태</th>
+      <th style="min-width:44px">서명</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for att in attendees %}
+    <tr{% if att.issue_flag %} class="issue-row"{% endif %}>
+      <td>{{ loop.index }}</td>
+      <td class="name-col">{{ att.name }}</td>
+      <td>{{ att.job_type }}</td>
+      <td>{{ att.subcontractor_name if att.subcontractor_name else company_name }}</td>
+      <td>
+        {% if att.issue_flag %}
+        <span class="b b-r">이상</span>
+        {% else %}
+        <span class="b b-g">정상</span>
+        {% endif %}
+      </td>
+      <td class="sign-col">
+        {% if att.signature_url %}
+        <img src="{{ att.signature_url }}" style="max-height:20px;">
+        {% elif att.signed_at %}
+        <span class="b b-i">완료</span>
+        {% else %}
+        <span class="b b-x">미서명</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% if att.issue_flag and att.issue_note %}
+    <tr class="issue-row">
+      <td></td>
+      <td colspan="5" style="font-size:8pt;text-align:left;padding-left:6px;">※ 이상 사유: {{ att.issue_note }}</td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+    {% for _ in empty_rows %}
+    <tr>
+      <td>{{ attendees|length + loop.index }}</td>
+      <td></td><td></td><td></td><td></td><td class="sign-col"></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if not has_issue %}
+<div style="font-size:8pt;color:#15803d;margin-top:4px;">※ 참석자 전원 보호구 착용 확인, 건강상태 이상 없음</div>
+{% endif %}
+
+<!-- ═══ 5. 전달사항 ═══ -->
+{% if previous_issues or today_notice %}
+<div class="section-title">전달사항</div>
+{% if previous_issues %}
+<div class="note-label">▸ 전일 작업 결과 및 문제점</div>
+<div class="note-box">{{ previous_issues }}</div>
+{% endif %}
+{% if today_notice %}
+<div class="note-label">▸ 당일 주의사항</div>
+<div class="note-box">{{ today_notice }}</div>
+{% endif %}
+{% endif %}
+
+<!-- ═══ 6. 진행자 확인 ═══ -->
 <div class="sign-area">
   <div class="sign-box">
     <div class="role">진행자</div>
-    <div class="sign-line">
-      {% if conductor_signature %}
-      <img src="{{ conductor_signature }}" alt="서명">
-      {% endif %}
-    </div>
-    <div class="sign-name">{{ conductor_name }}</div>
+    <div class="sign-line">{{ conductor_name }}</div>
   </div>
   <div class="sign-box">
     <div class="role">관리감독자</div>
-    <div class="sign-line"></div>
-    <div class="sign-name">{{ manager_name | default('') }}</div>
+    <div class="sign-line">{{ manager_name }}</div>
   </div>
 </div>
 
+<!-- ═══ 푸터 ═══ -->
 <div class="doc-footer">
-  <span>생성일: {{ generated_at }} | TAI Safe 자동생성</span>
-  <span>{{ factory_name }} — {{ work_date }}</span>
+  <span>{{ company_name }} · {{ factory_name }} · {{ work_date }}</span>
+  <span>Powered by TAI Safe</span>
 </div>
 
 </body>
