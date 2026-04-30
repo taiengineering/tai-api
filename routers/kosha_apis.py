@@ -131,7 +131,7 @@ async def debug_raw_safety_materials(page_no: int = Query(1), num_of_rows: int =
 async def debug_raw_const_acc(page_no: int = Query(1), num_of_rows: int = Query(2)):
     text, status = await _kosha_get_raw(
         "constDsstr01/getconstDsstr01",
-        {"callApiId": "1010", "pageNo": page_no, "numOfRows": num_of_rows}
+        {"callApiId": "1050", "pageNo": page_no, "numOfRows": num_of_rows}
     )
     return {"http_status": status, "raw": text[:3000]}
 
@@ -147,7 +147,7 @@ async def debug_raw_safety_light(page_no: int = Query(1), num_of_rows: int = Que
 async def debug_raw_accident(page_no: int = Query(1), num_of_rows: int = Query(2)):
     text, status = await _kosha_get_raw(
         "disaster_api02/getdisaster_api02",
-        {"callApiId": "국내재해사례 게시판 조회", "pageNo": page_no, "numOfRows": num_of_rows}
+        {"callApiId": "1040", "pageNo": page_no, "numOfRows": num_of_rows}
     )
     return {"http_status": status, "raw": text[:3000]}
 
@@ -175,7 +175,7 @@ async def accident_cases(
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
     params: dict = {
-        "callApiId": "국내재해사례 게시판 조회",
+        "callApiId": "1040",
         "pageNo": page_no, "numOfRows": num_of_rows,
     }
     if business: params["business"] = business
@@ -227,7 +227,7 @@ async def construction_accidents(
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
     params: dict = {
-        "callApiId": "1010",
+        "callApiId": "1050",
         "pageNo": page_no, "numOfRows": num_of_rows,
     }
     if year:  params["year"]  = year

@@ -205,7 +205,7 @@ async def _collect_accident_cases(since_date: str = INIT_DATE, full_refresh: boo
     since = INIT_DATE if full_refresh else since_date
     total_upserted = 0
     for page in range(1, MAX_PAGES + 1):
-        params = {"pageNo": page, "numOfRows": MAX_ROWS}
+        params = {"callApiId": "1040", "pageNo": page, "numOfRows": MAX_ROWS}
         resp  = await KoshaAPI.get("disaster_api02/getdisaster_api02", params)
         items = KoshaAPI.items(resp)
         if not items: break
@@ -277,7 +277,7 @@ async def _collect_construction_accidents(since_date: str = INIT_DATE, full_refr
     for page in range(1, MAX_PAGES + 1):
         resp  = await KoshaAPI.get(
             "constDsstr01/getconstDsstr01",
-            {"callApiId": "1010", "pageNo": page, "numOfRows": MAX_ROWS}
+            {"callApiId": "1050", "pageNo": page, "numOfRows": MAX_ROWS}
         )
         items = KoshaAPI.items(resp)
         if not items: break
