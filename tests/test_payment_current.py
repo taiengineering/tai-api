@@ -11,6 +11,7 @@ import os
 os.environ.setdefault("INTERNAL_API_SECRET", "pytest-internal-secret")
 
 import hashlib
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -42,14 +43,29 @@ def test_make_order_id_shape():
 
 
 def test_prepare_body_valid_minimal():
+    uid = "a50cf292-8607-4855-9b45-fcd15ad3148a"
     b = PrepareBody(
-        user_id="u1",
+        user_id=uid,
         product_type="DIAGNOSIS",
         amount=10000,
         goodname="테스트",
     )
-    assert b.user_id == "u1"
+    assert b.user_id == uid
     assert b.amount == 10000
+
+
+def test_prepare_body_non_uuid_user_id_becomes_uuid():
+    b = PrepareBody(
+        user_id="legacy-string-id",
+        product_type="DIAGNOSIS",
+        amount=10000,
+        goodname="테스트",
+    )
+    assert re.match(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        b.user_id,
+        re.I,
+    )
 
 
 def test_prepare_body_rejects_blank_user_id():
