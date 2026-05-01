@@ -2,6 +2,11 @@
 KOSHA 데이터 수집 — DB 저장 + 크론 갱신
 prefix: /kosha-collect
 
+v1.6.0 (2026-05-02):
+  [FIX] MAX_PAGES 100→500 (10,000건 한도 해제)
+  [ADD] _collect_safety_materials()에 start_page 파라미터 추가
+  [ADD] /run 엔드포인트에 start_page 쿼리 파라미터 추가 (이어받기 가능)
+
 v1.5.0 (2026-04-30):
   [ADD] _classify_material() — 제목 기반 자동 카테고리/업종 분류
   [ADD] _collect_safety_materials()에 수집 시 category/sector 자동 적용
@@ -29,7 +34,7 @@ def _get_service_key() -> str:
 
 BASE      = "https://apis.data.go.kr/B552468"
 MAX_ROWS  = 100
-MAX_PAGES = 100
+MAX_PAGES = 500   # v1.6.0: 100→500 (10,000건 한도 해제. 실 totalCount 기반으로 자동 중단됨)
 INIT_DATE = "2024-01-01"
 
 
@@ -234,11 +239,19 @@ async def _collect_accident_cases(since_date: str = INIT_DATE, full_refresh: boo
     return {"target": "accident_cases", "since": since, "upserted": total_upserted}
 
 
-async def _collect_safety_materials(since_date: str = INIT_DATE, full_refresh: bool = False) -> dict:
-    """v1.5.0: 수집 시 category/sector 자동 분류 적용"""
+async def _collect_safety_materials(
+    since_date: str = INIT_DATE,
+    full_refresh: bool = False,
+    start_page: int = 1,        # v1.6.0: 이어받기용 — 101부터 시작하면 기존 10,000건 건너뜀
+) -> dict:
+    """
+    v1.6.0: start_page 파라미터 추가 — 101 이상 지정 시 기존 수집분 건너뛰고 추가분만 수집.
+    v1.5.0: 수집 시 category/sector 자동 분류 적용.
+    UPSERT(on_conflict=id) 방식이라 중복 걱정 없음.
+    """
     sb = get_supabase()
     total_upserted = 0
-    for page in range(1, MAX_PAGES + 1):
+    for page in range(start_page, MAX_PAGES + 1):
         resp  = await KoshaAPI.get(
             "selectMediaList01/getselectMediaList01",
             {"callApiId": "1030", "pageNo": page, "numOfRows": MAX_ROWS}
@@ -267,7 +280,7 @@ async def _collect_safety_materials(since_date: str = INIT_DATE, full_refresh: b
             total_upserted += len(rows)
         if len(items) < MAX_ROWS: break
     _log("safety_materials", "success", total_upserted)
-    return {"target": "safety_materials", "upserted": total_upserted}
+    return {"target": "safety_materials", "start_page": start_page, "upserted": total_upserted}
 
 
 async def _collect_construction_accidents(since_date: str = INIT_DATE, full_refresh: bool = False) -> dict:
@@ -417,6 +430,7 @@ async def collect_all(
     since_date:   str  = Query(INIT_DATE),
     full_refresh: bool = Query(False),
     background:   bool = Query(False),
+    start_page:   int  = Query(1, ge=1, description="safety-materials 이어받기용 시작 페이지 (기본 1, 추가수집 시 101 지정)"),
 ):
     targets = [target] if target else [
         "accident-cases", "safety-materials", "construction-accidents",
@@ -427,20 +441,21 @@ async def collect_all(
         for t in targets:
             try:
                 since = since_date if full_refresh else _get_last_collected(t)
-                await _dispatch(t, since, full_refresh)
+                await _dispatch(t, since, full_refresh, start_page)
             except Exception as e:
                 _log(t, "fail", 0, str(e)[:300])
 
     if background:
         background_tasks.add_task(run_all)
         return {"status": "queued", "targets": targets,
-                "since_date": since_date, "full_refresh": full_refresh}
+                "since_date": since_date, "full_refresh": full_refresh,
+                "start_page": start_page}
 
     results = []
     for t in targets:
         try:
             since = since_date if full_refresh else _get_last_collected(t)
-            r = await _dispatch(t, since, full_refresh)
+            r = await _dispatch(t, since, full_refresh, start_page)
             results.append(r)
         except Exception as e:
             _log(t, "fail", 0, str(e)[:300])
@@ -448,9 +463,9 @@ async def collect_all(
     return {"status": "done", "results": results}
 
 
-async def _dispatch(target: str, since_date: str, full_refresh: bool):
+async def _dispatch(target: str, since_date: str, full_refresh: bool, start_page: int = 1):
     if target == "accident-cases":            return await _collect_accident_cases(since_date, full_refresh)
-    elif target == "safety-materials":        return await _collect_safety_materials(since_date, full_refresh)
+    elif target == "safety-materials":        return await _collect_safety_materials(since_date, full_refresh, start_page)
     elif target == "construction-accidents":  return await _collect_construction_accidents(since_date, full_refresh)
     elif target == "construction-safety-light": return await _collect_safety_light()
     elif target == "risk-assessment":         return await _collect_risk_assessment(since_date, full_refresh)
