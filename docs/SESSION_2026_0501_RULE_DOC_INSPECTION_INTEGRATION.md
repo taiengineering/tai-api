@@ -14,6 +14,7 @@
 - 정제 ≠ 운영 (다른 차원)
   - 정제 = 룰 신뢰도 (drafts.APPROVED)
   - 운영 = 사업장 적용 (공장이면 산안+소방+화학+가스 등)
+- **예외**: 외부 의뢰 워크플로우 통합을 위해 `document_forms.is_external_writer` 컬럼 추가 (5/1 결정)
 
 ---
 
@@ -32,7 +33,26 @@
 ### 사용자 기억 "1,900대"의 정체
 - `law_rule_drafts.status='APPROVED'` = 1,988 (정제 결과)
 - `master_building_legal_rules` 운영 = 2,012 (운영 룰)
-- 둘 다 정확
+
+---
+
+## document_forms 작성자 구분 (외부 의뢰 워크플로우)
+
+### 5/1 추가 정책
+- `document_forms.is_external_writer` 컬럼 추가 (boolean, default false)
+- 안전관리자 초과 등급(외부 검사기관/진단기관/지정기관) 작성 문서 표시
+- **목적**: SaaS에서 외부 의뢰 목록 워크플로우로 활용
+
+### 분류 결과
+| 구분 | 건수 | 의미 |
+|---|---|---|
+| `is_external_writer = false` | **235** | 사용자 직접 작성 (사업주/관리감독자/관리주체/안전관리자/시공자/수급인 등) |
+| `is_external_writer = true` | **25** | 외부 의뢰 (검사기관 8 / 건강진단기관 4 / 지정받으려는 자 3 / 한국가스안전공사·한국에너지공단 3 / 위험물·시도지사 검사 2 / 환경부·발주청 2 / 석면해체제거업자 3) |
+| 합계 | 260 | |
+
+### 혼합형 14건은 활성 유지 (사업장 작성 가능)
+- 사업주/건설사업자/관리주체가 작성 가능한 경우 모두 `is_external_writer = false`로 유지
+- 예: "사업주 또는 작업환경측정기관", "건설안전점검기관 또는 건설사업자", "관리주체 또는 정밀안전진단 실시기관"
 
 ---
 
@@ -58,15 +78,30 @@
 정확  alias  1,998   혼합   pending복귀
 ```
 
-### 매칭 로직 (3단계)
-1. `document_forms.required_fields[i].law_ref` 파싱
-2. **단일 표기**: parsed_law_name + parsed_article 매칭
-3. **혼합 표기**: "법령1 제N조, 법령2 제M조" 콤마 분리 + "시행규칙/시행령" 컨텍스트 보강
-4. law_alias로 약칭 변환 (산안법 → 산업안전보건법 등) + 공백 정규화
+---
 
-### law_alias 등록 (15건)
-- 기존: 산안법, 고압가스안전관리법, 승강기안전관리법 등 11건
-- 신규: 산안법 시행규칙, 산안법 시행령, 안전보건규칙, 시설물안전법 4건
+## v_engine_integration view 업데이트 (5/1)
+
+### 변경: is_external_writer 컬럼 노출
+- 기존 view에 `df.is_external_writer` 컬럼 추가 (끝 위치)
+- 외부 의뢰 vs 내부 작성 자동 추적 가능
+
+### 분포 (매핑된 110 문서 기준)
+| 구분 | row | 문서 | 점검 항목 |
+|---|---|---|---|
+| **내부 작성** (is_external_writer=false) | 963 | 101 | 510 |
+| **외부 의뢰** (is_external_writer=true) | 138 | 9 | 43 |
+| 합계 | 1,101 | 110 | 553 (중복 제외 416) |
+
+### inspection_master 변경 불필요 (derived data)
+- inspection_master는 document_forms.required_fields에서 derived
+- document_forms.is_external_writer 변경 시 view에서 자동 따라감
+- 점검 마스터 자체에 컬럼 추가 불필요 (동기화 부담 회피)
+
+### 활용 (서비스 운영 시)
+- **사용자 화면**: `WHERE is_external_writer = false` → 235개 문서 / 510개 점검
+- **외부 의뢰 화면**: `WHERE is_external_writer = true` → 25개 문서 / 외부 의뢰 워크플로우
+- 동일 view에서 두 워크플로우 자동 구분
 
 ---
 
@@ -76,8 +111,7 @@
 [4/7 5차 세션] 활성 룰 ~1,196건
   ↓ 4/22 KICKOFF — 새 법령엔진 시작
 [4/23 ATOMIC SWITCH] 182 laws / 60,636 records
-  - law_article: 10,974 / law_paragraph: 20,125 / law_item: 28,813
-  ↓ Claude Sonnet (auto_parse_parallel.py) 의무 추출
+  ↓ Claude Sonnet auto_parse_parallel.py 의무 추출
 law_rule_drafts 2,583
   ├ APPROVED 1,988 → master 등록 1,601
   ├ PENDING 542 / REJECTED 46 / NEEDS_REVIEW 6
@@ -99,33 +133,22 @@ master_building_legal_rules 운영 2,012
 
 ## 점검 시스템 통합 검증
 
-### v_engine_integration (룰→문서→점검 3중 매핑) ✅ 정상
-
-| 항목 | 값 |
-|---|---|
-| 총 row수 | 1,101 |
-| unique 운영 룰 | 107 |
-| unique 문서 | 110 |
-| unique 점검 항목 | 416 / 1,246 |
-| 룰당 평균 점검 | 10.3 |
-
-### inspection_master (1,246건)
-- document_forms.required_fields 기반 derived
-- master 변경과 독립적 → 변경 불필요
-- 매핑된 416개만 운영 룰과 연결 (33%)
-- 나머지 830개는 매핑 안 된 70% 문서의 점검 (서식 자체는 정상, 룰 추적만 안 됨)
+### 3중 매핑 정확한 상태
+| 매핑 | 상태 | 커버리지 |
+|---|---|---|
+| **B. 문서 ↔ 점검항목** | ✅ **100% 매핑** | 260/260 문서 모두 점검 보유 (1,246건) |
+| A. 의무 ↔ 문서 | ⚠️ 부분 | 110/260 (42.3%) |
+| C. 의무 ↔ 점검 | ⚠️ 부분 | 416/1,246 (33.4%) |
 
 ---
 
-## 매핑 한계 (남은 58% 미매핑)
-
-### 매핑 안 된 150 문서의 패턴
+## 매핑 한계 (남은 58% 미매핑) — 다음 세션 작업
 
 | 원인 | 건수 | 다음 세션 작업 |
 |---|---|---|
-| master에 없는 법령 (석면안전관리법, 화학물질등록평가법 시행규칙) | 8 | 추가 정제 필요 (큰 작업) |
+| master에 없는 법령 (석면안전관리법, 화학물질등록평가법 시행규칙) | 8 | 추가 정제 필요 |
 | 모호 표기 ("법", "시행규칙" 단독) | 11 | 컨텍스트 보강 |
-| 조문번호 없는 law_ref | 143 | 문서 데이터 보강 (GPT 작업 필요) |
+| 조문번호 없는 law_ref | 143 | 문서 데이터 보강 (GPT 작업) |
 
 ---
 
@@ -133,16 +156,17 @@ master_building_legal_rules 운영 2,012
 
 ### 즉시 진행 가능
 1. **부분 일치 48건 검토** (3월 잔재 중 3개키 16 + 2개키 32)
-2. **NFTC 321건 활용 방안 검토** — preserved에서 점검 마스터에 직접 사용 가능한지
+2. **NFTC 321건 활용 검토** — preserved에서 점검 마스터에 직접 사용 가능한지
 
 ### 큰 작업 (별도 세션)
 3. **master에 부족한 법령 추가 정제** (석면, 화학물질등록평가법 등)
 4. **document_forms.required_fields의 law_ref 보강** — 조문번호 없는 143건 (GPT 작업)
 5. **NULL 출처 738개 / AI_GENERATED 714개 추적** (pending_review)
 
-### 운영 전
+### 운영 시작 전
 6. inspection_set_items 사업장 인스턴스 시드
 7. safety_inspection_results 운영 시작
+8. 자동 문서 생성 파이프라인 가동 (외부 의뢰 워크플로우 포함)
 
 ---
 
@@ -152,14 +176,14 @@ master_building_legal_rules 운영 2,012
 master_building_legal_rules 운영 2,012
 ├─ A등급 (1,601): drafts.APPROVED 정제 거침 ✅
 ├─ A'등급 (397): 부처 API 직접 수집 (출처 신뢰)
-└─ A''등급 (14): pending에서 복귀 (산안법 핵심 의무, 의무 구체적)
+└─ A''등급 (14): pending에서 복귀 (산안법 핵심 의무)
 
 master_legal_rules_preserved 321
 └─ B등급: TECHNICAL_STANDARD (NFTC, 너무 세분화)
 
 master_legal_rules_pending_review 1,454
 ├─ C등급 (738): UNKNOWN_SOURCE
-└─ D등급 (714): AI_GENERATED
+└─ D등급 (716): AI_GENERATED
 
 master_legal_rules_archive 44
 └─ E등급: 폐기/대체됨
@@ -171,7 +195,7 @@ master_legal_rules_archive 44
 
 1. **임의해석 금지** — AI 의미 매칭 거부, 법령 텍스트 기반만
 2. **결정론적 매칭만** (4개 키: law_name + law_article + obligation_type + condition_code)
-3. **메인 테이블 깔끔 유지** — 컬럼 추가 금지, 별도 테이블 분리
+3. **메인 테이블 깔끔 유지** — 컬럼 추가 금지, 별도 테이블 분리 (5/1 예외: is_external_writer)
 4. **DELETE 대신 분리 보관** — 데이터 손실 방지
 5. **한 번에 하나씩만 진행** — 비개발자 사용자 결정 단순화
 6. **신뢰 추락 방지** — 잘못 매핑 시 모든 사용업체가 안 해도 될 의무 수행
@@ -180,89 +204,42 @@ master_legal_rules_archive 44
 
 ## 핵심 SQL (재실행용)
 
-### 전체 매핑 재구성 (단일 + 혼합)
+### v_engine_integration view 정의 (5/1 최종)
 ```sql
-DELETE FROM doc_rule_mapping;
+CREATE OR REPLACE VIEW v_engine_integration AS
+SELECT m.rule_id, m.law_name, m.law_article, m.obligation_type,
+    "left"(m.obligation_summary, 60) AS "의무요약",
+    drm.doc_id, df.doc_name, df.sector AS doc_sector,
+    im.id AS inspection_item_id, im.inspection_item, im.is_mandatory,
+    im.compliance_level, im.inspection_grade, im.source_field_key, im.field_group_key,
+    df.is_external_writer
+FROM master_building_legal_rules m
+  JOIN doc_rule_mapping drm ON drm.rule_id = m.rule_id
+  JOIN document_forms df ON df.doc_id = drm.doc_id
+  JOIN inspection_master im ON im.source_doc_id = df.doc_id
+WHERE m.is_active = true;
+```
 
--- 1단계: 단일 표기
-WITH law_ref_parsed AS (
-  SELECT df.doc_id, rf->>'field_key' as field_key, rf->>'field_name' as field_name,
-    rf->>'law_ref' as law_ref,
-    (regexp_match(rf->>'law_ref', '(제\d+조(?:의\d+)?)\s*$'))[1] as parsed_article,
-    trim(regexp_replace(rf->>'law_ref', '\s*제\d+조(?:의\d+)?\s*$', '')) as parsed_law_name
-  FROM document_forms df, jsonb_array_elements(df.required_fields) rf
-  WHERE rf->>'law_ref' IS NOT NULL AND rf->>'law_ref' != ''
-),
-law_ref_resolved AS (
-  SELECT lrp.doc_id, lrp.field_key, lrp.field_name, lrp.law_ref, lrp.parsed_article,
-    COALESCE(
-      (SELECT m.law_name FROM master_building_legal_rules m WHERE m.law_name = lrp.parsed_law_name LIMIT 1),
-      (SELECT la.full_name FROM law_alias la WHERE la.short_name = lrp.parsed_law_name LIMIT 1),
-      (SELECT m.law_name FROM master_building_legal_rules m 
-       WHERE replace(m.law_name, ' ', '') = replace(lrp.parsed_law_name, ' ', '') LIMIT 1)
-    ) as resolved_law_name
-  FROM law_ref_parsed lrp
-),
-matched AS (
-  SELECT lrr.doc_id, m.rule_id,
-    array_agg(DISTINCT lrr.law_ref) as source_law_refs,
-    array_agg(DISTINCT lrr.field_key) as source_field_keys,
-    array_agg(DISTINCT lrr.field_name) as source_field_names
-  FROM law_ref_resolved lrr
-  JOIN master_building_legal_rules m ON m.law_name = lrr.resolved_law_name AND m.law_article = lrr.parsed_article
-  WHERE lrr.resolved_law_name IS NOT NULL
-  GROUP BY lrr.doc_id, m.rule_id
-)
-INSERT INTO doc_rule_mapping (doc_id, rule_id, source_law_refs, source_field_keys, source_field_names,
-  matched_articles, match_method, confidence, reasoning, review_status)
-SELECT doc_id, rule_id, source_law_refs, source_field_keys, source_field_names, ARRAY[]::text[],
-  'LAW_REF_DIRECT_MATCH', 100, '단일 표기 매칭', 'PENDING'
-FROM matched ON CONFLICT (doc_id, rule_id) DO NOTHING;
+### document_forms.is_external_writer 분류 SQL
+```sql
+ALTER TABLE document_forms 
+  ADD COLUMN is_external_writer boolean DEFAULT false NOT NULL;
 
--- 2단계: 혼합 표기 (콤마 분리)
-WITH mixed_law_refs AS (
-  SELECT df.doc_id, rf->>'field_key' as field_key, rf->>'field_name' as field_name,
-    rf->>'law_ref' as original_law_ref,
-    trim(unnest(string_to_array(rf->>'law_ref', ','))) as part
-  FROM document_forms df, jsonb_array_elements(df.required_fields) rf
-  WHERE rf->>'law_ref' LIKE '%,%'
-),
-parsed_parts AS (
-  SELECT doc_id, field_key, field_name, original_law_ref, part,
-    (regexp_match(part, '(제\d+조(?:의\d+)?)\s*$'))[1] as part_article,
-    CASE WHEN trim(regexp_replace(part, '\s*제\d+조(?:의\d+)?\s*$', '')) IN ('시행규칙', '시행령') THEN
-      trim(regexp_replace((string_to_array(original_law_ref, ','))[1], '\s*제\d+조(?:의\d+)?\s*$', '')) || ' ' || 
-      trim(regexp_replace(part, '\s*제\d+조(?:의\d+)?\s*$', ''))
-    ELSE trim(regexp_replace(part, '\s*제\d+조(?:의\d+)?\s*$', ''))
-    END as part_law_name
-  FROM mixed_law_refs
-),
-mixed_resolved AS (
-  SELECT pp.doc_id, pp.field_key, pp.field_name, pp.original_law_ref, pp.part_article,
-    COALESCE(
-      (SELECT m.law_name FROM master_building_legal_rules m WHERE m.law_name = pp.part_law_name LIMIT 1),
-      (SELECT la.full_name FROM law_alias la WHERE la.short_name = pp.part_law_name LIMIT 1),
-      (SELECT m.law_name FROM master_building_legal_rules m 
-       WHERE replace(m.law_name, ' ', '') = replace(pp.part_law_name, ' ', '') LIMIT 1)
-    ) as resolved_law_name
-  FROM parsed_parts pp
-  WHERE pp.part_article IS NOT NULL
-),
-mixed_matched AS (
-  SELECT r.doc_id, m.rule_id,
-    array_agg(DISTINCT r.original_law_ref) as source_law_refs,
-    array_agg(DISTINCT r.field_key) as source_field_keys,
-    array_agg(DISTINCT r.field_name) as source_field_names
-  FROM mixed_resolved r
-  JOIN master_building_legal_rules m ON m.law_name = r.resolved_law_name AND m.law_article = r.part_article
-  WHERE r.resolved_law_name IS NOT NULL
-  GROUP BY r.doc_id, m.rule_id
-)
-INSERT INTO doc_rule_mapping (doc_id, rule_id, source_law_refs, source_field_keys, source_field_names,
-  matched_articles, match_method, confidence, reasoning, review_status)
-SELECT doc_id, rule_id, source_law_refs, source_field_keys, source_field_names, ARRAY[]::text[],
-  'LAW_REF_DIRECT_MATCH', 100, '혼합 표기 분리 매칭', 'PENDING'
-FROM mixed_matched ON CONFLICT (doc_id, rule_id) DO NOTHING;
+UPDATE document_forms 
+SET is_external_writer = true 
+WHERE writer IN (
+  '검사기관', '건강진단기관', '한국가스안전공사',
+  '시도지사 또는 검사기관', '검사기관 또는 한국가스안전공사',
+  '한국에너지공단 또는 검사기관',
+  '보건관리전문기관으로 지정받으려는 자',
+  '안전관리전문기관 지정을 받으려는 자',
+  '재해예방 전문지도기관으로 지정받으려는 자',
+  '환경부장관 또는 관계 행정기관',
+  '발주청 또는 인허가기관의 장',
+  '위험물 검사기관',
+  '석면해체제거업자',
+  '석면해체제거업자 또는 석면농도측정기관'
+);
 ```
 
 ### 데이터 분리 테이블 구조
@@ -276,5 +253,5 @@ FROM mixed_matched ON CONFLICT (doc_id, rule_id) DO NOTHING;
 
 **작성일**: 2026-05-01  
 **최종 매핑**: 227건 (42.3% 문서 커버리지) — 100% 결정론적  
-**시스템 정합성**: ✅ v_engine_integration 정상 작동  
+**시스템 정합성**: ✅ v_engine_integration 정상 작동 (is_external_writer 자동 추적)  
 **다음 세션**: 부분 일치 48건 검토 또는 추가 법령 정제
