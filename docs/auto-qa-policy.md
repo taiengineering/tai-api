@@ -22,7 +22,7 @@
 
 | 사이트 | URL | 비고 |
 |--------|-----|------|
-| 마케팅 사이트 | new.taieng.co.kr | Nexas 템플릿, Cloudflare Pages |
+| 마케팅 사이트 | taieng.co.kr | Nexas 템플릿, Cloudflare Pages |
 | Safe 앱 | safe.taieng.co.kr | 작업자/안전관리자 인터페이스 |
 | Backend API | api.taieng.co.kr | Railway, FastAPI |
 | Admin | admin.taieng.co.kr | 슈퍼어드민 전용 |
@@ -109,7 +109,7 @@
 
 ---
 
-## 4. 마케팅 사이트 체크리스트 (new.taieng.co.kr)
+## 4. 마케팅 사이트 체크리스트 (taieng.co.kr)
 
 ### 4-1. 페이지 로딩 (P0)
 
