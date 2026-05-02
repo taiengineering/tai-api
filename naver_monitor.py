@@ -243,10 +243,8 @@ def generate_draft(prompt: str, api_key: str) -> str | None:
         text = (parts[0].get("text") or "").strip() if parts else ""
         if not text:
             return None
-        # 마감 문구 보장
-        closing = DIAGNOSIS_LINE
-        if closing not in text:
-            text = text.rstrip() + "\n\n" + closing
+        if DIAGNOSIS_LINE not in text:
+            text = text.rstrip() + "\n\n" + DIAGNOSIS_LINE
         return text
     except Exception as e:
         logging.exception("Gemini 초안 생성 실패: %s", e)
@@ -281,7 +279,7 @@ def insert_log(sb: Any, row: dict[str, Any]) -> tuple[bool, str | None]:
 def send_slack(token: str, channel: str, items: list[dict], dashboard: str) -> None:
     lines = [f"🔍 네이버 지식인 신규 *{len(items)}건* 수집 완료", ""]
     for i, it in enumerate(items[:5], 1):
-        lines += [f"*{i}. {it.get('title','(제목없음)')}*", it.get("link",""),
+        lines += [f"*{i}. {it.get('title','(제목없음)')}*", it.get("link", ""),
                   f"> {(it.get('draft_preview') or '')[:200]}", ""]
     lines.append(f"Supabase: {dashboard}")
     try:
@@ -304,7 +302,7 @@ def main() -> None:
     naver_id     = _require_env("NAVER_CLIENT_ID")
     naver_secret = _require_env("NAVER_CLIENT_SECRET")
     sb_url       = _require_env("SUPABASE_URL")
-    sb_key       = _require_env("SUPABASE_SERVICE_ROLE_KEY")
+    sb_key       = _require_env("SUPABASE_SERVICE_KEY")   # ← Railway 환경변수명
     gemini_key   = _require_env("GEMINI_API_KEY")
 
     sb     = create_client(sb_url, sb_key)
@@ -353,7 +351,6 @@ def main() -> None:
                 logging.warning("법령 조회 예외 — 빈 근거로 진행: %s", e)
                 law_data = {"rules": [], "revisions": [], "precedents": []}
 
-            # ── Gemini 초안 (DB 프롬프트 반영) ──
             prompt = build_prompt(title, desc, law_data, prompt_cfg)
             draft  = generate_draft(prompt, gemini_key)
 
