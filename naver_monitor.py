@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """
-네이버 지식iN 모니터링 v3.3
-- TEST_MODE=1 : 키워드 1개, 항목 1건만 처리
-- pubDate 기준 24시간 이내 항목만 처리
-- penalty_summary 컬럼 사용
-- Gemini 429 재시도 (최대 3회)
-- kin_keyword_sets / kin_prompt_settings DB 동적 로드
+네이버 지식iN 모니터링 v4.0
+
+[두 단계 분리 실행]
+  STEP=collect  : 네이버 질문 수집 → DB 저장 (draft_answer 없이)
+  STEP=generate : DB 미처리 건 → Gemini 초안 생성 → 슬랙 전송
+  STEP 미설정   : collect → generate 순서로 전체 실행
+
+[스케줄 예시]
+  크론 09:00 → STEP=collect  (수집)
+  크론 09:10 → STEP=generate (생성 + 슬랙)
 """
 
 from __future__ import annotations
@@ -24,17 +28,17 @@ from typing import Any
 import requests
 from supabase import create_client
 
-# --- 기본값 ---
+# ── 기본값 ──
 NAVER_KIN_API    = "https://openapi.naver.com/v1/search/kin.json"
 GEMINI_API       = "https://generativelanguage.googleapis.com/v1beta/models"
 SLACK_POST_URL   = "https://slack.com/api/chat.postMessage"
 DIAGNOSIS_LINE   = "3분 무료 진단: https://taieng.co.kr/free-diagnosis.html"
 DEFAULT_KEYWORDS = "안전관리자 선임,중대재해처벌법,산업안전보건법 과태료,안전보건관리체계"
 
-HOURS_LIMIT       = 24
-GEMINI_DELAY_SEC  = 2.0
-GEMINI_RETRY_MAX  = 3
-GEMINI_RETRY_WAIT = 15.0
+HOURS_LIMIT      = 24    # 수집 기준: N시간 이내 질문만
+GEMINI_DELAY_SEC = 2.0   # Gemini 호출 간 딜레이
+GEMINI_RETRY_MAX = 3     # 429 재시도 최대 횟수
+GEMINI_RETRY_WAIT= 15.0  # 429 대기(초)
 
 DEFAULT_FORBIDDEN = """법률 상담, 법률 자문, 법적 조언, 변호사 등 법률 서비스를 암시하는 표현 금지
 DB에 없는 법령 조문·판례 번호를 임의로 만들어내기 금지
@@ -52,7 +56,9 @@ logging.basicConfig(
 )
 
 
-# ════════════════ 유틸 ════════════════
+# ════════════════════════════════════════
+#  유틸
+# ════════════════════════════════════════
 
 def _strip_tags(text: str) -> str:
     if not text:
@@ -70,12 +76,12 @@ def _require_env(name: str) -> str:
     return v
 
 
-def _is_test_mode() -> bool:
-    return os.environ.get("TEST_MODE", "").strip() == "1"
-
-
 def _gemini_model() -> str:
     return os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+
+
+def _test_mode() -> bool:
+    return os.environ.get("TEST_MODE", "").strip() == "1"
 
 
 def supabase_dashboard_link(supabase_url: str) -> str:
@@ -95,24 +101,25 @@ def is_within_hours(pub_date_str: str, hours: int = HOURS_LIMIT) -> bool:
         pub_dt = parsedate_to_datetime(pub_date_str)
         if pub_dt.tzinfo is None:
             pub_dt = pub_dt.replace(tzinfo=timezone.utc)
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-        return pub_dt >= cutoff
+        return pub_dt >= datetime.now(timezone.utc) - timedelta(hours=hours)
     except Exception as e:
         logging.warning("pubDate 파싱 실패(%s) — 통과 처리: %s", pub_date_str, e)
         return True
 
 
-# ════════════════ DB 설정 로드 ════════════════
+# ════════════════════════════════════════
+#  DB 설정 로드
+# ════════════════════════════════════════
 
 def load_active_keywords(sb: Any) -> list[str]:
     try:
         r = sb.table("kin_keyword_sets").select("keywords").eq("is_active", True).limit(1).execute()
         if r.data and r.data[0].get("keywords"):
             kws = r.data[0]["keywords"]
-            logging.info("DB 키워드 세트 로드: %s", kws)
+            logging.info("DB 키워드 세트: %s", kws)
             return kws
     except Exception as e:
-        logging.warning("kin_keyword_sets 조회 실패 — 환경변수 fallback: %s", e)
+        logging.warning("kin_keyword_sets 조회 실패 — fallback: %s", e)
     raw = os.environ.get("NAVER_KIN_KEYWORDS", "").strip() or DEFAULT_KEYWORDS
     return [k.strip() for k in raw.split(",") if k.strip()]
 
@@ -121,14 +128,16 @@ def load_active_prompt(sb: Any) -> dict:
     try:
         r = sb.table("kin_prompt_settings").select("*").eq("is_active", True).limit(1).execute()
         if r.data:
-            logging.info("DB 프롬프트 로드: %s", r.data[0].get("name"))
+            logging.info("DB 프롬프트: %s", r.data[0].get("name"))
             return r.data[0]
     except Exception as e:
         logging.warning("kin_prompt_settings 조회 실패 — 기본값 사용: %s", e)
     return {}
 
 
-# ════════════════ 네이버 지식iN ════════════════
+# ════════════════════════════════════════
+#  STEP 1 : 수집 (collect)
+# ════════════════════════════════════════
 
 def fetch_kin(keyword: str, client_id: str, client_secret: str, display: int = 30) -> list[dict]:
     r = requests.get(
@@ -141,52 +150,125 @@ def fetch_kin(keyword: str, client_id: str, client_secret: str, display: int = 3
     return r.json().get("items") or []
 
 
-# ════════════════ Supabase 법령 조회 ════════════════
+def row_exists(sb: Any, question_link: str) -> bool:
+    try:
+        r = sb.table("naver_kin_log").select("id").eq("question_link", question_link).limit(1).execute()
+        return bool(r.data)
+    except Exception as e:
+        logging.warning("중복 조회 실패: %s", e)
+        return False
+
+
+def step_collect(sb: Any, naver_id: str, naver_secret: str, test: bool = False) -> dict:
+    """
+    네이버 질문 수집 → DB 저장 (draft_answer=None, status=DRAFT)
+    Gemini 호출 없음.
+    """
+    keywords = load_active_keywords(sb)
+    if test:
+        keywords = keywords[:1]
+
+    run_at = datetime.now(timezone.utc).isoformat()
+    stats  = {"keywords": keywords, "api_items": 0, "skipped_old": 0,
+               "skipped_duplicate": 0, "inserted": 0, "insert_errors": 0}
+
+    for kw in keywords:
+        try:
+            items = fetch_kin(kw, naver_id, naver_secret, display=5 if test else 30)
+        except Exception as e:
+            logging.exception("[네이버 API] %s: %s", kw, e)
+            continue
+
+        logging.info("[collect] [%s] %d건 조회", kw, len(items))
+        saved = 0
+
+        for item in items:
+            if test and saved >= 1:
+                break
+
+            stats["api_items"] += 1
+            link = (item.get("link") or "").strip()
+            if not link:
+                continue
+
+            if not is_within_hours(item.get("pubDate", ""), HOURS_LIMIT):
+                stats["skipped_old"] += 1
+                continue
+
+            if row_exists(sb, link):
+                stats["skipped_duplicate"] += 1
+                continue
+
+            title = _strip_tags(item.get("title") or "")
+            desc  = _strip_tags(item.get("description") or "")
+
+            row = {
+                "question_link":        link,
+                "question_title":       title[:2000] or None,
+                "question_description": desc[:8000] or None,
+                "search_keyword":       kw,
+                "sort_mode":            "date",
+                "raw_item":             item,
+                "run_at":               run_at,
+                "status":               "DRAFT",
+                # draft_answer 없이 저장
+            }
+
+            try:
+                sb.table("naver_kin_log").insert(row).execute()
+                stats["inserted"] += 1
+                saved += 1
+                logging.info("✅ [collect] 저장: %s", title[:60])
+            except Exception as e:
+                msg = str(e).lower()
+                if "duplicate" in msg or "unique" in msg or "23505" in msg:
+                    stats["skipped_duplicate"] += 1
+                else:
+                    stats["insert_errors"] += 1
+                    logging.error("insert 실패: %s", e)
+
+    logging.info("[collect] 완료: %s", stats)
+    return stats
+
+
+# ════════════════════════════════════════
+#  STEP 2 : 생성 (generate)
+# ════════════════════════════════════════
 
 def search_law_data(sb: Any, keyword: str) -> dict[str, list]:
     out: dict[str, list] = {"rules": [], "revisions": [], "precedents": []}
-
     try:
         out["rules"] = (
             sb.table("master_building_legal_rules")
             .select("law_name, obligation_summary, obligation_type, penalty_summary")
             .ilike("obligation_summary", f"%{keyword}%")
-            .eq("is_active", True)
-            .limit(5)
-            .execute()
+            .eq("is_active", True).limit(5).execute()
         ).data or []
     except Exception as e:
-        logging.warning("master_building_legal_rules 조회 실패: %s", e)
+        logging.warning("rules 조회 실패: %s", e)
 
     try:
         out["revisions"] = (
             sb.table("law_revision_board")
             .select("law_name, title, summary, enforcement_date")
             .or_(f"title.ilike.%{keyword}%,summary.ilike.%{keyword}%")
-            .eq("is_public", True)
-            .order("enforcement_date", desc=True)
-            .limit(3)
-            .execute()
+            .eq("is_public", True).order("enforcement_date", desc=True).limit(3).execute()
         ).data or []
     except Exception as e:
-        logging.warning("law_revision_board 조회 실패: %s", e)
+        logging.warning("revisions 조회 실패: %s", e)
 
     try:
         out["precedents"] = (
             sb.table("industrial_accident_precedents")
             .select("case_name, summary, sentence_detail, fine_amount")
             .contains("keywords", [keyword])
-            .eq("is_active", True)
-            .limit(3)
-            .execute()
+            .eq("is_active", True).limit(3).execute()
         ).data or []
     except Exception as e:
-        logging.warning("industrial_accident_precedents 조회 실패: %s", e)
+        logging.warning("precedents 조회 실패: %s", e)
 
     return out
 
-
-# ════════════════ Gemini 초안 생성 ════════════════
 
 def build_prompt(title: str, desc: str, law_data: dict, prompt_cfg: dict) -> str:
     forbidden = (prompt_cfg.get("forbidden")          or DEFAULT_FORBIDDEN).strip()
@@ -239,10 +321,9 @@ def build_prompt(title: str, desc: str, law_data: dict, prompt_cfg: dict) -> str
 """
 
 
-def generate_draft(prompt: str, api_key: str) -> str | None:
+def call_gemini(prompt: str, api_key: str) -> str | None:
     model = _gemini_model()
     url   = f"{GEMINI_API}/{model}:generateContent"
-
     for attempt in range(1, GEMINI_RETRY_MAX + 1):
         try:
             time.sleep(GEMINI_DELAY_SEC)
@@ -269,7 +350,7 @@ def generate_draft(prompt: str, api_key: str) -> str | None:
             return text
         except requests.exceptions.HTTPError as e:
             if attempt == GEMINI_RETRY_MAX:
-                logging.error("Gemini 최종 실패 (%d회 시도): %s", attempt, e)
+                logging.error("Gemini 최종 실패: %s", e)
                 return None
         except Exception as e:
             logging.exception("Gemini 예외: %s", e)
@@ -277,59 +358,117 @@ def generate_draft(prompt: str, api_key: str) -> str | None:
     return None
 
 
-# ════════════════ Supabase INSERT ════════════════
-
-def row_exists(sb: Any, question_link: str) -> bool:
-    try:
-        r = sb.table("naver_kin_log").select("id").eq("question_link", question_link).limit(1).execute()
-        return bool(r.data)
-    except Exception as e:
-        logging.warning("중복 조회 실패(계속 진행): %s", e)
-        return False
-
-
-def insert_log(sb: Any, row: dict[str, Any]) -> tuple[bool, str | None]:
-    try:
-        sb.table("naver_kin_log").insert(row).execute()
-        return True, None
-    except Exception as e:
-        msg = str(e).lower()
-        if "duplicate" in msg or "unique" in msg or "23505" in msg:
-            return False, None
-        logging.exception("naver_kin_log insert 실패: %s", e)
-        return False, str(e)
-
-
-# ════════════════ Slack ════════════════
-
-def send_slack(token: str, channel: str, items: list[dict], dashboard: str, test: bool = False) -> None:
-    prefix = "🧪 *[테스트]* " if test else ""
-    lines  = [f"{prefix}🔍 네이버 지식인 신규 *{len(items)}건* 수집 완료 (최근 {HOURS_LIMIT}시간)", ""]
-    for i, it in enumerate(items[:5], 1):
-        lines += [
-            f"*{i}. {it.get('title','(제목없음)')}*",
-            it.get("link", ""),
-            f"> {(it.get('draft_preview') or '')[:200]}",
-            "",
-        ]
-    lines.append(f"📊 Supabase: {dashboard}")
+def send_slack(token: str, channel: str, row: dict, dashboard: str) -> None:
+    """1건 처리 완료 시 즉시 슬랙 전송."""
+    title   = row.get("question_title") or "(제목없음)"
+    link    = row.get("question_link") or ""
+    draft   = (row.get("draft_answer") or "")[:300]
+    keyword = row.get("search_keyword") or ""
+    text = (
+        f"🔔 *네이버 지식인 초안 생성 완료*\n\n"
+        f"*질문:* {title}\n"
+        f"*키워드:* `{keyword}`\n"
+        f"{link}\n\n"
+        f"> {draft}\n\n"
+        f"📊 {dashboard}"
+    )
     try:
         r = requests.post(
             SLACK_POST_URL,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"},
-            json={"channel": channel, "text": "\n".join(lines)},
+            json={"channel": channel, "text": text},
             timeout=30,
         )
         body = r.json()
         if not body.get("ok"):
-            logging.error("Slack API 오류: %s", body)
+            logging.error("Slack 오류: %s", body)
         else:
-            logging.info("Slack 전송 완료")
+            logging.info("✉️  Slack 전송 완료: %s", title[:40])
     except Exception as e:
         logging.exception("Slack 전송 실패: %s", e)
 
 
-# ════════════════ 메인 ════════════════
+def step_generate(sb: Any, gemini_key: str, dashboard: str, test: bool = False) -> dict:
+    """
+    DB에서 draft_answer가 없는 DRAFT 건을 한 건씩 처리.
+    Gemini 초안 생성 → DB 업데이트 → 슬랙 즉시 전송.
+    """
+    prompt_cfg = load_active_prompt(sb)
+
+    # draft_answer가 NULL인 DRAFT 건 조회
+    limit = 1 if test else 100
+    try:
+        r = (
+            sb.table("naver_kin_log")
+            .select("*")
+            .eq("status", "DRAFT")
+            .is_("draft_answer", "null")
+            .order("created_at", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        pending = r.data or []
+    except Exception as e:
+        logging.error("미처리 건 조회 실패: %s", e)
+        return {"error": str(e)}
+
+    logging.info("[generate] 미처리 %d건 처리 시작", len(pending))
+    stats = {"pending": len(pending), "generated": 0, "failed": 0, "slack_sent": 0}
+
+    slack_ok = slack_env_ready()
+    token    = os.environ.get("SLACK_BOT_TOKEN", "").strip()
+    channel  = os.environ.get("SLACK_CHANNEL_ID", "").strip()
+
+    for row in pending:
+        row_id   = row["id"]
+        title    = row.get("question_title") or ""
+        desc     = row.get("question_description") or ""
+        keyword  = row.get("search_keyword") or ""
+
+        logging.info("[generate] 처리 중: %s", title[:60])
+
+        # 법령 DB 조회
+        try:
+            law_data = search_law_data(sb, keyword)
+        except Exception as e:
+            logging.warning("법령 조회 실패: %s", e)
+            law_data = {"rules": [], "revisions": [], "precedents": []}
+
+        # Gemini 초안 생성
+        prompt = build_prompt(title, desc, law_data, prompt_cfg)
+        draft  = call_gemini(prompt, gemini_key)
+
+        if not draft:
+            stats["failed"] += 1
+            logging.warning("Gemini 실패 — 건너뜀: %s", title[:40])
+            continue
+
+        # DB 업데이트
+        try:
+            sb.table("naver_kin_log").update({
+                "draft_answer": draft,
+                "matched_rules": law_data,
+            }).eq("id", row_id).execute()
+            stats["generated"] += 1
+            logging.info("✅ [generate] 초안 저장: %s", title[:60])
+        except Exception as e:
+            logging.error("draft_answer 업데이트 실패: %s", e)
+            stats["failed"] += 1
+            continue
+
+        # 슬랙 즉시 전송
+        if slack_ok:
+            row["draft_answer"] = draft  # 전송용으로 갱신
+            send_slack(token, channel, row, dashboard)
+            stats["slack_sent"] += 1
+
+    logging.info("[generate] 완료: %s", stats)
+    return stats
+
+
+# ════════════════════════════════════════
+#  메인
+# ════════════════════════════════════════
 
 def main() -> None:
     naver_id     = _require_env("NAVER_CLIENT_ID")
@@ -338,122 +477,29 @@ def main() -> None:
     sb_key       = _require_env("SUPABASE_SERVICE_KEY")
     gemini_key   = _require_env("GEMINI_API_KEY")
 
-    test_mode = _is_test_mode()
-
-    sb     = create_client(sb_url, sb_key)
-    run_at = datetime.now(timezone.utc).isoformat()
-
-    keywords   = load_active_keywords(sb)
-    prompt_cfg = load_active_prompt(sb)
-
-    # ── TEST_MODE: 키워드 1개만 ──
-    if test_mode:
-        keywords = keywords[:1]
-        logging.info("🧪 TEST MODE — 키워드 1개, 항목 1건만 처리")
-
-    logging.info("실행 키워드 %d개: %s", len(keywords), keywords)
-    logging.info("프롬프트: %s", prompt_cfg.get("name", "기본값(DB 없음)"))
-    logging.info("수집 기준: 최근 %d시간 이내 등록 질문", HOURS_LIMIT)
-
-    new_for_slack: list[dict] = []
-    stats = {
-        "test_mode":          test_mode,
-        "keywords":           keywords,
-        "api_items":          0,
-        "skipped_old":        0,
-        "skipped_duplicate":  0,
-        "skipped_gemini":     0,
-        "inserted":           0,
-        "insert_errors":      0,
-    }
-
-    for kw in keywords:
-        try:
-            # TEST_MODE면 API에서 5건만 가져옴
-            display = 5 if test_mode else 30
-            items   = fetch_kin(kw, naver_id, naver_secret, display=display)
-        except Exception as e:
-            logging.exception("[네이버 API] keyword=%s: %s", kw, e)
-            continue
-
-        logging.info("[%s] API 수집 %d건", kw, len(items))
-
-        processed = 0  # TEST_MODE 1건 카운터
-
-        for idx, item in enumerate(items):
-            # TEST_MODE: 1건 성공 후 종료
-            if test_mode and processed >= 1:
-                break
-
-            stats["api_items"] += 1
-            link = (item.get("link") or "").strip()
-            if not link:
-                continue
-
-            pub_date = item.get("pubDate", "")
-            if not is_within_hours(pub_date, HOURS_LIMIT):
-                stats["skipped_old"] += 1
-                continue
-
-            if row_exists(sb, link):
-                stats["skipped_duplicate"] += 1
-                continue
-
-            title = _strip_tags(item.get("title") or "")
-            desc  = _strip_tags(item.get("description") or "")
-
-            try:
-                law_data = search_law_data(sb, kw)
-            except Exception as e:
-                logging.warning("법령 조회 예외: %s", e)
-                law_data = {"rules": [], "revisions": [], "precedents": []}
-
-            prompt = build_prompt(title, desc, law_data, prompt_cfg)
-            draft  = generate_draft(prompt, gemini_key)
-
-            if not draft:
-                stats["skipped_gemini"] += 1
-                continue
-
-            row = {
-                "question_link":        link,
-                "question_title":       title[:2000] or None,
-                "question_description": desc[:8000] or None,
-                "search_keyword":       kw,
-                "sort_mode":            "date",
-                "item_index":           idx,
-                "raw_item":             item,
-                "draft_answer":         draft,
-                "matched_rules":        law_data,
-                "run_at":               run_at,
-                "status":               "DRAFT",
-            }
-
-            inserted, err = insert_log(sb, row)
-            if inserted:
-                stats["inserted"] += 1
-                processed += 1
-                logging.info("✅ 저장: %s", title[:60])
-                new_for_slack.append({"title": title, "link": link, "draft_preview": draft})
-            elif err:
-                stats["insert_errors"] += 1
-            else:
-                stats["skipped_duplicate"] += 1
-                processed += 1  # 중복도 1건으로 카운트 (무한루프 방지)
-
+    sb        = create_client(sb_url, sb_key)
+    step      = os.environ.get("STEP", "").strip().lower()   # collect / generate / (비어있으면 전체)
+    test      = _test_mode()
     dashboard = supabase_dashboard_link(sb_url)
-    if slack_env_ready() and new_for_slack:
-        send_slack(
-            os.environ["SLACK_BOT_TOKEN"].strip(),
-            os.environ["SLACK_CHANNEL_ID"].strip(),
-            new_for_slack, dashboard,
-            test=test_mode,
-        )
-    elif not slack_env_ready():
-        logging.info("Slack 환경변수 미설정 — 알림 생략")
+    run_at    = datetime.now(timezone.utc).isoformat()
 
-    logging.info("완료: %s", stats)
-    print(json.dumps({"ok": True, "run_at": run_at, **stats}, ensure_ascii=False))
+    if test:
+        logging.info("🧪 TEST MODE 활성화")
+
+    result: dict = {"ok": True, "run_at": run_at, "step": step or "all"}
+
+    if step == "collect":
+        result["collect"] = step_collect(sb, naver_id, naver_secret, test=test)
+
+    elif step == "generate":
+        result["generate"] = step_generate(sb, gemini_key, dashboard, test=test)
+
+    else:
+        # STEP 미설정 → 수집 후 바로 생성
+        result["collect"]  = step_collect(sb, naver_id, naver_secret, test=test)
+        result["generate"] = step_generate(sb, gemini_key, dashboard, test=test)
+
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
