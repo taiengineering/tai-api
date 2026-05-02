@@ -1,4 +1,5 @@
-# routers/law_collector.py v3.0.4
+# routers/law_collector.py v3.0.5
+# v3.0.5: type 파라미터 제거 (data.go.kr 공식 cURL 샘플 검증 — type 미사용)
 # v3.0.4: target=law 필수 파라미터 추가 (data.go.kr 공식 스펙 검증)
 # v3.0.3: pageIndex → pageNo (data.go.kr 공공데이터포털 표준 파라미터명)
 # v3.0.2: DATA_GO_KR_SERVICE_KEY 환경변수 호환 추가 (Railway 변수명)
@@ -288,10 +289,10 @@ def delete_law_version_cascade_for_recollect(supabase: Any, version_id: str) -> 
 def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
     if DATA_GOV_KEY:
         url = f"{DATA_GOV_BASE}/lawSearchList.do"
-        # v3.0.4: data.go.kr 공식 스펙 5개 필수 파라미터
+        # v3.0.5: 공식 cURL 샘플 정확 매칭 (type 미사용)
         # serviceKey, target=law (고정값), query, numOfRows, pageNo
         params = {"serviceKey": DATA_GOV_KEY, "target": "law", "query": query,
-                  "numOfRows": display, "pageNo": page, "type": "xml"}
+                  "numOfRows": display, "pageNo": page}
         resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=30)
         resp.encoding = "utf-8"
         return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "data.go.kr"}
@@ -307,8 +308,9 @@ def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
 def fetch_law_content(mst_no: str) -> dict:
     if DATA_GOV_KEY:
         url = f"{DATA_GOV_BASE}/lawService.do"
-        # v3.0.4: target 추가 (lawService.do 스펙 별도 검증 필요)
-        params = {"serviceKey": DATA_GOV_KEY, "target": "law", "MST": mst_no, "type": "xml"}
+        # v3.0.5: type 제거. 단 lawService.do는 다른 데이터셋 (15057358 LINK형 — OC 인증)일 수 있어
+        # 현재 data.go.kr 키로는 동작 안 할 가능성 — Step F에서 별도 검증 필요
+        params = {"serviceKey": DATA_GOV_KEY, "target": "law", "MST": mst_no}
         resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=60)
         resp.encoding = "utf-8"
         return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "data.go.kr"}
@@ -805,7 +807,7 @@ async def get_collection_status():
         .select("law_id, job_message, updated_at").eq("job_status_code", "FAILED")\
         .order("updated_at", desc=True).limit(10).execute()
     return {
-        "version":             "3.0.4",
+        "version":             "3.0.5",
         "api_source":          "data.go.kr" if DATA_GOV_KEY else "law.go.kr (폴백)",
         "has_api_key":         bool(DATA_GOV_KEY),
         "collected_law_count": total.count,
