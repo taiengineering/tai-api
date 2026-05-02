@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-네이버 지식iN 모니터링 v4.1
+네이버 지식iN 모니터링 v4.2
 
 [두 단계 분리 실행]
   STEP=collect  : 네이버 질문 수집 → DB 저장 (draft_answer 없이)
   STEP=generate : DB 미처리 건 → Gemini 초안 생성 → 슬랙 전송
   STEP 미설정   : collect → generate 순서로 전체 실행
 
-[스케줄 예시]
-  크론 09:00 → STEP=collect  (수집)
-  크론 09:10 → STEP=generate (생성 + 슬랙)
+[수집 건수]
+  키워드당 최신 5건만 수집 (COLLECT_DISPLAY 환경변수로 조정 가능)
 """
 
 from __future__ import annotations
@@ -33,9 +32,10 @@ NAVER_KIN_API    = "https://openapi.naver.com/v1/search/kin.json"
 GEMINI_API       = "https://generativelanguage.googleapis.com/v1beta/models"
 SLACK_POST_URL   = "https://slack.com/api/chat.postMessage"
 DIAGNOSIS_LINE   = "3분 무료 진단: https://taieng.co.kr/free-diagnosis.html"
-DEFAULT_KEYWORDS = "안전관리자 선임,중대재해처벌법,산업안전보건법 과태료,안전보건관리체계"
+DEFAULT_KEYWORDS = "5인 미만 중대재해처벌법 적용 범위,20인 사업장 안전관리자 선임 유예,제조업 공장 안전관리자 자격 기준,소규모 건설현장 안전보건관리체계 구축 비용"
 
 HOURS_LIMIT       = 24
+COLLECT_DISPLAY   = int(os.environ.get("COLLECT_DISPLAY", "5"))  # 키워드당 수집 건수
 GEMINI_DELAY_SEC  = 2.0
 GEMINI_RETRY_MAX  = 3
 GEMINI_RETRY_WAIT = 15.0
@@ -77,7 +77,6 @@ def _require_env(name: str) -> str:
 
 
 def _gemini_model() -> str:
-    # gemini-2.0-flash는 신규 사용자 미지원 → gemini-2.5-flash 기본값
     return os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 
 
@@ -140,7 +139,7 @@ def load_active_prompt(sb: Any) -> dict:
 #  STEP 1 : 수집 (collect)
 # ════════════════════════════════════════
 
-def fetch_kin(keyword: str, client_id: str, client_secret: str, display: int = 30) -> list[dict]:
+def fetch_kin(keyword: str, client_id: str, client_secret: str, display: int = 5) -> list[dict]:
     r = requests.get(
         NAVER_KIN_API,
         params={"query": keyword, "display": str(display), "start": "1", "sort": "date"},
@@ -166,24 +165,21 @@ def step_collect(sb: Any, naver_id: str, naver_secret: str, test: bool = False) 
     if test:
         keywords = keywords[:1]
 
-    run_at = datetime.now(timezone.utc).isoformat()
-    stats  = {"keywords": keywords, "api_items": 0, "skipped_old": 0,
-               "skipped_duplicate": 0, "inserted": 0, "insert_errors": 0}
+    display = 1 if test else COLLECT_DISPLAY
+    run_at  = datetime.now(timezone.utc).isoformat()
+    stats   = {"keywords": keywords, "display_per_kw": display, "api_items": 0,
+                "skipped_old": 0, "skipped_duplicate": 0, "inserted": 0, "insert_errors": 0}
 
     for kw in keywords:
         try:
-            items = fetch_kin(kw, naver_id, naver_secret, display=5 if test else 30)
+            items = fetch_kin(kw, naver_id, naver_secret, display=display)
         except Exception as e:
             logging.exception("[네이버 API] %s: %s", kw, e)
             continue
 
         logging.info("[collect] [%s] %d건 조회", kw, len(items))
-        saved = 0
 
         for item in items:
-            if test and saved >= 1:
-                break
-
             stats["api_items"] += 1
             link = (item.get("link") or "").strip()
             if not link:
@@ -214,7 +210,6 @@ def step_collect(sb: Any, naver_id: str, naver_secret: str, test: bool = False) 
             try:
                 sb.table("naver_kin_log").insert(row).execute()
                 stats["inserted"] += 1
-                saved += 1
                 logging.info("✅ [collect] 저장: %s", title[:60])
             except Exception as e:
                 msg = str(e).lower()
@@ -476,6 +471,8 @@ def main() -> None:
 
     if test:
         logging.info("🧪 TEST MODE 활성화")
+
+    logging.info("수집 건수: 키워드당 %d건", COLLECT_DISPLAY)
 
     result: dict = {"ok": True, "run_at": run_at, "step": step or "all"}
 
