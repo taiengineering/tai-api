@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-네이버 지식iN 모니터링 v4.0
+네이버 지식iN 모니터링 v4.1
 
 [두 단계 분리 실행]
   STEP=collect  : 네이버 질문 수집 → DB 저장 (draft_answer 없이)
@@ -35,10 +35,10 @@ SLACK_POST_URL   = "https://slack.com/api/chat.postMessage"
 DIAGNOSIS_LINE   = "3분 무료 진단: https://taieng.co.kr/free-diagnosis.html"
 DEFAULT_KEYWORDS = "안전관리자 선임,중대재해처벌법,산업안전보건법 과태료,안전보건관리체계"
 
-HOURS_LIMIT      = 24    # 수집 기준: N시간 이내 질문만
-GEMINI_DELAY_SEC = 2.0   # Gemini 호출 간 딜레이
-GEMINI_RETRY_MAX = 3     # 429 재시도 최대 횟수
-GEMINI_RETRY_WAIT= 15.0  # 429 대기(초)
+HOURS_LIMIT       = 24
+GEMINI_DELAY_SEC  = 2.0
+GEMINI_RETRY_MAX  = 3
+GEMINI_RETRY_WAIT = 15.0
 
 DEFAULT_FORBIDDEN = """법률 상담, 법률 자문, 법적 조언, 변호사 등 법률 서비스를 암시하는 표현 금지
 DB에 없는 법령 조문·판례 번호를 임의로 만들어내기 금지
@@ -77,7 +77,8 @@ def _require_env(name: str) -> str:
 
 
 def _gemini_model() -> str:
-    return os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+    # gemini-2.0-flash는 신규 사용자 미지원 → gemini-2.5-flash 기본값
+    return os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 
 
 def _test_mode() -> bool:
@@ -160,10 +161,7 @@ def row_exists(sb: Any, question_link: str) -> bool:
 
 
 def step_collect(sb: Any, naver_id: str, naver_secret: str, test: bool = False) -> dict:
-    """
-    네이버 질문 수집 → DB 저장 (draft_answer=None, status=DRAFT)
-    Gemini 호출 없음.
-    """
+    """네이버 질문 수집 → DB 저장 (draft_answer=None). Gemini 호출 없음."""
     keywords = load_active_keywords(sb)
     if test:
         keywords = keywords[:1]
@@ -211,7 +209,6 @@ def step_collect(sb: Any, naver_id: str, naver_secret: str, test: bool = False) 
                 "raw_item":             item,
                 "run_at":               run_at,
                 "status":               "DRAFT",
-                # draft_answer 없이 저장
             }
 
             try:
@@ -324,6 +321,8 @@ def build_prompt(title: str, desc: str, law_data: dict, prompt_cfg: dict) -> str
 def call_gemini(prompt: str, api_key: str) -> str | None:
     model = _gemini_model()
     url   = f"{GEMINI_API}/{model}:generateContent"
+    logging.info("Gemini 모델: %s", model)
+
     for attempt in range(1, GEMINI_RETRY_MAX + 1):
         try:
             time.sleep(GEMINI_DELAY_SEC)
@@ -349,8 +348,8 @@ def call_gemini(prompt: str, api_key: str) -> str | None:
                 text = text.rstrip() + "\n\n" + DIAGNOSIS_LINE
             return text
         except requests.exceptions.HTTPError as e:
+            logging.error("Gemini HTTP 오류 (%d회): %s", attempt, e)
             if attempt == GEMINI_RETRY_MAX:
-                logging.error("Gemini 최종 실패: %s", e)
                 return None
         except Exception as e:
             logging.exception("Gemini 예외: %s", e)
@@ -389,14 +388,10 @@ def send_slack(token: str, channel: str, row: dict, dashboard: str) -> None:
 
 
 def step_generate(sb: Any, gemini_key: str, dashboard: str, test: bool = False) -> dict:
-    """
-    DB에서 draft_answer가 없는 DRAFT 건을 한 건씩 처리.
-    Gemini 초안 생성 → DB 업데이트 → 슬랙 즉시 전송.
-    """
+    """DB 미처리 건 → Gemini 초안 생성 → DB 업데이트 → 슬랙 즉시 전송."""
     prompt_cfg = load_active_prompt(sb)
-
-    # draft_answer가 NULL인 DRAFT 건 조회
     limit = 1 if test else 100
+
     try:
         r = (
             sb.table("naver_kin_log")
@@ -420,21 +415,19 @@ def step_generate(sb: Any, gemini_key: str, dashboard: str, test: bool = False) 
     channel  = os.environ.get("SLACK_CHANNEL_ID", "").strip()
 
     for row in pending:
-        row_id   = row["id"]
-        title    = row.get("question_title") or ""
-        desc     = row.get("question_description") or ""
-        keyword  = row.get("search_keyword") or ""
+        row_id  = row["id"]
+        title   = row.get("question_title") or ""
+        desc    = row.get("question_description") or ""
+        keyword = row.get("search_keyword") or ""
 
         logging.info("[generate] 처리 중: %s", title[:60])
 
-        # 법령 DB 조회
         try:
             law_data = search_law_data(sb, keyword)
         except Exception as e:
             logging.warning("법령 조회 실패: %s", e)
             law_data = {"rules": [], "revisions": [], "precedents": []}
 
-        # Gemini 초안 생성
         prompt = build_prompt(title, desc, law_data, prompt_cfg)
         draft  = call_gemini(prompt, gemini_key)
 
@@ -443,10 +436,9 @@ def step_generate(sb: Any, gemini_key: str, dashboard: str, test: bool = False) 
             logging.warning("Gemini 실패 — 건너뜀: %s", title[:40])
             continue
 
-        # DB 업데이트
         try:
             sb.table("naver_kin_log").update({
-                "draft_answer": draft,
+                "draft_answer":  draft,
                 "matched_rules": law_data,
             }).eq("id", row_id).execute()
             stats["generated"] += 1
@@ -456,9 +448,8 @@ def step_generate(sb: Any, gemini_key: str, dashboard: str, test: bool = False) 
             stats["failed"] += 1
             continue
 
-        # 슬랙 즉시 전송
         if slack_ok:
-            row["draft_answer"] = draft  # 전송용으로 갱신
+            row["draft_answer"] = draft
             send_slack(token, channel, row, dashboard)
             stats["slack_sent"] += 1
 
@@ -478,7 +469,7 @@ def main() -> None:
     gemini_key   = _require_env("GEMINI_API_KEY")
 
     sb        = create_client(sb_url, sb_key)
-    step      = os.environ.get("STEP", "").strip().lower()   # collect / generate / (비어있으면 전체)
+    step      = os.environ.get("STEP", "").strip().lower()
     test      = _test_mode()
     dashboard = supabase_dashboard_link(sb_url)
     run_at    = datetime.now(timezone.utc).isoformat()
@@ -490,12 +481,9 @@ def main() -> None:
 
     if step == "collect":
         result["collect"] = step_collect(sb, naver_id, naver_secret, test=test)
-
     elif step == "generate":
         result["generate"] = step_generate(sb, gemini_key, dashboard, test=test)
-
     else:
-        # STEP 미설정 → 수집 후 바로 생성
         result["collect"]  = step_collect(sb, naver_id, naver_secret, test=test)
         result["generate"] = step_generate(sb, gemini_key, dashboard, test=test)
 
