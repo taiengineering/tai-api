@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-네이버 지식iN 모니터링 v3.1
-- penalty_amount → penalty_summary (컬럼명 수정)
-- Gemini 429 대응: 요청 간 딜레이 + 재시도(최대 3회)
+네이버 지식iN 모니터링 v3.2
+- pubDate 기준 24시간 이내 항목만 처리
+- penalty_summary 컬럼 사용
+- Gemini 429 재시도 (최대 3회)
 - kin_keyword_sets / kin_prompt_settings DB 동적 로드
 """
 
@@ -15,7 +16,8 @@ import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import requests
@@ -28,10 +30,13 @@ SLACK_POST_URL   = "https://slack.com/api/chat.postMessage"
 DIAGNOSIS_LINE   = "3분 무료 진단: https://taieng.co.kr/free-diagnosis.html"
 DEFAULT_KEYWORDS = "안전관리자 선임,중대재해처벌법,산업안전보건법 과태료,안전보건관리체계"
 
+# 필터링 기준
+HOURS_LIMIT = 24  # 등록 후 N시간 이내만 수집
+
 # Gemini rate limit 대응
-GEMINI_DELAY_SEC  = 3.0   # 호출 간 기본 대기(초)
-GEMINI_RETRY_MAX  = 3     # 429 발생 시 최대 재시도 횟수
-GEMINI_RETRY_WAIT = 15.0  # 429 발생 시 대기(초)
+GEMINI_DELAY_SEC  = 3.0
+GEMINI_RETRY_MAX  = 3
+GEMINI_RETRY_WAIT = 15.0
 
 DEFAULT_FORBIDDEN = """법률 상담, 법률 자문, 법적 조언, 변호사 등 법률 서비스를 암시하는 표현 금지
 DB에 없는 법령 조문·판례 번호를 임의로 만들어내기 금지
@@ -81,6 +86,22 @@ def slack_env_ready() -> bool:
                 os.environ.get("SLACK_CHANNEL_ID", "").strip())
 
 
+def is_within_hours(pub_date_str: str, hours: int = HOURS_LIMIT) -> bool:
+    """네이버 pubDate(RFC 822)가 현재로부터 N시간 이내인지 확인."""
+    if not pub_date_str:
+        return True  # pubDate 없으면 통과
+    try:
+        pub_dt = parsedate_to_datetime(pub_date_str)
+        # timezone-aware 변환
+        if pub_dt.tzinfo is None:
+            pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        return pub_dt >= cutoff
+    except Exception as e:
+        logging.warning("pubDate 파싱 실패(%s) — 통과 처리: %s", pub_date_str, e)
+        return True
+
+
 # ════════════════ DB 설정 로드 ════════════════
 
 def load_active_keywords(sb: Any) -> list[str]:
@@ -126,7 +147,6 @@ def search_law_data(sb: Any, keyword: str) -> dict[str, list]:
     out: dict[str, list] = {"rules": [], "revisions": [], "precedents": []}
 
     try:
-        # penalty_amount 없음 → penalty_summary 사용
         out["rules"] = (
             sb.table("master_building_legal_rules")
             .select("law_name, obligation_summary, obligation_type, penalty_summary")
@@ -169,9 +189,9 @@ def search_law_data(sb: Any, keyword: str) -> dict[str, list]:
 # ════════════════ Gemini 초안 생성 ════════════════
 
 def build_prompt(title: str, desc: str, law_data: dict, prompt_cfg: dict) -> str:
-    forbidden = (prompt_cfg.get("forbidden")        or DEFAULT_FORBIDDEN).strip()
-    structure = (prompt_cfg.get("answer_structure") or DEFAULT_STRUCTURE).strip()
-    closing   = (prompt_cfg.get("closing_message")  or DIAGNOSIS_LINE).strip()
+    forbidden = (prompt_cfg.get("forbidden")          or DEFAULT_FORBIDDEN).strip()
+    structure = (prompt_cfg.get("answer_structure")   or DEFAULT_STRUCTURE).strip()
+    closing   = (prompt_cfg.get("closing_message")    or DIAGNOSIS_LINE).strip()
     extra     = (prompt_cfg.get("extra_instructions") or "").strip()
 
     rules = "\n".join(
@@ -220,13 +240,12 @@ def build_prompt(title: str, desc: str, law_data: dict, prompt_cfg: dict) -> str
 
 
 def generate_draft(prompt: str, api_key: str) -> str | None:
-    """Gemini 호출 — 429 시 최대 GEMINI_RETRY_MAX회 재시도."""
     model = _gemini_model()
     url   = f"{GEMINI_API}/{model}:generateContent"
 
     for attempt in range(1, GEMINI_RETRY_MAX + 1):
         try:
-            time.sleep(GEMINI_DELAY_SEC)  # 기본 딜레이
+            time.sleep(GEMINI_DELAY_SEC)
             r = requests.post(
                 url,
                 params={"key": api_key},
@@ -284,7 +303,7 @@ def insert_log(sb: Any, row: dict[str, Any]) -> tuple[bool, str | None]:
 # ════════════════ Slack ════════════════
 
 def send_slack(token: str, channel: str, items: list[dict], dashboard: str) -> None:
-    lines = [f"🔍 네이버 지식인 신규 *{len(items)}건* 수집 완료", ""]
+    lines = [f"🔍 네이버 지식인 신규 *{len(items)}건* 수집 완료 (최근 {HOURS_LIMIT}시간)", ""]
     for i, it in enumerate(items[:5], 1):
         lines += [
             f"*{i}. {it.get('title','(제목없음)')}*",
@@ -326,11 +345,13 @@ def main() -> None:
 
     logging.info("실행 키워드 %d개: %s", len(keywords), keywords)
     logging.info("프롬프트: %s", prompt_cfg.get("name", "기본값(DB 없음)"))
+    logging.info("수집 기준: 최근 %d시간 이내 등록 질문", HOURS_LIMIT)
 
     new_for_slack: list[dict] = []
     stats = {
         "keywords": keywords,
         "api_items": 0,
+        "skipped_old": 0,        # 24시간 초과 항목
         "skipped_duplicate": 0,
         "skipped_gemini": 0,
         "inserted": 0,
@@ -344,12 +365,19 @@ def main() -> None:
             logging.exception("[네이버 API] keyword=%s: %s", kw, e)
             continue
 
-        logging.info("[%s] 수집 %d건", kw, len(items))
+        logging.info("[%s] API 수집 %d건", kw, len(items))
 
         for idx, item in enumerate(items):
             stats["api_items"] += 1
             link = (item.get("link") or "").strip()
             if not link:
+                continue
+
+            # ── 24시간 필터 ──
+            pub_date = item.get("pubDate", "")
+            if not is_within_hours(pub_date, HOURS_LIMIT):
+                stats["skipped_old"] += 1
+                logging.debug("건너뜀(오래됨): %s | %s", pub_date, link)
                 continue
 
             if row_exists(sb, link):
