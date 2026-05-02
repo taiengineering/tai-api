@@ -1,6 +1,12 @@
-# routers/law_collector.py v3.0.1
-# v3.0.1: messaging import 수정 (SMS_URL → EDGE_SMS_URL, _call_messageme → _call_edge_function)
-# v3.0.0: data.go.kr API 전환
+# routers/law_collector.py v3.0.6
+# v3.0.6: data.go.kr 분기 제거 → 4/23 검증된 law.go.kr/DRF + OC 단일 경로로 원복
+#         (Railway 고정 IP는 open.law.go.kr OC=taieng에 등록 완료된 상태)
+# v3.0.5: type 파라미터 제거 (data.go.kr 공식 cURL 샘플 검증) — 폐기 (data.go.kr 경로 자체 폐기)
+# v3.0.4: target=law 필수 파라미터 추가 (data.go.kr 공식 스펙 검증) — 폐기
+# v3.0.3: pageIndex → pageNo (data.go.kr 공공데이터포털 표준 파라미터명) — 폐기
+# v3.0.2: DATA_GO_KR_SERVICE_KEY 환경변수 호환 추가 — 폐기
+# v3.0.1: messaging import 수정 (SMS_URL → EDGE_SMS_URL, _call_messageme → _call_edge_function) — 유지
+# v3.0.0: data.go.kr API 전환 — 원복됨
 
 import os
 import hashlib
@@ -17,13 +23,10 @@ from routers.messaging import EDGE_SMS_URL as SMS_URL, _call_edge_function as _c
 router = APIRouter(prefix="/law-collector", tags=["법령 수집기"])
 
 # ============================================================
-# 설정 — data.go.kr API (Railway IP 제한 없음)
+# 설정 — law.go.kr/DRF + OC 인증 (4/23 검증된 단일 경로)
+# Railway 고정 IP가 open.law.go.kr OC=taieng에 등록되어 있어야 함
 # ============================================================
 
-DATA_GOV_KEY  = os.environ.get("DATA_GOV_SERVICE_KEY", "")
-DATA_GOV_BASE = "https://apis.data.go.kr/1170000/law"
-
-# 폴백: law.go.kr (로컬 개발용)
 LAW_API_OC   = os.environ.get("LAW_API_OC", "taieng")
 LAW_API_BASE = "http://www.law.go.kr/DRF"
 
@@ -279,39 +282,24 @@ def delete_law_version_cascade_for_recollect(supabase: Any, version_id: str) -> 
 
 
 # ============================================================
-# API 호출
+# API 호출 — law.go.kr/DRF + OC=taieng (검증된 단일 경로)
 # ============================================================
 
 def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
-    if DATA_GOV_KEY:
-        url = f"{DATA_GOV_BASE}/lawSearchList.do"
-        params = {"serviceKey": DATA_GOV_KEY, "query": query,
-                  "numOfRows": display, "pageIndex": page, "type": "xml"}
-        resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=30)
-        resp.encoding = "utf-8"
-        return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "data.go.kr"}
-    else:
-        url = f"{LAW_API_BASE}/lawSearch.do"
-        params = {"OC": LAW_API_OC, "target": "law", "type": "XML",
-                  "query": query, "display": display, "page": page}
-        resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=30)
-        resp.encoding = "utf-8"
-        return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "law.go.kr"}
+    url = f"{LAW_API_BASE}/lawSearch.do"
+    params = {"OC": LAW_API_OC, "target": "law", "type": "XML",
+              "query": query, "display": display, "page": page}
+    resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=30)
+    resp.encoding = "utf-8"
+    return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "law.go.kr"}
 
 
 def fetch_law_content(mst_no: str) -> dict:
-    if DATA_GOV_KEY:
-        url = f"{DATA_GOV_BASE}/lawService.do"
-        params = {"serviceKey": DATA_GOV_KEY, "MST": mst_no, "type": "xml"}
-        resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=60)
-        resp.encoding = "utf-8"
-        return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "data.go.kr"}
-    else:
-        url = f"{LAW_API_BASE}/lawService.do"
-        params = {"OC": LAW_API_OC, "target": "law", "MST": mst_no, "type": "XML"}
-        resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=60)
-        resp.encoding = "utf-8"
-        return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "law.go.kr"}
+    url = f"{LAW_API_BASE}/lawService.do"
+    params = {"OC": LAW_API_OC, "target": "law", "MST": mst_no, "type": "XML"}
+    resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=60)
+    resp.encoding = "utf-8"
+    return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "law.go.kr"}
 
 
 # ============================================================
@@ -387,7 +375,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
         "law_status_code": "ACTIVE",
         "announcement_date": str(law_info.get("announcement_date")) if law_info.get("announcement_date") else None,
         "enforcement_date": str(law_info.get("enforcement_date")) if law_info.get("enforcement_date") else None,
-        "source_system": "data.go.kr/law", "is_active": True,
+        "source_system": "law.go.kr/DRF", "is_active": True,
         "updated_at": datetime.now().isoformat(),
     }, on_conflict="law_key").execute()
     law_id = master_res.data[0]["id"]
@@ -669,7 +657,8 @@ async def debug_law_api(law_name: str):
         except Exception as pe:
             law_count, root_tag, first_law = -1, "parse_error", {"error": str(pe)}
         return {
-            "api_source":  source, "has_api_key": bool(DATA_GOV_KEY),
+            "api_source":  source,
+            "oc": LAW_API_OC,
             "query": law_name, "http_status": http_status, "ok": result["ok"],
             "law_count": law_count, "xml_root_tag": root_tag, "first_law": first_law,
             "xml_b64": _b64(xml_text[:2000]),
@@ -799,9 +788,9 @@ async def get_collection_status():
         .select("law_id, job_message, updated_at").eq("job_status_code", "FAILED")\
         .order("updated_at", desc=True).limit(10).execute()
     return {
-        "version":             "3.0.1",
-        "api_source":          "data.go.kr" if DATA_GOV_KEY else "law.go.kr (폴백)",
-        "has_api_key":         bool(DATA_GOV_KEY),
+        "version":             "3.0.6",
+        "api_source":          "law.go.kr/DRF",
+        "oc":                  LAW_API_OC,
         "collected_law_count": total.count,
         "tracked_law_count":   collected.count,
         "change_log_count":    changed.count,
