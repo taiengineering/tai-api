@@ -1,4 +1,5 @@
-# routers/law_collector.py v3.0.1
+# routers/law_collector.py v3.0.2
+# v3.0.2: DATA_GO_KR_SERVICE_KEY 환경변수 호환 추가 (Railway 변수명)
 # v3.0.1: messaging import 수정 (SMS_URL → EDGE_SMS_URL, _call_messageme → _call_edge_function)
 # v3.0.0: data.go.kr API 전환
 
@@ -20,7 +21,7 @@ router = APIRouter(prefix="/law-collector", tags=["법령 수집기"])
 # 설정 — data.go.kr API (Railway IP 제한 없음)
 # ============================================================
 
-DATA_GOV_KEY  = os.environ.get("DATA_GOV_SERVICE_KEY", "")
+DATA_GOV_KEY  = os.environ.get("DATA_GO_KR_SERVICE_KEY", "") or os.environ.get("DATA_GOV_SERVICE_KEY", "")
 DATA_GOV_BASE = "https://apis.data.go.kr/1170000/law"
 
 # 폴백: law.go.kr (로컬 개발용)
@@ -799,7 +800,7 @@ async def get_collection_status():
         .select("law_id, job_message, updated_at").eq("job_status_code", "FAILED")\
         .order("updated_at", desc=True).limit(10).execute()
     return {
-        "version":             "3.0.1",
+        "version":             "3.0.2",
         "api_source":          "data.go.kr" if DATA_GOV_KEY else "law.go.kr (폴백)",
         "has_api_key":         bool(DATA_GOV_KEY),
         "collected_law_count": total.count,
