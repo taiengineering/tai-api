@@ -1,4 +1,6 @@
-# routers/law_collector.py v3.0.6
+# routers/law_collector.py v3.0.7
+# v3.0.7: /whoami 진단 endpoint 추가 (Railway egress IP 확인 — S6 IP 미등록 진단용)
+#         수집/파싱/저장 로직 변경 없음. read-only 진단만 추가.
 # v3.0.6: data.go.kr 분기 제거 → 4/23 검증된 law.go.kr/DRF + OC 단일 경로로 원복
 #         (Railway 고정 IP는 open.law.go.kr OC=taieng에 등록 완료된 상태)
 # v3.0.5: type 파라미터 제거 (data.go.kr 공식 cURL 샘플 검증) — 폐기 (data.go.kr 경로 자체 폐기)
@@ -776,6 +778,39 @@ def _run_check_updates():
     return results
 
 
+@router.get("/whoami")
+async def whoami():
+    """진단용: Railway 컨테이너의 외부 egress IP 확인 (S6 IP 미등록 진단).
+
+    - 1차: api.ipify.org (JSON 응답으로 IP 추출)
+    - 2차 fallback: ifconfig.me (plain text)
+    - 둘 다 실패 시 양측 에러 메시지 반환
+    - 호출 결과 IP를 open.law.go.kr OC=taieng 등록 IP와 비교
+    """
+    try:
+        r = requests.get("https://api.ipify.org?format=json", timeout=10)
+        return {
+            "egress_ip": r.json().get("ip"),
+            "oc": LAW_API_OC,
+            "via": "api.ipify.org",
+            "purpose": "법제처 호출에 사용되는 IP — open.law.go.kr 등록 IP와 비교",
+        }
+    except Exception as e:
+        try:
+            r2 = requests.get("https://ifconfig.me/ip", timeout=10)
+            return {
+                "egress_ip": r2.text.strip(),
+                "oc": LAW_API_OC,
+                "via": "ifconfig.me",
+                "primary_error": f"{type(e).__name__}: {str(e)[:200]}",
+            }
+        except Exception as e2:
+            return {
+                "error": f"{type(e).__name__}: {str(e)[:200]}",
+                "fallback_error": f"{type(e2).__name__}: {str(e2)[:200]}",
+            }
+
+
 @router.get("/status")
 async def get_collection_status():
     supabase = get_supabase()
@@ -788,7 +823,7 @@ async def get_collection_status():
         .select("law_id, job_message, updated_at").eq("job_status_code", "FAILED")\
         .order("updated_at", desc=True).limit(10).execute()
     return {
-        "version":             "3.0.6",
+        "version":             "3.0.7",
         "api_source":          "law.go.kr/DRF",
         "oc":                  LAW_API_OC,
         "collected_law_count": total.count,
