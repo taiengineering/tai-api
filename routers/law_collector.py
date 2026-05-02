@@ -1,13 +1,15 @@
-# routers/law_collector.py v3.0.7
-# v3.0.7: /whoami 진단 endpoint 추가 (Railway egress IP 확인 — S6 IP 미등록 진단용)
-#         수집/파싱/저장 로직 변경 없음. read-only 진단만 추가.
+# routers/law_collector.py v3.0.8
+# v3.0.8: OUTBOUND_PROXY (iwinv VPS 115.68.227.222:3128) 통과로 송신 IP 고정.
+#         Railway egress IP는 동적(GCP)이라 OC=taieng 등록 불가 → 4/20 이전부터
+#         SMS/결제 모듈이 사용하던 한국 고정 IP 프록시를 법령 수집에도 동일 적용.
+#         /whoami도 프록시를 통과해 외부 IP 측정 → 115.68.227.222로 회신되어야 정상.
+# v3.0.7: /whoami 진단 endpoint 추가 (S6 IP 미등록 진단용)
 # v3.0.6: data.go.kr 분기 제거 → 4/23 검증된 law.go.kr/DRF + OC 단일 경로로 원복
-#         (Railway 고정 IP는 open.law.go.kr OC=taieng에 등록 완료된 상태)
-# v3.0.5: type 파라미터 제거 (data.go.kr 공식 cURL 샘플 검증) — 폐기 (data.go.kr 경로 자체 폐기)
-# v3.0.4: target=law 필수 파라미터 추가 (data.go.kr 공식 스펙 검증) — 폐기
-# v3.0.3: pageIndex → pageNo (data.go.kr 공공데이터포털 표준 파라미터명) — 폐기
+# v3.0.5: type 파라미터 제거 — 폐기
+# v3.0.4: target=law 필수 파라미터 추가 — 폐기
+# v3.0.3: pageIndex → pageNo — 폐기
 # v3.0.2: DATA_GO_KR_SERVICE_KEY 환경변수 호환 추가 — 폐기
-# v3.0.1: messaging import 수정 (SMS_URL → EDGE_SMS_URL, _call_messageme → _call_edge_function) — 유지
+# v3.0.1: messaging import 수정 — 유지
 # v3.0.0: data.go.kr API 전환 — 원복됨
 
 import os
@@ -25,12 +27,19 @@ from routers.messaging import EDGE_SMS_URL as SMS_URL, _call_edge_function as _c
 router = APIRouter(prefix="/law-collector", tags=["법령 수집기"])
 
 # ============================================================
-# 설정 — law.go.kr/DRF + OC 인증 (4/23 검증된 단일 경로)
-# Railway 고정 IP가 open.law.go.kr OC=taieng에 등록되어 있어야 함
+# 설정 — law.go.kr/DRF + OC 인증 + iwinv 프록시 (4/20 검증된 인프라)
+# Railway egress(GCP 동적 IP)로 직송 시 OC 미등록으로 차단 →
+# 한국 고정 IP 프록시(115.68.227.222:3128)를 거쳐 송신.
 # ============================================================
 
-LAW_API_OC   = os.environ.get("LAW_API_OC", "taieng")
-LAW_API_BASE = "http://www.law.go.kr/DRF"
+LAW_API_OC      = os.environ.get("LAW_API_OC", "taieng")
+LAW_API_BASE    = "http://www.law.go.kr/DRF"
+
+# OUTBOUND_PROXY는 SMS/결제 모듈에서 이미 사용 중인 환경변수.
+# 예: http://115.68.227.222:3128 (Squid HTTP forward proxy, 인증 없음)
+# 미설정 시 직송으로 동작 (개발용 fallback). 운영은 반드시 설정 필요.
+OUTBOUND_PROXY  = os.environ.get("OUTBOUND_PROXY", "").strip()
+LAW_API_PROXIES = {"http": OUTBOUND_PROXY, "https": OUTBOUND_PROXY} if OUTBOUND_PROXY else None
 
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; TAI-LawCollector/3.0)",
@@ -284,14 +293,15 @@ def delete_law_version_cascade_for_recollect(supabase: Any, version_id: str) -> 
 
 
 # ============================================================
-# API 호출 — law.go.kr/DRF + OC=taieng (검증된 단일 경로)
+# API 호출 — law.go.kr/DRF + OC=taieng + iwinv 프록시 통과
 # ============================================================
 
 def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
     url = f"{LAW_API_BASE}/lawSearch.do"
     params = {"OC": LAW_API_OC, "target": "law", "type": "XML",
               "query": query, "display": display, "page": page}
-    resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=30)
+    resp = requests.get(url, params=params, headers=DEFAULT_HEADERS,
+                        proxies=LAW_API_PROXIES, timeout=30)
     resp.encoding = "utf-8"
     return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "law.go.kr"}
 
@@ -299,7 +309,8 @@ def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
 def fetch_law_content(mst_no: str) -> dict:
     url = f"{LAW_API_BASE}/lawService.do"
     params = {"OC": LAW_API_OC, "target": "law", "MST": mst_no, "type": "XML"}
-    resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=60)
+    resp = requests.get(url, params=params, headers=DEFAULT_HEADERS,
+                        proxies=LAW_API_PROXIES, timeout=60)
     resp.encoding = "utf-8"
     return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "law.go.kr"}
 
@@ -661,6 +672,7 @@ async def debug_law_api(law_name: str):
         return {
             "api_source":  source,
             "oc": LAW_API_OC,
+            "proxy_set": bool(LAW_API_PROXIES),
             "query": law_name, "http_status": http_status, "ok": result["ok"],
             "law_count": law_count, "xml_root_tag": root_tag, "first_law": first_law,
             "xml_b64": _b64(xml_text[:2000]),
@@ -780,35 +792,38 @@ def _run_check_updates():
 
 @router.get("/whoami")
 async def whoami():
-    """진단용: Railway 컨테이너의 외부 egress IP 확인 (S6 IP 미등록 진단).
+    """진단용: 법령 수집 호출에 실제 사용되는 외부 egress IP 확인.
 
-    - 1차: api.ipify.org (JSON 응답으로 IP 추출)
-    - 2차 fallback: ifconfig.me (plain text)
-    - 둘 다 실패 시 양측 에러 메시지 반환
-    - 호출 결과 IP를 open.law.go.kr OC=taieng 등록 IP와 비교
+    OUTBOUND_PROXY가 설정되어 있으면 프록시를 통과해서 측정 → 프록시 공인 IP가 회신됨.
+    설정 없으면 컨테이너 직접 egress IP가 회신됨 (Railway는 GCP 동적 IP).
+    개정 후: OUTBOUND_PROXY=http://115.68.227.222:3128 설정 시 115.68.227.222 회신 기대.
     """
+    diag = {"oc": LAW_API_OC, "proxy_set": bool(LAW_API_PROXIES)}
     try:
-        r = requests.get("https://api.ipify.org?format=json", timeout=10)
-        return {
+        r = requests.get("https://api.ipify.org?format=json",
+                         proxies=LAW_API_PROXIES, timeout=10)
+        diag.update({
             "egress_ip": r.json().get("ip"),
-            "oc": LAW_API_OC,
             "via": "api.ipify.org",
             "purpose": "법제처 호출에 사용되는 IP — open.law.go.kr 등록 IP와 비교",
-        }
+        })
+        return diag
     except Exception as e:
         try:
-            r2 = requests.get("https://ifconfig.me/ip", timeout=10)
-            return {
+            r2 = requests.get("https://ifconfig.me/ip",
+                              proxies=LAW_API_PROXIES, timeout=10)
+            diag.update({
                 "egress_ip": r2.text.strip(),
-                "oc": LAW_API_OC,
                 "via": "ifconfig.me",
                 "primary_error": f"{type(e).__name__}: {str(e)[:200]}",
-            }
+            })
+            return diag
         except Exception as e2:
-            return {
+            diag.update({
                 "error": f"{type(e).__name__}: {str(e)[:200]}",
                 "fallback_error": f"{type(e2).__name__}: {str(e2)[:200]}",
-            }
+            })
+            return diag
 
 
 @router.get("/status")
@@ -823,9 +838,10 @@ async def get_collection_status():
         .select("law_id, job_message, updated_at").eq("job_status_code", "FAILED")\
         .order("updated_at", desc=True).limit(10).execute()
     return {
-        "version":             "3.0.7",
+        "version":             "3.0.8",
         "api_source":          "law.go.kr/DRF",
         "oc":                  LAW_API_OC,
+        "proxy_set":           bool(LAW_API_PROXIES),
         "collected_law_count": total.count,
         "tracked_law_count":   collected.count,
         "change_log_count":    changed.count,
