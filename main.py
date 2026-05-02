@@ -1,4 +1,5 @@
-# main.py — v5.42.1
+# main.py — v5.43.0
+# v5.43.0: law_catalog_collector 라우터 등록 (POST /law-collector/collect-catalog — 외부 카탈로그 수집)
 # v5.42.1: POST /slack/interact 별칭 (Slack Interactions → slack_kin 동일 핸들러)
 # v5.42.0: kin_generate 라우터 등록 (POST /kin/generate, /kin/collect — 어드민 수동 실행)
 # v5.41.0: slack_kin 라우터 등록 (POST /slack/kin/interactions — 지식인 초안 승인·Playwright)
@@ -80,6 +81,7 @@ from routers.inspection_checklist    import router as inspection_router
 from routers.inspection_setup        import router as inspection_setup_router
 from routers.admin_stats             import router as admin_stats_router
 from routers.law_collector           import router as law_collector_router
+from routers.law_catalog_collector   import router as law_catalog_collector_router  # v5.43.0
 from routers.cron_manager            import router as cron_manager_router
 from routers.byulpyo                 import router as byulpyo_router
 from routers.price_setting           import router as price_setting_router
@@ -154,7 +156,7 @@ from routers.kin_generate            import router as kin_generate_router       
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.42.1"
+APP_VERSION = "5.43.0"
 
 
 @asynccontextmanager
@@ -282,6 +284,7 @@ app.include_router(inspection_router)
 app.include_router(inspection_setup_router)
 app.include_router(admin_stats_router)
 app.include_router(law_collector_router)
+app.include_router(law_catalog_collector_router)                                   # v5.43.0 외부 카탈로그
 app.include_router(cron_manager_router)
 app.include_router(byulpyo_router)
 app.include_router(price_setting_router)
