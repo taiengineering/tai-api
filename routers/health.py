@@ -19,6 +19,15 @@ from services.health_registry import (
 router = APIRouter(tags=["health"])
 
 
+@router.get("/health/live")
+def health_live():
+    """
+    프로세스 기동 확인 전용 (DB·외부 호출 없음).
+    Railway / Docker 헬스체크에 권장 — 빠른 liveness.
+    """
+    return JSONResponse(status_code=200, content={"status": "live"})
+
+
 @router.get("/health")
 def health_check():
     checks = {}

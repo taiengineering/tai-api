@@ -1,6 +1,10 @@
 """
 네이버 지식인 답변 폼 — Playwright로 초안 입력만 수행 (등록 버튼은 사람이 클릭).
 
+Docker/Railway 기본 이미지에는 Chromium 바이너리가 없습니다.
+첫 사용 전 호스트에서 한 번 실행: `playwright install chromium`
+(또는 CI/release 단계에서 동일 명령 실행)
+
 환경 변수:
   NAVER_COOKIES — JSON 배열 (Playwright cookie 형식: name, value, domain, path 필수)
   KIN_PLAYWRIGHT_HEADLESS — true/false (기본 true)

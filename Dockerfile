@@ -13,9 +13,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
-    && playwright install chromium \
-    && playwright install-deps chromium || true
+# playwright 패키지는 포함하되, Chromium 바이너리는 이미지에서 생략(RAM/빌드 안정).
+# 지식인 자동입력 사용 시: 배포 후 한 번 `playwright install chromium` 또는 전용 워커 이미지에서 설치.
+RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Railway 등은 $PORT 를 주입함 — 고정 8080만 쓰면 리슨 실패할 수 있음

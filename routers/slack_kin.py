@@ -20,7 +20,6 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from supabase import create_client
 
 from services.kin_draft_safety import validate_draft_for_playwright
-from services.kin_playwright_runner import fill_kin_answer_editor
 from services.slack_signature_verifier import verify_slack_signing_secret
 
 logger = logging.getLogger(__name__)
@@ -113,6 +112,9 @@ async def _run_approve_pipeline(log_id: str, response_url: str | None) -> None:
         final_text, warnings = validate_draft_for_playwright(draft)
         if warnings:
             logger.info("Draft warnings: %s", warnings)
+
+        # Playwright는 승인 시에만 로드 (API 기동 메모리·임포트 분리)
+        from services.kin_playwright_runner import fill_kin_answer_editor
 
         await fill_kin_answer_editor(link, final_text)
         await _notify_slack_done(response_url, ok=True)
