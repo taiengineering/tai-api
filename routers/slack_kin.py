@@ -2,7 +2,7 @@
 Slack × 네이버 지식인 반자동: 인터랙티브 버튼 → Playwright 초안 입력.
 
 - Slack Interactions URL 로 이 라우트를 등록: POST /slack/kin/interactions
-  (동일 핸들러) POST /slack/kin/approve
+  (동일 핸들러) POST /slack/kin/approve, POST /slack/interact
 """
 
 from __future__ import annotations
@@ -25,6 +25,8 @@ from services.slack_signature_verifier import verify_slack_signing_secret
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/slack/kin", tags=["slack-kin"])
+# /slack/kin/* 외에 Interactions URL 을 짧게 쓰기 위한 별칭 (같은 핸들러)
+interact_alias_router = APIRouter(prefix="/slack", tags=["slack-kin"])
 
 
 def _json_response(data: dict[str, Any]) -> JSONResponse:
@@ -232,3 +234,9 @@ async def slack_approve_alias(request: Request) -> JSONResponse:
 @router.get("/health")
 def slack_kin_health() -> PlainTextResponse:
     return PlainTextResponse("ok", status_code=200)
+
+
+@interact_alias_router.post("/interact")
+async def slack_interact_alias(request: Request) -> JSONResponse:
+    """Slack Interactions 별칭 — `POST /slack/kin/interactions` 와 동일 페이로드·서명 검증."""
+    return await _slack_interactions_handler(request)
