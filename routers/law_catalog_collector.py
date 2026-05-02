@@ -1,4 +1,4 @@
-ND# routers/law_catalog_collector.py — v1.1.0
+# routers/law_catalog_collector.py — v1.1.0
 # v1.1.0: env-check 디버그 엔드포인트 추가
 # v1.0.0: 외부 카탈로그 수집 (Railway 백그라운드 실행)
 
