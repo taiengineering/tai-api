@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-네이버 지식iN 모니터링 v3.2
+네이버 지식iN 모니터링 v3.3
+- TEST_MODE=1 : 키워드 1개, 항목 1건만 처리
 - pubDate 기준 24시간 이내 항목만 처리
 - penalty_summary 컬럼 사용
 - Gemini 429 재시도 (최대 3회)
@@ -30,11 +31,8 @@ SLACK_POST_URL   = "https://slack.com/api/chat.postMessage"
 DIAGNOSIS_LINE   = "3분 무료 진단: https://taieng.co.kr/free-diagnosis.html"
 DEFAULT_KEYWORDS = "안전관리자 선임,중대재해처벌법,산업안전보건법 과태료,안전보건관리체계"
 
-# 필터링 기준
-HOURS_LIMIT = 24  # 등록 후 N시간 이내만 수집
-
-# Gemini rate limit 대응
-GEMINI_DELAY_SEC  = 3.0
+HOURS_LIMIT       = 24
+GEMINI_DELAY_SEC  = 2.0
 GEMINI_RETRY_MAX  = 3
 GEMINI_RETRY_WAIT = 15.0
 
@@ -72,6 +70,10 @@ def _require_env(name: str) -> str:
     return v
 
 
+def _is_test_mode() -> bool:
+    return os.environ.get("TEST_MODE", "").strip() == "1"
+
+
 def _gemini_model() -> str:
     return os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
 
@@ -87,12 +89,10 @@ def slack_env_ready() -> bool:
 
 
 def is_within_hours(pub_date_str: str, hours: int = HOURS_LIMIT) -> bool:
-    """네이버 pubDate(RFC 822)가 현재로부터 N시간 이내인지 확인."""
     if not pub_date_str:
-        return True  # pubDate 없으면 통과
+        return True
     try:
         pub_dt = parsedate_to_datetime(pub_date_str)
-        # timezone-aware 변환
         if pub_dt.tzinfo is None:
             pub_dt = pub_dt.replace(tzinfo=timezone.utc)
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -130,10 +130,10 @@ def load_active_prompt(sb: Any) -> dict:
 
 # ════════════════ 네이버 지식iN ════════════════
 
-def fetch_kin(keyword: str, client_id: str, client_secret: str) -> list[dict]:
+def fetch_kin(keyword: str, client_id: str, client_secret: str, display: int = 30) -> list[dict]:
     r = requests.get(
         NAVER_KIN_API,
-        params={"query": keyword, "display": "30", "start": "1", "sort": "date"},
+        params={"query": keyword, "display": str(display), "start": "1", "sort": "date"},
         headers={"X-Naver-Client-Id": client_id, "X-Naver-Client-Secret": client_secret},
         timeout=60,
     )
@@ -302,8 +302,9 @@ def insert_log(sb: Any, row: dict[str, Any]) -> tuple[bool, str | None]:
 
 # ════════════════ Slack ════════════════
 
-def send_slack(token: str, channel: str, items: list[dict], dashboard: str) -> None:
-    lines = [f"🔍 네이버 지식인 신규 *{len(items)}건* 수집 완료 (최근 {HOURS_LIMIT}시간)", ""]
+def send_slack(token: str, channel: str, items: list[dict], dashboard: str, test: bool = False) -> None:
+    prefix = "🧪 *[테스트]* " if test else ""
+    lines  = [f"{prefix}🔍 네이버 지식인 신규 *{len(items)}건* 수집 완료 (최근 {HOURS_LIMIT}시간)", ""]
     for i, it in enumerate(items[:5], 1):
         lines += [
             f"*{i}. {it.get('title','(제목없음)')}*",
@@ -337,11 +338,18 @@ def main() -> None:
     sb_key       = _require_env("SUPABASE_SERVICE_KEY")
     gemini_key   = _require_env("GEMINI_API_KEY")
 
+    test_mode = _is_test_mode()
+
     sb     = create_client(sb_url, sb_key)
     run_at = datetime.now(timezone.utc).isoformat()
 
     keywords   = load_active_keywords(sb)
     prompt_cfg = load_active_prompt(sb)
+
+    # ── TEST_MODE: 키워드 1개만 ──
+    if test_mode:
+        keywords = keywords[:1]
+        logging.info("🧪 TEST MODE — 키워드 1개, 항목 1건만 처리")
 
     logging.info("실행 키워드 %d개: %s", len(keywords), keywords)
     logging.info("프롬프트: %s", prompt_cfg.get("name", "기본값(DB 없음)"))
@@ -349,35 +357,42 @@ def main() -> None:
 
     new_for_slack: list[dict] = []
     stats = {
-        "keywords": keywords,
-        "api_items": 0,
-        "skipped_old": 0,        # 24시간 초과 항목
-        "skipped_duplicate": 0,
-        "skipped_gemini": 0,
-        "inserted": 0,
-        "insert_errors": 0,
+        "test_mode":          test_mode,
+        "keywords":           keywords,
+        "api_items":          0,
+        "skipped_old":        0,
+        "skipped_duplicate":  0,
+        "skipped_gemini":     0,
+        "inserted":           0,
+        "insert_errors":      0,
     }
 
     for kw in keywords:
         try:
-            items = fetch_kin(kw, naver_id, naver_secret)
+            # TEST_MODE면 API에서 5건만 가져옴
+            display = 5 if test_mode else 30
+            items   = fetch_kin(kw, naver_id, naver_secret, display=display)
         except Exception as e:
             logging.exception("[네이버 API] keyword=%s: %s", kw, e)
             continue
 
         logging.info("[%s] API 수집 %d건", kw, len(items))
 
+        processed = 0  # TEST_MODE 1건 카운터
+
         for idx, item in enumerate(items):
+            # TEST_MODE: 1건 성공 후 종료
+            if test_mode and processed >= 1:
+                break
+
             stats["api_items"] += 1
             link = (item.get("link") or "").strip()
             if not link:
                 continue
 
-            # ── 24시간 필터 ──
             pub_date = item.get("pubDate", "")
             if not is_within_hours(pub_date, HOURS_LIMIT):
                 stats["skipped_old"] += 1
-                logging.debug("건너뜀(오래됨): %s | %s", pub_date, link)
                 continue
 
             if row_exists(sb, link):
@@ -417,12 +432,14 @@ def main() -> None:
             inserted, err = insert_log(sb, row)
             if inserted:
                 stats["inserted"] += 1
-                logging.info("✅ 저장: %s", title[:50])
+                processed += 1
+                logging.info("✅ 저장: %s", title[:60])
                 new_for_slack.append({"title": title, "link": link, "draft_preview": draft})
             elif err:
                 stats["insert_errors"] += 1
             else:
                 stats["skipped_duplicate"] += 1
+                processed += 1  # 중복도 1건으로 카운트 (무한루프 방지)
 
     dashboard = supabase_dashboard_link(sb_url)
     if slack_env_ready() and new_for_slack:
@@ -430,6 +447,7 @@ def main() -> None:
             os.environ["SLACK_BOT_TOKEN"].strip(),
             os.environ["SLACK_CHANNEL_ID"].strip(),
             new_for_slack, dashboard,
+            test=test_mode,
         )
     elif not slack_env_ready():
         logging.info("Slack 환경변수 미설정 — 알림 생략")
