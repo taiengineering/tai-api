@@ -27,6 +27,8 @@ from typing import Any
 import requests
 from supabase import create_client
 
+from services.slack_kin_blocks import build_kin_review_blocks
+
 # ── 기본값 ──
 NAVER_KIN_API    = "https://openapi.naver.com/v1/search/kin.json"
 GEMINI_API       = "https://generativelanguage.googleapis.com/v1beta/models"
@@ -353,24 +355,42 @@ def call_gemini(prompt: str, api_key: str) -> str | None:
 
 
 def send_slack(token: str, channel: str, row: dict, dashboard: str) -> None:
-    """1건 처리 완료 시 즉시 슬랙 전송."""
-    title   = row.get("question_title") or "(제목없음)"
-    link    = row.get("question_link") or ""
-    draft   = (row.get("draft_answer") or "")[:300]
+    """1건 처리 완료 시 즉시 슬랙 전송 — 인터랙티브 블록([승인][수정][삭제])."""
+    log_id = str(row.get("id") or "").strip()
+    title = row.get("question_title") or "(제목없음)"
+    link = row.get("question_link") or ""
+    draft_full = row.get("draft_answer") or ""
     keyword = row.get("search_keyword") or ""
-    text = (
-        f"🔔 *네이버 지식인 초안 생성 완료*\n\n"
-        f"*질문:* {title}\n"
-        f"*키워드:* `{keyword}`\n"
-        f"{link}\n\n"
-        f"> {draft}\n\n"
-        f"📊 {dashboard}"
+
+    blocks = build_kin_review_blocks(
+        log_id=log_id or "unknown",
+        question_title=title,
+        question_link=link,
+        draft_preview=draft_full,
     )
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": f"키워드: `{keyword}`  ·  Supabase: {dashboard}",
+                }
+            ],
+        }
+    )
+
+    # 푸시 알림·접근성용 폴백 (blocks만으로는 부족할 수 있음)
+    fallback_text = f"지식인 초안 생성: {title[:200]}"
     try:
         r = requests.post(
             SLACK_POST_URL,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"},
-            json={"channel": channel, "text": text},
+            json={
+                "channel": channel,
+                "text": fallback_text,
+                "blocks": blocks,
+            },
             timeout=30,
         )
         body = r.json()
