@@ -17,3 +17,4 @@ firebase-admin
 openai>=1.0.0
 sentry-sdk[fastapi]
 psycopg2-binary
+playwright>=1.49.0,<2

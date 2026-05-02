@@ -13,7 +13,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && playwright install chromium \
+    && playwright install-deps chromium || true
 COPY . .
 
 # Railway 등은 $PORT 를 주입함 — 고정 8080만 쓰면 리슨 실패할 수 있음

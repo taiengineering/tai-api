@@ -1,4 +1,5 @@
-# main.py — v5.40.0
+# main.py — v5.41.0
+# v5.41.0: slack_kin 라우터 등록 (POST /slack/kin/interactions — 지식인 초안 승인·Playwright)
 # v5.40.0: tbm_issue 라우터 등록 (PATCH /tbm/{id}/attendees/{aid}/issue — 이상 표시)
 # v5.39.0: document_engine 라우터 등록 (문서 자동생성 엔진 — preview/generate)
 # v5.38.1: 임시 디버그 엔드포인트 등록 (billing 500 traceback 캡처)
@@ -146,10 +147,11 @@ from routers.safety_reports          import router as safety_reports_router     
 from routers.pw_reset                import router as pw_reset_router                # v5.36.1 비밀번호재설정
 from routers.debug                   import router as debug_router                   # 임시 디버그
 from routers.document_engine         import router as document_engine_api_router      # v5.39.0 문서엔진
+from routers.slack_kin               import router as slack_kin_router                # v5.41.0 Slack×지식인 반자동
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.40.0"
+APP_VERSION = "5.41.0"
 
 
 @asynccontextmanager
@@ -313,6 +315,7 @@ app.include_router(payment_router)
 app.include_router(payment_ops_router)
 app.include_router(corrective_actions_router)
 app.include_router(messaging_router)
+app.include_router(slack_kin_router)                                               # v5.41.0 Slack 지식인 반자동
 app.include_router(fcm_router)
 app.include_router(worker_check_router)
 app.include_router(worker_home_router)
