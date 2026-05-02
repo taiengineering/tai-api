@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """
-네이버 지식iN 모니터링 v3 — 법령 DB + Gemini(DB 프롬프트) + Slack 알림.
-
-변경점(v3):
-- Gemini 프롬프트를 kin_prompt_settings 테이블에서 동적 로드
-- 키워드를 kin_keyword_sets(is_active=true)에서 우선 로드
-  (없으면 NAVER_KIN_KEYWORDS 환경변수 → DEFAULT_KEYWORDS 순서로 fallback)
-- 자동 게시·지식iN 답변 등록 로직은 포함하지 않습니다.
+네이버 지식iN 모니터링 v3.1
+- penalty_amount → penalty_summary (컬럼명 수정)
+- Gemini 429 대응: 요청 간 딜레이 + 재시도(최대 3회)
+- kin_keyword_sets / kin_prompt_settings DB 동적 로드
 """
 
 from __future__ import annotations
@@ -17,6 +14,7 @@ import logging
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,13 +22,17 @@ import requests
 from supabase import create_client
 
 # --- 기본값 ---
-NAVER_KIN_API   = "https://openapi.naver.com/v1/search/kin.json"
-GEMINI_API      = "https://generativelanguage.googleapis.com/v1beta/models"
-SLACK_POST_URL  = "https://slack.com/api/chat.postMessage"
-DIAGNOSIS_LINE  = "3분 무료 진단: https://taieng.co.kr/free-diagnosis.html"
+NAVER_KIN_API    = "https://openapi.naver.com/v1/search/kin.json"
+GEMINI_API       = "https://generativelanguage.googleapis.com/v1beta/models"
+SLACK_POST_URL   = "https://slack.com/api/chat.postMessage"
+DIAGNOSIS_LINE   = "3분 무료 진단: https://taieng.co.kr/free-diagnosis.html"
 DEFAULT_KEYWORDS = "안전관리자 선임,중대재해처벌법,산업안전보건법 과태료,안전보건관리체계"
 
-# 기본 프롬프트 (DB 로드 실패 시 fallback)
+# Gemini rate limit 대응
+GEMINI_DELAY_SEC  = 3.0   # 호출 간 기본 대기(초)
+GEMINI_RETRY_MAX  = 3     # 429 발생 시 최대 재시도 횟수
+GEMINI_RETRY_WAIT = 15.0  # 429 발생 시 대기(초)
+
 DEFAULT_FORBIDDEN = """법률 상담, 법률 자문, 법적 조언, 변호사 등 법률 서비스를 암시하는 표현 금지
 DB에 없는 법령 조문·판례 번호를 임의로 만들어내기 금지
 과장·확신 표현(반드시, 무조건) → 일반적으로, 해당 조건에서는 등으로 완화"""
@@ -79,10 +81,9 @@ def slack_env_ready() -> bool:
                 os.environ.get("SLACK_CHANNEL_ID", "").strip())
 
 
-# ════════════════ DB에서 설정 로드 ════════════════
+# ════════════════ DB 설정 로드 ════════════════
 
 def load_active_keywords(sb: Any) -> list[str]:
-    """kin_keyword_sets에서 활성 세트 키워드 로드."""
     try:
         r = sb.table("kin_keyword_sets").select("keywords").eq("is_active", True).limit(1).execute()
         if r.data and r.data[0].get("keywords"):
@@ -91,14 +92,11 @@ def load_active_keywords(sb: Any) -> list[str]:
             return kws
     except Exception as e:
         logging.warning("kin_keyword_sets 조회 실패 — 환경변수 fallback: %s", e)
-
-    # fallback: 환경변수 → DEFAULT
     raw = os.environ.get("NAVER_KIN_KEYWORDS", "").strip() or DEFAULT_KEYWORDS
     return [k.strip() for k in raw.split(",") if k.strip()]
 
 
 def load_active_prompt(sb: Any) -> dict:
-    """kin_prompt_settings에서 활성 프롬프트 로드."""
     try:
         r = sb.table("kin_prompt_settings").select("*").eq("is_active", True).limit(1).execute()
         if r.data:
@@ -111,7 +109,7 @@ def load_active_prompt(sb: Any) -> dict:
 
 # ════════════════ 네이버 지식iN ════════════════
 
-def fetch_kin(keyword: str, client_id: str, client_secret: str) -> tuple[list[dict], dict]:
+def fetch_kin(keyword: str, client_id: str, client_secret: str) -> list[dict]:
     r = requests.get(
         NAVER_KIN_API,
         params={"query": keyword, "display": "30", "start": "1", "sort": "date"},
@@ -119,8 +117,7 @@ def fetch_kin(keyword: str, client_id: str, client_secret: str) -> tuple[list[di
         timeout=60,
     )
     r.raise_for_status()
-    data = r.json()
-    return data.get("items") or [], data
+    return r.json().get("items") or []
 
 
 # ════════════════ Supabase 법령 조회 ════════════════
@@ -129,9 +126,10 @@ def search_law_data(sb: Any, keyword: str) -> dict[str, list]:
     out: dict[str, list] = {"rules": [], "revisions": [], "precedents": []}
 
     try:
+        # penalty_amount 없음 → penalty_summary 사용
         out["rules"] = (
             sb.table("master_building_legal_rules")
-            .select("law_name, obligation_summary, obligation_type, penalty_amount")
+            .select("law_name, obligation_summary, obligation_type, penalty_summary")
             .ilike("obligation_summary", f"%{keyword}%")
             .eq("is_active", True)
             .limit(5)
@@ -170,20 +168,14 @@ def search_law_data(sb: Any, keyword: str) -> dict[str, list]:
 
 # ════════════════ Gemini 초안 생성 ════════════════
 
-def build_prompt(
-    question_title: str,
-    question_desc: str,
-    law_data: dict[str, list],
-    prompt_cfg: dict,
-) -> str:
-    """DB 프롬프트 설정을 반영하여 Gemini 프롬프트 구성."""
-    forbidden  = (prompt_cfg.get("forbidden")          or DEFAULT_FORBIDDEN).strip()
-    structure  = (prompt_cfg.get("answer_structure")   or DEFAULT_STRUCTURE).strip()
-    closing    = (prompt_cfg.get("closing_message")    or DIAGNOSIS_LINE).strip()
-    extra      = (prompt_cfg.get("extra_instructions") or "").strip()
+def build_prompt(title: str, desc: str, law_data: dict, prompt_cfg: dict) -> str:
+    forbidden = (prompt_cfg.get("forbidden")        or DEFAULT_FORBIDDEN).strip()
+    structure = (prompt_cfg.get("answer_structure") or DEFAULT_STRUCTURE).strip()
+    closing   = (prompt_cfg.get("closing_message")  or DIAGNOSIS_LINE).strip()
+    extra     = (prompt_cfg.get("extra_instructions") or "").strip()
 
     rules = "\n".join(
-        f"- [{r.get('law_name')}] {r.get('obligation_summary')} (과태료: {r.get('penalty_amount','미확인')})"
+        f"- [{r.get('law_name')}] {r.get('obligation_summary')} (처벌: {r.get('penalty_summary','미확인')})"
         for r in (law_data.get("rules") or [])
     ) or "관련 의무 룰 없음"
 
@@ -209,8 +201,8 @@ def build_prompt(
 {structure}
 {extra_block}
 ---
-[질문 제목] {question_title}
-[질문 내용] {question_desc}
+[질문 제목] {title}
+[질문 내용] {desc}
 
 [DB — 의무 룰]
 {rules}
@@ -228,27 +220,42 @@ def build_prompt(
 
 
 def generate_draft(prompt: str, api_key: str) -> str | None:
+    """Gemini 호출 — 429 시 최대 GEMINI_RETRY_MAX회 재시도."""
     model = _gemini_model()
-    try:
-        r = requests.post(
-            f"{GEMINI_API}/{model}:generateContent",
-            params={"key": api_key},
-            json={"contents": [{"parts": [{"text": prompt}]}]},
-            headers={"Content-Type": "application/json"},
-            timeout=120,
-        )
-        r.raise_for_status()
-        data = r.json()
-        parts = ((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
-        text = (parts[0].get("text") or "").strip() if parts else ""
-        if not text:
+    url   = f"{GEMINI_API}/{model}:generateContent"
+
+    for attempt in range(1, GEMINI_RETRY_MAX + 1):
+        try:
+            time.sleep(GEMINI_DELAY_SEC)  # 기본 딜레이
+            r = requests.post(
+                url,
+                params={"key": api_key},
+                json={"contents": [{"parts": [{"text": prompt}]}]},
+                headers={"Content-Type": "application/json"},
+                timeout=120,
+            )
+            if r.status_code == 429:
+                wait = GEMINI_RETRY_WAIT * attempt
+                logging.warning("Gemini 429 — %d초 대기 후 재시도 (%d/%d)", wait, attempt, GEMINI_RETRY_MAX)
+                time.sleep(wait)
+                continue
+            r.raise_for_status()
+            data  = r.json()
+            parts = ((data.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+            text  = (parts[0].get("text") or "").strip() if parts else ""
+            if not text:
+                return None
+            if DIAGNOSIS_LINE not in text:
+                text = text.rstrip() + "\n\n" + DIAGNOSIS_LINE
+            return text
+        except requests.exceptions.HTTPError as e:
+            if attempt == GEMINI_RETRY_MAX:
+                logging.error("Gemini 최종 실패 (%d회 시도): %s", attempt, e)
+                return None
+        except Exception as e:
+            logging.exception("Gemini 예외: %s", e)
             return None
-        if DIAGNOSIS_LINE not in text:
-            text = text.rstrip() + "\n\n" + DIAGNOSIS_LINE
-        return text
-    except Exception as e:
-        logging.exception("Gemini 초안 생성 실패: %s", e)
-        return None
+    return None
 
 
 # ════════════════ Supabase INSERT ════════════════
@@ -279,9 +286,13 @@ def insert_log(sb: Any, row: dict[str, Any]) -> tuple[bool, str | None]:
 def send_slack(token: str, channel: str, items: list[dict], dashboard: str) -> None:
     lines = [f"🔍 네이버 지식인 신규 *{len(items)}건* 수집 완료", ""]
     for i, it in enumerate(items[:5], 1):
-        lines += [f"*{i}. {it.get('title','(제목없음)')}*", it.get("link", ""),
-                  f"> {(it.get('draft_preview') or '')[:200]}", ""]
-    lines.append(f"Supabase: {dashboard}")
+        lines += [
+            f"*{i}. {it.get('title','(제목없음)')}*",
+            it.get("link", ""),
+            f"> {(it.get('draft_preview') or '')[:200]}",
+            "",
+        ]
+    lines.append(f"📊 Supabase: {dashboard}")
     try:
         r = requests.post(
             SLACK_POST_URL,
@@ -292,6 +303,8 @@ def send_slack(token: str, channel: str, items: list[dict], dashboard: str) -> N
         body = r.json()
         if not body.get("ok"):
             logging.error("Slack API 오류: %s", body)
+        else:
+            logging.info("Slack 전송 완료")
     except Exception as e:
         logging.exception("Slack 전송 실패: %s", e)
 
@@ -302,18 +315,17 @@ def main() -> None:
     naver_id     = _require_env("NAVER_CLIENT_ID")
     naver_secret = _require_env("NAVER_CLIENT_SECRET")
     sb_url       = _require_env("SUPABASE_URL")
-    sb_key       = _require_env("SUPABASE_SERVICE_KEY")   # ← Railway 환경변수명
+    sb_key       = _require_env("SUPABASE_SERVICE_KEY")
     gemini_key   = _require_env("GEMINI_API_KEY")
 
     sb     = create_client(sb_url, sb_key)
     run_at = datetime.now(timezone.utc).isoformat()
 
-    # ── DB에서 키워드·프롬프트 로드 ──
     keywords   = load_active_keywords(sb)
     prompt_cfg = load_active_prompt(sb)
 
-    logging.info("실행 키워드: %s", keywords)
-    logging.info("프롬프트: %s", prompt_cfg.get("name", "기본값"))
+    logging.info("실행 키워드 %d개: %s", len(keywords), keywords)
+    logging.info("프롬프트: %s", prompt_cfg.get("name", "기본값(DB 없음)"))
 
     new_for_slack: list[dict] = []
     stats = {
@@ -327,10 +339,12 @@ def main() -> None:
 
     for kw in keywords:
         try:
-            items, _ = fetch_kin(kw, naver_id, naver_secret)
+            items = fetch_kin(kw, naver_id, naver_secret)
         except Exception as e:
             logging.exception("[네이버 API] keyword=%s: %s", kw, e)
             continue
+
+        logging.info("[%s] 수집 %d건", kw, len(items))
 
         for idx, item in enumerate(items):
             stats["api_items"] += 1
@@ -348,7 +362,7 @@ def main() -> None:
             try:
                 law_data = search_law_data(sb, kw)
             except Exception as e:
-                logging.warning("법령 조회 예외 — 빈 근거로 진행: %s", e)
+                logging.warning("법령 조회 예외: %s", e)
                 law_data = {"rules": [], "revisions": [], "precedents": []}
 
             prompt = build_prompt(title, desc, law_data, prompt_cfg)
@@ -375,6 +389,7 @@ def main() -> None:
             inserted, err = insert_log(sb, row)
             if inserted:
                 stats["inserted"] += 1
+                logging.info("✅ 저장: %s", title[:50])
                 new_for_slack.append({"title": title, "link": link, "draft_preview": draft})
             elif err:
                 stats["insert_errors"] += 1
@@ -391,6 +406,7 @@ def main() -> None:
     elif not slack_env_ready():
         logging.info("Slack 환경변수 미설정 — 알림 생략")
 
+    logging.info("완료: %s", stats)
     print(json.dumps({"ok": True, "run_at": run_at, **stats}, ensure_ascii=False))
 
 
