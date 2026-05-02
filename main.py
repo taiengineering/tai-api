@@ -182,7 +182,6 @@ app.add_middleware(
     allow_origins=[
         "https://taieng.co.kr",
         "https://www.taieng.co.kr",
-        "https://new.taieng.co.kr",
         "https://admin.taieng.co.kr",
         "https://tadmin.taieng.co.kr",
         "https://safe.taieng.co.kr",

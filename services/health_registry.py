@@ -57,7 +57,7 @@ ERROR_MESSAGES_KO = {
     "payment": "결제 시스템(KG이니시스) 연결을 확인할 수 없습니다.",
     "construction": "건설 관리 데이터에 접근할 수 없습니다.",
     "frontend_safe": "SaaS 사이트(safe.taieng.co.kr)에 접속할 수 없습니다.",
-    "frontend_marketing": "마케팅 사이트(new.taieng.co.kr)에 접속할 수 없습니다.",
+    "frontend_marketing": "마케팅 사이트(taieng.co.kr)에 접속할 수 없습니다.",
     # 상태별 종합 메시지
     "critical": "🚨 서비스 장애가 발생했습니다. 즉시 확인이 필요합니다.",
     "degraded": "⚠️ 일부 서비스가 정상적이지 않습니다. 확인이 필요합니다.",

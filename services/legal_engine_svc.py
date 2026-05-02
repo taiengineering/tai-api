@@ -383,8 +383,8 @@ register_probe(
     desc_ko="법령 엔진",
     meta={
         "impacts": [
-            {"name": "무료 진단", "url": "https://new.taieng.co.kr/free-diagnosis.html"},
-            {"name": "유료 진단", "url": "https://new.taieng.co.kr/paid-diagnosis-result.html"},
+            {"name": "무료 진단", "url": "https://taieng.co.kr/free-diagnosis.html"},
+            {"name": "유료 진단", "url": "https://taieng.co.kr/paid-diagnosis-result.html"},
             {"name": "SaaS 법적 의무", "page": "safe > 점검관리"},
         ],
         "fix_links": [

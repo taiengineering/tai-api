@@ -790,8 +790,8 @@ register_probe(
     desc_ko="결제 시스템",
     meta={
         "impacts": [
-            {"name": "법령진단 결제", "url": "https://new.taieng.co.kr/service/diagnosis.html"},
-            {"name": "SaaS 구독", "url": "https://new.taieng.co.kr/service/saas.html"},
+            {"name": "법령진단 결제", "url": "https://taieng.co.kr/service/diagnosis.html"},
+            {"name": "SaaS 구독", "url": "https://taieng.co.kr/service/saas.html"},
         ],
         "fix_links": [
             {"name": "Railway 환경변수", "url": "https://railway.com/project/7c3ab53b-feb6-40a4-a4f0-7ade3f6e524b/variables"},

@@ -26,7 +26,7 @@ API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.taieng.co.kr")
 # ============================================================
 
 class DiagnosisSurveyRequest(BaseModel):
-    """v3.0.0: new.taieng.co.kr free-diagnosis.html 전용 스펙."""
+    """v3.0.0: taieng.co.kr free-diagnosis.html 전용 스펙."""
     model_config = ConfigDict(extra="allow")
 
     # 섹터 & 등급
@@ -165,7 +165,7 @@ def send_notification_email(quote_no: str, payload: dict):
 
 
 # ============================================================
-# v3.0.0: 무료 법령 진단 접수 (new.taieng.co.kr free-diagnosis.html)
+# v3.0.0: 무료 법령 진단 접수 (taieng.co.kr free-diagnosis.html)
 # ============================================================
 
 @router.post("/survey")

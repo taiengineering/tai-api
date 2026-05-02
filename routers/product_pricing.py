@@ -37,7 +37,7 @@ class PricingUpdate(BaseModel):
     features:      Optional[List[FeatureItem]] = None
 
 
-# ── 공개 목록 (new.taieng.co.kr, pricing.html 에서 사용) ─────
+# ── 공개 목록 (taieng.co.kr, pricing.html 에서 사용) ─────
 @router.get("")
 def list_pricing():
     sb = get_supabase()
