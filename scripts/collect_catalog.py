@@ -16,14 +16,12 @@
   - 결과 distinct → 보유 182 + 통합 80 = 우리 시스템 인지 범위
   - 카탈로그 - 우리 인지 = 진짜 누락
 
-사용법:
+사용법 (S6 이후 권장):
     cd ~/dev/tai-api
-    set -a; source .env; set +a
-    
-    python3 scripts/collect_catalog.py collect    # 카탈로그 수집 (1회 약 30~60분)
-    python3 scripts/collect_catalog.py classify   # 보유/타겟과 대조 분류
-    python3 scripts/collect_catalog.py status     # 진행 통계
-    python3 scripts/collect_catalog.py missing    # 진짜 누락 법령 출력
+    railway run python3 scripts/collect_catalog.py collect    # 카탈로그 수집 (15~60분)
+    railway run python3 scripts/collect_catalog.py classify   # 보유/타겟과 대조 분류 (SQL 출력)
+    railway run python3 scripts/collect_catalog.py status     # 진행 통계
+    railway run python3 scripts/collect_catalog.py missing    # 진짜 누락 법령 출력
 """
 from __future__ import annotations
 
@@ -35,6 +33,17 @@ from typing import Optional
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
+
+# v1.1 (2026-05-03 S6): .env 자동 로드 추가 (collect_v2.py와 일관성).
+# railway run 사용 시엔 이미 환경변수가 주입되어 override=False로 무해.
+try:
+    from dotenv import load_dotenv
+    _ENV_PATH = os.path.join(_ROOT, ".env")
+    if os.path.isfile(_ENV_PATH):
+        load_dotenv(_ENV_PATH, override=False)
+except ImportError:
+    print("[warn] python-dotenv 미설치 — pip3 install python-dotenv 권장.",
+          file=sys.stderr)
 
 from db.database import get_supabase
 from routers.law_collector import (
@@ -274,7 +283,7 @@ def cmd_collect(rate_limit_sec: float = 0.4) -> int:
     print(f"📊 이번 세션 신규 적재: {total_inserted}")
     print(f"📊 이미 등록되어 skip: {total_skipped}")
     print(f"📊 오류: {total_errors}")
-    print(f"\n다음 단계: python3 scripts/collect_catalog.py classify")
+    print(f"\n다음 단계: railway run python3 scripts/collect_catalog.py classify")
     
     return 0 if total_errors == 0 else 1
 
