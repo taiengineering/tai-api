@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-collect_law_attachments.py — 첨부파일 본체 트랙 PDF/HWP 다운로드
+collect_law_attachments.py — 첨부파일 본체 트랙 PDF/HWP 다운로드  (v2: ASCII-safe Storage key)
 
 목적:
     law.go.kr DRF API가 "공고/고시" 형태로 응답한 행정규칙은 본문이 첨부파일에만 있고
@@ -12,12 +12,18 @@ collect_law_attachments.py — 첨부파일 본체 트랙 PDF/HWP 다운로드
     article_cnt <= 2 AND raw_xml에 <첨부파일링크> 존재 AND 아직 SUCCESS 첨부 없음
     예: 한국전기설비규정(KEC), 국가기술표준원 KS 표준 다수, KESCO 등
 
+v2 변경 (2026-05-03):
+    - Storage path를 ASCII-safe 로: {master_id}/{flSeq}.{ext}
+    - 한글/공백/대괄호 포함 한글 파일명 → InvalidKey (Supabase Storage 거부) 해결
+    - 원본 한글 파일명은 source_file_name + attachment_title 컬럼에 그대로 보존
+    - content-type 명시 헤더 (pdf/hwp 자동 매핑)
+
 처리:
     1. 후보 master 목록 수집
     2. raw_xml에서 (첨부파일명, 첨부파일링크) 쌍 추출 (regex)
     3. PDF 우선, PDF 없으면 HWP fallback (둘 다 없으면 모든 형식)
     4. law.go.kr 다운로드 (HTTP/HTTPS, retry 3회, exponential backoff)
-    5. Supabase Storage 업로드 (bucket: law-attachments, path: {master_id}/{filename})
+    5. Supabase Storage 업로드 (bucket: law-attachments, path: {master_id}/{flSeq}.{ext})
     6. law_attachment INSERT/UPDATE (source_url 기반 upsert)
 
 멱등성:
@@ -28,26 +34,10 @@ collect_law_attachments.py — 첨부파일 본체 트랙 PDF/HWP 다운로드
     cd ~/dev/tai-api
     git pull origin main
     railway run python3 scripts/collect_law_attachments.py [옵션]
-
-옵션:
-    --limit N          : N건만 처리 (테스트)
-    --master-id UUID   : 특정 master 만
-    --dry-run          : 다운로드/업로드/INSERT 모두 안 하고 매니페스트만 출력
-    --retry-failed     : download_status='FAILED' 인 첨부만 재시도
-    --force            : 이미 SUCCESS여도 다시 다운로드
-    --workers N        : 동시 다운로드 수 (기본 1, 로컬 IP 안전 고려)
-    --include-hwp      : PDF 있어도 HWP까지 함께 다운로드 (기본은 PDF 우선)
-
-환경변수:
-    SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (Mac 로컬 .env 또는 railway run)
-
-원칙:
-    - 다운로드/업로드/DB 어느 단계에서 실패해도 다음 master 로 진행 (전체 중단 X)
-    - FAILED 도 law_attachment 에 기록 (download_error) → 재시도 가능
-    - 본 스크립트는 다운로드까지. 텍스트 추출/의무 추출은 별도 단계.
 """
 
 import argparse
+import hashlib
 import os
 import re
 import sys
@@ -55,7 +45,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-# .env + 프록시 무력화 (Mac 로컬에서 railway run 패턴 호환)
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -80,7 +69,7 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 BUCKET = "law-attachments"
 
-# ── 정규식: <첨부파일명> + <첨부파일링크> 추출 (CDATA / 일반 텍스트 모두)
+# ── 정규식: <첨부파일명> + <첨부파일링크>
 RE_ATTACH_NAME = re.compile(
     r'<첨부파일명>\s*(?:<!\[CDATA\[(.+?)\]\]>|([^<]+?))\s*</첨부파일명>',
     re.DOTALL,
@@ -89,6 +78,14 @@ RE_ATTACH_LINK = re.compile(
     r'<첨부파일링크>\s*([^\s<]+)\s*</첨부파일링크>',
     re.DOTALL,
 )
+
+# 포맷별 content-type
+CONTENT_TYPE_MAP = {
+    'pdf': 'application/pdf',
+    'hwp': 'application/x-hwp',
+    'doc': 'application/octet-stream',
+    'other': 'application/octet-stream',
+}
 
 
 # ────────────────────────────────────────────────────────────────
@@ -143,23 +140,24 @@ def select_targets(pairs, include_hwp: bool = False):
     return other_pairs or pairs
 
 
-def safe_filename(name: str) -> str:
-    """파일시스템/Storage 안전한 이름. 한글 유지, 위험문자 _ 치환, 200byte 이내."""
-    out = re.sub(r'[/\\:*?"<>|\x00-\x1f]', '_', name or "untitled")
-    out = out.strip('. ')
-    if not out:
-        out = "untitled.bin"
-    # 200 byte 이내
-    enc = out.encode('utf-8')
-    if len(enc) > 200:
-        base, dot, ext = out.rpartition('.')
-        if dot:
-            keep = 200 - len(ext.encode('utf-8')) - 1
-            base_enc = base.encode('utf-8')[:max(keep, 1)]
-            out = base_enc.decode('utf-8', errors='ignore') + '.' + ext
-        else:
-            out = enc[:200].decode('utf-8', errors='ignore')
-    return out
+def build_storage_path(master_id: str, filename: str, source_url: str) -> str:
+    """ASCII-safe Storage key 생성. 형식: {master_id}/{flSeq}.{ext}
+
+    Supabase Storage(S3-호환)는 한글/공백/대괄호 등을 InvalidKey 로 거부함.
+    →  master_id (UUID, ASCII safe) + flSeq (URL의 숫자 ID) + 확장자만 사용.
+    원본 파일명은 DB의 source_file_name 컬럼에 보존되므로 식별 가능.
+    """
+    fmt = detect_format(filename)
+    ext_map = {'pdf': 'pdf', 'hwp': 'hwp', 'doc': 'doc', 'other': 'bin'}
+    ext = ext_map.get(fmt, 'bin')
+
+    m = re.search(r'flSeq=(\d+)', source_url)
+    if m:
+        seq = m.group(1)
+    else:
+        seq = hashlib.md5(source_url.encode('utf-8')).hexdigest()[:12]
+
+    return f"{master_id}/{seq}.{ext}"
 
 
 def download_file(url: str, timeout: int = 60, max_retry: int = 3):
@@ -188,24 +186,30 @@ def download_file(url: str, timeout: int = 60, max_retry: int = 3):
     raise RuntimeError(f"download failed after {max_retry} retries: {last_err}")
 
 
-def upload_storage(master_id: str, filename: str, content: bytes, content_type: str = None) -> str:
-    """Supabase Storage 업로드. 같은 path 있으면 update."""
-    safe = safe_filename(filename)
-    path = f"{master_id}/{safe}"
+def upload_storage(storage_path: str, filename: str, content: bytes) -> str:
+    """Supabase Storage 업로드. content-type은 파일명에서 자동 매핑.
 
-    # supabase-py upload는 file_options에 upsert 지원
-    file_options = {"upsert": "true"}
-    if content_type:
-        file_options["content-type"] = content_type
+    storage_path는 build_storage_path()로 ASCII-safe하게 미리 생성된 값.
+    """
+    fmt = detect_format(filename)
+    content_type = CONTENT_TYPE_MAP.get(fmt, 'application/octet-stream')
+
+    file_options = {
+        "content-type": content_type,
+        "upsert": "true",
+    }
     try:
-        sb.storage.from_(BUCKET).upload(path, content, file_options=file_options)
+        sb.storage.from_(BUCKET).upload(storage_path, content, file_options=file_options)
     except Exception as e1:
-        # 일부 버전은 upsert 안 먹어서 update fallback
+        # 일부 supabase-py 버전은 upsert 옵션 안 먹음 → update fallback
         try:
-            sb.storage.from_(BUCKET).update(path, content, file_options={"content-type": content_type or "application/octet-stream"})
+            sb.storage.from_(BUCKET).update(
+                storage_path, content,
+                file_options={"content-type": content_type},
+            )
         except Exception as e2:
-            raise RuntimeError(f"storage upload failed: {e1} / update: {e2}")
-    return path
+            raise RuntimeError(f"storage upload failed: {e1} / update fallback: {e2}")
+    return storage_path
 
 
 def upsert_attachment_row(version_id: str, source_url: str, payload: dict):
@@ -272,7 +276,8 @@ def process_one(master: dict, args) -> dict:
         if args.dry_run:
             files_result.append({
                 "filename": filename, "url": url,
-                "status": "DRY_RUN", "format": detect_format(filename)
+                "status": "DRY_RUN", "format": detect_format(filename),
+                "would_path": build_storage_path(master_id, filename, url),
             })
             continue
 
@@ -303,9 +308,10 @@ def process_one(master: dict, args) -> dict:
             })
             continue
 
-        # Step 2: Storage 업로드
+        # Step 2: Storage 업로드 (ASCII-safe path)
+        storage_path = build_storage_path(master_id, filename, url)
         try:
-            storage_path = upload_storage(master_id, filename, content, content_type)
+            upload_storage(storage_path, filename, content)
         except Exception as e:
             try:
                 upsert_attachment_row(version_id, url, {
@@ -406,7 +412,6 @@ def collect_candidates(args):
                 if (failed_cnt.count or 0) == 0:
                     continue
             else:
-                # SUCCESS가 이미 있으면 SKIP (전부 처리 완료된 것)
                 if (success_cnt.count or 0) > 0 and (failed_cnt.count or 0) == 0:
                     continue
 
@@ -435,7 +440,7 @@ def main():
     args = ap.parse_args()
 
     print("=" * 72)
-    print("collect_law_attachments — 첨부 본체 PDF/HWP 수집")
+    print("collect_law_attachments v2 — 첨부 본체 PDF/HWP 수집 (ASCII-safe key)")
     print("=" * 72)
     print(f"옵션: limit={args.limit} dry_run={args.dry_run} retry_failed={args.retry_failed} "
           f"force={args.force} workers={args.workers} include_hwp={args.include_hwp}")
@@ -450,14 +455,12 @@ def main():
         print("처리 대상 없음. 종료.")
         return
 
-    # 미리보기 (처음 5건)
     print("  처음 5건 미리보기:")
     for m in candidates[:5]:
         pairs = extract_attachments(m["raw_xml"])
         targets = select_targets(pairs, include_hwp=args.include_hwp)
         print(f"    - {m['law_name'][:50]}: {len(pairs)}개 첨부 (선택 {len(targets)})")
 
-    # 처리
     print(f"\nStep 2. 처리 시작 (workers={args.workers})")
     summary = {"SUCCESS": 0, "FAILED": 0, "SKIPPED": 0, "DRY_RUN": 0}
     file_count = 0
@@ -483,6 +486,8 @@ def main():
             for f in files:
                 if f.get("status") == "FAILED":
                     print(f"      FAIL: {f.get('filename', '?')[:50]} | {f.get('reason', '')[:80]}")
+                elif f.get("status") == "SUCCESS":
+                    print(f"      OK:   {f.get('path', '?')} ({f.get('size', 0)} bytes)")
     else:
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
             futs = {ex.submit(process_one, m, args): m for m in candidates}
@@ -502,7 +507,6 @@ def main():
                     file_count += 1
                 print(f"  [{i:3}/{len(candidates)}] {m['law_name'][:45]:45} ok={ok} fail={fail}")
 
-    # 요약
     print("\n" + "=" * 72)
     print("요약")
     print("=" * 72)
@@ -512,7 +516,6 @@ def main():
         if summary.get(k, 0):
             print(f"  {k:10}: {summary[k]}")
 
-    # DB 상태 검증
     if not args.dry_run:
         print("\nDB 상태 검증 (law_attachment):")
         for s in ("SUCCESS", "FAILED", "PENDING", "DOWNLOADING", "SKIPPED"):
@@ -523,11 +526,10 @@ def main():
             if n:
                 print(f"  {s:12}: {n}")
 
-    print("\n다음 단계 (이번 작업 완료 후):")
-    print("  1) 다운로드 결과 검토 (Supabase Storage 'law-attachments' 버킷)")
+    print("\n다음 단계:")
+    print("  1) Supabase Storage 'law-attachments' 버킷에서 파일 확인")
     print("  2) FAILED 원인 분석 후 --retry-failed")
     print("  3) PDF/HWP 텍스트 추출 단계 (별도 스크립트)")
-    print("  4) 의무 추출 (LLM, 4단계)")
 
 
 if __name__ == "__main__":
