@@ -1,36 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-judge_orphan_rules.py — 매핑 의심 룰 살림/죽임 판정 (read-only)
+judge_orphan_rules.py v2 — 매핑 의심 룰 살림/죽임 판정 (read-only)
 
-사용자 기준 (2026-05-03):
+v2 변경 (2026-05-03):
+    - DUTY_STRONG 사전 보강:
+        '할 것', '받아야 (한다|할)', '두어야 한다', '갖추어야 (한다|할)',
+        '마련하여야 한다', '아니 된다', '안 된다', '받지 아니하고는',
+        '의무가 있다', '책임이 있다', '명사+하여야' 등
+    - 중대재해처벌법 시행령 제5조('...할 것' 의무)가 v1 에서 KILL 오판된 것이 계기.
+    - KILL 후보 본문 미리보기 600자로 확장 (사용자 spot-check 강화).
+
+사용자 기준:
     하나라도 놓치면 수백 현장이 해야 할 일을 안 하게 되고,
     하나를 잘못 넣으면 수백 현장이 안 해도 될 일을 하게 됨.
     살릴지 죽일지 본문 기준으로 판단.
 
-판정 기준:
-    article_text(진짜 본문)에 사업장 의무 동사가 있는가?
-        - 의무 동사 명백 존재 -> KEEP (살림. 의무 표현은 추후 본문 기반 정정)
-        - 정의/원칙 조항만 -> KILL (죽임. 매핑 결함 확정)
-        - 모호 -> REVIEW (사용자 spot-check)
-
-대상:
-    diagnose_orphan_rules.py 의 D_MAPPED 분류 룰 (현재 약 180건).
-    B (첨부파일 본체) 와 C (article 없음) 는 별도 트랙이라 본 스크립트에서 제외.
-    필요 시 --include-all 로 전체 검사도 가능.
-
 판정 로직:
-    1. 강한 의무 동사 어미: '...하여야 한다', '...해야 한다', '...할 수 없다(금지)' 등
-        -> KEEP
-    2. 정의 패턴: '이라 한다', '을 말한다', '라 함은' + 의무 동사 부재
-        -> KILL (산안법 제2조 정의 같은 케이스)
-    3. 권한만 있고 의무 없음: '할 수 있다' 만 있고 '하여야' 없음
-        -> REVIEW
+    1. DUTY_STRONG 매칭 -> KEEP
+    2. (DUTY 부재) AND DEFINITION_TITLE OR DEFINITION 패턴 -> KILL
+    3. (DUTY 부재) AND PERMISSION 만 -> REVIEW
     4. 그 외 -> REVIEW
-
-출력:
-    /tmp/orphan_rules_judgment.csv  (살림/죽임/검토 + 근거 + 본문 미리보기)
-    콘솔 요약
 
 실행:
     cd ~/dev/tai-api
@@ -75,7 +65,9 @@ BOILER_RE = re.compile(
 KEC_RE = re.compile(r'^\s*[0-9]+(\.[0-9]+)?\s*$')
 ARTICLE_RE = re.compile(r'제\s*(\d+)\s*조(?:의\s*(\d+))?')
 
+# v2: 의무 동사 사전 보강
 DUTY_STRONG = [
+    # v1 기존
     re.compile(r'하여야\s*한다'),
     re.compile(r'해야\s*한다'),
     re.compile(r'하여야\s*하며'),
@@ -85,7 +77,24 @@ DUTY_STRONG = [
     re.compile(r'하지\s*않아야'),
     re.compile(r'하지\s*못한다'),
     re.compile(r'할\s*수\s*없다'),
-    re.compile(r'금지(?:한다|된다|되어 있다)'),
+    re.compile(r'금지(?:한다|된다|되어\s*있다)'),
+    # v2 추가
+    re.compile(r'[\.\s]\s*할\s*것\s*[\.。]?'),       # 시행령/시행규칙 핵심 의무 (중대재해법 시행령 제5조)
+    re.compile(r'받아야\s*한다'),                    # 검사·승인 수동 의무
+    re.compile(r'받아야\s*할'),
+    re.compile(r'두어야\s*한다'),                    # 비치/배치
+    re.compile(r'갖추어야\s*한다'),                  # 갖춤 의무
+    re.compile(r'갖추어야\s*할'),
+    re.compile(r'마련하여야\s*한다'),                # 절차/체계 마련
+    re.compile(r'아니\s*된다'),                     # 강한 금지
+    re.compile(r'안\s*된다'),
+    re.compile(r'받지\s*아니하고는'),                # 조건부 금지
+    re.compile(r'의무가\s*있다'),                   # 명시적 의무
+    re.compile(r'책임이\s*있다'),                   # 명시적 책임
+    re.compile(r'필요한\s*조치를\s*하'),             # 필요한 조치를 한다/하여야
+    re.compile(r'취하여야\s*한다'),                  # 조치 취해야
+    re.compile(r'(?:실시|점검|검사|측정|평가|기록|작성|보존|비치|보고|신고|선임|배치|이행)하여야'),
+    re.compile(r'(?:받|두|놓|갖추)게\s*하여야'),     # 사역형 의무
 ]
 
 PERMISSION = re.compile(r'할\s*수\s*있다')
@@ -137,7 +146,7 @@ def judge(article_text, article_title):
     permission = bool(PERMISSION.search(article_text))
 
     if duty_hits:
-        return "KEEP", "duty: " + duty_hits[0] + (f" +{len(duty_hits)-1}" if len(duty_hits) > 1 else "")
+        return "KEEP", "duty: " + duty_hits[0][:30] + (f" +{len(duty_hits)-1}" if len(duty_hits) > 1 else "")
 
     if is_def_title and def_hits >= 1:
         return "KILL", f"def-title: {article_title}"
@@ -159,7 +168,7 @@ def main():
     args = ap.parse_args()
 
     print("=" * 72)
-    print("Step 1. 대상 룰 + 본문 수집")
+    print("Step 1. 대상 룰 + 본문 수집  (judge v2)")
     print("=" * 72)
     rules = fetch_paged(
         "master_building_legal_rules",
@@ -206,7 +215,7 @@ def main():
 
     print()
     print("=" * 72)
-    print("Step 3. 본문 의무 동사 검사 + 판정")
+    print("Step 3. 본문 의무 동사 검사 + 판정 (v2 사전)")
     print("=" * 72)
     rows_out = []
     cls_cnt = Counter()
@@ -259,7 +268,9 @@ def main():
         article_title = ""
         if article_obj:
             article_title = article_obj.get("article_title") or ""
-            article_text_preview = (article_obj.get("article_text") or "")[:300].replace("\n", " ")
+            # v2: KILL 후보 검증 위해 본문 600자로 확장
+            preview_len = 600 if verdict == "KILL" else 300
+            article_text_preview = (article_obj.get("article_text") or "")[:preview_len].replace("\n", " ")
 
         rows_out.append({
             "id": r.get("id"),
@@ -306,9 +317,9 @@ def main():
     kill_rows = [r for r in rows_out if r["verdict"] == "KILL"]
     if kill_rows:
         print()
-        print(f"KILL 후보 {len(kill_rows)}건 (정의/원칙 조항 추정 - 사용자 spot-check 필수):")
+        print(f"KILL 후보 {len(kill_rows)}건 (사용자 spot-check 필수, 본문 600자 미리보기는 CSV 참조):")
         for r in kill_rows[:30]:
-            print(f"  [{r['source_api']:25}] {r['law_name'][:30]:30} {r['law_article_raw']:20} title={r['real_article_title'][:30]}")
+            print(f"  [{r['source_api']:25}] {r['law_name'][:30]:30} {r['law_article_raw']:18} title={r['real_article_title'][:40]}")
         if len(kill_rows) > 30:
             print(f"  ... 그 외 {len(kill_rows)-30}건")
 
@@ -316,8 +327,8 @@ def main():
     print("=" * 72)
     print("다음 단계")
     print("=" * 72)
-    print("  1) KILL 후보 spot-check (수동 확인 후 KEEP/KILL 확정)")
-    print("  2) KEEP 분: is_active 유지. 본 미션 4단계(의무 추출)에서 본문 기반 새 룰로 자연 대체")
+    print("  1) KILL 후보 본문 직접 대조 (CSV real_article_text_preview 600자)")
+    print("  2) KEEP 분: is_active 유지. 본 미션 4단계(의무 추출)에서 본문 기반 자연 대체")
     print("  3) KILL 확정 분: 처리 스크립트로 DELETE/비활성화")
     print("  4) REVIEW: 사용자 spot-check 후 KEEP/KILL 재분류")
 
