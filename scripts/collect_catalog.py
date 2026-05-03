@@ -35,7 +35,6 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 # v1.1 (2026-05-03 S6): .env 자동 로드 추가 (collect_v2.py와 일관성).
-# railway run 사용 시엔 이미 환경변수가 주입되어 override=False로 무해.
 try:
     from dotenv import load_dotenv
     _ENV_PATH = os.path.join(_ROOT, ".env")
@@ -43,6 +42,17 @@ try:
         load_dotenv(_ENV_PATH, override=False)
 except ImportError:
     print("[warn] python-dotenv 미설치 — pip3 install python-dotenv 권장.",
+          file=sys.stderr)
+
+# v1.2 (2026-05-03 S6): iwinv 프록시 hung 상태 우회
+# Railway env에서 주입되는 OUTBOUND_PROXY는 현재 죽은 iwinv VPS Squid를 가리킴.
+# routers/law_collector.py v3.0.8의 fetch_law_list는 OUTBOUND_PROXY가 있으면
+# 자동으로 통과시키도록 되어있는데, 사용자 Mac은 이미 OC=taieng에 IP 등록되어
+# 있어 직접 호출이 정상 작동함. → 스크립트 진입 시 OUTBOUND_PROXY 명시적 unset.
+# (db.database / routers.law_collector import 전에 실행되어야 함)
+_removed_proxy = os.environ.pop("OUTBOUND_PROXY", None)
+if _removed_proxy:
+    print(f"[info] OUTBOUND_PROXY={_removed_proxy} 무시 (Mac 직접 호출 사용)",
           file=sys.stderr)
 
 from db.database import get_supabase
