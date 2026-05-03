@@ -1,4 +1,5 @@
-# routers/law_collector.py v3.0.8
+# routers/law_collector.py v3.0.9
+# v3.0.9: save_law_to_db()의 law_article INSERT에 law_id 추가 (NOT NULL 위반 수정)
 # v3.0.8: OUTBOUND_PROXY (iwinv VPS 115.68.227.222:3128) 통과로 송신 IP 고정.
 #         Railway egress IP는 동적(GCP)이라 OC=taieng 등록 불가 → 4/20 이전부터
 #         SMS/결제 모듈이 사용하던 한국 고정 IP 프록시를 법령 수집에도 동일 적용.
@@ -428,6 +429,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
     if is_new_version:
         for art in articles:
             art_res = supabase.table("law_article").insert({
+                "law_id": law_id,                       # v3.0.9: law_id NOT NULL 충족
                 "law_version_id": version_id,
                 "article_internal_key": art["article_internal_key"],
                 "article_no": art["article_no"], "article_sub_no": art["article_sub_no"],
@@ -838,7 +840,7 @@ async def get_collection_status():
         .select("law_id, job_message, updated_at").eq("job_status_code", "FAILED")\
         .order("updated_at", desc=True).limit(10).execute()
     return {
-        "version":             "3.0.8",
+        "version":             "3.0.9",
         "api_source":          "law.go.kr/DRF",
         "oc":                  LAW_API_OC,
         "proxy_set":           bool(LAW_API_PROXIES),
