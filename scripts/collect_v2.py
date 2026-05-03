@@ -13,7 +13,7 @@
 
 사용법:
     cd ~/dev/tai-api
-    set -a; source .env; set +a
+    # .env 자동 로드 — set -a; source .env; set +a 불필요
     
     python3 scripts/collect_v2.py test "산업안전보건법"
     python3 scripts/collect_v2.py all
@@ -34,6 +34,22 @@ from typing import Any, Optional
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
+
+# v3.0.1 (2026-05-03 S6): .env 자동 로드 추가
+# 배경: zsh의 `set -a; source .env`가 .env 내 특수문자(^, $, 등)에 의해
+#       부분 로드되어 SUPABASE_URL이 빈 채로 실행 → DNS 실패가 빈번했음.
+# 조치: Python 진입 시 dotenv로 .env를 직접 로드하도록 변경.
+#       db.database import 전에 실행되어야 함 (db.database가 모듈 로드 시점에
+#       환경변수를 읽기 때문).
+# override=False: 호스팅 환경(Railway 등)의 export된 환경변수가 우선되도록 함.
+try:
+    from dotenv import load_dotenv
+    _ENV_PATH = os.path.join(_ROOT, ".env")
+    if os.path.isfile(_ENV_PATH):
+        load_dotenv(_ENV_PATH, override=False)
+except ImportError:
+    print("[warn] python-dotenv 미설치 — pip3 install python-dotenv 권장. "
+          "환경변수가 이미 export 되어 있으면 무시해도 됩니다.", file=sys.stderr)
 
 from db.database import get_supabase
 from routers.law_collector import (
