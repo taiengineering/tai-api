@@ -1,26 +1,21 @@
 #!/usr/bin/env python3
 """
-collect_phase4_full.py — S9 Phase 4 통합 본문 수집
+collect_phase4_full.py — S9 Phase 4 통합 본문 수집 (v2)
 ====================================================
-목표:
-  1. catalog 미등록 4건 등록 (소방기본법 등 — master_building_legal_rules에서 사용 중)
-  2. catalog.is_in_collection_target=TRUE && law_master에 미수집인 항목 모두 본문 수집
-  3. L1+L2+L3 무결성 검증
+v2 수정 (2026-05-03):
+  - Phase A INSERT에 api_target, search_keyword 추가 (NOT NULL)
+  - Phase B에 --debug-first 옵션 추가 (첫 1건 raw JSON 저장)
+  - Phase B 응답 파싱을 robust 하게 + 자세한 에러 메시지
 
 실행:
   cd ~/dev/tai-api
-  python scripts/collect_phase4_full.py            # 정상 실행
-  python scripts/collect_phase4_full.py --dry-run  # DB 변경 없이 대상만 출력
-  python scripts/collect_phase4_full.py --phase a  # Phase A만 (catalog 등록만)
-  python scripts/collect_phase4_full.py --phase b  # Phase B만 (본문 수집만)
-  python scripts/collect_phase4_full.py --phase c  # Phase C만 (검증만)
+  railway run python3 scripts/collect_phase4_full.py            # 정상 실행
+  railway run python3 scripts/collect_phase4_full.py --dry-run  # 대상만 출력
+  railway run python3 scripts/collect_phase4_full.py --phase a  # Phase A만
+  railway run python3 scripts/collect_phase4_full.py --phase b  # Phase B만
+  railway run python3 scripts/collect_phase4_full.py --debug-first  # 첫 1건만 + raw JSON 저장
 
-환경(.env):
-  SUPABASE_URL=https://vwlahtguyggrhvslabax.supabase.co
-  SUPABASE_SERVICE_ROLE_KEY=eyJ...
-
-법제처 API: OC=taieng (인증키 불필요, S5에서 검증된 패턴)
-작성: 2026-05-03 (S9)
+법제처 API: OC=taieng (인증키 불필요)
 """
 
 import os, sys, json, time, argparse, traceback
@@ -41,19 +36,16 @@ except ImportError:
     sys.exit(1)
 
 # ============================================================
-# 설정
-# ============================================================
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY", "")
-LAW_OC = "taieng"  # 법제처 Open API ID
+LAW_OC = "taieng"
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    print("[FATAL] .env에 SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY 설정 필요")
+    print("[FATAL] SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY 필요")
     sys.exit(1)
 
 sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Phase A: 사용 중이지만 catalog에도 없는 4건
 PHASE_A_LAWS = [
     "소방기본법",
     "건축물의 에너지원단위 목표관리 등에 관한 고시",
@@ -61,24 +53,31 @@ PHASE_A_LAWS = [
     "기존 건축물의 에너지성능 개선기준",
 ]
 
-# 통계
 STATS = {
     "phase_a_inserted": 0, "phase_a_skipped": 0, "phase_a_failed": 0,
     "phase_b_collected": 0, "phase_b_skipped": 0, "phase_b_failed": 0,
     "phase_b_articles": 0,
 }
 
+# 디버그 출력 디렉터리
+DEBUG_DIR = "scripts/_phase4_debug"
 
-# ============================================================
-# 공통 유틸
-# ============================================================
+
 def log(msg: str, level: str = "INFO"):
     icons = {"INFO": "ℹ️", "OK": "✓", "WARN": "⚠️", "ERR": "❌", "PHASE": "▶"}
     print(f"  {icons.get(level, '·')} {msg}")
 
 
+def save_debug(name: str, data):
+    """디버그용 JSON 저장"""
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+    path = f"{DEBUG_DIR}/{name}.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return path
+
+
 def law_search(query: str, target: str = "law", display: int = 5):
-    """law.go.kr DRF lawSearch.do — target=law (본법/시행령/시행규칙) or admrul (고시)"""
     url = "https://www.law.go.kr/DRF/lawSearch.do"
     params = {"OC": LAW_OC, "target": target, "type": "JSON", "query": query, "display": display}
     try:
@@ -98,11 +97,10 @@ def law_search(query: str, target: str = "law", display: int = 5):
 
 
 def law_service_fetch(api_id: str, target: str = "law"):
-    """law.go.kr DRF lawService.do — 본문 + 조문 가져오기"""
     url = "https://www.law.go.kr/DRF/lawService.do"
     if target == "law":
         params = {"OC": LAW_OC, "target": "law", "type": "JSON", "ID": api_id}
-    else:  # admrul
+    else:
         params = {"OC": LAW_OC, "target": "admrul", "type": "JSON", "ID": api_id}
     try:
         r = requests.get(url, params=params, timeout=30)
@@ -114,14 +112,12 @@ def law_service_fetch(api_id: str, target: str = "law"):
 
 
 def detect_target_from_type(law_type_code: str) -> str:
-    """law_type_code → DRF target 매핑"""
     if law_type_code in ("LAW", "ENFORCEMENT_DECREE", "ENFORCEMENT_RULE"):
         return "law"
-    return "admrul"  # NOTICE, OTHER, STANDARD
+    return "admrul"
 
 
 def detect_type_from_meta(meta: dict, law_name: str) -> str:
-    """검색 결과 메타에서 law_type_code 추정"""
     sort_name = meta.get("법령구분명", "") or meta.get("행정규칙종류", "")
     if "시행령" in sort_name or "시행령" in law_name:
         return "ENFORCEMENT_DECREE"
@@ -137,7 +133,7 @@ def detect_type_from_meta(meta: dict, law_name: str) -> str:
 
 
 # ============================================================
-# Phase A: catalog 미등록 4건 등록
+# Phase A
 # ============================================================
 def phase_a(dry_run: bool = False):
     print("\n" + "=" * 60)
@@ -147,14 +143,12 @@ def phase_a(dry_run: bool = False):
     for law_name in PHASE_A_LAWS:
         log(f"검색 중: {law_name}", "PHASE")
 
-        # 이미 catalog에 있는지 확인
         existing = sb.table("law_external_catalog").select("id").eq("law_name", law_name).execute()
         if existing.data:
-            log(f"이미 catalog에 있음, skip", "WARN")
+            log("이미 catalog에 있음, skip", "WARN")
             STATS["phase_a_skipped"] += 1
             continue
 
-        # 1차: target=law 검색
         items = law_search(law_name, target="law", display=10)
         meta = None
         target = "law"
@@ -164,7 +158,6 @@ def phase_a(dry_run: bool = False):
                 meta = it
                 break
 
-        # 2차: target=admrul 검색 (고시/기준)
         if not meta:
             items = law_search(law_name, target="admrul", display=10)
             for it in items:
@@ -173,17 +166,15 @@ def phase_a(dry_run: bool = False):
                     meta = it
                     target = "admrul"
                     break
-            # 정확 매칭 없으면 첫 결과
             if not meta and items:
                 meta = items[0]
                 target = "admrul"
 
         if not meta:
-            log(f"law.go.kr에서 찾을 수 없음", "ERR")
+            log("law.go.kr에서 찾을 수 없음", "ERR")
             STATS["phase_a_failed"] += 1
             continue
 
-        # 메타 추출
         law_type_code = detect_type_from_meta(meta, law_name)
         if target == "law":
             law_api_id = meta.get("법령일련번호", "")
@@ -194,14 +185,13 @@ def phase_a(dry_run: bool = False):
             law_type_code = "NOTICE"
 
         ministry_name = meta.get("소관부처명", "") or meta.get("소관부처", "")
-
         log(f"발견: api_id={law_api_id}, type={law_type_code}, ministry={ministry_name}", "INFO")
 
         if dry_run:
             log("[DRY-RUN] INSERT 스킵", "INFO")
             continue
 
-        # INSERT
+        # ★ NOT NULL 컬럼 모두 포함 (api_target, search_keyword)
         try:
             sb.table("law_external_catalog").insert({
                 "law_name": law_name,
@@ -213,67 +203,128 @@ def phase_a(dry_run: bool = False):
                 "is_in_collection_target": True,
                 "is_in_law_master": False,
                 "collected_at": datetime.now(timezone.utc).isoformat(),
+                "api_target": target,                          # ★ 추가
+                "search_keyword": "S9_phase4_manual",          # ★ 추가
             }).execute()
-            log(f"catalog 등록 완료", "OK")
+            log("catalog 등록 완료", "OK")
             STATS["phase_a_inserted"] += 1
         except Exception as e:
             log(f"INSERT 실패: {e}", "ERR")
             STATS["phase_a_failed"] += 1
 
-        time.sleep(0.5)  # rate limit 보호
+        time.sleep(0.5)
 
     print(f"\n[PHASE A 결과] 등록 {STATS['phase_a_inserted']} / 스킵 {STATS['phase_a_skipped']} / 실패 {STATS['phase_a_failed']}")
 
 
 # ============================================================
-# Phase B: 본문 수집 (catalog target=true && 미수집)
+# Phase B
 # ============================================================
 def fetch_collection_targets():
-    """수집 대상 catalog 항목 조회 (collection_target=TRUE && law_master에 없음)"""
-    # 단계 1: catalog의 target=true 항목
     targets = sb.table("law_external_catalog") \
         .select("id,law_name,law_api_id,law_mst_no,law_type_code,ministry_name") \
         .eq("is_in_collection_target", True) \
         .execute()
     target_rows = targets.data or []
-
-    # 단계 2: 이미 law_master에 있는 것 제외
     existing = sb.table("law_master").select("law_name").execute()
     existing_names = {r["law_name"] for r in (existing.data or [])}
-
     return [r for r in target_rows if r["law_name"] not in existing_names]
 
 
-def insert_law_master_and_articles(meta: dict, fetch_data: dict, target: str):
-    """law_master + law_version + law_article INSERT"""
-    law_name = meta["law_name"]
-    law_type_code = meta.get("law_type_code", "LAW")
+def parse_response_robust(fetch_data: dict, target: str, debug_prefix: str = "") -> dict:
+    """응답 구조에서 (basic, articles_raw) 추출 — 가능한 모든 키 시도
 
+    Returns: {"basic": {...}, "articles": [...], "block_used": "..."}
+    raises Exception with detailed message if cannot parse
+    """
+    # 후보 최상위 키들
     if target == "law":
-        # 본법/시행령/시행규칙
-        law_block = fetch_data.get("법령", {})
-        if not law_block:
-            return None, 0
-        basic = law_block.get("기본정보", {})
-        announcement_date = basic.get("공포일자", "") or ""
-        enforcement_date = basic.get("시행일자", "") or ""
-        law_number = basic.get("공포번호", "")
-        articles_raw = law_block.get("조문", {}).get("조문단위", [])
+        candidates = ["법령", "Law", "law"]
     else:
-        # 고시/행정규칙
-        admrul_block = fetch_data.get("AdmRulService", {}) or fetch_data.get("행정규칙", {})
-        if not admrul_block:
-            return None, 0
-        basic = admrul_block.get("기본정보", admrul_block)
-        announcement_date = basic.get("발령일자", "") or ""
-        enforcement_date = basic.get("시행일자", "") or ""
-        law_number = basic.get("발령번호", "")
-        articles_raw = admrul_block.get("조문", {}).get("조문단위", []) \
-            or admrul_block.get("조항", []) \
-            or admrul_block.get("조문내용", [])
+        candidates = ["AdmRulService", "행정규칙", "AdmRul", "admrul"]
+
+    block = None
+    block_key = None
+    for k in candidates:
+        if k in fetch_data:
+            block = fetch_data[k]
+            block_key = k
+            break
+
+    # 최상위에 직접 데이터가 있는 케이스
+    if block is None:
+        for k in fetch_data.keys():
+            if isinstance(fetch_data[k], dict) and ("기본정보" in fetch_data[k] or "조문" in fetch_data[k]):
+                block = fetch_data[k]
+                block_key = k
+                break
+
+    if block is None:
+        # 디버그용 저장
+        if debug_prefix:
+            path = save_debug(f"{debug_prefix}_no_block", fetch_data)
+            raise Exception(f"top-level block 없음. 응답 키: {list(fetch_data.keys())}. 저장: {path}")
+        raise Exception(f"top-level block 없음. 응답 키: {list(fetch_data.keys())}")
+
+    # basic 정보 추출 — 다양한 키 시도
+    basic = block.get("기본정보") or block.get("basic") or block
+
+    # 조문 추출 — 다양한 키 시도
+    articles_raw = None
+    for art_path in [
+        ("조문", "조문단위"),
+        ("조문",),
+        ("조항",),
+        ("조문내용",),
+        ("Articles",),
+    ]:
+        cur = block
+        for k in art_path:
+            if isinstance(cur, dict) and k in cur:
+                cur = cur[k]
+            else:
+                cur = None
+                break
+        if cur is not None:
+            articles_raw = cur
+            break
+
+    if articles_raw is None:
+        # 디버그용 저장
+        if debug_prefix:
+            path = save_debug(f"{debug_prefix}_no_articles", fetch_data)
+            raise Exception(f"조문 키 없음. block_key={block_key}, block 키들={list(block.keys())[:20]}. 저장: {path}")
+        raise Exception(f"조문 키 없음. block_key={block_key}, block 키들={list(block.keys())[:20]}")
 
     if isinstance(articles_raw, dict):
         articles_raw = [articles_raw]
+    if isinstance(articles_raw, str):
+        # 본문이 string으로 들어온 경우 — 1개 article로 처리
+        articles_raw = [{"조문번호": "0", "조문제목": "", "조문내용": articles_raw}]
+
+    return {"basic": basic, "articles": articles_raw, "block_key": block_key}
+
+
+def insert_law_master_and_articles(meta: dict, fetch_data: dict, target: str, debug_prefix: str = ""):
+    """law_master + law_version + law_article INSERT
+    raises Exception with detailed message on failure
+    """
+    law_name = meta["law_name"]
+    law_type_code = meta.get("law_type_code", "LAW")
+
+    parsed = parse_response_robust(fetch_data, target, debug_prefix=debug_prefix)
+    basic = parsed["basic"]
+    articles_raw = parsed["articles"]
+
+    # 발령/공포 일자
+    if target == "law":
+        announcement_date = basic.get("공포일자", "") or ""
+        enforcement_date = basic.get("시행일자", "") or ""
+        law_number = basic.get("공포번호", "")
+    else:
+        announcement_date = basic.get("발령일자", "") or basic.get("공포일자", "") or ""
+        enforcement_date = basic.get("시행일자", "") or ""
+        law_number = basic.get("발령번호", "") or basic.get("공포번호", "")
 
     def norm_date(s: str) -> Optional[str]:
         s = (s or "").replace(".", "").replace("-", "").strip()
@@ -298,7 +349,7 @@ def insert_law_master_and_articles(meta: dict, fetch_data: dict, target: str):
     }
     lm_resp = sb.table("law_master").insert(lm_data).execute()
     if not lm_resp.data:
-        return None, 0
+        raise Exception(f"law_master INSERT 응답 비어있음: {lm_resp}")
     law_master_id = lm_resp.data[0]["id"]
 
     # law_version INSERT
@@ -312,10 +363,9 @@ def insert_law_master_and_articles(meta: dict, fetch_data: dict, target: str):
     }
     lv_resp = sb.table("law_version").insert(lv_data).execute()
     if not lv_resp.data:
-        return law_master_id, 0
+        raise Exception(f"law_version INSERT 응답 비어있음: {lv_resp}")
     law_version_id = lv_resp.data[0]["id"]
 
-    # law_master.current_version_id 업데이트
     sb.table("law_master").update({"current_version_id": law_version_id}).eq("id", law_master_id).execute()
 
     # 조문 INSERT
@@ -323,10 +373,9 @@ def insert_law_master_and_articles(meta: dict, fetch_data: dict, target: str):
     for idx, art in enumerate(articles_raw):
         if not isinstance(art, dict):
             continue
-        art_no_raw = art.get("조문번호", "") or art.get("조번호", "")
+        art_no_raw = art.get("조문번호", "") or art.get("조번호", "") or art.get("Number", "")
         art_sub = art.get("조문가지번호", "") or art.get("조문가지", "")
         art_title = art.get("조문제목", "") or art.get("조제목", "") or ""
-        # 조문내용
         content_list = art.get("조문내용", []) or art.get("내용", "")
         if isinstance(content_list, dict):
             content_list = [content_list]
@@ -341,12 +390,13 @@ def insert_law_master_and_articles(meta: dict, fetch_data: dict, target: str):
         else:
             article_text = str(content_list or "")
 
-        # article_no는 integer (NULL 허용)
         art_no_int = None
         try:
-            art_no_int = int(str(art_no_raw).lstrip("0") or "0") if str(art_no_raw).strip().isdigit() or str(art_no_raw).lstrip("0").isdigit() else None
+            s = str(art_no_raw).strip().lstrip("0") or "0"
+            if s.isdigit():
+                art_no_int = int(s)
         except Exception:
-            art_no_int = None
+            pass
 
         try:
             sb.table("law_article").insert({
@@ -370,7 +420,7 @@ def insert_law_master_and_articles(meta: dict, fetch_data: dict, target: str):
     return law_master_id, article_count
 
 
-def phase_b(dry_run: bool = False):
+def phase_b(dry_run: bool = False, debug_first: bool = False):
     print("\n" + "=" * 60)
     print("[PHASE B] 본문 수집")
     print("=" * 60)
@@ -382,6 +432,30 @@ def phase_b(dry_run: bool = False):
         print("\n[DRY-RUN] 다음 항목들이 수집됩니다:")
         for i, t in enumerate(targets, 1):
             print(f"  [{i:>3}] [{t['law_type_code']}] {t['law_name']} (api_id={t['law_api_id']})")
+        return
+
+    # 디버그 모드: 첫 1건만 처리하고 raw response 저장
+    if debug_first:
+        if not targets:
+            log("수집 대상 없음", "WARN")
+            return
+        t = targets[0]
+        target_endpoint = detect_target_from_type(t["law_type_code"])
+        log(f"[DEBUG] 첫 1건: {t['law_name']} (api_id={t['law_api_id']}, target={target_endpoint})", "PHASE")
+        data = law_service_fetch(t["law_api_id"], target=target_endpoint)
+        if data:
+            path = save_debug(f"first_response_{target_endpoint}", data)
+            log(f"raw response 저장: {path}", "OK")
+            log(f"top-level keys: {list(data.keys())}", "INFO")
+            for k, v in data.items():
+                if isinstance(v, dict):
+                    log(f"  {k}.keys: {list(v.keys())[:10]}", "INFO")
+            # 파싱 시도
+            try:
+                parsed = parse_response_robust(data, target_endpoint, debug_prefix=t['law_name'][:20])
+                log(f"파싱 OK: block_key={parsed['block_key']}, articles={len(parsed['articles'])}개", "OK")
+            except Exception as e:
+                log(f"파싱 실패: {e}", "ERR")
         return
 
     for i, t in enumerate(targets, 1):
@@ -398,46 +472,36 @@ def phase_b(dry_run: bool = False):
             continue
 
         try:
-            law_master_id, art_cnt = insert_law_master_and_articles(t, data, target_endpoint)
-            if law_master_id:
-                # catalog의 is_in_law_master 업데이트
-                sb.table("law_external_catalog").update({"is_in_law_master": True}) \
-                    .eq("id", t["id"]).execute()
-                log(f"수집 완료 (조문 {art_cnt}개)", "OK")
-                STATS["phase_b_collected"] += 1
-                STATS["phase_b_articles"] += art_cnt
-            else:
-                log("INSERT 실패", "ERR")
-                STATS["phase_b_failed"] += 1
+            law_master_id, art_cnt = insert_law_master_and_articles(t, data, target_endpoint,
+                                                                     debug_prefix=t['law_name'][:30] if i <= 3 else "")
+            sb.table("law_external_catalog").update({"is_in_law_master": True}).eq("id", t["id"]).execute()
+            log(f"수집 완료 (조문 {art_cnt}개)", "OK")
+            STATS["phase_b_collected"] += 1
+            STATS["phase_b_articles"] += art_cnt
         except Exception as e:
             log(f"수집 실패: {e}", "ERR")
-            traceback.print_exc()
+            if i <= 3:  # 첫 3건은 traceback도 출력
+                traceback.print_exc()
             STATS["phase_b_failed"] += 1
 
-        time.sleep(1.0)  # rate limit (1 req/sec)
+        time.sleep(1.0)
 
     print(f"\n[PHASE B 결과] 수집 {STATS['phase_b_collected']} / 스킵 {STATS['phase_b_skipped']} / 실패 {STATS['phase_b_failed']}")
     print(f"             조문 합계: {STATS['phase_b_articles']}개")
 
 
 # ============================================================
-# Phase C: L1+L2+L3 무결성 검증 (S8 패턴)
+# Phase C
 # ============================================================
 def phase_c():
     print("\n" + "=" * 60)
     print("[PHASE C] L1+L2+L3 무결성 검증")
     print("=" * 60)
 
-    # L1: catalog target=true 항목이 모두 law_master에 있는가
-    targets = sb.table("law_external_catalog") \
-        .select("law_name") \
-        .eq("is_in_collection_target", True) \
-        .execute()
+    targets = sb.table("law_external_catalog").select("law_name").eq("is_in_collection_target", True).execute()
     target_names = [r["law_name"] for r in (targets.data or [])]
-
     masters = sb.table("law_master").select("law_name").execute()
     master_names = {r["law_name"] for r in (masters.data or [])}
-
     missing = [n for n in target_names if n not in master_names]
     if missing:
         log(f"L1 FAIL: {len(missing)}건 미수집", "ERR")
@@ -448,7 +512,6 @@ def phase_c():
     else:
         log(f"L1 OK: catalog target {len(target_names)}건 모두 law_master에 존재", "OK")
 
-    # L2: 각 law_master에 law_version이 있는가
     masters_full = sb.table("law_master").select("id,law_name,current_version_id").execute()
     no_version = [m for m in (masters_full.data or []) if not m.get("current_version_id")]
     if no_version:
@@ -458,10 +521,9 @@ def phase_c():
     else:
         log(f"L2 OK: 모든 law_master({len(masters_full.data or [])})에 current_version 존재", "OK")
 
-    # L3: 각 law_version에 law_article >= 1
     versions = sb.table("law_version").select("id,law_id").execute()
     no_articles = []
-    for v in (versions.data or [])[:50]:  # 최대 50개만 (시간 단축)
+    for v in (versions.data or [])[:50]:
         arts = sb.table("law_article").select("id", count="exact").eq("law_version_id", v["id"]).limit(1).execute()
         if arts.count == 0:
             no_articles.append(v["id"])
@@ -469,23 +531,25 @@ def phase_c():
         log(f"L3 FAIL: {len(no_articles)}건 (샘플 50개 중)이 article 0개", "ERR")
     else:
         log(f"L3 OK: 검사한 version 모두 article >= 1", "OK")
-
     print()
 
 
 # ============================================================
-# main
-# ============================================================
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--dry-run", action="store_true", help="DB 변경 없이 대상만 출력")
-    p.add_argument("--phase", choices=["a", "b", "c", "all"], default="all", help="실행할 phase")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--phase", choices=["a", "b", "c", "all"], default="all")
+    p.add_argument("--debug-first", action="store_true", help="Phase B 첫 1건만 처리 + raw response 저장")
     args = p.parse_args()
 
     print(f"\n{'=' * 60}")
-    print(f"  S9 Phase 4 통합 수집 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"  dry_run={args.dry_run} / phase={args.phase}")
+    print(f"  S9 Phase 4 통합 수집 v2 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  dry_run={args.dry_run} / phase={args.phase} / debug_first={args.debug_first}")
     print(f"{'=' * 60}")
+
+    if args.debug_first:
+        phase_b(dry_run=False, debug_first=True)
+        return
 
     if args.phase in ("a", "all"):
         phase_a(dry_run=args.dry_run)
