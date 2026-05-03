@@ -7,7 +7,14 @@
   - 조문 수가 비정상적으로 적음 (expected_article_count 대비 < 50%)
   - valid_pct (article_text 길이 > 20자 비율)가 30% 미만
   - law_content_raw 누락 (XML 원본 미저장)
-  - law_paragraph 0개 (조문은 있는데 항/호 분해 실패)
+  - law_paragraph 0개 (일반 법령에서만 — 행정규칙은 평문 CDATA 구조라 면제)
+
+v1.1 (2026-05-03 S6):
+  - 행정규칙(AdmRul: 고시/훈령/예규/기술기준) 분기 추가
+    · NFPC/NFTC 등 평문 CDATA 구조라 항/호 분해가 본래 없음
+    · NO_PARAGRAPHS 체크 면제
+  - expected_article_count = 0 인 타겟은 BELOW_EXPECTED 체크 면제
+    (현재 다수 타겟이 expected=0으로 등록되어 있어 false positive 양산)
 
 실행:
   cd ~/dev/tai-api
@@ -15,13 +22,8 @@
   railway run python3 scripts/quality_scan.py --domain FIRE
   railway run python3 scripts/quality_scan.py --csv /tmp/quality_report.csv
 
-출력:
-  - 콘솔: 도메인별 부실 건수 + 의심 법령 상위 30건
-  - --csv 옵션: 전체 결과 CSV 파일
-
 부실 식별 후:
-  python3 scripts/collect_v2.py test "<문제 법령명>"
-  → force 재수집은 routers/law_collector.py POST /collect/{name}?force=true
+  railway run python3 scripts/collect_v2.py test "<문제 법령명>"
 """
 from __future__ import annotations
 
@@ -55,6 +57,23 @@ ARTICLE_RATIO_THRESHOLD = 0.5    # expected_article_count 대비 50% 미만이�
 VALID_PCT_THRESHOLD     = 30.0   # article_text 유효 비율 30% 미만이면 의심
 MIN_ARTICLE_COUNT       = 3      # 절대 최소: 조문 3개 미만이면 무조건 의심
 
+# 행정규칙 식별 (collect_v2.py의 _is_admrul과 동일 규칙)
+_ADMRUL_TYPE_CODES = {"STANDARD", "NOTICE"}
+_ADMRUL_NAME_TOKENS = ("NFTC", "NFPC", "NFSC")
+
+
+def _is_admrul(target: dict) -> bool:
+    """행정규칙(고시/훈령/예규/기술기준) 여부.
+
+    행정규칙은 raw_xml이 <AdmRulService> 루트로 평문 CDATA 구조이고,
+    항(<항>) / 호(<호>) 계층이 없음 → law_paragraph 0건이 정상.
+    """
+    code = (target.get("law_type_code") or "").upper()
+    if code in _ADMRUL_TYPE_CODES:
+        return True
+    name = target.get("law_name") or ""
+    return any(tok in name for tok in _ADMRUL_NAME_TOKENS)
+
 
 # ═══════════════════════════════════════════════════════════
 # 메인 스캔 로직
@@ -65,13 +84,12 @@ def scan_one(target: dict, supabase: Any) -> dict:
     law_name = target["law_name"]
     domain = target.get("domain_code") or "?"
     expected = target.get("expected_article_count") or 0
+    is_admrul = _is_admrul(target)
 
-    # law_master 매칭 (law_name 완전일치 우선)
     master_q = supabase.table("law_master") \
         .select("id,law_name,current_version_id,law_mst_no,updated_at") \
         .eq("law_name", law_name).limit(1).execute()
     if not master_q.data:
-        # ilike 폴백
         master_q = supabase.table("law_master") \
             .select("id,law_name,current_version_id,law_mst_no,updated_at") \
             .ilike("law_name", f"%{law_name}%").limit(1).execute()
@@ -81,6 +99,7 @@ def scan_one(target: dict, supabase: Any) -> dict:
             "domain": domain,
             "law_name": law_name,
             "expected": expected,
+            "is_admrul": is_admrul,
             "issue": "MASTER_MISSING",
             "article_total": 0,
             "article_active": 0,
@@ -95,7 +114,6 @@ def scan_one(target: dict, supabase: Any) -> dict:
     law_id = master["id"]
     version_id = master.get("current_version_id")
 
-    # 조문 카운트
     arts_q = supabase.table("law_article") \
         .select("id,article_text,article_status_code") \
         .eq("law_id", law_id).execute()
@@ -109,12 +127,10 @@ def scan_one(target: dict, supabase: Any) -> dict:
     )
     valid_pct = round(valid_articles * 100.0 / article_active, 1) if article_active > 0 else 0.0
 
-    # 항(paragraph) 카운트 — article 단위가 아닌 law_id 단위로 한 번에
     para_q = supabase.table("law_paragraph") \
         .select("id", count="exact").eq("law_id", law_id).execute()
     paragraph_total = para_q.count or 0
 
-    # raw_xml 크기 확인 (현재 버전)
     raw_xml_size = 0
     if version_id:
         raw_q = supabase.table("law_content_raw") \
@@ -123,25 +139,26 @@ def scan_one(target: dict, supabase: Any) -> dict:
         if raw_q.data:
             raw_xml_size = len(raw_q.data[0].get("raw_xml") or "")
 
-    # 이슈 판정
+    # ── 이슈 판정 ────────────────────────────────────────────
     issues = []
     if article_total < MIN_ARTICLE_COUNT:
         issues.append(f"TOO_FEW_ARTICLES({article_total})")
-    if expected and expected > 0 and article_active < expected * ARTICLE_RATIO_THRESHOLD:
+    # expected 체크는 expected > 0 일 때만
+    if expected > 0 and article_active < expected * ARTICLE_RATIO_THRESHOLD:
         issues.append(f"BELOW_EXPECTED({article_active}/{expected})")
     if article_active > 0 and valid_pct < VALID_PCT_THRESHOLD:
         issues.append(f"LOW_VALID_PCT({valid_pct}%)")
     if raw_xml_size == 0:
         issues.append("RAW_XML_MISSING")
-    if article_active > 0 and paragraph_total == 0:
-        # 조문은 있는데 항이 없는 건 STANDARD/NOTICE에서는 정상일 수 있음
-        # 일단 표시만 (decision은 사용자)
+    # NO_PARAGRAPHS: 행정규칙은 평문 CDATA 구조라 본래 항/호 없음 → 면제
+    if not is_admrul and article_active > 0 and paragraph_total == 0:
         issues.append("NO_PARAGRAPHS")
 
     return {
         "domain": domain,
         "law_name": law_name,
         "expected": expected,
+        "is_admrul": is_admrul,
         "issue": ",".join(issues) if issues else "OK",
         "article_total": article_total,
         "article_active": article_active,
@@ -157,7 +174,7 @@ def run_scan(domain_filter: Optional[str] = None, csv_path: Optional[str] = None
     supabase = get_supabase()
 
     q = supabase.table("law_collection_target") \
-        .select("law_name,domain_code,expected_article_count,collection_status") \
+        .select("law_name,domain_code,expected_article_count,collection_status,law_type_code") \
         .eq("is_active", True) \
         .eq("collection_status", "SUCCESS")
     if domain_filter:
@@ -169,51 +186,56 @@ def run_scan(domain_filter: Optional[str] = None, csv_path: Optional[str] = None
         return 1
 
     print(f"\n{'=' * 78}")
-    print(f"🔍 법령 수집 품질 스캔 ({datetime.now():%Y-%m-%d %H:%M:%S})")
+    print(f"🔍 법령 수집 품질 스캔 v1.1 ({datetime.now():%Y-%m-%d %H:%M:%S})")
     if domain_filter:
         print(f"   도메인 필터: {domain_filter.upper()}")
     print(f"   대상: {len(targets)}개 (collection_status=SUCCESS)")
+    print(f"   임계값: 조문<{MIN_ARTICLE_COUNT} | expected 대비 <{int(ARTICLE_RATIO_THRESHOLD*100)}% | "
+          f"valid_pct <{VALID_PCT_THRESHOLD}%")
+    print(f"   행정규칙(AdmRul): NO_PARAGRAPHS 체크 면제 (평문 CDATA 구조)")
     print(f"{'=' * 78}\n")
 
     rows = []
+    admrul_count = 0
     for idx, t in enumerate(targets, 1):
         row = scan_one(t, supabase)
+        if row["is_admrul"]:
+            admrul_count += 1
         rows.append(row)
-        # 진행 표시 (50건마다)
         if idx % 50 == 0 or idx == len(targets):
             print(f"  진행 {idx}/{len(targets)} ...")
 
-    # ─── 집계 출력 ────────────────────────────────────────────
     ok = [r for r in rows if r["issue"] == "OK"]
     bad = [r for r in rows if r["issue"] != "OK"]
 
     print(f"\n{'─' * 78}")
     print(f"📊 결과 요약")
     print(f"{'─' * 78}")
-    print(f"  ✅ 정상         : {len(ok):4} / {len(rows)}")
+    print(f"  ✅ 정상         : {len(ok):4} / {len(rows)}  (행정규칙 {admrul_count}건 포함)")
     print(f"  ⚠️  부실/의심   : {len(bad):4} / {len(rows)}")
 
-    # 도메인별 부실 카운트
     by_domain: dict[str, dict] = {}
     for r in rows:
         d = r["domain"]
         if d not in by_domain:
-            by_domain[d] = {"total": 0, "ok": 0, "bad": 0}
+            by_domain[d] = {"total": 0, "ok": 0, "bad": 0, "admrul": 0}
         by_domain[d]["total"] += 1
         if r["issue"] == "OK":
             by_domain[d]["ok"] += 1
         else:
             by_domain[d]["bad"] += 1
+        if r["is_admrul"]:
+            by_domain[d]["admrul"] += 1
 
     print(f"\n🏛️  도메인별:")
-    print(f"  {'도메인':<22} {'전체':>5} {'정상':>5} {'부실':>5} {'정상률':>7}")
-    print(f"  {'-' * 50}")
+    print(f"  {'도메인':<22} {'전체':>5} {'정상':>5} {'부실':>5} {'AdmRul':>7} {'정상률':>7}")
+    print(f"  {'-' * 58}")
     for d in sorted(by_domain):
         s = by_domain[d]
         ok_pct = s["ok"] * 100.0 / s["total"] if s["total"] else 0
-        print(f"  {d:<22} {s['total']:>5} {s['ok']:>5} {s['bad']:>5} {ok_pct:>6.1f}%")
+        print(f"  {d:<22} {s['total']:>5} {s['ok']:>5} {s['bad']:>5} "
+              f"{s['admrul']:>7} {ok_pct:>6.1f}%")
 
-    # 이슈 종류별 카운트
     issue_buckets: dict[str, int] = {}
     for r in bad:
         for tok in r["issue"].split(","):
@@ -224,25 +246,25 @@ def run_scan(domain_filter: Optional[str] = None, csv_path: Optional[str] = None
         for k, v in sorted(issue_buckets.items(), key=lambda x: -x[1]):
             print(f"  {k:<22} {v:>5}건")
 
-    # 부실 상위 30건 (조문 수 적은 순)
     if bad:
-        print(f"\n⚠️  부실/의심 상위 30건 (article_active 오름차순):")
+        print(f"\n⚠️  부실/의심 전체 (article_active 오름차순):")
         bad_sorted = sorted(bad, key=lambda r: (r["article_active"], r["law_name"]))
-        print(f"  {'#':>3}  {'도메인':<14} {'법령명':<35} {'조문':>4} {'예상':>4} {'유효%':>6} {'XML':>8} {'이슈'}")
-        print(f"  {'-' * 76}")
-        for i, r in enumerate(bad_sorted[:30], 1):
+        print(f"  {'#':>3}  {'도메인':<14} {'법령명':<35} {'타입':<6} "
+              f"{'조문':>4} {'유효%':>6} {'XML':>8} {'이슈'}")
+        print(f"  {'-' * 78}")
+        for i, r in enumerate(bad_sorted[:50], 1):
             name = (r["law_name"] or "")[:34]
             xml_kb = f"{r['raw_xml_size']//1024}KB" if r['raw_xml_size'] else "0"
-            print(f"  {i:>3}  {r['domain']:<14} {name:<35} "
-                  f"{r['article_active']:>4} {r['expected']:>4} "
-                  f"{r['valid_pct']:>5.1f}% {xml_kb:>8} {r['issue']}")
+            tp = "AdmRul" if r["is_admrul"] else "Law"
+            print(f"  {i:>3}  {r['domain']:<14} {name:<35} {tp:<6} "
+                  f"{r['article_active']:>4} {r['valid_pct']:>5.1f}% "
+                  f"{xml_kb:>8} {r['issue']}")
 
-    # CSV 저장
     if csv_path:
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=[
-                "domain", "law_name", "expected", "article_total", "article_active",
-                "valid_pct", "paragraph_total", "raw_xml_size",
+                "domain", "law_name", "is_admrul", "expected", "article_total",
+                "article_active", "valid_pct", "paragraph_total", "raw_xml_size",
                 "current_version_id", "updated_at", "issue",
             ])
             w.writeheader()
@@ -255,18 +277,14 @@ def run_scan(domain_filter: Optional[str] = None, csv_path: Optional[str] = None
     print(f"{'=' * 78}\n")
 
     if bad:
-        print("재수집 명령 예시:")
         sample = bad[0]["law_name"]
-        print(f'  railway run python3 scripts/collect_v2.py test "{sample}"')
-        print()
+        print(f'재수집 명령 예시:\n  railway run python3 scripts/collect_v2.py test "{sample}"\n')
     return 0 if not bad else 2
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="법령 수집 품질 스캔",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
+        description="법령 수집 품질 스캔 v1.1 (행정규칙 분기 적용)",
     )
     ap.add_argument("--domain", help="특정 도메인만 (예: FIRE, BUILDING)")
     ap.add_argument("--csv", help="CSV 출력 경로 (예: /tmp/quality_report.csv)")
