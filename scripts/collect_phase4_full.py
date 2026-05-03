@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-collect_phase4_full.py — S9 Phase 4 통합 본문 수집 (v3.1)
+collect_phase4_full.py — S9 Phase 4 통합 본문 수집 (v3.2)
 ====================================================
-v3.1 수정 (2026-05-03):
-  - lm_data에 law_key NOT NULL 컬럼 추가 ({api_id}_{mst_no} 패턴)
+v3.2 수정 (2026-05-03):
+  - law_version: law_status_code → version_status_code
+  - LAW fetch: ID/MST 다중 시도 (api_id, mst_no 어느 쪽이든 작동)
 """
 
 import os, sys, json, time, argparse, traceback
@@ -57,25 +58,10 @@ STATS = {
     "phase_b_articles": 0,
 }
 
-DEBUG_DIR = "scripts/_phase4_debug"
-
 
 def log(msg: str, level: str = "INFO"):
     icons = {"INFO": "ℹ️", "OK": "✓", "WARN": "⚠️", "ERR": "❌", "PHASE": "▶"}
     print(f"  {icons.get(level, '·')} {msg}")
-
-
-def save_debug(name: str, data):
-    os.makedirs(DEBUG_DIR, exist_ok=True)
-    if isinstance(data, str):
-        path = f"{DEBUG_DIR}/{name}.xml"
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(data)
-        return path
-    path = f"{DEBUG_DIR}/{name}.json"
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    return path
 
 
 def law_search(query: str, target: str = "law", display: int = 5):
@@ -135,16 +121,14 @@ def phase_a(dry_run: bool = False):
         meta = None
         target = "law"
         for it in items:
-            it_name = (it.get("법령명한글") or "").strip()
-            if it_name == law_name:
+            if (it.get("법령명한글") or "").strip() == law_name:
                 meta = it
                 break
 
         if not meta:
             items = law_search(law_name, target="admrul", display=10)
             for it in items:
-                it_name = (it.get("행정규칙명") or "").strip()
-                if it_name == law_name:
+                if (it.get("행정규칙명") or "").strip() == law_name:
                     meta = it
                     target = "admrul"
                     break
@@ -209,19 +193,9 @@ def fetch_collection_targets():
     return [r for r in target_rows if r["law_name"] not in existing_names]
 
 
-def fetch_and_parse_law_json(api_id: str) -> dict:
-    url = "https://www.law.go.kr/DRF/lawService.do"
-    params = {"OC": LAW_OC, "target": "law", "type": "JSON", "ID": api_id}
-    r = requests.get(url, params=params, timeout=30)
-    r.raise_for_status()
-    data = r.json()
-
+def _parse_law_json_to_unified(data: dict) -> dict:
+    """법령 JSON 응답 → 통일 형식"""
     block = data.get("법령", {})
-    if not block:
-        if "Law" in data and isinstance(data["Law"], str):
-            raise Exception(f"법령 fetch 거부: {data['Law'][:100]}")
-        raise Exception(f"법령 응답 키 없음. keys={list(data.keys())}")
-
     basic_raw = block.get("기본정보", {})
     articles_raw = block.get("조문", {}).get("조문단위", [])
     if isinstance(articles_raw, dict):
@@ -262,10 +236,12 @@ def fetch_and_parse_law_json(api_id: str) -> dict:
         except Exception:
             pass
 
-        if art_sub_int:
-            internal_key = f"law-art-{art_no_int:03d}-of-{art_sub_int:02d}" if art_no_int else f"law-art-idx-{idx:03d}"
+        if art_sub_int and art_no_int:
+            internal_key = f"law-art-{art_no_int:03d}-of-{art_sub_int:02d}"
+        elif art_no_int:
+            internal_key = f"law-art-{art_no_int:03d}"
         else:
-            internal_key = f"law-art-{art_no_int:03d}" if art_no_int else f"law-art-idx-{idx:03d}"
+            internal_key = f"law-art-idx-{idx:03d}"
 
         unified_articles.append({
             "article_internal_key": internal_key,
@@ -284,6 +260,41 @@ def fetch_and_parse_law_json(api_id: str) -> dict:
         "law_number": basic_raw.get("공포번호", "") or "",
     }
     return {"basic": basic, "articles": unified_articles, "format": "law_json"}
+
+
+def fetch_and_parse_law_json(api_id: str, mst_no: Optional[str] = None) -> dict:
+    """LAW fetch — ID/MST 다중 시도 (catalog 데이터 일관성 차이 흡수)"""
+    url = "https://www.law.go.kr/DRF/lawService.do"
+
+    # 시도 순서
+    attempts = []
+    if api_id:
+        attempts.append(("ID", api_id))
+        attempts.append(("MST", api_id))
+    if mst_no and mst_no != api_id:
+        attempts.append(("ID", mst_no))
+        attempts.append(("MST", mst_no))
+
+    last_err = "(시도 없음)"
+    for param_name, param_val in attempts:
+        params = {"OC": LAW_OC, "target": "law", "type": "JSON", param_name: param_val}
+        try:
+            r = requests.get(url, params=params, timeout=30)
+            r.raise_for_status()
+            data = r.json()
+            block = data.get("법령")
+            if isinstance(block, dict) and block:
+                # 성공
+                return _parse_law_json_to_unified(data)
+            # 실패 응답
+            if "Law" in data and isinstance(data["Law"], str):
+                last_err = f"{param_name}={param_val} → {data['Law'][:60]}"
+            else:
+                last_err = f"{param_name}={param_val} → keys={list(data.keys())}"
+        except Exception as e:
+            last_err = f"{param_name}={param_val} → {e}"
+
+    raise Exception(f"법령 fetch 모든 시도 실패. last={last_err}")
 
 
 def fetch_and_parse_admrul(api_id: str) -> dict:
@@ -323,11 +334,10 @@ def insert_law_master_and_articles(meta: dict, parsed: dict):
 
     api_id = meta.get("law_api_id") or ""
     mst_no = meta.get("law_mst_no") or api_id
-    # ★ law_key NOT NULL — 기존 패턴: "{api_id}_{mst_no}"
     law_key = f"{api_id}_{mst_no}"
 
     lm_data = {
-        "law_key": law_key,                                # ★ 추가
+        "law_key": law_key,
         "law_name": law_name,
         "law_api_id": api_id,
         "law_mst_no": mst_no,
@@ -346,12 +356,14 @@ def insert_law_master_and_articles(meta: dict, parsed: dict):
         raise Exception("law_master INSERT 응답 비어있음")
     law_master_id = lm_resp.data[0]["id"]
 
+    # ★ law_version: version_status_code 사용 (law_status_code 아님)
     lv_data = {
         "law_id": law_master_id,
         "version_no": "1",
+        "law_mst_no": mst_no,
         "announcement_date": announcement_date,
         "enforcement_date": enforcement_date,
-        "law_status_code": "EFFECTIVE",
+        "version_status_code": "EFFECTIVE",   # ★ 수정
         "is_current": True,
     }
     lv_resp = sb.table("law_version").insert(lv_data).execute()
@@ -387,35 +399,30 @@ def insert_law_master_and_articles(meta: dict, parsed: dict):
 
 def phase_b(dry_run: bool = False, debug_first: bool = False):
     print("\n" + "=" * 60)
-    print("[PHASE B] 본문 수집 (v3.1 — law_key 추가)")
+    print("[PHASE B] 본문 수집 (v3.2 — version_status_code + LAW fetch 다중시도)")
     print("=" * 60)
 
     targets = fetch_collection_targets()
     log(f"수집 대상: {len(targets)}건", "PHASE")
 
     if dry_run:
-        print("\n[DRY-RUN] 다음 항목들이 수집됩니다:")
         for i, t in enumerate(targets, 1):
             print(f"  [{i:>3}] [{t['law_type_code']}] {t['law_name']} (api_id={t['law_api_id']})")
         return
 
     if debug_first:
         if not targets:
-            log("수집 대상 없음", "WARN")
             return
         t = targets[0]
         target_endpoint = detect_target_from_type(t["law_type_code"])
-        log(f"[DEBUG] 첫 1건: {t['law_name']} (api_id={t['law_api_id']}, target={target_endpoint})", "PHASE")
+        log(f"[DEBUG] {t['law_name']} (api_id={t['law_api_id']}, target={target_endpoint})", "PHASE")
         try:
             if target_endpoint == "law":
-                parsed = fetch_and_parse_law_json(t["law_api_id"])
+                parsed = fetch_and_parse_law_json(t["law_api_id"], t.get("law_mst_no"))
             else:
                 parsed = fetch_and_parse_admrul(t["law_api_id"])
             log(f"파싱 OK: format={parsed['format']}, articles={len(parsed['articles'])}개", "OK")
             log(f"basic: {parsed['basic']}", "INFO")
-            if parsed["articles"]:
-                first_art = parsed["articles"][0]
-                log(f"첫 article: no={first_art.get('article_no')}, title={first_art.get('article_title')[:50]}, text_len={len(first_art.get('article_text',''))}", "INFO")
         except Exception as e:
             log(f"파싱 실패: {e}", "ERR")
             traceback.print_exc()
@@ -431,7 +438,7 @@ def phase_b(dry_run: bool = False, debug_first: bool = False):
         target_endpoint = detect_target_from_type(t["law_type_code"])
         try:
             if target_endpoint == "law":
-                parsed = fetch_and_parse_law_json(t["law_api_id"])
+                parsed = fetch_and_parse_law_json(t["law_api_id"], t.get("law_mst_no"))
             else:
                 parsed = fetch_and_parse_admrul(t["law_api_id"])
             law_master_id, art_cnt = insert_law_master_and_articles(t, parsed)
@@ -500,8 +507,7 @@ def main():
     args = p.parse_args()
 
     print(f"\n{'=' * 60}")
-    print(f"  S9 Phase 4 통합 수집 v3.1 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"  dry_run={args.dry_run} / phase={args.phase} / debug_first={args.debug_first}")
+    print(f"  S9 Phase 4 v3.2 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'=' * 60}")
 
     if args.debug_first:
@@ -516,9 +522,8 @@ def main():
         phase_c()
 
     print("\n" + "=" * 60)
-    print(f"  완료 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"  Phase A: 등록 {STATS['phase_a_inserted']} / 스킵 {STATS['phase_a_skipped']} / 실패 {STATS['phase_a_failed']}")
-    print(f"  Phase B: 수집 {STATS['phase_b_collected']} / 스킵 {STATS['phase_b_skipped']} / 실패 {STATS['phase_b_failed']} / 조문 {STATS['phase_b_articles']}")
+    print(f"  완료 — Phase A: {STATS['phase_a_inserted']}/{STATS['phase_a_skipped']}/{STATS['phase_a_failed']}")
+    print(f"          Phase B: 수집 {STATS['phase_b_collected']} / 실패 {STATS['phase_b_failed']} / 조문 {STATS['phase_b_articles']}")
     print("=" * 60)
 
 
