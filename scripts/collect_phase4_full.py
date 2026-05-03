@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-collect_phase4_full.py — S9 Phase 4 (v4 — 파이프라인 본체 호출)
+collect_phase4_full.py — S9 Phase 4 (v5 — admrul dedupe 추가)
 =========================================================================
-v4 (2026-05-03):
-  - routers/law_collector.py + law_collector_admrul.py 본체 사용
-  - save_law_to_db() 그대로 호출 (law_content_raw / law_paragraph / law_item /
-    law_update_tracking 등 파이프라인 부속 처리 자동 포함)
-  - 별도 INSERT 로직 제거 → 후속 단계(law_rule_generator 등)와 호환
+v5 (2026-05-03):
+  - admrul 결과에 _dedupe_articles_by_internal_key 적용
+    (LAW는 parse_law_content_xml 내부에서 자동 dedupe됨,
+     admrul은 parse_admrul_content_xml이 dedupe 없음 → 같은 internal_key 충돌)
 
 실행:
   cd ~/dev/tai-api && git pull
@@ -35,6 +34,7 @@ try:
         fetch_law_list, parse_law_list_xml,
         fetch_law_content, parse_law_content_xml,
         save_law_to_db,
+        _dedupe_articles_by_internal_key,   # v5: admrul에도 적용
     )
     from routers.law_collector_admrul import (
         fetch_admrul_content, parse_admrul_content_xml,
@@ -42,7 +42,6 @@ try:
     from db.database import get_supabase
 except Exception as e:
     print(f"[FATAL] 파이프라인 모듈 import 실패: {e}")
-    print("  ~/dev/tai-api 위치에서 실행해야 합니다.")
     sys.exit(1)
 
 import requests
@@ -50,7 +49,6 @@ import requests
 LAW_OC = os.environ.get("LAW_API_OC", "taieng")
 sb = get_supabase()
 
-# ─── Phase A 대상 (catalog 미등록 4건) ──────────────────────────────
 PHASE_A_LAWS = [
     "소방기본법",
     "건축물의 에너지원단위 목표관리 등에 관한 고시",
@@ -70,10 +68,9 @@ def log(msg, level="INFO"):
 
 
 # ============================================================
-# Phase A: catalog 등록 (단순 INSERT — 파이프라인 무관)
+# Phase A
 # ============================================================
 def _law_search_meta(query, target):
-    """lawSearch.do 호출 → meta 1건"""
     url = "https://www.law.go.kr/DRF/lawSearch.do"
     params = {"OC": LAW_OC, "target": target, "type": "JSON", "query": query, "display": 10}
     try:
@@ -86,7 +83,6 @@ def _law_search_meta(query, target):
             items = data.get("AdmRulSearch", {}).get("admrul", [])
         if isinstance(items, dict):
             items = [items]
-        # 정확 매칭 우선
         name_key = "법령명한글" if target == "law" else "행정규칙명"
         for it in items:
             if (it.get(name_key) or "").strip() == query:
@@ -110,7 +106,6 @@ def phase_a(dry_run=False):
             STATS["phase_a_skipped"] += 1
             continue
 
-        # LAW 우선 시도
         meta = _law_search_meta(law_name, "law")
         target = "law"
         if not meta:
@@ -121,9 +116,6 @@ def phase_a(dry_run=False):
             STATS["phase_a_failed"] += 1
             continue
 
-        # ★ 정확한 매핑 (기존 패턴):
-        #   LAW: api_id=법령ID(짧은 zero-pad), mst_no=법령일련번호(긴)
-        #   admrul: api_id=행정규칙ID(짧은), mst_no=행정규칙일련번호(긴)
         if target == "law":
             law_api_id = meta.get("법령ID", "") or meta.get("법령일련번호", "")
             law_mst_no = meta.get("법령일련번호", "")
@@ -170,10 +162,9 @@ def phase_a(dry_run=False):
 
 
 # ============================================================
-# Phase B: 파이프라인 호출
+# Phase B
 # ============================================================
 def fetch_collection_targets():
-    """is_in_collection_target=true && law_master에 없는 catalog row"""
     targets = sb.table("law_external_catalog") \
         .select("id,law_name,law_api_id,law_mst_no,law_type_code,ministry_name,api_target") \
         .eq("is_in_collection_target", True) \
@@ -184,9 +175,8 @@ def fetch_collection_targets():
 
 
 def collect_one_law(catalog_row):
-    """파이프라인 그대로 호출.
-    LAW: fetch_law_list + fetch_law_content + parse + save_law_to_db
-    admrul: fetch_admrul_content + parse + save_law_to_db
+    """LAW: parse_law_content_xml이 자동 dedupe.
+    admrul: parse_admrul_content_xml은 dedupe 없음 → 여기서 _dedupe 호출.
     """
     law_name = catalog_row["law_name"]
     api_id = catalog_row["law_api_id"]
@@ -194,14 +184,12 @@ def collect_one_law(catalog_row):
     type_code = catalog_row["law_type_code"]
 
     if type_code in ("LAW", "ENFORCEMENT_DECREE", "ENFORCEMENT_RULE"):
-        # ─── LAW 파이프라인 ──────────────────────────────────────
         list_result = fetch_law_list(query=law_name, display=10)
         if not list_result["ok"]:
             raise Exception(f"법령 검색 HTTP {list_result['status']}")
         laws = parse_law_list_xml(list_result["xml"])
         if not laws:
             raise Exception("법령 검색 결과 없음")
-        # 정확 매칭 → fallback
         matched = next((l for l in laws if l["law_name"] == law_name), None)
         if not matched:
             matched = next((l for l in laws if law_name in l["law_name"]), laws[0])
@@ -209,7 +197,7 @@ def collect_one_law(catalog_row):
         content_result = fetch_law_content(matched["law_mst_no"])
         if not content_result["ok"]:
             raise Exception(f"법령 본문 HTTP {content_result['status']}")
-        parsed = parse_law_content_xml(content_result["xml"])
+        parsed = parse_law_content_xml(content_result["xml"])  # 내부에서 자동 dedupe됨
         law_info = {
             **parsed["info"],
             "law_mst_no": matched["law_mst_no"],
@@ -219,12 +207,14 @@ def collect_one_law(catalog_row):
         return save_law_to_db(law_info, content_result["xml"], parsed["articles"], sb)
 
     else:
-        # ─── admrul 파이프라인 ───────────────────────────────────
         content_result = fetch_admrul_content(api_id)
         if not content_result["ok"]:
             raise Exception(f"admrul 본문 HTTP {content_result['status']}")
         parsed = parse_admrul_content_xml(content_result["xml"])
-        # admrul info에 누락 필드 보완
+
+        # ★ v5: admrul도 dedupe 적용 (LAW와 동일 방식)
+        articles = _dedupe_articles_by_internal_key(parsed["articles"])
+
         law_info = {
             **parsed["info"],
             "law_mst_no": mst_no or api_id,
@@ -232,15 +222,15 @@ def collect_one_law(catalog_row):
         if not law_info.get("law_name"):
             law_info["law_name"] = law_name
         if not law_info.get("law_type_name"):
-            law_info["law_type_name"] = "고시"  # NOTICE로 분류되도록
+            law_info["law_type_name"] = "고시"
         if not law_info.get("law_name_short"):
             law_info["law_name_short"] = ""
-        return save_law_to_db(law_info, content_result["xml"], parsed["articles"], sb)
+        return save_law_to_db(law_info, content_result["xml"], articles, sb)
 
 
 def phase_b(dry_run=False, debug_first=False):
     print("\n" + "=" * 60)
-    print("[PHASE B] 본문 수집 (v4 — 파이프라인 본체 호출)")
+    print("[PHASE B] 본문 수집 (v5 — admrul dedupe 추가)")
     print("=" * 60)
 
     targets = fetch_collection_targets()
@@ -283,9 +273,6 @@ def phase_b(dry_run=False, debug_first=False):
     print(f"\n[PHASE B] 수집 {STATS['phase_b_collected']} / 실패 {STATS['phase_b_failed']} / 조문 {STATS['phase_b_articles']}")
 
 
-# ============================================================
-# Phase C: L1+L2+L3 무결성 검증
-# ============================================================
 def phase_c():
     print("\n" + "=" * 60)
     print("[PHASE C] L1+L2+L3 무결성 검증")
@@ -325,7 +312,6 @@ def phase_c():
     print()
 
 
-# ============================================================
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--dry-run", action="store_true")
@@ -334,7 +320,7 @@ def main():
     args = p.parse_args()
 
     print(f"\n{'=' * 60}")
-    print(f"  S9 Phase 4 v4 (파이프라인 본체 호출) — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  S9 Phase 4 v5 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'=' * 60}")
 
     if args.debug_first:
