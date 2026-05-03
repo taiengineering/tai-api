@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 """
-collect_phase4_full.py — S9 Phase 4 (v5 — admrul dedupe 추가)
+collect_phase4_full.py — S9 Phase 4 (v6 — OUTBOUND_PROXY 무력화)
 =========================================================================
-v5 (2026-05-03):
-  - admrul 결과에 _dedupe_articles_by_internal_key 적용
-    (LAW는 parse_law_content_xml 내부에서 자동 dedupe됨,
-     admrul은 parse_admrul_content_xml이 dedupe 없음 → 같은 internal_key 충돌)
+v6 (2026-05-03):
+  - OUTBOUND_PROXY (115.68.227.222) 무력화: 해당 IP가 OC=taieng 등록 IP와 달라
+    "사용자 정보 검증 실패" 응답. admrul는 직송으로 작동 → LAW도 직송 강제.
+  - routers/law_collector 모듈 import 전에 환경변수 비움.
 
 실행:
   cd ~/dev/tai-api && git pull
-  railway run python3 scripts/collect_phase4_full.py            # all
   railway run python3 scripts/collect_phase4_full.py --phase b
-  railway run python3 scripts/collect_phase4_full.py --debug-first
 """
 
 import os, sys, time, argparse, traceback
 from datetime import datetime, timezone
+
+# ★ v6: routers/law_collector.py 모듈이 OUTBOUND_PROXY 읽기 전에 비워야 함
+#   (모듈 로드 시점에 LAW_API_PROXIES가 dict 또는 None으로 고정됨)
+if os.environ.get("OUTBOUND_PROXY"):
+    print(f"[v6] OUTBOUND_PROXY 무력화 (직송 강제): {os.environ['OUTBOUND_PROXY']}")
+    os.environ["OUTBOUND_PROXY"] = ""
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -25,21 +29,26 @@ if PROJECT_ROOT not in sys.path:
 try:
     from dotenv import load_dotenv
     load_dotenv()
+    # load_dotenv 후에도 OUTBOUND_PROXY가 다시 로드될 수 있으므로 한 번 더 비움
+    os.environ["OUTBOUND_PROXY"] = ""
 except ImportError:
     pass
 
-# ─── 파이프라인 본체 import ──────────────────────────────────────────
+# ─── 파이프라인 본체 import (이 시점에 LAW_API_PROXIES = None 고정) ─
 try:
     from routers.law_collector import (
         fetch_law_list, parse_law_list_xml,
         fetch_law_content, parse_law_content_xml,
         save_law_to_db,
-        _dedupe_articles_by_internal_key,   # v5: admrul에도 적용
+        _dedupe_articles_by_internal_key,
     )
     from routers.law_collector_admrul import (
         fetch_admrul_content, parse_admrul_content_xml,
     )
     from db.database import get_supabase
+    # 안전장치: 모듈 변수 직접 None으로 override
+    import routers.law_collector as _lc_mod
+    _lc_mod.LAW_API_PROXIES = None
 except Exception as e:
     print(f"[FATAL] 파이프라인 모듈 import 실패: {e}")
     sys.exit(1)
@@ -67,9 +76,6 @@ def log(msg, level="INFO"):
     print(f"  {icons.get(level, '·')} {msg}")
 
 
-# ============================================================
-# Phase A
-# ============================================================
 def _law_search_meta(query, target):
     url = "https://www.law.go.kr/DRF/lawSearch.do"
     params = {"OC": LAW_OC, "target": target, "type": "JSON", "query": query, "display": 10}
@@ -161,9 +167,6 @@ def phase_a(dry_run=False):
     print(f"\n[PHASE A 결과] 등록 {STATS['phase_a_inserted']} / 스킵 {STATS['phase_a_skipped']} / 실패 {STATS['phase_a_failed']}")
 
 
-# ============================================================
-# Phase B
-# ============================================================
 def fetch_collection_targets():
     targets = sb.table("law_external_catalog") \
         .select("id,law_name,law_api_id,law_mst_no,law_type_code,ministry_name,api_target") \
@@ -175,9 +178,6 @@ def fetch_collection_targets():
 
 
 def collect_one_law(catalog_row):
-    """LAW: parse_law_content_xml이 자동 dedupe.
-    admrul: parse_admrul_content_xml은 dedupe 없음 → 여기서 _dedupe 호출.
-    """
     law_name = catalog_row["law_name"]
     api_id = catalog_row["law_api_id"]
     mst_no = catalog_row["law_mst_no"]
@@ -187,6 +187,9 @@ def collect_one_law(catalog_row):
         list_result = fetch_law_list(query=law_name, display=10)
         if not list_result["ok"]:
             raise Exception(f"법령 검색 HTTP {list_result['status']}")
+        # 응답 자체에 인증 실패 메시지 검출
+        if "사용자 정보 검증" in list_result["xml"] or "사용자 검증" in list_result["xml"]:
+            raise Exception(f"법제처 IP 인증 실패 (응답 거부)")
         laws = parse_law_list_xml(list_result["xml"])
         if not laws:
             raise Exception("법령 검색 결과 없음")
@@ -197,7 +200,9 @@ def collect_one_law(catalog_row):
         content_result = fetch_law_content(matched["law_mst_no"])
         if not content_result["ok"]:
             raise Exception(f"법령 본문 HTTP {content_result['status']}")
-        parsed = parse_law_content_xml(content_result["xml"])  # 내부에서 자동 dedupe됨
+        if "사용자 정보 검증" in content_result["xml"] or "사용자 검증" in content_result["xml"]:
+            raise Exception(f"법제처 IP 인증 실패 (본문)")
+        parsed = parse_law_content_xml(content_result["xml"])
         law_info = {
             **parsed["info"],
             "law_mst_no": matched["law_mst_no"],
@@ -211,8 +216,6 @@ def collect_one_law(catalog_row):
         if not content_result["ok"]:
             raise Exception(f"admrul 본문 HTTP {content_result['status']}")
         parsed = parse_admrul_content_xml(content_result["xml"])
-
-        # ★ v5: admrul도 dedupe 적용 (LAW와 동일 방식)
         articles = _dedupe_articles_by_internal_key(parsed["articles"])
 
         law_info = {
@@ -230,8 +233,12 @@ def collect_one_law(catalog_row):
 
 def phase_b(dry_run=False, debug_first=False):
     print("\n" + "=" * 60)
-    print("[PHASE B] 본문 수집 (v5 — admrul dedupe 추가)")
+    print("[PHASE B] 본문 수집 (v6 — 직송 강제)")
     print("=" * 60)
+
+    # 진단: 모듈 변수 확인
+    import routers.law_collector as _lc
+    log(f"LAW_API_PROXIES={_lc.LAW_API_PROXIES}", "INFO")
 
     targets = fetch_collection_targets()
     log(f"수집 대상: {len(targets)}건", "PHASE")
@@ -244,7 +251,8 @@ def phase_b(dry_run=False, debug_first=False):
     if debug_first:
         if not targets:
             return
-        t = targets[0]
+        # LAW 우선 디버그 (NOTICE는 이미 작동 검증됨)
+        t = next((x for x in targets if x["law_type_code"] in ("LAW", "ENFORCEMENT_DECREE", "ENFORCEMENT_RULE")), targets[0])
         log(f"[DEBUG] {t['law_name']} (api_id={t['law_api_id']}, type={t['law_type_code']})", "PHASE")
         try:
             result = collect_one_law(t)
@@ -320,7 +328,7 @@ def main():
     args = p.parse_args()
 
     print(f"\n{'=' * 60}")
-    print(f"  S9 Phase 4 v5 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  S9 Phase 4 v6 (직송 강제) — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'=' * 60}")
 
     if args.debug_first:
