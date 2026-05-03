@@ -1,5 +1,6 @@
-# routers/law_collector.py v3.0.9
-# v3.0.9: save_law_to_db()의 law_article INSERT에 law_id 추가 (NOT NULL 위반 수정)
+# routers/law_collector.py v3.0.10
+# v3.0.10: save_law_to_db()의 law_paragraph + law_item INSERT에 law_id 추가 (NOT NULL 위반 수정)
+# v3.0.9: save_law_to_db()의 law_article INSERT에 law_id 추가
 # v3.0.8: OUTBOUND_PROXY (iwinv VPS 115.68.227.222:3128) 통과로 송신 IP 고정.
 #         Railway egress IP는 동적(GCP)이라 OC=taieng 등록 불가 → 4/20 이전부터
 #         SMS/결제 모듈이 사용하던 한국 고정 IP 프록시를 법령 수집에도 동일 적용.
@@ -28,17 +29,9 @@ from routers.messaging import EDGE_SMS_URL as SMS_URL, _call_edge_function as _c
 router = APIRouter(prefix="/law-collector", tags=["법령 수집기"])
 
 # ============================================================
-# 설정 — law.go.kr/DRF + OC 인증 + iwinv 프록시 (4/20 검증된 인프라)
-# Railway egress(GCP 동적 IP)로 직송 시 OC 미등록으로 차단 →
-# 한국 고정 IP 프록시(115.68.227.222:3128)를 거쳐 송신.
-# ============================================================
-
 LAW_API_OC      = os.environ.get("LAW_API_OC", "taieng")
 LAW_API_BASE    = "http://www.law.go.kr/DRF"
 
-# OUTBOUND_PROXY는 SMS/결제 모듈에서 이미 사용 중인 환경변수.
-# 예: http://115.68.227.222:3128 (Squid HTTP forward proxy, 인증 없음)
-# 미설정 시 직송으로 동작 (개발용 fallback). 운영은 반드시 설정 필요.
 OUTBOUND_PROXY  = os.environ.get("OUTBOUND_PROXY", "").strip()
 LAW_API_PROXIES = {"http": OUTBOUND_PROXY, "https": OUTBOUND_PROXY} if OUTBOUND_PROXY else None
 
@@ -53,10 +46,6 @@ _CHUNK_SIZE = 100
 def _b64(text: str) -> str:
     return base64.b64encode(text.encode("utf-8")).decode("ascii")
 
-
-# ============================================================
-# 유틸
-# ============================================================
 
 def make_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -293,10 +282,6 @@ def delete_law_version_cascade_for_recollect(supabase: Any, version_id: str) -> 
     supabase.table("law_version").delete().eq("id", version_id).execute()
 
 
-# ============================================================
-# API 호출 — law.go.kr/DRF + OC=taieng + iwinv 프록시 통과
-# ============================================================
-
 def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
     url = f"{LAW_API_BASE}/lawSearch.do"
     params = {"OC": LAW_API_OC, "target": "law", "type": "XML",
@@ -315,10 +300,6 @@ def fetch_law_content(mst_no: str) -> dict:
     resp.encoding = "utf-8"
     return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "law.go.kr"}
 
-
-# ============================================================
-# XML 파싱
-# ============================================================
 
 def parse_law_list_xml(xml_text: str) -> list:
     root = ET.fromstring(xml_text)
@@ -366,10 +347,6 @@ def parse_law_content_xml(xml_text: str) -> dict:
             art["article_internal_key"] = ""
     return {"info": info, "articles": articles, "raw_xml": xml_text}
 
-
-# ============================================================
-# DB 저장
-# ============================================================
 
 def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> dict:
     law_mst_no    = law_info.get("law_mst_no", "")
@@ -429,7 +406,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
     if is_new_version:
         for art in articles:
             art_res = supabase.table("law_article").insert({
-                "law_id": law_id,                       # v3.0.9: law_id NOT NULL 충족
+                "law_id": law_id,                       # v3.0.9
                 "law_version_id": version_id,
                 "article_internal_key": art["article_internal_key"],
                 "article_no": art["article_no"], "article_sub_no": art["article_sub_no"],
@@ -443,6 +420,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
             article_count += 1
             for p_idx, para in enumerate(art["paragraphs"]):
                 para_res = supabase.table("law_paragraph").insert({
+                    "law_id": law_id,                                   # v3.0.10
                     "article_id": article_id, "paragraph_no": para["paragraph_no"],
                     "paragraph_no_sort": p_idx + 1, "paragraph_text": para["paragraph_text"],
                     "paragraph_status_code": "ACTIVE", "updated_at": datetime.now().isoformat(),
@@ -450,6 +428,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
                 paragraph_id = para_res.data[0]["id"]
                 for i_idx, item in enumerate(para["items"]):
                     item_res = supabase.table("law_item").insert({
+                        "law_id": law_id,                               # v3.0.10
                         "paragraph_id": paragraph_id, "item_level_code": "HO",
                         "item_no": item["item_no"], "item_no_sort": i_idx + 1,
                         "item_text": item["item_text"], "item_status_code": "ACTIVE",
@@ -458,6 +437,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
                     item_id = item_res.data[0]["id"]
                     for s_idx, sub in enumerate(item["sub_items"]):
                         supabase.table("law_item").insert({
+                            "law_id": law_id,                           # v3.0.10
                             "paragraph_id": paragraph_id, "parent_item_id": item_id,
                             "item_level_code": "MOK", "item_no": sub["item_no"],
                             "item_no_sort": s_idx + 1, "item_text": sub["item_text"],
@@ -649,10 +629,6 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
     }
 
 
-# ============================================================
-# 라우터 엔드포인트
-# ============================================================
-
 @router.get("/debug/{law_name}")
 async def debug_law_api(law_name: str):
     try:
@@ -794,12 +770,6 @@ def _run_check_updates():
 
 @router.get("/whoami")
 async def whoami():
-    """진단용: 법령 수집 호출에 실제 사용되는 외부 egress IP 확인.
-
-    OUTBOUND_PROXY가 설정되어 있으면 프록시를 통과해서 측정 → 프록시 공인 IP가 회신됨.
-    설정 없으면 컨테이너 직접 egress IP가 회신됨 (Railway는 GCP 동적 IP).
-    개정 후: OUTBOUND_PROXY=http://115.68.227.222:3128 설정 시 115.68.227.222 회신 기대.
-    """
     diag = {"oc": LAW_API_OC, "proxy_set": bool(LAW_API_PROXIES)}
     try:
         r = requests.get("https://api.ipify.org?format=json",
@@ -807,7 +777,6 @@ async def whoami():
         diag.update({
             "egress_ip": r.json().get("ip"),
             "via": "api.ipify.org",
-            "purpose": "법제처 호출에 사용되는 IP — open.law.go.kr 등록 IP와 비교",
         })
         return diag
     except Exception as e:
@@ -840,7 +809,7 @@ async def get_collection_status():
         .select("law_id, job_message, updated_at").eq("job_status_code", "FAILED")\
         .order("updated_at", desc=True).limit(10).execute()
     return {
-        "version":             "3.0.9",
+        "version":             "3.0.10",
         "api_source":          "law.go.kr/DRF",
         "oc":                  LAW_API_OC,
         "proxy_set":           bool(LAW_API_PROXIES),
