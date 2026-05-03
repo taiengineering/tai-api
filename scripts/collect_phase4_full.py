@@ -1,25 +1,15 @@
 #!/usr/bin/env python3
 """
-collect_phase4_full.py — S9 Phase 4 통합 본문 수집 (v3)
+collect_phase4_full.py — S9 Phase 4 통합 본문 수집 (v3.1)
 ====================================================
-v3 수정 (2026-05-03):
-  - admrul fetch에 routers/law_collector_admrul.py 모듈 재사용
-    (ID→LID, JSON→XML, NFPC/NFTC 분기 파서)
-  - LAW는 JSON 그대로, admrul은 XML+분기 파서
-
-실행:
-  cd ~/dev/tai-api
-  railway run python3 scripts/collect_phase4_full.py            # 정상 실행
-  railway run python3 scripts/collect_phase4_full.py --dry-run
-  railway run python3 scripts/collect_phase4_full.py --phase b
-  railway run python3 scripts/collect_phase4_full.py --debug-first
+v3.1 수정 (2026-05-03):
+  - lm_data에 law_key NOT NULL 컬럼 추가 ({api_id}_{mst_no} 패턴)
 """
 
 import os, sys, json, time, argparse, traceback
 from datetime import datetime, timezone
 from typing import Optional
 
-# tai-api 루트를 sys.path에 추가 (routers/* import용)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 if PROJECT_ROOT not in sys.path:
@@ -38,15 +28,12 @@ except ImportError:
     print("[ERROR] 필요 패키지 설치: pip install supabase python-dotenv requests")
     sys.exit(1)
 
-# 기존 검증된 admrul 파서 재사용
 try:
     from routers.law_collector_admrul import fetch_admrul_content, parse_admrul_content_xml
 except Exception as e:
     print(f"[FATAL] routers/law_collector_admrul.py import 실패: {e}")
-    print("  scripts/ 가 아닌 ~/dev/tai-api/ 위치에서 실행해야 합니다.")
     sys.exit(1)
 
-# ============================================================
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY", "")
 LAW_OC = "taieng"
@@ -80,11 +67,12 @@ def log(msg: str, level: str = "INFO"):
 
 def save_debug(name: str, data):
     os.makedirs(DEBUG_DIR, exist_ok=True)
-    path = f"{DEBUG_DIR}/{name}.json"
     if isinstance(data, str):
-        with open(f"{DEBUG_DIR}/{name}.xml", "w", encoding="utf-8") as f:
+        path = f"{DEBUG_DIR}/{name}.xml"
+        with open(path, "w", encoding="utf-8") as f:
             f.write(data)
-        return f"{DEBUG_DIR}/{name}.xml"
+        return path
+    path = f"{DEBUG_DIR}/{name}.json"
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     return path
@@ -130,9 +118,6 @@ def detect_type_from_meta(meta: dict, law_name: str) -> str:
     return "LAW"
 
 
-# ============================================================
-# Phase A: catalog 미등록 4건 등록 (변경 없음)
-# ============================================================
 def phase_a(dry_run: bool = False):
     print("\n" + "=" * 60)
     print("[PHASE A] catalog 미등록 4건 등록")
@@ -140,7 +125,6 @@ def phase_a(dry_run: bool = False):
 
     for law_name in PHASE_A_LAWS:
         log(f"검색 중: {law_name}", "PHASE")
-
         existing = sb.table("law_external_catalog").select("id").eq("law_name", law_name).execute()
         if existing.data:
             log("이미 catalog에 있음, skip", "WARN")
@@ -214,9 +198,6 @@ def phase_a(dry_run: bool = False):
     print(f"\n[PHASE A 결과] 등록 {STATS['phase_a_inserted']} / 스킵 {STATS['phase_a_skipped']} / 실패 {STATS['phase_a_failed']}")
 
 
-# ============================================================
-# Phase B: 본문 수집 (v3 — 기존 admrul 파서 재사용)
-# ============================================================
 def fetch_collection_targets():
     targets = sb.table("law_external_catalog") \
         .select("id,law_name,law_api_id,law_mst_no,law_type_code,ministry_name") \
@@ -229,20 +210,14 @@ def fetch_collection_targets():
 
 
 def fetch_and_parse_law_json(api_id: str) -> dict:
-    """LAW/DECREE/RULE: lawService.do?ID=...&type=JSON
-    Returns: {"basic": {...}, "articles": [unified_format, ...]}
-    raises Exception on failure
-    """
     url = "https://www.law.go.kr/DRF/lawService.do"
     params = {"OC": LAW_OC, "target": "law", "type": "JSON", "ID": api_id}
     r = requests.get(url, params=params, timeout=30)
     r.raise_for_status()
     data = r.json()
 
-    # 응답 검증
     block = data.get("법령", {})
     if not block:
-        # 에러 응답 (e.g., {"Law": "일치하는 법령이 없습니다"})
         if "Law" in data and isinstance(data["Law"], str):
             raise Exception(f"법령 fetch 거부: {data['Law'][:100]}")
         raise Exception(f"법령 응답 키 없음. keys={list(data.keys())}")
@@ -252,7 +227,6 @@ def fetch_and_parse_law_json(api_id: str) -> dict:
     if isinstance(articles_raw, dict):
         articles_raw = [articles_raw]
 
-    # 한국어 키 → admrul 통일 형식 변환
     unified_articles = []
     for idx, art in enumerate(articles_raw, start=1):
         if not isinstance(art, dict):
@@ -304,7 +278,6 @@ def fetch_and_parse_law_json(api_id: str) -> dict:
             "is_changed": False,
         })
 
-    # basic 정보를 통일 형식으로
     basic = {
         "announcement_date": basic_raw.get("공포일자", "") or "",
         "enforcement_date": basic_raw.get("시행일자", "") or "",
@@ -314,14 +287,10 @@ def fetch_and_parse_law_json(api_id: str) -> dict:
 
 
 def fetch_and_parse_admrul(api_id: str) -> dict:
-    """admrul: routers/law_collector_admrul 모듈 재사용
-    Returns: {"basic": {...}, "articles": [unified_format, ...]}
-    """
-    result = fetch_admrul_content(api_id)  # LID 사용, XML
+    result = fetch_admrul_content(api_id)
     if not result["ok"]:
         raise Exception(f"admrul fetch HTTP 실패: status={result['status']}")
     parsed = parse_admrul_content_xml(result["xml"])
-    # parsed = {"info": {...}, "articles": [{...}], "raw_xml": ...}
 
     return {
         "basic": {
@@ -336,10 +305,8 @@ def fetch_and_parse_admrul(api_id: str) -> dict:
 
 
 def insert_law_master_and_articles(meta: dict, parsed: dict):
-    """통일 형식 (basic + articles) 받아서 INSERT"""
     law_name = meta["law_name"]
     law_type_code = meta.get("law_type_code", "LAW")
-
     basic = parsed["basic"]
 
     def norm_date(s) -> Optional[str]:
@@ -354,11 +321,16 @@ def insert_law_master_and_articles(meta: dict, parsed: dict):
     enforcement_date = norm_date(basic.get("enforcement_date"))
     law_number = basic.get("law_number") or ""
 
-    # law_master INSERT
+    api_id = meta.get("law_api_id") or ""
+    mst_no = meta.get("law_mst_no") or api_id
+    # ★ law_key NOT NULL — 기존 패턴: "{api_id}_{mst_no}"
+    law_key = f"{api_id}_{mst_no}"
+
     lm_data = {
+        "law_key": law_key,                                # ★ 추가
         "law_name": law_name,
-        "law_api_id": meta.get("law_api_id"),
-        "law_mst_no": meta.get("law_mst_no"),
+        "law_api_id": api_id,
+        "law_mst_no": mst_no,
         "law_type_code": law_type_code,
         "ministry_name": meta.get("ministry_name", ""),
         "law_number": str(law_number) if law_number else None,
@@ -367,14 +339,13 @@ def insert_law_master_and_articles(meta: dict, parsed: dict):
         "law_status_code": "EFFECTIVE",
         "is_active": True,
         "source_system": "law.go.kr",
-        "source_url": f"https://www.law.go.kr/lsInfoP.do?lsiSeq={meta.get('law_api_id')}",
+        "source_url": f"https://www.law.go.kr/lsInfoP.do?lsiSeq={api_id}",
     }
     lm_resp = sb.table("law_master").insert(lm_data).execute()
     if not lm_resp.data:
-        raise Exception(f"law_master INSERT 응답 비어있음")
+        raise Exception("law_master INSERT 응답 비어있음")
     law_master_id = lm_resp.data[0]["id"]
 
-    # law_version INSERT
     lv_data = {
         "law_id": law_master_id,
         "version_no": "1",
@@ -385,15 +356,13 @@ def insert_law_master_and_articles(meta: dict, parsed: dict):
     }
     lv_resp = sb.table("law_version").insert(lv_data).execute()
     if not lv_resp.data:
-        raise Exception(f"law_version INSERT 응답 비어있음")
+        raise Exception("law_version INSERT 응답 비어있음")
     law_version_id = lv_resp.data[0]["id"]
 
     sb.table("law_master").update({"current_version_id": law_version_id}).eq("id", law_master_id).execute()
 
-    # 조문 INSERT (통일 형식)
     article_count = 0
-    articles = parsed["articles"]
-    for idx, art in enumerate(articles, start=1):
+    for idx, art in enumerate(parsed["articles"], start=1):
         try:
             sb.table("law_article").insert({
                 "law_version_id": law_version_id,
@@ -418,7 +387,7 @@ def insert_law_master_and_articles(meta: dict, parsed: dict):
 
 def phase_b(dry_run: bool = False, debug_first: bool = False):
     print("\n" + "=" * 60)
-    print("[PHASE B] 본문 수집 (v3 — admrul 파서 재사용)")
+    print("[PHASE B] 본문 수집 (v3.1 — law_key 추가)")
     print("=" * 60)
 
     targets = fetch_collection_targets()
@@ -430,7 +399,6 @@ def phase_b(dry_run: bool = False, debug_first: bool = False):
             print(f"  [{i:>3}] [{t['law_type_code']}] {t['law_name']} (api_id={t['law_api_id']})")
         return
 
-    # 디버그 모드: 첫 1건만 처리 + 결과 출력
     if debug_first:
         if not targets:
             log("수집 대상 없음", "WARN")
@@ -483,9 +451,6 @@ def phase_b(dry_run: bool = False, debug_first: bool = False):
     print(f"             조문 합계: {STATS['phase_b_articles']}개")
 
 
-# ============================================================
-# Phase C: 검증 (변경 없음)
-# ============================================================
 def phase_c():
     print("\n" + "=" * 60)
     print("[PHASE C] L1+L2+L3 무결성 검증")
@@ -527,7 +492,6 @@ def phase_c():
     print()
 
 
-# ============================================================
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--dry-run", action="store_true")
@@ -536,7 +500,7 @@ def main():
     args = p.parse_args()
 
     print(f"\n{'=' * 60}")
-    print(f"  S9 Phase 4 통합 수집 v3 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  S9 Phase 4 통합 수집 v3.1 — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  dry_run={args.dry_run} / phase={args.phase} / debug_first={args.debug_first}")
     print(f"{'=' * 60}")
 
