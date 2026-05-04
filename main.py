@@ -1,4 +1,5 @@
-# main.py — v5.43.0
+# main.py — v5.44.0
+# v5.44.0: internal_inbox 라우터 등록 (POST /internal/inbox/notify) — Phase 3 인박스 슬랙 알림
 # v5.43.0: law_catalog_collector 라우터 등록 (POST /law-collector/collect-catalog — 외부 카탈로그 수집)
 # v5.42.1: POST /slack/interact 별칭 (Slack Interactions → slack_kin 동일 핸들러)
 # v5.42.0: kin_generate 라우터 등록 (POST /kin/generate, /kin/collect — 어드민 수동 실행)
@@ -153,10 +154,11 @@ from routers.debug                   import router as debug_router              
 from routers.document_engine         import router as document_engine_api_router      # v5.39.0 문서엔진
 from routers.slack_kin               import router as slack_kin_router, interact_alias_router as slack_interact_alias_router  # v5.41.0 Slack×지식인 반자동
 from routers.kin_generate            import router as kin_generate_router             # v5.42.0 어드민 수동 실행
+from routers.internal_inbox          import router as internal_inbox_router            # v5.44.0 인박스 슬랙 알림
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.43.0"
+APP_VERSION = "5.44.0"
 
 
 @asynccontextmanager
@@ -302,6 +304,7 @@ app.include_router(contracts_engine_router,  prefix="/matching/contracts", tags=
 app.include_router(settlements_router,       prefix="/settlements",        tags=["정산"])
 app.include_router(identity_router, prefix="/identity", tags=["본인인증"])
 app.include_router(internal_api_registry_router)
+app.include_router(internal_inbox_router)                                          # v5.44.0 인박스 슬랙 알림
 app.include_router(report_api_registry_router)
 app.include_router(construction_router, prefix="/construction", tags=["건설안전"])
 app.include_router(safety_template_router)
