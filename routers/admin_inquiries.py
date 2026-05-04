@@ -1,0 +1,231 @@
+"""
+관리자 통합 인박스 — inquiries 목록·수정·직접 등록
+
+Doc: docs/inbox-system/PHASE4_INQUIRY_LIST.md
+"""
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Header, HTTPException, Query
+from pydantic import BaseModel, Field
+
+from db.supabase_client import get_supabase
+
+router = APIRouter(prefix="/admin/inquiries", tags=["관리 - 통합 인박스"])
+
+INQUIRY_CATEGORIES = {
+    "consult",
+    "safety",
+    "electric",
+    "risk",
+    "csia",
+    "saas",
+    "repair",
+    "edu",
+    "partner",
+    "other",
+}
+FEEDBACK_CATEGORIES = {
+    "fb_feature",
+    "fb_bug",
+    "fb_ux",
+    "fb_idea",
+    "fb_praise",
+}
+
+SORT_KEYS = {"created_at", "no", "category", "title", "name", "status", "assigned", "source", "inquiry_type"}
+
+
+def _require_bearer(authorization: Optional[str]) -> None:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="인증이 필요합니다.")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _next_inquiry_no(supabase) -> str:
+    utc = datetime.now(timezone.utc)
+    day = utc.strftime("%Y%m%d")
+    prefix = f"TAI-INQ-{day}-"
+    start = utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    res = (
+        supabase.table("inquiries")
+        .select("id", count="exact")
+        .gte("created_at", start.isoformat())
+        .execute()
+    )
+    n = (res.count or 0) + 1
+    return f"{prefix}{n:04d}"
+
+
+def _safe_or_pattern(q: str) -> Optional[str]:
+    s = (q or "").strip()[:120]
+    for ch in "*,%()":
+        s = s.replace(ch, " ")
+    s = s.strip()
+    return s if s else None
+
+
+class InquiryCreateBody(BaseModel):
+    inquiry_type: str = Field(..., min_length=1)
+    category: str = Field(..., min_length=1)
+    title: Optional[str] = None
+    content: str = Field(..., min_length=1)
+    name: Optional[str] = None
+    company: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    is_member: bool = False
+
+
+class InquiryPatchBody(BaseModel):
+    answer: Optional[str] = None
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    assigned: Optional[str] = None
+
+
+def _validate_category(inquiry_type: str, category: str) -> None:
+    cat = (category or "").strip()
+    it = (inquiry_type or "").strip().upper()
+    if it == "INQUIRY" and cat not in INQUIRY_CATEGORIES:
+        raise HTTPException(status_code=400, detail="INQUIRY 유형에 맞지 않는 category 입니다.")
+    if it == "FEEDBACK" and cat not in FEEDBACK_CATEGORIES:
+        raise HTTPException(status_code=400, detail="FEEDBACK 유형에 맞지 않는 category 입니다.")
+    if it not in ("INQUIRY", "FEEDBACK"):
+        raise HTTPException(status_code=400, detail="inquiry_type은 INQUIRY 또는 FEEDBACK 이어야 합니다.")
+
+
+@router.get("")
+def admin_list_inquiries(
+    authorization: Optional[str] = Header(None),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=200),
+    source: Optional[str] = Query(None, description="direct | marketing | safe"),
+    inquiry_type: Optional[str] = Query(None, description="INQUIRY | FEEDBACK"),
+    category: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    is_member: Optional[str] = Query(None, description="1=회원, 0=비회원"),
+    from_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    to_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    q: Optional[str] = Query(None, description="통합검색"),
+    sort_key: str = Query("created_at"),
+    sort_dir: str = Query("desc"),
+):
+    _require_bearer(authorization)
+    if sort_dir not in ("asc", "desc"):
+        raise HTTPException(status_code=400, detail="sort_dir은 asc 또는 desc 여야 합니다.")
+    if sort_key not in SORT_KEYS:
+        raise HTTPException(status_code=400, detail="지원하지 않는 sort_key 입니다.")
+    supabase = get_supabase()
+    offset = (page - 1) * size
+    desc = sort_dir == "desc"
+
+    query = supabase.table("inquiries").select("*", count="exact")
+
+    if source:
+        query = query.eq("source", source.strip())
+    if inquiry_type:
+        query = query.eq("inquiry_type", inquiry_type.strip().upper())
+    if category:
+        query = query.eq("category", category.strip())
+    if status:
+        query = query.eq("status", status.strip())
+    if is_member == "1":
+        query = query.eq("is_member", True)
+    elif is_member == "0":
+        query = query.eq("is_member", False)
+
+    if from_date:
+        query = query.gte("created_at", f"{from_date.strip()}T00:00:00+00:00")
+    if to_date:
+        query = query.lt("created_at", f"{to_date.strip()}T23:59:59.999999+00:00")
+
+    if q and q.strip():
+        pat = _safe_or_pattern(q)
+        if pat:
+            query = query.or_(
+                f"name.ilike.*{pat}*,company.ilike.*{pat}*,title.ilike.*{pat}*,"
+                f"content.ilike.*{pat}*,email.ilike.*{pat}*,phone.ilike.*{pat}*"
+            )
+
+    try:
+        res = query.order(sort_key, desc=desc).range(offset, offset + size - 1).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"조회 실패: {e!s}") from e
+
+    return {
+        "status": "success",
+        "data": {
+            "items": res.data or [],
+            "total": res.count or 0,
+            "page": page,
+            "size": size,
+        },
+    }
+
+
+@router.post("")
+def admin_create_inquiry(
+    body: InquiryCreateBody,
+    authorization: Optional[str] = Header(None),
+):
+    _require_bearer(authorization)
+    it = body.inquiry_type.strip().upper()
+    _validate_category(it, body.category)
+
+    supabase = get_supabase()
+    no = _next_inquiry_no(supabase)
+    title = (body.title or "").strip() or None
+    row: Dict[str, Any] = {
+        "no": no,
+        "source": "direct",
+        "inquiry_type": it,
+        "category": body.category.strip(),
+        "title": title,
+        "content": body.content.strip(),
+        "name": (body.name or "").strip() or None,
+        "company": (body.company or "").strip() or None,
+        "phone": (body.phone or "").strip() or None,
+        "email": (body.email or "").strip() or None,
+        "is_member": bool(body.is_member),
+        "status": "RECEIVED",
+        "priority": "NORMAL",
+    }
+    try:
+        res = supabase.table("inquiries").insert(row).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"등록 실패: {e!s}") from e
+    if not res.data:
+        raise HTTPException(status_code=500, detail="등록 후 데이터를 확인할 수 없습니다.")
+    return {"status": "success", "data": res.data[0]}
+
+
+@router.patch("/{inquiry_id}")
+def admin_patch_inquiry(
+    inquiry_id: UUID,
+    body: InquiryPatchBody,
+    authorization: Optional[str] = Header(None),
+):
+    _require_bearer(authorization)
+    raw = body.model_dump(exclude_unset=True) if hasattr(body, "model_dump") else body.dict(exclude_unset=True)
+    patch: Dict[str, Any] = {k: v for k, v in raw.items() if v is not None}
+    if not patch:
+        raise HTTPException(status_code=400, detail="변경할 필드가 없습니다.")
+
+    st = patch.get("status")
+    ans = patch.get("answer")
+    if st == "ANSWERED" and ans and str(ans).strip():
+        patch["replied_at"] = _now_iso()
+
+    supabase = get_supabase()
+    try:
+        res = supabase.table("inquiries").update(patch).eq("id", str(inquiry_id)).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"저장 실패: {e!s}") from e
+    if not res.data:
+        raise HTTPException(status_code=404, detail="문의를 찾을 수 없습니다.")
+    return {"status": "success", "data": res.data[0]}

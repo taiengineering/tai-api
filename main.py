@@ -1,4 +1,5 @@
-# main.py — v5.37.0
+# main.py — v5.38.0
+# v5.38.0: admin_inquiries 라우터 등록 (GET/POST/PATCH /admin/inquiries) — Phase 4 통합 인박스
 # v5.37.0: internal_inbox 라우터 등록 (POST /internal/inbox/notify) — Phase 3 인박스 슬랙 알림
 # v5.36.0: pw_reset 라우터 등록 (POST /auth/pw-reset/request, /auth/pw-reset/confirm)
 # v5.35.0: payment_billing 라우터 등록 (POST /payments/inicis/billing/*, /payments/subscriptions/{id}/cancel)
@@ -133,10 +134,11 @@ from routers.diagnosis_proposal      import router as diagnosis_proposal_router 
 from routers.diagram_proxy           import router as diagram_proxy_router           # v5.32.0
 from routers.pw_reset                import router as pw_reset_router                # v5.36.0 비밀번호재설정
 from routers.internal_inbox          import router as internal_inbox_router            # v5.37.0 인박스 슬랙 알림
+from routers.admin_inquiries         import router as admin_inquiries_router            # v5.38.0 Phase 4 인박스 API
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.37.0"
+APP_VERSION = "5.38.0"
 
 
 @asynccontextmanager
@@ -192,6 +194,7 @@ app.include_router(alert_messages_router)
 app.include_router(feature_flags_router)
 app.include_router(site_public_router)
 app.include_router(site_faq_admin_router)
+app.include_router(admin_inquiries_router)
 app.include_router(anonymous_diagnosis_router)
 app.include_router(public_pricing_router)
 app.include_router(connect_registration_router)
