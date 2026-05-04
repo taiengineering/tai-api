@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI 메일 관리 라우터 v2.1.0
+TAI 메일 관리 라우터 v2.2.0
 
+v2.2.0 (2026-05-04):
+  - reply_to 파라미터 추가 (send / reply / send-system)
+    · 자동 메일 답장을 Workspace Gmail로 라우팅하기 위함
+    · MAIL_DEFAULT_REPLY_TO 환경변수로 시스템 메일 답장 주소 지정
+  - webhook/inbound: MX 마이그레이션 안내 주석
+    · MX 레코드를 Resend → Google Workspace로 변경하면
+      이 엔드포인트는 더 이상 호출되지 않음 (Gmail이 직접 수신)
 v2.1.0:
   - 인바운드 웹훅: payload에서 html/text 직접 추출 (API 재조회 fallback)
   - 첨부파일 메타 직접 추출
@@ -34,6 +41,11 @@ resend_client.api_key = RESEND_API_KEY
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
+# 자동 발송 메일에 답장이 갈 주소 (Workspace Gmail 등).
+# 미설정 시 reply_to 헤더를 추가하지 않음 (= from으로 답장).
+# system@... 처럼 답장을 받을 수 없는 주소로 발송할 때 특히 중요.
+MAIL_DEFAULT_REPLY_TO = os.environ.get("MAIL_DEFAULT_REPLY_TO", "").strip()
+
 ALLOWED_FROM = {
     "tai@taieng.co.kr":     "TAI Engineering <tai@taieng.co.kr>",
     "taiwang@taieng.co.kr": "TAI Engineering <taiwang@taieng.co.kr>",
@@ -42,6 +54,13 @@ ALLOWED_FROM = {
 DEFAULT_FROM    = "tai@taieng.co.kr"
 STORAGE_BUCKET  = "mail-attachments"
 MAX_ATTACH_SIZE = 10 * 1024 * 1024
+
+
+def _normalize_reply_to(reply_to: Optional[str]) -> List[str]:
+    """콤마 구분 문자열 → 리스트. 빈값이면 []."""
+    if not reply_to:
+        return []
+    return [e.strip() for e in reply_to.split(",") if e.strip()]
 
 
 # ─── 첨부파일 헬퍼 ───────────────────────────────────────────
@@ -95,6 +114,7 @@ class MailSendRequest(BaseModel):
     subject:    str
     html:       str
     from_email: Optional[str] = None
+    reply_to:   Optional[List[str]] = None
     sent_by:    Optional[str] = None
 
 
@@ -106,6 +126,7 @@ class SystemMailRequest(BaseModel):
     to: str
     subject: str
     body: str
+    reply_to: Optional[str] = None  # 미지정 시 MAIL_DEFAULT_REPLY_TO 사용
 
 
 # ─── POST /mail/send-system ──────────────────────────────────
@@ -115,6 +136,11 @@ async def send_system_mail(req: SystemMailRequest):
     """
     pg_cron 자동QA 등 내부 시스템에서 JSON으로 호출하는 메일 발송.
     인증 불필요 (내부 Supabase pg_net 전용).
+
+    답장 라우팅:
+      - req.reply_to 가 있으면 그 주소로
+      - 없으면 MAIL_DEFAULT_REPLY_TO 환경변수
+      - 둘 다 없으면 reply_to 헤더 미설정 (= system@... 으로 답장 시도되어 실패할 수 있음)
     """
     supabase = get_supabase()
 
@@ -125,16 +151,24 @@ async def send_system_mail(req: SystemMailRequest):
     mail_id = str(uuid.uuid4())
     from_key = "system@taieng.co.kr"
 
+    send_params: dict = {
+        "from": f"TAI System <{from_key}>",
+        "to": to_list,
+        "subject": req.subject,
+        "text": req.body,
+    }
+
+    # reply_to: 요청 우선 → 환경변수 fallback
+    reply_to_value = (req.reply_to or "").strip() or MAIL_DEFAULT_REPLY_TO
+    reply_to_list = _normalize_reply_to(reply_to_value)
+    if reply_to_list:
+        send_params["reply_to"] = reply_to_list
+
     resend_id: Optional[str] = None
     status = "sent"
     error_message: Optional[str] = None
     try:
-        result = resend_client.Emails.send({
-            "from": f"TAI System <{from_key}>",
-            "to": to_list,
-            "subject": req.subject,
-            "text": req.body,
-        })
+        result = resend_client.Emails.send(send_params)
         resend_id = result.get("id") if isinstance(result, dict) else getattr(result, "id", None)
     except Exception as e:
         status = "failed"
@@ -174,6 +208,7 @@ async def send_mail(
     subject:    str         = Form(...),
     html:       str         = Form(...),
     from_email: Optional[str] = Form(None),
+    reply_to:   Optional[str] = Form(None, description="답장 받을 주소(콤마 구분). 미지정 시 from으로 답장."),
     sent_by:    Optional[str] = Form(None),
     files:      List[UploadFile] = File(default=[]),
 ):
@@ -205,6 +240,11 @@ async def send_mail(
         send_params["cc"] = cc_list
     if attach_metas:
         send_params["attachments"] = _build_resend_attachments(attach_metas)
+
+    # reply_to: 요청 명시 우선, 없으면 미설정 (= from 으로 답장)
+    reply_to_list = _normalize_reply_to(reply_to)
+    if reply_to_list:
+        send_params["reply_to"] = reply_to_list
 
     resend_id: Optional[str] = None
     status = "sent"
@@ -252,6 +292,7 @@ async def reply_mail(
     subject:    Optional[str]  = Form(None),
     html:       str            = Form(...),
     from_email: Optional[str]  = Form(None),
+    reply_to:   Optional[str]  = Form(None, description="답장 받을 주소(콤마 구분). 미지정 시 from으로 답장."),
     sent_by:    Optional[str]  = Form(None),
     files:      List[UploadFile] = File(default=[]),
 ):
@@ -299,6 +340,11 @@ async def reply_mail(
     }
     if attach_metas:
         send_params["attachments"] = _build_resend_attachments(attach_metas)
+
+    # reply_to: 요청 명시 우선, 없으면 미설정 (= from 으로 답장)
+    reply_to_list = _normalize_reply_to(reply_to)
+    if reply_to_list:
+        send_params["reply_to"] = reply_to_list
 
     orig_resend_id = original.get("resend_id")
     if orig_resend_id:
@@ -447,7 +493,15 @@ def delete_bulk(body: BulkDeleteRequest):
 
 @router.post("/webhook/inbound")
 async def webhook_inbound(request: Request):
-    """Resend 수신 웹훅 — webhook payload에서 본문 직접 추출 (v2.1.0)."""
+    """Resend 수신 웹훅 — webhook payload에서 본문 직접 추출 (v2.1.0).
+
+    ⚠️ MX 마이그레이션 메모 (2026-05-04):
+      MX 레코드가 Resend → Google Workspace 로 변경되면
+      외부 메일은 Gmail이 직접 수신하므로 이 엔드포인트는
+      더 이상 호출되지 않습니다. 코드는 그대로 두어도 무해
+      (호출이 안 들어올 뿐). Resend 대시보드의 Inbound 설정도
+      함께 비활성화하면 깔끔합니다.
+    """
     try:
         payload = await request.json()
     except Exception:
