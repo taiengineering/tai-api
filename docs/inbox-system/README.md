@@ -18,7 +18,7 @@
 | 2-b | Railway env: SLACK_CHANNEL_ID_INBOX | ⏳ | 대표 직접 |
 | 2-c | 슬랙 #inbox-all에 @slackbot 초대 | ⏳ | 대표 직접 |
 | 3 | tai-api notify 엔드포인트 + DB Trigger | 📝 지시서 완성 | Cursor |
-| 4 | 어드민 inquiry-list 포함 확장 (FEEDBACK 카테고리) | ⏳ | Cursor |
+| 4 | 어드민 inquiry-list 포함 확장 (FEEDBACK 카테고리) | 📝 [`PHASE4_INQUIRY_LIST.md`](./PHASE4_INQUIRY_LIST.md) | Cursor |
 | 5 | 마케팅 + SaaS 의견 폼 | ⏳ | MCP / Cursor |
 
 ## Phase 관련 문서
