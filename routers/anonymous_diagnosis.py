@@ -57,10 +57,10 @@ LEGAL_ENGINE_VERSION = "5.7.0"
 _ALLOWED_DIAGNOSE_SECTORS = frozenset({"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"})
 
 # sector 정규화 매핑
-# MANUFACTURING(법령엔진 내부 코드) → INDUSTRY
+# MANUFACTURING(법령엔진 내부 코드) → INDUSTRIAL
 # SPECIAL_FACILITY(기타시설)        → BUILDING
 _SECTOR_NORMALIZE: Dict[str, str] = {
-    "MANUFACTURING":    "INDUSTRY",
+    "MANUFACTURING":    "INDUSTRIAL",
     "SPECIAL_FACILITY": "BUILDING",
 }
 
@@ -321,7 +321,8 @@ def _normalize_sector(row: Dict[str, Any]) -> str:
     input_data: Dict[str, Any] = row.get("input_data") or {}
     full: Dict[str, Any]       = row.get("full_result") or {}
     raw = str(input_data.get("sector") or full.get("sector") or "").upper()
-    return _SECTOR_NORMALIZE.get(raw, raw)
+    mapped = _SECTOR_NORMALIZE.get(raw, raw)
+    return normalize_sector_db(mapped)
 
 
 # ── GET /{token}/transform  (이슈#2: JS fetch 참조 실주) ────────────────
@@ -394,7 +395,7 @@ def recommend_plan_by_token(token: str):
     input_data: Dict[str, Any] = row.get("input_data") or {}
     sector = _normalize_sector(row)
 
-    if sector not in ("INDUSTRY", "BUILDING", "CONSTRUCTION"):
+    if sector not in ("INDUSTRIAL", "BUILDING", "CONSTRUCTION"):
         raw = str(input_data.get("sector") or full.get("sector") or "").upper()
         raise HTTPException(
             status_code=422,
@@ -408,7 +409,7 @@ def recommend_plan_by_token(token: str):
     workers   = int(input_data.get("workers") or 0)
     penalty_risk_krw = int((full.get("roi") or {}).get("annual_penalty_risk_krw") or 0)
 
-    if sector == "INDUSTRY":
+    if sector == "INDUSTRIAL":
         plan_code, reasons = _recommend_industry(severity, obl_cnt, workers)
     elif sector == "BUILDING":
         plan_code, reasons = _recommend_building(severity, obl_cnt, workers)

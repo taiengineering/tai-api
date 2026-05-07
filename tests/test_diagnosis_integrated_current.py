@@ -12,8 +12,8 @@ def test_auto_tier_construction_threshold_snapshot():
 
 
 def test_auto_tier_industry_uses_user_tier_or_default():
-    assert diagnosis_integrated._auto_tier("INDUSTRY", user_tier="INDUSTRY_STANDARD") == "INDUSTRY_STANDARD"
-    assert diagnosis_integrated._auto_tier("INDUSTRY", user_tier=None) == "INDUSTRY_V2"
+    assert diagnosis_integrated._auto_tier("INDUSTRIAL", user_tier="INDUSTRY_STANDARD") == "INDUSTRY_STANDARD"
+    assert diagnosis_integrated._auto_tier("INDUSTRIAL", user_tier=None) == "INDUSTRY_V2"
 
 
 def test_build_partial_includes_core_fields_and_truncation():

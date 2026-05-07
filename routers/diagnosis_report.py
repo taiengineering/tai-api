@@ -43,9 +43,11 @@ FREE_TIER_CODES = frozenset({
 # 섹터 한글 라벨
 SECTOR_LABEL: Dict[str, str] = {
     "BUILDING":      "건물",
+    "INDUSTRIAL":    "산업",
     "INDUSTRY":      "산업",
     "CONSTRUCTION":  "건설",
     "MANUFACTURING": "산업(제조)",
+    "SPECIAL_FACILITY": "특정시설",
 }
 
 # 의무유형 한글 라벨

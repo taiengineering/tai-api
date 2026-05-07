@@ -4,6 +4,8 @@
 import time
 from fastapi import APIRouter
 from db.database import get_supabase
+from constants.sectors import sector_codes_for_query
+from services.legal_rules import normalize_sector_db
 
 router = APIRouter(prefix="/public/pricing", tags=["공개 가격"])
 
@@ -23,6 +25,14 @@ def _set_cache(key: str, data):
     _cache[key] = {"ts": time.time(), "data": data}
 
 
+def _saas_sector_codes_all():
+    """price_saas_plan.sector_code 호환 (레거시 INDUSTRY/SPECIAL 행 포함)."""
+    codes = []
+    for g in ("BUILDING", "INDUSTRIAL", "CONSTRUCTION", "SPECIAL_FACILITY"):
+        codes.extend(sector_codes_for_query(g))
+    return list(dict.fromkeys(codes))
+
+
 # ══════════════════════════════════════════════════════════════
 # v1.1.0 신규: 기획서 지정 엔드포인트
 # ══════════════════════════════════════════════════════════════
@@ -31,7 +41,7 @@ def _set_cache(key: str, data):
 def get_saas_plans(sector: str = None):
     """
     SaaS 구독 플랜 목록 (is_active=true, 인증 불필요).
-    sector: BUILDING | INDUSTRY | CONSTRUCTION (없으면 전체)
+    sector: BUILDING | INDUSTRIAL | CONSTRUCTION | SPECIAL_FACILITY (없으면 전체)
 
     응답: {"data": [...]}
     """
@@ -45,10 +55,10 @@ def get_saas_plans(sector: str = None):
         "plan_code, plan_name, display_name, description, sector_code, billing_unit,"
         "monthly_base_fee, sms_included, kakao_included, doc_included,"
         "storage_history_month, include_tbm, badge_color, sort_order, is_active"
-    ).eq("is_active", True).in_("sector_code", ["BUILDING", "INDUSTRY", "CONSTRUCTION"])
+    ).eq("is_active", True).in_("sector_code", _saas_sector_codes_all())
 
     if sector:
-        q = q.eq("sector_code", sector.upper())
+        q = q.in_("sector_code", list(sector_codes_for_query(normalize_sector_db(sector))))
 
     res = q.order("sort_order").execute()
     data = res.data or []
@@ -97,10 +107,10 @@ def public_saas_pricing(sector: str = None):
         "plan_code, plan_name, display_name, description, sector_code, billing_unit,"
         "monthly_base_fee, sms_included, kakao_included, doc_included,"
         "include_tbm, badge_color, sort_order"
-    ).eq("is_active", True).in_("sector_code", ["BUILDING", "INDUSTRY", "CONSTRUCTION"])
+    ).eq("is_active", True).in_("sector_code", _saas_sector_codes_all())
 
     if sector:
-        q = q.eq("sector_code", sector.upper())
+        q = q.in_("sector_code", list(sector_codes_for_query(normalize_sector_db(sector))))
 
     res = q.order("sort_order").execute()
     data = res.data or []
@@ -140,9 +150,9 @@ def public_all_pricing(sector: str = None):
         "plan_code, display_name, description, sector_code, billing_unit,"
         "monthly_base_fee, sms_included, kakao_included, doc_included, include_tbm,"
         "badge_color, sort_order"
-    ).eq("is_active", True).in_("sector_code", ["BUILDING", "INDUSTRY", "CONSTRUCTION"])
+    ).eq("is_active", True).in_("sector_code", _saas_sector_codes_all())
     if sector:
-        saas_q = saas_q.eq("sector_code", sector.upper())
+        saas_q = saas_q.in_("sector_code", list(sector_codes_for_query(normalize_sector_db(sector))))
     saas = saas_q.order("sort_order").execute().data or []
 
     diag = sb.table("price_diagnosis_report").select(

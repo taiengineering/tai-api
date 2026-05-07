@@ -13,11 +13,11 @@ class DisclaimerBody(BaseModel):
 class DiagnosisRunBody(BaseModel):
     auth_token: str = Field(..., description="본인인증 auth_token")
     disclaimer_log_id: str = Field(..., description="면책 동의 ID (POST /diagnosis/disclaimer 반환값)")
-    sector: str = Field(..., description="BUILDING | INDUSTRY | CONSTRUCTION")
+    sector: str = Field(..., description="BUILDING | INDUSTRIAL | CONSTRUCTION | SPECIAL_FACILITY")
     floor_area: Optional[float] = Field(None, description="바닥면적(㎡) — BUILDING")
     total_floor_area: Optional[float] = Field(None, description="연면적(㎡)")
     contract_amount_eok: Optional[float] = Field(None, description="공사금액(억원) — CONSTRUCTION")
-    user_tier: Optional[str] = Field(None, description="INDUSTRY 사용자 선택 티어")
+    user_tier: Optional[str] = Field(None, description="산업(INDUSTRIAL) 사용자 선택 티어")
     direct_workers: Optional[int] = None
     subcon_workers: Optional[int] = None
     worker_count: Optional[int] = None

@@ -215,10 +215,10 @@ def check_diagnosis_free_usage(
 
 @router.get("/price-tier")
 def get_price_tier(
-    sector:              str   = Query(..., description="BUILDING | INDUSTRY | CONSTRUCTION"),
+    sector:              str   = Query(..., description="BUILDING | INDUSTRIAL | CONSTRUCTION | SPECIAL_FACILITY"),
     floor_area:          float = Query(0.0, description="바닥면적 (㎡) — BUILDING 자동판정용"),
     contract_amount_eok: float = Query(0.0, description="공사금액(억원) — CONSTRUCTION 자동판정용"),
-    user_tier:           Optional[str] = Query(None, description="INDUSTRY 사용자 선택 티어"),
+    user_tier:           Optional[str] = Query(None, description="산업(INDUSTRIAL) 사용자 선택 티어"),
 ):
     return diagnosis_integrated_svc.get_price_tier_payload(
         sector=sector,

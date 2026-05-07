@@ -16,7 +16,7 @@ def test_auto_tier_snapshot():
     assert h._auto_tier("BUILDING", floor_area=5000) == "BUILDING_LARGE_V2"
     assert h._auto_tier("CONSTRUCTION", contract_amount_eok=49) == "CONSTRUCTION"
     assert h._auto_tier("CONSTRUCTION", contract_amount_eok=50) == "CONSTRUCTION_PREMIUM"
-    assert h._auto_tier("INDUSTRY", user_tier="INDUSTRY_STANDARD") == "INDUSTRY_STANDARD"
+    assert h._auto_tier("INDUSTRIAL", user_tier="INDUSTRY_STANDARD") == "INDUSTRY_STANDARD"
 
 
 def test_build_partial_truncates_lists():

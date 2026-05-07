@@ -25,6 +25,8 @@ import os, logging, httpx
 from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
 from db.supabase_client import get_supabase
+from constants.sectors import sector_codes_for_query
+from services.legal_rules import normalize_sector_db
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/precedents", tags=["산재판례"])
@@ -35,7 +37,7 @@ EDGE_COLLECT_URL = os.environ.get(
 )
 
 DEFAULT_DISPLAY = 20
-VALID_SECTORS = {"BUILDING", "INDUSTRY", "CONSTRUCTION", "ALL"}
+VALID_SECTORS = {"BUILDING", "INDUSTRIAL", "CONSTRUCTION", "SPECIAL_FACILITY", "ALL"}
 
 
 # ── GET /precedents/search  (posts 테이블 조회) ──────────────────────────
@@ -43,7 +45,7 @@ VALID_SECTORS = {"BUILDING", "INDUSTRY", "CONSTRUCTION", "ALL"}
 @router.get("/search")
 def search_precedents(
     query:   str           = Query(..., description="검색 키워드"),
-    sector:  Optional[str] = Query(None, description="섹터 필터: BUILDING / INDUSTRY / CONSTRUCTION / ALL"),
+    sector:  Optional[str] = Query(None, description="섹터 필터: BUILDING / INDUSTRIAL / CONSTRUCTION / SPECIAL_FACILITY / ALL"),
     year:    Optional[int] = Query(None, description="결정연도 필터 (예: 2023)"),
     source:  Optional[str] = Query(None, description="소스 필터 (현재 미사용)"),
     page:    int           = Query(1, ge=1),
@@ -66,8 +68,10 @@ def search_precedents(
            .eq("status", "published")
            .eq("category", "산재판례"))
 
-    if sector and sector.upper() in VALID_SECTORS and sector.upper() != "ALL":
-        q = q.eq("subcategory", sector.upper())
+    sec_norm = normalize_sector_db(sector) if sector else ""
+    if sec_norm and sec_norm in VALID_SECTORS and sec_norm != "ALL":
+        subs = sector_codes_for_query(sec_norm)
+        q = q.eq("subcategory", subs[0]) if len(subs) == 1 else q.in_("subcategory", list(subs))
 
     if year:
         q = q.gte("published_at", f"{year}-01-01").lte("published_at", f"{year}-12-31")
@@ -79,8 +83,10 @@ def search_precedents(
                .ilike("title", f"%{query}%")
                .eq("status", "published")
                .eq("category", "산재판례"))
-    if sector and sector.upper() in VALID_SECTORS and sector.upper() != "ALL":
-        cnt_q = cnt_q.eq("subcategory", sector.upper())
+    sec_norm = normalize_sector_db(sector) if sector else ""
+    if sec_norm and sec_norm in VALID_SECTORS and sec_norm != "ALL":
+        subs = sector_codes_for_query(sec_norm)
+        cnt_q = cnt_q.eq("subcategory", subs[0]) if len(subs) == 1 else cnt_q.in_("subcategory", list(subs))
     if year:
         cnt_q = cnt_q.gte("published_at", f"{year}-01-01").lte("published_at", f"{year}-12-31")
     cnt = cnt_q.execute()
@@ -102,7 +108,7 @@ def search_precedents(
 @router.get("/iap/search")
 def search_iap(
     query:      str           = Query(..., description="검색 키워드 (case_name, summary 검색)"),
-    sector:     Optional[str] = Query(None, description="섹터 필터: BUILDING / INDUSTRY / CONSTRUCTION"),
+    sector:     Optional[str] = Query(None, description="섹터 필터: BUILDING / INDUSTRIAL / CONSTRUCTION / SPECIAL_FACILITY"),
     hazard_type:Optional[str] = Query(None, description="위험유형: 추락/충돌/화재 등"),
     year:       Optional[int] = Query(None, description="결정연도"),
     page:       int           = Query(1, ge=1),

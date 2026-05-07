@@ -39,7 +39,14 @@ CONDITION_CODE_TO_CONTEXT_KEY: Dict[str, str] = {
 
 
 def normalize_sector_db(sector: str) -> str:
-    return sector.strip().upper()
+    if not sector:
+        return ""
+    u = sector.strip().upper()
+    if u == "INDUSTRY":
+        return "INDUSTRIAL"
+    if u == "SPECIAL":
+        return "SPECIAL_FACILITY"
+    return u
 
 
 def risk_level(applicable_count: int, appointment_n: int) -> str:

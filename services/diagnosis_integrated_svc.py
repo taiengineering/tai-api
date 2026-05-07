@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, Optional
 from fastapi import HTTPException, Request
 
 from schemas.legal_engine import DiagnoseStep1Body
+from services.legal_rules import normalize_sector_db
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ def get_price_tier_payload(
     paid_tier_prices: Dict[str, int],
     free_tier_codes,
 ) -> Dict[str, Any]:
-    sector = sector.strip().upper()
+    sector = normalize_sector_db(sector)
     tier_code = auto_tier_func(sector, floor_area, contract_amount_eok, user_tier)
 
     price = paid_tier_prices.get(tier_code, 0)
@@ -148,8 +149,8 @@ def run_diagnosis(
     if not disc_res.data or not disc_res.data[0].get("agreed"):
         raise HTTPException(status_code=400, detail="면책 동의가 필요합니다.")
 
-    sector = body.sector.strip().upper()
-    engine_sector = "MANUFACTURING" if sector == "INDUSTRY" else sector
+    sector = normalize_sector_db(body.sector)
+    engine_sector = "MANUFACTURING" if sector == "INDUSTRIAL" else sector
     tier_code = auto_tier_func(
         sector,
         floor_area=body.floor_area or 0.0,
@@ -306,8 +307,8 @@ def upgrade_diagnosis(
 
     input_data = rec.get("input_data") or {}
     inp = {"tier_code": target_tier, "anonymous_flow": True, "upgrade": True}
-    sector = (input_data.get("sector") or "").upper()
-    engine_sector = "MANUFACTURING" if sector == "INDUSTRY" else sector
+    sector = normalize_sector_db(str(input_data.get("sector") or ""))
+    engine_sector = "MANUFACTURING" if sector == "INDUSTRIAL" else sector
     workers = int(input_data.get("workers") or 0)
     floor_area = float(input_data.get("floor_area") or 400.0)
     contract_eok = float(input_data.get("contract_amount_eok") or 1.0)

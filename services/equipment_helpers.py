@@ -7,7 +7,7 @@ CATEGORY_MAP = {
     "MECH": "기계설비",
     "ELEC": "전기설비",
     "FIRE": "소방설비",
-    "INDUSTRY": "산업설비",
+    "INDUSTRIAL": "산업설비",
     "ENV": "환경설비",
     "HAZMAT": "위험물설비",
     "GAS": "가스설비",

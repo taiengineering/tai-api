@@ -101,7 +101,7 @@ class DiagnosisResultV202604(BaseModel):
     """
     schema_version: Literal["2026.04"]
     tier:   Literal["FREE", "PAID", "PAID1", "PAID2", "PAID3"]
-    sector: Literal["BUILDING", "INDUSTRY", "CONSTRUCTION"]
+    sector: Literal["BUILDING", "INDUSTRIAL", "CONSTRUCTION", "SPECIAL_FACILITY"]
     generated_at: datetime
     valid_until:  Optional[datetime] = None
 
