@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
 
 from db.supabase_client import get_supabase
+from services.legal_rules import normalize_sector_db
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/diagnosis", tags=["기안PDF"])
@@ -32,11 +33,15 @@ VERSION = "2.1.0"
 GOTENBERG_URL = os.getenv("GOTENBERG_URL", "http://tai-gotenberg.internal:3000")
 
 SECTOR_LABEL: Dict[str, str] = {
-    "INDUSTRY": "산업(제조)", "BUILDING": "건물·시설", "CONSTRUCTION": "건설",
-    "MANUFACTURING": "산업(제조)", "SPECIAL_FACILITY": "건물·시설",
+    "INDUSTRIAL": "산업(제조)",
+    "INDUSTRY": "산업(제조)",
+    "BUILDING": "건물·시설",
+    "CONSTRUCTION": "건설",
+    "MANUFACTURING": "산업(제조)",
+    "SPECIAL_FACILITY": "건물·시설",
 }
 SECTOR_NORMALIZE: Dict[str, str] = {
-    "MANUFACTURING": "INDUSTRY",
+    "MANUFACTURING": "INDUSTRIAL",
     "SPECIAL_FACILITY": "BUILDING",
 }
 
@@ -111,7 +116,7 @@ def _build_paid_tiers(sector: str, input_data: Dict[str, Any]) -> Dict[str, Any]
     - BUILDING: \uba74\uc801 \uae30\uc900 \uc790\ub3d9 \ud310\uc815 (\ub2e8\uc77c \ud655\uc815 + \uc0c1\uc704 \ud78c\ud2b8)
     - CONSTRUCTION: \uacf5\uc0ac\uae08\uc561 \uae30\uc900 \uc790\ub3d9 \ud310\uc815 (\ub2e8\uc77c \ud655\uc815 + \uc0c1\uc704 \ud78c\ud2b8)
     """
-    if sector == "INDUSTRY":
+    if sector == "INDUSTRIAL":
         return {
             "mode": "select",
             "tiers": [
@@ -262,9 +267,10 @@ def _build_context(row: Dict[str, Any]) -> Dict[str, Any]:
     partial    = row.get("partial_result") or {}
     full       = row.get("full_result") or {}
 
-    raw_sector   = str(input_data.get("sector") or full.get("sector") or partial.get("sector") or "INDUSTRY").upper()
-    sector       = SECTOR_NORMALIZE.get(raw_sector, raw_sector)
-    sector_label = SECTOR_LABEL.get(raw_sector, "\uc0b0\uc5c5")
+    raw_sector   = str(input_data.get("sector") or full.get("sector") or partial.get("sector") or "INDUSTRIAL").upper()
+    canon        = normalize_sector_db(raw_sector)
+    sector       = SECTOR_NORMALIZE.get(canon, canon)
+    sector_label = SECTOR_LABEL.get(sector, SECTOR_LABEL.get(canon, "\uc0b0\uc5c5"))
 
     company_name = input_data.get("company_name") or input_data.get("site_kind") or "\uadc0 \uc0ac\uc5c5\uc7a5"
     report_date  = _now().strftime("%Y\ub144 %m\uc6d4 %d\uc77c")

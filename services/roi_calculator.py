@@ -21,7 +21,7 @@ from typing import Any, Optional
 
 # ── 플랜별 월 요금 (현행 price_saas_plan DB 기준) ───────────────────────────
 PLAN_MONTHLY_FEE = {
-    # INDUSTRY
+    # INDUSTRIAL
     "STARTER":    79_000,
     "BUSINESS":  149_000,
     "ENTERPRISE": 249_000,  # PRO 플랜 249K 사용
@@ -60,7 +60,7 @@ def infer_plan(
       BUILDING:
         3,000㎡ 미만 + 10명 미만 → BUILDING_BASIC
         그 외            → BUILDING_STANDARD
-      INDUSTRY:
+      INDUSTRIAL:
         <100명        → STARTER
         100~300명    → BUSINESS
         300명+        → ENTERPRISE
@@ -78,7 +78,7 @@ def infer_plan(
             return "BUILDING_BASIC"
         return "BUILDING_STANDARD"
 
-    if s == "INDUSTRY":
+    if s == "INDUSTRIAL" or s == "INDUSTRY":
         if emp < 100:
             return "STARTER"
         if emp < 300:

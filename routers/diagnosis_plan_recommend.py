@@ -15,6 +15,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 
 from db.supabase_client import get_supabase
+from services.legal_rules import normalize_sector_db
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/diagnosis", tags=["플랜추천"])
@@ -23,10 +24,10 @@ VERSION = "1.1.0"
 
 
 _PLANS: dict[str, dict[str, Any]] = {
-    "INDUSTRY_STARTER_V2":    {"name": "산업 STARTER",    "monthly": 79000,  "sector": "INDUSTRY",     "tier": 1, "is_custom": False},
-    "INDUSTRY_BUSINESS_V2":   {"name": "산업 BUSINESS",   "monthly": 149000, "sector": "INDUSTRY",     "tier": 2, "is_custom": False},
-    "INDUSTRY_PRO":           {"name": "산업 PRO",          "monthly": 249000, "sector": "INDUSTRY",     "tier": 3, "is_custom": False},
-    "INDUSTRY_CUSTOM_V2":     {"name": "산업 CUSTOM",      "monthly": 0,      "sector": "INDUSTRY",     "tier": 4, "is_custom": True},
+    "INDUSTRY_STARTER_V2":    {"name": "산업 STARTER",    "monthly": 79000,  "sector": "INDUSTRIAL",     "tier": 1, "is_custom": False},
+    "INDUSTRY_BUSINESS_V2":   {"name": "산업 BUSINESS",   "monthly": 149000, "sector": "INDUSTRIAL",     "tier": 2, "is_custom": False},
+    "INDUSTRY_PRO":           {"name": "산업 PRO",          "monthly": 249000, "sector": "INDUSTRIAL",     "tier": 3, "is_custom": False},
+    "INDUSTRY_CUSTOM_V2":     {"name": "산업 CUSTOM",      "monthly": 0,      "sector": "INDUSTRIAL",     "tier": 4, "is_custom": True},
     "BUILDING_BASIC":         {"name": "건물 BASIC",          "monthly": 59000,  "sector": "BUILDING",     "tier": 1, "is_custom": False},
     "BUILDING_STANDARD":      {"name": "건물 STANDARD",     "monthly": 145000, "sector": "BUILDING",     "tier": 2, "is_custom": False},
     "BUILDING_CUSTOM":        {"name": "건물 CUSTOM",        "monthly": 249000, "sector": "BUILDING",     "tier": 3, "is_custom": False},
@@ -36,7 +37,7 @@ _PLANS: dict[str, dict[str, Any]] = {
 }
 
 _SECTOR_PLANS: dict[str, list[str]] = {
-    "INDUSTRY":     ["INDUSTRY_STARTER_V2", "INDUSTRY_BUSINESS_V2", "INDUSTRY_PRO", "INDUSTRY_CUSTOM_V2"],
+    "INDUSTRIAL":     ["INDUSTRY_STARTER_V2", "INDUSTRY_BUSINESS_V2", "INDUSTRY_PRO", "INDUSTRY_CUSTOM_V2"],
     "BUILDING":     ["BUILDING_BASIC", "BUILDING_STANDARD", "BUILDING_CUSTOM"],
     "CONSTRUCTION": ["CONSTRUCTION_STANDARD_V2", "CONSTRUCTION_PREMIUM_V2", "CONSTRUCTION_CUSTOM_V2"],
 }
@@ -188,7 +189,7 @@ def recommend_plan(diagnosis_id: str):
 
     diag = diag_res.data[0]
     rd: dict       = diag.get("result_data") or {}
-    sector: str    = (diag.get("sector") or "").upper()
+    sector: str    = normalize_sector_db(diag.get("sector") or "")
     rule_count: int = diag.get("rule_count") or 0
 
     factory: dict = {}
@@ -198,7 +199,7 @@ def recommend_plan(diagnosis_id: str):
                    .eq("id", diag["factory_id"]).limit(1).execute())
         factory = fac_res.data[0] if fac_res.data else {}
         if factory.get("sector"):
-            sector = str(factory["sector"]).upper()
+            sector = normalize_sector_db(str(factory["sector"]))
 
     headline     = rd.get("headline") or {}
     severity     = str(headline.get("severity") or "LOW").upper()
@@ -206,7 +207,7 @@ def recommend_plan(diagnosis_id: str):
     workers      = int(factory.get("total_worker_count_calc") or factory.get("employee_count") or 0)
     penalty_risk = int((rd.get("roi") or {}).get("annual_penalty_risk_krw") or 0)
 
-    if sector == "INDUSTRY":
+    if sector == "INDUSTRIAL":
         plan_code, reasons = _recommend_industry(severity, obl_cnt, workers)
     elif sector == "BUILDING":
         plan_code, reasons = _recommend_building(severity, obl_cnt, workers)

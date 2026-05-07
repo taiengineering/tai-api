@@ -13,6 +13,8 @@ API:
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 from db.supabase_client import get_supabase
+from constants.sectors import VALID_SECTORS, sector_codes_for_query
+from services.legal_rules import normalize_sector_db
 
 router = APIRouter(prefix="/feature-flags", tags=["Feature Flags"])
 
@@ -23,13 +25,12 @@ PLAN_ORDER = {
     'CUSTOM':     4,
 }
 
-VALID_SECTORS = frozenset({'BUILDING', 'INDUSTRY', 'CONSTRUCTION', 'SPECIAL'})
 VALID_PLANS   = frozenset(PLAN_ORDER.keys())
 
 
 @router.get("")
 async def get_feature_flags(
-    sector: str = Query(..., description="BUILDING / INDUSTRY / CONSTRUCTION / SPECIAL"),
+    sector: str = Query(..., description="BUILDING / INDUSTRIAL / CONSTRUCTION / SPECIAL_FACILITY"),
     plan:   str = Query(..., description="STARTER / BUSINESS / ENTERPRISE / CUSTOM"),
 ):
     """
@@ -39,7 +40,7 @@ async def get_feature_flags(
     - locked: 섹터 일치, 플랜 부족  → required_plan 포함 반환
     - hidden: 섹터 불일치            → feature_code 문자열만 반환
     """
-    sector_upper = sector.strip().upper()
+    sector_upper = normalize_sector_db(sector)
     plan_upper   = plan.strip().upper()
 
     if sector_upper not in VALID_SECTORS:
@@ -112,8 +113,8 @@ async def get_all_features(
         .order('sort_order')
 
     if sector:
-        sector_upper = sector.strip().upper()
-        q = q.in_('sector', ['ALL', sector_upper])
+        sector_upper = normalize_sector_db(sector)
+        q = q.in_('sector', ['ALL', *sector_codes_for_query(sector_upper)])
 
     res = q.execute()
     return {

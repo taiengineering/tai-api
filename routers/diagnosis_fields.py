@@ -5,16 +5,16 @@
 #
 # 섭터별 tier 맵핑:
 #   BUILDING:     FREE(8) | PAID(36)   → 연면적 5000㎡ 기준 99K/249K
-#   INDUSTRY:     FREE(3) | PAID1(15) | PAID2(+9=24) | PAID3(+12=36)
+#   INDUSTRIAL:     FREE(3) | PAID1(15) | PAID2(+9=24) | PAID3(+12=36)
 #   CONSTRUCTION: FREE(4) | PAID(24)  → 199K 고정
 from collections import defaultdict
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from db.database import get_supabase
+from constants.sectors import VALID_SECTORS, sector_codes_for_query
+from services.legal_rules import normalize_sector_db
 
 router = APIRouter(prefix="/diagnosis", tags=["다에진 입력항목"])
-
-VALID_SECTORS = {"BUILDING", "INDUSTRY", "CONSTRUCTION"}
 
 # 산업 누적 tier 순서
 INDUSTRY_TIER_ORDER = ["PAID1", "PAID2", "PAID3"]
@@ -24,19 +24,19 @@ INDUSTRY_TIER_ORDER = ["PAID1", "PAID2", "PAID3"]
 
 @router.get("/fields")
 def get_diagnosis_fields(
-    sector: str = Query(..., description="BUILDING | INDUSTRY | CONSTRUCTION"),
+    sector: str = Query(..., description="BUILDING | INDUSTRIAL | CONSTRUCTION | SPECIAL_FACILITY"),
     tier:   str = Query(..., description="FREE | PAID | PAID1 | PAID2 | PAID3"),
 ):
     """
     섭터/티어별 진단 입력항목 조회.
 
-    산업(INDUSTRY)는 누적 구조:
+    산업(INDUSTRIAL)는 누적 구조:
     - PAID2 요청 → PAID1 + PAID2 필드 합산
     - PAID3 요청 → PAID1 + PAID2 + PAID3 필드 합산
 
     인증 불필요 (공개 API).
     """
-    sector = sector.upper()
+    sector = normalize_sector_db(sector)
     tier   = tier.upper()
 
     if sector not in VALID_SECTORS:
@@ -45,7 +45,7 @@ def get_diagnosis_fields(
     sb = get_supabase()
 
     # 산업 누적 tier 연산
-    if sector == "INDUSTRY" and tier in INDUSTRY_TIER_ORDER:
+    if sector == "INDUSTRIAL" and tier in INDUSTRY_TIER_ORDER:
         idx = INDUSTRY_TIER_ORDER.index(tier)
         tiers_to_fetch = ["FREE"] + INDUSTRY_TIER_ORDER[:idx + 1]
     else:
@@ -55,7 +55,7 @@ def get_diagnosis_fields(
         "field_code, field_name, field_type, field_group, "
         "unit, is_required, placeholder, help_text, auto_source, "
         "input_options, sort_order, tier"
-    ).eq("sector", sector).eq("is_active", True).in_("tier", tiers_to_fetch).order("sort_order").execute()
+    ).in_("sector", list(sector_codes_for_query(sector))).eq("is_active", True).in_("tier", tiers_to_fetch).order("sort_order").execute()
 
     rows = res.data or []
 
@@ -101,28 +101,28 @@ def get_diagnosis_fields(
 
 @router.get("/pricing")
 def get_diagnosis_pricing(
-    sector:           str = Query(..., description="BUILDING | INDUSTRY | CONSTRUCTION"),
+    sector:           str = Query(..., description="BUILDING | INDUSTRIAL | CONSTRUCTION | SPECIAL_FACILITY"),
     total_floor_area: Optional[float] = Query(None, description="연면적(㎡) — BUILDING 에서 필수"),
-    tier:             Optional[str]  = Query(None, description="INDUSTRY 에서 PAID1|PAID2|PAID3"),
+    tier:             Optional[str]  = Query(None, description="INDUSTRIAL 에서 PAID1|PAID2|PAID3"),
 ):
     """
     섭터 + 조건별 진단 가격 자동 판단.
 
     BUILDING: total_floor_area >= 5000 → 249,000원 / < 5000 → 99,000원
-    INDUSTRY: tier=PAID1 →79K / PAID2 →149K / PAID3 →249K
+    INDUSTRIAL: tier=PAID1 →79K / PAID2 →149K / PAID3 →249K
     CONSTRUCTION: 199,000원 고정
 
     인증 불필요 (공개 API).
     """
-    sector = sector.upper()
+    sector = normalize_sector_db(sector)
     if sector not in VALID_SECTORS:
         raise HTTPException(status_code=400, detail=f"sector는 {sorted(VALID_SECTORS)} 중 하나여야 합니다")
 
     sb = get_supabase()
 
-    if sector == "BUILDING":
+    if sector in ("BUILDING", "SPECIAL_FACILITY"):
         if total_floor_area is None:
-            raise HTTPException(status_code=400, detail="BUILDING 섭터는 total_floor_area(연면적 ㎡)가 필요합니다")
+            raise HTTPException(status_code=400, detail="BUILDING·SPECIAL_FACILITY 섭터는 total_floor_area(연면적 ㎡)가 필요합니다")
 
         AREA_THRESHOLD = 5000
         if total_floor_area >= AREA_THRESHOLD:
@@ -153,9 +153,9 @@ def get_diagnosis_pricing(
             },
         }
 
-    elif sector == "INDUSTRY":
+    elif sector == "INDUSTRIAL":
         if not tier:
-            raise HTTPException(status_code=400, detail="INDUSTRY 섭터는 tier(PAID1|PAID2|PAID3)가 필요합니다")
+            raise HTTPException(status_code=400, detail="산업(INDUSTRIAL) 섭터는 tier(PAID1|PAID2|PAID3)가 필요합니다")
 
         tier = tier.upper()
         row = sb.table("price_diagnosis_report").select(
@@ -172,7 +172,7 @@ def get_diagnosis_pricing(
             "PAID3": {"fee": int(p["total_report_fee"]), "label": "산업 PAID3 (종합)"},
         }
         if tier not in TIER_MAP:
-            raise HTTPException(status_code=400, detail="INDUSTRY tier는 PAID1|PAID2|PAID3 중 하나여야 합니다")
+            raise HTTPException(status_code=400, detail="INDUSTRIAL tier는 PAID1|PAID2|PAID3 중 하나여야 합니다")
 
         t = TIER_MAP[tier]
         return {

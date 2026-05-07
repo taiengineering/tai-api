@@ -206,12 +206,12 @@ def verify_otp(req: VerifyOtpRequest):
     if not u_res.data:
         return {
             "id": None, "worker_id": None, "phone": phone, "name": phone,
-            "sector": "INDUSTRY", "factory_id": None, "site_id": None,
+            "sector": "INDUSTRIAL", "factory_id": None, "site_id": None,
             "company": "", "job_type": "",
         }
 
     user = u_res.data[0]
-    sector     = user.get("sector") or "INDUSTRY"
+    sector     = user.get("sector") or "INDUSTRIAL"
     factory_id = user.get("factory_id")
     company_id = user.get("company_id")
     factory_name = ""
