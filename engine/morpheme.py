@@ -10,29 +10,36 @@ helper 함수로 캐싀화하여 Stage 1/2 룰 매칭이 단순 문자열 비교
   - 법령 보전. 토큰화는 형태소 분해이며 의미해석 X.
   - 빈 입력은 빈 결과 반환 (예외 X).
 
+다단어 사전 처리 (Track C 권고 반영, 2026-05-09):
+  - 공백 포함 어휘 (예: "고압가스 안전관리법") → add_re_word 정규식 기반 등록 (안정)
+  - 공백 없는 어휘 → add_user_word 일반 등록
+  - 목적: dict_legal_terms의 다단어 법령명·기관명 안정 토큰화
+
+자동 사전 로드:
+  - __init__ 시 supabase 주입 + auto_load_verified_dict=True (기본)
+  - 인스턴스 생성 시점에 dict_legal_terms.verified=true 자동 로드
+  - 실패 시 warning 후 계속 진행 (degraded)
+
 계층: Service (FastAPI import 금지).
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Iterable
 
 from kiwipiepy import Kiwi, Token
 
 if TYPE_CHECKING:
-    # 타입 힌트만 — 런타임 의존성 X
     from supabase import Client as SupabaseClient
 
 logger = logging.getLogger(__name__)
 
 
 # ----- POS tag 카테고리 -----
-# Day 1 검증: EF (어말어미) 존재가 HEADER vs ITEM 의 1차 분별자.
 EF_TAGS = frozenset({"EF"})
-
-# 부호류 — has_ef 판정 시 제외 대상 (마침표 등)
 PUNCT_TAGS = frozenset({
     "SF", "SP", "SE", "SS", "SO", "SW", "SSO", "SSC", "SC",
 })
@@ -45,29 +52,41 @@ class TokenizationMeta:
     Day 1 발견을 직접 코드화한 것. Stage 2 sub_type 룰 매칭 시
     이 메타를 보고 빠르게 분기 가능.
     """
-    tail_3: str       # 마지막 3 토큰의 form/tag 시그니처
-    head_1: str       # 첫 토큰의 form/tag
-    has_ef: bool      # EF 종결 여부 (HEADER vs ITEM)
-    last_tag: str     # 마지막 의미 토큰의 tag (부호 제외)
-    last_form: str    # 마지막 의미 토큰의 form
-    token_count: int  # 전체 토큰 수
+    tail_3: str
+    head_1: str
+    has_ef: bool
+    last_tag: str
+    last_form: str
+    token_count: int
 
 
 class MorphemeEngine:
     """Kiwi 래핑 엔진.
 
     Usage:
-        engine = MorphemeEngine()
-        tokens = engine.tokenize("사업주는 ... 설치하여야 한다.")
+        engine = MorphemeEngine()                    # DB 없이
+        engine = MorphemeEngine(supabase=sb)         # 자동 사전 로드
         tokens, meta = engine.analyze("벌금에 처한다.")
-        # meta.has_ef -> True (HEADER 후보)
-        # meta.tail_3 -> "처하/VV + ᆫ다/EF + ./SF"
     """
 
-    def __init__(self, load_default_dict: bool = True) -> None:
+    def __init__(
+        self,
+        load_default_dict: bool = True,
+        supabase: SupabaseClient | None = None,
+        auto_load_verified_dict: bool = True,
+    ) -> None:
         logger.info("Kiwi 인스턴스 초기화 (load_default_dict=%s)", load_default_dict)
         self.kiwi = Kiwi(load_default_dict=load_default_dict)
         self._user_dict_count = 0
+        self.supabase = supabase
+
+        # Track C 권고: 자동 사전 로드 (dict_legal_terms verified=true)
+        if supabase is not None and auto_load_verified_dict:
+            try:
+                loaded = self.load_verified_dict_from_db(supabase)
+                logger.info("MorphemeEngine 자동 사전 로드: %d개", loaded)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("자동 사전 로드 실패 (degraded 계속): %s", e)
 
     # ----- 토큰화 -----
 
@@ -78,13 +97,13 @@ class MorphemeEngine:
         return self.kiwi.tokenize(text)
 
     def tokenize_batch(self, texts: list[str]) -> list[list[Token]]:
-        """일괄 토큰화. Kiwi 멀티스레드 활용."""
+        """일괄 토큰화."""
         if not texts:
             return []
         return list(self.kiwi.tokenize(texts))
 
     def analyze(self, text: str) -> tuple[list[Token], TokenizationMeta]:
-        """토큰화 + 메타 동시 산출. Stage 2 룰 매칭에 직접 사용."""
+        """토큰화 + 메타 동시 산출."""
         tokens = self.tokenize(text)
         meta = self._build_meta(tokens)
         return tokens, meta
@@ -93,10 +112,6 @@ class MorphemeEngine:
 
     @staticmethod
     def get_tail_signature(tokens: list[Token], n: int = 3) -> str:
-        """마지막 n 토큰의 form/tag 시그니처.
-
-        예: tail-3 -> "하/VX + ᆫ다/EF + ./SF"
-        """
         if not tokens:
             return ""
         tail = tokens[-n:] if len(tokens) >= n else tokens
@@ -104,7 +119,6 @@ class MorphemeEngine:
 
     @staticmethod
     def get_head_signature(tokens: list[Token], n: int = 1) -> str:
-        """첫 n 토큰의 form/tag. EXCEPTION_CLAUSE 검출용 (다만/MAG)."""
         if not tokens:
             return ""
         head = tokens[:n]
@@ -112,7 +126,6 @@ class MorphemeEngine:
 
     @staticmethod
     def get_last_meaningful_token(tokens: list[Token]) -> Token | None:
-        """부호류 제외 마지막 의미 토큰."""
         for tok in reversed(tokens):
             if tok.tag in PUNCT_TAGS:
                 continue
@@ -121,10 +134,7 @@ class MorphemeEngine:
 
     @classmethod
     def has_ef_terminator(cls, tokens: list[Token]) -> bool:
-        """마지막 의미 토큰이 EF (어말어미)인지.
-
-        Day 1 발견: HEADER 7종은 모두 True, ITEM (할 것/한 자)은 False.
-        """
+        """Day 1 발견: HEADER 7종은 모두 True, ITEM (할 것/한 자)은 False."""
         last = cls.get_last_meaningful_token(tokens)
         if last is None:
             return False
@@ -149,26 +159,30 @@ class MorphemeEngine:
         pos_tag: str = "NNG",
         score: float = 0.0,
     ) -> bool:
-        """단일 어휘를 Kiwi 사전에 추가."""
+        """단일 어휘를 Kiwi 사전에 추가.
+
+        다단어 (공백 포함) → add_re_word 정규식 등록 (안정).
+        단일어 → add_user_word 일반 등록.
+
+        Track C 권고 (2026-05-09): 다단어 법령명 정확 토큰화 보장.
+        """
         if not term:
             return False
         try:
-            self.kiwi.add_user_word(term, pos_tag, score)
+            if " " in term:
+                # 다단어: 정규식 메타문자 escape 후 add_re_word
+                pattern = re.escape(term)
+                self.kiwi.add_re_word(pattern, pos_tag)
+            else:
+                self.kiwi.add_user_word(term, pos_tag, score)
             self._user_dict_count += 1
             return True
         except Exception as e:  # noqa: BLE001
-            logger.warning("사전 추가 실패: term=%s reason=%s", term, e)
+            logger.warning("사전 추가 실패: term=%r reason=%s", term, e)
             return False
 
     def load_dict_terms(self, terms: Iterable[dict[str, Any]]) -> int:
-        """dict_legal_terms 행 리스트를 Kiwi 사전에 일괄 등록.
-
-        Args:
-            terms: [{"term": str, "pos_tag": str, "score": float}, ...]
-
-        Returns:
-            성공 등록 수.
-        """
+        """dict_legal_terms 행 리스트를 Kiwi 사전에 일괄 등록."""
         added = 0
         total = 0
         for row in terms:
@@ -192,16 +206,7 @@ class MorphemeEngine:
         term_type: str | None = None,
         limit: int = 1000,
     ) -> int:
-        """dict_legal_terms에서 verified=true 어휘를 DB에서 로드.
-
-        Args:
-            supabase: Supabase client (db.supabase_client.get_supabase()에서 주입)
-            term_type: 'LAW_NAME' / 'AGENCY_NAME' / 'TECH_TERM' / 'GENERIC' 또는 None (전체)
-            limit: 최대 로드 수
-
-        Returns:
-            등록 성공 수.
-        """
+        """dict_legal_terms.verified=true 어휘를 DB에서 로드."""
         query = (
             supabase.table("dict_legal_terms")
             .select("term, pos_tag, score, term_type")
