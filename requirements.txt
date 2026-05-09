@@ -16,3 +16,9 @@ python-dateutil>=2.8.2
 firebase-admin
 openai>=1.0.0
 sentry-sdk[fastapi]
+
+# === TAI 법령엔진 v3.0 — Track A (2026-05-09 추가) ===
+# 형태소 분석기 (한국어). LLM 사용 금지 원칙(§2.1) 대체 도구.
+# 라이선스: LGPL v3 — 동적 링크 사용 OK (NOTICE 파일 별도 관리 필요)
+kiwipiepy>=0.22.0,<0.24.0
+kiwipiepy-model>=0.22.0
