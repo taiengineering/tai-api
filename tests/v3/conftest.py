@@ -7,6 +7,10 @@ Fixtures:
   mock_sb_empty       — 모든 테이블 빈 결과
   mock_sb_with_data   — 주요 테이블에 1~2건씩 주입
   mock_sb_failing     — 모든 메서드 RuntimeError (error path)
+
+P0 패치 (2026-05-12):
+  _Builder.range(start, end) 추가 — load_verified_dict_from_db 페이지네이션 검증용.
+  execute()가 _range_slice를 반영해 슬라이싱 결과 반환.
 """
 
 from __future__ import annotations
@@ -27,8 +31,8 @@ class MockResult:
 class _Builder:
     """supabase-py 쿼리 빌더 mock.
 
-    .select() / .eq() / .order() / .limit() / .like() 모두 self 반환.
-    .execute() → MockResult.
+    .select() / .eq() / .order() / .limit() / .like() / .range() 모두 self 반환.
+    .execute() → MockResult (range 슬라이스 반영).
     .insert() → _InsertBuilder.
     """
 
@@ -42,6 +46,7 @@ class _Builder:
         self._data = table_data
         self._inserts = record_inserts
         self._count_requested = False
+        self._range_slice: tuple[int, int] | None = None
 
     def select(self, *_a, **kwargs) -> "_Builder":
         if kwargs.get("count") == "exact":
@@ -57,14 +62,24 @@ class _Builder:
     def gte(self, *_a, **_kw) -> "_Builder": return self
     def lte(self, *_a, **_kw) -> "_Builder": return self
 
+    def range(self, start: int, end: int) -> "_Builder":
+        """PostgREST Range 헤더 시뮬레이션. inclusive [start, end]."""
+        self._range_slice = (start, end)
+        return self
+
     def insert(self, rows: Any) -> "_InsertBuilder":
         rows_list = rows if isinstance(rows, list) else [rows]
         self._inserts.setdefault(self._table, []).extend(rows_list)
         return _InsertBuilder(rows_list)
 
     def execute(self) -> MockResult:
+        data = list(self._data)
+        if self._range_slice is not None:
+            s, e = self._range_slice
+            # PostgREST range는 inclusive end → 슬라이스 e+1
+            data = data[s:e + 1]
         return MockResult(
-            data=list(self._data),
+            data=data,
             count=len(self._data) if self._count_requested else None,
         )
 

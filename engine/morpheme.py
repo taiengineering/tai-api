@@ -11,7 +11,7 @@ helper 함수로 캐싀화하여 Stage 1/2 룰 매칭이 단순 문자열 비교
   - 빈 입력은 빈 결과 반환 (예외 X).
 
 다단어 사전 처리 (Track C 권고 반영, 2026-05-09):
-  - 공백 포함 어휘 (예: "고압가스 안전관리법") → add_re_word 정규식 기반 등록 (안정)
+  - 공백 포함 어휘 (예: \"고압가스 안전관리법\") → add_re_word 정규식 기반 등록 (안정)
   - 공백 없는 어휘 → add_user_word 일반 등록
   - 목적: dict_legal_terms의 다단어 법령명·기관명 안정 토큰화
 
@@ -24,6 +24,12 @@ helper 함수로 캐싀화하여 Stage 1/2 룰 매칭이 단순 문자열 비교
   - __init__ 시 supabase 주입 + auto_load_verified_dict=True (기본)
   - 인스턴스 생성 시점에 dict_legal_terms.verified=true 자동 로드
   - 실패 시 warning 후 계속 진행 (degraded)
+
+페이지네이션 (P0 패치, 2026-05-12):
+  - load_verified_dict_from_db: PostgREST max-rows=1000 기본 정책 회피
+  - .limit(N) → .range(start, end) 페이지네이션 (page_size=1000, max_pages=50)
+  - 기존 1,725건 중 1,000건만 로드되던 문제 해결 (마스터 §3 P0)
+  - 호환: 기존 limit 인자는 deprecated (warning + 무시)
 
 계층: Service (FastAPI import 금지).
 """
@@ -55,6 +61,12 @@ PUNCT_TAGS = frozenset({
 # '하수도법 시행규칙'도 dict에 있을 때) 짧은 분해가 선택될 수 있다.
 # 따라서 다단어에 강한 score 가중치를 부여해 무조건 우선되게 한다.
 MULTIWORD_SCORE_BOOST: float = 10.0
+
+# ----- 페이지네이션 기본값 (P0 패치, 2026-05-12) -----
+# PostgREST 서버 측 max-rows 기본값과 일치 (1000) → 한 페이지 1라운드트립.
+DEFAULT_PAGE_SIZE: int = 1000
+# 안전 상한: 50,000건 (현재 dict_legal_terms 14,943건 → 충분 여유).
+DEFAULT_MAX_PAGES: int = 50
 
 
 @dataclass
@@ -220,22 +232,68 @@ class MorphemeEngine:
         self,
         supabase: SupabaseClient,
         term_type: str | None = None,
-        limit: int = 5000,
+        page_size: int = DEFAULT_PAGE_SIZE,
+        max_pages: int = DEFAULT_MAX_PAGES,
+        limit: int | None = None,
     ) -> int:
-        """dict_legal_terms.verified=true 어휘를 DB에서 로드.
+        """dict_legal_terms.verified=true 어휘를 DB에서 페이지네이션으로 로드.
 
-        limit 기본 5000 (Track C v1.1 464건 + 향후 확장 대비).
+        P0 패치 (2026-05-12): PostgREST 서버 측 max-rows=1000 기본 정책으로
+        인해 .limit(N>1000)이 실제로는 1000만 반환하던 버그 해결.
+        .range(start, end)는 inclusive — Range 헤더로 명시적 페이지 요청.
+
+        Args:
+            supabase: Supabase Client.
+            term_type: 'LAW_NAME' 등 필터링. None이면 전체.
+            page_size: 페이지 크기. 기본 1000 (서버 정책 일치).
+            max_pages: 안전 상한. 기본 50 → 50,000건.
+            limit: **deprecated** — 페이지네이션으로 자동 처리. 무시됨 (warning).
+
+        Returns:
+            load_dict_terms의 added 카운트.
         """
-        query = (
-            supabase.table("dict_legal_terms")
-            .select("term, pos_tag, score, term_type")
-            .eq("verified", True)
+        if limit is not None:
+            logger.warning(
+                "load_verified_dict_from_db: 'limit' 인자는 deprecated. "
+                "페이지네이션으로 자동 처리 (PostgREST max-rows 회피). 무시됨."
+            )
+
+        accumulated: list[dict[str, Any]] = []
+        pages_read = 0
+        for page in range(max_pages):
+            q = (
+                supabase.table("dict_legal_terms")
+                .select("term, pos_tag, score, term_type")
+                .eq("verified", True)
+            )
+            if term_type:
+                q = q.eq("term_type", term_type)
+            start = page * page_size
+            end = start + page_size - 1
+            res = q.range(start, end).execute()
+            rows = res.data or []
+            pages_read += 1
+            if not rows:
+                break
+            accumulated.extend(rows)
+            if len(rows) < page_size:
+                break
+        else:
+            # for-else: break 없이 max_pages 도달 + 마지막 페이지가 풀이면 추가 가능성
+            if accumulated and len(accumulated) % page_size == 0:
+                logger.warning(
+                    "load_verified_dict_from_db: max_pages=%d 도달 — "
+                    "추가 데이터 가능성. max_pages 인자 상향 검토 필요.",
+                    max_pages,
+                )
+
+        logger.info(
+            "verified=true 페이지네이션 로드: %d건 (%d 페이지, page_size=%d)",
+            len(accumulated),
+            pages_read,
+            page_size,
         )
-        if term_type:
-            query = query.eq("term_type", term_type)
-        res = query.limit(limit).execute()
-        rows = res.data or []
-        return self.load_dict_terms(rows)
+        return self.load_dict_terms(accumulated)
 
     @property
     def user_dict_size(self) -> int:
