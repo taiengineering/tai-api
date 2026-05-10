@@ -1,34 +1,13 @@
 """
-OAuth 간편로그인/간편회원가입 라우터 — v1.0.0
+OAuth 간편로그인/간편회원가입 라우터 — v1.1.0
 지원: 네이버 / 카카오 / 구글
 
+v1.1.0 변경:
+- identity_verify_token 필수화 — 본인인증 없으면 가입 불가
+- consume_verify_token() 호출하여 users.identity_* 필드 채움 (CI/이름/휴대폰/생년월일 등)
+- 본인인증 이름/휴대폰을 OAuth 프로필 결과보다 우선 (명의 일치)
+
 prefix: /auth/oauth (main.py에서 지정)
-
-엔드포인트:
-- GET  /auth/oauth/{provider}                    — OAuth 인증 시작 (브라우저 redirect)
-- GET  /auth/oauth/{provider}/callback           — OAuth provider 콜백 처리
-- POST /auth/oauth/register                      — 신규 OAuth 회원가입 완료 (폼 제출)
-- POST /auth/oauth/link                          — 기존 계정에 OAuth 연동
-- POST /auth/oauth/unlink                        — OAuth 연동 해제
-- GET  /auth/oauth/links/{user_id}               — OAuth 연동 현황 조회
-
-환경변수 (.env에 입력 시 즉시 작동):
-  NAVER_CLIENT_ID, NAVER_CLIENT_SECRET
-  KAKAO_REST_API_KEY, KAKAO_CLIENT_SECRET (선택)
-  GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
-  OAUTH_REDIRECT_BASE                  — 기본: https://api.taieng.co.kr
-  OAUTH_FRONTEND_SUCCESS_URL           — 기본: https://taieng.co.kr/log-in.html
-  OAUTH_FRONTEND_REGISTER_URL          — 기본: https://taieng.co.kr/sign-up-oauth.html
-  OAUTH_FRONTEND_ERROR_URL             — 기본: https://taieng.co.kr/log-in.html?error=oauth
-
-DB 스키마 추가 필요:
-  ALTER TABLE users ADD COLUMN oauth_provider VARCHAR(20);
-  ALTER TABLE users ADD COLUMN oauth_provider_user_id VARCHAR(100);
-  CREATE INDEX idx_users_oauth ON users(oauth_provider, oauth_provider_user_id);
-
-main.py에 추가 필요:
-  from routers import oauth
-  app.include_router(oauth.router, prefix="/auth/oauth", tags=["oauth"])
 """
 from __future__ import annotations
 
@@ -45,12 +24,10 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from routers.identity import consume_verify_token  # 본인인증 토큰 검증
 
 log = logging.getLogger(__name__)
-
-# prefix는 main.py에서 지정 — 여기서는 절대 넣지 않음
 router = APIRouter()
-
 
 # ── Provider Config ─────────────────────────────────────────────────
 OAUTH_REDIRECT_BASE         = os.getenv("OAUTH_REDIRECT_BASE",         "https://api.taieng.co.kr")
@@ -65,11 +42,11 @@ PROVIDERS = {
         "auth_url":      "https://nid.naver.com/oauth2.0/authorize",
         "token_url":     "https://nid.naver.com/oauth2.0/token",
         "userinfo_url":  "https://openapi.naver.com/v1/nid/me",
-        "scope":         "",  # 네이버는 관리자 콘솔에서 제공항목 설정
+        "scope":         "",
     },
     "kakao": {
         "client_id":     os.getenv("KAKAO_REST_API_KEY",  ""),
-        "client_secret": os.getenv("KAKAO_CLIENT_SECRET", ""),  # 선택 (카카오 디벨로퍼스에서 on/off)
+        "client_secret": os.getenv("KAKAO_CLIENT_SECRET", ""),
         "auth_url":      "https://kauth.kakao.com/oauth/authorize",
         "token_url":     "https://kauth.kakao.com/oauth/token",
         "userinfo_url":  "https://kapi.kakao.com/v2/user/me",
@@ -85,21 +62,13 @@ PROVIDERS = {
     },
 }
 
-# CSRF 방지용 state 저장 — 운영에서는 Redis/DB 권장 (간단히 in-memory)
-# TODO: production-grade state storage
 _OAUTH_STATES: dict[str, dict] = {}
-
-# OAuth 후 신규 회원가입 페이지 이동 시 임시 토큰 (30분 유효) — 동일하게 Redis 권장
 _TEMP_REGISTER_TOKENS: dict[str, dict] = {}
 
 
-# ── 유틸 ─────────────────────────────────────────────────────────
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _now_ts() -> int:
-    return int(datetime.now(timezone.utc).timestamp())
+# ── 유틸 ───────────────────────────────────────────────────────
+def _now_iso() -> str: return datetime.now(timezone.utc).isoformat()
+def _now_ts() -> int:  return int(datetime.now(timezone.utc).timestamp())
 
 
 def _provider_config(provider: str) -> dict:
@@ -119,11 +88,7 @@ def _redirect_uri(provider: str) -> str:
 
 
 def _create_session_token(user_id: str) -> str:
-    """
-    세션 토큰 발급.
-    TODO: routers/auth.py의 JWT 발급 함수 재사용 (utils/auth.py로 분리 권장).
-          임시로 random token 발급 — 실제 운영 전 반드시 JWT로 교체.
-    """
+    """TODO: utils/auth.py에서 JWT 발급 함수 재사용 (현재는 random token placeholder)"""
     return secrets.token_urlsafe(48)
 
 
@@ -133,16 +98,13 @@ def oauth_start(
     provider: str,
     redirect: Optional[str] = Query(None, description="로그인 후 돌아갈 프론트엔드 URL"),
 ):
-    """OAuth provider 로그인 페이지로 redirect."""
     cfg   = _provider_config(provider)
     state = secrets.token_urlsafe(32)
-
     _OAUTH_STATES[state] = {
         "provider":   provider,
         "redirect":   redirect or OAUTH_FRONTEND_SUCCESS_URL,
-        "expires_at": _now_ts() + 600,  # 10분
+        "expires_at": _now_ts() + 600,
     }
-
     params = {
         "client_id":     cfg["client_id"],
         "redirect_uri":  _redirect_uri(provider),
@@ -151,13 +113,12 @@ def oauth_start(
     }
     if cfg["scope"]:
         params["scope"] = cfg["scope"]
-
     auth_url = f"{cfg['auth_url']}?{urllib.parse.urlencode(params)}"
-    log.info(f"[OAUTH] {provider} start → {auth_url}")
+    log.info(f"[OAUTH] {provider} start → {auth_url[:120]}...")
     return RedirectResponse(auth_url)
 
 
-# ── 2단계: 콜백 처리 ────────────────────────────────────────────────
+# ── 2단계: 콜백 ─────────────────────────────────────────────────────
 @router.get("/{provider}/callback")
 async def oauth_callback(
     provider: str,
@@ -165,14 +126,7 @@ async def oauth_callback(
     state: Optional[str] = Query(None),
     error: Optional[str] = Query(None),
 ):
-    """
-    provider가 호출하는 콜백
-    → code → access_token 교환
-    → userinfo 조회
-    → 기존 회원이면 즉시 로그인, 신규면 가입 페이지로 이동
-    """
     if error or not code:
-        log.warning(f"[OAUTH] {provider} callback error: {error}")
         sep = "&" if "?" in OAUTH_FRONTEND_ERROR_URL else "?"
         return RedirectResponse(f"{OAUTH_FRONTEND_ERROR_URL}{sep}reason={error or 'no_code'}")
 
@@ -185,7 +139,6 @@ async def oauth_callback(
     cfg = _provider_config(provider)
 
     async with httpx.AsyncClient(timeout=15.0) as client:
-        # 1. code → access_token 교환
         token_data = {
             "grant_type":    "authorization_code",
             "client_id":     cfg["client_id"],
@@ -201,13 +154,10 @@ async def oauth_callback(
         if token_res.status_code != 200:
             log.error(f"[OAUTH] {provider} token error: {token_res.text}")
             return RedirectResponse(f"{OAUTH_FRONTEND_ERROR_URL}&reason=token_error")
-
-        token_json   = token_res.json()
-        access_token = token_json.get("access_token")
+        access_token = token_res.json().get("access_token")
         if not access_token:
             return RedirectResponse(f"{OAUTH_FRONTEND_ERROR_URL}&reason=no_token")
 
-        # 2. userinfo 조회
         userinfo_res = await client.get(
             cfg["userinfo_url"],
             headers={"Authorization": f"Bearer {access_token}"},
@@ -215,15 +165,12 @@ async def oauth_callback(
         if userinfo_res.status_code != 200:
             log.error(f"[OAUTH] {provider} userinfo error: {userinfo_res.text}")
             return RedirectResponse(f"{OAUTH_FRONTEND_ERROR_URL}&reason=userinfo_error")
-
         userinfo = userinfo_res.json()
 
-    # 3. provider별 userinfo 정규화
     profile = _normalize_userinfo(provider, userinfo)
     if not profile.get("provider_user_id"):
         return RedirectResponse(f"{OAUTH_FRONTEND_ERROR_URL}&reason=no_user_id")
 
-    # 4. DB 조회 — 기존 OAuth 연동 사용자?
     supabase = get_supabase()
     existing = (
         supabase.table("users")
@@ -237,16 +184,15 @@ async def oauth_callback(
     front_url = state_data["redirect"]
 
     if existing.data:
-        # ── 기존 OAuth 사용자 — 즉시 로그인 ─────────────────────────────
+        # 기존 OAuth 사용자 — 즉시 로그인 (본인인증은 이미 가입 시 완료됨)
         user          = existing.data[0]
         session_token = _create_session_token(user["id"])
         sep = "&" if "?" in front_url else "?"
-        # URL fragment(#)으로 전달 — 서버 로그에 남지 않음
         return RedirectResponse(
             f"{front_url}{sep}oauth=success#token={session_token}&user_id={user['id']}"
         )
 
-    # ── 신규 OAuth — 회원가입 페이지로 이동 (이메일/이름/provider 정보 prefill) ──
+    # 신규 OAuth — 임시 토큰 발급 후 sign-up-oauth.html로 이동 (본인인증 필요)
     register_token = _issue_temp_register_token(provider, profile)
     register_url = (
         f"{OAUTH_FRONTEND_REGISTER_URL}"
@@ -259,107 +205,148 @@ async def oauth_callback(
     return RedirectResponse(register_url)
 
 
-# ── 3단계: 신규 OAuth 회원가입 완료 ─────────────────────────────────────
+# ── 3단계: 신규 OAuth 회원가입 완료 — 본인인증 필수 ─────────────────────
 class OAuthRegisterBody(BaseModel):
-    register_token: str
-    name:           str
-    phone:          str
-    email:          str
-    agree_terms:    bool                  # 이용약관 + 개인정보처리방침
-    # 선택: 본인인증 완료 토큰 (방식 B — 가입 중 본인인증)
-    identity_verify_token: Optional[str] = None
+    register_token:        str
+    identity_verify_token: str   # ✅ v1.1.0: 필수 (본인인증 없으면 가입 불가)
+    email:                 str
+    agree_terms:           bool
+    # name, phone은 본인인증 결과에서 가져오므로 클라이언트 입력값 무시 가능
+    # (필요 시 입력함 모드에서 편집 허용 — 일단 존재하면 참고)
+    name:                  Optional[str] = None
+    phone:                 Optional[str] = None
 
 
 @router.post("/register")
 async def oauth_register(body: OAuthRegisterBody):
     """
-    OAuth로 시작한 회원가입 완료 — 폼 정보 + (선택) 본인인증 토큰 합쳐서 가입
+    OAuth로 시작한 회원가입 완료 — 본인인증 필수.
+
+    flow:
+    1. OAuth 프로바이더에서 email/name 받음 (provider 단계)
+    2. sign-up-oauth.html에서 본인인증 수행 (identity 모듈 → verify_token)
+    3. 이 엔드포인트로 register_token + verify_token + email + agree_terms POST
+    4. 서버에서 둘 다 검증 후 users 테이블에 삽입 (identity_* 최종 값 주입)
     """
     if not body.agree_terms:
         raise HTTPException(status_code=400, detail="이용약관·개인정보처리방침에 동의해 주세요.")
-    phone_clean = (body.phone or "").replace("-", "").strip()
-    if len(phone_clean) < 10:
-        raise HTTPException(status_code=400, detail="올바른 휴대폰 번호를 입력해 주세요.")
 
+    # 1. register_token 검증 (provider 정보 복원)
     profile = _consume_temp_register_token(body.register_token)
     if not profile:
-        raise HTTPException(status_code=400, detail="유효하지 않거나 만료된 토큰입니다. 다시 시도해 주세요.")
+        raise HTTPException(status_code=400, detail="OAuth 세션이 만료되었습니다. 다시 시도해 주세요.")
+
+    # 2. 본인인증 토큰 검증 (필수)
+    verify_data = consume_verify_token(body.identity_verify_token)
+    if not verify_data:
+        raise HTTPException(status_code=400, detail="본인인증 토큰이 유효하지 않거나 만료되었습니다. 재인증해 주세요.")
 
     provider         = profile["provider"]
     provider_user_id = profile["provider_user_id"]
+    supabase         = get_supabase()
+    email            = (body.email or "").strip().lower()
 
-    supabase = get_supabase()
-    email    = (body.email or "").strip().lower()
+    # 3. CI 중복 체크 (본인인증 명의가 이미 가입되어 있으면 차단)
+    ci_check = (
+        supabase.table("users")
+        .select("id, email, oauth_provider")
+        .eq("identity_ci", verify_data["ci"])
+        .limit(1)
+        .execute()
+    )
+    if ci_check.data:
+        existing = ci_check.data[0]
+        login_hint = (
+            f"{existing['oauth_provider']}로 간편 로그인"
+            if existing.get("oauth_provider")
+            else "이메일/비밀번호로 로그인"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=f"이미 가입된 명의입니다. {login_hint}을 이용해 주세요.",
+        )
 
-    # 이메일 중복 체크
+    # 4. 이메일 중복 체크
     existing_email = (
         supabase.table("users")
-        .select("id, oauth_provider")
+        .select("id, oauth_provider, identity_ci")
         .eq("email", email)
         .limit(1)
         .execute()
     )
+
+    now = _now_iso()
+    identity_fields = {
+        "identity_ci":          verify_data["ci"],
+        "identity_di":          verify_data["di"],
+        "identity_name":        verify_data["name"],
+        "identity_birth":       verify_data["birth"],
+        "identity_gender":      verify_data["gender"],
+        "identity_nation":      verify_data["nation"],
+        "identity_phone":       verify_data["phone"],
+        "identity_carrier":     verify_data["carrier"],
+        "identity_method":      verify_data["method"],
+        "identity_verified":    True,
+        "identity_verified_at": now,
+    }
 
     if existing_email.data:
         existing = existing_email.data[0]
         if existing.get("oauth_provider") and existing["oauth_provider"] != provider:
             raise HTTPException(
                 status_code=409,
-                detail=f"이미 {existing['oauth_provider']}로 가입된 이메일입니다. 해당 로그인을 이용해 주세요.",
+                detail=f"이미 {existing['oauth_provider']}로 가입된 이메일입니다.",
             )
-        # 기존 일반 가입자 — OAuth 연동 추가
+        # 기존 일반 가입자 — OAuth + 본인인증 연동
         supabase.table("users").update({
             "oauth_provider":         provider,
             "oauth_provider_user_id": provider_user_id,
-            "updated_at":             _now_iso(),
+            **identity_fields,
+            "updated_at":             now,
         }).eq("id", existing["id"]).execute()
         user_id = existing["id"]
     else:
+        # 신규 가입 — 본인인증 이름/휴대폰을 OAuth 프로필보다 우선
         new_user = {
             "email":                  email,
-            "name":                   (body.name or "").strip(),
-            "phone":                  phone_clean,
-            "password_hash":          None,            # OAuth 사용자는 비밀번호 없음
+            "name":                   verify_data["name"],            # 본인인증 이름 우선
+            "phone":                  verify_data["phone"].replace("-", ""),
+            "password_hash":          None,                            # OAuth 사용자는 비밀번호 없음
             "oauth_provider":         provider,
             "oauth_provider_user_id": provider_user_id,
-            "created_at":             _now_iso(),
-            "updated_at":             _now_iso(),
+            **identity_fields,
+            "created_at":             now,
+            "updated_at":             now,
         }
         ins = supabase.table("users").insert(new_user).execute()
         user_id = ins.data[0]["id"] if ins.data else None
         if not user_id:
             raise HTTPException(status_code=500, detail="회원가입에 실패했습니다.")
 
-    # 본인인증 토큰 처리 (있으면) — identity 모듈과 연결
-    if body.identity_verify_token:
-        # TODO: identity.py에서 검증 함수 추가 후 import
-        # from routers.identity import consume_verify_token
-        # consume_verify_token(body.identity_verify_token, user_id)
-        log.info(f"[OAUTH] register identity_verify_token 수신 — user_id={user_id}")
-
     session_token = _create_session_token(user_id)
+    log.info(f"[OAUTH] register 완료 — user_id={user_id}, provider={provider}, ci={verify_data['ci'][:8]}...")
     return {
         "status": "success",
         "data": {
             "access_token": session_token,
             "user_id":      user_id,
             "provider":     provider,
+            "name":         verify_data["name"],
         },
     }
 
 
-# ── OAuth 연동 관리 ─────────────────────────────────────────────────
+# ── 연동 관리 ───────────────────────────────────────────────────────
 class OAuthLinkBody(BaseModel):
     user_id:  str
     provider: str
-    code:     str   # OAuth code (provider 파판에서 받은 code)
+    code:     str
 
 
 @router.post("/link")
 async def oauth_link(body: OAuthLinkBody):
-    """기존 계정에 OAuth 연동 추가 (로그인한 사용자가 마이페이지에서 연동)."""
+    """기존 계정에 OAuth 연동 추가 (마이페이지)."""
     cfg = _provider_config(body.provider)
-
     async with httpx.AsyncClient(timeout=15.0) as client:
         token_data = {
             "grant_type":    "authorization_code",
@@ -381,16 +368,11 @@ async def oauth_link(body: OAuthLinkBody):
         raise HTTPException(status_code=400, detail="OAuth 사용자 정보 조회에 실패했습니다.")
 
     supabase = get_supabase()
-
-    # 해당 OAuth로 이미 연동된 다른 계정이 있는지 체크
     dup = (
-        supabase.table("users")
-        .select("id")
+        supabase.table("users").select("id")
         .eq("oauth_provider", body.provider)
         .eq("oauth_provider_user_id", profile["provider_user_id"])
-        .neq("id", body.user_id)
-        .limit(1)
-        .execute()
+        .neq("id", body.user_id).limit(1).execute()
     )
     if dup.data:
         raise HTTPException(status_code=409, detail="이 OAuth 계정은 이미 다른 회원에게 연동되어 있습니다.")
@@ -400,13 +382,12 @@ async def oauth_link(body: OAuthLinkBody):
         "oauth_provider_user_id": profile["provider_user_id"],
         "updated_at":             _now_iso(),
     }).eq("id", body.user_id).execute()
-
     return {"status": "success", "data": {"provider": body.provider}}
 
 
 @router.post("/unlink")
 def oauth_unlink(user_id: str):
-    """OAuth 연동 해제 — 비밀번호가 설정되어 있어야 해제 가능."""
+    """OAuth 연동 해제 — 비밀번호 설정되어 있어야 해제 가능."""
     supabase = get_supabase()
     res = supabase.table("users").select("id, password_hash").eq("id", user_id).limit(1).execute()
     if not res.data:
@@ -414,7 +395,7 @@ def oauth_unlink(user_id: str):
     if not res.data[0].get("password_hash"):
         raise HTTPException(
             status_code=400,
-            detail="비밀번호를 먼저 설정해 주세요. (OAuth만으로 가입된 계정은 바로 해제할 수 없습니다.)",
+            detail="비밀번호를 먼저 설정해 주세요.",
         )
     supabase.table("users").update({
         "oauth_provider":         None,
@@ -426,7 +407,6 @@ def oauth_unlink(user_id: str):
 
 @router.get("/links/{user_id}")
 def get_oauth_links(user_id: str):
-    """사용자의 OAuth 연동 현황 조회."""
     supabase = get_supabase()
     res = supabase.table("users").select("id, email, oauth_provider, oauth_provider_user_id").eq("id", user_id).limit(1).execute()
     if not res.data:
@@ -443,9 +423,7 @@ def get_oauth_links(user_id: str):
 
 # ── userinfo 정규화 ───────────────────────────────────────────────────
 def _normalize_userinfo(provider: str, raw: dict) -> dict:
-    """provider별 userinfo를 표준 형식으로 변환."""
     if provider == "naver":
-        # 응답: { resultcode, message, response: { id, email, name, nickname, mobile, ... } }
         r = raw.get("response", {})
         return {
             "provider_user_id": r.get("id", ""),
@@ -455,11 +433,9 @@ def _normalize_userinfo(provider: str, raw: dict) -> dict:
             "raw":              r,
         }
     elif provider == "kakao":
-        # 응답: { id, kakao_account: { email, profile: {nickname}, phone_number, ... } }
         kakao_account = raw.get("kakao_account", {})
         profile_data  = kakao_account.get("profile", {})
         phone_raw     = kakao_account.get("phone_number", "")
-        # 카카오 phone 형식: "+82 10-1234-5678" → "01012345678"
         phone_clean   = phone_raw.replace("+82 ", "0").replace("-", "").replace(" ", "") if phone_raw else ""
         return {
             "provider_user_id": str(raw.get("id", "")),
@@ -469,12 +445,11 @@ def _normalize_userinfo(provider: str, raw: dict) -> dict:
             "raw":              raw,
         }
     elif provider == "google":
-        # 응답: { sub, email, name, given_name, family_name, picture, email_verified }
         return {
             "provider_user_id": raw.get("sub", ""),
             "email":            raw.get("email", ""),
             "name":             raw.get("name", ""),
-            "phone":            "",  # Google은 phone 미제공
+            "phone":            "",
             "raw":              raw,
         }
     return {}
@@ -482,7 +457,6 @@ def _normalize_userinfo(provider: str, raw: dict) -> dict:
 
 # ── 임시 토큰 헬퍼 ───────────────────────────────────────────────────────
 def _issue_temp_register_token(provider: str, profile: dict) -> str:
-    """OAuth 후 신규 회원가입 페이지로 보낼 때 임시 토큰 발급 (30분 유효)."""
     token = secrets.token_urlsafe(32)
     _TEMP_REGISTER_TOKENS[token] = {
         "provider":         provider,

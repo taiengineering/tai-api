@@ -1,16 +1,24 @@
 """
-본인인증(이니시스 간편인증) 라우터 — v1.0.0
+본인인증(이니시스 간편인증) 라우터 — v1.1.0
 
-이니시스 간편인증 API 문서 기반으로 구현.
-현재는 구조 설계 단계 — 이니시스 API 키 수령 후 실제 연동.
+v1.1.0 변경점:
+- prepare에 이니시스 SHA256 signature 생성 활성화 (TODO 채움)
+- callback 성공 시 회원가입 전 verify_token 발급 (oauth/auth register에서 소비)
+- consume_verify_token() 함수 공개 — 회원가입 시 본인인증 필수 강제
+- CI 중복 체크 강화 — 신규 가입 시 이미 다른 계정에 CI있으면 경고
 
 prefix: /identity (main.py에서 지정)
+
+DB schema:
+  identity_logs.user_id — NULL 허용 필요 (신규 가입 전 인증):
+    ALTER TABLE identity_logs ALTER COLUMN user_id DROP NOT NULL;
 """
 from __future__ import annotations
 
 import hashlib
 import logging
 import os
+import secrets
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -22,8 +30,6 @@ from pydantic import BaseModel
 from db.supabase_client import get_supabase
 
 log = logging.getLogger(__name__)
-
-# prefix는 main.py에서 지정 — 여기서는 절대 넣지 않음
 router = APIRouter()
 
 # ── 환경변수 (이니시스 API 키 수령 후 Railway에 등록) ─────────────────
@@ -31,35 +37,47 @@ INICIS_VERIFY_MID      = os.getenv("INICIS_VERIFY_MID", "")
 INICIS_VERIFY_SITE_CD  = os.getenv("INICIS_VERIFY_SITE_CD", "")
 INICIS_VERIFY_SITE_KEY = os.getenv("INICIS_VERIFY_SITE_KEY", "")
 
-FRONT_CALLBACK_URL = "https://tadmin.taieng.co.kr/html/horizontal-menu-template/identity-verify.html"
-VERIFY_RETURN_URL  = "https://api.taieng.co.kr/identity/callback"
+# 이니시스 간편인증 팝업 URL — 운영/테스트 분리
+# ❗ 이니시스 공식 문서 확인 후 교체 필요 (대략적 예시 URL)
+INICIS_POPUP_URL_PROD = os.getenv("INICIS_POPUP_URL_PROD", "https://kssa.inicis.com/idauth/auth")
+INICIS_POPUP_URL_TEST = os.getenv("INICIS_POPUP_URL_TEST", "https://kssa-test.inicis.com/idauth/auth")
+INICIS_POPUP_URL      = INICIS_POPUP_URL_PROD if os.getenv("ENV") == "production" else INICIS_POPUP_URL_TEST
+
+VERIFY_RETURN_URL = os.getenv("INICIS_VERIFY_RETURN_URL", "https://api.taieng.co.kr/identity/callback")
+
+# 회원가입 전 본인인증용 임시 토큰 (in-memory, 30분 유효)
+# TODO: production 시 Redis로 migration
+_VERIFY_TOKENS: dict[str, dict] = {}
 
 
-# ── 유틸 ────────────────────────────────────────────────────────────────
-
+# ── 유틸 ───────────────────────────────────────────────────────
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _now_ts() -> int:
+    return int(datetime.now(timezone.utc).timestamp())
 
 
 def _sha256(data: str) -> str:
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
-# ── Pydantic 모델 ────────────────────────────────────────────────────────
+def _make_signature(timestamp: str) -> str:
+    """이니시스 SHA256 서명 생성 — site_key + timestamp + mid"""
+    return _sha256(INICIS_VERIFY_SITE_KEY + timestamp + INICIS_VERIFY_MID)
 
+
+# ── Pydantic 모델 ───────────────────────────────────────────────────
 class PrepareBody(BaseModel):
-    user_id: str             # 로그인 회원 UUID (필수)
-    method:  str = "PHONE"  # PHONE / KAKAO / PASS
+    user_id: Optional[str] = None  # 있으면 기존 회원 / 없으면 신규 가입 전 인증
+    method:  str = "PHONE"          # PHONE / KAKAO / PASS
 
 
-# ── 엔드포인트 ───────────────────────────────────────────────────────────
-
+# ── /status ───────────────────────────────────────────────────────
 @router.get("/status")
 def get_verify_status(user_id: str = Query(..., description="회원 UUID")):
-    """
-    본인인증 상태 조회
-    GET /identity/status?user_id={uuid}
-    """
+    """본인인증 상태 조회"""
     supabase = get_supabase()
     res = supabase.table("users").select(
         "id, identity_verified, identity_verified_at, "
@@ -86,14 +104,15 @@ def get_verify_status(user_id: str = Query(..., description="회원 UUID")):
     }
 
 
+# ── /prepare ──────────────────────────────────────────────────────
 @router.post("/prepare")
 def prepare_verify(body: PrepareBody):
     """
     본인인증 준비 — 이니시스 팝업 파라미터 생성
-    POST /identity/prepare
 
-    ⚠️  이니시스 API 키 수령 후 실제 구현 필요.
-        현재는 구조만 반환 (플레이스홀더).
+    두 시나리오:
+    - 방식 A (가입 전 인증): user_id 없음 → 콜백에서 verify_token 발급
+    - 기존 회원 인증:        user_id 있음 → 콜백에서 users 테이블 즉시 업데이트
     """
     if not INICIS_VERIFY_MID:
         raise HTTPException(
@@ -104,7 +123,7 @@ def prepare_verify(body: PrepareBody):
     supabase  = get_supabase()
     timestamp = str(int(time.time() * 1000))
 
-    # identity_logs에 PENDING 기록
+    # identity_logs에 PENDING 기록 (user_id NULL 가능)
     log_res = supabase.table("identity_logs").insert({
         "user_id":    body.user_id,
         "method":     body.method,
@@ -114,9 +133,6 @@ def prepare_verify(body: PrepareBody):
 
     request_id = log_res.data[0]["id"] if log_res.data else ""
 
-    # TODO: 이니시스 간편인증 파라미터 생성
-    #       실제 구현 시 이니시스 문서의 signature 생성 방식 적용
-    #       signature = _sha256(INICIS_VERIFY_SITE_KEY + timestamp + INICIS_VERIFY_MID)
     return {
         "status": "success",
         "data": {
@@ -125,25 +141,23 @@ def prepare_verify(body: PrepareBody):
             "site_cd":    INICIS_VERIFY_SITE_CD,
             "timestamp":  timestamp,
             "return_url": VERIFY_RETURN_URL,
-            "signature":  "",   # SHA256 서명 (TODO: 이니시스 키 수령 후)
+            "signature":  _make_signature(timestamp),
             "method":     body.method,
-            "popup_url":  "",   # 이니시스 팝업 URL (TODO)
+            "popup_url":  INICIS_POPUP_URL,
+            # 프론트엔드가 이니시스 팝업에 form POST로 전달할 필드:
+            #   mid, site_cd, timestamp, signature, return_url, request_id (state로 사용)
         },
     }
 
 
+# ── /callback ────────────────────────────────────────────────────
 @router.post("/callback")
 async def verify_callback(request: Request):
     """
-    이니시스 본인인증 콜백
-    POST /identity/callback
-
-    인증 완료 후 이니시스가 이 URL로 결과 전송.
-    성공/실패 여부를 opener(프론트)로 postMessage 후 팝업 닫기.
-
-    ⚠️  실제 필드명은 이니시스 간편인증 API 문서 기준으로 수정 필요.
+    이니시스 콜백
+    - user_id 있으면: 즉시 users 테이블 업데이트
+    - user_id 없으면: verify_token 발급 → 회원가입 폼으로 전달
     """
-    # form-data 또는 JSON 모두 허용
     try:
         form = await request.form()
         data = dict(form)
@@ -161,7 +175,7 @@ async def verify_callback(request: Request):
     supabase = get_supabase()
     now      = _now_iso()
 
-    # ── 인증 실패 ─────────────────────────────────────────────
+    # ── 인증 실패 ───────────────────────────────────────
     if result_code != "0000":
         fail_msg = data.get("resultMsg", "인증 실패")
         if request_id:
@@ -178,8 +192,8 @@ async def verify_callback(request: Request):
             f"</script>"
         )
 
-    # ── 인증 성공 ─────────────────────────────────────────────
-    # ⚠️  실제 필드명은 이니시스 문서 확인 후 수정
+    # ── 인증 성공 ───────────────────────────────────────
+    # ⚠  실제 필드명은 이니시스 간편인증 API 문서 기준으로 수정 필요
     ci      = data.get("ci",        data.get("CI", ""))
     di      = data.get("di",        data.get("DI", ""))
     name    = data.get("name",      data.get("userName", ""))
@@ -208,43 +222,77 @@ async def verify_callback(request: Request):
     user_id = log_res.data[0]["user_id"]
     method  = log_res.data[0]["method"]
 
-    # CI 중복 체크 — 동일인이 다른 계정에서 이미 인증된 경우 차단
-    ci_check = (
-        supabase.table("users")
-        .select("id")
-        .eq("identity_ci", ci)
-        .neq("id", user_id)
-        .limit(1)
-        .execute()
-    )
-    if ci_check.data:
-        supabase.table("identity_logs").update({
-            "status":       "FAILED",
-            "fail_reason":  "이미 다른 계정에서 인증된 CI",
-            "completed_at": now,
-        }).eq("id", request_id).execute()
-        return HTMLResponse(
-            "<script>"
-            "window.opener?.onVerifyComplete({success:false,message:'이미 인증된 계정이 있습니다.'});"
-            "window.close();"
-            "</script>"
+    # CI 중복 체크
+    if user_id:
+        # 기존 회원 인증 — 다른 계정이 동일 CI를 가진 경우
+        ci_check = (
+            supabase.table("users")
+            .select("id")
+            .eq("identity_ci", ci)
+            .neq("id", user_id)
+            .limit(1)
+            .execute()
         )
+        if ci_check.data:
+            supabase.table("identity_logs").update({
+                "status":       "FAILED",
+                "fail_reason":  "이미 다른 계정에서 인증된 CI",
+                "completed_at": now,
+            }).eq("id", request_id).execute()
+            return HTMLResponse(
+                "<script>"
+                "window.opener?.onVerifyComplete({success:false,message:'이미 인증된 계정이 있습니다.'});"
+                "window.close();"
+                "</script>"
+            )
+    else:
+        # 신규 가입 전 인증 — CI로 이미 가입된 회원이 있는지
+        ci_existing = (
+            supabase.table("users")
+            .select("id, email, oauth_provider")
+            .eq("identity_ci", ci)
+            .limit(1)
+            .execute()
+        )
+        if ci_existing.data:
+            existing = ci_existing.data[0]
+            login_hint = (
+                f"{existing['oauth_provider']}로 간편 로그인"
+                if existing.get("oauth_provider")
+                else "이메일/비밀번호로 로그인"
+            )
+            supabase.table("identity_logs").update({
+                "status":       "FAILED",
+                "fail_reason":  "이미 가입된 명의",
+                "completed_at": now,
+            }).eq("id", request_id).execute()
+            return HTMLResponse(
+                f"<script>"
+                f"window.opener?.onVerifyComplete({{"
+                f"success:false,"
+                f"message:'이미 가입된 명의입니다. {login_hint}을 이용해 주세요.',"
+                f"already_registered:true"
+                f"}});"
+                f"window.close();"
+                f"</script>"
+            )
 
-    # users 테이블 업데이트
-    supabase.table("users").update({
-        "identity_ci":          ci,
-        "identity_di":          di,
-        "identity_name":        name,
-        "identity_birth":       birth,
-        "identity_gender":      gender,
-        "identity_nation":      nation,
-        "identity_phone":       phone,
-        "identity_carrier":     carrier,
-        "identity_method":      method,
-        "identity_verified":    True,
-        "identity_verified_at": now,
-        "updated_at":           now,
-    }).eq("id", user_id).execute()
+    # 기존 회원 — users 테이블 즉시 업데이트
+    if user_id:
+        supabase.table("users").update({
+            "identity_ci":          ci,
+            "identity_di":          di,
+            "identity_name":        name,
+            "identity_birth":       birth,
+            "identity_gender":      gender,
+            "identity_nation":      nation,
+            "identity_phone":       phone,
+            "identity_carrier":     carrier,
+            "identity_method":      method,
+            "identity_verified":    True,
+            "identity_verified_at": now,
+            "updated_at":           now,
+        }).eq("id", user_id).execute()
 
     # 로그 완료 처리
     supabase.table("identity_logs").update({
@@ -254,14 +302,67 @@ async def verify_callback(request: Request):
         "completed_at": now,
     }).eq("id", request_id).execute()
 
+    # 신규 가입 전 인증 — verify_token 발급
+    verify_token = None
+    if not user_id:
+        verify_token = _issue_verify_token({
+            "ci":      ci,
+            "di":      di,
+            "name":    name,
+            "birth":   birth,
+            "gender":  gender,
+            "nation":  nation,
+            "phone":   phone,
+            "carrier": carrier,
+            "method":  method,
+        })
+
+    # postMessage로 결과 전달 (verify_token 있으면 포함)
+    payload_parts = [
+        "success:true",
+        f"name:'{name}'",
+        f"phone:'{phone}'",
+    ]
+    if verify_token:
+        payload_parts.append(f"verify_token:'{verify_token}'")
+    payload_js = "{" + ",".join(payload_parts) + "}"
+
     return HTMLResponse(
         f"<script>"
-        f"window.opener?.onVerifyComplete({{success:true,name:'{name}',phone:'{phone}'}});"
+        f"window.opener?.onVerifyComplete({payload_js});"
         f"window.close();"
         f"</script>"
     )
 
 
+# ── verify_token 헬퍼 (oauth.py / auth.py register에서 import 사용) ───────
+def _issue_verify_token(payload: dict) -> str:
+    """본인인증 성공 후 회원가입 단계로 넘길 임시 토큰 (30분 유효)"""
+    token = secrets.token_urlsafe(32)
+    _VERIFY_TOKENS[token] = {
+        **payload,
+        "expires_at": _now_ts() + 1800,
+    }
+    log.info(f"[IDENTITY] verify_token 발급 — method={payload.get('method')}, expires_at={_VERIFY_TOKENS[token]['expires_at']}")
+    return token
+
+
+def consume_verify_token(token: str) -> Optional[dict]:
+    """
+    회원가입 시 호출 — 토큰을 검증하고 본인인증 정보 반환.
+    한 번 사용하면 삭제 (재사용 불가).
+
+    반환 dict의 키: ci, di, name, birth, gender, nation, phone, carrier, method
+    """
+    data = _VERIFY_TOKENS.pop(token, None)
+    if not data:
+        return None
+    if data["expires_at"] < _now_ts():
+        return None
+    return data
+
+
+# ── 어드민 목록 ────────────────────────────────────────────────────
 @router.get("/admin/list")
 def admin_list_verified(
     is_verified: Optional[bool] = Query(None, description="인증 완료 여부"),
@@ -270,10 +371,7 @@ def admin_list_verified(
     page: int = Query(1,  ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
-    """
-    어드민용 — 본인인증 현황 목록
-    GET /identity/admin/list
-    """
+    """어드민용 — 본인인증 현황 목록"""
     supabase = get_supabase()
     q = supabase.table("users").select(
         "id, name, email, phone, "
