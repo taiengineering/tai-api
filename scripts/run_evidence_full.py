@@ -3,6 +3,7 @@
 143,549 law_article_part 전체 대상.
 
 실행:
+  cd /Users/taiwangsim/Desktop/tai-engineering/tai-api
   railway run python3 scripts/run_evidence_full.py
 """
 
@@ -18,6 +19,21 @@ from engine.evidence_extractor import extract_evidence
 from engine.evidence_normalizer import load_registry, normalize_tokens
 
 BATCH_SIZE = 500
+
+
+def fetch_batch(conn, offset, limit):
+    """OFFSET/LIMIT으로 배치 조회."""
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT lap.id::text, lap.part_text
+        FROM law_article_part lap
+        WHERE lap.part_text IS NOT NULL AND lap.part_text != ''
+        ORDER BY lap.id
+        OFFSET %s LIMIT %s
+    """, (offset, limit))
+    rows = cur.fetchall()
+    cur.close()
+    return rows
 
 
 def save_batch(conn, results, normalized_all):
@@ -87,49 +103,34 @@ def main():
 
     conn = psycopg2.connect(url)
 
-    # Registry 로드
     registry = load_registry(conn)
     print(f"\n  📚 Registry: {len(registry)}개 canonical token")
 
-    # 전체 parts 조회
-    cur = conn.cursor(name="evidence_cursor")
-    cur.itersize = BATCH_SIZE
-    cur.execute("""
-        SELECT lap.id::text, lap.part_text
-        FROM law_article_part lap
-        WHERE lap.part_text IS NOT NULL AND lap.part_text != ''
-        ORDER BY lap.id
-    """)
-
     total = 143549
+    offset = 0
     processed = 0
     s1_tokens = 0
     s2_normalized = 0
     s2_candidate = 0
     s2_unresolved = 0
-    s1_pass = 0
     start = time.time()
 
     print(f"\n{'='*60}")
     print(f"  Stage 1 + Stage 2 전체 실행 — {total}건")
     print(f"{'='*60}\n")
 
-    batch_results = []
-    batch_normalized = []
-
-    while True:
-        rows = cur.fetchmany(BATCH_SIZE)
+    while offset < total:
+        rows = fetch_batch(conn, offset, BATCH_SIZE)
         if not rows:
             break
 
+        batch_results = []
+        batch_normalized = []
+
         for part_id, part_text in rows:
-            # Stage 1
             result = extract_evidence(part_id, part_text)
             s1_tokens += len(result.tokens)
-            if result.validation_status == "PASS":
-                s1_pass += 1
 
-            # Stage 2
             tok_dicts = [
                 {"id": None, "token_type": t.token_type, "value": t.value,
                  "span_start": t.span_start, "span_end": t.span_end}
@@ -144,37 +145,32 @@ def main():
             batch_normalized.extend(normalized)
             processed += 1
 
-        # 배치 저장
         try:
             save_batch(conn, batch_results, batch_normalized)
         except Exception as e:
-            print(f"\n  ❌ DB 저장 오류 (batch {processed}): {e}")
+            print(f"\n  ❌ DB 저장 오류 (offset {offset}): {e}")
             conn.rollback()
-        batch_results = []
-        batch_normalized = []
 
+        offset += BATCH_SIZE
         elapsed = time.time() - start
         rate = processed / elapsed if elapsed > 0 else 0
         eta = (total - processed) / rate if rate > 0 else 0
         print(
             f"  [{processed:>6}/{total}] "
-            f"S1토큰:{s1_tokens} S2정규화:{s2_normalized} "
-            f"CAND:{s2_candidate} UNRES:{s2_unresolved} "
-            f"({elapsed:.0f}s, ~{eta:.0f}s 남음)"
+            f"S1:{s1_tokens} S2:{s2_normalized} "
+            f"C:{s2_candidate} U:{s2_unresolved} "
+            f"({elapsed:.0f}s ~{eta:.0f}s)"
         )
 
-    cur.close()
     conn.close()
     elapsed = time.time() - start
 
     print(f"\n{'='*60}")
-    print(f"  전체 실행 완료 ({elapsed:.1f}초)")
+    print(f"  완료 ({elapsed:.1f}초)")
     print(f"{'='*60}")
-    print(f"  처리: {processed}/{total}건")
-    print(f"  Stage 1: 토큰 {s1_tokens}건 | PASS {s1_pass}건")
-    print(f"  Stage 2: 정규화 {s2_normalized}건")
-    print(f"    CANDIDATE: {s2_candidate}건")
-    print(f"    UNRESOLVED: {s2_unresolved}건")
+    print(f"  처리: {processed}건")
+    print(f"  S1 토큰: {s1_tokens}건")
+    print(f"  S2 정규화: {s2_normalized}건 (C:{s2_candidate} U:{s2_unresolved})")
     print(f"{'='*60}\n")
 
 
