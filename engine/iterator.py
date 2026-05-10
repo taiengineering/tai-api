@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
 from engine.pipeline import PipelineHaltError, TAIExtractionPipeline
-from engine.sample_accuracy import _verify_row
+from engine.sample_accuracy import compute_stage2_sample_accuracy, _verify_row
 from engine.validator import CheckResult
 
 if TYPE_CHECKING:
@@ -71,6 +71,10 @@ def fetch_law_ids_ordered(order: IteratorOrder) -> list[Any]:
         rows.sort(key=lambda x: str(x[0]))
 
     return [r[0] for r in rows]
+
+
+def _verdict_is_tp_like(verdict: str) -> bool:
+    return verdict in ("TP", "PHASE1_TP")
 
 
 def isolation_reason_for_fp_subtype(sub_type: str | None) -> str:
@@ -223,6 +227,8 @@ class Phase22V3Iterator:
         self.regression_window = regression_window
         self.max_iterations_per_law = max_iterations_per_law
         self.halt_on_first_fail = halt_on_first_fail
+        # 법령 최초 PASS 시점의 비격리 row별 Ground Truth verdict — 회귀 시 TP 훼손 검출
+        self._tp_baseline: dict[Any, dict[str, str]] = {}
 
     def iterate(self, *, only_stages: list[int] | None = None) -> Phase22V3IteratorRun:
         run = Phase22V3IteratorRun()
@@ -235,6 +241,7 @@ class Phase22V3Iterator:
             run.law_results.append(lp)
             if lp.final_status == "PASS":
                 passed_ids.append(law_id)
+                self._record_tp_baseline_if_missing(law_id)
                 logger.info(
                     "[Phase22V3 %s/%s] law_id=%s PASS (it=%s)",
                     i + 1,
@@ -392,18 +399,141 @@ class Phase22V3Iterator:
                 n += 1
         return n
 
+    def _record_tp_baseline_if_missing(self, law_id: Any) -> None:
+        """최초 PASS 법령만 스냅샷 고정 — 이후 회귀 비교 기준."""
+        if law_id in self._tp_baseline:
+            return
+        self._tp_baseline[law_id] = self._tp_snapshot_for_law(law_id)
+        logger.info(
+            "regression baseline 저장 law_id=%s rows=%s",
+            law_id,
+            len(self._tp_baseline[law_id]),
+        )
+
+    def _tp_snapshot_for_law(self, law_id: Any) -> dict[str, str]:
+        """비격리 stage_2 row id → _verify_row verdict."""
+        url = os.environ.get("DATABASE_URL")
+        if url:
+            return self._tp_snapshot_psycopg2(url, law_id)
+        return self._tp_snapshot_supabase(law_id)
+
+    def _tp_snapshot_psycopg2(self, url: str, law_id: Any) -> dict[str, str]:
+        import psycopg2
+
+        out: dict[str, str] = {}
+        conn = psycopg2.connect(url)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT s2.id::text, s2.sub_type, s1.source_text
+            FROM stage_2_elements s2
+            JOIN stage_1_clauses s1 ON s1.id = s2.clause_id
+            JOIN law_article_part lap ON lap.id = s1.part_id
+            JOIN law_article la ON la.id = lap.article_id
+            WHERE la.law_id = %s
+              AND COALESCE(s2.is_isolated, false) = false
+            """,
+            (law_id,),
+        )
+        for eid, st, stext in cur.fetchall():
+            out[str(eid)] = _verify_row((st or "UNCLASSIFIED"), stext or "")
+        cur.close()
+        conn.close()
+        return out
+
+    def _tp_snapshot_supabase(self, law_id: Any) -> dict[str, str]:
+        from engine.clause_fetch import fetch_clauses_by_law_id
+
+        out: dict[str, str] = {}
+        if self.supabase is None:
+            return out
+        clauses = fetch_clauses_by_law_id(self.supabase, law_id)
+        for cl in clauses:
+            cid = cl.get("id")
+            if not cid:
+                continue
+            stext = cl.get("source_text") or ""
+            res = (
+                self.supabase.table("stage_2_elements")
+                .select("id, sub_type, is_isolated")
+                .eq("clause_id", cid)
+                .execute()
+                .data
+                or []
+            )
+            for elem in res:
+                if elem.get("is_isolated") is True:
+                    continue
+                eid = elem.get("id")
+                if not eid:
+                    continue
+                st = elem.get("sub_type") or "UNCLASSIFIED"
+                out[str(eid)] = _verify_row(st, stext)
+        return out
+
+    def _check_tp_variance(self, law_id: Any) -> int:
+        """베이스라인 대비 TP·PHASE1_TP 가 깨진 비격리 row 수."""
+        baseline = self._tp_baseline.get(law_id)
+        if not baseline:
+            return 0
+        current = self._tp_snapshot_for_law(law_id)
+        lost = 0
+        for eid, v0 in baseline.items():
+            if not _verdict_is_tp_like(v0):
+                continue
+            v1 = current.get(eid)
+            if v1 is None or not _verdict_is_tp_like(v1):
+                lost += 1
+        return lost
+
+    def _stage2_for_halt(self):
+        for s in self.pipeline.stages:
+            if s.stage_number == 2:
+                return s
+        return self.pipeline.stages[0]
+
     def _regression_check(
         self,
         recent_law_ids: list[Any],
         *,
         only_stages: list[int] | None,
     ) -> None:
-        """회귀: 전체 법령 스코프 · 격리 제외 없음."""
-        for lid in recent_law_ids:
-            self.pipeline.run(
-                input_data=None,
-                only_stages=only_stages,
-                law_id=lid,
-                isolation_mode=False,
+        """회귀 검증 — 샘플 재측정(n≥30) + 비격리 TP 행 정합."""
+        _ = only_stages
+
+        for law_id in recent_law_ids:
+            accuracy, n = compute_stage2_sample_accuracy(
+                self.supabase,
+                law_id=law_id,
                 exclude_isolated=False,
             )
+            logger.info(
+                "regression sample_accuracy law_id=%s accuracy=%.4f n=%s",
+                law_id,
+                accuracy,
+                n,
+            )
+            if n < 30:
+                logger.info(
+                    "law_id=%s sample %s < 30 → 회귀 통계 건너뜀",
+                    law_id,
+                    n,
+                )
+                continue
+
+            tp_diff = self._check_tp_variance(law_id)
+            if tp_diff > 0:
+                stage2 = self._stage2_for_halt()
+                chk = CheckResult(
+                    stage=2,
+                    check_name="phase22_v3_regression_tp_variance",
+                    check_type="AUTO_HOOK",
+                    result_status="FAIL",
+                    expected_value="TP 변동 0",
+                    actual_value=str(tp_diff),
+                    threshold="0",
+                    sample_size=n,
+                    error_count=tp_diff,
+                    notes=f"sample_accuracy={accuracy:.4f}",
+                )
+                raise PipelineHaltError(stage2, chk)

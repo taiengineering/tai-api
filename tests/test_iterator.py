@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import psycopg2
@@ -11,6 +12,7 @@ from engine.iterator import (
     Phase22V3Iterator,
     PipelineIterator,
     isolation_reason_for_fp_subtype,
+    _verdict_is_tp_like,
 )
 from engine.pipeline import PipelineHaltError, TAIExtractionPipeline
 from engine.stages.base import Stage, StageContext, StageOutput
@@ -430,3 +432,53 @@ def test_stage2_initialization_once():
             LD.assert_called_once()
             dec_mock.load_rules.assert_called_once()
             assert dec_mock.decompose_batch.call_count == 5
+
+
+def test_verdict_is_tp_like():
+    assert _verdict_is_tp_like("TP")
+    assert _verdict_is_tp_like("PHASE1_TP")
+    assert not _verdict_is_tp_like("FP")
+
+
+def test_phase22_v3_regression_skips_when_sample_under_30(monkeypatch):
+    calls: list[Any] = []
+
+    def fake_variance(self, lid):  # noqa: ANN001
+        calls.append(lid)
+        return 0
+
+    monkeypatch.setattr(Phase22V3Iterator, "_check_tp_variance", fake_variance)
+    monkeypatch.setattr(
+        "engine.iterator.compute_stage2_sample_accuracy",
+        lambda _sb, **kw: (0.95, 12),
+    )
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = Phase22V3Iterator(pipeline, None, regression_window=10)
+    it._regression_check([42], only_stages=[2])
+    assert calls == []
+
+
+def test_phase22_v3_regression_tp_variance_raises(monkeypatch):
+    monkeypatch.setattr(
+        "engine.iterator.compute_stage2_sample_accuracy",
+        lambda _sb, **kw: (0.88, 40),
+    )
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = Phase22V3Iterator(pipeline, None, regression_window=10)
+    it._tp_baseline[9] = {"e1": "TP", "e2": "FP"}
+    monkeypatch.setattr(it, "_tp_snapshot_for_law", lambda lid: {"e1": "FP", "e2": "FP"})
+
+    with pytest.raises(PipelineHaltError) as ei:
+        it._regression_check([9], only_stages=[2])
+    assert ei.value.check.check_name == "phase22_v3_regression_tp_variance"
+    assert ei.value.check.result_status == "FAIL"
