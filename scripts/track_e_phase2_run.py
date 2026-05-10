@@ -8,6 +8,8 @@ Phase 2.2: Cursor_Phase_2_2_Accuracy_Spec.md
 
 실행:
   cd tai-api && railway run python3 scripts/track_e_phase2_run.py [--phase21|--phase22] [--only ...] [--limit N]
+
+  Phase 2.2 (v1.2 Pipeline): --phase22 [--only checks|backup|rules|pipeline|all]
 """
 
 from __future__ import annotations
@@ -39,6 +41,10 @@ from engine.phase_22_apply import apply_phase_22_rule_changes
 from engine.phase_22_apply import apply_phase_22_schema
 from engine.six_w_heuristic import extract_six_w
 from engine.subtype_rule_match import pick_first_matching_subtype_rule
+from engine.pipeline import PipelineHaltError, TAIExtractionPipeline, halt_exit
+from engine.schemas.stage_2 import Stage2Input
+from engine.stages import Stage2Decomposer, StageContext
+from engine.validator import Validator
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -54,6 +60,8 @@ BACKUP_S2_P22 = "stage_2_elements_backup_20260511_pre_phase22"
 
 # Phase 2.2 진입 (Phase 2.1 완료 직후 DB)
 EXPECTED_PHASE22_UNCLASSIFIED = 68130
+# Phase 2.2 명세 §2.1 진입 점검 — rule INSERT/비활성 반영 후 활성 룰 수 (배포 스냅샷 기준)
+EXPECTED_PHASE22_RULES_SUB = 34
 
 EXPECTED_TOTAL = 151751
 EXPECTED_UNCLASSIFIED = 143542
@@ -208,6 +216,95 @@ def run_backup(conn) -> None:
     logger.info("백업 검증: %s=%s %s=%s", BACKUP_S1, c1, BACKUP_S2, c2)
     if c1 != EXPECTED_TOTAL or c2 != EXPECTED_TOTAL:
         raise SystemExit("백업 row 수 불일치 — 정지")
+
+
+def run_entry_checks_phase22(sb) -> dict[str, Any]:
+    """Phase 2.2 진입 점검 (명세 Cursor_Phase_2_2_Pipeline_Engine_Spec_v1_2 §2.1)."""
+    s2 = (
+        sb.table("stage_2_elements")
+        .select("id", count="exact", head=True)
+        .execute()
+        .count
+    )
+    rs = (
+        sb.table("rule_classify_subtype")
+        .select("id", count="exact", head=True)
+        .eq("enabled", True)
+        .execute()
+        .count
+    )
+    uc = (
+        sb.table("stage_2_elements")
+        .select("id", count="exact", head=True)
+        .eq("sub_type", "UNCLASSIFIED")
+        .execute()
+        .count
+    )
+    out: dict[str, Any] = {
+        "stage_2_elements": s2,
+        "UNCLASSIFIED": uc,
+        "rule_classify_subtype_enabled": rs,
+    }
+    logger.info("Phase2.2 진입 점검: %s", out)
+    if s2 != EXPECTED_TOTAL:
+        raise SystemExit(f"진입 점검 실패: stage_2_elements {s2} != {EXPECTED_TOTAL}")
+    if uc != EXPECTED_PHASE22_UNCLASSIFIED:
+        raise SystemExit(
+            f"진입 점검 실패: UNCLASSIFIED {uc} != {EXPECTED_PHASE22_UNCLASSIFIED}"
+        )
+    if rs != EXPECTED_PHASE22_RULES_SUB:
+        raise SystemExit(
+            f"진입 점검 실패: 활성 sub_type 룰 {rs} != {EXPECTED_PHASE22_RULES_SUB} "
+            "(Phase2.2 룰 반영 전/후 스냅샷이 다르면 상수 조정)"
+        )
+    return out
+
+
+def run_backup_phase22(conn) -> None:
+    """Phase 2.2 백업 (rule_classify_subtype + stage_2_elements)."""
+    cur = conn.cursor()
+    for name, src in (
+        (BACKUP_RULES_P22, "rule_classify_subtype"),
+        (BACKUP_S2_P22, "stage_2_elements"),
+    ):
+        cur.execute(
+            """
+            SELECT EXISTS (
+              SELECT FROM pg_tables WHERE schemaname='public' AND tablename=%s
+            )
+            """,
+            (name,),
+        )
+        if cur.fetchone()[0]:
+            logger.warning("Phase2.2 백업 이미 존재 — 스킵: %s", name)
+            continue
+        cur.execute(f"CREATE TABLE {name} AS TABLE {src}")
+        logger.info("CREATE TABLE %s AS TABLE %s", name, src)
+    conn.commit()
+    cur.execute(f"SELECT COUNT(*) FROM {BACKUP_RULES_P22}")
+    cr = cur.fetchone()[0]
+    cur.execute(f"SELECT COUNT(*) FROM {BACKUP_S2_P22}")
+    ce = cur.fetchone()[0]
+    cur.close()
+    logger.info("Phase2.2 백업 검증: rules=%s elems=%s", cr, ce)
+    if cr < 1 or ce != EXPECTED_TOTAL:
+        raise SystemExit("Phase2.2 백업 row 수 불일치 — 정지")
+
+
+def run_phase22_pipeline(sb) -> Any:
+    """Pipeline 내장 검증 hook만 실행 (Stage2 샘플 정확도). 실패 시 SystemExit."""
+    pipeline = TAIExtractionPipeline(
+        stages=[Stage2Decomposer()],
+        validator=Validator(supabase=sb),
+        ctx=StageContext(supabase=sb),
+        halt_on_warning=True,
+    )
+    try:
+        inp = Stage2Input(clauses=[]).model_dump()
+        return pipeline.run(inp, only_stages=[2])
+    except PipelineHaltError as e:
+        halt_exit(e)
+        return None
 
 
 def run_backup_phase21(conn) -> None:
@@ -995,13 +1092,29 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--only",
-        choices=("checks", "backup", "rules", "stage1", "stage2", "sixw", "verify", "log", "all"),
+        choices=(
+            "checks",
+            "backup",
+            "rules",
+            "stage1",
+            "stage2",
+            "sixw",
+            "verify",
+            "log",
+            "all",
+            "pipeline",
+        ),
         default="all",
     )
     ap.add_argument(
         "--phase21",
         action="store_true",
         help="Phase 2.1 모드 (명세 Cursor_Phase_2_1_Rule_Redesign_Spec.md)",
+    )
+    ap.add_argument(
+        "--phase22",
+        action="store_true",
+        help="Phase 2.2 v1.2 Pipeline (Cursor_Phase_2_2_Pipeline_Engine_Spec_v1_2.md)",
     )
     ap.add_argument("--limit", type=int, default=None, help="스모크: 각 단계 최대 row")
     ap.add_argument("--batch-stage1", type=int, default=1000)
@@ -1011,6 +1124,20 @@ def main() -> int:
 
     sb = get_supabase()
     conn = pg_conn()
+
+    if args.phase22:
+        only = args.only
+        if only in ("checks", "all"):
+            run_entry_checks_phase22(sb)
+        if only in ("backup", "all"):
+            run_backup_phase22(conn)
+        if only in ("rules", "all"):
+            apply_phase_22_schema(conn)
+            apply_phase_22_rule_changes(conn)
+        if only in ("pipeline", "all"):
+            run_phase22_pipeline(sb)
+        conn.close()
+        return 0
 
     if args.phase21:
         if args.only == "log":

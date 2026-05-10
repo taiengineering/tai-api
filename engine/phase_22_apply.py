@@ -127,7 +127,7 @@ def apply_phase_22_schema(conn: psycopg2.extensions.connection) -> None:
         ALTER TABLE rule_classify_subtype ADD CONSTRAINT rule_classify_subtype_match_strategy_check
         CHECK (match_strategy = ANY (ARRAY[
           'TAIL_POS'::text,'HEAD_TOKEN'::text,'POS_SEQUENCE'::text,'COMPOSITE'::text,
-          'LAST_MEANINGFUL_TAG_IN'::text
+          'LAST_MEANINGFUL_TAG_IN'::text,'TAIL_REGEX'::text
         ]))
         """
     )

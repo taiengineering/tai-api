@@ -67,9 +67,22 @@ def _tail_pos_match(tok_json: list[dict[str, Any]], pattern: str, pattern_positi
         if (t.get("tag") or "") != et:
             return False
         tf = t.get("form") or ""
+        if ef in ("*", "**"):
+            continue
         if not _form_match(tf, ef):
             return False
     return True
+
+
+def _composite_regex_match(pattern: str, source_text: str, pattern_position: str) -> bool:
+    """COMPOSITE / TAIL_REGEX: 원문 대상 정규식. TAIL·TAIL_REGEX는 끝부분 윈도만 검사."""
+    st = source_text or ""
+    pos = (pattern_position or "").strip().upper()
+    if pos in ("TAIL", "TAIL_REGEX", "TAIL_COMPOSITE"):
+        window = 200
+        seg = st[-window:] if len(st) > window else st
+        return re.search(pattern, seg) is not None
+    return re.search(pattern, st) is not None
 
 
 def match_subtype_rule(rule: dict[str, Any], tok_json: list[dict[str, Any]], source_text: str) -> bool:
@@ -80,7 +93,10 @@ def match_subtype_rule(rule: dict[str, Any], tok_json: list[dict[str, Any]], sou
 
     try:
         if strategy == "COMPOSITE":
-            return re.search(pattern, source_text or "") is not None
+            return _composite_regex_match(pattern, source_text, pos)
+
+        if strategy == "TAIL_REGEX":
+            return _composite_regex_match(pattern, source_text, "TAIL_REGEX")
 
         if strategy == "HEAD_TOKEN":
             st = (source_text or "").strip()
