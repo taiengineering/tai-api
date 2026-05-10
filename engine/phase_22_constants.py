@@ -1,0 +1,35 @@
+"""Phase 2.2 — CHECK 제약에 사용하는 sub_type 허용 집합 (stage_2 + rule_classify 동일)."""
+
+from __future__ import annotations
+
+# 기존 25 + 신규 3 (명세 §4) — 철자는 DB 기존 CHECK와 동일 (WEAK_한다단순)
+SUB_TYPES_FOR_CHECK: tuple[str, ...] = (
+    "AS_본다",
+    "AUTHORITY_HEADER",
+    "AUTHORITY_TARGET_ITEM",
+    "DATE_EFFECTIVE",
+    "DELETED",
+    "DELEGATED_WAIVER",
+    "DELEGATION_ACTIVE",
+    "DEFINITION_HEADER",
+    "DEFINITION_INTRO",
+    "DEFINITION_TARGET_ITEM",
+    "ENUMERATION_ITEM",
+    "ENUMERATION_LIST_INTRO",
+    "EXCEPTION_CLAUSE",
+    "EXEMPTION_HEADER",
+    "EXEMPTION_TARGET_ITEM",
+    "OBLIGATION_DETAIL_ITEM",
+    "OBLIGATION_HEADER",
+    "PARSE_FRAGMENT",
+    "PENALTY_HEADER",
+    "PENALTY_VIOLATOR_ITEM",
+    "PROHIBITION_HEADER",
+    "PROHIBITION_TARGET_ITEM",
+    "REFERENCE_INVOCATION",
+    "REFERENCE_TO_ATTACHMENT",
+    "TITLE_HEADER",
+    "UNCLASSIFIED",
+    "WEAK_한다단순",
+    "WEAK_있다단순",
+)

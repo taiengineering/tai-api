@@ -90,6 +90,14 @@ def match_subtype_rule(rule: dict[str, Any], tok_json: list[dict[str, Any]], sou
 
         if strategy == "TAIL_POS":
             return _tail_pos_match(tok_json, pattern, pos)
+
+        if strategy == "LAST_MEANINGFUL_TAG_IN":
+            tags_raw = (pattern or "").replace(" ", "")
+            allowed = {t for t in tags_raw.split(",") if t}
+            mseq = _meaningful(tok_json)
+            if not mseq:
+                return False
+            return (mseq[-1].get("tag") or "") in allowed
     except re.error as ex:
         logger.warning("regex error rule=%s: %s", rule.get("rule_name"), ex)
         return False

@@ -4,9 +4,10 @@ Track E Stage 1/2 Phase 2 / Phase 2.1 — Kiwi 메타 보강 + sub_type 정밀 �
 
 Phase 2: Cursor_Stage_1_2_Phase_2_Spec.md
 Phase 2.1: Cursor_Phase_2_1_Rule_Redesign_Spec.md
+Phase 2.2: Cursor_Phase_2_2_Accuracy_Spec.md
 
 실행:
-  cd tai-api && railway run python3 scripts/track_e_phase2_run.py [--phase21] [--only ...] [--limit N]
+  cd tai-api && railway run python3 scripts/track_e_phase2_run.py [--phase21|--phase22] [--only ...] [--limit N]
 """
 
 from __future__ import annotations
@@ -34,6 +35,8 @@ from db.database import get_supabase
 from engine.morpheme import MorphemeEngine
 from engine.phase_21_rule_payload import RULE_INSERTS as PHASE21_INSERTS
 from engine.phase_21_rule_payload import RULE_PATTERN_UPDATES as PHASE21_UPDATES
+from engine.phase_22_apply import apply_phase_22_rule_changes
+from engine.phase_22_apply import apply_phase_22_schema
 from engine.six_w_heuristic import extract_six_w
 from engine.subtype_rule_match import pick_first_matching_subtype_rule
 
@@ -45,6 +48,12 @@ BACKUP_S2 = "stage_2_elements_backup_20260510_pre_phase2"
 
 BACKUP_RULES_P21 = "rule_classify_subtype_backup_20260510_pre_phase2_1"
 BACKUP_S2_P21 = "stage_2_elements_backup_20260510_pre_phase2_1"
+
+BACKUP_RULES_P22 = "rule_classify_subtype_backup_20260511_pre_phase22"
+BACKUP_S2_P22 = "stage_2_elements_backup_20260511_pre_phase22"
+
+# Phase 2.2 진입 (Phase 2.1 완료 직후 DB)
+EXPECTED_PHASE22_UNCLASSIFIED = 68130
 
 EXPECTED_TOTAL = 151751
 EXPECTED_UNCLASSIFIED = 143542
