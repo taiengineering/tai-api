@@ -38,6 +38,10 @@ def _element_to_dict(e: StageElement) -> dict[str, Any]:
 class Stage2Decomposer(Stage):
     """역할 분해 + sub_type 분류 Stage."""
 
+    def __init__(self) -> None:
+        self._me: MorphemeEngine | None = None
+        self._dec: LegacyStage2Decomposer | None = None
+
     @property
     def stage_number(self) -> int:
         return 2
@@ -45,6 +49,14 @@ class Stage2Decomposer(Stage):
     @property
     def stage_name(self) -> str:
         return "stage_2_decomposer"
+
+    def _ensure_initialized(self, supabase: Any) -> None:
+        """Kiwi·사전·룰 — Pipeline 동일 Stage 인스턴스에서 1회만 로드."""
+        if self._me is None:
+            self._me = MorphemeEngine(supabase=supabase)
+        if self._dec is None:
+            self._dec = LegacyStage2Decomposer(self._me, supabase=supabase)
+            self._dec.load_rules()
 
     def run(self, input_data: Any, ctx: StageContext) -> StageOutput:
         if ctx.law_id is not None and ctx.isolation_mode:
@@ -59,10 +71,9 @@ class Stage2Decomposer(Stage):
             )
             clauses = inp.clauses
 
-        me = MorphemeEngine(supabase=ctx.supabase)
-        dec = LegacyStage2Decomposer(me, supabase=ctx.supabase)
-        dec.load_rules()
-        elements = dec.decompose_batch(clauses)
+        self._ensure_initialized(ctx.supabase)
+        assert self._dec is not None
+        elements = self._dec.decompose_batch(clauses)
         classified = sum(1 for e in elements if e.sub_type != "UNCLASSIFIED")
         out = Stage2Output(elements=[_element_to_dict(e) for e in elements])
         metrics: dict[str, Any] = {

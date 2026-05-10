@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import psycopg2
 import pytest
@@ -407,3 +407,26 @@ def test_phase22_v3_regression_checkpoint(monkeypatch):
     )
     it.iterate(only_stages=[2])
     assert len(calls) >= 1
+
+
+def test_stage2_initialization_once():
+    """동일 Stage2Decomposer 인스턴스 — Kiwi/분해기/룰 로드 1회만."""
+    from engine.stages.stage_2 import Stage2Decomposer
+
+    dec_mock = MagicMock()
+    dec_mock.decompose_batch.return_value = []
+
+    with patch("engine.stages.stage_2.MorphemeEngine") as ME:
+        with patch(
+            "engine.stages.stage_2.LegacyStage2Decomposer",
+            return_value=dec_mock,
+        ) as LD:
+            s2 = Stage2Decomposer()
+            ctx = StageContext(supabase=None)
+            for _ in range(5):
+                s2.run(None, ctx)
+
+            ME.assert_called_once()
+            LD.assert_called_once()
+            dec_mock.load_rules.assert_called_once()
+            assert dec_mock.decompose_batch.call_count == 5
