@@ -282,7 +282,7 @@ def run_entry_checks_phase22_v3(sb, conn) -> dict[str, Any]:
     """Phase 2.2 v3 진입 점검 (행 수 + law_master + 조항 있는 법령 수)."""
     out = run_entry_checks_phase22(sb)
     nl = (
-        sb.table("law")
+        sb.table("law_master")
         .select("id", count="exact", head=True)
         .execute()
         .count
