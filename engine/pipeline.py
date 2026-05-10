@@ -54,51 +54,79 @@ class TAIExtractionPipeline:
         self.ctx = ctx
         self.halt_on_warning = halt_on_warning
 
-    def run(self, input_data: Any, *, only_stages: list[int] | None = None) -> PipelineRun:
-        """엔진 실행. only_stages로 부분 실행 (예: [2] = Stage 2만)."""
+    def run(
+        self,
+        input_data: Any,
+        *,
+        only_stages: list[int] | None = None,
+        law_id: int | str | None = None,
+        law_batch: list[int | str] | None = None,
+        isolation_mode: bool | None = None,
+        exclude_isolated: bool | None = None,
+    ) -> PipelineRun:
+        """엔진 실행. only_stages로 부분 실행. law_id / law_batch 시 해당 법령 범위만."""
+        prev_law_id = self.ctx.law_id
+        prev_law_batch = self.ctx.law_batch
+        prev_isolation_mode = self.ctx.isolation_mode
+        prev_exclude_isolated = self.ctx.exclude_isolated
+        if law_id is not None:
+            self.ctx.law_id = law_id
+        if law_batch is not None:
+            self.ctx.law_batch = law_batch
+        if isolation_mode is not None:
+            self.ctx.isolation_mode = isolation_mode
+        if exclude_isolated is not None:
+            self.ctx.exclude_isolated = exclude_isolated
+
         run = PipelineRun()
         current = input_data
 
-        for stage in self.stages:
-            if only_stages is not None and stage.stage_number not in only_stages:
-                continue
+        try:
+            for stage in self.stages:
+                if only_stages is not None and stage.stage_number not in only_stages:
+                    continue
 
-            logger.info(
-                "[Pipeline] Stage %s (%s) 진입",
-                stage.stage_number,
-                stage.stage_name,
-            )
+                logger.info(
+                    "[Pipeline] Stage %s (%s) 진입",
+                    stage.stage_number,
+                    stage.stage_name,
+                )
 
-            output = stage.run(current, self.ctx)
-            run.stage_outputs.append(output)
+                output = stage.run(current, self.ctx)
+                run.stage_outputs.append(output)
 
-            accuracy, sample_size = stage.measure_accuracy(output, self.ctx)
-            check = Validator.evaluate_sample_accuracy(
-                stage=stage.stage_number,
-                accuracy=accuracy,
-                sample_size=sample_size,
-                check_name=f"{stage.stage_name}_sample_accuracy",
-            )
-            check.verified_by = f"pipeline_{stage.stage_name}"
-            self.validator.log(check)
-            run.check_results.append(check)
+                accuracy, sample_size = stage.measure_accuracy(output, self.ctx)
+                check = Validator.evaluate_sample_accuracy(
+                    stage=stage.stage_number,
+                    accuracy=accuracy,
+                    sample_size=sample_size,
+                    check_name=f"{stage.stage_name}_sample_accuracy",
+                )
+                check.verified_by = f"pipeline_{stage.stage_name}"
+                self.validator.log(check)
+                run.check_results.append(check)
 
-            halt_statuses: set[str] = {"FAIL"}
-            if self.halt_on_warning:
-                halt_statuses.add("WARNING")
+                halt_statuses: set[str] = {"FAIL"}
+                if self.halt_on_warning:
+                    halt_statuses.add("WARNING")
 
-            if check.result_status in halt_statuses:
-                run.halted_at = stage
-                raise PipelineHaltError(stage, check)
+                if check.result_status in halt_statuses:
+                    run.halted_at = stage
+                    raise PipelineHaltError(stage, check)
 
-            current = output.data
-            logger.info(
-                "[Pipeline] Stage %s PASS (accuracy=%.4f)",
-                stage.stage_number,
-                accuracy,
-            )
+                current = output.data
+                logger.info(
+                    "[Pipeline] Stage %s PASS (accuracy=%.4f)",
+                    stage.stage_number,
+                    accuracy,
+                )
 
-        return run
+            return run
+        finally:
+            self.ctx.law_id = prev_law_id
+            self.ctx.law_batch = prev_law_batch
+            self.ctx.isolation_mode = prev_isolation_mode
+            self.ctx.exclude_isolated = prev_exclude_isolated
 
 
 def halt_exit(exc: BaseException, *, code: int = 1) -> None:

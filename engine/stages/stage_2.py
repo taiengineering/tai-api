@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from engine.clause_fetch import (
+    fetch_clauses_by_law_batch,
+    fetch_clauses_by_law_id,
+    fetch_isolated_clauses_by_law_id,
+)
 from engine.morpheme import MorphemeEngine
 from engine.sample_accuracy import compute_stage2_sample_accuracy
 from engine.stage_2_decomposer import StageElement
@@ -42,11 +47,22 @@ class Stage2Decomposer(Stage):
         return "stage_2_decomposer"
 
     def run(self, input_data: Any, ctx: StageContext) -> StageOutput:
-        inp = Stage2Input.model_validate(input_data)
+        if ctx.law_id is not None and ctx.isolation_mode:
+            clauses = fetch_isolated_clauses_by_law_id(ctx.supabase, ctx.law_id)
+        elif ctx.law_id is not None:
+            clauses = fetch_clauses_by_law_id(ctx.supabase, ctx.law_id)
+        elif ctx.law_batch:
+            clauses = fetch_clauses_by_law_batch(ctx.supabase, ctx.law_batch)
+        else:
+            inp = Stage2Input.model_validate(
+                input_data if input_data is not None else {"clauses": []}
+            )
+            clauses = inp.clauses
+
         me = MorphemeEngine(supabase=ctx.supabase)
         dec = LegacyStage2Decomposer(me, supabase=ctx.supabase)
         dec.load_rules()
-        elements = dec.decompose_batch(inp.clauses)
+        elements = dec.decompose_batch(clauses)
         classified = sum(1 for e in elements if e.sub_type != "UNCLASSIFIED")
         out = Stage2Output(elements=[_element_to_dict(e) for e in elements])
         metrics: dict[str, Any] = {
@@ -61,4 +77,9 @@ class Stage2Decomposer(Stage):
         n_m = output.metrics.get("sample_size")
         if isinstance(acc_m, (int, float)) and isinstance(n_m, int) and n_m > 0:
             return (float(acc_m), int(n_m))
-        return compute_stage2_sample_accuracy(ctx.supabase)
+        return compute_stage2_sample_accuracy(
+            ctx.supabase,
+            law_id=ctx.law_id,
+            law_batch=ctx.law_batch,
+            exclude_isolated=ctx.exclude_isolated,
+        )

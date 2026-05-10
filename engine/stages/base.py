@@ -16,6 +16,10 @@ class StageContext:
 
     supabase: Any | None = None
     config: dict[str, Any] | None = None
+    law_id: int | str | None = None
+    law_batch: list[int | str] | None = None
+    isolation_mode: bool = False
+    exclude_isolated: bool = False
 
 
 @dataclass

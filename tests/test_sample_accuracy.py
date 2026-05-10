@@ -85,8 +85,14 @@ class TestComputeStage2SampleAccuracy:
             _sb: object,
             *,
             sample_articles: int,
+            law_id: int | str | None = None,
+            law_batch: list[int | str] | None = None,
+            exclude_isolated: bool = False,
         ) -> list[dict]:
             _ = sample_articles
+            _ = law_id
+            _ = law_batch
+            _ = exclude_isolated
             rows: list[dict] = []
             rows.extend(
                 [{"sub_type": "OBLIGATION_HEADER", "source_text": "준수해야 한다."}]

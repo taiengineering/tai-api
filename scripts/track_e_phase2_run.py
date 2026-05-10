@@ -41,6 +41,11 @@ from engine.phase_22_apply import apply_phase_22_rule_changes
 from engine.phase_22_apply import apply_phase_22_schema
 from engine.six_w_heuristic import extract_six_w
 from engine.subtype_rule_match import pick_first_matching_subtype_rule
+from engine.iterator import (
+    IteratorOrder,
+    Phase22V3Iterator,
+    PipelineIterator,
+)
 from engine.pipeline import PipelineHaltError, TAIExtractionPipeline, halt_exit
 from engine.schemas.stage_2 import Stage2Input
 from engine.stages import Stage2Decomposer, StageContext
@@ -57,6 +62,19 @@ BACKUP_S2_P21 = "stage_2_elements_backup_20260510_pre_phase2_1"
 
 BACKUP_RULES_P22 = "rule_classify_subtype_backup_20260511_pre_phase22"
 BACKUP_S2_P22 = "stage_2_elements_backup_20260511_pre_phase22"
+
+BACKUP_RULES_V3 = "rule_classify_subtype_backup_20260510_pre_phase2_2_v3"
+BACKUP_S2_V3 = "stage_2_elements_backup_20260510_pre_phase2_2_v3"
+
+PHASE22_V3_MIGRATION_SQL = os.path.join(
+    _ROOT,
+    "supabase/migrations/20260510_phase_2_2_v3_isolation_columns.sql",
+)
+
+# Phase 2.2 v3 진입 — PM ground truth (명세 §2.1 정정, law_attachment 1,322 ≠ 법령 수)
+# law_master 전체 행 수 / stage_1_clauses 가 있는 법령(Phase 2 처리 대상)
+EXPECTED_PHASE22_V3_LAW_MASTER = 768
+EXPECTED_PHASE22_V3_LAWS_WITH_CLAUSES = 704
 
 # Phase 2.2 진입 (Phase 2.1 완료 직후 DB)
 EXPECTED_PHASE22_UNCLASSIFIED = 68130
@@ -260,6 +278,154 @@ def run_entry_checks_phase22(sb) -> dict[str, Any]:
     return out
 
 
+def run_entry_checks_phase22_v3(sb, conn) -> dict[str, Any]:
+    """Phase 2.2 v3 진입 점검 (행 수 + law_master + 조항 있는 법령 수)."""
+    out = run_entry_checks_phase22(sb)
+    nl = (
+        sb.table("law")
+        .select("id", count="exact", head=True)
+        .execute()
+        .count
+    )
+    out["law_master_count"] = nl
+
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT COUNT(*) FROM (
+          SELECT DISTINCT la.law_id
+          FROM stage_1_clauses s1
+          INNER JOIN law_article_part lap ON lap.id = s1.part_id
+          INNER JOIN law_article la ON la.id = lap.article_id
+        ) t
+        """
+    )
+    nlwc = int(cur.fetchone()[0] or 0)
+    out["laws_with_clauses_count"] = nlwc
+
+    cur.execute(
+        """
+        SELECT COUNT(*) FROM (
+          SELECT la.law_id
+          FROM stage_2_elements s2
+          INNER JOIN stage_1_clauses s1 ON s1.id = s2.clause_id
+          INNER JOIN law_article_part lap ON lap.id = s1.part_id
+          INNER JOIN law_article la ON la.id = lap.article_id
+          GROUP BY la.law_id
+        ) u
+        """
+    )
+    n_iter = int(cur.fetchone()[0] or 0)
+    out["iterator_law_distinct_count"] = n_iter
+    cur.close()
+
+    logger.info(
+        "Phase2.2 v3 진입: law_master=%s (예상 %s), laws_with_clauses=%s (예상 %s), "
+        "iterator_distinct_laws=%s",
+        nl,
+        EXPECTED_PHASE22_V3_LAW_MASTER,
+        nlwc,
+        EXPECTED_PHASE22_V3_LAWS_WITH_CLAUSES,
+        n_iter,
+    )
+    if nl != EXPECTED_PHASE22_V3_LAW_MASTER:
+        raise SystemExit(
+            f"진입 점검 실패: law_master {nl} != {EXPECTED_PHASE22_V3_LAW_MASTER}"
+        )
+    if nlwc != EXPECTED_PHASE22_V3_LAWS_WITH_CLAUSES:
+        raise SystemExit(
+            f"진입 점검 실패: laws_with_clauses {nlwc} != "
+            f"{EXPECTED_PHASE22_V3_LAWS_WITH_CLAUSES}"
+        )
+    if n_iter != nlwc:
+        logger.warning(
+            "iterator 순회 법령 수(%s)와 laws_with_clauses(%s) 불일치 — "
+            "데이터 점검 권고",
+            n_iter,
+            nlwc,
+        )
+    return out
+
+
+def run_backup_phase22_v3(conn) -> None:
+    """Phase 2.2 v3 백업 (격리 마이그레이션 전)."""
+    cur = conn.cursor()
+    for name, src in (
+        (BACKUP_RULES_V3, "rule_classify_subtype"),
+        (BACKUP_S2_V3, "stage_2_elements"),
+    ):
+        cur.execute(
+            """
+            SELECT EXISTS (
+              SELECT FROM pg_tables WHERE schemaname='public' AND tablename=%s
+            )
+            """,
+            (name,),
+        )
+        if cur.fetchone()[0]:
+            logger.warning("Phase2.2 v3 백업 이미 존재 — 스킵: %s", name)
+            continue
+        cur.execute(f"CREATE TABLE {name} AS TABLE {src}")
+        logger.info("CREATE TABLE %s AS TABLE %s", name, src)
+    conn.commit()
+    cur.execute(f"SELECT COUNT(*) FROM {BACKUP_S2_V3}")
+    ce = cur.fetchone()[0]
+    cur.close()
+    logger.info("Phase2.2 v3 백업 검증: stage_2_elements_backup rows=%s", ce)
+    if ce != EXPECTED_TOTAL:
+        raise SystemExit("Phase2.2 v3 백업 row 수 불일치 — 정지")
+
+
+def run_migration_phase22_v3(conn) -> None:
+    """DB 마이그레이션 phase_2_2_v3_isolation_columns."""
+    if not os.path.isfile(PHASE22_V3_MIGRATION_SQL):
+        raise SystemExit(f"마이그레이션 파일 없음: {PHASE22_V3_MIGRATION_SQL}")
+    with open(PHASE22_V3_MIGRATION_SQL, encoding="utf-8") as f:
+        sql = f.read()
+    cur = conn.cursor()
+    cur.execute(sql)
+    conn.commit()
+    cur.close()
+    logger.info("Phase2.2 v3 마이그레이션 적용 완료")
+
+
+def run_phase22_v3_iterate(
+    sb,
+    *,
+    order: IteratorOrder,
+    regression_window: int,
+    max_iterations_per_law: int,
+    halt_on_first_fail: bool = True,
+) -> None:
+    """Phase 2.2 v3 — 단일 법령 격리 반복 + 회귀."""
+    pipeline = TAIExtractionPipeline(
+        stages=[Stage2Decomposer()],
+        validator=Validator(supabase=sb),
+        ctx=StageContext(supabase=sb),
+        halt_on_warning=True,
+    )
+    iterator = Phase22V3Iterator(
+        pipeline=pipeline,
+        supabase=sb,
+        order=order,
+        regression_window=regression_window,
+        max_iterations_per_law=max_iterations_per_law,
+        halt_on_first_fail=halt_on_first_fail,
+    )
+    run = iterator.iterate(only_stages=[2])
+    if run.halted and run.laws_halted:
+        lid, lp = run.laws_halted[0]
+        raise SystemExit(
+            f"Phase22V3 정지: law_id={lid} final_status={lp.final_status} "
+            f"iterations={lp.iterations_used} isolated_fp_marked={lp.isolated_fp_marked}"
+        )
+    logger.info(
+        "Phase22V3 완료: 법령 수=%s halted=%s",
+        len(run.law_results),
+        run.halted,
+    )
+
+
 def run_backup_phase22(conn) -> None:
     """Phase 2.2 백업 (rule_classify_subtype + stage_2_elements)."""
     cur = conn.cursor()
@@ -291,7 +457,12 @@ def run_backup_phase22(conn) -> None:
         raise SystemExit("Phase2.2 백업 row 수 불일치 — 정지")
 
 
-def run_phase22_pipeline(sb) -> Any:
+def run_phase22_pipeline(
+    sb,
+    *,
+    law_id: int | str | None = None,
+    law_batch: list[int | str] | None = None,
+) -> Any:
     """Pipeline 내장 검증 hook만 실행 (Stage2 샘플 정확도). 실패 시 SystemExit."""
     pipeline = TAIExtractionPipeline(
         stages=[Stage2Decomposer()],
@@ -301,10 +472,76 @@ def run_phase22_pipeline(sb) -> Any:
     )
     try:
         inp = Stage2Input(clauses=[]).model_dump()
-        return pipeline.run(inp, only_stages=[2])
+        return pipeline.run(
+            inp,
+            only_stages=[2],
+            law_id=law_id,
+            law_batch=law_batch,
+        )
     except PipelineHaltError as e:
         halt_exit(e)
         return None
+
+
+def run_phase22_iterate(
+    sb,
+    *,
+    order: IteratorOrder = "ascending_size",
+    regression_window: int = 0,
+    halt_on_first_fail: bool = True,
+) -> None:
+    """점진 처리 모드 — 법령 단위 자동 순회 (Track A P3). 실패 시 SystemExit."""
+    pipeline = TAIExtractionPipeline(
+        stages=[Stage2Decomposer()],
+        validator=Validator(supabase=sb),
+        ctx=StageContext(supabase=sb),
+        halt_on_warning=True,
+    )
+    iterator = PipelineIterator(
+        pipeline=pipeline,
+        supabase=sb,
+        order=order,
+        regression_window=regression_window,
+        halt_on_first_fail=halt_on_first_fail,
+    )
+    run = iterator.iterate(only_stages=[2])
+    if run.halted and run.laws_failed:
+        first_law, chk = run.laws_failed[0]
+        raise SystemExit(
+            f"법령 {first_law} {chk.result_status} "
+            f"(actual={chk.actual_value}, threshold={chk.threshold}). "
+            f"PASS 법령: {len(run.laws_processed)}/{run.total_laws}"
+        )
+    logger.info(
+        "Iterator 완료: PASS %s/%s laws_failed=%s",
+        len(run.laws_processed),
+        run.total_laws,
+        len(run.laws_failed),
+    )
+
+
+def _parse_law_id(raw: str | None) -> int | str | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw, 10)
+    except ValueError:
+        return raw
+
+
+def _parse_law_batch(raw: str | None) -> list[int | str] | None:
+    if raw is None or not str(raw).strip():
+        return None
+    out: list[int | str] = []
+    for part in str(raw).split(","):
+        p = part.strip()
+        if not p:
+            continue
+        try:
+            out.append(int(p, 10))
+        except ValueError:
+            out.append(p)
+    return out or None
 
 
 def run_backup_phase21(conn) -> None:
@@ -1103,6 +1340,8 @@ def main() -> int:
             "log",
             "all",
             "pipeline",
+            "migration",
+            "iterate",
         ),
         default="all",
     )
@@ -1116,14 +1355,92 @@ def main() -> int:
         action="store_true",
         help="Phase 2.2 v1.2 Pipeline (Cursor_Phase_2_2_Pipeline_Engine_Spec_v1_2.md)",
     )
+    ap.add_argument(
+        "--phase22-v3",
+        dest="phase22_v3",
+        action="store_true",
+        help="Phase 2.2 v3 단일 법령 격리 (Cursor_Phase_2_2_v3_Single_Law_Isolation_Spec.md)",
+    )
     ap.add_argument("--limit", type=int, default=None, help="스모크: 각 단계 최대 row")
     ap.add_argument("--batch-stage1", type=int, default=1000)
     ap.add_argument("--batch-stage2", type=int, default=500)
     ap.add_argument("--batch-sixw", type=int, default=400)
+    # Track A P3 — 법령 단위 / 순회 (Phase 2.2)
+    ap.add_argument(
+        "--law-id",
+        type=str,
+        default=None,
+        help="단일 법령 Pipeline (--phase22 --only pipeline)",
+    )
+    ap.add_argument(
+        "--law-batch",
+        type=str,
+        default=None,
+        help="쉼표 구분 법령 ID 목록 (--phase22 --only pipeline)",
+    )
+    ap.add_argument(
+        "--iterate",
+        action="store_true",
+        help="법령 단위 자동 순회 (--phase22; pipeline 단계)",
+    )
+    ap.add_argument(
+        "--order",
+        choices=(
+            "ascending_size",
+            "descending_size",
+            "random",
+            "sequential",
+        ),
+        default="ascending_size",
+        help="순회 순서 (--iterate)",
+    )
+    ap.add_argument(
+        "--regression-window",
+        type=int,
+        default=0,
+        metavar="N",
+        help="이전 N개 법령 회귀 재검증 (0=비활성, 예: 10)",
+    )
+    ap.add_argument(
+        "--continue-after-fail",
+        action="store_true",
+        help="Iterator: 첫 FAIL 후에도 계속 (halt_on_first_fail=False)",
+    )
+    ap.add_argument(
+        "--max-iterations-per-law",
+        type=int,
+        default=5,
+        metavar="N",
+        help="Phase22 v3: 법령당 최대 격리 반복 (기본 5)",
+    )
     args = ap.parse_args()
 
     sb = get_supabase()
     conn = pg_conn()
+
+    if args.phase22_v3:
+        only = args.only
+        if only not in ("checks", "migration", "iterate", "all"):
+            conn.close()
+            raise SystemExit(
+                "--phase22-v3: --only checks|migration|iterate|all 만 허용",
+            )
+        if only in ("checks", "all"):
+            run_entry_checks_phase22_v3(sb, conn)
+        if only in ("migration", "all"):
+            run_backup_phase22_v3(conn)
+            run_migration_phase22_v3(conn)
+        if only in ("iterate", "all") or args.iterate:
+            rw = args.regression_window if args.regression_window > 0 else 10
+            run_phase22_v3_iterate(
+                sb,
+                order=args.order,
+                regression_window=rw,
+                max_iterations_per_law=args.max_iterations_per_law,
+                halt_on_first_fail=not args.continue_after_fail,
+            )
+        conn.close()
+        return 0
 
     if args.phase22:
         only = args.only
@@ -1135,7 +1452,17 @@ def main() -> int:
             apply_phase_22_schema(conn)
             apply_phase_22_rule_changes(conn)
         if only in ("pipeline", "all"):
-            run_phase22_pipeline(sb)
+            law_id = _parse_law_id(args.law_id)
+            law_batch = _parse_law_batch(args.law_batch)
+            if args.iterate:
+                run_phase22_iterate(
+                    sb,
+                    order=args.order,
+                    regression_window=args.regression_window,
+                    halt_on_first_fail=not args.continue_after_fail,
+                )
+            else:
+                run_phase22_pipeline(sb, law_id=law_id, law_batch=law_batch)
         conn.close()
         return 0
 
