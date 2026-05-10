@@ -131,6 +131,8 @@ def save_law_to_db(
     raw_xml: str,
     articles: list,
     supabase: Any,
+    *,
+    partial_merge: bool = False,
 ) -> dict:
     """
     조문 중심 UPSERT 저장:
@@ -138,6 +140,8 @@ def save_law_to_db(
       TX2: law_article UPSERT (law_id 기반) + paragraph/item 재구성
            - 조문 UUID는 (law_id, article_internal_key)로 영구 유지
            - paragraph/item은 article 단위로 delete+insert (하위 구조는 재파싱 가능)
+      partial_merge=True: 이번 payload에 없는 기존 조문을 DELETED 처리하지 않음
+                          (형법·민법 등 인용 Top-N 부분 적재 전용).
     """
     law_mst_no = matched.get("law_mst_no", "") or law_info.get("law_mst_no", "")
     law_api_id = matched.get("law_api_id", "") or law_info.get("law_api_id", "")
@@ -347,7 +351,7 @@ def save_law_to_db(
     # "사라진 조문" 감지: 이번 수집에 없는 기존 조문을 DELETED 상태로 표시
     # (물리 삭제 안 함 - 외부 참조 보존)
     deleted_count = 0
-    if current_keys:
+    if current_keys and not partial_merge:
         existing_all = supabase.table("law_article") \
             .select("id,article_internal_key") \
             .eq("law_id", law_id) \

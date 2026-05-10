@@ -231,6 +231,14 @@ def _nullify_dependent_article_refs(supabase: Any, art_ids: List[str]) -> None:
 def _clear_law_version_fk_dependents(supabase: Any, version_id: str) -> None:
     """law_version 삭제 직전: 해당 version_id 를 참조하는 테이블 정리 (환경별 스키마 차이는 try/except)."""
     try:
+        supabase.table("law_master").update({
+            "current_version_id": None,
+            "current_version_no": None,
+        }).eq("current_version_id", version_id).execute()
+    except Exception as e:
+        print(f"[law_collector] law_master current_version clear skip: {e}")
+
+    try:
         supabase.table("law_parsing_result").delete().eq("law_version_id", version_id).execute()
     except Exception as e:
         print(f"[law_collector] law_parsing_result delete skip: {e}")
@@ -304,6 +312,27 @@ def delete_law_version_cascade_for_recollect(supabase: Any, version_id: str) -> 
     _clear_law_version_fk_dependents(supabase, version_id)
     supabase.table("law_content_raw").delete().eq("law_version_id", version_id).execute()
     supabase.table("law_version").delete().eq("id", version_id).execute()
+
+
+def pick_match_law_from_list(laws: list, law_query: str) -> dict:
+    """검색 결과에서 법령명 매칭 — 완전 일치 우선 ('형법' vs '군형법' 오매칭 방지)."""
+    if not laws:
+        raise ValueError("empty laws")
+    q = law_query.strip()
+    q_compact = q.replace(" ", "")
+    for l in laws:
+        name = (l.get("law_name") or "").strip()
+        if name == q:
+            return l
+    for l in laws:
+        name = (l.get("law_name") or "").strip()
+        if name.replace(" ", "") == q_compact:
+            return l
+    for l in laws:
+        name = (l.get("law_name") or "").strip()
+        if q in name:
+            return l
+    return laws[0]
 
 
 # ============================================================
@@ -467,6 +496,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
     if is_new_version:
         for art in articles:
             art_res = supabase.table("law_article").insert({
+                "law_id": law_id,
                 "law_version_id": version_id,
                 "article_internal_key": art["article_internal_key"],
                 "article_no": art["article_no"], "article_sub_no": art["article_sub_no"],
@@ -481,6 +511,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
 
             for p_idx, para in enumerate(art["paragraphs"]):
                 para_res = supabase.table("law_paragraph").insert({
+                    "law_id": law_id,
                     "article_id": article_id, "paragraph_no": para["paragraph_no"],
                     "paragraph_no_sort": p_idx + 1, "paragraph_text": para["paragraph_text"],
                     "paragraph_status_code": "ACTIVE", "updated_at": datetime.now().isoformat(),
@@ -489,6 +520,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
 
                 for i_idx, item in enumerate(para["items"]):
                     item_res = supabase.table("law_item").insert({
+                        "law_id": law_id,
                         "paragraph_id": paragraph_id, "item_level_code": "HO",
                         "item_no": item["item_no"], "item_no_sort": i_idx + 1,
                         "item_text": item["item_text"], "item_status_code": "ACTIVE",
@@ -498,6 +530,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
 
                     for s_idx, sub in enumerate(item["sub_items"]):
                         supabase.table("law_item").insert({
+                            "law_id": law_id,
                             "paragraph_id": paragraph_id, "parent_item_id": item_id,
                             "item_level_code": "MOK", "item_no": sub["item_no"],
                             "item_no_sort": s_idx + 1, "item_text": sub["item_text"],
@@ -787,7 +820,7 @@ def _run_collect_all():
             if not laws:
                 results["skipped"] += 1
                 continue
-            matched = next((l for l in laws if target["law_name"] in l["law_name"]), laws[0])
+            matched = pick_match_law_from_list(laws, target["law_name"])
             content_result = fetch_law_content(matched["law_mst_no"])
             if not content_result["ok"]:
                 results["failed"] += 1
@@ -821,7 +854,7 @@ async def collect_single_law(law_name: str, force: bool = False):
         if not laws:
             raise HTTPException(status_code=404, detail=f"법령을 찾을 수 없습니다: {law_name}")
 
-        matched = next((l for l in laws if law_name in l["law_name"]), laws[0])
+        matched = pick_match_law_from_list(laws, law_name)
         content_result = fetch_law_content(matched["law_mst_no"])
 
         if not content_result["ok"]:
