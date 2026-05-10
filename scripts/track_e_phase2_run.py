@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Track E Stage 1/2 Phase 2 — Kiwi 메타 보강 + UNCLASSIFIED sub_type 정밀 분류 + 6하원칙.
+Track E Stage 1/2 Phase 2 / Phase 2.1 — Kiwi 메타 보강 + sub_type 정밀 분류 + 6하원칙.
 
-명세: tai-admin/docs/extraction/Cursor_Stage_1_2_Phase_2_Spec.md
-실행: cd tai-api && railway run python3 scripts/track_e_phase2_run.py [--only ...] [--limit N]
+Phase 2: Cursor_Stage_1_2_Phase_2_Spec.md
+Phase 2.1: Cursor_Phase_2_1_Rule_Redesign_Spec.md
+
+실행:
+  cd tai-api && railway run python3 scripts/track_e_phase2_run.py [--phase21] [--only ...] [--limit N]
 """
 
 from __future__ import annotations
@@ -29,6 +32,8 @@ except ImportError as e:
 
 from db.database import get_supabase
 from engine.morpheme import MorphemeEngine
+from engine.phase_21_rule_payload import RULE_INSERTS as PHASE21_INSERTS
+from engine.phase_21_rule_payload import RULE_PATTERN_UPDATES as PHASE21_UPDATES
 from engine.six_w_heuristic import extract_six_w
 from engine.subtype_rule_match import pick_first_matching_subtype_rule
 
@@ -38,10 +43,25 @@ logger = logging.getLogger(__name__)
 BACKUP_S1 = "stage_1_clauses_backup_20260510_pre_phase2"
 BACKUP_S2 = "stage_2_elements_backup_20260510_pre_phase2"
 
+BACKUP_RULES_P21 = "rule_classify_subtype_backup_20260510_pre_phase2_1"
+BACKUP_S2_P21 = "stage_2_elements_backup_20260510_pre_phase2_1"
+
 EXPECTED_TOTAL = 151751
 EXPECTED_UNCLASSIFIED = 143542
 EXPECTED_RULES_SUB = 23
 EXPECTED_RULES_IF = 8
+
+# Phase 2.1 진입 (Phase 2.0 직후 DB)
+EXPECTED_PHASE21_UNCLASSIFIED = 143220
+EXPECTED_PHASE21_TARGET_ROWS = 143542  # 151751 - 8209 (Phase 1 고정)
+
+PHASE1_LOCKED_SUBTYPES = (
+    "DELETED",
+    "EXCEPTION_CLAUSE",
+    "DEFINITION_INTRO",
+    "TITLE_HEADER",
+    "DATE_EFFECTIVE",
+)
 
 
 def _chunks(xs: list, n: int):
@@ -50,7 +70,7 @@ def _chunks(xs: list, n: int):
 
 
 def run_entry_checks(sb) -> dict[str, Any]:
-    """§2 진입 점검."""
+    """§2 진입 점검 (Phase 2.0 기준)."""
     s1 = sb.table("stage_1_clauses").select("id", count="exact", head=True).execute().count
     s2 = sb.table("stage_2_elements").select("id", count="exact", head=True).execute().count
     rs = (
@@ -91,6 +111,60 @@ def run_entry_checks(sb) -> dict[str, Any]:
     return out
 
 
+def run_entry_checks_phase21(sb) -> dict[str, Any]:
+    """§2.1 Phase 2.1 진입 점검."""
+    s1 = sb.table("stage_1_clauses").select("id", count="exact", head=True).execute().count
+    s2 = sb.table("stage_2_elements").select("id", count="exact", head=True).execute().count
+    rs = (
+        sb.table("rule_classify_subtype")
+        .select("id", count="exact", head=True)
+        .eq("enabled", True)
+        .execute()
+        .count
+    )
+    rif = (
+        sb.table("rule_classify_if_pattern")
+        .select("id", count="exact", head=True)
+        .eq("enabled", True)
+        .execute()
+        .count
+    )
+    uc = (
+        sb.table("stage_2_elements")
+        .select("id", count="exact", head=True)
+        .eq("sub_type", "UNCLASSIFIED")
+        .execute()
+        .count
+    )
+    c = pg_conn()
+    cur = c.cursor()
+    cur.execute(
+        "SELECT 100.0 * COUNT(*) FILTER (WHERE tokenization_json IS NULL) / COUNT(*) FROM stage_1_clauses"
+    )
+    tok_null = float(cur.fetchone()[0] or 0)
+    cur.close()
+    c.close()
+
+    out = {
+        "stage_1_clauses": s1,
+        "stage_2_elements": s2,
+        "rule_classify_subtype_enabled": rs,
+        "rule_classify_if_pattern_enabled": rif,
+        "UNCLASSIFIED": uc,
+        "tokenization_null_pct": tok_null,
+    }
+    logger.info("Phase2.1 진입 점검: %s", out)
+    if s1 != EXPECTED_TOTAL or s2 != EXPECTED_TOTAL:
+        raise SystemExit(f"진입 점검 실패: row 수 불일치 ({EXPECTED_TOTAL})")
+    if rs != EXPECTED_RULES_SUB or rif != EXPECTED_RULES_IF:
+        raise SystemExit("진입 점검 실패: subtype/if_pattern 룰 수 불일치")
+    if uc != EXPECTED_PHASE21_UNCLASSIFIED:
+        raise SystemExit(f"진입 점검 실패: UNCLASSIFIED {uc} != {EXPECTED_PHASE21_UNCLASSIFIED}")
+    if tok_null > 0.1:
+        raise SystemExit(f"tokenization_json NULL {tok_null}% > 0.1% — 정지")
+    return out
+
+
 def pg_conn():
     url = os.environ.get("DATABASE_URL")
     if not url:
@@ -99,11 +173,11 @@ def pg_conn():
 
 
 def run_backup(conn) -> None:
-    """§3 백업."""
+    """§3 백업 (Phase 2.0)."""
     cur = conn.cursor()
     for name, src in ((BACKUP_S1, "stage_1_clauses"), (BACKUP_S2, "stage_2_elements")):
         cur.execute(
-            f"""
+            """
             SELECT EXISTS (
               SELECT FROM pg_tables WHERE schemaname='public' AND tablename=%s
             )
@@ -125,6 +199,68 @@ def run_backup(conn) -> None:
     logger.info("백업 검증: %s=%s %s=%s", BACKUP_S1, c1, BACKUP_S2, c2)
     if c1 != EXPECTED_TOTAL or c2 != EXPECTED_TOTAL:
         raise SystemExit("백업 row 수 불일치 — 정지")
+
+
+def run_backup_phase21(conn) -> None:
+    """§5 Phase 2.1 백업."""
+    cur = conn.cursor()
+    for name, src in ((BACKUP_RULES_P21, "rule_classify_subtype"), (BACKUP_S2_P21, "stage_2_elements")):
+        cur.execute(
+            """
+            SELECT EXISTS (
+              SELECT FROM pg_tables WHERE schemaname='public' AND tablename=%s
+            )
+            """,
+            (name,),
+        )
+        if cur.fetchone()[0]:
+            logger.warning("Phase2.1 백업 이미 존재 — 스킵: %s", name)
+            continue
+        cur.execute(f"CREATE TABLE {name} AS TABLE {src}")
+        logger.info("CREATE TABLE %s AS SELECT * FROM %s", name, src)
+    conn.commit()
+    cur.execute(f"SELECT COUNT(*) FROM {BACKUP_RULES_P21}")
+    cr = cur.fetchone()[0]
+    cur.execute(f"SELECT COUNT(*) FROM {BACKUP_S2_P21}")
+    ce = cur.fetchone()[0]
+    cur.close()
+    logger.info("Phase2.1 백업 검증: rules=%s elems=%s", cr, ce)
+    if cr != EXPECTED_RULES_SUB or ce != EXPECTED_TOTAL:
+        raise SystemExit("Phase2.1 백업 row 수 불일치 — 정지")
+
+
+def apply_phase_21_rule_changes(conn) -> dict[str, Any]:
+    """§4 룰 패턴 UPDATE + 신규 INSERT (idempotent)."""
+    cur = conn.cursor()
+    updated = 0
+    for rn, pat in PHASE21_UPDATES.items():
+        cur.execute(
+            """
+            UPDATE rule_classify_subtype
+            SET pattern = %s, updated_at = NOW()
+            WHERE rule_name = %s
+            """,
+            (pat, rn),
+        )
+        updated += cur.rowcount
+    inserted = 0
+    for rule_name, sub_type, pattern, pos, pri, desc in PHASE21_INSERTS:
+        cur.execute("SELECT 1 FROM rule_classify_subtype WHERE rule_name = %s", (rule_name,))
+        if cur.fetchone():
+            continue
+        cur.execute(
+            """
+            INSERT INTO rule_classify_subtype
+              (rule_name, sub_type, match_strategy, pattern, pattern_position, priority, enabled, description)
+            VALUES (%s, %s, 'TAIL_POS', %s, %s, %s, true, %s)
+            """,
+            (rule_name, sub_type, pattern, pos, pri, desc),
+        )
+        inserted += 1
+    conn.commit()
+    cur.close()
+    logger.info("Phase2.1 룰 변경: updated_rows=%s inserted_rules=%s", updated, inserted)
+    return {"updated_rows": updated, "inserted_rules": inserted}
 
 
 def load_split_rules(sb) -> list[dict[str, Any]]:
@@ -237,7 +373,7 @@ def run_stage1(sb, conn, *, batch_size: int, limit: int | None) -> dict[str, Any
     return {"processed": processed, "tok_fail": tok_fail, "tok_fail_pct": fail_pct}
 
 
-def load_subtype_rules(sb) -> list[dict[str, Any]]:
+def load_subtype_rules(sb, *, phase21: bool = False) -> list[dict[str, Any]]:
     rules = (
         sb.table("rule_classify_subtype")
         .select("*")
@@ -247,8 +383,11 @@ def load_subtype_rules(sb) -> list[dict[str, Any]]:
         .data
         or []
     )
-    if len(rules) != EXPECTED_RULES_SUB:
+    rules.sort(key=lambda r: (r.get("priority") or 0, str(r.get("id") or "")))
+    if not phase21 and len(rules) != EXPECTED_RULES_SUB:
         raise SystemExit(f"subtype rules {len(rules)} != {EXPECTED_RULES_SUB}")
+    if phase21 and len(rules) < EXPECTED_RULES_SUB:
+        raise SystemExit(f"Phase2.1: subtype rules {len(rules)} < {EXPECTED_RULES_SUB}")
     return rules
 
 
@@ -340,8 +479,104 @@ def run_stage2(sb, conn, rules: list[dict[str, Any]], *, batch_size: int, limit:
     return {"processed_u": processed, "matched": matched}
 
 
+def run_stage2_phase21(
+    conn, rules: list[dict[str, Any]], *, batch_size: int, limit: int | None
+) -> dict[str, Any]:
+    """§6.5 Phase 2.1 — Phase 1 제외 전 행 재분류 (매칭 없으면 UNCLASSIFIED)."""
+    cur = conn.cursor()
+    last_id: str | None = None
+    scanned = 0
+    matched = 0
+    cap = limit or 10**12
+
+    merge_sql = """
+        UPDATE stage_2_elements SET
+          sub_type = %s,
+          applied_rules = COALESCE(applied_rules, '{}'::jsonb) || %s::jsonb,
+          confidence_score = %s
+        WHERE id = %s::uuid
+        """
+    nom_sql = """
+        UPDATE stage_2_elements SET
+          sub_type = 'UNCLASSIFIED',
+          applied_rules = COALESCE(applied_rules, '{}'::jsonb) || %s::jsonb,
+          confidence_score = 0
+        WHERE id = %s::uuid
+        """
+
+    while scanned < cap:
+        lim = min(batch_size, cap - scanned)
+        if last_id is None:
+            cur.execute(
+                f"""
+                SELECT e.id, e.clause_id, s1.source_text, s1.tokenization_json
+                FROM stage_2_elements e
+                INNER JOIN stage_1_clauses s1 ON s1.id = e.clause_id
+                WHERE e.sub_type NOT IN %s
+                ORDER BY e.id
+                LIMIT %s
+                """,
+                (PHASE1_LOCKED_SUBTYPES, lim),
+            )
+        else:
+            cur.execute(
+                f"""
+                SELECT e.id, e.clause_id, s1.source_text, s1.tokenization_json
+                FROM stage_2_elements e
+                INNER JOIN stage_1_clauses s1 ON s1.id = e.clause_id
+                WHERE e.sub_type NOT IN %s AND e.id > %s::uuid
+                ORDER BY e.id
+                LIMIT %s
+                """,
+                (PHASE1_LOCKED_SUBTYPES, last_id, lim),
+            )
+        rows = cur.fetchall()
+        if not rows:
+            break
+        last_id = rows[-1][0]
+
+        ups_m: list[tuple[Any, ...]] = []
+        ups_u: list[tuple[Any, ...]] = []
+        for eid, _cid, stext, tj in rows:
+            if not tj:
+                nom = {"phase": "phase_2_1", "method": "kiwi_subtype_rules_no_token"}
+                ups_u.append((Json(nom), eid))
+                continue
+            if isinstance(tj, str):
+                try:
+                    tj = json.loads(tj)
+                except json.JSONDecodeError:
+                    nom = {"phase": "phase_2_1", "method": "kiwi_subtype_rules_bad_json"}
+                    ups_u.append((Json(nom), eid))
+                    continue
+            rule = pick_first_matching_subtype_rule(rules, tj, stext or "")
+            if rule:
+                ar = {
+                    "phase": "phase_2_1",
+                    "method": "kiwi_subtype_rules",
+                    "sub_type_rule_id": rule["id"],
+                    "sub_type_rule_name": rule["rule_name"],
+                }
+                ups_m.append((rule["sub_type"], Json(ar), 0.85, eid))
+                matched += 1
+            else:
+                nom = {"phase": "phase_2_1", "method": "kiwi_subtype_rules_no_match"}
+                ups_u.append((Json(nom), eid))
+
+        if ups_m:
+            execute_batch(cur, merge_sql, ups_m, page_size=len(ups_m))
+        if ups_u:
+            execute_batch(cur, nom_sql, ups_u, page_size=len(ups_u))
+        conn.commit()
+        scanned += len(rows)
+        logger.info("phase21 stage2 scanned=%s matched_total=%s batch=%s", scanned, matched, len(rows))
+
+    cur.close()
+    return {"scanned_reclass": scanned, "matched": matched}
+
+
 def verify_phase1_preserved(sb) -> int:
-    """Phase 1 분류 행 덮어쓰기 검출."""
+    """Phase 2.0 백업 대비 분류 행 덮어쓰기 검출."""
     conn = pg_conn()
     cur = conn.cursor()
     cur.execute(
@@ -356,6 +591,44 @@ def verify_phase1_preserved(sb) -> int:
     cur.close()
     conn.close()
     return n
+
+
+def verify_phase1_preserved_phase21(conn) -> int:
+    """Phase 1 (5종) 절대 보전 — Phase2.1 시작 백업 대비."""
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        SELECT COUNT(*) FROM stage_2_elements e
+        INNER JOIN {BACKUP_S2_P21} b ON e.id = b.id
+        WHERE b.sub_type IN %s
+          AND e.sub_type IS DISTINCT FROM b.sub_type
+        """,
+        (PHASE1_LOCKED_SUBTYPES,),
+    )
+    n = cur.fetchone()[0]
+    cur.close()
+    return n
+
+
+def count_zero_match_rules(conn) -> tuple[list[str], int]:
+    """활성 룰 중 매칭 row 0건인 rule_name 목록."""
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT r.rule_name
+        FROM rule_classify_subtype r
+        WHERE r.enabled = true
+          AND (
+            SELECT COUNT(*) FROM stage_2_elements e
+            WHERE e.applied_rules->>'sub_type_rule_id' = r.id::text
+               OR e.applied_rules->>'sub_type_rule' = r.rule_name
+          ) = 0
+        ORDER BY r.priority, r.rule_name
+        """
+    )
+    names = [r[0] for r in cur.fetchall()]
+    cur.close()
+    return names, len(names)
 
 
 def run_six_w(sb, conn, *, batch_size: int, limit: int | None) -> dict[str, Any]:
@@ -417,7 +690,6 @@ def run_six_w(sb, conn, *, batch_size: int, limit: int | None) -> dict[str, Any]
                     sets[f] = ext[f]
             if not sets:
                 continue
-            # 동적 SET — 순서 고정
             ups.append(
                 (
                     sets.get("executor"),
@@ -616,12 +888,111 @@ def insert_verification_log(sb, metrics: dict[str, Any]) -> None:
     logger.info("verification_log inserted 6 rows")
 
 
+def insert_verification_log_phase21(sb, metrics: dict[str, Any], zero_names: list[str]) -> None:
+    """§6.8 Phase 2.1 verification_log."""
+    now = datetime.now(timezone.utc).isoformat()
+    zm_note = ",".join(zero_names[:12]) if zero_names else ""
+    rows = [
+        {
+            "stage": 2,
+            "check_name": "phase_2_1_classify_pct",
+            "check_type": "AUTO_HOOK",
+            "result_status": "PASS" if metrics["classified_pct"] >= 50 else "FAIL",
+            "expected_value": ">=50%",
+            "actual_value": f"{metrics['classified_pct']:.2f}%",
+            "threshold": "50",
+            "error_count": 0,
+            "error_examples": [],
+            "verified_at": now,
+            "verified_by": "Cursor_Phase_2_1_2026-05-10",
+            "notes": "Phase 2.1 분류율 (1차 목표)",
+        },
+        {
+            "stage": 2,
+            "check_name": "phase_2_1_sample_100",
+            "check_type": "AUTO_HOOK",
+            "result_status": "PASS" if metrics["sample100_pct"] >= 50 else "FAIL",
+            "expected_value": ">=50%",
+            "actual_value": f"{metrics['sample100_pct']:.2f}%",
+            "threshold": "50",
+            "error_count": 0,
+            "error_examples": [],
+            "verified_at": now,
+            "verified_by": "Cursor_Phase_2_1",
+            "notes": "100조문 sample",
+        },
+        {
+            "stage": 2,
+            "check_name": "phase_2_1_zero_match_rules",
+            "check_type": "AUTO_HOOK",
+            "result_status": "PASS" if metrics.get("zero_match_count", 0) == 0 else "FAIL",
+            "expected_value": "0 rules",
+            "actual_value": str(metrics.get("zero_match_count", 0)),
+            "threshold": "0",
+            "error_count": metrics.get("zero_match_count", 0),
+            "error_examples": zero_names[:20],
+            "verified_at": now,
+            "verified_by": "Cursor_Phase_2_1",
+            "notes": "0건 매칭 룰 수",
+        },
+        {
+            "stage": 2,
+            "check_name": "phase_2_1_six_w_executor",
+            "check_type": "AUTO_HOOK",
+            "result_status": "PASS" if metrics["six_w_executor_pct"] >= 50 else "FAIL",
+            "expected_value": ">=50%",
+            "actual_value": f"{metrics['six_w_executor_pct']:.2f}%",
+            "threshold": "50",
+            "error_count": 0,
+            "error_examples": [],
+            "verified_at": now,
+            "verified_by": "Cursor_Phase_2_1",
+            "notes": "6하 executor",
+        },
+        {
+            "stage": 1,
+            "check_name": "phase_2_1_tokenization_filled",
+            "check_type": "AUTO_HOOK",
+            "result_status": "PASS" if metrics["tokenization_null_pct"] <= 0.1 else "FAIL",
+            "expected_value": "<=0.1% NULL",
+            "actual_value": f"{metrics['tokenization_null_pct']:.4f}%",
+            "threshold": "99.9",
+            "error_count": 0,
+            "error_examples": [],
+            "verified_at": now,
+            "verified_by": "Cursor_Phase_2_1",
+            "notes": "tokenization_json 보전",
+        },
+        {
+            "stage": 2,
+            "check_name": "phase_2_1_phase1_preserved",
+            "check_type": "AUTO_HOOK",
+            "result_status": "PASS" if metrics.get("phase1_overwrites", 0) == 0 else "FAIL",
+            "expected_value": "0",
+            "actual_value": str(metrics.get("phase1_overwrites", 0)),
+            "threshold": "0",
+            "error_count": metrics.get("phase1_overwrites", 0),
+            "error_examples": [],
+            "verified_at": now,
+            "verified_by": "Cursor_Phase_2_1",
+            "notes": "Phase1 8209 보전",
+        },
+    ]
+    sb.table("verification_log").insert(rows).execute()
+    logger.info("verification_log Phase2.1 inserted 6 rows")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--only",
-        choices=("checks", "backup", "stage1", "stage2", "sixw", "verify", "log", "all"),
+        choices=("checks", "backup", "rules", "stage1", "stage2", "sixw", "verify", "log", "all"),
         default="all",
+    )
+    ap.add_argument(
+        "--phase21",
+        action="store_true",
+        help="Phase 2.1 모드 (명세 Cursor_Phase_2_1_Rule_Redesign_Spec.md)",
     )
     ap.add_argument("--limit", type=int, default=None, help="스모크: 각 단계 최대 row")
     ap.add_argument("--batch-stage1", type=int, default=1000)
@@ -632,6 +1003,75 @@ def main() -> int:
     sb = get_supabase()
     conn = pg_conn()
 
+    if args.phase21:
+        if args.only == "log":
+            m = run_verification_queries(conn)
+            zm, zc = count_zero_match_rules(conn)
+            m["zero_match_count"] = zc
+            m["zero_match_rule_names"] = zm
+            m["phase1_overwrites"] = verify_phase1_preserved_phase21(conn)
+            insert_verification_log_phase21(sb, m, zm)
+            conn.close()
+            return 0
+        if args.only in ("checks", "all"):
+            run_entry_checks_phase21(sb)
+        if args.only in ("backup", "all"):
+            run_backup_phase21(conn)
+        if args.only in ("rules", "all"):
+            apply_phase_21_rule_changes(conn)
+        rules = (
+            load_subtype_rules(sb, phase21=True)
+            if args.only in ("stage2", "all")
+            else []
+        )
+        if args.only in ("stage1", "all"):
+            run_stage1(sb, conn, batch_size=args.batch_stage1, limit=args.limit)
+        if args.only in ("stage2", "all"):
+            run_stage2_phase21(
+                conn, rules, batch_size=args.batch_stage2, limit=args.limit
+            )
+        if args.only in ("sixw", "all"):
+            run_six_w(sb, conn, batch_size=args.batch_sixw, limit=args.limit)
+        m: dict[str, Any] = {}
+        if args.only in ("verify", "log", "all"):
+            m = run_verification_queries(conn)
+            zm, zc = count_zero_match_rules(conn)
+            m["zero_match_count"] = zc
+            m["zero_match_rule_names"] = zm
+            m["phase1_overwrites"] = verify_phase1_preserved_phase21(conn)
+            logger.info("metrics: %s", json.dumps({k: v for k, v in m.items() if k != "zero_match_rule_names"}, ensure_ascii=False))
+            if zm:
+                logger.warning("zero_match rules (%s): %s", zc, zm[:15])
+
+        if args.only in ("log", "all"):
+            insert_verification_log_phase21(sb, m, m.get("zero_match_rule_names", []))
+
+        if args.only in ("verify", "all"):
+            if m.get("classified_pct", 0) < 50:
+                conn.close()
+                raise SystemExit(
+                    f"Phase2.1 분류율 {m['classified_pct']:.2f}% < 50% — 정지 (명세 §9)"
+                )
+            if m.get("tokenization_null_pct", 0) > 0.1:
+                conn.close()
+                raise SystemExit("tokenization_json NULL > 0.1% — 정지")
+            if m.get("row_s1") != EXPECTED_TOTAL or m.get("row_s2") != EXPECTED_TOTAL:
+                conn.close()
+                raise SystemExit("row 수 변동 — 정지")
+            if m.get("phase1_overwrites", 0) > 0:
+                conn.close()
+                raise SystemExit(
+                    f"Phase 1 분류 변동 {m['phase1_overwrites']}건 — 정지"
+                )
+            if m.get("zero_match_count", 0) >= 3:
+                conn.close()
+                raise SystemExit(
+                    f"0건 매칭 룰 {m['zero_match_count']}개 ≥ 3 — 정지 (명세 §9)"
+                )
+        conn.close()
+        return 0
+
+    # --- Phase 2.0 (기본) ---
     if args.only in ("checks", "all"):
         run_entry_checks(sb)
 
@@ -649,7 +1089,7 @@ def main() -> int:
     if args.only in ("sixw", "all"):
         run_six_w(sb, conn, batch_size=args.batch_sixw, limit=args.limit)
 
-    m: dict[str, Any] = {}
+    m = {}
     if args.only in ("verify", "log", "all"):
         m = run_verification_queries(conn)
         logger.info("metrics: %s", json.dumps(m, ensure_ascii=False))

@@ -33,6 +33,12 @@ def _form_match(actual: str, expected: str) -> bool:
     # 종결 어미에서 초성/종성 분해 차이
     if a.replace("\u11ab", "ㄴ") == e.replace("\u11ab", "ㄴ"):
         return True
+    # ᆫ다/EF vs ㄴ다/EF (호환 자모 ↔ conjoining)
+    if len(a) >= 2 and len(e) >= 2 and a[1:] == e[1:]:
+        if {a[0], e[0]} <= {"\u11ab", "ㄴ"}:
+            return True
+        if {a[0], e[0]} <= {"\u11af", "ㄹ"}:
+            return True
     if len(a) >= 2 and len(e) >= 2 and a[-2:] == e[-2:]:
         return True
     return False
