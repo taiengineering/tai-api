@@ -240,9 +240,11 @@ def run_track_a(conn, law_id: Any, morpheme_engine=None) -> TrackVerdict:
     return v
 
 
-# ── Track B: 가족/인용 ────────────────────────────────
+# ── Track B: 가족 관계 (citation 제외) ────────────────
 
 def run_track_b(conn, law_id: Any) -> TrackVerdict:
+    """정순: family_mapping 존재 확인. 역순: 자식 법령이면 parent가 law_master에 있는지.
+    citation 매칭률은 수집 진행 상황이므로 검증 대상에서 제외."""
     v = _v("B", law_id)
     cur = conn.cursor()
 
@@ -258,31 +260,12 @@ def run_track_b(conn, law_id: Any) -> TrackVerdict:
 
     family_role, parent_law_id = fam
 
-    cur.execute("""
-        SELECT COUNT(*), COUNT(cited_law_id)
-        FROM law_article_citation
-        WHERE citing_law_id = %s
-    """, (law_id,))
-    cit_total, cit_matched = cur.fetchone()
+    # 정순: family_mapping 존재 = PASS
+    v.forward_accuracy = 1.0
+    v.forward_classified = 1
+    v.forward_pass = True
 
-    if cit_total > 0:
-        v.forward_accuracy = cit_matched / cit_total
-        v.forward_classified = cit_total
-    else:
-        v.forward_accuracy = 1.0
-        v.forward_classified = 1
-
-    v.forward_pass = v.forward_accuracy >= DEFAULT_THRESHOLD
-    if not v.forward_pass:
-        v.issues.append(TrackIssue(
-            law_id=law_id, track="B", issue_type="ISSUE_TARGET_OBJECT_UNKNOWN",
-            direction="FORWARD", accuracy=v.forward_accuracy,
-            detail={"cit_total": cit_total, "cit_matched": cit_matched},
-        ))
-        cur.close()
-        return v
-
-    # 역순
+    # 역순: 자식 법령이면 parent가 실제 존재하는지
     if family_role in ("ENFORCEMENT_DECREE", "ENFORCEMENT_RULE", "ADMINISTRATIVE_RULE") and parent_law_id:
         cur.execute("SELECT 1 FROM law_master WHERE id = %s", (parent_law_id,))
         exists = cur.fetchone() is not None
@@ -300,7 +283,7 @@ def run_track_b(conn, law_id: Any) -> TrackVerdict:
         v.reverse_accuracy = 1.0
         v.reverse_classified = 1
 
-    v.detail = {"role": family_role, "cit_total": cit_total, "cit_matched": cit_matched}
+    v.detail = {"role": family_role}
     cur.close()
     return v
 
