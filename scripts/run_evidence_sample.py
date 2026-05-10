@@ -1,4 +1,7 @@
-"""증거 기반 파싱 샘플 v2 — 소방시설법 의무 조항.
+"""증거 기반 파싱 Stage 1 + Stage 2 통합 샘플.
+
+Stage 1: Evidence Token 추출 (원문 보전, span 기반)
+Stage 2: 정규화 (canonical token + family registry 매칭)
 
 실행:
   railway run python3 scripts/run_evidence_sample.py
@@ -12,6 +15,7 @@ logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(m
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.evidence_extractor import extract_evidence, save_result
+from engine.evidence_normalizer import load_registry, normalize_tokens, save_normalized
 
 
 def main():
@@ -24,7 +28,7 @@ def main():
     conn = psycopg2.connect(url)
     cur = conn.cursor()
 
-    # 소방시설 설치 및 관리에 관한 법률
+    # 소방시설법 20개 조항
     cur.execute("""
         SELECT lap.id::text, lap.part_text, la.article_no, la.article_title, lap.part_type
         FROM law_article_part lap
@@ -38,23 +42,6 @@ def main():
         LIMIT 20
     """)
     parts = cur.fetchall()
-
-    if not parts:
-        # fallback: 화학물질관리법
-        cur.execute("""
-            SELECT lap.id::text, lap.part_text, la.article_no, la.article_title, lap.part_type
-            FROM law_article_part lap
-            JOIN law_article la ON la.id = lap.article_id
-            JOIN law_master lm ON lm.id = la.law_id
-            WHERE lm.law_name LIKE '화학물질%%'
-              AND la.article_type = '조문'
-              AND lap.part_text IS NOT NULL AND lap.part_text != ''
-              AND la.article_no BETWEEN 5 AND 30
-            ORDER BY la.article_no, lap.sort_order
-            LIMIT 20
-        """)
-        parts = cur.fetchall()
-
     cur.close()
 
     if not parts:
@@ -62,62 +49,58 @@ def main():
         conn.close()
         sys.exit(1)
 
-    print(f"\n{'='*70}")
-    print(f"  증거 기반 파싱 v2 — {len(parts)}개 조항")
+    # Registry 로드
+    registry = load_registry(conn)
+    print(f"\n  📚 Registry: {len(registry)}개 canonical token 로드\n")
+
+    print(f"{'='*70}")
+    print(f"  Stage 1 + Stage 2 통합 — 소방시설법 {len(parts)}개 조항")
     print(f"{'='*70}\n")
 
-    total_tokens = 0
-    total_candidates = 0
-    total_issues = 0
-    pass_cnt = 0
-    unresolved_cnt = 0
+    s1_tokens = 0
+    s2_normalized = 0
+    s2_resolved = 0
+    s2_unresolved = 0
 
     for part_id, part_text, article_no, article_title, part_type in parts:
+        # ── Stage 1: 토큰 추출 ──
         result = extract_evidence(part_id, part_text)
-        saved = save_result(conn, result)
+        save_result(conn, result)
+        s1_tokens += len(result.tokens)
 
-        total_tokens += len(result.tokens)
-        total_candidates += len(result.candidates)
-        total_issues += len(result.issues)
-        if result.validation_status == "PASS":
-            pass_cnt += 1
-        elif result.validation_status == "UNRESOLVED":
-            unresolved_cnt += 1
+        # ── Stage 2: 정규화 ──
+        tok_dicts = [
+            {"id": None, "token_type": t.token_type, "value": t.value,
+             "span_start": t.span_start, "span_end": t.span_end}
+            for t in result.tokens
+        ]
+        normalized = normalize_tokens(conn, part_id, tok_dicts, registry)
+        save_normalized(conn, normalized)
+        s2_normalized += len(normalized)
+        s2_resolved += sum(1 for n in normalized if n.family_status == "CANDIDATE")
+        s2_unresolved += sum(1 for n in normalized if n.family_status == "UNRESOLVED")
 
+        # ── 출력 ──
         title = f"제{article_no}조 ({article_title})" if article_title else f"제{article_no}조"
         pt = f"[{part_type}]" if part_type else ""
-        text_preview = part_text[:80] + "..." if len(part_text) > 80 else part_text
+        text_preview = part_text[:70] + "..." if len(part_text) > 70 else part_text
 
         print(f"  📄 {title} {pt}")
         print(f"     원문: {text_preview}")
-        print(f"     토큰: {len(result.tokens)}건 | 후보: {len(result.candidates)}건 | 상태: {result.validation_status}")
+        print(f"     S1 토큰: {len(result.tokens)}건 | S2 정규화: {len(normalized)}건")
 
-        if result.tokens:
-            for tok in result.tokens[:6]:
-                print(f"       [{tok.token_type}] \"{tok.value}\" (span {tok.span_start}:{tok.span_end})")
-            if len(result.tokens) > 6:
-                print(f"       ... +{len(result.tokens) - 6}건")
-
-        if result.relations:
-            rel = result.relations[0]
-            parts_str = []
-            if rel.actor_candidate:
-                parts_str.append(f"주체={rel.actor_candidate}")
-            if rel.action_candidate:
-                parts_str.append(f"행위={rel.action_candidate}")
-            if rel.target_candidate:
-                parts_str.append(f"대상={rel.target_candidate}")
-            if rel.condition_candidate:
-                parts_str.append(f"조건={rel.condition_candidate}")
-            if rel.exception_candidate:
-                parts_str.append(f"예외={rel.exception_candidate}")
-            print(f"     관계후보: {' | '.join(parts_str)} [{rel.status}]")
+        if normalized:
+            for n in normalized:
+                family_str = f" → {n.family}" if n.family else ""
+                status_mark = "✅" if n.family_status == "CANDIDATE" else "❓"
+                print(f"       {status_mark} \"{n.raw_token}\" → canonical: \"{n.canonical_token}\"{family_str} [{n.family_status}]")
 
         print()
 
     print(f"{'='*70}")
-    print(f"  합계: 토큰 {total_tokens}건 | 후보 {total_candidates}건 | 이슈 {total_issues}건")
-    print(f"  PASS: {pass_cnt} | UNRESOLVED: {unresolved_cnt} | FAIL: {len(parts) - pass_cnt - unresolved_cnt}")
+    print(f"  Stage 1: 토큰 {s1_tokens}건")
+    print(f"  Stage 2: 정규화 {s2_normalized}건 (CANDIDATE: {s2_resolved} | UNRESOLVED: {s2_unresolved})")
+    print(f"  → evidence_token / evidence_normalized 저장 완료")
     print(f"{'='*70}\n")
 
     conn.close()
