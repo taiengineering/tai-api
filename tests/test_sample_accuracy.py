@@ -6,8 +6,11 @@ import pytest
 
 from engine.sample_accuracy import (
     CATEGORY_VERIFICATION_PATTERNS,
+    compute_law_reverse_verification,
     compute_stage2_sample_accuracy,
+    compute_subtype_group_accuracy,
     _verify_row,
+    _verify_row_reverse,
 )
 
 
@@ -18,6 +21,12 @@ class TestVerifyRow:
         assert _verify_row("OBLIGATION_HEADER", "관계 서류를 제출하여야 한다.") == "TP"
         assert _verify_row("OBLIGATION_HEADER", "준수해야 한다.") == "TP"
         assert _verify_row("OBLIGATION_HEADER", "의무가 있다.") == "TP"
+        assert _verify_row("OBLIGATION_HEADER", "법령을 지켜야 한다.") == "TP"
+        assert _verify_row("OBLIGATION_HEADER", "규정을 이행하여야 한다.") == "TP"
+
+    def test_verify_row_reverse_obligation(self) -> None:
+        text = "이 규정을 준수하여야 한다."
+        assert _verify_row_reverse("OBLIGATION_HEADER", text) == "TP"
 
     def test_authority_header_tp(self) -> None:
         assert _verify_row("AUTHORITY_HEADER", "명할 수 있다.") == "TP"
@@ -115,3 +124,61 @@ class TestComputeStage2SampleAccuracy:
         assert classified == 351
         expected = 315 / 351  # ≈ 0.8974358974358975
         assert abs(acc - expected) < 1e-9
+
+
+class TestPhase22V4Reverse:
+    """Phase 2.2 v4 역순 검증·subtype 그룹."""
+
+    def test_compute_law_reverse_verification_supabase_none(self) -> None:
+        ok, acc, n = compute_law_reverse_verification(None, "law-x")
+        assert ok is True
+        assert acc == 1.0
+        assert n == 0
+
+    def test_reverse_weak_only_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "engine.sample_accuracy.fetch_law_stage2_rows",
+            lambda sb, lid, **kw: [
+                {"id": "a", "sub_type": "WEAK_X", "source_text": "z"},
+            ],
+        )
+        ok, acc, n = compute_law_reverse_verification(object(), "lid")
+        assert ok is True
+        assert n == 1
+
+    def test_reverse_fp_triggers_not_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "engine.sample_accuracy.fetch_law_stage2_rows",
+            lambda sb, lid, **kw: [
+                {
+                    "id": "b",
+                    "sub_type": "OBLIGATION_HEADER",
+                    "source_text": "무의미한문장본문",
+                },
+            ],
+        )
+        ok, _, n = compute_law_reverse_verification(
+            object(),
+            "lid",
+            threshold=0.99,
+        )
+        assert n == 1
+        assert ok is False
+
+    def test_compute_subtype_group_accuracy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "engine.sample_accuracy._fetch_sample_rows",
+            lambda sb, **kw: [
+                {"sub_type": "AUTHORITY_HEADER", "source_text": "허가할 수 있다."},
+                {"sub_type": "AUTHORITY_HEADER", "source_text": "xxxx"},
+            ],
+        )
+        out = compute_subtype_group_accuracy(object(), law_id=None)
+        assert "AUTHORITY_HEADER" in out
+        assert out["AUTHORITY_HEADER"]["classified"] == 2
+        assert out["AUTHORITY_HEADER"]["fp"] == 1
+
+    def test_fetch_law_rows_empty_without_db(self) -> None:
+        from engine.sample_accuracy import fetch_law_stage2_rows
+
+        assert fetch_law_stage2_rows(None, "x") == []

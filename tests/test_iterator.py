@@ -520,3 +520,66 @@ def test_phase22_v3_regression_tp_variance_raises(monkeypatch):
         it._regression_check([9], only_stages=[2])
     assert ei.value.check.check_name == "phase22_v3_regression_tp_variance"
     assert ei.value.check.result_status == "FAIL"
+
+
+def test_process_single_law_reverse_then_pass(monkeypatch):
+    """정순 PASS 후 역순 실패 → 격리 → 차 회복 순 역순 PASS."""
+    calls = {"n": 0}
+
+    def rev(_sb, _lid, **kw):  # noqa: ANN001
+        calls["n"] += 1
+        return calls["n"] >= 2, 0.92, 20
+
+    monkeypatch.setattr("engine.iterator.compute_law_reverse_verification", rev)
+    monkeypatch.setattr(
+        Phase22V3Iterator,
+        "_isolate_failed_subtypes",
+        lambda self, lid: 2,
+    )
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = Phase22V3Iterator(pipeline, None, max_iterations_per_law=5)
+    lp = it._process_single_law("law-v4-a", only_stages=[2])
+    assert lp.final_status == "PASS"
+    assert lp.iterations_used == 2
+
+
+def test_reverse_fail_no_mark_pass_stable(monkeypatch):
+    """역순 계속 FAIL + 역순 FP 격리 0건 → PASS_STABLE (90c994c 본질)."""
+    monkeypatch.setattr(
+        "engine.iterator.compute_law_reverse_verification",
+        lambda sb, lid, **kw: (False, 0.5, 4),
+    )
+    monkeypatch.setattr(
+        Phase22V3Iterator,
+        "_isolate_failed_subtypes",
+        lambda self, lid: 0,
+    )
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = Phase22V3Iterator(pipeline, None, max_iterations_per_law=2)
+    lp = it._process_single_law("law-v4-b", only_stages=[2])
+    assert lp.final_status == "PASS_STABLE"
+    assert lp.iterations_used == 2
+
+
+def test_global_subtype_diagnostic_swallows_errors(monkeypatch):
+    monkeypatch.setattr(
+        "engine.iterator.compute_subtype_group_accuracy",
+        lambda **kw: (_ for _ in ()).throw(RuntimeError("diag")),
+    )
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = Phase22V3Iterator(pipeline, object())
+    it._log_global_subtype_diagnostic()

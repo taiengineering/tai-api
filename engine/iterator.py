@@ -1,4 +1,4 @@
-"""Pipeline Iterator — 법령 단위 순회 + Phase 2.2 v3 격리 반복."""
+"""Pipeline Iterator — 법령 단위 순회 + Phase 2.2 v3/v4 격리·역순 검증."""
 
 from __future__ import annotations
 
@@ -10,7 +10,13 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
 from engine.pipeline import PipelineHaltError, TAIExtractionPipeline
-from engine.sample_accuracy import compute_stage2_sample_accuracy, _verify_row
+from engine.sample_accuracy import (
+    compute_law_reverse_verification,
+    compute_stage2_sample_accuracy,
+    compute_subtype_group_accuracy,
+    _verify_row,
+    _verify_row_reverse,
+)
 from engine.validator import CheckResult
 
 if TYPE_CHECKING:
@@ -190,10 +196,11 @@ class PipelineIterator:
 
 @dataclass
 class LawProcessRun:
-    """단일 법령 처리 결과 (Phase 2.2 v3).
+    """단일 법령 처리 결과 (Phase 2.2 v3/v4).
 
     final_status: PASS | PASS_STABLE | FAIL_HALT
-    PASS_STABLE — 검증 미달이나 더 이상 FP 격리 변동 없음(안정 상태).
+    PASS — Pipeline 정순 통과 + 역순 검증(compute_law_reverse_verification) 통과.
+    PASS_STABLE — 격리 변동 0 안정 상태(v3 본질 보전).
     """
 
     law_id: Any
@@ -213,7 +220,7 @@ class Phase22V3IteratorRun:
 
 
 class Phase22V3Iterator:
-    """단일 법령 격리 분석 · 정정 반복 + 회귀 (Phase 2.2 v3)."""
+    """단일 법령 격리 분석 · 정순+역순 검증 · 회귀 (Phase 2.2 v3/v4)."""
 
     def __init__(
         self,
@@ -296,7 +303,6 @@ class Phase22V3Iterator:
                     isolation_mode=iso_mode,
                     exclude_isolated=excl,
                 )
-                return LawProcessRun(law_id, it, "PASS", total_marked)
             except PipelineHaltError as e:
                 chk = e.check
                 marked = self._isolate_fp_rows(law_id, chk)
@@ -317,6 +323,40 @@ class Phase22V3Iterator:
                     )
                     return LawProcessRun(law_id, it, "PASS_STABLE", total_marked)
                 prev_marked = total_marked
+                continue
+
+            rev_ok, rev_acc, rev_n = compute_law_reverse_verification(
+                self.supabase,
+                law_id,
+                exclude_isolated=excl,
+            )
+            logger.info(
+                "law_id=%s iteration=%s 역순 검증 ok=%s acc=%.4f classified=%s",
+                law_id,
+                it,
+                rev_ok,
+                rev_acc,
+                rev_n,
+            )
+            if rev_ok:
+                return LawProcessRun(law_id, it, "PASS", total_marked)
+
+            marked = self._isolate_failed_subtypes(law_id)
+            total_marked += marked
+            logger.info(
+                "law_id=%s iteration=%s 역순 FAIL — 역순 FP 격리 %s건",
+                law_id,
+                it,
+                marked,
+            )
+            if marked == 0 and total_marked == prev_marked:
+                logger.info(
+                    "law_id=%s iteration=%s 역순 후 격리 변동 0 — PASS_STABLE 처리",
+                    law_id,
+                    it,
+                )
+                return LawProcessRun(law_id, it, "PASS_STABLE", total_marked)
+            prev_marked = total_marked
 
         return LawProcessRun(
             law_id,
@@ -404,6 +444,94 @@ class Phase22V3Iterator:
                 if _verify_row(st, stext) != "FP":
                     continue
                 reason = isolation_reason_for_fp_subtype(st)
+                self.supabase.table("stage_2_elements").update(
+                    {
+                        "is_isolated": True,
+                        "isolation_reason": reason,
+                        "isolated_at": now,
+                    }
+                ).eq("id", elem["id"]).execute()
+                n += 1
+        return n
+
+    def _isolate_failed_subtypes(self, law_id: Any) -> int:
+        """역순 검증 FP 행만 격리 — sub_type 불변 (WARNING_LOW_ACCURACY)."""
+        url = os.environ.get("DATABASE_URL")
+        if url:
+            return self._isolate_failed_subtypes_psycopg2(url, law_id)
+        return self._isolate_failed_subtypes_supabase(law_id)
+
+    def _isolate_failed_subtypes_psycopg2(self, url: str, law_id: Any) -> int:
+        import psycopg2
+
+        n = 0
+        reason = "WARNING_LOW_ACCURACY"
+        conn = psycopg2.connect(url)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT s2.id, s2.sub_type, s1.source_text
+            FROM stage_2_elements s2
+            JOIN stage_1_clauses s1 ON s1.id = s2.clause_id
+            JOIN law_article_part lap ON lap.id = s1.part_id
+            JOIN law_article la ON la.id = lap.article_id
+            WHERE la.law_id = %s
+            """,
+            (law_id,),
+        )
+        now = datetime.now(timezone.utc)
+        for row in cur.fetchall():
+            eid, st, stext = row[0], row[1], row[2]
+            st_s = st or "UNCLASSIFIED"
+            stext_s = stext or ""
+            if _verify_row_reverse(st_s, stext_s) != "FP":
+                continue
+            cur.execute(
+                """
+                UPDATE stage_2_elements
+                SET is_isolated = true,
+                    isolation_reason = %s,
+                    isolated_at = %s
+                WHERE id = %s::uuid
+                  AND COALESCE(is_isolated, false) = false
+                """,
+                (reason, now, str(eid)),
+            )
+            n += cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+        return n
+
+    def _isolate_failed_subtypes_supabase(self, law_id: Any) -> int:
+        if self.supabase is None:
+            logger.warning("_isolate_failed_subtypes: supabase 없음")
+            return 0
+        from engine.clause_fetch import fetch_clauses_by_law_id
+
+        n = 0
+        reason = "WARNING_LOW_ACCURACY"
+        now = datetime.now(timezone.utc).isoformat()
+        clauses = fetch_clauses_by_law_id(self.supabase, law_id)
+        for cl in clauses:
+            cid = cl.get("id")
+            if not cid:
+                continue
+            res = (
+                self.supabase.table("stage_2_elements")
+                .select("id, sub_type, is_isolated")
+                .eq("clause_id", cid)
+                .execute()
+                .data
+                or []
+            )
+            stext = cl.get("source_text") or ""
+            for elem in res:
+                if elem.get("is_isolated") is True:
+                    continue
+                st = elem.get("sub_type") or "UNCLASSIFIED"
+                if _verify_row_reverse(st, stext) != "FP":
+                    continue
                 self.supabase.table("stage_2_elements").update(
                     {
                         "is_isolated": True,
@@ -552,3 +680,28 @@ class Phase22V3Iterator:
                     notes=f"sample_accuracy={accuracy:.4f}",
                 )
                 raise PipelineHaltError(stage2, chk)
+
+        self._log_global_subtype_diagnostic()
+
+    def _log_global_subtype_diagnostic(self) -> None:
+        """회귀 구간 전역 sub_type accuracy 진단 로그."""
+        if self.supabase is None:
+            return
+        try:
+            groups = compute_subtype_group_accuracy(
+                self.supabase,
+                law_id=None,
+                sample_articles=400,
+                exclude_isolated=True,
+            )
+            ranked = sorted(
+                groups.items(),
+                key=lambda kv: kv[1].get("accuracy", 1.0),
+            )[:15]
+            logger.info(
+                "regression global subtype diagnostic (low acc first): %s",
+                [(k, v.get("accuracy"), v.get("classified"), v.get("fp"))
+                 for k, v in ranked],
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("global subtype diagnostic 실패: %s", e)
