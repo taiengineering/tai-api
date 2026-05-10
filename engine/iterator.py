@@ -190,7 +190,11 @@ class PipelineIterator:
 
 @dataclass
 class LawProcessRun:
-    """단일 법령 처리 결과 (Phase 2.2 v3)."""
+    """단일 법령 처리 결과 (Phase 2.2 v3).
+
+    final_status: PASS | PASS_STABLE | FAIL_HALT
+    PASS_STABLE — 검증 미달이나 더 이상 FP 격리 변동 없음(안정 상태).
+    """
 
     law_id: Any
     iterations_used: int
@@ -239,14 +243,15 @@ class Phase22V3Iterator:
         for i, law_id in enumerate(law_ids):
             lp = self._process_single_law(law_id, only_stages=only_stages)
             run.law_results.append(lp)
-            if lp.final_status == "PASS":
+            if lp.final_status in ("PASS", "PASS_STABLE"):
                 passed_ids.append(law_id)
                 self._record_tp_baseline_if_missing(law_id)
                 logger.info(
-                    "[Phase22V3 %s/%s] law_id=%s PASS (it=%s)",
+                    "[Phase22V3 %s/%s] law_id=%s %s (it=%s)",
                     i + 1,
                     run.total_laws,
                     law_id,
+                    lp.final_status,
                     lp.iterations_used,
                 )
                 if (
@@ -279,6 +284,7 @@ class Phase22V3Iterator:
         only_stages: list[int] | None,
     ) -> LawProcessRun:
         total_marked = 0
+        prev_marked = -1
         for it in range(1, self.max_iterations_per_law + 1):
             iso_mode = it > 1
             excl = iso_mode
@@ -302,6 +308,15 @@ class Phase22V3Iterator:
                     chk.result_status,
                     marked,
                 )
+                # 안정 상태: 이번 격리 0건 + 누적 변동 없음 → 검증 미달이어도 진행 종료
+                if marked == 0 and total_marked == prev_marked:
+                    logger.info(
+                        "law_id=%s iteration=%s 격리 변동 0 (안정 상태) — PASS_STABLE 처리",
+                        law_id,
+                        it,
+                    )
+                    return LawProcessRun(law_id, it, "PASS_STABLE", total_marked)
+                prev_marked = total_marked
 
         return LawProcessRun(
             law_id,

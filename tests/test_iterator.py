@@ -365,7 +365,8 @@ def test_phase22_v3_fail_halt_after_max_iter(monkeypatch):
         "engine.iterator.fetch_law_ids_ordered",
         lambda _order: [7],
     )
-    monkeypatch.setattr(Phase22V3Iterator, "_isolate_fp_rows", lambda self, lid, c: 0)
+    # 매 반복 격리 1건씩 → 안정 상태(PASS_STABLE) 분기 미발동
+    monkeypatch.setattr(Phase22V3Iterator, "_isolate_fp_rows", lambda self, lid, c: 1)
 
     pipeline = TAIExtractionPipeline(
         stages=[MockLawAwareFailAtStage(fail_at=7)],
@@ -461,6 +462,43 @@ def test_phase22_v3_regression_skips_when_sample_under_30(monkeypatch):
     it = Phase22V3Iterator(pipeline, None, regression_window=10)
     it._regression_check([42], only_stages=[2])
     assert calls == []
+
+
+def test_stable_state_pass_after_no_marking_change(monkeypatch):
+    """격리 1건 후 연속 0건 마킹 → PASS_STABLE (WEAK-only·안정 상태)."""
+    stage = MockLawAwarePassStage()
+    chk = CheckResult(
+        stage=2,
+        check_name="sample_accuracy",
+        check_type="AUTO_HOOK",
+        result_status="FAIL",
+        expected_value=">=0.9",
+        actual_value="0.0",
+        threshold="0.9",
+    )
+
+    def always_halt(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise PipelineHaltError(stage, chk)
+
+    pipeline = TAIExtractionPipeline(
+        stages=[stage],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    monkeypatch.setattr(pipeline, "run", always_halt)
+
+    remaining = [1, 0]
+
+    def fake_iso(self, law_id, c):  # noqa: ANN001
+        return remaining.pop(0)
+
+    monkeypatch.setattr(Phase22V3Iterator, "_isolate_fp_rows", fake_iso)
+
+    it = Phase22V3Iterator(pipeline, None, max_iterations_per_law=5)
+    lp = it._process_single_law("d143d5a2-test", only_stages=[2])
+    assert lp.final_status == "PASS_STABLE"
+    assert lp.iterations_used == 2
+    assert lp.isolated_fp_marked == 1
 
 
 def test_phase22_v3_regression_tp_variance_raises(monkeypatch):
