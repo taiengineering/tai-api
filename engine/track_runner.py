@@ -160,7 +160,7 @@ def run_track_a(conn, law_id: Any, morpheme_engine=None) -> TrackVerdict:
     v = _v("A", law_id)
     cur = conn.cursor()
     cur.execute("""
-        SELECT lap.source_text FROM law_article_part lap
+        SELECT lap.part_text FROM law_article_part lap
         JOIN law_article la ON la.id = lap.article_id
         WHERE la.law_id = %s LIMIT 5000
     """, (law_id,))
@@ -246,7 +246,7 @@ def run_track_b(conn, law_id: Any) -> TrackVerdict:
     v = _v("B", law_id)
     cur = conn.cursor()
 
-    cur.execute("SELECT family_role, parent_law_id FROM law_family_mapping WHERE law_id = %s", (law_id,))
+    cur.execute("SELECT family_role, parent_law_id FROM law_family_mapping WHERE law_master_id = %s", (law_id,))
     fam = cur.fetchone()
     if not fam:
         v.issues.append(TrackIssue(
@@ -260,8 +260,8 @@ def run_track_b(conn, law_id: Any) -> TrackVerdict:
 
     cur.execute("""
         SELECT COUNT(*), COUNT(cited_law_id)
-        FROM law_article_citation c
-        JOIN law_article la ON la.id = c.article_id WHERE la.law_id = %s
+        FROM law_article_citation
+        WHERE citing_law_id = %s
     """, (law_id,))
     cit_total, cit_matched = cur.fetchone()
 
@@ -347,7 +347,12 @@ def run_track_c(conn, law_id: Any, morpheme_engine=None) -> TrackVerdict:
 def run_track_d(conn, law_id: Any) -> TrackVerdict:
     v = _v("D", law_id)
     cur = conn.cursor()
-    cur.execute("SELECT status, text_content FROM law_attachment WHERE law_id = %s", (law_id,))
+    cur.execute("""
+        SELECT la_att.extraction_verdict, la_att.attachment_text
+        FROM law_attachment la_att
+        JOIN law_version lv ON lv.id = la_att.law_version_id
+        WHERE lv.law_id = %s
+    """, (law_id,))
     rows = cur.fetchall()
     cur.close()
 
