@@ -1,4 +1,4 @@
-"""증거 기반 파싱 샘플 실행 — 산업안전보건법.
+"""증거 기반 파싱 샘플 v2 — 소방시설법 의무 조항.
 
 실행:
   railway run python3 scripts/run_evidence_sample.py
@@ -24,35 +24,53 @@ def main():
     conn = psycopg2.connect(url)
     cur = conn.cursor()
 
-    # 산업안전보건법에서 의무 조항이 있는 조문 15개
+    # 소방시설 설치 및 관리에 관한 법률
     cur.execute("""
         SELECT lap.id::text, lap.part_text, la.article_no, la.article_title, lap.part_type
         FROM law_article_part lap
         JOIN law_article la ON la.id = lap.article_id
         JOIN law_master lm ON lm.id = la.law_id
-        WHERE lm.law_name = '산업안전보건법'
+        WHERE lm.law_name LIKE '소방시설 설치%%'
           AND la.article_type = '조문'
-          AND lap.part_text IS NOT NULL
-          AND lap.part_text != ''
-          AND la.article_no BETWEEN 5 AND 40
+          AND lap.part_text IS NOT NULL AND lap.part_text != ''
+          AND la.article_no BETWEEN 5 AND 30
         ORDER BY la.article_no, lap.sort_order
-        LIMIT 15
+        LIMIT 20
     """)
     parts = cur.fetchall()
+
+    if not parts:
+        # fallback: 화학물질관리법
+        cur.execute("""
+            SELECT lap.id::text, lap.part_text, la.article_no, la.article_title, lap.part_type
+            FROM law_article_part lap
+            JOIN law_article la ON la.id = lap.article_id
+            JOIN law_master lm ON lm.id = la.law_id
+            WHERE lm.law_name LIKE '화학물질%%'
+              AND la.article_type = '조문'
+              AND lap.part_text IS NOT NULL AND lap.part_text != ''
+              AND la.article_no BETWEEN 5 AND 30
+            ORDER BY la.article_no, lap.sort_order
+            LIMIT 20
+        """)
+        parts = cur.fetchall()
+
     cur.close()
 
     if not parts:
-        print("❌ 산업안전보건법 데이터 없음")
+        print("❌ 대상 법령 데이터 없음")
         conn.close()
         sys.exit(1)
 
     print(f"\n{'='*70}")
-    print(f"  증거 기반 파싱 — 산업안전보건법 {len(parts)}개 조항")
+    print(f"  증거 기반 파싱 v2 — {len(parts)}개 조항")
     print(f"{'='*70}\n")
 
     total_tokens = 0
     total_candidates = 0
     total_issues = 0
+    pass_cnt = 0
+    unresolved_cnt = 0
 
     for part_id, part_text, article_no, article_title, part_type in parts:
         result = extract_evidence(part_id, part_text)
@@ -61,14 +79,18 @@ def main():
         total_tokens += len(result.tokens)
         total_candidates += len(result.candidates)
         total_issues += len(result.issues)
+        if result.validation_status == "PASS":
+            pass_cnt += 1
+        elif result.validation_status == "UNRESOLVED":
+            unresolved_cnt += 1
 
         title = f"제{article_no}조 ({article_title})" if article_title else f"제{article_no}조"
-        text_preview = part_text[:80] + "..." if len(part_text) > 80 else part_text
         pt = f"[{part_type}]" if part_type else ""
+        text_preview = part_text[:80] + "..." if len(part_text) > 80 else part_text
 
         print(f"  📄 {title} {pt}")
         print(f"     원문: {text_preview}")
-        print(f"     토큰: {len(result.tokens)}건 | 후보: {len(result.candidates)}건 | 이슈: {len(result.issues)}건 | 상태: {result.validation_status}")
+        print(f"     토큰: {len(result.tokens)}건 | 후보: {len(result.candidates)}건 | 상태: {result.validation_status}")
 
         if result.tokens:
             for tok in result.tokens[:6]:
@@ -83,17 +105,19 @@ def main():
                 parts_str.append(f"주체={rel.actor_candidate}")
             if rel.action_candidate:
                 parts_str.append(f"행위={rel.action_candidate}")
+            if rel.target_candidate:
+                parts_str.append(f"대상={rel.target_candidate}")
             if rel.condition_candidate:
                 parts_str.append(f"조건={rel.condition_candidate}")
             if rel.exception_candidate:
                 parts_str.append(f"예외={rel.exception_candidate}")
-            print(f"     관계후보: {' → '.join(parts_str)} [{rel.status}]")
+            print(f"     관계후보: {' | '.join(parts_str)} [{rel.status}]")
 
         print()
 
     print(f"{'='*70}")
     print(f"  합계: 토큰 {total_tokens}건 | 후보 {total_candidates}건 | 이슈 {total_issues}건")
-    print(f"  → DB 저장 완료")
+    print(f"  PASS: {pass_cnt} | UNRESOLVED: {unresolved_cnt} | FAIL: {len(parts) - pass_cnt - unresolved_cnt}")
     print(f"{'='*70}\n")
 
     conn.close()
