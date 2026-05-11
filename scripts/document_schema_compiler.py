@@ -21,7 +21,7 @@ try:
     from dotenv import load_dotenv; load_dotenv()
 except ImportError: pass
 
-SCRIPT_VERSION = "3.0.0"
+SCRIPT_VERSION = "3.1.0"
 KST = timezone(timedelta(hours=9))
 OUTPUT_DIR = Path("./form_originals_hwp/compiled")
 
@@ -255,8 +255,8 @@ def extract_all(parsed, doc_id, file_name, form_name, source_path):
                 elements.append({"element_id":f"EL-{el:04d}", "element_type":etype,
                     "raw_text":text[:500], "source_location":loc, "status":"EXTRACTED"})
 
-                # INSTRUCTION_TABLE에서는 필드 추출 스킵
-                if purpose == "INSTRUCTION_TABLE":
+                # 안내문 셀 자체만 스킵 (테이블 전체 스킵 금지)
+                if etype == "INSTRUCTION_TEXT" or etype == "DESCRIPTION_TEXT":
                     continue
 
                 # 번호 항목(①~⑳) → 무조건 필드 후보
@@ -267,14 +267,13 @@ def extract_all(parsed, doc_id, file_name, form_name, source_path):
                         "raw_label":text[:300], "canonical_field_candidate":canon,
                         "source_location":loc, "status":"CANDIDATE"})
 
-                # 일반 라벨 → 필드 후보
+                # 일반 라벨 → 무조건 필드 후보 (canonical은 보너스)
                 elif etype == "FIELD_LABEL":
-                    canon = find_canonical(text)
-                    if canon:
-                        fc += 1
-                        fields.append({"field_candidate_id":f"FC-{fc:03d}",
-                            "raw_label":text[:300], "canonical_field_candidate":canon,
-                            "source_location":loc, "status":"CANDIDATE"})
+                    fc += 1
+                    canon = find_canonical(text) or "unclassified_field"
+                    fields.append({"field_candidate_id":f"FC-{fc:03d}",
+                        "raw_label":text[:300], "canonical_field_candidate":canon,
+                        "source_location":loc, "status":"CANDIDATE"})
 
                 # 서명란, 날짜란, 비고란, 첨부란, 제출처 → 필드 + 증빙
                 elif etype in ("SIGNATURE_FIELD","DATE_FIELD","REMARKS_FIELD",
