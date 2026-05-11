@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """
-collect_form_templates_v2.py — 법제처 오픈API로 별지서식 HWP 자동 수집
+collect_form_templates_v2.py — DB raw_xml에서 별지서식 flSeq 추출 → HWP 다운로드
 
-법제처 DRF API의 '별표서식' 엔드포인트로 최신 bylSeq를 동적 조회한 뒤
-HWP 다운로드 → Supabase form-originals 버킷 업로드 → DB 업데이트.
-
-bylSeq가 법령 개정마다 변경되므로 하드코딩 URL 대신 API 동적 조회 사용.
+law_content_raw.raw_xml에 이미 최신 법령 XML이 저장되어 있고,
+그 안에 <별표단위> 블록의 <별표서식파일링크>/LSW/flDownload.do?flSeq=... 가 포함됨.
+외부 API 호출 없이 DB에서 직접 추출.
 
 실행:
   cd ~/Desktop/tai-engineering/tai-api
   railway run python3 scripts/collect_form_templates_v2.py --dry-run
   railway run python3 scripts/collect_form_templates_v2.py
 """
-import argparse, os, re, sys, time, xml.etree.ElementTree as ET
+import argparse, os, re, sys, time
 from pathlib import Path
 
 try:
@@ -24,15 +23,12 @@ except ImportError:
 import requests
 from supabase import create_client
 
-# ── env ──
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = (
     os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
     or os.environ.get("SUPABASE_KEY")
     or os.environ.get("SUPABASE_SERVICE_KEY")
 )
-LAW_OC = os.environ.get("LAW_API_OC", "taieng")
-
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("ERROR: SUPABASE_URL / SUPABASE_KEY 필요. railway run 으로 실행하세요.")
     sys.exit(1)
@@ -41,8 +37,9 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 BUCKET = "form-originals"
 DL_DIR = Path("./form_originals_hwp")
 HEADERS_SB = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+BASE_URL = "https://www.law.go.kr"
 
-# ── 대상 시행규칙 MST (law_master에서 조회한 값) ──
+# 대상 시행규칙 MST
 RULE_MST = {
     "산업안전보건법 시행규칙": "271485",
     "건설기술 진흥법 시행규칙": "279455",
@@ -61,44 +58,69 @@ RULE_MST = {
 }
 
 
-def fetch_bylaw_forms(mst: str) -> list[dict]:
-    """법제처 DRF API로 해당 법령의 별표서식 목록 조회 (bylSeq 포함)"""
-    url = "http://www.law.go.kr/DRF/lawService.do"
-    params = {"OC": LAW_OC, "target": "bylSc", "MST": mst, "type": "XML"}
-    try:
-        resp = requests.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-    except Exception as e:
-        print(f"    API 오류: {e}")
-        return []
-
+def extract_forms_from_xml(raw_xml: str) -> list[dict]:
+    """raw_xml에서 별표단위 블록을 파싱해 서식 정보 추출"""
     forms = []
-    try:
-        root = ET.fromstring(resp.content)
-        for item in root.iter("bylSc"):  # 또는 root.findall(".//bylSc")
-            seq = (item.findtext("bylSeq") or "").strip()
-            name = (item.findtext("bylNm") or item.findtext("서식명") or "").strip()
-            btype = (item.findtext("bylType") or item.findtext("구분") or "").strip()
-            if seq:
-                forms.append({"bylSeq": seq, "name": name, "type": btype})
-    except ET.ParseError:
-        # XML이 아닐 수 있음 — HTML 에러 페이지 등
-        print(f"    XML 파싱 실패. 응답 시작: {resp.text[:200]}")
+    # 별표단위 블록 추출 (CDATA 포함 가능하므로 non-greedy 대신 태그 기반)
+    blocks = re.split(r'<별표단위\s', raw_xml)
+    
+    for block in blocks[1:]:  # 첫 번째는 별표단위 앞 텍스트
+        # 별표구분 (별표 or 서식)
+        m_type = re.search(r'<별표구분>([^<\s]+)', block)
+        form_type = m_type.group(1).strip() if m_type else ""
+        
+        # 별표번호
+        m_no = re.search(r'<별표번호>(\d+)', block)
+        form_no = m_no.group(1) if m_no else ""
+        
+        # 별표가지번호
+        m_sub = re.search(r'<별표가지번호>(\d+)', block)
+        form_sub = m_sub.group(1) if m_sub else "00"
+        
+        # 별표제목 (CDATA 포함 가능)
+        m_title = re.search(r'<별표제목>\s*(?:<!\[CDATA\[(.+?)\]\]>|([^<]*))', block, re.DOTALL)
+        form_title = ""
+        if m_title:
+            form_title = (m_title.group(1) or m_title.group(2) or "").strip()
+        
+        # HWP 링크
+        m_hwp = re.search(r'<별표서식파일링크>\s*([^<\s]+)', block)
+        hwp_link = m_hwp.group(1).strip() if m_hwp else ""
+        
+        # PDF 링크
+        m_pdf = re.search(r'<별표서식PDF파일링크>\s*([^<\s]+)', block)
+        pdf_link = m_pdf.group(1).strip() if m_pdf else ""
+        
+        # flSeq 추출
+        fl_seq = ""
+        if hwp_link:
+            m_seq = re.search(r'flSeq=(\d+)', hwp_link)
+            fl_seq = m_seq.group(1) if m_seq else ""
+        
+        forms.append({
+            "type": form_type,
+            "no": form_no,
+            "sub": form_sub,
+            "title": form_title[:200],
+            "hwp_link": hwp_link,
+            "pdf_link": pdf_link,
+            "fl_seq": fl_seq,
+        })
+    
     return forms
 
 
-def download_hwp(bylseq: str, save_path: Path) -> bool:
-    """bylSeq로 HWP 다운로드"""
-    url = f"https://www.law.go.kr/LSW/bylFileP.do?bylSeq={bylseq}&fileType=hwp"
+def download_hwp(url: str, save_path: Path) -> bool:
     try:
-        resp = requests.get(url, timeout=30, allow_redirects=True,
+        full_url = url if url.startswith("http") else BASE_URL + url
+        resp = requests.get(full_url, timeout=30, allow_redirects=True,
                             headers={"User-Agent": "Mozilla/5.0 TAI-Bot"})
         resp.raise_for_status()
         size = len(resp.content)
         if size < 512:
             text = resp.content[:300].decode("utf-8", errors="ignore")
-            if "<html" in text.lower() or "에러" in text:
-                print(f"    ✗ HTML 에러 응답 ({size}b). 스킵.")
+            if "<html" in text.lower():
+                print(f"    ✗ HTML 에러 ({size}b)")
                 return False
         save_path.parent.mkdir(parents=True, exist_ok=True)
         save_path.write_bytes(resp.content)
@@ -110,7 +132,6 @@ def download_hwp(bylseq: str, save_path: Path) -> bool:
 
 
 def upload_storage(local: Path, path: str) -> bool:
-    """Supabase Storage 업로드"""
     url = f"{SUPABASE_URL}/storage/v1/object/{BUCKET}/{path}"
     data = local.read_bytes()
     resp = requests.post(url, headers={**HEADERS_SB, "Content-Type": "application/x-hwp",
@@ -122,130 +143,137 @@ def upload_storage(local: Path, path: str) -> bool:
     return False
 
 
-def update_form_templates(bylseq_old: str, bylseq_new: str, storage_path: str):
-    """form_templates 테이블의 bylseq, hwp_url, original_storage_path 업데이트"""
-    new_url = f"https://www.law.go.kr/LSW/bylFileP.do?bylSeq={bylseq_new}&fileType=hwp"
-    sb.table("form_templates").update({
-        "bylseq": bylseq_new,
-        "hwp_url": new_url,
-        "original_storage_path": storage_path,
-    }).eq("bylseq", bylseq_old).execute()
-
-
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dry-run", action="store_true", help="API 조회만, 다운로드 안 함")
-    ap.add_argument("--law", type=str, default=None, help="특정 법령만 (예: 산업안전보건법)")
-    ap.add_argument("--all-forms", action="store_true", help="form_templates 11건 외에 전체 서식도 수집")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--law", type=str, default=None, help="특정 법령만")
     args = ap.parse_args()
 
     print("=" * 70)
-    print("  법정서식 HWP 수집기 v2 (법제처 DRF API 동적 조회)")
+    print("  법정서식 HWP 수집기 v2 (DB raw_xml 파싱)")
     print("=" * 70)
 
-    # 1. form_templates의 기존 bylSeq 로드 (매칭용)
-    ft_resp = sb.table("form_templates").select("form_code,form_name,bylseq,original_storage_path").execute()
-    ft_map = {r["bylseq"]: r for r in (ft_resp.data or []) if r.get("bylseq")}
-    print(f"\n  form_templates: {len(ft_map)}건 (기존 bylSeq 매칭 대상)")
+    # 1. form_templates 로드
+    ft_resp = sb.table("form_templates").select("*").execute()
+    ft_list = ft_resp.data or []
+    print(f"\n  form_templates: {len(ft_list)}건")
 
-    stats = {"api_ok": 0, "api_fail": 0, "forms_found": 0, "matched": 0,
-             "dl_ok": 0, "dl_fail": 0, "up_ok": 0, "skip": 0}
+    stats = {"laws": 0, "forms_total": 0, "forms_sik": 0, "matched": 0,
+             "dl_ok": 0, "dl_fail": 0, "up_ok": 0}
 
-    # 2. 법령별 API 조회
-    targets = RULE_MST.items()
-    if args.law:
-        targets = [(k, v) for k, v in RULE_MST.items() if args.law in k]
+    all_forms = []  # 전체 서식 CSV용
 
-    all_forms = []  # (법령명, bylSeq, 서식명, type) 수집
-
-    for law_name, mst in targets:
-        print(f"\n[{law_name}] MST={mst}")
-        forms = fetch_bylaw_forms(mst)
-        if not forms:
-            stats["api_fail"] += 1
+    # 2. 법령별 raw_xml에서 서식 추출
+    for law_name, mst in RULE_MST.items():
+        if args.law and args.law not in law_name:
             continue
-        stats["api_ok"] += 1
 
-        # 서식만 필터 (별표 제외, 또는 전부 포함)
-        form_items = [f for f in forms if "서식" in f.get("type", "") or "서식" in f.get("name", "")]
-        if not form_items:
-            form_items = forms  # 서식 구분 안 되면 전체
+        # DB에서 raw_xml 조회
+        result = sb.rpc("", {}).execute()  # dummy - use SQL instead
+        # PostgREST로 raw_xml 가져오기
+        lm = sb.table("law_master").select("id,current_version_id").eq("law_mst_no", mst).limit(1).execute()
+        if not lm.data:
+            print(f"\n[{law_name}] law_master에 없음. 스킵.")
+            continue
+        
+        vid = lm.data[0]["current_version_id"]
+        if not vid:
+            print(f"\n[{law_name}] current_version_id 없음. 스킵.")
+            continue
+        
+        raw = sb.table("law_content_raw").select("raw_xml").eq("law_version_id", vid).limit(1).execute()
+        if not raw.data or not raw.data[0].get("raw_xml"):
+            print(f"\n[{law_name}] raw_xml 없음. 스킵.")
+            continue
 
-        stats["forms_found"] += len(form_items)
-        print(f"  → 서식 {len(form_items)}건 발견")
+        raw_xml = raw.data[0]["raw_xml"]
+        forms = extract_forms_from_xml(raw_xml)
+        stats["laws"] += 1
+        stats["forms_total"] += len(forms)
+        
+        sik_forms = [f for f in forms if f["type"] == "서식"]
+        byul_forms = [f for f in forms if f["type"] == "별표"]
+        stats["forms_sik"] += len(sik_forms)
+        
+        print(f"\n[{law_name}] 별표 {len(byul_forms)}건 + 서식 {len(sik_forms)}건 = {len(forms)}건")
+        
+        for f in forms:
+            all_forms.append({
+                "law_name": law_name,
+                "mst": mst,
+                **f,
+            })
 
-        for f in form_items:
-            seq = f["bylSeq"]
-            name = f["name"]
-            ftype = f.get("type", "")
-            all_forms.append((law_name, seq, name, ftype))
-
-            # form_templates 매칭 체크 (서식명 유사도)
-            matched_ft = None
-            for old_seq, ft in ft_map.items():
-                # 이름 부분 매칭
+        # 서식만 출력
+        for f in sik_forms:
+            no_str = f"제{int(f['no'])}호" if f["no"] else ""
+            sub_str = f"의{int(f['sub'])}" if f["sub"] and f["sub"] != "00" else ""
+            title = f["title"] or "(제목없음)"
+            print(f"  서식 {no_str}{sub_str}: {title}")
+            print(f"    HWP: {f['hwp_link']}")
+            
+            # form_templates 매칭 시도
+            for ft in ft_list:
                 ft_name = ft.get("form_name", "")
-                if ft_name and (ft_name in name or name in ft_name):
-                    matched_ft = ft
+                if ft_name and (ft_name in title or title in ft_name):
+                    fc = ft["form_code"]
+                    print(f"    ★ 매칭: → {fc}")
+                    stats["matched"] += 1
+                    
+                    if args.dry_run:
+                        continue
+                    
+                    if ft.get("original_storage_path"):
+                        print(f"    이미 완료. 스킵.")
+                        continue
+                    
+                    # 다운로드
+                    local = DL_DIR / f"{fc}.hwp"
+                    if not download_hwp(f["hwp_link"], local):
+                        stats["dl_fail"] += 1
+                        continue
+                    stats["dl_ok"] += 1
+                    
+                    # 업로드
+                    sp = f"{fc}/{fc}.hwp"
+                    if not upload_storage(local, sp):
+                        continue
+                    stats["up_ok"] += 1
+                    
+                    # DB 업데이트
+                    new_url = f"{BASE_URL}{f['hwp_link']}"
+                    sb.table("form_templates").update({
+                        "hwp_url": new_url,
+                        "original_storage_path": sp,
+                    }).eq("id", ft["id"]).execute()
+                    print(f"    ✓ DB 업데이트")
                     break
 
-            if matched_ft:
-                stats["matched"] += 1
-                old_seq = matched_ft["bylseq"]
-                fc = matched_ft["form_code"]
-                print(f"  ★ 매칭: {name} → {fc} (old={old_seq} → new={seq})")
+        time.sleep(0.3)
 
-                if args.dry_run:
-                    continue
-
-                if matched_ft.get("original_storage_path"):
-                    print(f"    이미 업로드됨. 스킵.")
-                    stats["skip"] += 1
-                    continue
-
-                # 다운로드
-                local = DL_DIR / f"{fc}.hwp"
-                if not download_hwp(seq, local):
-                    stats["dl_fail"] += 1
-                    continue
-                stats["dl_ok"] += 1
-
-                # 업로드
-                sp = f"{fc}/{fc}.hwp"
-                if not upload_storage(local, sp):
-                    continue
-                stats["up_ok"] += 1
-
-                # DB 업데이트
-                update_form_templates(old_seq, seq, sp)
-                print(f"    ✓ DB 업데이트 완료")
-            else:
-                if args.all_forms:
-                    print(f"  ○ 미매칭 서식: [{ftype}] {name} (bylSeq={seq})")
-
-        time.sleep(0.5)  # API 부하 방지
-
-    # 3. 결과 출력
-    print("\n" + "=" * 70)
-    print("  수집 결과")
-    print("=" * 70)
-    print(f"  API 조회: {stats['api_ok']} 성공 / {stats['api_fail']} 실패")
-    print(f"  서식 발견: {stats['forms_found']}건")
-    print(f"  form_templates 매칭: {stats['matched']}건 / {len(ft_map)}건")
-    if not args.dry_run:
-        print(f"  다운로드: {stats['dl_ok']} 성공 / {stats['dl_fail']} 실패")
-        print(f"  업로드: {stats['up_ok']} 성공")
-        print(f"  스킵(이미완료): {stats['skip']}건")
-
-    # 4. 전체 서식 목록 CSV 저장 (다른 260건 매핑용)
+    # 3. CSV 저장
     csv_path = DL_DIR / "all_bylaw_forms.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     with open(csv_path, "w", encoding="utf-8") as cf:
-        cf.write("law_name,bylSeq,form_name,form_type\n")
-        for law, seq, name, ftype in all_forms:
-            cf.write(f'"{law}",{seq},"{name}","{ftype}"\n')
-    print(f"\n  전체 서식 목록 CSV: {csv_path} ({len(all_forms)}건)")
-    print("  → 이 CSV로 document_forms 260건과 매칭 가능")
+        cf.write("law_name,mst,type,no,sub,title,hwp_link,pdf_link,fl_seq\n")
+        for f in all_forms:
+            title = f.get("title", "").replace('"', "'")
+            law = f.get("law_name", "").replace('"', "'")
+            cf.write(f'"{law}",{f["mst"]},{f["type"]},{f["no"]},{f["sub"]},')
+            cf.write(f'"{title}",{f.get("hwp_link","")},{f.get("pdf_link","")},{f.get("fl_seq","")}\n')
+
+    # 4. 결과
+    print("\n" + "=" * 70)
+    print("  수집 결과")
+    print("=" * 70)
+    print(f"  법령 처리: {stats['laws']}건")
+    print(f"  전체 별표+서식: {stats['forms_total']}건")
+    print(f"  서식만: {stats['forms_sik']}건")
+    print(f"  form_templates 매칭: {stats['matched']}건 / {len(ft_list)}건")
+    if not args.dry_run:
+        print(f"  다운로드: {stats['dl_ok']} 성공 / {stats['dl_fail']} 실패")
+        print(f"  업로드: {stats['up_ok']} 성공")
+    print(f"\n  전체 서식 CSV: {csv_path} ({len(all_forms)}건)")
     print("=" * 70)
 
 
