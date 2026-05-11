@@ -11,7 +11,6 @@
 import logging, os, sys, time
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 
-# [4단계] Abstract Pattern 탐지 대상
 ABSTRACT_PATTERNS = [
     ("필요한 조치",   "ABSTRACT_REQUIREMENT"),
     ("필요한 경우",   "ABSTRACT_REQUIREMENT"),
@@ -89,9 +88,8 @@ CREATE TABLE IF NOT EXISTS residual_issue (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_rc_part ON residual_candidate(part_id);
-CREATE INDEX IF NOT EXISTS idx_rc_type ON residual_candidate(residual_type);
-CREATE INDEX IF NOT EXISTS idx_rc_status ON residual_candidate(status);
+CREATE INDEX IF NOT EXISTS idx_resc_part ON residual_candidate(part_id);
+CREATE INDEX IF NOT EXISTS idx_resc_type ON residual_candidate(residual_type);
 CREATE INDEX IF NOT EXISTS idx_rap_part ON residual_abstract_pattern(part_id);
 CREATE INDEX IF NOT EXISTS idx_rcov_law ON residual_coverage(law_id);
 CREATE INDEX IF NOT EXISTS idx_rrc_pattern ON residual_registry_candidate(pattern_text);
@@ -127,14 +125,12 @@ def main():
 
     start = time.time()
 
-    # ================================================
     # [1단계] Residual 대상 식별
-    # ================================================
     print(f"\n{'─'*64}")
     print("  [1단계] Residual 대상 식별")
     print(f"{'─'*64}")
 
-    # (A) Token 없는 Part = STRUCTURAL_PARSE_FAILURE
+    # (A) Token 없는 Part
     cur.execute("""
         INSERT INTO residual_candidate
             (part_id, article_id, law_id, residual_type, failed_reason,
@@ -156,23 +152,22 @@ def main():
     conn.commit()
     print(f"    Token 없는 Part: {no_token:,}건")
 
-    # (B) UNKNOWN Family 토큰 = REGISTRY_GAP
+    # (B) UNKNOWN Family Part — family_candidate.part_id 기반
     cur.execute("""
         INSERT INTO residual_candidate
             (part_id, article_id, law_id, residual_type, failed_reason,
              source_text, source_text_length, status)
-        SELECT DISTINCT et.part_id, la.id, la.law_id,
+        SELECT DISTINCT fc.part_id, la.id, la.law_id,
                'REGISTRY_GAP',
                'NO_ACTION_FAMILY_MATCH',
-               left(et.raw_token, 200),
-               length(et.raw_token),
+               left(fc.raw_token, 200),
+               length(fc.raw_token),
                'NEW'
-        FROM evidence_token et
-        JOIN family_candidate fc ON et.id = fc.evidence_token_id
-        JOIN law_article_part lap ON et.part_id = lap.id
+        FROM family_candidate fc
+        JOIN law_article_part lap ON fc.part_id = lap.id
         JOIN law_article la ON lap.article_id = la.id
         WHERE fc.family_name = 'UNKNOWN'
-        AND et.part_id NOT IN (
+        AND fc.part_id NOT IN (
             SELECT part_id FROM residual_candidate WHERE residual_type = 'STRUCTURAL_PARSE_FAILURE'
         )
     """)
@@ -180,7 +175,7 @@ def main():
     conn.commit()
     print(f"    UNKNOWN Family Part: {registry_gap:,}건")
 
-    # (C) UNRESOLVED Constraint Node
+    # (C) UNKNOWN Constraint Node
     cur.execute("""
         INSERT INTO residual_candidate
             (part_id, article_id, law_id, residual_type, failed_reason,
@@ -207,9 +202,7 @@ def main():
     total_res = cur.fetchone()[0]
     print(f"    ✅ Residual Candidate 총: {total_res:,}건")
 
-    # ================================================
-    # [4단계] Abstract Pattern 탐지
-    # ================================================
+    # [4단계] Abstract Pattern
     print(f"\n{'─'*64}")
     print("  [4단계] Abstract Pattern 탐지")
     print(f"{'─'*64}")
@@ -237,14 +230,11 @@ def main():
         conn.commit()
     print(f"    ✅ Abstract Pattern: {len(abstract_rows):,}건")
 
-    # Pattern별 분포
     cur.execute("SELECT pattern_text, count(*) FROM residual_abstract_pattern GROUP BY pattern_text ORDER BY count(*) DESC")
     for r in cur.fetchall():
         print(f"      {r[0]:25s} {r[1]:>6,}")
 
-    # ================================================
     # [7단계] Coverage Metric
-    # ================================================
     print(f"\n{'─'*64}")
     print("  [7단계] Coverage Metric")
     print(f"{'─'*64}")
@@ -256,13 +246,13 @@ def main():
              residual_text_length, text_coverage_ratio)
         SELECT
             la.law_id, lm.law_name_short,
-            count(lap.id) as total,
+            count(lap.id),
             count(lap.id) FILTER (WHERE EXISTS (
                 SELECT 1 FROM evidence_token et WHERE et.part_id = lap.id
-            )) as parsed,
+            )),
             count(lap.id) FILTER (WHERE NOT EXISTS (
                 SELECT 1 FROM evidence_token et WHERE et.part_id = lap.id
-            )) as residual,
+            )),
             CASE WHEN count(lap.id) > 0
                 THEN count(lap.id) FILTER (WHERE EXISTS (
                     SELECT 1 FROM evidence_token et WHERE et.part_id = lap.id
@@ -301,9 +291,7 @@ def main():
     print(f"    Part Coverage: avg={avg_cov}, min={min_cov}, max={max_cov}")
     print(f"    Text Coverage: avg={avg_txt}")
 
-    # ================================================
-    # [9~10단계] Pattern Mining + Registry Expansion
-    # ================================================
+    # [9~10단계] Registry Expansion
     print(f"\n{'─'*64}")
     print("  [9~10단계] Pattern Mining & Registry Expansion Candidate")
     print(f"{'─'*64}")
@@ -333,9 +321,7 @@ def main():
     for r in cur.fetchall():
         print(f"      {r[0]:25s} {r[1]:>6,}회")
 
-    # ================================================
     # [15단계] Validation
-    # ================================================
     print(f"\n{'─'*64}")
     print("  [15단계] Validation")
     print(f"{'─'*64}")
@@ -345,16 +331,15 @@ def main():
     for r in cur.fetchall():
         print(f"    {r[0]:30s} {r[1]:>8,}")
 
-    print(f"\n    원문 보존: ✅ (source_text 전건 저장)")
-    print(f"    실패 원인 기록: ✅ (failed_reason 전건)")
+    print(f"\n    원문 보존: ✅")
+    print(f"    실패 원인 기록: ✅")
     print(f"    의미 보정: 없음 ✅")
-    print(f"    registry 자동 확장: 없음 ✅ (NEEDS_HUMAN_REVIEW)")
+    print(f"    registry 자동 확장: 없음 ✅")
     print(f"    추상 표현 구체화: 없음 ✅")
     print(f"    UNKNOWN 유지: ✅")
     print(f"    coverage 계산: ✅")
     print(f"    Candidate→Truth: 없음 ✅")
 
-    # 최종
     cur.execute("SELECT count(*) FROM residual_candidate")
     t1 = cur.fetchone()[0]
     cur.execute("SELECT count(*) FROM residual_abstract_pattern")
