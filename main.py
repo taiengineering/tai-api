@@ -1,30 +1,22 @@
-# main.py — v5.39.0
+# main.py — v5.40.0
+# v5.40.0: 법령진단서비스 + SaaS 반복설정 분리 (diagnosis_engine + saas_setup)
 # v5.39.0: Compiler Core + Residual Intelligence + Admin Review 라우터 등록 (법령엔진 v3.0 Deterministic)
 # v5.38.0: admin_inquiries 라우터 등록 (GET/POST/PATCH /admin/inquiries) — Phase 4 통합 인박스
 # v5.37.0: internal_inbox 라우터 등록 (POST /internal/inbox/notify) — Phase 3 인박스 슬랙 알림
 # v5.36.0: pw_reset 라우터 등록 (POST /auth/pw-reset/request, /auth/pw-reset/confirm)
-# v5.35.0: payment_billing 라우터 등록 (POST /payments/inicis/billing/*, /payments/subscriptions/{id}/cancel)
-# v5.34.0: Sentry 복원 + /health 개선 (항상 200 반환) + diagram_proxy 복원
-# v5.33.0: Sentry 에러 모니터링 (SENTRY_DSN 환경 변수 시 초기화)
-# v5.32.0: diagram_proxy 라우터 등록 (GET /api/v1/diagrams/{number}) — Supabase Storage 한글 SVG 우회
-# v5.31.1: diagnosis_proposal 라우터 등록 (GET /diagnosis/proposal-pdf/{public_token})
-# v5.31.0: diagnosis_report 라우터 등록 (GET /diagnosis/report-pdf/{public_token})
-# v5.30.0: diagnosis_integrated 라우터 등록 (BE-10 진단통합 백엔드)
+# v5.35.0: payment_billing 라우터 등록
+# v5.34.0: Sentry 복원 + /health 개선
 import os
 import sentry_sdk
 
 _sentry_dsn = os.getenv("SENTRY_DSN", "")
 if _sentry_dsn:
-    sentry_sdk.init(
-        dsn=_sentry_dsn,
-        traces_sample_rate=0.1,
-        environment="production",
-    )
+    sentry_sdk.init(dsn=_sentry_dsn, traces_sample_rate=0.1, environment="production")
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import services.health_probes  # noqa: F401  # register infra health probes (import side effects)
+import services.health_probes  # noqa: F401
 
 from routers.auth                    import router as auth_router
 from routers.users                   import router as users_router
@@ -102,7 +94,7 @@ from routers.safety_meetings         import router as safety_meetings_router
 from routers.risk_assessments        import router as risk_assessments_router
 from routers.payment                 import router as payment_router
 from routers.payment_ops             import router as payment_ops_router
-from routers.payment_billing         import router as payment_billing_router   # v5.35.0 정기결제
+from routers.payment_billing         import router as payment_billing_router
 from routers.corrective_actions      import router as corrective_actions_router
 from routers.messaging               import router as messaging_router
 from routers.fcm                     import router as fcm_router
@@ -129,22 +121,23 @@ from routers.diagnosis_roi           import router as diagnosis_roi_router
 from routers.diagnosis_transform     import router as diagnosis_transform_router
 from routers.overdue_checker         import router as overdue_checker_router
 from routers.diagnosis_plan_recommend import router as plan_recommend_router
-from routers.diagnosis_integrated    import router as diagnosis_integrated_router   # v5.30.0
-from routers.diagnosis_report        import router as diagnosis_report_router        # v5.31.0
-from routers.diagnosis_proposal      import router as diagnosis_proposal_router      # v5.31.1
-from routers.diagram_proxy           import router as diagram_proxy_router           # v5.32.0
-from routers.pw_reset                import router as pw_reset_router                # v5.36.0 비밀번호재설정
-from routers.internal_inbox          import router as internal_inbox_router            # v5.37.0 인박스 슬랙 알림
-from routers.admin_inquiries         import router as admin_inquiries_router            # v5.38.0 Phase 4 인박스 API
-# v5.39.0 법령엔진 v3.0 Deterministic Compiler Core
+from routers.diagnosis_integrated    import router as diagnosis_integrated_router
+from routers.diagnosis_report        import router as diagnosis_report_router
+from routers.diagnosis_proposal      import router as diagnosis_proposal_router
+from routers.diagram_proxy           import router as diagram_proxy_router
+from routers.pw_reset                import router as pw_reset_router
+from routers.internal_inbox          import router as internal_inbox_router
+from routers.admin_inquiries         import router as admin_inquiries_router
+# v5.39.0 법령엔진 v3.0
 from routers.compiler_core           import router as compiler_core_router
 from routers.residual_intelligence   import router as ri_router
 from routers.admin_review            import router as admin_review_router
+# v5.40.0 법령진단서비스 / SaaS 반복설정
+from routers.diagnosis_engine        import router as diagnosis_engine_router
+from routers.saas_setup              import router as saas_setup_router
 
 logger = logging.getLogger(__name__)
-
-APP_VERSION = "5.39.0"
-
+APP_VERSION = "5.40.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -159,158 +152,72 @@ async def lifespan(app: FastAPI):
         from scheduler import scheduler
         if scheduler.running:
             scheduler.shutdown(wait=False)
-            logger.info("[SHUTDOWN] APScheduler 종료")
     except Exception:
         pass
 
-
-app = FastAPI(
-    title="TAI API",
-    version=APP_VERSION,
-    description="TAI 산업안전 플랫폼 API",
-    lifespan=lifespan,
-)
+app = FastAPI(title="TAI API", version=APP_VERSION, description="TAI 산업안전 플랫폼 API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://taieng.co.kr",
-        "https://www.taieng.co.kr",
-        "https://new.taieng.co.kr",
-        "https://admin.taieng.co.kr",
-        "https://tadmin.taieng.co.kr",
-        "https://safe.taieng.co.kr",
-        "http://localhost:5500",
-        "http://127.0.0.1:5500",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
+        "https://taieng.co.kr","https://www.taieng.co.kr","https://new.taieng.co.kr",
+        "https://admin.taieng.co.kr","https://tadmin.taieng.co.kr","https://safe.taieng.co.kr",
+        "http://localhost:5500","http://127.0.0.1:5500","http://localhost:3000","http://127.0.0.1:3000",
     ],
     allow_origin_regex=r"https://([a-z0-9-]+\.)*taieng\.co\.kr",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
 # 공개 엔드포인트
-app.include_router(public_router)
-app.include_router(health_router)
-app.include_router(public_admin_router)
-app.include_router(alert_messages_router)
-app.include_router(feature_flags_router)
-app.include_router(site_public_router)
-app.include_router(site_faq_admin_router)
-app.include_router(admin_inquiries_router)
-app.include_router(anonymous_diagnosis_router)
-app.include_router(public_pricing_router)
-app.include_router(connect_registration_router)
-app.include_router(admin_connect_router)
-app.include_router(admin_pricing_router)
-app.include_router(fix_providers_router)
-app.include_router(diagnosis_fields_router)
-app.include_router(fix_chat_router)
-app.include_router(diagnosis_autofill_router)
-app.include_router(plan_recommend_router)
-app.include_router(diagnosis_integrated_router)
-app.include_router(diagnosis_report_router)
-app.include_router(diagnosis_proposal_router)
-app.include_router(diagram_proxy_router)
+for r in [public_router, health_router, public_admin_router, alert_messages_router, feature_flags_router,
+          site_public_router, site_faq_admin_router, admin_inquiries_router, anonymous_diagnosis_router,
+          public_pricing_router, connect_registration_router, admin_connect_router, admin_pricing_router,
+          fix_providers_router, diagnosis_fields_router, fix_chat_router, diagnosis_autofill_router,
+          plan_recommend_router, diagnosis_integrated_router, diagnosis_report_router,
+          diagnosis_proposal_router, diagram_proxy_router]:
+    app.include_router(r)
 
 # 인증 필요 엔드포인트
-app.include_router(auth_router)
-app.include_router(pw_reset_router)
-app.include_router(users_router)
-app.include_router(companies_router)
-app.include_router(factories_router)
-app.include_router(system_codes_router)
-app.include_router(legal_engine_router)
-app.include_router(legal_engine_patch_router)
-app.include_router(engine_qa_router)
-app.include_router(law_rule_generator_router)
-app.include_router(engine_document_router)
-app.include_router(contract_kmong_router)
-app.include_router(schedule_pipeline_router)
-app.include_router(ksic_engine_router)
-app.include_router(factory_process_router)
-app.include_router(process_management_router)
+for r in [auth_router, pw_reset_router, users_router, companies_router, factories_router,
+          system_codes_router, legal_engine_router, legal_engine_patch_router, engine_qa_router,
+          law_rule_generator_router, engine_document_router, contract_kmong_router,
+          schedule_pipeline_router, ksic_engine_router, factory_process_router,
+          process_management_router, quotes_router, report_forms_router, contracts_router,
+          contacts_router, education_router, education_assign_router, notifications_router,
+          equipment_assets_router, equipment_checkins_router, engine_equipment_router,
+          engine_model_router, engine_legal_router, personnel_router, repair_router,
+          biz_verify_router, kosha_router, fire_hazmat_router, safety_info_router, posts_router,
+          schedule_engine_router, roles_router, teams_router, areas_router, buildings_router,
+          inspection_sets_router, inspection_schedule_router, work_schedules_router,
+          inspection_router, inspection_setup_router, admin_stats_router, law_collector_router,
+          cron_manager_router, byulpyo_router, price_setting_router, product_pricing_router,
+          price_policy_router, connection_commission_router, agent_service_router, precedent_router,
+          weather_router, juso_router, internal_api_registry_router, internal_inbox_router,
+          report_api_registry_router, safety_template_router, event_trigger_router,
+          worker_registry_router, diagnosis_router, diagnosis_roi_router, diagnosis_transform_router,
+          overdue_checker_router, tbm_router, tbm_templates_router, safety_meetings_router,
+          risk_assessments_router, payment_router, payment_ops_router, payment_billing_router,
+          corrective_actions_router, messaging_router, fcm_router, worker_check_router,
+          worker_home_router, ai_copywrite_router, mail_router]:
+    app.include_router(r)
+
 app.include_router(building_register_router, prefix="/building-register")
-app.include_router(quotes_router)
-app.include_router(report_forms_router)
-app.include_router(contracts_router)
-app.include_router(contacts_router)
-app.include_router(education_router)
-app.include_router(education_assign_router)
-app.include_router(notifications_router)
-app.include_router(equipment_assets_router)
-app.include_router(equipment_checkins_router)
-app.include_router(engine_equipment_router)
-app.include_router(engine_model_router)
-app.include_router(engine_legal_router)
-app.include_router(personnel_router)
-app.include_router(repair_router)
-app.include_router(biz_verify_router)
-app.include_router(kosha_router)
-app.include_router(fire_hazmat_router)
-app.include_router(safety_info_router)
-app.include_router(posts_router)
-app.include_router(schedule_engine_router)
-app.include_router(roles_router)
-app.include_router(teams_router)
-app.include_router(areas_router)
-app.include_router(buildings_router)
-app.include_router(inspection_sets_router)
-app.include_router(inspection_schedule_router)
-app.include_router(work_schedules_router)
-app.include_router(inspection_router)
-app.include_router(inspection_setup_router)
-app.include_router(admin_stats_router)
-app.include_router(law_collector_router)
-app.include_router(cron_manager_router)
-app.include_router(byulpyo_router)
-app.include_router(price_setting_router)
-app.include_router(product_pricing_router)
-app.include_router(price_policy_router)
-app.include_router(connection_commission_router)
-app.include_router(agent_service_router)
-app.include_router(precedent_router)
-app.include_router(weather_router)
-app.include_router(juso_router)
-app.include_router(experts_router,  prefix="/experts",  tags=["전문가"])
-app.include_router(matching_router,          prefix="/matching",          tags=["매칭"])
-app.include_router(commission_router,        prefix="/price-commission",  tags=["수수료설정"])
-app.include_router(contracts_engine_router,  prefix="/matching/contracts", tags=["계약서"])
-app.include_router(settlements_router,       prefix="/settlements",        tags=["정산"])
+app.include_router(experts_router, prefix="/experts", tags=["전문가"])
+app.include_router(matching_router, prefix="/matching", tags=["매칭"])
+app.include_router(commission_router, prefix="/price-commission", tags=["수수료설정"])
+app.include_router(contracts_engine_router, prefix="/matching/contracts", tags=["계약서"])
+app.include_router(settlements_router, prefix="/settlements", tags=["정산"])
 app.include_router(identity_router, prefix="/identity", tags=["본인인증"])
-app.include_router(internal_api_registry_router)
-app.include_router(internal_inbox_router)
-app.include_router(report_api_registry_router)
 app.include_router(construction_router, prefix="/construction", tags=["건설안전"])
-app.include_router(safety_template_router)
-app.include_router(event_trigger_router)
-app.include_router(worker_registry_router)
-app.include_router(diagnosis_router)
-app.include_router(diagnosis_roi_router)
-app.include_router(diagnosis_transform_router)
-app.include_router(overdue_checker_router)
-app.include_router(tbm_router)
-app.include_router(tbm_templates_router)
-app.include_router(safety_meetings_router)
-app.include_router(risk_assessments_router)
-app.include_router(payment_router)
-app.include_router(payment_ops_router)
-app.include_router(payment_billing_router)                                        # v5.35.0 정기결제
-app.include_router(corrective_actions_router)
-app.include_router(messaging_router)
-app.include_router(fcm_router)
-app.include_router(worker_check_router)
-app.include_router(worker_home_router)
-app.include_router(ai_copywrite_router)
-app.include_router(mail_router)
 
 # v5.39.0 법령엔진 v3.0 — Deterministic Compiler Core + Human Review
-app.include_router(compiler_core_router)                                          # 7 API — /api/v1/compiler/*
-app.include_router(ri_router)                                                      # 22 API — /api/v1/residual-intelligence/*
-app.include_router(admin_review_router)                                            # 12 API — /api/v1/admin/*
+app.include_router(compiler_core_router)     # 7 API — /api/v1/compiler/*
+app.include_router(ri_router)                # 22 API — /api/v1/residual-intelligence/*
+app.include_router(admin_review_router)      # 12 API — /api/v1/admin/*
 
+# v5.40.0 법령진단서비스 / SaaS 반복설정 분리
+app.include_router(diagnosis_engine_router)  # 3 API — /api/v1/diagnosis-engine/*
+app.include_router(saas_setup_router)        # 6 API — /api/v1/saas-setup/*
 
 @app.get("/")
 def root():
