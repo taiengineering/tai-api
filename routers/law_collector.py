@@ -13,7 +13,7 @@ from datetime import datetime, date
 from typing import Any, List, Optional, Tuple
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from db.database import get_supabase
-from routers.messaging import SMS_URL, _call_messageme, _get_cfg
+from routers.messaging import EDGE_SMS_URL as SMS_URL, _call_edge_function as _call_messageme, _get_cfg
 
 router = APIRouter(prefix="/law-collector", tags=["법령 수집기"])
 
@@ -386,7 +386,6 @@ def fetch_law_content(mst_no: str) -> dict:
 def parse_law_list_xml(xml_text: str) -> list:
     root = ET.fromstring(xml_text)
     laws = []
-    # data.go.kr: <LawSearch><법령> 또는 law.go.kr: <LawSearch><law>
     for law in root.findall(".//법령") + root.findall(".//law"):
         laws.append({
             "law_mst_no":        law.findtext("법령일련번호", "") or law.findtext("법령ID", ""),
@@ -554,17 +553,12 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
 # ============================================================
 
 def mark_rules_needs_review(law_name: str, change_summary: str, supabase) -> int:
-    """
-    개정된 법령의 승인된 AI 룰을 NEEDS_REVIEW 상태로 변경합니다.
-    대표님이 AI 룰 검토 페이지에서 재검토할 수 있도록 표시합니다.
-    """
     res = supabase.table("law_rule_drafts").update({
         "status":          "NEEDS_REVIEW",
         "review_reason":   f"법령 개정 감지: {change_summary}",
         "law_changed_at":  datetime.now().isoformat(),
         "updated_at":      datetime.now().isoformat(),
     }).eq("law_name", law_name).eq("status", "APPROVED").execute()
-
     count = len(res.data) if res.data else 0
     return count
 
@@ -573,15 +567,11 @@ def _publish_law_revision_board(law_id: str, law_name: str, change_summary: str,
     try:
         now_iso = datetime.now().isoformat()
         supabase.table("law_revision_board").insert({
-            "law_id": law_id,
-            "law_name": law_name,
+            "law_id": law_id, "law_name": law_name,
             "title": f"[법령개정] {law_name}",
             "body": f"{law_name} 개정 감지: {change_summary}",
-            "status": "PUBLISHED",
-            "is_public": True,
-            "published_at": now_iso,
-            "created_at": now_iso,
-            "updated_at": now_iso,
+            "status": "PUBLISHED", "is_public": True,
+            "published_at": now_iso, "created_at": now_iso, "updated_at": now_iso,
         }).execute()
     except Exception as e:
         print(f"[LAW_UPDATE] law_revision_board INSERT 실패: {e}")
@@ -598,7 +588,6 @@ def _notify_safety_managers_by_law_change(law_name: str, change_summary: str, su
         company_ids = sorted({r.get("company_id") for r in (sets_res.data or []) if r.get("company_id")})
         if not company_ids:
             return 0
-
         users_res = supabase.table("users") \
             .select("id, company_id, phone, allow_sms") \
             .in_("company_id", company_ids) \
@@ -608,38 +597,28 @@ def _notify_safety_managers_by_law_change(law_name: str, change_summary: str, su
         users = users_res.data or []
         if not users:
             return 0
-
         title = "법령 개정으로 점검 재검토가 필요합니다"
         body = f"{law_name} 개정 감지: {change_summary}"
         cfg = _get_cfg()
         for u in users:
             try:
                 supabase.table("notifications").insert({
-                    "user_id": u["id"],
-                    "company_id": u.get("company_id"),
-                    "trigger_code": "LAW_CHANGED",
-                    "trigger_group": "LAW",
-                    "title": title,
-                    "body": body,
-                    "priority": "HIGH",
-                    "is_read": False,
-                    "channel": "push",
-                    "send_status": "SENT",
+                    "user_id": u["id"], "company_id": u.get("company_id"),
+                    "trigger_code": "LAW_CHANGED", "trigger_group": "LAW",
+                    "title": title, "body": body, "priority": "HIGH",
+                    "is_read": False, "channel": "push", "send_status": "SENT",
                     "sent_at": datetime.now().isoformat(),
                 }).execute()
             except Exception as e:
                 print(f"[LAW_UPDATE] notifications INSERT 실패 user={u.get('id')}: {e}")
-
-            if cfg["api_key"] and cfg["sender"] and u.get("allow_sms") and u.get("phone"):
+            if cfg.get("internal_key") and u.get("allow_sms") and u.get("phone"):
                 try:
-                    _call_messageme({
-                        "api_key": cfg["api_key"],
-                        "callback": cfg["sender"],
-                        "dstaddr": u["phone"],
-                        "msg": f"[TAI] {law_name} 개정 감지. 점검/법령 항목을 확인해 주세요.",
-                    }, SMS_URL)
+                    import httpx, asyncio
+                    asyncio.get_event_loop().run_until_complete(
+                        _call_messageme({"receiver": u["phone"], "message": f"[TAI] {law_name} 개정 감지. 점검/법령 항목을 확인해 주세요."})
+                    )
                 except Exception as e:
-                    print(f"[LAW_UPDATE] MessageMi SMS 실패 user={u.get('id')}: {e}")
+                    print(f"[LAW_UPDATE] SMS 실패 user={u.get('id')}: {e}")
             notified += 1
     except Exception as e:
         print(f"[LAW_UPDATE] 안전관리자 알림 처리 실패: {e}")
@@ -657,8 +636,7 @@ def _mark_inspection_items_law_changed(law_name: str, supabase) -> int:
         if not set_ids:
             return 0
         upd = supabase.table("inspection_set_items").update({
-            "is_law_changed": True,
-            "updated_at": datetime.now().isoformat(),
+            "is_law_changed": True, "updated_at": datetime.now().isoformat(),
         }).in_("inspection_set_id", set_ids).execute()
         return len(upd.data or [])
     except Exception as e:
@@ -667,29 +645,22 @@ def _mark_inspection_items_law_changed(law_name: str, supabase) -> int:
 
 
 def check_law_update(law_tracking: dict, supabase) -> dict:
-    """법령 개정 여부 확인 → 변경 시 재수집 + AI 룰 NEEDS_REVIEW 표시"""
     law_id      = law_tracking["law_id"]
     last_mst_no = law_tracking.get("last_source_mst_no", "")
     last_hash   = law_tracking.get("last_source_hash", "")
-
     master = supabase.table("law_master").select("law_name, law_api_id, law_mst_no")\
         .eq("id", law_id).single().execute()
     if not master.data:
         return {"changed": False, "reason": "법령 마스터 없음"}
-
     law_name = master.data["law_name"]
     list_result = fetch_law_list(query=law_name, display=5)
     if not list_result["ok"]:
         return {"changed": False, "reason": f"API 오류 {list_result['status']}"}
-
     laws = parse_law_list_xml(list_result["xml"])
     if not laws:
         return {"changed": False, "reason": "API 결과 없음"}
-
     current = laws[0]
     current_mst_no = current["law_mst_no"]
-
-    # 변경 없음
     if current_mst_no == last_mst_no:
         supabase.table("law_update_tracking").update({
             "last_checked_at": datetime.now().isoformat(), "update_needed": False,
@@ -697,29 +668,21 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
             "updated_at": datetime.now().isoformat(),
         }).eq("law_id", law_id).execute()
         return {"changed": False, "law_name": law_name}
-
-    # 변경 감지 → 본문 재수집
     content_result = fetch_law_content(current_mst_no)
     if not content_result["ok"]:
         return {"changed": False, "reason": f"본문 API 오류 {content_result['status']}"}
-
     parsed = parse_law_content_xml(content_result["xml"])
     new_hash = make_hash(content_result["xml"])
     if new_hash == last_hash:
         return {"changed": False, "law_name": law_name, "reason": "해시 동일"}
-
     old_version = supabase.table("law_version").select("id")\
         .eq("law_id", law_id).eq("is_current", True).execute()
     old_version_id = old_version.data[0]["id"] if old_version.data else None
-
     law_info = {**parsed["info"], "law_mst_no": current_mst_no,
                 "law_name_short": current.get("law_name_short", ""),
                 "revision_type":  current.get("revision_type", "")}
     save_result = save_law_to_db(law_info, content_result["xml"], parsed["articles"], supabase)
-
     change_summary = f"{current.get('revision_type', '')} ({current_mst_no})"
-
-    # law_change_log 기록
     supabase.table("law_change_log").insert({
         "law_id": law_id, "old_version_id": old_version_id,
         "new_version_id": save_result["version_id"],
@@ -729,13 +692,10 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
         "change_summary": change_summary,
         "processed_status_code": "DETECTED", "updated_at": datetime.now().isoformat(),
     }).execute()
-
-    # ★ AI 룰 NEEDS_REVIEW 표시 (핵심)
     needs_review_count = mark_rules_needs_review(law_name, change_summary, supabase)
     _publish_law_revision_board(law_id, law_name, change_summary, supabase)
     notified_count = _notify_safety_managers_by_law_change(law_name, change_summary, supabase)
     law_changed_items = _mark_inspection_items_law_changed(law_name, supabase)
-
     supabase.table("law_update_tracking").update({
         "last_checked_at": datetime.now().isoformat(),
         "last_source_mst_no": current_mst_no, "last_source_hash": new_hash,
@@ -744,13 +704,10 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
         "job_message": f"개정 감지 — AI룰 {needs_review_count}개 재검토 표시",
         "updated_at": datetime.now().isoformat(),
     }).eq("law_id", law_id).execute()
-
     return {
-        "changed":            True,
-        "law_name":           law_name,
-        "old_mst_no":         last_mst_no,
-        "new_mst_no":         current_mst_no,
-        "articles":           save_result["article_count"],
+        "changed": True, "law_name": law_name,
+        "old_mst_no": last_mst_no, "new_mst_no": current_mst_no,
+        "articles": save_result["article_count"],
         "needs_review_rules": needs_review_count,
         "notified_safety_managers": notified_count,
         "inspection_items_law_changed": law_changed_items,
@@ -763,13 +720,11 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
 
 @router.get("/debug/{law_name}")
 async def debug_law_api(law_name: str):
-    """[개발용] data.go.kr API 원본 응답 확인"""
     try:
         result = fetch_law_list(query=law_name, display=5)
         http_status = result["status"]
         xml_text    = result["xml"]
         source      = result.get("source", "unknown")
-
         try:
             root = ET.fromstring(xml_text)
             laws = root.findall(".//법령") + root.findall(".//law")
@@ -781,17 +736,11 @@ async def debug_law_api(law_name: str):
                     first_law[child.tag] = child.text
         except Exception as pe:
             law_count, root_tag, first_law = -1, "parse_error", {"error": str(pe)}
-
         return {
-            "api_source":  source,
-            "has_api_key": bool(DATA_GOV_KEY),
-            "query":       law_name,
-            "http_status": http_status,
-            "ok":          result["ok"],
-            "law_count":   law_count,
-            "xml_root_tag": root_tag,
-            "first_law":    first_law,
-            "xml_b64":      _b64(xml_text[:2000]),
+            "api_source": source, "has_api_key": bool(DATA_GOV_KEY),
+            "query": law_name, "http_status": http_status, "ok": result["ok"],
+            "law_count": law_count, "xml_root_tag": root_tag,
+            "first_law": first_law, "xml_b64": _b64(xml_text[:2000]),
         }
     except Exception as e:
         return {"error_type": type(e).__name__, "error_b64": _b64(str(e))}
@@ -839,32 +788,19 @@ def _run_collect_all():
 
 @router.post("/collect/{law_name}")
 async def collect_single_law(law_name: str, force: bool = False):
-    """단건 법령 수집 — data.go.kr 우선 사용"""
     supabase = get_supabase()
     try:
         list_result = fetch_law_list(query=law_name, display=10)
-
         if not list_result["ok"]:
-            raise HTTPException(
-                status_code=502,
-                detail=f"법제처 API 오류 HTTP {list_result['status']} (source: {list_result.get('source')})"
-            )
-
+            raise HTTPException(status_code=502, detail=f"법제처 API 오류 HTTP {list_result['status']}")
         laws = parse_law_list_xml(list_result["xml"])
         if not laws:
             raise HTTPException(status_code=404, detail=f"법령을 찾을 수 없습니다: {law_name}")
-
         matched = pick_match_law_from_list(laws, law_name)
         content_result = fetch_law_content(matched["law_mst_no"])
-
         if not content_result["ok"]:
-            raise HTTPException(
-                status_code=502,
-                detail=f"법제처 본문 API 오류 HTTP {content_result['status']}"
-            )
-
+            raise HTTPException(status_code=502, detail=f"법제처 본문 API 오류 HTTP {content_result['status']}")
         parsed = parse_law_content_xml(content_result["xml"])
-
         if force:
             law_mst_no = matched["law_mst_no"]
             law_key_check = supabase.table("law_master")\
@@ -877,18 +813,14 @@ async def collect_single_law(law_name: str, force: bool = False):
                     old_vid = ev.data[0]["id"]
                     snapshot_article_key_map_for_version(supabase, old_vid)
                     delete_law_version_cascade_for_recollect(supabase, old_vid)
-
         law_info = {**parsed["info"], "law_mst_no": matched["law_mst_no"],
                     "law_name_short": matched.get("law_name_short", ""),
                     "revision_type": matched.get("revision_type", "")}
         result = save_law_to_db(law_info, content_result["xml"], parsed["articles"], supabase)
         return {
-            "status": "success",
-            "api_source": list_result.get("source"),
-            "law_name": matched["law_name"],
-            "law_mst_no": matched["law_mst_no"],
-            "is_new_version": result["is_new_version"],
-            "article_count": result["article_count"],
+            "status": "success", "api_source": list_result.get("source"),
+            "law_name": matched["law_name"], "law_mst_no": matched["law_mst_no"],
+            "is_new_version": result["is_new_version"], "article_count": result["article_count"],
         }
     except HTTPException:
         raise
@@ -898,17 +830,12 @@ async def collect_single_law(law_name: str, force: bool = False):
 
 @router.post("/check-updates")
 async def check_all_updates(background_tasks: BackgroundTasks):
-    """기존 호환용 — /check-updates-v2 와 동일"""
     background_tasks.add_task(_run_check_updates)
     return {"status": "started", "message": "변경 감지 시작됐습니다."}
 
 
 @router.post("/check-updates-v2")
 async def check_all_updates_v2(background_tasks: BackgroundTasks):
-    """
-    크론 전용 엔드포인트 — 15일 주기 실행
-    변경 감지 시 AI 룰을 NEEDS_REVIEW로 자동 표시합니다.
-    """
     background_tasks.add_task(_run_check_updates)
     return {"status": "started", "message": "법령 개정 감지 시작 — 변경 시 AI 룰 재검토 표시됩니다."}
 
