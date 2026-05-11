@@ -1,5 +1,8 @@
 """
-메세지미 SMS/알림톡 라우터 — v6.2.0
+메세지미 SMS/알림톡 라우터 — v6.2.1
+
+v6.2.1 (2026-05-11):
+  [FIX] SMS_URL / _call_messageme 하위호환 alias 추가 (law_collector import 에러 수정)
 
 v6.2.0 (2026-04-30):
   [FIX] 타임아웃 60초 + 재시도 2회 + httpx 비동기
@@ -33,6 +36,9 @@ if not EDGE_SMS_URL:
     _sb = os.getenv("SUPABASE_URL", "")
     if _sb:
         EDGE_SMS_URL = f"{_sb}/functions/v1/send-sms"
+
+# ── 하위호환 alias (law_collector 등에서 import) ────────────────
+SMS_URL = EDGE_SMS_URL
 
 MAX_RETRIES = 2
 TIMEOUT_SEC = 60
@@ -101,6 +107,10 @@ async def _call_edge_function(payload: dict) -> dict:
             raise Exception(f"Edge Function 호출 실패: {e}")
 
     raise Exception(f"Edge Function {MAX_RETRIES + 1}회 시도 실패: {type(last_error).__name__}: {last_error}")
+
+
+# ── 하위호환 alias ──────────────────────────────────────────────
+_call_messageme = _call_edge_function
 
 
 # ── Pydantic 모델 ───────────────────────────────────────────────
