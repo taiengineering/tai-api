@@ -16,15 +16,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 # 단위 환산 금지. 직접 매칭만.
 # ════════════════════════════════════════════════════════
 FIELD_MAP = {
-    # binding_field: (facility_column, match_quality)
-    # DIRECT: 직접 비교 가능
-    # AMBIGUOUS: 칼럼 존재하나 단위/의미 불일치 가능
-    # MISSING: facility에 해당 칼럼 없음
     "employee_count":      ("employee_count",         "DIRECT"),
     "area_size":            ("building_area",          "DIRECT"),
     "power_capacity":       ("electrical_capacity_kw", "DIRECT"),
-    "voltage_level":        ("transformer_capacity_kva","AMBIGUOUS"),  # kVA ≠ V
-    "storage_capacity":     ("gas_capacity_m3",        "AMBIGUOUS"),   # m3 ≠ 리터
+    "voltage_level":        ("transformer_capacity_kva","AMBIGUOUS"),
+    "storage_capacity":     ("gas_capacity_m3",        "AMBIGUOUS"),
     "equipment_type":       (None,                     "EQUIPMENT_JOIN"),
     "facility_type":        ("site_type",              "AMBIGUOUS"),
     "process_type":         ("ksic_code",              "AMBIGUOUS"),
@@ -50,14 +46,14 @@ CREATE TABLE IF NOT EXISTS facility_applicability (
 
 CREATE TABLE IF NOT EXISTS facility_applicability_detail (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    applicability_id UUID NOT NULL,
+    applicability_id UUID,
     factory_id UUID NOT NULL,
     check_type TEXT NOT NULL,
     binding_field TEXT,
     facility_column TEXT,
     operator TEXT,
-    draft_value NUMERIC,
-    facility_value NUMERIC,
+    draft_value TEXT,
+    facility_value TEXT,
     result TEXT NOT NULL,
     reason TEXT,
     created_at TIMESTAMPTZ DEFAULT now()
@@ -102,6 +98,13 @@ def compare_numeric(operator, draft_val, facility_val):
         return "AMBIGUOUS"
 
 
+def _to_str(val):
+    """값을 TEXT로 안전하게 변환."""
+    if val is None:
+        return None
+    return str(val)
+
+
 def main():
     import psycopg2
     from psycopg2.extras import execute_values
@@ -132,14 +135,11 @@ def main():
 
     start = time.time()
 
-    # ================================================
     # [1단계] Facility Data 로드
-    # ================================================
     cur.execute("""
         SELECT id::text, employee_count, electrical_capacity_kw,
                transformer_capacity_kva, building_area, gas_capacity_m3,
-               gas_capacity_kg, construction_amount, site_type, ksic_code,
-               name
+               gas_capacity_kg, construction_amount, site_type, ksic_code, name
         FROM factories WHERE is_active = true
     """)
     facilities = cur.fetchall()
@@ -149,11 +149,9 @@ def main():
     fac_list = [dict(zip(fac_cols, row)) for row in facilities]
     print(f"\n  [1단계] Facility: {len(fac_list)}건 (수정 없음)")
 
-    # ================================================
     # [2단계] Draft + Numeric Slot 로드
-    # ================================================
     cur.execute("""
-        SELECT ed.id::text as draft_id, ed.part_id::text,
+        SELECT ed.id::text, ed.part_id::text,
                ds.binding_field, ds.operator, ds.value, ds.unit,
                ds.family_name, ds.section
         FROM executable_draft ed
@@ -164,77 +162,63 @@ def main():
           AND ds.value IS NOT NULL
         ORDER BY ed.id
     """)
-    numeric_slots = cur.fetchall()
     draft_numerics = {}
-    for draft_id, part_id, bf, op, val, unit, family, section in numeric_slots:
+    for draft_id, part_id, bf, op, val, unit, family, section in cur.fetchall():
         draft_numerics.setdefault(draft_id, []).append({
             'part_id': part_id, 'binding_field': bf,
             'operator': op, 'value': val, 'unit': unit, 'family': family
         })
     print(f"  [2단계] Numeric Draft: {len(draft_numerics)}건 (수정 없음)")
 
-    # Scope binding만 있는 draft (numeric 없는 것)
     cur.execute("""
         SELECT DISTINCT ed.id::text, ed.part_id::text, ds.binding_field, ds.family_name
         FROM executable_draft ed
         JOIN draft_slot ds ON ds.draft_id = ed.id
-        WHERE ds.binding_field IS NOT NULL
-          AND ds.section IN ('IF_SCOPE')
+        WHERE ds.binding_field IS NOT NULL AND ds.section IN ('IF_SCOPE')
     """)
-    scope_slots = cur.fetchall()
     draft_scopes = {}
-    for draft_id, part_id, bf, family in scope_slots:
+    for draft_id, part_id, bf, family in cur.fetchall():
         draft_scopes.setdefault(draft_id, []).append({
             'part_id': part_id, 'binding_field': bf, 'family': family
         })
     print(f"  Scope Draft: {len(draft_scopes)}건")
 
-    # ================================================
-    # [3~11단계] 평가 실행
-    # ================================================
+    # [3~11단계] 평가
     print(f"\n{'─'*64}")
     print("  [3~11단계] Applicability 평가")
     print(f"{'─'*64}")
 
     applicabilities = []
     details = []
-    issues = []
     all_draft_ids = set(list(draft_numerics.keys()) + list(draft_scopes.keys()))
 
     for fac in fac_list:
         fac_id = fac['id']
-
         for draft_id in all_draft_ids:
             part_id = None
             check_results = []
 
-            # Numeric 검증
             for ns in draft_numerics.get(draft_id, []):
                 part_id = ns['part_id']
                 bf = ns['binding_field']
                 fmap = FIELD_MAP.get(bf)
-
                 if not fmap:
                     check_results.append(('NUMERIC_CHECK', bf, None, ns['operator'], ns['value'], None, 'MISSING_DATA', 'NO_FIELD_MAP'))
                     continue
-
                 fac_col, quality = fmap
                 if fac_col is None:
                     check_results.append(('NUMERIC_CHECK', bf, None, ns['operator'], ns['value'], None, 'MISSING_DATA', 'NO_FACILITY_COLUMN'))
                     continue
-
                 fac_val = fac.get(fac_col)
                 if fac_val is None:
                     check_results.append(('NUMERIC_CHECK', bf, fac_col, ns['operator'], ns['value'], None, 'MISSING_DATA', 'FACILITY_VALUE_NULL'))
                     continue
-
                 if quality == 'AMBIGUOUS':
                     check_results.append(('NUMERIC_CHECK', bf, fac_col, ns['operator'], ns['value'], fac_val, 'AMBIGUOUS', 'UNIT_MISMATCH_POSSIBLE'))
                 else:
                     result = compare_numeric(ns['operator'], ns['value'], fac_val)
                     check_results.append(('NUMERIC_CHECK', bf, fac_col, ns['operator'], ns['value'], fac_val, result, 'DIRECT_COMPARE'))
 
-            # Scope 검증
             for ss in draft_scopes.get(draft_id, []):
                 part_id = part_id or ss['part_id']
                 bf = ss['binding_field']
@@ -248,10 +232,9 @@ def main():
                     else:
                         check_results.append(('SCOPE_CHECK', bf, fmap[0], None, None, fac_val, 'POSSIBLE_CANDIDATE', 'SCOPE_FIELD_EXISTS'))
 
-            if not check_results:
+            if not check_results or part_id is None:
                 continue
 
-            # [11단계] 종합 상태 결정
             results_set = set(r[6] for r in check_results)
             if 'MATCH_CANDIDATE' in results_set and 'NOT_MATCHED' not in results_set:
                 overall = 'MATCH_CANDIDATE'
@@ -261,26 +244,23 @@ def main():
                 overall = 'POSSIBLE_CANDIDATE'
             elif 'AMBIGUOUS' in results_set:
                 overall = 'AMBIGUOUS'
-            elif 'NOT_MATCHED' in results_set and results_set == {'NOT_MATCHED'}:
+            elif results_set == {'NOT_MATCHED'}:
                 overall = 'NOT_MATCHED'
             else:
                 overall = 'MISSING_DATA'
 
-            if part_id is None:
-                continue
-
-            app_id = None  # 나중에 배치로 처리
             applicabilities.append((
                 fac_id, draft_id, part_id, overall,
                 json.dumps({'checks': len(check_results)})
             ))
-
             for cr in check_results:
                 details.append((
-                    fac_id, cr[0], cr[1], cr[2], cr[3], cr[4], cr[5], cr[6], cr[7]
+                    fac_id, cr[0], cr[1], cr[2], cr[3],
+                    _to_str(cr[4]), _to_str(cr[5]),
+                    cr[6], cr[7]
                 ))
 
-    print(f"  평가 완료: {len(applicabilities):,}건 (\uc2dc\uc124 {len(fac_list)} \xd7 Draft {len(all_draft_ids)})")
+    print(f"  평가 완료: {len(applicabilities):,}건")
 
     # DB 저장
     print(f"\n{'─'*64}")
@@ -289,31 +269,26 @@ def main():
 
     if applicabilities:
         for i in range(0, len(applicabilities), 5000):
-            batch = applicabilities[i:i+5000]
             execute_values(cur, """
                 INSERT INTO facility_applicability
                     (factory_id, draft_id, part_id, applicability_status, match_details)
                 VALUES %s
-            """, batch, page_size=5000)
+            """, applicabilities[i:i+5000], page_size=5000)
         conn.commit()
         print(f"    ✅ facility_applicability: {len(applicabilities):,}건")
 
-    # Detail은 applicability_id 없이 독립 저장 (배치 효율)
     if details:
         for i in range(0, len(details), 5000):
-            batch = details[i:i+5000]
             execute_values(cur, """
                 INSERT INTO facility_applicability_detail
                     (factory_id, check_type, binding_field, facility_column,
                      operator, draft_value, facility_value, result, reason)
                 VALUES %s
-            """, batch, page_size=5000)
+            """, details[i:i+5000], page_size=5000)
         conn.commit()
         print(f"    ✅ facility_applicability_detail: {len(details):,}건")
 
-    # ================================================
     # [15단계] Validation
-    # ================================================
     print(f"\n{'─'*64}")
     print("  [15단계] Validation")
     print(f"{'─'*64}")
@@ -338,9 +313,6 @@ def main():
     print(f"    semantic expansion: 미발생 ✅")
     print(f"    Candidate→Truth: 없음 ✅")
 
-    # ================================================
-    # 최종 상태
-    # ================================================
     cur.execute("SELECT count(*) FROM facility_applicability")
     total_fa = cur.fetchone()[0]
     cur.execute("SELECT count(*) FROM facility_applicability_detail")
