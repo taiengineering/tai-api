@@ -1,4 +1,5 @@
-# routers/pw_reset.py — v1.0.0
+# routers/pw_reset.py — v1.0.1
+# v1.0.1: messaging import 호환 수정 (EDGE_SMS_URL, _call_edge_function)
 # SMS OTP 기반 비밀번호 재설정
 # POST /auth/pw-reset/request — OTP 생성 + SMS 발송
 # POST /auth/pw-reset/confirm — OTP 검증 + 비밀번호 변경
@@ -30,20 +31,26 @@ def _now_iso() -> str:
 
 
 def _send_sms(receiver: str, message: str) -> dict:
-    """messaging 모듈의 _call_messageme 직접 호출"""
+    """messaging 모듈의 Edge Function 경유 SMS 발송"""
     try:
-        from routers.messaging import _call_messageme, SMS_URL, _get_cfg
+        from routers.messaging import _call_edge_function, _get_cfg
+        import asyncio
         cfg = _get_cfg()
-        if not cfg["api_key"] or not cfg["sender"]:
-            log.error("[PW_RESET] MESSAGEME_API_KEY/SENDER 미설정")
+        if not cfg.get("edge_url"):
+            log.error("[PW_RESET] EDGE_SMS_URL 미설정")
             return {"success": False, "reason": "SMS 설정 미완료"}
-        payload = {
-            "api_key": cfg["api_key"],
-            "callback": cfg["sender"],
-            "dstaddr": receiver,
-            "msg": message,
-        }
-        return _call_messageme(payload, SMS_URL)
+        payload = {"receiver": receiver, "message": message}
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    result = pool.submit(asyncio.run, _call_edge_function(payload)).result()
+            else:
+                result = loop.run_until_complete(_call_edge_function(payload))
+        except RuntimeError:
+            result = asyncio.run(_call_edge_function(payload))
+        return result
     except Exception as e:
         log.error(f"[PW_RESET] SMS 발송 실패: {e}")
         return {"success": False, "reason": str(e)}
@@ -95,7 +102,6 @@ def pw_reset_request(req: PwResetRequest):
 
     if not sms_result.get("success"):
         log.warning(f"[PW_RESET] SMS 발송 실패 phone={phone} result={sms_result}")
-        # SMS 실패해도 OTP는 저장됨 — 개발환경에서 dev_otp로 테스트 가능
 
     user_name = user_res.data[0].get("name", "")
     masked_phone = phone[:3] + "****" + phone[-4:] if len(phone) >= 8 else phone
