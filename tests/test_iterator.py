@@ -1,0 +1,585 @@
+"""PipelineIterator 단위 테스트 (Track A P3)."""
+
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+import psycopg2
+import pytest
+
+from engine.iterator import (
+    Phase22V3Iterator,
+    PipelineIterator,
+    isolation_reason_for_fp_subtype,
+    _verdict_is_tp_like,
+)
+from engine.pipeline import PipelineHaltError, TAIExtractionPipeline
+from engine.stages.base import Stage, StageContext, StageOutput
+from engine.validator import CheckResult, Validator
+
+
+class MockLawAwarePassStage(Stage):
+    """law별로 PASS — 정확도 0.95."""
+
+    @property
+    def stage_number(self) -> int:
+        return 2
+
+    @property
+    def stage_name(self) -> str:
+        return "mock_law_pass"
+
+    def run(self, input_data, ctx):  # noqa: ANN001
+        return StageOutput(data=input_data or {}, metrics={})
+
+    def measure_accuracy(self, output, ctx):  # noqa: ANN001
+        return (0.95, 100)
+
+
+class MockLawAwareFailAtStage(Stage):
+    """지정 law_id에서만 FAIL."""
+
+    def __init__(self, fail_at: int | str) -> None:
+        self.fail_at = fail_at
+
+    @property
+    def stage_number(self) -> int:
+        return 2
+
+    @property
+    def stage_name(self) -> str:
+        return "mock_law_fail_at"
+
+    def run(self, input_data, ctx):  # noqa: ANN001
+        return StageOutput(data=input_data or {}, metrics={})
+
+    def measure_accuracy(self, output, ctx):  # noqa: ANN001
+        if ctx.law_id == self.fail_at:
+            return (0.80, 100)
+        return (0.95, 100)
+
+
+def test_iterator_all_pass(monkeypatch):
+    ids = list(range(10))
+
+    def fake_order(self):  # noqa: ANN001
+        return ids
+
+    monkeypatch.setattr(PipelineIterator, "_fetch_law_order", fake_order)
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = PipelineIterator(pipeline, None, regression_window=0, halt_on_first_fail=True)
+    run = it.iterate(only_stages=[2])
+
+    assert run.total_laws == 10
+    assert len(run.laws_processed) == 10
+    assert len(run.laws_failed) == 0
+    assert run.halted is False
+
+
+def test_iterator_halt_on_first_fail(monkeypatch):
+    ids = [1, 2, 3, 4, 5, 6]
+
+    def fake_order(self):  # noqa: ANN001
+        return ids
+
+    monkeypatch.setattr(PipelineIterator, "_fetch_law_order", fake_order)
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwareFailAtStage(fail_at=5)],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = PipelineIterator(pipeline, None, halt_on_first_fail=True)
+    run = it.iterate(only_stages=[2])
+
+    assert run.halted is True
+    assert len(run.laws_processed) == 4
+    assert len(run.laws_failed) == 1
+    assert run.laws_failed[0][0] == 5
+
+
+def test_iterator_continue_after_fail(monkeypatch):
+    ids = [1, 2, 3, 5]
+
+    def fake_order(self):  # noqa: ANN001
+        return ids
+
+    monkeypatch.setattr(PipelineIterator, "_fetch_law_order", fake_order)
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwareFailAtStage(fail_at=2)],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = PipelineIterator(pipeline, None, halt_on_first_fail=False)
+    run = it.iterate(only_stages=[2])
+
+    assert run.halted is False
+    assert len(run.laws_failed) == 1
+    assert len(run.laws_processed) == 3
+
+
+def test_iterator_regression_window_calls(monkeypatch):
+    ids = list(range(15))
+
+    def fake_order(self):  # noqa: ANN001
+        return ids
+
+    monkeypatch.setattr(PipelineIterator, "_fetch_law_order", fake_order)
+
+    calls: list[list] = []
+
+    def spy_regression(self, recent, *, only_stages=None):  # noqa: ANN001
+        calls.append(list(recent))
+
+    monkeypatch.setattr(PipelineIterator, "_regression_check", spy_regression)
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = PipelineIterator(
+        pipeline,
+        None,
+        regression_window=10,
+        halt_on_first_fail=True,
+    )
+    it.iterate(only_stages=[2])
+
+    assert len(calls) >= 1
+    assert len(calls[0]) <= 10
+
+
+def test_iterator_regression_failure_halts(monkeypatch):
+    ids = list(range(15))
+
+    def fake_order(self):  # noqa: ANN001
+        return ids
+
+    monkeypatch.setattr(PipelineIterator, "_fetch_law_order", fake_order)
+
+    def boom(self, recent, *, only_stages=None):  # noqa: ANN001
+        chk = CheckResult(
+            stage=2,
+            check_name="regression",
+            check_type="AUTO_HOOK",
+            result_status="FAIL",
+            actual_value="0.0",
+            threshold="0.9",
+        )
+        raise PipelineHaltError(MockLawAwarePassStage(), chk)
+
+    monkeypatch.setattr(PipelineIterator, "_regression_check", boom)
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = PipelineIterator(
+        pipeline,
+        None,
+        regression_window=10,
+        halt_on_first_fail=True,
+    )
+    run = it.iterate(only_stages=[2])
+
+    assert run.halted is True
+    assert len(run.laws_failed) == 1
+    assert run.laws_failed[0][0] == 10
+
+
+def test_pipeline_law_id_restored_after_run():
+    ctx = StageContext()
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=ctx,
+    )
+    pipeline.run(
+        {},
+        only_stages=[2],
+        law_id=999,
+        isolation_mode=True,
+        exclude_isolated=True,
+    )
+    assert ctx.law_id is None
+    assert ctx.law_batch is None
+    assert ctx.isolation_mode is False
+    assert ctx.exclude_isolated is False
+
+
+def test_regression_check_invokes_pipeline_per_law():
+    calls: list = []
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    orig = pipeline.run
+
+    def wrapped(*args, **kwargs):  # noqa: ANN002, ANN003
+        calls.append(kwargs.get("law_id"))
+        return orig(*args, **kwargs)
+
+    pipeline.run = wrapped  # type: ignore[method-assign]
+
+    it = PipelineIterator(pipeline, None)
+    it._regression_check([101, 102], only_stages=[2])
+    assert calls == [101, 102]
+
+
+def test_fetch_law_order_ascending_size(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_cur.fetchall.return_value = [(30, 100), (10, 5), (20, 50)]
+    mock_conn.cursor.return_value = mock_cur
+    monkeypatch.setattr(psycopg2, "connect", lambda _url: mock_conn)
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = PipelineIterator(pipeline, None, order="ascending_size")
+    assert it._fetch_law_order() == [10, 20, 30]
+
+
+def test_fetch_law_order_descending_size(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_cur.fetchall.return_value = [(1, 10), (2, 90), (3, 30)]
+    mock_conn.cursor.return_value = mock_cur
+    monkeypatch.setattr(psycopg2, "connect", lambda _url: mock_conn)
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = PipelineIterator(pipeline, None, order="descending_size")
+    assert it._fetch_law_order() == [2, 3, 1]
+
+
+def test_fetch_law_order_sequential(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+    mock_conn = MagicMock()
+    mock_cur = MagicMock()
+    mock_cur.fetchall.return_value = [(20, 1), (3, 1), (100, 1)]
+    mock_conn.cursor.return_value = mock_cur
+    monkeypatch.setattr(psycopg2, "connect", lambda _url: mock_conn)
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = PipelineIterator(pipeline, None, order="sequential")
+    assert it._fetch_law_order() == [100, 20, 3]
+
+
+def test_fetch_law_order_sql_error_returns_empty(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
+
+    def boom(_url):  # noqa: ANN001
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(psycopg2, "connect", boom)
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = PipelineIterator(pipeline, None)
+    assert it._fetch_law_order() == []
+
+
+def test_pipeline_law_id_visible_in_stage(monkeypatch):
+    seen: list = []
+
+    class CaptureStage(Stage):
+        @property
+        def stage_number(self) -> int:
+            return 2
+
+        @property
+        def stage_name(self) -> str:
+            return "capture"
+
+        def run(self, input_data, ctx):  # noqa: ANN001
+            seen.append(ctx.law_id)
+            return StageOutput(data={}, metrics={})
+
+        def measure_accuracy(self, output, ctx):  # noqa: ANN001
+            return (0.95, 100)
+
+    pipeline = TAIExtractionPipeline(
+        stages=[CaptureStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    pipeline.run({}, only_stages=[2], law_id=12345)
+    assert seen == [12345]
+
+
+def test_isolation_reason_fp_as_bonda():
+    assert isolation_reason_for_fp_subtype("AS_본다") == "FP_AS_본다_보조_룰"
+
+
+def test_phase22_v3_pass_first_iteration(monkeypatch):
+    monkeypatch.setattr(
+        "engine.iterator.fetch_law_ids_ordered",
+        lambda _order: [100],
+    )
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = Phase22V3Iterator(
+        pipeline,
+        None,
+        regression_window=0,
+        max_iterations_per_law=3,
+    )
+    run = it.iterate(only_stages=[2])
+    assert not run.halted
+    assert len(run.law_results) == 1
+    assert run.law_results[0].final_status == "PASS"
+    assert run.law_results[0].iterations_used == 1
+
+
+def test_phase22_v3_fail_halt_after_max_iter(monkeypatch):
+    monkeypatch.setattr(
+        "engine.iterator.fetch_law_ids_ordered",
+        lambda _order: [7],
+    )
+    # 매 반복 격리 1건씩 → 안정 상태(PASS_STABLE) 분기 미발동
+    monkeypatch.setattr(Phase22V3Iterator, "_isolate_fp_rows", lambda self, lid, c: 1)
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwareFailAtStage(fail_at=7)],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = Phase22V3Iterator(
+        pipeline,
+        None,
+        regression_window=0,
+        max_iterations_per_law=2,
+        halt_on_first_fail=True,
+    )
+    run = it.iterate(only_stages=[2])
+    assert run.halted
+    assert run.laws_halted[0][1].final_status == "FAIL_HALT"
+
+
+def test_phase22_v3_regression_checkpoint(monkeypatch):
+    monkeypatch.setattr(
+        "engine.iterator.fetch_law_ids_ordered",
+        lambda _order: list(range(11)),
+    )
+    calls: list[list] = []
+
+    def spy(self, recent, *, only_stages=None):  # noqa: ANN001
+        calls.append(list(recent))
+
+    monkeypatch.setattr(Phase22V3Iterator, "_regression_check", spy)
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = Phase22V3Iterator(
+        pipeline,
+        None,
+        regression_window=10,
+        max_iterations_per_law=1,
+    )
+    it.iterate(only_stages=[2])
+    assert len(calls) >= 1
+
+
+def test_stage2_initialization_once():
+    """동일 Stage2Decomposer 인스턴스 — Kiwi/분해기/룰 로드 1회만."""
+    from engine.stages.stage_2 import Stage2Decomposer
+
+    dec_mock = MagicMock()
+    dec_mock.decompose_batch.return_value = []
+
+    with patch("engine.stages.stage_2.MorphemeEngine") as ME:
+        with patch(
+            "engine.stages.stage_2.LegacyStage2Decomposer",
+            return_value=dec_mock,
+        ) as LD:
+            s2 = Stage2Decomposer()
+            ctx = StageContext(supabase=None)
+            for _ in range(5):
+                s2.run(None, ctx)
+
+            ME.assert_called_once()
+            LD.assert_called_once()
+            dec_mock.load_rules.assert_called_once()
+            assert dec_mock.decompose_batch.call_count == 5
+
+
+def test_verdict_is_tp_like():
+    assert _verdict_is_tp_like("TP")
+    assert _verdict_is_tp_like("PHASE1_TP")
+    assert not _verdict_is_tp_like("FP")
+
+
+def test_phase22_v3_regression_skips_when_sample_under_30(monkeypatch):
+    calls: list[Any] = []
+
+    def fake_variance(self, lid):  # noqa: ANN001
+        calls.append(lid)
+        return 0
+
+    monkeypatch.setattr(Phase22V3Iterator, "_check_tp_variance", fake_variance)
+    monkeypatch.setattr(
+        "engine.iterator.compute_stage2_sample_accuracy",
+        lambda _sb, **kw: (0.95, 12),
+    )
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = Phase22V3Iterator(pipeline, None, regression_window=10)
+    it._regression_check([42], only_stages=[2])
+    assert calls == []
+
+
+def test_stable_state_pass_after_no_marking_change(monkeypatch):
+    """격리 1건 후 연속 0건 마킹 → PASS_STABLE (WEAK-only·안정 상태)."""
+    stage = MockLawAwarePassStage()
+    chk = CheckResult(
+        stage=2,
+        check_name="sample_accuracy",
+        check_type="AUTO_HOOK",
+        result_status="FAIL",
+        expected_value=">=0.9",
+        actual_value="0.0",
+        threshold="0.9",
+    )
+
+    def always_halt(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise PipelineHaltError(stage, chk)
+
+    pipeline = TAIExtractionPipeline(
+        stages=[stage],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    monkeypatch.setattr(pipeline, "run", always_halt)
+
+    remaining = [1, 0]
+
+    def fake_iso(self, law_id, c):  # noqa: ANN001
+        return remaining.pop(0)
+
+    monkeypatch.setattr(Phase22V3Iterator, "_isolate_fp_rows", fake_iso)
+
+    it = Phase22V3Iterator(pipeline, None, max_iterations_per_law=5)
+    lp = it._process_single_law("d143d5a2-test", only_stages=[2])
+    assert lp.final_status == "PASS_STABLE"
+    assert lp.iterations_used == 2
+    assert lp.isolated_fp_marked == 1
+
+
+def test_phase22_v3_regression_tp_variance_raises(monkeypatch):
+    monkeypatch.setattr(
+        "engine.iterator.compute_stage2_sample_accuracy",
+        lambda _sb, **kw: (0.88, 40),
+    )
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = Phase22V3Iterator(pipeline, None, regression_window=10)
+    it._tp_baseline[9] = {"e1": "TP", "e2": "FP"}
+    monkeypatch.setattr(it, "_tp_snapshot_for_law", lambda lid: {"e1": "FP", "e2": "FP"})
+
+    with pytest.raises(PipelineHaltError) as ei:
+        it._regression_check([9], only_stages=[2])
+    assert ei.value.check.check_name == "phase22_v3_regression_tp_variance"
+    assert ei.value.check.result_status == "FAIL"
+
+
+def test_process_single_law_reverse_then_pass(monkeypatch):
+    """정순 PASS 후 역순 실패 → 격리 → 차 회복 순 역순 PASS."""
+    calls = {"n": 0}
+
+    def rev(_sb, _lid, **kw):  # noqa: ANN001
+        calls["n"] += 1
+        return calls["n"] >= 2, 0.92, 20
+
+    monkeypatch.setattr("engine.iterator.compute_law_reverse_verification", rev)
+    monkeypatch.setattr(
+        Phase22V3Iterator,
+        "_isolate_failed_subtypes",
+        lambda self, lid: 2,
+    )
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = Phase22V3Iterator(pipeline, None, max_iterations_per_law=5)
+    lp = it._process_single_law("law-v4-a", only_stages=[2])
+    assert lp.final_status == "PASS"
+    assert lp.iterations_used == 2
+
+
+def test_reverse_fail_no_mark_pass_stable(monkeypatch):
+    """역순 계속 FAIL + 역순 FP 격리 0건 → PASS_STABLE (90c994c 본질)."""
+    monkeypatch.setattr(
+        "engine.iterator.compute_law_reverse_verification",
+        lambda sb, lid, **kw: (False, 0.5, 4),
+    )
+    monkeypatch.setattr(
+        Phase22V3Iterator,
+        "_isolate_failed_subtypes",
+        lambda self, lid: 0,
+    )
+
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = Phase22V3Iterator(pipeline, None, max_iterations_per_law=2)
+    lp = it._process_single_law("law-v4-b", only_stages=[2])
+    assert lp.final_status == "PASS_STABLE"
+    assert lp.iterations_used == 2
+
+
+def test_global_subtype_diagnostic_swallows_errors(monkeypatch):
+    monkeypatch.setattr(
+        "engine.iterator.compute_subtype_group_accuracy",
+        lambda **kw: (_ for _ in ()).throw(RuntimeError("diag")),
+    )
+    pipeline = TAIExtractionPipeline(
+        stages=[MockLawAwarePassStage()],
+        validator=Validator(supabase=None),
+        ctx=StageContext(),
+    )
+    it = Phase22V3Iterator(pipeline, object())
+    it._log_global_subtype_diagnostic()

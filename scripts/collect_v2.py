@@ -13,13 +13,13 @@
 
 사용법:
     cd ~/dev/tai-api
-    # .env 자동 로드 — set -a; source .env; set +a 불필요
+    set -a; source .env; set +a
     
-    railway run python3 scripts/collect_v2.py test "산업안전보건법"
-    railway run python3 scripts/collect_v2.py all
-    railway run python3 scripts/collect_v2.py retry
-    railway run python3 scripts/collect_v2.py domain FIRE
-    railway run python3 scripts/collect_v2.py monitor
+    python3 scripts/collect_v2.py test "산업안전보건법"
+    python3 scripts/collect_v2.py all
+    python3 scripts/collect_v2.py retry
+    python3 scripts/collect_v2.py domain FIRE
+    python3 scripts/collect_v2.py monitor
 """
 from __future__ import annotations
 
@@ -34,27 +34,6 @@ from typing import Any, Optional
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
-
-# v3.0.1 (2026-05-03 S6): .env 자동 로드 추가
-try:
-    from dotenv import load_dotenv
-    _ENV_PATH = os.path.join(_ROOT, ".env")
-    if os.path.isfile(_ENV_PATH):
-        load_dotenv(_ENV_PATH, override=False)
-except ImportError:
-    print("[warn] python-dotenv 미설치 — pip3 install python-dotenv 권장. "
-          "환경변수가 이미 export 되어 있으면 무시해도 됩니다.", file=sys.stderr)
-
-# v3.0.2 (2026-05-03 S6): iwinv 프록시 hung 상태 우회
-# Railway env에서 주입되는 OUTBOUND_PROXY는 현재 죽은 iwinv VPS Squid를 가리킴.
-# routers/law_collector.py v3.0.8의 fetch_law_list/fetch_law_content는
-# OUTBOUND_PROXY가 있으면 자동으로 통과시키도록 되어있는데, 사용자 Mac은 이미
-# OC=taieng에 IP 등록되어 있어 직접 호출이 정상 작동함.
-# → 스크립트 진입 시 OUTBOUND_PROXY 명시적 unset.
-_removed_proxy = os.environ.pop("OUTBOUND_PROXY", None)
-if _removed_proxy:
-    print(f"[info] OUTBOUND_PROXY={_removed_proxy} 무시 (Mac 직접 호출 사용)",
-          file=sys.stderr)
 
 from db.database import get_supabase
 from routers.law_collector import (
@@ -152,7 +131,18 @@ def save_law_to_db(
     raw_xml: str,
     articles: list,
     supabase: Any,
+    *,
+    partial_merge: bool = False,
 ) -> dict:
+    """
+    조문 중심 UPSERT 저장:
+      TX1: law_master UPSERT + law_version UPSERT + law_content_raw INSERT
+      TX2: law_article UPSERT (law_id 기반) + paragraph/item 재구성
+           - 조문 UUID는 (law_id, article_internal_key)로 영구 유지
+           - paragraph/item은 article 단위로 delete+insert (하위 구조는 재파싱 가능)
+      partial_merge=True: 이번 payload에 없는 기존 조문을 DELETED 처리하지 않음
+                          (형법·민법 등 인용 Top-N 부분 적재 전용).
+    """
     law_mst_no = matched.get("law_mst_no", "") or law_info.get("law_mst_no", "")
     law_api_id = matched.get("law_api_id", "") or law_info.get("law_api_id", "")
     law_name = law_info.get("law_name", "") or target.get("law_name", "")
@@ -164,6 +154,7 @@ def save_law_to_db(
     version_no = f"{law_info.get('announcement_date', '')}_{law_info.get('law_number', '')}"
     law_key = f"{law_api_id}_{law_mst_no}"
     
+    # ─── TX1-1: law_master UPSERT ──────────────────────────
     master_res = supabase.table("law_master").upsert({
         "law_key": law_key,
         "law_api_id": law_api_id,
@@ -189,6 +180,7 @@ def save_law_to_db(
         raise RuntimeError("law_master upsert 실패")
     law_id = master_res.data[0]["id"]
     
+    # ─── TX1-2: law_version UPSERT ─────────────────────────
     existing_version = supabase.table("law_version") \
         .select("id") \
         .eq("law_id", law_id) \
@@ -239,6 +231,7 @@ def save_law_to_db(
         "updated_at": datetime.now().isoformat(),
     }).eq("id", law_id).execute()
     
+    # ─── TX1-3: law_content_raw (버전당 1개) ───────────────
     supabase.table("law_content_raw").delete().eq("law_version_id", version_id).execute()
     supabase.table("law_content_raw").insert({
         "law_version_id": version_id,
@@ -248,17 +241,24 @@ def save_law_to_db(
         "updated_at": datetime.now().isoformat(),
     }).execute()
     
+    # ─── TX2: 조문 UPSERT (UUID 영구 유지) ─────────────────
+    # 조문 중심 설계: (law_id, article_internal_key)로 UPSERT
+    # 같은 조문은 재수집해도 같은 UUID 유지 → 외부 참조 안 끊김
+    
+    # 현재 수집된 조문의 internal_key 목록 (나중에 "사라진 조문" 감지용)
     current_keys = set()
+    
     article_count = 0
     paragraph_count = 0
     item_count = 0
-    preserved_count = 0
-    new_article_count = 0
+    preserved_count = 0  # UUID 유지된 조문 (기존 존재)
+    new_article_count = 0  # 신규 조문
     
     for art in articles:
         ikey = art["article_internal_key"] or f"__auto_{art['article_no']}_{art['article_sub_no'] or 0}"
         current_keys.add(ikey)
         
+        # 기존 조문 조회 (UUID 유지 여부 판단)
         existing = supabase.table("law_article") \
             .select("id") \
             .eq("law_id", law_id) \
@@ -282,16 +282,20 @@ def save_law_to_db(
         }
         
         if existing.data:
+            # UPDATE (UUID 유지)
             article_id = existing.data[0]["id"]
             supabase.table("law_article").update(article_payload).eq("id", article_id).execute()
             preserved_count += 1
         else:
+            # INSERT (신규 조문)
             art_res = supabase.table("law_article").insert(article_payload).execute()
             article_id = art_res.data[0]["id"]
             new_article_count += 1
         
         article_count += 1
         
+        # paragraph/item 재구성 (article 단위 delete + insert)
+        # 하위 구조는 재파싱으로 동일 결과 생성되므로 UUID 영구 유지 불필요
         supabase.table("law_paragraph").delete().eq("article_id", article_id).execute()
         
         for p_idx, para in enumerate(art["paragraphs"]):
@@ -344,8 +348,10 @@ def save_law_to_db(
                     }).execute()
                     item_count += 1
     
+    # "사라진 조문" 감지: 이번 수집에 없는 기존 조문을 DELETED 상태로 표시
+    # (물리 삭제 안 함 - 외부 참조 보존)
     deleted_count = 0
-    if current_keys:
+    if current_keys and not partial_merge:
         existing_all = supabase.table("law_article") \
             .select("id,article_internal_key") \
             .eq("law_id", law_id) \
@@ -366,16 +372,21 @@ def save_law_to_db(
         "article_count": article_count,
         "paragraph_count": paragraph_count,
         "item_count": item_count,
-        "preserved_uuid_count": preserved_count,
-        "new_article_count": new_article_count,
-        "deleted_count": deleted_count,
+        "preserved_uuid_count": preserved_count,  # UUID 유지된 조문
+        "new_article_count": new_article_count,    # 신규 조문
+        "deleted_count": deleted_count,             # 삭제된 조문 (soft delete)
     }
 
+
+# ═══════════════════════════════════════════════════════════
+# 검증 체크리스트
+# ═══════════════════════════════════════════════════════════
 
 def verify_one_law(target: dict, save_result: dict, parsed: dict, supabase) -> dict:
     law_id = save_result["law_id"]
     article_count = save_result["article_count"]
     
+    # ACTIVE 상태 조문만 검증 대상
     valid_query = supabase.table("law_article") \
         .select("id,article_text", count="exact") \
         .eq("law_id", law_id) \
@@ -427,6 +438,10 @@ def verify_one_law(target: dict, save_result: dict, parsed: dict, supabase) -> d
     
     return checklist
 
+
+# ═══════════════════════════════════════════════════════════
+# 1개 법령 수집 유닛
+# ═══════════════════════════════════════════════════════════
 
 def collect_one_law(target: dict, supabase) -> dict:
     target_id = target["id"]
@@ -489,6 +504,7 @@ def collect_one_law(target: dict, supabase) -> dict:
         )
         result["save_result"] = save_result
         
+        # 조문 중심 설계 효과 출력
         preserved = save_result.get("preserved_uuid_count", 0)
         new = save_result.get("new_article_count", 0)
         deleted = save_result.get("deleted_count", 0)
@@ -624,6 +640,10 @@ def _fetch_and_parse_admrul(target, law_name, law_api_id, law_api_mst_no):
     parsed = parse_admrul_content_xml(content_result["xml"])
     return content_result, matched, parsed
 
+
+# ═══════════════════════════════════════════════════════════
+# 명령 핸들러
+# ═══════════════════════════════════════════════════════════
 
 def cmd_test(law_name: str) -> int:
     supabase = get_supabase()

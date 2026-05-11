@@ -1,15 +1,8 @@
-# main.py — v5.44.0
-# v5.44.0: internal_inbox 라우터 등록 (POST /internal/inbox/notify) — Phase 3 인박스 슬랙 알림
-# v5.43.0: law_catalog_collector 라우터 등록 (POST /law-collector/collect-catalog — 외부 카탈로그 수집)
-# v5.42.1: POST /slack/interact 별칭 (Slack Interactions → slack_kin 동일 핸들러)
-# v5.42.0: kin_generate 라우터 등록 (POST /kin/generate, /kin/collect — 어드민 수동 실행)
-# v5.41.0: slack_kin 라우터 등록 (POST /slack/kin/interactions — 지식인 초안 승인·Playwright)
-# v5.40.0: tbm_issue 라우터 등록 (PATCH /tbm/{id}/attendees/{aid}/issue — 이상 표시)
-# v5.39.0: document_engine 라우터 등록 (문서 자동생성 엔진 — preview/generate)
-# v5.38.1: 임시 디버그 엔드포인트 등록 (billing 500 traceback 캡처)
-# v5.38.0: payment_ops + 결제 서비스 레이어 분리 (origin/dev 병합)
-# v5.37.0: kosha_collect 라우터 등록 (POST /kosha-collect/run, /kosha-collect/{target})
-# v5.36.1: pw_reset 라우터 등록 (POST /auth/pw-reset/request, /auth/pw-reset/confirm)
+# main.py — v5.39.0
+# v5.39.0: Compiler Core + Residual Intelligence + Admin Review 라우터 등록 (법령엔진 v3.0 Deterministic)
+# v5.38.0: admin_inquiries 라우터 등록 (GET/POST/PATCH /admin/inquiries) — Phase 4 통합 인박스
+# v5.37.0: internal_inbox 라우터 등록 (POST /internal/inbox/notify) — Phase 3 인박스 슬랙 알림
+# v5.36.0: pw_reset 라우터 등록 (POST /auth/pw-reset/request, /auth/pw-reset/confirm)
 # v5.35.0: payment_billing 라우터 등록 (POST /payments/inicis/billing/*, /payments/subscriptions/{id}/cancel)
 # v5.34.0: Sentry 복원 + /health 개선 (항상 200 반환) + diagram_proxy 복원
 # v5.33.0: Sentry 에러 모니터링 (SENTRY_DSN 환경 변수 시 초기화)
@@ -43,7 +36,6 @@ from routers.legal_engine_patch      import router as legal_engine_patch_router
 from routers.engine_qa               import router as engine_qa_router
 from routers.law_rule_generator      import router as law_rule_generator_router
 from routers.engine_document         import router as engine_document_router
-from routers.document_forms          import router as document_forms_router
 from routers.contract_kmong          import router as contract_kmong_router
 from routers.schedule_pipeline       import router as schedule_pipeline_router
 from routers.ksic_engine             import router as ksic_engine_router
@@ -66,7 +58,6 @@ from routers.personnel               import router as personnel_router
 from routers.repair                  import router as repair_router
 from routers.biz_verify              import router as biz_verify_router
 from routers.kosha_apis              import router as kosha_router
-from routers.kosha_collect           import router as kosha_collect_router    # v5.37.0
 from routers.fire_hazmat             import router as fire_hazmat_router
 from routers.safety_info             import router as safety_info_router
 from routers.posts                   import router as posts_router
@@ -82,7 +73,6 @@ from routers.inspection_checklist    import router as inspection_router
 from routers.inspection_setup        import router as inspection_setup_router
 from routers.admin_stats             import router as admin_stats_router
 from routers.law_collector           import router as law_collector_router
-from routers.law_catalog_collector   import router as law_catalog_collector_router  # v5.43.0
 from routers.cron_manager            import router as cron_manager_router
 from routers.byulpyo                 import router as byulpyo_router
 from routers.price_setting           import router as price_setting_router
@@ -107,7 +97,6 @@ from routers.event_trigger           import router as event_trigger_router
 from routers.worker_registry         import router as worker_registry_router
 from routers.diagnosis               import router as diagnosis_router
 from routers.tbm                     import router as tbm_router
-from routers.tbm_issue               import router as tbm_issue_router                # v5.40.0 TBM이상표시
 from routers.tbm_templates           import router as tbm_templates_router
 from routers.safety_meetings         import router as safety_meetings_router
 from routers.risk_assessments        import router as risk_assessments_router
@@ -143,22 +132,18 @@ from routers.diagnosis_plan_recommend import router as plan_recommend_router
 from routers.diagnosis_integrated    import router as diagnosis_integrated_router   # v5.30.0
 from routers.diagnosis_report        import router as diagnosis_report_router        # v5.31.0
 from routers.diagnosis_proposal      import router as diagnosis_proposal_router      # v5.31.1
-from routers.diagnosis_result_web    import router as diagnosis_result_web_router    # v5.37.0
-from routers.law_viewer              import router as law_viewer_router               # v5.38.0 조문조회
 from routers.diagram_proxy           import router as diagram_proxy_router           # v5.32.0
-from routers.uploads                 import router as uploads_router                  # v5.36.0 사진업로드
-from routers.emergency_report        import router as emergency_report_router         # v5.36.0 긴급신고
-from routers.safety_reports          import router as safety_reports_router            # v5.36.0 이상신고
-from routers.pw_reset                import router as pw_reset_router                # v5.36.1 비밀번호재설정
-from routers.debug                   import router as debug_router                   # 임시 디버그
-from routers.document_engine         import router as document_engine_api_router      # v5.39.0 문서엔진
-from routers.slack_kin               import router as slack_kin_router, interact_alias_router as slack_interact_alias_router  # v5.41.0 Slack×지식인 반자동
-from routers.kin_generate            import router as kin_generate_router             # v5.42.0 어드민 수동 실행
-from routers.internal_inbox          import router as internal_inbox_router            # v5.44.0 인박스 슬랙 알림
+from routers.pw_reset                import router as pw_reset_router                # v5.36.0 비밀번호재설정
+from routers.internal_inbox          import router as internal_inbox_router            # v5.37.0 인박스 슬랙 알림
+from routers.admin_inquiries         import router as admin_inquiries_router            # v5.38.0 Phase 4 인박스 API
+# v5.39.0 법령엔진 v3.0 Deterministic Compiler Core
+from routers.compiler_core           import router as compiler_core_router
+from routers.residual_intelligence   import router as ri_router
+from routers.admin_review            import router as admin_review_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.44.0"
+APP_VERSION = "5.39.0"
 
 
 @asynccontextmanager
@@ -191,12 +176,10 @@ app.add_middleware(
     allow_origins=[
         "https://taieng.co.kr",
         "https://www.taieng.co.kr",
+        "https://new.taieng.co.kr",
         "https://admin.taieng.co.kr",
         "https://tadmin.taieng.co.kr",
         "https://safe.taieng.co.kr",
-        "capacitor://localhost",
-        "http://localhost",
-        "https://localhost",
         "http://localhost:5500",
         "http://127.0.0.1:5500",
         "http://localhost:3000",
@@ -216,6 +199,7 @@ app.include_router(alert_messages_router)
 app.include_router(feature_flags_router)
 app.include_router(site_public_router)
 app.include_router(site_faq_admin_router)
+app.include_router(admin_inquiries_router)
 app.include_router(anonymous_diagnosis_router)
 app.include_router(public_pricing_router)
 app.include_router(connect_registration_router)
@@ -229,10 +213,7 @@ app.include_router(plan_recommend_router)
 app.include_router(diagnosis_integrated_router)
 app.include_router(diagnosis_report_router)
 app.include_router(diagnosis_proposal_router)
-app.include_router(diagnosis_result_web_router)
-app.include_router(law_viewer_router)
 app.include_router(diagram_proxy_router)
-app.include_router(debug_router)                                                   # 임시 디버그
 
 # 인증 필요 엔드포인트
 app.include_router(auth_router)
@@ -246,8 +227,6 @@ app.include_router(legal_engine_patch_router)
 app.include_router(engine_qa_router)
 app.include_router(law_rule_generator_router)
 app.include_router(engine_document_router)
-app.include_router(document_forms_router)
-app.include_router(document_engine_api_router)                                     # v5.39.0 문서엔진
 app.include_router(contract_kmong_router)
 app.include_router(schedule_pipeline_router)
 app.include_router(ksic_engine_router)
@@ -270,7 +249,6 @@ app.include_router(personnel_router)
 app.include_router(repair_router)
 app.include_router(biz_verify_router)
 app.include_router(kosha_router)
-app.include_router(kosha_collect_router)                                           # v5.37.0
 app.include_router(fire_hazmat_router)
 app.include_router(safety_info_router)
 app.include_router(posts_router)
@@ -286,7 +264,6 @@ app.include_router(inspection_router)
 app.include_router(inspection_setup_router)
 app.include_router(admin_stats_router)
 app.include_router(law_collector_router)
-app.include_router(law_catalog_collector_router)                                   # v5.43.0 외부 카탈로그
 app.include_router(cron_manager_router)
 app.include_router(byulpyo_router)
 app.include_router(price_setting_router)
@@ -304,7 +281,7 @@ app.include_router(contracts_engine_router,  prefix="/matching/contracts", tags=
 app.include_router(settlements_router,       prefix="/settlements",        tags=["정산"])
 app.include_router(identity_router, prefix="/identity", tags=["본인인증"])
 app.include_router(internal_api_registry_router)
-app.include_router(internal_inbox_router)                                          # v5.44.0 인박스 슬랙 알림
+app.include_router(internal_inbox_router)
 app.include_router(report_api_registry_router)
 app.include_router(construction_router, prefix="/construction", tags=["건설안전"])
 app.include_router(safety_template_router)
@@ -315,26 +292,24 @@ app.include_router(diagnosis_roi_router)
 app.include_router(diagnosis_transform_router)
 app.include_router(overdue_checker_router)
 app.include_router(tbm_router)
-app.include_router(tbm_issue_router)                                               # v5.40.0 TBM이상표시
 app.include_router(tbm_templates_router)
 app.include_router(safety_meetings_router)
 app.include_router(risk_assessments_router)
-app.include_router(payment_billing_router)                                        # v5.35.0 정기결제
 app.include_router(payment_router)
 app.include_router(payment_ops_router)
+app.include_router(payment_billing_router)                                        # v5.35.0 정기결제
 app.include_router(corrective_actions_router)
 app.include_router(messaging_router)
-app.include_router(slack_kin_router)                                               # v5.41.0 Slack 지식인 반자동
-app.include_router(slack_interact_alias_router)                                    # POST /slack/interact → 동일 인터랙션 핸들러
-app.include_router(kin_generate_router)                                            # v5.42.0 어드민 수동 실행
 app.include_router(fcm_router)
 app.include_router(worker_check_router)
 app.include_router(worker_home_router)
 app.include_router(ai_copywrite_router)
 app.include_router(mail_router)
-app.include_router(uploads_router)
-app.include_router(emergency_report_router)
-app.include_router(safety_reports_router)
+
+# v5.39.0 법령엔진 v3.0 — Deterministic Compiler Core + Human Review
+app.include_router(compiler_core_router)                                          # 7 API — /api/v1/compiler/*
+app.include_router(ri_router)                                                      # 22 API — /api/v1/residual-intelligence/*
+app.include_router(admin_review_router)                                            # 12 API — /api/v1/admin/*
 
 
 @app.get("/")
