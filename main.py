@@ -1,4 +1,5 @@
-# main.py — v5.39.0
+# main.py — v5.40.0
+# v5.40.0: 법령진단서비스 + SaaS 반복설정 분리 (diagnosis_engine + saas_setup 라우터)
 # v5.39.0: Compiler Core + Residual Intelligence + Admin Review 라우터 등록 (법령엔진 v3.0 Deterministic)
 # v5.38.0: admin_inquiries 라우터 등록 (GET/POST/PATCH /admin/inquiries) — Phase 4 통합 인박스
 # v5.37.0: internal_inbox 라우터 등록 (POST /internal/inbox/notify) — Phase 3 인박스 슬랙 알림
@@ -140,10 +141,13 @@ from routers.admin_inquiries         import router as admin_inquiries_router    
 from routers.compiler_core           import router as compiler_core_router
 from routers.residual_intelligence   import router as ri_router
 from routers.admin_review            import router as admin_review_router
+# v5.40.0 법령진단서비스 / SaaS 반복설정 분리
+from routers.diagnosis_engine        import router as diagnosis_engine_router
+from routers.saas_setup              import router as saas_setup_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.39.0"
+APP_VERSION = "5.40.0"
 
 
 @asynccontextmanager
@@ -310,6 +314,10 @@ app.include_router(mail_router)
 app.include_router(compiler_core_router)                                          # 7 API — /api/v1/compiler/*
 app.include_router(ri_router)                                                      # 22 API — /api/v1/residual-intelligence/*
 app.include_router(admin_review_router)                                            # 12 API — /api/v1/admin/*
+
+# v5.40.0 법령진단서비스 / SaaS 반복설정 분리
+app.include_router(diagnosis_engine_router)                                        # 3 API — /api/v1/diagnosis-engine/*
+app.include_router(saas_setup_router)                                              # 6 API — /api/v1/saas-setup/*
 
 
 @app.get("/")
