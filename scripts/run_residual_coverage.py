@@ -152,7 +152,7 @@ def main():
     conn.commit()
     print(f"    Token 없는 Part: {no_token:,}건")
 
-    # (B) UNKNOWN Family Part — family_candidate.part_id 기반
+    # (B) UNKNOWN Family Part
     cur.execute("""
         INSERT INTO residual_candidate
             (part_id, article_id, law_id, residual_type, failed_reason,
@@ -175,7 +175,7 @@ def main():
     conn.commit()
     print(f"    UNKNOWN Family Part: {registry_gap:,}건")
 
-    # (C) UNKNOWN Constraint Node
+    # (C) UNKNOWN Constraint Node — raw_token 칼럼 사용
     cur.execute("""
         INSERT INTO residual_candidate
             (part_id, article_id, law_id, residual_type, failed_reason,
@@ -183,8 +183,8 @@ def main():
         SELECT DISTINCT cn.part_id, la.id, la.law_id,
                'UNMATCHED_CONDITION',
                'UNKNOWN_CONSTRAINT_NODE',
-               left(cn.raw_text, 200),
-               COALESCE(length(cn.raw_text), 0),
+               left(cn.raw_token, 200),
+               COALESCE(length(cn.raw_token), 0),
                'NEW'
         FROM constraint_node cn
         JOIN law_article_part lap ON cn.part_id = lap.id
