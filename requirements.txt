@@ -22,3 +22,4 @@ sentry-sdk[fastapi]
 # 라이선스: LGPL v3 — 동적 링크 사용 OK (NOTICE 파일 별도 관리 필요)
 kiwipiepy>=0.22.0,<0.24.0
 kiwipiepy-model>=0.22.0
+playwright
