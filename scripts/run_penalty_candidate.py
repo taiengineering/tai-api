@@ -11,14 +11,12 @@
 import logging, os, sys, time, re
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 
-# [1단계] Penalty 탐지 표현
 PENALTY_KEYWORDS = [
     '과태료', '벌금', '징역', '과징금', '허가취소', '영업정지',
     '사용정지', '개선명령', '시정명령', '몰수', '양벌규정',
     '처한다', '부과한다',
 ]
 
-# [3단계] Penalty Family 매핑
 PENALTY_FAMILY_MAP = {
     '과태료':     'ADMINISTRATIVE_FINE_FAMILY',
     '벌금':     'CRIMINAL_FINE_FAMILY',
@@ -29,14 +27,13 @@ PENALTY_FAMILY_MAP = {
     '사용정지': 'USE_SUSPENSION_FAMILY',
     '개선명령': 'CORRECTIVE_ORDER_FAMILY',
     '시정명령': 'CORRECTIVE_ORDER_FAMILY',
-    '몫수':     'CONFISCATION_FAMILY',
+    '몰수':     'CONFISCATION_FAMILY',
     '양벌규정': 'JOINT_PENALTY_FAMILY',
 }
 
-# [5단계] Violation Trigger 패턴
 VIOLATION_TRIGGERS = [
-    ('위반한 \uc790',          'VIOLATION_FAMILY'),
-    ('하지 아니한 \uc790',     'NON_PERFORMANCE_FAMILY'),
+    ('위반한 자',          'VIOLATION_FAMILY'),
+    ('하지 아니한 자',     'NON_PERFORMANCE_FAMILY'),
     ('거짓으로',           'FALSE_REPORTING_FAMILY'),
     ('이행하지 아니한',    'NON_COMPLIANCE_FAMILY'),
     ('허가를 받지 아니하고', 'UNPERMITTED_FAMILY'),
@@ -44,18 +41,9 @@ VIOLATION_TRIGGERS = [
     ('적합하지 아니한',    'NON_CONFORMITY_FAMILY'),
 ]
 
-# Numeric 패턴 (4단계)
-NUMERIC_PENALTY_RE = re.compile(
-    r'(\d[\d,]*)(\uc5b5\uc6d0|\ub9cc\uc6d0|\ucc9c\ub9cc\uc6d0|\uc6d0)\s*이하'
-)
-DURATION_PENALTY_RE = re.compile(
-    r'(\d+)(\ub144|\uac1c\uc6d4|\uc77c)\s*이하'
-)
-
-# [6단계] Reference 패턴
-REF_PATTERN = re.compile(
-    r'제(\d+)조(?:의(\d+))?(?:제(\d+)항)?'
-)
+NUMERIC_PENALTY_RE = re.compile(r'(\d[\d,]*)(억원|만원|천만원|원)\s*이하')
+DURATION_PENALTY_RE = re.compile(r'(\d+)(년|개월|일)\s*이하')
+REF_PATTERN = re.compile(r'제(\d+)조(?:의(\d+))?(?:제(\d+)항)?')
 
 CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS penalty_candidate (
@@ -93,6 +81,7 @@ CREATE TABLE IF NOT EXISTS penalty_reference_link (
     law_id UUID NOT NULL,
     from_article_no TEXT,
     to_article_ref TEXT NOT NULL,
+    to_article_no INTEGER,
     to_article_id UUID,
     status TEXT NOT NULL DEFAULT 'LINK_CANDIDATE',
     created_at TIMESTAMPTZ DEFAULT now()
@@ -206,14 +195,11 @@ def main():
 
     start = time.time()
 
-    # ================================================
-    # [1~3단계] Penalty 조문 식별 + Family 분류
-    # ================================================
+    # [1~3단계] Penalty 조문 식별
     print(f"\n{'─'*64}")
     print("  [1~3단계] Penalty 조문 식별")
     print(f"{'─'*64}")
 
-    # Part 레벨에서 penalty keyword 탐지
     keyword_conditions = " OR ".join([f"lap.part_text LIKE '%{kw}%'" for kw in PENALTY_KEYWORDS])
     rows = safe_query(f"""
         SELECT lap.id::text, lap.article_id::text, la.law_id::text,
@@ -230,7 +216,6 @@ def main():
     ref_rows = []
 
     for part_id, article_id, law_id, text, article_no in rows:
-        # Family 결정
         families_found = set()
         for kw, family in PENALTY_FAMILY_MAP.items():
             if kw in text:
@@ -238,7 +223,6 @@ def main():
         if not families_found:
             families_found.add(('처벌', 'UNKNOWN_PENALTY_FAMILY'))
 
-        # Violation Trigger
         vt_text, vt_family = None, None
         for vt_pat, vt_fam in VIOLATION_TRIGGERS:
             if vt_pat in text:
@@ -246,14 +230,13 @@ def main():
                 vt_family = vt_fam
                 break
 
-        # Penalty Subject
         subject = None
         for subj in ['사업주', '법인', '대표자', '관리자', '종업원', '행위자']:
             if subj in text:
                 subject = subj
                 break
 
-        is_joint = '양벌규정' in text or '법인' in text and '행위자' in text
+        is_joint = '양벌규정' in text or ('법인' in text and '행위자' in text)
 
         for raw_kw, family in families_found:
             pc_id = str(uuid_mod.uuid4())
@@ -263,12 +246,11 @@ def main():
                 vt_text, vt_family, subject, is_joint, 'CANDIDATE'
             ))
 
-            # [4단계] Numeric
             for m in NUMERIC_PENALTY_RE.finditer(text):
                 raw = m.group(0)
                 val_str = m.group(1).replace(',', '')
                 unit_str = m.group(2)
-                multiplier = {'\uc6d0': 1, '\ub9cc\uc6d0': 10000, '\ucc9c\ub9cc\uc6d0': 10000000, '\uc5b5\uc6d0': 100000000}
+                multiplier = {'원': 1, '만원': 10000, '천만원': 10000000, '억원': 100000000}
                 val = int(val_str) * multiplier.get(unit_str, 1)
                 numeric_rows.append((
                     pc_id, raw, '<=', val, f"{val_str}{unit_str}", '원', family, 'CANDIDATE'
@@ -280,18 +262,19 @@ def main():
                     pc_id, raw, '<=', int(m.group(1)), m.group(1)+m.group(2), m.group(2), family, 'CANDIDATE'
                 ))
 
-            # [6단계] Reference Link
+            # Reference Link — article_no를 정수로도 저장
             for m in REF_PATTERN.finditer(text):
+                ref_art_no = int(m.group(1))
                 ref_str = f"제{m.group(1)}조"
                 if m.group(2):
                     ref_str += f"의{m.group(2)}"
                 if m.group(3):
                     ref_str += f"제{m.group(3)}항"
                 ref_rows.append((
-                    pc_id, law_id, article_no, ref_str, None, 'LINK_CANDIDATE'
+                    pc_id, law_id, str(article_no) if article_no else None,
+                    ref_str, ref_art_no, None, 'LINK_CANDIDATE'
                 ))
 
-    # INSERT
     if penalty_rows:
         safe_insert_values("""
             INSERT INTO penalty_candidate
@@ -315,19 +298,16 @@ def main():
         safe_insert_values("""
             INSERT INTO penalty_reference_link
                 (penalty_candidate_id, law_id, from_article_no,
-                 to_article_ref, to_article_id, status)
+                 to_article_ref, to_article_no, to_article_id, status)
             VALUES %s
         """, ref_rows)
     print(f"    ✅ Penalty Reference Link: {len(ref_rows):,}건")
 
-    # ================================================
-    # [7단계] Obligation-Penalty 연결
-    # ================================================
+    # [7단계] Obligation-Penalty 연결 — to_article_no(integer) 기반 JOIN
     print(f"\n{'─'*64}")
     print("  [7단계] Obligation-Penalty 연결")
     print(f"{'─'*64}")
 
-    # Reference로 연결된 조문의 Rule Candidate 찾기
     obl_count = safe_execute("""
         INSERT INTO penalty_obligation_relation
             (penalty_candidate_id, rule_candidate_id, obligation_family,
@@ -345,16 +325,15 @@ def main():
                'CANDIDATE'
         FROM penalty_reference_link prl
         JOIN law_article la ON la.law_id = prl.law_id
-            AND la.article_no = prl.to_article_ref
+            AND la.article_no = prl.to_article_no
         JOIN law_article_part lap ON lap.article_id = la.id
         JOIN rule_candidate rc ON rc.part_id = lap.id
         WHERE prl.status = 'LINK_CANDIDATE'
+          AND prl.to_article_no IS NOT NULL
     """)
     print(f"    ✅ Obligation-Penalty Relation: {obl_count:,}건")
 
-    # ================================================
     # [16단계] Validation
-    # ================================================
     print(f"\n{'─'*64}")
     print("  [16단계] Validation")
     print(f"{'─'*64}")
