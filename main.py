@@ -1,4 +1,5 @@
-# main.py — v5.38.0
+# main.py — v5.39.0
+# v5.39.0: Compiler Core + Residual Intelligence + Admin Review 라우터 등록 (법령엔진 v3.0 Deterministic)
 # v5.38.0: admin_inquiries 라우터 등록 (GET/POST/PATCH /admin/inquiries) — Phase 4 통합 인박스
 # v5.37.0: internal_inbox 라우터 등록 (POST /internal/inbox/notify) — Phase 3 인박스 슬랙 알림
 # v5.36.0: pw_reset 라우터 등록 (POST /auth/pw-reset/request, /auth/pw-reset/confirm)
@@ -135,10 +136,14 @@ from routers.diagram_proxy           import router as diagram_proxy_router      
 from routers.pw_reset                import router as pw_reset_router                # v5.36.0 비밀번호재설정
 from routers.internal_inbox          import router as internal_inbox_router            # v5.37.0 인박스 슬랙 알림
 from routers.admin_inquiries         import router as admin_inquiries_router            # v5.38.0 Phase 4 인박스 API
+# v5.39.0 법령엔진 v3.0 Deterministic Compiler Core
+from routers.compiler_core           import router as compiler_core_router
+from routers.residual_intelligence   import router as ri_router
+from routers.admin_review            import router as admin_review_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.38.0"
+APP_VERSION = "5.39.0"
 
 
 @asynccontextmanager
@@ -301,9 +306,12 @@ app.include_router(worker_home_router)
 app.include_router(ai_copywrite_router)
 app.include_router(mail_router)
 
+# v5.39.0 법령엔진 v3.0 — Deterministic Compiler Core + Human Review
+app.include_router(compiler_core_router)                                          # 7 API — /api/v1/compiler/*
+app.include_router(ri_router)                                                      # 22 API — /api/v1/residual-intelligence/*
+app.include_router(admin_review_router)                                            # 12 API — /api/v1/admin/*
+
 
 @app.get("/")
 def root():
     return {"status": "ok", "service": "TAI API", "version": APP_VERSION}
-
-
