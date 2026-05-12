@@ -1,9 +1,10 @@
-# main.py — v5.45.0
+# main.py — v5.46.0
+# v5.46.0: Phase 2 — Inspection Bridge 라우터 등록 (4 API — /bridge/inspection/*)
 # v5.45.0: Phase 1 — Legacy Write Freeze + Runtime Bridge (일정/문서/진단 Ownership 전환)
-# v5.44.0: Persistence & Drift Control Engine 라우터 등록 (7 API — /persistence/*)
-# v5.43.0: Simulation Engine 라우터 등록 (6 API — /simulation/*)
-# v5.42.0: Runtime Evaluator Engine 라우터 등록 (7 API — /runtime-evaluator/*)
-# v5.41.0: 문서엔진 API 라우터 등록 (15 API — /document-engine/*)
+# v5.44.0: Persistence & Drift Control Engine (7 API — /persistence/*)
+# v5.43.0: Simulation Engine (6 API — /simulation/*)
+# v5.42.0: Runtime Evaluator Engine (7 API — /runtime-evaluator/*)
+# v5.41.0: 문서엔진 API (15 API — /document-engine/*)
 # v5.40.0: 법령진단서비스 + SaaS 반복설정 분리
 # v5.39.0: Compiler Core + Residual Intelligence + Admin Review
 import os
@@ -137,12 +138,12 @@ from routers.document_engine_api     import router as document_engine_api_router
 from routers.runtime_evaluator_api   import router as runtime_evaluator_api_router
 from routers.simulation_api          import router as simulation_api_router
 from routers.persistence_api         import router as persistence_api_router
-# v5.45.0 Phase 1 — Legacy Write Freeze + Runtime Bridge
 from routers.legacy_freeze           import router as legacy_freeze_router
 from routers.runtime_bridge          import router as runtime_bridge_router
+from routers.inspection_bridge       import router as inspection_bridge_router
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "5.45.0"
+APP_VERSION = "5.46.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -224,9 +225,10 @@ app.include_router(runtime_evaluator_api_router)   # /runtime-evaluator/*
 app.include_router(simulation_api_router)          # /simulation/*
 app.include_router(persistence_api_router)         # /persistence/*
 
-# v5.45.0 Phase 1 — Legacy Write Freeze + Runtime Bridge
+# Phase 1-2: Legacy→Runtime Ownership Transition
 app.include_router(legacy_freeze_router)           # Legacy write 차단 (HTTP 410)
-app.include_router(runtime_bridge_router)          # /bridge/* — Legacy→Runtime 호환
+app.include_router(runtime_bridge_router)          # /bridge/* — schedule/document/diagnosis
+app.include_router(inspection_bridge_router)       # /bridge/inspection/* — 점검 매핑
 
 @app.get("/")
 def root():
