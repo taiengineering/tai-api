@@ -1,4 +1,5 @@
-# main.py — v5.40.0
+# main.py — v5.41.0
+# v5.41.0: 문서엔진 API 라우터 등록 (15 API — /document-engine/*)
 # v5.40.0: 법령진단서비스 + SaaS 반복설정 분리 (diagnosis_engine + saas_setup 라우터)
 # v5.39.0: Compiler Core + Residual Intelligence + Admin Review 라우터 등록 (법령엔진 v3.0 Deterministic)
 # v5.38.0: admin_inquiries 라우터 등록 (GET/POST/PATCH /admin/inquiries) — Phase 4 통합 인박스
@@ -144,10 +145,12 @@ from routers.admin_review            import router as admin_review_router
 # v5.40.0 법령진단서비스 / SaaS 반복설정 분리
 from routers.diagnosis_engine        import router as diagnosis_engine_router
 from routers.saas_setup              import router as saas_setup_router
+# v5.41.0 문서엔진 API
+from routers.document_engine_api     import router as document_engine_api_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.40.0"
+APP_VERSION = "5.41.0"
 
 
 @asynccontextmanager
@@ -318,6 +321,9 @@ app.include_router(admin_review_router)                                         
 # v5.40.0 법령진단서비스 / SaaS 반복설정 분리
 app.include_router(diagnosis_engine_router)                                        # 3 API — /api/v1/diagnosis-engine/*
 app.include_router(saas_setup_router)                                              # 6 API — /api/v1/saas-setup/*
+
+# v5.41.0 문서엔진 API
+app.include_router(document_engine_api_router)                                     # 15 API — /document-engine/*
 
 
 @app.get("/")
