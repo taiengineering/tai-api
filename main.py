@@ -1,4 +1,5 @@
-# main.py — v5.48.0
+# main.py — v5.49.0
+# v5.49.0: Phase 4 — Notification Runtime Bridge 라우터 등록 (6 API — /bridge/notifications/*)
 # v5.48.0: Phase 3 — My Inspection Runtime Bridge 라우터 등록 (8 API — /bridge/my-inspection/*)
 # v5.47.0: Phase 2 — Obligation Bridge 라우터 등록 (7 API — /bridge/obligations/*)
 # v5.46.0: Phase 2 — Inspection Bridge 라우터 등록 (4 API — /bridge/inspection/*)
@@ -146,9 +147,10 @@ from routers.runtime_bridge          import router as runtime_bridge_router
 from routers.inspection_bridge       import router as inspection_bridge_router
 from routers.obligation_bridge       import router as obligation_bridge_router
 from routers.my_inspection_bridge    import router as my_inspection_bridge_router
+from routers.notification_bridge     import router as notification_bridge_router
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "5.48.0"
+APP_VERSION = "5.49.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -236,6 +238,7 @@ app.include_router(runtime_bridge_router)          # /bridge/* — schedule/docu
 app.include_router(inspection_bridge_router)       # /bridge/inspection/* — 점검 매핑
 app.include_router(obligation_bridge_router)       # /bridge/obligations/* — Phase 2 의무 관리
 app.include_router(my_inspection_bridge_router)    # /bridge/my-inspection/* — Phase 3 점검 수행
+app.include_router(notification_bridge_router)     # /bridge/notifications/* — Phase 4 알림
 
 @app.get("/")
 def root():
