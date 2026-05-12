@@ -1,11 +1,12 @@
-# main.py — v5.42.0
+# main.py — v5.43.0
+# v5.43.0: Simulation Engine 라우터 등록 (6 API — /simulation/*)
 # v5.42.0: Runtime Evaluator Engine 라우터 등록 (7 API — /runtime-evaluator/*)
 # v5.41.0: 문서엔진 API 라우터 등록 (15 API — /document-engine/*)
 # v5.40.0: 법령진단서비스 + SaaS 반복설정 분리 (diagnosis_engine + saas_setup)
 # v5.39.0: Compiler Core + Residual Intelligence + Admin Review 라우터 등록 (법령엔진 v3.0 Deterministic)
-# v5.38.0: admin_inquiries 라우터 등록 (GET/POST/PATCH /admin/inquiries) — Phase 4 통합 인박스
-# v5.37.0: internal_inbox 라우터 등록 (POST /internal/inbox/notify) — Phase 3 인박스 슬랙 알림
-# v5.36.0: pw_reset 라우터 등록 (POST /auth/pw-reset/request, /auth/pw-reset/confirm)
+# v5.38.0: admin_inquiries 라우터 등록
+# v5.37.0: internal_inbox 라우터 등록
+# v5.36.0: pw_reset 라우터 등록
 # v5.35.0: payment_billing 라우터 등록
 # v5.34.0: Sentry 복원 + /health 개선
 import os
@@ -141,9 +142,11 @@ from routers.saas_setup              import router as saas_setup_router
 from routers.document_engine_api     import router as document_engine_api_router
 # v5.42.0 Runtime Evaluator Engine
 from routers.runtime_evaluator_api   import router as runtime_evaluator_api_router
+# v5.43.0 Simulation Engine
+from routers.simulation_api          import router as simulation_api_router
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "5.42.0"
+APP_VERSION = "5.43.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -174,7 +177,6 @@ app.add_middleware(
     allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
-# 공개 엔드포인트
 for r in [public_router, health_router, public_admin_router, alert_messages_router, feature_flags_router,
           site_public_router, site_faq_admin_router, admin_inquiries_router, anonymous_diagnosis_router,
           public_pricing_router, connect_registration_router, admin_connect_router, admin_pricing_router,
@@ -183,7 +185,6 @@ for r in [public_router, health_router, public_admin_router, alert_messages_rout
           diagnosis_proposal_router, diagram_proxy_router]:
     app.include_router(r)
 
-# 인증 필요 엔드포인트
 for r in [auth_router, pw_reset_router, users_router, companies_router, factories_router,
           system_codes_router, legal_engine_router, legal_engine_patch_router, engine_qa_router,
           law_rule_generator_router, engine_document_router, contract_kmong_router,
@@ -216,20 +217,14 @@ app.include_router(settlements_router, prefix="/settlements", tags=["정산"])
 app.include_router(identity_router, prefix="/identity", tags=["본인인증"])
 app.include_router(construction_router, prefix="/construction", tags=["건설안전"])
 
-# v5.39.0 법령엔진 v3.0 — Deterministic Compiler Core + Human Review
-app.include_router(compiler_core_router)     # 7 API — /api/v1/compiler/*
-app.include_router(ri_router)                # 22 API — /api/v1/residual-intelligence/*
-app.include_router(admin_review_router)      # 12 API — /api/v1/admin/*
-
-# v5.40.0 법령진단서비스 / SaaS 반복설정 분리
-app.include_router(diagnosis_engine_router)  # 3 API — /api/v1/diagnosis-engine/*
-app.include_router(saas_setup_router)        # 6 API — /api/v1/saas-setup/*
-
-# v5.41.0 문서엔진 API
-app.include_router(document_engine_api_router)  # 15 API — /document-engine/*
-
-# v5.42.0 Runtime Evaluator Engine
-app.include_router(runtime_evaluator_api_router)  # 7 API — /runtime-evaluator/*
+app.include_router(compiler_core_router)          # /api/v1/compiler/*
+app.include_router(ri_router)                      # /api/v1/residual-intelligence/*
+app.include_router(admin_review_router)            # /api/v1/admin/*
+app.include_router(diagnosis_engine_router)        # /api/v1/diagnosis-engine/*
+app.include_router(saas_setup_router)              # /api/v1/saas-setup/*
+app.include_router(document_engine_api_router)     # /document-engine/*
+app.include_router(runtime_evaluator_api_router)   # /runtime-evaluator/*
+app.include_router(simulation_api_router)          # /simulation/*
 
 @app.get("/")
 def root():
