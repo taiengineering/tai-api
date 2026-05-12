@@ -1,4 +1,5 @@
-# main.py — v5.44.0
+# main.py — v5.45.0
+# v5.45.0: Phase 1 — Legacy Write Freeze + Runtime Bridge (일정/문서/진단 Ownership 전환)
 # v5.44.0: Persistence & Drift Control Engine 라우터 등록 (7 API — /persistence/*)
 # v5.43.0: Simulation Engine 라우터 등록 (6 API — /simulation/*)
 # v5.42.0: Runtime Evaluator Engine 라우터 등록 (7 API — /runtime-evaluator/*)
@@ -136,9 +137,12 @@ from routers.document_engine_api     import router as document_engine_api_router
 from routers.runtime_evaluator_api   import router as runtime_evaluator_api_router
 from routers.simulation_api          import router as simulation_api_router
 from routers.persistence_api         import router as persistence_api_router
+# v5.45.0 Phase 1 — Legacy Write Freeze + Runtime Bridge
+from routers.legacy_freeze           import router as legacy_freeze_router
+from routers.runtime_bridge          import router as runtime_bridge_router
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "5.44.0"
+APP_VERSION = "5.45.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -209,6 +213,7 @@ app.include_router(settlements_router, prefix="/settlements", tags=["정산"])
 app.include_router(identity_router, prefix="/identity", tags=["본인인증"])
 app.include_router(construction_router, prefix="/construction", tags=["건설안전"])
 
+# Runtime Engine Layer
 app.include_router(compiler_core_router)          # /api/v1/compiler/*
 app.include_router(ri_router)                      # /api/v1/residual-intelligence/*
 app.include_router(admin_review_router)            # /api/v1/admin/*
@@ -218,6 +223,10 @@ app.include_router(document_engine_api_router)     # /document-engine/*
 app.include_router(runtime_evaluator_api_router)   # /runtime-evaluator/*
 app.include_router(simulation_api_router)          # /simulation/*
 app.include_router(persistence_api_router)         # /persistence/*
+
+# v5.45.0 Phase 1 — Legacy Write Freeze + Runtime Bridge
+app.include_router(legacy_freeze_router)           # Legacy write 차단 (HTTP 410)
+app.include_router(runtime_bridge_router)          # /bridge/* — Legacy→Runtime 호환
 
 @app.get("/")
 def root():
