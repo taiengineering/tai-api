@@ -1,4 +1,5 @@
-# main.py — v5.46.0
+# main.py — v5.47.0
+# v5.47.0: Phase 2 — Obligation Bridge 라우터 등록 (7 API — /bridge/obligations/*)
 # v5.46.0: Phase 2 — Inspection Bridge 라우터 등록 (4 API — /bridge/inspection/*)
 # v5.45.0: Phase 1 — Legacy Write Freeze + Runtime Bridge (일정/문서/진단 Ownership 전환)
 # v5.44.0: Persistence & Drift Control Engine (7 API — /persistence/*)
@@ -141,9 +142,10 @@ from routers.persistence_api         import router as persistence_api_router
 from routers.legacy_freeze           import router as legacy_freeze_router
 from routers.runtime_bridge          import router as runtime_bridge_router
 from routers.inspection_bridge       import router as inspection_bridge_router
+from routers.obligation_bridge       import router as obligation_bridge_router
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "5.46.0"
+APP_VERSION = "5.47.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -229,6 +231,7 @@ app.include_router(persistence_api_router)         # /persistence/*
 app.include_router(legacy_freeze_router)           # Legacy write 차단 (HTTP 410)
 app.include_router(runtime_bridge_router)          # /bridge/* — schedule/document/diagnosis
 app.include_router(inspection_bridge_router)       # /bridge/inspection/* — 점검 매핑
+app.include_router(obligation_bridge_router)       # /bridge/obligations/* — Phase 2 의무 관리
 
 @app.get("/")
 def root():
