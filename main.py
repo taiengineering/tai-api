@@ -1,14 +1,10 @@
-# main.py — v5.43.0
+# main.py — v5.44.0
+# v5.44.0: Persistence & Drift Control Engine 라우터 등록 (7 API — /persistence/*)
 # v5.43.0: Simulation Engine 라우터 등록 (6 API — /simulation/*)
 # v5.42.0: Runtime Evaluator Engine 라우터 등록 (7 API — /runtime-evaluator/*)
 # v5.41.0: 문서엔진 API 라우터 등록 (15 API — /document-engine/*)
-# v5.40.0: 법령진단서비스 + SaaS 반복설정 분리 (diagnosis_engine + saas_setup)
-# v5.39.0: Compiler Core + Residual Intelligence + Admin Review 라우터 등록 (법령엔진 v3.0 Deterministic)
-# v5.38.0: admin_inquiries 라우터 등록
-# v5.37.0: internal_inbox 라우터 등록
-# v5.36.0: pw_reset 라우터 등록
-# v5.35.0: payment_billing 라우터 등록
-# v5.34.0: Sentry 복원 + /health 개선
+# v5.40.0: 법령진단서비스 + SaaS 반복설정 분리
+# v5.39.0: Compiler Core + Residual Intelligence + Admin Review
 import os
 import sentry_sdk
 
@@ -131,22 +127,18 @@ from routers.diagram_proxy           import router as diagram_proxy_router
 from routers.pw_reset                import router as pw_reset_router
 from routers.internal_inbox          import router as internal_inbox_router
 from routers.admin_inquiries         import router as admin_inquiries_router
-# v5.39.0 법령엔진 v3.0
 from routers.compiler_core           import router as compiler_core_router
 from routers.residual_intelligence   import router as ri_router
 from routers.admin_review            import router as admin_review_router
-# v5.40.0 법령진단서비스 / SaaS 반복설정
 from routers.diagnosis_engine        import router as diagnosis_engine_router
 from routers.saas_setup              import router as saas_setup_router
-# v5.41.0 문서엔진 API
 from routers.document_engine_api     import router as document_engine_api_router
-# v5.42.0 Runtime Evaluator Engine
 from routers.runtime_evaluator_api   import router as runtime_evaluator_api_router
-# v5.43.0 Simulation Engine
 from routers.simulation_api          import router as simulation_api_router
+from routers.persistence_api         import router as persistence_api_router
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "5.43.0"
+APP_VERSION = "5.44.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -225,6 +217,7 @@ app.include_router(saas_setup_router)              # /api/v1/saas-setup/*
 app.include_router(document_engine_api_router)     # /document-engine/*
 app.include_router(runtime_evaluator_api_router)   # /runtime-evaluator/*
 app.include_router(simulation_api_router)          # /simulation/*
+app.include_router(persistence_api_router)         # /persistence/*
 
 @app.get("/")
 def root():
