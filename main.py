@@ -1,4 +1,5 @@
-# main.py — v5.41.0
+# main.py — v5.42.0
+# v5.42.0: Runtime Evaluator Engine 라우터 등록 (7 API — /runtime-evaluator/*)
 # v5.41.0: 문서엔진 API 라우터 등록 (15 API — /document-engine/*)
 # v5.40.0: 법령진단서비스 + SaaS 반복설정 분리 (diagnosis_engine + saas_setup 라우터)
 # v5.39.0: Compiler Core + Residual Intelligence + Admin Review 라우터 등록 (법령엔진 v3.0 Deterministic)
@@ -7,11 +8,6 @@
 # v5.36.0: pw_reset 라우터 등록 (POST /auth/pw-reset/request, /auth/pw-reset/confirm)
 # v5.35.0: payment_billing 라우터 등록 (POST /payments/inicis/billing/*, /payments/subscriptions/{id}/cancel)
 # v5.34.0: Sentry 복원 + /health 개선 (항상 200 반환) + diagram_proxy 복원
-# v5.33.0: Sentry 에러 모니터링 (SENTRY_DSN 환경 변수 시 초기화)
-# v5.32.0: diagram_proxy 라우터 등록 (GET /api/v1/diagrams/{number}) — Supabase Storage 한글 SVG 우회
-# v5.31.1: diagnosis_proposal 라우터 등록 (GET /diagnosis/proposal-pdf/{public_token})
-# v5.31.0: diagnosis_report 라우터 등록 (GET /diagnosis/report-pdf/{public_token})
-# v5.30.0: diagnosis_integrated 라우터 등록 (BE-10 진단통합 백엔드)
 import os
 import sentry_sdk
 
@@ -104,7 +100,7 @@ from routers.safety_meetings         import router as safety_meetings_router
 from routers.risk_assessments        import router as risk_assessments_router
 from routers.payment                 import router as payment_router
 from routers.payment_ops             import router as payment_ops_router
-from routers.payment_billing         import router as payment_billing_router   # v5.35.0 정기결제
+from routers.payment_billing         import router as payment_billing_router
 from routers.corrective_actions      import router as corrective_actions_router
 from routers.messaging               import router as messaging_router
 from routers.fcm                     import router as fcm_router
@@ -131,13 +127,13 @@ from routers.diagnosis_roi           import router as diagnosis_roi_router
 from routers.diagnosis_transform     import router as diagnosis_transform_router
 from routers.overdue_checker         import router as overdue_checker_router
 from routers.diagnosis_plan_recommend import router as plan_recommend_router
-from routers.diagnosis_integrated    import router as diagnosis_integrated_router   # v5.30.0
-from routers.diagnosis_report        import router as diagnosis_report_router        # v5.31.0
-from routers.diagnosis_proposal      import router as diagnosis_proposal_router      # v5.31.1
-from routers.diagram_proxy           import router as diagram_proxy_router           # v5.32.0
-from routers.pw_reset                import router as pw_reset_router                # v5.36.0 비밀번호재설정
-from routers.internal_inbox          import router as internal_inbox_router            # v5.37.0 인박스 슬랙 알림
-from routers.admin_inquiries         import router as admin_inquiries_router            # v5.38.0 Phase 4 인박스 API
+from routers.diagnosis_integrated    import router as diagnosis_integrated_router
+from routers.diagnosis_report        import router as diagnosis_report_router
+from routers.diagnosis_proposal      import router as diagnosis_proposal_router
+from routers.diagram_proxy           import router as diagram_proxy_router
+from routers.pw_reset                import router as pw_reset_router
+from routers.internal_inbox          import router as internal_inbox_router
+from routers.admin_inquiries         import router as admin_inquiries_router
 # v5.39.0 법령엔진 v3.0 Deterministic Compiler Core
 from routers.compiler_core           import router as compiler_core_router
 from routers.residual_intelligence   import router as ri_router
@@ -147,10 +143,12 @@ from routers.diagnosis_engine        import router as diagnosis_engine_router
 from routers.saas_setup              import router as saas_setup_router
 # v5.41.0 문서엔진 API
 from routers.document_engine_api     import router as document_engine_api_router
+# v5.42.0 Runtime Evaluator Engine
+from routers.runtime_evaluator_api   import router as runtime_evaluator_api_router
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "5.41.0"
+APP_VERSION = "5.42.0"
 
 
 @asynccontextmanager
@@ -304,7 +302,7 @@ app.include_router(safety_meetings_router)
 app.include_router(risk_assessments_router)
 app.include_router(payment_router)
 app.include_router(payment_ops_router)
-app.include_router(payment_billing_router)                                        # v5.35.0 정기결제
+app.include_router(payment_billing_router)
 app.include_router(corrective_actions_router)
 app.include_router(messaging_router)
 app.include_router(fcm_router)
@@ -324,6 +322,9 @@ app.include_router(saas_setup_router)                                           
 
 # v5.41.0 문서엔진 API
 app.include_router(document_engine_api_router)                                     # 15 API — /document-engine/*
+
+# v5.42.0 Runtime Evaluator Engine
+app.include_router(runtime_evaluator_api_router)                                   # 7 API — /runtime-evaluator/*
 
 
 @app.get("/")
