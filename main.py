@@ -1,4 +1,5 @@
-# main.py — v5.41.0
+# main.py — v5.42.0
+# v5.42.0: Runtime Evaluator Engine 라우터 등록 (7 API — /runtime-evaluator/*)
 # v5.41.0: 문서엔진 API 라우터 등록 (15 API — /document-engine/*)
 # v5.40.0: 법령진단서비스 + SaaS 반복설정 분리 (diagnosis_engine + saas_setup)
 # v5.39.0: Compiler Core + Residual Intelligence + Admin Review 라우터 등록 (법령엔진 v3.0 Deterministic)
@@ -138,9 +139,11 @@ from routers.diagnosis_engine        import router as diagnosis_engine_router
 from routers.saas_setup              import router as saas_setup_router
 # v5.41.0 문서엔진 API
 from routers.document_engine_api     import router as document_engine_api_router
+# v5.42.0 Runtime Evaluator Engine
+from routers.runtime_evaluator_api   import router as runtime_evaluator_api_router
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "5.41.0"
+APP_VERSION = "5.42.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -224,6 +227,9 @@ app.include_router(saas_setup_router)        # 6 API — /api/v1/saas-setup/*
 
 # v5.41.0 문서엔진 API
 app.include_router(document_engine_api_router)  # 15 API — /document-engine/*
+
+# v5.42.0 Runtime Evaluator Engine
+app.include_router(runtime_evaluator_api_router)  # 7 API — /runtime-evaluator/*
 
 @app.get("/")
 def root():
