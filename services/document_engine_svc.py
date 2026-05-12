@@ -1,8 +1,10 @@
-"""TAI 문서엔진 서비스 v1.0.0
+"""TAI 문서엔진 서비스 v1.1.0
 
 Router = HTTP만, Service = 비즈니스 로직 (FastAPI import 금지)
 절대 금지: auto fill, auto approve, inferred default,
            semantic match, fallback mapping, candidate→truth 승격
+
+v1.1.0: Audit 수정 — field_key 검증, evidence 검증, generate audit 추가
 """
 from datetime import datetime, timezone
 from db.supabase_client import get_supabase
@@ -90,7 +92,6 @@ def create_document(
     created_by: str = None,
 ) -> dict:
     sb = get_supabase()
-    # schema 존재 확인
     schema = (
         sb.table("runtime_form_schema")
         .select("id,status")
@@ -183,17 +184,27 @@ def update_document(
         raise ValueError("document not found")
     if before.data["status"] == "ARCHIVED":
         raise ValueError("ARCHIVED document cannot be modified")
+
+    schema_id = before.data["form_schema_id"]
     now = datetime.now(timezone.utc).isoformat()
     update = {"updated_at": now}
     changes = {}
+
+    # Guardrail: runtime_field에 존재하는 field_key만 저장
     if runtime_data_json is not None:
+        _validate_field_keys(sb, schema_id, runtime_data_json)
         update["runtime_data_json"] = runtime_data_json
         changes["runtime_data_json"] = True
+
+    # Guardrail: evidence_links의 linked_field_id 검증
     if evidence_links is not None:
+        _validate_evidence_links(sb, schema_id, evidence_links)
         update["evidence_links"] = evidence_links
         changes["evidence_links"] = True
+
     if updated_by:
         update["updated_by"] = updated_by
+
     res = (
         sb.table("runtime_document_data")
         .update(update)
@@ -368,7 +379,11 @@ def generate_document(doc_id: str, export_type: str = "HTML") -> dict:
         "status": "GENERATED",
     }
     res = sb.table("generated_document").insert(record).execute()
-    return res.data[0] if res.data else {}
+    gen = res.data[0] if res.data else {}
+    # v1.1.0: audit log 추가
+    if gen:
+        _audit(sb, doc_id, "CREATED", None, None, gen)
+    return gen
 
 
 def list_generated(doc_id: str) -> list:
@@ -421,7 +436,56 @@ def get_audit_log(doc_id: str) -> list:
 
 
 # ═══════════════════════════════════════════════════════
-# Internal
+# Internal — Validation
+# ═══════════════════════════════════════════════════════
+
+def _validate_field_keys(sb, schema_id: str, data_json: dict):
+    """runtime_field에 존재하는 field_key만 허용. 미등록 키 차단."""
+    if not data_json:
+        return
+    res = (
+        sb.table("runtime_field")
+        .select("field_key")
+        .eq("form_schema_id", schema_id)
+        .execute()
+    )
+    allowed = {r["field_key"] for r in (res.data or []) if r.get("field_key")}
+    if not allowed:
+        return  # field_key 없는 schema는 자유형 입력 허용
+    unknown = set(data_json.keys()) - allowed
+    if unknown:
+        raise ValueError(
+            f"unknown field_keys not in runtime_field: {sorted(unknown)}"
+        )
+
+
+def _validate_evidence_links(sb, schema_id: str, links: list):
+    """evidence_links 내 linked_field_id가 runtime_evidence_field에 존재하는지 검증."""
+    if not links:
+        return
+    field_ids = [
+        el.get("linked_field_id")
+        for el in links
+        if isinstance(el, dict) and el.get("linked_field_id")
+    ]
+    if not field_ids:
+        return
+    res = (
+        sb.table("runtime_evidence_field")
+        .select("id")
+        .eq("form_schema_id", schema_id)
+        .execute()
+    )
+    allowed = {str(r["id"]) for r in (res.data or [])}
+    unknown = set(field_ids) - allowed
+    if unknown:
+        raise ValueError(
+            f"unknown evidence field_ids not in runtime_evidence_field: {sorted(unknown)}"
+        )
+
+
+# ═══════════════════════════════════════════════════════
+# Internal — Audit & Approval
 # ═══════════════════════════════════════════════════════
 
 def _audit(sb, doc_id, action, actor_id, before, after, field_changes=None):
