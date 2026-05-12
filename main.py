@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import services.health_probes  # noqa: F401
 
 from routers.auth                    import router as auth_router
+from routers.auth_oauth              import router as auth_oauth_router
 from routers.users                   import router as users_router
 from routers.companies               import router as companies_router
 from routers.factories               import router as factories_router
@@ -186,7 +187,7 @@ for r in [public_router, health_router, public_admin_router, alert_messages_rout
           diagnosis_proposal_router, diagram_proxy_router]:
     app.include_router(r)
 
-for r in [auth_router, pw_reset_router, users_router, companies_router, factories_router,
+for r in [auth_router, auth_oauth_router, pw_reset_router, users_router, companies_router, factories_router,
           system_codes_router, legal_engine_router, legal_engine_patch_router, engine_qa_router,
           law_rule_generator_router, engine_document_router, contract_kmong_router,
           schedule_pipeline_router, ksic_engine_router, factory_process_router,
