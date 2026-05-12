@@ -1,4 +1,5 @@
-# main.py — v5.50.0
+# main.py — v5.51.0
+# v5.51.0: Phase 6 — Compliance Evidence Bridge 라우터 등록 (8 API — /bridge/evidence-*)
 # v5.50.0: Phase 5 — Review Queue Runtime Bridge 라우터 등록 (8 API — /bridge/review-*)
 # v5.49.0: Phase 4 — Notification Runtime Bridge 라우터 등록 (6 API — /bridge/notifications/*)
 # v5.48.0: Phase 3 — My Inspection Runtime Bridge 라우터 등록 (8 API — /bridge/my-inspection/*)
@@ -150,9 +151,10 @@ from routers.obligation_bridge       import router as obligation_bridge_router
 from routers.my_inspection_bridge    import router as my_inspection_bridge_router
 from routers.notification_bridge     import router as notification_bridge_router
 from routers.review_bridge            import router as review_bridge_router
+from routers.evidence_bridge          import router as evidence_bridge_router
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "5.50.0"
+APP_VERSION = "5.51.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -242,6 +244,7 @@ app.include_router(obligation_bridge_router)       # /bridge/obligations/* — P
 app.include_router(my_inspection_bridge_router)    # /bridge/my-inspection/* — Phase 3 점검 수행
 app.include_router(notification_bridge_router)     # /bridge/notifications/* — Phase 4 알림
 app.include_router(review_bridge_router)            # /bridge/review-* — Phase 5 검토 승인
+app.include_router(evidence_bridge_router)          # /bridge/evidence-* — Phase 6 증빙
 
 @app.get("/")
 def root():
