@@ -1,21 +1,15 @@
-"""TAI Engine Integrity Monitor v1.0.0
-Deterministic drift/contamination 탐지 시스템.
+"""TAI Engine Integrity Monitor v1.1.0
+Deterministic drift/contamination 탐지 + Slack 연동.
 
-탐지 대상:
-- obligation drift
-- completeness drift
-- hidden mandatory drift
-- AI contamination
-- unsupported inference
-- checklist explosion
-- notification storm
-- explainability loss
+탐지 대상: obligation/completeness/mandatory drift, AI contamination,
+unsupported inference, checklist explosion, notification storm, explainability loss.
 
-절대 금지: inferred/guessed/semantic/AI decision
+Slack 연동: _emit() → slack_dispatcher 자동 발송.
+절대 금지: inferred/guessed/semantic/AI decision.
 """
 from fastapi import APIRouter, Query
 from typing import Optional
-import hashlib, logging
+import logging
 
 router = APIRouter(prefix="/integrity", tags=["엔진 무결성 감시"])
 logger = logging.getLogger("integrity_monitor")
@@ -27,6 +21,7 @@ def _sb():
 
 
 def _emit(event_type, severity, domain, description, detail=None, input_hash=None):
+    """이벤트 DB 저장 + Slack 발송"""
     sb = _sb()
     row = {
         "event_type": event_type,
@@ -40,6 +35,13 @@ def _emit(event_type, severity, domain, description, detail=None, input_hash=Non
     sb.table("engine_integrity_event").insert(row).execute()
     logger.warning(f"INTEGRITY_EVENT | {event_type} | {severity} | {description}")
 
+    # Slack 발송
+    try:
+        from services.slack_dispatcher import send_slack_sync
+        send_slack_sync(event_type, severity, f"[{domain}] {description}")
+    except Exception as e:
+        logger.error(f"Slack dispatch failed: {e}")
+
 
 @router.get("/run-audit")
 def run_full_integrity_audit():
@@ -52,7 +54,7 @@ def run_full_integrity_audit():
     obl_count = len(obl.data or [])
     results.append({"check": "obligation_count", "value": obl_count, "status": "OK"})
 
-    # B: Completeness Drift — mandatory rule 존재하는데 creatable=true 인 것 탐지
+    # B: Completeness Drift
     rules = sb.table("document_requirement_rule").select("form_code, requirement_level").eq("is_active", True).execute()
     mandatory_forms = set(r["form_code"] for r in (rules.data or []) if r["requirement_level"] == "MANDATORY")
     results.append({"check": "mandatory_rule_forms", "value": len(mandatory_forms), "status": "OK"})
@@ -65,7 +67,7 @@ def run_full_integrity_audit():
     mutations = sb.table("mapping_mutation_audit").select("id").order("created_at", desc=True).limit(10).execute()
     results.append({"check": "recent_mapping_mutations", "value": len(mutations.data or []), "status": "OK"})
 
-    # E: AI Contamination — source_trace 검사
+    # E: AI Contamination
     ai_traces = sb.table("engine_integrity_event").select("id").eq("event_type", "AI_CONTAMINATION_DETECTED").eq("resolved", False).execute()
     ai_count = len(ai_traces.data or [])
     ai_status = "CRITICAL" if ai_count > 0 else "OK"
@@ -90,12 +92,25 @@ def run_full_integrity_audit():
     storm = "HIGH" if noti_pending > 10000 else "WARNING" if noti_pending > 5000 else "OK"
     results.append({"check": "notification_pending", "value": noti_pending, "status": storm})
 
-    # I: Explainability — source_trace NULL 검사
+    # I: Explainability
     null_traces = sb.table("runtime_compliance_evidence").select("id").is_("source_trace", "null").limit(1).execute()
     explain_status = "CRITICAL" if null_traces.data else "OK"
     results.append({"check": "explainability_null_trace", "value": len(null_traces.data or []), "status": explain_status})
 
     overall = "CLEAN" if all(r["status"] == "OK" for r in results) else "ISSUES_DETECTED"
+
+    # Slack: 감사 결과 요약 발송
+    issues = [r for r in results if r["status"] != "OK"]
+    try:
+        from services.slack_dispatcher import send_slack_sync
+        if issues:
+            detail = ", ".join(f"{r['check']}={r['status']}" for r in issues)
+            send_slack_sync("INTEGRITY_AUDIT", "HIGH", f"감사 결과: {len(issues)}건 이슈", detail)
+        else:
+            send_slack_sync("INTEGRITY_AUDIT", "INFO", f"감사 결과: CLEAN ({len(results)}항목 PASS)")
+    except Exception:
+        pass
+
     return {
         "status": "success",
         "overall": overall,
@@ -144,7 +159,8 @@ def list_mapping_mutations(
 def integrity_status():
     return {
         "status": "active",
-        "engine": "Engine Integrity Monitor v1.0.0",
+        "engine": "Engine Integrity Monitor v1.1.0",
+        "slack": "ENABLED",
         "detectors": [
             "obligation_drift", "completeness_drift", "mandatory_drift",
             "mapping_mutation", "ai_contamination", "unsupported_inference",
