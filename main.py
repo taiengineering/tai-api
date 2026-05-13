@@ -1,4 +1,5 @@
-# main.py — v5.55.0
+# main.py — v5.56.0
+# v5.56.0: Document Engine Monitoring — admin document governance audit
 # v5.55.0: Engine Monitoring Dashboard — admin monitoring UI API
 # v5.54.0: Engine Integrity Monitor — 9 detectors, drift/contamination audit
 # v5.53.0: Requirement Engine — document completeness, checklist activation, obligation graph
@@ -160,9 +161,10 @@ from routers.submission_bridge        import router as submission_bridge_router
 from routers.requirement_engine       import router as requirement_engine_router
 from routers.integrity_monitor         import router as integrity_monitor_router
 from routers.engine_monitoring          import router as engine_monitoring_router
+from routers.document_monitoring        import router as document_monitoring_router
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "5.55.0"
+APP_VERSION = "5.56.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -257,6 +259,7 @@ app.include_router(submission_bridge_router)        # /bridge/submissions/* — 
 app.include_router(requirement_engine_router)       # /requirement/* — Requirement Engine
 app.include_router(integrity_monitor_router)         # /integrity/* — Engine Integrity Monitor
 app.include_router(engine_monitoring_router)          # /engine-monitoring/* — Admin Engine Monitor
+app.include_router(document_monitoring_router)        # /document-monitoring/* — Document Engine Monitor
 
 @app.get("/")
 def root():
