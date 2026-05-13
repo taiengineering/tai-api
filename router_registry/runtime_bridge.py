@@ -1,0 +1,15 @@
+"""Runtime Bridge — Legacy→Runtime 전환 브릿지 라우터.
+
+엔진 의존. 엔진 실패 시 graceful degradation.
+"""
+ROUTERS = [
+    {"module": "routers.legacy_freeze"},
+    {"module": "routers.runtime_bridge"},
+    {"module": "routers.inspection_bridge"},
+    {"module": "routers.obligation_bridge"},
+    {"module": "routers.my_inspection_bridge"},
+    {"module": "routers.notification_bridge"},
+    {"module": "routers.review_bridge"},
+    {"module": "routers.evidence_bridge"},
+    {"module": "routers.submission_bridge"},
+]
