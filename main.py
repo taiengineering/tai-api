@@ -1,4 +1,6 @@
-# main.py — v5.58.0
+# main.py — v5.60.0
+# v5.60.0: Controlled Publish Governance — release registry, publish gate, rollback
+# v5.59.0: Deterministic QA — golden scenarios, regression verification, cross-graph validation
 # v5.58.0: Legal Diff Engine — diff results, impact simulation, high-impact detection
 # v5.57.0: Legal Intake Pipeline — change signal cron, source registry, intake candidates
 # v5.56.0: Document Engine Monitoring — admin document governance audit
@@ -166,9 +168,11 @@ from routers.engine_monitoring          import router as engine_monitoring_route
 from routers.document_monitoring        import router as document_monitoring_router
 from routers.legal_intake              import router as legal_intake_router
 from routers.legal_diff                import router as legal_diff_router
+from routers.deterministic_qa           import router as deterministic_qa_router
+from routers.engine_publish             import router as engine_publish_router
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "5.58.0"
+APP_VERSION = "5.60.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -266,6 +270,8 @@ app.include_router(engine_monitoring_router)          # /engine-monitoring/* —
 app.include_router(document_monitoring_router)        # /document-monitoring/* — Document Engine Monitor
 app.include_router(legal_intake_router)              # /legal-intake/* — Legal Change Signal
 app.include_router(legal_diff_router)                # /legal-diff/* — Legal Diff & Impact Simulation
+app.include_router(deterministic_qa_router)           # /deterministic-qa/* — Regression & Graph Validation
+app.include_router(engine_publish_router)             # /engine-publish/* — Controlled Publish Governance
 
 @app.get("/")
 def root():
