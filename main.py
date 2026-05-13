@@ -1,4 +1,5 @@
-# main.py — v5.60.0
+# main.py — v5.61.0
+# v5.61.0: Staged Runtime Activation — rollout stages, drift verification, tenant risk
 # v5.60.0: Controlled Publish Governance — release registry, publish gate, rollback
 # v5.59.0: Deterministic QA — golden scenarios, regression verification, cross-graph validation
 # v5.58.0: Legal Diff Engine — diff results, impact simulation, high-impact detection
@@ -170,9 +171,10 @@ from routers.legal_intake              import router as legal_intake_router
 from routers.legal_diff                import router as legal_diff_router
 from routers.deterministic_qa           import router as deterministic_qa_router
 from routers.engine_publish             import router as engine_publish_router
+from routers.runtime_activation         import router as runtime_activation_router
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "5.60.0"
+APP_VERSION = "5.61.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -272,6 +274,7 @@ app.include_router(legal_intake_router)              # /legal-intake/* — Legal
 app.include_router(legal_diff_router)                # /legal-diff/* — Legal Diff & Impact Simulation
 app.include_router(deterministic_qa_router)           # /deterministic-qa/* — Regression & Graph Validation
 app.include_router(engine_publish_router)             # /engine-publish/* — Controlled Publish Governance
+app.include_router(runtime_activation_router)         # /runtime-activation/* — Staged Rollout
 
 @app.get("/")
 def root():
