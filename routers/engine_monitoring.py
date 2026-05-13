@@ -6,7 +6,6 @@
 절대 금지: 자동 수정, AI correction, semantic fallback, public exposure.
 """
 from fastapi import APIRouter, Query, Request, HTTPException
-from typing import Optional
 import logging
 
 router = APIRouter(prefix="/engine-monitoring", tags=["엔진감시 대시보드"])

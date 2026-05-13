@@ -1,4 +1,6 @@
-# main.py — v5.53.0
+# main.py — v5.55.0
+# v5.55.0: Engine Monitoring Dashboard — admin monitoring UI API
+# v5.54.0: Engine Integrity Monitor — 9 detectors, drift/contamination audit
 # v5.53.0: Requirement Engine — document completeness, checklist activation, obligation graph
 # v5.52.0: Phase 7 — Submission Runtime Bridge 라우터 등록 (8 API — /bridge/submissions/*)
 # v5.51.0: Phase 6 — Compliance Evidence Bridge 라우터 등록 (8 API — /bridge/evidence-*)
@@ -156,9 +158,11 @@ from routers.review_bridge            import router as review_bridge_router
 from routers.evidence_bridge          import router as evidence_bridge_router
 from routers.submission_bridge        import router as submission_bridge_router
 from routers.requirement_engine       import router as requirement_engine_router
+from routers.integrity_monitor         import router as integrity_monitor_router
+from routers.engine_monitoring          import router as engine_monitoring_router
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "5.53.0"
+APP_VERSION = "5.55.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -251,6 +255,8 @@ app.include_router(review_bridge_router)            # /bridge/review-* — Phase
 app.include_router(evidence_bridge_router)          # /bridge/evidence-* — Phase 6 증빙
 app.include_router(submission_bridge_router)        # /bridge/submissions/* — Phase 7 제출
 app.include_router(requirement_engine_router)       # /requirement/* — Requirement Engine
+app.include_router(integrity_monitor_router)         # /integrity/* — Engine Integrity Monitor
+app.include_router(engine_monitoring_router)          # /engine-monitoring/* — Admin Engine Monitor
 
 @app.get("/")
 def root():
