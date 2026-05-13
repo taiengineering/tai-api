@@ -1,4 +1,5 @@
-# main.py — v5.52.0
+# main.py — v5.53.0
+# v5.53.0: Requirement Engine — document completeness, checklist activation, obligation graph
 # v5.52.0: Phase 7 — Submission Runtime Bridge 라우터 등록 (8 API — /bridge/submissions/*)
 # v5.51.0: Phase 6 — Compliance Evidence Bridge 라우터 등록 (8 API — /bridge/evidence-*)
 # v5.50.0: Phase 5 — Review Queue Runtime Bridge 라우터 등록 (8 API — /bridge/review-*)
@@ -154,9 +155,10 @@ from routers.notification_bridge     import router as notification_bridge_router
 from routers.review_bridge            import router as review_bridge_router
 from routers.evidence_bridge          import router as evidence_bridge_router
 from routers.submission_bridge        import router as submission_bridge_router
+from routers.requirement_engine       import router as requirement_engine_router
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "5.52.0"
+APP_VERSION = "5.53.0"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -248,6 +250,7 @@ app.include_router(notification_bridge_router)     # /bridge/notifications/* —
 app.include_router(review_bridge_router)            # /bridge/review-* — Phase 5 검토 승인
 app.include_router(evidence_bridge_router)          # /bridge/evidence-* — Phase 6 증빙
 app.include_router(submission_bridge_router)        # /bridge/submissions/* — Phase 7 제출
+app.include_router(requirement_engine_router)       # /requirement/* — Requirement Engine
 
 @app.get("/")
 def root():
