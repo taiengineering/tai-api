@@ -10,3 +10,4 @@ venv/
 
 # SESSION 1 law XML samples (regenerate: python3 scripts/debug/fetch_law_raw_xml.py)
 scripts/debug/*.xml
+form_originals_hwp/

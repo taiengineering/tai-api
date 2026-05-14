@@ -775,6 +775,71 @@ tr:last-child td { border-bottom: none; }
   </div>
 </div>
 
+{% if compiler_candidates or compiler_penalties or compiler_schedule_hints %}
+<!-- ═══════════════════════════════════════════
+     P8.5: Compiler 산출물 (session 연동 시)
+═══════════════════════════════════════════ -->
+<div class="page">
+  <div class="rpt-header">
+    <div class="logo-area">
+      <span class="logo-text">TAI</span>
+      <span style="font-size: 8pt; color: var(--sub);">Compiler · 세션 {{ compiler_session_id or '—' }}</span>
+    </div>
+    <div class="doc-meta">{{ company_name }}<br>접수번호 {{ receipt_no }}</div>
+  </div>
+  <div class="sec-tag">SECTION 03-B</div>
+  <div class="sec-title">Compiler 후보 · 스케줄 · 처벌 연결</div>
+  <div class="sec-subtitle">diagnosis_candidate / diagnosis_schedule_hint / diagnosis_penalty_link</div>
+  {% if compiler_candidates %}
+  <h4 style="margin:10px 0 6px;font-size:10pt;">적용·의무 후보 (상위 25건)</h4>
+  <table>
+    <thead><tr><th>유형</th><th>요약</th><th>법령</th></tr></thead>
+    <tbody>
+      {% for c in compiler_candidates[:25] %}
+      <tr>
+        <td>{{ c.get('candidate_type') or c.get('type') or '—' }}</td>
+        <td>{{ c.get('summary') or c.get('title') or c.get('body') or '—' }}</td>
+        <td>{{ c.get('law_name') or c.get('law_ref') or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if compiler_schedule_hints %}
+  <h4 style="margin:14px 0 6px;font-size:10pt;">점검 스케줄 권고</h4>
+  <table>
+    <thead><tr><th>주기</th><th>메모</th></tr></thead>
+    <tbody>
+      {% for h in compiler_schedule_hints[:20] %}
+      <tr>
+        <td>{{ h.get('cycle') or h.get('frequency') or '—' }}</td>
+        <td>{{ h.get('hint') or h.get('description') or h | string }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if compiler_penalties %}
+  <h4 style="margin:14px 0 6px;font-size:10pt;">과태료·처벌 연결 후보</h4>
+  <table>
+    <thead><tr><th>법령</th><th>내용</th></tr></thead>
+    <tbody>
+      {% for p in compiler_penalties[:20] %}
+      <tr>
+        <td>{{ p.get('law_name') or '—' }}</td>
+        <td>{{ p.get('penalty_text') or p.get('summary') or p | string }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  <div class="rpt-footer">
+    <span>본 진단은 초기 onboarding seed로, 최종 법률 판단이 아닙니다.</span>
+    <span>p.8b</span>
+  </div>
+</div>
+{% endif %}
+
 
 <!-- ═══════════════════════════════════════════
      P9: SECTION 04 — 결론 = SaaS 안내 ★ 핵심
