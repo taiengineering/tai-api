@@ -85,9 +85,16 @@ body {
   padding-top: 5px;
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 8px;
   font-size: 7pt;
   color: var(--sub);
+}
+.rpt-footer-disclaimer {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+  padding-right: 6px;
 }
 
 /* ── 공통 섹션 타이틀 ── */
@@ -392,8 +399,8 @@ tr:last-child td { border-bottom: none; }
     <div>접수번호: {{ receipt_no }}</div>
   </div>
 
-  <div style="position: absolute; bottom: 14mm; left: 0; right: 0; text-align: center; font-size: 7pt; opacity: 0.45;">
-    본 문서는 TAI Engineering이 제공하는 법령 기반 진단 보고서입니다. 법률 자문이 아닌 참고 자료로만 활용하시기 바랍니다.
+  <div style="position: absolute; bottom: 14mm; left: 0; right: 0; text-align: center; font-size: 7pt; opacity: 0.45; padding: 0 18mm;">
+    본 진단 결과는 참고용이며 법적 효력이 없습니다. 정확한 법적 판단은 관련 전문가에게 문의하시기 바랍니다.
   </div>
 </div>
 
@@ -480,7 +487,7 @@ tr:last-child td { border-bottom: none; }
   </div>
 
   <div class="rpt-footer">
-    <span>본 문서는 TAI Engineering의 법령 기반 진단 결과이며 법률 자문이 아닙니다.</span>
+    <span class="rpt-footer-disclaimer">본 진단 결과는 참고용이며 법적 효력이 없습니다. 정확한 법적 판단은 관련 전문가에게 문의하시기 바랍니다.</span>
     <span>p.2</span>
   </div>
 </div>
@@ -538,7 +545,7 @@ tr:last-child td { border-bottom: none; }
   </div>
 
   <div class="rpt-footer">
-    <span>본 문서는 TAI Engineering의 법령 기반 진단 결과이며 법률 자문이 아닙니다.</span>
+    <span class="rpt-footer-disclaimer">본 진단 결과는 참고용이며 법적 효력이 없습니다. 정확한 법적 판단은 관련 전문가에게 문의하시기 바랍니다.</span>
     <span>p.3</span>
   </div>
 </div>
@@ -640,7 +647,7 @@ tr:last-child td { border-bottom: none; }
   {% endif %}
 
   <div class="rpt-footer">
-    <span>본 문서는 TAI Engineering의 법령 기반 진단 결과이며 법률 자문이 아닙니다.</span>
+    <span class="rpt-footer-disclaimer">본 진단 결과는 참고용이며 법적 효력이 없습니다. 정확한 법적 판단은 관련 전문가에게 문의하시기 바랍니다.</span>
     <span>p.4</span>
   </div>
 </div>
@@ -700,7 +707,7 @@ tr:last-child td { border-bottom: none; }
   {% endif %}
 
   <div class="rpt-footer">
-    <span>본 문서는 TAI Engineering의 법령 기반 진단 결과이며 법률 자문이 아닙니다.</span>
+    <span class="rpt-footer-disclaimer">본 진단 결과는 참고용이며 법적 효력이 없습니다. 정확한 법적 판단은 관련 전문가에게 문의하시기 바랍니다.</span>
     <span>p.5~</span>
   </div>
 </div>
@@ -770,7 +777,7 @@ tr:last-child td { border-bottom: none; }
   {% endif %}
 
   <div class="rpt-footer">
-    <span>본 문서는 TAI Engineering의 법령 기반 진단 결과이며 법률 자문이 아닙니다.</span>
+    <span class="rpt-footer-disclaimer">본 진단 결과는 참고용이며 법적 효력이 없습니다. 정확한 법적 판단은 관련 전문가에게 문의하시기 바랍니다.</span>
     <span>p.8</span>
   </div>
 </div>
@@ -834,7 +841,7 @@ tr:last-child td { border-bottom: none; }
   </table>
   {% endif %}
   <div class="rpt-footer">
-    <span>본 진단은 초기 onboarding seed로, 최종 법률 판단이 아닙니다.</span>
+    <span class="rpt-footer-disclaimer">본 진단 결과는 참고용이며 법적 효력이 없습니다. 정확한 법적 판단은 관련 전문가에게 문의하시기 바랍니다.</span>
     <span>p.8b</span>
   </div>
 </div>
@@ -912,7 +919,7 @@ tr:last-child td { border-bottom: none; }
   </div>
 
   <div class="rpt-footer">
-    <span>본 문서는 TAI Engineering의 법령 기반 진단 결과이며 법률 자문이 아닙니다.</span>
+    <span class="rpt-footer-disclaimer">본 진단 결과는 참고용이며 법적 효력이 없습니다. 정확한 법적 판단은 관련 전문가에게 문의하시기 바랍니다.</span>
     <span>p.9</span>
   </div>
 </div>
@@ -963,7 +970,7 @@ tr:last-child td { border-bottom: none; }
   </table>
 
   <div class="rpt-footer">
-    <span>부록 A — 전체 의무 테이블</span>
+    <span class="rpt-footer-disclaimer">본 진단 결과는 참고용이며 법적 효력이 없습니다. 정확한 법적 판단은 관련 전문가에게 문의하시기 바랍니다.</span>
     <span>A-1</span>
   </div>
 </div>
@@ -1013,7 +1020,7 @@ tr:last-child td { border-bottom: none; }
   </table>
 
   <div class="rpt-footer">
-    <span>부록 B — 점검 일정 요약</span>
+    <span class="rpt-footer-disclaimer">본 진단 결과는 참고용이며 법적 효력이 없습니다. 정확한 법적 판단은 관련 전문가에게 문의하시기 바랍니다.</span>
     <span>B-1</span>
   </div>
 </div>
@@ -1061,7 +1068,7 @@ tr:last-child td { border-bottom: none; }
   </table>
 
   <div class="rpt-footer">
-    <span>부록 C — 선임 의무 상세</span>
+    <span class="rpt-footer-disclaimer">본 진단 결과는 참고용이며 법적 효력이 없습니다. 정확한 법적 판단은 관련 전문가에게 문의하시기 바랍니다.</span>
     <span>C-1</span>
   </div>
 </div>
@@ -1122,7 +1129,7 @@ tr:last-child td { border-bottom: none; }
   </div>
 
   <div class="rpt-footer">
-    <span>부록 D — 용어 및 참고 법령 | © 2026 TAI Engineering. All rights reserved.</span>
+    <span class="rpt-footer-disclaimer">본 진단 결과는 참고용이며 법적 효력이 없습니다. 정확한 법적 판단은 관련 전문가에게 문의하시기 바랍니다.</span>
     <span>D-1</span>
   </div>
 </div>
