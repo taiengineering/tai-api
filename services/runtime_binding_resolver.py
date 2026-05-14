@@ -5,6 +5,7 @@ document_schema_registry.source_mapping → 실제 DB 데이터 조회.
 
 절대 금지: AI 기반 field mapping, semantic inference, guessed binding
 """
+import json
 from typing import Optional
 from db.supabase_client import get_supabase
 
@@ -91,6 +92,20 @@ def resolve_document_runtime(document_type: str, tenant_context: dict) -> dict:
         # runtime binding
         binding = resolve_source_value(f.get("source_mapping"), tenant_context)
 
+        cond_raw = f.get("conditional_rule")
+        if cond_raw is not None and not isinstance(cond_raw, (dict, list)):
+            try:
+                cond_raw = json.loads(cond_raw) if isinstance(cond_raw, str) else cond_raw
+            except (json.JSONDecodeError, TypeError):
+                cond_raw = None
+
+        val_raw = f.get("validation_rule")
+        if val_raw is not None and not isinstance(val_raw, dict):
+            try:
+                val_raw = json.loads(val_raw) if isinstance(val_raw, str) else val_raw
+            except (json.JSONDecodeError, TypeError):
+                val_raw = None
+
         section_fields[sc].append({
             "field_code": f["field_code"],
             "field_label": f["field_label"],
@@ -103,6 +118,9 @@ def resolve_document_runtime(document_type: str, tenant_context: dict) -> dict:
             "render_component": f.get("render_component"),
             "source_trace": f.get("source_trace"),
             "source_reason": f.get("source_reason"),
+            "source_mapping": f.get("source_mapping"),
+            "conditional_rule": cond_raw,
+            "validation_rule": val_raw,
         })
 
     # 조립

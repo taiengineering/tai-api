@@ -2,19 +2,47 @@
 
 PDF 생성이 아니라 Runtime Document Projection 반환.
 """
-from fastapi import APIRouter, HTTPException, Query
-from typing import Optional
-from db.supabase_client import get_supabase
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Query, Body
+from typing import Any, Optional
+
 from services.runtime_binding_resolver import resolve_document_runtime
 from services.conditional_rendering_resolver import resolve_conditional_fields
 from services.field_completeness_engine import (
-    evaluate_field_completeness, calculate_document_completeness
+    calculate_document_completeness,
 )
 from services.evidence_binding_engine import (
-    get_evidence_for_document, bind_evidence_to_fields
+    get_evidence_for_document,
+    bind_evidence_to_fields,
 )
+from services.runtime_document_context import build_runtime_context
+from services.rendering_integrity import compute_rendering_integrity
 
 router = APIRouter(prefix="/document-runtime", tags=["Document Runtime"])
+
+
+def _hydrate_runtime_payload(document_type: str, context: dict[str, Any]) -> dict[str, Any]:
+    """스키마 resolve → 조건부 필드 → completeness → evidence → integrity."""
+    payload = resolve_document_runtime(document_type, context)
+    if "error" in payload:
+        return payload
+
+    for section in payload.get("sections", []):
+        section["fields"] = resolve_conditional_fields(section["fields"], context)
+
+    evidence_list = get_evidence_for_document(document_type, context)
+    evidence_summary = bind_evidence_to_fields(payload.get("sections", []), evidence_list)
+    payload["evidence_summary"] = evidence_summary
+
+    completeness = calculate_document_completeness(payload.get("sections", []))
+    payload["completeness"] = completeness
+
+    payload["rendering_integrity"] = compute_rendering_integrity(
+        payload.get("sections", []),
+        evidence_summary,
+    )
+    return payload
 
 
 @router.get("/{document_type}")
@@ -22,49 +50,31 @@ async def get_runtime_document(
     document_type: str,
     facility_id: Optional[str] = Query(None),
 ):
-    """Runtime Document Projection 반환"""
-    context = {"facility_id": facility_id} if facility_id else {}
-    payload = resolve_document_runtime(document_type, context)
+    """Runtime Document Projection 반환 (evidence·integrity 포함)."""
+    context = build_runtime_context(facility_id, None)
+    payload = _hydrate_runtime_payload(document_type, context)
 
     if "error" in payload:
         raise HTTPException(404, payload["error"])
-
-    # PHASE C: conditional rendering
-    for section in payload.get("sections", []):
-        section["fields"] = resolve_conditional_fields(
-            section["fields"], context
-        )
-
-    # PHASE D: completeness
-    completeness = calculate_document_completeness(payload.get("sections", []))
-    payload["completeness"] = completeness
 
     return payload
 
 
 @router.post("/render")
-async def render_runtime_document(body: dict):
-    """Runtime context 기반 문서 렌더링"""
+async def render_runtime_document(body: dict = Body(...)):
+    """Runtime context 기반 문서 렌더링 — context overrides로 조건 시뮬레이션 가능."""
+    facility_id = body.get("facility_id") or (body.get("context") or {}).get("facility_id")
+    overrides = dict(body.get("context") or {})
+    overrides.pop("facility_id", None)
     document_type = body.get("document_type")
-    context = body.get("context", {})
 
     if not document_type:
         raise HTTPException(400, "document_type required")
 
-    payload = resolve_document_runtime(document_type, context)
+    context = build_runtime_context(facility_id, overrides)
+    payload = _hydrate_runtime_payload(document_type, context)
     if "error" in payload:
         raise HTTPException(404, payload["error"])
-
-    for section in payload.get("sections", []):
-        section["fields"] = resolve_conditional_fields(section["fields"], context)
-
-    completeness = calculate_document_completeness(payload.get("sections", []))
-    payload["completeness"] = completeness
-
-    # evidence binding
-    evidence_list = get_evidence_for_document(document_type, context)
-    evidence_summary = bind_evidence_to_fields(payload.get("sections", []), evidence_list)
-    payload["evidence_summary"] = evidence_summary
 
     return payload
 
@@ -75,7 +85,7 @@ async def get_completeness(
     facility_id: Optional[str] = Query(None),
 ):
     """Field-level completeness summary"""
-    context = {"facility_id": facility_id} if facility_id else {}
+    context = build_runtime_context(facility_id, None)
     payload = resolve_document_runtime(document_type, context)
 
     if "error" in payload:
@@ -83,6 +93,9 @@ async def get_completeness(
 
     for section in payload.get("sections", []):
         section["fields"] = resolve_conditional_fields(section["fields"], context)
+
+    evidence_list = get_evidence_for_document(document_type, context)
+    bind_evidence_to_fields(payload.get("sections", []), evidence_list)
 
     completeness = calculate_document_completeness(payload.get("sections", []))
 
@@ -98,11 +111,14 @@ async def get_evidence_binding(
     facility_id: Optional[str] = Query(None),
 ):
     """Evidence binding summary"""
-    context = {"facility_id": facility_id} if facility_id else {}
+    context = build_runtime_context(facility_id, None)
     payload = resolve_document_runtime(document_type, context)
 
     if "error" in payload:
         raise HTTPException(404, payload["error"])
+
+    for section in payload.get("sections", []):
+        section["fields"] = resolve_conditional_fields(section["fields"], context)
 
     evidence_list = get_evidence_for_document(document_type, context)
     evidence_summary = bind_evidence_to_fields(payload.get("sections", []), evidence_list)
@@ -118,29 +134,20 @@ async def check_rendering_integrity(
     document_type: str,
     facility_id: Optional[str] = Query(None),
 ):
-    """Rendering Integrity Verification (PHASE G)"""
-    context = {"facility_id": facility_id} if facility_id else {}
-    payload = resolve_document_runtime(document_type, context)
+    """Rendering Integrity Verification"""
+    context = build_runtime_context(facility_id, None)
+    payload = _hydrate_runtime_payload(document_type, context)
 
     if "error" in payload:
         raise HTTPException(404, payload["error"])
 
-    issues = []
-    for section in payload.get("sections", []):
-        for field in section.get("fields", []):
-            # orphan field (no source)
-            if not field.get("source"):
-                issues.append({"type": "missing_source_mapping", "field": field["field_code"]})
-            # render null mismatch
-            if field.get("required_level") == "MANDATORY" and not field.get("resolved"):
-                issues.append({"type": "mandatory_unresolved", "field": field["field_code"]})
-            # hidden mandatory
-            if not field.get("visible", True) and field.get("required_level") == "MANDATORY":
-                issues.append({"type": "hidden_mandatory_field", "field": field["field_code"]})
-
+    ri = payload.get("rendering_integrity") or {}
     return {
         "document_type": document_type,
-        "total_issues": len(issues),
-        "integrity_status": "CLEAN" if not issues else "HAS_ISSUES",
-        "issues": issues[:50],
+        "total_issues": ri.get("total_issues", 0),
+        "integrity_status": ri.get("integrity_status"),
+        "rollup_status": ri.get("rollup_status"),
+        "critical_count": ri.get("critical_count", 0),
+        "warning_count": ri.get("warning_count", 0),
+        "issues": ri.get("issues", []),
     }
