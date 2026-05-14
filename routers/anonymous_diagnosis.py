@@ -171,6 +171,7 @@ def _build_step1_body(body: AnonymousDiagnosisCreate) -> DiagnoseStep1Body:
 
 @router.post("")
 async def create_anonymous_diagnosis(body: AnonymousDiagnosisCreate):
+    supabase = get_supabase()
     step1_body = _build_step1_body(body)
     eng = _run_step1_via_service(supabase, step1_body)
     if eng.get("status") != "success":
@@ -194,7 +195,6 @@ async def create_anonymous_diagnosis(body: AnonymousDiagnosisCreate):
         "engine_version": LEGAL_ENGINE_VERSION,
         "rule_version": RULE_VERSION,
     }
-    supabase = get_supabase()
     try:
         res = supabase.table("anonymous_diagnosis_results").insert(row).execute()
         if not res.data:
