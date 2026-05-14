@@ -75,6 +75,7 @@ class TbmUpdateBody(BaseModel):
     transcript_text:       Optional[str] = None
     meeting_title:         Optional[str] = None
     construction_site_id:  Optional[str] = None
+    status_code:           Optional[str] = None
 
 
 class TranscribeBody(BaseModel):
