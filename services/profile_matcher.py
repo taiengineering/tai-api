@@ -4,7 +4,7 @@ Batch precompile 철학 유지.
 30개 precompiled factory 중 고객 입력과 가장 가까운 프로필을 deterministic 매칭.
 결과는 "초기 runtime seed"이지 최종 법률 판단 아님.
 
-매칭 기준 (deterministic, similarity scoring 아님):
+매칭 기준 (deterministic):
 1. sector 완전 일치 (BUILDING/CONSTRUCTION/INDUSTRIAL)
 2. employee_count 거리 (가장 가까운 구간)
 3. sector별 보조 기준:
@@ -13,18 +13,26 @@ Batch precompile 철학 유지.
    - INDUSTRIAL: ksic_code 2자리 일치 + hazardous_material
 """
 import os
-from typing import Optional, Dict, Any, List
-
-
-def _get_sb():
-    from supabase import create_client
-    return create_client(
-        os.environ.get('SUPABASE_URL', ''),
-        os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')
-    )
+from typing import Dict, Any, List
 
 
 PRECOMPILED_SECTORS = {'BUILDING', 'CONSTRUCTION', 'INDUSTRIAL'}
+
+_precompiled_cache = None
+
+
+def _load_precompiled_ids(sb) -> set:
+    """Get distinct factory_ids with precompiled applicability. Cached."""
+    global _precompiled_cache
+    if _precompiled_cache is not None:
+        return _precompiled_cache
+    result = sb.table('facility_applicability').select(
+        'factory_id'
+    ).limit(1000).execute()
+    _precompiled_cache = set(
+        r['factory_id'] for r in (result.data or [])
+    )
+    return _precompiled_cache
 
 
 class ProfileMatcher:
@@ -49,56 +57,31 @@ class ProfileMatcher:
         except (ValueError, TypeError):
             emp = 0
 
-        profiles = sb.table('factories').select(
+        precompiled_ids = _load_precompiled_ids(sb)
+        if not precompiled_ids:
+            return {'matched': False, 'reason': 'NO_PRECOMPILED_DATA'}
+
+        all_factories = sb.table('factories').select(
             'id, name, sector, ksic_code, employee_count, '
             'building_area, construction_amount, hazardous_material, '
             'electrical_capacity_kw, contractor_count'
-        ).eq('sector', sector).in_(
-            'id',
-            sb.table('facility_applicability').select('factory_id').limit(1000).execute().data
-            and [r['factory_id'] for r in
-                 sb.rpc('get_precompiled_factory_ids', {}).execute().data]
-            if False else []  # fallback below
-        ).execute()
+        ).eq('sector', sector).execute()
 
-        # Direct approach: get factories that have precompiled data
-        precompiled_ids_r = sb.table('facility_applicability').select(
-            'factory_id'
-        ).limit(1).execute()
-        # Get all distinct factory_ids from facility_applicability
-        all_app = sb.rpc('', {})  # can't use DISTINCT via supabase-py easily
-        # Simpler: query factories with sector filter, then check which have data
-        candidates = sb.table('factories').select(
-            'id, name, sector, ksic_code, employee_count, '
-            'building_area, construction_amount, hazardous_material, '
-            'electrical_capacity_kw, contractor_count'
-        ).eq('sector', sector).not_.is_('employee_count', 'null').order(
-            'employee_count'
-        ).execute()
+        candidates = [
+            f for f in (all_factories.data or [])
+            if f['id'] in precompiled_ids
+            and f.get('employee_count') is not None
+        ]
 
-        if not candidates.data:
+        if not candidates:
             return {
                 'matched': False,
                 'reason': f'NO_PROFILES_FOR_SECTOR: {sector}',
             }
 
-        # Filter to only factories with precompiled applicability
-        # (check via a single count query per candidate)
-        valid = []
-        for c in candidates.data:
-            check = sb.table('facility_applicability').select(
-                'id', count='exact'
-            ).eq('factory_id', c['id']).limit(1).execute()
-            if check.count and check.count > 0:
-                valid.append(c)
-
-        if not valid:
-            return {
-                'matched': False,
-                'reason': 'NO_PRECOMPILED_DATA',
-            }
-
-        best = ProfileMatcher._find_closest(valid, input_data, sector, emp)
+        best = ProfileMatcher._find_closest(
+            candidates, input_data, sector, emp
+        )
         unsupported = ProfileMatcher._check_unsupported(input_data, best)
 
         return {
@@ -128,35 +111,35 @@ class ProfileMatcher:
         def score(p):
             s = 0
             p_emp = p.get('employee_count') or 0
-            # Employee count distance (primary)
             s += abs(p_emp - emp) * 10
 
             if sector == 'BUILDING':
                 p_area = float(p.get('building_area') or 0)
                 i_area = float(input_data.get('building_area') or 0)
                 s += abs(p_area - i_area) * 0.01
-
             elif sector == 'CONSTRUCTION':
                 p_amt = float(p.get('construction_amount') or 0)
-                i_amt = float(input_data.get('construction_amount') or 0)
+                i_amt = float(
+                    input_data.get('construction_amount') or 0
+                )
                 s += abs(p_amt - i_amt) * 0.0000001
-
             elif sector == 'INDUSTRIAL':
                 p_ksic = (p.get('ksic_code') or '')[:2]
                 i_ksic = (input_data.get('ksic_code') or '')[:2]
                 if p_ksic and i_ksic and p_ksic == i_ksic:
-                    s -= 500  # bonus for same 2-digit KSIC
+                    s -= 500
                 p_haz = p.get('hazardous_material') or False
                 i_haz = input_data.get('hazardous_material') or False
                 if p_haz == i_haz:
-                    s -= 100  # bonus for matching hazard status
-
+                    s -= 100
             return s
 
         return min(profiles, key=score)
 
     @staticmethod
-    def _check_unsupported(input_data: Dict, matched: Dict) -> List[str]:
+    def _check_unsupported(
+        input_data: Dict, matched: Dict
+    ) -> List[str]:
         gaps = []
         m_emp = matched.get('employee_count') or 0
         i_emp = input_data.get('employee_count') or 0
@@ -164,7 +147,8 @@ class ProfileMatcher:
             ratio = abs(i_emp - m_emp) / max(i_emp, 1)
             if ratio > 0.5:
                 gaps.append(
-                    f'EMPLOYEE_COUNT_GAP: input={i_emp} matched={m_emp} '
+                    f'EMPLOYEE_COUNT_GAP: input={i_emp} '
+                    f'matched={m_emp} '
                     f'(>{int(ratio*100)}% difference)'
                 )
         i_ksic = input_data.get('ksic_code', '')
