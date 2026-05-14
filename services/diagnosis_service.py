@@ -17,17 +17,41 @@ def _get_sb():
                          os.environ.get('SUPABASE_SERVICE_ROLE_KEY',''))
 
 
+# Compiler task_type → SaaS sub_type 매핑
+# Compiler 파이프라인은 '_TASK_CANDIDATE' 접미사 사용
+# SaaSSetupService.RECURRING_TYPES와 매칭 필수
+TYPE_MAP = {
+    'REPORT_TASK_CANDIDATE': 'REPORT',
+    'INSPECTION_TASK_CANDIDATE': 'INSPECTION',
+    'TRAINING_TASK_CANDIDATE': 'EDUCATION',
+    'MEASURE_TASK_CANDIDATE': 'MEASUREMENT',
+    'PRESERVE_TASK_CANDIDATE': 'PRESERVATION',
+    'RECORD_TASK_CANDIDATE': 'REPORT',
+    'APPOINTMENT_TASK_CANDIDATE': 'INSPECTION',
+    'DESIGNATE_TASK_CANDIDATE': 'INSPECTION',
+    'INSTALL_TASK_CANDIDATE': 'GENERAL',
+    'NOTIFY_TASK_CANDIDATE': 'GENERAL',
+    'MANAGE_TASK_CANDIDATE': 'GENERAL',
+    'VERIFY_TASK_CANDIDATE': 'INSPECTION',
+    'EXECUTE_TASK_CANDIDATE': 'GENERAL',
+    # fallback bare names (legacy compat)
+    'REPORT': 'REPORT',
+    'INSPECTION': 'INSPECTION',
+    'EDUCATION': 'EDUCATION',
+    'MEASUREMENT': 'MEASUREMENT',
+    'PRESERVATION': 'PRESERVATION',
+}
+
+
 class DiagnosisService:
     @staticmethod
     def evaluate(sb, factory_id, input_data):
         now = datetime.now(timezone.utc).isoformat()
 
-        # Step 1: Profile Matching — find closest precompiled factory
         from services.profile_matcher import ProfileMatcher
         match_result = ProfileMatcher.match(sb, input_data)
 
         if not match_result.get('matched'):
-            # No precompiled profile found — create session with UNSUPPORTED status
             session = sb.table('diagnosis_session').insert({
                 'factory_id': factory_id,
                 'diagnosis_status': 'UNSUPPORTED_SECTOR',
@@ -50,7 +74,6 @@ class DiagnosisService:
                 'validation': {'status': 'UNSUPPORTED'},
             }
 
-        # Use the matched precompiled factory for data queries
         source_fid = match_result['matched_factory_id']
 
         session = sb.table('diagnosis_session').insert({
@@ -69,7 +92,6 @@ class DiagnosisService:
         sid = session.data[0]['id']
 
         try:
-            # Query precompiled data from matched factory
             app_r = sb.table('facility_applicability').select(
                 'id, draft_id, applicability_status, part_id'
             ).eq('factory_id', source_fid).in_(
@@ -97,23 +119,16 @@ class DiagnosisService:
             ).eq('factory_id', source_fid).execute()
             residuals = compliance_r.data or []
 
-            # Generate diagnosis candidates from precompiled tasks
-            TYPE_MAP = {
-                'REPORT': 'REPORT', 'INSTALL': 'GENERAL',
-                'APPOINTMENT': 'APPOINTMENT', 'INSPECTION': 'INSPECTION',
-                'EDUCATION': 'EDUCATION', 'RECORD': 'RECORD',
-                'MEASUREMENT': 'MEASUREMENT', 'PRESERVATION': 'PRESERVATION',
-                'SUBMIT': 'REPORT', 'MAINTAIN': 'GENERAL',
-            }
             obligations = []
             for t in tasks:
-                sub = TYPE_MAP.get(t.get('task_type'), 'GENERAL')
+                raw_type = t.get('task_type', '')
+                sub = TYPE_MAP.get(raw_type, 'GENERAL')
                 dc = sb.table('diagnosis_candidate').insert({
                     'session_id': sid,
                     'candidate_type': 'OBLIGATION',
                     'sub_type': sub,
                     'title_candidate': (
-                        f"{t.get('task_type', '')}: "
+                        f"{raw_type}: "
                         f"{t.get('source_action_family', '')}"
                     ),
                     'source_law': t.get('obligation_family'),
@@ -125,7 +140,7 @@ class DiagnosisService:
                 }).execute()
                 obligations.append(dc.data[0] if dc.data else {})
 
-            for a in applicability[:100]:  # limit inserts
+            for a in applicability[:100]:
                 sb.table('diagnosis_candidate').insert({
                     'session_id': sid,
                     'candidate_type': 'APPLICABILITY',
@@ -142,6 +157,10 @@ class DiagnosisService:
                     freq = 'YEARLY'
                 elif 'PERIODIC' in st:
                     freq = 'PERIODIC'
+                elif 'NUMERIC_FREQUENCY' in st:
+                    freq = 'PERIODIC'
+                elif 'IMMEDIATE' in st:
+                    freq = 'EVENT_BASED'
                 sb.table('diagnosis_schedule_hint').insert({
                     'session_id': sid,
                     'frequency_family': freq,
@@ -159,7 +178,6 @@ class DiagnosisService:
                     'status': 'PENALTY_LINK_CANDIDATE',
                 }).execute()
 
-            # Determine status
             missing = []
             if not input_data.get('employee_count'):
                 missing.append('employee_count')
@@ -169,7 +187,6 @@ class DiagnosisService:
             has_unknown = any(
                 t.get('status') == 'NEEDS_HUMAN_REVIEW' for t in tasks
             )
-            unsupported = match_result.get('unsupported_conditions', [])
 
             val_status = (
                 'AMBIGUOUS' if has_unknown
@@ -202,7 +219,9 @@ class DiagnosisService:
                 'match_result': {
                     'method': match_result['match_method'],
                     'source_factory': match_result.get('matched_factory_name'),
-                    'unsupported_conditions': unsupported,
+                    'unsupported_conditions': match_result.get(
+                        'unsupported_conditions', []
+                    ),
                     'warning': match_result.get('warning'),
                 },
                 'applicability_candidates': applicability,
