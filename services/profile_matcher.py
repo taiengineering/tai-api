@@ -3,32 +3,21 @@
 Batch precompile 철학 유지.
 30개 precompiled factory 중 고객 입력과 가장 가까운 프로필을 deterministic 매칭.
 결과는 "초기 runtime seed"이지 최종 법률 판단 아님.
-
-매칭 기준 (deterministic):
-1. sector 완전 일치 (BUILDING/CONSTRUCTION/INDUSTRIAL)
-2. employee_count 거리 (가장 가까운 구간)
-3. sector별 보조 기준:
-   - BUILDING: building_area
-   - CONSTRUCTION: construction_amount
-   - INDUSTRIAL: ksic_code 2자리 일치 + hazardous_material
 """
 import os
 from typing import Dict, Any, List
 
 
 PRECOMPILED_SECTORS = {'BUILDING', 'CONSTRUCTION', 'INDUSTRIAL'}
-
 _precompiled_cache = None
 
 
 def _load_precompiled_ids(sb) -> set:
-    """Get distinct factory_ids with precompiled applicability. Cached."""
+    """DB function으로 distinct factory_id 조회. Process-level cache."""
     global _precompiled_cache
     if _precompiled_cache is not None:
         return _precompiled_cache
-    result = sb.table('facility_applicability').select(
-        'factory_id'
-    ).limit(1000).execute()
+    result = sb.rpc('get_precompiled_factory_ids', {}).execute()
     _precompiled_cache = set(
         r['factory_id'] for r in (result.data or [])
     )
@@ -36,11 +25,6 @@ def _load_precompiled_ids(sb) -> set:
 
 
 class ProfileMatcher:
-    """Deterministic profile matcher.
-    All outputs are SEED CANDIDATES for onboarding.
-    Not legal conclusions.
-    """
-
     @staticmethod
     def match(sb, input_data: Dict[str, Any]) -> Dict[str, Any]:
         sector = (input_data.get('sector') or '').upper()
@@ -98,9 +82,9 @@ class ProfileMatcher:
             },
             'unsupported_conditions': unsupported,
             'warning': (
-                'This is an onboarding seed based on the closest '
-                'precompiled profile. Not a final legal determination. '
-                'Results require user approval before SaaS registration.'
+                'Onboarding seed based on closest precompiled profile. '
+                'Not a final legal determination. '
+                'Requires user approval before SaaS registration.'
             ),
         }
 
@@ -112,7 +96,6 @@ class ProfileMatcher:
             s = 0
             p_emp = p.get('employee_count') or 0
             s += abs(p_emp - emp) * 10
-
             if sector == 'BUILDING':
                 p_area = float(p.get('building_area') or 0)
                 i_area = float(input_data.get('building_area') or 0)
@@ -133,7 +116,6 @@ class ProfileMatcher:
                 if p_haz == i_haz:
                     s -= 100
             return s
-
         return min(profiles, key=score)
 
     @staticmethod
@@ -149,7 +131,7 @@ class ProfileMatcher:
                 gaps.append(
                     f'EMPLOYEE_COUNT_GAP: input={i_emp} '
                     f'matched={m_emp} '
-                    f'(>{int(ratio*100)}% difference)'
+                    f'(>{int(ratio*100)}% diff)'
                 )
         i_ksic = input_data.get('ksic_code', '')
         m_ksic = matched.get('ksic_code', '')
