@@ -27,4 +27,5 @@ ROUTERS = [
     {"module": "routers.precedent_api"},
     {"module": "routers.contract_kmong"},
     {"module": "routers.watch_engine_api"},
+    {"module": "routers.watch_engine_alert_api"},
 ]
