@@ -1,16 +1,20 @@
-"""Notification Engine API Router v2.0 — Health + Registry + DLQ + Status 규약
+"""Notification Engine API Router v3.0 — Observability & Metrics
 prefix: /notification-engine
 
 API:
-  POST   /notification-engine/process-queue     Queue Worker 수동 실행
-  GET    /notification-engine/queue-status       Queue 현황
-  GET    /notification-engine/events             최근 이벤트
-  POST   /notification-engine/emit-test          테스트 E2E
-  POST   /notification-engine/ack/{queue_id}     ACK
-  POST   /notification-engine/resolve/{queue_id} RESOLVE
-  GET    /notification-engine/health             Runtime Health
-  GET    /notification-engine/registry           Event Registry 목록
-  GET    /notification-engine/deadletters        DLQ 목록
+  GET    /notification-engine/health              Runtime Health
+  GET    /notification-engine/registry             Event Registry
+  GET    /notification-engine/deadletters          DLQ 목록
+  POST   /notification-engine/process-queue        Queue Worker 수동
+  GET    /notification-engine/queue-status          Queue 현황
+  GET    /notification-engine/events               최근 이벤트
+  POST   /notification-engine/emit-test            테스트 E2E
+  POST   /notification-engine/ack/{queue_id}       ACK
+  POST   /notification-engine/resolve/{queue_id}   RESOLVE
+  GET    /notification-engine/metrics              Metrics 이력
+  GET    /notification-engine/runtime-summary      실시간 요약
+  POST   /notification-engine/collect-metrics      Metrics 수동 집계
+  GET    /notification-engine/timeline/{trace_id}  Trace Timeline
 """
 
 import logging
@@ -29,26 +33,60 @@ def _sb():
 
 @router.get("/health")
 def notification_health():
-    """운영 상태 관측."""
     try:
-        sb = _sb()
-        result = {}
+        from services.notification_engine.metrics_aggregator import get_runtime_summary
+        summary = get_runtime_summary()
+        return {"status": "success", "data": summary}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
-        for status in ["QUEUED", "PROCESSING", "RETRY_PENDING", "FAILED", "DELIVERED", "DEADLETTER"]:
-            resp = sb.table("runtime_notification_queue") \
-                .select("id", count="exact") \
-                .eq("delivery_status", status).execute()
-            result[f"queue_{status.lower()}"] = resp.count or 0
 
-        from services.notification_engine.deadletter import count_deadletters
-        result["deadletter_total"] = count_deadletters()
+# ═══ Runtime Summary (실시간) ═══
 
-        result["status"] = "healthy"
-        if result.get("queue_failed", 0) > 10:
-            result["status"] = "degraded"
-        if result.get("deadletter_total", 0) > 50:
-            result["status"] = "critical"
+@router.get("/runtime-summary")
+def runtime_summary():
+    try:
+        from services.notification_engine.metrics_aggregator import get_runtime_summary
+        summary = get_runtime_summary()
+        return {"status": "success", "data": summary}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
+
+# ═══ Metrics 이력 ═══
+
+@router.get("/metrics")
+def list_metrics(limit: int = Query(24, ge=1, le=100)):
+    """최근 Metrics 이력."""
+    try:
+        resp = _sb().table("runtime_notification_metrics") \
+            .select("*").order("metric_time", desc=True).limit(limit).execute()
+        return {"status": "success", "data": resp.data or []}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ═══ Metrics 수동 집계 ═══
+
+@router.post("/collect-metrics")
+def collect_metrics_manual(window_minutes: int = Query(10, ge=1, le=60)):
+    try:
+        from services.notification_engine.metrics_aggregator import collect_and_record
+        result = collect_and_record(window_minutes=window_minutes)
+        return {"status": "success", "data": result}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ═══ Trace Timeline ═══
+
+@router.get("/timeline/{trace_id}")
+def get_trace_timeline(trace_id: str):
+    try:
+        from services.notification_engine.timeline import get_timeline
+        result = get_timeline(trace_id)
+        if result is None:
+            return {"status": "error", "message": "Timeline not found"}
         return {"status": "success", "data": result}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -58,11 +96,9 @@ def notification_health():
 
 @router.get("/registry")
 def list_event_registry():
-    """Event Type Registry 목록."""
     try:
         from services.notification_engine.registry import list_all_event_types
-        data = list_all_event_types()
-        return {"status": "success", "data": data}
+        return {"status": "success", "data": list_all_event_types()}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -71,7 +107,6 @@ def list_event_registry():
 
 @router.get("/deadletters")
 def list_deadletters(limit: int = Query(20, ge=1, le=100)):
-    """DLQ 목록."""
     try:
         resp = _sb().table("runtime_notification_deadletter") \
             .select("*").order("created_at", desc=True).limit(limit).execute()
@@ -80,14 +115,13 @@ def list_deadletters(limit: int = Query(20, ge=1, le=100)):
         return {"status": "error", "message": str(e)}
 
 
-# ═══ Queue Worker 수동 실행 ═══
+# ═══ Queue Worker ═══
 
 @router.post("/process-queue")
 def process_queue_manual(limit: int = Query(20, ge=1, le=100)):
     try:
         from services.notification_engine.worker import process_queue
-        stats = process_queue(limit=limit)
-        return {"status": "success", "data": stats}
+        return {"status": "success", "data": process_queue(limit=limit)}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -103,8 +137,7 @@ def get_queue_status():
         result = {}
         for s in statuses:
             resp = sb.table("runtime_notification_queue") \
-                .select("id", count="exact") \
-                .eq("delivery_status", s).execute()
+                .select("id", count="exact").eq("delivery_status", s).execute()
             result[s] = resp.count or 0
         return {"status": "success", "data": result}
     except Exception as e:
@@ -147,7 +180,6 @@ def emit_test_event():
             message_body="Notification Engine Phase 1 \ud14c\uc2a4\ud2b8.\n\uc815\uc0c1 \uc218\uc2e0\ub418\uba74 Pipeline \uc5f0\ub3d9 \uc644\ub8cc.",
             cooldown_minutes=1,
         )
-
         worker_stats = process_queue(limit=10)
 
         return {
@@ -171,12 +203,10 @@ def emit_test_event():
 def ack_notification(queue_id: str):
     try:
         from datetime import datetime, timezone
-        sb = _sb()
-        sb.table("runtime_notification_queue").update({
+        _sb().table("runtime_notification_queue").update({
             "delivery_status": "ACKNOWLEDGED",
             "acknowledged_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", queue_id).execute()
-
         from services.notification_engine.audit import log_ack
         log_ack(queue_id=queue_id)
         return {"status": "success", "message": f"{queue_id} ACK 완료"}
@@ -190,12 +220,10 @@ def ack_notification(queue_id: str):
 def resolve_notification(queue_id: str):
     try:
         from datetime import datetime, timezone
-        sb = _sb()
-        sb.table("runtime_notification_queue").update({
+        _sb().table("runtime_notification_queue").update({
             "delivery_status": "RESOLVED",
             "resolved_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", queue_id).execute()
-
         from services.notification_engine.audit import log_delivery
         log_delivery(
             queue_id=queue_id, event_id=queue_id,
