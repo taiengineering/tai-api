@@ -24,4 +24,5 @@ ROUTERS = [
     {"module": "routers.ksic_engine"},
     {"module": "routers.posts"},
     {"module": "routers.workers"},
+    {"module": "routers.workflow_integrity"},
 ]
