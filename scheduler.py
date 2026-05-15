@@ -1,6 +1,7 @@
-# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.2
+# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.3
 # v1.1: INTEGRITY_EVALUATE direct call
 # v1.2: SYNTHETIC_LOGIN / SYNTHETIC_PROCESS_REG direct call
+# v1.3: SYNTHETIC_CLEANUP direct call
 import os, logging
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -9,12 +10,10 @@ from apscheduler.triggers.cron import CronTrigger
 logger    = logging.getLogger(__name__)
 scheduler = BackgroundScheduler(timezone="Asia/Seoul")
 
-# ── Direct execution registry ────────────────────────────
 DIRECT_HANDLERS = {}
 
 
 def _register_direct_handlers():
-    """Register direct execution handlers (lazy import)."""
     global DIRECT_HANDLERS
     if DIRECT_HANDLERS:
         return
@@ -31,18 +30,23 @@ def _register_direct_handlers():
         from watch_engine.synthetic.runner import run_synthetic
         return run_synthetic(scenarios=["process_registration"])
 
+    def _run_synthetic_cleanup(payload: dict) -> dict:
+        from watch_engine.synthetic.cleanup import cleanup_synthetic_data
+        return cleanup_synthetic_data(
+            event_retention_days=payload.get("event_retention_days", 7),
+            service_data_retention_hours=payload.get("service_data_retention_hours", 24),
+        )
+
     DIRECT_HANDLERS = {
         "direct://integrity_evaluate": _run_integrity_evaluate,
         "direct://synthetic_login": _run_synthetic_login,
         "direct://synthetic_process_reg": _run_synthetic_process_reg,
+        "direct://synthetic_cleanup": _run_synthetic_cleanup,
     }
 
 
-# ── Job execution ─────────────────────────────────────────
-
 def execute_cron_job(job_code: str, endpoint_url: str,
                      http_method: str, payload: dict, timeout: int):
-    """크론 작업 실행 + 로그 기록."""
     from db.database import get_supabase
     sb = get_supabase()
 
@@ -55,7 +59,6 @@ def execute_cron_job(job_code: str, endpoint_url: str,
     started = datetime.now()
 
     try:
-        # ── Direct execution path ──
         if endpoint_url and endpoint_url.startswith("direct://"):
             result = _execute_direct(endpoint_url, payload or {})
             duration = (datetime.now() - started).total_seconds()
@@ -63,12 +66,7 @@ def execute_cron_job(job_code: str, endpoint_url: str,
             errors = 0
             if isinstance(result, dict):
                 errors = result.get("errors", 0)
-
-            if errors > 0:
-                status = "WARNING"
-            else:
-                status = "SUCCESS"
-
+            status = "WARNING" if errors > 0 else "SUCCESS"
             summary = _build_summary(result)
 
             sb.table("cron_job_log").update({
@@ -86,7 +84,6 @@ def execute_cron_job(job_code: str, endpoint_url: str,
             logger.info(f"[CRON] {job_code} {status} ({duration:.1f}s) [DIRECT]")
             return
 
-        # ── HTTP execution path (existing) ──
         import requests
         base_url = os.environ.get("INTERNAL_API_URL", "https://api.taieng.co.kr")
         url      = base_url + endpoint_url
@@ -126,7 +123,6 @@ def execute_cron_job(job_code: str, endpoint_url: str,
 
 
 def _execute_direct(endpoint_url: str, payload: dict) -> dict:
-    """Execute a direct handler."""
     _register_direct_handlers()
     handler = DIRECT_HANDLERS.get(endpoint_url)
     if handler is None:
@@ -135,32 +131,32 @@ def _execute_direct(endpoint_url: str, payload: dict) -> dict:
 
 
 def _build_summary(result) -> str:
-    """Build human-readable summary."""
     if not isinstance(result, dict):
         return str(result)
     parts = []
-    # Integrity evaluator format
     if "evaluated_traces" in result:
         parts.append(f"{result['evaluated_traces']} traces")
         if result.get("issues_found", 0) > 0:
             parts.append(f"{result['issues_found']} issues")
         if result.get("suppressed", 0) > 0:
             parts.append(f"{result['suppressed']} suppressed")
-    # Synthetic runner format
     if "scenario_run_id" in result:
         parts.append(f"run={result['scenario_run_id']}")
         parts.append(f"{result.get('passed', 0)} passed")
         if result.get("failed", 0) > 0:
             parts.append(f"{result['failed']} failed")
+    # Cleanup format
+    if "business_events_deleted" in result:
+        total = (result.get("business_events_deleted", 0)
+                 + result.get("integrity_events_deleted", 0)
+                 + result.get("service_data_deleted", 0))
+        parts.append(f"{total} synthetic records cleaned")
     if result.get("errors", 0) > 0:
         parts.append(f"{result['errors']} errors")
     return ", ".join(parts) if parts else "No activity"
 
 
-# ── Job loading ────────────────────────────────────────────
-
 def load_jobs_from_db():
-    """DB에서 활성 크론 작업 로드 후 스케줄러 등록."""
     from db.database import get_supabase
     sb   = get_supabase()
     jobs = sb.table("cron_job_master").select("*").eq("is_active", True).execute()
@@ -202,7 +198,6 @@ def load_jobs_from_db():
 
 
 def start_scheduler():
-    """스케줄러 시작."""
     try:
         load_jobs_from_db()
         if not scheduler.running:
