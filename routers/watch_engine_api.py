@@ -1,7 +1,9 @@
 # routers/watch_engine_api.py — Watch Engine 엔드포인트
 """
-Integrity Evaluator scheduler 연결용 API.
-scheduler.py가 이 엔드포인트를 주기적으로 호출.
+Watch Engine Admin API.
+
+NOTE: Scheduler는 v1.1부터 direct call 사용 (HTTP self-call 제거).
+      이 엔드포인트는 admin/수동 테스트 전용으로 유지.
 """
 
 import logging
@@ -14,10 +16,10 @@ router = APIRouter(prefix="/watch-engine", tags=["감시엔진"])
 
 @router.post("/evaluate")
 def run_integrity_evaluation():
-    """Integrity Evaluator 실행.
+    """Integrity Evaluator 수동 실행 (admin 전용).
 
-    scheduler 또는 수동 호출 가능.
-    실패해도 서비스 영향 없음 (fail-safe).
+    NOTE: 정기 실행은 scheduler.py에서 direct call로 처리.
+    이 엔드포인트는 수동 디버깅/테스트 용도.
     """
     t0 = time.time()
     try:
@@ -28,7 +30,7 @@ def run_integrity_evaluation():
 
         return {
             "status": "success",
-            "message": "Integrity evaluation completed",
+            "message": "Integrity evaluation completed (manual)",
             "data": {
                 "evaluated_traces": result.get("evaluated_traces", 0),
                 "issues_found": result.get("issues_found", 0),
@@ -61,14 +63,12 @@ def get_watch_engine_status():
         from db.supabase_client import get_supabase
         sb = get_supabase()
 
-        # 최근 integrity events
         active = sb.table("engine_integrity_event") \
             .select("id", count="exact") \
             .eq("resolved", False) \
             .not_.is_("trace_id", "null") \
             .execute()
 
-        # 최근 business events (24h)
         from datetime import datetime, timezone, timedelta
         since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
         recent = sb.table("business_event") \
@@ -76,12 +76,26 @@ def get_watch_engine_status():
             .gte("created_at", since) \
             .execute()
 
+        # Last evaluator run
+        last_run = sb.table("cron_job_log") \
+            .select("status,finished_at,result_detail") \
+            .eq("job_code", "INTEGRITY_EVALUATE") \
+            .order("started_at", desc=True) \
+            .limit(1).execute()
+        last = last_run.data[0] if last_run.data else None
+
         return {
             "status": "success",
             "data": {
                 "active_integrity_issues": active.count,
                 "business_events_24h": recent.count,
                 "engine_version": "v1.1",
+                "scheduler_mode": "direct",
+                "last_evaluation": {
+                    "status": last.get("status") if last else None,
+                    "finished_at": last.get("finished_at") if last else None,
+                    "detail": last.get("result_detail") if last else None,
+                } if last else None,
             },
         }
 
