@@ -32,4 +32,5 @@ ROUTERS = [
     {"module": "routers.watch_engine_sla_api"},
     {"module": "routers.watch_engine_incident_api"},
     {"module": "routers.watch_engine_recovery_api"},
+    {"module": "routers.watch_engine_knowledge_api"},
 ]
