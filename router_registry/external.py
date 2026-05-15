@@ -28,4 +28,5 @@ ROUTERS = [
     {"module": "routers.contract_kmong"},
     {"module": "routers.watch_engine_api"},
     {"module": "routers.watch_engine_alert_api"},
+    {"module": "routers.watch_engine_browser_api"},
 ]
