@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>본인인증 테스트</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f5f7;color:#1d1d1f;padding:20px}
+.container{max-width:640px;margin:0 auto}
+h1{font-size:20px;font-weight:700;text-align:center;margin-bottom:4px}
+.sub{text-align:center;color:#86868b;font-size:12px;margin-bottom:24px}
+.section{background:#fff;border-radius:14px;padding:20px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.section h2{font-size:15px;font-weight:600;margin-bottom:12px}
+label{font-size:13px;font-weight:500;display:block;margin-bottom:4px;color:#1d1d1f}
+input,select{width:100%;padding:10px 12px;border:1px solid #d2d2d7;border-radius:10px;font-size:14px;margin-bottom:10px;outline:none;transition:border .15s}
+input:focus,select:focus{border-color:#0071e3}
+.row{display:flex;gap:10px}
+.row>*{flex:1}
+.btn{display:inline-block;width:100%;padding:12px;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;border:none;color:#fff;transition:opacity .15s;margin-top:6px}
+.btn:hover{opacity:.85}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-blue{background:#0071e3}
+.btn-red{background:#ff3b30}
+.btn-green{background:#30d158}
+.btn-gray{background:#86868b}
+.btn-sm{padding:8px 14px;font-size:12px;width:auto;margin-top:0}
+.result{margin-top:12px;padding:14px;background:#f5f5f7;border-radius:10px;font-size:12px;font-family:'SF Mono',monospace;white-space:pre-wrap;word-break:break-all;display:none;max-height:400px;overflow-y:auto}
+.badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600}
+.badge-ok{background:#e8f5e9;color:#30d158}
+.badge-fail{background:#fce4ec;color:#ff3b30}
+.badge-mock{background:#fff3e0;color:#ff9500}
+.steps{counter-reset:step;padding-left:0;list-style:none}
+.steps li{counter-increment:step;padding:8px 0 8px 32px;position:relative;font-size:13px;border-left:2px solid #e5e5e7;margin-left:12px}
+.steps li::before{content:counter(step);position:absolute;left:-13px;top:6px;width:24px;height:24px;background:#0071e3;color:#fff;border-radius:50%;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.steps li.done{border-left-color:#30d158}
+.steps li.done::before{background:#30d158}
+hr{border:none;border-top:1px solid #f0f0f0;margin:16px 0}
+.warn{text-align:center;font-size:11px;color:#ff9500;margin-top:16px}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🔐 본인인증 Mock 테스트</h1>
+  <p class="sub"><span class="badge badge-mock">MOCK MODE</span> 이니시스 실키 발급 전 전체 플로우 테스트</p>
+
+  <!-- 시나리오 A: 기존회원 인증 -->
+  <div class="section">
+    <h2>시나리오 A — 기존회원 본인인증</h2>
+    <label>회원 UUID</label>
+    <input type="text" id="userId" placeholder="기존 회원 UUID 입력">
+    <div class="row">
+      <div><label>이름</label><input type="text" id="nameA" value="심태왕"></div>
+      <div><label>연락처</label><input type="text" id="phoneA" value="01012345678"></div>
+    </div>
+    <div class="row">
+      <div><label>생년월일</label><input type="text" id="birthA" value="19900101"></div>
+      <div><label>성별</label>
+        <select id="genderA"><option value="M">남성</option><option value="F">여성</option></select>
+      </div>
+      <div><label>인증수단</label>
+        <select id="methodA"><option>PASS</option><option>KAKAO</option><option>NAVER</option><option>TOSS</option></select>
+      </div>
+    </div>
+    <button class="btn btn-blue" onclick="runA()">✅ 기존회원 인증 실행</button>
+    <div id="resultA" class="result"></div>
+  </div>
+
+  <!-- 시나리오 B: 신규가입 전 인증 -->
+  <div class="section">
+    <h2>시나리오 B — 신규가입 전 본인인증 → verify_token</h2>
+    <div class="row">
+      <div><label>이름</label><input type="text" id="nameB" value="김신규"></div>
+      <div><label>연락처</label><input type="text" id="phoneB" value="01098765432"></div>
+    </div>
+    <div class="row">
+      <div><label>생년월일</label><input type="text" id="birthB" value="19950315"></div>
+      <div><label>성별</label>
+        <select id="genderB"><option value="F">여성</option><option value="M">남성</option></select>
+      </div>
+      <div><label>인증수단</label>
+        <select id="methodB"><option>NAVER</option><option>PASS</option><option>KAKAO</option><option>TOSS</option></select>
+      </div>
+    </div>
+    <button class="btn btn-green" onclick="runB()">🆕 신규 인증 → 토큰 발급</button>
+    <div id="resultB" class="result"></div>
+    <div id="tokenSection" style="display:none;margin-top:10px">
+      <hr>
+      <label>발급된 verify_token</label>
+      <input type="text" id="tokenValue" readonly style="background:#f0f0f0">
+      <button class="btn btn-gray btn-sm" style="width:100%;margin-top:4px" onclick="consumeToken()">🔑 토큰 소비 테스트 (회원가입 시뮬레이션)</button>
+      <div id="resultToken" class="result"></div>
+    </div>
+  </div>
+
+  <!-- 시나리오 C: 실패 -->
+  <div class="section">
+    <h2>시나리오 C — 인증 실패</h2>
+    <label>실패 사유</label>
+    <input type="text" id="failReason" value="사용자 인증 취소">
+    <button class="btn btn-red" onclick="runFail()">❌ 실패 시뮬레이션</button>
+    <div id="resultC" class="result"></div>
+  </div>
+
+  <!-- 조회/초기화 -->
+  <div class="section">
+    <h2>📋 조회 · 초기화</h2>
+    <div class="row">
+      <button class="btn btn-gray btn-sm" onclick="loadLogs()">인증 로그</button>
+      <button class="btn btn-gray btn-sm" onclick="loadVerified()">인증완료 사용자</button>
+    </div>
+    <div id="resultQuery" class="result" style="margin-top:10px"></div>
+    <hr>
+    <label>인증 초기화할 회원 UUID</label>
+    <div style="display:flex;gap:8px">
+      <input type="text" id="resetId" placeholder="UUID" style="margin-bottom:0">
+      <button class="btn btn-red btn-sm" onclick="resetUser()">초기화</button>
+    </div>
+    <div id="resultReset" class="result"></div>
+  </div>
+
+  <p class="warn">⚠️ Mock 모드 — 이니시스 실키 발급 후 실서비스 전환 필요</p>
+</div>
+
+<script>
+const API = window.location.origin;
+
+function show(id, data, isErr) {
+  const el = document.getElementById(id);
+  el.style.display = 'block';
+  el.style.color = isErr ? '#ff3b30' : '#1d1d1f';
+  el.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+}
+
+async function post(url, body) {
+  const res = await fetch(API + url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+async function get(url) {
+  const res = await fetch(API + url);
+  return res.json();
+}
+
+// 시나리오 A
+async function runA() {
+  const uid = document.getElementById('userId').value.trim();
+  if (!uid) { alert('회원 UUID를 입력해주세요'); return; }
+  show('resultA', '인증 실행 중...');
+  try {
+    const data = await post('/identity/test/simulate', {
+      user_id: uid,
+      name: document.getElementById('nameA').value,
+      phone: document.getElementById('phoneA').value,
+      birth: document.getElementById('birthA').value,
+      gender: document.getElementById('genderA').value,
+      method: document.getElementById('methodA').value,
+    });
+    show('resultA', data, !data.ok);
+  } catch(e) { show('resultA', '오류: ' + e.message, true); }
+}
+
+// 시나리오 B
+async function runB() {
+  show('resultB', '인증 실행 중...');
+  document.getElementById('tokenSection').style.display = 'none';
+  try {
+    const data = await post('/identity/test/simulate', {
+      user_id: null,
+      name: document.getElementById('nameB').value,
+      phone: document.getElementById('phoneB').value,
+      birth: document.getElementById('birthB').value,
+      gender: document.getElementById('genderB').value,
+      method: document.getElementById('methodB').value,
+    });
+    show('resultB', data, !data.ok);
+    if (data.ok && data.data?.verify_token) {
+      document.getElementById('tokenSection').style.display = 'block';
+      document.getElementById('tokenValue').value = data.data.verify_token;
+    }
+  } catch(e) { show('resultB', '오류: ' + e.message, true); }
+}
+
+// 토큰 소비
+async function consumeToken() {
+  const token = document.getElementById('tokenValue').value;
+  if (!token) return;
+  try {
+    const data = await post('/identity/test/consume-token?token=' + encodeURIComponent(token), {});
+    show('resultToken', data, !data.ok);
+  } catch(e) { show('resultToken', '오류: ' + e.message, true); }
+}
+
+// 시나리오 C
+async function runFail() {
+  try {
+    const reason = document.getElementById('failReason').value;
+    const data = await post('/identity/test/simulate-fail?fail_reason=' + encodeURIComponent(reason) + '&method=PASS', {});
+    show('resultC', data);
+  } catch(e) { show('resultC', '오류: ' + e.message, true); }
+}
+
+// 조회
+async function loadLogs() {
+  try {
+    const data = await get('/identity/test/logs?limit=10');
+    show('resultQuery', data);
+  } catch(e) { show('resultQuery', '오류: ' + e.message, true); }
+}
+
+async function loadVerified() {
+  try {
+    const data = await get('/identity/test/verified-users?limit=10');
+    show('resultQuery', data);
+  } catch(e) { show('resultQuery', '오류: ' + e.message, true); }
+}
+
+// 초기화
+async function resetUser() {
+  const uid = document.getElementById('resetId').value.trim();
+  if (!uid) { alert('UUID를 입력해주세요'); return; }
+  if (!confirm('정말 초기화할까요?')) return;
+  try {
+    const data = await post('/identity/test/reset/' + uid, {});
+    show('resultReset', data);
+  } catch(e) { show('resultReset', '오류: ' + e.message, true); }
+}
+</script>
+</body>
+</html>
