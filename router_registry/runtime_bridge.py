@@ -10,6 +10,7 @@ ROUTERS = [
     {"module": "routers.my_inspection_bridge"},
     {"module": "routers.notification_bridge"},
     {"module": "routers.notification_engine_api"},
+    {"module": "routers.workflow_engine_api"},
     {"module": "routers.review_bridge"},
     {"module": "routers.evidence_bridge"},
     {"module": "routers.submission_bridge"},
