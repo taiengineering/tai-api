@@ -26,4 +26,5 @@ ROUTERS = [
     {"module": "routers.fire_hazmat"},
     {"module": "routers.precedent_api"},
     {"module": "routers.contract_kmong"},
+    {"module": "routers.watch_engine_api"},
 ]
