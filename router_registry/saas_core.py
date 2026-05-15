@@ -25,4 +25,5 @@ ROUTERS = [
     {"module": "routers.posts"},
     {"module": "routers.workers"},
     {"module": "routers.workflow_integrity"},
+    {"module": "routers.browser_synthetic"},
 ]
