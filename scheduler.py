@@ -1,5 +1,8 @@
-# scheduler.py — APScheduler + DB 연동 크론 스케줄러
-import os, requests, logging
+# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.3
+# v1.1: INTEGRITY_EVALUATE direct call
+# v1.2: SYNTHETIC_LOGIN / SYNTHETIC_PROCESS_REG direct call
+# v1.3: SYNTHETIC_CLEANUP direct call
+import os, logging
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -7,10 +10,43 @@ from apscheduler.triggers.cron import CronTrigger
 logger    = logging.getLogger(__name__)
 scheduler = BackgroundScheduler(timezone="Asia/Seoul")
 
+DIRECT_HANDLERS = {}
+
+
+def _register_direct_handlers():
+    global DIRECT_HANDLERS
+    if DIRECT_HANDLERS:
+        return
+
+    def _run_integrity_evaluate(payload: dict) -> dict:
+        from watch_engine.integrity.evaluator import evaluate_recent_events
+        return evaluate_recent_events(last_minutes=payload.get("last_minutes", 10))
+
+    def _run_synthetic_login(payload: dict) -> dict:
+        from watch_engine.synthetic.runner import run_synthetic
+        return run_synthetic(scenarios=["login"])
+
+    def _run_synthetic_process_reg(payload: dict) -> dict:
+        from watch_engine.synthetic.runner import run_synthetic
+        return run_synthetic(scenarios=["process_registration"])
+
+    def _run_synthetic_cleanup(payload: dict) -> dict:
+        from watch_engine.synthetic.cleanup import cleanup_synthetic_data
+        return cleanup_synthetic_data(
+            event_retention_days=payload.get("event_retention_days", 7),
+            service_data_retention_hours=payload.get("service_data_retention_hours", 24),
+        )
+
+    DIRECT_HANDLERS = {
+        "direct://integrity_evaluate": _run_integrity_evaluate,
+        "direct://synthetic_login": _run_synthetic_login,
+        "direct://synthetic_process_reg": _run_synthetic_process_reg,
+        "direct://synthetic_cleanup": _run_synthetic_cleanup,
+    }
+
 
 def execute_cron_job(job_code: str, endpoint_url: str,
                      http_method: str, payload: dict, timeout: int):
-    """크론 작업 실행 + 로그 기록"""
     from db.database import get_supabase
     sb = get_supabase()
 
@@ -23,6 +59,32 @@ def execute_cron_job(job_code: str, endpoint_url: str,
     started = datetime.now()
 
     try:
+        if endpoint_url and endpoint_url.startswith("direct://"):
+            result = _execute_direct(endpoint_url, payload or {})
+            duration = (datetime.now() - started).total_seconds()
+
+            errors = 0
+            if isinstance(result, dict):
+                errors = result.get("errors", 0)
+            status = "WARNING" if errors > 0 else "SUCCESS"
+            summary = _build_summary(result)
+
+            sb.table("cron_job_log").update({
+                "finished_at":      datetime.now().isoformat(),
+                "duration_seconds": duration,
+                "status":           status,
+                "http_status_code": None,
+                "result_summary":   summary[:500],
+                "result_detail":    result if isinstance(result, dict) else {"raw": str(result)},
+            }).eq("id", log_id).execute()
+            sb.table("cron_schedule_config").update({
+                "last_run_at": datetime.now().isoformat(),
+                "last_status": status,
+            }).eq("job_code", job_code).execute()
+            logger.info(f"[CRON] {job_code} {status} ({duration:.1f}s) [DIRECT]")
+            return
+
+        import requests
         base_url = os.environ.get("INTERNAL_API_URL", "https://api.taieng.co.kr")
         url      = base_url + endpoint_url
         method   = (http_method or "POST").upper()
@@ -55,13 +117,46 @@ def execute_cron_job(job_code: str, endpoint_url: str,
             "finished_at":      datetime.now().isoformat(),
             "duration_seconds": duration,
             "status":           "FAILED",
-            "error_message":    str(e),
+            "error_message":    str(e)[:1000],
         }).eq("id", log_id).execute()
         logger.error(f"[CRON] {job_code} FAILED: {e}")
 
 
+def _execute_direct(endpoint_url: str, payload: dict) -> dict:
+    _register_direct_handlers()
+    handler = DIRECT_HANDLERS.get(endpoint_url)
+    if handler is None:
+        raise ValueError(f"No direct handler for: {endpoint_url}")
+    return handler(payload)
+
+
+def _build_summary(result) -> str:
+    if not isinstance(result, dict):
+        return str(result)
+    parts = []
+    if "evaluated_traces" in result:
+        parts.append(f"{result['evaluated_traces']} traces")
+        if result.get("issues_found", 0) > 0:
+            parts.append(f"{result['issues_found']} issues")
+        if result.get("suppressed", 0) > 0:
+            parts.append(f"{result['suppressed']} suppressed")
+    if "scenario_run_id" in result:
+        parts.append(f"run={result['scenario_run_id']}")
+        parts.append(f"{result.get('passed', 0)} passed")
+        if result.get("failed", 0) > 0:
+            parts.append(f"{result['failed']} failed")
+    # Cleanup format
+    if "business_events_deleted" in result:
+        total = (result.get("business_events_deleted", 0)
+                 + result.get("integrity_events_deleted", 0)
+                 + result.get("service_data_deleted", 0))
+        parts.append(f"{total} synthetic records cleaned")
+    if result.get("errors", 0) > 0:
+        parts.append(f"{result['errors']} errors")
+    return ", ".join(parts) if parts else "No activity"
+
+
 def load_jobs_from_db():
-    """DB에서 활성 크론 작업 로드 후 스케줄러 등록"""
     from db.database import get_supabase
     sb   = get_supabase()
     jobs = sb.table("cron_job_master").select("*").eq("is_active", True).execute()
@@ -94,7 +189,8 @@ def load_jobs_from_db():
                 replace_existing=True,
             )
             registered += 1
-            logger.info(f"[CRON] 등록: {j['job_code']} ({expr})")
+            mode = "DIRECT" if j["endpoint_url"].startswith("direct://") else "HTTP"
+            logger.info(f"[CRON] 등록: {j['job_code']} ({expr}) [{mode}]")
         except Exception as e:
             logger.error(f"[CRON] 등록 실패 {j['job_code']}: {e}")
 
@@ -102,7 +198,6 @@ def load_jobs_from_db():
 
 
 def start_scheduler():
-    """스케줄러 시작"""
     try:
         load_jobs_from_db()
         if not scheduler.running:
