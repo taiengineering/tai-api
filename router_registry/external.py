@@ -17,6 +17,7 @@ ROUTERS = [
     {"module": "routers.matching_commission", "attr": "commission_router", "prefix": "/price-commission", "tags": ["수수료설정"]},
     {"module": "routers.experts", "prefix": "/experts", "tags": ["전문가"]},
     {"module": "routers.identity", "prefix": "/identity", "tags": ["본인인증"]},
+    {"module": "routers.identity_test"},
     {"module": "routers.agent_service"},
     {"module": "routers.admin_review"},
     {"module": "routers.admin_stats"},
