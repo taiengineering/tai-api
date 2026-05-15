@@ -1,6 +1,7 @@
 """Payment — 결제·계약·정산 라우터."""
 ROUTERS = [
     {"module": "routers.payment"},
+    {"module": "routers.payment_test"},
     {"module": "routers.payment_ops"},
     {"module": "routers.payment_billing"},
     {"module": "routers.contracts"},
