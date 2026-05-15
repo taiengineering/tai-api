@@ -1,5 +1,5 @@
-# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.5
-# v1.5: Browser Synthetic direct handlers
+# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.6
+# v1.6: INCIDENT_REPEATED direct handler
 import os, logging
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -47,6 +47,11 @@ def _register_direct_handlers():
         from watch_engine.browser_synthetic.runner import run_browser_synthetic
         return run_browser_synthetic(scenarios=["process_registration_browser"])
 
+    def _run_incident_repeated(payload: dict) -> dict:
+        from watch_engine.incident.repeated import detect_repeated_failures
+        from db.supabase_client import get_supabase
+        return detect_repeated_failures(get_supabase())
+
     DIRECT_HANDLERS = {
         "direct://integrity_evaluate": _run_integrity_evaluate,
         "direct://synthetic_login": _run_synthetic_login,
@@ -55,6 +60,7 @@ def _register_direct_handlers():
         "direct://alert_evaluate": _run_alert_evaluate,
         "direct://browser_synthetic_login": _run_browser_synthetic_login,
         "direct://browser_synthetic_process": _run_browser_synthetic_process,
+        "direct://incident_repeated": _run_incident_repeated,
     }
 
 
@@ -151,22 +157,20 @@ def _build_summary(result) -> str:
         parts.append(f"{result['evaluated_traces']} traces")
         if result.get("issues_found", 0) > 0:
             parts.append(f"{result['issues_found']} issues")
-        if result.get("suppressed", 0) > 0:
-            parts.append(f"{result['suppressed']} suppressed")
     if "scenario_run_id" in result:
         parts.append(f"run={result['scenario_run_id']}")
         parts.append(f"{result.get('passed', 0)} passed")
         if result.get("failed", 0) > 0:
             parts.append(f"{result['failed']} failed")
     if "business_events_deleted" in result:
-        total = (result.get("business_events_deleted", 0)
-                 + result.get("integrity_events_deleted", 0)
-                 + result.get("service_data_deleted", 0))
+        total = sum(result.get(k, 0) for k in ("business_events_deleted","integrity_events_deleted","service_data_deleted"))
         parts.append(f"{total} cleaned")
     if "alerts_sent" in result:
-        parts.append(f"{result['alerts_sent']} alerts sent")
-        if result.get("suppressed", 0) > 0:
-            parts.append(f"{result['suppressed']} suppressed")
+        parts.append(f"{result['alerts_sent']} alerts")
+    if "detected" in result:
+        parts.append(f"{result['detected']} repeated, {result.get('created',0)} created")
+    if result.get("suppressed", 0) > 0:
+        parts.append(f"{result['suppressed']} suppressed")
     if result.get("errors", 0) > 0:
         parts.append(f"{result['errors']} errors")
     return ", ".join(parts) if parts else "No activity"
