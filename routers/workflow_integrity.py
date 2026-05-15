@@ -1,11 +1,13 @@
 """Workflow Integrity API Router.
 
-Endpoints:
-- GET  /workflow/integrity/{workflow_id}  → Integrity Timeline
-- POST /workflow/integrity/{workflow_id}/evaluate → 평가 실행
-- GET  /workflow/integrity/rules → 전체 규칙 조회
+Endpoints (경로 우선순위 순서):
+- GET  /workflow/integrity/rules/list → 전체 규칙 조회
 - GET  /workflow/integrity/events/{workflow_id} → 이벤트 조회
 - PATCH /workflow/integrity/events/{event_id}/resolve → 이벤트 해결
+- POST /workflow/integrity/{workflow_id}/evaluate → 평가 실행
+- GET  /workflow/integrity/{workflow_id} → Integrity Timeline
+
+주의: 구체 경로를 /{workflow_id} 파라미터 경로보다 먼저 선언.
 """
 from __future__ import annotations
 
@@ -31,40 +33,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/workflow/integrity", tags=["workflow-integrity"])
 
 
-@router.get("/{workflow_id}")
-async def api_integrity_timeline(workflow_id: UUID):
-    """Integrity Timeline 조회.
-
-    반환: integrity events + triggered rules + timeline correlation.
-    """
-    try:
-        result = await get_integrity_timeline(workflow_id)
-        return {"ok": True, "data": result}
-    except Exception as e:
-        logger.error("Integrity timeline error: %s", e)
-        raise HTTPException(500, detail=str(e))
-
-
-@router.post("/{workflow_id}/evaluate")
-async def api_evaluate_workflow(
-    workflow_id: UUID,
-    workflow_type: str = Query("COMMON"),
-    persist: bool = Query(True),
-):
-    """Workflow Integrity 평가 실행."""
-    try:
-        report = await evaluate_workflow(
-            workflow_id=workflow_id,
-            workflow_type=workflow_type,
-            persist_events=persist,
-        )
-        return {
-            "ok": True,
-            "data": report.model_dump(mode="json"),
-        }
-    except Exception as e:
-        logger.error("Integrity evaluation error: %s", e)
-        raise HTTPException(500, detail=str(e))
+# ── 구체 경로 먼저 선언 (파라미터 경로보다 우선) ──────────────
 
 
 @router.get("/rules/list")
@@ -107,4 +76,43 @@ async def api_resolve_event(event_id: UUID):
         raise
     except Exception as e:
         logger.error("Event resolve error: %s", e)
+        raise HTTPException(500, detail=str(e))
+
+
+# ── 파라미터 경로 (마지막 선언) ───────────────────────────
+
+
+@router.post("/{workflow_id}/evaluate")
+async def api_evaluate_workflow(
+    workflow_id: UUID,
+    workflow_type: str = Query("COMMON"),
+    persist: bool = Query(True),
+):
+    """Workflow Integrity 평가 실행."""
+    try:
+        report = await evaluate_workflow(
+            workflow_id=workflow_id,
+            workflow_type=workflow_type,
+            persist_events=persist,
+        )
+        return {
+            "ok": True,
+            "data": report.model_dump(mode="json"),
+        }
+    except Exception as e:
+        logger.error("Integrity evaluation error: %s", e)
+        raise HTTPException(500, detail=str(e))
+
+
+@router.get("/{workflow_id}")
+async def api_integrity_timeline(workflow_id: UUID):
+    """Integrity Timeline 조회.
+
+    반환: integrity events + triggered rules + timeline correlation.
+    """
+    try:
+        result = await get_integrity_timeline(workflow_id)
+        return {"ok": True, "data": result}
+    except Exception as e:
+        logger.error("Integrity timeline error: %s", e)
         raise HTTPException(500, detail=str(e))
