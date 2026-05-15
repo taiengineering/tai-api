@@ -47,6 +47,8 @@ from routers.diagnosis_transform import (
     _safe_dict,
     VERSION as TRANSFORM_VERSION,
 )
+from watch_engine import create_trace, emit_event
+from watch_engine.trace import clear_trace
 
 router = APIRouter(prefix="/anonymous-diagnosis", tags=["익명 무료진단"])
 
@@ -171,12 +173,57 @@ def _build_step1_body(body: AnonymousDiagnosisCreate) -> DiagnoseStep1Body:
 
 @router.post("")
 async def create_anonymous_diagnosis(body: AnonymousDiagnosisCreate):
+    create_trace(flow_key="law_diagnosis", tenant_id="anonymous", actor_type="user")
     supabase = get_supabase()
-    step1_body = _build_step1_body(body)
+    try:
+        step1_body = _build_step1_body(body)
+    except HTTPException:
+        emit_event(
+            step_key="error",
+            step_order=99,
+            event_type="error",
+            result="failure",
+            connector_type="api",
+        )
+        clear_trace()
+        raise
+    inp = step1_body.input or {}
+    sector_norm = _SECTOR_NORMALIZE.get(step1_body.sector, step1_body.sector)
+    emit_event(
+        step_key="submit_diagnosis",
+        step_order=0,
+        event_type="submit",
+        result="success",
+        connector_type="api",
+        payload_summary={
+            "sector": str(sector_norm or ""),
+            "has_conditions": bool(inp),
+            "condition_count": len(inp) if isinstance(inp, dict) else 0,
+        },
+    )
     eng = _run_step1_via_service(supabase, step1_body)
     if eng.get("status") != "success":
+        emit_event(
+            step_key="error",
+            step_order=99,
+            event_type="error",
+            result="failure",
+            connector_type="api",
+        )
+        clear_trace()
         raise HTTPException(status_code=500, detail="진단 실행 실패")
     full_result = eng["data"]
+    rules = full_result.get("rules") or []
+    key_obl = full_result.get("key_obligations") or []
+    obl_cnt = len(key_obl) if key_obl else int(full_result.get("applicable_count") or 0)
+    emit_event(
+        step_key="rule_evaluate",
+        step_order=1,
+        event_type="validate",
+        result="success",
+        connector_type="api",
+        payload_summary={"rule_match_count": len(rules), "obligation_count": obl_cnt},
+    )
     partial     = _partial_from_full(full_result)
     token       = str(uuid.uuid4())
     expires     = (_now() + timedelta(days=TTL_DAYS)).isoformat()
@@ -195,12 +242,46 @@ async def create_anonymous_diagnosis(body: AnonymousDiagnosisCreate):
         "engine_version": LEGAL_ENGINE_VERSION,
         "rule_version": RULE_VERSION,
     }
+    emit_event(
+        step_key="result_generate",
+        step_order=2,
+        event_type="submit",
+        result="success",
+        connector_type="api",
+        payload_summary={"result_generated": True, "obligation_count": obl_cnt},
+    )
     try:
         res = supabase.table("anonymous_diagnosis_results").insert(row).execute()
         if not res.data:
+            emit_event(
+                step_key="result_save",
+                step_order=3,
+                event_type="save",
+                result="failure",
+                connector_type="database",
+            )
+            clear_trace()
             raise HTTPException(status_code=500, detail="DB 저장 실패")
+    except HTTPException:
+        raise
     except Exception as e:
+        emit_event(
+            step_key="error",
+            step_order=99,
+            event_type="error",
+            result="failure",
+            connector_type="api",
+        )
+        clear_trace()
         raise HTTPException(status_code=500, detail=f"DB 저장 실패: {e!s}")
+    emit_event(
+        step_key="result_save",
+        step_order=3,
+        event_type="save",
+        result="success",
+        connector_type="database",
+    )
+    clear_trace()
     return {
         "status": "success",
         "publicToken": token,

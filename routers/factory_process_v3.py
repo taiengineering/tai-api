@@ -14,6 +14,8 @@ from pydantic import BaseModel
 from typing import Optional
 import os
 from supabase import create_client
+from watch_engine import create_trace, emit_event
+from watch_engine.trace import clear_trace
 
 router = APIRouter(prefix="/factory-process", tags=["factory-process"])
 
@@ -283,14 +285,46 @@ async def get_factory_processes(factory_id: str):
 # ──────────────────────────────────────────────
 @router.post("/{factory_id}/processes")
 async def add_factory_process(factory_id: str, body: ProcessCreateBody):
+    create_trace(flow_key="process_registration", tenant_id="tai", actor_type="user")
     supabase = get_supabase()
     import time
 
     source = (body.source or "DB").upper()
 
+    def _required_field_ok() -> bool:
+        if source == "MANUAL":
+            return bool((body.process_name_manual or "").strip())
+        if source == "KCSC":
+            return bool((body.kcs_code or "").strip())
+        return bool((body.process_id or "").strip())
+
+    emit_event(
+        step_key="submit_payload",
+        step_order=0,
+        event_type="submit",
+        result="success",
+        connector_type="api",
+        payload_summary={
+            "has_process_type": bool((body.source or "").strip()),
+            "process_type_key": source,
+            "required_field_exists": _required_field_ok(),
+        },
+    )
+
+    def _fail_validate_input():
+        emit_event(
+            step_key="validate_input",
+            step_order=1,
+            event_type="validate",
+            result="failure",
+            connector_type="api",
+        )
+        clear_trace()
+
     if source == "MANUAL":
         process_name = (body.process_name_manual or "").strip()
         if not process_name:
+            _fail_validate_input()
             raise HTTPException(status_code=422, detail="수동 공정 등록 시 process_name_manual은 필수입니다.")
 
         process_id = f"MANUAL-{factory_id[:8]}-{int(time.time())}"
@@ -314,6 +348,7 @@ async def add_factory_process(factory_id: str, body: ProcessCreateBody):
     elif source == "KCSC":
         # v3.2.0: kcsc_process_master에서 kcs_code로 조회
         if not body.kcs_code:
+            _fail_validate_input()
             raise HTTPException(status_code=422, detail="KCSC 공정 등록 시 kcs_code는 필수입니다.")
 
         kcsc_res = supabase.table("kcsc_process_master").select(
@@ -321,6 +356,7 @@ async def add_factory_process(factory_id: str, body: ProcessCreateBody):
         ).eq("kcs_code", body.kcs_code).eq("is_active", True).limit(1).execute()
 
         if not kcsc_res.data:
+            _fail_validate_input()
             raise HTTPException(status_code=404, detail="KCSC 공정을 찾을 수 없습니다.")
 
         kcsc = kcsc_res.data[0]
@@ -330,6 +366,7 @@ async def add_factory_process(factory_id: str, body: ProcessCreateBody):
             "factory_id", factory_id
         ).eq("process_id", body.kcs_code).eq("is_active", True).execute()
         if dup.data:
+            _fail_validate_input()
             raise HTTPException(status_code=409, detail="이미 등록된 KCSC 공정입니다.")
 
         lv1 = kcsc.get("level1_name") or kcsc.get("construction_type") or "기타"
@@ -352,18 +389,21 @@ async def add_factory_process(factory_id: str, body: ProcessCreateBody):
     else:
         # source == "DB"
         if not body.process_id:
+            _fail_validate_input()
             raise HTTPException(status_code=422, detail="KCSC 공정 등록 시 process_id는 필수입니다.")
 
         existing = supabase.table("factory_process").select("id").eq(
             "factory_id", factory_id
         ).eq("process_id", body.process_id).eq("is_active", True).execute()
         if existing.data:
+            _fail_validate_input()
             raise HTTPException(status_code=409, detail="이미 등록된 공정입니다.")
 
         proc_res = supabase.table("v_process_unified").select("*").eq(
             "process_id", body.process_id
         ).limit(1).execute()
         if not proc_res.data:
+            _fail_validate_input()
             raise HTTPException(status_code=404, detail="공정을 찾을 수 없습니다.")
 
         proc = proc_res.data[0]
@@ -380,9 +420,41 @@ async def add_factory_process(factory_id: str, body: ProcessCreateBody):
             "is_active":   True,
         }
 
+    emit_event(
+        step_key="validate_input",
+        step_order=1,
+        event_type="validate",
+        result="success",
+        connector_type="api",
+    )
+
     res = supabase.table("factory_process").insert(insert_data).execute()
     if not res.data:
+        emit_event(
+            step_key="save_db",
+            step_order=2,
+            event_type="save",
+            result="failure",
+            connector_type="database",
+            payload_summary={
+                "process_type_key": insert_data.get("source", source),
+                "row_saved": False,
+            },
+        )
+        clear_trace()
         raise HTTPException(status_code=500, detail="공정 등록에 실패했습니다.")
+
+    emit_event(
+        step_key="save_db",
+        step_order=2,
+        event_type="save",
+        result="success",
+        connector_type="database",
+        payload_summary={
+            "process_type_key": insert_data.get("source", source),
+            "row_saved": True,
+        },
+    )
 
     record = res.data[0]
     is_manual = (source == "MANUAL")
@@ -392,6 +464,18 @@ async def add_factory_process(factory_id: str, body: ProcessCreateBody):
         or record.get("process_lv3")
         or record.get("process_id", "")
     )
+    emit_event(
+        step_key="read_result",
+        step_order=3,
+        event_type="read",
+        result="success",
+        connector_type="api",
+        payload_summary={
+            "process_type_key": record.get("source", source),
+            "row_count": 1,
+        },
+    )
+    clear_trace()
     return {
         "status":  "success",
         "message": "공정이 추가됐습니다.",

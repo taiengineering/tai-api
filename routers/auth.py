@@ -12,6 +12,8 @@ from datetime import datetime, timezone, timedelta
 import os, re, random
 from supabase import create_client
 from services.health_registry import register_probe
+from watch_engine import create_trace, emit_event
+from watch_engine.trace import clear_trace
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -303,9 +305,30 @@ def seed_test_accounts():
 
 @router.post("/login")
 def login(req: LoginRequest):
+    create_trace(flow_key="login", tenant_id="tai", actor_type="user")
     supabase = get_supabase()
     identifier = req.login_id or req.email or req.phone
+    emit_event(
+        step_key="submit_credentials",
+        step_order=0,
+        event_type="submit",
+        result="success",
+        connector_type="api",
+        payload_summary={
+            "has_identifier": bool(identifier),
+            "has_password": bool((req.password or "").strip()),
+        },
+    )
     if not identifier:
+        emit_event(
+            step_key="validate_auth",
+            step_order=1,
+            event_type="validate",
+            result="failure",
+            connector_type="api",
+            payload_summary={"auth_result": "failure"},
+        )
+        clear_trace()
         raise HTTPException(status_code=400, detail="login_id (이메일 또는 전화번호)가 필요합니다")
     try:
         if is_email(identifier):
@@ -313,6 +336,15 @@ def login(req: LoginRequest):
                 "id, email, name, phone, role_code, company_id, factory_id, status_code, profile_image_url"
             ).eq("email", identifier).limit(1).execute()
             if not rows.data:
+                emit_event(
+                    step_key="validate_auth",
+                    step_order=1,
+                    event_type="validate",
+                    result="failure",
+                    connector_type="api",
+                    payload_summary={"auth_result": "failure"},
+                )
+                clear_trace()
                 raise HTTPException(status_code=401, detail="가입되지 않은 이메일입니다")
         else:
             phone_norm = normalize_phone(identifier)
@@ -320,28 +352,98 @@ def login(req: LoginRequest):
                 "id, email, name, phone, role_code, company_id, factory_id, status_code, profile_image_url"
             ).eq("phone", phone_norm).limit(1).execute()
             if not rows.data:
+                emit_event(
+                    step_key="validate_auth",
+                    step_order=1,
+                    event_type="validate",
+                    result="failure",
+                    connector_type="api",
+                    payload_summary={"auth_result": "failure"},
+                )
+                clear_trace()
                 raise HTTPException(status_code=401, detail="가입되지 않은 전화번호입니다")
     except HTTPException:
         raise
     except Exception as e:
+        emit_event(
+            step_key="error",
+            step_order=99,
+            event_type="error",
+            result="failure",
+            connector_type="api",
+        )
+        clear_trace()
         raise HTTPException(status_code=500, detail=f"사용자 조회 오류: {str(e)}")
     user = rows.data[0]
     status = user.get("status_code", "ACTIVE")
     if status in ("SUSPENDED", "DELETED", "INACTIVE"):
+        emit_event(
+            step_key="validate_auth",
+            step_order=1,
+            event_type="validate",
+            result="failure",
+            connector_type="api",
+            payload_summary={"auth_result": "failure"},
+        )
+        clear_trace()
         raise HTTPException(status_code=403, detail=f"접근 불가 계정입니다 ({status})")
     login_email = user.get("email")
     if not login_email:
+        emit_event(
+            step_key="validate_auth",
+            step_order=1,
+            event_type="validate",
+            result="failure",
+            connector_type="api",
+            payload_summary={"auth_result": "failure"},
+        )
+        clear_trace()
         raise HTTPException(status_code=401, detail="이 계정은 이메일이 설정되어 있지 않습니다.")
     try:
         auth_res = supabase.auth.sign_in_with_password({"email": login_email, "password": req.password})
     except Exception:
+        emit_event(
+            step_key="validate_auth",
+            step_order=1,
+            event_type="validate",
+            result="failure",
+            connector_type="api",
+            payload_summary={"auth_result": "failure"},
+        )
+        clear_trace()
         raise HTTPException(status_code=401, detail="비밀번호가 올바르지 않습니다")
     if not auth_res.user or not auth_res.session:
+        emit_event(
+            step_key="validate_auth",
+            step_order=1,
+            event_type="validate",
+            result="failure",
+            connector_type="api",
+            payload_summary={"auth_result": "failure"},
+        )
+        clear_trace()
         raise HTTPException(status_code=401, detail="로그인 실패")
+    emit_event(
+        step_key="validate_auth",
+        step_order=1,
+        event_type="validate",
+        result="success",
+        connector_type="api",
+        payload_summary={"auth_result": "success"},
+    )
     try:
         supabase.table("users").update({"last_login_at": _now_iso()}).eq("id", user["id"]).execute()
     except Exception:
         pass
+    emit_event(
+        step_key="session_issued",
+        step_order=2,
+        event_type="read",
+        result="success",
+        connector_type="api",
+        payload_summary={"has_token": True},
+    )
+    clear_trace()
     return {
         "status": "success",
         "data": {
