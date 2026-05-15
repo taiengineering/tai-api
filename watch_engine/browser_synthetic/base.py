@@ -1,7 +1,8 @@
-"""Browser Synthetic Base — Playwright 공통 기반.
+"""Browser Synthetic Base v1.1 — Playwright 공통 + 안정성 강화.
 
-Chromium headless 기반.
-실패 시 서비스 영향 없음.
+data-testid selector 기반.
+retry/wait/timeout 표준화.
+Fail-safe: Playwright 미설치 시 skip.
 """
 
 import logging
@@ -13,12 +14,25 @@ logger = logging.getLogger("watch_engine.browser_synthetic.base")
 
 PLAYWRIGHT_HEADLESS = os.environ.get("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
 PLAYWRIGHT_BASE_URL = os.environ.get("PLAYWRIGHT_BASE_URL", "https://taieng.co.kr")
-PLAYWRIGHT_TIMEOUT = int(os.environ.get("PLAYWRIGHT_TIMEOUT_MS", "15000"))
+
+# Timeout 표준 (ms)
+TIMEOUT_PAGE_LOAD = 15000
+TIMEOUT_SELECTOR = 10000
+TIMEOUT_SUBMIT_RESULT = 20000
+DEFAULT_RETRY = 2
+
+
+def tid(name: str) -> str:
+    """data-testid selector 생성.
+
+    사용법: tid('login-submit-btn') -> '[data-testid="login-submit-btn"]'
+    """
+    return f'[data-testid="{name}"]'
 
 
 @asynccontextmanager
 async def browser_context():
-    """Playwright browser context manager. Fail-safe."""
+    """Playwright browser context manager."""
     pw = None
     browser = None
     context = None
@@ -30,28 +44,46 @@ async def browser_context():
             viewport={"width": 1280, "height": 720},
             locale="ko-KR",
         )
-        context.set_default_timeout(PLAYWRIGHT_TIMEOUT)
+        context.set_default_timeout(TIMEOUT_SELECTOR)
         yield context
     finally:
         if context:
-            try:
-                await context.close()
-            except Exception:
-                pass
+            try: await context.close()
+            except Exception: pass
         if browser:
-            try:
-                await browser.close()
-            except Exception:
-                pass
+            try: await browser.close()
+            except Exception: pass
         if pw:
-            try:
-                await pw.stop()
-            except Exception:
-                pass
+            try: await pw.stop()
+            except Exception: pass
 
 
-async def safe_click(page, selector: str, timeout: int = 5000) -> dict:
-    """Safe click with result dict."""
+async def safe_wait_visible(page, selector: str, timeout: int = TIMEOUT_SELECTOR) -> dict:
+    """Wait for element to be visible."""
+    try:
+        el = await page.wait_for_selector(selector, timeout=timeout, state="visible")
+        if el:
+            return {"ok": True}
+        return {"ok": False, "error": "selector_not_found", "selector": selector}
+    except Exception as e:
+        return {"ok": False, "error": "selector_not_found", "selector": selector, "detail": str(e)[:100]}
+
+
+async def safe_wait_enabled(page, selector: str, timeout: int = TIMEOUT_SELECTOR) -> dict:
+    """Wait for element to be visible AND enabled."""
+    try:
+        el = await page.wait_for_selector(selector, timeout=timeout, state="visible")
+        if not el:
+            return {"ok": False, "error": "selector_not_found", "selector": selector}
+        if not await el.is_enabled():
+            return {"ok": False, "error": "button_not_clickable", "selector": selector}
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": "selector_not_found", "selector": selector, "detail": str(e)[:100]}
+
+
+async def safe_click(page, selector: str, timeout: int = TIMEOUT_SELECTOR) -> dict:
+    """Click with visibility + enabled check."""
     try:
         el = await page.wait_for_selector(selector, timeout=timeout, state="visible")
         if not el:
@@ -64,8 +96,22 @@ async def safe_click(page, selector: str, timeout: int = 5000) -> dict:
         return {"ok": False, "error": str(type(e).__name__), "selector": selector, "detail": str(e)[:100]}
 
 
-async def safe_fill(page, selector: str, value: str, timeout: int = 5000) -> dict:
-    """Safe fill with result dict."""
+async def safe_retry_click(page, selector: str, retries: int = DEFAULT_RETRY, timeout: int = TIMEOUT_SELECTOR) -> dict:
+    """Click with retry."""
+    last_result = {"ok": False, "error": "unknown"}
+    for attempt in range(retries + 1):
+        last_result = await safe_click(page, selector, timeout=timeout)
+        if last_result["ok"]:
+            return last_result
+        if attempt < retries:
+            import asyncio
+            await asyncio.sleep(1)
+    last_result["retries"] = retries
+    return last_result
+
+
+async def safe_fill(page, selector: str, value: str, timeout: int = TIMEOUT_SELECTOR) -> dict:
+    """Fill input."""
     try:
         el = await page.wait_for_selector(selector, timeout=timeout, state="visible")
         if not el:
@@ -76,8 +122,8 @@ async def safe_fill(page, selector: str, value: str, timeout: int = 5000) -> dic
         return {"ok": False, "error": str(type(e).__name__), "selector": selector, "detail": str(e)[:100]}
 
 
-async def safe_select(page, selector: str, value: str, timeout: int = 5000) -> dict:
-    """Safe select option."""
+async def safe_select(page, selector: str, value: str, timeout: int = TIMEOUT_SELECTOR) -> dict:
+    """Select option."""
     try:
         el = await page.wait_for_selector(selector, timeout=timeout, state="visible")
         if not el:
@@ -88,8 +134,8 @@ async def safe_select(page, selector: str, value: str, timeout: int = 5000) -> d
         return {"ok": False, "error": str(type(e).__name__), "selector": selector, "detail": str(e)[:100]}
 
 
-async def wait_for_url(page, url_pattern: str, timeout: int = 10000) -> dict:
-    """Wait for URL to contain pattern."""
+async def wait_for_url(page, url_pattern: str, timeout: int = TIMEOUT_PAGE_LOAD) -> dict:
+    """Wait for URL change."""
     try:
         await page.wait_for_url(f"**{url_pattern}**", timeout=timeout)
         return {"ok": True, "url": page.url}
@@ -97,8 +143,8 @@ async def wait_for_url(page, url_pattern: str, timeout: int = 10000) -> dict:
         return {"ok": False, "error": "page_timeout", "expected": url_pattern, "actual": page.url, "detail": str(e)[:100]}
 
 
-async def get_text(page, selector: str, timeout: int = 5000) -> Optional[str]:
-    """Get text content from selector."""
+async def get_text(page, selector: str, timeout: int = TIMEOUT_SELECTOR) -> Optional[str]:
+    """Get text content."""
     try:
         el = await page.wait_for_selector(selector, timeout=timeout)
         if el:

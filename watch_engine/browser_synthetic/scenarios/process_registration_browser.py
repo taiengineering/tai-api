@@ -1,7 +1,7 @@
-"""Browser Synthetic — Process Registration Flow.
+"""Browser Synthetic — Process Registration Flow v1.1.
 
-실제 브라우저로 공정등록 페이지 → 선택 → 입력 → 저장 → 확인.
-SelectBar mismatch / 버튼 disabled / 렌더 실패 탐지.
+data-testid selector 기반.
+SelectBar mismatch UI 탐지.
 """
 
 import logging
@@ -10,8 +10,9 @@ import os
 from watch_engine import create_trace, emit_event
 from watch_engine.trace import clear_trace
 from watch_engine.browser_synthetic.base import (
-    browser_context, safe_click, safe_fill, safe_select, wait_for_url, get_text,
-    PLAYWRIGHT_BASE_URL,
+    browser_context, safe_click, safe_fill, safe_select,
+    safe_retry_click, wait_for_url, get_text, tid,
+    PLAYWRIGHT_BASE_URL, TIMEOUT_PAGE_LOAD, TIMEOUT_SUBMIT_RESULT,
 )
 
 logger = logging.getLogger("watch_engine.browser_synthetic.process_registration_browser")
@@ -22,6 +23,13 @@ SYNTHETIC_FACTORY_ID = os.environ.get("SYNTHETIC_FACTORY_ID", "")
 
 SYNTHETIC_PROCESS_TYPE = "MANUAL"
 
+# Selectors: data-testid 우선
+SEL_TYPE = f"{tid('process-type-select')}, select[name='source'], #process-type"
+SEL_NAME = f"{tid('process-name-input')}, input[name='process_name'], #process-name"
+SEL_SUBMIT = f"{tid('process-submit-btn')}, button[type='submit'], #save-btn"
+SEL_SUCCESS = f"{tid('process-success-modal')}, .success-modal, .toast-success, [data-result='success']"
+SEL_RESULT_TYPE = f"{tid('process-type-display')}, .process-type-display, [data-field='source']"
+
 
 async def run_process_registration_browser(run_id: str) -> dict:
     result = {"scenario": "process_registration_browser", "status": "error", "steps_completed": 0, "detail": {}}
@@ -30,108 +38,84 @@ async def run_process_registration_browser(run_id: str) -> dict:
         result["detail"] = {"reason": "SYNTHETIC env vars not configured"}
         return result
 
-    trace = create_trace(
-        flow_key="process_registration_browser",
-        tenant_id="tai",
-        actor_type="synthetic_user",
-        scenario_run_id=run_id,
-    )
+    trace = create_trace(flow_key="process_registration_browser", tenant_id="tai",
+                         actor_type="synthetic_user", scenario_run_id=run_id)
 
     try:
         async with browser_context() as ctx:
             page = await ctx.new_page()
 
             # Login first
-            await page.goto(f"{PLAYWRIGHT_BASE_URL}/login")
-            await safe_fill(page, "input[type='email'], input[name='email'], #email, input[type='text']", SYNTHETIC_EMAIL)
-            await safe_fill(page, "input[type='password'], #password", SYNTHETIC_PASSWORD)
-            await safe_click(page, "button[type='submit'], #login-btn, .login-btn")
+            await page.goto(f"{PLAYWRIGHT_BASE_URL}/login", wait_until="domcontentloaded", timeout=TIMEOUT_PAGE_LOAD)
+            await safe_fill(page, f"{tid('login-email-input')}, input[type='email']", SYNTHETIC_EMAIL)
+            await safe_fill(page, f"{tid('login-password-input')}, input[type='password']", SYNTHETIC_PASSWORD)
+            await safe_click(page, f"{tid('login-submit-btn')}, button[type='submit']")
             try:
-                await page.wait_for_url("**/dashboard**", timeout=10000)
+                await page.wait_for_url("**/dashboard**", timeout=TIMEOUT_SUBMIT_RESULT)
             except Exception:
-                emit_event(step_key="error", step_order=99, event_type="error",
-                           result="failure", connector_type="browser",
-                           payload_summary={"synthetic": True, "error": "login_failed_before_process"})
-                result["status"] = "failed"
-                result["detail"] = {"step": "login", "error": "login failed"}
-                clear_trace()
-                return result
+                result["status"] = "failed"; result["detail"] = {"step": "login", "error": "login failed"}
+                emit_event(step_key="error", step_order=99, event_type="error", result="failure",
+                           connector_type="browser", payload_summary={"synthetic": True, "error": "login_failed"})
+                clear_trace(); return result
 
-            # Step 0: open_process_page
-            await page.goto(f"{PLAYWRIGHT_BASE_URL}/factory/{SYNTHETIC_FACTORY_ID}/process/new")
+            # 0: open
+            await page.goto(f"{PLAYWRIGHT_BASE_URL}/factory/{SYNTHETIC_FACTORY_ID}/process/new",
+                           wait_until="domcontentloaded", timeout=TIMEOUT_PAGE_LOAD)
             emit_event(step_key="open_process_page", step_order=0, event_type="submit",
                        result="success", connector_type="browser",
                        payload_summary={"synthetic": True, "page": "/process/new"})
             result["steps_completed"] = 1
 
-            # Step 1: select_process_type
-            r = await safe_select(page, "select[name='source'], #process-type, .process-type-select", SYNTHETIC_PROCESS_TYPE)
-            if not r["ok"]:
-                emit_event(step_key="select_process_type", step_order=1, event_type="submit",
-                           result="failure", connector_type="browser",
-                           payload_summary={"synthetic": True, "error": r["error"], "selector": r.get("selector")})
-                result["status"] = "failed"
-                result["detail"] = {"step": "select_process_type", **r}
-                clear_trace()
-                return result
+            # 1: select type
+            r = await safe_select(page, SEL_TYPE, SYNTHETIC_PROCESS_TYPE)
             emit_event(step_key="select_process_type", step_order=1, event_type="submit",
-                       result="success", connector_type="browser",
-                       payload_summary={"synthetic": True, "process_type_key": SYNTHETIC_PROCESS_TYPE})
+                       result="success" if r["ok"] else "failure", connector_type="browser",
+                       payload_summary={"synthetic": True, "process_type_key": SYNTHETIC_PROCESS_TYPE, "ok": r["ok"], "error": r.get("error")})
+            if not r["ok"]:
+                result["status"] = "failed"; result["detail"] = {"step": "select_process_type", **r}; clear_trace(); return result
             result["steps_completed"] = 2
 
-            # Step 2: input_required_fields
-            await safe_fill(page, "input[name='process_name'], #process-name", "SYNTHETIC_HEARTBEAT")
+            # 2: fill fields
+            await safe_fill(page, SEL_NAME, "SYNTHETIC_HEARTBEAT")
             emit_event(step_key="input_required_fields", step_order=2, event_type="submit",
                        result="success", connector_type="browser",
                        payload_summary={"synthetic": True, "fields_filled": True})
             result["steps_completed"] = 3
 
-            # Step 3: click_submit
-            r = await safe_click(page, "button[type='submit'], #save-btn, .save-btn")
-            if not r["ok"]:
-                emit_event(step_key="click_submit", step_order=3, event_type="submit",
-                           result="failure", connector_type="browser",
-                           payload_summary={"synthetic": True, "error": r["error"], "selector": r.get("selector")})
-                result["status"] = "failed"
-                result["detail"] = {"step": "click_submit", **r}
-                clear_trace()
-                return result
+            # 3: submit (retry)
+            r = await safe_retry_click(page, SEL_SUBMIT, retries=2)
             emit_event(step_key="click_submit", step_order=3, event_type="submit",
-                       result="success", connector_type="browser",
-                       payload_summary={"synthetic": True, "selector": "button[type=submit]"})
+                       result="success" if r["ok"] else "failure", connector_type="browser",
+                       payload_summary={"synthetic": True, "ok": r["ok"], "error": r.get("error"), "selector": SEL_SUBMIT[:50]})
+            if not r["ok"]:
+                result["status"] = "failed"; result["detail"] = {"step": "click_submit", **r}; clear_trace(); return result
             result["steps_completed"] = 4
 
-            # Step 4: wait_success_modal
+            # 4: wait success
             try:
-                await page.wait_for_selector(".success-modal, .toast-success, [data-result='success']", timeout=10000)
+                await page.wait_for_selector(SEL_SUCCESS, timeout=TIMEOUT_SUBMIT_RESULT)
                 emit_event(step_key="wait_success_modal", step_order=4, event_type="validate",
                            result="success", connector_type="browser",
                            payload_summary={"synthetic": True, "modal_appeared": True})
             except Exception:
                 emit_event(step_key="wait_success_modal", step_order=4, event_type="validate",
                            result="failure", connector_type="browser",
-                           payload_summary={"synthetic": True, "error": "page_timeout", "modal_appeared": False})
-                result["status"] = "failed"
-                result["detail"] = {"step": "wait_success_modal", "error": "page_timeout"}
-                clear_trace()
-                return result
+                           payload_summary={"synthetic": True, "error": "page_timeout"})
+                result["status"] = "failed"; result["detail"] = {"step": "wait_success_modal", "error": "page_timeout"}
+                clear_trace(); return result
             result["steps_completed"] = 5
 
-            # Step 5: verify_saved_result — UI value mismatch 검증
-            displayed_type = await get_text(page, ".process-type-display, [data-field='source'], .source-value")
+            # 5: verify mismatch
+            displayed = await get_text(page, SEL_RESULT_TYPE)
             submitted = SYNTHETIC_PROCESS_TYPE
-            stored = (displayed_type or "").strip()
+            stored = (displayed or "").strip()
             match = submitted.upper() == stored.upper() if stored else None
 
             emit_event(step_key="verify_saved_result", step_order=5, event_type="read",
                        result="success" if match is not False else "failure",
                        connector_type="browser",
-                       payload_summary={
-                           "synthetic": True,
-                           "process_type_key": stored or "unknown",
-                           "submitted": submitted,
-                           "ui_match": match,
-                       })
+                       payload_summary={"synthetic": True, "process_type_key": stored or "unknown",
+                                        "submitted": submitted, "ui_match": match})
             result["steps_completed"] = 6
 
             if match is False:
@@ -145,8 +129,7 @@ async def run_process_registration_browser(run_id: str) -> dict:
         emit_event(step_key="error", step_order=99, event_type="error",
                    result="failure", connector_type="browser",
                    payload_summary={"synthetic": True, "error": str(e)[:100]})
-        result["status"] = "error"
-        result["detail"] = {"error": str(e)[:200]}
+        result["status"] = "error"; result["detail"] = {"error": str(e)[:200]}
     finally:
         clear_trace()
 
