@@ -1,6 +1,12 @@
-"""Alert Engine — 진짜 중요한 문제만 알림.
+"""Alert Engine v2.0 — Notification Engine Phase 1 전환.
 
-Integrity Event → Alert Rule 판정 → Cooldown/Dedupe → Telegram 발송.
+Integrity Event → Alert Rule 판정 → Cooldown/Dedupe → Notification Pipeline.
+
+v2.0 변경사항:
+  - Telegram 직접 발송 제거
+  - Notification Engine Pipeline으로 전환
+  - Worker 동기 실행 (이벤트 → Queue → 발송 즉시 처리)
+
 Fail-safe: 절대 서비스 영향 없음.
 """
 
@@ -12,7 +18,7 @@ logger = logging.getLogger("watch_engine.alert.engine")
 
 
 def evaluate_and_alert(now: Optional[datetime] = None) -> dict:
-    """Alert Rule 기반 알림 평가 + 발송.
+    """Alert Rule 기반 알림 평가 + Notification Pipeline 발송.
 
     Returns:
         {"rules_checked": int, "alerts_sent": int, "suppressed": int, "errors": int}
@@ -36,6 +42,14 @@ def evaluate_and_alert(now: Optional[datetime] = None) -> dict:
             except Exception as e:
                 logger.error("Alert rule %s failed: %s", rule.get("rule_key"), e)
                 stats["errors"] += 1
+
+        # 2. Worker 동기 실행 — Queue에 쌓인 항목 즉시 발송
+        try:
+            from services.notification_engine.worker import process_queue
+            worker_stats = process_queue(limit=50)
+            logger.info("Worker sync run: %s", worker_stats)
+        except Exception as e:
+            logger.error("Worker sync run failed: %s", e)
 
     except Exception as e:
         logger.error("Alert engine failed: %s", e)
@@ -85,94 +99,91 @@ def _process_rule(sb, rule: dict, now: datetime, stats: dict):
     if count < threshold_count:
         return  # Below threshold
 
-    # Dedupe key
-    dedupe_key = f"{rule_key}_{event_type}"
-
-    # Cooldown check
-    cooldown_since = (now - timedelta(minutes=cooldown_minutes)).isoformat()
-    recent_alerts = sb.table("alert_history") \
-        .select("id", count="exact") \
-        .eq("dedupe_key", dedupe_key) \
-        .gte("sent_at", cooldown_since) \
-        .eq("success", True) \
-        .execute()
-
-    if (recent_alerts.count or 0) > 0:
-        stats["suppressed"] += 1
-        return  # Still in cooldown
-
     # Build message
     sample = resp.data[0] if resp.data else {}
-    message = _build_message(rule, count, sample)
+    message_title, message_body = _build_message_parts(rule, count, sample)
+    dedupe_key = f"{rule_key}_{event_type}"
 
-    # Send
-    channel = rule.get("notify_channel", "telegram")
-    success = False
-    error_msg = None
+    # === Notification Engine Pipeline ===
+    try:
+        from services.notification_engine.schemas import NotificationEventCreate
+        from services.notification_engine.pipeline import run_pipeline
 
-    if channel == "telegram":
-        success, error_msg = _send_telegram(message)
-    else:
-        logger.warning("Unknown channel: %s", channel)
-        error_msg = f"Unknown channel: {channel}"
+        event = NotificationEventCreate(
+            event_type=event_type,
+            source_engine="watch_engine",
+            severity=severity or "WARNING",
+            trace_id=f"WATCH-{rule_key}-{now.strftime('%Y%m%d%H%M')}",
+            payload={
+                "rule_key": rule_key,
+                "count": count,
+                "threshold_minutes": threshold_minutes,
+                "sample_flow_key": sample.get("flow_key"),
+                "sample_description": (sample.get("description") or "")[:200],
+                "integrity_event_id": sample.get("id"),
+            },
+            source_domain="watch_engine.alert",
+            source_entity_id=sample.get("id"),
+        )
 
-    # Record history
-    sb.table("alert_history").insert({
-        "rule_key": rule_key,
-        "event_type": event_type,
-        "flow_key": sample.get("flow_key"),
-        "severity": severity,
-        "channel": channel,
-        "message": message[:500],
-        "success": success,
-        "error_message": error_msg,
-        "dedupe_key": dedupe_key,
-        "integrity_event_id": sample.get("id"),
-    }).execute()
+        result = run_pipeline(
+            event=event,
+            message_title=message_title,
+            message_body=message_body,
+            cooldown_minutes=cooldown_minutes,
+            dedupe_key=dedupe_key,
+        )
 
-    if success:
-        stats["alerts_sent"] += 1
-    else:
+        if result.get("queued"):
+            stats["alerts_sent"] += 1
+        elif result.get("error"):
+            stats["errors"] += 1
+        else:
+            stats["suppressed"] += 1
+
+    except Exception as e:
+        logger.error("Notification pipeline failed for %s: %s", rule_key, e)
         stats["errors"] += 1
 
+    # alert_history 기록 (하위 호환)
+    try:
+        sb.table("alert_history").insert({
+            "rule_key": rule_key,
+            "event_type": event_type,
+            "flow_key": sample.get("flow_key"),
+            "severity": severity,
+            "channel": "notification_engine",
+            "message": (message_title + "\n" + message_body)[:500],
+            "success": bool(result.get("queued")),
+            "error_message": result.get("error"),
+            "dedupe_key": dedupe_key,
+            "integrity_event_id": sample.get("id"),
+        }).execute()
+    except Exception as e:
+        logger.error("alert_history insert failed: %s", e)
 
-def _build_message(rule: dict, count: int, sample: dict) -> str:
+
+def _build_message_parts(rule: dict, count: int, sample: dict) -> tuple[str, str]:
+    """Title + Body 분리 (기존 _build_message 대체)."""
     severity = rule.get("severity", "")
     icon = "\U0001f6a8" if severity == "CRITICAL" else "\u26a0\ufe0f"
-    return (
-        f"{icon} [{severity}] {rule.get('rule_name', rule['rule_key'])}\n"
+
+    title = f"{icon} [{severity}] {rule.get('rule_name', rule['rule_key'])}"
+    body = (
         f"\uc720\ud615: {rule['event_type']}\n"
         f"\ubc1c\uc0dd: {count}\ud68c (\ucd5c\uadfc {rule.get('threshold_minutes', 5)}\ubd84)\n"
         f"\ud750\ub984: {sample.get('flow_key', '-')}\n"
         f"\uc124\uba85: {(sample.get('description') or '-')[:100]}\n"
         f"\u2500\u2500\u2500\n"
-        f"Watch Engine v1.2"
+        f"Watch Engine v2.0 via Notification Engine"
     )
+    return title, body
 
 
+# === Legacy 호환 — _send_telegram 유지 (test endpoint용) ===
 def _send_telegram(message: str) -> tuple[bool, str | None]:
-    """Telegram Bot API 발송. Fail-safe."""
-    import os
-    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-
-    if not bot_token or not chat_id:
-        logger.warning("Telegram not configured (TELEGRAM_BOT_TOKEN/CHAT_ID missing)")
-        return False, "Telegram not configured"
-
-    try:
-        import requests
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        resp = requests.post(url, json={
-            "chat_id": chat_id,
-            "text": message,
-            "parse_mode": "HTML",
-        }, timeout=10)
-
-        if resp.status_code == 200:
-            return True, None
-        else:
-            return False, f"Telegram {resp.status_code}: {resp.text[:200]}"
-    except Exception as e:
-        logger.error("Telegram send failed: %s", e)
-        return False, str(e)[:200]
+    """Legacy 호환. test endpoint에서만 사용.
+    Phase 2에서 제거 예정.
+    """
+    from services.notification_engine.adapters.telegram import send
+    return send(message)
