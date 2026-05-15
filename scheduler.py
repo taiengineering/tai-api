@@ -1,7 +1,5 @@
-# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.3
-# v1.1: INTEGRITY_EVALUATE direct call
-# v1.2: SYNTHETIC_LOGIN / SYNTHETIC_PROCESS_REG direct call
-# v1.3: SYNTHETIC_CLEANUP direct call
+# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.4
+# v1.4: ALERT_EVALUATE direct call 추가
 import os, logging
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -37,11 +35,16 @@ def _register_direct_handlers():
             service_data_retention_hours=payload.get("service_data_retention_hours", 24),
         )
 
+    def _run_alert_evaluate(payload: dict) -> dict:
+        from watch_engine.alert.engine import evaluate_and_alert
+        return evaluate_and_alert()
+
     DIRECT_HANDLERS = {
         "direct://integrity_evaluate": _run_integrity_evaluate,
         "direct://synthetic_login": _run_synthetic_login,
         "direct://synthetic_process_reg": _run_synthetic_process_reg,
         "direct://synthetic_cleanup": _run_synthetic_cleanup,
+        "direct://alert_evaluate": _run_alert_evaluate,
     }
 
 
@@ -145,12 +148,15 @@ def _build_summary(result) -> str:
         parts.append(f"{result.get('passed', 0)} passed")
         if result.get("failed", 0) > 0:
             parts.append(f"{result['failed']} failed")
-    # Cleanup format
     if "business_events_deleted" in result:
         total = (result.get("business_events_deleted", 0)
                  + result.get("integrity_events_deleted", 0)
                  + result.get("service_data_deleted", 0))
-        parts.append(f"{total} synthetic records cleaned")
+        parts.append(f"{total} cleaned")
+    if "alerts_sent" in result:
+        parts.append(f"{result['alerts_sent']} alerts sent")
+        if result.get("suppressed", 0) > 0:
+            parts.append(f"{result['suppressed']} suppressed")
     if result.get("errors", 0) > 0:
         parts.append(f"{result['errors']} errors")
     return ", ".join(parts) if parts else "No activity"
