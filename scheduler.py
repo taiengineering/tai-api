@@ -1,5 +1,5 @@
-# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.4
-# v1.4: ALERT_EVALUATE direct call 추가
+# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.5
+# v1.5: Browser Synthetic direct handlers
 import os, logging
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -39,12 +39,22 @@ def _register_direct_handlers():
         from watch_engine.alert.engine import evaluate_and_alert
         return evaluate_and_alert()
 
+    def _run_browser_synthetic_login(payload: dict) -> dict:
+        from watch_engine.browser_synthetic.runner import run_browser_synthetic
+        return run_browser_synthetic(scenarios=["login_browser"])
+
+    def _run_browser_synthetic_process(payload: dict) -> dict:
+        from watch_engine.browser_synthetic.runner import run_browser_synthetic
+        return run_browser_synthetic(scenarios=["process_registration_browser"])
+
     DIRECT_HANDLERS = {
         "direct://integrity_evaluate": _run_integrity_evaluate,
         "direct://synthetic_login": _run_synthetic_login,
         "direct://synthetic_process_reg": _run_synthetic_process_reg,
         "direct://synthetic_cleanup": _run_synthetic_cleanup,
         "direct://alert_evaluate": _run_alert_evaluate,
+        "direct://browser_synthetic_login": _run_browser_synthetic_login,
+        "direct://browser_synthetic_process": _run_browser_synthetic_process,
     }
 
 
