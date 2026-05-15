@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TAI Safe 시험결제</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f5f7;color:#1d1d1f;padding:20px}
+.container{max-width:680px;margin:0 auto}
+h1{font-size:22px;font-weight:700;text-align:center;margin-bottom:6px}
+.sub{text-align:center;color:#86868b;font-size:13px;margin-bottom:28px}
+.section{background:#fff;border-radius:16px;padding:24px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.section h2{font-size:16px;font-weight:600;margin-bottom:4px}
+.section .desc{font-size:12px;color:#86868b;margin-bottom:16px}
+.cards{display:flex;flex-direction:column;gap:10px}
+.card{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border:1px solid #e5e5e7;border-radius:12px;transition:border-color .15s}
+.card:hover{border-color:#0071e3}
+.card-info h3{font-size:14px;font-weight:600}
+.card-info p{font-size:12px;color:#86868b;margin-top:2px}
+.price{font-size:18px;font-weight:700;color:#0071e3;white-space:nowrap}
+.btn{display:inline-block;padding:8px 18px;border-radius:20px;font-size:13px;font-weight:600;cursor:pointer;border:none;color:#fff;transition:opacity .15s}
+.btn:hover{opacity:.85}
+.btn-blue{background:#0071e3}
+.btn-green{background:#30d158}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.result-box{margin-top:10px;padding:14px;background:#f5f5f7;border-radius:10px;font-size:12px;color:#1d1d1f;display:none;word-break:break-all}
+.badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;margin-right:6px}
+.badge-diag{background:#e3f2fd;color:#0071e3}
+.badge-subs{background:#e8f5e9;color:#30d158}
+.warn{text-align:center;font-size:11px;color:#ff3b30;margin-top:20px}
+hr{border:none;border-top:1px solid #f0f0f0;margin:16px 0}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🛡️ TAI Safe 시험결제</h1>
+  <p class="sub">KG이니시스 연동 테스트 · 각 1만원</p>
+
+  <!-- 법령진단 (1회성) -->
+  <div class="section">
+    <h2>📝 법령진단 유료 결제</h2>
+    <p class="desc">산업 섹터별 1회성 진단 결제 · 10,000원 (VAT 포함)</p>
+    <div class="cards">
+      <div class="card">
+        <div class="card-info">
+          <h3><span class="badge badge-diag">진단</span>제조업 (공장)</h3>
+          <p>INDUSTRIAL · 시설+공정+설비 통합</p>
+        </div>
+        <div style="text-align:right">
+          <div class="price">￦10,000</div>
+          <button class="btn btn-blue" onclick="payDiagnosis('INDUSTRIAL','제조업 법령진단')">결제</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-info">
+          <h3><span class="badge badge-diag">진단</span>건축물</h3>
+          <p>BUILDING · 소방/전기/가스 통합</p>
+        </div>
+        <div style="text-align:right">
+          <div class="price">￦10,000</div>
+          <button class="btn btn-blue" onclick="payDiagnosis('BUILDING','건축물 법령진단')">결제</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-info">
+          <h3><span class="badge badge-diag">진단</span>건설업</h3>
+          <p>CONSTRUCTION · 건설현장 통합</p>
+        </div>
+        <div style="text-align:right">
+          <div class="price">￦10,000</div>
+          <button class="btn btn-blue" onclick="payDiagnosis('CONSTRUCTION','건설업 법령진단')">결제</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 구독 (월결제) -->
+  <div class="section">
+    <h2>🔄 SaaS 구독 결제</h2>
+    <p class="desc">산업 섹터별 월 구독 · 10,000원/월 (VAT 포함)</p>
+    <div class="cards">
+      <div class="card">
+        <div class="card-info">
+          <h3><span class="badge badge-subs">구독</span>제조업 (공장)</h3>
+          <p>INDUSTRIAL · 월 10,000원 정기결제</p>
+        </div>
+        <div style="text-align:right">
+          <div class="price">￦10,000<span style="font-size:12px;color:#86868b">/월</span></div>
+          <button class="btn btn-green" onclick="paySubscription('INDUSTRIAL','IND_TEST','제조업 구독')">구독</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-info">
+          <h3><span class="badge badge-subs">구독</span>건축물</h3>
+          <p>BUILDING · 월 10,000원 정기결제</p>
+        </div>
+        <div style="text-align:right">
+          <div class="price">￦10,000<span style="font-size:12px;color:#86868b">/월</span></div>
+          <button class="btn btn-green" onclick="paySubscription('BUILDING','BLD_TEST','건축물 구독')">구독</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-info">
+          <h3><span class="badge badge-subs">구독</span>건설업</h3>
+          <p>CONSTRUCTION · 월 10,000원 정기결제</p>
+        </div>
+        <div style="text-align:right">
+          <div class="price">￦10,000<span style="font-size:12px;color:#86868b">/월</span></div>
+          <button class="btn btn-green" onclick="paySubscription('CONSTRUCTION','CON_TEST','건설업 구독')">구독</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="resultBox" class="result-box"></div>
+  <p class="warn">⚠️ 시험결제 페이지입니다. 실제 결제가 진행될 수 있습니다.</p>
+</div>
+
+<script>
+const API = window.location.origin;
+
+function showResult(msg, isError) {
+  const box = document.getElementById('resultBox');
+  box.style.display = 'block';
+  box.style.color = isError ? '#ff3b30' : '#1d1d1f';
+  box.textContent = typeof msg === 'object' ? JSON.stringify(msg, null, 2) : msg;
+}
+
+// ---- 법령진단 1회성 결제 ----
+async function payDiagnosis(sector, goodname) {
+  showResult('결제 준비 중...');
+  try {
+    const res = await fetch(API + '/payments/inicis/prepare', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        user_id: null,
+        product_type: 'DIAGNOSIS',
+        amount: 10000,
+        goodname: 'TAI Safe ' + goodname,
+        buyername: '시험사용자',
+        buyertel: '01000000000',
+        buyeremail: 'test@taieng.co.kr',
+        sector: sector
+      })
+    });
+    const data = await res.json();
+    if (data.ok || data.data) {
+      showResult('✅ 결제 준비 완료: ' + JSON.stringify(data.data || data));
+      // 실제 KG이니시스 창 오픈 시: 아래 주석 해제
+      // if (data.data?.form_html) document.write(data.data.form_html);
+    } else {
+      showResult('❌ 오류: ' + JSON.stringify(data), true);
+    }
+  } catch (e) {
+    showResult('❌ 네트워크 오류: ' + e.message, true);
+  }
+}
+
+// ---- SaaS 구독 결제 ----
+async function paySubscription(sector, planCode, goodname) {
+  showResult('구독 결제 준비 중...');
+  try {
+    const res = await fetch(API + '/payments/test/subscribe', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        product_type: 'SAAS_FACILITY',
+        plan_code: planCode,
+        sector: sector,
+        amount: 10000,
+        goodname: 'TAI Safe ' + goodname,
+        buyername: '시험사용자',
+        buyertel: '01000000000',
+        buyeremail: 'test@taieng.co.kr'
+      })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showResult('✅ 구독 준비 완료: ' + JSON.stringify(data.data));
+      // 빌링키 발급 페이지로 이동 시:
+      // if (data.data?.redirect_url) window.location.href = data.data.redirect_url;
+    } else {
+      showResult('❌ 오류: ' + JSON.stringify(data), true);
+    }
+  } catch (e) {
+    showResult('❌ 네트워크 오류: ' + e.message, true);
+  }
+}
+</script>
+</body>
+</html>
