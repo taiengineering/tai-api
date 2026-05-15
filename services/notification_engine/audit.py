@@ -1,7 +1,6 @@
-"""Audit Logger — 누가 언제 무엇을 받았고 ACK 했는가 추적."""
+"""Audit Logger v2.0 — trace_id 전파 포함."""
 
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger("notification_engine.audit")
@@ -15,8 +14,9 @@ def log_delivery(
     delivery_status: str,
     action_by: Optional[str] = None,
     error_message: Optional[str] = None,
+    trace_id: Optional[str] = None,
 ) -> Optional[dict]:
-    """Audit trail INSERT."""
+    """Audit trail INSERT with trace_id."""
     try:
         from db.supabase_client import get_supabase
         sb = get_supabase()
@@ -29,7 +29,8 @@ def log_delivery(
             "action_by": action_by,
             "channel": channel,
             "delivery_status": delivery_status,
-            "error_message": error_message,
+            "error_message": error_message[:500] if error_message else None,
+            "trace_id": trace_id,
             "source_trace": "NOTIFICATION_ENGINE_AUDIT",
         }
 
@@ -37,17 +38,17 @@ def log_delivery(
         return resp.data[0] if resp.data else None
 
     except Exception as e:
-        logger.error("Audit log failed: queue=%s action=%s — %s", queue_id, action, e)
+        logger.error("Audit log failed: queue=%s action=%s trace=%s — %s",
+                     queue_id, action, trace_id, e)
         return None
 
 
-def log_ack(queue_id: str, acked_by: Optional[str] = None) -> Optional[dict]:
+def log_ack(queue_id: str, acked_by: Optional[str] = None,
+            trace_id: Optional[str] = None) -> Optional[dict]:
     """ACK 기록."""
     return log_delivery(
-        queue_id=queue_id,
-        event_id=queue_id,  # fallback
-        action="ACK",
-        channel="SYSTEM",
+        queue_id=queue_id, event_id=queue_id,
+        action="ACK", channel="SYSTEM",
         delivery_status="ACKNOWLEDGED",
-        action_by=acked_by,
+        action_by=acked_by, trace_id=trace_id,
     )

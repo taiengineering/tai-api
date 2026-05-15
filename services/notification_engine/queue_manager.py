@@ -1,7 +1,4 @@
-"""Queue Manager — recipient → queue 생성 + dedupe + cooldown.
-
-사용 테이블: runtime_notification_queue
-"""
+"""Queue Manager v2.0 — trace_id 전파 + Registry 검증."""
 
 import logging
 from datetime import datetime, timezone, timedelta
@@ -21,22 +18,20 @@ def create_queue_items(
     """Recipient 목록 → Queue Item INSERT.
 
     dedupe: 같은 dedupe_key가 cooldown 내 이미 있으면 skip.
-    Returns: 생성된 queue row 목록.
+    trace_id: event_row에서 전파.
     """
     created = []
     try:
         from db.supabase_client import get_supabase
         sb = get_supabase()
         now = datetime.now(timezone.utc)
+        trace_id = event_row.get("trace_id", "")
 
         for recipient in recipients:
-            item_dedupe = dedupe_key or _build_dedupe_key(
-                event_row, recipient
-            )
+            item_dedupe = dedupe_key or _build_dedupe_key(event_row, recipient)
 
-            # Dedupe check
             if _is_in_cooldown(sb, item_dedupe, cooldown_minutes, now):
-                logger.info("Suppressed (cooldown): %s", item_dedupe)
+                logger.info("Suppressed (cooldown): %s trace=%s", item_dedupe, trace_id)
                 continue
 
             row = {
@@ -50,6 +45,7 @@ def create_queue_items(
                 "dedupe_key": item_dedupe,
                 "cooldown_until": (now + timedelta(minutes=cooldown_minutes)).isoformat(),
                 "escalation_level": recipient.get("escalation_level", 0),
+                "trace_id": trace_id,
                 "source_trace": "NOTIFICATION_ENGINE_QUEUE",
             }
 
@@ -69,15 +65,14 @@ def _build_dedupe_key(event_row: dict, recipient: dict) -> str:
 
 
 def _is_in_cooldown(sb, dedupe_key: str, cooldown_minutes: int, now: datetime) -> bool:
-    """cooldown 기간 내 동일 dedupe_key 존재 여부."""
     try:
         since = (now - timedelta(minutes=cooldown_minutes)).isoformat()
         resp = sb.table("runtime_notification_queue") \
             .select("id", count="exact") \
             .eq("dedupe_key", dedupe_key) \
             .gte("created_at", since) \
-            .in_("delivery_status", ["QUEUED", "SENT", "DELIVERED"]) \
+            .in_("delivery_status", ["QUEUED", "PROCESSING", "DELIVERED", "RETRY_PENDING"]) \
             .execute()
         return (resp.count or 0) > 0
     except Exception:
-        return False  # fail-open: cooldown 확인 실패시 발송 허용
+        return False
