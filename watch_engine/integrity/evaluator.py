@@ -1,12 +1,6 @@
-"""Integrity Evaluator v1.1 — with Flow Completion Semantics.
+"""Integrity Evaluator v1.2 — with SLA checks.
 
-Changes from v1.0:
-- Flow status computed BEFORE rule evaluation
-- False positive suppression for failed flows
-- field_mismatch and timeout_exceeded never suppressed
-- sequence_violation and stuck_detected suppressed when flow_status=failed
-
-Scheduler calls evaluate_recent_events() periodically.
+v1.2: SLA violation detection added.
 """
 
 import logging
@@ -20,6 +14,7 @@ from watch_engine.integrity.rules.field_mismatch import check_field_mismatch
 from watch_engine.integrity.rules.sequence_violation import check_sequence_violation
 from watch_engine.integrity.rules.stuck_detected import check_stuck_detected
 from watch_engine.integrity.rules.timeout_exceeded import check_timeout_exceeded
+from watch_engine.integrity.rules.sla_violation import check_sla_violation
 
 logger = logging.getLogger("watch_engine.integrity.evaluator")
 
@@ -42,12 +37,6 @@ def evaluate_recent_events(
     last_minutes: int = 5,
     now: Optional[datetime] = None,
 ) -> dict:
-    """Evaluate recent business_events against integrity rules.
-
-    Returns:
-        {"evaluated_traces": int, "issues_found": int,
-         "suppressed": int, "errors": int}
-    """
     stats = {"evaluated_traces": 0, "issues_found": 0,
              "suppressed": 0, "errors": 0}
 
@@ -61,7 +50,6 @@ def evaluate_recent_events(
             now = datetime.now(timezone.utc)
         since = now - timedelta(minutes=last_minutes)
 
-        # 1. Get recent business_events
         resp = sb.table("business_event") \
             .select("*") \
             .gte("created_at", since.isoformat()) \
@@ -72,7 +60,6 @@ def evaluate_recent_events(
         if not events:
             return stats
 
-        # 2. Group by trace_id
         traces = {}
         for e in events:
             tid = e.get("trace_id", "unknown")
@@ -86,11 +73,20 @@ def evaluate_recent_events(
                 }
             traces[tid]["events"].append(e)
 
-        # 3. Process each trace
+        # Load SLA registry once
+        sla_map = {}
+        try:
+            sla_resp = sb.table("workflow_sla_registry") \
+                .select("*").eq("enabled", True).execute()
+            for s in (sla_resp.data or []):
+                sla_map[s["flow_key"]] = s
+        except Exception:
+            pass
+
         for trace_id, trace_data in traces.items():
             try:
                 issues, suppressed = _evaluate_trace(
-                    sb, trace_id, trace_data, now
+                    sb, trace_id, trace_data, now, sla_map
                 )
                 stats["evaluated_traces"] += 1
                 stats["issues_found"] += len(issues)
@@ -116,9 +112,8 @@ def evaluate_recent_events(
 
 
 def _evaluate_trace(
-    sb, trace_id: str, trace_data: dict, now: datetime
+    sb, trace_id: str, trace_data: dict, now: datetime, sla_map: dict
 ) -> tuple[list[dict], int]:
-    """Evaluate a single trace. Returns (issues, suppressed_count)."""
     issues = []
     suppressed_count = 0
     flow_key = trace_data["flow_key"]
@@ -127,7 +122,6 @@ def _evaluate_trace(
     service_key = trace_data["service_key"]
     events = trace_data["events"]
 
-    # Group events by step_key
     events_by_step = {}
     for e in events:
         sk = e.get("step_key", "unknown")
@@ -135,7 +129,6 @@ def _evaluate_trace(
             events_by_step[sk] = []
         events_by_step[sk].append(e)
 
-    # Load registries
     fr_resp = sb.table("flow_registry") \
         .select("*") \
         .eq("tenant_id", tenant_id) \
@@ -165,7 +158,7 @@ def _evaluate_trace(
         .eq("is_active", True).execute()
     rules = rr_resp.data or []
 
-    # ═══ STEP 1: Compute flow status FIRST ═══
+    # STEP 1: Flow status
     flow_status = compute_flow_status(
         events_by_step, registered_steps,
         stuck_threshold_ms=flow_reg.get("stuck_threshold_ms", 60000),
@@ -173,15 +166,9 @@ def _evaluate_trace(
     )
     status = flow_status["status"]
 
-    logger.debug(
-        "Trace %s flow_status=%s terminal=%s",
-        trace_id, status, flow_status.get("terminal_step"),
-    )
-
-    # ═══ STEP 2: Apply rules with suppression ═══
+    # STEP 2: Apply rules
     candidate_issues = []
 
-    # Rule-based checks
     for rule in rules:
         rt = rule.get("rule_type")
         if rt == "field_match":
@@ -195,7 +182,6 @@ def _evaluate_trace(
             if result:
                 candidate_issues.append(result)
 
-    # Flow-level checks
     stuck = check_stuck_detected(
         flow_reg, events_by_step, trace_id, registered_steps, now
     )
@@ -208,15 +194,19 @@ def _evaluate_trace(
     )
     candidate_issues.extend(timeouts)
 
-    # ═══ STEP 3: Suppress false positives ═══
+    # STEP 2.5: SLA checks
+    sla_reg = sla_map.get(flow_key)
+    if sla_reg:
+        sla_issues = check_sla_violation(
+            sla_reg, events_by_step, trace_id, flow_status
+        )
+        candidate_issues.extend(sla_issues)
+
+    # STEP 3: Suppress false positives
     for issue in candidate_issues:
         event_type = issue.get("event_type", "")
         if should_suppress(event_type, status):
             suppressed_count += 1
-            logger.info(
-                "Suppressed %s for trace %s (flow_status=%s)",
-                event_type, trace_id, status,
-            )
         else:
             issues.append(issue)
 
@@ -224,7 +214,6 @@ def _evaluate_trace(
 
 
 def _write_integrity_event(sb, issue: dict) -> bool:
-    """Write engine_integrity_event with dedupe."""
     try:
         trace_id = issue.get("trace_id")
         event_type = issue.get("event_type")
