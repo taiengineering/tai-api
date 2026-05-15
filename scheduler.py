@@ -1,5 +1,6 @@
-# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.1
-# v1.1: INTEGRITY_EVALUATE direct call 지원
+# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.2
+# v1.1: INTEGRITY_EVALUATE direct call
+# v1.2: SYNTHETIC_LOGIN / SYNTHETIC_PROCESS_REG direct call
 import os, logging
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -9,8 +10,6 @@ logger    = logging.getLogger(__name__)
 scheduler = BackgroundScheduler(timezone="Asia/Seoul")
 
 # ── Direct execution registry ────────────────────────────
-# endpoint_url이 "direct://" 로 시작하는 job은 HTTP 대신 직접 함수 호출.
-# 새 direct job 추가 시 여기에 등록.
 DIRECT_HANDLERS = {}
 
 
@@ -21,12 +20,21 @@ def _register_direct_handlers():
         return
 
     def _run_integrity_evaluate(payload: dict) -> dict:
-        """Integrity Evaluator direct call. No HTTP, no network."""
         from watch_engine.integrity.evaluator import evaluate_recent_events
         return evaluate_recent_events(last_minutes=payload.get("last_minutes", 10))
 
+    def _run_synthetic_login(payload: dict) -> dict:
+        from watch_engine.synthetic.runner import run_synthetic
+        return run_synthetic(scenarios=["login"])
+
+    def _run_synthetic_process_reg(payload: dict) -> dict:
+        from watch_engine.synthetic.runner import run_synthetic
+        return run_synthetic(scenarios=["process_registration"])
+
     DIRECT_HANDLERS = {
         "direct://integrity_evaluate": _run_integrity_evaluate,
+        "direct://synthetic_login": _run_synthetic_login,
+        "direct://synthetic_process_reg": _run_synthetic_process_reg,
     }
 
 
@@ -34,10 +42,7 @@ def _register_direct_handlers():
 
 def execute_cron_job(job_code: str, endpoint_url: str,
                      http_method: str, payload: dict, timeout: int):
-    """크론 작업 실행 + 로그 기록.
-
-    endpoint_url이 "direct://"로 시작하면 HTTP 대신 직접 함수 호출.
-    """
+    """크론 작업 실행 + 로그 기록."""
     from db.database import get_supabase
     sb = get_supabase()
 
@@ -55,7 +60,6 @@ def execute_cron_job(job_code: str, endpoint_url: str,
             result = _execute_direct(endpoint_url, payload or {})
             duration = (datetime.now() - started).total_seconds()
 
-            # Status determination based on result content
             errors = 0
             if isinstance(result, dict):
                 errors = result.get("errors", 0)
@@ -122,7 +126,7 @@ def execute_cron_job(job_code: str, endpoint_url: str,
 
 
 def _execute_direct(endpoint_url: str, payload: dict) -> dict:
-    """Execute a direct handler. Fail-safe — never propagates to scheduler."""
+    """Execute a direct handler."""
     _register_direct_handlers()
     handler = DIRECT_HANDLERS.get(endpoint_url)
     if handler is None:
@@ -131,21 +135,25 @@ def _execute_direct(endpoint_url: str, payload: dict) -> dict:
 
 
 def _build_summary(result) -> str:
-    """Build human-readable summary from evaluator result."""
+    """Build human-readable summary."""
     if not isinstance(result, dict):
         return str(result)
     parts = []
-    traces = result.get("evaluated_traces", 0)
-    issues = result.get("issues_found", 0)
-    suppressed = result.get("suppressed", 0)
-    errors = result.get("errors", 0)
-    parts.append(f"{traces} traces evaluated")
-    if issues > 0:
-        parts.append(f"{issues} issues found")
-    if suppressed > 0:
-        parts.append(f"{suppressed} suppressed")
-    if errors > 0:
-        parts.append(f"{errors} errors")
+    # Integrity evaluator format
+    if "evaluated_traces" in result:
+        parts.append(f"{result['evaluated_traces']} traces")
+        if result.get("issues_found", 0) > 0:
+            parts.append(f"{result['issues_found']} issues")
+        if result.get("suppressed", 0) > 0:
+            parts.append(f"{result['suppressed']} suppressed")
+    # Synthetic runner format
+    if "scenario_run_id" in result:
+        parts.append(f"run={result['scenario_run_id']}")
+        parts.append(f"{result.get('passed', 0)} passed")
+        if result.get("failed", 0) > 0:
+            parts.append(f"{result['failed']} failed")
+    if result.get("errors", 0) > 0:
+        parts.append(f"{result['errors']} errors")
     return ", ".join(parts) if parts else "No activity"
 
 
