@@ -1,13 +1,14 @@
-# routers/watch_engine_document_api.py — Document Output Pipeline API v2
+# routers/watch_engine_document_api.py — Document Output Pipeline API v3
 """
-MVP 문서 생성 + Runtime Activation + Workflow Hook + PDF E2E.
-P0 런치 블로커 해결 중심.
+MVP 문서 생성 + Runtime Activation + Gotenberg PDF + Download.
+v3: Gotenberg 실제 연결, download redirect, generate-pdf async.
 """
 
 import logging
 from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -77,27 +78,55 @@ def activate_documents(body: ActivateBody):
         from watch_engine.document import activate_documents_for_workflow
         result = activate_documents_for_workflow(
             _sb(),
-            flow_key=body.flow_key,
-            trace_id=body.trace_id,
-            tenant_id=body.tenant_id,
-            factory_id=body.factory_id,
-            actor_id=body.actor_id,
-            workflow_context=body.workflow_context,
+            flow_key=body.flow_key, trace_id=body.trace_id,
+            tenant_id=body.tenant_id, factory_id=body.factory_id,
+            actor_id=body.actor_id, workflow_context=body.workflow_context,
         )
         return {"status": "success", "data": result}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
-# ═══ PDF Generation (Manual) ═══
+# ═══ PDF Generation (Gotenberg) ═══
 
-@router.post("/generate-pdf/{activation_id}")
-def generate_pdf(activation_id: str):
-    """특정 activation의 PDF 생성."""
+@router.post("/generate-pdf/{generated_doc_id}")
+async def generate_pdf(generated_doc_id: str):
+    """Gotenberg HTML→PDF 변환 + Storage 업로드."""
     try:
-        from watch_engine.document import generate_pdf_for_document
-        result = generate_pdf_for_document(_sb(), activation_id)
-        return {"status": "success", "data": result}
+        from watch_engine.document import render_pdf_gotenberg
+        result = await render_pdf_gotenberg(_sb(), generated_doc_id)
+        return {"status": "success" if result.get("success") else "error", "data": result}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ═══ Download ═══
+
+@router.get("/download/{generated_doc_id}")
+def download_document(generated_doc_id: str):
+    """PDF 다운로드 (redirect to Storage URL)."""
+    try:
+        sb = _sb()
+        gen = sb.table("generated_document") \
+            .select("download_url,storage_path,status,document_name") \
+            .eq("id", generated_doc_id).limit(1).execute()
+
+        if not gen.data:
+            return {"status": "error", "message": "문서를 찾을 수 없습니다"}
+
+        g = gen.data[0]
+
+        if g.get("download_url"):
+            return RedirectResponse(url=g["download_url"], status_code=302)
+
+        if g.get("storage_path"):
+            try:
+                url = sb.storage.from_("form-outputs").get_public_url(g["storage_path"])
+                return RedirectResponse(url=url, status_code=302)
+            except Exception:
+                pass
+
+        return {"status": "error", "message": f"PDF 미생성 (상태: {g.get('status')})"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -119,7 +148,8 @@ def get_activations(limit: int = 20):
 @router.get("/generated")
 def get_generated_documents(limit: int = 20):
     try:
-        resp = _sb().table("generated_document").select("*") \
+        resp = _sb().table("generated_document") \
+            .select("id,flow_key,trace_id,tenant_id,form_code,document_name,export_type,status,download_url,version,created_at") \
             .order("created_at", desc=True).limit(limit).execute()
         return {"status": "success", "data": resp.data or []}
     except Exception as e:
@@ -151,12 +181,16 @@ def get_document_summary():
         schemas = sb.table("document_schema_registry").select("id", count="exact").execute()
         wdr = sb.table("workflow_document_registry").select("id", count="exact").eq("enabled", True).execute()
         gen = sb.table("generated_document").select("id", count="exact").execute()
+        gen_ready = sb.table("generated_document").select("id", count="exact").eq("status", "GENERATED").execute()
         act = sb.table("runtime_document_activation").select("id", count="exact").execute()
         runtime = sb.table("runtime_document_data").select("id", count="exact").execute()
         return {"status": "success", "data": {
             "form_master": forms.count or 0, "schema_registry": schemas.count or 0,
-            "workflow_document_links": wdr.count or 0, "generated_documents": gen.count or 0,
-            "runtime_activations": act.count or 0, "runtime_data": runtime.count or 0,
+            "workflow_document_links": wdr.count or 0,
+            "generated_documents": gen.count or 0,
+            "generated_ready": gen_ready.count or 0,
+            "runtime_activations": act.count or 0,
+            "runtime_data": runtime.count or 0,
         }}
     except Exception as e:
         return {"status": "error", "message": str(e)}
