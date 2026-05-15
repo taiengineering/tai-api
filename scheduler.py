@@ -1,5 +1,5 @@
-# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.6
-# v1.6: INCIDENT_REPEATED direct handler
+# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.7
+# v1.7: PATTERN_SYNC direct handler
 import os, logging
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -52,6 +52,10 @@ def _register_direct_handlers():
         from db.supabase_client import get_supabase
         return detect_repeated_failures(get_supabase())
 
+    def _run_pattern_sync(payload: dict) -> dict:
+        from watch_engine.knowledge.pattern_updater import update_patterns
+        return update_patterns(window_hours=payload.get("window_hours", 24))
+
     DIRECT_HANDLERS = {
         "direct://integrity_evaluate": _run_integrity_evaluate,
         "direct://synthetic_login": _run_synthetic_login,
@@ -61,6 +65,7 @@ def _register_direct_handlers():
         "direct://browser_synthetic_login": _run_browser_synthetic_login,
         "direct://browser_synthetic_process": _run_browser_synthetic_process,
         "direct://incident_repeated": _run_incident_repeated,
+        "direct://pattern_sync": _run_pattern_sync,
     }
 
 
@@ -169,6 +174,8 @@ def _build_summary(result) -> str:
         parts.append(f"{result['alerts_sent']} alerts")
     if "detected" in result:
         parts.append(f"{result['detected']} repeated, {result.get('created',0)} created")
+    if "patterns_updated" in result:
+        parts.append(f"{result['patterns_updated']} updated, {result.get('patterns_created',0)} new")
     if result.get("suppressed", 0) > 0:
         parts.append(f"{result['suppressed']} suppressed")
     if result.get("errors", 0) > 0:
