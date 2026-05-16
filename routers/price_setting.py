@@ -1,10 +1,10 @@
 # routers/price_setting.py — 가격 설정 관리 API
-# v1.1.0 (2026-04-14): saas-plans에 sector 필터 추가
+# v2.0.0 (2026-05-16): features/target/is_recommended/is_custom + 진단 새 필드 추가
 from datetime import datetime
+from typing import Optional, List, Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
-from db.database import get_supabase
+from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/price-setting", tags=["가격 설정"])
 
@@ -12,6 +12,7 @@ router = APIRouter(prefix="/price-setting", tags=["가격 설정"])
 # ── Pydantic 모델 ──────────────────────────────────────────────
 
 class SaasPlanUpdate(BaseModel):
+    plan_name: Optional[str] = None
     monthly_base_fee: Optional[int] = None
     annual_base_fee: Optional[int] = None
     annual_discount_rate: Optional[float] = None
@@ -43,6 +44,12 @@ class SaasPlanUpdate(BaseModel):
     include_safety_content: Optional[str] = None
     include_dashboard: Optional[str] = None
     updated_by: Optional[str] = None
+    # v2 추가 필드 (pricing.html 연동)
+    features: Optional[List[str]] = None
+    target: Optional[str] = None
+    is_recommended: Optional[bool] = None
+    is_custom: Optional[bool] = None
+    sector_code: Optional[str] = None
 
 
 class DiagnosisReportUpdate(BaseModel):
@@ -56,6 +63,13 @@ class DiagnosisReportUpdate(BaseModel):
     sector_display: Optional[str] = None
     sort_order: Optional[int] = None
     is_active: Optional[bool] = None
+    # v2 추가 필드 (pricing.html 연동)
+    features: Optional[List[str]] = None
+    icon: Optional[str] = None
+    goods_name: Optional[str] = None
+    is_recommended: Optional[bool] = None
+    is_special: Optional[bool] = None
+    sub_label: Optional[str] = None
 
 
 class RepairBrokerageUpdate(BaseModel):
@@ -134,22 +148,13 @@ def _log_changes(sb, table_name: str, record_id: str, old: dict, new: dict, chan
 # ── SaaS 요금제 ──────────────────────────────────────────
 
 @router.get("/saas-plans")
-def list_saas_plans(
-    sector: str = None,   # BUILDING | INDUSTRY | CONSTRUCTION | ALL 등
-    is_active: bool = None,
-):
-    """
-    SaaS 요금제 목록.
-    sector 파라미터로 섹터 필터링 가능.
-    """
+def list_saas_plans(sector: str = None, is_active: bool = None):
     sb = get_supabase()
     q = sb.table("price_saas_plan").select("*")
-
     if sector:
         q = q.eq("sector_code", sector.upper())
     if is_active is not None:
         q = q.eq("is_active", is_active)
-
     res = q.order("sort_order").execute()
     return {"status": "success", "data": res.data}
 
@@ -180,11 +185,18 @@ def update_saas_plan(plan_id: str, body: SaasPlanUpdate):
 
     changed = _log_changes(sb, "price_saas_plan", plan_id, old_res.data, update_data, body.updated_by)
     res = sb.table("price_saas_plan").update(update_data).eq("id", plan_id).execute()
-    return {
-        "status": "success",
-        "data": res.data[0] if res.data else None,
-        "changes_logged": changed,
-    }
+    return {"status": "success", "data": res.data[0] if res.data else None, "changes_logged": changed}
+
+
+@router.post("/saas-plans")
+def create_saas_plan(body: SaasPlanUpdate):
+    """SaaS 플랜 신규 생성."""
+    sb = get_supabase()
+    row = {k: v for k, v in body.dict().items() if v is not None and k != "updated_by"}
+    row["created_at"] = datetime.now().isoformat()
+    row["updated_at"] = datetime.now().isoformat()
+    res = sb.table("price_saas_plan").insert(row).execute()
+    return {"status": "success", "data": res.data[0] if res.data else None}
 
 
 # ── 진단 보고서 가격 ────────────────────────────────────
@@ -213,29 +225,19 @@ def update_diagnosis_report(report_id: str, body: DiagnosisReportUpdate):
 
     changed = _log_changes(sb, "price_diagnosis_report", report_id, old_res.data, update_data)
     res = sb.table("price_diagnosis_report").update(update_data).eq("id", report_id).execute()
-    return {
-        "status": "success",
-        "data": res.data[0] if res.data else None,
-        "changes_logged": changed,
-    }
+    return {"status": "success", "data": res.data[0] if res.data else None, "changes_logged": changed}
 
 
 # ── 변경 이력 ─────────────────────────────────────────────
 
 @router.get("/change-logs")
-def list_change_logs(
-    table_name: str = None,
-    record_id: str = None,
-    page: int = 1,
-    page_size: int = 50,
-):
+def list_change_logs(table_name: str = None, record_id: str = None, page: int = 1, page_size: int = 50):
     sb = get_supabase()
     q = sb.table("price_change_log").select("*")
     if table_name:
         q = q.eq("table_name", table_name)
     if record_id:
         q = q.eq("record_id", record_id)
-
     offset = (page - 1) * page_size
     res = q.order("changed_at", desc=True).range(offset, offset + page_size - 1).execute()
     return {"status": "success", "data": res.data}
@@ -256,12 +258,10 @@ def update_repair_brokerage(item_id: str, body: RepairBrokerageUpdate):
     old_res = sb.table("price_repair_brokerage").select("*").eq("id", item_id).single().execute()
     if not old_res.data:
         raise HTTPException(status_code=404, detail="수리중개 요금을 찾을 수 없습니다")
-
     update_data = {k: v for k, v in body.dict().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="변경할 항목이 없습니다")
     update_data["updated_at"] = datetime.now().isoformat()
-
     changed = _log_changes(sb, "price_repair_brokerage", item_id, old_res.data, update_data)
     res = sb.table("price_repair_brokerage").update(update_data).eq("id", item_id).execute()
     return {"status": "success", "data": res.data[0] if res.data else None, "changes_logged": changed}
@@ -282,12 +282,10 @@ def update_safety_management(item_id: str, body: SafetyManagementUpdate):
     old_res = sb.table("price_safety_management").select("*").eq("id", item_id).single().execute()
     if not old_res.data:
         raise HTTPException(status_code=404, detail="안전관리 요금을 찾을 수 없습니다")
-
     update_data = {k: v for k, v in body.dict().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="변경할 항목이 없습니다")
     update_data["updated_at"] = datetime.now().isoformat()
-
     changed = _log_changes(sb, "price_safety_management", item_id, old_res.data, update_data)
     res = sb.table("price_safety_management").update(update_data).eq("id", item_id).execute()
     return {"status": "success", "data": res.data[0] if res.data else None, "changes_logged": changed}
@@ -308,12 +306,10 @@ def update_consulting(item_id: str, body: ConsultingUpdate):
     old_res = sb.table("price_consulting").select("*").eq("id", item_id).single().execute()
     if not old_res.data:
         raise HTTPException(status_code=404, detail="콘설팅 요금을 찾을 수 없습니다")
-
     update_data = {k: v for k, v in body.dict().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="변경할 항목이 없습니다")
     update_data["updated_at"] = datetime.now().isoformat()
-
     changed = _log_changes(sb, "price_consulting", item_id, old_res.data, update_data)
     res = sb.table("price_consulting").update(update_data).eq("id", item_id).execute()
     return {"status": "success", "data": res.data[0] if res.data else None, "changes_logged": changed}
