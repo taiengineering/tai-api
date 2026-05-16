@@ -1,11 +1,13 @@
-# routers/cron_manager.py — 크론 관리 API
-import os, requests
+# routers/cron_manager.py — 크론 관리 API v2
+# v2: reload시 scheduler.start() 포함, DIRECT handler 수동실행 지원
+import os, logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from db.database import get_supabase
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/cron", tags=["크론 관리"])
 
 
@@ -22,7 +24,7 @@ class CronJobCreate(BaseModel):
     job_code:        str
     job_name:        str
     job_description: Optional[str] = None
-    category:        str                      # LAW / DATA / SYSTEM / REPORT
+    category:        str
     endpoint_url:    str
     http_method:     str = "POST"
     cron_expression: str
@@ -32,7 +34,7 @@ class CronJobCreate(BaseModel):
     notify_on_fail:  bool = True
 
 
-# ── 목록 ─────────────────────────────────────────────────
+# ── 목록
 @router.get("/jobs")
 def list_jobs():
     sb = get_supabase()
@@ -42,7 +44,7 @@ def list_jobs():
     return {"status": "success", "data": jobs.data}
 
 
-# ── 단건 조회 ────────────────────────────────────────────
+# ── 단건 조회
 @router.get("/jobs/{job_code}")
 def get_job(job_code: str):
     sb = get_supabase()
@@ -54,7 +56,7 @@ def get_job(job_code: str):
     return {"status": "success", "data": job.data, "recent_logs": logs.data}
 
 
-# ── 신규 등록 ────────────────────────────────────────────
+# ── 신규 등록
 @router.post("/jobs")
 def create_job(body: CronJobCreate):
     sb = get_supabase()
@@ -66,7 +68,6 @@ def create_job(body: CronJobCreate):
         "job_code":        body.job_code,
         "cron_expression": body.cron_expression,
     }).execute()
-    # 스케줄러 리로드
     try:
         from scheduler import load_jobs_from_db
         load_jobs_from_db()
@@ -75,7 +76,7 @@ def create_job(body: CronJobCreate):
     return {"status": "success", "data": job.data[0]}
 
 
-# ── 수정 ────────────────────────────────────────────────
+# ── 수정
 @router.patch("/jobs/{job_code}")
 def update_job(job_code: str, body: CronJobUpdate):
     sb = get_supabase()
@@ -88,7 +89,6 @@ def update_job(job_code: str, body: CronJobUpdate):
             .update({"cron_expression": body.cron_expression,
                      "updated_at": datetime.now().isoformat()}) \
             .eq("job_code", job_code).execute()
-    # 스케줄러 리로드
     try:
         from scheduler import load_jobs_from_db
         load_jobs_from_db()
@@ -97,7 +97,7 @@ def update_job(job_code: str, body: CronJobUpdate):
     return {"status": "success", "data": job.data}
 
 
-# ── 삭제 ────────────────────────────────────────────────
+# ── 삭제
 @router.delete("/jobs/{job_code}")
 def delete_job(job_code: str):
     sb = get_supabase()
@@ -110,7 +110,7 @@ def delete_job(job_code: str):
     return {"status": "success", "message": f"{job_code} 삭제 완료"}
 
 
-# ── 수동 실행 ────────────────────────────────────────────
+# ── 수동 실행 (HTTP + DIRECT 지원)
 @router.post("/jobs/{job_code}/run")
 def run_job_now(job_code: str, user_email: str = "admin"):
     sb = get_supabase()
@@ -120,7 +120,6 @@ def run_job_now(job_code: str, user_email: str = "admin"):
     j = job.data
 
     log = sb.table("cron_job_log").insert({
-        "job_id":            j["id"],
         "job_code":          job_code,
         "triggered_by":      "MANUAL",
         "triggered_by_user": user_email,
@@ -130,14 +129,47 @@ def run_job_now(job_code: str, user_email: str = "admin"):
     started = datetime.now()
 
     try:
+        endpoint_url = j["endpoint_url"]
+
+        # DIRECT handler 지원
+        if endpoint_url and endpoint_url.startswith("direct://"):
+            from scheduler import _execute_direct
+            payload = j.get("request_payload") or {}
+            result = _execute_direct(endpoint_url, payload)
+            duration = (datetime.now() - started).total_seconds()
+
+            errors = 0
+            if isinstance(result, dict):
+                errors = result.get("errors", 0)
+            status = "WARNING" if errors > 0 else "SUCCESS"
+
+            sb.table("cron_job_log").update({
+                "finished_at":      datetime.now().isoformat(),
+                "duration_seconds": duration,
+                "status":           status,
+                "result_summary":   str(result)[:500],
+                "result_detail":    result if isinstance(result, dict) else {"raw": str(result)},
+            }).eq("id", log_id).execute()
+            try:
+                sb.table("cron_schedule_config").update({
+                    "last_run_at": datetime.now().isoformat(),
+                    "last_status": status,
+                }).eq("job_code", job_code).execute()
+            except Exception:
+                pass
+            logger.info(f"[CRON] MANUAL {job_code} {status} ({duration:.1f}s) [DIRECT]")
+            return {"status": status, "duration": duration, "result": result}
+
+        # HTTP handler
+        import requests as req
         base_url = os.environ.get("INTERNAL_API_URL", "https://api.taieng.co.kr")
-        url      = base_url + j["endpoint_url"]
+        url      = base_url + endpoint_url
         method   = j.get("http_method", "POST").upper()
         timeout  = j.get("timeout_seconds", 300)
         payload  = j.get("request_payload") or {}
 
-        resp = requests.post(url, json=payload, timeout=timeout) \
-            if method == "POST" else requests.get(url, timeout=timeout)
+        resp = req.post(url, json=payload, timeout=timeout) \
+            if method == "POST" else req.get(url, timeout=timeout)
         duration = (datetime.now() - started).total_seconds()
         status   = "SUCCESS" if resp.status_code < 400 else "FAILED"
         result   = {}
@@ -154,10 +186,13 @@ def run_job_now(job_code: str, user_email: str = "admin"):
             "result_summary": str(result)[:500],
             "result_detail":  result,
         }).eq("id", log_id).execute()
-        sb.table("cron_schedule_config").update({
-            "last_run_at": datetime.now().isoformat(),
-            "last_status": status,
-        }).eq("job_code", job_code).execute()
+        try:
+            sb.table("cron_schedule_config").update({
+                "last_run_at": datetime.now().isoformat(),
+                "last_status": status,
+            }).eq("job_code", job_code).execute()
+        except Exception:
+            pass
 
         return {"status": status, "duration": duration,
                 "http_status": resp.status_code, "result": result}
@@ -168,23 +203,45 @@ def run_job_now(job_code: str, user_email: str = "admin"):
             "finished_at":    datetime.now().isoformat(),
             "duration_seconds": duration,
             "status":         "FAILED",
-            "error_message":  str(e),
+            "error_message":  str(e)[:1000],
         }).eq("id", log_id).execute()
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── 스케줄러 리로드 ───────────────────────────────────────
+# ── 스케줄러 리로드 + 시작
 @router.post("/reload")
 def reload_scheduler():
+    """스케줄러 리로드 + 미실행시 시작."""
     try:
-        from scheduler import load_jobs_from_db
+        from scheduler import load_jobs_from_db, scheduler
         load_jobs_from_db()
-        return {"status": "success", "message": "스케줄러 리로드 완료"}
+        if not scheduler.running:
+            scheduler.start()
+            logger.info("[CRON] 스케줄러 시작됨 (reload)")
+        return {"status": "success", "message": "스케줄러 리로드 완료",
+                "scheduler_running": scheduler.running}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── 로그 조회 ────────────────────────────────────────────
+# ── 스케줄러 상태
+@router.get("/scheduler-status")
+def get_scheduler_status():
+    """APScheduler 실행 상태 확인."""
+    try:
+        from scheduler import scheduler
+        jobs = scheduler.get_jobs()
+        return {
+            "status": "success",
+            "scheduler_running": scheduler.running,
+            "registered_jobs": len(jobs),
+            "jobs": [{"id": j.id, "next_run": str(j.next_run_time)} for j in jobs],
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ── 로그 조회
 @router.get("/logs")
 def get_logs(job_code: str = None, status: str = None, limit: int = 50):
     sb  = get_supabase()
@@ -197,7 +254,7 @@ def get_logs(job_code: str = None, status: str = None, limit: int = 50):
     return {"status": "success", "data": logs.data}
 
 
-# ── 통계 ─────────────────────────────────────────────────
+# ── 통계
 @router.get("/stats")
 def get_stats():
     sb     = get_supabase()
