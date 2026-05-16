@@ -1,4 +1,4 @@
-"""Notification Engine API Router v5.2 — E2E Test Runner
+"""Notification Engine API Router v5.3 — Runtime Consistency
 prefix: /notification-engine
 """
 
@@ -56,10 +56,7 @@ def collect_metrics_manual(window_minutes: int = Query(10, ge=1, le=60)):
 def get_trace_timeline(trace_id: str):
     try:
         from services.notification_engine.timeline import get_timeline
-        result = get_timeline(trace_id)
-        if result is None:
-            return {"status": "error", "message": "Timeline not found"}
-        return {"status": "success", "data": result}
+        return {"status": "success", "data": get_timeline(trace_id)}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -96,24 +93,36 @@ def list_deadletters(limit: int = Query(20, ge=1, le=100)):
 def get_policy_audit(notification_id: str):
     try:
         resp = _sb().table("runtime_notification_policy_audit") \
-            .select("*").eq("notification_id", notification_id) \
-            .order("created_at").execute()
+            .select("*").eq("notification_id", notification_id).order("created_at").execute()
         return {"status": "success", "data": resp.data or []}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
 @router.get("/policy-audit")
-def list_policy_audit(
-    policy_type: Optional[str] = Query(None),
-    limit: int = Query(20, ge=1, le=100),
-):
+def list_policy_audit(policy_type: Optional[str] = Query(None), limit: int = Query(20, ge=1, le=100)):
     try:
         q = _sb().table("runtime_notification_policy_audit") \
             .select("*").order("created_at", desc=True).limit(limit)
         if policy_type:
             q = q.eq("policy_type", policy_type)
         return {"status": "success", "data": q.execute().data or []}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ═══ Runtime Consistency ═══
+
+@router.get("/runtime-consistency/{trace_id}")
+def check_runtime_consistency(trace_id: str):
+    """trace_id 기반 Layer간 정합성 검증."""
+    try:
+        from services.notification_engine.runtime_consistency_validator import validate_trace
+        from services.notification_engine.runtime_gap_classifier import classify_gaps
+        result = validate_trace(trace_id)
+        if result.get("detected_gaps"):
+            result["gap_classification"] = classify_gaps(result["detected_gaps"])
+        return {"status": "success", "data": result}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -154,8 +163,6 @@ def list_recent_events(limit: int = Query(20, ge=1, le=100)):
         return {"status": "error", "message": str(e)}
 
 
-# ═══ emit-test ═══
-
 @router.post("/emit-test")
 def emit_test_event(
     channel_key: Optional[str] = Query(None),
@@ -166,47 +173,32 @@ def emit_test_event(
         from services.notification_engine.schemas import NotificationEventCreate
         from services.notification_engine.pipeline import run_pipeline
         from services.notification_engine.worker import process_queue
-
         src_type = source_type or "runtime_alert"
         event = NotificationEventCreate(
-            event_type="test_notification",
-            source_engine="notification_engine_test",
-            severity="INFO",
-            trace_id=f"TEST-{src_type.upper()}",
+            event_type="test_notification", source_engine="notification_engine_test",
+            severity="INFO", trace_id=f"TEST-{src_type.upper()}",
             payload={"message": f"Test (ch={channel_key or 'auto'}, src={src_type})"},
             source_domain="notification_engine",
         )
-        pr = run_pipeline(
-            event=event,
-            message_title=f"\U0001f6a8 [TEST] ({channel_key or 'auto'})",
-            message_body=f"Channel: {channel_key or 'auto'}\nSource: {src_type}",
-            cooldown_minutes=1, force_quiet_hour=force_quiet_hour,
-        )
+        pr = run_pipeline(event=event, message_title=f"\U0001f6a8 [TEST] ({channel_key or 'auto'})",
+                          message_body=f"Channel: {channel_key or 'auto'}\nSource: {src_type}",
+                          cooldown_minutes=1, force_quiet_hour=force_quiet_hour)
         ws = process_queue(limit=10)
-        return {
-            "status": "success",
-            "test_params": {"channel_key": channel_key, "source_type": src_type, "force_quiet_hour": force_quiet_hour},
-            "pipeline": {
-                "event_id": pr.get("event", {}).get("id") if pr.get("event") else None,
-                "trace_id": pr.get("event", {}).get("trace_id") if pr.get("event") else None,
-                "recipients": len(pr.get("recipients", [])),
-                "queued": len(pr.get("queued", [])),
-                "error": pr.get("error"),
-            },
-            "worker": ws,
-        }
+        return {"status": "success",
+                "test_params": {"channel_key": channel_key, "source_type": src_type, "force_quiet_hour": force_quiet_hour},
+                "pipeline": {"event_id": pr.get("event", {}).get("id") if pr.get("event") else None,
+                             "trace_id": pr.get("event", {}).get("trace_id") if pr.get("event") else None,
+                             "recipients": len(pr.get("recipients", [])), "queued": len(pr.get("queued", [])),
+                             "error": pr.get("error")}, "worker": ws}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
-# ═══ E2E Scenario Test Runner ═══
-
 @router.post("/run-e2e-test")
 def run_e2e_test(
-    scenario: str = Query("NORMAL", description="NORMAL, MUTE, QUIET_HOUR, CRITICAL_BYPASS, RETRY, DLQ"),
+    scenario: str = Query("NORMAL"),
     channel_key: str = Query("TELEGRAM"),
 ):
-    """Scenario 기반 Runtime E2E 검증."""
     try:
         from services.notification_engine.e2e_executor import run_scenario
         return {"status": "success", "data": run_scenario(scenario=scenario, channel_key=channel_key)}
@@ -214,15 +206,12 @@ def run_e2e_test(
         return {"status": "error", "message": str(e)}
 
 
-# ═══ ACK / Resolve ═══
-
 @router.post("/ack/{queue_id}")
 def ack_notification(queue_id: str):
     try:
         from datetime import datetime, timezone
         _sb().table("runtime_notification_queue").update({
-            "delivery_status": "ACKNOWLEDGED",
-            "acknowledged_at": datetime.now(timezone.utc).isoformat(),
+            "delivery_status": "ACKNOWLEDGED", "acknowledged_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", queue_id).execute()
         from services.notification_engine.audit import log_ack
         log_ack(queue_id=queue_id)
@@ -236,15 +225,10 @@ def resolve_notification(queue_id: str):
     try:
         from datetime import datetime, timezone
         _sb().table("runtime_notification_queue").update({
-            "delivery_status": "RESOLVED",
-            "resolved_at": datetime.now(timezone.utc).isoformat(),
+            "delivery_status": "RESOLVED", "resolved_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", queue_id).execute()
         from services.notification_engine.audit import log_delivery
-        log_delivery(
-            queue_id=queue_id, event_id=queue_id,
-            action="RESOLVED", channel="SYSTEM",
-            delivery_status="RESOLVED",
-        )
+        log_delivery(queue_id=queue_id, event_id=queue_id, action="RESOLVED", channel="SYSTEM", delivery_status="RESOLVED")
         return {"status": "success", "message": f"{queue_id} RESOLVE 완료"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
