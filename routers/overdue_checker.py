@@ -80,10 +80,36 @@ def _effective_due(wa: dict) -> Optional[date]:
         return None
 
 
-def _send_sms(phone: str, message: str) -> bool:
-    """Edge Function 경유 SMS 발송. 성공 시 True."""
+def _send_sms(
+    phone: str,
+    message: str,
+    *,
+    user_id: Optional[str] = None,
+    company_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    source_entity_id: Optional[str] = None,
+) -> bool:
+    """Runtime absorption 우선, 실패 시 Edge Function 직접 발송."""
     if not phone:
         return False
+    try:
+        from services.notification_engine.runtime_compat import compat_send_sms
+
+        if compat_send_sms(
+            phone,
+            message,
+            event_type="WORK_OVERDUE",
+            source_engine="overdue_checker",
+            user_id=user_id,
+            company_id=company_id,
+            trace_id=trace_id,
+            source_entity_id=source_entity_id,
+            title="[TAI Safe] 작업 지연",
+        ):
+            log.info("[OVERDUE] SMS %s → compat OK", phone[-4:])
+            return True
+    except Exception as e:
+        log.warning("[OVERDUE] compat SMS 실패, legacy fallback: %s", e)
     try:
         resp = _req.post(
             _SMS_EDGE,
@@ -117,8 +143,32 @@ def _send_fcm(push_token: str, title: str, body: str) -> bool:
         return False
 
 
-def _write_notification(sb, user_id: str, company_id: Optional[str], title: str, body: str) -> None:
-    """안전신 notifications 테이블 INSERT."""
+def _write_notification(
+    sb,
+    user_id: str,
+    company_id: Optional[str],
+    title: str,
+    body: str,
+    *,
+    trace_id: Optional[str] = None,
+    source_entity_id: Optional[str] = None,
+) -> None:
+    """Runtime absorption 우선, 실패 시 notifications 테이블 INSERT."""
+    try:
+        from services.notification_engine.runtime_compat import compat_send_in_app
+
+        if compat_send_in_app(
+            sb,
+            user_id,
+            company_id,
+            title,
+            body,
+            trace_id=trace_id,
+            source_entity_id=source_entity_id,
+        ):
+            return
+    except Exception as e:
+        log.warning("[OVERDUE] compat in-app 실패, legacy fallback: %s", e)
     try:
         sb.table("notifications").insert({
             "user_id":      user_id,
@@ -224,6 +274,7 @@ def _process_one(sb, wa: dict, today: date) -> dict:
             pass
 
     company_id = worker_info.get("company_id")
+    trace_id = f"overdue-{wa_id}"
 
     # 메시지 생성
     worker_name = worker_info.get("name") or "\uc791\uc5c5\uc790"
@@ -239,34 +290,64 @@ def _process_one(sb, wa: dict, today: date) -> dict:
         # 작업자 대상
         target_user_id = user_id
         if worker_info.get("allow_sms") and worker_info.get("phone"):
-            sms_ok = _send_sms(worker_info["phone"], msg)
+            sms_ok = _send_sms(
+                worker_info["phone"],
+                msg,
+                user_id=user_id,
+                company_id=company_id,
+                trace_id=trace_id,
+                source_entity_id=wa_id,
+            )
         if action_type == "WARN_WORKER":
             if worker_info.get("allow_push") and worker_info.get("push_token"):
                 fcm_ok = _send_fcm(worker_info["push_token"], "[TAI Safe] \uc791\uc5c5 \uc9c0\uc5f0", msg)
         if target_user_id:
-            _write_notification(sb, target_user_id, company_id, "[TAI Safe] \uc791\uc5c5 \uc9c0\uc5f0", msg)
+            _write_notification(
+                sb, target_user_id, company_id, "[TAI Safe] \uc791\uc5c5 \uc9c0\uc5f0", msg,
+                trace_id=trace_id, source_entity_id=wa_id,
+            )
             notif_ok = True
 
     elif action_type == "NOTIFY_MANAGER":
         # 관리자 대상
         target_user_id = manager_info.get("id") or user_id
         if manager_info.get("allow_sms") and manager_info.get("phone"):
-            sms_ok = _send_sms(manager_info["phone"], msg)
+            sms_ok = _send_sms(
+                manager_info["phone"],
+                msg,
+                user_id=target_user_id,
+                company_id=company_id,
+                trace_id=trace_id,
+                source_entity_id=wa_id,
+            )
         if manager_info.get("allow_push") and manager_info.get("push_token"):
             fcm_ok = _send_fcm(manager_info["push_token"], "[TAI Safe] \uc9c0\uc5f0 \ud310\ub9ac", msg)
         if target_user_id:
-            _write_notification(sb, target_user_id, company_id, "[TAI Safe] \uc9c0\uc5f0 \ud310\ub9ac", msg)
+            _write_notification(
+                sb, target_user_id, company_id, "[TAI Safe] \uc9c0\uc5f0 \ud310\ub9ac", msg,
+                trace_id=trace_id, source_entity_id=wa_id,
+            )
             notif_ok = True
 
     elif action_type == "MARK_OVERDUE":
         # OVERDUE 전환 + 판리자/작업자 동시 알림
         target_user_id = manager_info.get("id") or user_id
         if manager_info.get("allow_sms") and manager_info.get("phone"):
-            sms_ok = _send_sms(manager_info["phone"], msg)
+            sms_ok = _send_sms(
+                manager_info["phone"],
+                msg,
+                user_id=target_user_id,
+                company_id=company_id,
+                trace_id=trace_id,
+                source_entity_id=wa_id,
+            )
         if manager_info.get("allow_push") and manager_info.get("push_token"):
             fcm_ok = _send_fcm(manager_info["push_token"], "[TAI Safe] OVERDUE", msg)
         if target_user_id:
-            _write_notification(sb, target_user_id, company_id, "[TAI Safe] OVERDUE \uc804\ud658", msg)
+            _write_notification(
+                sb, target_user_id, company_id, "[TAI Safe] OVERDUE \uc804\ud658", msg,
+                trace_id=trace_id, source_entity_id=wa_id,
+            )
             notif_ok = True
         # status_code OVERDUE 전환
         try:

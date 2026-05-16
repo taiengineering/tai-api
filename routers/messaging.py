@@ -113,6 +113,33 @@ async def _call_edge_function(payload: dict) -> dict:
 _call_messageme = _call_edge_function
 
 
+async def _dispatch_sms(receiver: str, message: str, title: Optional[str] = None) -> dict:
+    """Runtime absorption 우선, 실패 시 Edge Function 직접 호출."""
+    try:
+        from services.notification_engine.runtime_compat import compat_send_sms
+
+        if compat_send_sms(
+            receiver,
+            message,
+            event_type="API_SMS",
+            source_engine="messaging_router",
+            title=title or "TAI Safe",
+        ):
+            return {
+                "success": True,
+                "code": "QUEUED",
+                "mode": "runtime_queue",
+                "parsed": {"absorbed": True},
+            }
+    except Exception as e:
+        log.warning("[MESSAGING] compat SMS failed, legacy fallback: %s", e)
+
+    payload: dict = {"receiver": receiver, "message": message}
+    if title:
+        payload["title"] = title
+    return await _call_edge_function(payload)
+
+
 # ── Pydantic 모델 ───────────────────────────────────────────────
 
 class SmsSendBody(BaseModel):
@@ -154,9 +181,9 @@ def debug_messaging():
 
 @router.get("/debug-send")
 async def debug_send(receiver: str, message: str = "TAI Safe 테스트 메시지"):
-    """SMS 테스트 발송 (GET) — Edge Function 경유"""
+    """SMS 테스트 발송 (GET) — runtime absorption 또는 Edge Function"""
     try:
-        result = await _call_edge_function({"receiver": receiver, "message": message})
+        result = await _dispatch_sms(receiver, message)
         return {"receiver": receiver, "result": result}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Edge Function 호출 실패: {e}")
@@ -167,10 +194,7 @@ async def debug_send(receiver: str, message: str = "TAI Safe 테스트 메시지
 @router.post("/send-sms")
 async def send_sms(body: SmsSendBody):
     try:
-        payload = {"receiver": body.receiver, "message": body.message}
-        if body.title:
-            payload["title"] = body.title
-        result = await _call_edge_function(payload)
+        result = await _dispatch_sms(body.receiver, body.message, body.title)
         return {
             "status": "success" if result["success"] else "fail",
             "receiver": body.receiver,
