@@ -11,6 +11,7 @@ ROUTERS = [
     {"module": "routers.notification_bridge"},
     {"module": "routers.notification_engine_api"},
     {"module": "routers.notification_inbox_api"},
+    {"module": "routers.notification_preference_api"},
     {"module": "routers.workflow_alert_api"},
     {"module": "routers.workflow_engine_api"},
     {"module": "routers.review_bridge"},
