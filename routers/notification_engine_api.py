@@ -1,4 +1,4 @@
-"""Notification Engine API Router v4.0 — Channel별 테스트 + Source Tracking
+"""Notification Engine API Router v5.0 — Policy Audit + Quiet Hour
 prefix: /notification-engine
 """
 
@@ -14,8 +14,6 @@ def _sb():
     from db.supabase_client import get_supabase
     return get_supabase()
 
-
-# ═══ Health ═══
 
 @router.get("/health")
 def notification_health():
@@ -94,6 +92,37 @@ def list_deadletters(limit: int = Query(20, ge=1, le=100)):
         return {"status": "error", "message": str(e)}
 
 
+# ═══ Policy Audit ═══
+
+@router.get("/policy-audit/{notification_id}")
+def get_policy_audit(notification_id: str):
+    """Policy 결정 이력 조회."""
+    try:
+        resp = _sb().table("runtime_notification_policy_audit") \
+            .select("*").eq("notification_id", notification_id) \
+            .order("created_at").execute()
+        return {"status": "success", "data": resp.data or []}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@router.get("/policy-audit")
+def list_policy_audit(
+    policy_type: Optional[str] = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+):
+    try:
+        q = _sb().table("runtime_notification_policy_audit") \
+            .select("*").order("created_at", desc=True).limit(limit)
+        if policy_type:
+            q = q.eq("policy_type", policy_type)
+        return {"status": "success", "data": q.execute().data or []}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ═══ Queue ═══
+
 @router.post("/process-queue")
 def process_queue_manual(limit: int = Query(20, ge=1, le=100)):
     try:
@@ -108,7 +137,8 @@ def get_queue_status():
     try:
         sb = _sb()
         statuses = ["QUEUED", "PROCESSING", "DELIVERED", "FAILED",
-                    "RETRY_PENDING", "DEADLETTER", "ACKNOWLEDGED", "RESOLVED"]
+                    "RETRY_PENDING", "DEADLETTER", "ACKNOWLEDGED",
+                    "RESOLVED", "QUIET_HOUR_DELAYED"]
         result = {}
         for s in statuses:
             resp = sb.table("runtime_notification_queue") \
@@ -129,50 +159,47 @@ def list_recent_events(limit: int = Query(20, ge=1, le=100)):
         return {"status": "error", "message": str(e)}
 
 
-# ═══ 테스트 E2E (channel_key + source_type 선택 가능) ═══
+# ═══ 테스트 E2E ═══
 
 @router.post("/emit-test")
 def emit_test_event(
-    channel_key: Optional[str] = Query(None, description="TELEGRAM, SMS, IN_APP"),
-    source_type: Optional[str] = Query(None, description="runtime_alert, service_notice, billing_notice"),
+    channel_key: Optional[str] = Query(None),
+    source_type: Optional[str] = Query(None),
 ):
     try:
         from services.notification_engine.schemas import NotificationEventCreate
         from services.notification_engine.pipeline import run_pipeline
         from services.notification_engine.worker import process_queue
 
-        event_type = "test_notification"
         src_type = source_type or "runtime_alert"
-
         event = NotificationEventCreate(
-            event_type=event_type,
+            event_type="test_notification",
             source_engine="notification_engine_test",
             severity="INFO",
             trace_id=f"TEST-{src_type.upper()}",
-            payload={"message": f"Notification Engine Test (channel={channel_key or 'auto'}, source={src_type})"},
+            payload={"message": f"Test (ch={channel_key or 'auto'}, src={src_type})"},
             source_domain="notification_engine",
         )
 
-        pipeline_result = run_pipeline(
+        pr = run_pipeline(
             event=event,
-            message_title=f"\U0001f6a8 [TEST] Notification Engine ({channel_key or 'auto'})",
-            message_body=f"Channel: {channel_key or 'auto'}\nSource: {src_type}\n\uc815\uc0c1 \uc218\uc2e0\ub418\uba74 Runtime \uc5f0\ub3d9 \uc644\ub8cc.",
+            message_title=f"\U0001f6a8 [TEST] ({channel_key or 'auto'})",
+            message_body=f"Channel: {channel_key or 'auto'}\nSource: {src_type}",
             cooldown_minutes=1,
         )
-
-        worker_stats = process_queue(limit=10)
+        ws = process_queue(limit=10)
 
         return {
             "status": "success",
             "test_params": {"channel_key": channel_key, "source_type": src_type},
             "pipeline": {
-                "event_id": pipeline_result.get("event", {}).get("id") if pipeline_result.get("event") else None,
-                "trace_id": pipeline_result.get("event", {}).get("trace_id") if pipeline_result.get("event") else None,
-                "recipients": len(pipeline_result.get("recipients", [])),
-                "queued": len(pipeline_result.get("queued", [])),
-                "error": pipeline_result.get("error"),
+                "event_id": pr.get("event", {}).get("id") if pr.get("event") else None,
+                "trace_id": pr.get("event", {}).get("trace_id") if pr.get("event") else None,
+                "recipients": len(pr.get("recipients", [])),
+                "queued": len(pr.get("queued", [])),
+                "error": pr.get("error"),
             },
-            "worker": worker_stats,
+            "worker": ws,
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
