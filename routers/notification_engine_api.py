@@ -1,4 +1,4 @@
-"""Notification Engine API Router v5.0 — Policy Audit + Quiet Hour
+"""Notification Engine API Router v5.1 — force_quiet_hour E2E
 prefix: /notification-engine
 """
 
@@ -92,11 +92,8 @@ def list_deadletters(limit: int = Query(20, ge=1, le=100)):
         return {"status": "error", "message": str(e)}
 
 
-# ═══ Policy Audit ═══
-
 @router.get("/policy-audit/{notification_id}")
 def get_policy_audit(notification_id: str):
-    """Policy 결정 이력 조회."""
     try:
         resp = _sb().table("runtime_notification_policy_audit") \
             .select("*").eq("notification_id", notification_id) \
@@ -120,8 +117,6 @@ def list_policy_audit(
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-
-# ═══ Queue ═══
 
 @router.post("/process-queue")
 def process_queue_manual(limit: int = Query(20, ge=1, le=100)):
@@ -159,12 +154,13 @@ def list_recent_events(limit: int = Query(20, ge=1, le=100)):
         return {"status": "error", "message": str(e)}
 
 
-# ═══ 테스트 E2E ═══
+# ═══ 테스트 E2E (force_quiet_hour 지원) ═══
 
 @router.post("/emit-test")
 def emit_test_event(
     channel_key: Optional[str] = Query(None),
     source_type: Optional[str] = Query(None),
+    force_quiet_hour: bool = Query(False, description="강제 Quiet Hour 상태 생성"),
 ):
     try:
         from services.notification_engine.schemas import NotificationEventCreate
@@ -177,21 +173,22 @@ def emit_test_event(
             source_engine="notification_engine_test",
             severity="INFO",
             trace_id=f"TEST-{src_type.upper()}",
-            payload={"message": f"Test (ch={channel_key or 'auto'}, src={src_type})"},
+            payload={"message": f"Test (ch={channel_key or 'auto'}, src={src_type}, qh={force_quiet_hour})"},
             source_domain="notification_engine",
         )
 
         pr = run_pipeline(
             event=event,
             message_title=f"\U0001f6a8 [TEST] ({channel_key or 'auto'})",
-            message_body=f"Channel: {channel_key or 'auto'}\nSource: {src_type}",
+            message_body=f"Channel: {channel_key or 'auto'}\nSource: {src_type}\nQuiet Hour: {force_quiet_hour}",
             cooldown_minutes=1,
+            force_quiet_hour=force_quiet_hour,
         )
         ws = process_queue(limit=10)
 
         return {
             "status": "success",
-            "test_params": {"channel_key": channel_key, "source_type": src_type},
+            "test_params": {"channel_key": channel_key, "source_type": src_type, "force_quiet_hour": force_quiet_hour},
             "pipeline": {
                 "event_id": pr.get("event", {}).get("id") if pr.get("event") else None,
                 "trace_id": pr.get("event", {}).get("trace_id") if pr.get("event") else None,
