@@ -1,5 +1,5 @@
-# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.7
-# v1.7: PATTERN_SYNC direct handler
+# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.8
+# v1.8: Notification Engine direct handlers
 import os, logging
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -56,6 +56,14 @@ def _register_direct_handlers():
         from watch_engine.knowledge.pattern_updater import update_patterns
         return update_patterns(window_hours=payload.get("window_hours", 24))
 
+    def _run_notification_queue_worker(payload: dict) -> dict:
+        from services.notification_engine.worker import process_queue
+        return process_queue(limit=payload.get("limit", 50))
+
+    def _run_notification_collect_metrics(payload: dict) -> dict:
+        from services.notification_engine.metrics_aggregator import collect_and_record
+        return collect_and_record(window_minutes=payload.get("window_minutes", 10))
+
     DIRECT_HANDLERS = {
         "direct://integrity_evaluate": _run_integrity_evaluate,
         "direct://synthetic_login": _run_synthetic_login,
@@ -66,6 +74,8 @@ def _register_direct_handlers():
         "direct://browser_synthetic_process": _run_browser_synthetic_process,
         "direct://incident_repeated": _run_incident_repeated,
         "direct://pattern_sync": _run_pattern_sync,
+        "direct://notification_queue_worker": _run_notification_queue_worker,
+        "direct://notification_collect_metrics": _run_notification_collect_metrics,
     }
 
 
@@ -180,6 +190,13 @@ def _build_summary(result) -> str:
         parts.append(f"{result['suppressed']} suppressed")
     if result.get("errors", 0) > 0:
         parts.append(f"{result['errors']} errors")
+    # Notification Engine summary
+    if "processed" in result and "sent" in result:
+        parts.append(f"{result['processed']} processed, {result['sent']} sent")
+        if result.get("quiet_hour_resumed", 0) > 0:
+            parts.append(f"{result['quiet_hour_resumed']} qh_resumed")
+    if "health_score" in result:
+        parts.append(f"health={result['health_score']}")
     return ", ".join(parts) if parts else "No activity"
 
 
