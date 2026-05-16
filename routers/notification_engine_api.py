@@ -1,4 +1,4 @@
-"""Notification Engine API Router v5.1 — force_quiet_hour E2E
+"""Notification Engine API Router v5.2 — E2E Test Runner
 prefix: /notification-engine
 """
 
@@ -154,13 +154,13 @@ def list_recent_events(limit: int = Query(20, ge=1, le=100)):
         return {"status": "error", "message": str(e)}
 
 
-# ═══ 테스트 E2E (force_quiet_hour 지원) ═══
+# ═══ emit-test ═══
 
 @router.post("/emit-test")
 def emit_test_event(
     channel_key: Optional[str] = Query(None),
     source_type: Optional[str] = Query(None),
-    force_quiet_hour: bool = Query(False, description="강제 Quiet Hour 상태 생성"),
+    force_quiet_hour: bool = Query(False),
 ):
     try:
         from services.notification_engine.schemas import NotificationEventCreate
@@ -173,19 +173,16 @@ def emit_test_event(
             source_engine="notification_engine_test",
             severity="INFO",
             trace_id=f"TEST-{src_type.upper()}",
-            payload={"message": f"Test (ch={channel_key or 'auto'}, src={src_type}, qh={force_quiet_hour})"},
+            payload={"message": f"Test (ch={channel_key or 'auto'}, src={src_type})"},
             source_domain="notification_engine",
         )
-
         pr = run_pipeline(
             event=event,
             message_title=f"\U0001f6a8 [TEST] ({channel_key or 'auto'})",
-            message_body=f"Channel: {channel_key or 'auto'}\nSource: {src_type}\nQuiet Hour: {force_quiet_hour}",
-            cooldown_minutes=1,
-            force_quiet_hour=force_quiet_hour,
+            message_body=f"Channel: {channel_key or 'auto'}\nSource: {src_type}",
+            cooldown_minutes=1, force_quiet_hour=force_quiet_hour,
         )
         ws = process_queue(limit=10)
-
         return {
             "status": "success",
             "test_params": {"channel_key": channel_key, "source_type": src_type, "force_quiet_hour": force_quiet_hour},
@@ -201,6 +198,23 @@ def emit_test_event(
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+
+# ═══ E2E Scenario Test Runner ═══
+
+@router.post("/run-e2e-test")
+def run_e2e_test(
+    scenario: str = Query("NORMAL", description="NORMAL, MUTE, QUIET_HOUR, CRITICAL_BYPASS, RETRY, DLQ"),
+    channel_key: str = Query("TELEGRAM"),
+):
+    """Scenario 기반 Runtime E2E 검증."""
+    try:
+        from services.notification_engine.e2e_executor import run_scenario
+        return {"status": "success", "data": run_scenario(scenario=scenario, channel_key=channel_key)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ═══ ACK / Resolve ═══
 
 @router.post("/ack/{queue_id}")
 def ack_notification(queue_id: str):
