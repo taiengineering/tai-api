@@ -227,18 +227,23 @@ def reload_scheduler():
 # ── 스케줄러 상태
 @router.get("/scheduler-status")
 def get_scheduler_status():
-    """APScheduler 실행 상태 확인."""
+    """APScheduler 실행 상태 확인 (admin cron-list UI)."""
     try:
         from scheduler import scheduler
+        sb = get_supabase()
+        active = sb.table("cron_job_master").select("id", count="exact").eq("is_active", True).execute()
         jobs = scheduler.get_jobs()
         return {
             "status": "success",
-            "scheduler_running": scheduler.running,
-            "registered_jobs": len(jobs),
+            "data": {
+                "scheduler_running": bool(scheduler.running),
+                "registered_jobs": len(jobs),
+                "active_count": active.count or 0,
+            },
             "jobs": [{"id": j.id, "next_run": str(j.next_run_time)} for j in jobs],
         }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── 로그 조회
