@@ -1,5 +1,6 @@
-"""Workflow Stability Tracker — 안정성 점수 계산.
+"""Workflow Stability Tracker v1.1 — Production isolation.
 
+v1.1: Mock environment 제외 (TASK 30).
 rule-based: STABLE / WATCH / UNSTABLE / CRITICAL.
 """
 
@@ -11,18 +12,16 @@ logger = logging.getLogger("watch_engine.knowledge.stability")
 
 
 def compute_stability(sb, hours: int = 24, now: Optional[datetime] = None) -> list[dict]:
-    """Compute stability score per flow.
-
-    Returns list of {flow_key, stability, score, details}.
-    """
     if now is None:
         now = datetime.now(timezone.utc)
     since = (now - timedelta(hours=hours)).isoformat()
 
     try:
+        # TASK 30: Mock environment 제외
         events = sb.table("engine_integrity_event") \
             .select("flow_key,event_type,severity,resolved") \
             .not_.is_("trace_id", "null") \
+            .neq("environment", "mock") \
             .gte("created_at", since).execute()
 
         browser_types = {"browser_render_failed", "selector_not_found", "button_not_clickable", "page_timeout", "ui_value_mismatch"}
@@ -57,7 +56,7 @@ def compute_stability(sb, hours: int = 24, now: Optional[datetime] = None) -> li
             score += d["browser"] * 5
             score += d["sla"] * 8
             score += d["repeat"] * 15
-            score -= d["resolved"] * 3  # resolved reduces risk
+            score -= d["resolved"] * 3
             score = max(score, 0)
 
             if score >= 50:
@@ -86,7 +85,6 @@ def compute_stability(sb, hours: int = 24, now: Optional[datetime] = None) -> li
 
 
 def get_recovery_effectiveness(sb, limit: int = 10) -> list[dict]:
-    """Recovery action effectiveness ranking."""
     try:
         actions = sb.table("incident_action_log") \
             .select("action_type,outcome_status") \

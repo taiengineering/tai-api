@@ -1,5 +1,6 @@
-"""Tenant Impact Engine — 고객사 영향도 계산.
+"""Tenant Impact Engine v1.1 — Production isolation.
 
+v1.1: Mock environment/tenant 제외 (TASK 30).
 rule-based: HEALTHY / WATCH / RISK / CRITICAL.
 Escalation: L1~L4.
 """
@@ -24,14 +25,19 @@ def compute_tenant_impact(
     since = (now - timedelta(hours=hours)).isoformat()
 
     try:
+        # TASK 30: Mock environment 제외
         events = sb.table("engine_integrity_event") \
             .select("tenant_id,flow_key,event_type,severity,resolved,ignored") \
             .not_.is_("trace_id", "null") \
+            .neq("environment", "mock") \
             .gte("created_at", since).execute()
 
         tenants = {}
         for e in (events.data or []):
             tid = e.get("tenant_id", "unknown")
+            # TASK 30: Mock tenant 제외
+            if tid.startswith("mock_"):
+                continue
             if tid not in tenants:
                 tenants[tid] = {"total": 0, "critical": 0, "browser": 0, "sla": 0,
                                 "repeat": 0, "active": 0, "flows": set()}
@@ -49,8 +55,8 @@ def compute_tenant_impact(
             if e.get("flow_key"):
                 tenants[tid]["flows"].add(e["flow_key"])
 
-        # Registry lookup
-        reg_resp = sb.table("tenant_operational_registry").select("tenant_id,tenant_name").execute()
+        reg_resp = sb.table("tenant_operational_registry").select("tenant_id,tenant_name") \
+            .not_.like("tenant_id", "mock_%").execute()
         names = {r["tenant_id"]: r.get("tenant_name", r["tenant_id"]) for r in (reg_resp.data or [])}
 
         results = []
@@ -58,7 +64,6 @@ def compute_tenant_impact(
             stability, escalation = _calc_status(d)
             flow_count = len(d["flows"])
 
-            # Update registry
             try:
                 sb.table("tenant_operational_registry").upsert({
                     "tenant_id": tid,
@@ -100,7 +105,6 @@ def compute_tenant_impact(
 
 
 def _calc_status(d: dict) -> tuple[str, str]:
-    """Calculate stability + escalation."""
     score = 0
     score += d["critical"] * 15
     score += d["browser"] * 8
@@ -117,7 +121,6 @@ def _calc_status(d: dict) -> tuple[str, str]:
     else:
         stability = "HEALTHY"
 
-    # Escalation
     if d["critical"] > 0 and len(d["flows"]) >= 2:
         escalation = "L4"
     elif d["browser"] > 0 and d["sla"] > 0:

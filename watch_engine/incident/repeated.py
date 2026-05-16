@@ -1,5 +1,6 @@
-"""Repeated Failure Detection — 반복 실패 탐지.
+"""Repeated Failure Detection v1.1 — Production isolation.
 
+v1.1: Mock environment 제외 (TASK 30).
 동일 flow_key + event_type 반복 시 repeated_failure / workflow_instability 생성.
 """
 
@@ -26,21 +27,20 @@ def detect_repeated_failures(
     try:
         since = (now - timedelta(minutes=window_minutes)).isoformat()
 
-        # Load risk registry for thresholds
         risk_resp = sb.table("workflow_risk_registry") \
             .select("flow_key,repeat_failure_threshold,business_impact_level") \
             .eq("enabled", True).execute()
         risk_map = {r["flow_key"]: r for r in (risk_resp.data or [])}
 
-        # Count active issues by flow_key + event_type
+        # TASK 30: Mock environment 제외
         issues = sb.table("engine_integrity_event") \
             .select("flow_key,event_type,severity,trace_id") \
             .eq("resolved", False).eq("ignored", False) \
             .not_.is_("trace_id", "null") \
+            .neq("environment", "mock") \
             .gte("created_at", since) \
             .execute()
 
-        # Aggregate
         groups = {}
         for i in (issues.data or []):
             key = f"{i['flow_key']}_{i['event_type']}"
@@ -56,7 +56,6 @@ def detect_repeated_failures(
             if i.get("trace_id"):
                 groups[key]["traces"].add(i["trace_id"])
 
-        # Check thresholds
         for key, group in groups.items():
             fk = group["flow_key"]
             risk = risk_map.get(fk, {})
@@ -67,8 +66,6 @@ def detect_repeated_failures(
 
             stats["detected"] += 1
 
-            # Dedupe: check if already created
-            dedupe_key = f"repeated_{key}"
             existing = sb.table("engine_integrity_event") \
                 .select("id") \
                 .eq("event_type", "repeated_failure") \
@@ -78,9 +75,8 @@ def detect_repeated_failures(
                 .limit(1).execute()
 
             if existing.data:
-                continue  # Already reported
+                continue
 
-            # Determine if instability (multiple different event types)
             flow_event_types = set(
                 g["event_type"] for k, g in groups.items()
                 if g["flow_key"] == fk and g["count"] >= 2
