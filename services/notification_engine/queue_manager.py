@@ -1,7 +1,4 @@
-"""Queue Manager v4.0 — Preference Enforcement + CRITICAL Bypass.
-
-Mute/Disabled/Quiet Hour 적용. Policy Audit 기록.
-"""
+"""Queue Manager v4.1 — Quiet Hour 종료 시각 preference 기반 계산."""
 
 import logging
 from datetime import datetime, timezone, timedelta, time as dtime
@@ -17,6 +14,7 @@ def create_queue_items(
     message_body: str,
     dedupe_key: Optional[str] = None,
     cooldown_minutes: int = 15,
+    force_quiet_hour: bool = False,
 ) -> List[dict]:
     created = []
     try:
@@ -33,23 +31,20 @@ def create_queue_items(
             actor_id = recipient.get("user_id") or event_row.get("triggered_by")
             item_dedupe = dedupe_key or _build_dedupe_key(event_row, recipient)
 
-            # === Preference Enforcement ===
+            # Preference Enforcement
             policy_result = _check_preferences(
                 actor_id=actor_id, source_type=source_type or event_type,
                 channel_key=channel, severity=severity, now=now,
                 event_id=event_row.get("id"), trace_id=trace_id,
+                force_quiet_hour=force_quiet_hour,
             )
 
             if policy_result == "SUPPRESSED":
-                logger.info("Suppressed (preference): %s ch=%s trace=%s", actor_id, channel, trace_id)
                 continue
 
-            # Cooldown/Dedupe
             if _is_in_cooldown(sb, item_dedupe, cooldown_minutes, now):
-                logger.info("Suppressed (cooldown): %s trace=%s", item_dedupe, trace_id)
                 continue
 
-            # Queue 생성
             row = {
                 "runtime_event_id": event_row["id"],
                 "recipient_user_id": actor_id or "00000000-0000-0000-0000-000000000000",
@@ -66,7 +61,12 @@ def create_queue_items(
             }
 
             if policy_result == "QUIET_HOUR_DELAYED":
-                row["next_retry_at"] = _calc_quiet_hour_end(now).isoformat()
+                qh_end = _calc_quiet_hour_end_for_actor(actor_id, now)
+                row["next_retry_at"] = qh_end.isoformat()
+                _log_policy(event_row.get("id"), actor_id, source_type or event_type,
+                            channel, "QUIET_HOUR", "DELAYED",
+                            f"Delayed until {qh_end.isoformat()}",
+                            severity, trace_id)
 
             resp = sb.table("runtime_notification_queue").insert(row).execute()
             if resp.data:
@@ -80,53 +80,40 @@ def create_queue_items(
 
 
 def _check_preferences(
-    actor_id: Optional[str], source_type: str, channel_key: str,
-    severity: str, now: datetime, event_id: Optional[str] = None,
-    trace_id: Optional[str] = None,
+    actor_id, source_type, channel_key, severity, now,
+    event_id=None, trace_id=None, force_quiet_hour=False,
 ) -> str:
-    """Preference 검사 → ALLOWED / SUPPRESSED / QUIET_HOUR_DELAYED / CRITICAL_BYPASS."""
     if not actor_id:
         return "ALLOWED"
-
     try:
         from services.notification_engine.preference_service import is_channel_muted
 
-        # CRITICAL bypass
-        if severity == "CRITICAL":
+        if severity == "CRITICAL" and not force_quiet_hour:
             _log_policy(event_id, actor_id, source_type, channel_key,
-                        "CRITICAL_BYPASS", "ALLOWED", "CRITICAL severity bypasses preference",
+                        "CRITICAL_BYPASS", "ALLOWED", "CRITICAL bypasses preference",
                         severity, trace_id)
             return "ALLOWED"
 
-        # Mute / Disabled check
-        if is_channel_muted(actor_id, source_type, channel_key):
+        if not force_quiet_hour and is_channel_muted(actor_id, source_type, channel_key):
             _log_policy(event_id, actor_id, source_type, channel_key,
-                        "MUTE", "SUPPRESSED", "Channel muted or disabled by preference",
+                        "MUTE", "SUPPRESSED", "Muted or disabled",
                         severity, trace_id)
             return "SUPPRESSED"
 
-        # Quiet Hour check (KST)
-        if _is_quiet_hour(actor_id, now):
-            _log_policy(event_id, actor_id, source_type, channel_key,
-                        "QUIET_HOUR", "DELAYED", "Within quiet hour",
-                        severity, trace_id)
+        if force_quiet_hour or _is_quiet_hour(actor_id, now):
             return "QUIET_HOUR_DELAYED"
 
         return "ALLOWED"
-    except Exception as e:
-        logger.debug("Preference check failed (fail-open): %s", e)
+    except Exception:
         return "ALLOWED"
 
 
 def _is_quiet_hour(actor_id: str, now: datetime) -> bool:
-    """KST 기준 quiet hour 확인."""
     try:
         from db.supabase_client import get_supabase
-        sb = get_supabase()
-        resp = sb.table("notification_preference_registry") \
+        resp = get_supabase().table("notification_preference_registry") \
             .select("quiet_hour_enabled,quiet_hour_start,quiet_hour_end") \
-            .eq("actor_id", actor_id) \
-            .eq("quiet_hour_enabled", True) \
+            .eq("actor_id", actor_id).eq("quiet_hour_enabled", True) \
             .limit(1).execute()
         if not resp.data:
             return False
@@ -135,12 +122,10 @@ def _is_quiet_hour(actor_id: str, now: datetime) -> bool:
         end_str = pref.get("quiet_hour_end")
         if not start_str or not end_str:
             return False
-
         kst = now + timedelta(hours=9)
         current = kst.time()
         start = dtime.fromisoformat(start_str)
         end = dtime.fromisoformat(end_str)
-
         if start <= end:
             return start <= current <= end
         else:
@@ -149,49 +134,63 @@ def _is_quiet_hour(actor_id: str, now: datetime) -> bool:
         return False
 
 
-def _calc_quiet_hour_end(now: datetime) -> datetime:
-    """KST 07:00 기본 종료 시각."""
+def _calc_quiet_hour_end_for_actor(actor_id: Optional[str], now: datetime) -> datetime:
+    """Preference의 quiet_hour_end 기반 계산. KST."""
+    end_time_str = None
+    if actor_id:
+        try:
+            from db.supabase_client import get_supabase
+            resp = get_supabase().table("notification_preference_registry") \
+                .select("quiet_hour_end") \
+                .eq("actor_id", actor_id).eq("quiet_hour_enabled", True) \
+                .limit(1).execute()
+            if resp.data:
+                end_time_str = resp.data[0].get("quiet_hour_end")
+        except Exception:
+            pass
+
     kst = now + timedelta(hours=9)
-    next_morning = kst.replace(hour=7, minute=0, second=0, microsecond=0)
-    if kst.hour >= 7:
-        next_morning += timedelta(days=1)
-    return next_morning - timedelta(hours=9)  # UTC 변환
+    if end_time_str:
+        try:
+            end_t = dtime.fromisoformat(end_time_str)
+        except Exception:
+            end_t = dtime(7, 0)
+    else:
+        end_t = dtime(7, 0)
+
+    target = kst.replace(hour=end_t.hour, minute=end_t.minute, second=0, microsecond=0)
+    if kst.time() >= end_t:
+        target += timedelta(days=1)
+    return target - timedelta(hours=9)  # UTC
 
 
-def _log_policy(
-    event_id, actor_id, source_type, channel_key,
-    policy_type, policy_result, reason, severity, trace_id,
-):
+def _log_policy(event_id, actor_id, source_type, channel_key,
+                policy_type, policy_result, reason, severity, trace_id):
     try:
         from db.supabase_client import get_supabase
         get_supabase().table("runtime_notification_policy_audit").insert({
-            "notification_id": event_id,
-            "event_id": event_id,
-            "actor_id": actor_id,
-            "source_type": source_type,
-            "channel_key": channel_key,
-            "policy_type": policy_type,
-            "policy_result": policy_result,
-            "reason": reason,
-            "severity": severity,
-            "trace_id": trace_id,
+            "notification_id": event_id, "event_id": event_id,
+            "actor_id": actor_id, "source_type": source_type,
+            "channel_key": channel_key, "policy_type": policy_type,
+            "policy_result": policy_result, "reason": reason,
+            "severity": severity, "trace_id": trace_id,
         }).execute()
     except Exception as e:
         logger.debug("Policy audit log failed: %s", e)
 
 
-def _build_dedupe_key(event_row: dict, recipient: dict) -> str:
+def _build_dedupe_key(event_row, recipient):
     return f"{event_row.get('event_type')}_{event_row.get('source_engine')}_{recipient.get('recipient_source', 'OP')}"
 
 
-def _is_in_cooldown(sb, dedupe_key: str, cooldown_minutes: int, now: datetime) -> bool:
+def _is_in_cooldown(sb, dedupe_key, cooldown_minutes, now):
     try:
         since = (now - timedelta(minutes=cooldown_minutes)).isoformat()
         resp = sb.table("runtime_notification_queue") \
-            .select("id", count="exact") \
-            .eq("dedupe_key", dedupe_key) \
+            .select("id", count="exact").eq("dedupe_key", dedupe_key) \
             .gte("created_at", since) \
-            .in_("delivery_status", ["QUEUED", "PROCESSING", "DELIVERED", "RETRY_PENDING", "QUIET_HOUR_DELAYED"]) \
+            .in_("delivery_status", ["QUEUED", "PROCESSING", "DELIVERED",
+                                     "RETRY_PENDING", "QUIET_HOUR_DELAYED"]) \
             .execute()
         return (resp.count or 0) > 0
     except Exception:

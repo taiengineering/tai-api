@@ -1,8 +1,4 @@
-"""Queue Worker v3.0 — Channel Registry Adapter Resolution.
-
-Adapter를 CHANNEL_ADAPTERS 고정 dict 대신
-channel_registry.resolve_adapter()로 동적 해결.
-"""
+"""Queue Worker v4.0 — QUIET_HOUR_DELAYED poll + RESUME audit."""
 
 import logging
 from datetime import datetime, timezone
@@ -15,7 +11,6 @@ from . import channel_registry
 
 logger = logging.getLogger("notification_engine.worker")
 
-# Fallback static map (registry 실패 시)
 FALLBACK_ADAPTERS = {}
 try:
     from .adapters import telegram as _tg
@@ -23,44 +18,53 @@ try:
 except Exception:
     pass
 
-VALID_STATUSES = {
-    "QUEUED", "PROCESSING", "DELIVERED", "FAILED",
-    "RETRY_PENDING", "DEADLETTER", "ACKNOWLEDGED", "RESOLVED", "IGNORED",
-}
-
 
 def process_queue(limit: int = 20) -> dict:
-    """QUEUED + RETRY_PENDING(시간 도래) 항목 poll → 발송."""
-    stats = {"processed": 0, "sent": 0, "failed": 0, "retried": 0, "deadlettered": 0}
+    """QUEUED + RETRY_PENDING + QUIET_HOUR_DELAYED(시간 도래) poll → 발송."""
+    stats = {"processed": 0, "sent": 0, "failed": 0, "retried": 0,
+             "deadlettered": 0, "quiet_hour_resumed": 0}
 
     try:
         from db.supabase_client import get_supabase
         sb = get_supabase()
         now = datetime.now(timezone.utc).isoformat()
 
-        resp1 = sb.table("runtime_notification_queue") \
+        # QUEUED
+        r1 = sb.table("runtime_notification_queue") \
             .select("*").eq("delivery_status", "QUEUED") \
             .order("created_at").limit(limit).execute()
 
-        resp2 = sb.table("runtime_notification_queue") \
+        # RETRY_PENDING (시간 도래)
+        r2 = sb.table("runtime_notification_queue") \
             .select("*").eq("delivery_status", "RETRY_PENDING") \
             .lte("next_retry_at", now) \
             .order("next_retry_at").limit(limit).execute()
 
-        items = (resp1.data or []) + (resp2.data or [])
-        logger.info("Worker: %d items to process", len(items))
+        # QUIET_HOUR_DELAYED (시간 도래)
+        r3 = sb.table("runtime_notification_queue") \
+            .select("*").eq("delivery_status", "QUIET_HOUR_DELAYED") \
+            .lte("next_retry_at", now) \
+            .order("next_retry_at").limit(limit).execute()
+
+        items = (r1.data or []) + (r2.data or []) + (r3.data or [])
+        logger.info("Worker: %d items (queued=%d retry=%d qh=%d)",
+                    len(items), len(r1.data or []), len(r2.data or []), len(r3.data or []))
 
         for item in items:
             stats["processed"] += 1
+            was_delayed = item.get("delivery_status") == "QUIET_HOUR_DELAYED"
             _deliver_item(sb, item, stats)
+            if was_delayed and stats["sent"] > 0:
+                stats["quiet_hour_resumed"] += 1
+                _log_qh_resume(item)
 
     except Exception as e:
         logger.error("Worker failed: %s", e)
 
     logger.info(
-        "Worker done: processed=%d sent=%d failed=%d retried=%d dlq=%d",
+        "Worker: processed=%d sent=%d failed=%d retried=%d dlq=%d qh_resumed=%d",
         stats["processed"], stats["sent"], stats["failed"],
-        stats["retried"], stats["deadlettered"],
+        stats["retried"], stats["deadlettered"], stats["quiet_hour_resumed"],
     )
     return stats
 
@@ -73,27 +77,22 @@ def _deliver_item(sb, item: dict, stats: dict):
 
     _update_queue(sb, queue_id, {"delivery_status": "PROCESSING"})
 
-    # Dynamic adapter resolution via channel_registry
     adapter_fn = channel_registry.resolve_adapter(channel)
     if not adapter_fn:
         adapter_fn = FALLBACK_ADAPTERS.get(channel)
     if not adapter_fn:
-        logger.error("No adapter for channel: %s (trace=%s)", channel, trace_id)
         _handle_failure(sb, item, f"No adapter for {channel}", stats)
         return
 
     title = item.get("message_title") or ""
     body = item.get("message_body") or ""
-    message = f"{title}\n{body}".strip() if title or body else f"[{item.get('notification_type')}] Notification"
+    message = f"{title}\n{body}".strip() if title or body else f"[{item.get('notification_type')}]"
 
     success, error_msg = adapter_fn(message)
     now = datetime.now(timezone.utc).isoformat()
 
     if success:
-        _update_queue(sb, queue_id, {
-            "delivery_status": "DELIVERED",
-            "delivered_at": now,
-        })
+        _update_queue(sb, queue_id, {"delivery_status": "DELIVERED", "delivered_at": now})
         stats["sent"] += 1
         audit.log_delivery(
             queue_id=queue_id, event_id=event_id,
@@ -118,8 +117,7 @@ def _handle_failure(sb, item: dict, error_msg: str, stats: dict):
         audit.log_delivery(
             queue_id=queue_id, event_id=event_id,
             action="DEADLETTER", channel=channel,
-            delivery_status="DEADLETTER",
-            error_message=error_msg, trace_id=trace_id,
+            delivery_status="DEADLETTER", error_message=error_msg, trace_id=trace_id,
         )
     else:
         next_at = retry_policy.calculate_next_retry_at(current_retry)
@@ -133,9 +131,27 @@ def _handle_failure(sb, item: dict, error_msg: str, stats: dict):
         audit.log_delivery(
             queue_id=queue_id, event_id=event_id,
             action=f"RETRY_{current_retry}", channel=channel,
-            delivery_status="RETRY_PENDING",
-            error_message=error_msg, trace_id=trace_id,
+            delivery_status="RETRY_PENDING", error_message=error_msg, trace_id=trace_id,
         )
+
+
+def _log_qh_resume(item: dict):
+    """QUIET_HOUR_RESUME policy audit."""
+    try:
+        from db.supabase_client import get_supabase
+        get_supabase().table("runtime_notification_policy_audit").insert({
+            "notification_id": item.get("runtime_event_id"),
+            "event_id": item.get("runtime_event_id"),
+            "actor_id": item.get("recipient_user_id"),
+            "source_type": item.get("notification_type"),
+            "channel_key": item.get("delivery_channel"),
+            "policy_type": "QUIET_HOUR_RESUME",
+            "policy_result": "DELIVERED",
+            "reason": "Quiet hour ended, delayed notification delivered",
+            "trace_id": item.get("trace_id"),
+        }).execute()
+    except Exception as e:
+        logger.debug("QH resume audit failed: %s", e)
 
 
 def _update_queue(sb, queue_id: str, updates: dict):
