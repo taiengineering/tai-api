@@ -39,4 +39,5 @@ ROUTERS = [
     {"module": "routers.watch_engine_identity_api"},
     {"module": "routers.watch_engine_control_api"},
     {"module": "routers.watch_engine_document_api"},
+    {"module": "routers.pricing_validation_api"},
 ]
