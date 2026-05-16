@@ -1,24 +1,28 @@
-"""Queue Worker v2.0 — Retry Policy + Dead Letter + Trace Propagation.
+"""Queue Worker v3.0 — Channel Registry Adapter Resolution.
 
-Phase 1: Telegram only. Adapter 구조로 확장 가능.
+Adapter를 CHANNEL_ADAPTERS 고정 dict 대신
+channel_registry.resolve_adapter()로 동적 해결.
 """
 
 import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from .adapters import telegram as telegram_adapter
 from . import audit
 from . import retry_policy
 from . import deadletter
+from . import channel_registry
 
 logger = logging.getLogger("notification_engine.worker")
 
-CHANNEL_ADAPTERS = {
-    "TELEGRAM": telegram_adapter.send,
-}
+# Fallback static map (registry 실패 시)
+FALLBACK_ADAPTERS = {}
+try:
+    from .adapters import telegram as _tg
+    FALLBACK_ADAPTERS["TELEGRAM"] = _tg.send
+except Exception:
+    pass
 
-# 허용 Queue Status
 VALID_STATUSES = {
     "QUEUED", "PROCESSING", "DELIVERED", "FAILED",
     "RETRY_PENDING", "DEADLETTER", "ACKNOWLEDGED", "RESOLVED", "IGNORED",
@@ -26,11 +30,7 @@ VALID_STATUSES = {
 
 
 def process_queue(limit: int = 20) -> dict:
-    """Queue에서 QUEUED + RETRY_PENDING(시간 도래) 항목 poll → 발송.
-
-    Returns:
-        {"processed": int, "sent": int, "failed": int, "retried": int, "deadlettered": int}
-    """
+    """QUEUED + RETRY_PENDING(시간 도래) 항목 poll → 발송."""
     stats = {"processed": 0, "sent": 0, "failed": 0, "retried": 0, "deadlettered": 0}
 
     try:
@@ -38,20 +38,14 @@ def process_queue(limit: int = 20) -> dict:
         sb = get_supabase()
         now = datetime.now(timezone.utc).isoformat()
 
-        # QUEUED 항목
         resp1 = sb.table("runtime_notification_queue") \
-            .select("*") \
-            .eq("delivery_status", "QUEUED") \
-            .order("created_at") \
-            .limit(limit).execute()
+            .select("*").eq("delivery_status", "QUEUED") \
+            .order("created_at").limit(limit).execute()
 
-        # RETRY_PENDING 중 시간 도래한 항목
         resp2 = sb.table("runtime_notification_queue") \
-            .select("*") \
-            .eq("delivery_status", "RETRY_PENDING") \
+            .select("*").eq("delivery_status", "RETRY_PENDING") \
             .lte("next_retry_at", now) \
-            .order("next_retry_at") \
-            .limit(limit).execute()
+            .order("next_retry_at").limit(limit).execute()
 
         items = (resp1.data or []) + (resp2.data or [])
         logger.info("Worker: %d items to process", len(items))
@@ -72,27 +66,26 @@ def process_queue(limit: int = 20) -> dict:
 
 
 def _deliver_item(sb, item: dict, stats: dict):
-    """단일 Queue Item 발송."""
     queue_id = item["id"]
     channel = item.get("delivery_channel", "TELEGRAM")
     event_id = item.get("runtime_event_id", queue_id)
     trace_id = item.get("trace_id", "")
 
-    # Mark PROCESSING
     _update_queue(sb, queue_id, {"delivery_status": "PROCESSING"})
 
-    adapter_fn = CHANNEL_ADAPTERS.get(channel)
+    # Dynamic adapter resolution via channel_registry
+    adapter_fn = channel_registry.resolve_adapter(channel)
+    if not adapter_fn:
+        adapter_fn = FALLBACK_ADAPTERS.get(channel)
     if not adapter_fn:
         logger.error("No adapter for channel: %s (trace=%s)", channel, trace_id)
-        _handle_failure(sb, item, "Unknown channel", stats)
+        _handle_failure(sb, item, f"No adapter for {channel}", stats)
         return
 
-    # Build message
     title = item.get("message_title") or ""
     body = item.get("message_body") or ""
     message = f"{title}\n{body}".strip() if title or body else f"[{item.get('notification_type')}] Notification"
 
-    # Send
     success, error_msg = adapter_fn(message)
     now = datetime.now(timezone.utc).isoformat()
 
@@ -112,7 +105,6 @@ def _deliver_item(sb, item: dict, stats: dict):
 
 
 def _handle_failure(sb, item: dict, error_msg: str, stats: dict):
-    """Retry or DLQ."""
     queue_id = item["id"]
     event_id = item.get("runtime_event_id", queue_id)
     trace_id = item.get("trace_id", "")
@@ -121,7 +113,6 @@ def _handle_failure(sb, item: dict, error_msg: str, stats: dict):
     max_retries = item.get("max_retries", retry_policy.DEFAULT_MAX_RETRIES)
 
     if retry_policy.should_deadletter(current_retry, max_retries):
-        # DLQ 이동
         deadletter.move_to_deadletter(item, error_msg)
         stats["deadlettered"] += 1
         audit.log_delivery(
@@ -131,7 +122,6 @@ def _handle_failure(sb, item: dict, error_msg: str, stats: dict):
             error_message=error_msg, trace_id=trace_id,
         )
     else:
-        # Retry
         next_at = retry_policy.calculate_next_retry_at(current_retry)
         _update_queue(sb, queue_id, {
             "delivery_status": "RETRY_PENDING",
@@ -149,7 +139,6 @@ def _handle_failure(sb, item: dict, error_msg: str, stats: dict):
 
 
 def _update_queue(sb, queue_id: str, updates: dict):
-    """Queue 상태 업데이트."""
     try:
         sb.table("runtime_notification_queue").update(updates).eq("id", queue_id).execute()
     except Exception as e:
