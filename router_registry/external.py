@@ -42,4 +42,5 @@ ROUTERS = [
     {"module": "routers.pricing_validation_api"},
     {"module": "routers.payment_activation_api"},
     {"module": "routers.semantic_adapter_api"},
+    {"module": "routers.production_guard_api"},
 ]
