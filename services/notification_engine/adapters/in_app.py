@@ -1,11 +1,7 @@
-"""In-App Adapter — notifications 테이블 스키마 정합 v2.
+"""In-App Adapter v3 — trace_id 저장.
 
-실제 notifications 테이블 컨럼:
-  id, company_id, user_id, trigger_code(NOT NULL), trigger_group,
-  title(NOT NULL), body, link_url, priority, is_read, read_at,
-  channel, send_status, sent_at, created_at
-
-inbox_notify_svc.py 삭제 금지. 병렬 유지.
+notifications 테이블 실제 스키마 정합.
+trace_id로 Feed↔Runtime Trace 연결.
 """
 
 import logging
@@ -15,10 +11,20 @@ from .delivery_result import DeliveryResult
 
 logger = logging.getLogger("notification_engine.adapters.in_app")
 
+# Worker 호환 인터페이스용 전역 변수
+_current_trace_id: Optional[str] = None
+_current_user_id: Optional[str] = None
+
+
+def set_context(trace_id: Optional[str] = None, user_id: Optional[str] = None):
+    global _current_trace_id, _current_user_id
+    _current_trace_id = trace_id
+    _current_user_id = user_id
+
 
 def send(message: str, user_id: Optional[str] = None) -> tuple[bool, Optional[str]]:
-    """Worker 호환 인터페이스 (bool, error)."""
-    result = send_in_app(message, user_id)
+    target_user = user_id or _current_user_id
+    result = send_in_app(message, target_user, trace_id=_current_trace_id)
     return result.success, result.error_message
 
 
@@ -31,8 +37,8 @@ def send_in_app(
     company_id: Optional[str] = None,
     link_url: Optional[str] = None,
     priority: str = "INFO",
+    trace_id: Optional[str] = None,
 ) -> DeliveryResult:
-    """notifications 테이블 INSERT → DeliveryResult."""
     if not user_id or user_id == "00000000-0000-0000-0000-000000000000":
         return DeliveryResult(
             success=False, delivery_status="FAILED",
@@ -59,6 +65,8 @@ def send_in_app(
             row["company_id"] = company_id
         if link_url:
             row["link_url"] = link_url
+        if trace_id or _current_trace_id:
+            row["trace_id"] = trace_id or _current_trace_id
 
         resp = sb.table("notifications").insert(row).execute()
         if resp.data:
@@ -66,13 +74,6 @@ def send_in_app(
                 success=True, delivery_status="DELIVERED",
                 external_id=str(resp.data[0].get("id")),
             )
-        else:
-            return DeliveryResult(
-                success=False, delivery_status="FAILED",
-                error_message="INSERT returned empty",
-            )
+        return DeliveryResult(success=False, delivery_status="FAILED", error_message="INSERT returned empty")
     except Exception as e:
-        return DeliveryResult(
-            success=False, delivery_status="FAILED",
-            error_message=str(e)[:200],
-        )
+        return DeliveryResult(success=False, delivery_status="FAILED", error_message=str(e)[:200])
