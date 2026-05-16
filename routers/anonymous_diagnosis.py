@@ -281,6 +281,31 @@ async def create_anonymous_diagnosis(body: AnonymousDiagnosisCreate):
         result="success",
         connector_type="database",
     )
+
+    # ═══ Document Auto Activation Hook (TASK 23) ═══
+    try:
+        from watch_engine.document import activate_documents_for_workflow
+        from db.supabase_client import get_supabase as get_sb_client
+
+        activate_documents_for_workflow(
+            get_sb_client(),
+            flow_key="law_diagnosis",
+            trace_id=f"diag_{token}",
+            tenant_id="anonymous",
+            actor_id="anonymous",
+            workflow_context={
+                "public_token": token,
+                "sector": full_result.get("sector") or sector_norm,
+            },
+        )
+    except Exception as _doc_err:
+        import logging
+
+        logging.getLogger("watch_engine.document.hook").warning(
+            "Document activation hook failed (non-blocking): %s", _doc_err
+        )
+    # ═══ End Document Hook ═══
+
     clear_trace()
     return {
         "status": "success",

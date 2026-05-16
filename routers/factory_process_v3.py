@@ -475,6 +475,33 @@ async def add_factory_process(factory_id: str, body: ProcessCreateBody):
             "row_count": 1,
         },
     )
+
+    # ═══ Document Auto Activation Hook (TASK 23) ═══
+    try:
+        from watch_engine.document import activate_documents_for_workflow
+        from db.supabase_client import get_supabase as get_sb_client
+
+        activate_documents_for_workflow(
+            get_sb_client(),
+            flow_key="process_registration",
+            trace_id=f"procreg_{record.get('id', '')}",
+            tenant_id=str(factory_id),
+            factory_id=factory_id,
+            actor_id="user",
+            workflow_context={
+                "process_name": display_name,
+                "process_source": source,
+                "process_id": record.get("process_id"),
+            },
+        )
+    except Exception as _doc_err:
+        import logging
+
+        logging.getLogger("watch_engine.document.hook").warning(
+            "Document activation hook failed (non-blocking): %s", _doc_err
+        )
+    # ═══ End Document Hook ═══
+
     clear_trace()
     return {
         "status":  "success",
