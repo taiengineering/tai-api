@@ -1,24 +1,10 @@
-"""Notification Engine API Router v3.0 — Observability & Metrics
+"""Notification Engine API Router v4.0 — Channel별 테스트 + Source Tracking
 prefix: /notification-engine
-
-API:
-  GET    /notification-engine/health              Runtime Health
-  GET    /notification-engine/registry             Event Registry
-  GET    /notification-engine/deadletters          DLQ 목록
-  POST   /notification-engine/process-queue        Queue Worker 수동
-  GET    /notification-engine/queue-status          Queue 현황
-  GET    /notification-engine/events               최근 이벤트
-  POST   /notification-engine/emit-test            테스트 E2E
-  POST   /notification-engine/ack/{queue_id}       ACK
-  POST   /notification-engine/resolve/{queue_id}   RESOLVE
-  GET    /notification-engine/metrics              Metrics 이력
-  GET    /notification-engine/runtime-summary      실시간 요약
-  POST   /notification-engine/collect-metrics      Metrics 수동 집계
-  GET    /notification-engine/timeline/{trace_id}  Trace Timeline
 """
 
 import logging
 from fastapi import APIRouter, Query
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/notification-engine", tags=["알림엔진"])
@@ -35,29 +21,22 @@ def _sb():
 def notification_health():
     try:
         from services.notification_engine.metrics_aggregator import get_runtime_summary
-        summary = get_runtime_summary()
-        return {"status": "success", "data": summary}
+        return {"status": "success", "data": get_runtime_summary()}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-
-# ═══ Runtime Summary (실시간) ═══
 
 @router.get("/runtime-summary")
 def runtime_summary():
     try:
         from services.notification_engine.metrics_aggregator import get_runtime_summary
-        summary = get_runtime_summary()
-        return {"status": "success", "data": summary}
+        return {"status": "success", "data": get_runtime_summary()}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
-# ═══ Metrics 이력 ═══
-
 @router.get("/metrics")
 def list_metrics(limit: int = Query(24, ge=1, le=100)):
-    """최근 Metrics 이력."""
     try:
         resp = _sb().table("runtime_notification_metrics") \
             .select("*").order("metric_time", desc=True).limit(limit).execute()
@@ -66,19 +45,14 @@ def list_metrics(limit: int = Query(24, ge=1, le=100)):
         return {"status": "error", "message": str(e)}
 
 
-# ═══ Metrics 수동 집계 ═══
-
 @router.post("/collect-metrics")
 def collect_metrics_manual(window_minutes: int = Query(10, ge=1, le=60)):
     try:
         from services.notification_engine.metrics_aggregator import collect_and_record
-        result = collect_and_record(window_minutes=window_minutes)
-        return {"status": "success", "data": result}
+        return {"status": "success", "data": collect_and_record(window_minutes=window_minutes)}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-
-# ═══ Trace Timeline ═══
 
 @router.get("/timeline/{trace_id}")
 def get_trace_timeline(trace_id: str):
@@ -92,8 +66,6 @@ def get_trace_timeline(trace_id: str):
         return {"status": "error", "message": str(e)}
 
 
-# ═══ Registry ═══
-
 @router.get("/registry")
 def list_event_registry():
     try:
@@ -103,7 +75,14 @@ def list_event_registry():
         return {"status": "error", "message": str(e)}
 
 
-# ═══ Dead Letters ═══
+@router.get("/channels")
+def list_channels():
+    try:
+        from services.notification_engine.channel_registry import list_enabled_channels
+        return {"status": "success", "data": list_enabled_channels()}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 
 @router.get("/deadletters")
 def list_deadletters(limit: int = Query(20, ge=1, le=100)):
@@ -115,8 +94,6 @@ def list_deadletters(limit: int = Query(20, ge=1, le=100)):
         return {"status": "error", "message": str(e)}
 
 
-# ═══ Queue Worker ═══
-
 @router.post("/process-queue")
 def process_queue_manual(limit: int = Query(20, ge=1, le=100)):
     try:
@@ -125,8 +102,6 @@ def process_queue_manual(limit: int = Query(20, ge=1, le=100)):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-
-# ═══ Queue 현황 ═══
 
 @router.get("/queue-status")
 def get_queue_status():
@@ -144,8 +119,6 @@ def get_queue_status():
         return {"status": "error", "message": str(e)}
 
 
-# ═══ 최근 이벤트 ═══
-
 @router.get("/events")
 def list_recent_events(limit: int = Query(20, ge=1, le=100)):
     try:
@@ -156,34 +129,42 @@ def list_recent_events(limit: int = Query(20, ge=1, le=100)):
         return {"status": "error", "message": str(e)}
 
 
-# ═══ 테스트 E2E ═══
+# ═══ 테스트 E2E (channel_key + source_type 선택 가능) ═══
 
 @router.post("/emit-test")
-def emit_test_event():
+def emit_test_event(
+    channel_key: Optional[str] = Query(None, description="TELEGRAM, SMS, IN_APP"),
+    source_type: Optional[str] = Query(None, description="runtime_alert, service_notice, billing_notice"),
+):
     try:
         from services.notification_engine.schemas import NotificationEventCreate
         from services.notification_engine.pipeline import run_pipeline
         from services.notification_engine.worker import process_queue
 
+        event_type = "test_notification"
+        src_type = source_type or "runtime_alert"
+
         event = NotificationEventCreate(
-            event_type="test_notification",
+            event_type=event_type,
             source_engine="notification_engine_test",
             severity="INFO",
-            trace_id="TEST-MANUAL",
-            payload={"message": "Notification Engine Phase 1 Test"},
+            trace_id=f"TEST-{src_type.upper()}",
+            payload={"message": f"Notification Engine Test (channel={channel_key or 'auto'}, source={src_type})"},
             source_domain="notification_engine",
         )
 
         pipeline_result = run_pipeline(
             event=event,
-            message_title="\U0001f6a8 [TEST] Notification Engine",
-            message_body="Notification Engine Phase 1 \ud14c\uc2a4\ud2b8.\n\uc815\uc0c1 \uc218\uc2e0\ub418\uba74 Pipeline \uc5f0\ub3d9 \uc644\ub8cc.",
+            message_title=f"\U0001f6a8 [TEST] Notification Engine ({channel_key or 'auto'})",
+            message_body=f"Channel: {channel_key or 'auto'}\nSource: {src_type}\n\uc815\uc0c1 \uc218\uc2e0\ub418\uba74 Runtime \uc5f0\ub3d9 \uc644\ub8cc.",
             cooldown_minutes=1,
         )
+
         worker_stats = process_queue(limit=10)
 
         return {
             "status": "success",
+            "test_params": {"channel_key": channel_key, "source_type": src_type},
             "pipeline": {
                 "event_id": pipeline_result.get("event", {}).get("id") if pipeline_result.get("event") else None,
                 "trace_id": pipeline_result.get("event", {}).get("trace_id") if pipeline_result.get("event") else None,
@@ -196,8 +177,6 @@ def emit_test_event():
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-
-# ═══ ACK ═══
 
 @router.post("/ack/{queue_id}")
 def ack_notification(queue_id: str):
@@ -213,8 +192,6 @@ def ack_notification(queue_id: str):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-
-# ═══ RESOLVE ═══
 
 @router.post("/resolve/{queue_id}")
 def resolve_notification(queue_id: str):
