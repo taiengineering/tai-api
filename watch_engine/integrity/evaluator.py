@@ -1,5 +1,6 @@
-"""Integrity Evaluator v1.2 — with SLA checks.
+"""Integrity Evaluator v1.3 — Production isolation.
 
+v1.3: Mock environment 제외 (TASK 30).
 v1.2: SLA violation detection added.
 """
 
@@ -50,8 +51,10 @@ def evaluate_recent_events(
             now = datetime.now(timezone.utc)
         since = now - timedelta(minutes=last_minutes)
 
+        # TASK 30: Mock environment 제외
         resp = sb.table("business_event") \
             .select("*") \
+            .neq("environment", "mock") \
             .gte("created_at", since.isoformat()) \
             .order("created_at") \
             .execute()
