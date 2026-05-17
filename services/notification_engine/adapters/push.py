@@ -1,15 +1,30 @@
-"""Push (FCM) Delivery Adapter — Mock Phase.
+"""Push (FCM) Delivery Adapter — Compat Phase.
 
-Phase 1: Mock logging only.
-Phase 2: 실제 FCM 연동 예정.
+기존 fcm_utils.send_push()를 Notification Runtime Adapter로 래핑.
+새 Push 시스템 구축 불필요 — 기존 인프라 그대로 사용.
 
-Adapter Interface: send_push(token, title, body, data) -> (success, error)
+Adapter Interface: send(message, context) -> (success, error)
 """
 
 import logging
 from typing import Tuple, Optional, Dict, Any
 
 logger = logging.getLogger("notification_engine.adapters.push")
+
+VERSION = "2.0.0"  # Mock → Compat (fcm_utils 실연결)
+
+
+def _get_fcm_send():
+    """fcm_utils.send_push 동적 import (firebase-admin 미설치 환경 대비)."""
+    try:
+        from utils.fcm_utils import send_push as fcm_send
+        return fcm_send
+    except ImportError:
+        logger.warning("Push adapter: fcm_utils not available (firebase-admin missing?)")
+        return None
+    except Exception as e:
+        logger.error("Push adapter: fcm_utils import failed: %s", e)
+        return None
 
 
 def send_push(
@@ -18,10 +33,7 @@ def send_push(
     body: str,
     data: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, Optional[str]]:
-    """FCM Push 발송 (Mock).
-
-    Phase 1: 실제 FCM 연동 없이 로깅만 수행.
-    Phase 2: firebase-admin SDK 연동 예정.
+    """FCM Push 발송 — 기존 fcm_utils.send_push() 위임.
 
     Args:
         fcm_token: 대상 디바이스 FCM 토큰
@@ -36,16 +48,37 @@ def send_push(
         logger.warning("Push adapter: empty fcm_token")
         return False, "Empty FCM token"
 
-    # ── Mock Phase: 로깅만 수행 ──
-    logger.info(
-        "[MOCK PUSH] token=%s... title=%s body=%s data=%s",
-        fcm_token[:20] if len(fcm_token) > 20 else fcm_token,
-        title[:50],
-        body[:80],
-        data,
-    )
+    fcm_send = _get_fcm_send()
+    if not fcm_send:
+        # fallback: mock logging
+        logger.info(
+            "[MOCK PUSH] fcm_utils unavailable — token=%s... title=%s",
+            fcm_token[:20] if len(fcm_token) > 20 else fcm_token,
+            title[:50],
+        )
+        return True, None  # mock success
 
-    return True, None
+    try:
+        message_id = fcm_send(
+            fcm_token=fcm_token,
+            title=title,
+            body=body,
+            data=data or {},
+        )
+        logger.info(
+            "[PUSH] sent token=%s... title=%s message_id=%s",
+            fcm_token[:20] if len(fcm_token) > 20 else fcm_token,
+            title[:50],
+            message_id,
+        )
+        return True, None
+    except Exception as e:
+        logger.error(
+            "[PUSH] failed token=%s... error=%s",
+            fcm_token[:20] if len(fcm_token) > 20 else fcm_token,
+            e,
+        )
+        return False, str(e)
 
 
 def send(
