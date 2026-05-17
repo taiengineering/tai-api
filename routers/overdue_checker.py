@@ -70,7 +70,7 @@ def _today() -> date:
 
 
 def _schedule_wire_and_emit(event_type: str, payload: dict) -> None:
-    """033: sync cron path → fire-and-forget async wire_and_emit."""
+    """034: sync cron path → fire-and-forget async wire_and_emit."""
 
     async def _run() -> None:
         try:
@@ -306,7 +306,7 @@ def _process_one(sb, wa: dict, today: date) -> dict:
         except Exception as e:
             log.error("[OVERDUE] status OVERDUE 업데이트 실패: %s", e)
 
-    # ── Notification Runtime 연결 (033) ──
+    # ── Notification Runtime (034) ──
     _schedule_wire_and_emit(
         "schedule_overdue",
         {

@@ -32,6 +32,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import threading
 import urllib.parse
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -431,6 +432,21 @@ def _apply_failure_to_subscription(supabase, subscription_id: str, reason: str) 
     supabase.table("subscriptions").update(upd).eq("id", subscription_id).execute()
 
 
+def _schedule_wire(coro) -> None:
+    """034: fire-and-forget wire_and_emit from sync billing helpers."""
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(coro)
+    except RuntimeError:
+        def _thread_main() -> None:
+            try:
+                asyncio.run(coro)
+            except Exception:
+                pass
+
+        threading.Thread(target=_thread_main, daemon=True).start()
+
+
 def _fail_subscription_by_oid(supabase, oid: str, reason: str) -> None:
     """prepare/return 단계에서 실패한 구독을 FAILED로 마킹."""
     if not oid:
@@ -441,6 +457,25 @@ def _fail_subscription_by_oid(supabase, oid: str, reason: str) -> None:
         "last_failure_reason": (reason or "")[:500],
         "updated_at":          _now_iso(),
     }).eq("inicis_order_id", oid).execute()
+
+    # ── Notification Runtime (034) ──
+    try:
+        sub_fail = (
+            supabase.table("subscriptions")
+            .select("company_id, plan_name")
+            .eq("inicis_order_id", oid)
+            .limit(1)
+            .execute()
+        )
+        sub_row = sub_fail.data[0] if sub_fail.data else {}
+        _schedule_wire(_wire_payment_failed(
+            company_id=sub_row.get("company_id"),
+            order_id=oid,
+            result_msg=reason or "",
+            plan_name=sub_row.get("plan_name") or "",
+        ))
+    except Exception:
+        pass
 
 
 async def _wire_payment_failed(
@@ -592,23 +627,6 @@ async def billing_return(request: Request):
 
     if result_code and result_code != "0000":
         _fail_subscription_by_oid(supabase, order_id, result_msg or "인증 실패")
-        try:
-            sub_fail = (
-                supabase.table("subscriptions")
-                .select("company_id, plan_name")
-                .eq("inicis_order_id", order_id)
-                .limit(1)
-                .execute()
-            )
-            sub_row = sub_fail.data[0] if sub_fail.data else {}
-            asyncio.create_task(_wire_payment_failed(
-                company_id=sub_row.get("company_id"),
-                order_id=order_id,
-                result_msg=result_msg or "인증 실패",
-                plan_name=sub_row.get("plan_name") or "",
-            ))
-        except Exception as e:
-            log.warning("[NOTIF] payment_failed schedule failed: %s", e)
         return RedirectResponse(
             f"{FRONT_RETURN_URL}?resultCode=FAIL&msg={urllib.parse.quote(result_msg or '인증 실패')}&oid={order_id}",
             status_code=302,
@@ -734,11 +752,15 @@ async def billing_return(request: Request):
     )
 
     if charge_res.get("success"):
-        asyncio.create_task(_wire_subscription_activated(
-            company_id=subscription.get("company_id"),
-            order_id=order_id,
-            plan_name=subscription.get("plan_name") or "TAI Safe",
-        ))
+        # ── Notification Runtime (034) — 결제 성공 (ACTIVE 후 첫 결제) ──
+        try:
+            asyncio.create_task(_wire_subscription_activated(
+                company_id=subscription.get("company_id"),
+                order_id=order_id,
+                plan_name=subscription.get("plan_name") or "TAI Safe",
+            ))
+        except Exception:
+            pass
         qs = urllib.parse.urlencode({
             "resultCode":      "00",
             "oid":             order_id,
@@ -753,12 +775,7 @@ async def billing_return(request: Request):
         return RedirectResponse(f"{FRONT_RETURN_URL}?{qs}", status_code=302)
 
     fail_msg = charge_res.get("result", {}).get("resultMsg", "첫 결제 실패")
-    asyncio.create_task(_wire_payment_failed(
-        company_id=subscription.get("company_id"),
-        order_id=order_id,
-        result_msg=str(fail_msg),
-        plan_name=subscription.get("plan_name") or "",
-    ))
+    _fail_subscription_by_oid(supabase, order_id, str(fail_msg))
     return RedirectResponse(
         f"{FRONT_RETURN_URL}?resultCode=FAIL&msg={urllib.parse.quote(str(fail_msg))}&oid={order_id}",
         status_code=302,
