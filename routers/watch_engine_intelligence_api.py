@@ -1,15 +1,16 @@
-# routers/watch_engine_intelligence_api.py — Operational Intelligence API
+# routers/watch_engine_intelligence_api.py — Operational Intelligence API v2
 """
-\uc6b4\uc601 Intelligence \uc870\ud68c. Truth \uc0dd\uc131 \uae08\uc9c0.
-recommendation / prediction / correlation / awareness \uc804\uc6a9.
+운영 Intelligence 조회 + Event Stream + Incident Lifecycle.
+Truth 생성 금지. recommendation / prediction / correlation / awareness 전용.
+v2: event-stream, incident-lifecycle 추가 (TASK 43).
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/watch/intelligence", tags=["\uc6b4\uc601\uc9c0\ub2a5"])
+router = APIRouter(prefix="/watch/intelligence", tags=["운영지능"])
 
 
 def _sb():
@@ -19,7 +20,6 @@ def _sb():
 
 @router.get("/repeated-failures")
 def get_repeated_failures(hours: int = 24):
-    """\ubc18\ubcf5 \uc2e4\ud328 Intelligence."""
     try:
         from watch_engine.intelligence import analyze_repeated_failures
         results = analyze_repeated_failures(_sb(), hours=hours)
@@ -30,7 +30,6 @@ def get_repeated_failures(hours: int = 24):
 
 @router.get("/patterns")
 def get_patterns(hours: int = 48):
-    """\uc6b4\uc601 \ud328\ud134 \ucd94\uc138."""
     try:
         from watch_engine.intelligence import analyze_patterns
         results = analyze_patterns(_sb(), hours=hours)
@@ -41,7 +40,6 @@ def get_patterns(hours: int = 48):
 
 @router.get("/tenant-degradation")
 def get_tenant_degradation(hours: int = 24):
-    """\ud14c\ub10c\ud2b8 \uc545\ud654 \uac10\uc9c0."""
     try:
         from watch_engine.intelligence import analyze_tenant_degradation
         results = analyze_tenant_degradation(_sb(), hours=hours)
@@ -52,7 +50,6 @@ def get_tenant_degradation(hours: int = 24):
 
 @router.get("/recovery-recommendations")
 def get_recovery_recommendations(event_type: str = None):
-    """\ubcf5\uad6c \ucd94\ucc9c."""
     try:
         from watch_engine.intelligence import recommend_recovery
         results = recommend_recovery(_sb(), event_type=event_type)
@@ -63,23 +60,20 @@ def get_recovery_recommendations(event_type: str = None):
 
 @router.get("/summary")
 def get_intelligence_summary(hours: int = 24):
-    """Intelligence \uc694\uc57d."""
     try:
         from watch_engine.intelligence import (
             analyze_repeated_failures, analyze_patterns,
             analyze_tenant_degradation, recommend_recovery,
         )
         sb = _sb()
-
         repeated = analyze_repeated_failures(sb, hours=hours)
         patterns = analyze_patterns(sb, hours=hours * 2)
         degradation = analyze_tenant_degradation(sb, hours=hours)
         recovery = recommend_recovery(sb)
 
-        # \uc704\ud5d8 \uc694\uc57d
         critical_repeated = sum(1 for r in repeated if r.severity == "CRITICAL")
         accelerating = sum(1 for p in patterns if p.details.get("trend") == "ACCELERATING")
-        degrading_tenants = sum(1 for d in degradation if "\uc545\ud654" in d.summary)
+        degrading_tenants = sum(1 for d in degradation if "악화" in d.summary)
         top_risk = max((r.risk_score for r in repeated), default=0)
 
         return {"status": "success", "data": {
@@ -93,6 +87,95 @@ def get_intelligence_summary(hours: int = 24):
             "top_risk_score": top_risk,
             "analysis_hours": hours,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+        }}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ═══ Event Stream (TASK 43) ═══
+
+@router.get("/event-stream")
+def get_event_stream(limit: int = 50):
+    """최근 운영 이벤트 스트림 (Canonical Event 기반)."""
+    try:
+        sb = _sb()
+
+        # business_event 최근
+        be = sb.table("business_event") \
+            .select("id,tenant_id,flow_key,step_key,event_type,result,created_at") \
+            .neq("environment", "mock") \
+            .order("created_at", desc=True).limit(limit // 2).execute()
+
+        # integrity_event 최근
+        ie = sb.table("engine_integrity_event") \
+            .select("id,tenant_id,flow_key,event_type,severity,description,created_at") \
+            .neq("environment", "mock") \
+            .order("created_at", desc=True).limit(limit // 2).execute()
+
+        stream = []
+        for e in (be.data or []):
+            canonical = f"workflow.{e.get('result', 'unknown')}" if e.get("result") else "workflow.event"
+            stream.append({
+                "event_type": canonical,
+                "source": "workflow",
+                "severity": "WARNING" if e.get("result") == "failure" else "INFO",
+                "tenant_id": e.get("tenant_id"),
+                "flow_key": e.get("flow_key"),
+                "step_key": e.get("step_key"),
+                "summary": f"{e.get('flow_key', '')}.{e.get('step_key', '')} → {e.get('result', '')}",
+                "created_at": e.get("created_at"),
+            })
+
+        for e in (ie.data or []):
+            stream.append({
+                "event_type": f"watch.{e.get('event_type', '')}",
+                "source": "control",
+                "severity": e.get("severity", "WARNING"),
+                "tenant_id": e.get("tenant_id"),
+                "flow_key": e.get("flow_key"),
+                "summary": e.get("description", "")[:100],
+                "created_at": e.get("created_at"),
+            })
+
+        stream.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return {"status": "success", "data": stream[:limit], "total": len(stream)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ═══ Incident Lifecycle (TASK 43) ═══
+
+@router.get("/incident-lifecycle")
+def get_incident_lifecycle(hours: int = 24):
+    """Incident 상태별 현황."""
+    try:
+        sb = _sb()
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+        issues = sb.table("engine_integrity_event") \
+            .select("id,resolved,ignored,severity,event_type") \
+            .neq("environment", "mock") \
+            .not_.is_("trace_id", "null") \
+            .gte("created_at", since).execute()
+
+        actions = sb.table("incident_action_log") \
+            .select("action_type") \
+            .gte("created_at", since).execute()
+
+        detected = len(issues.data or [])
+        resolved = sum(1 for i in (issues.data or []) if i.get("resolved"))
+        ignored = sum(1 for i in (issues.data or []) if i.get("ignored"))
+        active = detected - resolved - ignored
+        acknowledged = sum(1 for a in (actions.data or []) if a.get("action_type") == "ACKNOWLEDGED")
+        escalated = sum(1 for a in (actions.data or []) if a.get("action_type") == "ESCALATED")
+
+        return {"status": "success", "data": {
+            "detected": detected,
+            "active": active,
+            "acknowledged": acknowledged,
+            "escalated": escalated,
+            "resolved": resolved,
+            "ignored": ignored,
         }}
     except Exception as e:
         return {"status": "error", "message": str(e)}
