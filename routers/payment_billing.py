@@ -28,6 +28,7 @@ payments.py(단건결제)와는 별도 파일로 분리. 동일한 prefix="/paym
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -442,6 +443,52 @@ def _fail_subscription_by_oid(supabase, oid: str, reason: str) -> None:
     }).eq("inicis_order_id", oid).execute()
 
 
+async def _wire_payment_failed(
+    *,
+    company_id,
+    order_id: str,
+    result_msg: str = "",
+    plan_name: str = "",
+) -> None:
+    try:
+        from services.notification_engine.event_wiring import wire_and_emit
+
+        await wire_and_emit(
+            event_type="payment_failed",
+            payload={
+                "title": "결제 실패",
+                "body": f"결제가 실패했습니다. 사유: {result_msg or '알 수 없음'}",
+                "company_id": str(company_id) if company_id else None,
+                "order_id": order_id,
+                "plan_name": plan_name or None,
+            },
+        )
+    except Exception as e:
+        log.warning("[NOTIF] wire_and_emit failed: %s", e)
+
+
+async def _wire_subscription_activated(
+    *,
+    company_id,
+    order_id: str,
+    plan_name: str = "",
+) -> None:
+    try:
+        from services.notification_engine.event_wiring import wire_and_emit
+
+        await wire_and_emit(
+            event_type="subscription_activated",
+            payload={
+                "title": f"구독 활성화: {plan_name or 'TAI Safe'}",
+                "body": "결제 완료. 구독이 활성화되었습니다.",
+                "company_id": str(company_id) if company_id else None,
+                "order_id": order_id,
+            },
+        )
+    except Exception as e:
+        log.warning("[NOTIF] wire_and_emit failed: %s", e)
+
+
 # ── 엔드포인트 ────────────────────────────────────────────────────────
 
 @router.post("/inicis/billing/prepare")
@@ -545,6 +592,23 @@ async def billing_return(request: Request):
 
     if result_code and result_code != "0000":
         _fail_subscription_by_oid(supabase, order_id, result_msg or "인증 실패")
+        try:
+            sub_fail = (
+                supabase.table("subscriptions")
+                .select("company_id, plan_name")
+                .eq("inicis_order_id", order_id)
+                .limit(1)
+                .execute()
+            )
+            sub_row = sub_fail.data[0] if sub_fail.data else {}
+            asyncio.create_task(_wire_payment_failed(
+                company_id=sub_row.get("company_id"),
+                order_id=order_id,
+                result_msg=result_msg or "인증 실패",
+                plan_name=sub_row.get("plan_name") or "",
+            ))
+        except Exception as e:
+            log.warning("[NOTIF] payment_failed schedule failed: %s", e)
         return RedirectResponse(
             f"{FRONT_RETURN_URL}?resultCode=FAIL&msg={urllib.parse.quote(result_msg or '인증 실패')}&oid={order_id}",
             status_code=302,
@@ -670,6 +734,11 @@ async def billing_return(request: Request):
     )
 
     if charge_res.get("success"):
+        asyncio.create_task(_wire_subscription_activated(
+            company_id=subscription.get("company_id"),
+            order_id=order_id,
+            plan_name=subscription.get("plan_name") or "TAI Safe",
+        ))
         qs = urllib.parse.urlencode({
             "resultCode":      "00",
             "oid":             order_id,
@@ -684,6 +753,12 @@ async def billing_return(request: Request):
         return RedirectResponse(f"{FRONT_RETURN_URL}?{qs}", status_code=302)
 
     fail_msg = charge_res.get("result", {}).get("resultMsg", "첫 결제 실패")
+    asyncio.create_task(_wire_payment_failed(
+        company_id=subscription.get("company_id"),
+        order_id=order_id,
+        result_msg=str(fail_msg),
+        plan_name=subscription.get("plan_name") or "",
+    ))
     return RedirectResponse(
         f"{FRONT_RETURN_URL}?resultCode=FAIL&msg={urllib.parse.quote(str(fail_msg))}&oid={order_id}",
         status_code=302,
