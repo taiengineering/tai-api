@@ -111,6 +111,45 @@ def _resolve_lat_lon(site: dict) -> tuple[float, float]:
     return 37.5665, 126.9780
 
 
+def _alert_type_from_work_stop(weather_data: dict) -> str:
+    ws = weather_data.get("work_stop") if isinstance(weather_data, dict) else None
+    if not isinstance(ws, dict) or not ws.get("required"):
+        return ""
+    reasons = ws.get("reasons") or []
+    parts: list[str] = []
+    for r in reasons[:3]:
+        if isinstance(r, dict):
+            parts.append(str(r.get("code") or r.get("name") or r.get("msg") or ""))
+        else:
+            parts.append(str(r))
+    return ", ".join(p for p in parts if p) or "WORK_STOP"
+
+
+async def _wire_weather_work_stop(
+    *,
+    region: str,
+    alert_type: str,
+    site_id: Optional[str] = None,
+    site_name: Optional[str] = None,
+) -> None:
+    try:
+        from services.notification_engine.event_wiring import wire_and_emit
+
+        region_label = region or (site_name or "")
+        await wire_and_emit(
+            event_type="weather_work_stop",
+            payload={
+                "title": f"작업중지 경보: {alert_type or '기상 기준 초과'}",
+                "body": f"{region_label} 지역 작업중지 경보가 발령되었습니다.".strip(),
+                "region": region,
+                "alert_type": alert_type,
+                "site_id": str(site_id) if site_id else None,
+            },
+        )
+    except Exception as e:
+        log.warning("[NOTIF] weather_work_stop wire failed: %s", e)
+
+
 # ── 콘크리트 라우트 먼저 선언 ──────────────────────────────────────────
 
 @router.get("/work-stop-criteria")
@@ -143,6 +182,18 @@ async def get_work_stoppage_by_site(
 
     # Edge Function 호출 (weather/now 액션)
     weather_data = await _edge_call({"action": "now", "lat": str(lat), "lon": str(lon)})
+
+    alert_type = _alert_type_from_work_stop(weather_data)
+    if alert_type:
+        region = " ".join(
+            p for p in (site.get("site_sido"), site.get("site_sigungu")) if p
+        ) or (site.get("site_name") or "")
+        await _wire_weather_work_stop(
+            region=region,
+            alert_type=alert_type,
+            site_id=site_id,
+            site_name=site.get("site_name"),
+        )
 
     return {
         "status": "success",
@@ -179,7 +230,14 @@ async def get_weather_now(
     lon: float = Query(..., description="경도 (예: 126.9780)"),
 ):
     """현재 날씨 + 작업중지 판단 (Edge Function 경유 → apihub.kma.go.kr)"""
-    return await _edge_call({"action": "now", "lat": str(lat), "lon": str(lon)})
+    weather_data = await _edge_call({"action": "now", "lat": str(lat), "lon": str(lon)})
+    alert_type = _alert_type_from_work_stop(weather_data)
+    if alert_type:
+        await _wire_weather_work_stop(
+            region=f"{lat},{lon}",
+            alert_type=alert_type,
+        )
+    return weather_data
 
 
 @router.get("/alert")
@@ -190,4 +248,18 @@ async def get_weather_alert(
     payload: dict = {"action": "alert"}
     if region_code:
         payload["region_code"] = region_code
-    return await _edge_call(payload)
+    alert_data = await _edge_call(payload)
+    alerts = []
+    if isinstance(alert_data, dict):
+        alerts = alert_data.get("alerts") or alert_data.get("items") or alert_data.get("data") or []
+    if alerts:
+        first = alerts[0] if isinstance(alerts[0], dict) else {}
+        alert_type = str(
+            first.get("alert_type")
+            or first.get("warn_type")
+            or first.get("category")
+            or "SPECIAL_ALERT"
+        )
+        region = str(first.get("region") or first.get("region_name") or region_code or "")
+        await _wire_weather_work_stop(region=region, alert_type=alert_type)
+    return alert_data

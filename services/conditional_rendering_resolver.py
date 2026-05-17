@@ -52,42 +52,19 @@ def evaluate_condition(rule: dict, context: dict) -> bool:
         return False
 
 
-def _rule_unmet_description(rule: dict, context: dict) -> str:
-    field = rule.get("condition") or rule.get("field")
-    op = rule.get("operator", "=")
-    expected = rule.get("value")
-    actual = context.get(field) if field else None
-    return (
-        f"conditional_rule not satisfied: {field!r} {op} {expected!r} "
-        f"(context[{field!r}]={actual!r})"
-    )
-
-
 def resolve_conditional_fields(fields: list, context: dict) -> list:
     """필드 목록에서 조건부 필드를 필터링"""
     result = []
     for f in fields:
         rule_str = f.get("conditional_rule")
         if rule_str:
-            try:
-                rule = rule_str if isinstance(rule_str, dict) else json.loads(rule_str)
-            except (json.JSONDecodeError, TypeError):
-                f["visible"] = True
-                f["condition_evaluated"] = False
-                f["conditional_reason"] = "invalid_conditional_rule_json"
-                result.append(f)
-                continue
+            rule = rule_str if isinstance(rule_str, dict) else json.loads(rule_str)
             visible = evaluate_condition(rule, context)
             f["visible"] = visible
             f["condition_evaluated"] = True
             f["condition_result"] = visible
-            if not visible:
-                f["conditional_reason"] = _rule_unmet_description(rule, context)
-            else:
-                f.pop("conditional_reason", None)
         else:
             f["visible"] = True
             f["condition_evaluated"] = False
-            f.pop("conditional_reason", None)
         result.append(f)
     return result

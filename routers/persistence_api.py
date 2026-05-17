@@ -1,5 +1,6 @@
 """TAI Persistence API v1.0.0
 Prefix: /persistence
+장기 운영 deterministic consistency.
 """
 from fastapi import APIRouter,HTTPException,Query
 from typing import Optional

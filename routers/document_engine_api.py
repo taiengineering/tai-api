@@ -1,79 +1,209 @@
 """TAI 문서엔진 API v1.0.0
+
 Prefix: /document-engine
+Guardrails:
+  - 상태 전이는 runtime_state_transition_rule 기준만
+  - APPROVED_BY_HUMAN 시 reviewer_id 필수
+  - review_comment 필수 (REJECT/RETURN)
+  - 모든 상태 변경 audit log 기록
+  - generated_document는 입력된 값만 사용
+  - 누락값은 빈 값 유지
+  - evidence는 실제 파일만
+  - source_trace 항상 유지
 """
-from fastapi import APIRouter,HTTPException,Query
+from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
-from schemas.document_engine import DocumentCreateIn,DocumentUpdateIn,StatusChangeIn,EvidenceLinkIn,GenerateDocumentIn
+from schemas.document_engine import (
+    DocumentCreateIn,
+    DocumentUpdateIn,
+    StatusChangeIn,
+    EvidenceLinkIn,
+    GenerateDocumentIn,
+)
 from services import document_engine_svc as svc
 
-router=APIRouter(prefix="/document-engine",tags=["문서엔진"])
+router = APIRouter(prefix="/document-engine", tags=["문서엔진"])
+
+
+# ═══════════════════════════════════════════════════════
+# 1. Runtime Form Schema
+# ═══════════════════════════════════════════════════════
 
 @router.get("/schemas")
-def list_schemas(document_family:Optional[str]=Query(None),form_type:Optional[str]=Query(None),status:Optional[str]=Query(None),page:int=Query(1,ge=1),page_size:int=Query(20,ge=1,le=100)):
-    return{"status":"success","data":svc.list_form_schemas(document_family,form_type,status,page,page_size)}
+def list_schemas(
+    document_family: Optional[str] = Query(None),
+    form_type: Optional[str] = Query(
+        None, description="OFFICIAL|CUSTOM|INTERNAL"
+    ),
+    status: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    """Runtime Form Schema 목록 조회"""
+    result = svc.list_form_schemas(
+        document_family, form_type, status, page, page_size
+    )
+    return {"status": "success", "data": result}
+
 
 @router.get("/schemas/{schema_id}")
-def get_schema_detail(schema_id:str):
-    r=svc.get_form_schema_detail(schema_id)
-    if not r:raise HTTPException(404,"schema not found")
-    return{"status":"success","data":r}
+def get_schema_detail(schema_id: str):
+    """Schema 상세: fields + checklists + evidence_fields"""
+    result = svc.get_form_schema_detail(schema_id)
+    if not result:
+        raise HTTPException(404, "schema not found")
+    return {"status": "success", "data": result}
+
+
+# ═══════════════════════════════════════════════════════
+# 2. Runtime Document CRUD
+# ═══════════════════════════════════════════════════════
 
 @router.post("/documents")
-def create_document(body:DocumentCreateIn):
-    try:return{"status":"success","data":svc.create_document(body.form_schema_id,body.factory_id,body.company_id,body.created_by)}
-    except ValueError as e:raise HTTPException(400,str(e))
+def create_document(body: DocumentCreateIn):
+    """문서 생성 (DRAFT 상태)"""
+    try:
+        result = svc.create_document(
+            body.form_schema_id,
+            body.factory_id,
+            body.company_id,
+            body.created_by,
+        )
+        return {"status": "success", "data": result}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
 
 @router.get("/documents")
-def list_documents(factory_id:Optional[str]=Query(None),company_id:Optional[str]=Query(None),status:Optional[str]=Query(None),page:int=Query(1,ge=1),page_size:int=Query(20,ge=1,le=100)):
-    return{"status":"success","data":svc.list_documents(factory_id,company_id,status,page,page_size)}
+def list_documents(
+    factory_id: Optional[str] = Query(None),
+    company_id: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    """문서 목록 조회"""
+    result = svc.list_documents(
+        factory_id, company_id, status, page, page_size
+    )
+    return {"status": "success", "data": result}
+
 
 @router.get("/documents/{doc_id}")
-def get_document(doc_id:str):
-    r=svc.get_document(doc_id)
-    if not r:raise HTTPException(404,"document not found")
-    return{"status":"success","data":r}
+def get_document(doc_id: str):
+    """문서 상세 조회"""
+    result = svc.get_document(doc_id)
+    if not result:
+        raise HTTPException(404, "document not found")
+    return {"status": "success", "data": result}
+
 
 @router.patch("/documents/{doc_id}")
-def update_document(doc_id:str,body:DocumentUpdateIn):
-    try:return{"status":"success","data":svc.update_document(doc_id,body.runtime_data_json,body.evidence_links,body.updated_by)}
-    except ValueError as e:raise HTTPException(400,str(e))
+def update_document(doc_id: str, body: DocumentUpdateIn):
+    """문서 데이터 수정 (runtime_data_json, evidence_links)"""
+    try:
+        result = svc.update_document(
+            doc_id,
+            body.runtime_data_json,
+            body.evidence_links,
+            body.updated_by,
+        )
+        return {"status": "success", "data": result}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+# ═══════════════════════════════════════════════════════
+# 3. 상태 전이
+# ═══════════════════════════════════════════════════════
 
 @router.post("/documents/{doc_id}/status")
-def change_status(doc_id:str,body:StatusChangeIn):
-    try:return{"status":"success","data":svc.change_status(doc_id,body.to_status,body.actor_id,body.comment)}
-    except ValueError as e:raise HTTPException(400,str(e))
+def change_status(doc_id: str, body: StatusChangeIn):
+    """상태 전이 — runtime_state_transition_rule 기준만 허용"""
+    try:
+        result = svc.change_status(
+            doc_id, body.to_status, body.actor_id, body.comment
+        )
+        return {"status": "success", "data": result}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
 
 @router.get("/transitions")
 def list_transitions():
-    return{"status":"success","data":svc.get_transitions()}
+    """허용된 상태 전이 규칙 목록"""
+    return {"status": "success", "data": svc.get_transitions()}
+
+
+# ═══════════════════════════════════════════════════════
+# 4. Evidence
+# ═══════════════════════════════════════════════════════
 
 @router.post("/documents/{doc_id}/evidence")
-def add_evidence(doc_id:str,body:EvidenceLinkIn):
-    d=svc.get_document(doc_id)
-    if not d:raise HTTPException(404,"document not found")
-    return{"status":"success","data":svc.link_evidence(doc_id,body.evidence_type,body.storage_path,body.file_name,body.file_size,body.mime_type,body.linked_field_id,body.uploaded_by)}
+def add_evidence(doc_id: str, body: EvidenceLinkIn):
+    """증빙 파일 링크 등록"""
+    doc = svc.get_document(doc_id)
+    if not doc:
+        raise HTTPException(404, "document not found")
+    result = svc.link_evidence(
+        doc_id,
+        body.evidence_type,
+        body.storage_path,
+        body.file_name,
+        body.file_size,
+        body.mime_type,
+        body.linked_field_id,
+        body.uploaded_by,
+    )
+    return {"status": "success", "data": result}
+
 
 @router.get("/documents/{doc_id}/evidence")
-def list_evidence(doc_id:str):
-    return{"status":"success","data":svc.list_evidence(doc_id)}
+def list_evidence(doc_id: str):
+    """문서의 증빙 목록"""
+    return {"status": "success", "data": svc.list_evidence(doc_id)}
+
+
+# ═══════════════════════════════════════════════════════
+# 5. Generated Document
+# ═══════════════════════════════════════════════════════
 
 @router.post("/documents/{doc_id}/generate")
-def generate_document(doc_id:str,body:GenerateDocumentIn):
-    try:return{"status":"success","data":svc.generate_document(doc_id,body.export_type)}
-    except ValueError as e:raise HTTPException(400,str(e))
+def generate_document(doc_id: str, body: GenerateDocumentIn):
+    """문서 생성 (입력값만 사용, auto fill 금지)"""
+    try:
+        result = svc.generate_document(doc_id, body.export_type)
+        return {"status": "success", "data": result}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
 
 @router.get("/documents/{doc_id}/generated")
-def list_generated(doc_id:str):
-    return{"status":"success","data":svc.list_generated(doc_id)}
+def list_generated(doc_id: str):
+    """생성된 문서 목록"""
+    return {"status": "success", "data": svc.list_generated(doc_id)}
+
+
+# ═══════════════════════════════════════════════════════
+# 6. Metrics & Audit
+# ═══════════════════════════════════════════════════════
 
 @router.get("/metrics")
 def get_metrics():
-    return{"status":"success","data":svc.get_metrics()}
+    """전체 Runtime 메트릭"""
+    return {"status": "success", "data": svc.get_metrics()}
+
 
 @router.get("/metrics/factory/{factory_id}")
-def get_factory_metrics(factory_id:str):
-    return{"status":"success","data":svc.get_metrics_by_factory(factory_id)}
+def get_factory_metrics(factory_id: str):
+    """시설별 메트릭"""
+    return {
+        "status": "success",
+        "data": svc.get_metrics_by_factory(factory_id),
+    }
+
 
 @router.get("/documents/{doc_id}/audit-log")
-def get_audit_log(doc_id:str):
-    return{"status":"success","data":svc.get_audit_log(doc_id)}
+def get_audit_log(doc_id: str):
+    """문서 감사 로그"""
+    return {"status": "success", "data": svc.get_audit_log(doc_id)}

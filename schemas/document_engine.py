@@ -5,6 +5,8 @@ from uuid import UUID
 from datetime import datetime
 
 
+# ─── Request ───
+
 class DocumentCreateIn(BaseModel):
     form_schema_id: str
     factory_id: Optional[str] = None

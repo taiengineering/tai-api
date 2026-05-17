@@ -24,8 +24,10 @@ API:
   POST /overdue/resolve/{history_id} 지연 해소 해주기
 """
 from __future__ import annotations
+import asyncio
 import logging
 import os
+import threading
 from datetime import date, datetime, timezone, timedelta
 from typing import Optional, Any
 
@@ -65,6 +67,25 @@ _LEVELS = [
 
 def _today() -> date:
     return datetime.now(timezone.utc).date()
+
+
+def _schedule_wire_and_emit(event_type: str, payload: dict) -> None:
+    """034: sync cron path → fire-and-forget async wire_and_emit."""
+
+    async def _run() -> None:
+        try:
+            from services.notification_engine.event_wiring import wire_and_emit
+            await wire_and_emit(event_type=event_type, payload=payload)
+        except Exception as e:
+            log.warning("[NOTIF] %s wire failed: %s", event_type, e)
+
+    def _thread_main() -> None:
+        try:
+            asyncio.run(_run())
+        except Exception as e:
+            log.warning("[NOTIF] %s wire thread failed: %s", event_type, e)
+
+    threading.Thread(target=_thread_main, daemon=True).start()
 
 
 def _effective_due(wa: dict) -> Optional[date]:
@@ -276,6 +297,17 @@ def _process_one(sb, wa: dict, today: date) -> dict:
     company_id = worker_info.get("company_id")
     trace_id = f"overdue-{wa_id}"
 
+    factory_name = ""
+    if factory_id:
+        try:
+            fr = sb.table("factories").select("factory_name").eq("id", factory_id).limit(1).execute()
+            if fr.data:
+                factory_name = fr.data[0].get("factory_name") or ""
+        except Exception:
+            pass
+
+    inspection_id = wa.get("inspection_set_id") or wa.get("inspection_id")
+
     # 메시지 생성
     worker_name = worker_info.get("name") or "\uc791\uc5c5\uc790"
     msg = (msg_tpl
@@ -354,6 +386,20 @@ def _process_one(sb, wa: dict, today: date) -> dict:
             sb.table("work_assignments").update({"status_code": "OVERDUE"}).eq("id", wa_id).execute()
         except Exception as e:
             log.error("[OVERDUE] status OVERDUE 업데이트 실패: %s", e)
+
+    # ── Notification Runtime (034) ──
+    _schedule_wire_and_emit(
+        "schedule_overdue",
+        {
+            "title": f"점검 미이행: {task_name}",
+            "body": f"{factory_name or ''} 점검이 예정일을 초과했습니다.".strip(),
+            "factory_id": str(factory_id) if factory_id else None,
+            "company_id": str(company_id) if company_id else None,
+            "inspection_id": str(inspection_id) if inspection_id else None,
+            "assignment_id": str(wa_id),
+            "overdue_level": lvl,
+        },
+    )
 
     # overdue_level + last_reminded_at 업데이트
     now_iso = datetime.now(timezone.utc).isoformat()

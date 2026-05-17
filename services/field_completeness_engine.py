@@ -35,14 +35,6 @@ def evaluate_field_completeness(field: dict) -> dict:
                     float(value)
                 except (ValueError, TypeError):
                     return {"status": "FAIL", "reason": "invalid_numeric_value"}
-            elif r == "date":
-                try:
-                    from datetime import datetime
-
-                    s = str(value).replace("Z", "+00:00")
-                    datetime.fromisoformat(s)
-                except (ValueError, TypeError):
-                    return {"status": "FAIL", "reason": "invalid_date"}
             elif r == "non_empty":
                 if is_empty:
                     return {"status": "FAIL", "reason": "non_empty_validation_fail"}
@@ -50,9 +42,8 @@ def evaluate_field_completeness(field: dict) -> dict:
                 if is_empty:
                     return {"status": "FAIL", "reason": "signature_missing"}
             elif r == "evidence_required":
-                if field.get("evidence_bound"):
-                    continue
-                return {"status": "FAIL", "reason": "evidence_missing"}
+                if is_empty:
+                    return {"status": "FAIL", "reason": "evidence_missing"}
 
     return {"status": "PASS", "reason": "field_valid"}
 
