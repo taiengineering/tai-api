@@ -23,4 +23,5 @@ ROUTERS = [
     {"module": "routers.runtime_task_api"},
     {"module": "routers.runtime_schedule_api"},
     {"module": "routers.legal_adapter_api"},
+    {"module": "routers.runtime_cockpit_api"},
 ]
