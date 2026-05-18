@@ -2,6 +2,7 @@
 
 Routes:
     POST /trans/translate        — event → human message
+    POST /trans/translate-batch  — events → human messages (batch)
     POST /trans/summary          — events → 상황 요약
     GET  /trans/examples         — 샘플 반환
     POST /trans/build-situation  — events → 운영 상황
@@ -28,6 +29,11 @@ router = APIRouter(prefix="/trans", tags=["Trans Engine"])
 
 class TranslateRequest(BaseModel):
     event: dict[str, Any] = Field(..., description="Runtime event dict")
+    audience: str = Field("operator", description="operator | admin | developer")
+
+
+class BatchTranslateRequest(BaseModel):
+    events: list[dict[str, Any]] = Field(..., description="Runtime event list")
     audience: str = Field("operator", description="operator | admin | developer")
 
 
@@ -104,3 +110,31 @@ async def api_explain_risk(req: RiskRequest):
     if req.risk_level:
         result["risk_level"] = explain_risk_level(req.risk_level)
     return result
+
+
+# ── T-04 Endpoints ─────────────────────────
+
+@router.post("/translate-batch")
+async def api_translate_batch(req: BatchTranslateRequest):
+    """다건 events → Human Messages 배치 변환.
+
+    - 순서 유지
+    - 개별 실패 시 fallback message 반환
+    - N+1 호출 해소용
+    """
+    messages: list[dict[str, Any]] = []
+    for event in req.events:
+        try:
+            msg = translate_event(event, req.audience)
+        except Exception:
+            msg = {
+                "title": "번역 처리 중 오류가 발생했습니다",
+                "summary": "이벤트를 운영 언어로 변환하지 못했습니다.",
+                "urgency": "확인 필요",
+                "impact": "확인 필요",
+                "recommended_checks": ["해당 이벤트 상세를 확인하세요"],
+                "recommended_actions": [],
+                "confidence": 0.0,
+            }
+        messages.append(msg)
+    return {"messages": messages}
