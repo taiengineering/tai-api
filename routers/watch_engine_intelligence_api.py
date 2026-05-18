@@ -1,8 +1,8 @@
-# routers/watch_engine_intelligence_api.py — Operational Intelligence API v2
+# routers/watch_engine_intelligence_api.py — Operational Intelligence API v3
 """
-운영 Intelligence 조회 + Event Stream + Incident Lifecycle.
+운영 Intelligence 조회 + Event Stream + Incident Lifecycle + Synthetic Status.
 Truth 생성 금지. recommendation / prediction / correlation / awareness 전용.
-v2: event-stream, incident-lifecycle 추가 (TASK 43).
+v3: synthetic-status, operational-density, synthetic-event-stream (TASK 46).
 """
 
 import logging
@@ -92,49 +92,48 @@ def get_intelligence_summary(hours: int = 24):
         return {"status": "error", "message": str(e)}
 
 
-# ═══ Event Stream (TASK 43) ═══
+# ═══ Event Stream ═══
 
 @router.get("/event-stream")
-def get_event_stream(limit: int = 50):
-    """최근 운영 이벤트 스트림 (Canonical Event 기반)."""
+def get_event_stream(limit: int = 50, include_mock: bool = False):
+    """최근 운영 이벤트 스트림."""
     try:
         sb = _sb()
+        q_be = sb.table("business_event") \
+            .select("id,tenant_id,flow_key,step_key,event_type,result,environment,created_at") \
+            .order("created_at", desc=True).limit(limit // 2)
+        q_ie = sb.table("engine_integrity_event") \
+            .select("id,tenant_id,flow_key,event_type,severity,description,environment,created_at") \
+            .order("created_at", desc=True).limit(limit // 2)
 
-        # business_event 최근
-        be = sb.table("business_event") \
-            .select("id,tenant_id,flow_key,step_key,event_type,result,created_at") \
-            .neq("environment", "mock") \
-            .order("created_at", desc=True).limit(limit // 2).execute()
+        if not include_mock:
+            q_be = q_be.neq("environment", "mock")
+            q_ie = q_ie.neq("environment", "mock")
 
-        # integrity_event 최근
-        ie = sb.table("engine_integrity_event") \
-            .select("id,tenant_id,flow_key,event_type,severity,description,created_at") \
-            .neq("environment", "mock") \
-            .order("created_at", desc=True).limit(limit // 2).execute()
+        be = q_be.execute()
+        ie = q_ie.execute()
 
         stream = []
         for e in (be.data or []):
             canonical = f"workflow.{e.get('result', 'unknown')}" if e.get("result") else "workflow.event"
+            is_mock = e.get("environment") == "mock"
             stream.append({
-                "event_type": canonical,
-                "source": "workflow",
+                "event_type": canonical, "source": "workflow",
                 "severity": "WARNING" if e.get("result") == "failure" else "INFO",
-                "tenant_id": e.get("tenant_id"),
-                "flow_key": e.get("flow_key"),
+                "tenant_id": e.get("tenant_id"), "flow_key": e.get("flow_key"),
                 "step_key": e.get("step_key"),
-                "summary": f"{e.get('flow_key', '')}.{e.get('step_key', '')} → {e.get('result', '')}",
-                "created_at": e.get("created_at"),
+                "summary": f"{e.get('flow_key','')}.{e.get('step_key','')} → {e.get('result','')}",
+                "created_at": e.get("created_at"), "synthetic": is_mock,
             })
 
         for e in (ie.data or []):
+            is_mock = e.get("environment") == "mock"
             stream.append({
-                "event_type": f"watch.{e.get('event_type', '')}",
-                "source": "control",
+                "event_type": f"watch.{e.get('event_type','')}", "source": "control",
                 "severity": e.get("severity", "WARNING"),
-                "tenant_id": e.get("tenant_id"),
-                "flow_key": e.get("flow_key"),
-                "summary": e.get("description", "")[:100],
-                "created_at": e.get("created_at"),
+                "tenant_id": e.get("tenant_id"), "flow_key": e.get("flow_key"),
+                "summary": (e.get("description") or "")[:100],
+                "created_at": e.get("created_at"), "synthetic": is_mock,
             })
 
         stream.sort(key=lambda x: x.get("created_at", ""), reverse=True)
@@ -143,24 +142,19 @@ def get_event_stream(limit: int = 50):
         return {"status": "error", "message": str(e)}
 
 
-# ═══ Incident Lifecycle (TASK 43) ═══
+# ═══ Incident Lifecycle ═══
 
 @router.get("/incident-lifecycle")
 def get_incident_lifecycle(hours: int = 24):
-    """Incident 상태별 현황."""
     try:
         sb = _sb()
         since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-
         issues = sb.table("engine_integrity_event") \
             .select("id,resolved,ignored,severity,event_type") \
-            .neq("environment", "mock") \
-            .not_.is_("trace_id", "null") \
+            .neq("environment", "mock").not_.is_("trace_id", "null") \
             .gte("created_at", since).execute()
-
         actions = sb.table("incident_action_log") \
-            .select("action_type") \
-            .gte("created_at", since).execute()
+            .select("action_type").gte("created_at", since).execute()
 
         detected = len(issues.data or [])
         resolved = sum(1 for i in (issues.data or []) if i.get("resolved"))
@@ -170,12 +164,111 @@ def get_incident_lifecycle(hours: int = 24):
         escalated = sum(1 for a in (actions.data or []) if a.get("action_type") == "ESCALATED")
 
         return {"status": "success", "data": {
-            "detected": detected,
-            "active": active,
-            "acknowledged": acknowledged,
-            "escalated": escalated,
-            "resolved": resolved,
-            "ignored": ignored,
+            "detected": detected, "active": active, "acknowledged": acknowledged,
+            "escalated": escalated, "resolved": resolved, "ignored": ignored,
+        }}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ═══ Synthetic Status (TASK 46) ═══
+
+@router.get("/synthetic-status")
+def get_synthetic_status(hours: int = 1):
+    """Synthetic Runtime 실행 현황."""
+    try:
+        sb = _sb()
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+        # Synthetic business_event
+        be = sb.table("business_event").select("id,tenant_id,flow_key,result", count="exact") \
+            .eq("environment", "mock").gte("created_at", since).execute()
+
+        # Synthetic integrity_event
+        ie = sb.table("engine_integrity_event").select("id,severity,event_type", count="exact") \
+            .eq("environment", "mock").gte("created_at", since).execute()
+
+        # Persona 분포
+        persona_counts = {}
+        for e in (be.data or []):
+            tid = e.get("tenant_id", "")
+            persona_counts[tid] = persona_counts.get(tid, 0) + 1
+
+        # Flow 분포
+        flow_counts = {}
+        for e in (be.data or []):
+            fk = e.get("flow_key", "unknown")
+            flow_counts[fk] = flow_counts.get(fk, 0) + 1
+
+        # Result 분포
+        result_counts = {}
+        for e in (be.data or []):
+            r = e.get("result", "unknown")
+            result_counts[r] = result_counts.get(r, 0) + 1
+
+        # Severity 분포 (integrity)
+        sev_counts = {}
+        for e in (ie.data or []):
+            s = e.get("severity", "INFO")
+            sev_counts[s] = sev_counts.get(s, 0) + 1
+
+        # Chaos (integrity에서 CHAOS 포함)
+        chaos_count = sum(1 for e in (ie.data or []) if "CHAOS" in (e.get("event_type") or "").upper()
+                         or "chaos" in (e.get("event_type") or ""))
+
+        # Scheduler 마지막 실행
+        cron_logs = sb.table("cron_job_log").select("job_code,status,started_at,duration_seconds") \
+            .in_("job_code", ["SYNTHETIC_RUNTIME_TICK", "SYNTHETIC_CHAOS_INJECTION", "CONTROL_BRIDGE_EVALUATE"]) \
+            .order("started_at", desc=True).limit(6).execute()
+
+        return {"status": "success", "data": {
+            "window_hours": hours,
+            "workflow_events": be.count or len(be.data or []),
+            "integrity_events": ie.count or len(ie.data or []),
+            "active_tenants": len(persona_counts),
+            "tenant_distribution": dict(sorted(persona_counts.items(), key=lambda x: -x[1])[:10]),
+            "flow_distribution": dict(sorted(flow_counts.items(), key=lambda x: -x[1])),
+            "result_distribution": result_counts,
+            "severity_distribution": sev_counts,
+            "chaos_events": chaos_count,
+            "scheduler_recent": cron_logs.data or [],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ═══ Operational Density (TASK 46) ═══
+
+@router.get("/operational-density")
+def get_operational_density(hours: int = 1):
+    """운영 밀도 KPI."""
+    try:
+        sb = _sb()
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+        be_count = sb.table("business_event").select("id", count="exact") \
+            .eq("environment", "mock").gte("created_at", since).execute()
+        ie_count = sb.table("engine_integrity_event").select("id", count="exact") \
+            .eq("environment", "mock").gte("created_at", since).execute()
+
+        wf_total = be_count.count or 0
+        ie_total = ie_count.count or 0
+
+        # WARNING/CRITICAL 카운트
+        warnings = sb.table("engine_integrity_event").select("id", count="exact") \
+            .eq("environment", "mock").eq("severity", "WARNING").gte("created_at", since).execute()
+        criticals = sb.table("engine_integrity_event").select("id", count="exact") \
+            .eq("environment", "mock").eq("severity", "CRITICAL").gte("created_at", since).execute()
+
+        return {"status": "success", "data": {
+            "window_hours": hours,
+            "workflow_per_hour": round(wf_total / max(hours, 1), 1),
+            "incident_per_hour": round(ie_total / max(hours, 1), 1),
+            "warning_count": warnings.count or 0,
+            "critical_count": criticals.count or 0,
+            "total_events": wf_total + ie_total,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }}
     except Exception as e:
         return {"status": "error", "message": str(e)}
