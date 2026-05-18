@@ -47,4 +47,5 @@ ROUTERS = [
     {"module": "routers.control_runtime_gateway_api"},
     {"module": "routers.synthetic_control_api"},
     {"module": "routers.calibration_api"},
+    {"module": "routers.feedback_api"},
 ]
