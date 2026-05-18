@@ -45,4 +45,6 @@ ROUTERS = [
     {"module": "routers.semantic_adapter_api"},
     {"module": "routers.production_guard_api"},
     {"module": "routers.control_runtime_gateway_api"},
+    {"module": "routers.synthetic_control_api"},
+    {"module": "routers.calibration_api"},
 ]
