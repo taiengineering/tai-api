@@ -35,7 +35,9 @@ async def create_schedule(data: dict[str, Any]) -> dict:
 async def check_overdue_schedules() -> list[dict]:
     """Find active schedules past due date and emit overdue events.
 
-    Intended to be called by a scheduler/cron.
+    - Skips tasks already completed or overdue (no duplicate processing)
+    - Uses idempotency_key (schedule_id + date) to prevent duplicate events
+    - Intended to be called by a scheduler/cron
     """
     sb = get_supabase()
     today = date.today().isoformat()
@@ -51,16 +53,20 @@ async def check_overdue_schedules() -> list[dict]:
 
     for sched in overdue:
         task = sched.get("runtime_task", {})
-        if not task or task.get("status") == "completed":
+        if not task:
             continue
 
-        # Mark task overdue (if not already)
-        if task.get("status") not in ("completed", "overdue"):
-            sb.table("runtime_task").update(
-                {"status": "overdue"}
-            ).eq("id", task["id"]).execute()
+        # Skip completed or already-overdue tasks
+        if task.get("status") in ("completed", "overdue"):
+            continue
 
-        # Emit overdue event
+        # Mark task overdue
+        sb.table("runtime_task").update(
+            {"status": "overdue"}
+        ).eq("id", task["id"]).execute()
+
+        # Emit overdue event with idempotency_key
+        idem_key = f"overdue:{sched['id']}:{today}"
         envelope = create_envelope(
             event_type="runtime.schedule_overdue",
             tenant_id=sched["tenant_id"],
@@ -72,6 +78,7 @@ async def check_overdue_schedules() -> list[dict]:
                 "next_due_date": sched["next_due_date"],
                 "overdue_since": today,
             },
+            idempotency_key=idem_key,
         )
         await emit_envelope(envelope)
         events_emitted.append(envelope.model_dump(mode="json"))
