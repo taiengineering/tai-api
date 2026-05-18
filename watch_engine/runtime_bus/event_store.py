@@ -6,14 +6,12 @@ NOT NULL 컬럼에 기본값 제공.
 
 import logging
 import json
-from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger("watch_engine.runtime_bus.store")
 
 
 def store_business_event(sb, ctx, event: dict) -> Optional[str]:
-    """business_event 테이블에 저장."""
     try:
         row = {
             "tenant_id": event.get("tenant_id") or ctx.tenant_id or "system",
@@ -35,7 +33,6 @@ def store_business_event(sb, ctx, event: dict) -> Optional[str]:
 
 
 def store_integrity_event(sb, ctx, event: dict) -> Optional[str]:
-    """engine_integrity_event 테이블에 저장."""
     try:
         row = {
             "tenant_id": event.get("tenant_id") or ctx.tenant_id or "system",
@@ -49,7 +46,10 @@ def store_integrity_event(sb, ctx, event: dict) -> Optional[str]:
             "health_status": _severity_to_health(event.get("severity", "INFO")),
             "domain": event.get("flow_key") or "",
             "description": event.get("description") or f"[BUS] {event.get('event_type', '')}",
+            "source_trace": event.get("trace_id") or "bus",
             "resolved": False,
+            "acknowledged": False,
+            "ignored": False,
         }
         if event.get("step_key"):
             row["step_key"] = event["step_key"]
@@ -62,19 +62,17 @@ def store_integrity_event(sb, ctx, event: dict) -> Optional[str]:
         return None
 
 
-def _map_event_type(event_type: str) -> str:
+def _map_event_type(event_type):
     parts = event_type.split(".")
-    if len(parts) >= 2:
-        return parts[-1]
-    return event_type
+    return parts[-1] if len(parts) >= 2 else event_type
 
 
-def _map_result(event: dict) -> str:
+def _map_result(event):
     et = event.get("event_type", "")
     if "failed" in et or "timeout" in et or "blocked" in et:
         return "failure"
     return "success"
 
 
-def _severity_to_health(severity: str) -> str:
+def _severity_to_health(severity):
     return {"INFO": "ok", "WARNING": "warning", "CRITICAL": "critical", "FATAL": "critical"}.get(severity, "unknown")
