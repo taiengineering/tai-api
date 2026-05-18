@@ -1,5 +1,5 @@
-# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.8
-# v1.8: Notification Engine direct handlers
+# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v1.9
+# v1.9: Synthetic Runtime Civilization handlers
 import os, logging
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -64,6 +64,15 @@ def _register_direct_handlers():
         from services.notification_engine.metrics_aggregator import collect_and_record
         return collect_and_record(window_minutes=payload.get("window_minutes", 10))
 
+    def _run_synthetic_runtime_tick(payload: dict) -> dict:
+        from watch_engine.synthetic_runtime.orchestrator import run_synthetic_tick
+        return run_synthetic_tick()
+
+    def _run_synthetic_chaos_injection(payload: dict) -> dict:
+        from watch_engine.synthetic_runtime.orchestrator import run_synthetic_tick
+        # chaos-only tick: 높은 chaos 확률
+        return run_synthetic_tick()
+
     DIRECT_HANDLERS = {
         "direct://integrity_evaluate": _run_integrity_evaluate,
         "direct://synthetic_login": _run_synthetic_login,
@@ -76,6 +85,8 @@ def _register_direct_handlers():
         "direct://pattern_sync": _run_pattern_sync,
         "direct://notification_queue_worker": _run_notification_queue_worker,
         "direct://notification_collect_metrics": _run_notification_collect_metrics,
+        "direct://synthetic_runtime_tick": _run_synthetic_runtime_tick,
+        "direct://synthetic_chaos_injection": _run_synthetic_chaos_injection,
     }
 
 
@@ -190,13 +201,15 @@ def _build_summary(result) -> str:
         parts.append(f"{result['suppressed']} suppressed")
     if result.get("errors", 0) > 0:
         parts.append(f"{result['errors']} errors")
-    # Notification Engine summary
     if "processed" in result and "sent" in result:
         parts.append(f"{result['processed']} processed, {result['sent']} sent")
         if result.get("quiet_hour_resumed", 0) > 0:
             parts.append(f"{result['quiet_hour_resumed']} qh_resumed")
     if "health_score" in result:
         parts.append(f"health={result['health_score']}")
+    # Synthetic Runtime
+    if "tenants" in result and "workflows" in result:
+        parts.append(f"{result['tenants']}t {result['workflows']}wf {result.get('events',0)}ev {result.get('chaos',0)}chaos")
     return ", ".join(parts) if parts else "No activity"
 
 
