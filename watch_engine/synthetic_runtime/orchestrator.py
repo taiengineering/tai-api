@@ -1,11 +1,14 @@
-"""Orchestrator — Synthetic Tick \uc2e4\ud589.
+"""Orchestrator — Synthetic Tick 실행.
 
-\ub9e4 tick\ub9c8\ub2e4:
-1. 20\uac1c tenant \uc21c\ud68c
-2. Persona \uae30\ubc18 workflow \uc2e4\ud589 \uc5ec\ubd80 \uacb0\uc815
-3. Scenario \uc120\ud0dd + \uc2e4\ud589
-4. Chaos \uc8fc\uc785
-5. emit_runtime_event \uacbd\uc720 \uc800\uc7a5
+매 tick마다:
+1. 20개 tenant 순회
+2. Persona 기반 workflow 실행 여부 결정
+3. Scenario 선택 + 실행
+4. Chaos 주입
+5. emit_runtime_event 경유 저장
+
+중요: Workflow Runtime은 severity=INFO만 설정 가능.
+WARNING/CRITICAL은 Control Bridge가 projection.
 """
 
 import random
@@ -17,7 +20,7 @@ logger = logging.getLogger("watch_engine.synthetic_runtime.orchestrator")
 
 
 def run_synthetic_tick(sb=None) -> dict:
-    """1\ud68c synthetic tick \uc2e4\ud589."""
+    """1회 synthetic tick 실행."""
     from watch_engine.synthetic_runtime.personas import TENANT_PERSONAS, PERSONAS
     from watch_engine.synthetic_runtime.scenarios import SCENARIOS
     from watch_engine.synthetic_runtime.chaos_engine import inject_chaos
@@ -29,7 +32,7 @@ def run_synthetic_tick(sb=None) -> dict:
 
     now = datetime.now(timezone.utc)
     hour = now.hour
-    stats = {"tenants": 0, "workflows": 0, "events": 0, "chaos": 0, "abandoned": 0, "failed": 0}
+    stats = {"tenants": 0, "workflows": 0, "events": 0, "chaos": 0, "abandoned": 0, "failed": 0, "blocked": 0}
 
     scenario_keys = list(SCENARIOS.keys())
 
@@ -40,21 +43,21 @@ def run_synthetic_tick(sb=None) -> dict:
 
         stats["tenants"] += 1
 
-        # \uadfc\ubb34\uc2dc\uac04 \uccb4\ud06c
+        # 근무시간 체크
         wh = persona["working_hours"]
         if wh[0] < wh[1]:
             if not (wh[0] <= hour < wh[1]):
                 continue
-        else:  # \uc57c\uac04 (22~6)
+        else:  # 야간 (22~6)
             if not (hour >= wh[0] or hour < wh[1]):
                 continue
 
-        # workflow \ube48\ub3c4 \uae30\ubc18 \uc2e4\ud589 \uc5ec\ubd80
+        # workflow 빈도 기반 실행 여부
         freq = persona["workflow_freq"]
-        if random.random() > freq * 0.3:  # tick\ub2f9 30% * freq \ud655\ub960
+        if random.random() > freq * 0.3:
             continue
 
-        # burst \uccb4\ud06c
+        # burst 체크
         run_count = 1
         if random.random() < persona["burst_rate"]:
             run_count = random.randint(3, 8)
@@ -71,8 +74,8 @@ def run_synthetic_tick(sb=None) -> dict:
                 environment="mock",
             )
 
-            # workflow.started
-            emit_runtime_event(ctx, {
+            # workflow.started (INFO — 사실 기록)
+            r = emit_runtime_event(ctx, {
                 "event_type": "workflow.started",
                 "flow_key": scenario["flow_key"],
                 "trace_id": trace_id,
@@ -80,62 +83,65 @@ def run_synthetic_tick(sb=None) -> dict:
                 "tenant_id": tenant_id,
                 "environment": "mock",
             }, sb=sb)
-            stats["events"] += 1
+            if r.accepted:
+                stats["events"] += 1
+            else:
+                stats["blocked"] += 1
 
-            # \uc911\ub3c4 \ud3ec\uae30 \uccb4\ud06c
+            # 중도 포기 체크
             if random.random() < persona["abandon_rate"]:
-                emit_runtime_event(ctx, {
+                r = emit_runtime_event(ctx, {
                     "event_type": "workflow.blocked",
                     "flow_key": scenario["flow_key"],
                     "trace_id": trace_id,
-                    "severity": "WARNING",
+                    "severity": "INFO",
                     "tenant_id": tenant_id,
                     "environment": "mock",
                     "description": "[SYNTHETIC] user abandoned flow",
                 }, sb=sb)
                 stats["abandoned"] += 1
-                stats["events"] += 1
+                stats["events"] += 1 if r.accepted else 0
                 continue
 
-            # Step \uc2e4\ud589
+            # Step 실행
             flow_failed = False
             for step in scenario["steps"]:
                 step_fail = random.random() < (step["fail_rate"] + persona["retry_rate"])
                 step_timeout = random.random() < persona["timeout_rate"]
 
                 if step_timeout:
-                    emit_runtime_event(ctx, {
+                    r = emit_runtime_event(ctx, {
                         "event_type": "workflow.timeout",
                         "flow_key": scenario["flow_key"],
                         "step_key": step["step_key"],
                         "step_order": step["order"],
                         "trace_id": trace_id,
-                        "severity": "WARNING",
+                        "severity": "INFO",
                         "tenant_id": tenant_id,
                         "environment": "mock",
                     }, sb=sb)
-                    stats["events"] += 1
+                    stats["events"] += 1 if r.accepted else 0
                     flow_failed = True
                     break
 
                 if step_fail:
-                    emit_runtime_event(ctx, {
+                    r = emit_runtime_event(ctx, {
                         "event_type": "step.failed",
                         "flow_key": scenario["flow_key"],
                         "step_key": step["step_key"],
                         "step_order": step["order"],
                         "trace_id": trace_id,
-                        "severity": "WARNING",
+                        "severity": "INFO",
                         "tenant_id": tenant_id,
                         "environment": "mock",
                     }, sb=sb)
-                    stats["events"] += 1
+                    stats["events"] += 1 if r.accepted else 0
                     stats["failed"] += 1
                     flow_failed = True
                     break
 
-                # step \uc131\uacf5
-                emit_runtime_event(ctx, {
+                # step 성공
+                r = emit_runtime_event(ctx, {
                     "event_type": "step.completed",
                     "flow_key": scenario["flow_key"],
                     "step_key": step["step_key"],
@@ -145,14 +151,14 @@ def run_synthetic_tick(sb=None) -> dict:
                     "tenant_id": tenant_id,
                     "environment": "mock",
                 }, sb=sb)
-                stats["events"] += 1
+                stats["events"] += 1 if r.accepted else 0
 
-            # Chaos injection
+            # Chaos injection (Control Runtime 컨텍스트 — WARNING/CRITICAL 가능)
             chaos = inject_chaos(tenant_id, scenario["flow_key"],
                                  chaos_probability=persona["degradation_sensitivity"])
             if chaos:
                 ctrl_ctx = make_context("control", tenant_id=tenant_id, environment="mock")
-                emit_runtime_event(ctrl_ctx, {
+                r = emit_runtime_event(ctrl_ctx, {
                     "event_type": chaos["event_type"],
                     "flow_key": scenario["flow_key"],
                     "trace_id": trace_id,
@@ -163,20 +169,20 @@ def run_synthetic_tick(sb=None) -> dict:
                     "payload": {"chaos_type": chaos["chaos_type"]},
                 }, sb=sb)
                 stats["chaos"] += 1
-                stats["events"] += 1
+                stats["events"] += 1 if r.accepted else 0
 
-            # workflow \uacb0\uacfc
+            # workflow 결과 (INFO — Control Bridge가 severity projection)
             if flow_failed:
-                emit_runtime_event(ctx, {
+                r = emit_runtime_event(ctx, {
                     "event_type": "workflow.failed",
                     "flow_key": scenario["flow_key"],
                     "trace_id": trace_id,
-                    "severity": "WARNING",
+                    "severity": "INFO",
                     "tenant_id": tenant_id,
                     "environment": "mock",
                 }, sb=sb)
             else:
-                emit_runtime_event(ctx, {
+                r = emit_runtime_event(ctx, {
                     "event_type": "workflow.completed",
                     "flow_key": scenario["flow_key"],
                     "trace_id": trace_id,
@@ -184,7 +190,7 @@ def run_synthetic_tick(sb=None) -> dict:
                     "tenant_id": tenant_id,
                     "environment": "mock",
                 }, sb=sb)
-            stats["events"] += 1
+            stats["events"] += 1 if r.accepted else 0
             stats["workflows"] += 1
 
     logger.info("[SYNTHETIC] tick: %s", stats)
