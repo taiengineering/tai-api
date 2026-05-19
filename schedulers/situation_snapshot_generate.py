@@ -1,10 +1,11 @@
-"""Situation Snapshot Generate — Scheduler DIRECT handler (v2).
+"""Situation Snapshot Generate — Scheduler DIRECT handler (v3).
 
 5분 주기로 최근 이벤트를 수집하여 Situation Snapshot을 생성하고,
-이전 snapshot과 비교하여 delta/evolution을 계산하여 DB에 저장한다.
+이전 snapshot과 비교하여 delta/evolution을 계산하고,
+attention score를 계산하여 DB에 저장한다.
 
-T-06: delta_type, lifecycle_transition, risk_direction, change_summary,
-      previous_snapshot_id 자동 계산 추가.
+T-06: delta_type, lifecycle_transition, risk_direction, change_summary
+T-08: attention_score, attention_level, requires_attention, attention_summary
 """
 
 from __future__ import annotations
@@ -16,11 +17,12 @@ logger = logging.getLogger(__name__)
 
 
 async def handler() -> dict[str, Any]:
-    """Situation Snapshot 생성 + Delta 계산 + 저장."""
+    """Situation Snapshot 생성 + Delta + Attention 계산 + 저장."""
     try:
         from watch_engine.trans_engine.situation_snapshot_builder import build_situation_snapshot
         from watch_engine.trans_engine.situation_snapshot_store import save_snapshot, get_snapshot_timeline
         from watch_engine.trans_engine.situation_evolution import compute_situation_evolution
+        from watch_engine.trans_engine.attention_engine import enrich_snapshot_attention
 
         events = await _fetch_recent_events()
         if not events:
@@ -37,7 +39,7 @@ async def handler() -> dict[str, Any]:
                     audience="admin",
                 )
 
-                # T-06: 이전 snapshot 조회 + delta 계산
+                # T-06: delta/evolution
                 situation_id = snapshot.get("situation_id", "")
                 prev_snapshots = await get_snapshot_timeline(situation_id, limit=1)
                 previous = prev_snapshots[0] if prev_snapshots else None
@@ -48,6 +50,9 @@ async def handler() -> dict[str, Any]:
                 snapshot["lifecycle_transition"] = evolution.get("lifecycle_transition")
                 snapshot["risk_direction"] = evolution.get("risk_direction", "stable")
                 snapshot["change_summary"] = evolution.get("change_summary", "")
+
+                # T-08: attention enrichment
+                enrich_snapshot_attention(snapshot)
 
                 result = await save_snapshot(snapshot)
                 if result:
