@@ -55,4 +55,5 @@ ROUTERS = [
     {"module": "routers.response_guidance_api"},
     {"module": "routers.operational_learning_api"},
     {"module": "routers.operational_closure_api"},
+    {"module": "routers.situation_detail_api"},
 ]
