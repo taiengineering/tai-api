@@ -51,4 +51,5 @@ ROUTERS = [
     {"module": "routers.trans_engine_api"},
     {"module": "routers.situation_history_api"},
     {"module": "routers.situation_dashboard_api"},
+    {"module": "routers.attention_dashboard_api"},
 ]
