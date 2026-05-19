@@ -1,18 +1,17 @@
-"""Situation Snapshot Generate — Scheduler DIRECT handler (v4).
+"""Situation Snapshot Generate — Scheduler DIRECT handler (v5).
 
-5분 주기. Snapshot 생성 → Delta → Attention → Guidance → DB 저장.
+5분 주기. Snapshot → Delta → Attention → Guidance → Learning → DB 저장.
 
-T-06: delta_type, lifecycle_transition, risk_direction, change_summary
-T-08: attention_score, attention_level, requires_attention, attention_summary
+T-06: delta, lifecycle_transition, risk_direction, change_summary
+T-08: attention_score/level, requires_attention, attention_summary
 T-09: guidance_level, recommended_actions/checks/order, guidance_summary
+T-10: last_response_outcome, learned_effectiveness, recurrence_risk, operational_memory_notes
 """
-
 from __future__ import annotations
 import logging
 from typing import Any
 
 logger = logging.getLogger(__name__)
-
 
 async def handler() -> dict[str, Any]:
     try:
@@ -21,6 +20,7 @@ async def handler() -> dict[str, Any]:
         from watch_engine.trans_engine.situation_evolution import compute_situation_evolution
         from watch_engine.trans_engine.attention_engine import enrich_snapshot_attention
         from watch_engine.trans_engine.response_guidance import enrich_snapshot_guidance
+        from watch_engine.trans_engine.operational_memory import build_operational_memory
 
         events = await _fetch_recent_events()
         if not events:
@@ -32,8 +32,8 @@ async def handler() -> dict[str, Any]:
         for tenant_id, tenant_events in tenant_groups.items():
             try:
                 snapshot = build_situation_snapshot(events=tenant_events, tenant_id=tenant_id, audience="admin")
-
                 situation_id = snapshot.get("situation_id", "")
+
                 prev_snapshots = await get_snapshot_timeline(situation_id, limit=1)
                 previous = prev_snapshots[0] if prev_snapshots else None
 
@@ -47,36 +47,43 @@ async def handler() -> dict[str, Any]:
                 enrich_snapshot_attention(snapshot)
                 enrich_snapshot_guidance(snapshot)
 
-                result = await save_snapshot(snapshot)
-                if result:
-                    saved_count += 1
-            except Exception as e:
-                logger.error(f"Snapshot build/save error for {tenant_id}: {e}")
+                # T-10: operational memory enrichment
+                try:
+                    memory = await build_operational_memory(situation_id)
+                    snapshot["learned_effectiveness"] = memory.get("learned_effectiveness")
+                    snapshot["recurrence_risk"] = memory.get("recurrence_risk", "low")
+                    snapshot["operational_memory_notes"] = " ".join(memory.get("memory_notes", []))
+                    if memory.get("outcomes"):
+                        outcomes = memory["outcomes"]
+                        snapshot["last_response_outcome"] = max(outcomes, key=outcomes.get) if outcomes else None
+                except Exception:
+                    pass
 
-        return {"status": "success", "message": f"Saved {saved_count} snapshots from {len(tenant_groups)} tenants",
+                result = await save_snapshot(snapshot)
+                if result: saved_count += 1
+            except Exception as e:
+                logger.error(f"Snapshot error for {tenant_id}: {e}")
+
+        return {"status": "success", "message": f"Saved {saved_count}/{len(tenant_groups)}",
                 "saved": saved_count, "tenants": len(tenant_groups)}
     except Exception as e:
-        logger.error(f"situation_snapshot_generate handler error: {e}")
+        logger.error(f"handler error: {e}")
         return {"status": "error", "message": str(e)}
-
 
 async def _fetch_recent_events() -> list[dict[str, Any]]:
     try:
         from db.supabase_client import get_supabase
         sb = get_supabase()
-        result = (sb.table("watch_engine_events").select("*")
-                  .gte("created_at", "now() - interval '5 minutes'")
-                  .order("created_at", desc=True).limit(100).execute())
-        return result.data or []
+        return (sb.table("watch_engine_events").select("*")
+                .gte("created_at", "now() - interval '5 minutes'")
+                .order("created_at", desc=True).limit(100).execute()).data or []
     except Exception as e:
-        logger.warning(f"Event fetch failed: {e}")
-        return []
-
+        logger.warning(f"Event fetch: {e}"); return []
 
 def _group_by_tenant(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    groups: dict[str, list[dict[str, Any]]] = {}
+    g: dict[str, list] = {}
     for e in events:
-        tid = e.get("tenant_id") or "system"
-        if tid not in groups: groups[tid] = []
-        groups[tid].append(e)
-    return groups
+        t = e.get("tenant_id") or "system"
+        if t not in g: g[t] = []
+        g[t].append(e)
+    return g
