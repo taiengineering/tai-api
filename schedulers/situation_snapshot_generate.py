@@ -1,9 +1,11 @@
-"""Situation Snapshot Generate — Scheduler DIRECT handler (v7 Refactored).
+"""Situation Snapshot Generate — Scheduler DIRECT handler (v8).
 
 5분 주기. Enrichment Pipeline 모듈 사용.
+v8: 이벤트 소스를 engine_integrity_event + business_event로 수정.
 """
 from __future__ import annotations
 import logging
+from datetime import datetime, timezone, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -33,11 +35,9 @@ async def handler() -> dict[str, Any]:
                 )
                 situation_id = snapshot.get("situation_id", "")
 
-                # Previous snapshot for delta
                 prev_snapshots = await get_snapshot_timeline(situation_id, limit=1)
                 previous = prev_snapshots[0] if prev_snapshots else None
 
-                # Enrichment Pipeline
                 apply_delta_enrichment(snapshot, previous)
                 apply_attention_enrichment(snapshot)
                 apply_guidance_enrichment(snapshot)
@@ -62,20 +62,82 @@ async def handler() -> dict[str, Any]:
 
 
 async def _fetch_recent_events() -> list[dict[str, Any]]:
+    """engine_integrity_event + business_event에서 최근 5분 이벤트 수집.
+
+    event-stream API와 동일한 소스 사용.
+    mock 포함 (Trans Engine은 PROD/SYN 모두 처리).
+    """
     try:
         from db.supabase_client import get_supabase
         sb = get_supabase()
-        return (
-            sb.table("watch_engine_events")
-            .select("*")
-            .gte("created_at", "now() - interval '5 minutes'")
-            .order("created_at", desc=True)
-            .limit(100)
-            .execute()
-        ).data or []
+        stream: list[dict[str, Any]] = []
+
+        # 1) engine_integrity_event — 무결성/장애 이벤트
+        try:
+            ie = (
+                sb.table("engine_integrity_event")
+                .select("id,tenant_id,flow_key,step_key,event_type,severity,description,environment,created_at")
+                .gte("created_at", _since_5min())
+                .order("created_at", desc=True)
+                .limit(100)
+                .execute()
+            )
+            for e in (ie.data or []):
+                stream.append({
+                    "event_id": str(e.get("id", "")),
+                    "event_type": e.get("event_type", "unknown"),
+                    "severity": e.get("severity", "WARNING"),
+                    "tenant_id": e.get("tenant_id"),
+                    "flow_key": e.get("flow_key"),
+                    "step_key": e.get("step_key"),
+                    "description": e.get("description", ""),
+                    "source": "control",
+                    "is_mock": e.get("environment") == "mock",
+                    "environment": e.get("environment", "production"),
+                    "created_at": e.get("created_at"),
+                })
+        except Exception as ex:
+            logger.warning(f"integrity event fetch: {ex}")
+
+        # 2) business_event — 워크플로우 이벤트
+        try:
+            be = (
+                sb.table("business_event")
+                .select("id,tenant_id,flow_key,step_key,event_type,result,environment,created_at")
+                .gte("created_at", _since_5min())
+                .order("created_at", desc=True)
+                .limit(100)
+                .execute()
+            )
+            for e in (be.data or []):
+                result_val = e.get("result", "unknown")
+                stream.append({
+                    "event_id": str(e.get("id", "")),
+                    "event_type": f"workflow.{result_val}" if result_val else "workflow.event",
+                    "severity": "WARNING" if result_val == "failure" else "INFO",
+                    "tenant_id": e.get("tenant_id"),
+                    "flow_key": e.get("flow_key"),
+                    "step_key": e.get("step_key"),
+                    "description": f"{e.get('flow_key','')}.{e.get('step_key','')} → {result_val}",
+                    "source": "workflow",
+                    "is_mock": e.get("environment") == "mock",
+                    "environment": e.get("environment", "production"),
+                    "created_at": e.get("created_at"),
+                })
+        except Exception as ex:
+            logger.warning(f"business event fetch: {ex}")
+
+        stream.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return stream
+
     except Exception as e:
-        logger.warning(f"Event fetch: {e}")
+        logger.warning(f"_fetch_recent_events error: {e}")
         return []
+
+
+def _since_5min() -> str:
+    """5분 전 ISO timestamp."""
+    return (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
 
 
 def _group_by_tenant(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
