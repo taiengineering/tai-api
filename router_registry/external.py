@@ -53,4 +53,5 @@ ROUTERS = [
     {"module": "routers.situation_dashboard_api"},
     {"module": "routers.attention_dashboard_api"},
     {"module": "routers.response_guidance_api"},
+    {"module": "routers.operational_learning_api"},
 ]
