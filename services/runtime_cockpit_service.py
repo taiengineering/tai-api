@@ -20,19 +20,9 @@ async def get_cockpit_tasks(
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict]:
-    """Return enriched task list for Cockpit display.
-
-    Each task includes:
-    - required_document_count
-    - fulfilled_document_count
-    - required_evidence_count
-    - fulfilled_evidence_count
-    - is_overdue (computed from schedule)
-    - next_due_date (from schedule)
-    """
+    """Return enriched task list for Cockpit display."""
     sb = get_supabase()
 
-    # Base task query
     q = sb.table("runtime_task").select("*").eq("tenant_id", tenant_id)
     if facility_id:
         q = q.eq("facility_id", facility_id)
@@ -52,7 +42,6 @@ async def get_cockpit_tasks(
 
     task_ids = [t["id"] for t in tasks]
 
-    # Batch fetch document requirements
     doc_res = (
         sb.table("runtime_document_requirement")
         .select("task_id, is_fulfilled")
@@ -68,7 +57,6 @@ async def get_cockpit_tasks(
         if d.get("is_fulfilled"):
             doc_map[tid]["fulfilled"] += 1
 
-    # Batch fetch evidence requirements
     evi_res = (
         sb.table("runtime_evidence_requirement")
         .select("task_id, is_fulfilled")
@@ -84,7 +72,6 @@ async def get_cockpit_tasks(
         if e.get("is_fulfilled"):
             evi_map[tid]["fulfilled"] += 1
 
-    # Batch fetch schedules (nearest due date)
     sched_res = (
         sb.table("runtime_schedule")
         .select("task_id, next_due_date, status")
@@ -103,7 +90,6 @@ async def get_cockpit_tasks(
                 "is_overdue": bool(ndd and ndd < today),
             }
 
-    # Enrich tasks
     enriched = []
     for t in tasks:
         tid = t["id"]
@@ -130,3 +116,98 @@ async def get_cockpit_tasks(
         })
 
     return enriched
+
+
+async def get_task_detail(task_id: str) -> Optional[dict]:
+    """Full task detail with documents, evidence, schedules, events."""
+    sb = get_supabase()
+
+    task_res = sb.table("runtime_task").select("*").eq("id", task_id).execute()
+    if not task_res.data:
+        return None
+    task = task_res.data[0]
+
+    docs = (
+        sb.table("runtime_document_requirement")
+        .select("id, document_type, title, is_fulfilled, fulfilled_at, document_form_id")
+        .eq("task_id", task_id)
+        .execute()
+    ).data or []
+
+    evidence = (
+        sb.table("runtime_evidence_requirement")
+        .select("id, evidence_type, title, is_fulfilled, fulfilled_at, storage_ref")
+        .eq("task_id", task_id)
+        .execute()
+    ).data or []
+
+    schedules = (
+        sb.table("runtime_schedule")
+        .select("id, schedule_type, recurrence_rule, next_due_date, last_completed_date, status")
+        .eq("task_id", task_id)
+        .execute()
+    ).data or []
+
+    events = (
+        sb.table("runtime_event_log")
+        .select("event_id, event_type, source, payload, created_at")
+        .eq("tenant_id", str(task["tenant_id"]))
+        .order("created_at", desc=True)
+        .limit(20)
+        .execute()
+    ).data or []
+
+    # Filter events related to this task
+    task_events = [
+        e for e in events
+        if (e.get("payload") or {}).get("task_id") == task_id
+    ]
+
+    today = date.today().isoformat()
+    return {
+        "task": task,
+        "documents": docs,
+        "evidence": evidence,
+        "schedules": schedules,
+        "events": task_events,
+        "completeness": {
+            "document_total": len(docs),
+            "document_fulfilled": sum(1 for d in docs if d.get("is_fulfilled")),
+            "evidence_total": len(evidence),
+            "evidence_fulfilled": sum(1 for e in evidence if e.get("is_fulfilled")),
+        },
+    }
+
+
+async def get_runtime_timeline(
+    tenant_id: str,
+    facility_id: Optional[str] = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Recent runtime events for tenant timeline display."""
+    sb = get_supabase()
+
+    q = (
+        sb.table("runtime_event_log")
+        .select("event_id, event_type, source, payload, trace_id, created_at")
+        .eq("tenant_id", tenant_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+    )
+    res = q.execute()
+    events = res.data or []
+
+    timeline = []
+    for e in events:
+        payload = e.get("payload") or {}
+        timeline.append({
+            "event_id": e["event_id"],
+            "event_type": e["event_type"],
+            "source": e["source"],
+            "task_id": payload.get("task_id"),
+            "task_title": payload.get("task_title"),
+            "detail": payload.get("overdue_since") or payload.get("detail"),
+            "created_at": e["created_at"],
+        })
+
+    return timeline
