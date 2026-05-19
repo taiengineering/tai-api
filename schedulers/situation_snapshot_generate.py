@@ -1,11 +1,12 @@
-"""Situation Snapshot Generate — Scheduler DIRECT handler (v5).
+"""Situation Snapshot Generate — Scheduler DIRECT handler (v6 FINAL).
 
-5분 주기. Snapshot → Delta → Attention → Guidance → Learning → DB 저장.
+5분 주기. Snapshot → Delta → Attention → Guidance → Learning → Closure → DB.
 
 T-06: delta, lifecycle_transition, risk_direction, change_summary
 T-08: attention_score/level, requires_attention, attention_summary
 T-09: guidance_level, recommended_actions/checks/order, guidance_summary
 T-10: last_response_outcome, learned_effectiveness, recurrence_risk, operational_memory_notes
+T-11: closure_status, resolved_by, resolved_at (from existing closure records)
 """
 from __future__ import annotations
 import logging
@@ -24,7 +25,7 @@ async def handler() -> dict[str, Any]:
 
         events = await _fetch_recent_events()
         if not events:
-            return {"status": "success", "message": "No events to snapshot", "saved": 0}
+            return {"status": "success", "message": "No events", "saved": 0}
 
         tenant_groups = _group_by_tenant(events)
         saved_count = 0
@@ -47,7 +48,7 @@ async def handler() -> dict[str, Any]:
                 enrich_snapshot_attention(snapshot)
                 enrich_snapshot_guidance(snapshot)
 
-                # T-10: operational memory enrichment
+                # T-10: learning
                 try:
                     memory = await build_operational_memory(situation_id)
                     snapshot["learned_effectiveness"] = memory.get("learned_effectiveness")
@@ -56,6 +57,19 @@ async def handler() -> dict[str, Any]:
                     if memory.get("outcomes"):
                         outcomes = memory["outcomes"]
                         snapshot["last_response_outcome"] = max(outcomes, key=outcomes.get) if outcomes else None
+                except Exception:
+                    pass
+
+                # T-11: closure status from existing closures
+                try:
+                    from watch_engine.trans_engine.closure_workflow import get_closure_history
+                    closures = await get_closure_history(situation_id)
+                    if closures:
+                        latest_c = closures[0]
+                        snapshot["closure_status"] = latest_c.get("resolution_type")
+                        snapshot["resolved_by"] = latest_c.get("operator_id")
+                        snapshot["resolved_at"] = latest_c.get("closed_at")
+                        snapshot["closure_summary"] = latest_c.get("resolution_summary", "")
                 except Exception:
                     pass
 
