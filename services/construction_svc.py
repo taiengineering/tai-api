@@ -56,19 +56,18 @@ def run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
         get_construction_summary as _get_construction_summary,
     )
     from services.legal_format import _classify_rules_db, format_rule_result_db
+    from services.legal_diagnosis_rules import fetch_diagnosis_rules
     from services.legal_helpers import get_sector_groups
+    from services.legal_rules import normalize_sector_db
 
     sector_raw = "CONSTRUCTION"
-    sector_groups = get_sector_groups(sector_raw)
-    rules_res = (
-        supabase.table("master_building_legal_rules")
-        .select("*")
-        .eq("is_active", True)
-        .in_("sector", sector_groups)
-        .eq("diagnosis_stage", 1)
-        .execute()
+    sector_db = normalize_sector_db(sector_raw)
+    all_rules = fetch_diagnosis_rules(
+        supabase,
+        sector_db=sector_db,
+        diagnosis_stage=1,
+        sector_groups=get_sector_groups(sector_db),
     )
-    all_rules = rules_res.data or []
 
     inp = {
         "contract_amount_eok": contract_eok,

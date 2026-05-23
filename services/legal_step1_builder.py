@@ -33,7 +33,7 @@ def build_step1_result_data(
         try:
             rule_ids = [r.get("rule_id") for r in applicable if r.get("rule_id")]
             if rule_ids:
-                article_ctx = fetch_article_contexts(supabase, rule_ids)
+                article_ctx = fetch_article_contexts(supabase, rule_ids, rules=applicable)
         except Exception as e:
             print(f"[STEP1_BUILDER] 조문 본문 조회 실패 (무시): {e}")
             article_ctx = None

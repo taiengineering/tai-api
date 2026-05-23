@@ -41,8 +41,21 @@ def health_check():
     try:
         if sb is None:
             sb = get_supabase()
-        res = sb.table("master_building_legal_rules").select("id").eq("is_active", True).limit(1).execute()
-        checks["law_engine"] = "ok" if res.data else "empty"
+        use_runtime = os.environ.get("TAI_USE_RUNTIME_ENGINE", "false").lower() == "true"
+        if use_runtime:
+            res = (
+                sb.table("runtime_metadata_resolution")
+                .select("id", count="exact")
+                .limit(0)
+                .execute()
+            )
+            n = getattr(res, "count", None) or 0
+            checks["law_engine"] = "ok" if n else "empty"
+            checks["law_engine_source"] = "runtime_metadata_resolution"
+        else:
+            res = sb.table("master_building_legal_rules").select("id").eq("is_active", True).limit(1).execute()
+            checks["law_engine"] = "ok" if res.data else "empty"
+            checks["law_engine_source"] = "master_building_legal_rules"
     except Exception as e:
         checks["law_engine"] = f"fail: {str(e)[:100]}"
     try:

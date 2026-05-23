@@ -27,6 +27,7 @@ rule_id 리스트를 받아서 rule_article_mapping을 통해 law_article 본문
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 
@@ -47,7 +48,77 @@ def classify_law_system(article_internal_key: str) -> str:
     return "OTHER"
 
 
-def fetch_article_contexts(supabase, rule_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+def _article_no_digits(law_article: str) -> str:
+    s = (law_article or "").strip()
+    if not s:
+        return ""
+    digits = re.sub(r"[^\d]", "", s)
+    return digits
+
+
+def _lookup_articles_by_citation(
+    supabase,
+    rules: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """rule_article_mapping 없을 때 law_name + 조문번호로 law_article 조회."""
+    out: Dict[str, Dict[str, Any]] = {}
+    pairs: List[tuple[str, str, str]] = []
+    for rule in rules:
+        rid = str(rule.get("rule_id") or "")
+        law = (rule.get("law_name") or "").strip()
+        art_digits = _article_no_digits(rule.get("law_article") or "")
+        if rid and law and art_digits:
+            pairs.append((rid, law, art_digits))
+
+    seen_laws = list({p[1] for p in pairs})
+    for law_name in seen_laws[:50]:
+        try:
+            res = (
+                supabase.table("law_article")
+                .select(
+                    "id, law_name, article_no, article_internal_key, article_type, "
+                    "article_title, article_text, article_status_code, law_id"
+                )
+                .eq("article_status_code", "ACTIVE")
+                .ilike("law_name", f"%{law_name}%")
+                .limit(500)
+                .execute()
+            )
+        except Exception:
+            continue
+        articles = res.data or []
+        by_digits: Dict[str, Dict[str, Any]] = {}
+        for a in articles:
+            d = _article_no_digits(str(a.get("article_no") or ""))
+            if d and d not in by_digits:
+                by_digits[d] = a
+        for rid, ln, digits in pairs:
+            if ln != law_name or rid in out:
+                continue
+            article = by_digits.get(digits)
+            if not article:
+                continue
+            internal_key = article.get("article_internal_key") or ""
+            out[rid] = {
+                "article_id": article["id"],
+                "article_internal_key": internal_key,
+                "article_no": article.get("article_no"),
+                "article_sub_no": article.get("article_sub_no"),
+                "article_type": article.get("article_type", ""),
+                "article_title": article.get("article_title", ""),
+                "article_text": article.get("article_text", ""),
+                "law_id": article.get("law_id"),
+                "confidence": 0.5,
+                "law_system": classify_law_system(internal_key),
+            }
+    return out
+
+
+def fetch_article_contexts(
+    supabase,
+    rule_ids: List[str],
+    rules: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Dict[str, Any]]:
     """
     rule_id 리스트 → {rule_id: article_info} 매핑 반환.
     
@@ -146,6 +217,15 @@ def fetch_article_contexts(supabase, rule_ids: List[str]) -> Dict[str, Dict[str,
             "law_system":            classify_law_system(internal_key),
         }
     
+    if rules:
+        try:
+            citation_ctx = _lookup_articles_by_citation(supabase, rules)
+            for rid, info in citation_ctx.items():
+                if rid not in result:
+                    result[rid] = info
+        except Exception as e:
+            print(f"[LEGAL_ARTICLE_LOADER] citation fallback 실패 (무시): {e}")
+
     return result
 
 

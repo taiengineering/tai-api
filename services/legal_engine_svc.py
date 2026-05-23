@@ -35,6 +35,8 @@ from services.legal_evaluator import (
     run_get_legal_summary,
 )
 
+from services.legal_diagnosis_rules import fetch_diagnosis_rules
+
 ENGINE_VERSION = "5.8.0"  # v5.8.0 (2026-04-23): 조문 본문 연결 (rule_article_mapping 활용)
 ALLOWED_DIAGNOSE_SECTORS = frozenset({"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"})
 
@@ -84,11 +86,15 @@ def run_diagnose_step2(supabase, body, engine_version: str) -> Dict[str, Any]:
             )
     if work_type_codes_direct:
         work_types = list(set(work_types + work_type_codes_direct))
-    sector_groups = get_sector_groups(sector)
-    q = supabase.table("master_building_legal_rules").select("*").in_("sector", sector_groups).lte("diagnosis_stage", 2).eq("is_active", True)
-    if sector == "CONSTRUCTION" and work_types:
-        q = q.or_(f"construction_work_type.is.null,construction_work_type.in.({','.join(work_types)})")
-    rules = q.execute().data or []
+    sector_db = normalize_sector_db(sector)
+    rules = fetch_diagnosis_rules(
+        supabase,
+        sector_db=sector_db,
+        factory_id=factory_id or None,
+        diagnosis_stage_lte=2,
+        work_types=work_types if sector == "CONSTRUCTION" and work_types else None,
+        sector_groups=get_sector_groups(sector_db),
+    )
     matched = [r for r in rules if _evaluate_condition(r, input_data)]
     diagnosis = {}
     if factory_id:
@@ -171,11 +177,15 @@ def run_diagnose_step3(supabase, body, engine_version: str) -> Dict[str, Any]:
         if not any(e.get("equipment_code") == code for e in equipments):
             equipments.append({"equipment_code": code})
     input_data["equipments"] = equipments
-    sector_groups_s3 = get_sector_groups(sector)
-    q = supabase.table("master_building_legal_rules").select("*").in_("sector", sector_groups_s3).eq("diagnosis_stage", 3).eq("is_active", True)
-    if sector == "CONSTRUCTION" and extra_equipment_codes:
-        q = q.or_(f"construction_work_type.is.null,construction_work_type.in.({','.join(extra_equipment_codes)})")
-    rules = q.execute().data or []
+    sector_db_s3 = normalize_sector_db(sector)
+    rules = fetch_diagnosis_rules(
+        supabase,
+        sector_db=sector_db_s3,
+        factory_id=factory_id or None,
+        diagnosis_stage=3,
+        work_types=extra_equipment_codes if sector == "CONSTRUCTION" and extra_equipment_codes else None,
+        sector_groups=get_sector_groups(sector_db_s3),
+    )
     matched = [r for r in rules if _evaluate_condition(r, input_data)]
     diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 3, input_data, matched)
     return {
@@ -214,16 +224,14 @@ def run_diagnose_step1(
             raise LookupError("시설을 찾을 수 없습니다.")
         fac_company_id = fac_check.data[0].get("company_id")
 
-    sector_groups = get_sector_groups(normalize_sector_fn(sector_raw))
-    all_rules = (
-        supabase.table("master_building_legal_rules")
-        .select("*")
-        .eq("is_active", True)
-        .in_("sector", sector_groups)
-        .eq("diagnosis_stage", 1)
-        .execute()
-        .data
-        or []
+    sector_db = normalize_sector_fn(sector_raw)
+    sector_groups = get_sector_groups(sector_db)
+    all_rules = fetch_diagnosis_rules(
+        supabase,
+        sector_db=sector_db,
+        factory_id=factory_id or None,
+        diagnosis_stage=1,
+        sector_groups=sector_groups,
     )
 
     inp = dict(body.input or {})

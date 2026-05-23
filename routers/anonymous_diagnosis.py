@@ -52,7 +52,9 @@ from watch_engine.trace import clear_trace
 
 router = APIRouter(prefix="/anonymous-diagnosis", tags=["익명 무료진단"])
 
-RULE_VERSION = "master_building_legal_rules:v1"
+from services.legal_diagnosis_rules import diagnosis_rule_source_label
+
+RULE_VERSION = diagnosis_rule_source_label()
 SOURCE_TYPE_DEFAULT = "site_free"
 TTL_DAYS = 7
 LEGAL_ENGINE_VERSION = "5.7.0"
