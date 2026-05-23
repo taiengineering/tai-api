@@ -16,6 +16,12 @@ from services.health_registry import (
     run_all_probes,
 )
 
+from services.projection_cleanup import (
+    ENABLE_PROJECTION_CLEANUP,
+    PROJECTION_VERSION,
+    get_last_cleanup_stats,
+)
+
 router = APIRouter(tags=["health"])
 
 
@@ -69,6 +75,41 @@ def health_check():
     return JSONResponse(
         status_code=200,
         content={"status": "healthy" if all_ok else "degraded", "checks": checks},
+    )
+
+
+@router.get("/debug/projection-stats")
+def projection_stats():
+    """Runtime projection cleanup 품질 지표 (Step 5)."""
+    sb = None
+    runtime_rule_count = None
+    try:
+        sb = get_supabase()
+        use_runtime = os.environ.get("TAI_USE_RUNTIME_ENGINE", "false").lower() == "true"
+        if use_runtime:
+            res = (
+                sb.table("runtime_metadata_resolution")
+                .select("id", count="exact")
+                .limit(0)
+                .execute()
+            )
+            runtime_rule_count = getattr(res, "count", None)
+            source = "runtime"
+        else:
+            source = "legacy"
+    except Exception:
+        source = "unknown"
+
+    last = get_last_cleanup_stats() or {}
+    return JSONResponse(
+        status_code=200,
+        content={
+            "projection_source": source,
+            "projection_version": PROJECTION_VERSION,
+            "runtime_rule_count": runtime_rule_count,
+            "cleanup_enabled": ENABLE_PROJECTION_CLEANUP,
+            "last_diagnosis": last or None,
+        },
     )
 
 

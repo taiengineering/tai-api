@@ -1,0 +1,5 @@
+# Generated sample JSON — run scripts/collect_projection_samples.py
+sample_*/
+manifest.json
+anomaly_catalog.json
+before_after_report.json

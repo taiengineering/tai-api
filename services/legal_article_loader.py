@@ -30,6 +30,21 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
+_IN_CHUNK = 80
+_MAX_CITATION_RULES = 100
+
+
+def _chunked_in_query(supabase, table: str, select: str, column: str, ids: List[str]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    clean = [x for x in ids if x]
+    for i in range(0, len(clean), _IN_CHUNK):
+        chunk = clean[i : i + _IN_CHUNK]
+        if not chunk:
+            continue
+        res = supabase.table(table).select(select).in_(column, chunk).execute()
+        rows.extend(res.data or [])
+    return rows
+
 
 def classify_law_system(article_internal_key: str) -> str:
     """article_internal_key로 법령 체계 분류."""
@@ -63,7 +78,7 @@ def _lookup_articles_by_citation(
     """rule_article_mapping 없을 때 law_name + 조문번호로 law_article 조회."""
     out: Dict[str, Dict[str, Any]] = {}
     pairs: List[tuple[str, str, str]] = []
-    for rule in rules:
+    for rule in rules[:_MAX_CITATION_RULES]:
         rid = str(rule.get("rule_id") or "")
         law = (rule.get("law_name") or "").strip()
         art_digits = _article_no_digits(rule.get("law_article") or "")
@@ -139,83 +154,68 @@ def fetch_article_contexts(
         return {}
     
     try:
-        # Step 1: rule_article_mapping 조회
-        mapping_result = (
-            supabase.table("rule_article_mapping")
-            .select("rule_id, article_id, article_internal_key, confidence_score")
-            .in_("rule_id", unique_rule_ids)
-            .execute()
+        mappings: List[Dict[str, Any]] = _chunked_in_query(
+            supabase,
+            "rule_article_mapping",
+            "rule_id, article_id, article_internal_key, confidence_score",
+            "rule_id",
+            unique_rule_ids,
         )
-        mappings = mapping_result.data or []
     except Exception as e:
         print(f"[LEGAL_ARTICLE_LOADER] rule_article_mapping 조회 실패: {e}")
-        return {}
+        mappings = []
     
-    if not mappings:
-        return {}
-    
-    # 매핑된 article_id 목록 (하나의 rule에 여러 article이 매칭될 수 있음)
-    article_ids = list(set(
-        m["article_id"] for m in mappings
-        if m.get("article_id")
-    ))
-    
-    if not article_ids:
-        return {}
-    
-    try:
-        # Step 2: law_article 본문 배치 조회
-        article_result = (
-            supabase.table("law_article")
-            .select(
-                "id, article_internal_key, article_no, article_sub_no, "
-                "article_type, article_title, article_text, "
-                "article_status_code, law_id"
-            )
-            .in_("id", article_ids)
-            .eq("article_status_code", "ACTIVE")
-            .execute()
-        )
-        articles = article_result.data or []
-    except Exception as e:
-        print(f"[LEGAL_ARTICLE_LOADER] law_article 조회 실패: {e}")
-        return {}
-    
-    # article_id → article 정보 인덱싱
-    article_by_id = {a["id"]: a for a in articles}
-    
-    # Step 3: rule_id 기준으로 집계
-    # 한 rule에 여러 매핑이 있으면 confidence_score 가장 높은 것 선택
     result: Dict[str, Dict[str, Any]] = {}
-    
-    for m in mappings:
-        rid = m.get("rule_id")
-        aid = m.get("article_id")
-        if not rid or not aid or aid not in article_by_id:
-            continue
-        
-        article = article_by_id[aid]
-        confidence = float(m.get("confidence_score") or 0)
-        
-        # 이미 더 높은 confidence 매핑이 있으면 건너뜀
-        existing = result.get(rid)
-        if existing and existing.get("confidence", 0) >= confidence:
-            continue
-        
-        internal_key = article.get("article_internal_key") or ""
-        
-        result[rid] = {
-            "article_id":            article["id"],
-            "article_internal_key":  internal_key,
-            "article_no":            article.get("article_no"),
-            "article_sub_no":        article.get("article_sub_no"),
-            "article_type":          article.get("article_type", ""),
-            "article_title":         article.get("article_title", ""),
-            "article_text":          article.get("article_text", ""),
-            "law_id":                article.get("law_id"),
-            "confidence":            confidence,
-            "law_system":            classify_law_system(internal_key),
-        }
+
+    if mappings:
+        article_ids = list({m["article_id"] for m in mappings if m.get("article_id")})
+        if article_ids:
+            try:
+                articles = _chunked_in_query(
+                    supabase,
+                    "law_article",
+                    "id, article_internal_key, article_no, article_sub_no, "
+                    "article_type, article_title, article_text, "
+                    "article_status_code, law_id",
+                    "id",
+                    article_ids,
+                )
+                articles = [a for a in articles if (a.get("article_status_code") or "") == "ACTIVE"]
+            except Exception as e:
+                print(f"[LEGAL_ARTICLE_LOADER] law_article 조회 실패: {e}")
+                articles = []
+        else:
+            articles = []
+
+        article_by_id = {a["id"]: a for a in articles}
+
+        for m in mappings:
+            rid = m.get("rule_id")
+            aid = m.get("article_id")
+            if not rid or not aid or aid not in article_by_id:
+                continue
+
+            article = article_by_id[aid]
+            confidence = float(m.get("confidence_score") or 0)
+
+            existing = result.get(rid)
+            if existing and existing.get("confidence", 0) >= confidence:
+                continue
+
+            internal_key = article.get("article_internal_key") or ""
+
+            result[rid] = {
+                "article_id": article["id"],
+                "article_internal_key": internal_key,
+                "article_no": article.get("article_no"),
+                "article_sub_no": article.get("article_sub_no"),
+                "article_type": article.get("article_type", ""),
+                "article_title": article.get("article_title", ""),
+                "article_text": article.get("article_text", ""),
+                "law_id": article.get("law_id"),
+                "confidence": confidence,
+                "law_system": classify_law_system(internal_key),
+            }
     
     if rules:
         try:

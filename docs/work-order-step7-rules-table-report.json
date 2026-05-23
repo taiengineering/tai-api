@@ -1,0 +1,114 @@
+{
+  "engine_flags": {
+    "TAI_USE_RUNTIME_ENGINE": "true",
+    "TAI_USE_V2_ENGINE": "false"
+  },
+  "rule_pool": 3395,
+  "applicable": 3395,
+  "not_applicable": 0,
+  "rules_table_distribution": {
+    "total": 178,
+    "law_name_top5": [
+      [
+        "소방시설 설치 및 관리에 관한 법률 시행규칙",
+        16
+      ],
+      [
+        "소방시설 설치 및 관리에 관한 법률",
+        15
+      ],
+      [
+        "소방시설공사업법 시행규칙",
+        14
+      ],
+      [
+        "소방시설공사업법",
+        12
+      ],
+      [
+        "화재의 예방 및 안전관리에 관한 법률 시행규칙",
+        7
+      ]
+    ],
+    "category": {
+      "선임": 30,
+      "점검": 15,
+      "조치": 73,
+      "신고": 51,
+      "보고": 9
+    },
+    "obligation_type": {
+      "APPOINT": 30,
+      "INSPECT": 15,
+      "ACTION": 73,
+      "REPORT": 51,
+      "NOTIFY": 9
+    },
+    "penalty_summary_present": 178
+  },
+  "law_group_count": 69,
+  "risk_level": "HIGH",
+  "article_mapping_stats": {
+    "total_rules": 178,
+    "mapped_rules": 0,
+    "coverage_pct": 0.0
+  },
+  "issues": [],
+  "sample_row": {
+    "category": "선임",
+    "rule_id": "08439131-b438-4382-8b5f-56a40d597a59",
+    "rule_type": "001",
+    "law_name": "건설기술 진흥법 시행령",
+    "law_article": "제18조",
+    "description": "사업주 | 선임",
+    "obligation_summary": "사업주 | 선임",
+    "remarks": "사업주 | 선임",
+    "appointment_target": "",
+    "qualification_required": "",
+    "inspection_cycle": "",
+    "inspection_cycle_code": "",
+    "inspection_cycle_unit": "",
+    "inspection_cycle_int": 0,
+    "schedule_type": "ON_DEMAND",
+    "cycle_base_type": "",
+    "cycle_base_guide": "",
+    "construction_work_type": "",
+    "executor_type_code": "",
+    "executor_type_label": "",
+    "condition_code": "",
+    "condition_value": null,
+    "penalty_amount": "미선임 시 과태료 부과 가능",
+    "penalty_summary": "미선임 시 과태료 부과 가능",
+    "source_label": "",
+    "obligation_type": "APPOINT",
+    "appointment_required": true,
+    "inspection_required": false,
+    "action_required": false,
+    "report_required": false,
+    "notify_required": false,
+    "form_code": "",
+    "form_name": "",
+    "form_url": "",
+    "online_system": "",
+    "system_url": "",
+    "tai_feature_code": "",
+    "qualification_code": "",
+    "due_days": 0,
+    "is_recurring": false,
+    "due_info": {},
+    "sector": "BUILDING",
+    "diagnosis_stage": 1,
+    "submit_org_code": "",
+    "submit_org_label": "",
+    "report_method_std": "",
+    "report_method_label": "",
+    "article_id": null,
+    "article_internal_key": "",
+    "article_title": "",
+    "article_text": "",
+    "article_type": "",
+    "law_system": "NOT_MAPPED",
+    "article_confidence": 0,
+    "has_article_text": false
+  }
+}

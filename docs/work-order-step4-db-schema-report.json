@@ -1,0 +1,191 @@
+{
+  "supabase_url": "https://vwlahtguyggrhvslabax.supabase.co",
+  "tables": {
+    "master_rule_v2": {
+      "row_count": 0,
+      "columns": [],
+      "sample_keys_only": []
+    },
+    "master_rule_v2_relation": {
+      "row_count": 0,
+      "columns": [],
+      "sample_keys_only": []
+    },
+    "master_rule_scope": {
+      "row_count": 0,
+      "columns": [],
+      "sample_keys_only": []
+    },
+    "master_building_legal_rules": {
+      "row_count": "ERROR: {'message': \"Could not find the table 'public.master_building_legal_rules' in the schema cache\", 'code': 'PGRST205', 'hi",
+      "columns": [],
+      "sample_keys_only": []
+    },
+    "runtime_metadata_resolution": {
+      "row_count": 3395,
+      "columns": [
+        "condition_source",
+        "condition_status",
+        "condition_value",
+        "created_at",
+        "evidence_source",
+        "evidence_status",
+        "evidence_value",
+        "how_source",
+        "how_status",
+        "how_value",
+        "id",
+        "overall_completeness",
+        "runtime_name",
+        "schedule_json",
+        "schedule_source",
+        "schedule_status",
+        "sector",
+        "source_article_no",
+        "source_law_name",
+        "when_source",
+        "when_status",
+        "when_value",
+        "who_source",
+        "who_status",
+        "who_value"
+      ],
+      "sample_keys_only": [
+        "condition_source",
+        "condition_status",
+        "condition_value",
+        "created_at",
+        "evidence_source",
+        "evidence_status",
+        "evidence_value",
+        "how_source",
+        "how_status",
+        "how_value",
+        "id",
+        "overall_completeness",
+        "runtime_name",
+        "schedule_json",
+        "schedule_source",
+        "schedule_status",
+        "sector",
+        "source_article_no",
+        "source_law_name",
+        "when_source"
+      ]
+    },
+    "rule_candidate": {
+      "row_count": 34456,
+      "columns": [
+        "article_id",
+        "created_at",
+        "has_numeric",
+        "id",
+        "part_id",
+        "relation_count",
+        "slot_count",
+        "status"
+      ],
+      "sample_keys_only": [
+        "article_id",
+        "created_at",
+        "has_numeric",
+        "id",
+        "part_id",
+        "relation_count",
+        "slot_count",
+        "status"
+      ]
+    },
+    "rule_article_mapping": {
+      "row_count": 2677,
+      "columns": [
+        "article_id",
+        "article_internal_key",
+        "confidence_score",
+        "created_at",
+        "id",
+        "is_verified",
+        "law_id",
+        "mapping_source",
+        "match_method",
+        "rule_id",
+        "source_article_text",
+        "source_law_name",
+        "updated_at",
+        "verification_notes",
+        "verified_at"
+      ],
+      "sample_keys_only": [
+        "article_id",
+        "article_internal_key",
+        "confidence_score",
+        "created_at",
+        "id",
+        "is_verified",
+        "law_id",
+        "mapping_source",
+        "match_method",
+        "rule_id",
+        "source_article_text",
+        "source_law_name",
+        "updated_at",
+        "verification_notes",
+        "verified_at"
+      ]
+    },
+    "law_article": {
+      "row_count": 35412,
+      "columns": [
+        "ai_parsed_at",
+        "article_internal_key",
+        "article_no",
+        "article_no_sort",
+        "article_status_code",
+        "article_sub_no",
+        "article_text",
+        "article_text_normalized",
+        "article_title",
+        "article_type",
+        "classification_confidence",
+        "classified_at",
+        "classified_by",
+        "classified_by_rules",
+        "content_type",
+        "content_types",
+        "created_at",
+        "enforcement_date",
+        "id",
+        "is_changed",
+        "is_deleted_in_version",
+        "law_id",
+        "law_version_id",
+        "parent_article_id",
+        "primary_content_type",
+        "updated_at"
+      ],
+      "sample_keys_only": [
+        "ai_parsed_at",
+        "article_internal_key",
+        "article_no",
+        "article_no_sort",
+        "article_status_code",
+        "article_sub_no",
+        "article_text",
+        "article_text_normalized",
+        "article_title",
+        "article_type",
+        "classification_confidence",
+        "classified_at",
+        "classified_by",
+        "classified_by_rules",
+        "content_type",
+        "content_types",
+        "created_at",
+        "enforcement_date",
+        "id",
+        "is_changed"
+      ]
+    }
+  },
+  "master_rule_v2_rule_kind_sample": {}
+}

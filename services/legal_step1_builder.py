@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from services.legal_article_loader import fetch_article_contexts
+from services.projection_cleanup import apply_rules_table_cleanup
 
 
 def build_step1_result_data(
@@ -47,7 +48,7 @@ def build_step1_result_data(
     
     for r in not_applicable:
         triggered["not_applicable"].append(format_rule_result_db_fn(r))
-    total_applicable = sum(len(triggered[k]) for k in ("appointment", "inspection", "notify", "report", "action"))
+    total_applicable_pre = sum(len(triggered[k]) for k in ("appointment", "inspection", "notify", "report", "action"))
     law_names = sorted({x.get("law_name") for x in applicable if x.get("law_name")})
     obligations: List[Dict[str, Any]] = []
     for key, label in [("appointment", "선임"), ("inspection", "점검"), ("action", "조치")]:
@@ -65,6 +66,13 @@ def build_step1_result_data(
         rules_table.append({"category": "신고", **row})
     for row in triggered["notify"]:
         rules_table.append({"category": "보고", **row})
+
+    cleanup_stats = apply_rules_table_cleanup(rules_table)
+    total_applicable = len([r for r in rules_table if not r.get("_overflow")])
+
+    def _cat_count(label: str) -> int:
+        return len([r for r in rules_table if r.get("category") == label and not r.get("_overflow")])
+
     appointment_n = len(triggered["appointment"])
     risk = risk_level_fn(total_applicable, appointment_n)
     law_cats: List[str] = []
@@ -133,6 +141,7 @@ def build_step1_result_data(
         "not_applicable_total": len(not_applicable),
         "total_rules_checked": len(applicable) + len(not_applicable),
         "applicable_count": total_applicable,
+        "projection_cleanup_stats": cleanup_stats,
         "article_mapping_stats": article_mapping_stats,  # v5.8.0
         "inspection_schedule_ready": {
             "periodic_count": len(insp_by_type["PERIODIC"]),
@@ -143,12 +152,13 @@ def build_step1_result_data(
         },
         "summary": {
             "total": total_applicable,
-            "appointment": len(triggered["appointment"]),
-            "inspection": len(triggered["inspection"]),
-            "action": len(triggered["action"]),
-            "report": len(triggered["report"]),
-            "notify": len(triggered["notify"]),
+            "appointment": _cat_count("선임"),
+            "inspection": _cat_count("점검"),
+            "action": _cat_count("조치"),
+            "report": _cat_count("신고"),
+            "notify": _cat_count("보고"),
             "form_linked": sum(1 for r in applicable if (r.get("form_code") or "").strip()),
+            "pre_cleanup_total": total_applicable_pre,
         },
     }
     if sector_raw == "CONSTRUCTION":
