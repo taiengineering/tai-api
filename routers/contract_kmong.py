@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
 import io
+import logging
 import os
 
 from db.supabase_client import get_supabase
@@ -26,6 +27,7 @@ from services.legal_format import _classify_rules_db, format_rule_result_db
 from services.legal_rules import _risk_level
 
 router = APIRouter(prefix="/contract/kmong", tags=["contract-kmong"])
+log = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────
@@ -190,7 +192,7 @@ def patch_request(request_id: str, body: KmongPatchBody):
 
 
 @router.post("/{request_id}/pdf")
-def generate_pdf(request_id: str):
+async def generate_pdf(request_id: str):
     """
     result_html → xhtml2pdf → PDF bytes → Supabase Storage 업로드 → result_pdf_url 저장
     Storage 버킷: diagnosis-pdfs (public)
@@ -218,9 +220,28 @@ def generate_pdf(request_id: str):
         raise HTTPException(status_code=500, detail=f"PDF 생성 실패: {result.err}")
 
     pdf_bytes = pdf_buffer.getvalue()
+    file_name = f"kmong/{request_id}.pdf"
+
+    company_id = row.get("company_id")
+    try:
+        from services.document_svc import register_generated
+
+        if company_id:
+            await register_generated(
+                file_bytes=pdf_bytes,
+                file_name=f"{request_id}.pdf",
+                mime_type="application/pdf",
+                company_id=company_id,
+                category="contract",
+                generated_by="contract_kmong",
+                linked_table="contracts",
+                linked_id=request_id,
+                title=f"계약서 {row.get('request_no') or request_id}",
+            )
+    except Exception as _doc_err:
+        log.warning("documents 기록 실패 (PDF는 정상 반환): %s", _doc_err)
 
     # ── Supabase Storage 업로드 ──
-    file_name   = f"kmong/{request_id}.pdf"
     bucket_name = "diagnosis-pdfs"
 
     try:

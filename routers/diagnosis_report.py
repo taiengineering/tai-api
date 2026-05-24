@@ -385,6 +385,42 @@ async def get_paid_report_pdf(public_token: str):
         receipt_no, tier_code, len(pdf_bytes)
     )
 
+    diagnosis_id = rec.get("id")
+    company_id = input_data.get("company_id") or full_result.get("company_id")
+    factory_id = full_result.get("factory_id") or input_data.get("factory_id")
+    if not company_id and factory_id:
+        try:
+            fac_res = (
+                supabase.table("factories")
+                .select("company_id")
+                .eq("id", factory_id)
+                .limit(1)
+                .execute()
+            )
+            if fac_res.data:
+                company_id = fac_res.data[0].get("company_id")
+        except Exception:
+            pass
+
+    try:
+        from services.document_svc import register_generated
+
+        if company_id:
+            await register_generated(
+                file_bytes=pdf_bytes,
+                file_name=filename,
+                mime_type="application/pdf",
+                company_id=company_id,
+                category="report",
+                generated_by="diagnosis_report",
+                factory_id=factory_id,
+                linked_table="diagnosis_results",
+                linked_id=diagnosis_id,
+                title=f"법령진단 리포트 {receipt_no}",
+            )
+    except Exception as _doc_err:
+        log.warning("documents 기록 실패 (PDF는 정상 반환): %s", _doc_err)
+
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
