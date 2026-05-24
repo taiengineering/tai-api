@@ -381,6 +381,45 @@ async def get_proposal_pdf(public_token: str):
     pdf      = await _generate_pdf(html)
     filename = f"TAI_proposal_{context['report_no']}.pdf"
 
+    input_data = row.get("input_data") or {}
+    full_result = row.get("full_result") or {}
+    diagnosis_id = row.get("id")
+    company_id = input_data.get("company_id") or full_result.get("company_id")
+    factory_id = full_result.get("factory_id") or input_data.get("factory_id")
+    if not company_id and factory_id:
+        try:
+            sb_lookup = get_supabase()
+            fac_res = (
+                sb_lookup.table("factories")
+                .select("company_id")
+                .eq("id", factory_id)
+                .limit(1)
+                .execute()
+            )
+            if fac_res.data:
+                company_id = fac_res.data[0].get("company_id")
+        except Exception:
+            pass
+
+    try:
+        from services.document_svc import register_generated
+
+        if company_id:
+            await register_generated(
+                file_bytes=pdf,
+                file_name=filename,
+                mime_type="application/pdf",
+                company_id=company_id,
+                category="report",
+                generated_by="diagnosis_proposal",
+                factory_id=factory_id,
+                linked_table="diagnosis_results",
+                linked_id=diagnosis_id,
+                title=f"법령진단 제안서 {context['report_no']}",
+            )
+    except Exception as _doc_err:
+        log.warning("documents 기록 실패 (PDF는 정상 반환): %s", _doc_err)
+
     # Storage \uc5c5\ub85c\ub4dc \ud6c4 DB\uc5d0 URL \uae30\ub85d (\uc2e4\ud328 \uc2dc \uc9c1\uc811 \uc2a4\ud2b8\ub9ac\ubc0d fallback)
     try:
         sb           = get_supabase()

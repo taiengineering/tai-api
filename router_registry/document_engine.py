@@ -3,6 +3,7 @@
 격리 필수: 이 그룹 실패해도 SaaS Core 정상 작동.
 """
 ROUTERS = [
+    {"module": "routers.document_engine"},
     {"module": "routers.document_engine_api"},
     {"module": "routers.engine_document"},
     {"module": "routers.report_forms"},
