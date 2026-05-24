@@ -94,29 +94,6 @@ def _enrich_rules(rules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return rules
 
 
-def _load_compiler_report_tables(supabase, session_id: Optional[str]) -> Dict[str, Any]:
-    """Compiler 산출물 — diagnosis_session.id 기준 (없으면 빈 리스트)."""
-    empty: Dict[str, Any] = {"candidates": [], "penalties": [], "schedule_hints": []}
-    if not session_id:
-        return empty
-    try:
-        empty["candidates"] = (
-            supabase.table("diagnosis_candidate").select("*").eq("session_id", session_id).limit(400).execute().data
-            or []
-        )
-        empty["penalties"] = (
-            supabase.table("diagnosis_penalty_link").select("*").eq("session_id", session_id).limit(200).execute().data
-            or []
-        )
-        empty["schedule_hints"] = (
-            supabase.table("diagnosis_schedule_hint").select("*").eq("session_id", session_id).limit(200).execute().data
-            or []
-        )
-    except Exception as ex:
-        log.warning("[REPORT PDF] compiler tables 조회 생략: %s", ex)
-    return empty
-
-
 def _build_law_groups(
     rules: List[Dict[str, Any]],
     max_groups: int = 10,
@@ -335,15 +312,6 @@ async def get_paid_report_pdf(public_token: str):
     worker_count     = input_data.get("workers") or input_data.get("worker_count") or 0
     csia_applicable  = int(worker_count or 0) >= 5
 
-    # Compiler 연동 세션 (match_info JSON 등)
-    session_id: Optional[str] = None
-    mi = full_result.get("match_info")
-    if isinstance(mi, dict):
-        session_id = mi.get("diagnosis_session_id") or mi.get("session_id")
-    if not session_id:
-        session_id = full_result.get("diagnosis_session_id") or full_result.get("session_id")
-    compiler_pack = _load_compiler_report_tables(supabase, session_id)
-
     # 추천 플랜
     plan_info = RECOMMEND_PLAN.get(tier_code, {})
 
@@ -394,11 +362,6 @@ async def get_paid_report_pdf(public_token: str):
         # SaaS 추천
         "recommended_plan_name":  plan_info.get("name") or "",
         "recommended_plan_price": plan_info.get("price") or "",
-        # Compiler (diagnosis_session 연동 시)
-        "compiler_session_id":   session_id or "",
-        "compiler_candidates":   compiler_pack["candidates"],
-        "compiler_penalties":    compiler_pack["penalties"],
-        "compiler_schedule_hints": compiler_pack["schedule_hints"],
     }
 
     try:
@@ -421,6 +384,42 @@ async def get_paid_report_pdf(public_token: str):
         "[REPORT PDF] 생성 완료 — token=%s tier=%s size=%d bytes",
         receipt_no, tier_code, len(pdf_bytes)
     )
+
+    diagnosis_id = rec.get("id")
+    company_id = input_data.get("company_id") or full_result.get("company_id")
+    factory_id = full_result.get("factory_id") or input_data.get("factory_id")
+    if not company_id and factory_id:
+        try:
+            fac_res = (
+                supabase.table("factories")
+                .select("company_id")
+                .eq("id", factory_id)
+                .limit(1)
+                .execute()
+            )
+            if fac_res.data:
+                company_id = fac_res.data[0].get("company_id")
+        except Exception:
+            pass
+
+    try:
+        from services.document_svc import register_generated
+
+        if company_id:
+            await register_generated(
+                file_bytes=pdf_bytes,
+                file_name=filename,
+                mime_type="application/pdf",
+                company_id=company_id,
+                category="report",
+                generated_by="diagnosis_report",
+                factory_id=factory_id,
+                linked_table="diagnosis_results",
+                linked_id=diagnosis_id,
+                title=f"법령진단 리포트 {receipt_no}",
+            )
+    except Exception as _doc_err:
+        log.warning("documents 기록 실패 (PDF는 정상 반환): %s", _doc_err)
 
     return Response(
         content=pdf_bytes,
