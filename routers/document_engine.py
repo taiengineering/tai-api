@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Optional
 
@@ -13,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
+from db.supabase_client import get_supabase
 from services.document_engine.fetchers.tbm_fetcher import TbmFetcher
 from services.document_engine.renderer import (
     generate_document_pdf,
@@ -20,11 +22,12 @@ from services.document_engine.renderer import (
 )
 
 router = APIRouter(prefix="/document-forms", tags=["document-engine"])
+log = logging.getLogger(__name__)
 
-# 패처 레지스트리 (doc_id → Fetcher)
+# 패철 레지스트리 (doc_id → Fetcher)
 _FETCHERS = {
     "DOC-OSH-056": TbmFetcher(),
-    # TODO: 추가 패처 등록
+    # TODO: 추가 패철 등록
 }
 
 
@@ -44,7 +47,7 @@ async def preview_document(
     date_to: Optional[date] = Query(None),
     meeting_id: Optional[str] = Query(None),
 ):
-    """HTML 미리보기 — 데이터를 주입한 문서 HTML을 반환합니다."""
+    """해HTML 미리보기 — 데이터를 주입한 문서 HTML을 반환합니다."""
     fetcher = _FETCHERS.get(doc_id)
     if not fetcher:
         raise HTTPException(404, f"No fetcher registered for {doc_id}")
@@ -71,12 +74,6 @@ async def generate_document(doc_id: str, req: GenerateRequest):
     if not fetcher:
         raise HTTPException(404, f"No fetcher registered for {doc_id}")
 
-    # TODO: 티켓 잔여 확인 + 차감 (B~D등급)
-    # from services.document_forms_service import get_document_form
-    # form = get_document_form(doc_id)
-    # if form['tai_grade'] != 'A':
-    #     check_and_deduct_ticket(factory_id, form['ticket_cost'])
-
     try:
         data = await fetcher.fetch(
             factory_id=req.factory_id,
@@ -88,6 +85,34 @@ async def generate_document(doc_id: str, req: GenerateRequest):
         pdf_bytes = await generate_document_pdf(doc_id, data)
 
         filename = f"{doc_id}_{req.factory_id[:8]}_{data.get('work_date', 'doc')}.pdf"
+        try:
+            from services.document_svc import register_generated
+
+            _sb = get_supabase()
+            _fac = (
+                _sb.table("factories")
+                .select("company_id")
+                .eq("id", req.factory_id)
+                .limit(1)
+                .execute()
+            )
+            _company_id = (_fac.data[0].get("company_id") if _fac.data else None)
+            if _company_id:
+                await register_generated(
+                    file_bytes=pdf_bytes,
+                    file_name=filename,
+                    mime_type="application/pdf",
+                    company_id=_company_id,
+                    category="tbm",
+                    generated_by="document_engine",
+                    factory_id=req.factory_id,
+                    linked_table="tbm_meetings",
+                    linked_id=req.meeting_id,
+                    title=f"TBM 기록 {data.get('work_date', '')}",
+                )
+        except Exception as _doc_err:
+            log.warning("documents 기록 실패 (PDF는 정상 반환): %s", _doc_err)
+
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
