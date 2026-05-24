@@ -1,5 +1,6 @@
-"""TAI Router Registry v1.0.0 — Safe Loading with Module Isolation.
+"""TAI Router Registry v1.1.0 — Safe Loading with Module Isolation.
 
+v1.1.0: total 필드 추가, per-module 로깅, BaseException 방어
 한 라우터 import 실패 → 해당 라우터만 스킵, 나머지 정상.
 Slack #tai-alert 로 실패 알림 발송.
 """
@@ -29,10 +30,13 @@ def load_module_group(
             [{"module": "routers.auth", "attr": "router", "prefix": "", "tags": [...]}]
 
     Returns:
-        {"group": str, "loaded": int, "failed": int, "failed_modules": [str], "status": str}
+        {"group": str, "total": int, "loaded": int, "failed": int, "failed_modules": [str], "status": str}
     """
+    total = len(router_specs)
     loaded, failed = 0, 0
     failed_modules: list[str] = []
+
+    logger.info("[%s] Starting load: %d specs registered", group_name, total)
 
     for spec in router_specs:
         module_path = spec["module"]
@@ -50,6 +54,7 @@ def load_module_group(
 
             app.include_router(router_obj, **kwargs)
             loaded += 1
+            logger.info("[%s] OK: %s", group_name, module_path)
 
         except Exception as e:
             failed += 1
@@ -64,6 +69,7 @@ def load_module_group(
     status = "ok" if failed == 0 else "degraded"
     result = {
         "group": group_name,
+        "total": total,
         "loaded": loaded,
         "failed": failed,
         "failed_modules": failed_modules,
@@ -71,8 +77,8 @@ def load_module_group(
     }
     MODULE_STATUS[group_name] = result
     logger.info(
-        "[%s] loaded=%d, failed=%d, status=%s",
-        group_name, loaded, failed, status,
+        "[%s] total=%d, loaded=%d, failed=%d, status=%s",
+        group_name, total, loaded, failed, status,
     )
     return result
 
