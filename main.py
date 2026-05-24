@@ -1,5 +1,6 @@
-# main.py — v6.0.0
+# main.py — v6.0.1
 # v6.0.0: Module Isolation — Safe Loading + 10 Module Groups
+# v6.0.1: Add total field to module status for debugging
 # 한 라우터 import 실패 → 해당 라우터만 스킵, 나머지 정상 작동
 # /health 응답에 모듈별 상태(ok/degraded) 포함
 import os
@@ -18,7 +19,7 @@ import services.health_probes  # noqa: F401
 from router_registry import load_module_group, get_all_status
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "6.0.0"
+APP_VERSION = "6.0.1"
 
 
 @asynccontextmanager
@@ -103,6 +104,7 @@ def root():
         "version": APP_VERSION,
         "modules": {
             name: {
+                "total": info.get("total", info["loaded"] + info["failed"]),
                 "loaded": info["loaded"],
                 "failed": info["failed"],
                 "status": info["status"],
