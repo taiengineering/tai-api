@@ -23,25 +23,35 @@ from services.legal_helpers import get_sector_groups
 from services.legal_rules import normalize_sector_db, risk_level
 from services.legal_runtime_fetch import fetch_runtime_rules_as_v1
 from services.legal_step1_builder import build_step1_result_data
-from services.rule_candidate_projection import _format_article_no
 
 RUNTIME_ENGINE_VERSION = "v3.0-runtime-compiler"
 
+_ARTICLE_NO_RE = re.compile(r"제(\d+)조")
 _SLOT_TYPES_WHO = frozenset({"ACTOR"})
-_SLOT_TYPES_WHAT = frozenset({"OBLIGATION", "ACTION"})
+_SLOT_TYPES_WHAT = frozenset({"OBLIGATION", "ACTION", "TARGET"})
 _SLOT_TYPES_WHEN = frozenset({"DEADLINE", "FREQUENCY"})
 _SLOT_TYPES_QUERY = tuple(_SLOT_TYPES_WHO | _SLOT_TYPES_WHAT | _SLOT_TYPES_WHEN)
 _CHUNK = 200
 
 
-def _article_digits_key(law_name: str, law_article: str) -> Tuple[str, str]:
+def _parse_article_no(law_article: str) -> Optional[str]:
+    """예: '산업안전보건법 제29조)' → '29'."""
+    if not law_article:
+        return None
+    m = _ARTICLE_NO_RE.search(str(law_article))
+    if m:
+        return m.group(1)
+    digits = re.sub(r"[^\d]", "", str(law_article))
+    return digits if digits else None
+
+
+def _slot_lookup_key(law_name: str, law_article: str) -> Optional[Tuple[str, str]]:
+    """(law_name, article_no) — law_name은 rules_table 별도 필드."""
     law = (law_name or "").strip()
-    raw = (law_article or "").strip()
-    digits = re.sub(r"[^\d]", "", raw)
-    if not digits:
-        formatted = _format_article_no(raw)
-        digits = re.sub(r"[^\d]", "", formatted)
-    return (law, digits)
+    art = _parse_article_no(law_article or "")
+    if law and art:
+        return (law, art)
+    return None
 
 
 def _join_tokens(tokens: List[str]) -> str:
@@ -129,41 +139,103 @@ def _fetch_rule_candidate_slots(
     return grouped
 
 
-def _build_slot_lookup_by_law_article(
-    supabase, rules: List[Dict[str, Any]]
-) -> Dict[Tuple[str, str], Dict[str, str]]:
-    """
-    (law_name, article_digits) → {who, what, when, rule_kind}
-    rule_candidate JOIN rule_candidate_slot 경로.
-    """
-    law_names = list({(r.get("law_name") or "").strip() for r in rules if r.get("law_name")})
-    if not law_names:
-        return {}
-
-    article_id_by_key: Dict[Tuple[str, str], str] = {}
+def _fetch_law_version_ids(
+    supabase, law_names: List[str]
+) -> Dict[str, str]:
+    """law_name → 현행 law_version.id (law_master → law_version)."""
+    version_by_law: Dict[str, str] = {}
     for law in law_names:
         try:
-            res = (
-                supabase.table("law_article")
-                .select("id,law_name,article_no")
+            lm = (
+                supabase.table("law_master")
+                .select("id")
                 .eq("law_name", law)
-                .limit(500)
+                .eq("is_active", True)
+                .limit(1)
                 .execute()
             )
         except Exception:
             continue
-        for row in res.data or []:
-            ln = (row.get("law_name") or "").strip()
-            art_no = str(row.get("article_no") or "")
-            key = _article_digits_key(ln, art_no)
-            if key[0] and key[1] and key not in article_id_by_key:
-                article_id_by_key[key] = str(row.get("id") or "")
+        if not lm.data:
+            continue
+        law_id = str(lm.data[0].get("id") or "")
+        if not law_id:
+            continue
+        try:
+            lv = (
+                supabase.table("law_version")
+                .select("id")
+                .eq("law_id", law_id)
+                .eq("is_current", True)
+                .limit(1)
+                .execute()
+            )
+        except Exception:
+            continue
+        if lv.data:
+            vid = str(lv.data[0].get("id") or "")
+            if vid:
+                version_by_law[law] = vid
+    return version_by_law
+
+
+def _build_slot_lookup_by_law_article(
+    supabase, rules: List[Dict[str, Any]]
+) -> Dict[Tuple[str, str], Dict[str, str]]:
+    """
+    (law_name, article_no) → {who, what, when, rule_kind}
+    law_master → law_version → law_article → rule_candidate → rule_candidate_slot
+    """
+    keys_needed: Dict[Tuple[str, str], None] = {}
+    art_nos_by_law: Dict[str, set[str]] = {}
+    for r in rules:
+        key = _slot_lookup_key(r.get("law_name") or "", r.get("law_article") or "")
+        if not key:
+            continue
+        keys_needed[key] = None
+        art_nos_by_law.setdefault(key[0], set()).add(key[1])
+
+    if not keys_needed:
+        return {}
+
+    version_by_law = _fetch_law_version_ids(supabase, list(art_nos_by_law.keys()))
+    article_id_by_key: Dict[Tuple[str, str], str] = {}
+    for law_name, art_nos in art_nos_by_law.items():
+        vid = version_by_law.get(law_name)
+        if not vid:
+            continue
+        art_ints = []
+        for a in art_nos:
+            try:
+                art_ints.append(int(a))
+            except ValueError:
+                continue
+        if not art_ints:
+            continue
+        for i in range(0, len(art_ints), _CHUNK):
+            chunk = art_ints[i : i + _CHUNK]
+            try:
+                res = (
+                    supabase.table("law_article")
+                    .select("id,article_no")
+                    .eq("law_version_id", vid)
+                    .in_("article_no", chunk)
+                    .execute()
+                )
+            except Exception:
+                continue
+            for row in res.data or []:
+                art_no = str(row.get("article_no") or "")
+                aid = str(row.get("id") or "")
+                key = (law_name, art_no)
+                if aid and key in keys_needed and key not in article_id_by_key:
+                    article_id_by_key[key] = aid
 
     if not article_id_by_key:
         return {}
 
     article_ids = list(dict.fromkeys(article_id_by_key.values()))
-    rc_id_by_article: Dict[str, str] = {}
+    rc_ids_by_article: Dict[str, List[str]] = {}
     for i in range(0, len(article_ids), _CHUNK):
         chunk = article_ids[i : i + _CHUNK]
         res = (
@@ -175,20 +247,22 @@ def _build_slot_lookup_by_law_article(
         for row in res.data or []:
             aid = str(row.get("article_id") or "")
             rcid = str(row.get("id") or "")
-            if aid and rcid and aid not in rc_id_by_article:
-                rc_id_by_article[aid] = rcid
+            if aid and rcid:
+                rc_ids_by_article.setdefault(aid, []).append(rcid)
 
-    rc_ids = list(rc_id_by_article.values())
-    if not rc_ids:
+    all_rc_ids = list(
+        dict.fromkeys(rcid for ids in rc_ids_by_article.values() for rcid in ids)
+    )
+    if not all_rc_ids:
         return {}
 
-    slots_by_rc = _fetch_rule_candidate_slots(supabase, rc_ids)
+    slots_by_rc = _fetch_rule_candidate_slots(supabase, all_rc_ids)
     lookup: Dict[Tuple[str, str], Dict[str, str]] = {}
     for key, aid in article_id_by_key.items():
-        rcid = rc_id_by_article.get(aid)
-        if not rcid:
-            continue
-        triplet = _slots_to_triplet(slots_by_rc.get(rcid, []))
+        slots: List[Dict[str, Any]] = []
+        for rcid in rc_ids_by_article.get(aid, []):
+            slots.extend(slots_by_rc.get(rcid, []))
+        triplet = _slots_to_triplet(slots)
         if triplet.get("who") or triplet.get("what") or triplet.get("when"):
             lookup[key] = triplet
     return lookup
@@ -213,9 +287,9 @@ def _apply_who_what_when(
     slot_lookup: Dict[Tuple[str, str], Dict[str, str]],
     meta_by_id: Dict[str, Dict[str, str]],
 ) -> None:
-    key = _article_digits_key(row.get("law_name") or "", row.get("law_article") or "")
+    key = _slot_lookup_key(row.get("law_name") or "", row.get("law_article") or "")
     meta = meta_by_id.get(str(row.get("rule_id") or ""))
-    triplet = _merge_triplet(slot_lookup.get(key), meta)
+    triplet = _merge_triplet(slot_lookup.get(key) if key else None, meta)
     row["who"] = triplet["who"]
     row["what"] = triplet["what"]
     row["when"] = triplet["when"]
