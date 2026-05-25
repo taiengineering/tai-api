@@ -1,6 +1,7 @@
 """Construction & Safety — 건설안전·교육·장비·인력 라우터."""
 ROUTERS = [
     {"module": "routers.construction", "prefix": "/construction", "tags": ["건설안전"]},
+    {"module": "routers.subcontractors"},
     {"module": "routers.tbm"},
     {"module": "routers.tbm_templates"},
     {"module": "routers.safety_meetings"},
