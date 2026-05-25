@@ -148,6 +148,48 @@ async def get_ksic_lv4(lv3: str = Query(..., description="lv3 코드")):
 
 
 # ──────────────────────────────────────────────
+# GET /ksic-engine/search?query=&size=
+# 업종명/코드 자동완성 (tadmin my-company, factory-list)
+# ──────────────────────────────────────────────
+@router.get("/search")
+async def search_ksic(
+    query: Optional[str] = Query(None, description="검색어 (업종명 또는 코드)"),
+    q: Optional[str] = Query(None, description="query 별칭"),
+    size: int = Query(30, ge=1, le=100),
+):
+    term = (query or q or "").strip()
+    supabase = get_supabase()
+    sel = (
+        "industry_code_full, industry_name_full, "
+        "lv1_code, lv1_name, lv2_code, lv2_name, "
+        "lv3_code, lv3_name, lv4_code, lv4_name, "
+        "industry_path_ko"
+    )
+    dbq = supabase.table("industry_master").select(sel).eq("is_active", True)
+    if term:
+        if term.isdigit():
+            dbq = dbq.ilike("industry_code_full", f"{term}%")
+        else:
+            dbq = dbq.ilike("industry_name_full", f"%{term}%")
+    dbq = dbq.order("industry_code_full").limit(size)
+    res = dbq.execute()
+    items = []
+    for row in (res.data or []):
+        code = row.get("industry_code_full") or ""
+        name = row.get("industry_name_full") or ""
+        if not code:
+            continue
+        items.append({
+            "code": code,
+            "name": name,
+            "ksic_code": code,
+            "industry_name": name,
+            "path": row.get("industry_path_ko") or "",
+        })
+    return {"status": "success", "data": {"items": items, "total": len(items), "q": term or None}}
+
+
+# ──────────────────────────────────────────────
 # GET /ksic-engine/process-search?ksic={code}&lv1={lv1}&lv2={lv2}&lv3={lv3}
 # KSIC 코드 기반 공정 목록 (v_process_unified)
 # 셀렉트바 각 단계별 공정 필터링용
