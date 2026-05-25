@@ -1,9 +1,9 @@
-"""Legal Adapter v2 — Contract Adapter for Binding Engine.
+"""Legal Adapter v2.1 — Contract Adapter for Binding Engine + Inspection Bridge.
 
 Converts legal matched_rules → RuntimeCandidateInput → Binding Engine.
 Does NOT create runtime_task directly (candidate → activation → runtime).
 
-Backward-compatible: project_rules() returns candidates instead of tasks.
+v2.1: Also creates inspection_sets for inspection-anchor.html compatibility.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import logging
 import uuid
 from typing import Any, Optional
 
+from db.supabase_client import get_supabase
 from models.runtime_candidate_contract import RuntimeCandidateInput
 from services.runtime_binding_engine import project_candidate, log_residual
 
@@ -27,6 +28,24 @@ _RULE_KIND_MAP: dict[str, str] = {
 }
 
 _RESIDUAL_KINDS = {"PENALTY", "STANDARD"}
+
+# ----- candidate_type → obligation_type (inspection_sets용) -----
+_CANDIDATE_TO_OBLIGATION: dict[str, str] = {
+    "inspection": "INSPECT",
+    "appointment": "APPOINT",
+    "report": "REPORT",
+    "training": "DOCUMENT",
+    "compliance_check": "ACTION",
+    "permit": "DOCUMENT",
+}
+
+_DEFAULT_CYCLES: dict[str, tuple] = {
+    "INSPECT": ("year", 1),
+    "APPOINT": ("year", 1),
+    "REPORT": ("year", 1),
+    "DOCUMENT": ("year", 1),
+    "ACTION": ("year", 1),
+}
 
 # ----- Default document/evidence suggestions per candidate_type -----
 _DOC_SUGGESTIONS: dict[str, list[dict]] = {
@@ -58,6 +77,64 @@ def _severity_to_priority(rule: dict) -> str:
     return "medium"
 
 
+def _create_inspection_set(
+    tenant_id: str,
+    facility_id: str,
+    candidate_type: str,
+    title: str,
+    description: str | None,
+    rule: dict[str, Any],
+) -> None:
+    """Create inspection_set alongside runtime_candidate (bridge).
+
+    Dedup: factory_id + law_name + law_article.
+    """
+    try:
+        sb = get_supabase()
+        law_name = rule.get("law_name") or ""
+        law_article = rule.get("article") or ""
+
+        if not law_name:
+            return
+
+        # 중복 방지
+        existing = (
+            sb.table("inspection_sets")
+            .select("id")
+            .eq("factory_id", facility_id)
+            .eq("law_name", law_name)
+            .eq("law_article", law_article)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            return
+
+        obl_type = _CANDIDATE_TO_OBLIGATION.get(candidate_type, "OTHER")
+        cycle_unit, cycle_value = _DEFAULT_CYCLES.get(obl_type, ("year", 1))
+
+        row = {
+            "id": str(uuid.uuid4()),
+            "company_id": tenant_id,
+            "factory_id": facility_id,
+            "inspection_set_name": (title or "")[:200],
+            "law_name": law_name,
+            "law_article": law_article,
+            "obligation_type": obl_type,
+            "obligation_summary": description or title,
+            "cycle_unit": cycle_unit,
+            "cycle_value": cycle_value,
+            "source": "LEGAL_ENGINE",
+            "is_active": True,
+        }
+        sb.table("inspection_sets").insert(row).execute()
+        logger.info(
+            "Inspection set created: %s | %s %s", title[:40], law_name, law_article
+        )
+    except Exception as e:
+        logger.warning("Failed to create inspection_set (non-blocking): %s", e)
+
+
 async def project_rules(
     tenant_id: str,
     facility_id: str,
@@ -67,6 +144,7 @@ async def project_rules(
 ) -> dict:
     """Convert legal matched_rules into runtime candidates via Binding Engine.
 
+    Also creates inspection_sets for inspection-anchor.html compatibility.
     Returns {"candidates": [...], "residuals": [...], "stats": {...}}
     """
     trace = trace_id or str(uuid.uuid4())
@@ -128,6 +206,16 @@ async def project_rules(
 
         result = await project_candidate(inp)
         candidates_created.append(result)
+
+        # Bridge: inspection_sets 동시 생성
+        _create_inspection_set(
+            tenant_id=tenant_id,
+            facility_id=facility_id,
+            candidate_type=candidate_type,
+            title=title[:200],
+            description=rule.get("description") or rule.get("rule_text"),
+            rule=rule,
+        )
 
     return {
         "candidates": candidates_created,
