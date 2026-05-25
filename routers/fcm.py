@@ -1,10 +1,11 @@
 """
-Firebase FCM 토큰 등록 / 푸시 발송 라우터 — v2.0.0 (Capability Wrapper Migration)
+Firebase FCM 토큰 등록 / 푸시 발송 라우터 — v3.0.0 (Capability Consume)
 
 Wrapper: transport only (request parse, auth, token resolve → adapter, response format)
-Capability: _cap_send_push (firebase_admin, framework/DB 모름)
-Adapter: _adapter_* (DB token lookup/save)
+Capability: capabilities.fcm.core.send_push (firebase_admin, framework/DB 모름)
+Adapter: capabilities.fcm.adapters (DB token lookup/save)
 
+v3.0.0 (2026-05-25): Phase 2 capability consume — inline 제거, capabilities.fcm import
 v2.0.0 (2026-05-25): Phase 2 thin wrapper migration
 v1.1.0: worker_registry + users fallback, send-push, push-test
 
@@ -19,64 +20,19 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
+from capabilities.fcm.core import send_push as _cap_send_push
+from capabilities.fcm.adapters import (
+    find_token_by_phone as _adapter_find_token,
+    save_token_worker as _adapter_save_worker,
+    save_token_by_phone as _adapter_save_phone,
+)
 from db.supabase_client import get_supabase
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workers", tags=["FCM"])
 
-VERSION = "2.0.0"
-
-
-# ═══════════════════════════════════════════════════════
-# Capability Core (_cap_*) — Framework/DB 모름
-# ═══════════════════════════════════════════════════════
-
-def _cap_send_push(fcm_token: str, title: str, body: str, data: Optional[dict] = None) -> str:
-    """FCM push 발송. DB/Framework 모름. firebase_admin만 사용."""
-    from utils.fcm_utils import send_push
-    return send_push(fcm_token=fcm_token, title=title, body=body, data=data)
-
-
-# ═══════════════════════════════════════════════════════
-# Adapter (_adapter_*) — DB operations
-# ═══════════════════════════════════════════════════════
-
-def _adapter_find_token_by_phone(supabase, phone: str) -> Optional[str]:
-    """전화번호로 FCM 토큰 조회. worker_registry → users 순서."""
-    clean = phone.replace("-", "").replace(" ", "")
-    wr = supabase.table("worker_registry").select("push_token").eq("phone", clean).limit(1).execute()
-    if wr.data and wr.data[0].get("push_token"):
-        return wr.data[0]["push_token"]
-    u = supabase.table("users").select("push_token").eq("phone", clean).limit(1).execute()
-    if not u.data:
-        u = supabase.table("users").select("push_token").eq("phone", f"{clean[:3]}-{clean[3:7]}-{clean[7:]}").limit(1).execute()
-    if u.data and u.data[0].get("push_token"):
-        return u.data[0]["push_token"]
-    return None
-
-def _adapter_save_token_worker(supabase, worker_id: str, fcm_token: str) -> bool:
-    """worker_registry에 FCM 토큰 저장."""
-    chk = supabase.table("worker_registry").select("id").eq("id", worker_id).limit(1).execute()
-    if not chk.data:
-        return False
-    supabase.table("worker_registry").update({"push_token": fcm_token, "app_installed": True}).eq("id", worker_id).execute()
-    return True
-
-def _adapter_save_token_by_phone(supabase, phone: str, fcm_token: str, platform: str = "web") -> Optional[str]:
-    """전화번호로 FCM 토큰 저장. worker_registry → users fallback. 저장한 table 반환."""
-    clean = phone.replace("-", "").replace(" ", "")
-    wr = supabase.table("worker_registry").select("id").eq("phone", clean).limit(1).execute()
-    if wr.data:
-        supabase.table("worker_registry").update({"push_token": fcm_token, "app_installed": True}).eq("id", wr.data[0]["id"]).execute()
-        return "worker_registry"
-    u = supabase.table("users").select("id").eq("phone", clean).limit(1).execute()
-    if not u.data:
-        u = supabase.table("users").select("id").eq("phone", f"{clean[:3]}-{clean[3:7]}-{clean[7:]}").limit(1).execute()
-    if u.data:
-        supabase.table("users").update({"push_token": fcm_token, "push_platform": platform}).eq("id", u.data[0]["id"]).execute()
-        return "users"
-    return None
+VERSION = "3.0.0"
 
 
 # ═══════════════════════════════════════════════════════
@@ -130,7 +86,7 @@ def register_fcm_token(body: FcmTokenBody, _auth: Optional[dict] = Depends(_opti
 
     # ① worker_id 직접 지정 → adapter
     if body.worker_id:
-        ok = _adapter_save_token_worker(supabase, body.worker_id, body.fcm_token)
+        ok = _adapter_save_worker(supabase, body.worker_id, body.fcm_token)
         if not ok:
             raise HTTPException(status_code=404, detail="작업자를 찾을 수 없습니다.")
         log.info(f"[FCM] 토큰 등록 worker_id={body.worker_id}")
@@ -139,7 +95,7 @@ def register_fcm_token(body: FcmTokenBody, _auth: Optional[dict] = Depends(_opti
     # ② phone → adapter
     clean_phone = (body.phone or "").replace("-", "").replace(" ", "")
     if clean_phone:
-        table = _adapter_save_token_by_phone(supabase, clean_phone, body.fcm_token, body.platform or "web")
+        table = _adapter_save_phone(supabase, clean_phone, body.fcm_token, body.platform or "web")
         if table:
             log.info(f"[FCM] 토큰 등록 ({table}) phone={clean_phone}")
             return {"status": "success", "message": "FCM 토큰이 등록됐습니다.", "table": table}
@@ -153,7 +109,7 @@ def send_push_by_phone(body: SendPushBody):
     supabase = get_supabase()
 
     # Adapter: token resolve
-    token = _adapter_find_token_by_phone(supabase, body.phone)
+    token = _adapter_find_token(supabase, body.phone)
     if not token:
         raise HTTPException(status_code=404, detail=f"해당 번호의 FCM 토큰이 없습니다. 앱에서 알림을 먼저 허용해주세요. ({body.phone})")
 
