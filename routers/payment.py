@@ -159,6 +159,7 @@ async def inicis_return(request: Request):
             qs = urllib.parse.urlencode(out["qs_params"])
             return RedirectResponse(f"{FRONT_RETURN_URL}?{qs}", status_code=302)
 
+        # 후처리(계약 생성·알림): process_card_success → on_payment_success_sync
         out = process_card_success(payment, auth_result, pg_method, order_id=order_id, goodname=goodname, price=price)
         qs = urllib.parse.urlencode(out["qs_params"])
         return RedirectResponse(f"{FRONT_RETURN_URL}?{qs}", status_code=302)

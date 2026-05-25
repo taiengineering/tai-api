@@ -126,6 +126,12 @@ def manual_confirm(body: ManualConfirmBody):
     supabase.table("payments").update(update_row).eq("id", body.payment_id).execute()
     supabase.table("contracts").update({"is_active": True, "updated_at": now}).eq("id", body.contract_id).execute()
 
+    try:
+        from services.payment_post_process import on_payment_success_sync
+        on_payment_success_sync(str(body.payment_id))
+    except Exception as e:
+        log.error("Payment post-process failed: %s", e)
+
     return {
         "status": "success",
         "message": "수동 활성화 완료",

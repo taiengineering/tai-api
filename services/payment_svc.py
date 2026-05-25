@@ -301,6 +301,12 @@ def process_card_success(
 
     supabase.table("payments").update(update_row).eq("id", payment_id).execute()
 
+    try:
+        from services.payment_post_process import on_payment_success_sync
+        on_payment_success_sync(str(payment_id))
+    except Exception as e:
+        log.error("Payment post-process failed: %s", e)
+
     if contract_id:
         supabase.table("contracts").update({"is_active": True, "updated_at": now}).eq("id", contract_id).execute()
 
@@ -465,6 +471,12 @@ def process_vbank_deposit(
         }
     ).eq("id", payment_id).execute()
     log.info(f"[VBANK NOTI] 입금 확인 — payment_id={payment_id}")
+
+    try:
+        from services.payment_post_process import on_payment_success_sync
+        on_payment_success_sync(str(payment_id))
+    except Exception as e:
+        log.error("Payment post-process failed: %s", e)
 
     if matching_contract_id:
         supabase.table("matching_contracts").update(
