@@ -3,6 +3,9 @@ Nexas / anonymous diagnosis — Runtime Compiler step1 실행.
 
 legal_engine_svc.run_diagnose_step1(legacy) 대신
 runtime_metadata_resolution → v1 projection → build_step1_result_data.
+
+웹 결과 표시 정제(BE-08 dedupe/FAMILY→한글)는
+routers/diagnosis_result_web._refine_rules_table() 에서 조회 시 적용.
 """
 
 from __future__ import annotations
