@@ -199,7 +199,14 @@ def run_diagnosis(
         price = paid_tier_prices.get(tier_code, 0)
         raise HTTPException(status_code=402, detail=f"유료 진단입니다. 결제 완료 후 payment_ref를 포함해 주세요. (가격: {price:,}원)")
 
+    factory_id = (getattr(body, "factory_id", None) or "").strip() or None
+    company_id = (getattr(body, "company_id", None) or "").strip() or None
+
     inp: dict = {"region": body.region or "", "anonymous_flow": True, "tier_code": tier_code}
+    if factory_id:
+        inp["factory_id"] = factory_id
+    if company_id:
+        inp["company_id"] = company_id
     workers = body.worker_count or body.direct_workers or 0
     employees = body.employee_count or workers
     floor_area = body.floor_area or 400.0
@@ -208,7 +215,7 @@ def run_diagnosis(
 
     if engine_sector == "CONSTRUCTION":
         step1_body = DiagnoseStep1Body(
-            factory_id=None,
+            factory_id=factory_id,
             sector=engine_sector,
             input=inp,
             construction_type=body.construction_type or "건축",
@@ -218,7 +225,7 @@ def run_diagnosis(
         )
     elif engine_sector == "BUILDING":
         step1_body = DiagnoseStep1Body(
-            factory_id=None,
+            factory_id=factory_id,
             sector=engine_sector,
             input=inp,
             building_use_type=body.building_use_type or "사무실",
@@ -230,7 +237,7 @@ def run_diagnosis(
         )
     else:
         step1_body = DiagnoseStep1Body(
-            factory_id=None,
+            factory_id=factory_id,
             sector=engine_sector,
             input=inp,
             worker_count=workers,
@@ -258,6 +265,8 @@ def run_diagnosis(
             "floor_area": floor_area,
             "contract_amount_eok": contract_eok,
             "workers": workers,
+            **({"factory_id": factory_id} if factory_id else {}),
+            **({"company_id": company_id} if company_id else {}),
         },
         "partial_result": build_partial_func(full_result),
         "full_result": full_result,
@@ -306,6 +315,7 @@ def run_diagnosis(
     return {
         "status": "success",
         "public_token": public_token,
+        "diagnosis_id": str(created.get("id") or ""),
         "tier_code": tier_code,
         "is_free": is_free,
         "expires_at": expires_at,

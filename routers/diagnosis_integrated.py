@@ -17,8 +17,10 @@ from services.diagnosis_helpers import _auto_tier, _build_partial, _now, _sha256
 from services import diagnosis_integrated_svc
 from services.diagnosis_runtime_step1 import (
     RUNTIME_ENGINE_VERSION,
+    convert_rules_table_to_matched_rules,
     run_diagnose_step1_runtime,
 )
+from services.legal_adapter import project_rules
 
 log = logging.getLogger(__name__)
 
@@ -242,7 +244,7 @@ def save_disclaimer(body: DisclaimerBody, request: Request):
 @router.post("/run")
 async def run_diagnosis(body: DiagnosisRunBody):
     supabase = get_supabase()
-    return diagnosis_integrated_svc.run_diagnosis(
+    result = diagnosis_integrated_svc.run_diagnosis(
         supabase=supabase,
         body=body,
         run_step1_func=_run_step1_via_service,
@@ -253,6 +255,42 @@ async def run_diagnosis(body: DiagnosisRunBody):
         free_tier_codes=FREE_TIER_CODES,
         engine_version=ENGINE_VERSION,
     )
+
+    factory_id = (body.factory_id or "").strip() or None
+    company_id = (body.company_id or "").strip() or None
+    if factory_id and not company_id:
+        try:
+            fac = (
+                supabase.table("factories")
+                .select("company_id")
+                .eq("id", factory_id)
+                .limit(1)
+                .execute()
+            )
+            if fac.data:
+                company_id = str(fac.data[0].get("company_id") or "").strip() or None
+        except Exception as e:
+            log.warning("Binding Engine company_id lookup failed (non-blocking): %s", e)
+
+    if factory_id and company_id:
+        try:
+            full_result = result.get("result") or {}
+            rules_for_binding = convert_rules_table_to_matched_rules(
+                full_result.get("rules_table") or []
+            )
+            if rules_for_binding:
+                diagnosis_id = result.get("diagnosis_id") or result.get("public_token") or "unknown"
+                binding_result = await project_rules(
+                    tenant_id=str(company_id),
+                    facility_id=str(factory_id),
+                    matched_rules=rules_for_binding,
+                    trace_id=f"diagnosis-{diagnosis_id}",
+                )
+                log.info("Binding Engine: %s", binding_result.get("stats"))
+        except Exception as e:
+            log.warning("Binding Engine 호출 실패 (non-blocking): %s", e)
+
+    return result
 
 
 @router.post("/upgrade")

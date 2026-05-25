@@ -31,6 +31,8 @@ class DiagnosisRunBody(BaseModel):
     invoice_biz_no: Optional[str] = Field(None, description="세금계산서 사업자등록번호")
     invoice_email: Optional[str] = Field(None, description="세금계산서 수신 이메일")
     invoice_company_name: Optional[str] = Field(None, description="세금계산서 상호")
+    factory_id: Optional[str] = Field(None, description="SaaS 사업장 ID — 있으면 Binding Engine 호출")
+    company_id: Optional[str] = Field(None, description="SaaS tenant(회사) ID — factory_id와 함께 사용")
 
 
 class UpgradeBody(BaseModel):

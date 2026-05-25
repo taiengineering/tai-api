@@ -309,6 +309,63 @@ def _enrich_rules_with_slots(
             _apply_who_what_when(row, slot_lookup, meta_by_id)
 
 
+_RULE_KIND_MAP_FOR_BINDING: Dict[str, str] = {
+    "APPOINT_FAMILY": "APPOINTMENT",
+    "APPOINT": "APPOINTMENT",
+    "PRESERVE_FAMILY": "INSPECTION",
+    "PRESERVE": "INSPECTION",
+    "REPORT_FAMILY": "REPORT",
+    "REPORT": "REPORT",
+    "TRAINING_FAMILY": "TRAINING",
+    "TRAINING": "TRAINING",
+    "MANDATORY_FAMILY": "INSPECTION",
+    "MANDATORY": "INSPECTION",
+    "PROHIBITION_FAMILY": "PROHIBITION",
+    "PROHIBITION": "PROHIBITION",
+    "PERMISSIVE_FAMILY": "STANDARD",
+    "선임": "APPOINTMENT",
+    "점검": "INSPECTION",
+    "신고": "REPORT",
+    "교육": "TRAINING",
+    "서류": "REPORT",
+    "OTHER": "STANDARD",
+    "INSPECTION": "INSPECTION",
+    "APPOINTMENT": "APPOINTMENT",
+}
+
+
+def convert_rules_table_to_matched_rules(rules_table: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    full_result rules_table → Legal Adapter project_rules()용 matched_rules.
+    """
+    matched: List[Dict[str, Any]] = []
+    for i, rule in enumerate(rules_table):
+        if not isinstance(rule, dict):
+            continue
+        raw_kind = (rule.get("rule_kind") or rule.get("category") or "").upper()
+        rule_kind = _RULE_KIND_MAP_FOR_BINDING.get(raw_kind, raw_kind)
+
+        who = (rule.get("who") or "").strip()
+        what = (rule.get("what") or "").strip()
+        when = (rule.get("when") or "").strip()
+        desc_parts = [p for p in (who, what, when) if p]
+        description = " | ".join(desc_parts)
+
+        penalty = rule.get("penalty_summary") or ""
+        matched.append(
+            {
+                "rule_id": str(rule.get("rule_id") or rule.get("id") or f"diag-{i}"),
+                "rule_kind": rule_kind,
+                "title": rule.get("obligation_summary") or rule.get("what") or f"Rule {i}",
+                "description": description,
+                "law_name": rule.get("law_name"),
+                "article": rule.get("law_article"),
+                "severity": "high" if "과태료" in penalty else "medium",
+            }
+        )
+    return matched
+
+
 def enrich_rules_with_candidate_slots(
     supabase,
     rules: List[Dict[str, Any]],
