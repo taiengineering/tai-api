@@ -57,6 +57,7 @@ async def apply_legal_engine_from_quote(quote_id: str):
 
 @router.post("/diagnose/step1")
 async def diagnose_step1(body: DiagnoseStep1Body):
+    # LEGACY - ISOLATED: 구형 엔진 경로 (master_building_legal_rules). Nexas는 /diagnosis/run runtime 사용.
     supabase = get_supabase()
     try:
         return legal_engine_svc.run_diagnose_step1_endpoint(supabase, body)
@@ -112,12 +113,14 @@ async def debug_quote_context(quote_id: str):
 
 @router.post("/diagnose/step2")
 def diagnose_step2(body: DiagnoseStep2Body):
+    # LEGACY - ISOLATED: 구형 엔진 경로. runtime 전환 완료 후 제거 대상.
     supabase = get_supabase()
     return legal_engine_svc.run_diagnose_step2(supabase, body, ENGINE_VERSION)
 
 
 @router.post("/diagnose/step3")
 def diagnose_step3(body: DiagnoseStep3Body):
+    # LEGACY - ISOLATED: 구형 엔진 경로. runtime 전환 완료 후 제거 대상.
     supabase = get_supabase()
     if not body.factory_id:
         raise HTTPException(status_code=400, detail='factory_id 필수')

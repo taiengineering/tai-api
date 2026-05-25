@@ -10,7 +10,7 @@ paid-diagnosis-result.html에서 호출하여 인터랙티브 대시보드 렌�
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -41,12 +41,25 @@ RECOMMEND_PLAN = {
 }
 
 
+@router.get("/result/{public_token}")
+def get_diagnosis_result_web(public_token: str):
+    """
+    무료/유료 공통 진단 결과 웹 조회.
+    free-diagnosis-result.html → GET /diagnosis/result/{token}
+    """
+    return _build_result_payload(public_token, free_preview_limit=5)
+
+
 @router.get("/paid-result/{public_token}")
 def get_paid_result_web(public_token: str):
     """
     유료 진단 결과 웹 조회.
     paid-diagnosis-result.html에서 fetch하여 인터랙티브 대시보드 렌더링.
     """
+    return _build_result_payload(public_token, free_preview_limit=None)
+
+
+def _build_result_payload(public_token: str, free_preview_limit: Optional[int]) -> Dict[str, Any]:
     supabase = get_supabase()
 
     res = (
@@ -73,7 +86,6 @@ def get_paid_result_web(public_token: str):
     sector = (full_result.get("sector") or input_data.get("sector") or "BUILDING").upper()
     sector_label = SECTOR_LABEL.get(sector, sector)
 
-    # 핵심 데이터 추출
     rules_table = [r for r in (full_result.get("rules_table") or []) if isinstance(r, dict)]
     inspection_required = [r for r in (full_result.get("inspection_required") or []) if isinstance(r, dict)]
     appointment_required = [r for r in (full_result.get("appointment_required") or []) if isinstance(r, dict)]
@@ -86,7 +98,6 @@ def get_paid_result_web(public_token: str):
     risk_level = full_result.get("risk_level") or "MEDIUM"
     worker_count = input_data.get("workers") or input_data.get("worker_count") or 0
 
-    # 법령별 그룹핑
     law_groups: Dict[str, list] = {}
     for r in rules_table:
         law = r.get("law_name") or "기타"
@@ -98,22 +109,24 @@ def get_paid_result_web(public_token: str):
         reverse=True,
     )
 
-    # 의무 유형별 카운트
     ob_counts: Dict[str, int] = {}
     for r in rules_table:
         ot = r.get("obligation_type") or "OTHER"
         ob_counts[ot] = ob_counts.get(ot, 0) + 1
 
-    # 추천 플랜
     plan_info = RECOMMEND_PLAN.get(tier_code, {})
-
-    # 입력 데이터 요약
     company_name = input_data.get("company_name") or full_result.get("company_name") or "사업장"
+
+    limit = free_preview_limit if is_free else None
+    rules_out = rules_table[:limit] if limit else rules_table
+    key_ob_out = key_obligations[:limit] if limit else key_obligations
+    law_grp_out = law_group_list[:limit] if limit else law_group_list
+
+    engine_version = full_result.get("engine_version") or "v3.0-runtime-compiler"
 
     return {
         "status": "success",
         "data": {
-            # 메타
             "public_token": public_token,
             "tier_code": tier_code,
             "is_free": is_free,
@@ -121,9 +134,9 @@ def get_paid_result_web(public_token: str):
             "sector_label": sector_label,
             "company_name": company_name,
             "risk_level": risk_level,
-            "engine_version": full_result.get("engine_version") or "v1",
-
-            # 요약
+            "risk_reason": full_result.get("risk_reason"),
+            "applicable_count": total,
+            "engine_version": engine_version,
             "summary": {
                 "total": total,
                 "inspection": summary.get("inspection") or len(inspection_required),
@@ -136,15 +149,13 @@ def get_paid_result_web(public_token: str):
                 "csia_applicable": int(worker_count or 0) >= 5,
             },
             "obligation_counts": ob_counts,
-
-            # 상세 데이터
-            "rules_table": rules_table if not is_free else rules_table[:5],
+            "rules_table": rules_out,
+            "appointment_required": appointment_required,
+            "inspection_required": inspection_required,
             "law_badges": law_badges,
-            "key_obligations": key_obligations if not is_free else key_obligations[:3],
+            "key_obligations": key_ob_out,
             "inspection_schedule": inspection_schedule if not is_free else {},
-            "law_groups": law_group_list if not is_free else law_group_list[:3],
-
-            # 입력 데이터
+            "law_groups": law_grp_out,
             "input_data": {
                 "company_name": company_name,
                 "business_no": input_data.get("business_no") or "",
@@ -153,8 +164,6 @@ def get_paid_result_web(public_token: str):
                 "worker_count": worker_count,
                 "floor_area": input_data.get("floor_area") or input_data.get("total_floor_area") or "",
             },
-
-            # SaaS 전환
             "recommended_plan": plan_info,
             "pdf_url": f"/diagnosis/report-pdf/{public_token}",
         },

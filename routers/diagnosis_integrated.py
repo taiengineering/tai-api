@@ -15,17 +15,17 @@ from schemas.diagnosis_integrated import DiagnosisRunBody, DisclaimerBody, Upgra
 from schemas.legal_engine import DiagnoseStep1Body
 from services.diagnosis_helpers import _auto_tier, _build_partial, _now, _sha256
 from services import diagnosis_integrated_svc
-from services import legal_engine_svc
-from services.legal_context import _input_to_facility_context
-from services.legal_format import _classify_rules_db, format_rule_result_db
-from services.legal_rules import normalize_sector_db, risk_level
+from services.diagnosis_runtime_step1 import (
+    RUNTIME_ENGINE_VERSION,
+    run_diagnose_step1_runtime,
+)
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/diagnosis", tags=["진단통합"])
 
-VERSION = "1.0.1"
-ENGINE_VERSION = "5.7.0"
+VERSION = "1.0.2"
+ENGINE_VERSION = RUNTIME_ENGINE_VERSION
 _ALLOWED_DIAGNOSE_SECTORS = frozenset({"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"})
 
 # 이니시스 환경변수
@@ -65,21 +65,15 @@ FREE_TIER_CODES = frozenset({
 
 
 def _run_step1_via_service(supabase, step1_body: DiagnoseStep1Body) -> Dict[str, Any]:
-    diag = legal_engine_svc.run_diagnose_step1(
-        supabase,
-        step1_body,
-        ENGINE_VERSION,
-        _ALLOWED_DIAGNOSE_SECTORS,
-        normalize_sector_db,
-        _input_to_facility_context,
-        legal_engine_svc.evaluate_facility_conditions_db,
-        _classify_rules_db,
-        format_rule_result_db,
-        risk_level,
-        legal_engine_svc.get_construction_summary,
-    )
-    final = legal_engine_svc.finalize_diagnose_step1(supabase, diag)
-    return {"status": "success", "data": final["result_data"]}
+    try:
+        result_data = run_diagnose_step1_runtime(
+            supabase,
+            step1_body,
+            _ALLOWED_DIAGNOSE_SECTORS,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "success", "data": result_data}
 
 
 def _resolve_auth_log(supabase, auth_token: str) -> dict:
