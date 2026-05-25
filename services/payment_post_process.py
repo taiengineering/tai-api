@@ -110,7 +110,7 @@ def _create_contract_from_payment(sb, pay: dict) -> Optional[str]:
 
 
 def send_payment_notification(pay: dict, plan_code: str, plan_info: dict) -> None:
-    """SMS + 인앱 결제 완료 알림."""
+    """SMS + Email + 인앱 결제 완료 알림."""
     sb = get_supabase()
     user_id = pay.get("user_id")
     user: dict[str, Any] = {}
@@ -136,6 +136,7 @@ def send_payment_notification(pay: dict, plan_code: str, plan_info: dict) -> Non
     )
     total = int(float(pay.get("total_amount") or 0))
 
+    # ── SMS ──
     phone = user.get("phone")
     if phone:
         try:
@@ -160,10 +161,24 @@ def send_payment_notification(pay: dict, plan_code: str, plan_info: dict) -> Non
         except Exception as e:
             logger.error("SMS send failed: %s", e)
 
+    # ── Email (Gmail SMTP) ──
     email = user.get("email")
     if email:
-        logger.info("Email notification queued for %s (TODO: send_email util)", email)
+        try:
+            from utils.email_sender import send_email, payment_success_email
 
+            subject, html, text = payment_success_email(
+                user_name=user.get("name", ""),
+                company_name=company_name,
+                plan_code=plan_code,
+                total_amount=total,
+                sector_kr=sector_kr,
+            )
+            send_email(to=email, subject=subject, body_html=html, body_text=text)
+        except Exception as e:
+            logger.error("Email send failed: %s", e)
+
+    # ── 인앱 알림 ──
     body = (
         f"{company_name + ' ' if company_name else ''}{sector_kr} 플랜 결제가 완료되었습니다. "
         "safe.taieng.co.kr에서 이용을 시작하세요."
