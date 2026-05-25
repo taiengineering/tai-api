@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, HTTPException
 
 from db.supabase_client import get_supabase
+from services.diagnosis_runtime_step1 import enrich_rules_with_candidate_slots
 from routers.diagnosis_transform import (
     CATEGORY_MAP,
     _extract_obligations,
@@ -271,6 +272,9 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int]) 
 
     inspection_required = [r for r in (full_result.get("inspection_required") or []) if isinstance(r, dict)]
     appointment_required = [r for r in (full_result.get("appointment_required") or []) if isinstance(r, dict)]
+    enrich_rules_with_candidate_slots(
+        supabase, rules_table + inspection_required + appointment_required
+    )
     key_obligations = full_result.get("key_obligations") or []
     law_badges = full_result.get("law_badges") or []
     inspection_schedule = full_result.get("inspection_schedule_ready") or {}

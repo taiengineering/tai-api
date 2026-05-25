@@ -235,11 +235,19 @@ def _enrich_rules_with_slots(
             _apply_who_what_when(row, slot_lookup, meta_by_id)
 
 
-def _enrich_result_data_slots(
+def enrich_rules_with_candidate_slots(
     supabase,
-    result_data: Dict[str, Any],
-    slot_lookup: Dict[Tuple[str, str], Dict[str, str]],
+    rules: List[Dict[str, Any]],
 ) -> None:
+    """rule_candidate_slot + metadata 폴백으로 who/what/when 주입 (step1·웹 조회 공용)."""
+    rows = [r for r in rules if isinstance(r, dict)]
+    if not rows:
+        return
+    slot_lookup = _build_slot_lookup_by_law_article(supabase, rows)
+    _enrich_rules_with_slots(supabase, rows, slot_lookup)
+
+
+def _enrich_result_data_slots(supabase, result_data: Dict[str, Any]) -> None:
     """rules_table 및 분류 리스트에 who/what/when 주입."""
     rule_lists = [
         "rules_table",
@@ -253,7 +261,7 @@ def _enrich_result_data_slots(
         items = result_data.get(key) or []
         if isinstance(items, list):
             rows.extend(r for r in items if isinstance(r, dict))
-    _enrich_rules_with_slots(supabase, rows, slot_lookup)
+    enrich_rules_with_candidate_slots(supabase, rows)
 
 
 def run_diagnose_step1_runtime(
@@ -318,9 +326,6 @@ def run_diagnose_step1_runtime(
         facility_ctx, all_rules, sector_raw
     )
 
-    slot_lookup = _build_slot_lookup_by_law_article(supabase, applicable)
-    _enrich_rules_with_slots(supabase, applicable, slot_lookup)
-
     result_data = build_step1_result_data(
         sector_raw,
         sector_groups,
@@ -336,5 +341,5 @@ def run_diagnose_step1_runtime(
         supabase=supabase,
     )
     result_data["rule_version"] = "runtime_metadata_resolution:v1"
-    _enrich_result_data_slots(supabase, result_data, slot_lookup)
+    _enrich_result_data_slots(supabase, result_data)
     return result_data
