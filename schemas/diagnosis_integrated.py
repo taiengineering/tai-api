@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
@@ -12,8 +12,12 @@ class DisclaimerBody(BaseModel):
 
 class DiagnosisRunBody(BaseModel):
     auth_token: str = Field(..., description="본인인증 auth_token")
-    disclaimer_log_id: str = Field(..., description="면책 동의 ID (POST /diagnosis/disclaimer 반환값)")
-    sector: str = Field(..., description="BUILDING | INDUSTRIAL | CONSTRUCTION | SPECIAL_FACILITY")
+    disclaimer_log_id: Optional[str] = Field(
+        None, description="면책 동의 ID (무료 필수, 유료 직입 시 서버 자동 생성 가능)"
+    )
+    sector: str = Field(..., description="BUILDING | INDUSTRY | INDUSTRIAL | CONSTRUCTION | SPECIAL_FACILITY")
+    tier: Optional[str] = Field(None, description="Nexas: FREE | PAID | BASIC | STANDARD | PREMIUM")
+    form_data: Optional[Dict[str, Any]] = Field(None, description="Nexas 동적 폼 값 (field_code → value)")
     floor_area: Optional[float] = Field(None, description="바닥면적(㎡) — BUILDING")
     total_floor_area: Optional[float] = Field(None, description="연면적(㎡)")
     contract_amount_eok: Optional[float] = Field(None, description="공사금액(억원) — CONSTRUCTION")

@@ -116,6 +116,28 @@ def get_price_tier_payload(
     }
 
 
+def _ensure_disclaimer_for_paid_entry(supabase, auth_row: dict) -> str:
+    """유료 결제 직입(runPaidDiagnosis) — disclaimer_log_id 없을 때 자동 기록."""
+    from services.diagnosis_helpers import _now
+
+    res = (
+        supabase.table("diagnosis_disclaimer_log")
+        .insert(
+            {
+                "ci_hash": auth_row["ci_hash"],
+                "auth_log_id": auth_row["id"],
+                "disclaimer_text": "유료 진단 결제 완료 후 자동 동의 처리",
+                "agreed": True,
+                "agreed_at": _now(),
+            }
+        )
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=500, detail="면책 동의 저장에 실패했습니다.")
+    return str(res.data[0]["id"])
+
+
 def save_disclaimer(
     supabase,
     auth_token: str,
@@ -169,16 +191,23 @@ def run_diagnosis(
     engine_version: str,
 ) -> Dict[str, Any]:
     auth_row = resolve_auth_log(supabase, body.auth_token)
-    disc_res = (
-        supabase.table("diagnosis_disclaimer_log")
-        .select("id, ci_hash, agreed")
-        .eq("id", body.disclaimer_log_id)
-        .eq("ci_hash", auth_row["ci_hash"])
-        .limit(1)
-        .execute()
-    )
-    if not disc_res.data or not disc_res.data[0].get("agreed"):
-        raise HTTPException(status_code=400, detail="면책 동의가 필요합니다.")
+    disclaimer_log_id = (body.disclaimer_log_id or "").strip()
+    if not disclaimer_log_id:
+        if body.payment_ref:
+            disclaimer_log_id = _ensure_disclaimer_for_paid_entry(supabase, auth_row)
+        else:
+            raise HTTPException(status_code=400, detail="면책 동의가 필요합니다.")
+    else:
+        disc_res = (
+            supabase.table("diagnosis_disclaimer_log")
+            .select("id, ci_hash, agreed")
+            .eq("id", disclaimer_log_id)
+            .eq("ci_hash", auth_row["ci_hash"])
+            .limit(1)
+            .execute()
+        )
+        if not disc_res.data or not disc_res.data[0].get("agreed"):
+            raise HTTPException(status_code=400, detail="면책 동의가 필요합니다.")
 
     sector = normalize_sector_db(body.sector)
     engine_sector = "MANUFACTURING" if sector == "INDUSTRIAL" else sector
@@ -276,7 +305,7 @@ def run_diagnosis(
         "engine_version": engine_version,
         "ci_hash": auth_row["ci_hash"],
         "auth_log_id": auth_row["id"],
-        "disclaimer_log_id": body.disclaimer_log_id,
+        "disclaimer_log_id": disclaimer_log_id,
         "tier_code": tier_code,
         "paid_amount": 0 if is_free else paid_tier_prices.get(tier_code, 0),
         "payment_ref": body.payment_ref,

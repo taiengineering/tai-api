@@ -15,6 +15,10 @@ from schemas.diagnosis_integrated import DiagnosisRunBody, DisclaimerBody, Upgra
 from schemas.legal_engine import DiagnoseStep1Body
 from services.diagnosis_helpers import _auto_tier, _build_partial, _now, _sha256
 from services import diagnosis_integrated_svc
+from services.diagnosis_nexas_adapter import (
+    build_nexas_run_response,
+    nexas_run_body_from_request,
+)
 from services.diagnosis_runtime_step1 import (
     RUNTIME_ENGINE_VERSION,
     convert_rules_table_to_matched_rules,
@@ -244,9 +248,10 @@ def save_disclaimer(body: DisclaimerBody, request: Request):
 @router.post("/run")
 async def run_diagnosis(body: DiagnosisRunBody):
     supabase = get_supabase()
+    run_body = nexas_run_body_from_request(body.model_dump())
     result = diagnosis_integrated_svc.run_diagnosis(
         supabase=supabase,
-        body=body,
+        body=run_body,
         run_step1_func=_run_step1_via_service,
         auto_tier_func=_auto_tier,
         build_partial_func=_build_partial,
@@ -290,7 +295,7 @@ async def run_diagnosis(body: DiagnosisRunBody):
         except Exception as e:
             log.warning("Binding Engine 호출 실패 (non-blocking): %s", e)
 
-    return result
+    return build_nexas_run_response(result)
 
 
 @router.post("/upgrade")

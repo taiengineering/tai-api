@@ -206,3 +206,83 @@ def get_diagnosis_pricing(
                 "paid_fee":        int(p["process_fee"] or p["total_report_fee"]),
             },
         }
+
+
+# ── GET /diagnosis/equipment-options (Nexas 동적 폼) ──
+
+@router.get("/equipment-options")
+def get_equipment_options():
+    """설비 테이블 select 옵션 — system_codes equipment_type / capacity_unit."""
+    sb = get_supabase()
+
+    def _load(category: str) -> list:
+        try:
+            res = (
+                sb.table("system_codes")
+                .select("code, name_ko, label")
+                .eq("category", category)
+                .eq("is_active", True)
+                .order("sort_order")
+                .execute()
+            )
+        except Exception:
+            return []
+        out = []
+        for row in res.data or []:
+            code = row.get("code") or ""
+            label = (row.get("name_ko") or row.get("label") or code).strip()
+            if code:
+                out.append({"code": code, "label": label})
+        return out
+
+    equipment_types = _load("equipment_type")
+    capacity_units = _load("capacity_unit")
+    if not capacity_units:
+        capacity_units = [
+            {"code": "kW", "label": "kW"},
+            {"code": "kg", "label": "kg"},
+            {"code": "m3", "label": "m³"},
+            {"code": "ton", "label": "톤"},
+        ]
+    return {
+        "status": "success",
+        "data": {
+            "equipment_types": equipment_types,
+            "capacity_units": capacity_units,
+        },
+    }
+
+
+# ── GET /diagnosis/process-options (Nexas searchable_select) ──
+
+@router.get("/process-options")
+def get_process_options(
+    ksic_major: str = Query("", description="KSIC 대분류 문자 (예: C)"),
+    ksic_sub: str = Query("", description="KSIC 세부 (예: 25)"),
+):
+    """KSIC 기반 공정 후보 — ksic_process_map."""
+    sb = get_supabase()
+    code = f"{(ksic_major or '').strip()}{(ksic_sub or '').strip()}".upper()
+    try:
+        q = sb.table("ksic_process_map").select(
+            "process_id, process_lv1, process_lv2, process_lv4, industry_code_full"
+        ).limit(500)
+        if code:
+            q = q.ilike("industry_code_full", f"{code}%")
+        res = q.execute()
+    except Exception:
+        res = None
+    processes = []
+    for row in (res.data if res else []) or []:
+        name = (row.get("process_lv4") or row.get("process_lv2") or "").strip()
+        if not name:
+            continue
+        processes.append(
+            {
+                "process_id": row.get("process_id"),
+                "process_name": name,
+                "process_lv2": row.get("process_lv2") or "",
+                "industry_code_full": row.get("industry_code_full") or "",
+            }
+        )
+    return {"status": "success", "data": {"processes": processes}}
