@@ -10,6 +10,8 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 import os, re, random
+
+import bcrypt
 from supabase import create_client
 from services.health_registry import register_probe
 from watch_engine import create_trace, emit_event
@@ -333,7 +335,7 @@ def login(req: LoginRequest):
     try:
         if is_email(identifier):
             rows = supabase.table("users").select(
-                "id, email, name, phone, role_code, company_id, factory_id, status_code, profile_image_url"
+                "id, email, name, phone, role_code, company_id, factory_id, status_code, profile_image_url, password_hash, auth_id"
             ).eq("email", identifier).limit(1).execute()
             if not rows.data:
                 emit_event(
@@ -349,7 +351,7 @@ def login(req: LoginRequest):
         else:
             phone_norm = normalize_phone(identifier)
             rows = supabase.table("users").select(
-                "id, email, name, phone, role_code, company_id, factory_id, status_code, profile_image_url"
+                "id, email, name, phone, role_code, company_id, factory_id, status_code, profile_image_url, password_hash, auth_id"
             ).eq("phone", phone_norm).limit(1).execute()
             if not rows.data:
                 emit_event(
@@ -399,20 +401,62 @@ def login(req: LoginRequest):
         )
         clear_trace()
         raise HTTPException(status_code=401, detail="이 계정은 이메일이 설정되어 있지 않습니다.")
+    auth_res = None
     try:
         auth_res = supabase.auth.sign_in_with_password({"email": login_email, "password": req.password})
     except Exception:
-        emit_event(
-            step_key="validate_auth",
-            step_order=1,
-            event_type="validate",
-            result="failure",
-            connector_type="api",
-            payload_summary={"auth_result": "failure"},
-        )
-        clear_trace()
-        raise HTTPException(status_code=401, detail="비밀번호가 올바르지 않습니다")
-    if not auth_res.user or not auth_res.session:
+        pass
+
+    if not auth_res or not auth_res.user or not auth_res.session:
+        pw_hash = user.get("password_hash")
+        if not pw_hash or not bcrypt.checkpw(
+            req.password.encode("utf-8"), pw_hash.encode("utf-8")
+        ):
+            emit_event(
+                step_key="validate_auth",
+                step_order=1,
+                event_type="validate",
+                result="failure",
+                connector_type="api",
+                payload_summary={"auth_result": "failure"},
+            )
+            clear_trace()
+            raise HTTPException(status_code=401, detail="비밀번호가 올바르지 않습니다")
+
+        try:
+            supabase_admin = get_supabase_admin()
+            if user.get("auth_id"):
+                supabase_admin.auth.admin.update_user_by_id(
+                    user["auth_id"], {"password": req.password}
+                )
+            else:
+                new_auth = supabase_admin.auth.admin.create_user({
+                    "email": login_email,
+                    "password": req.password,
+                    "email_confirm": True,
+                })
+                supabase.table("users").update({
+                    "auth_id": str(new_auth.user.id),
+                    "updated_at": _now_iso(),
+                }).eq("id", user["id"]).execute()
+
+            auth_res = supabase.auth.sign_in_with_password({
+                "email": login_email,
+                "password": req.password,
+            })
+        except Exception:
+            emit_event(
+                step_key="validate_auth",
+                step_order=1,
+                event_type="validate",
+                result="failure",
+                connector_type="api",
+                payload_summary={"auth_result": "failure"},
+            )
+            clear_trace()
+            raise HTTPException(status_code=401, detail="로그인 실패 — GoTrue 복구 실패")
+
+    if not auth_res or not auth_res.user or not auth_res.session:
         emit_event(
             step_key="validate_auth",
             step_order=1,

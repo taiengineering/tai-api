@@ -8,6 +8,7 @@ openpyxl
 httpx>=0.27.0
 apscheduler
 python-multipart
+bcrypt
 resend
 tenacity
 xhtml2pdf
