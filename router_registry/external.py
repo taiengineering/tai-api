@@ -31,6 +31,15 @@ ROUTERS = [
     {"module": "routers.payment_activation_api"},
     {"module": "routers.feedback_api"},
 
+    # ── SaaS 대시보드 의존 모듈 (유지) ──
+    {"module": "routers.situation_dashboard_api"},
+    {"module": "routers.attention_dashboard_api"},
+    {"module": "routers.situation_detail_api"},
+    {"module": "routers.situation_history_api"},
+    {"module": "routers.response_guidance_api"},
+    {"module": "routers.operational_learning_api"},
+    {"module": "routers.operational_closure_api"},
+
     # ── Watch Engine 격리 (45cminc 이관 완료) ──
     # {"module": "routers.watch_engine_api"},
     # {"module": "routers.watch_engine_alert_api"},
@@ -51,11 +60,4 @@ ROUTERS = [
     # {"module": "routers.synthetic_control_api"},
     # {"module": "routers.calibration_api"},
     # {"module": "routers.trans_engine_api"},
-    # {"module": "routers.situation_history_api"},
-    # {"module": "routers.situation_dashboard_api"},
-    # {"module": "routers.attention_dashboard_api"},
-    # {"module": "routers.response_guidance_api"},
-    # {"module": "routers.operational_learning_api"},
-    # {"module": "routers.operational_closure_api"},
-    # {"module": "routers.situation_detail_api"},
 ]
