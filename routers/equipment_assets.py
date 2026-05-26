@@ -191,6 +191,19 @@ def get_area_assets(area_id: str):
     return {"status": "success", "data": result.data}
 
 
+# ── 시설별 설비 통계 ─────────────────────────────────────────
+@router.get("/summary")
+def get_equipment_summary(factory_id: str = Query(...)):
+    supabase = get_supabase()
+    result = supabase.table("equipment_assets").select("operation_status").eq("factory_id", factory_id).execute()
+    rows = result.data or []
+    total = len(rows)
+    active = sum(1 for r in rows if r.get("operation_status") == "ACTIVE")
+    broken = sum(1 for r in rows if r.get("operation_status") == "BROKEN")
+    inactive = sum(1 for r in rows if r.get("operation_status") == "INACTIVE")
+    return {"status": "success", "data": {"total": total, "active": active, "broken": broken, "inactive": inactive}}
+
+
 # ── 단건 조회 ────────────────────────────────────────────────
 @router.get("/{asset_id}")
 def get_asset(asset_id: str):
