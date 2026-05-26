@@ -70,6 +70,7 @@ class CompanyCreate(BaseModel):
     address_dong:        Optional[str] = None
     employee_count:      Optional[int] = None
     logo_url:            Optional[str] = None
+    created_by:          Optional[str] = None
 
 
 class CompanyUpdate(BaseModel):
@@ -367,12 +368,14 @@ def get_companies(
     search:      Optional[str] = Query(default=None),
     status_code: Optional[str] = Query(default=None),
     sido:        Optional[str] = Query(default=None),
+    created_by:  Optional[str] = Query(default=None),
 ):
     supabase = get_supabase()
     query    = supabase.table("companies").select("*", count="exact")
     if search:      query = query.ilike("name", f"%{search}%")
     if status_code: query = query.eq("status_code", status_code)
     if sido:        query = query.eq("address_sido", sido)
+    if created_by:  query = query.eq("created_by", created_by)
     offset = (page - 1) * size
     res = query.order("created_at", desc=True).range(offset, offset + size - 1).execute()
     return {
