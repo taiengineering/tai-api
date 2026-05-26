@@ -70,6 +70,7 @@ class MeetingCreateBody(BaseModel):
 
 
 class MeetingUpdateBody(BaseModel):
+    meeting_type:    Optional[str]  = None
     meeting_title:   Optional[str]  = None
     meeting_date:    Optional[str]  = None
     meeting_place:   Optional[str]  = None
@@ -80,6 +81,8 @@ class MeetingUpdateBody(BaseModel):
     agenda_items:    Optional[list] = None
     discussion_text: Optional[str]  = None
     resolution_text: Optional[str]  = None
+    files_json:      Optional[list] = None
+    status_code:     Optional[str]  = None
 
 
 class FileAttachBody(BaseModel):
@@ -313,6 +316,18 @@ def attach_file(meeting_id: str, body: FileAttachBody):
         "updated_at": _now(),
     }).eq("id", meeting_id).execute()
     return {"status": "success", "message": "파일이 첨부됐습니다.", "data": {"files": files}}
+
+
+@router.delete("/{meeting_id}")
+def delete_meeting(meeting_id: str):
+    """안전보건 회의 삭제."""
+    supabase = get_supabase()
+    res = supabase.table("safety_committee_meetings").delete().eq(
+        "id", meeting_id
+    ).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="회의록을 찾을 수 없습니다.")
+    return {"status": "success", "message": "삭제됐습니다."}
 
 
 @router.post("/{meeting_id}/complete")
