@@ -51,6 +51,15 @@ def _should_auto_contract(pay: dict) -> bool:
     return False
 
 
+def _parse_contract_date(value: Any) -> Optional[date]:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
 def _activate_existing_contract(sb, pay: dict, contract_id: str) -> None:
     now = now_iso()
     update: dict[str, Any] = {
@@ -65,6 +74,33 @@ def _activate_existing_contract(sb, pay: dict, contract_id: str) -> None:
         start = date.today()
         update["start_date"] = start.isoformat()
         update["end_date"] = _contract_end_date(start, int(period_months)).isoformat()
+    sb.table("contracts").update(update).eq("id", contract_id).execute()
+
+
+def _extend_contract_for_renewal(sb, pay: dict, contract_id: str) -> None:
+    """기간연장: 기존 end_date 이후부터 period_months 만큼 연장."""
+    ct_res = sb.table("contracts").select("end_date, start_date, status_code").eq("id", contract_id).limit(1).execute()
+    if not ct_res.data:
+        logger.warning("Renewal contract %s not found", contract_id)
+        return
+
+    contract = ct_res.data[0]
+    period_months = int(pay.get("period_months") or 1)
+    current_end = _parse_contract_date(contract.get("end_date"))
+    base_start = current_end if current_end and current_end >= date.today() else date.today()
+    new_end = _contract_end_date(base_start, period_months)
+    now = now_iso()
+
+    update: dict[str, Any] = {
+        "status_code": "ACTIVE",
+        "is_active": True,
+        "end_date": new_end.isoformat(),
+        "paid_amount": float(pay.get("total_amount") or 0),
+        "paid_at": pay.get("paid_at") or now,
+        "updated_at": now,
+    }
+    if pay.get("plan_code"):
+        update["plan_code"] = pay["plan_code"]
     sb.table("contracts").update(update).eq("id", contract_id).execute()
 
 
@@ -216,9 +252,13 @@ def on_payment_success_sync(payment_id: str) -> None:
 
     existing_contract_id = pay.get("contract_id")
     if existing_contract_id:
-        _activate_existing_contract(sb, pay, existing_contract_id)
+        if (pay.get("payment_type") or "").upper() == "RENEWAL":
+            _extend_contract_for_renewal(sb, pay, existing_contract_id)
+            logger.info("Payment %s renewed contract %s", payment_id, existing_contract_id)
+        else:
+            _activate_existing_contract(sb, pay, existing_contract_id)
+            logger.info("Payment %s activated contract %s", payment_id, existing_contract_id)
         send_payment_notification(pay, plan_code, plan_info)
-        logger.info("Payment %s activated contract %s", payment_id, existing_contract_id)
         return
 
     if not _should_auto_contract(pay):
