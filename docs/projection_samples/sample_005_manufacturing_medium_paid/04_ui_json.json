@@ -1,0 +1,49 @@
+{
+  "sector": "MANUFACTURING",
+  "applicable_count": 178,
+  "risk_level": "HIGH",
+  "rules_table_count": 178,
+  "law_group_count": 69,
+  "law_groups_top5": [
+    {
+      "law_name": "소방시설 설치 및 관리에 관한 법률 시행규칙",
+      "count": 16
+    },
+    {
+      "law_name": "소방시설 설치 및 관리에 관한 법률",
+      "count": 15
+    },
+    {
+      "law_name": "소방시설공사업법 시행규칙",
+      "count": 14
+    },
+    {
+      "law_name": "소방시설공사업법",
+      "count": 12
+    },
+    {
+      "law_name": "화재의 예방 및 안전관리에 관한 법률 시행규칙",
+      "count": 7
+    }
+  ],
+  "obligation_type_counts": {
+    "APPOINT": 30,
+    "INSPECT": 15,
+    "ACTION": 73,
+    "REPORT": 51,
+    "NOTIFY": 9
+  },
+  "projection_cleanup_stats": {
+    "input_count": 3395,
+    "output_count": 178,
+    "duplicates_removed": 3217,
+    "summaries_stabilized": 2828,
+    "labels_cleaned": 6776,
+    "overflow_count": 0,
+    "empty_summary_count": 0
+  },
+  "input_data": {
+    "employee_count": 50,
+    "floor_area": 3000
+  }
+}

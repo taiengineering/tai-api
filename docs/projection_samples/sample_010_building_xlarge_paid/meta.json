@@ -1,0 +1,14 @@
+{
+  "name": "building_xlarge_paid",
+  "case": {
+    "slug": "building_xlarge",
+    "sector": "BUILDING",
+    "employee_count": 1000,
+    "floor_area": 50000
+  },
+  "variant": "paid",
+  "runtime_raw_count": 200,
+  "projection_count": 3395,
+  "rules_table_after_count": 178,
+  "pre_cleanup_count": 3395
+}

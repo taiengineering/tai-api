@@ -1,0 +1,14 @@
+{
+  "name": "building_medium_paid",
+  "case": {
+    "slug": "building_medium",
+    "sector": "BUILDING",
+    "employee_count": 50,
+    "floor_area": 3000
+  },
+  "variant": "paid",
+  "runtime_raw_count": 200,
+  "projection_count": 3395,
+  "rules_table_after_count": 178,
+  "pre_cleanup_count": 3395
+}

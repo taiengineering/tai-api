@@ -1,0 +1,15 @@
+{
+  "name": "construction_small_paid",
+  "case": {
+    "slug": "construction_small",
+    "sector": "CONSTRUCTION",
+    "worker_count": 20,
+    "contract_amount_eok": 5,
+    "construction_type": "BUILDING"
+  },
+  "variant": "paid",
+  "runtime_raw_count": 200,
+  "projection_count": 442,
+  "rules_table_after_count": 25,
+  "pre_cleanup_count": 442
+}

@@ -1,0 +1,50 @@
+{
+  "sector": "CONSTRUCTION",
+  "applicable_count": 25,
+  "risk_level": "HIGH",
+  "rules_table_count": 25,
+  "law_group_count": 10,
+  "law_groups_top5": [
+    {
+      "law_name": "산업안전보건법",
+      "count": 6
+    },
+    {
+      "law_name": "산업안전보건기준에 관한 규칙",
+      "count": 5
+    },
+    {
+      "law_name": "산업안전보건법 시행규칙",
+      "count": 4
+    },
+    {
+      "law_name": "산업안전보건법 시행령",
+      "count": 2
+    },
+    {
+      "law_name": "고용보험 및 산업재해보상보험의 보험료징수 등에 관한 법률",
+      "count": 2
+    }
+  ],
+  "obligation_type_counts": {
+    "APPOINT": 8,
+    "INSPECT": 4,
+    "ACTION": 5,
+    "REPORT": 6,
+    "NOTIFY": 2
+  },
+  "projection_cleanup_stats": {
+    "input_count": 442,
+    "output_count": 25,
+    "duplicates_removed": 417,
+    "summaries_stabilized": 386,
+    "labels_cleaned": 872,
+    "overflow_count": 0,
+    "empty_summary_count": 0
+  },
+  "input_data": {
+    "worker_count": 20,
+    "contract_amount_eok": 5,
+    "construction_type": "BUILDING"
+  }
+}

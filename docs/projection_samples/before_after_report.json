@@ -1,0 +1,91 @@
+{
+  "samples": [
+    {
+      "sample": "sample_001_building_small_paid",
+      "before_count": 3395,
+      "after_count": 178,
+      "after_visible_count": 178,
+      "delta": 3217
+    },
+    {
+      "sample": "sample_002_building_medium_paid",
+      "before_count": 3395,
+      "after_count": 178,
+      "after_visible_count": 178,
+      "delta": 3217
+    },
+    {
+      "sample": "sample_003_building_large_paid",
+      "before_count": 3395,
+      "after_count": 178,
+      "after_visible_count": 178,
+      "delta": 3217
+    },
+    {
+      "sample": "sample_004_manufacturing_small_paid",
+      "before_count": 3395,
+      "after_count": 178,
+      "after_visible_count": 178,
+      "delta": 3217
+    },
+    {
+      "sample": "sample_005_manufacturing_medium_paid",
+      "before_count": 3395,
+      "after_count": 178,
+      "after_visible_count": 178,
+      "delta": 3217
+    },
+    {
+      "sample": "sample_006_manufacturing_large_paid",
+      "before_count": 3395,
+      "after_count": 178,
+      "after_visible_count": 178,
+      "delta": 3217
+    },
+    {
+      "sample": "sample_007_construction_small_paid",
+      "before_count": 442,
+      "after_count": 25,
+      "after_visible_count": 25,
+      "delta": 417
+    },
+    {
+      "sample": "sample_008_construction_large_paid",
+      "before_count": 442,
+      "after_count": 25,
+      "after_visible_count": 25,
+      "delta": 417
+    },
+    {
+      "sample": "sample_009_building_zero_paid",
+      "before_count": 3394,
+      "after_count": 177,
+      "after_visible_count": 177,
+      "delta": 3217
+    },
+    {
+      "sample": "sample_010_building_xlarge_paid",
+      "before_count": 3395,
+      "after_count": 178,
+      "after_visible_count": 178,
+      "delta": 3217
+    },
+    {
+      "sample": "sample_011_special_facility_paid",
+      "before_count": 3395,
+      "after_count": 178,
+      "after_visible_count": 178,
+      "delta": 3217
+    },
+    {
+      "sample": "sample_012_manufacturing_edge_paid",
+      "before_count": 3394,
+      "after_count": 177,
+      "after_visible_count": 177,
+      "delta": 3217
+    }
+  ],
+  "totals": {
+    "PENALTY_FALLBACK": 1540
+  }
+}

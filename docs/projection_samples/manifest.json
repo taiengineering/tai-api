@@ -1,0 +1,187 @@
+{
+  "collected_at": "2026-05-23T22:30:45.638490",
+  "samples": [
+    {
+      "sample": "sample_001_building_small_paid",
+      "name": "building_small_paid",
+      "case": {
+        "slug": "building_small",
+        "sector": "BUILDING",
+        "employee_count": 5,
+        "floor_area": 500
+      },
+      "variant": "paid",
+      "runtime_raw_count": 200,
+      "projection_count": 3395,
+      "rules_table_after_count": 178,
+      "pre_cleanup_count": 3395
+    },
+    {
+      "sample": "sample_002_building_medium_paid",
+      "name": "building_medium_paid",
+      "case": {
+        "slug": "building_medium",
+        "sector": "BUILDING",
+        "employee_count": 50,
+        "floor_area": 3000
+      },
+      "variant": "paid",
+      "runtime_raw_count": 200,
+      "projection_count": 3395,
+      "rules_table_after_count": 178,
+      "pre_cleanup_count": 3395
+    },
+    {
+      "sample": "sample_003_building_large_paid",
+      "name": "building_large_paid",
+      "case": {
+        "slug": "building_large",
+        "sector": "BUILDING",
+        "employee_count": 300,
+        "floor_area": 15000
+      },
+      "variant": "paid",
+      "runtime_raw_count": 200,
+      "projection_count": 3395,
+      "rules_table_after_count": 178,
+      "pre_cleanup_count": 3395
+    },
+    {
+      "sample": "sample_004_manufacturing_small_paid",
+      "name": "manufacturing_small_paid",
+      "case": {
+        "slug": "manufacturing_small",
+        "sector": "MANUFACTURING",
+        "employee_count": 5,
+        "floor_area": 500
+      },
+      "variant": "paid",
+      "runtime_raw_count": 200,
+      "projection_count": 3395,
+      "rules_table_after_count": 178,
+      "pre_cleanup_count": 3395
+    },
+    {
+      "sample": "sample_005_manufacturing_medium_paid",
+      "name": "manufacturing_medium_paid",
+      "case": {
+        "slug": "manufacturing_medium",
+        "sector": "MANUFACTURING",
+        "employee_count": 50,
+        "floor_area": 3000
+      },
+      "variant": "paid",
+      "runtime_raw_count": 200,
+      "projection_count": 3395,
+      "rules_table_after_count": 178,
+      "pre_cleanup_count": 3395
+    },
+    {
+      "sample": "sample_006_manufacturing_large_paid",
+      "name": "manufacturing_large_paid",
+      "case": {
+        "slug": "manufacturing_large",
+        "sector": "MANUFACTURING",
+        "employee_count": 300,
+        "floor_area": 10000
+      },
+      "variant": "paid",
+      "runtime_raw_count": 200,
+      "projection_count": 3395,
+      "rules_table_after_count": 178,
+      "pre_cleanup_count": 3395
+    },
+    {
+      "sample": "sample_007_construction_small_paid",
+      "name": "construction_small_paid",
+      "case": {
+        "slug": "construction_small",
+        "sector": "CONSTRUCTION",
+        "worker_count": 20,
+        "contract_amount_eok": 5,
+        "construction_type": "BUILDING"
+      },
+      "variant": "paid",
+      "runtime_raw_count": 200,
+      "projection_count": 442,
+      "rules_table_after_count": 25,
+      "pre_cleanup_count": 442
+    },
+    {
+      "sample": "sample_008_construction_large_paid",
+      "name": "construction_large_paid",
+      "case": {
+        "slug": "construction_large",
+        "sector": "CONSTRUCTION",
+        "worker_count": 120,
+        "contract_amount_eok": 80,
+        "construction_type": "BUILDING"
+      },
+      "variant": "paid",
+      "runtime_raw_count": 200,
+      "projection_count": 442,
+      "rules_table_after_count": 25,
+      "pre_cleanup_count": 442
+    },
+    {
+      "sample": "sample_009_building_zero_paid",
+      "name": "building_zero_paid",
+      "case": {
+        "slug": "building_zero",
+        "sector": "BUILDING",
+        "employee_count": 0,
+        "floor_area": 200
+      },
+      "variant": "paid",
+      "runtime_raw_count": 200,
+      "projection_count": 3394,
+      "rules_table_after_count": 177,
+      "pre_cleanup_count": 3394
+    },
+    {
+      "sample": "sample_010_building_xlarge_paid",
+      "name": "building_xlarge_paid",
+      "case": {
+        "slug": "building_xlarge",
+        "sector": "BUILDING",
+        "employee_count": 1000,
+        "floor_area": 50000
+      },
+      "variant": "paid",
+      "runtime_raw_count": 200,
+      "projection_count": 3395,
+      "rules_table_after_count": 178,
+      "pre_cleanup_count": 3395
+    },
+    {
+      "sample": "sample_011_special_facility_paid",
+      "name": "special_facility_paid",
+      "case": {
+        "slug": "special_facility",
+        "sector": "SPECIAL_FACILITY",
+        "employee_count": 30,
+        "floor_area": 2000
+      },
+      "variant": "paid",
+      "runtime_raw_count": 200,
+      "projection_count": 3395,
+      "rules_table_after_count": 178,
+      "pre_cleanup_count": 3395
+    },
+    {
+      "sample": "sample_012_manufacturing_edge_paid",
+      "name": "manufacturing_edge_paid",
+      "case": {
+        "slug": "manufacturing_edge",
+        "sector": "MANUFACTURING",
+        "employee_count": 1,
+        "floor_area": 50
+      },
+      "variant": "paid",
+      "runtime_raw_count": 200,
+      "projection_count": 3394,
+      "rules_table_after_count": 177,
+      "pre_cleanup_count": 3394
+    }
+  ]
+}
