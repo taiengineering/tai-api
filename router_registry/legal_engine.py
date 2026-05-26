@@ -8,7 +8,7 @@ ROUTERS = [
     {"module": "routers.engine_qa"},
     {"module": "routers.law_rule_generator"},
     {"module": "routers.engine_legal"},
-    {"module": "routers.law_collector"},
+    # {"module": "routers.law_collector"},  # _get_cfg import 오류 — messaging.py 리팩토링 후 복원
     {"module": "routers.byulpyo"},
     {"module": "routers.compiler_core"},
     {"module": "routers.residual_intelligence"},
