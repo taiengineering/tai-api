@@ -1,15 +1,14 @@
 """이메일 발송 유틸 — Gmail SMTP.
 
+v1.1.0  2026-05-26  발신자 noreply 분리, Reply-To 추가
 v1.0.0  2026-05-26  신규 생성
 
 환경변수:
-  GMAIL_USER     = 발송자 이메일 (e.g. noreply@taieng.co.kr)
-  GMAIL_APP_PASS = Gmail 앱 비밀번호 (16자리)
-  GMAIL_FROM_NAME = 발송자 표시명 (기본: TAI Safe)
-
-앱 비밀번호 생성:
-  1. Google 계정 → 보안 → 2단계 인증 활성화
-  2. Google 계정 → 보안 → 앱 비밀번호 → 생성
+  GMAIL_USER       = SMTP 인증용 계정 (e.g. tai@taieng.co.kr)
+  GMAIL_APP_PASS   = Gmail 앱 비밀번호 (16자리)
+  GMAIL_FROM_EMAIL = 발신자 이메일 표시 (기본: noreply@taieng.co.kr)
+  GMAIL_FROM_NAME  = 발신자 표시명 (기본: TAI Safe)
+  GMAIL_REPLY_TO   = 회신 주소 (기본: support@taieng.co.kr)
 """
 import os
 import smtplib
@@ -22,7 +21,9 @@ logger = logging.getLogger(__name__)
 
 GMAIL_USER = os.getenv("GMAIL_USER", "")
 GMAIL_APP_PASS = os.getenv("GMAIL_APP_PASS", "")
+GMAIL_FROM_EMAIL = os.getenv("GMAIL_FROM_EMAIL", "noreply@taieng.co.kr")
 GMAIL_FROM_NAME = os.getenv("GMAIL_FROM_NAME", "TAI Safe")
+GMAIL_REPLY_TO = os.getenv("GMAIL_REPLY_TO", "support@taieng.co.kr")
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 
@@ -45,9 +46,10 @@ def send_email(
 
     try:
         msg = MIMEMultipart("alternative")
-        msg["From"] = f"{GMAIL_FROM_NAME} <{GMAIL_USER}>"
+        msg["From"] = f"{GMAIL_FROM_NAME} <{GMAIL_FROM_EMAIL}>"
         msg["To"] = to
         msg["Subject"] = subject
+        msg["Reply-To"] = GMAIL_REPLY_TO
         if cc:
             msg["Cc"] = ", ".join(cc)
 
@@ -62,7 +64,7 @@ def send_email(
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
             server.starttls()
             server.login(GMAIL_USER, GMAIL_APP_PASS)
-            server.sendmail(GMAIL_USER, recipients, msg.as_string())
+            server.sendmail(GMAIL_FROM_EMAIL, recipients, msg.as_string())
 
         logger.info(f"Email sent to {to}, subject='{subject}'")
         return True
@@ -128,6 +130,7 @@ def payment_success_email(user_name: str, company_name: str, plan_code: str,
         </p>
       </div>
       <p style="text-align:center;font-size:11px;color:#aaa;margin-top:16px;">
+        이 메일은 발신전용입니다. 회신은 support@taieng.co.kr로 부탁드립니다.<br>
         TAI Engineering | 서울 강남구 테헤란로79길 6 JS타워 3층
       </p>
     </div>
@@ -137,7 +140,8 @@ def payment_success_email(user_name: str, company_name: str, plan_code: str,
         f"{user_name}님, 결제가 완료되었습니다.\n"
         f"플랜: {plan_code}\n"
         f"금액: {total_amount:,}원\n"
-        f"지금 바로 이용하세요 \u2192 https://safe.taieng.co.kr"
+        f"지금 바로 이용하세요 → https://safe.taieng.co.kr\n\n"
+        f"이 메일은 발신전용입니다. 문의: support@taieng.co.kr"
     )
     
     return subject, html, text
