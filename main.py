@@ -1,6 +1,7 @@
-# main.py — v6.0.1
-# v6.0.0: Module Isolation — Safe Loading + 10 Module Groups
+# main.py — v6.0.2
+# v6.0.2: /health 엔드포인트 복원 (Railway 헬스체크 필수)
 # v6.0.1: Add total field to module status for debugging
+# v6.0.0: Module Isolation — Safe Loading + 10 Module Groups
 # 한 라우터 import 실패 → 해당 라우터만 스킵, 나머지 정상 작동
 # /health 응답에 모듈별 상태(ok/degraded) 포함
 import os
@@ -19,7 +20,7 @@ import services.health_probes  # noqa: F401
 from router_registry import load_module_group, get_all_status
 
 logger = logging.getLogger(__name__)
-APP_VERSION = "6.0.1"
+APP_VERSION = "6.0.2"
 
 
 @asynccontextmanager
@@ -94,7 +95,13 @@ def _load_all_modules():
 _load_all_modules()
 
 
-# === Root / Health ===
+# === Health Check (Railway 필수) ===
+@app.get("/health")
+def health():
+    return {"status": "ok", "version": APP_VERSION}
+
+
+# === Root ===
 @app.get("/")
 def root():
     status_info = get_all_status()
