@@ -1,5 +1,9 @@
 """
-work_schedules.py — v1.2.0
+work_schedules.py — v1.2.1
+
+v1.2.1 (2026-05-26):
+  [FIX] GET /work-schedules — size 상한 100→500 변경
+        대시보드 일별 차트 집계에서 size=500 요청 시 422 발생 수정
 
 v1.2.0 (2026-04-13):
   [ADD] GET /work-schedules — is_assigned, company_id, factory_id, status_code, page, size 필터 지원
@@ -28,7 +32,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/work-schedules", tags=["work_schedules"])
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 
 
 def _now() -> str:
@@ -200,14 +204,15 @@ def get_work_schedules(
     source_type:  Optional[str]  = Query(None, description="소스 타입 필터 (MANUAL/LAW_ENGINE)"),
     is_assigned:  Optional[bool] = Query(None, description="배정 여부 필터. false=미배정(assigned_user_id IS NULL), true=배정완료"),
     page:         int            = Query(1, ge=1, description="페이지 번호"),
-    size:         int            = Query(20, ge=1, le=100, description="페이지 크기"),
+    size:         int            = Query(20, ge=1, le=500, description="페이지 크기"),
 ):
     """
-    v1.2.0: 업무 일정 목록 조회.
+    v1.2.1: 업무 일정 목록 조회.
 
     - is_assigned=false → 미배정 건 (assigned_user_id IS NULL)
     - is_assigned=true  → 배정 완료 건 (assigned_user_id IS NOT NULL)
     - 대시보드 미배정 경고 카드: GET /work-schedules?is_assigned=false&company_id=xxx
+    - size 상한 500 (대시보드 차트 집계용)
     """
     supabase = get_supabase()
     q = supabase.table("work_schedules").select("*", count="exact")
