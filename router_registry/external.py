@@ -33,7 +33,7 @@ ROUTERS = [
     {"module": "routers.watch_engine_sla_api"},
     {"module": "routers.watch_engine_incident_api"},
     {"module": "routers.watch_engine_recovery_api"},
-    {"module": "routers.watch_engine_knowledge_api"},
+    # {"module": "routers.watch_engine_knowledge_api"},  # 모듈 미존재 — 필요 시 생성
     {"module": "routers.watch_engine_memory_api"},
     {"module": "routers.watch_engine_governance_api"},
     {"module": "routers.watch_engine_identity_api"},
