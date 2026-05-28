@@ -1,10 +1,14 @@
 """
-inicis_auth.py — KG이니시스 통합인증서비스(SA) 연동
+inicis_auth.py — KG이니시스 통합인증서비스(SA) 연동  v1.1.0
+
+v1.1.0 (2026-05-28):
+  [FIX] callback/success, callback/fail: GET → POST 변경
+        이니시스가 콜백을 POST form data로 전송
 
 API:
   POST /auth/inicis/request           인증요청 파라미터 생성
-  GET  /auth/inicis/callback/success  성공 콜백 + S2S 결과조회 + DB 저장
-  GET  /auth/inicis/callback/fail     실패 콜백
+  POST /auth/inicis/callback/success  성공 콜백 + S2S 결과조회 + DB 저장
+  POST /auth/inicis/callback/fail     실패 콜백
   GET  /auth/inicis/result/{mtx_id}   인증결과 조회
 """
 from __future__ import annotations
@@ -165,14 +169,17 @@ def create_auth_request(body: AuthRequestBody):
     }
 
 
-@router.get("/callback/success")
+@router.post("/callback/success")
 async def callback_success(request: Request):
-    """STEP2 콜백 → STEP3 S2S 결과조회 → STEP4 복호화·저장."""
-    params = dict(request.query_params)
-    result_code = params.get("resultCode", "")
-    result_msg = unquote(params.get("resultMsg", "") or "")
-    auth_request_url = params.get("authRequestUrl", "")
-    tx_id = params.get("txId", "")
+    """STEP2 콜백 (POST form data) → STEP3 S2S 결과조회 → STEP4 복호화·저장."""
+    # 이니시스는 POST form data로 콜백 전송
+    form = await request.form()
+    params = dict(form)
+
+    result_code = str(params.get("resultCode", ""))
+    result_msg = unquote(str(params.get("resultMsg", "") or ""))
+    auth_request_url = str(params.get("authRequestUrl", ""))
+    tx_id = str(params.get("txId", ""))
 
     if result_code != "0000":
         return HTMLResponse(_popup_result_html(False, result_msg or "인증 실패"))
@@ -231,11 +238,14 @@ async def callback_success(request: Request):
     return HTMLResponse(_popup_result_html(True, "본인인증이 완료되었습니다.", mtx_id))
 
 
-@router.get("/callback/fail")
+@router.post("/callback/fail")
 async def callback_fail(request: Request):
-    params = dict(request.query_params)
-    result_msg = unquote(params.get("resultMsg", "") or "인증 실패")
-    mtx_id = params.get("mTxId", "")
+    """실패 콜백 (POST form data)."""
+    form = await request.form()
+    params = dict(form)
+
+    result_msg = unquote(str(params.get("resultMsg", "") or "인증 실패"))
+    mtx_id = str(params.get("mTxId", ""))
 
     if mtx_id:
         try:
