@@ -30,6 +30,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
+from services.diagnosis_integrated_svc import sync_diagnosis_auth_log_from_inicis
 from utils.seed_cipher import seed_cbc_decrypt
 
 log = logging.getLogger(__name__)
@@ -235,6 +236,11 @@ async def callback_success(request: Request):
         log.exception("[inicis_auth] update failed mtx_id=%s", mtx_id)
         return HTMLResponse(_popup_result_html(False, f"저장 실패: {e}"))
 
+    try:
+        sync_diagnosis_auth_log_from_inicis(get_supabase(), mtx_id)
+    except Exception as e:
+        log.warning("[inicis_auth] diagnosis_auth_log sync mtx_id=%s: %s", mtx_id, e)
+
     return HTMLResponse(_popup_result_html(True, "본인인증이 완료되었습니다.", mtx_id))
 
 
@@ -274,7 +280,15 @@ def get_auth_result(mtx_id: str):
     )
     if not result.data:
         raise HTTPException(404, "인증 요청을 찾을 수 없습니다.")
-    return {"status": "success", "data": result.data[0]}
+
+    row = result.data[0]
+    if row.get("status") == "SUCCESS":
+        try:
+            sync_diagnosis_auth_log_from_inicis(get_supabase(), mtx_id)
+        except Exception as e:
+            log.warning("[inicis_auth] diagnosis sync on result mtx_id=%s: %s", mtx_id, e)
+
+    return {"status": "success", "data": row}
 
 
 def _popup_result_html(success: bool, message: str, mtx_id: str = "") -> str:

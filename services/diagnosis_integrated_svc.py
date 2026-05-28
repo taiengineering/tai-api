@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -42,6 +43,58 @@ def _save_diagnosis_purchase(
         ).execute()
     except Exception as e:
         log.warning("[diagnosis_purchases] save failed: %s", e)
+
+
+def sync_diagnosis_auth_log_from_inicis(supabase, mtx_id: str) -> None:
+    """inicis_auth_requests(SUCCESS) → diagnosis_auth_log, auth_token=mtx_id (무료진단 호환)."""
+    res = (
+        supabase.table("inicis_auth_requests")
+        .select("mtx_id, status, user_name, user_phone, user_ci")
+        .eq("mtx_id", mtx_id)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        return
+    row = res.data[0]
+    if row.get("status") != "SUCCESS":
+        return
+    ci = (row.get("user_ci") or "").strip()
+    if not ci:
+        log.warning("[diagnosis_auth] inicis SUCCESS but no CI mtx_id=%s", mtx_id)
+        return
+
+    ci_hash = hashlib.sha256(ci.encode("utf-8")).hexdigest()
+    name = row.get("user_name") or ""
+    phone = row.get("user_phone") or ""
+    now = datetime.now(timezone.utc).isoformat()
+
+    existing = (
+        supabase.table("diagnosis_auth_log")
+        .select("id, free_count, free_limit")
+        .eq("ci_hash", ci_hash)
+        .limit(1)
+        .execute()
+    )
+    payload = {
+        "name": name,
+        "phone": phone,
+        "verified_at": now,
+        "updated_at": now,
+        "auth_token": mtx_id,
+        "status": "ACTIVE",
+    }
+    if existing.data:
+        supabase.table("diagnosis_auth_log").update(payload).eq("id", existing.data[0]["id"]).execute()
+    else:
+        supabase.table("diagnosis_auth_log").insert({
+            **payload,
+            "ci": "",
+            "ci_hash": ci_hash,
+            "free_count": 0,
+            "free_limit": 3,
+            "created_at": now,
+        }).execute()
 
 
 def resolve_auth_log(supabase, auth_token: str) -> dict:
