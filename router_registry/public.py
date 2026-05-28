@@ -11,4 +11,5 @@ ROUTERS = [
     {"module": "routers.admin_pricing"},
     {"module": "routers.internal_inbox"},
     {"module": "routers.admin_inquiries"},
+    {"module": "routers.inicis_auth"},
 ]
