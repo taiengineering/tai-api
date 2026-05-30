@@ -18,6 +18,7 @@ from services.legal_rules import (
     normalize_sector_db as _normalize_sector_db,
 )
 from services.leg_output_adapter import adapt
+from services.legal_diagnosis_rules import fetch_diagnosis_rules
 from services.legal_runtime import _create_report_events_from_rules, _save_diagnosis_result
 
 
@@ -38,15 +39,12 @@ def run_diagnose_step1_v510(
             raise LookupError("시설을 찾을 수 없습니다.")
 
     sector_db = _normalize_sector_db(sector_raw)
-    rules_res = (
-        supabase.table("master_building_legal_rules")
-        .select("*")
-        .eq("is_active", True)
-        .eq("sector", sector_db)
-        .eq("diagnosis_stage", 1)
-        .execute()
+    all_rules = fetch_diagnosis_rules(
+        supabase,
+        sector_db=sector_db,
+        diagnosis_stage=1,
+        factory_id=factory_id or None,
     )
-    all_rules = rules_res.data or []
 
     inp = dict(body.input or {})
     flat_fields = {
@@ -268,19 +266,14 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
     input_data["construction_types"] = construction_types
     input_data["sector"] = sector
 
-    q = (
-        supabase.table("master_building_legal_rules")
-        .select("*")
-        .eq("sector", sector)
-        .lte("diagnosis_stage", 2)
-        .eq("is_active", True)
+    sector_db = _normalize_sector_db(sector)
+    rules = fetch_diagnosis_rules(
+        supabase,
+        sector_db=sector_db,
+        diagnosis_stage_lte=2,
+        work_types=work_types if work_types else None,
+        factory_id=factory_id,
     )
-    if sector == "CONSTRUCTION" and work_types:
-        work_type_csv = ",".join(work_types)
-        q = q.or_(f"construction_work_type.is.null,construction_work_type.in.({work_type_csv})")
-
-    rules_res = q.execute()
-    rules = rules_res.data or []
     matched = [r for r in rules if _evaluate_condition(r, input_data)]
 
     diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 2, input_data, matched)
