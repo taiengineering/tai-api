@@ -17,9 +17,10 @@ from services.legal_rules import (
     _risk_level,
     normalize_sector_db as _normalize_sector_db,
 )
-from services.leg_output_adapter import adapt
+from services.leg_output_adapter import adapt, _group_by_type, _group_by_law
 from services.legal_diagnosis_rules import fetch_diagnosis_rules
 from services.legal_runtime import _create_report_events_from_rules, _save_diagnosis_result
+from services.leg_obligation_enrichment import enrich
 
 
 def run_diagnose_step1_v510(
@@ -174,6 +175,41 @@ def run_diagnose_step1_v510(
         result_data["construction_summary"] = _get_construction_summary(facility_ctx)
 
     obligation_contract = adapt(result_data, mode=sector_raw)
+
+    # Enrichment Guard: 조건 없는 rule을 applicable에서 분리
+    enrichment_result = enrich(
+        obligation_contract.get("obligations", []),
+        supabase,
+    )
+    obligation_contract["obligations"] = enrichment_result["applicable"]
+    obligation_contract["enrichment_stats"] = enrichment_result["enrichment_stats"]
+
+    # review_required는 API 응답에서 제외 — 운영자 검토용 백로그
+    review_list = enrichment_result["review_required"]
+    obligation_contract["review_required_count"] = len(review_list)
+    obligation_contract["review_sample"] = [
+        {
+            "obligation_id": r.get("obligation_id", ""),
+            "law_name": r.get("law_name", ""),
+            "law_article": r.get("law_article", ""),
+            "title": r.get("title", ""),
+            "missing_fields": (r.get("enrichment") or {}).get("missing_fields", []),
+        }
+        for r in review_list[:10]
+    ]
+
+    # grouped_by_type/law를 applicable 기준으로 재생성
+    obligation_contract["grouped_by_type"] = _group_by_type(enrichment_result["applicable"])
+    obligation_contract["grouped_by_law"] = _group_by_law(enrichment_result["applicable"])
+    obligation_contract["evidence_refs"] = [
+        {"law_name": g["law_name"], "count": g["count"]}
+        for g in obligation_contract["grouped_by_law"]
+    ]
+
+    # summary 업데이트
+    obligation_contract["summary"]["applicable_after_enrichment"] = len(enrichment_result["applicable"])
+    obligation_contract["summary"]["review_required"] = len(enrichment_result["review_required"])
+
     obligation_contract["sector"] = sector_raw
     obligation_contract["step"] = 1
     if sector_raw == "CONSTRUCTION" and result_data.get("construction_summary"):
