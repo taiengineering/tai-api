@@ -5,6 +5,7 @@ from typing import Optional
 from db.supabase_client import get_supabase
 from schemas.legal_engine import DiagnoseStep1Body, DiagnoseStep2Body, DiagnoseStep3Body
 from services import legal_engine_svc
+from services.legal_v510_svc import run_diagnose_step1_v510
 from services.legal_context import _factory_to_context, _survey_data_to_context
 from services.legal_format import CYCLE_CODE_MAP
 from services.legal_helpers import (
@@ -57,10 +58,10 @@ async def apply_legal_engine_from_quote(quote_id: str):
 
 @router.post("/diagnose/step1")
 async def diagnose_step1(body: DiagnoseStep1Body):
-    # LEGACY - ISOLATED: 구형 엔진 경로 (master_building_legal_rules). Nexas는 /diagnosis/run runtime 사용.
+    # v510 Canonical Runtime: adapter + enrichment + obligation_contract
     supabase = get_supabase()
     try:
-        return legal_engine_svc.run_diagnose_step1_endpoint(supabase, body)
+        return run_diagnose_step1_v510(supabase, body, ["BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY"], "v5.10")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except LookupError as e:
