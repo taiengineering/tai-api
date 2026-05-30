@@ -17,6 +17,7 @@ from services.legal_rules import (
     _risk_level,
     normalize_sector_db as _normalize_sector_db,
 )
+from services.leg_output_adapter import adapt
 from services.legal_runtime import _create_report_events_from_rules, _save_diagnosis_result
 
 
@@ -174,6 +175,13 @@ def run_diagnose_step1_v510(
     if sector_raw == "CONSTRUCTION":
         result_data["construction_summary"] = _get_construction_summary(facility_ctx)
 
+    obligation_contract = adapt(result_data, mode=sector_raw)
+    obligation_contract["sector"] = sector_raw
+    obligation_contract["step"] = 1
+    if sector_raw == "CONSTRUCTION" and result_data.get("construction_summary"):
+        obligation_contract["construction_summary"] = result_data["construction_summary"]
+    result_data["obligation_contract"] = obligation_contract
+
     diagnosis_id = None
     if factory_id:
         try:
@@ -232,7 +240,9 @@ def run_diagnose_step1_v510(
                 pass
 
     result_data["diagnosis_id"] = diagnosis_id
-    return {"status": "success", "data": result_data}
+    obligation_contract["diagnosis_id"] = diagnosis_id
+    obligation_contract["factory_id"] = factory_id or None
+    return {"status": "success", "data": obligation_contract}
 
 
 def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: str) -> Dict[str, Any]:
