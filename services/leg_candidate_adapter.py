@@ -41,7 +41,7 @@ def _make_candidate(item, source_bucket):
         "article_no": (item.get("law_article") or "").strip(),
         "article_title": _clean(item.get("article_title") or ""),
         "article_text": (item.get("article_text") or "").strip(),
-        "who": _clean(item.get("appointment_target") or item.get("executor_type_label") or ""),
+        "who": _clean(item.get("appointment_target") or item.get("executor_type_label") or (item.get("remarks") or "").split("|")[0].strip() or ""),
         "when": _clean(item.get("inspection_cycle") or item.get("cycle_base_guide") or ""),
         "where": "", "what": _clean(item.get("description") or item.get("obligation_summary") or item.get("remarks") or ""),
         "how": _clean(runtime_name), "why": (item.get("law_name") or "").strip(),
