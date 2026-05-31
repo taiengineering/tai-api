@@ -115,7 +115,7 @@ def fetch_rules_v1(
 ) -> List[Dict[str, Any]]:
     groups = sector_groups or get_sector_groups(sector_db)
     q = (
-        supabase.table("master_building_legal_rules")
+        supabase.table("master_building_legal_rules_legacy_contaminated")
         .select(_SELECT_ALL)
         .eq("is_active", True)
         .in_("sector", groups)

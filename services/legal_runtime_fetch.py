@@ -1,3 +1,7 @@
+# [CATALOG ONLY - NOT DIAGNOSIS SOURCE]
+# runtime_metadata_resolution = 법령 카탈로그. 진단 경로 격리됨 (2026-05-31)
+# 삭제 금지. 검색/문서생성/AI근거탐색 용도 보존.
+
 """
 Runtime Engine (runtime_metadata_resolution) → v1 diagnosis rule fetch.
 """
