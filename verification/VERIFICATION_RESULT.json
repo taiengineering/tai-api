@@ -1,0 +1,274 @@
+{
+  "reachability": {
+    "total": 2002,
+    "reachable": 1996,
+    "truly_reachable": 634,
+    "no_condition_pass": 1362,
+    "unreachable": 6,
+    "data_error": 0,
+    "reachability_pct": 99.7,
+    "unreachable_list": [
+      {
+        "rule_id": "NFPC102_8_2_2",
+        "law": "옥내소화전설비의 화재안전성능기준(NFPC 102)",
+        "article": "제8조전원",
+        "condition_code": "building_area",
+        "condition_value": "3000.0",
+        "operator": ">="
+      },
+      {
+        "rule_id": "NFPC102_8_2_1-V2",
+        "law": "옥내소화전설비의 화재안전성능기준(NFPC 102)",
+        "article": "제8조전원",
+        "condition_code": "building_area",
+        "condition_value": "2000.0",
+        "operator": ">="
+      },
+      {
+        "rule_id": "NFTC 501 2.5.2.1",
+        "law": "제연설비의 화재안전기술기준(NFTC 501)",
+        "article": "제2조2.5.2.1 바닥면적 400 ㎡ 미만의 거실인 예상제연구역(제연경계에 따른 구획을 제외한다. 다만, 거실과 통로와의 구획은 그렇지 않다)에 대해서는 공기유입구와 배출구간의 직선거리는 5 m 이",
+        "condition_code": "building_area",
+        "condition_value": "400.0",
+        "operator": "<"
+      },
+      {
+        "rule_id": "NFTC 501-2.5.2.1",
+        "law": "제연설비의 화재안전기술기준(NFTC 501)",
+        "article": "제2조2.5.2.1 바닥면적 400 ㎡ 미만의 거실인 예상제연구역(제연경계에 따른 구획을 제외한다. 다만, 거실과 통로와의 구획은 그렇지 않다)에 대해서는 공기유입구와 배출구간의 직선거리는 5 m 이",
+        "condition_code": "building_area",
+        "condition_value": "400.0",
+        "operator": "<"
+      },
+      {
+        "rule_id": "NFTC 608 2.8.1.2",
+        "law": "공동주택의 화재안전기술기준(NFTC 608)",
+        "article": "제15조2.8 비상방송설비",
+        "condition_code": "is_multi_use",
+        "condition_value": "2",
+        "operator": "=="
+      },
+      {
+        "rule_id": "NFTC 103B 2.1.0.1.5",
+        "law": "화재조기진압용 스프링클러설비의 화재안전기술기준(NFTC 103B)",
+        "article": "제23조2.1 0.1.5 송수구는 하나의 층의 바닥면적이 3,000 ㎡를 넘을 때마다 1개 이상(5개를 넘을 경우에는 5개로 한다)을 설치할 것",
+        "condition_code": "building_area",
+        "condition_value": "3000.0",
+        "operator": ">"
+      }
+    ]
+  },
+  "mutation": {
+    "total_boundary_rules": 41,
+    "passed": 29,
+    "failed": 12,
+    "skipped": 0,
+    "pass_rate": 70.7,
+    "failed_list": [
+      {
+        "rule_id": "NFTC 501-2.5.2.1-V2",
+        "law": "제연설비의 화재안전기술기준(NFTC 501)",
+        "code": "building_area",
+        "op": ">",
+        "boundary": 200.0,
+        "below": true,
+        "exact": true,
+        "above": true
+      },
+      {
+        "rule_id": "NFPC 103B 7-1",
+        "law": "화재조기진압용 스프링클러설비의 화재안전성능기준(NFPC 103B)",
+        "code": "building_area",
+        "op": "<=",
+        "boundary": 3000.0,
+        "below": true,
+        "exact": true,
+        "above": true
+      },
+      {
+        "rule_id": "NFTC 103 2.3.1.1",
+        "law": "스프링클러설비의 화재안전기술기준(NFTC 103)",
+        "code": "building_area",
+        "op": "<=",
+        "boundary": 3000.0,
+        "below": true,
+        "exact": true,
+        "above": true
+      },
+      {
+        "rule_id": "NFTC 103B 2.4.1.1",
+        "law": "화재조기진압용 스프링클러설비의 화재안전기술기준(NFTC 103B)",
+        "code": "building_area",
+        "op": "<=",
+        "boundary": 3000.0,
+        "below": true,
+        "exact": true,
+        "above": true
+      },
+      {
+        "rule_id": "NFPC102_8_2_2",
+        "law": "옥내소화전설비의 화재안전성능기준(NFPC 102)",
+        "code": "building_area",
+        "op": ">=",
+        "boundary": 3000.0,
+        "below": false,
+        "exact": false,
+        "above": false
+      },
+      {
+        "rule_id": "NFPC102_8_2_1-V2",
+        "law": "옥내소화전설비의 화재안전성능기준(NFPC 102)",
+        "code": "building_area",
+        "op": ">=",
+        "boundary": 2000.0,
+        "below": false,
+        "exact": false,
+        "above": false
+      },
+      {
+        "rule_id": "NFPC 103A-6-1",
+        "law": "간이스프링클러설비의 화재안전성능기준(NFPC 103A)",
+        "code": "building_area",
+        "op": "<=",
+        "boundary": 1000.0,
+        "below": true,
+        "exact": true,
+        "above": true
+      },
+      {
+        "rule_id": "NFTC501_2.3.2.1",
+        "law": "제연설비의 화재안전기술기준(NFTC 501)",
+        "code": "building_area",
+        "op": "<=",
+        "boundary": 1256.64,
+        "below": true,
+        "exact": true,
+        "above": true
+      },
+      {
+        "rule_id": "NFTC 501 2.5.2.1",
+        "law": "제연설비의 화재안전기술기준(NFTC 501)",
+        "code": "building_area",
+        "op": "<",
+        "boundary": 400.0,
+        "below": false,
+        "exact": false,
+        "above": false
+      },
+      {
+        "rule_id": "NFTC 501-2.5.2.1",
+        "law": "제연설비의 화재안전기술기준(NFTC 501)",
+        "code": "building_area",
+        "op": "<",
+        "boundary": 400.0,
+        "below": false,
+        "exact": false,
+        "above": false
+      },
+      {
+        "rule_id": "NFTC105_2.5.2.2",
+        "law": "포소화설비의 화재안전기술기준(NFTC 105)",
+        "code": "building_area",
+        "op": ">=",
+        "boundary": 200.0,
+        "below": true,
+        "exact": true,
+        "above": true
+      },
+      {
+        "rule_id": "NFTC 103B 2.1.0.1.5",
+        "law": "화재조기진압용 스프링클러설비의 화재안전기술기준(NFTC 103B)",
+        "code": "building_area",
+        "op": ">",
+        "boundary": 3000.0,
+        "below": false,
+        "exact": false,
+        "above": false
+      }
+    ]
+  },
+  "consistency": {
+    "total_rules": 1000,
+    "conflict_count": 130,
+    "conflict_by_type": {
+      "ACTION": 34,
+      "APPOINT": 27,
+      "NOTIFY": 45,
+      "REPORT": 20,
+      "INSPECT": 4
+    },
+    "conflict_rate": 13.0,
+    "sample_conflicts": [
+      {
+        "rule_id": "FIREACT-012-CMN",
+        "law": "소방시설 설치 및 관리에 관한 법률",
+        "article": "제12조",
+        "obligation_type": "ACTION",
+        "flag_should_be": "action_required"
+      },
+      {
+        "rule_id": "FIREACT-014-CMN",
+        "law": "화재의 예방 및 안전관리에 관한 법률 시행규칙",
+        "article": "제14조소방안전관리자의 선임신고 등",
+        "obligation_type": "APPOINT",
+        "flag_should_be": "appointment_required"
+      },
+      {
+        "rule_id": "ISOHR-016-COMMON",
+        "law": "산업안전보건법 시행규칙",
+        "article": "제16조안전관리ㆍ보건관리전문기관의 지정신청 등",
+        "obligation_type": "NOTIFY",
+        "flag_should_be": "notify_required"
+      },
+      {
+        "rule_id": "FIREACT-014-CMN-4",
+        "law": "화재의 예방 및 안전관리에 관한 법률 시행규칙",
+        "article": "제14조소방안전관리자의 선임신고 등",
+        "obligation_type": "APPOINT",
+        "flag_should_be": "appointment_required"
+      },
+      {
+        "rule_id": "FIREACT-018-CONST",
+        "law": "화재의 예방 및 안전관리에 관한 법률 시행규칙",
+        "article": "제18조",
+        "obligation_type": "APPOINT",
+        "flag_should_be": "appointment_required"
+      },
+      {
+        "rule_id": "HPGASACT-004-MFG",
+        "law": "고압가스 안전관리법 시행규칙",
+        "article": "제4조",
+        "obligation_type": "NOTIFY",
+        "flag_should_be": "notify_required"
+      },
+      {
+        "rule_id": "ESAFETY-002-COMMON",
+        "law": "전기안전관리법 시행규칙",
+        "article": "제2조",
+        "obligation_type": "NOTIFY",
+        "flag_should_be": "notify_required"
+      },
+      {
+        "rule_id": "ISHR-018-CMN",
+        "law": "산업안전보건법 시행규칙",
+        "article": "제18조둘 이상의 관할지역에 걸치는 안전관리ㆍ보건관리전문기관의 지정",
+        "obligation_type": "NOTIFY",
+        "flag_should_be": "notify_required"
+      },
+      {
+        "rule_id": "HPGASA-012-MFG",
+        "law": "고압가스 안전관리법 시행령",
+        "article": "제4조",
+        "obligation_type": "APPOINT",
+        "flag_should_be": "appointment_required"
+      },
+      {
+        "rule_id": "ISOFE-024-REPORT",
+        "law": "산업안전보건법 시행령",
+        "article": "제24조안전보건관리담당자의 선임 등",
+        "obligation_type": "REPORT",
+        "flag_should_be": "report_required"
+      }
+    ]
+  }
+}
