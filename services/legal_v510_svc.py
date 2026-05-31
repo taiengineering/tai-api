@@ -5,12 +5,12 @@ from schemas.legal_engine import DiagnoseStep1Body
 from schemas.legal_engine_v510 import DiagnoseStep2Body
 from services.legal_format import _classify_rules_db, format_rule_result_db
 from services.legal_v510_helpers import (
-    _evaluate_facility_conditions_db_v510,
     _get_construction_summary,
     _input_to_facility_context_v510,
 )
 from services.legal_rules import (
     _evaluate_condition,
+    _evaluate_conditions,
     _resolve_obligation_type,
     _risk_level,
     normalize_sector_db as _normalize_sector_db,
@@ -47,7 +47,10 @@ def run_diagnose_step1_v510(supabase, body: DiagnoseStep1Body, allowed_sectors, 
 
     facility_ctx = _input_to_facility_context_v510(sector_raw, inp)
     evaluated_at = datetime.now().isoformat()
-    applicable, not_applicable = _evaluate_facility_conditions_db_v510(facility_ctx, all_rules, sector_raw)
+    # _evaluate_conditions는 원설계 필드명(employee_count, floor_area 등) 사용
+    eval_ctx = dict(inp)
+    eval_ctx["sector"] = sector_raw
+    applicable, not_applicable = _evaluate_conditions(eval_ctx, all_rules)
 
     triggered: Dict[str, List] = {"appointment":[],"inspection":[],"notify":[],"report":[],"action":[],"not_applicable":[]}
     _classify_rules_db(applicable, triggered)
