@@ -1,11 +1,12 @@
 """
-services/input_normalizer.py — Input Normalizer v1.0.0
+services/input_normalizer.py — Input Normalizer v1.1.0
 
 역할:
 - 별칭 통합 (workers → worker_count 등)
 - 타입 변환 ("10" → 10)
 - 빈값 처리 ("" → None)
 - 단위 문자 제거 ("500㎡" → 500)
+- condition_code 양방향 키 보장 (electric_capacity, FLOOR_AREA 등)
 
 허용: 별칭 통합, 타입 정규화, 빈값 처리
 금지: 판단, 추정, 기본값 자동 생성
@@ -30,7 +31,8 @@ ALIAS_MAP: Dict[str, str] = {
     "total_floor_area":         "building_area",
     "area":                     "building_area",
     "FLOOR_AREA":               "building_area",
-    # electric
+    # electric: API 입력은 electrical_capacity_kw로 정규화하되
+    # electric_capacity condition_code (11건)를 위해 역방향도 보존
     "electric_capacity":        "electrical_capacity_kw",
     "electric_capacity_kw":     "electrical_capacity_kw",
     "power_capacity":           "electrical_capacity_kw",
@@ -46,7 +48,7 @@ ALIAS_MAP: Dict[str, str] = {
 }
 
 # 단위 제거 패턴
-_UNIT_PATTERN = re.compile(r"[㎡kKwWm³톤억원명층대]+$")
+_UNIT_PATTERN = re.compile(r"[\u33a1kKwWm\u00b3\ud1a4\uc5b5\uc6d0\uba85\uce35\ub300]+$")
 
 
 def _strip_units(value: str) -> str:
@@ -84,11 +86,36 @@ def _normalize_value(key: str, value: Any) -> Any:
     return value
 
 
+def _ensure_condition_code_keys(result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    엔진의 _evaluate_conditions()는 condition_code를 context 키로 직접 조회한다.
+    normalizer가 alias 변환 후에도 원래 condition_code 키가 존재해야 한다.
+
+    예:
+      electric_capacity  → electrical_capacity_kw 변환 후
+                           electric_capacity 키도 유지 (11건 룰 조회용)
+      building_area      → floor_area 입력 시 building_area로 변환됨 (정상)
+      FLOOR_AREA         → building_area와 동일 값 보장 (2건 룰)
+      FLOOR_COUNT        → floor_count와 동일 값 보장 (2건 룰)
+    """
+    # electrical_capacity_kw 있으면 electric_capacity도 보장
+    if "electrical_capacity_kw" in result and "electric_capacity" not in result:
+        result["electric_capacity"] = result["electrical_capacity_kw"]
+
+    # 대문자 condition_code 별칭 보장
+    if "building_area" in result and "FLOOR_AREA" not in result:
+        result["FLOOR_AREA"] = result["building_area"]
+    if "floor_count" in result and "FLOOR_COUNT" not in result:
+        result["FLOOR_COUNT"] = result["floor_count"]
+
+    return result
+
+
 def normalize_input(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     API payload → LEG 조건 판정용 표준 입력.
 
-    별칭 통합 → 타입 정규화 → 빈값 None 처리.
+    별칭 통합 → 타입 정규화 → 빈값 None 처리 → condition_code 키 보장.
     판단/추정/기본값 생성 없음.
     """
     result: Dict[str, Any] = {}
@@ -112,4 +139,5 @@ def normalize_input(payload: Dict[str, Any]) -> Dict[str, Any]:
     if "sector" in result and isinstance(result["sector"], str):
         result["sector"] = result["sector"].strip().upper()
 
-    return result
+    # condition_code 양방향 키 보장
+    return _ensure_condition_code_keys(result)

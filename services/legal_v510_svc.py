@@ -15,6 +15,7 @@ from services.legal_rules import (
     _risk_level,
     normalize_sector_db as _normalize_sector_db,
 )
+from services.input_normalizer import normalize_input
 from services.leg_candidate_adapter import to_candidate_contract
 from services.legal_diagnosis_rules import fetch_diagnosis_rules
 from services.legal_runtime import _create_report_events_from_rules, _save_diagnosis_result
@@ -47,8 +48,10 @@ def run_diagnose_step1_v510(supabase, body: DiagnoseStep1Body, allowed_sectors, 
 
     facility_ctx = _input_to_facility_context_v510(sector_raw, inp)
     evaluated_at = datetime.now().isoformat()
-    # _evaluate_conditions는 원설계 필드명(employee_count, floor_area 등) 사용
-    eval_ctx = dict(inp)
+
+    # normalize_input을 통해 condition_code alias 완전 보장
+    # (floor_area→building_area, electric_capacity→electrical_capacity_kw+electric_capacity 등)
+    eval_ctx = normalize_input(inp)
     eval_ctx["sector"] = sector_raw
     applicable, not_applicable = _evaluate_conditions(eval_ctx, all_rules)
 
