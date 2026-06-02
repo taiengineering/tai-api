@@ -19,6 +19,7 @@ from services.legal_rules import (
 from services.input_normalizer import normalize_input
 from services.code_condition_resolver import build_code_condition_context
 from services.leg_candidate_adapter import to_candidate_contract
+from services.candidate_presentation import build_candidate_presentation  # Phase 8-B
 from services.legal_diagnosis_rules import fetch_diagnosis_rules
 from services.legal_runtime import _create_report_events_from_rules, _save_diagnosis_result
 
@@ -69,57 +70,30 @@ def _merge_candidates(
 
 # ── Phase 7-C: 건설 Condition 복구 헬퍼 ──────────────────────────────────
 def _apply_construction_conditions(inp: Dict[str, Any], body: DiagnoseStep1Body, sector_raw: str) -> None:
-    """
-    CONSTRUCTION sector Step1에서 건설 핵심 condition_code를 inp/eval_ctx에 주입.
-
-    복구 대상:
-      contract_amount     (65건 DEAD → 복구)
-      construction_amount (34건 DEAD → 복구)
-      is_construction_site (4건 DEAD → 복구)
-
-    TODO: TUNNEL_LENGTH — DiagnoseStep1Body에 필드 없음. 별도 추가 필요.
-    """
     if sector_raw != "CONSTRUCTION":
         return
-
-    # 1. 공사금액 변환 (억원 → 원)
     eok = body.contract_amount_eok
     if eok is not None:
         try:
             contract_amount_won = float(eok) * 100_000_000
-            # body 공식 필드 우선 — 기존 inp 값 덮어쓰기
             inp["contract_amount_eok"] = float(eok)
             inp["contract_amount"] = contract_amount_won
             inp["construction_amount"] = contract_amount_won
-            logger.info(
-                "[Phase7C] contract_amount_eok=%.1f억 → contract_amount=%.0f원",
-                eok, contract_amount_won,
-            )
+            logger.info("[Phase7C] contract_amount_eok=%.1f억 → contract_amount=%.0f원", eok, contract_amount_won)
         except (TypeError, ValueError):
             pass
     else:
-        # eok 없음 — inp에 직접 원화로 들어온 경우 양쪽 키 동기화
         raw_won = inp.get("contract_amount") or inp.get("construction_amount")
         if raw_won:
             inp["contract_amount"] = float(raw_won)
             inp["construction_amount"] = float(raw_won)
-
-    # 2. is_construction_site: CONSTRUCTION sector면 항상 1
     inp["is_construction_site"] = 1
-
-    # 3. construction_type 전달
     if body.construction_type and "construction_type" not in inp:
         inp["construction_type"] = body.construction_type
-
-    # 4. direct_workers / subcon_workers
     if body.direct_workers is not None and "direct_workers" not in inp:
         inp["direct_workers"] = body.direct_workers
     if body.subcon_workers is not None and "subcon_workers" not in inp:
         inp["subcon_workers"] = body.subcon_workers
-
-    # TODO: TUNNEL_LENGTH — body.tunnel_length 필드 추가 후 연결
-    # if body.tunnel_length is not None:
-    #     inp["TUNNEL_LENGTH"] = body.tunnel_length
 
 
 # ── Step1 ─────────────────────────────────────────────────────────────────
@@ -148,7 +122,6 @@ def run_diagnose_step1_v510(supabase, body: DiagnoseStep1Body, allowed_sectors, 
         if v is not None and k not in inp:
             inp[k] = v
 
-    # Phase 7-C: 건설 Condition 복구
     _apply_construction_conditions(inp, body, sector_raw)
 
     facility_ctx = _input_to_facility_context_v510(sector_raw, inp)
@@ -188,6 +161,10 @@ def run_diagnose_step1_v510(supabase, body: DiagnoseStep1Body, allowed_sectors, 
     candidate_contract["factory_id"] = factory_id or None
     if sector_raw == "CONSTRUCTION" and raw_leg.get("construction_summary"):
         candidate_contract["construction_summary"] = raw_leg["construction_summary"]
+
+    # Phase 8-B: Presentation Layer 추가
+    presentation = build_candidate_presentation(candidate_contract.get("candidates", []))
+    candidate_contract["presentation"] = presentation
 
     result_data = {
         "factory_id": factory_id or None, "sector": sector_raw, "step": 1,
@@ -273,14 +250,11 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
     ]
 
     logger.info("[Step2] condition_ctx=%s", condition_ctx)
-    logger.info("[Step2] equipment_type_codes=%s work_types=%s process_ids=%s step1_candidates=%d",
-                equipments, work_types, input_data["process_ids"], len(step1_candidates))
 
     sector_db = _normalize_sector_db(sector)
     all_rules = fetch_diagnosis_rules(
         supabase, sector_db=sector_db, diagnosis_stage_lte=2,
-        work_types=None,
-        factory_id=factory_id,
+        work_types=None, factory_id=factory_id,
     )
     matched = [r for r in all_rules if _evaluate_step2_rule(r, input_data)]
 
@@ -302,8 +276,8 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
     step2_candidates: List[Dict[str, Any]] = step2_contract.get("candidates", [])
     merged_candidates = _merge_candidates(step1_candidates, step2_candidates)
 
-    logger.info("[Step2] step1=%d step2=%d merged=%d",
-                len(step1_candidates), len(step2_candidates), len(merged_candidates))
+    # Phase 8-B: Presentation Layer
+    presentation = build_candidate_presentation(merged_candidates)
 
     prev_codes = {r.get("rule_code") for r in ((prev or {}).get("result_data") or {}).get("rules", [])}
     added = [r for r in matched if (r.get("rule_code") or r.get("rule_id")) not in prev_codes]
@@ -337,6 +311,8 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
             "merged_count": len(merged_candidates),
             "dedup_removed": len(step1_candidates) + len(step2_candidates) - len(merged_candidates),
         },
+        # Phase 8-B: presentation 추가
+        "presentation": presentation,
         "summary": {
             "applicable_law_categories": result.get("applicable_law_categories", []),
             "appointment_required": result.get("appointment_required", False),
