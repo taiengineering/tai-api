@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 from datetime import datetime
 from typing import Any, Dict, List
 from schemas.legal_engine import DiagnoseStep1Body
@@ -16,15 +17,18 @@ from services.legal_rules import (
     normalize_sector_db as _normalize_sector_db,
 )
 from services.input_normalizer import normalize_input
+from services.condition_normalizer import build_condition_context
 from services.leg_candidate_adapter import to_candidate_contract
 from services.legal_diagnosis_rules import fetch_diagnosis_rules
 from services.legal_runtime import _create_report_events_from_rules, _save_diagnosis_result
+
+logger = logging.getLogger(__name__)
 
 
 def run_diagnose_step1_v510(supabase, body: DiagnoseStep1Body, allowed_sectors, engine_version: str) -> Dict[str, Any]:
     sector_raw = body.sector.strip().upper()
     if sector_raw not in allowed_sectors:
-        raise ValueError("sector는 BUILDING, MANUFACTURING, CONSTRUCTION, SPECIAL_FACILITY 중 하나여야 합니다.")
+        raise ValueError("섹터는 BUILDING, MANUFACTURING, CONSTRUCTION, SPECIAL_FACILITY 중 하나여야 합니다.")
 
     factory_id = (body.factory_id or "").strip()
     if factory_id:
@@ -49,8 +53,6 @@ def run_diagnose_step1_v510(supabase, body: DiagnoseStep1Body, allowed_sectors, 
     facility_ctx = _input_to_facility_context_v510(sector_raw, inp)
     evaluated_at = datetime.now().isoformat()
 
-    # normalize_input을 통해 condition_code alias 완전 보장
-    # (floor_area→building_area, electric_capacity→electrical_capacity_kw+electric_capacity 등)
     eval_ctx = normalize_input(inp)
     eval_ctx["sector"] = sector_raw
     applicable, not_applicable = _evaluate_conditions(eval_ctx, all_rules)
@@ -146,6 +148,16 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
     input_data["construction_types"] = body.construction_types
     input_data["sector"] = sector
 
+    # Condition Layer: 공정+설비+작업 입력을 boolean condition으로 변환
+    # 출력예: {"has_welding": True, "has_crane": True, "construction_steel": True}
+    condition_ctx = build_condition_context(
+        processes=body.processes,
+        equipments=body.equipments,
+        work_types=work_types,
+    )
+    input_data.update(condition_ctx)
+    logger.info("[Step2] condition_ctx=%s", condition_ctx)
+
     sector_db = _normalize_sector_db(sector)
     rules = fetch_diagnosis_rules(supabase, sector_db=sector_db, diagnosis_stage_lte=2, work_types=work_types if work_types else None, factory_id=factory_id)
     matched = [r for r in rules if _evaluate_condition(r, input_data)]
@@ -166,6 +178,7 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
         "status": "success", "diagnosis_id": diagnosis.get("id"), "stage": 2,
         "engine_version": engine_version, "sector": sector,
         "rule_count": len(matched), "added_rule_count": len(added),
+        "condition_ctx": condition_ctx,  # 디버깅용 반환
         "filtered_by_work_types": work_types if work_types else None,
         "work_type_summary": work_type_summary if work_types else None,
         "summary": {"applicable_law_categories": result.get("applicable_law_categories",[]),
