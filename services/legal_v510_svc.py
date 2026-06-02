@@ -58,9 +58,6 @@ def _merge_candidates(
     """
     candidate_id(=rule_id) 기준 중복 제거 후 병합.
     Step1 우선 — 동일 candidate_id는 Step1 버전 유지.
-
-    Case 1: Step1 R100 + Step2 R100 → merged 1건 (Step1)
-    Case 2: Step1 R100 + Step2 R200 → merged 2건
     """
     seen: Set[str] = set()
     merged: List[Dict[str, Any]] = []
@@ -72,6 +69,63 @@ def _merge_candidates(
             seen.add(cid)
         merged.append(c)
     return merged
+
+
+# ── Phase 7-C: 건설 Condition 복구 헬퍼 ──────────────────────────────────
+def _apply_construction_conditions(inp: Dict[str, Any], body: DiagnoseStep1Body, sector_raw: str) -> None:
+    """
+    CONSTRUCTION sector Step1에서 건설 핵심 condition_code를 inp/eval_ctx에 주입.
+
+    복구 대상:
+      contract_amount   (65건 DEAD → 복구)
+      construction_amount (34건 DEAD → 복구)
+      is_construction_site (4건 DEAD → 복구)
+
+    TODO (다음 작업):
+      TUNNEL_LENGTH — DiagnoseStep1Body에 필드 없음. 별도 추가 필요.
+    """
+    if sector_raw != "CONSTRUCTION":
+        return
+
+    # 1. 공사금액 변환 (억원 → 원)
+    # contract_amount_eok는 억원 단위 (Schema 공식 필드) → 원화로 변환
+    eok = body.contract_amount_eok
+    if eok is not None:
+        try:
+            contract_amount_won = float(eok) * 100_000_000
+            # body 공식 필드 우선 — 기존 inp 값 덮어쓰기
+            inp["contract_amount_eok"] = float(eok)
+            inp["contract_amount"] = contract_amount_won
+            inp["construction_amount"] = contract_amount_won
+            logger.info(
+                "[Phase7C] contract_amount_eok=%.1f억 → contract_amount=%.0f원",
+                eok, contract_amount_won,
+            )
+        except (TypeError, ValueError):
+            pass
+    elif "contract_amount" not in inp and "construction_amount" not in inp:
+        # inp에 직접 원화로 들어온 경우도 양쪽 키 확보
+        raw_won = inp.get("contract_amount") or inp.get("construction_amount")
+        if raw_won:
+            inp["contract_amount"] = float(raw_won)
+            inp["construction_amount"] = float(raw_won)
+
+    # 2. is_construction_site: CONSTRUCTION sector면 항상 True
+    inp["is_construction_site"] = 1
+
+    # 3. construction_type 전달 (is_construction_site 연관 조건용)
+    if body.construction_type and "construction_type" not in inp:
+        inp["construction_type"] = body.construction_type
+
+    # 4. direct_workers / subcon_workers
+    if body.direct_workers is not None and "direct_workers" not in inp:
+        inp["direct_workers"] = body.direct_workers
+    if body.subcon_workers is not None and "subcon_workers" not in inp:
+        inp["subcon_workers"] = body.subcon_workers
+
+    # TODO: TUNNEL_LENGTH — body.tunnel_length 필드 추가 후 연결
+    # if body.tunnel_length is not None:
+    #     inp["TUNNEL_LENGTH"] = body.tunnel_length
 
 
 # ── Step1 ─────────────────────────────────────────────────────────────────
@@ -99,6 +153,10 @@ def run_diagnose_step1_v510(supabase, body: DiagnoseStep1Body, allowed_sectors, 
     }.items():
         if v is not None and k not in inp:
             inp[k] = v
+
+    # Phase 7-C: 건설 Condition 복구
+    # contract_amount(65건) + construction_amount(34건) + is_construction_site(4건) DEAD → 복구
+    _apply_construction_conditions(inp, body, sector_raw)
 
     facility_ctx = _input_to_facility_context_v510(sector_raw, inp)
     evaluated_at = datetime.now().isoformat()
@@ -200,7 +258,6 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
     input_data["construction_types"] = body.construction_types
     input_data["sector"] = sector
 
-    # Step1 Candidate 조회 (prev result_data.candidate_contract.candidates)
     step1_candidates: List[Dict[str, Any]] = []
     try:
         cc = (prev or {}).get("result_data", {}).get("candidate_contract", {})
@@ -208,7 +265,6 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
     except Exception:
         pass
 
-    # Code-Based Condition Resolver
     condition_ctx = build_code_condition_context(
         processes=body.processes,
         equipments=equipments,
@@ -227,7 +283,6 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
     logger.info("[Step2] equipment_type_codes=%s work_types=%s process_ids=%s step1_candidates=%d",
                 equipments, work_types, input_data["process_ids"], len(step1_candidates))
 
-    # Rule 판정 (condition_code + equipment_type_code + construction_work_type)
     sector_db = _normalize_sector_db(sector)
     all_rules = fetch_diagnosis_rules(
         supabase, sector_db=sector_db, diagnosis_stage_lte=2,
@@ -239,11 +294,9 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
     diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 2, input_data, matched)
     _create_report_events_from_rules(supabase, factory_id, matched)
 
-    # 작업 1: Step2 matched → bucket 분류
     triggered2: Dict[str, List] = {"appointment":[],"inspection":[],"notify":[],"report":[],"action":[]}
     _classify_rules_db(matched, triggered2)
 
-    # 작업 2: Step2 Candidate 생성
     raw_leg_step2 = {
         "engine_version": engine_version, "mode": sector, "evaluated_at": datetime.now().isoformat(),
         "total_rules_checked": len(all_rules),
@@ -254,14 +307,11 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
     }
     step2_contract = to_candidate_contract(raw_leg_step2)
     step2_candidates: List[Dict[str, Any]] = step2_contract.get("candidates", [])
-
-    # 작업 4: Step1 + Step2 Candidate 병합 (candidate_id 중복 제거)
     merged_candidates = _merge_candidates(step1_candidates, step2_candidates)
 
     logger.info("[Step2] step1=%d step2=%d merged=%d",
                 len(step1_candidates), len(step2_candidates), len(merged_candidates))
 
-    # 이전 Step1 codes 기준 added_rules 계산
     prev_codes = {r.get("rule_code") for r in ((prev or {}).get("result_data") or {}).get("rules", [])}
     added = [r for r in matched if (r.get("rule_code") or r.get("rule_id")) not in prev_codes]
     result = diagnosis.get("result_data", {})
@@ -286,7 +336,6 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
         "process_ids": input_data["process_ids"],
         "work_type_summary": work_type_summary or None,
         "equipment_type_summary": equip_type_summary or None,
-        # 작업 5: candidates 추가
         "candidates": merged_candidates,
         "candidate_count": len(merged_candidates),
         "candidate_metadata": {
