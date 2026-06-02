@@ -1,8 +1,7 @@
 # verification/synthetic_dataset_generator.py
 # Phase 7 -- Synthetic Dataset 생성 및 엔진 품질 검증
 # 실행: TAI_USE_RUNTIME_ENGINE=false python3 verification/synthetic_dataset_generator.py
-import os, sys, random, json, csv, time
-from datetime import datetime
+import os, sys, random, csv, time
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -12,10 +11,8 @@ from supabase import create_client
 from services.legal_v510_svc import run_diagnose_step1_v510
 
 sb = create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_ROLE_KEY'])
-
 random.seed(42)
 
-# ── 실제 DB 코드 목록 (실데이터 기준) ──
 PROCESS_POOLS = {
     'MANUFACTURING': [
         {'process_id':'KOSHA-C-108-2017-P001','process_path':'마감>용접용단>용접작업>철골/배관 용접'},
@@ -48,9 +45,7 @@ PROCESS_POOLS = {
         {'process_id':'IP000208','process_path':'제조>가공>냉각>냉각 및 안정화'},
         {'process_id':'IP005100','process_path':'물류·유통>입고>하역>입고 및 하역'},
     ],
-    'BUILDING': [
-        # BUILDING은 공정 없음 — 빈 리스트 허용
-    ],
+    'BUILDING': [],
 }
 
 EQUIPMENT_POOLS = {
@@ -87,7 +82,6 @@ def make_profile(idx, industry):
     employee_count = pick_employee_count()
     floor_area = random.choice([200,500,1000,2000,5000,10000,20000])
 
-    # 공정 pool이 비어있으면 프로세스 없음 (BUILDING 등)
     proc_pool = PROCESS_POOLS.get(industry, [])
     if proc_pool:
         n_processes = random.randint(1, min(4, len(proc_pool)))
@@ -98,6 +92,8 @@ def make_profile(idx, industry):
     equip_pool = EQUIPMENT_POOLS.get(industry, [])
     n_equip = random.randint(1, min(3, len(equip_pool))) if equip_pool else 0
     equipments = random.sample(equip_pool, n_equip) if equip_pool else []
+
+    contract_eok = random.choice([5,20,50,100,300]) if cfg['sector'] == 'CONSTRUCTION' else None
 
     return {
         'idx': idx,
@@ -116,7 +112,11 @@ def make_profile(idx, industry):
         'annual_energy_toe': random.choice([0,500,2000,5000]) if industry == 'BUILDING' and employee_count > 100 else 0,
         'elevator_count': random.choice([0,1,2,4]) if industry == 'BUILDING' else 0,
         'is_multi_use': 1 if industry == 'BUILDING' and random.random() > 0.5 else 0,
-        'contract_amount_eok': random.choice([5,20,50,100,300]) if cfg['sector'] == 'CONSTRUCTION' else 0,
+        'contract_amount_eok': contract_eok,
+        # 건설 전용 추가 필드
+        'construction_type': random.choice(['건축공사','토목공사']) if cfg['sector'] == 'CONSTRUCTION' else None,
+        'direct_workers': random.randint(5, 30) if cfg['sector'] == 'CONSTRUCTION' else None,
+        'subcon_workers': random.randint(10, 50) if cfg['sector'] == 'CONSTRUCTION' else None,
     }
 
 def run_step1(profile):
@@ -132,8 +132,10 @@ def run_step1(profile):
         'elevator_count': profile['elevator_count'],
         'is_multi_use': profile['is_multi_use'],
     }
-    if sector == 'CONSTRUCTION':
+    if sector == 'CONSTRUCTION' and profile['contract_amount_eok']:
         inp['contract_amount_eok'] = profile['contract_amount_eok']
+
+    # body 속성: _apply_construction_conditions()이 읽는 모든 필드 포함
     body = type('B', (), {
         'sector': sector,
         'factory_id': None,
@@ -144,11 +146,15 @@ def run_step1(profile):
         'electric_capacity': profile['electrical_capacity_kw'],
         'floor_count': 2,
         'elevator_count': profile['elevator_count'] or None,
-        'contract_amount_eok': profile.get('contract_amount_eok') or None,
+        'contract_amount_eok': profile['contract_amount_eok'],
+        'construction_type': profile['construction_type'],    # Phase 7-C 추가
+        'direct_workers': profile['direct_workers'],          # Phase 7-C 추가
+        'subcon_workers': profile['subcon_workers'],          # Phase 7-C 추가
         'building_use_type': None, 'construction_work_type': None,
         'ksic_major': None, 'facility_type': None,
         'input': inp,
     })()
+
     try:
         r = run_diagnose_step1_v510(sb, body, [sector,'MANUFACTURING','INDUSTRIAL'], 'v5.10')
         cands = r['data'].get('candidates', [])
@@ -161,7 +167,7 @@ def run_step1(profile):
             'law_names': list({c.get('law_name','') for c in cands if c.get('law_name')}),
         }
     except Exception as e:
-        return {'error': str(e)[:80], 'candidate_count': -1}
+        return {'error': str(e)[:100], 'candidate_count': -1}
 
 # ── 메인 ──
 N = int(os.environ.get('SYNTHETIC_N', '500'))
@@ -184,6 +190,7 @@ for i in range(N):
         'sector': profile['sector'],
         'employee_count': profile['employee_count'],
         'floor_area': profile['floor_area'],
+        'contract_amount_eok': profile['contract_amount_eok'] or 0,
         'process_ids': ','.join(profile['process_ids']),
         'equipment_codes': ','.join(profile['equipment_type_codes']),
         'is_hazardous': profile['is_hazardous_material'],
@@ -195,7 +202,7 @@ for i in range(N):
     results.append(row)
 
     if i % 50 == 0:
-        print(f'  [{i}/{N}] {industry} emp={profile["employee_count"]} -> candidates={step1.get("candidate_count","ERR")}')
+        print(f'  [{i}/{N}] {industry} emp={profile["employee_count"]} contract={profile["contract_amount_eok"]} -> candidates={step1.get("candidate_count","ERR")}')
 
     ccount = step1.get('candidate_count', 0)
     if ccount > 0:
@@ -218,11 +225,11 @@ print(f'\nCSV 저장: {csv_path}')
 # ── 분석 ──
 counts = [r['candidate_count'] for r in results if r['candidate_count'] >= 0]
 print(f'\n=== 분석 1: Candidate 수 분포 ===')
-print(f'  0건:       {sum(1 for c in counts if c == 0):>5}')
-print(f'  1~5건:     {sum(1 for c in counts if 1 <= c <= 5):>5}')
-print(f'  6~20건:    {sum(1 for c in counts if 6 <= c <= 20):>5}')
-print(f'  21~100건:  {sum(1 for c in counts if 21 <= c <= 100):>5}')
-print(f'  100건 이상: {sum(1 for c in counts if c > 100):>5}')
+print(f'  0건:        {sum(1 for c in counts if c == 0):>5}')
+print(f'  1~5건:      {sum(1 for c in counts if 1 <= c <= 5):>5}')
+print(f'  6~20건:     {sum(1 for c in counts if 6 <= c <= 20):>5}')
+print(f'  21~100건:   {sum(1 for c in counts if 21 <= c <= 100):>5}')
+print(f'  100건 이상:  {sum(1 for c in counts if c > 100):>5}')
 print(f'  평균: {sum(counts)/len(counts):.1f}  min={min(counts)}  max={max(counts)}')
 
 print(f'\n=== 분석 2: 산업군별 평균 Candidate ===')
@@ -232,6 +239,15 @@ for r in results:
         by_industry[r['industry']].append(r['candidate_count'])
 for ind, vals in sorted(by_industry.items()):
     print(f'  {ind:<15} n={len(vals):>4} avg={sum(vals)/len(vals):>7.1f} min={min(vals):>4} max={max(vals):>4}')
+
+# 건설 공사금액별 세부 분석
+con_rows = [r for r in results if r['industry'] == 'CONSTRUCTION' and r['candidate_count'] >= 0]
+if con_rows:
+    print(f'\n=== 분석 2-B: 건설 공사금액별 Candidate ===')
+    for eok in [5, 20, 50, 100, 300]:
+        vals = [r['candidate_count'] for r in con_rows if r['contract_amount_eok'] == eok]
+        if vals:
+            print(f'  {eok}억:  n={len(vals):>3} avg={sum(vals)/len(vals):.1f}')
 
 print(f'\n=== 분석 3: 설비별 영향도 (Candidate 평균) ===')
 for eq, vals in sorted(equip_impact.items(), key=lambda x: -sum(x[1])/len(x[1])):
