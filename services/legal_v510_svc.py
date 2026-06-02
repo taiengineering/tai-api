@@ -17,7 +17,7 @@ from services.legal_rules import (
     normalize_sector_db as _normalize_sector_db,
 )
 from services.input_normalizer import normalize_input
-from services.condition_normalizer import build_condition_context
+from services.code_condition_resolver import build_code_condition_context
 from services.leg_candidate_adapter import to_candidate_contract
 from services.legal_diagnosis_rules import fetch_diagnosis_rules
 from services.legal_runtime import _create_report_events_from_rules, _save_diagnosis_result
@@ -63,7 +63,6 @@ def run_diagnose_step1_v510(supabase, body: DiagnoseStep1Body, allowed_sectors, 
         triggered["not_applicable"].append(format_rule_result_db(r))
 
     total_applicable = sum(len(triggered[k]) for k in ("appointment","inspection","notify","report","action"))
-    appointment_n = len(triggered["appointment"])
 
     raw_leg = {
         "engine_version": engine_version, "mode": sector_raw, "evaluated_at": evaluated_at,
@@ -148,12 +147,14 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
     input_data["construction_types"] = body.construction_types
     input_data["sector"] = sector
 
-    # Condition Layer: 공정+설비+작업 입력을 boolean condition으로 변환
-    # 출력예: {"has_welding": True, "has_crane": True, "construction_steel": True}
-    condition_ctx = build_condition_context(
-        processes=body.processes,
-        equipments=body.equipments,
+    # Code-Based Condition Resolver:
+    # process_id + equipment_type_code → DB Lookup → boolean condition
+    # 텍스트 직접 판정 금지. TAI 표준 코드체계만 허용.
+    condition_ctx = build_code_condition_context(
+        processes=body.processes,      # [{"process_id": "IP000005", ...}]
+        equipments=body.equipments,    # ["021", "CRANE", ...]
         work_types=work_types,
+        supabase=supabase,
     )
     input_data.update(condition_ctx)
     logger.info("[Step2] condition_ctx=%s", condition_ctx)
@@ -178,7 +179,7 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
         "status": "success", "diagnosis_id": diagnosis.get("id"), "stage": 2,
         "engine_version": engine_version, "sector": sector,
         "rule_count": len(matched), "added_rule_count": len(added),
-        "condition_ctx": condition_ctx,  # 디버깅용 반환
+        "condition_ctx": condition_ctx,
         "filtered_by_work_types": work_types if work_types else None,
         "work_type_summary": work_type_summary if work_types else None,
         "summary": {"applicable_law_categories": result.get("applicable_law_categories",[]),
