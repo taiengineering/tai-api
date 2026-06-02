@@ -22,6 +22,11 @@ from services.code_condition_resolver import build_code_condition_context
 
 sb = create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_ROLE_KEY'])
 
+# factories.sector CHECK constraint 허용값:
+#   BUILDING, INDUSTRIAL, CONSTRUCTION, SPECIAL_FACILITY, COMMON
+# 진단 엔진은 MANUFACTURING을 허용하므로 factory 저장 시에만 INDUSTRIAL로 매핑한다.
+FACTORY_SECTOR_MAP = {'MANUFACTURING': 'INDUSTRIAL'}
+
 COMPANY_TEMPLATES = [
     {
         'label': 'Company-MFG-001', 'name': '금속가공_E2E_001',
@@ -136,8 +141,10 @@ def step_create_company(tmpl):
 
 def step_create_factory(tmpl, company_id):
     try:
+        # factories.sector check constraint 충족 — MANUFACTURING→INDUSTRIAL (저장 시에만)
+        factory_sector = FACTORY_SECTOR_MAP.get(tmpl['sector'], tmpl['sector'])
         res = sb.table('factories').insert({
-            'company_id': company_id, 'name': tmpl['name'], 'sector': tmpl['sector'],
+            'company_id': company_id, 'name': tmpl['name'], 'sector': factory_sector,
             'employee_count': tmpl['employee_count'], 'electrical_capacity_kw': tmpl['electrical_capacity_kw'],
             'is_active': True,
         }).execute()
