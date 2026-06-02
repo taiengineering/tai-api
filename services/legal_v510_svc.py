@@ -10,7 +10,7 @@ from services.legal_v510_helpers import (
     _input_to_facility_context_v510,
 )
 from services.legal_rules import (
-    _check_rule_conditions,   # Step1/Step2 공통 evaluator (condition_code 기반)
+    _check_rule_conditions,
     _evaluate_conditions,
     _resolve_obligation_type,
     _risk_level,
@@ -27,10 +27,6 @@ logger = logging.getLogger(__name__)
 
 # ── Step2 전용 Rule 매칭 함수 ─────────────────────────────────────────────
 def _equipment_rule_match(rule: Dict[str, Any], input_data: Dict[str, Any]) -> bool:
-    """
-    Rule.equipment_type_code ↔ input_data["equipment_type_codes"] 매칭.
-    Rule에 equipment_type_code 없으면 항상 True (조건 없음).
-    """
     eq_code = rule.get("equipment_type_code")
     if not eq_code:
         return True
@@ -38,10 +34,6 @@ def _equipment_rule_match(rule: Dict[str, Any], input_data: Dict[str, Any]) -> b
 
 
 def _work_type_rule_match(rule: Dict[str, Any], input_data: Dict[str, Any]) -> bool:
-    """
-    Rule.construction_work_type ↔ input_data["construction_work_types"] 매칭.
-    Rule에 construction_work_type 없으면 항상 True.
-    """
     wt = rule.get("construction_work_type")
     if not wt:
         return True
@@ -49,13 +41,6 @@ def _work_type_rule_match(rule: Dict[str, Any], input_data: Dict[str, Any]) -> b
 
 
 def _evaluate_step2_rule(rule: Dict[str, Any], input_data: Dict[str, Any]) -> bool:
-    """
-    Step2 Rule 판정 — 3가지 조건 모두 통과해야 applicable.
-
-    1. condition_code 기반 (_check_rule_conditions) — Step1과 동일
-    2. equipment_type_code 매칭
-    3. construction_work_type 매칭
-    """
     if not _check_rule_conditions(rule, input_data):
         return False
     if not _equipment_rule_match(rule, input_data):
@@ -63,6 +48,30 @@ def _evaluate_step2_rule(rule: Dict[str, Any], input_data: Dict[str, Any]) -> bo
     if not _work_type_rule_match(rule, input_data):
         return False
     return True
+
+
+# ── Candidate 병합 헬퍼 ───────────────────────────────────────────────────
+def _merge_candidates(
+    step1_candidates: List[Dict[str, Any]],
+    step2_candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    candidate_id(=rule_id) 기준 중복 제거 후 병합.
+    Step1 우선 — 동일 candidate_id는 Step1 버전 유지.
+
+    Case 1: Step1 R100 + Step2 R100 → merged 1건 (Step1)
+    Case 2: Step1 R100 + Step2 R200 → merged 2건
+    """
+    seen: Set[str] = set()
+    merged: List[Dict[str, Any]] = []
+    for c in step1_candidates + step2_candidates:
+        cid = c.get("candidate_id") or ""
+        if cid and cid in seen:
+            continue
+        if cid:
+            seen.add(cid)
+        merged.append(c)
+    return merged
 
 
 # ── Step1 ─────────────────────────────────────────────────────────────────
@@ -191,10 +200,15 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
     input_data["construction_types"] = body.construction_types
     input_data["sector"] = sector
 
-    # 작업 1: Code-Based Condition Resolver
-    # process_id → DB Lookup → lv3 → boolean condition (has_cutting 등)
-    # equipment_type_code → boolean condition (has_crane 등)
-    # 텍스트 직접 판정 금지. TAI 표준 코드체계만 허용.
+    # Step1 Candidate 조회 (prev result_data.candidate_contract.candidates)
+    step1_candidates: List[Dict[str, Any]] = []
+    try:
+        cc = (prev or {}).get("result_data", {}).get("candidate_contract", {})
+        step1_candidates = cc.get("candidates", [])
+    except Exception:
+        pass
+
+    # Code-Based Condition Resolver
     condition_ctx = build_code_condition_context(
         processes=body.processes,
         equipments=equipments,
@@ -202,31 +216,22 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
         supabase=supabase,
     )
     input_data.update(condition_ctx)
-
-    # 작업 2: equipment_type_codes 보존 (Rule.equipment_type_code 매칭용)
     input_data["equipment_type_codes"] = equipments
-
-    # 작업 3: construction_work_types 보존 (Rule.construction_work_type 매칭용)
     input_data["construction_work_types"] = work_types
-
-    # 작업 4: process_ids 보존 (향후 scope_process 기반 Rule 연결용)
     input_data["process_ids"] = [
         p.get("process_id") for p in (body.processes or [])
         if isinstance(p, dict) and p.get("process_id")
     ]
 
     logger.info("[Step2] condition_ctx=%s", condition_ctx)
-    logger.info("[Step2] equipment_type_codes=%s work_types=%s process_ids=%s",
-                input_data["equipment_type_codes"],
-                input_data["construction_work_types"],
-                input_data["process_ids"])
+    logger.info("[Step2] equipment_type_codes=%s work_types=%s process_ids=%s step1_candidates=%d",
+                equipments, work_types, input_data["process_ids"], len(step1_candidates))
 
-    # 작업 1: evaluator 교체
-    # _evaluate_condition(condition_1_field) → _evaluate_step2_rule(condition_code + equipment + work_type)
+    # Rule 판정 (condition_code + equipment_type_code + construction_work_type)
     sector_db = _normalize_sector_db(sector)
     all_rules = fetch_diagnosis_rules(
         supabase, sector_db=sector_db, diagnosis_stage_lte=2,
-        work_types=None,  # work_type 필터는 _evaluate_step2_rule에서 처리
+        work_types=None,
         factory_id=factory_id,
     )
     matched = [r for r in all_rules if _evaluate_step2_rule(r, input_data)]
@@ -234,6 +239,29 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
     diagnosis = _save_diagnosis_result(supabase, factory_id, sector, 2, input_data, matched)
     _create_report_events_from_rules(supabase, factory_id, matched)
 
+    # 작업 1: Step2 matched → bucket 분류
+    triggered2: Dict[str, List] = {"appointment":[],"inspection":[],"notify":[],"report":[],"action":[]}
+    _classify_rules_db(matched, triggered2)
+
+    # 작업 2: Step2 Candidate 생성
+    raw_leg_step2 = {
+        "engine_version": engine_version, "mode": sector, "evaluated_at": datetime.now().isoformat(),
+        "total_rules_checked": len(all_rules),
+        "appointment_required": triggered2["appointment"],
+        "inspection_required":  triggered2["inspection"],
+        "action_required":      triggered2["action"],
+        "report_required":      triggered2["report"] + triggered2["notify"],
+    }
+    step2_contract = to_candidate_contract(raw_leg_step2)
+    step2_candidates: List[Dict[str, Any]] = step2_contract.get("candidates", [])
+
+    # 작업 4: Step1 + Step2 Candidate 병합 (candidate_id 중복 제거)
+    merged_candidates = _merge_candidates(step1_candidates, step2_candidates)
+
+    logger.info("[Step2] step1=%d step2=%d merged=%d",
+                len(step1_candidates), len(step2_candidates), len(merged_candidates))
+
+    # 이전 Step1 codes 기준 added_rules 계산
     prev_codes = {r.get("rule_code") for r in ((prev or {}).get("result_data") or {}).get("rules", [])}
     added = [r for r in matched if (r.get("rule_code") or r.get("rule_id")) not in prev_codes]
     result = diagnosis.get("result_data", {})
@@ -258,6 +286,15 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
         "process_ids": input_data["process_ids"],
         "work_type_summary": work_type_summary or None,
         "equipment_type_summary": equip_type_summary or None,
+        # 작업 5: candidates 추가
+        "candidates": merged_candidates,
+        "candidate_count": len(merged_candidates),
+        "candidate_metadata": {
+            "step1_count": len(step1_candidates),
+            "step2_count": len(step2_candidates),
+            "merged_count": len(merged_candidates),
+            "dedup_removed": len(step1_candidates) + len(step2_candidates) - len(merged_candidates),
+        },
         "summary": {
             "applicable_law_categories": result.get("applicable_law_categories", []),
             "appointment_required": result.get("appointment_required", False),
