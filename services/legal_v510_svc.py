@@ -55,10 +55,6 @@ def _merge_candidates(
     step1_candidates: List[Dict[str, Any]],
     step2_candidates: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """
-    candidate_id(=rule_id) 기준 중복 제거 후 병합.
-    Step1 우선 — 동일 candidate_id는 Step1 버전 유지.
-    """
     seen: Set[str] = set()
     merged: List[Dict[str, Any]] = []
     for c in step1_candidates + step2_candidates:
@@ -77,18 +73,16 @@ def _apply_construction_conditions(inp: Dict[str, Any], body: DiagnoseStep1Body,
     CONSTRUCTION sector Step1에서 건설 핵심 condition_code를 inp/eval_ctx에 주입.
 
     복구 대상:
-      contract_amount   (65건 DEAD → 복구)
+      contract_amount     (65건 DEAD → 복구)
       construction_amount (34건 DEAD → 복구)
       is_construction_site (4건 DEAD → 복구)
 
-    TODO (다음 작업):
-      TUNNEL_LENGTH — DiagnoseStep1Body에 필드 없음. 별도 추가 필요.
+    TODO: TUNNEL_LENGTH — DiagnoseStep1Body에 필드 없음. 별도 추가 필요.
     """
     if sector_raw != "CONSTRUCTION":
         return
 
     # 1. 공사금액 변환 (억원 → 원)
-    # contract_amount_eok는 억원 단위 (Schema 공식 필드) → 원화로 변환
     eok = body.contract_amount_eok
     if eok is not None:
         try:
@@ -103,17 +97,17 @@ def _apply_construction_conditions(inp: Dict[str, Any], body: DiagnoseStep1Body,
             )
         except (TypeError, ValueError):
             pass
-    elif "contract_amount" not in inp and "construction_amount" not in inp:
-        # inp에 직접 원화로 들어온 경우도 양쪽 키 확보
+    else:
+        # eok 없음 — inp에 직접 원화로 들어온 경우 양쪽 키 동기화
         raw_won = inp.get("contract_amount") or inp.get("construction_amount")
         if raw_won:
             inp["contract_amount"] = float(raw_won)
             inp["construction_amount"] = float(raw_won)
 
-    # 2. is_construction_site: CONSTRUCTION sector면 항상 True
+    # 2. is_construction_site: CONSTRUCTION sector면 항상 1
     inp["is_construction_site"] = 1
 
-    # 3. construction_type 전달 (is_construction_site 연관 조건용)
+    # 3. construction_type 전달
     if body.construction_type and "construction_type" not in inp:
         inp["construction_type"] = body.construction_type
 
@@ -155,7 +149,6 @@ def run_diagnose_step1_v510(supabase, body: DiagnoseStep1Body, allowed_sectors, 
             inp[k] = v
 
     # Phase 7-C: 건설 Condition 복구
-    # contract_amount(65건) + construction_amount(34건) + is_construction_site(4건) DEAD → 복구
     _apply_construction_conditions(inp, body, sector_raw)
 
     facility_ctx = _input_to_facility_context_v510(sector_raw, inp)
