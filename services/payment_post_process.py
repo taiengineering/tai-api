@@ -232,6 +232,22 @@ def send_payment_notification(pay: dict, plan_code: str, plan_info: dict) -> Non
     except Exception as e:
         logger.warning("notification_queue insert failed, skipping in-app: %s", e)
 
+    # ── Slack 매출 알림 (#tai-ops, 베스트에포트) ──
+    try:
+        from services.slack_dispatcher import ops
+        product = pay.get("product_type") or ""
+        plan_label = f"{sector_kr} {plan_code}".strip() if sector_kr else (plan_code or product or "결제")
+        detail = (
+            f"상품: {plan_label}" + (f" ({product})" if product else "")
+            + f"\n금액: {total:,}원"
+            + f"\n구매자: {user.get('name') or '-'} / 회사: {company_name or '-'}"
+            + f"\n연락처: {user.get('phone') or '-'} / 이메일: {user.get('email') or '-'}"
+            + f"\n결제ID: {str(pay.get('id', ''))[:8]}"
+        )
+        ops(f"💰 결제 완료 · {plan_label} · {total:,}원", detail)
+    except Exception as e:
+        logger.error("Slack sales notify failed: %s", e)
+
 
 def on_payment_success_sync(payment_id: str) -> None:
     """결제 성공 시 계약 자동생성 + 알림 (동기)."""
