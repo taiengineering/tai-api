@@ -18,14 +18,11 @@ railway run sh -c 'PYTHONPATH=. python scripts/quality_coverage_report.py'      
 
 ## 2. Quality Distribution — **VERIFIED (commit, 2026-06-03)**
 
-`railway run ... --commit` 실제 출력 (추측 아님):
+`railway run ... --commit` 실제 출력:
 ```json
-{"source":"diagnosis","mode":"commit","source_rows":1,"obligation_count":1000,
- "conflicts":0,
- "coverage":{"total":1000,
-   "distribution":{"READY":0,"TRACE_REQUIRED":1000,"CORRECTION_REQUIRED":0},
-   "top_reasons":[{"reason":"EVIDENCE_INSUFFICIENT","count":1000}],
-   "unclassified":0,"fully_classified":true},
+{"source":"diagnosis","mode":"commit","source_rows":1,"obligation_count":1000,"conflicts":0,
+ "coverage":{"total":1000,"distribution":{"READY":0,"TRACE_REQUIRED":1000,"CORRECTION_REQUIRED":0},
+   "top_reasons":[{"reason":"EVIDENCE_INSUFFICIENT","count":1000}],"unclassified":0,"fully_classified":true},
  "persisted":1000}
 ```
 
@@ -45,18 +42,25 @@ railway run sh -c 'PYTHONPATH=. python scripts/quality_coverage_report.py'      
 |---|--------|-------|
 | 1 | EVIDENCE_INSUFFICIENT | 1000 |
 
-## 4. Admin Queue 현황
+## 4. Admin Queue 현황 — **VERIFIED (table read, 2026-06-03)**
 
-CORRECTION_REQUIRED = 0 → 자동 등록 없음. 예상 OPEN 건수 **0**. (테이블 확인: `scripts/quality_coverage_report.py` → _PENDING_)
+`scripts/quality_coverage_report.py` 실제 출력:
+```json
+{"obligation_quality_rows":1000,
+ "coverage":{"total":1000,"distribution":{"READY":0,"TRACE_REQUIRED":1000,"CORRECTION_REQUIRED":0},
+   "top_reasons":[{"reason":"EVIDENCE_INSUFFICIENT","count":1000}],"unclassified":0,"fully_classified":true},
+ "admin_obligation_queue_total":0,"admin_obligation_queue_by_status":{}}
+```
+obligation_quality 테이블에 1000행 적재 확인. CORRECTION 0 → admin 큐 **0건** 확정.
 
 ## 5. Schedule Gate — 배포 후
 
-`enforce_quality` 파라미터는 피처 브랜치에만 있어 현 운영(main)에 미배포. READY=0이므로 활성화 시 전량 skipped_not_ready(스케줄 0). 로직은 순수 테스트로 검증됨(`is_schedulable`). 전역 활성화는 Check 연결 후.
+`enforce_quality` 파라미터는 피처 브랜치에만 있어 현 운영(main)에 미배포. READY=0이므로 활성화 시 전량 skipped_not_ready(스케줄 0). 로직은 순수 테스트로 검증됨(`is_schedulable`). 전역 활성화는 Check 연결로 READY 발생 후.
 
 ## 참고 — Coverage HTTP 엔드포인트 404
 
-`GET /admin/obligations/coverage` 가 prod에서 404인 것은 라우터(routers/admin_obligation_queue.py)가 아직 main에 미머지·미배포라서. PR #89/#90 머지 + 배포 후 동작. 그 전엔 위 스크립트로 테이블에서 직접 확인.
+`GET /admin/obligations/coverage` 가 prod에서 404인 것은 라우터가 아직 main에 미머지·미배포라서. PR #89/#90 머지 + 배포 후 동작. 그 전엔 위 스크립트로 테이블에서 직접 확인(상기 4번).
 
 ## 결론
 
-성공 기준 달성: 기존 의무 전체(1000)가 3상태 중 하나를 가진다 (fully_classified=true), 실 DB 적재 완료(persisted=1000). 현 품질은 "전체 추적 필요(Check 미수행)" — 정직한 산출. 다음 근본 과제 = 의무별 Check 리포트(LEG→Check) 연결 → READY 발생.
+성공 기준 달성: 기존 의무 전체(1000)가 3상태 중 하나(fully_classified=true), 실 DB 적재 완료(persisted=1000, 테이블 재확인 1000). 현 품질은 "전체 추적 필요(Check 미수행)" — 정직한 산출. 다음 근본 과제 = 의무별 Check 리포트(LEG→Check) 연결 → READY 발생.
