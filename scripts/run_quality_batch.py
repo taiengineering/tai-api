@@ -7,15 +7,21 @@ Real obligation source (confirmed by live DB probe):
 Run from repo root:
     # preview only (no DB writes), default source = diagnosis:
     PYTHONPATH=. python scripts/run_quality_batch.py --dry-run
-    # persist + auto-load admin queue on CORRECTION_REQUIRED:
-    PYTHONPATH=. python scripts/run_quality_batch.py --commit
+    # persist + auto-load admin queue on CORRECTION_REQUIRED (needs service_role key):
+    SUPABASE_SERVICE_KEY=... PYTHONPATH=. python scripts/run_quality_batch.py --commit
     # alternate source:
     PYTHONPATH=. python scripts/run_quality_batch.py --source work_schedules --dry-run
 
 Obligations without a Check report -> TRACE_REQUIRED (real, not fabricated).
+
+NOTE: --commit writes to obligation_quality / admin_obligation_queue which have RLS
+enabled. The Supabase client must use the service_role key (SUPABASE_SERVICE_KEY),
+which bypasses RLS. The anon key (SUPABASE_KEY) can read for --dry-run but cannot
+write. This guard fails fast with a clear message instead of an RLS traceback.
 """
 import argparse
 import json
+import os
 
 from db.supabase_client import get_supabase
 from services.obligation_quality_batch import (
@@ -53,6 +59,15 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="evaluate + print only, no writes")
     args = ap.parse_args()
     commit = args.commit and not args.dry_run
+
+    if commit and not os.environ.get("SUPABASE_SERVICE_KEY"):
+        print(json.dumps({
+            "error": "SUPABASE_SERVICE_KEY_NOT_SET",
+            "message": "--commit writes to RLS-protected tables and requires the service_role key. "
+                       "Set SUPABASE_SERVICE_KEY (Supabase dashboard > Project Settings > API > service_role) "
+                       "then retry. --dry-run works with the anon key.",
+        }, ensure_ascii=False, indent=2))
+        raise SystemExit(1)
 
     sb = get_supabase()
     if args.source == "work_schedules":
