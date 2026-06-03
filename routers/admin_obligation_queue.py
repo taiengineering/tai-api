@@ -1,9 +1,10 @@
-"""Phase 9 — Admin Obligation Queue API.
+"""Phase 9/10 — Admin Obligation Queue + Coverage API.
 
-CORRECTION_REQUIRED 의무의 보정 작업 큐 조회/배정/해소. 운영 어드민 전용.
+CORRECTION_REQUIRED 의무의 보정 작업 큐 + 품질 Coverage. 운영 어드민 전용.
 GET    /admin/obligations/queue          목록(상태 필터)
 GET    /admin/obligations/queue/{id}      상세
 PATCH  /admin/obligations/queue/{id}      상태/담당자 변경
+GET    /admin/obligations/coverage        품질 분포 + TOP10 원인 (Phase 10)
 """
 from datetime import datetime, timezone
 from typing import Optional
@@ -42,6 +43,16 @@ def list_queue(
     start = (page - 1) * page_size
     res = q.order("created_at", desc=True).range(start, start + page_size - 1).execute()
     return {"status": "success", "data": res.data or [], "page": page, "page_size": page_size}
+
+
+@router.get("/admin/obligations/coverage")
+def coverage():
+    """Phase 10: 전체 obligation_quality 분포 + TOP10 원인."""
+    from db.supabase_client import get_supabase
+    from services.obligation_quality_coverage import compute_coverage
+    sb = get_supabase()
+    res = sb.table("obligation_quality").select("obligation_id, quality_status, quality_reason").execute()
+    return {"status": "success", "data": compute_coverage(res.data or [])}
 
 
 @router.get("/admin/obligations/queue/{queue_id}")
