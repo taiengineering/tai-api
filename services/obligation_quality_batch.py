@@ -1,12 +1,13 @@
 """Phase 10 — Obligation population batch helpers (service layer, no new engine).
 
-Pure functions to (1) collect the distinct obligation population from latest
-factory diagnosis results, and (2) evaluate the whole population with the
-VERIFIED Phase 9 evaluator. Where an obligation has no Check EvidenceReport yet,
-a well-formed EMPTY report is used — which the evaluator correctly maps to
-TRACE_REQUIRED (근거 미관측 / 추적 필요), NOT a fabricated result.
+Pure functions to collect the distinct obligation population and evaluate it with
+the VERIFIED Phase 9 evaluator. Two confirmed sources:
+  - work_schedules (LEGAL) : the obligations actually in operation (real catalogue)
+  - factory_diagnosis_results.result_data.inspection_required : per-diagnosis rules
 
-IO (Supabase reads/writes) lives in scripts/run_quality_batch.py, not here.
+Where an obligation has no Check EvidenceReport yet, a well-formed EMPTY report is
+used — which the evaluator correctly maps to TRACE_REQUIRED (근거 미관측 / 추적 필요),
+NOT a fabricated result. IO (Supabase reads/writes) lives in the runner script.
 """
 from __future__ import annotations
 
@@ -16,11 +17,8 @@ from services.obligation_quality_evaluator import evaluate_quality
 
 
 def empty_check_report(obligation_id: Optional[str] = None) -> Dict[str, Any]:
-    """A well-formed Check report with nothing observed yet.
-
-    Truthfully represents "no evidence/claim/chain observed" -> evaluator returns
-    TRACE_REQUIRED. This is NOT a fake PASS; it encodes the real fact that the
-    obligation has not been Check-evaluated.
+    """A well-formed Check report with nothing observed yet -> evaluator returns
+    TRACE_REQUIRED. Encodes the real fact 'not Check-evaluated', not a fake PASS.
     """
     return {
         "report_id": None,
@@ -29,41 +27,71 @@ def empty_check_report(obligation_id: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
-def collect_obligations_from_diagnosis(
-    diagnosis_rows: List[dict],
-) -> Tuple[List[dict], Set[str]]:
-    """Collect distinct obligations (by obligation_id) from latest diagnosis rows.
+def _merge_distinct(
+    by_id: Dict[str, dict], conflicts: Set[str], oid: str, ob: dict
+) -> None:
+    if oid in by_id:
+        prev = by_id[oid]
+        if (prev.get("law_name") or "") != (ob.get("law_name") or "") or (
+            prev.get("law_article") or ""
+        ) != (ob.get("law_article") or ""):
+            conflicts.add(oid)
+    else:
+        by_id[oid] = ob
 
-    Source = factory_diagnosis_results.result_data.inspection_required[] — the same
-    rules the schedule gate consults (rule_id/rule_code = obligation_id).
-    Returns (obligations, conflict_ids). conflict_ids = same obligation_id whose
-    law linkage disagrees across rows (a real data anomaly -> CORRECTION).
+
+def collect_obligations_from_work_schedules(
+    rows: List[dict],
+) -> Tuple[List[dict], Set[str]]:
+    """Distinct obligations (by rule_code) from work_schedules rows.
+
+    rule_code = obligation_id (same ID space the schedule gate uses).
+    conflict = same rule_code whose law linkage disagrees across rows.
     """
     by_id: Dict[str, dict] = {}
     conflicts: Set[str] = set()
+    for row in rows:
+        oid = (row.get("rule_code") or "").strip()
+        if not oid:
+            continue
+        ob = {
+            "obligation_id": oid,
+            "law_name": row.get("law_name") or "",
+            "law_article": row.get("law_article") or "",
+            "obligation_type": row.get("obligation_type") or "",
+            "obligation_summary": row.get("description") or row.get("summary") or "",
+        }
+        _merge_distinct(by_id, conflicts, oid, ob)
+    return list(by_id.values()), conflicts
 
+
+def collect_obligations_from_diagnosis(
+    diagnosis_rows: List[dict],
+) -> Tuple[List[dict], Set[str]]:
+    """Distinct obligations from factory_diagnosis_results.result_data.
+
+    Tries inspection_required first, then falls back to 'rules' (current schema
+    stores obligations under result_data.rules). obligation_id = rule_id/rule_code.
+    """
+    by_id: Dict[str, dict] = {}
+    conflicts: Set[str] = set()
     for row in diagnosis_rows:
         result_data = (row or {}).get("result_data") or {}
-        for rule in (result_data.get("inspection_required") or []):
+        rules = result_data.get("inspection_required") or result_data.get("rules") or []
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
             oid = (rule.get("rule_id") or rule.get("rule_code") or "").strip()
             if not oid:
                 continue
             ob = {
                 "obligation_id": oid,
                 "law_name": rule.get("law_name") or "",
-                "law_article": rule.get("law_article") or "",
+                "law_article": rule.get("law_article") or rule.get("article_no") or "",
                 "obligation_type": rule.get("obligation_type") or "",
                 "obligation_summary": rule.get("obligation_summary") or rule.get("description") or "",
             }
-            if oid in by_id:
-                prev = by_id[oid]
-                if (prev.get("law_name") or "") != (ob.get("law_name") or "") or (
-                    prev.get("law_article") or ""
-                ) != (ob.get("law_article") or ""):
-                    conflicts.add(oid)
-            else:
-                by_id[oid] = ob
-
+            _merge_distinct(by_id, conflicts, oid, ob)
     return list(by_id.values()), conflicts
 
 
@@ -72,8 +100,8 @@ def evaluate_population(
     conflicts: Optional[Set[str]] = None,
     reports_by_id: Optional[Dict[str, dict]] = None,
 ) -> List[Dict[str, Any]]:
-    """Evaluate every obligation. Uses a real Check report if provided in
-    reports_by_id, else an empty (not-yet-evaluated) report.
+    """Evaluate every obligation. Real Check report if provided in reports_by_id,
+    else an empty (not-yet-evaluated) report.
     """
     conflicts = conflicts or set()
     reports_by_id = reports_by_id or {}
@@ -81,8 +109,7 @@ def evaluate_population(
     for ob in obligations:
         oid = ob.get("obligation_id")
         report = reports_by_id.get(oid) or empty_check_report(oid)
-        is_conflict = oid in conflicts
-        res = evaluate_quality(ob, report, duplicate=is_conflict)
+        res = evaluate_quality(ob, report, duplicate=(oid in conflicts))
         out.append({
             "obligation_id": oid,
             "quality_status": res["quality_status"],

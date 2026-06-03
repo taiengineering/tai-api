@@ -6,6 +6,7 @@ from services.obligation_quality_coverage import compute_coverage
 from services.obligation_quality_batch import (
     empty_check_report,
     collect_obligations_from_diagnosis,
+    collect_obligations_from_work_schedules,
     evaluate_population,
 )
 from services.obligation_quality_evaluator import READY, TRACE_REQUIRED, CORRECTION_REQUIRED
@@ -31,16 +32,30 @@ def test_compute_coverage_empty():
     assert cov["fully_classified"] is False
 
 
-def test_collect_dedup_and_conflict():
+def test_collect_from_work_schedules():
+    rows = [
+        {"rule_code": "R1", "law_name": "산안법", "law_article": "17"},
+        {"rule_code": "R1", "law_name": "산안법", "law_article": "17"},
+        {"rule_code": "R2", "law_name": "산안법", "law_article": "18"},
+        {"rule_code": "R2", "law_name": "다른법", "law_article": "1"},
+        {"rule_code": "", "law_name": "x"},
+        {"law_name": "no code"},
+    ]
+    obs, conflicts = collect_obligations_from_work_schedules(rows)
+    ids = {o["obligation_id"] for o in obs}
+    assert ids == {"R1", "R2"}
+    assert "R2" in conflicts
+    assert "R1" not in conflicts
+
+
+def test_collect_dedup_and_conflict_diagnosis():
     rows = [
         {"result_data": {"inspection_required": [
             {"rule_id": "R1", "law_name": "산안법", "law_article": "17"},
             {"rule_code": "R2", "law_name": "산안법", "law_article": "18"},
         ]}},
-        {"result_data": {"inspection_required": [
-            {"rule_id": "R1", "law_name": "산안법", "law_article": "17"},
-            {"rule_id": "R3", "law_name": "산안법", "law_article": "99"},
-            {"law_name": "산안법"},
+        {"result_data": {"rules": [
+            {"rule_id": "R3", "law_name": "산안법", "article_no": "99"},
         ]}},
         {"result_data": {"inspection_required": [
             {"rule_id": "R3", "law_name": "다른법", "law_article": "1"},
@@ -50,7 +65,6 @@ def test_collect_dedup_and_conflict():
     ids = {o["obligation_id"] for o in obligations}
     assert ids == {"R1", "R2", "R3"}
     assert "R3" in conflicts
-    assert "R1" not in conflicts
 
 
 def test_evaluate_population_empty_report_is_trace():
