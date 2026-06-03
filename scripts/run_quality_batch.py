@@ -1,12 +1,16 @@
 """Phase 10 — batch-evaluate all existing obligations into obligation_quality.
 
+Real obligation source (confirmed by live DB probe):
+  factory_diagnosis_results(is_latest).result_data.rules  — obligation_id = rule_code.
+  (work_schedules has no rule_code/law linkage — not an obligation catalogue.)
+
 Run from repo root:
-    # preview only (no DB writes), default source = work_schedules (LEGAL):
+    # preview only (no DB writes), default source = diagnosis:
     PYTHONPATH=. python scripts/run_quality_batch.py --dry-run
     # persist + auto-load admin queue on CORRECTION_REQUIRED:
     PYTHONPATH=. python scripts/run_quality_batch.py --commit
     # alternate source:
-    PYTHONPATH=. python scripts/run_quality_batch.py --source diagnosis --dry-run
+    PYTHONPATH=. python scripts/run_quality_batch.py --source work_schedules --dry-run
 
 Obligations without a Check report -> TRACE_REQUIRED (real, not fabricated).
 """
@@ -27,7 +31,6 @@ def load_work_schedule_rows(sb):
     res = (
         sb.table("work_schedules")
         .select("rule_code, law_name, law_article, obligation_type, description, summary, source_type")
-        .eq("source_type", "LEGAL")
         .execute()
     )
     return res.data or []
@@ -45,7 +48,7 @@ def load_diagnosis_rows(sb):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", choices=["work_schedules", "diagnosis"], default="work_schedules")
+    ap.add_argument("--source", choices=["diagnosis", "work_schedules"], default="diagnosis")
     ap.add_argument("--commit", action="store_true", help="persist to obligation_quality + admin queue")
     ap.add_argument("--dry-run", action="store_true", help="evaluate + print only, no writes")
     args = ap.parse_args()
