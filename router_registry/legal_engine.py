@@ -23,4 +23,6 @@ ROUTERS = [
     {"module": "routers.persistence_api"},
     {"module": "routers.runtime_evaluator_api"},
     {"module": "routers.simulation_api"},
+    # Phase 9 — Obligation Quality Layer (Admin Queue API)
+    {"module": "routers.admin_obligation_queue"},
 ]

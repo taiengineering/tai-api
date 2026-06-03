@@ -1,6 +1,12 @@
 """
-진단→일정 자동생성 + D-7/D-3/당일 알림 파이프 — v1.1.0
+진단→일정 자동생성 + D-7/D-3/당일 알림 파이프 — v1.2.0
 ============================================================
+v1.2.0 (2026-06-03) Phase 9 — Obligation Quality gate:
+  generate-schedules 에 enforce_quality 파라미터 추가.
+  enforce_quality=True 이면 obligation_quality.quality_status == 'READY' 인
+  의무만 work_schedules 생성. TRACE_REQUIRED / CORRECTION_REQUIRED / 미평가는 제외.
+  기본값 False = 기존 동작 유지(무중단). 품질 레코드 백필 후 True 권장.
+
 v1.1.0 (2026-04-09) Pipeline Priority 1:
   [FIX] trigger-due-alerts: assigned_user_id IS NOT NULL 필터 추가
         담당자 없는 일정(inspection_sets 4조건 미충족으로 생성된 스케줄 등)에
@@ -36,10 +42,13 @@ def _cycle_to_days(cycle_unit: str, cycle_int: int) -> int:
 # ============================================================
 
 @router.post("/legal-engine/generate-schedules/{factory_id}")
-def generate_schedules_from_diagnosis(factory_id: str):
+def generate_schedules_from_diagnosis(factory_id: str, enforce_quality: bool = False):
     """
     최신 진단 결과(is_latest=True) → work_schedules 자동 생성.
     source_type='LEGAL'
+
+    Phase 9: enforce_quality=True 이면 obligation_quality.quality_status == 'READY'
+    인 의무(rule_id)만 생성. 기본값 False = 기존 동작 유지.
     """
     supabase = get_supabase()
 
@@ -78,9 +87,25 @@ def generate_schedules_from_diagnosis(factory_id: str):
         r["rule_code"] for r in (existing_res.data or []) if r.get("rule_code")
     }
 
+    # Phase 9: 품질 게이트 맵 (obligation_id -> quality_status). enforce_quality 시에만 조회.
+    quality_map = {}
+    if enforce_quality:
+        oq_res = (
+            supabase.table("obligation_quality")
+            .select("obligation_id, quality_status")
+            .execute()
+        )
+        quality_map = {
+            r["obligation_id"]: r["quality_status"]
+            for r in (oq_res.data or [])
+            if r.get("obligation_id")
+        }
+
     today   = date.today()
     created = 0
     skipped = 0
+    skipped_not_ready    = 0
+    skipped_unevaluated  = 0
     rows    = []
 
     for rule in inspection_rules:
@@ -89,6 +114,17 @@ def generate_schedules_from_diagnosis(factory_id: str):
             skipped += 1; continue
         if rule_id in existing_rule_codes:
             skipped += 1; continue
+
+        # Phase 9: READY 의무만 스케줄 생성. TRACE_REQUIRED/CORRECTION_REQUIRED/미평가 제외.
+        if enforce_quality:
+            q = quality_map.get(rule_id)
+            if q != "READY":
+                if q is None:
+                    skipped_unevaluated += 1
+                else:
+                    skipped_not_ready += 1
+                skipped += 1
+                continue
 
         cycle_unit = rule.get("inspection_cycle_unit") or ""
         cycle_int  = int(rule.get("inspection_cycle_int") or 0)
@@ -120,7 +156,14 @@ def generate_schedules_from_diagnosis(factory_id: str):
 
     return {
         "status": "success",
-        "data": {"created": created, "skipped": skipped, "total_rules": total_rules},
+        "data": {
+            "created": created,
+            "skipped": skipped,
+            "total_rules": total_rules,
+            "enforce_quality": enforce_quality,
+            "skipped_not_ready": skipped_not_ready,
+            "skipped_unevaluated": skipped_unevaluated,
+        },
     }
 
 
