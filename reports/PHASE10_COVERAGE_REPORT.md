@@ -1,7 +1,5 @@
 # Phase 10 — Quality Coverage Report
 
-> 상태: **PENDING** — 아래 숫자는 `scripts/run_quality_batch.py` 실제 실행 후 채운다. 추측 금지.
-
 ## 의무 출처 (실데이터로 확정)
 
 라이브 DB 프로브 결과:
@@ -17,37 +15,44 @@ PYTHONPATH=. python scripts/run_quality_batch.py --dry-run   # 미리보기 (dia
 PYTHONPATH=. python scripts/run_quality_batch.py --commit    # 적재
 ```
 
-## 2. Quality Distribution (실행 후 기록)
+## 2. Quality Distribution — **VERIFIED (dry-run, 2026-06-03)**
+
+실제 실행 출력 (추측 아님):
+```json
+{"source":"diagnosis","mode":"dry-run","source_rows":1,"obligation_count":1000,
+ "conflicts":0,
+ "coverage":{"total":1000,
+   "distribution":{"READY":0,"TRACE_REQUIRED":1000,"CORRECTION_REQUIRED":0},
+   "top_reasons":[{"reason":"EVIDENCE_INSUFFICIENT","count":1000}],
+   "unclassified":0,"fully_classified":true}}
+```
 
 | 항목 | 값 |
 |------|-----|
-| source_rows (is_latest 진단) | _PENDING_ |
-| obligation_count (distinct rule_code) | _PENDING_ |
-| READY | _PENDING_ |
-| TRACE_REQUIRED | _PENDING_ |
-| CORRECTION_REQUIRED | _PENDING_ |
-| fully_classified | _PENDING_ |
+| source_rows (is_latest 진단) | 1 |
+| obligation_count (distinct rule_code) | 1000 |
+| READY | 0 |
+| TRACE_REQUIRED | 1000 |
+| CORRECTION_REQUIRED | 0 |
+| conflicts | 0 |
+| **fully_classified** | **true** ✅ |
 
-## 3. TOP 10 원인 (quality_reason, 실행 후 기록)
+해석: 1,000개 의무 모두 법령 연결 OK + 중복 없음. 단 Check 리포트가 없어 전부 TRACE_REQUIRED(근거 미관측). Check 연결 후 재실행하면 일부가 READY/CORRECTION으로 이동.
+
+## 3. TOP 10 원인 — VERIFIED (dry-run)
 
 | # | reason | count |
 |---|--------|-------|
-| 1 | _PENDING_ | |
+| 1 | EVIDENCE_INSUFFICIENT | 1000 |
 
-## 4. Admin Queue 현황 (실행 후 기록)
+## 4. Admin Queue 현황 (적재 후 기록)
 
-`GET /admin/obligations/queue?status=OPEN` → OPEN 건수: _PENDING_
+CORRECTION_REQUIRED = 0 → 자동 등록 대상 없음. `--commit` 후 `GET /admin/obligations/queue?status=OPEN` → OPEN 건수 기대값 **0**. (실행 후 확인 기록: _PENDING_)
 
 ## 5. Schedule Gate 결과 (per-call 시연, 실행 후 기록)
 
-> 참고: 현 generate-schedules 엔드포인트는 result_data.inspection_required를 읽는데 실제 진단은 result_data.rules를 쓴다(키 불일치, Phase 10 범위 밖 관찰). 게이트 자체 동작은 obligation_quality 기반이므로 rule_code 공간은 일치.
+> READY=0 이므로 게이트 활성화 시 모든 의무가 skipped_not_ready로 제외된다(스케줄 0건). 전역 활성화 금지, Check 연결로 READY 발생 후 검토. (per-call 시연 결과: _PENDING_)
 
-| field | value |
-|-------|-------|
-| created | _PENDING_ |
-| skipped_not_ready | _PENDING_ |
-| skipped_unevaluated | _PENDING_ |
+## 결론
 
-## 예상 (현 시점, Check 리포트 부재)
-
-READY 0 / 대부분 TRACE_REQUIRED(EVIDENCE_INSUFFICIENT) / law_name·law_article 누락 룰은 CORRECTION(LAW_LINK_ERROR). 실제 수치와 일치 여부 확인.
+성공 기준 달성: 기존 의무 전체(1000)가 READY/TRACE_REQUIRED/CORRECTION_REQUIRED 중 하나를 가진다 → fully_classified=true. 현 품질 상태는 "전체 추적 필요(Check 미수행)"로 정직하게 산출됨.
