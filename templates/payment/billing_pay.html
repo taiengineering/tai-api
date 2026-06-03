@@ -48,10 +48,10 @@
 
   <script>
     (function() {
-      var API = 'https://api.taieng.co.kr';
-      var ORIGIN = window.location.origin || API;
-      // taieng.co.kr 프록시 경유 시 /_api/ 프리픽스 필요
+      var ORIGIN = window.location.origin;
+      // taieng.co.kr 프록시 경유 시 /_api/ 프리픽스 필요, api.taieng.co.kr 직접 접속 시 프리픽스 없음
       var API_PREFIX = (ORIGIN.indexOf('api.taieng.co.kr') !== -1) ? '' : '/_api';
+      var BASE = ORIGIN + API_PREFIX;
       var params = new URLSearchParams(window.location.search);
 
       var userId = params.get('user_id');
@@ -74,7 +74,7 @@
         return;
       }
 
-      fetch(API + '/payments/inicis/billing/prepare', {
+      fetch(BASE + '/payments/inicis/billing/prepare', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
@@ -111,8 +111,8 @@
         });
 
         // returnUrl, closeUrl: 현재 도메인 + 프록시 프리픽스 자동 적용
-        f.elements['returnUrl'].value = ORIGIN + API_PREFIX + '/payments/inicis/billing/return';
-        f.elements['closeUrl'].value = ORIGIN + API_PREFIX + '/payments/result?resultCode=CLOSE';
+        f.elements['returnUrl'].value = BASE + '/payments/inicis/billing/return';
+        f.elements['closeUrl'].value = BASE + '/payments/result?resultCode=CLOSE';
 
         document.getElementById('statusText').textContent = '결제창을 여는 중...';
         setTimeout(function() {
