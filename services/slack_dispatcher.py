@@ -7,7 +7,8 @@
 - #tai-engine  : 엔진 변경/drift/regression/publish
 
 환경변수:
-- SLACK_BOT_TOKEN       : Slack Bot OAuth Token
+- SLACK_BOT_TOKEN1      : Slack Bot OAuth Token (우선)
+- SLACK_BOT_TOKEN       : Slack Bot OAuth Token (폴백)
 - SLACK_CH_ALERT        : #tai-alert 채널 ID
 - SLACK_CH_OPS          : #tai-ops 채널 ID
 - SLACK_CH_ENGINE       : #tai-engine 채널 ID
@@ -50,15 +51,15 @@ ENGINE_EVENTS = {
 
 # severity → 이모지
 SEVERITY_EMOJI = {
-    "CRITICAL": "\ud83d\udd34",
-    "HIGH": "\ud83d\udfe0",
-    "WARNING": "\ud83d\udfe1",
-    "INFO": "\u2705",
+    "CRITICAL": "🔴",
+    "HIGH": "🟠",
+    "WARNING": "🟡",
+    "INFO": "✅",
 }
 
 
 def _get_channel_id(channel_type: str) -> Optional[str]:
-    """\ud658\uacbd\ubcc0\uc218\uc5d0\uc11c \ucc44\ub110 ID \uc870\ud68c"""
+    """환경변수에서 채널 ID 조회"""
     mapping = {
         CHANNEL_ALERT: os.environ.get("SLACK_CH_ALERT", "").strip(),
         CHANNEL_OPS: os.environ.get("SLACK_CH_OPS", "").strip(),
@@ -102,9 +103,9 @@ async def send_slack(
         logger.debug(f"Slack disabled, skip: {event_type}")
         return
 
-    token = os.environ.get("SLACK_BOT_TOKEN", "").strip()
+    token = (os.environ.get("SLACK_BOT_TOKEN1", "") or os.environ.get("SLACK_BOT_TOKEN", "")).strip()
     if not token:
-        logger.warning("SLACK_BOT_TOKEN not set, skip slack dispatch")
+        logger.warning("SLACK_BOT_TOKEN1/SLACK_BOT_TOKEN not set, skip slack dispatch")
         return
 
     channel_type = channel_override or _resolve_channel(event_type, severity)
@@ -113,7 +114,7 @@ async def send_slack(
         logger.warning(f"No channel ID for {channel_type}, skip")
         return
 
-    emoji = SEVERITY_EMOJI.get(severity, "\u2139\ufe0f")
+    emoji = SEVERITY_EMOJI.get(severity, "ℹ️")
     text = f"{emoji} *[{severity}]* {title}"
     if detail:
         text += f"\n> {detail}"
