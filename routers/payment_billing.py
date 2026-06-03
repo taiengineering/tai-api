@@ -565,7 +565,7 @@ def billing_prepare(body: BillingPrepareBody):
         "user_id":         body.user_id,
         "product_type":    body.product_type,
         "plan_code":       body.plan_code,
-        "plan_name":       body.plan_name,
+        "plan_name":       body.plan_name or body.goodname or "TAI Safe",
         "amount":          body.amount,
         "supply_amount":   supply_amount,
         "vat_amount":      vat_amount,
@@ -578,7 +578,13 @@ def billing_prepare(body: BillingPrepareBody):
     if body.company_id:
         sub_row["company_id"] = body.company_id
 
-    created_sub = insert_subscription(sub_row)
+    try:
+        created_sub = insert_subscription(sub_row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"[BILLING PREPARE] insert_subscription 실패 oid={oid}: {e}")
+        raise HTTPException(status_code=500, detail=f"구독 레코드 생성 실패: {e}")
     if not created_sub:
         raise HTTPException(status_code=500, detail="구독 레코드 생성 실패")
 
