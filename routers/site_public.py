@@ -2,6 +2,8 @@
 공개 웹용 — 문의 접수(POST /contacts), FAQ 목록(GET /faqs)
 관리자 FAQ: prefix /admin/site-faqs
 """
+import re
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -10,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
 
+logger = logging.getLogger("site_public")
 router = APIRouter(tags=["공개 웹"])
 
 
@@ -17,37 +20,80 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# ── POST /contacts (기존 프론트 사이트와 동일 URL·필드) ─────────────
+_CATEGORY_LABEL = {
+    "introduction": "TAI Safe 도입",
+    "diagnosis": "법령진단 문의",
+    "tech": "기술지원",
+    "partner": "제휴·파트너",
+    "etc": "기타 문의",
+}
+
+
+def _strip_html(html: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", html or "").replace("&nbsp;", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+# ── POST /contacts → inquiries 저장 + Slack(#tai-ops) 알림 ──────────
 
 class PublicContactBody(BaseModel):
     name: str = Field(..., min_length=1)
-    company_name: Optional[str] = None
     email: str = Field(..., min_length=3)
+    content: str = Field(..., min_length=1)
+    category: Optional[str] = None
+    title: Optional[str] = None
     phone: Optional[str] = None
-    inquiry_type: str = Field(..., min_length=1)
-    content: str = Field(..., min_length=10)
-    source: Optional[str] = "nexas.taieng.co.kr"
+    company: Optional[str] = None
+    company_name: Optional[str] = None   # 구 필드 호환
+    inquiry_type: Optional[str] = None   # 구 필드 호환
+    source: Optional[str] = "taieng.co.kr/contact"
+    page_url: Optional[str] = None
 
 
 @router.post("/contacts")
 def submit_public_contact(body: PublicContactBody):
-    """공개 문의 접수 → site_contact_leads"""
+    """공개 문의 접수 → inquiries 저장 + Slack 알림"""
     supabase = get_supabase()
+    category = (body.category or body.inquiry_type or "").strip() or None
+    company = (body.company or body.company_name or "").strip() or None
     row = {
         "name": body.name.strip(),
-        "company_name": (body.company_name or "").strip() or None,
         "email": body.email.strip(),
         "phone": (body.phone or "").strip() or None,
-        "inquiry_type": body.inquiry_type.strip(),
+        "company": company,
+        "category": category,
+        "title": (body.title or "").strip() or None,
         "content": body.content.strip(),
-        "source": (body.source or "nexas.taieng.co.kr").strip(),
+        "source": (body.source or "taieng.co.kr/contact").strip(),
+        "page_url": (body.page_url or "").strip() or None,
+        "inquiry_type": "INQUIRY",
+        "is_member": False,
         "created_at": _now(),
+        "updated_at": _now(),
     }
     try:
-        res = supabase.table("site_contact_leads").insert(row).execute()
+        res = supabase.table("inquiries").insert(row).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"저장 실패: {e!s}")
-    return {"status": "success", "data": res.data[0] if res.data else row}
+
+    saved = res.data[0] if res.data else row
+
+    try:
+        from services.slack_dispatcher import ops
+        cat_label = _CATEGORY_LABEL.get(category, category or "문의")
+        plain = _strip_html(body.content)
+        detail = (
+            f"분야: {cat_label}\n"
+            f"성함: {row['name']} / 회사: {company or '-'}\n"
+            f"연락처: {row['phone'] or '-'} / 이메일: {row['email']}\n"
+            f"제목: {row['title'] or '-'}\n"
+            f"내용: {plain[:800]}"
+        )
+        ops(f"새 문의 접수 · {cat_label} · {row['name']}", detail)
+    except Exception:
+        logger.exception("contact slack notify failed")
+
+    return {"status": "success", "data": saved}
 
 
 # ── GET /faqs ─────────────────────────────────────────────────────
