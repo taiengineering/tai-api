@@ -5,9 +5,9 @@
 #       Observation Status / Observation Record / Evidence Report 가 실제 생성되는지
 #       "실행 결과"로 증명한다. (기존 e2e_lifecycle_validator 사용 금지)
 #
-# 실행: python3 verification/check_runtime_probe.py [factory_id]
+# 실행(권장): railway run python3 verification/check_runtime_probe.py [factory_id]
 #   기본 대상: cc000003-0000-0000-0000-000000000003 (강남 본사 사업장)
-#   필요 env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+#   env: 앱과 동일한 get_supabase 사용 (SUPABASE_URL + SUPABASE_SERVICE_KEY or SUPABASE_KEY)
 #
 # 출력: /tmp/check_runtime_probe.json + 콘솔 STEP1~6 PASS/FAIL 표
 #
@@ -19,8 +19,8 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault('TAI_USE_RUNTIME_ENGINE', 'false')
 
-from supabase import create_client
-SB = create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_ROLE_KEY'])
+from db.supabase_client import get_supabase
+SB = get_supabase()
 
 FACTORY_ID = sys.argv[1] if len(sys.argv) > 1 else 'cc000003-0000-0000-0000-000000000003'
 
@@ -45,7 +45,7 @@ def snapshot(tables):
 
 report = {'factory_id': FACTORY_ID, 'executed_at': datetime.now(timezone.utc).isoformat(), 'steps': {}}
 
-# ── STEP 1: LEG 실행 ────────────────────────────────────
+# STEP 1: LEG 실행
 from services.legal_v510_svc import run_diagnose_step1_v510
 f = SB.table('factories').select('*').eq('id', FACTORY_ID).single().execute().data
 procs = SB.table('factory_process').select('process_id,process_path').eq('factory_id', FACTORY_ID).eq('is_active', True).execute().data or []
@@ -72,7 +72,7 @@ try:
 except Exception as e:
     report['steps']['1_LEG'] = {'pass': False, 'error': str(e)[:120]}; candidates = []
 
-# ── STEP 2: Check 입력 생성 (claim_ref / evidence_refs / evidence_chain) ──
+# STEP 2: Check 입력 생성 (claim_ref / evidence_refs / evidence_chain)
 def field(c, *names):
     for n in names:
         if isinstance(c, dict) and c.get(n) not in (None, '', [], {}): return c.get(n)
@@ -86,7 +86,7 @@ report['steps']['2_CHECK_INPUT'] = {
     'pass': bool(candidates) and (claim_ok or ev_ok or chain_ok),
     'claim_ref': claim_ok, 'evidence_refs': ev_ok, 'evidence_chain': chain_ok}
 
-# ── STEP 3: Check Runtime 직접 호출 (현재 Runtime 진입점) ─────
+# STEP 3: Check Runtime 직접 호출 (현재 Runtime 진입점)
 before = {'status': snapshot(OBSERVATION_STATUS_TABLES),
           'record': snapshot(OBSERVATION_RECORD_TABLES),
           'report': snapshot(EVIDENCE_REPORT_TABLES)}
@@ -110,14 +110,7 @@ try:
 except Exception as e:
     report['steps']['3_RUNTIME_CALL'] = {'pass': False, 'error': str(e)[:160]}
 
-# ── STEP 4~6: Observation Status / Observation Record / Evidence Report ──
-def ctx_counts(tables, ctx_id):
-    out = {}
-    for t in tables:
-        out[t] = count(t, ctx_id) if ctx_id else 'NO_CTX'
-    return out
-
-obs_status = ctx_counts(OBSERVATION_STATUS_TABLES, ctx_id) if ctx_id else {}
+# STEP 4~6: Observation Status / Observation Record / Evidence Report
 status_n = 1 if ctx_id else 0
 record_n = count('runtime_rule_activation', ctx_id) if ctx_id else 0
 after_report = snapshot(EVIDENCE_REPORT_TABLES)
@@ -133,7 +126,7 @@ report['steps']['5_OBSERVATION_RECORD'] = {'pass': isinstance(record_n, int) and
 report['steps']['6_EVIDENCE_REPORT'] = {'pass': evidence_report_generated,
     'delta': report_delta, 'note': 'delta in evidence-report candidate tables'}
 
-# ── 판정 ────────────────────────────────────────
+# 판정
 s = report['steps']
 def p(k): return bool(s.get(k, {}).get('pass'))
 checktbl = [('LEG 출력 생성','1_LEG'),('Check 입력 생성','2_CHECK_INPUT'),
