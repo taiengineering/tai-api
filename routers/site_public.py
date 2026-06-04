@@ -46,7 +46,7 @@ class PublicContactBody(BaseModel):
     company: Optional[str] = None
     company_name: Optional[str] = None   # 구 필드 호환
     inquiry_type: Optional[str] = None   # 구 필드 호환
-    source: Optional[str] = "taieng.co.kr/contact"
+    source: Optional[str] = "marketing"
     page_url: Optional[str] = None
 
 
@@ -64,7 +64,7 @@ def submit_public_contact(body: PublicContactBody):
         "category": category,
         "title": (body.title or "").strip() or None,
         "content": body.content.strip(),
-        "source": (body.source or "taieng.co.kr/contact").strip(),
+        "source": (body.source or "marketing").strip(),
         "page_url": (body.page_url or "").strip() or None,
         "inquiry_type": "INQUIRY",
         "is_member": False,
