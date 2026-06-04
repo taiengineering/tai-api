@@ -2,6 +2,8 @@ from __future__ import annotations
 import re, uuid
 from typing import Any, Dict, List
 
+from services.leg_ondemand_enrichment import enrich_ondemand
+
 ADAPTER_VERSION = "1.0.0"
 RUNTIME_NAME_SOURCE_TYPE = {
     "REPORT_TASK_CANDIDATE": "REPORT", "INSTALL_TASK_CANDIDATE": "INSTALL",
@@ -68,6 +70,7 @@ def to_candidate_contract(raw):
     for bucket in ("appointment_required","inspection_required","action_required","report_required"):
         for item in (raw.get(bucket) or []):
             candidates.append(_make_candidate(item, bucket))
+    candidates = enrich_ondemand(candidates)
     law_counts = {}
     for c in candidates:
         ln = c["law_name"] or "기타"
