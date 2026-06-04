@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "generated": "2026-06-02",
+  "description": "E2E 검증용 사업장 Dataset (2단계 산출물). 입력표준화 구조로 입력 가능. process_id/equipment_type_code는 E2E 140/140 PASS 확인 어휘 사용.",
+  "total": 56,
+  "sector_distribution": {
+    "BUILDING": 14,
+    "INDUSTRIAL": 18,
+    "CONSTRUCTION": 14,
+    "SPECIAL_FACILITY": 10
+  },
+  "boundary_count": 30,
+  "hazmat_count": 18,
+  "rows": "__SEE_GENERATOR__"
+}
