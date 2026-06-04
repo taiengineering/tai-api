@@ -1,0 +1,15 @@
+{
+  "version": "v2",
+  "generated": "2026-06-02",
+  "description": "2-1단계: 엔진 실제 입력요소(시설/공정/설비/작업/위험물취급) 충전. v1 골격 → v2 상세완성. _counts는 검토용 집계.",
+  "total": 56,
+  "sector_distribution": { "BUILDING": 14, "INDUSTRIAL": 18, "CONSTRUCTION": 14, "SPECIAL_FACILITY": 10 },
+  "element_vocabulary": {
+    "process": "process_id → v_process_unified.process_lv3 → has_* (code_condition_resolver)",
+    "equipment": "equipment_type_code → has_* (code_condition_resolver)",
+    "work": "construction work label → construction_* (condition_normalizer)",
+    "hazmat": "027/028/029/030 + is_hazardous_material + gas_capacity_kg",
+    "facility_type": "시설유형 라벨 (worksite 분류)"
+  },
+  "note": "전체 rows 상세는 enrich 생성 결과와 동일. 핵심 충전 요약은 docs 핸드오프 참조."
+}
