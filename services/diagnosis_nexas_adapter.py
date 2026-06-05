@@ -75,6 +75,12 @@ def nexas_run_body_from_request(raw: Dict[str, Any]) -> DiagnosisRunBody:
             if payload.get(target) is None:
                 payload[target] = coerced
 
+    # 원본 form_data 보존: 엔진 입력 배선(run_diagnosis → legal_context)이
+    # DTO top-level에 없는 키(has_*, electric_capacity, process_list 등)를
+    # facility_context로 직접 읽을 수 있도록 raw dict를 유지한다.
+    if form_data and isinstance(form_data, dict):
+        payload["form_data"] = form_data
+
     body = DiagnosisRunBody(**payload)
     return body
 
