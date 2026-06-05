@@ -1,6 +1,10 @@
 # routers/public_pricing.py — 공개 가격 API (인증 불필요)
-# v2.0.0 (2026-05-16): features/target/is_recommended/is_custom 필드 추가, 프론트 완전 연동
-# v1.1.0 (2026-04-14): /saas-plans + /diagnosis-reports 엔드포인트 추가
+# v3.0.0 (2026-06-05): price_master 단일 테이블로 통합. price_saas_plan/price_diagnosis_report 직접 참조 제거.
+#   - 데이터 소스: price_master + price_service_feature (SSOT)
+#   - 기존 응답 키(saas_plans/diagnosis_plans, features 등) 호환 유지
+#   - 신규: GET /public/pricing/resolve — 기준값(연면적/근로자수/공사금액)으로 플랜 자동 산정
+# v2.0.0 (2026-05-16): features/target/is_recommended/is_custom 필드 추가
+# v1.1.0 (2026-04-14): /saas-plans + /diagnosis-reports 추가
 import time
 from fastapi import APIRouter
 from db.supabase_client import get_supabase
@@ -23,34 +27,60 @@ def _set_cache(key: str, data):
     _cache[key] = {"ts": time.time(), "data": data}
 
 
+# ── price_master 조회 + feature 조인 ──────────────────────────
+
+MASTER_FIELDS = (
+    "id, service_type, sector, tier_code, criteria_type, criteria_min, criteria_max,"
+    "amount, vat_included, vat_rate, billing_unit, display_name, sub_label, icon,"
+    "is_recommended, is_active, sort_order"
+)
+
+
+def _load(service_type: str, sector: str = None):
+    """price_master에서 service_type(+sector) 활성 행을 features와 함께 로드."""
+    sb = get_supabase()
+    q = (
+        sb.table("price_master")
+        .select(MASTER_FIELDS)
+        .eq("service_type", service_type)
+        .eq("is_active", True)
+    )
+    if sector:
+        q = q.eq("sector", sector.upper())
+    rows = q.order("sort_order").execute().data or []
+
+    ids = [r["id"] for r in rows]
+    feat_map: dict = {}
+    if ids:
+        feats = (
+            sb.table("price_service_feature")
+            .select("price_id, feature_text, feature_type, icon, sort_order, is_active")
+            .in_("price_id", ids)
+            .eq("is_active", True)
+            .order("sort_order")
+            .execute()
+            .data or []
+        )
+        for f in feats:
+            feat_map.setdefault(f["price_id"], []).append(f["feature_text"])
+
+    for r in rows:
+        r["features"] = feat_map.get(r["id"], [])
+    return rows
+
+
 # ══════════════════════════════════════════════════════════════
 # SaaS Plans
 # ══════════════════════════════════════════════════════════════
 
-SAAS_FIELDS = (
-    "id, plan_code, plan_name, display_name, description, sector_code, billing_unit,"
-    "monthly_base_fee, annual_discount_rate, included_users, extra_user_fee_v2,"
-    "sms_included, kakao_included, doc_included, include_tbm,"
-    "include_task_assign, include_group_mgmt, include_miss_alert,"
-    "include_safety_content, include_dashboard, annual_free_months,"
-    "badge_color, sort_order, is_active, target, features, is_recommended, is_custom"
-)
-
-
 @router.get("/saas-plans")
 def get_saas_plans(sector: str = None):
-    """SaaS 구독 플랜 목록 (is_active=true, 인증 불필요)."""
-    cache_key = f"saas_plans_v2:{sector or 'ALL'}"
+    """SaaS 구독 플랜 목록 (price_master service_type=SAAS, 인증 불필요)."""
+    cache_key = f"saas_plans_v3:{sector or 'ALL'}"
     cached = _get_cached(cache_key)
     if cached:
         return {"data": cached}
-
-    sb = get_supabase()
-    q = sb.table("price_saas_plan").select(SAAS_FIELDS).eq("is_active", True)
-    if sector:
-        q = q.eq("sector_code", sector.upper())
-    res = q.order("sort_order").execute()
-    data = res.data or []
+    data = _load("SAAS", sector)
     _set_cache(cache_key, data)
     return {"data": data}
 
@@ -59,32 +89,15 @@ def get_saas_plans(sector: str = None):
 # Diagnosis Reports
 # ══════════════════════════════════════════════════════════════
 
-DIAG_FIELDS = (
-    "id, facility_type_code, facility_type_name, sector_display,"
-    "basic_fee, process_fee, equipment_fee, total_report_fee,"
-    "free_fee, inquiry_label, price_version, sort_order, is_active,"
-    "features, icon, goods_name, is_recommended, is_special, sub_label"
-)
-
-
 @router.get("/diagnosis-reports")
-def get_diagnosis_reports():
-    """법령진단 리포트 단건 가격 목록 (is_active=true, 인증 불필요)."""
-    cached = _get_cached("diagnosis_reports_v2")
+def get_diagnosis_reports(sector: str = None):
+    """법령진단 단건 가격 목록 (price_master service_type=DIAGNOSIS, 인증 불필요)."""
+    cache_key = f"diagnosis_reports_v3:{sector or 'ALL'}"
+    cached = _get_cached(cache_key)
     if cached:
         return {"data": cached}
-
-    sb = get_supabase()
-    res = (
-        sb.table("price_diagnosis_report")
-        .select(DIAG_FIELDS)
-        .eq("is_active", True)
-        .eq("price_version", "v2")
-        .order("sort_order")
-        .execute()
-    )
-    data = res.data or []
-    _set_cache("diagnosis_reports_v2", data)
+    data = _load("DIAGNOSIS", sector)
+    _set_cache(cache_key, data)
     return {"data": data}
 
 
@@ -95,30 +108,53 @@ def get_diagnosis_reports():
 @router.get("/all")
 def public_all_pricing(sector: str = None):
     """pricing.html에서 사용. SaaS + 법령진단 가격 동시 반환."""
-    cached = _get_cached(f"all_v2:{sector or 'ALL'}")
+    cache_key = f"all_v3:{sector or 'ALL'}"
+    cached = _get_cached(cache_key)
     if cached is not None:
         return {"status": "success", "cached": True, **cached}
-
-    sb = get_supabase()
-
-    saas_q = sb.table("price_saas_plan").select(SAAS_FIELDS).eq("is_active", True)
-    if sector:
-        saas_q = saas_q.eq("sector_code", sector.upper())
-    saas = saas_q.order("sort_order").execute().data or []
-
-    diag = (
-        sb.table("price_diagnosis_report")
-        .select(DIAG_FIELDS)
-        .eq("is_active", True)
-        .eq("price_version", "v2")
-        .order("sort_order")
-        .execute()
-        .data or []
-    )
-
-    payload = {"saas_plans": saas, "diagnosis_plans": diag}
-    _set_cache(f"all_v2:{sector or 'ALL'}", payload)
+    payload = {
+        "saas_plans": _load("SAAS", sector),
+        "diagnosis_plans": _load("DIAGNOSIS", sector),
+    }
+    _set_cache(cache_key, payload)
     return {"status": "success", "cached": False, **payload}
+
+
+# ══════════════════════════════════════════════════════════════
+# 가격 자동 산정 (기준값 → 플랜)
+# ══════════════════════════════════════════════════════════════
+
+@router.get("/resolve")
+def resolve_price(service_type: str, sector: str, value: float = None):
+    """기준값으로 적용 플랜을 산정.
+    - service_type: DIAGNOSIS / SAAS
+    - sector: BUILDING(연면적) / INDUSTRY(근로자수) / CONSTRUCTION(공사금액)
+    - value: 기준값. criteria_min <= value < criteria_max 인 행을 반환(FLAT은 value 무관).
+    """
+    rows = _load(service_type.upper(), sector.upper())
+    if not rows:
+        return {"status": "not_found", "data": None}
+
+    if value is None:
+        # 기준값 미입력 → 추천 우선, 없으면 첫 행
+        chosen = next((r for r in rows if r.get("is_recommended")), rows[0])
+        return {"status": "success", "data": chosen, "matched_by": "default"}
+
+    match = None
+    for r in rows:
+        cmin = r.get("criteria_min")
+        cmax = r.get("criteria_max")
+        lo_ok = cmin is None or value >= float(cmin)
+        hi_ok = cmax is None or value < float(cmax)
+        if r.get("criteria_type") == "FLAT":
+            continue
+        if lo_ok and hi_ok:
+            match = r
+            break
+    if match is None:
+        # 구간 초과 시 FLAT(맞춤) 또는 마지막 행
+        match = next((r for r in rows if r.get("criteria_type") == "FLAT"), rows[-1])
+    return {"status": "success", "data": match, "matched_by": "criteria"}
 
 
 # ── 레거시 호환 ──────────────────────────────────────────────
@@ -130,9 +166,9 @@ def public_saas_pricing(sector: str = None):
 
 
 @router.get("/diagnosis")
-def public_diagnosis_pricing():
+def public_diagnosis_pricing(sector: str = None):
     """레거시 — /diagnosis-reports 사용 권장."""
-    return get_diagnosis_reports()
+    return get_diagnosis_reports(sector)
 
 
 @router.delete("/cache")
