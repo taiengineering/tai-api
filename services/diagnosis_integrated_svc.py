@@ -13,6 +13,86 @@ from services.legal_rules import normalize_sector_db
 
 log = logging.getLogger(__name__)
 
+# 엔진 facility_context(_input_to_facility_context)가 inp에서 직접 읽는 키.
+# run_diagnosis가 step1_body.input(inp)로 그대로 넘기면 엔진까지 도달한다.
+# 명시적으로 처리되는 핵심 키(worker_count/floor_area 등)는 제외하고,
+# 그 외 사용자 입력(has_*, 용량, 층수 등)을 배선 복구 대상으로 합류시킨다.
+_ENGINE_INPUT_PASSTHROUGH = frozenset(
+    {
+        "floor_count",
+        "basement_count",
+        "built_year",
+        "main_structure",
+        "building_use_type",
+        "building_use",
+        "building_use_code",
+        "electric_capacity",
+        "electrical_capacity_kw",
+        "has_high_pressure_gas",
+        "has_hazardous_material",
+        "has_chemical_substance",
+        "has_boiler",
+        "has_city_gas",
+        "has_elevator",
+        "has_dust_work",
+        "has_noise_work",
+        "has_confined_space",
+        "has_radiation",
+        "has_hazmat_storage",
+        "gas_capacity_kg",
+        "gas_capacity_m3",
+        "boiler_capacity_kw",
+        "elevator_count",
+        "annual_energy_toe",
+        "operation_shift",
+        "ksic_sub",
+        "is_factory_registered",
+        "is_multi_use",
+        "process_list",
+        "equipment_list",
+        "construction_type",
+        "has_subcontractor",
+        "subcontractor_count",
+        "has_excavation",
+        "excavation_depth",
+        "has_pile_work",
+        "has_steel_frame",
+        "has_concrete_work",
+        "has_demolition",
+        "max_work_height",
+        "has_tower_crane",
+        "tower_crane_count",
+        "has_scaffold",
+        "has_gondola",
+        "has_temp_electric",
+        "has_asbestos_demo",
+        "has_blasting",
+        "has_diving",
+        "has_tunnel_bridge",
+        "has_crane",
+        "has_high_work",
+        "has_asbestos",
+        "underground_area",
+    }
+)
+
+
+def _merge_form_data_into_inp(inp: dict, form_data: Optional[Dict[str, Any]]) -> None:
+    """사용자 입력(form_data)을 엔진 입력 inp에 합류.
+
+    이미 inp에 있는 키(region/tier_code 등 명시 처리분)는 보존하고,
+    엔진 facility_context가 읽을 수 있는 나머지 입력값을 그대로 전달한다.
+    값이 비어있으면(None/"") 건너뛴다.
+    """
+    if not form_data or not isinstance(form_data, dict):
+        return
+    for code, val in form_data.items():
+        if val is None or val == "":
+            continue
+        if code in inp:
+            continue
+        inp[code] = val
+
 
 def _save_diagnosis_purchase(
     supabase,
@@ -289,33 +369,50 @@ def run_diagnosis(
         inp["factory_id"] = factory_id
     if company_id:
         inp["company_id"] = company_id
+
+    # 배선 복구: 사용자 입력(form_data)을 엔진 입력 inp에 합류.
+    # legal_context._input_to_facility_context가 inp에서 직접 읽는 키
+    # (has_*, electric_capacity, floor_count, gas/boiler 용량, 공정/설비 목록 등)를
+    # 그대로 전달하여 UI→ENGINE 도달을 보장한다.
+    form_data = getattr(body, "form_data", None) or {}
+    _merge_form_data_into_inp(inp, form_data)
+
     workers = body.worker_count or body.direct_workers or 0
     employees = body.employee_count or workers
     floor_area = body.floor_area or 400.0
     total_floor_area = body.total_floor_area or floor_area
     contract_eok = body.contract_amount_eok or 1.0
 
+    def _form_int(key, default=None):
+        v = form_data.get(key)
+        if v in (None, ""):
+            return default
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return default
+
     if engine_sector == "CONSTRUCTION":
         step1_body = DiagnoseStep1Body(
             factory_id=factory_id,
             sector=engine_sector,
             input=inp,
-            construction_type=body.construction_type or "건축",
+            construction_type=body.construction_type or form_data.get("construction_type") or "건축",
             contract_amount_eok=float(contract_eok),
             direct_workers=body.direct_workers or workers,
-            subcon_workers=body.subcon_workers or 0,
+            subcon_workers=body.subcon_workers or _form_int("subcon_workers", 0) or 0,
         )
     elif engine_sector == "BUILDING":
         step1_body = DiagnoseStep1Body(
             factory_id=factory_id,
             sector=engine_sector,
             input=inp,
-            building_use_type=body.building_use_type or "사무실",
+            building_use_type=body.building_use_type or form_data.get("building_use_type") or "사무실",
             floor_area=float(floor_area),
             total_floor_area=float(total_floor_area),
             worker_count=workers,
             employee_count=employees,
-            floor_count=5,
+            floor_count=_form_int("floor_count", 5),
         )
     else:
         step1_body = DiagnoseStep1Body(
@@ -326,7 +423,7 @@ def run_diagnosis(
             employee_count=employees,
             floor_area=float(floor_area),
             total_floor_area=float(total_floor_area),
-            ksic_major=body.ksic_major or "",
+            ksic_major=body.ksic_major or form_data.get("ksic_major") or "",
         )
 
     eng = run_step1_func(supabase, step1_body)
@@ -339,17 +436,23 @@ def run_diagnosis(
     if is_free:
         expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
 
+    # DB 저장 복구: 사용자 입력 원본을 input_data.form_data에 보존하여
+    # 저장 단계에서의 입력값 소실을 방지한다.
+    input_data = {
+        "sector": sector,
+        "tier_code": tier_code,
+        "floor_area": floor_area,
+        "contract_amount_eok": contract_eok,
+        "workers": workers,
+        **({"factory_id": factory_id} if factory_id else {}),
+        **({"company_id": company_id} if company_id else {}),
+    }
+    if form_data:
+        input_data["form_data"] = form_data
+
     row = {
         "public_token": public_token,
-        "input_data": {
-            "sector": sector,
-            "tier_code": tier_code,
-            "floor_area": floor_area,
-            "contract_amount_eok": contract_eok,
-            "workers": workers,
-            **({"factory_id": factory_id} if factory_id else {}),
-            **({"company_id": company_id} if company_id else {}),
-        },
+        "input_data": input_data,
         "partial_result": build_partial_func(full_result),
         "full_result": full_result,
         "expires_at": expires_at,
@@ -443,33 +546,45 @@ def upgrade_diagnosis(
 
     input_data = rec.get("input_data") or {}
     inp = {"tier_code": target_tier, "anonymous_flow": True, "upgrade": True}
+    # 업그레이드 재실행에서도 최초 진단의 사용자 입력(form_data)을 엔진 입력에 복원한다.
+    _merge_form_data_into_inp(inp, input_data.get("form_data"))
     sector = normalize_sector_db(str(input_data.get("sector") or ""))
     engine_sector = "MANUFACTURING" if sector == "INDUSTRIAL" else sector
     workers = int(input_data.get("workers") or 0)
     floor_area = float(input_data.get("floor_area") or 400.0)
     contract_eok = float(input_data.get("contract_amount_eok") or 1.0)
+    saved_form = input_data.get("form_data") or {}
+
+    def _saved_int(key, default=None):
+        v = saved_form.get(key)
+        if v in (None, ""):
+            return default
+        try:
+            return int(float(v))
+        except (TypeError, ValueError):
+            return default
 
     if engine_sector == "CONSTRUCTION":
         step1_body = DiagnoseStep1Body(
             factory_id=None,
             sector=engine_sector,
             input=inp,
-            construction_type="건축",
+            construction_type=saved_form.get("construction_type") or "건축",
             contract_amount_eok=contract_eok,
             direct_workers=workers,
-            subcon_workers=0,
+            subcon_workers=_saved_int("subcon_workers", 0) or 0,
         )
     elif engine_sector == "BUILDING":
         step1_body = DiagnoseStep1Body(
             factory_id=None,
             sector=engine_sector,
             input=inp,
-            building_use_type="사무실",
+            building_use_type=saved_form.get("building_use_type") or "사무실",
             floor_area=floor_area,
             total_floor_area=floor_area,
             worker_count=workers,
             employee_count=workers,
-            floor_count=5,
+            floor_count=_saved_int("floor_count", 5),
         )
     else:
         step1_body = DiagnoseStep1Body(
@@ -480,7 +595,7 @@ def upgrade_diagnosis(
             employee_count=workers,
             floor_area=floor_area,
             total_floor_area=floor_area,
-            ksic_major="",
+            ksic_major=saved_form.get("ksic_major") or "",
         )
 
     eng = run_step1_func(supabase, step1_body)
