@@ -8,6 +8,7 @@ ROUTERS = [
     {"module": "routers.contracts_engine", "prefix": "/matching/contracts", "tags": ["계약서"]},
     {"module": "routers.quotes"},
     {"module": "routers.price_setting"},
+    {"module": "routers.price_master_admin"},
     {"module": "routers.product_pricing"},
     {"module": "routers.price_policy"},
     {"module": "routers.connection_commission"},
