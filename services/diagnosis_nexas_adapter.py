@@ -11,6 +11,7 @@ _FORM_ALIASES: Dict[str, str] = {
     "ksic_code": "ksic_major",
     "project_address": "region",
     "address": "region",
+    "project_amount": "contract_amount_eok",
 }
 
 _NUMERIC_FIELDS = frozenset(
@@ -28,6 +29,8 @@ _NUMERIC_FIELDS = frozenset(
         "annual_energy_toe",
         "electrical_capacity_kw",
         "elevator_count",
+        "floor_count",
+        "electric_capacity",
     }
 )
 

@@ -315,7 +315,11 @@ def run_diagnosis(
             total_floor_area=float(total_floor_area),
             worker_count=workers,
             employee_count=employees,
-            floor_count=5,
+            floor_count=body.floor_count or 5,
+            electric_capacity=body.electric_capacity,
+            elevator_count=body.elevator_count,
+            has_high_pressure_gas=body.has_gas if body.has_gas is not None else None,
+            has_hazardous_material=body.has_chemical if body.has_chemical is not None else None,
         )
     else:
         step1_body = DiagnoseStep1Body(
@@ -327,6 +331,11 @@ def run_diagnosis(
             floor_area=float(floor_area),
             total_floor_area=float(total_floor_area),
             ksic_major=body.ksic_major or "",
+            electric_capacity=body.electric_capacity,
+            has_boiler=body.has_boiler,
+            has_hazardous_material=body.has_hazardous_material,
+            has_high_pressure_gas=body.has_high_pressure_gas,
+            has_chemical_substance=body.has_chemical_substance,
         )
 
     eng = run_step1_func(supabase, step1_body)

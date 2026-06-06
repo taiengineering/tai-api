@@ -19,6 +19,27 @@ def test_nexas_form_data_maps_worker_count():
     assert body.total_floor_area == 3000.0
 
 
+def test_nexas_form_data_maps_facility_fields_and_project_amount_alias():
+    body = nexas_run_body_from_request(
+        {
+            "auth_token": "t",
+            "disclaimer_log_id": "d",
+            "sector": "BUILDING",
+            "tier": "FREE",
+            "form_data": {
+                "floor_count": 12,
+                "electric_capacity": 500,
+                "project_amount": 30,
+                "has_gas": True,
+            },
+        }
+    )
+    assert body.floor_count == 12
+    assert body.electric_capacity == 500.0
+    assert body.contract_amount_eok == 30.0
+    assert body.has_gas is True
+
+
 def test_rules_table_to_obligations():
     obs = rules_table_to_obligations(
         {

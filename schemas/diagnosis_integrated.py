@@ -37,6 +37,18 @@ class DiagnosisRunBody(BaseModel):
     invoice_company_name: Optional[str] = Field(None, description="세금계산서 상호")
     factory_id: Optional[str] = Field(None, description="SaaS 사업장 ID — 있으면 Binding Engine 호출")
     company_id: Optional[str] = Field(None, description="SaaS tenant(회사) ID — factory_id와 함께 사용")
+    # P5-01: 시설 입력 전달용 (Week1 = 시설 범위)
+    floor_count: Optional[int] = None
+    electric_capacity: Optional[float] = None
+    elevator_count: Optional[int] = None
+    has_gas: Optional[bool] = None
+    has_chemical: Optional[bool] = None
+    is_multi_use: Optional[bool] = None
+    has_boiler: Optional[bool] = None
+    has_hazardous_material: Optional[bool] = None
+    has_high_pressure_gas: Optional[bool] = None
+    has_chemical_substance: Optional[bool] = None
+    project_amount: Optional[float] = None
 
 
 class UpgradeBody(BaseModel):
