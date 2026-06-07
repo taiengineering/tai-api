@@ -23,6 +23,10 @@ router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
 # v5.7.0: BE-11 데이터 품질 개선
 ENGINE_VERSION = "5.8.0"
 
+# 입력표준(INDUSTRIAL)과 엔진/룰표준(MANUFACTURING)을 모두 허용한다.
+# 산업 sector는 입력단에서 INDUSTRIAL, 룰조회/판정 경계에서 MANUFACTURING으로 변환된다.
+STEP1_ALLOWED_SECTORS = ["BUILDING", "MANUFACTURING", "INDUSTRIAL", "CONSTRUCTION", "SPECIAL_FACILITY"]
+
 
 @router.post("/apply/{factory_id}")
 async def apply_legal_engine(factory_id: str, body: Optional[dict] = None, mode: str = Query("all")):
@@ -61,7 +65,7 @@ async def diagnose_step1(body: DiagnoseStep1Body):
     # v510 Canonical Runtime: adapter + enrichment + obligation_contract
     supabase = get_supabase()
     try:
-        return run_diagnose_step1_v510(supabase, body, ["BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY"], "v5.10")
+        return run_diagnose_step1_v510(supabase, body, STEP1_ALLOWED_SECTORS, "v5.10")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except LookupError as e:
