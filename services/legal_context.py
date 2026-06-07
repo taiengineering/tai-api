@@ -98,6 +98,10 @@ def _factory_to_context(factory: dict) -> Dict[str, Any]:
 
 def _input_to_facility_context(sector: str, inp: Dict[str, Any]) -> Dict[str, Any]:
     sec = sector.strip().upper()
+    # 입력표준(INDUSTRIAL) → 엔진/룰표준(MANUFACTURING) 경계 변환.
+    # 입력·저장·가격 API는 INDUSTRIAL을 쓰고, 엔진 룰/분기는 MANUFACTURING을 쓴다.
+    if sec == "INDUSTRIAL":
+        sec = "MANUFACTURING"
     ctx: Dict[str, Any] = {
         "worker_count": 0,
         "total_floor_area": 0.0,
