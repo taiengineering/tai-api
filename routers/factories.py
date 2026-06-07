@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Factories 라우터 - 시설 등록/관리 v2.3.0
+TAI Factories 라우터 - 시설 등록/관리 v2.4.0
 
+v2.4.0 (LEGAL-CONSTRUCTION): 건설 법령 판정 입력 필드 6개 추가
+  - subcontractor_count (int, 하도급 업체 수)
+  - has_tower_crane / has_confined_space / has_asbestos_demo / has_blasting / has_diving (boolean, 위험시설)
 v2.3.0 (LEGAL-FIELD): 법령 판정 입력 필드 5개 추가
   - has_safety_manager / has_high_pressure_gas / has_chemical_substance / has_boiler (boolean)
   - building_grade (int)
@@ -76,12 +79,19 @@ class FactoryCreate(BaseModel):
     # v2.2.0: 건설 전용 필드
     construction_type:            Optional[str] = None   # 건축/토목/공통/기타
     subcontractor_worker_count:   Optional[int] = 0      # 하도급 근로자 수
-    # v2.3.0: 법령 판정 입력 필드
+    # v2.3.0: 법령 판정 입력 필드 (산업/건축)
     has_safety_manager:      Optional[bool] = None
     has_high_pressure_gas:   Optional[bool] = None
     has_chemical_substance:  Optional[bool] = None
     has_boiler:              Optional[bool] = None
     building_grade:          Optional[int] = None
+    # v2.4.0: 건설 법령 판정 입력 필드
+    subcontractor_count:     Optional[int] = None
+    has_tower_crane:         Optional[bool] = None
+    has_confined_space:      Optional[bool] = None
+    has_asbestos_demo:       Optional[bool] = None
+    has_blasting:            Optional[bool] = None
+    has_diving:              Optional[bool] = None
 
 
 class FactoryUpdate(BaseModel):
@@ -125,12 +135,19 @@ class FactoryUpdate(BaseModel):
     # v2.2.0: 건설 전용 필드
     construction_type:            Optional[str] = None   # 건축/토목/공통/기타
     subcontractor_worker_count:   Optional[int] = None   # 하도급 근로자 수
-    # v2.3.0: 법령 판정 입력 필드
+    # v2.3.0: 법령 판정 입력 필드 (산업/건축)
     has_safety_manager:      Optional[bool] = None
     has_high_pressure_gas:   Optional[bool] = None
     has_chemical_substance:  Optional[bool] = None
     has_boiler:              Optional[bool] = None
     building_grade:          Optional[int] = None
+    # v2.4.0: 건설 법령 판정 입력 필드
+    subcontractor_count:     Optional[int] = None
+    has_tower_crane:         Optional[bool] = None
+    has_confined_space:      Optional[bool] = None
+    has_asbestos_demo:       Optional[bool] = None
+    has_blasting:            Optional[bool] = None
+    has_diving:              Optional[bool] = None
 
 
 class FactoryContactBody(BaseModel):
