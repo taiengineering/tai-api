@@ -37,7 +37,9 @@ from services.legal_evaluator import (
 )
 
 ENGINE_VERSION = "5.8.0"  # v5.8.0 (2026-04-23): 조문 본문 연결 (rule_article_mapping 활용)
-ALLOWED_DIAGNOSE_SECTORS = frozenset({"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"})
+# 입력표준(INDUSTRIAL)과 엔진/룰표준(MANUFACTURING)을 모두 허용한다.
+# 산업 sector는 입력단에서 INDUSTRIAL, 룰조회/판정 경계에서 MANUFACTURING으로 변환된다.
+ALLOWED_DIAGNOSE_SECTORS = frozenset({"BUILDING", "MANUFACTURING", "INDUSTRIAL", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"})
 
 
 def run_diagnose_step2(supabase, body, engine_version: str) -> Dict[str, Any]:
