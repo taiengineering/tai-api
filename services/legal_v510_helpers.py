@@ -39,6 +39,9 @@ CONDITION_CODE_TO_CONTEXT_KEY_V510: Dict[str, str] = {
 
 def _input_to_facility_context_v510(sector: str, inp: Dict[str, Any]) -> Dict[str, Any]:
     sec = sector.strip().upper()
+    # 입력표준(INDUSTRIAL) → 엔진/룰표준(MANUFACTURING) 경계 변환.
+    if sec == "INDUSTRIAL":
+        sec = "MANUFACTURING"
     ctx: Dict[str, Any] = {
         "worker_count": 0,
         "total_floor_area": 0.0,
