@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Factories 라우터 - 시설 등록/관리 v2.2.0
+TAI Factories 라우터 - 시설 등록/관리 v2.3.0
 
+v2.3.0 (LEGAL-FIELD): 법령 판정 입력 필드 5개 추가
+  - has_safety_manager / has_high_pressure_gas / has_chemical_substance / has_boiler (boolean)
+  - building_grade (int)
+  (floor_count, gas_capacity_m3, transformer_capacity_kva 는 기존 스키마에 이미 존재)
 v2.2.0 (B-CON-001): 건설 전용 필드 추가
   - construction_type (VARCHAR 20: 건축/토목/공통/기타)
   - subcontractor_worker_count (하도급 근로자 수)
@@ -72,6 +76,12 @@ class FactoryCreate(BaseModel):
     # v2.2.0: 건설 전용 필드
     construction_type:            Optional[str] = None   # 건축/토목/공통/기타
     subcontractor_worker_count:   Optional[int] = 0      # 하도급 근로자 수
+    # v2.3.0: 법령 판정 입력 필드
+    has_safety_manager:      Optional[bool] = None
+    has_high_pressure_gas:   Optional[bool] = None
+    has_chemical_substance:  Optional[bool] = None
+    has_boiler:              Optional[bool] = None
+    building_grade:          Optional[int] = None
 
 
 class FactoryUpdate(BaseModel):
@@ -115,6 +125,12 @@ class FactoryUpdate(BaseModel):
     # v2.2.0: 건설 전용 필드
     construction_type:            Optional[str] = None   # 건축/토목/공통/기타
     subcontractor_worker_count:   Optional[int] = None   # 하도급 근로자 수
+    # v2.3.0: 법령 판정 입력 필드
+    has_safety_manager:      Optional[bool] = None
+    has_high_pressure_gas:   Optional[bool] = None
+    has_chemical_substance:  Optional[bool] = None
+    has_boiler:              Optional[bool] = None
+    building_grade:          Optional[int] = None
 
 
 class FactoryContactBody(BaseModel):
