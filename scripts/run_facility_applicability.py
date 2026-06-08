@@ -9,25 +9,15 @@
 """
 
 import logging, os, sys, time
+from pathlib import Path
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
 
-# ════════════════════════════════════════════════════════
-# [3단계] Field Binding: binding_field → facility 칼럼
-# 단위 환산 금지. 직접 매칭만.
-# ════════════════════════════════════════════════════════
-FIELD_MAP = {
-    "employee_count":      ("employee_count",         "DIRECT"),
-    "area_size":            ("building_area",          "DIRECT"),
-    "power_capacity":       ("electrical_capacity_kw", "DIRECT"),
-    "voltage_level":        ("transformer_capacity_kva","AMBIGUOUS"),
-    "storage_capacity":     ("gas_capacity_m3",        "AMBIGUOUS"),
-    "equipment_type":       (None,                     "EQUIPMENT_JOIN"),
-    "facility_type":        ("site_type",              "AMBIGUOUS"),
-    "process_type":         ("ksic_code",              "AMBIGUOUS"),
-    "monetary_value":       ("construction_amount",    "AMBIGUOUS"),
-    "concentration_level":  (None,                     "MISSING"),
-    "distance_value":       (None,                     "MISSING"),
-}
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from services.facility_applicability_eval import evaluate_draft_for_facility
 
 CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS facility_applicability (
@@ -74,28 +64,6 @@ CREATE INDEX IF NOT EXISTS idx_fa_status ON facility_applicability(applicability
 CREATE INDEX IF NOT EXISTS idx_fad_appid ON facility_applicability_detail(applicability_id);
 CREATE INDEX IF NOT EXISTS idx_fai_factory ON facility_applicability_issue(factory_id);
 """
-
-
-def compare_numeric(operator, draft_val, facility_val):
-    """[4단계] 숫자 비교. 법적 판단 없음. 조건 충족 여부만."""
-    if draft_val is None or facility_val is None:
-        return "MISSING_DATA"
-    try:
-        dv = float(draft_val)
-        fv = float(facility_val)
-    except (TypeError, ValueError):
-        return "MISSING_DATA"
-
-    if operator == ">=":
-        return "MATCH_CANDIDATE" if fv >= dv else "NOT_MATCHED"
-    elif operator == "<=":
-        return "MATCH_CANDIDATE" if fv <= dv else "NOT_MATCHED"
-    elif operator == ">":
-        return "MATCH_CANDIDATE" if fv > dv else "NOT_MATCHED"
-    elif operator == "<":
-        return "MATCH_CANDIDATE" if fv < dv else "NOT_MATCHED"
-    else:
-        return "AMBIGUOUS"
 
 
 def _to_str(val):
@@ -195,60 +163,15 @@ def main():
     for fac in fac_list:
         fac_id = fac['id']
         for draft_id in all_draft_ids:
-            part_id = None
-            check_results = []
-
-            for ns in draft_numerics.get(draft_id, []):
-                part_id = ns['part_id']
-                bf = ns['binding_field']
-                fmap = FIELD_MAP.get(bf)
-                if not fmap:
-                    check_results.append(('NUMERIC_CHECK', bf, None, ns['operator'], ns['value'], None, 'MISSING_DATA', 'NO_FIELD_MAP'))
-                    continue
-                fac_col, quality = fmap
-                if fac_col is None:
-                    check_results.append(('NUMERIC_CHECK', bf, None, ns['operator'], ns['value'], None, 'MISSING_DATA', 'NO_FACILITY_COLUMN'))
-                    continue
-                fac_val = fac.get(fac_col)
-                if fac_val is None:
-                    check_results.append(('NUMERIC_CHECK', bf, fac_col, ns['operator'], ns['value'], None, 'MISSING_DATA', 'FACILITY_VALUE_NULL'))
-                    continue
-                if quality == 'AMBIGUOUS':
-                    check_results.append(('NUMERIC_CHECK', bf, fac_col, ns['operator'], ns['value'], fac_val, 'AMBIGUOUS', 'UNIT_MISMATCH_POSSIBLE'))
-                else:
-                    result = compare_numeric(ns['operator'], ns['value'], fac_val)
-                    check_results.append(('NUMERIC_CHECK', bf, fac_col, ns['operator'], ns['value'], fac_val, result, 'DIRECT_COMPARE'))
-
-            for ss in draft_scopes.get(draft_id, []):
-                part_id = part_id or ss['part_id']
-                bf = ss['binding_field']
-                fmap = FIELD_MAP.get(bf)
-                if not fmap or fmap[0] is None:
-                    check_results.append(('SCOPE_CHECK', bf, None, None, None, None, 'MISSING_DATA', 'NO_FACILITY_COLUMN'))
-                else:
-                    fac_val = fac.get(fmap[0])
-                    if fac_val is None:
-                        check_results.append(('SCOPE_CHECK', bf, fmap[0], None, None, None, 'MISSING_DATA', 'FACILITY_VALUE_NULL'))
-                    else:
-                        check_results.append(('SCOPE_CHECK', bf, fmap[0], None, None, fac_val, 'POSSIBLE_CANDIDATE', 'SCOPE_FIELD_EXISTS'))
-
-            if not check_results or part_id is None:
+            evaluated = evaluate_draft_for_facility(
+                fac,
+                draft_id,
+                draft_numerics.get(draft_id, []),
+                draft_scopes.get(draft_id, []),
+            )
+            if not evaluated:
                 continue
-
-            results_set = set(r[6] for r in check_results)
-            if 'MATCH_CANDIDATE' in results_set and 'NOT_MATCHED' not in results_set:
-                overall = 'MATCH_CANDIDATE'
-            elif 'MATCH_CANDIDATE' in results_set and 'NOT_MATCHED' in results_set:
-                overall = 'AMBIGUOUS'
-            elif 'POSSIBLE_CANDIDATE' in results_set:
-                overall = 'POSSIBLE_CANDIDATE'
-            elif 'AMBIGUOUS' in results_set:
-                overall = 'AMBIGUOUS'
-            elif results_set == {'NOT_MATCHED'}:
-                overall = 'NOT_MATCHED'
-            else:
-                overall = 'MISSING_DATA'
-
+            overall, part_id, check_results = evaluated
             applicabilities.append((
                 fac_id, draft_id, part_id, overall,
                 json.dumps({'checks': len(check_results)})

@@ -3,8 +3,11 @@
 법령진단은 판단 엔진이 아니다.
 결과를 출력할 뿐, 반복설정/스케줄/업무/위반을 확정하지 않는다.
 """
-import os, json
+import json
+import os
 from datetime import datetime, timezone
+
+from services.compiler_core_svc import fetch_compiler_candidates
 
 
 def _get_sb():
@@ -31,38 +34,12 @@ class DiagnosisService:
         sid = session.data[0]['id']
 
         try:
-            # ── Compiler Core 호출 ──
-            # Applicability
-            app_r = sb.table('facility_applicability').select(
-                'id, draft_id, applicability_status, part_id'
-            ).eq('factory_id', factory_id).in_(
-                'applicability_status', ['MATCH_CANDIDATE','POSSIBLE_CANDIDATE']
-            ).execute()
-            applicability = app_r.data or []
-
-            # Task → Obligation/Prohibition 분류
-            task_r = sb.table('task_candidate').select(
-                'id, task_type, source_action_family, obligation_family, status'
-            ).eq('factory_id', factory_id).execute()
-            tasks = task_r.data or []
-
-            # Schedule hints
-            sched_r = sb.table('schedule_candidate').select(
-                'id, schedule_type, source_family, source_relation_type, task_type, status'
-            ).eq('factory_id', factory_id).execute()
-            schedules = sched_r.data or []
-
-            # Penalty
-            penalty_r = sb.table('penalty_obligation_relation').select(
-                'id, penalty_candidate_id, rule_candidate_id, obligation_family, status'
-            ).limit(200).execute()
-            penalties = penalty_r.data or []
-
-            # Residuals (factory 관련)
-            compliance_r = sb.table('compliance_review_queue').select(
-                'id, issue_type, detail, status'
-            ).eq('factory_id', factory_id).execute()
-            residuals = compliance_r.data or []
+            core = fetch_compiler_candidates(sb, factory_id)
+            applicability = core["applicability_candidates"]
+            tasks = core["task_candidates"]
+            schedules = core["schedule_candidates"]
+            penalties = core["penalty_candidates"]
+            residuals = core["residuals"]
 
             # ── Candidate 저장 ──
             obligations = []
@@ -148,6 +125,7 @@ class DiagnosisService:
                 'diagnosis_id': sid,
                 'facility_id': factory_id,
                 'diagnosis_status': diag_status,
+                'compiler_version': core['compiler_version'],
                 'applicability_candidates': applicability,
                 'obligation_candidates': [o for o in obligations if o],
                 'prohibition_candidates': prohibitions,
