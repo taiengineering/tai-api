@@ -7,6 +7,5 @@ ROUTERS = [
     {"module": "routers.system_codes"},
     # {"module": "routers.file_upload"},  # 모듈 삭제됨 — 필요 시 재생성
     {"module": "routers.notifications"},
-    {"module": "routers.fcm"},
     {"module": "routers.onboarding"},
 ]
