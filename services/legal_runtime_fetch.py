@@ -1,5 +1,5 @@
-# [CATALOG ONLY - NOT DIAGNOSIS SOURCE]
-# runtime_metadata_resolution = 법령 카탈로그. 진단 경로 격리됨 (2026-05-31)
+# [ISOLATED] [CATALOG ONLY - NOT DIAGNOSIS SOURCE]
+# runtime_metadata_resolution = 법령 카탈로그. 소비자 진단(Phase 2)은 compiler_core 경로 사용.
 # 삭제 금지. 검색/문서생성/AI근거탐색 용도 보존.
 
 """

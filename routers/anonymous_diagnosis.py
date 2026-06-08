@@ -20,9 +20,10 @@ from pydantic import BaseModel, Field
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from schemas.legal_engine import DiagnoseStep1Body
-from services.diagnosis_runtime_step1 import (
-    RUNTIME_ENGINE_VERSION,
-    run_diagnose_step1_runtime,
+from services.anonymous_factory_service import (
+    ANONYMOUS_COMPILER_ENGINE_VERSION,
+    RULE_VERSION_COMPILER,
+    run_anonymous_diagnosis,
 )
 from services.legal_helpers import _now_iso
 from services.legal_rules import normalize_sector_db
@@ -53,7 +54,7 @@ from watch_engine.trace import clear_trace
 
 router = APIRouter(prefix="/anonymous-diagnosis", tags=["익명 무료진단"])
 
-RULE_VERSION = "runtime_metadata_resolution:v1"
+RULE_VERSION = RULE_VERSION_COMPILER
 SOURCE_TYPE_DEFAULT = "site_free"
 TTL_DAYS = 7
 _ALLOWED_DIAGNOSE_SECTORS = frozenset({"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"})
@@ -71,12 +72,11 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# LEGACY - ISOLATED (제거됨): legal_engine_svc.run_diagnose_step1 + master_building_legal_rules
-# 현재: run_diagnose_step1_runtime (runtime_metadata_resolution)
+# LEGACY [ISOLATED]: run_diagnose_step1_runtime (runtime_metadata_resolution) — Phase 2 replaced
 
 
 def _run_step1_via_service(supabase, step1_body: DiagnoseStep1Body) -> Dict[str, Any]:
-    result_data = run_diagnose_step1_runtime(
+    result_data = run_anonymous_diagnosis(
         supabase,
         step1_body,
         _ALLOWED_DIAGNOSE_SECTORS,
@@ -234,7 +234,7 @@ async def create_anonymous_diagnosis(body: AnonymousDiagnosisCreate):
         "created_at": created, "expires_at": expires,
         "claimed_user_id": None, "status": "ACTIVE",
         "source_type": SOURCE_TYPE_DEFAULT,
-        "engine_version": RUNTIME_ENGINE_VERSION,
+        "engine_version": ANONYMOUS_COMPILER_ENGINE_VERSION,
         "rule_version": RULE_VERSION,
     }
     emit_event(

@@ -1,5 +1,7 @@
 """
-runtime_metadata_resolution → master_building_legal_rules 호환 dict.
+[ISOLATED] runtime_metadata_resolution → master_building_legal_rules 호환 dict.
+
+소비자 진단(Phase 2)은 compiler_core 경로. 본 모듈은 diagnosis_runtime_step1 등 legacy용.
 
 기계적 필드 매핑만 수행. Supabase/FastAPI import 없음.
 """

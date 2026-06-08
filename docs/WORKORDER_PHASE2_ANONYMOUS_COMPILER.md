@@ -1,42 +1,56 @@
-# 작업지시서: Phase 2 — 익명 진단 Compiler Core 연결
+# 작업지시서: Phase 2 — 익명/소비자 진단 Compiler Core 연결
 
-> Phase 1 완료: facility_applicability_eval.py 추출, compiler_core_svc.py 공유 fetch
-> Phase 2 목표: 익명 진단(factory_id=None)이 Compiler Core를 사용하도록 연결
-> 브랜치: feature/connect-compiler-core-20260608 (Phase 1과 동일 브랜치)
+> Phase 1 완료: `facility_applicability_eval.py`, `compiler_core_svc.py`  
+> Phase 2 목표: 익명·통합 진단이 Compiler Core temp-factory 경로 사용  
+> 브랜치: `feature/connect-compiler-core-20260608` (Phase 1과 동일)  
 > 원칙: 엔진 수정 금지. 연결만.
 
-## Phase 1 산출물 (이미 있는 것)
+## Phase 1 산출물
 
-- services/facility_applicability_eval.py → evaluate_single_factory()
-- services/compiler_core_svc.py → fetch_compiler_candidates()
+- `services/facility_applicability_eval.py` — 순수 평가 로직
+- `services/compiler_core_svc.py` — `fetch_compiler_candidates()`
 
-## Phase 2 구현
+## Phase 2 구현 (완료)
 
-### 1. services/anonymous_factory_service.py (신규)
+| 항목 | 파일 |
+|------|------|
+| 오케스트레이션 | `services/anonymous_factory_service.py` |
+| 익명 API | `routers/anonymous_diagnosis.py` |
+| 통합 진단 | `routers/diagnosis_integrated.py`, `services/diagnosis_integrated_svc.py` |
+| [ISOLATED] | `diagnosis_runtime_step1.py`, `legal_runtime_fetch.py`, `rule_candidate_projection.py` |
+| 테스트 | `tests/test_anonymous_factory_service.py` |
 
-- create_temp_factory(supabase, sector, input_data) → factory_id
-- run_anonymous_diagnosis(supabase, sector, input_data) → result_data
-- cleanup_temp_factory(supabase, factory_id)
-- _compiler_result_to_step1_format(compiler_result, sector) → 프론트 호환 포맷
+### anonymous_factory_service.py
 
-### 2. routers/anonymous_diagnosis.py 변경
+- `create_temp_factory` — 소비자 입력 → `factories` INSERT (`[ANON]…`, `is_active=false`)
+- `evaluate_single_factory` — `facility_applicability_eval` + `facility_applicability` INSERT
+- `fetch_compiler_candidates` — `compiler_core_svc` 위임
+- `_compiler_result_to_step1_format` — Compiler 출력 → step1 JSON (`rules_table`, `key_obligations`, …)
+- `cleanup_temp_factory` — `facility_applicability` + `factories` DELETE
+- `run_anonymous_diagnosis` — 전체 오케스트레이션 (finally cleanup)
 
-_run_step1_via_service()가 run_anonymous_diagnosis()를 호출하도록 교체.
+## 흐름
 
-### 3. services/diagnosis_integrated_svc.py 동일 변경
+```
+DiagnoseStep1Body
+  → create_temp_factory
+  → evaluate_single_factory
+  → fetch_compiler_candidates
+  → _compiler_result_to_step1_format
+  → cleanup_temp_factory (finally)
+```
 
-### 4. 격리
+## 출력 호환
 
-- services/diagnosis_runtime_step1.py → [ISOLATED]
-- services/legal_runtime_fetch.py → [ISOLATED]
-- services/rule_candidate_projection.py → [ISOLATED]
+`rules_table`, `rules`, `key_obligations`, `law_badges`, `risk_level`, `summary`, `obligations`, `construction_summary`(건설)
 
-### 5. 검증
+- `engine_version`: `v3.0-compiler-core-anonymous`
+- `rule_version`: `compiler_core:facility_applicability:v1`
 
-- BUILDING 50명 → ~100건 이하
-- MANUFACTURING 300명 → ~100건 이하
-- CONSTRUCTION 78억 → ~200건 이하
-- 출력 포맷 기존과 호환
-- factories 테이블 임시 데이터 잔류 없음
+## 검증 (수동)
 
-## 상세 내용은 로컬 WORKORDER_PHASE2_ANONYMOUS_COMPILER.md 참조
+- BUILDING 50명 → applicable 건수 입력 민감
+- MANUFACTURING 300명 → 동일
+- CONSTRUCTION 78억 → 동일
+- 출력 포맷 기존 FE와 호환
+- `factories` / `facility_applicability` 임시 데이터 잔류 없음 (cleanup)

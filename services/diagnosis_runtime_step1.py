@@ -1,5 +1,8 @@
 """
-Nexas / anonymous diagnosis — Runtime Compiler step1 실행.
+[ISOLATED] Nexas / anonymous diagnosis — Runtime Compiler step1 (Phase 1 legacy path).
+
+Consumer diagnosis (Phase 2) uses services/anonymous_factory_service.run_anonymous_diagnosis
+instead of this module. Retained for factory_id-attached enrichment and internal tooling.
 
 legal_engine_svc.run_diagnose_step1(legacy) 대신
 runtime_metadata_resolution → v1 projection → build_step1_result_data.

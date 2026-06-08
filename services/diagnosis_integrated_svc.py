@@ -13,6 +13,19 @@ from services.legal_rules import normalize_sector_db
 
 log = logging.getLogger(__name__)
 
+_COMPILER_ALLOWED_SECTORS = frozenset(
+    {"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"}
+)
+
+
+def run_step1_via_compiler(supabase, step1_body: DiagnoseStep1Body, allowed_sectors=None) -> Dict[str, Any]:
+    """Consumer step1 via Compiler Core temp-factory path (Phase 2)."""
+    from services.anonymous_factory_service import run_anonymous_diagnosis
+
+    sectors = allowed_sectors or _COMPILER_ALLOWED_SECTORS
+    result_data = run_anonymous_diagnosis(supabase, step1_body, sectors)
+    return {"status": "success", "data": result_data}
+
 
 def _save_diagnosis_purchase(
     supabase,

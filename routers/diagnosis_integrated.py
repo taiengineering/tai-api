@@ -19,11 +19,9 @@ from services.diagnosis_nexas_adapter import (
     build_nexas_run_response,
     nexas_run_body_from_request,
 )
-from services.diagnosis_runtime_step1 import (
-    RUNTIME_ENGINE_VERSION,
-    convert_rules_table_to_matched_rules,
-    run_diagnose_step1_runtime,
-)
+from services.anonymous_factory_service import ANONYMOUS_COMPILER_ENGINE_VERSION
+from services.diagnosis_integrated_svc import run_step1_via_compiler
+from services.diagnosis_runtime_step1 import convert_rules_table_to_matched_rules
 from services.legal_adapter import project_rules
 
 log = logging.getLogger(__name__)
@@ -31,7 +29,7 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/diagnosis", tags=["진단통합"])
 
 VERSION = "1.0.2"
-ENGINE_VERSION = RUNTIME_ENGINE_VERSION
+ENGINE_VERSION = ANONYMOUS_COMPILER_ENGINE_VERSION
 _ALLOWED_DIAGNOSE_SECTORS = frozenset({"BUILDING", "MANUFACTURING", "CONSTRUCTION", "SPECIAL_FACILITY", "SPECIAL"})
 
 # 이니시스 환경변수
@@ -72,14 +70,9 @@ FREE_TIER_CODES = frozenset({
 
 def _run_step1_via_service(supabase, step1_body: DiagnoseStep1Body) -> Dict[str, Any]:
     try:
-        result_data = run_diagnose_step1_runtime(
-            supabase,
-            step1_body,
-            _ALLOWED_DIAGNOSE_SECTORS,
-        )
+        return run_step1_via_compiler(supabase, step1_body, _ALLOWED_DIAGNOSE_SECTORS)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"status": "success", "data": result_data}
 
 
 def _resolve_auth_log(supabase, auth_token: str) -> dict:
