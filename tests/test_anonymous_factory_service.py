@@ -7,6 +7,7 @@ import pytest
 from schemas.legal_engine import DiagnoseStep1Body
 from services.anonymous_factory_service import (
     _compiler_result_to_step1_format,
+    _load_draft_fallback_context,
     cleanup_temp_factory,
     create_temp_factory,
     normalize_consumer_inp,
@@ -196,3 +197,115 @@ def test_run_anonymous_diagnosis_invalid_sector():
     body = DiagnoseStep1Body(sector="INVALID")
     with pytest.raises(ValueError):
         run_anonymous_diagnosis(MagicMock(), body, frozenset({"BUILDING"}))
+
+
+def _mock_supabase_for_fallback(draft_id: str, article_id: str, law_id: str):
+    sb = MagicMock()
+
+    def table(name):
+        t = MagicMock()
+        if name == "executable_draft":
+            t.select.return_value.in_.return_value.execute.return_value = _FakeResponse(
+                [{"id": draft_id, "article_id": article_id, "rule_candidate_id": "rc1", "part_id": "p1"}]
+            )
+        elif name == "law_article":
+            t.select.return_value.in_.return_value.execute.return_value = _FakeResponse(
+                [{"id": article_id, "law_id": law_id, "article_no": "12", "article_title": "시설 설치"}]
+            )
+        elif name == "law_master":
+            t.select.return_value.in_.return_value.execute.return_value = _FakeResponse(
+                [{"id": law_id, "law_name": "산업안전보건법"}]
+            )
+        elif name == "draft_slot":
+            chain = t.select.return_value.in_.return_value
+            chain.eq.return_value.execute.return_value = _FakeResponse(
+                [
+                    {
+                        "draft_id": draft_id,
+                        "section": "THEN_ACTION",
+                        "family_name": "APPOINT_FAMILY",
+                        "raw_token": "안전관리자 선임",
+                    }
+                ]
+            )
+        return t
+
+    sb.table.side_effect = table
+    return sb
+
+
+def test_compiler_result_to_step1_format_fallback_enriched():
+    draft_id = "d-fallback-1"
+    compiler = {
+        "compiler_version": "v3.0-deterministic",
+        "warning": "All results are CANDIDATES.",
+        "applicability_candidates": [
+            {"id": "a1", "applicability_status": "MATCH_CANDIDATE", "draft_id": draft_id}
+        ],
+        "task_candidates": [],
+        "schedule_candidates": [],
+    }
+    sb = _mock_supabase_for_fallback(draft_id, "art-1", "law-1")
+    out = _compiler_result_to_step1_format(
+        compiler,
+        sector_raw="BUILDING",
+        facility_ctx={"worker_count": 50, "total_floor_area": 3000},
+        evaluated_at="2026-06-08T00:00:00+00:00",
+        supabase=sb,
+    )
+    assert len(out["rules_table"]) == 1
+    row = out["rules_table"][0]
+    assert row["law_name"] == "산업안전보건법"
+    assert row["rule_type"] == "APPOINTMENT_TASK_CANDIDATE"
+    assert row["category"] == "선임"
+    assert row["appointment_required"] is True
+    assert row["action_required"] is False
+    assert row["diagnosis_stage"] == 1
+    assert row["schedule_type"] == "ON_DEMAND"
+
+
+def test_load_draft_fallback_context_empty_ids():
+    assert _load_draft_fallback_context(MagicMock(), []) == {}
+    assert _load_draft_fallback_context(None, ["d1"]) == {}
+
+
+def test_fallback_rule_row_matches_task_row_structure():
+    task_compiler = {
+        "compiler_version": "v3.0-deterministic",
+        "applicability_candidates": [],
+        "task_candidates": [
+            {
+                "id": "t1",
+                "task_type": "APPOINTMENT",
+                "source_action_family": "APPOINT_FAMILY",
+                "obligation_family": "산업안전보건법",
+            }
+        ],
+        "schedule_candidates": [],
+    }
+    task_out = _compiler_result_to_step1_format(
+        task_compiler,
+        sector_raw="BUILDING",
+        facility_ctx={},
+        evaluated_at="2026-06-08T00:00:00+00:00",
+    )
+    draft_id = "d-struct-1"
+    fallback_compiler = {
+        "compiler_version": "v3.0-deterministic",
+        "applicability_candidates": [
+            {"id": "a1", "applicability_status": "MATCH_CANDIDATE", "draft_id": draft_id}
+        ],
+        "task_candidates": [],
+        "schedule_candidates": [],
+    }
+    sb = _mock_supabase_for_fallback(draft_id, "art-1", "law-1")
+    fallback_out = _compiler_result_to_step1_format(
+        fallback_compiler,
+        sector_raw="BUILDING",
+        facility_ctx={},
+        evaluated_at="2026-06-08T00:00:00+00:00",
+        supabase=sb,
+    )
+    task_keys = set(task_out["rules_table"][0].keys())
+    fallback_keys = set(fallback_out["rules_table"][0].keys())
+    assert task_keys == fallback_keys
