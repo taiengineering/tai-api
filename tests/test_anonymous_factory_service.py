@@ -9,6 +9,7 @@ from services.anonymous_factory_service import (
     _compiler_result_to_step1_format,
     cleanup_temp_factory,
     create_temp_factory,
+    normalize_consumer_inp,
     run_anonymous_diagnosis,
 )
 
@@ -51,6 +52,34 @@ def test_compiler_result_to_step1_format_shape():
     assert out["engine_version"] == "v3.0-compiler-core-anonymous"
 
 
+def test_normalize_consumer_inp_unit_strings():
+    body = DiagnoseStep1Body(
+        sector="CONSTRUCTION",
+        input={"electrical_capacity_kw": "800kVA", "construction_amount": "78억"},
+        direct_workers=50,
+        subcon_workers=0,
+        construction_type="건축",
+    )
+    inp = normalize_consumer_inp(body)
+    assert inp["electrical_capacity_kw"] == 800
+    assert inp["contract_amount_eok"] == 78.0
+    assert inp["construction_amount"] == 7_800_000_000
+
+
+def test_normalize_consumer_inp_numeric_regression():
+    body = DiagnoseStep1Body(
+        sector="CONSTRUCTION",
+        contract_amount_eok=78.0,
+        direct_workers=50,
+        subcon_workers=0,
+        construction_type="건축",
+        electrical_capacity_kw=800.0,
+    )
+    inp = normalize_consumer_inp(body)
+    assert inp["contract_amount_eok"] == 78.0
+    assert inp["electrical_capacity_kw"] == 800.0
+
+
 def test_create_temp_factory_maps_building_fields():
     sb = MagicMock()
     sb.table.return_value.insert.return_value.execute.return_value = _FakeResponse(
@@ -71,6 +100,56 @@ def test_create_temp_factory_maps_building_fields():
     assert insert_call["name"].startswith("[ANON]BUILDING")
     assert insert_call["employee_count"] == 25
     assert insert_call["building_area"] == 1200.0
+    assert insert_call["sector"] == "BUILDING"
+    assert insert_call["site_type"] == "사무실"
+    assert insert_call["building_use_code"] == "사무실"
+
+
+def test_create_temp_factory_manufacturing_sector_db_industrial():
+    sb = MagicMock()
+    sb.table.return_value.insert.return_value.execute.return_value = _FakeResponse(
+        [{"id": "fac-mfg-1"}]
+    )
+    body = DiagnoseStep1Body(
+        sector="MANUFACTURING",
+        worker_count=300,
+        employee_count=300,
+        floor_area=5000.0,
+        total_floor_area=5000.0,
+        ksic_major="C10",
+    )
+    create_temp_factory(sb, body)
+    row = sb.table.return_value.insert.call_args[0][0]
+    assert row["sector"] == "INDUSTRIAL"
+    assert row["employee_count"] == 300
+
+
+def test_create_temp_factory_hospital_building_fields():
+    sb = MagicMock()
+    sb.table.return_value.insert.return_value.execute.return_value = _FakeResponse(
+        [{"id": "fac-uuid-2"}]
+    )
+    body = DiagnoseStep1Body(
+        sector="BUILDING",
+        building_use_type="병원",
+        floor_count=5,
+        floor_area=3000.0,
+        total_floor_area=3000.0,
+        worker_count=50,
+        employee_count=50,
+        has_hazardous_material=True,
+        gas_capacity_m3=120.0,
+    )
+    fid = create_temp_factory(sb, body)
+    assert fid == "fac-uuid-2"
+    row = sb.table.return_value.insert.call_args[0][0]
+    assert row["site_type"] == "병원"
+    assert row["building_use_code"] == "병원"
+    assert row["floor_count"] == 5
+    assert row["employee_count"] == 50
+    assert row["gas_capacity_m3"] == 120.0
+    assert row["is_hazardous_material"] is True
+    assert row["site_type"] != row["sector"]
 
 
 def test_cleanup_temp_factory_deletes_rows():

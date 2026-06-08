@@ -25,6 +25,8 @@ def test_resolve_obligation_and_risk_level():
     assert risk_level(6, 0) == "MEDIUM"
     assert risk_level(2, 0) == "LOW"
     assert normalize_sector_db(" building ") == "BUILDING"
+    assert normalize_sector_db("MANUFACTURING") == "INDUSTRIAL"
+    assert normalize_sector_db("INDUSTRY") == "INDUSTRIAL"
 
 
 def test_evaluate_facility_conditions_db_filters():

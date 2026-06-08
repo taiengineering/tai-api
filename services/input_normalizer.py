@@ -1,14 +1,15 @@
 """
-services/input_normalizer.py — Input Normalizer v1.1.0
+services/input_normalizer.py — Input Normalizer v1.2.0
 
 역할:
 - 별칭 통합 (workers → worker_count 등)
 - 타입 변환 ("10" → 10)
 - 빈값 처리 ("" → None)
 - 단위 문자 제거 ("500㎡" → 500)
+- 단위 환산 (전력→kW, 금액→원, 거리→m) — 단위 문자열이 있을 때만
 - condition_code 양방향 키 보장 (electric_capacity, FLOOR_AREA 등)
 
-허용: 별칭 통합, 타입 정규화, 빈값 처리
+허용: 별칭 통합, 타입 정규화, 빈값 처리, 명시 단위 환산
 금지: 판단, 추정, 기본값 자동 생성
 """
 from __future__ import annotations
@@ -50,9 +51,110 @@ ALIAS_MAP: Dict[str, str] = {
 # 단위 제거 패턴
 _UNIT_PATTERN = re.compile(r"[\u33a1kKwWm\u00b3\ud1a4\uc5b5\uc6d0\uba85\uce35\ub300]+$")
 
+_POWER_KEYS = frozenset({
+    "electrical_capacity_kw",
+    "electric_capacity",
+    "electric_capacity_kw",
+    "power_capacity",
+    "transformer_capacity_kva",
+})
+_AMOUNT_KEYS = frozenset({
+    "contract_amount",
+    "construction_amount",
+    "contract_amount_won",
+})
+_DISTANCE_KEYS = frozenset({
+    "distance_value",
+    "distance",
+    "distance_m",
+    "TUNNEL_LENGTH",
+})
+
+_EOK = 100_000_000.0
+_MANWON = 10_000.0
+
 
 def _strip_units(value: str) -> str:
     return _UNIT_PATTERN.sub("", value.strip()).strip()
+
+
+def _parse_numeric_prefix(value: str) -> Optional[float]:
+    """문자열 앞부분 숫자만 추출 (단위 환산용)."""
+    cleaned = value.strip().replace(",", "")
+    match = re.match(r"^[-+]?\d+(?:\.\d+)?", cleaned)
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def _convert_to_standard_unit(key: str, raw_value: Any) -> Any:
+    """
+    표준 단위 환산.
+    - 전력 → kW (W: /1000, kVA: kW 근사 1:1)
+    - 금액 → 원 (억: ×1억, 만원/만: ×1만, contract_amount_eok 키: ×1억)
+    - 거리 → m (mm: /1000, cm: /100)
+    - 단위 문자열이 없고 이미 숫자면 환산하지 않음 (추정 금지)
+    """
+    if raw_value is None:
+        return raw_value
+
+    if key == "contract_amount_eok":
+        num = float(raw_value) if isinstance(raw_value, (int, float)) else _parse_numeric_prefix(str(raw_value))
+        if num is not None:
+            return num * _EOK
+        return raw_value
+
+    if isinstance(raw_value, (int, float)):
+        return raw_value
+
+    if not isinstance(raw_value, str):
+        return raw_value
+
+    text = raw_value.strip()
+    if not text:
+        return raw_value
+
+    if key in _POWER_KEYS:
+        lower = text.lower().replace(" ", "")
+        num = _parse_numeric_prefix(lower)
+        if num is None:
+            return raw_value
+        if "kva" in lower:
+            return num
+        if "kw" in lower:
+            return num
+        if lower.endswith("w") and not lower.endswith("kw"):
+            return num / 1000.0
+        return raw_value
+
+    if key in _AMOUNT_KEYS:
+        compact = text.replace(" ", "")
+        num = _parse_numeric_prefix(compact)
+        if num is None:
+            return raw_value
+        if "억원" in compact or "억" in compact:
+            return num * _EOK
+        if "만원" in compact or compact.endswith("만"):
+            return num * _MANWON
+        return raw_value
+
+    if key in _DISTANCE_KEYS:
+        lower = text.lower().replace(" ", "")
+        num = _parse_numeric_prefix(lower)
+        if num is None:
+            return raw_value
+        if lower.endswith("mm"):
+            return num / 1000.0
+        if lower.endswith("cm"):
+            return num / 100.0
+        if lower.endswith("m") and not lower.endswith("mm") and not lower.endswith("cm"):
+            return num
+        return raw_value
+
+    return raw_value
 
 
 def _to_number(value: Any) -> Optional[float]:
@@ -122,6 +224,9 @@ def normalize_input(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     for key, value in payload.items():
         normalized_key = ALIAS_MAP.get(key, key)
+        value = _convert_to_standard_unit(key, value)
+        if normalized_key != key:
+            value = _convert_to_standard_unit(normalized_key, value)
         normalized_value = _normalize_value(normalized_key, value)
         if normalized_value is None:
             continue  # 빈값은 포함하지 않음

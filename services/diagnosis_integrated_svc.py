@@ -20,9 +20,10 @@ _COMPILER_ALLOWED_SECTORS = frozenset(
 
 def run_step1_via_compiler(supabase, step1_body: DiagnoseStep1Body, allowed_sectors=None) -> Dict[str, Any]:
     """Consumer step1 via Compiler Core temp-factory path (Phase 2)."""
-    from services.anonymous_factory_service import run_anonymous_diagnosis
+    from services.anonymous_factory_service import prepare_step1_body_for_compiler, run_anonymous_diagnosis
 
     sectors = allowed_sectors or _COMPILER_ALLOWED_SECTORS
+    step1_body = prepare_step1_body_for_compiler(step1_body)
     result_data = run_anonymous_diagnosis(supabase, step1_body, sectors)
     return {"status": "success", "data": result_data}
 

@@ -14,6 +14,7 @@ from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 from schemas.legal_engine import DiagnoseStep1Body
 from services.compiler_core_svc import COMPILER_VERSION, fetch_compiler_candidates
 from services.facility_applicability_eval import evaluate_draft_for_facility
+from services.input_normalizer import normalize_input
 from services.legal_context import _input_to_facility_context
 from services.legal_helpers import get_sector_groups
 from services.legal_rules import get_construction_summary, normalize_sector_db, risk_level
@@ -80,16 +81,66 @@ def _merge_body_input(body: DiagnoseStep1Body) -> Dict[str, Any]:
     return inp
 
 
+def normalize_consumer_inp(body: DiagnoseStep1Body) -> Dict[str, Any]:
+    """
+    Consumer path: merge body fields → normalize_input → legal_context-ready dict.
+
+    Defends legal_context float() parsing from unit strings (e.g. 800kVA, 78억).
+    """
+    base = _merge_body_input(body)
+    sector = body.sector.strip().upper()
+    norm = normalize_input({**base, "sector": sector})
+    merged = {**base, **norm}
+    if sector == "CONSTRUCTION":
+        won = norm.get("contract_amount") or norm.get("construction_amount")
+        if won is not None:
+            merged["contract_amount_eok"] = float(won) / 100_000_000.0
+    return merged
+
+
+def prepare_step1_body_for_compiler(body: DiagnoseStep1Body) -> DiagnoseStep1Body:
+    """Persist normalized values into body.input before compiler step1."""
+    norm = normalize_consumer_inp(body)
+    payload_input = dict(body.input or {})
+    for key, val in norm.items():
+        if key == "sector":
+            continue
+        payload_input[key] = val
+    return body.model_copy(update={"input": payload_input})
+
+
+def _resolve_site_type(sector_raw: str, inp: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+    """Layer 1→2: site_type = facility/building use (not sector enum)."""
+    use = str(
+        inp.get("building_use_type")
+        or inp.get("facility_type")
+        or ctx.get("building_use_code")
+        or ""
+    ).strip()
+    if use:
+        return use
+    if sector_raw == "CONSTRUCTION":
+        return str(ctx.get("construction_type") or "").strip()
+    if sector_raw == "MANUFACTURING":
+        return str(ctx.get("ksic_code") or "").strip()
+    return ""
+
+
 def create_temp_factory(supabase, body: DiagnoseStep1Body) -> str:
     """Consumer input → short-lived factories row (is_active=false)."""
     sector_raw = body.sector.strip().upper()
-    inp = _merge_body_input(body)
+    inp = normalize_consumer_inp(body)
     ctx = _input_to_facility_context(sector_raw, inp)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    building_use_code = str(
+        inp.get("building_use_type") or inp.get("facility_type") or ctx.get("building_use_code") or ""
+    ).strip()
+    site_type = _resolve_site_type(sector_raw, inp, ctx)
+    sector_db = normalize_sector_db(sector_raw)
     row: Dict[str, Any] = {
         "name": f"[ANON]{sector_raw}-{ts}"[:200],
-        "sector": sector_raw,
-        "site_type": sector_raw,
+        "sector": sector_db,
+        "site_type": site_type or None,
         "is_active": False,
         "status_code": "ANON_TEMP",
         "employee_count": int(ctx.get("worker_count") or ctx.get("employee_count") or 0),
@@ -98,17 +149,40 @@ def create_temp_factory(supabase, body: DiagnoseStep1Body) -> str:
             ctx.get("electrical_capacity_kw") or ctx.get("electric_capacity") or 0
         ),
         "transformer_capacity_kva": float(ctx.get("transformer_capacity_kva") or 0),
-        "gas_capacity_m3": float(ctx.get("gas_capacity_m3") or 0),
         "gas_capacity_kg": float(ctx.get("gas_capacity_kg") or 0),
         "construction_amount": float(ctx.get("construction_amount") or 0),
-        "ksic_code": str(ctx.get("ksic_code") or ""),
-        "construction_type": str(ctx.get("construction_type") or ""),
         "subcontractor_worker_count": int(
             ctx.get("subcontractor_worker_count") or ctx.get("subcon_workers") or 0
         ),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    ksic = str(ctx.get("ksic_code") or "").strip()
+    if ksic:
+        row["ksic_code"] = ksic
+    construction_type = str(ctx.get("construction_type") or "").strip()
+    if construction_type:
+        row["construction_type"] = construction_type
+    if building_use_code:
+        row["building_use_code"] = building_use_code
+    floor_count = int(ctx.get("floor_count") or 0)
+    if floor_count > 0:
+        row["floor_count"] = floor_count
+    gas_m3 = float(ctx.get("gas_capacity_m3") or 0)
+    if gas_m3 > 0:
+        row["gas_capacity_m3"] = gas_m3
+    boiler_kw = float(ctx.get("boiler_capacity_kw") or 0)
+    if boiler_kw > 0:
+        row["boiler_capacity_kw"] = boiler_kw
+    elevator_count = int(ctx.get("elevator_count") or 0)
+    if elevator_count > 0:
+        row["elevator_count"] = elevator_count
+    annual_toe = float(ctx.get("annual_energy_toe") or 0)
+    if annual_toe > 0:
+        row["annual_energy_toe"] = annual_toe
+    is_haz = ctx.get("is_hazardous_material")
+    if is_haz is not None:
+        row["is_hazardous_material"] = bool(is_haz)
     res = supabase.table("factories").insert(row).execute()
     if not res.data:
         raise RuntimeError("임시 시설(factories) 생성 실패")
@@ -414,7 +488,7 @@ def run_anonymous_diagnosis(
             "sector는 BUILDING, MANUFACTURING, CONSTRUCTION, SPECIAL_FACILITY 중 하나여야 합니다."
         )
 
-    inp = _merge_body_input(body)
+    inp = normalize_consumer_inp(body)
     facility_ctx = _input_to_facility_context(sector_raw, inp)
     evaluated_at = datetime.now(timezone.utc).isoformat()
 

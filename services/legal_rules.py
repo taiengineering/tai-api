@@ -44,6 +44,8 @@ def normalize_sector_db(sector: str) -> str:
     u = sector.strip().upper()
     if u == "INDUSTRY":
         return "INDUSTRIAL"
+    if u == "MANUFACTURING":
+        return "INDUSTRIAL"
     if u == "SPECIAL":
         return "SPECIAL_FACILITY"
     return u
