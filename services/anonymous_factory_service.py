@@ -44,6 +44,51 @@ _TASK_TYPE_TO_BUCKET: Dict[str, Tuple[str, str]] = {
     "PRESERVATION": ("action", "조치"),
 }
 
+_ACTION_TO_TASK: Dict[str, str] = {
+    "INSPECT_FAMILY": "INSPECTION_TASK_CANDIDATE",
+    "REPORT_FAMILY": "REPORT_TASK_CANDIDATE",
+    "TRAINING_FAMILY": "TRAINING_TASK_CANDIDATE",
+    "APPOINT_FAMILY": "APPOINTMENT_TASK_CANDIDATE",
+    "RECORD_FAMILY": "RECORD_TASK_CANDIDATE",
+    "PRESERVE_FAMILY": "PRESERVE_TASK_CANDIDATE",
+    "INSTALL_FAMILY": "INSTALL_TASK_CANDIDATE",
+    "MANAGE_FAMILY": "MANAGE_TASK_CANDIDATE",
+    "NOTIFY_FAMILY": "NOTIFY_TASK_CANDIDATE",
+    "MEASURE_FAMILY": "MEASURE_TASK_CANDIDATE",
+    "VERIFY_FAMILY": "VERIFY_TASK_CANDIDATE",
+    "DESIGNATE_FAMILY": "DESIGNATE_TASK_CANDIDATE",
+    "EXECUTE_FAMILY": "EXECUTE_TASK_CANDIDATE",
+    "PUBLISH_FAMILY": "PUBLISH_TASK_CANDIDATE",
+    "CONSULT_FAMILY": "CONSULT_TASK_CANDIDATE",
+    "PROVIDE_FAMILY": "PROVIDE_TASK_CANDIDATE",
+    "REPAIR_FAMILY": "REPAIR_TASK_CANDIDATE",
+    "REPLACE_FAMILY": "REPLACE_TASK_CANDIDATE",
+    "CANCEL_FAMILY": "CANCEL_TASK_CANDIDATE",
+    "CORRECT_FAMILY": "CORRECT_TASK_CANDIDATE",
+    "PREVENT_FAMILY": "PREVENT_TASK_CANDIDATE",
+    "PROCESS_FAMILY": "PROCESS_TASK_CANDIDATE",
+    "REQUEST_FAMILY": "REQUEST_TASK_CANDIDATE",
+}
+
+_OBLIGATION_FAMILIES = frozenset(
+    {
+        "MANDATORY_FAMILY",
+        "PERMISSIVE_FAMILY",
+        "MANDATORY_ITEM_FAMILY",
+        "PROHIBITION_FAMILY",
+    }
+)
+
+
+def _bucket_for_task_type(task_type: str) -> Tuple[str, str]:
+    tt = (task_type or "ACTION").upper()
+    if tt in _TASK_TYPE_TO_BUCKET:
+        return _TASK_TYPE_TO_BUCKET[tt]
+    for prefix, bucket in _TASK_TYPE_TO_BUCKET.items():
+        if tt.startswith(prefix):
+            return bucket
+    return ("action", "조치")
+
 
 def _merge_body_input(body: DiagnoseStep1Body) -> Dict[str, Any]:
     inp = dict(body.input or {})
@@ -304,19 +349,144 @@ def cleanup_temp_factory(supabase, factory_id: str) -> None:
         log.warning("factories cleanup failed factory_id=%s: %s", fid, exc)
 
 
-def _task_to_rule_row(task: Dict[str, Any], sector_raw: str) -> Dict[str, Any]:
-    task_type = (task.get("task_type") or "ACTION").upper()
-    bucket, cat_label = _TASK_TYPE_TO_BUCKET.get(task_type, ("action", "조치"))
-    title = f"{task.get('task_type', '')}: {task.get('source_action_family', '')}".strip(": ")
-    fam = (task.get("obligation_family") or "").strip()
-    obl_type = task_type if task_type in ("APPOINT", "INSPECT", "REPORT", "NOTIFY", "ACTION") else "ACTION"
-    flags = {
+def _load_draft_fallback_context(
+    supabase,
+    draft_ids: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    """Batch-read executable_draft, law_master, draft_slot for fallback rule rows."""
+    unique = [
+        d
+        for d in dict.fromkeys(str(x).strip() for x in draft_ids if x and str(x).strip())
+    ]
+    if not unique or supabase is None:
+        return {}
+
+    ctx: Dict[str, Dict[str, Any]] = {d: {} for d in unique}
+    articles_by_draft: Dict[str, str] = {}
+
+    for i in range(0, len(unique), _INSERT_CHUNK):
+        chunk = unique[i : i + _INSERT_CHUNK]
+        try:
+            res = (
+                supabase.table("executable_draft")
+                .select("id, article_id, rule_candidate_id, part_id")
+                .in_("id", chunk)
+                .execute()
+            )
+        except Exception as exc:
+            log.warning("executable_draft batch fetch failed: %s", exc)
+            continue
+        for row in res.data or []:
+            did = str(row.get("id") or "")
+            if not did:
+                continue
+            ctx[did]["article_id"] = row.get("article_id")
+            ctx[did]["rule_candidate_id"] = row.get("rule_candidate_id")
+            ctx[did]["part_id"] = row.get("part_id")
+            if row.get("article_id"):
+                articles_by_draft[did] = str(row["article_id"])
+
+    article_meta: Dict[str, Dict[str, Any]] = {}
+    article_ids = list(dict.fromkeys(articles_by_draft.values()))
+    for i in range(0, len(article_ids), _INSERT_CHUNK):
+        chunk = article_ids[i : i + _INSERT_CHUNK]
+        try:
+            res = (
+                supabase.table("law_article")
+                .select("id, law_id, article_no, article_title")
+                .in_("id", chunk)
+                .execute()
+            )
+        except Exception as exc:
+            log.warning("law_article batch fetch failed: %s", exc)
+            continue
+        for row in res.data or []:
+            article_meta[str(row["id"])] = row
+
+    law_ids = list(
+        dict.fromkeys(str(r.get("law_id")) for r in article_meta.values() if r.get("law_id"))
+    )
+    law_names: Dict[str, str] = {}
+    for i in range(0, len(law_ids), _INSERT_CHUNK):
+        chunk = law_ids[i : i + _INSERT_CHUNK]
+        try:
+            res = (
+                supabase.table("law_master")
+                .select("id, law_name")
+                .in_("id", chunk)
+                .execute()
+            )
+        except Exception as exc:
+            log.warning("law_master batch fetch failed: %s", exc)
+            continue
+        for row in res.data or []:
+            law_names[str(row["id"])] = (row.get("law_name") or "").strip()
+
+    for did, aid in articles_by_draft.items():
+        am = article_meta.get(aid) or {}
+        law_name = law_names.get(str(am.get("law_id") or ""), "")
+        art_no = am.get("article_no") or ""
+        art_title = (am.get("article_title") or "").strip()
+        ctx[did]["law_name"] = law_name
+        ctx[did]["law_article"] = str(art_no) if art_no else ""
+        ctx[did]["description"] = art_title or law_name
+
+    slots_by_draft: Dict[str, List[Dict[str, Any]]] = {}
+    for i in range(0, len(unique), _INSERT_CHUNK):
+        chunk = unique[i : i + _INSERT_CHUNK]
+        try:
+            res = (
+                supabase.table("draft_slot")
+                .select("draft_id, section, family_name, raw_token")
+                .in_("draft_id", chunk)
+                .eq("section", "THEN_ACTION")
+                .execute()
+            )
+        except Exception as exc:
+            log.warning("draft_slot batch fetch failed: %s", exc)
+            continue
+        for row in res.data or []:
+            did = str(row.get("draft_id") or "")
+            if did:
+                slots_by_draft.setdefault(did, []).append(row)
+
+    for did, slots in slots_by_draft.items():
+        obligation = ""
+        for slot in slots:
+            fam = slot.get("family_name") or ""
+            if fam in _OBLIGATION_FAMILIES:
+                obligation = fam
+        for slot in slots:
+            fam = slot.get("family_name") or ""
+            if fam not in _ACTION_TO_TASK:
+                continue
+            ctx[did]["task_type"] = _ACTION_TO_TASK[fam]
+            ctx[did]["source_action_family"] = fam
+            token = (slot.get("raw_token") or "").strip()
+            if token:
+                ctx[did]["description"] = token
+            break
+        ctx[did]["obligation_family"] = obligation
+
+    return ctx
+
+
+def _rule_row_flags(bucket: str) -> Dict[str, bool]:
+    return {
         "appointment_required": bucket == "appointment",
         "inspection_required": bucket == "inspection",
         "action_required": bucket == "action",
         "report_required": bucket == "report",
         "notify_required": bucket == "notify",
     }
+
+
+def _task_to_rule_row(task: Dict[str, Any], sector_raw: str) -> Dict[str, Any]:
+    task_type = (task.get("task_type") or "ACTION").upper()
+    bucket, cat_label = _bucket_for_task_type(task_type)
+    title = f"{task.get('task_type', '')}: {task.get('source_action_family', '')}".strip(": ")
+    fam = (task.get("obligation_family") or "").strip()
+    obl_type = task_type if task_type in ("APPOINT", "INSPECT", "REPORT", "NOTIFY", "ACTION") else "ACTION"
     return {
         "rule_id": str(task.get("id") or ""),
         "rule_type": task_type,
@@ -331,7 +501,41 @@ def _task_to_rule_row(task: Dict[str, Any], sector_raw: str) -> Dict[str, Any]:
         "diagnosis_stage": 1,
         "schedule_type": "ON_DEMAND",
         "penalty_summary": "",
-        **flags,
+        **_rule_row_flags(bucket),
+        "_bucket": bucket,
+    }
+
+
+def _applicability_to_rule_row(
+    applicability: Dict[str, Any],
+    sector_raw: str,
+    draft_ctx: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    draft_id = str(applicability.get("draft_id") or "")
+    meta = draft_ctx.get(draft_id) or {}
+    task_type = (meta.get("task_type") or "ACTION").upper()
+    bucket, cat_label = _bucket_for_task_type(task_type)
+    source_fam = meta.get("source_action_family") or ""
+    fam = (meta.get("obligation_family") or "").strip()
+    law_name = (meta.get("law_name") or "").strip() or fam or "Compiler Candidate"
+    desc = (meta.get("description") or "").strip()
+    title = f"{task_type}: {source_fam}".strip(": ") if source_fam else (desc or law_name)
+    obl_type = task_type if task_type in ("APPOINT", "INSPECT", "REPORT", "NOTIFY", "ACTION") else "ACTION"
+    return {
+        "rule_id": str(applicability.get("id") or draft_id),
+        "rule_type": task_type,
+        "law_name": law_name,
+        "law_article": meta.get("law_article") or "",
+        "obligation_summary": title or fam or "의무 후보",
+        "remarks": title,
+        "description": desc or title or fam,
+        "category": cat_label,
+        "obligation_type": obl_type,
+        "sector": sector_raw,
+        "diagnosis_stage": 1,
+        "schedule_type": "ON_DEMAND",
+        "penalty_summary": "",
+        **_rule_row_flags(bucket),
         "_bucket": bucket,
     }
 
@@ -342,6 +546,7 @@ def _compiler_result_to_step1_format(
     sector_raw: str,
     facility_ctx: Dict[str, Any],
     evaluated_at: str,
+    supabase=None,
 ) -> Dict[str, Any]:
     """Compiler Core / DiagnosisService-shaped dict → legacy step1 result_data."""
     sector_db = normalize_sector_db(sector_raw)
@@ -351,23 +556,11 @@ def _compiler_result_to_step1_format(
 
     rules_from_tasks = [_task_to_rule_row(t, sector_raw) for t in tasks]
     if not rules_from_tasks and applicability:
-        for a in applicability:
-            status = a.get("applicability_status") or ""
-            rules_from_tasks.append(
-                {
-                    "rule_id": str(a.get("id") or a.get("draft_id") or ""),
-                    "law_name": "Applicability Candidate",
-                    "law_article": "",
-                    "obligation_summary": f"Applicability: {status}",
-                    "remarks": f"draft={a.get('draft_id')}",
-                    "description": f"Applicability: {status}",
-                    "category": "조치",
-                    "obligation_type": "ACTION",
-                    "sector": sector_raw,
-                    "action_required": True,
-                    "_bucket": "action",
-                }
-            )
+        draft_ids = [str(a.get("draft_id") or "") for a in applicability]
+        draft_ctx = _load_draft_fallback_context(supabase, draft_ids)
+        rules_from_tasks = [
+            _applicability_to_rule_row(a, sector_raw, draft_ctx) for a in applicability
+        ]
 
     triggered: Dict[str, List] = {
         "appointment": [],
@@ -502,6 +695,7 @@ def run_anonymous_diagnosis(
             sector_raw=sector_raw,
             facility_ctx=facility_ctx,
             evaluated_at=evaluated_at,
+            supabase=supabase,
         )
     finally:
         if factory_id:
