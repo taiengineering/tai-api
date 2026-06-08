@@ -1,5 +1,8 @@
 """
-Nexas / anonymous diagnosis — Runtime Compiler step1 실행.
+[ISOLATED] Nexas / anonymous diagnosis — Runtime Compiler step1 (Phase 1 legacy path).
+
+Consumer diagnosis (Phase 2) uses services/anonymous_factory_service.run_anonymous_diagnosis
+instead of this module. Retained for factory_id-attached enrichment and internal tooling.
 
 legal_engine_svc.run_diagnose_step1(legacy) 대신
 runtime_metadata_resolution → v1 projection → build_step1_result_data.
@@ -21,6 +24,7 @@ from services.legal_rules import get_construction_summary
 from services.legal_format import _classify_rules_db, format_rule_result_db
 from services.legal_helpers import get_sector_groups
 from services.legal_rules import normalize_sector_db, risk_level
+from services.compiler_core_svc import fetch_compiler_candidates
 from services.legal_runtime_fetch import fetch_runtime_rules_as_v1
 from services.legal_step1_builder import build_step1_result_data
 
@@ -473,4 +477,28 @@ def run_diagnose_step1_runtime(
     )
     result_data["rule_version"] = "runtime_metadata_resolution:v1"
     _enrich_result_data_slots(supabase, result_data)
+
+    factory_id = (body.factory_id or "").strip() or None
+    if factory_id:
+        try:
+            core = fetch_compiler_candidates(supabase, factory_id)
+            result_data["compiler_core"] = {
+                "compiler_version": core["compiler_version"],
+                "warning": core["warning"],
+                "applicability_count": len(core["applicability_candidates"]),
+                "task_count": len(core["task_candidates"]),
+                "schedule_count": len(core["schedule_candidates"]),
+                "applicability_candidates": core["applicability_candidates"],
+                "task_candidates": core["task_candidates"],
+                "schedule_candidates": core["schedule_candidates"],
+            }
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "compiler_core fetch failed for factory_id=%s: %s",
+                factory_id,
+                exc,
+            )
+            result_data["compiler_core"] = None
+
     return result_data

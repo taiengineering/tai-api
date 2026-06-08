@@ -46,49 +46,23 @@ async def evaluate_facility(body: FacilityEvaluateRequest):
     """Runtime이 호출하는 Compiler Core.
     Candidate만 반환. 법적 확정 금지.
     """
+    from services.compiler_core_svc import fetch_compiler_candidates
+
     sb = _get_sb()
-    fid = body.factory_id
-
-    # Applicability Candidates
-    app_result = sb.table('facility_applicability').select(
-        'id, draft_id, applicability_status, part_id'
-    ).eq('factory_id', fid).in_(
-        'applicability_status', ['MATCH_CANDIDATE', 'POSSIBLE_CANDIDATE']
-    ).execute()
-
-    # Task Candidates
-    task_result = sb.table('task_candidate').select(
-        'id, task_type, source_action_family, obligation_family, applicability_status, status'
-    ).eq('factory_id', fid).execute()
-
-    # Schedule Candidates
-    sched_result = sb.table('schedule_candidate').select(
-        'id, schedule_type, source_family, source_relation_type, task_type, status'
-    ).eq('factory_id', fid).execute()
-
-    # Penalty Candidates (via task→draft→penalty)
-    penalty_result = sb.table('penalty_obligation_relation').select(
-        'id, penalty_candidate_id, rule_candidate_id, obligation_family, via_reference, status'
-    ).execute()
-
-    # Review Queue (facility-specific)
-    review_result = sb.table('compliance_review_queue').select(
-        'id, issue_type, detail, status'
-    ).eq('factory_id', fid).execute()
-
-    # Compliance Package
-    pkg_result = sb.table('compliance_package').select('*').eq('factory_id', fid).execute()
-
+    try:
+        core = fetch_compiler_candidates(sb, body.factory_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {
-        'factory_id': fid,
-        'compiler_version': 'v3.0-deterministic',
-        'warning': 'All results are CANDIDATES. Not legal conclusions.',
-        'applicability_candidates': app_result.data or [],
-        'task_candidates': task_result.data or [],
-        'schedule_candidates': sched_result.data or [],
-        'penalty_relations': penalty_result.data[:50] if penalty_result.data else [],  # 제한
-        'review_queue': review_result.data or [],
-        'compliance_package': pkg_result.data[0] if pkg_result.data else None,
+        'factory_id': core['factory_id'],
+        'compiler_version': core['compiler_version'],
+        'warning': core['warning'],
+        'applicability_candidates': core['applicability_candidates'],
+        'task_candidates': core['task_candidates'],
+        'schedule_candidates': core['schedule_candidates'],
+        'penalty_relations': core['penalty_relations'],
+        'review_queue': core['review_queue'],
+        'compliance_package': core['compliance_package'],
     }
 
 
