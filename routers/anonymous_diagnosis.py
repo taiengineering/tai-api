@@ -23,6 +23,7 @@ from schemas.legal_engine import DiagnoseStep1Body
 from services.anonymous_factory_service import (
     ANONYMOUS_COMPILER_ENGINE_VERSION,
     RULE_VERSION_COMPILER,
+    prepare_step1_body_for_compiler,
     run_anonymous_diagnosis,
 )
 from services.legal_helpers import _now_iso
@@ -76,6 +77,7 @@ def _now() -> datetime:
 
 
 def _run_step1_via_service(supabase, step1_body: DiagnoseStep1Body) -> Dict[str, Any]:
+    step1_body = prepare_step1_body_for_compiler(step1_body)
     result_data = run_anonymous_diagnosis(
         supabase,
         step1_body,
