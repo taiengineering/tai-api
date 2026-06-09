@@ -1,15 +1,19 @@
 """
-routers/diagnosis_result_web.py — v1.1.0
+routers/diagnosis_result_web.py — v1.2.0
 
 유료/무료 진단 결과 웹 조회 API (JSON)
   GET /diagnosis/result/{public_token}
   GET /diagnosis/paid-result/{public_token}
 
 v1.1.0: BE-08 Transform 정제 함수 연동 (rules_table dedupe + FAMILY→한글)
+v1.2.0: 의무 제목/설명 표시 보정 — obligation_summary/remarks가 코드 토큰
+        (예: "APPOINTMENT_TASK_CANDIDATE: APPOINT_FAMILY")일 때 description의
+        사람이 읽는 텍스트를 우선 사용. 엔진/판정 로직 미변경(표시 transform만).
 """
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
@@ -36,6 +40,28 @@ SECTOR_LABEL = {
     "BUILDING": "건물", "INDUSTRY": "산업",
     "CONSTRUCTION": "건설", "MANUFACTURING": "산업(제조)",
 }
+
+# 엔진이 obligation_summary/remarks에 넣는 코드 토큰 패턴.
+# 예: "APPOINTMENT_TASK_CANDIDATE: APPOINT_FAMILY", "INSPECT_FAMILY"
+_TOKEN_RE = re.compile(r"_CANDIDATE|_FAMILY|^[A-Z][A-Z0-9_]*\s*:\s*[A-Z][A-Z0-9_]*$")
+
+
+def _is_token(v: Any) -> bool:
+    """사람이 읽는 문장이 아니라 코드 토큰이면 True."""
+    s = (v or "").strip() if isinstance(v, str) else str(v or "").strip()
+    if not s:
+        return True
+    return bool(_TOKEN_RE.search(s))
+
+
+def _human_text(*cands: Any) -> str:
+    """후보 중 코드 토큰이 아닌 첫 사람이 읽는 텍스트를 반환."""
+    for c in cands:
+        s = (c or "").strip() if isinstance(c, str) else str(c or "").strip()
+        if s and not _is_token(s):
+            return s
+    return ""
+
 
 # FAMILY / obligation 코드 → diagnosis_transform CATEGORY_MAP 키
 _FAMILY_STEM_TO_CATEGORY_KEY: Dict[str, str] = {
@@ -146,18 +172,20 @@ def _rule_row_to_obligation_src(row: Dict[str, Any]) -> Dict[str, Any]:
     law_ref = " ".join(
         p for p in ((row.get("law_name") or "").strip(), (row.get("law_article") or "").strip()) if p
     )
+    # 코드 토큰(obligation_summary/remarks)보다 사람이 읽는 description을 우선.
+    human = _human_text(
+        row.get("description"),
+        row.get("obligation_summary"),
+        row.get("remarks"),
+        row.get("rule_name"),
+    )
     return {
         "id": str(row.get("rule_id") or row.get("id") or ""),
         "category": cat_key,
         "type": cat_key,
-        "title": (
-            row.get("obligation_summary")
-            or row.get("description")
-            or row.get("remarks")
-            or "의무사항"
-        ),
-        "name": row.get("obligation_summary") or row.get("description") or "",
-        "description": row.get("remarks") or row.get("description") or "",
+        "title": human or "의무사항",
+        "name": human or "",
+        "description": human or "",
         "risk_level": row.get("risk_level") or "MEDIUM",
         "legal_basis": law_ref,
         "evidence": [law_ref] if law_ref else [],
@@ -173,10 +201,23 @@ def _merge_obligation_into_rule_row(
     )
     merged["rule_kind"] = _rule_kind_key(original)
     merged["rule_kind_label"] = merged["category"]
-    if obligation.get("title"):
-        merged["obligation_summary"] = obligation["title"]
-    if obligation.get("description"):
-        merged["description"] = obligation["description"]
+    # 사람이 읽는 텍스트로 obligation_summary/description를 보정.
+    # 원본이 코드 토큰이면 정제된 obligation 텍스트로 덮어쓴다.
+    human = _human_text(
+        obligation.get("title"),
+        obligation.get("description"),
+        original.get("description"),
+        original.get("obligation_summary"),
+        original.get("remarks"),
+    )
+    if human:
+        if _is_token(merged.get("obligation_summary")):
+            merged["obligation_summary"] = human
+        if _is_token(merged.get("description")):
+            merged["description"] = human
+    # remarks가 코드 토큰이면 화면 노출되지 않도록 비운다.
+    if _is_token(merged.get("remarks")):
+        merged["remarks"] = ""
     return merged
 
 
