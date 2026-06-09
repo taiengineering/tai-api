@@ -17,6 +17,7 @@ from services.facility_applicability_eval import evaluate_draft_for_facility
 from services.input_normalizer import normalize_input
 from services.legal_context import _input_to_facility_context
 from services.legal_helpers import get_sector_groups
+from services.diagnosis_helpers import SOURCE_DIAGNOSIS
 from services.legal_rules import get_construction_summary, normalize_sector_db, risk_level
 
 log = logging.getLogger(__name__)
@@ -501,6 +502,7 @@ def _task_to_rule_row(task: Dict[str, Any], sector_raw: str) -> Dict[str, Any]:
         "diagnosis_stage": 1,
         "schedule_type": "ON_DEMAND",
         "penalty_summary": "",
+        "source": SOURCE_DIAGNOSIS,
         **_rule_row_flags(bucket),
         "_bucket": bucket,
     }
@@ -535,6 +537,7 @@ def _applicability_to_rule_row(
         "diagnosis_stage": 1,
         "schedule_type": "ON_DEMAND",
         "penalty_summary": "",
+        "source": SOURCE_DIAGNOSIS,
         **_rule_row_flags(bucket),
         "_bucket": bucket,
     }
@@ -590,11 +593,20 @@ def _compiler_result_to_step1_format(
     appointment_n = len(triggered["appointment"])
     risk = risk_level(total_applicable, appointment_n)
 
-    key_obligations: List[str] = []
+    key_obligations: List[Dict[str, Any]] = []
+    seen_key_titles: set[str] = set()
     for x in rules_from_tasks[:20]:
         t = (x.get("obligation_summary") or x.get("remarks") or "").strip()
-        if t and t not in key_obligations:
-            key_obligations.append(t)
+        if t and t not in seen_key_titles:
+            seen_key_titles.add(t)
+            key_obligations.append(
+                {
+                    "title": t,
+                    "law_name": (x.get("law_name") or "").strip(),
+                    "rule_type": (x.get("rule_type") or "").strip(),
+                    "source": SOURCE_DIAGNOSIS,
+                }
+            )
 
     obligations: List[Dict[str, Any]] = []
     for key, label in [("appointment", "선임"), ("inspection", "점검"), ("action", "조치")]:

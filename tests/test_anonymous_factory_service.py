@@ -46,6 +46,8 @@ def test_compiler_result_to_step1_format_shape():
     assert out["rules_table"]
     assert out["rules"] == out["rules_table"]
     assert out["key_obligations"]
+    assert out["key_obligations"][0]["source"] == "DIAGNOSIS"
+    assert out["rules_table"][0]["source"] == "DIAGNOSIS"
     assert out["law_badges"]
     assert out["applicable_count"] >= 1
     assert out["summary"]["total"] >= 1

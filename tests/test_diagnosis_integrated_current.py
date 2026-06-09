@@ -17,20 +17,29 @@ def test_auto_tier_industry_uses_user_tier_or_default():
 
 
 def test_build_partial_includes_core_fields_and_truncation():
+    from services.diagnosis_helpers import SOURCE_DIAGNOSIS, _build_partial
+
     full = {
         "risk_level": "HIGH",
         "summary": {"total": 10},
         "applicable_count": 10,
         "sector": "BUILDING",
+        "evaluated_at": "2026-06-08T00:00:00+00:00",
+        "engine_version": "v3.0-compiler-core-anonymous",
         "key_obligations": list(range(10)),
         "law_badges": list(range(30)),
+        "rules_table": [{"rule_id": "r1", "law_name": "법A"}],
     }
-    partial = diagnosis_integrated._build_partial(full)
+    partial = _build_partial(full)
     assert partial["risk_level"] == "HIGH"
     assert partial["summary"]["total"] == 10
     assert partial["applicable_count"] == 10
+    assert partial["evaluated_at"] == "2026-06-08T00:00:00+00:00"
+    assert partial["rules_preview"]
     assert len(partial["key_obligations"]) == 6
     assert len(partial["law_badges"]) == 18
+    assert partial["key_obligations"][0]["source"] == SOURCE_DIAGNOSIS
+    assert partial["rules_table"][0]["source"] == SOURCE_DIAGNOSIS
 
 
 def test_price_table_contains_expected_core_tiers():
