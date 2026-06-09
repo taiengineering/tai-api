@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from schemas.legal_engine import DiagnoseStep1Body
 from services.compiler_core_svc import COMPILER_VERSION, fetch_compiler_candidates
@@ -28,6 +28,35 @@ RULE_VERSION_COMPILER = "compiler_core:facility_applicability:v1"
 _DRAFT_PAGE = 1000
 _INSERT_CHUNK = 200
 _PERSIST_STATUSES = frozenset({"MATCH_CANDIDATE", "POSSIBLE_CANDIDATE"})
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 입구(sector) 표준 매핑
+#
+# 중요: MANUFACTURING은 엔진 내부(입구~제일 뒤)가 일관되게 쓰는 내부 표준 용어다.
+#   입력 표준(법령분류·law_sector_mapping·factories.sector)은 INDUSTRIAL을 쓰고,
+#   엔진에 넣을 때 입구에서 INDUSTRIAL→MANUFACTURING으로 변환한다.
+#   따라서 law_sector_mapping과 대조할 때는 "변환 전 입력 표준값"으로 되돌려서
+#   매칭해야 한다. 문제가 생길 때마다 이 표준을 바꾸지 말 것 — 표준을 그대로
+#   읽어서 거르기만 한다(아래 _mapping_sector_key 참조).
+#
+# law_sector_mapping.sectors 표준값: BUILDING / INDUSTRIAL / CONSTRUCTION / SPECIAL_FACILITY
+# factories.sector 표준값:           BUILDING / INDUSTRIAL / CONSTRUCTION / SPECIAL_FACILITY / COMMON
+# ─────────────────────────────────────────────────────────────────────────────
+_ENGINE_TO_MAPPING_SECTOR: Dict[str, str] = {
+    # 엔진 내부 용어 → 입력 표준(law_sector_mapping) 용어
+    "MANUFACTURING": "INDUSTRIAL",
+}
+
+
+def _mapping_sector_key(sector_value: str) -> str:
+    """factory/엔진 sector 값을 law_sector_mapping.sectors 표준 키로 환원.
+
+    factories.sector는 입력 표준(INDUSTRIAL 등)을 그대로 보존하므로 대개 변환이
+    불필요하지만, 엔진 내부 표준(MANUFACTURING)이 흘러들어온 경우를 방어적으로
+    INDUSTRIAL로 되돌린다. 그 외 값은 표준을 건드리지 않고 그대로 통과시킨다.
+    """
+    s = (sector_value or "").strip().upper()
+    return _ENGINE_TO_MAPPING_SECTOR.get(s, s)
 
 _TASK_TYPE_TO_BUCKET: Dict[str, Tuple[str, str]] = {
     "APPOINTMENT": ("appointment", "선임"),
@@ -285,8 +314,134 @@ def create_temp_factory(supabase, body: DiagnoseStep1Body) -> str:
     return str(res.data[0]["id"])
 
 
-def _load_draft_slot_groups(supabase) -> Tuple[Dict[str, List[Dict]], Dict[str, List[Dict]]]:
-    """Paginate draft_slot → numeric / scope groups keyed by draft_id."""
+def _load_sector_allowed_draft_ids(supabase, sector_value: str) -> Optional[Set[str]]:
+    """입구 sector 필터: 이 sector에 적용되는 draft_id 집합을 반환.
+
+    법령분류 표준(law_sector_mapping)을 '그대로 읽어서' 거른다. 표준을 새로 만들지
+    않는다. 연결: executable_draft → law_article → law_master ← law_sector_mapping.
+
+    통과 규칙(사장님 확정):
+      - 해당 sector가 law_sector_mapping.sectors에 포함된 draft  → 통과
+      - law_sector_mapping에 매핑이 아예 없는 법령의 draft        → 통과(가지고 감)
+        (미매핑은 나중에 매핑을 채운 뒤 제외 예정. 지금 빼면 의무 누락 위험)
+      - 다른 sector 전용으로 명시된 법령(예: 의료법=SPECIAL_FACILITY)의 draft → 제외
+
+    Returns:
+      허용 draft_id 집합. 매핑 데이터가 없거나 조회 실패 시 None을 돌려주어
+      호출부가 '필터 미적용(전체 평가)'로 안전하게 폴백하도록 한다.
+    """
+    key = _mapping_sector_key(sector_value)
+    if not key:
+        return None
+
+    # 1) executable_draft → article_id
+    draft_article: Dict[str, str] = {}
+    article_ids: Set[str] = set()
+    offset = 0
+    while True:
+        try:
+            res = (
+                supabase.table("executable_draft")
+                .select("id, article_id")
+                .not_.is_("article_id", "null")
+                .range(offset, offset + _DRAFT_PAGE - 1)
+                .execute()
+            )
+        except Exception as exc:
+            log.warning("sector-filter executable_draft fetch failed: %s", exc)
+            return None
+        chunk = res.data or []
+        if not chunk:
+            break
+        for row in chunk:
+            did = str(row.get("id") or "")
+            aid = str(row.get("article_id") or "")
+            if did and aid:
+                draft_article[did] = aid
+                article_ids.add(aid)
+        if len(chunk) < _DRAFT_PAGE:
+            break
+        offset += _DRAFT_PAGE
+
+    if not draft_article:
+        return None
+
+    # 2) law_article → law_id
+    article_law: Dict[str, str] = {}
+    law_ids: Set[str] = set()
+    aid_list = list(article_ids)
+    for i in range(0, len(aid_list), _INSERT_CHUNK):
+        chunk = aid_list[i : i + _INSERT_CHUNK]
+        try:
+            res = (
+                supabase.table("law_article")
+                .select("id, law_id")
+                .in_("id", chunk)
+                .execute()
+            )
+        except Exception as exc:
+            log.warning("sector-filter law_article fetch failed: %s", exc)
+            return None
+        for row in res.data or []:
+            aid = str(row.get("id") or "")
+            lid = str(row.get("law_id") or "")
+            if aid and lid:
+                article_law[aid] = lid
+                law_ids.add(lid)
+
+    # 3) law_sector_mapping: law_id → sectors[]  (매핑된 법령만 존재)
+    law_sectors: Dict[str, List[str]] = {}
+    lid_list = list(law_ids)
+    for i in range(0, len(lid_list), _INSERT_CHUNK):
+        chunk = lid_list[i : i + _INSERT_CHUNK]
+        try:
+            res = (
+                supabase.table("law_sector_mapping")
+                .select("law_id, sectors")
+                .in_("law_id", chunk)
+                .execute()
+            )
+        except Exception as exc:
+            log.warning("sector-filter law_sector_mapping fetch failed: %s", exc)
+            return None
+        for row in res.data or []:
+            lid = str(row.get("law_id") or "")
+            secs = row.get("sectors") or []
+            if lid:
+                law_sectors[lid] = [str(s).strip().upper() for s in secs if s]
+
+    if not law_sectors:
+        # 매핑 테이블이 비었거나 연결 실패 → 필터 미적용(전체 평가) 폴백
+        return None
+
+    # 4) draft별 통과 판정
+    allowed: Set[str] = set()
+    for did, aid in draft_article.items():
+        lid = article_law.get(aid)
+        if not lid:
+            # 법령 연결이 끊긴 draft는 보수적으로 통과(누락 방지)
+            allowed.add(did)
+            continue
+        secs = law_sectors.get(lid)
+        if secs is None:
+            # 미매핑 법령 → 가지고 감(나중에 제외)
+            allowed.add(did)
+        elif key in secs:
+            # 해당 sector에 적용되는 법령 → 통과
+            allowed.add(did)
+        # else: 다른 sector 전용 → 제외
+    return allowed
+
+
+def _load_draft_slot_groups(
+    supabase,
+    allowed_draft_ids: Optional[Set[str]] = None,
+) -> Tuple[Dict[str, List[Dict]], Dict[str, List[Dict]]]:
+    """Paginate draft_slot → numeric / scope groups keyed by draft_id.
+
+    allowed_draft_ids가 주어지면 그 집합에 속한 draft만 적재한다(입구 sector 필터).
+    None이면 종전대로 전체 적재(폴백).
+    """
     numerics: Dict[str, List[Dict[str, Any]]] = {}
     scopes: Dict[str, List[Dict[str, Any]]] = {}
     offset = 0
@@ -305,6 +460,8 @@ def _load_draft_slot_groups(supabase) -> Tuple[Dict[str, List[Dict]], Dict[str, 
         for row in chunk:
             draft_id = str(row.get("draft_id") or "")
             if not draft_id:
+                continue
+            if allowed_draft_ids is not None and draft_id not in allowed_draft_ids:
                 continue
             section = (row.get("section") or "").upper()
             if section == "IF_NUMERIC":
@@ -339,13 +496,22 @@ def evaluate_single_factory(supabase, factory_id: str) -> Dict[str, int]:
     On-demand facility_applicability for one factory (Compiler Core materialize).
 
     Uses facility_applicability_eval pure logic; persists MATCH/POSSIBLE rows only.
+
+    입구 sector 필터: factory.sector(입력 표준값)를 기준으로 law_sector_mapping에
+    맞는 draft만 평가 대상으로 적재한다. 타 sector 전용 법령(예: 제조업 진단에
+    들어오던 의료법·특수교육법=SPECIAL_FACILITY)은 평가 진입 전에 분리된다.
+    판정 로직(evaluate_draft_for_facility) 자체는 변경하지 않는다.
     """
     fac_res = supabase.table("factories").select("*").eq("id", factory_id).limit(1).execute()
     if not fac_res.data:
         raise LookupError(f"factory not found: {factory_id}")
     facility = fac_res.data[0]
 
-    numerics, scopes = _load_draft_slot_groups(supabase)
+    # 입구에서 sector 표준값으로 허용 draft 집합 산출(법령분류 표준을 그대로 읽음).
+    sector_value = str(facility.get("sector") or "").strip()
+    allowed_draft_ids = _load_sector_allowed_draft_ids(supabase, sector_value)
+
+    numerics, scopes = _load_draft_slot_groups(supabase, allowed_draft_ids)
     all_draft_ids = set(numerics.keys()) | set(scopes.keys())
 
     rows: List[Dict[str, Any]] = []
@@ -382,6 +548,7 @@ def evaluate_single_factory(supabase, factory_id: str) -> Dict[str, int]:
     return {
         "drafts_evaluated": len(all_draft_ids),
         "applicability_inserted": inserted,
+        "sector_filtered": allowed_draft_ids is not None,
     }
 
 
