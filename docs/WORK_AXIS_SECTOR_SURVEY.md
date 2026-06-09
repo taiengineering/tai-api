@@ -1,11 +1,13 @@
-# 작업(work) 축 섹터별 조사 (2026-06-09)
+# 작업(work) 축 섹터별 조사 (2026-06-09, v2 정정)
 
 > 질문: 작업(work)이 건설에만 있는가, 제조(산업)에도 있는가?
-> 결과: 건설은 작업 축 구현됨, 제조는 미구현 (코드 수정 없음)
+> 결과(정정): 두 섹터 모두 작업 축 있음. 표현 방식만 다름. (코드 수정 없음)
+> v1 정정 사유: 제조는 별도 work 테이블이 없어 "미구현"으로 봤으나,
+>   ksic_process_map.process_lv4가 작업 행위 수준임을 추가 확인.
 
 ## 조사 결과
 
-### 건설 (KCSC) — 작업 축 있음
+### 건설 (KCSC) — 작업이 독립 테이블
 
 ```
 kcsc_work_master (243건):
@@ -14,19 +16,35 @@ kcsc_work_master (243건):
   → equipment_type_codes (설비)
   → safety_standard (안전기준)
 
-구조: 공정 → 작업 → 위험/설비 분해
-→ 법령 진단의 입력 축으로 구현됨
+구조: 공정 → 작업(독립 테이블) → 위험/설비/안전기준
 ```
 
-### 제조 (KSIC) — 작업 축 없음
+### 제조 (KSIC) — 작업이 공정 계층의 최하위(lv4)
 
 ```
-ksic_process_map: work 컬럼 없음 (공정 레벨까지만)
-process_equipment_map: work 컬럼 없음
+ksic_process_map: 공정 4단계 계층
+  lv1: 전자제조        (공정 大분류)
+  lv2: 전공정/후공정/세정/검사/유틸리티/출하  (공정 단계)
+  lv3: 웨이퍼·기판 준비 / 증착·코팅 / 노광·식각  (세부 공정)
+  lv4: 증착 및 코팅 / 노광 및 식각 / 공정 세정   (작업 행위) ★
 
-구조: 공정(KSIC) → 설비 (process_equipment_map)
-→ 공정과 설비 사이 "작업" 레벨 부재
-→ 제조 작업 축 미구현
+process_equipment_map:
+  process_lv1~4 → equipment_role, mapped_equipment_count
+  → 작업(lv4) → 설비 연결 있음 ✅
+
+구조: 공정 4단계(lv4=작업) → 설비
+```
+
+### 두 섹터 작업 축 비교
+
+```
+            건설(KCSC)              제조(KSIC)
+  ─────────────────────────────────────────────────
+  작업 위치  kcsc_work_master       ksic_process_map.lv4
+            (독립 테이블)           (공정 최하위 계층)
+  작업→설비  equipment_type_codes   process_equipment_map ✅
+  작업→위험  is_hazardous ✅        없음 ❌
+  안전기준   safety_standard ✅     없음 ❌
 ```
 
 ### work_assignments (1,549건) — 작업 축 아님
@@ -37,11 +55,24 @@ schedule_id, asset_id, assigned_user_id, scheduled_date, status_code...
 → 법령 진단의 작업 입력 축이 아니라 운영 실행 레코드
 ```
 
-## 핵심 구분: "작업"의 두 의미
+## 핵심 결론 (정정)
 
 ```
-1. 법령 진단 작업 축 (건설만):
-   kcsc_work_master — 공정 분해, 위험/설비 연결
+작업은 두 섹터 모두 존재 (사용자 직관이 맞음):
+
+  건설: 공정 → 작업(독립 테이블 kcsc_work_master)
+  제조: 공정 4단계의 최하위 lv4가 작업 행위
+
+  표현 방식만 다름:
+    건설 = 작업이 별도 테이블, 위험/설비/안전기준 풍부하게 연결
+    제조 = 작업이 공정 lv4, 설비만 연결 (위험/안전기준 없음)
+```
+
+## "작업"의 두 의미 (구분 유지)
+
+```
+1. 법령 진단 작업 축 (두 섹터):
+   건설 kcsc_work_master / 제조 ksic_process_map.lv4
    → 입력 대상으로서의 작업
 
 2. 운영 작업 배정 (전 섹터):
@@ -49,38 +80,51 @@ schedule_id, asset_id, assigned_user_id, scheduled_date, status_code...
    → 입력이 아니라 실행 레코드
 ```
 
-## 입력 대상 재정의 (건설 공정 + 작업 반영)
+## 입력 대상 재정의 (작업 정정 반영)
 
 ```
 1. 시설 (facility/factory)
-2. 공정 — 제조 (KSIC 기반, ksic_process_map)
-3. 공정 — 건설 (KCSC 기반, kcsc_process_master)  ← 분리
-4. 설비 (equipment, process_equipment_map)
-5. 작업 — 건설 (kcsc_work_master)  ← 건설 전용 확인
-   작업 — 제조: 구조상 없음 (개념적으론 존재 가능, 미구현)
-6. 위험물 (hazard/chemical, runtime_facility_hazard)
-   + 건설 작업 내장 위험 (kcsc_work_master.is_hazardous)
+2. 공정 — 제조 (KSIC, ksic_process_map lv1~3)
+3. 공정 — 건설 (KCSC, kcsc_process_master)
+4. 설비 (equipment, process_equipment_map / equipment_type_codes)
+5. 작업
+   - 제조: ksic_process_map.lv4 (작업 행위) → 설비 연결
+   - 건설: kcsc_work_master → 설비+위험+안전기준 연결
+6. 위험물
+   - runtime_facility_hazard
+   - 건설 작업 내장 위험 (kcsc_work_master.is_hazardous)
+   - 제조 작업 위험: 없음 (lv4에 위험 연결 부재)
 ```
 
-## 판정
+## 표준화 시사점
 
 ```
-작업 축:
-  건설 ✅ 구현됨 (kcsc_work_master, 공정→작업→위험/설비)
-  제조 ❌ 미구현 (공정→설비까지만)
+작업 축은 두 섹터 공통 입력 대상이나, 연결 깊이가 다름:
 
-  → 제조 작업 축은 "개념적으로 가능하나 데이터 없음"
-  → 표준화 시: 건설은 작업 축 포함, 제조는 공정→설비
-  → 제조 작업 축 신설은 별도 판단 (데이터 구축 필요)
+  제조 작업(lv4): → 설비
+  건설 작업(work_master): → 설비 + 위험 + 안전기준
+
+표준에서:
+  "작업"을 공통 입력 대상으로 포함
+  섹터별 소스 매핑:
+    제조 = ksic_process_map.lv4
+    건설 = kcsc_work_master
+  연결 깊이 차이는 그대로 수용
+    (제조 작업→위험은 데이터 없음 → 엔진 v2 또는 데이터 구축 과제)
 ```
 
 ## 다음 판단 필요
 
 ```
-질문 1: 제조에 작업 축을 신설할 것인가?
-  - 신설하면: KSIC 공정 → 제조 작업 → 설비/위험 데이터 구축 필요
-  - 안 하면: 제조는 공정→설비 직접 연결 유지
+질문 1: 제조 작업(lv4)을 진단 입력/평가에 연결할 것인가?
+  - lv4는 이미 데이터 있음 (증착/노광/세정 등)
+  - 설비 연결도 있음 (process_equipment_map)
+  - 단, draft_slot의 process_type가 value=null이라
+    엔진이 값 비교 못 함 (KSIC 테스트에서 확인)
+  → 입력 연결은 가능, 정밀 매칭은 엔진 v2
 
-질문 2: 표준은 건설/제조 작업 축 차이를 어떻게 수용하는가?
-  - 공통 표준 + 섹터별 작업 축 유무
+질문 2: 제조 작업→위험 연결을 구축할 것인가?
+  - 현재 lv4에 위험 정보 없음
+  - 건설은 있음 (is_hazardous)
+  → 데이터 구축 과제 (별도)
 ```
