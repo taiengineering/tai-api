@@ -37,13 +37,24 @@ TTL_DAYS = 30
 TEST_HARNESS_STATUS = "TEST_HARNESS"
 
 # factories.sector 값 → 진단 입력 sector (입력표준 INDUSTRIAL)
+#
+# ※ SPECIAL_FACILITY → BUILDING 매핑은 "의도적 보류(dormant)"이며 버그가 아니다.
+#    SPECIAL_FACILITY(병원·학교 등 특수시설)는 원래 정식 서비스 섹터였으나,
+#    해당 분야는 관련 법령이 지나치게 분산되어 있어 현재 법령엔진 기술로는
+#    진단 정확도가 충분히 나오지 않는다. 그래서 서비스 노출만 감춰둔 상태다.
+#    (데이터는 살아있음: constants.sectors.VALID_SECTORS에 SPECIAL_FACILITY 포함,
+#     law_sector_mapping에 SPECIAL_FACILITY 전용 법령 113건 보존)
+#    엔진 기술이 발전하면 되살릴 섹터이므로, 이 줄을 함부로
+#    "SPECIAL_FACILITY → SPECIAL_FACILITY"로 고치지 말 것. 지금 살리면 아직
+#    정확도가 안 나오는 섹터를 강제로 노출하는 셈이 된다. 부활 시점은
+#    법령엔진 정확도 확보 후 별도 결정한다.
 _SECTOR_FROM_FACTORY = {
     "INDUSTRY": "INDUSTRIAL",
     "MANUFACTURING": "INDUSTRIAL",
     "INDUSTRIAL": "INDUSTRIAL",
     "BUILDING": "BUILDING",
     "CONSTRUCTION": "CONSTRUCTION",
-    "SPECIAL_FACILITY": "BUILDING",
+    "SPECIAL_FACILITY": "BUILDING",  # 의도적 보류 — 위 주석 참조. 건드리지 말 것.
 }
 
 
