@@ -45,6 +45,17 @@ _TASK_TYPE_TO_BUCKET: Dict[str, Tuple[str, str]] = {
     "PRESERVATION": ("action", "조치"),
 }
 
+# bucket → obligation_type (결과페이지/작업할당 분류 기준).
+# _bucket_for_task_type가 이미 task_type을 bucket으로 정확히 분류하므로,
+# obligation_type은 그 bucket에서 직접 도출한다(추측·재판정 없음).
+_BUCKET_TO_OBLIGATION: Dict[str, str] = {
+    "appointment": "APPOINT",
+    "inspection": "INSPECT",
+    "report": "REPORT",
+    "notify": "NOTIFY",
+    "action": "ACTION",
+}
+
 _ACTION_TO_TASK: Dict[str, str] = {
     "INSPECT_FAMILY": "INSPECTION_TASK_CANDIDATE",
     "REPORT_FAMILY": "REPORT_TASK_CANDIDATE",
@@ -79,6 +90,45 @@ _OBLIGATION_FAMILIES = frozenset(
         "PROHIBITION_FAMILY",
     }
 )
+
+
+def _is_token_text(value: Any) -> bool:
+    """사람이 읽는 문장이 아니라 내부 코드 토큰이면 True.
+
+    예: "APPOINTMENT_TASK_CANDIDATE: APPOINT_FAMILY", "INSPECT_FAMILY".
+    """
+    s = (value or "").strip() if isinstance(value, str) else str(value or "").strip()
+    if not s:
+        return True
+    u = s.upper()
+    if "TASK_CANDIDATE" in u or "_FAMILY" in u:
+        return True
+    return False
+
+
+def _obligation_summary_text(
+    *,
+    description: str,
+    law_name: str,
+    law_article: str,
+    fallback: str,
+) -> str:
+    """의무 요약: 사람이 읽는 텍스트 우선, 코드 토큰은 배제.
+
+    1) description(법조문 제목 등)이 토큰이 아니면 사용
+    2) 아니면 "법령명 조문" 조합
+    3) 아니면 fallback
+    """
+    desc = (description or "").strip()
+    if desc and not _is_token_text(desc):
+        return desc
+    law_bit = " ".join(p for p in ((law_name or "").strip(), (law_article or "").strip()) if p).strip()
+    if law_bit and not _is_token_text(law_bit):
+        return law_bit
+    fb = (fallback or "").strip()
+    if fb and not _is_token_text(fb):
+        return fb
+    return "의무사항"
 
 
 def _bucket_for_task_type(task_type: str) -> Tuple[str, str]:
@@ -430,6 +480,7 @@ def _load_draft_fallback_context(
         art_title = (am.get("article_title") or "").strip()
         ctx[did]["law_name"] = law_name
         ctx[did]["law_article"] = str(art_no) if art_no else ""
+        # description = 법조문 제목(사람이 읽는 텍스트). THEN_ACTION raw_token으로 덮지 않는다.
         ctx[did]["description"] = art_title or law_name
 
     slots_by_draft: Dict[str, List[Dict[str, Any]]] = {}
@@ -463,9 +514,10 @@ def _load_draft_fallback_context(
                 continue
             ctx[did]["task_type"] = _ACTION_TO_TASK[fam]
             ctx[did]["source_action_family"] = fam
+            # raw_token은 코드 토큰이므로 description을 덮지 않고 별도 보관.
             token = (slot.get("raw_token") or "").strip()
             if token:
-                ctx[did]["description"] = token
+                ctx[did]["then_action_token"] = token
             break
         ctx[did]["obligation_family"] = obligation
 
@@ -485,19 +537,31 @@ def _rule_row_flags(bucket: str) -> Dict[str, bool]:
 def _task_to_rule_row(task: Dict[str, Any], sector_raw: str) -> Dict[str, Any]:
     task_type = (task.get("task_type") or "ACTION").upper()
     bucket, cat_label = _bucket_for_task_type(task_type)
-    title = f"{task.get('task_type', '')}: {task.get('source_action_family', '')}".strip(": ")
     fam = (task.get("obligation_family") or "").strip()
-    obl_type = task_type if task_type in ("APPOINT", "INSPECT", "REPORT", "NOTIFY", "ACTION") else "ACTION"
+    source_fam = (task.get("source_action_family") or "").strip()
+    desc = (task.get("description") or "").strip()
+    # obligation_type은 bucket에서 직접 도출(task_type 토큰 매칭 실패 → ACTION 강등 버그 제거).
+    obl_type = _BUCKET_TO_OBLIGATION.get(bucket, "ACTION")
+    law_name = fam or "Compiler Candidate"
+    summary = _obligation_summary_text(
+        description=desc,
+        law_name=law_name,
+        law_article="",
+        fallback=fam,
+    )
+    token = f"{task.get('task_type', '')}: {task.get('source_action_family', '')}".strip(": ")
     return {
         "rule_id": str(task.get("id") or ""),
         "rule_type": task_type,
-        "law_name": fam or "Compiler Candidate",
+        "law_name": law_name,
         "law_article": "",
-        "obligation_summary": title or fam or "의무 후보",
-        "remarks": title,
-        "description": title or fam,
+        "obligation_summary": summary,
+        "remarks": desc if (desc and not _is_token_text(desc)) else "",
+        "description": summary,
         "category": cat_label,
         "obligation_type": obl_type,
+        "source_action_family": source_fam,
+        "then_action_token": token,
         "sector": sector_raw,
         "diagnosis_stage": 1,
         "schedule_type": "ON_DEMAND",
@@ -517,22 +581,33 @@ def _applicability_to_rule_row(
     meta = draft_ctx.get(draft_id) or {}
     task_type = (meta.get("task_type") or "ACTION").upper()
     bucket, cat_label = _bucket_for_task_type(task_type)
-    source_fam = meta.get("source_action_family") or ""
+    source_fam = (meta.get("source_action_family") or "").strip()
     fam = (meta.get("obligation_family") or "").strip()
     law_name = (meta.get("law_name") or "").strip() or fam or "Compiler Candidate"
+    law_article = meta.get("law_article") or ""
     desc = (meta.get("description") or "").strip()
-    title = f"{task_type}: {source_fam}".strip(": ") if source_fam else (desc or law_name)
-    obl_type = task_type if task_type in ("APPOINT", "INSPECT", "REPORT", "NOTIFY", "ACTION") else "ACTION"
+    token = (meta.get("then_action_token") or "").strip()
+    # obligation_type은 bucket에서 직접 도출(task_type 토큰 매칭 실패 → ACTION 강등 버그 제거).
+    obl_type = _BUCKET_TO_OBLIGATION.get(bucket, "ACTION")
+    # 요약은 법조문 제목(description) 우선. source_fam 토큰을 제목으로 쓰지 않는다.
+    summary = _obligation_summary_text(
+        description=desc,
+        law_name=law_name,
+        law_article=law_article,
+        fallback=fam,
+    )
     return {
         "rule_id": str(applicability.get("id") or draft_id),
         "rule_type": task_type,
         "law_name": law_name,
-        "law_article": meta.get("law_article") or "",
-        "obligation_summary": title or fam or "의무 후보",
-        "remarks": title,
-        "description": desc or title or fam,
+        "law_article": law_article,
+        "obligation_summary": summary,
+        "remarks": desc if (desc and not _is_token_text(desc)) else "",
+        "description": summary,
         "category": cat_label,
         "obligation_type": obl_type,
+        "source_action_family": source_fam,
+        "then_action_token": token,
         "sector": sector_raw,
         "diagnosis_stage": 1,
         "schedule_type": "ON_DEMAND",
