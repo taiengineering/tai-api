@@ -137,6 +137,51 @@ def _normalize_category(raw: str) -> str:
     return CATEGORY_MAP.get((raw or "").lower().strip(), "서류")
 
 
+def _evidence_text_list(item: dict) -> list[str]:
+    """TAI 내부 evidence: text 배열만 (Check 계약 변환은 별도 어댑터)."""
+    ev = item.get("evidence") or item.get("legal_basis") or []
+    if isinstance(ev, str):
+        return [ev] if ev.strip() else []
+    if not isinstance(ev, list):
+        return []
+    return [str(x) for x in ev if x]
+
+
+def _obligation_from_item(item: dict, *, group_category: str = "") -> dict:
+    cat = _normalize_category(group_category or item.get("category") or item.get("type") or "")
+    title = (
+        item.get("obligation_summary")
+        or item.get("title")
+        or item.get("name")
+        or item.get("item")
+    )
+    law_name = str(item.get("law_name") or "").strip()
+    rule_type = str(item.get("rule_type") or "").strip()
+    evidence = _evidence_text_list(item)
+    if not evidence and law_name:
+        law_art = str(item.get("law_article") or "").strip()
+        ref = " ".join(p for p in (law_name, law_art) if p)
+        if ref:
+            evidence = [ref]
+    return {
+        "id": str(item.get("rule_id") or item.get("id") or uuid.uuid4()),
+        "category": cat,
+        "title": str(title or "의무사항"),
+        "law_name": law_name,
+        "rule_type": rule_type,
+        "risk_level": (item.get("risk_level") or item.get("severity") or "MEDIUM").upper(),
+        "description": str(item.get("description") or item.get("remarks") or item.get("detail") or ""),
+        "evidence": evidence,
+        "action_url": item.get("action_url"),
+        "auto_schedulable": bool(item.get("auto_schedulable") or item.get("schedulable") or False),
+    }
+
+
+def _is_obligation_wrapper(obj: dict) -> bool:
+    items = obj.get("items")
+    return isinstance(items, list) and bool(items)
+
+
 def _extract_obligations(rd: dict) -> list[dict]:
     raw_list: list = []
     for key in ("obligations", "key_obligations", "mandatory_obligations", "critical_obligations"):
@@ -162,26 +207,31 @@ def _extract_obligations(rd: dict) -> list[dict]:
         if isinstance(obj, str):
             result.append({
                 "id": str(uuid.uuid4()), "category": "서류",
-                "title": obj, "risk_level": "MEDIUM",
+                "title": obj, "law_name": "", "rule_type": "",
+                "risk_level": "MEDIUM",
                 "description": obj, "evidence": [],
             })
             continue
         if not isinstance(obj, dict):
             continue
-        cat = _normalize_category(obj.get("category") or obj.get("type") or "")
-        ev = obj.get("evidence") or obj.get("legal_basis") or []
-        if isinstance(ev, str):
-            ev = [ev]
-        result.append({
-            "id": str(obj.get("id") or uuid.uuid4()),
-            "category": cat,
-            "title": str(obj.get("title") or obj.get("name") or obj.get("item") or "의무사항"),
-            "risk_level": (obj.get("risk_level") or obj.get("severity") or "MEDIUM").upper(),
-            "description": str(obj.get("description") or obj.get("detail") or ""),
-            "evidence": list(ev),
-            "action_url": obj.get("action_url"),
-            "auto_schedulable": bool(obj.get("auto_schedulable") or obj.get("schedulable") or False),
-        })
+        if _is_obligation_wrapper(obj):
+            group_cat = str(obj.get("category") or obj.get("label") or "")
+            for item in obj["items"]:
+                if isinstance(item, str):
+                    result.append({
+                        "id": str(uuid.uuid4()),
+                        "category": _normalize_category(group_cat),
+                        "title": item,
+                        "law_name": "",
+                        "rule_type": "",
+                        "risk_level": "MEDIUM",
+                        "description": item,
+                        "evidence": [],
+                    })
+                elif isinstance(item, dict):
+                    result.append(_obligation_from_item(item, group_category=group_cat))
+            continue
+        result.append(_obligation_from_item(obj))
 
     result.sort(key=lambda o: RISK_ORDER.get(o.get("risk_level", ""), 0), reverse=True)
     return result
