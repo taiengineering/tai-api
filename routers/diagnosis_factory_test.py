@@ -8,6 +8,9 @@ UI 무료진단(/diagnosis/run)과 동일 엔진(run_step1_via_compiler)을 타�
 엔진 판정 로직/역회전/Compiler/룰데이터는 일절 수정하지 않는다 (GPT 영역 read-only).
 입력 매핑은 services.diagnosis_integrated_svc.run_diagnosis의 step1_body 생성
 로직을 그대로 차용하여 UI 경로와 동일한 입력→엔진 경로를 보장한다.
+
+목록은 검증 전용으로 등록한 사업장(status_code='TEST_HARNESS')만 노출한다.
+기존 실데이터/임시진단(ACTIVE, ANON_TEMP, DEMO 등)은 섞이지 않는다.
 """
 from __future__ import annotations
 
@@ -26,9 +29,12 @@ from services.legal_rules import normalize_sector_db
 
 router = APIRouter(prefix="/diagnosis", tags=["진단검증하니스"])
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 ENGINE_VERSION = "v3.0-compiler-core-factory-test"
 TTL_DAYS = 30
+
+# 검증 하니스 전용 사업장 식별자. 이 status_code만 목록에 노출한다.
+TEST_HARNESS_STATUS = "TEST_HARNESS"
 
 # factories.sector 값 → 진단 입력 sector (입력표준 INDUSTRIAL)
 _SECTOR_FROM_FACTORY = {
@@ -127,7 +133,10 @@ def list_factory_test_cases(
     page: int = Query(1, ge=1),
     size: int = Query(10, ge=1, le=50),
 ):
-    """검증 하니스용 factories 목록 (카드 표시용)."""
+    """검증 하니스용 factories 목록 (카드 표시용).
+
+    status_code='TEST_HARNESS'인 검증 전용 사업장만, 최신 등록순으로 노출한다.
+    """
     supabase = get_supabase()
     offset = (page - 1) * size
     q = (
@@ -141,7 +150,8 @@ def list_factory_test_cases(
             "last_diagnosis_at, legal_applicable_count",
             count="exact",
         )
-        .order("created_at", desc=False)
+        .eq("status_code", TEST_HARNESS_STATUS)
+        .order("created_at", desc=True)
         .range(offset, offset + size - 1)
     )
     res = q.execute()
