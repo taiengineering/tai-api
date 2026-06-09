@@ -12,5 +12,6 @@ ROUTERS = [
     {"module": "routers.diagnosis_plan_recommend"},
     {"module": "routers.diagnosis_result_web"},
     {"module": "routers.diagnosis_runtime_projection"},
+    {"module": "routers.diagnosis_factory_test"},
     {"module": "routers.saas_setup"},
 ]
