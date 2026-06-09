@@ -26,6 +26,7 @@ from services.anonymous_factory_service import (
     prepare_step1_body_for_compiler,
     run_anonymous_diagnosis,
 )
+from services.diagnosis_helpers import _build_standard_output
 from services.legal_helpers import _now_iso
 from services.legal_rules import normalize_sector_db
 
@@ -87,19 +88,7 @@ def _run_step1_via_service(supabase, step1_body: DiagnoseStep1Body) -> Dict[str,
 
 
 def _partial_from_full(full: Dict[str, Any]) -> Dict[str, Any]:
-    rules = full.get("rules") or []
-    return {
-        "risk_level": full.get("risk_level"),
-        "summary": full.get("summary"),
-        "applicable_count": full.get("applicable_count"),
-        "sector": full.get("sector"),
-        "evaluated_at": full.get("evaluated_at"),
-        "key_obligations": (full.get("key_obligations") or [])[:6],
-        "rules_preview": rules[:12],
-        "law_badges": (full.get("law_badges") or [])[:18],
-        "construction_summary": full.get("construction_summary"),
-        "message": "일부 결과만 표시됩니다. 전체 법령·의무 목록은 로그인 후 확인할 수 있습니다.",
-    }
+    return _build_standard_output(full)
 
 
 SCALE_PRESETS: Dict[str, Dict[str, Any]] = {
