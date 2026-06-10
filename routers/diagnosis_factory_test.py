@@ -13,10 +13,11 @@ UI 무료진단(/diagnosis/run)과 동일 엔진(run_step1_via_compiler)을 타�
 기존 실데이터/임시진단(ACTIVE, ANON_TEMP, DEMO 등)은 섞이지 않는다.
 
 추가: GET /diagnosis/factory-test-verify/{token}
-  진단 결과의 각 법령이 sector에 맞는지 law_sector_mapping과 실시간 대조하여
-  OK/UNMAPPED/MISMATCH로 분류한다(진단 성공 여부와 별개의 sector 적합성 검증).
-  sector 키 환원은 입구 필터와 동일하게 constants.sectors.to_mapping_sector(표준)를
-  인용한다 — 모듈별 별도 변환 상수를 두지 않는다.
+  진단 결과의 sector 적합성 역검증. 범용 체크엔진(services.check_engine)을
+  '어댑터'로 호출한다. 이 라우터(어댑터)가 법령엔진 데이터(진단결과·
+  law_sector_mapping)를 체크엔진 계약(CheckItem)으로 변환하고, 체크엔진이
+  반환한 사실(verdict)을 sector_health로 해석한다. 체크엔진 코어는 sector·
+  법령을 모른다(오염 격리).
 """
 from __future__ import annotations
 
@@ -33,10 +34,11 @@ from services.diagnosis_integrated_svc import run_step1_via_compiler
 from services.diagnosis_helpers import _build_partial
 from services.legal_rules import normalize_sector_db
 from constants.sectors import to_mapping_sector
+from services import check_engine
 
 router = APIRouter(prefix="/diagnosis", tags=["진단검증하니스"])
 
-VERSION = "1.2.1"
+VERSION = "1.3.0"
 ENGINE_VERSION = "v3.0-compiler-core-factory-test"
 TTL_DAYS = 30
 
@@ -265,28 +267,76 @@ def factory_test_run(body: FactoryTestRunBody):
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 법령엔진용 어댑터: 진단결과·law_sector_mapping → 체크엔진 계약 → 해석
+#  - 오염(sector/법령/테이블/판정)은 전부 이 어댑터에만 둔다.
+#  - 체크엔진(services.check_engine)은 sector를 모르는 범용 대조기.
+# ─────────────────────────────────────────────────────────────────────────────
+def _load_law_values_by_name(
+    supabase, law_names: List[str]
+) -> Dict[str, List[str]]:
+    """결과 법령명 → 그 법령이 룰상 허용하는 sector 목록(values).
+
+    입구 필터와 동일 기준(law_id 경유)으로 law_sector_mapping을 읽는다.
+    매핑이 없으면 빈 목록 → 체크엔진이 NO_RULE로 처리.
+    """
+    CHUNK = 100
+    name_to_lawid: Dict[str, str] = {}
+    for i in range(0, len(law_names), CHUNK):
+        chunk = law_names[i : i + CHUNK]
+        lm = (
+            supabase.table("law_master")
+            .select("id, law_name, is_active")
+            .in_("law_name", chunk)
+            .eq("is_active", True)
+            .execute()
+        )
+        for row in lm.data or []:
+            nm = (row.get("law_name") or "").strip()
+            lid = str(row.get("id") or "")
+            if nm and lid:
+                name_to_lawid[nm] = lid
+
+    lawid_to_sectors: Dict[str, List[str]] = {}
+    law_ids = list(dict.fromkeys(name_to_lawid.values()))
+    for i in range(0, len(law_ids), CHUNK):
+        chunk = law_ids[i : i + CHUNK]
+        m = (
+            supabase.table("law_sector_mapping")
+            .select("law_id, sectors")
+            .in_("law_id", chunk)
+            .execute()
+        )
+        for row in m.data or []:
+            lid = str(row.get("law_id") or "")
+            secs = [str(s).strip().upper() for s in (row.get("sectors") or []) if s]
+            if lid:
+                lawid_to_sectors[lid] = secs
+
+    out: Dict[str, List[str]] = {}
+    for nm in law_names:
+        lid = name_to_lawid.get(nm)
+        out[nm] = lawid_to_sectors.get(lid, []) if lid else []
+    return out
+
+
 @router.get("/factory-test-verify/{token}")
 def factory_test_verify(token: str):
-    """진단 결과의 sector 적합성 검증.
+    """진단 결과의 sector 적합성 역검증 (범용 체크엔진 + 법령엔진 어댑터).
 
-    저장된 진단 결과의 각 법령을 law_sector_mapping과 실시간 대조하여 분류한다.
-    진단 '성공 여부'와는 별개로, 나온 법령이 해당 sector에 맞는지를 본다.
+    흐름:
+      1) 저장된 진단결과에서 고유 법령명을 모은다.
+      2) 어댑터가 각 법령의 '허용 sector 목록'을 law_sector_mapping에서 읽어
+         체크엔진 계약(CheckItem)으로 만든다.
+      3) 체크엔진이 expected(진단 sector)와 대조해 사실(verdict)을 낸다.
+      4) 어댑터가 verdict를 결과 형식·sector_health로 해석한다.
 
-    판정:
-      - OK        : law_sector_mapping에 매핑되어 있고 해당 sector를 포함     → 적합
-      - MISMATCH  : 매핑되어 있으나 해당 sector를 포함하지 않음(타 sector 전용) → 누수(버그)
-      - UNMAPPED  : law_sector_mapping에 매핑이 없음                          → 검토 필요
-
-    sector_health:
-      - FAIL : MISMATCH > 0 (입구 필터가 막았어야 할 법령이 새어 들어옴)
-      - WARN : MISMATCH = 0 이고 UNMAPPED > 0 (가지고 온 미매핑 법령 검토 필요)
-      - PASS : MISMATCH = 0, UNMAPPED = 0
-
-    sector 키 환원·법령 매칭은 입구 필터(_load_sector_allowed_draft_ids)와 동일 기준:
-      - sector 키: constants.sectors.to_mapping_sector (표준 단일 정의처)
-      - 법령 매칭: law_id 기준(executable_draft → law_article → law_master ← mapping).
-        결과 rules_table에는 law_id가 없으므로, 입구 필터와 동일하게 law_master를
-        거쳐 law_id로 law_sector_mapping과 대조한다(law_name 직접매칭의 표기 불일치 방지).
+    verdict 의미(체크엔진):
+      - MATCH    → 적합(OK)        : 이 법은 이 sector에서 나올 수 있다.
+      - MISMATCH → 누수(MISMATCH)  : 이 법은 이 sector에서 나오면 안 되는데 나옴.
+      - NO_RULE  → 미매핑(UNMAPPED): 룰이 없어 판단 보류(가지고 감).
+    sector_health(어댑터 해석):
+      - FAIL : MISMATCH > 0 / WARN : NO_RULE > 0 / PASS : 둘 다 0
     """
     supabase = get_supabase()
     tok = (token or "").strip()
@@ -305,11 +355,9 @@ def factory_test_verify(token: str):
 
     full_result = res.data[0].get("full_result") or {}
     result_sector = str(full_result.get("sector") or "").upper()
-    # 표준 인용: 입구 필터와 동일한 sector 키 환원
-    sector_key = to_mapping_sector(result_sector)
+    expected = to_mapping_sector(result_sector)  # 표준 인용(입구 필터와 동일)
 
     rules = full_result.get("rules_table") or []
-    # 결과의 고유 법령명 수집(법령별 적용 건수도 같이)
     law_counts: Dict[str, int] = {}
     for r in rules:
         ln = (r.get("law_name") or "").strip()
@@ -317,70 +365,37 @@ def factory_test_verify(token: str):
             law_counts[ln] = law_counts.get(ln, 0) + 1
     law_names = list(law_counts.keys())
 
-    CHUNK = 100
+    # 어댑터: 법령 → 허용 sector 목록(values)
+    try:
+        law_values = _load_law_values_by_name(supabase, law_names)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"룰 조회 실패: {exc}")
 
-    # 1) 결과 법령명 → law_master.id (law_id 기준 대조를 위해; 입구 필터와 동일 표준)
-    name_to_lawid: Dict[str, str] = {}
-    for i in range(0, len(law_names), CHUNK):
-        chunk = law_names[i : i + CHUNK]
-        try:
-            lm = (
-                supabase.table("law_master")
-                .select("id, law_name, is_active")
-                .in_("law_name", chunk)
-                .eq("is_active", True)
-                .execute()
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"law_master 조회 실패: {exc}")
-        for row in lm.data or []:
-            nm = (row.get("law_name") or "").strip()
-            lid = str(row.get("id") or "")
-            if nm and lid:
-                name_to_lawid[nm] = lid
+    # 계약 변환 → 체크엔진 호출(역검증)
+    items = [check_engine.CheckItem(id=nm, values=law_values.get(nm, [])) for nm in law_names]
+    results = check_engine.check(items, expected)
+    counts = check_engine.tally(results)
 
-    # 2) law_id → sectors[] (law_sector_mapping, 입구 필터와 동일하게 law_id 기준)
-    lawid_to_sectors: Dict[str, List[str]] = {}
-    law_ids = list(dict.fromkeys(name_to_lawid.values()))
-    for i in range(0, len(law_ids), CHUNK):
-        chunk = law_ids[i : i + CHUNK]
-        try:
-            m = (
-                supabase.table("law_sector_mapping")
-                .select("law_id, sectors")
-                .in_("law_id", chunk)
-                .execute()
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"law_sector_mapping 조회 실패: {exc}")
-        for row in m.data or []:
-            lid = str(row.get("law_id") or "")
-            secs = [str(s).strip().upper() for s in (row.get("sectors") or []) if s]
-            if lid:
-                lawid_to_sectors[lid] = secs
-
+    # 어댑터 해석: verdict → 결과 형식
     ok: List[Dict[str, Any]] = []
     mismatch: List[Dict[str, Any]] = []
     unmapped: List[Dict[str, Any]] = []
-    for ln in law_names:
-        cnt = law_counts[ln]
-        lid = name_to_lawid.get(ln)
-        secs = lawid_to_sectors.get(lid) if lid else None
-        if secs is None:
-            unmapped.append({"law_name": ln, "count": cnt})
-        elif sector_key in secs:
-            ok.append({"law_name": ln, "count": cnt, "sectors": secs})
-        else:
-            mismatch.append({"law_name": ln, "count": cnt, "sectors": secs})
+    for r in results:
+        cnt = law_counts.get(r.id, 0)
+        if r.verdict == check_engine.VERDICT_MATCH:
+            ok.append({"law_name": r.id, "count": cnt, "sectors": list(r.values)})
+        elif r.verdict == check_engine.VERDICT_MISMATCH:
+            mismatch.append({"law_name": r.id, "count": cnt, "sectors": list(r.values)})
+        else:  # NO_RULE
+            unmapped.append({"law_name": r.id, "count": cnt})
 
-    if mismatch:
+    if counts.get(check_engine.VERDICT_MISMATCH, 0) > 0:
         health = "FAIL"
-    elif unmapped:
+    elif counts.get(check_engine.VERDICT_NO_RULE, 0) > 0:
         health = "WARN"
     else:
         health = "PASS"
 
-    # 정렬: 건수 많은 순(검토 우선순위)
     mismatch.sort(key=lambda x: x["count"], reverse=True)
     unmapped.sort(key=lambda x: x["count"], reverse=True)
 
@@ -388,7 +403,7 @@ def factory_test_verify(token: str):
         "status": "success",
         "public_token": tok,
         "result_sector": result_sector,
-        "mapping_sector_key": sector_key,
+        "mapping_sector_key": expected,
         "sector_health": health,
         "summary": {
             "total_laws": len(law_names),
