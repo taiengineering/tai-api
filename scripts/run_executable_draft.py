@@ -8,6 +8,17 @@ Compatibility PASS 기반으로 Stabilized Pool → Executable Draft IR 생성.
 실행:
   cd /Users/taiwangsim/Desktop/tai-engineering/tai-api
   railway run python3 scripts/run_executable_draft.py
+
+────────────────────────────────────────────────────────────────────
+WO-LEG-Compiler-002B (2026-06-10): Scope 게이트 (NO_CONDITION 설치기준류).
+  문제: 본문이 "~설치기준/~설치방법/~성능기준/~설비"인 draft가 해당 시설/설비
+        보유 scope 없이(IF_SCOPE도 유효 IF_NUMERIC도 없이) CANDIDATE로 무조건
+        적용됨 → 80명 화학공장에 간이스프링클러·고층건축물·도로터널 등 비보유
+        설비 설치기준이 그대로 노출.
+  수정: scope 없는 설치기준류 NO_CONDITION draft → NEEDS_HUMAN_REVIEW(보류).
+        진단 결과 fetch는 status='CANDIDATE'만 가져가므로 보류분은 제외됨.
+  방식: 개별 조문·블랙리스트 아님. 본문 패턴(설치기준류) + scope 부재 조건.
+────────────────────────────────────────────────────────────────────
 """
 
 import logging, os, sys, time
@@ -54,6 +65,16 @@ SLOT_TO_SECTION = {
     "ACTOR":      "IF_ACTOR",
     "TARGET":     "IF_SCOPE",
 }
+
+# ════════════════════════════════════════════════════════
+# [WO-LEG-Compiler-002B] Scope 게이트 설정
+# ════════════════════════════════════════════════════════
+# 본문(article_title)이 설치기준/설치방법/성능기준/설비류인데 해당 시설/설비
+# 보유 scope가 없으면(IF_SCOPE 없고 유효 IF_NUMERIC 없음) "무조건 적용"을
+# 금지하고 보류(NEEDS_HUMAN_REVIEW)로 둔다.
+SCOPE_GATE_TITLE_REGEX = r'(설치기준|설치방법|성능기준|설비|설치ㆍ관리 기준|설치 및 관리 기준)'
+# 대상 법령군: NFPC / 화재안전 / 성능기준 계열 (시설·설비 설치기준이 집중된 곳)
+SCOPE_GATE_LAW_REGEX = r'(NFPC|화재안전|성능기준)'
 
 CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS executable_draft (
@@ -330,6 +351,56 @@ def main():
     print(f"    최종 Condition Graph: {final_cg:,}건")
 
     # ================================================
+    # [14단계] Scope 게이트 — WO-LEG-Compiler-002B
+    # ================================================
+    # 본문이 설치기준/설치방법/성능기준/설비류인데 해당 시설/설비 보유 scope가
+    # 없으면(IF_SCOPE 없고 유효 IF_NUMERIC 없음) 무조건 적용 금지 → 보류.
+    # 진단 fetch는 status='CANDIDATE'만 가져가므로 보류분은 결과에서 제외됨.
+    print(f"\n{'─'*64}")
+    print("  [14단계] Scope 게이트 (NO_CONDITION 설치기준류 → 보류)")
+    print(f"{'─'*64}")
+
+    cur.execute("""
+        WITH cand AS (
+            SELECT ed.id AS draft_id,
+                bool_or(ds.section = 'IF_SCOPE') AS has_scope,
+                bool_or(ds.section = 'IF_NUMERIC' AND ds.binding_field IS NOT NULL) AS has_active_numeric
+            FROM executable_draft ed
+            JOIN law_article la ON la.id = ed.article_id
+            JOIN law_master lm ON lm.id = la.law_id AND lm.is_active
+            LEFT JOIN draft_slot ds ON ds.draft_id = ed.id
+            WHERE ed.status = 'CANDIDATE'
+              AND lm.law_name ~ %(law_re)s
+              AND la.article_title ~ %(title_re)s
+            GROUP BY ed.id
+        )
+        UPDATE executable_draft ed
+        SET status = 'NEEDS_HUMAN_REVIEW'
+        FROM cand
+        WHERE ed.id = cand.draft_id
+          AND NOT cand.has_scope
+          AND NOT cand.has_active_numeric
+    """, {"law_re": SCOPE_GATE_LAW_REGEX, "title_re": SCOPE_GATE_TITLE_REGEX})
+    scope_gated = cur.rowcount
+    conn.commit()
+    print(f"    ✅ Scope 게이트 보류 처리: {scope_gated:,}건")
+    print(f"       (설치기준류 + scope 부재 → NEEDS_HUMAN_REVIEW, 무조건 적용 차단)")
+
+    # 보류 사유를 draft_issue에 기록 (추적용)
+    cur.execute("""
+        INSERT INTO draft_issue (draft_id, part_id, issue_type, detail)
+        SELECT ed.id, ed.part_id, 'SCOPE_REQUIRED',
+               'NO_CONDITION install-standard held: facility/equipment scope missing'
+        FROM executable_draft ed
+        WHERE ed.status = 'NEEDS_HUMAN_REVIEW'
+          AND NOT EXISTS (
+              SELECT 1 FROM draft_issue di
+              WHERE di.draft_id = ed.id AND di.issue_type = 'SCOPE_REQUIRED'
+          )
+    """)
+    conn.commit()
+
+    # ================================================
     # [16단계] Validation
     # ================================================
     print(f"\n{'─'*64}")
@@ -363,6 +434,11 @@ def main():
     total_dcg = cur.fetchone()[0]
     cur.execute("SELECT count(*) FROM draft_issue")
     total_di = cur.fetchone()[0]
+
+    cur.execute("SELECT status, count(*) FROM executable_draft GROUP BY status ORDER BY count(*) DESC")
+    print("\n  Executable Draft status:")
+    for r in cur.fetchall():
+        print(f"    {r[0]:25s} {r[1]:>8,}")
 
     cur.execute("SELECT avg(slot_count)::int, max(slot_count), min(slot_count) FROM executable_draft WHERE slot_count > 0")
     avg_s, max_s, min_s = cur.fetchone()
