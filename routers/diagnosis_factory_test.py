@@ -15,6 +15,8 @@ UI 무료진단(/diagnosis/run)과 동일 엔진(run_step1_via_compiler)을 타�
 추가: GET /diagnosis/factory-test-verify/{token}
   진단 결과의 각 법령이 sector에 맞는지 law_sector_mapping과 실시간 대조하여
   OK/UNMAPPED/MISMATCH로 분류한다(진단 성공 여부와 별개의 sector 적합성 검증).
+  sector 키 환원은 입구 필터와 동일하게 constants.sectors.to_mapping_sector(표준)를
+  인용한다 — 모듈별 별도 변환 상수를 두지 않는다.
 """
 from __future__ import annotations
 
@@ -30,10 +32,11 @@ from schemas.legal_engine import DiagnoseStep1Body
 from services.diagnosis_integrated_svc import run_step1_via_compiler
 from services.diagnosis_helpers import _build_partial
 from services.legal_rules import normalize_sector_db
+from constants.sectors import to_mapping_sector
 
 router = APIRouter(prefix="/diagnosis", tags=["진단검증하니스"])
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 ENGINE_VERSION = "v3.0-compiler-core-factory-test"
 TTL_DAYS = 30
 
@@ -61,14 +64,8 @@ _SECTOR_FROM_FACTORY = {
     "SPECIAL_FACILITY": "BUILDING",  # 의도적 보류 — 위 주석 참조. 건드리지 말 것.
 }
 
-# 엔진 내부 표준(MANUFACTURING) → law_sector_mapping 표준(INDUSTRIAL) 환원.
-# anonymous_factory_service._mapping_sector_key와 동일 규칙(검증도 같은 기준으로 대조).
-_ENGINE_TO_MAPPING_SECTOR = {"MANUFACTURING": "INDUSTRIAL"}
-
-
-def _mapping_sector_key(sector_value: str) -> str:
-    s = (sector_value or "").strip().upper()
-    return _ENGINE_TO_MAPPING_SECTOR.get(s, s)
+# sector 키 환원은 constants.sectors.to_mapping_sector(표준 단일 정의처)를 인용한다.
+# 별도 변환 상수를 이 파일에 두지 않는다 — 표준이 분산되면 입구 필터와 어긋난다.
 
 
 def _now() -> datetime:
@@ -284,6 +281,12 @@ def factory_test_verify(token: str):
       - FAIL : MISMATCH > 0 (입구 필터가 막았어야 할 법령이 새어 들어옴)
       - WARN : MISMATCH = 0 이고 UNMAPPED > 0 (가지고 온 미매핑 법령 검토 필요)
       - PASS : MISMATCH = 0, UNMAPPED = 0
+
+    sector 키 환원·법령 매칭은 입구 필터(_load_sector_allowed_draft_ids)와 동일 기준:
+      - sector 키: constants.sectors.to_mapping_sector (표준 단일 정의처)
+      - 법령 매칭: law_id 기준(executable_draft → law_article → law_master ← mapping).
+        결과 rules_table에는 law_id가 없으므로, 입구 필터와 동일하게 law_master를
+        거쳐 law_id로 law_sector_mapping과 대조한다(law_name 직접매칭의 표기 불일치 방지).
     """
     supabase = get_supabase()
     tok = (token or "").strip()
@@ -302,7 +305,8 @@ def factory_test_verify(token: str):
 
     full_result = res.data[0].get("full_result") or {}
     result_sector = str(full_result.get("sector") or "").upper()
-    sector_key = _mapping_sector_key(result_sector)
+    # 표준 인용: 입구 필터와 동일한 sector 키 환원
+    sector_key = to_mapping_sector(result_sector)
 
     rules = full_result.get("rules_table") or []
     # 결과의 고유 법령명 수집(법령별 적용 건수도 같이)
@@ -313,32 +317,55 @@ def factory_test_verify(token: str):
             law_counts[ln] = law_counts.get(ln, 0) + 1
     law_names = list(law_counts.keys())
 
-    # law_sector_mapping 일괄 조회(law_name 매칭; 366건 전부 law_name 고유)
-    mapping: Dict[str, List[str]] = {}
     CHUNK = 100
+
+    # 1) 결과 법령명 → law_master.id (law_id 기준 대조를 위해; 입구 필터와 동일 표준)
+    name_to_lawid: Dict[str, str] = {}
     for i in range(0, len(law_names), CHUNK):
         chunk = law_names[i : i + CHUNK]
         try:
+            lm = (
+                supabase.table("law_master")
+                .select("id, law_name, is_active")
+                .in_("law_name", chunk)
+                .eq("is_active", True)
+                .execute()
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"law_master 조회 실패: {exc}")
+        for row in lm.data or []:
+            nm = (row.get("law_name") or "").strip()
+            lid = str(row.get("id") or "")
+            if nm and lid:
+                name_to_lawid[nm] = lid
+
+    # 2) law_id → sectors[] (law_sector_mapping, 입구 필터와 동일하게 law_id 기준)
+    lawid_to_sectors: Dict[str, List[str]] = {}
+    law_ids = list(dict.fromkeys(name_to_lawid.values()))
+    for i in range(0, len(law_ids), CHUNK):
+        chunk = law_ids[i : i + CHUNK]
+        try:
             m = (
                 supabase.table("law_sector_mapping")
-                .select("law_name, sectors")
-                .in_("law_name", chunk)
+                .select("law_id, sectors")
+                .in_("law_id", chunk)
                 .execute()
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"law_sector_mapping 조회 실패: {exc}")
         for row in m.data or []:
-            nm = (row.get("law_name") or "").strip()
+            lid = str(row.get("law_id") or "")
             secs = [str(s).strip().upper() for s in (row.get("sectors") or []) if s]
-            if nm:
-                mapping[nm] = secs
+            if lid:
+                lawid_to_sectors[lid] = secs
 
     ok: List[Dict[str, Any]] = []
     mismatch: List[Dict[str, Any]] = []
     unmapped: List[Dict[str, Any]] = []
     for ln in law_names:
         cnt = law_counts[ln]
-        secs = mapping.get(ln)
+        lid = name_to_lawid.get(ln)
+        secs = lawid_to_sectors.get(lid) if lid else None
         if secs is None:
             unmapped.append({"law_name": ln, "count": cnt})
         elif sector_key in secs:
