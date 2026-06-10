@@ -36,27 +36,28 @@ _PERSIST_STATUSES = frozenset({"MATCH_CANDIDATE", "POSSIBLE_CANDIDATE"})
 #   입력 표준(법령분류·law_sector_mapping·factories.sector)은 INDUSTRIAL을 쓰고,
 #   엔진에 넣을 때 입구에서 INDUSTRIAL→MANUFACTURING으로 변환한다.
 #   따라서 law_sector_mapping과 대조할 때는 "변환 전 입력 표준값"으로 되돌려서
-#   매칭해야 한다. 문제가 생길 때마다 이 표준을 바꾸지 말 것 — 표준을 그대로
-#   읽어서 거르기만 한다(아래 _mapping_sector_key 참조).
+#   매칭해야 한다.
+#
+#   sector 변환 표준은 이 파일에서 따로 정의하지 않는다. 표준 정의처
+#   services.legal_rules.normalize_sector_db 를 그대로 인용한다(단일 원천).
+#   normalize_sector_db: MANUFACTURING/INDUSTRY → INDUSTRIAL, SPECIAL → SPECIAL_FACILITY.
+#   문제가 생길 때마다 이 환원 규칙을 여기서 바꾸지 말 것 — 표준을 고쳐야 하면
+#   normalize_sector_db 한 곳만 고치면 모든 인용처가 따라온다.
 #
 # law_sector_mapping.sectors 표준값: BUILDING / INDUSTRIAL / CONSTRUCTION / SPECIAL_FACILITY
 # factories.sector 표준값:           BUILDING / INDUSTRIAL / CONSTRUCTION / SPECIAL_FACILITY / COMMON
 # ─────────────────────────────────────────────────────────────────────────────
-_ENGINE_TO_MAPPING_SECTOR: Dict[str, str] = {
-    # 엔진 내부 용어 → 입력 표준(law_sector_mapping) 용어
-    "MANUFACTURING": "INDUSTRIAL",
-}
 
 
 def _mapping_sector_key(sector_value: str) -> str:
     """factory/엔진 sector 값을 law_sector_mapping.sectors 표준 키로 환원.
 
+    표준 정의처(normalize_sector_db)를 인용한다. 여기서 별도 규칙을 만들지 않는다.
     factories.sector는 입력 표준(INDUSTRIAL 등)을 그대로 보존하므로 대개 변환이
-    불필요하지만, 엔진 내부 표준(MANUFACTURING)이 흘러들어온 경우를 방어적으로
-    INDUSTRIAL로 되돌린다. 그 외 값은 표준을 건드리지 않고 그대로 통과시킨다.
+    불필요하지만, 엔진 내부 표준(MANUFACTURING)이 흘러들어온 경우 normalize가
+    INDUSTRIAL로 되돌린다.
     """
-    s = (sector_value or "").strip().upper()
-    return _ENGINE_TO_MAPPING_SECTOR.get(s, s)
+    return normalize_sector_db(sector_value or "")
 
 _TASK_TYPE_TO_BUCKET: Dict[str, Tuple[str, str]] = {
     "APPOINTMENT": ("appointment", "선임"),
