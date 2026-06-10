@@ -11,10 +11,21 @@
 실행:
   cd /Users/taiwangsim/Desktop/tai-engineering/tai-api
   railway run python3 scripts/run_numeric_family.py
+
+────────────────────────────────────────────────────────────────────
+WO-LEG-Compiler-002 (2026-06-10): Subject Extractor 주어 게이트 추가.
+  문제: "N명 이상"이면 주어와 무관하게 EMPLOYEE_THRESHOLD_FAMILY로 분류 →
+        유족/위원/발기인/용접사/잠수작업자 수가 사업장 근로자수로 오인됨.
+  수정: EMPLOYEE 분류는 주어가 근로자 계열(상시근로자/근로자/종업원/노동자)일
+        때만 허용. 그 외 주어이거나 주어 미상이면 SUBJECT_UNRESOLVED_FAMILY로
+        보류(employee_count binding 생성 안 됨).
+  방식: 개별 조문 수정·블랙리스트 아님. 주어 패턴 단위 게이트.
+────────────────────────────────────────────────────────────────────
 """
 
 import logging
 import os
+import re
 import sys
 import time
 
@@ -51,6 +62,42 @@ SUBJECT_HINTS = {
     "농도": "CONCENTRATION_THRESHOLD_FAMILY",
     "면적": "AREA_THRESHOLD_FAMILY",
 }
+
+# ════════════════════════════════════════════════════════════
+# [WO-LEG-Compiler-002] EMPLOYEE 주어 게이트
+# ════════════════════════════════════════════════════════════
+# EMPLOYEE_THRESHOLD_FAMILY는 주어가 "사업장 근로자" 계열일 때만 허용한다.
+# 그 외(위원·유족·발기인·용접사·정원 등)이거나 주어 미상이면 보류한다.
+#
+# 화이트리스트: 주어 문자열에 아래 토큰이 포함되면 근로자로 인정.
+#   (subject 추출이 "상시근로자수가"처럼 조사 붙어 들어오므로 부분일치로 검사)
+EMPLOYEE_SUBJECT_TOKENS = (
+    "상시근로자",
+    "근로자",
+    "종업원",
+    "노동자",
+)
+
+# EMPLOYEE 주어 게이트를 통과 못 한 숫자 조건이 가는 곳.
+# (UNKNOWN_THRESHOLD_FAMILY와 구분 — "숫자는 있으나 주어가 사업장 근로자가
+#  아니라서 employee로 못 쓰는" 상태. employee_count binding을 만들지 않는다.)
+SUBJECT_UNRESOLVED_FAMILY = "SUBJECT_UNRESOLVED_FAMILY"
+
+
+def is_employee_subject(subject: str) -> bool:
+    """주어가 사업장 근로자 계열인지 판정.
+
+    근로자/상시근로자/종업원/노동자 계열만 True.
+    위원·유족·발기인·용접사·정원·수용인원·부상자 등은 False.
+    주어 미상(UNKNOWN_SUBJECT)·조사/부사(포함한·각각·이상 등)도 False
+    (= employee로 단정할 근거 없음 → 보류).
+    """
+    if not subject:
+        return False
+    s = str(subject).strip()
+    if not s or s == "UNKNOWN_SUBJECT":
+        return False
+    return any(tok in s for tok in EMPLOYEE_SUBJECT_TOKENS)
 
 # [6단계] Numeric Family → Action 연결 규칙
 # numeric_family + constraint_node.node_type → relation_type
@@ -128,6 +175,7 @@ def main():
     print("  Numeric-Aware Family Builder (프롬프트 17단계)")
     print(f"{'='*64}")
     print("  원칙: 숫자는 조건 구조 제한만, 법적 의미 확정 금지")
+    print("  [WO-LEG-Compiler-002] EMPLOYEE 주어 게이트 적용")
 
     # 테이블 생성
     cur.execute(CREATE_TABLES_SQL)
@@ -162,6 +210,7 @@ def main():
     rows = cur.fetchall()
 
     candidates = []
+    employee_gate_blocked = 0
     for nc_id, part_id, raw_text, subject, ctype, ss, se in rows:
         family = CTYPE_TO_FAMILY.get(ctype)
 
@@ -170,6 +219,22 @@ def main():
             candidates.append((
                 part_id, "UNKNOWN_THRESHOLD_FAMILY", nc_id,
                 raw_text, subject, ss, se, None, "UNRESOLVED"
+            ))
+            continue
+
+        # ────────────────────────────────────────────────────
+        # [WO-LEG-Compiler-002] EMPLOYEE 주어 게이트
+        # EMPLOYEE_THRESHOLD_FAMILY는 주어가 근로자 계열일 때만 통과.
+        # 그 외(위원/유족/발기인/용접사/정원…)·주어미상이면
+        # SUBJECT_UNRESOLVED_FAMILY로 보류 → employee_count binding 안 생김.
+        # ────────────────────────────────────────────────────
+        if family == "EMPLOYEE_THRESHOLD_FAMILY" and not is_employee_subject(subject):
+            employee_gate_blocked += 1
+            candidates.append((
+                part_id, SUBJECT_UNRESOLVED_FAMILY, nc_id,
+                raw_text, subject, ss, se,
+                [f"subject={subject or 'UNKNOWN_SUBJECT'}", "employee_gate=blocked"],
+                "UNRESOLVED"
             ))
             continue
 
@@ -197,6 +262,9 @@ def main():
             VALUES %s
         """, candidates, page_size=2000)
         conn.commit()
+
+    print(f"\n  [WO-LEG-Compiler-002] EMPLOYEE 주어 게이트 차단: {employee_gate_blocked:,}건")
+    print(f"    (근로자 아닌 주어/주어미상 → SUBJECT_UNRESOLVED_FAMILY, employee binding 방지)")
 
     # 통계
     cur.execute("SELECT family_name, status, count(*) FROM numeric_family_candidate GROUP BY family_name, status ORDER BY count(*) DESC")
