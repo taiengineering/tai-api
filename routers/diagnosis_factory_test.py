@@ -11,12 +11,16 @@ UI 무료진단(/diagnosis/run)과 동일 엔진(run_step1_via_compiler)을 타�
 
 목록은 검증 전용으로 등록한 사업장(status_code='TEST_HARNESS')만 노출한다.
 기존 실데이터/임시진단(ACTIVE, ANON_TEMP, DEMO 등)은 섞이지 않는다.
+
+추가: GET /diagnosis/factory-test-verify/{token}
+  진단 결과의 각 법령이 sector에 맞는지 law_sector_mapping과 실시간 대조하여
+  OK/UNMAPPED/MISMATCH로 분류한다(진단 성공 여부와 별개의 sector 적합성 검증).
 """
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -29,7 +33,7 @@ from services.legal_rules import normalize_sector_db
 
 router = APIRouter(prefix="/diagnosis", tags=["진단검증하니스"])
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 ENGINE_VERSION = "v3.0-compiler-core-factory-test"
 TTL_DAYS = 30
 
@@ -56,6 +60,15 @@ _SECTOR_FROM_FACTORY = {
     "CONSTRUCTION": "CONSTRUCTION",
     "SPECIAL_FACILITY": "BUILDING",  # 의도적 보류 — 위 주석 참조. 건드리지 말 것.
 }
+
+# 엔진 내부 표준(MANUFACTURING) → law_sector_mapping 표준(INDUSTRIAL) 환원.
+# anonymous_factory_service._mapping_sector_key와 동일 규칙(검증도 같은 기준으로 대조).
+_ENGINE_TO_MAPPING_SECTOR = {"MANUFACTURING": "INDUSTRIAL"}
+
+
+def _mapping_sector_key(sector_value: str) -> str:
+    s = (sector_value or "").strip().upper()
+    return _ENGINE_TO_MAPPING_SECTOR.get(s, s)
 
 
 def _now() -> datetime:
@@ -252,4 +265,111 @@ def factory_test_run(body: FactoryTestRunBody):
         "risk_level": full_result.get("risk_level") or "MEDIUM",
         "result_page": f"/paid-diagnosis-result.html?token={public_token}",
         "result": full_result,
+    }
+
+
+@router.get("/factory-test-verify/{token}")
+def factory_test_verify(token: str):
+    """진단 결과의 sector 적합성 검증.
+
+    저장된 진단 결과의 각 법령을 law_sector_mapping과 실시간 대조하여 분류한다.
+    진단 '성공 여부'와는 별개로, 나온 법령이 해당 sector에 맞는지를 본다.
+
+    판정:
+      - OK        : law_sector_mapping에 매핑되어 있고 해당 sector를 포함     → 적합
+      - MISMATCH  : 매핑되어 있으나 해당 sector를 포함하지 않음(타 sector 전용) → 누수(버그)
+      - UNMAPPED  : law_sector_mapping에 매핑이 없음                          → 검토 필요
+
+    sector_health:
+      - FAIL : MISMATCH > 0 (입구 필터가 막았어야 할 법령이 새어 들어옴)
+      - WARN : MISMATCH = 0 이고 UNMAPPED > 0 (가지고 온 미매핑 법령 검토 필요)
+      - PASS : MISMATCH = 0, UNMAPPED = 0
+    """
+    supabase = get_supabase()
+    tok = (token or "").strip()
+    if not tok:
+        raise HTTPException(status_code=422, detail="token이 필요합니다.")
+
+    res = (
+        supabase.table("anonymous_diagnosis_results")
+        .select("public_token, full_result")
+        .eq("public_token", tok)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="진단 결과를 찾을 수 없습니다.")
+
+    full_result = res.data[0].get("full_result") or {}
+    result_sector = str(full_result.get("sector") or "").upper()
+    sector_key = _mapping_sector_key(result_sector)
+
+    rules = full_result.get("rules_table") or []
+    # 결과의 고유 법령명 수집(법령별 적용 건수도 같이)
+    law_counts: Dict[str, int] = {}
+    for r in rules:
+        ln = (r.get("law_name") or "").strip()
+        if ln:
+            law_counts[ln] = law_counts.get(ln, 0) + 1
+    law_names = list(law_counts.keys())
+
+    # law_sector_mapping 일괄 조회(law_name 매칭; 366건 전부 law_name 고유)
+    mapping: Dict[str, List[str]] = {}
+    CHUNK = 100
+    for i in range(0, len(law_names), CHUNK):
+        chunk = law_names[i : i + CHUNK]
+        try:
+            m = (
+                supabase.table("law_sector_mapping")
+                .select("law_name, sectors")
+                .in_("law_name", chunk)
+                .execute()
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"law_sector_mapping 조회 실패: {exc}")
+        for row in m.data or []:
+            nm = (row.get("law_name") or "").strip()
+            secs = [str(s).strip().upper() for s in (row.get("sectors") or []) if s]
+            if nm:
+                mapping[nm] = secs
+
+    ok: List[Dict[str, Any]] = []
+    mismatch: List[Dict[str, Any]] = []
+    unmapped: List[Dict[str, Any]] = []
+    for ln in law_names:
+        cnt = law_counts[ln]
+        secs = mapping.get(ln)
+        if secs is None:
+            unmapped.append({"law_name": ln, "count": cnt})
+        elif sector_key in secs:
+            ok.append({"law_name": ln, "count": cnt, "sectors": secs})
+        else:
+            mismatch.append({"law_name": ln, "count": cnt, "sectors": secs})
+
+    if mismatch:
+        health = "FAIL"
+    elif unmapped:
+        health = "WARN"
+    else:
+        health = "PASS"
+
+    # 정렬: 건수 많은 순(검토 우선순위)
+    mismatch.sort(key=lambda x: x["count"], reverse=True)
+    unmapped.sort(key=lambda x: x["count"], reverse=True)
+
+    return {
+        "status": "success",
+        "public_token": tok,
+        "result_sector": result_sector,
+        "mapping_sector_key": sector_key,
+        "sector_health": health,
+        "summary": {
+            "total_laws": len(law_names),
+            "ok": len(ok),
+            "mismatch": len(mismatch),
+            "unmapped": len(unmapped),
+            "total_rules": len(rules),
+        },
+        "mismatch_laws": mismatch,
+        "unmapped_laws": unmapped,
     }
