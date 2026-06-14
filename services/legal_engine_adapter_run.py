@@ -7,15 +7,14 @@ legal_engine_adapter_run — 어댑터를 실제로 붙여 돌려보는 경로 (
            → 어댑터.facility_input_to_base (사업장 = 평가 주체측)
            → sector 해당 article의 의미절 적재(semantic_clause_fix, 보정 executor)
            → 어댑터.clause_to_context (의무 1건 → 표준 계약 1건)
-           → policyProvider.classify_applicability (RASE 적용대상 판정)
+           → policy.classify_applicability(executor, supabase) — 테이블 망 규칙(RASE 적용대상)
               · BUSINESS  → 추출(KEEP)
               · AMBIGUOUS → 보류로 추출(KEEP_REVIEW, "빠짐없이")
               · AUTHORITY/FRAGMENT → 제외(DROP, 명백히 사업장 대상 아님)
            → 추출된 표준 계약 목록 반환
 
-RASE 추출: 거름망(빼기)이 아니라 적용대상 일치하면 담음. 명백 불일치만 버리고 애매는 남김.
+망 규칙은 legal_sieve_rule 테이블(노가다로 한 줄씩 누적). 미매치=보류(빠짐없이).
 영역: 어댑터 변환 + 적용대상 판정만. 분해기·판정로직(GPT)·엔진코어·체크엔진코어 무수정.
-의미절 읽기만. 규모 수치(≥,≤) 2차 거름은 아직(적용대상 1차만).
 """
 from __future__ import annotations
 
@@ -120,11 +119,14 @@ def _load_obligation_clauses(supabase, allowed_article_ids: Optional[Set[str]]) 
 
 
 def run_adapter_diagnosis(supabase, body: DiagnoseStep1Body) -> Dict[str, Any]:
-    """어댑터 변환 + RASE 적용대상 추출. (1차: 적용대상 거름까지. 규모 수치는 2차 별도.)"""
+    """어댑터 변환 + RASE 적용대상 추출(테이블 망 규칙). (1차: 적용대상까지. 규모 수치는 2차 별도.)"""
     sector_raw = body.sector.strip().upper()
     inp = normalize_consumer_inp(body)
     facility_ctx = _input_to_facility_context(sector_raw, inp)
     sector_db = normalize_sector_db(sector_raw)
+
+    # 망 규칙 최신화(테이블에 행 추가했을 수 있으니 이 실행 시작 시 reload)
+    policy.reload_rules()
 
     # 사용자 입력 → 사업장 base (어댑터)
     facility_base = adapter.facility_input_to_base(sector_raw, facility_ctx)
@@ -148,9 +150,9 @@ def run_adapter_diagnosis(supabase, body: DiagnoseStep1Body) -> Dict[str, Any]:
             skipped_non_obligation += 1
             continue
         executor = (c.get("executor_text") or "").strip()
-        cls, decision = policy.classify_applicability(executor)
+        # 테이블 망 규칙으로 적용대상 판정 (supabase 전달)
+        cls, decision = policy.classify_applicability(executor, supabase)
         class_counts[cls] = class_counts.get(cls, 0) + 1
-        # 표준 계약에 적용대상 판정 부착(추적용)
         ctx["applicability"] = {"class": cls, "decision": decision}
         if decision == policy.DECISION_DROP:
             dropped += 1
@@ -167,14 +169,13 @@ def run_adapter_diagnosis(supabase, body: DiagnoseStep1Body) -> Dict[str, Any]:
         "counts": {
             "clauses_loaded": len(clauses),
             "skipped_non_obligation": skipped_non_obligation,
-            "dropped_not_business": dropped,        # 명백히 사업장 대상 아님(행정청·조각)
-            "extracted_business": len(kept),        # 확실한 적용대상
-            "extracted_review": len(review),        # 보류(빠짐없이)
+            "dropped_not_business": dropped,
+            "extracted_business": len(kept),
+            "extracted_review": len(review),
             "extracted_total": len(kept) + len(review),
             "by_class": class_counts,
             "sector_filtered": allowed is not None,
             "allowed_articles": len(allowed) if allowed else None,
         },
-        # 추출 결과: 확실분 먼저, 보류분 뒤
         "contexts": kept + review,
     }
