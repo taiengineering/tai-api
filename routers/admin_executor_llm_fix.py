@@ -12,7 +12,8 @@ GPT API로 주어 판정 → 6중 그물 검증 → 통과분만 executor_fixed�
 - 원본 semantic_clause 무변경. 임시 라우터(작업 끝나면 제거).
 
 보호: X-Internal-Secret 헤더 = INTERNAL_API_SECRET 필요.
-실행: POST /admin/executor-llm-fix?limit=50&dry_run=true
+실행(전체): POST /admin/executor-llm-fix?run_all=true&dry_run=false&batch_size=50
+실행(단발): POST /admin/executor-llm-fix?limit=50&dry_run=true
 """
 import os
 import json
@@ -106,30 +107,22 @@ def _passes_nets(executor: str, source_part: str, role_check: str, source_text: 
     """6중 그물. 통과 여부 + 사유."""
     if executor in ("주어없음", "의무아님", "", None):
         return False, f"non_subject:{executor}"
-    # 그물5: 의미절이 벌칙/효력/준용 종결이면 의무 아님
     if _OBLIG_NOT.search(source_text):
         return False, "not_obligation(penalty/effect)"
-    # 그물4(자동): role_check가 실행주체가 아니면 탈락(수령대상/객체/장소 차단)
     if role_check != "실행주체":
         return False, f"role_check:{role_check}"
-    # 그물3: BLOCKLIST(법령형식어·사물)
     if any(b in executor for b in _B1_LAW_FORMS):
         return False, "blocklist_B1_lawform"
     if _SAMUL_SUFFIX.search(executor):
         return False, "blocklist_B3_samul"
-    # 그물2: 원문 발췌 존재(환각 차단)
     core = re.sub(r"\s+", "", executor)
     pt_ns = re.sub(r"\s+", "", source_part)
     if core not in pt_ns:
         return False, "not_in_source(hallucination)"
-    # 그물1: Kiwi 명사 끝
     if not _kiwi_is_noun_ending(executor):
         return False, "kiwi_not_noun"
-    # 불완전 주어(수식 잘림) 차단
     if executor in ("하는 자", "한 자", "되는 자", "된 자", "있는 자", "그 자", "자", "것"):
         return False, "incomplete_subject(modifier_cut)"
-    # 그물6: 원문에서 executor 직후가 부사격(에/에는/에게/에 대하여/에서)이고
-    # 주격(은/는/이/가)으로는 안 나오면 → 장소·대상이지 실행주체 아님
     pos = pt_ns.find(core)
     if pos >= 0:
         after = pt_ns[pos + len(core): pos + len(core) + 6]
@@ -142,26 +135,22 @@ def _passes_nets(executor: str, source_part: str, role_check: str, source_text: 
 
 @router.post("/admin/executor-llm-fix")
 def executor_llm_fix(
-    limit: int = Query(50, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=500, description="run_all=false일 때 1회 처리 건수"),
     dry_run: bool = Query(True),
+    run_all: bool = Query(False, description="true면 DEFER_REVIEW 전체를 batch_size씩 끝까지 처리"),
+    batch_size: int = Query(50, ge=1, le=200, description="run_all 배치 크기"),
+    max_batches: int = Query(300, ge=1, le=1000, description="안전 상한(무한루프 방지)"),
     x_internal_secret: str = Header(None, alias="X-Internal-Secret"),
 ):
     if x_internal_secret != os.environ.get("INTERNAL_API_SECRET"):
         raise HTTPException(status_code=403, detail="forbidden")
 
-    sb = get_supabase()
-    rows = (
-        sb.table("semantic_clause_fix")
-        .select("id, source_text, source_part_text, content_type, executor_text")
-        .eq("fix_status", "DEFER_REVIEW")
-        .limit(limit)
-        .execute()
-    ).data or []
+    results = {"mode": "run_all" if run_all else "single",
+               "batches": 0, "processed": 0, "applied": 0, "rejected": 0,
+               "non_subject": 0, "error": 0, "samples": [], "reject_reasons": {},
+               "remaining_after": None}
 
-    results = {"requested": len(rows), "applied": 0, "rejected": 0,
-               "non_subject": 0, "error": 0, "samples": [], "reject_reasons": {}}
-
-    for r in rows:
+    def _process_one(sb, r):
         rid = r["id"]
         st = (r.get("source_text") or "").strip()
         pt = (r.get("source_part_text") or "").strip()
@@ -170,13 +159,11 @@ def executor_llm_fix(
             j = _gpt_judge(st, pt, ct)
         except Exception:
             results["error"] += 1
-            continue
-
+            return
         executor = (j.get("executor") or "").strip()
         role = j.get("role_check") or ""
         conf = j.get("confidence") or "low"
         ok, reason = _passes_nets(executor, pt, role, st)
-
         if ok and conf == "high":
             results["applied"] += 1
             if not dry_run:
@@ -200,5 +187,52 @@ def executor_llm_fix(
             else:
                 results["rejected"] += 1
                 results["reject_reasons"][reason] = results["reject_reasons"].get(reason, 0) + 1
+
+    def _fetch(sb, n):
+        return (
+            sb.table("semantic_clause_fix")
+            .select("id, source_text, source_part_text, content_type, executor_text")
+            .eq("fix_status", "DEFER_REVIEW").limit(n).execute()
+        ).data or []
+
+    if not run_all:
+        sb = get_supabase()
+        rows = _fetch(sb, limit)
+        results["requested"] = len(rows)
+        for r in rows:
+            _process_one(sb, r)
+            results["processed"] += 1
+        results["batches"] = 1
+    else:
+        # 전체 모드: batch_size씩 끝까지. ★배치마다 get_supabase() 재접속(연결 끊김 방지).
+        for b in range(max_batches):
+            sb = get_supabase()
+            try:
+                rows = _fetch(sb, batch_size)
+            except Exception:
+                sb = get_supabase()  # 재접속 후 1회 재시도
+                try:
+                    rows = _fetch(sb, batch_size)
+                except Exception:
+                    break
+            if not rows:
+                break  # DEFER_REVIEW 소진 → 완료
+            for r in rows:
+                _process_one(sb, r)
+                results["processed"] += 1
+            results["batches"] = b + 1
+            if dry_run:
+                break  # dry_run은 DB 안 바뀌어 같은 행 반복 → 1배치만
+
+        try:
+            sb = get_supabase()
+            rem = (
+                sb.table("semantic_clause_fix")
+                .select("id", count="exact")
+                .eq("fix_status", "DEFER_REVIEW").limit(1).execute()
+            )
+            results["remaining_after"] = rem.count
+        except Exception:
+            pass
 
     return results
