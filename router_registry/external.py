@@ -44,4 +44,6 @@ ROUTERS = [
     {"module": "routers.admin_executor_llm_fix", "tags": ["executor-llm-fix-temp"]},
     # ── 임시: D단계 의미절 직접 진단 테스트 (검증 후 정식 통합·제거) ──
     {"module": "routers.semantic_diagnosis_test", "tags": ["semantic-diagnosis-test"]},
+    # ── 임시: D단계 법령엔진 어댑터 경로 테스트 (검증 후 정식 통합·제거) ──
+    {"module": "routers.legal_adapter_test", "tags": ["legal-adapter-test"]},
 ]
