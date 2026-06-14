@@ -12,18 +12,28 @@ GPT API로 주어 판정 → 6중 그물 검증 → 통과분만 executor_fixed�
 - 원본 semantic_clause 무변경. 임시 라우터(작업 끝나면 제거).
 
 보호: X-Internal-Secret 헤더 = INTERNAL_API_SECRET 필요.
-실행(전체): POST /admin/executor-llm-fix?run_all=true&dry_run=false&batch_size=50
-실행(단발): POST /admin/executor-llm-fix?limit=50&dry_run=true
+실행(백그라운드 전체): POST /admin/executor-llm-fix/start?dry_run=false&batch_size=50
+  → 즉시 202 응답, 서버 뒤에서 전체 처리. 긴 HTTP 요청 타임아웃(502) 회피.
+진행 확인: GET /admin/executor-llm-fix/status
+단발(동기): POST /admin/executor-llm-fix?limit=50&dry_run=true  (검증·표본용)
 """
 import os
 import json
 import re
-from fastapi import APIRouter, Header, HTTPException, Query
+import threading
+import time
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query
 from db.supabase_client import get_supabase
 
 router = APIRouter()
 
 OPENAI_MODEL = "gpt-4o-mini"
+
+# ── 진행 상태(메모리, 단일 워커 가정) ──
+_JOB = {"running": False, "started_at": None, "processed": 0, "applied": 0,
+        "rejected": 0, "non_subject": 0, "error": 0, "batches": 0,
+        "remaining": None, "reject_reasons": {}, "last_update": None, "stop": False}
+_JOB_LOCK = threading.Lock()
 
 # ── BLOCKLIST (그물3) ──
 _B1_LAW_FORMS = ("대통령령", "부령", "조례", "고시", "총리령", "훈령", "예규", "규칙")
@@ -32,10 +42,8 @@ _SAMUL_SUFFIX = re.compile(
     r"오염도|권한|자격|회의|항목|규정|재단|안전성|업무|사업|행위|자료|서류|사항|결과|내용|기준|"
     r"단지|크레인|차량|기계|기구|건축물|구조물|토양|물건)$"
 )
-# 그물5: 벌칙/효력/준용 종결 (의무 아님)
 _OBLIG_NOT = re.compile(r"(처한다|과태료|벌금|징역|부과한다|준용한다|소멸한다|효력을 상실|로 본다)")
 
-# ── LLM 규정 v2 프롬프트 ──
 _SYSTEM_PROMPT = (
     "너는 한국 법령 의미절의 '의무 주체(주어)'만 원문에서 찾아 발췌하는 도구다. "
     "새 단어를 만들지 말고 원문에 있는 표현만 그대로 발췌한다. 다음 규칙을 엄격히 지켜라.\n"
@@ -63,7 +71,6 @@ _SYSTEM_PROMPT = (
 
 
 def _gpt_judge(source_text: str, source_part: str, content_type: str) -> dict:
-    """GPT API로 주어 판정. 실패 시 예외 발생(상위에서 처리)."""
     from openai import OpenAI
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     user = (
@@ -74,21 +81,15 @@ def _gpt_judge(source_text: str, source_part: str, content_type: str) -> dict:
     )
     resp = client.chat.completions.create(
         model=OPENAI_MODEL,
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": user},
-        ],
-        temperature=0,
-        response_format={"type": "json_object"},
-        max_tokens=300,
+        messages=[{"role": "system", "content": _SYSTEM_PROMPT},
+                  {"role": "user", "content": user}],
+        temperature=0, response_format={"type": "json_object"}, max_tokens=300,
     )
     return json.loads(resp.choices[0].message.content)
 
 
-# ── 그물1: Kiwi 명사 검증 ──
 _kiwi = None
 def _kiwi_is_noun_ending(text: str) -> bool:
-    """executor 마지막 형태소가 명사류(NN*/XSN)인지. Kiwi 사용, 실패 시 간이검증."""
     global _kiwi
     try:
         if _kiwi is None:
@@ -104,7 +105,6 @@ def _kiwi_is_noun_ending(text: str) -> bool:
 
 
 def _passes_nets(executor: str, source_part: str, role_check: str, source_text: str = "") -> tuple[bool, str]:
-    """6중 그물. 통과 여부 + 사유."""
     if executor in ("주어없음", "의무아님", "", None):
         return False, f"non_subject:{executor}"
     if _OBLIG_NOT.search(source_text):
@@ -133,106 +133,178 @@ def _passes_nets(executor: str, source_part: str, role_check: str, source_text: 
     return True, "ok"
 
 
-@router.post("/admin/executor-llm-fix")
-def executor_llm_fix(
-    limit: int = Query(50, ge=1, le=500, description="run_all=false일 때 1회 처리 건수"),
-    dry_run: bool = Query(True),
-    run_all: bool = Query(False, description="true면 DEFER_REVIEW 전체를 batch_size씩 끝까지 처리"),
-    batch_size: int = Query(50, ge=1, le=200, description="run_all 배치 크기"),
-    max_batches: int = Query(300, ge=1, le=1000, description="안전 상한(무한루프 방지)"),
-    x_internal_secret: str = Header(None, alias="X-Internal-Secret"),
-):
-    if x_internal_secret != os.environ.get("INTERNAL_API_SECRET"):
-        raise HTTPException(status_code=403, detail="forbidden")
+def _fetch(sb, n):
+    return (
+        sb.table("semantic_clause_fix")
+        .select("id, source_text, source_part_text, content_type, executor_text")
+        .eq("fix_status", "DEFER_REVIEW").limit(n).execute()
+    ).data or []
 
-    results = {"mode": "run_all" if run_all else "single",
-               "batches": 0, "processed": 0, "applied": 0, "rejected": 0,
-               "non_subject": 0, "error": 0, "samples": [], "reject_reasons": {},
-               "remaining_after": None}
 
-    def _process_one(sb, r):
-        rid = r["id"]
-        st = (r.get("source_text") or "").strip()
-        pt = (r.get("source_part_text") or "").strip()
-        ct = r.get("content_type") or ""
-        try:
-            j = _gpt_judge(st, pt, ct)
-        except Exception:
-            results["error"] += 1
-            return
-        executor = (j.get("executor") or "").strip()
-        role = j.get("role_check") or ""
-        conf = j.get("confidence") or "low"
-        ok, reason = _passes_nets(executor, pt, role, st)
-        if ok and conf == "high":
-            results["applied"] += 1
+def _process_one(sb, r, dry_run):
+    rid = r["id"]
+    st = (r.get("source_text") or "").strip()
+    pt = (r.get("source_part_text") or "").strip()
+    ct = r.get("content_type") or ""
+    try:
+        j = _gpt_judge(st, pt, ct)
+    except Exception:
+        _JOB["error"] += 1
+        return
+    executor = (j.get("executor") or "").strip()
+    role = j.get("role_check") or ""
+    conf = j.get("confidence") or "low"
+    ok, reason = _passes_nets(executor, pt, role, st)
+    if ok and conf == "high":
+        _JOB["applied"] += 1
+        if not dry_run:
+            sb.table("semantic_clause_fix").update({
+                "executor_fixed": executor, "fix_status": "LLM_CANDIDATE",
+                "review_reason": f"GPT-{OPENAI_MODEL} 판정 채택 후보: {role}",
+            }).eq("id", rid).execute()
+    else:
+        if executor in ("주어없음", "의무아님") or reason.startswith("not_obligation"):
+            _JOB["non_subject"] += 1
             if not dry_run:
                 sb.table("semantic_clause_fix").update({
-                    "executor_fixed": executor,
-                    "fix_status": "LLM_CANDIDATE",
-                    "review_reason": f"GPT-{OPENAI_MODEL} 판정 채택 후보: {role}",
+                    "review_reason": f"GPT 판정: {executor} / {reason}",
                 }).eq("id", rid).execute()
-            if len(results["samples"]) < 25:
-                results["samples"].append({
-                    "id": rid, "executor": executor, "role": role, "conf": conf,
-                    "src": st[:60], "span": (j.get("source_span") or "")[:50],
-                })
         else:
-            if executor in ("주어없음", "의무아님") or reason.startswith("not_obligation"):
-                results["non_subject"] += 1
-                if not dry_run:
-                    sb.table("semantic_clause_fix").update({
-                        "review_reason": f"GPT 판정: {executor} / {reason}",
-                    }).eq("id", rid).execute()
-            else:
-                results["rejected"] += 1
-                results["reject_reasons"][reason] = results["reject_reasons"].get(reason, 0) + 1
+            _JOB["rejected"] += 1
+            _JOB["reject_reasons"][reason] = _JOB["reject_reasons"].get(reason, 0) + 1
 
-    def _fetch(sb, n):
-        return (
-            sb.table("semantic_clause_fix")
-            .select("id, source_text, source_part_text, content_type, executor_text")
-            .eq("fix_status", "DEFER_REVIEW").limit(n).execute()
-        ).data or []
 
-    if not run_all:
-        sb = get_supabase()
-        rows = _fetch(sb, limit)
-        results["requested"] = len(rows)
-        for r in rows:
-            _process_one(sb, r)
-            results["processed"] += 1
-        results["batches"] = 1
-    else:
-        # 전체 모드: batch_size씩 끝까지. ★배치마다 get_supabase() 재접속(연결 끊김 방지).
+def _run_job(dry_run: bool, batch_size: int, max_batches: int):
+    """백그라운드 전체 처리. 배치마다 Supabase 재접속."""
+    try:
         for b in range(max_batches):
+            if _JOB["stop"]:
+                break
             sb = get_supabase()
             try:
                 rows = _fetch(sb, batch_size)
             except Exception:
-                sb = get_supabase()  # 재접속 후 1회 재시도
+                sb = get_supabase()
                 try:
                     rows = _fetch(sb, batch_size)
                 except Exception:
                     break
             if not rows:
-                break  # DEFER_REVIEW 소진 → 완료
+                break
             for r in rows:
-                _process_one(sb, r)
-                results["processed"] += 1
-            results["batches"] = b + 1
+                _process_one(sb, r, dry_run)
+                _JOB["processed"] += 1
+            _JOB["batches"] = b + 1
+            _JOB["last_update"] = time.time()
             if dry_run:
-                break  # dry_run은 DB 안 바뀌어 같은 행 반복 → 1배치만
-
+                break
+        # 잔여 카운트
         try:
             sb = get_supabase()
-            rem = (
-                sb.table("semantic_clause_fix")
-                .select("id", count="exact")
-                .eq("fix_status", "DEFER_REVIEW").limit(1).execute()
-            )
-            results["remaining_after"] = rem.count
+            rem = (sb.table("semantic_clause_fix").select("id", count="exact")
+                   .eq("fix_status", "DEFER_REVIEW").limit(1).execute())
+            _JOB["remaining"] = rem.count
         except Exception:
             pass
+    finally:
+        _JOB["running"] = False
+        _JOB["last_update"] = time.time()
 
-    return results
+
+@router.post("/admin/executor-llm-fix/start")
+def start_job(
+    background_tasks: BackgroundTasks,
+    dry_run: bool = Query(False),
+    batch_size: int = Query(50, ge=1, le=200),
+    max_batches: int = Query(300, ge=1, le=2000),
+    x_internal_secret: str = Header(None, alias="X-Internal-Secret"),
+):
+    """백그라운드로 전체 DEFER_REVIEW 처리 시작. 즉시 202 응답."""
+    if x_internal_secret != os.environ.get("INTERNAL_API_SECRET"):
+        raise HTTPException(status_code=403, detail="forbidden")
+    if _JOB["running"]:
+        return {"status": "already_running", **_status_snapshot()}
+    # 상태 초기화
+    for k in ("processed", "applied", "rejected", "non_subject", "error", "batches"):
+        _JOB[k] = 0
+    _JOB["reject_reasons"] = {}
+    _JOB["running"] = True
+    _JOB["stop"] = False
+    _JOB["started_at"] = time.time()
+    _JOB["remaining"] = None
+    background_tasks.add_task(_run_job, dry_run, batch_size, max_batches)
+    return {"status": "started", "dry_run": dry_run, "batch_size": batch_size}
+
+
+def _status_snapshot():
+    return {
+        "running": _JOB["running"], "processed": _JOB["processed"],
+        "applied": _JOB["applied"], "rejected": _JOB["rejected"],
+        "non_subject": _JOB["non_subject"], "error": _JOB["error"],
+        "batches": _JOB["batches"], "remaining": _JOB["remaining"],
+        "reject_reasons": _JOB["reject_reasons"],
+        "started_at": _JOB["started_at"], "last_update": _JOB["last_update"],
+    }
+
+
+@router.get("/admin/executor-llm-fix/status")
+def job_status(x_internal_secret: str = Header(None, alias="X-Internal-Secret")):
+    if x_internal_secret != os.environ.get("INTERNAL_API_SECRET"):
+        raise HTTPException(status_code=403, detail="forbidden")
+    return _status_snapshot()
+
+
+@router.post("/admin/executor-llm-fix/stop")
+def stop_job(x_internal_secret: str = Header(None, alias="X-Internal-Secret")):
+    if x_internal_secret != os.environ.get("INTERNAL_API_SECRET"):
+        raise HTTPException(status_code=403, detail="forbidden")
+    _JOB["stop"] = True
+    return {"status": "stopping", **_status_snapshot()}
+
+
+@router.post("/admin/executor-llm-fix")
+def executor_llm_fix(
+    limit: int = Query(50, ge=1, le=500),
+    dry_run: bool = Query(True),
+    x_internal_secret: str = Header(None, alias="X-Internal-Secret"),
+):
+    """단발 동기 모드 (검증·표본용). 전체 처리는 /start 사용."""
+    if x_internal_secret != os.environ.get("INTERNAL_API_SECRET"):
+        raise HTTPException(status_code=403, detail="forbidden")
+    sb = get_supabase()
+    rows = _fetch(sb, limit)
+    # 임시로 JOB 카운터 재사용하지 않고 로컬 집계
+    local = {"requested": len(rows), "applied": 0, "rejected": 0,
+             "non_subject": 0, "error": 0, "samples": [], "reject_reasons": {}}
+    for r in rows:
+        rid = r["id"]; st = (r.get("source_text") or "").strip()
+        pt = (r.get("source_part_text") or "").strip(); ct = r.get("content_type") or ""
+        try:
+            j = _gpt_judge(st, pt, ct)
+        except Exception:
+            local["error"] += 1; continue
+        executor = (j.get("executor") or "").strip()
+        role = j.get("role_check") or ""; conf = j.get("confidence") or "low"
+        ok, reason = _passes_nets(executor, pt, role, st)
+        if ok and conf == "high":
+            local["applied"] += 1
+            if not dry_run:
+                sb.table("semantic_clause_fix").update({
+                    "executor_fixed": executor, "fix_status": "LLM_CANDIDATE",
+                    "review_reason": f"GPT-{OPENAI_MODEL} 판정 채택 후보: {role}",
+                }).eq("id", rid).execute()
+            if len(local["samples"]) < 25:
+                local["samples"].append({"id": rid, "executor": executor, "role": role,
+                                          "conf": conf, "src": st[:60],
+                                          "span": (j.get("source_span") or "")[:50]})
+        else:
+            if executor in ("주어없음", "의무아님") or reason.startswith("not_obligation"):
+                local["non_subject"] += 1
+                if not dry_run:
+                    sb.table("semantic_clause_fix").update({
+                        "review_reason": f"GPT 판정: {executor} / {reason}",
+                    }).eq("id", rid).execute()
+            else:
+                local["rejected"] += 1
+                local["reject_reasons"][reason] = local["reject_reasons"].get(reason, 0) + 1
+    return local
