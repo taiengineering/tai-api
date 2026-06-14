@@ -2,12 +2,12 @@
 admin_executor_llm_fix — executor 보정 3층 LLM(GPT API) 임시 라우터.
 
 목적: semantic_clause_fix의 DEFER_REVIEW 잔여(조건절/수식절 깊은 주어)를
-GPT API로 주어 판정 → 5중 그물 검증 → 통과분만 executor_fixed에 기록.
+GPT API로 주어 판정 → 6중 그물 검증 → 통과분만 executor_fixed에 기록.
 
-규정: docs/2026-06-14_LLM_EXECUTOR_RULES_VALIDATION.md (v2, 4중그물 + 벌칙그물)
+규정: docs/2026-06-14_LLM_EXECUTOR_RULES_VALIDATION.md
 - LLM은 원문서 주어 발췌만(생성 금지). 주어없음/의무아님 허용.
-- 5중그물: ①Kiwi 명사검증 ②원문 발췌존재 ③BLOCKLIST ④role_check(실행주체만)
-  ⑤벌칙/효력/준용 종결(의무아님) 차단.
+- 6중그물: ①Kiwi 명사검증 ②원문 발췌존재 ③BLOCKLIST(법령형식어·사물) ④role_check(실행주체만)
+  ⑤벌칙/효력/준용 종결(의무아님) ⑥부사격 차단(에/에는/에 대해서=장소·대상, 주체 아님).
 - executor_text 직접 변경 금지. executor_fixed에만 기록. 검증·표본 후 별도 반영.
 - 원본 semantic_clause 무변경. 임시 라우터(작업 끝나면 제거).
 
@@ -28,7 +28,8 @@ OPENAI_MODEL = "gpt-4o-mini"
 _B1_LAW_FORMS = ("대통령령", "부령", "조례", "고시", "총리령", "훈령", "예규", "규칙")
 _SAMUL_SUFFIX = re.compile(
     r"(권리|금액|기간|비용|시설|설비|장치|배관|가스|사고|규모|연면적|높이|층수|방향|"
-    r"오염도|권한|자격|회의|항목|규정|재단|안전성|업무|사업|행위|자료|서류|사항|결과|내용|기준)$"
+    r"오염도|권한|자격|회의|항목|규정|재단|안전성|업무|사업|행위|자료|서류|사항|결과|내용|기준|"
+    r"단지|크레인|차량|기계|기구|건축물|구조물|토양|물건)$"
 )
 # 그물5: 벌칙/효력/준용 종결 (의무 아님)
 _OBLIG_NOT = re.compile(r"(처한다|과태료|벌금|징역|부과한다|준용한다|소멸한다|효력을 상실|로 본다)")
@@ -37,9 +38,11 @@ _OBLIG_NOT = re.compile(r"(처한다|과태료|벌금|징역|부과한다|준용
 _SYSTEM_PROMPT = (
     "너는 한국 법령 의미절의 '의무 주체(주어)'만 원문에서 찾아 발췌하는 도구다. "
     "새 단어를 만들지 말고 원문에 있는 표현만 그대로 발췌한다. 다음 규칙을 엄격히 지켜라.\n"
-    "1) 의무 주체 = 그 의무(동사)를 실행하는 쪽. 수령/대상/객체는 주체가 아니다.\n"
+    "1) 의무 주체 = 그 의무(동사)를 실행하는 쪽. 수령/대상/객체/장소는 주체가 아니다.\n"
     "   - 'X에 대하여는/X에게는 ~을 지급/지원/적용한다' → X는 받는 대상이지 주체 아님.\n"
+    "   - 'X에는/X에 대해서는 ~한다'에서 X(장소·대상)는 주체 아님. (산업단지에는, 크레인에 대해서는)\n"
     "   - 'X를 ~한다'의 X(목적어), 'X에 관하여는'의 X(화제)도 주체 아님.\n"
+    "   - 의무 주체는 보통 'X은/는/이/가 ~하여야 한다' 형태로 주격조사가 붙는다.\n"
     "2) 주어가 원문에 명시 안 됐으면(생략) executor='주어없음'.\n"
     "3) 의무 자체가 아니면 executor='의무아님'. 특히 문장이 "
     "'…에 처한다 / 과태료를 부과한다 / 벌금 / 징역'으로 끝나는 벌칙, "
@@ -53,7 +56,7 @@ _SYSTEM_PROMPT = (
     "출력은 JSON만. 형식: "
     '{"executor":"<원문 발췌 or 주어없음 or 의무아님>",'
     '"source_span":"<주어 포함 원문 구절 그대로>",'
-    '"role_check":"실행주체|수령대상|객체|없음",'
+    '"role_check":"실행주체|수령대상|객체|장소|없음",'
     '"confidence":"high|low"}'
 )
 
@@ -96,35 +99,44 @@ def _kiwi_is_noun_ending(text: str) -> bool:
         last = toks[-1]
         return last.tag.startswith("NN") or last.tag in ("XSN", "NP", "XR")
     except Exception:
-        # 간이검증: 동사/어미 어간으로 끝나면 False
         return not re.search(r"(하|되|받|당|들|르|기|고|며|서|은|는|이|가|을|를|에)$", text)
 
 
 def _passes_nets(executor: str, source_part: str, role_check: str, source_text: str = "") -> tuple[bool, str]:
-    """5중 그물. 통과 여부 + 사유."""
+    """6중 그물. 통과 여부 + 사유."""
     if executor in ("주어없음", "의무아님", "", None):
         return False, f"non_subject:{executor}"
-    # 그물5: 의미절이 벌칙/효력/준용 종결이면 의무 아님 → executor 채우지 않음
+    # 그물5: 의미절이 벌칙/효력/준용 종결이면 의무 아님
     if _OBLIG_NOT.search(source_text):
         return False, "not_obligation(penalty/effect)"
-    # 그물4(자동): role_check가 실행주체가 아니면 탈락
+    # 그물4(자동): role_check가 실행주체가 아니면 탈락(수령대상/객체/장소 차단)
     if role_check != "실행주체":
         return False, f"role_check:{role_check}"
-    # 그물3: BLOCKLIST
+    # 그물3: BLOCKLIST(법령형식어·사물)
     if any(b in executor for b in _B1_LAW_FORMS):
         return False, "blocklist_B1_lawform"
     if _SAMUL_SUFFIX.search(executor):
         return False, "blocklist_B3_samul"
-    # 그물2: 원문 발췌 존재 (핵심 명사가 원문에 있어야)
+    # 그물2: 원문 발췌 존재(환각 차단)
     core = re.sub(r"\s+", "", executor)
-    if core not in re.sub(r"\s+", "", source_part):
+    pt_ns = re.sub(r"\s+", "", source_part)
+    if core not in pt_ns:
         return False, "not_in_source(hallucination)"
     # 그물1: Kiwi 명사 끝
     if not _kiwi_is_noun_ending(executor):
         return False, "kiwi_not_noun"
-    # "하는 자"/"한 자"처럼 수식 잘린 불완전 주어 차단(2글자 자/것 단독)
+    # 불완전 주어(수식 잘림) 차단
     if executor in ("하는 자", "한 자", "되는 자", "된 자", "있는 자", "그 자", "자", "것"):
         return False, "incomplete_subject(modifier_cut)"
+    # 그물6: 원문에서 executor 직후가 부사격(에/에는/에게/에 대하여/에서)이고
+    # 주격(은/는/이/가)으로는 안 나오면 → 장소·대상이지 실행주체 아님
+    pos = pt_ns.find(core)
+    if pos >= 0:
+        after = pt_ns[pos + len(core): pos + len(core) + 6]
+        if re.match(r"(에는|에게|에대하여|에대해서|에관하여|에관해서|에서|에)", after) \
+           and not re.match(r"(에서의|에관한)", after) \
+           and not re.search(re.escape(core) + r"(은|는|이|가)", pt_ns):
+            return False, "adverbial_case(place/object_not_subject)"
     return True, "ok"
 
 
@@ -138,7 +150,6 @@ def executor_llm_fix(
         raise HTTPException(status_code=403, detail="forbidden")
 
     sb = get_supabase()
-    # DEFER_REVIEW 잔여를 limit개 (이미 LLM 시도한 것 제외: review_reason 마커 없는 것)
     rows = (
         sb.table("semantic_clause_fix")
         .select("id, source_text, source_part_text, content_type, executor_text")
@@ -171,7 +182,7 @@ def executor_llm_fix(
             if not dry_run:
                 sb.table("semantic_clause_fix").update({
                     "executor_fixed": executor,
-                    "fix_status": "LLM_CANDIDATE",  # 표본 검증 전 후보 상태
+                    "fix_status": "LLM_CANDIDATE",
                     "review_reason": f"GPT-{OPENAI_MODEL} 판정 채택 후보: {role}",
                 }).eq("id", rid).execute()
             if len(results["samples"]) < 25:
