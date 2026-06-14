@@ -39,4 +39,7 @@ ROUTERS = [
     {"module": "routers.response_guidance_api"},
     {"module": "routers.operational_learning_api"},
     {"module": "routers.operational_closure_api"},
+
+    # ── 임시: executor 3층 LLM 보정 (작업 완료 후 제거) ──
+    {"module": "routers.admin_executor_llm_fix", "tags": ["executor-llm-fix-temp"]},
 ]
