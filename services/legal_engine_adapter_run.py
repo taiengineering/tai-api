@@ -1,19 +1,21 @@
 """
 legal_engine_adapter_run — 어댑터를 실제로 붙여 돌려보는 경로 (검증용).
 
-설계: taieng/docs/2026-06-14_STAGE_D_LEGAL_ENGINE_ADAPTER_DESIGN.md
+설계: taieng/docs/2026-06-14_STAGE_D_LEGAL_ENGINE_ADAPTER_DESIGN.md (섹션 0: RASE 추출)
 흐름:
   factory_id → 사용자입력 표준화(_input_to_facility_context, 기존 재사용)
            → 어댑터.facility_input_to_base (사업장 = 평가 주체측)
            → sector 해당 article의 의미절 적재(semantic_clause_fix, 보정 executor)
            → 어댑터.clause_to_context (의무 1건 → 표준 계약 1건)
-           → 표준 계약 목록 반환
+           → policyProvider.classify_applicability (RASE 적용대상 판정)
+              · BUSINESS  → 추출(KEEP)
+              · AMBIGUOUS → 보류로 추출(KEEP_REVIEW, "빠짐없이")
+              · AUTHORITY/FRAGMENT → 제외(DROP, 명백히 사업장 대상 아님)
+           → 추출된 표준 계약 목록 반환
 
-이 단계는 "붙여서 무엇이 나오는지 본다"가 목적. 엔진 평가/정제는 아직 안 붙임 —
-표준 계약으로 변환된 의무 목록이 제대로 나오는지(수범자/조건이 표준 형식으로 실리는지)를
-글로 읽어 확인하는 것이 1차. 기존 진단 경로 무수정.
-
-영역: 어댑터 변환만. 분해기·판정로직(GPT)·엔진코어 무수정. 의미절 읽기만.
+RASE 추출: 거름망(빼기)이 아니라 적용대상 일치하면 담음. 명백 불일치만 버리고 애매는 남김.
+영역: 어댑터 변환 + 적용대상 판정만. 분해기·판정로직(GPT)·엔진코어·체크엔진코어 무수정.
+의미절 읽기만. 규모 수치(≥,≤) 2차 거름은 아직(적용대상 1차만).
 """
 from __future__ import annotations
 
@@ -25,6 +27,7 @@ from services.anonymous_factory_service import normalize_consumer_inp, _mapping_
 from services.legal_rules import normalize_sector_db
 from schemas.legal_engine import DiagnoseStep1Body
 from services import legal_engine_adapter as adapter
+from services import legal_engine_policy as policy
 
 log = logging.getLogger(__name__)
 
@@ -117,7 +120,7 @@ def _load_obligation_clauses(supabase, allowed_article_ids: Optional[Set[str]]) 
 
 
 def run_adapter_diagnosis(supabase, body: DiagnoseStep1Body) -> Dict[str, Any]:
-    """어댑터를 붙여 표준 계약 목록을 만든다 (1차: 변환 결과 확인용)."""
+    """어댑터 변환 + RASE 적용대상 추출. (1차: 적용대상 거름까지. 규모 수치는 2차 별도.)"""
     sector_raw = body.sector.strip().upper()
     inp = normalize_consumer_inp(body)
     facility_ctx = _input_to_facility_context(sector_raw, inp)
@@ -126,18 +129,36 @@ def run_adapter_diagnosis(supabase, body: DiagnoseStep1Body) -> Dict[str, Any]:
     # 사용자 입력 → 사업장 base (어댑터)
     facility_base = adapter.facility_input_to_base(sector_raw, facility_ctx)
 
-    # sector 해당 의무절 적재 → 어댑터로 표준 계약 변환
+    # sector 해당 의무절 적재 → 어댑터로 표준 계약 변환 → 적용대상 판정
     allowed = _load_sector_allowed_article_ids(supabase, sector_db)
     clauses = _load_obligation_clauses(supabase, allowed)
 
-    contexts: List[Dict[str, Any]] = []
-    skipped = 0
+    kept: List[Dict[str, Any]] = []           # BUSINESS (확실한 적용대상)
+    review: List[Dict[str, Any]] = []         # AMBIGUOUS (보류, 빠짐없이)
+    class_counts: Dict[str, int] = {
+        policy.APPLY_BUSINESS: 0, policy.APPLY_AUTHORITY: 0,
+        policy.APPLY_FRAGMENT: 0, policy.APPLY_AMBIGUOUS: 0,
+    }
+    skipped_non_obligation = 0
+    dropped = 0
+
     for c in clauses:
         ctx = adapter.clause_to_context(c, facility_ctx)
         if ctx is None:
-            skipped += 1
+            skipped_non_obligation += 1
             continue
-        contexts.append(ctx)
+        executor = (c.get("executor_text") or "").strip()
+        cls, decision = policy.classify_applicability(executor)
+        class_counts[cls] = class_counts.get(cls, 0) + 1
+        # 표준 계약에 적용대상 판정 부착(추적용)
+        ctx["applicability"] = {"class": cls, "decision": decision}
+        if decision == policy.DECISION_DROP:
+            dropped += 1
+            continue
+        if decision == policy.DECISION_KEEP_REVIEW:
+            review.append(ctx)
+        else:
+            kept.append(ctx)
 
     return {
         "adapter": adapter.adapter_definition(),
@@ -145,10 +166,15 @@ def run_adapter_diagnosis(supabase, body: DiagnoseStep1Body) -> Dict[str, Any]:
         "sector": sector_raw,
         "counts": {
             "clauses_loaded": len(clauses),
-            "contexts_built": len(contexts),
-            "skipped_non_obligation": skipped,
+            "skipped_non_obligation": skipped_non_obligation,
+            "dropped_not_business": dropped,        # 명백히 사업장 대상 아님(행정청·조각)
+            "extracted_business": len(kept),        # 확실한 적용대상
+            "extracted_review": len(review),        # 보류(빠짐없이)
+            "extracted_total": len(kept) + len(review),
+            "by_class": class_counts,
             "sector_filtered": allowed is not None,
             "allowed_articles": len(allowed) if allowed else None,
         },
-        "contexts": contexts,
+        # 추출 결과: 확실분 먼저, 보류분 뒤
+        "contexts": kept + review,
     }
