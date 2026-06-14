@@ -4,17 +4,17 @@ admin_executor_llm_fix — executor 보정 3층 LLM(GPT API) 임시 라우터.
 목적: semantic_clause_fix의 DEFER_REVIEW 잔여(조건절/수식절 깊은 주어)를
 GPT API로 주어 판정 → 6중 그물 검증 → 통과분만 executor_fixed에 기록.
 
+★ 상태 전이(재조회 차단 — 무한반복 방지):
+- 채택 → LLM_CANDIDATE / 주어없음 → LLM_NO_SUBJECT / 의무아님 → LLM_NONOBLIG
+- 그물 탈락(rejected) → LLM_REJECTED. 모두 DEFER_REVIEW에서 빠져 재조회 안됨.
+
 규정: docs/2026-06-14_LLM_EXECUTOR_RULES_VALIDATION.md
-- LLM은 원문서 주어 발췌만(생성 금지). 주어없음/의무아님 허용.
-- 6중그물: ①Kiwi 명사검증 ②원문 발췌존재 ③BLOCKLIST(법령형식어·사물) ④role_check(실행주체만)
-  ⑤벌칙/효력/준용 종결(의무아님) ⑥부사격 차단(에/에는/에 대해서=장소·대상, 주체 아님).
-- executor_text 직접 변경 금지. executor_fixed에만 기록. 검증·표본 후 별도 반영.
+- LLM은 원문서 주어 발췤만(생성 금지). executor_text 직접 변경 금지. executor_fixed에만 기록.
 - 원본 semantic_clause 무변경. 임시 라우터(작업 끝나면 제거).
 
 보호: X-Internal-Secret 헤더 = INTERNAL_API_SECRET 필요.
 실행(백그라운드 전체): POST /admin/executor-llm-fix/start?dry_run=false&batch_size=50
-  → 즉시 202 응답, 서버 뒤에서 전체 처리. 긴 HTTP 요청 타임아웃(502) 회피.
-진행 확인: GET /admin/executor-llm-fix/status
+진행 확인: GET /admin/executor-llm-fix/status   중단: POST /admin/executor-llm-fix/stop
 단발(동기): POST /admin/executor-llm-fix?limit=50&dry_run=true  (검증·표본용)
 """
 import os
@@ -29,14 +29,11 @@ router = APIRouter()
 
 OPENAI_MODEL = "gpt-4o-mini"
 
-# ── 진행 상태(메모리, 단일 워커 가정) ──
 _JOB = {"running": False, "started_at": None, "processed": 0, "applied": 0,
         "rejected": 0, "non_subject": 0, "error": 0, "batches": 0,
         "remaining": None, "reject_reasons": {}, "last_update": None, "stop": False}
-_JOB_LOCK = threading.Lock()
 
-# ── BLOCKLIST (그물3) ──
-_B1_LAW_FORMS = ("대통령령", "부령", "조례", "고시", "총리령", "훈령", "예규", "규칙")
+_B1_LAW_FORMS = ("대통령령", "부령", "조례", "고시", "총리령", "훈령", "예규")
 _SAMUL_SUFFIX = re.compile(
     r"(권리|금액|기간|비용|시설|설비|장치|배관|가스|사고|규모|연면적|높이|층수|방향|"
     r"오염도|권한|자격|회의|항목|규정|재단|안전성|업무|사업|행위|자료|서류|사항|결과|내용|기준|"
@@ -45,8 +42,8 @@ _SAMUL_SUFFIX = re.compile(
 _OBLIG_NOT = re.compile(r"(처한다|과태료|벌금|징역|부과한다|준용한다|소멸한다|효력을 상실|로 본다)")
 
 _SYSTEM_PROMPT = (
-    "너는 한국 법령 의미절의 '의무 주체(주어)'만 원문에서 찾아 발췌하는 도구다. "
-    "새 단어를 만들지 말고 원문에 있는 표현만 그대로 발췌한다. 다음 규칙을 엄격히 지켜라.\n"
+    "너는 한국 법령 의미절의 '의무 주체(주어)'만 원문에서 찾아 발췤하는 도구다. "
+    "새 단어를 만들지 말고 원문에 있는 표현만 그대로 발췤한다. 다음 규칙을 엄격히 지켜라.\n"
     "1) 의무 주체 = 그 의무(동사)를 실행하는 쪽. 수령/대상/객체/장소는 주체가 아니다.\n"
     "   - 'X에 대하여는/X에게는 ~을 지급/지원/적용한다' → X는 받는 대상이지 주체 아님.\n"
     "   - 'X에는/X에 대해서는 ~한다'에서 X(장소·대상)는 주체 아님. (산업단지에는, 크레인에 대해서는)\n"
@@ -57,13 +54,13 @@ _SYSTEM_PROMPT = (
     "'…에 처한다 / 과태료를 부과한다 / 벌금 / 징역'으로 끝나는 벌칙, "
     "'정한다'(위임), '준용한다'(준용), '소멸한다/상실한다'(효력)는 모두 '의무아님'이다. "
     "벌칙의 '…한 자'는 의무 주체가 아니라 처벌 대상이므로 절대 executor로 내지 마라.\n"
-    "4) 법령형식어(대통령령/부령/조례/고시)는 주어가 아니다.\n"
+    "4) 법령형식어(대통령/부령/조례/고시)는 주어가 아니다.\n"
     "5) 'X가 ~하는/~된/~인' 수식절의 X는 수식절 주어일 뿐 의무 주체가 아니다.\n"
-    "6) 주어를 발췌할 때는 수식어구를 포함한 완전한 명사구로 발췌하라. "
-    "예: '…으로 하는 자' 전체를 발췌하고 '하는 자'처럼 잘라내지 마라.\n"
+    "6) 주어를 발췤할 때는 수식어구를 포함한 완전한 명사구로 발췤하라. "
+    "예: '…으로 하는 자' 전체를 발췤하고 '하는 자'처럼 잘라내지 마라.\n"
     "7) 불확실하면 executor='주어없음', confidence='low'.\n"
     "출력은 JSON만. 형식: "
-    '{"executor":"<원문 발췌 or 주어없음 or 의무아님>",'
+    '{"executor":"<원문 발췤 or 주어없음 or 의무아님>",'
     '"source_span":"<주어 포함 원문 구절 그대로>",'
     '"role_check":"실행주체|수령대상|객체|장소|없음",'
     '"confidence":"high|low"}'
@@ -104,7 +101,7 @@ def _kiwi_is_noun_ending(text: str) -> bool:
         return not re.search(r"(하|되|받|당|들|르|기|고|며|서|은|는|이|가|을|를|에)$", text)
 
 
-def _passes_nets(executor: str, source_part: str, role_check: str, source_text: str = "") -> tuple[bool, str]:
+def _passes_nets(executor: str, source_part: str, role_check: str, source_text: str = "") -> tuple:
     if executor in ("주어없음", "의무아님", "", None):
         return False, f"non_subject:{executor}"
     if _OBLIG_NOT.search(source_text):
@@ -162,20 +159,26 @@ def _process_one(sb, r, dry_run):
                 "executor_fixed": executor, "fix_status": "LLM_CANDIDATE",
                 "review_reason": f"GPT-{OPENAI_MODEL} 판정 채택 후보: {role}",
             }).eq("id", rid).execute()
+    elif executor in ("주어없음", "의무아님") or reason.startswith("not_obligation"):
+        _JOB["non_subject"] += 1
+        if not dry_run:
+            new_status = "LLM_NONOBLIG" if (executor == "의무아님" or reason.startswith("not_obligation")) else "LLM_NO_SUBJECT"
+            sb.table("semantic_clause_fix").update({
+                "fix_status": new_status,
+                "review_reason": f"GPT 판정: {executor} / {reason}",
+            }).eq("id", rid).execute()
     else:
-        if executor in ("주어없음", "의무아님") or reason.startswith("not_obligation"):
-            _JOB["non_subject"] += 1
-            if not dry_run:
-                sb.table("semantic_clause_fix").update({
-                    "review_reason": f"GPT 판정: {executor} / {reason}",
-                }).eq("id", rid).execute()
-        else:
-            _JOB["rejected"] += 1
-            _JOB["reject_reasons"][reason] = _JOB["reject_reasons"].get(reason, 0) + 1
+        _JOB["rejected"] += 1
+        _JOB["reject_reasons"][reason] = _JOB["reject_reasons"].get(reason, 0) + 1
+        if not dry_run:
+            # ★ 그물 탈락도 상태 변경 → 재조회 차단(무한반복 방지)
+            sb.table("semantic_clause_fix").update({
+                "fix_status": "LLM_REJECTED",
+                "review_reason": f"GPT 후보 그물탈락: {reason} (executor={executor[:30]})",
+            }).eq("id", rid).execute()
 
 
 def _run_job(dry_run: bool, batch_size: int, max_batches: int):
-    """백그라운드 전체 처리. 배치마다 Supabase 재접속."""
     try:
         for b in range(max_batches):
             if _JOB["stop"]:
@@ -198,7 +201,6 @@ def _run_job(dry_run: bool, batch_size: int, max_batches: int):
             _JOB["last_update"] = time.time()
             if dry_run:
                 break
-        # 잔여 카운트
         try:
             sb = get_supabase()
             rem = (sb.table("semantic_clause_fix").select("id", count="exact")
@@ -219,12 +221,10 @@ def start_job(
     max_batches: int = Query(300, ge=1, le=2000),
     x_internal_secret: str = Header(None, alias="X-Internal-Secret"),
 ):
-    """백그라운드로 전체 DEFER_REVIEW 처리 시작. 즉시 202 응답."""
     if x_internal_secret != os.environ.get("INTERNAL_API_SECRET"):
         raise HTTPException(status_code=403, detail="forbidden")
     if _JOB["running"]:
         return {"status": "already_running", **_status_snapshot()}
-    # 상태 초기화
     for k in ("processed", "applied", "rejected", "non_subject", "error", "batches"):
         _JOB[k] = 0
     _JOB["reject_reasons"] = {}
@@ -268,12 +268,10 @@ def executor_llm_fix(
     dry_run: bool = Query(True),
     x_internal_secret: str = Header(None, alias="X-Internal-Secret"),
 ):
-    """단발 동기 모드 (검증·표본용). 전체 처리는 /start 사용."""
     if x_internal_secret != os.environ.get("INTERNAL_API_SECRET"):
         raise HTTPException(status_code=403, detail="forbidden")
     sb = get_supabase()
     rows = _fetch(sb, limit)
-    # 임시로 JOB 카운터 재사용하지 않고 로컬 집계
     local = {"requested": len(rows), "applied": 0, "rejected": 0,
              "non_subject": 0, "error": 0, "samples": [], "reject_reasons": {}}
     for r in rows:
@@ -297,14 +295,20 @@ def executor_llm_fix(
                 local["samples"].append({"id": rid, "executor": executor, "role": role,
                                           "conf": conf, "src": st[:60],
                                           "span": (j.get("source_span") or "")[:50]})
+        elif executor in ("주어없음", "의무아님") or reason.startswith("not_obligation"):
+            local["non_subject"] += 1
+            if not dry_run:
+                new_status = "LLM_NONOBLIG" if (executor == "의무아님" or reason.startswith("not_obligation")) else "LLM_NO_SUBJECT"
+                sb.table("semantic_clause_fix").update({
+                    "fix_status": new_status,
+                    "review_reason": f"GPT 판정: {executor} / {reason}",
+                }).eq("id", rid).execute()
         else:
-            if executor in ("주어없음", "의무아님") or reason.startswith("not_obligation"):
-                local["non_subject"] += 1
-                if not dry_run:
-                    sb.table("semantic_clause_fix").update({
-                        "review_reason": f"GPT 판정: {executor} / {reason}",
-                    }).eq("id", rid).execute()
-            else:
-                local["rejected"] += 1
-                local["reject_reasons"][reason] = local["reject_reasons"].get(reason, 0) + 1
+            local["rejected"] += 1
+            local["reject_reasons"][reason] = local["reject_reasons"].get(reason, 0) + 1
+            if not dry_run:
+                sb.table("semantic_clause_fix").update({
+                    "fix_status": "LLM_REJECTED",
+                    "review_reason": f"GPT 후보 그물탈락: {reason}",
+                }).eq("id", rid).execute()
     return local
