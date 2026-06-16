@@ -37,4 +37,6 @@ ROUTERS = [
     {"module": "routers.reverse_check_api"},
     # D-007: Refinery
     {"module": "routers.refinery_api"},
+    # D-004B PILOT: 안전관리자 선임 의무 파일럿
+    {"module": "routers.pilot_safety_manager_api"},
 ]
