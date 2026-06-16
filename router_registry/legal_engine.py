@@ -27,4 +27,6 @@ ROUTERS = [
     {"module": "routers.semantic_pipeline_api"},
     # D-002: Common Sieve Engine
     {"module": "routers.common_sieve_api"},
+    # D-003: Section Sieve
+    {"module": "routers.section_sieve_api"},
 ]
