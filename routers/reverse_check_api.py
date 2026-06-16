@@ -13,6 +13,8 @@ from services.reverse_check_service import run_reverse_check_batch
 
 router = APIRouter(prefix="/reverse-check", tags=["D-006 Reverse Check"])
 
+_DEFAULT_STATUS_FILTER = ["MATCH_CANDIDATE", "POSSIBLE_CANDIDATE"]
+
 
 @router.post("/trace-track-a", response_model=ReverseCheckListResponse)
 def trace_track_a(
@@ -28,8 +30,12 @@ def trace_track_a(
     """
     supabase = get_supabase()
 
-    # load_track_a_results는 이미 List[CheckResult] 반환
-    check_results = load_track_a_results(supabase, facility_id=facility_id)
+    # D-004A와 동일하게 status_filter 명시
+    check_results = load_track_a_results(
+        supabase,
+        facility_id=facility_id,
+        status_filter=_DEFAULT_STATUS_FILTER,
+    )
     check_results = check_results[:limit]
 
     traces = run_reverse_check_batch(check_results)
@@ -49,7 +55,11 @@ def trace_single(
     """단일 applicability_id 역추적."""
     supabase = get_supabase()
 
-    check_results = load_track_a_results(supabase, facility_id=facility_id)
+    check_results = load_track_a_results(
+        supabase,
+        facility_id=facility_id,
+        status_filter=_DEFAULT_STATUS_FILTER,
+    )
     target = next((r for r in check_results if r.applicability_id == applicability_id), None)
     if not target:
         from fastapi import HTTPException
