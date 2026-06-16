@@ -13,7 +13,7 @@ domain_verdict를 생성한다.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
@@ -29,6 +29,32 @@ router = APIRouter(
 )
 
 _DEFAULT_STATUS_FILTER = ["MATCH_CANDIDATE", "POSSIBLE_CANDIDATE"]
+
+# 조문 단위 MISMATCH 예외 규칙
+# {law_name_keyword: [article_no, ...]} — 해당 조문은 INDUSTRIAL 제외
+_ARTICLE_MISMATCH_RULES: Dict[str, List[int]] = {
+    "소방시설 설치 및 관리에 관한 법률": [10],       # 주택소방시설 — 주택 전용
+    "소방시설 설치 및 관리에 관한 법률 시행규칙": [23], # 소방시설관리업자 자체점검
+    "수도법": [38],                                  # 위탁심의위원회 — 수도사업자
+    "수도법 시행령": [38],
+    "승강기산업 진흥법": [16],                        # 협회 설립인가
+    "산업안전보건기준에 관한 규칙": [547],             # 잠수작업 — 제조업 280명 공장 해당 없음
+}
+
+
+def _check_article_mismatch(law_name: str, article_no) -> Optional[str]:
+    """조문 단위 MISMATCH 여부 확인. 해당하면 reason 반환, 없으면 None."""
+    if not article_no:
+        return None
+    try:
+        art_int = int(article_no)
+    except (ValueError, TypeError):
+        return None
+
+    for law_keyword, articles in _ARTICLE_MISMATCH_RULES.items():
+        if law_keyword in law_name and art_int in articles:
+            return f"{law_name} 제{article_no}조: 조문 단위 INDUSTRIAL 제외 (법령 레벨 sector_mapping 한계)"
+    return None
 
 
 def _get_law_sector_map(supabase, law_ids: List[str]) -> Dict[str, List[str]]:
@@ -58,11 +84,12 @@ def _compute_domain_verdict(
     actor_group: str,
     actor_code: Optional[str],
     law_sectors: List[str],
-) -> tuple[str, str]:
+    law_name: str = "",
+    article_no=None,
+) -> Tuple[str, str]:
     """(domain_verdict, mismatch_reason) 반환."""
 
     if facility_sector != "INDUSTRIAL":
-        # INDUSTRIAL 외 섹터는 현단계 파일럿 범위 밖
         return "DOMAIN_REVIEW", "비-INDUSTRIAL sector 판단 미적용"
 
     # AUTHORITY → MISMATCH
@@ -73,7 +100,7 @@ def _compute_domain_verdict(
     if actor_group == "FRAGMENT":
         return "DOMAIN_MISMATCH", "FRAGMENT: 주체 토큰 아님"
 
-    # CONSTRUCTOR → MISMATCH (sector 무관하게)
+    # CONSTRUCTOR → MISMATCH
     if actor_code == "ACTOR:CONSTRUCTOR":
         return "DOMAIN_MISMATCH", "ACTOR:CONSTRUCTOR: 제조업 사업장에 공사업자 의무 적용 불가"
 
@@ -93,13 +120,15 @@ def _compute_domain_verdict(
                     f"ACTOR:MANAGER + law_sectors={law_sectors}: "
                     "건물/주택 관리의무는 INDUSTRIAL 적용 불가"
                 )
-            return "DOMAIN_KEEP", "사업장 내 관리의무"
 
         if not law_sectors:
-            # 미매핑 pass-through
             return "DOMAIN_REVIEW", "law_sector_mapping 미매핑: pass-through 오염 검토 필요"
 
         if "INDUSTRIAL" in law_sectors:
+            # 조문 단위 예외 규칙 체크
+            article_mismatch = _check_article_mismatch(law_name, article_no)
+            if article_mismatch:
+                return "DOMAIN_MISMATCH", article_mismatch
             return "DOMAIN_KEEP", f"BUSINESS + law_sectors={law_sectors}: 업종 일치"
         else:
             return "DOMAIN_REVIEW", (
@@ -118,8 +147,9 @@ class DomainFilterStats(BaseModel):
     DOMAIN_MISMATCH: int
     DOMAIN_REVIEW: int
     actor_overlay_coverage: int
-    estimated_clean: int   # DOMAIN_KEEP만
+    estimated_clean: int
     top_mismatches: List[dict]
+    top_keeps: List[dict]
 
 
 @router.get("/stats", response_model=DomainFilterStats)
@@ -129,7 +159,6 @@ def get_domain_filter_stats(
     """K-06~09: Domain Filter 적용 후 감소량 측정."""
     supabase = get_supabase()
 
-    # 1) 사업장 sector 로드
     fac_res = (
         supabase.table("factories")
         .select("id, sector")
@@ -139,14 +168,12 @@ def get_domain_filter_stats(
     )
     facility_sector = str((fac_res.data or {}).get("sector") or "")
 
-    # 2) Track A 로드
     check_results = load_track_a_results(
         supabase, facility_id=facility_id,
         status_filter=_DEFAULT_STATUS_FILTER,
     )
     traces = run_reverse_check_batch(check_results)
 
-    # 3) Actor Overlay
     draft_ids = [
         t.full_trace.get("stage_check", {}).get("draft_id")
         for t in traces
@@ -154,8 +181,11 @@ def get_domain_filter_stats(
     draft_ids_clean = [d for d in draft_ids if d]
     actor_map = _build_actor_map_chunked(supabase, draft_ids_clean)
 
-    # 4) draft_id → law_id 매핑
+    # draft_id → law_id + law_name + article_no 매핑
     draft_to_law: Dict[str, str] = {}
+    draft_to_law_name: Dict[str, str] = {}
+    draft_to_article_no: Dict[str, str] = {}
+
     for i in range(0, len(draft_ids_clean), 50):
         chunk = draft_ids_clean[i: i + 50]
         try:
@@ -173,47 +203,73 @@ def get_domain_filter_stats(
                 art_ids = [a[1] for a in article_ids]
                 ar = (
                     supabase.table("law_article")
-                    .select("id, law_id")
+                    .select("id, law_id, article_no")
                     .in_("id", art_ids)
                     .execute()
                 )
-                art_to_law = {str(a["id"]): str(a["law_id"]) for a in (ar.data or [])}
+                art_map = {
+                    str(a["id"]): (str(a["law_id"]), str(a.get("article_no") or ""))
+                    for a in (ar.data or [])
+                }
+                law_ids_chunk = list({v[0] for v in art_map.values()})
+                lm_res = (
+                    supabase.table("law_master")
+                    .select("id, law_name")
+                    .in_("id", law_ids_chunk)
+                    .execute()
+                )
+                law_name_map = {str(l["id"]): str(l["law_name"]) for l in (lm_res.data or [])}
+
                 for did, aid in article_ids:
-                    if aid in art_to_law:
-                        draft_to_law[did] = art_to_law[aid]
+                    if aid in art_map:
+                        lid, art_no = art_map[aid]
+                        draft_to_law[did] = lid
+                        draft_to_article_no[did] = art_no
+                        draft_to_law_name[did] = law_name_map.get(lid, "")
         except Exception:
             continue
 
-    # 5) law_id → sectors 매핑
     law_ids = list(set(draft_to_law.values()))
     law_sector_map = _get_law_sector_map(supabase, law_ids)
 
-    # 6) domain_verdict 산정
     counts = {"DOMAIN_KEEP": 0, "DOMAIN_MISMATCH": 0, "DOMAIN_REVIEW": 0}
     mismatches: List[dict] = []
+    keeps: List[dict] = []
 
     for t in traces:
         draft_id = t.full_trace.get("stage_check", {}).get("draft_id")
         actor_info = actor_map.get(str(draft_id), {}) if draft_id else {}
         law_id = draft_to_law.get(str(draft_id) if draft_id else "", "")
         law_sectors = law_sector_map.get(law_id, []) if law_id else []
+        law_name = draft_to_law_name.get(str(draft_id) if draft_id else "", t.law_name or "")
+        article_no = draft_to_article_no.get(str(draft_id) if draft_id else "", t.article_no)
 
         verdict, reason = _compute_domain_verdict(
             facility_sector=facility_sector,
             actor_group=actor_info.get("actor_group", "UNKNOWN"),
             actor_code=actor_info.get("actor_code"),
             law_sectors=law_sectors,
+            law_name=law_name,
+            article_no=article_no,
         )
         counts[verdict] += 1
 
         if verdict == "DOMAIN_MISMATCH" and len(mismatches) < 20:
             mismatches.append({
-                "law_name": t.law_name,
-                "article_no": t.article_no,
+                "law_name": law_name or t.law_name,
+                "article_no": article_no or t.article_no,
                 "actor_group": actor_info.get("actor_group"),
                 "actor_code": actor_info.get("actor_code"),
                 "law_sectors": law_sectors,
                 "reason": reason,
+            })
+
+        if verdict == "DOMAIN_KEEP" and len(keeps) < 30:
+            keeps.append({
+                "law_name": law_name or t.law_name,
+                "article_no": article_no or t.article_no,
+                "actor_code": actor_info.get("actor_code"),
+                "applicability_status": t.applicability_status,
             })
 
     return DomainFilterStats(
@@ -226,4 +282,5 @@ def get_domain_filter_stats(
         actor_overlay_coverage=len(actor_map),
         estimated_clean=counts["DOMAIN_KEEP"],
         top_mismatches=mismatches,
+        top_keeps=keeps,
     )
