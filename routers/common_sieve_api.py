@@ -21,10 +21,10 @@ from schemas.candidate_clause_schema import (
 )
 from services.common_sieve_service import (
     apply_common_sieve,
+    load_sieve_rules,
     run_common_sieve_batch,
-    _load_sieve_rules,
 )
-from services.semantic_clause_service import get_semantic_clauses, count_semantic_clauses
+from services.semantic_clause_service import get_semantic_clauses
 
 router = APIRouter(prefix="/common-sieve", tags=["D-002 Common Sieve"])
 
@@ -66,7 +66,7 @@ def list_candidates(
     clauses = get_semantic_clauses(
         supabase, sector_hint=sector_hint, limit=limit, offset=offset
     )
-    sieve_rules = _load_sieve_rules(supabase)
+    sieve_rules = load_sieve_rules(supabase)
 
     all_candidates = [apply_common_sieve(c, sieve_rules) for c in clauses]
 
@@ -76,7 +76,7 @@ def list_candidates(
             target = SieveResult(sieve_result)
             all_candidates = [c for c in all_candidates if c.sieve_result == target]
         except ValueError:
-            pass  # 잘못된 값이면 전체 반환
+            pass
 
     return CandidateClauseListResponse(
         items=all_candidates,

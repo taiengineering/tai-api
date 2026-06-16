@@ -16,8 +16,7 @@ CandidateClause (KEEP/DROP/PENDING)를 생성.
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
-from typing import Dict, List, Optional, Tuple
+from typing import List, Tuple
 
 from schemas.candidate_clause_schema import CandidateClause, SieveResult, SieveSummary
 from schemas.semantic_clause_schema import SemanticClause
@@ -25,7 +24,7 @@ from schemas.semantic_clause_schema import SemanticClause
 log = logging.getLogger(__name__)
 
 
-def _load_sieve_rules(supabase) -> List[dict]:
+def load_sieve_rules(supabase) -> List[dict]:
     """legal_sieve_rule 전체 로드 (enabled=true만).
 
     PostgREST 1000행 제한 → range 페이지네이션.
@@ -55,7 +54,7 @@ def _apply_rule(executor_text: str, rule: dict) -> bool:
 
     현재 match_type:
       exact — executor_text == pattern (완전 일치)
-      contains — pattern이 executor_text에 포함 (추후 확장)
+      contains — pattern이 executor_text에 포함
     """
     match_type = rule.get("match_type", "exact")
     pattern = rule.get("pattern", "")
@@ -100,7 +99,7 @@ def run_common_sieve_batch(
     Returns:
         (CandidateClause 목록, 요약 통계)
     """
-    sieve_rules = _load_sieve_rules(supabase)
+    sieve_rules = load_sieve_rules(supabase)
     log.info("거름망 룰 %d개 로드", len(sieve_rules))
 
     results: List[CandidateClause] = []
