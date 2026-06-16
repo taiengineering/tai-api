@@ -1,7 +1,7 @@
 """D-007: StoredDiagnosisResult 스키마
 
-정제 결과 최종 객체.
-중복 제거 + 문장 생성 후 저장 가능한 형태.
+중복 제거 + 문장 생성 후 최종 산출물.
+DB 저장 없음 — 메모리 객체 반환.
 """
 from __future__ import annotations
 
@@ -14,29 +14,26 @@ from schemas.reverse_check_schema import ReverseCheckResult
 
 
 class ObligationItem(BaseModel):
-    """의무 1건."""
-    obligation_id: str              # applicability_id 재사용
-    law_name: Optional[str]
-    article_no: Optional[str]
-    article_title: Optional[str]
+    """정제된 의무 항목 1개."""
+    obligation_id: str              # applicability_id (Track A 식별자)
+    law_name: Optional[str] = None
+    article_no: Optional[str] = None
+    article_title: Optional[str] = None
     obligation_text: str            # 생성된 의무 문장
-    check_verdict: Optional[str]    # APPLICABLE / POSSIBLE
-    applicability_status: Optional[str]
-    law_article_url: Optional[str]
-    trace: ReverseCheckResult
+    check_verdict: Optional[str] = None   # APPLICABLE / POSSIBLE / UNKNOWN
+    check_method: str = "track_a_facility_applicability"
+    law_article_url: Optional[str] = None
+    trace: Optional[ReverseCheckResult] = None
 
 
 class StoredDiagnosisResult(BaseModel):
-    """정제 완료된 진단 결과."""
+    """D-007 파이프라인 최종 산출물."""
     facility_id: str
+    sector: Optional[str] = None
     obligations: List[ObligationItem]
     total_count: int
-    dedup_removed: int              # 중복 제거 건수
-    generated_at: datetime
+    before_dedup: int               # 중복 제거 전 건수
+    after_dedup: int                # 중복 제거 후 건수 (= total_count)
+    generated_at: str
     pipeline_version: str = "WO-D-007-v1"
-
-
-class RefineryResponse(BaseModel):
-    result: StoredDiagnosisResult
-    before_dedup: int
-    after_dedup: int
+    pipeline_stages: Dict[str, Any] = {}  # 각 단계 건수 요약
