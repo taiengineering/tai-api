@@ -29,4 +29,6 @@ ROUTERS = [
     {"module": "routers.common_sieve_api"},
     # D-003: Section Sieve
     {"module": "routers.section_sieve_api"},
+    # D-004A: Track A Check Adapter
+    {"module": "routers.check_adapter_api"},
 ]
