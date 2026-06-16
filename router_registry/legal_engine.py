@@ -31,4 +31,6 @@ ROUTERS = [
     {"module": "routers.section_sieve_api"},
     # D-004A: Track A Check Adapter
     {"module": "routers.check_adapter_api"},
+    # D-005: KSIC Signal Engine
+    {"module": "routers.ksic_signal_api"},
 ]
