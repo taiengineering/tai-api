@@ -31,26 +31,34 @@ router = APIRouter(
 _DEFAULT_STATUS_FILTER = ["MATCH_CANDIDATE", "POSSIBLE_CANDIDATE"]
 
 # 조문 단위 MISMATCH 예외 규칙
-# {법령명 키워드: [조문번호, ...]} — 해당 조문은 INDUSTRIAL 제외
 _ARTICLE_MISMATCH_RULES: Dict[str, List[int]] = {
-    "소방시설 설치 및 관리에 관한 법률": [10],           # 주택소방시설 — 주택 전용
-    "소방시설 설치 및 관리에 관한 법률 시행규칙": [23],    # 소방시설관리업자 의무
-    "수도법": [38],                                     # 위탁심의위원회 — 수도사업자
+    "소방시설 설치 및 관리에 관한 법률": [10],
+    "소방시설 설치 및 관리에 관한 법률 시행규칙": [23],
+    "수도법": [38],
     "수도법 시행령": [38],
-    "승강기산업 진흥법": [16],                          # 협회 설립인가
-    "산업안전보건기준에 관한 규칙": [547],            # 잠수작업 — 제조업 280명 공장 해당 없음
+    "승강기산업 진흥법": [16],
+    "산업안전보건기준에 관한 규칙": [547],
 }
+
+# NFPC 소방 성능기준 — 기술기준 조문, 주체 없음 → UNKNOWN actor + non-INDUSTRIAL → MISMATCH
+_NFPC_LAW_KEYWORDS = [
+    "화재안전성능기준", "화재안전기준", "NFPC", "성능인증 및 제품검사",
+    "한국전기설비규정",
+]
+
+
+def _is_nfpc_technical_standard(law_name: str) -> bool:
+    """NFPC 소방/전기 기술기준 여부 — executor_text null, 주체 없는 조문."""
+    return any(kw in law_name for kw in _NFPC_LAW_KEYWORDS)
 
 
 def _check_article_mismatch(law_name: str, article_no) -> Optional[str]:
-    """조문 단위 MISMATCH 여부 확인. 해당하면 reason 반환, 없으면 None."""
     if not article_no or not law_name:
         return None
     try:
         art_int = int(str(article_no))
     except (ValueError, TypeError):
         return None
-
     for law_keyword, articles in _ARTICLE_MISMATCH_RULES.items():
         if law_keyword in law_name and art_int in articles:
             return (
@@ -61,7 +69,6 @@ def _check_article_mismatch(law_name: str, article_no) -> Optional[str]:
 
 
 def _get_law_sector_map(supabase, law_ids: List[str]) -> Dict[str, List[str]]:
-    """law_id → sectors 매핑 로드 (chunk 50)."""
     if not law_ids:
         return {}
     result: Dict[str, List[str]] = {}
@@ -111,8 +118,20 @@ def _compute_domain_verdict(
     if actor_group == "ASSOCIATION":
         return "DOMAIN_REVIEW", "ASSOCIATION: 협회 자체 vs 회원 사업자 의무 확인 필요"
 
-    # UNKNOWN → REVIEW
+    # UNKNOWN → sector 기반 추가 판정
     if actor_group == "UNKNOWN" or not actor_group:
+        # NFPC 기술기준 + non-INDUSTRIAL → MISMATCH (주체 없는 설비 성능기준)
+        if law_sectors and "INDUSTRIAL" not in law_sectors and _is_nfpc_technical_standard(law_name):
+            return "DOMAIN_MISMATCH", (
+                f"NFPC 기술기준 + law_sectors={law_sectors}: "
+                "주체 없는 설비 성능기준, INDUSTRIAL 미해당"
+            )
+        # law_sectors에 INDUSTRIAL 없고 NFPC 아니어도 sector로 판단
+        if law_sectors and "INDUSTRIAL" not in law_sectors:
+            return "DOMAIN_MISMATCH", (
+                f"UNKNOWN actor + law_sectors={law_sectors}: "
+                "INDUSTRIAL 미해당 sector 법령"
+            )
         return "DOMAIN_REVIEW", "UNKNOWN actor: 분류 불가"
 
     # BUSINESS 계열
@@ -125,10 +144,12 @@ def _compute_domain_verdict(
                 )
 
         if not law_sectors:
+            # NFPC 기술기준 미매핑 → MISMATCH
+            if _is_nfpc_technical_standard(law_name):
+                return "DOMAIN_MISMATCH", "NFPC 기술기준 미매핑: 설비 성능기준"
             return "DOMAIN_REVIEW", "law_sector_mapping 미매핑: pass-through 오염 검토 필요"
 
         if "INDUSTRIAL" in law_sectors:
-            # 조문 단위 예외 규칙 체크
             article_reason = _check_article_mismatch(law_name, article_no)
             if article_reason:
                 return "DOMAIN_MISMATCH", article_reason
@@ -153,7 +174,7 @@ class DomainFilterStats(BaseModel):
     estimated_clean: int
     top_mismatches: List[dict]
     top_keeps: List[dict]
-    article_mismatch_applied: int  # 조문 단위 예외규칙 적용 건수
+    article_mismatch_applied: int
 
 
 @router.get("/stats", response_model=DomainFilterStats)
@@ -185,7 +206,6 @@ def get_domain_filter_stats(
     draft_ids_clean = [d for d in draft_ids if d]
     actor_map = _build_actor_map_chunked(supabase, draft_ids_clean)
 
-    # draft_id → law_id + law_name + article_no
     draft_to_law: Dict[str, str] = {}
     draft_to_law_name: Dict[str, str] = {}
     draft_to_article_no: Dict[str, object] = {}
