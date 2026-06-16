@@ -35,4 +35,6 @@ ROUTERS = [
     {"module": "routers.ksic_signal_api"},
     # D-006: Reverse Check Engine
     {"module": "routers.reverse_check_api"},
+    # D-007: Refinery
+    {"module": "routers.refinery_api"},
 ]
