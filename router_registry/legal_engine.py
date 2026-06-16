@@ -39,4 +39,6 @@ ROUTERS = [
     {"module": "routers.refinery_api"},
     # D-004B PILOT: 안전관리자 선임 의무 파일럿
     {"module": "routers.pilot_safety_manager_api"},
+    # WO-D-DOMAIN-001: Actor×Sector Domain Filter
+    {"module": "routers.domain_filter_api"},
 ]
