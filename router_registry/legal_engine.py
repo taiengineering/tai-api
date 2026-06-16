@@ -25,4 +25,6 @@ ROUTERS = [
     {"module": "routers.simulation_api"},
     # D-001: SemanticClause Pipeline
     {"module": "routers.semantic_pipeline_api"},
+    # D-002: Common Sieve Engine
+    {"module": "routers.common_sieve_api"},
 ]
