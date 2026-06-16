@@ -23,4 +23,6 @@ ROUTERS = [
     {"module": "routers.persistence_api"},
     {"module": "routers.runtime_evaluator_api"},
     {"module": "routers.simulation_api"},
+    # D-001: SemanticClause Pipeline
+    {"module": "routers.semantic_pipeline_api"},
 ]
