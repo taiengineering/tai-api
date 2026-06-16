@@ -1,94 +1,68 @@
 """D-006: Reverse Check Engine API
 
-ObligationCandidate → ReverseCheckResult 역추적.
-
-Track A 결과를 기반으로 하며, section_clause는
-같은 article_id를 갖는 SemanticClause로 매칭을 시도.
+'왜 포함됐는가' 역추적 엔드포인트.
 """
 from __future__ import annotations
+
+from typing import List
 
 from fastapi import APIRouter, Query
 
 from db.supabase_client import get_supabase
-from schemas.check_input_schema import CheckVerdict
-from schemas.reverse_check_schema import (
-    ObligationCandidate,
-    ReverseCheckListResponse,
-)
-from services.check_engine_adapter import load_track_a_results
-from services.common_sieve_service import apply_common_sieve, load_sieve_rules
-from services.ksic_signal_service import generate_ksic_signals, load_noun_stats
+from schemas.check_input_schema import CheckResult
+from schemas.reverse_check_schema import ReverseCheckListResponse, ReverseCheckResult
+from services.check_engine_adapter import load_track_a_results, map_applicability_to_check_result
 from services.reverse_check_service import run_reverse_check_batch
-from services.section_sieve_service import assign_sector, load_sector_mapping
-from services.semantic_clause_service import get_semantic_clauses
-from schemas.candidate_clause_schema import SieveResult
 
 router = APIRouter(prefix="/reverse-check", tags=["D-006 Reverse Check"])
 
-_VALID_SECTORS = {"INDUSTRIAL", "BUILDING", "CONSTRUCTION"}
 
-
-@router.post("/run", response_model=ReverseCheckListResponse)
-def run_reverse(
-    facility_id: str = Query(...),
-    facility_sector: str = Query(..., description="INDUSTRIAL / BUILDING / CONSTRUCTION"),
-    limit: int = Query(200, ge=1, le=1000),
+@router.post("/trace-track-a", response_model=ReverseCheckListResponse)
+def trace_track_a(
+    facility_id: str = Query(..., description="factories.id"),
+    limit: int = Query(100, ge=1, le=500),
 ):
-    """Track A 결과 기반 역추적 실행.
+    """Track A CheckResult 전체를 역추적.
 
     D-006 체크 1: ReverseCheckResult 목록 반환
-    D-006 체크 2: full_trace 필드 아래 track_a 있음
+    D-006 체크 2: full_trace에 stage_check.verdict 있음
     D-006 체크 3: law_article_url 형식 확인
+    D-006 체크 4: check_method = 'track_a_facility_applicability'
     """
-    if facility_sector not in _VALID_SECTORS:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail=f"facility_sector는 {_VALID_SECTORS} 중 하나")
-
     supabase = get_supabase()
 
-    # 1) Track A CheckResult 조회
-    check_results = load_track_a_results(
-        supabase, facility_id,
-        status_filter=["MATCH_CANDIDATE", "POSSIBLE_CANDIDATE"]
-    )
+    # 1) Track A 결과 로드
+    rows = load_track_a_results(supabase, facility_id=facility_id, limit=limit)
 
-    # 2) SemanticClause → Section Sieve (article_id 매칭용)
-    clauses = get_semantic_clauses(supabase, limit=limit)
-    sieve_rules = load_sieve_rules(supabase)
-    sector_mapping = load_sector_mapping(supabase)
+    # 2) CheckResult로 변환
+    check_results: List[CheckResult] = [
+        map_applicability_to_check_result(row) for row in rows
+    ]
 
-    # article_id → SectionCandidateClause 매핑
-    article_to_section: dict = {}
-    for c in clauses:
-        candidate = apply_common_sieve(c, sieve_rules)
-        if candidate.sieve_result != SieveResult.KEEP:
-            continue
-        sc = assign_sector(candidate, sector_mapping, facility_sector)
-        if sc and sc.article_id:
-            article_to_section[sc.article_id] = sc
-
-    # 3) KSIC 신호
-    section_list = list(article_to_section.values())
-    noun_stats = load_noun_stats(supabase)
-    ksic_signals = generate_ksic_signals(supabase, section_list, facility_id, noun_stats)
-    clause_to_ksic = {s.clause_id: s for s in ksic_signals}
-
-    # 4) ObligationCandidate 조립
-    obligations = []
-    for cr in check_results:
-        sc = article_to_section.get(cr.article_id or "")
-        ks = clause_to_ksic.get(sc.clause_id if sc else "", None)
-        obligations.append(ObligationCandidate(
-            check_result=cr,
-            section_clause=sc,
-            ksic_signal=ks,
-        ))
-
-    # 5) 역추적
-    results = run_reverse_check_batch(obligations)
+    # 3) 역추적
+    traces = run_reverse_check_batch(check_results)
 
     return ReverseCheckListResponse(
-        items=results,
-        total=len(results),
+        items=traces,
+        total=len(traces),
         facility_id=facility_id,
     )
+
+
+@router.post("/trace-single")
+def trace_single(
+    facility_id: str = Query(..., description="factories.id"),
+    applicability_id: str = Query(..., description="facility_applicability.id"),
+):
+    """단일 applicability_id 역추적."""
+    supabase = get_supabase()
+
+    rows = load_track_a_results(supabase, facility_id=facility_id, limit=500)
+    target = next((r for r in rows if r.get("id") == applicability_id), None)
+    if not target:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="해당 applicability_id를 찾을 수 없음")
+
+    check_result = map_applicability_to_check_result(target)
+    trace = run_reverse_check_batch([check_result])[0]
+    return trace
