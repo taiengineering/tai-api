@@ -11,6 +11,7 @@ Actor Overlay 연결: draft_id → article_id → semantic_clause_fix → actor_
 """
 from __future__ import annotations
 
+from collections import Counter
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Query
@@ -25,6 +26,15 @@ router = APIRouter(prefix="/refinery", tags=["D-007 Refinery"])
 
 _DEFAULT_STATUS_FILTER = ["MATCH_CANDIDATE", "POSSIBLE_CANDIDATE"]
 
+# actor_group 우선순위: AUTHORITY > FRAGMENT > ASSOCIATION > BUSINESS > UNKNOWN
+_GROUP_PRIORITY = {
+    "AUTHORITY": 0,
+    "FRAGMENT": 1,
+    "ASSOCIATION": 2,
+    "BUSINESS": 3,
+    "UNKNOWN": 99,
+}
+
 
 def _build_actor_map_by_article(
     supabase,
@@ -32,6 +42,8 @@ def _build_actor_map_by_article(
 ) -> Dict[str, dict]:
     """draft_id → article_id → semantic_clause_actor_resolution 경유로 actor 정보 로드.
 
+    한 article에 clause가 여러 개일 수 있으므로,
+    우선순위 기준으로 가장 모수인 actor_group 선택.
     반환: {draft_id: {actor_group, actor_code, confidence}}
     """
     if not draft_ids:
@@ -42,11 +54,10 @@ def _build_actor_map_by_article(
         draft_res = (
             supabase.table("executable_draft")
             .select("id, article_id")
-            .in_("id", draft_ids)
+            .in_("id", list(set(draft_ids)))
             .execute()
         )
         draft_rows = draft_res.data or []
-        # {draft_id: article_id}
         draft_to_article: Dict[str, str] = {
             str(d["id"]): str(d["article_id"])
             for d in draft_rows
@@ -57,7 +68,7 @@ def _build_actor_map_by_article(
         if not article_ids:
             return {}
 
-        # 2) article_id → semantic_clause_fix.id (source_article_id 기준)
+        # 2) article_id → semantic_clause_fix.id 전체 (1개 제한 안 함)
         clause_res = (
             supabase.table("semantic_clause_fix")
             .select("id, source_article_id")
@@ -65,40 +76,60 @@ def _build_actor_map_by_article(
             .execute()
         )
         clause_rows = clause_res.data or []
-        # {article_id: clause_id} — 한 article에 clause 여러 개일 수 있으므로 첫 번째 사용
-        article_to_clause: Dict[str, str] = {}
+        # {article_id: [clause_id, ...]}
+        article_to_clauses: Dict[str, List[str]] = {}
         for c in clause_rows:
             aid = str(c.get("source_article_id") or "")
-            if aid and aid not in article_to_clause:
-                article_to_clause[aid] = str(c["id"])
+            if aid:
+                article_to_clauses.setdefault(aid, []).append(str(c["id"]))
 
-        clause_ids = list(set(article_to_clause.values()))
-        if not clause_ids:
+        all_clause_ids = [
+            cid
+            for clauses in article_to_clauses.values()
+            for cid in clauses
+        ]
+        if not all_clause_ids:
             return {}
 
-        # 3) clause_id → actor_resolution
+        # 3) clause_id → actor_resolution (전체 조회)
         actor_res = (
             supabase.table("semantic_clause_actor_resolution")
             .select("clause_id, actor_group, actor_code, confidence")
-            .in_("clause_id", clause_ids)
+            .in_("clause_id", all_clause_ids)
             .execute()
         )
         # {clause_id: actor_info}
         clause_to_actor: Dict[str, dict] = {
             str(row["clause_id"]): {
-                "actor_group": row.get("actor_group"),
+                "actor_group": row.get("actor_group") or "UNKNOWN",
                 "actor_code": row.get("actor_code"),
                 "confidence": row.get("confidence"),
             }
             for row in (actor_res.data or [])
         }
 
-        # 4) draft_id → actor_info 조합
+        # 4) article_id → 대표 actor (우선순위 기준)
+        # 여러 clause 중 우선순위가 높은 것(좌표 작은 것) 선택
+        article_to_best_actor: Dict[str, dict] = {}
+        for article_id, clause_ids in article_to_clauses.items():
+            best: Optional[dict] = None
+            best_priority = 999
+            for cid in clause_ids:
+                info = clause_to_actor.get(cid)
+                if info:
+                    p = _GROUP_PRIORITY.get(info["actor_group"], 99)
+                    if p < best_priority:
+                        best_priority = p
+                        best = info
+            if best:
+                article_to_best_actor[article_id] = best
+
+        # 5) draft_id → actor_info
         result: Dict[str, dict] = {}
         for draft_id, article_id in draft_to_article.items():
-            clause_id = article_to_clause.get(article_id)
-            if clause_id and clause_id in clause_to_actor:
-                result[draft_id] = clause_to_actor[clause_id]
+            actor = article_to_best_actor.get(article_id)
+            if actor:
+                result[draft_id] = actor
 
         return result
 
@@ -116,7 +147,6 @@ def run_refinery(
     """Track A → 역추적 → Actor Overlay → 중복 제거 → 문장 생성."""
     supabase = get_supabase()
 
-    # 1) Track A CheckResult 로드
     check_results = load_track_a_results(
         supabase,
         facility_id=facility_id,
@@ -124,17 +154,19 @@ def run_refinery(
     )
     check_results = check_results[:limit]
 
-    # 2) 역추적
     traces = run_reverse_check_batch(check_results)
 
-    # 3) Actor Overlay — draft_id 경유
-    draft_ids = [t.full_trace.get("stage_check", {}).get("draft_id") for t in traces]
-    draft_ids = [d for d in draft_ids if d]
-    actor_map = _build_actor_map_by_article(supabase, draft_ids)
+    draft_ids = [
+        t.full_trace.get("stage_check", {}).get("draft_id")
+        for t in traces
+    ]
+    draft_ids_clean = [d for d in draft_ids if d]
+    actor_map = _build_actor_map_by_article(supabase, draft_ids_clean)
 
     authority_count = 0
     fragment_count = 0
     business_count = 0
+    association_count = 0
     unmatched_count = 0
 
     filtered_traces = []
@@ -149,7 +181,9 @@ def run_refinery(
                 continue
         elif ag == "FRAGMENT":
             fragment_count += 1
-        elif ag in ("BUSINESS", "ASSOCIATION"):
+        elif ag == "ASSOCIATION":
+            association_count += 1
+        elif ag == "BUSINESS":
             business_count += 1
         else:
             unmatched_count += 1
@@ -158,7 +192,6 @@ def run_refinery(
             t.full_trace["actor_overlay"] = actor_info
         filtered_traces.append(t)
 
-    # 4) 정제
     pipeline_stages = {
         "track_a_loaded": len(check_results),
         "after_reverse_check": len(traces),
@@ -166,6 +199,7 @@ def run_refinery(
         "actor_authority": authority_count,
         "actor_fragment": fragment_count,
         "actor_business": business_count,
+        "actor_association": association_count,
         "actor_unmatched": unmatched_count,
         "after_actor_filter": len(filtered_traces),
     }
@@ -192,9 +226,12 @@ def get_actor_stats(
     )
     traces = run_reverse_check_batch(check_results)
 
-    draft_ids = [t.full_trace.get("stage_check", {}).get("draft_id") for t in traces]
-    draft_ids = [d for d in draft_ids if d]
-    actor_map = _build_actor_map_by_article(supabase, draft_ids)
+    draft_ids = [
+        t.full_trace.get("stage_check", {}).get("draft_id")
+        for t in traces
+    ]
+    draft_ids_clean = [d for d in draft_ids if d]
+    actor_map = _build_actor_map_by_article(supabase, draft_ids_clean)
 
     stats: Dict[str, int] = {
         "total": len(traces),
@@ -207,10 +244,8 @@ def get_actor_stats(
     for t in traces:
         draft_id = t.full_trace.get("stage_check", {}).get("draft_id")
         ag = actor_map.get(str(draft_id) if draft_id else "", {}).get("actor_group", "UNKNOWN")
-        if ag in stats:
-            stats[ag] += 1
-        else:
-            stats["UNKNOWN"] += 1
+        key = ag if ag in stats else "UNKNOWN"
+        stats[key] += 1
 
     stats["actor_overlay_coverage"] = len(actor_map)
     stats["estimated_clean_after_authority_filter"] = (
