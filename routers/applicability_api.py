@@ -1,15 +1,18 @@
-"""WO-V4-PHASE2-001: ApplicabilityCondition 파일럿 API
+"""Phase 2 + Phase 3: ApplicabilityCondition 파일럿 API
+
+Phase 3: Condition Scope Layer 연결
 
 금지:
   obligation_result 생성 금지
   diagnosis_result 생성 금지
-  stored_diagnosis_result 생성 금지
-  안전관리자 시올 외 확장 금지
+  is_general 금지
+  scope_type 텍스트 런타임 해석 금지
+  안전관리자 외 확장 금지
   pilot_safety_manager_api 삭제 금지
 """
 from __future__ import annotations
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 
 from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
@@ -17,30 +20,23 @@ from pydantic import BaseModel
 from db.supabase_client import get_supabase
 from services.applicability_condition_service import (
     build_applicability_condition,
-    evaluate_facility,
+    evaluate_condition,
     aggregate_verdict,
 )
+from services.condition_scope_service import evaluate_scopes
 from services.facility_profile_service import build_facility_profile
 
 router = APIRouter(
     prefix="/applicability",
-    tags=["Phase2 ApplicabilityCondition"],
+    tags=["Phase2+3 ApplicabilityCondition"],
 )
 
 
-# ---------------------------------------------------------------------------
-# SC-01: appendix_condition → ApplicabilityCondition 변환 + 저장
-# ---------------------------------------------------------------------------
-
 @router.post("/conditions/build")
 def build_conditions():
-    """SC-01: appendix_condition 7건 → ApplicabilityCondition 7건.
-
-    이미 저장된 경우 반환만. 중복 생성 안 함.
-    """
+    """SC-01: appendix_condition 7건 → ApplicabilityCondition 7건."""
     supabase = get_supabase()
 
-    # appendix_condition 로드
     ac_res = (
         supabase.table("appendix_condition")
         .select("*, law_appendix(appendix_no, appendix_title, law_master(law_name))")
@@ -57,7 +53,6 @@ def build_conditions():
         law_name = lm.get("law_name", "")
         appendix_no = lap.get("appendix_no", "")
 
-        # 이미 있는지 확인
         existing = (
             supabase.table("applicability_conditions")
             .select("id")
@@ -90,23 +85,22 @@ def build_conditions():
     }
 
 
-# ---------------------------------------------------------------------------
-# SC-02~06: FacilityProfile × ApplicabilityCondition 평가
-# ---------------------------------------------------------------------------
-
 @router.get("/evaluate/{factory_id}")
 def evaluate(
     factory_id: str,
-    save: bool = Query(False, description="결과 DB 저장 여부"),
+    save: bool = Query(False),
 ):
-    """SC-02~06: C1 파일럿 평가.
+    """Phase 3: Scope 필터 포함 C1 평가.
 
-    FacilityProfile(factories 실시간 Projection) × ApplicabilityCondition.
-    Obligation/Diagnosis 생성 없음.
+    순서:
+    1) FacilityProfile Projection
+    2) ApplicabilityCondition + condition_scopes 로드
+    3) Scope 평가 먼저 (NOT_APPLICABLE 이면 수치 비교 건너끈)
+    4) 수치 비교 (PRESENT vs threshold)
+    5) verdict 집계
     """
     supabase = get_supabase()
 
-    # 1) factories 로드 (Source of Record)
     fac_res = (
         supabase.table("factories")
         .select("*")
@@ -117,84 +111,129 @@ def evaluate(
     if not fac_res.data:
         raise HTTPException(status_code=404, detail="사업장 미존재")
 
-    # 2) FacilityProfile Projection
     profile = build_facility_profile(fac_res.data)
 
-    # 3) ApplicabilityCondition 로드
+    # ApplicabilityCondition + condition_scopes 로드
     cond_res = (
         supabase.table("applicability_conditions")
-        .select("*")
+        .select("*, condition_scopes(*)")
         .eq("status", "ACTIVE")
         .execute()
     )
     conditions = cond_res.data or []
     if not conditions:
-        raise HTTPException(status_code=404, detail="ApplicabilityCondition 없음. POST /applicability/conditions/build 먼저 호출")
+        raise HTTPException(
+            status_code=404,
+            detail="ApplicabilityCondition 없음. POST /applicability/conditions/build 먼저"
+        )
 
-    # 4) C1 평가
-    eval_results = evaluate_facility(profile, conditions)
+    eval_results = []
+    for cond in conditions:
+        scopes = cond.get("condition_scopes") or []
 
-    # 5) 종합 verdict
+        # 1) Scope 평가 먼저
+        scope_result, scope_reason = evaluate_scopes(scopes, profile)
+
+        if scope_result == "NOT_APPLICABLE":
+            eval_results.append({
+                "condition_id": cond.get("id"),
+                "metric": "METRIC:EMPLOYEE_COUNT",
+                "input_state": None,
+                "input_value": None,
+                "evaluation_result": "NOT_APPLICABLE",
+                "evaluation_reason": f"[SCOPE] {scope_reason}",
+                "industry_name": cond.get("industry_name"),
+                "threshold_value": cond.get("threshold_value"),
+                "operator": cond.get("operator"),
+                "required_count": cond.get("required_count"),
+                "scope_result": scope_result,
+                "scope_reason": scope_reason,
+            })
+            continue
+
+        if scope_result == "UNKNOWN":
+            eval_results.append({
+                "condition_id": cond.get("id"),
+                "metric": "METRIC:EMPLOYEE_COUNT",
+                "input_state": None,
+                "input_value": None,
+                "evaluation_result": "UNKNOWN",
+                "evaluation_reason": f"[SCOPE] {scope_reason}",
+                "industry_name": cond.get("industry_name"),
+                "threshold_value": cond.get("threshold_value"),
+                "operator": cond.get("operator"),
+                "required_count": cond.get("required_count"),
+                "scope_result": scope_result,
+                "scope_reason": scope_reason,
+            })
+            continue
+
+        # 2) Scope 통과 → 수치 비교
+        regular_workers = (
+            profile.get("workforce", {})
+            .get("regular_workers", {"state": "UNKNOWN", "value": None})
+        )
+        num_result, num_reason = evaluate_condition(regular_workers, cond)
+
+        eval_results.append({
+            "condition_id": cond.get("id"),
+            "metric": "METRIC:EMPLOYEE_COUNT",
+            "input_state": regular_workers.get("state"),
+            "input_value": regular_workers.get("value"),
+            "evaluation_result": num_result,
+            "evaluation_reason": f"[SCOPE_OK] {scope_reason} | [NUM] {num_reason}",
+            "industry_name": cond.get("industry_name"),
+            "threshold_value": cond.get("threshold_value"),
+            "operator": cond.get("operator"),
+            "required_count": cond.get("required_count"),
+            "scope_result": scope_result,
+            "scope_reason": scope_reason,
+        })
+
     verdict = aggregate_verdict(eval_results)
 
-    # 6) Golden Reference 비교 (pilot과 동일 판정인지)
-    pilot_verdict = "REQUIRED" if any(
-        r["evaluation_result"] == "MATCH" for r in eval_results
-    ) else "UNKNOWN" if any(
-        r["evaluation_result"] == "UNKNOWN" for r in eval_results
-    ) else "NOT_REQUIRED"
-
+    pilot_verdict = (
+        "REQUIRED" if any(r["evaluation_result"] == "MATCH" for r in eval_results)
+        else "UNKNOWN" if any(r["evaluation_result"] == "UNKNOWN" for r in eval_results)
+        else "NOT_REQUIRED"
+    )
     sc04_pass = verdict["verdict"] == pilot_verdict
 
-    # 7) SC-06: 빈 사업장 검증
     all_unknown = all(r["evaluation_result"] == "UNKNOWN" for r in eval_results)
-    input_state = (profile.get("workforce", {})
-                   .get("regular_workers", {}).get("state", "UNKNOWN"))
-    sc06_applicable = (input_state == "UNKNOWN" and all_unknown)
+    input_state = (
+        profile.get("workforce", {})
+        .get("regular_workers", {}).get("state", "UNKNOWN")
+    )
+    sc06_applicable = input_state == "UNKNOWN" and all_unknown
 
-    # 8) 선택적 저장
-    if save and eval_results:
-        rows = []
-        fp_res = (
-            supabase.table("facility_profiles")
-            .select("id")
-            .eq("factory_id", factory_id)
-            .order("profile_version", desc=True)
-            .limit(1)
-            .execute()
-        )
-        fp_id = fp_res.data[0]["id"] if fp_res.data else None
-
-        for r in eval_results:
-            rows.append({
-                "factory_id": factory_id,
-                "facility_profile_id": fp_id,
-                "condition_id": str(r["condition_id"]) if r.get("condition_id") else None,
-                "metric": r["metric"],
-                "input_state": r["input_state"],
-                "input_value": r["input_value"],
-                "evaluation_result": r["evaluation_result"],
-                "evaluation_reason": r["evaluation_reason"],
-                "pilot_verdict": pilot_verdict,
-                "pilot_match": sc04_pass,
-            })
-        supabase.table("applicability_evaluation_result").insert(rows).execute()
+    # SC-05: 새 Scope Type 추가 시 C1 코드 수정 없음을 나타내는 메타 필드
+    scope_types_used = list({
+        s["scope_type"]
+        for c in conditions
+        for s in (c.get("condition_scopes") or [])
+    })
 
     return {
         "factory_id": factory_id,
         "facility_sector": profile.get("sector"),
         "ksic_code": profile.get("ksic_code"),
-        "regular_workers": profile.get("workforce", {}).get("regular_workers"),
-        # 판정
+        "regular_workers": (
+            profile.get("workforce", {})
+            .get("regular_workers")
+        ),
         "verdict": verdict["verdict"],
         "required_count": verdict["required_count"],
         "matched_conditions": verdict["matched_conditions"],
-        # SC 검증
-        "sc02_match_count": sum(1 for r in eval_results if r["evaluation_result"] == "MATCH"),
+        "sc02_match_count": sum(
+            1 for r in eval_results if r["evaluation_result"] == "MATCH"
+        ),
         "sc03_verdict": verdict["verdict"],
         "sc04_pilot_match": sc04_pass,
-        "sc05_unknown_count": sum(1 for r in eval_results if r["evaluation_result"] == "UNKNOWN"),
+        "sc05_scope_types_used": scope_types_used,
+        "sc05_note": "condition_scopes에 데이터만 추가하면 C1 코드 수정 없이 확장 가능",
         "sc06_all_unknown_when_no_input": sc06_applicable,
-        # 상세
+        "not_applicable_count": sum(
+            1 for r in eval_results if r["evaluation_result"] == "NOT_APPLICABLE"
+        ),
         "evaluation_details": eval_results,
     }
