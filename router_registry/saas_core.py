@@ -10,6 +10,8 @@ ROUTERS = [
     {"module": "routers.onboarding"},
     # Phase 1: FacilityProfile (입력 보존·복원·감사)
     {"module": "routers.facility_profile_api"},
-    # Phase 2: ApplicabilityCondition 파일럿 (안전관리자 선임 7건)
+    # Phase 2+3: ApplicabilityCondition + Condition Scope Layer
     {"module": "routers.applicability_api"},
+    # Phase 4: Real Facility Validation (배치 검증)
+    {"module": "routers.validation_api"},
 ]
