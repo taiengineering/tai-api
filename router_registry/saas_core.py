@@ -8,4 +8,6 @@ ROUTERS = [
     # {"module": "routers.file_upload"},  # 모듈 삭제됨 — 필요 시 재생성
     {"module": "routers.notifications"},
     {"module": "routers.onboarding"},
+    # Phase 1: FacilityProfile (입력 보존·복원·감사)
+    {"module": "routers.facility_profile_api"},
 ]
