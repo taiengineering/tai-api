@@ -1,5 +1,10 @@
-# routers/diagnosis_transform.py — v1.0.1 (BE-08)
+# routers/diagnosis_transform.py — v1.0.2 (BE-08)
 # v1.0.1: import 경로 수정 + anonymous_diagnosis.py 호환 함수 추가
+# v1.0.2: (WO-TRANSFORM-COLUMN-FIX-001) factory_diagnosis_results 스키마 불일치 수정
+#   - SELECT에서 실재하지 않는 컬럼 제거: tier / company_name / user_id
+#   - 실재 컬럼 추가: created_by / factory_id
+#   - 권한 체크 user_id → created_by (b2: 소유자 확인, 우회 금지)
+#   - tier/company_name은 _build_transform이 result_data 폴백으로 이미 처리
 # Transform 레이어: result_data JSONB 읽기 전용 → FN-06 표준 응답 변환
 # 원칙: legal_engine.py 미수정, 엔진 직접 호출 금지, result_data 읽기 전용
 
@@ -20,7 +25,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/diagnosis/transform", tags=["BE-08 Transform"])
 
 SCHEMA_VERSION = "v2026.04"
-VERSION = "1.0.1"  # anonymous_diagnosis.py에서 참조
+VERSION = "1.0.2"  # anonymous_diagnosis.py에서 참조
 
 
 # ─────────────────────────────────────────
@@ -375,9 +380,10 @@ def _build_transform(row: dict) -> dict:
     rd: dict = row.get("result_data") or {}
     diag_id = str(row.get("id") or "")
     schema_ver = rd.get("schema_version") or rd.get("version") or "unknown"
-    company_name = row.get("company_name") or rd.get("company_name") or rd.get("factory_name") or "(정보없음)"
+    # tier/company_name은 테이블 컬럼이 아님 → result_data 폴백 (v1.0.2)
+    company_name = rd.get("company_name") or rd.get("factory_name") or "(정보없음)"
     sector = str(row.get("sector") or rd.get("sector") or "BUILDING").upper()
-    tier   = str(row.get("tier") or rd.get("tier") or "FREE").upper()
+    tier   = str(rd.get("tier") or "FREE").upper()
 
     generated_at = ""
     if row.get("created_at"):
@@ -405,12 +411,15 @@ def _build_transform(row: dict) -> dict:
 
 # ─────────────────────────────────────────
 # 공통 DB 조회
+# v1.0.2: SELECT 컬럼을 factory_diagnosis_results 실재 컬럼으로 교정.
+#   실재 컬럼: id, factory_id, sector, result_data, created_at, created_by, is_latest
+#   권한 체크: created_by 기준 (b2, 우회 금지)
 # ─────────────────────────────────────────
 async def _fetch_row_by_id(diagnosis_id: str, user_id: str) -> dict:
     supabase = get_supabase()
     res = (
         supabase.table("factory_diagnosis_results")
-        .select("id, sector, tier, company_name, created_at, result_data, user_id")
+        .select("id, factory_id, sector, created_at, result_data, created_by")
         .eq("id", diagnosis_id)
         .single()
         .execute()
@@ -418,7 +427,8 @@ async def _fetch_row_by_id(diagnosis_id: str, user_id: str) -> dict:
     row = res.data
     if not row:
         raise HTTPException(status_code=404, detail="진단 결과를 찾을 수 없습니다.")
-    if str(row.get("user_id") or "") != str(user_id):
+    # b2: created_by 기준 소유자 확인 (우회 금지)
+    if str(row.get("created_by") or "") != str(user_id):
         raise HTTPException(status_code=403, detail="접근 권한이 없습니다.")
     return row
 
@@ -428,20 +438,21 @@ async def _fetch_latest_row(factory_id: str, sector: Optional[str],
     supabase = get_supabase()
     q = (
         supabase.table("factory_diagnosis_results")
-        .select("id, sector, tier, company_name, created_at, result_data, user_id")
+        .select("id, factory_id, sector, created_at, result_data, created_by")
         .eq("factory_id", factory_id)
         .order("created_at", desc=True)
         .limit(1)
     )
     if sector:
         q = q.eq("sector", sector.upper())
-    if stage:
-        q = q.eq("tier", stage.upper())
+    # stage 파라미터는 tier 컬럼이 없으므로 diagnosis_stage로 매핑하지 않고 무시.
+    # (호환 유지: 인자는 받되 필터하지 않음. tier 컬럼 부재 — v1.0.2)
     res = q.execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="해당 시설의 진단 결과가 없습니다.")
     row = res.data[0]
-    if str(row.get("user_id") or "") != str(user_id):
+    # b2: created_by 기준 소유자 확인 (우회 금지)
+    if str(row.get("created_by") or "") != str(user_id):
         raise HTTPException(status_code=403, detail="접근 권한이 없습니다.")
     return row
 
