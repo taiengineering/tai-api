@@ -1,4 +1,4 @@
-"""Obligation Adapter API — v1.1.0 (WO-USER-VISIBLE-BRIDGE-IMPL-002)
+"""Obligation Adapter API — v1.1.1 (WO-USER-VISIBLE-BRIDGE-IMPL-002)
 
 B안 어댑터 라우터 (HTTP only).
 
@@ -20,6 +20,8 @@ B안 어댑터 라우터 (HTTP only).
   - 라우터는 HTTP만 (변환 로직은 서비스에)
   - 새 판단/법령/threshold 생성 금지
   - 익명 진단 트랙(anonymous_diagnosis_results) 손대지 않음
+
+v1.1.1: schema_version 값을 컬럼 한계(varchar 10)에 맞춰 "v4adapt"로 수정.
 """
 from __future__ import annotations
 
@@ -39,6 +41,9 @@ router = APIRouter(
     prefix="/obligation-adapter",
     tags=["Obligation Adapter (B안)"],
 )
+
+# schema_version 컬럼은 varchar(10). 10자 이하 유지 필수.
+SCHEMA_VERSION = "v4adapt"
 
 
 def _load_conditions_by_id() -> Dict[str, Dict[str, Any]]:
@@ -117,7 +122,7 @@ def persist_obligations(factory_id: str):
         "result_data": result_data,
         "rule_count": adapter_result["obligation_count"],
         "is_latest": True,
-        "schema_version": "v4_adapter_v1",
+        "schema_version": SCHEMA_VERSION,
         "created_at": now_iso,
     }
     ins = supabase.table("factory_diagnosis_results").insert(row).execute()
