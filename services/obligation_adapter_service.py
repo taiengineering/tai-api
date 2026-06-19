@@ -1,4 +1,4 @@
-"""Obligation Adapter Service — v1.0.0 (WO-OBLIGATION-ADAPTER-IMPL-001)
+"""Obligation Adapter Service — v1.1.0 (WO-USER-VISIBLE-BRIDGE-IMPL-002)
 
 B안 어댑터: V4 verdict → result_data.obligations 스키마 변환.
 
@@ -16,6 +16,9 @@ B안 어댑터: V4 verdict → result_data.obligations 스키마 변환.
   3. action_type → category 매핑 (정제레이어 CATEGORY_MAP과 정합)
   4. result_data.obligations 스키마로 변환
 출력: {obligations: [...], obligation_count, source}
+
+v1.1.0: build_result_data() 추가 — factory_diagnosis_results.result_data 조립
+        (Track A 저장 배선용. 기존 함수 불변.)
 
 FastAPI import 없음 (서비스 레이어 규칙).
 """
@@ -64,6 +67,7 @@ def _build_obligation(detail: Dict[str, Any], condition: Dict[str, Any]) -> Dict
         "category": category,
         "title": action_text or condition.get("industry_name") or "의무사항",
         "law_name": law_name,
+        "law_article": appendix_no,
         "rule_type": action_type,
         "risk_level": "MEDIUM",  # V4 미보유 → 정제레이어 폴백과 동일 기본값
         "description": action_text,
@@ -107,4 +111,28 @@ def build_obligations_from_v4(
         "verdict": v4_result.get("verdict"),
         "factory_id": v4_result.get("factory_id"),
         "source": "V4_OBLIGATION_ADAPTER_v1",
+    }
+
+
+def build_result_data(adapter_result: Dict[str, Any], v4_result: Dict[str, Any]) -> Dict[str, Any]:
+    """어댑터 obligations → factory_diagnosis_results.result_data 스키마.
+
+    정제레이어(diagnosis_transform._extract_obligations)가 읽는 키:
+      obligations / key_obligations 우선
+    정제레이어가 읽는 보조 필드: sector / rule_count / risk_level
+
+    이 함수는 어댑터 obligations를 그 스키마로 감싸기만 한다.
+    새 판단/데이터 생성 없음 (obligations는 어댑터가 이미 만든 것).
+    """
+    obligations = adapter_result.get("obligations") or []
+    return {
+        "obligations": obligations,
+        "key_obligations": obligations,  # 정제레이어 폴백 키 호환
+        "sector": v4_result.get("facility_sector") or "INDUSTRIAL",
+        "rule_count": len(obligations),
+        "applicable_count": len(obligations),
+        "risk_level": "MEDIUM",
+        "verdict": adapter_result.get("verdict"),
+        "engine_version": "V4_OBLIGATION_ADAPTER_v1",
+        "source": adapter_result.get("source"),
     }
