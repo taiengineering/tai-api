@@ -133,7 +133,9 @@ def main():
     # 재실행 대비
     cur.execute("SELECT count(*) FROM task_candidate")
     if cur.fetchone()[0] > 0:
-        cur.execute("TRUNCATE task_candidate, task_candidate_relation, task_candidate_issue")
+        # CASCADE: task_candidate를 참조하는 자식(document_requirement_candidate 등)도 함께 비움.
+        # 자식 체인은 후속 배치(run_compliance_package 등)가 재생성하므로 안전.
+        cur.execute("TRUNCATE task_candidate, task_candidate_relation, task_candidate_issue CASCADE")
         conn.commit()
         print("  ⚠️ TRUNCATE 완료")
 
