@@ -19,8 +19,8 @@ VR_FLAG = "VR_CONSTRUCTION_ROUND_001"
 TARGET_COUNT = 5000
 SEED = 42
 
-# 건설 공사 유형 (다양화)
-CONSTRUCTION_TYPES = ["건축", "토목", "산업환경설비", "조경", "전문공사"]
+# 건설 공사 유형 (factories_construction_type_check 허용값만: 건축/토목/공통/기타)
+CONSTRUCTION_TYPES = ["건축", "토목", "공통", "기타"]
 
 # KSIC 건설 업종 코드 (다양화)
 KSIC_CONSTRUCTION = ["F41", "F42", "F41110", "F41210", "F42100", "F42200", "F42300"]
