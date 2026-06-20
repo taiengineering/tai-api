@@ -7,6 +7,14 @@ factories row → FacilityProfile (TriValue + Provenance)
   null → UNKNOWN / 값 있음 → PRESENT
   factories 데이터 수정 금지
   Check Engine / Track A / Track B 연결 금지
+
+확장 (WO-FACILITYPROFILE-EXPANSION-001):
+  사용자 입력 계약 전체를 FacilityProfile 계약으로 정합.
+  신규 그룹: facility_physical / facility_hazard / construction /
+            process(일반) / equipment / construction_process / construction_work.
+  규칙: 수집 → 전달만. 값 변환 금지. 판정 로직 추가 금지. 조건 추가 금지.
+  일반 공정(process.*)과 건설 공정(construction_process.*)은 분리.
+  일반 작업(task)과 건설 작업(construction_work.*)은 분리.
 """
 from __future__ import annotations
 
@@ -49,6 +57,8 @@ def build_facility_profile(row: dict) -> Dict[str, Any]:
 
     이 함수는 factories를 수정하지 않는다.
     반환된 dict는 profile_snapshot으로 저장된다.
+
+    수집 → 전달만 수행. 값 변환/판정/조건 추가 없음.
     """
     # ---- 섹터 결정 ----
     sector = row.get("sector")
@@ -57,7 +67,7 @@ def build_facility_profile(row: dict) -> Dict[str, Any]:
         sector = "INDUSTRIAL"  # 기본값
         sector_provenance = "DEFAULT"
 
-    # ---- 필드별 TriValue ----
+    # ---- [기존] 필드별 TriValue (11차원 유지) ----
     workforce = {
         "regular_workers":     _tri(row.get("employee_count")),
         "subcontract_workers": _tri(row.get("subcontractor_worker_count")),
@@ -72,6 +82,80 @@ def build_facility_profile(row: dict) -> Dict[str, Any]:
         "construction_amount": _tri(row.get("construction_amount")),
         "electrical_kw":       _tri(row.get("electrical_capacity_kw")),
         "gas_capacity":        _gas_capacity(row),
+    }
+
+    # ---- [신규] 시설 물리속성 ----
+    facility_physical = {
+        "boiler_capacity":   _tri(row.get("boiler_capacity")),
+        "elevator_count":    _tri(row.get("elevator_count")),
+        "annual_energy_toe": _tri(row.get("annual_energy_toe")),
+        "building_grade":    _tri(row.get("building_grade")),
+        "transformer_kva":   _tri(row.get("transformer_kva")),
+    }
+
+    # ---- [신규] 시설 위험속성 ----
+    facility_hazard = {
+        "has_hazardous_material": _tri(row.get("has_hazardous_material")),
+        "has_chemical_material":  _tri(row.get("has_chemical_material")),
+        "has_high_pressure_gas":  _tri(row.get("has_high_pressure_gas")),
+        "has_safety_manager":     _tri(row.get("has_safety_manager")),
+        "is_factory_registered":  _tri(row.get("is_factory_registered")),
+        "is_public_facility":     _tri(row.get("is_public_facility")),
+    }
+
+    # ---- [신규] 건설 속성 ----
+    construction = {
+        "construction_type":          _tri(row.get("construction_type")),
+        "subcontractor_company_count": _tri(row.get("subcontractor_company_count")),
+        "has_tower_crane":            _tri(row.get("has_tower_crane")),
+        "has_confined_space":         _tri(row.get("has_confined_space")),
+        "has_asbestos":               _tri(row.get("has_asbestos")),
+        "has_blasting":               _tri(row.get("has_blasting")),
+        "has_diving_work":            _tri(row.get("has_diving_work")),
+    }
+
+    # ---- [신규] 공정 (일반) ----
+    process = {
+        "process_lv1": _tri(row.get("process_lv1")),
+        "process_lv2": _tri(row.get("process_lv2")),
+        "process_lv3": _tri(row.get("process_lv3")),
+        "process_lv4": _tri(row.get("process_lv4")),
+    }
+
+    # ---- [신규] 설비 ----
+    equipment = {
+        "equipment_count":            _tri(row.get("equipment_count")),
+        "equipment_names":            _tri(row.get("equipment_names")),
+        "equipment_install_years":    _tri(row.get("equipment_install_years")),
+        "equipment_locations":        _tri(row.get("equipment_locations")),
+        "equipment_legal_targets":    _tri(row.get("equipment_legal_targets")),
+        "equipment_operation_status": _tri(row.get("equipment_operation_status")),
+    }
+
+    # ---- [신규] 건설 공정 (일반 process와 분리, 표준코드 체계 별도) ----
+    construction_process = {
+        "construction_process_code":             _tri(row.get("construction_process_code")),
+        "construction_process_name":             _tri(row.get("construction_process_name")),
+        "construction_process_standard_version": _tri(row.get("construction_process_standard_version")),
+    }
+
+    # ---- [신규] 건설 작업 (일반 task와 분리, 표준코드 체계 별도) ----
+    construction_work = {
+        "construction_work_code":             _tri(row.get("construction_work_code")),
+        "construction_work_name":             _tri(row.get("construction_work_name")),
+        "construction_work_standard_version": _tri(row.get("construction_work_standard_version")),
+        "construction_work_amount":           _tri(row.get("construction_work_amount")),
+        "construction_work_duration_days":    _tri(row.get("construction_work_duration_days")),
+        "construction_work_worker_count":     _tri(row.get("construction_work_worker_count")),
+        "has_excavation_work":   _tri(row.get("has_excavation_work")),
+        "has_high_place_work":   _tri(row.get("has_high_place_work")),
+        "has_lifting_work":      _tri(row.get("has_lifting_work")),
+        "has_demolition_work":   _tri(row.get("has_demolition_work")),
+        "has_scaffold_work":     _tri(row.get("has_scaffold_work")),
+        "has_formwork_work":     _tri(row.get("has_formwork_work")),
+        "has_welding_work":      _tri(row.get("has_welding_work")),
+        "has_electrical_work":   _tri(row.get("has_electrical_work")),
+        "has_hot_work":          _tri(row.get("has_hot_work")),
     }
 
     # ---- provenance 요약 ----
@@ -93,6 +177,13 @@ def build_facility_profile(row: dict) -> Dict[str, Any]:
         **{f"workforce.{k}": v for k, v in workforce.items()},
         **{f"building.{k}": v for k, v in building.items()},
         **{f"metrics.{k}": v for k, v in metrics.items()},
+        **{f"facility_physical.{k}": v for k, v in facility_physical.items()},
+        **{f"facility_hazard.{k}": v for k, v in facility_hazard.items()},
+        **{f"construction.{k}": v for k, v in construction.items()},
+        **{f"process.{k}": v for k, v in process.items()},
+        **{f"equipment.{k}": v for k, v in equipment.items()},
+        **{f"construction_process.{k}": v for k, v in construction_process.items()},
+        **{f"construction_work.{k}": v for k, v in construction_work.items()},
     }
     for field_path, tri in all_tri_fields.items():
         if tri["state"] == "PRESENT":
@@ -112,18 +203,31 @@ def build_facility_profile(row: dict) -> Dict[str, Any]:
         "workforce": workforce,
         "building": building,
         "metrics": metrics,
+        "facility_physical": facility_physical,
+        "facility_hazard": facility_hazard,
+        "construction": construction,
+        "process": process,
+        "equipment": equipment,
+        "construction_process": construction_process,
+        "construction_work": construction_work,
         "provenance": {
             "input_fields": input_fields,
             "inferred_fields": inferred_fields,
             "default_fields": default_fields,
         },
-        "profile_version": 1,
+        "profile_version": 2,
     }
     return profile
 
 
 def profile_to_db_row(profile: dict) -> dict:
-    """FacilityProfile dict → facility_profiles INSERT 행."""
+    """FacilityProfile dict → facility_profiles INSERT 행.
+
+    기존 11차원 컬럼은 그대로 유지 (하위호환).
+    신규 확장 필드는 profile_snapshot(JSON 전체)에 포함되어 보존된다.
+    (신규 필드를 평탄화 컬럼으로 추가하지 않음 = DB 스키마 변경 회피,
+     수집→전달만 수행. 평탄화가 필요하면 별도 WO에서 컬럼 추가.)
+    """
 
     def _state(tri): return tri["state"]
     def _value(tri): return tri["value"]
@@ -180,5 +284,5 @@ def profile_to_db_row(profile: dict) -> dict:
         "inferred_fields":                  pv["inferred_fields"],
         "default_fields":                   pv["default_fields"],
 
-        "profile_snapshot":                 profile,  # JSON 전체
+        "profile_snapshot":                 profile,  # JSON 전체 (신규 필드 포함)
     }
