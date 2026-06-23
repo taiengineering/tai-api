@@ -14,5 +14,6 @@ ROUTERS = [
     {"module": "routers.diagnosis_runtime_projection"},
     {"module": "routers.diagnosis_factory_test"},
     {"module": "routers.obligation_adapter"},
+    {"module": "routers.trigger_diagnosis"},
     {"module": "routers.saas_setup"},
 ]
