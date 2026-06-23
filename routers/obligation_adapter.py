@@ -1,4 +1,4 @@
-"""Obligation Adapter API — v1.1.1 (WO-USER-VISIBLE-BRIDGE-IMPL-002)
+"""Obligation Adapter API — v1.2.0 (CURSOR-TASK-002)
 
 B안 어댑터 라우터 (HTTP only).
 
@@ -14,6 +14,13 @@ B안 어댑터 라우터 (HTTP only).
     4. build_result_data() → factory_diagnosis_results 저장 (is_latest=true)
     → 이후 정제레이어 GET /diagnosis/transform/latest/{factory_id}로 가시화
 
+  POST /obligation-adapter/run-trigger/{factory_id}   (v1.2.0, CURSOR-TASK-002)
+    1. Trigger Code Set 생성 (trigger_generator)
+    2. semantic_clause 후보 생성 (trigger_obligation_generator)
+    3. obligations 변환 (build_obligations_from_trigger_candidates)
+    4. 요약 JSON 반환
+    → V4 / evaluate_draft_for_facility 무수정
+
 원칙:
   - V4 불변 (evaluate 재사용, 수정 안 함)
   - 정제레이어 불변
@@ -21,7 +28,9 @@ B안 어댑터 라우터 (HTTP only).
   - 새 판단/법령/threshold 생성 금지
   - 익명 진단 트랙(anonymous_diagnosis_results) 손대지 않음
 
-v1.1.1: schema_version 값을 컬럼 한계(varchar 10)에 맞춰 "v4adapt"로 수정.
+v1.1.1: schema_version 값을 컨럼 한계(varchar 10)에 맞춰 "v4adapt"로 수정.
+v1.2.0: POST /run-trigger/{factory_id} 추가 (CURSOR-TASK-002).
+        V4 / Check Engine 무수정. 트리거 기반 후보 생성 연결.
 """
 from __future__ import annotations
 
@@ -33,16 +42,18 @@ from fastapi import APIRouter, HTTPException
 from db.supabase_client import get_supabase
 from routers.applicability_api import evaluate as v4_evaluate
 from services.obligation_adapter_service import (
+    build_obligations_from_trigger_candidates,
     build_obligations_from_v4,
     build_result_data,
 )
+from services.trigger_generator import generate_trigger_codes
+from services.trigger_obligation_generator import generate_obligation_candidates
 
 router = APIRouter(
     prefix="/obligation-adapter",
     tags=["Obligation Adapter (B안)"],
 )
 
-# schema_version 컬럼은 varchar(10). 10자 이하 유지 필수.
 SCHEMA_VERSION = "v4adapt"
 
 
@@ -104,21 +115,15 @@ def persist_obligations(factory_id: str):
     sector = v4_result.get("facility_sector") or "INDUSTRIAL"
 
     supabase = get_supabase()
-
-    # 기존 is_latest=true 해제 (같은 factory_id + sector)
     supabase.table("factory_diagnosis_results").update(
         {"is_latest": False}
     ).eq("factory_id", factory_id).eq("sector", sector).eq("is_latest", True).execute()
 
-    # 신규 저장
     row = {
         "factory_id": factory_id,
         "sector": sector,
         "diagnosis_stage": 2,
-        "input_data": {
-            "factory_id": factory_id,
-            "source": "V4_OBLIGATION_ADAPTER",
-        },
+        "input_data": {"factory_id": factory_id, "source": "V4_OBLIGATION_ADAPTER"},
         "result_data": result_data,
         "rule_count": adapter_result["obligation_count"],
         "is_latest": True,
@@ -139,4 +144,45 @@ def persist_obligations(factory_id: str):
         "is_latest": True,
         "source": adapter_result["source"],
         "next": f"GET /diagnosis/transform/latest/{factory_id}",
+    }
+
+
+@router.post("/run-trigger/{factory_id}")
+def run_trigger_based_obligation_adapter(factory_id: str):
+    """Trigger 기반 의무후보 생성 → obligations 변환 (v1.2.0).
+
+    V4 / evaluate_draft_for_facility 무수정.
+    Trigger Generator → semantic_clause 후보 → obligation_adapter_service 연결.
+
+    Returns:
+      {
+        factory_id, trigger_count, candidate_count, matched_count,
+        trigger_codes, obligations, status
+      }
+    """
+    supabase = get_supabase()
+
+    # Step 1: Trigger Code Set 생성
+    try:
+        trigger_codes = generate_trigger_codes(factory_id, supabase)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    # Step 2: semantic_clause 의무후보 생성
+    candidates = generate_obligation_candidates(trigger_codes, supabase)
+
+    # Step 3: obligations 변환 (기존 어댑터 서비스 재사용)
+    adapter_result = build_obligations_from_trigger_candidates(
+        candidates, factory_id, trigger_codes
+    )
+
+    return {
+        "factory_id": factory_id,
+        "trigger_count": len(trigger_codes),
+        "candidate_count": len(candidates),
+        "matched_count": adapter_result["obligation_count"],
+        "trigger_codes": trigger_codes,
+        "obligations": adapter_result["obligations"],
+        "status": "ok",
+        "source": adapter_result["source"],
     }

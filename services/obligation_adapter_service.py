@@ -1,4 +1,4 @@
-"""Obligation Adapter Service — v1.1.0 (WO-USER-VISIBLE-BRIDGE-IMPL-002)
+"""Obligation Adapter Service — v1.2.0 (CURSOR-TASK-002)
 
 B안 어댑터: V4 verdict → result_data.obligations 스키마 변환.
 
@@ -19,8 +19,9 @@ B안 어댑터: V4 verdict → result_data.obligations 스키마 변환.
 
 v1.1.0: build_result_data() 추가 — factory_diagnosis_results.result_data 조립
         (Track A 저장 배선용. 기존 함수 불변.)
-
-FastAPI import 없음 (서비스 레이어 규칙).
+v1.2.0: build_obligations_from_trigger_candidates() 추가 (CURSOR-TASK-002)
+        Trigger 기반 semantic_clause 후보 → result_data.obligations 변환.
+        기존 V4 흐름 무수정. FastAPI import 없음.
 """
 from __future__ import annotations
 
@@ -38,10 +39,33 @@ ACTION_TYPE_TO_CATEGORY = {
     "INSTALLATION": "서류",      # 설비 설치 (점검 대상화 전까지 서류)
 }
 
+# content_type → rule_type 매핑 (Trigger 기반 후보용)
+_CONTENT_TYPE_TO_RULE_TYPE = {
+    "OBLIGATION": "OBLIGATION",
+    "PROHIBITION": "PROHIBITION",
+}
+
+# Trigger 타입 → category 추정 (action_type 미제공 시 폴백)
+_TRIGGER_TO_CATEGORY = {
+    "WORK": "점검",
+    "EQUIPMENT": "점검",
+    "EQUIPMENT_ACT": "점검",
+    "HAZARD_FACTOR": "점검",
+    "THRESHOLD": "선임",
+    "BUSINESS": "서류",
+    "INDUSTRY": "서류",
+}
+
 
 def _category_from_action_type(action_type: str) -> str:
-    """action_type → 정제레이어 category. 미매핑은 '서류' 기본."""
+    """액션타입 → 정제레이어 category. 미매핑은 '서류' 기본."""
     return ACTION_TYPE_TO_CATEGORY.get((action_type or "").upper(), "서류")
+
+
+def _category_from_trigger(trigger_code: str) -> str:
+    """trigger_code 타입 �리 → category. 예: WORK:CONFINED_SPACE → '점검'."""
+    family = trigger_code.split(":", 1)[0] if ":" in trigger_code else ""
+    return _TRIGGER_TO_CATEGORY.get(family, "서류")
 
 
 def _build_obligation(detail: Dict[str, Any], condition: Dict[str, Any]) -> Dict[str, Any]:
@@ -58,8 +82,6 @@ def _build_obligation(detail: Dict[str, Any], condition: Dict[str, Any]) -> Dict
     # 근거(evidence) = 법령명 + 조문/별표
     legal_basis = " ".join(p for p in (law_name, appendix_no) if p)
 
-    # title: APPOINTMENT/DESIGNATION 류는 action_text가 길 수 있어
-    #        action_type 기반 짧은 제목을 우선, action_text는 description으로
     category = _category_from_action_type(action_type)
 
     return {
@@ -69,10 +91,44 @@ def _build_obligation(detail: Dict[str, Any], condition: Dict[str, Any]) -> Dict
         "law_name": law_name,
         "law_article": appendix_no,
         "rule_type": action_type,
-        "risk_level": "MEDIUM",  # V4 미보유 → 정제레이어 폴백과 동일 기본값
+        "risk_level": "MEDIUM",
         "description": action_text,
         "evidence": [legal_basis] if legal_basis else [],
         "required_count": condition.get("required_count"),
+        "auto_schedulable": False,
+    }
+
+
+def _build_obligation_from_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """Trigger 기반 의무후보 1건 → obligation dict.
+
+    semantic_clause 후보를 정제레이어 호환 포맷으로 변환.
+    새 판단 없음. candidate에 있는 데이터만 사용.
+    """
+    trigger_code = candidate.get("trigger_code") or ""
+    action_text = str(candidate.get("action_text") or "").strip()
+    condition_text = str(candidate.get("condition_text") or "").strip()
+    category = _category_from_trigger(trigger_code)
+
+    # 제목: action_text 앞 50자
+    title = action_text[:50] if action_text else "의무사항"
+
+    return {
+        "id": candidate.get("clause_id") or candidate.get("source_article_id") or "",
+        "category": category,
+        "title": title,
+        "law_name": "",           # semantic_clause에 법령명 없음 → 빈 문자열
+        "law_article": "",        # 이후 JOIN으로 보강 가능
+        "rule_type": _CONTENT_TYPE_TO_RULE_TYPE.get(
+            candidate.get("content_type") or "", "OBLIGATION"
+        ),
+        "risk_level": "MEDIUM",
+        "description": action_text,
+        "condition": condition_text or None,
+        "trigger_code": trigger_code,
+        "confidence": candidate.get("confidence") or "MEDIUM",
+        "evidence": [],
+        "required_count": None,
         "auto_schedulable": False,
     }
 
@@ -101,7 +157,6 @@ def build_obligations_from_v4(
         cond_id = str(detail.get("condition_id") or "")
         condition = conditions_by_id.get(cond_id)
         if not condition:
-            # condition 레코드 없으면 변환 불가 → 건너뜀 (추정 금지)
             continue
         obligations.append(_build_obligation(detail, condition))
 
@@ -111,6 +166,36 @@ def build_obligations_from_v4(
         "verdict": v4_result.get("verdict"),
         "factory_id": v4_result.get("factory_id"),
         "source": "V4_OBLIGATION_ADAPTER_v1",
+    }
+
+
+def build_obligations_from_trigger_candidates(
+    candidates: List[Dict[str, Any]],
+    factory_id: str,
+    trigger_codes: List[str],
+) -> Dict[str, Any]:
+    """Trigger 기반 의무후보 → result_data.obligations 스키마 (v1.2.0).
+
+    Args:
+      candidates: trigger_obligation_generator.generate_obligation_candidates() 결과
+      factory_id: 대상 사업장 ID
+      trigger_codes: 생성된 Trigger Code Set
+
+    Returns:
+      build_obligations_from_v4()와 동일한 스키마.
+      다운스트림 정제레이어가 그대로 소비 가능.
+
+    새 판단 없음. candidates에 있는 데이터만 사용.
+    """
+    obligations = [_build_obligation_from_candidate(c) for c in candidates]
+    verdict = "APPLICABLE" if obligations else "NOT_APPLICABLE"
+    return {
+        "obligations": obligations,
+        "obligation_count": len(obligations),
+        "verdict": verdict,
+        "factory_id": factory_id,
+        "trigger_codes": trigger_codes,
+        "source": "TRIGGER_BASED_ADAPTER_v1",
     }
 
 
@@ -127,7 +212,7 @@ def build_result_data(adapter_result: Dict[str, Any], v4_result: Dict[str, Any])
     obligations = adapter_result.get("obligations") or []
     return {
         "obligations": obligations,
-        "key_obligations": obligations,  # 정제레이어 폴백 키 호환
+        "key_obligations": obligations,
         "sector": v4_result.get("facility_sector") or "INDUSTRIAL",
         "rule_count": len(obligations),
         "applicable_count": len(obligations),
