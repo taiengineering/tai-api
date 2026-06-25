@@ -5,6 +5,7 @@ ROUTERS = [
     {"module": "routers.diagnosis_integrated"},
     {"module": "routers.diagnosis_autofill"},
     {"module": "routers.diagnosis_fields"},
+    {"module": "routers.exists_input_api"},
     {"module": "routers.diagnosis_report"},
     {"module": "routers.diagnosis_proposal"},
     {"module": "routers.diagnosis_roi"},
