@@ -28,12 +28,15 @@ B안 어댑터 라우터 (HTTP only).
   - 새 판단/법령/threshold 생성 금지
   - 익명 진단 트랙(anonymous_diagnosis_results) 손대지 않음
 
-v1.1.1: schema_version 값을 컨럼 한계(varchar 10)에 맞춰 "v4adapt"로 수정.
+v1.1.1: schema_version 값을 컬럼 한계(varchar 10)에 맞춰 "v4adapt"로 수정.
 v1.2.0: POST /run-trigger/{factory_id} 추가 (CURSOR-TASK-002).
         V4 / Check Engine 무수정. 트리거 기반 후보 생성 연결.
+v1.3.0: POST /from-instances/{factory_id} 추가 (CURSOR-TASK-001 Glue).
+        obligation_instance → candidate → 기존 Adapter.
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -41,6 +44,9 @@ from fastapi import APIRouter, HTTPException
 
 from db.supabase_client import get_supabase
 from routers.applicability_api import evaluate as v4_evaluate
+from services.obligation_instance_adapter import (
+    obligation_instances_to_trigger_candidates,
+)
 from services.obligation_adapter_service import (
     build_obligations_from_trigger_candidates,
     build_obligations_from_v4,
@@ -185,4 +191,41 @@ def run_trigger_based_obligation_adapter(factory_id: str):
         "obligations": adapter_result["obligations"],
         "status": "ok",
         "source": adapter_result["source"],
+    }
+
+
+@router.post("/from-instances/{factory_id}")
+def adapt_from_obligation_instances(factory_id: str):
+    """obligation_instance(Applicability Engine) → 45CM obligations.
+
+    Glue: obligation_instance → candidate → 기존 Adapter.
+    Check Engine / 정제레이어 무수정.
+    """
+    t0 = time.perf_counter()
+    supabase = get_supabase()
+
+    t_fetch = time.perf_counter()
+    candidates = obligation_instances_to_trigger_candidates(factory_id, supabase)
+    fetch_ms = int((time.perf_counter() - t_fetch) * 1000)
+
+    t_adapt = time.perf_counter()
+    adapter_result = build_obligations_from_trigger_candidates(
+        candidates, factory_id, trigger_codes=[]
+    )
+    adapt_ms = int((time.perf_counter() - t_adapt) * 1000)
+    total_ms = int((time.perf_counter() - t0) * 1000)
+
+    return {
+        "status": "ok",
+        "factory_id": factory_id,
+        "candidate_count": len(candidates),
+        "obligation_count": adapter_result["obligation_count"],
+        "verdict": adapter_result["verdict"],
+        "obligations": adapter_result["obligations"],
+        "source": adapter_result["source"],
+        "trace": {
+            "fetch_rows_ms": fetch_ms,
+            "adapter_ms": adapt_ms,
+            "total_ms": total_ms,
+        },
     }
