@@ -1,4 +1,4 @@
-"""Obligation Adapter API — v1.2.0 (CURSOR-TASK-002)
+"""Obligation Adapter API — v1.3.1 (WO-OPERATIONAL-INTEGRATION-001)
 
 B안 어댑터 라우터 (HTTP only).
 
@@ -21,6 +21,10 @@ B안 어댑터 라우터 (HTTP only).
     4. 요약 JSON 반환
     → V4 / evaluate_draft_for_facility 무수정
 
+  POST /obligation-adapter/from-instances/{factory_id}   (v1.3.0 Glue, v1.3.1 persist 옵션)
+    obligation_instance → candidate → 기존 Adapter.
+    persist=true 시 기존 운영 Persist(_persist_result_data) 로 factory_diagnosis_results 저장.
+
 원칙:
   - V4 불변 (evaluate 재사용, 수정 안 함)
   - 정제레이어 불변
@@ -28,17 +32,18 @@ B안 어댑터 라우터 (HTTP only).
   - 새 판단/법령/threshold 생성 금지
   - 익명 진단 트랙(anonymous_diagnosis_results) 손대지 않음
 
-v1.1.1: schema_version 값을 컬럼 한계(varchar 10)에 맞춰 "v4adapt"로 수정.
+v1.1.1: schema_version 값을 컴럼 한계(varchar 10)에 맞춰 "v4adapt"로 수정.
 v1.2.0: POST /run-trigger/{factory_id} 추가 (CURSOR-TASK-002).
-        V4 / Check Engine 무수정. 트리거 기반 후보 생성 연결.
 v1.3.0: POST /from-instances/{factory_id} 추가 (CURSOR-TASK-001 Glue).
-        obligation_instance → candidate → 기존 Adapter.
+v1.3.1: /from-instances에 persist 옵션 추가 (WO-OPERATIONAL-INTEGRATION-001).
+        새 Persist/Service/Adapter 없음 — _persist_result_data로 기존 저장 로직 재사용.
+        기본 persist=false → 기존 동작 불변.
 """
 from __future__ import annotations
 
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -84,6 +89,61 @@ def _adapt(factory_id: str) -> Dict[str, Any]:
     return {"v4_result": v4_result, "adapter_result": adapter_result}
 
 
+def _factory_sector(factory_id: str) -> str:
+    """factories.sector 조회. 없으면 INDUSTRIAL 폴백.
+
+    from-instances persist에는 v4_result가 없으므로 sector를 여기서 공급.
+    """
+    try:
+        supabase = get_supabase()
+        res = (
+            supabase.table("factories")
+            .select("sector")
+            .eq("id", factory_id)
+            .limit(1)
+            .execute()
+        )
+        if res.data:
+            return str(res.data[0].get("sector") or "INDUSTRIAL").upper()
+    except Exception:
+        pass
+    return "INDUSTRIAL"
+
+
+def _persist_result_data(
+    factory_id: str,
+    sector: str,
+    result_data: Dict[str, Any],
+    obligation_count: int,
+    source: str,
+) -> str:
+    """기존 운영 Persist 쓰기 로직 (factory_diagnosis_results 저장 + is_latest 토글).
+
+    /persist 와 /from-instances(persist=true)가 공유. 새 저장 로직 아니라 기존 배선 추출.
+    이전 동작(/persist v1.1.0)과 동일한 컴럼/토글.
+    """
+    supabase = get_supabase()
+    supabase.table("factory_diagnosis_results").update(
+        {"is_latest": False}
+    ).eq("factory_id", factory_id).eq("sector", sector).eq("is_latest", True).execute()
+
+    row = {
+        "factory_id": factory_id,
+        "sector": sector,
+        "diagnosis_stage": 2,
+        "input_data": {"factory_id": factory_id, "source": source},
+        "result_data": result_data,
+        "rule_count": obligation_count,
+        "is_latest": True,
+        "schema_version": SCHEMA_VERSION,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    ins = supabase.table("factory_diagnosis_results").insert(row).execute()
+    if not ins.data:
+        raise HTTPException(status_code=500, detail="factory_diagnosis_results 저장 실패")
+    return str(ins.data[0].get("id"))
+
+
 @router.get("/{factory_id}")
 def adapt_obligations(factory_id: str):
     """V4 verdict → result_data.obligations 변환 (조회 전용)."""
@@ -117,34 +177,15 @@ def persist_obligations(factory_id: str):
         )
 
     result_data = build_result_data(adapter_result, v4_result)
-    now_iso = datetime.now(timezone.utc).isoformat()
     sector = v4_result.get("facility_sector") or "INDUSTRIAL"
-
-    supabase = get_supabase()
-    supabase.table("factory_diagnosis_results").update(
-        {"is_latest": False}
-    ).eq("factory_id", factory_id).eq("sector", sector).eq("is_latest", True).execute()
-
-    row = {
-        "factory_id": factory_id,
-        "sector": sector,
-        "diagnosis_stage": 2,
-        "input_data": {"factory_id": factory_id, "source": "V4_OBLIGATION_ADAPTER"},
-        "result_data": result_data,
-        "rule_count": adapter_result["obligation_count"],
-        "is_latest": True,
-        "schema_version": SCHEMA_VERSION,
-        "created_at": now_iso,
-    }
-    ins = supabase.table("factory_diagnosis_results").insert(row).execute()
-    if not ins.data:
-        raise HTTPException(status_code=500, detail="factory_diagnosis_results 저장 실패")
-
-    saved = ins.data[0]
+    diagnosis_id = _persist_result_data(
+        factory_id, sector, result_data,
+        adapter_result["obligation_count"], "V4_OBLIGATION_ADAPTER",
+    )
     return {
         "status": "success",
         "factory_id": factory_id,
-        "diagnosis_id": str(saved.get("id")),
+        "diagnosis_id": diagnosis_id,
         "verdict": adapter_result["verdict"],
         "obligation_count": adapter_result["obligation_count"],
         "is_latest": True,
@@ -195,11 +236,13 @@ def run_trigger_based_obligation_adapter(factory_id: str):
 
 
 @router.post("/from-instances/{factory_id}")
-def adapt_from_obligation_instances(factory_id: str):
+def adapt_from_obligation_instances(factory_id: str, persist: bool = False):
     """obligation_instance(Applicability Engine) → 45CM obligations.
 
     Glue: obligation_instance → candidate → 기존 Adapter.
-    Check Engine / 정제레이어 무수정.
+    persist=true 일 때 기존 운영 Persist(_persist_result_data)로
+    factory_diagnosis_results 저장 → 이후 GET /diagnosis/transform/latest/{factory_id}로 가시화.
+    Check Engine / 정제레이어 / 기존 Persist 로직 무수정.
     """
     t0 = time.perf_counter()
     supabase = get_supabase()
@@ -213,6 +256,16 @@ def adapt_from_obligation_instances(factory_id: str):
         candidates, factory_id, trigger_codes=[]
     )
     adapt_ms = int((time.perf_counter() - t_adapt) * 1000)
+
+    diagnosis_id: Optional[str] = None
+    if persist and adapter_result["obligation_count"] > 0:
+        sector = _factory_sector(factory_id)
+        result_data = build_result_data(adapter_result, {"facility_sector": sector})
+        diagnosis_id = _persist_result_data(
+            factory_id, sector, result_data,
+            adapter_result["obligation_count"], "FROM_INSTANCES_OBLIGATION_INSTANCE",
+        )
+
     total_ms = int((time.perf_counter() - t0) * 1000)
 
     return {
@@ -223,6 +276,8 @@ def adapt_from_obligation_instances(factory_id: str):
         "verdict": adapter_result["verdict"],
         "obligations": adapter_result["obligations"],
         "source": adapter_result["source"],
+        "persisted": diagnosis_id is not None,
+        "diagnosis_id": diagnosis_id,
         "trace": {
             "fetch_rows_ms": fetch_ms,
             "adapter_ms": adapt_ms,
