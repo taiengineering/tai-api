@@ -56,6 +56,7 @@ class ObligationModel(BaseModel):
     evidence: list[str]
     action_url: Optional[str] = None
     auto_schedulable: bool = False
+    trigger_sources: list[str] = []   # WO-REFINEMENT-DEDUP-001 (병합된 trigger 보존)
 
 class WarningModel(BaseModel):
     level: str
@@ -179,12 +180,48 @@ def _obligation_from_item(item: dict, *, group_category: str = "") -> dict:
         "evidence": evidence,
         "action_url": item.get("action_url"),
         "auto_schedulable": bool(item.get("auto_schedulable") or item.get("schedulable") or False),
+        # --- WO-REFINEMENT-DEDUP-001 (병합 키/trigger 보존용, 추가적) ---
+        "source_clause_id": str(item.get("id") or item.get("rule_id") or ""),
+        "law_article": str(item.get("law_article") or "").strip(),
+        "trigger_sources": (
+            item.get("trigger_sources")
+            or ([item["trigger_code"]] if item.get("trigger_code") else [])
+        ),
     }
 
 
 def _is_obligation_wrapper(obj: dict) -> bool:
     items = obj.get("items")
     return isinstance(items, list) and bool(items)
+
+
+def _merge_by_clause_law(obligations: list[dict]) -> list[dict]:
+    """출력 직전 중복 병합 (WO-REFINEMENT-DEDUP-001).
+
+    동일 (source_clause_id, law_name, law_article) → 1건으로 표시.
+    병합 대상은 trigger 정보뿐 — trigger_sources 배열로 union.
+    verdict/reason/description/category/title/law_name/law_article 불변(첫 항목 보존).
+    raw(result_data)는 건드리지 않음 — 인메모리 transform 결과에만 적용.
+    """
+    merged: list[dict] = []
+    index: dict[tuple, dict] = {}
+    for o in obligations:
+        key = (
+            str(o.get("source_clause_id") or o.get("id") or ""),
+            str(o.get("law_name") or ""),
+            str(o.get("law_article") or ""),
+        )
+        srcs = o.get("trigger_sources") or []
+        existing = index.get(key)
+        if existing is None:
+            o["trigger_sources"] = list(dict.fromkeys(srcs))  # 중복제거·순서보존
+            index[key] = o
+            merged.append(o)
+        else:
+            for s in srcs:                                    # trigger만 union
+                if s not in existing["trigger_sources"]:
+                    existing["trigger_sources"].append(s)
+    return merged
 
 
 def _extract_obligations(rd: dict) -> list[dict]:
@@ -239,6 +276,7 @@ def _extract_obligations(rd: dict) -> list[dict]:
         result.append(_obligation_from_item(obj))
 
     result.sort(key=lambda o: RISK_ORDER.get(o.get("risk_level", ""), 0), reverse=True)
+    result = _merge_by_clause_law(result)   # WO-REFINEMENT-DEDUP-001: 출력 직전 병합 (171→169)
     return result
 
 
