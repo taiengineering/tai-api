@@ -5,6 +5,11 @@
   - FastAPI import 없음 (순수 서비스).
   - obligation_adapter_service 무수정 호출.
   - status='ACTIVE'는 Engine이 이미 정한 것 (새 판단 아님).
+
+v1.1.0 (WO-ADAPTER-LAW-ENRICHMENT-001):
+  - 누락 law_name/law_article 보강 추가 (source_article_id → law_article → law_master JOIN).
+  - 새 판단/법령 생성 아님. DB에 이미 있는 법령식별 값을 후보에 채울 뿐.
+  - 실패 시 빈 값 유지(graceful) — 파이프라인 무중단.
 """
 from __future__ import annotations
 
@@ -33,6 +38,19 @@ def _confidence_band(value: Any) -> str:
     return "LOW"
 
 
+def _format_law_article(article_no: Any, article_sub_no: Any) -> str:
+    """law_article 표기 문자열. 예: 139 → '제139조', (24, 2) → '제24조의2'.
+
+    새 데이터 생성 아님 — law_article의 표준 표기일 뿐.
+    """
+    if article_no in (None, ""):
+        return ""
+    base = f"제{article_no}조"
+    if article_sub_no not in (None, "", 0):
+        return f"{base}의{article_sub_no}"
+    return base
+
+
 def obligation_instances_to_candidates(
     rows: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
@@ -43,6 +61,8 @@ def obligation_instances_to_candidates(
       trigger_type, trigger_l2, executor_text,
       condition_text, action_text, content_type,
       applicable_sectors, confidence
+
+    law_name/law_article는 빈 값으로 두고 _resolve_law_for_candidates()가 보강.
     """
     candidates: List[Dict[str, Any]] = []
     for r in rows:
@@ -59,8 +79,76 @@ def obligation_instances_to_candidates(
             "content_type": r.get("content_type"),
             "sector": sectors[0] if sectors else None,
             "confidence": _confidence_band(r.get("confidence")),
+            "law_name": "",      # _resolve_law_for_candidates()가 보강
+            "law_article": "",   # _resolve_law_for_candidates()가 보강
         })
     return candidates
+
+
+def _resolve_law_for_candidates(
+    supabase,
+    candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """source_article_id → law_article → law_master JOIN으로 law_name/law_article 보강.
+
+    원칙:
+      - 새 판단/법령 생성 없음. DB에 이미 있는 식별값을 후보에 채울 뿐.
+      - 실패 시 후보를 그대로 반환(빈 값 유지) — 파이프라인 무중단.
+    """
+    try:
+        article_ids = list({
+            str(c["source_article_id"])
+            for c in candidates
+            if c.get("source_article_id")
+        })
+        if not article_ids:
+            return candidates
+
+        # source_article_id → law_article
+        article_map: Dict[str, Dict[str, Any]] = {}
+        for i in range(0, len(article_ids), 200):
+            chunk = article_ids[i:i + 200]
+            res = (
+                supabase.table("law_article")
+                .select("id, law_id, article_no, article_sub_no")
+                .in_("id", chunk)
+                .execute()
+            )
+            for a in res.data or []:
+                article_map[str(a["id"])] = a
+
+        # law_id → law_master
+        law_ids = list({
+            str(a["law_id"])
+            for a in article_map.values()
+            if a.get("law_id")
+        })
+        law_map: Dict[str, Dict[str, Any]] = {}
+        for i in range(0, len(law_ids), 200):
+            chunk = law_ids[i:i + 200]
+            res = (
+                supabase.table("law_master")
+                .select("id, law_name")
+                .in_("id", chunk)
+                .execute()
+            )
+            for lm in res.data or []:
+                law_map[str(lm["id"])] = lm
+
+        # 후보 보강
+        for c in candidates:
+            art = article_map.get(str(c.get("source_article_id") or ""))
+            if not art:
+                continue
+            law = law_map.get(str(art.get("law_id") or ""))
+            c["law_name"] = str((law or {}).get("law_name") or "")
+            c["law_article"] = _format_law_article(
+                art.get("article_no"), art.get("article_sub_no")
+            )
+        return candidates
+    except Exception as exc:
+        log.warning("law enrichment failed, keep empty: %s", exc)
+        return candidates
 
 
 def _flatten_embedded_join(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -183,9 +271,12 @@ def obligation_instances_to_trigger_candidates(
     """obligation_instance → build_obligations_from_trigger_candidates() 입력.
 
     변환만 수행. 새 판단/필터/법령/Trigger 없음.
+    law_name/law_article는 _resolve_law_for_candidates()가 DB JOIN으로 보강.
     """
     if supabase is None:
         from db.supabase_client import get_supabase
         supabase = get_supabase()
     rows = fetch_obligation_instance_rows(supabase, factory_id)
-    return obligation_instances_to_candidates(rows)
+    candidates = obligation_instances_to_candidates(rows)
+    candidates = _resolve_law_for_candidates(supabase, candidates)
+    return candidates
