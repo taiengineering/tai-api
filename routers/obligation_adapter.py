@@ -1,4 +1,4 @@
-"""Obligation Adapter API — v1.3.1 (WO-OPERATIONAL-INTEGRATION-001)
+"""Obligation Adapter API — v1.3.2 (WO-CREATEDBY-FIX-001)
 
 B안 어댑터 라우터 (HTTP only).
 
@@ -38,6 +38,11 @@ v1.3.0: POST /from-instances/{factory_id} 추가 (CURSOR-TASK-001 Glue).
 v1.3.1: /from-instances에 persist 옵션 추가 (WO-OPERATIONAL-INTEGRATION-001).
         새 Persist/Service/Adapter 없음 — _persist_result_data로 기존 저장 로직 재사용.
         기본 persist=false → 기존 동작 불변.
+v1.3.2: persist 시 created_by 보강 (WO-CREATEDBY-FIX-001).
+        옵션 Authorization 헤더 → 유효 토큰이면 users.id를 created_by에 저장(권한 컬럼만).
+        토큰 없음/무효(서비스·시스템 실행) → created_by 미설정(기존 동작 유지, 억지 ID 금지).
+        result_data/obligations/rule_count/verdict 등 불변. 새 Service/Router 없음 —
+        기존 get_current_user 재사용.
 """
 from __future__ import annotations
 
@@ -45,7 +50,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 
 from db.supabase_client import get_supabase
 from routers.applicability_api import evaluate as v4_evaluate
@@ -66,6 +71,23 @@ router = APIRouter(
 )
 
 SCHEMA_VERSION = "v4adapt"
+
+
+def _optional_user_id(authorization: Optional[str]) -> Optional[str]:
+    """Authorization 헤더가 유효하면 users.id 반환, 아니면 None (WO-CREATEDBY-FIX-001).
+
+    기존 get_current_user 로직 재사용 — 새 인증/판단 로직 없음.
+    토큰 없음/무효/사용자 없음 → None (서비스·시스템 실행 시 created_by 미설정, 억지 ID 금지).
+    """
+    if not authorization:
+        return None
+    try:
+        from routers.auth import get_current_user
+        user = get_current_user(authorization=authorization)
+        uid = user.get("id") if user else None
+        return str(uid) if uid else None
+    except Exception:
+        return None
 
 
 def _load_conditions_by_id() -> Dict[str, Dict[str, Any]]:
@@ -116,11 +138,13 @@ def _persist_result_data(
     result_data: Dict[str, Any],
     obligation_count: int,
     source: str,
+    created_by: Optional[str] = None,
 ) -> str:
     """기존 운영 Persist 쓰기 로직 (factory_diagnosis_results 저장 + is_latest 토글).
 
     /persist 와 /from-instances(persist=true)가 공유. 새 저장 로직 아니라 기존 배선 추출.
     이전 동작(/persist v1.1.0)과 동일한 컴럼/토글.
+    WO-CREATEDBY-FIX-001: created_by가 주어지면 권한 컬럼만 추가 채움(나머지 불변).
     """
     supabase = get_supabase()
     supabase.table("factory_diagnosis_results").update(
@@ -138,6 +162,8 @@ def _persist_result_data(
         "schema_version": SCHEMA_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if created_by:                      # WO-CREATEDBY-FIX-001: 인증 사용자면 권한 컬럼만 채움
+        row["created_by"] = created_by
     ins = supabase.table("factory_diagnosis_results").insert(row).execute()
     if not ins.data:
         raise HTTPException(status_code=500, detail="factory_diagnosis_results 저장 실패")
@@ -160,11 +186,12 @@ def adapt_obligations(factory_id: str):
 
 
 @router.post("/{factory_id}/persist")
-def persist_obligations(factory_id: str):
+def persist_obligations(factory_id: str, authorization: Optional[str] = Header(None)):
     """어댑터 obligations → factory_diagnosis_results 저장 (Track A 배선).
 
     이후 정제레이어 GET /diagnosis/transform/latest/{factory_id}로
     사용자 화면까지 도달.
+    WO-CREATEDBY-FIX-001: 유효 토큰이면 created_by=users.id 저장(없으면 기존대로 null).
     """
     out = _adapt(factory_id)
     v4_result = out["v4_result"]
@@ -181,6 +208,7 @@ def persist_obligations(factory_id: str):
     diagnosis_id = _persist_result_data(
         factory_id, sector, result_data,
         adapter_result["obligation_count"], "V4_OBLIGATION_ADAPTER",
+        created_by=_optional_user_id(authorization),
     )
     return {
         "status": "success",
@@ -236,13 +264,18 @@ def run_trigger_based_obligation_adapter(factory_id: str):
 
 
 @router.post("/from-instances/{factory_id}")
-def adapt_from_obligation_instances(factory_id: str, persist: bool = False):
+def adapt_from_obligation_instances(
+    factory_id: str,
+    persist: bool = False,
+    authorization: Optional[str] = Header(None),
+):
     """obligation_instance(Applicability Engine) → 45CM obligations.
 
     Glue: obligation_instance → candidate → 기존 Adapter.
     persist=true 일 때 기존 운영 Persist(_persist_result_data)로
     factory_diagnosis_results 저장 → 이후 GET /diagnosis/transform/latest/{factory_id}로 가시화.
     Check Engine / 정제레이어 / 기존 Persist 로직 무수정.
+    WO-CREATEDBY-FIX-001: 유효 토큰이면 created_by=users.id 저장(없으면 기존대로 null).
     """
     t0 = time.perf_counter()
     supabase = get_supabase()
@@ -264,6 +297,7 @@ def adapt_from_obligation_instances(factory_id: str, persist: bool = False):
         diagnosis_id = _persist_result_data(
             factory_id, sector, result_data,
             adapter_result["obligation_count"], "FROM_INSTANCES_OBLIGATION_INSTANCE",
+            created_by=_optional_user_id(authorization),
         )
 
     total_ms = int((time.perf_counter() - t0) * 1000)
