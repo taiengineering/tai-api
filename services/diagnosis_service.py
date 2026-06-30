@@ -53,7 +53,9 @@ class DiagnosisService:
 
             for t in tasks:
                 ctype = 'OBLIGATION'
-                sub = TYPE_MAP.get(t.get('task_type'), 'GENERAL')
+                tt = (t.get('task_type') or '')
+                key = tt.split('_TASK_CANDIDATE')[0].split(':')[0].strip()
+                sub = TYPE_MAP.get(key, 'GENERAL')
                 dc = sb.table('diagnosis_candidate').insert({
                     'session_id': sid,
                     'candidate_type': ctype,
