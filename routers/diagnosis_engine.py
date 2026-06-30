@@ -29,7 +29,17 @@ async def evaluate_facility(body: DiagnosisRequest):
     """법령진단 실행. Candidate 결과만 출력. 반복설정 등록 안 함."""
     from services.diagnosis_service import DiagnosisService
     try:
-        result = DiagnosisService.evaluate(_get_sb(), body.factory_id, body.input_data)
+        sb = _get_sb()
+        result = DiagnosisService.evaluate(sb, body.factory_id, body.input_data)
+        session_id = result['diagnosis_id']
+        try:
+            from services.saas_setup_service import SaaSSetupService
+            SaaSSetupService.extract_setup_candidates(sb, session_id)
+        except Exception as _saas_err:
+            import logging
+            logging.getLogger("saas.setup.hook").warning(
+                "SaaS setup extract hook failed (non-blocking): %s", _saas_err
+            )
         return result
     except Exception as e:
         raise HTTPException(500, str(e))
