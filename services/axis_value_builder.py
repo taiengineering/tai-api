@@ -138,6 +138,11 @@ def build_storage_capacity(ci: Dict[str, Any]) -> AxisValue:
     if cap is not None and ci.get("capacity_unit") in ("m3", "m³"):
         return AxisValue("storage_capacity", cap, DERIVED, ["capacity", "capacity_unit"],
                          engine_note="AMBIGUOUS_QUALITY", notes="capacity(m3)")
+    # confirmed source (WO-ENG-003) fallback: water tank tonnage; water 1 t ~= 1 m3
+    ton = _num(ci.get("water_tank_ton"))
+    if ton is not None:
+        return AxisValue("storage_capacity", ton, DERIVED, ["water_tank_ton"],
+                         engine_note="AMBIGUOUS_QUALITY", notes="water_tank ton~=m3 (water medium)")
     return AxisValue("storage_capacity", None, GAP, [], engine_note="GAP", notes="no storage input")
 
 
@@ -192,9 +197,25 @@ def build_process_type(ci: Dict[str, Any],
 
 
 # --- equipment (no fac_col; produced for future join) -----------------------
+# Default has_* -> equipment label map, grounded in diagnosis_input_fields
+# (field_group 위험물/전기/수질환경 boolean equipment fields). Labels are the
+# literal flag meaning, not invented domain codes. Override via flag_map arg;
+# map to system_codes 설비유형 codes via code_map arg.
+DEFAULT_EQUIPMENT_FLAG_MAP: Dict[str, str] = {
+    "has_boiler": "boiler",
+    "has_emergency_gen": "emergency_generator",
+    "has_gas": "gas_facility",
+    "has_high_pressure_gas": "high_pressure_gas",
+    "has_hazmat_storage": "hazmat_storage",
+    "has_water_tank": "water_tank",
+}
+
+
 def build_equipment_type(ci: Dict[str, Any],
                          flag_map: Optional[Dict[str, Any]] = None,
                          code_map: Optional[Dict[str, Any]] = None) -> AxisValue:
+    if flag_map is None:
+        flag_map = DEFAULT_EQUIPMENT_FLAG_MAP
     types: List[Any] = []
     used: List[str] = []
     # normalize: extract from equipment_list
@@ -229,11 +250,15 @@ def _gap(axis: str, note: str) -> AxisValue:
 
 
 def build_voltage_level(ci: Dict[str, Any]) -> AxisValue:
-    v = _num(ci.get("voltage_level")) if ci.get("voltage_level") is not None else None
+    # Confirmed source (WO-ENG-003): transformer_capacity_kva is voltage_level's
+    # FIELD_MAP source column. Priority: explicit voltage_level -> transformer kVA.
+    v, k = _first_num(ci, ["voltage_level", "transformer_capacity_kva"])
     if v is not None:
-        return AxisValue("voltage_level", v, DIRECT, ["voltage_level"],
-                         engine_note="AMBIGUOUS_QUALITY", notes="voltage supplied")
-    return _gap("voltage_level", "collection gap: no voltage input")
+        return AxisValue("voltage_level", v,
+                         DIRECT if k == "voltage_level" else FALLBACK, [k],
+                         engine_note="AMBIGUOUS_QUALITY",
+                         notes="from transformer_capacity_kva" if k != "voltage_level" else "voltage supplied")
+    return _gap("voltage_level", "no voltage_level / transformer_capacity_kva")
 
 
 def build_concentration_level(ci: Dict[str, Any]) -> AxisValue:
