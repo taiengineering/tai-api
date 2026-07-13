@@ -113,7 +113,8 @@ def test_obligation_candidates_dedupe_by_article():
 
 
 # =====================================================================
-# DEV-IN-004: (A) 누락 스펙 추가 + (B) 구조적 what_text/where_text 확장
+# DEV-IN-004 / 004V: (B) 구조적 what_text/where_text 확장 + 매칭근거.
+# (A) 누락 스펙은 emitter 미declared(dead) 확인되어 철회 → 기존 정식 코드로만 테스트.
 # =====================================================================
 
 def _clause(**kw):
@@ -126,85 +127,50 @@ def _clause(**kw):
     return base
 
 
-# ---- (A) Positive: 누락됐던 트리거가 검출된다 ----
-
-def test_devin004_grinding_detected():
-    c = _clause(action_text="사업주는 연삭기의 덮개를 설치해야 한다.")
-    assert len(match_clauses_for_trigger([c], "WORK:GRINDING")) == 1
-
-
-def test_devin004_dust_detected():
-    c = _clause(condition_text="분진이 발생하는 작업을 하는 경우",
-                action_text="사업주는 국소배기장치를 설치해야 한다.")
-    assert len(match_clauses_for_trigger([c], "WORK:DUST")) == 1
-
-
-def test_devin004_radiation_detected():
-    c = _clause(action_text="사업주는 방사선 발생장치에 차폐물을 설치해야 한다.")
-    assert len(match_clauses_for_trigger([c], "WORK:RADIATION")) == 1
-
-
-def test_devin004_roller_detected():
-    c = _clause(action_text="사업주는 압연롤러에 방호장치를 설치해야 한다.")
-    assert len(match_clauses_for_trigger([c], "EQUIPMENT:ROLLER")) == 1
-
-
-# ---- (B) Positive: 설비명이 구조적 what_text(목적어)에만 있어도 검출 ----
+# ---- (B) Positive: 설비명이 구조적 what_text/where_text 에만 있어도 검출 (기존 정식 코드) ----
 
 def test_devin004_subject_in_what_text_detected():
-    # 압력용기가 condition/action 이 아닌 구조적 목적어(what_text)에만 존재
+    # 압력용기(EQUIPMENT:PRESSURE_VESSEL, 정식 코드)가 구조적 목적어(what_text)에만 존재
     c = _clause(
         condition_text="다음 각 호의 경우",
         action_text="사업주는 안전밸브를 설치해야 한다.",
         what_text="압력용기",
     )
-    matched = match_clauses_for_trigger([c], "EQUIPMENT:PRESSURE_VESSEL")
-    assert len(matched) == 1
+    assert len(match_clauses_for_trigger([c], "EQUIPMENT:PRESSURE_VESSEL")) == 1
 
 
-def test_devin004_matched_field_recorded():
-    clauses = [_clause(action_text="사업주는 연삭기 덮개를 설치해야 한다.")]
+def test_devin004_subject_in_where_text_detected():
+    # 밀폐공간(WORK:CONFINED_SPACE)이 구조적 장소(where_text)에만 존재
+    c = _clause(
+        action_text="사업주는 산소농도를 측정해야 한다.",
+        where_text="밀폐공간",
+    )
+    assert len(match_clauses_for_trigger([c], "WORK:CONFINED_SPACE")) == 1
+
+
+def test_devin004_matched_field_recorded_condition_action():
+    clauses = [_clause(action_text="사업주는 밀폐공간의 산소농도를 측정해야 한다.")]
     sb = MagicMock()
     sb.table.return_value.select.return_value.in_.return_value.eq.return_value.range.return_value.execute.return_value.data = clauses
-    out = generate_obligation_candidates(["WORK:GRINDING"], sb)
+    out = generate_obligation_candidates(["WORK:CONFINED_SPACE"], sb)
     assert len(out) == 1
     assert out[0]["matched_field"] == "condition_action"
-    assert out[0]["matched_text"] == "연삭"
+    assert out[0]["matched_text"] == "밀폐공간"
+
+
+def test_devin004_matched_field_recorded_what_text():
+    clauses = [_clause(action_text="사업주는 안전밸브를 설치한다.", what_text="압력용기")]
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.in_.return_value.eq.return_value.range.return_value.execute.return_value.data = clauses
+    out = generate_obligation_candidates(["EQUIPMENT:PRESSURE_VESSEL"], sb)
+    assert len(out) == 1
+    assert out[0]["matched_field"] == "what_text"
 
 
 # ---- Negative: 과탐 방지 (수정과 동일 비중) ----
 
-def test_devin004_neg_education_training_not_facility():
-    # "교육"(훈련)이 시설/설비 트리거로 오매칭되지 않는다
-    c = _clause(action_text="사업주는 근로자에게 안전보건교육을 실시해야 한다.")
-    for code in ("WORK:GRINDING", "WORK:DUST", "WORK:RADIATION", "EQUIPMENT:ROLLER"):
-        assert match_clauses_for_trigger([c], code) == []
-
-
-def test_devin004_neg_office_work_not_facility():
-    # "사무직"이 업무시설/설비 트리거로 오매칭되지 않는다
-    c = _clause(action_text="사무직에 종사하는 근로자에 대하여 사업주는 휴게시설을 갖추어야 한다.")
-    for code in ("WORK:GRINDING", "WORK:DUST", "EQUIPMENT:ROLLER", "EQUIPMENT:PRESS"):
-        assert match_clauses_for_trigger([c], code) == []
-
-
-def test_devin004_neg_cargo_vehicle_not_excavator():
-    # "화물자동차"가 건설기계(굴착기) 트리거로 오매칭되지 않는다
-    c = _clause(action_text="사업주는 화물자동차에 화물을 실을 때 낙하를 방지해야 한다.")
-    assert match_clauses_for_trigger([c], "EQUIPMENT:EXCAVATOR") == []
-
-
-def test_devin004_neg_factory_contrast_not_facility():
-    # "공장"이 단순 대조어로 등장해도 facility 트리거로 오매칭되지 않는다
-    c = _clause(
-        action_text="사무직 근로자(공장 또는 공사현장과 같은 구역에 있지 않은 사람)에 대하여 사업주는 조치한다."
-    )
-    for code in ("WORK:GRINDING", "WORK:DUST", "WORK:RADIATION", "EQUIPMENT:ROLLER"):
-        assert match_clauses_for_trigger([c], code) == []
-
-
 def test_devin004_neg_hazmat_only_in_source_text_not_matched():
-    # (B) 가드: 위험물이 raw source_text/source_part_text 에만 있고
+    # (B) 핵심 가드: 위험물이 raw source_text 에만 있고
     # 구조적 필드(condition/action/what/where)엔 없으면 매칭하지 않는다.
     c = _clause(
         condition_text="다음의 경우",
@@ -214,3 +180,20 @@ def test_devin004_neg_hazmat_only_in_source_text_not_matched():
         source_text="위험물 저장소 인근의 사업장에서 사업주는 게시판을 설치해야 한다.",
     )
     assert match_clauses_for_trigger([c], "WORK:HAZARDOUS_MATERIAL") == []
+
+
+def test_devin004_neg_absent_keyword_not_matched_even_with_structural():
+    # 트리거 키워드가 어느 필드에도 없으면, 구조적 필드가 있어도 매칭되지 않는다.
+    c = _clause(
+        action_text="사업주는 근로자에게 안전보건교육을 실시해야 한다.",
+        what_text="교육자료",
+        where_text="회의실",
+    )
+    for code in ("WORK:CONFINED_SPACE", "EQUIPMENT:PRESSURE_VESSEL", "EQUIPMENT:CRANE"):
+        assert match_clauses_for_trigger([c], code) == []
+
+
+def test_devin004_neg_existing_behavior_condition_action_preserved():
+    # 기존 동작 보존: condition+action 에 키워드 있으면 그대로 매칭
+    c = _clause(condition_text="밀폐공간에서 작업하는 경우", action_text="환기한다")
+    assert len(match_clauses_for_trigger([c], "WORK:CONFINED_SPACE")) == 1
