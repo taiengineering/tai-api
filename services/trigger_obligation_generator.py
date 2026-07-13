@@ -11,7 +11,9 @@ Trigger Code Set을 keyword_pattern으로 semantic_clause에서 검색해
 DB 쓰기 없음. obligation_adapter 무수정.
 
 DEV-IN-004 (production trigger detection 개선):
-  (A) 누락 TRIGGER_SPECS 추가: 연삭/분진/방사선/롤러/비상방송/비상발전.
+  (A) [DEV-IN-004V 검증 후 철회] 누락 스펙 6종은 emitter(trigger_generator)에
+      해당 has_X/equipment canonical 이 없어 NOT_DECLARED(dead) → 계약 확장 금지 원칙에
+      따라 제거함. 필요 시 factories 계약 확장은 별도 승인 작업.
   (B) _match_clause 검색 범위를 구조적 what_text·where_text 로 확장
       (raw 원문/상위문맥은 과탐 위험 → 미포함. 구조적 목적어/장소만).
   매칭 근거(matched_field/matched_pattern/matched_text)를 후보에 기록.
@@ -102,13 +104,6 @@ TRIGGER_SPECS: Dict[str, TriggerSpec] = {
     "WORK:CHEMICAL_SUBSTANCE": TriggerSpec(pattern=r"(관리대상 유해물질|허가대상 유해물질|금지유해물질|화학물질)", confidence="HIGH"),
     "WORK:SAFETY_MANAGER": TriggerSpec(pattern=r"안전관리자|안전보건관리책임자", confidence="HIGH"),
     "WORK:HAZARDOUS_MATERIAL": TriggerSpec(pattern=r"위험물", confidence="HIGH"),
-    # --- DEV-IN-004 (A): 누락 트리거 스펙 추가 (19 Gap 연결, 구별력 높은 키워드) ---
-    "WORK:GRINDING": TriggerSpec(pattern=r"연삭", confidence="HIGH"),
-    "WORK:DUST": TriggerSpec(pattern=r"분진", confidence="HIGH"),
-    "WORK:RADIATION": TriggerSpec(pattern=r"(방사선|방사성물질|방사성동위원소)", confidence="HIGH"),
-    "WORK:EMERGENCY_BROADCAST": TriggerSpec(pattern=r"(비상방송|비상경보설비)", confidence="HIGH"),
-    "WORK:EMERGENCY_POWER": TriggerSpec(pattern=r"(비상발전|비상전원설비)", confidence="HIGH"),
-    "EQUIPMENT:ROLLER": TriggerSpec(pattern=r"(압연롤러|롤러기|롤러)", confidence="HIGH"),
     # EQUIPMENT
     "EQUIPMENT:CRANE": TriggerSpec(
         pattern=r"(크레인|양중기)",
