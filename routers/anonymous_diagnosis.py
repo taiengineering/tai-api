@@ -30,6 +30,9 @@ from services.diagnosis_helpers import _build_standard_output
 from services.legal_helpers import _now_iso
 from services.legal_rules import normalize_sector_db
 
+# WO-SERVICE-002: LEG Runtime API Shadow (실패해도 기존 진단에 영향 없음)
+from clients.leg_runtime_client import run_shadow_compare
+
 # BE-09: BE-08 추천 함수 재사용 (코드 중복 금지)
 from routers.diagnosis_plan_recommend import (
     _recommend_industry,
@@ -212,6 +215,15 @@ async def create_anonymous_diagnosis(body: AnonymousDiagnosisCreate):
     )
     partial     = _partial_from_full(full_result)
     token       = str(uuid.uuid4())
+
+    # WO-SERVICE-002: LEG Runtime Shadow (non-blocking)
+    run_shadow_compare(
+        step1_body,
+        diagnosis_id=token,
+        legacy_engine_version=ANONYMOUS_COMPILER_ENGINE_VERSION,
+        legacy_rule_version=RULE_VERSION,
+        legacy_obligation_count=obl_cnt,
+    )
     expires     = (_now() + timedelta(days=TTL_DAYS)).isoformat()
     created     = _now().isoformat()
     input_snapshot: Dict[str, Any] = {
