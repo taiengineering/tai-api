@@ -1,9 +1,3 @@
-# main.py — v6.0.2
-# v6.0.2: /health 엔드포인트 복원 (Railway 헬스체크 필수)
-# v6.0.1: Add total field to module status for debugging
-# v6.0.0: Module Isolation — Safe Loading + 10 Module Groups
-# 한 라우터 import 실패 → 해당 라우터만 스킵, 나머지 정상 작동
-# /health 응답에 모듈별 상태(ok/degraded) 포함
 import os
 import sentry_sdk
 
@@ -52,10 +46,12 @@ app.add_middleware(
     allow_origins=[
         "https://taieng.co.kr", "https://www.taieng.co.kr", "https://new.taieng.co.kr",
         "https://admin.taieng.co.kr", "https://tadmin.taieng.co.kr", "https://safe.taieng.co.kr",
+        "https://tai-admin-vue3.pages.dev",
         "http://localhost:5500", "http://127.0.0.1:5500",
         "http://localhost:3000", "http://127.0.0.1:3000",
+        "http://localhost:5050", "http://127.0.0.1:5050",
     ],
-    allow_origin_regex=r"https://([a-z0-9-]+\.)*taieng\.co\.kr",
+    allow_origin_regex=r"https://([a-z0-9-]+\.)*taieng\.co\.kr|https://([a-z0-9-]+\.)?tai-admin-vue3\.pages\.dev",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
