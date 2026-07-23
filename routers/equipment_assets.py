@@ -6,9 +6,13 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/equipment-assets", tags=["equipment_assets"])
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 """
-equipment_assets.py v1.5.0
+equipment_assets.py v1.6.0
+v1.6.0: GET /overview 추가 (시설별 설비 현황)
+  - v_equipment_overview 집계 뷰 조회 (시설별 total/legal/operating/expired 카운트)
+  - 라우트 순서: /{asset_id} 앞에 배치 (과거 /summary 순서 버그 선례와 동일)
+  - 프론트(admin equipment-list 탭1)가 호출하던 미구현 엔드포인트 복구
 v1.5.0: operation_status 필드 추가
   - EquipmentAssetUpdate에 operation_status 추가 (ACTIVE|BROKEN|INACTIVE)
   - GET 목록에 operation_status, factory_process_id 컨럼 포함
@@ -97,6 +101,34 @@ def get_assets(
             "total": res.count or 0,
             "page":  page,
             "size":  size,
+        }
+    }
+
+
+# ── 시설별 설비 현황 (탭1 overview) ─────────────────────────────
+# 원본 admin equipment-list.html 탭1 이 호출: GET /equipment-assets/overview?page=&page_size=&search=
+# 집계 뷰 v_equipment_overview (시설 LEFT JOIN 회사 LEFT JOIN 설비[is_operating=true]) 를 조회.
+# ⚠️ 라우트 순서: 반드시 GET /{asset_id} 보다 위에 정의 (과거 /summary 순서 버그와 동일 이슈 방지).
+@router.get("/overview")
+def get_equipment_overview(
+    search:    Optional[str] = Query(None, description="시설명/회사명 ILIKE"),
+    page:      int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    supabase = get_supabase()
+    query = supabase.table("v_equipment_overview").select("*", count="exact")
+    if search and search.strip():
+        s = search.strip().replace(",", " ")
+        query = query.or_(f"factory_name.ilike.*{s}*,company_name.ilike.*{s}*")
+    offset = (page - 1) * page_size
+    res = query.order("factory_name").range(offset, offset + page_size - 1).execute()
+    return {
+        "status": "success",
+        "data": {
+            "items": res.data,
+            "total": res.count or 0,
+            "page":  page,
+            "size":  page_size,
         }
     }
 
