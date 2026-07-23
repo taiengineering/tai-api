@@ -1,12 +1,12 @@
 # routers/pricing_validation_api.py — Pricing Validation & Audit Layer
 """
 SaaS 가격 운영 안정화: Validation + Audit + Dangerous Guard.
-Single Pricing Source: price_saas_plan + price_diagnosis_report.
+Single Pricing Source: **price_master** (price_saas_plan / price_diagnosis_report = price_master 위 호환 뷰).
+2026-07-23: 정본을 price_master(A) 단일로 확정(서비스=SaaS+법령진단). 레거시 product_pricing 교차검증 제거(테이블 격리 준비).
 Billing 플랫폼 아님. 운영 안전장치.
 """
 
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -24,12 +24,11 @@ def _sb():
 
 @router.get("/validate")
 def validate_pricing():
-    """전체 Pricing 무결성 검증."""
+    """price_master 기반 price_saas_plan 무결성 검증."""
     try:
         sb = _sb()
         issues = []
 
-        # 1. price_saas_plan 검증
         plans = sb.table("price_saas_plan").select(
             "id,plan_code,plan_name,display_name,monthly_base_fee,is_active,is_recommended,sector_code,sort_order,features"
         ).execute()
@@ -37,68 +36,43 @@ def validate_pricing():
         active_plans = [p for p in (plans.data or []) if p.get("is_active")]
         inactive_plans = [p for p in (plans.data or []) if not p.get("is_active")]
 
-        # 활성 플랜 0개 → CRITICAL
         if not active_plans:
             issues.append({"severity": "CRITICAL", "type": "no_active_plans", "message": "활성 플랜이 0개입니다"})
 
-        # 추천상품 0개
         recommended = [p for p in active_plans if p.get("is_recommended")]
         if not recommended:
             issues.append({"severity": "WARNING", "type": "no_recommended", "message": "활성 추천상품이 0개입니다"})
 
-        # 비활성 추천상품
         for p in inactive_plans:
             if p.get("is_recommended"):
                 issues.append({"severity": "WARNING", "type": "inactive_recommended",
-                              "plan_code": p["plan_code"], "message": f"비활성 추천상품: {p['plan_code']}"})
+                               "plan_code": p.get("plan_code"), "message": f"비활성 추천상품: {p.get('plan_code')}"})
 
-        # display_name 누락
         for p in active_plans:
             if not p.get("display_name"):
                 issues.append({"severity": "WARNING", "type": "missing_display_name",
-                              "plan_code": p["plan_code"], "message": f"display_name 누락: {p['plan_code']}"})
+                               "plan_code": p.get("plan_code"), "message": f"display_name 누락: {p.get('plan_code')}"})
 
-        # features JSON 검증
         for p in active_plans:
             feat = p.get("features")
             if feat is not None and not isinstance(feat, (dict, list)):
                 issues.append({"severity": "WARNING", "type": "invalid_features_json",
-                              "plan_code": p["plan_code"], "message": f"features JSON 이상: {p['plan_code']}"})
+                               "plan_code": p.get("plan_code"), "message": f"features JSON 이상: {p.get('plan_code')}"})
 
-        # sector별 활성 플랜 수
         sectors = {}
         for p in active_plans:
             s = p.get("sector_code", "UNKNOWN")
             sectors[s] = sectors.get(s, 0) + 1
 
-        # 2. product_pricing ↔ price_saas_plan 정합성
-        products = sb.table("product_pricing").select("plan_code,plan_name,price_monthly,is_active").execute()
-        saas_codes = {p["plan_code"] for p in (plans.data or [])}
-
-        for prod in (products.data or []):
-            pc = prod.get("plan_code")
-            if pc and pc not in saas_codes:
-                issues.append({"severity": "WARNING", "type": "product_orphan",
-                              "plan_code": pc, "message": f"product_pricing '{pc}' → saas_plan 미매칭"})
-            elif pc and pc in saas_codes:
-                saas = next((p for p in (plans.data or []) if p["plan_code"] == pc), {})
-                saas_fee = float(saas.get("monthly_base_fee") or 0)
-                prod_fee = float(prod.get("price_monthly") or 0)
-                if saas_fee != prod_fee:
-                    issues.append({"severity": "CRITICAL", "type": "price_mismatch",
-                                  "plan_code": pc,
-                                  "message": f"\uac00\uaca9 \ubd88\uc77c\uce58: product={int(prod_fee):,} vs saas={int(saas_fee):,}"})
-
-        # 3. Payment 고\uc544 plan_code
+        # Payment 고아 plan_code (product_pricing 교차검증은 2026-07-23 제거)
         payments = sb.table("payments").select("plan_code,product_type") \
             .not_.is_("plan_code", "null").execute()
+        saas_codes = {p["plan_code"] for p in (plans.data or [])}
         payment_codes = set(p["plan_code"] for p in (payments.data or []))
-        orphan_payment_codes = payment_codes - saas_codes
-        # DIAG 코드는 진단 전용이므로 WARNING만
-        for opc in orphan_payment_codes:
+        for opc in (payment_codes - saas_codes):
             sev = "INFO" if "DIAG" in opc.upper() else "WARNING"
             issues.append({"severity": sev, "type": "payment_orphan_plan",
-                          "plan_code": opc, "message": f"payment plan_code '{opc}' \u2192 saas_plan \ubbf8\ub9e4\uce6d"})
+                           "plan_code": opc, "message": f"payment plan_code '{opc}' → saas_plan 미매칭"})
 
         return {"status": "success", "data": {
             "total_plans": len(plans.data or []),
@@ -113,33 +87,18 @@ def validate_pricing():
         return {"status": "error", "message": str(e)}
 
 
-# ═══ Payment Mapping ═══
+# ═══ Payment Mapping (deprecated) ═══
 
 @router.get("/payment-mapping")
 def check_payment_mapping():
-    """결제\uc0c1\ud488 \u2194 Pricing \ub9e4\ud551 \uac80\uc99d."""
+    """[deprecated 2026-07-23] product_pricing 격리(A 단일 SSOT)로 교차매핑 폐기. price_saas_plan 목록만 반환."""
     try:
         sb = _sb()
-        products = sb.table("product_pricing").select("*").execute()
-        saas = sb.table("price_saas_plan").select("plan_code,display_name,monthly_base_fee,is_active,sector_code").execute()
-        saas_map = {p["plan_code"]: p for p in (saas.data or [])}
-
-        mappings = []
-        for prod in (products.data or []):
-            pc = prod["plan_code"]
-            matched = saas_map.get(pc)
-            mappings.append({
-                "product_plan_code": pc,
-                "product_name": prod.get("plan_name"),
-                "product_price": prod.get("price_monthly"),
-                "product_active": prod.get("is_active"),
-                "saas_matched": matched is not None,
-                "saas_price": float(matched["monthly_base_fee"]) if matched else None,
-                "saas_active": matched.get("is_active") if matched else None,
-                "price_match": float(prod.get("price_monthly") or 0) == float(matched.get("monthly_base_fee") or 0) if matched else False,
-            })
-
-        return {"status": "success", "data": mappings}
+        saas = sb.table("price_saas_plan").select(
+            "plan_code,display_name,monthly_base_fee,is_active,sector_code"
+        ).execute()
+        return {"status": "success", "data": [], "note": "product_pricing 격리 — 정본 price_master 단일. 매핑 검증 폐기.",
+                "saas_plans": saas.data or []}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -148,7 +107,7 @@ def check_payment_mapping():
 
 @router.get("/audit")
 def get_audit_log(limit: int = 50):
-    """\uac00\uaca9 \ubcc0\uacbd \uc774\ub825."""
+    """가격 변경 이력."""
     try:
         resp = _sb().table("pricing_audit_log").select("*") \
             .order("created_at", desc=True).limit(limit).execute()
@@ -171,10 +130,10 @@ class AuditEntry(BaseModel):
 
 @router.post("/audit")
 def create_audit_entry(body: AuditEntry):
-    """\uac00\uaca9 \ubcc0\uacbd \uae30\ub85d \uc218\ub3d9 \ub4f1\ub85d."""
+    """가격 변경 기록 수동 등록."""
     try:
         _sb().table("pricing_audit_log").insert(body.dict()).execute()
-        return {"status": "success", "message": "audit \uae30\ub85d \uc644\ub8cc"}
+        return {"status": "success", "message": "audit 기록 완료"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -183,40 +142,26 @@ def create_audit_entry(body: AuditEntry):
 
 @router.get("/guard")
 def check_dangerous_state():
-    """\uc704\ud5d8 \uc6b4\uc601 \uc0c1\ud0dc \ud0d0\uc9c0."""
+    """위험 운영 상태 탐지 (price_master 기반)."""
     try:
         sb = _sb()
         dangers = []
 
-        # 1. \ud65c\uc131 \ud50c\ub79c 0\uac1c
         active = sb.table("price_saas_plan").select("id", count="exact").eq("is_active", True).execute()
         if (active.count or 0) == 0:
-            dangers.append({"severity": "CRITICAL", "type": "all_plans_off", "message": "\ubaa8\ub4e0 \ud50c\ub79c \ube44\ud65c\uc131"})
+            dangers.append({"severity": "CRITICAL", "type": "all_plans_off", "message": "모든 플랜 비활성"})
 
-        # 2. \ucd94\ucc9c\uc0c1\ud488 0\uac1c
         rec = sb.table("price_saas_plan").select("id", count="exact") \
             .eq("is_active", True).eq("is_recommended", True).execute()
         if (rec.count or 0) == 0:
-            dangers.append({"severity": "WARNING", "type": "no_recommended", "message": "\ud65c\uc131 \ucd94\ucc9c\uc0c1\ud488 \uc5c6\uc74c"})
+            dangers.append({"severity": "WARNING", "type": "no_recommended", "message": "활성 추천상품 없음"})
 
-        # 3. sector\ubcc4 \ud65c\uc131 \ud50c\ub79c \uc5c6\uc74c
         plans = sb.table("price_saas_plan").select("sector_code,is_active").execute()
         all_sectors = set(p["sector_code"] for p in (plans.data or []) if p.get("sector_code"))
         active_sectors = set(p["sector_code"] for p in (plans.data or []) if p.get("is_active") and p.get("sector_code"))
-        missing = all_sectors - active_sectors
-        for s in missing:
+        for s in (all_sectors - active_sectors):
             dangers.append({"severity": "CRITICAL", "type": "sector_no_plan",
-                          "sector": s, "message": f"{s} \uc139\ud130 \ud65c\uc131 \ud50c\ub79c \uc5c6\uc74c"})
-
-        # 4. product_pricing stale
-        products = sb.table("product_pricing").select("plan_code,price_monthly").execute()
-        saas = sb.table("price_saas_plan").select("plan_code,monthly_base_fee").execute()
-        saas_map = {p["plan_code"]: float(p.get("monthly_base_fee") or 0) for p in (saas.data or [])}
-        for prod in (products.data or []):
-            pc = prod["plan_code"]
-            if pc in saas_map and float(prod.get("price_monthly") or 0) != saas_map[pc]:
-                dangers.append({"severity": "CRITICAL", "type": "price_mismatch",
-                              "plan_code": pc, "message": f"product_pricing '{pc}' \uac00\uaca9 \ubd88\uc77c\uce58"})
+                            "sector": s, "message": f"{s} 섹터 활성 플랜 없음"})
 
         return {"status": "success", "data": {
             "dangers": dangers,
@@ -232,12 +177,11 @@ def check_dangerous_state():
 
 @router.get("/summary")
 def pricing_summary():
-    """\uac00\uaca9 \uc6b4\uc601 \uc694\uc57d."""
+    """가격 운영 요약 (price_master 기반)."""
     try:
         sb = _sb()
         saas = sb.table("price_saas_plan").select("plan_code,is_active,is_recommended,sector_code").execute()
         diag = sb.table("price_diagnosis_report").select("id", count="exact").execute()
-        products = sb.table("product_pricing").select("id", count="exact").execute()
         audit = sb.table("pricing_audit_log").select("id", count="exact").execute()
 
         active = [p for p in (saas.data or []) if p.get("is_active")]
@@ -252,7 +196,6 @@ def pricing_summary():
             "saas_recommended": sum(1 for p in active if p.get("is_recommended")),
             "sectors": sectors,
             "diagnosis_tiers": diag.count or 0,
-            "product_pricing": products.count or 0,
             "audit_entries": audit.count or 0,
         }}
     except Exception as e:
