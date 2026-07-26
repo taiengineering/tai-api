@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: "Noto Sans KR", "Malgun Gothic", sans-serif; color: #1f2a44; font-size: 12px; margin: 0; }
+  .wrap { padding: 4px 2px; }
+  h1 { font-size: 20px; margin: 0 0 2px; color: #0f3f8f; }
+  .sub { color: #667085; font-size: 11px; margin: 0 0 14px; }
+  .meta { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+  .meta td { padding: 4px 8px; border: 1px solid #e3e8ef; font-size: 11px; }
+  .meta td.k { background: #f4f7fb; color: #475467; width: 90px; font-weight: 700; }
+  .cards { display: flex; gap: 8px; margin-bottom: 18px; }
+  .card { flex: 1; border: 1px solid #e3e8ef; border-radius: 8px; padding: 10px 12px; }
+  .card .label { font-size: 10px; color: #667085; }
+  .card .value { font-size: 22px; font-weight: 800; color: #1a5fd4; margin-top: 2px; }
+  .card .unit { font-size: 11px; font-weight: 600; color: #667085; }
+  h2 { font-size: 13px; margin: 18px 0 6px; padding-left: 8px; border-left: 3px solid #1a5fd4; color: #0f3f8f; }
+  table.data { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+  table.data th { background: #1f2a44; color: #fff; padding: 5px 6px; text-align: left; font-weight: 600; }
+  table.data td { padding: 4px 6px; border-bottom: 1px solid #eef2f7; }
+  .stat-row { display: flex; gap: 16px; margin: 4px 0 8px; font-size: 11px; }
+  .stat-row b { color: #0f3f8f; }
+  .empty { color: #98a2b3; font-size: 11px; padding: 6px 2px; }
+  .foot { margin-top: 22px; padding-top: 8px; border-top: 1px solid #e3e8ef; color: #98a2b3; font-size: 9.5px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>안전보건관리체계 이행 증빙 리포트</h1>
+  <p class="sub">Safety &amp; Health Management Compliance Evidence Report · TAI Safe</p>
+
+  <table class="meta">
+    <tr><td class="k">회사</td><td>{{ company_name or '—' }}</td><td class="k">사업장</td><td>{{ factory_name or '—' }}</td></tr>
+    <tr><td class="k">소재지</td><td>{{ factory_address or '—' }}</td><td class="k">관리책임자</td><td>{{ manager_name or '—' }}</td></tr>
+    <tr><td class="k">대상 기간</td><td>{{ period_from }} ~ {{ period_to }}</td><td class="k">생성일시</td><td>{{ generated_at }}</td></tr>
+  </table>
+
+  <div class="cards">
+    <div class="card"><div class="label">점검 이행률</div><div class="value">{{ compliance.rate }}<span class="unit">%</span></div></div>
+    <div class="card"><div class="label">미이행 발생</div><div class="value">{{ escalation.total }}<span class="unit">건</span></div></div>
+    <div class="card"><div class="label">교육 이수</div><div class="value">{{ education.completed }}<span class="unit">/ {{ education.total }}</span></div></div>
+    <div class="card"><div class="label">TBM 실시</div><div class="value">{{ tbm.total }}<span class="unit">회</span></div></div>
+  </div>
+
+  <h2>1. 점검 이행 현황</h2>
+  <div class="stat-row">
+    <span>예정 <b>{{ compliance.planned }}</b>건</span>
+    <span>완료 <b>{{ compliance.done }}</b>건</span>
+    <span>미완료 <b>{{ compliance.pending }}</b>건</span>
+    <span>기한초과 <b>{{ compliance.overdue }}</b>건</span>
+    <span>이행률 <b>{{ compliance.rate }}%</b></span>
+  </div>
+
+  <h2>2. 미이행 조치·에스컬레이션 이력</h2>
+  <div class="stat-row">
+    <span>D-1 알림 <b>{{ escalation.lvl1 }}</b></span>
+    <span>D+1 경고 <b>{{ escalation.lvl2 }}</b></span>
+    <span>D+2 관리자통보 <b>{{ escalation.lvl3 }}</b></span>
+    <span>D+7 미이행확정 <b>{{ escalation.lvl4 }}</b></span>
+    <span>해소 <b>{{ escalation.resolved }}</b></span>
+  </div>
+  {% if escalation.items %}
+  <table class="data">
+    <thead><tr><th style="width:90px">발생일</th><th style="width:60px">단계</th><th>조치 유형</th><th style="width:70px">해소</th></tr></thead>
+    <tbody>
+      {% for it in escalation.items %}
+      <tr><td>{{ it.date }}</td><td>Lv.{{ it.level }}</td><td>{{ it.action }}</td><td>{{ it.resolved }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<div class="empty">해당 기간 미이행 에스컬레이션 기록이 없습니다.</div>{% endif %}
+
+  <h2>3. 법정·안전 교육 실시 내역</h2>
+  <div class="stat-row">
+    <span>대상 <b>{{ education.total }}</b></span>
+    <span>이수 <b>{{ education.completed }}</b></span>
+    <span>미이수 <b>{{ education.pending }}</b></span>
+    <span>기한초과 <b>{{ education.overdue }}</b></span>
+  </div>
+  {% if education.items %}
+  <table class="data">
+    <thead><tr><th>교육</th><th style="width:80px">상태</th><th style="width:90px">이수일</th><th>기관</th></tr></thead>
+    <tbody>
+      {% for it in education.items %}
+      <tr><td>{{ it.code }}</td><td>{{ it.status }}</td><td>{{ it.completed_date or '—' }}</td><td>{{ it.institution or '—' }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<div class="empty">해당 기간 교육 기록이 없습니다.</div>{% endif %}
+
+  <h2>4. TBM(작업 전 안전점검회의) 실시 내역</h2>
+  <div class="stat-row">
+    <span>실시 <b>{{ tbm.total }}</b>회</span>
+    <span>완료 <b>{{ tbm.completed }}</b>회</span>
+  </div>
+  {% if tbm.items %}
+  <table class="data">
+    <thead><tr><th style="width:90px">일자</th><th>장소</th><th style="width:80px">진행자</th><th style="width:60px">참석</th><th style="width:70px">상태</th></tr></thead>
+    <tbody>
+      {% for it in tbm.items %}
+      <tr><td>{{ it.work_date }}</td><td>{{ it.location or '—' }}</td><td>{{ it.conductor or '—' }}</td><td>{{ it.attendees }}명</td><td>{{ it.status }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<div class="empty">해당 기간 TBM 기록이 없습니다.</div>{% endif %}
+
+  <div class="foot">
+    본 리포트는 TAI Safe에 기록된 안전보건관리 활동 이력을 대상 기간 기준으로 집계한 <b>증빙 자료</b>입니다.
+    중대재해처벌법상 안전보건관리체계 이행 여부의 법적 판단을 대체하거나 그 충족을 보장하지 않으며, 참고·보고 목적으로 활용하시기 바랍니다.
+    <br>생성: {{ generated_at }} · TAI Safe (safe.taieng.co.kr)
+  </div>
+</div>
+</body>
+</html>
