@@ -18,4 +18,5 @@ ROUTERS = [
     {"module": "routers.trigger_diagnosis"},
     {"module": "routers.saas_setup"},
     {"module": "routers.anonymous_diagnosis_leg"},  # WO-PIPE-004: LEG standalone endpoint
+    {"module": "routers.diagnosis_integrated_leg"},  # WO-PIPE-004(paid): LEG standalone paid endpoint
 ]
