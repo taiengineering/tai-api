@@ -3,7 +3,8 @@
     tai-api  ──HTTP──>  LEG Runtime API  ──>  31,434 Approved Atom  ──>  4-Result
 
 Repository 직접 접근 없음. DATABASE_URL 사용 금지. LEG_RUNTIME_URL만 사용.
-Shadow Mode 전용 — 이 모듈은 절대 예외를 호출자에게 전파하지 않는다.
+Shadow(run_shadow_compare)는 예외를 전파하지 않는다.
+WO-PIPE-004 소비자 경로(build_facility/evaluate_rtm)는 실패를 예외로 올려 호출자가 처리한다(TAI fallback 금지).
 """
 from __future__ import annotations
 
@@ -128,3 +129,67 @@ def run_shadow_compare(step1_body: Any, diagnosis_id: str,
 
     log.info("leg_runtime_shadow %s", record)
     return record
+
+
+# ── WO-PIPE-004: LEG 전용 소비자 경로 (/rtm/evaluate) ─────────────────────────
+# LEG Runtime이 판정에 참조하는 input_field_code 전체(실측: requirement_input_resolution_v3).
+# 추정 금지 — step1_body에 없는 필드는 미포함(LEG가 NO_APPLICABLE/EVIDENCE_GAP 반환).
+_LEG_INPUT_FIELDS = (
+    "worker_count", "total_floor_area", "building_use_type", "construction_type",
+    "ksic_major", "has_chemical", "has_elevator", "has_noise_work", "has_asbestos",
+    "has_crane", "has_excavation", "has_concrete_work", "has_hazardous_material",
+    "has_gas", "is_multi_use", "has_safety_manager", "has_subcontractor", "has_scaffold",
+    "has_diving", "has_dust_work", "has_forklift", "has_high_pressure_gas", "has_pile_work",
+    "has_confined_space", "has_welding", "has_mech_parking", "has_pressure_vessel",
+    "has_demolition", "has_radiation", "has_rolling", "has_boiler", "has_conveyor",
+    "has_steel_frame", "is_energy_intensive", "has_grinding", "has_painting", "has_blasting",
+    "has_high_place_work", "gas_capacity_kg", "has_gondola", "has_water_tank", "has_press",
+    "has_fire_hydrant", "has_emergency_broadcast", "has_hazmat_storage", "has_sprinkler",
+    "has_emergency_gen", "has_casting", "has_plating",
+)
+
+
+def build_facility(step1_body: Any) -> Dict[str, Any]:
+    """DiagnoseStep1Body -> LEG /rtm/evaluate facility(consumer_input dict).
+
+    값 출처: step1_body 최상위 속성 우선, 없으면 step1_body.input dict.
+    None/빈 문자열은 미포함. 추정/임의 매핑 없음.
+    """
+    inp = getattr(step1_body, "input", None) or {}
+    if not isinstance(inp, dict):
+        inp = {}
+    facility: Dict[str, Any] = {}
+    for code in _LEG_INPUT_FIELDS:
+        val = getattr(step1_body, code, None)
+        if val is None:
+            val = inp.get(code)
+        if val is None:
+            continue
+        if isinstance(val, str) and not val.strip():
+            continue
+        facility[code] = val
+    return facility
+
+
+def evaluate_rtm(facility: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    """POST {LEG_RUNTIME_URL}/rtm/evaluate. 사업장 배치 판정 -> obligations. retry 0, fail fast.
+
+    반환(그대로): {status, obligations[], obligation_count, provenance, contract,
+                  trace_id, error_code, error}. 4xx/5xx도 body를 반환하며 호출자가 status로 분기.
+    네트워크/파싱 실패만 LegRuntimeError로 올린다(호출자가 처리, fallback 금지).
+    """
+    if not is_enabled():
+        raise LegRuntimeError("LEG_RUNTIME_URL 미설정")
+    url = "{}/rtm/evaluate".format(LEG_RUNTIME_URL)
+    try:
+        resp = httpx.post(
+            url,
+            json={"facility": facility},
+            timeout=timeout or LEG_RUNTIME_TIMEOUT,
+        )
+    except Exception as e:
+        raise LegRuntimeError("request failed: {}".format(e))
+    try:
+        return resp.json()
+    except Exception as e:
+        raise LegRuntimeError("invalid json: {}".format(e))
