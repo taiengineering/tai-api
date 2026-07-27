@@ -80,7 +80,12 @@ def _seed_decrypt(encrypted_b64: str) -> str:
         raise ValueError("INICIS_SA_SEED_IV must be 16 bytes")
     encrypted = base64.b64decode(encrypted_b64)
     decrypted = seed_cbc_decrypt(key, iv, encrypted)
-    return decrypted.decode("utf-8")
+    for _enc in ("utf-8", "cp949"):
+        try:
+            return decrypted.decode(_enc)
+        except UnicodeDecodeError:
+            continue
+    return decrypted.decode("utf-8", errors="replace")
 
 
 def _is_allowed_auth_url(url: str) -> bool:
