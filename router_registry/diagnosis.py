@@ -17,4 +17,5 @@ ROUTERS = [
     {"module": "routers.obligation_adapter"},
     {"module": "routers.trigger_diagnosis"},
     {"module": "routers.saas_setup"},
+    {"module": "routers.anonymous_diagnosis_leg"},  # WO-PIPE-004: LEG standalone endpoint
 ]
