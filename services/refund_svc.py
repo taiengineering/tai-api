@@ -4,6 +4,7 @@ Goal: G-ms4je4z3-33eada
 규격: docs/INICIS_INTEGRATION_SPEC.md §4 (전체취소/부분취소)
 - URL/키/IP는 payment_helpers의 env 상수만 참조 (R-008 하드코딩 금지)
 - 모든 성공/실패는 refunds 대장에 기록 (사유 필수, 누적환불 검증)
+- WO-2: 성공/실패 시 audit_svc.record로 감사 기록 (best-effort)
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from typing import Any, Dict, Optional
 import requests as _requests
 
 from db.supabase_client import get_supabase
+from services import audit_svc
 from services.payment_helpers import (
     INICIS_CLIENT_IP,
     INICIS_INIAPI_KEY,
@@ -155,9 +157,20 @@ def run_refund(payment_id: str, reason: str = "", cancelled_by: Optional[str] = 
         get_supabase().table("payments").update(
             {"status_code": "CANCELLED", "updated_at": now_iso()}
         ).eq("id", payment_id).execute()
+        audit_svc.record(
+            "REFUND_FULL", "payment", entity_id=payment_id, actor_id=cancelled_by,
+            before={"status_code": payment["status_code"], "cumulative_done": done},
+            after={"refund_id": refund_id, "amount": remaining, "status": "DONE", "result_code": "00"},
+        )
         return {"status": "success", "refund_id": refund_id, "amount": remaining, "inicis": result}
 
     _update_refund(refund_id, {"status": "FAILED", "inicis_raw": result})
+    audit_svc.record(
+        "REFUND_FULL", "payment", entity_id=payment_id, actor_id=cancelled_by,
+        before={"status_code": payment["status_code"], "cumulative_done": done},
+        after={"refund_id": refund_id, "amount": remaining, "status": "FAILED",
+               "result_code": str(result.get("resultCode", ""))},
+    )
     raise PaymentPrepareError(400, result.get("resultMsg", "이니시스 환불 실패"))
 
 
@@ -225,6 +238,12 @@ def run_partial_refund(payment_id: str, amount: int, reason: str = "", cancelled
         get_supabase().table("payments").update(
             {"status_code": new_status, "updated_at": now_iso()}
         ).eq("id", payment_id).execute()
+        audit_svc.record(
+            "REFUND_PARTIAL", "payment", entity_id=payment_id, actor_id=cancelled_by,
+            before={"status_code": payment["status_code"], "cumulative_done": done},
+            after={"refund_id": refund_id, "amount": amount, "cumulative": new_cumulative,
+                   "status": "DONE", "result_code": "00", "payment_status": new_status},
+        )
         return {
             "status": "success",
             "refund_id": refund_id,
@@ -234,4 +253,10 @@ def run_partial_refund(payment_id: str, amount: int, reason: str = "", cancelled
         }
 
     _update_refund(refund_id, {"status": "FAILED", "inicis_raw": result})
+    audit_svc.record(
+        "REFUND_PARTIAL", "payment", entity_id=payment_id, actor_id=cancelled_by,
+        before={"status_code": payment["status_code"], "cumulative_done": done},
+        after={"refund_id": refund_id, "amount": amount, "status": "FAILED",
+               "result_code": str(result.get("resultCode", ""))},
+    )
     raise PaymentPrepareError(400, result.get("resultMsg", "이니시스 부분환불 실패"))
