@@ -3,6 +3,7 @@
 Goal: G-ms4je4z3-33eada
 - 매출·구독(MRR)·결제 건전성·전환 지표. admin_stats(자산 수)와 상보.
 - 결제 상태(system_codes payment_status): PENDING/SUCCESS/FAILED/CANCELLED.
+- 진단 상태(diagnosis_purchases.status): PAID(결제완료) — payments와 다른 코드 체계.
 - 원천 읽기만. 각 지표 오류 격리.
 """
 from __future__ import annotations
@@ -15,6 +16,7 @@ from db.supabase_client import get_supabase
 log = logging.getLogger(__name__)
 
 _PAGE = 1000
+_DIAG_PAID = "PAID"  # diagnosis_purchases 결제완료 상태(payments의 SUCCESS와 다름)
 
 
 def _fetch_all(table: str, select: str, build=None) -> List[Dict[str, Any]]:
@@ -48,7 +50,7 @@ def revenue() -> Dict[str, Any]:
         by_product[key] = by_product.get(key, 0) + int(p.get("total_amount") or 0)
 
     diags = _fetch_all("diagnosis_purchases", "price, status",
-                       lambda q: q.eq("status", "SUCCESS"))
+                       lambda q: q.eq("status", _DIAG_PAID))
     diag_total = sum(int(d.get("price") or 0) for d in diags)
 
     return {
@@ -99,7 +101,7 @@ def conversion() -> Dict[str, Any]:
     """진단→SaaS 전환: 진단 구매 회사 중 SaaS 구독 보유 비율(간접 산출)."""
     diag_companies = {
         d.get("company_id") for d in
-        _fetch_all("diagnosis_purchases", "company_id", lambda q: q.eq("status", "SUCCESS"))
+        _fetch_all("diagnosis_purchases", "company_id, status", lambda q: q.eq("status", _DIAG_PAID))
         if d.get("company_id")
     }
     saas_companies = {
