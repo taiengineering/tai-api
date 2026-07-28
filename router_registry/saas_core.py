@@ -4,6 +4,7 @@ ROUTERS = [
     {"module": "routers.users"},
     {"module": "routers.companies"},
     {"module": "routers.customer360"},  # WO-6 고객360 통합 집계 (GET /companies/{id}/360)
+    {"module": "routers.onboarding_ops"},  # WO-17 온보딩 체크리스트 (GET /companies/{id}/onboarding)
     {"module": "routers.global_search"},  # WO-11 통합 교차검색 (GET /search)
     {"module": "routers.factories"},
     {"module": "routers.system_codes"},
