@@ -14,6 +14,7 @@ ROUTERS = [
     {"module": "routers.automation"},   # WO-12 운영 자동화 (/automation/*)
     {"module": "routers.ops_home"},     # WO-13 관제홈 (GET /ops/home)
     {"module": "routers.stats_provider"},  # WO-14 경영 지표 (GET /stats/business)
+    {"module": "routers.tax_ops"},      # WO-15 세무 발행현황 (/tax/ops, /tax/unissued, /tax/issued)
     {"module": "routers.ai_copywrite"},
     {"module": "routers.event_trigger"},
     {"module": "routers.repair"},
