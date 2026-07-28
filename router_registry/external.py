@@ -10,6 +10,7 @@ ROUTERS = [
     {"module": "routers.mail"},
     {"module": "routers.gmail_inbox"},  # WO-8B Gmail 수신 폴링 (POST /mail/pull)
     {"module": "routers.notify"},       # WO-8C 통합 발송 (POST /notify/send, /notify/dry-run)
+    {"module": "routers.integration_health"},  # WO-10 연동 관제 (GET /integrations/health, POST /probe)
     {"module": "routers.ai_copywrite"},
     {"module": "routers.event_trigger"},
     {"module": "routers.repair"},
