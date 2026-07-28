@@ -149,6 +149,14 @@ _LEG_INPUT_FIELDS = (
 )
 
 
+# 소비자 스키마 필드명 -> LEG Input Contract field_code (WO-E2E-SEM-001 승인: 의미 동일, 이름만 상이)
+# has_fall_risk 는 제외(추락위험 != 고소작업대, UNDECIDABLE — 별도 WO 승인 전 금지).
+_LEG_CODE_TO_CONSUMER = {
+    "has_chemical": "has_chemical_substance",
+    "has_high_place_work": "has_high_work",
+}
+
+
 def build_facility(step1_body: Any) -> Dict[str, Any]:
     """DiagnoseStep1Body -> LEG /rtm/evaluate facility(consumer_input dict).
 
@@ -163,6 +171,12 @@ def build_facility(step1_body: Any) -> Dict[str, Any]:
         val = getattr(step1_body, code, None)
         if val is None:
             val = inp.get(code)
+        if val is None:
+            _alias = _LEG_CODE_TO_CONSUMER.get(code)
+            if _alias:
+                val = getattr(step1_body, _alias, None)
+                if val is None:
+                    val = inp.get(_alias)
         if val is None:
             continue
         if isinstance(val, str) and not val.strip():
