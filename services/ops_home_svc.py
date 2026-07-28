@@ -4,6 +4,8 @@ Goal: G-ms4je4z3-33eada
 - 기존 집계 재사용(신규 집계 없음). 1인 운영자의 "오늘 처리할 일" 요약.
 - action_queue(처리 대기) + alerts(이상 신호) + today(오늘의 숫자).
 - 각 소스 오류 격리: 한 소스 실패해도 나머지 반환.
+- 결제 상태 코드(system_codes payment_status): PENDING/SUCCESS/FAILED/CANCELLED.
+  입금대기 = payment_method='VBANK' AND status_code='PENDING' AND vbank_confirmed_at IS NULL.
 """
 from __future__ import annotations
 
@@ -37,8 +39,11 @@ def action_queue() -> Dict[str, Any]:
                               lambda q: q.eq("status", "APPROVAL_PENDING"))
     unread_mail = _count("mail_logs",
                          lambda q: q.eq("direction", "inbound").eq("read", False).eq("deleted", False))
+    # 입금 대기: 가상계좌 결제 중 미입금(PENDING + 미확인)
     vbank_waiting = _count("payments",
-                           lambda q: q.eq("status_code", "VBANK_READY"))
+                           lambda q: q.eq("payment_method", "VBANK")
+                                       .eq("status_code", "PENDING")
+                                       .is_("vbank_confirmed_at", "null"))
     return {
         "approval_pending": approval_pending,
         "unread_inbound_mail": unread_mail,
