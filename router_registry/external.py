@@ -13,6 +13,7 @@ ROUTERS = [
     {"module": "routers.integration_health"},  # WO-10 연동 관제 (GET /integrations/health, POST /probe)
     {"module": "routers.automation"},   # WO-12 운영 자동화 (/automation/*)
     {"module": "routers.ops_home"},     # WO-13 관제홈 (GET /ops/home)
+    {"module": "routers.stats_provider"},  # WO-14 경영 지표 (GET /stats/business)
     {"module": "routers.ai_copywrite"},
     {"module": "routers.event_trigger"},
     {"module": "routers.repair"},
