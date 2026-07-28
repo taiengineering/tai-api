@@ -12,6 +12,7 @@ ROUTERS = [
     {"module": "routers.notify"},       # WO-8C 통합 발송 (POST /notify/send, /notify/dry-run)
     {"module": "routers.integration_health"},  # WO-10 연동 관제 (GET /integrations/health, POST /probe)
     {"module": "routers.automation"},   # WO-12 운영 자동화 (/automation/*)
+    {"module": "routers.ops_home"},     # WO-13 관제홈 (GET /ops/home)
     {"module": "routers.ai_copywrite"},
     {"module": "routers.event_trigger"},
     {"module": "routers.repair"},
