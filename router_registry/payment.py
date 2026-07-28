@@ -3,6 +3,7 @@ ROUTERS = [
     {"module": "routers.payment"},
     {"module": "routers.payment_test"},
     {"module": "routers.payment_ops"},
+    {"module": "routers.payment_ledger"},  # WO-7 환불/크레딧/증빙 결선 + 결제원장 조회
     {"module": "routers.payment_billing"},
     {"module": "routers.contracts"},
     {"module": "routers.contracts_engine", "prefix": "/matching/contracts", "tags": ["계약서"]},
