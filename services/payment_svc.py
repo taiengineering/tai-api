@@ -775,14 +775,22 @@ def run_billing_cancel(subscription_id: str, reason: str = "사용자 요청", c
     return {"status": "success", "data": {"subscription_id": subscription_id, "status": "CANCELLED"}}
 
 
-def run_partial_refund(payment_id: str, amount: int, reason: str) -> dict:
-    """부분 환불 — TODO: 구현 예정."""
-    raise PaymentPrepareError(501, "부분 환불 기능은 아직 구현되지 않았습니다.")
+def run_partial_refund(payment_id: str, amount: int, reason: str = "", cancelled_by: Optional[str] = None) -> dict:
+    """부분 환불 — WO-1 refund_svc 위임 (이니시스 INIAPI 실연동).
+
+    본문은 services/refund_svc.py. 순환 import 방지를 위해 함수 내부에서 지연 import.
+    """
+    from services.refund_svc import run_partial_refund as _impl
+    return _impl(payment_id, amount, reason, cancelled_by)
 
 
-def run_refund(payment_id: str, reason: str = "") -> dict:
-    """전체 환불 — TODO: 구현 예정."""
-    raise PaymentPrepareError(501, "환불 기능은 아직 구현되지 않았습니다.")
+def run_refund(payment_id: str, reason: str = "", cancelled_by: Optional[str] = None) -> dict:
+    """전체 환불 — WO-1 refund_svc 위임 (이니시스 INIAPI 실연동).
+
+    본문은 services/refund_svc.py. 순환 import 방지를 위해 함수 내부에서 지연 import.
+    """
+    from services.refund_svc import run_refund as _impl
+    return _impl(payment_id, reason, cancelled_by)
 
 
 from services.health_registry import register_probe
