@@ -8,6 +8,7 @@ ROUTERS = [
     {"module": "routers.messaging"},
     {"module": "routers.fcm"},
     {"module": "routers.mail"},
+    {"module": "routers.gmail_inbox"},  # WO-8B Gmail 수신 폴링 (POST /mail/pull)
     {"module": "routers.ai_copywrite"},
     {"module": "routers.event_trigger"},
     {"module": "routers.repair"},
