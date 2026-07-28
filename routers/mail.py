@@ -1,24 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI 메일 관리 라우터 v2.2.0
+TAI 메일 관리 라우터 v3.0.0
 
-v2.2.0 (2026-05-04):
-  - reply_to 파라미터 추가 (send / reply / send-system)
-    · 자동 메일 답장을 Workspace Gmail로 라우팅하기 위함
-    · MAIL_DEFAULT_REPLY_TO 환경변수로 시스템 메일 답장 주소 지정
-  - webhook/inbound: MX 마이그레이션 안내 주석
-    · MX 레코드를 Resend → Google Workspace로 변경하면
-      이 엔드포인트는 더 이상 호출되지 않음 (Gmail이 직접 수신)
-v2.1.0:
-  - 인바운드 웹훅: payload에서 html/text 직접 추출 (API 재조회 fallback)
-  - 첨부파일 메타 직접 추출
-  - text_body 저장 (컬럼 없으면 자동 제외 후 재시도)
-v2.0.0:
-  - POST /mail/send        첨부파일(multipart) 지원
-  - POST /mail/reply/:id   답장
-  - GET  /mail/:id         수신메일 html_body + attachments 완전 반환
-  - GET  /mail/attachment/:mail_id/:filename  첨부파일 다운로드
+v3.0.0 (2026-07-28) — WO-8A 발송 경로 Gmail 전환:
+  - 발송(send/send-system/reply)을 Gmail API(서비스계정 도메인위임) 우선으로 전환.
+  - GMAIL_SA_JSON + GMAIL_SENDER 설정 시 Gmail, 미설정 시 기존 Resend fallback.
+  - _dispatch_send() 공통 헬퍼가 채널 선택. mail_logs 이력·조회·수신 웹훅은 그대로.
+  - 발송 결과 provider(gmail/resend) 기록.
+v2.2.0 (2026-05-04): reply_to 파라미터 (send/reply/send-system), MX 마이그레이션 주석.
+v2.1.0: 인바운드 웹훅 본문 직접 추출. v2.0.0: 첨부/답장/상세.
 """
 
 from fastapi import APIRouter, HTTPException, Query, Request, File, UploadFile, Form
@@ -41,9 +32,6 @@ resend_client.api_key = RESEND_API_KEY
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
-# 자동 발송 메일에 답장이 갈 주소 (Workspace Gmail 등).
-# 미설정 시 reply_to 헤더를 추가하지 않음 (= from으로 답장).
-# system@... 처럼 답장을 받을 수 없는 주소로 발송할 때 특히 중요.
 MAIL_DEFAULT_REPLY_TO = os.environ.get("MAIL_DEFAULT_REPLY_TO", "").strip()
 
 ALLOWED_FROM = {
@@ -54,6 +42,61 @@ ALLOWED_FROM = {
 DEFAULT_FROM    = "tai@taieng.co.kr"
 STORAGE_BUCKET  = "mail-attachments"
 MAX_ATTACH_SIZE = 10 * 1024 * 1024
+
+
+def _gmail_enabled() -> bool:
+    """Gmail 발송 준비 여부 (서비스계정 + 발신계정 설정)."""
+    has_sa = bool(os.environ.get("GMAIL_SA_JSON", "").strip() or os.environ.get("GMAIL_SA_JSON_B64", "").strip())
+    has_sender = bool(os.environ.get("GMAIL_SENDER", "").strip())
+    return has_sa and has_sender
+
+
+def _dispatch_send(*, to_list: List[str], subject: str, html: Optional[str] = None,
+                   text: Optional[str] = None, cc_list: Optional[List[str]] = None,
+                   reply_to_list: Optional[List[str]] = None) -> dict:
+    """발송 채널 선택: Gmail 우선, 미설정 시 Resend fallback.
+
+    반환: {provider, external_id, status, error}
+    (Gmail: external_id=gmail messageId, Resend: external_id=resend id)
+    """
+    # 1) Gmail 우선
+    if _gmail_enabled():
+        try:
+            from services.gmail_channel import send as gmail_send
+            res = gmail_send(
+                to_list, subject, html=html, text=text,
+                cc=cc_list or None, reply_to=reply_to_list or None,
+            )
+            return {"provider": "gmail", "external_id": res.get("id"), "status": "sent", "error": None}
+        except Exception as e:  # noqa: BLE001 — Gmail 실패 시 Resend fallback
+            gmail_err = str(e)
+            # fallback으로 진행 (아래 Resend)
+    else:
+        gmail_err = None
+
+    # 2) Resend fallback
+    send_params: dict = {
+        "from": ALLOWED_FROM.get(DEFAULT_FROM, DEFAULT_FROM),
+        "to": to_list,
+        "subject": subject,
+    }
+    if html:
+        send_params["html"] = html
+    if text:
+        send_params["text"] = text
+    if cc_list:
+        send_params["cc"] = cc_list
+    if reply_to_list:
+        send_params["reply_to"] = reply_to_list
+    try:
+        result = resend_client.Emails.send(send_params)
+        rid = result.get("id") if isinstance(result, dict) else getattr(result, "id", None)
+        return {"provider": "resend", "external_id": rid, "status": "sent", "error": None}
+    except Exception as e:
+        err = str(e)
+        if gmail_err:
+            err = f"gmail: {gmail_err} | resend: {err}"
+        return {"provider": "resend", "external_id": None, "status": "failed", "error": err}
 
 
 def _normalize_reply_to(reply_to: Optional[str]) -> List[str]:
@@ -92,13 +135,6 @@ async def _upload_attachment(file: UploadFile, mail_id: str) -> dict:
     }
 
 
-def _build_resend_attachments(attach_metas: list) -> list:
-    return [
-        {"filename": a["name"], "content": a["content_b64"]}
-        for a in attach_metas
-    ]
-
-
 def _strip_b64(attach_metas: list) -> list:
     return [
         {k: v for k, v in a.items() if k != "content_b64"}
@@ -126,22 +162,14 @@ class SystemMailRequest(BaseModel):
     to: str
     subject: str
     body: str
-    reply_to: Optional[str] = None  # 미지정 시 MAIL_DEFAULT_REPLY_TO 사용
+    reply_to: Optional[str] = None
 
 
 # ─── POST /mail/send-system ──────────────────────────────────
 
 @router.post("/send-system")
 async def send_system_mail(req: SystemMailRequest):
-    """
-    pg_cron 자동QA 등 내부 시스템에서 JSON으로 호출하는 메일 발송.
-    인증 불필요 (내부 Supabase pg_net 전용).
-
-    답장 라우팅:
-      - req.reply_to 가 있으면 그 주소로
-      - 없으면 MAIL_DEFAULT_REPLY_TO 환경변수
-      - 둘 다 없으면 reply_to 헤더 미설정 (= system@... 으로 답장 시도되어 실패할 수 있음)
-    """
+    """내부 시스템 메일 발송 (pg_cron 등). Gmail 우선 → Resend fallback."""
     supabase = get_supabase()
 
     to_list = [e.strip() for e in req.to.split(",") if e.strip()]
@@ -149,30 +177,13 @@ async def send_system_mail(req: SystemMailRequest):
         raise HTTPException(status_code=400, detail="수신자(to)가 비어 있습니다.")
 
     mail_id = str(uuid.uuid4())
-    from_key = "system@taieng.co.kr"
-
-    send_params: dict = {
-        "from": f"TAI System <{from_key}>",
-        "to": to_list,
-        "subject": req.subject,
-        "text": req.body,
-    }
-
-    # reply_to: 요청 우선 → 환경변수 fallback
     reply_to_value = (req.reply_to or "").strip() or MAIL_DEFAULT_REPLY_TO
     reply_to_list = _normalize_reply_to(reply_to_value)
-    if reply_to_list:
-        send_params["reply_to"] = reply_to_list
 
-    resend_id: Optional[str] = None
-    status = "sent"
-    error_message: Optional[str] = None
-    try:
-        result = resend_client.Emails.send(send_params)
-        resend_id = result.get("id") if isinstance(result, dict) else getattr(result, "id", None)
-    except Exception as e:
-        status = "failed"
-        error_message = str(e)
+    result = _dispatch_send(
+        to_list=to_list, subject=req.subject, text=req.body,
+        reply_to_list=reply_to_list or None,
+    )
 
     log_row = {
         "id": mail_id,
@@ -180,12 +191,12 @@ async def send_system_mail(req: SystemMailRequest):
         "cc_emails": [],
         "subject": req.subject,
         "html_body": f"<pre style='white-space:pre-wrap;font-family:inherit;margin:0;'>{req.body}</pre>",
-        "status": status,
-        "resend_id": resend_id,
-        "error_message": error_message,
-        "sent_by": "system",
+        "status": result["status"],
+        "resend_id": result["external_id"],
+        "error_message": result["error"],
+        "sent_by": f"system:{result['provider']}",
         "direction": "outbound",
-        "from_email": from_key,
+        "from_email": DEFAULT_FROM,
         "attachments": [],
     }
     try:
@@ -193,10 +204,10 @@ async def send_system_mail(req: SystemMailRequest):
     except Exception:
         pass
 
-    if status == "failed":
-        raise HTTPException(status_code=502, detail=f"메일 발송 실패: {error_message}")
+    if result["status"] == "failed":
+        raise HTTPException(status_code=502, detail=f"메일 발송 실패: {result['error']}")
 
-    return {"ok": True}
+    return {"ok": True, "provider": result["provider"]}
 
 
 # ─── POST /mail/send ─────────────────────────────────────────
@@ -217,7 +228,6 @@ async def send_mail(
     from_key = from_email or DEFAULT_FROM
     if from_key not in ALLOWED_FROM:
         raise HTTPException(status_code=400, detail=f"허용되지 않은 발신 주소: {from_key}")
-    from_address = ALLOWED_FROM[from_key]
 
     to_list = [e.strip() for e in to.split(",") if e.strip()]
     cc_list = [e.strip() for e in (cc or "").split(",") if e.strip()]
@@ -230,32 +240,20 @@ async def send_mail(
             meta = await _upload_attachment(f, mail_id)
             attach_metas.append(meta)
 
-    send_params: dict = {
-        "from":    from_address,
-        "to":      to_list,
-        "subject": subject,
-        "html":    html,
-    }
-    if cc_list:
-        send_params["cc"] = cc_list
-    if attach_metas:
-        send_params["attachments"] = _build_resend_attachments(attach_metas)
-
-    # reply_to: 요청 명시 우선, 없으면 미설정 (= from 으로 답장)
     reply_to_list = _normalize_reply_to(reply_to)
-    if reply_to_list:
-        send_params["reply_to"] = reply_to_list
 
-    resend_id: Optional[str] = None
-    status = "sent"
-    error_message: Optional[str] = None
-
-    try:
-        result = resend_client.Emails.send(send_params)
-        resend_id = result.get("id") if isinstance(result, dict) else getattr(result, "id", None)
-    except Exception as e:
-        status = "failed"
-        error_message = str(e)
+    # NOTE: 첨부는 현재 Resend fallback 경로에서만 지원. Gmail 첨부는 WO-8 후속.
+    if attach_metas and _gmail_enabled():
+        # 첨부가 있으면 안전하게 Resend로(첨부 지원). 첨부 없으면 Gmail.
+        result = _resend_with_attachments(
+            to_list, cc_list, subject, html, ALLOWED_FROM[from_key],
+            reply_to_list, attach_metas,
+        )
+    else:
+        result = _dispatch_send(
+            to_list=to_list, subject=subject, html=html,
+            cc_list=cc_list or None, reply_to_list=reply_to_list or None,
+        )
 
     log_row = {
         "id":          mail_id,
@@ -263,24 +261,40 @@ async def send_mail(
         "cc_emails":   cc_list,
         "subject":     subject,
         "html_body":   html,
-        "status":      status,
-        "resend_id":   resend_id,
-        "error_message": error_message,
-        "sent_by":     sent_by,
+        "status":      result["status"],
+        "resend_id":   result["external_id"],
+        "error_message": result["error"],
+        "sent_by":     f"{sent_by or ''}:{result['provider']}",
         "direction":   "outbound",
         "from_email":  from_key,
         "attachments": _strip_b64(attach_metas),
     }
-
     try:
         supabase.table("mail_logs").insert(log_row).execute()
     except Exception:
         pass
 
-    if status == "failed":
-        raise HTTPException(status_code=502, detail=f"메일 발송 실패: {error_message}")
+    if result["status"] == "failed":
+        raise HTTPException(status_code=502, detail=f"메일 발송 실패: {result['error']}")
 
-    return {"success": True, "resend_id": resend_id, "mail_id": mail_id}
+    return {"success": True, "resend_id": result["external_id"], "mail_id": mail_id, "provider": result["provider"]}
+
+
+def _resend_with_attachments(to_list, cc_list, subject, html, from_address,
+                             reply_to_list, attach_metas) -> dict:
+    """첨부가 있는 발송은 Resend로(첨부 지원). Gmail 첨부는 후속 작업."""
+    send_params: dict = {"from": from_address, "to": to_list, "subject": subject, "html": html}
+    if cc_list:
+        send_params["cc"] = cc_list
+    if reply_to_list:
+        send_params["reply_to"] = reply_to_list
+    send_params["attachments"] = [{"filename": a["name"], "content": a["content_b64"]} for a in attach_metas]
+    try:
+        result = resend_client.Emails.send(send_params)
+        rid = result.get("id") if isinstance(result, dict) else getattr(result, "id", None)
+        return {"provider": "resend", "external_id": rid, "status": "sent", "error": None}
+    except Exception as e:
+        return {"provider": "resend", "external_id": None, "status": "failed", "error": str(e)}
 
 
 # ─── POST /mail/reply/:mail_id ───────────────────────────────
@@ -332,34 +346,17 @@ async def reply_mail(
 </div>
 """
 
-    send_params: dict = {
-        "from":    from_address,
-        "to":      to_list,
-        "subject": reply_subject,
-        "html":    reply_html,
-    }
-    if attach_metas:
-        send_params["attachments"] = _build_resend_attachments(attach_metas)
-
-    # reply_to: 요청 명시 우선, 없으면 미설정 (= from 으로 답장)
     reply_to_list = _normalize_reply_to(reply_to)
-    if reply_to_list:
-        send_params["reply_to"] = reply_to_list
 
-    orig_resend_id = original.get("resend_id")
-    if orig_resend_id:
-        send_params["headers"] = {"In-Reply-To": f"<{orig_resend_id}>"}
-
-    resend_id: Optional[str] = None
-    status = "sent"
-    error_message: Optional[str] = None
-
-    try:
-        result = resend_client.Emails.send(send_params)
-        resend_id = result.get("id") if isinstance(result, dict) else getattr(result, "id", None)
-    except Exception as e:
-        status = "failed"
-        error_message = str(e)
+    if attach_metas and _gmail_enabled():
+        result = _resend_with_attachments(
+            to_list, [], reply_subject, reply_html, from_address, reply_to_list, attach_metas,
+        )
+    else:
+        result = _dispatch_send(
+            to_list=to_list, subject=reply_subject, html=reply_html,
+            reply_to_list=reply_to_list or None,
+        )
 
     log_row = {
         "id":          new_mail_id,
@@ -367,26 +364,25 @@ async def reply_mail(
         "cc_emails":   [],
         "subject":     reply_subject,
         "html_body":   reply_html,
-        "status":      status,
-        "resend_id":   resend_id,
-        "error_message": error_message,
-        "sent_by":     sent_by,
+        "status":      result["status"],
+        "resend_id":   result["external_id"],
+        "error_message": result["error"],
+        "sent_by":     f"{sent_by or ''}:{result['provider']}",
         "direction":   "outbound",
         "from_email":  from_key,
         "reply_to_id": mail_id,
-        "in_reply_to": orig_resend_id,
+        "in_reply_to": original.get("resend_id"),
         "attachments": _strip_b64(attach_metas),
     }
-
     try:
         supabase.table("mail_logs").insert(log_row).execute()
     except Exception:
         pass
 
-    if status == "failed":
-        raise HTTPException(status_code=502, detail=f"답장 발송 실패: {error_message}")
+    if result["status"] == "failed":
+        raise HTTPException(status_code=502, detail=f"답장 발송 실패: {result['error']}")
 
-    return {"success": True, "resend_id": resend_id, "mail_id": new_mail_id}
+    return {"success": True, "resend_id": result["external_id"], "mail_id": new_mail_id, "provider": result["provider"]}
 
 
 # ─── GET /mail/attachment/:mail_id/:filename ─────────────────
@@ -489,19 +485,11 @@ def delete_bulk(body: BulkDeleteRequest):
     return {"success": True, "deleted_count": len(body.mail_ids)}
 
 
-# ─── POST /mail/webhook/inbound ───────────────────────────────
+# ─── POST /mail/webhook/inbound (Resend 레거시 — Gmail 폴링(WO-8B)으로 대체 예정) ──
 
 @router.post("/webhook/inbound")
 async def webhook_inbound(request: Request):
-    """Resend 수신 웹훅 — webhook payload에서 본문 직접 추출 (v2.1.0).
-
-    ⚠️ MX 마이그레이션 메모 (2026-05-04):
-      MX 레코드가 Resend → Google Workspace 로 변경되면
-      외부 메일은 Gmail이 직접 수신하므로 이 엔드포인트는
-      더 이상 호출되지 않습니다. 코드는 그대로 두어도 무해
-      (호출이 안 들어올 뿐). Resend 대시보드의 Inbound 설정도
-      함께 비활성화하면 깔끔합니다.
-    """
+    """Resend 수신 웹훅 (레거시). Gmail 폴링(WO-8B) 도입 후 은퇴."""
     try:
         payload = await request.json()
     except Exception:
