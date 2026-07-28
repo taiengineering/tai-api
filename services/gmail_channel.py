@@ -3,7 +3,7 @@
 Goal: G-ms4je4z3-33eada
 - 서비스계정 도메인 위임(DWD)으로 tai@taieng.co.kr 가장(impersonate).
 - 발송: Gmail API messages.send (RFC822 MIME base64url).
-- 수신(WO-8B): messages.list→get→mail_logs 적재.
+- 수신(WO-8B): messages.list→get→파싱(parse_message).
 - SDK/키 지연 로딩: 미설정·미설치 시 GmailError(501) → 배포 `/health` 안전.
 - env(Railway 단일): GMAIL_SA_JSON 또는 GMAIL_SA_JSON_B64, GMAIL_SENDER.
 """
@@ -110,7 +110,7 @@ def send(to: List[str], subject: str, *, html: Optional[str] = None,
     return {"id": result.get("id"), "threadId": result.get("threadId")}
 
 
-# ── 수신 폴링 (WO-8B) ────────────────────────────────────────────────
+# ── 수신 (WO-8B) ─────────────────────────────────────────────────────
 def list_new_messages(query: str = "in:inbox", max_results: int = 50) -> List[str]:
     """수신 메시지 ID 목록 (신규 필터는 호출부에서 관리)."""
     svc = _service()
@@ -124,9 +124,75 @@ def list_new_messages(query: str = "in:inbox", max_results: int = 50) -> List[st
 
 
 def get_message(msg_id: str) -> Dict[str, Any]:
-    """메시지 상세 (헤더·본문)."""
+    """메시지 상세 (헤더·본문 raw)."""
     svc = _service()
     try:
         return svc.users().messages().get(userId="me", id=msg_id, format="full").execute()
     except Exception as e:  # noqa: BLE001
         raise GmailError(502, f"Gmail 메시지 조회 실패: {e}") from e
+
+
+def _header(headers: List[Dict[str, str]], name: str) -> str:
+    for h in headers:
+        if h.get("name", "").lower() == name.lower():
+            return h.get("value", "")
+    return ""
+
+
+def _decode_part(data: str) -> str:
+    try:
+        return base64.urlsafe_b64decode(data.encode("utf-8")).decode("utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _extract_bodies(payload: Dict[str, Any]) -> Dict[str, str]:
+    """페이로드에서 text/plain·text/html 본문 추출 (재귀)."""
+    result = {"text": "", "html": ""}
+
+    def walk(part: Dict[str, Any]) -> None:
+        mime = part.get("mimeType", "")
+        body = part.get("body", {})
+        data = body.get("data")
+        if mime == "text/plain" and data and not result["text"]:
+            result["text"] = _decode_part(data)
+        elif mime == "text/html" and data and not result["html"]:
+            result["html"] = _decode_part(data)
+        for sub in part.get("parts", []) or []:
+            walk(sub)
+
+    walk(payload)
+    return result
+
+
+def parse_message(msg: Dict[str, Any]) -> Dict[str, Any]:
+    """Gmail get_message 응답 → mail_logs 적재용 dict."""
+    payload = msg.get("payload", {})
+    headers = payload.get("headers", [])
+    bodies = _extract_bodies(payload)
+
+    from_email = _header(headers, "From")
+    to_raw = _header(headers, "To")
+    cc_raw = _header(headers, "Cc")
+    subject = _header(headers, "Subject") or "(제목 없음)"
+
+    to_emails = [e.strip() for e in to_raw.split(",") if e.strip()]
+    cc_emails = [e.strip() for e in cc_raw.split(",") if e.strip()]
+
+    html_body = bodies["html"]
+    text_body = bodies["text"]
+    if not html_body and text_body:
+        import html as html_escape
+        html_body = f"<pre style='white-space:pre-wrap;font-family:inherit;margin:0;'>{html_escape.escape(text_body)}</pre>"
+
+    return {
+        "gmail_id": msg.get("id"),
+        "thread_id": msg.get("threadId"),
+        "from_email": from_email,
+        "to_emails": to_emails,
+        "cc_emails": cc_emails,
+        "subject": subject,
+        "html_body": html_body,
+        "text_body": text_body,
+        "snippet": msg.get("snippet", ""),
+    }
