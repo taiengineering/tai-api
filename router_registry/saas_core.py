@@ -3,6 +3,7 @@ ROUTERS = [
     {"module": "routers.auth"},
     {"module": "routers.users"},
     {"module": "routers.companies"},
+    {"module": "routers.customer360"},  # WO-6 고객360 통합 집계 (GET /companies/{id}/360)
     {"module": "routers.factories"},
     {"module": "routers.system_codes"},
     # {"module": "routers.file_upload"},  # 모듈 삭제됨 — 필요 시 재생성
