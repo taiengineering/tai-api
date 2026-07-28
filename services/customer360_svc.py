@@ -1,9 +1,10 @@
-"""고객360 통합 집계 서비스 (WO-6 Customer360).
+"""고객360 통합 집계 서비스 (WO-6 Customer360 + WO-9B 사업장 축).
 
 Goal: G-ms4je4z3-33eada
 - 회사 1건 기준으로 시설·회원·결제·구독·진단·크레딧·세금계산서·환불·감사를 한 번에 집계.
 - 원천 읽기만(어드민 DB 복제 없음). credit_svc.balance 재사용.
 - soft delete 반영: factories/users/contacts는 deleted_at IS NULL 기준.
+- WO-9B: get_factory_billing — 사업장별 구독·과금 산정(과금=사업장 수 비례).
 """
 from __future__ import annotations
 
@@ -127,6 +128,9 @@ def get_summary(company_id: str, audit_limit: int = 10) -> Dict[str, Any]:
     # 10) 온보딩 (WO-17 전까지 null)
     onboarding = None
 
+    # 11) 사업장 과금 요약 (WO-9B — 과금=사업장 수 비례)
+    billing = factory_billing_summary(company_id)
+
     return {
         "company": company,
         "counts": counts,
@@ -138,6 +142,7 @@ def get_summary(company_id: str, audit_limit: int = 10) -> Dict[str, Any]:
         "refunds": refunds_summary,
         "recent_audit": recent_audit,
         "onboarding": onboarding,
+        "billing": billing,
     }
 
 
@@ -157,3 +162,93 @@ def _recent_audit(company_id: str, payment_ids: List[str], limit: int) -> List[D
     except Exception as e:  # noqa: BLE001
         log.warning("[C360] audit 조회 실패: %s", e)
         return []
+
+
+# ── WO-9B 사업장 축 (과금=사업장 수 비례) ────────────────────────────
+def factory_billing_summary(company_id: str) -> Dict[str, Any]:
+    """회사의 사업장 수 기반 과금 집계(요약).
+
+    - 활성 사업장 수, 구독 있는 사업장 수, 월 과금 합계(ACTIVE 구독 amount 합).
+    반환 예: {active_factories, subscribed_factories, unsubscribed_factories, monthly_amount}
+    """
+    supabase = get_supabase()
+    active_factories = _count_active("factories", company_id)
+
+    subs = (
+        supabase.table("subscriptions")
+        .select("factory_id, status, amount")
+        .eq("company_id", company_id).execute()
+    ).data or []
+    active_subs = [s for s in subs if s.get("status") == "ACTIVE"]
+    subscribed_factory_ids = {s["factory_id"] for s in active_subs if s.get("factory_id")}
+    monthly_amount = sum(int(s.get("amount") or 0) for s in active_subs)
+
+    return {
+        "active_factories": active_factories,
+        "subscribed_factories": len(subscribed_factory_ids),
+        "unsubscribed_factories": max(active_factories - len(subscribed_factory_ids), 0),
+        "monthly_amount": monthly_amount,
+    }
+
+
+def get_factory_billing(company_id: str, limit: int = 100, offset: int = 0) -> Dict[str, Any]:
+    """회사의 사업장별 구독·과금 상세.
+
+    - 사업장 목록(활성) + 각 사업장 plan_code·diagnosis_status·구독 상태/금액.
+    - 집계(factory_billing_summary) 동봉.
+    """
+    supabase = get_supabase()
+
+    comp = supabase.table("companies").select("id, name").eq("id", company_id).limit(1).execute()
+    if not comp.data:
+        raise Customer360Error(404, "회사를 찾을 수 없습니다.")
+
+    # 활성 사업장 목록
+    facs = (
+        supabase.table("factories")
+        .select("id, name, site_code, plan_code, diagnosis_status, "
+                "legal_applicable_count, last_diagnosis_at, is_active")
+        .eq("company_id", company_id).is_("deleted_at", "null")
+        .order("created_at", desc=True)
+        .range(offset, offset + limit - 1).execute()
+    ).data or []
+
+    # 사업장별 구독 매핑
+    subs = (
+        supabase.table("subscriptions")
+        .select("factory_id, status, plan_code, plan_name, amount, next_billing_at")
+        .eq("company_id", company_id).execute()
+    ).data or []
+    sub_by_factory: Dict[str, Dict[str, Any]] = {}
+    for s in subs:
+        fid = s.get("factory_id")
+        if fid and (fid not in sub_by_factory or s.get("status") == "ACTIVE"):
+            sub_by_factory[fid] = s
+
+    items = []
+    for f in facs:
+        sub = sub_by_factory.get(f["id"])
+        items.append({
+            "factory_id": f["id"],
+            "name": f.get("name"),
+            "site_code": f.get("site_code"),
+            "plan_code": f.get("plan_code"),
+            "diagnosis_status": f.get("diagnosis_status"),
+            "legal_applicable_count": f.get("legal_applicable_count"),
+            "last_diagnosis_at": f.get("last_diagnosis_at"),
+            "subscription": {
+                "status": sub.get("status") if sub else None,
+                "plan_code": sub.get("plan_code") if sub else None,
+                "plan_name": sub.get("plan_name") if sub else None,
+                "amount": sub.get("amount") if sub else None,
+                "next_billing_at": sub.get("next_billing_at") if sub else None,
+            } if sub else None,
+        })
+
+    return {
+        "company_id": company_id,
+        "summary": factory_billing_summary(company_id),
+        "factories": items,
+        "limit": limit,
+        "offset": offset,
+    }
