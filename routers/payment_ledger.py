@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
@@ -87,23 +87,22 @@ def grant_credit(payment_id: str, body: CreditGrantBody):
     from services.credit_svc import CreditError, grant, grant_from_diagnosis
     try:
         if body.diagnosis_purchase_id:
-            res = grant_from_diagnosis(body.diagnosis_purchase_id, by=body.by)
+            credit_id = grant_from_diagnosis(body.diagnosis_purchase_id, created_by=body.by)
         else:
             if not body.amount or body.amount <= 0:
                 raise HTTPException(status_code=400, detail="수동 지급은 amount가 필요합니다.")
-            # payment로 company_id 조회
             pay = (
                 get_supabase().table("payments").select("company_id")
                 .eq("id", payment_id).limit(1).execute()
             )
             if not pay.data:
                 raise HTTPException(status_code=404, detail="결제 건을 찾을 수 없습니다.")
-            res = grant(
+            credit_id = grant(
                 company_id=pay.data[0]["company_id"], amount=body.amount,
                 source="MANUAL", source_ref=payment_id, expires_at=None,
-                by=body.by, memo=body.memo,
+                created_by=body.by, memo=body.memo,
             )
-        return {"status": "success", "data": res}
+        return {"status": "success", "data": {"credit_id": credit_id}}
     except CreditError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
