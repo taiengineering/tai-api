@@ -2,6 +2,7 @@
 
 Goal: G-ms4je4z3-33eada
 - 규칙 CRUD + 수동 발화 + 실행 이력 + 승인 실행. 얇은 위임.
+- 모듈 로드 시 automation_svc.register()로 mail.inbound 수신 콜백 결합.
 """
 from typing import Any, Dict, Optional
 
@@ -10,10 +11,16 @@ from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
 from services.automation_svc import (
-    ACTION_TYPES, EVENT_TYPES, AutomationError, approve_run, fire,
+    ACTION_TYPES, EVENT_TYPES, AutomationError, approve_run, fire, register,
 )
 
 router = APIRouter(prefix="/automation", tags=["운영자동화"])
+
+# 모듈 로드 시 수신 콜백 등록(부팅 1회). 실패해도 라우터는 기동.
+try:
+    register()
+except Exception:  # noqa: BLE001
+    pass
 
 
 class RuleBody(BaseModel):
