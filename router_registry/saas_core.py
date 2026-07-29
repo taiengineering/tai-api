@@ -11,6 +11,8 @@ ROUTERS = [
     # {"module": "routers.file_upload"},  # 모듈 삭제됨 — 필요 시 재생성
     {"module": "routers.notifications"},
     {"module": "routers.onboarding"},
+    # 공용 휴무 캘린더 — 캘린더를 쓰는 모든 기능이 공유 (org_holiday / holiday_svc)
+    {"module": "routers.holidays"},
     # Phase 1: FacilityProfile (입력 보존·복원·감사)
     {"module": "routers.facility_profile_api"},
     # Phase 2+3: ApplicabilityCondition + Condition Scope Layer
