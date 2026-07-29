@@ -30,3 +30,8 @@ sentry-sdk[fastapi]
 kiwipiepy>=0.22.0,<0.24.0
 kiwipiepy-model>=0.22.0
 playwright
+
+# === WO-8 Gmail 채널 — 서비스계정 도메인 위임 발송/수신 (2026-07-28 추가) ===
+# gmail_channel.py 지연 import. 누락 시 GmailError(501)로 안전 폴백(발송 불가).
+google-api-python-client>=2.100.0
+google-auth>=2.23.0
