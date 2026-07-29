@@ -11,5 +11,6 @@ ROUTERS = [
     {"module": "routers.admin_pricing"},
     {"module": "routers.internal_inbox"},
     {"module": "routers.admin_inquiries"},
+    {"module": "routers.admin_audit"},  # P3-4 감사로그 조회 (GET /admin/audit-logs)
     {"module": "routers.inicis_auth"},
 ]
