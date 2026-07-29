@@ -1,25 +1,33 @@
 """
-위험성평가 관리 라우터 — v1.3.0
+위험성평가 관리 라우터 — v1.4.0
 
-v1.3.0 (2026-07-29, Goal G-ms5zwv4v-b88c4a) — 법정 기한의 상수 하드코딩 제거
+v1.4.0 (2026-07-29, Goal G-ms5zwv4v-b88c4a) — 완료 가드와 보존만료일
+  [C1] 완료 시 ra_item 판정 결과를 점검한다. 허용 가능한 수준에 이르지 못한 요인이
+       남아 있으면 완료를 막는다. 근거: 고시 제12조제3항 — 위험성 감소대책 실행 후
+       해당 공정의 위험성이 허용 가능한 수준인지 확인하고, 미달이면 허용 가능한
+       수준이 될 때까지 추가 대책을 수립·실행해야 한다.
+       예외: 제12조제4항 — 즉시 개선이 곤란하면 暫定(잠정) 조치를 실행한 뒤
+       개선계획을 수립·실행할 수 있다. 이 경우 is_interim 대책이 있으면 통과시키되
+       warnings 로 표시한다.
+  [C2] 완료 시 retention_until(보존만료일)을 산출해 저장한다.
+       근거: 시행규칙 제37조제2항(3년 보존) + 고시 제14조제2항(기산점 = 완료한 날).
+       보존연수는 ra_policy_param.RETENTION 에서 읽으므로 법 개정 시 코드 수정이 없다.
+  [C3] 상시평가(CONTINUOUS)를 assessment_type 에 정식 반영(고시 제15조제4항).
+  [C4] 요인 판정 결과가 있으면 risk_level 을 ra_item 기준으로 산출(items_json 대체).
+
+v1.3.0 (2026-07-29) — 법정 기한의 상수 하드코딩 제거
   법정 주기·기한을 코드 상수가 아니라 ra_policy_param(services/ra_policy_svc)에서 읽는다.
   근거: 산업안전보건법 제36조제4항이 "평가의 방법, 절차 및 시기"를 고시에 전부 위임하고,
         「사업장 위험성평가에 관한 지침」(고시 제2024-76호) 제28조가 3년마다 재검토를 예고한다.
   배경: v1.1.0 까지 최초평가 기한이 "1년"으로 박혀 있었다(2014년 구 고시 부칙의 잔재).
         현행 고시 제15조제1항은 "1개월이 되는 날까지 착수" 이며 v1.2.0 에서 정정했으나,
         상수로 두는 한 같은 사고가 재발한다. 이번 버전에서 값의 출처를 데이터로 옮긴다.
-  - INITIAL_DUE_MONTHS / PERIODIC_CYCLE_YEARS / RETENTION_YEARS 상수 제거
-  - 대시보드 응답에 policy_source 를 실어 값의 출처(db|fallback)를 투명하게 노출
-  - 최초평가 착수기한 초과 여부(initial_overdue) 판정 추가
 
 v1.2.0 (2026-07-29) — 법령 원문 대조 후 긴급 정정
   [F1] 최초평가 기한 "1년 이내" → "1개월이 되는 날까지 착수" (고시 제15조제1항)
   [F2] GET /risk-assessments: date_from / date_to 쿼리 지원
   [F3] 목록·상세 응답에 risk_level(대표 등급) 파생 필드 추가
   [F4] assessment_type 기본값 통일 (DB default 와 동일한 REGULAR)
-
-v1.1.0 (2026-04-07 Phase 3):
-  - construction_site_id 지원, work_name/risk_factor/risk_level/countermeasure 별칭 지원
 
 설계: docs/ops/tai-risk-assessment/PLAN_risk-assessment-design_v2.md
 검증: docs/ops/tai-risk-assessment/RESEARCH_legal-verification_v1.md
@@ -31,14 +39,17 @@ API:
   GET    /risk-assessments/{id}                상세 조회
   PATCH  /risk-assessments/{id}                수정
   POST   /risk-assessments/{id}/files          파일 첨부
-  POST   /risk-assessments/{id}/complete       완료 처리
+  POST   /risk-assessments/{id}/complete       완료 처리 (가드 + 보존만료일 산출)
+
+  ※ 요인·대책·재판정은 routers/ra_items.py (/ra/*)
 
 assessment_type (고시 제15조):
-  INITIAL   최초평가 — 사업 성립일(건설업은 실착공일)부터 정해진 기한 내 착수
-  REGULAR   정기평가 — 정해진 주기마다 적정성 재검토 (제15조제3항)
-  SPECIAL   수시평가 — 제15조제2항 각 호 사유 발생 시, 계획 실행 착수 전
-                       (제5호 중대산업사고·휴업 이상 산업재해는 작업 재개 전)
-  ※ 제15조제4항 '상시평가'는 미지원 — 설계 v2 단계 2에서 추가 예정
+  INITIAL     최초평가 — 사업 성립일(건설업은 실착공일)부터 정해진 기한 내 착수
+  REGULAR     정기평가 — 정해진 주기마다 적정성 재검토 (제15조제3항)
+  SPECIAL     수시평가 — 제15조제2항 각 호 사유 발생 시, 계획 실행 착수 전
+                         (제5호 중대산업사고·휴업 이상 산업재해는 작업 재개 전)
+  CONTINUOUS  상시평가 — 제15조제4항. 월1회 이상 발굴, 주1회 이상 논의·점검,
+                         매 작업일 TBM 의 3요건을 갖추면 수시·정기평가를 실시한 것으로 본다.
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -47,10 +58,11 @@ from datetime import datetime, timezone, date
 from db.supabase_client import get_supabase
 from services.health_registry import register_probe
 from services.ra_policy_svc import get_param_value, list_params
+from services.ra_decision_svc import assessment_readiness
 
 router = APIRouter(prefix="/risk-assessments", tags=["risk_assessments"])
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 # 아래 값들은 '정본'이 아니라 조회 실패 시의 안전망이다.
 # 정본은 ra_policy_param (미적용 시 services/ra_policy_svc._FALLBACK).
@@ -71,13 +83,26 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _is_leap(y: int) -> bool:
+    return y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+
+
+def _last_day(y: int, m: int) -> int:
+    return [31, 29 if _is_leap(y) else 28, 31, 30, 31, 30,
+            31, 31, 30, 31, 30, 31][m - 1]
+
+
 def _add_months(d: date, months: int) -> date:
     """월 단위 가산. 말일 보정 포함."""
     y, m = divmod((d.year * 12 + (d.month - 1)) + months, 12)
     m += 1
-    last = [31, 29 if (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)) else 28,
-            31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
-    return date(y, m, min(d.day, last))
+    return date(y, m, min(d.day, _last_day(y, m)))
+
+
+def _add_years(d: date, years: int) -> date:
+    """연 단위 가산. 2/29 → 평년 2/28 보정."""
+    y = d.year + years
+    return date(y, d.month, min(d.day, _last_day(y, d.month)))
 
 
 def _periodic_cycle_years() -> int:
@@ -101,7 +126,7 @@ def _next_review(assessment_date_str: str, assessment_type: str) -> Optional[str
         return None
     try:
         d = date.fromisoformat(assessment_date_str)
-        return date(d.year + _periodic_cycle_years(), d.month, d.day).isoformat()
+        return _add_years(d, _periodic_cycle_years()).isoformat()
     except Exception:
         return None
 
@@ -139,7 +164,7 @@ class RiskCreateBody(BaseModel):
     company_id:           Optional[str] = None
     factory_id:           Optional[str] = None
     construction_site_id: Optional[str] = None
-    assessment_type:      str = "REGULAR"          # INITIAL | REGULAR | SPECIAL
+    assessment_type:      str = "REGULAR"    # INITIAL | REGULAR | SPECIAL | CONTINUOUS
 
     title:            Optional[str]  = None
     work_name:        Optional[str]  = None        # work_name 입력 시 title로 저장
@@ -161,6 +186,12 @@ class RiskCreateBody(BaseModel):
     created_by:       Optional[str]  = None
     next_review_date: Optional[str]  = None
 
+    # 설계 v2 추가 필드
+    scale_id:         Optional[str]  = None        # 척도(고시 제9조제2항) — 판정에 필수
+    trigger_reason:   Optional[str]  = None        # 수시평가 사유(제15조제2항 각 호)
+    prep_json:        Optional[dict] = None        # 사전조사 안전보건정보(제9조제1항)
+    participants_json: Optional[list] = None       # 근로자 참여(제6조)
+
     # 최초평가 착수기한 판정용(선택). 건설업은 실착공일.
     business_start_date: Optional[str] = None
 
@@ -175,6 +206,10 @@ class RiskUpdateBody(BaseModel):
     items_json:       Optional[list] = None
     next_review_date: Optional[str]  = None
     construction_site_id: Optional[str] = None
+    scale_id:         Optional[str]  = None
+    trigger_reason:   Optional[str]  = None
+    prep_json:        Optional[dict] = None
+    participants_json: Optional[list] = None
 
 
 class FileAttachBody(BaseModel):
@@ -318,6 +353,12 @@ def create_assessment(body: RiskCreateBody):
         "created_at":           now,
         "updated_at":           now,
     }
+    # 설계 v2 컬럼은 존재할 때만 실어 보낸다(미적용 환경 호환).
+    for k, v in (("scale_id", body.scale_id), ("trigger_reason", body.trigger_reason),
+                 ("prep_json", body.prep_json), ("participants_json", body.participants_json)):
+        if v is not None:
+            row[k] = v
+
     res = supabase.table("risk_assessments").insert(row).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="위험성평가 등록에 실패했습니다.")
@@ -444,24 +485,89 @@ def attach_file(assessment_id: str, body: FileAttachBody):
     return {"status": "success", "message": "파일이 첨부되었습니다.", "data": {"files": files}}
 
 
+def _readiness_of(assessment_id: str) -> Optional[dict]:
+    """ra_item / ra_control 기반 완료 가능 여부. 테이블 미적용이면 None."""
+    sb = get_supabase()
+    try:
+        items = (sb.table("ra_item").select("*")
+                 .eq("assessment_id", assessment_id).execute().data) or []
+    except Exception:
+        return None   # 스키마 미적용 환경 — 가드를 건너뛰되 완료는 막지 않는다.
+
+    controls: dict = {}
+    ids = [str(i["id"]) for i in items]
+    if ids:
+        try:
+            rows = sb.table("ra_control").select("*").in_("item_id", ids).execute().data or []
+            for c in rows:
+                controls.setdefault(str(c["item_id"]), []).append(c)
+        except Exception:
+            controls = {}
+    return assessment_readiness(items, controls)
+
+
 @router.post("/{assessment_id}/complete")
 def complete_assessment(assessment_id: str):
     """위험성평가 완료 처리.
 
-    보존기간 기산점은 고시 제14조제2항(실시 시기별 평가를 완료한 날)이다.
-    보존만료일 컬럼 산출은 설계 v2 단계 4에서 스키마와 함께 추가한다.
+    가드 — 고시 제12조제3항: 감소대책 실행 후에도 허용 가능한 수준에 이르지 못한
+    유해·위험요인이 남아 있으면 완료할 수 없다. 다만 제12조제4항에 따라 잠정조치를
+    실행한 요인은 통과시키고 경고로 표시한다.
+
+    보존만료일 — 시행규칙 제37조제2항(보존연수) + 고시 제14조제2항(기산점 = 완료한 날).
     """
     supabase = get_supabase()
+
+    cur = supabase.table("risk_assessments").select("id, status_code").eq(
+        "id", assessment_id).limit(1).execute()
+    if not cur.data:
+        raise HTTPException(status_code=404, detail="위험성평가를 찾을 수 없습니다.")
+
+    ready = _readiness_of(assessment_id)
+    if ready and not ready.get("can_complete"):
+        raise HTTPException(status_code=409, detail={
+            "code": "RA_NOT_ACCEPTABLE",
+            "message": ("허용 가능한 수준에 이르지 못한 유해·위험요인이 남아 있습니다. "
+                        "고시 제12조제3항에 따라 추가 감소대책을 수립·실행하거나, "
+                        "제12조제4항에 따른 잠정조치를 등록한 뒤 완료하십시오."),
+            "open_items": ready.get("open_items"),
+            "warnings": ready.get("warnings"),
+        })
+
+    years = _retention_years()
+    today = date.today()
+    retention_until = _add_years(today, years).isoformat()
+
     now = _now()
-    res = supabase.table("risk_assessments").update({
+    payload = {
         "status_code":     "COMPLETED",
         "completed_at":    now,
-        "retention_years": _retention_years(),   # 완료 시점 기준값으로 갱신
+        "retention_years": years,          # 완료 시점 기준값으로 갱신
         "updated_at":      now,
-    }).eq("id", assessment_id).execute()
+    }
+    try:
+        res = supabase.table("risk_assessments").update(
+            {**payload, "retention_until": retention_until}
+        ).eq("id", assessment_id).execute()
+    except Exception:
+        # retention_until 컬럼 미적용 환경 — 완료 자체는 진행한다.
+        res = supabase.table("risk_assessments").update(payload).eq(
+            "id", assessment_id).execute()
+        retention_until = None
+
     if not res.data:
         raise HTTPException(status_code=404, detail="위험성평가를 찾을 수 없습니다.")
-    return {"status": "success", "message": "완료 처리되었습니다.", "data": res.data[0]}
+
+    return {
+        "status": "success",
+        "message": "완료 처리되었습니다.",
+        "data": {
+            **res.data[0],
+            "retention_until": retention_until,
+            "retention_basis": "고시 제14조제2항 — 완료한 날부터 기산",
+        },
+        "warnings": (ready or {}).get("warnings") or [],
+    }
 
 
 async def _probe_risk():
