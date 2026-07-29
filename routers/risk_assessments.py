@@ -1,5 +1,10 @@
 """
-위험성평가 관리 라우터 — v1.5.0
+위험성평가 관리 라우터 — v1.5.1
+
+v1.5.1 (2026-07-30, Goal G-ms6az4y8-b88c4a) — 상시평가 판정에 휴무 캘린더 반영
+  continuous-status 가 org_holiday(공용 휴무 캘린더, services/holiday_svc)를 조회해
+  판정에 전달한다. 법정공휴일·사업장 휴무일이 3호(매 작업일 TBM)의 작업일에서
+  빠지고, 제외 근거가 응답 excluded_holidays 로 표시된다.
 
 v1.5.0 (2026-07-30, Goal G-ms5zwv4v-b88c4a) — 상시평가 3요건 간주 판정
   GET /continuous-status 신설. 고시 제15조제4항의 3요건(월1회 발굴·주1회
@@ -58,6 +63,7 @@ API:
   POST   /risk-assessments/{id}/complete       완료 처리 (가드 + 보존만료일 산출)
 
   ※ 요인·대책·재판정은 routers/ra_items.py (/ra/*)
+  ※ 휴무 캘린더는 routers/holidays.py (/holidays) — 공용 모듈
 
 assessment_type (고시 제15조):
   INITIAL     최초평가 — 사업 성립일(건설업은 실착공일)부터 정해진 기한 내 착수
@@ -76,10 +82,11 @@ from services.health_registry import register_probe
 from services.ra_policy_svc import get_param_value, list_params
 from services.ra_decision_svc import assessment_readiness
 from services.ra_continuous_svc import judge_continuous
+from services.holiday_svc import holiday_map
 
 router = APIRouter(prefix="/risk-assessments", tags=["risk_assessments"])
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 
 # 아래 값들은 '정본'이 아니라 조회 실패 시의 안전망이다.
 # 정본은 ra_policy_param (미적용 시 services/ra_policy_svc._FALLBACK).
@@ -341,8 +348,9 @@ def get_continuous_status(
 
     월 1회 이상 유해·위험요인 발굴, 매주 1회 이상 논의·점검, 매 작업일 TBM 의
     3요건을 모두 실시하면 그 달의 수시·정기평가를 실시한 것으로 본다.
-    기존 운영 데이터(ra_item / work_schedules / tbm_meetings)를 실적으로 쓰므로
-    별도 입력 없이 판정된다. 판정 로직: services/ra_continuous_svc.
+    기존 운영 데이터(ra_item / work_schedules / tbm_meetings)를 실적으로 쓰고,
+    작업일은 공용 휴무 캘린더(org_holiday)를 반영해 산출한다.
+    판정 로직: services/ra_continuous_svc.
     """
     if not company_id and not factory_id:
         raise HTTPException(status_code=422, detail="company_id 또는 factory_id 가 필요합니다.")
@@ -354,6 +362,7 @@ def get_continuous_status(
         raise HTTPException(status_code=422, detail="month 는 YYYY-MM 형식이어야 합니다.")
 
     next_first = _add_months(month_first, 1)
+    month_last = next_first - __import__("datetime").timedelta(days=1)
     supabase = get_supabase()
 
     # 1호 실적 — 회사/시설 평가에 속한 ra_item 등록일
@@ -399,11 +408,16 @@ def get_continuous_status(
     except Exception:
         tbm_dates = []
 
+    # 휴무 캘린더 — 공용 모듈. 테이블 미적용 환경이면 빈 맵(종전 동작과 동일).
+    holidays = holiday_map(company_id, factory_id,
+                           month_first.isoformat(), month_last.isoformat())
+
     verdict = judge_continuous(
         month=target_month,
         discovery_dates=discovery_dates,
         review_dates=review_dates,
         tbm_dates=tbm_dates,
+        holidays=holidays,
     )
     return {"status": "success", "data": verdict}
 
