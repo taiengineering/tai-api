@@ -1,7 +1,12 @@
 """
-ra_continuous_svc — 상시평가 3요건 간주 판정. v1.0.0
+ra_continuous_svc — 상시평가 3요건 간주 판정. v1.1.0
 
-Goal: G-ms5zwv4v-b88c4a
+Goal: G-ms5zwv4v-b88c4a (v1.0.0) / G-ms6az4y8-b88c4a (v1.1.0 휴무 캘린더 반영)
+
+v1.1.0 (2026-07-30) — 휴무 캘린더 반영
+  3호(매 작업일 TBM) 판정의 작업일 산출을 services/holiday_svc(공용 모듈)로 옮겼다.
+  법정공휴일·사업장 휴무일이 작업일에서 빠지므로 휴무일 TBM 결측이 미성립으로
+  오판되지 않는다. 제외된 휴무일은 excluded_holidays 로 응답에 표시한다.
 
 법적 근거 — 「사업장 위험성평가에 관한 지침」 제15조제4항:
   사업주가 다음 각 호의 활동을 모두 실시하는 경우 수시평가와 정기평가를
@@ -11,21 +16,20 @@ Goal: G-ms5zwv4v-b88c4a
     2. 매주 1회 이상: 합동안전점검회의 등에서 제1호 실행 상황을 논의·점검
        (→ work_schedules 점검 완료 실적으로 판정)
     3. 매 작업일: 작업 전 안전점검회의(TBM) 등으로 근로자에게 공유·주지
-       (→ tbm_meetings 실적으로 판정)
+       (→ tbm_meetings 실적으로 판정, 작업일 = holiday_svc 판정)
 
 설계 원칙
-  · 판정은 순수 함수(judge_continuous)로 두고 데이터 조회와 분리한다 —
-    ra_decision_svc 와 같은 구조. 화면은 판정하지 않고 결과만 표시한다.
-  · '작업일' 캘린더가 없는 사업장이 대부분이므로 평일(월~금)을 작업일로
-    간주한다. 주말에 TBM 실적이 있으면 그날도 실시일로 집계된다(불이익 없음).
-    이 한계는 응답의 criteria 에 명시해 화면이 그대로 안내한다.
+  · 판정은 순수 함수(judge_continuous)로 두고 데이터 조회와 분리한다.
+    휴무일도 호출자가 조회해 넘긴다(holidays 파라미터) — 테스트 주입 가능.
   · 오늘은 아직 끝나지 않은 날이므로 TBM 결측 판정에서 제외한다.
     진행 중인 주도 같은 이유로 '미성립'이 아니라 '진행중'으로 표시한다.
 """
 from datetime import date, timedelta
-from typing import Iterable, List, Optional, Set
+from typing import Dict, Iterable, List, Optional, Set
 
-VERSION = "1.0.0"
+from services.holiday_svc import workdays_between
+
+VERSION = "1.1.0"
 
 
 def _month_range(month: str) -> tuple:
@@ -54,6 +58,7 @@ def judge_continuous(
     review_dates: Iterable,
     tbm_dates: Iterable,
     today: Optional[date] = None,
+    holidays: Optional[Dict[date, List[str]]] = None,
 ) -> dict:
     """상시평가 3요건 간주 판정.
 
@@ -62,9 +67,12 @@ def judge_continuous(
     review_dates    논의·점검(점검 완료) 일자들
     tbm_dates       TBM 실시 일자들
     today           기준일(테스트 주입용). 기본 오늘.
+    holidays        날짜→휴무 이름 목록 (holiday_svc.holiday_map 결과).
+                    작업일 산출에서 제외되며 응답에 근거로 표시된다.
     """
     today = today or date.today()
     first, last = _month_range(month)
+    holidays = holidays or {}
 
     # 판정 구간: 월 첫날 ~ min(월 말일, 오늘). 미래 월이면 구간 없음.
     end = min(last, today)
@@ -111,15 +119,20 @@ def judge_continuous(
     }
 
     # ── 3호: 매 작업일 TBM ────────────────────────────────────
-    # 작업일 = 평일(월~금) 간주. 오늘은 판정에서 제외(아직 실시 가능).
+    # 작업일 = holiday_svc 판정(평일 - 휴무일). 오늘은 판정에서 제외(아직 실시 가능).
     tbm_judge_end = min(end, today - timedelta(days=1))
     workdays: List[date] = []
-    d = first
-    while d <= tbm_judge_end:
-        if d.weekday() < 5:
-            workdays.append(d)
-        d += timedelta(days=1)
+    if tbm_judge_end >= first:
+        workdays = workdays_between(first, tbm_judge_end, holidays.keys())
     missing = sorted(x.isoformat() for x in workdays if x not in tbm)
+
+    # 판정 구간에서 제외된 휴무일 — 화면에 근거로 표시한다.
+    excluded_holidays = [
+        {"date": d.isoformat(), "names": names}
+        for d, names in sorted(holidays.items())
+        if first <= d <= (tbm_judge_end if tbm_judge_end >= first else end) and d.weekday() < 5
+    ]
+
     daily = {
         "met": len(workdays) > 0 and len(missing) == 0,
         "workdays_elapsed": len(workdays),
@@ -127,6 +140,7 @@ def judge_continuous(
         "missing_days": missing[:15],
         "missing_total": len(missing),
         "today_done": today in tbm,
+        "excluded_holidays": excluded_holidays,
         "label": "매 작업일 TBM 실시 (제15조제4항제3호)",
     }
 
@@ -145,6 +159,6 @@ def judge_continuous(
         "criteria": [
             "발굴: 해당 월에 등록된 유해·위험요인(ra_item)을 실적으로 봅니다.",
             "논의·점검: 점검관리에서 완료 처리된 점검을 실적으로 봅니다. 월요일 시작 주 단위로 판정하며, 진행 중인 주는 미성립으로 치지 않습니다.",
-            "TBM: 작업일은 평일(월~금)로 간주합니다. 사업장 휴무일은 반영되지 않으므로 휴무일 결측은 무시하고 판단하십시오. 오늘은 판정에서 제외합니다.",
+            "TBM: 작업일은 평일에서 법정공휴일과 사업장 휴무일을 뺀 날입니다. 휴무일은 위험성평가 > 휴무 캘린더에서 관리합니다. 오늘은 판정에서 제외합니다.",
         ],
     }
