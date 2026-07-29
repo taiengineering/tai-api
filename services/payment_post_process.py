@@ -1,10 +1,15 @@
-"""결제 완료 후처리 — 계약 자동 생성 + 알림 발송."""
+"""결제 완료 후처리 — 계약 자동 생성 + 알림 발송.
+
+[2026-07-29 P2-4] 결제 성공 시 automation 이벤트(payment.success) 발화 결선.
+  발화는 automation_svc.fire 위임. 규칙이 없으면 무동작이며, 예외는 삼켜서
+  결제 후처리(계약 생성·알림)에 절대 영향을 주지 않는다(_fire_automation).
+"""
 from __future__ import annotations
 
 import logging
 import random
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from dateutil.relativedelta import relativedelta
 
@@ -28,6 +33,15 @@ PLAN_MAP = {
     "CONSTRUCTION_PREMIUM_V2": {"sector": "CONSTRUCTION", "level": 2},
     "CONSTRUCTION_CUSTOM_V2": {"sector": "CONSTRUCTION", "level": 3},
 }
+
+
+def _fire_automation(event_type: str, payload: Dict[str, Any], trigger_ref: Optional[str] = None) -> None:
+    """automation 이벤트 발화(베스트에포트). 규칙 없으면 무동작, 예외는 삼킨다."""
+    try:
+        from services.automation_svc import fire
+        fire(event_type, payload, trigger_ref=trigger_ref)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[AUTOMATION] %s 발화 실패: %s", event_type, e)
 
 
 def _gen_contract_no() -> str:
@@ -265,6 +279,17 @@ def on_payment_success_sync(payment_id: str) -> None:
 
     plan_code = (pay.get("plan_code") or "INDUSTRY_PRO").upper()
     plan_info = PLAN_MAP.get(plan_code, {"sector": "INDUSTRIAL", "level": 3})
+
+    # [P2-4] 결제 성공 automation 이벤트 발화(모든 성공 경로 공통 지점: 카드성공·수동활성화).
+    _fire_automation("payment.success", {
+        "payment_id": payment_id,
+        "company_id": pay.get("company_id"),
+        "user_id": pay.get("user_id"),
+        "plan_code": plan_code,
+        "product_type": pay.get("product_type"),
+        "total_amount": pay.get("total_amount"),
+        "status": status,
+    }, trigger_ref=payment_id)
 
     existing_contract_id = pay.get("contract_id")
     if existing_contract_id:
