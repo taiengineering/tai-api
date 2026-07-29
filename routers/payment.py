@@ -7,6 +7,9 @@ v4.1.0 (2026-04-27)
 
 v4.0.0 (2026-04-27)
   매뉴얼 기반 전면 재작성
+
+[2026-07-29 P2-4] 카드 인증 실패 지점에 automation payment.failed 이벤트 발화 결선.
+  발화는 베스트에포트(_fire_automation) — 규칙 없으면 무동작, 예외는 삼켜 결제 흐름에 영향 없음.
 """
 from __future__ import annotations
 
@@ -43,6 +46,15 @@ from services.payment_helpers import FRONT_RETURN_URL, load_template, now_iso as
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/payments", tags=["결제"])
+
+
+def _fire_automation(event_type: str, payload: Dict[str, Any], trigger_ref: str = None) -> None:
+    """automation 이벤트 발화(베스트에포트). 규칙 없으면 무동작, 예외는 삼킨다."""
+    try:
+        from services.automation_svc import fire
+        fire(event_type, payload, trigger_ref=trigger_ref)
+    except Exception as e:  # noqa: BLE001
+        log.warning("[AUTOMATION] %s 발화 실패: %s", event_type, e)
 
 
 # ── HTML 페이지 ────────────────────────────────────────────────────────
@@ -147,6 +159,15 @@ async def inicis_return(request: Request):
         auth_result = call_pay_auth(auth_token, auth_url, sign_key)
     except Exception as e:
         process_auth_failure(payment_id, f"승인 API 실패: {e}", {})
+        _fire_automation("payment.failed", {
+            "payment_id": payment_id,
+            "company_id": payment.get("company_id"),
+            "user_id": payment.get("user_id"),
+            "plan_code": payment.get("plan_code"),
+            "product_type": payment.get("product_type"),
+            "total_amount": payment.get("total_amount"),
+            "reason": f"승인 API 실패: {e}",
+        }, trigger_ref=payment_id)
         return RedirectResponse(f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=승인API오류&oid={order_id}", status_code=302)
 
     is_ok = str(auth_result.get("resultCode", "")) == "0000"
@@ -166,6 +187,15 @@ async def inicis_return(request: Request):
 
     fail_msg = auth_result.get("resultMsg", "승인 실패")
     process_auth_failure(payment_id, fail_msg, auth_result)
+    _fire_automation("payment.failed", {
+        "payment_id": payment_id,
+        "company_id": payment.get("company_id"),
+        "user_id": payment.get("user_id"),
+        "plan_code": payment.get("plan_code"),
+        "product_type": payment.get("product_type"),
+        "total_amount": payment.get("total_amount"),
+        "reason": fail_msg,
+    }, trigger_ref=payment_id)
     return RedirectResponse(
         f"{FRONT_RETURN_URL}?resultCode=FAIL&msg={urllib.parse.quote(fail_msg)}&oid={order_id}",
         status_code=302,
