@@ -1,5 +1,14 @@
 """
-위험성평가 관리 라우터 — v1.4.1
+위험성평가 관리 라우터 — v1.5.0
+
+v1.5.0 (2026-07-30, Goal G-ms5zwv4v-b88c4a) — 상시평가 3요건 간주 판정
+  GET /continuous-status 신설. 고시 제15조제4항의 3요건(월1회 발굴·주1회
+  논의점검·매작업일 TBM)을 기존 운영 데이터로 판정한다.
+    발굴      → ra_item.created_at (해당 회사/시설 평가에 속한 요인)
+    논의·점검 → work_schedules.completed_at (점검관리 완료 실적)
+    TBM       → tbm_meetings.work_date
+  판정 로직은 services/ra_continuous_svc.judge_continuous (순수 함수).
+  화면은 판정하지 않고 결과만 표시한다.
 
 v1.4.1 (2026-07-30, Goal G-ms5zwv4v-b88c4a) — 목록 응답에 retention_until 포함
   실화면 검증에서 발견: 완료 화면(상세)은 보존만료일을 표시하는데 목록은 '—' 였다.
@@ -42,6 +51,7 @@ API:
   POST   /risk-assessments                     등록
   GET    /risk-assessments                     목록 조회
   GET    /risk-assessments/dashboard           현황 요약 (고정경로)
+  GET    /risk-assessments/continuous-status   상시평가 3요건 간주 판정 (고정경로)
   GET    /risk-assessments/{id}                상세 조회
   PATCH  /risk-assessments/{id}                수정
   POST   /risk-assessments/{id}/files          파일 첨부
@@ -65,10 +75,11 @@ from db.supabase_client import get_supabase
 from services.health_registry import register_probe
 from services.ra_policy_svc import get_param_value, list_params
 from services.ra_decision_svc import assessment_readiness
+from services.ra_continuous_svc import judge_continuous
 
 router = APIRouter(prefix="/risk-assessments", tags=["risk_assessments"])
 
-VERSION = "1.4.1"
+VERSION = "1.5.0"
 
 # 아래 값들은 '정본'이 아니라 조회 실패 시의 안전망이다.
 # 정본은 ra_policy_param (미적용 시 services/ra_policy_svc._FALLBACK).
@@ -318,6 +329,83 @@ def get_dashboard(
             )
         }
     }
+
+
+@router.get("/continuous-status")
+def get_continuous_status(
+    company_id: Optional[str] = Query(None),
+    factory_id: Optional[str] = Query(None),
+    month:      Optional[str] = Query(None, description="판정 대상 월 YYYY-MM (기본: 이번 달)"),
+):
+    """상시평가 3요건 간주 판정 — 고시 제15조제4항.
+
+    월 1회 이상 유해·위험요인 발굴, 매주 1회 이상 논의·점검, 매 작업일 TBM 의
+    3요건을 모두 실시하면 그 달의 수시·정기평가를 실시한 것으로 본다.
+    기존 운영 데이터(ra_item / work_schedules / tbm_meetings)를 실적으로 쓰므로
+    별도 입력 없이 판정된다. 판정 로직: services/ra_continuous_svc.
+    """
+    if not company_id and not factory_id:
+        raise HTTPException(status_code=422, detail="company_id 또는 factory_id 가 필요합니다.")
+
+    target_month = month or date.today().isoformat()[:7]
+    try:
+        month_first = date.fromisoformat(f"{target_month}-01")
+    except Exception:
+        raise HTTPException(status_code=422, detail="month 는 YYYY-MM 형식이어야 합니다.")
+
+    next_first = _add_months(month_first, 1)
+    supabase = get_supabase()
+
+    # 1호 실적 — 회사/시설 평가에 속한 ra_item 등록일
+    discovery_dates: List[str] = []
+    try:
+        aq = supabase.table("risk_assessments").select("id")
+        if company_id: aq = aq.eq("company_id", company_id)
+        if factory_id: aq = aq.eq("factory_id", factory_id)
+        aids = [r["id"] for r in (aq.execute().data or [])]
+        if aids:
+            items = (supabase.table("ra_item").select("created_at")
+                     .in_("assessment_id", aids)
+                     .gte("created_at", month_first.isoformat())
+                     .lt("created_at", next_first.isoformat())
+                     .execute().data) or []
+            discovery_dates = [r.get("created_at") for r in items]
+    except Exception:
+        discovery_dates = []
+
+    # 2호 실적 — 점검관리 완료(work_schedules.completed_at)
+    review_dates: List[str] = []
+    try:
+        wq = supabase.table("work_schedules").select("completed_at")
+        if company_id: wq = wq.eq("company_id", company_id)
+        if factory_id: wq = wq.eq("factory_id", factory_id)
+        rows = (wq.gte("completed_at", month_first.isoformat())
+                  .lt("completed_at", next_first.isoformat())
+                  .execute().data) or []
+        review_dates = [r.get("completed_at") for r in rows]
+    except Exception:
+        review_dates = []
+
+    # 3호 실적 — TBM 실시일(tbm_meetings.work_date)
+    tbm_dates: List[str] = []
+    try:
+        tq = supabase.table("tbm_meetings").select("work_date")
+        if company_id: tq = tq.eq("company_id", company_id)
+        if factory_id: tq = tq.eq("factory_id", factory_id)
+        rows = (tq.gte("work_date", month_first.isoformat())
+                  .lt("work_date", next_first.isoformat())
+                  .execute().data) or []
+        tbm_dates = [r.get("work_date") for r in rows]
+    except Exception:
+        tbm_dates = []
+
+    verdict = judge_continuous(
+        month=target_month,
+        discovery_dates=discovery_dates,
+        review_dates=review_dates,
+        tbm_dates=tbm_dates,
+    )
+    return {"status": "success", "data": verdict}
 
 
 # ── CRUD ─────────────────────────────────────────────────
