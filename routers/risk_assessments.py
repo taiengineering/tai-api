@@ -1,5 +1,11 @@
 """
-위험성평가 관리 라우터 — v1.4.0
+위험성평가 관리 라우터 — v1.4.1
+
+v1.4.1 (2026-07-30, Goal G-ms5zwv4v-b88c4a) — 목록 응답에 retention_until 포함
+  실화면 검증에서 발견: 완료 화면(상세)은 보존만료일을 표시하는데 목록은 '—' 였다.
+  원인은 목록 SELECT 에 retention_until 이 빠져 있었던 것. 보존만료일 산출은 완료
+  라우트(서버)가 단일 소스이므로 프론트 재계산이 아니라 목록 응답에 컬럼을 싣는다.
+  retention_until 컬럼 미적용 환경에서는 종전 SELECT 로 폴백한다.
 
 v1.4.0 (2026-07-29, Goal G-ms5zwv4v-b88c4a) — 완료 가드와 보존만료일
   [C1] 완료 시 ra_item 판정 결과를 점검한다. 허용 가능한 수준에 이르지 못한 요인이
@@ -62,7 +68,7 @@ from services.ra_decision_svc import assessment_readiness
 
 router = APIRouter(prefix="/risk-assessments", tags=["risk_assessments"])
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 
 # 아래 값들은 '정본'이 아니라 조회 실패 시의 안전망이다.
 # 정본은 ra_policy_param (미적용 시 services/ra_policy_svc._FALLBACK).
@@ -77,6 +83,15 @@ _LEVEL_ORDER = {
     "MEDIUM": 2, "중": 2, "보통": 2, "주의": 2,
     "LOW": 1, "하": 1, "낮음": 1, "양호": 1,
 }
+
+# 목록 SELECT — retention_until 포함본과 미적용 환경용 폴백본.
+_LIST_COLS_WITH_RETENTION = (
+    "id, company_id, factory_id, construction_site_id, "
+    "assessment_type, title, assessment_date, "
+    "process_name, assessor_name, status_code, next_review_date, "
+    "retention_years, retention_until, files_json, items_json, completed_at, created_at"
+)
+_LIST_COLS_FALLBACK = _LIST_COLS_WITH_RETENTION.replace("retention_until, ", "")
 
 
 def _now() -> str:
@@ -384,29 +399,32 @@ def list_assessments(
 ):
     """위험성평가 목록 조회. date_from/date_to 가 지정되면 year 보다 우선한다."""
     supabase = get_supabase()
-    q = supabase.table("risk_assessments").select(
-        "id, company_id, factory_id, construction_site_id, "
-        "assessment_type, title, assessment_date, "
-        "process_name, assessor_name, status_code, next_review_date, "
-        "retention_years, files_json, items_json, completed_at, created_at",
-        count="exact"
-    )
-    if factory_id:           q = q.eq("factory_id",           factory_id)
-    if company_id:           q = q.eq("company_id",           company_id)
-    if construction_site_id: q = q.eq("construction_site_id", construction_site_id)
-    if assessment_type:      q = q.eq("assessment_type",      assessment_type)
-    if status_code:          q = q.eq("status_code",          status_code)
 
-    if date_from or date_to:
-        if date_from:
-            q = q.gte("assessment_date", date_from)
-        if date_to:
-            q = q.lte("assessment_date", date_to)
-    elif year:
-        q = q.gte("assessment_date", f"{year}-01-01").lte("assessment_date", f"{year}-12-31")
+    def _run(select_cols: str):
+        q = supabase.table("risk_assessments").select(select_cols, count="exact")
+        if factory_id:           q = q.eq("factory_id",           factory_id)
+        if company_id:           q = q.eq("company_id",           company_id)
+        if construction_site_id: q = q.eq("construction_site_id", construction_site_id)
+        if assessment_type:      q = q.eq("assessment_type",      assessment_type)
+        if status_code:          q = q.eq("status_code",          status_code)
 
-    offset = (page - 1) * size
-    res = q.order("assessment_date", desc=True).range(offset, offset + size - 1).execute()
+        if date_from or date_to:
+            if date_from:
+                q = q.gte("assessment_date", date_from)
+            if date_to:
+                q = q.lte("assessment_date", date_to)
+        elif year:
+            q = q.gte("assessment_date", f"{year}-01-01").lte("assessment_date", f"{year}-12-31")
+
+        offset = (page - 1) * size
+        return q.order("assessment_date", desc=True).range(offset, offset + size - 1).execute()
+
+    try:
+        res = _run(_LIST_COLS_WITH_RETENTION)
+    except Exception:
+        # retention_until 컬럼 미적용 환경 — 종전 컬럼으로 폴백.
+        res = _run(_LIST_COLS_FALLBACK)
+
     total = res.count or 0
 
     items = []
