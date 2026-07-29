@@ -1,7 +1,12 @@
-"""위험성평가 — 유해·위험요인 / 감소대책 / 재판정 API (v1.0.0).
+"""위험성평가 — 유해·위험요인 / 감소대책 / 재판정 API (v1.1.0).
 
 Goal: G-ms5zwv4v-b88c4a
 설계: docs/ops/tai-risk-assessment/PLAN_risk-assessment-design_v2.md
+
+v1.1.0 (2026-07-29) — 재판정 수렴 결함 정정
+  재판정에서 잔여 노출 인원과 승급 사유 플래그를 다시 입력할 수 있게 했다.
+  종전에는 요인 등록 시의 노출 인원이 매 재판정마다 그대로 승급에 반영돼,
+  대책을 실행해도 등급이 내려가지 않아 고시 제12조제3항의 반복 루프가 끝나지 않았다.
 
 ■ 이 라우터가 담당하는 법정 절차 (고시 제8조)
     2. 유해·위험요인 파악      → POST /ra/assessments/{id}/items
@@ -21,6 +26,7 @@ API:
   PATCH /ra/items/{item_id}                         요인 수정(재판정 수반)
   POST  /ra/items/{item_id}/controls                감소대책 등록
   POST  /ra/items/{item_id}/reevaluate              재판정(대책 실행 후)
+  GET   /ra/items/{item_id}/revisions               재판정 이력
   PATCH /ra/controls/{control_id}                   대책 수정·완료
 """
 from __future__ import annotations
@@ -34,14 +40,14 @@ from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
 from services.ra_decision_svc import (
-    DecisionError, HIERARCHY_LABELS, assessment_readiness, decide,
+    DecisionError, ESCALATION_LABELS, HIERARCHY_LABELS, assessment_readiness, decide,
 )
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ra", tags=["위험성평가 요인·대책"])
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 
 def _now() -> str:
@@ -98,6 +104,19 @@ def _record_revision(item_id: str, level: Optional[str], acceptable: Optional[bo
     return seq
 
 
+def _next_action(verdict: Dict[str, Any]) -> Optional[str]:
+    """허용 불가일 때 무엇을 해야 하는지 알려준다."""
+    if verdict.get("acceptable") is True:
+        return None
+    rules = [r.get("rule") for r in (verdict.get("escalation") or [])]
+    if "LEGAL_NONCOMPLIANCE" in rules:
+        return "법령에서 규정하는 조치를 먼저 이행해야 합니다(고시 제12조제1항제1호)."
+    if "MANY_EXPOSED" in rules:
+        return ("노출 인원으로 인해 한 단계 상향되었습니다. 대책 실행으로 노출이 줄었다면 "
+                "재판정 시 exposed_count 에 잔여 노출 인원을 입력하십시오.")
+    return "추가 감소대책을 수립·실행한 뒤 재판정하십시오(고시 제12조제3항)."
+
+
 # ── 스키마 ──────────────────────────────────────────────────────────
 class ItemBody(BaseModel):
     hazard: str
@@ -152,6 +171,8 @@ class ControlUpdateBody(BaseModel):
 
 class ReevaluateBody(BaseModel):
     raw_input_json: Optional[Dict[str, Any]] = None
+    # 대책 실행 후 남은 노출 인원. 미입력이면 요인 등록값을 그대로 쓴다.
+    exposed_count: Optional[int] = None
     evaluated_by: Optional[str] = None
     note: Optional[str] = None
 
@@ -197,7 +218,7 @@ def create_item(assessment_id: str, body: ItemBody):
                      body.raw_input_json, body.created_by, "최초 판정")
 
     return {"status": "success", "message": "요인이 등록되었습니다.",
-            "data": {**row, "verdict": verdict}}
+            "data": {**row, "verdict": verdict, "next_action": _next_action(verdict)}}
 
 
 @router.get("/assessments/{assessment_id}/items")
@@ -224,7 +245,9 @@ def list_items(assessment_id: str, include_controls: bool = Query(True)):
         it["revision_count"] = revs.get(k, 0)
 
     return {"status": "success",
-            "data": {"items": items, "total": len(items)}}
+            "data": {"items": items, "total": len(items),
+                     "escalation_labels": ESCALATION_LABELS,
+                     "hierarchy_labels": HIERARCHY_LABELS}}
 
 
 @router.patch("/items/{item_id}")
@@ -329,6 +352,9 @@ def reevaluate(item_id: str, body: ReevaluateBody):
 
     고시 제12조제2항 — 대책 실행 후 허용 가능한 수준인지 확인한다.
     제12조제3항 — 미달이면 허용 가능한 수준이 될 때까지 추가 대책을 수립·실행한다.
+
+    exposed_count 를 함께 보내면 그 값을 '대책 실행 후 남은 노출 인원'으로 보아
+    승급 여부를 다시 판단한다. 보내지 않으면 요인 등록값을 그대로 쓴다.
     """
     cur = _sb().table("ra_item").select("*").eq("id", item_id).limit(1).execute()
     if not cur.data:
@@ -338,9 +364,13 @@ def reevaluate(item_id: str, body: ReevaluateBody):
     assessment = _get_assessment(str(item["assessment_id"]))
     scale = _get_scale_for(assessment)
 
-    merged = {**item}
+    raw = dict(item.get("raw_input_json") or {})
     if body.raw_input_json is not None:
-        merged["raw_input_json"] = body.raw_input_json
+        raw = dict(body.raw_input_json)
+    if body.exposed_count is not None:
+        raw["exposed_count"] = body.exposed_count
+
+    merged = {**item, "raw_input_json": raw}
 
     try:
         verdict = decide(merged, scale)
@@ -351,20 +381,20 @@ def reevaluate(item_id: str, body: ReevaluateBody):
         "level": verdict["level"],
         "acceptable": verdict["acceptable"],
         "escalation_json": verdict["escalation"] or None,
+        "raw_input_json": raw,
         "updated_at": _now(),
     }
-    if body.raw_input_json is not None:
-        upd["raw_input_json"] = body.raw_input_json
     _sb().table("ra_item").update(upd).eq("id", item_id).execute()
 
     seq = _record_revision(item_id, verdict["level"], verdict["acceptable"],
-                           merged.get("raw_input_json"), body.evaluated_by,
+                           raw, body.evaluated_by,
                            body.note or "감소대책 실행 후 재판정")
 
     msg = ("허용 가능한 수준입니다." if verdict["acceptable"]
            else "아직 허용 가능한 수준이 아닙니다. 추가 감소대책이 필요합니다(고시 제12조제3항).")
     return {"status": "success", "message": msg,
-            "data": {"item_id": item_id, "revision_seq": seq, "verdict": verdict}}
+            "data": {"item_id": item_id, "revision_seq": seq, "verdict": verdict,
+                     "next_action": _next_action(verdict)}}
 
 
 @router.get("/items/{item_id}/revisions")
