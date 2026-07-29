@@ -18,6 +18,13 @@ Goal: G-ms5zwv4v-b88c4a
 ■ 4기법 단일 인터페이스 (고시 제7조제5항)
   빈도·강도법 / 체크리스트법 / 3단계 판단법 / 핵심요인기술법(OPS)
   입력 형태만 다르고 산출은 모두 (level, acceptable) 이다.
+
+■ 승급 사유는 '판정 시점'의 상태로 본다 (2026-07-29 정정)
+  승급 사유의 요건은 인원수 그 자체가 아니라 "많은 근로자가 '위험에 노출될 것'이
+  예상되는" 상태다. 감소대책을 실행해 노출이 차단되면 그 요건은 더 이상 성립하지 않는다.
+  따라서 승급 판단은 이번 판정의 입력(raw_input_json)을 우선 보고, 값이 없을 때만
+  요인에 등록된 값을 쓴다. 이렇게 하지 않으면 대책을 아무리 세워도 등급이 내려가지 않아
+  고시 제12조제3항의 반복 루프가 영원히 끝나지 않는다.
 """
 from __future__ import annotations
 
@@ -37,6 +44,13 @@ HIERARCHY_LABELS = {
 
 # 다수 근로자 노출로 볼 기본 임계값. 사업장이 조정할 수 있도록 인자로 받는다.
 DEFAULT_MANY_EXPOSED = 10
+
+ESCALATION_LABELS = {
+    "LEGAL_NONCOMPLIANCE": "법령에서 규정하는 사항을 만족하지 않음",
+    "SEVERE_EXPECTED": "중대재해 또는 건강장해가 명확히 예상됨",
+    "MANY_EXPOSED": "많은 근로자가 위험에 노출될 것으로 예상됨",
+    "INDUSTRY_PRECEDENT": "동종업계 중대재해와 연관 있음",
+}
 
 
 class DecisionError(Exception):
@@ -151,6 +165,13 @@ _METHOD_FN = {
 
 
 # ── 자동 승급 ────────────────────────────────────────────────────────
+def _int_or_none(v: Any) -> Optional[int]:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def escalate(level_code: Optional[str], item: Dict[str, Any], scale: Dict[str, Any],
              many_exposed_threshold: int = DEFAULT_MANY_EXPOSED
              ) -> Tuple[Optional[str], List[Dict[str, str]]]:
@@ -161,6 +182,9 @@ def escalate(level_code: Optional[str], item: Dict[str, Any], scale: Dict[str, A
       2. 중대재해·건강장해가 명확히 예상되는 경우          → 최고 수준으로
       3. 많은 근로자가 위험에 노출될 것이 예상되는 경우    → 한 단계 상향
       4. 동종업계 중대재해와 연관이 있는 경우              → 한 단계 상향
+
+    3번은 '노출될 것이 예상되는' 상태를 요건으로 하므로, 이번 판정의 입력에
+    exposed_count 가 실려 있으면 그 값(잔여 노출 인원)을 먼저 본다.
     """
     raw = item.get("raw_input_json") or {}
     reasons: List[Dict[str, str]] = []
@@ -175,23 +199,25 @@ def escalate(level_code: Optional[str], item: Dict[str, Any], scale: Dict[str, A
     def to_top(code_reason: str) -> None:
         nonlocal cur
         cur = top
-        reasons.append({"rule": code_reason})
+        reasons.append({"rule": code_reason, "label": ESCALATION_LABELS.get(code_reason, ""),
+                        "effect": "TO_TOP"})
 
     def step_up(code_reason: str) -> None:
         nonlocal cur
         if cur < top:
             cur = min(cur + 1, top)
-        reasons.append({"rule": code_reason})
+        reasons.append({"rule": code_reason, "label": ESCALATION_LABELS.get(code_reason, ""),
+                        "effect": "STEP_UP"})
 
     if raw.get("legal_noncompliance") or item.get("legal_noncompliance"):
         to_top("LEGAL_NONCOMPLIANCE")
     if raw.get("severe_expected"):
         to_top("SEVERE_EXPECTED")
 
-    try:
-        exposed = int(item.get("exposed_count") or 0)
-    except (TypeError, ValueError):
-        exposed = 0
+    # 잔여 노출 인원 — 이번 판정 입력이 우선, 없으면 요인 등록값
+    exposed = _int_or_none(raw.get("exposed_count"))
+    if exposed is None:
+        exposed = _int_or_none(item.get("exposed_count")) or 0
     if exposed >= many_exposed_threshold:
         step_up("MANY_EXPOSED")
 
@@ -268,9 +294,11 @@ def assessment_readiness(items: List[Dict[str, Any]],
         if it.get("acceptable") is True:
             continue
         cs = controls_by_item.get(str(it.get("id")), [])
-        (interim_items if any(c.get("is_interim") for c in cs) else open_items).append({
+        entry = {
             "id": it.get("id"), "hazard": it.get("hazard"), "level": it.get("level"),
-        })
+            "escalation": it.get("escalation_json") or [],
+        }
+        (interim_items if any(c.get("is_interim") for c in cs) else open_items).append(entry)
 
     warnings = [w for w in (check_discovery_methods(items),) if w]
     for it in items:
