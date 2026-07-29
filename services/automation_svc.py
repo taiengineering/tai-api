@@ -1,8 +1,9 @@
 """운영 자동화 서비스 (WO-12 AutomationEngine).
 
-Goal: G-ms4je4z3-33eada
+Goal: G-ms4je4z3-33eada (구축 이어받기 G-ms5pdquz-9e76e5)
 - 엔진 자산과 분리된 운영 전용 자동화. event→condition→action.
-- 입력: gmail_inbox_svc 수신 콜백(mail.inbound), 수동 fire.
+- 입력: gmail_inbox_svc 수신 콜백(mail.inbound), 수동 fire, 결제 성공/실패 발화(P2-4),
+        만료임박 스캔(scan_expiring_subscriptions → subscription.expiring).
 - 출력: notify_svc.send(SEND_MAIL/SEND_SMS), CREATE_TASK/CALL_WEBHOOK/LLM_DRAFT.
 - require_approval 게이트: 승인 필요 규칙은 APPROVAL_PENDING 적재 후 사람 승인 시 실행.
 - 감사(audit_svc). automation_rule/run_log(RLS off).
@@ -10,6 +11,7 @@ Goal: G-ms4je4z3-33eada
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from db.supabase_client import get_supabase
@@ -172,6 +174,43 @@ def approve_run(run_id: str, actor: Optional[str] = None) -> Dict[str, Any]:
             {"status": "FAILED", "error": str(e), "approved_by": actor}
         ).eq("id", run_id).execute()
         raise AutomationError(502, f"실행 실패: {e}") from e
+
+
+# ── 만료임박 구독 스캔 → subscription.expiring 발화 (WO-12 / P2-4) ─────
+def scan_expiring_subscriptions(days: int = 7) -> Dict[str, Any]:
+    """만료 임박(SUCCESS 결제의 expired_at ∈ [now, now+days]) 건을 스캔해
+    각 건에 subscription.expiring 이벤트를 발화한다.
+
+    자동 발화 소스(수동 fire 외)를 넓히기 위한 진입점. 운영자/크론에서 주기 호출.
+    개별 발화 실패는 삼켜서 스캔 전체를 막지 않는다.
+    """
+    now = datetime.now(timezone.utc)
+    deadline = (now + timedelta(days=days)).isoformat()
+    rows = (
+        get_supabase().table("v_payments_list")
+        .select("id, company_id, user_id, plan_code, product_type, total_amount, expired_at")
+        .eq("status_code", "SUCCESS")
+        .lte("expired_at", deadline).gte("expired_at", now.isoformat())
+        .execute()
+    ).data or []
+
+    fired = 0
+    for r in rows:
+        try:
+            fire("subscription.expiring", {
+                "payment_id": r.get("id"),
+                "company_id": r.get("company_id"),
+                "user_id": r.get("user_id"),
+                "plan_code": r.get("plan_code"),
+                "product_type": r.get("product_type"),
+                "total_amount": r.get("total_amount"),
+                "expired_at": r.get("expired_at"),
+            }, trigger_ref=r.get("id"))
+            fired += 1
+        except Exception as e:  # noqa: BLE001
+            log.warning("[AUTOMATION] subscription.expiring 발화 실패: %s", e)
+
+    return {"scanned": len(rows), "fired": fired, "days": days}
 
 
 # ── 수신 콜백 결합 (WO-8B → WO-12) ───────────────────────────────────
