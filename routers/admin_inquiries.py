@@ -2,6 +2,10 @@
 관리자 통합 인박스 — inquiries 목록·수정·직접 등록
 
 Doc: docs/inbox-system/PHASE4_INQUIRY_LIST.md
+
+[2026-07-29 P2-5] 답변(status=ANSWERED + answer) 저장 시 고객에게 실제 발송 연동.
+  메일 우선(email 있으면), 없으면 SMS 안내. notify_svc 위임. 발송 실패는 저장 결과에
+  영향을 주지 않고 응답의 notify 필드에 상태만 담는다(베스트에포트).
 """
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -44,6 +48,36 @@ def _require_bearer(authorization: Optional[str]) -> None:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _notify_answer(row: Dict[str, Any], answer: str) -> Dict[str, Any]:
+    """답변 등록 시 고객 실발송(베스트에포트). 메일 우선, 없으면 SMS 안내."""
+    email = (row.get("email") or "").strip()
+    phone = (row.get("phone") or "").strip()
+    name = row.get("name") or "고객"
+    title = row.get("title") or "문의"
+    try:
+        from services import notify_svc
+        if email:
+            subject = f"[TAI] 문의 답변 안내 - {title}"
+            text = (
+                f"안녕하세요, {name}님.\n\n"
+                f"문의해 주신 내용에 대한 답변입니다.\n\n"
+                f"{answer}\n\n"
+                f"감사합니다.\nTAI Engineering"
+            )
+            r = notify_svc.send("MAIL", target=email, subject=subject, message=text, actor_id="admin")
+            return {"channel": "MAIL", "status": r.get("status"), "provider": r.get("provider"), "error": r.get("error")}
+        if phone:
+            r = notify_svc.send(
+                "SMS", target=phone,
+                message="[TAI] 문의에 답변이 등록되었습니다. 확인 부탁드립니다.",
+                actor_id="admin",
+            )
+            return {"channel": "SMS", "status": r.get("status"), "provider": r.get("provider"), "error": r.get("error")}
+        return {"channel": None, "status": "skipped", "error": "수신 연락처 없음"}
+    except Exception as e:  # noqa: BLE001
+        return {"channel": None, "status": "failed", "error": str(e)}
 
 
 def _next_inquiry_no(supabase) -> str:
@@ -218,7 +252,8 @@ def admin_patch_inquiry(
 
     st = patch.get("status")
     ans = patch.get("answer")
-    if st == "ANSWERED" and ans and str(ans).strip():
+    is_answer_event = st == "ANSWERED" and ans and str(ans).strip()
+    if is_answer_event:
         patch["replied_at"] = _now_iso()
 
     supabase = get_supabase()
@@ -228,4 +263,8 @@ def admin_patch_inquiry(
         raise HTTPException(status_code=500, detail=f"저장 실패: {e!s}") from e
     if not res.data:
         raise HTTPException(status_code=404, detail="문의를 찾을 수 없습니다.")
-    return {"status": "success", "data": res.data[0]}
+
+    row = res.data[0]
+    # [P2-5] 답변 등록 시 고객 실발송(베스트에포트). 발송 실패해도 저장은 성공 처리.
+    notify_result = _notify_answer(row, str(ans).strip()) if is_answer_event else None
+    return {"status": "success", "data": row, "notify": notify_result}
