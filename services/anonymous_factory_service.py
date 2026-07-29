@@ -21,6 +21,8 @@ from services.diagnosis_helpers import SOURCE_DIAGNOSIS
 from services.legal_rules import get_construction_summary, normalize_sector_db, risk_level
 from constants.sectors import to_mapping_sector
 
+from services import compiler_engine_gateway as compiler_gw
+
 log = logging.getLogger(__name__)
 
 ANONYMOUS_COMPILER_ENGINE_VERSION = "v3.0-compiler-core-anonymous"
@@ -342,17 +344,10 @@ def _load_sector_allowed_draft_ids(supabase, sector_value: str) -> Optional[Set[
     offset = 0
     while True:
         try:
-            res = (
-                supabase.table("executable_draft")
-                .select("id, article_id")
-                .not_.is_("article_id", "null")
-                .range(offset, offset + _DRAFT_PAGE - 1)
-                .execute()
-            )
+            chunk = compiler_gw.fetch_executable_draft_articles(supabase, offset, _DRAFT_PAGE)
         except Exception as exc:
             log.warning("sector-filter executable_draft fetch failed: %s", exc)
             return None
-        chunk = res.data or []
         if not chunk:
             break
         for row in chunk:
@@ -448,15 +443,7 @@ def _load_draft_slot_groups(
     scopes: Dict[str, List[Dict[str, Any]]] = {}
     offset = 0
     while True:
-        res = (
-            supabase.table("draft_slot")
-            .select("draft_id, part_id, section, binding_field, operator, value, unit, family_name")
-            .not_.is_("binding_field", "null")
-            .in_("section", ["IF_NUMERIC", "IF_SCOPE"])
-            .range(offset, offset + _DRAFT_PAGE - 1)
-            .execute()
-        )
-        chunk = res.data or []
+        chunk = compiler_gw.fetch_draft_slots_numeric_scope(supabase, offset, _DRAFT_PAGE)
         if not chunk:
             break
         for row in chunk:
@@ -544,7 +531,7 @@ def evaluate_single_factory(supabase, factory_id: str) -> Dict[str, int]:
         batch = rows[i : i + _INSERT_CHUNK]
         if not batch:
             continue
-        supabase.table("facility_applicability").insert(batch).execute()
+        compiler_gw.insert_facility_applicability(supabase, batch)
         inserted += len(batch)
 
     return {
@@ -560,7 +547,7 @@ def cleanup_temp_factory(supabase, factory_id: str) -> None:
     if not fid:
         return
     try:
-        supabase.table("facility_applicability").delete().eq("factory_id", fid).execute()
+        compiler_gw.delete_facility_applicability_by_factory(supabase, fid)
     except Exception as exc:
         log.warning("facility_applicability cleanup failed factory_id=%s: %s", fid, exc)
     try:
@@ -587,16 +574,11 @@ def _load_draft_fallback_context(
     for i in range(0, len(unique), _INSERT_CHUNK):
         chunk = unique[i : i + _INSERT_CHUNK]
         try:
-            res = (
-                supabase.table("executable_draft")
-                .select("id, article_id, rule_candidate_id, part_id")
-                .in_("id", chunk)
-                .execute()
-            )
+            rows = compiler_gw.fetch_executable_draft_meta(supabase, chunk)
         except Exception as exc:
             log.warning("executable_draft batch fetch failed: %s", exc)
             continue
-        for row in res.data or []:
+        for row in rows:
             did = str(row.get("id") or "")
             if not did:
                 continue
@@ -656,17 +638,11 @@ def _load_draft_fallback_context(
     for i in range(0, len(unique), _INSERT_CHUNK):
         chunk = unique[i : i + _INSERT_CHUNK]
         try:
-            res = (
-                supabase.table("draft_slot")
-                .select("draft_id, section, family_name, raw_token")
-                .in_("draft_id", chunk)
-                .eq("section", "THEN_ACTION")
-                .execute()
-            )
+            rows = compiler_gw.fetch_draft_slots_then_action(supabase, chunk)
         except Exception as exc:
             log.warning("draft_slot batch fetch failed: %s", exc)
             continue
-        for row in res.data or []:
+        for row in rows:
             did = str(row.get("draft_id") or "")
             if did:
                 slots_by_draft.setdefault(did, []).append(row)
