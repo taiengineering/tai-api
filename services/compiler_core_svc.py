@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from services import compiler_engine_gateway as compiler_gw
+
 COMPILER_VERSION = "v3.0-deterministic"
 COMPILER_WARNING = "All results are CANDIDATES. Not legal conclusions."
 
@@ -35,13 +37,7 @@ def fetch_compiler_candidates(
 
     statuses = list(applicability_statuses or APPLICABILITY_MATCH_STATUSES)
 
-    app_result = (
-        sb.table("facility_applicability")
-        .select("id, draft_id, applicability_status, part_id, match_details")
-        .eq("factory_id", fid)
-        .in_("applicability_status", statuses)
-        .execute()
-    )
+    app_rows = compiler_gw.fetch_facility_applicability_by_factory(sb, fid, statuses)
 
     task_result = (
         sb.table("task_candidate")
@@ -88,7 +84,7 @@ def fetch_compiler_candidates(
         "factory_id": fid,
         "compiler_version": COMPILER_VERSION,
         "warning": COMPILER_WARNING,
-        "applicability_candidates": app_result.data or [],
+        "applicability_candidates": app_rows,
         "task_candidates": task_result.data or [],
         "schedule_candidates": sched_result.data or [],
         "penalty_relations": penalties[:penalty_limit],
