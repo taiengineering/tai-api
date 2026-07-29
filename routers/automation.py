@@ -1,8 +1,9 @@
 """운영 자동화 라우터 (WO-12 AutomationEngine).
 
-Goal: G-ms4je4z3-33eada
+Goal: G-ms4je4z3-33eada (구축 이어받기 G-ms5pdquz-9e76e5)
 - 규칙 CRUD + 수동 발화 + 실행 이력 + 승인 실행. 얇은 위임.
 - 모듈 로드 시 automation_svc.register()로 mail.inbound 수신 콜백 결합.
+- P2-4: POST /scan/expiring — 만료임박 구독 스캔 후 subscription.expiring 발화(운영/크론 호출).
 """
 from typing import Any, Dict, Optional
 
@@ -12,6 +13,7 @@ from pydantic import BaseModel
 from db.supabase_client import get_supabase
 from services.automation_svc import (
     ACTION_TYPES, EVENT_TYPES, AutomationError, approve_run, fire, register,
+    scan_expiring_subscriptions,
 )
 
 router = APIRouter(prefix="/automation", tags=["운영자동화"])
@@ -89,6 +91,12 @@ def fire_event(body: FireBody):
     except AutomationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
     return {"status": "success", "data": result}
+
+
+@router.post("/scan/expiring")
+def scan_expiring(days: int = Query(default=7, ge=1, le=90)):
+    """만료 임박 구독 스캔 → subscription.expiring 발화. 운영자/크론에서 주기 호출."""
+    return {"status": "success", "data": scan_expiring_subscriptions(days)}
 
 
 @router.get("/runs")
