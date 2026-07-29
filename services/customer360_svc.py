@@ -1,10 +1,15 @@
 """고객360 통합 집계 서비스 (WO-6 Customer360 + WO-9B 사업장 축).
 
-Goal: G-ms4je4z3-33eada
-- 회사 1건 기준으로 시설·회원·결제·구독·진단·크레딧·세금계산서·환불·감사를 한 번에 집계.
+Goal: G-ms4je4z3-33eada (구축 이어받기 G-ms5pdquz-9e76e5)
+- 회사 1건 기준으로 시설·회원·결제·구독·진단·크레딧·세금계산서·환불·계약·문의·감사를 한 번에 집계.
 - 원천 읽기만(어드민 DB 복제 없음). credit_svc.balance 재사용.
 - soft delete 반영: factories/users/contacts는 deleted_at IS NULL 기준.
 - WO-9B: get_factory_billing — 사업장별 구독·과금 산정(과금=사업장 수 비례).
+
+[2026-07-29 P1-1/P1-2 CRM 개통]
+- payments 에 최근 건별 목록(recent) 추가.
+- contracts(계약)·inquiries(문의) 이력 블록 추가 — CRM "한 화면에서 결제·문의·계약" 요건.
+- onboarding: WO-17 onboarding_svc.get_checklist 실연결(기존 None 하드코딩 제거).
 """
 from __future__ import annotations
 
@@ -49,11 +54,11 @@ def get_summary(company_id: str, audit_limit: int = 10) -> Dict[str, Any]:
         "contacts": _count_active("company_contacts", company_id),
     }
 
-    # 3) 결제 요약
+    # 3) 결제 요약 + 최근 건별(recent, 최신순 10)
     pays = (
         supabase.table("payments")
-        .select("id, total_amount, status_code, paid_at")
-        .eq("company_id", company_id).execute()
+        .select("id, total_amount, status_code, product_type, plan_code, pg_method, paid_at, created_at")
+        .eq("company_id", company_id).order("created_at", desc=True).execute()
     ).data or []
     success_pays = [p for p in pays if p.get("status_code") == "SUCCESS"]
     paid_dates = [p["paid_at"] for p in success_pays if p.get("paid_at")]
@@ -62,6 +67,7 @@ def get_summary(company_id: str, audit_limit: int = 10) -> Dict[str, Any]:
         "success_count": len(success_pays),
         "total_amount": sum(int(p["total_amount"] or 0) for p in success_pays),
         "last_paid_at": max(paid_dates) if paid_dates else None,
+        "recent": pays[:10],
     }
     payment_ids = [p["id"] for p in pays]
 
@@ -125,11 +131,42 @@ def get_summary(company_id: str, audit_limit: int = 10) -> Dict[str, Any]:
     # 9) 최근 감사 (이 회사 + 관련 결제)
     recent_audit = _recent_audit(company_id, payment_ids, audit_limit)
 
-    # 10) 온보딩 (WO-17 전까지 null)
-    onboarding = None
+    # 10) 온보딩 (WO-17 onboarding_svc 실연결)
+    try:
+        from services.onboarding_svc import get_checklist
+        onboarding = get_checklist(company_id)
+    except Exception as e:  # noqa: BLE001
+        log.warning("[C360] onboarding 조회 실패: %s", e)
+        onboarding = None
 
     # 11) 사업장 과금 요약 (WO-9B — 과금=사업장 수 비례)
     billing = factory_billing_summary(company_id)
+
+    # 12) 계약 이력 (CRM 축)
+    contract_rows = (
+        supabase.table("contracts")
+        .select("id, contract_no, service_type, plan_code, status_code, total_amount, "
+                "start_date, end_date, is_active, paid_at, created_at")
+        .eq("company_id", company_id).order("created_at", desc=True).execute()
+    ).data or []
+    contracts = {
+        "count": len(contract_rows),
+        "active_count": len([c for c in contract_rows if c.get("is_active")]),
+        "items": contract_rows[:20],
+    }
+
+    # 13) 문의 이력 (CRM 축)
+    inquiry_rows = (
+        supabase.table("inquiries")
+        .select("id, no, category, title, status, priority, created_at, replied_at")
+        .eq("company_id", company_id).order("created_at", desc=True).execute()
+    ).data or []
+    unanswered = len([q for q in inquiry_rows if (q.get("status") or "").upper() != "ANSWERED"])
+    inquiries = {
+        "count": len(inquiry_rows),
+        "unanswered": unanswered,
+        "items": inquiry_rows[:20],
+    }
 
     return {
         "company": company,
@@ -140,6 +177,8 @@ def get_summary(company_id: str, audit_limit: int = 10) -> Dict[str, Any]:
         "credit_balance": credit_balance,
         "invoices": invoices,
         "refunds": refunds_summary,
+        "contracts": contracts,
+        "inquiries": inquiries,
         "recent_audit": recent_audit,
         "onboarding": onboarding,
         "billing": billing,
