@@ -2,6 +2,11 @@
 일정관리 API — inspection_sets 기준일·주기 관리
 prefix: /inspection-schedule
 
+v1.2 (2026-07-30, Goal G-ms6az4y8-b88c4a):
+  next_planned_date 산출에 휴무 보정 적용 — 공용 휴무 캘린더(org_holiday,
+  services/holiday_svc) 연동. inspection_sets.holiday_process_type 이
+  BEFORE/AFTER 인 세트만 보정되며, 그 외에는 종전 동작 그대로다.
+
 v1.1 (2026-04-03):
   anchor_type (FIXED_ANNUAL/HISTORICAL/EVENT) 필드·필터 추가
   /sets API에 anchor_type 포함, confirm-anchor에 anchor_type PATCH 지원
@@ -15,7 +20,10 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
-from services.inspection_sets_helpers import _next_planned_from as _calc_next_date
+from services.inspection_sets_helpers import (
+    _next_planned_from as _calc_next_date,
+    adjust_planned_for_holiday,
+)
 from services.legal_format import CYCLE_CODE_MAP, INSPECTION_CYCLE_UNIT_MAP
 from services.legal_helpers import get_sector_groups
 
@@ -404,6 +412,7 @@ def list_inspection_sets(
         "schedule_anchor_date, schedule_end_date, next_planned_date, last_inspection_date, "
         "status_code, anchor_confirmed, law_name, law_article, legal_rule_id, "
         "anchor_type, anchor_type_confidence, anchor_type_reason, "
+        "holiday_process_type, "
         "source, factory_id, company_id, created_at, updated_at"
     ).eq("is_active", True)
 
@@ -489,7 +498,8 @@ def patch_inspection_set(set_id: str, body: InspectionSetPatch):
     if not updates:
         raise HTTPException(status_code=400, detail="변경할 필드 없음")
 
-    if any(k in updates for k in ("cycle_unit", "cycle_value", "schedule_anchor_date", "anchor_type")):
+    if any(k in updates for k in ("cycle_unit", "cycle_value", "schedule_anchor_date",
+                                  "anchor_type", "holiday_process_type")):
         if "schedule_anchor_date" in updates:
             anchor = _to_date(updates["schedule_anchor_date"])
         else:
@@ -497,10 +507,13 @@ def patch_inspection_set(set_id: str, body: InspectionSetPatch):
         at_eff = updates["anchor_type"] if "anchor_type" in updates else cur.get("anchor_type")
         c_unit = updates.get("cycle_unit") or cur.get("cycle_unit")
         c_val = int(updates.get("cycle_value") or cur.get("cycle_value") or 1)
+        hpt = updates.get("holiday_process_type") or cur.get("holiday_process_type")
         if at_eff == "EVENT" and anchor is None:
             updates["next_planned_date"] = None
         elif anchor and c_unit and c_val:
-            updates["next_planned_date"] = _calc_next_date(anchor, str(c_unit), c_val).isoformat()
+            nxt = _calc_next_date(anchor, str(c_unit), c_val)
+            nxt = adjust_planned_for_holiday(nxt, cur.get("company_id"), cur.get("factory_id"), hpt)
+            updates["next_planned_date"] = nxt.isoformat()
         elif "schedule_anchor_date" in updates and updates.get("schedule_anchor_date") is None:
             updates["next_planned_date"] = None
 
@@ -517,7 +530,8 @@ def patch_inspection_set(set_id: str, body: InspectionSetPatch):
 def confirm_anchor(set_id: str, body: ConfirmAnchorBody):
     supabase = get_supabase()
     cur = (
-        supabase.table("inspection_sets").select("cycle_unit, cycle_value")
+        supabase.table("inspection_sets")
+        .select("cycle_unit, cycle_value, company_id, factory_id, holiday_process_type")
         .eq("id", set_id).eq("is_active", True).limit(1).execute()
     )
     if not cur.data:
@@ -529,6 +543,7 @@ def confirm_anchor(set_id: str, body: ConfirmAnchorBody):
     cv = int(cur.get("cycle_value") or 1)
 
     if anchor is None:
+        next_date = None
         patch = {
             "schedule_anchor_date": None,
             "anchor_confirmed": True,
@@ -538,6 +553,9 @@ def confirm_anchor(set_id: str, body: ConfirmAnchorBody):
         }
     else:
         next_date = _calc_next_date(anchor, str(cu), cv) if cu else None
+        next_date = adjust_planned_for_holiday(
+            next_date, cur.get("company_id"), cur.get("factory_id"),
+            cur.get("holiday_process_type"))
         patch = {
             "schedule_anchor_date": anchor.isoformat(),
             "anchor_confirmed": True,
@@ -554,7 +572,7 @@ def confirm_anchor(set_id: str, body: ConfirmAnchorBody):
         raise HTTPException(status_code=500, detail="갱신 후 조회 실패")
     if anchor is None:
         msg = "활성화되었습니다. (기준일 미설정)"
-    elif "next_date" in dir() and next_date:
+    elif next_date:
         msg = f"기준일 확정 완료. 다음 점검일: {next_date}"
     else:
         msg = "활성화되었습니다."
