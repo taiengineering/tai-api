@@ -7,6 +7,7 @@ ROUTERS = [
     {"module": "routers.safety_meetings"},
     {"module": "routers.risk_assessments"},
     {"module": "routers.ra_settings"},  # 위험성평가 설정(운영 파라미터·척도) /ra/*
+    {"module": "routers.ra_items"},     # 위험성평가 요인·대책·재판정 /ra/*
     {"module": "routers.worker_registry"},
     {"module": "routers.worker_check"},
     {"module": "routers.worker_home"},
