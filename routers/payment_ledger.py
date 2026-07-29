@@ -1,9 +1,17 @@
 """결제 원장 결선 라우터 (WO-7 PaymentLedger).
 
-Goal: G-ms4je4z3-33eada
+Goal: G-ms4je4z3-33eada (구축 이어받기 G-ms5pdquz-9e76e5)
 - 기존 payment_ops.py는 불변. WO-1~4 서비스(refund/credit/invoice)를 결제에 결선.
 - 얇은 위임: 각 서비스가 payment_id로 자기 검증·감사. 로직 중복 금지.
 - prefix /payments (기존 결제 네임스페이스와 동일).
+
+[2026-07-29 P0-1] 환불 라우트 정본 단일화:
+  기존 이 파일의 POST /{id}/refund, POST /{id}/refund/partial 은
+  routers/payment.py 의 동일/유사 라우트에 의해 선등록 그림자 처리(사문)였다.
+  프론트가 이 파일 스펙(body.by)을 보고 구현하면 처리자 정보가 조용히 누락되는
+  위험이 있어 제거한다. 환불 정본 = routers/payment.py:
+    POST /payments/{id}/refund          body: reason, cancelled_by
+    POST /payments/{id}/partial-refund  body: amount, reason, cancelled_by
 """
 from __future__ import annotations
 
@@ -21,17 +29,6 @@ router = APIRouter(prefix="/payments", tags=["결제원장"])
 
 
 # ── 요청 스키마 ──────────────────────────────────────────────────────
-class RefundBody(BaseModel):
-    reason: str
-    by: Optional[str] = None
-
-
-class PartialRefundBody(BaseModel):
-    amount: int
-    reason: str
-    by: Optional[str] = None
-
-
 class CreditGrantBody(BaseModel):
     # diagnosis_purchase_id가 있으면 전환크레딧, 없으면 수동 지급(amount 필수)
     diagnosis_purchase_id: Optional[str] = None
@@ -57,27 +54,10 @@ class CashReceiptBody(BaseModel):
     by: Optional[str] = None
 
 
-# ── 환불 결선 (refund_svc) ───────────────────────────────────────────
-@router.post("/{payment_id}/refund")
-def refund_full(payment_id: str, body: RefundBody):
-    """전액 환불 (이니시스 실호출)."""
-    from services.payment_svc import PaymentPrepareError
-    from services.refund_svc import run_refund
-    try:
-        return run_refund(payment_id, reason=body.reason, cancelled_by=body.by)
-    except PaymentPrepareError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.detail)
-
-
-@router.post("/{payment_id}/refund/partial")
-def refund_partial(payment_id: str, body: PartialRefundBody):
-    """부분 환불 (이니시스 실호출)."""
-    from services.payment_svc import PaymentPrepareError
-    from services.refund_svc import run_partial_refund
-    try:
-        return run_partial_refund(payment_id, amount=body.amount, reason=body.reason, cancelled_by=body.by)
-    except PaymentPrepareError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.detail)
+# ── 환불 결선 ────────────────────────────────────────────────────────
+# [2026-07-29 P0-1] 이 파일의 환불 라우트는 routers/payment.py 로 단일화되어 제거됨.
+#   정본: POST /payments/{id}/refund  (body: reason, cancelled_by)
+#         POST /payments/{id}/partial-refund  (body: amount, reason, cancelled_by)
 
 
 # ── 전환크레딧 결선 (credit_svc) ─────────────────────────────────────
@@ -145,7 +125,7 @@ def get_payment_ledger(payment_id: str):
     supabase = get_supabase()
     pay = (
         supabase.table("payments")
-        .select("id, company_id, status_code, total_amount, product_type, paid_at")
+        .select("id, company_id, contract_id, status_code, total_amount, product_type, paid_at")
         .eq("id", payment_id).limit(1).execute()
     )
     if not pay.data:
