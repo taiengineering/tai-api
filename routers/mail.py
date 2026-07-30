@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI 메일 관리 라우터 v3.0.0
+TAI 메일 관리 라우터 v3.1.0
 
+v3.1.0 (2026-07-30) — #4 실패 메일 후속:
+  - POST /mail/resend/{id}: 저장된 수신자/제목/본문으로 재발송(_dispatch_send 재시도).
+    성공 시 mail_logs 행을 sent 로 갱신(실패 지표 해소). 발신(outbound)만 허용.
+    실발송은 운영자가 화면에서 트리거한다(자동 재발송 아님).
 v3.0.0 (2026-07-28) — WO-8A 발송 경로 Gmail 전환:
   - 발송(send/send-system/reply)을 Gmail API(서비스계정 도메인위임) 우선으로 전환.
   - GMAIL_SA_JSON + GMAIL_SENDER 설정 시 Gmail, 미설정 시 기존 Resend fallback.
@@ -385,6 +389,55 @@ async def reply_mail(
     return {"success": True, "resend_id": result["external_id"], "mail_id": new_mail_id, "provider": result["provider"]}
 
 
+# ─── POST /mail/resend/:mail_id (실패 메일 재발송) ────────────
+
+@router.post("/resend/{mail_id}")
+def resend_mail(mail_id: str, by: Optional[str] = Query(None)):
+    """실패(또는 임의 발신) 메일 재발송. 저장된 수신자/제목/본문으로 재시도.
+
+    성공 시 해당 mail_logs 행을 sent 로 갱신(실패 지표 해소). 발신(outbound)만 허용.
+    실발송은 운영자가 화면에서 트리거한다(자동 재발송 아님).
+    """
+    supabase = get_supabase()
+    orig = supabase.table("mail_logs").select("*").eq("id", mail_id).single().execute()
+    if not orig.data:
+        raise HTTPException(status_code=404, detail="메일을 찾을 수 없습니다.")
+    m = orig.data
+    if m.get("direction") != "outbound":
+        raise HTTPException(status_code=400, detail="발신 메일만 재발송할 수 있습니다.")
+
+    to_list = m.get("to_emails") or []
+    if not to_list:
+        raise HTTPException(status_code=400, detail="수신자 정보가 없어 재발송할 수 없습니다.")
+    cc_list = m.get("cc_emails") or []
+    subject = m.get("subject") or ""
+    html = m.get("html_body")
+    text = m.get("text_body")
+    if not (html or text):
+        raise HTTPException(status_code=400, detail="본문이 없어 재발송할 수 없습니다.")
+
+    result = _dispatch_send(
+        to_list=to_list, subject=subject, html=html, text=text,
+        cc_list=cc_list or None,
+    )
+
+    patch = {
+        "status":        result["status"],
+        "resend_id":     result["external_id"],
+        "error_message": result["error"],
+        "sent_by":       f"resend:{by or 'admin'}:{result['provider']}",
+    }
+    try:
+        supabase.table("mail_logs").update(patch).eq("id", mail_id).execute()
+    except Exception:
+        pass
+
+    if result["status"] == "failed":
+        raise HTTPException(status_code=502, detail=f"재발송 실패: {result['error']}")
+
+    return {"success": True, "provider": result["provider"], "external_id": result["external_id"], "mail_id": mail_id}
+
+
 # ─── GET /mail/attachment/:mail_id/:filename ─────────────────
 
 @router.get("/attachment/{mail_id}/{filename}")
@@ -438,7 +491,7 @@ def list_mails(
     data_res = _apply_filters(
         supabase.table("mail_logs").select(
             "id, subject, from_email, to_emails, cc_emails, direction, status, "
-            "read, deleted, attachments, reply_to_id, created_at"
+            "read, deleted, attachments, reply_to_id, error_message, created_at"
         )
     ).order("created_at", desc=True).range(offset, offset + size - 1).execute()
 
