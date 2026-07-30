@@ -17,9 +17,11 @@ owner: taiwang
 검증(2026-07-29~30)이 끝난 뒤 확정한 as-built 문서이며, 코드가 이 문서와 어긋나면 코드가
 틀린 것이다.
 
-관련 코드: `routers/risk_assessments.py`(v1.5.0), `routers/ra_items.py`(v1.1.0),
-`routers/ra_settings.py`, `services/ra_decision_svc.py`, `services/ra_continuous_svc.py`,
-`services/ra_policy_svc.py`. 프론트: tai-admin `vue3/src/pages/risk-assessment-*`.
+관련 코드: `routers/risk_assessments.py`(v1.5.1), `routers/ra_items.py`(v1.1.0),
+`routers/ra_settings.py`, `routers/holidays.py`, `services/ra_decision_svc.py`,
+`services/ra_continuous_svc.py`(v1.1.0), `services/ra_policy_svc.py`,
+`services/holiday_svc.py`. 프론트: tai-admin `vue3/src/pages/risk-assessment-*`,
+`vue3/src/pages/holiday-calendar`.
 
 ## 1. 설계 원칙
 
@@ -28,7 +30,9 @@ owner: taiwang
 `ra_policy_param` 에서 읽는다 — 고시는 3년마다 재검토되므로(제28조) 상수로 두면 법 개정
 때마다 같은 결함이 재발한다(v1.1.0의 "최초평가 1년" 결함이 그 사례). 셋째, 판정은 서버가
 단일 소스다. 화면은 입력을 모아 보내고 결과만 표시한다 — 판정 로직이 화면과 서버 양쪽에
-있으면 반드시 어긋나고, 어긋난 쪽이 증적으로 남는다.
+있으면 반드시 어긋나고, 어긋난 쪽이 증적으로 남는다. 넷째, 캘린더(작업일·휴무일)는 위험성
+평가 전용이 아니라 공용 모듈(`holiday_svc`)로 두어, 점검 일정 등 다른 기능이 같은 판정을
+재구현하지 않도록 한다.
 
 ## 2. 데이터모델
 
@@ -61,6 +65,13 @@ raw_input_json, note. 요인 등록·수정·재판정 때마다 적재되어 �
 제15조제1항), PERIODIC_CYCLE(정기평가 주기, 현행 1년 — 제15조제3항), RETENTION(보존연수,
 현행 3년 — 시행규칙 제37조제2항). 조회 실패 시 코드의 안전망 값을 쓰되 그 값은 정본이
 아니다.
+
+`org_holiday` — 조직 공용 휴무 캘린더. holiday_date, name, source(LEGAL·COMPANY),
+company_id·factory_id(스코프). company_id IS NULL = 전국 공통(법정공휴일),
+company_id 지정·factory_id NULL = 회사 전체 휴무, 둘 다 지정 = 시설 휴무. 법정공휴일은
+연도별 시드(마이그레이션)로만 관리하고 화면에서 수정하지 않는다 — 임시·대체공휴일은 해마다
+달라지므로 코드 상수로 두지 않는다(제1원칙과 동일한 이유). 이 테이블은 위험성평가 전용이
+아니라 캘린더를 쓰는 모든 기능의 공용 원천이다.
 
 ## 3. 상태기계
 
@@ -112,25 +123,50 @@ acceptable_max 는 사업장이 척도 확정 시 정한 값이며 코드 기본
 1호(월 1회 이상 발굴): 해당 월에 등록된 ra_item(회사/시설의 평가 소속) ≥ 1건.
 2호(매주 1회 이상 논의·점검): work_schedules.completed_at(점검관리 완료 실적)을 월요일
 시작 주 단위로 버킷팅해 경과한 각 주에 ≥ 1건. 진행 중인 주는 미성립으로 치지 않는다.
-3호(매 작업일 TBM): tbm_meetings.work_date 가 경과한 평일마다 존재. 작업일 캘린더가 없어
-평일(월~금)을 작업일로 간주하며 이 한계를 응답 criteria 로 화면에 그대로 안내한다. 오늘은
-아직 끝나지 않은 날이므로 판정에서 제외한다.
+3호(매 작업일 TBM): tbm_meetings.work_date 가 경과한 작업일마다 존재. 작업일은 평일에서
+공용 휴무 캘린더(org_holiday, holiday_svc)의 법정공휴일·사업장 휴무일을 뺀 날이다. 제외된
+휴무일은 응답 excluded_holidays 로 화면에 근거로 표시된다. 오늘은 아직 끝나지 않은 날이므로
+판정에서 제외한다. (교대제·주말 조업 캘린더는 아직 반영하지 않으며, 주말 실적이 있으면
+집계에 자연히 잡히므로 불이익은 없다.)
 
 API: `GET /risk-assessments/continuous-status?company_id&factory_id&month`. 응답은 요건별
 성립 여부·실적 수치·결측일 목록과 종합 deemed 를 담고, 화면(평가 목록 상단 카드)은 이를
 그대로 표시한다.
 
-## 6. API 매핑
+실측 검증(2026-07-30, 2026-07 대상): 평일 21일 중 제헌절(07-17, LEGAL)·전사 하계휴가
+(07-28, COMPANY) 2일이 작업일에서 제외되어 workdays_elapsed=19, excluded_holidays 에 2건
+표시. 휴무 캘린더 화면에서 법정공휴일 21건 조회 및 사업장 휴무 등록·삭제 확인.
+
+## 6. 공용 휴무 캘린더 (holiday_svc / routers.holidays)
+
+`holiday_svc` 는 캘린더를 쓰는 모든 기능의 공용 서비스다. `get_holidays`(스코프 병합 조회),
+`holiday_map`(날짜→이름), `is_workday`/`workdays_between`(작업일 판정)을 제공한다.
+조회 규칙: factory_id 미지정(회사 단위)이면 법정 + 회사의 모든 휴무(시설별 포함)를,
+factory_id 지정(특정 시설 판정)이면 법정 + 회사 전체 + 그 시설 휴무만 돌려준다. 테이블
+미적용 환경에서는 빈 결과로 폴백해 종전 동작(휴무 없음)과 같다.
+
+소비자:
+- 상시평가 3호 판정 — `ra_continuous_svc.judge_continuous(holidays=...)`.
+- 점검 일정 다음 점검일 보정 — `inspection_sets_helpers.adjust_planned_for_holiday`.
+  inspection_sets.holiday_process_type 이 BEFORE/AFTER 인 세트는 산출된 예정일이 휴무일이면
+  직전/직후 작업일로 옮긴다. 미설정 세트는 보정하지 않는다(종전 동작 불변).
+
+API: GET/POST/DELETE `/holidays`. 법정공휴일(source=LEGAL)은 등록·삭제할 수 없다.
+새 기능에서 "평일이면 작업일" 같은 판정을 다시 구현하지 말고 이 모듈을 쓸 것.
+
+## 7. API 매핑
 
 평가 수명주기: POST /risk-assessments(생성, 유형·척도·사전조사·참여자) → POST
 /ra/assessments/{id}/items(요인 등록·즉시 판정) → POST /ra/items/{id}/controls(대책) →
 PATCH /ra/controls/{id}(실행 완료) → POST /ra/items/{id}/reevaluate(재판정) → GET
 /ra/assessments/{id}/readiness(완료 가능 점검) → POST /risk-assessments/{id}/complete
 (가드 + 보존만료 산출). 이력: GET /ra/items/{id}/revisions. 설정: /ra/scales CRUD
-(ra_settings). 상시평가: GET /risk-assessments/continuous-status.
+(ra_settings). 상시평가: GET /risk-assessments/continuous-status. 휴무 캘린더: /holidays
+(holidays).
 
-## 7. 범위 밖 (후속)
+## 8. 범위 밖 (후속)
 
 KOSHA 인정신청 대행, 화학물질 MSDS 전용 모듈, 건설업 전용 공종 라이브러리, 빈도강도법
-프리셋 확충(척도 설정으로 이미 확장 가능), 사업장 휴무 캘린더 연동(3호 판정 정밀화),
-중대재해처벌법 시행령 제4조 3호 반기 증적 리포트 화면.
+프리셋 확충(척도 설정으로 이미 확장 가능), 사업장 교대제·주말 조업 캘린더(3호 판정 추가
+정밀화), 공휴일 Open API 실시간 동기화(현재는 연도별 시드), 중대재해처벌법 시행령 제4조
+3호 반기 증적 리포트 화면.
