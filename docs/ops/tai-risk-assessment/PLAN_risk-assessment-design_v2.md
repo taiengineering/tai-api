@@ -18,10 +18,11 @@ owner: taiwang
 틀린 것이다.
 
 관련 코드: `routers/risk_assessments.py`(v1.5.1), `routers/ra_items.py`(v1.1.0),
-`routers/ra_settings.py`, `routers/holidays.py`(v1.1.0), `services/ra_decision_svc.py`,
-`services/ra_continuous_svc.py`(v1.1.0), `services/ra_policy_svc.py`,
-`services/holiday_svc.py`, `services/holiday_sync_svc.py`, `scheduler.py`.
-프론트: tai-admin `vue3/src/pages/risk-assessment-*`, `vue3/src/pages/holiday-calendar`.
+`routers/ra_settings.py`, `routers/holidays.py`(v1.1.0), `routers/ra_report.py`(v1.0.1),
+`services/ra_decision_svc.py`, `services/ra_continuous_svc.py`(v1.1.0),
+`services/ra_policy_svc.py`, `services/holiday_svc.py`, `services/holiday_sync_svc.py`,
+`scheduler.py`. 프론트: tai-admin `vue3/src/pages/risk-assessment-*`,
+`vue3/src/pages/holiday-calendar`, `vue3/src/pages/risk-assessment-report`.
 
 ## 1. 설계 원칙
 
@@ -69,7 +70,7 @@ raw_input_json, note. 요인 등록·수정·재판정 때마다 적재되어 �
 `org_holiday` — 조직 공용 휴무 캘린더. holiday_date, name, source(LEGAL·COMPANY),
 company_id·factory_id(스코프). company_id IS NULL = 전국 공통(법정공휴일),
 company_id 지정·factory_id NULL = 회사 전체 휴무, 둘 다 지정 = 시설 휴무. 법정공휴일의 정본은
-공식 API 동기화(§6)이며, 마이그레이션 시드는 초기 부트스트랩·API 미가용 시의 안전망이다.
+공식 API 동기화(§6.1)이며, 마이그레이션 시드는 초기 부트스트랩·API 미가용 시의 안전망이다.
 임시·대체공휴일은 해마다 달라지므로 코드 상수로 두지 않는다(제1원칙과 동일한 이유).
 이 테이블은 위험성평가 전용이 아니라 캘린더를 쓰는 모든 기능의 공용 원천이다.
 
@@ -175,7 +176,29 @@ holiday_sync_svc 는 DATA_GO_KR_HTTP_PROXY(없으면 KMC_HTTP_PROXY)로 한국 e
 동작한다. 프록시(또는 다른 한국 egress) 준비 시 `POST /holidays/sync?year=2026` 로 검증하면
 동기화 경로가 활성화된다. 코드·라우트·스케줄러는 배포 완료 상태다.
 
-## 7. API 매핑
+## 7. 중대재해처벌법 반기 점검 증적 리포트 (ra_report)
+
+중대재해처벌법 시행령 제4조제3호는 경영책임자에게 ① 유해·위험요인 확인·개선 업무절차 마련,
+② 그 이행 여부의 반기 1회 이상 점검, ③ 필요한 조치를 요구한다. 단서로, 산업안전보건법
+제36조 위험성평가를 실시하고 그 결과를 보고받으면 이 확인·개선 점검을 한 것으로 본다(간주).
+따라서 위험성평가 데이터를 반기 단위로 집계하면 그대로 중처법 반기 점검 증적이 된다.
+
+집계·판정 (`GET /ra/semiannual-report?company_id&factory_id&year&half=H1|H2`):
+반기(H1 1~6월 / H2 7~12월) 내 assessment_date 기준으로 위험성평가를 모아 실시·완료 건수,
+그 평가들의 ra_item(파악·허용가능·미해결), ra_control(수립·실행·잠정)을 집계한다. 판정은
+DONE(완료 ≥1 그리고 미해결 0 → 점검 완료·갈음), GAP(실시 ≥1이나 미해결 존재 → '필요한 조치'
+미완), NONE(실시 0 → 미점검) 세 가지. 판정·집계는 서버(ra_report)가 단일 소스이며 화면은
+표시·인쇄만 한다. 최종 점검 책임은 경영책임자에게 있음을 리포트에 명시한다.
+
+화면(risk-assessment-report): 연도·반기·시설 선택 → 판정 배지 + 근거 문구 + 집계 카드
++ 미해결 요인 목록 + 실시 평가 목록. '증적 출력(PDF 저장)'은 인쇄용 레이아웃(no-print 요소
+숨김)으로 브라우저 인쇄를 띄워 PDF 증적을 남긴다.
+
+실측 검증(2026-07-30, 2026 H2): 평가 1(완료 1)·요인 1(허용가능 1, 미해결 0)·대책 1(실행 1)
+집계, 판정 "반기 점검 완료(위험성평가로 갈음)" 화면 표시 확인. (v1.0.0 에서 ra_item select 에
+없는 process_name 컬럼으로 요인 집계가 0 이던 것을 v1.0.1 에서 work_process 로 정정.)
+
+## 8. API 매핑
 
 평가 수명주기: POST /risk-assessments(생성, 유형·척도·사전조사·참여자) → POST
 /ra/assessments/{id}/items(요인 등록·즉시 판정) → POST /ra/items/{id}/controls(대책) →
@@ -183,13 +206,14 @@ PATCH /ra/controls/{id}(실행 완료) → POST /ra/items/{id}/reevaluate(재판
 /ra/assessments/{id}/readiness(완료 가능 점검) → POST /risk-assessments/{id}/complete
 (가드 + 보존만료 산출). 이력: GET /ra/items/{id}/revisions. 설정: /ra/scales CRUD
 (ra_settings). 상시평가: GET /risk-assessments/continuous-status. 휴무 캘린더: /holidays
-(GET·POST·DELETE), 공휴일 동기화: POST /holidays/sync.
+(GET·POST·DELETE), 공휴일 동기화: POST /holidays/sync. 중처법 반기 증적: GET
+/ra/semiannual-report.
 
-## 8. 범위 밖 (후속)
+## 9. 범위 밖 (후속)
 
 KOSHA 인정신청 대행, 화학물질 MSDS 전용 모듈, 건설업 전용 공종 라이브러리, 빈도강도법
 프리셋 확충(척도 설정으로 이미 확장 가능), 사업장 교대제·주말 조업 캘린더(3호 판정 추가
-정밀화), 중대재해처벌법 시행령 제4조 3호 반기 증적 리포트 화면.
+정밀화), 반기 증적 리포트의 경영책임자 전자서명·결재 워크플로우(현재는 인쇄 증적).
 
 보류 중(구현·배포 완료, 검증만 대기): 공휴일 공식 API 동기화(§6.1) — tai-api 의 한국 egress
 프록시(DATA_GO_KR_HTTP_PROXY) 준비 시 실호출 검증으로 활성화. 그때까지는 마이그레이션
