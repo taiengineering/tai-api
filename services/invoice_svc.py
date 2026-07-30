@@ -11,7 +11,7 @@ Goal: G-ms4je4z3-33eada (게이트 보강 G-ms5pdquz-9e76e5)
   운영 정책상 실발행(팝빌 실 registIssue)은 사람 게이트 완료 전까지 실호출을 막는다.
   플래그가 꺼져 있으면 검증까지만 수행하고, 원장 오염 없이 423으로 차단하며 감사만 남긴다.
   발행취소(cancel)도 동일 게이트 — 실호출이 잠긴 상태에서는 실 취소도 나가지 않는다.
-  켜려면 배포 환경변수 INVOICE_LIVE=on(사람이 명시적으로 설정)해야 한다.
+  허용 소스: 배포 ENV(INVOICE_LIVE=on) 또는 어드민 실행게이트(ops_feature_gate, 준비완료 통과 후 활성화).
 """
 from __future__ import annotations
 
@@ -37,8 +37,16 @@ class InvoiceError(Exception):
 
 
 def invoice_live() -> bool:
-    """실발행 실호출 허용 여부. 기본 off — 사람이 INVOICE_LIVE=on 을 명시해야 실호출."""
-    return os.getenv(_INVOICE_LIVE_ENV, "").strip().lower() in ("1", "true", "on", "yes")
+    """실발행 실호출 허용 여부. 기본 off.
+
+    ENV(INVOICE_LIVE=on) 또는 어드민 실행게이트(ops_feature_gate) 활성 시 허용.
+    게이트 서비스 오류 시 보수적으로 ENV 만 본다.
+    """
+    try:
+        from services.ops_gate_svc import is_live
+        return is_live(_INVOICE_LIVE_ENV)
+    except Exception:  # noqa: BLE001
+        return os.getenv(_INVOICE_LIVE_ENV, "").strip().lower() in ("1", "true", "on", "yes")
 
 
 def _assert_invoice_live(payment_id: Optional[str], doc_type: str, op: str,
