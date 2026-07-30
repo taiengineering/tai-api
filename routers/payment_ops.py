@@ -1,4 +1,8 @@
-"""결제 조회·수동처리·VBANK 상태 — /payments 보조 라우트 (payment.py 용량 분리)."""
+"""결제 조회·수동처리·VBANK 상태 — /payments 보조 라우트 (payment.py 용량 분리).
+
+[2026-07-30 #5 감사 완결성] 결제취소(PAYMENT_CANCEL)·수동활성화(PAYMENT_MANUAL_CONFIRM)를
+  admin_ops_audit_logs 에 before/after·actor 로 기록한다(best-effort — 감사 실패가 본 처리를 막지 않음).
+"""
 from __future__ import annotations
 
 import logging
@@ -9,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from db.supabase_client import get_supabase
 from schemas.payment import CancelBody, ManualConfirmBody
+from services import audit_svc
 from services.payment_helpers import SAAS_PRODUCT_TYPES, calc_expired_at, now_iso
 
 log = logging.getLogger(__name__)
@@ -126,6 +131,14 @@ def manual_confirm(body: ManualConfirmBody):
     supabase.table("payments").update(update_row).eq("id", body.payment_id).execute()
     supabase.table("contracts").update({"is_active": True, "updated_at": now}).eq("id", body.contract_id).execute()
 
+    audit_svc.record(
+        "PAYMENT_MANUAL_CONFIRM", "payment", entity_id=str(body.payment_id),
+        actor_id=body.by,
+        before={"status_code": payment["status_code"]},
+        after={"status_code": "SUCCESS", "service_status": "ACTIVE",
+               "contract_id": str(body.contract_id)},
+    )
+
     try:
         from services.payment_post_process import on_payment_success_sync
         on_payment_success_sync(str(body.payment_id))
@@ -170,6 +183,13 @@ def cancel_payment(payment_id: str, body: CancelBody):
     contract_id = payment.get("contract_id")
     if contract_id:
         supabase.table("contracts").update({"is_active": False, "updated_at": now}).eq("id", contract_id).execute()
+
+    audit_svc.record(
+        "PAYMENT_CANCEL", "payment", entity_id=str(payment_id),
+        actor_id=body.cancelled_by,
+        before={"status_code": payment["status_code"], "contract_id": contract_id},
+        after={"status_code": "CANCELLED", "service_status": "ENDED", "reason": body.reason},
+    )
 
     return {
         "status": "success",
