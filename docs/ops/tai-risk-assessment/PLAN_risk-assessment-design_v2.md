@@ -17,10 +17,10 @@ owner: taiwang
 검증(2026-07-29~30)이 끝난 뒤 확정한 as-built 문서이며, 코드가 이 문서와 어긋나면 코드가
 틀린 것이다.
 
-관련 코드: `routers/risk_assessments.py`(v1.5.1), `routers/ra_items.py`(v1.1.0),
-`routers/ra_settings.py`, `routers/holidays.py`(v1.1.0), `routers/ra_report.py`(v1.0.1),
-`services/ra_decision_svc.py`, `services/ra_continuous_svc.py`(v1.1.0),
-`services/ra_policy_svc.py`, `services/holiday_svc.py`, `services/holiday_sync_svc.py`,
+관련 코드: `routers/risk_assessments.py`(v1.5.2), `routers/ra_items.py`(v1.1.0),
+`routers/ra_settings.py`, `routers/holidays.py`(v1.2.0), `routers/ra_report.py`(v1.0.1),
+`services/ra_decision_svc.py`, `services/ra_continuous_svc.py`(v1.2.0),
+`services/ra_policy_svc.py`, `services/holiday_svc.py`(v1.1.0), `services/holiday_sync_svc.py`,
 `scheduler.py`. 프론트: tai-admin `vue3/src/pages/risk-assessment-*`,
 `vue3/src/pages/holiday-calendar`, `vue3/src/pages/risk-assessment-report`.
 
@@ -74,6 +74,11 @@ company_id 지정·factory_id NULL = 회사 전체 휴무, 둘 다 지정 = 시�
 공식 API 동기화(§6.1)이며, 마이그레이션 시드는 초기 부트스트랩·API 미가용 시의 안전망이다.
 임시·대체공휴일은 해마다 달라지므로 코드 상수로 두지 않는다(제1원칙과 동일한 이유).
 이 테이블은 위험성평가 전용이 아니라 캘린더를 쓰는 모든 기능의 공용 원천이다.
+
+`org_work_policy` — 조업요일 정책. company_id + factory_id(NULL=회사 전체) 스코프,
+work_weekdays(ISO 1=월…7=일, 기본 {1,2,3,4,5}). '작업일'의 요일 기준이며, 시설 정책이
+회사 정책을 우선한다. 주말 조업·연속(교대) 조업 사업장은 토·일을 포함한다. 테이블/정책
+미적용 시 기본 월~금 폴백. 이 정책도 캘린더를 쓰는 모든 기능의 공용 입력이다(§6).
 
 ## 3. 상태기계
 
@@ -137,35 +142,38 @@ acceptable_max 는 사업장이 척도 확정 시 정한 값이며 코드 기본
 1호(월 1회 이상 발굴): 해당 월에 등록된 ra_item(회사/시설의 평가 소속) ≥ 1건.
 2호(매주 1회 이상 논의·점검): work_schedules.completed_at(점검관리 완료 실적)을 월요일
 시작 주 단위로 버킷팅해 경과한 각 주에 ≥ 1건. 진행 중인 주는 미성립으로 치지 않는다.
-3호(매 작업일 TBM): tbm_meetings.work_date 가 경과한 작업일마다 존재. 작업일은 평일에서
-공용 휴무 캘린더(org_holiday, holiday_svc)의 법정공휴일·사업장 휴무일을 뺀 날이다. 제외된
-휴무일은 응답 excluded_holidays 로 화면에 근거로 표시된다. 오늘은 아직 끝나지 않은 날이므로
-판정에서 제외한다. (교대제·주말 조업 캘린더는 아직 반영하지 않으며, 주말 실적이 있으면
-집계에 자연히 잡히므로 불이익은 없다.)
+3호(매 작업일 TBM): tbm_meetings.work_date 가 경과한 작업일마다 존재. 작업일 = 사업장
+조업요일(org_work_policy) − 휴무일(org_holiday). 조업요일은 사업장이 정한 요일 집합
+(기본 월~금)이며 주말 조업·교대제는 토·일을 포함한다. 제외된 휴무일은 응답
+excluded_holidays 로, 적용된 조업요일은 work_weekdays·work_weekdays_label 로 화면에 표시된다.
+오늘은 아직 끝나지 않은 날이므로 판정에서 제외한다. (교대조 편성·야간 교대 시간대는 범위 밖 —
+'그 요일에 조업하는지'만 본다.)
 
 API: `GET /risk-assessments/continuous-status?company_id&factory_id&month`. 응답은 요건별
-성립 여부·실적 수치·결측일 목록과 종합 deemed 를 담고, 화면(평가 목록 상단 카드)은 이를
-그대로 표시한다.
+성립 여부·실적 수치·결측일 목록·적용 조업요일과 종합 deemed 를 담고, 화면(평가 목록 상단
+카드)은 이를 그대로 표시한다.
 
-실측 검증(2026-07-30, 2026-07 대상): 평일 21일 중 제헌절(07-17, LEGAL)·전사 하계휴가
-(07-28, COMPANY) 2일이 작업일에서 제외되어 workdays_elapsed=19, excluded_holidays 에 2건
-표시. 휴무 캘린더 화면에서 법정공휴일 21건 조회 및 사업장 휴무 등록·삭제 확인.
+실측 검증(2026-07-30): 조업요일 월~금이면 2026-07 작업일 20일, 토요일 추가(월~토)하면 24일로
+증가(7월 토요일 4일 반영)함을 continuous-status 실호출로 확인. 휴무 캘린더 화면에서
+조업요일 카드로 설정·저장 확인.
 
-## 6. 공용 휴무 캘린더 (holiday_svc / routers.holidays)
+## 6. 공용 휴무·작업일 캘린더 (holiday_svc / routers.holidays)
 
 `holiday_svc` 는 캘린더를 쓰는 모든 기능의 공용 서비스다. `get_holidays`(스코프 병합 조회),
-`holiday_map`(날짜→이름), `is_workday`/`workdays_between`(작업일 판정)을 제공한다.
-조회 규칙: factory_id 미지정(회사 단위)이면 법정 + 회사의 모든 휴무(시설별 포함)를,
-factory_id 지정(특정 시설 판정)이면 법정 + 회사 전체 + 그 시설 휴무만 돌려준다. 테이블
-미적용 환경에서는 빈 결과로 폴백해 종전 동작(휴무 없음)과 같다.
+`holiday_map`(날짜→이름), `get_work_weekdays`(조업요일 정책 조회, 시설>회사>기본 월~금 폴백),
+`is_workday`/`workdays_between`(조업요일 − 휴무 기반 작업일 판정)을 제공한다.
+휴무 조회 규칙: factory_id 미지정(회사 단위)이면 법정 + 회사의 모든 휴무(시설별 포함)를,
+factory_id 지정(특정 시설)이면 법정 + 회사 전체 + 그 시설 휴무만 돌려준다. 테이블 미적용
+환경에서는 빈 결과·기본 조업요일로 폴백해 종전 동작(평일=작업일, 휴무 없음)과 같다.
 
 소비자:
-- 상시평가 3호 판정 — `ra_continuous_svc.judge_continuous(holidays=...)`.
+- 상시평가 3호 판정 — `ra_continuous_svc.judge_continuous(holidays=…, work_weekdays=…)`.
 - 점검 일정 다음 점검일 보정 — `inspection_sets_helpers.adjust_planned_for_holiday`.
   inspection_sets.holiday_process_type 이 BEFORE/AFTER 인 세트는 산출된 예정일이 휴무일이면
   직전/직후 작업일로 옮긴다. 미설정 세트는 보정하지 않는다(종전 동작 불변).
 
-API: GET/POST/DELETE `/holidays`. 법정공휴일(source=LEGAL)은 등록·삭제할 수 없다.
+API: GET/POST/DELETE `/holidays`(법정공휴일 source=LEGAL 은 등록·삭제 불가),
+GET/PUT `/work-policy`(조업요일 정책 조회·설정, 스코프당 1건 upsert).
 새 기능에서 "평일이면 작업일" 같은 판정을 다시 구현하지 말고 이 모듈을 쓸 것.
 
 ### 6.1 법정공휴일 공식 API 동기화 (holiday_sync_svc)
@@ -219,13 +227,13 @@ PATCH /ra/controls/{id}(실행 완료) → POST /ra/items/{id}/reevaluate(재판
 /ra/assessments/{id}/readiness(완료 가능 점검) → POST /risk-assessments/{id}/complete
 (가드 + 보존만료 산출). 이력: GET /ra/items/{id}/revisions. 설정: /ra/scales CRUD
 (ra_settings). 상시평가: GET /risk-assessments/continuous-status. 휴무 캘린더: /holidays
-(GET·POST·DELETE), 공휴일 동기화: POST /holidays/sync. 중처법 반기 증적: GET
-/ra/semiannual-report.
+(GET·POST·DELETE), 조업요일: /work-policy(GET·PUT), 공휴일 동기화: POST /holidays/sync.
+중처법 반기 증적: GET /ra/semiannual-report.
 
 ## 9. 범위 밖 (후속)
 
-KOSHA 인정신청 대행, 화학물질 MSDS 전용 모듈, 건설업 전용 공종 라이브러리, 사업장 교대제·
-주말 조업 캘린더(3호 판정 추가 정밀화), 반기 증적 리포트의 경영책임자 전자서명·결재
+KOSHA 인정신청 대행, 화학물질 MSDS 전용 모듈, 건설업 전용 공종 라이브러리, 교대조 편성·야간
+교대 시간대 관리(현재는 조업요일 단위), 반기 증적 리포트의 경영책임자 전자서명·결재
 워크플로우(현재는 인쇄 증적), 척도 설정의 빈도강도법 매트릭스 시각 편집기(현재는 프리셋
 matrix 를 편집 없이 보존).
 
