@@ -45,10 +45,11 @@ accident_history), 참여 근로자(participants_json), 완료일(completed_at),
 여기 실린다.
 
 `ra_scale` — 척도. method(THREE_STEP·CHECKLIST·OPS·FREQ_SEV), levels_json(코드·표시명·
-순서·판단기준 문장), acceptable_max(허용 가능한 최대 수준), acceptable_reason(그렇게 정한
-근거), is_preset. 프리셋은 회사 소속이 없는 참고용 표본이며, 사업장이 복사해 자신의 척도로
-확정해야 평가에 쓸 수 있다. 평가 생성 시 1회 선택하고 이후 고정한다 — 평가 도중 척도가
-바뀌면 앞서 내린 판정의 근거가 사라진다.
+순서·판단기준 문장), matrix_json(FREQ_SEV 전용 — op·bands, §4 참조), acceptable_max(허용
+가능한 최대 수준), acceptable_reason(그렇게 정한 근거), is_preset. 프리셋은 회사 소속이 없는
+참고용 표본이며, 사업장이 복사해 자신의 척도로 확정해야 평가에 쓸 수 있다. 평가 생성 시 1회
+선택하고 이후 고정한다 — 평가 도중 척도가 바뀌면 앞서 내린 판정의 근거가 사라진다.
+프리셋 시드: 3단계 판단법·체크리스트법·핵심요인기술법(OPS)·빈도강도법 3x3·빈도강도법 5x4.
 
 `ra_item` — 유해·위험요인(시행규칙 제37조제1항제1호). hazard, work_process,
 situation_result, exposed_count, legal_basis, current_controls, discovery_method,
@@ -101,7 +102,17 @@ ra_item_revision 에 seq 를 올려 적재한다. 잔여 노출 인원을 다시
 
 기법별 기본 수준 산출 — THREE_STEP: raw.level 을 그대로 수준으로. CHECKLIST: mark(O/X)를
 최저/최고 수준으로 사상. OPS: is_sufficient 를 최저/최고 수준으로 사상. FREQ_SEV:
-freq×sev 값을 matrix_json 구간에 사상.
+raw.freq·raw.sev 를 matrix_json 으로 조합해 점수를 내고 bands 구간에 사상.
+
+matrix_json 구조(FREQ_SEV): `{"op":"MULTIPLY|ADD|MATRIX", "freq_max":n, "sev_max":m,
+"bands":[{"min":1,"max":2,"level_code":"LOW"}, ...]}`. op=MULTIPLY/ADD 는 freq·sev 를
+곱/합해 점수를 내고 bands 로 사상하며, op=MATRIX 는 cells[freq][sev] 로 직접 사상한다.
+band 의 level_code 는 levels_json 의 code 와 일치해야 한다. 시드 프리셋:
+- 빈도강도법 3x3 — MULTIPLY, 점수 1~2 LOW / 3~4 MEDIUM / 5~9 HIGH, 허용 최대 MEDIUM.
+- 빈도강도법 5x4 — MULTIPLY, 1~4 LOW / 5~9 MEDIUM / 10~15 HIGH / 16~20 VERY_HIGH, 허용 최대 LOW.
+구간 수치는 법정값이 아니라 KOSHA/KRAS 예시이며(고시 제9조제2항 자율), 사업장이 복사 후
+확정한다. 척도 설정 화면은 매트릭스 시각 편집기를 아직 제공하지 않으므로 프리셋의 matrix_json
+을 편집 없이 보존·전달한다(복사·수정 모두). 매트릭스 편집 UI 는 후속.
 
 승급 규칙(수준 상향) — 산출된 기본 수준에 다음을 적용한다.
 LEGAL_NONCOMPLIANCE(법령 미준수): 허용 불가로 강제, 법령 조치 우선 안내.
@@ -113,8 +124,10 @@ MANY_EXPOSED(다수 노출, exposed_count 기준): 한 단계 상향. 재판정 
 허용 판정 — 최종 수준의 order ≤ acceptable_max 의 order 이면 acceptable=true.
 acceptable_max 는 사업장이 척도 확정 시 정한 값이며 코드 기본값이 없다.
 
-실측 검증(2026-07-30): 입력 "하"+SEVERE_EXPECTED → 서버가 "상"으로 승급·사유 표시,
+실측 검증(2026-07-30): (3단계) 입력 "하"+SEVERE_EXPECTED → 서버가 "상"으로 승급·사유 표시,
 대책 실행·노출 0 재판정 → "하·허용 가능", 완료 가드 통과, retention_until 2029-07-29 산출.
+(빈도강도법 3x3) 프리셋 복사→척도 확정→평가 생성→빈도3·강도3 입력 → MULTIPLY 9점 → HIGH·
+허용불가 판정 확인.
 
 ## 5. 상시평가 판정 (ra_continuous_svc.judge_continuous)
 
@@ -211,9 +224,10 @@ PATCH /ra/controls/{id}(실행 완료) → POST /ra/items/{id}/reevaluate(재판
 
 ## 9. 범위 밖 (후속)
 
-KOSHA 인정신청 대행, 화학물질 MSDS 전용 모듈, 건설업 전용 공종 라이브러리, 빈도강도법
-프리셋 확충(척도 설정으로 이미 확장 가능), 사업장 교대제·주말 조업 캘린더(3호 판정 추가
-정밀화), 반기 증적 리포트의 경영책임자 전자서명·결재 워크플로우(현재는 인쇄 증적).
+KOSHA 인정신청 대행, 화학물질 MSDS 전용 모듈, 건설업 전용 공종 라이브러리, 사업장 교대제·
+주말 조업 캘린더(3호 판정 추가 정밀화), 반기 증적 리포트의 경영책임자 전자서명·결재
+워크플로우(현재는 인쇄 증적), 척도 설정의 빈도강도법 매트릭스 시각 편집기(현재는 프리셋
+matrix 를 편집 없이 보존).
 
 보류 중(구현·배포 완료, 검증만 대기): 공휴일 공식 API 동기화(§6.1) — tai-api 의 한국 egress
 프록시(DATA_GO_KR_HTTP_PROXY) 준비 시 실호출 검증으로 활성화. 그때까지는 마이그레이션
