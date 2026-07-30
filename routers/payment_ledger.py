@@ -12,6 +12,10 @@ Goal: G-ms4je4z3-33eada (구축 이어받기 G-ms5pdquz-9e76e5)
   위험이 있어 제거한다. 환불 정본 = routers/payment.py:
     POST /payments/{id}/refund          body: reason, cancelled_by
     POST /payments/{id}/partial-refund  body: amount, reason, cancelled_by
+
+[2026-07-30 실호출 게이트] GET /payments/ops/live-flags:
+  환불(REFUND_LIVE)·증빙(INVOICE_LIVE) 실호출 활성 여부를 프론트에 노출.
+  프론트는 이 값으로 '실호출 잠금' 배지를 표시하고, 실행 시 423(게이트)을 안내한다.
 """
 from __future__ import annotations
 
@@ -52,6 +56,19 @@ class CashReceiptBody(BaseModel):
     trade_usage: str           # 소득공제용 | 지출증빙용
     identity_num: str          # 휴대폰/주민번호(소득공제용) 또는 사업자번호(지출증빙용)
     by: Optional[str] = None
+
+
+# ── 실호출 게이트 상태 ───────────────────────────────────────────────
+@router.get("/ops/live-flags")
+def live_flags():
+    """환불·증빙 실호출 활성 여부. 프론트 '실호출 잠금' 표시용."""
+    try:
+        from services.invoice_svc import invoice_live
+        from services.refund_svc import refund_live
+        return {"status": "success", "data": {"refund_live": refund_live(), "invoice_live": invoice_live()}}
+    except Exception as e:  # noqa: BLE001 — 조회 실패는 잠금(보수적)으로 폴백
+        log.warning("[LEDGER] live-flags 조회 실패: %s", e)
+        return {"status": "success", "data": {"refund_live": False, "invoice_live": False}}
 
 
 # ── 환불 결선 ────────────────────────────────────────────────────────
