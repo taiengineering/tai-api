@@ -19,7 +19,7 @@ owner: taiwang
 
 - Freeze tag: `canonical-phase1-freeze` → commit `e4803d77`
 - Canonical Phase 1 = By-Construction Wrapper (5개 진단 진입점 통일)
-- 본 문서는 **Canonical(주배선)** 과 **Legacy(기존자산)** 의 경계를 명문화한다.
+- 본 문서는 **Canonical(주배선)** 과 **Legacy(기존자산)** 의 경계를 명문화하며, 이후 Phase 2에서 경계 위반 여부를 비교하는 기준점이다.
 
 ## 1. Legacy Asset Inventory (STEP 1)
 
@@ -55,7 +55,7 @@ Boundary를 넘는 **신규 의존성 금지**.
 
 ## 3. Dependency Boundary Map (STEP 5) — 실측
 
-`from services.canonical` 전체 참조(저장소 grep, total=5):
+### 3.1 `from services.canonical` 참조 (저장소 grep)
 
 ```
 routers/anonymous_diagnosis.py       b4549343   (create_anonymous_diagnosis wrapper)
@@ -65,15 +65,43 @@ routers/diagnosis_integrated_leg.py  a1a63938   (run_diagnosis_leg wrapper)
 tests/test_canonical_skeleton.py     d5a34ae9   (B#0 test)
 ```
 
-규칙 및 판정:
+> 광의 검색 `services.canonical` = 6건 = 위 5 + 본 문서 자체(텍스트 언급). 코드 import는 정확히 **5**. 대체 구문 `import services.canonical` 은 0건.
 
-| 방향 | 정책 | 실측 |
-|---|---|---|
-| Canonical → Legacy | 허용 (delegate lambda로 _impl 호출) | OK |
-| Legacy → Canonical | 금지 (Wrapper 예외) | 위반 0 (오직 5 Wrapper) |
-| Runtime → Canonical | 금지 | 위반 0 |
-| _impl → Canonical | 금지 | 위반 0 (5개 _impl 모두 canonical 참조 = 0, 각 003 게이트에서 실측) |
-| 순환 의존성 | 0 | **0 (PASS)** |
+### 3.2 STEP 5 검증표
+
+| 검사 항목 | 기대 | 실측 | 판정 |
+|---|---|---|---|
+| `services.canonical` import 파일 | Wrapper + Canonical 골격만 | 4 라우터(5 wrapper 함수) + `test_canonical_skeleton` | PASS |
+| Legacy Runtime → Canonical import | 0 | 0 | PASS |
+| `_impl` 내부 → Canonical import | 0 | 0 (각 003 게이트 `implHasCanonical=false`) | PASS |
+| Compiler Runtime → Canonical import | 0 | 0 | PASS |
+| LEG Runtime → Canonical import | 0 | 0 | PASS |
+| 순환 의존성 (Canonical ↔ Runtime) | 0 | 0 | PASS |
+
+### 3.3 역방향(단방향성) 실측
+
+- `services/canonical/service.py` import = `.dto`, `.engine_interface` (canonical 내부만). `evaluate = return await delegate()`.
+- `services/canonical/adapters.py` import = `.dto` (canonical 내부만). `to_canonical` = raw dict 필드 복사.
+- ⇒ **Canonical → Legacy/Runtime import = 0.** delegate는 Wrapper가 호출 시 주입(import 아님).
+- 의존 방향: `Wrapper → Canonical(import)` + `Wrapper → _impl(delegate)`. **역방향 없음 (one-way).**
+
+```
+Canonical
+      │  (import 없음 · delegate 주입만)
+      ▼
+Legacy
+(역방향 없음)
+```
+
+### 3.4 종료 기준
+
+```
+Canonical import 대상 = Wrapper + Canonical Layer만   ... 충족
+Legacy → Canonical    = 0                             ... 충족
+Circular Dependency   = 0                             ... 충족
+Boundary Violation    = 0                             ... 충족
+⇒ WO-ISOLATION-001 STEP 5 = PASS
+```
 
 ## 4. 진입 경로 봉인 (STEP 2)
 
