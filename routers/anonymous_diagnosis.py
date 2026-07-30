@@ -160,8 +160,7 @@ def _build_step1_body(body: AnonymousDiagnosisCreate) -> DiagnoseStep1Body:
     )
 
 
-@router.post("")
-async def create_anonymous_diagnosis(body: AnonymousDiagnosisCreate):
+async def _create_anonymous_diagnosis_impl(body: AnonymousDiagnosisCreate):
     create_trace(flow_key="law_diagnosis", tenant_id="anonymous", actor_type="user")
     supabase = get_supabase()
     try:
@@ -312,6 +311,22 @@ async def create_anonymous_diagnosis(body: AnonymousDiagnosisCreate):
         "hasFullResult": True,
         "expiresAt": expires,
     }
+
+
+@router.post("")
+async def create_anonymous_diagnosis(body: AnonymousDiagnosisCreate):
+    from services.canonical.flags import canonical_enabled
+    if not canonical_enabled():
+        return await _create_anonymous_diagnosis_impl(body)
+    from services.canonical.adapters import AnonymousAdapter
+    from services.canonical.service import CanonicalDiagnosisService
+    dto = AnonymousAdapter().to_canonical({
+        "site_kind": body.site_kind, "scale": body.scale,
+        "workers": body.workers, "region": body.region,
+    })
+    return await CanonicalDiagnosisService().evaluate(
+        dto=dto, delegate=lambda: _create_anonymous_diagnosis_impl(body)
+    )
 
 
 ADMIN_ALLOWED_STATUS = frozenset({"ACTIVE", "CLAIMED", "EXPIRED"})
