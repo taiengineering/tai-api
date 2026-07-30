@@ -15,7 +15,9 @@ Goal: G-ms4je4z3-33eada (운영 보강 G-ms5pdquz-9e76e5)
 [2026-07-30 #3 KPI 타일]:
   매출 관점 지표를 관제홈에 추가한다. 매출은 결제완료(SUCCESS)의 total_amount 합.
   기간 경계는 paid_at(실제 입금/승인 시각) 기준. 순매출 = 매출 - 환불(DONE).
-  대량 합산 방지: 기간 필터가 있어 행 수가 제한적(이달분). 안전상 상한 range 적용.
+  미수(pending_amount)는 미입금(PENDING) 결제 원금 합 — 실측상 완료(SUCCESS) 결제가 없고
+  대기 결제만 존재할 수 있어(초기 운영), 매출 0이어도 대기 금액이 드러나도록 전체 PENDING 을 합한다.
+  대량 합산 방지: 안전상 상한 range 적용.
 """
 from __future__ import annotations
 
@@ -59,7 +61,7 @@ def _count(table: str, build) -> int:
 
 
 def _sum(table: str, column: str, build: Callable) -> int:
-    """지정 컬럼 합. 기간 필터 있는 호출만 사용(행 수 제한). 실패 시 0."""
+    """지정 컬럼 합. 실패 시 0. 상한 range 로 대량 합산 방지."""
     try:
         q = get_supabase().table(table).select(column)
         q = build(q).limit(_SUM_ROW_CAP)
@@ -116,7 +118,10 @@ def alerts() -> Dict[str, Any]:
 
 
 def kpi() -> Dict[str, Any]:
-    """매출 KPI. 매출=SUCCESS 결제 total_amount 합(paid_at 기준). 순매출=매출-환불(DONE)."""
+    """매출 KPI. 매출=SUCCESS 결제 total_amount 합(paid_at 기준). 순매출=매출-환불(DONE).
+
+    pending_amount = 미입금(PENDING) 결제 원금 합(미수). 완료 결제가 아직 없어도 대기 금액이 드러난다.
+    """
     today_start = _today_start_iso()
     month_start = _month_start_iso()
 
@@ -129,11 +134,10 @@ def kpi() -> Dict[str, Any]:
     # 이달 환불(DONE) 합 — refunds 대장 기준
     refund_mtd = _sum("refunds", "amount",
                       lambda q: q.eq("status", "DONE").gte("created_at", month_start))
-    # 미수금: 가상계좌 미입금(PENDING) 결제의 원금 합
-    vbank_waiting_amount = _sum("payments", "total_amount",
-                                lambda q: q.eq("payment_method", "VBANK")
-                                            .eq("status_code", "PENDING")
-                                            .is_("vbank_confirmed_at", "null"))
+    # 미수: 미입금(PENDING) 결제 원금 합 (전체 대기 — VBANK 한정 아님)
+    pending_amount = _sum("payments", "total_amount",
+                          lambda q: q.eq("status_code", "PENDING"))
+    pending_count = _count("payments", lambda q: q.eq("status_code", "PENDING"))
 
     return {
         "revenue_today": revenue_today,
@@ -141,7 +145,8 @@ def kpi() -> Dict[str, Any]:
         "refund_mtd": refund_mtd,
         "net_revenue_mtd": revenue_mtd - refund_mtd,
         "paid_mtd_count": paid_mtd_count,
-        "vbank_waiting_amount": vbank_waiting_amount,
+        "pending_amount": pending_amount,
+        "pending_count": pending_count,
     }
 
 
