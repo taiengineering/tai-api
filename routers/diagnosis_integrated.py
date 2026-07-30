@@ -238,8 +238,7 @@ def save_disclaimer(body: DisclaimerBody, request: Request):
     )
 
 
-@router.post("/run")
-async def run_diagnosis(body: DiagnosisRunBody):
+async def _run_diagnosis_impl(body: DiagnosisRunBody):
     supabase = get_supabase()
     run_body = nexas_run_body_from_request(body.model_dump())
     result = diagnosis_integrated_svc.run_diagnosis(
@@ -289,6 +288,19 @@ async def run_diagnosis(body: DiagnosisRunBody):
             log.warning("Binding Engine 호출 실패 (non-blocking): %s", e)
 
     return build_nexas_run_response(result)
+
+
+@router.post("/run")
+async def run_diagnosis(body: DiagnosisRunBody):
+    from services.canonical.flags import canonical_enabled
+    if not canonical_enabled():
+        return await _run_diagnosis_impl(body)
+    from services.canonical.adapters import MemberAdapter
+    from services.canonical.service import CanonicalDiagnosisService
+    dto = MemberAdapter().to_canonical(body.model_dump())
+    return await CanonicalDiagnosisService().evaluate(
+        dto=dto, delegate=lambda: _run_diagnosis_impl(body)
+    )
 
 
 @router.post("/upgrade")
