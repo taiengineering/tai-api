@@ -7,6 +7,11 @@ Goal: G-ms4je4z3-33eada (구축 이어받기 G-ms5pdquz-9e76e5)
 - 출력: notify_svc.send(SEND_MAIL/SEND_SMS), CREATE_TASK/CALL_WEBHOOK/LLM_DRAFT.
 - require_approval 게이트: 승인 필요 규칙은 APPROVAL_PENDING 적재 후 사람 승인 시 실행.
 - 감사(audit_svc). automation_rule/run_log(RLS off).
+
+CREATE_TASK (2026-07-30, G-ms5pdquz-9e76e5): 스텁 → 실구현.
+  운영 태스크를 admin_ops_task(taieng 어드민 전용 테이블)에 적재한다.
+  45CM 자산(runtime_task/task_master 등)은 쓰지 않는다 — 도메인 분리.
+  같은 규칙·같은 트리거의 열린 태스크가 중복 생성되지 않도록 멱등 처리한다.
 """
 from __future__ import annotations
 
@@ -22,6 +27,8 @@ log = logging.getLogger(__name__)
 EVENT_TYPES = ("mail.inbound", "payment.failed", "payment.success",
                "subscription.expiring", "manual")
 ACTION_TYPES = ("SEND_MAIL", "SEND_SMS", "CREATE_TASK", "CALL_WEBHOOK", "LLM_DRAFT")
+
+_PRIORITY = {"LOW", "NORMAL", "HIGH", "URGENT"}
 
 
 class AutomationError(Exception):
@@ -70,8 +77,74 @@ def _log_run(rule_id: Optional[str], event_type: str, trigger_ref: Optional[str]
     return res.data[0]["id"] if res.data else ""
 
 
+def _create_ops_task(config: Dict[str, Any], payload: Dict[str, Any],
+                     rule_id: Optional[str] = None, event_type: Optional[str] = None,
+                     trigger_ref: Optional[str] = None) -> Dict[str, Any]:
+    """운영 태스크를 admin_ops_task 에 적재. 멱등(같은 규칙·트리거의 열린 태스크 1건).
+
+    config: {title?, description?, priority?, due_date?, assignee?}
+    payload 의 값으로 제목 템플릿 치환({field})을 지원한다.
+    """
+    sb = get_supabase()
+
+    def _fmt(s: Optional[str]) -> Optional[str]:
+        if not s:
+            return s
+        try:
+            return s.format(**{k: ("" if v is None else v) for k, v in (payload or {}).items()})
+        except Exception:
+            return s
+
+    title = _fmt(config.get("title")) or _fmt(config.get("note")) or f"[자동화] {event_type or '태스크'}"
+    priority = str(config.get("priority", "NORMAL")).upper()
+    if priority not in _PRIORITY:
+        priority = "NORMAL"
+
+    # 멱등: 같은 규칙·트리거의 열린 태스크가 이미 있으면 재사용.
+    if rule_id and trigger_ref:
+        try:
+            dup = (sb.table("admin_ops_task").select("id")
+                   .eq("source", "AUTOMATION").eq("source_rule_id", rule_id)
+                   .eq("trigger_ref", trigger_ref).eq("status", "OPEN")
+                   .limit(1).execute().data)
+            if dup:
+                return {"task": "deduped", "task_id": dup[0]["id"], "title": title}
+        except Exception:
+            pass  # 테이블 미적용 등 — 아래 insert 에서 처리
+
+    row = {
+        "company_id": payload.get("company_id"),
+        "title": title[:500],
+        "description": _fmt(config.get("description")),
+        "priority": priority,
+        "status": "OPEN",
+        "source": "AUTOMATION",
+        "source_rule_id": rule_id,
+        "source_event": event_type,
+        "trigger_ref": trigger_ref,
+        "due_date": config.get("due_date"),
+        "assignee": config.get("assignee"),
+        "created_by": "automation",
+    }
+    try:
+        res = sb.table("admin_ops_task").insert(row).execute()
+    except Exception as e:  # noqa: BLE001
+        msg = str(e).lower()
+        if any(h in msg for h in ("does not exist", "relation", "42p01", "schema cache")):
+            raise AutomationError(409, "admin_ops_task 스키마가 아직 적용되지 않았습니다. 마이그레이션 적용 후 다시 시도하세요.")
+        # 멱등 유니크 충돌 → 이미 열린 태스크 존재
+        if "duplicate" in msg or "unique" in msg:
+            return {"task": "deduped", "title": title}
+        raise AutomationError(500, f"태스크 생성 실패: {e}")
+    if not res.data:
+        raise AutomationError(500, "태스크 생성에 실패했습니다.")
+    return {"task": "created", "task_id": res.data[0]["id"], "title": title}
+
+
 def _execute_action(action_type: str, config: Dict[str, Any],
-                    payload: Dict[str, Any]) -> Dict[str, Any]:
+                    payload: Dict[str, Any], rule_id: Optional[str] = None,
+                    event_type: Optional[str] = None,
+                    trigger_ref: Optional[str] = None) -> Dict[str, Any]:
     """액션 실행. notify_svc 등 위임."""
     if action_type == "SEND_MAIL":
         from services.notify_svc import send as notify_send
@@ -89,8 +162,8 @@ def _execute_action(action_type: str, config: Dict[str, Any],
     if action_type == "CALL_WEBHOOK":
         return _call_webhook(config.get("url", ""), payload)
     if action_type == "CREATE_TASK":
-        # 운영 태스크 적재(간단): automation_run_log가 곧 태스크 흔적. 별도 태스크 테이블은 후속.
-        return {"task": "created", "note": config.get("note", "")}
+        return _create_ops_task(config, payload, rule_id=rule_id,
+                                event_type=event_type, trigger_ref=trigger_ref)
     if action_type == "LLM_DRAFT":
         # 엔진 LLM 미결합 — 인터페이스만. 초안 요청 흔적만 반환.
         return {"llm_draft": "queued", "prompt_key": config.get("prompt_key")}
@@ -131,7 +204,8 @@ def fire(event_type: str, payload: Dict[str, Any],
 
         # 즉시 실행
         try:
-            result = _execute_action(rule["action_type"], rule.get("action_config_json") or {}, payload)
+            result = _execute_action(rule["action_type"], rule.get("action_config_json") or {}, payload,
+                                     rule_id=rule["id"], event_type=event_type, trigger_ref=trigger_ref)
             _log_run(rule["id"], event_type, trigger_ref, True, "RUN", rule["action_type"], result=result)
             outcomes.append({"rule_code": rule["rule_code"], "status": "RUN", "result": result})
         except Exception as e:  # noqa: BLE001
@@ -162,7 +236,9 @@ def approve_run(run_id: str, actor: Optional[str] = None) -> Dict[str, Any]:
     payload = stored.get("payload", {})
     config = stored.get("config") or rule.get("action_config_json") or {}
     try:
-        result = _execute_action(rule["action_type"], config, payload)
+        result = _execute_action(rule["action_type"], config, payload,
+                                 rule_id=rule["id"], event_type=r.get("event_type"),
+                                 trigger_ref=r.get("trigger_ref"))
         supabase.table("automation_run_log").update(
             {"status": "APPROVED_RUN", "result_json": result, "approved_by": actor}
         ).eq("id", run_id).execute()
@@ -174,6 +250,34 @@ def approve_run(run_id: str, actor: Optional[str] = None) -> Dict[str, Any]:
             {"status": "FAILED", "error": str(e), "approved_by": actor}
         ).eq("id", run_id).execute()
         raise AutomationError(502, f"실행 실패: {e}") from e
+
+
+# ── 운영 태스크 조회/완료 (admin_ops_task) ───────────────────────────
+def list_ops_tasks(status: Optional[str] = None, company_id: Optional[str] = None,
+                   limit: int = 100) -> List[Dict[str, Any]]:
+    try:
+        q = get_supabase().table("admin_ops_task").select("*")
+        if status:
+            q = q.eq("status", status)
+        if company_id:
+            q = q.eq("company_id", company_id)
+        return (q.order("created_at", desc=True).limit(limit).execute().data) or []
+    except Exception:
+        return []
+
+
+def close_ops_task(task_id: str, status: str = "DONE", actor: Optional[str] = None) -> Dict[str, Any]:
+    if status not in ("DONE", "CANCELED"):
+        raise AutomationError(400, "status 는 DONE 또는 CANCELED 여야 합니다.")
+    now = datetime.now(timezone.utc).isoformat()
+    res = (get_supabase().table("admin_ops_task")
+           .update({"status": status, "done_at": now, "updated_at": now})
+           .eq("id", task_id).execute())
+    if not res.data:
+        raise AutomationError(404, "태스크를 찾을 수 없습니다.")
+    audit_svc.record("OPS_TASK_CLOSE", "admin_ops_task", entity_id=task_id, actor_id=actor,
+                     after={"status": status})
+    return res.data[0]
 
 
 # ── 만료임박 구독 스캔 → subscription.expiring 발화 (WO-12 / P2-4) ─────
