@@ -4,6 +4,7 @@ Goal: G-ms4je4z3-33eada (구축 이어받기 G-ms5pdquz-9e76e5)
 - 규칙 CRUD + 수동 발화 + 실행 이력 + 승인 실행. 얇은 위임.
 - 모듈 로드 시 automation_svc.register()로 mail.inbound 수신 콜백 결합.
 - P2-4: POST /scan/expiring — 만료임박 구독 스캔 후 subscription.expiring 발화(운영/크론 호출).
+- P3-7: 운영 태스크(admin_ops_task) 조회/완료 — CREATE_TASK 결과 확인·종결.
 """
 from typing import Any, Dict, Optional
 
@@ -12,8 +13,8 @@ from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
 from services.automation_svc import (
-    ACTION_TYPES, EVENT_TYPES, AutomationError, approve_run, fire, register,
-    scan_expiring_subscriptions,
+    ACTION_TYPES, EVENT_TYPES, AutomationError, approve_run, close_ops_task, fire,
+    list_ops_tasks, register, scan_expiring_subscriptions,
 )
 
 router = APIRouter(prefix="/automation", tags=["운영자동화"])
@@ -41,6 +42,11 @@ class FireBody(BaseModel):
     event_type: str
     payload: Dict[str, Any] = {}
     trigger_ref: Optional[str] = None
+
+
+class TaskCloseBody(BaseModel):
+    status: str = "DONE"  # DONE | CANCELED
+    by: Optional[str] = None
 
 
 @router.get("/rules")
@@ -113,6 +119,24 @@ def approve(run_id: str, by: Optional[str] = Query(None)):
     """승인 대기 건 실행."""
     try:
         result = approve_run(run_id, actor=by)
+    except AutomationError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+    return {"status": "success", "data": result}
+
+
+# ── 운영 태스크(admin_ops_task) ──────────────────────────────────────
+@router.get("/tasks")
+def list_tasks(status: Optional[str] = Query(None), company_id: Optional[str] = Query(None),
+               limit: int = Query(default=100, ge=1, le=200)):
+    """CREATE_TASK/수동으로 적재된 운영 태스크 조회."""
+    return {"status": "success", "data": list_ops_tasks(status=status, company_id=company_id, limit=limit)}
+
+
+@router.post("/tasks/{task_id}/close")
+def close_task(task_id: str, body: TaskCloseBody):
+    """운영 태스크 종결(DONE/CANCELED)."""
+    try:
+        result = close_ops_task(task_id, status=body.status, actor=body.by)
     except AutomationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
     return {"status": "success", "data": result}
