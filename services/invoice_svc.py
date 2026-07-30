@@ -1,11 +1,17 @@
 """세금계산서·현금영수증 발행 서비스 (WO-4 InvoiceService) — 팝빌 API 실연동.
 
-Goal: G-ms4je4z3-33eada
+Goal: G-ms4je4z3-33eada (게이트 보강 G-ms5pdquz-9e76e5)
 - 팝빌(링크허브) 세금계산서 registIssue/cancelIssue, 현금영수증 registIssue/revoke.
 - 팝빌 SDK는 지연 import (미설치 시 501, 배포 `/health` 안전).
 - LinkID/SecretKey·공급자(TAI) 정보는 env 상수만 참조 (R-008 하드코딩 금지).
 - tax_invoices 원장 기록(PENDING→ISSUED/FAILED/CANCELLED), 발행/취소 audit.
 - doc_type: TAX_INVOICE(세금계산서) | CASH_RECEIPT(현금영수증).
+
+[2026-07-30 실호출 게이트 A-2] INVOICE_LIVE(기본 off):
+  운영 정책상 실발행(팝빌 실 registIssue)은 사람 게이트 완료 전까지 실호출을 막는다.
+  플래그가 꺼져 있으면 검증까지만 수행하고, 원장 오염 없이 423으로 차단하며 감사만 남긴다.
+  발행취소(cancel)도 동일 게이트 — 실호출이 잠긴 상태에서는 실 취소도 나가지 않는다.
+  켜려면 배포 환경변수 INVOICE_LIVE=on(사람이 명시적으로 설정)해야 한다.
 """
 from __future__ import annotations
 
@@ -20,12 +26,35 @@ from services.payment_helpers import now_iso, split_supply_vat
 
 log = logging.getLogger(__name__)
 
+_INVOICE_LIVE_ENV = "INVOICE_LIVE"
+
 
 class InvoiceError(Exception):
     def __init__(self, status_code: int, detail: str):
         self.status_code = status_code
         self.detail = detail
         super().__init__(detail)
+
+
+def invoice_live() -> bool:
+    """실발행 실호출 허용 여부. 기본 off — 사람이 INVOICE_LIVE=on 을 명시해야 실호출."""
+    return os.getenv(_INVOICE_LIVE_ENV, "").strip().lower() in ("1", "true", "on", "yes")
+
+
+def _assert_invoice_live(payment_id: Optional[str], doc_type: str, op: str,
+                         created_by: Optional[str]) -> None:
+    """게이트: 실호출이 잠겨 있으면 원장 기록 없이 423 차단 + 감사."""
+    if invoice_live():
+        return
+    audit_svc.record(
+        "INVOICE_GATED", "payment", entity_id=payment_id, actor_id=created_by,
+        after={"doc_type": doc_type, "op": op, "gate": "INVOICE_LIVE=off"},
+    )
+    raise InvoiceError(
+        423,
+        "실발행 실호출이 운영 게이트로 잠겨 있습니다(INVOICE_LIVE 비활성). "
+        "실제 팝빌 발행/취소는 나가지 않았습니다. 실행하려면 운영자가 실호출을 활성화해야 합니다.",
+    )
 
 
 # ── 팝빌 설정 (env 상수) ──────────────────────────────────────────────
@@ -112,6 +141,10 @@ def issue_tax_invoice(payment_id: str, invoicee: Dict[str, str], created_by: Opt
     payment = _load_payment(payment_id)
     if payment["status_code"] != "SUCCESS":
         raise InvoiceError(400, "결제완료(SUCCESS) 건만 발행할 수 있습니다.")
+
+    # 게이트: 실호출 잠금 시 원장 오염 없이 여기서 차단.
+    _assert_invoice_live(payment_id, "TAX_INVOICE", "ISSUE", created_by)
+
     total = int(payment["total_amount"] or 0)
     supply, tax = split_supply_vat(total)
     mgt_key = _make_mgt_key(payment_id, "TAX_INVOICE")
@@ -183,6 +216,10 @@ def issue_cash_receipt(payment_id: str, trade_usage: str, identity_num: str,
     payment = _load_payment(payment_id)
     if payment["status_code"] != "SUCCESS":
         raise InvoiceError(400, "결제완료(SUCCESS) 건만 발행할 수 있습니다.")
+
+    # 게이트: 실호출 잠금 시 원장 오염 없이 여기서 차단.
+    _assert_invoice_live(payment_id, "CASH_RECEIPT", "ISSUE", created_by)
+
     total = int(payment["total_amount"] or 0)
     supply, tax = split_supply_vat(total)
     mgt_key = _make_mgt_key(payment_id, "CASH_RECEIPT")
@@ -239,6 +276,10 @@ def cancel(invoice_id: str, reason: str = "", created_by: Optional[str] = None) 
     inv = res.data[0]
     if inv["status"] != "ISSUED":
         raise InvoiceError(400, "발행완료(ISSUED) 건만 취소할 수 있습니다.")
+
+    # 게이트: 실 취소도 실호출이므로 동일 차단.
+    _assert_invoice_live(inv.get("payment_id"), inv.get("doc_type", ""), "CANCEL", created_by)
+
     conf = _popbill_conf()
 
     try:
