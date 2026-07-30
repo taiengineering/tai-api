@@ -31,6 +31,13 @@ ACTION_TYPES = ("SEND_MAIL", "SEND_SMS", "CREATE_TASK", "CALL_WEBHOOK", "LLM_DRA
 _PRIORITY = {"LOW", "NORMAL", "HIGH", "URGENT"}
 
 
+class _SafeDict(dict):
+    """str.format_map 용 — 템플릿이 참조한 키가 payload 에 없으면 공백으로 치환."""
+
+    def __missing__(self, key: str) -> str:
+        return ""
+
+
 class AutomationError(Exception):
     def __init__(self, status_code: int, detail: str):
         self.status_code = status_code
@@ -84,14 +91,16 @@ def _create_ops_task(config: Dict[str, Any], payload: Dict[str, Any],
 
     config: {title?, description?, priority?, due_date?, assignee?}
     payload 의 값으로 제목 템플릿 치환({field})을 지원한다.
+    누락 키를 참조해도 KeyError 없이 공백으로 치환한다(_SafeDict).
     """
     sb = get_supabase()
+    safe = _SafeDict({k: ("" if v is None else v) for k, v in (payload or {}).items()})
 
     def _fmt(s: Optional[str]) -> Optional[str]:
         if not s:
             return s
         try:
-            return s.format(**{k: ("" if v is None else v) for k, v in (payload or {}).items()})
+            return s.format_map(safe)
         except Exception:
             return s
 
