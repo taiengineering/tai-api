@@ -1,4 +1,8 @@
-# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v2.0
+# scheduler.py — APScheduler + DB 연동 크론 스케줄러 v2.1
+# v2.1 (2026-07-30, Goal G-ms6skzj3-76dbad): 공휴일 공식 API 동기화 잡 등록
+#   DB 크론(cron_job_master)과 별개로, org_holiday LEGAL 동기화를 코드에서 직접 등록한다.
+#   연1회(12/1 03:10, 익년 확정 달력)·분기1회(1/4/7/10월 1일 03:10, 임시공휴일 반영).
+#   load_jobs_from_db()가 remove_all_jobs()로 DB 잡을 재적재하므로, 그 뒤에 add 한다.
 # v2.0: Control Bridge handler (TASK 45)
 import os, logging
 from datetime import datetime
@@ -170,9 +174,37 @@ def load_jobs_from_db():
     logger.info(f"[CRON] 총 {registered}개 작업 등록")
 
 
+def _run_holiday_sync():
+    """공휴일 공식 API 동기화(올해+내년). 스케줄러 전용 진입점."""
+    from services.holiday_sync_svc import sync_current_and_next
+    try:
+        result = sync_current_and_next(created_by=None)
+        logger.info(f"[HOLIDAY_SYNC] 완료: {result}")
+    except Exception as e:
+        logger.error(f"[HOLIDAY_SYNC] 실패: {e}")
+
+
+def register_code_jobs():
+    """DB 크론과 별개로 코드에서 직접 등록하는 잡. load_jobs_from_db 뒤에 호출."""
+    # 연 1회 — 12/1 03:10, 익년 확정 달력 반영
+    scheduler.add_job(
+        _run_holiday_sync,
+        trigger=CronTrigger(month=12, day=1, hour=3, minute=10, timezone="Asia/Seoul"),
+        id="holiday_sync_annual", replace_existing=True,
+    )
+    # 분기 1회 — 1·4·7·10월 1일 03:10, 임시공휴일 등 연중 변경 반영
+    scheduler.add_job(
+        _run_holiday_sync,
+        trigger=CronTrigger(month="1,4,7,10", day=1, hour=3, minute=10, timezone="Asia/Seoul"),
+        id="holiday_sync_quarterly", replace_existing=True,
+    )
+    logger.info("[CRON] 공휴일 동기화 잡 등록: holiday_sync_annual, holiday_sync_quarterly")
+
+
 def start_scheduler():
     try:
         load_jobs_from_db()
+        register_code_jobs()          # DB 잡 재적재(remove_all_jobs) 이후에 코드 잡 등록
         if not scheduler.running: scheduler.start()
         logger.info("[CRON] 스케줄러 시작 완료")
     except Exception as e:
