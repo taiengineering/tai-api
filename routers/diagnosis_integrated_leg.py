@@ -40,8 +40,7 @@ def _run_step1_via_leg(supabase, step1_body) -> Dict[str, Any]:
     return {"status": "success", "data": full}
 
 
-@router.post("/run-leg")
-async def run_diagnosis_leg(body: DiagnosisRunBody):
+async def _run_leg_impl(body: DiagnosisRunBody):
     if not LEG_PIPELINE_ENABLED:
         raise HTTPException(status_code=503, detail="LEG 파이프라인이 비활성화되어 있습니다 (LEG_PIPELINE_ENABLED).")
     if not is_enabled():
@@ -77,3 +76,16 @@ async def run_diagnosis_leg(body: DiagnosisRunBody):
         "obligationCount": full.get("applicable_count"),
         "partialResult": _build_partial(full),
     }
+
+
+@router.post("/run-leg")
+async def run_diagnosis_leg(body: DiagnosisRunBody):
+    from services.canonical.flags import canonical_enabled
+    if not canonical_enabled():
+        return await _run_leg_impl(body)
+    from services.canonical.adapters import MemberAdapter
+    from services.canonical.service import CanonicalDiagnosisService
+    dto = MemberAdapter().to_canonical(body.model_dump())
+    return await CanonicalDiagnosisService().evaluate(
+        dto=dto, delegate=lambda: _run_leg_impl(body)
+    )
