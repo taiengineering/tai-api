@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI 메일 관리 라우터 v3.1.0
+TAI 메일 관리 라우터 v3.1.1
 
+v3.1.1 (2026-07-30) — #5 감사 완결성:
+  - 재발송(resend) 성공/실패를 admin_ops_audit_logs 에 MAIL_RESEND 로 기록.
 v3.1.0 (2026-07-30) — #4 실패 메일 후속:
   - POST /mail/resend/{id}: 저장된 수신자/제목/본문으로 재발송(_dispatch_send 재시도).
     성공 시 mail_logs 행을 sent 로 갱신(실패 지표 해소). 발신(outbound)만 허용.
@@ -25,6 +27,7 @@ import resend as resend_client
 import httpx
 
 from db.supabase_client import get_supabase
+from services import audit_svc
 
 router = APIRouter(prefix="/mail", tags=["메일관리"])
 
@@ -396,7 +399,7 @@ def resend_mail(mail_id: str, by: Optional[str] = Query(None)):
     """실패(또는 임의 발신) 메일 재발송. 저장된 수신자/제목/본문으로 재시도.
 
     성공 시 해당 mail_logs 행을 sent 로 갱신(실패 지표 해소). 발신(outbound)만 허용.
-    실발송은 운영자가 화면에서 트리거한다(자동 재발송 아님).
+    실발송은 운영자가 화면에서 트리거한다(자동 재발송 아님). 결과는 MAIL_RESEND 로 감사.
     """
     supabase = get_supabase()
     orig = supabase.table("mail_logs").select("*").eq("id", mail_id).single().execute()
@@ -431,6 +434,12 @@ def resend_mail(mail_id: str, by: Optional[str] = Query(None)):
         supabase.table("mail_logs").update(patch).eq("id", mail_id).execute()
     except Exception:
         pass
+
+    audit_svc.record(
+        "MAIL_RESEND", "mail", entity_id=mail_id, actor_id=by,
+        before={"prev_error": m.get("error_message")},
+        after={"status": result["status"], "provider": result["provider"], "to": to_list},
+    )
 
     if result["status"] == "failed":
         raise HTTPException(status_code=502, detail=f"재발송 실패: {result['error']}")
