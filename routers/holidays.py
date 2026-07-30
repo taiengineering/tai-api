@@ -1,17 +1,24 @@
 """
-휴무 캘린더 라우터 — v1.0.0
+휴무 캘린더 라우터 — v1.1.0
 
-Goal: G-ms6az4y8-b88c4a
-서비스: services/holiday_svc.py (공용 모듈 — 캘린더를 쓰는 모든 기능이 공유)
+Goal: G-ms6az4y8-b88c4a (v1.0.0) / G-ms6skzj3-76dbad (v1.1.0 공식 API 동기화)
+서비스: services/holiday_svc.py (조회·판정 공용 모듈)
+        services/holiday_sync_svc.py (특일정보 API 동기화)
 데이터: org_holiday
+
+v1.1.0 (2026-07-30) — 공휴일 공식 API 동기화
+  POST /holidays/sync 추가. 한국천문연구원 특일정보(getRestDeInfo)로 org_holiday 의
+  LEGAL 행을 국가 발표 기준으로 교체한다(수기 시드 갱신 대체). 스케줄러도 이 로직을
+  연1회·분기1회 자동 호출한다(scheduler.py).
 
 API:
   GET    /holidays                 스코프 병합 목록 (법정 + 회사 + 시설)
   POST   /holidays                 사업장 휴무 등록 (source=COMPANY)
   DELETE /holidays/{holiday_id}    사업장 휴무 삭제 (법정공휴일은 삭제 불가)
+  POST   /holidays/sync            공휴일 공식 API 동기화 (LEGAL 교체)
 
 법정공휴일(source=LEGAL, company_id 없음)은 사업장이 만들지도 지우지도 못한다.
-연도별 갱신은 마이그레이션 시드로만 한다(BKP-004 — DDL·시드 git 고정).
+정본은 특일정보 API 동기화이며, 마이그레이션 시드는 초기 부트스트랩용이다.
 """
 from datetime import date
 from typing import Optional
@@ -22,10 +29,11 @@ from pydantic import BaseModel
 from db.supabase_client import get_supabase
 from services.health_registry import register_probe
 from services.holiday_svc import get_holidays
+from services.holiday_sync_svc import HolidaySyncError, sync_year
 
 router = APIRouter(prefix="/holidays", tags=["휴무 캘린더"])
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 
 class HolidayCreateBody(BaseModel):
@@ -35,6 +43,28 @@ class HolidayCreateBody(BaseModel):
     name: str
     note: Optional[str] = None
     created_by: Optional[str] = None
+
+
+# ── 고정경로 먼저 (/{holiday_id} 보다 앞) ─────────────────────────
+
+@router.post("/sync")
+def sync_holidays(
+    year: Optional[int] = Query(None, description="동기화 대상 연도(기본: 올해)"),
+    created_by: Optional[str] = Query(None),
+):
+    """공휴일 공식 API(한국천문연구원 특일정보)로 LEGAL 공휴일을 교체 동기화.
+
+    대체·임시공휴일까지 국가 발표 기준으로 반영된다. 사업장 휴무(COMPANY)는 건드리지 않는다.
+    서비스키는 tai-api 의 DATA_GO_KR_SERVICE_KEY 환경변수에서 읽는다.
+    """
+    target = year or date.today().year
+    try:
+        result = sync_year(target, created_by)
+    except HolidaySyncError as e:
+        raise HTTPException(status_code=502, detail=e.detail)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"동기화 실패: {e}")
+    return {"status": "success", "message": f"{target}년 공휴일 {result['inserted']}건 동기화", "data": result}
 
 
 @router.get("")
@@ -56,7 +86,7 @@ def list_holidays(
 
 @router.post("")
 def create_holiday(body: HolidayCreateBody):
-    """사업장 휴무 등록. 법정공휴일은 등록 대상이 아니다(시드로만 관리)."""
+    """사업장 휴무 등록. 법정공휴일은 등록 대상이 아니다(동기화/시드로만 관리)."""
     try:
         date.fromisoformat(body.holiday_date)
     except Exception:
@@ -95,7 +125,7 @@ def delete_holiday(holiday_id: str, company_id: str = Query(..., description="�
         raise HTTPException(status_code=404, detail="휴무일을 찾을 수 없습니다.")
     row = cur.data[0]
     if row.get("source") == "LEGAL" or not row.get("company_id"):
-        raise HTTPException(status_code=403, detail="법정공휴일은 삭제할 수 없습니다. 연도별 시드로만 관리합니다.")
+        raise HTTPException(status_code=403, detail="법정공휴일은 삭제할 수 없습니다. 동기화/시드로만 관리합니다.")
     if str(row.get("company_id")) != str(company_id):
         raise HTTPException(status_code=403, detail="다른 사업장의 휴무일은 삭제할 수 없습니다.")
 
