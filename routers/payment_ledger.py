@@ -16,11 +16,16 @@ Goal: G-ms4je4z3-33eada (구축 이어받기 G-ms5pdquz-9e76e5)
 [2026-07-30 실호출 게이트] GET /payments/ops/live-flags:
   환불(REFUND_LIVE)·증빙(INVOICE_LIVE) 실호출 활성 여부를 프론트에 노출.
   프론트는 이 값으로 '실호출 잠금' 배지를 표시하고, 실행 시 423(게이트)을 안내한다.
+
+[2026-07-30 게이트 해제 절차]:
+  GET  /payments/ops/gate-readiness — 채널별 준비완료 체크리스트 + 현재 상태.
+  POST /payments/ops/gate/activate   — 준비완료 통과 시 DB 게이트 활성화(운영자 확인 필요, 감사).
+  POST /payments/ops/gate/deactivate — DB 게이트 비활성화(킬스위치).
 """
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -58,6 +63,13 @@ class CashReceiptBody(BaseModel):
     by: Optional[str] = None
 
 
+class GateBody(BaseModel):
+    channel: str               # REFUND_LIVE | INVOICE_LIVE
+    confirm: bool = False
+    by: Optional[str] = None
+    note: Optional[str] = None
+
+
 # ── 실호출 게이트 상태 ───────────────────────────────────────────────
 @router.get("/ops/live-flags")
 def live_flags():
@@ -69,6 +81,38 @@ def live_flags():
     except Exception as e:  # noqa: BLE001 — 조회 실패는 잠금(보수적)으로 폴백
         log.warning("[LEDGER] live-flags 조회 실패: %s", e)
         return {"status": "success", "data": {"refund_live": False, "invoice_live": False}}
+
+
+# ── 실행 게이트 해제 절차 ────────────────────────────────────────────
+@router.get("/ops/gate-readiness")
+def gate_readiness_ep():
+    """채널별 준비완료 체크리스트 + 현재 실호출 상태."""
+    from services.ops_gate_svc import readiness
+    return {"status": "success", "data": readiness()}
+
+
+@router.post("/ops/gate/activate")
+def gate_activate(body: GateBody):
+    """DB 게이트 활성화 — 준비완료 통과 + 운영자 확인(confirm) 필요."""
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="활성화 확인(confirm)이 필요합니다.")
+    from services.ops_gate_svc import GateError, set_gate
+    try:
+        res = set_gate(body.channel, True, by=body.by, note=body.note)
+    except GateError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+    return {"status": "success", "data": res}
+
+
+@router.post("/ops/gate/deactivate")
+def gate_deactivate(body: GateBody):
+    """DB 게이트 비활성화(킬스위치)."""
+    from services.ops_gate_svc import GateError, set_gate
+    try:
+        res = set_gate(body.channel, False, by=body.by, note=body.note)
+    except GateError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+    return {"status": "success", "data": res}
 
 
 # ── 환불 결선 ────────────────────────────────────────────────────────
