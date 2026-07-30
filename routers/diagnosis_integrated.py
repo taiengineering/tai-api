@@ -303,8 +303,7 @@ async def run_diagnosis(body: DiagnosisRunBody):
     )
 
 
-@router.post("/upgrade")
-async def upgrade_diagnosis(body: UpgradeBody):
+async def _upgrade_diagnosis_impl(body: UpgradeBody):
     supabase = get_supabase()
     return diagnosis_integrated_svc.upgrade_diagnosis(
         supabase=supabase,
@@ -312,4 +311,17 @@ async def upgrade_diagnosis(body: UpgradeBody):
         run_step1_func=_run_step1_via_service,
         build_partial_func=_build_partial,
         paid_tier_prices=PAID_TIER_PRICES,
+    )
+
+
+@router.post("/upgrade")
+async def upgrade_diagnosis(body: UpgradeBody):
+    from services.canonical.flags import canonical_enabled
+    if not canonical_enabled():
+        return await _upgrade_diagnosis_impl(body)
+    from services.canonical.adapters import PaidAdapter
+    from services.canonical.service import CanonicalDiagnosisService
+    dto = PaidAdapter().to_canonical(body.model_dump())
+    return await CanonicalDiagnosisService().evaluate(
+        dto=dto, delegate=lambda: _upgrade_diagnosis_impl(body)
     )
