@@ -1,10 +1,16 @@
 """
-holiday_sync_svc — 공휴일 공식 API 동기화. v1.0.0
+holiday_sync_svc — 공휴일 공식 API 동기화. v1.1.0
 
 Goal: G-ms6skzj3-76dbad
 정본: 공공데이터포털 「한국천문연구원_특일 정보」 getRestDeInfo
       (국경일 + 관공서 공휴일 — 대체공휴일·임시공휴일 포함)
       https://www.data.go.kr/data/15012690/openapi.do
+
+v1.1.0 (2026-07-30) — 한국 egress 프록시 경유
+  data.go.kr 은 해외 서버 IP 를 차단한다(Railway 직접 호출 시 HTTP 403,
+  한국 IP 에서는 정상 — 실측 확인). KMC 본인인증·SMS 가 이미 쓰는 것과 같은
+  한국 HTTP 프록시로 우회한다. 프록시는 DATA_GO_KR_HTTP_PROXY 를 우선 읽고,
+  없으면 KMC_HTTP_PROXY 로 폴백한다. 둘 다 없으면 직접 호출(프록시 불필요 환경).
 
 왜 API 동기화인가
   법정공휴일을 코드/시드로 유지하면 매년 갱신이 필요하고, 임시공휴일(예: 선거일)은
@@ -37,10 +43,12 @@ from db.supabase_client import get_supabase
 
 log = logging.getLogger(__name__)
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 _BASE = "https://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getRestDeInfo"
 _ENV_KEY = "DATA_GO_KR_SERVICE_KEY"
+_ENV_PROXY = "DATA_GO_KR_HTTP_PROXY"
+_ENV_PROXY_FALLBACK = "KMC_HTTP_PROXY"     # KMC/SMS 가 쓰는 한국 egress 프록시 재사용
 
 
 class HolidaySyncError(Exception):
@@ -62,19 +70,29 @@ def _key_param(key: str) -> str:
     return key if "%" in key else quote(key, safe="")
 
 
+def _proxies() -> Optional[dict]:
+    """한국 egress 프록시. data.go.kr 해외IP 403 우회용. 없으면 None(직접 호출)."""
+    p = (os.getenv(_ENV_PROXY, "") or os.getenv(_ENV_PROXY_FALLBACK, "")).strip()
+    return {"http": p, "https": p} if p else None
+
+
 def _fetch_month(year: int, month: int) -> List[dict]:
     """특정 연·월의 공휴일 항목 조회. isHoliday=Y 만 반환."""
     key = _key_param(_service_key())
     url = (f"{_BASE}?serviceKey={key}"
            f"&solYear={year}&solMonth={month:02d}&numOfRows=100&_type=json")
     try:
-        resp = requests.get(url, timeout=20)
+        resp = requests.get(url, timeout=20, proxies=_proxies())
     except Exception as e:
         raise HolidaySyncError(f"{year}-{month:02d} 특일정보 호출 실패: {e}")
 
     if resp.status_code >= 400:
+        hint = ""
+        if resp.status_code in (401, 403):
+            hint = (" — data.go.kr 은 해외 IP 를 차단합니다. "
+                    "DATA_GO_KR_HTTP_PROXY(또는 KMC_HTTP_PROXY)에 한국 egress 프록시를 설정하십시오.")
         raise HolidaySyncError(
-            f"{year}-{month:02d} 특일정보 HTTP {resp.status_code}: {resp.text[:200]}")
+            f"{year}-{month:02d} 특일정보 HTTP {resp.status_code}: {resp.text[:150]}{hint}")
 
     try:
         body = resp.json()["response"]["body"]
