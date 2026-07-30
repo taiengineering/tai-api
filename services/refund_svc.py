@@ -1,14 +1,20 @@
 """환불 서비스 (WO-1 RefundService) — 이니시스 INIAPI 취소/환불 실연동.
 
-Goal: G-ms4je4z3-33eada
+Goal: G-ms4je4z3-33eada (게이트 보강 G-ms5pdquz-9e76e5)
 규격: docs/INICIS_INTEGRATION_SPEC.md §4 (전체취소/부분취소)
 - URL/키/IP는 payment_helpers의 env 상수만 참조 (R-008 하드코딩 금지)
 - 모든 성공/실패는 refunds 대장에 기록 (사유 필수, 누적환불 검증)
 - WO-2: 성공/실패 시 audit_svc.record로 감사 기록 (best-effort)
+
+[2026-07-30 실호출 게이트 B-1] REFUND_LIVE(기본 off):
+  운영 정책상 실환불(이니시스 실취소)은 사람 게이트가 완료되기 전까지 실호출을 막는다.
+  플래그가 꺼져 있으면 검증까지만 수행하고, 대장 오염 없이 423으로 차단하며 감사만 남긴다.
+  켜려면 배포 환경변수 REFUND_LIVE=on(사람이 명시적으로 설정)해야 한다.
 """
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, Optional
 
 import requests as _requests
@@ -29,12 +35,32 @@ from services.payment_svc import PaymentPrepareError
 log = logging.getLogger(__name__)
 
 _OUTBOUND_PROXY_ENV = "OUTBOUND_PROXY"
+_REFUND_LIVE_ENV = "REFUND_LIVE"
+
+
+def refund_live() -> bool:
+    """실환불 실호출 허용 여부. 기본 off — 사람이 REFUND_LIVE=on 을 명시해야 실호출."""
+    return os.getenv(_REFUND_LIVE_ENV, "").strip().lower() in ("1", "true", "on", "yes")
+
+
+def _assert_refund_live(payment_id: str, refund_type: str, amount: int,
+                        cancelled_by: Optional[str]) -> None:
+    """게이트: 실호출이 잠겨 있으면 대장 기록 없이 423 차단 + 감사."""
+    if refund_live():
+        return
+    audit_svc.record(
+        "REFUND_GATED", "payment", entity_id=payment_id, actor_id=cancelled_by,
+        after={"refund_type": refund_type, "amount": amount, "gate": "REFUND_LIVE=off"},
+    )
+    raise PaymentPrepareError(
+        423,
+        "실환불 실호출이 운영 게이트로 잠겨 있습니다(REFUND_LIVE 비활성). "
+        "실제 이니시스 취소는 나가지 않았습니다. 실행하려면 운영자가 실호출을 활성화해야 합니다.",
+    )
 
 
 def _proxies() -> Optional[Dict[str, str]]:
     """이니시스 화이트리스트 IP(iwinV 프록시) 경유. env 없으면 직접."""
-    import os
-
     proxy = os.getenv(_OUTBOUND_PROXY_ENV, "").strip()
     if not proxy:
         return None
@@ -121,6 +147,9 @@ def run_refund(payment_id: str, reason: str = "", cancelled_by: Optional[str] = 
     if remaining <= 0:
         raise PaymentPrepareError(409, "이미 전액 환불되었습니다.")
 
+    # 게이트: 실호출 잠금 시 대장 오염 없이 여기서 차단.
+    _assert_refund_live(payment_id, "FULL", remaining, cancelled_by)
+
     paymethod = _paymethod(payment)
     refund_id = _insert_refund({
         "payment_id": payment_id,
@@ -194,6 +223,9 @@ def run_partial_refund(payment_id: str, amount: int, reason: str = "", cancelled
     if done + amount > total:
         raise PaymentPrepareError(400, f"원금을 초과할 수 없습니다. (잔여 {total - done}원)")
     confirm_price = total - done - amount  # 이번 취소 후 잔여
+
+    # 게이트: 실호출 잠금 시 대장 오염 없이 여기서 차단.
+    _assert_refund_live(payment_id, "PARTIAL", amount, cancelled_by)
 
     paymethod = _paymethod(payment)
     refund_id = _insert_refund({
