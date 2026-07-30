@@ -1,5 +1,10 @@
 """
-위험성평가 관리 라우터 — v1.5.1
+위험성평가 관리 라우터 — v1.5.2
+
+v1.5.2 (2026-07-30, Goal G-ms6zml74-76dbad) — 상시평가 판정에 조업요일 반영
+  continuous-status 가 holiday_svc.get_work_weekdays 로 사업장 조업요일(org_work_policy)을
+  조회해 판정에 전달한다. 3호(매 작업일 TBM)의 작업일이 평일 고정이 아니라 조업요일 - 휴무로
+  산정된다(주말 조업·교대제 대응). 정책 미설정 시 월~금 폴백.
 
 v1.5.1 (2026-07-30, Goal G-ms6az4y8-b88c4a) — 상시평가 판정에 휴무 캘린더 반영
   continuous-status 가 org_holiday(공용 휴무 캘린더, services/holiday_svc)를 조회해
@@ -63,7 +68,7 @@ API:
   POST   /risk-assessments/{id}/complete       완료 처리 (가드 + 보존만료일 산출)
 
   ※ 요인·대책·재판정은 routers/ra_items.py (/ra/*)
-  ※ 휴무 캘린더는 routers/holidays.py (/holidays) — 공용 모듈
+  ※ 휴무 캘린더·조업요일은 routers/holidays.py (/holidays, /work-policy) — 공용 모듈
 
 assessment_type (고시 제15조):
   INITIAL     최초평가 — 사업 성립일(건설업은 실착공일)부터 정해진 기한 내 착수
@@ -82,11 +87,11 @@ from services.health_registry import register_probe
 from services.ra_policy_svc import get_param_value, list_params
 from services.ra_decision_svc import assessment_readiness
 from services.ra_continuous_svc import judge_continuous
-from services.holiday_svc import holiday_map
+from services.holiday_svc import holiday_map, get_work_weekdays
 
 router = APIRouter(prefix="/risk-assessments", tags=["risk_assessments"])
 
-VERSION = "1.5.1"
+VERSION = "1.5.2"
 
 # 아래 값들은 '정본'이 아니라 조회 실패 시의 안전망이다.
 # 정본은 ra_policy_param (미적용 시 services/ra_policy_svc._FALLBACK).
@@ -349,7 +354,7 @@ def get_continuous_status(
     월 1회 이상 유해·위험요인 발굴, 매주 1회 이상 논의·점검, 매 작업일 TBM 의
     3요건을 모두 실시하면 그 달의 수시·정기평가를 실시한 것으로 본다.
     기존 운영 데이터(ra_item / work_schedules / tbm_meetings)를 실적으로 쓰고,
-    작업일은 공용 휴무 캘린더(org_holiday)를 반영해 산출한다.
+    작업일은 사업장 조업요일(org_work_policy) - 휴무 캘린더(org_holiday)로 산출한다.
     판정 로직: services/ra_continuous_svc.
     """
     if not company_id and not factory_id:
@@ -408,9 +413,10 @@ def get_continuous_status(
     except Exception:
         tbm_dates = []
 
-    # 휴무 캘린더 — 공용 모듈. 테이블 미적용 환경이면 빈 맵(종전 동작과 동일).
+    # 휴무 캘린더·조업요일 — 공용 모듈. 테이블 미적용이면 각각 빈 맵·월~금 폴백.
     holidays = holiday_map(company_id, factory_id,
                            month_first.isoformat(), month_last.isoformat())
+    work_weekdays = get_work_weekdays(company_id, factory_id)
 
     verdict = judge_continuous(
         month=target_month,
@@ -418,6 +424,7 @@ def get_continuous_status(
         review_dates=review_dates,
         tbm_dates=tbm_dates,
         holidays=holidays,
+        work_weekdays=work_weekdays,
     )
     return {"status": "success", "data": verdict}
 
