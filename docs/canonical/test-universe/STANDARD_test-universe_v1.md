@@ -79,7 +79,7 @@ Case: CASE-<6digit>
 압력용기    → PressureContainment → has_pressure_vessel
 크레인     → Lifting           → has_crane, has_tower_crane
 승강기     → VerticalTransport → has_elevator
-변전실     → PowerDistribution → has_electric_work  [GAP: has_substation 없음]
+변전실     → PowerDistribution → ∅ Coverage Gap  [GAP: has_substation 없음 · has_electric_work 임의연결 금지]
 소방시설    → FireProtection    → has_sprinkler, has_fire_hydrant, has_smoke_control, has_emergency_broadcast, has_water_tank
 가스설비    → GasSystem         → has_gas, has_high_pressure_gas, gas_capacity_kg
 ```
@@ -91,7 +91,7 @@ Case: CASE-<6digit>
 리모델링    → Remodeling        → construction_type
 철거       → Demolition        → has_demolition, has_asbestos_demo
 유지보수    → Maintenance       → ∅semantic-only
-배관공사    → Piping            → GAP: has_piping 없음 (근접 has_welding)
+배관공사    → Piping            → ∅ Coverage Gap  [GAP: has_piping 없음 · has_welding 임의연결 금지]
 전기공사    → ElectricalWork    → has_electric_work, has_temp_electric
 ```
 
@@ -128,15 +128,16 @@ Case: CASE-<6digit>
 승강기   → has_elevator
 컨베이어 → has_conveyor
 집진기   → has_dust_work
-변압기   → PowerDistribution → has_electric_work  [GAP: has_transformer 없음]
-수배전반 → PowerDistribution → has_electric_work  [GAP: has_switchgear 없음]
+변압기   → PowerDistribution → ∅ Coverage Gap  [GAP: has_transformer 없음]
+수배전반 → PowerDistribution → ∅ Coverage Gap  [GAP: has_switchgear 없음]
 콤프레서 → PressureContainment → has_pressure_vessel (근접) / has_machinery
 ```
 
 ### Contract Coverage Gap (요약 — 향후 계약 확장 후보, 본 WO는 정의만)
 ```
 has_substation · has_transformer · has_switchgear · has_piping · has_cutting
-→ 변전실·변압기·수배전반·배관공사·절단이 정확 매핑 부재. 현재는 근접필드/∅로 표기.
+→ 변전실·변압기·수배전반·배관공사·절단은 정확 매핑 부재 → 계약 ∅ 유지.
+원칙: GAP을 유사·상위 필드로 임의 연결하지 않는다(예: 변전실→has_electric_work 금지). Gap 자체가 자산.
 ```
 
 ## STEP 7 — Allowed Matrix (Sector × Object, ○/×)
