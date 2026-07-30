@@ -31,8 +31,7 @@ LEG_PIPELINE_ENABLED = os.getenv("LEG_PIPELINE_ENABLED", "").lower() in ("1", "t
 LEG_SOURCE_TYPE = "site_free_leg"
 
 
-@router.post("")
-async def create_anonymous_diagnosis_leg(body: AnonymousDiagnosisCreate):
+async def _create_anonymous_diagnosis_leg_impl(body: AnonymousDiagnosisCreate):
     if not LEG_PIPELINE_ENABLED:
         raise HTTPException(status_code=503, detail="LEG 파이프라인이 비활성화되어 있습니다 (LEG_PIPELINE_ENABLED).")
     if not is_enabled():
@@ -92,3 +91,19 @@ async def create_anonymous_diagnosis_leg(body: AnonymousDiagnosisCreate):
         "legStatus": full_result.get("leg_status"),
         "obligationCount": obl_cnt,
     }
+
+
+@router.post("")
+async def create_anonymous_diagnosis_leg(body: AnonymousDiagnosisCreate):
+    from services.canonical.flags import canonical_enabled
+    if not canonical_enabled():
+        return await _create_anonymous_diagnosis_leg_impl(body)
+    from services.canonical.adapters import AnonymousAdapter
+    from services.canonical.service import CanonicalDiagnosisService
+    dto = AnonymousAdapter().to_canonical({
+        "site_kind": body.site_kind, "scale": body.scale,
+        "workers": body.workers, "region": body.region,
+    })
+    return await CanonicalDiagnosisService().evaluate(
+        dto=dto, delegate=lambda: _create_anonymous_diagnosis_leg_impl(body)
+    )
