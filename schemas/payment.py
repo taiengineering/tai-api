@@ -201,6 +201,7 @@ class PartialRefundBody(BaseModel):
 class ManualConfirmBody(BaseModel):
     payment_id: str
     contract_id: str
+    by: Optional[str] = None  # 수동활성화 처리자(감사 actor). 프론트에서 'admin' 전달.
 
 
 class CancelBody(BaseModel):
