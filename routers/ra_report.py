@@ -1,7 +1,11 @@
 """
-위험성평가 — 중대재해처벌법 반기 점검 증적 리포트. v1.0.0
+위험성평가 — 중대재해처벌법 반기 점검 증적 리포트. v1.0.1
 
 Goal: G-ms6xe3z4-76dbad
+
+v1.0.1 (2026-07-30) — ra_item select 에서 존재하지 않는 process_name 컬럼 제거.
+  종전에는 select 오류가 except 로 잡혀 요인 집계가 항상 0 이었다(실화면 검증에서 발견).
+  ra_item 에는 work_process 만 있고 process_name 은 없다.
 
 법적 근거 — 중대재해처벌법 시행령 제4조제3호:
   경영책임자등은 ① 사업장 특성에 따른 유해·위험요인을 확인하여 개선하는 업무절차를
@@ -11,19 +15,10 @@ Goal: G-ms6xe3z4-76dbad
   위험성평가를 직접 실시하거나 실시하도록 하여 그 결과를 보고받은 경우에는, 유해·위험요인의
   확인 및 개선에 대한 점검을 한 것으로 본다(간주).
 
-즉 위험성평가를 반기 내에 실시·완료하고 그 결과(미해결 요인 유무·조치)를 확인하면
-중처법 제4조3호의 반기 점검을 갈음할 수 있다. 이 리포트는 위험성평가 데이터를 그
-점검 증적으로 집계·판정해 출력한다.
-
 점검 판정 매핑
   DONE   반기 내 위험성평가 완료 ≥ 1건 이고 미해결(허용 불가) 요인 0
-         → 유해·위험요인 확인·개선 점검 완료(위험성평가로 갈음)
   GAP    반기 내 위험성평가 실시 ≥ 1건이나 미해결 요인이 남음
-         → 점검은 실시했으나 '필요한 조치'(제4조3호)가 미완 — 개선 요망
   NONE   반기 내 위험성평가 실시 0건
-         → 반기 점검 미이행(위험성평가 실시 필요)
-
-이 판정은 위험성평가 데이터에 근거한 시스템 집계이며, 최종 점검 책임은 경영책임자에게 있다.
 
 API:
   GET /ra/semiannual-report?company_id&factory_id&year&half=H1|H2
@@ -37,7 +32,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/ra", tags=["위험성평가 증적 리포트"])
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 _LEGAL_BASIS = "중대재해처벌법 시행령 제4조제3호 (유해·위험요인 확인·개선의 반기 1회 이상 점검)"
 _DEEM_BASIS = "산업안전보건법 제36조 위험성평가로 갈음(시행령 제4조제3호 단서)"
@@ -80,13 +75,14 @@ def semiannual_report(
     aids = [a["id"] for a in assessments]
 
     # 2) 요인·대책 집계 (ra_item / ra_control). 테이블 미적용이면 0.
+    #    ra_item 에는 work_process 만 있고 process_name 은 없다(v1.0.1 정정).
     hazard_total = acceptable_cnt = open_cnt = 0
     control_total = control_done = control_interim = 0
     open_items = []
     if aids:
         try:
             items = (sb.table("ra_item").select(
-                "id, assessment_id, hazard, level, acceptable, process_name, work_process")
+                "id, assessment_id, hazard, level, acceptable, work_process")
                 .in_("assessment_id", aids).execute().data) or []
         except Exception:
             items = []
@@ -99,7 +95,7 @@ def semiannual_report(
                 open_items.append({
                     "hazard": it.get("hazard"),
                     "level": it.get("level"),
-                    "work_process": it.get("work_process") or it.get("process_name"),
+                    "work_process": it.get("work_process"),
                 })
         iids = [str(it["id"]) for it in items]
         if iids:
