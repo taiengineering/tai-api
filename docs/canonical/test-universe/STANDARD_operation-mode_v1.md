@@ -106,3 +106,31 @@ Configuration → Index → Query → Code
 ```text
 Before Clean 생성  AND  Runner 결정성 확보  AND  Measurement Gate PASS
 ```
+
+**11.6 측정 완전성 (Preview ≠ Full).** 측정은 전체 결과를 담아야 한다. 익명 `/anonymous-diagnosis`는 preview(rules_table 12)만 반환하며 전체 의무는 `appointment/inspection/action/report_required` 배열에 있다(합 = applicable_count, `hasFullResult:true`). Runner/Snapshot은 preview가 아니라 **전량 의무**를 저장·비교해야 한다. preview 기준 관측은 무효로 간주한다.
+
+## 12. E2E_REVIEW 모드 (발견 ≠ 해결)
+Review는 **수정이 아니라 발견(Discovery)**이다. Claude의 '첫 문제 몰입'(발견 즉시 원인분석·수정으로 진입)을 규칙으로 차단한다.
+
+**12.1 Review 중 CHG 생성 금지.** 흐름은 오직: 읽기 → Issue 등록 → 다음 Profile → 반복. 발견 즉시 CHG로 가지 않는다.
+
+**12.2 Issue는 누적만.** Issue-001, 002, 003 … Issue-N을 쌓기만 한다. 중간에 해결하지 않는다. 첫 Issue에 몰입하다 더 근본 Issue를 놓치는 것을 막는다. (실례: Issue-001에 몰입해 CHG 생성 → 이후 Issue-003 Preview저장이 더 근본임을 발견.)
+
+**12.3 전수 후 분류.** 전량 검토가 끝난 뒤에야 Issue를 분류한다: Engine / Data / Query / UI / Rule / Performance / Measurement.
+
+**12.4 영향도 계산.** 분류 후 각 Issue의 영향도를 매긴다: Critical / High / Medium / Low.
+
+**12.5 그다음에야 CHG.** 순서는 반드시 Issue → 우선순위 → CHG. 절대 'Issue 발견 → CHG 생성'으로 직행하지 않는다.
+
+**12.6 허용/금지 표현.** Review 중 허용: 관측 · 등록 · 보류 · 후순위 · 분류. 금지: "원인을 찾겠습니다" · "수정하겠습니다" · "가설을 세우겠습니다".
+
+**12.7 완성 표 전제.** Review 종료 시 아래 표가 반드시 존재해야 하며, 이 표가 완성되기 전에는 **어떤 CHG도 생성하지 않는다.**
+```text
+ID   | Issue           | 범위        | 영향도    | CHG 여부
+001  | 동일 입력 다른 출력 | 10 Profile | Critical | 후보
+002  | 의무 중복         | 112 Profile| High     | 후보
+003  | Preview 저장      | 전체        | Critical | 후보
+...  | ...             | ...        | ...      | 보류
+```
+
+**12.8 Goal 종료.** Review는 '모든 Issue를 발견하는 것'으로 끝난다. 고치는 것은 다음 WO다.
