@@ -90,12 +90,13 @@ changed > 0 이면 CHG를 시작하지 않고 **측정 환경부터 수정**한�
 ```text
 RUN_WORKERS=1 · RUN_TIMEOUT_S=180 · RUN_RETRIES=1
 ```
-병렬 Runner는 성능 검증 전까지 사용하지 않는다. (실측: 짧은 타임아웃/병렬은 394만 행 스캔 지연으로 부분집계 노이즈를 만들어 결과를 오염시킴 — 엔진 자체는 결정적.)
+병렬 Runner는 성능 검증 전까지 사용하지 않는다. (실측: 짧은 타임아웃/병렬은 394만 행 스캔 지연으로 부분집계 노이즈를 만들어 결과를 오염시킴 — 엔진 자체는 결정적.) 단, 병렬을 쓰려면 사전에 동일 입력 2회로 결정성(changed=0)을 검증한 워커 수에서만 사용한다.
 
-**11.3 Before Clean.** 타임아웃 오염 가능성이 있는 기존 Before는 Regression 기준으로 쓰지 않는다. 새 기준 `Before Clean` 생성 조건:
+**11.3 Before Clean.** 타임아웃/과도기 배포 오염 가능성이 있는 기존 Before는 Regression 기준으로 쓰지 않는다. 새 기준 `Before Clean` 생성 조건:
 ```text
-Runner 2회 → changed = 0 → Freeze
+안정 엔진(배포 안정 후) · Runner 2회 → changed = 0 → Freeze
 ```
+기준선은 반드시 안정 엔진 상태에서 생성한다. 배포 과도기(코드 반영 중) 산출물은 오염으로 간주하고 기준선으로 쓰지 않는다.
 
 **11.4 성능 수정 우선순위.** 성능은 Code 문제가 아니다.
 ```text
@@ -116,7 +117,7 @@ Review는 **수정이 아니라 발견(Discovery)**이다. Claude의 '첫 문제
 
 **12.2 Issue는 누적만.** Issue-001, 002, 003 … Issue-N을 쌓기만 한다. 중간에 해결하지 않는다. 첫 Issue에 몰입하다 더 근본 Issue를 놓치는 것을 막는다. (실례: Issue-001에 몰입해 CHG 생성 → 이후 Issue-003 Preview저장이 더 근본임을 발견.)
 
-**12.3 전수 후 분류.** 전량 검토가 끝난 뒤에야 Issue를 분류한다: Engine / Data / Query / UI / Rule / Performance / Measurement.
+**12.3 전수 후 분류.** 전량 검토가 끝난 뒤에야 Issue를 분류한다: Engine / Data / Query / UI / Rule / Performance / Measurement. (분류는 Analysis 성격이므로 Observation Inventory 단계가 아니라 이후에 부여.)
 
 **12.4 영향도 계산.** 분류 후 각 Issue의 영향도를 매긴다: Critical / High / Medium / Low.
 
@@ -124,13 +125,36 @@ Review는 **수정이 아니라 발견(Discovery)**이다. Claude의 '첫 문제
 
 **12.6 허용/금지 표현.** Review 중 허용: 관측 · 등록 · 보류 · 후순위 · 분류. 금지: "원인을 찾겠습니다" · "수정하겠습니다" · "가설을 세우겠습니다".
 
-**12.7 완성 표 전제.** Review 종료 시 아래 표가 반드시 존재해야 하며, 이 표가 완성되기 전에는 **어떤 CHG도 생성하지 않는다.**
+**12.7 완성 표 전제.** Review 종료 시 아래 표(관측·범위·영향)가 반드시 존재해야 하며, 이 표가 완성되기 전에는 **어떤 CHG도 생성하지 않는다.**
 ```text
-ID   | Issue           | 범위        | 영향도    | CHG 여부
-001  | 동일 입력 다른 출력 | 10 Profile | Critical | 후보
-002  | 의무 중복         | 112 Profile| High     | 후보
-003  | Preview 저장      | 전체        | Critical | 후보
-...  | ...             | ...        | ...      | 보류
+ID   | 관측            | 범위        | 영향
+001  | 동일 입력 다른 출력 | ...        | Critical
 ```
 
 **12.8 Goal 종료.** Review는 '모든 Issue를 발견하는 것'으로 끝난다. 고치는 것은 다음 WO다.
+
+**12.9 Review Evidence 규율 (읽었다 ≠ 읽은 증거).** 'READ COMPLETE' 선언은 증거가 아니다. Review도 Measurement·Analysis·Verify처럼 검증 가능한 Evidence를 남긴다. 각 profile을 다음 순서로 기록한다.
+```text
+READ
+  ↓
+Observation (그 profile에서 관측된 것)
+  ↓
+Evidence (항목의 위치/인덱스 등 검증 가능한 좌표)
+  ↓
+READ COMPLETE
+  ↓
+다음 Profile
+```
+규칙:
+- profile마다 Observation과 **Evidence(위치 인덱스/좌표)**를 기록한다. 관측이 없으면 'Evidence 없음'으로 명시한다.
+- Evidence 로그 없이 'READ COMPLETE' 선언만으로는 종료할 수 없다.
+- **대표 샘플 정독 + 집계 범위추정은 Review Evidence가 아니다.** "112/112"는 전량 정독 로그(각 profile의 Evidence)로만 주장할 수 있다.
+- 112개(또는 전량)를 다 읽은 뒤에만 Observation Inventory를 작성한다.
+- 예시:
+```text
+PF-0001  obligations=18
+  Evidence: [report] 중대재해 처벌법 시행령 | 안전보건교육의 실시 등  @pos [13,14,17]
+  Evidence: [action] 안전보건교육규정 | 교육방법  @pos [7,9]
+  READ COMPLETE
+```
+이로써 3,000건·30,000건으로 확장해도 '정말 읽었는지'를 언제든 원본과 대조해 검증할 수 있다.
