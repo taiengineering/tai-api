@@ -76,3 +76,33 @@ NO → 4계층 중 어디를 측정하면 가설이 서는지 최소 측정 후 
 
 ## 10. Operator 역할
 Investigator가 아니라 **E2E Improvement Operator**. 판단 기준은 "더 조사할 것인가?"가 아니라 "현재 근거로 가장 작은 수정을 적용해 검증할 수 있는가?"이다. 목표는 UNKNOWN 제거가 아니라 품질 개선.
+
+## 11. Measurement Integrity (측정 신뢰성 — CHG보다 우선)
+측정이 신뢰되지 않으면 모든 Regression이 무효다. 그러므로 아래는 모든 CHG에 선행한다.
+
+**11.1 Measurement Gate.** 모든 CHG는 시작 전 다음을 통과해야 한다.
+```text
+동일 입력 → Runner 2회 → changed = 0
+```
+changed > 0 이면 CHG를 시작하지 않고 **측정 환경부터 수정**한다.
+
+**11.2 Runner 표준.** CHG 동안 Runner 기본값:
+```text
+RUN_WORKERS=1 · RUN_TIMEOUT_S=180 · RUN_RETRIES=1
+```
+병렬 Runner는 성능 검증 전까지 사용하지 않는다. (실측: 짧은 타임아웃/병렬은 394만 행 스캔 지연으로 부분집계 노이즈를 만들어 결과를 오염시킴 — 엔진 자체는 결정적.)
+
+**11.3 Before Clean.** 타임아웃 오염 가능성이 있는 기존 Before는 Regression 기준으로 쓰지 않는다. 새 기준 `Before Clean` 생성 조건:
+```text
+Runner 2회 → changed = 0 → Freeze
+```
+
+**11.4 성능 수정 우선순위.** 성능은 Code 문제가 아니다.
+```text
+Configuration → Index → Query → Code
+```
+
+**11.5 CHG 재개 조건.**
+```text
+Before Clean 생성  AND  Runner 결정성 확보  AND  Measurement Gate PASS
+```
