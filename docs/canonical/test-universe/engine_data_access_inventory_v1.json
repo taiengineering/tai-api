@@ -1,0 +1,67 @@
+{
+  "wo": "WO-ENGINE-DATA-ACCESS-001",
+  "goal": "G-ms8cylp2-eb6d75",
+  "type": "investigation_inventory",
+  "generated_by": "taiwang/claude",
+  "measurement_environment": "cloud_session (guri-cf execute_sql)",
+  "principle": "Measure Before Modify — read-only only",
+  "conclusion": "cloud_measurement_not_possible",
+  "conclusion_note": "현재 세션에서 Rule Data / Master / Engine 측정 불가 — 유효한 Fact",
+  "single_project_architecture": true,
+  "architecture_evidence": "compiler_engine_gateway.py(fbe529b3) binds engine_isolated schema on db.supabase_client SUPABASE_URL; law_sector_mapping read on default public schema",
+  "assets": [
+    {
+      "asset": "draft_slot",
+      "layer": "Rule Data",
+      "schema": "engine_isolated",
+      "table": "draft_slot",
+      "project": "tai-api Supabase (single project)",
+      "current_project_ref": "UNKNOWN",
+      "current_project_ref_reason": "Fly Secret, not committed to Git by policy",
+      "access_path": "SUPABASE_URL (deploy secret)",
+      "runtime": "cloud_unreachable; On-your-computer or provided ref required",
+      "select_status": "UNKNOWN"
+    },
+    {
+      "asset": "facility_applicability",
+      "layer": "Rule Data / Engine",
+      "schema": "engine_isolated",
+      "table": "facility_applicability",
+      "project": "tai-api Supabase (single project)",
+      "current_project_ref": "UNKNOWN",
+      "current_project_ref_reason": "Fly Secret, not committed to Git by policy",
+      "access_path": "SUPABASE_URL (deploy secret)",
+      "runtime": "cloud_unreachable; On-your-computer or provided ref required",
+      "select_status": "UNKNOWN"
+    },
+    {
+      "asset": "law_sector_mapping",
+      "layer": "Master",
+      "schema": "public",
+      "table": "law_sector_mapping",
+      "project": "tai-api Supabase (single project)",
+      "current_project_ref": "UNKNOWN",
+      "current_project_ref_reason": "Fly Secret, not committed to Git by policy",
+      "access_path": "SUPABASE_URL (deploy secret)",
+      "runtime": "cloud_unreachable; On-your-computer or provided ref required",
+      "select_status": "UNKNOWN"
+    }
+  ],
+  "non_target_refs": [
+    { "ref": "xntdkrjhgcscmqctdzyo", "source": ".env.example", "status": "REMOVED (Resource has been removed)", "verdict": "decommissioned" },
+    { "ref": "iapzwbysfzootqnldtan", "source": "governance default", "status": "no engine_isolated schema", "verdict": "not engine DB" },
+    { "ref": "wrfcedzgdrfupenzqhur", "source": "leg-prod", "status": "only public/quarantine.facility_applicability", "verdict": "not engine DB" }
+  ],
+  "resolved": {
+    "asset_locations": "CONFIRMED",
+    "single_project_architecture": "CONFIRMED",
+    "repo_ref_decommissioned": "CONFIRMED",
+    "current_ref_is_deploy_secret": "CONFIRMED"
+  },
+  "unresolved": {
+    "current_production_project_ref": "UNKNOWN",
+    "select_capability": "UNKNOWN"
+  },
+  "next": "WAIT — WO-ENGINE-FIX-001 does not start until production project_ref is obtained (new Fact)",
+  "status": "COMPLETED (system: PASSED with measurement-not-possible conclusion)"
+}
