@@ -763,6 +763,56 @@ def _applicability_to_rule_row(
     }
 
 
+def _merge_presentation_duplicates(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Part->Article Presentation 병합 (POLICY_merge-obs002_v1).
+
+    같은 (law_name, law_article, obligation_summary, category)를 하나로 표시.
+    단 cycle/condition/penalty가 그룹 내 상이하면 병합하지 않는다(의미 보존).
+    Rule/Applicability/Draft 불변 — 표시 리스트에서만 병합.
+    """
+    def _mkey(r: Dict[str, Any]):
+        return (
+            (r.get("law_name") or "").strip(),
+            (r.get("law_article") or "").strip(),
+            (r.get("obligation_summary") or "").strip(),
+            (r.get("category") or "").strip(),
+        )
+
+    def _semkey(r: Dict[str, Any]):
+        return (
+            r.get("inspection_cycle_value"),
+            r.get("inspection_cycle_unit_code"),
+            r.get("condition_code"),
+            r.get("condition_value"),
+            (r.get("penalty_summary") or "").strip(),
+        )
+
+    groups: Dict[tuple, List[Dict[str, Any]]] = {}
+    order: List[tuple] = []
+    for r in rows:
+        k = _mkey(r)
+        if k not in groups:
+            groups[k] = []
+            order.append(k)
+        groups[k].append(r)
+
+    out: List[Dict[str, Any]] = []
+    for k in order:
+        members = groups[k]
+        if len(members) == 1:
+            out.append(members[0])
+            continue
+        sem = {_semkey(m) for m in members}
+        if len(sem) > 1:
+            out.extend(members)
+            continue
+        rep = next((m for m in members if (m.get("then_action_token") or "").strip()), members[0])
+        rep = dict(rep)
+        rep["merged_count"] = len(members)
+        out.append(rep)
+    return out
+
+
 def _compiler_result_to_step1_format(
     compiler: Dict[str, Any],
     *,
@@ -796,6 +846,10 @@ def _compiler_result_to_step1_format(
     for row in rules_from_tasks:
         bucket = row.pop("_bucket", "action")
         triggered[bucket].append(row)
+
+    # WO-CHG-003 Obs-002: Part->Article Presentation 병합 (표시/집계 층에서만)
+    for _bk in ("appointment", "inspection", "notify", "report", "action"):
+        triggered[_bk] = _merge_presentation_duplicates(triggered[_bk])
 
     rules_table: List[Dict[str, Any]] = []
     for key, label in [
