@@ -17,6 +17,9 @@ ROUTERS = [
     {"module": "routers.obligation_adapter"},
     {"module": "routers.trigger_diagnosis"},
     {"module": "routers.saas_setup"},
-    {"module": "routers.anonymous_diagnosis_leg"},  # WO-PIPE-004: LEG standalone endpoint
-    {"module": "routers.diagnosis_integrated_leg"},  # WO-PIPE-004(paid): LEG standalone paid endpoint
+    # WO-ISOLATE-001: 축2 LEG standalone 격리 (E2E 검증 전용, tai-www 미연결).
+    #   LEG_PIPELINE_ENABLED=true 로 인프라는 살아있으나 라이브 컷오버 전까지 URL 격리.
+    #   컷오버 시 아래 두 줄 주석 해제로 부활. 파일·서비스·클라이언트 모두 보존.
+    # {"module": "routers.anonymous_diagnosis_leg"},  # WO-PIPE-004: LEG standalone endpoint
+    # {"module": "routers.diagnosis_integrated_leg"},  # WO-PIPE-004(paid): LEG standalone paid endpoint
 ]
