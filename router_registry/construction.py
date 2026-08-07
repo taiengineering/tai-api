@@ -12,6 +12,9 @@ ROUTERS = [
     {"module": "routers.worker_registry"},
     {"module": "routers.worker_check"},
     {"module": "routers.worker_home"},
+    # 작업자 PWA(/app/) 전용 — 종전 서버에 부재해 404 로 실패하던 경로들
+    {"module": "routers.worker_reports"},  # 안전신고 /safety-reports · 긴급신고 /emergency/report
+    {"module": "routers.worker_assets"},   # 사진업로드 /uploads/inspection-photo · /work-assignments · /education/worker-complete
     {"module": "routers.equipment_assets"},
     {"module": "routers.equipment_checkins"},
     {"module": "routers.engine_equipment"},
