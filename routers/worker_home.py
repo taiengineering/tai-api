@@ -1,12 +1,14 @@
 """
-worker_home.py — v1.0.0
-작업자 전용 홈 API (오늘의 할일 + QR 스캔 → 점검세트)
+worker_home.py — v1.1.0
+작업자 전용 홈 API (오늘의 할일 + QR 스캔 → 점검세트 + 홈 지표 요약)
 
 2026-04-13 신규 생성
+2026-08-08 v1.1.0: GET /worker/summary 추가 (홈 지표 서버 기준 집계)
 
 API:
   GET  /worker/today                   오늘의 할일 (배정된 점검/TBM/교육) 한 번에 반환
   GET  /worker/qr-check/{equipment_id} QR 스캔 → 해당 설비 점검세트 + 항목 반환
+  GET  /worker/summary                 홈 상단 지표 3종 (점검완료/TBM서명/미처리이상)
 """
 import logging
 from datetime import datetime, date, timezone
@@ -19,11 +21,28 @@ from db.supabase_client import get_supabase
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/worker", tags=["worker_home"])
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 
 def _today() -> str:
     return date.today().isoformat()
+
+
+def _clean_phone(phone: str) -> str:
+    return (phone or "").replace("-", "").replace(" ", "")
+
+
+def _phone_variants(phone: str) -> list:
+    """users.phone 은 하이픈 유무가 섞여 있어 양쪽 형식을 모두 시도한다.
+    (worker_check.py 와 동일 관례)
+    """
+    clean = _clean_phone(phone)
+    if not clean:
+        return []
+    out = [clean]
+    if len(clean) == 11:
+        out.append(f"{clean[:3]}-{clean[3:7]}-{clean[7:]}")
+    return out
 
 
 # ─────────────────────────────────────────────────────────────
@@ -157,6 +176,124 @@ def get_today_tasks(
                 "pending":   pending,
                 "completed": completed,
             },
+        },
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+# GET /worker/summary
+# 작업자앱 홈 상단 지표 3종 — 서버가 소유한 사실로 집계한다.
+#
+# 종전에는 프론트가 localStorage(tai_activities)를 세었다. 그 구조는
+#   - 관리자가 조치를 완료해도 미처리 이상 카운트가 줄지 않고
+#   - 최근 10건 제한에 걸려 그 이상은 누락되며
+#   - 판정이 title 문자열 매칭이라 i18n 언어 전환 시 0 이 되는
+# 문제가 있었다. 상태의 소유자인 서버가 계산해 내려준다.
+# ─────────────────────────────────────────────────────────────
+
+@router.get("/summary")
+def get_worker_summary(
+    phone: str = Query(..., description="작업자 전화번호"),
+    factory_id: Optional[str] = Query(None, description="TBM 조회 범위"),
+    company_id: Optional[str] = Query(None, description="TBM 조회 범위"),
+):
+    """
+    홈 상단 지표 3종.
+
+    반환 구조:
+    {
+      "today_checks": 2,        # 오늘 완료한 점검 건수
+      "tbm_signed":   true,     # 오늘 TBM 에 내가 서명했는지 (오늘 TBM 없으면 null)
+      "open_issues":  3,        # 내가 신고한 건 중 미처리(RECEIVED) 건수
+    }
+
+    각 지표는 독립적으로 집계하며 실패 시 null 을 반환한다.
+    프론트가 0 과 구분해 '미확인'으로 표시할 수 있어야 하기 때문이다 —
+    조회 실패를 0 으로 내리면 작업자가 미처리 신고가 없다고 오인할 수 있다.
+    """
+    supabase = get_supabase()
+    today = _today()
+    variants = _phone_variants(phone)
+
+    today_checks = None
+    tbm_signed = None
+    open_issues = None
+
+    # ── 1. 오늘 완료한 점검 ────────────────────────────────
+    # safety_inspections.inspection_date 는 timestamp 이므로 당일 범위로 필터한다.
+    try:
+        inspector_id = None
+        for v in variants:
+            u = supabase.table("users").select("id").eq("phone", v).limit(1).execute()
+            if u.data:
+                inspector_id = u.data[0]["id"]
+                break
+        if not inspector_id and variants:
+            w = supabase.table("worker_registry").select("id").eq("phone", variants[0]).limit(1).execute()
+            if w.data:
+                inspector_id = w.data[0]["id"]
+
+        if inspector_id:
+            r = supabase.table("safety_inspections") \
+                .select("id", count="exact") \
+                .eq("inspector_id", inspector_id) \
+                .gte("inspection_date", f"{today}T00:00:00") \
+                .lte("inspection_date", f"{today}T23:59:59") \
+                .execute()
+            today_checks = r.count or 0
+        else:
+            # 작업자를 특정하지 못하면 0 건이 맞다(기록 주체가 없으므로).
+            today_checks = 0
+    except Exception as e:
+        log.error(f"[WorkerSummary] today_checks 집계 실패 phone={phone}: {e}")
+
+    # ── 2. 오늘 TBM 서명 여부 ──────────────────────────────
+    # tbm_attendees.phone 이 존재해 전화번호로 직접 조회할 수 있다.
+    try:
+        tbm_q = supabase.table("tbm_meetings").select("id") \
+            .eq("work_date", today).neq("status_code", "CANCELLED")
+        if factory_id: tbm_q = tbm_q.eq("factory_id", factory_id)
+        if company_id: tbm_q = tbm_q.eq("company_id", company_id)
+        tbm_res = tbm_q.limit(20).execute()
+        tbm_ids = [t["id"] for t in (tbm_res.data or [])]
+
+        if not tbm_ids:
+            # 오늘 TBM 자체가 없으면 '미완료'가 아니라 '해당 없음'이다.
+            tbm_signed = None
+        else:
+            att = supabase.table("tbm_attendees") \
+                .select("sign_status, phone") \
+                .in_("meeting_id", tbm_ids) \
+                .in_("phone", variants) \
+                .execute()
+            rows = att.data or []
+            if not rows:
+                # 명단에 없으면 서명 대상이 아니다.
+                tbm_signed = None
+            else:
+                tbm_signed = any((r.get("sign_status") or "").upper() == "SIGNED" for r in rows)
+    except Exception as e:
+        log.error(f"[WorkerSummary] tbm_signed 집계 실패 phone={phone}: {e}")
+
+    # ── 3. 미처리 이상 신고 ────────────────────────────────
+    # 관리자가 조치를 확인(CONFIRMED)하면 자연히 줄어든다.
+    try:
+        r = supabase.table("safety_reports") \
+            .select("id", count="exact") \
+            .in_("phone", variants) \
+            .eq("status", "RECEIVED") \
+            .execute()
+        open_issues = r.count or 0
+    except Exception as e:
+        log.error(f"[WorkerSummary] open_issues 집계 실패 phone={phone}: {e}")
+
+    return {
+        "status": "success",
+        "data": {
+            "date":         today,
+            "today_checks": today_checks,
+            "tbm_signed":   tbm_signed,
+            "open_issues":  open_issues,
         },
     }
 
