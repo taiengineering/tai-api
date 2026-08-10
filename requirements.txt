@@ -4,6 +4,7 @@ supabase
 psycopg2-binary>=2.9.9
 python-dotenv
 requests
+urllib3==2.0.7
 pandas
 openpyxl
 httpx>=0.27.0
@@ -23,6 +24,11 @@ sentry-sdk[fastapi]
 # psycopg2-binary: 정기결제 직접 SQL(db/direct_sql.py) — PostgREST 스키마캐시
 # 우회용. 누락 시 POST /payments/inicis/billing/prepare 가 ModuleNotFoundError로
 # 평문 500("Internal Server Error") 반환 → 프론트 JSON 파싱 실패.
+
+# urllib3==2.0.7: 프록시(OUTBOUND_PROXY) 경유 data.go.kr(공공데이터포털) HTTPS
+# 호출이 urllib3 2.5+ 에서 코드10(INVALID_REQUEST_PARAMETER)로 거부됨. 카페24
+# egress 서버(urllib3 2.0.7)는 정상 — 동일 버전으로 핀해 프록시 CONNECT 동작 일치.
+# KOSHA 수집(kosha_collect.py) 이 이 프록시 경로를 사용.
 
 # === TAI 법령엔진 v3.0 — Track A (2026-05-09 추가) ===
 # 형태소 분석기 (한국어). LLM 사용 금지 원칙(§2.1) 대체 도구.
