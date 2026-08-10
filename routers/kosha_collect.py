@@ -535,12 +535,10 @@ async def debug_guide(
     num_rows: int = Query(5, ge=1, le=20),
 ):
     """
-    [임시 · 조사용 · 읽기 전용] 프록시 경유 params= vs URL문자열 비교.
-    G-msmq1ip1: 프록시 ip_via_proxy=1.234.79.95 확인·서버 curl 은 NORMAL_CODE 인데
-    tai-api httpx params= 는 코드10. httpx 재인코딩 의심. 두 방식으로 실측:
-      - guide_via_proxy_params : params= 딕셔너리 (httpx 인코딩)
-      - guide_via_proxy_urlstr : URL 문자열 직접 (서버 curl 과 동일)
-    시크릿 미출력: serviceKey 값 미반환(응답 text 내 마스킹). DB 쓰기 없음. 확정 후 제거.
+    [임시 · 조사용 · 읽기 전용] 프록시 경유 params vs URL문자열 + 에코 진단.
+    G-msmq1ip1: 프록시 ip_via_proxy=1.234.79.95, 서버 curl 은 NORMAL_CODE 인데
+    tai-api httpx 는 params/urlstr 둘 다 코드10. httpbin 에코로 Squid 가 요청을
+    변형하는지 확인. 시크릿 미출력: serviceKey 마스킹. DB 쓰기 없음. 확정 후 제거.
     """
     import httpx as _httpx
 
@@ -556,7 +554,6 @@ async def debug_guide(
     url = f"{BASE}/{path}"
     params = {"callApiId": call_api_id, "pageNo": page_no,
               "numOfRows": num_rows, "serviceKey": svc_key}
-    # 서버 curl 과 완전 동일한 URL 문자열(파라미터 직접 append, httpx 재인코딩 회피)
     url_full = (f"{url}?callApiId={call_api_id}&pageNo={page_no}"
                 f"&numOfRows={num_rows}&serviceKey={svc_key}")
 
@@ -575,7 +572,6 @@ async def debug_guide(
         except Exception:
             return {"http_status": status, "parsed": "not-json(xml?)", "head": masked[:300]}
 
-    # 프록시 URL 은 시크릿 미노출 — 존재/host:port 만.
     proxy_display = None
     if proxy:
         try:
@@ -587,7 +583,7 @@ async def debug_guide(
 
     out = {"proxy_present": bool(proxy), "proxy_host_port": proxy_display}
 
-    # 1) 공인 IP 실측 — 직접 (짧은 타임아웃: hang 방지)
+    # 1) 공인 IP 실측 — 직접
     try:
         async with _httpx.AsyncClient(timeout=8.0) as c:
             r = await c.get("https://api.ipify.org?format=json")
@@ -595,7 +591,7 @@ async def debug_guide(
     except Exception as e:
         out["ip_direct"] = f"ERR {type(e).__name__}: {str(e)[:120]}"
 
-    # 2) 공인 IP 실측 — 프록시 경유 (고정 IP 1.234.79.95 여야 함)
+    # 2) 공인 IP 실측 — 프록시 경유
     if proxy:
         try:
             async with _httpx.AsyncClient(timeout=10.0, proxy=proxy) as c:
@@ -604,7 +600,7 @@ async def debug_guide(
         except Exception as e:
             out["ip_via_proxy"] = f"ERR {type(e).__name__}: {str(e)[:150]}"
 
-    # 3) GUIDE 프록시 경유 — params= 방식 (httpx 가 딕셔너리 인코딩)
+    # 3) GUIDE 프록시 경유 — params= 방식
     if proxy:
         try:
             async with _httpx.AsyncClient(timeout=20.0, proxy=proxy) as c:
@@ -613,7 +609,7 @@ async def debug_guide(
         except Exception as e:
             out["guide_via_proxy_params"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
 
-    # 4) GUIDE 프록시 경유 — URL 직접 방식 (서버 curl 과 동일한 문자열)
+    # 4) GUIDE 프록시 경유 — URL 직접 방식
     if proxy:
         try:
             async with _httpx.AsyncClient(timeout=20.0, proxy=proxy) as c:
@@ -621,6 +617,24 @@ async def debug_guide(
                 out["guide_via_proxy_urlstr"] = _summarize(r.status_code, r.text)
         except Exception as e:
             out["guide_via_proxy_urlstr"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
+
+    # 5) 에코 진단 — 프록시 경유로 httpbin 에 보냈을 때 실제 도달 쿼리 확인.
+    #    Squid 가 쿼리스트링/헤더를 변형하는지 판명. serviceKey 는 더미(에코 확인용).
+    if proxy:
+        try:
+            async with _httpx.AsyncClient(timeout=15.0, proxy=proxy) as c:
+                r = await c.get("https://httpbin.org/get",
+                                params={"callApiId": "1050", "probe": "abc123"})
+                jj = r.json()
+                out["echo_via_proxy"] = {
+                    "http_status": r.status_code,
+                    "url_seen": jj.get("url"),
+                    "args_seen": jj.get("args"),
+                    "headers_seen": {k: jj.get("headers", {}).get(k)
+                                     for k in ("Host", "User-Agent", "Via", "X-Forwarded-For")},
+                }
+        except Exception as e:
+            out["echo_via_proxy"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
 
     return {
         "path": path,
