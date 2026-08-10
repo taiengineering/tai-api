@@ -558,10 +558,10 @@ async def debug_guide(
     num_rows: int = Query(5, ge=1, le=20),
 ):
     """
-    [임시 · 조사용 · 읽기 전용] 프록시 경유 requests URL직접 vs params 실측.
-    G-msmq1ip1: Squid TCP_TUNNEL/200(프록시 무변형)인데 tai-api requests params= 는
-    코드10, 서버 curl(URL직접)은 NORMAL_CODE. URL직접 조립 방식 실측 확정용.
-    serviceKey 마스킹. DB 쓰기 없음. 확정 후 제거.
+    [임시 · 조사용 · 읽기 전용] 프록시 경유 requests URL직접 vs params + 라이브러리 버전.
+    G-msn171po: 서버 requests=성공/tai-api requests=코드10. requirements 버전 핀 없음
+    → 컨테이너 urllib3/requests 버전이 서버와 달라 프록시 CONNECT 처리 차이 의심.
+    lib_versions 로 실측. serviceKey 마스킹. DB 쓰기 없음. 확정 후 제거.
     """
     key_src, key_len = None, 0
     for name in ("DATA_GO_KR_SERVICE_KEY", "KOSHA_SERVICE_KEY", "BUILDING_API_KEY"):
@@ -601,6 +601,14 @@ async def debug_guide(
             proxy_display = "set"
 
     out = {"proxy_present": bool(proxy), "proxy_host_port": proxy_display}
+
+    # 라이브러리 버전 진단 — 서버(성공) vs tai-api(실패) urllib3/requests 버전 비교.
+    try:
+        import requests as _rv, urllib3 as _uv
+        out["lib_versions"] = {"requests": getattr(_rv, "__version__", "?"),
+                               "urllib3": getattr(_uv, "__version__", "?")}
+    except Exception as e:
+        out["lib_versions"] = {"error": f"{type(e).__name__}: {str(e)[:100]}"}
 
     # 1) requests + params= (기존 실패 방식, 대조)
     if proxy:
