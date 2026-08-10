@@ -499,22 +499,21 @@ async def debug_guide(
     num_rows: int = Query(5, ge=1, le=20),
 ):
     """
-    [임시 · 조사용 · 읽기 전용] serviceKey 인코딩 방식 4종 실측 — KoshaAPI.get 우회.
-    G-msmq1ip1: 명세 확인 결과 callApiId=1050 은 맞음. 모든 타깃이 XML
-    INVALID_REQUEST_PARAMETER_ERROR(코드10) → serviceKey 이중 인코딩 의심.
-    data.go.kr 키는 Encoding/Decoding 두 형태가 있어, httpx params 로 넘길 때 이미
-    인코딩된 키가 다시 인코딩되면 인증이 깨진다. 4가지 방식을 같은 조건으로 호출해
-    어느 것이 200+데이터를 주는지 실측한다:
-      A) params 로 원본(현행 KoshaAPI.get 방식)
-      B) params 로 unquote(원본)  — 이미 인코딩된 키면 디코딩
-      C) URL 쿼리스트링에 원본을 직접 append (httpx 재인코딩 회피)
-      D) URL 쿼리스트링에 unquote(원본) 직접 append
+    [임시 · 조사용 · 읽기 전용] outbound IP 실측 + 프록시 경유/직접 GUIDE 호출 비교.
+    G-msmq1ip1: 브라우저(일반 IP)로는 정식 키가 NORMAL_CODE(totalCount 1039)인데
+    서버 경유는 코드10. 원인은 outbound IP — data.go.kr 에 등록된 고정 IP 와 서버가
+    실제 나가는 IP 불일치로 판정. 고정 IP 재세팅(1.234.79.95, 카페24 프록시) 후 재실측.
 
-    시크릿 미출력: serviceKey 값 미반환. 응답 text 내 키는 마스킹, URL 은 반환 안 함.
-    DB 쓰기 없음. 방식 확정 후 이 엔드포인트 제거.
+    확인 항목:
+      - ip_direct       : 프록시 없이 나갈 때의 공인 IP (Railway 유동 egress)
+      - ip_via_proxy    : OUTBOUND_PROXY 경유 시 공인 IP (고정 IP 여야 함)
+      - guide_direct    : 프록시 없이 GUIDE 호출 결과
+      - guide_via_proxy : OUTBOUND_PROXY 경유 GUIDE 호출 결과
+
+    시크릿 미출력: serviceKey 값 미반환(응답 text 내 마스킹, 길이만). DB 쓰기 없음.
+    확정 후 이 엔드포인트 제거.
     """
     import httpx as _httpx
-    from urllib.parse import unquote, quote
 
     key_src, key_len = None, 0
     for name in ("DATA_GO_KR_SERVICE_KEY", "KOSHA_SERVICE_KEY", "BUILDING_API_KEY"):
@@ -523,67 +522,67 @@ async def debug_guide(
             key_src, key_len = name, len(v)
             break
     svc_key = _get_service_key()
-    dec_key = unquote(svc_key) if svc_key else svc_key
-    was_encoded = (dec_key != svc_key)
+    proxy = os.getenv("OUTBOUND_PROXY") or None
 
-    base_params = {"callApiId": call_api_id, "pageNo": page_no, "numOfRows": num_rows}
     url = f"{BASE}/{path}"
+    params = {"callApiId": call_api_id, "pageNo": page_no,
+              "numOfRows": num_rows, "serviceKey": svc_key}
 
     def _summarize(status, text):
-        if text is None:
-            return {"http_status": status, "parsed": None, "head": None}
-        masked = text
-        for k in (svc_key, dec_key):
-            if k and k in masked:
-                masked = masked.replace(k, "<KEY>")
+        masked = text or ""
+        if svc_key and svc_key in masked:
+            masked = masked.replace(svc_key, "<KEY>")
         try:
-            j = json.loads(text)
-            parsed = list(j.keys()) if isinstance(j, dict) else "json-nonobj"
-            tc = None
+            j = json.loads(masked)
             body = j.get("body") if isinstance(j, dict) else None
-            if isinstance(body, dict):
-                tc = body.get("totalCount")
-            return {"http_status": status, "parsed": parsed,
-                    "totalCount": tc, "head": masked[:400]}
+            tc = body.get("totalCount") if isinstance(body, dict) else None
+            hdr = j.get("header") if isinstance(j, dict) else None
+            return {"http_status": status, "totalCount": tc,
+                    "resultCode": (hdr or {}).get("resultCode") if isinstance(hdr, dict) else None,
+                    "head": masked[:300]}
         except Exception:
-            return {"http_status": status, "parsed": "not-json(xml?)", "head": masked[:400]}
+            return {"http_status": status, "parsed": "not-json(xml?)", "head": masked[:300]}
 
-    results = {}
-    async with _httpx.AsyncClient(timeout=30.0) as client:
-        # A) params 원본
+    out = {"proxy_env_present": bool(proxy)}
+
+    # 1) 공인 IP 실측 — 직접
+    try:
+        async with _httpx.AsyncClient(timeout=15.0) as c:
+            r = await c.get("https://api.ipify.org?format=json")
+            out["ip_direct"] = r.json().get("ip")
+    except Exception as e:
+        out["ip_direct"] = f"ERR {type(e).__name__}: {str(e)[:120]}"
+
+    # 2) 공인 IP 실측 — 프록시 경유
+    if proxy:
         try:
-            r = await client.get(url, params={**base_params, "serviceKey": svc_key})
-            results["A_params_raw"] = _summarize(r.status_code, r.text)
+            async with _httpx.AsyncClient(timeout=15.0, proxy=proxy) as c:
+                r = await c.get("https://api.ipify.org?format=json")
+                out["ip_via_proxy"] = r.json().get("ip")
         except Exception as e:
-            results["A_params_raw"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
-        # B) params unquote
+            out["ip_via_proxy"] = f"ERR {type(e).__name__}: {str(e)[:120]}"
+
+    # 3) GUIDE 호출 — 직접
+    try:
+        async with _httpx.AsyncClient(timeout=30.0) as c:
+            r = await c.get(url, params=params)
+            out["guide_direct"] = _summarize(r.status_code, r.text)
+    except Exception as e:
+        out["guide_direct"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
+
+    # 4) GUIDE 호출 — 프록시 경유
+    if proxy:
         try:
-            r = await client.get(url, params={**base_params, "serviceKey": dec_key})
-            results["B_params_decoded"] = _summarize(r.status_code, r.text)
+            async with _httpx.AsyncClient(timeout=30.0, proxy=proxy) as c:
+                r = await c.get(url, params=params)
+                out["guide_via_proxy"] = _summarize(r.status_code, r.text)
         except Exception as e:
-            results["B_params_decoded"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
-        # C) URL 에 원본 직접 append (httpx 재인코딩 회피)
-        try:
-            qs = f"callApiId={call_api_id}&pageNo={page_no}&numOfRows={num_rows}&serviceKey={svc_key}"
-            r = await client.get(f"{url}?{qs}")
-            results["C_url_raw"] = _summarize(r.status_code, r.text)
-        except Exception as e:
-            results["C_url_raw"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
-        # D) URL 에 unquote 직접 append (수동 quote)
-        try:
-            qs = (f"callApiId={call_api_id}&pageNo={page_no}&numOfRows={num_rows}"
-                  f"&serviceKey={quote(dec_key, safe='')}")
-            r = await client.get(f"{url}?{qs}")
-            results["D_url_requoted"] = _summarize(r.status_code, r.text)
-        except Exception as e:
-            results["D_url_requoted"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
+            out["guide_via_proxy"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
 
     return {
         "path": path,
-        "service_key": {"present": bool(svc_key), "source_env": key_src,
-                        "length": key_len, "looks_url_encoded": was_encoded,
-                        "decoded_length": len(dec_key) if dec_key else 0},
-        "results": results,
+        "service_key": {"present": bool(svc_key), "source_env": key_src, "length": key_len},
+        "results": out,
     }
 
 
