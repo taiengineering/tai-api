@@ -133,6 +133,28 @@ def _classify_material(title: str) -> Tuple[str, str]:
     return category, sector
 
 
+def _parse_kosha_text(text: str) -> dict:
+    """KOSHA 응답 텍스트 → dict. JSON 우선, 실패 시 XML 파싱(기존 동작 유지)."""
+    try:
+        data = json.loads(text)
+        if "response" in data and isinstance(data["response"], dict):
+            return data["response"]
+        return data
+    except Exception:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(text)
+        items = []
+        for items_el in root.findall(".//items"):
+            for item_el in items_el:
+                item = {c.tag: c.text or "" for c in item_el}
+                if item:
+                    items.append(item)
+        return {"body": {
+            "items": items,
+            "totalCount": int(root.findtext(".//totalCount") or 0)
+        }}
+
+
 class KoshaAPI:
     @staticmethod
     async def get(path: str, params: dict) -> dict:
@@ -140,32 +162,28 @@ class KoshaAPI:
         # data.go.kr 은 고정 IP 화이트리스트 — 아웃바운드 프록시 경유(있으면).
         # 프록시 미설정이면 직접 나간다(하위호환). 인증 정보는 _build_proxy_url 이 조합.
         proxy = _build_proxy_url()
-        client_kwargs = {"timeout": 30.0}
-        if proxy:
-            client_kwargs["proxy"] = proxy
+        url = f"{BASE}/{path}"
         try:
-            async with httpx.AsyncClient(**client_kwargs) as client:
-                resp = await client.get(f"{BASE}/{path}", params=params)
-                resp.raise_for_status()
-                text = resp.text
-                try:
-                    data = json.loads(text)
-                    if "response" in data and isinstance(data["response"], dict):
-                        return data["response"]
-                    return data
-                except Exception:
-                    import xml.etree.ElementTree as ET
-                    root = ET.fromstring(text)
-                    items = []
-                    for items_el in root.findall(".//items"):
-                        for item_el in items_el:
-                            item = {c.tag: c.text or "" for c in item_el}
-                            if item:
-                                items.append(item)
-                    return {"body": {
-                        "items": items,
-                        "totalCount": int(root.findtext(".//totalCount") or 0)
-                    }}
+            if proxy:
+                # 프록시 경유 HTTPS 는 requests(동기)로 — httpx 의 프록시 CONNECT 구성이
+                # data.go.kr 에서 코드10 을 유발하는 문제 회피. requests 는 curl 과 동일
+                # 방식으로 CONNECT 터널링해 정상 동작(서버 curl 실증). asyncio.to_thread
+                # 로 async 컨텍스트에서 블로킹 없이 실행.
+                import asyncio, requests
+                def _blocking_get():
+                    rr = requests.get(url, params=params,
+                                      proxies={"http": proxy, "https": proxy},
+                                      timeout=30)
+                    return rr.status_code, rr.text
+                _status, text = await asyncio.to_thread(_blocking_get)
+                if _status >= 400:
+                    log.error("[KOSHA] %s 프록시 HTTP %s", path, _status)
+                return _parse_kosha_text(text)
+            else:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.get(url, params=params)
+                    resp.raise_for_status()
+                    return _parse_kosha_text(resp.text)
         except Exception as e:
             log.error("[KOSHA] %s 호출 실패: %s", path, e)
             return {"body": {"items": [], "totalCount": 0}}
@@ -535,10 +553,10 @@ async def debug_guide(
     num_rows: int = Query(5, ge=1, le=20),
 ):
     """
-    [임시 · 조사용 · 읽기 전용] 프록시 경유 params vs URL문자열 + 에코 진단.
-    G-msmq1ip1: 프록시 ip_via_proxy=1.234.79.95, 서버 curl 은 NORMAL_CODE 인데
-    tai-api httpx 는 params/urlstr 둘 다 코드10. httpbin 에코로 Squid 가 요청을
-    변형하는지 확인. 시크릿 미출력: serviceKey 마스킹. DB 쓰기 없음. 확정 후 제거.
+    [임시 · 조사용 · 읽기 전용] 프록시 경유 httpx vs requests 비교.
+    G-msmq1ip1: 서버 curl(프록시)은 NORMAL_CODE 인데 tai-api httpx 프록시는 코드10.
+    requests(curl 동일 CONNECT) 방식이 되는지 실측 → KoshaAPI.get 확정.
+    시크릿 미출력: serviceKey 마스킹. DB 쓰기 없음. 확정 후 제거.
     """
     import httpx as _httpx
 
@@ -554,8 +572,6 @@ async def debug_guide(
     url = f"{BASE}/{path}"
     params = {"callApiId": call_api_id, "pageNo": page_no,
               "numOfRows": num_rows, "serviceKey": svc_key}
-    url_full = (f"{url}?callApiId={call_api_id}&pageNo={page_no}"
-                f"&numOfRows={num_rows}&serviceKey={svc_key}")
 
     def _summarize(status, text):
         masked = text or ""
@@ -583,15 +599,7 @@ async def debug_guide(
 
     out = {"proxy_present": bool(proxy), "proxy_host_port": proxy_display}
 
-    # 1) 공인 IP 실측 — 직접
-    try:
-        async with _httpx.AsyncClient(timeout=8.0) as c:
-            r = await c.get("https://api.ipify.org?format=json")
-            out["ip_direct"] = r.json().get("ip")
-    except Exception as e:
-        out["ip_direct"] = f"ERR {type(e).__name__}: {str(e)[:120]}"
-
-    # 2) 공인 IP 실측 — 프록시 경유
+    # 1) 공인 IP — 프록시 경유
     if proxy:
         try:
             async with _httpx.AsyncClient(timeout=10.0, proxy=proxy) as c:
@@ -600,41 +608,27 @@ async def debug_guide(
         except Exception as e:
             out["ip_via_proxy"] = f"ERR {type(e).__name__}: {str(e)[:150]}"
 
-    # 3) GUIDE 프록시 경유 — params= 방식
+    # 2) GUIDE 프록시 경유 — httpx params (기존 실패 방식, 대조용)
     if proxy:
         try:
             async with _httpx.AsyncClient(timeout=20.0, proxy=proxy) as c:
                 r = await c.get(url, params=params)
-                out["guide_via_proxy_params"] = _summarize(r.status_code, r.text)
+                out["guide_via_proxy_httpx"] = _summarize(r.status_code, r.text)
         except Exception as e:
-            out["guide_via_proxy_params"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
+            out["guide_via_proxy_httpx"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
 
-    # 4) GUIDE 프록시 경유 — URL 직접 방식
+    # 3) GUIDE 프록시 경유 — requests(동기). 성공 기대(curl 동일 동작).
     if proxy:
         try:
-            async with _httpx.AsyncClient(timeout=20.0, proxy=proxy) as c:
-                r = await c.get(url_full)
-                out["guide_via_proxy_urlstr"] = _summarize(r.status_code, r.text)
+            import asyncio as _aio, requests as _req
+            def _rget():
+                rr = _req.get(url, params=params,
+                              proxies={"http": proxy, "https": proxy}, timeout=25)
+                return rr.status_code, rr.text
+            _st, _tx = await _aio.to_thread(_rget)
+            out["guide_via_proxy_requests"] = _summarize(_st, _tx)
         except Exception as e:
-            out["guide_via_proxy_urlstr"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
-
-    # 5) 에코 진단 — 프록시 경유로 httpbin 에 보냈을 때 실제 도달 쿼리 확인.
-    #    Squid 가 쿼리스트링/헤더를 변형하는지 판명. serviceKey 는 더미(에코 확인용).
-    if proxy:
-        try:
-            async with _httpx.AsyncClient(timeout=15.0, proxy=proxy) as c:
-                r = await c.get("https://httpbin.org/get",
-                                params={"callApiId": "1050", "probe": "abc123"})
-                jj = r.json()
-                out["echo_via_proxy"] = {
-                    "http_status": r.status_code,
-                    "url_seen": jj.get("url"),
-                    "args_seen": jj.get("args"),
-                    "headers_seen": {k: jj.get("headers", {}).get(k)
-                                     for k in ("Host", "User-Agent", "Via", "X-Forwarded-For")},
-                }
-        except Exception as e:
-            out["echo_via_proxy"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
+            out["guide_via_proxy_requests"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
 
     return {
         "path": path,
