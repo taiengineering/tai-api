@@ -2,6 +2,11 @@
 KOSHA 데이터 수집 — DB 저장 + 크론 갱신
 prefix: /kosha-collect
 
+v1.7.0 (2026-08-10):
+  [FIX] _collect_guide() 신 KOSHA GUIDE 전용 API 전환 — kosha_guide 0건 해소.
+        폐기된 srch/smartSearch 키워드 우회 → getKoshaGuide(koshaguide) 전용 API.
+        callApiId=1050 필수. 응답 body.items.item[] (techGdlnNm/No/OfancYmd/fileDownloadUrl).
+
 v1.6.0 (2026-05-02):
   [FIX] MAX_PAGES 100→500 (10,000건 한도 해제)
   [ADD] _collect_safety_materials()에 start_page 파라미터 추가
@@ -388,33 +393,44 @@ async def _collect_risk_assessment(since_date: str = INIT_DATE, full_refresh: bo
 
 
 async def _collect_guide(full_refresh: bool = False) -> dict:
+    """
+    v1.7.0: 신 KOSHA GUIDE 전용 API(getKoshaGuide) 전환.
+    - 엔드포인트: koshaguide/getKoshaGuide (Base apis.data.go.kr/B552468)
+    - 필수: callApiId=1050 (미입력시 에러99). serviceKey 는 KoshaAPI.get 이 주입.
+    - 응답: body.items.item[] — techGdlnNm(규정명)/techGdlnNo(규정번호)/
+            techGdlnOfancYmd(공표일자)/fileDownloadUrl(다운로드링크).
+    - kosha_guide 스키마(guide_no/guide_title/category/guide_url/regist_date/raw_json) 매핑.
+    - 폐기된 srch/smartSearch 키워드 우회 제거(0건 원인).
+    """
     sb = get_supabase()
     total_upserted = 0
-    keywords = ["KOSHA GUIDE", "안전보건기술지침"]
-    for kw in keywords:
-        for page in range(1, 20):
-            resp = await KoshaAPI.get(
-                "srch/smartSearch",
-                {"keyword": kw, "pageNo": page, "numOfRows": MAX_ROWS, "returnType": "json"}
-            )
-            items = KoshaAPI.items(resp)
-            if not items: break
-            rows = []
-            for i, it in enumerate(items):
-                rid = str(it.get("guideNo") or it.get("docNo") or it.get("id") or _make_id("guide", kw, page, i))
-                rows.append({
-                    "id": rid,
-                    "guide_no": it.get("guideNo") or it.get("docNo") or "",
-                    "guide_title": it.get("title") or it.get("guideTitle") or "",
-                    "category": (it.get("category") or "").upper(),
-                    "guide_url": it.get("url") or it.get("fileUrl") or "",
-                    "regist_date": it.get("regDt") or it.get("date") or "",
-                    "raw_json": it,
-                })
-            if rows:
-                sb.table("kosha_guide").upsert(rows, on_conflict="id").execute()
-                total_upserted += len(rows)
-            if len(items) < MAX_ROWS: break
+    for page in range(1, MAX_PAGES + 1):
+        resp = await KoshaAPI.get(
+            "koshaguide/getKoshaGuide",
+            {"callApiId": "1050", "pageNo": page, "numOfRows": MAX_ROWS}
+        )
+        items = KoshaAPI.items(resp)
+        if not items:
+            break
+        rows = []
+        for i, it in enumerate(items):
+            no  = str(it.get("techGdlnNo") or "").strip()
+            rid = no if no else _make_id("guide", page, i)
+            rows.append({
+                "id": rid,
+                "guide_no": no,
+                "guide_title": it.get("techGdlnNm") or "",
+                # 신 API 는 분야코드 필드가 없음 — 빈값(필요 시 techGdlnNo 접두로 후분류).
+                "category": "",
+                "guide_url": it.get("fileDownloadUrl") or "",
+                "regist_date": it.get("techGdlnOfancYmd") or "",
+                "raw_json": it,
+            })
+        if rows:
+            sb.table("kosha_guide").upsert(rows, on_conflict="id").execute()
+            total_upserted += len(rows)
+        if len(items) < MAX_ROWS:
+            break
     _log("guide", "success", total_upserted)
     return {"target": "guide", "upserted": total_upserted}
 
