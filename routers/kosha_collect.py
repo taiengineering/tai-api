@@ -167,13 +167,15 @@ class KoshaAPI:
             if proxy:
                 # 프록시 경유 HTTPS 는 requests(동기)로 — httpx 의 프록시 CONNECT 구성이
                 # data.go.kr 에서 코드10 을 유발하는 문제 회피. requests 는 curl 과 동일
-                # 방식으로 CONNECT 터널링해 정상 동작(서버 curl 실증). asyncio.to_thread
-                # 로 async 컨텍스트에서 블로킹 없이 실행.
+                # 방식으로 CONNECT 터널링해 정상 동작(서버 curl/requests 실증). trust_env=
+                # False 로 컨테이너 시스템 프록시 env 간섭 차단. asyncio.to_thread 로 논블로킹.
                 import asyncio, requests
                 def _blocking_get():
-                    rr = requests.get(url, params=params,
-                                      proxies={"http": proxy, "https": proxy},
-                                      timeout=30)
+                    s = requests.Session()
+                    s.trust_env = False
+                    rr = s.get(url, params=params,
+                               proxies={"http": proxy, "https": proxy},
+                               timeout=30)
                     return rr.status_code, rr.text
                 _status, text = await asyncio.to_thread(_blocking_get)
                 if _status >= 400:
@@ -553,10 +555,10 @@ async def debug_guide(
     num_rows: int = Query(5, ge=1, le=20),
 ):
     """
-    [임시 · 조사용 · 읽기 전용] 프록시 경유 httpx vs requests 비교.
-    G-msmq1ip1: 서버 curl(프록시)은 NORMAL_CODE 인데 tai-api httpx 프록시는 코드10.
-    requests(curl 동일 CONNECT) 방식이 되는지 실측 → KoshaAPI.get 확정.
-    시크릿 미출력: serviceKey 마스킹. DB 쓰기 없음. 확정 후 제거.
+    [임시 · 조사용 · 읽기 전용] 프록시 경유 requests trust_env + 시스템 프록시 env 진단.
+    G-msmq1ip1: 서버 requests(프록시)는 NORMAL_CODE 인데 tai-api requests 는 코드10.
+    같은 코드 서버=성공/tai-api=실패 → Railway 컨테이너 프록시 env 간섭 의심.
+    trust_env=False 경로 + 시스템 프록시 env(host:port) 진단. serviceKey 마스킹.
     """
     import httpx as _httpx
 
@@ -599,25 +601,7 @@ async def debug_guide(
 
     out = {"proxy_present": bool(proxy), "proxy_host_port": proxy_display}
 
-    # 1) 공인 IP — 프록시 경유
-    if proxy:
-        try:
-            async with _httpx.AsyncClient(timeout=10.0, proxy=proxy) as c:
-                r = await c.get("https://api.ipify.org?format=json")
-                out["ip_via_proxy"] = r.json().get("ip")
-        except Exception as e:
-            out["ip_via_proxy"] = f"ERR {type(e).__name__}: {str(e)[:150]}"
-
-    # 2) GUIDE 프록시 경유 — httpx params (기존 실패 방식, 대조용)
-    if proxy:
-        try:
-            async with _httpx.AsyncClient(timeout=20.0, proxy=proxy) as c:
-                r = await c.get(url, params=params)
-                out["guide_via_proxy_httpx"] = _summarize(r.status_code, r.text)
-        except Exception as e:
-            out["guide_via_proxy_httpx"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
-
-    # 3) GUIDE 프록시 경유 — requests(동기). 성공 기대(curl 동일 동작).
+    # 1) requests(trust_env 기본 True) — 기존 실패 방식 대조
     if proxy:
         try:
             import asyncio as _aio, requests as _req
@@ -629,6 +613,35 @@ async def debug_guide(
             out["guide_via_proxy_requests"] = _summarize(_st, _tx)
         except Exception as e:
             out["guide_via_proxy_requests"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
+
+    # 2) requests + trust_env=False — 시스템 프록시 env 무시. 성공 기대.
+    if proxy:
+        try:
+            import asyncio as _aio2, requests as _req2
+            def _rget2():
+                s = _req2.Session()
+                s.trust_env = False
+                rr = s.get(url, params=params,
+                           proxies={"http": proxy, "https": proxy}, timeout=25)
+                return rr.status_code, rr.text
+            _st2, _tx2 = await _aio2.to_thread(_rget2)
+            out["guide_via_proxy_requests_notrust"] = _summarize(_st2, _tx2)
+        except Exception as e:
+            out["guide_via_proxy_requests_notrust"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
+
+    # 3) 컨테이너의 프록시 관련 시스템 env 진단(값 아님 — host:port 만).
+    _proxy_env = {}
+    for _n in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy",
+               "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"):
+        _v = os.getenv(_n)
+        if _v:
+            try:
+                from urllib.parse import urlparse as _up2
+                _pp = _up2(_v if "://" in _v else "http://" + _v)
+                _proxy_env[_n] = f"{_pp.hostname}:{_pp.port}" if _pp.hostname else "set"
+            except Exception:
+                _proxy_env[_n] = "set"
+    out["system_proxy_env"] = _proxy_env or "none"
 
     return {
         "path": path,
