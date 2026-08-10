@@ -5,6 +5,7 @@ ROUTERS = [
     {"module": "routers.building_register", "prefix": "/building-register"},
     {"module": "routers.biz_verify"},
     {"module": "routers.kosha_apis"},
+    {"module": "routers.kosha_collect"},   # KOSHA 데이터 수집+DB저장 (POST /kosha-collect/run, GET /status)
     {"module": "routers.messaging"},
     {"module": "routers.fcm"},
     {"module": "routers.mail"},
