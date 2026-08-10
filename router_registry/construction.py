@@ -1,6 +1,10 @@
 """Construction & Safety — 건설안전·교육·장비·인력 라우터."""
 ROUTERS = [
     {"module": "routers.construction", "prefix": "/construction", "tags": ["건설안전"]},
+    # 건설 공정별 점검항목 마스터 조회 /construction/check-templates
+    # prefix 를 두지 않는다 — 모듈이 데코레이터에 절대경로를 적어 위 construction 과
+    # 경로가 겹치지 않으며, prefix 를 주면 /construction/construction/... 이 된다.
+    {"module": "routers.construction_check"},
     {"module": "routers.subcontractors"},
     {"module": "routers.tbm"},
     {"module": "routers.tbm_templates"},
