@@ -499,31 +499,55 @@ async def debug_guide(
     num_rows: int = Query(5, ge=1, le=20),
 ):
     """
-    [임시 · 조사용 · 읽기 전용] KOSHA GUIDE raw 응답 확인.
-    G-msmq1ip1: _collect_guide 가 upserted=0 인 원인(callApiId=1050 이 GUIDE 에 안 맞을
-    가능성)을 실측한다. DB 쓰기 없음 — data.go.kr 실제 응답의 header(resultCode/resultMsg)·
-    totalCount·items 표본만 반환한다. 시크릿 미출력: serviceKey 는 응답에 포함하지 않는다.
-    원인 확정 후 이 엔드포인트는 제거한다(디버그 잔재 금지).
+    [임시 · 조사용 · 읽기 전용] KOSHA API raw 응답 확인 — KoshaAPI.get 우회.
+    G-msmq1ip1: _collect_guide 및 정상 타깃(constplan 등)까지 모두 resp_keys=["body"]·
+    totalCount=0 인 원인을 실측한다. KoshaAPI.get 은 예외를 삼켜 원인을 숨기므로, 여기서는
+    직접 httpx 로 호출해 실제 HTTP status·응답 본문 앞부분·예외 메시지를 노출한다.
+
+    시크릿 미출력 원칙: serviceKey 값은 절대 반환하지 않는다 — 존재 여부와 길이(어느 env
+    변수에서 왔는지)만 노출한다. 응답 본문에 serviceKey 가 에코될 가능성은 없으나(POST 아님),
+    혹시 위해 응답 text 는 앞 800자만 자르고 'serviceKey=' 뒤를 마스킹한다.
+    DB 쓰기 없음. 원인 확정 후 이 엔드포인트는 제거한다.
     """
-    resp = await KoshaAPI.get(path, {"callApiId": call_api_id, "pageNo": page_no, "numOfRows": num_rows})
-    items = KoshaAPI.items(resp)
-    total = KoshaAPI.total(resp)
-    header = {}
-    if isinstance(resp, dict):
-        h = resp.get("header") or {}
-        if isinstance(h, dict):
-            header = {"resultCode": h.get("resultCode"), "resultMsg": h.get("resultMsg")}
-        # header 가 body 안에 있는 변형 대응
-        body = resp.get("body")
-        if not header and isinstance(body, dict):
-            header = {k: body.get(k) for k in ("resultCode", "resultMsg") if k in body}
+    import httpx as _httpx
+
+    # serviceKey 진단 — 값이 아니라 '어느 env 에서 왔고 길이 얼마'만.
+    key_src, key_len = None, 0
+    for name in ("DATA_GO_KR_SERVICE_KEY", "KOSHA_SERVICE_KEY", "BUILDING_API_KEY"):
+        v = os.getenv(name)
+        if v:
+            key_src, key_len = name, len(v)
+            break
+    svc_key = _get_service_key()
+
+    http_status, err, raw_head, parsed_keys = None, None, None, None
+    try:
+        params = {"callApiId": call_api_id, "pageNo": page_no,
+                  "numOfRows": num_rows, "serviceKey": svc_key}
+        async with _httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(f"{BASE}/{path}", params=params)
+            http_status = r.status_code
+            text = r.text or ""
+            # serviceKey 마스킹(혹시 에러 XML 이 요청 URL 을 에코하는 경우 대비)
+            if svc_key and svc_key in text:
+                text = text.replace(svc_key, "<SERVICE_KEY_MASKED>")
+            raw_head = text[:800]
+            try:
+                j = json.loads(text)
+                parsed_keys = list(j.keys()) if isinstance(j, dict) else None
+            except Exception:
+                parsed_keys = "not-json(xml?)"
+    except Exception as e:
+        err = f"{type(e).__name__}: {str(e)[:300]}"
+
     return {
-        "tried": {"path": path, "callApiId": call_api_id, "pageNo": page_no, "numOfRows": num_rows},
-        "header": header,
-        "totalCount": total,
-        "item_count": len(items),
-        "items_sample": items[:3],
-        "resp_keys": list(resp.keys()) if isinstance(resp, dict) else None,
+        "tried": {"path": path, "callApiId": call_api_id,
+                  "pageNo": page_no, "numOfRows": num_rows},
+        "service_key": {"present": bool(svc_key), "source_env": key_src, "length": key_len},
+        "http_status": http_status,
+        "exception": err,
+        "parsed_top_keys": parsed_keys,
+        "raw_response_head": raw_head,
     }
 
 
