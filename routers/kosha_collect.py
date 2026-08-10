@@ -535,19 +535,12 @@ async def debug_guide(
     num_rows: int = Query(5, ge=1, le=20),
 ):
     """
-    [임시 · 조사용 · 읽기 전용] outbound IP 실측 + 프록시 경유/직접 GUIDE 호출 비교.
-    G-msmq1ip1: 브라우저(일반 IP)로는 정식 키가 NORMAL_CODE(totalCount 1039)인데
-    서버 경유는 코드10. 원인은 outbound IP — data.go.kr 에 등록된 고정 IP 와 서버가
-    실제 나가는 IP 불일치로 판정. 고정 IP 재세팅(1.234.79.95, 카페24 프록시) 후 재실측.
-
-    확인 항목:
-      - ip_direct       : 프록시 없이 나갈 때의 공인 IP (Railway 유동 egress)
-      - ip_via_proxy    : OUTBOUND_PROXY 경유 시 공인 IP (고정 IP 여야 함)
-      - guide_direct    : 프록시 없이 GUIDE 호출 결과
-      - guide_via_proxy : OUTBOUND_PROXY 경유 GUIDE 호출 결과
-
-    시크릿 미출력: serviceKey 값 미반환(응답 text 내 마스킹, 길이만). DB 쓰기 없음.
-    확정 후 이 엔드포인트 제거.
+    [임시 · 조사용 · 읽기 전용] 프록시 경유 params= vs URL문자열 비교.
+    G-msmq1ip1: 프록시 ip_via_proxy=1.234.79.95 확인·서버 curl 은 NORMAL_CODE 인데
+    tai-api httpx params= 는 코드10. httpx 재인코딩 의심. 두 방식으로 실측:
+      - guide_via_proxy_params : params= 딕셔너리 (httpx 인코딩)
+      - guide_via_proxy_urlstr : URL 문자열 직접 (서버 curl 과 동일)
+    시크릿 미출력: serviceKey 값 미반환(응답 text 내 마스킹). DB 쓰기 없음. 확정 후 제거.
     """
     import httpx as _httpx
 
@@ -558,11 +551,14 @@ async def debug_guide(
             key_src, key_len = name, len(v)
             break
     svc_key = _get_service_key()
-    proxy = _build_proxy_url()   # user:pass@host:port 조합
+    proxy = _build_proxy_url()
 
     url = f"{BASE}/{path}"
     params = {"callApiId": call_api_id, "pageNo": page_no,
               "numOfRows": num_rows, "serviceKey": svc_key}
+    # 서버 curl 과 완전 동일한 URL 문자열(파라미터 직접 append, httpx 재인코딩 회피)
+    url_full = (f"{url}?callApiId={call_api_id}&pageNo={page_no}"
+                f"&numOfRows={num_rows}&serviceKey={svc_key}")
 
     def _summarize(status, text):
         masked = text or ""
@@ -608,22 +604,23 @@ async def debug_guide(
         except Exception as e:
             out["ip_via_proxy"] = f"ERR {type(e).__name__}: {str(e)[:150]}"
 
-    # 3) GUIDE 호출 — 직접
-    try:
-        async with _httpx.AsyncClient(timeout=15.0) as c:
-            r = await c.get(url, params=params)
-            out["guide_direct"] = _summarize(r.status_code, r.text)
-    except Exception as e:
-        out["guide_direct"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
-
-    # 4) GUIDE 호출 — 프록시 경유 (성공 시 NORMAL_CODE·totalCount 1039)
+    # 3) GUIDE 프록시 경유 — params= 방식 (httpx 가 딕셔너리 인코딩)
     if proxy:
         try:
             async with _httpx.AsyncClient(timeout=20.0, proxy=proxy) as c:
                 r = await c.get(url, params=params)
-                out["guide_via_proxy"] = _summarize(r.status_code, r.text)
+                out["guide_via_proxy_params"] = _summarize(r.status_code, r.text)
         except Exception as e:
-            out["guide_via_proxy"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
+            out["guide_via_proxy_params"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
+
+    # 4) GUIDE 프록시 경유 — URL 직접 방식 (서버 curl 과 동일한 문자열)
+    if proxy:
+        try:
+            async with _httpx.AsyncClient(timeout=20.0, proxy=proxy) as c:
+                r = await c.get(url_full)
+                out["guide_via_proxy_urlstr"] = _summarize(r.status_code, r.text)
+        except Exception as e:
+            out["guide_via_proxy_urlstr"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
 
     return {
         "path": path,
