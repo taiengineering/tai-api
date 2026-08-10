@@ -37,6 +37,36 @@ def _get_service_key() -> str:
         or os.getenv("BUILDING_API_KEY", "")
     )
 
+
+def _build_proxy_url() -> Optional[str]:
+    """
+    아웃바운드 프록시 URL 조합 — data.go.kr 고정 IP 경유용.
+    OUTBOUND_PROXY(예: http://1.234.79.95) + PROXY_USER/PROXY_PASS + 포트(기본 8080).
+    - 인증 정보(PROXY_USER/PASS)는 URL 에 합쳐 넣되, 값은 절대 로그/응답에 노출하지 않는다.
+    - OUTBOUND_PROXY 에 포트가 없으면 PROXY_PORT(기본 8080)를 붙인다.
+    - OUTBOUND_PROXY 미설정이면 None → 호출부는 프록시 없이 직접 나간다.
+    """
+    from urllib.parse import urlparse, quote
+    raw = os.getenv("OUTBOUND_PROXY") or ""
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = "http://" + raw
+    p = urlparse(raw)
+    scheme = p.scheme or "http"
+    host = p.hostname
+    if not host:
+        return None
+    port = p.port or int(os.getenv("PROXY_PORT", "8080"))
+    user = os.getenv("PROXY_USER") or ""
+    pw = os.getenv("PROXY_PASS") or ""
+    if user and pw:
+        auth = f"{quote(user, safe='')}:{quote(pw, safe='')}@"
+    else:
+        auth = ""
+    return f"{scheme}://{auth}{host}:{port}"
+
+
 BASE      = "https://apis.data.go.kr/B552468"
 MAX_ROWS  = 100
 MAX_PAGES = 500   # v1.6.0: 100→500 (10,000건 한도 해제. 실 totalCount 기반으로 자동 중단됨)
@@ -107,8 +137,14 @@ class KoshaAPI:
     @staticmethod
     async def get(path: str, params: dict) -> dict:
         params["serviceKey"] = _get_service_key()
+        # data.go.kr 은 고정 IP 화이트리스트 — 아웃바운드 프록시 경유(있으면).
+        # 프록시 미설정이면 직접 나간다(하위호환). 인증 정보는 _build_proxy_url 이 조합.
+        proxy = _build_proxy_url()
+        client_kwargs = {"timeout": 30.0}
+        if proxy:
+            client_kwargs["proxy"] = proxy
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(**client_kwargs) as client:
                 resp = await client.get(f"{BASE}/{path}", params=params)
                 resp.raise_for_status()
                 text = resp.text
@@ -522,7 +558,7 @@ async def debug_guide(
             key_src, key_len = name, len(v)
             break
     svc_key = _get_service_key()
-    proxy = os.getenv("OUTBOUND_PROXY") or None
+    proxy = _build_proxy_url()   # user:pass@host:port 조합
 
     url = f"{BASE}/{path}"
     params = {"callApiId": call_api_id, "pageNo": page_no,
@@ -543,37 +579,47 @@ async def debug_guide(
         except Exception:
             return {"http_status": status, "parsed": "not-json(xml?)", "head": masked[:300]}
 
-    out = {"proxy_env_present": bool(proxy)}
+    # 프록시 URL 은 시크릿 미노출 — 존재/host:port 만.
+    proxy_display = None
+    if proxy:
+        try:
+            from urllib.parse import urlparse as _up
+            _p = _up(proxy)
+            proxy_display = f"{_p.scheme}://{_p.hostname}:{_p.port}"
+        except Exception:
+            proxy_display = "set"
 
-    # 1) 공인 IP 실측 — 직접
+    out = {"proxy_present": bool(proxy), "proxy_host_port": proxy_display}
+
+    # 1) 공인 IP 실측 — 직접 (짧은 타임아웃: hang 방지)
     try:
-        async with _httpx.AsyncClient(timeout=15.0) as c:
+        async with _httpx.AsyncClient(timeout=8.0) as c:
             r = await c.get("https://api.ipify.org?format=json")
             out["ip_direct"] = r.json().get("ip")
     except Exception as e:
         out["ip_direct"] = f"ERR {type(e).__name__}: {str(e)[:120]}"
 
-    # 2) 공인 IP 실측 — 프록시 경유
+    # 2) 공인 IP 실측 — 프록시 경유 (고정 IP 1.234.79.95 여야 함)
     if proxy:
         try:
-            async with _httpx.AsyncClient(timeout=15.0, proxy=proxy) as c:
+            async with _httpx.AsyncClient(timeout=10.0, proxy=proxy) as c:
                 r = await c.get("https://api.ipify.org?format=json")
                 out["ip_via_proxy"] = r.json().get("ip")
         except Exception as e:
-            out["ip_via_proxy"] = f"ERR {type(e).__name__}: {str(e)[:120]}"
+            out["ip_via_proxy"] = f"ERR {type(e).__name__}: {str(e)[:150]}"
 
     # 3) GUIDE 호출 — 직접
     try:
-        async with _httpx.AsyncClient(timeout=30.0) as c:
+        async with _httpx.AsyncClient(timeout=15.0) as c:
             r = await c.get(url, params=params)
             out["guide_direct"] = _summarize(r.status_code, r.text)
     except Exception as e:
         out["guide_direct"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
 
-    # 4) GUIDE 호출 — 프록시 경유
+    # 4) GUIDE 호출 — 프록시 경유 (성공 시 NORMAL_CODE·totalCount 1039)
     if proxy:
         try:
-            async with _httpx.AsyncClient(timeout=30.0, proxy=proxy) as c:
+            async with _httpx.AsyncClient(timeout=20.0, proxy=proxy) as c:
                 r = await c.get(url, params=params)
                 out["guide_via_proxy"] = _summarize(r.status_code, r.text)
         except Exception as e:
