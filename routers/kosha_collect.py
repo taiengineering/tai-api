@@ -392,22 +392,24 @@ async def _collect_risk_assessment(since_date: str = INIT_DATE, full_refresh: bo
     return {"target": "risk_assessment", "since": since, "upserted": total_upserted}
 
 
-async def _collect_guide(full_refresh: bool = False) -> dict:
+async def _collect_guide(full_refresh: bool = False, call_api_id: str = "1050") -> dict:
     """
     v1.7.0: 신 KOSHA GUIDE 전용 API(getKoshaGuide) 전환.
     - 엔드포인트: koshaguide/getKoshaGuide (Base apis.data.go.kr/B552468)
-    - 필수: callApiId=1050 (미입력시 에러99). serviceKey 는 KoshaAPI.get 이 주입.
+    - 필수: callApiId (미입력시 에러99). serviceKey 는 KoshaAPI.get 이 주입.
     - 응답: body.items.item[] — techGdlnNm(규정명)/techGdlnNo(규정번호)/
             techGdlnOfancYmd(공표일자)/fileDownloadUrl(다운로드링크).
     - kosha_guide 스키마(guide_no/guide_title/category/guide_url/regist_date/raw_json) 매핑.
     - 폐기된 srch/smartSearch 키워드 우회 제거(0건 원인).
+
+    call_api_id: 기본 "1050". debug 조사(G-msmq1ip1)로 올바른 값 확정 시까지 오버라이드 가능.
     """
     sb = get_supabase()
     total_upserted = 0
     for page in range(1, MAX_PAGES + 1):
         resp = await KoshaAPI.get(
             "koshaguide/getKoshaGuide",
-            {"callApiId": "1050", "pageNo": page, "numOfRows": MAX_ROWS}
+            {"callApiId": call_api_id, "pageNo": page, "numOfRows": MAX_ROWS}
         )
         items = KoshaAPI.items(resp)
         if not items:
@@ -487,6 +489,42 @@ async def _dispatch(target: str, since_date: str, full_refresh: bool, start_page
     elif target == "risk-assessment":         return await _collect_risk_assessment(since_date, full_refresh)
     elif target == "guide":                   return await _collect_guide(full_refresh)
     raise ValueError(f"Unknown target: {target}")
+
+
+@router.get("/debug-guide")
+async def debug_guide(
+    call_api_id: str = Query("1050", description="시험할 callApiId 값 (건설재해=1050 충돌 조사용)"),
+    path: str = Query("koshaguide/getKoshaGuide", description="시험할 KOSHA API 경로"),
+    page_no: int = Query(1, ge=1),
+    num_rows: int = Query(5, ge=1, le=20),
+):
+    """
+    [임시 · 조사용 · 읽기 전용] KOSHA GUIDE raw 응답 확인.
+    G-msmq1ip1: _collect_guide 가 upserted=0 인 원인(callApiId=1050 이 GUIDE 에 안 맞을
+    가능성)을 실측한다. DB 쓰기 없음 — data.go.kr 실제 응답의 header(resultCode/resultMsg)·
+    totalCount·items 표본만 반환한다. 시크릿 미출력: serviceKey 는 응답에 포함하지 않는다.
+    원인 확정 후 이 엔드포인트는 제거한다(디버그 잔재 금지).
+    """
+    resp = await KoshaAPI.get(path, {"callApiId": call_api_id, "pageNo": page_no, "numOfRows": num_rows})
+    items = KoshaAPI.items(resp)
+    total = KoshaAPI.total(resp)
+    header = {}
+    if isinstance(resp, dict):
+        h = resp.get("header") or {}
+        if isinstance(h, dict):
+            header = {"resultCode": h.get("resultCode"), "resultMsg": h.get("resultMsg")}
+        # header 가 body 안에 있는 변형 대응
+        body = resp.get("body")
+        if not header and isinstance(body, dict):
+            header = {k: body.get(k) for k in ("resultCode", "resultMsg") if k in body}
+    return {
+        "tried": {"path": path, "callApiId": call_api_id, "pageNo": page_no, "numOfRows": num_rows},
+        "header": header,
+        "totalCount": total,
+        "item_count": len(items),
+        "items_sample": items[:3],
+        "resp_keys": list(resp.keys()) if isinstance(resp, dict) else None,
+    }
 
 
 @router.get("/status")
