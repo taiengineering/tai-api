@@ -7,6 +7,11 @@ v1.7.0 (2026-08-10):
         폐기된 srch/smartSearch 키워드 우회 → getKoshaGuide(koshaguide) 전용 API.
         callApiId=1050 필수. 응답 body.items.item[] (techGdlnNm/No/OfancYmd/fileDownloadUrl).
 
+  [주의] tai-api(Railway) egress 는 data.go.kr 프록시 경유 시 코드10(실측 확정,
+        urllib3 버전 무관 — 인프라 원인). KOSHA 수집은 카페24 서버(고정 IP)에서
+        직접 실행하는 스크립트(kosha_guide_collect.py)로 수행한다. 이 라우터의
+        /run 은 프록시 미설정 환경(직접 나가는 곳)에서만 정상 동작한다.
+
 v1.6.0 (2026-05-02):
   [FIX] MAX_PAGES 100→500 (10,000건 한도 해제)
   [ADD] _collect_safety_materials()에 start_page 파라미터 추가
@@ -40,11 +45,14 @@ def _get_service_key() -> str:
 
 def _build_proxy_url() -> Optional[str]:
     """
-    아웃바운드 프록시 URL 조합 — data.go.kr 고정 IP 경유용.
-    OUTBOUND_PROXY(예: http://1.234.79.95) + PROXY_USER/PROXY_PASS + 포트(기본 8080).
+    아웃바운드 프록시 URL 조합 — data.go.kr 고정 IP 경유용(선택).
+    OUTBOUND_PROXY + PROXY_USER/PROXY_PASS + 포트(기본 8080).
     - 인증 정보(PROXY_USER/PASS)는 URL 에 합쳐 넣되, 값은 절대 로그/응답에 노출하지 않는다.
-    - OUTBOUND_PROXY 에 포트가 없으면 PROXY_PORT(기본 8080)를 붙인다.
-    - OUTBOUND_PROXY 미설정이면 None → 호출부는 프록시 없이 직접 나간다.
+    - OUTBOUND_PROXY 미설정이면 None → 호출부는 프록시 없이 직접 나간다(기본).
+
+    참고: tai-api(Railway) 에서는 프록시 경유해도 data.go.kr 코드10(인프라 원인, 실측).
+    실제 KOSHA 수집은 고정 IP 서버의 별도 스크립트로 수행한다. 이 함수/프록시 경로는
+    프록시가 실제로 통하는 환경을 위한 하위호환으로만 남겨둔다.
     """
     from urllib.parse import urlparse, quote
     raw = os.getenv("OUTBOUND_PROXY") or ""
@@ -159,17 +167,13 @@ class KoshaAPI:
     @staticmethod
     async def get(path: str, params: dict) -> dict:
         params["serviceKey"] = _get_service_key()
-        # data.go.kr 은 고정 IP 화이트리스트 — 아웃바운드 프록시 경유(있으면).
-        # 프록시 미설정이면 직접 나간다(하위호환). 인증 정보는 _build_proxy_url 이 조합.
+        # data.go.kr 은 고정 IP 화이트리스트 — 프록시 설정 시 경유, 없으면 직접(기본).
         proxy = _build_proxy_url()
         url = f"{BASE}/{path}"
         try:
             if proxy:
-                # 프록시 경유 HTTPS 는 requests(동기)로 — Squid 는 TCP_TUNNEL(내용 무변형)이라
-                # 프록시 무관하나, tai-api 의 requests params= 인코딩이 서버 curl 과 달라
-                # data.go.kr 이 코드10 을 주는 문제. 서버 curl 과 100% 동일하게 쿼리스트링을
-                # 직접 조립해 URL 에 붙인다(params= 미사용). trust_env=False 로 시스템 프록시
-                # env 차단. asyncio.to_thread 로 async 논블로킹.
+                # 프록시 경유 시 requests(동기, URL 직접 조립) + trust_env=False.
+                # asyncio.to_thread 로 async 논블로킹.
                 import asyncio, requests
                 from urllib.parse import urlencode
                 full_url = f"{url}?{urlencode(params)}"
@@ -459,9 +463,9 @@ async def _collect_guide(full_refresh: bool = False, call_api_id: str = "1050") 
     - 응답: body.items.item[] — techGdlnNm(규정명)/techGdlnNo(규정번호)/
             techGdlnOfancYmd(공표일자)/fileDownloadUrl(다운로드링크).
     - kosha_guide 스키마(guide_no/guide_title/category/guide_url/regist_date/raw_json) 매핑.
-    - 폐기된 srch/smartSearch 키워드 우회 제거(0건 원인).
 
-    call_api_id: 기본 "1050". debug 조사(G-msmq1ip1)로 올바른 값 확정 시까지 오버라이드 가능.
+    참고: tai-api 에서 프록시 경유 시 data.go.kr 코드10(인프라). 실제 수집은 고정 IP
+    서버 스크립트(kosha_guide_collect.py)로 수행하며, 이미 kosha_guide 1039건 적재됨.
     """
     sb = get_supabase()
     total_upserted = 0
@@ -548,102 +552,6 @@ async def _dispatch(target: str, since_date: str, full_refresh: bool, start_page
     elif target == "risk-assessment":         return await _collect_risk_assessment(since_date, full_refresh)
     elif target == "guide":                   return await _collect_guide(full_refresh)
     raise ValueError(f"Unknown target: {target}")
-
-
-@router.get("/debug-guide")
-async def debug_guide(
-    call_api_id: str = Query("1050", description="callApiId 고정값 (명세: 1050)"),
-    path: str = Query("koshaguide/getKoshaGuide", description="KOSHA API 경로"),
-    page_no: int = Query(1, ge=1),
-    num_rows: int = Query(5, ge=1, le=20),
-):
-    """
-    [임시 · 조사용 · 읽기 전용] 프록시 경유 requests URL직접 vs params + 라이브러리 버전.
-    G-msn171po: 서버 requests=성공/tai-api requests=코드10. requirements 버전 핀 없음
-    → 컨테이너 urllib3/requests 버전이 서버와 달라 프록시 CONNECT 처리 차이 의심.
-    lib_versions 로 실측. serviceKey 마스킹. DB 쓰기 없음. 확정 후 제거.
-    """
-    key_src, key_len = None, 0
-    for name in ("DATA_GO_KR_SERVICE_KEY", "KOSHA_SERVICE_KEY", "BUILDING_API_KEY"):
-        v = os.getenv(name)
-        if v:
-            key_src, key_len = name, len(v)
-            break
-    svc_key = _get_service_key()
-    proxy = _build_proxy_url()
-
-    url = f"{BASE}/{path}"
-    params = {"callApiId": call_api_id, "pageNo": page_no,
-              "numOfRows": num_rows, "serviceKey": svc_key}
-
-    def _summarize(status, text):
-        masked = text or ""
-        if svc_key and svc_key in masked:
-            masked = masked.replace(svc_key, "<KEY>")
-        try:
-            j = json.loads(masked)
-            body = j.get("body") if isinstance(j, dict) else None
-            tc = body.get("totalCount") if isinstance(body, dict) else None
-            hdr = j.get("header") if isinstance(j, dict) else None
-            return {"http_status": status, "totalCount": tc,
-                    "resultCode": (hdr or {}).get("resultCode") if isinstance(hdr, dict) else None,
-                    "head": masked[:300]}
-        except Exception:
-            return {"http_status": status, "parsed": "not-json(xml?)", "head": masked[:300]}
-
-    proxy_display = None
-    if proxy:
-        try:
-            from urllib.parse import urlparse as _up
-            _p = _up(proxy)
-            proxy_display = f"{_p.scheme}://{_p.hostname}:{_p.port}"
-        except Exception:
-            proxy_display = "set"
-
-    out = {"proxy_present": bool(proxy), "proxy_host_port": proxy_display}
-
-    # 라이브러리 버전 진단 — 서버(성공) vs tai-api(실패) urllib3/requests 버전 비교.
-    try:
-        import requests as _rv, urllib3 as _uv
-        out["lib_versions"] = {"requests": getattr(_rv, "__version__", "?"),
-                               "urllib3": getattr(_uv, "__version__", "?")}
-    except Exception as e:
-        out["lib_versions"] = {"error": f"{type(e).__name__}: {str(e)[:100]}"}
-
-    # 1) requests + params= (기존 실패 방식, 대조)
-    if proxy:
-        try:
-            import asyncio as _aio, requests as _req
-            def _rget():
-                s = _req.Session(); s.trust_env = False
-                rr = s.get(url, params=params,
-                           proxies={"http": proxy, "https": proxy}, timeout=25)
-                return rr.status_code, rr.text
-            _st, _tx = await _aio.to_thread(_rget)
-            out["guide_via_proxy_params"] = _summarize(_st, _tx)
-        except Exception as e:
-            out["guide_via_proxy_params"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
-
-    # 2) requests + URL 직접 조립 (서버 curl 동일, 성공 기대)
-    if proxy:
-        try:
-            import asyncio as _aio2, requests as _req2
-            from urllib.parse import urlencode as _ue
-            _full = f"{url}?{_ue(params)}"
-            def _rget2():
-                s = _req2.Session(); s.trust_env = False
-                rr = s.get(_full, proxies={"http": proxy, "https": proxy}, timeout=25)
-                return rr.status_code, rr.text
-            _st2, _tx2 = await _aio2.to_thread(_rget2)
-            out["guide_via_proxy_urlstr"] = _summarize(_st2, _tx2)
-        except Exception as e:
-            out["guide_via_proxy_urlstr"] = {"exception": f"{type(e).__name__}: {str(e)[:200]}"}
-
-    return {
-        "path": path,
-        "service_key": {"present": bool(svc_key), "source_env": key_src, "length": key_len},
-        "results": out,
-    }
 
 
 @router.get("/status")
