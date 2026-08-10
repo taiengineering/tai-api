@@ -128,6 +128,10 @@ def _build_step1_body(body: AnonymousDiagnosisCreate) -> DiagnoseStep1Body:
     region  = (body.region or "").strip()
     inp: Dict[str, Any] = {"region": region, "site_kind": sk, "scale": sc, "anonymous_flow": True}
 
+    # WO-E2E-P001-HAS-HAZMAT-ISOLATED-001: E2E sentinel(검증로)+제조업에만 has_hazardous_material 주입. 실사용자 미적용. 실험 후 원복.
+    if sector == "MANUFACTURING" and "검증로" in region:
+        inp["has_hazardous_material"] = True
+
     if sector == "CONSTRUCTION":
         return DiagnoseStep1Body(
             factory_id=None, sector=sector, input=inp,
