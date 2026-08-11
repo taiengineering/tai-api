@@ -1,5 +1,5 @@
 """
-TBM 템플릿 업로더 — tbm_templates.py  v1.1.0
+TBM 템플릿 업로더 — tbm_templates.py  v1.1.1
 
 GET    /tbm-templates              템플릿 목록 (sort: popular|recent|name)
 POST   /tbm-templates              템플릿 생성
@@ -10,10 +10,9 @@ POST   /tbm-templates/{id}/use     템플릿으로 TBM 실행 (tbm_meetings 생�
 
 DB: tbm_templates, tbm_meetings, tbm_attendees
 
-v1.1.0 (2026-08-11):
-  [CHANGE] risk_items 시드 정본 shape로 정합 — RiskItem {description, ppe, precaution}
-           (이전 {content, category}). SafetyItem {description} (이전 {content}).
-           기존 시드 25개 템플릿과 동일한 키. /use 복사 로직은 변경 없음.
+v1.1.0 (2026-08-11): risk_items/safety_items 시드 정본 shape — RiskItem {description, ppe, precaution}, SafetyItem {description}.
+v1.1.1 (2026-08-11): 시설(factory) 단위 스코핑 — 목록은 factory_id 지정 시 (factory_id IS NULL 프리셋) OR (해당 시설 소유),
+           미지정 시 프리셋만 반환. 타 시설 템플릿 노출 방지.
 """
 
 import uuid
@@ -141,8 +140,14 @@ async def list_templates(
     else:
         query = query.neq("template_name", "__LIBRARY__")
 
+    # 시설(factory) 단위 스코핑:
+    #   factory_id 지정 → 전역 프리셋(factory_id IS NULL) + 해당 시설 소유만
+    #   미지정     → 전역 프리셋만 (타 시설 템플릿 노출 방지)
     if factory_id:
-        query = query.eq("factory_id", factory_id)
+        query = query.or_(f"factory_id.is.null,factory_id.eq.{factory_id}")
+    else:
+        query = query.filter("factory_id", "is", "null")
+
     if company_id:
         query = query.eq("company_id", company_id)
     if q:
