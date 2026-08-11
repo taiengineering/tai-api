@@ -1,4 +1,5 @@
-# routers/auth.py — v3.8.0
+# routers/auth.py — v3.8.1
+# v3.8.1: users INSERT 시 sector 명시 — 컬럼 기본값 'INDUSTRY' 가 users_sector_check 를 위반
 # v3.8.0: verify-otp 세션 발급 — OTP 통과 시 access_token 반환 + worker_registry 배선
 #         (Phase 3 A단계, DESIGN_phase3-leader-auth_v2 §4)
 # v3.7.0: #65 RLS bypass — get_supabase()를 service_role key로 변경 (모든 테이블 조작 정상화)
@@ -31,6 +32,10 @@ RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 # GoTrue 는 email 이 필수이나 현장 작업자는 이메일을 갖지 않는 경우가 많다.
 # 실제 수신용이 아니며 로그인 식별자로만 쓴다.
 WORKER_EMAIL_DOMAIN = os.getenv("WORKER_EMAIL_DOMAIN", "worker.taieng.co.kr")
+
+# users_sector_check 가 허용하는 값. 컬럼 기본값('INDUSTRY')이 이 목록에 없어
+# sector 를 명시하지 않은 INSERT 는 23514 로 실패한다(기본값 오타).
+DEFAULT_SECTOR = "INDUSTRIAL"
 
 def get_supabase():
     """v3.7.0: auth.py는 백엔드 라우터 — service_role key로 RLS bypass"""
@@ -136,7 +141,7 @@ class VerifyOtpRequest(BaseModel):
 
 @router.get("/test")
 def test():
-    return {"message": "auth router alive", "version": "3.8.0"}
+    return {"message": "auth router alive", "version": "3.8.1"}
 
 
 # ════════════════════════════════════════════
@@ -281,6 +286,21 @@ def _ensure_user_row(supabase, phone: str) -> Optional[dict]:
         return None
 
     clean = normalize_phone(phone)
+
+    # v3.8.1: sector 는 반드시 명시한다.
+    # users.sector 의 컬럼 기본값이 'INDUSTRY' 인데 users_sector_check 는
+    # BUILDING|INDUSTRIAL|CONSTRUCTION|SPECIAL_FACILITY|COMMON (또는 NULL)만
+    # 허용해, 미지정 INSERT 는 23514 제약 위반으로 실패한다(기본값 오타).
+    # worker_registry 에는 sector 컬럼이 없으므로 소속 시설에서 가져온다.
+    sector = DEFAULT_SECTOR
+    if wr.get("factory_id"):
+        try:
+            f = supabase.table("factories").select("sector").eq("id", wr["factory_id"]).limit(1).execute()
+            if f.data and f.data[0].get("sector"):
+                sector = f.data[0]["sector"]
+        except Exception:
+            pass
+
     user_code = "USR-" + datetime.now().strftime("%Y%m%d") + "-" + "".join(random.choices(string.digits, k=4))
     row = {
         "email":       _worker_email(clean),
@@ -291,6 +311,7 @@ def _ensure_user_row(supabase, phone: str) -> Optional[dict]:
         "user_code":   user_code,
         "company_id":  wr.get("company_id"),
         "factory_id":  wr.get("factory_id"),
+        "sector":      sector,
         "status_code": "ACTIVE",
         "is_active":   True,
         "created_at":  _now_iso(),
@@ -299,10 +320,13 @@ def _ensure_user_row(supabase, phone: str) -> Optional[dict]:
     try:
         res = supabase.table("users").insert(row).execute()
         if res.data:
-            log.info(f"[verify-otp] users 생성 phone={clean} from worker_registry")
+            log.info(f"[verify-otp] users 생성 phone={clean} sector={sector}")
             return res.data[0]
+        log.error(f"[verify-otp] users INSERT 응답 비어 있음 phone={clean}")
     except Exception as e:
-        log.error(f"[verify-otp] users 생성 실패 phone={clean}: {e}")
+        # 실패 원인을 특정할 수 있도록 시도한 값을 함께 남긴다.
+        log.error(f"[verify-otp] users 생성 실패 phone={clean} sector={sector} "
+                  f"company={row.get('company_id')} factory={row.get('factory_id')}: {e}")
     return None
 
 
@@ -371,11 +395,11 @@ def verify_otp(req: VerifyOtpRequest):
         # worker_registry 에도 없는 번호. 종전과 동일하게 빈 프로필을 돌려준다.
         return {
             "id": None, "worker_id": None, "phone": phone, "name": phone,
-            "sector": "INDUSTRIAL", "factory_id": None, "site_id": None,
+            "sector": DEFAULT_SECTOR, "factory_id": None, "site_id": None,
             "company": "", "job_type": "",
         }
 
-    sector     = user.get("sector") or "INDUSTRIAL"
+    sector     = user.get("sector") or DEFAULT_SECTOR
     factory_id = user.get("factory_id")
     company_id = user.get("company_id")
     factory_name = ""
@@ -741,6 +765,8 @@ def register(req: RegisterRequest):
             "auth_id": auth_id, "email": req.email, "phone": phone_normalized,
             "name": req.name, "username": phone_normalized, "role_code": req.role_code,
             "company_id": company_id, "user_code": user_code, "status_code": "PENDING",
+            # v3.8.1: sector 미지정 시 컬럼 기본값 'INDUSTRY' 가 CHECK 제약을 위반한다.
+            "sector": DEFAULT_SECTOR,
             "is_active": False, "allow_push": True, "allow_sms": True,
             "allow_email": True, "allow_kakao": False,
             "created_at": _now_iso(), "updated_at": _now_iso(),
