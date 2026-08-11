@@ -11,6 +11,8 @@ ROUTERS = [
     # {"module": "routers.file_upload"},  # 모듈 삭제됨 — 필요 시 재생성
     {"module": "routers.notifications"},
     {"module": "routers.onboarding"},
+    # 조직 계층: 부서·팀·그룹·근로자배정 (TBM 팀·그룹 하이브리드 Phase 1)
+    {"module": "routers.org"},
     # 공용 휴무 캘린더 — 캘린더를 쓰는 모든 기능이 공유 (org_holiday / holiday_svc)
     {"module": "routers.holidays"},
     # Phase 1: FacilityProfile (입력 보존·복원·감사)
