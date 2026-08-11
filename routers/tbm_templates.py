@@ -1,5 +1,5 @@
 """
-TBM 템플릿 업로더 — tbm_templates.py  v1.2.0
+TBM 템플릿 업로더 — tbm_templates.py  v1.3.0
 
 GET    /tbm-templates              템플릿 목록 (sort: popular|recent|name)
 POST   /tbm-templates              템플릿 생성
@@ -11,10 +11,11 @@ POST   /tbm-templates/{id}/use     템플릿으로 TBM 실행 (tbm_meetings 생�
 DB: tbm_templates, tbm_meetings, tbm_attendees, groups, worker_group, worker_registry
 
 v1.1.0 (2026-08-11): risk_items/safety_items 시드 정본 shape — RiskItem {description, ppe, precaution}, SafetyItem {description}.
-v1.1.1 (2026-08-11): 시설(factory) 단위 스코핑 — 목록은 factory_id 지정 시 (factory_id IS NULL 프리셋) OR (해당 시설 소유),
-           미지정 시 프리셋만 반환. 타 시설 템플릿 노출 방지.
-v1.2.0 (2026-08-11): TBM 그룹화(Phase 2) — /use 에 group_id 지정 시 tbm_meetings.group_id/team_id 기록 +
-           그룹원(worker_group)을 worker_id 연결로 자동 소집(참석자). group_id 없으면 기존 default_attendees 유지.
+v1.1.1 (2026-08-11): 시설(factory) 단위 스코핑.
+v1.2.0 (2026-08-11): TBM 그룹화(Phase 2) — /use 에 group_id 지정 시 그룹원 자동 소집.
+v1.3.0 (2026-08-11): 팀 템플릿 스코핑 — team_id 수용(생성) + 목록 필터.
+           스코프 = 전역(factory·team null) / 시설(factory, team null) / 팀(team_id).
+           team_id 지정 시: 팀 템플릿 + (팀 미지정 && (전역|해당 시설)). 미지정 시: 팀 템플릿 제외.
 """
 
 import uuid
@@ -59,6 +60,7 @@ class DefaultAttendee(BaseModel):
 
 class TbmTemplateCreate(BaseModel):
     factory_id: Optional[str] = None
+    team_id: Optional[str] = None
     company_id: Optional[str] = None
     template_name: str
     work_location: Optional[str] = None
@@ -105,6 +107,7 @@ def _summary(row: dict) -> dict:
         "id":               row["id"],
         "template_name":    row["template_name"],
         "factory_id":       row.get("factory_id"),
+        "team_id":          row.get("team_id"),
         "company_id":       row.get("company_id"),
         "work_location":    row.get("work_location"),
         "work_description": row.get("work_description"),
@@ -123,6 +126,7 @@ def _summary(row: dict) -> dict:
 @router.get("")
 async def list_templates(
     factory_id: Optional[str] = Query(None),
+    team_id: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
     q: Optional[str] = Query(None, description="template_name 검색"),
     library: Optional[bool] = Query(None, description="True면 라이브러리 전용 레코드만"),
@@ -132,7 +136,7 @@ async def list_templates(
 ):
     sb = get_sb()
     query = sb.table("tbm_templates").select(
-        "id, template_name, factory_id, company_id, work_location, work_description, "
+        "id, template_name, factory_id, team_id, company_id, work_location, work_description, "
         "risk_items, safety_items, default_attendees, use_count, last_used_at, created_at, updated_at",
         count="exact"
     ).eq("is_active", True)
@@ -144,13 +148,23 @@ async def list_templates(
     else:
         query = query.neq("template_name", "__LIBRARY__")
 
-    # 시설(factory) 단위 스코핑:
-    #   factory_id 지정 → 전역 프리셋(factory_id IS NULL) + 해당 시설 소유만
-    #   미지정     → 전역 프리셋만 (타 시설 템플릿 노출 방지)
-    if factory_id:
-        query = query.or_(f"factory_id.is.null,factory_id.eq.{factory_id}")
+    # 스코핑: 전역(factory·team null) / 시설(factory, team null) / 팀(team_id)
+    #   team_id 지정 → 팀 템플릿 + (팀 미지정 && (전역 프리셋 | 해당 시설))
+    #   미지정      → 팀 템플릿 제외(team_id IS NULL) 후 (전역 | 해당 시설)
+    if team_id:
+        if factory_id:
+            query = query.or_(
+                f"team_id.eq.{team_id},"
+                f"and(team_id.is.null,or(factory_id.is.null,factory_id.eq.{factory_id}))"
+            )
+        else:
+            query = query.or_(f"team_id.eq.{team_id},and(team_id.is.null,factory_id.is.null)")
     else:
-        query = query.filter("factory_id", "is", "null")
+        query = query.filter("team_id", "is", "null")
+        if factory_id:
+            query = query.or_(f"factory_id.is.null,factory_id.eq.{factory_id}")
+        else:
+            query = query.filter("factory_id", "is", "null")
 
     if company_id:
         query = query.eq("company_id", company_id)
@@ -193,6 +207,7 @@ async def create_template(body: TbmTemplateCreate):
     data = {
         "template_name":    body.template_name.strip(),
         "factory_id":       body.factory_id,
+        "team_id":          body.team_id,
         "company_id":       body.company_id,
         "work_location":    body.work_location,
         "work_description": body.work_description,
@@ -287,10 +302,10 @@ async def use_template(template_id: str, body: TbmUseBody):
 
     # 그룹 지정 시: team_id 유도 + 그룹원 자동 소집
     group_id = body.group_id
-    team_id = body.team_id
+    team_id = body.team_id or tmpl.get("team_id")
     group_members = []
     if group_id:
-        if not team_id:
+        if not body.team_id:
             g_res = sb.table("groups").select("team_id").eq("id", group_id).limit(1).execute()
             if g_res.data:
                 team_id = g_res.data[0].get("team_id")
