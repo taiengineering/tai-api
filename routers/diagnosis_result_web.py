@@ -1,5 +1,5 @@
 """
-routers/diagnosis_result_web.py — v1.2.0
+routers/diagnosis_result_web.py — v1.3.0
 
 유료/무료 진단 결과 웹 조회 API (JSON)
   GET /diagnosis/result/{public_token}
@@ -9,6 +9,11 @@ v1.1.0: BE-08 Transform 정제 함수 연동 (rules_table dedupe + FAMILY→한�
 v1.2.0: 의무 제목/설명 표시 보정 — obligation_summary/remarks가 코드 토큰
         (예: "APPOINTMENT_TASK_CANDIDATE: APPOINT_FAMILY")일 때 description의
         사람이 읽는 텍스트를 우선 사용. 엔진/판정 로직 미변경(표시 transform만).
+v1.3.0: LEG(법령엔진) 결과 표시 변환 — LEG 파이프라인은 rules_table 대신
+        obligations_raw(rich: enrichment/obligation_detail)를 저장한다.
+        rules_table 부재 시 obligations_raw에서 '값 생성 없이' 페이지가 소비하는
+        rules_table/summary 형태로 이미 추출된 값만 운반. 축1(Compiler) 경로 무변경.
+        엔진·프론트·조립기 무변경(조회 시점 표시 transform만).
 """
 from __future__ import annotations
 
@@ -251,6 +256,95 @@ def _refine_rules_table(rules_table: List[Dict[str, Any]]) -> List[Dict[str, Any
     return refined if refined else deduped
 
 
+# ─────────────────────────────────────────────────────────────
+# LEG(법령엔진) 결과 표시 변환
+#   LEG 파이프라인은 rules_table 대신 obligations_raw(rich)를 저장한다.
+#   (obligations_raw[].enrichment / .obligation_detail = Check Layer 산출)
+#   페이지(free-diagnosis-result)가 소비하는 rules_table/summary 형태로
+#   '값 생성 없이' 이미 추출된 값만 운반한다. 엔진·프론트 무변경.
+# ─────────────────────────────────────────────────────────────
+
+# enrichment.obligation_type → 페이지 칩(OB_TYPE_LABEL: APPOINT/INSPECT/ACTION/REPORT/NOTIFY)
+_LEG_TYPE_TO_PAGE: Dict[str, str] = {
+    "APPOINT": "APPOINT",
+    "INSPECT": "INSPECT",
+    "REPORT": "REPORT",
+    "NOTIFY": "NOTIFY",
+    "ACTION": "ACTION",
+    "TRAINING": "ACTION",   # 교육 → 조치 버킷(페이지 전용 칩 없음)
+    "PROHIBIT": "ACTION",   # 금지 → 조치 버킷(페이지 전용 칩 없음)
+}
+
+# 페이지 obligation_type → summary 집계 버킷
+_LEG_PAGE_TYPE_TO_SUMMARY: Dict[str, str] = {
+    "APPOINT": "appointment",
+    "INSPECT": "inspection",
+    "ACTION": "action",
+    "REPORT": "report",
+    "NOTIFY": "notify",
+}
+
+
+def _leg_obligation_type(o: Dict[str, Any]) -> str:
+    enr = o.get("enrichment") or {}
+    raw = (enr.get("obligation_type") or "").strip().upper()
+    return _LEG_TYPE_TO_PAGE.get(raw, "ACTION")
+
+
+def _leg_rule_row(o: Dict[str, Any]) -> Dict[str, Any]:
+    """obligations_raw 1건 → 페이지 rules_table 1행 (값 생성 없음)."""
+    enr = o.get("enrichment") or {}
+    det = o.get("obligation_detail") or {}
+    law_name = (o.get("law_name") or "").strip()
+    law_article = (o.get("law_article") or "").strip()
+    # 의무 설명 = obligation_detail.what(실제 의무 문장). 없으면 법령명+조번호.
+    what = (det.get("what") or "").strip()
+    summary_text = what or " ".join(p for p in (law_name, law_article) if p)
+    return {
+        "law_name": law_name,
+        "law_article": law_article,
+        "obligation_type": _leg_obligation_type(o),
+        "obligation_summary": summary_text,
+        "description": summary_text,
+        "inspection_cycle": (enr.get("inspection_cycle") or "").strip(),
+        # trace (페이지 미표시, 감사용)
+        "atom_id": o.get("atom_id") or "",
+        "source": "LEG",
+    }
+
+
+def _leg_rules_from_obligations_raw(obligations_raw: List[Any]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    seen_atom: set = set()
+    for o in obligations_raw:
+        if not isinstance(o, dict):
+            continue
+        # 적용(APPLICABLE)만 표시. (필터 — 값 생성 아님)
+        appl = (o.get("applicability") or "").strip().upper()
+        if appl and appl != "APPLICABLE":
+            continue
+        aid = str(o.get("atom_id") or "")
+        if aid and aid in seen_atom:
+            continue
+        if aid:
+            seen_atom.add(aid)
+        row = _leg_rule_row(o)
+        if not (row["law_name"] or row["obligation_summary"]):
+            continue
+        rows.append(row)
+    return rows
+
+
+def _leg_summary_from_rules(rules: List[Dict[str, Any]]) -> Dict[str, int]:
+    counts = {"appointment": 0, "inspection": 0, "action": 0, "report": 0, "notify": 0}
+    for r in rules:
+        bucket = _LEG_PAGE_TYPE_TO_SUMMARY.get(r.get("obligation_type") or "", "action")
+        counts[bucket] += 1
+    counts["total"] = len(rules)
+    counts["form_linked"] = 0
+    return counts
+
+
 RECOMMEND_PLAN = {
     "BUILDING_V2":          {"name": "건물 소형 플랜",  "price": "월 59,000원~"},
     "BUILDING_LARGE_V2":    {"name": "건물 대형 플랜",  "price": "월 145,000원~"},
@@ -308,19 +402,44 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int]) 
     sector_label = SECTOR_LABEL.get(sector, sector)
 
     raw_rules = [r for r in (full_result.get("rules_table") or []) if isinstance(r, dict)]
-    rules_table = _refine_rules_table(raw_rules)
+    leg_summary: Optional[Dict[str, int]] = None
+    if raw_rules:
+        # 축1(Compiler) 결과: 기존 경로 무변경.
+        rules_table = _refine_rules_table(raw_rules)
+    else:
+        # LEG 결과: rules_table 부재 → obligations_raw(rich)에서 표시용 rules_table 파생.
+        # 값 생성 없음 — enrichment/obligation_detail의 이미 추출된 값만 운반.
+        obligations_raw = [
+            o for o in (full_result.get("obligations_raw") or []) if isinstance(o, dict)
+        ]
+        rules_table = _leg_rules_from_obligations_raw(obligations_raw)
+        if rules_table:
+            leg_summary = _leg_summary_from_rules(rules_table)
     warnings = _extract_warnings(full_result)
 
     inspection_required = [r for r in (full_result.get("inspection_required") or []) if isinstance(r, dict)]
     appointment_required = [r for r in (full_result.get("appointment_required") or []) if isinstance(r, dict)]
-    enrich_rules_with_candidate_slots(
-        supabase, rules_table + inspection_required + appointment_required
-    )
+    if raw_rules:
+        # candidate slot 보강은 축1 rows 전용(rule_id 기반). LEG rows는 미해당.
+        enrich_rules_with_candidate_slots(
+            supabase, rules_table + inspection_required + appointment_required
+        )
     key_obligations = full_result.get("key_obligations") or []
     law_badges = full_result.get("law_badges") or []
+    # LEG 결과의 law_badges는 빈약(≤1)한 경우가 많음 → 파생 rules_table의 실제 법령명으로 보강.
+    if leg_summary is not None and len(law_badges) <= 1:
+        _derived_badges: List[str] = []
+        _seen_law: set = set()
+        for r in rules_table:
+            ln = (r.get("law_name") or "").strip()
+            if ln and ln not in _seen_law:
+                _seen_law.add(ln)
+                _derived_badges.append(ln)
+        if _derived_badges:
+            law_badges = _derived_badges
     inspection_schedule = full_result.get("inspection_schedule_ready") or {}
 
-    summary = full_result.get("summary") or {}
+    summary = full_result.get("summary") or leg_summary or {}
     total = full_result.get("applicable_count") or summary.get("total") or len(rules_table)
     risk_level = full_result.get("risk_level") or "MEDIUM"
     worker_count = input_data.get("workers") or input_data.get("worker_count") or 0
