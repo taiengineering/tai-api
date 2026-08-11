@@ -1,13 +1,14 @@
 """
-안전보건 회의 관리 라우터 — v1.0.0
+안전보건 회의 관리 라우터 — v1.1.0
 
 safety_committee_meetings 테이블 사용
+참석자는 전용 테이블 safety_committee_attendees 사용 (v1.1.0~)
 
 API:
   POST   /safety-meetings                     회의록 생성
   GET    /safety-meetings                     목록 조회
   GET    /safety-meetings/schedule            개최 주기 준수 현황 (고정경로)
-  GET    /safety-meetings/{id}                상세 조회
+  GET    /safety-meetings/{id}                상세 조회 (attendees 포함)
   PATCH  /safety-meetings/{id}                수정
   POST   /safety-meetings/{id}/files          파일 첨부 (URL 저장)
   POST   /safety-meetings/{id}/complete       완료 처리
@@ -26,7 +27,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/safety-meetings", tags=["safety_meetings"])
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 RETENTION_YEARS = 3   # 회의록 법정 보존기한
 
@@ -50,6 +51,40 @@ def _retention_expires(meeting_date_str: str, years: int = RETENTION_YEARS) -> s
         return ""
 
 
+# ── 참석자 전용 테이블(safety_committee_attendees) 헬퍼 ─────────
+
+def _load_attendees(supabase, meeting_id: str) -> list:
+    """회의 참석자 목록을 전용 테이블에서 조회."""
+    res = supabase.table("safety_committee_attendees").select(
+        "id, worker_id, name, role, phone, organization, sign_status, attended_at"
+    ).eq("meeting_id", meeting_id).order("created_at").execute()
+    return res.data or []
+
+
+def _replace_attendees(supabase, meeting_id: str, attendees: list) -> int:
+    """참석자 전용 테이블을 전달된 목록으로 교체하고 인원수를 반환."""
+    supabase.table("safety_committee_attendees").delete().eq(
+        "meeting_id", meeting_id
+    ).execute()
+    rows = []
+    for a in (attendees or []):
+        if not isinstance(a, dict):
+            continue
+        rows.append({
+            "meeting_id":   meeting_id,
+            "worker_id":    a.get("worker_id"),
+            "name":         a.get("name") or a.get("worker_name") or "",
+            "role":         a.get("role"),
+            "phone":        a.get("phone"),
+            "organization": a.get("organization"),
+            "sign_status":  a.get("sign_status") or "PENDING",
+            "attended_at":  a.get("attended_at"),
+        })
+    if rows:
+        supabase.table("safety_committee_attendees").insert(rows).execute()
+    return len(rows)
+
+
 # ── Pydantic 모델 ─────────────────────────────────────────────
 
 class MeetingCreateBody(BaseModel):
@@ -62,7 +97,7 @@ class MeetingCreateBody(BaseModel):
     duration_min:     Optional[int] = None
     chair_name:       Optional[str] = None
     attendee_count:   Optional[int] = None
-    attendees_json:   Optional[list] = []
+    attendees_json:   Optional[list] = []          # 참석자 목록 → 전용 테이블로 저장
     agenda_items:     Optional[list] = []
     discussion_text:  Optional[str] = None
     resolution_text:  Optional[str] = None
@@ -77,7 +112,7 @@ class MeetingUpdateBody(BaseModel):
     duration_min:    Optional[int]  = None
     chair_name:      Optional[str]  = None
     attendee_count:  Optional[int]  = None
-    attendees_json:  Optional[list] = None
+    attendees_json:  Optional[list] = None         # 참석자 목록 → 전용 테이블로 저장
     agenda_items:    Optional[list] = None
     discussion_text: Optional[str]  = None
     resolution_text: Optional[str]  = None
@@ -192,7 +227,7 @@ def create_meeting(body: MeetingCreateBody):
         "duration_min":    body.duration_min,
         "chair_name":      body.chair_name,
         "attendee_count":  body.attendee_count or 0,
-        "attendees_json":  body.attendees_json or [],
+        "attendees_json":  [],
         "agenda_items":    body.agenda_items   or [],
         "discussion_text": body.discussion_text,
         "resolution_text": body.resolution_text,
@@ -208,6 +243,14 @@ def create_meeting(body: MeetingCreateBody):
         raise HTTPException(status_code=500, detail="회의록 생성에 실패했습니다.")
 
     record = res.data[0]
+    # 참석자는 전용 테이블(safety_committee_attendees)에 저장
+    if body.attendees_json:
+        cnt = _replace_attendees(supabase, record["id"], body.attendees_json)
+        supabase.table("safety_committee_meetings").update(
+            {"attendee_count": cnt}
+        ).eq("id", record["id"]).execute()
+        record["attendee_count"] = cnt
+    record["attendees"] = _load_attendees(supabase, record["id"])
     record["retention_expires"] = _retention_expires(body.meeting_date)
     return {"status": "success", "message": "회의록이 생성됐습니다.", "data": record}
 
@@ -263,7 +306,7 @@ def list_meetings(
 
 @router.get("/{meeting_id}")
 def get_meeting(meeting_id: str):
-    """안전보건 회의 상세 조회."""
+    """안전보건 회의 상세 조회 (참석자는 전용 테이블에서 로드)."""
     supabase = get_supabase()
     res = supabase.table("safety_committee_meetings").select("*").eq(
         "id", meeting_id
@@ -271,6 +314,7 @@ def get_meeting(meeting_id: str):
     if not res.data:
         raise HTTPException(status_code=404, detail="회의록을 찾을 수 없습니다.")
     record = res.data[0]
+    record["attendees"] = _load_attendees(supabase, meeting_id)
     record["retention_expires"] = _retention_expires(
         record.get("meeting_date", ""), record.get("retention_years", RETENTION_YEARS)
     )
@@ -279,18 +323,40 @@ def get_meeting(meeting_id: str):
 
 @router.patch("/{meeting_id}")
 def update_meeting(meeting_id: str, body: MeetingUpdateBody):
-    """안전보건 회의 수정."""
+    """안전보건 회의 수정 (참석자는 전용 테이블에 교체 저장)."""
     supabase = get_supabase()
     payload = {k: v for k, v in body.dict().items() if v is not None}
-    if not payload:
+    # 참석자는 전용 테이블로 분리 저장 (json 컬럼 대신)
+    attendees = payload.pop("attendees_json", None)
+    if not payload and attendees is None:
         raise HTTPException(status_code=422, detail="수정할 내용이 없습니다.")
-    payload["updated_at"] = _now()
-    res = supabase.table("safety_committee_meetings").update(payload).eq(
-        "id", meeting_id
-    ).execute()
-    if not res.data:
-        raise HTTPException(status_code=404, detail="회의록을 찾을 수 없습니다.")
-    return {"status": "success", "message": "수정됐습니다.", "data": res.data[0]}
+
+    record = None
+    if payload:
+        payload["updated_at"] = _now()
+        res = supabase.table("safety_committee_meetings").update(payload).eq(
+            "id", meeting_id
+        ).execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail="회의록을 찾을 수 없습니다.")
+        record = res.data[0]
+
+    if attendees is not None:
+        cnt = _replace_attendees(supabase, meeting_id, attendees)
+        supabase.table("safety_committee_meetings").update(
+            {"attendee_count": cnt, "updated_at": _now()}
+        ).eq("id", meeting_id).execute()
+
+    if record is None:
+        chk = supabase.table("safety_committee_meetings").select("*").eq(
+            "id", meeting_id
+        ).limit(1).execute()
+        if not chk.data:
+            raise HTTPException(status_code=404, detail="회의록을 찾을 수 없습니다.")
+        record = chk.data[0]
+
+    record["attendees"] = _load_attendees(supabase, meeting_id)
+    return {"status": "success", "message": "수정됐습니다.", "data": record}
 
 
 @router.post("/{meeting_id}/files")
@@ -320,7 +386,7 @@ def attach_file(meeting_id: str, body: FileAttachBody):
 
 @router.delete("/{meeting_id}")
 def delete_meeting(meeting_id: str):
-    """안전보건 회의 삭제."""
+    """안전보건 회의 삭제 (참석자는 FK ON DELETE CASCADE로 함께 삭제)."""
     supabase = get_supabase()
     res = supabase.table("safety_committee_meetings").delete().eq(
         "id", meeting_id
