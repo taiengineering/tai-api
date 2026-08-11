@@ -1,5 +1,8 @@
 """
-TBM(작업 전 안전점검회의) 관리 라우터 — v1.2.0
+TBM(작업 전 안전점검회의) 관리 라우터 — v1.3.0
+
+v1.3.0 (2026-08-11 Phase 2):
+  [ADD] 목록/상세 응답에 팀·그룹 임베드 (groups(group_name), teams(team_name)).
 
 v1.2.0 (2026-04-08):
   [ADD] GET  /tbm/{id}/sign-info  서명의 페이지 정보 (JWT 불필요)
@@ -40,7 +43,7 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tbm", tags=["tbm"])
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 STORAGE_BUCKET = "signatures"
 
@@ -383,9 +386,10 @@ def list_tbm(
 ):
     supabase = get_supabase()
     q = supabase.table("tbm_meetings").select(
-        "id, factory_id, company_id, construction_site_id, meeting_title, work_date, "
+        "id, factory_id, company_id, construction_site_id, group_id, team_id, meeting_title, work_date, "
         "work_location, conductor_name, attendee_count, status_code, "
-        "transcript_status, audio_url, completed_at, created_at",
+        "transcript_status, audio_url, completed_at, created_at, "
+        "groups(group_name), teams(team_name)",
         count="exact"
     )
     if factory_id:           q = q.eq("factory_id",           factory_id)
@@ -407,7 +411,9 @@ def list_tbm(
 @router.get("/{tbm_id}")
 def get_tbm(tbm_id: str):
     supabase = get_supabase()
-    res = supabase.table("tbm_meetings").select("*").eq("id", tbm_id).limit(1).execute()
+    res = supabase.table("tbm_meetings").select(
+        "*, groups(group_name), teams(team_name)"
+    ).eq("id", tbm_id).limit(1).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="TBM을 찾을 수 없습니다.")
     tbm = res.data[0]
