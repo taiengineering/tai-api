@@ -1,5 +1,5 @@
 """
-TBM 템플릿 업로더 — tbm_templates.py  v1.0.0
+TBM 템플릿 업로더 — tbm_templates.py  v1.1.0
 
 GET    /tbm-templates              템플릿 목록 (sort: popular|recent|name)
 POST   /tbm-templates              템플릿 생성
@@ -9,6 +9,11 @@ DELETE /tbm-templates/{id}         템플릿 삭제 (soft delete)
 POST   /tbm-templates/{id}/use     템플릿으로 TBM 실행 (tbm_meetings 생성)
 
 DB: tbm_templates, tbm_meetings, tbm_attendees
+
+v1.1.0 (2026-08-11):
+  [CHANGE] risk_items 시드 정본 shape로 정합 — RiskItem {description, ppe, precaution}
+           (이전 {content, category}). SafetyItem {description} (이전 {content}).
+           기존 시드 25개 템플릿과 동일한 키. /use 복사 로직은 변경 없음.
 """
 
 import uuid
@@ -29,17 +34,20 @@ def get_sb():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-# ── Pydantic 모델 ───────────────────────────────────────
+# ── Pydantic 모델 ────────────────────────────
 
 class RiskItem(BaseModel):
+    """시드 정본 shape: 위험 내용(description) + 개인보호구(ppe) + 주의사항(precaution)."""
     id: Optional[str] = None
-    content: str
-    category: str = "기타"  # 전도|협착|충돌|추락|낙하|폭발|화재|질식|감전|기타
+    description: str
+    ppe: Optional[str] = None
+    precaution: Optional[str] = None
 
 
 class SafetyItem(BaseModel):
+    """시드 정본 shape: 안전수칙 내용(description)."""
     id: Optional[str] = None
-    content: str
+    description: str
 
 
 class DefaultAttendee(BaseModel):
@@ -75,7 +83,7 @@ class TbmUseBody(BaseModel):
     override_description: Optional[str] = None
 
 
-# ── 헬퍼 ───────────────────────────────────────
+# ── 헬퍼 ────────────────────────────
 
 def _ensure_ids(items: list) -> list:
     """아이템 id 없으면 uuid 자동 부여"""
@@ -107,7 +115,7 @@ def _summary(row: dict) -> dict:
     }
 
 
-# ── GET /tbm-templates ─────────────────────────────
+# ── GET /tbm-templates ─────────────────
 
 @router.get("")
 async def list_templates(
@@ -165,7 +173,7 @@ async def list_templates(
     }
 
 
-# ── POST /tbm-templates ─────────────────────────────
+# ── POST /tbm-templates ─────────────────
 
 @router.post("")
 async def create_template(body: TbmTemplateCreate):
@@ -193,7 +201,7 @@ async def create_template(body: TbmTemplateCreate):
     return {"status": "success", "message": "템플릿이 생성됐습니다.", "data": _summary(res.data[0])}
 
 
-# ── GET /tbm-templates/{id} ────────────────────────
+# ── GET /tbm-templates/{id} ──────────────
 
 @router.get("/{template_id}")
 async def get_template(template_id: str):
@@ -204,7 +212,7 @@ async def get_template(template_id: str):
     return {"status": "success", "data": res.data[0]}
 
 
-# ── PATCH /tbm-templates/{id} ───────────────────────
+# ── PATCH /tbm-templates/{id} ───────────────
 
 @router.patch("/{template_id}")
 async def update_template(template_id: str, body: TbmTemplateUpdate):
@@ -234,7 +242,7 @@ async def update_template(template_id: str, body: TbmTemplateUpdate):
     return {"status": "success", "message": "템플릿이 수정됐습니다.", "data": _summary(res.data[0])}
 
 
-# ── DELETE /tbm-templates/{id} ──────────────────────
+# ── DELETE /tbm-templates/{id} ────────────────
 
 @router.delete("/{template_id}")
 async def delete_template(template_id: str):
@@ -245,7 +253,7 @@ async def delete_template(template_id: str):
     return {"status": "success", "message": "템플릿이 삭제됐습니다."}
 
 
-# ── POST /tbm-templates/{id}/use ────────────────────
+# ── POST /tbm-templates/{id}/use ────────────────
 
 @router.post("/{template_id}/use")
 async def use_template(template_id: str, body: TbmUseBody):
