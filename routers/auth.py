@@ -1,4 +1,6 @@
-# routers/auth.py — v3.7.0
+# routers/auth.py — v3.8.0
+# v3.8.0: verify-otp 세션 발급 — OTP 통과 시 access_token 반환 + worker_registry 배선
+#         (Phase 3 A단계, DESIGN_phase3-leader-auth_v2 §4)
 # v3.7.0: #65 RLS bypass — get_supabase()를 service_role key로 변경 (모든 테이블 조작 정상화)
 # v3.6.0: GET /auth/me 에 identity_verified + expert_status 포함
 # v3.5.0: PWA 작업자 인증 — POST /auth/send-otp, POST /auth/verify-otp 추가
@@ -9,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone, timedelta
-import os, re, random
+import os, re, random, secrets, string, logging
 
 import bcrypt
 from supabase import create_client
@@ -17,12 +19,18 @@ from services.health_registry import register_probe
 from watch_engine import create_trace, emit_event
 from watch_engine.trace import clear_trace
 
+log = logging.getLogger("auth")
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+
+# 전화번호만 아는 작업자에게 GoTrue 계정을 만들기 위한 가상 이메일 도메인.
+# GoTrue 는 email 이 필수이나 현장 작업자는 이메일을 갖지 않는 경우가 많다.
+# 실제 수신용이 아니며 로그인 식별자로만 쓴다.
+WORKER_EMAIL_DOMAIN = os.getenv("WORKER_EMAIL_DOMAIN", "worker.taieng.co.kr")
 
 def get_supabase():
     """v3.7.0: auth.py는 백엔드 라우터 — service_role key로 RLS bypass"""
@@ -128,7 +136,7 @@ class VerifyOtpRequest(BaseModel):
 
 @router.get("/test")
 def test():
-    return {"message": "auth router alive", "version": "3.7.0"}
+    return {"message": "auth router alive", "version": "3.8.0"}
 
 
 # ════════════════════════════════════════════
@@ -161,6 +169,159 @@ def send_otp(req: SendOtpRequest):
         "message": f"인증번호를 발송했습니다 ({phone})",
         "dev_otp": otp_code,  # ⚠ 개발용 — 프로덕션 배포 시 제거
     }
+
+
+# ════════════════════════════════════════════
+# v3.8.0: OTP 통과 → 세션 발급 + 계정 배선 (Phase 3 A단계)
+#
+# 배경
+#   종전 verify-otp 는 번호·인증번호 대조 후 사용자 정보만 반환하고 토큰을
+#   발급하지 않았다. 대조에 쓰인 otp_store 행은 곧바로 삭제되므로, 이후 요청은
+#   "인증을 통과했다"는 사실을 증명할 수단이 없다. 서버는 요청 바디의 phone
+#   문자열만 근거로 삼게 되어, 번호만 아는 제3자와 본인이 구분되지 않는다.
+#
+#   작업자는 자기 데이터 범위라 허용됐으나, TBM 리더는 "자기 팀만 본다"는
+#   스코프 판정 대상이라 성립하지 않는다(클라이언트 신뢰 금지).
+#
+#   인증 방식은 바꾸지 않는다. 전화번호 인증을 그대로 두고, 대조 통과 시
+#   access_token 을 함께 반환한다. 토큰은 "방금 대조를 통과했다"는 서버 발급
+#   증서이며, 앱은 저장·전송만 하므로 자동 로그인 UX 는 동일하다.
+# ════════════════════════════════════════════
+
+def _worker_email(phone: str) -> str:
+    """전화번호 기반 가상 이메일. GoTrue 가 email 을 요구하는데 현장 작업자는
+    이메일이 없는 경우가 많다. 수신용이 아니라 로그인 식별자로만 쓴다."""
+    return f"{phone}@{WORKER_EMAIL_DOMAIN}"
+
+
+def _phone_variants(phone: str) -> list:
+    """users.phone 은 하이픈 유무가 섞여 있어 양쪽 형식을 모두 시도한다.
+    (worker_check.py 와 동일 관례)"""
+    clean = normalize_phone(phone)
+    if not clean:
+        return []
+    out = [clean]
+    if len(clean) == 11:
+        out.append(f"{clean[:3]}-{clean[3:7]}-{clean[7:]}")
+    return out
+
+
+def _issue_session_for_phone(supabase, phone: str, user_row: Optional[dict]) -> tuple:
+    """OTP 통과자에게 Supabase 세션을 발급한다.
+
+    반환: (access_token, refresh_token, user_row)
+    실패해도 예외를 올리지 않는다 — 토큰이 없어도 기존 앱은 동작하므로,
+    세션 발급 실패가 로그인 자체를 막아서는 안 된다.
+    """
+    admin = get_supabase_admin()
+    email = (user_row or {}).get("email") or _worker_email(phone)
+    # GoTrue 계정 비밀번호는 서버만 안다. 앱은 OTP 로 인증하므로 노출되지 않는다.
+    password = secrets.token_urlsafe(24)
+
+    try:
+        auth_id = (user_row or {}).get("auth_id")
+
+        if auth_id:
+            # 기존 GoTrue 계정 — 비밀번호를 재설정해 세션을 얻는다.
+            admin.auth.admin.update_user_by_id(auth_id, {"password": password})
+        else:
+            # GoTrue 계정 없음 — 생성 후 users.auth_id 연결
+            try:
+                created = admin.auth.admin.create_user({
+                    "email": email,
+                    "password": password,
+                    "email_confirm": True,
+                })
+                auth_id = str(created.user.id)
+            except Exception as e:
+                # 이미 존재하는 이메일이면 목록에서 찾아 연결 (login 의 복구 패턴)
+                if not any(k in str(e).lower() for k in ("already", "exists", "duplicate")):
+                    raise
+                users_list = admin.auth.admin.list_users()
+                matched = next((u for u in (users_list or []) if getattr(u, "email", None) == email), None)
+                if not matched:
+                    raise
+                auth_id = str(matched.id)
+                admin.auth.admin.update_user_by_id(auth_id, {"password": password})
+
+            if user_row:
+                supabase.table("users").update({
+                    "auth_id": auth_id, "updated_at": _now_iso(),
+                }).eq("id", user_row["id"]).execute()
+                user_row["auth_id"] = auth_id
+
+        sess = supabase.auth.sign_in_with_password({"email": email, "password": password})
+        if sess and sess.session:
+            return sess.session.access_token, sess.session.refresh_token, user_row
+    except Exception as e:
+        log.error(f"[verify-otp] 세션 발급 실패 phone={phone}: {e}")
+
+    return None, None, user_row
+
+
+def _ensure_user_row(supabase, phone: str) -> Optional[dict]:
+    """users 행이 없으면 worker_registry 정보로 만든다.
+
+    현장 작업자는 관리자가 worker_registry 에 먼저 등록하고 앱은 나중에 깐다.
+    등록되지 않은 번호로는 계정을 만들지 않는다 — 아무나 가입되면 안 된다.
+    """
+    variants = _phone_variants(phone)
+    for v in variants:
+        u = supabase.table("users").select("*").eq("phone", v).limit(1).execute()
+        if u.data:
+            return u.data[0]
+
+    wr = None
+    for v in variants:
+        r = supabase.table("worker_registry").select("*").eq("phone", v).limit(1).execute()
+        if r.data:
+            wr = r.data[0]
+            break
+    if not wr:
+        return None
+
+    clean = normalize_phone(phone)
+    user_code = "USR-" + datetime.now().strftime("%Y%m%d") + "-" + "".join(random.choices(string.digits, k=4))
+    row = {
+        "email":       _worker_email(clean),
+        "phone":       clean,
+        "name":        wr.get("name") or clean,
+        "username":    clean,
+        "role_code":   "014",          # 작업자 (산안법 제5조). 리더 승격은 A-2 에서 별도
+        "user_code":   user_code,
+        "company_id":  wr.get("company_id"),
+        "factory_id":  wr.get("factory_id"),
+        "status_code": "ACTIVE",
+        "is_active":   True,
+        "created_at":  _now_iso(),
+        "updated_at":  _now_iso(),
+    }
+    try:
+        res = supabase.table("users").insert(row).execute()
+        if res.data:
+            log.info(f"[verify-otp] users 생성 phone={clean} from worker_registry")
+            return res.data[0]
+    except Exception as e:
+        log.error(f"[verify-otp] users 생성 실패 phone={clean}: {e}")
+    return None
+
+
+def _link_worker_registry(supabase, phone: str, user_id: str) -> None:
+    """worker_registry.user_id·app_installed 배선. 실패해도 로그인을 막지 않는다."""
+    try:
+        for v in _phone_variants(phone):
+            r = supabase.table("worker_registry").select("id, user_id").eq("phone", v).limit(1).execute()
+            if not r.data:
+                continue
+            if r.data[0].get("user_id") == user_id:
+                return
+            supabase.table("worker_registry").update({
+                "user_id": user_id, "app_installed": True, "updated_at": _now_iso(),
+            }).eq("id", r.data[0]["id"]).execute()
+            log.info(f"[verify-otp] worker_registry 배선 phone={v} user_id={user_id}")
+            return
+    except Exception as e:
+        log.error(f"[verify-otp] worker_registry 배선 실패 phone={phone}: {e}")
 
 
 @router.post("/verify-otp")
@@ -203,18 +364,17 @@ def verify_otp(req: VerifyOtpRequest):
     if not otp_valid:
         raise HTTPException(status_code=401, detail="인증번호가 올바르지 않거나 만료되었습니다.")
 
-    u_res = supabase.table("users").select(
-        "id, phone, name, sector, factory_id, company_id, department, position, profile_image_url"
-    ).eq("phone", phone).limit(1).execute()
+    # ── v3.8.0: users 행 확보 (없으면 worker_registry 기준으로 생성) ──
+    user = _ensure_user_row(supabase, phone)
 
-    if not u_res.data:
+    if not user:
+        # worker_registry 에도 없는 번호. 종전과 동일하게 빈 프로필을 돌려준다.
         return {
             "id": None, "worker_id": None, "phone": phone, "name": phone,
             "sector": "INDUSTRIAL", "factory_id": None, "site_id": None,
             "company": "", "job_type": "",
         }
 
-    user = u_res.data[0]
     sector     = user.get("sector") or "INDUSTRIAL"
     factory_id = user.get("factory_id")
     company_id = user.get("company_id")
@@ -244,11 +404,22 @@ def verify_otp(req: VerifyOtpRequest):
                 site_id = s.data[0]["id"]
         except Exception:
             pass
+
+    # ── v3.8.0: 세션 발급 + worker_registry 배선 ──
+    access_token, refresh_token, user = _issue_session_for_phone(supabase, phone, user)
+    _link_worker_registry(supabase, phone, user["id"])
+
+    try:
+        supabase.table("users").update({"last_login_at": _now_iso()}).eq("id", user["id"]).execute()
+    except Exception:
+        pass
     try:
         supabase.table("otp_store").delete().eq("phone", phone).execute()
     except Exception:
         pass
 
+    # 기존 응답 필드는 그대로 유지한다. 토큰과 role 컨텍스트만 추가하므로
+    # 구버전 앱이 깨지지 않는다.
     return {
         "id": user["id"], "worker_id": user["id"], "phone": phone,
         "name": user.get("name") or phone, "sector": sector,
@@ -256,6 +427,12 @@ def verify_otp(req: VerifyOtpRequest):
         "company": company_name or factory_name,
         "job_type": user.get("position") or user.get("department") or "",
         "profile_image_url": user.get("profile_image_url"),
+        # v3.8.0 추가
+        "access_token":  access_token,
+        "refresh_token": refresh_token,
+        "token_type":    "Bearer" if access_token else None,
+        "role_code":     user.get("role_code"),
+        "team_id":       user.get("team_id"),
     }
 
 
@@ -558,7 +735,6 @@ def register(req: RegisterRequest):
                 company_id = cr.data[0]["id"] if cr.data else None
             except Exception:
                 pass
-    import string
     user_code = "USR-" + datetime.now().strftime("%Y%m%d") + "-" + ''.join(random.choices(string.digits, k=4))
     try:
         ur = supabase.table("users").insert({
