@@ -189,3 +189,62 @@ def get_customers(days: int = 90) -> Dict[str, Any]:
         "by_region": by_region,
         "by_size": by_size,
     }
+
+
+# ── B. 매출·결제 ─────────────────────────────────────────────────────
+def get_revenue(days: int = 90) -> Dict[str, Any]:
+    """결제·매출. 완료(SUCCESS)=매출, 전체=시도. 완료 반영일은 paid_at 우선(없으면 created_at).
+
+    summary: attempted_amount/completed_amount/attempted_count/completed_count/pending_count/success_rate
+    chart:   일별 시도금액/완료금액
+    by_status(건수+금액) / by_product(금액) / by_method(건수)
+    """
+    days = max(7, min(int(days or 90), 365))
+    axis = _date_axis(days)
+    since = _since_iso(days)
+
+    payments = _fetch(
+        "payments",
+        "created_at, paid_at, status_code, total_amount, product_type, plan_code, payment_method",
+        since=since,
+    )
+
+    att_amt = {d: 0 for d in axis}
+    comp_amt = {d: 0 for d in axis}
+    attempted_amount = completed_amount = 0
+    attempted_count = completed_count = pending_count = 0
+    for p in payments:
+        amt = int(p.get("total_amount") or 0)
+        attempted_amount += amt
+        attempted_count += 1
+        d = _day(p.get("created_at"))
+        if d in att_amt:
+            att_amt[d] += amt
+        st = p.get("status_code")
+        if st == "SUCCESS":
+            completed_amount += amt
+            completed_count += 1
+            pd = _day(p.get("paid_at")) or d
+            if pd in comp_amt:
+                comp_amt[pd] += amt
+        elif st == "PENDING":
+            pending_count += 1
+
+    success_rate = round(completed_count * 100 / attempted_count, 2) if attempted_count else 0
+
+    return {
+        "range_days": days,
+        "generated_at": _now(),
+        "summary": {
+            "attempted_amount": attempted_amount,
+            "completed_amount": completed_amount,
+            "attempted_count": attempted_count,
+            "completed_count": completed_count,
+            "pending_count": pending_count,
+            "success_rate": success_rate,
+        },
+        "chart": [{"date": d, "attempted": att_amt[d], "completed": comp_amt[d]} for d in axis],
+        "by_status": _breakdown(payments, "status_code", "total_amount"),
+        "by_product": _breakdown(payments, "product_type", "total_amount"),
+        "by_method": _breakdown(payments, "payment_method"),
+    }
