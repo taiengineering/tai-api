@@ -1,5 +1,5 @@
 """
-TBM 템플릿 업로더 — tbm_templates.py  v1.1.1
+TBM 템플릿 업로더 — tbm_templates.py  v1.2.0
 
 GET    /tbm-templates              템플릿 목록 (sort: popular|recent|name)
 POST   /tbm-templates              템플릿 생성
@@ -8,11 +8,13 @@ PATCH  /tbm-templates/{id}         템플릿 수정
 DELETE /tbm-templates/{id}         템플릿 삭제 (soft delete)
 POST   /tbm-templates/{id}/use     템플릿으로 TBM 실행 (tbm_meetings 생성)
 
-DB: tbm_templates, tbm_meetings, tbm_attendees
+DB: tbm_templates, tbm_meetings, tbm_attendees, groups, worker_group, worker_registry
 
 v1.1.0 (2026-08-11): risk_items/safety_items 시드 정본 shape — RiskItem {description, ppe, precaution}, SafetyItem {description}.
 v1.1.1 (2026-08-11): 시설(factory) 단위 스코핑 — 목록은 factory_id 지정 시 (factory_id IS NULL 프리셋) OR (해당 시설 소유),
            미지정 시 프리셋만 반환. 타 시설 템플릿 노출 방지.
+v1.2.0 (2026-08-11): TBM 그룹화(Phase 2) — /use 에 group_id 지정 시 tbm_meetings.group_id/team_id 기록 +
+           그룹원(worker_group)을 worker_id 연결로 자동 소집(참석자). group_id 없으면 기존 default_attendees 유지.
 """
 
 import uuid
@@ -80,6 +82,8 @@ class TbmUseBody(BaseModel):
     conductor_name: Optional[str] = None
     override_location: Optional[str] = None
     override_description: Optional[str] = None
+    group_id: Optional[str] = None         # 그룹 선택 시 그룹원 자동 소집
+    team_id: Optional[str] = None          # 미지정 시 group 에서 유도
 
 
 # ── 헬퍼 ────────────────────────────
@@ -264,8 +268,10 @@ async def delete_template(template_id: str):
 async def use_template(template_id: str, body: TbmUseBody):
     """
     템플릿으로 TBM 실행:
-    1. tbm_meetings 레코드 생성 (템플릿 내용 복사)
-    2. tbm_attendees 레코드 생성 (default_attendees 기반)
+    1. tbm_meetings 레코드 생성 (템플릿 내용 복사, group_id/team_id 기록)
+    2. tbm_attendees 레코드 생성
+       - group_id 지정 → 그룹원(worker_group) 자동 소집 (worker_id 연결)
+       - 미지정        → 템플릿 default_attendees
     3. use_count += 1, last_used_at = now()
     """
     sb = get_sb()
@@ -279,10 +285,44 @@ async def use_template(template_id: str, body: TbmUseBody):
     # 날짜
     work_date_str = body.work_date or date.today().isoformat()
 
+    # 그룹 지정 시: team_id 유도 + 그룹원 자동 소집
+    group_id = body.group_id
+    team_id = body.team_id
+    group_members = []
+    if group_id:
+        if not team_id:
+            g_res = sb.table("groups").select("team_id").eq("id", group_id).limit(1).execute()
+            if g_res.data:
+                team_id = g_res.data[0].get("team_id")
+        wg_res = sb.table("worker_group").select(
+            "worker_id, worker_registry(name, phone, job_type_name)"
+        ).eq("group_id", group_id).execute()
+        for row in (wg_res.data or []):
+            w = row.get("worker_registry") or {}
+            if not isinstance(w, dict):
+                w = {}
+            group_members.append({
+                "worker_id": row.get("worker_id"),
+                "name":      w.get("name", ""),
+                "job_type":  w.get("job_type_name"),
+                "phone":     w.get("phone"),
+            })
+
+    # 참석자: 그룹 지정 시 그룹원, 아니면 템플릿 default_attendees
+    if group_members:
+        attendee_src = group_members
+    else:
+        attendee_src = [
+            {"worker_id": None, "name": a.get("name", ""), "job_type": a.get("job_type"), "phone": a.get("phone")}
+            for a in (tmpl.get("default_attendees") or [])
+        ]
+
     # tbm_meetings 생성
     meeting_data = {
         "factory_id":       tmpl.get("factory_id"),
         "company_id":       tmpl.get("company_id"),
+        "group_id":         group_id,
+        "team_id":          team_id,
         "meeting_title":    tmpl["template_name"],
         "work_date":        work_date_str,
         "work_location":    body.override_location or tmpl.get("work_location"),
@@ -291,7 +331,7 @@ async def use_template(template_id: str, body: TbmUseBody):
         "safety_items":     tmpl.get("safety_items", []),
         "conductor_name":   body.conductor_name,
         "status_code":      "DRAFT",
-        "attendee_count":   len(tmpl.get("default_attendees") or []),
+        "attendee_count":   len(attendee_src),
     }
     m_res = sb.table("tbm_meetings").insert(meeting_data).execute()
     if not m_res.data:
@@ -299,18 +339,18 @@ async def use_template(template_id: str, body: TbmUseBody):
     meeting = m_res.data[0]
     meeting_id = meeting["id"]
 
-    # tbm_attendees 생성 (default_attendees 기반)
-    attendees = tmpl.get("default_attendees") or []
-    if attendees:
+    # tbm_attendees 생성
+    if attendee_src:
         attendee_rows = [
             {
                 "meeting_id":  meeting_id,
+                "worker_id":   a.get("worker_id"),
                 "name":        a.get("name", ""),
                 "job_type":    a.get("job_type"),
                 "phone":       a.get("phone"),
                 "sign_status": "PENDING",
             }
-            for a in attendees
+            for a in attendee_src
         ]
         sb.table("tbm_attendees").insert(attendee_rows).execute()
 
@@ -325,9 +365,11 @@ async def use_template(template_id: str, body: TbmUseBody):
         "status":  "success",
         "message": "TBM이 생성됐습니다.",
         "data": {
-            "meeting_id":    meeting_id,
-            "template_name": tmpl["template_name"],
-            "work_date":     work_date_str,
-            "attendee_count": len(attendees),
+            "meeting_id":     meeting_id,
+            "template_name":  tmpl["template_name"],
+            "work_date":      work_date_str,
+            "group_id":       group_id,
+            "team_id":        team_id,
+            "attendee_count": len(attendee_src),
         }
     }
