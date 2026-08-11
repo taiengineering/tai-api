@@ -7,6 +7,7 @@ Goal: G-ms4je4z3-33eada (통계 대시보드 G-ms5pdquz-9e76e5)
 - GET /stats/customers — (신규) 고객사·사업장: 업종/지역/규모 분포(라벨 정규화) + 등록 추이.
 - GET /stats/revenue — (신규) 매출·결제: 시도/완료 금액 추이 + 상태/상품/수단 분포.
 - GET /stats/fulfillment — (신규) 서비스 이행: 문서 생성·점검셋·배정 백로그 + 상태 분포.
+- GET /stats/workers — (신규) 워커 활동: 작업 배정 추이·상태 + 워커/교육/보고 카운트.
 """
 from fastapi import APIRouter, Query
 
@@ -14,6 +15,7 @@ from services.stats_dashboard_svc import get_dashboard
 from services.stats_fulfillment_svc import get_fulfillment
 from services.stats_ops_svc import get_customers, get_funnel, get_revenue
 from services.stats_provider_svc import get_stats
+from services.stats_workers_svc import get_workers
 
 router = APIRouter(prefix="/stats", tags=["경영지표"])
 
@@ -52,3 +54,9 @@ def revenue_stats(days: int = Query(default=90, ge=7, le=365)):
 def fulfillment_stats(days: int = Query(default=90, ge=7, le=365)):
     """서비스 이행 — 문서 생성·점검셋·배정 백로그 + 상태 분포."""
     return {"status": "success", "data": get_fulfillment(days)}
+
+
+@router.get("/workers")
+def workers_stats(days: int = Query(default=90, ge=7, le=365)):
+    """워커 활동 — 작업 배정 추이·상태 + 워커/교육/보고 카운트."""
+    return {"status": "success", "data": get_workers(days)}
