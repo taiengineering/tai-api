@@ -13,6 +13,8 @@ ROUTERS = [
     {"module": "routers.onboarding"},
     # 조직 계층: 부서·팀·그룹·근로자배정 (TBM 팀·그룹 하이브리드 Phase 1)
     {"module": "routers.org"},
+    # 작업자 조직배정 조회 (수정 패널 프리필: GET /worker-registry/{id}/org-assignment)
+    {"module": "routers.worker_org"},
     # 공용 휴무 캘린더 — 캘린더를 쓰는 모든 기능이 공유 (org_holiday / holiday_svc)
     {"module": "routers.holidays"},
     # Phase 1: FacilityProfile (입력 보존·복원·감사)
