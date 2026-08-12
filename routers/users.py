@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Users 라우터 - 회원 관리 v2.1.0
+TAI Users 라우터 - 회원 관리 v2.2.0
 
+v2.2.0: 어드민 전체목록(get_users, company_id 미지정)에서 데모(체험) 테넌트 사용자 제외
+  - 데모 회사(is_demo) 소속 사용자 id 를 조회해 목록에서 neq 로 제외(회사 스코프 조회 시엔 유지)
 v2.1.0: APPOINTMENT 이벤트 트리거 추가
   - PATCH /users/{id}/role 에서 role_code='002' 설정 시 + factory_id 있으면
     trigger_event_schedules(APPOINTMENT) 자동 호출
@@ -17,7 +19,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 DEACTIVATE_STATUSES = {"INACTIVE", "DELETED", "SUSPENDED"}
 
@@ -98,8 +100,24 @@ def _unassign_user_schedules(supabase, user_id: str) -> int:
         return 0
 
 
+def _demo_user_ids(supabase) -> list:
+    """데모(체험) 회사에 소속된 사용자 id 목록. 어드민 전체목록 제외용."""
+    try:
+        co = supabase.table("companies").select("id").eq("is_demo", True).execute()
+        cids = [c["id"] for c in (co.data or [])]
+        if not cids:
+            return []
+        us = supabase.table("users").select("id").in_("company_id", cids).execute()
+        return [u["id"] for u in (us.data or [])]
+    except Exception as e:
+        print(f"[USERS] 데모 사용자 조회 실패: {e}")
+        return []
+
+
 # ============================================================
 # 1. 회원 목록
+#    company_id 미지정(어드민 전체목록)이면 데모 테넌트 사용자 제외.
+#    NULL company_id(내부 계정 등) 보존 위해 company_id 필터 대신 사용자 id neq 사용.
 # ============================================================
 
 @router.get("")
@@ -114,6 +132,9 @@ def get_users(
 ):
     supabase = get_supabase()
     query = supabase.table("users").select("*", count="exact")
+    if not company_id:
+        for uid in _demo_user_ids(supabase):
+            query = query.neq("id", uid)
     if search:      query = query.or_(f"name.ilike.%{search}%,email.ilike.%{search}%")
     if company_id:  query = query.eq("company_id", company_id)
     if factory_id:  query = query.eq("factory_id", factory_id)
