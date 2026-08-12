@@ -25,7 +25,7 @@
 
   <form id="SendPayForm_id" method="POST" accept-charset="UTF-8">
     <input type="hidden" name="version" value="1.0">
-    <input type="hidden" name="gopaymethod" value="Card">
+    <input type="hidden" name="gopaymethod" value="">
     <input type="hidden" name="mid" value="">
     <input type="hidden" name="oid" value="">
     <input type="hidden" name="price" value="">
@@ -101,6 +101,10 @@
         f.elements['buyername'].value = d.buyername;
         f.elements['buyertel'].value = d.buyertel;
         f.elements['buyeremail'].value = d.buyeremail || 'noreply@taieng.co.kr';
+        // gopaymethod: 응답값(빈값=전 수단 노출) 반영. 응답에 있으면 사용, 없으면 폼 기본값(빈값) 유지.
+        if (d.gopaymethod !== undefined && d.gopaymethod !== null) {
+          f.elements['gopaymethod'].value = String(d.gopaymethod);
+        }
         f.elements['returnUrl'].value = 'https://api.taieng.co.kr/payments/inicis/return';
         f.elements['closeUrl'].value = 'https://api.taieng.co.kr/payments/result?resultCode=CLOSE';
 
