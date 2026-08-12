@@ -1,16 +1,23 @@
-"""SMS Adapter — MessageMi Runtime 흡수.
+"""SMS Adapter — notification_engine 채널.
 
-Runtime Queue 소비 → MessageMi HTTP → DeliveryResult 반환.
-sms_service.py 삭제 금지. 병렬 유지.
+v2.0.0: 발송 경로를 기존 SMS 모듈(capabilities.sms.core)로 교체.
 
-v1.1.0: 환경변수 이름 폴백 추가.
-  Railway 에는 MESSAGEME_* (ME) 로 설정돼 있는데 이 어댑터는 MESSAGEMI_* (MI) 를
-  읽고 있어, 키가 있어도 "SMS not configured" 로 실패했다. 서비스명이 '메시지미'라
-  MI 로 적었으나 실제 설정은 ME 다. 어느 쪽이 표준인지 확정되기 전까지 양쪽을
-  모두 읽는다. Railway 변수를 건드리면 이 값을 쓰는 다른 코드(sms_service.py 등)가
-  깨질 수 있어 어댑터에서 흡수한다.
+  종전에는 api.messagemi.com 을 직접 호출했으나 그 도메인이 존재하지 않아
+  DNS 해석에 실패했다(NameResolutionError). 즉 이 채널로 나가는 SMS 는
+  모두 실패해 왔다.
+
+  실제 검증된 발송 경로는 capabilities/sms/core.py 이며 routers/messaging.py
+  v8.0.0 과 routers/worker_registry.py v1.2.0 이 그것을 쓴다.
+  Supabase Edge Function(서울)을 경유해 메세지미로 나가고, retry 2회 +
+  timeout 60초가 내장돼 있다.
+
+계약 유지
+  channel_registry.resolve_adapter() 가 이 모듈의 send 를 가져가며
+  (bool, error) 튜플을 기대한다. core.send_sms 는 async 이므로 여기서 흡수한다.
+  send_sms(message, phone) -> DeliveryResult 시그니처도 그대로 둔다.
 """
 
+import asyncio
 import logging
 import os
 from typing import Optional
@@ -19,71 +26,63 @@ from .delivery_result import DeliveryResult
 logger = logging.getLogger("notification_engine.adapters.sms")
 
 
-def _env(*names: str, default: str = "") -> str:
-    """여러 후보 이름 중 먼저 설정된 값을 돌려준다."""
-    for n in names:
-        v = os.environ.get(n, "")
-        if v:
-            return v
-    return default
-
-
 def send(message: str, phone: Optional[str] = None) -> tuple[bool, Optional[str]]:
     """SMS 발송. Worker 호환 인터페이스 (bool, error)."""
     result = send_sms(message, phone)
     return result.success, result.error_message
 
 
-def send_sms(message: str, phone: Optional[str] = None) -> DeliveryResult:
-    """MessageMi SMS 발송 → DeliveryResult."""
-    # MI/ME 양쪽 표기를 모두 허용한다(위 모듈 주석 참조).
-    api_key = _env("MESSAGEMI_API_KEY", "MESSAGEME_API_KEY")
-    sender = _env("MESSAGEMI_SENDER", "MESSAGEME_SENDER")
-    user_id = _env("MESSAGEMI_USER_ID", "MESSAGEME_USER_ID")
-    default_phone = os.environ.get("NOTIFICATION_SMS_DEFAULT_PHONE", "")
-    target_phone = phone or default_phone
+def _run(coro):
+    """동기 컨텍스트에서 async 코루틴을 실행한다.
 
-    if not api_key or not target_phone:
-        # 어느 쪽이 비었는지 구분해 남긴다. 종전에는 한 문장이라 원인을 알 수 없었다.
-        missing = []
-        if not api_key:
-            missing.append("api_key")
-        if not target_phone:
-            missing.append("phone")
+    channel_registry 는 동기 send() 를 기대하지만 core.send_sms 는 async 다.
+    이미 이벤트 루프가 돌고 있으면 별도 스레드에서 새 루프를 돌린다 —
+    실행 중인 루프에 asyncio.run 을 쓰면 RuntimeError 가 난다.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(asyncio.run, coro).result()
+
+
+def send_sms(message: str, phone: Optional[str] = None) -> DeliveryResult:
+    """SMS 발송 → DeliveryResult.
+
+    수신번호가 없으면 NOTIFICATION_SMS_DEFAULT_PHONE 로 폴백한다(종전 동작 유지).
+    """
+    target_phone = phone or os.environ.get("NOTIFICATION_SMS_DEFAULT_PHONE", "")
+    if not target_phone:
         return DeliveryResult(
             success=False, delivery_status="FAILED",
-            error_message=f"SMS not configured (missing: {', '.join(missing)})",
+            error_message="SMS not configured (phone missing)",
         )
 
     try:
-        import requests
-        url = "https://api.messagemi.com/v1/send"
-        payload = {
-            "apiKey": api_key,
-            "sender": sender,
-            "receiver": target_phone,
-            "message": message[:90],
-            "type": "SMS",
-        }
-        # 계정 식별자를 요구하는 계약일 수 있어, 설정돼 있으면 함께 보낸다.
-        if user_id:
-            payload["userId"] = user_id
-
-        resp = requests.post(url, json=payload, timeout=10)
-
-        if resp.status_code == 200:
-            data = resp.json()
-            return DeliveryResult(
-                success=True, delivery_status="DELIVERED",
-                external_id=data.get("messageId"),
-            )
-        else:
-            return DeliveryResult(
-                success=False, delivery_status="FAILED",
-                error_message=f"SMS {resp.status_code}: {resp.text[:200]}",
-            )
+        from capabilities.sms.core import send_sms as core_send_sms
+        result = _run(core_send_sms(target_phone, message, title="TAI Safe"))
     except Exception as e:
+        logger.error("[sms] 발송 예외 phone=%s: %s", target_phone, e)
         return DeliveryResult(
             success=False, delivery_status="FAILED",
             error_message=str(e)[:200],
         )
+
+    if result.get("success"):
+        return DeliveryResult(
+            success=True, delivery_status="DELIVERED",
+            # Edge Function 은 messageId 대신 code 를 준다(정상 접수 시 100).
+            external_id=str(result.get("code") or ""),
+        )
+
+    # 실패 사유에 code·raw 를 담는다. 발신번호 미등록·잔액 부족 등을 구분하려면
+    # 중계사 응답 원문이 필요하다.
+    err = f"code={result.get('code')} {str(result.get('raw'))[:150]}"
+    logger.error("[sms] 발송 실패 phone=%s: %s", target_phone, err)
+    return DeliveryResult(
+        success=False, delivery_status="FAILED",
+        error_message=err[:200],
+    )
