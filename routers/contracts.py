@@ -4,6 +4,10 @@
 TAI Contracts 라우터 - 견적/계약 관리
 전역변수: contract_status / service_type / saas_plan
 
+v2.2.0 (2026-08-12):
+  - get_contracts(계약 전체목록, company_id 미지정)에서 데모(체험) 테넌트 계약 제외
+    데모 회사(is_demo) 소속 계약 id 를 조회해 목록에서 neq 로 제외(회사 스코프 조회 시엔 유지)
+
 v2.1.0 (2026-04-07):
   - PATCH /contracts/{id}/status 래퍼 추가
     status 값에 따라 activate/suspend/cancel로 분기
@@ -56,6 +60,20 @@ def gen_contract_no() -> str:
 
 def calc_vat(amount: int) -> int:
     return int(amount * 0.1)
+
+
+def _demo_contract_ids(supabase) -> list:
+    """데모(체험) 회사에 속한 계약 id 목록. 어드민 전체목록 제외용."""
+    try:
+        co = supabase.table("companies").select("id").eq("is_demo", True).execute()
+        cids = [c["id"] for c in (co.data or [])]
+        if not cids:
+            return []
+        cs = supabase.table("contracts").select("id").in_("company_id", cids).execute()
+        return [c["id"] for c in (cs.data or [])]
+    except Exception as e:
+        print(f"[CONTRACTS] 데모 계약 조회 실패: {e}")
+        return []
 
 
 # ============================================================
@@ -319,6 +337,11 @@ def get_contracts(
 ):
     supabase = get_supabase()
     query = supabase.table("contracts").select("*", count="exact")
+
+    # 데모(체험) 테넌트 계약 제외 — 회사 스코프 조회가 아닐 때만(어드민 전체목록)
+    if not company_id:
+        for cid in _demo_contract_ids(supabase):
+            query = query.neq("id", cid)
 
     if company_id:   query = query.eq("company_id", company_id)
     if service_type: query = query.eq("service_type", service_type)
