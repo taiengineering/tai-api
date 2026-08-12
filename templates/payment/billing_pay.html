@@ -61,6 +61,7 @@
       var planCode = params.get('plan_code') || '';
       var companyId = params.get('company_id') || '';
       var factoryId = params.get('factory_id') || '';
+      var returnUrlFront = params.get('return_url') || '';  // 결제 후 복귀 프론트 URL(허용 도메인만 서버가 검증)
       var buyername = params.get('buyername') || '고객';
       var buyertel = params.get('buyertel') || '00000000000';
       var buyeremail = params.get('buyeremail') || '';
@@ -111,7 +112,12 @@
         });
 
         // returnUrl, closeUrl: 현재 도메인 + 프록시 프리픽스 자동 적용
-        f.elements['returnUrl'].value = BASE + '/payments/inicis/billing/return';
+        // 결제 후 복귀 프론트 URL을 ?front= 로 실어 billing_return 이 그 페이지로 리다이렉트.
+        var retUrl = BASE + '/payments/inicis/billing/return';
+        if (returnUrlFront) {
+          retUrl += '?front=' + encodeURIComponent(returnUrlFront);
+        }
+        f.elements['returnUrl'].value = retUrl;
         f.elements['closeUrl'].value = BASE + '/payments/result?resultCode=CLOSE';
 
         document.getElementById('statusText').textContent = '결제창을 여는 중...';
