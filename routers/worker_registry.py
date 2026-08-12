@@ -1,9 +1,10 @@
 """
-작업자 명부 라우터 — v1.1.0
+작업자 명부 라우터 — v1.2.0
 
 작업자 등록 (수동 + 파일 일괄), 목록 조회, 수정, 비활성화, 앱 초대 문자 발송
 
-v1.1.0: 초대 문자 실제 발송 — MessageMi 어댑터 연결 (종전 stub)
+v1.2.0: 초대 발송을 기존 SMS 모듈(capabilities.sms.core)로 연결
+v1.1.0: 초대 문자 실제 발송 시도 (종전 stub)
 
 DB: worker_registry
 endpoints:
@@ -29,7 +30,7 @@ from db.supabase_client import get_supabase
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/worker-registry", tags=["worker_registry"])
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 # 초대 링크. 단축 도메인(w.taieng.co.kr)이 코드에 적혀 있었으나 프로젝트 어디에도
 # 근거가 없어 실제 앱 주소를 쓴다. 환경변수로 바꿀 수 있게 둔다.
@@ -485,25 +486,34 @@ def delete_worker(worker_id: str):
 # ============================================================
 # POST /worker-registry/{id}/invite  앱 초대 문자 발송
 #
-# v1.1.0: 실제 발송으로 전환.
-#   종전에는 메시지 문자열을 만들어 print 로 출력하고 invite_sent_at 만 갱신했다.
+# v1.2.0: 기존 SMS 모듈을 직접 호출한다.
+#   SMS 는 capabilities/sms/core.py 로 이미 모듈화되어 있고 routers/messaging.py
+#   가 그것을 쓴다. Supabase Edge Function(서울) 경유이며 retry·timeout 이 내장돼
+#   있다. 초대 발송도 같은 모듈을 쓴다.
+#
+#   v1.1.0 은 services/notification_engine/adapters/sms.py 를 불렀으나, 그 어댑터는
+#   api.messagemi.com 을 직접 호출하는데 그 도메인이 존재하지 않아 DNS 해석에
+#   실패했다(NameResolutionError).
+#
+#   종전(v1.0.0)에는 메시지 문자열을 print 로 출력하고 invite_sent_at 만 갱신했다.
 #   그럼에도 응답은 "초대 문자가 발송됐습니다" 였기에, 관리자 화면에서는 성공으로
 #   보이지만 실제로는 아무것도 나가지 않았다.
-#   MessageMi 어댑터를 연결하고, 실패를 성공으로 표시하지 않는다.
 # ============================================================
 
 def _build_invite_message(name: str) -> str:
     """초대 문안.
 
-    SMS 는 90바이트 제한이며 어댑터가 message[:90] 으로 자른다.
-    URL 을 앞쪽에 두어 이름이 길어도 링크가 잘리지 않게 한다 —
+    URL 을 앞쪽에 두어 이름이 길어도 링크가 온전하게 남도록 한다 —
     링크가 깨지면 초대의 목적 자체가 사라진다.
+    길이 제한은 신경 쓰지 않는다. core.detect_msg_type() 이 90바이트 초과 시
+    LMS 로 판별한다.
     """
-    return f"[TAI Safe] 안전점검 앱 설치\n{APP_INVITE_URL}\n{name}님"
+    suffix = f"\n{name}님" if name else ""
+    return f"[TAI Safe] 안전점검 앱 설치\n{APP_INVITE_URL}{suffix}"
 
 
 @router.post("/{worker_id}/invite")
-def send_invite(worker_id: str):
+async def send_invite(worker_id: str):
     """작업자에게 앱 초대 문자를 발송한다."""
     supabase = get_supabase()
     chk = supabase.table("worker_registry").select(
@@ -520,20 +530,19 @@ def send_invite(worker_id: str):
     invite_msg = _build_invite_message(worker.get("name") or "")
 
     try:
-        from services.notification_engine.adapters.sms import send_sms
-        result = send_sms(invite_msg, phone)
+        from capabilities.sms.core import send_sms
+        result = await send_sms(phone, invite_msg, title="TAI Safe")
     except Exception as e:
-        log.error(f"[invite] SMS 어댑터 호출 실패 worker_id={worker_id}: {e}")
-        raise HTTPException(status_code=502, detail="문자 발송에 실패했습니다. 잠시 후 다시 시도해주세요.")
+        log.error(f"[invite] SMS 발송 예외 worker_id={worker_id} phone={phone}: {e}")
+        raise HTTPException(status_code=502, detail=f"문자 발송에 실패했습니다. ({str(e)[:150]})")
 
-    if not result.success:
+    if not result.get("success"):
         # 발송에 실패했으면 invite_sent_at 을 남기지 않는다. 기록이 남으면
         # 관리자가 이미 보냈다고 판단해 재발송하지 않는다.
-        log.error(f"[invite] 발송 실패 worker_id={worker_id} phone={phone}: {result.error_message}")
-        raise HTTPException(
-            status_code=502,
-            detail=f"문자 발송에 실패했습니다. ({result.error_message or '알 수 없는 오류'})",
-        )
+        # code·raw 를 함께 남긴다 — 발신번호 미등록·잔액 부족 등을 구분해야 한다.
+        err = f"code={result.get('code')} {str(result.get('raw'))[:150]}"
+        log.error(f"[invite] 발송 실패 worker_id={worker_id} phone={phone}: {err}")
+        raise HTTPException(status_code=502, detail=f"문자 발송에 실패했습니다. ({err})")
 
     now = _now_iso()
     supabase.table("worker_registry").update({
@@ -541,7 +550,7 @@ def send_invite(worker_id: str):
         "updated_at":     now,
     }).eq("id", worker_id).execute()
 
-    log.info(f"[invite] 발송 성공 worker_id={worker_id} phone={phone}")
+    log.info(f"[invite] 발송 성공 worker_id={worker_id} phone={phone} mode={result.get('mode')}")
 
     return {
         "status":  "success",
@@ -552,6 +561,6 @@ def send_invite(worker_id: str):
             "phone":          worker["phone"],
             "invite_sent_at": now,
             "message":        invite_msg,
-            "external_id":    result.external_id,
+            "mode":           result.get("mode"),
         }
     }
