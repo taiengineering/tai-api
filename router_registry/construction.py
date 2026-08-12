@@ -20,6 +20,9 @@ ROUTERS = [
     {"module": "routers.worker_reports"},  # 안전신고 /safety-reports · 긴급신고 /emergency/report
     {"module": "routers.worker_assets"},   # 사진업로드 /uploads/inspection-photo · /work-assignments · /education/worker-complete
     {"module": "routers.worker_permits"},  # 위험성평가 참여 /risk-assessments/{id}/participate · 출퇴근 /attendance · 작업허가 /work-permits
+    # TBM 리더 스코프 /leader/* — 토큰의 team_id 로만 조회, 클라이언트 team_id 불신
+    # 모듈이 APIRouter(prefix="/leader") 를 이미 갖고 있어 여기서 prefix 를 주지 않는다.
+    {"module": "routers.leader_scope"},
     {"module": "routers.equipment_assets"},
     {"module": "routers.equipment_checkins"},
     {"module": "routers.engine_equipment"},
