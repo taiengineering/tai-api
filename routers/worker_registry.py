@@ -1,8 +1,12 @@
 """
-작업자 명부 라우터 — v1.3.0
+작업자 명부 라우터 — v1.4.0
 
 작업자 등록 (수동 + 파일 일괄), 목록 조회, 수정, 비활성화, 앱 초대 문자 발송
 
+v1.4.0: 부서·팀·그룹(구조화 org) 연동
+  - GET 목록에 department_id/team_id/group_id 필터 추가 (worker_group 멤버십 기준)
+  - bulk-import 에 부서/팀/그룹 컬럼 파싱 → 그룹 해석 후 worker_group 배정(대표 1건 교체)
+  - bulk-import 전화번호 헤더 '연락처'/'연락처(필수)' 도 인식(프론트 템플릿과 정합)
 v1.3.0: 수정 시 factory_id·memo 반영 (종전 WorkerUpdate에 없어 무시됐음). worker_registry.memo 컬럼 사용.
 v1.2.0: 초대 발송을 기존 SMS 모듈(capabilities.sms.core)로 연결
 v1.1.0: 초대 문자 실제 발송 시도 (종전 stub)
@@ -31,7 +35,7 @@ from db.supabase_client import get_supabase
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/worker-registry", tags=["worker_registry"])
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 # 초대 링크. 단축 도메인(w.taieng.co.kr)이 코드에 적혀 있었으나 프로젝트 어디에도
 # 근거가 없어 실제 앱 주소를 쓴다. 환경변수로 바꿀 수 있게 둔다.
@@ -117,6 +121,89 @@ def _get_job_type_name(code: str) -> str:
 
 
 # ============================================================
+# 부서·팀·그룹(구조화 org) 헬퍼 — v1.4.0
+# ============================================================
+
+def _org_worker_ids(supabase, department_id: Optional[str], team_id: Optional[str], group_id: Optional[str]):
+    """
+    부서/팀/그룹 필터에 해당하는 worker_registry.id 집합을 반환.
+    - group_id 지정 시: 그 그룹의 구성원
+    - team_id 지정 시: 그 팀 하위 모든 그룹의 구성원
+    - department_id 지정 시: 그 부서 하위 모든 팀→그룹의 구성원
+    필터 미지정이면 None(=필터 없음), 매칭 그룹 없으면 [] 반환.
+    """
+    if not (group_id or team_id or department_id):
+        return None
+
+    gids: list = []
+    if group_id:
+        gids = [group_id]
+    elif team_id:
+        gr = supabase.table("groups").select("id").eq("team_id", team_id).execute()
+        gids = [g["id"] for g in (gr.data or [])]
+    elif department_id:
+        tr = supabase.table("teams").select("id").eq("department_id", department_id).execute()
+        tids = [t["id"] for t in (tr.data or [])]
+        if tids:
+            gr = supabase.table("groups").select("id").in_("team_id", tids).execute()
+            gids = [g["id"] for g in (gr.data or [])]
+
+    if not gids:
+        return []
+    wg = supabase.table("worker_group").select("worker_id").in_("group_id", gids).execute()
+    return list({w["worker_id"] for w in (wg.data or [])})
+
+
+def _resolve_group_id(supabase, factory_id: str, dept_name: str, team_name: str, group_name: str) -> Optional[str]:
+    """엑셀의 부서/팀/그룹 '이름'을 factory 범위 org 에서 group_id 로 해석. 실패 시 None."""
+    if not group_name:
+        return None
+
+    dept_id = None
+    if dept_name:
+        d = supabase.table("departments").select("id").eq(
+            "factory_id", factory_id
+        ).eq("department_name", dept_name).limit(1).execute()
+        dept_id = d.data[0]["id"] if d.data else None
+
+    team_id = None
+    if team_name:
+        tq = supabase.table("teams").select("id").eq("team_name", team_name)
+        if dept_id:
+            tq = tq.eq("department_id", dept_id)
+        t = tq.limit(1).execute()
+        team_id = t.data[0]["id"] if t.data else None
+
+    gq = supabase.table("groups").select("id, team_id").eq("group_name", group_name)
+    if team_id:
+        gq = gq.eq("team_id", team_id)
+    g = gq.execute()
+    rows = g.data or []
+    if not rows:
+        return None
+    if len(rows) == 1 or team_id:
+        return rows[0]["id"]
+    # 이름 중복 & 팀 미지정 → factory 소속 팀으로 좁혀 첫 매칭
+    fac_teams = supabase.table("teams").select("id").eq("factory_id", factory_id).execute()
+    fac_team_ids = {t["id"] for t in (fac_teams.data or [])}
+    for r in rows:
+        if r.get("team_id") in fac_team_ids:
+            return r["id"]
+    return rows[0]["id"]
+
+
+def _assign_worker_group(supabase, worker_id: str, group_id: str):
+    """대표 1건 교체: 기존 배정 제거 후 해당 그룹으로 재배정."""
+    try:
+        supabase.table("worker_group").delete().eq("worker_id", worker_id).execute()
+        supabase.table("worker_group").insert({
+            "worker_id": worker_id, "group_id": group_id, "is_lead": False,
+        }).execute()
+    except Exception as e:
+        log.warning(f"[bulk] worker_group 배정 실패 worker={worker_id} group={group_id}: {e}")
+
+
+# ============================================================
 # 스키마
 # ============================================================
 
@@ -163,8 +250,8 @@ def download_template():
         # 시트 1: 데이터 입력
         ws = wb.active
         ws.title = "작업자명부"
-        ws.append(["이름(필수)", "연락선(필수)", "직종(필수)", "소속업체", "입사일"])
-        ws.append(["홍길동", "010-1234-5678", "용접공", "(\uc8fc)ABC건설", "2026-04-01"])
+        ws.append(["이름(필수)", "연락처(필수)", "직종(필수)", "소속업체", "입사일", "부서", "팀", "그룹"])
+        ws.append(["홍길동", "010-1234-5678", "용접공", "(\uc8fc)ABC건설", "2026-04-01", "공사부", "골조팀", "철근·형틀반"])
 
         # 시트 2: 직종 참고
         ws2 = wb.create_sheet(title="직종목록(참고)")
@@ -190,8 +277,8 @@ def download_template():
         )
     except ImportError:
         # openpyxl 미설치 시 CSV fallback
-        csv_content = "이름(필수),연락선(필수),직종(필수),소속업체,입사일\n"
-        csv_content += "홍길동,010-1234-5678,용접공,(\uc8fc)ABC건설,2026-04-01\n"
+        csv_content = "이름(필수),연락처(필수),직종(필수),소속업체,입사일,부서,팀,그룹\n"
+        csv_content += "홍길동,010-1234-5678,용접공,(\uc8fc)ABC건설,2026-04-01,공사부,골조팀,철근·형틀반\n"
         buf = io.BytesIO(csv_content.encode("utf-8-sig"))
         return StreamingResponse(
             buf,
@@ -213,7 +300,7 @@ def create_worker(body: WorkerCreate):
 
     phone = _normalize_phone(body.phone)
     if not phone:
-        raise HTTPException(status_code=422, detail="연락선은 필수입니다.")
+        raise HTTPException(status_code=422, detail="연락처는 필수입니다.")
 
     # factory → company_id 조회
     fac = supabase.table("factories").select("company_id").eq(
@@ -274,8 +361,9 @@ async def bulk_import_workers(
 ):
     """
     엑셀 / CSV 파일로 작업자 일괄 등록.
-    켇럼: 이름(필수) | 연락선(필수) | 직종(필수) | 소속업체 | 입사일
+    컬럼: 이름(필수) | 연락처(필수) | 직종(필수) | 소속업체 | 입사일 | 부서 | 팀 | 그룹
     - 직종명 → WJT 코드 자동 매핑 (실패 시 WJT020)
+    - 부서/팀/그룹 이름 → 해당 그룹으로 worker_group 배정(구조화 org)
     - 중복 전화번호 → 업데이트
     """
     supabase = get_supabase()
@@ -311,7 +399,7 @@ async def bulk_import_workers(
     if not rows:
         raise HTTPException(status_code=422, detail="파일에 데이터가 없습니다.")
 
-    # 콼럼명 정규화 함수
+    # 컬럼명 정규화 함수
     def _col(row: dict, *keys: str) -> str:
         for k in keys:
             if k in row and str(row[k]).strip():
@@ -331,21 +419,25 @@ async def bulk_import_workers(
         "WJT019":"일용직","WJT020":"기타"
     }
     mapping_failed = []  # 직종 매핑 실패 항목
+    org_failed = []      # 부서/팀/그룹 매칭 실패 항목
 
     for idx, row in enumerate(rows, start=2):  # 1행 = 헤더
         name     = _col(row, "이름", "이름(필수)", "name")
-        phone_raw = _col(row, "연락선", "연락선(필수)", "phone", "휴대폰")
+        phone_raw = _col(row, "연락처", "연락처(필수)", "연락선", "연락선(필수)", "phone", "휴대폰")
         job_name = _col(row, "직종", "직종(필수)", "job_type", "직종명")
         contractor = _col(row, "소속업체", "contractor")
         start_date = _col(row, "입사일", "start_date")
+        dept_name  = _col(row, "부서", "department")
+        team_name  = _col(row, "팀", "team")
+        group_name = _col(row, "그룹", "조", "group")
 
         if not name or not phone_raw:
-            failed.append({"row": idx, "reason": "이름/연락선 누락"})
+            failed.append({"row": idx, "reason": "이름/연락처 누락"})
             continue
 
         phone = _normalize_phone(phone_raw)
         if len(phone) < 10:
-            failed.append({"row": idx, "name": name, "reason": "연락선 형식 오류"})
+            failed.append({"row": idx, "name": name, "reason": "연락처 형식 오류"})
             continue
 
         job_type_code = _match_job_type(job_name)
@@ -367,6 +459,7 @@ async def bulk_import_workers(
         }
         if contractor:  record["contractor_name"] = contractor
         if start_date:  record["start_date"]      = start_date
+        if dept_name:   record["department"]      = dept_name  # 텍스트 부서명도 함께 보관(참고용)
 
         try:
             # 중복 여부 확인 (factory_id + phone)
@@ -376,14 +469,24 @@ async def bulk_import_workers(
 
             if dup.data:
                 # 업데이트
+                worker_id = dup.data[0]["id"]
                 supabase.table("worker_registry").update(record).eq(
-                    "id", dup.data[0]["id"]
+                    "id", worker_id
                 ).execute()
                 updated += 1
             else:
                 record["created_at"] = now
-                supabase.table("worker_registry").insert(record).execute()
+                ins = supabase.table("worker_registry").insert(record).execute()
+                worker_id = ins.data[0]["id"] if ins.data else None
                 created += 1
+
+            # 부서/팀/그룹 → worker_group 배정
+            if worker_id and group_name:
+                gid = _resolve_group_id(supabase, factory_id, dept_name, team_name, group_name)
+                if gid:
+                    _assign_worker_group(supabase, worker_id, gid)
+                else:
+                    org_failed.append({"row": idx, "name": name, "group": group_name})
         except Exception as e:
             failed.append({"row": idx, "name": name, "reason": str(e)})
 
@@ -395,6 +498,7 @@ async def bulk_import_workers(
             "updated":        updated,
             "failed":         failed,
             "mapping_failed": mapping_failed,  # 직종 매핑 실패 목록
+            "org_failed":     org_failed,      # 부서/팀/그룹 매칭 실패 목록
         }
     }
 
@@ -408,12 +512,22 @@ def get_workers(
     factory_id:    Optional[str]  = Query(None),
     company_id:    Optional[str]  = Query(None),
     job_type_code: Optional[str]  = Query(None),
+    department_id: Optional[str]  = Query(None),
+    team_id:       Optional[str]  = Query(None),
+    group_id:      Optional[str]  = Query(None),
     is_active:     Optional[bool] = Query(None),
-    keyword:       Optional[str]  = Query(None, description="이름/연락선/소속업체 통합 검색"),
+    keyword:       Optional[str]  = Query(None, description="이름/연락처/소속업체 통합 검색"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
     supabase = get_supabase()
+
+    # 부서/팀/그룹 필터 → worker_group 멤버십으로 대상 worker id 산출
+    org_ids = _org_worker_ids(supabase, department_id, team_id, group_id)
+    if org_ids is not None and len(org_ids) == 0:
+        # 필터는 걸렸으나 해당 인원 없음 → 빈 결과
+        return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0}}
+
     query = supabase.table("worker_registry").select(
         "id, factory_id, company_id, name, phone, job_type_code, job_type_name, "
         "contractor_name, department, start_date, end_date, memo, "
@@ -423,6 +537,7 @@ def get_workers(
     if factory_id:    query = query.eq("factory_id",    factory_id)
     if company_id:    query = query.eq("company_id",    company_id)
     if job_type_code: query = query.eq("job_type_code", job_type_code)
+    if org_ids is not None: query = query.in_("id", org_ids)
     if is_active is not None: query = query.eq("is_active", is_active)
     if keyword:       query = query.or_(
         f"name.ilike.%{keyword}%,phone.ilike.%{keyword}%,contractor_name.ilike.%{keyword}%"
