@@ -84,7 +84,6 @@
         company_id: companyId || undefined,
         contract_id: contractId || undefined,
         period_months: periodMonths || undefined,
-        return_url: returnUrlFront || undefined,
         buyername: buyername,
         buyertel: buyertel,
         buyeremail: buyeremail
@@ -115,8 +114,12 @@
           }
         });
 
-        // returnUrl, closeUrl: 현재 도메인 + 프록시 프리픽스 자동 적용 (단건 콜백)
-        f.elements['returnUrl'].value = BASE + '/payments/inicis/return';
+        // returnUrl: 단건 콜백. 결제 후 복귀 프론트 URL을 ?front= 로 실어 콜백이 그 페이지로 리다이렉트.
+        var retUrl = BASE + '/payments/inicis/return';
+        if (returnUrlFront) {
+          retUrl += '?front=' + encodeURIComponent(returnUrlFront);
+        }
+        f.elements['returnUrl'].value = retUrl;
         f.elements['closeUrl'].value = BASE + '/payments/result?resultCode=CLOSE';
 
         document.getElementById('statusText').textContent = '결제창을 여는 중...';
