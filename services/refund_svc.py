@@ -26,6 +26,7 @@ from services.payment_helpers import (
     INICIS_INIAPI_KEY,
     INICIS_MID,
     REFUND_URL,
+    get_proxies,
     now_iso,
     sha512,
     ts_yyyymmddhhmmss,
@@ -65,14 +66,6 @@ def _assert_refund_live(payment_id: str, refund_type: str, amount: int,
         "실환불 실호출이 운영 게이트로 잠겨 있습니다(REFUND_LIVE 비활성). "
         "실제 이니시스 취소는 나가지 않았습니다. 실행하려면 운영자가 실호출을 활성화해야 합니다.",
     )
-
-
-def _proxies() -> Optional[Dict[str, str]]:
-    """이니시스 화이트리스트 IP(iwinV 프록시) 경유. env 없으면 직접."""
-    proxy = os.getenv(_OUTBOUND_PROXY_ENV, "").strip()
-    if not proxy:
-        return None
-    return {"http": proxy, "https": proxy}
 
 
 def _load_payment(payment_id: str) -> Dict[str, Any]:
@@ -130,7 +123,7 @@ def _call_inicis_refund(params: Dict[str, str]) -> Dict[str, Any]:
             data=params,
             timeout=30,
             headers={"Content-Type": "application/x-www-form-urlencoded;charset=utf-8"},
-            proxies=_proxies(),
+            proxies=get_proxies(),
         )
         data = resp.json()
     except Exception as e:  # noqa: BLE001
