@@ -33,7 +33,7 @@ INICIS_BILLING_MID = os.getenv("INICIS_BILLING_MID", "")
 INICIS_INILITE_KEY = os.getenv("INICIS_INILITE_KEY", "")
 INICIS_INIAPI_KEY = os.getenv("INICIS_INIAPI_KEY", "")
 
-INICIS_CLIENT_IP = os.getenv("INICIS_CLIENT_IP", "115.68.227.222")
+INICIS_CLIENT_IP = os.getenv("INICIS_CLIENT_IP", "")
 
 BILLING_ISSUE_URL = "https://inilitepay.inicis.com/pay/card/billing"
 BILLING_CHARGE_URL = os.getenv(
@@ -150,6 +150,26 @@ def decrypt_billkey(encrypted: str, inilite_key: str) -> Optional[str]:
         return decrypted.decode("utf-8")
     except Exception:
         return None
+
+
+def get_proxies() -> Optional[dict[str, str]]:
+    """이니시스 화이트리스트(고정 IP) 프록시 경유용 proxies dict.
+
+    - OUTBOUND_PROXY 미설정 → None(직접 연결)
+    - OUTBOUND_PROXY에 자격증명이 없고 PROXY_USER/PROXY_PASS가 있으면
+      URL에 주입(프록시가 htpasswd 인증을 요구하는 경우 대응)
+    """
+    proxy = os.getenv("OUTBOUND_PROXY", "").strip()
+    if not proxy:
+        return None
+    scheme, sep, rest = proxy.partition("://")
+    if sep and "@" not in rest:
+        user = os.getenv("PROXY_USER", "").strip()
+        pw = os.getenv("PROXY_PASS", "").strip()
+        if user and pw:
+            from urllib.parse import quote
+            proxy = f"{scheme}://{quote(user, safe='')}:{quote(pw, safe='')}@{rest}"
+    return {"http": proxy, "https": proxy}
 
 
 def get_server_ip() -> str:
