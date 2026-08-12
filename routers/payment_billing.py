@@ -55,6 +55,7 @@ from services.payment_helpers import (
     FRONT_RETURN_URL,
     SAAS_PRODUCT_TYPES,
     calc_expired_at as _calc_expired_at,
+    get_proxies as _get_proxies,
     now_iso as _now_iso,
     sha256 as _sha256,
     ts_ms as _ts_ms,
@@ -191,6 +192,7 @@ def _call_billing_charge_api(
             data=form,
             timeout=30,
             headers={"Content-Type": "application/x-www-form-urlencoded;charset=utf-8"},
+            proxies=_get_proxies(),
         )
     except Exception as e:
         log.error(f"[BILLING CHARGE] 네트워크 오류: {e}")
