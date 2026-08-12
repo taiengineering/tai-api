@@ -1,13 +1,16 @@
-"""SaaS 플랜 월요금 리졸버 — 기존계약 정기결제/기한연장용 (읽기 전용).
+"""기존계약 결제 지원 — SaaS 월요금 리졸버 + 단건결제 페이지 (읽기/서빙 전용).
 
-정본(SSOT) = price_master(service_type='SAAS'). 뷰/레거시 테이블 참조 안 함.
-계약의 plan_code 를 price_master.tier_code 로 정규화(_V\\d+ 접미어 제거)해 월요금을 반환.
+리졸버(GET /payments/plan-amount):
+  정본(SSOT) = price_master(service_type='SAAS'). 뷰/레거시 테이블 참조 안 함.
+  계약의 plan_code 를 price_master.tier_code 로 정규화(_V\\d+ 접미어 제거)해 월요금을 반환.
+  VAT: price_master.amount 는 공급가(vat_included=false). 두 값 모두 반환한다.
+    - monthly_supply : 단건 기한연장(POST /payments/inicis/prepare)의 amount(=공급가). 백엔드가 VAT 가산.
+    - monthly_total  : 정기결제(GET /payments/billing/pay?amount=)의 amount(=VAT 포함 총액).
+  CUSTOM(협의, amount=0) 또는 매핑 불가 → resolvable=false. 프론트는 결제 대신 담당자 문의 안내.
 
-VAT: price_master.amount 는 공급가(vat_included=false). 두 값 모두 반환한다.
-  - monthly_supply : 단건 기한연장(POST /payments/inicis/prepare)의 amount(=공급가). 백엔드가 VAT 가산.
-  - monthly_total  : 정기결제(GET /payments/billing/pay?amount=)의 amount(=VAT 포함 총액).
-
-CUSTOM(협의, amount=0) 또는 매핑 불가 → resolvable=false. 프론트는 결제 대신 담당자 문의 안내.
+단건결제 페이지(GET /payments/pay):
+  templates/payment/pay.html 서빙. billing/pay 의 단건 버전(기한연장 RENEWAL 등).
+  프론트는 이 URL 로 리다이렉트만 하면 INIStdPay 결제창이 뜬다.
 """
 from __future__ import annotations
 
@@ -15,8 +18,10 @@ import re
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import HTMLResponse
 
 from db.supabase_client import get_supabase
+from services.payment_helpers import load_template
 
 router = APIRouter(prefix="/payments", tags=["결제"])
 
@@ -100,3 +105,9 @@ def resolve_plan_amount(
             "is_custom": False,
         },
     }
+
+
+@router.get("/pay", response_class=HTMLResponse, include_in_schema=True)
+def single_pay_page():
+    """단건결제(기한연장 등) 서버 렌더 페이지. templates/payment/pay.html 서빙."""
+    return HTMLResponse(content=load_template("pay.html"), status_code=200)
