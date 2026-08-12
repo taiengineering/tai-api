@@ -64,6 +64,7 @@
       var contractId = params.get('contract_id') || '';
       var periodMonths = parseInt(params.get('period_months') || '0');
       var paymentType = params.get('payment_type') || 'CARD';
+      var returnUrlFront = params.get('return_url') || '';  // 결제 후 복귀할 프론트 URL(허용 도메인만 서버가 검증)
       var buyername = params.get('buyername') || '고객';
       var buyertel = params.get('buyertel') || '00000000000';
       var buyeremail = params.get('buyeremail') || '';
@@ -83,6 +84,7 @@
         company_id: companyId || undefined,
         contract_id: contractId || undefined,
         period_months: periodMonths || undefined,
+        return_url: returnUrlFront || undefined,
         buyername: buyername,
         buyertel: buyertel,
         buyeremail: buyeremail
