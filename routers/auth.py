@@ -1,4 +1,5 @@
-# routers/auth.py — v3.8.1
+# routers/auth.py — v3.8.2
+# v3.8.2: dev_otp 응답 노출을 환경변수로 통제 + worker_registry 자동 배선 견고화·관측성 보강
 # v3.8.1: users INSERT 시 sector 명시 — 컬럼 기본값 'INDUSTRY' 가 users_sector_check 를 위반
 # v3.8.0: verify-otp 세션 발급 — OTP 통과 시 access_token 반환 + worker_registry 배선
 #         (Phase 3 A단계, DESIGN_phase3-leader-auth_v2 §4)
@@ -33,9 +34,13 @@ RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 # 실제 수신용이 아니며 로그인 식별자로만 쓴다.
 WORKER_EMAIL_DOMAIN = os.getenv("WORKER_EMAIL_DOMAIN", "worker.taieng.co.kr")
 
-# users_sector_check 가 허용하는 값. 컬럼 기본값('INDUSTRY')이 이 목록에 없어
-# sector 를 명시하지 않은 INSERT 는 23514 로 실패한다(기본값 오타).
+# users_sector_check 가 허용하는 값 중 기본값.
 DEFAULT_SECTOR = "INDUSTRIAL"
+
+# send-otp 응답에 인증번호를 실을지 여부. 기본은 비노출이다.
+# 노출하면 누구나 남의 번호로 OTP 를 받아볼 수 있어 전화번호 인증이 무력해진다.
+# 개발·테스트 환경에서만 OTP_DEV_ECHO=1 로 켠다.
+OTP_DEV_ECHO = os.getenv("OTP_DEV_ECHO", "").strip() in ("1", "true", "True")
 
 def get_supabase():
     """v3.7.0: auth.py는 백엔드 라우터 — service_role key로 RLS bypass"""
@@ -141,7 +146,7 @@ class VerifyOtpRequest(BaseModel):
 
 @router.get("/test")
 def test():
-    return {"message": "auth router alive", "version": "3.8.1"}
+    return {"message": "auth router alive", "version": "3.8.2"}
 
 
 # ════════════════════════════════════════════
@@ -169,11 +174,15 @@ def send_otp(req: SendOtpRequest):
             }).eq("phone", phone).execute()
         except Exception:
             pass
-    return {
+    out = {
         "status":  "success",
         "message": f"인증번호를 발송했습니다 ({phone})",
-        "dev_otp": otp_code,  # ⚠ 개발용 — 프로덕션 배포 시 제거
     }
+    # v3.8.2: 기본 비노출. OTP_DEV_ECHO=1 인 환경에서만 응답에 싣는다.
+    # 종전에는 항상 실어 보내, 번호만 알면 남의 인증번호를 받아볼 수 있었다.
+    if OTP_DEV_ECHO:
+        out["dev_otp"] = otp_code
+    return out
 
 
 # ════════════════════════════════════════════
@@ -264,6 +273,38 @@ def _issue_session_for_phone(supabase, phone: str, user_row: Optional[dict]) -> 
     return None, None, user_row
 
 
+def _find_worker_registry(supabase, phone: str) -> Optional[dict]:
+    """전화번호로 worker_registry 행을 찾는다.
+
+    v3.8.2: 정확 일치 → 정규화 대조 폴백의 2단 구조.
+      저장 형식이 하이픈 유무뿐 아니라 공백·국가번호 등으로 섞일 수 있어,
+      정확 일치만으로는 놓칠 수 있다. 등록 인원이 많지 않은 구간이라
+      후보를 받아 대조하는 비용이 작다.
+    """
+    clean = normalize_phone(phone)
+
+    for v in _phone_variants(phone):
+        try:
+            r = supabase.table("worker_registry").select("id,user_id,phone").eq("phone", v).limit(1).execute()
+            if r.data:
+                return r.data[0]
+        except Exception as e:
+            log.error(f"[worker_registry] 조회 실패 phone={v}: {e}")
+
+    if clean:
+        try:
+            tail = clean[-8:]
+            r = supabase.table("worker_registry").select("id,user_id,phone").ilike("phone", f"%{tail}%").limit(20).execute()
+            for row in (r.data or []):
+                if normalize_phone(row.get("phone") or "") == clean:
+                    log.info(f"[worker_registry] 폴백 대조로 발견 phone={clean} stored={row.get('phone')}")
+                    return row
+        except Exception as e:
+            log.error(f"[worker_registry] 폴백 조회 실패 phone={clean}: {e}")
+
+    return None
+
+
 def _ensure_user_row(supabase, phone: str) -> Optional[dict]:
     """users 행이 없으면 worker_registry 정보로 만든다.
 
@@ -276,21 +317,24 @@ def _ensure_user_row(supabase, phone: str) -> Optional[dict]:
         if u.data:
             return u.data[0]
 
-    wr = None
-    for v in variants:
-        r = supabase.table("worker_registry").select("*").eq("phone", v).limit(1).execute()
-        if r.data:
-            wr = r.data[0]
-            break
+    wr = _find_worker_registry(supabase, phone)
     if not wr:
         return None
+
+    # 폴백 조회는 id·user_id·phone 만 가져오므로 생성에 필요한 나머지를 채운다.
+    try:
+        full = supabase.table("worker_registry").select("*").eq("id", wr["id"]).limit(1).execute()
+        if full.data:
+            wr = full.data[0]
+    except Exception:
+        pass
 
     clean = normalize_phone(phone)
 
     # v3.8.1: sector 는 반드시 명시한다.
-    # users.sector 의 컬럼 기본값이 'INDUSTRY' 인데 users_sector_check 는
+    # users.sector 의 컬럼 기본값이 'INDUSTRY' 였고 users_sector_check 는
     # BUILDING|INDUSTRIAL|CONSTRUCTION|SPECIAL_FACILITY|COMMON (또는 NULL)만
-    # 허용해, 미지정 INSERT 는 23514 제약 위반으로 실패한다(기본값 오타).
+    # 허용해, 미지정 INSERT 가 23514 로 실패했다(기본값 오타, 이후 수정됨).
     # worker_registry 에는 sector 컬럼이 없으므로 소속 시설에서 가져온다.
     sector = DEFAULT_SECTOR
     if wr.get("factory_id"):
@@ -331,21 +375,43 @@ def _ensure_user_row(supabase, phone: str) -> Optional[dict]:
 
 
 def _link_worker_registry(supabase, phone: str, user_id: str) -> None:
-    """worker_registry.user_id·app_installed 배선. 실패해도 로그인을 막지 않는다."""
+    """worker_registry.user_id·app_installed 배선. 실패해도 로그인을 막지 않는다.
+
+    v3.8.2: 견고화 + 관측성 보강.
+      v3.8.0 에서 이 배선이 동작하지 않아 수동 SQL 로 처리해야 했다. 컬럼 타입·
+      제약을 실측했으나 결함을 특정하지 못했고, 전체를 하나의 try 로 감싸 예외
+      로그도 남지 않아 어느 단계에서 빠졌는지 알 수 없었다. 단계를 분리해 각
+      분기의 결과를 남기고, 갱신 후 실제 반영까지 확인한다.
+    """
+    clean = normalize_phone(phone)
+    target = _find_worker_registry(supabase, phone)
+
+    if not target:
+        # 등록되지 않은 번호로는 여기까지 오지 않는다(_ensure_user_row 가 먼저 막는다).
+        # 그럼에도 도달했다면 조회 경로에 문제가 있다는 신호이므로 남긴다.
+        log.error(f"[verify-otp] worker_registry 대상 없음 phone={clean}")
+        return
+
+    if target.get("user_id") == user_id:
+        return
+
     try:
-        for v in _phone_variants(phone):
-            r = supabase.table("worker_registry").select("id, user_id").eq("phone", v).limit(1).execute()
-            if not r.data:
-                continue
-            if r.data[0].get("user_id") == user_id:
-                return
-            supabase.table("worker_registry").update({
-                "user_id": user_id, "app_installed": True, "updated_at": _now_iso(),
-            }).eq("id", r.data[0]["id"]).execute()
-            log.info(f"[verify-otp] worker_registry 배선 phone={v} user_id={user_id}")
-            return
+        supabase.table("worker_registry").update({
+            "user_id": user_id, "app_installed": True, "updated_at": _now_iso(),
+        }).eq("id", target["id"]).execute()
     except Exception as e:
-        log.error(f"[verify-otp] worker_registry 배선 실패 phone={phone}: {e}")
+        log.error(f"[verify-otp] worker_registry 갱신 실패 id={target['id']} phone={clean}: {e}")
+        return
+
+    # 갱신이 실제로 반영됐는지 확인한다. update 가 0행을 처리해도 예외가 나지
+    # 않으므로, 호출이 끝났다는 사실만으로 성공을 단정할 수 없다.
+    try:
+        chk = supabase.table("worker_registry").select("user_id").eq("id", target["id"]).limit(1).execute()
+        ok = bool(chk.data) and chk.data[0].get("user_id") == user_id
+        log.info(f"[verify-otp] worker_registry 배선 {'성공' if ok else '미반영'} "
+                 f"id={target['id']} phone={clean} user_id={user_id}")
+    except Exception as e:
+        log.error(f"[verify-otp] worker_registry 확인 실패 id={target['id']}: {e}")
 
 
 @router.post("/verify-otp")
@@ -765,7 +831,7 @@ def register(req: RegisterRequest):
             "auth_id": auth_id, "email": req.email, "phone": phone_normalized,
             "name": req.name, "username": phone_normalized, "role_code": req.role_code,
             "company_id": company_id, "user_code": user_code, "status_code": "PENDING",
-            # v3.8.1: sector 미지정 시 컬럼 기본값 'INDUSTRY' 가 CHECK 제약을 위반한다.
+            # v3.8.1: sector 를 명시한다. 컬럼 기본값이 CHECK 제약과 어긋나 있던 이력이 있다.
             "sector": DEFAULT_SECTOR,
             "is_active": False, "allow_push": True, "allow_sms": True,
             "allow_email": True, "allow_kakao": False,
