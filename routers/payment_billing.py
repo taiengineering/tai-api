@@ -25,6 +25,9 @@ payments.py(단건결제)와는 별도 파일로 분리. 동일한 prefix="/paym
   INICIS_BILLING_SIGN_KEY     — STEP3(SHA256)용
   INICIS_BILLING_INIAPI_KEY   — Billing API(SHA512)용
   INICIS_CLIENT_IP            — 이니시스 API 호출 시 clientIp 파라미터
+
+[2026-08-12 item3] billing_return 이 returnUrl?front= 로 전달된 복귀 프론트 URL을
+  허용 도메인 검증(safe_front_return_url) 후 리다이렉트에 사용. 값 없으면 기존 FRONT_RETURN_URL.
 """
 from __future__ import annotations
 
@@ -57,6 +60,7 @@ from services.payment_helpers import (
     calc_expired_at as _calc_expired_at,
     get_proxies as _get_proxies,
     now_iso as _now_iso,
+    safe_front_return_url,
     sha256 as _sha256,
     ts_ms as _ts_ms,
 )
@@ -624,6 +628,8 @@ async def billing_return(request: Request):
     빌링키 발급 콜백 (STEP2 → STEP3 → BillKey 저장 → 첫 결제).
     성공 시 /payments/result 로 RedirectResponse.
     """
+    # 결제 후 복귀 프론트 URL: billing_pay.html 이 returnUrl?front= 로 전달. 허용 도메인만 통과, 없으면 기본값.
+    front = safe_front_return_url(request.query_params.get("front", "")) or FRONT_RETURN_URL
     try:
         form = await request.form()
         data: Dict[str, Any] = dict(form)
@@ -632,7 +638,7 @@ async def billing_return(request: Request):
             data = await request.json()
         except Exception:
             return RedirectResponse(
-                f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=파싱실패",
+                f"{front}?resultCode=FAIL&msg=파싱실패",
                 status_code=302,
             )
 
@@ -648,7 +654,7 @@ async def billing_return(request: Request):
     if result_code and result_code != "0000":
         _fail_subscription_by_oid(supabase, order_id, result_msg or "인증 실패")
         return RedirectResponse(
-            f"{FRONT_RETURN_URL}?resultCode=FAIL&msg={urllib.parse.quote(result_msg or '인증 실패')}&oid={order_id}",
+            f"{front}?resultCode=FAIL&msg={urllib.parse.quote(result_msg or '인증 실패')}&oid={order_id}",
             status_code=302,
         )
 
@@ -656,7 +662,7 @@ async def billing_return(request: Request):
     subscription = find_subscription_by_oid(order_id)
     if not subscription:
         return RedirectResponse(
-            f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=구독정보없음&oid={order_id}",
+            f"{front}?resultCode=FAIL&msg=구독정보없음&oid={order_id}",
             status_code=302,
         )
     subscription_id = subscription["id"]
@@ -664,14 +670,14 @@ async def billing_return(request: Request):
     # 멱등: 이미 처리됨
     if subscription.get("status") == "ACTIVE":
         return RedirectResponse(
-            f"{FRONT_RETURN_URL}?resultCode=00&oid={order_id}&subscription_id={subscription_id}",
+            f"{front}?resultCode=00&oid={order_id}&subscription_id={subscription_id}",
             status_code=302,
         )
 
     if not auth_url:
         _fail_subscription_by_oid(supabase, order_id, "authUrl 없음")
         return RedirectResponse(
-            f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=authUrl없음&oid={order_id}",
+            f"{front}?resultCode=FAIL&msg=authUrl없음&oid={order_id}",
             status_code=302,
         )
 
@@ -683,7 +689,7 @@ async def billing_return(request: Request):
     except Exception as e:
         _fail_subscription_by_oid(supabase, order_id, f"STEP3 호출 실패: {e}")
         return RedirectResponse(
-            f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=STEP3오류&oid={order_id}",
+            f"{front}?resultCode=FAIL&msg=STEP3오류&oid={order_id}",
             status_code=302,
         )
 
@@ -691,7 +697,7 @@ async def billing_return(request: Request):
         fail = auth_result.get("resultMsg", "빌링키 발급 실패")
         _fail_subscription_by_oid(supabase, order_id, fail)
         return RedirectResponse(
-            f"{FRONT_RETURN_URL}?resultCode=FAIL&msg={urllib.parse.quote(fail)}&oid={order_id}",
+            f"{front}?resultCode=FAIL&msg={urllib.parse.quote(fail)}&oid={order_id}",
             status_code=302,
         )
 
@@ -700,7 +706,7 @@ async def billing_return(request: Request):
     if not bill_key:
         _fail_subscription_by_oid(supabase, order_id, "CARD_BillKey 응답 없음")
         return RedirectResponse(
-            f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=빌링키없음&oid={order_id}",
+            f"{front}?resultCode=FAIL&msg=빌링키없음&oid={order_id}",
             status_code=302,
         )
 
@@ -728,7 +734,7 @@ async def billing_return(request: Request):
     if not bk_ins.data:
         _fail_subscription_by_oid(supabase, order_id, "billing_keys 저장 실패")
         return RedirectResponse(
-            f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=빌링키저장실패&oid={order_id}",
+            f"{front}?resultCode=FAIL&msg=빌링키저장실패&oid={order_id}",
             status_code=302,
         )
     billing_key_row = bk_ins.data[0]
@@ -786,12 +792,12 @@ async def billing_return(request: Request):
             "subscription_id": subscription_id,
             "expired_at":      subscription.get("next_billing_at") or "",
         })
-        return RedirectResponse(f"{FRONT_RETURN_URL}?{qs}", status_code=302)
+        return RedirectResponse(f"{front}?{qs}", status_code=302)
 
     fail_msg = charge_res.get("result", {}).get("resultMsg", "첫 결제 실패")
     _fail_subscription_by_oid(supabase, order_id, str(fail_msg))
     return RedirectResponse(
-        f"{FRONT_RETURN_URL}?resultCode=FAIL&msg={urllib.parse.quote(str(fail_msg))}&oid={order_id}",
+        f"{front}?resultCode=FAIL&msg={urllib.parse.quote(str(fail_msg))}&oid={order_id}",
         status_code=302,
     )
 
