@@ -1,7 +1,9 @@
 """
-작업자 명부 라우터 — v1.0.0
+작업자 명부 라우터 — v1.1.0
 
 작업자 등록 (수동 + 파일 일괄), 목록 조회, 수정, 비활성화, 앱 초대 문자 발송
+
+v1.1.0: 초대 문자 실제 발송 — MessageMi 어댑터 연결 (종전 stub)
 
 DB: worker_registry
 endpoints:
@@ -19,12 +21,19 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
 import io
+import os
 import re
+import logging
 from db.supabase_client import get_supabase
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/worker-registry", tags=["worker_registry"])
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
+
+# 초대 링크. 단축 도메인(w.taieng.co.kr)이 코드에 적혀 있었으나 프로젝트 어디에도
+# 근거가 없어 실제 앱 주소를 쓴다. 환경변수로 바꿀 수 있게 둔다.
+APP_INVITE_URL = os.getenv("APP_INVITE_URL", "https://safe.taieng.co.kr/app/")
 
 # 직종명 → WJT 코드 매핑 (업로드 시 직종명 ILIKE 매칭용)
 JOB_TYPE_MAP = {
@@ -86,7 +95,7 @@ def _normalize_phone(phone: str) -> str:
 
 
 def _match_job_type(job_name: str) -> str:
-    """""직종명 → WJT 코드. 매핑 실패 시 WJT020(기타) 반환."""
+    """직종명 → WJT 코드. 매핑 실패 시 WJT020(기타) 반환."""
     if not job_name:
         return "WJT020"
     job_name = job_name.strip()
@@ -475,14 +484,27 @@ def delete_worker(worker_id: str):
 
 # ============================================================
 # POST /worker-registry/{id}/invite  앱 초대 문자 발송
+#
+# v1.1.0: 실제 발송으로 전환.
+#   종전에는 메시지 문자열을 만들어 print 로 출력하고 invite_sent_at 만 갱신했다.
+#   그럼에도 응답은 "초대 문자가 발송됐습니다" 였기에, 관리자 화면에서는 성공으로
+#   보이지만 실제로는 아무것도 나가지 않았다.
+#   MessageMi 어댑터를 연결하고, 실패를 성공으로 표시하지 않는다.
 # ============================================================
+
+def _build_invite_message(name: str) -> str:
+    """초대 문안.
+
+    SMS 는 90바이트 제한이며 어댑터가 message[:90] 으로 자른다.
+    URL 을 앞쪽에 두어 이름이 길어도 링크가 잘리지 않게 한다 —
+    링크가 깨지면 초대의 목적 자체가 사라진다.
+    """
+    return f"[TAI Safe] 안전점검 앱 설치\n{APP_INVITE_URL}\n{name}님"
+
 
 @router.post("/{worker_id}/invite")
 def send_invite(worker_id: str):
-    """
-    작업자에게 앱 초대 문자 발송.
-    현재: invite_sent_at 업데이트만 실행 (실제 SMS는 채널 연동 후 구현).
-    """
+    """작업자에게 앱 초대 문자를 발송한다."""
     supabase = get_supabase()
     chk = supabase.table("worker_registry").select(
         "id, name, phone"
@@ -491,26 +513,45 @@ def send_invite(worker_id: str):
         raise HTTPException(status_code=404, detail="작업자를 찾을 수 없습니다.")
 
     worker = chk.data[0]
-    now    = _now_iso()
+    phone  = _normalize_phone(worker.get("phone") or "")
+    if not phone:
+        raise HTTPException(status_code=422, detail="연락처가 없어 초대를 보낼 수 없습니다.")
 
+    invite_msg = _build_invite_message(worker.get("name") or "")
+
+    try:
+        from services.notification_engine.adapters.sms import send_sms
+        result = send_sms(invite_msg, phone)
+    except Exception as e:
+        log.error(f"[invite] SMS 어댑터 호출 실패 worker_id={worker_id}: {e}")
+        raise HTTPException(status_code=502, detail="문자 발송에 실패했습니다. 잠시 후 다시 시도해주세요.")
+
+    if not result.success:
+        # 발송에 실패했으면 invite_sent_at 을 남기지 않는다. 기록이 남으면
+        # 관리자가 이미 보냈다고 판단해 재발송하지 않는다.
+        log.error(f"[invite] 발송 실패 worker_id={worker_id} phone={phone}: {result.error_message}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"문자 발송에 실패했습니다. ({result.error_message or '알 수 없는 오류'})",
+        )
+
+    now = _now_iso()
     supabase.table("worker_registry").update({
         "invite_sent_at": now,
         "updated_at":     now,
     }).eq("id", worker_id).execute()
 
-    # TODO: 실제 SMS 발송 로직 (커널 연동 후 구현)
-    # 메시지: "[TAI Safe] {name}님, 앱을 설치해 주세요. https://w.taieng.co.kr"
-    invite_msg = f"[TAI Safe] {worker['name']}님, 앱을 설치해 주세요. https://w.taieng.co.kr"
-    print(f"[INVITE] 입시 로그 (SMS 미연동) → {worker['phone']}: {invite_msg}")
+    log.info(f"[invite] 발송 성공 worker_id={worker_id} phone={phone}")
 
     return {
         "status":  "success",
         "message": f"초대 문자가 발송됐습니다. ({worker['phone']})",
         "data": {
-            "worker_id":     worker_id,
-            "name":          worker["name"],
-            "phone":         worker["phone"],
+            "worker_id":      worker_id,
+            "name":           worker["name"],
+            "phone":          worker["phone"],
             "invite_sent_at": now,
-            "message":       invite_msg,
+            "message":        invite_msg,
+            "external_id":    result.external_id,
         }
     }
