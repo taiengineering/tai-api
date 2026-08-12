@@ -10,6 +10,9 @@ v4.0.0 (2026-04-27)
 
 [2026-07-29 P2-4] 카드 인증 실패 지점에 automation payment.failed 이벤트 발화 결선.
   발화는 베스트에포트(_fire_automation) — 규칙 없으면 무동작, 예외는 삼켜 결제 흐름에 영향 없음.
+
+[2026-08-12 item3] 단건 콜백(inicis_return)이 returnUrl?front= 로 전달된 복귀 프론트 URL을
+  허용 도메인 검증(safe_front_return_url) 후 리다이렉트에 사용. 값 없으면 기존 FRONT_RETURN_URL.
 """
 from __future__ import annotations
 
@@ -41,7 +44,7 @@ from services.payment_svc import (
     run_partial_refund,
     run_refund,
 )
-from services.payment_helpers import FRONT_RETURN_URL, load_template, now_iso as _now_iso
+from services.payment_helpers import FRONT_RETURN_URL, load_template, now_iso as _now_iso, safe_front_return_url
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +114,8 @@ def inicis_prepare(body: PrepareBody):
 @router.post("/inicis/return", include_in_schema=True)
 async def inicis_return(request: Request):
     """결제 인증 콜백 — STEP2→STEP3"""
+    # 결제 후 복귀 프론트 URL: pay.html 이 returnUrl?front= 로 전달. 허용 도메인만 통과, 없으면 기본값.
+    front = safe_front_return_url(request.query_params.get("front", "")) or FRONT_RETURN_URL
     try:
         form = await request.form()
         data: Dict[str, Any] = dict(form)
@@ -118,7 +123,7 @@ async def inicis_return(request: Request):
         try:
             data = await request.json()
         except Exception:
-            return RedirectResponse(f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=파싱실패", status_code=302)
+            return RedirectResponse(f"{front}?resultCode=FAIL&msg=파싱실패", status_code=302)
 
     result_code = data.get("resultCode", "")
     auth_token  = data.get("authToken", "")
@@ -135,19 +140,19 @@ async def inicis_return(request: Request):
     if result_code and result_code != "0000":
         result_msg = data.get("resultMsg", "인증 실패")
         return RedirectResponse(
-            f"{FRONT_RETURN_URL}?resultCode=FAIL&msg={urllib.parse.quote(result_msg)}&oid={order_id}",
+            f"{front}?resultCode=FAIL&msg={urllib.parse.quote(result_msg)}&oid={order_id}",
             status_code=302
         )
 
     pay_res = supabase.table("payments").select("*").eq("inicis_order_id", order_id).limit(1).execute()
     if not pay_res.data:
-        return RedirectResponse(f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=주문번호미확인&oid={order_id}", status_code=302)
+        return RedirectResponse(f"{front}?resultCode=FAIL&msg=주문번호미확인&oid={order_id}", status_code=302)
 
     payment    = pay_res.data[0]
     payment_id = payment["id"]
 
     if not auth_url:
-        return RedirectResponse(f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=authUrl없음&oid={order_id}", status_code=302)
+        return RedirectResponse(f"{front}?resultCode=FAIL&msg=authUrl없음&oid={order_id}", status_code=302)
 
     supabase.table("payments").update({
         "memo": f"authToken_prefix={auth_token[:32]} idc={idc_name} authUrl={auth_url[:50]}",
@@ -168,7 +173,7 @@ async def inicis_return(request: Request):
             "total_amount": payment.get("total_amount"),
             "reason": f"승인 API 실패: {e}",
         }, trigger_ref=payment_id)
-        return RedirectResponse(f"{FRONT_RETURN_URL}?resultCode=FAIL&msg=승인API오류&oid={order_id}", status_code=302)
+        return RedirectResponse(f"{front}?resultCode=FAIL&msg=승인API오류&oid={order_id}", status_code=302)
 
     is_ok = str(auth_result.get("resultCode", "")) == "0000"
 
@@ -178,12 +183,12 @@ async def inicis_return(request: Request):
         if pg_method in ("Vbank", "VBANK"):
             out = process_vbank_issued(payment_id, order_id, auth_result, goodname=goodname, price=price)
             qs = urllib.parse.urlencode(out["qs_params"])
-            return RedirectResponse(f"{FRONT_RETURN_URL}?{qs}", status_code=302)
+            return RedirectResponse(f"{front}?{qs}", status_code=302)
 
         # 후처리(계약 생성·알림): process_card_success → on_payment_success_sync
         out = process_card_success(payment, auth_result, pg_method, order_id=order_id, goodname=goodname, price=price)
         qs = urllib.parse.urlencode(out["qs_params"])
-        return RedirectResponse(f"{FRONT_RETURN_URL}?{qs}", status_code=302)
+        return RedirectResponse(f"{front}?{qs}", status_code=302)
 
     fail_msg = auth_result.get("resultMsg", "승인 실패")
     process_auth_failure(payment_id, fail_msg, auth_result)
@@ -197,7 +202,7 @@ async def inicis_return(request: Request):
         "reason": fail_msg,
     }, trigger_ref=payment_id)
     return RedirectResponse(
-        f"{FRONT_RETURN_URL}?resultCode=FAIL&msg={urllib.parse.quote(fail_msg)}&oid={order_id}",
+        f"{front}?resultCode=FAIL&msg={urllib.parse.quote(fail_msg)}&oid={order_id}",
         status_code=302,
     )
 
