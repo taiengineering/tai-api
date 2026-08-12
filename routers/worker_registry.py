@@ -1,8 +1,9 @@
 """
-작업자 명부 라우터 — v1.2.0
+작업자 명부 라우터 — v1.3.0
 
 작업자 등록 (수동 + 파일 일괄), 목록 조회, 수정, 비활성화, 앱 초대 문자 발송
 
+v1.3.0: 수정 시 factory_id·memo 반영 (종전 WorkerUpdate에 없어 무시됐음). worker_registry.memo 컬럼 사용.
 v1.2.0: 초대 발송을 기존 SMS 모듈(capabilities.sms.core)로 연결
 v1.1.0: 초대 문자 실제 발송 시도 (종전 stub)
 
@@ -30,7 +31,7 @@ from db.supabase_client import get_supabase
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/worker-registry", tags=["worker_registry"])
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 # 초대 링크. 단축 도메인(w.taieng.co.kr)이 코드에 적혀 있었으나 프로젝트 어디에도
 # 근거가 없어 실제 앱 주소를 쓴다. 환경변수로 바꿀 수 있게 둔다.
@@ -129,9 +130,11 @@ class WorkerCreate(BaseModel):
     start_date:      Optional[str] = None
     birth_date:      Optional[str] = None
     id_number_last4: Optional[str] = None
+    memo:            Optional[str] = None
 
 
 class WorkerUpdate(BaseModel):
+    factory_id:      Optional[str] = None
     name:            Optional[str] = None
     phone:           Optional[str] = None
     job_type_code:   Optional[str] = None
@@ -140,6 +143,7 @@ class WorkerUpdate(BaseModel):
     start_date:      Optional[str] = None
     end_date:        Optional[str] = None
     is_active:       Optional[bool] = None
+    memo:            Optional[str] = None
 
 
 # ============================================================
@@ -250,6 +254,7 @@ def create_worker(body: WorkerCreate):
     if body.start_date:      data["start_date"]      = body.start_date
     if body.birth_date:      data["birth_date"]      = body.birth_date
     if body.id_number_last4: data["id_number_last4"] = body.id_number_last4
+    if body.memo:            data["memo"]            = body.memo
 
     res = supabase.table("worker_registry").insert(data).execute()
     if not res.data:
@@ -411,7 +416,7 @@ def get_workers(
     supabase = get_supabase()
     query = supabase.table("worker_registry").select(
         "id, factory_id, company_id, name, phone, job_type_code, job_type_name, "
-        "contractor_name, department, start_date, end_date, "
+        "contractor_name, department, start_date, end_date, memo, "
         "app_installed, invite_sent_at, is_active, status_code, created_at",
         count="exact"
     )
