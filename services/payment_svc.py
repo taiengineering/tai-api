@@ -198,7 +198,7 @@ def run_inicis_prepare(body: PrepareBody) -> dict:
             "returnUrl": DEFAULT_RETURN_URL,
             "closeUrl": DEFAULT_CLOSE_URL,
             "charset": "UTF-8",
-            "gopaymethod": "Card",
+            "gopaymethod": "",
         },
     }
 
