@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Companies 라우터 - 사업장 등록/관리 v2.1.0
+TAI Companies 라우터 - 사업장 등록/관리 v2.2.0
 
+v2.2.0: 어드민 전체 목록(get_companies)에서 데모(체험) 테넌트 제외 (companies.is_demo)
 v2.1.0: 사업자번호 중복 확인 API 추가
   - GET /companies/check-biz?business_number=  사업자번호 중복 확인 (등록/미등록 + 회사명 반환)
 v2.0.0: 담당자/파일/계약이력/온보딩 API 추가
@@ -359,6 +360,8 @@ def onboarding(req: OnboardingBody):
 
 # ============================================================
 # 1. 목록 조회
+#    어드민 전체 목록 — 데모(체험) 테넌트는 제외(companies.is_demo).
+#    고객용 단건 조회(GET /companies/{id})는 제외하지 않는다(데모 계정이 자기 회사를 봐야 함).
 # ============================================================
 
 @router.get("")
@@ -372,6 +375,7 @@ def get_companies(
 ):
     supabase = get_supabase()
     query    = supabase.table("companies").select("*", count="exact")
+    query    = query.eq("is_demo", False)  # 데모(체험) 테넌트 제외
     if search:      query = query.ilike("name", f"%{search}%")
     if status_code: query = query.eq("status_code", status_code)
     if sido:        query = query.eq("address_sido", sido)
