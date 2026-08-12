@@ -13,7 +13,7 @@ from base64 import b64decode
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import List, Optional
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
 from dateutil.relativedelta import relativedelta
@@ -130,6 +130,22 @@ def add_vat(supply_amount: int) -> int:
     """공급가액(원)에 부가세 10%를 더한 총 청구액."""
     vat = int(round(supply_amount * 0.1))
     return supply_amount + vat
+
+
+def safe_front_return_url(url) -> Optional[str]:
+    """결제 후 복귀 URL 검증 — 허용 도메인(*.taieng.co.kr)만 통과. 오픈리다이렉트 방지.
+
+    허용 안 되거나 파싱 실패 시 None(→ 호출측이 기본 FRONT_RETURN_URL 사용).
+    """
+    if not url:
+        return None
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        return None
+    if host == "taieng.co.kr" or host.endswith(".taieng.co.kr"):
+        return url
+    return None
 
 
 def service_status_after_card_pay(contract_id: str | None) -> str:
