@@ -5,6 +5,7 @@ Goal: G-ms4je4z3-33eada
 - 채널 타깃은 ARRAY(channels text[]) — 한 공지를 한쪽/양쪽 노출.
 - 공개 조회: 채널 포함 + enabled + 노출기간 내. priority desc.
 - notice_banner(RLS off).
+- 2026-08-13 공지 유형(category) 추가: NEW·IMPROVE·SAFETY·NOTICE. 게시판형 분류·필터용.
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ log = logging.getLogger(__name__)
 
 CHANNELS = ("MARKETING", "SAFE")
 BANNER_TYPES = ("INFO", "WARNING", "MAINTENANCE", "EVENT")
+CATEGORIES = ("NEW", "IMPROVE", "SAFETY", "NOTICE")
 
 
 class NoticeError(Exception):
@@ -49,11 +51,14 @@ def create(data: Dict[str, Any]) -> Dict[str, Any]:
             raise NoticeError(400, f"지원하지 않는 채널: {ch}")
     if data.get("banner_type") and data["banner_type"] not in BANNER_TYPES:
         raise NoticeError(400, f"지원하지 않는 배너 유형: {data['banner_type']}")
+    if data.get("category") and data["category"] not in CATEGORIES:
+        raise NoticeError(400, f"지원하지 않는 공지 유형: {data['category']}")
     row = {
         "title": data["title"],
         "body": data.get("body"),
         "channels": channels,
         "banner_type": data.get("banner_type", "INFO"),
+        "category": data.get("category", "NOTICE"),
         "link_url": data.get("link_url"),
         "link_label": data.get("link_label"),
         "starts_at": data.get("starts_at"),
@@ -68,12 +73,14 @@ def create(data: Dict[str, Any]) -> Dict[str, Any]:
 
 def update(notice_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
     patch = {k: v for k, v in data.items() if v is not None and k in (
-        "title", "body", "channels", "banner_type", "link_url", "link_label",
+        "title", "body", "channels", "banner_type", "category", "link_url", "link_label",
         "starts_at", "ends_at", "priority", "enabled")}
     if "channels" in patch:
         for ch in patch["channels"]:
             if ch not in CHANNELS:
                 raise NoticeError(400, f"지원하지 않는 채널: {ch}")
+    if "category" in patch and patch["category"] not in CATEGORIES:
+        raise NoticeError(400, f"지원하지 않는 공지 유형: {patch['category']}")
     patch["updated_at"] = _now_iso()
     res = get_supabase().table("notice_banner").update(patch).eq("id", notice_id).execute()
     if not res.data:
