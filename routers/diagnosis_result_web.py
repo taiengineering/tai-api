@@ -1,19 +1,25 @@
 """
-routers/diagnosis_result_web.py — v1.3.0
+routers/diagnosis_result_web.py — v1.3.1
 
 유료/무료 진단 결과 웹 조회 API (JSON)
   GET /diagnosis/result/{public_token}
   GET /diagnosis/paid-result/{public_token}
 
 v1.1.0: BE-08 Transform 정제 함수 연동 (rules_table dedupe + FAMILY→한글)
-v1.2.0: 의무 제목/설명 표시 보정 — obligation_summary/remarks가 코드 토큰
-        (예: "APPOINTMENT_TASK_CANDIDATE: APPOINT_FAMILY")일 때 description의
-        사람이 읽는 텍스트를 우선 사용. 엔진/판정 로직 미변경(표시 transform만).
-v1.3.0: LEG(법령엔진) 결과 표시 변환 — LEG 파이프라인은 rules_table 대신
-        obligations_raw(rich: enrichment/obligation_detail)를 저장한다.
-        rules_table 부재 시 obligations_raw에서 '값 생성 없이' 페이지가 소비하는
-        rules_table/summary 형태로 이미 추출된 값만 운반. 축1(Compiler) 경로 무변경.
-        엔진·프론트·조립기 무변경(조회 시점 표시 transform만).
+v1.2.0: 의무 제목/설명 표시 보정 — obligation_summary/remarks가 코드 토큰일 때
+        description의 사람이 읽는 텍스트를 우선 사용. 엔진/판정 로직 미변경.
+v1.3.0: LEG 결과 표시 변환 — rules_table 부재 시 obligations_raw(rich)에서
+        '값 생성 없이' rules_table/summary 형태로 이미 추출된 값만 운반. 축1 무변경.
+v1.3.1: WO-FE-MAPPING-001 — Collector(check.collectors) + obligation 확장 매핑(add-only).
+        · penalty_summary  ← check.collectors.penalty (COLLECTED + articles 있을 때만,
+          의미=동일 법령 내 벌칙/과태료 조문, obligation_specific=false 유지)
+        · submit_org_label ← check.collectors.agency.submit_org (COLLECTED만)
+        · ministry         → 표시 미연결(DEFERRED). 원본 check.collectors는 불변.
+        · D8 가드: distinct law identity == 1 결과에서만 collector 표시(fail-closed).
+        · obligation 확장: executor_type_label(who)·condition·consumer_status·
+          usable_for_evaluation·mapped_field·triggered_by·evidence (값 있을 때만).
+        · top-level contract → payload.data.contract (LEG, 비어있지 않을 때만).
+        값 생성 없음. 축1(Compiler) 경로·기존 v1.3.0 필드 무변경.
 """
 from __future__ import annotations
 
@@ -46,13 +52,10 @@ SECTOR_LABEL = {
     "CONSTRUCTION": "건설", "MANUFACTURING": "산업(제조)",
 }
 
-# 엔진이 obligation_summary/remarks에 넣는 코드 토큰 패턴.
-# 예: "APPOINTMENT_TASK_CANDIDATE: APPOINT_FAMILY", "INSPECT_FAMILY"
 _TOKEN_RE = re.compile(r"_CANDIDATE|_FAMILY|^[A-Z][A-Z0-9_]*\s*:\s*[A-Z][A-Z0-9_]*$")
 
 
 def _is_token(v: Any) -> bool:
-    """사람이 읽는 문장이 아니라 코드 토큰이면 True."""
     s = (v or "").strip() if isinstance(v, str) else str(v or "").strip()
     if not s:
         return True
@@ -60,7 +63,6 @@ def _is_token(v: Any) -> bool:
 
 
 def _human_text(*cands: Any) -> str:
-    """후보 중 코드 토큰이 아닌 첫 사람이 읽는 텍스트를 반환."""
     for c in cands:
         s = (c or "").strip() if isinstance(c, str) else str(c or "").strip()
         if s and not _is_token(s):
@@ -68,51 +70,24 @@ def _human_text(*cands: Any) -> str:
     return ""
 
 
-# FAMILY / obligation 코드 → diagnosis_transform CATEGORY_MAP 키
 _FAMILY_STEM_TO_CATEGORY_KEY: Dict[str, str] = {
-    "APPOINT": "appointment",
-    "APPOINTMENT": "appointment",
-    "DESIGNATE": "appointment",
-    "INSPECT": "inspection",
-    "MEASURE": "inspection",
-    "VERIFY": "inspection",
-    "TEST": "inspection",
-    "REPORT": "report",
-    "NOTIFY": "report",
-    "REGISTER": "report",
-    "PERMIT": "report",
-    "PRESERVE": "document",
-    "RECORD": "document",
-    "MANAGE": "document",
-    "INSTALL": "document",
-    "MAINTAIN": "document",
-    "TRAINING": "education",
-    "EDUCATION": "education",
-    "ACTION": "document",
-    "MANDATORY": "document",
-    "PERMISSIVE": "document",
-    "PROHIBITION": "document",
+    "APPOINT": "appointment", "APPOINTMENT": "appointment", "DESIGNATE": "appointment",
+    "INSPECT": "inspection", "MEASURE": "inspection", "VERIFY": "inspection", "TEST": "inspection",
+    "REPORT": "report", "NOTIFY": "report", "REGISTER": "report", "PERMIT": "report",
+    "PRESERVE": "document", "RECORD": "document", "MANAGE": "document",
+    "INSTALL": "document", "MAINTAIN": "document",
+    "TRAINING": "education", "EDUCATION": "education",
+    "ACTION": "document", "MANDATORY": "document", "PERMISSIVE": "document", "PROHIBITION": "document",
 }
 
 _OBLIGATION_TYPE_TO_CATEGORY_KEY: Dict[str, str] = {
-    "APPOINT": "appointment",
-    "INSPECT": "inspection",
-    "REPORT": "report",
-    "NOTIFY": "report",
-    "ACTION": "document",
-    "OTHER": "document",
+    "APPOINT": "appointment", "INSPECT": "inspection", "REPORT": "report",
+    "NOTIFY": "report", "ACTION": "document", "OTHER": "document",
 }
 
 
 def _rule_kind_key(row: Dict[str, Any]) -> str:
-    """dedupe 키: law_article + rule_kind (FAMILY / obligation_type / category)."""
-    for field in (
-        "rule_kind",
-        "source_action_family",
-        "obligation_family",
-        "obligation_type",
-        "rule_type",
-    ):
+    for field in ("rule_kind", "source_action_family", "obligation_family", "obligation_type", "rule_type"):
         val = (row.get(field) or "").strip().upper()
         if val:
             return val
@@ -132,13 +107,7 @@ def _law_article_key(row: Dict[str, Any]) -> str:
 
 
 def _category_key_for_row(row: Dict[str, Any]) -> str:
-    """FAMILY 코드·obligation_type → CATEGORY_MAP 영문 키."""
-    raw = (
-        row.get("rule_kind")
-        or row.get("source_action_family")
-        or row.get("obligation_family")
-        or ""
-    ).strip().upper()
+    raw = (row.get("rule_kind") or row.get("source_action_family") or row.get("obligation_family") or "").strip().upper()
     if raw.endswith("_FAMILY"):
         stem = raw[: -len("_FAMILY")]
         if stem in _FAMILY_STEM_TO_CATEGORY_KEY:
@@ -174,64 +143,40 @@ def _dedupe_rules_table(rules_table: List[Dict[str, Any]]) -> List[Dict[str, Any
 
 def _rule_row_to_obligation_src(row: Dict[str, Any]) -> Dict[str, Any]:
     cat_key = _category_key_for_row(row)
-    law_ref = " ".join(
-        p for p in ((row.get("law_name") or "").strip(), (row.get("law_article") or "").strip()) if p
-    )
-    # 코드 토큰(obligation_summary/remarks)보다 사람이 읽는 description을 우선.
-    human = _human_text(
-        row.get("description"),
-        row.get("obligation_summary"),
-        row.get("remarks"),
-        row.get("rule_name"),
-    )
+    law_ref = " ".join(p for p in ((row.get("law_name") or "").strip(), (row.get("law_article") or "").strip()) if p)
+    human = _human_text(row.get("description"), row.get("obligation_summary"), row.get("remarks"), row.get("rule_name"))
     return {
         "id": str(row.get("rule_id") or row.get("id") or ""),
-        "category": cat_key,
-        "type": cat_key,
-        "title": human or "의무사항",
-        "name": human or "",
-        "description": human or "",
+        "category": cat_key, "type": cat_key,
+        "title": human or "의무사항", "name": human or "", "description": human or "",
         "risk_level": row.get("risk_level") or "MEDIUM",
-        "legal_basis": law_ref,
-        "evidence": [law_ref] if law_ref else [],
+        "legal_basis": law_ref, "evidence": [law_ref] if law_ref else [],
     }
 
 
-def _merge_obligation_into_rule_row(
-    obligation: Dict[str, Any], original: Dict[str, Any]
-) -> Dict[str, Any]:
+def _merge_obligation_into_rule_row(obligation: Dict[str, Any], original: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(original)
-    merged["category"] = obligation.get("category") or _normalize_category(
-        _category_key_for_row(original)
-    )
+    merged["category"] = obligation.get("category") or _normalize_category(_category_key_for_row(original))
     merged["rule_kind"] = _rule_kind_key(original)
     merged["rule_kind_label"] = merged["category"]
-    # 사람이 읽는 텍스트로 obligation_summary/description를 보정.
-    # 원본이 코드 토큰이면 정제된 obligation 텍스트로 덮어쓴다.
     human = _human_text(
-        obligation.get("title"),
-        obligation.get("description"),
-        original.get("description"),
-        original.get("obligation_summary"),
-        original.get("remarks"),
+        obligation.get("title"), obligation.get("description"),
+        original.get("description"), original.get("obligation_summary"), original.get("remarks"),
     )
     if human:
         if _is_token(merged.get("obligation_summary")):
             merged["obligation_summary"] = human
         if _is_token(merged.get("description")):
             merged["description"] = human
-    # remarks가 코드 토큰이면 화면 노출되지 않도록 비운다.
     if _is_token(merged.get("remarks")):
         merged["remarks"] = ""
     return merged
 
 
 def _refine_rules_table(rules_table: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """dedupe → BE-08 _extract_obligations 정제 → rules_table 형태 복원."""
     deduped = _dedupe_rules_table(rules_table)
     if not deduped:
         return []
-
     lookup: Dict[str, Dict[str, Any]] = {}
     for row in deduped:
         rid = str(row.get("rule_id") or row.get("id") or "")
@@ -240,10 +185,7 @@ def _refine_rules_table(rules_table: List[Dict[str, Any]]) -> List[Dict[str, Any
         title_key = (row.get("obligation_summary") or row.get("description") or "")[:120]
         if title_key:
             lookup[f"title:{title_key}"] = row
-
-    extracted = _extract_obligations(
-        {"obligations": [_rule_row_to_obligation_src(r) for r in deduped]}
-    )
+    extracted = _extract_obligations({"obligations": [_rule_row_to_obligation_src(r) for r in deduped]})
     refined: List[Dict[str, Any]] = []
     for ob in extracted:
         oid = str(ob.get("id") or "")
@@ -257,31 +199,15 @@ def _refine_rules_table(rules_table: List[Dict[str, Any]]) -> List[Dict[str, Any
 
 
 # ─────────────────────────────────────────────────────────────
-# LEG(법령엔진) 결과 표시 변환
-#   LEG 파이프라인은 rules_table 대신 obligations_raw(rich)를 저장한다.
-#   (obligations_raw[].enrichment / .obligation_detail = Check Layer 산출)
-#   페이지(free-diagnosis-result)가 소비하는 rules_table/summary 형태로
-#   '값 생성 없이' 이미 추출된 값만 운반한다. 엔진·프론트 무변경.
+# LEG(법령엔진) 결과 표시 변환 (v1.3.0) + Collector·obligation 확장 (v1.3.1)
 # ─────────────────────────────────────────────────────────────
-
-# enrichment.obligation_type → 페이지 칩(OB_TYPE_LABEL: APPOINT/INSPECT/ACTION/REPORT/NOTIFY)
 _LEG_TYPE_TO_PAGE: Dict[str, str] = {
-    "APPOINT": "APPOINT",
-    "INSPECT": "INSPECT",
-    "REPORT": "REPORT",
-    "NOTIFY": "NOTIFY",
-    "ACTION": "ACTION",
-    "TRAINING": "ACTION",   # 교육 → 조치 버킷(페이지 전용 칩 없음)
-    "PROHIBIT": "ACTION",   # 금지 → 조치 버킷(페이지 전용 칩 없음)
+    "APPOINT": "APPOINT", "INSPECT": "INSPECT", "REPORT": "REPORT",
+    "NOTIFY": "NOTIFY", "ACTION": "ACTION", "TRAINING": "ACTION", "PROHIBIT": "ACTION",
 }
-
-# 페이지 obligation_type → summary 집계 버킷
 _LEG_PAGE_TYPE_TO_SUMMARY: Dict[str, str] = {
-    "APPOINT": "appointment",
-    "INSPECT": "inspection",
-    "ACTION": "action",
-    "REPORT": "report",
-    "NOTIFY": "notify",
+    "APPOINT": "appointment", "INSPECT": "inspection", "ACTION": "action",
+    "REPORT": "report", "NOTIFY": "notify",
 }
 
 
@@ -297,20 +223,40 @@ def _leg_rule_row(o: Dict[str, Any]) -> Dict[str, Any]:
     det = o.get("obligation_detail") or {}
     law_name = (o.get("law_name") or "").strip()
     law_article = (o.get("law_article") or "").strip()
-    # 의무 설명 = obligation_detail.what(실제 의무 문장). 없으면 법령명+조번호.
     what = (det.get("what") or "").strip()
     summary_text = what or " ".join(p for p in (law_name, law_article) if p)
-    return {
+    row: Dict[str, Any] = {
         "law_name": law_name,
         "law_article": law_article,
         "obligation_type": _leg_obligation_type(o),
         "obligation_summary": summary_text,
         "description": summary_text,
         "inspection_cycle": (enr.get("inspection_cycle") or "").strip(),
-        # trace (페이지 미표시, 감사용)
         "atom_id": o.get("atom_id") or "",
         "source": "LEG",
     }
+    # v1.3.1 STEP 6 확장 — 이미 존재하는 값만 운반(값 있을 때만, 합성 금지).
+    who = (det.get("who") or "").strip()
+    if who:
+        row["executor_type_label"] = who          # 수행자 (기존 프론트 계약 필드)
+    condition = (det.get("condition") or "").strip()
+    if condition:
+        row["condition"] = condition               # 적용조건
+    cstatus = (enr.get("consumer_status") or "").strip()
+    if cstatus:
+        row["consumer_status"] = cstatus           # 이행상태 (우선)
+    if enr.get("usable_for_evaluation") is not None:
+        row["usable_for_evaluation"] = enr.get("usable_for_evaluation")  # 보조(합성 금지)
+    mapped_field = (o.get("mapped_field") or "").strip()
+    if mapped_field:
+        row["mapped_field"] = mapped_field         # 적용 이유
+    triggered_by = o.get("triggered_by")
+    if isinstance(triggered_by, list) and triggered_by:
+        row["triggered_by"] = triggered_by         # 적용 이유(입력 필드)
+    evidence = (o.get("evidence") or "").strip()
+    if evidence:
+        row["evidence"] = evidence                 # 근거(원문 그대로, 재작성 금지)
+    return row
 
 
 def _leg_rules_from_obligations_raw(obligations_raw: List[Any]) -> List[Dict[str, Any]]:
@@ -319,7 +265,6 @@ def _leg_rules_from_obligations_raw(obligations_raw: List[Any]) -> List[Dict[str
     for o in obligations_raw:
         if not isinstance(o, dict):
             continue
-        # 적용(APPLICABLE)만 표시. (필터 — 값 생성 아님)
         appl = (o.get("applicability") or "").strip().upper()
         if appl and appl != "APPLICABLE":
             continue
@@ -345,6 +290,66 @@ def _leg_summary_from_rules(rules: List[Dict[str, Any]]) -> Dict[str, int]:
     return counts
 
 
+# ── v1.3.1 Collector 매핑 (check.collectors, 값 생성 없음·status 존중) ──
+def _get_collectors(full_result: Dict[str, Any]) -> Dict[str, Any]:
+    check = full_result.get("check") or {}
+    col = check.get("collectors") or {}
+    return col if isinstance(col, dict) else {}
+
+
+def _collector_penalty_summary(collectors: Dict[str, Any]) -> str:
+    """penalty COLLECTED + articles 있을 때만. 의미=동일 법령 내 벌칙/과태료 조문(의무-특정 아님)."""
+    pen = collectors.get("penalty") or {}
+    if (pen.get("status") or "").strip().upper() != "COLLECTED":
+        return ""
+    val = pen.get("value") or {}
+    articles = val.get("articles") or []
+    if not isinstance(articles, list) or not articles:
+        return ""
+    refs: List[str] = []
+    for a in articles:
+        if isinstance(a, str):
+            s = a.strip()
+        elif isinstance(a, dict):
+            s = (a.get("article") or a.get("article_no") or a.get("label") or a.get("title") or "").strip()
+        else:
+            s = ""
+        if s:
+            refs.append(s)
+    base = "동일 법령 내 벌칙·과태료 조문"
+    return f"{base} ({', '.join(refs)})" if refs else base
+
+
+def _collector_submit_org_label(collectors: Dict[str, Any]) -> str:
+    """제출처(submit_org) COLLECTED만. 소관부처(ministry)는 여기 넣지 않는다(D5)."""
+    ag = collectors.get("agency") or {}
+    so = ag.get("submit_org") or {}
+    if (so.get("status") or "").strip().upper() != "COLLECTED":
+        return ""
+    v = so.get("value")
+    return v.strip() if isinstance(v, str) and v.strip() else ""
+
+
+def _apply_collectors_to_leg_rows(full_result: Dict[str, Any], rules_table: List[Dict[str, Any]]) -> None:
+    """D8 fail-closed: distinct law identity == 1 결과에서만 result-level collector를 각 행에 적용.
+    ministry는 표시 미연결(DEFERRED). collector 값을 다중 법령 행에 복제하지 않는다."""
+    collectors = _get_collectors(full_result)
+    if not collectors:
+        return
+    distinct_laws = {(r.get("law_name") or "").strip() for r in rules_table if (r.get("law_name") or "").strip()}
+    if len(distinct_laws) != 1:
+        return  # multi-law: backend law_id-keyed map 제공 전까지 미표시
+    penalty_summary = _collector_penalty_summary(collectors)
+    submit_org_label = _collector_submit_org_label(collectors)
+    if not (penalty_summary or submit_org_label):
+        return
+    for r in rules_table:
+        if penalty_summary:
+            r["penalty_summary"] = penalty_summary
+        if submit_org_label:
+            r["submit_org_label"] = submit_org_label
+
+
 RECOMMEND_PLAN = {
     "BUILDING_V2":          {"name": "건물 소형 플랜",  "price": "월 59,000원~"},
     "BUILDING_LARGE_V2":    {"name": "건물 대형 플랜",  "price": "월 145,000원~"},
@@ -358,19 +363,11 @@ RECOMMEND_PLAN = {
 
 @router.get("/result/{public_token}")
 def get_diagnosis_result_web(public_token: str):
-    """
-    무료/유료 공통 진단 결과 웹 조회.
-    free-diagnosis-result.html → GET /diagnosis/result/{token}
-    """
     return _build_result_payload(public_token, free_preview_limit=5)
 
 
 @router.get("/paid-result/{public_token}")
 def get_paid_result_web(public_token: str):
-    """
-    유료 진단 결과 웹 조회.
-    paid-diagnosis-result.html에서 fetch하여 인터랙티브 대시보드 렌더링.
-    """
     return _build_result_payload(public_token, free_preview_limit=None)
 
 
@@ -388,7 +385,6 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int]) 
         raise HTTPException(status_code=404, detail="진단 결과를 찾을 수 없습니다.")
 
     rec = res.data[0]
-
     if rec.get("status") != "ACTIVE":
         raise HTTPException(status_code=410, detail="비활성화된 진단 결과입니다.")
 
@@ -403,30 +399,30 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int]) 
 
     raw_rules = [r for r in (full_result.get("rules_table") or []) if isinstance(r, dict)]
     leg_summary: Optional[Dict[str, int]] = None
+    leg_contract: Optional[Dict[str, Any]] = None
     if raw_rules:
         # 축1(Compiler) 결과: 기존 경로 무변경.
         rules_table = _refine_rules_table(raw_rules)
     else:
-        # LEG 결과: rules_table 부재 → obligations_raw(rich)에서 표시용 rules_table 파생.
-        # 값 생성 없음 — enrichment/obligation_detail의 이미 추출된 값만 운반.
-        obligations_raw = [
-            o for o in (full_result.get("obligations_raw") or []) if isinstance(o, dict)
-        ]
+        # LEG 결과: obligations_raw(rich)에서 표시용 rules_table 파생.
+        obligations_raw = [o for o in (full_result.get("obligations_raw") or []) if isinstance(o, dict)]
         rules_table = _leg_rules_from_obligations_raw(obligations_raw)
         if rules_table:
             leg_summary = _leg_summary_from_rules(rules_table)
+            # v1.3.1: Collector(penalty/submit_org) 적용 — D8 단일 법령 가드.
+            _apply_collectors_to_leg_rows(full_result, rules_table)
+            # v1.3.1: top-level contract 노출 (비어있지 않을 때만).
+            _contract = full_result.get("contract")
+            if isinstance(_contract, dict) and _contract:
+                leg_contract = _contract
     warnings = _extract_warnings(full_result)
 
     inspection_required = [r for r in (full_result.get("inspection_required") or []) if isinstance(r, dict)]
     appointment_required = [r for r in (full_result.get("appointment_required") or []) if isinstance(r, dict)]
     if raw_rules:
-        # candidate slot 보강은 축1 rows 전용(rule_id 기반). LEG rows는 미해당.
-        enrich_rules_with_candidate_slots(
-            supabase, rules_table + inspection_required + appointment_required
-        )
+        enrich_rules_with_candidate_slots(supabase, rules_table + inspection_required + appointment_required)
     key_obligations = full_result.get("key_obligations") or []
     law_badges = full_result.get("law_badges") or []
-    # LEG 결과의 law_badges는 빈약(≤1)한 경우가 많음 → 파생 rules_table의 실제 법령명으로 보강.
     if leg_summary is not None and len(law_badges) <= 1:
         _derived_badges: List[str] = []
         _seen_law: set = set()
@@ -448,11 +444,9 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int]) 
     for r in rules_table:
         law = r.get("law_name") or "기타"
         law_groups.setdefault(law, []).append(r)
-
     law_group_list = sorted(
         [{"law_name": k, "count": len(v), "rules": v} for k, v in law_groups.items()],
-        key=lambda x: x["count"],
-        reverse=True,
+        key=lambda x: x["count"], reverse=True,
     )
 
     ob_counts: Dict[str, int] = {}
@@ -470,7 +464,7 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int]) 
 
     engine_version = full_result.get("engine_version") or "v3.0-runtime-compiler"
 
-    return {
+    payload = {
         "status": "success",
         "data": {
             "public_token": public_token,
@@ -515,3 +509,7 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int]) 
             "pdf_url": f"/diagnosis/report-pdf/{public_token}",
         },
     }
+    # v1.3.1: LEG top-level contract (입력 부족 고지용) — 비어있지 않을 때만 add-only.
+    if leg_contract is not None:
+        payload["data"]["contract"] = leg_contract
+    return payload
