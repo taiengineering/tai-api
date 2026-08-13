@@ -96,7 +96,7 @@ def get_preview_schedule(factory_id: str, months: int) -> dict:
 
 def generate_all_items(factory_id: Optional[str], dry_run: bool) -> dict:
     supabase = get_supabase()
-    q = supabase.table("inspection_sets").select("id, inspection_set_name, legal_rule_id, factory_id").not_.is_("legal_rule_id", "null").eq("is_active", True)
+    q = supabase.table("inspection_sets").select("id, inspection_set_name, legal_rule_id, factory_id, obligation_type, obligation_summary, law_name, law_article").not_.is_("legal_rule_id", "null").eq("is_active", True)
     if factory_id:
         q = q.eq("factory_id", factory_id)
     sets = q.execute().data or []
@@ -107,11 +107,8 @@ def generate_all_items(factory_id: Optional[str], dry_run: bool) -> dict:
     for i in range(0, len(set_ids), 100):
         for row in (supabase.table("inspection_set_items").select("inspection_set_id").in_("inspection_set_id", set_ids[i:i + 100]).execute().data or []):
             existing_set_ids.add(row["inspection_set_id"])
-    rule_ids = list({s["legal_rule_id"] for s in sets if s.get("legal_rule_id")})
-    rules_map = {}
-    for i in range(0, len(rule_ids), 100):
-        for rule in (supabase.table("master_building_legal_rules").select("rule_id, obligation_summary, obligation_type, law_name, law_article").in_("rule_id", rule_ids[i:i + 100]).eq("is_active", True).execute().data or []):
-            rules_map[rule["rule_id"]] = rule
+    # 파이프라인 정합 (2026-08-13): 격리 master_building_legal_rules 대신
+    #   inspection_sets 자체 LEG 컬럼(obligation_type/summary/law)을 룰 소스로 사용.
     created = skipped = failed = 0
     preview_rows = []
     for iset in sets:
@@ -119,11 +116,7 @@ def generate_all_items(factory_id: Optional[str], dry_run: bool) -> dict:
         if set_id in existing_set_ids:
             skipped += 1
             continue
-        rule = rules_map.get(iset.get("legal_rule_id"))
-        if not rule:
-            skipped += 1
-            continue
-        item_rows = _build_items_for_set(iset, rule)
+        item_rows = _build_items_for_set(iset, iset)
         preview_rows.extend(item_rows)
         if dry_run:
             created += len(item_rows)
@@ -138,7 +131,7 @@ def generate_all_items(factory_id: Optional[str], dry_run: bool) -> dict:
 
 def generate_items_for_set(inspection_set_id: str) -> dict:
     supabase = get_supabase()
-    set_res = supabase.table("inspection_sets").select("id, inspection_set_name, legal_rule_id, factory_id").eq("id", inspection_set_id).limit(1).execute()
+    set_res = supabase.table("inspection_sets").select("id, inspection_set_name, legal_rule_id, factory_id, obligation_type, obligation_summary, law_name, law_article").eq("id", inspection_set_id).limit(1).execute()
     if not set_res.data:
         raise InspectionSetsSvcError(404, "점검세트를 찾을 수 없습니다.")
     iset = set_res.data[0]
@@ -147,14 +140,11 @@ def generate_items_for_set(inspection_set_id: str) -> dict:
         raise InspectionSetsSvcError(422, "legal_rule_id가 없는 점검세트입니다.")
     if supabase.table("inspection_set_items").select("id").eq("inspection_set_id", inspection_set_id).limit(1).execute().data:
         return {"status": "skipped", "message": "이미 항목이 존재합니다.", "data": {"inspection_set_id": inspection_set_id, "created": 0}}
-    rule_res = supabase.table("master_building_legal_rules").select("rule_id, obligation_summary, obligation_type, law_name, law_article").eq("rule_id", rule_id).eq("is_active", True).limit(1).execute()
-    if not rule_res.data:
-        raise InspectionSetsSvcError(404, f"법령룰 없음 (rule_id={rule_id})")
-    rule = rule_res.data[0]
-    item_rows = _build_items_for_set(iset, rule)
+    # 파이프라인 정합 (2026-08-13): iset 자체 LEG 컬럼을 룰 소스로 사용(격리 master 미참조).
+    item_rows = _build_items_for_set(iset, iset)
     ins_res = supabase.table("inspection_set_items").insert(item_rows).execute()
     created = len(ins_res.data or [])
-    return {"status": "success", "message": f"{created}개 점검 항목 생성됐습니다.", "data": {"inspection_set_id": inspection_set_id, "inspection_set_name": iset.get("inspection_set_name"), "rule_id": rule_id, "obligation_type": rule.get("obligation_type"), "created": created, "items": ins_res.data or []}}
+    return {"status": "success", "message": f"{created}개 점검 항목 생성됐습니다.", "data": {"inspection_set_id": inspection_set_id, "inspection_set_name": iset.get("inspection_set_name"), "rule_id": rule_id, "obligation_type": iset.get("obligation_type"), "created": created, "items": ins_res.data or []}}
 
 
 def get_company_sets(company_id: str) -> dict:
