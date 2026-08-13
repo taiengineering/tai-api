@@ -12,6 +12,12 @@ from typing import Any, Dict, List
 
 from clients import leg_runtime_client as leg_client
 
+# WO-CHECK-015: Production Result Builder Collector wiring (add-only, fail-safe import).
+try:
+    from services import collector_activation as _collector_activation
+except Exception:
+    _collector_activation = None
+
 log = logging.getLogger("services.leg_diagnosis")
 
 LEG_ENGINE_VERSION = "leg-runtime-v3"
@@ -53,7 +59,7 @@ def _obligation_to_key_item(o: Dict[str, Any]) -> Dict[str, Any]:
 def run_leg_diagnosis(step1_body: Any) -> Dict[str, Any]:
     """LEG 전용 진단. 반환 = full_result(LEG). 실패 시 LegDiagnosisError/LegRuntimeError 전파."""
     facility = leg_client.build_facility(step1_body)
-    data = leg_client.evaluate_rtm(facility)  # net/parse 실패 시 LegRuntimeError
+    data = leg_client.evaluate_rtm(facility)  # net/parse 실패시 LegRuntimeError
 
     status = data.get("status")
     error_code = data.get("error_code")
@@ -72,7 +78,7 @@ def run_leg_diagnosis(step1_body: Any) -> Dict[str, Any]:
             law_names.append(ln)
 
     full_result: Dict[str, Any] = {
-        # ── LEG 식별 메타 ──
+        # ── LEG 식보 메타 ──
         "engine_family": "LEG",
         "engine_version": LEG_ENGINE_VERSION,
         "rule_source": LEG_RULE_SOURCE,
@@ -85,7 +91,7 @@ def run_leg_diagnosis(step1_body: Any) -> Dict[str, Any]:
         "key_obligations": key_obl,
         "applicable_laws": law_names,
         "law_badges": law_names,
-        "rules": [],          # rtm는 rule-table 미제공 → 빈 값(임의 생성 금지)
+        "rules": [],          # rtm낔 rule-table 미제공 → 빈 값(임의 생성 금지)
         "risk_level": None,   # LEG rtm 미산출 → None(위장 금지)
         "summary": None,
         # ── 원본 보존(추적성) ──
@@ -98,4 +104,11 @@ def run_leg_diagnosis(step1_body: Any) -> Dict[str, Any]:
         "leg_diagnosis status=%s obligations=%d laws=%d",
         status, len(obligations), len(law_names),
     )
+    # WO-CHECK-015: last enrichment stage — add ONLY check.collectors.{penalty,agency}.
+    # add-only, fail-closed; never alters existing fields or breaks the runtime result.
+    if _collector_activation is not None:
+        try:
+            full_result = _collector_activation.activate(full_result)
+        except Exception:
+            pass
     return full_result
