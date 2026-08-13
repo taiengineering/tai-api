@@ -2,6 +2,7 @@
 
 Goal: G-ms4je4z3-33eada
 - 어드민 CRUD + 채널별 공개 조회(marketing·safe가 호출).
+- 2026-08-13 공지 유형(category) 필드 추가: NEW·IMPROVE·SAFETY·NOTICE.
 """
 from typing import Any, Dict, List, Optional
 
@@ -20,6 +21,7 @@ class NoticeBody(BaseModel):
     body: Optional[str] = None
     channels: Optional[List[str]] = None
     banner_type: Optional[str] = "INFO"
+    category: Optional[str] = "NOTICE"
     link_url: Optional[str] = None
     link_label: Optional[str] = None
     starts_at: Optional[str] = None
@@ -34,6 +36,7 @@ class NoticePatch(BaseModel):
     body: Optional[str] = None
     channels: Optional[List[str]] = None
     banner_type: Optional[str] = None
+    category: Optional[str] = None
     link_url: Optional[str] = None
     link_label: Optional[str] = None
     starts_at: Optional[str] = None
