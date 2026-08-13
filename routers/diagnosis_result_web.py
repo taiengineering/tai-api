@@ -1,5 +1,5 @@
 """
-routers/diagnosis_result_web.py — v1.3.1
+routers/diagnosis_result_web.py — v1.3.2
 
 유료/무료 진단 결과 웹 조회 API (JSON)
   GET /diagnosis/result/{public_token}
@@ -20,6 +20,11 @@ v1.3.1: WO-FE-MAPPING-001 — Collector(check.collectors) + obligation 확장 �
           usable_for_evaluation·mapped_field·triggered_by·evidence (값 있을 때만).
         · top-level contract → payload.data.contract (LEG, 비어있지 않을 때만).
         값 생성 없음. 축1(Compiler) 경로·기존 v1.3.0 필드 무변경.
+v1.3.2: obligation 확장 2 + 소관부처 노출(add-only, 값 생성 없음).
+        · content_type ← enrichment.content_type (의무/금지 구분, 값 있을 때만)
+        · check_result ← obligations_raw.check_result (검증 상태, 값 있을 때만)
+        · governing_ministry ← check.collectors.agency.ministry (COLLECTED + 단일 법령만,
+          결과 단위 1값. 제출처(submit_org)와 별개. 기존 DEFERRED 방침을 운영자 승인으로 해제)
 """
 from __future__ import annotations
 
@@ -256,6 +261,13 @@ def _leg_rule_row(o: Dict[str, Any]) -> Dict[str, Any]:
     evidence = (o.get("evidence") or "").strip()
     if evidence:
         row["evidence"] = evidence                 # 근거(원문 그대로, 재작성 금지)
+    # v1.3.2 확장 — 값 있을 때만
+    content_type = (enr.get("content_type") or "").strip()
+    if content_type:
+        row["content_type"] = content_type         # 의무/금지 구분(OBLIGATION/PROHIBITION)
+    check_result = (o.get("check_result") or "").strip()
+    if check_result:
+        row["check_result"] = check_result         # 검증 상태(VERIFIED 등)
     return row
 
 
@@ -330,6 +342,21 @@ def _collector_submit_org_label(collectors: Dict[str, Any]) -> str:
     return v.strip() if isinstance(v, str) and v.strip() else ""
 
 
+def _collector_ministry(full_result: Dict[str, Any], rules_table: List[Dict[str, Any]]) -> str:
+    """소관부처(ministry) COLLECTED + 단일 법령(D8)일 때만. 결과 단위 1값. 제출처(submit_org)와 별개."""
+    collectors = _get_collectors(full_result)
+    if not collectors:
+        return ""
+    distinct_laws = {(r.get("law_name") or "").strip() for r in rules_table if (r.get("law_name") or "").strip()}
+    if len(distinct_laws) != 1:
+        return ""
+    mi = (collectors.get("agency") or {}).get("ministry") or {}
+    if (mi.get("status") or "").strip().upper() != "COLLECTED":
+        return ""
+    v = mi.get("value")
+    return v.strip() if isinstance(v, str) and v.strip() else ""
+
+
 def _apply_collectors_to_leg_rows(full_result: Dict[str, Any], rules_table: List[Dict[str, Any]]) -> None:
     """D8 fail-closed: distinct law identity == 1 결과에서만 result-level collector를 각 행에 적용.
     ministry는 표시 미연결(DEFERRED). collector 값을 다중 법령 행에 복제하지 않는다."""
@@ -400,6 +427,7 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int]) 
     raw_rules = [r for r in (full_result.get("rules_table") or []) if isinstance(r, dict)]
     leg_summary: Optional[Dict[str, int]] = None
     leg_contract: Optional[Dict[str, Any]] = None
+    leg_ministry: str = ""
     if raw_rules:
         # 축1(Compiler) 결과: 기존 경로 무변경.
         rules_table = _refine_rules_table(raw_rules)
@@ -411,6 +439,8 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int]) 
             leg_summary = _leg_summary_from_rules(rules_table)
             # v1.3.1: Collector(penalty/submit_org) 적용 — D8 단일 법령 가드.
             _apply_collectors_to_leg_rows(full_result, rules_table)
+            # v1.3.2: 소관부처(ministry) — COLLECTED + 단일 법령만(제출처와 별개).
+            leg_ministry = _collector_ministry(full_result, rules_table)
             # v1.3.1: top-level contract 노출 (비어있지 않을 때만).
             _contract = full_result.get("contract")
             if isinstance(_contract, dict) and _contract:
@@ -512,4 +542,6 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int]) 
     # v1.3.1: LEG top-level contract (입력 부족 고지용) — 비어있지 않을 때만 add-only.
     if leg_contract is not None:
         payload["data"]["contract"] = leg_contract
+    if leg_ministry:
+        payload["data"]["governing_ministry"] = leg_ministry
     return payload
