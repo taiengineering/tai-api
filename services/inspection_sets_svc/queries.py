@@ -15,7 +15,8 @@ def get_sets_list(factory_id, source, anchor_confirmed, page, size) -> dict:
     supabase = get_supabase()
     query = supabase.table("inspection_sets").select(
         "id, company_id, factory_id, inspection_set_name, inspection_set_code, "
-        "inspection_category, legal_rule_id, law_name, law_article, cycle_unit, cycle_value, "
+        "inspection_category, legal_rule_id, law_name, law_article, "
+        "obligation_type, obligation_summary, cycle_unit, cycle_value, "
         "cycle_base_type, cycle_base_guide, anchor_type, schedule_anchor_date, "
         "last_inspection_date, next_planned_date, anchor_confirmed, description, source, "
         "is_active, status_code, assignee_user_id, created_at, updated_at",
@@ -30,27 +31,20 @@ def get_sets_list(factory_id, source, anchor_confirmed, page, size) -> dict:
     offset = (page - 1) * size
     res = query.order("created_at", desc=True).range(offset, offset + size - 1).execute()
     items = res.data or []
-    rule_ids = list({r["legal_rule_id"] for r in items if r.get("legal_rule_id")})
-    rules_map = {}
-    for i in range(0, len(rule_ids), 100):
-        chunk = rule_ids[i:i + 100]
-        r_res = supabase.table("master_building_legal_rules").select(
-            "rule_id, obligation_type, obligation_summary, penalty_summary, form_name, "
-            "form_url, remarks, cycle_base_guide, online_system, system_url"
-        ).in_("rule_id", chunk).execute()
-        for row in (r_res.data or []):
-            rules_map[row["rule_id"]] = row
+    # 파이프라인 정합 (2026-08-13): 격리된 master_building_legal_rules JOIN 제거.
+    #   obligation_type/obligation_summary 는 LEG 파이프라인이 채운 inspection_sets
+    #   자체 컴럼에서 서빙한다(값 생성 없음). penalty/form 계열은 LEG 파이프라인 산출이
+    #   아니므로 응답 계약 유지를 위해 빈값으로 노출(소비처가 미표시).
     for item in items:
-        rule_row = rules_map.get(item.get("legal_rule_id"), {})
-        item["obligation_type"] = rule_row.get("obligation_type") or "OTHER"
-        item["obligation_summary"] = rule_row.get("obligation_summary") or ""
-        item["penalty_summary"] = rule_row.get("penalty_summary") or ""
-        item["form_name"] = rule_row.get("form_name") or ""
-        item["form_url"] = rule_row.get("form_url") or ""
-        item["remarks"] = rule_row.get("remarks") or ""
-        item["online_system"] = rule_row.get("online_system") or ""
-        item["system_url"] = rule_row.get("system_url") or ""
-        item["cycle_base_guide_rule"] = rule_row.get("cycle_base_guide") or ""
+        item["obligation_type"] = item.get("obligation_type") or "OTHER"
+        item["obligation_summary"] = item.get("obligation_summary") or ""
+        item["penalty_summary"] = ""
+        item["form_name"] = ""
+        item["form_url"] = ""
+        item["remarks"] = ""
+        item["online_system"] = ""
+        item["system_url"] = ""
+        item["cycle_base_guide_rule"] = item.get("cycle_base_guide") or ""
     return {"status": "success", "data": {"items": items, "total": res.count or 0, "page": page, "size": size, "total_pages": ((res.count or 0) + size - 1) // size if res.count else 0}}
 
 
