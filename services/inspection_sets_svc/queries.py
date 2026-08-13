@@ -33,7 +33,7 @@ def get_sets_list(factory_id, source, anchor_confirmed, page, size) -> dict:
     items = res.data or []
     # 파이프라인 정합 (2026-08-13): 격리된 master_building_legal_rules JOIN 제거.
     #   obligation_type/obligation_summary 는 LEG 파이프라인이 채운 inspection_sets
-    #   자체 컴럼에서 서빙한다(값 생성 없음). penalty/form 계열은 LEG 파이프라인 산출이
+    #   자체 컬럼에서 서빙한다(값 생성 없음). penalty/form 계열은 LEG 파이프라인 산출이
     #   아니므로 응답 계약 유지를 위해 빈값으로 노출(소비처가 미표시).
     for item in items:
         item["obligation_type"] = item.get("obligation_type") or "OTHER"
