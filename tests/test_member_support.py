@@ -16,10 +16,14 @@ counting LLM 과 함께 써서 "FAQ 는 LLM 미호출"을 직접 검증한다.
   8. HANDOFF 저장 실패 → ERROR
   9. Routing ERROR → ERROR
  10. Answer ERROR → ERROR
+ 11. _build_routing_context: diagnosis object_type 단독(object_id 없이) 보존 / object_id 미포함 / 비허용 제거
+ 12. _handle_ask(routing_ctx=...): route 는 routing_ctx(+company_id) 사용, 저장은 stored_ctx(clean)
+ 13. 하위호환: routing_ctx 미지정 → stored_ctx 를 routing 근거로 사용
 """
 import json
 
-from routers.member_support import _handle_ask
+from routers.member_support import _build_routing_context, _handle_ask
+from routers.member_inquiries import InquiryContextBody
 from services import support_answer_svc
 
 results = []
@@ -147,6 +151,49 @@ r = _handle_ask("x", None, False, IDENT,
                 explain_fn=lambda r, q: {"status": "ERROR", "detail": "llm_call failed"},
                 save_fn=save_recorder())
 check("10 Answer ERROR->ERROR", r["status"] == "ERROR" and "llm_call" in r["detail"])
+
+# 11. _build_routing_context: diagnosis 단독 보존 / object_id 미포함 / 비허용 제거
+check("11 routing ctx diagnosis 단독 보존",
+      _build_routing_context(InquiryContextBody(factory_id="F-1", object_type="diagnosis"))
+      == {"factory_id": "F-1", "object_type": "diagnosis"})
+check("11b routing ctx object_id 미포함",
+      _build_routing_context(InquiryContextBody(factory_id="F-1", object_type="diagnosis", object_id="D-9"))
+      == {"factory_id": "F-1", "object_type": "diagnosis"})
+check("11c routing ctx 비허용 object_type 제거",
+      _build_routing_context(InquiryContextBody(factory_id="F-1", object_type="report")) == {"factory_id": "F-1"})
+
+# 12. _handle_ask(routing_ctx=...): route 는 routing_ctx(+company_id) 사용, 저장은 stored_ctx(clean)
+cap = {}
+
+
+def route_capture(q, ctx, aa):
+    cap["ctx"] = dict(ctx)
+    return {"status": "HANDOFF", "reason": "x"}
+
+
+save12 = save_recorder()
+stored12 = {"factory_id": "F-1"}                               # 저장용(object_type 제거된 저장 계약 결과)
+routing12 = {"factory_id": "F-1", "object_type": "diagnosis"}  # routing 용(diagnosis 보존)
+r = _handle_ask("왜?", stored12, False, IDENT, routing_ctx=routing12,
+                route_fn=route_capture, explain_fn=lambda r, q: {"status": "ERROR"}, save_fn=save12)
+check("12 route 는 routing_ctx 사용(diagnosis+company_id)",
+      cap["ctx"].get("object_type") == "diagnosis" and cap["ctx"].get("factory_id") == "F-1"
+      and cap["ctx"].get("company_id") == "C-1")
+check("12b 저장은 stored_ctx(회사ID·object_type 없음)",
+      save12.rec["kwargs"]["context"] == stored12 and "company_id" not in save12.rec["kwargs"]["context"])
+
+# 13. 하위호환: routing_ctx 미지정 → stored_ctx 를 routing 근거로 사용
+cap2 = {}
+
+
+def route_capture2(q, ctx, aa):
+    cap2["ctx"] = dict(ctx)
+    return {"status": "HANDOFF", "reason": "x"}
+
+
+_handle_ask("q", {"factory_id": "F-7"}, False, IDENT,
+            route_fn=route_capture2, explain_fn=lambda r, q: {"status": "ERROR"}, save_fn=save_recorder())
+check("13 하위호환: routing_ctx None→stored 사용", cap2["ctx"].get("factory_id") == "F-7")
 
 failed = [n for n, ok in results if not ok]
 print(f"\n{len(results) - len(failed)}/{len(results)} passed")
