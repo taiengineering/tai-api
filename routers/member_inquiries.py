@@ -19,6 +19,12 @@
 
 저장 로직은 _save_member_inquiry() 공통 함수로 추출한다.
   → POST /me/inquiries 와 POST /me/support/ask(HANDOFF)가 같은 저장 로직을 재사용한다(복붙 금지).
+
+[트랙 B] HANDOFF 저장 시 서버가 생성한 taxonomy(type_code/subtype_code/resolution_axis)를
+  정규 컬럼으로 저장할 수 있도록 _save_member_inquiry 에 nullable 3파라미터를 추가한다.
+  - 값은 서버 내부(member_support 의 HANDOFF orchestration)에서만 넣는다. public request schema 에는 없다.
+  - 값이 없으면(기존 호출 포함) NULL 로 저장한다 — 하위호환(회귀 없음).
+  - taxonomy 는 정규 컬럼으로만 저장하고 context.support 에 중복 저장하지 않는다(역할 분리).
 """
 import logging
 from datetime import datetime, timezone
@@ -126,12 +132,19 @@ def _save_member_inquiry(
     title: Optional[str] = None,
     category: str = "saas",
     handoff_reason: Optional[str] = None,
+    type_code: Optional[str] = None,
+    subtype_code: Optional[str] = None,
+    resolution_axis: Optional[str] = None,
 ) -> Dict[str, Any]:
     """회원 문의 1건을 inquiries 에 저장(+ context) + Slack 통지(베스트에포트). 저장된 row 반환.
 
     /me/inquiries 와 /me/support/ask(HANDOFF) 공통. 실패 시 예외를 그대로 올린다(호출측이 변환).
     title 은 /me/inquiries 에서만 전달한다(HANDOFF 는 미전달 → NULL).
     handoff_reason 은 내부 통지에만 쓴다(신규 DB 컬럼 없음).
+
+    [트랙 B] type_code/subtype_code/resolution_axis 는 서버 생성 taxonomy(HANDOFF 저장 시).
+      값이 있으면 정규 컬럼으로 저장하고, 없으면 넣지 않는다(NULL — 하위호환).
+      client 입력이 아니라 서버 내부에서만 전달된다. context.support 에 중복 저장하지 않는다.
     """
     if supabase is None:
         supabase = get_supabase()
@@ -154,6 +167,14 @@ def _save_member_inquiry(
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
     }
+
+    # [트랙 B] taxonomy 정규 컬럼(서버 생성값). 값 있을 때만 추가 — 없으면 컬럼 미포함(DB default NULL).
+    if type_code is not None:
+        row["type_code"] = type_code
+    if subtype_code is not None:
+        row["subtype_code"] = subtype_code
+    if resolution_axis is not None:
+        row["resolution_axis"] = resolution_axis
 
     res = supabase.table("inquiries").insert(row).execute()
     if not res.data:
