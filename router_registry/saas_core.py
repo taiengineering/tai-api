@@ -25,4 +25,6 @@ ROUTERS = [
     {"module": "routers.validation_api"},
     # 고객응대 MVP 1단계: SaaS 회원 문의 저장 경로 + Question Context 보존 (POST /me/inquiries)
     {"module": "routers.member_inquiries"},
+    # 고객응대 MVP: 질문 진입점 결선 (POST /me/support/ask — routing→answer→handoff)
+    {"module": "routers.member_support"},
 ]
