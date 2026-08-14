@@ -3,7 +3,7 @@
 
 설계: 고객응대 AI 1:1 문의 유형 체계.
   - 상위유형 T1~T7 (사용자에게 노출하지 않음. LLM 이 뒷단에서 분류 — 트랙 B).
-  - 세부유형 37종 (stable code + 한국어 label + parent_type).
+  - 세부유형 36종 (stable code + 한국어 label + parent_type).
   - 처리축 3종 (KNOWLEDGE / INVESTIGATION / HANDOFF). AI ACTION 은 없다(capability=0).
 
 이 모듈은 '값의 정의(SoT)'만 제공한다. 분류(어느 문의가 어느 type 인지)는 하지 않는다(그건 트랙 B).
@@ -45,7 +45,7 @@ TYPES: List[Dict[str, str]] = [
 ]
 TYPE_CODES = frozenset(t["code"] for t in TYPES)
 
-# ── 세부유형 37종 (code · label · parent_type) ──
+# ── 세부유형 36종 (code · label · parent_type) ──
 # T5-5 '권한부여 요청' 은 T7_PERMISSION_ACCOUNT 로 통합(여기 T5 에는 두지 않음).
 SUBTYPES: List[Dict[str, str]] = [
     # T1 사용법·안내 (5)
@@ -145,6 +145,24 @@ def subtype_matches_type(subtype_code: Optional[str], type_code: Optional[str]) 
         if s["code"] == subtype_code:
             return s["parent_type"] == type_code
     return False
+
+
+def project_labels(row: Dict[str, Any]) -> Dict[str, Any]:
+    """문의 row(dict)에 표시용 label 3개를 additive 로 붙인 '새 dict' 반환.
+
+    admin 응답 projection 전용(트랙 A 마감 보정). 하는 것:
+      - 원본 row 를 얕은 복사한 뒤 type_label/subtype_label/resolution_axis_label 을 추가.
+      - 값이 없거나 미매핑이면 해당 label 은 None(억지 '미분류' 저장/반환 금지 — 표시측이 처리).
+    하지 않는 것: DB write / 분류 / subtype·axis 추론 / LLM 호출 / 원본 code 변경.
+    label 은 응답 전용이며 DB 컬럼이 아니다(저장되지 않는다).
+    """
+    if not isinstance(row, dict):
+        return row
+    out = dict(row)
+    out["type_label"] = type_label(row.get("type_code"))
+    out["subtype_label"] = subtype_label(row.get("subtype_code"))
+    out["resolution_axis_label"] = resolution_axis_label(row.get("resolution_axis"))
+    return out
 
 
 def taxonomy_snapshot() -> Dict[str, Any]:
