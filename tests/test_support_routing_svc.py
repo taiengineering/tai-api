@@ -11,13 +11,21 @@
   6. 다른 object_type → HANDOFF
   7. 추가질문 1회 규칙
   8. 근거 없음 → HANDOFF
-소유권 검증 케이스(신규):
+소유권 검증 케이스:
   4b. 소유 아님 → HANDOFF, latest 미호출
   4c. company_id 없음 → HANDOFF, latest 미호출
   4d. 소유권 체크 예외 → ERROR
 보완 케이스:
   11. Knowledge hit 있어도 object_type=diagnosis + factory_id(+소유 OK) 이면 CONTEXT 우선
   12. Context 없는 일반 질문은 Knowledge ANSWER
+FAQ alias(동의 질문) 매칭 케이스:
+  13. canonical exact → FAQ ANSWER
+  14. alias exact → FAQ ANSWER
+  15. 띄어쓰기/구두점 차이(normalize 범위) → ANSWER
+  16. 유사하지만 alias 미등록 → FAQ ANSWER 금지 → HANDOFF
+  17. 두 FAQ 동시 alias 매칭(모호) → 임의 선택 금지 / Knowledge 폴백
+  18. alias 없는 FAQ 회귀(canonical exact 동작, 유사 금지)
+  19. 동일 doc 캐논+별칭 중복 → 1건 카운트 → ANSWER
 """
 import os
 import sys
@@ -246,6 +254,61 @@ r = svc.route(
 )
 check("12 일반질문(context 없음)->Knowledge ANSWER",
       r["status"] == "ANSWER" and r["source"] == "KNOWLEDGE" and r["evidence"] == kn_hit)
+
+
+# ── FAQ alias(동의 질문) 매칭 케이스 ──
+def faq_items(items):
+    def _f(q, ctx):
+        return {"items": items, "total": len(items)}
+    return _f
+
+
+_FAQ_A = {"doc_id": "FAQ-대분류", "type": "FAQ",
+          "question": "대분류는 무엇을 선택해야 하나요?", "answer_short": "업종 기준으로 선택합니다.",
+          "aliases": ["대분류는 뭘 골라야 하나요?", "어떤 대분류를 선택하죠?"]}
+_FAQ_B = {"doc_id": "FAQ-B", "type": "FAQ",
+          "question": "환불은 어떻게 하나요?", "answer_short": "환불 안내",
+          "aliases": ["어떤 대분류를 선택하죠?"]}  # 의도적 동일 alias(모호 테스트용)
+_FAQ_NOALIAS = {"doc_id": "FAQ-C", "type": "FAQ",
+                "question": "무료 진단은 무료인가요?", "answer_short": "네, 무료입니다."}
+
+# 13. canonical exact → FAQ ANSWER
+r = svc.route("대분류는 무엇을 선택해야 하나요?", context={}, faq_search=faq_items([_FAQ_A]), knowledge_search=empty)
+check("13 canonical exact->FAQ ANSWER",
+      r["status"] == "ANSWER" and r["source"] == "FAQ" and r["evidence"]["doc_id"] == "FAQ-대분류")
+
+# 14. alias exact → FAQ ANSWER
+r = svc.route("대분류는 뭘 골라야 하나요?", context={}, faq_search=faq_items([_FAQ_A]), knowledge_search=empty)
+check("14 alias exact->FAQ ANSWER", r["status"] == "ANSWER" and r["source"] == "FAQ")
+
+# 15. 띄어쓰기/구두점 차이(기존 normalize 범위) → alias ANSWER
+r = svc.route("  대분류는 뭘  골라야 하나요 ", context={}, faq_search=faq_items([_FAQ_A]), knowledge_search=empty)
+check("15 normalize 범위 차이->ANSWER", r["status"] == "ANSWER" and r["source"] == "FAQ")
+
+# 16. 유사하지만 alias 미등록 → FAQ ANSWER 금지 → HANDOFF
+r = svc.route("대분류 고르는 팁 알려줘", context={}, faq_search=faq_items([_FAQ_A]), knowledge_search=empty)
+check("16 미등록 유사->FAQ 금지+HANDOFF",
+      (not (r["status"] == "ANSWER" and r.get("source") == "FAQ")) and r["status"] == "HANDOFF")
+
+# 17. 두 FAQ가 동일 표현으로 동시 alias 매칭 → 임의 선택 금지(FAQ ANSWER 금지)
+r = svc.route("어떤 대분류를 선택하죠?", context={}, faq_search=faq_items([_FAQ_A, _FAQ_B]), knowledge_search=empty)
+check("17 다중 alias 매칭->FAQ 금지", not (r["status"] == "ANSWER" and r.get("source") == "FAQ"))
+check("17b 다중 매칭->다음 단계(HANDOFF)", r["status"] == "HANDOFF")
+# 17c. 다중 매칭이어도 Knowledge 있으면 KB 폴백(FAQ만 금지, 순서 유지)
+r = svc.route("어떤 대분류를 선택하죠?", context={}, faq_search=faq_items([_FAQ_A, _FAQ_B]),
+              knowledge_search=kn_with([{"doc_id": "KB-X", "type": "PAGE_GUIDE"}]))
+check("17c 다중 매칭->Knowledge 폴백", r["status"] == "ANSWER" and r["source"] == "KNOWLEDGE")
+
+# 18. alias 없는 FAQ 회귀 — canonical exact 동작 / 유사 금지
+r = svc.route("무료 진단은 무료인가요?", context={}, faq_search=faq_items([_FAQ_NOALIAS]), knowledge_search=empty)
+check("18 alias 없음 canonical exact->ANSWER", r["status"] == "ANSWER" and r["source"] == "FAQ")
+r = svc.route("무료 진단 환불되나요?", context={}, faq_search=faq_items([_FAQ_NOALIAS]), knowledge_search=empty)
+check("18b alias 없음 유사->FAQ 금지", not (r["status"] == "ANSWER" and r.get("source") == "FAQ"))
+
+# 19. 동일 doc 캐논+별칭 중복 매칭 → 1건으로 카운트 → ANSWER
+_FAQ_SELF = {"doc_id": "FAQ-S", "type": "FAQ", "question": "엑스와이제트", "aliases": ["엑스와이제트"]}
+r = svc.route("엑스와이제트", context={}, faq_search=faq_items([_FAQ_SELF]), knowledge_search=empty)
+check("19 동일 doc 캐논+별칭 중복->1건 ANSWER", r["status"] == "ANSWER" and r["source"] == "FAQ")
 
 
 failed = [n for n, ok in results if not ok]
