@@ -19,6 +19,11 @@ SoT 재사용: 가능한 code/label/parent_type 는 services.support_taxonomy �
 LLM 재사용: 기존 support_answer_svc 와 동일 계열(OpenAI SDK, env OPENAI_API_KEY, chat.completions JSON).
   신규 provider/abstraction 없음. 호출은 주입 가능(llm_call), 미주입 시 기본 구현 지연 import.
 
+지연/타임아웃 정책(분류보다 문의 저장 우선):
+  - 기본 LLM 호출에 짧은 명시적 timeout(_LLM_TIMEOUT_SECONDS)을 건다. retry 는 넣지 않는다(max_retries=0).
+  - timeout/네트워크 지연 → 예외 → classify() 가 None → 호출측이 즉시 HANDOFF 저장을 진행한다.
+  - 즉 느린 분류가 문의 저장을 막지 않는다(best-effort metadata 원칙).
+
 실패 정책(best-effort): timeout/exception/invalid JSON/unknown code/mismatch/empty →
   classify() 는 None 을 반환한다(예외를 밖으로 던지지 않는다). 호출측은 None 이면 taxonomy 를
   NULL 로 두고 HANDOFF 저장을 계속한다. ERROR 승격/저장 취소/재시도 요구 금지.
@@ -32,6 +37,10 @@ from typing import Any, Callable, Dict, List, Optional
 from services import support_taxonomy
 
 logger = logging.getLogger("support_classifier")
+
+# 분류는 best-effort metadata 이므로, 느린 응답이 HANDOFF 저장을 막지 않도록 짧은 deadline 을 건다.
+# retry 는 넣지 않는다(문의 저장이 분류보다 우선). timeout 이면 예외 → classify() None → 즉시 저장.
+_LLM_TIMEOUT_SECONDS = 6.0
 
 # 분류기 출력 계약(고정): type_code + subtype_code 만. 설명/축/추론 금지.
 _LLM_SYSTEM = (
@@ -66,10 +75,19 @@ def _build_taxonomy_brief() -> str:
 
 
 def _default_llm_call(system_msg: str, user_msg: str) -> str:
-    """기존 support_answer_svc 와 동일 provider·설정 재사용(OpenAI gpt-4o, JSON). raw 문자열 반환."""
+    """기존 support_answer_svc 와 동일 provider·설정 재사용(OpenAI gpt-4o, JSON). raw 문자열 반환.
+
+    분류는 best-effort 이므로 짧은 timeout 을 명시하고 retry 를 끈다(max_retries=0).
+    timeout/네트워크 오류는 예외로 올라가 classify() 에서 None 으로 흡수된다(문의 저장이 우선).
+    """
     import os
     from openai import OpenAI  # 지연 import
-    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+    # timeout: per-request deadline. max_retries=0: 느린 분류가 저장을 막지 않도록 재시도 없음.
+    client = OpenAI(
+        api_key=os.environ.get("OPENAI_API_KEY", ""),
+        timeout=_LLM_TIMEOUT_SECONDS,
+        max_retries=0,
+    )
     resp = client.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -78,6 +96,7 @@ def _default_llm_call(system_msg: str, user_msg: str) -> str:
         ],
         temperature=0.0,
         response_format={"type": "json_object"},
+        timeout=_LLM_TIMEOUT_SECONDS,  # per-call 재확인(클라이언트 기본값 위에 명시)
     )
     return resp.choices[0].message.content
 
@@ -125,7 +144,7 @@ def classify(
 ) -> Optional[Dict[str, str]]:
     """question → {type_code, subtype_code} 또는 None(실패/무효).
 
-    best-effort: 어떤 실패든 예외를 밖으로 던지지 않고 None 을 반환한다.
+    best-effort: 어떤 실패든(그리고 기본 호출의 timeout 도) 예외를 밖으로 던지지 않고 None 을 반환한다.
     resolution_axis 는 여기서 만들지 않는다(서버가 HANDOFF 로 확정).
     """
     q = (question or "").strip()
@@ -143,8 +162,8 @@ def classify(
 
     try:
         raw = llm_call(_LLM_SYSTEM, user_msg)
-    except Exception:  # noqa: BLE001
-        logger.warning("classifier_failed: llm_call raised")
+    except Exception:  # noqa: BLE001  (timeout 포함 — 문의 저장이 우선이므로 None 흡수)
+        logger.warning("classifier_failed: llm_call raised or timed out")
         return None
 
     try:
