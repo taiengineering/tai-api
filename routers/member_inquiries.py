@@ -5,6 +5,7 @@
 - POST /me/inquiries : 로그인 회원이 SaaS 안에서 문의를 접수한다.
 - 신원(user_id/company_id)은 Bearer 토큰에서 서버가 파생한다(클라이언트 신뢰 금지).
   → routers.auth.get_current_user 재사용(토큰 검증 → users 행 반환).
+- source 는 서버가 항상 "saas" 로 고정한다(이 경로는 SaaS 회원 전용). 클라이언트 입력을 받지 않는다.
 - Question Context 보존(안 A · inquiries.context jsonb):
     정규 컬럼(user_id/company_id/page_url/source/content)에 있는 값은 context 에 중복 저장하지 않는다.
     context 에는 화면 Context 만 담는다 — factory_id, object_type, object_id.
@@ -27,6 +28,9 @@ from routers.admin_inquiries import _next_inquiry_no
 logger = logging.getLogger("member_inquiries")
 router = APIRouter(prefix="/me", tags=["회원 문의"])
 
+# 이 경로는 SaaS 회원 전용이므로 source 는 서버가 고정한다(클라이언트 입력 금지).
+INQUIRY_SOURCE = "saas"
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -44,7 +48,6 @@ class MemberInquiryBody(BaseModel):
     title: Optional[str] = None
     category: Optional[str] = None
     page_url: Optional[str] = None
-    source: Optional[str] = "saas"
     context: Optional[InquiryContextBody] = None
 
 
@@ -86,7 +89,7 @@ def create_member_inquiry(
 
     row: Dict[str, Any] = {
         "no": _next_inquiry_no(supabase),
-        "source": (body.source or "saas").strip() or "saas",
+        "source": INQUIRY_SOURCE,  # 서버 고정 — 클라이언트 입력 안 받음
         "inquiry_type": "INQUIRY",
         "category": (body.category or "saas").strip() or "saas",
         "title": (body.title or "").strip() or None,
