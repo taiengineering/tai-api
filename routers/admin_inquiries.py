@@ -12,6 +12,11 @@ Doc: docs/inbox-system/PHASE4_INQUIRY_LIST.md
   type_label/subtype_label/resolution_axis_label 3개를 응답 row 에 덧붙인다(DB 컬럼 아님).
   분류/추론/LLM/저장은 하지 않는다 — 값은 트랙 B 분류기가 채운다(현재 전부 NULL → label None).
   GET items · POST/PATCH 반환 row 에 동일 helper(support_taxonomy.project_labels)를 재사용한다(중복 구현 금지).
+
+[리스트/검색 개편] GET /admin/inquiries 에 taxonomy 필터(type_code / resolution_axis)를 additive 로 추가.
+  - 값 '__none__' 이면 IS NULL(미분류) 필터. 그 외엔 support_taxonomy 로 유효성 검사 후 eq 필터.
+  - 유효하지 않은 값은 400. 기존 필터/정렬/계약 무변경(추가만).
+  - sort_key 에 type_code / resolution_axis 추가(리스트 컬럼 정렬 대응).
 """
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -21,7 +26,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
-from services.support_taxonomy import project_labels
+from services.support_taxonomy import project_labels, is_valid_type, is_valid_axis
 
 router = APIRouter(prefix="/admin/inquiries", tags=["관리 - 통합 인박스"])
 
@@ -45,7 +50,13 @@ FEEDBACK_CATEGORIES = {
     "fb_praise",
 }
 
-SORT_KEYS = {"created_at", "no", "category", "title", "name", "status", "assigned", "source", "inquiry_type"}
+SORT_KEYS = {
+    "created_at", "no", "category", "title", "name", "status", "assigned", "source",
+    "inquiry_type", "type_code", "resolution_axis",
+}
+
+# 미분류(NULL) 필터를 요청하는 특수 토큰(클라이언트 → 서버 약속값).
+NONE_FILTER_TOKEN = "__none__"
 
 
 def _require_bearer(authorization: Optional[str]) -> None:
@@ -149,6 +160,8 @@ def admin_list_inquiries(
     inquiry_type: Optional[str] = Query(None, description="INQUIRY | FEEDBACK"),
     category: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    type_code: Optional[str] = Query(None, description="T1~T7 | __none__(미분류)"),
+    resolution_axis: Optional[str] = Query(None, description="KNOWLEDGE|INVESTIGATION|HANDOFF | __none__(미분류)"),
     is_member: Optional[str] = Query(None, description="1=회원, 0=비회원"),
     from_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
     to_date: Optional[str] = Query(None, description="YYYY-MM-DD"),
@@ -175,6 +188,25 @@ def admin_list_inquiries(
         query = query.eq("category", category.strip())
     if status:
         query = query.eq("status", status.strip())
+
+    # taxonomy 필터(additive). '__none__' → IS NULL(미분류). 그 외엔 SoT 유효성 검사 후 eq.
+    if type_code:
+        tc = type_code.strip()
+        if tc == NONE_FILTER_TOKEN:
+            query = query.is_("type_code", "null")
+        elif is_valid_type(tc):
+            query = query.eq("type_code", tc)
+        else:
+            raise HTTPException(status_code=400, detail="지원하지 않는 type_code 입니다.")
+    if resolution_axis:
+        ax = resolution_axis.strip()
+        if ax == NONE_FILTER_TOKEN:
+            query = query.is_("resolution_axis", "null")
+        elif is_valid_axis(ax):
+            query = query.eq("resolution_axis", ax)
+        else:
+            raise HTTPException(status_code=400, detail="지원하지 않는 resolution_axis 입니다.")
+
     if is_member == "1":
         query = query.eq("is_member", True)
     elif is_member == "0":
