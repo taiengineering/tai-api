@@ -8,11 +8,6 @@
     ANSWER / ASK / HANDOFF / ERROR
 (RESOLVED 는 만들지 않는다. 문의 저장/RESOLVED 처리는 이 서비스의 책임이 아니다.)
 
-이번 단계 범위(고정):
-- 근거를 찾고 올바른 경로를 결정하는 것까지만 구현한다. LLM 호출은 넣지 않는다.
-- ANSWER 는 실제 evidence(FAQ 항목 / diagnosis 결과 / Knowledge 문서)를 그대로 반환한다.
-  사람이 읽기 좋은 문장 생성(LLM/Projection)은 다음 작업에서 붙인다.
-
 단계(고정 순서):
   1. FAQ            : safe_help_svc.search(types=["FAQ"]) 재사용. 항상 가장 먼저.
                       단순 검색 hit 만으로 ANSWER 금지 — FAQ 의 실제 question 문구와
@@ -20,7 +15,7 @@
                       유사하지만 불일치 → 다음 단계. (임의 confidence 숫자 없음)
   2. 분기(intent classifier 아님 — object_type 값만 본다):
      2a. object_type == "diagnosis" → diagnosis Context 를 Knowledge 보다 '우선' 조회.
-         - object_id 없음 + factory_id 있음 → run_get_latest_diagnosis 사용.
+         - object_id 없음 + factory_id 있음 → (소유권 검증 후) run_get_latest_diagnosis 사용.
          - object_id 있음 + 정확 조회 경로 확인됨 → 해당 diagnosis 사용.
          - object_id 있음 + 정확 조회 불가 → latest 대체 금지 → HANDOFF.
          - factory_id·object_id 모두 없음 → ASK(1회) / already_asked → HANDOFF.
@@ -30,7 +25,14 @@
   3. Knowledge      : safe_help_svc.search(types=["PAGE_GUIDE","TASK_GUIDE"]) 재사용.
                       검색된 실제 문서를 evidence 로 반환. 근거 없으면 답 생성 없이 HANDOFF.
   4. ASK / HANDOFF  : 부족정보가 명확할 때만 ASK, 최대 1회. 그 외 HANDOFF.
-                      실제 이관(POST /me/inquiries)은 호출측이 수행.
+
+diagnosis 소유권 검증(보안, 필수):
+  diagnosis Context 를 factory_id 로 조회하기 '이전'에, 인증 회사(company_id)가 해당 factory 를
+  소유하는지 확인한다(factories.id == factory_id AND company_id == 인증회사).
+  company_id 부재/소유 불일치면 진단을 조회하지 않고 HANDOFF 한다(타사 진단 노출 차단).
+  company_id 는 반드시 서버 파생값이어야 한다 — 호출측 member_support 가 인증 토큰에서
+  context["company_id"] 로 넣는다. 화면 Context 빌더(_build_context)는 company_id 를 만들지 않으므로
+  클라이언트가 주입할 수 없다.
 
 조회는 주입(injection) 가능하다(테스트/재사용). 미주입 시 기존 함수를 지연 import 한다.
 """
@@ -71,6 +73,21 @@ def _default_latest_diagnosis(factory_id: str) -> Any:
     return legal_engine_svc.run_get_latest_diagnosis(get_supabase(), factory_id)
 
 
+def _default_company_owns_factory(company_id: str, factory_id: str) -> bool:
+    """인증 회사가 factory 를 소유하는지 확인. factories.id == factory_id AND company_id == 인증회사."""
+    from db.supabase_client import get_supabase
+    sb = get_supabase()
+    res = (
+        sb.table("factories")
+        .select("id")
+        .eq("id", factory_id)
+        .eq("company_id", company_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(getattr(res, "data", None))
+
+
 def _gating(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """MVP: 게이팅 미적용(safe_help_svc.search 는 None 허용). 후속 확장 훅."""
     return {}
@@ -81,8 +98,13 @@ def _resolve_diagnosis(
     already_asked: bool,
     latest_diagnosis: Callable[[str], Any],
     diagnosis_by_id: Optional[Callable[[str], Any]],
+    company_id: Optional[str],
+    company_owns_factory: Callable[[str, str], bool],
 ) -> Dict[str, Any]:
-    """object_type=="diagnosis" 전용 처리. ANSWER/ASK/HANDOFF/ERROR 로 종결."""
+    """object_type=="diagnosis" 전용 처리. ANSWER/ASK/HANDOFF/ERROR 로 종결.
+
+    factory_id 로 진단을 조회하기 전에 소유권을 검증한다(company_id 필수).
+    """
     object_id = (ctx.get("object_id") or "").strip() or None
     factory_id = (ctx.get("factory_id") or "").strip() or None
 
@@ -101,6 +123,19 @@ def _resolve_diagnosis(
         return {"status": "ANSWER", "source": "CONTEXT", "evidence": data}
 
     if factory_id:
+        # ── 소유권 검증(진단 조회 이전) ──
+        # company_id 는 서버 파생값이어야 한다. 없으면 검증 불가 → 조회하지 않고 HANDOFF.
+        if not company_id:
+            return {"status": "HANDOFF", "reason": "factory ownership unverifiable (no company)"}
+        try:
+            owns = company_owns_factory(company_id, factory_id)
+        except Exception as e:  # noqa: BLE001
+            return {"status": "ERROR", "detail": f"ownership check failed: {e}"}
+        if not owns:
+            # 인증 회사가 소유하지 않는 factory → 진단을 조회하지 않는다(타사 노출 차단).
+            return {"status": "HANDOFF", "reason": "factory not owned by company"}
+
+        # 소유 확인됨 → 최신 진단 조회
         try:
             data = latest_diagnosis(factory_id)
         except LookupError:
@@ -126,12 +161,13 @@ def route(
     knowledge_search: Optional[Callable[[str, Dict[str, Any]], Dict[str, Any]]] = None,
     latest_diagnosis: Optional[Callable[[str], Any]] = None,
     diagnosis_by_id: Optional[Callable[[str], Any]] = None,
+    company_owns_factory: Optional[Callable[[str, str], bool]] = None,
 ) -> Dict[str, Any]:
     """question+context → {status: ANSWER|ASK|HANDOFF|ERROR, ...}.
 
-    순서: FAQ exact → (object_type=="diagnosis" 면 diagnosis Context 우선) → Knowledge.
-    diagnosis_by_id 기본값 None = object_id 정확 조회 경로 '미확인'.
-    (현재 확인된 진단 조회는 factory_id→latest 뿐이므로 object_id 있으면 HANDOFF.)
+    순서: FAQ exact → (object_type=="diagnosis" 면 diagnosis Context 우선, 소유권 검증 후) → Knowledge.
+    context["company_id"] 는 서버 파생 인증 회사(호출측 member_support 가 넣음). 소유권 검증에 사용한다.
+    diagnosis_by_id 기본값 None = object_id 정확 조회 경로 '미확인' → object_id 있으면 HANDOFF.
     """
     q = (question or "").strip()
     if not q:
@@ -141,6 +177,7 @@ def route(
     faq_search = faq_search or _default_faq_search
     knowledge_search = knowledge_search or _default_knowledge_search
     latest_diagnosis = latest_diagnosis or _default_latest_diagnosis
+    company_owns_factory = company_owns_factory or _default_company_owns_factory
 
     # ── 1. FAQ: 정규화 정확 일치만 ANSWER (항상 최우선) ──
     try:
@@ -156,10 +193,13 @@ def route(
 
     # ── 2. 분기: object_type 값만 본다(intent classifier 아님) ──
     object_type = (ctx.get("object_type") or "").strip() or None
+    company_id = (ctx.get("company_id") or "").strip() or None  # 서버 파생 인증 회사
 
     if object_type == "diagnosis":
         # diagnosis Context 를 Knowledge 보다 우선 조회. 여기서 종결(Knowledge 로 안 내려감).
-        return _resolve_diagnosis(ctx, already_asked, latest_diagnosis, diagnosis_by_id)
+        return _resolve_diagnosis(
+            ctx, already_asked, latest_diagnosis, diagnosis_by_id, company_id, company_owns_factory,
+        )
 
     if object_type:
         # diagnosis 가 아닌 object_type → 이번 MVP 범위 밖
