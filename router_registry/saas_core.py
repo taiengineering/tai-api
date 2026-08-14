@@ -23,4 +23,6 @@ ROUTERS = [
     {"module": "routers.applicability_api"},
     # Phase 4: Real Facility Validation (배치 검증)
     {"module": "routers.validation_api"},
+    # 고객응대 MVP 1단계: SaaS 회원 문의 저장 경로 + Question Context 보존 (POST /me/inquiries)
+    {"module": "routers.member_inquiries"},
 ]
