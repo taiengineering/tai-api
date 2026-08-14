@@ -83,12 +83,14 @@ def _save_member_inquiry(
     question: str,
     page_url: Optional[str],
     context: Optional[Dict[str, Any]],
+    title: Optional[str] = None,
     category: str = "saas",
     handoff_reason: Optional[str] = None,
 ) -> Dict[str, Any]:
     """회원 문의 1건을 inquiries 에 저장(+ context) + Slack 통지(베스트에포트). 저장된 row 반환.
 
     /me/inquiries 와 /me/support/ask(HANDOFF) 공통. 실패 시 예외를 그대로 올린다(호출측이 변환).
+    title 은 /me/inquiries 에서만 전달한다(HANDOFF 는 미전달 → NULL).
     handoff_reason 은 내부 통지에만 쓴다(신규 DB 컬럼 없음).
     """
     if supabase is None:
@@ -99,7 +101,7 @@ def _save_member_inquiry(
         "source": INQUIRY_SOURCE,  # 서버 고정 — 클라이언트 입력 안 받음
         "inquiry_type": "INQUIRY",
         "category": (category or "saas").strip() or "saas",
-        "title": None,
+        "title": (title or "").strip() or None,
         "content": question.strip(),
         "name": name or None,
         "is_member": True,
@@ -168,6 +170,7 @@ def create_member_inquiry(
             question=body.question,
             page_url=body.page_url,
             context=context,
+            title=body.title,
             category=(body.category or "saas"),
         )
     except Exception as e:  # noqa: BLE001
