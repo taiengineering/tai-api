@@ -14,11 +14,14 @@ POST /me/support/ask :
   - 신원(user_id/company_id)은 Bearer 토큰에서 서버가 파생한다(클라이언트 입력 금지).
   - AI 가 문의를 RESOLVED 로 자동 종료하지 않는다.
 
-Context 분리(저장 vs 라우팅):
-  - stored_ctx : 저장(inquiries.context)에 쓰는 화면 Context. factory_id/object_type/object_id 만.
-  - routing_ctx: stored_ctx 복사본 + 서버 파생 company_id. routing 의 factory 소유권 검증에만 쓴다.
-    company_id 는 저장 context 에 넣지 않는다(정규 컬럼 company_id 로 이미 저장됨, 중복 금지).
-    company_id 를 서버(인증)에서만 넣으므로 클라이언트가 소유권 검증을 우회할 수 없다.
+Context 분리(저장 vs 라우팅) — 서로 다른 계약이므로 별도로 만든다:
+  - stored_ctx (_build_context): 저장(inquiries.context) 계약. object_type/object_id 는 '쌍'으로만.
+      → 프론트가 object_id 없이 object_type="diagnosis" 만 보내면 저장 context 에서는 object_type 이 빠진다.
+  - routing_ctx (_build_routing_context): routing 전용 최소 Context.
+      factory_id + object_type="diagnosis"(단독, object_id 없이) 를 '보존'한다(diagnosis 분기 진입용).
+      여기에 서버 파생 company_id 를 더해 factory 소유권 검증에 쓴다.
+      company_id 는 저장 context 에 넣지 않는다(정규 컬럼 company_id 로 이미 저장, 중복 금지).
+      company_id 를 서버(인증)에서만 넣으므로 클라이언트가 소유권 검증을 우회할 수 없다.
 
 처리 규칙:
   1) route() 호출
@@ -50,6 +53,31 @@ class SupportAskBody(BaseModel):
     page_url: Optional[str] = None
     context: Optional[InquiryContextBody] = None
     already_asked: bool = False
+
+
+# routing 에서 허용하는 object_type (MVP: diagnosis 하나). object_id 는 사용하지 않는다.
+SUPPORT_ROUTING_OBJECT_TYPES = {"diagnosis"}
+
+
+def _build_routing_context(ctx: Optional[InquiryContextBody]) -> Dict[str, Any]:
+    """routing 전용 최소 Context.
+
+    저장용 _build_context()(문의 저장 계약: object_type/object_id 쌍 필수)와 '분리'된 빌더.
+    - factory_id: 있으면 포함
+    - object_type: 허용목록(diagnosis)일 때만 포함. object_id 는 MVP 에서 사용하지 않으므로 전송/보존하지 않는다.
+    → 프론트가 factory_id + object_type="diagnosis"(object_id 없음)만 보내도 routing 에서 diagnosis 분기로 들어간다.
+    company_id(서버 파생)는 _handle_ask 에서 별도 주입한다.
+    """
+    if not ctx:
+        return {}
+    out: Dict[str, Any] = {}
+    factory_id = (ctx.factory_id or "").strip() or None
+    object_type = (ctx.object_type or "").strip() or None
+    if factory_id:
+        out["factory_id"] = factory_id
+    if object_type in SUPPORT_ROUTING_OBJECT_TYPES:
+        out["object_type"] = object_type
+    return out
 
 
 def _default_route(question: str, ctx: Dict[str, Any], already_asked: bool) -> Dict[str, Any]:
@@ -91,20 +119,26 @@ def _handle_ask(
     already_asked: bool,
     identity: Dict[str, Any],
     *,
+    routing_ctx: Optional[Dict[str, Any]] = None,
     route_fn: Callable[[str, Dict[str, Any], bool], Dict[str, Any]] = _default_route,
     explain_fn: Callable[[Dict[str, Any], str], Dict[str, Any]] = _default_explain,
     save_fn: Callable[..., Dict[str, Any]] = _save_member_inquiry,
     supabase: Any = None,
 ) -> Dict[str, Any]:
-    """결선 순수 로직. 의존성 주입 가능(테스트: route/explain/save fake)."""
-    # routing 용 Context: 저장용 stored_ctx 를 복사한 뒤, 서버 파생 company_id 를 넣는다.
-    # (stored_ctx 원본은 그대로 저장에 사용 — company_id 는 저장 context 에 넣지 않는다.)
+    """결선 순수 로직. 의존성 주입 가능(테스트: route/explain/save fake).
+
+    routing_ctx 지정 시 그것을 routing 근거로 쓰고(미지정이면 stored_ctx — 하위호환),
+    서버 파생 company_id 를 더해 route 한다. 저장(HANDOFF)에는 항상 stored_ctx 원본을 쓴다.
+    """
+    # routing 용 Context: routing_ctx(지정 시) 또는 저장용 stored_ctx(하위호환) 를 복사한 뒤,
+    # 서버 파생 company_id 를 넣는다. stored_ctx 원본은 그대로 저장에 사용한다(company_id 미포함).
     # company_id 는 반드시 서버 파생값이어야 소유권 검증이 안전하다(클라이언트 주입 불가).
-    routing_ctx = dict(stored_ctx or {})
+    base_ctx = routing_ctx if routing_ctx is not None else (stored_ctx or {})
+    routing_ctx_eff = dict(base_ctx)
     company_id = identity.get("company_id")
     if company_id:
-        routing_ctx["company_id"] = company_id
-    r = route_fn(question, routing_ctx, already_asked)
+        routing_ctx_eff["company_id"] = company_id
+    r = route_fn(question, routing_ctx_eff, already_asked)
     status = r.get("status")
 
     if status == "ASK":
@@ -145,11 +179,14 @@ def support_ask(
     if not user_id:
         raise HTTPException(status_code=401, detail="사용자 식별에 실패했습니다.")
 
-    stored_ctx = _build_context(body.context)
+    stored_ctx = _build_context(body.context)          # 저장용(문의 저장 계약 유지)
+    routing_ctx = _build_routing_context(body.context)  # routing 용(diagnosis object_type 단독 보존)
     identity = {
         "user_id": user_id,
         "company_id": current_user.get("company_id"),
         "name": current_user.get("name"),
         "page_url": (body.page_url or "").strip() or None,
     }
-    return _handle_ask(body.question, stored_ctx, bool(body.already_asked), identity)
+    return _handle_ask(
+        body.question, stored_ctx, bool(body.already_asked), identity, routing_ctx=routing_ctx,
+    )
