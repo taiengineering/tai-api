@@ -11,6 +11,9 @@
   6. 다른 object_type → HANDOFF
   7. 추가질문 1회 규칙
   8. 근거 없음 → HANDOFF
+보완 케이스:
+  11. Knowledge hit 있어도 object_type=diagnosis + factory_id 이면 CONTEXT 우선
+  12. Context 없는 일반 질문은 Knowledge ANSWER
 """
 import os
 import sys
@@ -146,18 +149,41 @@ r = svc.route(
 )
 check("8 근거 없음->HANDOFF", r["status"] == "HANDOFF")
 
-# 부가: 빈 질문 → ERROR
+# 9. 빈 질문 → ERROR
 r = svc.route("   ", context={})
 check("9 빈 질문->ERROR", r["status"] == "ERROR")
 
 
-# 부가: 조회 예외 → ERROR
+# 10. 조회 예외 → ERROR
 def boom(*_a, **_k):
     raise RuntimeError("db down")
 
 
 r = svc.route("아무 질문", context={}, faq_search=boom)
 check("10 조회 예외->ERROR", r["status"] == "ERROR")
+
+# 11. Knowledge hit가 있어도 object_type=diagnosis + factory_id 이면 CONTEXT 우선
+kn_hit = [{"doc_id": "KB-9", "type": "PAGE_GUIDE", "title": "법 적용 안내", "body": "..."}]
+ctx_payload = {"result_data": {"risk_level": "HIGH"}, "sector": "INDUSTRIAL"}
+r = svc.route(
+    "왜 이 법이 우리 사업장에 적용됐나요?",
+    context={"object_type": "diagnosis", "factory_id": "F-1"},
+    faq_search=empty,
+    knowledge_search=kn_with(kn_hit),      # Knowledge hit 존재해도
+    latest_diagnosis=lambda fid: ctx_payload,
+)
+check("11 diagnosis+factory: KB hit 있어도 CONTEXT 우선",
+      r["status"] == "ANSWER" and r["source"] == "CONTEXT" and r["evidence"] == ctx_payload)
+
+# 12. Context 없는 일반 질문은 기존대로 Knowledge ANSWER
+r = svc.route(
+    "TBM은 어떻게 등록하나요?",
+    context={},                              # object_type 없음
+    faq_search=empty,
+    knowledge_search=kn_with(kn_hit),
+)
+check("12 일반질문(context 없음)->Knowledge ANSWER",
+      r["status"] == "ANSWER" and r["source"] == "KNOWLEDGE" and r["evidence"] == kn_hit)
 
 
 failed = [n for n, ok in results if not ok]
