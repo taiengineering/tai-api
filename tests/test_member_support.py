@@ -20,18 +20,28 @@ counting LLM 과 함께 써서 "FAQ 는 LLM 미호출"을 직접 검증한다.
  12. _handle_ask(routing_ctx=...): route 는 routing_ctx(+company_id) 사용, 저장은 stored_ctx(clean)
  13. 하위호환: routing_ctx 미지정 → stored_ctx 를 routing 근거로 사용
 
- Enriched HANDOFF(구현 1단계):
- 14. diagnosis(CONTEXT) INSUFFICIENT → context.support 에 diagnosis_summary FACT
+ Enriched HANDOFF(구현 1단계 + 의미 안전성 보정):
+ 14. diagnosis(CONTEXT) INSUFFICIENT → context.support 에 diagnosis_summary FACT + safe token
  15. KNOWLEDGE INSUFFICIENT → support 미첨부(기존과 동일, context None)
  16. Routing HANDOFF(evidence 없음) → support 미첨부, screen context 보존
  17. raw diagnosis payload/obligations 원문/input_data/rules 가 support 에 저장되지 않음
  18. stored_ctx + diagnosis INSUFFICIENT → screen context + support 공존
  19. _do_handoff(verified_support=None) → 기존과 동일(support 없음)
- 20. diagnosis 대표값 없음 → support 미첨부 / rule_count fallback 동작
+ 20. obligations list → obligation_count=len / rule_count 만 있으면 obligation_count 없음(fallback 제거)
+ 21. _project_diagnosis_summary 단위: obligations list→count, rule_count→미저장, 대표값 없음→None
+ 22. _safe_reason_token whitelist: raw 내부 reason 을 token 으로만(needs_review 포함)
+ 23. _safe_support_projection: raw 내부 reason 이 support JSON 에 그대로 저장되지 않음
 """
 import json
 
-from routers.member_support import _build_routing_context, _do_handoff, _handle_ask
+from routers.member_support import (
+    _build_routing_context,
+    _do_handoff,
+    _handle_ask,
+    _project_diagnosis_summary,
+    _safe_reason_token,
+    _safe_support_projection,
+)
 from routers.member_inquiries import InquiryContextBody
 from services import support_answer_svc
 
@@ -206,9 +216,9 @@ _handle_ask("q", {"factory_id": "F-7"}, False, IDENT,
             route_fn=route_capture2, explain_fn=lambda r, q: {"status": "ERROR"}, save_fn=save_recorder())
 check("13 하위호환: routing_ctx None→stored 사용", cap2["ctx"].get("factory_id") == "F-7")
 
-# ── Enriched HANDOFF(구현 1단계) ──
+# ── Enriched HANDOFF(구현 1단계 + 의미 안전성 보정) ──
 
-# 14. diagnosis(CONTEXT) INSUFFICIENT → context.support 에 diagnosis_summary FACT
+# 14. diagnosis(CONTEXT) INSUFFICIENT → context.support 에 diagnosis_summary FACT + safe token
 save14 = save_recorder()
 diag_ev = {"id": "D-1", "result_data": {"verdict": "APPLICABLE", "risk_level": "MEDIUM",
                                         "obligations": [1, 2, 3]}}
@@ -216,8 +226,9 @@ r = _handle_ask("왜 이 법이?", {"factory_id": "F-1", "object_type": "diagnos
                 route_fn=route_ret(status="ANSWER", source="CONTEXT", evidence=diag_ev),
                 explain_fn=lambda r, q: {"status": "INSUFFICIENT"}, save_fn=save14)
 sup = (save14.rec["kwargs"]["context"] or {}).get("support")
-check("14 diagnosis INSUFFICIENT->support FACT",
+check("14 diagnosis INSUFFICIENT->support FACT+token",
       r["status"] == "HANDOFF" and isinstance(sup, dict)
+      and sup.get("handoff_reason") == "answer_insufficient"
       and sup.get("unknown_gap") == "answer_insufficient"
       and any(f.get("fact_type") == "diagnosis_summary" and f.get("verdict") == "APPLICABLE"
               and f.get("risk_level") == "MEDIUM" and f.get("obligation_count") == 3
@@ -273,7 +284,7 @@ check("19 _do_handoff 기본(support 없음)",
       out["status"] == "HANDOFF" and save19.rec["kwargs"]["context"] == {"factory_id": "F-1"}
       and "support" not in save19.rec["kwargs"]["context"])
 
-# 20. 대표값 없음 → support 미첨부 / rule_count fallback
+# 20. obligations list → obligation_count=len / rule_count 만 있으면 obligation_count 없음(fallback 제거)
 save20a = save_recorder()
 r = _handle_ask("왜?", None, False, IDENT,
                 route_fn=route_ret(status="ANSWER", source="CONTEXT", evidence={"result_data": {"foo": "bar"}}),
@@ -284,8 +295,43 @@ r = _handle_ask("왜?", None, False, IDENT,
                 route_fn=route_ret(status="ANSWER", source="CONTEXT",
                                    evidence={"result_data": {"risk_level": "LOW", "rule_count": 7}}),
                 explain_fn=lambda r, q: {"status": "INSUFFICIENT"}, save_fn=save20b)
-check("20b rule_count fallback",
-      save20b.rec["kwargs"]["context"]["support"]["verified_facts"][0]["obligation_count"] == 7)
+sup20b = save20b.rec["kwargs"]["context"]["support"]
+blob20b = json.dumps(sup20b, ensure_ascii=False)
+check("20b rule_count fallback 제거(obligation_count 없음, rule_count 미저장)",
+      sup20b["verified_facts"][0].get("risk_level") == "LOW"
+      and "obligation_count" not in sup20b["verified_facts"][0]
+      and "rule_count" not in blob20b)
+
+# 21. _project_diagnosis_summary 단위
+check("21 obligations list->count",
+      _project_diagnosis_summary({"result_data": {"risk_level": "HIGH", "obligations": [1, 2]}})
+      == {"fact_type": "diagnosis_summary", "risk_level": "HIGH", "obligation_count": 2})
+check("21b rule_count 만->obligation_count 없음",
+      _project_diagnosis_summary({"result_data": {"risk_level": "LOW", "rule_count": 9}})
+      == {"fact_type": "diagnosis_summary", "risk_level": "LOW"})
+check("21c 대표값 없음->None",
+      _project_diagnosis_summary({"result_data": {"foo": "bar"}}) is None)
+
+# 22. _safe_reason_token whitelist
+check("22 no evidence found->no_evidence", _safe_reason_token("no evidence found") == "no_evidence")
+check("22b answer_insufficient 유지", _safe_reason_token("answer_insufficient") == "answer_insufficient")
+check("22c ownership->ownership_unverified",
+      _safe_reason_token("factory ownership unverifiable (no company)") == "ownership_unverified"
+      and _safe_reason_token("factory not owned by company") == "ownership_unverified")
+check("22d unsupported prefix->unsupported_context",
+      _safe_reason_token("unsupported object_type: report") == "unsupported_context")
+check("22e 미매핑->needs_review", _safe_reason_token("weird new reason") == "needs_review"
+      and _safe_reason_token(None) == "needs_review")
+
+# 23. raw 내부 reason 이 support JSON 에 그대로 저장되지 않음(직접 projection)
+pkg = _safe_support_projection(
+    {"source": "CONTEXT", "evidence": {"result_data": {"risk_level": "HIGH"}}},
+    "factory ownership unverifiable (no company)",
+)
+blob23 = json.dumps(pkg, ensure_ascii=False)
+check("23 raw 내부 reason 미저장",
+      pkg["handoff_reason"] == "ownership_unverified" and pkg["unknown_gap"] == "ownership_unverified"
+      and "ownership unverifiable" not in blob23 and "(no company)" not in blob23)
 
 failed = [n for n, ok in results if not ok]
 print(f"\n{len(results) - len(failed)}/{len(results)} passed")
