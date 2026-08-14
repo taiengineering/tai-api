@@ -6,6 +6,12 @@ Doc: docs/inbox-system/PHASE4_INQUIRY_LIST.md
 [2026-07-29 P2-5] 답변(status=ANSWERED + answer) 저장 시 고객에게 실제 발송 연동.
   메일 우선(email 있으면), 없으면 SMS 안내. notify_svc 위임. 발송 실패는 저장 결과에
   영향을 주지 않고 응답의 notify 필드에 상태만 담는다(베스트에포트).
+
+[트랙 A 마감] 고객응대 taxonomy 표시용 label 을 응답에 additive projection.
+  값/label SoT 는 services/support_taxonomy.py 하나다. 여기서는 그 label 함수만 호출해
+  type_label/subtype_label/resolution_axis_label 3개를 응답 row 에 덧붙인다(DB 컬럼 아님).
+  분류/추론/LLM/저장은 하지 않는다 — 값은 트랙 B 분류기가 채운다(현재 전부 NULL → label None).
+  GET items · POST/PATCH 반환 row 에 동일 helper(support_taxonomy.project_labels)를 재사용한다(중복 구현 금지).
 """
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -15,6 +21,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
+from services.support_taxonomy import project_labels
 
 router = APIRouter(prefix="/admin/inquiries", tags=["관리 - 통합 인박스"])
 
@@ -191,10 +198,13 @@ def admin_list_inquiries(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"조회 실패: {e!s}") from e
 
+    # 표시용 taxonomy label 을 additive projection(SoT=support_taxonomy). 값 없으면 label None.
+    items = [project_labels(r) for r in (res.data or [])]
+
     return {
         "status": "success",
         "data": {
-            "items": res.data or [],
+            "items": items,
             "total": res.count or 0,
             "page": page,
             "size": size,
@@ -235,7 +245,8 @@ def admin_create_inquiry(
         raise HTTPException(status_code=500, detail=f"등록 실패: {e!s}") from e
     if not res.data:
         raise HTTPException(status_code=500, detail="등록 후 데이터를 확인할 수 없습니다.")
-    return {"status": "success", "data": res.data[0]}
+    # 목록과 동일한 label projection 재사용(프론트 캐시 upsert 시 표시 일관성).
+    return {"status": "success", "data": project_labels(res.data[0])}
 
 
 @router.patch("/{inquiry_id}")
@@ -267,4 +278,5 @@ def admin_patch_inquiry(
     row = res.data[0]
     # [P2-5] 답변 등록 시 고객 실발송(베스트에포트). 발송 실패해도 저장은 성공 처리.
     notify_result = _notify_answer(row, str(ans).strip()) if is_answer_event else None
-    return {"status": "success", "data": row, "notify": notify_result}
+    # 프론트가 PATCH 응답 row 를 캐시에 upsert 하므로, 목록과 동일 label projection 을 붙여 표시 일관성 유지.
+    return {"status": "success", "data": project_labels(row), "notify": notify_result}
