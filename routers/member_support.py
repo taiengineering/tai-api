@@ -20,6 +20,10 @@ Enriched HANDOFF(구현 1단계 · 최소):
   - 신규 DB 조회/LLM/분류/원인추론 없음. route 결과에 '이미' 들어 있는 evidence 만 재사용한다.
   - 첫 슬라이스는 diagnosis(source=="CONTEXT") 의 대표 summary(verdict/risk_level/obligation_count)만
     FACT 로 남긴다. 전체 payload/obligations 원문/내부구조/raw 오류는 저장하지 않는다.
+  - obligation_count 는 obligations 가 실제 list 일 때만 len() 으로. rule_count 를 obligation_count 로
+    치환하지 않는다(의미가 다른 값). 대표값이 하나도 없으면 FACT 생략.
+  - context.support.handoff_reason 은 raw routing reason 을 저장하지 않고 whitelist token 으로만 정규화한다
+    (내부 구현 의미가 snapshot 에 새지 않도록). 단 기존 _save_member_inquiry(handoff_reason=) 흐름은 그대로 둔다.
   - FACT 가 하나도 없으면 support 를 첨부하지 않는다(기존 HANDOFF 저장과 완전히 동일).
   - projection 실패는 best-effort — support 만 생략하고 문의 저장은 계속한다.
   - _save_member_inquiry / routing / answer 서비스는 변경하지 않는다.
@@ -101,16 +105,41 @@ def _default_explain(routing_result: Dict[str, Any], question: str) -> Dict[str,
 
 # ── Enriched HANDOFF: customer-safe FACT projection (신규 조회 없음) ──
 
-_SAFE_REASON_MAX = 200
-# handoff reason(안전한 짧은 문자열)만 gap 토큰으로 정규화. 매핑 없으면 needs_review.
-_GAP_BY_REASON = {
+# raw routing reason → 저장용 whitelist token. raw 문자열(내부 구현 의미 포함 가능)을
+# context.support 에 그대로 복사하지 않는다. 미매핑/비문자 → needs_review.
+_SAFE_REASON_TOKENS = {
     "answer_insufficient": "answer_insufficient",
     "no evidence found": "no_evidence",
+    "insufficient context after ask": "insufficient_context",
+    "factory ownership unverifiable (no company)": "ownership_unverified",
+    "factory not owned by company": "ownership_unverified",
+    "no diagnosis for factory": "no_evidence",
+    "diagnosis object_id not found": "no_evidence",
+    "diagnosis object_id read path unavailable": "unsupported_context",
 }
+_UNSUPPORTED_REASON_PREFIX = "unsupported object_type"
+
+
+def _safe_reason_token(reason: Any) -> str:
+    """raw routing reason → whitelist token. 미매핑/비문자 → needs_review.
+
+    raw 문자열은 절대 반환하지 않는다(내부 구현 의미가 snapshot 에 새지 않도록).
+    """
+    if not isinstance(reason, str):
+        return "needs_review"
+    key = reason.strip()
+    if key in _SAFE_REASON_TOKENS:
+        return _SAFE_REASON_TOKENS[key]
+    if key.startswith(_UNSUPPORTED_REASON_PREFIX):
+        return "unsupported_context"
+    return "needs_review"
 
 
 def _safe_str(v: Any, limit: int) -> Optional[str]:
-    """문자열이면 trim + 길이 제한. 아니면 None. (raw 구조/비문자 저장 방지)"""
+    """이미 고객-safe 로 허용된 scalar(verdict/risk_level 등)의 길이 제한 전용. 아니면 None.
+
+    raw routing reason 처리에는 사용하지 않는다(그건 _safe_reason_token 의 whitelist 가 먼저).
+    """
     if not isinstance(v, str):
         return None
     s = v.strip()
@@ -119,18 +148,13 @@ def _safe_str(v: Any, limit: int) -> Optional[str]:
     return s[:limit]
 
 
-def _gap_from_reason(reason: Any) -> str:
-    if not isinstance(reason, str):
-        return "needs_review"
-    return _GAP_BY_REASON.get(reason.strip(), "needs_review")
-
-
 def _project_diagnosis_summary(evidence: Any) -> Optional[Dict[str, Any]]:
     """진단 evidence → 대표 summary FACT(스칼라만). 구조 불명확/대표값 없으면 None.
 
     - 신규 조회 없음(route 단계에서 이미 조회된 evidence 재사용).
     - result_data 가 중첩이든 평면이든 허용. verdict/risk_level(짧은 문자열) + obligation_count(정수)만.
-    - 전체 payload / obligations 원문 / input_data / rules / 내부구조는 저장하지 않는다.
+    - obligation_count 는 obligations 가 '실제 list' 일 때만 len(). rule_count 로 대체하지 않는다(의미 다름).
+    - 전체 payload / obligations 원문 / input_data / rules / 내부구조 / rule_count 는 저장하지 않는다.
     """
     if not isinstance(evidence, dict):
         return None
@@ -139,19 +163,15 @@ def _project_diagnosis_summary(evidence: Any) -> Optional[Dict[str, Any]]:
         rd = evidence
     verdict = _safe_str(rd.get("verdict"), 60)
     risk_level = _safe_str(rd.get("risk_level"), 60)
-    obligation_count: Optional[int] = None
-    obligations = rd.get("obligations")
-    if isinstance(obligations, list):
-        obligation_count = len(obligations)
-    elif isinstance(rd.get("rule_count"), int):
-        obligation_count = rd.get("rule_count")
     fact: Dict[str, Any] = {"fact_type": "diagnosis_summary"}
     if verdict is not None:
         fact["verdict"] = verdict
     if risk_level is not None:
         fact["risk_level"] = risk_level
-    if isinstance(obligation_count, int) and obligation_count >= 0:
-        fact["obligation_count"] = obligation_count
+    # obligation_count: obligations 가 실제 list 일 때만. rule_count fallback 금지(서로 다른 의미).
+    obligations = rd.get("obligations")
+    if isinstance(obligations, list):
+        fact["obligation_count"] = len(obligations)
     # 대표 값이 하나도 없으면 FACT 로서 의미 없음 → 생략(추정 금지).
     if len(fact) == 1:
         return None
@@ -162,6 +182,7 @@ def _safe_support_projection(route_result: Any, reason: Any) -> Optional[Dict[st
     """이미 확보된 route 결과만으로 customer-safe support package 생성(best-effort).
 
     신규 DB 조회·LLM·분류·원인추론 없음. 첫 슬라이스: diagnosis(CONTEXT) summary FACT 만.
+    handoff_reason/unknown_gap 은 raw reason 이 아니라 whitelist token 으로만 저장한다.
     FACT 가 하나도 없으면 None 을 반환해 support 를 첨부하지 않는다(기존 HANDOFF 와 동일).
     예외는 삼켜서 support 만 생략한다(문의 저장 자체는 계속되어야 한다).
     """
@@ -173,10 +194,11 @@ def _safe_support_projection(route_result: Any, reason: Any) -> Optional[Dict[st
                 facts.append(ds)
         if not facts:
             return None
+        token = _safe_reason_token(reason)  # raw 미저장 — whitelist token 만
         return {
-            "handoff_reason": _safe_str(reason, _SAFE_REASON_MAX) or "needs_review",
+            "handoff_reason": token,
             "verified_facts": facts,
-            "unknown_gap": _gap_from_reason(reason),
+            "unknown_gap": token,  # 첫 슬라이스: 동일 정규화 결과 재사용(중복 helper 금지)
             "checked_at": _now_iso(),
         }
     except Exception:  # noqa: BLE001
@@ -199,6 +221,7 @@ def _do_handoff(
     verified_support 가 있으면 screen context 와 '별도 키(support)'로 병합해 저장한다.
     verified_support 가 None 이면 기존과 완전히 동일하게 동작한다(하위호환).
     _do_handoff 는 조사/조회/분류/LLM 을 하지 않는다 — 이미 만들어진 package 를 받아 병합·저장만 한다.
+    reason 은 기존대로 _save_member_inquiry(handoff_reason=)에 전달한다(Slack 내부통지 흐름 무변경).
     """
     context_eff = dict(stored_ctx) if stored_ctx else {}
     if verified_support:
