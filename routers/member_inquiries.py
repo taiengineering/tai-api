@@ -13,6 +13,9 @@
     없는 값은 넣지 않는다(추측 금지). context 가 비면 NULL 로 저장한다.
 - 채번은 admin_inquiries._next_inquiry_no 재사용(TAI-INQ-YYYYMMDD-NNNN).
 - 운영자 통지는 기존 services.slack_dispatcher.ops 재사용(베스트에포트 — 실패해도 저장 성공).
+
+저장 로직은 _save_member_inquiry() 공통 함수로 추출한다.
+  → POST /me/inquiries 와 POST /me/support/ask(HANDOFF)가 같은 저장 로직을 재사용한다(복붙 금지).
 """
 import logging
 from datetime import datetime, timezone
@@ -71,6 +74,75 @@ def _build_context(ctx: Optional[InquiryContextBody]) -> Optional[Dict[str, Any]
     return out or None
 
 
+def _save_member_inquiry(
+    supabase,
+    *,
+    user_id: str,
+    company_id: Optional[str],
+    name: Optional[str],
+    question: str,
+    page_url: Optional[str],
+    context: Optional[Dict[str, Any]],
+    category: str = "saas",
+    handoff_reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    """회원 문의 1건을 inquiries 에 저장(+ context) + Slack 통지(베스트에포트). 저장된 row 반환.
+
+    /me/inquiries 와 /me/support/ask(HANDOFF) 공통. 실패 시 예외를 그대로 올린다(호출측이 변환).
+    handoff_reason 은 내부 통지에만 쓴다(신규 DB 컬럼 없음).
+    """
+    if supabase is None:
+        supabase = get_supabase()
+
+    row: Dict[str, Any] = {
+        "no": _next_inquiry_no(supabase),
+        "source": INQUIRY_SOURCE,  # 서버 고정 — 클라이언트 입력 안 받음
+        "inquiry_type": "INQUIRY",
+        "category": (category or "saas").strip() or "saas",
+        "title": None,
+        "content": question.strip(),
+        "name": name or None,
+        "is_member": True,
+        "user_id": user_id,
+        "company_id": company_id,
+        "page_url": (page_url or "").strip() or None,
+        "status": "RECEIVED",
+        "priority": "NORMAL",
+        "context": context,  # jsonb — None 이면 NULL
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+    }
+
+    res = supabase.table("inquiries").insert(row).execute()
+    if not res.data:
+        raise RuntimeError("등록 후 데이터를 확인할 수 없습니다.")
+    saved = res.data[0]
+
+    # 운영자 통지(베스트에포트). 실패해도 저장 결과에 영향 없음.
+    try:
+        from services.slack_dispatcher import ops
+        ctx_line = ""
+        if context:
+            parts = []
+            if context.get("factory_id"):
+                parts.append(f"factory={context['factory_id']}")
+            if context.get("object_type"):
+                parts.append(f"{context['object_type']}={context.get('object_id')}")
+            if parts:
+                ctx_line = "\nContext: " + ", ".join(parts)
+        reason_line = f"\n(자동응대 이관 사유: {handoff_reason})" if handoff_reason else ""
+        detail = (
+            f"회원: {row['name'] or '-'} (user={user_id} / company={company_id or '-'})\n"
+            f"화면: {row['page_url'] or '-'}{ctx_line}{reason_line}\n"
+            f"내용: {row['content'][:800]}"
+        )
+        ops(f"새 SaaS 문의 · {row['name'] or '회원'}", detail)
+    except Exception:  # noqa: BLE001
+        logger.exception("member inquiry slack notify failed")
+
+    return saved
+
+
 @router.post("/inquiries")
 def create_member_inquiry(
     body: MemberInquiryBody,
@@ -87,52 +159,18 @@ def create_member_inquiry(
 
     context = _build_context(body.context)
 
-    row: Dict[str, Any] = {
-        "no": _next_inquiry_no(supabase),
-        "source": INQUIRY_SOURCE,  # 서버 고정 — 클라이언트 입력 안 받음
-        "inquiry_type": "INQUIRY",
-        "category": (body.category or "saas").strip() or "saas",
-        "title": (body.title or "").strip() or None,
-        "content": body.question.strip(),
-        "name": current_user.get("name") or None,
-        "is_member": True,
-        "user_id": user_id,
-        "company_id": company_id,
-        "page_url": (body.page_url or "").strip() or None,
-        "status": "RECEIVED",
-        "priority": "NORMAL",
-        "context": context,  # jsonb — None 이면 NULL
-        "created_at": _now_iso(),
-        "updated_at": _now_iso(),
-    }
-
     try:
-        res = supabase.table("inquiries").insert(row).execute()
+        saved = _save_member_inquiry(
+            supabase,
+            user_id=user_id,
+            company_id=company_id,
+            name=current_user.get("name"),
+            question=body.question,
+            page_url=body.page_url,
+            context=context,
+            category=(body.category or "saas"),
+        )
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"저장 실패: {e!s}") from e
-    if not res.data:
-        raise HTTPException(status_code=500, detail="등록 후 데이터를 확인할 수 없습니다.")
-    saved = res.data[0]
-
-    # 운영자 통지(베스트에포트). 실패해도 저장 결과에 영향 없음.
-    try:
-        from services.slack_dispatcher import ops
-        ctx_line = ""
-        if context:
-            parts = []
-            if context.get("factory_id"):
-                parts.append(f"factory={context['factory_id']}")
-            if context.get("object_type"):
-                parts.append(f"{context['object_type']}={context.get('object_id')}")
-            if parts:
-                ctx_line = "\nContext: " + ", ".join(parts)
-        detail = (
-            f"회원: {row['name'] or '-'} (user={user_id} / company={company_id or '-'})\n"
-            f"화면: {row['page_url'] or '-'}{ctx_line}\n"
-            f"내용: {row['content'][:800]}"
-        )
-        ops(f"새 SaaS 문의 · {row['name'] or '회원'}", detail)
-    except Exception:  # noqa: BLE001
-        logger.exception("member inquiry slack notify failed")
 
     return {"status": "success", "data": saved}
