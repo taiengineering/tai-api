@@ -17,6 +17,9 @@ Doc: docs/inbox-system/PHASE4_INQUIRY_LIST.md
   - 값 '__none__' 이면 IS NULL(미분류) 필터. 그 외엔 support_taxonomy 로 유효성 검사 후 eq 필터.
   - 유효하지 않은 값은 400. 기존 필터/정렬/계약 무변경(추가만).
   - sort_key 에 type_code / resolution_axis 추가(리스트 컬럼 정렬 대응).
+  - GET /admin/inquiries/taxonomy-options: 필터 드롭다운 선택지(문의유형/처리방식)를 SoT 에서 내려준다
+    (프론트가 label 을 재정의하지 않도록 — SoT 단일 유지). taxonomy_snapshot() 재사용, 신규 로직 없음.
+    라우터 순서: 고정 경로이므로 동적 경로(/{inquiry_id}) 앞에 둔다.
 """
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -26,7 +29,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
-from services.support_taxonomy import project_labels, is_valid_type, is_valid_axis
+from services.support_taxonomy import project_labels, is_valid_type, is_valid_axis, taxonomy_snapshot
 
 router = APIRouter(prefix="/admin/inquiries", tags=["관리 - 통합 인박스"])
 
@@ -240,6 +243,27 @@ def admin_list_inquiries(
             "total": res.count or 0,
             "page": page,
             "size": size,
+        },
+    }
+
+
+@router.get("/taxonomy-options")
+def admin_inquiry_taxonomy_options(
+    authorization: Optional[str] = Header(None),
+):
+    """문의 필터 드롭다운 선택지(문의유형 T1~T7 / 처리방식 3종)를 SoT 에서 내려준다.
+
+    프론트가 label 을 재정의하지 않도록(SoT 단일 유지) taxonomy_snapshot() 의 types/resolution_axes 만 반환.
+    subtype 은 필터 대상이 아니므로 내려주지 않는다(현 개편 범위: 문의유형 + 처리방식).
+    운영자 화면 전용(Bearer 필요). 값/DB 조회 없음 — 상수 스냅샷.
+    """
+    _require_bearer(authorization)
+    snap = taxonomy_snapshot()
+    return {
+        "status": "success",
+        "data": {
+            "types": snap.get("types", []),
+            "resolution_axes": snap.get("resolution_axes", []),
         },
     }
 
