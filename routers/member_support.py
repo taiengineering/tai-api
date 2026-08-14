@@ -28,6 +28,16 @@ Enriched HANDOFF(구현 1단계 · 최소):
   - projection 실패는 best-effort — support 만 생략하고 문의 저장은 계속한다.
   - _save_member_inquiry / routing / answer 서비스는 변경하지 않는다.
 
+트랙 B(HANDOFF taxonomy · 최소 구현):
+  - 최종 HANDOFF 가 확정된 뒤, 저장 직전에만 support_classifier_svc.classify() 로 type_code/subtype_code 를 만든다.
+    ANSWER/ASK 에서는 분류를 호출하지 않는다(응답 latency/안정성 영향 최소).
+  - HANDOFF 두 경로 모두 대상: (A) routing 자체 HANDOFF, (B) routing ANSWER → explain INSUFFICIENT → HANDOFF.
+  - resolution_axis 는 LLM 이 아니라 서버가 "HANDOFF" 로 확정한다(이번 저장 row 는 HANDOFF 뿐).
+  - 분류는 best-effort: 실패/무효면 taxonomy 를 NULL 로 두고 HANDOFF 저장을 계속한다(ERROR 승격 금지).
+  - taxonomy 는 정규 컬럼(_save_member_inquiry 파라미터)로만 저장. context.support 에 중복 저장하지 않는다.
+  - classifier 입력은 최소 safe context(page_url/object_type/has_factory)만. factory_id 원문/payload 금지.
+  - route()/explain 규칙은 변경하지 않는다. 분류는 metadata only — routing 결과에 영향 없음.
+
 Context 분리(저장 vs 라우팅) — 서로 다른 계약이므로 별도로 만든다:
   - stored_ctx (_build_context): 저장(inquiries.context) 계약. object_type/object_id 는 '쌍'으로만.
       → 프론트가 object_id 없이 object_type="diagnosis" 만 보내면 저장 context 에서는 object_type 이 빠진다.
@@ -57,7 +67,7 @@ from routers.member_inquiries import (
     _now_iso,
     _save_member_inquiry,
 )
-from services import support_routing_svc, support_answer_svc
+from services import support_routing_svc, support_answer_svc, support_classifier_svc
 
 logger = logging.getLogger("member_support")
 router = APIRouter(prefix="/me/support", tags=["회원 고객응대"])
@@ -72,6 +82,9 @@ class SupportAskBody(BaseModel):
 
 # routing 에서 허용하는 object_type (MVP: diagnosis 하나). object_id 는 사용하지 않는다.
 SUPPORT_ROUTING_OBJECT_TYPES = {"diagnosis"}
+
+# 이번 트랙 B 최소 구현에서 taxonomy 를 저장하는 row 는 HANDOFF 뿐이므로 서버가 이 축을 확정한다.
+_HANDOFF_AXIS = "HANDOFF"
 
 
 def _build_routing_context(ctx: Optional[InquiryContextBody]) -> Dict[str, Any]:
@@ -101,6 +114,10 @@ def _default_route(question: str, ctx: Dict[str, Any], already_asked: bool) -> D
 
 def _default_explain(routing_result: Dict[str, Any], question: str) -> Dict[str, Any]:
     return support_answer_svc.explain(routing_result, question)
+
+
+def _default_classify(question: str, safe_context: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    return support_classifier_svc.classify(question, safe_context)
 
 
 # ── Enriched HANDOFF: customer-safe FACT projection (신규 조회 없음) ──
@@ -206,6 +223,55 @@ def _safe_support_projection(route_result: Any, reason: Any) -> Optional[Dict[st
         return None
 
 
+def _build_safe_classifier_context(
+    routing_ctx: Optional[Dict[str, Any]],
+    page_url: Optional[str],
+) -> Dict[str, Any]:
+    """classifier 전용 최소 safe context. factory_id 원문/payload 는 넘기지 않는다.
+
+    허용: page_url, object_type(routing 허용목록), has_factory(존재 여부 bool).
+    factory_id 자체는 넘기지 않고 존재 여부(bool)만 넘긴다(최소 정보 원칙).
+    """
+    rc = routing_ctx or {}
+    out: Dict[str, Any] = {"has_factory": bool(rc.get("factory_id"))}
+    object_type = rc.get("object_type")
+    if isinstance(object_type, str) and object_type:
+        out["object_type"] = object_type
+    if isinstance(page_url, str) and page_url.strip():
+        out["page_url"] = page_url.strip()
+    return out
+
+
+def _classify_handoff_taxonomy(
+    question: str,
+    routing_ctx: Optional[Dict[str, Any]],
+    page_url: Optional[str],
+    classify_fn: Callable[[str, Dict[str, Any]], Optional[Dict[str, str]]],
+) -> Dict[str, Optional[str]]:
+    """HANDOFF 저장 직전 taxonomy package 생성(best-effort).
+
+    - classify_fn 으로 type_code/subtype_code 를 얻는다(실패/무효면 None — classifier 가 이미 검증).
+    - resolution_axis 는 LLM 이 아니라 서버가 HANDOFF 로 확정한다.
+    - 어떤 실패든 예외를 던지지 않고 NULL taxonomy 를 반환한다(HANDOFF 저장은 계속되어야 함).
+    반환: {type_code, subtype_code, resolution_axis}. type/subtype 은 None 일 수 있고, axis 는 항상 HANDOFF.
+    """
+    pkg: Dict[str, Optional[str]] = {
+        "type_code": None,
+        "subtype_code": None,
+        "resolution_axis": _HANDOFF_AXIS,  # 서버 확정(이번 저장 row 는 HANDOFF)
+    }
+    try:
+        safe_ctx = _build_safe_classifier_context(routing_ctx, page_url)
+        result = classify_fn(question, safe_ctx)  # 실패/무효 → None (classifier 내부에서 검증·흡수)
+        if result:
+            pkg["type_code"] = result.get("type_code")
+            pkg["subtype_code"] = result.get("subtype_code")
+    except Exception:  # noqa: BLE001
+        # 방어적: classify_fn 이 (계약과 달리) 예외를 던져도 taxonomy 는 NULL 로 두고 저장 계속.
+        logger.warning("classifier_failed: unexpected exception, taxonomy=NULL")
+    return pkg
+
+
 def _do_handoff(
     question: str,
     stored_ctx: Optional[Dict[str, Any]],
@@ -215,6 +281,7 @@ def _do_handoff(
     supabase: Any,
     *,
     verified_support: Optional[Dict[str, Any]] = None,
+    taxonomy: Optional[Dict[str, Optional[str]]] = None,
 ) -> Dict[str, Any]:
     """공통 저장 함수로 문의 1건 저장. 실패 시 ERROR(저장 실패 구분).
 
@@ -222,11 +289,16 @@ def _do_handoff(
     verified_support 가 None 이면 기존과 완전히 동일하게 동작한다(하위호환).
     _do_handoff 는 조사/조회/분류/LLM 을 하지 않는다 — 이미 만들어진 package 를 받아 병합·저장만 한다.
     reason 은 기존대로 _save_member_inquiry(handoff_reason=)에 전달한다(Slack 내부통지 흐름 무변경).
+
+    [트랙 B] taxonomy(이미 분류·검증된 package)가 있으면 정규 컬럼으로 저장한다.
+      _do_handoff 는 분류를 하지 않는다 — 호출측이 만든 package 를 그대로 _save_member_inquiry 에 넘긴다.
+      taxonomy 는 context.support 에 넣지 않는다(정규 컬럼 전용 — 역할 분리).
     """
     context_eff = dict(stored_ctx) if stored_ctx else {}
     if verified_support:
         context_eff["support"] = verified_support
     context_to_save = context_eff or None  # 비면 None(기존 NULL 저장과 동일)
+    tax = taxonomy or {}
     try:
         saved = save_fn(
             supabase,
@@ -237,6 +309,9 @@ def _do_handoff(
             page_url=identity.get("page_url"),
             context=context_to_save,
             handoff_reason=reason,
+            type_code=tax.get("type_code"),
+            subtype_code=tax.get("subtype_code"),
+            resolution_axis=tax.get("resolution_axis"),
         )
     except Exception as e:  # noqa: BLE001
         return {"status": "ERROR", "detail": f"handoff save failed: {e!s}"}
@@ -252,14 +327,18 @@ def _handle_ask(
     routing_ctx: Optional[Dict[str, Any]] = None,
     route_fn: Callable[[str, Dict[str, Any], bool], Dict[str, Any]] = _default_route,
     explain_fn: Callable[[Dict[str, Any], str], Dict[str, Any]] = _default_explain,
+    classify_fn: Callable[[str, Dict[str, Any]], Optional[Dict[str, str]]] = _default_classify,
     save_fn: Callable[..., Dict[str, Any]] = _save_member_inquiry,
     supabase: Any = None,
 ) -> Dict[str, Any]:
-    """결선 순수 로직. 의존성 주입 가능(테스트: route/explain/save fake).
+    """결선 순수 로직. 의존성 주입 가능(테스트: route/explain/classify/save fake).
 
     routing_ctx 지정 시 그것을 routing 근거로 쓰고(미지정이면 stored_ctx — 하위호환),
     서버 파생 company_id 를 더해 route 한다. 저장(HANDOFF)에는 항상 stored_ctx 원본을 쓴다.
     HANDOFF 저장 시, route 결과에 이미 있는 evidence 만으로 customer-safe support 를 best-effort 로 붙인다.
+
+    [트랙 B] 최종 HANDOFF 가 확정된 뒤에만(ANSWER/ASK 아님) classify_fn 으로 taxonomy 를 만들어 저장한다.
+      HANDOFF 두 경로(routing HANDOFF · explain INSUFFICIENT) 모두에서 저장 직전에 분류한다.
     """
     # routing 용 Context: routing_ctx(지정 시) 또는 저장용 stored_ctx(하위호환) 를 복사한 뒤,
     # 서버 파생 company_id 를 넣는다. stored_ctx 원본은 그대로 저장에 사용한다(company_id 미포함).
@@ -273,7 +352,7 @@ def _handle_ask(
     status = r.get("status")
 
     if status == "ASK":
-        # 저장하지 않음. 추가질문 상태 반환.
+        # 저장하지 않음. 추가질문 상태 반환. (분류 호출 없음)
         return {"status": "ASK", "missing_field": r.get("missing_field"), "already_asked": True}
 
     if status == "ERROR":
@@ -281,16 +360,19 @@ def _handle_ask(
 
     if status == "HANDOFF":
         # route 자체 HANDOFF: 대개 evidence 없음(source 없음) → support 미첨부(기존과 동일).
+        # 최종 HANDOFF 확정 → 저장 직전 taxonomy 분류(best-effort).
         support_pkg = _safe_support_projection(r, r.get("reason"))
+        taxonomy = _classify_handoff_taxonomy(question, routing_ctx, identity.get("page_url"), classify_fn)
         return _do_handoff(
             question, stored_ctx, identity, r.get("reason"), save_fn, supabase,
-            verified_support=support_pkg,
+            verified_support=support_pkg, taxonomy=taxonomy,
         )
 
     if status == "ANSWER":
         a = explain_fn(r, question)
         a_status = a.get("status")
         if a_status == "ANSWER":
+            # ANSWER: 저장 없음 → 분류 호출 없음.
             return {
                 "status": "ANSWER",
                 "answer": a.get("answer"),
@@ -300,10 +382,12 @@ def _handle_ask(
         if a_status == "INSUFFICIENT":
             # AI 가 임의 답변하지 않음 → Human handoff 저장(사유 내부 보존).
             # route 결과(r)에 이미 있는 evidence(diagnosis 등)만 재사용해 support 첨부(신규 조회 없음).
+            # 최종 HANDOFF 확정 → 저장 직전 taxonomy 분류(best-effort).
             support_pkg = _safe_support_projection(r, "answer_insufficient")
+            taxonomy = _classify_handoff_taxonomy(question, routing_ctx, identity.get("page_url"), classify_fn)
             return _do_handoff(
                 question, stored_ctx, identity, "answer_insufficient", save_fn, supabase,
-                verified_support=support_pkg,
+                verified_support=support_pkg, taxonomy=taxonomy,
             )
         # 설명 ERROR
         return {"status": "ERROR", "detail": a.get("detail") or "answer error"}
