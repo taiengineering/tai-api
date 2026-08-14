@@ -11,6 +11,9 @@
     context 에는 화면 Context 만 담는다 — factory_id, object_type, object_id.
     object_type/object_id 는 쌍으로만 저장한다(한쪽만 있으면 둘 다 버린다).
     없는 값은 넣지 않는다(추측 금지). context 가 비면 NULL 로 저장한다.
+    ※ 고객응대(/me/support/ask) 는 HANDOFF 시 이 context 에 'support' 하위키(Enriched HANDOFF)를
+      더해 넘길 수 있다. 이 파일은 context 를 그대로 저장하고, 운영자 Slack 통지에 support 요약을
+      한 줄 덧붙인다(저장 계약·정규 컬럼 불변).
 - 채번은 admin_inquiries._next_inquiry_no 재사용(TAI-INQ-YYYYMMDD-NNNN).
 - 운영자 통지는 기존 services.slack_dispatcher.ops 재사용(베스트에포트 — 실패해도 저장 성공).
 
@@ -74,6 +77,43 @@ def _build_context(ctx: Optional[InquiryContextBody]) -> Optional[Dict[str, Any]
     return out or None
 
 
+def _support_slack_line(context: Optional[Dict[str, Any]]) -> str:
+    """context.support(Enriched HANDOFF) → 운영자 Slack용 customer-safe 한 줄 요약. 없으면 ''.
+
+    저장된 support 는 이미 customer-safe(토큰/스칼라만)이지만, 통지에서도 방어적으로 스칼라만 읽는다.
+    raw payload/원문/내부구조는 애초에 support 에 없다(고객응대 projection 단계에서 차단).
+    운영자가 문의를 열기 전에 'AI 가 이미 확인한 사실'을 보고 재조회를 줄이는 것이 목적.
+    """
+    if not isinstance(context, dict):
+        return ""
+    sup = context.get("support")
+    if not isinstance(sup, dict):
+        return ""
+    bits = []
+    reason = sup.get("handoff_reason")
+    if isinstance(reason, str) and reason:
+        bits.append(f"사유={reason}")
+    fbits = []
+    for f in (sup.get("verified_facts") or []):
+        if not isinstance(f, dict):
+            continue
+        if f.get("fact_type") == "diagnosis_summary":
+            seg = []
+            if isinstance(f.get("verdict"), str) and f["verdict"]:
+                seg.append(f"verdict={f['verdict']}")
+            if isinstance(f.get("risk_level"), str) and f["risk_level"]:
+                seg.append(f"위험도={f['risk_level']}")
+            if isinstance(f.get("obligation_count"), int):
+                seg.append(f"의무={f['obligation_count']}건")
+            if seg:
+                fbits.append("진단(" + ", ".join(seg) + ")")
+    if fbits:
+        bits.append("확인사실: " + " / ".join(fbits))
+    if not bits:
+        return ""
+    return "\nAI 확인: " + " · ".join(bits)
+
+
 def _save_member_inquiry(
     supabase,
     *,
@@ -132,10 +172,11 @@ def _save_member_inquiry(
                 parts.append(f"{context['object_type']}={context.get('object_id')}")
             if parts:
                 ctx_line = "\nContext: " + ", ".join(parts)
+        support_line = _support_slack_line(context)  # Enriched HANDOFF 요약(있으면)
         reason_line = f"\n(자동응대 이관 사유: {handoff_reason})" if handoff_reason else ""
         detail = (
             f"회원: {row['name'] or '-'} (user={user_id} / company={company_id or '-'})\n"
-            f"화면: {row['page_url'] or '-'}{ctx_line}{reason_line}\n"
+            f"화면: {row['page_url'] or '-'}{ctx_line}{support_line}{reason_line}\n"
             f"내용: {row['content'][:800]}"
         )
         ops(f"새 SaaS 문의 · {row['name'] or '회원'}", detail)
