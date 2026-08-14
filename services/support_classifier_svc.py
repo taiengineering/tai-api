@@ -20,9 +20,13 @@ LLM 재사용: 기존 support_answer_svc 와 동일 계열(OpenAI SDK, env OPENA
   신규 provider/abstraction 없음. 호출은 주입 가능(llm_call), 미주입 시 기본 구현 지연 import.
 
 지연/타임아웃 정책(분류보다 문의 저장 우선):
-  - 기본 LLM 호출에 짧은 명시적 timeout(_LLM_TIMEOUT_SECONDS)을 건다. retry 는 넣지 않는다(max_retries=0).
-  - timeout/네트워크 지연 → 예외 → classify() 가 None → 호출측이 즉시 HANDOFF 저장을 진행한다.
-  - 즉 느린 분류가 문의 저장을 막지 않는다(best-effort metadata 원칙).
+  - retry 는 넣지 않는다(max_retries=0). 문의 저장이 분류보다 우선이므로 느린 재시도를 만들지 않는다.
+  - timeout 값은 코드에 임의 숫자로 고정하지 않는다(TAI 원칙: 근거 없는 임계값 금지).
+    현재 repo 에는 LLM timeout SoT 가 없음을 실측 확인(.env.example/ai_copywrite/support_answer_svc 모두 미명시).
+    → 운영 설정값 env(SUPPORT_CLASSIFIER_TIMEOUT_SECONDS)로 분리한다.
+    - 미설정/파싱불가/<=0 → None → OpenAI SDK 기본 동작 유지(임의 수치를 제품값으로 굳히지 않음).
+    - E2E latency 측정 후 Operator 가 값을 확정하면 그때 env 로 주입한다.
+  - timeout(설정 시)/네트워크 오류는 예외로 올라가 classify() 에서 None 으로 흡수된다(저장 계속).
 
 실패 정책(best-effort): timeout/exception/invalid JSON/unknown code/mismatch/empty →
   classify() 는 None 을 반환한다(예외를 밖으로 던지지 않는다). 호출측은 None 이면 taxonomy 를
@@ -32,15 +36,38 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, Callable, Dict, List, Optional
 
 from services import support_taxonomy
 
 logger = logging.getLogger("support_classifier")
 
-# 분류는 best-effort metadata 이므로, 느린 응답이 HANDOFF 저장을 막지 않도록 짧은 deadline 을 건다.
-# retry 는 넣지 않는다(문의 저장이 분류보다 우선). timeout 이면 예외 → classify() None → 즉시 저장.
-_LLM_TIMEOUT_SECONDS = 6.0
+# 재시도 없음: 문의 저장이 분류보다 우선(느린 재시도 금지). 이는 수치가 아니라 정책 결정.
+_LLM_MAX_RETRIES = 0
+
+# timeout SoT 는 운영 설정값(env)로 분리한다. 코드에 임의 숫자를 박지 않는다.
+_TIMEOUT_ENV = "SUPPORT_CLASSIFIER_TIMEOUT_SECONDS"
+
+
+def _resolve_timeout() -> Optional[float]:
+    """env(SUPPORT_CLASSIFIER_TIMEOUT_SECONDS) → float 초. 미설정/파싱불가/<=0 → None.
+
+    None 이면 OpenAI SDK 기본 동작을 그대로 쓴다(임의 수치를 제품 정책값으로 굳히지 않음).
+    운영에서 E2E latency 측정 후 Operator 가 값을 확정하면 env 로 주입한다.
+    """
+    raw = os.environ.get(_TIMEOUT_ENV)
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("invalid %s=%r → default SDK timeout", _TIMEOUT_ENV, raw)
+        return None
+    if v <= 0:
+        return None
+    return v
+
 
 # 분류기 출력 계약(고정): type_code + subtype_code 만. 설명/축/추론 금지.
 _LLM_SYSTEM = (
@@ -77,27 +104,32 @@ def _build_taxonomy_brief() -> str:
 def _default_llm_call(system_msg: str, user_msg: str) -> str:
     """기존 support_answer_svc 와 동일 provider·설정 재사용(OpenAI gpt-4o, JSON). raw 문자열 반환.
 
-    분류는 best-effort 이므로 짧은 timeout 을 명시하고 retry 를 끈다(max_retries=0).
-    timeout/네트워크 오류는 예외로 올라가 classify() 에서 None 으로 흡수된다(문의 저장이 우선).
+    분류는 best-effort 이므로 retry 를 끈다(max_retries=0). timeout 은 env 로만 설정하고
+    미설정 시 SDK 기본을 쓴다(임의 수치 금지). timeout/네트워크 오류는 classify() 에서 None 으로 흡수.
     """
-    import os
     from openai import OpenAI  # 지연 import
-    # timeout: per-request deadline. max_retries=0: 느린 분류가 저장을 막지 않도록 재시도 없음.
-    client = OpenAI(
-        api_key=os.environ.get("OPENAI_API_KEY", ""),
-        timeout=_LLM_TIMEOUT_SECONDS,
-        max_retries=0,
-    )
-    resp = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
+    timeout = _resolve_timeout()  # None 이면 인자 자체를 넘기지 않는다(SDK 기본 유지)
+
+    client_kwargs: Dict[str, Any] = {
+        "api_key": os.environ.get("OPENAI_API_KEY", ""),
+        "max_retries": _LLM_MAX_RETRIES,
+    }
+    if timeout is not None:
+        client_kwargs["timeout"] = timeout
+    client = OpenAI(**client_kwargs)
+
+    create_kwargs: Dict[str, Any] = {
+        "model": "gpt-4o",
+        "messages": [
             {"role": "system", "content": system_msg},
             {"role": "user", "content": user_msg},
         ],
-        temperature=0.0,
-        response_format={"type": "json_object"},
-        timeout=_LLM_TIMEOUT_SECONDS,  # per-call 재확인(클라이언트 기본값 위에 명시)
-    )
+        "temperature": 0.0,
+        "response_format": {"type": "json_object"},
+    }
+    if timeout is not None:
+        create_kwargs["timeout"] = timeout  # per-call 재확인(설정된 경우에만)
+    resp = client.chat.completions.create(**create_kwargs)
     return resp.choices[0].message.content
 
 
