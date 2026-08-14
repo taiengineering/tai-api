@@ -10,29 +10,26 @@
 
 단계(고정 순서):
   1. FAQ            : safe_help_svc.search(types=["FAQ"]) 재사용. 항상 가장 먼저.
-                      단순 검색 hit 만으로 ANSWER 금지 — FAQ 의 실제 question 문구와
-                      사용자 질문이 '정규화 후 명확히 일치'할 때만 ANSWER(source="FAQ").
-                      유사하지만 불일치 → 다음 단계. (임의 confidence 숫자 없음)
+                      정규화 정확 일치만 ANSWER(source="FAQ") — canonical question 또는 등록된 alias(정확 표현).
+                      유사하지만 불일치 → 다음 단계. 후보 2개 이상(모호) → 임의 선택 금지 → 다음 단계.
+                      (임의 confidence 숫자 없음. 유사도/LLM/semantic match 없음.)
   2. 분기(intent classifier 아님 — object_type 값만 본다):
      2a. object_type == "diagnosis" → diagnosis Context 를 Knowledge 보다 '우선' 조회.
-         - object_id 없음 + factory_id 있음 → (소유권 검증 후) run_get_latest_diagnosis 사용.
-         - object_id 있음 + 정확 조회 경로 확인됨 → 해당 diagnosis 사용.
-         - object_id 있음 + 정확 조회 불가 → latest 대체 금지 → HANDOFF.
-         - factory_id·object_id 모두 없음 → ASK(1회) / already_asked → HANDOFF.
-         (diagnosis 분기는 여기서 ANSWER/ASK/HANDOFF/ERROR 로 종결. Knowledge 로 내려가지 않는다.)
      2b. object_type 이 있으나 "diagnosis" 아님 → HANDOFF (이번 MVP 범위 밖).
-     2c. object_type 없음(=diagnosis 아닌 일반 질문) → Knowledge 단계로.
-  3. Knowledge      : safe_help_svc.search(types=["PAGE_GUIDE","TASK_GUIDE"]) 재사용.
-                      검색된 실제 문서를 evidence 로 반환. 근거 없으면 답 생성 없이 HANDOFF.
+     2c. object_type 없음 → Knowledge 단계로.
+  3. Knowledge      : safe_help_svc.search(types=["PAGE_GUIDE","TASK_GUIDE"]) 재사용. hit → ANSWER.
   4. ASK / HANDOFF  : 부족정보가 명확할 때만 ASK, 최대 1회. 그 외 HANDOFF.
+
+FAQ alias(동의 질문) 매칭:
+  운영자가 FAQ 항목에 명시 등록한 alias(정확 표현) 목록을 캐논 질문과 동등하게 취급한다.
+  매칭은 '정규화 후 exact' 만 사용한다(유사도 아님). alias 는 검색 hit item 의 "aliases": [str,...] 에서 읽는다.
+  aliases 필드가 없으면 캐논만 본다(기존 동작과 동일 — 회귀 없음).
 
 diagnosis 소유권 검증(보안, 필수):
   diagnosis Context 를 factory_id 로 조회하기 '이전'에, 인증 회사(company_id)가 해당 factory 를
-  소유하는지 확인한다(factories.id == factory_id AND company_id == 인증회사).
-  company_id 부재/소유 불일치면 진단을 조회하지 않고 HANDOFF 한다(타사 진단 노출 차단).
-  company_id 는 반드시 서버 파생값이어야 한다 — 호출측 member_support 가 인증 토큰에서
-  context["company_id"] 로 넣는다. 화면 Context 빌더(_build_context)는 company_id 를 만들지 않으므로
-  클라이언트가 주입할 수 없다.
+  소유하는지 확인한다. company_id 부재/소유 불일치면 진단을 조회하지 않고 HANDOFF 한다(타사 진단 노출 차단).
+  company_id 는 반드시 서버에서 파생된 값이어야 한다(member_support 가 인증 토큰에서 넣는다).
+  화면 Context 빌더(_build_context)는 company_id 를 만들지 않으므로 클라이언트가 주입할 수 없다.
 
 조회는 주입(injection) 가능하다(테스트/재사용). 미주입 시 기존 함수를 지연 import 한다.
 """
@@ -152,6 +149,39 @@ def _resolve_diagnosis(
     return {"status": "HANDOFF", "reason": "insufficient context after ask"}
 
 
+def _faq_item_matches(normalized_q: str, item: Dict[str, Any]) -> bool:
+    """FAQ 한 건이 사용자 질문과 '정규화 후 exact' 로 일치하는지.
+
+    canonical question 또는 등록된 alias(정확 표현) 중 하나라도 정규화 exact 일치면 True.
+    alias 는 운영자가 명시 등록한 표현만 사용한다(유사도/LLM 판단 없음).
+    aliases 필드가 없거나 형식이 아니면 canonical 만 본다(기존 동작과 동일 — 회귀 없음).
+    """
+    if _normalize(item.get("question")) == normalized_q:
+        return True
+    aliases = item.get("aliases")
+    if isinstance(aliases, list):
+        for a in aliases:
+            if isinstance(a, str) and _normalize(a) == normalized_q:
+                return True
+    return False
+
+
+def _faq_match_candidates(normalized_q: str, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """정규화 exact(캐논/별칭) 일치 FAQ 후보들. doc_id 기준 중복 제거.
+
+    한 FAQ 가 캐논·별칭 양쪽으로 맞아도 1건으로 센다. 반환 길이로 호출측이 0/1/다수를 판단한다.
+    """
+    matched: List[Dict[str, Any]] = []
+    seen: set = set()
+    for it in items:
+        if _faq_item_matches(normalized_q, it):
+            key = it.get("doc_id") or id(it)
+            if key not in seen:
+                seen.add(key)
+                matched.append(it)
+    return matched
+
+
 def route(
     question: str,
     context: Optional[Dict[str, Any]] = None,
@@ -165,7 +195,7 @@ def route(
 ) -> Dict[str, Any]:
     """question+context → {status: ANSWER|ASK|HANDOFF|ERROR, ...}.
 
-    순서: FAQ exact → (object_type=="diagnosis" 면 diagnosis Context 우선, 소유권 검증 후) → Knowledge.
+    순서: FAQ exact(캐논/별칭) → (object_type=="diagnosis" 면 diagnosis Context 우선, 소유권 검증 후) → Knowledge.
     context["company_id"] 는 서버 파생 인증 회사(호출측 member_support 가 넣음). 소유권 검증에 사용한다.
     diagnosis_by_id 기본값 None = object_id 정확 조회 경로 '미확인' → object_id 있으면 HANDOFF.
     """
@@ -179,30 +209,29 @@ def route(
     latest_diagnosis = latest_diagnosis or _default_latest_diagnosis
     company_owns_factory = company_owns_factory or _default_company_owns_factory
 
-    # ── 1. FAQ: 정규화 정확 일치만 ANSWER (항상 최우선) ──
+    # ── 1. FAQ: 정규화 정확 일치만 ANSWER (캐논 또는 등록된 alias). 항상 최우선 ──
     try:
         faq = faq_search(q, ctx) or {}
     except Exception as e:  # noqa: BLE001
         return {"status": "ERROR", "detail": f"faq_search failed: {e}"}
     nq = _normalize(q)
     if nq:
-        for item in (faq.get("items") or []):
-            if _normalize(item.get("question")) == nq:
-                return {"status": "ANSWER", "source": "FAQ", "evidence": item}
-    # 유사하지만 정확 불일치 → 다음 단계 (FAQ ANSWER 금지)
+        candidates = _faq_match_candidates(nq, faq.get("items") or [])
+        if len(candidates) == 1:
+            return {"status": "ANSWER", "source": "FAQ", "evidence": candidates[0]}
+        # 0개: 유사하지만 미등록 → 다음 단계. 2개 이상: 모호 → 임의 선택 금지, FAQ ANSWER 금지 → 다음 단계.
+        # (LLM/유사도 판단 없음. semantic match 미도입. canonical exact 는 기존 그대로 최우선.)
 
     # ── 2. 분기: object_type 값만 본다(intent classifier 아님) ──
     object_type = (ctx.get("object_type") or "").strip() or None
     company_id = (ctx.get("company_id") or "").strip() or None  # 서버 파생 인증 회사
 
     if object_type == "diagnosis":
-        # diagnosis Context 를 Knowledge 보다 우선 조회. 여기서 종결(Knowledge 로 안 내려감).
         return _resolve_diagnosis(
             ctx, already_asked, latest_diagnosis, diagnosis_by_id, company_id, company_owns_factory,
         )
 
     if object_type:
-        # diagnosis 가 아닌 object_type → 이번 MVP 범위 밖
         return {"status": "HANDOFF", "reason": f"unsupported object_type: {object_type}"}
 
     # ── 3. Knowledge: diagnosis 아닌 일반 질문에서만. 검색 hit = evidence ──
@@ -214,5 +243,5 @@ def route(
     if kn_items:
         return {"status": "ANSWER", "source": "KNOWLEDGE", "evidence": kn_items}
 
-    # ── 4. 근거 없음 & 물어볼 것 특정 곤란 → HANDOFF ──
+    # ── 4. 근거 없음 → HANDOFF ──
     return {"status": "HANDOFF", "reason": "no evidence found"}
