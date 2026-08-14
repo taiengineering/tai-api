@@ -19,10 +19,19 @@ counting LLM 과 함께 써서 "FAQ 는 LLM 미호출"을 직접 검증한다.
  11. _build_routing_context: diagnosis object_type 단독(object_id 없이) 보존 / object_id 미포함 / 비허용 제거
  12. _handle_ask(routing_ctx=...): route 는 routing_ctx(+company_id) 사용, 저장은 stored_ctx(clean)
  13. 하위호환: routing_ctx 미지정 → stored_ctx 를 routing 근거로 사용
+
+ Enriched HANDOFF(구현 1단계):
+ 14. diagnosis(CONTEXT) INSUFFICIENT → context.support 에 diagnosis_summary FACT
+ 15. KNOWLEDGE INSUFFICIENT → support 미첨부(기존과 동일, context None)
+ 16. Routing HANDOFF(evidence 없음) → support 미첨부, screen context 보존
+ 17. raw diagnosis payload/obligations 원문/input_data/rules 가 support 에 저장되지 않음
+ 18. stored_ctx + diagnosis INSUFFICIENT → screen context + support 공존
+ 19. _do_handoff(verified_support=None) → 기존과 동일(support 없음)
+ 20. diagnosis 대표값 없음 → support 미첨부 / rule_count fallback 동작
 """
 import json
 
-from routers.member_support import _build_routing_context, _handle_ask
+from routers.member_support import _build_routing_context, _do_handoff, _handle_ask
 from routers.member_inquiries import InquiryContextBody
 from services import support_answer_svc
 
@@ -113,6 +122,7 @@ r = _handle_ask("환불", None, False, IDENT,
                 explain_fn=lambda r, q: {"status": "ERROR"}, save_fn=save5)
 check("5 HANDOFF->저장1건+inquiry_no",
       r["status"] == "HANDOFF" and r["inquiry_no"] == "TAI-INQ-20260814-0009" and save5.rec["calls"] == 1)
+check("5b HANDOFF stored None->context None(support 없음)", save5.rec["kwargs"]["context"] is None)
 
 # 6. Answer INSUFFICIENT → inquiry 1건 저장
 save6 = save_recorder()
@@ -131,7 +141,8 @@ r = _handle_ask("이관질문", stored, False, IDENT,
 kw = save7.rec["kwargs"]
 check("7 HANDOFF context 보존",
       kw["context"] == stored and kw["user_id"] == "U-1" and kw["company_id"] == "C-1"
-      and kw["page_url"] == "https://safe/x" and kw["question"] == "이관질문")
+      and kw["page_url"] == "https://safe/x" and kw["question"] == "이관질문"
+      and "support" not in kw["context"])
 
 # 8. HANDOFF 저장 실패 → ERROR
 r = _handle_ask("환불", None, False, IDENT,
@@ -194,6 +205,87 @@ def route_capture2(q, ctx, aa):
 _handle_ask("q", {"factory_id": "F-7"}, False, IDENT,
             route_fn=route_capture2, explain_fn=lambda r, q: {"status": "ERROR"}, save_fn=save_recorder())
 check("13 하위호환: routing_ctx None→stored 사용", cap2["ctx"].get("factory_id") == "F-7")
+
+# ── Enriched HANDOFF(구현 1단계) ──
+
+# 14. diagnosis(CONTEXT) INSUFFICIENT → context.support 에 diagnosis_summary FACT
+save14 = save_recorder()
+diag_ev = {"id": "D-1", "result_data": {"verdict": "APPLICABLE", "risk_level": "MEDIUM",
+                                        "obligations": [1, 2, 3]}}
+r = _handle_ask("왜 이 법이?", {"factory_id": "F-1", "object_type": "diagnosis"}, False, IDENT,
+                route_fn=route_ret(status="ANSWER", source="CONTEXT", evidence=diag_ev),
+                explain_fn=lambda r, q: {"status": "INSUFFICIENT"}, save_fn=save14)
+sup = (save14.rec["kwargs"]["context"] or {}).get("support")
+check("14 diagnosis INSUFFICIENT->support FACT",
+      r["status"] == "HANDOFF" and isinstance(sup, dict)
+      and sup.get("unknown_gap") == "answer_insufficient"
+      and any(f.get("fact_type") == "diagnosis_summary" and f.get("verdict") == "APPLICABLE"
+              and f.get("risk_level") == "MEDIUM" and f.get("obligation_count") == 3
+              for f in sup.get("verified_facts", [])))
+
+# 15. KNOWLEDGE INSUFFICIENT → support 미첨부(context None)
+save15 = save_recorder()
+r = _handle_ask("가이드 밖", None, False, IDENT,
+                route_fn=route_ret(status="ANSWER", source="KNOWLEDGE", evidence=[{"doc_id": "KB-1"}]),
+                explain_fn=lambda r, q: {"status": "INSUFFICIENT"}, save_fn=save15)
+check("15 KNOWLEDGE INSUFFICIENT->support 없음",
+      r["status"] == "HANDOFF" and save15.rec["kwargs"]["context"] is None)
+
+# 16. Routing HANDOFF(evidence 없음) → support 미첨부, screen context 보존
+save16 = save_recorder()
+stored16 = {"factory_id": "F-2"}
+r = _handle_ask("환불", stored16, False, IDENT,
+                route_fn=route_ret(status="HANDOFF", reason="no evidence found"),
+                explain_fn=lambda r, q: {"status": "ERROR"}, save_fn=save16)
+check("16 routing HANDOFF->support 없음+context 보존",
+      save16.rec["kwargs"]["context"] == stored16 and "support" not in save16.rec["kwargs"]["context"])
+
+# 17. raw diagnosis payload/obligations 원문/input_data/rules 미저장
+save17 = save_recorder()
+diag_ev2 = {"id": "D-2", "input_data": {"secret": "x"},
+            "result_data": {"verdict": "APPLICABLE", "risk_level": "LOW",
+                            "obligations": [{"description": "원문"}], "rules": ["r"]}}
+r = _handle_ask("왜?", {"factory_id": "F-1", "object_type": "diagnosis"}, False, IDENT,
+                route_fn=route_ret(status="ANSWER", source="CONTEXT", evidence=diag_ev2),
+                explain_fn=lambda r, q: {"status": "INSUFFICIENT"}, save_fn=save17)
+sup17 = save17.rec["kwargs"]["context"]["support"]
+blob = json.dumps(sup17, ensure_ascii=False)
+check("17 raw payload 미저장",
+      "input_data" not in blob and "원문" not in blob and "secret" not in blob and "rules" not in blob
+      and sup17["verified_facts"][0]["obligation_count"] == 1)
+
+# 18. stored_ctx + diagnosis INSUFFICIENT → screen context + support 공존
+save18 = save_recorder()
+stored18 = {"factory_id": "F-1"}
+r = _handle_ask("왜?", stored18, False, IDENT,
+                route_fn=route_ret(status="ANSWER", source="CONTEXT",
+                                   evidence={"result_data": {"risk_level": "HIGH"}}),
+                explain_fn=lambda r, q: {"status": "INSUFFICIENT"}, save_fn=save18)
+ctx18 = save18.rec["kwargs"]["context"]
+check("18 screen+support 공존",
+      ctx18.get("factory_id") == "F-1" and "support" in ctx18
+      and ctx18["support"]["verified_facts"][0]["risk_level"] == "HIGH")
+
+# 19. _do_handoff(verified_support=None) → 기존과 동일(support 없음)
+save19 = save_recorder()
+out = _do_handoff("q", {"factory_id": "F-1"}, IDENT, "x", save19, None)
+check("19 _do_handoff 기본(support 없음)",
+      out["status"] == "HANDOFF" and save19.rec["kwargs"]["context"] == {"factory_id": "F-1"}
+      and "support" not in save19.rec["kwargs"]["context"])
+
+# 20. 대표값 없음 → support 미첨부 / rule_count fallback
+save20a = save_recorder()
+r = _handle_ask("왜?", None, False, IDENT,
+                route_fn=route_ret(status="ANSWER", source="CONTEXT", evidence={"result_data": {"foo": "bar"}}),
+                explain_fn=lambda r, q: {"status": "INSUFFICIENT"}, save_fn=save20a)
+check("20 대표값 없음->support 없음", save20a.rec["kwargs"]["context"] is None)
+save20b = save_recorder()
+r = _handle_ask("왜?", None, False, IDENT,
+                route_fn=route_ret(status="ANSWER", source="CONTEXT",
+                                   evidence={"result_data": {"risk_level": "LOW", "rule_count": 7}}),
+                explain_fn=lambda r, q: {"status": "INSUFFICIENT"}, save_fn=save20b)
+check("20b rule_count fallback",
+      save20b.rec["kwargs"]["context"]["support"]["verified_facts"][0]["obligation_count"] == 7)
 
 failed = [n for n, ok in results if not ok]
 print(f"\n{len(results) - len(failed)}/{len(results)} passed")
