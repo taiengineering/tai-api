@@ -14,6 +14,12 @@ POST /me/support/ask :
   - 신원(user_id/company_id)은 Bearer 토큰에서 서버가 파생한다(클라이언트 입력 금지).
   - AI 가 문의를 RESOLVED 로 자동 종료하지 않는다.
 
+Context 분리(저장 vs 라우팅):
+  - stored_ctx : 저장(inquiries.context)에 쓰는 화면 Context. factory_id/object_type/object_id 만.
+  - routing_ctx: stored_ctx 복사본 + 서버 파생 company_id. routing 의 factory 소유권 검증에만 쓴다.
+    company_id 는 저장 context 에 넣지 않는다(정규 컬럼 company_id 로 이미 저장됨, 중복 금지).
+    company_id 를 서버(인증)에서만 넣으므로 클라이언트가 소유권 검증을 우회할 수 없다.
+
 처리 규칙:
   1) route() 호출
   2) ANSWER → explain(); 설명 ANSWER→반환 / 설명 INSUFFICIENT→Human handoff 저장 / 설명 ERROR→ERROR
@@ -91,7 +97,13 @@ def _handle_ask(
     supabase: Any = None,
 ) -> Dict[str, Any]:
     """결선 순수 로직. 의존성 주입 가능(테스트: route/explain/save fake)."""
+    # routing 용 Context: 저장용 stored_ctx 를 복사한 뒤, 서버 파생 company_id 를 넣는다.
+    # (stored_ctx 원본은 그대로 저장에 사용 — company_id 는 저장 context 에 넣지 않는다.)
+    # company_id 는 반드시 서버 파생값이어야 소유권 검증이 안전하다(클라이언트 주입 불가).
     routing_ctx = dict(stored_ctx or {})
+    company_id = identity.get("company_id")
+    if company_id:
+        routing_ctx["company_id"] = company_id
     r = route_fn(question, routing_ctx, already_asked)
     status = r.get("status")
 
