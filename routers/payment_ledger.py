@@ -21,16 +21,22 @@ Goal: G-ms4je4z3-33eada (구축 이어받기 G-ms5pdquz-9e76e5)
   GET  /payments/ops/gate-readiness — 채널별 준비완료 체크리스트 + 현재 상태.
   POST /payments/ops/gate/activate   — 준비완료 통과 시 DB 게이트 활성화(운영자 확인 필요, 감사).
   POST /payments/ops/gate/deactivate — DB 게이트 비활성화(킬스위치).
+
+[2026-08-15 P0-보정1] 인증 경계 추가: 전 엔드포인트 SUPER_ADMIN(role_code==001).
+  공용 자산 재사용: routers.matching_deps._require_admin (get_current_user + role 001).
+  게이트/크레딧/증빙 서비스에 넘기는 감사 주체(by)는 body가 아닌 인증 사용자(current_user["id"])로
+  서버 확정. 서비스 인터페이스·결제 business logic 무변경 — 인증/감사주체만 보정.
 """
 from __future__ import annotations
 
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from routers.matching_deps import _require_admin
 
 log = logging.getLogger(__name__)
 
@@ -72,7 +78,7 @@ class GateBody(BaseModel):
 
 # ── 실호출 게이트 상태 ───────────────────────────────────────────────
 @router.get("/ops/live-flags")
-def live_flags():
+def live_flags(current_user: dict = Depends(_require_admin)):
     """환불·증빙 실호출 활성 여부. 프론트 '실호출 잠금' 표시용."""
     try:
         from services.invoice_svc import invoice_live
@@ -85,31 +91,31 @@ def live_flags():
 
 # ── 실행 게이트 해제 절차 ────────────────────────────────────────────
 @router.get("/ops/gate-readiness")
-def gate_readiness_ep():
+def gate_readiness_ep(current_user: dict = Depends(_require_admin)):
     """채널별 준비완료 체크리스트 + 현재 실호출 상태."""
     from services.ops_gate_svc import readiness
     return {"status": "success", "data": readiness()}
 
 
 @router.post("/ops/gate/activate")
-def gate_activate(body: GateBody):
+def gate_activate(body: GateBody, current_user: dict = Depends(_require_admin)):
     """DB 게이트 활성화 — 준비완료 통과 + 운영자 확인(confirm) 필요."""
     if not body.confirm:
         raise HTTPException(status_code=400, detail="활성화 확인(confirm)이 필요합니다.")
     from services.ops_gate_svc import GateError, set_gate
     try:
-        res = set_gate(body.channel, True, by=body.by, note=body.note)
+        res = set_gate(body.channel, True, by=current_user["id"], note=body.note)
     except GateError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
     return {"status": "success", "data": res}
 
 
 @router.post("/ops/gate/deactivate")
-def gate_deactivate(body: GateBody):
+def gate_deactivate(body: GateBody, current_user: dict = Depends(_require_admin)):
     """DB 게이트 비활성화(킬스위치)."""
     from services.ops_gate_svc import GateError, set_gate
     try:
-        res = set_gate(body.channel, False, by=body.by, note=body.note)
+        res = set_gate(body.channel, False, by=current_user["id"], note=body.note)
     except GateError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
     return {"status": "success", "data": res}
@@ -123,12 +129,12 @@ def gate_deactivate(body: GateBody):
 
 # ── 전환크레딧 결선 (credit_svc) ─────────────────────────────────────
 @router.post("/{payment_id}/credit")
-def grant_credit(payment_id: str, body: CreditGrantBody):
+def grant_credit(payment_id: str, body: CreditGrantBody, current_user: dict = Depends(_require_admin)):
     """전환크레딧 발행. diagnosis_purchase_id 있으면 진단전환, 없으면 수동지급."""
     from services.credit_svc import CreditError, grant, grant_from_diagnosis
     try:
         if body.diagnosis_purchase_id:
-            credit_id = grant_from_diagnosis(body.diagnosis_purchase_id, created_by=body.by)
+            credit_id = grant_from_diagnosis(body.diagnosis_purchase_id, created_by=current_user["id"])
         else:
             if not body.amount or body.amount <= 0:
                 raise HTTPException(status_code=400, detail="수동 지급은 amount가 필요합니다.")
@@ -141,7 +147,7 @@ def grant_credit(payment_id: str, body: CreditGrantBody):
             credit_id = grant(
                 company_id=pay.data[0]["company_id"], amount=body.amount,
                 source="MANUAL", source_ref=payment_id, expires_at=None,
-                created_by=body.by, memo=body.memo,
+                created_by=current_user["id"], memo=body.memo,
             )
         return {"status": "success", "data": {"credit_id": credit_id}}
     except CreditError as e:
@@ -150,7 +156,7 @@ def grant_credit(payment_id: str, body: CreditGrantBody):
 
 # ── 증빙 결선 (invoice_svc) ──────────────────────────────────────────
 @router.post("/{payment_id}/invoice/tax")
-def issue_tax(payment_id: str, body: TaxInvoiceBody):
+def issue_tax(payment_id: str, body: TaxInvoiceBody, current_user: dict = Depends(_require_admin)):
     """세금계산서 발행 (팝빌)."""
     from services.invoice_svc import InvoiceError, issue_tax_invoice
     try:
@@ -159,20 +165,20 @@ def issue_tax(payment_id: str, body: TaxInvoiceBody):
             "email": body.email, "addr": body.addr,
             "bizType": body.bizType, "bizClass": body.bizClass,
         }
-        res = issue_tax_invoice(payment_id, invoicee, created_by=body.by)
+        res = issue_tax_invoice(payment_id, invoicee, created_by=current_user["id"])
         return {"status": "success", "data": res}
     except InvoiceError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
 
 @router.post("/{payment_id}/invoice/cash")
-def issue_cash(payment_id: str, body: CashReceiptBody):
+def issue_cash(payment_id: str, body: CashReceiptBody, current_user: dict = Depends(_require_admin)):
     """현금영수증 발행 (팝빌)."""
     from services.invoice_svc import InvoiceError, issue_cash_receipt
     try:
         res = issue_cash_receipt(
             payment_id, trade_usage=body.trade_usage,
-            identity_num=body.identity_num, created_by=body.by,
+            identity_num=body.identity_num, created_by=current_user["id"],
         )
         return {"status": "success", "data": res}
     except InvoiceError as e:
@@ -181,7 +187,7 @@ def issue_cash(payment_id: str, body: CashReceiptBody):
 
 # ── 결제 원장 통합 조회 ──────────────────────────────────────────────
 @router.get("/{payment_id}/ledger")
-def get_payment_ledger(payment_id: str):
+def get_payment_ledger(payment_id: str, current_user: dict = Depends(_require_admin)):
     """결제 1건의 환불·크레딧·증빙 통합 조회."""
     supabase = get_supabase()
     pay = (

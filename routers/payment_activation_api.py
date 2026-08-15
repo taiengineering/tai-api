@@ -3,12 +3,19 @@
 결제 → 구독 → Tenant 활성화 E2E 검증 + 운영 Guard.
 Billing 플랫폼 아님. 상업 활성화 안정성 레이어.
 Single Pricing Source: price_saas_plan.
+
+[2026-08-15 P0-보정1] 인증 경계 추가: 전 엔드포인트 SUPER_ADMIN(role_code==001).
+  공용 자산 재사용: routers.matching_deps._require_admin (get_current_user + role 001).
+  수동 활성화 감사 주체(changed_by)는 하드코딩 'admin' 대신 인증 사용자(current_user["id"])로 서버 확정.
+  결제 business logic·PG flow 무변경 — 인증/감사주체만 보정.
 """
 
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+
+from routers.matching_deps import _require_admin
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/payment", tags=["결제검증"])
@@ -22,7 +29,7 @@ def _sb():
 # ═══ E2E Chain Validation ═══
 
 @router.get("/e2e-validate")
-def validate_payment_e2e():
+def validate_payment_e2e(current_user: dict = Depends(_require_admin)):
     """결제 → 구독 → Tenant 전체 흐름 검증."""
     try:
         sb = _sb()
@@ -99,7 +106,7 @@ def validate_payment_e2e():
 # ═══ Commercial Activation Guard ═══
 
 @router.get("/activation-guard")
-def check_activation_guard():
+def check_activation_guard(current_user: dict = Depends(_require_admin)):
     """상\uc5c5 \ud65c\uc131\ud654 \uc704\ud5d8 \ud0d0\uc9c0."""
     try:
         sb = _sb()
@@ -149,7 +156,7 @@ def check_activation_guard():
 # ═══ Status Summary ═══
 
 @router.get("/status-summary")
-def payment_status_summary():
+def payment_status_summary(current_user: dict = Depends(_require_admin)):
     """\uacb0\uc81c/\uad6c\ub3c5 \uc0c1\ud0dc \uc694\uc57d."""
     try:
         sb = _sb()
@@ -185,7 +192,7 @@ def payment_status_summary():
 # ═══ Activation Chain (\uad6c\ub3c5 \u2192 SaaS \ud65c\uc131\ud654) ═══
 
 @router.post("/activate-subscription/{subscription_id}")
-def activate_subscription(subscription_id: str):
+def activate_subscription(subscription_id: str, current_user: dict = Depends(_require_admin)):
     """\uad6c\ub3c5 \uc218\ub3d9 \ud65c\uc131\ud654 (\uc6b4\uc601\uc790 \uc804\uc6a9)."""
     try:
         sb = _sb()
@@ -229,7 +236,7 @@ def activate_subscription(subscription_id: str):
                 "action": "ACTIVATE",
                 "old_value": s.get("status"),
                 "new_value": "ACTIVE",
-                "changed_by": "admin",
+                "changed_by": current_user["id"],
                 "change_reason": "\uc218\ub3d9 \ud65c\uc131\ud654",
             }).execute()
         except Exception:
@@ -248,7 +255,7 @@ def activate_subscription(subscription_id: str):
 # ═══ Orphan Detection ═══
 
 @router.get("/orphans")
-def detect_orphans():
+def detect_orphans(current_user: dict = Depends(_require_admin)):
     """\uace0\uc544 \uacb0\uc81c/\uad6c\ub3c5 \ud0d0\uc9c0."""
     try:
         sb = _sb()
