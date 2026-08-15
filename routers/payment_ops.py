@@ -2,6 +2,11 @@
 
 [2026-07-30 #5 감사 완결성] 결제취소(PAYMENT_CANCEL)·수동활성화(PAYMENT_MANUAL_CONFIRM)를
   admin_ops_audit_logs 에 before/after·actor 로 기록한다(best-effort — 감사 실패가 본 처리를 막지 않음).
+
+[2026-08-15 P0-보정1] 인증 경계 추가: 전 엔드포인트 SUPER_ADMIN(role_code==001).
+  공용 자산 재사용: routers.matching_deps._require_admin (get_current_user + role 001).
+  감사 주체(actor)는 body의 by/cancelled_by를 신뢰하지 않고 인증 사용자(current_user["id"])로 서버 확정.
+  결제 business logic·PG flow 무변경 — 인증/감사주체만 보정.
 """
 from __future__ import annotations
 
@@ -9,9 +14,10 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from db.supabase_client import get_supabase
+from routers.matching_deps import _require_admin
 from schemas.payment import CancelBody, ManualConfirmBody
 from services import audit_svc
 from services.payment_helpers import SAAS_PRODUCT_TYPES, calc_expired_at, now_iso
@@ -33,6 +39,7 @@ def list_payments(
     keyword: Optional[str] = Query(None, description="회원명 또는 회사명 검색"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(_require_admin),
 ):
     supabase = get_supabase()
     q = supabase.table("v_payments_list").select("*", count="exact")
@@ -75,6 +82,7 @@ def list_expiring_payments(
     days: int = Query(30, ge=1, le=90),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(_require_admin),
 ):
     supabase = get_supabase()
     now = datetime.now(timezone.utc)
@@ -100,7 +108,7 @@ def list_expiring_payments(
 
 
 @router.post("/manual/confirm")
-def manual_confirm(body: ManualConfirmBody):
+def manual_confirm(body: ManualConfirmBody, current_user: dict = Depends(_require_admin)):
     supabase = get_supabase()
     now = now_iso()
     pay_res = (
@@ -133,7 +141,7 @@ def manual_confirm(body: ManualConfirmBody):
 
     audit_svc.record(
         "PAYMENT_MANUAL_CONFIRM", "payment", entity_id=str(body.payment_id),
-        actor_id=body.by,
+        actor_id=current_user["id"],
         before={"status_code": payment["status_code"]},
         after={"status_code": "SUCCESS", "service_status": "ACTIVE",
                "contract_id": str(body.contract_id)},
@@ -153,7 +161,7 @@ def manual_confirm(body: ManualConfirmBody):
 
 
 @router.post("/{payment_id}/cancel")
-def cancel_payment(payment_id: str, body: CancelBody):
+def cancel_payment(payment_id: str, body: CancelBody, current_user: dict = Depends(_require_admin)):
     supabase = get_supabase()
     now = now_iso()
     pay_res = (
@@ -186,7 +194,7 @@ def cancel_payment(payment_id: str, body: CancelBody):
 
     audit_svc.record(
         "PAYMENT_CANCEL", "payment", entity_id=str(payment_id),
-        actor_id=body.cancelled_by,
+        actor_id=current_user["id"],
         before={"status_code": payment["status_code"], "contract_id": contract_id},
         after={"status_code": "CANCELLED", "service_status": "ENDED", "reason": body.reason},
     )
@@ -199,7 +207,7 @@ def cancel_payment(payment_id: str, body: CancelBody):
 
 
 @router.get("/{payment_id}/vbank-status")
-def get_vbank_status(payment_id: str):
+def get_vbank_status(payment_id: str, current_user: dict = Depends(_require_admin)):
     supabase = get_supabase()
     res = (
         supabase.table("payments")
