@@ -19,4 +19,5 @@ ROUTERS = [
     {"module": "routers.admin_audit"},  # P3-4 감사로그 조회 (GET /admin/audit-logs)
     {"module": "routers.inicis_auth"},
     {"module": "routers.safe_help"},  # safe 헬프센터 검색/조회/upsert (/help/*) — Phase2
+    {"module": "routers.helpcenter"},  # help.taieng.co.kr 헬프센터 조회 (/helpcenter/*) — 서버 종결 게이팅
 ]
