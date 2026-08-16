@@ -67,13 +67,23 @@ def _node_path(node_id: str, by_id: Dict[str, Dict[str, Any]]) -> List[Dict[str,
 # ─────────────────────────────────────────────────────────────────────────
 
 def get_tree(root_key: Optional[str], viewer: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """축 하나(또는 전체)의 트리. 노출 판정 후 고아 없이 중첩 구조로 돌려준다."""
+    """축 하나(또는 전체)의 트리. 노출 판정 후 고아 없이 중첩 구조로 돌려준다.
+
+    노드에는 문서 slug 가 없다(배치와 내용을 분리했으므로). 그런데 화면은 /doc/{slug} 로 링크해야
+    하므로, 여기서 doc_id → 문서 slug 를 한 번에 붙여 준다. 프론트가 doc_id 로 다시 조회하는
+    왕복을 만들지 않기 위해서다.
+    """
     nodes = _load_nodes(root_key)
     allowed = vis.prune_tree(nodes, viewer)
 
+    slug_of = {
+        d["doc_id"]: d.get("slug")
+        for d in _fetch_docs_by_ids([n.get("doc_id") for n in allowed if n.get("doc_id")])
+    }
+
     out: Dict[str, Dict[str, Any]] = {}
     for n in allowed:
-        item = vis.public_node(n)
+        item = vis.public_node({**n, "doc_slug": slug_of.get(n.get("doc_id"))})
         item["children"] = []
         out[n["id"]] = item
 
