@@ -286,10 +286,22 @@ def get_context(page_slug: str, viewer: Dict[str, Any], lang: str = "ko") -> Dic
     visible_doc_ids = {n.get("doc_id") for n in allowed_nodes if n.get("doc_id")}
     docs = [d for d in docs if d.get("doc_id") in visible_doc_ids and d.get("status") == vis.PUBLISHED]
 
-    guide = next((d for d in docs if d.get("type") == "GUIDE"), None)
+    # 한 화면에 GUIDE 가 둘 이상일 때, 예전에는 next() 가 첫 건만 집고 나머지가 조용히 사라졌다.
+    # other 의 조건이 GUIDE 를 배제하므로 그쪽으로도 가지 않았고, 쿼리에 ORDER BY 가 없어
+    # 어느 것이 남는지 DB 행 순서에 달려 있었다 — 재현되지 않는 사라짐이었다(실측으로 겪음).
+    # 이제는 화면 이름과 slug 가 같은 문서를 대표로 세우고, 나머지는 other 로 흘려 보낸다.
+    guides = [d for d in docs if d.get("type") == "GUIDE"]
+    guides.sort(key=lambda d: (d.get("slug") != page_slug, d.get("doc_id") or ""))
+    guide = guides[0] if guides else None
+    if len(guides) > 1:
+        log.warning(
+            "[helpcenter] page_slug=%s 에 GUIDE 가 %d건이다. 대표=%s, 나머지는 other 로 보낸다: %s",
+            page_slug, len(guides), guide.get("doc_id"),
+            [d.get("doc_id") for d in guides[1:]],
+        )
     trouble = [d for d in docs if d.get("type") == "TROUBLE"]
     faq = [d for d in docs if d.get("type") == "FAQ"]
-    other = [d for d in docs if d.get("type") not in ("GUIDE", "TROUBLE", "FAQ")]
+    other = guides[1:] + [d for d in docs if d.get("type") not in ("GUIDE", "TROUBLE", "FAQ")]
 
     return {
         "page_slug": page_slug,
@@ -306,7 +318,7 @@ def get_context(page_slug: str, viewer: Dict[str, Any], lang: str = "ko") -> Dic
 # O10 SearchService
 # ─────────────────────────────────────────────────────────────────────────
 
-_TERM_UNSAFE = ',()"{}\\%'
+_TERM_UNSAFE = ',()"{}\%'
 
 
 def _sanitize_term(term: str) -> str:
