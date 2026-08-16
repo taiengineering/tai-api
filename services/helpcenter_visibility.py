@@ -128,8 +128,8 @@ def public_node(node: Dict[str, Any]) -> Dict[str, Any]:
     roles·sectors·min_level·addons·visibility 는 게이팅 근거이므로 응답에서 제외한다.
     무엇이 왜 감춰졌는지 클라이언트가 역산할 수 있게 두지 않는다.
 
-    doc_slug 는 판정 근거가 아니라 링크 재료다. 노드가 doc_id 만 갖고 있으면 화면이
-    /doc/&lt;slug&gt; 를 만들 수 없어 노드 slug 로 잘못 링크한다. 호출부(get_tree)가 채워 준다.
+    doc_slug 는 판정 근거가 아니라 링크 재료다. 노드는 doc_id 만 갖고 있어서 화면이
+    /doc/{slug} 를 만들 수 없고, 그러면 노드 slug 로 잘못 링크한다. 호출부(get_tree)가 채워 준다.
     """
     return {
         "id": node.get("id"),
