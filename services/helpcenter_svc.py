@@ -318,7 +318,7 @@ def get_context(page_slug: str, viewer: Dict[str, Any], lang: str = "ko") -> Dic
 # O10 SearchService
 # ─────────────────────────────────────────────────────────────────────────
 
-_TERM_UNSAFE = ',()"{}\%'
+_TERM_UNSAFE = ',()"{}\\%'
 
 
 def _sanitize_term(term: str) -> str:
