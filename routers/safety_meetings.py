@@ -1,12 +1,16 @@
 """
-안전보건 회의 관리 라우터 — v1.1.0
+안전보건 회의 관리 라우터 — v1.2.0
 
 safety_committee_meetings 테이블 사용
 참석자는 전용 테이블 safety_committee_attendees 사용 (v1.1.0~)
 
+v1.2.0 (2026-08-17, LEDGER ④):
+  [FIX] GET /safety-meetings 에 date_from·date_to(회의일 meeting_date 범위) 추가.
+        화면(useSafetyMeetingList)이 보내던 기간 필터가 서버에 선언되지 않아 무시되던 것 해소.
+
 API:
   POST   /safety-meetings                     회의록 생성
-  GET    /safety-meetings                     목록 조회
+  GET    /safety-meetings                     목록 조회 (date_from·date_to 기간 필터 ← v1.2.0)
   GET    /safety-meetings/schedule            개최 주기 준수 현황 (고정경로)
   GET    /safety-meetings/{id}                상세 조회 (attendees 포함)
   PATCH  /safety-meetings/{id}                수정
@@ -27,7 +31,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/safety-meetings", tags=["safety_meetings"])
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 RETENTION_YEARS = 3   # 회의록 법정 보존기한
 
@@ -262,10 +266,12 @@ def list_meetings(
     meeting_type: Optional[str] = Query(None),
     status_code:  Optional[str] = Query(None),
     year:         Optional[int] = Query(None),
+    date_from:    Optional[str] = Query(None, description="회의일 시작 (YYYY-MM-DD)"),
+    date_to:      Optional[str] = Query(None, description="회의일 종료 (YYYY-MM-DD)"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
-    """안전보건 회의 목록 조회."""
+    """안전보건 회의 목록 조회. v1.2.0: date_from·date_to(meeting_date 범위) 필터 추가."""
     supabase = get_supabase()
     q = supabase.table("safety_committee_meetings").select(
         "id, company_id, factory_id, meeting_type, meeting_title, meeting_date, "
@@ -279,6 +285,9 @@ def list_meetings(
     if status_code:  q = q.eq("status_code",  status_code)
     if year:
         q = q.gte("meeting_date", f"{year}-01-01").lte("meeting_date", f"{year}-12-31")
+    # v1.2.0 (LEDGER ④): 화면이 보내던 기간 필터를 실제 적용
+    if date_from:    q = q.gte("meeting_date", date_from)
+    if date_to:      q = q.lte("meeting_date", date_to)
 
     offset = (page - 1) * size
     res = q.order("meeting_date", desc=True).range(offset, offset + size - 1).execute()
