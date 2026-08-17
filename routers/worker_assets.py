@@ -1,14 +1,17 @@
-"""작업자 사진 업로드 / 배정업무 / 교육이수 API — v1.1.0
+"""작업자 사진 업로드 / 배정업무 / 교육이수 API — v1.1.1
 
-v1.1.0 (Goal G-mswtdmi1-420f8c, 검토 ⓐ):
-  GET /work-assignments/{id}/items 에 소유자 검증 — 토큰 users.id vs assigned_user_id, 다르면 403 (A-8).
-v1.0.0:
-  작업자 PWA 가 호출하지만 서버에 부재해 404 로 실패하던 경로를 신설.
+v1.1.1 (Goal G-mswtdmi1-420f8c):
+  [REVERT] GET /work-assignments/{id}/items 의 소유자 검증(ⓐ)을 임시 철회.
+    작업자 로그인(verify-otp)의 토큰 발급 신뢰성이 확인되지 않아, 토큰이 없거나
+    거부되면 401 → 앱이 로그인으로 되돌아가 화면을 못 쓴다. 현재 항목이 범용 16종이라
+    실질 유출 위험이 없으므로, 소유자 검증은 토큰 발급 신뢰성 확인 후 재도입한다(별건).
+v1.1.0: 소유자 검증 추가(위에서 철회).
+v1.0.0: 작업자 PWA 가 호출하지만 서버에 부재해 404 로 실패하던 경로를 신설.
 
 API:
   POST /uploads/inspection-photo    현장 사진 업로드 (_utils.js TAI.uploadPhoto)
   GET  /work-assignments            배정업무 조회 (index.html 미이행 배너)
-  GET  /work-assignments/{id}/items 배정 점검 항목 (inspect.html) — 소유자 검증
+  GET  /work-assignments/{id}/items 배정 점검 항목 (inspect.html)
   POST /education/worker-complete   교육 이수 확인 (education.html)
 """
 import logging
@@ -141,22 +144,12 @@ def list_work_assignments(
 
 
 @router.get("/work-assignments/{assignment_id}/items")
-def get_work_assignment_items(
-    assignment_id: str,
-    current_user: Optional[dict] = Depends(_optional_auth),
-):
-    """배정 점검 항목 조회. ⓐ 본인 배정만(A-8): 토큰 users.id vs assigned_user_id, 다르면 403.
+def get_work_assignment_items(assignment_id: str):
+    """배정 점검 항목 조회.
 
-    verify-otp 가 worker_id=users.id 로 발급하므로 앱이 조회하는 assigned_user_id 와 같은 공간이다.
+    소유자 검증(ⓐ)은 v1.1.1 에서 임시 철회했다 — 작업자 토큰 발급 신뢰성 확인 후 재도입(별건).
+    토큰을 하드 요구하면 발급 실패·미저장 세션이 401 로 로그인에 튕겨 화면을 못 쓴다.
     """
-    if not current_user:
-        raise HTTPException(status_code=401, detail={"error": "AUTH_REQUIRED"})
-    supabase = get_supabase()
-    wa = supabase.table("work_assignments").select("assigned_user_id").eq("id", assignment_id).limit(1).execute()
-    if not wa.data:
-        raise HTTPException(status_code=404, detail="배정된 점검을 찾을 수 없습니다")
-    if wa.data[0].get("assigned_user_id") != current_user["id"]:
-        raise HTTPException(status_code=403, detail="본인에게 배정된 점검만 조회할 수 있습니다")
     try:
         return _iss.get_items_for_assignment(assignment_id)
     except _iss.InspectionSetsSvcError as e:
