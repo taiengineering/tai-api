@@ -236,8 +236,8 @@ def _issue_session_for_phone(supabase, phone: str, user_row: Optional[dict]) -> 
         auth_id = (user_row or {}).get("auth_id")
 
         if auth_id:
-            # 기존 GoTrue 계정 — 비밀번호를 재설정해 세션을 얻는다.
-            admin.auth.admin.update_user_by_id(auth_id, {"password": password})
+            # 기존 GoTrue 계정 — 비밀번호 재설정 + 이메일 확인(미확인 계정 자가치유).
+            admin.auth.admin.update_user_by_id(auth_id, {"password": password, "email_confirm": True})
         else:
             # GoTrue 계정 없음 — 생성 후 users.auth_id 연결
             try:
@@ -256,7 +256,7 @@ def _issue_session_for_phone(supabase, phone: str, user_row: Optional[dict]) -> 
                 if not matched:
                     raise
                 auth_id = str(matched.id)
-                admin.auth.admin.update_user_by_id(auth_id, {"password": password})
+                admin.auth.admin.update_user_by_id(auth_id, {"password": password, "email_confirm": True})
 
             if user_row:
                 supabase.table("users").update({
