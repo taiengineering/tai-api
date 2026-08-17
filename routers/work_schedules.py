@@ -1,5 +1,12 @@
 """
-work_schedules.py — v1.2.1
+work_schedules.py — v1.2.2
+
+v1.2.2 (2026-08-17):
+  [FIX] GET /work-schedules/{schedule_id} — schedule_id uuid 검증 추가.
+        존재하지 않는 /work-schedules/summary 같은 비-uuid 경로가 catch-all
+        {schedule_id} 에 잡혀 .eq("id","summary") → 22P02(invalid uuid) → 500 이
+        운영에서 발생. uuid 가 아니면 404 로 응답한다(크래시·에러로그 방지).
+        [별건] /summary 가 필요한 엔드포인트라면 별도 구현 필요(현재 404).
 
 v1.2.1 (2026-05-26):
   [FIX] GET /work-schedules — size 상한 100→500 변경
@@ -23,6 +30,8 @@ API:
   POST  /work-schedules/confirm/{factory_id}         검토 확정     ← v1.1.0
   GET   /work-schedules/{schedule_id}                단건 조회
 """
+import uuid
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List
@@ -32,11 +41,19 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/work-schedules", tags=["work_schedules"])
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
 
 
 # ── Pydantic 모델 ─────────────────────────────────────────────
@@ -273,6 +290,9 @@ def get_inspection_set_work_schedules(inspection_set_id: str):
 # /{schedule_id}는 반드시 모든 고정경로 뒤에 선언
 @router.get("/{schedule_id}")
 def get_work_schedule(schedule_id: str):
+    # v1.2.2: 비-uuid 경로(/summary 등)가 catch-all 에 잡혀 500(22P02) 나던 것 방지.
+    if not _is_uuid(schedule_id):
+        raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
     supabase = get_supabase()
     result = (
         supabase.table("work_schedules")
