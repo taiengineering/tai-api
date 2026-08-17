@@ -1,6 +1,12 @@
 """
-작업자 현장 점검 제출 API — v1.4.0
+작업자 현장 점검 제출 API — v1.4.1
 
+v1.4.1 (2026-08-17, Goal G-mswtdmi1-420f8c):
+  [FIX] safety_inspections.assignment_id 의 FK 는 work_schedules(id) 를 참조한다(컬럼명과 대상 불일치).
+        v1.4.0 이 work_assignments.id 를 그대로 넣어 FK 위반 → 500 → 앱이 "기기에 임시저장"으로 처리했다.
+        (8/09 옛 제출은 assignment_id 가 없어 FK 검사를 타지 않아 성공했고, 새 앱은 assignment_id 를 보내 위반.)
+        → assignment_id(work_assignments.id)를 schedule_id(work_schedules.id)로 변환해 저장한다.
+        [별건] 컬럼명 assignment_id 인데 FK 는 work_schedules — 명명/설계 정합(FK 를 work_assignments 로 옮길지)은 기획 결정.
 v1.4.0 (2026-08-17, Goal G-mswtdmi1-420f8c):
   [FIX] 참조 검증을 assignment_id 3홉(work_assignments→work_schedules→inspection_set_id)으로 교체.
         safety_inspections.assignment_id 저장.
@@ -108,11 +114,20 @@ def submit_check(
     has_issue = any(item.result == "bad" for item in body.items)
     status_code = "ISSUE" if has_issue else "COMPLETED"
 
+    # safety_inspections.assignment_id 의 FK 는 work_schedules(id) 를 참조한다(컬럼명과 불일치, 별건).
+    # body.assignment_id 는 work_assignments.id 이므로 그대로 넣으면 FK 위반(500)이다.
+    # → schedule_id(work_schedules.id)로 변환해 저장한다. body.schedule_id 가 오면 그것을 우선한다.
+    schedule_ref = body.schedule_id
+    if not schedule_ref and body.assignment_id:
+        _wa = supabase.table("work_assignments").select("schedule_id").eq("id", body.assignment_id).limit(1).execute()
+        if _wa.data:
+            schedule_ref = _wa.data[0].get("schedule_id")
+
     ins_res = supabase.table("safety_inspections").insert({
         "inspector_id": inspector_id,
         "inspection_date": now,
         "status_code": status_code,
-        "assignment_id": body.assignment_id,
+        "assignment_id": schedule_ref,
     }).execute()
 
     if not ins_res.data:
