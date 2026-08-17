@@ -2,7 +2,7 @@ from db.supabase_client import get_supabase as _health_get_supabase
 from services.health_registry import register_probe
 from .anchors import bulk_update_anchors, patch_set, set_anchor_bulk, update_anchor
 from .errors import InspectionSetsSvcError
-from .items import get_set_items
+from .items import get_items_for_assignment, get_set_items, resolve_set_id_for_assignment
 from .queries import (
     create_manual_set,
     generate_all_items,
@@ -32,6 +32,8 @@ __all__ = [
     "get_factory_sets",
     "get_set_by_id",
     "get_set_items",
+    "get_items_for_assignment",
+    "resolve_set_id_for_assignment",
 ]
 
 

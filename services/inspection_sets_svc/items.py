@@ -28,3 +28,32 @@ def get_set_items(inspection_set_id: str) -> dict:
         .execute()
     )
     return {"status": "success", "data": {"items": res.data or []}}
+
+
+def resolve_set_id_for_assignment(assignment_id: str) -> str | None:
+    """work_assignments → work_schedules → inspection_set_id (없으면 None)."""
+    supabase = get_supabase()
+    wa = supabase.table("work_assignments").select("schedule_id").eq("id", assignment_id).limit(1).execute()
+    if not wa.data or not wa.data[0].get("schedule_id"):
+        return None
+    ws = supabase.table("work_schedules").select("inspection_set_id").eq("id", wa.data[0]["schedule_id"]).limit(1).execute()
+    if not ws.data:
+        return None
+    return ws.data[0].get("inspection_set_id")  # None 가능
+
+
+def get_items_for_assignment(assignment_id: str) -> dict:
+    """배정 → 세트 → 항목. inspect.html 이 읽는 {data:{items:[...]}} 형태. 없으면 404."""
+    set_id = resolve_set_id_for_assignment(assignment_id)
+    if not set_id:
+        raise InspectionSetsSvcError(404, "배정된 점검을 찾을 수 없습니다")
+    supabase = get_supabase()
+    res = (
+        supabase.table("inspection_set_items")
+        .select("id, item_seq, item_name, description, risk_type, is_required, check_type")
+        .eq("inspection_set_id", set_id)
+        .neq("is_active", False)
+        .order("item_seq")
+        .execute()
+    )
+    return {"status": "success", "data": {"items": res.data or []}}

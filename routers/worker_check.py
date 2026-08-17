@@ -1,8 +1,11 @@
 """
-작업자 현장 점검 제출 API — v1.3.0
+작업자 현장 점검 제출 API — v1.4.0
 
+v1.4.0 (2026-08-17, Goal G-mswtdmi1-420f8c):
+  [FIX] 참조 검증을 assignment_id 3홉(work_assignments→work_schedules→inspection_set_id)으로 교체.
+        safety_inspections.assignment_id 저장.
 v1.3.0 (2026-08-17, Goal G-mswtdmi1-420f8c — 검토 ①ㄴ·②·⑤):
-  [FIX] 제출된 inspection_set_item_id 를 검증한다 — 이 점검 세트(schedule_id)의 항목만 참조로 인정.
+  [FIX] 제출된 inspection_set_item_id 를 검증한다 — 이 점검 세트의 항목만 참조로 인정.
         아닌 참조는 버리고 경고(가공 차단은 FK/검증 문제이지 수용만으로는 안 된다).
   [FIX] 참조가 맞으면 item_name 을 서버 마스터 값으로 덮어쓴다 — 이름 위조 경로 제거.
   [FIX] 경고 로그에서 phone 제거(inspection_id 로 추적).
@@ -21,6 +24,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from services import inspection_sets_svc as _iss
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/worker-check", tags=["WorkerCheck"])
@@ -60,6 +64,7 @@ class CheckSubmitBody(BaseModel):
     worker_id: Optional[str] = None
     factory_id: Optional[str] = None
     schedule_id: Optional[str] = None
+    assignment_id: Optional[str] = None
     inspection_type: Optional[str] = None  # BEFORE_WORK | BEFORE_WORK_CON
     asset_name: Optional[str] = None       # 설비명
     items: List[CheckItem]
@@ -107,6 +112,7 @@ def submit_check(
         "inspector_id": inspector_id,
         "inspection_date": now,
         "status_code": status_code,
+        "assignment_id": body.assignment_id,
     }).execute()
 
     if not ins_res.data:
@@ -114,28 +120,22 @@ def submit_check(
 
     inspection_id = ins_res.data[0]["id"]
 
-    # 3. 참조 검증(가공 차단): 이 점검 세트(schedule_id)에 속한 항목만 참조로 인정하고,
-    #    참조가 맞으면 item_name 을 서버 마스터 값으로 덮어썸(이름 위조 경로 제거).
+    # 3. 참조 검증(가공 차단): assignment_id 3홉으로 세트 항목만 참조로 인정하고,
+    #    참조가 맞으면 item_name 을 서버 마스터 값으로 덮어씀(이름 위조 경로 제거).
     allowed: dict = {}
-    if body.schedule_id:
-        arows = (
-            supabase.table("inspection_set_items")
-            .select("id, item_name")
-            .eq("inspection_set_id", body.schedule_id)
-            .execute()
-            .data
-            or []
-        )
+    set_id = _iss.resolve_set_id_for_assignment(body.assignment_id) if body.assignment_id else None
+    if set_id:
+        arows = supabase.table("inspection_set_items").select("id, item_name").eq("inspection_set_id", set_id).execute().data or []
         allowed = {r["id"]: r.get("item_name") for r in arows}
 
     result_rows = []
     missing_ref = 0      # 참조 없음(구버전 앱)
     invalid_ref = 0      # 이 점검 세트의 항목이 아님 → 참조 버림
-    unvalidated = 0      # schedule_id 없어 검증 불가 → 참조 유지
+    unvalidated = 0      # assignment_id 없어 검증 불가 → 참조 유지
     for item in body.items:
         ref = item.inspection_set_item_id
         name = item.name
-        if ref and body.schedule_id:
+        if ref and set_id:
             if ref in allowed:
                 name = allowed[ref] or item.name   # ② 이름을 서버 마스터로
             else:

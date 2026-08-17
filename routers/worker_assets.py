@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from services import inspection_sets_svc as _iss
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["WorkerAssets"])
@@ -197,6 +198,14 @@ def list_work_assignments(
         ]
 
     return {"status": "success", "data": {"items": items, "total": len(items)}}
+
+
+@router.get("/work-assignments/{assignment_id}/items")
+def get_work_assignment_items(assignment_id: str):
+    try:
+        return _iss.get_items_for_assignment(assignment_id)
+    except _iss.InspectionSetsSvcError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
 
 
 # ══════════════════════════════════════════
