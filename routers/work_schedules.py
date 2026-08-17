@@ -1,14 +1,16 @@
 """
-work_schedules.py — v1.2.3
+work_schedules.py — v1.2.4
+
+v1.2.4 (2026-08-17, LEDGER ㉙):
+  [ADD] GET /work-schedules 에 obligation_type · planned_date_from · planned_date_to 필터.
+        점검 캘린더/작업일정 화면이 보내던 계획일 범위·의무구분 필터가 서버에 선언되지
+        않아 무시되던 것 해소. planned_date · obligation_type 은 실제 컬럼(실측 확인).
 
 v1.2.3 (2026-08-17, LEDGER ㉑·㉘·㉝):
   [ADD] PATCH /work-schedules/{schedule_id} — 단건 갱신(담당자 배정·상태 등).
   [ADD] POST  /work-schedules/bulk-assign   — 선택 일정 일괄 담당자 배정.
-        대시보드 [담당자 배정]·점검 캘린더 [완료처리]·작업일정 [담당자 배정]이 모두
-        존재하지 않는 개별 갱신 라우트를 불러 404 를 성공으로 오표시하던 것을 해소.
-        화면 별칭 assignee_id → assigned_user_id 흡수. work_assignments 동기화는
-        batch-update 와 동일 로직(_apply_one_update)을 재사용.
-        [주의] 완료처리의 "다음 회차 자동 생성"은 별도 기능 — 이 라우트는 상태만 저장한다.
+        대시보드 [담당자 배정]·점검 캘린더 [완료처리]·작업일정 [담당자 배정] 공통 경로.
+        화면 별칭 assignee_id → assigned_user_id 흡수. work_assignments 동기화 재사용.
 
 v1.2.2 (2026-08-17):
   [FIX] GET /work-schedules/{schedule_id} — 비-uuid 경로(/summary 등) 404 처리(22P02 500 방지).
@@ -37,7 +39,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/work-schedules", tags=["work_schedules"])
 
-VERSION = "1.2.3"
+VERSION = "1.2.4"
 
 
 def _now() -> str:
@@ -229,27 +231,35 @@ def confirm_schedules(factory_id: str, body: ConfirmBody):
 
 @router.get("")
 def get_work_schedules(
-    company_id:   Optional[str]  = Query(None, description="회사 ID 필터"),
-    factory_id:   Optional[str]  = Query(None, description="시설 ID 필터"),
-    status_code:  Optional[str]  = Query(None, description="상태코드 필터"),
-    source_type:  Optional[str]  = Query(None, description="소스 타입 필터 (MANUAL/LAW_ENGINE)"),
-    is_assigned:  Optional[bool] = Query(None, description="배정 여부 필터. false=미배정, true=배정완료"),
-    page:         int            = Query(1, ge=1, description="페이지 번호"),
-    size:         int            = Query(20, ge=1, le=500, description="페이지 크기"),
+    company_id:        Optional[str]  = Query(None, description="회사 ID 필터"),
+    factory_id:        Optional[str]  = Query(None, description="시설 ID 필터"),
+    status_code:       Optional[str]  = Query(None, description="상태코드 필터"),
+    source_type:       Optional[str]  = Query(None, description="소스 타입 필터 (MANUAL/LAW_ENGINE)"),
+    obligation_type:   Optional[str]  = Query(None, description="의무 구분 필터 (v1.2.4)"),
+    is_assigned:       Optional[bool] = Query(None, description="배정 여부 필터. false=미배정, true=배정완료"),
+    planned_date_from: Optional[str]  = Query(None, description="계획일 시작 YYYY-MM-DD (v1.2.4)"),
+    planned_date_to:   Optional[str]  = Query(None, description="계획일 종료 YYYY-MM-DD (v1.2.4)"),
+    page:              int            = Query(1, ge=1, description="페이지 번호"),
+    size:              int            = Query(20, ge=1, le=500, description="페이지 크기"),
 ):
-    """v1.2.1: 업무 일정 목록 조회. is_assigned 필터, size 상한 500."""
+    """v1.2.4: 업무 일정 목록 조회. is_assigned·obligation_type·planned_date 범위 필터, size 상한 500."""
     supabase = get_supabase()
     q = supabase.table("work_schedules").select("*", count="exact")
 
-    if company_id:   q = q.eq("company_id",  company_id)
-    if factory_id:   q = q.eq("factory_id",  factory_id)
-    if status_code:  q = q.eq("status_code", status_code)
-    if source_type:  q = q.eq("source_type", source_type)
+    if company_id:      q = q.eq("company_id",      company_id)
+    if factory_id:      q = q.eq("factory_id",      factory_id)
+    if status_code:     q = q.eq("status_code",     status_code)
+    if source_type:     q = q.eq("source_type",     source_type)
+    if obligation_type: q = q.eq("obligation_type", obligation_type)
 
     if is_assigned is False:
         q = q.is_("assigned_user_id", "null")
     elif is_assigned is True:
         q = q.not_.is_("assigned_user_id", "null")
+
+    # v1.2.4 (LEDGER ㉙): 화면이 보내던 계획일 범위 필터를 실제 적용
+    if planned_date_from: q = q.gte("planned_date", planned_date_from)
+    if planned_date_to:   q = q.lte("planned_date", planned_date_to)
 
     offset = (page - 1) * size
     result = q.order("created_at", desc=True).range(offset, offset + size - 1).execute()
