@@ -30,6 +30,7 @@ API:
 """
 import base64
 import logging
+import uuid
 from typing import List, Optional
 from datetime import datetime, timezone
 
@@ -50,6 +51,14 @@ STORAGE_BUCKET = "signatures"
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
 
 
 # ── Pydantic 모델 ────────────────────────────────────────
@@ -410,6 +419,9 @@ def list_tbm(
 
 @router.get("/{tbm_id}")
 def get_tbm(tbm_id: str):
+    # 비-uuid 경로(/summary 등)가 catch-all 에 잡혀 500(22P02) 나던 것 방지
+    if not _is_uuid(tbm_id):
+        raise HTTPException(status_code=404, detail="TBM을 찾을 수 없습니다.")
     supabase = get_supabase()
     res = supabase.table("tbm_meetings").select(
         "*, groups(group_name), teams(team_name)"
