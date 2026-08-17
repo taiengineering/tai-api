@@ -99,6 +99,12 @@ def get_factory_inspection_sets(factory_id: str):
     return _call(svc.get_factory_sets, factory_id)
 
 
+# 주의: 아래 /{inspection_set_id} 보다 위에 둠 — 작업자앱 inspect.html 이 부르는 항목 조회.
+@router.get("/{inspection_set_id}/items")
+def get_inspection_set_items(inspection_set_id: str):
+    return _call(svc.get_set_items, inspection_set_id)
+
+
 @router.get("/{inspection_set_id}")
 def get_inspection_set(inspection_set_id: str):
     return _call(svc.get_set_by_id, inspection_set_id)

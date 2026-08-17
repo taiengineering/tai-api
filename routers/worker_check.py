@@ -1,6 +1,9 @@
 """
-작업자 현장 점검 제출 API — v1.1.0
+작업자 현장 점검 제출 API — v1.2.0
 
+v1.2.0 (2026-08-17, Goal G-mswtdmi1-420f8c):
+  [ADD] items[].inspection_set_item_id 수용·저장 — 가공 항목 구조적 차단(참조 저장).
+        없는 제출은 경고 로그만 남김(구버전 앱 비파괴). 필수화는 2단계.
 v1.1.0 (2026-04-24):
   [ADD] Authorization 검증 (Optional — 있으면 검증, 없으면 phone 기반)
   [ADD] items[].photo_urls 필드 수용
@@ -49,6 +52,7 @@ class CheckItem(BaseModel):
     memo: Optional[str] = None
     note: Optional[str] = None       # 구버전 호환
     photo_urls: Optional[List[str]] = None
+    inspection_set_item_id: Optional[str] = None  # v1.2.0 — 항목 참조(가공 항목 차단)
 
 
 class CheckSubmitBody(BaseModel):
@@ -114,6 +118,7 @@ def submit_check(
 
     # 3. 항목별 결과 저장
     result_rows = []
+    missing_ref = 0
     for item in body.items:
         row_data = {
             "inspection_id": inspection_id,
@@ -123,12 +128,22 @@ def submit_check(
             "note": item.memo or item.note or "",
             "checked_at": now,
         }
+        if item.inspection_set_item_id:
+            row_data["inspection_set_item_id"] = item.inspection_set_item_id
+        else:
+            missing_ref += 1
         if item.photo_urls:
             row_data["photo_urls"] = item.photo_urls
         result_rows.append(row_data)
 
     if result_rows:
         supabase.table("safety_inspection_results").insert(result_rows).execute()
+
+    if missing_ref:
+        log.warning(
+            f"[WorkerCheck] inspection_set_item_id 누락 {missing_ref}/{len(body.items)}건 "
+            f"— 이름만 저장(가공 항목 소지). inspection_id={inspection_id} phone={clean_phone}"
+        )
 
     issue_items = [i.name for i in body.items if i.result == "bad"]
     log.info(f"[WorkerCheck] 저장 inspection_id={inspection_id} phone={clean_phone} issues={issue_items}")
