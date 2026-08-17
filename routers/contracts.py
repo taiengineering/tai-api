@@ -4,6 +4,11 @@
 TAI Contracts 라우터 - 견적/계약 관리
 전역변수: contract_status / service_type / saas_plan
 
+v2.3.0 (2026-08-18):
+  - 인증·회사 스코프 가드 (LEDGER §38·§35 / P13)
+    비-ALL: 목록은 토큰 company_id 강제, 단건은 타사면 404.
+    계약·견적 쓰기는 ALL 전용(403). 데모 제외는 ALL 전체목록만.
+
 v2.2.0 (2026-08-12):
   - get_contracts(계약 전체목록, company_id 미지정)에서 데모(체험) 테넌트 계약 제외
     데모 회사(is_demo) 소속 계약 id 를 조회해 목록에서 neq 로 제외(회사 스코프 조회 시엔 유지)
@@ -38,11 +43,12 @@ POST   /contracts/{id}/cancel    계약 취소 → CANCELLED
 GET    /contracts/{id}/history   상태 변경 이력
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timedelta
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
 import random
 
 router = APIRouter(tags=["contracts"])
@@ -74,6 +80,41 @@ def _demo_contract_ids(supabase) -> list:
     except Exception as e:
         print(f"[CONTRACTS] 데모 계약 조회 실패: {e}")
         return []
+
+
+def _scope(supabase, role_code) -> str:
+    """role_data_scope.scope_type. 미정의는 가장 좁게(TEAM). leader_scope 정본과 동일."""
+    if not role_code:
+        return "TEAM"
+    try:
+        r = supabase.table("role_data_scope").select("scope_type").eq("role_code", role_code).limit(1).execute()
+        return (r.data[0]["scope_type"] if r.data and r.data[0].get("scope_type") else "TEAM")
+    except Exception:
+        return "TEAM"
+
+
+def _is_admin(ctx_scope) -> bool:
+    return ctx_scope == "ALL"  # 플랫폼 총관리자만 전사
+
+
+def _require_admin(current: dict, supabase) -> None:
+    if not _is_admin(_scope(supabase, current.get("role_code"))):
+        raise HTTPException(status_code=403, detail="권한이 없습니다")
+
+
+def _ensure_own_company(resource_company_id, current: dict, supabase, not_found: str) -> None:
+    """비-ALL 이 타사 자원을 보면 404(존재 숨김)."""
+    if _is_admin(_scope(supabase, current.get("role_code"))):
+        return
+    token_cid = current.get("company_id")
+    if not token_cid or resource_company_id != token_cid:
+        raise HTTPException(status_code=404, detail=not_found)
+
+
+def _empty_page(page: int, size: int) -> dict:
+    return {"status": "success", "data": {
+        "items": [], "total": 0, "page": page, "size": size, "total_pages": 0,
+    }}
 
 
 # ============================================================
@@ -153,8 +194,13 @@ def get_quotes(
     service_type: Optional[str] = Query(default=None),
     status_code:  Optional[str] = Query(default=None),
     search:       Optional[str] = Query(default=None),
+    current:      dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
+    if not _is_admin(_scope(supabase, current.get("role_code"))):
+        company_id = current.get("company_id")
+        if not company_id:
+            return _empty_page(page, size)
     query = supabase.table("quotes").select("*", count="exact")
 
     if company_id:   query = query.eq("company_id", company_id)
@@ -176,8 +222,9 @@ def get_quotes(
 
 
 @router.post("/quotes")
-def create_quote(req: QuoteCreate):
+def create_quote(req: QuoteCreate, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _require_admin(current, supabase)
 
     company = supabase.table("companies")\
         .select("id").eq("id", req.company_id).single().execute()
@@ -217,17 +264,19 @@ def create_quote(req: QuoteCreate):
 
 
 @router.get("/quotes/{quote_id}")
-def get_quote(quote_id: str):
+def get_quote(quote_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     res = supabase.table("quotes").select("*").eq("id", quote_id).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="견적을 찾을 수 없습니다")
+    _ensure_own_company(res.data.get("company_id"), current, supabase, "견적을 찾을 수 없습니다")
     return {"status": "success", "data": res.data}
 
 
 @router.patch("/quotes/{quote_id}")
-def update_quote(quote_id: str, req: QuoteUpdate):
+def update_quote(quote_id: str, req: QuoteUpdate, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _require_admin(current, supabase)
 
     existing = supabase.table("quotes")\
         .select("id, status_code").eq("id", quote_id).single().execute()
@@ -257,9 +306,10 @@ def update_quote(quote_id: str, req: QuoteUpdate):
 
 
 @router.post("/quotes/{quote_id}/confirm")
-def confirm_quote(quote_id: str):
+def confirm_quote(quote_id: str, current: dict = Depends(get_current_user)):
     """견적 확정 → CONFIRMED"""
     supabase = get_supabase()
+    _require_admin(current, supabase)
     q = supabase.table("quotes").select("status_code").eq("id", quote_id).single().execute()
     if not q.data:
         raise HTTPException(status_code=404, detail="견적을 찾을 수 없습니다")
@@ -275,11 +325,12 @@ def confirm_quote(quote_id: str):
 
 
 @router.post("/quotes/{quote_id}/convert")
-def convert_to_contract(quote_id: str):
+def convert_to_contract(quote_id: str, current: dict = Depends(get_current_user)):
     """견적 → 계약 전환 → PENDING_PAYMENT
     v2.0.0: service_type='DIAGNOSIS'이면 quotes.items → contracts.items 복사
     """
     supabase = get_supabase()
+    _require_admin(current, supabase)
     q = supabase.table("quotes").select("*").eq("id", quote_id).single().execute()
     if not q.data:
         raise HTTPException(status_code=404, detail="견적을 찾을 수 없습니다")
@@ -334,12 +385,18 @@ def get_contracts(
     status_code:  Optional[str] = Query(default=None),
     search:       Optional[str] = Query(default=None),
     expiring:     bool = Query(default=False),
+    current:      dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
+    admin = _is_admin(_scope(supabase, current.get("role_code")))
+    if not admin:
+        company_id = current.get("company_id")
+        if not company_id:
+            return _empty_page(page, size)
     query = supabase.table("contracts").select("*", count="exact")
 
-    # 데모(체험) 테넌트 계약 제외 — 회사 스코프 조회가 아닐 때만(어드민 전체목록)
-    if not company_id:
+    # 데모(체험) 테넌트 계약 제외 — ALL 전체목록에서만(회사 스코프 조회 시엔 유지)
+    if admin and not company_id:
         for cid in _demo_contract_ids(supabase):
             query = query.neq("id", cid)
 
@@ -366,8 +423,9 @@ def get_contracts(
 
 
 @router.post("/contracts")
-def create_contract(req: ContractCreate):
+def create_contract(req: ContractCreate, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _require_admin(current, supabase)
     company = supabase.table("companies")\
         .select("id").eq("id", req.company_id).single().execute()
     if not company.data:
@@ -403,17 +461,19 @@ def create_contract(req: ContractCreate):
 
 
 @router.get("/contracts/{contract_id}")
-def get_contract(contract_id: str):
+def get_contract(contract_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     res = supabase.table("contracts").select("*").eq("id", contract_id).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="계약을 찾을 수 없습니다")
+    _ensure_own_company(res.data.get("company_id"), current, supabase, "계약을 찾을 수 없습니다")
     return {"status": "success", "data": res.data}
 
 
 @router.patch("/contracts/{contract_id}")
-def update_contract(contract_id: str, req: ContractUpdate):
+def update_contract(contract_id: str, req: ContractUpdate, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _require_admin(current, supabase)
     existing = supabase.table("contracts")\
         .select("id").eq("id", contract_id).single().execute()
     if not existing.data:
@@ -438,7 +498,7 @@ def update_contract(contract_id: str, req: ContractUpdate):
 # ──────────────────────────────────────────────────────────────
 
 @router.patch("/contracts/{contract_id}/status")
-def update_contract_status(contract_id: str, req: ContractStatusUpdate):
+def update_contract_status(contract_id: str, req: ContractStatusUpdate, current_user: dict = Depends(get_current_user)):
     """
     계약 상태 변경 래퍼 (프론트엔드 단일 엔드포인트 호환).
 
@@ -448,6 +508,7 @@ def update_contract_status(contract_id: str, req: ContractStatusUpdate):
       CANCELLED → cancel_contract() 로직 (모든 상태 → CANCELLED)
     """
     supabase = get_supabase()
+    _require_admin(current_user, supabase)
     c = supabase.table("contracts").select("*").eq("id", contract_id).single().execute()
     if not c.data:
         raise HTTPException(status_code=404, detail="계약을 찾을 수 없습니다")
@@ -526,11 +587,12 @@ def update_contract_status(contract_id: str, req: ContractStatusUpdate):
 # ============================================================
 
 @router.post("/contracts/{contract_id}/activate")
-def activate_contract(contract_id: str):
+def activate_contract(contract_id: str, current: dict = Depends(get_current_user)):
     """PENDING_PAYMENT → ACTIVE + 회사 상태 ACTIVE
     v2.0.0: DIAGNOSIS 계약도 동일하게 ACTIVE 처리 (end_date=None → 영구)
     """
     supabase = get_supabase()
+    _require_admin(current, supabase)
     c = supabase.table("contracts").select("*").eq("id", contract_id).single().execute()
     if not c.data:
         raise HTTPException(status_code=404, detail="계약을 찾을 수 없습니다")
@@ -554,9 +616,10 @@ def activate_contract(contract_id: str):
 
 
 @router.post("/contracts/{contract_id}/payment")
-def confirm_payment(contract_id: str, req: PaymentConfirm):
+def confirm_payment(contract_id: str, req: PaymentConfirm, current: dict = Depends(get_current_user)):
     """입금 확인"""
     supabase = get_supabase()
+    _require_admin(current, supabase)
     c = supabase.table("contracts").select("id").eq("id", contract_id).single().execute()
     if not c.data:
         raise HTTPException(status_code=404, detail="계약을 찾을 수 없습니다")
@@ -572,9 +635,10 @@ def confirm_payment(contract_id: str, req: PaymentConfirm):
 
 
 @router.post("/contracts/{contract_id}/suspend")
-def suspend_contract(contract_id: str, req: SuspendRequest):
+def suspend_contract(contract_id: str, req: SuspendRequest, current: dict = Depends(get_current_user)):
     """ACTIVE → SUSPENDED"""
     supabase = get_supabase()
+    _require_admin(current, supabase)
     c = supabase.table("contracts").select("status_code").eq("id", contract_id).single().execute()
     if not c.data:
         raise HTTPException(status_code=404, detail="계약을 찾을 수 없습니다")
@@ -593,9 +657,10 @@ def suspend_contract(contract_id: str, req: SuspendRequest):
 
 
 @router.post("/contracts/{contract_id}/cancel")
-def cancel_contract(contract_id: str, req: CancelRequest):
+def cancel_contract(contract_id: str, req: CancelRequest, current: dict = Depends(get_current_user)):
     """계약 취소 → CANCELLED"""
     supabase = get_supabase()
+    _require_admin(current, supabase)
     c = supabase.table("contracts").select("status_code").eq("id", contract_id).single().execute()
     if not c.data:
         raise HTTPException(status_code=404, detail="계약을 찾을 수 없습니다")
@@ -615,12 +680,13 @@ def cancel_contract(contract_id: str, req: CancelRequest):
 
 
 @router.get("/contracts/{contract_id}/history")
-def get_contract_history(contract_id: str):
+def get_contract_history(contract_id: str, current: dict = Depends(get_current_user)):
     """계약 상태 변경 이력"""
     supabase = get_supabase()
     c = supabase.table("contracts").select("*").eq("id", contract_id).single().execute()
     if not c.data:
         raise HTTPException(status_code=404, detail="계약을 찾을 수 없습니다")
+    _ensure_own_company(c.data.get("company_id"), current, supabase, "계약을 찾을 수 없습니다")
 
     d = c.data
     history = [{"status": "CREATED", "label": "계약 생성", "at": d.get("created_at")}]
