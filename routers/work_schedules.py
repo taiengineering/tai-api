@@ -1,34 +1,30 @@
 """
-work_schedules.py — v1.2.2
+work_schedules.py — v1.2.3
+
+v1.2.3 (2026-08-17, LEDGER ㉑·㉘·㉝):
+  [ADD] PATCH /work-schedules/{schedule_id} — 단건 갱신(담당자 배정·상태 등).
+  [ADD] POST  /work-schedules/bulk-assign   — 선택 일정 일괄 담당자 배정.
+        대시보드 [담당자 배정]·점검 캘린더 [완료처리]·작업일정 [담당자 배정]이 모두
+        존재하지 않는 개별 갱신 라우트를 불러 404 를 성공으로 오표시하던 것을 해소.
+        화면 별칭 assignee_id → assigned_user_id 흡수. work_assignments 동기화는
+        batch-update 와 동일 로직(_apply_one_update)을 재사용.
+        [주의] 완료처리의 "다음 회차 자동 생성"은 별도 기능 — 이 라우트는 상태만 저장한다.
 
 v1.2.2 (2026-08-17):
-  [FIX] GET /work-schedules/{schedule_id} — schedule_id uuid 검증 추가.
-        존재하지 않는 /work-schedules/summary 같은 비-uuid 경로가 catch-all
-        {schedule_id} 에 잡혀 .eq("id","summary") → 22P02(invalid uuid) → 500 이
-        운영에서 발생. uuid 가 아니면 404 로 응답한다(크래시·에러로그 방지).
-        [별건] /summary 가 필요한 엔드포인트라면 별도 구현 필요(현재 404).
-
-v1.2.1 (2026-05-26):
-  [FIX] GET /work-schedules — size 상한 100→500 변경
-        대시보드 일별 차트 집계에서 size=500 요청 시 422 발생 수정
-
-v1.2.0 (2026-04-13):
-  [ADD] GET /work-schedules — is_assigned, company_id, factory_id, status_code, page, size 필터 지원
-        - is_assigned=false → assigned_user_id IS NULL (미배정 건 조회)
-        - is_assigned=true  → assigned_user_id IS NOT NULL
-        대시보드 미배정 경고 카드에서 사용
-
-v1.1.0 (2026-04-07):
-  [ADD] PATCH /work-schedules/batch-update   — 복수 건 일괄 업데이트
-  [ADD] POST  /work-schedules/confirm/{factory_id} — 검토 확정
+  [FIX] GET /work-schedules/{schedule_id} — 비-uuid 경로(/summary 등) 404 처리(22P02 500 방지).
+v1.2.1 (2026-05-26): GET size 상한 100→500.
+v1.2.0 (2026-04-13): GET 필터(is_assigned 등).
+v1.1.0 (2026-04-07): PATCH /batch-update, POST /confirm/{factory_id}.
 
 API:
   GET   /work-schedules                              전체 목록 (필터 지원)
   GET   /work-schedules/factory/{factory_id}         공장별 목록
   GET   /work-schedules/inspection-set/{id}          점검세트별 목록
-  PATCH /work-schedules/batch-update                 일괄 업데이트  ← v1.1.0
-  POST  /work-schedules/confirm/{factory_id}         검토 확정     ← v1.1.0
+  PATCH /work-schedules/batch-update                 일괄 업데이트
+  POST  /work-schedules/bulk-assign                  일괄 담당자 배정  ← v1.2.3
+  POST  /work-schedules/confirm/{factory_id}         검토 확정
   GET   /work-schedules/{schedule_id}                단건 조회
+  PATCH /work-schedules/{schedule_id}                단건 갱신        ← v1.2.3
 """
 import uuid
 
@@ -41,7 +37,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/work-schedules", tags=["work_schedules"])
 
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 
 
 def _now() -> str:
@@ -54,6 +50,45 @@ def _is_uuid(value: str) -> bool:
         return True
     except (ValueError, AttributeError, TypeError):
         return False
+
+
+def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> bool:
+    """단일 work_schedules 행 갱신 + assigned_user_id 변경 시 work_assignments 동기화.
+
+    fields 에 'assigned_user_id' 키가 있으면(None 포함) 배정 변경으로 본다(batch-update 와 동일).
+    지원 필드: is_excluded · excluded_reason · custom_cycle · status_code · resolved_at · assigned_user_id.
+    """
+    payload: dict = {"updated_at": now}
+    for k in ("is_excluded", "excluded_reason", "custom_cycle", "status_code", "resolved_at"):
+        if fields.get(k) is not None:
+            payload[k] = fields[k]
+    assign_changed = "assigned_user_id" in fields
+    if assign_changed:
+        payload["assigned_user_id"] = fields["assigned_user_id"]
+
+    res = supabase.table("work_schedules").update(payload).eq("id", schedule_id).execute()
+    updated = bool(res.data)
+
+    if assign_changed:
+        auid = fields["assigned_user_id"]
+        if auid:
+            existing = supabase.table("work_assignments").select("id") \
+                .eq("schedule_id", schedule_id).eq("status_code", "PENDING").limit(1).execute()
+            if existing.data:
+                supabase.table("work_assignments").update({
+                    "assigned_user_id": auid, "updated_at": now,
+                }).eq("id", existing.data[0]["id"]).execute()
+            else:
+                supabase.table("work_assignments").insert({
+                    "schedule_id": schedule_id, "assigned_user_id": auid,
+                    "scheduled_date": datetime.now().date().isoformat(),
+                    "status_code": "PENDING", "created_at": now,
+                }).execute()
+        else:
+            supabase.table("work_assignments").update({
+                "status_code": "CANCELLED", "updated_at": now,
+            }).eq("schedule_id", schedule_id).eq("status_code", "PENDING").execute()
+    return updated
 
 
 # ── Pydantic 모델 ─────────────────────────────────────────────
@@ -74,73 +109,64 @@ class ConfirmBody(BaseModel):
     reviewed_by: str   # user uuid
 
 
+class SchedulePatchBody(BaseModel):
+    assigned_user_id: Optional[str]  = None
+    assignee_id:      Optional[str]  = None   # 화면 별칭 → assigned_user_id
+    status_code:      Optional[str]  = None
+    status:           Optional[str]  = None   # 화면 별칭 → status_code
+    is_excluded:      Optional[bool] = None
+    excluded_reason:  Optional[str]  = None
+    custom_cycle:     Optional[str]  = None
+    resolved_at:      Optional[str]  = None
+
+
+class BulkAssignBody(BaseModel):
+    ids:              List[str]
+    assigned_user_id: Optional[str] = None
+    assignee_id:      Optional[str] = None   # 화면 별칭
+
+
 # ── 고정경로 먼저 선언 (/{schedule_id} 보다 앞에) ──────────────
 
 @router.patch("/batch-update")
 def batch_update_schedules(body: BatchUpdateBody):
     """
     v1.1.0: 복수 work_schedules 일괄 업데이트.
-
     - is_excluded / excluded_reason / custom_cycle 업데이트
-    - assigned_user_id 있으면 work_assignments에도 반영
-      · 기존 PENDING 배정 있으면 UPDATE, 없으면 INSERT
-      · null 전달 시 기존 배정 취소(CANCELLED)
+    - assigned_user_id 있으면 work_assignments에도 반영(PENDING UPDATE/INSERT, null→CANCELLED)
     """
     supabase = get_supabase()
     now      = _now()
     updated  = 0
 
     for item in body.updates:
-        # work_schedules 업데이트할 필드만 추려냄
-        payload: dict = {"updated_at": now}
+        fields: dict = {}
         if item.is_excluded is not None:
-            payload["is_excluded"] = item.is_excluded
+            fields["is_excluded"] = item.is_excluded
         if item.excluded_reason is not None:
-            payload["excluded_reason"] = item.excluded_reason
+            fields["excluded_reason"] = item.excluded_reason
         if item.custom_cycle is not None:
-            payload["custom_cycle"] = item.custom_cycle
-        # assigned_user_id: 명시적으로 전달된 경우만 (None이 아닌 것 포함)
-        assign_changed = "assigned_user_id" in item.__fields_set__
-        if assign_changed:
-            payload["assigned_user_id"] = item.assigned_user_id
-
-        # work_schedules UPDATE
-        res = supabase.table("work_schedules").update(payload).eq("id", item.id).execute()
-        if res.data:
+            fields["custom_cycle"] = item.custom_cycle
+        if "assigned_user_id" in item.__fields_set__:
+            fields["assigned_user_id"] = item.assigned_user_id
+        if _apply_one_update(supabase, item.id, fields, now):
             updated += 1
 
-        # work_assignments 처리
-        if assign_changed:
-            if item.assigned_user_id:
-                # 기존 PENDING 배정 조회
-                existing = supabase.table("work_assignments") \
-                    .select("id") \
-                    .eq("schedule_id", item.id) \
-                    .eq("status_code", "PENDING") \
-                    .limit(1).execute()
+    return {"status": "success", "data": {"updated": updated}}
 
-                if existing.data:
-                    # 기존 배정 UPDATE
-                    supabase.table("work_assignments").update({
-                        "assigned_user_id": item.assigned_user_id,
-                        "updated_at": now,
-                    }).eq("id", existing.data[0]["id"]).execute()
-                else:
-                    # 신규 INSERT
-                    supabase.table("work_assignments").insert({
-                        "schedule_id":      item.id,
-                        "assigned_user_id": item.assigned_user_id,
-                        "scheduled_date":   datetime.now().date().isoformat(),
-                        "status_code":      "PENDING",
-                        "created_at":       now,
-                    }).execute()
-            else:
-                # assigned_user_id = null → 기존 PENDING 배정 취소
-                supabase.table("work_assignments").update({
-                    "status_code": "CANCELLED",
-                    "updated_at":  now,
-                }).eq("schedule_id", item.id).eq("status_code", "PENDING").execute()
 
+@router.post("/bulk-assign")
+def bulk_assign_schedules(body: BulkAssignBody):
+    """v1.2.3: 선택 일정 일괄 담당자 배정(작업일정 §33). ids[] + assignee_id/assigned_user_id."""
+    supabase = get_supabase()
+    now = _now()
+    auid = body.assigned_user_id if body.assigned_user_id is not None else body.assignee_id
+    updated = 0
+    for sid in body.ids:
+        if not _is_uuid(sid):
+            continue
+        if _apply_one_update(supabase, sid, {"assigned_user_id": auid}, now):
+            updated += 1
     return {"status": "success", "data": {"updated": updated}}
 
 
@@ -148,17 +174,12 @@ def batch_update_schedules(body: BatchUpdateBody):
 def confirm_schedules(factory_id: str, body: ConfirmBody):
     """
     v1.1.0: 검토 완료 후 스케줄 확정.
-
-    1. factory_id의 is_excluded=FALSE 스케줄 전체 → reviewed_at / reviewed_by 업데이트
-    2. custom_cycle 있는 건 → cycle_code = custom_cycle 로 반영
-    3. is_excluded=TRUE 건 → status_code='EXCLUDED', is_active=FALSE
-    4. 결과: { confirmed, excluded, created }
-       (created는 향후 inspection_schedule 자동생성 예약 — 현재 0 반환)
+    1. is_excluded=FALSE → reviewed_at/reviewed_by, custom_cycle→cycle_code
+    2. is_excluded=TRUE → status_code='EXCLUDED', is_active=FALSE
     """
     supabase = get_supabase()
     now      = _now()
 
-    # ── 1. is_excluded = FALSE: 확정 처리 ──────────────────────
     active_res = supabase.table("work_schedules") \
         .select("id, custom_cycle") \
         .eq("factory_id", factory_id) \
@@ -174,14 +195,11 @@ def confirm_schedules(factory_id: str, body: ConfirmBody):
             "reviewed_by": body.reviewed_by,
             "updated_at":  now,
         }
-        # custom_cycle 있으면 cycle_code도 덮어쓰기
         if row.get("custom_cycle"):
             update_payload["cycle_code"] = row["custom_cycle"]
-
         supabase.table("work_schedules").update(update_payload).eq("id", row["id"]).execute()
         confirmed += 1
 
-    # ── 2. is_excluded = TRUE: EXCLUDED 처리 ───────────────────
     excluded_res = supabase.table("work_schedules") \
         .select("id") \
         .eq("factory_id", factory_id) \
@@ -203,11 +221,7 @@ def confirm_schedules(factory_id: str, body: ConfirmBody):
 
     return {
         "status": "success",
-        "data": {
-            "confirmed": confirmed,
-            "excluded":  excluded,
-            "created":   0,   # 향후 inspection_schedule 자동생성 시 업데이트
-        },
+        "data": {"confirmed": confirmed, "excluded": excluded, "created": 0},
     }
 
 
@@ -219,18 +233,11 @@ def get_work_schedules(
     factory_id:   Optional[str]  = Query(None, description="시설 ID 필터"),
     status_code:  Optional[str]  = Query(None, description="상태코드 필터"),
     source_type:  Optional[str]  = Query(None, description="소스 타입 필터 (MANUAL/LAW_ENGINE)"),
-    is_assigned:  Optional[bool] = Query(None, description="배정 여부 필터. false=미배정(assigned_user_id IS NULL), true=배정완료"),
+    is_assigned:  Optional[bool] = Query(None, description="배정 여부 필터. false=미배정, true=배정완료"),
     page:         int            = Query(1, ge=1, description="페이지 번호"),
     size:         int            = Query(20, ge=1, le=500, description="페이지 크기"),
 ):
-    """
-    v1.2.1: 업무 일정 목록 조회.
-
-    - is_assigned=false → 미배정 건 (assigned_user_id IS NULL)
-    - is_assigned=true  → 배정 완료 건 (assigned_user_id IS NOT NULL)
-    - 대시보드 미배정 경고 카드: GET /work-schedules?is_assigned=false&company_id=xxx
-    - size 상한 500 (대시보드 차트 집계용)
-    """
+    """v1.2.1: 업무 일정 목록 조회. is_assigned 필터, size 상한 500."""
     supabase = get_supabase()
     q = supabase.table("work_schedules").select("*", count="exact")
 
@@ -239,7 +246,6 @@ def get_work_schedules(
     if status_code:  q = q.eq("status_code", status_code)
     if source_type:  q = q.eq("source_type", source_type)
 
-    # is_assigned 필터: assigned_user_id 컬럼 기준
     if is_assigned is False:
         q = q.is_("assigned_user_id", "null")
     elif is_assigned is True:
@@ -302,3 +308,40 @@ def get_work_schedule(schedule_id: str):
         .execute()
     )
     return result.data
+
+
+@router.patch("/{schedule_id}")
+def patch_work_schedule(schedule_id: str, body: SchedulePatchBody):
+    """v1.2.3: 단건 갱신 — 담당자 배정(assignee_id/assigned_user_id)·상태(status_code) 등.
+
+    대시보드 [담당자 배정](㉑)·점검 캘린더 [완료처리](㉘)·작업일정 [담당자 배정](㉝) 공통 경로.
+    [주의] 완료처리의 "다음 회차 자동 생성"은 별도 기능이며 여기서 하지 않는다(상태만 저장).
+    """
+    if not _is_uuid(schedule_id):
+        raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
+    supabase = get_supabase()
+    now = _now()
+
+    fields: dict = {}
+    if "assigned_user_id" in body.__fields_set__:
+        fields["assigned_user_id"] = body.assigned_user_id
+    elif "assignee_id" in body.__fields_set__:
+        fields["assigned_user_id"] = body.assignee_id
+    if body.status_code is not None:
+        fields["status_code"] = body.status_code
+    elif body.status is not None:
+        fields["status_code"] = body.status
+    for k in ("is_excluded", "excluded_reason", "custom_cycle", "resolved_at"):
+        v = getattr(body, k)
+        if v is not None:
+            fields[k] = v
+
+    if not fields:
+        raise HTTPException(status_code=400, detail="변경할 필드가 없습니다")
+
+    updated = _apply_one_update(supabase, schedule_id, fields, now)
+    if not updated:
+        raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
+
+    row = supabase.table("work_schedules").select("*").eq("id", schedule_id).limit(1).execute()
+    return {"status": "success", "data": (row.data[0] if row.data else None)}
