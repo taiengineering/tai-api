@@ -1,10 +1,16 @@
 """
-작업자 현장 점검 제출 API — v1.1.0
+작업자 현장 점검 제출 API — v1.4.0
 
-v1.1.0 (2026-04-24):
-  [ADD] Authorization 검증 (Optional — 있으면 검증, 없으면 phone 기반)
-  [ADD] items[].photo_urls 필드 수용
-  [ADD] worker_id, factory_id, schedule_id, inspection_type 필드
+v1.4.0 (2026-08-17, Goal G-mswtdmi1-420f8c):
+  [FIX] 참조 검증을 assignment_id 3홉(work_assignments→work_schedules→inspection_set_id)으로 교체.
+        safety_inspections.assignment_id 저장.
+v1.3.0 (2026-08-17, Goal G-mswtdmi1-420f8c — 검토 ①ㄴ·②·⑤):
+  [FIX] 제출된 inspection_set_item_id 를 검증한다 — 이 점검 세트의 항목만 참조로 인정.
+        아닌 참조는 버리고 경고(가공 차단은 FK/검증 문제이지 수용만으로는 안 된다).
+  [FIX] 참조가 맞으면 item_name 을 서버 마스터 값으로 덮어쓴다 — 이름 위조 경로 제거.
+  [FIX] 경고 로그에서 phone 제거(inspection_id 로 추적).
+v1.2.0 (2026-08-17): items[].inspection_set_item_id 수용·저장.
+v1.1.0 (2026-04-24): Authorization(Optional)·photo_urls·worker_id/factory_id/schedule_id/inspection_type.
 
 API:
   POST /worker-check/submit   점검 결과 저장
@@ -18,6 +24,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from services import inspection_sets_svc as _iss
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/worker-check", tags=["WorkerCheck"])
@@ -49,6 +56,7 @@ class CheckItem(BaseModel):
     memo: Optional[str] = None
     note: Optional[str] = None       # 구버전 호환
     photo_urls: Optional[List[str]] = None
+    inspection_set_item_id: Optional[str] = None  # v1.2.0 — 항목 참조(가공 항목 차단)
 
 
 class CheckSubmitBody(BaseModel):
@@ -56,6 +64,7 @@ class CheckSubmitBody(BaseModel):
     worker_id: Optional[str] = None
     factory_id: Optional[str] = None
     schedule_id: Optional[str] = None
+    assignment_id: Optional[str] = None
     inspection_type: Optional[str] = None  # BEFORE_WORK | BEFORE_WORK_CON
     asset_name: Optional[str] = None       # 설비명
     items: List[CheckItem]
@@ -72,7 +81,7 @@ def submit_check(
     작업자 점검 제출.
     1. users 테이블에서 전화번호로 inspector_id 조회
     2. safety_inspections 점검 세션 생성
-    3. safety_inspection_results 항목별 결과 저장
+    3. 참조 검증 후 safety_inspection_results 항목별 결과 저장
     """
     supabase = get_supabase()
     now = datetime.now(timezone.utc).isoformat()
@@ -88,7 +97,6 @@ def submit_check(
         inspector_id = u.data[0]["id"]
         inspector_name = u.data[0].get("name", "")
     else:
-        # worker_registry fallback
         w = supabase.table("worker_registry").select("id, name").eq("phone", clean_phone).limit(1).execute()
         if w.data:
             inspector_id = w.data[0]["id"]
@@ -104,7 +112,7 @@ def submit_check(
         "inspector_id": inspector_id,
         "inspection_date": now,
         "status_code": status_code,
-        # asset_id 없으면 널로
+        "assignment_id": body.assignment_id,
     }).execute()
 
     if not ins_res.data:
@@ -112,17 +120,41 @@ def submit_check(
 
     inspection_id = ins_res.data[0]["id"]
 
-    # 3. 항목별 결과 저장
+    # 3. 참조 검증(가공 차단): assignment_id 3홉으로 세트 항목만 참조로 인정하고,
+    #    참조가 맞으면 item_name 을 서버 마스터 값으로 덮어씀(이름 위조 경로 제거).
+    allowed: dict = {}
+    set_id = _iss.resolve_set_id_for_assignment(body.assignment_id) if body.assignment_id else None
+    if set_id:
+        arows = supabase.table("inspection_set_items").select("id, item_name").eq("inspection_set_id", set_id).execute().data or []
+        allowed = {r["id"]: r.get("item_name") for r in arows}
+
     result_rows = []
+    missing_ref = 0      # 참조 없음(구버전 앱)
+    invalid_ref = 0      # 이 점검 세트의 항목이 아님 → 참조 버림
+    unvalidated = 0      # assignment_id 없어 검증 불가 → 참조 유지
     for item in body.items:
+        ref = item.inspection_set_item_id
+        name = item.name
+        if ref and set_id:
+            if ref in allowed:
+                name = allowed[ref] or item.name   # ② 이름을 서버 마스터로
+            else:
+                ref = None                          # ①ㄴ 이 점검의 항목이 아님
+                invalid_ref += 1
+        elif ref:
+            unvalidated += 1
+        else:
+            missing_ref += 1
         row_data = {
             "inspection_id": inspection_id,
-            "item_name": item.name,
+            "item_name": name,
             "result_code": "NORMAL" if item.result == "ok" else "ABNORMAL",
             "value_text": item.result,
             "note": item.memo or item.note or "",
             "checked_at": now,
         }
+        if ref:
+            row_data["inspection_set_item_id"] = ref
         if item.photo_urls:
             row_data["photo_urls"] = item.photo_urls
         result_rows.append(row_data)
@@ -130,8 +162,15 @@ def submit_check(
     if result_rows:
         supabase.table("safety_inspection_results").insert(result_rows).execute()
 
+    if missing_ref or invalid_ref or unvalidated:
+        log.warning(
+            f"[WorkerCheck] 참조 미검증 inspection_id={inspection_id} "
+            f"missing={missing_ref} invalid={invalid_ref} unvalidated={unvalidated}/{len(body.items)} "
+            f"— 이름만 저장(가공 항목 소지)"
+        )
+
     issue_items = [i.name for i in body.items if i.result == "bad"]
-    log.info(f"[WorkerCheck] 저장 inspection_id={inspection_id} phone={clean_phone} issues={issue_items}")
+    log.info(f"[WorkerCheck] 저장 inspection_id={inspection_id} issues={len(issue_items)}")
 
     return {
         "status": "success",
@@ -149,9 +188,7 @@ def submit_check(
 
 @router.get("/recent")
 def get_recent_checks(phone: str, limit: int = 5):
-    """
-    점검자의 최근 점검 이력 조회
-    """
+    """점검자의 최근 점검 이력 조회"""
     supabase = get_supabase()
     clean = phone.replace("-", "").replace(" ", "")
 
