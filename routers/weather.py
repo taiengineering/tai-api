@@ -1,8 +1,13 @@
 """
-routers/weather.py — v1.3.2
+routers/weather.py — v1.3.3
 
 기상청 날씨 API — Supabase Edge Function 프록시 방식
 
+v1.3.3 (2026-08-18):
+  [FIX] 작업중지 배지가 기상과 무관하게 항상 「정상」 (LEDGER §66 · 안전 직결).
+  화면(safety-dashboard)은 work_stop.level/message 를 읽는데 Edge 는 required/reasons 로
+  내려줘 level 이 없어 항상 'normal'(초록) 이었다. _normalize_work_stop 으로 required/reasons →
+  level·message 를 도출해 병기한다(원본 보존, 서빙 정규화). /now·/work-stoppage 에 적용.
 v1.3.2 (2026-08-18):
   [FIX] GET /weather/work-stop-criteria 응답에 data 키 추가 (LEDGER §67)
   화면(safety-dashboard)은 d?.data?.items || d?.items || d?.data 를 읽어
@@ -130,6 +135,42 @@ def _alert_type_from_work_stop(weather_data: dict) -> str:
     return ", ".join(p for p in parts if p) or "WORK_STOP"
 
 
+def _normalize_work_stop(weather_data: dict) -> dict:
+    """작업중지 배지 정규화 (LEDGER §66 · 안전 직결).
+
+    Edge Function 은 work_stop 을 {required, reasons} 로 내려주지만, 화면
+    (safety-dashboard useSafetyDashboard.ts)은 work_stop.level('stop'|'caution'|'normal')
+    ·work_stop.message 를 읽는다. level 이 없어 항상 'normal'(초록) 로 떨어져,
+    강풍·강우·강설·뇌전이 기준을 넘어도 배지가 「정상」이었다.
+    → required/reasons 로부터 화면 계약(level·message)을 도출해 병기한다.
+      원본 required/reasons 는 보존한다(데이터 불변, 서빙 정규화 — §67 과 동일 철학).
+      required=True → level='stop'(빨강, 작업중지) 이 안전 방향이다.
+    work_stop 이 없거나 형식이 다르면 원본을 그대로 둔다(회귀 없음).
+    """
+    if not isinstance(weather_data, dict):
+        return weather_data
+    ws = weather_data.get("work_stop")
+    if not isinstance(ws, dict):
+        return weather_data
+    required = bool(ws.get("required"))
+    if "level" not in ws:
+        ws["level"] = "stop" if required else "normal"
+    if "message" not in ws:
+        reasons = ws.get("reasons") or []
+        parts: list[str] = []
+        for r in reasons[:3]:
+            if isinstance(r, dict):
+                parts.append(str(r.get("name") or r.get("code") or r.get("msg") or ""))
+            else:
+                parts.append(str(r))
+        joined = ", ".join(p for p in parts if p)
+        if required:
+            ws["message"] = (f"{joined} 기준 초과로 작업중지" if joined else "기상 기준 초과로 작업중지")
+        else:
+            ws["message"] = "정상"
+    return weather_data
+
+
 async def _wire_weather_work_stop(
     *,
     region: str,
@@ -201,6 +242,8 @@ async def get_work_stoppage_by_site(
             site_name=site.get("site_name"),
         )
 
+    weather_data = _normalize_work_stop(weather_data)
+
     return {
         "status": "success",
         "site_id":   site_id,
@@ -243,7 +286,7 @@ async def get_weather_now(
             region=f"{lat},{lon}",
             alert_type=alert_type,
         )
-    return weather_data
+    return _normalize_work_stop(weather_data)
 
 
 @router.get("/alert")
