@@ -137,7 +137,7 @@ def get_education_master(
     q = supabase.table("education_master").select("*").eq("is_active", True)
     if category:
         q = q.eq("category", category)
-    res = q.order("sort_order").execute()
+    res = q.order("education_code").execute()
     return {"success": True, "data": res.data}
 
 
@@ -231,7 +231,7 @@ def get_company_education_settings(
     company_id = _forced_company_id(current, supabase, company_id)
     if not _is_admin(_scope(supabase, current.get("role_code"))) and not company_id:
         return {"success": True, "data": []}
-    master_res = supabase.table("education_master").select("*").eq("is_active", True).order("sort_order").execute()
+    master_res = supabase.table("education_master").select("*").eq("is_active", True).order("education_code").execute()
     setting_data = []
     try:
         setting_res = (
@@ -358,7 +358,7 @@ def get_education_settings(factory_id: str, supabase: Client = Depends(get_supab
     """시설별 전체 교육 설정 조회"""
     _ensure_factory_own(supabase, factory_id, current)
     # 마스터와 LEFT JOIN 형식으로 설정값 반환
-    master_res = supabase.table("education_master").select("*").eq("is_active", True).order("sort_order").execute()
+    master_res = supabase.table("education_master").select("*").eq("is_active", True).order("education_code").execute()
     setting_res = supabase.table("education_setting").select("*").eq("factory_id", factory_id).execute()
 
     setting_map = {s["education_code"]: s for s in (setting_res.data or [])}
