@@ -9,13 +9,14 @@ v2.1.0: 사업자번호 중복 확인 API 추가
 v2.0.0: 담당자/파일/계약이력/온보딩 API 추가
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 import httpx
 import os
 import re
+import uuid
 from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/companies", tags=["companies"])
@@ -631,6 +632,97 @@ def add_company_file(company_id: str, body: FileBody):
     if not res.data:
         raise HTTPException(status_code=500, detail="파일 등록 실패")
     return {"status": "success", "message": "파일이 등록됐습니다.", "data": res.data[0]}
+
+
+# ============================================================
+# 13-b. 파일 업로드 (multipart 수신 → Storage 저장)
+#   [13] 화면(useMyCompanyLicenseUpload)은 multipart(file, file_type)로
+#   POST /companies/{id}/upload-file 을 부르는데 서버에 라우트가 없어 404 였다.
+#   useTaiApi.upload() 가 res.ok 를 안 봐서(①과 같은 원인) 404 본문이 넘어오고
+#   json?.data?.url || json?.url || 'uploaded' 가 'uploaded' 로 떨어져
+#   "사업자등록증이 업로드됐습니다" 거짓 성공이 떴다 — 파일은 어디에도 없었다.
+#   실제 파일을 Storage 에 올리고 company_files 메타를 남긴 뒤 data.url 을 돌려준다.
+# ============================================================
+
+@router.post("/{company_id}/upload-file")
+async def upload_company_file(
+    company_id: str,
+    file: UploadFile = File(...),
+    file_type: str = Form("business_license"),
+):
+    supabase = get_supabase()
+
+    chk = supabase.table("companies").select("id").eq("id", company_id).limit(1).execute()
+    if not chk.data:
+        raise HTTPException(status_code=404, detail="회사를 찾을 수 없습니다.")
+
+    MAX_SIZE = 10 * 1024 * 1024
+    content = await file.read()
+    if len(content) > MAX_SIZE:
+        raise HTTPException(status_code=400, detail="파일 크기가 초과되었습니다. (최대 10MB)")
+
+    allowed_types = ["application/pdf", "image/jpeg", "image/png"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="PDF, JPG, PNG 파일만 업로드 가능합니다.")
+
+    ext = file.filename.split(".")[-1] if (file.filename and "." in file.filename) else "bin"
+    # 비공개 버킷 company-files 에 저장. 경로는 회사/파일종류/uuid.
+    storage_path = f"{company_id}/{file_type}/{uuid.uuid4()}.{ext}"
+
+    try:
+        supabase.storage.from_("company-files").upload(
+            storage_path, content, {"content-type": file.content_type}
+        )
+        # 비공개 버킷이므로 public URL 대신 signed URL(1년) 을 발급한다.
+        signed = supabase.storage.from_("company-files").create_signed_url(
+            storage_path, 60 * 60 * 24 * 365
+        )
+        signed_url = ""
+        if isinstance(signed, dict):
+            signed_url = (
+                signed.get("signedURL")
+                or signed.get("signedUrl")
+                or signed.get("signed_url")
+                or signed.get("url")
+                or ""
+            )
+        elif isinstance(signed, str):
+            signed_url = signed
+        if signed_url and not signed_url.startswith("http"):
+            base = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+            sep = "" if signed_url.startswith("/") else "/"
+            signed_url = f"{base}{sep}{signed_url}"
+        file_url = signed_url
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"파일 업로드 실패: {str(e)}")
+
+    now = datetime.now().isoformat()
+    # company_files 실측 컬럼에 맞춘다(storage_path 컬럼은 존재하지 않는다).
+    meta = {
+        "company_id":  company_id,
+        "file_type":   file_type,
+        "file_name":   file.filename,
+        "file_url":    file_url,
+        "file_size":   len(content),
+        "is_active":   True,
+        "uploaded_at": now,
+        "created_at":  now,
+    }
+    ins = supabase.table("company_files").insert(meta).execute()
+    record = ins.data[0] if ins.data else None
+
+    return {
+        "status": "success",
+        "message": "파일이 업로드됐습니다.",
+        "data": {
+            "url":       file_url,
+            "file_url":  file_url,
+            "file_name": file.filename,
+            "file_type": file_type,
+            "file_size": len(content),
+            "record":    record,
+        },
+    }
 
 
 # ============================================================
