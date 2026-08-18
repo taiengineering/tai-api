@@ -1,5 +1,10 @@
 """
-TBM(작업 전 안전점검회의) 관리 라우터 — v1.3.0
+TBM(작업 전 안전점검회의) 관리 라우터 — v1.3.1
+
+v1.3.1 (2026-08-18, LEDGER ⑤):
+  [FIX] GET /tbm 목록 select 에 risk_items·safety_items 추가. 두 컬럼은 tbm_meetings 에
+        실재(jsonb)하나 select 에 빠져 화면 「위험사항」·「안전지시」 열이 항상 빈칸 → "위험 없음"
+        오독 위험이었다. conductor_name 은 이미 select 에 포함(「기록자→진행자」 relabel 은 화면 몫).
 
 v1.3.0 (2026-08-11 Phase 2):
   [ADD] 목록/상세 응답에 팀·그룹 임베드 (groups(group_name), teams(team_name)).
@@ -10,7 +15,7 @@ v1.2.0 (2026-04-08):
   [ADD] POST /tbm/{id}/request-sign  참석자 FCM 서명요청 발송
 
 v1.1.0 (2026-04-07 Phase 3):
-  - construction_site_id 콓럼 추가, 필터 지원
+  - construction_site_id 컬럼 추가, 필터 지원
 
 tbm_meetings, tbm_attendees 테이블 사용
 
@@ -44,7 +49,7 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tbm", tags=["tbm"])
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 STORAGE_BUCKET = "signatures"
 
@@ -398,6 +403,7 @@ def list_tbm(
         "id, factory_id, company_id, construction_site_id, group_id, team_id, meeting_title, work_date, "
         "work_location, conductor_name, attendee_count, status_code, "
         "transcript_status, audio_url, completed_at, created_at, "
+        "risk_items, safety_items, "
         "groups(group_name), teams(team_name)",
         count="exact"
     )
