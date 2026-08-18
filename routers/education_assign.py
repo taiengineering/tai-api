@@ -19,6 +19,7 @@ endpoints (prefix /education):
   PATCH  /education/assignment/{id}/complete         이수 완료
   POST   /education/assignment/{id}/certificate      이수증 URL 저장
   POST   /education/assignments/expire               만료 처리 (크론용)
+  GET    /education/{edu_id}                         교육 마스터 단건 (작업자앱 교육 화면, 결함 75)
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -513,3 +514,34 @@ def expire_assignments():
         "message": f"{updated}건 만료 처리됐습니다.",
         "data":    {"updated": updated, "date": today},
     }
+
+
+# ============================================================
+# GET /education/{edu_id}  교육 마스터 단건 (작업자앱 교육 화면, 결함 75)
+# ============================================================
+# ⚠ 이 동적 라우트는 반드시 위의 모든 정적 GET 경로(/master · /company-settings ·
+#   /assignments · /assignments/summary) '뒤에' 선언한다. FastAPI 라우트 매칭은
+#   정의(등록) 순서이므로, 정적 경로가 먼저 매칭되고 나머지만 여기로 온다.
+#   construction 그룹 로드 순서상 education(정적 /education/company-* 보유)이
+#   education_assign 보다 먼저 등록되므로, education.py 의 정적 경로도 먼저 매칭된다.
+#   이중 안전: 예약어가 들어오면 404 로 되돌린다.
+
+@router.get("/{edu_id}")
+def get_education_for_worker(edu_id: str):
+    """작업자앱 교육 화면용 — education_code 로 교육 마스터 단건 조회 (결함 75).
+
+    앱이 GET /education/{eduId} 를 호출한다(eduId = education_code, worker-complete 와 동일 키).
+    서버에 이 라우트가 없어 교육 화면이 항상 '교육을 불러오지 못했습니다' 였다.
+    응답 봉투에 status/success 두 키를 모두 담아 앱 파싱 형식에 관계없이 호환한다.
+    """
+    reserved = {
+        "master", "company-settings", "company-effective-link",
+        "assignments", "assignment", "assign", "expire",
+    }
+    if edu_id in reserved:
+        raise HTTPException(status_code=404, detail="교육을 찾을 수 없습니다.")
+    supabase = get_supabase()
+    res = supabase.table("education_master").select("*").eq("education_code", edu_id).limit(1).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="교육을 찾을 수 없습니다.")
+    return {"status": "success", "success": True, "data": res.data[0]}
