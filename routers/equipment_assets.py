@@ -6,16 +6,21 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/equipment-assets", tags=["equipment_assets"])
 
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 """
-equipment_assets.py v1.6.0
+equipment_assets.py v1.7.0
+v1.7.0: GET 목록(get_assets) size 상한 100→1000 (LEDGER §31)
+  - 「내 설비」 통계 4카드(전체·점검필요·30일이내·정상)는 목록 전체를 클라이언트가 집계하므로
+    화면이 size=1000 을 보낸다. le=100 이라 422 → ①(res.ok 미검사)로 빈 배열 → 4카드 전부 0.
+    시설별 설비 수는 유한하므로 상한만 상향(목록/집계 공용 경로, 응답 형태 불변).
+  - overview·model/search 의 상한(100)은 그대로 둔다.
 v1.6.0: GET /overview 추가 (시설별 설비 현황)
   - v_equipment_overview 집계 뷰 조회 (시설별 total/legal/operating/expired 카운트)
   - 라우트 순서: /{asset_id} 앞에 배치 (과거 /summary 순서 버그 선례와 동일)
   - 프론트(admin equipment-list 탭1)가 호출하던 미구현 엔드포인트 복구
 v1.5.0: operation_status 필드 추가
   - EquipmentAssetUpdate에 operation_status 추가 (ACTIVE|BROKEN|INACTIVE)
-  - GET 목록에 operation_status, factory_process_id 컨럼 포함
+  - GET 목록에 operation_status, factory_process_id 컬럼 포함
 v1.4.0: /model/search 개선 (equipment_model_master + v_equipment_unified 병합)
 v1.3.0: 설비 마스터 검색 엔드포인트 추가
 v1.2.0: QR/RFID 참조
@@ -72,7 +77,7 @@ def get_assets(
     area_id:              Optional[str] = Query(None),
     equipment_type_code:  Optional[str] = Query(None),
     page: int = Query(1, ge=1),
-    size: int = Query(20, ge=1, le=100),
+    size: int = Query(20, ge=1, le=1000),
 ):
     supabase = get_supabase()
     query = supabase.table("equipment_assets").select(
