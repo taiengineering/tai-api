@@ -191,6 +191,19 @@ def worker_complete_education(
         user_id = current_user["id"]
     if not user_id:
         user_id, _ = _resolve_worker(clean)
+    # [77] 소속(회사·시설)을 함께 저장한다. 저장 누락 시 관리자 화면(회사/시설 축)에서 이수 기록이 안 보인다.
+    #   건설사는 시설(factory) 이 없고 현장만 있으므로 factory_id 가 NULL 일 수 있다 —
+    #   company_id 를 항상 채워 회사 축 조회가 가능하게 한다(79 연계).
+    company_id = None
+    factory_id = None
+    if user_id:
+        try:
+            urow = supabase.table("users").select("company_id, factory_id").eq("id", user_id).limit(1).execute()
+            if urow.data:
+                company_id = urow.data[0].get("company_id")
+                factory_id = urow.data[0].get("factory_id")
+        except Exception as e:
+            log.warning(f"[EduComplete] 소속 조회 실패 user_id={user_id}: {e}")
     completed_date = (body.completed_at or datetime.now(timezone.utc).isoformat())[:10]
     signature_note = None
     if body.signature_data:
@@ -204,6 +217,10 @@ def worker_complete_education(
         except Exception as e:
             log.error(f"[EduComplete] 서명 저장 실패 phone={clean}: {e}")
     row = {"user_id": user_id, "education_code": body.edu_id, "completed_at": completed_date, "status_code": "COMPLETED"}
+    if company_id:
+        row["company_id"] = company_id
+    if factory_id:
+        row["factory_id"] = factory_id
     if signature_note:
         row["memo"] = f"작업자 확인 서명: {signature_note}"
     res = supabase.table("education_history").insert(row).execute()
