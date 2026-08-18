@@ -10,6 +10,10 @@ ROUTERS = [
     {"module": "routers.system_codes"},
     # {"module": "routers.file_upload"},  # 모듈 삭제됨 — 필요 시 재생성
     {"module": "routers.notifications"},
+    # LEDGER §32: 알럿 메시지 관리(system_alert_messages, role 001 전용). 구현돼 있었으나
+    # 어느 ROUTERS 에도 등록되지 않아 /alert-messages 6개가 전부 404였음. 전역 시스템
+    # 카탈로그이며 모든 변경 엔드포인트가 role_code=='001' 게이팅이라 회사 스코프 불필요.
+    {"module": "routers.alert_messages"},
     {"module": "routers.onboarding"},
     # 조직 계층: 부서·팀·그룹·근로자배정 (TBM 팀·그룹 하이브리드 Phase 1)
     {"module": "routers.org"},
