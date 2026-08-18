@@ -51,6 +51,22 @@ def _validate_uuid(value: str) -> str:
         raise HTTPException(status_code=400, detail="유효하지 않은 ID 형식입니다.")
 
 
+def _alias_inspection_row(row: dict) -> dict:
+    """화면 계약 호환(LEDGER §62 표시분): DB 컬럼명에 화면이 읽는 별칭을 병기(원본 유지).
+    목록은 item.inspection_datetime 을, 상세는 defect_details·corrective_due 를 읽어
+    값이 있어도 '-'/created_at 으로 떨어지던 것을 해소한다.
+    ※ inspector_name(이름) 은 inspector_id(uuid)에서 채울 수 없어 여기서 다루지 않는다(결정 대기)."""
+    if not isinstance(row, dict):
+        return row
+    if row.get("inspection_datetime") is None and row.get("inspection_date") is not None:
+        row["inspection_datetime"] = row.get("inspection_date")
+    if row.get("defect_details") is None and row.get("defect_items") is not None:
+        row["defect_details"] = row.get("defect_items")
+    if row.get("corrective_due") is None and row.get("corrective_deadline") is not None:
+        row["corrective_due"] = row.get("corrective_deadline")
+    return row
+
+
 def _ptw_number(site_id: str, supabase) -> str:
     year = datetime.now().year
     res = supabase.table("construction_works").select("id", count="exact").eq("site_id", site_id).execute()
@@ -353,6 +369,7 @@ async def list_inspections(
             size,
             [("inspection_date", True)],
         )
+        data["items"] = [_alias_inspection_row(r) for r in data.get("items", [])]
         return {"status": "success", "data": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -371,7 +388,7 @@ async def create_inspection(site_id: str, body: InspectionCreate):
         inspection = res.data[0]
         if data.get("overall_result") in ("FAIL", "ISSUE") and data.get("defect_count", 0) > 0:
             await send_fcm_inspection_alert(supabase, site_id=site_id, inspection_id=inspection["id"], defect_count=data.get("defect_count", 1))
-        return {"status": "success", "data": inspection}
+        return {"status": "success", "data": _alias_inspection_row(inspection)}
     except HTTPException:
         raise
     except Exception as e:
@@ -384,7 +401,7 @@ async def get_inspection(inspection_id: str):
     row = get_record_or_none(supabase, "construction_inspections", inspection_id)
     if not row:
         raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다.")
-    return {"status": "success", "data": row}
+    return {"status": "success", "data": _alias_inspection_row(row)}
 
 
 @router.patch("/inspections/{inspection_id}")
@@ -398,7 +415,7 @@ async def update_inspection(inspection_id: str, body: InspectionPatch):
         updated = update_record(supabase, "construction_inspections", inspection_id, data, _now_iso)
         if not updated:
             raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다.")
-        return {"status": "success", "data": updated}
+        return {"status": "success", "data": _alias_inspection_row(updated)}
     except HTTPException:
         raise
     except Exception as e:
@@ -415,7 +432,7 @@ async def update_corrective(inspection_id: str, body: CorrectivePatch):
     res = supabase.table("construction_inspections").update(data).eq("id", inspection_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다.")
-    return {"status": "success", "data": res.data[0]}
+    return {"status": "success", "data": _alias_inspection_row(res.data[0])}
 
 
 @router.delete("/inspections/{inspection_id}")
