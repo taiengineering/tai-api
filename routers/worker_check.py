@@ -21,6 +21,7 @@ v1.1.0 (2026-04-24): Authorization(Optional)·photo_urls·worker_id/factory_id/s
 API:
   POST /worker-check/submit   점검 결과 저장
   GET  /worker-check/recent   최근 점검 이력 조회
+  GET  /worker-check/history  점검 이력 조회 (앱 이력 화면)
 """
 import logging
 from datetime import datetime, timezone
@@ -201,6 +202,26 @@ def submit_check(
     }
 
 
+def _resolve_inspector_id(supabase, worker_id: Optional[str], phone: Optional[str]) -> Optional[str]:
+    """worker_id(=users.id) 우선, 없으면 phone 으로 users→worker_registry 순 조회."""
+    if worker_id:
+        return worker_id
+    if not phone:
+        return None
+    clean = phone.replace("-", "").replace(" ", "")
+    if not clean:
+        return None
+    u = supabase.table("users").select("id").eq("phone", clean).limit(1).execute()
+    if not u.data and len(clean) == 11:
+        u = supabase.table("users").select("id").eq("phone", f"{clean[:3]}-{clean[3:7]}-{clean[7:]}").limit(1).execute()
+    if u.data:
+        return u.data[0]["id"]
+    w = supabase.table("worker_registry").select("id").eq("phone", clean).limit(1).execute()
+    if w.data:
+        return w.data[0]["id"]
+    return None
+
+
 @router.get("/recent")
 def get_recent_checks(phone: str, limit: int = 5):
     """점검자의 최근 점검 이력 조회"""
@@ -214,6 +235,32 @@ def get_recent_checks(phone: str, limit: int = 5):
     if u.data:
         inspector_id = u.data[0]["id"]
 
+    if not inspector_id:
+        return {"status": "success", "data": {"items": []}}
+
+    res = supabase.table("safety_inspections") \
+        .select("id, inspection_date, status_code") \
+        .eq("inspector_id", inspector_id) \
+        .order("inspection_date", desc=True) \
+        .limit(limit).execute()
+
+    return {"status": "success", "data": {"items": res.data or []}}
+
+
+@router.get("/history")
+def get_check_history(
+    worker_id: Optional[str] = None,
+    phone: Optional[str] = None,
+    limit: int = 50,
+):
+    """점검자의 점검 이력 조회 (앱 이력 화면). worker_id(=users.id) 우선, 없으면 phone.
+
+    앱 이력 화면이 GET /worker-check/history?worker_id=&phone= 로 호출한다.
+    이 라우트가 없으면 항상 실패했고, 앱이 오류를 삼켜 '빈 이력'과 구분되지 않았다(결함 76).
+    점검자를 못 찾으면 빈 목록을 돌려준다(정상 응답). 조회 자체 실패는 예외로 전파한다.
+    """
+    supabase = get_supabase()
+    inspector_id = _resolve_inspector_id(supabase, worker_id, phone)
     if not inspector_id:
         return {"status": "success", "data": {"items": []}}
 
