@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -276,22 +277,103 @@ async def list_workers(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _iso_date(v) -> Optional[str]:
+    """date 객체면 ISO 문자열로, 그 외(str/None)는 그대로."""
+    if v is None:
+        return None
+    return v.isoformat() if hasattr(v, "isoformat") else str(v)
+
+
 @router.post("/sites/{site_id}/workers")
 async def create_worker(site_id: str, body: WorkerCreate):
+    """건설 작업자 등록 — 통합 명부(worker_registry) + 현장배치(construction_workers) 동시 생성.
+
+    LEDGER §19: 종전에는 construction_workers 에만 직접 써서 화면 8필드가 버려지고, org
+    (부서·팀·그룹)·리더 체계에서 이탈했다. 실측상 org 배정·리더는 worker_registry.id 를
+    기준점으로 하고(worker_group·groups.lead_worker_id·teams.lead_worker_id FK),
+    construction_workers 는 worker_registry_id 로 명부와 연결된다(기존 데이터 전원 연결·
+    worker_registry.factory_id=NULL·company 스코프). 그 선례대로:
+      1) worker_registry 명부 생성(factory_id=NULL, company 스코프) — org·리더 편입 가능
+      2) construction_workers 현장배치 생성(worker_registry_id 연결 + 건설 특화: 고용형태·
+         안전교육·출입상태)
+    실패 시 명부 고아를 남기지 않도록 보상 삭제한다.
+    """
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
+
+    name = (body.worker_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="이름은 필수입니다.")
+
+    # site → company_id (worker_registry 는 factory_id 없이 company 스코프로 담는다)
+    site = supabase.table("construction_sites").select("company_id").eq("id", site_id).single().execute()
+    if not site.data:
+        raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+    company_id = site.data.get("company_id")
+
+    phone = re.sub(r"[^0-9]", "", body.phone or "") or None
+    job_label = (body.job_type or "").strip() or None
+    contractor = (body.company_name or "").strip() or None
+    memo = (body.memo or "").strip() or None
+    hire = _iso_date(body.hire_date)
+    now = _now_iso()
+
+    # 1) 통합 명부(worker_registry) — factory_id=NULL, company 스코프 (실측 선례)
+    reg_payload = {
+        "company_id":      company_id,
+        "factory_id":      None,
+        "name":            name,
+        "phone":           phone,
+        "job_type_code":   job_label,
+        "job_type_name":   job_label,
+        "contractor_name": contractor,
+        "start_date":      hire,
+        "memo":            memo,
+        "is_active":       True,
+        "status_code":     "ACTIVE",
+        "created_at":      now,
+        "updated_at":      now,
+    }
+    reg_payload = {k: v for k, v in reg_payload.items() if v is not None}
     try:
-        data = body.model_dump(exclude_none=True)
-        data["site_id"] = site_id
-        data = normalize_date_fields(data, ("join_date", "safety_edu_date"))
-        created = create_record(supabase, "construction_workers", data, _now_iso, "등록 실패")
-        return {"status": "success", "data": created}
-    except ValueError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except HTTPException:
-        raise
+        reg = supabase.table("worker_registry").insert(reg_payload).execute()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"작업자 명부 등록 실패: {e}")
+    if not reg.data:
+        raise HTTPException(status_code=500, detail="작업자 명부 등록 실패")
+    worker_registry_id = reg.data[0]["id"]
+
+    # 2) 현장배치(construction_workers) — 명부 연결 + 건설 특화(고용형태·안전교육·출입)
+    edu_hours = int(body.safety_training_hours) if body.safety_training_hours is not None else None
+    cw_payload = {
+        "site_id":            site_id,
+        "worker_registry_id": worker_registry_id,
+        "worker_name":        name,
+        "worker_phone":       phone,
+        "worker_type":        body.worker_type,
+        "join_date":          hire,
+        "safety_edu_date":    _iso_date(body.safety_training_date),
+        "safety_edu_hours":   edu_hours,
+        "entry_status":       body.entry_status,
+        "notes":              memo,
+        "is_active":          True,
+        "created_at":         now,
+        "updated_at":         now,
+    }
+    cw_payload = {k: v for k, v in cw_payload.items() if v is not None}
+    try:
+        res = supabase.table("construction_workers").insert(cw_payload).execute()
+        if not res.data:
+            raise Exception("현장 배치 저장 결과가 비어 있습니다.")
+    except Exception as e:
+        # 보상: 명부 고아 방지
+        try:
+            supabase.table("worker_registry").delete().eq("id", worker_registry_id).execute()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=f"현장 배치 등록 실패: {e}")
+
+    return {"status": "success", "data": res.data[0]}
 
 
 @router.get("/workers/{worker_id}")

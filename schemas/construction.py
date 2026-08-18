@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class SiteCreate(BaseModel):
@@ -121,17 +121,25 @@ class PtwPatch(BaseModel):
 
 
 class WorkerCreate(BaseModel):
-    user_id: Optional[str] = None
-    worker_name: Optional[str] = None
-    worker_phone: Optional[str] = None
-    worker_type: Optional[str] = "SUBCON"
-    subcontractor_id: Optional[str] = None
-    role_code: Optional[str] = None
-    join_date: Optional[date] = None
-    certification_codes: Optional[str] = None
-    safety_edu_date: Optional[date] = None
-    safety_edu_hours: Optional[int] = 0
-    notes: Optional[str] = None
+    """건설 작업자 등록 입력 (LEDGER §19 통합).
+
+    화면(construction-worker-list)이 보내는 필드명을 1급으로 받는다. 등록 시
+    worker_registry(통합 명부) + construction_workers(현장배치)를 동시 생성하기 위한 입력이며,
+    종전처럼 construction_workers 에만 직접 쓰지 않는다. 종전 서버 필드명
+    (worker_phone·join_date·safety_edu_date·notes)도 alias 로 수용해 하위호환을 유지한다.
+    """
+    model_config = ConfigDict(populate_by_name=True)
+
+    worker_name: str
+    phone: Optional[str] = Field(default=None, validation_alias=AliasChoices("phone", "worker_phone"))
+    worker_type: Optional[str] = "DIRECT"
+    job_type: Optional[str] = None
+    company_name: Optional[str] = None
+    hire_date: Optional[date] = Field(default=None, validation_alias=AliasChoices("hire_date", "join_date"))
+    safety_training_date: Optional[date] = Field(default=None, validation_alias=AliasChoices("safety_training_date", "safety_edu_date"))
+    safety_training_hours: Optional[float] = Field(default=None, validation_alias=AliasChoices("safety_training_hours", "safety_edu_hours"))
+    memo: Optional[str] = Field(default=None, validation_alias=AliasChoices("memo", "notes"))
+    entry_status: Optional[str] = "OFFSITE"
 
 
 class WorkerPatch(BaseModel):
