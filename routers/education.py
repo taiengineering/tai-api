@@ -470,10 +470,18 @@ def get_education_history(
     current: dict = Depends(get_current_user),
 ):
     """교육 이수 이력 목록 조회"""
+    # [79] 건설사는 시설(factory)이 없고 현장만 있어 factory_id 로 조회할 수 없다.
+    #   factory_id 가 있으면 기존대로 시설 소유를 확인하고, 없으면 회사 스코프(P13)를
+    #   기본 축으로 쓴다. _forced_company_id 가 비-ALL 의 company_id 를 강제하므로
+    #   타사 이력은 노출되지 않는다.
+    scoped_company_id = None
     if not _is_admin(_scope(supabase, current.get("role_code"))):
-        if not factory_id:
-            raise HTTPException(status_code=400, detail="factory_id가 필요합니다.")
-        _ensure_factory_own(supabase, factory_id, current)
+        if factory_id:
+            _ensure_factory_own(supabase, factory_id, current)
+        else:
+            scoped_company_id = _forced_company_id(current, supabase, None)
+            if not scoped_company_id:
+                raise HTTPException(status_code=400, detail="factory_id 또는 회사 정보가 필요합니다.")
     offset = (page - 1) * size
     q = supabase.table("education_history") \
         .select(
@@ -483,6 +491,8 @@ def get_education_history(
 
     if factory_id:
         q = q.eq("factory_id", factory_id)
+    elif scoped_company_id:
+        q = q.eq("company_id", scoped_company_id)
     if user_id:
         q = q.eq("user_id", user_id)
     if education_code:
