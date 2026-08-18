@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Users 라우터 - 회원 관리 v2.2.0
+TAI Users 라우터 - 회원 관리 v2.3.0
 
+v2.3.0: 목록 size 상한 100→500 (LEDGER §68)
+  - 대시보드 담당자 목록이 GET /users?size=200 을 보내 le=100 위반으로 422 → 담당자 열·배정
+    셀렉트가 빈다. factory_id 로 좁힌 목록이라 테넌트당 인원이 유한하므로 상한만 상향.
 v2.2.0: 어드민 전체목록(get_users, company_id 미지정)에서 데모(체험) 테넌트 사용자 제외
   - 데모 회사(is_demo) 소속 사용자 id 를 조회해 목록에서 neq 로 제외(회사 스코프 조회 시엔 유지)
 v2.1.0: APPOINTMENT 이벤트 트리거 추가
@@ -19,7 +22,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 
 DEACTIVATE_STATUSES = {"INACTIVE", "DELETED", "SUSPENDED"}
 
@@ -123,7 +126,7 @@ def _demo_user_ids(supabase) -> list:
 @router.get("")
 def get_users(
     page:        int  = Query(default=1, ge=1),
-    size:        int  = Query(default=20, ge=1, le=100),
+    size:        int  = Query(default=20, ge=1, le=500),
     search:      Optional[str] = Query(default=None),
     company_id:  Optional[str] = Query(default=None),
     factory_id:  Optional[str] = Query(default=None),
