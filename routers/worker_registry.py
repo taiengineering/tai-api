@@ -1,8 +1,9 @@
 """
-작업자 명부 라우터 — v1.4.0
+작업자 명부 라우터 — v1.5.0
 
 작업자 등록 (수동 + 파일 일괄), 목록 조회, 수정, 비활성화, 앱 초대 문자 발송
 
+v1.5.0: 수동 등록 is_active 반영
 v1.4.0: 부서·팀·그룹(구조화 org) 연동
   - GET 목록에 department_id/team_id/group_id 필터 추가 (worker_group 멤버십 기준)
   - bulk-import 에 부서/팀/그룹 컬럼 파싱 → 그룹 해석 후 worker_group 배정(대표 1건 교체)
@@ -35,7 +36,7 @@ from db.supabase_client import get_supabase
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/worker-registry", tags=["worker_registry"])
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 # 초대 링크. 단축 도메인(w.taieng.co.kr)이 코드에 적혀 있었으나 프로젝트 어디에도
 # 근거가 없어 실제 앱 주소를 쓴다. 환경변수로 바꿀 수 있게 둔다.
@@ -218,6 +219,7 @@ class WorkerCreate(BaseModel):
     birth_date:      Optional[str] = None
     id_number_last4: Optional[str] = None
     memo:            Optional[str] = None
+    is_active:       Optional[bool] = True    # 미지정 시 재직
 
 
 class WorkerUpdate(BaseModel):
@@ -323,6 +325,7 @@ def create_worker(body: WorkerCreate):
     job_type_name = job_names.get(body.job_type_code, "기타")
 
     now = _now_iso()
+    is_active = body.is_active if body.is_active is not None else True
     data = {
         "factory_id":      body.factory_id,
         "company_id":      company_id,
@@ -330,8 +333,8 @@ def create_worker(body: WorkerCreate):
         "phone":           phone,
         "job_type_code":   body.job_type_code,
         "job_type_name":   job_type_name,
-        "is_active":       True,
-        "status_code":     "ACTIVE",
+        "is_active":       is_active,
+        "status_code":     "ACTIVE" if is_active else "INACTIVE",
         "app_installed":   False,
         "created_at":      now,
         "updated_at":      now,
