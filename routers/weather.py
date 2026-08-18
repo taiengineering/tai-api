@@ -1,8 +1,14 @@
 """
-routers/weather.py — v1.3.2
+routers/weather.py — v1.3.3
 
 기상청 날씨 API — Supabase Edge Function 프록시 방식
 
+v1.3.3 (2026-08-18):
+  [FIX · 안전 직결] 작업중지 배지가 기상과 무관하게 항상 「정상」 (LEDGER §66)
+  화면(safety-dashboard)은 work_stop.level / work_stop.message 를 읽는데,
+  Edge Function 은 work_stop 을 required / reasons 로 준다 → level 부재로 항상 'normal'.
+  _normalize_work_stop() 으로 required/reasons 를 근거로 level·message 를 병기한다
+  (서빙 정규화, 원본 키 보존, Edge 가 level 을 채운 경우는 존중). /now·/work-stoppage 적용.
 v1.3.2 (2026-08-18):
   [FIX] GET /weather/work-stop-criteria 응답에 data 키 추가 (LEDGER §67)
   화면(safety-dashboard)은 d?.data?.items || d?.items || d?.data 를 읽어
@@ -130,6 +136,38 @@ def _alert_type_from_work_stop(weather_data: dict) -> str:
     return ", ".join(p for p in parts if p) or "WORK_STOP"
 
 
+def _normalize_work_stop(weather_data: dict) -> None:
+    """[LEDGER §66 · 안전 직결] 화면(safety-dashboard)은 work_stop.level / work_stop.message 를 읽는다.
+
+    Edge Function 은 work_stop 을 required / reasons 로 준다 → level 이 없어 화면이
+    항상 'normal'(초록 「정상」) 배지로 떨어졌다. 기상 기준을 넘어도 「정상」이라 사람이 다칠 수 있다.
+    required / reasons 를 근거로 프론트 계약(level·message)을 병기한다(서빙 정규화, 원본 키 보존).
+    Edge 가 이미 level 을 채운 경우는 존중하고 덮어쓰지 않는다.
+    """
+    if not isinstance(weather_data, dict):
+        return
+    ws = weather_data.get("work_stop")
+    if not isinstance(ws, dict):
+        return
+    if ws.get("level"):  # Edge 가 이미 채웠다면 존중
+        return
+    required = bool(ws.get("required"))
+    reasons = ws.get("reasons") or []
+    names: list[str] = []
+    for r in reasons[:4]:
+        if isinstance(r, dict):
+            names.append(str(r.get("name") or r.get("code") or r.get("msg") or "").strip())
+        elif r:
+            names.append(str(r).strip())
+    names = [n for n in names if n]
+    if required:
+        ws["level"] = "stop"
+        ws["message"] = ("작업중지 기준 초과: " + ", ".join(names)) if names else "작업중지 기준을 초과했습니다."
+    else:
+        ws["level"] = "normal"
+        ws["message"] = ws.get("message") or ""
+
+
 async def _wire_weather_work_stop(
     *,
     region: str,
@@ -188,6 +226,7 @@ async def get_work_stoppage_by_site(
 
     # Edge Function 호출 (weather/now 액션)
     weather_data = await _edge_call({"action": "now", "lat": str(lat), "lon": str(lon)})
+    _normalize_work_stop(weather_data)  # [§66] work_stop 에 level·message 병기
 
     alert_type = _alert_type_from_work_stop(weather_data)
     if alert_type:
@@ -237,6 +276,7 @@ async def get_weather_now(
 ):
     """현재 날씨 + 작업중지 판단 (Edge Function 경유 → apihub.kma.go.kr)"""
     weather_data = await _edge_call({"action": "now", "lat": str(lat), "lon": str(lon)})
+    _normalize_work_stop(weather_data)  # [§66] work_stop 에 level·message 병기
     alert_type = _alert_type_from_work_stop(weather_data)
     if alert_type:
         await _wire_weather_work_stop(
