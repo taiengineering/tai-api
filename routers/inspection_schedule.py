@@ -2,6 +2,9 @@
 일정관리 API — inspection_sets 기준일·주기 관리
 prefix: /inspection-schedule
 
+v1.3 (2026-08-18, P13): 인증·회사 스코프 가드.
+  비-ALL 은 토큰 company_id 강제. 남의 set/시설 → 404. GET /rules 는 인증만.
+
 v1.2 (2026-07-30, Goal G-ms6az4y8-b88c4a):
   next_planned_date 산출에 휴무 보정 적용 — 공용 휴무 캘린더(org_holiday,
   services/holiday_svc) 연동. inspection_sets.holiday_process_type 이
@@ -16,10 +19,18 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import (
+    _ensure_factory_own,
+    _ensure_own_company,
+    _forced_company_id,
+    _is_admin,
+    _scope,
+)
 from services.inspection_sets_helpers import (
     _next_planned_from as _calc_next_date,
     adjust_planned_for_holiday,
@@ -175,7 +186,10 @@ def _enrich_factory_names(supabase, rows: list) -> None:
 # ── GET /inspection-schedule/rules ───────────────────────────────────────────
 
 @router.get("/rules")
-def list_inspect_master_rules(sector: Optional[str] = Query(None)):
+def list_inspect_master_rules(
+    sector: Optional[str] = Query(None),
+    current: dict = Depends(get_current_user),
+):
     supabase = get_supabase()
     res = (
         supabase.table("master_building_legal_rules")
@@ -225,7 +239,11 @@ def list_inspect_master_rules(sector: Optional[str] = Query(None)):
 # ── GET /inspection-schedule/rules/{rule_id}/factories ───────────────────────
 
 @router.get("/rules/{rule_id}/factories")
-def list_factories_for_rule(rule_id: str, site_type: Optional[str] = Query(None)):
+def list_factories_for_rule(
+    rule_id: str,
+    site_type: Optional[str] = Query(None),
+    current: dict = Depends(get_current_user),
+):
     supabase = get_supabase()
     mres = (
         supabase.table("master_building_legal_rules")
@@ -238,6 +256,14 @@ def list_factories_for_rule(rule_id: str, site_type: Optional[str] = Query(None)
     master = mres.data[0]
 
     fq = supabase.table("factories").select("id, name, sector, company_id")
+    if not _is_admin(_scope(supabase, current.get("role_code"))):
+        cid = current.get("company_id")
+        if not cid:
+            return {"status": "success", "data": {
+                "rule": {**master, "cycle_label": _cycle_label_from_master(master)},
+                "items": [], "total": 0, "generated": 0, "not_generated": 0,
+            }}
+        fq = fq.eq("company_id", cid)
     if site_type:
         fq = fq.eq("sector", site_type)
     facs = fq.order("name").limit(8000).execute().data or []
@@ -278,7 +304,7 @@ def list_factories_for_rule(rule_id: str, site_type: Optional[str] = Query(None)
 # ── POST /inspection-schedule/generate ───────────────────────────────────────
 
 @router.post("/generate")
-def generate_inspection_sets(body: GenerateScheduleSetsBody):
+def generate_inspection_sets(body: GenerateScheduleSetsBody, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     rule_id = (body.rule_id or "").strip()
     if not rule_id:
@@ -286,6 +312,9 @@ def generate_inspection_sets(body: GenerateScheduleSetsBody):
     ids = [str(x).strip() for x in (body.factory_ids or []) if str(x).strip()]
     if not ids:
         raise HTTPException(status_code=422, detail="factory_ids 필수")
+    if not _is_admin(_scope(supabase, current.get("role_code"))):
+        for fid in ids:
+            _ensure_factory_own(supabase, fid, current)
 
     mres = (
         supabase.table("master_building_legal_rules").select("*")
@@ -327,7 +356,7 @@ def generate_inspection_sets(body: GenerateScheduleSetsBody):
 # ── GET /inspection-schedule/sets/summary-by-rule ────────────────────────────
 
 @router.get("/sets/summary-by-rule")
-def get_sets_summary_by_rule():
+def get_sets_summary_by_rule(current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     total_rules = (
         supabase.table("master_building_legal_rules")
@@ -336,11 +365,19 @@ def get_sets_summary_by_rule():
         .not_.in_("sector", ["SPECIAL_FACILITY", "SPECIAL"]).execute()
     ).count or 0
 
-    sets = (
+    sq = (
         supabase.table("inspection_sets")
         .select("legal_rule_id, factory_id, status_code, anchor_type")
-        .eq("source", "LEGAL_ENGINE").eq("is_active", True).execute()
-    ).data or []
+        .eq("source", "LEGAL_ENGINE").eq("is_active", True)
+    )
+    if not _is_admin(_scope(supabase, current.get("role_code"))):
+        cid = current.get("company_id")
+        if not cid:
+            sets = []
+        else:
+            sets = sq.eq("company_id", cid).execute().data or []
+    else:
+        sets = sq.execute().data or []
 
     used_rules = {s["legal_rule_id"] for s in sets if s.get("legal_rule_id")}
     pending = sum(1 for s in sets if s.get("status_code") == "PENDING_ANCHOR")
@@ -368,9 +405,15 @@ def get_sets_summary_by_rule():
 def get_summary(
     factory_id: Optional[str] = Query(None),
     company_id: Optional[str] = Query(None),
+    current: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
+    company_id = _forced_company_id(current, supabase, company_id)
     today = date.today()
+    if not _is_admin(_scope(supabase, current.get("role_code"))) and not company_id:
+        return {"status": "success", "data": {
+            "total": 0, "pending_anchor": 0, "active": 0, "overdue": 0, "upcoming_7d": 0,
+        }}
     q = supabase.table("inspection_sets").select(
         "status_code, next_planned_date, source"
     ).eq("is_active", True)
@@ -404,8 +447,12 @@ def list_inspection_sets(
     anchor_type_confidence: Optional[int] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
+    company_id = _forced_company_id(current, supabase, company_id)
+    if not _is_admin(_scope(supabase, current.get("role_code"))) and not company_id:
+        return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size}}
     q = supabase.table("inspection_sets").select(
         "id, inspection_set_name, inspection_set_code, inspection_category, "
         "cycle_unit, cycle_value, cycle_base_type, cycle_base_guide, "
@@ -456,7 +503,7 @@ def list_inspection_sets(
 # ── GET /inspection-schedule/sets/{id} ───────────────────────────────────────
 
 @router.get("/sets/{set_id}")
-def get_inspection_set(set_id: str):
+def get_inspection_set(set_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     res = (
         supabase.table("inspection_sets").select("*")
@@ -465,6 +512,7 @@ def get_inspection_set(set_id: str):
     if not res.data:
         raise HTTPException(status_code=404, detail="inspection_set 없음")
     data = dict(res.data[0])
+    _ensure_own_company(data.get("company_id"), current, supabase, "inspection_set 없음")
     fac = supabase.table("factories").select("name").eq("id", data.get("factory_id")).limit(1).execute()
     data["factory_name"] = fac.data[0].get("name") if fac.data else "-"
     data["anchor_type_label"] = ANCHOR_TYPE_LABEL.get(data.get("anchor_type") or "", "미분류")
@@ -477,7 +525,7 @@ def get_inspection_set(set_id: str):
 # ── PATCH /inspection-schedule/sets/{id} ─────────────────────────────────────
 
 @router.patch("/sets/{set_id}")
-def patch_inspection_set(set_id: str, body: InspectionSetPatch):
+def patch_inspection_set(set_id: str, body: InspectionSetPatch, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     cur = (
         supabase.table("inspection_sets").select("*")
@@ -486,6 +534,7 @@ def patch_inspection_set(set_id: str, body: InspectionSetPatch):
     if not cur.data:
         raise HTTPException(status_code=404, detail="inspection_set 없음")
     cur = cur.data[0]
+    _ensure_own_company(cur.get("company_id"), current, supabase, "inspection_set 없음")
 
     allowed = {
         "cycle_unit", "cycle_value", "cycle_base_type", "cycle_weekday",
@@ -527,7 +576,7 @@ def patch_inspection_set(set_id: str, body: InspectionSetPatch):
 # ── POST /inspection-schedule/sets/{id}/confirm-anchor ───────────────────────
 
 @router.post("/sets/{set_id}/confirm-anchor")
-def confirm_anchor(set_id: str, body: ConfirmAnchorBody):
+def confirm_anchor(set_id: str, body: ConfirmAnchorBody, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     cur = (
         supabase.table("inspection_sets")
@@ -537,6 +586,7 @@ def confirm_anchor(set_id: str, body: ConfirmAnchorBody):
     if not cur.data:
         raise HTTPException(status_code=404, detail="inspection_set 없음")
     cur = cur.data[0]
+    _ensure_own_company(cur.get("company_id"), current, supabase, "inspection_set 없음")
 
     anchor = body.anchor_date
     cu = cur.get("cycle_unit")

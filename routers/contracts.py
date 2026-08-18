@@ -49,6 +49,7 @@ from typing import Optional, List
 from datetime import datetime, timedelta
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
+from services.company_scope import _ensure_own_company, _is_admin, _require_admin, _scope
 import random
 
 router = APIRouter(tags=["contracts"])
@@ -80,35 +81,6 @@ def _demo_contract_ids(supabase) -> list:
     except Exception as e:
         print(f"[CONTRACTS] 데모 계약 조회 실패: {e}")
         return []
-
-
-def _scope(supabase, role_code) -> str:
-    """role_data_scope.scope_type. 미정의는 가장 좁게(TEAM). leader_scope 정본과 동일."""
-    if not role_code:
-        return "TEAM"
-    try:
-        r = supabase.table("role_data_scope").select("scope_type").eq("role_code", role_code).limit(1).execute()
-        return (r.data[0]["scope_type"] if r.data and r.data[0].get("scope_type") else "TEAM")
-    except Exception:
-        return "TEAM"
-
-
-def _is_admin(ctx_scope) -> bool:
-    return ctx_scope == "ALL"  # 플랫폼 총관리자만 전사
-
-
-def _require_admin(current: dict, supabase) -> None:
-    if not _is_admin(_scope(supabase, current.get("role_code"))):
-        raise HTTPException(status_code=403, detail="권한이 없습니다")
-
-
-def _ensure_own_company(resource_company_id, current: dict, supabase, not_found: str) -> None:
-    """비-ALL 이 타사 자원을 보면 404(존재 숨김)."""
-    if _is_admin(_scope(supabase, current.get("role_code"))):
-        return
-    token_cid = current.get("company_id")
-    if not token_cid or resource_company_id != token_cid:
-        raise HTTPException(status_code=404, detail=not_found)
 
 
 def _empty_page(page: int, size: int) -> dict:

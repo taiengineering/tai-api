@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Factories 라우터 - 시설 등록/관리 v2.4.0
+TAI Factories 라우터 - 시설 등록/관리 v2.5.0
 
+v2.5.0 (2026-08-18, P13): 인증·회사 스코프 가드.
+  비-ALL 은 토큰 company_id 강제. /{id} 및 중첩 자원은 시설 소유권 404.
 v2.4.0 (LEGAL-CONSTRUCTION): 건설 법령 판정 입력 필드 6개 추가
   - subcontractor_count (int, 하도급 업체 수)
   - has_tower_crane / has_confined_space / has_asbestos_demo / has_blasting / has_diving (boolean, 위험시설)
@@ -17,11 +19,13 @@ v2.1.0: CHANGE / CLOSURE 이벤트 트리거 추가
 v2.0.0: 담당자 관리 API 추가
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, date
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _ensure_factory_own, _forced_company_id, _is_admin, _scope
 
 router = APIRouter(prefix="/factories", tags=["factories"])
 
@@ -181,8 +185,18 @@ def get_factories(
     site_type:   Optional[str] = Query(default=None),
     sido:        Optional[str] = Query(default=None),
     status_code: Optional[str] = Query(default=None),
+    current:     dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
+    company_id = _forced_company_id(current, supabase, company_id)
+    if not _is_admin(_scope(supabase, current.get("role_code"))) and not company_id:
+        return {
+            "status": "success",
+            "data": {
+                "items": [], "total": 0, "page": page, "size": size,
+                "total_pages": 0,
+            }
+        }
     query = supabase.table("factories").select("*", count="exact")
     if company_id:  query = query.eq("company_id", company_id)
     if search:      query = query.ilike("name", f"%{search}%")
@@ -208,8 +222,13 @@ def get_factories(
 # ============================================================
 
 @router.post("")
-def create_factory(req: FactoryCreate):
+def create_factory(req: FactoryCreate, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    if not _is_admin(_scope(supabase, current.get("role_code"))):
+        cid = current.get("company_id")
+        if not cid:
+            raise HTTPException(status_code=403, detail="권한이 없습니다")
+        req.company_id = cid
     company = supabase.table("companies").select("id").eq(
         "id", req.company_id
     ).single().execute()
@@ -227,7 +246,7 @@ def create_factory(req: FactoryCreate):
     res = supabase.table("factories").insert(data).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="시설 등록 실패")
-    return {"status": "success", "message": "시설이 등록뙀습니다", "data": res.data[0]}
+    return {"status": "success", "message": "시설이 등록됐습니다", "data": res.data[0]}
 
 
 # ============================================================
@@ -235,8 +254,9 @@ def create_factory(req: FactoryCreate):
 # ============================================================
 
 @router.get("/{factory_id}")
-def get_factory(factory_id: str):
+def get_factory(factory_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     res = supabase.table("factories").select("*").eq(
         "id", factory_id
     ).single().execute()
@@ -250,13 +270,14 @@ def get_factory(factory_id: str):
 # ============================================================
 
 @router.patch("/{factory_id}")
-async def update_factory(factory_id: str, req: FactoryUpdate):
+async def update_factory(factory_id: str, req: FactoryUpdate, current: dict = Depends(get_current_user)):
     """
     v2.2.0: construction_type, subcontractor_worker_count 필드 저장·수정 가능
     v2.1.0: 실제 변경이 있으면 CHANGE 이벤트 트리거
             status_code='INACTIVE' 로 변경 시 CLOSURE 이벤트 트리거
     """
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     existing = supabase.table("factories").select("id, status_code").eq(
         "id", factory_id
     ).single().execute()
@@ -293,7 +314,7 @@ async def update_factory(factory_id: str, req: FactoryUpdate):
 
     return {
         "status":  "success",
-        "message": "시설 정보가 수정똥습니다",
+        "message": "시설 정보가 수정됐습니다",
         "data":    res.data[0] if res.data else {},
     }
 
@@ -303,8 +324,9 @@ async def update_factory(factory_id: str, req: FactoryUpdate):
 # ============================================================
 
 @router.delete("/{factory_id}")
-def delete_factory(factory_id: str):
+def delete_factory(factory_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     existing = supabase.table("factories").select("id").eq(
         "id", factory_id
     ).single().execute()
@@ -315,7 +337,7 @@ def delete_factory(factory_id: str):
         "status_code": "INACTIVE",
         "updated_at":  datetime.now().isoformat(),
     }).eq("id", factory_id).execute()
-    return {"status": "success", "message": "시설이 비활성화똥습니다"}
+    return {"status": "success", "message": "시설이 비활성화됐습니다"}
 
 
 # ============================================================
@@ -323,8 +345,9 @@ def delete_factory(factory_id: str):
 # ============================================================
 
 @router.get("/{factory_id}/users")
-def get_factory_users(factory_id: str):
+def get_factory_users(factory_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     res = supabase.table("users").select(
         "id, name, email, phone, role_code, status_code, department, position"
     ).eq("factory_id", factory_id).order("created_at", desc=True).execute()
@@ -336,8 +359,9 @@ def get_factory_users(factory_id: str):
 # ============================================================
 
 @router.get("/{factory_id}/buildings")
-def get_factory_buildings(factory_id: str):
+def get_factory_buildings(factory_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     res = supabase.table("buildings").select(
         "id, name, building_use_code, floor_count, building_area, is_active"
     ).eq("factory_id", factory_id).order("created_at", desc=True).execute()
@@ -349,8 +373,9 @@ def get_factory_buildings(factory_id: str):
 # ============================================================
 
 @router.get("/{factory_id}/contacts")
-def get_factory_contacts(factory_id: str):
+def get_factory_contacts(factory_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     res = supabase.table("factory_contacts").select("*").eq(
         "factory_id", factory_id
     ).eq("is_active", True).order("is_primary", desc=True).order("sort_order").execute()
@@ -362,8 +387,9 @@ def get_factory_contacts(factory_id: str):
 # ============================================================
 
 @router.post("/{factory_id}/contacts")
-def add_factory_contact(factory_id: str, body: FactoryContactBody):
+def add_factory_contact(factory_id: str, body: FactoryContactBody, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     if body.is_primary:
         supabase.table("factory_contacts").update({"is_primary": False}).eq(
             "factory_id", factory_id
@@ -383,7 +409,7 @@ def add_factory_contact(factory_id: str, body: FactoryContactBody):
     }).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="담당자 등록 실패")
-    return {"status": "success", "message": "담당자가 추가똥습니다.", "data": res.data[0]}
+    return {"status": "success", "message": "담당자가 추가됐습니다.", "data": res.data[0]}
 
 
 # ============================================================
@@ -391,8 +417,9 @@ def add_factory_contact(factory_id: str, body: FactoryContactBody):
 # ============================================================
 
 @router.patch("/{factory_id}/contacts/{contact_id}")
-def update_factory_contact(factory_id: str, contact_id: str, body: FactoryContactUpdate):
+def update_factory_contact(factory_id: str, contact_id: str, body: FactoryContactUpdate, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     chk = supabase.table("factory_contacts").select("id, is_primary").eq(
         "id", contact_id
     ).eq("factory_id", factory_id).limit(1).execute()
@@ -407,7 +434,7 @@ def update_factory_contact(factory_id: str, contact_id: str, body: FactoryContac
     res = supabase.table("factory_contacts").update(update_data).eq(
         "id", contact_id
     ).execute()
-    return {"status": "success", "message": "담당자가 수정똥습니다.", "data": res.data[0] if res.data else {}}
+    return {"status": "success", "message": "담당자가 수정됐습니다.", "data": res.data[0] if res.data else {}}
 
 
 # ============================================================
@@ -415,8 +442,9 @@ def update_factory_contact(factory_id: str, contact_id: str, body: FactoryContac
 # ============================================================
 
 @router.delete("/{factory_id}/contacts/{contact_id}")
-def delete_factory_contact(factory_id: str, contact_id: str):
+def delete_factory_contact(factory_id: str, contact_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     chk = supabase.table("factory_contacts").select("id, is_primary").eq(
         "id", contact_id
     ).eq("factory_id", factory_id).limit(1).execute()
@@ -428,7 +456,7 @@ def delete_factory_contact(factory_id: str, contact_id: str):
         "is_active":  False,
         "updated_at": datetime.now().isoformat(),
     }).eq("id", contact_id).execute()
-    return {"status": "success", "message": "담당자가 삭제똥습니다."}
+    return {"status": "success", "message": "담당자가 삭제됐습니다."}
 
 
 # ============================================================
@@ -436,9 +464,10 @@ def delete_factory_contact(factory_id: str, contact_id: str):
 # ============================================================
 
 @router.post("/{factory_id}/legal")
-def run_legal_engine(factory_id: str):
+def run_legal_engine(factory_id: str, current: dict = Depends(get_current_user)):
     from routers.legal_engine import apply_legal_rules
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     try:
         result = apply_legal_rules(factory_id, supabase)
         return {"status": "success", "data": result}
