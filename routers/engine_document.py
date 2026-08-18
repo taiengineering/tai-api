@@ -1,6 +1,11 @@
 """
-엔진설정 > 문서 메뉴 라우터 — v1.0.0
+엔진설정 > 문서 메뉴 라우터 — v1.1.0
 =======================================
+v1.1.0 (2026-08-18):
+  - 서식 목록/상세 응답에 penalty 별칭 부여 (LEDGER §49 매핑분)
+    화면(engine-document)은 item.penalty 를 읽으나 두 원본 테이블은 penalty_summary 만 보유.
+    서빙 계층에서 penalty = penalty_summary 를 채워 넣는다(원본 penalty_summary 는 그대로 유지).
+    ※ 데이터 자체가 비어있는 경우(form_templates.penalty_summary 등)는 여기서 채울 수 없음 — 데이터/엔진 영역.
 v1.0.0 (2026-04-02):
   - GET  /engine/forms          서식 목록 조회 (form_type 파라미터로 테이블 분기)
   - GET  /engine/forms/summary  보관현황 요약 카드
@@ -18,6 +23,16 @@ from datetime import datetime, timezone
 from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/engine", tags=["engine-document"])
+
+
+def _alias_penalty(row: dict) -> dict:
+    """화면 계약(item.penalty) 호환: penalty 가 없고 penalty_summary 가 있으면 채운다.
+    원본 penalty_summary 는 제거하지 않는다(다른 소비자 호환)."""
+    if not isinstance(row, dict):
+        return row
+    if row.get("penalty") in (None, "") and row.get("penalty_summary") not in (None, ""):
+        row["penalty"] = row.get("penalty_summary")
+    return row
 
 
 @router.get("/forms")
@@ -62,10 +77,12 @@ async def get_forms(
             query = query.eq("sector", sector)
         result = query.order("sort_order").execute()
 
+    rows = [_alias_penalty(r) for r in (result.data or [])]
+
     return {
         "success": True,
-        "data": result.data or [],
-        "total": len(result.data or []),
+        "data": rows,
+        "total": len(rows),
     }
 
 
@@ -134,7 +151,7 @@ async def get_form_detail(form_code: str):
         .execute()
     )
     if res.data:
-        return {"success": True, "data": res.data[0], "source": "form_templates"}
+        return {"success": True, "data": _alias_penalty(res.data[0]), "source": "form_templates"}
 
     # document_form_master
     res = (
@@ -145,7 +162,7 @@ async def get_form_detail(form_code: str):
         .execute()
     )
     if res.data:
-        return {"success": True, "data": res.data[0], "source": "document_form_master"}
+        return {"success": True, "data": _alias_penalty(res.data[0]), "source": "document_form_master"}
 
     raise HTTPException(status_code=404, detail=f"Form not found: {form_code}")
 
