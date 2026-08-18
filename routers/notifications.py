@@ -113,16 +113,39 @@ def update_notification_setting(trigger_code: str, req: NotificationSettingUpdat
 def get_notifications(
     page:          int  = Query(default=1, ge=1),
     size:          int  = Query(default=20, ge=1, le=100),
+    limit:         Optional[int] = Query(default=None, ge=1, le=100),  # [§23] 화면 별칭(size)
     user_id:       Optional[str] = Query(default=None),
     worker_id:     Optional[str] = Query(default=None),
     phone:         Optional[str] = Query(default=None),
     company_id:    Optional[str] = Query(default=None),
     trigger_group: Optional[str] = Query(default=None),
     is_read:       Optional[bool] = Query(default=None),
+    read:          Optional[str] = Query(default=None),  # [§23] 화면 별칭(is_read): true/false/read/unread
+    date_from:     Optional[str] = Query(default=None, alias="from"),  # [§23] created_at >= (YYYY-MM-DD)
+    date_to:       Optional[str] = Query(default=None, alias="to"),    # [§23] created_at <= (YYYY-MM-DD)
     priority:      Optional[str] = Query(default=None),
 ):
-    """알림 목록 조회 (worker_id, phone 파라미터 추가)"""
+    """알림 목록 조회 (worker_id, phone 파라미터 추가)
+
+    [§23/§72] 화면(useNotificationList)이 보내는 파라미터명을 서버가 수용한다(화면 무수정):
+      - limit → size (페이지당 개수)
+      - read  → is_read (true/false/read/unread 관대 해석)
+      - from / to → created_at 범위
+    ※ 미수용(별도 결정 필요): type(한글 카테고리→trigger_group 매핑은 제품 결정),
+      factory_id(notifications 에 컬럼 없음 — DDL 필요). 지어내지 않고 무시(현행)한다.
+    """
     supabase = get_supabase()
+
+    # [§23] size 별칭
+    if limit is not None:
+        size = limit
+    # [§23] read → is_read (명시적 is_read 가 우선)
+    if is_read is None and read is not None:
+        rv = read.strip().lower()
+        if rv in ("true", "1", "read", "y", "yes"):
+            is_read = True
+        elif rv in ("false", "0", "unread", "n", "no"):
+            is_read = False
 
     # phone → user_id 변환
     resolved_user_id = user_id
@@ -144,6 +167,11 @@ def get_notifications(
     if trigger_group:    query = query.eq("trigger_group", trigger_group)
     if is_read is not None: query = query.eq("is_read", is_read)
     if priority:         query = query.eq("priority", priority)
+    # [§23] 기간 필터 (created_at). date_to 는 날짜만 오면 당일 끝까지 포함.
+    if date_from:        query = query.gte("created_at", date_from)
+    if date_to:
+        _to = date_to if len(date_to) > 10 else f"{date_to} 23:59:59"
+        query = query.lte("created_at", _to)
 
     offset = (page - 1) * size
     res = query.order("created_at", desc=True)\
