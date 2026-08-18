@@ -1,9 +1,13 @@
 """
-안전보건 회의 관리 라우터 — v1.2.0
+안전보건 회의 관리 라우터 — v1.2.1
 
 safety_committee_meetings 테이블 사용
 참석자는 전용 테이블 safety_committee_attendees 사용 (v1.1.0~)
 
+v1.2.1 (2026-08-18, 로그 관측):
+  [FIX] GET /{meeting_id} 에 uuid 가드. 정의되지 않은 고정경로(/summary 등)가 catch-all 에
+        잡혀 .eq("id","summary") → Postgres 22P02(500)로 깨지던 것 방지. 비-uuid → 깨끗한 404.
+        (work_schedules v1.2.2 와 동일 패턴.) 회의 요약이 필요하면 GET /schedule 이 준수현황을 제공.
 v1.2.0 (2026-08-17, LEDGER ④):
   [FIX] GET /safety-meetings 에 date_from·date_to(회의일 meeting_date 범위) 추가.
         화면(useSafetyMeetingList)이 보내던 기간 필터가 서버에 선언되지 않아 무시되던 것 해소.
@@ -23,6 +27,8 @@ meeting_type:
   LABOR_COUNCIL       노사협의회
   OTHER               기타 안전회의
 """
+import uuid
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List
@@ -31,7 +37,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/safety-meetings", tags=["safety_meetings"])
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 
 RETENTION_YEARS = 3   # 회의록 법정 보존기한
 
@@ -45,6 +51,14 @@ MEETING_CYCLE = {
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
 
 
 def _retention_expires(meeting_date_str: str, years: int = RETENTION_YEARS) -> str:
@@ -316,6 +330,9 @@ def list_meetings(
 @router.get("/{meeting_id}")
 def get_meeting(meeting_id: str):
     """안전보건 회의 상세 조회 (참석자는 전용 테이블에서 로드)."""
+    # 정의되지 않은 고정경로(/summary 등)가 catch-all 에 잡혀 22P02 나던 것 방지 (v1.2.1)
+    if not _is_uuid(meeting_id):
+        raise HTTPException(status_code=404, detail="회의록을 찾을 수 없습니다.")
     supabase = get_supabase()
     res = supabase.table("safety_committee_meetings").select("*").eq(
         "id", meeting_id
@@ -333,6 +350,8 @@ def get_meeting(meeting_id: str):
 @router.patch("/{meeting_id}")
 def update_meeting(meeting_id: str, body: MeetingUpdateBody):
     """안전보건 회의 수정 (참석자는 전용 테이블에 교체 저장)."""
+    if not _is_uuid(meeting_id):
+        raise HTTPException(status_code=404, detail="회의록을 찾을 수 없습니다.")
     supabase = get_supabase()
     payload = {k: v for k, v in body.dict().items() if v is not None}
     # 참석자는 전용 테이블로 분리 저장 (json 컬럼 대신)
