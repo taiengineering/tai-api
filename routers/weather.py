@@ -1,8 +1,13 @@
 """
-routers/weather.py — v1.3.1
+routers/weather.py — v1.3.2
 
 기상청 날씨 API — Supabase Edge Function 프록시 방식
 
+v1.3.2 (2026-08-18):
+  [FIX] GET /weather/work-stop-criteria 응답에 data 키 추가 (LEDGER §67)
+  화면(safety-dashboard)은 d?.data?.items || d?.items || d?.data 를 읽어
+  criteria 키를 보지 못했다 → 항상 「기준 정보 없음」. criteria 는 그대로 두고
+  표준 봉투 data 를 병기한다(서빙 정규화, 데이터·로직 불변).
 v1.3.1 (2026-04-29):
   [FIX] KMA_EDGE_URL 기본값을 서울 프로젝트(vwlahtguyggrhvslabax)로 변경
   구 프로젝트(vwlahtguyggrhvslabax) 삭제 대비
@@ -156,7 +161,8 @@ async def _wire_weather_work_stop(
 def get_work_stop_criteria():
     """산업안전보건기준에 관한 규칙 제37조 작업중지 기준 목록"""
     return {"status":"success","legal_basis":"산업안전보건기준에 관한 규칙 제37조",
-            "total":len(WORK_STOP_CRITERIA),"criteria":WORK_STOP_CRITERIA}
+            "total":len(WORK_STOP_CRITERIA),"criteria":WORK_STOP_CRITERIA,
+            "data":WORK_STOP_CRITERIA}
 
 
 @router.get("/work-stoppage")
