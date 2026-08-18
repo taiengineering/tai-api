@@ -14,6 +14,8 @@ import os
 import uuid
 from supabase import create_client, Client
 from services.health_registry import register_probe
+from routers.auth import get_current_user
+from services.company_scope import _ensure_factory_own, _forced_company_id, _is_admin, _scope
 
 router = APIRouter()
 
@@ -114,6 +116,13 @@ def _merge_master_company_row(m: dict, srow: Optional[dict]) -> dict:
     }
 
 
+def _ensure_history_own(supabase, history_id, current):
+    h = supabase.table("education_history").select("factory_id").eq("id", history_id).limit(1).execute()
+    if not h.data:
+        raise HTTPException(status_code=404, detail="이수 이력을 찾을 수 없습니다.")
+    _ensure_factory_own(supabase, h.data[0].get("factory_id"), current)
+
+
 # ─────────────────────────────────────────────────────────────
 # 1. 교육 마스터 (읽기 전용)
 # ─────────────────────────────────────────────────────────────
@@ -121,7 +130,8 @@ def _merge_master_company_row(m: dict, srow: Optional[dict]) -> dict:
 @router.get("/education-master", tags=["교육관리"])
 def get_education_master(
     category: Optional[str] = Query(None, description="worker_safety / duty / training"),
-    supabase: Client = Depends(get_supabase)
+    supabase: Client = Depends(get_supabase),
+    current: dict = Depends(get_current_user),
 ):
     """법정교육 마스터 목록 조회 (20개)"""
     q = supabase.table("education_master").select("*").eq("is_active", True)
@@ -132,7 +142,7 @@ def get_education_master(
 
 
 @router.get("/education-master/{education_code}", tags=["교육관리"])
-def get_education_master_detail(education_code: str, supabase: Client = Depends(get_supabase)):
+def get_education_master_detail(education_code: str, supabase: Client = Depends(get_supabase), current: dict = Depends(get_current_user)):
     """법정교육 마스터 상세 조회"""
     res = supabase.table("education_master").select("*").eq("education_code", education_code).single().execute()
     if not res.data:
@@ -145,6 +155,7 @@ def get_education_company_effective_link(
     company_id: str = Query(..., description="회사 ID"),
     education_code: str = Query(..., description="education_master.education_code"),
     supabase: Client = Depends(get_supabase),
+    current: dict = Depends(get_current_user),
 ):
     """
     교육 수강 링크 표시 우선순위:
@@ -152,6 +163,9 @@ def get_education_company_effective_link(
     2) education_master.source_url (KOSHA 등 기본값)
     3) 없음 → effective_url null (프론트에서 이수증만 안내)
     """
+    company_id = _forced_company_id(current, supabase, company_id)
+    if not _is_admin(_scope(supabase, current.get("role_code"))) and not company_id:
+        raise HTTPException(status_code=403, detail="권한이 없습니다")
     mres = supabase.table("education_master").select("*").eq("education_code", education_code).limit(1).execute()
     if not mres.data:
         raise HTTPException(status_code=404, detail="교육 마스터를 찾을 수 없습니다.")
@@ -211,8 +225,12 @@ def get_education_company_effective_link(
 def get_company_education_settings(
     company_id: str = Query(..., description="회사 ID"),
     supabase: Client = Depends(get_supabase),
+    current: dict = Depends(get_current_user),
 ):
     """education_master + company_education_setting 병합 목록 (회사별 수강 링크 설정 화면용)"""
+    company_id = _forced_company_id(current, supabase, company_id)
+    if not _is_admin(_scope(supabase, current.get("role_code"))) and not company_id:
+        return {"success": True, "data": []}
     master_res = supabase.table("education_master").select("*").eq("is_active", True).order("sort_order").execute()
     setting_data = []
     try:
@@ -247,8 +265,12 @@ def upsert_company_education_setting(
     body: CompanyEducationSettingUpsert,
     company_id: str = Query(..., description="회사 ID"),
     supabase: Client = Depends(get_supabase),
+    current: dict = Depends(get_current_user),
 ):
     """회사별 교육 링크 저장·수정 (custom_url 비우면 행 삭제 → KOSHA 기본)"""
+    company_id = _forced_company_id(current, supabase, company_id)
+    if not _is_admin(_scope(supabase, current.get("role_code"))) and not company_id:
+        raise HTTPException(status_code=403, detail="권한이 없습니다")
     mcheck = supabase.table("education_master").select("id").eq("id", education_id).limit(1).execute()
     if not mcheck.data:
         raise HTTPException(status_code=404, detail="교육 마스터를 찾을 수 없습니다.")
@@ -312,8 +334,12 @@ def delete_company_education_setting(
     education_id: str,
     company_id: str = Query(..., description="회사 ID"),
     supabase: Client = Depends(get_supabase),
+    current: dict = Depends(get_current_user),
 ):
     """회사별 교육 링크 초기화 (KOSHA 기본으로 복원)"""
+    company_id = _forced_company_id(current, supabase, company_id)
+    if not _is_admin(_scope(supabase, current.get("role_code"))) and not company_id:
+        raise HTTPException(status_code=403, detail="권한이 없습니다")
     try:
         supabase.table("company_education_setting").delete().eq("company_id", company_id).eq(
             "education_id", education_id
@@ -328,8 +354,9 @@ def delete_company_education_setting(
 # ─────────────────────────────────────────────────────────────
 
 @router.get("/education-settings/{factory_id}", tags=["교육관리"])
-def get_education_settings(factory_id: str, supabase: Client = Depends(get_supabase)):
+def get_education_settings(factory_id: str, supabase: Client = Depends(get_supabase), current: dict = Depends(get_current_user)):
     """시설별 전체 교육 설정 조회"""
+    _ensure_factory_own(supabase, factory_id, current)
     # 마스터와 LEFT JOIN 형식으로 설정값 반환
     master_res = supabase.table("education_master").select("*").eq("is_active", True).order("sort_order").execute()
     setting_res = supabase.table("education_setting").select("*").eq("factory_id", factory_id).execute()
@@ -358,9 +385,11 @@ def get_education_settings(factory_id: str, supabase: Client = Depends(get_supab
 def get_education_setting_detail(
     factory_id: str,
     education_code: str,
-    supabase: Client = Depends(get_supabase)
+    supabase: Client = Depends(get_supabase),
+    current: dict = Depends(get_current_user),
 ):
     """시설별 교육 설정 단건 조회"""
+    _ensure_factory_own(supabase, factory_id, current)
     res = supabase.table("education_setting") \
         .select("*, education_master(*)") \
         .eq("factory_id", factory_id) \
@@ -382,9 +411,11 @@ def update_education_setting(
     factory_id: str,
     education_code: str,
     body: EducationSettingUpdate,
-    supabase: Client = Depends(get_supabase)
+    supabase: Client = Depends(get_supabase),
+    current: dict = Depends(get_current_user),
 ):
     """시설별 교육 설정 저장 (upsert)"""
+    _ensure_factory_own(supabase, factory_id, current)
     existing = supabase.table("education_setting") \
         .select("id") \
         .eq("factory_id", factory_id) \
@@ -435,9 +466,14 @@ def get_education_history(
     search: Optional[str] = Query(None, description="이름·교육명 부분 검색(전체 로드 후 필터)"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
-    supabase: Client = Depends(get_supabase)
+    supabase: Client = Depends(get_supabase),
+    current: dict = Depends(get_current_user),
 ):
     """교육 이수 이력 목록 조회"""
+    if not _is_admin(_scope(supabase, current.get("role_code"))):
+        if not factory_id:
+            raise HTTPException(status_code=400, detail="factory_id가 필요합니다.")
+        _ensure_factory_own(supabase, factory_id, current)
     offset = (page - 1) * size
     q = supabase.table("education_history") \
         .select(
@@ -499,9 +535,14 @@ def get_education_history(
 def get_education_history_summary(
     factory_id: Optional[str] = Query(None),
     user_id: Optional[str] = Query(None),
-    supabase: Client = Depends(get_supabase)
+    supabase: Client = Depends(get_supabase),
+    current: dict = Depends(get_current_user),
 ):
     """교육 이수 현황 요약 카드 (전체/완료/미이수/기한초과)"""
+    if not _is_admin(_scope(supabase, current.get("role_code"))):
+        if not factory_id:
+            raise HTTPException(status_code=400, detail="factory_id가 필요합니다.")
+        _ensure_factory_own(supabase, factory_id, current)
     q = supabase.table("education_history").select("status")
     if factory_id:
         q = q.eq("factory_id", factory_id)
@@ -528,8 +569,9 @@ def get_education_history_summary(
 
 
 @router.post("/education-history", tags=["교육관리"])
-def create_education_history(body: EducationHistoryCreate, supabase: Client = Depends(get_supabase)):
+def create_education_history(body: EducationHistoryCreate, supabase: Client = Depends(get_supabase), current: dict = Depends(get_current_user)):
     """교육 이수 이력 등록"""
+    _ensure_factory_own(supabase, body.factory_id, current)
     # 법정 기준시간 검증
     master = supabase.table("education_master") \
         .select("min_hours, education_name") \
@@ -563,8 +605,9 @@ def create_education_history(body: EducationHistoryCreate, supabase: Client = De
 
 
 @router.post("/education-history/pending", tags=["교육관리"])
-def create_pending_education_history(body: EducationPendingCreate, supabase: Client = Depends(get_supabase)):
+def create_pending_education_history(body: EducationPendingCreate, supabase: Client = Depends(get_supabase), current: dict = Depends(get_current_user)):
     """교육 발령 — 미이수(pending) 배정 행 생성"""
+    _ensure_factory_own(supabase, body.factory_id, current)
     master = (
         supabase.table("education_master")
         .select("education_code, education_name")
@@ -608,8 +651,9 @@ def create_pending_education_history(body: EducationPendingCreate, supabase: Cli
 
 
 @router.get("/education-history/{history_id}", tags=["교육관리"])
-def get_education_history_detail(history_id: str, supabase: Client = Depends(get_supabase)):
+def get_education_history_detail(history_id: str, supabase: Client = Depends(get_supabase), current: dict = Depends(get_current_user)):
     """교육 이수 이력 상세 조회"""
+    _ensure_history_own(supabase, history_id, current)
     res = supabase.table("education_history") \
         .select("*, education_master(*), users(name, job_type, email), education_files(*)") \
         .eq("id", history_id) \
@@ -625,9 +669,11 @@ def get_education_history_detail(history_id: str, supabase: Client = Depends(get
 def update_education_history(
     history_id: str,
     body: EducationHistoryUpdate,
-    supabase: Client = Depends(get_supabase)
+    supabase: Client = Depends(get_supabase),
+    current: dict = Depends(get_current_user),
 ):
     """교육 이수 이력 수정"""
+    _ensure_history_own(supabase, history_id, current)
     existing = supabase.table("education_history").select("id, education_code").eq("id", history_id).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="이수 이력을 찾을 수 없습니다.")
@@ -659,8 +705,9 @@ def update_education_history(
 # ─────────────────────────────────────────────────────────────
 
 @router.get("/education-history/{history_id}/files", tags=["교육관리"])
-def get_education_files(history_id: str, supabase: Client = Depends(get_supabase)):
+def get_education_files(history_id: str, supabase: Client = Depends(get_supabase), current: dict = Depends(get_current_user)):
     """교육 이수 증빙서류 목록"""
+    _ensure_history_own(supabase, history_id, current)
     res = supabase.table("education_files").select("*").eq("history_id", history_id).order("created_at").execute()
     return {"success": True, "data": res.data}
 
@@ -670,13 +717,11 @@ async def upload_education_file(
     history_id: str,
     file: UploadFile = File(...),
     doc_type: str = Form("기타", description="수료증 / 출석부 / 이수확인서 / 교육일지 / 기타"),
-    supabase: Client = Depends(get_supabase)
+    supabase: Client = Depends(get_supabase),
+    current: dict = Depends(get_current_user),
 ):
     """교육 증빙서류 업로드"""
-    # 이력 존재 확인
-    existing = supabase.table("education_history").select("id").eq("id", history_id).single().execute()
-    if not existing.data:
-        raise HTTPException(status_code=404, detail="이수 이력을 찾을 수 없습니다.")
+    _ensure_history_own(supabase, history_id, current)
 
     # 파일 크기 제한 (10MB)
     MAX_SIZE = 10 * 1024 * 1024
@@ -721,9 +766,11 @@ async def upload_education_file(
 def delete_education_file(
     history_id: str,
     file_id: str,
-    supabase: Client = Depends(get_supabase)
+    supabase: Client = Depends(get_supabase),
+    current: dict = Depends(get_current_user),
 ):
     """교육 증빙서류 삭제"""
+    _ensure_history_own(supabase, history_id, current)
     file_row = supabase.table("education_files") \
         .select("*").eq("id", file_id).eq("history_id", history_id).single().execute()
 

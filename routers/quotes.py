@@ -1,4 +1,8 @@
-# routers/quotes.py — v3.0.0
+# routers/quotes.py — v3.1.0
+# v3.1.0 (2026-08-18, P13):
+#   - GET /survey/list: 인증 + 비-ALL 은 토큰 company_id 강제
+#   - POST /survey/{id}/convert · /run-legal-engine: ALL 전용
+#   - POST /survey 무료진단 접수는 공개 유지
 # v3.0.0 (2026-04-11):
 #   - POST /survey: DiagnosisSurveyRequest 스펙 추가 (sector/grade/user_id/form_data)
 #   - POST /survey: Authorization Bearer 토큰 처리 (실패해도 관대하게 통과)
@@ -6,7 +10,7 @@
 # v2.0.0 S02: 설문 접수 후 법령엔진 자동 실행 (BackgroundTask)
 # v2.0.0 S03: survey 견적 convert 지원 (company_id NULL 허용)
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Header
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Header, Depends
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, Any, Dict
 from datetime import datetime
@@ -15,6 +19,8 @@ import resend as resend_client
 import httpx
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _is_admin, _require_admin, _scope
 
 router = APIRouter(prefix="/quotes", tags=["quotes"])
 
@@ -309,8 +315,13 @@ def survey_test():
 # ============================================================
 
 @router.post("/survey/{quote_id}/run-legal-engine")
-def rerun_legal_engine(quote_id: str, background_tasks: BackgroundTasks):
+def rerun_legal_engine(
+    quote_id: str,
+    background_tasks: BackgroundTasks,
+    current: dict = Depends(get_current_user),
+):
     supabase = get_supabase()
+    _require_admin(current, supabase)
     q = supabase.table("quotes").select("id, survey_data").eq("id", quote_id).single().execute()
     if not q.data:
         raise HTTPException(status_code=404, detail="견적을 찾을 수 없습니다")
@@ -325,8 +336,13 @@ def rerun_legal_engine(quote_id: str, background_tasks: BackgroundTasks):
 # ============================================================
 
 @router.post("/survey/{quote_id}/convert")
-def convert_survey_to_contract(quote_id: str, req: SurveyConvertRequest):
+def convert_survey_to_contract(
+    quote_id: str,
+    req: SurveyConvertRequest,
+    current: dict = Depends(get_current_user),
+):
     supabase = get_supabase()
+    _require_admin(current, supabase)
     q = supabase.table("quotes").select("*").eq("id", quote_id).single().execute()
     if not q.data:
         raise HTTPException(status_code=404, detail="견적을 찾을 수 없습니다")
@@ -388,14 +404,29 @@ def list_survey_quotes(
     status_code: Optional[str] = Query(None),
     search:      Optional[str] = Query(None),
     has_legal:   Optional[bool] = Query(None),
+    current:     dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
+    if not _is_admin(_scope(supabase, current.get("role_code"))):
+        cid = current.get("company_id")
+        if not cid:
+            return {
+                "status": "success",
+                "data": {
+                    "items": [], "total": 0, "page": page,
+                    "page_size": page_size, "total_pages": 0,
+                },
+            }
+    else:
+        cid = None
     query = supabase.table("quotes").select(
         "id, quote_no, company_name, contact_name, contact_phone, contact_email, "
         "status_code, source, survey_type, legal_applicable_count, legal_evaluated_at, "
         "contract_id, created_at, updated_at",
         count="exact"
     ).eq("source", "survey_web")
+    if cid:
+        query = query.eq("company_id", cid)
 
     if status_code:
         query = query.eq("status_code", status_code)
