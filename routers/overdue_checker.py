@@ -1,12 +1,12 @@
 """
-routers/overdue_checker.py — v1.0.0
+routers/overdue_checker.py — v1.1.0
 
-BE-10: 업무 지연 에스켈레이션 라우터
+BE-10: 업무 지연 에스컬레이션 라우터
 
-에스켈레이션 단계:
+에스컬레이션 단계:
   D-1  (overdue_level=1): 리마인더  → 작업자 SMS
   D+1  (overdue_level=2): 작업자 경고 → 작업자 SMS + FCM
-  D+2  (overdue_level=3): 관리자 알림 → 판리자/안전관리자 SMS + FCM
+  D+2  (overdue_level=3): 관리자 알림 → 관리자/안전관리자 SMS + FCM
   D+7  (overdue_level=4): OVERDUE 전환 → status_code='OVERDUE' + notifications
 
 원칙:
@@ -18,10 +18,11 @@ BE-10: 업무 지연 에스켈레이션 라우터
   - DONE/SKIP 스킵 트리거는 status_code='OVERDUE'로 업데이트
 
 API:
-  POST /overdue/check               추제 실행 (cron-job.org 또는 수동)
-  GET  /overdue/summary             사업장/판리자로 지연 현황 요약
-  GET  /overdue/history             에스켈레이션 이력 조회
-  POST /overdue/resolve/{history_id} 지연 해소 해주기
+  POST /overdue/check               추적 실행 (cron-job.org 또는 수동)
+  GET  /overdue/summary             사업장/관리자로 지연 현황 요약
+  GET  /overdue/history             에스컬레이션 이력 조회
+  POST /overdue/urge/{assignment_id} 대시보드 즉시 독촉
+  POST /overdue/resolve/{history_id} 지연 해소 하기
 """
 from __future__ import annotations
 import asyncio
@@ -38,9 +39,9 @@ from pydantic import BaseModel
 from db.supabase_client import get_supabase
 
 log    = logging.getLogger(__name__)
-router = APIRouter(prefix="/overdue", tags=["\uc5c5\ubb34\uc9c0\uc5f0\uc5d0\uc2a4\ucf08\ub808\uc774\uc158"])
+router = APIRouter(prefix="/overdue", tags=["업무지연에스컬레이션"])
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # Edge Function URL (messaging.py와 동일)
 _SMS_EDGE = "https://vwlahtguyggrhvslabax.supabase.co/functions/v1/send-sms"
@@ -51,11 +52,11 @@ _FCM_EDGE = os.getenv(
     "https://vwlahtguyggrhvslabax.supabase.co/functions/v1/send-push"
 )
 
-# 에스켈레이션 단계 정의
-# (days_delta, overdue_level, action_type, 상와 문자열)
+# 에스컬레이션 단계 정의
+# (days_delta, overdue_level, action_type, 상황 문자열)
 _LEVELS = [
     (-1, 1, "REMIND",           "[TAI Safe] 내일 {task} 마감입니다. 오늘 안에 완료해 주세요."),
-    ( 1, 2, "WARN_WORKER",      "[TAI Safe] {task} 작업이 {days}일 지연되었습니다. 지금 증 완료해 주세요."),
+    ( 1, 2, "WARN_WORKER",      "[TAI Safe] {task} 작업이 {days}일 지연되었습니다. 지금 즉 완료해 주세요."),
     ( 2, 3, "NOTIFY_MANAGER",   "[TAI Safe] \u26a0 {task} 2일 이상 미완료 확인 요청. 담당: {worker}"),
     ( 7, 4, "MARK_OVERDUE",     "[TAI Safe] {task}가 7일 이상 미완료되어 OVERDUE 전환되었습니다."),
 ]
@@ -220,7 +221,7 @@ def _write_history(
     fcm_sent: bool,
     notif_sent: bool,
 ) -> Optional[str]:
-    """에스켈레이션 이력 overdue_history 저장. 생성된 id 반환."""
+    """에스컬레이션 이력 overdue_history 저장. 생성된 id 반환."""
     try:
         res = sb.table("overdue_history").insert({
             "assignment_id":    assignment_id,
@@ -240,7 +241,7 @@ def _write_history(
 
 
 def _process_one(sb, wa: dict, today: date) -> dict:
-    """단일 work_assignment 에스켈레이션 실행. 결과 dict 반환."""
+    """단일 work_assignment 에스컬레이션 실행. 결과 dict 반환."""
     wa_id    = wa["id"]
     cur_lvl  = wa.get("overdue_level") or 0
     due      = _effective_due(wa)
@@ -269,7 +270,7 @@ def _process_one(sb, wa: dict, today: date) -> dict:
     # 작업자/관리자 정보 조회
     user_id    = wa.get("assigned_user_id")
     factory_id = wa.get("factory_id")
-    task_name  = wa.get("task_name") or wa.get("inspection_set_id") or "\uc810\uac80 \uc791\uc5c5"
+    task_name  = wa.get("task_name") or wa.get("inspection_set_id") or "점검 작업"
 
     worker_info: dict[str, Any] = {}
     if user_id:
@@ -309,7 +310,7 @@ def _process_one(sb, wa: dict, today: date) -> dict:
     inspection_id = wa.get("inspection_set_id") or wa.get("inspection_id")
 
     # 메시지 생성
-    worker_name = worker_info.get("name") or "\uc791\uc5c5\uc790"
+    worker_name = worker_info.get("name") or "작업자"
     msg = (msg_tpl
            .replace("{task}",   str(task_name))
            .replace("{days}",   str(abs(delta)))
@@ -332,10 +333,10 @@ def _process_one(sb, wa: dict, today: date) -> dict:
             )
         if action_type == "WARN_WORKER":
             if worker_info.get("allow_push") and worker_info.get("push_token"):
-                fcm_ok = _send_fcm(worker_info["push_token"], "[TAI Safe] \uc791\uc5c5 \uc9c0\uc5f0", msg)
+                fcm_ok = _send_fcm(worker_info["push_token"], "[TAI Safe] 작업 지연", msg)
         if target_user_id:
             _write_notification(
-                sb, target_user_id, company_id, "[TAI Safe] \uc791\uc5c5 \uc9c0\uc5f0", msg,
+                sb, target_user_id, company_id, "[TAI Safe] 작업 지연", msg,
                 trace_id=trace_id, source_entity_id=wa_id,
             )
             notif_ok = True
@@ -353,16 +354,16 @@ def _process_one(sb, wa: dict, today: date) -> dict:
                 source_entity_id=wa_id,
             )
         if manager_info.get("allow_push") and manager_info.get("push_token"):
-            fcm_ok = _send_fcm(manager_info["push_token"], "[TAI Safe] \uc9c0\uc5f0 \ud310\ub9ac", msg)
+            fcm_ok = _send_fcm(manager_info["push_token"], "[TAI Safe] 지연 관리", msg)
         if target_user_id:
             _write_notification(
-                sb, target_user_id, company_id, "[TAI Safe] \uc9c0\uc5f0 \ud310\ub9ac", msg,
+                sb, target_user_id, company_id, "[TAI Safe] 지연 관리", msg,
                 trace_id=trace_id, source_entity_id=wa_id,
             )
             notif_ok = True
 
     elif action_type == "MARK_OVERDUE":
-        # OVERDUE 전환 + 판리자/작업자 동시 알림
+        # OVERDUE 전환 + 관리자/작업자 동시 알림
         target_user_id = manager_info.get("id") or user_id
         if manager_info.get("allow_sms") and manager_info.get("phone"):
             sms_ok = _send_sms(
@@ -377,7 +378,7 @@ def _process_one(sb, wa: dict, today: date) -> dict:
             fcm_ok = _send_fcm(manager_info["push_token"], "[TAI Safe] OVERDUE", msg)
         if target_user_id:
             _write_notification(
-                sb, target_user_id, company_id, "[TAI Safe] OVERDUE \uc804\ud658", msg,
+                sb, target_user_id, company_id, "[TAI Safe] OVERDUE 전환", msg,
                 trace_id=trace_id, source_entity_id=wa_id,
             )
             notif_ok = True
@@ -440,7 +441,7 @@ def run_overdue_check(
     limit:       int           = Query(200, ge=1, le=1000, description="실행 최대 건수"),
 ):
     """
-    에스켈레이션 실행. cron-job.org에서 매일 09:00 KST 자동 호출.
+    에스컬레이션 실행. cron-job.org에서 매일 09:00 KST 자동 호출.
     dry_run=True이면 실제 SMS/FCM/DB 수정 없이 시뮬레이션 결과만 반환.
     """
     supabase = get_supabase()
@@ -503,7 +504,7 @@ def get_overdue_summary(
 ):
     """
     지연 현황 요약.
-    overdue_level 총 4단계 + OVERDUE status 긜별 집계.
+    overdue_level 총 4단계 + OVERDUE status 구분 집계.
     """
     supabase = get_supabase()
     today    = _today()
@@ -545,7 +546,8 @@ def get_overdue_summary(
         "status": "success",
         "date":   today.isoformat(),
         "factory_id": factory_id or "all",
-        "summary": summary,
+        "data":    summary,   # 화면이 sumRes.data 로 읽는다 (LEDGER 22)
+        "summary": summary,   # 하위호환 유지
     }
 
 
@@ -553,12 +555,12 @@ def get_overdue_summary(
 def get_overdue_history(
     factory_id:    Optional[str] = Query(None),
     assignment_id: Optional[str] = Query(None),
-    action_type:   Optional[str] = Query(None, description="REMIND|WARN_WORKER|NOTIFY_MANAGER|MARK_OVERDUE|RESOLVE"),
+    action_type:   Optional[str] = Query(None, description="REMIND|WARN_WORKER|NOTIFY_MANAGER|MARK_OVERDUE|URGE|RESOLVE"),
     resolved:      Optional[bool] = Query(None),
     page:          int           = Query(1, ge=1),
     size:          int           = Query(20, ge=1, le=100),
 ):
-    """\uc5d0\uc2a4\ucf08\ub808\uc774\uc158 \uc774\ub825 \uc870\ud68c."""
+    """에스컬레이션 이력 조회."""
     supabase = get_supabase()
     offset = (page - 1) * size
 
@@ -591,11 +593,43 @@ class ResolveBody(BaseModel):
     resolve_note: Optional[str] = None
 
 
+@router.post("/urge/{assignment_id}")
+def urge_overdue(assignment_id: str):
+    """대시보드 [독촉] — 담당자에게 즉시 리마인더(SMS/인앱). 에스컬레이션 level 은 변경하지 않는다."""
+    supabase = get_supabase()
+    wa = supabase.table("work_assignments").select(
+        "id, assigned_user_id, factory_id, inspection_set_id, scheduled_date, due_date, overdue_level"
+    ).eq("id", assignment_id).limit(1).execute()
+    if not wa.data:
+        raise HTTPException(status_code=404, detail="배정을 찾을 수 없습니다.")
+    row = wa.data[0]
+    user_id = row.get("assigned_user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="담당자가 배정되지 않았습니다.")
+    task = row.get("task_name") or row.get("inspection_set_id") or "점검 작업"
+    msg = f"[TAI Safe] {task} 완료를 독촉합니다. 확인 후 처리해 주세요."
+    ur = supabase.table("users").select(
+        "id, phone, allow_sms, company_id"
+    ).eq("id", user_id).limit(1).execute()
+    u = ur.data[0] if ur.data else {}
+    sms_ok = False
+    if u.get("allow_sms") and u.get("phone"):
+        sms_ok = _send_sms(u["phone"], msg, user_id=user_id,
+                           company_id=u.get("company_id"), trace_id=f"urge-{assignment_id}",
+                           source_entity_id=assignment_id)
+    _write_notification(supabase, user_id, u.get("company_id"),
+                        "[TAI Safe] 독촉", msg,
+                        trace_id=f"urge-{assignment_id}", source_entity_id=assignment_id)
+    _write_history(supabase, assignment_id, row.get("factory_id"), user_id,
+                   row.get("overdue_level") or 0, "URGE", msg, sms_ok, False, True)
+    return {"status": "success", "assignment_id": assignment_id, "sms": sms_ok, "notif": True}
+
+
 @router.post("/resolve/{history_id}")
 def resolve_overdue(history_id: str, body: ResolveBody):
     """
-    \uc9c0\uc5f0 \ud574\uc18c \ud574\uc8fc\uae30.
-    overdue_history 크 해소 표시 + 대상 work_assignment의 resolved_at 기록.
+    지연 해소 하기.
+    overdue_history 에 해소 표시 + 대상 work_assignment의 resolved_at 기록.
     """
     supabase = get_supabase()
     now_iso  = datetime.now(timezone.utc).isoformat()
@@ -636,7 +670,7 @@ def resolve_overdue(history_id: str, body: ResolveBody):
     # 4. 해소 이력 기록
     _write_history(
         supabase, wa_id, None, body.resolved_by,
-        0, "RESOLVE", body.resolve_note or "\uc9c0\uc5f0 \ud574\uc18c",
+        0, "RESOLVE", body.resolve_note or "지연 해소",
         False, False, False,
     )
 
