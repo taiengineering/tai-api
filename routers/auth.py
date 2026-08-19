@@ -755,6 +755,17 @@ def login(req: LoginRequest):
         payload_summary={"has_token": True},
     )
     clear_trace()
+    # companies.business_sector — 결제 시 확정되는 정확한 sector 구분값(BUILDING/INDUSTRY/CONSTRUCTION).
+    # users.sector(INDUSTRIAL 등 다른 체계)와 혼동하지 말 것. 실패해도 로그인은 막지 않는다.
+    business_sector = None
+    _company_id = user.get("company_id")
+    if _company_id:
+        try:
+            _c = supabase.table("companies").select("business_sector").eq("id", _company_id).limit(1).execute()
+            if _c.data:
+                business_sector = _c.data[0].get("business_sector")
+        except Exception:
+            pass
     return {
         "status": "success",
         "data": {
@@ -770,6 +781,7 @@ def login(req: LoginRequest):
                 "role_code":   user["role_code"],
                 "company_id":  user.get("company_id"),
                 "factory_id":  user.get("factory_id"),
+                "business_sector": business_sector,
                 "status_code": user.get("status_code"),
                 "profile_image_url": user.get("profile_image_url"),
             }
