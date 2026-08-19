@@ -78,6 +78,18 @@ def nexas_run_body_from_request(raw: Dict[str, Any]) -> DiagnosisRunBody:
             if payload.get(target) is None:
                 payload[target] = coerced
 
+    # Phase 1 lossless canonical materialization
+    # (WO-GATE8-CANONICAL-LOSSLESS-MATERIALIZATION-IMPLEMENT-01):
+    # DiagnosisRunBody 로 선언되지 않은 RTM-vocab applicability(has_confined_space 등)는
+    # 위 declared-merge 에서 탈락한다. 이를 body.form_data 에 vocab-allowlist 로 보존해
+    # run_diagnosis 가 DiagnoseStep1Body.input 으로 손실 없이 전달하게 한다.
+    # alias/derivation/값 생성 없음(정확 이름만).
+    from services.canonical.materialization import canonical_applicability
+
+    _preserved = canonical_applicability(form_data)
+    if _preserved:
+        payload["form_data"] = _preserved
+
     body = DiagnosisRunBody(**payload)
     return body
 
