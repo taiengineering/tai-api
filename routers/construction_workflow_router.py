@@ -258,21 +258,29 @@ async def list_workers(
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
-        data = run_list_query(
-            supabase,
-            "construction_workers",
-            {
-                "site_id": site_id,
-                "is_active": True,
-                "worker_type": worker_type,
-                "entry_status": entry_status,
-                "worker_name__ilike": f"%{search}%" if search else None,
-            },
-            page,
-            size,
-            [("created_at", True)],
-        )
-        return {"status": "success", "data": data}
+        offset = (page - 1) * size
+        q = supabase.table("construction_workers").select(
+            "*, worker_registry(name, phone, job_type_code, job_type_name, contractor_name, start_date, memo)",
+            count="exact",
+        ).eq("site_id", site_id).eq("is_active", True)
+        if worker_type:
+            q = q.eq("worker_type", worker_type)
+        if entry_status:
+            q = q.eq("entry_status", entry_status)
+        if search:
+            q = q.ilike("worker_name", f"%{search}%")
+        res = q.order("created_at", desc=True).range(offset, offset + size - 1).execute()
+        items = res.data or []
+        # 화면이 바로 읽도록 명부값을 평탄화(원본 embed 객체도 유지)
+        for it in items:
+            reg = it.get("worker_registry") or {}
+            it["job_type_code"] = reg.get("job_type_code")
+            it["job_type_name"] = reg.get("job_type_name")
+            it["contractor_name"] = reg.get("contractor_name")
+            it["start_date"] = reg.get("start_date")
+            it["registry_name"] = reg.get("name")
+            it["registry_memo"] = reg.get("memo")
+        return {"status": "success", "data": {"items": items, "total": res.count or 0, "page": page, "size": size}}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
