@@ -1,9 +1,10 @@
+import io
 import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from db.supabase_client import get_supabase
 from schemas.construction import (
@@ -53,6 +54,59 @@ _JOB_CODE_TO_NAME = {
     "WJT016": "관리감독자", "WJT017": "안전보건관리담당자", "WJT018": "협력업체 작업자",
     "WJT019": "일용직", "WJT020": "기타",
 }
+_JOB_NAME_TO_CODE = {
+    "사무직": "WJT001", "사무": "WJT001", "생산직": "WJT002", "생산": "WJT002",
+    "용접공": "WJT003", "용접": "WJT003", "철근공": "WJT004", "철근": "WJT004",
+    "타설공": "WJT004", "목공": "WJT005", "형틀목공": "WJT005", "비계공": "WJT006",
+    "비계": "WJT006", "전기공": "WJT007", "전기": "WJT007", "배관공": "WJT008",
+    "설비공": "WJT008", "배관": "WJT008", "도장공": "WJT009", "도장": "WJT009",
+    "운전기사": "WJT010", "굴착기운전": "WJT010", "크레인 운전원": "WJT012",
+    "관리감독자": "WJT016", "현장소장": "WJT016", "안전보건관리담당자": "WJT017",
+    "안전관리자": "WJT017", "협력업체 작업자": "WJT018", "신호수": "WJT018",
+    "일용직": "WJT019", "기타": "WJT020",
+}
+_EMP_TYPE_MAP = {
+    "직접": "DIRECT", "직영": "DIRECT", "정규": "DIRECT",
+    "하도급": "SUBCON", "협력": "SUBCON", "하청": "SUBCON",
+    "원청": "PRIMARY", "원청직영": "PRIMARY",
+}
+
+
+def _match_job_code(job_name: str) -> str:
+    if not job_name:
+        return "WJT020"
+    s = job_name.strip()
+    if s in _JOB_NAME_TO_CODE:
+        return _JOB_NAME_TO_CODE[s]
+    for k, v in _JOB_NAME_TO_CODE.items():
+        if k in s or s in k:
+            return v
+    return "WJT020"
+
+
+def _resolve_group_id_site(supabase, site_id: str, dept_name: str, team_name: str, group_name: str):
+    """건설 org: construction_site_id → departments → teams → groups 로 group_id 해석. 실패 시 None."""
+    if not group_name:
+        return None
+    dept_id = None
+    if dept_name:
+        d = supabase.table("departments").select("id").eq("construction_site_id", site_id).eq("department_name", dept_name).limit(1).execute()
+        dept_id = d.data[0]["id"] if d.data else None
+    team_id = None
+    if team_name:
+        tq = supabase.table("teams").select("id").eq("team_name", team_name)
+        if dept_id:
+            tq = tq.eq("department_id", dept_id)
+        t = tq.limit(1).execute()
+        team_id = t.data[0]["id"] if t.data else None
+    gq = supabase.table("groups").select("id, team_id").eq("group_name", group_name)
+    if team_id:
+        gq = gq.eq("team_id", team_id)
+    g = gq.execute()
+    rows = g.data or []
+    if not rows:
+        return None
+    return rows[0]["id"]
 
 
 def _validate_uuid(value: str) -> str:
@@ -394,6 +448,115 @@ async def create_worker(site_id: str, body: WorkerCreate):
         raise HTTPException(status_code=500, detail=f"현장 배치 등록 실패: {e}")
 
     return {"status": "success", "data": res.data[0]}
+
+
+@router.post("/sites/{site_id}/workers/bulk-import")
+async def bulk_import_construction_workers(
+    site_id: str,
+    file: UploadFile = File(...),
+):
+    """건설 작업자 엑셀 일괄 등록 — 행마다 worker_registry(명부) + construction_workers(배치) 생성.
+    컬럼: 이름(필수)|연락처(필수)|직종(필수)|소속업체|입사일|부서|팀|그룹|고용형태(선택)"""
+    site_id = _validate_uuid(site_id)
+    supabase = get_supabase()
+    site = supabase.table("construction_sites").select("company_id").eq("id", site_id).single().execute()
+    if not site.data:
+        raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+    company_id = site.data.get("company_id")
+    content = await file.read()
+    filename = file.filename or ""
+    rows: list = []
+    try:
+        if filename.endswith(".csv"):
+            import csv
+            reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")))
+            rows = list(reader)
+        else:
+            import pandas as pd
+            df = pd.read_excel(io.BytesIO(content), sheet_name=0, dtype=str).fillna("")
+            rows = df.to_dict(orient="records")
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"파일 파싱 실패: {e}")
+    if not rows:
+        raise HTTPException(status_code=422, detail="파일에 데이터가 없습니다.")
+    def _col(row: dict, *keys: str) -> str:
+        for k in keys:
+            if k in row and str(row[k]).strip():
+                return str(row[k]).strip()
+        return ""
+    created, updated, failed, mapping_failed, org_failed = 0, 0, [], [], []
+    now = _now_iso()
+    for idx, row in enumerate(rows, start=2):
+        name = _col(row, "이름", "이름(필수)", "name")
+        phone_raw = _col(row, "연락처", "연락처(필수)", "phone")
+        job_name = _col(row, "직종", "직종(필수)", "job_type")
+        contractor = _col(row, "소속업체", "contractor") or None
+        start_date = _col(row, "입사일", "start_date") or None
+        dept_name = _col(row, "부서", "department")
+        team_name = _col(row, "팀", "team")
+        group_name = _col(row, "그룹", "조", "group")
+        emp_raw = _col(row, "고용형태", "worker_type")
+        if not name or not phone_raw:
+            failed.append({"row": idx, "reason": "이름/연락처 누락"})
+            continue
+        phone = re.sub(r"[^0-9]", "", phone_raw)
+        if len(phone) < 10:
+            failed.append({"row": idx, "name": name, "reason": "연락처 형식 오류"})
+            continue
+        job_code = _match_job_code(job_name)
+        job_type_name = _JOB_CODE_TO_NAME.get(job_code, "기타")
+        if job_code == "WJT020" and job_name and job_name not in ("기타", ""):
+            mapping_failed.append({"row": idx, "name": name, "job_name": job_name})
+        worker_type = _EMP_TYPE_MAP.get(emp_raw, "DIRECT")
+        try:
+            # 중복: 같은 현장에 같은 연락처 → 배치 update
+            dup = supabase.table("construction_workers").select("id, worker_registry_id").eq("site_id", site_id).eq("worker_phone", phone).eq("is_active", True).limit(1).execute()
+            if dup.data:
+                cw_id = dup.data[0]["id"]
+                reg_id = dup.data[0]["worker_registry_id"]
+                supabase.table("worker_registry").update({
+                    "name": name, "job_type_code": job_code, "job_type_name": job_type_name,
+                    "contractor_name": contractor, "start_date": start_date, "updated_at": now,
+                }).eq("id", reg_id).execute()
+                supabase.table("construction_workers").update({
+                    "worker_name": name, "worker_type": worker_type, "updated_at": now,
+                }).eq("id", cw_id).execute()
+                worker_registry_id = reg_id
+                updated += 1
+            else:
+                reg_payload = {
+                    "company_id": company_id, "factory_id": None, "name": name, "phone": phone,
+                    "job_type_code": job_code, "job_type_name": job_type_name,
+                    "contractor_name": contractor, "start_date": start_date,
+                    "is_active": True, "status_code": "ACTIVE", "created_at": now, "updated_at": now,
+                }
+                reg_payload = {k: v for k, v in reg_payload.items() if v is not None}
+                reg = supabase.table("worker_registry").insert(reg_payload).execute()
+                worker_registry_id = reg.data[0]["id"]
+                cw_payload = {
+                    "site_id": site_id, "worker_registry_id": worker_registry_id,
+                    "worker_name": name, "worker_phone": phone, "worker_type": worker_type,
+                    "join_date": start_date, "is_active": True, "created_at": now, "updated_at": now,
+                }
+                cw_payload = {k: v for k, v in cw_payload.items() if v is not None}
+                supabase.table("construction_workers").insert(cw_payload).execute()
+                created += 1
+            # org 배정 (site 기반 그룹 해석)
+            if worker_registry_id and group_name:
+                gid = _resolve_group_id_site(supabase, site_id, dept_name, team_name, group_name)
+                if gid:
+                    supabase.table("worker_group").delete().eq("worker_id", worker_registry_id).execute()
+                    supabase.table("worker_group").insert({"worker_id": worker_registry_id, "group_id": gid, "is_lead": False}).execute()
+                else:
+                    org_failed.append({"row": idx, "name": name, "group": group_name})
+        except Exception as e:
+            failed.append({"row": idx, "name": name, "reason": str(e)})
+    return {
+        "status": "success",
+        "message": f"등록 {created}건, 수정 {updated}건, 실패 {len(failed)}건",
+        "data": {"created": created, "updated": updated, "failed": failed,
+                 "mapping_failed": mapping_failed, "org_failed": org_failed},
+    }
 
 
 @router.get("/workers/{worker_id}")
