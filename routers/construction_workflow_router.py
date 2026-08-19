@@ -44,6 +44,17 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_JOB_CODE_TO_NAME = {
+    "WJT001": "사무직", "WJT002": "생산직(일반)", "WJT003": "용접공",
+    "WJT004": "철근공", "WJT005": "목공", "WJT006": "비계공",
+    "WJT007": "전기공", "WJT008": "배관공", "WJT009": "도장공",
+    "WJT010": "운전기사", "WJT011": "지게차 운전원", "WJT012": "크레인 운전원",
+    "WJT013": "화학물질 취급", "WJT014": "고소작업자", "WJT015": "밀폐공간 작업자",
+    "WJT016": "관리감독자", "WJT017": "안전보건관리담당자", "WJT018": "협력업체 작업자",
+    "WJT019": "일용직", "WJT020": "기타",
+}
+
+
 def _validate_uuid(value: str) -> str:
     try:
         uuid.UUID(value)
@@ -321,6 +332,7 @@ async def create_worker(site_id: str, body: WorkerCreate):
 
     phone = re.sub(r"[^0-9]", "", body.phone or "") or None
     job_label = (body.job_type or "").strip() or "미지정"
+    job_name = _JOB_CODE_TO_NAME.get(job_label, job_label)  # 코드면 직종명, 아니면(미지정/자유텍스트) 그대로
     contractor = (body.company_name or "").strip() or None
     memo = (body.memo or "").strip() or None
     hire = _iso_date(body.hire_date)
@@ -333,7 +345,7 @@ async def create_worker(site_id: str, body: WorkerCreate):
         "name":            name,
         "phone":           phone,
         "job_type_code":   job_label,
-        "job_type_name":   job_label,
+        "job_type_name":   job_name,
         "contractor_name": contractor,
         "start_date":      hire,
         "memo":            memo,
