@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
 from schemas.construction import (
@@ -448,6 +449,55 @@ async def create_worker(site_id: str, body: WorkerCreate):
         raise HTTPException(status_code=500, detail=f"현장 배치 등록 실패: {e}")
 
     return {"status": "success", "data": res.data[0]}
+
+
+class SiteQrBody(BaseModel):
+    qr_code: Optional[str] = None   # 미지정 시 site_id 를 그대로 QR 값으로 사용
+
+
+@router.post("/sites/{site_id}/qr")
+async def issue_site_qr(site_id: str, body: SiteQrBody):
+    """현장 출입 QR 발급(등록). 이미 발급된 현장이면 기존 행을 갱신(재발급).
+    QR 내용은 기본적으로 site_id(UUID) 그대로 — 앱 qr_scan.html 이 이 값을 site_id 로 파싱한다."""
+    site_id = _validate_uuid(site_id)
+    supabase = get_supabase()
+
+    site = supabase.table("construction_sites").select("id, site_name").eq("id", site_id).single().execute()
+    if not site.data:
+        raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+
+    qr_code = (body.qr_code or "").strip() or site_id
+    now_naive = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+
+    # 같은 현장에 이미 발급된 QR 있으면 갱신, 없으면 신규
+    exist = supabase.table("qr_entities").select("id").eq("site_id", site_id).eq("tag_type", "SITE").limit(1).execute()
+    if exist.data:
+        qid = exist.data[0]["id"]
+        supabase.table("qr_entities").update({
+            "qr_code": qr_code, "status_code": "ACTIVE",
+        }).eq("id", qid).execute()
+    else:
+        ins = supabase.table("qr_entities").insert({
+            "site_id": site_id, "qr_code": qr_code, "tag_type": "SITE",
+            "status_code": "ACTIVE", "issued_at": now_naive,
+        }).execute()
+        qid = ins.data[0]["id"] if ins.data else None
+
+    return {
+        "status": "success",
+        "data": {"id": qid, "site_id": site_id, "qr_code": qr_code,
+                 "site_name": site.data.get("site_name")},
+    }
+
+
+@router.get("/sites/{site_id}/qr")
+async def get_site_qr(site_id: str):
+    """현장에 발급된 QR 조회(없으면 data=null). 화면이 발급 여부·재출력에 쓴다."""
+    site_id = _validate_uuid(site_id)
+    supabase = get_supabase()
+    res = supabase.table("qr_entities").select("id, qr_code, status_code, issued_at") \
+        .eq("site_id", site_id).eq("tag_type", "SITE").limit(1).execute()
+    return {"status": "success", "data": (res.data[0] if res.data else None)}
 
 
 @router.post("/sites/{site_id}/workers/bulk-import")
