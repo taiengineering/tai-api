@@ -312,7 +312,7 @@ async def create_worker(site_id: str, body: WorkerCreate):
     company_id = site.data.get("company_id")
 
     phone = re.sub(r"[^0-9]", "", body.phone or "") or None
-    job_label = (body.job_type or "").strip() or None
+    job_label = (body.job_type or "").strip() or "미지정"
     contractor = (body.company_name or "").strip() or None
     memo = (body.memo or "").strip() or None
     hire = _iso_date(body.hire_date)
