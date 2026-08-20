@@ -19,6 +19,10 @@ v1.1.0 (2026-04-07 Phase 3):
 
 tbm_meetings, tbm_attendees 테이블 사용
 
+인증·스코프 (2026-08-20):
+  공개(비공개 링크 worker 서명): sign-info · sign · register_sign(레거시).
+  그 외 관리자·테넌트 엔드포인트는 로그인 + TBM(회사) 소유 확인.
+
 API:
   POST   /tbm                              TBM 생성
   GET    /tbm                              목록 조회
@@ -43,6 +47,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import (
+    require_company_id, scoped_list_company, _ensure_own_company, _ensure_factory_own,
+)
 from services.health_registry import register_probe
 
 log = logging.getLogger(__name__)
@@ -64,6 +72,14 @@ def _is_uuid(value: str) -> bool:
         return True
     except (ValueError, AttributeError, TypeError):
         return False
+
+
+def _ensure_tbm_own(supabase, tbm_id: str, current: dict) -> None:
+    """TBM 소유 확인 — tbm_meetings.company_id 경유. 비-ALL 타사 404."""
+    r = supabase.table("tbm_meetings").select("company_id").eq("id", tbm_id).limit(1).execute()
+    if not r.data:
+        raise HTTPException(status_code=404, detail="TBM을 찾을 수 없습니다.")
+    _ensure_own_company(r.data[0].get("company_id"), current, supabase, "TBM을 찾을 수 없습니다.")
 
 
 # ── Pydantic 모델 ────────────────────────────────────────
@@ -127,14 +143,10 @@ class RequestSignBody(BaseModel):
 # ── 고정경로 먼저 선언 (/{id} 보다 앞에) ──────────────
 
 @router.post("/transcribe")
-def save_transcript(body: TranscribeBody):
+def save_transcript(body: TranscribeBody, current: dict = Depends(get_current_user)):
     """STT 변환 결과 저장."""
     supabase = get_supabase()
-    chk = supabase.table("tbm_meetings").select("id").eq(
-        "id", body.tbm_id
-    ).limit(1).execute()
-    if not chk.data:
-        raise HTTPException(status_code=404, detail="TBM을 찾을 수 없습니다.")
+    _ensure_tbm_own(supabase, body.tbm_id, current)
     update: dict = {
         "transcript_text":   body.transcript_text,
         "transcript_status": "DONE",
@@ -270,7 +282,7 @@ def submit_sign(
 
 
 @router.post("/{tbm_id}/request-sign")
-def request_sign(tbm_id: str, body: RequestSignBody):
+def request_sign(tbm_id: str, body: RequestSignBody, current: dict = Depends(get_current_user)):
     """
     v1.2.0: 선택된 참석자에게 FCM 서명요청 푸시 발송.
 
@@ -281,6 +293,7 @@ def request_sign(tbm_id: str, body: RequestSignBody):
     """
     supabase = get_supabase()
     now = _now()
+    _ensure_tbm_own(supabase, tbm_id, current)
 
     # TBM 정보 조회 (알림 내용용)
     tbm_res = supabase.table("tbm_meetings").select(
@@ -352,8 +365,9 @@ def request_sign(tbm_id: str, body: RequestSignBody):
 # ── CRUD ──────────────────────────────────────────────────
 
 @router.post("")
-def create_tbm(body: TbmCreateBody):
+def create_tbm(body: TbmCreateBody, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, body.factory_id, current)   # 타사 시설 404
     now = _now()
     company_id = body.company_id
     if not company_id:
@@ -362,6 +376,9 @@ def create_tbm(body: TbmCreateBody):
         ).limit(1).execute()
         if fac.data:
             company_id = fac.data[0].get("company_id")
+    _forced = require_company_id(current, supabase)   # 비-ALL 토큰강제·무회사 403
+    if _forced:
+        company_id = _forced
     title = body.meeting_title or f"TBM {body.work_date} {body.work_location or ''}".strip()
     row = {
         "factory_id":           body.factory_id,
@@ -397,8 +414,13 @@ def list_tbm(
     date_to:              Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
+    scoped_cid, deny_all = scoped_list_company(current, supabase, company_id)
+    if deny_all:
+        return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0}}
+    company_id = scoped_cid
     q = supabase.table("tbm_meetings").select(
         "id, factory_id, company_id, construction_site_id, group_id, team_id, meeting_title, work_date, "
         "work_location, conductor_name, attendee_count, status_code, "
@@ -424,7 +446,7 @@ def list_tbm(
 
 
 @router.get("/{tbm_id}")
-def get_tbm(tbm_id: str):
+def get_tbm(tbm_id: str, current: dict = Depends(get_current_user)):
     # 비-uuid 경로(/summary 등)가 catch-all 에 잡혀 500(22P02) 나던 것 방지
     if not _is_uuid(tbm_id):
         raise HTTPException(status_code=404, detail="TBM을 찾을 수 없습니다.")
@@ -435,14 +457,16 @@ def get_tbm(tbm_id: str):
     if not res.data:
         raise HTTPException(status_code=404, detail="TBM을 찾을 수 없습니다.")
     tbm = res.data[0]
+    _ensure_own_company(tbm.get("company_id"), current, supabase, "TBM을 찾을 수 없습니다.")
     att = supabase.table("tbm_attendees").select("*").eq("meeting_id", tbm_id).execute()
     tbm["attendees"] = att.data or []
     return {"status": "success", "data": tbm}
 
 
 @router.patch("/{tbm_id}")
-def update_tbm(tbm_id: str, body: TbmUpdateBody):
+def update_tbm(tbm_id: str, body: TbmUpdateBody, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_tbm_own(supabase, tbm_id, current)
     payload = {k: v for k, v in body.dict().items() if v is not None}
     if not payload:
         raise HTTPException(status_code=422, detail="수정할 내용이 없습니다.")
@@ -454,8 +478,9 @@ def update_tbm(tbm_id: str, body: TbmUpdateBody):
 
 
 @router.post("/{tbm_id}/complete")
-def complete_tbm(tbm_id: str):
+def complete_tbm(tbm_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_tbm_own(supabase, tbm_id, current)
     now = _now()
     res = supabase.table("tbm_meetings").update({
         "status_code": "COMPLETED", "completed_at": now, "updated_at": now,
@@ -466,18 +491,17 @@ def complete_tbm(tbm_id: str):
 
 
 @router.get("/{tbm_id}/attendees")
-def list_attendees(tbm_id: str):
+def list_attendees(tbm_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_tbm_own(supabase, tbm_id, current)
     res = supabase.table("tbm_attendees").select("*").eq("meeting_id", tbm_id).execute()
     return {"status": "success", "data": {"items": res.data or [], "total": len(res.data or [])}}
 
 
 @router.post("/{tbm_id}/attendees")
-def add_attendee(tbm_id: str, body: AttendeeAddBody):
+def add_attendee(tbm_id: str, body: AttendeeAddBody, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
-    chk = supabase.table("tbm_meetings").select("id").eq("id", tbm_id).limit(1).execute()
-    if not chk.data:
-        raise HTTPException(status_code=404, detail="TBM을 찾을 수 없습니다.")
+    _ensure_tbm_own(supabase, tbm_id, current)
     now = _now()
     row = {
         "meeting_id":  tbm_id,
@@ -504,7 +528,7 @@ def add_attendee(tbm_id: str, body: AttendeeAddBody):
 
 @router.patch("/{tbm_id}/attendees/{attendee_id}/sign")
 def register_sign(tbm_id: str, attendee_id: str, body: SignBody):
-    """v1.1.0 레거시 서명 URL 등록 (호환 유지)."""
+    """v1.1.0 레거시 서명 URL 등록 (호환 유지, 비공개 링크 서명)."""
     supabase = get_supabase()
     now = _now()
     res = supabase.table("tbm_attendees").update({
