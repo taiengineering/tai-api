@@ -1,6 +1,12 @@
 """
-routers/inspection_setup.py — v1.2.0
+routers/inspection_setup.py — v1.3.0
 점검항목 세팅 (prefill + setup)
+
+v1.3.0 (2026-08-20)
+  [SEC] 인증·회사 스코프 (Wave3, 직접MCP)
+    - 전 엔드포인트 로그인 필수(get_current_user).
+    - GET /prefill: 쿼리 company_id 를 토큰과 대조(_ensure_own_company) — 타사 플랜 probe 차단(P13).
+    - POST /setup: 대상 inspection_set 의 company_id 소유확인 후 저장.
 
 v1.2.0 (2026-04-20)
   [FIX] _resolve_plan_code: contracts 우선 → payments(status_code=SUCCESS, service_status=ACTIVE) 우선
@@ -15,9 +21,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _ensure_own_company
 
 router = APIRouter(prefix="/inspection-checklist", tags=["점검항목 세팅"])
 
@@ -111,6 +119,7 @@ async def get_prefill(
     equipment_std: str = Query(..., description="설비 표준코드 (inspection_master.equipment_std)"),
     company_id: str = Query(..., description="회사 UUID"),
     cycle: Optional[str] = Query(None, description="점검 주기 필터 (선택)"),
+    current: dict = Depends(get_current_user),
 ):
     """플랜 tier에 따라 추천 점검항목 반환.
 
@@ -119,6 +128,9 @@ async def get_prefill(
     - CONSTRUCTION 플랜 → tier 무관 항상 프리필
     """
     supabase = get_supabase()
+    # ── 회사 스코프 (P13): 쿼리 company_id 를 토큰과 대조 ──
+    _ensure_own_company(company_id, current, supabase, "회사를 찾을 수 없습니다.")
+
     plan_code = _resolve_plan_code(supabase, company_id)
     tier = _extract_tier(plan_code)
     allow_prefill = tier >= 2 or _is_construction_plan(plan_code)
@@ -191,7 +203,7 @@ async def get_prefill(
 # ── POST /inspection-checklist/setup ──────────────────────────────────────────
 
 @router.post("/setup")
-async def setup_inspection_checklist(body: dict):
+async def setup_inspection_checklist(body: dict, current: dict = Depends(get_current_user)):
     """점검항목 일괄 저장.
 
     - 기존 is_active=True 항목 soft delete → 신규 INSERT
@@ -219,6 +231,9 @@ async def setup_inspection_checklist(body: dict):
     if not set_res.data:
         raise HTTPException(status_code=404, detail="inspection_set_id를 찾을 수 없습니다.")
     set_row = set_res.data[0]
+
+    # ── 회사 스코프 (P13): 대상 세트 소유확인 ──
+    _ensure_own_company(set_row.get("company_id"), current, supabase, "inspection_set_id를 찾을 수 없습니다.")
 
     now = _now_iso()
 
