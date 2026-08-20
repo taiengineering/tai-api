@@ -303,6 +303,19 @@ def run_diagnosis(
         inp["factory_id"] = factory_id
     if company_id:
         inp["company_id"] = company_id
+
+    # Phase 1 lossless canonical materialization
+    # (WO-GATE8-CANONICAL-LOSSLESS-MATERIALIZATION-IMPLEMENT-01):
+    # consumer 가 실제 제공한 RTM-vocab applicability(선언 attr + 보존된 form_data)를
+    # DiagnoseStep1Body.input 으로 손실 없이 전달한다. build_facility(49) 가 input[code]
+    # 로 사영하므로 스키마/매핑 확장 불요. alias/derivation/값 생성 없음.
+    # setdefault 로 기존 inp 키(region/tier_code 등)는 덮어쓰지 않는다. FREE 경로 미영향.
+    from services.canonical.materialization import canonical_applicability
+
+    _available: dict = {f: getattr(body, f, None) for f in type(body).model_fields}
+    _available.update(getattr(body, "form_data", None) or {})
+    for _code, _val in canonical_applicability(_available).items():
+        inp.setdefault(_code, _val)
     workers = body.worker_count or body.direct_workers or 0
     employees = body.employee_count or workers
     floor_area = body.floor_area or 400.0
