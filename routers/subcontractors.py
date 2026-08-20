@@ -1,15 +1,37 @@
 """하도급업체 관리 CRUD — 건설현장별 하도급업체 + 소속 작업자 연결.
 
 v1.0.0  2026-05-26  신규 생성
+
+인증·스코프 (2026-08-20):
+  company_id 는 하도급업체(공급사)의 회사이므로 테넌트 키가 아니다.
+  테넌트 소유는 site_id → construction_sites.company_id 로 확인한다(전 엔드포인트 로그인).
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 from datetime import date, datetime
 from uuid import UUID
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _ensure_own_company
 
 router = APIRouter(prefix="/construction/subcontractors", tags=["하도급관리"])
+
+
+def _ensure_site_own(sb, site_id, current) -> None:
+    """건설현장 소유 확인 — construction_sites.company_id 경유. 비-ALL 타사 404."""
+    r = sb.table("construction_sites").select("company_id").eq("id", str(site_id)).limit(1).execute()
+    if not r.data:
+        raise HTTPException(404, "현장을 찾을 수 없습니다.")
+    _ensure_own_company(r.data[0].get("company_id"), current, sb, "현장을 찾을 수 없습니다.")
+
+
+def _ensure_sub_own(sb, subcontractor_id, current) -> None:
+    """하도급업체 → 현장 → 회사 소유 확인."""
+    r = sb.table("subcontractors").select("site_id").eq("id", str(subcontractor_id)).limit(1).execute()
+    if not r.data:
+        raise HTTPException(404, "하도급업체를 찾을 수 없습니다.")
+    _ensure_site_own(sb, r.data[0]["site_id"], current)
 
 
 # ── Schemas ──
@@ -58,8 +80,10 @@ async def list_subcontractors(
     status_code: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
+    current: dict = Depends(get_current_user),
 ):
     sb = get_supabase()
+    _ensure_site_own(sb, site_id, current)
     q = sb.table("subcontractors").select("*").eq("site_id", str(site_id))
     if status_code:
         q = q.eq("status_code", status_code)
@@ -82,8 +106,9 @@ async def list_subcontractors(
 
 # ── Detail ──
 @router.get("/{subcontractor_id}")
-async def get_subcontractor(subcontractor_id: UUID):
+async def get_subcontractor(subcontractor_id: UUID, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _ensure_sub_own(sb, subcontractor_id, current)
     res = sb.table("subcontractors").select("*").eq("id", str(subcontractor_id)).execute()
     if not res.data:
         raise HTTPException(404, "하도급업체를 찾을 수 없습니다.")
@@ -100,8 +125,9 @@ async def get_subcontractor(subcontractor_id: UUID):
 
 # ── Create ──
 @router.post("")
-async def create_subcontractor(body: SubcontractorCreate):
+async def create_subcontractor(body: SubcontractorCreate, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _ensure_site_own(sb, body.site_id, current)
     payload = body.model_dump(mode="json")
     payload["site_id"] = str(body.site_id)
     payload["company_id"] = str(body.company_id)
@@ -113,8 +139,9 @@ async def create_subcontractor(body: SubcontractorCreate):
 
 # ── Update ──
 @router.put("/{subcontractor_id}")
-async def update_subcontractor(subcontractor_id: UUID, body: SubcontractorUpdate):
+async def update_subcontractor(subcontractor_id: UUID, body: SubcontractorUpdate, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _ensure_sub_own(sb, subcontractor_id, current)
     payload = body.model_dump(exclude_none=True, mode="json")
     if not payload:
         raise HTTPException(400, "수정할 항목이 없습니다.")
@@ -127,8 +154,9 @@ async def update_subcontractor(subcontractor_id: UUID, body: SubcontractorUpdate
 
 # ── Delete ──
 @router.delete("/{subcontractor_id}")
-async def delete_subcontractor(subcontractor_id: UUID):
+async def delete_subcontractor(subcontractor_id: UUID, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _ensure_sub_own(sb, subcontractor_id, current)
     # soft delete
     res = sb.table("subcontractors").update(
         {"is_active": False, "status_code": "TERMINATED", "updated_at": datetime.utcnow().isoformat()}
