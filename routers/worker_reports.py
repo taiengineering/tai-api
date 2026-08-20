@@ -1,5 +1,5 @@
 """
-작업자 안전신고 / 긴급신고 API — v1.0.0
+작업자 안전신고 / 긴급신고 API — v1.1.0
 
 작업자 PWA(/app/report.html, /app/emergency.html, /app/corrective.html)가 호출하지만
 서버에 부재해 404 로 실패하던 경로를 신설한다. 테이블은 이미 존재하므로 DDL 변경은 없다.
@@ -13,9 +13,14 @@ API:
 인증은 worker_check.py 관례를 따른다 — Authorization 이 있으면 검증하고, 없으면
 phone 기반으로 처리한다. 현장 작업자가 토큰 만료 상태에서도 신고할 수 있어야 하기
 때문이며, 산안법 제52조(근로자의 즉시 보고)를 막지 않기 위함이다.
+
+v1.1.0 (2026-08-20): [FIX] GET/POST /safety-reports/{id} 의 report_id 를 UUID 검증.
+  프론트가 /safety-reports/summary 를 폴링하면 report_id="summary" 로 매칭돼
+  postgrest 22P02(invalid uuid) 로 500 이 나던 것을 404 로 정정한다(경로 부재 신호).
 """
 import logging
 import random
+import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -26,6 +31,15 @@ from db.supabase_client import get_supabase
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["WorkerReport"])
+
+
+def _is_uuid(value) -> bool:
+    """report_id 가 UUID 형식인지. 아니면 라우트 부재로 보고 404 처리(500 방지)."""
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, TypeError, AttributeError):
+        return False
 
 
 def _optional_auth(authorization: Optional[str] = Header(None)) -> Optional[dict]:
@@ -161,6 +175,9 @@ def create_safety_report(
 @router.get("/safety-reports/{report_id}")
 def get_safety_report(report_id: str):
     """신고 상세 조회. corrective.html 이 시정조치 내용을 표시할 때 사용한다."""
+    # report_id 가 UUID 가 아니면(예: 프론트의 /summary 폴링) 라우트 부재로 보고 404.
+    if not _is_uuid(report_id):
+        raise HTTPException(status_code=404, detail="신고를 찾을 수 없습니다")
     supabase = get_supabase()
     res = supabase.table("safety_reports").select("*").eq("id", report_id).limit(1).execute()
     if not res.data:
@@ -184,6 +201,8 @@ def confirm_safety_report(
     safety_reports 에는 확인자/확인시각 전용 컬럼이 없다. 상태만 CONFIRMED 로 전이시키며,
     확인자 이력이 필요해지면 별도 컬럼 추가를 동반한 마이그레이션이 필요하다.
     """
+    if not _is_uuid(report_id):
+        raise HTTPException(status_code=404, detail="신고를 찾을 수 없습니다")
     supabase = get_supabase()
 
     exist = supabase.table("safety_reports").select("id, status").eq("id", report_id).limit(1).execute()
