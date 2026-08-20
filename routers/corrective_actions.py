@@ -1,5 +1,13 @@
 """
-이창 보고서 조치사항(Corrective Actions) 관리 라우터 — v1.1.0
+이창 보고서 조치사항(Corrective Actions) 관리 라우터 — v1.2.0
+
+v1.2.0 (2026-08-20):
+  [SEC] 인증·회사 스코프 (Wave3, 직접MCP)
+    - GET 목록: factory_id 주면 시설 소유확인, 아니면 회사 스코프(company_id).
+      비-ALL·무회사는 빈 결과. ALL 은 company_id 선택 필터.
+    - POST: require_company_id 로 비-ALL 은 토큰 company_id 강제(클라 값 무시, P13).
+      factory_id 주면 시설 소유확인.
+    - PATCH: 대상 행 company_id 소유확인(_ensure_own_company) 후 수정.
 
 v1.1.0 (2026-04-07):
   [FIX] 기존 테이블 구조 대응
@@ -19,16 +27,24 @@ API:
   POST   /corrective-actions   등록
   PATCH  /corrective-actions/{id}  수정
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import (
+    require_company_id,
+    _ensure_own_company,
+    _ensure_factory_own,
+    _scope,
+    _is_admin,
+)
 
 router = APIRouter(prefix="/corrective-actions", tags=["이창보고서"])
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 
 def _now() -> str:
@@ -96,6 +112,7 @@ def list_corrective_actions(
     assignee_id: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(200, ge=1, le=500),
+    current: dict = Depends(get_current_user),
 ):
     """
     이창 보고서 목록 조회.
@@ -104,8 +121,30 @@ def list_corrective_actions(
     supabase = get_supabase()
     q = supabase.table("corrective_actions").select("*", count="exact")
 
-    if factory_id:  q = q.eq("factory_id",  factory_id)
-    if company_id:  q = q.eq("company_id",  company_id)
+    # ── 인증·회사 스코프 (P13) ──
+    # factory_id 지정 → 시설 소유확인 후 시설 스코프
+    # 그 외 비-ALL → 토큰 company_id 스코프(무회사는 빈 결과)
+    # ALL → company_id 선택 필터(미지정 시 전사)
+    if factory_id:
+        _ensure_factory_own(supabase, factory_id, current)
+        q = q.eq("factory_id", factory_id)
+    elif not _is_admin(_scope(supabase, current.get("role_code"))):
+        cid = current.get("company_id")
+        if not cid:
+            return {
+                "status": "success",
+                "data": {
+                    "items":       [],
+                    "total":       0,
+                    "page":        page,
+                    "size":        size,
+                    "total_pages": 0,
+                },
+            }
+        q = q.eq("company_id", cid)
+    elif company_id:
+        q = q.eq("company_id", company_id)
+
     if severity:    q = q.eq("severity",     severity)
 
     # status 필터: status 또는 status_code 둘 다 체크
@@ -137,9 +176,20 @@ def list_corrective_actions(
 # ── POST /corrective-actions ─────────────────────────────────
 
 @router.post("")
-def create_corrective_action(body: CorrectiveActionCreate):
+def create_corrective_action(
+    body: CorrectiveActionCreate,
+    current: dict = Depends(get_current_user),
+):
     """이창 발행 등록."""
     supabase = get_supabase()
+
+    # ── 회사 스코프 강제 (P13): 비-ALL 은 토큰 company_id(클라 값 무시) ──
+    _forced = require_company_id(current, supabase)
+    if _forced:
+        body.company_id = _forced
+    if body.factory_id:
+        _ensure_factory_own(supabase, body.factory_id, current)
+
     now = _now()
 
     row = {
@@ -176,7 +226,11 @@ def create_corrective_action(body: CorrectiveActionCreate):
 # ── PATCH /corrective-actions/{id} ──────────────────────────
 
 @router.patch("/{action_id}")
-def update_corrective_action(action_id: str, body: CorrectiveActionUpdate):
+def update_corrective_action(
+    action_id: str,
+    body: CorrectiveActionUpdate,
+    current: dict = Depends(get_current_user),
+):
     """
     이창 수정.
     - status=COMPLETED 시 completed_at 자동 세팅
@@ -186,9 +240,11 @@ def update_corrective_action(action_id: str, body: CorrectiveActionUpdate):
     supabase = get_supabase()
     now = _now()
 
-    chk = supabase.table("corrective_actions").select("id").eq("id", action_id).limit(1).execute()
+    chk = supabase.table("corrective_actions").select("id, company_id").eq("id", action_id).limit(1).execute()
     if not chk.data:
         raise HTTPException(status_code=404, detail="이창을 찾을 수 없습니다.")
+    # ── 회사 소유확인 (P13): 비-ALL 이 타사 자원 수정 차단 ──
+    _ensure_own_company(chk.data[0].get("company_id"), current, supabase, "이창을 찾을 수 없습니다.")
 
     payload: dict = {"updated_at": now}
 
