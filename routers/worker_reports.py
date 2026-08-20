@@ -1,18 +1,24 @@
 """
-작업자 안전신고 / 긴급신고 API — v1.1.0
+작업자 안전신고 / 긴급신고 API — v1.2.0
 
 작업자 PWA(/app/report.html, /app/emergency.html, /app/corrective.html)가 호출하지만
 서버에 부재해 404 로 실패하던 경로를 신설한다. 테이블은 이미 존재하므로 DDL 변경은 없다.
 
 API:
-  POST /safety-reports              이상 신고 접수 (report.html)
-  GET  /safety-reports/{id}         신고 상세 (corrective.html)
-  POST /safety-reports/{id}/confirm 시정조치 확인 (corrective.html)
-  POST /emergency/report            긴급 신고 접수 (emergency.html)
+  POST /safety-reports              이상 신고 접수 (report.html) — 개방(산안법 제52조)
+  GET  /safety-reports/{id}         신고 상세 (corrective.html) — 인증+회사 스코프
+  POST /safety-reports/{id}/confirm 시정조치 확인 (corrective.html) — 인증+회사 스코프
+  POST /emergency/report            긴급 신고 접수 (emergency.html) — 개방(즉시보고)
 
-인증은 worker_check.py 관례를 따른다 — Authorization 이 있으면 검증하고, 없으면
-phone 기반으로 처리한다. 현장 작업자가 토큰 만료 상태에서도 신고할 수 있어야 하기
-때문이며, 산안법 제52조(근로자의 즉시 보고)를 막지 않기 위함이다.
+접수(POST)는 산안법 제52조(근로자의 즉시 보고)를 막지 않도록 개방(optional-auth)한다.
+현장 작업자가 토큰 만료 상태에서도 신고할 수 있어야 하기 때문이다.
+
+v1.2.0 (2026-08-20): [SEC] 열람·확인 경로 인증 강제 + 회사 스코프 (Wave3, 직접MCP, 운영자 승인)
+  - GET /safety-reports/{id}·POST /{id}/confirm 은 로그인 필수(get_current_user).
+  - safety_reports 에 직접 company_id 가 없어 factory_id→factories / site_id→construction_sites
+    경유로 회사를 판정, 비-ALL 은 자사 신고만 열람·확인(타사 404). 회사 판정 불가(둘 다 null)
+    신고는 ALL 만 접근(소유 증명 불가 → 안전기본값).
+  - 접수(POST /safety-reports, /emergency/report)는 개방 유지(산안법 제52조 즉시보고).
 
 v1.1.0 (2026-08-20): [FIX] GET/POST /safety-reports/{id} 의 report_id 를 UUID 검증.
   프론트가 /safety-reports/summary 를 폴링하면 report_id="summary" 로 매칭돼
@@ -28,6 +34,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _ensure_own_company
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["WorkerReport"])
@@ -40,6 +48,22 @@ def _is_uuid(value) -> bool:
         return True
     except (ValueError, TypeError, AttributeError):
         return False
+
+
+def _report_company_id(sb, row) -> Optional[str]:
+    """safety_reports 행의 회사 판정. factory_id→factories.company_id 우선,
+    없으면 site_id→construction_sites.company_id. 둘 다 없으면 None(판정 불가)."""
+    fid = row.get("factory_id")
+    if fid:
+        f = sb.table("factories").select("company_id").eq("id", fid).limit(1).execute()
+        if f.data:
+            return f.data[0].get("company_id")
+    sid = row.get("site_id")
+    if sid:
+        s = sb.table("construction_sites").select("company_id").eq("id", sid).limit(1).execute()
+        if s.data:
+            return s.data[0].get("company_id")
+    return None
 
 
 def _optional_auth(authorization: Optional[str] = Header(None)) -> Optional[dict]:
@@ -123,7 +147,7 @@ def create_safety_report(
     body: SafetyReportBody,
     current_user: Optional[dict] = Depends(_optional_auth),
 ):
-    """이상 신고 접수 (산안법 제52조)."""
+    """이상 신고 접수 (산안법 제52조) — 개방(즉시보고 보장)."""
     supabase = get_supabase()
     clean = _clean_phone(body.phone)
 
@@ -173,8 +197,8 @@ def create_safety_report(
 
 
 @router.get("/safety-reports/{report_id}")
-def get_safety_report(report_id: str):
-    """신고 상세 조회. corrective.html 이 시정조치 내용을 표시할 때 사용한다."""
+def get_safety_report(report_id: str, current: dict = Depends(get_current_user)):
+    """신고 상세 조회 (corrective.html). 인증 필수 + 회사 스코프."""
     # report_id 가 UUID 가 아니면(예: 프론트의 /summary 폴링) 라우트 부재로 보고 404.
     if not _is_uuid(report_id):
         raise HTTPException(status_code=404, detail="신고를 찾을 수 없습니다")
@@ -182,7 +206,10 @@ def get_safety_report(report_id: str):
     res = supabase.table("safety_reports").select("*").eq("id", report_id).limit(1).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="신고를 찾을 수 없습니다")
-    return {"status": "success", "data": res.data[0]}
+    row = res.data[0]
+    # 회사 스코프(P13): factory_id/site_id 경유 회사 판정 후 자사만 열람
+    _ensure_own_company(_report_company_id(supabase, row), current, supabase, "신고를 찾을 수 없습니다")
+    return {"status": "success", "data": row}
 
 
 class ConfirmBody(BaseModel):
@@ -194,9 +221,9 @@ class ConfirmBody(BaseModel):
 def confirm_safety_report(
     report_id: str,
     body: ConfirmBody,
-    current_user: Optional[dict] = Depends(_optional_auth),
+    current: dict = Depends(get_current_user),
 ):
-    """작업자의 시정조치 완료 확인 (산안법 제53조).
+    """작업자의 시정조치 완료 확인 (산안법 제53조). 인증 필수 + 회사 스코프.
 
     safety_reports 에는 확인자/확인시각 전용 컬럼이 없다. 상태만 CONFIRMED 로 전이시키며,
     확인자 이력이 필요해지면 별도 컬럼 추가를 동반한 마이그레이션이 필요하다.
@@ -205,9 +232,11 @@ def confirm_safety_report(
         raise HTTPException(status_code=404, detail="신고를 찾을 수 없습니다")
     supabase = get_supabase()
 
-    exist = supabase.table("safety_reports").select("id, status").eq("id", report_id).limit(1).execute()
+    exist = supabase.table("safety_reports").select("id, status, factory_id, site_id").eq("id", report_id).limit(1).execute()
     if not exist.data:
         raise HTTPException(status_code=404, detail="신고를 찾을 수 없습니다")
+    # 회사 스코프(P13): 자사 신고만 확인 가능
+    _ensure_own_company(_report_company_id(supabase, exist.data[0]), current, supabase, "신고를 찾을 수 없습니다")
 
     res = supabase.table("safety_reports").update({
         "status": "CONFIRMED",
