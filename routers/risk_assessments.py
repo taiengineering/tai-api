@@ -78,11 +78,13 @@ assessment_type (고시 제15조):
   CONTINUOUS  상시평가 — 제15조제4항. 월1회 이상 발굴, 주1회 이상 논의·점검,
                          매 작업일 TBM 의 3요건을 갖추면 수시·정기평가를 실시한 것으로 본다.
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone, date
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import require_company_id, scoped_list_company, _ensure_own_company
 from services.health_registry import register_probe
 from services.ra_policy_svc import get_param_value, list_params
 from services.ra_decision_svc import assessment_readiness
@@ -264,6 +266,7 @@ def get_dashboard(
     company_id:           Optional[str] = Query(None),
     construction_site_id: Optional[str] = Query(None),
     business_start_date:  Optional[str] = Query(None, description="사업 성립일(건설=실착공일) YYYY-MM-DD"),
+    current: dict = Depends(get_current_user),
 ):
     """
     위험성평가 현황 요약.
@@ -273,6 +276,19 @@ def get_dashboard(
     - 적용된 법정 기한 값과 그 출처(policy_source)
     """
     supabase = get_supabase()
+    scoped_cid, deny_all = scoped_list_company(current, supabase, company_id)
+    if deny_all:
+        return {"status": "success", "data": {
+            "total": 0, "completed": 0, "draft": 0,
+            "initial_done": False, "initial_started": False,
+            "initial_due_months": _initial_due_months(),
+            "initial_due_date": None, "initial_due_dday": None, "initial_overdue": None,
+            "pending_special": 0, "next_regular_date": None, "next_regular_dday": None,
+            "periodic_cycle_years": _periodic_cycle_years(),
+            "retention_years": _retention_years(),
+            "policy_source": None, "alert": None,
+        }}
+    company_id = scoped_cid
     q = supabase.table("risk_assessments").select(
         "id, assessment_type, title, assessment_date, next_review_date, status_code, completed_at"
     )
@@ -348,6 +364,7 @@ def get_continuous_status(
     company_id: Optional[str] = Query(None),
     factory_id: Optional[str] = Query(None),
     month:      Optional[str] = Query(None, description="판정 대상 월 YYYY-MM (기본: 이번 달)"),
+    current: dict = Depends(get_current_user),
 ):
     """상시평가 3요건 간주 판정 — 고시 제15조제4항.
 
@@ -369,6 +386,11 @@ def get_continuous_status(
     next_first = _add_months(month_first, 1)
     month_last = next_first - __import__("datetime").timedelta(days=1)
     supabase = get_supabase()
+
+    scoped_cid, deny_all = scoped_list_company(current, supabase, company_id)
+    if deny_all:
+        return {"status": "success", "data": {}}
+    company_id = scoped_cid
 
     # 1호 실적 — 회사/시설 평가에 속한 ra_item 등록일
     discovery_dates: List[str] = []
@@ -432,10 +454,13 @@ def get_continuous_status(
 # ── CRUD ─────────────────────────────────────────────────
 
 @router.post("")
-def create_assessment(body: RiskCreateBody):
+def create_assessment(body: RiskCreateBody, current: dict = Depends(get_current_user)):
     """위험성평가 등록."""
     supabase = get_supabase()
     now = _now()
+
+    _forced = require_company_id(current, supabase)   # 비-ALL 토큰강제·무회사 403; ALL 은 토큰 company(None 가능)
+    body.company_id = _forced or body.company_id
 
     title = body.title or body.work_name or ""
     if not title:
@@ -505,9 +530,14 @@ def list_assessments(
     date_to:              Optional[str] = Query(None, description="YYYY-MM-DD (assessment_date <=)"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
 ):
     """위험성평가 목록 조회. date_from/date_to 가 지정되면 year 보다 우선한다."""
     supabase = get_supabase()
+    scoped_cid, deny_all = scoped_list_company(current, supabase, company_id)
+    if deny_all:
+        return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0}}
+    company_id = scoped_cid
 
     def _run(select_cols: str):
         q = supabase.table("risk_assessments").select(select_cols, count="exact")
@@ -558,7 +588,7 @@ def list_assessments(
 
 
 @router.get("/{assessment_id}")
-def get_assessment(assessment_id: str):
+def get_assessment(assessment_id: str, current: dict = Depends(get_current_user)):
     """위험성평가 상세 조회."""
     supabase = get_supabase()
     res = supabase.table("risk_assessments").select("*").eq(
@@ -567,15 +597,20 @@ def get_assessment(assessment_id: str):
     if not res.data:
         raise HTTPException(status_code=404, detail="위험성평가를 찾을 수 없습니다.")
     record = res.data[0]
+    _ensure_own_company(record.get("company_id"), current, supabase, "위험성평가를 찾을 수 없습니다.")
     record["next_review_dday"] = _dday(record.get("next_review_date"))
     record["risk_level"] = _top_level(record.get("items_json"))
     return {"status": "success", "data": record}
 
 
 @router.patch("/{assessment_id}")
-def update_assessment(assessment_id: str, body: RiskUpdateBody):
+def update_assessment(assessment_id: str, body: RiskUpdateBody, current: dict = Depends(get_current_user)):
     """위험성평가 수정."""
     supabase = get_supabase()
+    _own = supabase.table("risk_assessments").select("company_id").eq("id", assessment_id).limit(1).execute()
+    if not _own.data:
+        raise HTTPException(status_code=404, detail="위험성평가를 찾을 수 없습니다.")
+    _ensure_own_company(_own.data[0].get("company_id"), current, supabase, "위험성평가를 찾을 수 없습니다.")
     payload = {k: v for k, v in body.dict().items() if v is not None}
     if not payload:
         raise HTTPException(status_code=422, detail="수정할 내용이 없습니다.")
@@ -589,14 +624,15 @@ def update_assessment(assessment_id: str, body: RiskUpdateBody):
 
 
 @router.post("/{assessment_id}/files")
-def attach_file(assessment_id: str, body: FileAttachBody):
+def attach_file(assessment_id: str, body: FileAttachBody, current: dict = Depends(get_current_user)):
     """파일 URL 첨부."""
     supabase = get_supabase()
     chk = supabase.table("risk_assessments").select(
-        "id, files_json"
+        "id, files_json, company_id"
     ).eq("id", assessment_id).limit(1).execute()
     if not chk.data:
         raise HTTPException(status_code=404, detail="위험성평가를 찾을 수 없습니다.")
+    _ensure_own_company(chk.data[0].get("company_id"), current, supabase, "위험성평가를 찾을 수 없습니다.")
 
     files = list(chk.data[0].get("files_json") or [])
     files.append({
@@ -634,7 +670,7 @@ def _readiness_of(assessment_id: str) -> Optional[dict]:
 
 
 @router.post("/{assessment_id}/complete")
-def complete_assessment(assessment_id: str):
+def complete_assessment(assessment_id: str, current: dict = Depends(get_current_user)):
     """위험성평가 완료 처리.
 
     가드 — 고시 제12조제3항: 감소대책 실행 후에도 허용 가능한 수준에 이르지 못한
@@ -645,10 +681,11 @@ def complete_assessment(assessment_id: str):
     """
     supabase = get_supabase()
 
-    cur = supabase.table("risk_assessments").select("id, status_code").eq(
+    cur = supabase.table("risk_assessments").select("id, status_code, company_id").eq(
         "id", assessment_id).limit(1).execute()
     if not cur.data:
         raise HTTPException(status_code=404, detail="위험성평가를 찾을 수 없습니다.")
+    _ensure_own_company(cur.data[0].get("company_id"), current, supabase, "위험성평가를 찾을 수 없습니다.")
 
     ready = _readiness_of(assessment_id)
     if ready and not ready.get("can_complete"):
