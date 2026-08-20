@@ -1,8 +1,10 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 from datetime import date, datetime, timezone
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _ensure_factory_own, _require_admin, _scope, _is_admin
 
 router = APIRouter(prefix="/equipment-assets", tags=["equipment_assets"])
 
@@ -25,7 +27,31 @@ v1.4.0: /model/search 개선 (equipment_model_master + v_equipment_unified 병�
 v1.3.0: 설비 마스터 검색 엔드포인트 추가
 v1.2.0: QR/RFID 참조
 v1.1.0: INSTALL 이벤트 트리거
+
+인증·스코프 (2026-08-20):
+  equipment_assets 는 factory_id 키(직접 company_id 없음)라 factory→company 로 소유확인한다.
+  목록/단건/변경은 자사 시설 스코프, /overview(전사 집계 뷰)는 ALL 전용,
+  /model/search(마스터 카탈로그)는 로그인만.
 """
+
+
+def _own_factory_ids(sb, current):
+    """비-ALL 자기 회사 factory id 목록. ALL → None(전체). 무회사 → []."""
+    if _is_admin(_scope(sb, current.get("role_code"))):
+        return None
+    cid = current.get("company_id")
+    if not cid:
+        return []
+    res = sb.table("factories").select("id").eq("company_id", cid).execute()
+    return [r["id"] for r in (res.data or [])]
+
+
+def _ensure_asset_own(sb, asset_id, current):
+    """설비 → 시설 → 회사 소유 확인."""
+    r = sb.table("equipment_assets").select("factory_id").eq("id", asset_id).limit(1).execute()
+    if not r.data:
+        raise HTTPException(status_code=404, detail="설비를 찾을 수 없습니다")
+    _ensure_factory_own(sb, r.data[0]["factory_id"], current)
 
 
 class EquipmentAssetCreate(BaseModel):
@@ -78,6 +104,7 @@ def get_assets(
     equipment_type_code:  Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=1000),
+    current: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
     query = supabase.table("equipment_assets").select(
@@ -91,7 +118,14 @@ def get_assets(
         count="exact"
     )
     if factory_id:
+        _ensure_factory_own(supabase, factory_id, current)
         query = query.eq("factory_id", factory_id)
+    else:
+        own = _own_factory_ids(supabase, current)
+        if own == []:
+            return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size}}
+        if own is not None:
+            query = query.in_("factory_id", own)
     if area_id:
         query = query.eq("area_id", area_id)
     if equipment_type_code:
@@ -114,13 +148,16 @@ def get_assets(
 # 원본 admin equipment-list.html 탭1 이 호출: GET /equipment-assets/overview?page=&page_size=&search=
 # 집계 뷰 v_equipment_overview (시설 LEFT JOIN 회사 LEFT JOIN 설비[is_operating=true]) 를 조회.
 # ⚠️ 라우트 순서: 반드시 GET /{asset_id} 보다 위에 정의 (과거 /summary 순서 버그와 동일 이슈 방지).
+# 전사 집계 뷰라 ALL(총관리자) 전용.
 @router.get("/overview")
 def get_equipment_overview(
     search:    Optional[str] = Query(None, description="시설명/회사명 ILIKE"),
     page:      int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
+    _require_admin(current, supabase)
     query = supabase.table("v_equipment_overview").select("*", count="exact")
     if search and search.strip():
         s = search.strip().replace(",", " ")
@@ -143,6 +180,7 @@ def get_equipment_overview(
 def scan_equipment(
     id:   Optional[str] = Query(None),
     rfid: Optional[str] = Query(None),
+    current: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
     if not id and not rfid:
@@ -161,6 +199,7 @@ def scan_equipment(
         raise HTTPException(status_code=404, detail="등록된 설비를 찾을 수 없습니다")
     asset = asset_res.data[0]
     factory_id = asset.get("factory_id")
+    _ensure_factory_own(supabase, factory_id, current)   # 타사 설비 스캔 404
     factory_info, company_info, company_id = {}, {}, None
     if factory_id:
         fac = supabase.table("factories").select("id, name, company_id").eq("id", factory_id).limit(1).execute()
@@ -195,6 +234,7 @@ def search_equipment_model(
     q:    str            = Query(..., description="설비명 검색어 (ILIKE)"),
     lv2:  Optional[str] = Query(None),
     size: int            = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
     seen: set = set()
@@ -222,16 +262,22 @@ def search_equipment_model(
 
 # ── area별 조회 ─────────────────────────────────────────────
 @router.get("/area/{area_id}")
-def get_area_assets(area_id: str):
+def get_area_assets(area_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     result = supabase.table("equipment_assets").select("*").eq("area_id", area_id).execute()
-    return {"status": "success", "data": result.data}
+    rows = result.data or []
+    if not _is_admin(_scope(supabase, current.get("role_code"))):
+        own = _own_factory_ids(supabase, current)
+        own_set = set(own or [])
+        rows = [r for r in rows if r.get("factory_id") in own_set]
+    return {"status": "success", "data": rows}
 
 
 # ── 시설별 설비 통계 ─────────────────────────────────────────
 @router.get("/summary")
-def get_equipment_summary(factory_id: str = Query(...)):
+def get_equipment_summary(factory_id: str = Query(...), current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     result = supabase.table("equipment_assets").select("operation_status").eq("factory_id", factory_id).execute()
     rows = result.data or []
     total = len(rows)
@@ -243,8 +289,9 @@ def get_equipment_summary(factory_id: str = Query(...)):
 
 # ── 단건 조회 ────────────────────────────────────────────────
 @router.get("/{asset_id}")
-def get_asset(asset_id: str):
+def get_asset(asset_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_asset_own(supabase, asset_id, current)
     result = supabase.table("equipment_assets").select("*").eq("id", asset_id).limit(1).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="설비를 찾을 수 없습니다")
@@ -253,10 +300,11 @@ def get_asset(asset_id: str):
 
 # ── 설비 등록 ────────────────────────────────────────────────
 @router.post("")
-async def create_asset(body: EquipmentAssetCreate):
+async def create_asset(body: EquipmentAssetCreate, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     if not body.asset_name.strip():
         raise HTTPException(status_code=422, detail="asset_name은 필수입니다.")
+    _ensure_factory_own(supabase, body.factory_id, current)
     fac = supabase.table("factories").select("company_id").eq("id", body.factory_id).limit(1).execute()
     company_id = (fac.data[0] if fac.data else {}).get("company_id")
     insert_data = {
@@ -296,8 +344,9 @@ async def create_asset(body: EquipmentAssetCreate):
 
 # ── QR URL 생성 ──────────────────────────────────────────────
 @router.post("/{asset_id}/generate-qr")
-def generate_qr(asset_id: str):
+def generate_qr(asset_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_asset_own(supabase, asset_id, current)
     asset_res = supabase.table("equipment_assets").select("id, asset_name, asset_code, factory_id").eq("id", asset_id).limit(1).execute()
     if not asset_res.data:
         raise HTTPException(status_code=404, detail="설비를 찾을 수 없습니다")
@@ -310,20 +359,22 @@ def generate_qr(asset_id: str):
 
 # ── QR 출력 횟수 ─────────────────────────────────────────────
 @router.post("/{asset_id}/qr-printed")
-def increment_qr_print(asset_id: str):
+def increment_qr_print(asset_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_asset_own(supabase, asset_id, current)
     asset_res = supabase.table("equipment_assets").select("qr_print_count").eq("id", asset_id).limit(1).execute()
     if not asset_res.data:
         raise HTTPException(status_code=404, detail="설비를 찾을 수 없습니다")
-    current = asset_res.data[0].get("qr_print_count") or 0
-    supabase.table("equipment_assets").update({"qr_print_count": current + 1}).eq("id", asset_id).execute()
-    return {"status": "success", "qr_print_count": current + 1}
+    current_cnt = asset_res.data[0].get("qr_print_count") or 0
+    supabase.table("equipment_assets").update({"qr_print_count": current_cnt + 1}).eq("id", asset_id).execute()
+    return {"status": "success", "qr_print_count": current_cnt + 1}
 
 
 # ── 설비 수정 (v1.5.0: operation_status 포함) ─────────────────────
 @router.patch("/{asset_id}")
-def update_asset(asset_id: str, body: EquipmentAssetUpdate):
+def update_asset(asset_id: str, body: EquipmentAssetUpdate, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_asset_own(supabase, asset_id, current)
     update_data = {}
     for k, v in body.dict().items():
         # None은 제외하되, is_legal_target/is_operating 같은 bool은 False도 포함
@@ -343,8 +394,9 @@ def update_asset(asset_id: str, body: EquipmentAssetUpdate):
 
 # ── 설비 삭제 (soft) ─────────────────────────────────────────
 @router.delete("/{asset_id}")
-def delete_asset(asset_id: str):
+def delete_asset(asset_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_asset_own(supabase, asset_id, current)
     res = supabase.table("equipment_assets").update({"is_operating": False}).eq("id", asset_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="설비를 찾을 수 없습니다.")
