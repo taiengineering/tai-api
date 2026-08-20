@@ -3,13 +3,15 @@
 """
 TAI Companies 라우터 - 사업장 등록/관리 v2.2.0
 
+v2.3.0: 인증·회사 스코프 (P13). nts/check-biz 공개, onboarding·create 로그인,
+        get_companies ALL 전용, by-id 14개는 자기 회사(_ensure_own_company).
 v2.2.0: 어드민 전체 목록(get_companies)에서 데모(체험) 테넌트 제외 (companies.is_demo)
 v2.1.0: 사업자번호 중복 확인 API 추가
   - GET /companies/check-biz?business_number=  사업자번호 중복 확인 (등록/미등록 + 회사명 반환)
 v2.0.0: 담당자/파일/계약이력/온보딩 API 추가
 """
 
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Depends
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
@@ -18,6 +20,8 @@ import os
 import re
 import uuid
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _ensure_own_company, _require_admin
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 
@@ -285,7 +289,7 @@ def check_biz(business_number: str = Query(..., description="사업자등록번�
 # ============================================================
 
 @router.post("/onboarding")
-def onboarding(req: OnboardingBody):
+def onboarding(req: OnboardingBody, current: dict = Depends(get_current_user)):
     """회사 + 시설 + 담당자를 한 번에 등록."""
     supabase = get_supabase()
     now      = datetime.now()
@@ -373,8 +377,10 @@ def get_companies(
     status_code: Optional[str] = Query(default=None),
     sido:        Optional[str] = Query(default=None),
     created_by:  Optional[str] = Query(default=None),
+    current:     dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
+    _require_admin(current, supabase)
     query    = supabase.table("companies").select("*", count="exact")
     query    = query.eq("is_demo", False)  # 데모(체험) 테넌트 제외
     if search:      query = query.ilike("name", f"%{search}%")
@@ -400,7 +406,7 @@ def get_companies(
 # ============================================================
 
 @router.post("")
-def create_company(req: CompanyCreate):
+def create_company(req: CompanyCreate, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     display_name = (req.name or req.company_name or "").strip()
     if not display_name:
@@ -441,8 +447,9 @@ def create_company(req: CompanyCreate):
 # ============================================================
 
 @router.get("/{company_id}")
-def get_company(company_id: str):
+def get_company(company_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_own_company(company_id, current, supabase, "사업장을 찾을 수 없습니다")
     res = supabase.table("companies").select("*").eq("id", company_id).single().execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="사업장을 찾을 수 없습니다")
@@ -454,8 +461,9 @@ def get_company(company_id: str):
 # ============================================================
 
 @router.patch("/{company_id}")
-def update_company(company_id: str, req: CompanyUpdate):
+def update_company(company_id: str, req: CompanyUpdate, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_own_company(company_id, current, supabase, "사업장을 찾을 수 없습니다")
     existing = supabase.table("companies").select("id").eq("id", company_id).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="사업장을 찾을 수 없습니다")
@@ -472,8 +480,9 @@ def update_company(company_id: str, req: CompanyUpdate):
 # ============================================================
 
 @router.delete("/{company_id}")
-def delete_company(company_id: str):
+def delete_company(company_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_own_company(company_id, current, supabase, "사업장을 찾을 수 없습니다")
     existing = supabase.table("companies").select("id").eq("id", company_id).single().execute()
     if not existing.data:
         raise HTTPException(status_code=404, detail="사업장을 찾을 수 없습니다")
@@ -490,8 +499,9 @@ def delete_company(company_id: str):
 # ============================================================
 
 @router.get("/{company_id}/users")
-def get_company_users(company_id: str):
+def get_company_users(company_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_own_company(company_id, current, supabase, "사업장을 찾을 수 없습니다")
     res = supabase.table("users").select(
         "id, name, email, phone, role_code, status_code, department, position, last_login_at"
     ).eq("company_id", company_id).order("created_at", desc=True).execute()
@@ -503,8 +513,9 @@ def get_company_users(company_id: str):
 # ============================================================
 
 @router.get("/{company_id}/factories")
-def get_company_factories(company_id: str):
+def get_company_factories(company_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_own_company(company_id, current, supabase, "사업장을 찾을 수 없습니다")
     res = supabase.table("factories").select(
         "id, name, site_type, address_road, employee_count, status_code, is_active"
     ).eq("company_id", company_id).order("created_at", desc=True).execute()
@@ -516,8 +527,9 @@ def get_company_factories(company_id: str):
 # ============================================================
 
 @router.get("/{company_id}/contacts")
-def get_company_contacts(company_id: str):
+def get_company_contacts(company_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_own_company(company_id, current, supabase, "사업장을 찾을 수 없습니다")
     res = supabase.table("company_contacts").select("*").eq(
         "company_id", company_id
     ).eq("is_active", True).order("is_primary", desc=True).order("sort_order").execute()
@@ -529,8 +541,9 @@ def get_company_contacts(company_id: str):
 # ============================================================
 
 @router.post("/{company_id}/contacts")
-def add_company_contact(company_id: str, body: ContactBody):
+def add_company_contact(company_id: str, body: ContactBody, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_own_company(company_id, current, supabase, "사업장을 찾을 수 없습니다")
     if body.is_primary:
         supabase.table("company_contacts").update({"is_primary": False}).eq(
             "company_id", company_id
@@ -558,8 +571,9 @@ def add_company_contact(company_id: str, body: ContactBody):
 # ============================================================
 
 @router.patch("/{company_id}/contacts/{contact_id}")
-def update_company_contact(company_id: str, contact_id: str, body: ContactUpdate):
+def update_company_contact(company_id: str, contact_id: str, body: ContactUpdate, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_own_company(company_id, current, supabase, "사업장을 찾을 수 없습니다")
     chk = supabase.table("company_contacts").select("id, is_primary").eq(
         "id", contact_id
     ).eq("company_id", company_id).limit(1).execute()
@@ -580,8 +594,9 @@ def update_company_contact(company_id: str, contact_id: str, body: ContactUpdate
 # ============================================================
 
 @router.delete("/{company_id}/contacts/{contact_id}")
-def delete_company_contact(company_id: str, contact_id: str):
+def delete_company_contact(company_id: str, contact_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_own_company(company_id, current, supabase, "사업장을 찾을 수 없습니다")
     chk = supabase.table("company_contacts").select("id, is_primary").eq(
         "id", contact_id
     ).eq("company_id", company_id).limit(1).execute()
@@ -601,8 +616,9 @@ def delete_company_contact(company_id: str, contact_id: str):
 # ============================================================
 
 @router.get("/{company_id}/contracts")
-def get_company_contracts(company_id: str):
+def get_company_contracts(company_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_own_company(company_id, current, supabase, "사업장을 찾을 수 없습니다")
     res = supabase.table("contracts").select(
         "id, contract_no, service_type, plan_code, status_code, "
         "start_date, end_date, contract_amount, total_amount, paid_amount, "
@@ -616,8 +632,9 @@ def get_company_contracts(company_id: str):
 # ============================================================
 
 @router.post("/{company_id}/files")
-def add_company_file(company_id: str, body: FileBody):
+def add_company_file(company_id: str, body: FileBody, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_own_company(company_id, current, supabase, "사업장을 찾을 수 없습니다")
     now = datetime.now().isoformat()
     res = supabase.table("company_files").insert({
         "company_id":  company_id,
@@ -649,8 +666,10 @@ async def upload_company_file(
     company_id: str,
     file: UploadFile = File(...),
     file_type: str = Form("business_license"),
+    current: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
+    _ensure_own_company(company_id, current, supabase, "회사를 찾을 수 없습니다.")
 
     chk = supabase.table("companies").select("id").eq("id", company_id).limit(1).execute()
     if not chk.data:
@@ -730,8 +749,9 @@ async def upload_company_file(
 # ============================================================
 
 @router.delete("/{company_id}/files/{file_id}")
-def delete_company_file(company_id: str, file_id: str):
+def delete_company_file(company_id: str, file_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_own_company(company_id, current, supabase, "사업장을 찾을 수 없습니다")
     chk = supabase.table("company_files").select("id").eq(
         "id", file_id
     ).eq("company_id", company_id).limit(1).execute()
@@ -749,8 +769,9 @@ def delete_company_file(company_id: str, file_id: str):
 # ============================================================
 
 @router.patch("/{company_id}/contract-url")
-def set_contract_url(company_id: str, body: ContractUrlBody):
+def set_contract_url(company_id: str, body: ContractUrlBody, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_own_company(company_id, current, supabase, "회사를 찾을 수 없습니다.")
     chk = supabase.table("companies").select("id").eq("id", company_id).limit(1).execute()
     if not chk.data:
         raise HTTPException(status_code=404, detail="회사를 찾을 수 없습니다.")
