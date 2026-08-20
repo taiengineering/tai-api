@@ -1,5 +1,9 @@
 """
-점검 템플릿 CRUD 라우터 — v1.0.0
+점검 템플릿 CRUD 라우터 — v1.1.0
+v1.1.0 (2026-08-20): 인증·회사 스코프 (Wave3, 직접MCP)
+  - 전 엔드포인트 로그인 필수(get_current_user).
+  - detail/{id}·{id}/items·DELETE → 템플릿 소유확인(_ensure_template_own).
+  - GET /{factory_id}·POST → 시설 소유확인(_ensure_factory_own).
 v1.0.0: 점검항목 수동 입력 신규
   - GET  /safety-templates/detail/{id}  (항목 포함 상세) — /{factory_id} 보다 먼저 선언
   - GET  /safety-templates/{factory_id} (목록 + item_count)
@@ -8,14 +12,24 @@ v1.0.0: 점검항목 수동 입력 신규
   - DELETE /safety-templates/{id}/items/{item_id} (항목 soft delete)
   - DELETE /safety-templates/{id}       (템플릿 soft delete)
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _ensure_own_company, _ensure_factory_own
 
 router = APIRouter(prefix="/safety-templates", tags=["safety-templates"])
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
+
+
+def _ensure_template_own(sb, template_id, current):
+    """safety_template 소유확인(행 company_id). 없으면/타사면 404."""
+    r = sb.table("safety_templates").select("id, company_id").eq("id", template_id).limit(1).execute()
+    if not r.data:
+        raise HTTPException(status_code=404, detail="템플릿을 찾을 수 없습니다.")
+    _ensure_own_company(r.data[0].get("company_id"), current, sb, "템플릿을 찾을 수 없습니다.")
 
 
 # ── Pydantic 모델 ────────────────────────────
@@ -49,7 +63,7 @@ class TemplateUpdateBody(BaseModel):
 # ══════════════════════════════════════════════
 
 @router.get("/detail/{template_id}")
-async def get_template_detail(template_id: str):
+async def get_template_detail(template_id: str, current: dict = Depends(get_current_user)):
     """템플릿 상세 + 항목 목록 포함."""
     supabase = get_supabase()
 
@@ -60,6 +74,9 @@ async def get_template_detail(template_id: str):
         raise HTTPException(status_code=404, detail="템플릿을 찾을 수 없습니다.")
 
     t = t_res.data[0]
+    # ── 회사 소유확인 (P13) ──
+    _ensure_own_company(t.get("company_id"), current, supabase, "템플릿을 찾을 수 없습니다.")
+
     items_res = supabase.table("safety_template_items").select("*").eq(
         "template_id", template_id
     ).eq("is_active", True).order("sort_order").execute()
@@ -73,9 +90,10 @@ async def get_template_detail(template_id: str):
 # ══════════════════════════════════════════════
 
 @router.get("/{factory_id}")
-async def list_templates(factory_id: str):
+async def list_templates(factory_id: str, current: dict = Depends(get_current_user)):
     """시설별 템플릿 목록 (item_count 포함)."""
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
 
     res = supabase.table("safety_templates").select(
         "id, template_name, description, source, is_active, created_at"
@@ -98,12 +116,15 @@ async def list_templates(factory_id: str):
 # ══════════════════════════════════════════════
 
 @router.post("")
-async def create_template(body: TemplateCreateBody):
+async def create_template(body: TemplateCreateBody, current: dict = Depends(get_current_user)):
     """템플릿 + 항목 일괄 생성."""
     supabase = get_supabase()
 
     if not (body.template_name or "").strip():
         raise HTTPException(status_code=422, detail="템플릿명은 필수입니다.")
+
+    # ── 시설 소유확인 (P13) ──
+    _ensure_factory_own(supabase, body.factory_id, current)
 
     # 시설의 company_id 조회
     fac_res = supabase.table("factories").select("company_id").eq(
@@ -159,9 +180,10 @@ async def create_template(body: TemplateCreateBody):
 # ══════════════════════════════════════════════
 
 @router.post("/{template_id}/items")
-async def add_template_items(template_id: str, items: List[TemplateItemBody]):
+async def add_template_items(template_id: str, items: List[TemplateItemBody], current: dict = Depends(get_current_user)):
     """기존 템플릿에 항목 추가."""
     supabase = get_supabase()
+    _ensure_template_own(supabase, template_id, current)
 
     if not items:
         raise HTTPException(status_code=422, detail="항목이 없습니다.")
@@ -197,9 +219,10 @@ async def add_template_items(template_id: str, items: List[TemplateItemBody]):
 # ══════════════════════════════════════════════
 
 @router.delete("/{template_id}/items/{item_id}")
-async def delete_template_item(template_id: str, item_id: str):
+async def delete_template_item(template_id: str, item_id: str, current: dict = Depends(get_current_user)):
     """항목 soft delete."""
     supabase = get_supabase()
+    _ensure_template_own(supabase, template_id, current)
     supabase.table("safety_template_items").update({"is_active": False}).eq(
         "id", item_id
     ).eq("template_id", template_id).execute()
@@ -211,9 +234,10 @@ async def delete_template_item(template_id: str, item_id: str):
 # ══════════════════════════════════════════════
 
 @router.delete("/{template_id}")
-async def delete_template(template_id: str):
+async def delete_template(template_id: str, current: dict = Depends(get_current_user)):
     """템플릿 soft delete (항목은 유지)."""
     supabase = get_supabase()
+    _ensure_template_own(supabase, template_id, current)
     supabase.table("safety_templates").update({"is_active": False}).eq(
         "id", template_id
     ).execute()

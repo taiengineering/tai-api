@@ -1,5 +1,5 @@
 """
-TBM 템플릿 업로더 — tbm_templates.py  v1.3.0
+TBM 템플릿 업로더 — tbm_templates.py  v1.4.0
 
 GET    /tbm-templates              템플릿 목록 (sort: popular|recent|name)
 POST   /tbm-templates              템플릿 생성
@@ -16,15 +16,32 @@ v1.2.0 (2026-08-11): TBM 그룹화(Phase 2) — /use 에 group_id 지정 시 그
 v1.3.0 (2026-08-11): 팀 템플릿 스코핑 — team_id 수용(생성) + 목록 필터.
            스코프 = 전역(factory·team null) / 시설(factory, team null) / 팀(team_id).
            team_id 지정 시: 팀 템플릿 + (팀 미지정 && (전역|해당 시설)). 미지정 시: 팀 템플릿 제외.
+v1.4.0 (2026-08-20): 인증·회사 스코프 (Wave3, 직접MCP)
+           - 전 엔드포인트 로그인 필수(get_current_user).
+           - 목록: 비-ALL 은 전역 프리셋(company_id null) + 자사만.
+           - 생성: require_company_id 로 비-ALL 은 토큰 company_id 강제, factory 지정 시 소유확인.
+           - 상세/사용: 전역 프리셋은 허용, 그 외 자사만(_ensure_own_company).
+           - 수정/삭제: 전역 프리셋은 ALL 전용, 그 외 자사만.
+           - (미결) /use 의 group_id·team_id 교차회사 검증은 후속(그룹 소유확인) — 통지.
 """
 
 import uuid
 from datetime import datetime, date
 from typing import Optional, List
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 import os
 from supabase import create_client
+
+from routers.auth import get_current_user
+from services.company_scope import (
+    _scope,
+    _is_admin,
+    _require_admin,
+    require_company_id,
+    _ensure_own_company,
+    _ensure_factory_own,
+)
 
 router = APIRouter(prefix="/tbm-templates", tags=["tbm-templates"])
 
@@ -34,6 +51,22 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 def get_sb():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+def _ensure_tbm_own_or_global(sb, template_id, current, *, write=False):
+    """tbm_template 소유확인. 전역 프리셋(company_id null)은 조회/사용 허용, 수정/삭제(write)는 ALL 전용.
+    반환: 템플릿 row(없으면 404)."""
+    r = sb.table("tbm_templates").select("*").eq("id", template_id).eq("is_active", True).limit(1).execute()
+    if not r.data:
+        raise HTTPException(status_code=404, detail="템플릿을 찾을 수 없습니다.")
+    row = r.data[0]
+    cid = row.get("company_id")
+    if cid is None:
+        if write:
+            _require_admin(current, sb)   # 전역 프리셋 수정/삭제는 ALL 전용
+    else:
+        _ensure_own_company(cid, current, sb, "템플릿을 찾을 수 없습니다.")
+    return row
 
 
 # ── Pydantic 모델 ────────────────────────────
@@ -133,6 +166,7 @@ async def list_templates(
     sort: str = Query("popular", description="popular|recent|name"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
 ):
     sb = get_sb()
     query = sb.table("tbm_templates").select(
@@ -165,6 +199,14 @@ async def list_templates(
             query = query.or_(f"factory_id.is.null,factory_id.eq.{factory_id}")
         else:
             query = query.filter("factory_id", "is", "null")
+
+    # ── 회사 스코프 (P13): 비-ALL 은 전역 프리셋(company_id null) + 자사만 ──
+    if not _is_admin(_scope(sb, current.get("role_code"))):
+        cid = current.get("company_id")
+        if cid:
+            query = query.or_(f"company_id.is.null,company_id.eq.{cid}")
+        else:
+            query = query.filter("company_id", "is", "null")
 
     if company_id:
         query = query.eq("company_id", company_id)
@@ -199,11 +241,19 @@ async def list_templates(
 # ── POST /tbm-templates ─────────────────
 
 @router.post("")
-async def create_template(body: TbmTemplateCreate):
+async def create_template(body: TbmTemplateCreate, current: dict = Depends(get_current_user)):
     if not body.template_name.strip():
         raise HTTPException(status_code=422, detail="template_name은 필수입니다.")
 
     sb = get_sb()
+
+    # ── 회사 스코프 강제 (P13): 비-ALL 은 토큰 company_id ──
+    _forced = require_company_id(current, sb)
+    if _forced:
+        body.company_id = _forced
+    if body.factory_id:
+        _ensure_factory_own(sb, body.factory_id, current)
+
     data = {
         "template_name":    body.template_name.strip(),
         "factory_id":       body.factory_id,
@@ -228,19 +278,18 @@ async def create_template(body: TbmTemplateCreate):
 # ── GET /tbm-templates/{id} ──────────────
 
 @router.get("/{template_id}")
-async def get_template(template_id: str):
+async def get_template(template_id: str, current: dict = Depends(get_current_user)):
     sb = get_sb()
-    res = sb.table("tbm_templates").select("*").eq("id", template_id).eq("is_active", True).limit(1).execute()
-    if not res.data:
-        raise HTTPException(status_code=404, detail="템플릿을 찾을 수 없습니다.")
-    return {"status": "success", "data": res.data[0]}
+    row = _ensure_tbm_own_or_global(sb, template_id, current)
+    return {"status": "success", "data": row}
 
 
 # ── PATCH /tbm-templates/{id} ───────────────
 
 @router.patch("/{template_id}")
-async def update_template(template_id: str, body: TbmTemplateUpdate):
+async def update_template(template_id: str, body: TbmTemplateUpdate, current: dict = Depends(get_current_user)):
     sb = get_sb()
+    _ensure_tbm_own_or_global(sb, template_id, current, write=True)
 
     update: dict = {"updated_at": datetime.utcnow().isoformat()}
     if body.template_name is not None:
@@ -269,8 +318,9 @@ async def update_template(template_id: str, body: TbmTemplateUpdate):
 # ── DELETE /tbm-templates/{id} ────────────────
 
 @router.delete("/{template_id}")
-async def delete_template(template_id: str):
+async def delete_template(template_id: str, current: dict = Depends(get_current_user)):
     sb = get_sb()
+    _ensure_tbm_own_or_global(sb, template_id, current, write=True)
     res = sb.table("tbm_templates").update({"is_active": False}).eq("id", template_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="템플릿을 찾을 수 없습니다.")
@@ -280,7 +330,7 @@ async def delete_template(template_id: str):
 # ── POST /tbm-templates/{id}/use ────────────────
 
 @router.post("/{template_id}/use")
-async def use_template(template_id: str, body: TbmUseBody):
+async def use_template(template_id: str, body: TbmUseBody, current: dict = Depends(get_current_user)):
     """
     템플릿으로 TBM 실행:
     1. tbm_meetings 레코드 생성 (템플릿 내용 복사, group_id/team_id 기록)
@@ -291,11 +341,8 @@ async def use_template(template_id: str, body: TbmUseBody):
     """
     sb = get_sb()
 
-    # 템플릿 조회
-    t_res = sb.table("tbm_templates").select("*").eq("id", template_id).eq("is_active", True).limit(1).execute()
-    if not t_res.data:
-        raise HTTPException(status_code=404, detail="템플릿을 찾을 수 없습니다.")
-    tmpl = t_res.data[0]
+    # 템플릿 조회 + 소유확인(전역 프리셋 허용)
+    tmpl = _ensure_tbm_own_or_global(sb, template_id, current)
 
     # 날짜
     work_date_str = body.work_date or date.today().isoformat()
