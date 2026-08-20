@@ -24,13 +24,17 @@ Goal: G-ms5zwv4v-b88c4a
   적용 전에는 테이블이 없으므로, 조회 API 는 500 대신 fallback(내장 기본값)을 반환하고
   응답에 source="fallback" 을 표시한다. 쓰기 API 는 409 로 명확히 거절한다.
 
+■ 인증·스코프 (2026-08-20)
+  policy-params 는 전사 공통 법정 상수(참조데이터)이며 get_policy_param 이 내부 함수로
+  호출하므로 공개 유지한다. 척도(scales)는 회사 데이터이므로 로그인 + 회사 스코프를 건다.
+
 API:
-  GET   /ra/policy-params            운영 파라미터 목록(현행)
-  GET   /ra/policy-params/{code}     단건
-  GET   /ra/scales                   척도 목록(프리셋 + 회사 설정)
-  POST  /ra/scales                   척도 생성(프리셋 복제 포함)
-  PUT   /ra/scales/{id}              척도 수정
-  GET   /ra/settings/health          스키마 적용 여부 점검
+  GET   /ra/policy-params            운영 파라미터 목록(현행) — 공개(참조)
+  GET   /ra/policy-params/{code}     단건 — 공개(참조)
+  GET   /ra/scales                   척도 목록(프리셋 + 회사 설정) — 자사 스코프
+  POST  /ra/scales                   척도 생성(프리셋 복제 포함) — 토큰 회사 강제
+  PUT   /ra/scales/{id}              척도 수정 — 자사 소유 확인
+  GET   /ra/settings/health          스키마 적용 여부 점검 — 로그인
 """
 from __future__ import annotations
 
@@ -38,10 +42,12 @@ import logging
 from datetime import date
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import require_company_id, scoped_list_company, _ensure_own_company
 
 log = logging.getLogger(__name__)
 
@@ -115,7 +121,7 @@ class ScaleUpdateBody(BaseModel):
 _ALLOWED_METHODS = ("THREE_STEP", "CHECKLIST", "OPS", "FREQ_SEV")
 
 
-# ── 운영 파라미터 ────────────────────────────────────────────────────
+# ── 운영 파라미터 (공개 참조데이터) ──────────────────────────────────
 @router.get("/policy-params")
 def list_policy_params(
     on_date: Optional[str] = Query(None, description="기준일 YYYY-MM-DD. 기본값 오늘"),
@@ -125,6 +131,7 @@ def list_policy_params(
 
     effective_from <= 기준일 < effective_to 인 행을 반환한다.
     법 개정 시 종전 행이 닫히고 신규 행이 추가되므로, 과거 시점 판정도 재현 가능하다.
+    전사 공통 법정 상수라 공개 유지(get_policy_param 이 내부 함수로 호출).
     """
     ref = on_date or date.today().isoformat()
     try:
@@ -158,17 +165,22 @@ def get_policy_param(param_code: str, on_date: Optional[str] = Query(None)):
     raise HTTPException(status_code=404, detail=f"파라미터를 찾을 수 없습니다: {param_code}")
 
 
-# ── 척도 ────────────────────────────────────────────────────────────
+# ── 척도 (회사 데이터 — 스코프) ─────────────────────────────────────
 @router.get("/scales")
 def list_scales(
     company_id: Optional[str] = Query(None),
     factory_id: Optional[str] = Query(None),
     include_presets: bool = Query(True),
     method: Optional[str] = Query(None),
+    current: dict = Depends(get_current_user),
 ):
-    """척도 목록. 회사 설정 + (옵션) 시스템 프리셋."""
+    """척도 목록. 회사 설정 + (옵션) 시스템 프리셋. 비-ALL 은 자사 척도만 + 프리셋."""
+    sb = get_supabase()
+    scoped_cid, deny_all = scoped_list_company(current, sb, company_id)
+    company_id = scoped_cid              # 비-ALL=토큰회사, ALL=클라값(None=전체)
+    only_presets = deny_all              # 무회사 비-ALL → 회사 척도 숨김(프리셋만)
     try:
-        q = get_supabase().table("ra_scale").select("*").eq("is_active", True)
+        q = sb.table("ra_scale").select("*").eq("is_active", True)
         if method:
             q = q.eq("method", method)
         res = q.order("is_preset", desc=True).order("created_at").execute()
@@ -179,6 +191,8 @@ def list_scales(
             if r.get("is_preset"):
                 if include_presets:
                     out.append(r)
+                continue
+            if only_presets:
                 continue
             if company_id and r.get("company_id") != company_id:
                 continue
@@ -195,12 +209,16 @@ def list_scales(
 
 
 @router.post("/scales")
-def create_scale(body: ScaleBody):
+def create_scale(body: ScaleBody, current: dict = Depends(get_current_user)):
     """척도 생성. 프리셋을 복제해 사업장 기준을 만드는 것이 표준 흐름이다.
 
     고시 제9조제2항 — 사업주는 위험성평가 실시 전에 위험성 수준과 판단기준,
     허용 가능한 위험성 수준을 확정해야 한다. 허용수준은 법에서 정한 기준 이상이어야 한다.
     """
+    _forced = require_company_id(current, get_supabase())   # 비-ALL 토큰강제·무회사 403; ALL 은 토큰 company
+    if _forced:
+        body.company_id = _forced
+
     if body.method not in _ALLOWED_METHODS:
         raise HTTPException(status_code=400, detail=f"지원하지 않는 평가방법: {body.method}")
     if not body.company_id:
@@ -243,7 +261,7 @@ def create_scale(body: ScaleBody):
 
 
 @router.put("/scales/{scale_id}")
-def update_scale(scale_id: str, body: ScaleUpdateBody):
+def update_scale(scale_id: str, body: ScaleUpdateBody, current: dict = Depends(get_current_user)):
     """척도 수정. 프리셋은 수정할 수 없다.
 
     판정 기준이 바뀌면 version 을 올린다. 완료된 평가는 당시 version 을 스냅샷 참조하므로
@@ -255,13 +273,14 @@ def update_scale(scale_id: str, body: ScaleUpdateBody):
 
     try:
         cur = get_supabase().table("ra_scale").select(
-            "id, is_preset, version, levels_json, acceptable_max"
+            "id, is_preset, version, levels_json, acceptable_max, company_id"
         ).eq("id", scale_id).limit(1).execute()
         if not cur.data:
             raise HTTPException(status_code=404, detail="척도를 찾을 수 없습니다.")
         row = cur.data[0]
         if row.get("is_preset"):
             raise HTTPException(status_code=403, detail="시스템 프리셋은 수정할 수 없습니다. 복제해 사용하세요.")
+        _ensure_own_company(row.get("company_id"), current, get_supabase(), "척도를 찾을 수 없습니다.")
 
         levels = payload.get("levels_json", row.get("levels_json")) or []
         acc = payload.get("acceptable_max", row.get("acceptable_max"))
@@ -289,7 +308,7 @@ def update_scale(scale_id: str, body: ScaleUpdateBody):
 
 # ── 상태 점검 ────────────────────────────────────────────────────────
 @router.get("/settings/health")
-def settings_health():
+def settings_health(current: dict = Depends(get_current_user)):
     """스키마 적용 여부 점검. 운영자가 마이그레이션 적용 결과를 확인하는 용도."""
     out: Dict[str, Any] = {}
     for t in ("ra_policy_param", "ra_scale"):
