@@ -4,10 +4,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _ensure_own_company
 from schemas.construction import (
     CorrectivePatch,
     EntryPatch,
@@ -44,6 +46,26 @@ router = APIRouter(tags=["건설안전"])
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# ── 회사 스코프 가드 (P13, Wave3 직접MCP) ──
+# 건설 리소스는 construction_sites.company_id 기준. 자식(process/work/worker/inspection)은
+# site_id 경유로 소유확인. 가드는 각 엔드포인트 try 앞에서 호출(404가 500으로 삼켜지는 것 방지).
+
+def _ensure_site_own(sb, site_id, current):
+    r = sb.table("construction_sites").select("id, company_id").eq("id", site_id).limit(1).execute()
+    if not r.data:
+        raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+    _ensure_own_company(r.data[0].get("company_id"), current, sb, "현장을 찾을 수 없습니다.")
+
+
+def _ensure_child_site_own(sb, table, record_id, current, not_found):
+    r = sb.table(table).select("id, site_id").eq("id", record_id).limit(1).execute()
+    if not r.data:
+        raise HTTPException(status_code=404, detail=not_found)
+    site = sb.table("construction_sites").select("company_id").eq("id", r.data[0].get("site_id")).limit(1).execute()
+    _cid = site.data[0].get("company_id") if site.data else None
+    _ensure_own_company(_cid, current, sb, not_found)
 
 
 _JOB_CODE_TO_NAME = {
@@ -147,9 +169,11 @@ async def list_processes(
     status_code: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
 ):
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
+    _ensure_site_own(supabase, site_id, current)
     try:
         data = run_list_query(
             supabase,
@@ -165,9 +189,10 @@ async def list_processes(
 
 
 @router.post("/sites/{site_id}/processes")
-async def create_process(site_id: str, body: ProcessCreate):
+async def create_process(site_id: str, body: ProcessCreate, current: dict = Depends(get_current_user)):
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
+    _ensure_site_own(supabase, site_id, current)
     try:
         data = body.model_dump(exclude_none=True)
         data["site_id"] = site_id
@@ -183,8 +208,9 @@ async def create_process(site_id: str, body: ProcessCreate):
 
 
 @router.get("/processes/{process_id}")
-async def get_process(process_id: str):
+async def get_process(process_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_child_site_own(supabase, "construction_site_processes", process_id, current, "공정을 찾을 수 없습니다.")
     row = get_record_or_none(supabase, "construction_site_processes", process_id)
     if not row:
         raise HTTPException(status_code=404, detail="공정을 찾을 수 없습니다.")
@@ -192,8 +218,9 @@ async def get_process(process_id: str):
 
 
 @router.patch("/processes/{process_id}")
-async def update_process(process_id: str, body: ProcessPatch):
+async def update_process(process_id: str, body: ProcessPatch, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_child_site_own(supabase, "construction_site_processes", process_id, current, "공정을 찾을 수 없습니다.")
     try:
         data = body.model_dump(exclude_none=True)
         if not data:
@@ -210,8 +237,9 @@ async def update_process(process_id: str, body: ProcessPatch):
 
 
 @router.delete("/processes/{process_id}")
-async def delete_process(process_id: str):
+async def delete_process(process_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_child_site_own(supabase, "construction_site_processes", process_id, current, "공정을 찾을 수 없습니다.")
     deleted = soft_delete_record(supabase, "construction_site_processes", process_id, _now_iso)
     if not deleted:
         raise HTTPException(status_code=404, detail="공정을 찾을 수 없습니다.")
@@ -226,9 +254,11 @@ async def list_works(
     work_date: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
 ):
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
+    _ensure_site_own(supabase, site_id, current)
     try:
         data = run_list_query(
             supabase,
@@ -244,9 +274,10 @@ async def list_works(
 
 
 @router.post("/sites/{site_id}/works")
-async def create_work(site_id: str, body: WorkCreate):
+async def create_work(site_id: str, body: WorkCreate, current: dict = Depends(get_current_user)):
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
+    _ensure_site_own(supabase, site_id, current)
     try:
         data = body.model_dump(exclude_none=True)
         data["site_id"] = site_id
@@ -264,8 +295,9 @@ async def create_work(site_id: str, body: WorkCreate):
 
 
 @router.get("/works/{work_id}")
-async def get_work(work_id: str):
+async def get_work(work_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_child_site_own(supabase, "construction_works", work_id, current, "작업을 찾을 수 없습니다.")
     row = get_record_or_none(supabase, "construction_works", work_id)
     if not row:
         raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다.")
@@ -273,8 +305,9 @@ async def get_work(work_id: str):
 
 
 @router.patch("/works/{work_id}")
-async def update_work(work_id: str, body: WorkPatch):
+async def update_work(work_id: str, body: WorkPatch, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_child_site_own(supabase, "construction_works", work_id, current, "작업을 찾을 수 없습니다.")
     try:
         data = body.model_dump(exclude_none=True)
         if not data:
@@ -291,8 +324,9 @@ async def update_work(work_id: str, body: WorkPatch):
 
 
 @router.patch("/works/{work_id}/ptw")
-async def update_ptw(work_id: str, body: PtwPatch):
+async def update_ptw(work_id: str, body: PtwPatch, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_child_site_own(supabase, "construction_works", work_id, current, "작업을 찾을 수 없습니다.")
     try:
         data = build_ptw_update_payload(body, _now_iso)
     except ValueError as e:
@@ -304,8 +338,9 @@ async def update_ptw(work_id: str, body: PtwPatch):
 
 
 @router.delete("/works/{work_id}")
-async def delete_work(work_id: str):
+async def delete_work(work_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_child_site_own(supabase, "construction_works", work_id, current, "작업을 찾을 수 없습니다.")
     deleted = soft_delete_record(supabase, "construction_works", work_id, _now_iso)
     if not deleted:
         raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다.")
@@ -320,9 +355,11 @@ async def list_workers(
     search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
 ):
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
+    _ensure_site_own(supabase, site_id, current)
     try:
         offset = (page - 1) * size
         q = supabase.table("construction_workers").select(
@@ -359,7 +396,7 @@ def _iso_date(v) -> Optional[str]:
 
 
 @router.post("/sites/{site_id}/workers")
-async def create_worker(site_id: str, body: WorkerCreate):
+async def create_worker(site_id: str, body: WorkerCreate, current: dict = Depends(get_current_user)):
     """건설 작업자 등록 — 통합 명부(worker_registry) + 현장배치(construction_workers) 동시 생성.
 
     LEDGER §19: 종전에는 construction_workers 에만 직접 써서 화면 8필드가 버려지고, org
@@ -374,6 +411,7 @@ async def create_worker(site_id: str, body: WorkerCreate):
     """
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
+    _ensure_site_own(supabase, site_id, current)
 
     name = (body.worker_name or "").strip()
     if not name:
@@ -456,11 +494,12 @@ class SiteQrBody(BaseModel):
 
 
 @router.post("/sites/{site_id}/qr")
-async def issue_site_qr(site_id: str, body: SiteQrBody):
+async def issue_site_qr(site_id: str, body: SiteQrBody, current: dict = Depends(get_current_user)):
     """현장 출입 QR 발급(등록). 이미 발급된 현장이면 기존 행을 갱신(재발급).
     QR 내용은 기본적으로 site_id(UUID) 그대로 — 앱 qr_scan.html 이 이 값을 site_id 로 파싱한다."""
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
+    _ensure_site_own(supabase, site_id, current)
 
     site = supabase.table("construction_sites").select("id, site_name").eq("id", site_id).single().execute()
     if not site.data:
@@ -491,10 +530,11 @@ async def issue_site_qr(site_id: str, body: SiteQrBody):
 
 
 @router.get("/sites/{site_id}/qr")
-async def get_site_qr(site_id: str):
+async def get_site_qr(site_id: str, current: dict = Depends(get_current_user)):
     """현장에 발급된 QR 조회(없으면 data=null). 화면이 발급 여부·재출력에 쓴다."""
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
+    _ensure_site_own(supabase, site_id, current)
     res = supabase.table("qr_entities").select("id, qr_code, status_code, issued_at") \
         .eq("site_id", site_id).eq("tag_type", "SITE").limit(1).execute()
     return {"status": "success", "data": (res.data[0] if res.data else None)}
@@ -504,11 +544,13 @@ async def get_site_qr(site_id: str):
 async def bulk_import_construction_workers(
     site_id: str,
     file: UploadFile = File(...),
+    current: dict = Depends(get_current_user),
 ):
     """건설 작업자 엑셀 일괄 등록 — 행마다 worker_registry(명부) + construction_workers(배치) 생성.
     컬럼: 이름(필수)|연락처(필수)|직종(필수)|소속업체|입사일|부서|팀|그룹|고용형태(선택)"""
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
+    _ensure_site_own(supabase, site_id, current)
     site = supabase.table("construction_sites").select("company_id").eq("id", site_id).single().execute()
     if not site.data:
         raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
@@ -610,8 +652,9 @@ async def bulk_import_construction_workers(
 
 
 @router.get("/workers/{worker_id}")
-async def get_worker(worker_id: str):
+async def get_worker(worker_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_child_site_own(supabase, "construction_workers", worker_id, current, "작업자를 찾을 수 없습니다.")
     row = get_record_or_none(supabase, "construction_workers", worker_id)
     if not row:
         raise HTTPException(status_code=404, detail="작업자를 찾을 수 없습니다.")
@@ -619,8 +662,9 @@ async def get_worker(worker_id: str):
 
 
 @router.patch("/workers/{worker_id}")
-async def update_worker(worker_id: str, body: WorkerPatch):
+async def update_worker(worker_id: str, body: WorkerPatch, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_child_site_own(supabase, "construction_workers", worker_id, current, "작업자를 찾을 수 없습니다.")
     try:
         data = body.model_dump(exclude_none=True)
         if not data:
@@ -637,8 +681,9 @@ async def update_worker(worker_id: str, body: WorkerPatch):
 
 
 @router.patch("/workers/{worker_id}/entry")
-async def update_entry(worker_id: str, body: EntryPatch):
+async def update_entry(worker_id: str, body: EntryPatch, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_child_site_own(supabase, "construction_workers", worker_id, current, "작업자를 찾을 수 없습니다.")
     try:
         data = build_entry_update_payload(body, _now_iso)
     except ValueError as e:
@@ -650,8 +695,9 @@ async def update_entry(worker_id: str, body: EntryPatch):
 
 
 @router.delete("/workers/{worker_id}")
-async def delete_worker(worker_id: str):
+async def delete_worker(worker_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_child_site_own(supabase, "construction_workers", worker_id, current, "작업자를 찾을 수 없습니다.")
     deleted = soft_delete_record(supabase, "construction_workers", worker_id, _now_iso)
     if not deleted:
         raise HTTPException(status_code=404, detail="작업자를 찾을 수 없습니다.")
@@ -666,9 +712,11 @@ async def list_inspections(
     corrective_status: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
 ):
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
+    _ensure_site_own(supabase, site_id, current)
     try:
         data = run_list_query(
             supabase,
@@ -691,9 +739,10 @@ async def list_inspections(
 
 
 @router.post("/sites/{site_id}/inspections")
-async def create_inspection(site_id: str, body: InspectionCreate):
+async def create_inspection(site_id: str, body: InspectionCreate, current: dict = Depends(get_current_user)):
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
+    _ensure_site_own(supabase, site_id, current)
     try:
         data = prepare_inspection_payload(body.model_dump(exclude_none=True), _now_iso)
         data["site_id"] = site_id
@@ -711,8 +760,9 @@ async def create_inspection(site_id: str, body: InspectionCreate):
 
 
 @router.get("/inspections/{inspection_id}")
-async def get_inspection(inspection_id: str):
+async def get_inspection(inspection_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_child_site_own(supabase, "construction_inspections", inspection_id, current, "점검을 찾을 수 없습니다.")
     row = get_record_or_none(supabase, "construction_inspections", inspection_id)
     if not row:
         raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다.")
@@ -720,8 +770,9 @@ async def get_inspection(inspection_id: str):
 
 
 @router.patch("/inspections/{inspection_id}")
-async def update_inspection(inspection_id: str, body: InspectionPatch):
+async def update_inspection(inspection_id: str, body: InspectionPatch, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_child_site_own(supabase, "construction_inspections", inspection_id, current, "점검을 찾을 수 없습니다.")
     try:
         data = body.model_dump(exclude_none=True)
         if not data:
@@ -738,8 +789,9 @@ async def update_inspection(inspection_id: str, body: InspectionPatch):
 
 
 @router.patch("/inspections/{inspection_id}/corrective")
-async def update_corrective(inspection_id: str, body: CorrectivePatch):
+async def update_corrective(inspection_id: str, body: CorrectivePatch, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_child_site_own(supabase, "construction_inspections", inspection_id, current, "점검을 찾을 수 없습니다.")
     try:
         data = build_corrective_update_payload(body, _now_iso)
     except ValueError as e:
@@ -751,8 +803,9 @@ async def update_corrective(inspection_id: str, body: CorrectivePatch):
 
 
 @router.delete("/inspections/{inspection_id}")
-async def delete_inspection(inspection_id: str):
+async def delete_inspection(inspection_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_child_site_own(supabase, "construction_inspections", inspection_id, current, "점검을 찾을 수 없습니다.")
     deleted = soft_delete_record(supabase, "construction_inspections", inspection_id, _now_iso)
     if not deleted:
         raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다.")
@@ -760,5 +813,5 @@ async def delete_inspection(inspection_id: str):
 
 
 @router.post("/engine/safety-manager")
-async def engine_safety_manager(body: SafetyManagerBody):
+async def engine_safety_manager(body: SafetyManagerBody, current: dict = Depends(get_current_user)):
     return {"status": "success", "data": calc_safety_manager(body.site_type, body.contract_amount, body.total_workers)}
