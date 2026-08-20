@@ -7,6 +7,10 @@
   공용 자산 재사용: routers.matching_deps._require_admin (get_current_user + role 001).
   감사 주체(actor)는 body의 by/cancelled_by를 신뢰하지 않고 인증 사용자(current_user["id"])로 서버 확정.
   결제 business logic·PG flow 무변경 — 인증/감사주체만 보정.
+
+[2026-08-20 §35] 고객 자사 조회 분리: GET /payments/my 신설.
+  기존 관리자 엔드포인트(전체 조회)는 불변. /my 는 로그인 사용자의 소속 회사(current_user["company_id"])
+  결제만 반환한다 — client 가 보낸 company_id 를 신뢰하지 않는다(P13). 관리자 여부와 무관하게 자사만 조회.
 """
 from __future__ import annotations
 
@@ -17,6 +21,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
 from routers.matching_deps import _require_admin
 from schemas.payment import CancelBody, ManualConfirmBody
 from services import audit_svc
@@ -61,6 +66,47 @@ def list_payments(
 
     if keyword:
         q = q.or_(f"user_name.ilike.%{keyword}%,company_name.ilike.%{keyword}%")
+
+    offset = (page - 1) * size
+    res = q.order("created_at", desc=True).range(offset, offset + size - 1).execute()
+    total = res.count or 0
+    return {
+        "status": "success",
+        "data": {
+            "items": res.data or [],
+            "total": total,
+            "page": page,
+            "size": size,
+            "total_pages": (total + size - 1) // size if total else 0,
+        },
+    }
+
+
+@router.get("/my")
+def list_my_payments(
+    status_code: Optional[str] = Query(None),
+    product_type: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    고객 자사 결제 조회 (§35).
+
+    로그인 사용자의 소속 회사 결제만 반환한다. 관리자 여부와 무관.
+    company_id 는 토큰(current_user)에서만 도출한다 — client 가 보낸 값을 신뢰하지 않는다(P13).
+    """
+    company_id = current_user.get("company_id")
+    if not company_id:
+        raise HTTPException(status_code=403, detail="소속 회사가 없어 조회할 수 없습니다.")
+
+    supabase = get_supabase()
+    q = supabase.table("v_payments_list").select("*", count="exact").eq("company_id", company_id)
+
+    if status_code:
+        q = q.eq("status_code", status_code)
+    if product_type:
+        q = q.eq("product_type", product_type)
 
     offset = (page - 1) * size
     res = q.order("created_at", desc=True).range(offset, offset + size - 1).execute()
