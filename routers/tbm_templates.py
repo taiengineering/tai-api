@@ -1,5 +1,5 @@
 """
-TBM 템플릿 업로더 — tbm_templates.py  v1.4.0
+TBM 템플릿 업로더 — tbm_templates.py  v1.5.0
 
 GET    /tbm-templates              템플릿 목록 (sort: popular|recent|name)
 POST   /tbm-templates              템플릿 생성
@@ -22,7 +22,8 @@ v1.4.0 (2026-08-20): 인증·회사 스코프 (Wave3, 직접MCP)
            - 생성: require_company_id 로 비-ALL 은 토큰 company_id 강제, factory 지정 시 소유확인.
            - 상세/사용: 전역 프리셋은 허용, 그 외 자사만(_ensure_own_company).
            - 수정/삭제: 전역 프리셋은 ALL 전용, 그 외 자사만.
-           - (미결) /use 의 group_id·team_id 교차회사 검증은 후속(그룹 소유확인) — 통지.
+v1.5.0 (2026-08-20): [FIX] /use 의 group_id 교차회사 검증(_ensure_group_own, groups.company_id).
+           비-ALL 이 타사 group_id 로 그룹원(worker_registry name/phone)을 소집하지 못하게 막는다(P13).
 """
 
 import uuid
@@ -67,6 +68,15 @@ def _ensure_tbm_own_or_global(sb, template_id, current, *, write=False):
     else:
         _ensure_own_company(cid, current, sb, "템플릿을 찾을 수 없습니다.")
     return row
+
+
+def _ensure_group_own(sb, group_id, current):
+    """그룹 소유확인(groups.company_id). 비-ALL 이 타사 그룹으로 그룹원을 소집하지 못하게(P13)."""
+    if _is_admin(_scope(sb, current.get("role_code"))):
+        return
+    g = sb.table("groups").select("company_id").eq("id", group_id).limit(1).execute()
+    if not g.data or g.data[0].get("company_id") != current.get("company_id"):
+        raise HTTPException(status_code=404, detail="그룹을 찾을 수 없습니다.")
 
 
 # ── Pydantic 모델 ────────────────────────────
@@ -352,6 +362,8 @@ async def use_template(template_id: str, body: TbmUseBody, current: dict = Depen
     team_id = body.team_id or tmpl.get("team_id")
     group_members = []
     if group_id:
+        # 회사 스코프(P13): 타사 그룹으로 그룹원 소집 차단
+        _ensure_group_own(sb, group_id, current)
         if not body.team_id:
             g_res = sb.table("groups").select("team_id").eq("id", group_id).limit(1).execute()
             if g_res.data:
