@@ -19,12 +19,12 @@ ROUTERS = [
     {"module": "routers.notice"},       # WO-16 통합 공지배너 (/notices/*, /notices/active)
     {"module": "routers.ai_copywrite"},
     {"module": "routers.event_trigger"},
-    {"module": "routers.repair"},
+    # {"module": "routers.repair"},  # ISOLATED 2026-08-20 (unlaunched 수선중개)
     {"module": "routers.fix_chat"},
-    {"module": "routers.fix_providers_api"},
-    {"module": "routers.matching", "prefix": "/matching", "tags": ["매칭"]},
-    {"module": "routers.matching_commission", "attr": "commission_router", "prefix": "/price-commission", "tags": ["수수료설정"]},
-    {"module": "routers.experts", "prefix": "/experts", "tags": ["전문가"]},
+    # {"module": "routers.fix_providers_api"},  # ISOLATED 2026-08-20 (unlaunched TAI Fix 업체)
+    # {"module": "routers.matching", "prefix": "/matching", "tags": ["매칭"]},  # ISOLATED 2026-08-20 (unlaunched 매칭)
+    # {"module": "routers.matching_commission", "attr": "commission_router", "prefix": "/price-commission", "tags": ["수수료설정"]},  # ISOLATED 2026-08-20 (unlaunched 매칭수수료)
+    # {"module": "routers.experts", "prefix": "/experts", "tags": ["전문가"]},  # ISOLATED 2026-08-20 (unlaunched 공급자등록)
     {"module": "routers.identity", "prefix": "/identity", "tags": ["본인인증"]},
     {"module": "routers.identity_test"},
     {"module": "routers.agent_service"},

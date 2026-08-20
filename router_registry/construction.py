@@ -29,6 +29,6 @@ ROUTERS = [
     {"module": "routers.engine_model"},
     {"module": "routers.education"},
     {"module": "routers.education_assign"},
-    {"module": "routers.personnel"},
+    # {"module": "routers.personnel"},  # ISOLATED 2026-08-20 (unlaunched 선임연결)
     {"module": "routers.safety_info"},
 ]
