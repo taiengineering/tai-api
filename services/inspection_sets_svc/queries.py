@@ -11,7 +11,11 @@ from services.inspection_sets_helpers import UNIT_KO, _build_items_for_set, _get
 from .errors import InspectionSetsSvcError
 
 
-def get_sets_list(factory_id, source, anchor_confirmed, page, size) -> dict:
+def get_sets_list(factory_id, source, anchor_confirmed, page, size, company_id=None, deny_all=False) -> dict:
+    # 회사 스코프(P13): deny_all(비-ALL·무회사)은 쿼리 실행 없이 빈 결과.
+    #   company_id 가 주어지면 해당 회사로 제한(None 은 ALL 전사).
+    if deny_all:
+        return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0}}
     supabase = get_supabase()
     query = supabase.table("inspection_sets").select(
         "id, company_id, factory_id, inspection_set_name, inspection_set_code, "
@@ -24,6 +28,8 @@ def get_sets_list(factory_id, source, anchor_confirmed, page, size) -> dict:
     )
     if factory_id:
         query = query.eq("factory_id", factory_id)
+    if company_id:
+        query = query.eq("company_id", company_id)
     if source:
         query = query.eq("source", source)
     if anchor_confirmed is not None:
