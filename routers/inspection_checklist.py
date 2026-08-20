@@ -1,5 +1,12 @@
 """
-점검리스트 시스템 — v1.4.0
+점검리스트 시스템 — v1.5.0
+v1.5.0: 인증·회사 스코프 (Wave3, 직접MCP)
+  - 전 엔드포인트 로그인 필수(get_current_user).
+  - factory 직결: generate-items/generate-schedules/status/schedules(factory_id) → _ensure_factory_own
+  - work_schedule 경유: start/complete → _ensure_ws_own(행 company_id 소유확인)
+  - inspection 경유: result/{id}/items → _ensure_inspection_own(assignment→work_schedule.company_id)
+  - 무path 목록(GET /schedules): _own_factory_ids 로 자사 factory 제한(P13, 전사노출 차단)
+  - 소유가드는 try 앞(404가 500으로 삼켜지는 것 방지). 비즈니스 로직 verbatim.
 v1.4.0: Rolling 완료 후 다음 회차 자동 생성
   - complete/{id}: 완료 시점에 다음 planned_date 1건 자동 INSERT
   - schedule_end_date 있으면 다음 회차가 그 날짜 넘으면 생성 안 함
@@ -11,17 +18,24 @@ v1.2.0: anchor_confirmed=True 필터 + sets_skipped
 v1.1.0: /status count 쿼리 4개 분리
 prefix: /inspection
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional
 from datetime import datetime, timezone, date, timedelta
 import calendar
 
 from dateutil.relativedelta import relativedelta
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import (
+    _scope,
+    _is_admin,
+    _ensure_own_company,
+    _ensure_factory_own,
+)
 
 router = APIRouter(prefix="/inspection", tags=["점검리스트"])
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 LEGAL_INSPECTION_ITEMS = {
     "ELECACT-010":    ["배전반 외관 점검", "접지 상태 확인", "절연저항 측정", "과전류 차단기 동작 확인"],
@@ -128,9 +142,44 @@ def _calc_schedule_dates(start_date: date, end_date: date, cycle_unit: str, cycl
     return dates
 
 
+# ── 인증·회사 스코프 헬퍼 (P13, 로컬 정의 — company_scope.py 는 ADDITIVE만) ──
+
+def _own_factory_ids(sb, current):
+    """ALL→None(전체) / 무회사→[] / else 자사 factory id 목록."""
+    if _is_admin(_scope(sb, current.get("role_code"))):
+        return None
+    cid = current.get("company_id")
+    if not cid:
+        return []
+    r = sb.table("factories").select("id").eq("company_id", cid).execute()
+    return [row["id"] for row in (r.data or [])]
+
+
+def _ensure_ws_own(sb, work_schedule_id, current):
+    """work_schedule 소유확인(행 company_id 경유). 없으면/타사면 404."""
+    r = sb.table("work_schedules").select("id, company_id").eq("id", work_schedule_id).limit(1).execute()
+    if not r.data:
+        raise HTTPException(status_code=404, detail="점검 일정을 찾을 수 없습니다.")
+    _ensure_own_company(r.data[0].get("company_id"), current, sb, "점검 일정을 찾을 수 없습니다.")
+
+
+def _ensure_inspection_own(sb, inspection_id, current):
+    """safety_inspection → assignment(work_schedule) → company 경유 소유확인."""
+    insp = sb.table("safety_inspections").select("id, assignment_id").eq("id", inspection_id).limit(1).execute()
+    if not insp.data:
+        raise HTTPException(status_code=404, detail="점검 레코드를 찾을 수 없습니다.")
+    if _is_admin(_scope(sb, current.get("role_code"))):
+        return
+    ws_id = insp.data[0].get("assignment_id")
+    ws = sb.table("work_schedules").select("company_id").eq("id", ws_id).limit(1).execute()
+    if not ws.data or ws.data[0].get("company_id") != current.get("company_id"):
+        raise HTTPException(status_code=404, detail="점검 레코드를 찾을 수 없습니다.")
+
+
 @router.post("/generate-items/{factory_id}")
-async def generate_inspection_items(factory_id: str):
+async def generate_inspection_items(factory_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     try:
         sets_res = supabase.table("inspection_sets").select(
             "id, inspection_set_code, inspection_set_name, law_name"
@@ -167,8 +216,9 @@ async def generate_inspection_items(factory_id: str):
 
 
 @router.post("/generate-schedules/{factory_id}")
-async def generate_schedules(factory_id: str, body: Optional[dict] = None):
+async def generate_schedules(factory_id: str, body: Optional[dict] = None, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     try:
         body = body or {}
         start_str = body.get("start_date") or date.today().isoformat()
@@ -235,8 +285,9 @@ async def generate_schedules(factory_id: str, body: Optional[dict] = None):
 
 
 @router.get("/status/{factory_id}")
-async def get_inspection_status(factory_id: str):
+async def get_inspection_status(factory_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     try:
         today      = date.today()
         today_str  = today.isoformat()
@@ -292,8 +343,10 @@ async def list_schedules(
     status_code: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     try:
         query = supabase.table("work_schedules").select(
             "*, inspection_sets(inspection_set_name, law_name, law_article, cycle_unit, cycle_value)",
@@ -326,8 +379,9 @@ async def list_schedules(
 
 
 @router.post("/start/{work_schedule_id}")
-async def start_inspection(work_schedule_id: str, body: dict = None):
+async def start_inspection(work_schedule_id: str, body: dict = None, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_ws_own(supabase, work_schedule_id, current)
     try:
         body = body or {}
         inspector_name = body.get("inspector_name", "")
@@ -350,8 +404,9 @@ async def start_inspection(work_schedule_id: str, body: dict = None):
 
 
 @router.post("/result/{inspection_id}/items")
-async def record_inspection_results(inspection_id: str, body: dict):
+async def record_inspection_results(inspection_id: str, body: dict, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_inspection_own(supabase, inspection_id, current)
     try:
         results = body.get("results", [])
         if not results:
@@ -377,7 +432,7 @@ async def record_inspection_results(inspection_id: str, body: dict):
 
 
 @router.post("/complete/{work_schedule_id}")
-async def complete_inspection(work_schedule_id: str, body: dict = None):
+async def complete_inspection(work_schedule_id: str, body: dict = None, current: dict = Depends(get_current_user)):
     """
     v1.4.0: Rolling 완료 후 다음 회차 자동 생성.
     - 완료된 planned_date + delta = 다음 planned_date 1건 INSERT
@@ -387,6 +442,7 @@ async def complete_inspection(work_schedule_id: str, body: dict = None):
     - COMPLETED 자체는 절대 수정 안 함
     """
     supabase = get_supabase()
+    _ensure_ws_own(supabase, work_schedule_id, current)
     try:
         body = body or {}
         summary      = body.get("summary", "")
@@ -484,12 +540,21 @@ async def list_inspection_schedules(
     status_code: str = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
+    current: dict = Depends(get_current_user),
 ):
     """점검 일정 목록 (work_schedules 기반)"""
     supabase = get_supabase()
     q = supabase.table("work_schedules").select("*", count="exact")
+    # ── 회사 스코프 (P13): factory 지정 시 소유확인, 아니면 자사 factory 제한 ──
     if factory_id:
+        _ensure_factory_own(supabase, factory_id, current)
         q = q.eq("factory_id", factory_id)
+    else:
+        own = _own_factory_ids(supabase, current)
+        if own is not None:            # 비-ALL
+            if not own:                # 무회사 → 빈 결과
+                return {"status": "success", "data": [], "total": 0}
+            q = q.in_("factory_id", own)
     if status_code:
         q = q.eq("status_code", status_code)
     offset = (page - 1) * page_size
