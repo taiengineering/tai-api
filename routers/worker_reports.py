@@ -1,5 +1,5 @@
 """
-작업자 안전신고 / 긴급신고 API — v1.2.0
+작업자 안전신고 / 긴급신고 API — v1.3.0
 
 작업자 PWA(/app/report.html, /app/emergency.html, /app/corrective.html)가 호출하지만
 서버에 부재해 404 로 실패하던 경로를 신설한다. 테이블은 이미 존재하므로 DDL 변경은 없다.
@@ -13,11 +13,16 @@ API:
 접수(POST)는 산안법 제52조(근로자의 즉시 보고)를 막지 않도록 개방(optional-auth)한다.
 현장 작업자가 토큰 만료 상태에서도 신고할 수 있어야 하기 때문이다.
 
+v1.3.0 (2026-08-20): [SEC] 회사 판정에 reporter_id/worker_id 폴백 추가.
+  factory_id/site_id 가 비어 있는 신고(실측: 기존 2건 모두 null)는 factory/site 만으로는
+  회사 판정이 불가해 자사 관리자조차 열람 불가(ALL 전용)가 된다. 신고는 reporter_id·worker_id
+  를 담으므로, factory→site→reporter→worker 순으로 회사를 판정한다(각 id 는 users→
+  worker_registry 에서 company_id 조회). 이로써 factory/site 미기재 신고도 자사 열람이 성립.
+
 v1.2.0 (2026-08-20): [SEC] 열람·확인 경로 인증 강제 + 회사 스코프 (Wave3, 직접MCP, 운영자 승인)
   - GET /safety-reports/{id}·POST /{id}/confirm 은 로그인 필수(get_current_user).
   - safety_reports 에 직접 company_id 가 없어 factory_id→factories / site_id→construction_sites
-    경유로 회사를 판정, 비-ALL 은 자사 신고만 열람·확인(타사 404). 회사 판정 불가(둘 다 null)
-    신고는 ALL 만 접근(소유 증명 불가 → 안전기본값).
+    경유로 회사를 판정, 비-ALL 은 자사 신고만 열람·확인(타사 404).
   - 접수(POST /safety-reports, /emergency/report)는 개방 유지(산안법 제52조 즉시보고).
 
 v1.1.0 (2026-08-20): [FIX] GET/POST /safety-reports/{id} 의 report_id 를 UUID 검증.
@@ -50,19 +55,39 @@ def _is_uuid(value) -> bool:
         return False
 
 
+def _entity_company_id(sb, entity_id) -> Optional[str]:
+    """reporter_id/worker_id 는 users.id 또는 worker_registry.id 둘 다 가능(모호) →
+    users 우선, 없으면 worker_registry 에서 company_id 조회."""
+    if not entity_id:
+        return None
+    u = sb.table("users").select("company_id").eq("id", entity_id).limit(1).execute()
+    if u.data and u.data[0].get("company_id"):
+        return u.data[0].get("company_id")
+    w = sb.table("worker_registry").select("company_id").eq("id", entity_id).limit(1).execute()
+    if w.data and w.data[0].get("company_id"):
+        return w.data[0].get("company_id")
+    return None
+
+
 def _report_company_id(sb, row) -> Optional[str]:
-    """safety_reports 행의 회사 판정. factory_id→factories.company_id 우선,
-    없으면 site_id→construction_sites.company_id. 둘 다 없으면 None(판정 불가)."""
+    """safety_reports 행의 회사 판정. factory_id→site_id→reporter_id→worker_id 순.
+    factory_id→factories.company_id, site_id→construction_sites.company_id,
+    reporter_id/worker_id→users|worker_registry.company_id. 전부 실패 시 None."""
     fid = row.get("factory_id")
     if fid:
         f = sb.table("factories").select("company_id").eq("id", fid).limit(1).execute()
-        if f.data:
+        if f.data and f.data[0].get("company_id"):
             return f.data[0].get("company_id")
     sid = row.get("site_id")
     if sid:
         s = sb.table("construction_sites").select("company_id").eq("id", sid).limit(1).execute()
-        if s.data:
+        if s.data and s.data[0].get("company_id"):
             return s.data[0].get("company_id")
+    # 폴백: factory/site 미기재 신고 → 신고자/작업자 id 경유로 회사 판정
+    for eid in (row.get("reporter_id"), row.get("worker_id")):
+        cid = _entity_company_id(sb, eid)
+        if cid:
+            return cid
     return None
 
 
@@ -207,7 +232,7 @@ def get_safety_report(report_id: str, current: dict = Depends(get_current_user))
     if not res.data:
         raise HTTPException(status_code=404, detail="신고를 찾을 수 없습니다")
     row = res.data[0]
-    # 회사 스코프(P13): factory_id/site_id 경유 회사 판정 후 자사만 열람
+    # 회사 스코프(P13): factory_id→site_id→reporter_id→worker_id 경유 회사 판정 후 자사만 열람
     _ensure_own_company(_report_company_id(supabase, row), current, supabase, "신고를 찾을 수 없습니다")
     return {"status": "success", "data": row}
 
@@ -232,7 +257,7 @@ def confirm_safety_report(
         raise HTTPException(status_code=404, detail="신고를 찾을 수 없습니다")
     supabase = get_supabase()
 
-    exist = supabase.table("safety_reports").select("id, status, factory_id, site_id").eq("id", report_id).limit(1).execute()
+    exist = supabase.table("safety_reports").select("id, status, factory_id, site_id, reporter_id, worker_id").eq("id", report_id).limit(1).execute()
     if not exist.data:
         raise HTTPException(status_code=404, detail="신고를 찾을 수 없습니다")
     # 회사 스코프(P13): 자사 신고만 확인 가능
