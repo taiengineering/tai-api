@@ -22,13 +22,14 @@ def list_sites(supabase, company_id, status_code, site_type, search, page, size)
     return data
 
 
-def build_site_create_payload(body, now_iso_fn):
+def build_site_create_payload(body, now_iso_fn, company_id):
     data = body.model_dump(exclude_none=True)
     data = normalize_date_fields(data, ("start_date", "end_date"))
     if body.contract_amount is not None:
         sm = calc_safety_manager(body.site_type, float(body.contract_amount), body.total_workers or 0)
         data["safety_manager_required"] = sm["required"]
         data["safety_manager_count"] = sm["count"]
+    data["company_id"] = company_id
     data["created_at"] = now_iso_fn()
     data["updated_at"] = now_iso_fn()
     return data

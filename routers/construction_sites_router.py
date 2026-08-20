@@ -2,9 +2,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
 from schemas.construction import SiteCreate, SitePatch
 from services.construction_sites_svc import (
     build_site_create_payload,
@@ -20,6 +21,7 @@ from services.construction_svc import (
     run_diagnosis,
     run_generate_schedules,
 )
+from services.company_scope import _ensure_own_company, _forced_company_id, _is_admin, _scope
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -46,19 +48,26 @@ async def list_sites(
     search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
     try:
-        return {"status": "success", "data": list_sites_svc(supabase, company_id, status_code, site_type, search, page, size)}
+        scoped_cid = _forced_company_id(current, supabase, company_id)
+        if not _is_admin(_scope(supabase, current.get("role_code"))) and not scoped_cid:
+            return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0}}
+        return {"status": "success", "data": list_sites_svc(supabase, scoped_cid, status_code, site_type, search, page, size)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/sites")
-async def create_site(body: SiteCreate):
+async def create_site(body: SiteCreate, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     try:
-        data = build_site_create_payload(body, _now_iso)
+        company_id = current.get("company_id")
+        if not company_id:
+            raise HTTPException(status_code=403, detail="회사 등록이 필요합니다.")
+        data = build_site_create_payload(body, _now_iso, company_id)
         res = supabase.table("construction_sites").insert(data).execute()
         if not res.data:
             raise HTTPException(status_code=500, detail="등록 실패")
@@ -76,9 +85,13 @@ async def create_site(body: SiteCreate):
 
 
 @router.get("/sites/{site_id}")
-async def get_site(site_id: str):
+async def get_site(site_id: str, current: dict = Depends(get_current_user)):
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
+    srow = supabase.table("construction_sites").select("company_id").eq("id", site_id).limit(1).execute()
+    if not srow.data:
+        raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+    _ensure_own_company(srow.data[0].get("company_id"), current, supabase, "현장을 찾을 수 없습니다.")
     res = supabase.table("construction_sites").select("*").eq("id", site_id).eq("is_active", True).limit(1).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
@@ -86,10 +99,14 @@ async def get_site(site_id: str):
 
 
 @router.patch("/sites/{site_id}")
-async def update_site(site_id: str, body: SitePatch):
+async def update_site(site_id: str, body: SitePatch, current: dict = Depends(get_current_user)):
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
+        srow = supabase.table("construction_sites").select("company_id").eq("id", site_id).limit(1).execute()
+        if not srow.data:
+            raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+        _ensure_own_company(srow.data[0].get("company_id"), current, supabase, "현장을 찾을 수 없습니다.")
         data = body.model_dump(exclude_none=True)
         if not data:
             raise HTTPException(status_code=400, detail="수정할 항목이 없습니다.")
@@ -107,9 +124,13 @@ async def update_site(site_id: str, body: SitePatch):
 
 
 @router.delete("/sites/{site_id}")
-async def delete_site(site_id: str):
+async def delete_site(site_id: str, current: dict = Depends(get_current_user)):
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
+    srow = supabase.table("construction_sites").select("company_id").eq("id", site_id).limit(1).execute()
+    if not srow.data:
+        raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+    _ensure_own_company(srow.data[0].get("company_id"), current, supabase, "현장을 찾을 수 없습니다.")
     res = supabase.table("construction_sites").update({"is_active": False, "updated_at": _now_iso()}).eq("id", site_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
@@ -117,10 +138,14 @@ async def delete_site(site_id: str):
 
 
 @router.get("/sites/{site_id}/stats")
-async def get_site_stats(site_id: str):
+async def get_site_stats(site_id: str, current: dict = Depends(get_current_user)):
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
+        srow = supabase.table("construction_sites").select("company_id").eq("id", site_id).limit(1).execute()
+        if not srow.data:
+            raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+        _ensure_own_company(srow.data[0].get("company_id"), current, supabase, "현장을 찾을 수 없습니다.")
         site_res = supabase.table("construction_sites").select("*").eq("id", site_id).limit(1).execute()
         if not site_res.data:
             raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
@@ -137,10 +162,14 @@ async def get_site_stats(site_id: str):
 
 
 @router.post("/sites/{site_id}/diagnose")
-async def diagnose_site(site_id: str):
+async def diagnose_site(site_id: str, current: dict = Depends(get_current_user)):
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
+        srow = supabase.table("construction_sites").select("company_id").eq("id", site_id).limit(1).execute()
+        if not srow.data:
+            raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+        _ensure_own_company(srow.data[0].get("company_id"), current, supabase, "현장을 찾을 수 없습니다.")
         _, factory_id, diag = run_diagnose_site(
             supabase,
             site_id,
@@ -167,10 +196,14 @@ async def diagnose_site(site_id: str):
 
 
 @router.post("/sites/{site_id}/generate-schedules")
-async def generate_schedules(site_id: str):
+async def generate_schedules(site_id: str, current: dict = Depends(get_current_user)):
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     try:
+        srow = supabase.table("construction_sites").select("company_id").eq("id", site_id).limit(1).execute()
+        if not srow.data:
+            raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+        _ensure_own_company(srow.data[0].get("company_id"), current, supabase, "현장을 찾을 수 없습니다.")
         factory_id, sched = run_generate_site_schedules(supabase, site_id, run_generate_schedules)
         return {
             "status": "success",

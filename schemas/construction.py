@@ -5,7 +5,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class SiteCreate(BaseModel):
-    company_id: str
+    company_id: Optional[str] = None
     site_name: str
     site_code: Optional[str] = None
     site_type: str = "BUILDING"
