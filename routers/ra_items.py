@@ -35,10 +35,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _ensure_own_company
 from services.ra_decision_svc import (
     DecisionError, ESCALATION_LABELS, HIERARCHY_LABELS, assessment_readiness, decide,
 )
@@ -63,6 +65,30 @@ def _get_assessment(assessment_id: str) -> Dict[str, Any]:
     if not res.data:
         raise HTTPException(status_code=404, detail="위험성평가를 찾을 수 없습니다.")
     return res.data[0]
+
+
+def _ensure_assessment_own(assessment_id: str, current: dict) -> None:
+    """부모 평가 소유 확인 — 비-ALL 타사 404."""
+    a = _sb().table("risk_assessments").select("company_id").eq("id", assessment_id).limit(1).execute()
+    if not a.data:
+        raise HTTPException(status_code=404, detail="위험성평가를 찾을 수 없습니다.")
+    _ensure_own_company(a.data[0].get("company_id"), current, _sb(), "위험성평가를 찾을 수 없습니다.")
+
+
+def _ensure_item_own(item_id: str, current: dict) -> None:
+    """요인 → 부모 평가 소유 확인."""
+    it = _sb().table("ra_item").select("assessment_id").eq("id", item_id).limit(1).execute()
+    if not it.data:
+        raise HTTPException(status_code=404, detail="요인을 찾을 수 없습니다.")
+    _ensure_assessment_own(str(it.data[0]["assessment_id"]), current)
+
+
+def _ensure_control_own(control_id: str, current: dict) -> None:
+    """대책 → 요인 → 부모 평가 소유 확인."""
+    c = _sb().table("ra_control").select("item_id").eq("id", control_id).limit(1).execute()
+    if not c.data:
+        raise HTTPException(status_code=404, detail="대책을 찾을 수 없습니다.")
+    _ensure_item_own(str(c.data[0]["item_id"]), current)
 
 
 def _get_scale_for(assessment: Dict[str, Any]) -> Dict[str, Any]:
@@ -179,8 +205,9 @@ class ReevaluateBody(BaseModel):
 
 # ── 요인 ────────────────────────────────────────────────────────────
 @router.post("/assessments/{assessment_id}/items")
-def create_item(assessment_id: str, body: ItemBody):
+def create_item(assessment_id: str, body: ItemBody, current: dict = Depends(get_current_user)):
     """유해·위험요인 등록. 등록 즉시 위험성을 결정한다(고시 제10조·제11조)."""
+    _ensure_assessment_own(assessment_id, current)
     assessment = _get_assessment(assessment_id)
     scale = _get_scale_for(assessment)
 
@@ -222,8 +249,9 @@ def create_item(assessment_id: str, body: ItemBody):
 
 
 @router.get("/assessments/{assessment_id}/items")
-def list_items(assessment_id: str, include_controls: bool = Query(True)):
+def list_items(assessment_id: str, include_controls: bool = Query(True), current: dict = Depends(get_current_user)):
     """요인 목록. 감소대책과 재판정 횟수를 함께 반환한다."""
+    _ensure_assessment_own(assessment_id, current)
     _get_assessment(assessment_id)
     res = (_sb().table("ra_item").select("*")
            .eq("assessment_id", assessment_id)
@@ -251,8 +279,9 @@ def list_items(assessment_id: str, include_controls: bool = Query(True)):
 
 
 @router.patch("/items/{item_id}")
-def update_item(item_id: str, body: ItemUpdateBody):
+def update_item(item_id: str, body: ItemUpdateBody, current: dict = Depends(get_current_user)):
     """요인 수정. 판정에 영향을 주는 입력이 바뀌면 재판정하고 이력을 남긴다."""
+    _ensure_item_own(item_id, current)
     cur = _sb().table("ra_item").select("*").eq("id", item_id).limit(1).execute()
     if not cur.data:
         raise HTTPException(status_code=404, detail="요인을 찾을 수 없습니다.")
@@ -288,8 +317,9 @@ def update_item(item_id: str, body: ItemUpdateBody):
 
 # ── 감소대책 ────────────────────────────────────────────────────────
 @router.post("/items/{item_id}/controls")
-def create_control(item_id: str, body: ControlBody):
+def create_control(item_id: str, body: ControlBody, current: dict = Depends(get_current_user)):
     """감소대책 등록. 우선순위는 고시 제12조제1항 각 호를 따른다."""
+    _ensure_item_own(item_id, current)
     cur = _sb().table("ra_item").select("id").eq("id", item_id).limit(1).execute()
     if not cur.data:
         raise HTTPException(status_code=404, detail="요인을 찾을 수 없습니다.")
@@ -328,8 +358,9 @@ def create_control(item_id: str, body: ControlBody):
 
 
 @router.patch("/controls/{control_id}")
-def update_control(control_id: str, body: ControlUpdateBody):
+def update_control(control_id: str, body: ControlUpdateBody, current: dict = Depends(get_current_user)):
     """대책 수정·실행 완료 처리."""
+    _ensure_control_own(control_id, current)
     payload = {k: v for k, v in body.dict(exclude={"done"}).items() if v is not None}
     if body.done is not None:
         payload["done_at"] = _now() if body.done else None
@@ -347,7 +378,7 @@ def update_control(control_id: str, body: ControlUpdateBody):
 
 # ── 재판정 ──────────────────────────────────────────────────────────
 @router.post("/items/{item_id}/reevaluate")
-def reevaluate(item_id: str, body: ReevaluateBody):
+def reevaluate(item_id: str, body: ReevaluateBody, current: dict = Depends(get_current_user)):
     """감소대책 실행 후 재판정.
 
     고시 제12조제2항 — 대책 실행 후 허용 가능한 수준인지 확인한다.
@@ -356,6 +387,7 @@ def reevaluate(item_id: str, body: ReevaluateBody):
     exposed_count 를 함께 보내면 그 값을 '대책 실행 후 남은 노출 인원'으로 보아
     승급 여부를 다시 판단한다. 보내지 않으면 요인 등록값을 그대로 쓴다.
     """
+    _ensure_item_own(item_id, current)
     cur = _sb().table("ra_item").select("*").eq("id", item_id).limit(1).execute()
     if not cur.data:
         raise HTTPException(status_code=404, detail="요인을 찾을 수 없습니다.")
@@ -398,8 +430,9 @@ def reevaluate(item_id: str, body: ReevaluateBody):
 
 
 @router.get("/items/{item_id}/revisions")
-def list_revisions(item_id: str):
+def list_revisions(item_id: str, current: dict = Depends(get_current_user)):
     """재판정 이력. 반복 실행의 증적이 된다."""
+    _ensure_item_own(item_id, current)
     res = (_sb().table("ra_item_revision").select("*")
            .eq("item_id", item_id).order("seq").execute())
     return {"status": "success", "data": {"items": res.data or []}}
@@ -407,8 +440,9 @@ def list_revisions(item_id: str):
 
 # ── 완료 가능 여부 ──────────────────────────────────────────────────
 @router.get("/assessments/{assessment_id}/readiness")
-def readiness(assessment_id: str):
+def readiness(assessment_id: str, current: dict = Depends(get_current_user)):
     """완료 가능 여부 점검. 허용 불가 요인이 남아 있으면 완료할 수 없다."""
+    _ensure_assessment_own(assessment_id, current)
     _get_assessment(assessment_id)
     res = _sb().table("ra_item").select("*").eq("assessment_id", assessment_id).execute()
     items = res.data or []
