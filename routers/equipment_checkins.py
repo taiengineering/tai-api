@@ -10,13 +10,19 @@ v1.0.0 (2026-04-08):
 이상(NG/HOLD) 발생 시 자동 처리:
   1. notifications 테이블에 DB 알림 생성
   2. 해당 사업장 안전관리자(role_code=003)에게 FCM 푸시 발송
+
+인증·스코프 (2026-08-20):
+  POST(제출)는 현장 익명 스캔 허용이라 공개 유지.
+  GET(이력·단건)는 로그인 + 회사 스코프(equipment_checkins.company_id).
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _ensure_own_company, _ensure_factory_own, _scope, _is_admin
 
 router = APIRouter(prefix="/equipment-checkins", tags=["equipment_checkins"])
 
@@ -47,7 +53,7 @@ class EquipmentCheckinCreate(BaseModel):
     longitude:          Optional[float] = None
 
 
-# ── POST /equipment-checkins (인증 불필요) ──────────────────
+# ── POST /equipment-checkins (인증 불필요 — 현장 익명 스캔) ──────────
 
 @router.post("")
 async def submit_checkin(body: EquipmentCheckinCreate):
@@ -205,7 +211,7 @@ def _notify_abnormal_checkin(
         print(f"[CHECKIN] FCM 전체 실패: {e}")
 
 
-# ── GET /equipment-checkins (인증 필요) ─────────────────────
+# ── GET /equipment-checkins (로그인 + 회사 스코프) ─────────────────────
 
 @router.get("")
 def get_checkins(
@@ -214,6 +220,7 @@ def get_checkins(
     overall_result:     Optional[str] = Query(None),   # OK | NG | HOLD
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
     q = supabase.table("equipment_checkins").select(
@@ -223,7 +230,13 @@ def get_checkins(
         count="exact"
     )
     if factory_id:
-        q = q.eq("factory_id",         factory_id)
+        _ensure_factory_own(supabase, factory_id, current)
+        q = q.eq("factory_id", factory_id)
+    elif not _is_admin(_scope(supabase, current.get("role_code"))):
+        cid = current.get("company_id")
+        if not cid:
+            return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size}}
+        q = q.eq("company_id", cid)
     if equipment_asset_id:
         q = q.eq("equipment_asset_id", equipment_asset_id)
     if overall_result:
@@ -242,14 +255,15 @@ def get_checkins(
     }
 
 
-# ── GET /equipment-checkins/{id} (인증 필요) ────────────────
+# ── GET /equipment-checkins/{id} (로그인 + 소유 확인) ────────────────
 
 @router.get("/{checkin_id}")
-def get_checkin(checkin_id: str):
+def get_checkin(checkin_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     res = supabase.table("equipment_checkins").select("*").eq(
         "id", checkin_id
     ).limit(1).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="체크인 기록을 찾을 수 없습니다")
+    _ensure_own_company(res.data[0].get("company_id"), current, supabase, "체크인 기록을 찾을 수 없습니다")
     return {"status": "success", "data": res.data[0]}
