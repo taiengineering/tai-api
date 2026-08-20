@@ -8,9 +8,9 @@
   - set 배치(anchor/bulk PATCH) → _ensure_sets_own(items[].id).
   - company/{company_id} → _ensure_own_company(path 값 토큰 대조, 타사 404).
   - 전사 batch(generate-all-items 무 factory_id · generate-schedules-all) → _require_admin(ALL 전용).
-  - list(GET "") 무 factory_id 는 비-ALL 차단(_require_admin) — svc 내부 쿼리를 라우터에서 회사필터 못 하므로
-    안전기본값. (회사 전체 목록은 후속 서비스계층 스코프 B 에서.)
-  svc 패키지는 무수정(가드는 위임 전에 라우터에서 수행).
+  - list(GET "") 무 factory_id → 회사 스코프(§4, 방식 B): scoped_list_company 로
+    비-ALL=자사 전체·ALL=전사·무회사=빈결과. svc.get_sets_list(company_id, deny_all) 가산.
+  svc 패키지는 get_sets_list 에 company_id/deny_all 파라미터 ADDITIVE 가산(나머지 무수정).
 """
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ from services.company_scope import (
     _require_admin,
     _ensure_own_company,
     _ensure_factory_own,
+    scoped_list_company,
 )
 from schemas.inspection_sets import (
     AnchorBody,
@@ -84,9 +85,10 @@ def get_inspection_sets(
     sb = get_supabase()
     if factory_id:
         _ensure_factory_own(sb, factory_id, current)
-    else:
-        _require_admin(current, sb)   # 무 factory_id 전사 목록은 ALL 전용
-    return _call(svc.get_sets_list, factory_id, source, anchor_confirmed, page, size)
+        return _call(svc.get_sets_list, factory_id, source, anchor_confirmed, page, size)
+    # 무 factory_id: 회사 스코프(§4) — 비-ALL=자사 전체, ALL=전사, 무회사=빈결과
+    scoped_cid, deny_all = scoped_list_company(current, sb)
+    return _call(svc.get_sets_list, factory_id, source, anchor_confirmed, page, size, scoped_cid, deny_all)
 
 
 @router.post("/manual")
