@@ -26,9 +26,11 @@ API:
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import scoped_list_company
 
 router = APIRouter(prefix="/ra", tags=["위험성평가 증적 리포트"])
 
@@ -50,6 +52,7 @@ def semiannual_report(
     factory_id: Optional[str] = Query(None),
     year:       Optional[int] = Query(None, description="대상 연도(기본: 올해)"),
     half:       str = Query("H1", description="H1 상반기 | H2 하반기"),
+    current: dict = Depends(get_current_user),
 ):
     """중처법 시행령 제4조3호 반기 점검 증적 — 위험성평가 데이터 집계."""
     if not company_id and not factory_id:
@@ -61,6 +64,11 @@ def semiannual_report(
     lo, hi, half_label = _half_range(y, half)
 
     sb = get_supabase()
+
+    scoped_cid, deny_all = scoped_list_company(current, sb, company_id)
+    if deny_all:
+        return {"status": "success", "data": {}}
+    company_id = scoped_cid
 
     # 1) 반기 내 위험성평가 (assessment_date 기준)
     aq = sb.table("risk_assessments").select(
