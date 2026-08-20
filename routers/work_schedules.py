@@ -30,12 +30,16 @@ API:
 """
 import uuid
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import (
+    scoped_list_company, _ensure_own_company, _ensure_factory_own, _scope, _is_admin,
+)
 
 router = APIRouter(prefix="/work-schedules", tags=["work_schedules"])
 
@@ -93,6 +97,17 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
     return updated
 
 
+def _owned_ids(supabase, ids, current):
+    """비-ALL: 자기 회사 소유 schedule id 집합만. ALL: 전체 그대로."""
+    if _is_admin(_scope(supabase, current.get("role_code"))):
+        return set(ids)
+    cid = current.get("company_id")
+    if not cid or not ids:
+        return set()
+    res = supabase.table("work_schedules").select("id").in_("id", list(ids)).eq("company_id", cid).execute()
+    return {r["id"] for r in (res.data or [])}
+
+
 # ── Pydantic 모델 ─────────────────────────────────────────────
 
 class ScheduleUpdateItem(BaseModel):
@@ -131,7 +146,7 @@ class BulkAssignBody(BaseModel):
 # ── 고정경로 먼저 선언 (/{schedule_id} 보다 앞에) ──────────────
 
 @router.patch("/batch-update")
-def batch_update_schedules(body: BatchUpdateBody):
+def batch_update_schedules(body: BatchUpdateBody, current: dict = Depends(get_current_user)):
     """
     v1.1.0: 복수 work_schedules 일괄 업데이트.
     - is_excluded / excluded_reason / custom_cycle 업데이트
@@ -140,8 +155,11 @@ def batch_update_schedules(body: BatchUpdateBody):
     supabase = get_supabase()
     now      = _now()
     updated  = 0
+    owned = _owned_ids(supabase, [it.id for it in body.updates], current)
 
     for item in body.updates:
+        if item.id not in owned:
+            continue
         fields: dict = {}
         if item.is_excluded is not None:
             fields["is_excluded"] = item.is_excluded
@@ -158,14 +176,17 @@ def batch_update_schedules(body: BatchUpdateBody):
 
 
 @router.post("/bulk-assign")
-def bulk_assign_schedules(body: BulkAssignBody):
+def bulk_assign_schedules(body: BulkAssignBody, current: dict = Depends(get_current_user)):
     """v1.2.3: 선택 일정 일괄 담당자 배정(작업일정 §33). ids[] + assignee_id/assigned_user_id."""
     supabase = get_supabase()
     now = _now()
     auid = body.assigned_user_id if body.assigned_user_id is not None else body.assignee_id
     updated = 0
+    owned = _owned_ids(supabase, body.ids, current)
     for sid in body.ids:
         if not _is_uuid(sid):
+            continue
+        if sid not in owned:
             continue
         if _apply_one_update(supabase, sid, {"assigned_user_id": auid}, now):
             updated += 1
@@ -173,13 +194,14 @@ def bulk_assign_schedules(body: BulkAssignBody):
 
 
 @router.post("/confirm/{factory_id}")
-def confirm_schedules(factory_id: str, body: ConfirmBody):
+def confirm_schedules(factory_id: str, body: ConfirmBody, current: dict = Depends(get_current_user)):
     """
     v1.1.0: 검토 완료 후 스케줄 확정.
     1. is_excluded=FALSE → reviewed_at/reviewed_by, custom_cycle→cycle_code
     2. is_excluded=TRUE → status_code='EXCLUDED', is_active=FALSE
     """
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)   # 타사 시설 404
     now      = _now()
 
     active_res = supabase.table("work_schedules") \
@@ -241,9 +263,14 @@ def get_work_schedules(
     planned_date_to:   Optional[str]  = Query(None, description="계획일 종료 YYYY-MM-DD (v1.2.4)"),
     page:              int            = Query(1, ge=1, description="페이지 번호"),
     size:              int            = Query(20, ge=1, le=500, description="페이지 크기"),
+    current:           dict           = Depends(get_current_user),
 ):
     """v1.2.4: 업무 일정 목록 조회. is_assigned·obligation_type·planned_date 범위 필터, size 상한 500."""
     supabase = get_supabase()
+    scoped_cid, deny_all = scoped_list_company(current, supabase, company_id)
+    if deny_all or not scoped_cid:
+        return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0}}
+    company_id = scoped_cid
     q = supabase.table("work_schedules").select("*", count="exact")
 
     if company_id:      q = q.eq("company_id",      company_id)
@@ -278,8 +305,9 @@ def get_work_schedules(
 
 
 @router.get("/factory/{factory_id}")
-def get_factory_work_schedules(factory_id: str):
+def get_factory_work_schedules(factory_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)   # 타사 시설 404
     result = (
         supabase.table("work_schedules")
         .select("*")
@@ -291,7 +319,7 @@ def get_factory_work_schedules(factory_id: str):
 
 
 @router.get("/inspection-set/{inspection_set_id}")
-def get_inspection_set_work_schedules(inspection_set_id: str):
+def get_inspection_set_work_schedules(inspection_set_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     result = (
         supabase.table("work_schedules")
@@ -300,12 +328,16 @@ def get_inspection_set_work_schedules(inspection_set_id: str):
         .order("created_at", desc=True)
         .execute()
     )
-    return result.data
+    data = result.data or []
+    if not _is_admin(_scope(supabase, current.get("role_code"))):
+        cid = current.get("company_id")
+        data = [d for d in data if d.get("company_id") == cid]
+    return data
 
 
 # /{schedule_id}는 반드시 모든 고정경로 뒤에 선언
 @router.get("/{schedule_id}")
-def get_work_schedule(schedule_id: str):
+def get_work_schedule(schedule_id: str, current: dict = Depends(get_current_user)):
     # v1.2.2: 비-uuid 경로(/summary 등)가 catch-all 에 잡혀 500(22P02) 나던 것 방지.
     if not _is_uuid(schedule_id):
         raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
@@ -317,11 +349,14 @@ def get_work_schedule(schedule_id: str):
         .limit(1)
         .execute()
     )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
+    _ensure_own_company(result.data[0].get("company_id"), current, supabase, "일정을 찾을 수 없습니다")
     return result.data
 
 
 @router.patch("/{schedule_id}")
-def patch_work_schedule(schedule_id: str, body: SchedulePatchBody):
+def patch_work_schedule(schedule_id: str, body: SchedulePatchBody, current: dict = Depends(get_current_user)):
     """v1.2.3: 단건 갱신 — 담당자 배정(assignee_id/assigned_user_id)·상태(status_code) 등.
 
     대시보드 [담당자 배정](㉑)·점검 캘린더 [완료처리](㉘)·작업일정 [담당자 배정](㉝) 공통 경로.
@@ -330,6 +365,10 @@ def patch_work_schedule(schedule_id: str, body: SchedulePatchBody):
     if not _is_uuid(schedule_id):
         raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
     supabase = get_supabase()
+    _own = supabase.table("work_schedules").select("company_id").eq("id", schedule_id).limit(1).execute()
+    if not _own.data:
+        raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
+    _ensure_own_company(_own.data[0].get("company_id"), current, supabase, "일정을 찾을 수 없습니다")
     now = _now()
 
     fields: dict = {}
