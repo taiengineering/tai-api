@@ -1,7 +1,14 @@
 """
-법령진단 접근 제어 + 견적 요청 라우터 — v2.0.0
+법령진단 접근 제어 + 견적 요청 라우터 — v2.1.0
 
 변경 이력:
+  v2.1.0 (2026-08-20, §80 무인증 해소):
+    - GET  /diagnosis/access-check   인증 필수(_require_login) + 회사 스코프(P13):
+      관리자가 아니면 자사 시설만 조회. 타 회사 factory_id → 403 (계약 존재 노출 차단)
+    - POST /diagnosis/request-quote  company_id 를 factory 에서만 도출(client 신뢰 제거, P13).
+      접수 자체는 공개 유지(비로그인 견적 신청 허용)
+    - POST /diagnosis/purchases      [DEPRECATED] 410 Gone 잠금
+
   v2.0.0 (2026-04-01):
     - POST /diagnosis/request-quote  신규: quotes 테이블에 DIAGNOSIS 견적 생성
     - GET  /diagnosis/access-check   변경: contracts 테이블 기반 접근 확인
@@ -17,20 +24,22 @@
   → access-check: contracts 테이블에서 ACTIVE 계약 + items 확인
 
 API:
-  POST /diagnosis/request-quote        DIAGNOSIS 견적 생성 (신규)
-  GET  /diagnosis/access-check         단계별 접근 가능 여부 (contracts 기반)
-  POST /diagnosis/purchases            [DEPRECATED] 단건 결제 기록 (삭제 금지)
+  POST /diagnosis/request-quote        DIAGNOSIS 견적 생성 (공개, company_id 는 factory 도출)
+  GET  /diagnosis/access-check         단계별 접근 가능 여부 (인증 필수 + 회사 스코프)
+  POST /diagnosis/purchases            [DEPRECATED · LOCKED] 410 Gone
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _is_admin, _scope
 import random
 
 router = APIRouter(prefix="/diagnosis", tags=["diagnosis"])
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 VALID_STEPS = {1, 2, 3, 99}  # 99 = 종합리포트
 
@@ -59,7 +68,7 @@ def _gen_quote_no() -> str:
 
 
 # ============================================================
-# POST /diagnosis/request-quote  신규 v2.0.0
+# POST /diagnosis/request-quote  신규 v2.0.0 · v2.1.0 P13
 # ============================================================
 
 class DiagnosisQuoteRequest(BaseModel):
@@ -70,16 +79,18 @@ class DiagnosisQuoteRequest(BaseModel):
     contact_phone: str
     contact_email: Optional[str] = None
     memo:          Optional[str] = None
-    company_id:    Optional[str] = None
+    # company_id 제거(v2.1.0 §80/P13): client 가 보낸 company_id 를 신뢰하지 않는다.
+    # company_id 는 서버에서 factory_id 로만 도출한다.
 
 
 @router.post("/request-quote")
 def request_diagnosis_quote(body: DiagnosisQuoteRequest):
     """
-    DIAGNOSIS 견적 생성 (B2B 플로우).
+    DIAGNOSIS 견적 생성 (B2B 플로우) — 접수는 공개(비로그인 허용).
 
     quotes 테이블에 service_type='DIAGNOSIS' 행 생성.
     금액은 SECTOR_PRICES 기준 자동 계산.
+    company_id 는 factory_id 로만 도출(P13: client 신뢰 금지).
     items JSONB에 factory_id + step 저장 → 이후 contracts.items로 복사됨.
     """
     if body.step not in {2, 3, 99}:
@@ -94,16 +105,13 @@ def request_diagnosis_quote(body: DiagnosisQuoteRequest):
 
     supabase = get_supabase()
 
-    # company_id 조회 (없으면 factory에서 자동 조회)
-    company_id = body.company_id
-    factory_name = ""
+    # company_id 는 factory 에서만 도출 (P13: client 가 보낸 company_id 신뢰 금지)
     fac = supabase.table("factories").select("company_id, name").eq(
         "id", body.factory_id
     ).limit(1).execute()
     if not fac.data:
         raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다.")
-    if not company_id:
-        company_id = fac.data[0].get("company_id")
+    company_id   = fac.data[0].get("company_id")
     factory_name = fac.data[0].get("name", "")
 
     unit_price     = SECTOR_PRICES[sector][body.step]
@@ -153,19 +161,21 @@ def request_diagnosis_quote(body: DiagnosisQuoteRequest):
 
 
 # ============================================================
-# GET /diagnosis/access-check  v2.0.0 변경
+# GET /diagnosis/access-check  v2.0.0 변경 · v2.1.0 인증+스코프
 # ============================================================
 
 @router.get("/access-check")
 def check_diagnosis_access(
     factory_id: str = Query(..., description="factories.id (UUID)"),
     step:        int = Query(..., description="1=기초진단(무료) | 2=2단계 | 3=3단계 | 99=종합리포트"),
+    current:    dict = Depends(get_current_user),
 ):
     """
     법령진단 단계별 접근 가능 여부 확인.
 
-    v2.0.0: contracts 테이블 기반 확인
-    - step=1 → 항상 has_access=True (무료)
+    v2.1.0 (§80): 인증 필수 + 회사 스코프(P13).
+      관리자가 아니면 자사 시설만 조회 가능. 타 회사 factory_id 는 403.
+    - step=1 → 항상 has_access=True (무료), 단 소유 검증은 선행
     - step=2/3/99 → contracts에서 service_type='DIAGNOSIS', status_code='ACTIVE',
       items 배열에 factory_id + step 일치 항목 존재 여부 확인
     """
@@ -174,6 +184,23 @@ def check_diagnosis_access(
             status_code=422,
             detail=f"step은 {sorted(VALID_STEPS)} 중 하나여야 합니다."
         )
+
+    supabase = get_supabase()
+
+    # factory → company_id 확인 (step 무관하게 소유 검증 선행)
+    fac_res = supabase.table("factories").select("id, company_id").eq(
+        "id", factory_id
+    ).limit(1).execute()
+
+    if not fac_res.data:
+        raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다.")
+
+    company_id = fac_res.data[0].get("company_id")
+
+    # 회사 스코프 (P13): 관리자가 아니면 자사 시설만 접근 가능
+    if not _is_admin(_scope(supabase, current.get("role_code"))):
+        if str(company_id) != str(current.get("company_id")):
+            raise HTTPException(status_code=403, detail="타 회사 시설에 접근할 수 없습니다.")
 
     # 1단계 — 항상 무료
     if step == 1:
@@ -186,18 +213,6 @@ def check_diagnosis_access(
                 "reason":     "FREE",
             }
         }
-
-    supabase = get_supabase()
-
-    # factory → company_id 확인
-    fac_res = supabase.table("factories").select("id, company_id").eq(
-        "id", factory_id
-    ).limit(1).execute()
-
-    if not fac_res.data:
-        raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다.")
-
-    company_id = fac_res.data[0].get("company_id")
 
     # contracts에서 DIAGNOSIS ACTIVE 계약 조회
     q = supabase.table("contracts").select("id, items").eq(
@@ -250,8 +265,9 @@ def check_diagnosis_access(
 
 
 # ============================================================
-# POST /diagnosis/purchases — [DEPRECATED v2.0.0]
-# 삭제 금지: 하위 호환 유지 / 내부 관리 로그 용도
+# POST /diagnosis/purchases — [DEPRECATED · LOCKED v2.1.0]
+# 410 Gone: 새 흐름은 POST /diagnosis/request-quote
+# 모델은 하위호환 참조용으로 유지하되, 엔드포인트는 잠근다.
 # ============================================================
 
 class PurchaseCreateBody(BaseModel):
@@ -270,66 +286,11 @@ class PurchaseCreateBody(BaseModel):
 @router.post("/purchases")
 def create_purchase(body: PurchaseCreateBody):
     """
-    [DEPRECATED v2.0.0] 법령진단 단건 결제 기록.
-    새로운 결제 흐름은 POST /diagnosis/request-quote 를 사용하세요.
+    [DEPRECATED · LOCKED v2.1.0] 법령진단 단건 결제 기록.
+    이 엔드포인트는 폐기됐습니다. 새로운 결제 흐름은
+    POST /diagnosis/request-quote 를 사용하세요.
     """
-    if body.step not in {2, 3, 99}:
-        raise HTTPException(status_code=422, detail="step은 2, 3, 99 중 하나여야 합니다.")
-
-    pm = (body.payment_method or "card").lower()
-    if pm not in VALID_PAY_METHODS:
-        raise HTTPException(status_code=422, detail=f"payment_method는 {sorted(VALID_PAY_METHODS)} 중 하나여야 합니다.")
-
-    supabase = get_supabase()
-
-    company_id = body.company_id
-    if not company_id:
-        fac = supabase.table("factories").select("company_id").eq(
-            "id", body.factory_id
-        ).limit(1).execute()
-        if fac.data:
-            company_id = fac.data[0].get("company_id")
-
-    expected = SECTOR_PRICES.get(body.sector, {}).get(body.step)
-    if expected and body.amount != expected:
-        raise HTTPException(
-            status_code=422,
-            detail=f"금액이 올바르지 않습니다. (기대값: {expected:,}원)"
-        )
-
-    now     = _now()
-    is_card = pm == "card"
-    status  = "PAID" if is_card else "PENDING"
-    paid_at = now if is_card else None
-
-    try:
-        row = {
-            "factory_id":      body.factory_id,
-            "company_id":      company_id,
-            "sector":          body.sector,
-            "step":            body.step,
-            "price":           body.amount,
-            "status":          status,
-            "paid_at":         paid_at,
-            "expires_at":      None,
-            "payment_method":  pm,
-            "diagnosis_id":    body.diagnosis_id,
-            "step_label":      body.step_label or f"step{body.step}",
-            "invoice_biz_no":  body.invoice_biz_no,
-            "invoice_email":   body.invoice_email,
-            "created_at":      now,
-        }
-        res = supabase.table("diagnosis_purchases").insert(row).execute()
-        record = res.data[0] if res.data else {}
-    except Exception:
-        record = {}
-
-    return {
-        "status":     "success",
-        "deprecated": True,
-        "message":    "[DEPRECATED] 새로운 결제 흐름은 POST /diagnosis/request-quote를 사용하세요.",
-        "data": {
-            **record,
-            "has_access": is_card,
-        }
-    }
+    raise HTTPException(
+        status_code=410,
+        detail="이 엔드포인트는 폐기됐습니다. POST /diagnosis/request-quote 를 사용하세요.",
+    )
