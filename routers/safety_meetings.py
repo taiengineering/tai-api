@@ -29,11 +29,13 @@ meeting_type:
 """
 import uuid
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone, date, timedelta
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import require_company_id, scoped_list_company, _ensure_own_company
 
 router = APIRouter(prefix="/safety-meetings", tags=["safety_meetings"])
 
@@ -150,6 +152,7 @@ class FileAttachBody(BaseModel):
 def get_meeting_schedule(
     company_id: str = Query(..., description="회사 ID"),
     year:       int = Query(None, description="연도 (기본: 올해)"),
+    current: dict = Depends(get_current_user),
 ):
     """
     안전보건 회의 개최 주기 준수 현황.
@@ -158,6 +161,24 @@ def get_meeting_schedule(
     """
     supabase = get_supabase()
     target_year = year or date.today().year
+    scoped_cid, deny_all = scoped_list_company(current, supabase, company_id)
+    if deny_all or not scoped_cid:
+        return {
+            "status": "success",
+            "data": {
+                "company_id": None,
+                "year": target_year,
+                "safety_committee": [],
+                "contractor_council": [],
+                "summary": {
+                    "committee_compliant": 0,
+                    "committee_overdue": 0,
+                    "council_compliant": 0,
+                    "council_overdue": 0,
+                },
+            },
+        }
+    company_id = scoped_cid
 
     res = supabase.table("safety_committee_meetings").select(
         "id, meeting_type, meeting_date, status_code"
@@ -231,9 +252,10 @@ def get_meeting_schedule(
 # ── CRUD ─────────────────────────────────────────────────────
 
 @router.post("")
-def create_meeting(body: MeetingCreateBody):
+def create_meeting(body: MeetingCreateBody, current: dict = Depends(get_current_user)):
     """안전보건 회의록 생성."""
     supabase = get_supabase()
+    body.company_id = require_company_id(current, supabase)   # 무회사 403, 클라 company_id 무시
     now = _now()
     row = {
         "company_id":      body.company_id,
@@ -284,9 +306,14 @@ def list_meetings(
     date_to:      Optional[str] = Query(None, description="회의일 종료 (YYYY-MM-DD)"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
 ):
     """안전보건 회의 목록 조회. v1.2.0: date_from·date_to(meeting_date 범위) 필터 추가."""
     supabase = get_supabase()
+    scoped_cid, deny_all = scoped_list_company(current, supabase, company_id)
+    if deny_all or not scoped_cid:
+        return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0}}
+    company_id = scoped_cid
     q = supabase.table("safety_committee_meetings").select(
         "id, company_id, factory_id, meeting_type, meeting_title, meeting_date, "
         "meeting_place, chair_name, attendee_count, files_json, status_code, "
@@ -328,7 +355,7 @@ def list_meetings(
 
 
 @router.get("/{meeting_id}")
-def get_meeting(meeting_id: str):
+def get_meeting(meeting_id: str, current: dict = Depends(get_current_user)):
     """안전보건 회의 상세 조회 (참석자는 전용 테이블에서 로드)."""
     # 정의되지 않은 고정경로(/summary 등)가 catch-all 에 잡혀 22P02 나던 것 방지 (v1.2.1)
     if not _is_uuid(meeting_id):
@@ -340,6 +367,7 @@ def get_meeting(meeting_id: str):
     if not res.data:
         raise HTTPException(status_code=404, detail="회의록을 찾을 수 없습니다.")
     record = res.data[0]
+    _ensure_own_company(record.get("company_id"), current, supabase, "회의록을 찾을 수 없습니다.")
     record["attendees"] = _load_attendees(supabase, meeting_id)
     record["retention_expires"] = _retention_expires(
         record.get("meeting_date", ""), record.get("retention_years", RETENTION_YEARS)
@@ -348,11 +376,15 @@ def get_meeting(meeting_id: str):
 
 
 @router.patch("/{meeting_id}")
-def update_meeting(meeting_id: str, body: MeetingUpdateBody):
+def update_meeting(meeting_id: str, body: MeetingUpdateBody, current: dict = Depends(get_current_user)):
     """안전보건 회의 수정 (참석자는 전용 테이블에 교체 저장)."""
     if not _is_uuid(meeting_id):
         raise HTTPException(status_code=404, detail="회의록을 찾을 수 없습니다.")
     supabase = get_supabase()
+    _own = supabase.table("safety_committee_meetings").select("company_id").eq("id", meeting_id).limit(1).execute()
+    if not _own.data:
+        raise HTTPException(status_code=404, detail="회의록을 찾을 수 없습니다.")
+    _ensure_own_company(_own.data[0].get("company_id"), current, supabase, "회의록을 찾을 수 없습니다.")
     payload = {k: v for k, v in body.dict().items() if v is not None}
     # 참석자는 전용 테이블로 분리 저장 (json 컬럼 대신)
     attendees = payload.pop("attendees_json", None)
@@ -388,9 +420,13 @@ def update_meeting(meeting_id: str, body: MeetingUpdateBody):
 
 
 @router.post("/{meeting_id}/files")
-def attach_file(meeting_id: str, body: FileAttachBody):
+def attach_file(meeting_id: str, body: FileAttachBody, current: dict = Depends(get_current_user)):
     """파일 URL 첨부 (프론트에서 Supabase Storage 업로드 후 URL 전달)."""
     supabase = get_supabase()
+    _own = supabase.table("safety_committee_meetings").select("company_id").eq("id", meeting_id).limit(1).execute()
+    if not _own.data:
+        raise HTTPException(status_code=404, detail="회의록을 찾을 수 없습니다.")
+    _ensure_own_company(_own.data[0].get("company_id"), current, supabase, "회의록을 찾을 수 없습니다.")
     # 현재 files_json 조회
     chk = supabase.table("safety_committee_meetings").select(
         "id, files_json"
@@ -413,9 +449,13 @@ def attach_file(meeting_id: str, body: FileAttachBody):
 
 
 @router.delete("/{meeting_id}")
-def delete_meeting(meeting_id: str):
+def delete_meeting(meeting_id: str, current: dict = Depends(get_current_user)):
     """안전보건 회의 삭제 (참석자는 FK ON DELETE CASCADE로 함께 삭제)."""
     supabase = get_supabase()
+    _own = supabase.table("safety_committee_meetings").select("company_id").eq("id", meeting_id).limit(1).execute()
+    if not _own.data:
+        raise HTTPException(status_code=404, detail="회의록을 찾을 수 없습니다.")
+    _ensure_own_company(_own.data[0].get("company_id"), current, supabase, "회의록을 찾을 수 없습니다.")
     res = supabase.table("safety_committee_meetings").delete().eq(
         "id", meeting_id
     ).execute()
@@ -425,9 +465,13 @@ def delete_meeting(meeting_id: str):
 
 
 @router.post("/{meeting_id}/complete")
-def complete_meeting(meeting_id: str):
+def complete_meeting(meeting_id: str, current: dict = Depends(get_current_user)):
     """회의록 완료 처리."""
     supabase = get_supabase()
+    _own = supabase.table("safety_committee_meetings").select("company_id").eq("id", meeting_id).limit(1).execute()
+    if not _own.data:
+        raise HTTPException(status_code=404, detail="회의록을 찾을 수 없습니다.")
+    _ensure_own_company(_own.data[0].get("company_id"), current, supabase, "회의록을 찾을 수 없습니다.")
     now = _now()
     res = supabase.table("safety_committee_meetings").update({
         "status_code":  "COMPLETED",
