@@ -1,8 +1,14 @@
 """
-routers/weather.py — v1.3.2
+routers/weather.py — v1.3.3
 
 기상청 날씨 API — Supabase Edge Function 프록시 방식
 
+v1.3.3 (2026-08-20, LEDGER §66):
+  [FIX] _alert_type_from_work_stop 가 ws.get("reasons") 를 읽었으나 라이브 Edge
+  응답의 사유 배열 키는 "triggered" 다. required=true 여도 사유를 못 읽어
+  "WORK_STOP" 일반 문구만 나가고 강풍·강우 등 구체 사유가 유실됐다.
+  → ws.get("triggered") 를 우선 읽고 구 키 "reasons" 를 하위호환 fallback 으로 둔다.
+  (서버·엣지 키 정합: 라이브 Edge 가 이미 triggered 이므로 triggered 가 정본)
 v1.3.2 (2026-08-18):
   [FIX] GET /weather/work-stop-criteria 응답에 data 키 추가 (LEDGER §67)
   화면(safety-dashboard)은 d?.data?.items || d?.items || d?.data 를 읽어
@@ -120,7 +126,8 @@ def _alert_type_from_work_stop(weather_data: dict) -> str:
     ws = weather_data.get("work_stop") if isinstance(weather_data, dict) else None
     if not isinstance(ws, dict) or not ws.get("required"):
         return ""
-    reasons = ws.get("reasons") or []
+    # §66: 라이브 Edge 사유 배열 키는 "triggered". 구 키 "reasons" 는 하위호환 fallback.
+    reasons = ws.get("triggered") or ws.get("reasons") or []
     parts: list[str] = []
     for r in reasons[:3]:
         if isinstance(r, dict):
