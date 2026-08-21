@@ -42,8 +42,8 @@ SA_API_KEY = os.getenv("INICIS_SA_API_KEY", "TGdxb2l3enJDWFRTbTgvREU3MGYwUT09")
 SA_SEED_IV = os.getenv("INICIS_SA_SEED_IV", "SASKGINICIS00000")
 SA_MODE = os.getenv("INICIS_SA_MODE", "test")
 
-SA_AUTH_URL = "https://sa.inicis.com/auth"
-SA_ID_AUTH_URL = "https://sa.inicis.com/id/auth"
+SA_AUTH_URL = os.getenv("INICIS_SA_AUTH_URL", "")
+SA_ID_AUTH_URL = os.getenv("INICIS_SA_ID_AUTH_URL", "")
 
 BASE_URL = os.getenv("API_BASE_URL", "https://api.taieng.co.kr").rstrip("/")
 SUCCESS_URL = f"{BASE_URL}/auth/inicis/callback/success"
