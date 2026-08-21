@@ -1,8 +1,14 @@
 """
-routers/weather.py — v1.3.3
+routers/weather.py — v1.3.4
 
 기상청 날씨 API — Supabase Edge Function 프록시 방식
 
+v1.3.4 (2026-08-21, LEDGER §66 잔여 — 서버→화면 패스스루):
+  [FIX] work_stop 사유 배열을 화면으로 그대로 통과시킬 때 triggered 만 실려
+  화면(safety-dashboard 배지)이 읽는 reasons 키가 비어 구체 사유가 유실됐다.
+  서버 내부 파생(_alert_type_from_work_stop)은 v1.3.3 에서 고쳤으나 패스스루
+  응답(work-stoppage·now)은 그대로였다. → 반환 직전 work_stop 에 triggered·reasons
+  두 키를 병기한다(같은 배열 공유, 데이터·판정 불변; triggered 정본, reasons 화면 하위호환).
 v1.3.3 (2026-08-20, LEDGER §66):
   [FIX] _alert_type_from_work_stop 가 ws.get("reasons") 를 읽었으나 라이브 Edge
   응답의 사유 배열 키는 "triggered" 다. required=true 여도 사유를 못 읽어
@@ -137,6 +143,23 @@ def _alert_type_from_work_stop(weather_data: dict) -> str:
     return ", ".join(p for p in parts if p) or "WORK_STOP"
 
 
+def _mirror_work_stop_keys(weather_data: dict) -> dict:
+    """§66(서버→화면): work_stop 사유 배열을 triggered·reasons 두 키로 병기한다.
+    라이브 Edge 는 triggered 로 주고 화면 배지는 reasons 를 읽어 사유가 유실됐다.
+    같은 배열을 두 키에 실어 계약을 정합시킨다(원본 불변, 판정 로직 무관)."""
+    if not isinstance(weather_data, dict):
+        return weather_data
+    ws = weather_data.get("work_stop")
+    if isinstance(ws, dict):
+        arr = ws.get("triggered")
+        if arr is None:
+            arr = ws.get("reasons")
+        if arr is not None:
+            ws["triggered"] = arr
+            ws["reasons"] = arr
+    return weather_data
+
+
 async def _wire_weather_work_stop(
     *,
     region: str,
@@ -195,6 +218,7 @@ async def get_work_stoppage_by_site(
 
     # Edge Function 호출 (weather/now 액션)
     weather_data = await _edge_call({"action": "now", "lat": str(lat), "lon": str(lon)})
+    weather_data = _mirror_work_stop_keys(weather_data)  # §66 서버→화면 키 병기
 
     alert_type = _alert_type_from_work_stop(weather_data)
     if alert_type:
@@ -244,6 +268,7 @@ async def get_weather_now(
 ):
     """현재 날씨 + 작업중지 판단 (Edge Function 경유 → apihub.kma.go.kr)"""
     weather_data = await _edge_call({"action": "now", "lat": str(lat), "lon": str(lon)})
+    weather_data = _mirror_work_stop_keys(weather_data)  # §66 서버→화면 키 병기
     alert_type = _alert_type_from_work_stop(weather_data)
     if alert_type:
         await _wire_weather_work_stop(
