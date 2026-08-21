@@ -374,7 +374,7 @@ def _evaluate(request: Request) -> Optional[Response]:
     if user is None:
         return _deny(_is_advisory("auth", resource), 401,
                      "토큰이 없습니다.", f"{method} {path}")
-    if method in WRITE_METHODS:
+    if method in WRITE_METHODS and resource != "platform":
         if not active_entitlement(user.get("company_id")):
             d = _deny(_is_advisory("entitlement", resource), 403,
                       "구독이 만료되어 조회만 가능합니다.",
