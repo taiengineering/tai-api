@@ -356,56 +356,40 @@ def _deny(advisory: bool, code: int, msg: str, extra: str = "") -> Optional[Resp
     return JSONResponse({"detail": msg}, status_code=code)
 
 
-async def permission_guard_middleware(request: Request, call_next):
+def _evaluate(request: Request) -> Optional[Response]:
+    """가드 판정만. 거부 시 Response, 통과 시 None. call_next 호출하지 않는다."""
     method = request.method.upper()
     raw = request.url.path
+    if is_public(method, raw):
+        return None
+    path = template_for(method, raw)
+    resource = _resource_of(path)
+    user = _resolve_user(request)
+    if user is None:
+        return _deny(_is_advisory("auth", resource), 401,
+                     "토큰이 없습니다.", f"{method} {path}")
+    if method in WRITE_METHODS:
+        if not active_entitlement(user.get("company_id")):
+            d = _deny(_is_advisory("entitlement", resource), 403,
+                      "구독이 만료되어 조회만 가능합니다.",
+                      f"company={user.get('company_id')} {method} {path}")
+            if d is not None:
+                return d
+    perm = lookup_permission(method, path)
+    if perm and not has_permission(user.get("role_code"), perm):
+        return _deny(_is_advisory("action", resource), 403,
+                     "권한이 없습니다.",
+                     f"role={user.get('role_code')} perm={perm} {method} {path}")
+    return None
+
+
+async def permission_guard_middleware(request: Request, call_next):
     try:
-        if is_public(method, raw):
-            return await call_next(request)
-
-        path = template_for(method, raw)
-        resource = _resource_of(path)
-        user = _resolve_user(request)
-
-        if user is None:
-            denied = _deny(_is_advisory("auth", resource), 401, "토큰이 없습니다.", f"{method} {path}")
-            if denied is not None:
-                return denied
-            return await call_next(request)
-
-        if method in WRITE_METHODS:
-            cached = getattr(request.state, "_guard_entitlement", None)
-            if cached is None:
-                ok = active_entitlement(user.get("company_id"))
-                request.state._guard_entitlement = ok
-            else:
-                ok = cached
-            if not ok:
-                denied = _deny(
-                    _is_advisory("entitlement", resource),
-                    403,
-                    "구독이 만료되어 조회만 가능합니다.",
-                    f"company={user.get('company_id')} {method} {path}",
-                )
-                if denied is not None:
-                    return denied
-                return await call_next(request)
-
-        perm = lookup_permission(method, path)
-        if perm and not has_permission(user.get("role_code"), perm):
-            denied = _deny(
-                _is_advisory("action", resource),
-                403,
-                "권한이 없습니다.",
-                f"role={user.get('role_code')} perm={perm} {method} {path}",
-            )
-            if denied is not None:
-                return denied
-    except HTTPException:
-        raise
+        decision = _evaluate(request)
     except Exception:
-        log.exception("[GUARD] 예외 — fail-open %s %s", method, raw)
-    return await call_next(request)
+        log.exception("[GUARD] 예외 — fail-open %s %s", request.method, request.url.path)
+        decision = None
+    return decision if decision is not None else await call_next(request)
 
 
 def mount_permission_guard(app) -> None:
