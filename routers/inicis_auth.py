@@ -59,6 +59,11 @@ def _sha256(data: str) -> str:
 
 
 def _seed_key_bytes() -> bytes:
+    # 운영 통합인증 인증키가 32자 hex 문자열이면 그대로 16바이트로 디코드한다.
+    # base64 계열 키(테스트 키 등)는 hex 문자셋이 아니므로 이 분기에 걸리지 않아 기존 동작을 보존한다.
+    _k = SA_API_KEY.strip()
+    if len(_k) == 32 and all(c in "0123456789abcdefABCDEF" for c in _k):
+        return bytes.fromhex(_k)
     raw = base64.b64decode(SA_API_KEY)
     if len(raw) == 16:
         return raw
