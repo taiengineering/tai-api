@@ -1,4 +1,7 @@
-# routers/quotes.py — v3.1.0
+# routers/quotes.py — v3.1.1
+# v3.1.1 (2026-08-21, P13/§51-㉡):
+#   - GET /survey/list: 비-admin(고객) 응답 select 에서 contact_phone·contact_email 제거 (심층방어)
+#     · 총관리자(ALL) 경로만 연락처 포함. 교차노출은 v3.1.0 회사스코프로 이미 차단.
 # v3.1.0 (2026-08-18, P13):
 #   - GET /survey/list: 인증 + 비-ALL 은 토큰 company_id 강제
 #   - POST /survey/{id}/convert · /run-legal-engine: ALL 전용
@@ -419,12 +422,24 @@ def list_survey_quotes(
             }
     else:
         cid = None
-    query = supabase.table("quotes").select(
-        "id, quote_no, company_name, contact_name, contact_phone, contact_email, "
-        "status_code, source, survey_type, legal_applicable_count, legal_evaluated_at, "
-        "contract_id, created_at, updated_at",
-        count="exact"
-    ).eq("source", "survey_web")
+
+    # ㉡ 개인정보(§51): 고객(비-admin) 응답에는 contact_phone·contact_email 을 싣지 않는다.
+    #     화면(my-diagnosis)은 두 필드를 렌더하지 않으며, 총관리자(ALL)만 연락처를 본다.
+    #     교차노출은 위 회사스코프로 이미 차단됐고, 이 select 분리는 심층방어다.
+    _is_all = cid is None  # 위 분기에서 ALL(admin) 만 cid=None 이 된다
+    if _is_all:
+        _cols = (
+            "id, quote_no, company_name, contact_name, contact_phone, contact_email, "
+            "status_code, source, survey_type, legal_applicable_count, legal_evaluated_at, "
+            "contract_id, created_at, updated_at"
+        )
+    else:
+        _cols = (
+            "id, quote_no, company_name, contact_name, "
+            "status_code, source, survey_type, legal_applicable_count, legal_evaluated_at, "
+            "contract_id, created_at, updated_at"
+        )
+    query = supabase.table("quotes").select(_cols, count="exact").eq("source", "survey_web")
     if cid:
         query = query.eq("company_id", cid)
 
