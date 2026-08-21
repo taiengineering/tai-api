@@ -1,5 +1,11 @@
 """
-work_schedules.py — v1.2.4
+work_schedules.py — v1.2.5
+
+v1.2.5 (2026-08-21, LEDGER ㉑-마감일):
+  [ADD] SchedulePatchBody · _apply_one_update 에 planned_date(마감일) 지원.
+        대시보드 [담당자 배정]에서 담당자(assigned_user_id)는 저장됐으나, 마감일이
+        스키마·화이트리스트에 없어 조용히 버려지던 것 해소. planned_date 는 실제
+        컬럼(v1.2.4 GET 범위필터가 이미 사용 중).
 
 v1.2.4 (2026-08-17, LEDGER ㉙):
   [ADD] GET /work-schedules 에 obligation_type · planned_date_from · planned_date_to 필터.
@@ -43,7 +49,7 @@ from services.company_scope import (
 
 router = APIRouter(prefix="/work-schedules", tags=["work_schedules"])
 
-VERSION = "1.2.4"
+VERSION = "1.2.5"
 
 
 def _now() -> str:
@@ -62,10 +68,10 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
     """단일 work_schedules 행 갱신 + assigned_user_id 변경 시 work_assignments 동기화.
 
     fields 에 'assigned_user_id' 키가 있으면(None 포함) 배정 변경으로 본다(batch-update 와 동일).
-    지원 필드: is_excluded · excluded_reason · custom_cycle · status_code · resolved_at · assigned_user_id.
+    지원 필드: is_excluded · excluded_reason · custom_cycle · status_code · resolved_at · planned_date · assigned_user_id.
     """
     payload: dict = {"updated_at": now}
-    for k in ("is_excluded", "excluded_reason", "custom_cycle", "status_code", "resolved_at"):
+    for k in ("is_excluded", "excluded_reason", "custom_cycle", "status_code", "resolved_at", "planned_date"):
         if fields.get(k) is not None:
             payload[k] = fields[k]
     assign_changed = "assigned_user_id" in fields
@@ -135,6 +141,7 @@ class SchedulePatchBody(BaseModel):
     excluded_reason:  Optional[str]  = None
     custom_cycle:     Optional[str]  = None
     resolved_at:      Optional[str]  = None
+    planned_date:     Optional[str]  = None   # 마감일(㉑) — YYYY-MM-DD
 
 
 class BulkAssignBody(BaseModel):
@@ -380,7 +387,7 @@ def patch_work_schedule(schedule_id: str, body: SchedulePatchBody, current: dict
         fields["status_code"] = body.status_code
     elif body.status is not None:
         fields["status_code"] = body.status
-    for k in ("is_excluded", "excluded_reason", "custom_cycle", "resolved_at"):
+    for k in ("is_excluded", "excluded_reason", "custom_cycle", "resolved_at", "planned_date"):
         v = getattr(body, k)
         if v is not None:
             fields[k] = v
