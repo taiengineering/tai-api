@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone, timedelta
-import os, re, random, secrets, string, logging
+import os, re, random, secrets, string, logging, hashlib
 
 import bcrypt
 from supabase import create_client
@@ -112,6 +112,7 @@ class RegisterRequest(BaseModel):
     representative_name:  Optional[str] = None
     ksic_code:            Optional[str] = None
     contact_phone:        Optional[str] = None
+    mtx_id:               str                       # 본인인증(SA) 트랜잭션 ID — 필수
 
 class FindPasswordRequest(BaseModel):
     phone: str
@@ -801,6 +802,20 @@ def register(req: RegisterRequest):
     email_dup = supabase.table("users").select("id").eq("email", req.email).limit(1).execute()
     if email_dup.data:
         raise HTTPException(status_code=400, detail="이미 가입된 이메일입니다")
+    # ── 본인인증(SA) 필수: mtx_id 로 SUCCESS 인증 확인 → CI 해시 도출 → 중복가입 차단 ──
+    _ia_res = supabase.table("inicis_auth_requests").select(
+        "status, user_ci, user_name, user_phone, user_birthday"
+    ).eq("mtx_id", req.mtx_id).limit(1).execute()
+    if not _ia_res.data or _ia_res.data[0].get("status") != "SUCCESS":
+        raise HTTPException(status_code=400, detail="본인인증이 필요합니다. 본인인증을 먼저 완료해 주세요.")
+    _ia = _ia_res.data[0]
+    _ci = (_ia.get("user_ci") or "").strip()
+    if not _ci:
+        raise HTTPException(status_code=400, detail="본인인증 정보를 확인할 수 없습니다.")
+    ci_hash = hashlib.sha256(_ci.encode("utf-8")).hexdigest()
+    _ci_dup = supabase.table("users").select("id").eq("identity_ci", ci_hash).limit(1).execute()
+    if _ci_dup.data:
+        raise HTTPException(status_code=400, detail="이미 가입된 사용자입니다. (본인인증 중복)")
     try:
         auth_res = supabase.auth.sign_up(
             {
@@ -847,10 +862,25 @@ def register(req: RegisterRequest):
             "sector": DEFAULT_SECTOR,
             "is_active": False, "allow_push": True, "allow_sms": True,
             "allow_email": True, "allow_kakao": False,
+            # 본인인증 매핑 (CI는 해시 저장, UNIQUE 제약으로 중복가입 차단)
+            "identity_verified": True, "identity_verified_at": _now_iso(),
+            "identity_name": _ia.get("user_name"), "identity_phone": _ia.get("user_phone"),
+            "identity_birth": _ia.get("user_birthday"), "identity_ci": ci_hash,
             "created_at": _now_iso(), "updated_at": _now_iso(),
         }).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"사용자 저장 실패: {str(e)}")
+    new_user_id = ur.data[0]["id"]
+    # ── 이력 승계(D3): 동일 CI 무료진단/인증 이력을 계정에 연결 ──
+    try:
+        supabase.table("diagnosis_auth_log").update(
+            {"linked_user_id": new_user_id, "updated_at": _now_iso()}
+        ).eq("ci_hash", ci_hash).execute()
+        supabase.table("inicis_auth_requests").update(
+            {"user_id": new_user_id}
+        ).eq("mtx_id", req.mtx_id).execute()
+    except Exception as _e:
+        log.warning(f"[register] 본인인증 이력 승계 실패 user_id={new_user_id}: {_e}")
     return {"status": "success", "message": "회원가입이 완료되었습니다.",
             "data": {"user_id": ur.data[0]["id"], "phone": phone_normalized, "name": req.name, "company_id": company_id}}
 
