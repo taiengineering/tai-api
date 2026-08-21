@@ -1,5 +1,9 @@
 """
-시설 공정 관리 라우터 — v3.2.0
+시설 공정 관리 라우터 — v3.3.0
+v3.3.0: (LEDGER §39) GET /search 의 분류 옵션(hierarchy) 을 목록 limit 과 분리.
+  - 옵션(lv1/lv2/lv3_options)을 해당 업종(ksic) 전체 distinct 로 집계(캐스케이드).
+  - 종전에는 limit 로 잘린 items 에서 옵션을 만들어(화면이 limit=1 로 옵션만 조회) 대분류가
+    1개만 노출됐다. 화면이 이미 hierarchy 를 읽으므로 서버만 고치면 즉시 반영(무 vue3).
 v3.2.0: KCSC 공정 검색 및 등록 지원
   - GET  /factory-process/kcsc/search?q=&limit=  kcsc_process_master ILIKE 검색
   - POST /{factory_id}/processes: source='KCSC' + kcs_code 처리 추가
@@ -85,9 +89,29 @@ async def search_processes(
     res = query.limit(limit).execute()
     items = res.data or []
 
-    lv1_set = sorted(set(r["process_lv1"] for r in items if r.get("process_lv1")))
-    lv2_set = sorted(set(r["process_lv2"] for r in items if r.get("process_lv2")))
-    lv3_set = sorted(set(r["process_lv3"] for r in items if r.get("process_lv3")))
+    # §39: 분류 옵션(hierarchy)이 limit 에 잘리지 않도록, 옵션은 목록(items)과 분리해
+    #      해당 업종(ksic) 전체를 distinct 로 집계한다(캐스케이드: lv1 → lv2 → lv3).
+    #      화면 옵션 조회는 항상 ksic 를 보내므로, ksic 지정 시 이 경로를 탄다.
+    #      (ksic 미지정 시에만 종전처럼 items 기반 — 회귀 방지.)
+    if ksic:
+        opt_rows = (
+            supabase.table("v_process_unified")
+            .select("process_lv1, process_lv2, process_lv3")
+            .eq("industry_code_full", ksic)
+            .limit(10000)
+            .execute()
+            .data
+            or []
+        )
+        lv1_set = sorted(set(r["process_lv1"] for r in opt_rows if r.get("process_lv1")))
+        lv2_src = [r for r in opt_rows if (not lv1 or r.get("process_lv1") == lv1)]
+        lv2_set = sorted(set(r["process_lv2"] for r in lv2_src if r.get("process_lv2")))
+        lv3_src = [r for r in lv2_src if (not lv2 or r.get("process_lv2") == lv2)]
+        lv3_set = sorted(set(r["process_lv3"] for r in lv3_src if r.get("process_lv3")))
+    else:
+        lv1_set = sorted(set(r["process_lv1"] for r in items if r.get("process_lv1")))
+        lv2_set = sorted(set(r["process_lv2"] for r in items if r.get("process_lv2")))
+        lv3_set = sorted(set(r["process_lv3"] for r in items if r.get("process_lv3")))
 
     result_items = []
     for row in items:
