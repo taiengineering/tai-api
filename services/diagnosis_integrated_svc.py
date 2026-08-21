@@ -114,7 +114,7 @@ def sync_diagnosis_auth_log_from_inicis(supabase, mtx_id: str) -> None:
 def resolve_auth_log(supabase, auth_token: str) -> dict:
     res = (
         supabase.table("diagnosis_auth_log")
-        .select("id, ci_hash, name, phone, free_count, free_limit, status")
+        .select("id, ci_hash, name, phone, free_count, free_limit, status, linked_user_id")
         .eq("auth_token", auth_token)
         .limit(1)
         .execute()
@@ -246,6 +246,30 @@ def save_disclaimer(
     }
 
 
+def _bind_linked_user_id(supabase, auth_row: dict, current_user: Optional[dict], now_iso: str) -> None:
+    """유료 성공 시 diagnosis_auth_log.linked_user_id 바인딩. 다른 유저 연결이면 403."""
+    if not current_user:
+        return
+    uid = current_user.get("id")
+    if not uid:
+        return
+    existing = auth_row.get("linked_user_id")
+    if existing:
+        if str(existing) != str(uid):
+            raise HTTPException(status_code=403, detail="이미 다른 계정에 연결된 인증입니다.")
+        return
+    supabase.table("diagnosis_auth_log").update(
+        {"linked_user_id": uid, "updated_at": now_iso}
+    ).eq("id", auth_row["id"]).execute()
+
+
+def _assert_linkable(auth_row: dict, current_user: dict) -> None:
+    existing = auth_row.get("linked_user_id")
+    uid = current_user.get("id")
+    if existing and uid and str(existing) != str(uid):
+        raise HTTPException(status_code=403, detail="이미 다른 계정에 연결된 인증입니다.")
+
+
 def run_diagnosis(
     supabase,
     body,
@@ -256,6 +280,7 @@ def run_diagnosis(
     paid_tier_prices: Dict[str, int],
     free_tier_codes,
     engine_version: str,
+    current_user: Optional[dict] = None,
 ) -> Dict[str, Any]:
     auth_row = resolve_auth_log(supabase, body.auth_token)
     disclaimer_log_id = (body.disclaimer_log_id or "").strip()
@@ -291,9 +316,13 @@ def run_diagnosis(
         limit_cnt = auth_row.get("free_limit") or 3
         if used >= limit_cnt:
             raise HTTPException(status_code=402, detail=f"무료 진단 횟수({limit_cnt}회)를 모두 사용하셨습니다. 유료 진단을 이용해 주세요.")
-    elif not body.payment_ref:
-        price = paid_tier_prices.get(tier_code, 0)
-        raise HTTPException(status_code=402, detail=f"유료 진단입니다. 결제 완료 후 payment_ref를 포함해 주세요. (가격: {price:,}원)")
+    else:
+        if current_user is None:
+            raise HTTPException(status_code=401, detail="유료 진단은 회원가입 후 이용 가능합니다.")
+        _assert_linkable(auth_row, current_user)
+        if not body.payment_ref:
+            price = paid_tier_prices.get(tier_code, 0)
+            raise HTTPException(status_code=402, detail=f"유료 진단입니다. 결제 완료 후 payment_ref를 포함해 주세요. (가격: {price:,}원)")
 
     factory_id = (getattr(body, "factory_id", None) or "").strip() or None
     company_id = (getattr(body, "company_id", None) or "").strip() or None
@@ -430,6 +459,7 @@ def run_diagnosis(
             invoice_biz_no=(getattr(body, "invoice_biz_no", None) or None),
             invoice_email=(getattr(body, "invoice_email", None) or None),
         )
+        _bind_linked_user_id(supabase, auth_row, current_user, now_func())
 
     return {
         "status": "success",
@@ -449,8 +479,13 @@ def upgrade_diagnosis(
     run_step1_func: Callable[[Any, DiagnoseStep1Body], Dict[str, Any]],
     build_partial_func: Callable[[dict], dict],
     paid_tier_prices: Dict[str, int],
+    current_user: Optional[dict] = None,
+    now_func: Optional[Callable[[], str]] = None,
 ) -> Dict[str, Any]:
     auth_row = resolve_auth_log(supabase, body.auth_token)
+    if current_user is None:
+        raise HTTPException(status_code=401, detail="유료 진단은 회원가입 후 이용 가능합니다.")
+    _assert_linkable(auth_row, current_user)
     existing = (
         supabase.table("anonymous_diagnosis_results")
         .select("id, ci_hash, tier_code, input_data, paid_amount, status")
@@ -547,6 +582,12 @@ def upgrade_diagnosis(
         invoice_requested=bool(getattr(body, "invoice_requested", False)),
         invoice_biz_no=(getattr(body, "invoice_biz_no", None) or None),
         invoice_email=(getattr(body, "invoice_email", None) or None),
+    )
+    _bind_linked_user_id(
+        supabase,
+        auth_row,
+        current_user,
+        (now_func or (lambda: datetime.now(timezone.utc).isoformat()))(),
     )
 
     return {

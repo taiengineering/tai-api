@@ -10,11 +10,12 @@ POST /diagnosis/run-leg : 인증·티어·과금·저장 오케스트레이션(d
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user_optional
 from schemas.diagnosis_integrated import DiagnosisRunBody
 from services import diagnosis_integrated_svc
 from services.diagnosis_helpers import _auto_tier, _build_partial, _now
@@ -40,7 +41,7 @@ def _run_step1_via_leg(supabase, step1_body) -> Dict[str, Any]:
     return {"status": "success", "data": full}
 
 
-async def _run_leg_impl(body: DiagnosisRunBody):
+async def _run_leg_impl(body: DiagnosisRunBody, current_user: Optional[dict] = None):
     if not LEG_PIPELINE_ENABLED:
         raise HTTPException(status_code=503, detail="LEG 파이프라인이 비활성화되어 있습니다 (LEG_PIPELINE_ENABLED).")
     if not is_enabled():
@@ -60,6 +61,7 @@ async def _run_leg_impl(body: DiagnosisRunBody):
         paid_tier_prices=PAID_TIER_PRICES,
         free_tier_codes=FREE_TIER_CODES,
         engine_version=LEG_ENGINE_VERSION,
+        current_user=current_user,
     )
 
     full = result.get("result") or {}
@@ -79,13 +81,16 @@ async def _run_leg_impl(body: DiagnosisRunBody):
 
 
 @router.post("/run-leg")
-async def run_diagnosis_leg(body: DiagnosisRunBody):
+async def run_diagnosis_leg(
+    body: DiagnosisRunBody,
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+):
     from services.canonical.flags import canonical_enabled
     if not canonical_enabled():
-        return await _run_leg_impl(body)
+        return await _run_leg_impl(body, current_user)
     from services.canonical.adapters import MemberAdapter
     from services.canonical.service import CanonicalDiagnosisService
     dto = MemberAdapter().to_canonical(body.model_dump())
     return await CanonicalDiagnosisService().evaluate(
-        dto=dto, delegate=lambda: _run_leg_impl(body)
+        dto=dto, delegate=lambda: _run_leg_impl(body, current_user)
     )

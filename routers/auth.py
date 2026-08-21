@@ -92,6 +92,15 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     return res.data[0]
 
 
+def get_current_user_optional(authorization: Optional[str] = Header(None)) -> Optional[dict]:
+    if not authorization:
+        return None
+    try:
+        return get_current_user(authorization=authorization)
+    except HTTPException:
+        return None
+
+
 # ── 스키마 ─────────────────────────────────────────
 
 class LoginRequest(BaseModel):

@@ -7,10 +7,11 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user, get_current_user_optional
 from schemas.diagnosis_integrated import DiagnosisRunBody, DisclaimerBody, UpgradeBody
 from schemas.legal_engine import DiagnoseStep1Body
 from services.diagnosis_helpers import _auto_tier, _build_partial, _now, _sha256
@@ -238,7 +239,7 @@ def save_disclaimer(body: DisclaimerBody, request: Request):
     )
 
 
-async def _run_diagnosis_impl(body: DiagnosisRunBody):
+async def _run_diagnosis_impl(body: DiagnosisRunBody, current_user: Optional[dict] = None):
     supabase = get_supabase()
     run_body = nexas_run_body_from_request(body.model_dump())
     result = diagnosis_integrated_svc.run_diagnosis(
@@ -251,6 +252,7 @@ async def _run_diagnosis_impl(body: DiagnosisRunBody):
         paid_tier_prices=PAID_TIER_PRICES,
         free_tier_codes=FREE_TIER_CODES,
         engine_version=ENGINE_VERSION,
+        current_user=current_user,
     )
 
     factory_id = (body.factory_id or "").strip() or None
@@ -291,19 +293,22 @@ async def _run_diagnosis_impl(body: DiagnosisRunBody):
 
 
 @router.post("/run")
-async def run_diagnosis(body: DiagnosisRunBody):
+async def run_diagnosis(
+    body: DiagnosisRunBody,
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+):
     from services.canonical.flags import canonical_enabled
     if not canonical_enabled():
-        return await _run_diagnosis_impl(body)
+        return await _run_diagnosis_impl(body, current_user)
     from services.canonical.adapters import MemberAdapter
     from services.canonical.service import CanonicalDiagnosisService
     dto = MemberAdapter().to_canonical(body.model_dump())
     return await CanonicalDiagnosisService().evaluate(
-        dto=dto, delegate=lambda: _run_diagnosis_impl(body)
+        dto=dto, delegate=lambda: _run_diagnosis_impl(body, current_user)
     )
 
 
-async def _upgrade_diagnosis_impl(body: UpgradeBody):
+async def _upgrade_diagnosis_impl(body: UpgradeBody, current_user: dict):
     supabase = get_supabase()
     return diagnosis_integrated_svc.upgrade_diagnosis(
         supabase=supabase,
@@ -311,17 +316,22 @@ async def _upgrade_diagnosis_impl(body: UpgradeBody):
         run_step1_func=_run_step1_via_service,
         build_partial_func=_build_partial,
         paid_tier_prices=PAID_TIER_PRICES,
+        current_user=current_user,
+        now_func=_now,
     )
 
 
 @router.post("/upgrade")
-async def upgrade_diagnosis(body: UpgradeBody):
+async def upgrade_diagnosis(
+    body: UpgradeBody,
+    current_user: dict = Depends(get_current_user),
+):
     from services.canonical.flags import canonical_enabled
     if not canonical_enabled():
-        return await _upgrade_diagnosis_impl(body)
+        return await _upgrade_diagnosis_impl(body, current_user)
     from services.canonical.adapters import PaidAdapter
     from services.canonical.service import CanonicalDiagnosisService
     dto = PaidAdapter().to_canonical(body.model_dump())
     return await CanonicalDiagnosisService().evaluate(
-        dto=dto, delegate=lambda: _upgrade_diagnosis_impl(body)
+        dto=dto, delegate=lambda: _upgrade_diagnosis_impl(body, current_user)
     )
