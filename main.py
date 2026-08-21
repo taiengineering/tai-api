@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import services.health_probes  # noqa: F401
 
 from router_registry import load_module_group, get_all_status
+from services.permission_guard import mount_permission_guard
 
 logger = logging.getLogger(__name__)
 APP_VERSION = "6.0.2"
@@ -115,3 +116,6 @@ def root():
             for name, info in status_info["modules"].items()
         },
     }
+
+
+mount_permission_guard(app)
