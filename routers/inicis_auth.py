@@ -30,7 +30,6 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
-from services.diagnosis_integrated_svc import sync_diagnosis_auth_log_from_inicis
 from utils.seed_cipher import seed_cbc_decrypt
 
 log = logging.getLogger(__name__)
@@ -56,6 +55,67 @@ def _generate_mtx_id() -> str:
 
 def _sha256(data: str) -> str:
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+def _ensure_diag_auth_token(mtx_id: str) -> Optional[str]:
+    """SUCCESS 인증(mtx_id) → diagnosis_auth_log 의 uuid auth_token 발급/재사용 후 반환.
+
+    diagnosis_auth_log.auth_token 은 uuid 컬럼이므로 mtx_id(TAI…, 비-uuid)를 그대로 쓰지 않고
+    ci_hash 기준으로 행을 upsert 하며 uuid auth_token 을 부여한다. 프론트는 이 값을 세션 토큰으로 쓴다.
+    """
+    sb = get_supabase()
+    res = (
+        sb.table("inicis_auth_requests")
+        .select("status, user_name, user_phone, user_ci")
+        .eq("mtx_id", mtx_id)
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        return None
+    r = res.data[0]
+    if r.get("status") != "SUCCESS":
+        return None
+    ci = (r.get("user_ci") or "").strip()
+    if not ci:
+        log.warning("[inicis_auth] SUCCESS but no CI mtx_id=%s", mtx_id)
+        return None
+
+    ci_hash = hashlib.sha256(ci.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "name": r.get("user_name") or "",
+        "phone": r.get("user_phone") or "",
+        "verified_at": now,
+        "updated_at": now,
+        "status": "ACTIVE",
+    }
+    existing = (
+        sb.table("diagnosis_auth_log")
+        .select("id, auth_token")
+        .eq("ci_hash", ci_hash)
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        cur = existing.data[0]
+        token = str(cur.get("auth_token") or uuid.uuid4())
+        upd = dict(payload)
+        if not cur.get("auth_token"):
+            upd["auth_token"] = token
+        sb.table("diagnosis_auth_log").update(upd).eq("id", cur["id"]).execute()
+        return token
+    token = str(uuid.uuid4())
+    sb.table("diagnosis_auth_log").insert({
+        **payload,
+        "auth_token": token,
+        "ci": "",
+        "ci_hash": ci_hash,
+        "free_count": 0,
+        "free_limit": 3,
+        "created_at": now,
+    }).execute()
+    return token
 
 
 def _seed_key_bytes() -> bytes:
@@ -252,7 +312,7 @@ async def callback_success(request: Request):
         return HTMLResponse(_popup_result_html(False, f"저장 실패: {e}"))
 
     try:
-        sync_diagnosis_auth_log_from_inicis(get_supabase(), mtx_id)
+        _ensure_diag_auth_token(mtx_id)
     except Exception as e:
         log.warning("[inicis_auth] diagnosis_auth_log sync mtx_id=%s: %s", mtx_id, e)
 
@@ -299,7 +359,9 @@ def get_auth_result(mtx_id: str):
     row = result.data[0]
     if row.get("status") == "SUCCESS":
         try:
-            sync_diagnosis_auth_log_from_inicis(get_supabase(), mtx_id)
+            diag_token = _ensure_diag_auth_token(mtx_id)
+            if diag_token:
+                row["diag_auth_token"] = diag_token
         except Exception as e:
             log.warning("[inicis_auth] diagnosis sync on result mtx_id=%s: %s", mtx_id, e)
 
