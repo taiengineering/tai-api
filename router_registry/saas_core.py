@@ -1,6 +1,8 @@
 """SaaS Core — 인증·사용자·회사·시설·기본설정 라우터."""
 ROUTERS = [
     {"module": "routers.auth"},
+    # GET /users/roles 가 users.GET /{user_id} 에 잡히지 않도록 users 보다 먼저 등록
+    {"module": "routers.role_menu_permissions", "prefix": "", "tags": ["role-menu-permissions"]},
     {"module": "routers.users"},
     {"module": "routers.companies"},
     {"module": "routers.customer360"},  # WO-6 고객360 통합 집계 (GET /companies/{id}/360)
