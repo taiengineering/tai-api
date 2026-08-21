@@ -885,6 +885,132 @@ def register(req: RegisterRequest):
             "data": {"user_id": ur.data[0]["id"], "phone": phone_normalized, "name": req.name, "company_id": company_id}}
 
 
+# ── 소셜 유저 동기화 (B2) ────────────────────────────────────────
+# 소셜 로그인(카카오/구글)은 Supabase auth.users만 만들고 public.users 행은 만들지 않는다.
+# (auth.users 트리거 없음 확인) 로그인 후 이 엔드포인트로 public.users 행을 멱등 생성한다.
+# 이메일 가입 경로(register)는 무접촉 — 대부분 기존 행을 그대로 반환한다.
+
+def _auth_user_from_token(authorization):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="토큰이 없습니다")
+    token = authorization.replace("Bearer ", "")
+    supabase = get_supabase()
+    try:
+        ur = supabase.auth.get_user(token)
+        if not ur or not ur.user:
+            raise HTTPException(status_code=401, detail="유효하지 않은 토큰")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="토큰 검증 실패")
+    return supabase, ur.user
+
+
+@router.post("/ensure-user")
+def ensure_user(authorization: Optional[str] = Header(None)):
+    """소셜 로그인 등으로 auth 유저는 있으나 public.users 행이 없으면 생성(멱등)."""
+    supabase, auth_user = _auth_user_from_token(authorization)
+    auth_id = str(auth_user.id)
+    res = supabase.table("users").select("*").eq("auth_id", auth_id).limit(1).execute()
+    if res.data:
+        return {"status": "success", "created": False, "data": res.data[0]}
+    email = getattr(auth_user, "email", None)
+    if email:
+        by_email = supabase.table("users").select("*").eq("email", email).limit(1).execute()
+        if by_email.data:
+            row = by_email.data[0]
+            if not row.get("auth_id"):
+                try:
+                    supabase.table("users").update({"auth_id": auth_id, "updated_at": _now_iso()}).eq("id", row["id"]).execute()
+                    row["auth_id"] = auth_id
+                except Exception:
+                    pass
+            return {"status": "success", "created": False, "data": row}
+    meta = getattr(auth_user, "user_metadata", None) or {}
+    app_meta = getattr(auth_user, "app_metadata", None) or {}
+    provider = app_meta.get("provider")
+    name = meta.get("name") or meta.get("full_name") or (email.split("@")[0] if email else "사용자")
+    user_code = "USR-" + datetime.now().strftime("%Y%m%d") + "-" + "".join(random.choices(string.digits, k=4))
+    row = {
+        "auth_id": auth_id, "email": email, "name": name, "username": email or user_code,
+        "role_code": "002", "user_code": user_code, "status_code": "PENDING",
+        "sector": DEFAULT_SECTOR, "is_active": False, "social_provider": provider,
+        "identity_verified": False,
+        "allow_push": True, "allow_sms": True, "allow_email": True, "allow_kakao": False,
+        "created_at": _now_iso(), "updated_at": _now_iso(),
+    }
+    try:
+        ins = supabase.table("users").insert(row).execute()
+        if not ins.data:
+            raise HTTPException(status_code=500, detail="사용자 생성 실패")
+        log.info(f"[ensure-user] 소셜 유저 생성 auth_id={auth_id} provider={provider}")
+        return {"status": "success", "created": True, "data": ins.data[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"사용자 생성 실패: {str(e)}")
+
+
+# ── 진단 이용 시 본인인증 부착 (B2) ────────────────────────────────────────
+# 로그인 유저가 무료/유료진단 진입 시 미인증이면 본인인증(SA) 후 이 엔드포인트로 현재 계정에 부착한다.
+# B1(register)의 CI 매핑·중복방지·이력승계 로직을 기존 유저용으로 재사용한다.
+
+class VerifyIdentityRequest(BaseModel):
+    mtx_id: str
+
+
+@router.post("/verify-identity")
+def verify_identity(req: VerifyIdentityRequest, authorization: Optional[str] = Header(None)):
+    supabase, auth_user = _auth_user_from_token(authorization)
+    auth_id = str(auth_user.id)
+    ures = supabase.table("users").select("*").eq("auth_id", auth_id).limit(1).execute()
+    if not ures.data:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다. 먼저 계정 동기화가 필요합니다.")
+    user = ures.data[0]
+    if user.get("identity_verified"):
+        return {"status": "success", "already": True, "data": {"identity_verified": True}}
+    ia_res = supabase.table("inicis_auth_requests").select(
+        "status, user_ci, user_name, user_phone, user_birthday"
+    ).eq("mtx_id", req.mtx_id).limit(1).execute()
+    if not ia_res.data or ia_res.data[0].get("status") != "SUCCESS":
+        raise HTTPException(status_code=400, detail="본인인증이 필요합니다. 본인인증을 먼저 완료해 주세요.")
+    ia = ia_res.data[0]
+    ci = (ia.get("user_ci") or "").strip()
+    if not ci:
+        raise HTTPException(status_code=400, detail="본인인증 정보를 확인할 수 없습니다.")
+    ci_hash = hashlib.sha256(ci.encode("utf-8")).hexdigest()
+    dup = supabase.table("users").select("id").eq("identity_ci", ci_hash).neq("id", user["id"]).limit(1).execute()
+    if dup.data:
+        raise HTTPException(status_code=400, detail="이미 다른 계정에서 인증된 본인인증 정보입니다.")
+    upd = {
+        "identity_verified": True, "identity_verified_at": _now_iso(),
+        "identity_name": ia.get("user_name"), "identity_phone": ia.get("user_phone"),
+        "identity_birth": ia.get("user_birthday"), "identity_ci": ci_hash,
+        "updated_at": _now_iso(),
+    }
+    try:
+        supabase.table("users").update(upd).eq("id", user["id"]).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"본인인증 반영 실패: {str(e)}")
+    # 소셜 유저는 phone이 없을 수 있어 인증 휴대폰으로 채움(충돌 시 무시)
+    if not user.get("phone") and ia.get("user_phone"):
+        try:
+            supabase.table("users").update({"phone": normalize_phone(ia.get("user_phone")), "updated_at": _now_iso()}).eq("id", user["id"]).execute()
+        except Exception:
+            pass
+    # 무료진단 이력 승계 (실패해도 인증은 성공)
+    try:
+        supabase.table("diagnosis_auth_log").update(
+            {"linked_user_id": user["id"], "updated_at": _now_iso()}
+        ).eq("ci_hash", ci_hash).execute()
+        supabase.table("inicis_auth_requests").update(
+            {"user_id": user["id"]}
+        ).eq("mtx_id", req.mtx_id).execute()
+    except Exception as _e:
+        log.warning(f"[verify-identity] 이력 승계 실패 user_id={user['id']}: {_e}")
+    return {"status": "success", "data": {"identity_verified": True, "identity_name": ia.get("user_name")}}
+
+
 # ── 로그아웃 ────────────────────────────────────────
 
 @router.post("/logout")
