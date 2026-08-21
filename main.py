@@ -21,6 +21,12 @@ APP_VERSION = "6.0.2"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
+        from services.permission_guard import bind_app
+        bind_app(app)
+        logger.info("[STARTUP] permission_guard bind 완료")
+    except Exception as e:
+        logger.error("[STARTUP] permission_guard bind 실패: %s", e)
+    try:
         from scheduler import start_scheduler
         start_scheduler()
         logger.info("[STARTUP] APScheduler 시작 완료")

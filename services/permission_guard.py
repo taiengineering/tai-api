@@ -93,6 +93,7 @@ _PARAM_RE = re.compile(r"\{[^/]+\}")
 
 _route_templates: list[Tuple[Set[str], str, re.Pattern]] = []
 _perm_map: Dict[Tuple[str, str], str] = {}
+_perm_res: list[Tuple[str, str, re.Pattern, str]] = []
 _role_perms: Dict[str, Set[str]] = {}
 _cache_at = 0.0
 _CACHE_TTL = 60.0
@@ -155,25 +156,38 @@ def _compile_template(tmpl: str) -> re.Pattern:
     return re.compile("^" + body + "$")
 
 
+def _iter_http_routes(routes) -> list:
+    found = []
+    for r in routes or []:
+        nested = getattr(r, "routes", None)
+        if nested:
+            found.extend(_iter_http_routes(nested))
+            continue
+        path = getattr(r, "path_format", None) or getattr(r, "path", None)
+        methods = getattr(r, "methods", None)
+        if path and methods:
+            found.append((path, methods))
+    return found
+
+
 def bind_app(app) -> None:
     """app.routes 인트로스펙션 — 요청 path → 템플릿 매칭용."""
     global _route_templates
     compiled = []
     seen = set()
-    for r in app.routes:
-        path = getattr(r, "path", None)
-        methods = getattr(r, "methods", None)
-        if not path or not methods:
-            continue
+    router = getattr(app, "router", app)
+    src = _iter_http_routes(getattr(router, "routes", None) or getattr(app, "routes", []) or [])
+    for path, methods in src:
         npath = normalize_path(path)
-        key = (frozenset(m.upper() for m in methods if m.upper() != "HEAD"), npath)
-        if key in seen:
+        key = (frozenset(m.upper() for m in methods if m.upper() not in ("HEAD", "OPTIONS")), npath)
+        if not key[0] or key in seen:
             continue
         seen.add(key)
         compiled.append((set(key[0]), npath, _compile_template(npath)))
     compiled.sort(key=lambda x: (x[1].count("{"), -len(x[1])))
     _route_templates = compiled
     _refresh_maps(force=True)
+    log.info("[GUARD] bind routes=%d perm_maps=%d", len(_route_templates), len(_perm_map))
     _log_t4_coverage()
 
 
@@ -190,7 +204,7 @@ def _log_t4_coverage() -> None:
 
 
 def _refresh_maps(force: bool = False) -> None:
-    global _perm_map, _role_perms, _cache_at
+    global _perm_map, _perm_res, _role_perms, _cache_at
     now = time.time()
     if not force and now - _cache_at < _CACHE_TTL and _perm_map:
         return
@@ -207,28 +221,44 @@ def _refresh_maps(force: bool = False) -> None:
             code = row.get("permission_code")
             if method and path and code:
                 pmap[(method, path)] = code
+        compiled = [
+            (method, path, _compile_template(path), code)
+            for (method, path), code in pmap.items()
+        ]
+        compiled.sort(key=lambda x: (x[1].count("{"), -len(x[1])))
         rp = sb.table("role_permissions").select("role_code, permission_code").limit(5000).execute()
         rmap: Dict[str, Set[str]] = {}
         for row in rp.data or []:
             rmap.setdefault(row.get("role_code") or "", set()).add(row.get("permission_code") or "")
-        _perm_map, _role_perms, _cache_at = pmap, rmap, now
+        _perm_map, _perm_res, _role_perms, _cache_at = pmap, compiled, rmap, now
     except Exception:
         log.exception("[GUARD] permission cache refresh 실패 — 기존 캐시 유지")
 
 
 def template_for(method: str, raw_path: str) -> str:
-    """요청 URL 을 app.routes 템플릿으로 정규화. 실패 시 normalize(raw)."""
+    """요청 URL 을 app.routes 또는 api_permissions 템플릿으로 정규화."""
     m = method.upper()
     p = normalize_path(raw_path)
     for methods, tmpl, cre in _route_templates:
         if m in methods and cre.match(p):
+            return tmpl
+    for em, tmpl, cre, _code in _perm_res:
+        if em == m and cre.match(p):
             return tmpl
     return p
 
 
 def lookup_permission(method: str, path_template: str) -> Optional[str]:
     _refresh_maps()
-    return _perm_map.get((method.upper(), normalize_path(path_template)))
+    m = method.upper()
+    p = normalize_path(path_template)
+    hit = _perm_map.get((m, p))
+    if hit:
+        return hit
+    for em, _tmpl, cre, code in _perm_res:
+        if em == m and cre.match(p):
+            return code
+    return None
 
 
 def has_permission(role_code: Optional[str], permission_code: str) -> bool:
