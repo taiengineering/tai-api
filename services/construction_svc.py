@@ -316,6 +316,10 @@ def run_list_query(
             continue
         if key.endswith("__ilike"):
             q = q.ilike(key.replace("__ilike", ""), value)
+        elif key.endswith("__gte"):
+            q = q.gte(key.replace("__gte", ""), value)
+        elif key.endswith("__lte"):
+            q = q.lte(key.replace("__lte", ""), value)
         else:
             q = q.eq(key, value)
     for order in order_by:
