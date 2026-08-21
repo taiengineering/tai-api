@@ -1,4 +1,4 @@
-# routers/juso.py — v2.0.1
+# routers/juso.py — v2.0.2
 # 주소 검색 + 좌표 변환 (행정안전부 도로명주소 API)
 # 카카오 API 완전 제거 (2026-04-14)
 #
@@ -8,7 +8,7 @@
 #
 # 엔드포인트:
 #   GET /juso/search?query=주소           → 주소 목록 (최대 10건)
-#   GET /juso/coord?query=주소            → 첫 번째 결과 + 좌표
+#   GET /juso/coord?query=주소            → 첫 번째 결과 + 좌표 (화면 별칭 address 도 수용, §71)
 #   GET /juso/coord?admCd=&rnMgtSn=&udrtYn=&buldMnnm=&buldSlno= → 좌표만
 
 from __future__ import annotations
@@ -150,6 +150,7 @@ async def search_address(
 @router.get("/coord")
 async def get_coord(
     query: Optional[str] = Query(None, description="검색할 주소 (자동으로 첫 번째 결과의 좌표 반환)"),
+    address: Optional[str] = Query(None, description="query 화면 별칭 (§71) — 대시보드 날씨 폴백 지오코딩"),
     admCd: Optional[str] = Query(None, description="행정구역코드"),
     rnMgtSn: Optional[str] = Query(None, description="도로명코드"),
     udrtYn: Optional[str] = Query(None, description="지하여부"),
@@ -159,9 +160,11 @@ async def get_coord(
     """
     주소 → 좌표 반환.
 
-    사용법 1: query만 전달 → 첫 번째 검색 결과의 좌표 반환
+    사용법 1: query(또는 화면 별칭 address)만 전달 → 첫 번째 검색 결과의 좌표 반환
     사용법 2: admCd, rnMgtSn, udrtYn, buldMnnm, buldSlno 전달 → 해당 주소의 좌표 반환
     """
+    # §71: 화면이 보내던 address 별칭을 query 로 흡수(둘 다 없을 때만 400).
+    query = query or address
     # 방법 2: 키값으로 직접 좌표 조회
     if admCd and rnMgtSn:
         coord = await _get_coord(admCd, rnMgtSn, udrtYn or "0", buldMnnm or "0", buldSlno or "0")
