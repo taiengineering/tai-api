@@ -45,6 +45,7 @@ async def list_sites(
     company_id: Optional[str] = Query(None),
     status_code: Optional[str] = Query(None),
     site_type: Optional[str] = Query(None),
+    factory_id: Optional[str] = Query(None, description="시설 ID 필터 (§71 대시보드 날씨: 우리 현장 특정)"),
     search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
@@ -55,7 +56,7 @@ async def list_sites(
         scoped_cid = _forced_company_id(current, supabase, company_id)
         if not _is_admin(_scope(supabase, current.get("role_code"))) and not scoped_cid:
             return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0}}
-        return {"status": "success", "data": list_sites_svc(supabase, scoped_cid, status_code, site_type, search, page, size)}
+        return {"status": "success", "data": list_sites_svc(supabase, scoped_cid, status_code, site_type, search, page, size, factory_id=factory_id)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
