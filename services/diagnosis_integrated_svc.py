@@ -329,6 +329,7 @@ def run_diagnosis(
             input=inp,
             construction_type=body.construction_type or "건축",
             contract_amount_eok=float(contract_eok),
+            worker_count=workers,
             direct_workers=body.direct_workers or workers,
             subcon_workers=body.subcon_workers or 0,
         )
