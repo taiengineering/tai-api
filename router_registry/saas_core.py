@@ -4,6 +4,7 @@ ROUTERS = [
     # GET /users/roles 가 users.GET /{user_id} 에 잡히지 않도록 users 보다 먼저 등록
     {"module": "routers.role_menu_permissions", "prefix": "", "tags": ["role-menu-permissions"]},
     {"module": "routers.role_permissions", "prefix": "", "tags": ["role-permissions"]},
+    {"module": "routers.menus", "prefix": "", "tags": ["menus"]},
     {"module": "routers.users"},
     {"module": "routers.companies"},
     {"module": "routers.customer360"},  # WO-6 고객360 통합 집계 (GET /companies/{id}/360)
