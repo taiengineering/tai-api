@@ -1,5 +1,11 @@
 """
-work_schedules.py — v1.2.5
+work_schedules.py — v1.2.6
+
+v1.2.6 (2026-08-21, LEDGER §34 keyword):
+  [ADD] GET /work-schedules 에 keyword 자유검색 추가. 화면(작업일정)이 보내던 keyword 가
+        서버에 선언되지 않아 버려졌다. description·law_name·rule_code 를 ilike or 로 검색한다
+        (or_ 파싱 보호로 쉼표는 공백 치환). ※ §34 잔여(알럿 미사용/비활성 카드 동일값·
+        상태 선택지 '예정-구' 하드코딩)는 화면 = vue3.
 
 v1.2.5 (2026-08-21, LEDGER ㉑-마감일):
   [ADD] SchedulePatchBody · _apply_one_update 에 planned_date(마감일) 지원.
@@ -49,7 +55,7 @@ from services.company_scope import (
 
 router = APIRouter(prefix="/work-schedules", tags=["work_schedules"])
 
-VERSION = "1.2.5"
+VERSION = "1.2.6"
 
 
 def _now() -> str:
@@ -268,6 +274,7 @@ def get_work_schedules(
     is_assigned:       Optional[bool] = Query(None, description="배정 여부 필터. false=미배정, true=배정완료"),
     planned_date_from: Optional[str]  = Query(None, description="계획일 시작 YYYY-MM-DD (v1.2.4)"),
     planned_date_to:   Optional[str]  = Query(None, description="계획일 종료 YYYY-MM-DD (v1.2.4)"),
+    keyword:           Optional[str]  = Query(None, description="자유 검색어(설명·법령명·규칙코드) (v1.2.6 §34)"),
     page:              int            = Query(1, ge=1, description="페이지 번호"),
     size:              int            = Query(20, ge=1, le=500, description="페이지 크기"),
     current:           dict           = Depends(get_current_user),
@@ -294,6 +301,13 @@ def get_work_schedules(
     # v1.2.4 (LEDGER ㉙): 화면이 보내던 계획일 범위 필터를 실제 적용
     if planned_date_from: q = q.gte("planned_date", planned_date_from)
     if planned_date_to:   q = q.lte("planned_date", planned_date_to)
+
+    # v1.2.6 (LEDGER §34): 화면이 보내던 keyword 자유검색을 실제 적용(설명·법령명·규칙코드).
+    #   or_ 파싱이 쉼표로 깨지지 않도록 쉼표는 공백으로 치환.
+    if keyword:
+        kw = keyword.replace(",", " ").strip()
+        if kw:
+            q = q.or_(f"description.ilike.%{kw}%,law_name.ilike.%{kw}%,rule_code.ilike.%{kw}%")
 
     offset = (page - 1) * size
     result = q.order("created_at", desc=True).range(offset, offset + size - 1).execute()
