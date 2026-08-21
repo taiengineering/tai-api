@@ -15,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends
 
-from routers.matching_deps import _require_admin
+from routers.auth import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/payment", tags=["결제검증"])
@@ -29,7 +29,7 @@ def _sb():
 # ═══ E2E Chain Validation ═══
 
 @router.get("/e2e-validate")
-def validate_payment_e2e(current_user: dict = Depends(_require_admin)):
+def validate_payment_e2e(current_user: dict = Depends(get_current_user)):
     """결제 → 구독 → Tenant 전체 흐름 검증."""
     try:
         sb = _sb()
@@ -106,7 +106,7 @@ def validate_payment_e2e(current_user: dict = Depends(_require_admin)):
 # ═══ Commercial Activation Guard ═══
 
 @router.get("/activation-guard")
-def check_activation_guard(current_user: dict = Depends(_require_admin)):
+def check_activation_guard(current_user: dict = Depends(get_current_user)):
     """상\uc5c5 \ud65c\uc131\ud654 \uc704\ud5d8 \ud0d0\uc9c0."""
     try:
         sb = _sb()
@@ -156,7 +156,7 @@ def check_activation_guard(current_user: dict = Depends(_require_admin)):
 # ═══ Status Summary ═══
 
 @router.get("/status-summary")
-def payment_status_summary(current_user: dict = Depends(_require_admin)):
+def payment_status_summary(current_user: dict = Depends(get_current_user)):
     """\uacb0\uc81c/\uad6c\ub3c5 \uc0c1\ud0dc \uc694\uc57d."""
     try:
         sb = _sb()
@@ -192,7 +192,7 @@ def payment_status_summary(current_user: dict = Depends(_require_admin)):
 # ═══ Activation Chain (\uad6c\ub3c5 \u2192 SaaS \ud65c\uc131\ud654) ═══
 
 @router.post("/activate-subscription/{subscription_id}")
-def activate_subscription(subscription_id: str, current_user: dict = Depends(_require_admin)):
+def activate_subscription(subscription_id: str, current_user: dict = Depends(get_current_user)):
     """\uad6c\ub3c5 \uc218\ub3d9 \ud65c\uc131\ud654 (\uc6b4\uc601\uc790 \uc804\uc6a9)."""
     try:
         sb = _sb()
@@ -255,7 +255,7 @@ def activate_subscription(subscription_id: str, current_user: dict = Depends(_re
 # ═══ Orphan Detection ═══
 
 @router.get("/orphans")
-def detect_orphans(current_user: dict = Depends(_require_admin)):
+def detect_orphans(current_user: dict = Depends(get_current_user)):
     """\uace0\uc544 \uacb0\uc81c/\uad6c\ub3c5 \ud0d0\uc9c0."""
     try:
         sb = _sb()

@@ -21,7 +21,7 @@ import re
 import uuid
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
-from services.company_scope import _ensure_own_company, _require_admin
+from services.company_scope import _ensure_own_company
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 
@@ -380,7 +380,6 @@ def get_companies(
     current:     dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
-    _require_admin(current, supabase)
     query    = supabase.table("companies").select("*", count="exact")
     query    = query.eq("is_demo", False)  # 데모(체험) 테넌트 제외
     if search:      query = query.ilike("name", f"%{search}%")

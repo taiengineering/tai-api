@@ -43,9 +43,7 @@ from services.support_taxonomy import project_labels, is_valid_type, is_valid_ax
 
 router = APIRouter(prefix="/admin/inquiries", tags=["관리 - 통합 인박스"])
 
-# admin 경계 = 시스템 전체 관리자(system_codes role '001' 최고관리자).
-# 회사/사업장 관리자('002')는 super-admin 콘솔 대상이 아니므로 포함하지 않는다(최소 권한).
-ADMIN_ROLE_CODES = {"001"}
+# 인증은 get_current_user, 권한은 헤더가드 PLATFORM_INQUIRY_*.
 
 INQUIRY_CATEGORIES = {
     "consult",
@@ -74,20 +72,6 @@ SORT_KEYS = {
 
 # 미분류(NULL) 필터를 요청하는 특수 토큰(클라이언트 → 서버 약속값).
 NONE_FILTER_TOKEN = "__none__"
-
-
-def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
-    """admin 경계 의존성. get_current_user(토큰 실검증) 통과 후 role 이 admin 인지 확인.
-
-    - 무토큰/무효/만료 토큰 → get_current_user 가 401.
-    - 유효 토큰이지만 admin(role '001') 아님 → 403.
-    - admin → current_user 반환.
-    role 확인만 추가한다(신규 인증 체계 없음). super-admin 콘솔 전용 경계.
-    """
-    role = str(current_user.get("role_code") or "").strip()
-    if role not in ADMIN_ROLE_CODES:
-        raise HTTPException(status_code=403, detail="관리자 권한이 필요합니다.")
-    return current_user
 
 
 def _now_iso() -> str:
@@ -179,7 +163,7 @@ def _validate_category(inquiry_type: str, category: str) -> None:
 
 @router.get("")
 def admin_list_inquiries(
-    _admin: dict = Depends(require_admin),
+    _admin: dict = Depends(get_current_user),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
     source: Optional[str] = Query(None, description="direct | marketing | safe"),
@@ -271,7 +255,7 @@ def admin_list_inquiries(
 
 @router.get("/taxonomy-options")
 def admin_inquiry_taxonomy_options(
-    _admin: dict = Depends(require_admin),
+    _admin: dict = Depends(get_current_user),
 ):
     """문의 필터 드롭다운 선택지(문의유형 T1~T7 / 처리방식 3종)를 SoT 에서 내려준다.
 
@@ -292,7 +276,7 @@ def admin_inquiry_taxonomy_options(
 @router.post("")
 def admin_create_inquiry(
     body: InquiryCreateBody,
-    _admin: dict = Depends(require_admin),
+    _admin: dict = Depends(get_current_user),
 ):
     it = body.inquiry_type.strip().upper()
     _validate_category(it, body.category)
@@ -329,7 +313,7 @@ def admin_create_inquiry(
 def admin_patch_inquiry(
     inquiry_id: UUID,
     body: InquiryPatchBody,
-    _admin: dict = Depends(require_admin),
+    _admin: dict = Depends(get_current_user),
 ):
     raw = body.model_dump(exclude_unset=True) if hasattr(body, "model_dump") else body.dict(exclude_unset=True)
     patch: Dict[str, Any] = {k: v for k, v in raw.items() if v is not None}

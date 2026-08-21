@@ -63,6 +63,9 @@ _PUBLIC: Tuple[Tuple[str, str], ...] = (
     ("POST", "/payments/inicis/noti"),
     ("POST", "/payments/inicis/return"),
     ("POST", "/payments/inicis/billing/return"),
+    ("GET", "/alert-messages/codes"),
+    ("POST", "/overdue/check"),
+    ("POST", "/anonymous-diagnosis/admin/expire-stale"),
     ("POST", "/mail/webhook/"),
     ("GET", "/public/"),
     ("POST", "/public/"),
@@ -87,16 +90,6 @@ _RESOURCE_PREFIX = {
     "work-schedules": "work",
     "work-assignments": "work",
     "defects": "defects",
-    "payments": "platform",
-    "payment": "platform",
-    "overdue": "platform",
-    "tax": "platform",
-    "alert-messages": "platform",
-    "anonymous-diagnosis": "platform",
-    "admin": "platform",
-    "ops": "platform",
-    "quotes": "platform",
-    "contracts": "platform",
 }
 
 _PARAM_RE = re.compile(r"\{[^/]+\}")
@@ -135,13 +128,7 @@ def _is_advisory(kind: str, resource: Optional[str]) -> bool:
 
 
 def _resource_of(path: str) -> str:
-    p = path.strip("/")
-    segs = p.split("/") if p else []
-    seg = segs[0] if segs else ""
-    if p.startswith("fix/chat/admin"):
-        return "platform"
-    if p == "companies":
-        return "platform"
+    seg = path.strip("/").split("/", 1)[0] if path.strip("/") else ""
     return _RESOURCE_PREFIX.get(seg, seg)
 
 
@@ -379,7 +366,10 @@ def _evaluate(request: Request) -> Optional[Response]:
     if is_public(method, raw):
         return None
     path = template_for(method, raw)
+    perm = lookup_permission(method, path)
     resource = _resource_of(path)
+    if perm and perm.startswith("PLATFORM_"):
+        resource = "platform"
     user = _resolve_user(request)
     if user is None:
         return _deny(_is_advisory("auth", resource), 401,
@@ -391,9 +381,6 @@ def _evaluate(request: Request) -> Optional[Response]:
                       f"company={user.get('company_id')} {method} {path}")
             if d is not None:
                 return d
-    perm = lookup_permission(method, path)
-    if perm and perm.startswith("PLATFORM_"):
-        resource = "platform"
     if perm and not has_permission(user.get("role_code"), perm):
         return _deny(_is_advisory("action", resource), 403,
                      "권한이 없습니다.",

@@ -36,7 +36,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
-from routers.matching_deps import _require_admin
+from routers.auth import get_current_user
 
 log = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class GateBody(BaseModel):
 
 # ── 실호출 게이트 상태 ───────────────────────────────────────────────
 @router.get("/ops/live-flags")
-def live_flags(current_user: dict = Depends(_require_admin)):
+def live_flags(current_user: dict = Depends(get_current_user)):
     """환불·증빙 실호출 활성 여부. 프론트 '실호출 잠금' 표시용."""
     try:
         from services.invoice_svc import invoice_live
@@ -91,14 +91,14 @@ def live_flags(current_user: dict = Depends(_require_admin)):
 
 # ── 실행 게이트 해제 절차 ────────────────────────────────────────────
 @router.get("/ops/gate-readiness")
-def gate_readiness_ep(current_user: dict = Depends(_require_admin)):
+def gate_readiness_ep(current_user: dict = Depends(get_current_user)):
     """채널별 준비완료 체크리스트 + 현재 실호출 상태."""
     from services.ops_gate_svc import readiness
     return {"status": "success", "data": readiness()}
 
 
 @router.post("/ops/gate/activate")
-def gate_activate(body: GateBody, current_user: dict = Depends(_require_admin)):
+def gate_activate(body: GateBody, current_user: dict = Depends(get_current_user)):
     """DB 게이트 활성화 — 준비완료 통과 + 운영자 확인(confirm) 필요."""
     if not body.confirm:
         raise HTTPException(status_code=400, detail="활성화 확인(confirm)이 필요합니다.")
@@ -111,7 +111,7 @@ def gate_activate(body: GateBody, current_user: dict = Depends(_require_admin)):
 
 
 @router.post("/ops/gate/deactivate")
-def gate_deactivate(body: GateBody, current_user: dict = Depends(_require_admin)):
+def gate_deactivate(body: GateBody, current_user: dict = Depends(get_current_user)):
     """DB 게이트 비활성화(킬스위치)."""
     from services.ops_gate_svc import GateError, set_gate
     try:
@@ -129,7 +129,7 @@ def gate_deactivate(body: GateBody, current_user: dict = Depends(_require_admin)
 
 # ── 전환크레딧 결선 (credit_svc) ─────────────────────────────────────
 @router.post("/{payment_id}/credit")
-def grant_credit(payment_id: str, body: CreditGrantBody, current_user: dict = Depends(_require_admin)):
+def grant_credit(payment_id: str, body: CreditGrantBody, current_user: dict = Depends(get_current_user)):
     """전환크레딧 발행. diagnosis_purchase_id 있으면 진단전환, 없으면 수동지급."""
     from services.credit_svc import CreditError, grant, grant_from_diagnosis
     try:
@@ -156,7 +156,7 @@ def grant_credit(payment_id: str, body: CreditGrantBody, current_user: dict = De
 
 # ── 증빙 결선 (invoice_svc) ──────────────────────────────────────────
 @router.post("/{payment_id}/invoice/tax")
-def issue_tax(payment_id: str, body: TaxInvoiceBody, current_user: dict = Depends(_require_admin)):
+def issue_tax(payment_id: str, body: TaxInvoiceBody, current_user: dict = Depends(get_current_user)):
     """세금계산서 발행 (팝빌)."""
     from services.invoice_svc import InvoiceError, issue_tax_invoice
     try:
@@ -172,7 +172,7 @@ def issue_tax(payment_id: str, body: TaxInvoiceBody, current_user: dict = Depend
 
 
 @router.post("/{payment_id}/invoice/cash")
-def issue_cash(payment_id: str, body: CashReceiptBody, current_user: dict = Depends(_require_admin)):
+def issue_cash(payment_id: str, body: CashReceiptBody, current_user: dict = Depends(get_current_user)):
     """현금영수증 발행 (팝빌)."""
     from services.invoice_svc import InvoiceError, issue_cash_receipt
     try:
@@ -187,7 +187,7 @@ def issue_cash(payment_id: str, body: CashReceiptBody, current_user: dict = Depe
 
 # ── 결제 원장 통합 조회 ──────────────────────────────────────────────
 @router.get("/{payment_id}/ledger")
-def get_payment_ledger(payment_id: str, current_user: dict = Depends(_require_admin)):
+def get_payment_ledger(payment_id: str, current_user: dict = Depends(get_current_user)):
     """결제 1건의 환불·크레딧·증빙 통합 조회."""
     supabase = get_supabase()
     pay = (

@@ -22,7 +22,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
-from routers.matching_deps import _require_admin
 from schemas.payment import CancelBody, ManualConfirmBody
 from services import audit_svc
 from services.payment_helpers import SAAS_PRODUCT_TYPES, calc_expired_at, now_iso
@@ -44,7 +43,7 @@ def list_payments(
     keyword: Optional[str] = Query(None, description="회원명 또는 회사명 검색"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
-    current_user: dict = Depends(_require_admin),
+    current_user: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
     q = supabase.table("v_payments_list").select("*", count="exact")
@@ -128,7 +127,7 @@ def list_expiring_payments(
     days: int = Query(30, ge=1, le=90),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
-    current_user: dict = Depends(_require_admin),
+    current_user: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
     now = datetime.now(timezone.utc)
@@ -154,7 +153,7 @@ def list_expiring_payments(
 
 
 @router.post("/manual/confirm")
-def manual_confirm(body: ManualConfirmBody, current_user: dict = Depends(_require_admin)):
+def manual_confirm(body: ManualConfirmBody, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
     now = now_iso()
     pay_res = (
@@ -207,7 +206,7 @@ def manual_confirm(body: ManualConfirmBody, current_user: dict = Depends(_requir
 
 
 @router.post("/{payment_id}/cancel")
-def cancel_payment(payment_id: str, body: CancelBody, current_user: dict = Depends(_require_admin)):
+def cancel_payment(payment_id: str, body: CancelBody, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
     now = now_iso()
     pay_res = (
@@ -253,7 +252,7 @@ def cancel_payment(payment_id: str, body: CancelBody, current_user: dict = Depen
 
 
 @router.get("/{payment_id}/vbank-status")
-def get_vbank_status(payment_id: str, current_user: dict = Depends(_require_admin)):
+def get_vbank_status(payment_id: str, current_user: dict = Depends(get_current_user)):
     supabase = get_supabase()
     res = (
         supabase.table("payments")

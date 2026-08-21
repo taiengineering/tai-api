@@ -137,12 +137,6 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _require_admin(current_user: dict):
-    role = current_user.get("role_code") or current_user.get("role", "")
-    if role != "001":
-        raise HTTPException(status_code=403, detail="관리자 권한이 필요합니다")
-
-
 async def _call_claude(messages: list, turn_index: int = 0) -> tuple:
     """
     Claude API 호출. KEY 없으면 규칙 기반 폴백 응답 반환.
@@ -452,13 +446,12 @@ def complete_chat(body: CompleteBody, current_user: dict = Depends(get_current_u
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 어드민 API (role_code=001 필수) — 변경 금지
+# 어드민 API — 권한은 헤더가드 PLATFORM_AUDIT_VIEW
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 @router.get("/admin/stats")
 def admin_stats(current_user: dict = Depends(get_current_user)):
     """상담 통계 — 전체/상태별/의도별/오늘/토큰"""
-    _require_admin(current_user)
     sb = get_supabase()
 
     all_res = sb.table("fix_chat_sessions").select(
@@ -516,7 +509,6 @@ def admin_sessions(
     current_user: dict       = Depends(get_current_user),
 ):
     """상담 세션 목록 — 필터/페이징"""
-    _require_admin(current_user)
     sb = get_supabase()
 
     q = sb.table("fix_chat_sessions").select(
@@ -556,7 +548,6 @@ def admin_sessions(
 @router.get("/admin/sessions/{session_id}")
 def admin_session_detail(session_id: str, current_user: dict = Depends(get_current_user)):
     """상담 세션 상세 + 전체 메시지"""
-    _require_admin(current_user)
     sb = get_supabase()
 
     sess_res = sb.table("fix_chat_sessions").select("*").eq("id", session_id).limit(1).execute()

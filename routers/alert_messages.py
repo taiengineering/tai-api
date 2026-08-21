@@ -69,9 +69,6 @@ def list_alerts(
     size: int = Query(50, ge=1, le=200),
     current_user: dict = Depends(get_current_user),
 ):
-    if current_user.get("role_code") != "001":
-        raise HTTPException(status_code=403, detail="관리자만 접근 가능합니다.")
-
     supabase = get_supabase()
     offset   = (page - 1) * size
 
@@ -120,8 +117,6 @@ def list_alert_codes():
 
 @router.get("/contexts")
 def list_contexts(current_user: dict = Depends(get_current_user)):
-    if current_user.get("role_code") != "001":
-        raise HTTPException(status_code=403, detail="관리자만 접근 가능합니다.")
     supabase  = get_supabase()
     res       = supabase.table("system_alert_messages").select("context").execute()
     contexts  = sorted(set(r["context"] for r in (res.data or []) if r.get("context")))
@@ -137,9 +132,6 @@ def create_alert(
     body: AlertCreate,
     current_user: dict = Depends(get_current_user),
 ):
-    if current_user.get("role_code") != "001":
-        raise HTTPException(status_code=403, detail="관리자만 접근 가능합니다.")
-
     supabase = get_supabase()
 
     # 중복 코드 검사
@@ -169,9 +161,6 @@ def update_alert(
     body: AlertPatch,
     current_user: dict = Depends(get_current_user),
 ):
-    if current_user.get("role_code") != "001":
-        raise HTTPException(status_code=403, detail="관리자만 접근 가능합니다.")
-
     data = body.model_dump(exclude_none=True)
     if not data:
         raise HTTPException(status_code=400, detail="수정할 항목이 없습니다.")
@@ -193,9 +182,6 @@ def toggle_alert(
     alert_id: str,
     current_user: dict = Depends(get_current_user),
 ):
-    if current_user.get("role_code") != "001":
-        raise HTTPException(status_code=403, detail="관리자만 접근 가능합니다.")
-
     supabase = get_supabase()
     cur = supabase.table("system_alert_messages") \
         .select("is_active").eq("id", alert_id).limit(1).execute()
@@ -220,9 +206,6 @@ def delete_alert(
     alert_id: str,
     current_user: dict = Depends(get_current_user),
 ):
-    if current_user.get("role_code") != "001":
-        raise HTTPException(status_code=403, detail="관리자만 접근 가능합니다.")
-
     supabase = get_supabase()
     res = supabase.table("system_alert_messages").update({
         "is_active":  False,
