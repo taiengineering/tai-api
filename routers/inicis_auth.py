@@ -118,28 +118,13 @@ def _ensure_diag_auth_token(mtx_id: str) -> Optional[str]:
     return token
 
 
-def _seed_key_bytes() -> bytes:
-    # 운영 통합인증 인증키가 32자 hex 문자열이면 그대로 16바이트로 디코드한다.
-    # base64 계열 키(테스트 키 등)는 hex 문자셋이 아니므로 이 분기에 걸리지 않아 기존 동작을 보존한다.
-    _k = SA_API_KEY.strip()
-    if len(_k) == 32 and all(c in "0123456789abcdefABCDEF" for c in _k):
-        return bytes.fromhex(_k)
-    raw = base64.b64decode(SA_API_KEY)
-    if len(raw) == 16:
-        return raw
-    try:
-        inner = base64.b64decode(raw)
-        if len(inner) == 16:
-            return inner
-    except Exception:
-        pass
-    if len(raw) >= 16:
-        return raw[:16]
-    raise ValueError("INICIS_SA_API_KEY must decode to a 16-byte SEED key")
-
-
-def _seed_decrypt(encrypted_b64: str) -> str:
-    key = _seed_key_bytes()
+def _seed_decrypt(encrypted_b64: str, token: str) -> str:
+    # KG이니시스 통합인증(SA) 개인정보 SEED-CBC 복호화.
+    # SEED 키 = 인증결과 콜백의 token 값을 base64 디코드한 16바이트 (API 키가 아님).
+    # IV = 발급받은 SEED IV(SA_SEED_IV) 문자열 바이트 그대로. 암호문 = base64 디코드.
+    key = base64.b64decode(token)
+    if len(key) != 16:
+        raise ValueError("SEED key(token) must decode to 16 bytes")
     iv = SA_SEED_IV.encode("utf-8")
     if len(iv) != 16:
         raise ValueError("INICIS_SA_SEED_IV must be 16 bytes")
@@ -256,6 +241,7 @@ async def callback_success(request: Request):
     result_msg = unquote(str(params.get("resultMsg", "") or ""))
     auth_request_url = str(params.get("authRequestUrl", ""))
     tx_id = str(params.get("txId", ""))
+    sa_token = str(params.get("token", ""))
 
     if result_code != "0000":
         return HTMLResponse(_popup_result_html(False, result_msg or "인증 실패"))
@@ -283,12 +269,12 @@ async def callback_success(request: Request):
     svc_cd = data.get("svcCd", "")
 
     try:
-        user_name = _seed_decrypt(data["userName"]) if data.get("userName") else None
-        user_phone = _seed_decrypt(data["userPhone"]) if data.get("userPhone") else None
-        user_birthday = _seed_decrypt(data["userBirthday"]) if data.get("userBirthday") else None
-        user_ci = _seed_decrypt(data["userCi"]) if data.get("userCi") else None
-        user_di = _seed_decrypt(data["userDi"]) if data.get("userDi") else None
-        user_gender = _seed_decrypt(data["userGender"]) if data.get("userGender") else None
+        user_name = _seed_decrypt(data["userName"], sa_token) if data.get("userName") else None
+        user_phone = _seed_decrypt(data["userPhone"], sa_token) if data.get("userPhone") else None
+        user_birthday = _seed_decrypt(data["userBirthday"], sa_token) if data.get("userBirthday") else None
+        user_ci = _seed_decrypt(data["userCi"], sa_token) if data.get("userCi") else None
+        user_di = _seed_decrypt(data["userDi"], sa_token) if data.get("userDi") else None
+        user_gender = _seed_decrypt(data["userGender"], sa_token) if data.get("userGender") else None
     except Exception as e:
         log.exception("[inicis_auth] SEED decrypt failed mtx_id=%s", mtx_id)
         return HTMLResponse(_popup_result_html(False, f"복호화 실패: {e}"))
