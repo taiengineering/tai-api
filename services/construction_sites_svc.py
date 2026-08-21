@@ -2,13 +2,14 @@ from services.construction_helpers import calc_safety_manager
 from services.construction_svc import normalize_date_fields, run_list_query
 
 
-def list_sites(supabase, company_id, status_code, site_type, search, page, size):
+def list_sites(supabase, company_id, status_code, site_type, search, page, size, factory_id=None):
     data = run_list_query(
         supabase,
         "construction_sites",
         {
             "is_active": True,
             "company_id": company_id,
+            "factory_id": factory_id,
             "status_code": status_code,
             "site_type": site_type,
             "site_name__ilike": f"%{search}%" if search else None,
