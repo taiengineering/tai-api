@@ -710,6 +710,8 @@ async def list_inspections(
     inspection_type: Optional[str] = Query(None),
     overall_result: Optional[str] = Query(None),
     corrective_status: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None, description="점검일 시작 YYYY-MM-DD (LEDGER §63)"),
+    date_to: Optional[str] = Query(None, description="점검일 종료 YYYY-MM-DD (LEDGER §63)"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     current: dict = Depends(get_current_user),
@@ -717,6 +719,9 @@ async def list_inspections(
     site_id = _validate_uuid(site_id)
     supabase = get_supabase()
     _ensure_site_own(supabase, site_id, current)
+    # §63: 화면이 보내던 기간 필터를 실제 적용. inspection_date 는 timestamptz 라
+    #      종료일은 그날 끝(23:59:59)까지 포함시킨다.
+    _date_to = f"{date_to}T23:59:59.999999" if date_to and len(date_to) == 10 else date_to
     try:
         data = run_list_query(
             supabase,
@@ -727,6 +732,8 @@ async def list_inspections(
                 "inspection_type": inspection_type,
                 "overall_result": overall_result,
                 "corrective_status": corrective_status,
+                "inspection_date__gte": date_from,
+                "inspection_date__lte": _date_to,
             },
             page,
             size,
