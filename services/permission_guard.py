@@ -176,7 +176,31 @@ def bind_app(app) -> None:
     compiled = []
     seen = set()
     router = getattr(app, "router", app)
-    src = _iter_http_routes(getattr(router, "routes", None) or getattr(app, "routes", []) or [])
+    raw_routes = getattr(router, "routes", None)
+    n_raw = len(raw_routes) if raw_routes is not None else -1
+    src = _iter_http_routes(raw_routes or [])
+    paths_seen = {normalize_path(p) for p, _ in src}
+    if "/companies" not in paths_seen:
+        try:
+            from fastapi.openapi.utils import get_openapi
+            spec = get_openapi(
+                title=getattr(app, "title", "TAI"),
+                version=getattr(app, "version", "0"),
+                routes=list(getattr(app, "routes", []) or []),
+            )
+            extra = []
+            for p, item in (spec.get("paths") or {}).items():
+                methods = {
+                    m.upper()
+                    for m in item.keys()
+                    if m.upper() in ("GET", "POST", "PUT", "PATCH", "DELETE")
+                }
+                if methods:
+                    extra.append((p, methods))
+            if extra:
+                src = extra
+        except Exception:
+            log.exception("[GUARD] openapi fallback 실패")
     for path, methods in src:
         npath = normalize_path(path)
         key = (frozenset(m.upper() for m in methods if m.upper() not in ("HEAD", "OPTIONS")), npath)
@@ -187,7 +211,10 @@ def bind_app(app) -> None:
     compiled.sort(key=lambda x: (x[1].count("{"), -len(x[1])))
     _route_templates = compiled
     _refresh_maps(force=True)
-    log.info("[GUARD] bind routes=%d perm_maps=%d", len(_route_templates), len(_perm_map))
+    log.warning(
+        "[GUARD] bind raw_routes=%d src=%d templates=%d perm_maps=%d",
+        n_raw, len(src), len(_route_templates), len(_perm_map),
+    )
     _log_t4_coverage()
 
 
