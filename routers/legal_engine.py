@@ -1,8 +1,10 @@
 """법령 판정 엔진 라우터."""
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Header
 from typing import Optional
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _ensure_factory_own
 from schemas.legal_engine import DiagnoseStep1Body, DiagnoseStep2Body, DiagnoseStep3Body
 from services import legal_engine_svc
 from services.legal_v510_svc import run_diagnose_step1_v510
@@ -61,9 +63,15 @@ async def apply_legal_engine_from_quote(quote_id: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/diagnose/step1")
-async def diagnose_step1(body: DiagnoseStep1Body):
+async def diagnose_step1(body: DiagnoseStep1Body, authorization: Optional[str] = Header(None)):
     # v510 Canonical Runtime: adapter + enrichment + obligation_contract
     supabase = get_supabase()
+    # P13 (2026-08-21): factory_id 로 저장 시설 프로필을 끌어오는 경로는 소유 검증을 요구한다.
+    #   factory_id 미지정(인라인 무료진단)은 공개로 유지 — 무료진단 퍼널 불변.
+    #   존재만 확인하던 종전 방식은 타사 factory_id 로 진단 결과를 열람할 여지가 있었다.
+    if body.factory_id:
+        current = get_current_user(authorization)
+        _ensure_factory_own(supabase, body.factory_id, current)
     try:
         return run_diagnose_step1_v510(supabase, body, STEP1_ALLOWED_SECTORS, "v5.10")
     except ValueError as e:
