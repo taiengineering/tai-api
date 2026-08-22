@@ -1,6 +1,15 @@
 """
 legal_engine_patch.py
 =====================
+v1.4.0 (2026-08-23, WP-PARTITION-02C REV-1)
+  [ADD] auto_assign_schedules: work_assignments INSERT 시 factory_id 전파.
+        work_schedules 가 PARTITION BY HASH(factory_id) 로 전환되면
+        work_assignments FK 가 (schedule_id, factory_id) 복합키 +
+        MATCH FULL + pair CHECK 가 되므로 factory_id 없이 INSERT 하면
+        23514 로 실패한다.
+        상위 SELECT 가 이미 factory_id 를 가져오므로 추가 조회는 없다.
+        ※ 파티션 적용 DB 전제. DB migration 과 동일 window 배포 필요.
+
 v1.3.0 (2026-04-07)
   [FIX] generate-schedules/all: CONSTRUCTION 한정 → is_active=True 전체 공장으로 확장
         (진단 결과 없는 공장은 자동 스킵)
@@ -87,6 +96,8 @@ def auto_assign_schedules(
     3. 해당 공장의 안전관리자(role_code IN 003,012) 1명 조회
     4. work_assignments INSERT + work_schedules.assigned_user_id 업데이트
     5. 배정 건수 반환
+
+    v1.4.0(WP-PARTITION-02C REV-1): work_assignments INSERT 에 factory_id 전파.
     """
     supabase = get_supabase()
 
@@ -149,6 +160,7 @@ def auto_assign_schedules(
         for s in scheds:
             assign_rows.append({
                 "schedule_id":      s["id"],
+                "factory_id":       s["factory_id"],
                 "assigned_user_id": manager_id,
                 "scheduled_date":   s.get("planned_date") or today_str,
                 "status_code":      "PENDING",
