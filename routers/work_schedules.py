@@ -1,5 +1,15 @@
 """
-work_schedules.py — v1.2.7
+work_schedules.py — v1.2.8
+
+v1.2.8 (2026-08-23, WP-PARTITION-02C):
+  [ADD] work_assignments 신규 INSERT 시 factory_id 전파.
+        work_schedules 가 PARTITION BY HASH(factory_id) 로 전환되면
+        PK 가 (id, factory_id) 가 되고 work_assignments FK 도
+        (schedule_id, factory_id) 복합키 + MATCH FULL + pair CHECK 가 된다.
+        → 신규 assignment 생성 경로에서만 parent 의 factory_id 를 조회해 전달한다.
+        기존 assignment UPDATE / CANCELLED 경로는 변경하지 않는다(추가 왕복 0).
+        ※ 이 변경은 파티션 적용 DB 를 전제로 한다. DB migration 과 동일
+          maintenance window 에서 배포해야 한다(구 schema 와 호환 안 됨).
 
 v1.2.7 (2026-08-22, Phase E-1):
   [ADD] FACTORY 스코프 — scoped_filter(company_id+factory_id). FACTORY role 은
@@ -68,7 +78,7 @@ from services.status_vocab import wa_active_query_values, wa_write_ready
 
 router = APIRouter(prefix="/work-schedules", tags=["work_schedules"])
 
-VERSION = "1.2.7"
+VERSION = "1.2.8"
 
 
 def _now() -> str:
@@ -88,6 +98,8 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
 
     fields 에 'assigned_user_id' 키가 있으면(None 포함) 배정 변경으로 본다(batch-update 와 동일).
     지원 필드: is_excluded · excluded_reason · custom_cycle · status_code · resolved_at · planned_date · assigned_user_id.
+
+    v1.2.8(WP-PARTITION-02C): 신규 work_assignments INSERT 시 factory_id 를 전달한다.
     """
     payload: dict = {"updated_at": now}
     for k in ("is_excluded", "excluded_reason", "custom_cycle", "status_code", "resolved_at", "planned_date"):
@@ -106,12 +118,26 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
             existing = supabase.table("work_assignments").select("id") \
                 .eq("schedule_id", schedule_id).in_("status_code", wa_active_query_values()).limit(1).execute()
             if existing.data:
+                # 기존 assignment 갱신 — factory_id 추가 조회 없음(왕복 증가 0)
                 supabase.table("work_assignments").update({
                     "assigned_user_id": auid, "updated_at": now,
                 }).eq("id", existing.data[0]["id"]).execute()
             else:
+                # v1.2.8: 신규 INSERT 경로에서만 parent 의 factory_id 를 조회해 전파.
+                #   파티션 전환 후 work_assignments FK = (schedule_id, factory_id) MATCH FULL
+                #   + CHECK ((schedule_id IS NULL) = (factory_id IS NULL)) 이므로
+                #   factory_id 없이 INSERT 하면 23514 로 실패한다(조용한 우회 아님).
+                _ws = supabase.table("work_schedules").select("factory_id") \
+                    .eq("id", schedule_id).limit(1).execute()
+                _fid = _ws.data[0].get("factory_id") if _ws.data else None
+                if not _fid:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="일정의 사업장 정보를 확인할 수 없어 배정할 수 없습니다",
+                    )
                 supabase.table("work_assignments").insert({
-                    "schedule_id": schedule_id, "assigned_user_id": auid,
+                    "schedule_id": schedule_id, "factory_id": _fid,
+                    "assigned_user_id": auid,
                     "scheduled_date": datetime.now().date().isoformat(),
                     "status_code": wa_write_ready(), "created_at": now,
                 }).execute()

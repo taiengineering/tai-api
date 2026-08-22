@@ -1,5 +1,5 @@
 """
-점검리스트 시스템 — v1.5.0
+점검리스트 시스템 — v1.6.0
 v1.5.0: 인증·회사 스코프 (Wave3, 직접MCP)
   - 전 엔드포인트 로그인 필수(get_current_user).
   - factory 직결: generate-items/generate-schedules/status/schedules(factory_id) → _ensure_factory_own
@@ -40,7 +40,7 @@ from services.status_vocab import (
 
 router = APIRouter(prefix="/inspection", tags=["점검리스트"])
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 
 LEGAL_INSPECTION_ITEMS = {
     "ELECACT-010":    ["배전반 외관 점검", "접지 상태 확인", "절연저항 측정", "과전류 차단기 동작 확인"],
@@ -396,8 +396,15 @@ async def start_inspection(work_schedule_id: str, body: dict = None, current: di
         }).eq("id", work_schedule_id).execute()
         if not ws_res.data:
             raise HTTPException(status_code=404, detail="점검 일정을 찾을 수 없습니다.")
+        # v1.6.0(WP-PARTITION-02C REV-1): 파티션 전환 후 safety_inspections FK 는
+        #   (assignment_id, factory_id) 복합키 + MATCH FULL + pair CHECK 다.
+        #   UPDATE 응답(ws_res.data[0])에 factory_id 가 있으므로 추가 SELECT 없이 재사용한다.
+        factory_id = ws_res.data[0].get("factory_id")
+        if not factory_id:
+            raise HTTPException(status_code=409, detail="일정의 사업장 정보를 확인할 수 없습니다.")
         insp_res = supabase.table("safety_inspections").insert({
-            "assignment_id": work_schedule_id, "inspection_date": started_at, "status_code": "in_progress",
+            "assignment_id": work_schedule_id, "factory_id": factory_id,
+            "inspection_date": started_at, "status_code": "in_progress",
         }).execute()
         if not insp_res.data:
             raise HTTPException(status_code=500, detail="점검 레코드 생성 실패")
