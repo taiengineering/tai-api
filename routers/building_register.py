@@ -24,7 +24,7 @@ BUILDING_KEY  = os.environ.get("BUILDING_API_KEY", "")
 VERSION       = "2.4.0"
 
 JUSO_URL      = "https://business.juso.go.kr/addrlink/addrLinkApi.do"
-BUILDING_BASE = "http://apis.data.go.kr/1613000/BldRgstService_v2"
+BUILDING_BASE = "https://apis.data.go.kr/1613000/BldRgstHubService"
 
 
 def get_supabase():
