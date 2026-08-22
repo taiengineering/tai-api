@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime
 from typing import Optional, Any, List
 import asyncio, re, requests, urllib3, os, traceback
-from urllib.parse import unquote
+from urllib.parse import unquote, quote
 from supabase import create_client
 from tenacity import retry, stop_after_attempt, wait_fixed
 
@@ -371,45 +371,53 @@ def get_sewage_info(sigungu, bjdong, bun, ji="0000", plat_gb="0"):
     return _building_get("getBrExposPublcRqstInfo", sigungu, bjdong, bun, ji, plat_gb=plat_gb)
 
 
-def _building_probe(sigungu, bjdong, bun, ji, plat_gb="0", unquote_key=False):
-    """진단 전용 — getBrTitleInfo 원응답(HTTP/resultCode/resultMsg/totalCount)을 그대로 노출."""
-    out = {"platGbCd": plat_gb, "unquote_key": unquote_key, "bun": bun, "ji": ji}
-    if not BUILDING_KEY:
-        out["error"] = "BUILDING_API_KEY 미설정"
-        return out
-    key = unquote(BUILDING_KEY) if unquote_key else BUILDING_KEY
+def _probe_call(url, params):
+    o = {}
     try:
-        r = requests.get(f"{BUILDING_BASE}/getBrTitleInfo", params={
-            "serviceKey": key,
-            "sigunguCd":  sigungu,
-            "bjdongCd":   bjdong,
-            "platGbCd":   plat_gb,
-            "bun":        bun,
-            "ji":         ji,
-            "numOfRows":  10,
-            "pageNo":     1,
-            "_type":      "json"
-        }, verify=False, timeout=15)
-        out["http"] = r.status_code
-        out["content_type"] = r.headers.get("content-type", "")
-        out["raw"] = r.text[:500]
+        r = requests.get(url, params=params, verify=False, timeout=15)
+        o["http"] = r.status_code
         try:
             d = r.json()
             resp = d.get("response") or {}
-            hdr = resp.get("header") or {}
-            body = resp.get("body") or {}
-            out["resultCode"] = hdr.get("resultCode")
-            out["resultMsg"] = hdr.get("resultMsg")
-            out["totalCount"] = body.get("totalCount")
-            errenv = (d.get("OpenAPI_ServiceResponse") or {}).get("cmmMsgHeader") or d.get("cmmMsgHeader")
-            if isinstance(errenv, dict):
-                out["errMsg"] = errenv.get("errMsg")
-                out["returnAuthMsg"] = errenv.get("returnAuthMsg")
-                out["returnReasonCode"] = errenv.get("returnReasonCode")
+            o["resultCode"] = (resp.get("header") or {}).get("resultCode")
+            o["totalCount"] = (resp.get("body") or {}).get("totalCount")
+            err = (d.get("OpenAPI_ServiceResponse") or {}).get("cmmMsgHeader")
+            if isinstance(err, dict):
+                o["reason"] = err.get("returnReasonCode")
+                o["errMsg"] = err.get("errMsg")
         except Exception:
-            pass
+            o["raw"] = r.text[:200]
     except Exception as e:
-        out["exception"] = f"{type(e).__name__}: {str(e)[:200]}"
+        o["exception"] = f"{type(e).__name__}: {str(e)[:150]}"
+    return o
+
+
+def _building_probe_matrix(sg, bj, bun, ji):
+    """getBrTitleInfo 요청 구성 매트릭스 — 어떤 조합이 통과하는지 확정."""
+    key = BUILDING_KEY or ""
+    base = f"{BUILDING_BASE}/getBrTitleInfo"
+    bun_u = str(int(bun)) if str(bun).isdigit() else str(bun)      # 비패딩
+    ji_i = int(ji) if str(ji).isdigit() else 0
+    ji_u = str(ji_i) if ji_i != 0 else ""                          # 비패딩(0이면 빈값)
+    common = f"sigunguCd={sg}&bjdongCd={bj}&numOfRows=10&pageNo=1&_type=json"
+    out = {}
+    # A: URL문자열 · 키 as-is · 비패딩 · platGbCd 없음
+    out["A_str_keyasis_unpad_noplat"] = _probe_call(
+        f"{base}?serviceKey={key}&{common}&bun={bun_u}&ji={ji_u}", None)
+    # B: URL문자열 · 키 quote · 비패딩 · platGbCd 없음
+    out["B_str_keyquote_unpad_noplat"] = _probe_call(
+        f"{base}?serviceKey={quote(key)}&{common}&bun={bun_u}&ji={ji_u}", None)
+    # C: params · 비패딩 · platGbCd 없음
+    out["C_params_unpad_noplat"] = _probe_call(base, {
+        "serviceKey": key, "sigunguCd": sg, "bjdongCd": bj,
+        "bun": bun_u, "ji": ji_u, "numOfRows": 10, "pageNo": 1, "_type": "json"})
+    # D: params · 패딩 · platGbCd 없음 (패딩 격리)
+    out["D_params_pad_noplat"] = _probe_call(base, {
+        "serviceKey": key, "sigunguCd": sg, "bjdongCd": bj,
+        "bun": bun, "ji": ji, "numOfRows": 10, "pageNo": 1, "_type": "json"})
+    # E: URL문자열 · 키 quote · 비패딩 · platGbCd 빈값
+    out["E_str_keyquote_unpad_platempty"] = _probe_call(
+        f"{base}?serviceKey={quote(key)}&{common}&platGbCd=&bun={bun_u}&ji={ji_u}", None)
     return out
 
 
@@ -577,12 +585,8 @@ def diagnose(address: str = Query("인천광역시 서구 가좌로 123", descri
         try:
             parsed = parse_bdmgtsn(bdmgtsn)
             result["bdmgtsn_parsed"] = parsed
-            result["building_probe"] = [
-                _building_probe(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], "0", False),
-                _building_probe(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], "1", False),
-                _building_probe(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], "0", True),
-                _building_probe(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], "0000", "0", False),
-            ]
+            result["building_probe"] = _building_probe_matrix(
+                parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"])
             _pg = parsed.get("mountain", "0")
             title = get_building_title(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], plat_gb=_pg)
             if not title:
