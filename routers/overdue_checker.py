@@ -43,6 +43,7 @@ from pydantic import BaseModel
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_factory_own, _scope, _is_admin
+from services.status_vocab import wa_write_done
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/overdue", tags=["\uc5c5\ubb34\uc9c0\uc5f0\uc5d0\uc2a4\ucf08\ub808\uc774\uc158"])
@@ -68,9 +69,7 @@ _LEVELS = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# 내부 헬퍼
-# ─────────────────────────────────────────────────────────────────────────
+_WA_SKIP_STATUSES = ["DONE", "SKIP", "OVERDUE", "COMPLETED", "RESOLVED"]
 
 def _today() -> date:
     return datetime.now(timezone.utc).date()
@@ -471,7 +470,7 @@ def run_overdue_check(
         supabase.table("work_assignments")
         .select("id, factory_id, assigned_user_id, scheduled_date, due_date,"
                 " overdue_level, last_reminded_at, status_code, inspection_set_id")
-        .not_.in_("status_code", ["DONE", "SKIP", "OVERDUE"])
+        .not_.in_("status_code", _WA_SKIP_STATUSES)
         .limit(limit)
     )
     if factory_id:
@@ -531,7 +530,7 @@ def get_overdue_summary(
 
     q = supabase.table("work_assignments").select(
         "id, factory_id, scheduled_date, due_date, overdue_level, status_code"
-    ).not_.in_("status_code", ["DONE", "SKIP"])
+    ).not_.in_("status_code", _WA_SKIP_STATUSES)
     if factory_id:
         _ensure_factory_own(supabase, factory_id, current)
         q = q.eq("factory_id", factory_id)
@@ -677,7 +676,7 @@ def resolve_overdue(history_id: str, body: ResolveBody, current: dict = Depends(
         supabase.table("work_assignments").update({
             "resolved_at":  now_iso,
             "overdue_level": 0,
-            "status_code":  "DONE",
+            "status_code":  wa_write_done(),
         }).eq("id", wa_id).execute()
     except Exception as e:
         log.warning("[OVERDUE] resolve wa 업데이트 실패: %s", e)

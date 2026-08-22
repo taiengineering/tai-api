@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_factory_own, _require_admin, _scope, _is_admin
+from services.status_vocab import is_ws_completed
 
 router = APIRouter(prefix="/equipment-assets", tags=["equipment_assets"])
 
@@ -223,8 +224,8 @@ def scan_equipment(
     if factory_id:
         sched = supabase.table("work_schedules").select(
             "id, description, planned_date, status_code, law_name, law_article"
-        ).eq("factory_id", factory_id).eq("planned_date", today).neq("status_code", "DONE").limit(10).execute()
-        pending = sched.data or []
+        ).eq("factory_id", factory_id).eq("planned_date", today).limit(20).execute()
+        pending = [r for r in (sched.data or []) if not is_ws_completed(r.get("status_code"))]
     return {"status": "success", "data": {"equipment": asset, "factory": factory_info, "company": company_info, "process": process_info, "pending_schedules": pending, "scan_method": "RFID" if rfid else "QR"}}
 
 

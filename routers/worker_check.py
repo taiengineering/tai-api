@@ -32,6 +32,7 @@ from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
 from services import inspection_sets_svc as _iss
+from services.status_vocab import normalize_inspection_result_write
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/worker-check", tags=["WorkerCheck"])
@@ -59,7 +60,7 @@ def _optional_auth(authorization: Optional[str] = Header(None)) -> Optional[dict
 
 class CheckItem(BaseModel):
     name: str
-    result: str            # ok | bad
+    result: str            # ok | bad | hold
     memo: Optional[str] = None
     note: Optional[str] = None       # 구버전 호환
     photo_urls: Optional[List[str]] = None
@@ -113,7 +114,8 @@ def submit_check(
 
     # 2. safety_inspections 점검 세션 생성
     has_issue = any(item.result == "bad" for item in body.items)
-    status_code = "ISSUE" if has_issue else "COMPLETED"
+    has_hold = any((item.result or "").lower() == "hold" for item in body.items)
+    status_code = "ISSUE" if has_issue else ("HOLD" if has_hold else "COMPLETED")
 
     # safety_inspections.assignment_id 의 FK 는 work_schedules(id) 를 참조한다(컬럼명과 불일치, 별건).
     # body.assignment_id 는 work_assignments.id 이므로 그대로 넣으면 FK 위반(500)이다.
@@ -164,7 +166,7 @@ def submit_check(
         row_data = {
             "inspection_id": inspection_id,
             "item_name": name,
-            "result_code": "NORMAL" if item.result == "ok" else "ABNORMAL",
+            "result_code": normalize_inspection_result_write(item.result),
             "value_text": item.result,
             "note": item.memo or item.note or "",
             "checked_at": now,

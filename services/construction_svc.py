@@ -320,6 +320,8 @@ def run_list_query(
             q = q.gte(key.replace("__gte", ""), value)
         elif key.endswith("__lte"):
             q = q.lte(key.replace("__lte", ""), value)
+        elif key.endswith("__in"):
+            q = q.in_(key.replace("__in", ""), value)
         else:
             q = q.eq(key, value)
     for order in order_by:

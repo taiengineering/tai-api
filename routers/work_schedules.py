@@ -64,6 +64,7 @@ from services.company_scope import (
     _is_admin,
     _tier,
 )
+from services.status_vocab import wa_active_query_values, wa_write_ready
 
 router = APIRouter(prefix="/work-schedules", tags=["work_schedules"])
 
@@ -103,7 +104,7 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
         auid = fields["assigned_user_id"]
         if auid:
             existing = supabase.table("work_assignments").select("id") \
-                .eq("schedule_id", schedule_id).eq("status_code", "PENDING").limit(1).execute()
+                .eq("schedule_id", schedule_id).in_("status_code", wa_active_query_values()).limit(1).execute()
             if existing.data:
                 supabase.table("work_assignments").update({
                     "assigned_user_id": auid, "updated_at": now,
@@ -112,12 +113,12 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
                 supabase.table("work_assignments").insert({
                     "schedule_id": schedule_id, "assigned_user_id": auid,
                     "scheduled_date": datetime.now().date().isoformat(),
-                    "status_code": "PENDING", "created_at": now,
+                    "status_code": wa_write_ready(), "created_at": now,
                 }).execute()
         else:
             supabase.table("work_assignments").update({
                 "status_code": "CANCELLED", "updated_at": now,
-            }).eq("schedule_id", schedule_id).eq("status_code", "PENDING").execute()
+            }).eq("schedule_id", schedule_id).in_("status_code", wa_active_query_values()).execute()
     return updated
 
 
