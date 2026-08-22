@@ -1,7 +1,7 @@
 # WORK_SCHEDULES_PARTITION_PRODUCTION_CUTOVER_RUNBOOK_v1
 
 > 작성일: 2026-08-23
-> 최종 정정: 2026-08-23 (REV-A — 실측 운영환경 반영 5건)
+> 최종 정정: 2026-08-23 (REV-B — PRE_CUTOVER_PROD_SHA capture 방식 전환)
 > 상위: WORK_SCHEDULES_PARTITION_DESIGN_FINAL_v1.md
 > 관련: WORK_SCHEDULES_PARTITION_CODE_COMPAT_v1.md
 > 상태: **RUNBOOK DESIGN = READY / PRODUCTION APPLY = NOT APPROVED**
@@ -90,13 +90,25 @@ org plan      pro
 DB 크기        4,773 MB
 ```
 
-### 현재 production 배포 SHA
+### SHA 기준 [REV-B]
 
 ```text
-0972a18e9f158ce49c5d7163ab31860ebcb4f7db
+PATCH BASE SHA
+= 0972a18e9f158ce49c5d7163ab31860ebcb4f7db
+
+CURRENT PROD PRE-CUTOVER SHA (2026-08-23 실측)
+= ed0f47a9eecc5c0e053193f202bc32cf6b5a3212
+  deployment 42d0d419 / SUCCESS / health 200 / 0.53s
+
+CODE DRIFT BETWEEN THEM = 0
+  ed0f47a9 는 0972a18e 의 직계 자손이며
+  변경 = 문서 1건 신규 (DOCUMENT_ENGINE_ARCHITECTURE_FINAL_v1.md)
+  routers/ · services/ 무변경, 4개 대상 파일 무변경
 ```
 
-**patch base 와 동일하다. CODE DRIFT = 0.**
+⚠ **PRE_CUTOVER_PROD_SHA 를 고정값으로 하드코딩하지 않는다.**
+cutover 당일 maintenance 진입 전에 실제 값을 capture 한다(§17-0).
+문서 커밋 하나만 더 생겨도 이 값은 바뀐다.
 
 ---
 
@@ -147,6 +159,22 @@ MANUAL SMOKE = REQUIRED
 ```
 
 smoke 는 operator 가 직접 수행한다(§16 참조).
+
+---
+
+### 3-5. documentation-only commit 도 배포를 일으킨다 [REV-B]
+
+```text
+LESSON-PARTITION-DEPLOY-01
+
+2026-08-23 23:19:54  docs 커밋 ed0f47a9 (main)
+2026-08-23 23:19:56  Railway 자동배포 SUCCESS  ← 2초 후
+
+tai-api main 의 documentation commit 도
+Railway production auto-deploy 를 발생시킨다.
+```
+
+따라서 **cutover 기준 SHA 가 중요한 기간에는 documentation-only commit 도 main direct push 를 금지한다.** 문서 수정은 partition 브랜치에서만 한다.
 
 ---
 
@@ -622,12 +650,26 @@ SELECT to_regclass('public.work_schedules_old') IS NOT NULL AS rollback_anchor; 
 ```text
 [ ] DB POSTCHECK 전항목 PASS
 [ ] work_schedules_old 존재 확인 (rollback anchor)
+[ ] PRE_CUTOVER_PROD_SHA 기록 완료 확인 (§17-0)
 [ ] 운영자 승인 서명: ______
 ```
 
 ---
 
 ## 17. Code Deploy
+
+### 17-0. [READ ONLY] PRE_CUTOVER_PROD_SHA capture [REV-B]
+
+**maintenance 진입 전에 반드시 먼저 수행한다.**
+
+```text
+Railway 콘솔 또는 MCP 로 tai-api-prod 현재 deployment SHA 확인
+
+PRE_CUTOVER_PROD_SHA = ______________________________
+capture 시각          = ______________________________
+```
+
+이 값이 **rollback 시 redeploy 목표**다. 고정 문자열을 쓰지 않는다.
 
 ### [MUTATION] PR merge
 
@@ -642,7 +684,9 @@ cherry-pick·수동 복붙 금지
 
 ```text
 Railway 콘솔 또는 MCP 로 tai-api-prod 최신 deployment 확인
-배포 SHA 가 예상과 다르면 STOP
+기대: merged PR head 를 포함한 expected deployment SHA
+      (특정 고정 SHA 문자열이 아니라 merge 결과 commit 인지 확인)
+불일치 → STOP
 ```
 
 ---
@@ -867,7 +911,7 @@ work_schedules_old 가 존재해야 한다.
 [6] PRE-state restoration 검증
 [7] application code 를 pre-cutover revision 으로 복구
       → main revert 또는 Railway 이전 deployment redeploy
-      → 목표 SHA: 0972a18e9f158ce49c5d7163ab31860ebcb4f7db
+      → 목표 SHA: PRE_CUTOVER_PROD_SHA (§17-0 에서 capture 한 값)
 [8] read/write smoke
 [9] pg_cron job 3·4 원상복구
 [10] maintenance OFF
