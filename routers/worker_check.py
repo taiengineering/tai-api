@@ -1,12 +1,25 @@
 """
-작업자 현장 점검 제출 API — v1.4.1
+작업자 현장 점검 제출 API — v1.5.0
+
+v1.5.0 (2026-08-23, WP-PARTITION-02C):
+  [ADD] safety_inspections INSERT 시 factory_id 전파.
+        work_schedules 가 PARTITION BY HASH(factory_id) 로 전환되면
+        PK 가 (id, factory_id) 가 되고 safety_inspections FK 도
+        (assignment_id, factory_id) 복합키 + MATCH FULL + pair CHECK 가 된다.
+        → 기존 work_assignments 조회에 factory_id 를 함께 취득(추가 SELECT 없음).
+          body.schedule_id 직접 경로처럼 factory 를 얻지 못한 경우에만
+          work_schedules 에서 보완 조회한다.
+        assignment 이 없는 제출(구버전 앱)은 둘 다 NULL 로 저장되어
+        pair CHECK 를 정상 통과한다.
+        ※ 이 변경은 파티션 적용 DB 를 전제로 한다. DB migration 과 동일
+          maintenance window 에서 배포해야 한다(구 schema 와 호환 안 됨).
 
 v1.4.1 (2026-08-17, Goal G-mswtdmi1-420f8c):
   [FIX] safety_inspections.assignment_id 의 FK 는 work_schedules(id) 를 참조한다(컬럼명과 대상 불일치).
         v1.4.0 이 work_assignments.id 를 그대로 넣어 FK 위반 → 500 → 앱이 "기기에 임시저장"으로 처리했다.
         (8/09 옛 제출은 assignment_id 가 없어 FK 검사를 타지 않아 성공했고, 새 앱은 assignment_id 를 보내 위반.)
         → assignment_id(work_assignments.id)를 schedule_id(work_schedules.id)로 변환해 저장한다.
-        [별건] 컬럼명 assignment_id 인데 FK 는 work_schedules — 명명/설계 정합(FK 를 work_assignments 로 옮길지)은 기획 결정.
+        [별건] 컬럼명 assignment_id 인데 FK 는 work_schedules — 명명/설계 정합(FK 를 work_assignments 로 옆길지)은 기획 결정.
 v1.4.0 (2026-08-17, Goal G-mswtdmi1-420f8c):
   [FIX] 참조 검증을 assignment_id 3홉(work_assignments→work_schedules→inspection_set_id)으로 교체.
         safety_inspections.assignment_id 저장.
@@ -121,16 +134,34 @@ def submit_check(
     # body.assignment_id 는 work_assignments.id 이므로 그대로 넣으면 FK 위반(500)이다.
     # → schedule_id(work_schedules.id)로 변환해 저장한다. body.schedule_id 가 오면 그것을 우선한다.
     schedule_ref = body.schedule_id
+    factory_ref = None
     if not schedule_ref and body.assignment_id:
-        _wa = supabase.table("work_assignments").select("schedule_id").eq("id", body.assignment_id).limit(1).execute()
+        # v1.5.0(WP-PARTITION-02C): 기존 조회에 factory_id 를 함께 취득(추가 SELECT 없음)
+        _wa = supabase.table("work_assignments").select("schedule_id, factory_id") \
+            .eq("id", body.assignment_id).limit(1).execute()
         if _wa.data:
             schedule_ref = _wa.data[0].get("schedule_id")
+            factory_ref = _wa.data[0].get("factory_id")
+
+    # v1.5.0: schedule 을 참조하는데 factory 를 아직 못 얻은 경우에만 parent 에서 보완.
+    #   · body.schedule_id 직접 전달 경로
+    #   · work_assignments.factory_id 가 비어 있는 경우
+    if schedule_ref and not factory_ref:
+        _ws = supabase.table("work_schedules").select("factory_id") \
+            .eq("id", schedule_ref).limit(1).execute()
+        factory_ref = _ws.data[0].get("factory_id") if _ws.data else None
+
+    # v1.5.0: pair CHECK — (assignment_id IS NULL) = (factory_id IS NULL)
+    #   schedule 을 참조하는데 factory 를 모르면 저장하지 않는다(무결성 우회 차단).
+    if schedule_ref and not factory_ref:
+        raise HTTPException(status_code=409, detail="일정의 사업장 정보를 확인할 수 없습니다")
 
     ins_res = supabase.table("safety_inspections").insert({
         "inspector_id": inspector_id,
         "inspection_date": now,
         "status_code": status_code,
         "assignment_id": schedule_ref,
+        "factory_id": factory_ref,
     }).execute()
 
     if not ins_res.data:
@@ -139,7 +170,7 @@ def submit_check(
     inspection_id = ins_res.data[0]["id"]
 
     # 3. 참조 검증(가공 차단): assignment_id 3홉으로 세트 항목만 참조로 인정하고,
-    #    참조가 맞으면 item_name 을 서버 마스터 값으로 덮어씀(이름 위조 경로 제거).
+    #    참조가 맞으면 item_name 을 서버 마스터 값으로 덮어썼(이름 위조 경로 제거).
     allowed: dict = {}
     set_id = _iss.resolve_set_id_for_assignment(body.assignment_id) if body.assignment_id else None
     if set_id:
