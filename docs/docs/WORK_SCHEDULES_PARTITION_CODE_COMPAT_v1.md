@@ -247,7 +247,7 @@ cycle_code    — work_schedules 에 없음
 is_active     — work_schedules 에 없음 (실제는 active_yn)
 ```
 
-파티셔닝과 무관한 기존 결함이므로 **이번 패치에 섮지 않았다.**
+파티셔닝과 무관한 기존 결함이므로 **이번 패치에 섞지 않았다.**
 
 별건 WP 로 처리한다.
 
