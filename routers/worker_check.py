@@ -19,7 +19,7 @@ v1.4.1 (2026-08-17, Goal G-mswtdmi1-420f8c):
         v1.4.0 이 work_assignments.id 를 그대로 넣어 FK 위반 → 500 → 앱이 "기기에 임시저장"으로 처리했다.
         (8/09 옛 제출은 assignment_id 가 없어 FK 검사를 타지 않아 성공했고, 새 앱은 assignment_id 를 보내 위반.)
         → assignment_id(work_assignments.id)를 schedule_id(work_schedules.id)로 변환해 저장한다.
-        [별건] 컬럼명 assignment_id 인데 FK 는 work_schedules — 명명/설계 정합(FK 를 work_assignments 로 옆길지)은 기획 결정.
+        [별건] 컬럼명 assignment_id 인데 FK 는 work_schedules — 명명/설계 정합(FK 를 work_assignments 로 이동할지)은 기획 결정.
 v1.4.0 (2026-08-17, Goal G-mswtdmi1-420f8c):
   [FIX] 참조 검증을 assignment_id 3홉(work_assignments→work_schedules→inspection_set_id)으로 교체.
         safety_inspections.assignment_id 저장.
@@ -170,7 +170,7 @@ def submit_check(
     inspection_id = ins_res.data[0]["id"]
 
     # 3. 참조 검증(가공 차단): assignment_id 3홉으로 세트 항목만 참조로 인정하고,
-    #    참조가 맞으면 item_name 을 서버 마스터 값으로 덮어쓴(이름 위조 경로 제거).
+    #    참조가 맞으면 item_name 을 서버 마스터 값으로 덮어쓴다(이름 위조 경로 제거).
     allowed: dict = {}
     set_id = _iss.resolve_set_id_for_assignment(body.assignment_id) if body.assignment_id else None
     if set_id:
