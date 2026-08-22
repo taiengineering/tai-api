@@ -186,6 +186,18 @@ def build_facility(step1_body: Any) -> Dict[str, Any]:
         if isinstance(val, str) and not val.strip():
             continue
         facility[code] = val
+    # WO-LEG-ELEVATOR-OPTION-A: 건물 승강기(승강기법) 축.
+    # has_building_elevator는 derived-only canonical field — consumer passthrough 금지.
+    # (_LEG_INPUT_FIELDS 미등록: sector 무관 복사 통로를 차단하여 direct injection 방지)
+    # 명시적 sector==BUILDING gate — INDUSTRIAL/CONSTRUCTION elevator_count 오염 방지.
+    # 산업 리프트(has_elevator, 산안규칙)와 분리된 축이며, has_elevator는 무접촉.
+    _sector = getattr(step1_body, "sector", None)
+    if _sector == "BUILDING":
+        _ec = getattr(step1_body, "elevator_count", None)
+        if _ec is None:
+            _ec = inp.get("elevator_count")
+        if isinstance(_ec, (int, float)) and not isinstance(_ec, bool) and _ec > 0:
+            facility["has_building_elevator"] = True
     return facility
 
 
