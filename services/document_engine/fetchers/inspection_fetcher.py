@@ -1,16 +1,22 @@
-"""점검 기록 공통 Fetcher — 카테고리 2+5 (22건) 통합
+"""점검 기록 공통 Fetcher — INSP·CHK·EQUIP·PPE 공통
 
-safety_inspections + safety_inspection_results 에서
-점검 기록 데이터를 가져와 문서 템플릿에 전달.
+safety_inspections + safety_inspection_results 에서 점검 1건(inspection_id)의
+데이터를 가져와 문서 템플릿 변수로 조립한다.
 
-22건이 전부 동일한 DB 구조를 사용하므로
-fetcher 1개로 22건 문서를 모두 커버.
-차이점은 inspection_set의 점검 항목 구성뿐.
+단건형: 발행 단위 = 점검 1건. params={'inspection_id': ...}.
+
+스키마 정합(2026-08-22 실측):
+  safety_inspections = id, assignment_id, asset_id, inspector_id, inspection_date, status_code
+    (factory_id 없음 → asset_id → equipment_assets.factory_id 경유)
+  equipment_assets   = asset_name, asset_code, location_type, location_detail, factory_id ...
+  safety_inspection_results = item_name, result_code, note, photo_urls, value_text, value_number, created_at
+
+희박 데이터/스키마 드리프트에 견디도록 각 조회를 try/except 로 방어한다.
 """
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Dict
 
 from db.supabase_client import get_supabase
 from services.document_engine.fetchers.base_fetcher import BaseFetcher
@@ -19,145 +25,120 @@ log = logging.getLogger(__name__)
 
 
 class InspectionFetcher(BaseFetcher):
-    """안전점검·설비점검 공통 데이터 패처."""
+    """안전점검·설비점검·보호구 공통 데이터 패처 (단건)."""
 
-    async def fetch(self, params: dict) -> dict[str, Any]:
-        """
-        params:
-            inspection_id: str  — safety_inspections.id
-        """
-        inspection_id = params["inspection_id"]
+    async def fetch(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        inspection_id = params.get("inspection_id")
+        if not inspection_id:
+            raise ValueError("inspection_id 가 필요합니다.")
         sb = get_supabase()
 
-        # 1) 점검 기본 정보
-        insp = (
+        # 1) 점검 기본 (실제 존재 컬럼만)
+        insp_res = (
             sb.table("safety_inspections")
-            .select(
-                "id, factory_id, asset_id, inspection_date, inspector_id, "
-                "status_code, note, inspection_set_id, created_at, completed_at"
-            )
-            .eq("id", inspection_id)
-            .limit(1)
-            .execute()
+            .select("id, assignment_id, asset_id, inspector_id, inspection_date, status_code")
+            .eq("id", inspection_id).limit(1).execute()
         )
-        if not insp.data:
+        if not insp_res.data:
             raise ValueError(f"점검 기록을 찾을 수 없습니다: {inspection_id}")
-        inspection = insp.data[0]
+        insp = insp_res.data[0]
 
-        # 2) 회사·시설 정보
-        factory_id = inspection["factory_id"]
-        fac = (
-            sb.table("factories")
-            .select("name, site_address, company_id")
-            .eq("id", factory_id)
-            .limit(1)
-            .execute()
-        )
-        factory = fac.data[0] if fac.data else {}
-        company_id = factory.get("company_id")
-
-        comp = (
-            sb.table("companies")
-            .select("name, logo_url, representative_name")
-            .eq("id", company_id)
-            .limit(1)
-            .execute()
-        ) if company_id else None
-        company = comp.data[0] if comp and comp.data else {}
-
-        # 3) 점검자 정보
-        inspector_id = inspection.get("inspector_id")
-        inspector_name = ""
-        if inspector_id:
-            usr = (
-                sb.table("users")
-                .select("name")
-                .eq("id", inspector_id)
-                .limit(1)
-                .execute()
-            )
-            if usr.data:
-                inspector_name = usr.data[0].get("name", "")
-
-        # 4) 점검세트 정보 (문서 제목용)
-        set_id = inspection.get("inspection_set_id")
-        set_name = ""
-        if set_id:
-            s = (
-                sb.table("inspection_sets")
-                .select("name")
-                .eq("id", set_id)
-                .limit(1)
-                .execute()
-            )
-            if s.data:
-                set_name = s.data[0].get("name", "")
-
-        # 5) 점검 대상 설비
-        asset_id = inspection.get("asset_id")
-        asset_name = ""
-        asset_location = ""
+        # 2) 대상 설비 + factory_id (asset 경유)
+        asset: Dict[str, Any] = {}
+        factory_id = None
+        asset_id = insp.get("asset_id")
         if asset_id:
-            a = (
-                sb.table("equipment_assets")
-                .select("name, location, asset_code")
-                .eq("id", asset_id)
-                .limit(1)
-                .execute()
+            try:
+                a = (
+                    sb.table("equipment_assets")
+                    .select("asset_name, asset_code, location_type, location_detail, factory_id")
+                    .eq("id", asset_id).limit(1).execute()
+                )
+                if a.data:
+                    asset = a.data[0]
+                    factory_id = asset.get("factory_id")
+            except Exception as e:
+                log.warning("asset fetch 실패: %s", e)
+
+        # 3) 사업장 + 회사
+        factory: Dict[str, Any] = {}
+        company: Dict[str, Any] = {}
+        if factory_id:
+            try:
+                f = (
+                    sb.table("factories")
+                    .select("name, site_address, manager_name, company_id")
+                    .eq("id", factory_id).limit(1).execute()
+                )
+                factory = f.data[0] if f.data else {}
+            except Exception as e:
+                log.warning("factory fetch 실패: %s", e)
+            cid = factory.get("company_id")
+            if cid:
+                try:
+                    c = (
+                        sb.table("companies")
+                        .select("name, logo_url, representative_name")
+                        .eq("id", cid).limit(1).execute()
+                    )
+                    company = c.data[0] if c.data else {}
+                except Exception as e:
+                    log.warning("company fetch 실패: %s", e)
+
+        # 4) 점검자
+        inspector_name = ""
+        iid = insp.get("inspector_id")
+        if iid:
+            try:
+                u = sb.table("users").select("name").eq("id", iid).limit(1).execute()
+                if u.data:
+                    inspector_name = u.data[0].get("name", "")
+            except Exception as e:
+                log.warning("inspector fetch 실패: %s", e)
+
+        # 5) 점검 결과 (항목별)
+        items = []
+        try:
+            r = (
+                sb.table("safety_inspection_results")
+                .select("id, item_name, result_code, note, photo_urls, value_text, value_number")
+                .eq("inspection_id", inspection_id).order("created_at").execute()
             )
-            if a.data:
-                asset_name = a.data[0].get("name", "")
-                asset_location = a.data[0].get("location", "")
+            items = r.data or []
+        except Exception as e:
+            log.warning("results fetch 실패: %s", e)
 
-        # 6) 점검 결과 (항목별)
-        results = (
-            sb.table("safety_inspection_results")
-            .select(
-                "id, item_name, result_code, note, photo_urls, "
-                "inspection_set_item_id"
-            )
-            .eq("inspection_id", inspection_id)
-            .order("created_at")
-            .execute()
-        )
+        def _rc(i: dict) -> str:
+            return (i.get("result_code") or "").upper()
 
-        # 결과를 정상/이상/보류로 분류
-        items = results.data or []
-        normal_count = sum(1 for i in items if i.get("result_code") == "NORMAL")
-        issue_count = sum(1 for i in items if i.get("result_code") == "ISSUE")
-        hold_count = sum(1 for i in items if i.get("result_code") == "HOLD")
-
-        # 이상 항목만 별도 추출
+        normal_count = sum(1 for i in items if _rc(i) == "NORMAL")
+        issue_count = sum(1 for i in items if _rc(i) == "ISSUE")
+        hold_count = sum(1 for i in items if _rc(i) == "HOLD")
         issue_items = [
             {
                 "no": idx + 1,
                 "item_name": i.get("item_name", ""),
                 "note": i.get("note", ""),
-                "photo_urls": i.get("photo_urls", []),
+                "photo_urls": i.get("photo_urls") or [],
             }
-            for idx, i in enumerate(items)
-            if i.get("result_code") == "ISSUE"
+            for idx, i in enumerate(items) if _rc(i) == "ISSUE"
         ]
 
-        # 7) 데이터 조립
+        location = asset.get("location_detail") or asset.get("location_type") or ""
+
         return {
-            # 회사·시설
             "company_name": company.get("name", ""),
             "company_logo": company.get("logo_url"),
             "factory_name": factory.get("name", ""),
             "factory_address": factory.get("site_address", ""),
-
-            # 문서 정보
-            "doc_title": set_name or "점검 기록",
-            "inspection_date": inspection.get("inspection_date", ""),
+            "manager_name": factory.get("manager_name", ""),
+            "doc_title": asset.get("asset_name") or "점검 기록",
+            "inspection_date": insp.get("inspection_date", ""),
             "inspector_name": inspector_name,
-            "status_code": inspection.get("status_code", ""),
-
-            # 설비 정보
-            "asset_name": asset_name,
-            "asset_location": asset_location,
-
-            # 점검 결과
+            "status_code": insp.get("status_code", ""),
+            "asset_name": asset.get("asset_name", ""),
+            "asset_code": asset.get("asset_code", ""),
+            "asset_location": location,
             "items": items,
             "total_count": len(items),
             "normal_count": normal_count,
@@ -165,7 +146,4 @@ class InspectionFetcher(BaseFetcher):
             "hold_count": hold_count,
             "issue_items": issue_items,
             "has_issue": issue_count > 0,
-
-            # 메모
-            "inspection_note": inspection.get("note", ""),
         }
