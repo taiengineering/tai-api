@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Users 라우터 - 회원 관리 v2.3.0
+TAI Users 라우터 - 회원 관리 v2.3.1
 
+v2.3.1: get_users 데모제외를 어드민 전체목록에만 적용
+  - factory_id 지정 조회(담당자 드롭다운)에서 company_id 없을 때 데모 사용자가 neq 제외되던 결함 수정
 v2.3.0: 목록 size 상한 100→500 (LEDGER §68)
   - 대시보드 담당자 목록이 GET /users?size=200 을 보내 le=100 위반으로 422 → 담당자 열·배정
     셀렉트가 빈다. factory_id 로 좁힌 목록이라 테넌트당 인원이 유한하므로 상한만 상향.
@@ -22,7 +24,7 @@ from db.supabase_client import get_supabase
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-VERSION = "2.3.0"
+VERSION = "2.3.1"
 
 DEACTIVATE_STATUSES = {"INACTIVE", "DELETED", "SUSPENDED"}
 
@@ -119,7 +121,7 @@ def _demo_user_ids(supabase) -> list:
 
 # ============================================================
 # 1. 회원 목록
-#    company_id 미지정(어드민 전체목록)이면 데모 테넌트 사용자 제외.
+#    company_id·factory_id 둘 다 미지정(어드민 전체목록)이면 데모 테넌트 사용자 제외.
 #    NULL company_id(내부 계정 등) 보존 위해 company_id 필터 대신 사용자 id neq 사용.
 # ============================================================
 
@@ -135,7 +137,7 @@ def get_users(
 ):
     supabase = get_supabase()
     query = supabase.table("users").select("*", count="exact")
-    if not company_id:
+    if not company_id and not factory_id:
         for uid in _demo_user_ids(supabase):
             query = query.neq("id", uid)
     if search:      query = query.or_(f"name.ilike.%{search}%,email.ilike.%{search}%")
