@@ -301,16 +301,7 @@ def soft_delete_record(supabase, table_name: str, record_id: str, now_iso_fn):
     return res.data[0] if res.data else None
 
 
-def run_list_query(
-    supabase,
-    table_name: str,
-    filters: dict,
-    page: int,
-    size: int,
-    order_by: list,
-):
-    offset = (page - 1) * size
-    q = supabase.table(table_name).select("*", count="exact")
+def apply_table_filters(q, filters: dict):
     for key, value in filters.items():
         if value is None:
             continue
@@ -324,6 +315,65 @@ def run_list_query(
             q = q.in_(key.replace("__in", ""), value)
         else:
             q = q.eq(key, value)
+    return q
+
+
+def count_table_rows(supabase, table_name: str, filters: dict) -> int:
+    q = apply_table_filters(
+        supabase.table(table_name).select("id", count="exact"),
+        filters,
+    )
+    res = q.limit(0).execute()
+    return res.count or 0
+
+
+def inspection_result_summary(supabase, filters: dict) -> dict:
+    """§63-③: overall_result PASS·ISSUE·FAIL 집계(필터 조건 동일, 결과별 breakdown)."""
+    active = {k: v for k, v in filters.items() if v is not None}
+    base = {k: v for k, v in active.items() if k != "overall_result"}
+    total = count_table_rows(supabase, "construction_inspections", active)
+    pass_count = count_table_rows(
+        supabase, "construction_inspections", {**base, "overall_result": "PASS"}
+    )
+    issue_count = count_table_rows(
+        supabase, "construction_inspections", {**base, "overall_result": "ISSUE"}
+    )
+    fail_count = count_table_rows(
+        supabase, "construction_inspections", {**base, "overall_result": "FAIL"}
+    )
+    corrective_count = count_table_rows(
+        supabase, "construction_inspections", {**base, "corrective_status": "IN_PROGRESS"}
+    )
+    return {
+        "total": total,
+        "pass": pass_count,
+        "issue": issue_count,
+        "fail": fail_count,
+        "corrective_in_progress": corrective_count,
+    }
+
+
+def inspector_name_map(supabase, inspector_ids: list) -> dict:
+    ids = sorted({i for i in inspector_ids if i})
+    if not ids:
+        return {}
+    res = supabase.table("users").select("id, name").in_("id", ids).execute()
+    return {row["id"]: (row.get("name") or "") for row in (res.data or [])}
+
+
+def run_list_query(
+    supabase,
+    table_name: str,
+    filters: dict,
+    page: int,
+    size: int,
+    order_by: list,
+):
+    offset = (page - 1) * size
+    q = apply_table_filters(
+        supabase.table(table_name).select("*", count="exact"),
+        filters,
+    )
     for order in order_by:
         if isinstance(order, tuple):
             q = q.order(order[0], desc=bool(order[1]))

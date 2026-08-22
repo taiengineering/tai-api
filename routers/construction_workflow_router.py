@@ -33,6 +33,8 @@ from services.construction_status_svc import (
 from services.construction_svc import (
     create_record,
     get_record_or_none,
+    inspection_result_summary,
+    inspector_name_map,
     normalize_date_fields,
     prepare_inspection_payload,
     run_list_query,
@@ -141,11 +143,8 @@ def _validate_uuid(value: str) -> str:
         raise HTTPException(status_code=400, detail="유효하지 않은 ID 형식입니다.")
 
 
-def _alias_inspection_row(row: dict) -> dict:
-    """화면 계약 호환(LEDGER §62 표시분): DB 컬럼명에 화면이 읽는 별칭을 병기(원본 유지).
-    목록은 item.inspection_datetime 을, 상세는 defect_details·corrective_due 를 읽어
-    값이 있어도 '-'/created_at 으로 떨어지던 것을 해소한다.
-    ※ inspector_name(이름) 은 inspector_id(uuid)에서 채울 수 없어 여기서 다루지 않는다(결정 대기)."""
+def _alias_inspection_row(row: dict, inspector_names: Optional[dict] = None) -> dict:
+    """화면 계약 호환(LEDGER §62·§63): DB 컬럼명에 화면 별칭 병기 + inspector_name(projection)."""
     if not isinstance(row, dict):
         return row
     if row.get("inspection_datetime") is None and row.get("inspection_date") is not None:
@@ -154,7 +153,15 @@ def _alias_inspection_row(row: dict) -> dict:
         row["defect_details"] = row.get("defect_items")
     if row.get("corrective_due") is None and row.get("corrective_deadline") is not None:
         row["corrective_due"] = row.get("corrective_deadline")
+    inspector_id = row.get("inspector_id")
+    if inspector_id and inspector_names and inspector_id in inspector_names:
+        row["inspector_name"] = inspector_names[inspector_id]
     return row
+
+
+def _enrich_inspection_rows(supabase, rows: list) -> list:
+    names = inspector_name_map(supabase, [r.get("inspector_id") for r in rows if isinstance(r, dict)])
+    return [_alias_inspection_row(r, names) for r in rows]
 
 
 def _ptw_number(site_id: str, supabase) -> str:
@@ -730,24 +737,26 @@ async def list_inspections(
     # §63: 화면이 보내던 기간 필터를 실제 적용. inspection_date 는 timestamptz 라
     #      종료일은 그날 끝(23:59:59)까지 포함시킨다.
     _date_to = f"{date_to}T23:59:59.999999" if date_to and len(date_to) == 10 else date_to
+    list_filters = {
+        "site_id": site_id,
+        "is_active": True,
+        "inspection_type": inspection_type,
+        "overall_result": overall_result,
+        "corrective_status": corrective_status,
+        "inspection_date__gte": date_from,
+        "inspection_date__lte": _date_to,
+    }
     try:
         data = run_list_query(
             supabase,
             "construction_inspections",
-            {
-                "site_id": site_id,
-                "is_active": True,
-                "inspection_type": inspection_type,
-                "overall_result": overall_result,
-                "corrective_status": corrective_status,
-                "inspection_date__gte": date_from,
-                "inspection_date__lte": _date_to,
-            },
+            list_filters,
             page,
             size,
             [("inspection_date", True)],
         )
-        data["items"] = [_alias_inspection_row(r) for r in data.get("items", [])]
+        data["items"] = _enrich_inspection_rows(supabase, data.get("items", []))
+        data["summary"] = inspection_result_summary(supabase, list_filters)
         return {"status": "success", "data": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -761,13 +770,15 @@ async def create_inspection(site_id: str, body: InspectionCreate, current: dict 
     try:
         data = prepare_inspection_payload(body.model_dump(exclude_none=True), _now_iso)
         data["site_id"] = site_id
+        if not data.get("inspector_id"):
+            data["inspector_id"] = current.get("id")
         res = supabase.table("construction_inspections").insert(data).execute()
         if not res.data:
             raise HTTPException(status_code=500, detail="등록 실패")
         inspection = res.data[0]
         if data.get("overall_result") in ("FAIL", "ISSUE") and data.get("defect_count", 0) > 0:
             await send_fcm_inspection_alert(supabase, site_id=site_id, inspection_id=inspection["id"], defect_count=data.get("defect_count", 1))
-        return {"status": "success", "data": _alias_inspection_row(inspection)}
+        return {"status": "success", "data": _enrich_inspection_rows(supabase, [inspection])[0]}
     except HTTPException:
         raise
     except Exception as e:
@@ -781,7 +792,7 @@ async def get_inspection(inspection_id: str, current: dict = Depends(get_current
     row = get_record_or_none(supabase, "construction_inspections", inspection_id)
     if not row:
         raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다.")
-    return {"status": "success", "data": _alias_inspection_row(row)}
+    return {"status": "success", "data": _enrich_inspection_rows(supabase, [row])[0]}
 
 
 @router.patch("/inspections/{inspection_id}")
@@ -796,7 +807,7 @@ async def update_inspection(inspection_id: str, body: InspectionPatch, current: 
         updated = update_record(supabase, "construction_inspections", inspection_id, data, _now_iso)
         if not updated:
             raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다.")
-        return {"status": "success", "data": _alias_inspection_row(updated)}
+        return {"status": "success", "data": _enrich_inspection_rows(supabase, [updated])[0]}
     except HTTPException:
         raise
     except Exception as e:
@@ -814,7 +825,7 @@ async def update_corrective(inspection_id: str, body: CorrectivePatch, current: 
     res = supabase.table("construction_inspections").update(data).eq("id", inspection_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다.")
-    return {"status": "success", "data": _alias_inspection_row(res.data[0])}
+    return {"status": "success", "data": _enrich_inspection_rows(supabase, [res.data[0]])[0]}
 
 
 @router.delete("/inspections/{inspection_id}")
