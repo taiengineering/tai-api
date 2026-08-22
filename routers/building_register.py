@@ -307,11 +307,8 @@ async def juso_search(
 # 건축물대장 API
 # ============================================================
 
-def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, rows: int = 10, plat_gb: str = "0") -> Optional[list]:
-    if not BUILDING_KEY:
-        print(f"[BUILDING] BUILDING_API_KEY 미설정 — {endpoint} 스킵")
-        return None
-    plat_gb = "1" if str(plat_gb).strip() == "1" else "0"
+def _building_call_once(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, rows: int, plat_gb: str) -> Optional[list]:
+    """건축물대장 단일 호출 (platGbCd 고정). 결과 없으면 None."""
     try:
         r = requests.get(f"{BUILDING_BASE}/{endpoint}", params={
             "serviceKey": BUILDING_KEY,
@@ -324,7 +321,7 @@ def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, r
             "pageNo":     1,
             "_type":      "json"
         }, verify=False, timeout=15)
-        print(f"[BUILDING] {endpoint} HTTP={r.status_code}")
+        print(f"[BUILDING] {endpoint} platGbCd={plat_gb} HTTP={r.status_code}")
         try:
             data = r.json()
         except Exception:
@@ -351,11 +348,25 @@ def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, r
             return None
         if isinstance(items, dict):
             items = [items]
-        print(f"[BUILDING] {endpoint} {len(items)}건")
+        print(f"[BUILDING] {endpoint} platGbCd={plat_gb} {len(items)}건")
         return items or None
     except Exception as e:
-        print(f"[BUILDING ERROR] {endpoint}: {e}")
+        print(f"[BUILDING ERROR] {endpoint} platGbCd={plat_gb}: {e}")
         return None
+
+
+def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, rows: int = 10, plat_gb: str = "0") -> Optional[list]:
+    if not BUILDING_KEY:
+        print(f"[BUILDING] BUILDING_API_KEY 미설정 — {endpoint} 스킵")
+        return None
+    # 대지구분(platGbCd)은 건물관리번호의 산여부와 1:1 대응하지 않으므로,
+    # 대지(0) 우선 조회 후 결과가 없으면 산(1)으로 폴백한다. (공식 응답 검증: 대지 platGbCd=0)
+    first = "1" if str(plat_gb).strip() == "1" else "0"
+    second = "0" if first == "1" else "1"
+    items = _building_call_once(endpoint, sigungu, bjdong, bun, ji, rows, first)
+    if items:
+        return items
+    return _building_call_once(endpoint, sigungu, bjdong, bun, ji, rows, second)
 
 
 def get_building_title(sigungu, bjdong, bun, ji="0000", plat_gb="0"):
