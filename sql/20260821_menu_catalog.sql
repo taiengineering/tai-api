@@ -43,6 +43,7 @@ INSERT INTO public.menu_catalog (menu_code, title, group_code, group_title, sort
   ('safety-info', '안전정보', 'ETC', '기타', 1000, '{}'),
   ('equipment-qr-manager', 'QR/RFID 설비관리', 'ETC', '기타', 1010, '{}'),
   ('construction-site-list', '건설현장목록', 'ETC', '기타', 1020, '{CONSTRUCTION}'),
+  ('construction-subcontractor-list', '하도급관리', 'ETC', '기타', 1025, '{CONSTRUCTION}'),
   ('construction-process-list', '건설공정목록', 'ETC', '기타', 1030, '{CONSTRUCTION}'),
   ('construction-inspection-list', '건설점검목록', 'ETC', '기타', 1040, '{CONSTRUCTION}'),
   ('construction-inspection-anchor', '건설 점검항목관리', 'ETC', '기타', 1050, '{CONSTRUCTION}'),

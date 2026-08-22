@@ -34,6 +34,37 @@ def _ensure_sub_own(sb, subcontractor_id, current) -> None:
     _ensure_site_own(sb, r.data[0]["site_id"], current)
 
 
+def _has_active_children(sb, subcontractor_id) -> bool:
+    r = (
+        sb.table("subcontractors")
+        .select("id")
+        .eq("parent_subcontractor_id", str(subcontractor_id))
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+    return bool(r.data)
+
+
+def _derive_parent(sb, site_id: str, parent_id: UUID):
+    """같은 현장 상위 수급인 조회. 없으면 400."""
+    p = (
+        sb.table("subcontractors")
+        .select("id, site_id, tier, is_active")
+        .eq("id", str(parent_id))
+        .limit(1)
+        .execute()
+    )
+    if not p.data:
+        raise HTTPException(400, "상위 수급인을 찾을 수 없습니다.")
+    row = p.data[0]
+    if row.get("is_active") is False:
+        raise HTTPException(400, "상위 수급인을 찾을 수 없습니다.")
+    if str(row["site_id"]) != str(site_id):
+        raise HTTPException(400, "상위 수급인은 같은 현장이어야 합니다.")
+    return row
+
+
 # ── Schemas ──
 class SubcontractorCreate(BaseModel):
     site_id: UUID
@@ -52,6 +83,7 @@ class SubcontractorCreate(BaseModel):
     contact_phone: Optional[str] = None
     contact_email: Optional[str] = None
     notes: Optional[str] = None
+    parent_subcontractor_id: Optional[UUID] = None
 
 
 class SubcontractorUpdate(BaseModel):
@@ -71,6 +103,7 @@ class SubcontractorUpdate(BaseModel):
     status_code: Optional[str] = None
     is_active: Optional[bool] = None
     notes: Optional[str] = None
+    parent_subcontractor_id: Optional[UUID] = None
 
 
 # ── List ──
@@ -128,9 +161,16 @@ async def get_subcontractor(subcontractor_id: UUID, current: dict = Depends(get_
 async def create_subcontractor(body: SubcontractorCreate, current: dict = Depends(get_current_user)):
     sb = get_supabase()
     _ensure_site_own(sb, body.site_id, current)
-    payload = body.model_dump(mode="json")
+    payload = body.model_dump(mode="json", exclude={"parent_subcontractor_id"})
     payload["site_id"] = str(body.site_id)
     payload["company_id"] = str(body.company_id)
+    if body.parent_subcontractor_id:
+        parent = _derive_parent(sb, str(body.site_id), body.parent_subcontractor_id)
+        payload["tier"] = int(parent["tier"] or 1) + 1
+        payload["parent_subcontractor_id"] = str(body.parent_subcontractor_id)
+    else:
+        payload["tier"] = 1
+        payload["parent_subcontractor_id"] = None
     res = sb.table("subcontractors").insert(payload).execute()
     if not res.data:
         raise HTTPException(500, "하도급업체 생성 실패")
@@ -142,7 +182,30 @@ async def create_subcontractor(body: SubcontractorCreate, current: dict = Depend
 async def update_subcontractor(subcontractor_id: UUID, body: SubcontractorUpdate, current: dict = Depends(get_current_user)):
     sb = get_supabase()
     _ensure_sub_own(sb, subcontractor_id, current)
-    payload = body.model_dump(exclude_none=True, mode="json")
+    payload = body.model_dump(exclude_none=True, mode="json", exclude={"parent_subcontractor_id"})
+    if "parent_subcontractor_id" in body.model_fields_set:
+        if _has_active_children(sb, subcontractor_id):
+            raise HTTPException(400, "하위가 있어 상위를 바꿀 수 없습니다.")
+        cur = (
+            sb.table("subcontractors")
+            .select("id, site_id")
+            .eq("id", str(subcontractor_id))
+            .limit(1)
+            .execute()
+        )
+        if not cur.data:
+            raise HTTPException(404, "하도급업체를 찾을 수 없습니다.")
+        site_id = cur.data[0]["site_id"]
+        new_parent = body.parent_subcontractor_id
+        if new_parent is None:
+            payload["parent_subcontractor_id"] = None
+            payload["tier"] = 1
+        else:
+            if str(new_parent) == str(subcontractor_id):
+                raise HTTPException(400, "자기 자신을 상위로 지정할 수 없습니다.")
+            parent = _derive_parent(sb, site_id, new_parent)
+            payload["parent_subcontractor_id"] = str(new_parent)
+            payload["tier"] = int(parent["tier"] or 1) + 1
     if not payload:
         raise HTTPException(400, "수정할 항목이 없습니다.")
     payload["updated_at"] = datetime.utcnow().isoformat()
@@ -157,6 +220,8 @@ async def update_subcontractor(subcontractor_id: UUID, body: SubcontractorUpdate
 async def delete_subcontractor(subcontractor_id: UUID, current: dict = Depends(get_current_user)):
     sb = get_supabase()
     _ensure_sub_own(sb, subcontractor_id, current)
+    if _has_active_children(sb, subcontractor_id):
+        raise HTTPException(400, "하위 수급인을 먼저 정리하세요.")
     # soft delete
     res = sb.table("subcontractors").update(
         {"is_active": False, "status_code": "TERMINATED", "updated_at": datetime.utcnow().isoformat()}
