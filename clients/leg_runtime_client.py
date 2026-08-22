@@ -150,6 +150,9 @@ _LEG_INPUT_FIELDS = (
     # numeric은 canonical_applicability VERBATIM 경로로 float 보존(Nexas _NUMERIC_FIELDS 미등록).
     "work_height_m", "has_truck_loading_unloading", "truck_loading_height_m",
     "has_manual_heavy_handling", "manual_handling_weight_kg",
+    # WO-LEG-ELEVATOR-OPTION-A-POST-HOTFIX-REBASE-AND-IMPLEMENT-01:
+    # 건물 승강기(승강기법) 축. 산업 리프트(has_elevator, 산안규칙)와 분리.
+    "has_building_elevator",
 )
 
 
@@ -186,6 +189,16 @@ def build_facility(step1_body: Any) -> Dict[str, Any]:
         if isinstance(val, str) and not val.strip():
             continue
         facility[code] = val
+    # WO-LEG-ELEVATOR-OPTION-A: 건물 승강기(승강기법) 축.
+    # 명시적 sector==BUILDING gate — INDUSTRIAL/CONSTRUCTION elevator_count 오염 방지.
+    # 산업 리프트(has_elevator, 산안규칙)와 분리된 축이며, has_elevator는 무접촉.
+    _sector = getattr(step1_body, "sector", None)
+    if _sector == "BUILDING":
+        _ec = getattr(step1_body, "elevator_count", None)
+        if _ec is None:
+            _ec = inp.get("elevator_count")
+        if isinstance(_ec, (int, float)) and not isinstance(_ec, bool) and _ec > 0:
+            facility["has_building_elevator"] = True
     return facility
 
 
