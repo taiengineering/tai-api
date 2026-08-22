@@ -146,6 +146,10 @@ _LEG_INPUT_FIELDS = (
     "has_high_place_work", "gas_capacity_kg", "has_gondola", "has_water_tank", "has_press",
     "has_fire_hydrant", "has_emergency_broadcast", "has_hazmat_storage", "has_sprinkler",
     "has_emergency_gen", "has_casting", "has_plating",
+    # WO-LEG-SAFETY-3-CONSUMER-INPUT-IMPLEMENT-01: 산안49/187/665 소비자 입력 5축(append).
+    # numeric은 canonical_applicability VERBATIM 경로로 float 보존(Nexas _NUMERIC_FIELDS 미등록).
+    "work_height_m", "has_truck_loading_unloading", "truck_loading_height_m",
+    "has_manual_heavy_handling", "manual_handling_weight_kg",
 )
 
 
