@@ -405,32 +405,44 @@ def _probe_send(method, url, params=None, proxies=None):
     return o
 
 
+def _outbound_proxies():
+    """payment_helpers.get_proxies() 동일 — OUTBOUND_PROXY(이니시스 고정IP) 경유."""
+    proxy = os.getenv("OUTBOUND_PROXY", "").strip()
+    if not proxy:
+        return None
+    scheme, sep, rest = proxy.partition("://")
+    if sep and "@" not in rest:
+        user = os.getenv("PROXY_USER", "").strip()
+        pw = os.getenv("PROXY_PASS", "").strip()
+        if user and pw:
+            proxy = f"{scheme}://{quote(user, safe='')}:{quote(pw, safe='')}@{rest}"
+    return {"http": proxy, "https": proxy}
+
+
 def _building_probe_key(sg, bj, bun, ji):
-    """정답 라우터 대조: 후보 env 지문 + DATA_GO_KR_SERVICE_KEY(+한국프록시) 레퍼런스 검증."""
+    """OUTBOUND_PROXY(이니시스 고정IP) 경유 + 후보 키 env 각각으로 레퍼런스(개포동, 34건) 검증."""
     def fp(name):
         v = os.getenv(name, "") or ""
         return {"set": bool(v), "len": len(v), "head4": v[:4], "tail6": v[-6:],
                 "has_pct": "%" in v, "has_plus_slash_eq": any(c in v for c in ("+", "/", "="))}
-    cands = ["BUILDING_API_KEY", "BUILDING_REGISTER_API_KEY", "DATA_GO_KR_SERVICE_KEY",
+    cands = ["DATA_GO_KR_SERVICE_KEY", "BUILDING_REGISTER_API_KEY", "BUILDING_API_KEY",
              "KOSHA_SERVICE_KEY", "FIRE_SERVICE_KEY", "SAFETY_INFO_SERVICE_KEY"]
-    proxy = (os.getenv("DATA_GO_KR_HTTP_PROXY", "") or os.getenv("KMC_HTTP_PROXY", "")).strip()
-    proxies = {"http": proxy, "https": proxy} if proxy else None
+    proxies = _outbound_proxies()
     out = {
         "_expected_totalCount": "약 34",
+        "OUTBOUND_PROXY_set": bool(os.getenv("OUTBOUND_PROXY", "")),
+        "proxy_used": bool(proxies),
         "env_fingerprints": {n: fp(n) for n in cands},
-        "proxy": {"DATA_GO_KR_HTTP_PROXY_set": bool(os.getenv("DATA_GO_KR_HTTP_PROXY", "")),
-                  "KMC_HTTP_PROXY_set": bool(os.getenv("KMC_HTTP_PROXY", "")),
-                  "proxy_used": bool(proxies)},
+        "via_proxy": {},
     }
     base = f"{BUILDING_BASE}/getBrTitleInfo"
     tail = "sigunguCd=11680&bjdongCd=10300&bun=0012&ji=0000&numOfRows=10&pageNo=1&_type=json"
-    dgk = os.getenv("DATA_GO_KR_SERVICE_KEY", "").strip()
-    if dgk:
-        keyparam = dgk if "%" in dgk else quote(dgk, safe="")  # holiday _key_param 패턴
-        out["A_dgk_proxy"] = _probe_send("requests_url", f"{base}?{tail}&serviceKey={keyparam}", None, proxies)
-        out["B_dgk_direct"] = _probe_send("requests_url", f"{base}?{tail}&serviceKey={keyparam}", None, None)
-    else:
-        out["A_dgk_proxy"] = {"skip": "DATA_GO_KR_SERVICE_KEY 미설정"}
+    for n in cands:
+        k = os.getenv(n, "").strip()
+        if not k:
+            continue
+        kp = k if "%" in k else quote(k, safe="")  # holiday _key_param 패턴
+        out["via_proxy"][n] = _probe_send("requests_url", f"{base}?{tail}&serviceKey={kp}", None, proxies)
     return out
 
 def _get_title_sync(bdmgtsn: str) -> Optional[List[dict]]:
