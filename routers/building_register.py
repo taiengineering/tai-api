@@ -323,7 +323,16 @@ def _building_call_once(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: 
         }, verify=False, timeout=15)
         print(f"[BUILDING] {endpoint} platGbCd={plat_gb} HTTP={r.status_code}")
         if r.status_code != 200:
-            print(f"[BUILDING-DIAG] {endpoint} platGbCd={plat_gb} status={r.status_code} body={r.text[:300]}")
+            # 환경변수 오염(공백/개행/따옴표) 진단: 키 길이와 repr로 숨은 문자 노출
+            _klen = len(BUILDING_KEY)
+            _khead = BUILDING_KEY[:6]
+            _ktail = BUILDING_KEY[-6:]
+            _krepr = repr(BUILDING_KEY[:3] + "..." + BUILDING_KEY[-3:])
+            print(f"[BUILDING-DIAG] {endpoint} platGbCd={plat_gb} status={r.status_code} keylen={_klen} head={_khead} tail={_ktail} repr={_krepr}")
+            # requests가 실제 전송한 URL의 serviceKey 인코딩 확인
+            _u = r.url
+            _sk = _u.split("serviceKey=")[-1].split("&")[0] if "serviceKey=" in _u else "(none)"
+            print(f"[BUILDING-DIAG] {endpoint} sent_serviceKey_head={_sk[:12]} sent_serviceKey_tail={_sk[-12:]}")
         try:
             data = r.json()
         except Exception:
