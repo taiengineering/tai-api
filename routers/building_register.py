@@ -24,7 +24,7 @@ BUILDING_KEY  = os.environ.get("BUILDING_API_KEY", "")
 VERSION       = "2.4.0"
 
 JUSO_URL      = "https://business.juso.go.kr/addrlink/addrLinkApi.do"
-BUILDING_BASE = "https://apis.data.go.kr/1613000/BldRgstHubService"
+BUILDING_BASE = "http://apis.data.go.kr/1613000/BldRgstService_v2"
 
 
 def get_supabase():
@@ -371,80 +371,6 @@ def get_sewage_info(sigungu, bjdong, bun, ji="0000", plat_gb="0"):
     return _building_get("getBrExposPublcRqstInfo", sigungu, bjdong, bun, ji, plat_gb=plat_gb)
 
 
-def _probe_send(method, url, params=None, proxies=None):
-    o = {"method": method}
-    try:
-        if method == "urllib":
-            import ssl, urllib.request
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            with urllib.request.urlopen(urllib.request.Request(url), context=ctx, timeout=15) as resp:
-                o["http"] = getattr(resp, "status", None)
-                txt = resp.read().decode("utf-8", "ignore")
-                o["sent_url_pct25"] = "%25" in url
-        else:
-            r = requests.get(url, params=params, verify=False, timeout=20, proxies=proxies)
-            o["http"] = r.status_code
-            txt = r.text
-            o["sent_url_pct25"] = "%25" in (r.request.url or "")
-        try:
-            import json as _j
-            d = _j.loads(txt)
-            resp = d.get("response") or {}
-            o["resultCode"] = (resp.get("header") or {}).get("resultCode")
-            o["totalCount"] = (resp.get("body") or {}).get("totalCount")
-            err = (d.get("OpenAPI_ServiceResponse") or {}).get("cmmMsgHeader")
-            if isinstance(err, dict):
-                o["reason"] = err.get("returnReasonCode")
-                o["errMsg"] = err.get("errMsg")
-        except Exception:
-            o["raw"] = txt[:150]
-    except Exception as e:
-        o["exception"] = f"{type(e).__name__}: {str(e)[:150]}"
-    return o
-
-
-def _outbound_proxies():
-    """payment_helpers.get_proxies() 동일 — OUTBOUND_PROXY(이니시스 고정IP) 경유."""
-    proxy = os.getenv("OUTBOUND_PROXY", "").strip()
-    if not proxy:
-        return None
-    scheme, sep, rest = proxy.partition("://")
-    if sep and "@" not in rest:
-        user = os.getenv("PROXY_USER", "").strip()
-        pw = os.getenv("PROXY_PASS", "").strip()
-        if user and pw:
-            proxy = f"{scheme}://{quote(user, safe='')}:{quote(pw, safe='')}@{rest}"
-    return {"http": proxy, "https": proxy}
-
-
-def _building_probe_key(sg, bj, bun, ji):
-    """OUTBOUND_PROXY(이니시스 고정IP) 경유 + 후보 키 env 각각으로 레퍼런스(개포동, 34건) 검증."""
-    def fp(name):
-        v = os.getenv(name, "") or ""
-        return {"set": bool(v), "len": len(v), "head4": v[:4], "tail6": v[-6:],
-                "has_pct": "%" in v, "has_plus_slash_eq": any(c in v for c in ("+", "/", "="))}
-    cands = ["DATA_GO_KR_SERVICE_KEY", "BUILDING_REGISTER_API_KEY", "BUILDING_API_KEY",
-             "KOSHA_SERVICE_KEY", "FIRE_SERVICE_KEY", "SAFETY_INFO_SERVICE_KEY"]
-    proxies = _outbound_proxies()
-    out = {
-        "_expected_totalCount": "약 34",
-        "OUTBOUND_PROXY_set": bool(os.getenv("OUTBOUND_PROXY", "")),
-        "proxy_used": bool(proxies),
-        "env_fingerprints": {n: fp(n) for n in cands},
-        "via_proxy": {},
-    }
-    base = f"{BUILDING_BASE}/getBrTitleInfo"
-    tail = "sigunguCd=11680&bjdongCd=10300&bun=0012&ji=0000&numOfRows=10&pageNo=1&_type=json"
-    for n in cands:
-        k = os.getenv(n, "").strip()
-        if not k:
-            continue
-        kp = k if "%" in k else quote(k, safe="")  # holiday _key_param 패턴
-        out["via_proxy"][n] = _probe_send("requests_url", f"{base}?{tail}&serviceKey={kp}", None, proxies)
-    return out
-
 def _get_title_sync(bdmgtsn: str) -> Optional[List[dict]]:
     p = parse_bdmgtsn(bdmgtsn)
     if not p:
@@ -609,8 +535,6 @@ def diagnose(address: str = Query("인천광역시 서구 가좌로 123", descri
         try:
             parsed = parse_bdmgtsn(bdmgtsn)
             result["bdmgtsn_parsed"] = parsed
-            result["building_probe"] = _building_probe_key(
-                parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"])
             _pg = parsed.get("mountain", "0")
             title = get_building_title(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], plat_gb=_pg)
             if not title:
