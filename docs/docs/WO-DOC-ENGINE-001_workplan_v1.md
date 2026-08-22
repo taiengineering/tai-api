@@ -1,7 +1,7 @@
 # 작업계획서 WO-DOC-ENGINE-001 — 문서엔진 생성 파이프라인 배선 v1
 
 > 작성일: 2026-08-22
-> 상태: 진행중 (WO-1·WO-2 완료, WO-3 대기)
+> 상태: 진행중 (WO-1·WO-2·WO-3 완료, WO-4 진행중)
 > 상위: DOCUMENT_ENGINE_MASTER_PLAN_v1 (로드맵 단계 2~5)
 > 근거: DOCUMENT_CODE_CONVENTION_v1 · DOCUMENT_SOURCE_MAPPING_v1
 > 목표: 즉시가용 A등급 문서를 실제 생성 가능 상태로. 신규 엔진 없이 기존 검증 자산(renderer·fetcher·compliance_report 패턴) 재활용.
@@ -9,7 +9,7 @@
 ## 결정 (operator 2026-08-22)
 - 매핑 저장 = **별도 테이블**.
 - 2겹 레지스트리 = **테이블**.
-- WO-1 착수 승인 완료.
+- WO-1·WO-3 착수 승인 완료. 발행 단위 = 단건형(inspection_id 기반).
 
 ---
 
@@ -29,24 +29,24 @@
 
 ### WO-2 · 2겹 매핑 (유형 → 템플릿·fetcher 레지스트리) — ✅ 완료
 - **테이블** `document_type_registry` 신설(8행): doc_type → template_file·fetcher_key·evidence_source·fetcher_status.
-- fetcher_status 실측 결과:
-  - EXISTING(기존 fetcher 즉시): INSP·EQUIP·TBM·CHK·PPE = **24건**.
-  - NEW_NEEDED: CONLOG·EDU.
-  - NO_SOURCE(입력폼): APPT.
+- fetcher_status: EXISTING(INSP·EQUIP·TBM·CHK·PPE=24건) / NEW_NEEDED(CONLOG·EDU) / NO_SOURCE(APPT).
 - 검증: 8유형 등록, 1겹 매핑 30건과 조인 정합.
 
-### WO-3 · 생성 경로 배선 — 대기
-- document_forms(또는 신규) 라우터에 `/{doc_type}/preview`·`/{doc_type}/generate` 추가.
-- compliance_report 패턴 일반화: registry로 fetcher·template 조회 → 조립 → renderer → PDF.
-- 발행 코드(TYPE-사업장-YYYYMMDD-[세부]) 생성 규칙 적용.
-- 우선 대상: fetcher_status=EXISTING 24건(INSP·EQUIP·TBM·CHK·PPE).
-- 검증: 목업 데이터로 INSP·TBM PDF 생성 성공(compliance_report와 동일 경로).
+### WO-3 · 생성 경로 배선 — ✅ 완료 (코드) / Railway 검증 대기
+- 신규 라우터 `routers/document_generate.py`: `/documents/{doc_type}/preview`·`/generate` + 발행코드.
+- 신규 서비스 `services/document_engine/generator.py`: registry 디스패치 → fetcher → renderer(compliance_report 패턴 일반화).
+- fetcher 계약 통일(fetch(params)): base_fetcher·inspection_fetcher·tbm_fetcher 수정.
+- **inspection_fetcher 스키마 수리**: safety_inspections에 factory_id 없음 → asset 경유. name→asset_name, location→location_detail. try/except 방어.
+- router_registry/document_engine.py 에 등록.
+- 검증: 코드 정합(스키마·import·계약) 완료. 실 PDF 생성은 Gotenberg 필요 → **operator Railway 배포 후 확인**.
 
-### WO-4 · 템플릿 제작 (즉시가용 우선) — 대기
+### WO-4 · 템플릿 제작 (즉시가용 우선) — 진행중
 - 순서: INSP → EQUIP → TBM(기존 재활용) → CHK → PPE.
 - 각 템플릿: 표준 소스 지도(DOCUMENT_STANDARD_SOURCES) 따라 구성요소 확정 후 제작.
+- 데이터 계약: inspection_fetcher 출력(company/factory/inspector/asset/items/issue_items…)에 맞춰 작성.
 - EQUIP은 1템플릿 + 대상 데이터 주입.
-- 검증: 유형별 목업 렌더 PDF 육안 확인.
+- **TBM 템플릿 파일명 정리 필요**: registry는 DOC-TBM.html인데 기존 파일은 DOC-OSH-056.html. 재활용하려면 registry 조정 또는 신규 제작.
+- 검증: 유형별 목업 렌더 PDF 육안 확인(Railway).
 
 ## 2. 산출물 요약
 
@@ -54,8 +54,8 @@
 |---|---|---|---|
 | WO-1 | document_type_mapping + 30건 분류 | 30건 doc_type 채움 | ✅ |
 | WO-2 | document_type_registry 8행 | 8유형 해소 | ✅ |
-| WO-3 | 범용 preview/generate 라우터·서비스 | 목업 PDF 생성 | 대기 |
-| WO-4 | 즉시가용 유형 템플릿 5종 | 렌더 육안 확인 | 대기 |
+| WO-3 | 범용 generate 라우터·서비스 + fetcher 수리 | 코드 정합 ✅ / PDF Railway | ✅(코드) |
+| WO-4 | 즉시가용 유형 템플릿 5종 | 렌더 육안 확인 | 진행중 |
 
 ## 3. 범위 밖 (별도 WO)
 
@@ -77,4 +77,4 @@
 
 ---
 
-*WO-1·WO-2 완료. 다음 WO-3(생성 배선)은 EXISTING 24건 우선. 각 단계 검증 후 진행.*
+*WO-1·WO-2·WO-3 완료. WO-4(템플릿) 진행중. 실 PDF 검증은 Railway 배포 후.*
