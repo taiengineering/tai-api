@@ -406,21 +406,31 @@ def _probe_send(method, url, params=None):
 
 
 def _building_probe_key(sg, bj, bun, ji):
-    """인코딩키 이중인코딩 방지 조립법 확정 — 레퍼런스(강남 개포동, totalCount≈34)로 검증."""
+    """서버에서 '작동한 브라우저 호출'을 1:1 복제 후 변수 하나씩만 변경해 정확한 원인 격리."""
     KEY = BUILDING_KEY or ""
-    base = f"{BUILDING_BASE}/getBrTitleInfo"
-    rsg, rbj, rbun, rji = "11680", "10300", "0012", "0000"  # 데이터 확실
-    common = f"sigunguCd={rsg}&bjdongCd={rbj}&platGbCd=0&bun={rbun}&ji={rji}&numOfRows=10&pageNo=1&_type=json"
-    out = {"_expected_totalCount": "약 34"}
-    # 1) 수동 URL 전체 조립, params 없음 (requests가 %를 재인코딩하는지 확인)
-    out["ref_manual_url"] = _probe_send("requests_url", f"{base}?serviceKey={KEY}&{common}", None)
-    # 2) urllib 직접 (requests 우회 — % 재인코딩 원천 차단)
-    out["ref_urllib"] = _probe_send("urllib", f"{base}?serviceKey={KEY}&{common}", None)
-    # 3) serviceKey는 URL에, 나머지 파라미터만 params로
-    out["ref_key_in_url_rest_params"] = _probe_send(
-        "requests_url", f"{base}?serviceKey={KEY}",
-        {"sigunguCd": rsg, "bjdongCd": rbj, "platGbCd": "0", "bun": rbun, "ji": rji,
-         "numOfRows": 10, "pageNo": 1, "_type": "json"})
+    base_http  = "http://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo"
+    base_https = f"{BUILDING_BASE}/getBrTitleInfo"
+    rsg, rbj, rbun, rji = "11680", "10300", "0012", "0000"  # 강남 개포동, 데이터 확실
+    # 브라우저 성공 URL과 동일: serviceKey 맨뒤, platGbCd 없음
+    tail = f"sigunguCd={rsg}&bjdongCd={rbj}&bun={rbun}&ji={rji}&numOfRows=10&pageNo=1&_type=json"
+    out = {
+        "_expected_totalCount": "약 34",
+        "key_fingerprint": {
+            "len": len(KEY),
+            "head4": KEY[:4],
+            "tail6": KEY[-6:],
+            "has_percent": "%" in KEY,
+            "has_whitespace": any(c in KEY for c in (" ", "\t", "\n", "\r")),
+        },
+    }
+    # V1: 브라우저 성공 URL 완전 복제 (http · serviceKey 맨뒤 · platGbCd 없음)
+    out["V1_browser_replica_http"] = _probe_send("requests_url", f"{base_http}?{tail}&serviceKey={KEY}", None)
+    # V2: V1과 동일하나 https
+    out["V2_same_https"] = _probe_send("requests_url", f"{base_https}?{tail}&serviceKey={KEY}", None)
+    # V3: https · serviceKey 맨앞
+    out["V3_https_key_first"] = _probe_send("requests_url", f"{base_https}?serviceKey={KEY}&{tail}", None)
+    # V4: https · platGbCd=0 추가
+    out["V4_https_platgb"] = _probe_send("requests_url", f"{base_https}?{tail}&platGbCd=0&serviceKey={KEY}", None)
     return out
 
 def _get_title_sync(bdmgtsn: str) -> Optional[List[dict]]:
