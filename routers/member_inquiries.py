@@ -3,6 +3,7 @@
 설계: docs(tai-www) 2026-08-14_TAI-고객응대-자동화_MVP-설계서.md §8-D, §15(1단계)
 
 - POST /me/inquiries : 로그인 회원이 SaaS 안에서 문의를 접수한다.
+- GET  /me/inquiries : 본인이 접수한 문의 목록 + 답변 조회(토큰 user_id 격리).
 - 신원(user_id/company_id)은 Bearer 토큰에서 서버가 파생한다(클라이언트 신뢰 금지).
   → routers.auth.get_current_user 재사용(토큰 검증 → users 행 반환).
 - source 는 서버가 항상 "saas" 로 고정한다(이 경로는 SaaS 회원 전용). 클라이언트 입력을 받지 않는다.
@@ -30,7 +31,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
@@ -205,6 +206,40 @@ def _save_member_inquiry(
         logger.exception("member inquiry slack notify failed")
 
     return saved
+
+
+@router.get("/inquiries")
+def list_member_inquiries(
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+):
+    """본인이 접수한 문의 목록 + 답변 조회. 토큰 user_id 로 격리(본인 것만)."""
+    supabase = get_supabase()
+    user_id = current_user.get("id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="사용자 식별에 실패했습니다.")
+    offset = (page - 1) * size
+    res = (
+        supabase.table("inquiries")
+        .select(
+            "id, no, category, title, content, answer, status, priority, page_url, replied_at, created_at",
+            count="exact",
+        )
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .range(offset, offset + size - 1)
+        .execute()
+    )
+    return {
+        "status": "success",
+        "data": {
+            "items": res.data or [],
+            "total": res.count or 0,
+            "page": page,
+            "size": size,
+        },
+    }
 
 
 @router.post("/inquiries")
