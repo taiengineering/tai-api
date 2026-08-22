@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>안전점검일지 — {{ company_name }}</title>
+<link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" rel="stylesheet">
+<link rel="stylesheet" href="_base.css">
+</head>
+<body>
+
+<!-- ═══ 헤더 ═══ -->
+<div class="doc-header">
+  <div class="doc-header-left">
+    <div class="doc-company">{{ company_name }}</div>
+    <div class="doc-facility">{{ factory_name }}{% if factory_address %} · {{ factory_address }}{% endif %}</div>
+    <div class="doc-title">안전점검일지</div>
+    <div class="doc-law">산업안전보건법 제38조</div>
+  </div>
+  <div class="doc-header-right">
+    {% if company_logo %}<img class="logo" src="{{ company_logo }}" alt="{{ company_name }}">{% endif %}
+    <div class="doc-code">INSP</div>
+  </div>
+</div>
+
+<!-- ═══ 1. 기본 정보 ═══ -->
+<table class="info-table">
+  <tr><th>점검일자</th><td>{{ inspection_date }}</td><th>점검자</th><td>{{ inspector_name }}</td></tr>
+  <tr><th>점검대상</th><td>{{ asset_name or doc_title }}</td><th>위치</th><td>{{ asset_location }}</td></tr>
+</table>
+
+<!-- ═══ 2. 점검 결과 요약 ═══ -->
+<div class="section-title">점검 결과 요약</div>
+<div class="weather-row">
+  <div class="weather-item">전체 <strong>{{ total_count }}</strong></div>
+  <div class="weather-item">정상 <strong style="color:#15803d;">{{ normal_count }}</strong></div>
+  <div class="weather-item">이상 <strong style="color:#dc2626;">{{ issue_count }}</strong></div>
+  <div class="weather-item">보류 <strong style="color:#b45309;">{{ hold_count }}</strong></div>
+</div>
+
+<!-- ═══ 3. 항목별 점검 결과 ═══ -->
+<div class="section-title">항목별 점검 결과</div>
+<table class="data-table">
+  <thead>
+    <tr><th style="width:26px">No</th><th>점검 항목</th><th style="width:56px">결과</th><th>비고</th></tr>
+  </thead>
+  <tbody>
+    {% for item in items %}
+    <tr{% if (item.result_code or '')|upper == 'ISSUE' %} class="issue-row"{% endif %}>
+      <td class="num">{{ loop.index }}</td>
+      <td>{{ item.item_name }}</td>
+      <td class="c">
+        {% set rc = (item.result_code or '')|upper %}
+        {% if rc == 'ISSUE' %}<span class="b b-r">이상</span>
+        {% elif rc == 'HOLD' %}<span class="b b-w">보류</span>
+        {% elif rc == 'NORMAL' %}<span class="b b-g">정상</span>
+        {% else %}<span class="b b-i">{{ item.result_code or '-' }}</span>{% endif %}
+      </td>
+      <td>{{ item.note or '' }}</td>
+    </tr>
+    {% endfor %}
+    {% if not items %}
+    <tr><td colspan="4" style="text-align:center;color:#94a3b8;padding:12px;">점검 항목 데이터가 없습니다.</td></tr>
+    {% endif %}
+  </tbody>
+</table>
+
+<!-- ═══ 4. 이상 항목 조치 ═══ -->
+{% if issue_items %}
+<div class="section-title">이상 항목 상세·조치</div>
+<table class="data-table">
+  <thead><tr><th style="width:26px">No</th><th>이상 항목</th><th>상세 내용</th></tr></thead>
+  <tbody>
+    {% for it in issue_items %}
+    <tr class="issue-row"><td class="num">{{ it.no }}</td><td>{{ it.item_name }}</td><td>{{ it.note or '' }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div style="font-size:8pt;color:#15803d;margin-top:4px;">※ 점검 결과 이상 없음</div>
+{% endif %}
+
+<!-- ═══ 5. 확인 ═══ -->
+<div class="sign-area">
+  <div class="sign-box"><div class="role">점검자</div><div class="sign-line">{{ inspector_name }}</div></div>
+  <div class="sign-box"><div class="role">관리감독자</div><div class="sign-line">{{ manager_name }}</div></div>
+</div>
+
+<!-- ═══ 푸터 ═══ -->
+<div class="doc-footer">
+  <span>{{ company_name }} · {{ factory_name }} · {{ inspection_date }}</span>
+  <span>Powered by TAI Safe</span>
+</div>
+
+</body>
+</html>
