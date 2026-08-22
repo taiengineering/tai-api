@@ -306,15 +306,17 @@ async def juso_search(
 # 건축물대장 API
 # ============================================================
 
-def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, rows: int = 10) -> Optional[list]:
+def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, rows: int = 10, plat_gb: str = "0") -> Optional[list]:
     if not BUILDING_KEY:
         print(f"[BUILDING] BUILDING_API_KEY 미설정 — {endpoint} 스킵")
         return None
+    plat_gb = "1" if str(plat_gb).strip() == "1" else "0"
     try:
         r = requests.get(f"{BUILDING_BASE}/{endpoint}", params={
             "serviceKey": BUILDING_KEY,
             "sigunguCd":  sigungu,
             "bjdongCd":   bjdong,
+            "platGbCd":   plat_gb,
             "bun":        bun,
             "ji":         ji,
             "numOfRows":  rows,
@@ -355,26 +357,27 @@ def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, r
         return None
 
 
-def get_building_title(sigungu, bjdong, bun, ji="0000"):
-    return _building_get("getBrTitleInfo", sigungu, bjdong, bun, ji)
+def get_building_title(sigungu, bjdong, bun, ji="0000", plat_gb="0"):
+    return _building_get("getBrTitleInfo", sigungu, bjdong, bun, ji, plat_gb=plat_gb)
 
-def get_building_basis(sigungu, bjdong, bun, ji="0000"):
-    return _building_get("getBrBasisOulnInfo", sigungu, bjdong, bun, ji)
+def get_building_basis(sigungu, bjdong, bun, ji="0000", plat_gb="0"):
+    return _building_get("getBrBasisOulnInfo", sigungu, bjdong, bun, ji, plat_gb=plat_gb)
 
-def get_floor_outline(sigungu, bjdong, bun, ji="0000"):
-    return _building_get("getBrFlrOulnInfo", sigungu, bjdong, bun, ji, rows=100)
+def get_floor_outline(sigungu, bjdong, bun, ji="0000", plat_gb="0"):
+    return _building_get("getBrFlrOulnInfo", sigungu, bjdong, bun, ji, rows=100, plat_gb=plat_gb)
 
-def get_sewage_info(sigungu, bjdong, bun, ji="0000"):
-    return _building_get("getBrExposPublcRqstInfo", sigungu, bjdong, bun, ji)
+def get_sewage_info(sigungu, bjdong, bun, ji="0000", plat_gb="0"):
+    return _building_get("getBrExposPublcRqstInfo", sigungu, bjdong, bun, ji, plat_gb=plat_gb)
 
 
 def _get_title_sync(bdmgtsn: str) -> Optional[List[dict]]:
     p = parse_bdmgtsn(bdmgtsn)
     if not p:
         return None
-    t = get_building_title(p["sigunguCd"], p["bjdongCd"], p["bun"], p["ji"])
+    pg = p.get("mountain", "0")
+    t = get_building_title(p["sigunguCd"], p["bjdongCd"], p["bun"], p["ji"], plat_gb=pg)
     if not t:
-        t = get_building_title(p["sigunguCd"], p["bjdongCd"], p["bun"], "0000")
+        t = get_building_title(p["sigunguCd"], p["bjdongCd"], p["bun"], "0000", plat_gb=pg)
     return t
 
 
@@ -387,14 +390,15 @@ def fetch_all_building_data(bdmgtsn: str) -> dict:
     if not p:
         return {}
     sg, bj, bun, ji = p["sigunguCd"], p["bjdongCd"], p["bun"], p["ji"]
+    pg = p.get("mountain", "0")
     result = {"bdmgtsn": bdmgtsn, "parsed": p}
-    title = get_building_title(sg, bj, bun, ji) or get_building_title(sg, bj, bun, "0000")
+    title = get_building_title(sg, bj, bun, ji, plat_gb=pg) or get_building_title(sg, bj, bun, "0000", plat_gb=pg)
     if title:
         ji = "0000"
     result["title"]  = title
-    result["basis"]  = get_building_basis(sg, bj, bun, ji)
-    result["floors"] = get_floor_outline(sg, bj, bun, ji)
-    result["sewage"] = get_sewage_info(sg, bj, bun, ji)
+    result["basis"]  = get_building_basis(sg, bj, bun, ji, plat_gb=pg)
+    result["floors"] = get_floor_outline(sg, bj, bun, ji, plat_gb=pg)
+    result["sewage"] = get_sewage_info(sg, bj, bun, ji, plat_gb=pg)
     return result
 
 
@@ -530,9 +534,10 @@ def diagnose(address: str = Query("인천광역시 서구 가좌로 123", descri
         try:
             parsed = parse_bdmgtsn(bdmgtsn)
             result["bdmgtsn_parsed"] = parsed
-            title = get_building_title(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"])
+            _pg = parsed.get("mountain", "0")
+            title = get_building_title(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], plat_gb=_pg)
             if not title:
-                title = get_building_title(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], "0000")
+                title = get_building_title(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], "0000", plat_gb=_pg)
                 result["title_fallback"] = "ji=0000으로 재시도"
 
             if title:
