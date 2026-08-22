@@ -322,10 +322,12 @@ def _building_call_once(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: 
             "_type":      "json"
         }, verify=False, timeout=15)
         print(f"[BUILDING] {endpoint} platGbCd={plat_gb} HTTP={r.status_code}")
+        if r.status_code != 200:
+            print(f"[BUILDING-DIAG] {endpoint} platGbCd={plat_gb} status={r.status_code} body={r.text[:300]}")
         try:
             data = r.json()
         except Exception:
-            print(f"[BUILDING] JSON 파싱 실패 응답: {r.text[:100]}")
+            print(f"[BUILDING] JSON 파싱 실패 응답: {r.text[:300]}")
             return None
 
         resp = data.get("response") if isinstance(data, dict) else None
