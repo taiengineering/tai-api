@@ -371,13 +371,26 @@ def get_sewage_info(sigungu, bjdong, bun, ji="0000", plat_gb="0"):
     return _building_get("getBrExposPublcRqstInfo", sigungu, bjdong, bun, ji, plat_gb=plat_gb)
 
 
-def _probe_call(url, params):
-    o = {}
+def _probe_send(method, url, params=None):
+    o = {"method": method}
     try:
-        r = requests.get(url, params=params, verify=False, timeout=15)
-        o["http"] = r.status_code
+        if method == "urllib":
+            import ssl, urllib.request
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with urllib.request.urlopen(urllib.request.Request(url), context=ctx, timeout=15) as resp:
+                o["http"] = getattr(resp, "status", None)
+                txt = resp.read().decode("utf-8", "ignore")
+                o["sent_url_pct25"] = "%25" in url
+        else:
+            r = requests.get(url, params=params, verify=False, timeout=15)
+            o["http"] = r.status_code
+            txt = r.text
+            o["sent_url_pct25"] = "%25" in (r.request.url or "")
         try:
-            d = r.json()
+            import json as _j
+            d = _j.loads(txt)
             resp = d.get("response") or {}
             o["resultCode"] = (resp.get("header") or {}).get("resultCode")
             o["totalCount"] = (resp.get("body") or {}).get("totalCount")
@@ -386,40 +399,29 @@ def _probe_call(url, params):
                 o["reason"] = err.get("returnReasonCode")
                 o["errMsg"] = err.get("errMsg")
         except Exception:
-            o["raw"] = r.text[:200]
+            o["raw"] = txt[:150]
     except Exception as e:
         o["exception"] = f"{type(e).__name__}: {str(e)[:150]}"
     return o
 
 
-def _building_probe_matrix(sg, bj, bun, ji):
-    """getBrTitleInfo 요청 구성 매트릭스 — 어떤 조합이 통과하는지 확정."""
-    key = BUILDING_KEY or ""
+def _building_probe_key(sg, bj, bun, ji):
+    """인코딩키 이중인코딩 방지 조립법 확정 — 레퍼런스(강남 개포동, totalCount≈34)로 검증."""
+    KEY = BUILDING_KEY or ""
     base = f"{BUILDING_BASE}/getBrTitleInfo"
-    bun_u = str(int(bun)) if str(bun).isdigit() else str(bun)      # 비패딩
-    ji_i = int(ji) if str(ji).isdigit() else 0
-    ji_u = str(ji_i) if ji_i != 0 else ""                          # 비패딩(0이면 빈값)
-    common = f"sigunguCd={sg}&bjdongCd={bj}&numOfRows=10&pageNo=1&_type=json"
-    out = {}
-    # A: URL문자열 · 키 as-is · 비패딩 · platGbCd 없음
-    out["A_str_keyasis_unpad_noplat"] = _probe_call(
-        f"{base}?serviceKey={key}&{common}&bun={bun_u}&ji={ji_u}", None)
-    # B: URL문자열 · 키 quote · 비패딩 · platGbCd 없음
-    out["B_str_keyquote_unpad_noplat"] = _probe_call(
-        f"{base}?serviceKey={quote(key)}&{common}&bun={bun_u}&ji={ji_u}", None)
-    # C: params · 비패딩 · platGbCd 없음
-    out["C_params_unpad_noplat"] = _probe_call(base, {
-        "serviceKey": key, "sigunguCd": sg, "bjdongCd": bj,
-        "bun": bun_u, "ji": ji_u, "numOfRows": 10, "pageNo": 1, "_type": "json"})
-    # D: params · 패딩 · platGbCd 없음 (패딩 격리)
-    out["D_params_pad_noplat"] = _probe_call(base, {
-        "serviceKey": key, "sigunguCd": sg, "bjdongCd": bj,
-        "bun": bun, "ji": ji, "numOfRows": 10, "pageNo": 1, "_type": "json"})
-    # E: URL문자열 · 키 quote · 비패딩 · platGbCd 빈값
-    out["E_str_keyquote_unpad_platempty"] = _probe_call(
-        f"{base}?serviceKey={quote(key)}&{common}&platGbCd=&bun={bun_u}&ji={ji_u}", None)
+    rsg, rbj, rbun, rji = "11680", "10300", "0012", "0000"  # 데이터 확실
+    common = f"sigunguCd={rsg}&bjdongCd={rbj}&platGbCd=0&bun={rbun}&ji={rji}&numOfRows=10&pageNo=1&_type=json"
+    out = {"_expected_totalCount": "약 34"}
+    # 1) 수동 URL 전체 조립, params 없음 (requests가 %를 재인코딩하는지 확인)
+    out["ref_manual_url"] = _probe_send("requests_url", f"{base}?serviceKey={KEY}&{common}", None)
+    # 2) urllib 직접 (requests 우회 — % 재인코딩 원천 차단)
+    out["ref_urllib"] = _probe_send("urllib", f"{base}?serviceKey={KEY}&{common}", None)
+    # 3) serviceKey는 URL에, 나머지 파라미터만 params로
+    out["ref_key_in_url_rest_params"] = _probe_send(
+        "requests_url", f"{base}?serviceKey={KEY}",
+        {"sigunguCd": rsg, "bjdongCd": rbj, "platGbCd": "0", "bun": rbun, "ji": rji,
+         "numOfRows": 10, "pageNo": 1, "_type": "json"})
     return out
-
 
 def _get_title_sync(bdmgtsn: str) -> Optional[List[dict]]:
     p = parse_bdmgtsn(bdmgtsn)
@@ -585,7 +587,7 @@ def diagnose(address: str = Query("인천광역시 서구 가좌로 123", descri
         try:
             parsed = parse_bdmgtsn(bdmgtsn)
             result["bdmgtsn_parsed"] = parsed
-            result["building_probe"] = _building_probe_matrix(
+            result["building_probe"] = _building_probe_key(
                 parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"])
             _pg = parsed.get("mountain", "0")
             title = get_building_title(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], plat_gb=_pg)
