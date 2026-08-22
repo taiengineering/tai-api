@@ -94,10 +94,33 @@ _RESOURCE_PREFIX = {
 
 _PARAM_RE = re.compile(r"\{[^/]+\}")
 
+# 근로자 앱(PWA) prefix — 인증은 유지, role_menu 게이트만 제외.
+# /tbm 은 exact-or-child (/tbm-templates 와 구분). /worker 는 /worker-check·/worker-registry 와 구분.
+# inspection-sets 확장 시 worker read(/inspection-sets/{id}/items)는 이 목록 또는 menu_code NULL.
+_WORKER_PREFIXES = (
+    "/work-assignments",
+    "/worker-check",
+    "/worker-attendance",
+    "/attendance",
+    "/work-permits",
+    "/qr",
+    "/tbm",
+    "/worker",
+    "/workers",
+    "/uploads/inspection-photo",
+    "/education/worker-complete",
+    "/notifications",
+    "/safety-reports",
+    "/emergency",
+)
+_WORKER_GET_ONE = ("/risk-assessments", "/education")
+
 _route_templates: list[Tuple[Set[str], str, re.Pattern]] = []
 _perm_map: Dict[Tuple[str, str], str] = {}
-_perm_res: list[Tuple[str, str, re.Pattern, str]] = []
+_menu_map: Dict[Tuple[str, str], Optional[str]] = {}
+_perm_res: list[Tuple[str, str, re.Pattern, str, Optional[str]]] = []
 _role_perms: Dict[str, Set[str]] = {}
+_role_menu: Dict[Tuple[str, str], dict] = {}
 _cache_at = 0.0
 _CACHE_TTL = 60.0
 
@@ -215,8 +238,9 @@ def bind_app(app) -> None:
     _route_templates = compiled
     _refresh_maps(force=True)
     log.warning(
-        "[GUARD] bind raw_routes=%d src=%d templates=%d perm_maps=%d",
+        "[GUARD] bind raw_routes=%d src=%d templates=%d perm_maps=%d menu_maps=%d",
         n_raw, len(src), len(_route_templates), len(_perm_map),
+        sum(1 for v in _menu_map.values() if v),
     )
     _log_t4_coverage()
 
@@ -234,7 +258,7 @@ def _log_t4_coverage() -> None:
 
 
 def _refresh_maps(force: bool = False) -> None:
-    global _perm_map, _perm_res, _role_perms, _cache_at
+    global _perm_map, _menu_map, _perm_res, _role_perms, _role_menu, _cache_at
     now = time.time()
     if not force and now - _cache_at < _CACHE_TTL and _perm_map:
         return
@@ -242,17 +266,20 @@ def _refresh_maps(force: bool = False) -> None:
         from db.supabase_client import get_supabase
         sb = get_supabase()
         ap = sb.table("api_permissions").select(
-            "http_method, api_path, permission_code"
+            "http_method, api_path, permission_code, menu_code"
         ).limit(2000).execute()
         pmap: Dict[Tuple[str, str], str] = {}
+        mmap: Dict[Tuple[str, str], Optional[str]] = {}
         for row in ap.data or []:
             method = (row.get("http_method") or "").upper()
             path = normalize_path(row.get("api_path") or "")
             code = row.get("permission_code")
+            menu = row.get("menu_code") or None
             if method and path and code:
                 pmap[(method, path)] = code
+                mmap[(method, path)] = menu
         compiled = [
-            (method, path, _compile_template(path), code)
+            (method, path, _compile_template(path), code, mmap.get((method, path)))
             for (method, path), code in pmap.items()
         ]
         compiled.sort(key=lambda x: (x[1].count("{"), -len(x[1])))
@@ -260,7 +287,22 @@ def _refresh_maps(force: bool = False) -> None:
         rmap: Dict[str, Set[str]] = {}
         for row in rp.data or []:
             rmap.setdefault(row.get("role_code") or "", set()).add(row.get("permission_code") or "")
-        _perm_map, _perm_res, _role_perms, _cache_at = pmap, compiled, rmap, now
+        rm = sb.table("role_menu_permissions").select(
+            "role_code, menu_code, can_list, can_create, can_update, can_delete"
+        ).limit(5000).execute()
+        rmenu: Dict[Tuple[str, str], dict] = {}
+        for row in rm.data or []:
+            role = row.get("role_code") or ""
+            menu = row.get("menu_code") or ""
+            if role and menu:
+                rmenu[(role, menu)] = {
+                    "can_list": bool(row.get("can_list")),
+                    "can_create": bool(row.get("can_create")),
+                    "can_update": bool(row.get("can_update")),
+                    "can_delete": bool(row.get("can_delete")),
+                }
+        _perm_map, _menu_map, _perm_res = pmap, mmap, compiled
+        _role_perms, _role_menu, _cache_at = rmap, rmenu, now
     except Exception:
         log.exception("[GUARD] permission cache refresh 실패 — 기존 캐시 유지")
 
@@ -272,7 +314,7 @@ def template_for(method: str, raw_path: str) -> str:
     for methods, tmpl, cre in _route_templates:
         if m in methods and cre.match(p):
             return tmpl
-    for em, tmpl, cre, _code in _perm_res:
+    for em, tmpl, cre, _code, _menu in _perm_res:
         if em == m and cre.match(p):
             return tmpl
     return p
@@ -285,10 +327,70 @@ def lookup_permission(method: str, path_template: str) -> Optional[str]:
     hit = _perm_map.get((m, p))
     if hit:
         return hit
-    for em, _tmpl, cre, code in _perm_res:
+    for em, _tmpl, cre, code, _menu in _perm_res:
         if em == m and cre.match(p):
             return code
     return None
+
+
+def lookup_menu(method: str, path_template: str) -> Optional[str]:
+    _refresh_maps()
+    m = method.upper()
+    p = normalize_path(path_template)
+    if (m, p) in _menu_map:
+        return _menu_map.get((m, p))
+    for em, _tmpl, cre, _code, menu in _perm_res:
+        if em == m and cre.match(p):
+            return menu
+    return None
+
+
+def _crud_flag(method: str) -> str:
+    m = method.upper()
+    if m == "POST":
+        return "can_create"
+    if m in ("PUT", "PATCH"):
+        return "can_update"
+    if m == "DELETE":
+        return "can_delete"
+    return "can_list"
+
+
+def has_menu_permission(role_code: Optional[str], menu_code: Optional[str], crud_col: str) -> bool:
+    if not role_code or not menu_code or crud_col not in (
+        "can_list", "can_create", "can_update", "can_delete",
+    ):
+        return False
+    _refresh_maps()
+    row = _role_menu.get((role_code, menu_code))
+    if not row:
+        return False
+    return bool(row.get(crud_col))
+
+
+def _path_under(path: str, prefix: str) -> bool:
+    return path == prefix or path.startswith(prefix + "/")
+
+
+def _is_worker_route(method: str, path: str) -> bool:
+    """근로자 앱 route — 인증만 요구, role_menu 게이트 제외."""
+    p = normalize_path(path)
+    m = method.upper()
+    for prefix in _WORKER_PREFIXES:
+        if _path_under(p, prefix):
+            return True
+    if m == "GET":
+        for base in _WORKER_GET_ONE:
+            rest = p[len(base):] if p.startswith(base) else None
+            # /risk-assessments/{id} 또는 실측 UUID 한 단 — 컬렉션·하위 path 제외
+            if rest and rest.startswith("/") and rest.count("/") == 1 and rest[1:]:
+                return True
+    # 위험성평가 참여(작업자). GET {id} 와 별도.
+    if _path_under(p, "/risk-assessments") and (
+        p.endswith("/participate") or p.endswith("/participants")
+    ):
+        return True
+    return False
 
 
 def has_permission(role_code: Optional[str], permission_code: str) -> bool:
@@ -381,10 +483,22 @@ def _evaluate(request: Request) -> Optional[Response]:
                       f"company={user.get('company_id')} {method} {path}")
             if d is not None:
                 return d
-    if perm and not has_permission(user.get("role_code"), perm):
-        return _deny(_is_advisory("action", resource), 403,
-                     "권한이 없습니다.",
-                     f"role={user.get('role_code')} perm={perm} {method} {path}")
+    # 근로자 앱: 인증·entitlement 이후 menu 게이트만 생략
+    if _is_worker_route(method, path):
+        return None
+    menu = lookup_menu(method, path)
+    user_role = user.get("role_code")
+    if perm and perm.startswith("PLATFORM_"):
+        if not has_permission(user_role, perm):
+            return _deny(_is_advisory("action", "platform"), 403,
+                         "권한이 없습니다.",
+                         f"role={user_role} perm={perm} {method} {path}")
+    elif menu:
+        crud = _crud_flag(method)
+        if not has_menu_permission(user_role, menu, crud):
+            return _deny(_is_advisory("action", resource), 403,
+                         "권한이 없습니다.",
+                         f"role={user_role} menu={menu} {crud}")
     return None
 
 
