@@ -8,7 +8,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime
 from typing import Optional, Any, List
-import asyncio, re, requests, urllib3, os, traceback
+import asyncio, re, requests, urllib3, os, traceback, time
 from urllib.parse import unquote, quote
 from supabase import create_client
 from tenacity import retry, stop_after_attempt, wait_fixed
@@ -169,7 +169,7 @@ def _normalize_kakao_address(address: str) -> str:
         return a
 
     for short, full in _KAKAO_SIDO_MAP.items():
-        # "서울 " 또는 "서울	" 로 시작하는 경우
+        # "서울 " 또는 "서울\t" 로 시작하는 경우
         if re.match(rf"^{re.escape(short)}[\s　]", a):
             return full + " " + a[len(short):].lstrip()
     return a
@@ -316,62 +316,97 @@ async def juso_search(
 # ============================================================
 
 def _building_call_once(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, rows: int, plat_gb: str) -> Optional[list]:
-    """건축물대장 단일 호출 (platGbCd 고정). 결과 없으면 None."""
-    try:
-        r = requests.get(f"{BUILDING_BASE}/{endpoint}", params={
-            "serviceKey": BUILDING_KEY,
-            "sigunguCd":  sigungu,
-            "bjdongCd":   bjdong,
-            "platGbCd":   plat_gb,
-            "bun":        bun,
-            "ji":         ji,
-            "numOfRows":  rows,
-            "pageNo":     1,
-            "_type":      "json"
-        }, headers=BUILDING_HEADERS, verify=False, timeout=15)
-        print(f"[BUILDING] {endpoint} platGbCd={plat_gb} HTTP={r.status_code}")
-        if r.status_code != 200:
-            # 환경변수 오염(공백/개행/따옴표) 진단: 키 길이와 repr로 숨은 문자 노출
-            _klen = len(BUILDING_KEY)
-            _khead = BUILDING_KEY[:6]
-            _ktail = BUILDING_KEY[-6:]
-            _krepr = repr(BUILDING_KEY[:3] + "..." + BUILDING_KEY[-3:])
-            print(f"[BUILDING-DIAG] {endpoint} platGbCd={plat_gb} status={r.status_code} keylen={_klen} head={_khead} tail={_ktail} repr={_krepr}")
-            # requests가 실제 전송한 URL의 serviceKey 인코딩 확인
-            _u = r.url
-            _sk = _u.split("serviceKey=")[-1].split("&")[0] if "serviceKey=" in _u else "(none)"
-            print(f"[BUILDING-DIAG] {endpoint} sent_serviceKey_head={_sk[:12]} sent_serviceKey_tail={_sk[-12:]}")
-        try:
-            data = r.json()
-        except Exception:
-            print(f"[BUILDING] JSON 파싱 실패 응답: {r.text[:300]}")
-            return None
+    """건축물대장 단일 호출 (platGbCd 고정) + 일시장애 재시도. 결과 없으면 None.
 
-        resp = data.get("response") if isinstance(data, dict) else None
-        if not isinstance(resp, dict):
-            return None
-        body = resp.get("body")
-        if not isinstance(body, dict):
-            return None
+    data.go.kr 게이트웨이의 일시적 upstream 오류(05 SERVICETIMEOUT / 04 HTTP_ERROR / 5xx /
+    연결·타임아웃)는 최대 _MAX_ATTEMPTS회(1초 간격) 재시도한다. JUSO(_juso_call_once)와 동일한
+    복원력 의도이며, None 기반 제어 흐름(무자료·platGbCd 폴백) 보존을 위해 tenacity 데코레이터 대신
+    명시적 유한 루프를 쓴다(소진 시 예외 전파 없이 None 반환 → 기존 200-graceful 동작 유지).
+    정상 무자료(totalCount==0)와 권한/등록류 비일시 오류는 재시도하지 않고 즉시 None."""
+    _MAX_ATTEMPTS = 3
+    for _attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
-            total = int(body.get("totalCount", 0))
-        except (TypeError, ValueError):
-            total = 0
-        if total == 0:
+            r = requests.get(f"{BUILDING_BASE}/{endpoint}", params={
+                "serviceKey": BUILDING_KEY,
+                "sigunguCd":  sigungu,
+                "bjdongCd":   bjdong,
+                "platGbCd":   plat_gb,
+                "bun":        bun,
+                "ji":         ji,
+                "numOfRows":  rows,
+                "pageNo":     1,
+                "_type":      "json"
+            }, headers=BUILDING_HEADERS, verify=False, timeout=15)
+            print(f"[BUILDING] {endpoint} platGbCd={plat_gb} HTTP={r.status_code} (attempt {_attempt}/{_MAX_ATTEMPTS})")
+            if r.status_code != 200:
+                # 환경변수 오염(공백/개행/따옴표) 진단: 키 길이와 repr로 숨은 문자 노출
+                _klen = len(BUILDING_KEY)
+                _khead = BUILDING_KEY[:6]
+                _ktail = BUILDING_KEY[-6:]
+                _krepr = repr(BUILDING_KEY[:3] + "..." + BUILDING_KEY[-3:])
+                print(f"[BUILDING-DIAG] {endpoint} platGbCd={plat_gb} status={r.status_code} keylen={_klen} head={_khead} tail={_ktail} repr={_krepr}")
+                # requests가 실제 전송한 URL의 serviceKey 인코딩 확인
+                _u = r.url
+                _sk = _u.split("serviceKey=")[-1].split("&")[0] if "serviceKey=" in _u else "(none)"
+                print(f"[BUILDING-DIAG] {endpoint} sent_serviceKey_head={_sk[:12]} sent_serviceKey_tail={_sk[-12:]}")
+                # 비정상 응답 본문 로깅 — data.go.kr returnReasonCode/errMsg 확보 (기존 미로깅 갭 보완)
+                _btxt = (r.text or "")[:300]
+                print(f"[BUILDING-BODY] {endpoint} platGbCd={plat_gb} status={r.status_code} body={_btxt}")
+                # 일시적 게이트웨이 오류만 재시도 (05 SERVICETIMEOUT / 04 HTTP_ERROR / 5xx).
+                # 권한/등록류(예: 30) 비일시 오류는 재시도 무의미 → 즉시 None.
+                _transient = (
+                    r.status_code >= 500
+                    or "SERVICETIMEOUT" in _btxt
+                    or "HTTP_ERROR" in _btxt
+                    or "<returnReasonCode>04</returnReasonCode>" in _btxt
+                    or "<returnReasonCode>05</returnReasonCode>" in _btxt
+                )
+                if _transient and _attempt < _MAX_ATTEMPTS:
+                    print(f"[BUILDING-RETRY] {endpoint} platGbCd={plat_gb} 일시오류 재시도 {_attempt}/{_MAX_ATTEMPTS}")
+                    time.sleep(1)
+                    continue
+                return None
+            try:
+                data = r.json()
+            except Exception:
+                print(f"[BUILDING] JSON 파싱 실패 응답: {r.text[:300]}")
+                return None
+
+            resp = data.get("response") if isinstance(data, dict) else None
+            if not isinstance(resp, dict):
+                return None
+            body = resp.get("body")
+            if not isinstance(body, dict):
+                return None
+            try:
+                total = int(body.get("totalCount", 0))
+            except (TypeError, ValueError):
+                total = 0
+            if total == 0:
+                return None
+            items_wrap = body.get("items")
+            if not isinstance(items_wrap, dict):
+                return None
+            items = items_wrap.get("item")
+            if items is None:
+                return None
+            if isinstance(items, dict):
+                items = [items]
+            print(f"[BUILDING] {endpoint} platGbCd={plat_gb} {len(items)}건")
+            return items or None
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+                requests.exceptions.ChunkedEncodingError) as e:
+            # 연결/타임아웃도 일시장애로 간주해 재시도
+            print(f"[BUILDING-RETRY] {endpoint} platGbCd={plat_gb} 연결/타임아웃 재시도 {_attempt}/{_MAX_ATTEMPTS}: {e}")
+            if _attempt < _MAX_ATTEMPTS:
+                time.sleep(1)
+                continue
             return None
-        items_wrap = body.get("items")
-        if not isinstance(items_wrap, dict):
+        except Exception as e:
+            print(f"[BUILDING ERROR] {endpoint} platGbCd={plat_gb}: {e}")
             return None
-        items = items_wrap.get("item")
-        if items is None:
-            return None
-        if isinstance(items, dict):
-            items = [items]
-        print(f"[BUILDING] {endpoint} platGbCd={plat_gb} {len(items)}건")
-        return items or None
-    except Exception as e:
-        print(f"[BUILDING ERROR] {endpoint} platGbCd={plat_gb}: {e}")
-        return None
+    return None
 
 
 def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, rows: int = 10, plat_gb: str = "0") -> Optional[list]:
