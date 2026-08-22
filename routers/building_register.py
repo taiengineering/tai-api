@@ -371,13 +371,26 @@ def get_sewage_info(sigungu, bjdong, bun, ji="0000", plat_gb="0"):
     return _building_get("getBrExposPublcRqstInfo", sigungu, bjdong, bun, ji, plat_gb=plat_gb)
 
 
-def _probe_call(url, params):
-    o = {}
+def _probe_send(method, url, params=None, proxies=None):
+    o = {"method": method}
     try:
-        r = requests.get(url, params=params, verify=False, timeout=15)
-        o["http"] = r.status_code
+        if method == "urllib":
+            import ssl, urllib.request
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with urllib.request.urlopen(urllib.request.Request(url), context=ctx, timeout=15) as resp:
+                o["http"] = getattr(resp, "status", None)
+                txt = resp.read().decode("utf-8", "ignore")
+                o["sent_url_pct25"] = "%25" in url
+        else:
+            r = requests.get(url, params=params, verify=False, timeout=20, proxies=proxies)
+            o["http"] = r.status_code
+            txt = r.text
+            o["sent_url_pct25"] = "%25" in (r.request.url or "")
         try:
-            d = r.json()
+            import json as _j
+            d = _j.loads(txt)
             resp = d.get("response") or {}
             o["resultCode"] = (resp.get("header") or {}).get("resultCode")
             o["totalCount"] = (resp.get("body") or {}).get("totalCount")
@@ -386,40 +399,39 @@ def _probe_call(url, params):
                 o["reason"] = err.get("returnReasonCode")
                 o["errMsg"] = err.get("errMsg")
         except Exception:
-            o["raw"] = r.text[:200]
+            o["raw"] = txt[:150]
     except Exception as e:
         o["exception"] = f"{type(e).__name__}: {str(e)[:150]}"
     return o
 
 
-def _building_probe_matrix(sg, bj, bun, ji):
-    """getBrTitleInfo 요청 구성 매트릭스 — 어떤 조합이 통과하는지 확정."""
-    key = BUILDING_KEY or ""
+def _building_probe_key(sg, bj, bun, ji):
+    """정답 라우터 대조: 후보 env 지문 + DATA_GO_KR_SERVICE_KEY(+한국프록시) 레퍼런스 검증."""
+    def fp(name):
+        v = os.getenv(name, "") or ""
+        return {"set": bool(v), "len": len(v), "head4": v[:4], "tail6": v[-6:],
+                "has_pct": "%" in v, "has_plus_slash_eq": any(c in v for c in ("+", "/", "="))}
+    cands = ["BUILDING_API_KEY", "BUILDING_REGISTER_API_KEY", "DATA_GO_KR_SERVICE_KEY",
+             "KOSHA_SERVICE_KEY", "FIRE_SERVICE_KEY", "SAFETY_INFO_SERVICE_KEY"]
+    proxy = (os.getenv("DATA_GO_KR_HTTP_PROXY", "") or os.getenv("KMC_HTTP_PROXY", "")).strip()
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    out = {
+        "_expected_totalCount": "약 34",
+        "env_fingerprints": {n: fp(n) for n in cands},
+        "proxy": {"DATA_GO_KR_HTTP_PROXY_set": bool(os.getenv("DATA_GO_KR_HTTP_PROXY", "")),
+                  "KMC_HTTP_PROXY_set": bool(os.getenv("KMC_HTTP_PROXY", "")),
+                  "proxy_used": bool(proxies)},
+    }
     base = f"{BUILDING_BASE}/getBrTitleInfo"
-    bun_u = str(int(bun)) if str(bun).isdigit() else str(bun)      # 비패딩
-    ji_i = int(ji) if str(ji).isdigit() else 0
-    ji_u = str(ji_i) if ji_i != 0 else ""                          # 비패딩(0이면 빈값)
-    common = f"sigunguCd={sg}&bjdongCd={bj}&numOfRows=10&pageNo=1&_type=json"
-    out = {}
-    # A: URL문자열 · 키 as-is · 비패딩 · platGbCd 없음
-    out["A_str_keyasis_unpad_noplat"] = _probe_call(
-        f"{base}?serviceKey={key}&{common}&bun={bun_u}&ji={ji_u}", None)
-    # B: URL문자열 · 키 quote · 비패딩 · platGbCd 없음
-    out["B_str_keyquote_unpad_noplat"] = _probe_call(
-        f"{base}?serviceKey={quote(key)}&{common}&bun={bun_u}&ji={ji_u}", None)
-    # C: params · 비패딩 · platGbCd 없음
-    out["C_params_unpad_noplat"] = _probe_call(base, {
-        "serviceKey": key, "sigunguCd": sg, "bjdongCd": bj,
-        "bun": bun_u, "ji": ji_u, "numOfRows": 10, "pageNo": 1, "_type": "json"})
-    # D: params · 패딩 · platGbCd 없음 (패딩 격리)
-    out["D_params_pad_noplat"] = _probe_call(base, {
-        "serviceKey": key, "sigunguCd": sg, "bjdongCd": bj,
-        "bun": bun, "ji": ji, "numOfRows": 10, "pageNo": 1, "_type": "json"})
-    # E: URL문자열 · 키 quote · 비패딩 · platGbCd 빈값
-    out["E_str_keyquote_unpad_platempty"] = _probe_call(
-        f"{base}?serviceKey={quote(key)}&{common}&platGbCd=&bun={bun_u}&ji={ji_u}", None)
+    tail = "sigunguCd=11680&bjdongCd=10300&bun=0012&ji=0000&numOfRows=10&pageNo=1&_type=json"
+    dgk = os.getenv("DATA_GO_KR_SERVICE_KEY", "").strip()
+    if dgk:
+        keyparam = dgk if "%" in dgk else quote(dgk, safe="")  # holiday _key_param 패턴
+        out["A_dgk_proxy"] = _probe_send("requests_url", f"{base}?{tail}&serviceKey={keyparam}", None, proxies)
+        out["B_dgk_direct"] = _probe_send("requests_url", f"{base}?{tail}&serviceKey={keyparam}", None, None)
+    else:
+        out["A_dgk_proxy"] = {"skip": "DATA_GO_KR_SERVICE_KEY 미설정"}
     return out
-
 
 def _get_title_sync(bdmgtsn: str) -> Optional[List[dict]]:
     p = parse_bdmgtsn(bdmgtsn)
@@ -585,7 +597,7 @@ def diagnose(address: str = Query("인천광역시 서구 가좌로 123", descri
         try:
             parsed = parse_bdmgtsn(bdmgtsn)
             result["bdmgtsn_parsed"] = parsed
-            result["building_probe"] = _building_probe_matrix(
+            result["building_probe"] = _building_probe_key(
                 parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"])
             _pg = parsed.get("mountain", "0")
             title = get_building_title(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], plat_gb=_pg)
