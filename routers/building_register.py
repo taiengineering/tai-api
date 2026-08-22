@@ -585,10 +585,15 @@ async def search_building(
             detail=f"건물관리번호를 찾을 수 없습니다 (주소는 찾았으나 건물 정보 없음)"
         )
 
-    # STAGE 2 — 건축물대장 표제부
+    # STAGE 2 — 건축물대장 (표제부 + 기본개요 + 층별개요) : 구자산 방식 복원
     try:
-        title_data = await get_title_async(bdmgtsn)
-        print(f"[SEARCH] 표제부 {len(title_data) if title_data else 0}건")
+        building_data = await asyncio.to_thread(fetch_all_building_data, bdmgtsn)
+        title_data = building_data.get("title")
+        print(
+            f"[SEARCH] 표제부 {len(title_data) if title_data else 0}건 · "
+            f"기본개요 {len(building_data.get('basis') or [])}건 · "
+            f"층별개요 {len(building_data.get('floors') or [])}건"
+        )
     except Exception as e:
         print(f"[SEARCH] 건축물대장 오류: {e}")
         raise HTTPException(status_code=500, detail=f"건축물대장 API 오류: {str(e)}")
@@ -636,7 +641,26 @@ async def search_building(
             "address_dong":    juso_data.get("emdNm", ""),
         }
 
-        print(f"[SEARCH] DONE")
+        # 층별개요(floors) 폴백 — 표제부에 연면적/층수가 비면 층별개요로 보완 (집합건물 등)
+        floors = building_data.get("floors") or []
+        if floors:
+            if not data_out.get("building_area"):
+                _area_sum = sum((_to_float(f.get("area")) or 0.0) for f in floors)
+                if _area_sum > 0:
+                    data_out["building_area"] = round(_area_sum, 2)
+            if data_out.get("floor_count") is None:
+                _grnd = [f for f in floors if str(f.get("flrGbCdNm") or "").strip() == "지상"]
+                if _grnd:
+                    data_out["floor_count"] = len(_grnd)
+
+        # 구자산 전-필드 매핑 병합 — 화면 표시값 외 값도 전부 확보(프론트 키는 유지)
+        try:
+            _factory_data = build_factory_update(juso_data, building_data)
+        except Exception:
+            _factory_data = {}
+        data_out = {**_factory_data, **{k: v for k, v in data_out.items() if v is not None}}
+
+        print(f"[SEARCH] DONE fields={len(data_out)}")
         return {
             "status":  "success",
             "bdmgtsn": bdmgtsn,
