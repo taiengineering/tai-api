@@ -170,7 +170,7 @@ def submit_check(
     inspection_id = ins_res.data[0]["id"]
 
     # 3. 참조 검증(가공 차단): assignment_id 3홉으로 세트 항목만 참조로 인정하고,
-    #    참조가 맞으면 item_name 을 서버 마스터 값으로 덮어썼(이름 위조 경로 제거).
+    #    참조가 맞으면 item_name 을 서버 마스터 값으로 덮어쓴(이름 위조 경로 제거).
     allowed: dict = {}
     set_id = _iss.resolve_set_id_for_assignment(body.assignment_id) if body.assignment_id else None
     if set_id:
