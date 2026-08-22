@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime
 from typing import Optional, Any, List
 import asyncio, re, requests, urllib3, os, traceback
+from urllib.parse import unquote
 from supabase import create_client
 from tenacity import retry, stop_after_attempt, wait_fixed
 
@@ -20,7 +21,7 @@ SUPABASE_URL  = os.getenv("SUPABASE_URL")
 SUPABASE_KEY  = os.getenv("SUPABASE_KEY")
 JUSO_KEY      = os.environ.get("JUSO_API_KEY", "U01TX0FVVEgyMDI2MDMxODEyMjUxNjExNzc1MTc=")
 BUILDING_KEY  = os.environ.get("BUILDING_API_KEY", "")
-VERSION       = "2.3.0"
+VERSION       = "2.4.0"
 
 JUSO_URL      = "https://business.juso.go.kr/addrlink/addrLinkApi.do"
 BUILDING_BASE = "https://apis.data.go.kr/1613000/BldRgstHubService"
@@ -370,6 +371,42 @@ def get_sewage_info(sigungu, bjdong, bun, ji="0000", plat_gb="0"):
     return _building_get("getBrExposPublcRqstInfo", sigungu, bjdong, bun, ji, plat_gb=plat_gb)
 
 
+def _building_probe(sigungu, bjdong, bun, ji, plat_gb="0", unquote_key=False):
+    """진단 전용 — getBrTitleInfo 원응답(HTTP/resultCode/resultMsg/totalCount)을 그대로 노출."""
+    out = {"platGbCd": plat_gb, "unquote_key": unquote_key, "bun": bun, "ji": ji}
+    if not BUILDING_KEY:
+        out["error"] = "BUILDING_API_KEY 미설정"
+        return out
+    key = unquote(BUILDING_KEY) if unquote_key else BUILDING_KEY
+    try:
+        r = requests.get(f"{BUILDING_BASE}/getBrTitleInfo", params={
+            "serviceKey": key,
+            "sigunguCd":  sigungu,
+            "bjdongCd":   bjdong,
+            "platGbCd":   plat_gb,
+            "bun":        bun,
+            "ji":         ji,
+            "numOfRows":  10,
+            "pageNo":     1,
+            "_type":      "json"
+        }, verify=False, timeout=15)
+        out["http"] = r.status_code
+        out["content_type"] = r.headers.get("content-type", "")
+        try:
+            d = r.json()
+            resp = d.get("response") or {}
+            hdr = resp.get("header") or {}
+            body = resp.get("body") or {}
+            out["resultCode"] = hdr.get("resultCode")
+            out["resultMsg"] = hdr.get("resultMsg")
+            out["totalCount"] = body.get("totalCount")
+        except Exception:
+            out["raw"] = r.text[:400]
+    except Exception as e:
+        out["exception"] = f"{type(e).__name__}: {str(e)[:200]}"
+    return out
+
+
 def _get_title_sync(bdmgtsn: str) -> Optional[List[dict]]:
     p = parse_bdmgtsn(bdmgtsn)
     if not p:
@@ -534,6 +571,12 @@ def diagnose(address: str = Query("인천광역시 서구 가좌로 123", descri
         try:
             parsed = parse_bdmgtsn(bdmgtsn)
             result["bdmgtsn_parsed"] = parsed
+            result["building_probe"] = [
+                _building_probe(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], "0", False),
+                _building_probe(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], "1", False),
+                _building_probe(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], "0", True),
+                _building_probe(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], "0000", "0", False),
+            ]
             _pg = parsed.get("mountain", "0")
             title = get_building_title(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], plat_gb=_pg)
             if not title:
