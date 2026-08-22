@@ -59,6 +59,33 @@ def get_diagnosis_fields(
 
     rows = res.data or []
 
+    # ── ksic_major(업종 대분류) 옵션 주입 ─────────────────────────────────
+    # getFields는 기본적으로 DB input_options를 그대로 전달한다. ksic_major는
+    # DB에 옵션을 두지 않고(하드코딩 회피), 업종 SoT인 industry_master의 대분류
+    # (lv1)에서 라이브로 주입한다. equipment-options가 system_codes에서 소싱하는
+    # 것과 동일 패턴. value=대분류코드(A~U) → process-options의 ksic_major 파싱과 일치.
+    if any(r.get("field_code") == "ksic_major" and not r.get("input_options") for r in rows):
+        try:
+            _im = (
+                sb.table("industry_master")
+                .select("lv1_code, lv1_name")
+                .eq("is_active", True)
+                .execute()
+            )
+        except Exception:
+            _im = None
+        _seen: dict = {}
+        for _r in (_im.data if _im else []) or []:
+            _c = (_r.get("lv1_code") or "").strip()
+            _n = (_r.get("lv1_name") or "").strip()
+            if _c and _c not in _seen:
+                _seen[_c] = _n
+        _ksic_opts = [{"value": c, "label": _seen[c]} for c in sorted(_seen)]
+        if _ksic_opts:
+            for r in rows:
+                if r.get("field_code") == "ksic_major" and not r.get("input_options"):
+                    r["input_options"] = _ksic_opts
+
     # field_group 물로의 가닥 성을 고려한 정렬된 그룹핑
     group_order: list = []
     group_map: dict = defaultdict(list)
