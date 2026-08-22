@@ -392,6 +392,7 @@ def _building_probe(sigungu, bjdong, bun, ji, plat_gb="0", unquote_key=False):
         }, verify=False, timeout=15)
         out["http"] = r.status_code
         out["content_type"] = r.headers.get("content-type", "")
+        out["raw"] = r.text[:500]
         try:
             d = r.json()
             resp = d.get("response") or {}
@@ -400,8 +401,13 @@ def _building_probe(sigungu, bjdong, bun, ji, plat_gb="0", unquote_key=False):
             out["resultCode"] = hdr.get("resultCode")
             out["resultMsg"] = hdr.get("resultMsg")
             out["totalCount"] = body.get("totalCount")
+            errenv = (d.get("OpenAPI_ServiceResponse") or {}).get("cmmMsgHeader") or d.get("cmmMsgHeader")
+            if isinstance(errenv, dict):
+                out["errMsg"] = errenv.get("errMsg")
+                out["returnAuthMsg"] = errenv.get("returnAuthMsg")
+                out["returnReasonCode"] = errenv.get("returnReasonCode")
         except Exception:
-            out["raw"] = r.text[:400]
+            pass
     except Exception as e:
         out["exception"] = f"{type(e).__name__}: {str(e)[:200]}"
     return out
