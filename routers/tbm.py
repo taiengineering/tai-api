@@ -85,7 +85,7 @@ def _ensure_tbm_own(supabase, tbm_id: str, current: dict) -> None:
 # ── Pydantic 모델 ────────────────────────────────────────
 
 class TbmCreateBody(BaseModel):
-    factory_id:            str
+    factory_id:            Optional[str] = None
     company_id:            Optional[str] = None
     construction_site_id:  Optional[str] = None
     work_date:             str
@@ -367,12 +367,32 @@ def request_sign(tbm_id: str, body: RequestSignBody, current: dict = Depends(get
 @router.post("")
 def create_tbm(body: TbmCreateBody, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
-    _ensure_factory_own(supabase, body.factory_id, current)   # 타사 시설 404
-    now = _now()
+    factory_id = body.factory_id
+    site_id = body.construction_site_id
     company_id = body.company_id
-    if not company_id:
+    if site_id:
+        site = (
+            supabase.table("construction_sites")
+            .select("company_id, factory_id")
+            .eq("id", site_id)
+            .limit(1)
+            .execute()
+        )
+        if not site.data:
+            raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+        _ensure_own_company(site.data[0].get("company_id"), current, supabase, "현장을 찾을 수 없습니다.")
+        if not factory_id:
+            factory_id = site.data[0].get("factory_id")
+        if not company_id:
+            company_id = site.data[0].get("company_id")
+    if factory_id:
+        _ensure_factory_own(supabase, factory_id, current)
+    elif not site_id:
+        raise HTTPException(status_code=400, detail="시설 또는 현장을 지정하세요.")
+    now = _now()
+    if not company_id and factory_id:
         fac = supabase.table("factories").select("company_id").eq(
-            "id", body.factory_id
+            "id", factory_id
         ).limit(1).execute()
         if fac.data:
             company_id = fac.data[0].get("company_id")
@@ -381,7 +401,7 @@ def create_tbm(body: TbmCreateBody, current: dict = Depends(get_current_user)):
         company_id = _forced
     title = body.meeting_title or f"TBM {body.work_date} {body.work_location or ''}".strip()
     row = {
-        "factory_id":           body.factory_id,
+        "factory_id":           factory_id,
         "company_id":           company_id,
         "construction_site_id": body.construction_site_id,
         "meeting_title":        title,

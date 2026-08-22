@@ -34,7 +34,7 @@ INSERT INTO public.menu_catalog (menu_code, title, group_code, group_title, sort
   ('education-list', '교육목록', 'EDUCATION', '교육관리', 600, '{}'),
   ('education-setting', '교육설정', 'EDUCATION', '교육관리', 610, '{}'),
   ('engine-schedule', '일정관리', 'DOCUMENT', '문서관리', 700, '{}'),
-  ('engine-document', '엔진문서', 'DOCUMENT', '문서관리', 710, '{}'),
+  ('engine-document', '서식관리', 'DOCUMENT', '문서관리', 710, '{}'),
   ('document-forms', '서식작성', 'DOCUMENT', '문서관리', 720, '{}'),
   ('compliance-report', '증빙 리포트', 'DOCUMENT', '문서관리', 730, '{}'),
   ('notification-list', '알림센터', 'NOTIFICATION', '알림센터', 800, '{}'),

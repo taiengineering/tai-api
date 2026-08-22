@@ -5,6 +5,8 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class SiteCreate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     company_id: Optional[str] = None
     site_name: str
     site_code: Optional[str] = None
@@ -18,68 +20,74 @@ class SiteCreate(BaseModel):
     total_workers: Optional[int] = 0
     direct_workers: Optional[int] = 0
     subcon_workers: Optional[int] = 0
-    site_address: Optional[str] = None
+    site_address: Optional[str] = Field(None, validation_alias=AliasChoices("site_address", "address"))
     site_address_detail: Optional[str] = None
     site_sido: Optional[str] = None
     site_sigungu: Optional[str] = None
     latitude: Optional[float] = Field(None, description="WGS84 위도 (예: 37.5665)")
     longitude: Optional[float] = Field(None, description="WGS84 경도 (예: 126.9780)")
     start_date: Optional[date] = None
-    end_date: Optional[date] = None
+    end_date: Optional[date] = Field(None, validation_alias=AliasChoices("end_date", "planned_end_date"))
     manager_id: Optional[str] = None
     status_code: Optional[str] = "PLANNED"
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, validation_alias=AliasChoices("notes", "memo"))
 
 
 class SitePatch(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     site_name: Optional[str] = None
     site_type: Optional[str] = None
     contract_amount: Optional[float] = None
     total_workers: Optional[int] = None
     direct_workers: Optional[int] = None
     subcon_workers: Optional[int] = None
-    site_address: Optional[str] = None
+    site_address: Optional[str] = Field(None, validation_alias=AliasChoices("site_address", "address"))
     site_address_detail: Optional[str] = None
     site_sido: Optional[str] = None
     site_sigungu: Optional[str] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     start_date: Optional[date] = None
-    end_date: Optional[date] = None
+    end_date: Optional[date] = Field(None, validation_alias=AliasChoices("end_date", "planned_end_date"))
     manager_id: Optional[str] = None
     status_code: Optional[str] = None
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, validation_alias=AliasChoices("notes", "memo"))
 
 
 class ProcessCreate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     process_master_id: Optional[str] = None
     kcsc_process_id: Optional[str] = None
     work_type_code: Optional[str] = None
     work_type_label: Optional[str] = None
     process_name: str
     construction_type: Optional[str] = None
-    planned_start: Optional[date] = None
-    planned_end: Optional[date] = None
+    planned_start: Optional[date] = Field(None, validation_alias=AliasChoices("planned_start", "planned_start_date"))
+    planned_end: Optional[date] = Field(None, validation_alias=AliasChoices("planned_end", "planned_end_date"))
     worker_count: Optional[int] = 0
-    is_high_risk: Optional[bool] = False
+    is_high_risk: Optional[bool] = Field(False, validation_alias=AliasChoices("is_high_risk", "is_hazardous"))
     sort_order: Optional[int] = 0
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, validation_alias=AliasChoices("notes", "memo"))
 
 
 class ProcessPatch(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     process_name: Optional[str] = None
     kcsc_process_id: Optional[str] = None
     work_type_code: Optional[str] = None
-    planned_start: Optional[date] = None
-    planned_end: Optional[date] = None
+    planned_start: Optional[date] = Field(None, validation_alias=AliasChoices("planned_start", "planned_start_date"))
+    planned_end: Optional[date] = Field(None, validation_alias=AliasChoices("planned_end", "planned_end_date"))
     actual_start: Optional[date] = None
     actual_end: Optional[date] = None
     progress_rate: Optional[int] = None
     worker_count: Optional[int] = None
-    is_high_risk: Optional[bool] = None
+    is_high_risk: Optional[bool] = Field(None, validation_alias=AliasChoices("is_high_risk", "is_hazardous"))
     status_code: Optional[str] = None
     sort_order: Optional[int] = None
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, validation_alias=AliasChoices("notes", "memo"))
 
 
 class WorkCreate(BaseModel):
