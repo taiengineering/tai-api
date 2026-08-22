@@ -27,6 +27,14 @@ JUSO_URL      = "https://business.juso.go.kr/addrlink/addrLinkApi.do"
 BUILDING_BASE = "https://apis.data.go.kr/1613000/BldRgstHubService"
 
 
+# 건축물대장(data.go.kr) 호출 헤더 — python-requests UA는 게이트웨이에서
+# 다르게 취급될 수 있어 브라우저 호환 UA + JSON Accept 명시
+BUILDING_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (compatible; TAI-API/1.0)',
+    'Accept': 'application/json',
+}
+
+
 def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -320,7 +328,7 @@ def _building_call_once(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: 
             "numOfRows":  rows,
             "pageNo":     1,
             "_type":      "json"
-        }, verify=False, timeout=15)
+        }, headers=BUILDING_HEADERS, verify=False, timeout=15)
         print(f"[BUILDING] {endpoint} platGbCd={plat_gb} HTTP={r.status_code}")
         if r.status_code != 200:
             # 환경변수 오염(공백/개행/따옴표) 진단: 키 길이와 repr로 숨은 문자 노출
