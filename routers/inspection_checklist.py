@@ -32,6 +32,11 @@ from services.company_scope import (
     _ensure_own_company,
     _ensure_factory_own,
 )
+from services.status_vocab import (
+    normalize_inspection_result_write,
+    ws_completed_query_values,
+    ws_write_scheduled,
+)
 
 router = APIRouter(prefix="/inspection", tags=["점검리스트"])
 
@@ -305,7 +310,7 @@ async def get_inspection_status(factory_id: str, current: dict = Depends(get_cur
         this_month_count = month_res.count or 0
 
         completed_res = supabase.table("work_schedules").select("id", count="exact")\
-            .eq("factory_id", factory_id).eq("status_code", "completed").limit(0).execute()
+            .eq("factory_id", factory_id).in_("status_code", ws_completed_query_values()).limit(0).execute()
         completed_count = completed_res.count or 0
 
         overdue_res = supabase.table("work_schedules").select("id", count="exact")\
@@ -413,7 +418,7 @@ async def record_inspection_results(inspection_id: str, body: dict, current: dic
             raise HTTPException(status_code=400, detail="results가 비어 있습니다.")
         now = _now_iso()
         insert_rows = [{"inspection_id": inspection_id, "inspection_set_item_id": r.get("inspection_set_item_id"),
-                        "result_code": r.get("result", "NA"), "note": r.get("note", ""),
+                        "result_code": normalize_inspection_result_write(r.get("result", "NA")), "note": r.get("note", ""),
                         "photo_url": r.get("photo_url"), "checked_at": now} for r in results]
         res = supabase.table("safety_inspection_results").insert(insert_rows).execute()
         created = len(res.data or [])
@@ -499,7 +504,7 @@ async def complete_inspection(work_schedule_id: str, body: dict = None, current:
                             "planned_date":       next_date.isoformat(),
                             "start_date":         next_date.isoformat(),
                             "end_date":           next_date.isoformat(),
-                            "status_code":        "SCHEDULED",
+                            "status_code":        ws_write_scheduled(),
                             "source_type":        source_type,
                             "obligation_type":    iset.get("inspection_category") or "GENERAL",
                             "summary":            iset.get("inspection_set_name") or "",

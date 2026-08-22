@@ -1,19 +1,26 @@
 from services.construction_helpers import calc_safety_manager
 from services.construction_svc import normalize_date_fields, run_list_query
+from services.status_vocab import is_ptw_pending_approval, site_status_filter_query_values
 
 
 def list_sites(supabase, company_id, status_code, site_type, search, page, size, factory_id=None):
+    filters = {
+        "is_active": True,
+        "company_id": company_id,
+        "factory_id": factory_id,
+        "site_type": site_type,
+        "site_name__ilike": f"%{search}%" if search else None,
+    }
+    codes = site_status_filter_query_values(status_code)
+    if codes:
+        if len(codes) == 1:
+            filters["status_code"] = codes[0]
+        else:
+            filters["status_code__in"] = codes
     data = run_list_query(
         supabase,
         "construction_sites",
-        {
-            "is_active": True,
-            "company_id": company_id,
-            "factory_id": factory_id,
-            "status_code": status_code,
-            "site_type": site_type,
-            "site_name__ilike": f"%{search}%" if search else None,
-        },
+        filters,
         page,
         size,
         [("created_at", True)],
@@ -69,7 +76,7 @@ def build_site_stats(site_id: str, site: dict, procs: list, works: list, workers
             "total": len(works),
             "scheduled": sum(1 for w in works if w.get("status_code") == "SCHEDULED"),
             "in_progress": sum(1 for w in works if w.get("status_code") == "IN_PROGRESS"),
-            "ptw_pending": sum(1 for w in works if w.get("ptw_status") == "DRAFT"),
+            "ptw_pending": sum(1 for w in works if is_ptw_pending_approval(w.get("ptw_status"))),
             "ptw_approved": sum(1 for w in works if w.get("ptw_status") == "APPROVED"),
         },
         "workers": {

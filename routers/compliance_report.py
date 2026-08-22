@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
 from services.document_engine.renderer import generate_document_pdf
+from services.status_vocab import is_ws_completed
 
 router = APIRouter(prefix="/compliance-report", tags=["compliance-report"])
 
@@ -37,8 +38,9 @@ class ComplianceReportBody(BaseModel):
 
 
 def _is_done(row: dict) -> bool:
-    s = (row.get("status_code") or "").upper()
-    return s in ("COMPLETED", "DONE") or bool(row.get("completed_at"))
+    if bool(row.get("completed_at")):
+        return True
+    return is_ws_completed(row.get("status_code"))
 
 
 def _assemble(body: ComplianceReportBody) -> Dict[str, Any]:

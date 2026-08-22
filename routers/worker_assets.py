@@ -27,6 +27,7 @@ from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
 from services import inspection_sets_svc as _iss
+from services.status_vocab import is_wa_done
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["WorkerAssets"])
@@ -142,7 +143,7 @@ def list_work_assignments(
     items = res.data or []
     if overdue_only:
         today = datetime.now(timezone.utc).date().isoformat()
-        items = [a for a in items if (a.get("overdue_level") or 0) > 0 or ((a.get("due_date") or a.get("scheduled_date") or "") < today and (a.get("status_code") or "").upper() not in ("DONE", "COMPLETED", "RESOLVED"))]
+        items = [a for a in items if (a.get("overdue_level") or 0) > 0 or ((a.get("due_date") or a.get("scheduled_date") or "") < today and not is_wa_done(a.get("status_code")))]
     return {"status": "success", "data": {"items": items, "total": len(items)}}
 
 

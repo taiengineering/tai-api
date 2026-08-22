@@ -40,6 +40,7 @@ from services.construction_svc import (
     soft_delete_record,
     update_record,
 )
+from services.status_vocab import ptw_filter_query_values
 
 router = APIRouter(tags=["건설안전"])
 
@@ -260,10 +261,17 @@ async def list_works(
     supabase = get_supabase()
     _ensure_site_own(supabase, site_id, current)
     try:
+        filters = {"site_id": site_id, "is_active": True, "status_code": status_code, "work_date": work_date}
+        ptw_codes = ptw_filter_query_values(ptw_status)
+        if ptw_codes:
+            if len(ptw_codes) == 1:
+                filters["ptw_status"] = ptw_codes[0]
+            else:
+                filters["ptw_status__in"] = ptw_codes
         data = run_list_query(
             supabase,
             "construction_works",
-            {"site_id": site_id, "is_active": True, "status_code": status_code, "ptw_status": ptw_status, "work_date": work_date},
+            filters,
             page,
             size,
             [("work_date", True), ("created_at", True)],
