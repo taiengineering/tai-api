@@ -1,5 +1,10 @@
 """
-work_schedules.py — v1.2.6
+work_schedules.py — v1.2.7
+
+v1.2.7 (2026-08-22, Phase E-1):
+  [ADD] FACTORY 스코프 — scoped_filter(company_id+factory_id). FACTORY role 은
+        자기 factory 행만. TEAM/ASSIGNED 는 team_id 컬럼 없으므로 FACTORY→COMPANY
+        폴백. 단건·factory 경로·_owned_ids 동시 적용.
 
 v1.2.6 (2026-08-21, LEDGER §34 keyword):
   [ADD] GET /work-schedules 에 keyword 자유검색 추가. 화면(작업일정)이 보내던 keyword 가
@@ -50,12 +55,19 @@ from datetime import datetime, timezone
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import (
-    scoped_list_company, _ensure_own_company, _ensure_factory_own, _scope, _is_admin,
+    DENY,
+    apply_scoped_filter,
+    scoped_filter,
+    _ensure_own_company,
+    _ensure_factory_own,
+    _scope,
+    _is_admin,
+    _tier,
 )
 
 router = APIRouter(prefix="/work-schedules", tags=["work_schedules"])
 
-VERSION = "1.2.6"
+VERSION = "1.2.7"
 
 
 def _now() -> str:
@@ -110,14 +122,44 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
 
 
 def _owned_ids(supabase, ids, current):
-    """비-ALL: 자기 회사 소유 schedule id 집합만. ALL: 전체 그대로."""
+    """비-ALL: 자기 스코프 소유 schedule id 집합만. ALL: 전체 그대로.
+
+    E-1: FACTORY/TEAM(team_id 없는 테이블)은 factory_id 까지 좁힘.
+    """
     if _is_admin(_scope(supabase, current.get("role_code"))):
         return set(ids)
-    cid = current.get("company_id")
-    if not cid or not ids:
+    if not ids:
         return set()
-    res = supabase.table("work_schedules").select("id").in_("id", list(ids)).eq("company_id", cid).execute()
+    filt = scoped_filter(current, supabase, {"company_id", "factory_id"})
+    if filt is DENY:
+        return set()
+    q = supabase.table("work_schedules").select("id").in_("id", list(ids))
+    q = apply_scoped_filter(q, filt)
+    if q is None:
+        return set()
+    res = q.execute()
     return {r["id"] for r in (res.data or [])}
+
+
+def _ensure_ws_factory_access(supabase, factory_id, current) -> None:
+    """시설 경로: 회사 소유 + E-1 FACTORY/TEAM 은 자기 factory 만."""
+    _ensure_factory_own(supabase, factory_id, current)
+    tier = _tier(supabase, current.get("role_code"))
+    if tier in ("FACTORY", "TEAM"):
+        token_fid = current.get("factory_id")
+        if not token_fid or factory_id != token_fid:
+            raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
+
+
+def _ensure_ws_row(row, current, supabase) -> None:
+    """단건: 회사 + (FACTORY/TEAM 이면) factory 일치."""
+    _ensure_own_company(
+        row.get("company_id"),
+        current,
+        supabase,
+        "일정을 찾을 수 없습니다",
+        resource_factory_id=row.get("factory_id"),
+    )
 
 
 # ── Pydantic 모델 ─────────────────────────────────────────────
@@ -214,7 +256,7 @@ def confirm_schedules(factory_id: str, body: ConfirmBody, current: dict = Depend
     2. is_excluded=TRUE → status_code='EXCLUDED', is_active=FALSE
     """
     supabase = get_supabase()
-    _ensure_factory_own(supabase, factory_id, current)   # 타사 시설 404
+    _ensure_ws_factory_access(supabase, factory_id, current)   # 타사·타시설 404
     now      = _now()
 
     active_res = supabase.table("work_schedules") \
@@ -279,16 +321,41 @@ def get_work_schedules(
     size:              int            = Query(20, ge=1, le=500, description="페이지 크기"),
     current:           dict           = Depends(get_current_user),
 ):
-    """v1.2.4: 업무 일정 목록 조회. is_assigned·obligation_type·planned_date 범위 필터, size 상한 500."""
-    supabase = get_supabase()
-    scoped_cid, deny_all = scoped_list_company(current, supabase, company_id)
-    if deny_all or not scoped_cid:
-        return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0}}
-    company_id = scoped_cid
-    q = supabase.table("work_schedules").select("*", count="exact")
+    """v1.2.4: 업무 일정 목록 조회. is_assigned·obligation_type·planned_date 범위 필터, size 상한 500.
 
-    if company_id:      q = q.eq("company_id",      company_id)
-    if factory_id:      q = q.eq("factory_id",      factory_id)
+    E-1: FACTORY role 은 자기 factory_id 행만(scoped_filter). TEAM/ASSIGNED 는
+    team_id 컬럼 없으므로 FACTORY→COMPANY 폴백.
+    """
+    supabase = get_supabase()
+    filt = scoped_filter(current, supabase, {"company_id", "factory_id"})
+    if filt is DENY:
+        return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0}}
+
+    # ALL: 클라 company_id 유지. 그 외: scoped_filter 가 강제.
+    if _is_admin(_tier(supabase, current.get("role_code"))):
+        if not company_id and not factory_id:
+            # ALL + 필터 없음 = 전체(기존과 동일하게 company 필수였던 분기와 맞춤:
+            # 기존은 scoped_list_company 후 not scoped_cid 이면 빈결과 — ALL 에
+            # company_id=None 이면 (None, False) 반환 후 `if deny_all or not scoped_cid`
+            # 에서 빈결과. 즉 ALL 도 company_id 없으면 빈결과였음. 유지.)
+            return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0}}
+        filt = {}
+        if company_id:
+            filt["company_id"] = company_id
+        if factory_id:
+            filt["factory_id"] = factory_id
+    else:
+        # 클라 factory_id 가 스코프 밖이면 빈결과(존재 숨김)
+        if factory_id and filt.get("factory_id") and factory_id != filt["factory_id"]:
+            return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0}}
+        if factory_id and "factory_id" not in filt:
+            filt = {**filt, "factory_id": factory_id}
+
+    q = supabase.table("work_schedules").select("*", count="exact")
+    q = apply_scoped_filter(q, filt)
+    if q is None:
+        return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0}}
+
     if status_code:     q = q.eq("status_code",     status_code)
     if source_type:     q = q.eq("source_type",     source_type)
     if obligation_type: q = q.eq("obligation_type", obligation_type)
@@ -328,7 +395,7 @@ def get_work_schedules(
 @router.get("/factory/{factory_id}")
 def get_factory_work_schedules(factory_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
-    _ensure_factory_own(supabase, factory_id, current)   # 타사 시설 404
+    _ensure_ws_factory_access(supabase, factory_id, current)   # 타사·타시설 404
     result = (
         supabase.table("work_schedules")
         .select("*")
@@ -350,10 +417,20 @@ def get_inspection_set_work_schedules(inspection_set_id: str, current: dict = De
         .execute()
     )
     data = result.data or []
-    if not _is_admin(_scope(supabase, current.get("role_code"))):
-        cid = current.get("company_id")
-        data = [d for d in data if d.get("company_id") == cid]
-    return data
+    if _is_admin(_scope(supabase, current.get("role_code"))):
+        return data
+    # E-1: FACTORY/TEAM 은 factory 까지 in-memory 필터
+    filt = scoped_filter(current, supabase, {"company_id", "factory_id"})
+    if filt is DENY:
+        return []
+    out = []
+    for d in data:
+        if filt.get("company_id") and d.get("company_id") != filt["company_id"]:
+            continue
+        if filt.get("factory_id") and d.get("factory_id") != filt["factory_id"]:
+            continue
+        out.append(d)
+    return out
 
 
 # /{schedule_id}는 반드시 모든 고정경로 뒤에 선언
@@ -372,7 +449,7 @@ def get_work_schedule(schedule_id: str, current: dict = Depends(get_current_user
     )
     if not result.data:
         raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
-    _ensure_own_company(result.data[0].get("company_id"), current, supabase, "일정을 찾을 수 없습니다")
+    _ensure_ws_row(result.data[0], current, supabase)
     return result.data
 
 
@@ -386,10 +463,16 @@ def patch_work_schedule(schedule_id: str, body: SchedulePatchBody, current: dict
     if not _is_uuid(schedule_id):
         raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
     supabase = get_supabase()
-    _own = supabase.table("work_schedules").select("company_id").eq("id", schedule_id).limit(1).execute()
+    _own = (
+        supabase.table("work_schedules")
+        .select("company_id,factory_id")
+        .eq("id", schedule_id)
+        .limit(1)
+        .execute()
+    )
     if not _own.data:
         raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
-    _ensure_own_company(_own.data[0].get("company_id"), current, supabase, "일정을 찾을 수 없습니다")
+    _ensure_ws_row(_own.data[0], current, supabase)
     now = _now()
 
     fields: dict = {}
