@@ -27,9 +27,17 @@ Q5 confirm transaction 은 compute_confirmed_snapshot_hash() 하나만 호출한
   16 hex truncation / default=str / separators 미고정 / fail-open(None) 이라 의미가 다르다.
   기존 helper 를 공유하면 해당 엔진들의 hash 의미가 바뀌므로 전용 유틸로 분리한다.
 
-Decimal scale 보존(1.10 != 1.1)은 **문서 snapshot 전용** 규칙이다.
-확정 당시 표현된 값까지 증거로 보존하기 위함이며, 다른 엔진의 numeric canonicalization
-규칙으로 확장하지 않는다.
+TYPE BOUNDARY (hidden coercion = 0):
+  generic JSON payload (runtime_values_snapshot / source_trace_snapshot / evidence_manifest)
+    = JSON-native 만 허용 (null / bool / int / finite float / str / list / dict)
+    = Decimal / datetime / UUID / bytes / set / tuple 은 FAIL-CLOSED
+      (문자열로 강제 변환하면 Decimal("1.10") 과 "1.10" 이 동일 hash 가 되어 충돌한다)
+  top-level seal 필드만 명시적으로 타입 정규화
+    runtime_document_id / confirmed_by = UUID object | valid UUID string → canonical lowercase
+    confirmed_at                       = timezone-aware datetime → UTC ISO8601 + 'Z'
+
+표시 자릿수(예: 금액 1.10)가 법적 의미를 가진다면 Python Decimal 의 scale 에 의존하지 말고
+snapshot 에 명시적 데이터({"value":"1.10","display":"1.10","unit":"원"})로 저장한다.
 """
 
 from __future__ import annotations
@@ -37,7 +45,6 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
-from decimal import Decimal
 from typing import Any, Dict, List
 from uuid import UUID
 
@@ -101,11 +108,21 @@ def _normalize_identifier(value: Any, field: str) -> str:
     )
 
 
-def _normalize_for_canonical_json(value: Any, _path: str = "$") -> Any:
-    """지원 타입만 JSON 표현으로 명시 변환. 미지원 타입은 예외(FAIL-CLOSED).
+def _canonicalize_json_payload_value(value: Any, _path: str = "$") -> Any:
+    """generic JSON payload 값 검증 — **JSON-native 타입만** 허용(FAIL-CLOSED).
 
-    default=str 을 쓰지 않는 이유: datetime/Decimal/UUID 가 실행 환경 의존 문자열로
-    조용히 변환되어 hash 가 달라질 수 있다. 변환 규칙을 여기에 고정한다.
+    허용: null / bool / int / finite float / str / list / dict(str key)
+    거부: Decimal / datetime / UUID / bytes / set / tuple / 기타 객체
+
+    non-JSON-native 를 문자열로 강제 변환하면 타입이 다른 두 입력이 같은 canonical JSON
+    이 되어 hash 가 충돌한다. 예: Decimal("1.10") 과 "1.10" 은 서로 다른 값인데
+    문자열 변환 시 둘 다 {"v":"1.10"} 이 되어 동일 hash 가 나온다.
+    integrity hash 는 "확정 당시 무엇이 있었는지"를 봉인해야 하므로 hidden coercion = 0 이다.
+
+    표시 자릿수·시각·식별자를 값으로 보존해야 한다면 snapshot 에 명시적 데이터
+    (예: {"value":"1.10","display":"1.10","unit":"원"})로 저장한다.
+    canonicalizer 가 Python 타입을 몰래 의미로 바꾸지 않는다.
+    타입 정규화는 top-level seal identity/time 에만 명시적으로 적용된다.
     """
     # bool 은 int 의 subclass 이므로 반드시 먼저 검사한다.
     if value is None or isinstance(value, (bool, str)):
@@ -120,39 +137,26 @@ def _normalize_for_canonical_json(value: Any, _path: str = "$") -> Any:
             raise _fail("non-finite float at %s" % _path)
         return value
 
-    if isinstance(value, datetime):
-        # naive datetime 은 시간대가 모호하여 hash 재현성을 깨뜨린다 → 거부.
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise _fail("naive datetime (tz 없음) at %s" % _path)
-        utc = value.astimezone(timezone.utc)
-        # 고정 형식: UTC · microsecond 6자리 항상 표기 · 'Z' suffix
-        return utc.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
-
-    if isinstance(value, UUID):
-        return str(value).lower()
-
-    if isinstance(value, Decimal):
-        if not value.is_finite():
-            raise _fail("non-finite Decimal at %s" % _path)
-        # 지수 표기 금지 · 주어진 scale 보존. 1.10 과 1.1 은 다른 값으로 취급한다.
-        return format(value, "f")
-
     if isinstance(value, dict):
         out: Dict[str, Any] = {}
         for key, item in value.items():
             if not isinstance(key, str):
                 raise _fail("non-string dict key %s at %s" % (type(key).__name__, _path))
-            out[key] = _normalize_for_canonical_json(item, "%s.%s" % (_path, key))
+            out[key] = _canonicalize_json_payload_value(item, "%s.%s" % (_path, key))
         return out
 
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list):
         # list 순서는 의미가 있으므로 정렬하지 않는다.
         return [
-            _normalize_for_canonical_json(item, "%s[%d]" % (_path, idx))
+            _canonicalize_json_payload_value(item, "%s[%d]" % (_path, idx))
             for idx, item in enumerate(value)
         ]
 
-    raise _fail("unsupported type %s at %s" % (type(value).__name__, _path))
+    raise _fail(
+        "non-JSON-native type %s at %s (JSON payload 에는 null/bool/int/float/str/list/dict "
+        "만 허용. Decimal/datetime/UUID 등은 snapshot 에 명시적 값으로 저장할 것)"
+        % (type(value).__name__, _path)
+    )
 
 
 def _build_canonical_snapshot_payload(
@@ -190,6 +194,7 @@ def _build_canonical_snapshot_payload(
     if missing:
         raise _fail("required hash field is None: %s" % ", ".join(sorted(missing)))
 
+    # ── top-level seal 필드는 별도 계약으로 **명시** 정규화한다 ──────────────
     # identity 계약 — UUID object 또는 valid UUID string → canonical lowercase.
     raw["runtime_document_id"] = _normalize_identifier(
         runtime_document_id, "runtime_document_id"
@@ -204,6 +209,10 @@ def _build_canonical_snapshot_payload(
         )
     if confirmed_at.tzinfo is None or confirmed_at.utcoffset() is None:
         raise _fail("confirmed_at must be timezone-aware (naive datetime 금지)")
+    # 고정 형식: UTC · microsecond 6자리 항상 표기 · 'Z' suffix
+    raw["confirmed_at"] = (
+        confirmed_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    )
 
     if not isinstance(document_version, int) or isinstance(document_version, bool):
         raise _fail("document_version must be int")
@@ -219,13 +228,15 @@ def _build_canonical_snapshot_payload(
     if not isinstance(rendered_body, str):
         raise _fail("rendered_body must be str")
 
-    # DB CHECK(chk_rdarch_source_trace_array) 와 동일 계약: 비어있지 않은 ARRAY.
-    if not isinstance(source_trace_snapshot, (list, tuple)):
-        raise _fail("source_trace_snapshot must be a JSON array")
+    # DB CHECK(chk_rdarch_source_trace_array) 와 동일 계약: 비어있지 않은 JSON ARRAY.
+    if not isinstance(source_trace_snapshot, list):
+        raise _fail("source_trace_snapshot must be a JSON array (list)")
     if len(source_trace_snapshot) == 0:
         raise _fail("source_trace_snapshot must not be empty")
 
-    return _normalize_for_canonical_json(raw)
+    # ── 나머지(generic JSON payload)는 JSON-native 만 허용 ──────────────────
+    # 위에서 정규화한 seal 필드는 이미 str 이므로 이 검증을 그대로 통과한다.
+    return _canonicalize_json_payload_value(raw)
 
 
 def _canonicalize_confirmed_snapshot(payload: Dict[str, Any]) -> bytes:
@@ -251,7 +262,7 @@ def _canonicalize_confirmed_snapshot(payload: Dict[str, Any]) -> bytes:
             separators=(",", ":"),
             allow_nan=False,
         )
-    except (TypeError, ValueError) as exc:  # pragma: no cover - normalize 가 선제 차단
+    except (TypeError, ValueError) as exc:  # pragma: no cover - 선행 검증이 차단
         raise _fail("json serialization failed: %s" % exc)
 
     return text.encode("utf-8")
@@ -273,12 +284,12 @@ def compute_confirmed_snapshot_hash(**fields: Any) -> str:
         runtime_document_id      UUID object | valid UUID string (→ canonical lowercase)
         document_version         int >= 1
         snapshot_schema_version  int >= 1
-        runtime_values_snapshot  JSON 값
-        source_trace_snapshot    비어있지 않은 list
+        runtime_values_snapshot  JSON-native 값만 (dict 권장)
+        source_trace_snapshot    비어있지 않은 list, 원소는 JSON-native
         template_identity        str
         confirmed_at             timezone-aware datetime
         confirmed_by             UUID object | valid UUID string (→ canonical lowercase)
-        evidence_manifest        JSON 값
+        evidence_manifest        JSON-native 값만
         rendered_body            str
     """
     return _compute_snapshot_hash(_build_canonical_snapshot_payload(**fields))

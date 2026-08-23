@@ -77,6 +77,7 @@ def test_A2_public_api_is_single_entry_point():
         "canonicalize_confirmed_snapshot",
         "build_canonical_snapshot_payload",
         "normalize_for_canonical_json",
+        "canonicalize_json_payload_value",
         "HASH_INPUT_FIELDS",
     ):
         assert not hasattr(dsi, leaked), "public bypass 노출: %s" % leaked
@@ -84,7 +85,7 @@ def test_A2_public_api_is_single_entry_point():
         n for n in dir(dsi) if not n.startswith("_") and n not in ("annotations",)
     }
     # import 된 표준 모듈/타입을 제외한 자체 public 심볼은 __all__ 과 일치해야 한다.
-    own = public - {"hashlib", "json", "datetime", "timezone", "Decimal", "UUID",
+    own = public - {"hashlib", "json", "datetime", "timezone", "UUID",
                     "Any", "Dict", "List"}
     assert own == set(dsi.__all__)
 
@@ -110,7 +111,7 @@ def test_A4_identifier_contract():
     assert h == compute_confirmed_snapshot_hash(**base(runtime_document_id=str(DOC_ID)))
 
 
-# ── deterministic 계약 16종 ───────────────────────────────────────────────
+# ── deterministic 계약 ────────────────────────────────────────────────────
 # 1. dict key 순서가 달라도 hash 동일
 def test_01_top_level_key_order_invariant():
     p1 = _build_canonical_snapshot_payload(**base())
@@ -267,15 +268,71 @@ def test_14_hash_shape():
     assert not h.startswith("sha256:")
 
 
-# 15. Decimal scale 보존 / bool 이 int 로 뭉개지지 않음
-def test_15_decimal_and_scalar_normalization():
-    a = compute_confirmed_snapshot_hash(
-        **base(runtime_values_snapshot={"v": Decimal("1.10")})
-    )
-    b = compute_confirmed_snapshot_hash(
-        **base(runtime_values_snapshot={"v": Decimal("1.1")})
-    )
-    assert a != b  # 문서 snapshot 전용 규칙: scale 유의
+# 15. bool 이 int 로 뭉개지지 않음 (JSON-native 내에서의 타입 구분)
+def test_15_bool_is_not_int():
     t = compute_confirmed_snapshot_hash(**base(runtime_values_snapshot={"v": True}))
     one = compute_confirmed_snapshot_hash(**base(runtime_values_snapshot={"v": 1}))
     assert t != one
+
+
+# 16. JSON payload 안의 Decimal 은 거부된다 (scale 계약 철회)
+def test_16_decimal_in_json_payload_rejected():
+    with pytest.raises(SnapshotCanonicalizationError):
+        compute_confirmed_snapshot_hash(
+            **base(runtime_values_snapshot={"v": Decimal("1.10")})
+        )
+
+
+# 17. non-JSON-native 타입은 전부 거부 → string coercion 충돌 원천 차단
+def test_17_non_json_native_types_rejected():
+    bads = (
+        Decimal("1.10"),
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+        datetime(2026, 1, 1),
+        UUID("33333333-3333-3333-3333-333333333333"),
+        b"bytes",
+        {1, 2},
+        ("a", "b"),
+        object(),
+    )
+    for field in ("runtime_values_snapshot", "evidence_manifest"):
+        for bad in bads:
+            with pytest.raises(SnapshotCanonicalizationError):
+                compute_confirmed_snapshot_hash(**base(**{field: {"v": bad}}))
+    # 중첩 깊은 곳도 동일하게 거부
+    with pytest.raises(SnapshotCanonicalizationError):
+        compute_confirmed_snapshot_hash(
+            **base(runtime_values_snapshot={"a": [{"b": [Decimal("1")]}]})
+        )
+    # source_trace 내부도 동일
+    with pytest.raises(SnapshotCanonicalizationError):
+        compute_confirmed_snapshot_hash(
+            **base(source_trace_snapshot=[{"captured_at": datetime(2026, 1, 1, tzinfo=timezone.utc)}])
+        )
+
+
+# 18. 타입 충돌 부재 확인 — 과거 blocker 재발 방지
+def test_18_no_type_string_collision():
+    """Decimal/UUID/datetime 이 str 로 강제 변환되어 동일 hash 가 되던 결함의 회귀 테스트."""
+    u = UUID("33333333-3333-3333-3333-333333333333")
+    t = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    # 문자열은 정상 수용된다
+    for s_val in ("1.10", str(u), "2026-01-01T00:00:00.000000Z"):
+        assert len(compute_confirmed_snapshot_hash(
+            **base(runtime_values_snapshot={"v": s_val})
+        )) == 64
+    # 대응하는 비-JSON-native 원본은 거부되므로 애초에 충돌할 수 없다
+    for raw_val in (Decimal("1.10"), u, t):
+        with pytest.raises(SnapshotCanonicalizationError):
+            compute_confirmed_snapshot_hash(**base(runtime_values_snapshot={"v": raw_val}))
+
+
+# 19. top-level seal 필드의 타입 정규화는 그대로 유지된다
+def test_19_top_level_seal_normalization_preserved():
+    h = compute_confirmed_snapshot_hash(**base())
+    # UUID object / str / uppercase / hex 는 동일 hash
+    assert h == compute_confirmed_snapshot_hash(**base(confirmed_by=str(BY).upper()))
+    # timezone 표현이 달라도 동일 순간이면 동일 hash
+    assert h == compute_confirmed_snapshot_hash(
+        **base(confirmed_at=AT.astimezone(timezone(timedelta(hours=9))))
+    )
