@@ -376,7 +376,7 @@ def generate_document(doc_id: str, export_type: str = "HTML") -> dict:
         "runtime_document_id": doc_id,
         "form_schema_id": doc.data.get("form_schema_id"),
         "export_type": export_type,
-        "status": "GENERATED",
+        "status": "PENDING",  # WP-DOCUMENT-ARCH-03C: object 미생성 상태이므로 GENERATED 금지 (pre-DDL compat). 실제 완료는 output/snapshot 계약(Q5)에서 GENERATED 승격.
     }
     res = sb.table("generated_document").insert(record).execute()
     gen = res.data[0] if res.data else {}
