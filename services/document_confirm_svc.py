@@ -30,7 +30,7 @@ from services.document_snapshot_integrity import (
 )
 
 
-# ── 도메인 예외 (라우터가 HTTP 로 변환) ──────────────────────────────────────
+# ── 도메인 예외 (라우터가 HTTP 로 변환) ─────────────────────────────
 class ConfirmError(Exception):
     """confirm 실패 도메인 예외. http_status 로 라우터가 매핑한다."""
 
@@ -40,7 +40,7 @@ class ConfirmError(Exception):
         self.detail = detail
 
 
-# ── APPROVE 대상 전이 ───────────────────────────────────────────────────────
+# ── APPROVE 대상 전이 ────────────────────────────────────────
 _TARGET_STATUS = "APPROVED_BY_HUMAN"
 _REQUIRED_FROM = "REVIEW_PENDING"
 _SNAPSHOT_SCHEMA_VERSION = 1
@@ -300,7 +300,11 @@ def confirm_document_atomic(
                 ),
             )
             sealed = cur.fetchone()
-            sealed = dict(sealed) if sealed else {}
+            if not sealed:
+                # FOR UPDATE 로 잠근 행이 seal UPDATE 에서 사라졌다면 무결성 위반.
+                # 조용히 빈 커밋하지 않고 롤백(아래 except 에서 500).
+                raise RuntimeError("seal update returned no row")
+            sealed = dict(sealed)
 
         # 20. COMMIT
         conn.commit()
