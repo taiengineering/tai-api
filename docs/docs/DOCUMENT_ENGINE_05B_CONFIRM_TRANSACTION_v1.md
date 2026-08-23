@@ -1,0 +1,267 @@
+# WP-DOCUMENT-ARCH-05B — Confirm Transaction & Snapshot Seal 정의 문서 (v1)
+
+- 상태: **진행 중** (B0A 배포 완료, B1 구현 대기)
+- 기준 MAIN SHA: `8fdaeca44627bb3ecf76f1f4aa2f14a371039cc6`
+- 대상 저장소: `taiengineering/tai-api`
+- 대상 DB: Supabase `vwlahtguyggrhvslabax` (taieng)
+- 관련 아키텍처 정본: `docs/docs/DOCUMENT_ENGINE_ARCHITECTURE_FINAL_v1.md`
+
+이 문서는 05B 하위 작업(STEP 2 설계 · A1/A2 DDL · B0 조사 · B0A 정책 · B1 조사)에서
+확정된 계약과 현재까지의 실행 결과를 한곳에 모은 정의 문서다. B1 구현은 이 문서의
+계약을 재설계 없이 그대로 따른다.
+
+---
+
+## 0. 목적
+
+confirm(`REVIEW_PENDING → APPROVED_BY_HUMAN`)을 **단일 원자 트랜잭션**으로 수행하여,
+확정 시점의 working state 를 불변 스냅샷으로 봉인한다. 봉인은 다음을 한 번에 만든다.
+
+- `runtime_document_archive` 1행 (sealed snapshot, hash 포함)
+- `runtime_document_approval` 1행 (snapshot_id 로 archive 를 가리킴)
+- `runtime_document_data.status = APPROVED_BY_HUMAN` (seal)
+
+세 가지가 전부 성공하거나 전부 롤백된다. 부분 상태(partial)를 남기지 않는다.
+
+---
+
+## 1. 하위 작업 진행 현황
+
+| 단계 | 내용 | 상태 |
+|---|---|---|
+| STEP 1 | Confirm 트랜잭션 조사 | PASS / CLOSED |
+| STEP 2 | Confirm 트랜잭션 상세 설계 | PASS / DESIGN FIXED |
+| A1 | approval.snapshot_id DDL artifact (UP/DOWN/VALIDATION) | PASS / CLOSED |
+| A1 dry-run | production transactional dry-run (BEGIN→UP→validation→ROLLBACK) | PASS (영구 mutation 0) |
+| A2 | approval.snapshot_id production apply | PASS / CLOSED (LIVE) |
+| B0 | Confirm Auth / Data Scope 조사 | PASS / CLOSED |
+| B0A | Approval Permission Policy (순수 authz 모듈) | PASS / CLOSED (merged/deployed) |
+| B1-0 | Atomic Confirm Pre-Implementation 조사 | PASS (드리프트 0) |
+| **B1-1** | **Atomic Confirm 구현 + 테스트** | **대기 (다음 단계)** |
+| B1-2 | PR / REVIEW / MERGE | 미착수 |
+| B1-3 | DEPLOY VERIFY | 미착수 |
+| B1-4 (E2E) | CONTROLLED FIRST CONFIRM (별도 승인) | 미착수 |
+
+---
+
+## 2. 배포된 산출물 (production LIVE)
+
+### 2.1 코드 (merged to main)
+
+- `services/document_snapshot_integrity.py` — Q4. `compute_confirmed_snapshot_hash(**fields)`.
+  SHA-256 canonical JSON, 10개 키 명시 allowlist, JSON-native only, FAIL-CLOSED.
+- `services/document_schema_renderer.py` — 05A. `build_render_artifacts(*, document, schema, fields, checklists)`.
+  결정적 렌더 → `{rendered_body, template_identity, source_trace_snapshot, evidence_manifest}`.
+- `services/document_confirm_authz.py` — B0A. `authorize_confirm(*, current_user, document, role_scope, actor_id=None, factory_company_id=None)`.
+  순수 인가 정책 함수. DB/clock/network 미접촉.
+
+### 2.2 DB (A2 apply, LIVE)
+
+- `runtime_document_approval.snapshot_id uuid NULL`
+- FK `runtime_document_approval(snapshot_id) → runtime_document_archive(id) ON DELETE RESTRICT`
+- index `idx_rda_snapshot_id (snapshot_id)`
+- 금지(미적용): `snapshot_hash` 컬럼, `NOT NULL`, `APPROVE ⇒ snapshot_id` CHECK
+  (CHECK 은 CODE 배포 후 별도 hardening WP 에서 VALIDATE 와 함께 추가)
+
+---
+
+## 3. 확정 계약 (재설계 금지)
+
+### 3.1 트랜잭션 방식
+
+- **psycopg2 direct transaction** (신규 RPC/DB 함수 없음). `db/direct_sql.py` 의 psycopg2
+  관행(`_connect()` + `DATABASE_URL`, try/commit/except-rollback/finally-close)을 재사용한다.
+- 단, 기존 함수는 단일 작업·개별 커밋 구조다. B1 은 **한 커넥션에서 여러 문을 실행하고
+  마지막에 한 번만 commit** 하는 신규 함수를 둔다(기존 함수 재사용 아님).
+- confirm 전용 함수를 **별도 파일** `services/document_confirm_svc.py` 에 둔다
+  (권장: `confirm_document_atomic(...)`). `change_status()` 를 비대하게 만들지 않는다.
+
+### 3.2 동시성 · 락
+
+- 대상 `runtime_document_data` 행을 `SELECT ... FOR UPDATE` 로 잠근다 (NOWAIT 미사용).
+- render/hash/archive 는 **락 이후 값** 기준으로만 만든다. 락 전 렌더/조회 금지.
+- 동시 confirm 시: TX1 락→커밋, TX2 대기 후 최신 status = APPROVED_BY_HUMAN 확인 → 409.
+
+### 3.3 유효 전이
+
+- `REVIEW_PENDING → APPROVED_BY_HUMAN` 만 confirm 대상.
+- 전이 규칙 SoT = `runtime_state_transition_rule` (락 이후 같은 TX 에서 확인).
+
+### 3.4 인증 · 신원 · 데이터 스코프
+
+- confirm 주체 SoT = 인증된 `current_user.id` (`routers/auth.py` 의 `get_current_user`).
+- `body.actor_id` 는 **신뢰하지 않는다**. 대조만: 없음→허용, 같음→허용, 다름→403.
+- 저장되는 `confirmed_by` / `reviewer_id` / `reviewed_by` 는 전부 `current_user.id`.
+- 승인 권한 = **API code fail-closed** (DB permission 신설 안 함).
+  허용 role = `001`(최고관리자) + `011`(안전보건관리책임자). `012` 등은 불가.
+  (배정 변경은 `APPROVE_ROLE_CODES` 상수만 바꾸는 별도 WP)
+- data scope = 기존 `role_data_scope` 규칙 재사용(신규 authz framework 금지).
+  ALL=회사경계 넘음 / COMPANY=같은회사 / FACTORY=같은회사+같은시설.
+  미정의 · TEAM · ASSIGNED · PLATFORM = fail-closed. PLATFORM 을 ALL 로 자동확장 안 함.
+- ownership consistency: `doc.company_id` 와 `factory→company` 충돌 시 봉인 불가.
+  소유주 자체를 특정 못 하면 `001`(ALL)이라도 봉인 불가. cross-company 는 존재 은닉(404).
+- **ownership scope 판정은 반드시 락 이후 값으로** 한다. 락 전 PostgREST 조회 금지(TOCTOU).
+
+### 3.5 시각
+
+- `SELECT clock_timestamp()` 를 락 이후 같은 TX 에서 **1회만** 읽는다.
+- 그 값을 hash 입력 · `archive.confirmed_at` · `approval.reviewed_at` · `rdd.reviewed_at`
+  에 **동일하게** 사용한다. Python now() 와 DB now() 혼용 금지, INSERT 마다 now() 호출 금지.
+
+### 3.6 approval 링크
+
+- `approval.snapshot_id = archive.id` 를 채운다.
+- `approval.snapshot_hash` 는 두지 않는다. hash SoT 는 `runtime_document_archive` 하나.
+
+### 3.7 `_approval()` / `_audit()` 경계
+
+- APPROVE 경로는 기존 `_approval()`(`except Exception: pass`)을 **완전히 우회**한다.
+  approval INSERT 는 원자 트랜잭션 안에서 직접 수행한다.
+- REJECT · 기타 전이는 기존 `change_status()` 경로를 그대로 둔다(이번 범위 밖).
+- `_audit()` 는 원자 트랜잭션 안에 넣지 않는다. COMMIT 성공 후 기존 best-effort `_audit()`
+  를 1회 호출한다. audit 실패가 confirm 을 되돌리지 않는다.
+
+---
+
+## 4. 트랜잭션 순서 (FIXED)
+
+```
+BEGIN
+ 1. SELECT runtime_document_data WHERE id=%s FOR UPDATE
+ 2. 없으면 404
+ 3. role_data_scope 조회 (current_user.role_code)
+ 4. doc.factory_id 있으면 factories.company_id 조회 (같은 TX)
+ 5. authorize_confirm(current_user, locked doc, role_scope, actor_id, factory_company_id)
+      DENY → ROLLBACK + 해당 HTTP status
+ 6. runtime_state_transition_rule 조회 (locked status → APPROVED_BY_HUMAN)
+ 7. status==REVIEW_PENDING + rule 허용 아니면 409
+ 8. reviewer/comment/version 검증
+ 9. runtime_form_schema 조회
+10. runtime_field 조회
+11. runtime_checklist_item 조회
+12. build_render_artifacts()            (05A)
+13. SELECT clock_timestamp()            (1회)
+14. compute_confirmed_snapshot_hash()   (Q4)
+15. INSERT runtime_document_archive RETURNING id
+16. INSERT runtime_document_approval (snapshot_id=archive.id,
+      reviewer_id=current_user.id, reviewed_at=clock)
+17. UPDATE runtime_document_data (status=APPROVED_BY_HUMAN,
+      reviewed_by=current_user.id, reviewed_at=clock, review_comment=comment)
+18. COMMIT
+어느 단계든 실패 → ROLLBACK → partial state 0
+```
+
+라우터 결합:
+
+```
+POST /document-engine/documents/{doc_id}/status
+  current_user = Depends(get_current_user)      # routers.auth
+  if body.to_status == "APPROVED_BY_HUMAN":
+      document_confirm_svc.confirm_document_atomic(
+          doc_id, actor_id=body.actor_id, comment=body.comment, current_user=current_user)
+  else:
+      기존 svc.change_status(...)
+# APPROVE 전 PostgREST document 조회/ownership 확인 금지 (모두 락 이후)
+```
+
+---
+
+## 5. HTTP 계약
+
+```
+401  승인 요청에 토큰 없음 / invalid token
+403  body.actor_id != 인증 사용자 / role 승인 권한 없음 / scope 부족(같은 회사 내)
+404  문서 없음 / cross-company(존재 은닉) / 소유 회사 판정 불능
+409  locked status != REVIEW_PENDING / 동시 승인에서 이미 승인됨 / document_version 충돌
+422  review_comment 누락 / SchemaRenderError / SnapshotCanonicalizationError
+503  DB 연결 불가 / lock timeout / deadlock
+500  분류되지 않은 서버 오류
+```
+
+---
+
+## 6. archive INSERT 필수 컬럼 (실측)
+
+NOT NULL 이며 default 없음 → B1 이 반드시 채운다:
+
+```
+runtime_document_id · runtime_values_snapshot · confirmed_at · confirmed_by
+document_version · source_trace_snapshot · rendered_body · snapshot_hash · template_identity
+```
+
+생략 가능(default 존재): `id`(gen_random_uuid) · `evidence_links_snapshot`('[]') ·
+`is_immutable`(true) · `snapshot_schema_version`(1) · `evidence_manifest`('[]').
+
+봉인 트리거(LIVE): `runtime_document_data` = `trg_rdd_seal_guard`,
+`runtime_document_archive` = `trg_rdarch_no_delete` · `trg_rdarch_no_update`.
+
+---
+
+## 7. B1 필수 테스트 (구현 시)
+
+```
+A 정상 confirm (archive=1, approval=1, snapshot_id 연결, status=APPROVED_BY_HUMAN)
+B actor spoof 403, DB write=0
+C role 012 403, DB write=0
+D role 011 same company PASS
+E cross-company 404
+F ownership metadata conflict 404
+G REVIEW_PENDING 아님 409
+H transition rule 없음/deny 409
+I renderer 실패 → ROLLBACK
+J hash 실패 → ROLLBACK
+K archive insert 실패 → ROLLBACK
+L approval insert 실패 → ROLLBACK
+M status seal 실패 → ROLLBACK
+N duplicate document_version 409
+O concurrent confirm (하나 성공, 두 번째 409)
+P clock_timestamp 동일 (archive.confirmed_at = approval.reviewed_at = rdd.reviewed_at)
+```
+
+회귀: B0A authz 28 · Q4 24 · 05A 25 는 그대로 통과해야 한다.
+`get_current_user` 는 dependency override 로 테스트하고, 실제 Supabase Auth 호출은 하지 않는다.
+
+---
+
+## 8. FAST-PATH DOWN 경계 (중요)
+
+현재 `archive rows = 0`, `snapshot-linked rows = 0` 인 동안 A1 의 FAST-PATH DOWN 은
+계속 유효(OPEN)하다. **첫 실제 confirm 이 성공해 archive 1행이 생기는 순간부터**
+FAST-PATH DOWN 은 CLOSED 로 전환된다.
+
+따라서:
+
+- B1 코드가 merge/deploy 되어도 **실제 APPROVED_BY_HUMAN 호출은 금지**.
+- 배포 직후 검증은 startup · ImportError · 5xx · route 등록 · production SHA 까지만.
+- 실제 첫 confirm 은 별도 승인(`WP-DOCUMENT-ARCH-05B-B1-E2E CONTROLLED FIRST CONFIRM`)
+  후에만 수행한다. 현재 유일 문서가 DRAFT 이므로, E2E 시 문서를 REVIEW_PENDING 까지
+  올린 뒤 수행한다.
+
+---
+
+## 9. 후속 (05B 이후 예정)
+
+- APPROVE ⇒ snapshot_id CHECK hardening (CODE 배포 후, VALIDATE 동반)
+- 첫 archive 행 생성 후 FAST-PATH DOWN 폐쇄 처리
+- render_pdf_gotenberg 재활성 · source_trace KNOWN 채움(fetcher 확장)
+- api.taieng.co.kr CORS 실패 (05B 와 무관, 별건)
+- `012` 승인 필요 시 allowlist 변경 WP
+
+---
+
+## 부록 A. 기준 커밋
+
+```
+Q4  (document_snapshot_integrity.py)   merge 499fdd18 → main
+05A (document_schema_renderer.py)      PR #192 → main bbcbbc07
+B0A (document_confirm_authz.py)        PR #193 → main 8fdaeca4  (현재 기준)
+A2  (approval.snapshot_id)             apply_migration wo_document_arch05b_a2_approval_snapshot_id
+```
+
+## 부록 B. 검증 한계 (반복)
+
+- 실행 환경 네트워크 차단으로 `pytest`/`psql` 미설치. 테스트는 `pytest.raises` shim 으로
+  전량 실행했고, SQL 은 스키마 대조 + guri execute_sql/apply_migration 실행으로 검증했다.
+  표준 CI 에서 `pytest` 재확인을 권고한다.
+- `/health` HTTP 직접 호출은 세션에서 불가. Railway startup-complete + 2xx + 5xx=0 으로
+  간접 확인했다.
