@@ -23,7 +23,7 @@ ARCHIVE_ID = "cccccccc-0001-0001-0001-000000000001"
 TS = _dt.datetime(2026, 8, 23, 9, 0, 0, tzinfo=_dt.timezone.utc)
 
 
-# ── Fake psycopg2 layer ─────────────────────────────────────────────
+# ── Fake psycopg2 layer ─────────────────────────────────────────
 class FakeUniqueViolation(Exception):
     pass
 
@@ -175,7 +175,7 @@ def locked(status="REVIEW_PENDING", company_id=COMPANY_A, factory_id=None, versi
             "evidence_links": [] if evidence is None else evidence}
 
 
-# ═══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════
 # 1. 정상 confirm
 def test_01_normal_confirm():
     audit = []
@@ -438,9 +438,9 @@ def test_20_existing_approval_not_called():
     assert calls == []  # 기존 _approval 미호출
 
 
-# ═══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════
 # B1-CORR-01 추가: submitter-as-confirmer
-# ═══════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════
 
 # B1. worker 014 self-submitted confirm → PASS
 def test_B1_worker_014_self_submitted_pass():
@@ -501,3 +501,22 @@ def test_B5_all_ids_equal_submitter():
     assert approval_params[1] == USER_ID
     assert update_params[1] == USER_ID
     assert conn.locked_row["submitted_by"] == USER_ID
+
+
+# B6. (hardening) seal UPDATE 가 행을 반환하지 않으면 500 + rollback
+def test_B6_seal_returns_no_row_500():
+    conn = FakeConn(locked_row=locked(submitted_by=USER_ID))
+    # UPDATE 는 성공하지만 RETURNING 이 None 인 상황을 강제
+    class _NoRowCursor(FakeCursor):
+        def execute(self, sql, params=None):
+            super().execute(sql, params)
+            if "UPDATE RUNTIME_DOCUMENT_DATA" in sql.strip().upper():
+                self.conn._last = None  # RETURNING 없음
+    conn.cursor = lambda cursor_factory=None: _NoRowCursor(conn)
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="ok", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 500
+    assert conn.rolled_back and not conn.committed
