@@ -8,6 +8,12 @@ APPROVED_BY_HUMAN 이 confirm_document_atomic 으로 분기되는지 검증한�
 
 import sys
 import types
+from pathlib import Path
+
+# ── repo-relative 경로 (특정 환경 비종속) ────────────────────────────
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 # ── 경량 stub 주입 (import 전에) ───────────────────────────────────
 USER_ID = "11111111-1111-1111-1111-111111111111"
@@ -30,12 +36,8 @@ sys.modules["schemas"] = _schemas_pkg
 sys.modules["schemas.document_engine"] = _schemas_doc
 
 # routers.auth.get_current_user stub
-import os as _os
-_ROUTERS_DIR = _os.path.join(
-    _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "routers"
-)
 _routers_pkg = sys.modules.get("routers") or types.ModuleType("routers")
-_routers_pkg.__path__ = [_ROUTERS_DIR]
+_routers_pkg.__path__ = [str(ROOT / "routers")]
 sys.modules["routers"] = _routers_pkg
 _auth = types.ModuleType("routers.auth")
 _auth.get_current_user = lambda: {"id": USER_ID}
