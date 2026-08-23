@@ -10,8 +10,12 @@ Guardrails:
   - 누락값은 빈 값 유지
   - evidence는 실제 파일만
   - source_trace 항상 유지
+
+v1.1.0 (WP-DOCUMENT-ARCH-05B-B1): APPROVED_BY_HUMAN 전이를 인증·인가·원자 트랜잭션으로
+  강제한다. status route 에 get_current_user 를 부착하고, to_status==APPROVED_BY_HUMAN 은
+  confirm_document_atomic() 로 분기한다. 나머지 전이는 기존 svc.change_status() 유지.
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional
 from schemas.document_engine import (
     DocumentCreateIn,
@@ -21,6 +25,8 @@ from schemas.document_engine import (
     GenerateDocumentIn,
 )
 from services import document_engine_svc as svc
+from services.document_confirm_svc import confirm_document_atomic, ConfirmError
+from routers.auth import get_current_user
 
 router = APIRouter(prefix="/document-engine", tags=["문서엔진"])
 
@@ -118,8 +124,30 @@ def update_document(doc_id: str, body: DocumentUpdateIn):
 # ═══════════════════════════════════════════════════════
 
 @router.post("/documents/{doc_id}/status")
-def change_status(doc_id: str, body: StatusChangeIn):
-    """상태 전이 — runtime_state_transition_rule 기준만 허용"""
+def change_status(
+    doc_id: str,
+    body: StatusChangeIn,
+    current_user: dict = Depends(get_current_user),
+):
+    """상태 전이 — runtime_state_transition_rule 기준만 허용.
+
+    APPROVED_BY_HUMAN 은 인증·인가·원자 트랜잭션(confirm_document_atomic)으로 처리한다.
+    승인 전에 get_document/PostgREST ownership/scope 사전조회를 하지 않는다(TOCTOU 방지) —
+    모든 판정은 트랜잭션 내부에서 SELECT ... FOR UPDATE 이후 값으로 이뤄진다.
+    """
+    if body.to_status == "APPROVED_BY_HUMAN":
+        try:
+            result = confirm_document_atomic(
+                doc_id,
+                actor_id=body.actor_id,
+                comment=body.comment,
+                current_user=current_user,
+            )
+            return {"status": "success", "data": result}
+        except ConfirmError as e:
+            raise HTTPException(e.http_status, e.detail)
+
+    # 그 외 전이는 기존 경로 유지
     try:
         result = svc.change_status(
             doc_id, body.to_status, body.actor_id, body.comment
