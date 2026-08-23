@@ -23,7 +23,7 @@ ARCHIVE_ID = "cccccccc-0001-0001-0001-000000000001"
 TS = _dt.datetime(2026, 8, 23, 9, 0, 0, tzinfo=_dt.timezone.utc)
 
 
-# ── Fake psycopg2 layer ─────────────────────────────────────────────────────
+# ── Fake psycopg2 layer ─────────────────────────────────────────────
 class FakeUniqueViolation(Exception):
     pass
 
@@ -81,8 +81,6 @@ class FakeCursor:
                 raise exc
         if "FOR UPDATE" in s:
             self.conn._last = self.conn.locked_row
-        elif "ROLE_DATA_SCOPE" in s:
-            self.conn._last = self.conn.role_scope_row
         elif "FROM FACTORIES" in s:
             self.conn._last = self.conn.factory_row
         elif "RUNTIME_STATE_TRANSITION_RULE" in s:
@@ -121,7 +119,6 @@ class FakeCursor:
 class FakeConn:
     def __init__(self, **kw):
         self.locked_row = kw.get("locked_row")
-        self.role_scope_row = kw.get("role_scope_row")
         self.factory_row = kw.get("factory_row")
         self.rule_row = kw.get("rule_row", {"requires_reviewer": True, "requires_comment": True})
         self.schema_row = kw.get("schema_row", {"id": SCHEMA_ID, "form_name": "테스트", "form_schema_id": SCHEMA_ID})
@@ -170,18 +167,19 @@ def user(role_code="011", company_id=COMPANY_A, factory_id=None, uid=USER_ID):
 
 
 def locked(status="REVIEW_PENDING", company_id=COMPANY_A, factory_id=None, version=1,
-           runtime=None, evidence=None):
+           runtime=None, evidence=None, submitted_by=USER_ID):
     return {"id": DOC_ID, "form_schema_id": SCHEMA_ID, "status": status,
             "company_id": company_id, "factory_id": factory_id, "version": version,
+            "submitted_by": submitted_by,
             "runtime_data_json": {} if runtime is None else runtime,
             "evidence_links": [] if evidence is None else evidence}
 
 
-# ══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
 # 1. 정상 confirm
 def test_01_normal_confirm():
     audit = []
-    conn = FakeConn(locked_row=locked(), role_scope_row={"scope_type": "COMPANY"})
+    conn = FakeConn(locked_row=locked())
     _install(conn, audit)
     out = confirm_document_atomic(DOC_ID, actor_id=None, comment="검토완료",
                                   current_user=user())
@@ -194,7 +192,7 @@ def test_01_normal_confirm():
 
 # 2. actor spoof → 403
 def test_02_actor_spoof_403():
-    conn = FakeConn(locked_row=locked(), role_scope_row={"scope_type": "COMPANY"})
+    conn = FakeConn(locked_row=locked())
     _install(conn)
     try:
         confirm_document_atomic(DOC_ID, actor_id=OTHER_ID, comment="x", current_user=user())
@@ -204,23 +202,18 @@ def test_02_actor_spoof_403():
     assert conn.rolled_back and conn.archive_inserts == 0
 
 
-# 3. role 012 → 403
-def test_03_role_012_403():
-    conn = FakeConn(locked_row=locked(), role_scope_row={"scope_type": "FACTORY"})
+# 3. (B1-CORR-01 반전) role 012 + 본인 제출 → PASS (role 은 판정 기준 아님)
+def test_03_role_012_self_submitted_pass():
+    conn = FakeConn(locked_row=locked(submitted_by=USER_ID))
     _install(conn)
-    try:
-        confirm_document_atomic(DOC_ID, actor_id=None, comment="x",
-                                current_user=user(role_code="012"))
-        assert False
-    except ConfirmError as e:
-        assert e.http_status == 403
-    assert conn.rolled_back
+    out = confirm_document_atomic(DOC_ID, actor_id=None, comment="ok",
+                                  current_user=user(role_code="012", uid=USER_ID))
+    assert conn.committed and out["status"] == "APPROVED_BY_HUMAN"
 
 
 # 4. role 011 same company → PASS
 def test_04_role_011_same_company_pass():
-    conn = FakeConn(locked_row=locked(company_id=COMPANY_A),
-                    role_scope_row={"scope_type": "COMPANY"})
+    conn = FakeConn(locked_row=locked(company_id=COMPANY_A))
     _install(conn)
     out = confirm_document_atomic(DOC_ID, actor_id=None, comment="ok",
                                   current_user=user(role_code="011", company_id=COMPANY_A))
@@ -229,8 +222,7 @@ def test_04_role_011_same_company_pass():
 
 # 5. cross-company → 404
 def test_05_cross_company_404():
-    conn = FakeConn(locked_row=locked(company_id=COMPANY_B),
-                    role_scope_row={"scope_type": "COMPANY"})
+    conn = FakeConn(locked_row=locked(company_id=COMPANY_B))
     _install(conn)
     try:
         confirm_document_atomic(DOC_ID, actor_id=None, comment="x",
@@ -244,7 +236,6 @@ def test_05_cross_company_404():
 # 6. ownership metadata conflict → 404
 def test_06_ownership_conflict_404():
     conn = FakeConn(locked_row=locked(company_id=COMPANY_A, factory_id=FACTORY_1),
-                    role_scope_row={"scope_type": "COMPANY"},
                     factory_row={"company_id": COMPANY_B})  # 충돌
     _install(conn)
     try:
@@ -258,8 +249,7 @@ def test_06_ownership_conflict_404():
 
 # 7. REVIEW_PENDING 아님 → 409
 def test_07_not_review_pending_409():
-    conn = FakeConn(locked_row=locked(status="DRAFT"),
-                    role_scope_row={"scope_type": "COMPANY"})
+    conn = FakeConn(locked_row=locked(status="DRAFT"))
     _install(conn)
     try:
         confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
@@ -271,7 +261,7 @@ def test_07_not_review_pending_409():
 
 # 8. transition rule 없음 → 409
 def test_08_no_transition_rule_409():
-    conn = FakeConn(locked_row=locked(), role_scope_row={"scope_type": "COMPANY"},
+    conn = FakeConn(locked_row=locked(),
                     rule_row=None)
     _install(conn)
     try:
@@ -284,7 +274,7 @@ def test_08_no_transition_rule_409():
 
 # 9. comment 없음 → 422
 def test_09_missing_comment_422():
-    conn = FakeConn(locked_row=locked(), role_scope_row={"scope_type": "COMPANY"})
+    conn = FakeConn(locked_row=locked())
     _install(conn)
     try:
         confirm_document_atomic(DOC_ID, actor_id=None, comment="  ", current_user=user())
@@ -298,7 +288,7 @@ def test_09_missing_comment_422():
 def test_10_renderer_failure_rollback():
     # 05A 렌더러 실제 실패조건: runtime_field 가 다른 schema 소속이면 SchemaRenderError.
     # svc 의 version/schema gate 를 통과한 뒤 build_render_artifacts 에서 422 로 변환된다.
-    conn = FakeConn(locked_row=locked(), role_scope_row={"scope_type": "COMPANY"},
+    conn = FakeConn(locked_row=locked(),
                     field_rows=[{"id": "fld1", "form_schema_id": "OTHER_SCHEMA",
                                  "field_key": "k", "field_order": 1}])
     _install(conn)
@@ -312,7 +302,7 @@ def test_10_renderer_failure_rollback():
 
 # 11. hash failure → rollback
 def test_11_hash_failure_rollback(monkeypatch=None):
-    conn = FakeConn(locked_row=locked(), role_scope_row={"scope_type": "COMPANY"})
+    conn = FakeConn(locked_row=locked())
     _install(conn)
     orig = mod.compute_confirmed_snapshot_hash
     def boom(**k):
@@ -331,7 +321,7 @@ def test_11_hash_failure_rollback(monkeypatch=None):
 
 # 12. archive insert failure → rollback
 def test_12_archive_insert_failure_rollback():
-    conn = FakeConn(locked_row=locked(), role_scope_row={"scope_type": "COMPANY"},
+    conn = FakeConn(locked_row=locked(),
                     fail_on={"INSERT INTO runtime_document_archive": RuntimeError("archive fail")})
     _install(conn)
     try:
@@ -344,7 +334,7 @@ def test_12_archive_insert_failure_rollback():
 
 # 13. approval insert failure → rollback
 def test_13_approval_insert_failure_rollback():
-    conn = FakeConn(locked_row=locked(), role_scope_row={"scope_type": "COMPANY"},
+    conn = FakeConn(locked_row=locked(),
                     fail_on={"INSERT INTO runtime_document_approval": RuntimeError("approval fail")})
     _install(conn)
     try:
@@ -357,7 +347,7 @@ def test_13_approval_insert_failure_rollback():
 
 # 14. rdd seal failure → rollback
 def test_14_rdd_seal_failure_rollback():
-    conn = FakeConn(locked_row=locked(), role_scope_row={"scope_type": "COMPANY"},
+    conn = FakeConn(locked_row=locked(),
                     fail_on={"UPDATE runtime_document_data": RuntimeError("seal fail")})
     _install(conn)
     try:
@@ -370,7 +360,7 @@ def test_14_rdd_seal_failure_rollback():
 
 # 15. duplicate version → 409
 def test_15_duplicate_version_409():
-    conn = FakeConn(locked_row=locked(), role_scope_row={"scope_type": "COMPANY"},
+    conn = FakeConn(locked_row=locked(),
                     fail_on={"INSERT INTO runtime_document_archive": FakeUniqueViolation("dup")})
     _install(conn)
     try:
@@ -383,8 +373,7 @@ def test_15_duplicate_version_409():
 
 # 16. concurrent / stale second approval → 409 (락 후 status가 이미 APPROVED)
 def test_16_stale_second_approval_409():
-    conn = FakeConn(locked_row=locked(status="APPROVED_BY_HUMAN"),
-                    role_scope_row={"scope_type": "COMPANY"})
+    conn = FakeConn(locked_row=locked(status="APPROVED_BY_HUMAN"))
     _install(conn)
     try:
         confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
@@ -396,7 +385,7 @@ def test_16_stale_second_approval_409():
 
 # 17. timestamp 동일성 (archive/approval/rdd 모두 같은 TS)
 def test_17_timestamp_identical():
-    conn = FakeConn(locked_row=locked(), role_scope_row={"scope_type": "COMPANY"})
+    conn = FakeConn(locked_row=locked())
     _install(conn)
     confirm_document_atomic(DOC_ID, actor_id=None, comment="ok", current_user=user())
     # archive INSERT params 의 confirmed_at, approval reviewed_at, update reviewed_at 모두 TS
@@ -413,7 +402,7 @@ def test_17_timestamp_identical():
 
 # 18. snapshot_id = 실제 archive.id
 def test_18_snapshot_id_is_archive_id():
-    conn = FakeConn(locked_row=locked(), role_scope_row={"scope_type": "COMPANY"})
+    conn = FakeConn(locked_row=locked())
     _install(conn)
     confirm_document_atomic(DOC_ID, actor_id=None, comment="ok", current_user=user())
     approval_params = next(p for (s, p) in conn.executed if "INSERT INTO runtime_document_approval" in s)
@@ -423,7 +412,7 @@ def test_18_snapshot_id_is_archive_id():
 
 # 19. confirmed_by / reviewer / reviewed_by 모두 auth user
 def test_19_all_ids_are_auth_user():
-    conn = FakeConn(locked_row=locked(), role_scope_row={"scope_type": "COMPANY"})
+    conn = FakeConn(locked_row=locked())
     _install(conn)
     confirm_document_atomic(DOC_ID, actor_id=USER_ID, comment="ok", current_user=user(uid=USER_ID))
     archive_params = next(p for (s, p) in conn.executed if "INSERT INTO runtime_document_archive" in s)
@@ -440,10 +429,75 @@ def test_20_existing_approval_not_called():
     calls = []
     orig = legacy._approval
     legacy._approval = lambda *a, **k: calls.append(a)
-    conn = FakeConn(locked_row=locked(), role_scope_row={"scope_type": "COMPANY"})
+    conn = FakeConn(locked_row=locked())
     _install(conn)
     try:
         confirm_document_atomic(DOC_ID, actor_id=None, comment="ok", current_user=user())
     finally:
         legacy._approval = orig
     assert calls == []  # 기존 _approval 미호출
+
+
+# ═══════════════════════════════════════════════════════════════
+# B1-CORR-01 추가: submitter-as-confirmer
+# ═══════════════════════════════════════════════════════════════
+
+# B1. worker 014 self-submitted confirm → PASS
+def test_B1_worker_014_self_submitted_pass():
+    conn = FakeConn(locked_row=locked(submitted_by=USER_ID))
+    _install(conn)
+    out = confirm_document_atomic(DOC_ID, actor_id=None, comment="ok",
+                                  current_user=user(role_code="014", uid=USER_ID))
+    assert conn.committed and out["status"] == "APPROVED_BY_HUMAN"
+    assert conn.archive_inserts == 1 and conn.approval_inserts == 1 and conn.status_updates == 1
+
+
+# B2. safety manager 012 self-submitted confirm → PASS
+def test_B2_safety_012_self_submitted_pass():
+    conn = FakeConn(locked_row=locked(submitted_by=USER_ID))
+    _install(conn)
+    out = confirm_document_atomic(DOC_ID, actor_id=None, comment="ok",
+                                  current_user=user(role_code="012", uid=USER_ID))
+    assert conn.committed and out["status"] == "APPROVED_BY_HUMAN"
+
+
+# B3. admin 001 이지만 다른 사람이 제출 → 403 + rollback
+def test_B3_admin_other_submitter_403():
+    conn = FakeConn(locked_row=locked(submitted_by=OTHER_ID))
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x",
+                                current_user=user(role_code="001", uid=USER_ID))
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 403
+    assert conn.rolled_back and conn.archive_inserts == 0
+
+
+# B4. submitted_by NULL → 409 + rollback
+def test_B4_submitter_null_409():
+    conn = FakeConn(locked_row=locked(submitted_by=None))
+    _install(conn)
+    try:
+        confirm_document_atomic(DOC_ID, actor_id=None, comment="x", current_user=user())
+        assert False
+    except ConfirmError as e:
+        assert e.http_status == 409
+    assert conn.rolled_back and conn.archive_inserts == 0
+
+
+# B5. confirmed_by / reviewer_id / reviewed_by = submitted_by = auth user
+def test_B5_all_ids_equal_submitter():
+    conn = FakeConn(locked_row=locked(submitted_by=USER_ID))
+    _install(conn)
+    confirm_document_atomic(DOC_ID, actor_id=USER_ID, comment="ok",
+                            current_user=user(uid=USER_ID))
+    archive_params = next(p for (s, p) in conn.executed if "INSERT INTO runtime_document_archive" in s)
+    approval_params = next(p for (s, p) in conn.executed if "INSERT INTO runtime_document_approval" in s)
+    update_params = next(p for (s, p) in conn.executed if "UPDATE runtime_document_data" in s)
+    # archive.confirmed_by(idx4) / approval.reviewer_id(idx1) / rdd.reviewed_by(idx1) 모두 USER_ID
+    # 그리고 locked.submitted_by 도 USER_ID → 4자 동일성
+    assert archive_params[4] == USER_ID
+    assert approval_params[1] == USER_ID
+    assert update_params[1] == USER_ID
+    assert conn.locked_row["submitted_by"] == USER_ID
