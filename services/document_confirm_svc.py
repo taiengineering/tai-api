@@ -105,17 +105,10 @@ def confirm_document_atomic(
                 raise ConfirmError(404, "document not found")
             locked = dict(locked)
 
-            # 3. role_data_scope (없으면 None → authorize_confirm fail-closed)
-            role_code = current_user.get("role_code")
-            role_scope = None
-            if role_code:
-                cur.execute(
-                    "SELECT scope_type FROM role_data_scope WHERE role_code = %s LIMIT 1",
-                    (str(role_code),),
-                )
-                sc = cur.fetchone()
-                if sc:
-                    role_scope = sc.get("scope_type")
+            # 3. (B1-CORR-01) role_data_scope 조회 제거.
+            #     Confirm 권한은 role tier 가 아니라 제출자 identity 로 판정한다.
+            #     submitted_by 는 위 FOR UPDATE 로 잠근 locked row 에서만 사용한다
+            #     (재조회·pre-lock 조회 금지).
 
             # 4. doc.factory_id → factories.company_id (같은 TX)
             factory_company_id = None
@@ -129,10 +122,10 @@ def confirm_document_atomic(
                     factory_company_id = fc.get("company_id")
 
             # 5~6. 인가 (DENY → 롤백 + HTTP status)
+            #      submitter-as-confirmer: locked.submitted_by == current_user.id.
             auth = authorize_confirm(
                 current_user=current_user,
                 document=locked,
-                role_scope=role_scope,
                 actor_id=actor_id,
                 factory_company_id=factory_company_id,
             )
