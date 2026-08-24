@@ -62,6 +62,57 @@ def _building_probe_raw(sigungu, bjdong, bun, ji, plat_gb="0", endpoint="getBrTi
         return {"error": f"{type(e).__name__}: {e}"}
 
 
+def _building_probe_matrix(sigungu, bjdong, bun, ji, mountain="0", endpoint="getBrTitleInfo"):
+    """진단 전용 — 파라미터 조합별 data.go.kr 원본 응답을 나란히 노출한다.
+    검증 라이브러리(PublicDataReader)와 현재 tai-api 방식의 차이(serviceKey unquote,
+    platGbCd 생략, ji 생략)를 실측으로 판별하기 위한 매트릭스."""
+    import re as _re
+    from urllib.parse import unquote as _unq
+    base = f"{BUILDING_BASE}/{endpoint}"
+
+    def _run(label, params, key_variant):
+        try:
+            p = dict(params)
+            p["serviceKey"] = key_variant
+            p.update({"numOfRows": 10, "pageNo": 1, "_type": "json"})
+            r = requests.get(base, params=p, headers=BUILDING_HEADERS, verify=False, timeout=15)
+            body = (r.text or "")[:400]
+            m = _re.search(r"<returnReasonCode>(\d+)</returnReasonCode>", body) or _re.search(r'"returnReasonCode"\s*:\s*"?(\d+)', body)
+            m2 = _re.search(r"<errMsg>([^<]+)</errMsg>", body) or _re.search(r'"errMsg"\s*:\s*"([^"]+)', body)
+            tc = _re.search(r"<totalCount>(\d+)</totalCount>", body) or _re.search(r'"totalCount"\s*:\s*"?(\d+)', body)
+            return {
+                "label": label,
+                "http": r.status_code,
+                "return_reason_code": m.group(1) if m else None,
+                "err_msg": m2.group(1) if m2 else None,
+                "totalCount": tc.group(1) if tc else None,
+                "body_head": body[:180],
+            }
+        except Exception as e:
+            return {"label": label, "error": f"{type(e).__name__}: {e}"}
+
+    key_raw = BUILDING_KEY
+    key_unq = _unq(BUILDING_KEY)
+    base_params = {"sigunguCd": sigungu, "bjdongCd": bjdong, "bun": bun}
+    results = []
+    # 1) 현재 tai-api 방식: platGbCd=mountain, ji=0000, 키 원본(인코딩키 그대로)
+    results.append(_run("current(platGb=mtn,ji=0000,key=raw)", {**base_params, "platGbCd": mountain, "ji": ji}, key_raw))
+    # 2) 키만 unquote(디코딩) — 이중인코딩 가설
+    results.append(_run("key_unquote(platGb=mtn,ji=0000)", {**base_params, "platGbCd": mountain, "ji": ji}, key_unq))
+    # 3) platGbCd 생략 + ji 생략 (PublicDataReader 방식), 키 원본
+    results.append(_run("omit_platGb+omit_ji(key=raw)", {**base_params}, key_raw))
+    # 4) platGbCd 생략 + ji 생략 + 키 unquote (검증 라이브러리 완전 재현)
+    results.append(_run("verified(omit_platGb+omit_ji+key=unq)", {**base_params}, key_unq))
+    # 5) platGbCd=0 명시 + ji=0000, 키 원본
+    results.append(_run("platGb=0,ji=0000,key=raw", {**base_params, "platGbCd": "0", "ji": ji}, key_raw))
+    return {
+        "key_len_raw": len(key_raw),
+        "key_len_unquoted": len(key_unq),
+        "key_changed_by_unquote": key_raw != key_unq,
+        "attempts": results,
+    }
+
+
 def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -628,6 +679,7 @@ def diagnose(address: str = Query("인천광역시 서구 가좌로 123", descri
             parsed = parse_bdmgtsn(bdmgtsn)
             result["bdmgtsn_parsed"] = parsed
             result["raw_probe"] = _building_probe_raw(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], plat_gb=parsed.get("mountain", "0"))
+            result["probe_matrix"] = _building_probe_matrix(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], mountain=parsed.get("mountain", "0"))
             _pg = parsed.get("mountain", "0")
             title = get_building_title(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], plat_gb=_pg)
             if not title:
