@@ -128,6 +128,69 @@ def _building_probe_matrix(sigungu, bjdong, bun, ji, mountain="0", endpoint="get
     }
 
 
+def _building_probe_proxy(sigungu, bjdong, bun, endpoint="getBrTitleInfo"):
+    """진단 전용 — 아웃바운드 프록시 경유 시 code 10이 사라지는지 실측 + 프록시 env 자동탐지.
+    data.go.kr 건축물대장은 등록 IP만 허용 → 미등록 IP는 code 10. 프록시 경유로 등록 IP를 쓰면
+    정상 응답(totalCount)이 나와야 한다. requests는 proxies= 인자가 있어야 프록시를 쓴다."""
+    import re as _re
+    base = f"{BUILDING_BASE}/{endpoint}"
+    params = {
+        "serviceKey": BUILDING_KEY, "sigunguCd": sigungu, "bjdongCd": bjdong,
+        "bun": bun, "numOfRows": 10, "pageNo": 1, "_type": "json",
+    }
+    # 후보 env 이름들에서 프록시 URL 탐지
+    candidate_names = ["OUTBOUND_PROXY", "BUILDING_PROXY", "DATA_GO_KR_PROXY",
+                       "PROXY_URL", "HTTPS_PROXY", "HTTP_PROXY",
+                       "https_proxy", "http_proxy", "FIXIE_URL", "QUOTAGUARD_URL", "PROXY"]
+    found = {n: bool(os.environ.get(n)) for n in candidate_names}
+    proxy_env_present = [n for n, v in found.items() if v]
+
+    def _probe(label, proxies):
+        try:
+            r = requests.get(base, params=params, headers=BUILDING_HEADERS,
+                             proxies=proxies, verify=False, timeout=20)
+            body = (r.text or "")[:400]
+            m = _re.search(r"<returnReasonCode>(\d+)</returnReasonCode>", body) or _re.search(r'"returnReasonCode"\s*:\s*"?(\d+)', body)
+            m2 = _re.search(r"<errMsg>([^<]+)</errMsg>", body) or _re.search(r'"errMsg"\s*:\s*"([^"]+)', body)
+            tc = _re.search(r"<totalCount>(\d+)</totalCount>", body) or _re.search(r'"totalCount"\s*:\s*"?(\d+)', body)
+            return {
+                "label": label, "http": r.status_code,
+                "return_reason_code": m.group(1) if m else None,
+                "err_msg": m2.group(1) if m2 else None,
+                "totalCount": tc.group(1) if tc else None,
+                "body_head": body[:180],
+            }
+        except Exception as e:
+            return {"label": label, "error": f"{type(e).__name__}: {e}"}
+
+    results = []
+    # A) 프록시 없음 (현재 상태 재현)
+    results.append(_probe("no_proxy(current)", None))
+    # B) 발견된 각 프록시 env 로 경유
+    for n in proxy_env_present:
+        purl = os.environ.get(n)
+        results.append(_probe(f"via_{n}", {"http": purl, "https": purl}))
+
+    # 서버의 현재 아웃바운드 공인 IP도 확인 (프록시 없이 / 프록시 경유)
+    def _whatismyip(proxies, label):
+        try:
+            r = requests.get("https://api.ipify.org?format=json", proxies=proxies, timeout=15)
+            return {"label": label, "ip": r.json().get("ip")}
+        except Exception as e:
+            return {"label": label, "error": f"{type(e).__name__}: {e}"}
+    ip_checks = [_whatismyip(None, "direct_ip")]
+    for n in proxy_env_present:
+        purl = os.environ.get(n)
+        ip_checks.append(_whatismyip({"http": purl, "https": purl}, f"ip_via_{n}"))
+
+    return {
+        "proxy_env_present": proxy_env_present,
+        "proxy_env_checked": found,
+        "building_attempts": results,
+        "outbound_ip": ip_checks,
+    }
+
+
 def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -695,6 +758,7 @@ def diagnose(address: str = Query("인천광역시 서구 가좌로 123", descri
             result["bdmgtsn_parsed"] = parsed
             result["raw_probe"] = _building_probe_raw(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], plat_gb=parsed.get("mountain", "0"))
             result["probe_matrix"] = _building_probe_matrix(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], mountain=parsed.get("mountain", "0"))
+            result["probe_proxy"] = _building_probe_proxy(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"])
             _pg = parsed.get("mountain", "0")
             title = get_building_title(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], plat_gb=_pg)
             if not title:
