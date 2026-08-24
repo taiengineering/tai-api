@@ -85,6 +85,22 @@ async def submit_checkin(body: EquipmentCheckinCreate):
         ).limit(1).execute()
         company_id = (fac.data[0] if fac.data else {}).get("company_id")
 
+    # WP-04E: schedule_id 제공 시 asset.factory_id 와 schedule.factory_id pair 일치 검증 (side-effect 전 fail-closed).
+    #   ASSET = factory authority. cross-factory / 미해결 pair 는 INSERT/UPDATE/notify 이전에 중단.
+    if body.schedule_id:
+        _ws = supabase.table("work_schedules").select("id, factory_id").eq(
+            "id", body.schedule_id
+        ).limit(1).execute()
+        if not _ws.data:
+            raise HTTPException(status_code=409, detail="점검 일정을 찾을 수 없습니다")
+        _sched_factory_id = _ws.data[0].get("factory_id")
+        if not _sched_factory_id:
+            raise HTTPException(status_code=409, detail="일정의 factory_id를 확인할 수 없습니다")
+        if not factory_id:
+            raise HTTPException(status_code=409, detail="설비의 factory_id를 확인할 수 없습니다")
+        if _sched_factory_id != factory_id:
+            raise HTTPException(status_code=409, detail="설비와 일정의 사업장이 일치하지 않습니다")
+
     # 체크인 레코드 저장
     now_iso     = datetime.now(timezone.utc).isoformat()
     insert_data = {
