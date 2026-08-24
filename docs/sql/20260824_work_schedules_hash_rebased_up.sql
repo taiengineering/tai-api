@@ -16,15 +16,19 @@
 --              대신 LOCK 이후 mismatch/null=0 을 PRECHECK 로 재확인(참조는 canonical parent).
 --   REBASE-3 : child pair CHECK / composite FK / partition core(§3~§9,§11~§15) 는 OLD 설계 그대로 유지.
 --
---   [REV-2 CRITICAL 추가 — 물리설계 불변]
+--   [REV-2 CRITICAL — 물리설계 불변]
 --   CRITICAL-1 (§2 snapshot + §14-B rebind + §15-(9)): dashboard_stats matview OID rebind.
 --   CRITICAL-2 (§2/§4/§12 REVOKE + §15-(10)): rollback anchor / snapshot / physical partition privilege lockdown.
+--   [REV-3 CRITICAL-3 — ACL exactness]
+--   ACL 스냅샷/POSTCHECK SoT = pg_class.relacl + aclexplode (information_schema.role_table_grants 는 PG17 MAINTAIN 누락 + matview 0 rows).
+--   MAINTAIN 포함 8 privileges × role 캡처. restore 는 REVOKE ALL → 스냅샷 재생 → aclexplode 양방향 EXCEPT. matview ACL = arwdDxtm × 4 roles(owner-only 아님).
 --
 --   [PRE-STATE 실측 2026-08-24 @ 6874bb85 · fresh]
 --     work_schedules : rows=66 · cols=37 · factory_id NULL=0 · distinct factory=4 · dup target=0
 --                      set/factory mismatch=0 · constraints=7 · CHECK=0 · indexes=12 · policies=6
 --                      user triggers=0 · owner=postgres · RLS enabled=true forced=false · relkind='r' · comments=26
---     dependent matview: dashboard_stats (owner postgres · populated · ws deps 3 · def 참조 12 · idx singleton · comment NULL · grants owner-only)
+--                      ACL(aclexplode): anon/authenticated/service_role/postgres 각 arwdDxtm (SELECT/INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER/MAINTAIN)
+--     dependent matview: dashboard_stats (owner postgres · populated · ws deps 3 · def 참조 12 · idx singleton · comment NULL · ACL arwdDxtm×4)
 --     work_assignments   : rows=5991 · factory companion LIVE(04C) · linked factory NULL=0 · mismatch=0 · schedule NULL=0
 --                          factory_id: uuid/nullable · comment=NULL
 --     safety_inspections : rows=2 · linked=1 · legacy standalone(assignment NULL)=1 · linked factory NULL=0
@@ -182,9 +186,15 @@ SELECT coalesce(a.attname, '(table)') AS objname, d.description
   LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = d.objsubid;
 
 CREATE TABLE public._mig_ws_grants AS
-SELECT grantor, grantee, privilege_type, is_grantable
-  FROM information_schema.role_table_grants
- WHERE table_schema='public' AND table_name='work_schedules';
+SELECT
+    CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END AS grantor,
+    CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END AS grantee,
+    a.privilege_type, a.is_grantable
+  FROM pg_class c
+  CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
+ WHERE c.oid='public.work_schedules'::regclass;
+-- [REV-3 CRITICAL-3] ACL SoT = pg_class.relacl + aclexplode (information_schema.role_table_grants 는 PG17 MAINTAIN 누락).
+--   grantee/grantor 는 oid 0 → PUBLIC 매핑. is_grantable 은 boolean.
 
 CREATE TABLE public._mig_ws_policies AS
 SELECT policyname, cmd, permissive, roles::text AS roles, qual, with_check
@@ -217,9 +227,14 @@ SELECT indexname, indexdef FROM pg_indexes
  WHERE schemaname='public' AND tablename='dashboard_stats';
 
 CREATE TABLE public._mig_ws_matview_grants AS
-SELECT grantee, privilege_type, is_grantable
-  FROM information_schema.role_table_grants
- WHERE table_schema='public' AND table_name='dashboard_stats';
+SELECT
+    CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END AS grantor,
+    CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END AS grantee,
+    a.privilege_type, a.is_grantable
+  FROM pg_class c
+  CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('m', c.relowner))) a
+ WHERE c.oid='public.dashboard_stats'::regclass;
+-- [REV-3 CRITICAL-3] matview ACL 도 aclexplode. 실측: anon/authenticated/service_role/postgres 각 arwdDxtm (owner-only 아님).
 
 DO $$
 BEGIN
@@ -536,19 +551,24 @@ END $$;
 
 
 -- ---------------------------------------------------------------------
--- §14. OWNER + GRANTS — 스냅샷에서 동적 재생성 (is_grantable=YES → WITH GRANT OPTION)
+-- §14. OWNER + GRANTS — 스냅샷에서 동적 재생성 (REV-3: aclexplode SoT + ACL reset, is_grantable boolean, PUBLIC 처리)
 -- ---------------------------------------------------------------------
 ALTER TABLE public.work_schedules OWNER TO postgres;
 
+-- [REV-3 CRITICAL-3] 명시 ACL reset 후 스냅샷 재생 (default ACL 우연 의존 제거).
+REVOKE ALL PRIVILEGES ON TABLE public.work_schedules FROM PUBLIC;
+REVOKE ALL PRIVILEGES ON TABLE public.work_schedules FROM anon, authenticated, service_role;
 DO $$
 DECLARE r record;
 BEGIN
     FOR r IN SELECT DISTINCT grantee, privilege_type, is_grantable
                FROM public._mig_ws_grants LOOP
-        IF r.is_grantable = 'YES' THEN
-            EXECUTE format('GRANT %s ON public.work_schedules TO %I WITH GRANT OPTION', r.privilege_type, r.grantee);
+        IF r.is_grantable THEN
+            EXECUTE format('GRANT %s ON public.work_schedules TO %s WITH GRANT OPTION',
+                           r.privilege_type, CASE WHEN r.grantee='PUBLIC' THEN 'PUBLIC' ELSE quote_ident(r.grantee) END);
         ELSE
-            EXECUTE format('GRANT %s ON public.work_schedules TO %I', r.privilege_type, r.grantee);
+            EXECUTE format('GRANT %s ON public.work_schedules TO %s',
+                           r.privilege_type, CASE WHEN r.grantee='PUBLIC' THEN 'PUBLIC' ELSE quote_ident(r.grantee) END);
         END IF;
     END LOOP;
 END $$;
@@ -588,12 +608,16 @@ BEGIN
         EXECUTE format('COMMENT ON MATERIALIZED VIEW public.dashboard_stats IS %L', v_comment);
     END IF;
 
-    -- grants 복원 (원본은 role grant 없음(owner-only)일 수 있음 → 스냅샷 그대로)
+    -- grants 복원 [REV-3 CRITICAL-3]: ACL reset 후 aclexplode 스냅샷 재생 (MAINTAIN 포함, arwdDxtm × roles).
+    EXECUTE 'REVOKE ALL PRIVILEGES ON TABLE public.dashboard_stats FROM PUBLIC';
+    EXECUTE 'REVOKE ALL PRIVILEGES ON TABLE public.dashboard_stats FROM anon, authenticated, service_role';
     FOR r IN SELECT grantee, privilege_type, is_grantable FROM public._mig_ws_matview_grants LOOP
-        IF r.is_grantable = 'YES' THEN
-            EXECUTE format('GRANT %s ON public.dashboard_stats TO %I WITH GRANT OPTION', r.privilege_type, r.grantee);
+        IF r.is_grantable THEN
+            EXECUTE format('GRANT %s ON public.dashboard_stats TO %s WITH GRANT OPTION',
+                           r.privilege_type, CASE WHEN r.grantee='PUBLIC' THEN 'PUBLIC' ELSE quote_ident(r.grantee) END);
         ELSE
-            EXECUTE format('GRANT %s ON public.dashboard_stats TO %I', r.privilege_type, r.grantee);
+            EXECUTE format('GRANT %s ON public.dashboard_stats TO %s',
+                           r.privilege_type, CASE WHEN r.grantee='PUBLIC' THEN 'PUBLIC' ELSE quote_ident(r.grantee) END);
         END IF;
     END LOOP;
 END $$;
@@ -637,20 +661,24 @@ BEGIN
          SELECT objname, description FROM public._mig_ws_comments)) x;
     IF v_diff > 0 THEN RAISE EXCEPTION 'POSTCHECK FAIL: comments mismatch = %', v_diff; END IF;
 
-    -- (4) grants EXACT equality
+    -- (4) grants EXACT equality [REV-3 CRITICAL-3: aclexplode SoT, MAINTAIN 포함]
     SELECT count(*) INTO v_diff FROM (
         (SELECT grantor, grantee, privilege_type, is_grantable FROM public._mig_ws_grants
          EXCEPT
-         SELECT grantor, grantee, privilege_type, is_grantable
-           FROM information_schema.role_table_grants
-          WHERE table_schema='public' AND table_name='work_schedules')
+         SELECT CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
+                CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+                a.privilege_type, a.is_grantable
+           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
+          WHERE c.oid='public.work_schedules'::regclass)
         UNION ALL
-        (SELECT grantor, grantee, privilege_type, is_grantable
-           FROM information_schema.role_table_grants
-          WHERE table_schema='public' AND table_name='work_schedules'
+        (SELECT CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
+                CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+                a.privilege_type, a.is_grantable
+           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
+          WHERE c.oid='public.work_schedules'::regclass
          EXCEPT
          SELECT grantor, grantee, privilege_type, is_grantable FROM public._mig_ws_grants)) x;
-    IF v_diff > 0 THEN RAISE EXCEPTION 'POSTCHECK FAIL: grants mismatch = %', v_diff; END IF;
+    IF v_diff > 0 THEN RAISE EXCEPTION 'POSTCHECK FAIL: grants mismatch = % (aclexplode/MAINTAIN 포함)', v_diff; END IF;
 
     -- (5) policy EXACT equality
     SELECT count(*) INTO v_diff FROM (
@@ -704,6 +732,24 @@ BEGIN
          WHERE d.refobjid = 'public.work_schedules_old'::regclass) THEN
         RAISE EXCEPTION 'POSTCHECK FAIL: dashboard_stats 가 여전히 work_schedules_old 를 참조';
     END IF;
+    -- (9-B) [REV-3 CRITICAL-3] matview ACL 이 스냅샷대로 복원됐는지 (aclexplode, MAINTAIN 포함)
+    SELECT count(*) INTO v_diff FROM (
+        (SELECT grantor, grantee, privilege_type, is_grantable FROM public._mig_ws_matview_grants
+         EXCEPT
+         SELECT CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
+                CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+                a.privilege_type, a.is_grantable
+           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('m', c.relowner))) a
+          WHERE c.oid='public.dashboard_stats'::regclass)
+        UNION ALL
+        (SELECT CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
+                CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+                a.privilege_type, a.is_grantable
+           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('m', c.relowner))) a
+          WHERE c.oid='public.dashboard_stats'::regclass
+         EXCEPT
+         SELECT grantor, grantee, privilege_type, is_grantable FROM public._mig_ws_matview_grants)) x;
+    IF v_diff > 0 THEN RAISE EXCEPTION 'POSTCHECK FAIL: dashboard_stats grants mismatch = % (aclexplode/MAINTAIN)', v_diff; END IF;
 
     -- (10) [REV-2 CRITICAL-2] anchor / snapshot / physical child 직접 노출 차단 확인
     IF has_table_privilege('anon','public.work_schedules_old','SELECT')
@@ -725,7 +771,7 @@ BEGIN
         RAISE EXCEPTION 'POSTCHECK FAIL: canonical work_schedules service_role SELECT 미복원';
     END IF;
 
-    RAISE NOTICE 'POSTCHECK OK: data/comments/grants/policies/owner/RLS/FK EXACT + companion 보존 + matview NEW OID rebind + anchor/partition lockdown';
+    RAISE NOTICE 'POSTCHECK OK: data/comments/grants(aclexplode·MAINTAIN)/policies/owner/RLS/FK EXACT + companion 보존 + matview NEW OID rebind + matview ACL + anchor/partition lockdown';
 END $$;
 
 COMMIT;
