@@ -22,6 +22,9 @@
 --   §9-(5)/(11)/(12) POSTCHECK 를 aclexplode 양방향 EXCEPT 로 교체 (information_schema.role_table_grants 는 MAINTAIN 누락 + matview 0 rows).
 --   [REV-3A CRITICAL-4 추가]
 --   matview ACL POSTCHECK fallback 도 acldefault('r',...) 사용. 'm' 은 acldefault object type 인자로 무효 (PG17.6 실측 ERROR).
+--   [REV-3B CRITICAL-5 추가]
+--   _mig_ws_matview.definition 은 UP §2 에서 terminal semicolon 이 제거된 normalized snapshot. DOWN §5 는 별도 trim 없이 그대로 소비.
+--   (pg_get_viewdef() terminal ';' → CREATE MATERIALIZED VIEW 조립 조기종료. REV-3A dry-run #1 에서 검출; UP §2 정규화로 CLOSED.)
 --
 --   [FAST-PATH ONLY 계약] work_schedules_old 존재 시에만 실행. 없으면 §0 즉시 ABORT.
 --   [ROLLBACK WINDOW] old 존재 기간 = 기능 검증 전용. 대량 write 비권장.
@@ -194,6 +197,9 @@ BEGIN
 END $$;
 
 -- [REV-2 CRITICAL-1] dashboard_stats 를 restored regular work_schedules 에 재결합 (스냅샷 definition/owner/index/comment/grants).
+-- [REV-3B CRITICAL-5] _mig_ws_matview.definition 은 UP §2 에서 이미 terminal semicolon 이 제거된 normalized snapshot 이다.
+--   → DOWN 은 별도 trim 로직을 두지 않는다. 동일 snapshot 을 그대로 CREATE MATERIALIZED VIEW ... AS <def> WITH DATA 에 소비.
+--   (UP/DOWN 공통 SoT = normalized snapshot. definition 재가공 금지.)
 DO $$
 DECLARE
     v_def text; v_owner name; v_populated bool; v_comment text; r record;
