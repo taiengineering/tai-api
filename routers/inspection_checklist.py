@@ -391,6 +391,15 @@ async def start_inspection(work_schedule_id: str, body: dict = None, current: di
         body = body or {}
         inspector_name = body.get("inspector_name", "")
         started_at     = body.get("started_at", date.today().isoformat())
+
+        # WP-04D: parent factory companion PRE-READ (side-effect 전 fail-closed)
+        _ws = supabase.table("work_schedules").select("factory_id").eq("id", work_schedule_id).limit(1).execute()
+        if not _ws.data:
+            raise HTTPException(status_code=404, detail="점검 일정을 찾을 수 없습니다.")
+        _parent_factory_id = _ws.data[0].get("factory_id")
+        if not _parent_factory_id:
+            raise HTTPException(status_code=409, detail="일정의 factory_id를 확인할 수 없습니다.")
+
         ws_res = supabase.table("work_schedules").update({
             "status_code": "in_progress", "inspector_name": inspector_name,
         }).eq("id", work_schedule_id).execute()
@@ -398,6 +407,7 @@ async def start_inspection(work_schedule_id: str, body: dict = None, current: di
             raise HTTPException(status_code=404, detail="점검 일정을 찾을 수 없습니다.")
         insp_res = supabase.table("safety_inspections").insert({
             "assignment_id": work_schedule_id, "inspection_date": started_at, "status_code": "in_progress",
+            "factory_id": _parent_factory_id,   # WP-04D parent companion
         }).execute()
         if not insp_res.data:
             raise HTTPException(status_code=500, detail="점검 레코드 생성 실패")

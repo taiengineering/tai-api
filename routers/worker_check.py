@@ -126,11 +126,24 @@ def submit_check(
         if _wa.data:
             schedule_ref = _wa.data[0].get("schedule_id")
 
+    # WP-04D: schedule-backed only. 신규 standalone(assignment_id NULL) 생성 금지 → fail-closed.
+    if not schedule_ref:
+        raise HTTPException(status_code=409, detail="일정 참조가 없어 점검을 생성할 수 없습니다.")
+
+    # WP-04D: parent work_schedules 에서 factory_id companion 확보 (body.factory_id 신뢰 금지).
+    _ws = supabase.table("work_schedules").select("id, factory_id").eq("id", schedule_ref).limit(1).execute()
+    if not _ws.data:
+        raise HTTPException(status_code=409, detail="일정을 찾을 수 없습니다.")
+    _parent_factory_id = _ws.data[0].get("factory_id")
+    if not _parent_factory_id:
+        raise HTTPException(status_code=409, detail="일정의 factory_id를 확인할 수 없습니다.")
+
     ins_res = supabase.table("safety_inspections").insert({
         "inspector_id": inspector_id,
         "inspection_date": now,
         "status_code": status_code,
         "assignment_id": schedule_ref,
+        "factory_id": _parent_factory_id,   # WP-04D parent companion (request factory_id 미사용)
     }).execute()
 
     if not ins_res.data:
