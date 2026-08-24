@@ -42,6 +42,13 @@ routers/equipment_checkins.py :: submit_checkin  POST /equipment-checkins  [blob
   GAP = body.schedule_id(client) 와 asset.factory_id 사이 factory 일치 검증 없음
         → asset.factory=A, body.schedule_id→ws.factory=B 인 cross-factory pair도 단일컬럼 FK만 통과하면 INSERT 가능.
   현재 table rows = 0 → 기존 데이터 오염 0.
+
+  ★ SECOND WRITE SURFACE (실측 @ vwlahtguyggrhvslabax):
+    equipment_checkins 에 anon INSERT grant = YES · RLS policy anon_insert_equipment_checkins WITH CHECK(true)
+    → API submit_checkin() 외에 Supabase direct anon INSERT 경로가 실재.
+    → direct path 는 asset.factory==schedule.factory pair 검증을 우회함(RLS WITH CHECK=true 라 무조건 통과).
+    → 따라서 "writer 정확히 1개"는 APPLICATION writer 기준이며, DB write surface 기준으로는 2개(API + direct anon).
+    04E 범위: 이 사실을 기록 + HASH Gate 조건으로 고정만. (RLS 수정/anon revoke 는 04E 범위 밖 — 범위 확대 금지)
 ```
 
 ## 3. CANONICAL FACTORY CONTRACT
@@ -103,18 +110,21 @@ writer patch 는 신규 DB column 요구 없음:
   OLD DB + NEW CODE = SAFE (기존 columns + work_schedules.factory_id 만 사용)
   HASH NEW DB + NEW CODE = SAFE target
 → 이 writer hardening 은 HASH maintenance 이전에 미리 deploy 가능 (WRITE OFF/스키마 불요).
+  (단, API writer 배포만으로는 direct anon INSERT 경로가 닫히지 않음 — §9 참조)
 ```
 
 ## 9. STATUS / STOP GATE
 ```
 PRE-STATE GROUNDED   = PASS
-CURRENT WRITER       = GROUNDED (creator 정확히 1개: submit_checkin)
-PAIR MISMATCH RISK   = CLOSED (writer fail-closed 계약)
+APPLICATION WRITER   = GROUNDED (routers/equipment_checkins.py::submit_checkin 1개)
+DIRECT DB WRITE SURFACE = OPEN (anon INSERT grant + RLS anon_insert WITH CHECK(true) 실측 존재 → API pair validation 우회 가능)
+PAIR MISMATCH RISK   = API PATH CLOSED AFTER DEPLOY (writer fail-closed 계약)
+                     · DB DIRECT PATH OPEN UNTIL HASH REWIRE / DB GUARD (composite FK live 전까지 DB가 pair 강제 안 함)
 STANDALONE POLICY    = CLOSED (schedule NULL 허용 · MATCH FULL 금지)
 PATCH DRAFT          = COMPLETE (WRITER_PATCH_DRAFT)
 TEST PLAN            = COMPLETE (WRITER_PATCH_DRAFT §TESTS, T1–T10)
-FUTURE FK CONTRACT   = CLOSED (HASH_REWIRE_CONTRACT · canonical MATCH 반영)
+FUTURE FK CONTRACT   = CLOSED (HASH_REWIRE_CONTRACT · canonical MATCH 반영 · direct path Gate 조건 고정)
 HASH READINESS MATRIX = COMPLETE (HASH_REWIRE_CONTRACT)
 DB/CODE/DEPLOY MUTATION = 0 · COMMIT = HOLD
-RESULT = READY FOR 04E EXECUTION REVIEW
+RESULT = READY FOR 04E WRITER EXECUTION (API pair hardening) · FINAL SEAL 은 direct-path Gate 조건 기록 후
 ```
