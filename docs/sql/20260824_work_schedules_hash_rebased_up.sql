@@ -22,13 +22,15 @@
 --   [REV-3 CRITICAL-3 — ACL exactness]
 --   ACL 스냅샷/POSTCHECK SoT = pg_class.relacl + aclexplode (information_schema.role_table_grants 는 PG17 MAINTAIN 누락 + matview 0 rows).
 --   MAINTAIN 포함 8 privileges × role 캡처. restore 는 REVOKE ALL → 스냅샷 재생 → aclexplode 양방향 EXCEPT. matview ACL = arwdDxtm × 4 roles(owner-only 아님).
+--   [REV-3A CRITICAL-4 — acldefault object type]
+--   matview ACL fallback 도 acldefault('r',...) 사용. 'm'(relkind 코드)은 acldefault object type 인자로 무효 (PG17.6: ERROR unrecognized object type abbreviation: m).
 --
 --   [PRE-STATE 실측 2026-08-24 @ 6874bb85 · fresh]
 --     work_schedules : rows=66 · cols=37 · factory_id NULL=0 · distinct factory=4 · dup target=0
 --                      set/factory mismatch=0 · constraints=7 · CHECK=0 · indexes=12 · policies=6
 --                      user triggers=0 · owner=postgres · RLS enabled=true forced=false · relkind='r' · comments=26
 --                      ACL(aclexplode): anon/authenticated/service_role/postgres 각 arwdDxtm (SELECT/INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER/MAINTAIN)
---     dependent matview: dashboard_stats (owner postgres · populated · ws deps 3 · def 참조 12 · idx singleton · comment NULL · ACL arwdDxtm×4)
+--     dependent matview: dashboard_stats (owner postgres · populated · ws deps 3 · def 참조 12 · idx singleton · comment NULL · ACL arwdDxtm×4 · reloptions NULL · heap · permanent)
 --     work_assignments   : rows=5991 · factory companion LIVE(04C) · linked factory NULL=0 · mismatch=0 · schedule NULL=0
 --                          factory_id: uuid/nullable · comment=NULL
 --     safety_inspections : rows=2 · linked=1 · legacy standalone(assignment NULL)=1 · linked factory NULL=0
@@ -232,9 +234,11 @@ SELECT
     CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END AS grantee,
     a.privilege_type, a.is_grantable
   FROM pg_class c
-  CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('m', c.relowner))) a
+  CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
  WHERE c.oid='public.dashboard_stats'::regclass;
 -- [REV-3 CRITICAL-3] matview ACL 도 aclexplode. 실측: anon/authenticated/service_role/postgres 각 arwdDxtm (owner-only 아님).
+-- [REV-3A CRITICAL-4] acldefault object type code 는 matview 도 'r'(relation) 사용. 'm' 은 pg_class.relkind 코드이지 acldefault 인자가 아님
+--   (PG17.6 실측: acldefault('m',...) → ERROR unrecognized object type abbreviation: m). relacl non-NULL 이라 현재는 COALESCE 로 평가 안 되지만 실행가능성 보장.
 
 DO $$
 BEGIN
@@ -739,13 +743,13 @@ BEGIN
          SELECT CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
                 CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
                 a.privilege_type, a.is_grantable
-           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('m', c.relowner))) a
+           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
           WHERE c.oid='public.dashboard_stats'::regclass)
         UNION ALL
         (SELECT CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
                 CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
                 a.privilege_type, a.is_grantable
-           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('m', c.relowner))) a
+           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
           WHERE c.oid='public.dashboard_stats'::regclass
          EXCEPT
          SELECT grantor, grantee, privilege_type, is_grantable FROM public._mig_ws_matview_grants)) x;
