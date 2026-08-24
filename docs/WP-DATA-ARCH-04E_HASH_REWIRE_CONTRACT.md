@@ -44,12 +44,27 @@ equipment_checkins    factory_id      허용(schedule_id NULL     불요(rows0) 
     equipment_checkins 는 schedule 없이도 factory 보유가 정상이므로 XNOR CHECK 부적합.
 ```
 
-## 4. writer 선행 조건 (04E가 채우는 것)
+## 4. writer 선행 조건 + DIRECT PATH 경고 (04E가 채우는 것 / 못 채우는 것)
 ```
 composite FK 는 cross-factory 행을 "거부"하지만, 현재 단일컬럼 FK 상태에서 cross-factory INSERT 가 들어오면
 HASH rewire 시 FK 위반으로 마이그레이션이 실패한다.
-→ 04E writer fail-closed(§WRITER_PATCH_DRAFT)로 cross-factory checkin 을 사전 차단해야 HASH rewire 가 clean.
-현재 rows=0 이므로 기존 위반 0. writer deploy 후에는 신규 위반도 0 보장.
+→ 04E writer fail-closed(§WRITER_PATCH_DRAFT)로 API 경로 cross-factory checkin 을 사전 차단.
+현재 rows=0 이므로 기존 위반 0.
+
+★ 그러나 신규 위반 "완전 0 보장"은 아니다 (DB 실측):
+  equipment_checkins 는 anon INSERT grant + RLS anon_insert WITH CHECK(true) 로
+  API submit_checkin() 을 우회한 Supabase direct anon INSERT 가 가능하다.
+  → API writer 경로의 신규 cross-factory = 배포 후 차단.
+  → 단, direct anon INSERT 는 composite FK(DB-level) 적용 전까지 DB 가 pair 를 강제하지 않음 = OPEN.
+  이 direct path 봉쇄는 04E 범위 밖(RLS/anon revoke 는 범위 확대). HASH maintenance Gate 소유.
+
+★ 따라서 HASH maintenance Gate 는 반드시 아래 순서를 강제한다:
+  WRITE OFF (equipment_checkins direct anon INSERT 포함 실제 write 차단 — API 정지만으로 불충분)
+  → cross-factory precheck = 0 (wa/si/equipment_checkins 전 child)
+  → composite FK 생성 (child별 MATCH: wa/si=FULL+CHECK, checkins=SIMPLE)
+  → FK live 확인
+  → WRITE ON
+  (04D에서 쓴 DB-level INSERT 차단 트리거 방식이 direct anon 까지 막는 실제 WRITE OFF 수단)
 ```
 
 ## 5. HASH DRY-RUN 시 검증 항목 (04E 미실행, HASH package에서)
@@ -57,6 +72,7 @@ HASH rewire 시 FK 위반으로 마이그레이션이 실패한다.
 - work_schedules (id, factory_id) UNIQUE/PK 존재 여부 (composite FK 전제)
 - ON DELETE SET NULL (schedule_id) column-list DDL 실행 가능성 (PG 17.6)
 - 각 child cross-factory 위반 행 = 0 (wa/si/equipment_checkins) — FK 생성 전 필수 precheck
+  (equipment_checkins 는 API 우회 direct anon INSERT 가능성 때문에 precheck 를 WRITE OFF 이후에 수행해야 신뢰 가능)
 - MATCH child별 적용 (canonical WORK_SCHEDULES_PARTITION_DESIGN_FINAL_v1): wa=MATCH FULL+pair CHECK · si=MATCH FULL+pair CHECK · equipment_checkins=MATCH SIMPLE(pair CHECK 없음)
 - si pair CHECK ((assignment_id IS NULL)=(factory_id IS NULL)) 실행가능성 + legacy NULL pair 1건 통과 확인
 - 기존 단일컬럼 FK drop → composite FK add 원자성 · lock 창
@@ -64,7 +80,10 @@ HASH rewire 시 FK 위반으로 마이그레이션이 실패한다.
 
 ## 6. 04E 경계
 ```
-04E 완료(승인·배포 시) = equipment_checkins writer pair fail-closed LIVE + child composite FK 계약 고정.
-04E 미의미 = composite FK 실제 생성(아님) · work_schedules HASH 실행(아님) · (id,factory_id) UNIQUE 부여(아님).
-다음 = work_schedules HASH migration maintenance gate → 위 3 child composite FK rewire (본 계약대로).
+04E 완료(승인·배포 시) = equipment_checkins API writer pair fail-closed LIVE + child composite FK 계약 고정.
+04E 미의미 = composite FK 실제 생성(아님) · work_schedules HASH 실행(아님) · (id,factory_id) UNIQUE 부여(아님)
+           · direct anon INSERT 경로 봉쇄(아님 — RLS/anon revoke 는 04E 범위 밖).
+DIRECT ANON DB WRITE PATH = OPEN / HASH GATE OWNED
+  (composite FK live 전까지 direct anon path 로 cross-factory INSERT 가 물리적으로 가능; HASH WRITE OFF 가 봉쇄).
+다음 = work_schedules HASH migration maintenance gate → §4 WRITE OFF 순서 강제 → 위 3 child composite FK rewire (본 계약대로).
 ```
