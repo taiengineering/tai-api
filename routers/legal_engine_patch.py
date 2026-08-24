@@ -101,6 +101,13 @@ def auto_assign_schedules(
     sched_res = q.execute()
     schedules = sched_res.data or []
 
+    # WP-04C fail-closed: factory_id 없는 일정 존재 시 자동배정 전체 중단 (어떤 side-effect보다 먼저)
+    if any(not s.get("factory_id") for s in schedules):
+        raise HTTPException(
+            status_code=409,
+            detail="factory_id가 없는 일정이 있어 자동배정을 중단합니다.",
+        )
+
     if not schedules:
         return {"status": "success", "data": {"assigned": 0, "skipped": 0, "message": "배정할 스케줄 없음"}}
 
@@ -153,6 +160,7 @@ def auto_assign_schedules(
                 "scheduled_date":   s.get("planned_date") or today_str,
                 "status_code":      "PENDING",
                 "created_at":       now,
+                "factory_id":       s["factory_id"],   # WP-04C parent companion (조회 시 이미 select됨)
             })
             sched_ids.append(s["id"])
 

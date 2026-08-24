@@ -88,6 +88,9 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
 
     fields 에 'assigned_user_id' 키가 있으면(None 포함) 배정 변경으로 본다(batch-update 와 동일).
     지원 필드: is_excluded · excluded_reason · custom_cycle · status_code · resolved_at · planned_date · assigned_user_id.
+
+    WP-04C: 신규 work_assignments 생성 시 factory_id = parent work_schedules.factory_id(companion).
+            parent factory_id 확인 불가 시 어떤 side-effect(work_schedules UPDATE 포함)보다 먼저 409.
     """
     payload: dict = {"updated_at": now}
     for k in ("is_excluded", "excluded_reason", "custom_cycle", "status_code", "resolved_at", "planned_date"):
@@ -97,6 +100,20 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
     if assign_changed:
         payload["assigned_user_id"] = fields["assigned_user_id"]
 
+    # WP-04C parent factory PRE-READ (side-effect 전 fail-closed).
+    # 신규 assignment INSERT가 발생하는 경우(assigned_user_id 실제 값)만 검사한다.
+    _parent_factory_id = None
+    if assign_changed and fields["assigned_user_id"]:
+        _parent = supabase.table("work_schedules").select("factory_id") \
+            .eq("id", schedule_id).limit(1).execute()
+        _parent_factory_id = _parent.data[0].get("factory_id") if _parent.data else None
+        if not _parent_factory_id:
+            raise HTTPException(
+                status_code=409,
+                detail="일정의 factory_id를 확인할 수 없습니다.",
+            )
+
+    # fail-closed 통과 후에만 기존 work_schedules UPDATE 수행
     res = supabase.table("work_schedules").update(payload).eq("id", schedule_id).execute()
     updated = bool(res.data)
 
@@ -114,6 +131,7 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
                     "schedule_id": schedule_id, "assigned_user_id": auid,
                     "scheduled_date": datetime.now().date().isoformat(),
                     "status_code": wa_write_ready(), "created_at": now,
+                    "factory_id": _parent_factory_id,   # WP-04C parent companion (PRE-READ 값)
                 }).execute()
         else:
             supabase.table("work_assignments").update({
