@@ -17,6 +17,9 @@
 --   [REV-2 CRITICAL 추가]
 --   CRITICAL-1 (§5): partitioned current DROP 전 dashboard_stats DROP → old rename → restored 에 재결합 + §9-(10) 검증.
 --   CRITICAL-2 (§5): old→canonical 후 _mig_ws_grants 스냅샷으로 PRE grants EXACT 재생성 + §9-(11) 검증.
+--   [REV-3 CRITICAL-3 추가]
+--   ACL 복원/검증 SoT = pg_class.relacl + aclexplode (MAINTAIN 포함). §5 복원은 ACL reset→스냅샷 재생(boolean is_grantable, PUBLIC 매핑).
+--   §9-(5)/(11)/(12) POSTCHECK 를 aclexplode 양방향 EXCEPT 로 교체 (information_schema.role_table_grants 는 MAINTAIN 누락 + matview 0 rows).
 --
 --   [FAST-PATH ONLY 계약] work_schedules_old 존재 시에만 실행. 없으면 §0 즉시 ABORT.
 --   [ROLLBACK WINDOW] old 존재 기간 = 기능 검증 전용. 대량 write 비권장.
@@ -169,19 +172,20 @@ DROP MATERIALIZED VIEW IF EXISTS public.dashboard_stats;
 DROP TABLE public.work_schedules;                       -- 파티션 부모 + 자식 16
 ALTER TABLE public.work_schedules_old RENAME TO work_schedules;
 
--- [REV-2 CRITICAL-2] old→canonical 복원 후 PRE grants 정확 재생성.
---   UP 에서 old 의 anon/authenticated/service_role 권한을 회수했으므로, 복원 시 _mig_ws_grants 스냅샷으로 원복.
---   (old 가 grants 를 그대로 들고 있다는 기존 가정은 anchor lockdown 이후 더 이상 성립하지 않음.)
+-- [REV-2 CRITICAL-2 / REV-3 CRITICAL-3] old→canonical 복원 후 PRE grants 정확 재생성.
+--   UP 에서 old 의 anon/authenticated/service_role 권한을 회수했으므로, 복원 시 _mig_ws_grants(aclexplode) 스냅샷으로 원복.
 REVOKE ALL PRIVILEGES ON TABLE public.work_schedules FROM PUBLIC;
 REVOKE ALL PRIVILEGES ON TABLE public.work_schedules FROM anon, authenticated, service_role;
 DO $$
 DECLARE r record;
 BEGIN
     FOR r IN SELECT DISTINCT grantee, privilege_type, is_grantable FROM public._mig_ws_grants LOOP
-        IF r.is_grantable = 'YES' THEN
-            EXECUTE format('GRANT %s ON public.work_schedules TO %I WITH GRANT OPTION', r.privilege_type, r.grantee);
+        IF r.is_grantable THEN
+            EXECUTE format('GRANT %s ON public.work_schedules TO %s WITH GRANT OPTION',
+                           r.privilege_type, CASE WHEN r.grantee='PUBLIC' THEN 'PUBLIC' ELSE quote_ident(r.grantee) END);
         ELSE
-            EXECUTE format('GRANT %s ON public.work_schedules TO %I', r.privilege_type, r.grantee);
+            EXECUTE format('GRANT %s ON public.work_schedules TO %s',
+                           r.privilege_type, CASE WHEN r.grantee='PUBLIC' THEN 'PUBLIC' ELSE quote_ident(r.grantee) END);
         END IF;
     END LOOP;
 END $$;
@@ -200,11 +204,15 @@ BEGIN
     IF v_comment IS NOT NULL THEN
         EXECUTE format('COMMENT ON MATERIALIZED VIEW public.dashboard_stats IS %L', v_comment);
     END IF;
+    EXECUTE 'REVOKE ALL PRIVILEGES ON TABLE public.dashboard_stats FROM PUBLIC';
+    EXECUTE 'REVOKE ALL PRIVILEGES ON TABLE public.dashboard_stats FROM anon, authenticated, service_role';
     FOR r IN SELECT grantee, privilege_type, is_grantable FROM public._mig_ws_matview_grants LOOP
-        IF r.is_grantable = 'YES' THEN
-            EXECUTE format('GRANT %s ON public.dashboard_stats TO %I WITH GRANT OPTION', r.privilege_type, r.grantee);
+        IF r.is_grantable THEN
+            EXECUTE format('GRANT %s ON public.dashboard_stats TO %s WITH GRANT OPTION',
+                           r.privilege_type, CASE WHEN r.grantee='PUBLIC' THEN 'PUBLIC' ELSE quote_ident(r.grantee) END);
         ELSE
-            EXECUTE format('GRANT %s ON public.dashboard_stats TO %I', r.privilege_type, r.grantee);
+            EXECUTE format('GRANT %s ON public.dashboard_stats TO %s',
+                           r.privilege_type, CASE WHEN r.grantee='PUBLIC' THEN 'PUBLIC' ELSE quote_ident(r.grantee) END);
         END IF;
     END LOOP;
 END $$;
@@ -310,18 +318,24 @@ BEGIN
          SELECT objname, description FROM public._mig_ws_comments)) x;
     IF v_diff > 0 THEN RAISE EXCEPTION 'DOWN FAIL: comments mismatch = %', v_diff; END IF;
 
-    -- (5) grants EXACT
+    -- (5) grants EXACT [REV-3 CRITICAL-3: aclexplode, MAINTAIN 포함]
     SELECT count(*) INTO v_diff FROM (
         (SELECT grantor, grantee, privilege_type, is_grantable FROM public._mig_ws_grants
          EXCEPT
-         SELECT grantor, grantee, privilege_type, is_grantable
-           FROM information_schema.role_table_grants WHERE table_schema='public' AND table_name='work_schedules')
+         SELECT CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
+                CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+                a.privilege_type, a.is_grantable
+           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
+          WHERE c.oid='public.work_schedules'::regclass)
         UNION ALL
-        (SELECT grantor, grantee, privilege_type, is_grantable
-           FROM information_schema.role_table_grants WHERE table_schema='public' AND table_name='work_schedules'
+        (SELECT CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
+                CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+                a.privilege_type, a.is_grantable
+           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
+          WHERE c.oid='public.work_schedules'::regclass
          EXCEPT
          SELECT grantor, grantee, privilege_type, is_grantable FROM public._mig_ws_grants)) x;
-    IF v_diff > 0 THEN RAISE EXCEPTION 'DOWN FAIL: grants mismatch = %', v_diff; END IF;
+    IF v_diff > 0 THEN RAISE EXCEPTION 'DOWN FAIL: grants mismatch = % (aclexplode/MAINTAIN)', v_diff; END IF;
 
     -- (6) policy EXACT
     SELECT count(*) INTO v_diff FROM (
@@ -383,20 +397,45 @@ BEGIN
                     AND ispopulated = (SELECT populated FROM public._mig_ws_matview LIMIT 1)) THEN
         RAISE EXCEPTION 'DOWN FAIL: dashboard_stats populated 상태 불일치'; END IF;
 
-    -- (11) [REV-2 CRITICAL-2] canonical grants = _mig_ws_grants 스냅샷 EXACT 복원
+    -- (11) [REV-3 CRITICAL-3] canonical work_schedules ACL = _mig_ws_grants 스냅샷 EXACT (aclexplode, MAINTAIN 포함)
     SELECT count(*) INTO v_diff FROM (
-        (SELECT grantee, privilege_type, is_grantable FROM public._mig_ws_grants
+        (SELECT grantor, grantee, privilege_type, is_grantable FROM public._mig_ws_grants
          EXCEPT
-         SELECT grantee, privilege_type, is_grantable FROM information_schema.role_table_grants
-          WHERE table_schema='public' AND table_name='work_schedules')
+         SELECT CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
+                CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+                a.privilege_type, a.is_grantable
+           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
+          WHERE c.oid='public.work_schedules'::regclass)
         UNION ALL
-        (SELECT grantee, privilege_type, is_grantable FROM information_schema.role_table_grants
-          WHERE table_schema='public' AND table_name='work_schedules'
+        (SELECT CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
+                CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+                a.privilege_type, a.is_grantable
+           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
+          WHERE c.oid='public.work_schedules'::regclass
          EXCEPT
-         SELECT grantee, privilege_type, is_grantable FROM public._mig_ws_grants)) x;
-    IF v_diff > 0 THEN RAISE EXCEPTION 'DOWN FAIL: canonical grants 스냅샷 불일치 = %', v_diff; END IF;
+         SELECT grantor, grantee, privilege_type, is_grantable FROM public._mig_ws_grants)) x;
+    IF v_diff > 0 THEN RAISE EXCEPTION 'DOWN FAIL: canonical grants 스냅샷 불일치 = % (aclexplode/MAINTAIN)', v_diff; END IF;
 
-    RAISE NOTICE 'DOWN POSTCHECK OK: 구조/데이터/메타 EXACT + 04C/04D companion 보존 + 단일 FK 복원 + matview restored + grants exact';
+    -- (12) [REV-3 CRITICAL-3] dashboard_stats ACL = _mig_ws_matview_grants 스냅샷 EXACT
+    SELECT count(*) INTO v_diff FROM (
+        (SELECT grantor, grantee, privilege_type, is_grantable FROM public._mig_ws_matview_grants
+         EXCEPT
+         SELECT CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
+                CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+                a.privilege_type, a.is_grantable
+           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('m', c.relowner))) a
+          WHERE c.oid='public.dashboard_stats'::regclass)
+        UNION ALL
+        (SELECT CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
+                CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
+                a.privilege_type, a.is_grantable
+           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('m', c.relowner))) a
+          WHERE c.oid='public.dashboard_stats'::regclass
+         EXCEPT
+         SELECT grantor, grantee, privilege_type, is_grantable FROM public._mig_ws_matview_grants)) x;
+    IF v_diff > 0 THEN RAISE EXCEPTION 'DOWN FAIL: dashboard_stats grants 스냅샷 불일치 = % (aclexplode/MAINTAIN)', v_diff; END IF;
+
+    RAISE NOTICE 'DOWN POSTCHECK OK: 구조/데이터/메타 EXACT + 04C/04D companion 보존 + 단일 FK 복원 + matview restored + ACL exact(MAINTAIN 포함)';
 END $$;
 
 
