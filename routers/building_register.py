@@ -70,12 +70,19 @@ def _building_probe_matrix(sigungu, bjdong, bun, ji, mountain="0", endpoint="get
     from urllib.parse import unquote as _unq
     base = f"{BUILDING_BASE}/{endpoint}"
 
-    def _run(label, params, key_variant):
+    def _run(label, params, key_variant, extra=None, base_url=None, add_type=True, add_page=True):
         try:
             p = dict(params)
             p["serviceKey"] = key_variant
-            p.update({"numOfRows": 10, "pageNo": 1, "_type": "json"})
-            r = requests.get(base, params=p, headers=BUILDING_HEADERS, verify=False, timeout=15)
+            p["numOfRows"] = 10
+            if add_page:
+                p["pageNo"] = 1
+            if add_type:
+                p["_type"] = "json"
+            if extra:
+                p.update(extra)
+            url = base_url or base
+            r = requests.get(url, params=p, headers=BUILDING_HEADERS, verify=False, timeout=15)
             body = (r.text or "")[:400]
             m = _re.search(r"<returnReasonCode>(\d+)</returnReasonCode>", body) or _re.search(r'"returnReasonCode"\s*:\s*"?(\d+)', body)
             m2 = _re.search(r"<errMsg>([^<]+)</errMsg>", body) or _re.search(r'"errMsg"\s*:\s*"([^"]+)', body)
@@ -95,16 +102,24 @@ def _building_probe_matrix(sigungu, bjdong, bun, ji, mountain="0", endpoint="get
     key_unq = _unq(BUILDING_KEY)
     base_params = {"sigunguCd": sigungu, "bjdongCd": bjdong, "bun": bun}
     results = []
-    # 1) 현재 tai-api 방식: platGbCd=mountain, ji=0000, 키 원본(인코딩키 그대로)
+    _v2_base = base.replace("BldRgstHubService", "BldRgstService_v2")
+    _http_base = base.replace("https://", "http://")
+    # 1) 현재 tai-api 방식
     results.append(_run("current(platGb=mtn,ji=0000,key=raw)", {**base_params, "platGbCd": mountain, "ji": ji}, key_raw))
-    # 2) 키만 unquote(디코딩) — 이중인코딩 가설
-    results.append(_run("key_unquote(platGb=mtn,ji=0000)", {**base_params, "platGbCd": mountain, "ji": ji}, key_unq))
-    # 3) platGbCd 생략 + ji 생략 (PublicDataReader 방식), 키 원본
+    # 3) platGbCd 생략 + ji 생략, 키 원본
     results.append(_run("omit_platGb+omit_ji(key=raw)", {**base_params}, key_raw))
-    # 4) platGbCd 생략 + ji 생략 + 키 unquote (검증 라이브러리 완전 재현)
-    results.append(_run("verified(omit_platGb+omit_ji+key=unq)", {**base_params}, key_unq))
-    # 5) platGbCd=0 명시 + ji=0000, 키 원본
-    results.append(_run("platGb=0,ji=0000,key=raw", {**base_params, "platGbCd": "0", "ji": ji}, key_raw))
+    # 6) _type=json 제거 (XML 응답) — 검증 라이브러리 방식
+    results.append(_run("no_type(xml),omit_platGb,omit_ji", {**base_params}, key_raw, add_type=False))
+    # 7) pageNo 제거 + _type 제거
+    results.append(_run("no_type+no_pageNo,omit_platGb,omit_ji", {**base_params}, key_raw, add_type=False, add_page=False))
+    # 8) http:// 경로
+    results.append(_run("http_base,omit_platGb,omit_ji", {**base_params}, key_raw, base_url=_http_base))
+    # 9) BldRgstService_v2 경로 (getBrTitleInfo)
+    results.append(_run("v2_path,omit_platGb,omit_ji", {**base_params}, key_raw, base_url=_v2_base))
+    # 10) v2 경로 + _type 제거
+    results.append(_run("v2_path,no_type,omit_platGb,omit_ji", {**base_params}, key_raw, base_url=_v2_base, add_type=False))
+    # 11) numOfRows 없이 최소 파라미터 (sigungu+bjdong+bun만, _type 없음)
+    results.append(_run("minimal(no_type,no_page,no_numRows_override)", {**base_params}, key_raw, add_type=False, add_page=False))
     return {
         "key_len_raw": len(key_raw),
         "key_len_unquoted": len(key_unq),
