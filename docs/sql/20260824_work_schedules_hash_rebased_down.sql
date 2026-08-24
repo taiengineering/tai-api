@@ -20,6 +20,8 @@
 --   [REV-3 CRITICAL-3 추가]
 --   ACL 복원/검증 SoT = pg_class.relacl + aclexplode (MAINTAIN 포함). §5 복원은 ACL reset→스냅샷 재생(boolean is_grantable, PUBLIC 매핑).
 --   §9-(5)/(11)/(12) POSTCHECK 를 aclexplode 양방향 EXCEPT 로 교체 (information_schema.role_table_grants 는 MAINTAIN 누락 + matview 0 rows).
+--   [REV-3A CRITICAL-4 추가]
+--   matview ACL POSTCHECK fallback 도 acldefault('r',...) 사용. 'm' 은 acldefault object type 인자로 무효 (PG17.6 실측 ERROR).
 --
 --   [FAST-PATH ONLY 계약] work_schedules_old 존재 시에만 실행. 없으면 §0 즉시 ABORT.
 --   [ROLLBACK WINDOW] old 존재 기간 = 기능 검증 전용. 대량 write 비권장.
@@ -172,8 +174,9 @@ DROP MATERIALIZED VIEW IF EXISTS public.dashboard_stats;
 DROP TABLE public.work_schedules;                       -- 파티션 부모 + 자식 16
 ALTER TABLE public.work_schedules_old RENAME TO work_schedules;
 
--- [REV-2 CRITICAL-2 / REV-3 CRITICAL-3] old→canonical 복원 후 PRE grants 정확 재생성.
---   UP 에서 old 의 anon/authenticated/service_role 권한을 회수했으므로, 복원 시 _mig_ws_grants(aclexplode) 스냅샷으로 원복.
+-- [REV-2 CRITICAL-2] old→canonical 복원 후 PRE grants 정확 재생성.
+--   UP 에서 old 의 anon/authenticated/service_role 권한을 회수했으므로, 복원 시 _mig_ws_grants 스냅샷으로 원복.
+--   (old 가 grants 를 그대로 들고 있다는 기존 가정은 anchor lockdown 이후 더 이상 성립하지 않음.)
 REVOKE ALL PRIVILEGES ON TABLE public.work_schedules FROM PUBLIC;
 REVOKE ALL PRIVILEGES ON TABLE public.work_schedules FROM anon, authenticated, service_role;
 DO $$
@@ -423,13 +426,13 @@ BEGIN
          SELECT CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
                 CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
                 a.privilege_type, a.is_grantable
-           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('m', c.relowner))) a
+           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
           WHERE c.oid='public.dashboard_stats'::regclass)
         UNION ALL
         (SELECT CASE WHEN a.grantor=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantor) END,
                 CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END,
                 a.privilege_type, a.is_grantable
-           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('m', c.relowner))) a
+           FROM pg_class c CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) a
           WHERE c.oid='public.dashboard_stats'::regclass
          EXCEPT
          SELECT grantor, grantee, privilege_type, is_grantable FROM public._mig_ws_matview_grants)) x;
