@@ -35,6 +35,33 @@ BUILDING_HEADERS = {
 }
 
 
+def _building_probe_raw(sigungu, bjdong, bun, ji, plat_gb="0", endpoint="getBrTitleInfo"):
+    """진단 전용 — 오류를 삼키지 않고 data.go.kr 원본 응답을 그대로 노출한다."""
+    import re as _re
+    try:
+        r = requests.get(f"{BUILDING_BASE}/{endpoint}", params={
+            "serviceKey": BUILDING_KEY, "sigunguCd": sigungu, "bjdongCd": bjdong,
+            "platGbCd": plat_gb, "bun": bun, "ji": ji,
+            "numOfRows": 10, "pageNo": 1, "_type": "json",
+        }, headers=BUILDING_HEADERS, verify=False, timeout=15)
+        body = (r.text or "")[:500]
+        m = _re.search(r"<returnReasonCode>(\d+)</returnReasonCode>", body) or _re.search(r"returnReasonCode[\"'>:\s]+(\d+)", body)
+        m2 = _re.search(r"<errMsg>([^<]+)</errMsg>", body) or _re.search(r"errMsg[\"'<>:\s]+([A-Z_]+)", body)
+        sent = r.url.split("serviceKey=")[-1].split("&")[0] if "serviceKey=" in r.url else ""
+        return {
+            "http_status": r.status_code,
+            "return_reason_code": m.group(1) if m else None,
+            "err_msg": m2.group(1) if m2 else None,
+            "body_head": body[:250],
+            "sent_serviceKey_head": sent[:8],
+            "sent_serviceKey_tail": sent[-8:] if len(sent) >= 8 else sent,
+            "building_key_len": len(BUILDING_KEY),
+            "plat_gb_used": plat_gb,
+        }
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
 def get_supabase():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -600,6 +627,7 @@ def diagnose(address: str = Query("인천광역시 서구 가좌로 123", descri
         try:
             parsed = parse_bdmgtsn(bdmgtsn)
             result["bdmgtsn_parsed"] = parsed
+            result["raw_probe"] = _building_probe_raw(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], plat_gb=parsed.get("mountain", "0"))
             _pg = parsed.get("mountain", "0")
             title = get_building_title(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], plat_gb=_pg)
             if not title:
