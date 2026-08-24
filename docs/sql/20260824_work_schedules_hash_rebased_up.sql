@@ -24,13 +24,15 @@
 --   MAINTAIN 포함 8 privileges × role 캡처. restore 는 REVOKE ALL → 스냅샷 재생 → aclexplode 양방향 EXCEPT. matview ACL = arwdDxtm × 4 roles(owner-only 아님).
 --   [REV-3A CRITICAL-4 — acldefault object type]
 --   matview ACL fallback 도 acldefault('r',...) 사용. 'm'(relkind 코드)은 acldefault object type 인자로 무효 (PG17.6: ERROR unrecognized object type abbreviation: m).
+--   [REV-3B CRITICAL-5 — matview definition terminal semicolon]
+--   pg_get_viewdef() 는 정의 끝에 ';' 를 붙여 반환 → CREATE MATERIALIZED VIEW ... AS <def> WITH DATA 조립 시 조기 종료(syntax error at end of input).
+--   §2 캡처에서 regexp_replace(definition, ';[[:space:]]*$','') 로 정규화 + fail-closed assertion. UP §14-B/DOWN §5 는 normalized snapshot 공통 소비(DOWN 별도 trim 없음).
+--   (REV-3A dry-run #1 에서 실측 검출; permanent mutation 0, safe rollback.)
 --
 --   [PRE-STATE 실측 2026-08-24 @ 6874bb85 · fresh]
 --     work_schedules : rows=66 · cols=37 · factory_id NULL=0 · distinct factory=4 · dup target=0
 --                      set/factory mismatch=0 · constraints=7 · CHECK=0 · indexes=12 · policies=6
 --                      user triggers=0 · owner=postgres · RLS enabled=true forced=false · relkind='r' · comments=26
---                      ACL(aclexplode): anon/authenticated/service_role/postgres 각 arwdDxtm (SELECT/INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER/MAINTAIN)
---     dependent matview: dashboard_stats (owner postgres · populated · ws deps 3 · def 참조 12 · idx singleton · comment NULL · ACL arwdDxtm×4 · reloptions NULL · heap · permanent)
 --     work_assignments   : rows=5991 · factory companion LIVE(04C) · linked factory NULL=0 · mismatch=0 · schedule NULL=0
 --                          factory_id: uuid/nullable · comment=NULL
 --     safety_inspections : rows=2 · linked=1 · legacy standalone(assignment NULL)=1 · linked factory NULL=0
@@ -218,11 +220,24 @@ END $$;
 CREATE TABLE public._mig_ws_matview AS
 SELECT
     'dashboard_stats'::text AS matview_name,
-    pg_get_viewdef('public.dashboard_stats'::regclass, true) AS definition,
+    -- [REV-3B CRITICAL-5] pg_get_viewdef() 는 정의 끝에 terminal ';' 를 붙여 반환한다(실측: '...now() AS synced_at;').
+    --   이를 그대로 CREATE MATERIALIZED VIEW ... AS <def> WITH DATA 에 삽입하면 '... synced_at; WITH DATA' 가 되어
+    --   PG 파싱이 조기 종료('syntax error at end of input'). → 캡처 시점에 문자열 끝 ';' + trailing whitespace 1회만 제거해
+    --   canonical SQL body 로 정규화한다. 이 snapshot 이 UP §14-B / DOWN §5 공통 SoT (DOWN 은 별도 trim 없음).
+    --   (실측: 정의 내부 세미콜론 총 1개 = terminal 뿐 → 복합문 아님, 안전)
+    regexp_replace(pg_get_viewdef('public.dashboard_stats'::regclass, true), ';[[:space:]]*$', '') AS definition,
     pg_get_userbyid(relowner) AS owner_name,
     relispopulated AS populated,
     obj_description('public.dashboard_stats'::regclass) AS comment_text
   FROM pg_class WHERE oid='public.dashboard_stats'::regclass;
+
+-- [REV-3B CRITICAL-5] fail-closed assertion: 정규화 후 definition 끝에 세미콜론이 남으면 즉시 중단.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM public._mig_ws_matview WHERE definition ~ ';[[:space:]]*$') THEN
+        RAISE EXCEPTION 'SNAPSHOT FAIL: dashboard_stats definition still has trailing semicolon (CRITICAL-5 정규화 실패)';
+    END IF;
+END $$;
 
 CREATE TABLE public._mig_ws_matview_idx AS
 SELECT indexname, indexdef FROM pg_indexes
@@ -584,6 +599,7 @@ END $$;
 --   → 같은 transaction 안에서 DROP 후 스냅샷 definition 으로 재생성하여 NEW canonical work_schedules 에 재결합.
 --   owner/index/grants/comment/ populated(WITH DATA) 복원. matview 정의는 이름 'work_schedules' 를 참조하므로
 --   재생성 시점엔 NEW canonical 이 이미 그 이름을 가진다(§12 swap 완료) → 자동으로 NEW OID 에 결합.
+--   [REV-3B CRITICAL-5] v_def 는 §2 에서 terminal ';' 가 제거된 normalized snapshot → CREATE MATERIALIZED VIEW 조립 안전.
 -- ---------------------------------------------------------------------
 DO $$
 DECLARE
