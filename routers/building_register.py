@@ -22,6 +22,9 @@ SUPABASE_KEY  = os.getenv("SUPABASE_KEY")
 JUSO_KEY      = os.environ.get("JUSO_API_KEY", "U01TX0FVVEgyMDI2MDMxODEyMjUxNjExNzc1MTc=")
 BUILDING_KEY  = os.environ.get("BUILDING_API_KEY", "")
 OUTBOUND_PROXY = os.environ.get("OUTBOUND_PROXY", "").strip()
+PROXY_USER     = os.environ.get("PROXY_USER", "").strip()
+PROXY_PASS     = os.environ.get("PROXY_PASS", "").strip()
+PROXY_PORT     = os.environ.get("PORT", "").strip()
 VERSION       = "2.4.0"
 
 JUSO_URL      = "https://business.juso.go.kr/addrlink/addrLinkApi.do"
@@ -35,11 +38,35 @@ BUILDING_HEADERS = {
     'Accept': 'application/json',
 }
 
+def _build_proxy_url():
+    """OUTBOUND_PROXY 에 인증정보(PROXY_USER/PROXY_PASS)를 안전하게 주입해 완성된 프록시 URL 반환.
+    - 이미 user:pass@ 포함 시 그대로. 스킴 없으면 http:// 부여. 포트 없으면 PORT 보완.
+    - 자격증명은 URL-encode. data.go.kr 건축물대장은 해외/클라우드 IP를 차단하므로 한국 IP 프록시(cafe24)로 경유한다."""
+    raw = OUTBOUND_PROXY
+    if not raw:
+        return None
+    if "://" in raw:
+        scheme, rest = raw.split("://", 1)
+    else:
+        scheme, rest = "http", raw
+    if "@" in rest:
+        creds, hostpart = rest.split("@", 1)
+    else:
+        creds, hostpart = "", rest
+        if PROXY_USER:
+            creds = f"{quote(PROXY_USER, safe='')}:{quote(PROXY_PASS, safe='')}"
+    if ":" not in hostpart and PROXY_PORT:
+        hostpart = f"{hostpart}:{PROXY_PORT}"
+    if creds:
+        return f"{scheme}://{creds}@{hostpart}"
+    return f"{scheme}://{hostpart}"
+
+
 def _proxies():
-    """OUTBOUND_PROXY 가 설정돼 있으면 http/https 프록시 매핑을 반환, 아니면 None.
-    data.go.kr 건축물대장은 등록 IP만 허용하므로 등록 IP를 가진 아웃바운드 프록시로 경유한다."""
-    if OUTBOUND_PROXY:
-        return {"http": OUTBOUND_PROXY, "https": OUTBOUND_PROXY}
+    """완성된 프록시 URL(_build_proxy_url) 을 http/https 양쪽에 적용. 미설정 시 None."""
+    purl = _build_proxy_url()
+    if purl:
+        return {"http": purl, "https": purl}
     return None
 
 
