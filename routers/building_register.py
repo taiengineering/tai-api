@@ -21,6 +21,7 @@ SUPABASE_URL  = os.getenv("SUPABASE_URL")
 SUPABASE_KEY  = os.getenv("SUPABASE_KEY")
 JUSO_KEY      = os.environ.get("JUSO_API_KEY", "U01TX0FVVEgyMDI2MDMxODEyMjUxNjExNzc1MTc=")
 BUILDING_KEY  = os.environ.get("BUILDING_API_KEY", "")
+OUTBOUND_PROXY = os.environ.get("OUTBOUND_PROXY", "").strip()
 VERSION       = "2.4.0"
 
 JUSO_URL      = "https://business.juso.go.kr/addrlink/addrLinkApi.do"
@@ -34,161 +35,12 @@ BUILDING_HEADERS = {
     'Accept': 'application/json',
 }
 
-
-def _building_probe_raw(sigungu, bjdong, bun, ji, plat_gb="0", endpoint="getBrTitleInfo"):
-    """진단 전용 — 오류를 삼키지 않고 data.go.kr 원본 응답을 그대로 노출한다."""
-    import re as _re
-    try:
-        r = requests.get(f"{BUILDING_BASE}/{endpoint}", params={
-            "serviceKey": BUILDING_KEY, "sigunguCd": sigungu, "bjdongCd": bjdong,
-            "platGbCd": plat_gb, "bun": bun, "ji": ji,
-            "numOfRows": 10, "pageNo": 1, "_type": "json",
-        }, headers=BUILDING_HEADERS, verify=False, timeout=15)
-        body = (r.text or "")[:500]
-        m = _re.search(r"<returnReasonCode>(\d+)</returnReasonCode>", body) or _re.search(r"returnReasonCode[\"'>:\s]+(\d+)", body)
-        m2 = _re.search(r"<errMsg>([^<]+)</errMsg>", body) or _re.search(r"errMsg[\"'<>:\s]+([A-Z_]+)", body)
-        sent = r.url.split("serviceKey=")[-1].split("&")[0] if "serviceKey=" in r.url else ""
-        return {
-            "http_status": r.status_code,
-            "return_reason_code": m.group(1) if m else None,
-            "err_msg": m2.group(1) if m2 else None,
-            "body_head": body[:250],
-            "sent_serviceKey_head": sent[:8],
-            "sent_serviceKey_tail": sent[-8:] if len(sent) >= 8 else sent,
-            "building_key_len": len(BUILDING_KEY),
-            "plat_gb_used": plat_gb,
-        }
-    except Exception as e:
-        return {"error": f"{type(e).__name__}: {e}"}
-
-
-def _building_probe_matrix(sigungu, bjdong, bun, ji, mountain="0", endpoint="getBrTitleInfo"):
-    """진단 전용 — 파라미터 조합별 data.go.kr 원본 응답을 나란히 노출한다.
-    검증 라이브러리(PublicDataReader)와 현재 tai-api 방식의 차이(serviceKey unquote,
-    platGbCd 생략, ji 생략)를 실측으로 판별하기 위한 매트릭스."""
-    import re as _re
-    from urllib.parse import unquote as _unq
-    base = f"{BUILDING_BASE}/{endpoint}"
-
-    def _run(label, params, key_variant, extra=None, base_url=None, add_type=True, add_page=True):
-        try:
-            p = dict(params)
-            p["serviceKey"] = key_variant
-            p["numOfRows"] = 10
-            if add_page:
-                p["pageNo"] = 1
-            if add_type:
-                p["_type"] = "json"
-            if extra:
-                p.update(extra)
-            url = base_url or base
-            r = requests.get(url, params=p, headers=BUILDING_HEADERS, verify=False, timeout=15)
-            body = (r.text or "")[:400]
-            m = _re.search(r"<returnReasonCode>(\d+)</returnReasonCode>", body) or _re.search(r'"returnReasonCode"\s*:\s*"?(\d+)', body)
-            m2 = _re.search(r"<errMsg>([^<]+)</errMsg>", body) or _re.search(r'"errMsg"\s*:\s*"([^"]+)', body)
-            tc = _re.search(r"<totalCount>(\d+)</totalCount>", body) or _re.search(r'"totalCount"\s*:\s*"?(\d+)', body)
-            return {
-                "label": label,
-                "http": r.status_code,
-                "return_reason_code": m.group(1) if m else None,
-                "err_msg": m2.group(1) if m2 else None,
-                "totalCount": tc.group(1) if tc else None,
-                "body_head": body[:180],
-            }
-        except Exception as e:
-            return {"label": label, "error": f"{type(e).__name__}: {e}"}
-
-    key_raw = BUILDING_KEY
-    key_unq = _unq(BUILDING_KEY)
-    base_params = {"sigunguCd": sigungu, "bjdongCd": bjdong, "bun": bun}
-    results = []
-    _v2_base = base.replace("BldRgstHubService", "BldRgstService_v2")
-    _http_base = base.replace("https://", "http://")
-    # 1) 현재 tai-api 방식
-    results.append(_run("current(platGb=mtn,ji=0000,key=raw)", {**base_params, "platGbCd": mountain, "ji": ji}, key_raw))
-    # 3) platGbCd 생략 + ji 생략, 키 원본
-    results.append(_run("omit_platGb+omit_ji(key=raw)", {**base_params}, key_raw))
-    # 6) _type=json 제거 (XML 응답) — 검증 라이브러리 방식
-    results.append(_run("no_type(xml),omit_platGb,omit_ji", {**base_params}, key_raw, add_type=False))
-    # 7) pageNo 제거 + _type 제거
-    results.append(_run("no_type+no_pageNo,omit_platGb,omit_ji", {**base_params}, key_raw, add_type=False, add_page=False))
-    # 8) http:// 경로
-    results.append(_run("http_base,omit_platGb,omit_ji", {**base_params}, key_raw, base_url=_http_base))
-    # 9) BldRgstService_v2 경로 (getBrTitleInfo)
-    results.append(_run("v2_path,omit_platGb,omit_ji", {**base_params}, key_raw, base_url=_v2_base))
-    # 10) v2 경로 + _type 제거
-    results.append(_run("v2_path,no_type,omit_platGb,omit_ji", {**base_params}, key_raw, base_url=_v2_base, add_type=False))
-    # 11) numOfRows 없이 최소 파라미터 (sigungu+bjdong+bun만, _type 없음)
-    results.append(_run("minimal(no_type,no_page,no_numRows_override)", {**base_params}, key_raw, add_type=False, add_page=False))
-    return {
-        "key_len_raw": len(key_raw),
-        "key_len_unquoted": len(key_unq),
-        "key_changed_by_unquote": key_raw != key_unq,
-        "attempts": results,
-    }
-
-
-def _building_probe_proxy(sigungu, bjdong, bun, endpoint="getBrTitleInfo"):
-    """진단 전용 — 아웃바운드 프록시 경유 시 code 10이 사라지는지 실측 + 프록시 env 자동탐지.
-    data.go.kr 건축물대장은 등록 IP만 허용 → 미등록 IP는 code 10. 프록시 경유로 등록 IP를 쓰면
-    정상 응답(totalCount)이 나와야 한다. requests는 proxies= 인자가 있어야 프록시를 쓴다."""
-    import re as _re
-    base = f"{BUILDING_BASE}/{endpoint}"
-    params = {
-        "serviceKey": BUILDING_KEY, "sigunguCd": sigungu, "bjdongCd": bjdong,
-        "bun": bun, "numOfRows": 10, "pageNo": 1, "_type": "json",
-    }
-    # 후보 env 이름들에서 프록시 URL 탐지
-    candidate_names = ["OUTBOUND_PROXY", "BUILDING_PROXY", "DATA_GO_KR_PROXY",
-                       "PROXY_URL", "HTTPS_PROXY", "HTTP_PROXY",
-                       "https_proxy", "http_proxy", "FIXIE_URL", "QUOTAGUARD_URL", "PROXY"]
-    found = {n: bool(os.environ.get(n)) for n in candidate_names}
-    proxy_env_present = [n for n, v in found.items() if v]
-
-    def _probe(label, proxies):
-        try:
-            r = requests.get(base, params=params, headers=BUILDING_HEADERS,
-                             proxies=proxies, verify=False, timeout=20)
-            body = (r.text or "")[:400]
-            m = _re.search(r"<returnReasonCode>(\d+)</returnReasonCode>", body) or _re.search(r'"returnReasonCode"\s*:\s*"?(\d+)', body)
-            m2 = _re.search(r"<errMsg>([^<]+)</errMsg>", body) or _re.search(r'"errMsg"\s*:\s*"([^"]+)', body)
-            tc = _re.search(r"<totalCount>(\d+)</totalCount>", body) or _re.search(r'"totalCount"\s*:\s*"?(\d+)', body)
-            return {
-                "label": label, "http": r.status_code,
-                "return_reason_code": m.group(1) if m else None,
-                "err_msg": m2.group(1) if m2 else None,
-                "totalCount": tc.group(1) if tc else None,
-                "body_head": body[:180],
-            }
-        except Exception as e:
-            return {"label": label, "error": f"{type(e).__name__}: {e}"}
-
-    results = []
-    # A) 프록시 없음 (현재 상태 재현)
-    results.append(_probe("no_proxy(current)", None))
-    # B) 발견된 각 프록시 env 로 경유
-    for n in proxy_env_present:
-        purl = os.environ.get(n)
-        results.append(_probe(f"via_{n}", {"http": purl, "https": purl}))
-
-    # 서버의 현재 아웃바운드 공인 IP도 확인 (프록시 없이 / 프록시 경유)
-    def _whatismyip(proxies, label):
-        try:
-            r = requests.get("https://api.ipify.org?format=json", proxies=proxies, timeout=15)
-            return {"label": label, "ip": r.json().get("ip")}
-        except Exception as e:
-            return {"label": label, "error": f"{type(e).__name__}: {e}"}
-    ip_checks = [_whatismyip(None, "direct_ip")]
-    for n in proxy_env_present:
-        purl = os.environ.get(n)
-        ip_checks.append(_whatismyip({"http": purl, "https": purl}, f"ip_via_{n}"))
-
-    return {
-        "proxy_env_present": proxy_env_present,
-        "proxy_env_checked": found,
-        "building_attempts": results,
-        "outbound_ip": ip_checks,
-    }
+def _proxies():
+    """OUTBOUND_PROXY 가 설정돼 있으면 http/https 프록시 매핑을 반환, 아니면 None.
+    data.go.kr 건축물대장은 등록 IP만 허용하므로 등록 IP를 가진 아웃바운드 프록시로 경유한다."""
+    if OUTBOUND_PROXY:
+        return {"http": OUTBOUND_PROXY, "https": OUTBOUND_PROXY}
+    return None
 
 
 def get_supabase():
@@ -482,7 +334,7 @@ def _building_call_once(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: 
     _MAX_ATTEMPTS = 3
     for _attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
-            r = requests.get(f"{BUILDING_BASE}/{endpoint}", params={
+            _bparams = {
                 "serviceKey": BUILDING_KEY,
                 "sigunguCd":  sigungu,
                 "bjdongCd":   bjdong,
@@ -492,7 +344,19 @@ def _building_call_once(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: 
                 "numOfRows":  rows,
                 "pageNo":     1,
                 "_type":      "json"
-            }, headers=BUILDING_HEADERS, verify=False, timeout=15)
+            }
+            _px = _proxies()
+            if _px:
+                try:
+                    r = requests.get(f"{BUILDING_BASE}/{endpoint}", params=_bparams,
+                                     headers=BUILDING_HEADERS, proxies=_px, verify=False, timeout=15)
+                except Exception as _pe:
+                    print(f"[BUILDING] 프록시 경유 실패 → 직접 호출 폴백: {type(_pe).__name__}: {_pe}")
+                    r = requests.get(f"{BUILDING_BASE}/{endpoint}", params=_bparams,
+                                     headers=BUILDING_HEADERS, verify=False, timeout=15)
+            else:
+                r = requests.get(f"{BUILDING_BASE}/{endpoint}", params=_bparams,
+                                 headers=BUILDING_HEADERS, verify=False, timeout=15)
             print(f"[BUILDING] {endpoint} platGbCd={plat_gb} HTTP={r.status_code} (attempt {_attempt}/{_MAX_ATTEMPTS})")
             if r.status_code != 200:
                 # 환경변수 오염(공백/개행/따옴표) 진단: 키 길이와 repr로 숨은 문자 노출
@@ -756,9 +620,6 @@ def diagnose(address: str = Query("인천광역시 서구 가좌로 123", descri
         try:
             parsed = parse_bdmgtsn(bdmgtsn)
             result["bdmgtsn_parsed"] = parsed
-            result["raw_probe"] = _building_probe_raw(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], plat_gb=parsed.get("mountain", "0"))
-            result["probe_matrix"] = _building_probe_matrix(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], mountain=parsed.get("mountain", "0"))
-            result["probe_proxy"] = _building_probe_proxy(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"])
             _pg = parsed.get("mountain", "0")
             title = get_building_title(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], plat_gb=_pg)
             if not title:
