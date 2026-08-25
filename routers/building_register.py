@@ -605,6 +605,34 @@ def _diag_raw_building(parsed: dict) -> dict:
         out["sent_key_len"] = len(_sk)
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {e}"
+    # NO_PROXY / 환경 프록시 노출 — trust_env=True 인 bare requests 가 프록시를 우회하는지 판별
+    import os as _os
+    out["env_NO_PROXY"] = _os.environ.get("NO_PROXY", "") or _os.environ.get("no_proxy", "")
+    out["env_HTTP_PROXY"] = bool(_os.environ.get("HTTP_PROXY") or _os.environ.get("http_proxy"))
+    out["env_HTTPS_PROXY"] = bool(_os.environ.get("HTTPS_PROXY") or _os.environ.get("https_proxy"))
+    # 대조 호출: KOSHA 방식(trust_env=False + 명시 프록시)으로 동일 요청 — 이쪽이 성공하면 우회가 원인
+    try:
+        import requests as _rq2
+        _s = _rq2.Session()
+        _s.trust_env = False
+        _bp2 = {
+            "serviceKey": BUILDING_KEY,
+            "sigunguCd":  parsed.get("sigunguCd"),
+            "bjdongCd":   parsed.get("bjdongCd"),
+            "platGbCd":   "0",
+            "bun":        parsed.get("bun"),
+            "ji":         parsed.get("ji"),
+            "numOfRows":  10,
+            "pageNo":     1,
+            "_type":      "json",
+        }
+        _r2 = _s.get(f"{BUILDING_BASE}/getBrTitleInfo", params=_bp2,
+                     headers=BUILDING_HEADERS, proxies=get_proxies(), verify=False, timeout=25)
+        out["trustenv_false_status"] = _r2.status_code
+        out["trustenv_false_len"] = len(_r2.text or "")
+        out["trustenv_false_head"] = (_r2.text or "")[:200]
+    except Exception as _e2:
+        out["trustenv_false_error"] = f"{type(_e2).__name__}: {_e2}"
     return out
 
 
