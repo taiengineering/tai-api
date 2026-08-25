@@ -6,8 +6,11 @@ prefix: /fire-hazmat
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
-import httpx
 import os
+import asyncio
+import json
+
+from services.kr_public_api import kr_get
 
 router = APIRouter(prefix="/fire-hazmat", tags=["소방청위험물"])
 
@@ -23,16 +26,16 @@ async def _fire_get(path: str, params: dict) -> dict:
     params["serviceKey"] = SERVICE_KEY
     params.setdefault("type", "json")
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(f"{FIRE_BASE}/{path}", params=params)
-            resp.raise_for_status()
-            ct = resp.headers.get("content-type", "")
-            if "json" in ct:
-                return resp.json()
-            return {"raw": resp.text[:3000]}
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=502, detail=f"소방청 API 오류 {e.response.status_code}: {e.response.text[:200]}")
-    except httpx.RequestError as e:
+        _st, _tx = await asyncio.to_thread(kr_get, f"{FIRE_BASE}/{path}", params=params, timeout=15)
+        if _st >= 400:
+            raise HTTPException(status_code=502, detail=f"소방청 위험물 API HTTP {_st}")
+        try:
+            return json.loads(_tx)
+        except Exception:
+            return {"raw": _tx[:3000]}
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(status_code=502, detail=f"소방청 API 연결 실패: {str(e)}")
 
 
