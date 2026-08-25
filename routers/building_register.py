@@ -552,6 +552,15 @@ def _diag_raw_building(parsed: dict) -> dict:
     값(키)은 마스킹하고 상태·본문머리·키지문만 반환한다. curl 은 되는데 앱만 실패하는 원인 판별용."""
     import requests as _rq
     out = {}
+    try:
+        import urllib3 as _u3
+        out["urllib3_version"] = getattr(_u3, "__version__", "?")
+    except Exception as _e:
+        out["urllib3_version"] = f"err:{type(_e).__name__}"
+    try:
+        out["requests_version"] = getattr(requests, "__version__", "?")
+    except Exception:
+        out["requests_version"] = "?"
     # 키 지문 — 공백/개행/인코딩 오염 탐지 (값 자체는 노출 안 함)
     k = BUILDING_KEY or ""
     out["key_len"] = len(k)
