@@ -26,11 +26,12 @@ v1.3.1: _log() 버그 수정
 v1.3.0: callApiId 추가
 """
 from __future__ import annotations
-import os, logging, httpx, json, hashlib, re
+import os, logging, httpx, json, hashlib, re, asyncio
 from datetime import datetime, timezone
 from fastapi import APIRouter, Query, BackgroundTasks
 from typing import Optional, Tuple
 from db.supabase_client import get_supabase
+from services.kr_public_api import kr_get
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/kosha-collect", tags=["KOSHA데이터수집"])
@@ -41,38 +42,6 @@ def _get_service_key() -> str:
         or os.getenv("KOSHA_SERVICE_KEY")
         or os.getenv("BUILDING_API_KEY", "")
     )
-
-
-def _build_proxy_url() -> Optional[str]:
-    """
-    아웃바운드 프록시 URL 조합 — data.go.kr 고정 IP 경유용(선택).
-    OUTBOUND_PROXY + PROXY_USER/PROXY_PASS + 포트(기본 8080).
-    - 인증 정보(PROXY_USER/PASS)는 URL 에 합쳐 넣되, 값은 절대 로그/응답에 노출하지 않는다.
-    - OUTBOUND_PROXY 미설정이면 None → 호출부는 프록시 없이 직접 나간다(기본).
-
-    참고: tai-api(Railway) 에서는 프록시 경유해도 data.go.kr 코드10(인프라 원인, 실측).
-    실제 KOSHA 수집은 고정 IP 서버의 별도 스크립트로 수행한다. 이 함수/프록시 경로는
-    프록시가 실제로 통하는 환경을 위한 하위호환으로만 남겨둔다.
-    """
-    from urllib.parse import urlparse, quote
-    raw = os.getenv("OUTBOUND_PROXY") or ""
-    if not raw:
-        return None
-    if "://" not in raw:
-        raw = "http://" + raw
-    p = urlparse(raw)
-    scheme = p.scheme or "http"
-    host = p.hostname
-    if not host:
-        return None
-    port = p.port or int(os.getenv("PROXY_PORT", "8080"))
-    user = os.getenv("PROXY_USER") or ""
-    pw = os.getenv("PROXY_PASS") or ""
-    if user and pw:
-        auth = f"{quote(user, safe='')}:{quote(pw, safe='')}@"
-    else:
-        auth = ""
-    return f"{scheme}://{auth}{host}:{port}"
 
 
 BASE      = "https://apis.data.go.kr/B552468"
@@ -167,32 +136,10 @@ class KoshaAPI:
     @staticmethod
     async def get(path: str, params: dict) -> dict:
         params["serviceKey"] = _get_service_key()
-        # data.go.kr 은 고정 IP 화이트리스트 — 프록시 설정 시 경유, 없으면 직접(기본).
-        proxy = _build_proxy_url()
         url = f"{BASE}/{path}"
         try:
-            if proxy:
-                # 프록시 경유 시 requests(동기, URL 직접 조립) + trust_env=False.
-                # asyncio.to_thread 로 async 논블로킹.
-                import asyncio, requests
-                from urllib.parse import urlencode
-                full_url = f"{url}?{urlencode(params)}"
-                def _blocking_get():
-                    s = requests.Session()
-                    s.trust_env = False
-                    rr = s.get(full_url,
-                               proxies={"http": proxy, "https": proxy},
-                               timeout=30)
-                    return rr.status_code, rr.text
-                _status, text = await asyncio.to_thread(_blocking_get)
-                if _status >= 400:
-                    log.error("[KOSHA] %s 프록시 HTTP %s", path, _status)
-                return _parse_kosha_text(text)
-            else:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.get(url, params=params)
-                    resp.raise_for_status()
-                    return _parse_kosha_text(resp.text)
+            status, text = await asyncio.to_thread(kr_get, url, params=params, timeout=30)
+            return _parse_kosha_text(text)
         except Exception as e:
             log.error("[KOSHA] %s 호출 실패: %s", path, e)
             return {"body": {"items": [], "totalCount": 0}}
