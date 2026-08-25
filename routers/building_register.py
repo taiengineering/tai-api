@@ -319,12 +319,11 @@ async def juso_search(
 def _building_call_once(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, rows: int, plat_gb: str) -> Optional[list]:
     """건축물대장 단일 호출 (platGbCd 고정) + 일시장애 재시도. 결과 없으면 None.
 
-    data.go.kr 게이트웨이의 일시적 upstream 오류(05 SERVICETIMEOUT / 04 HTTP_ERROR / 5xx /
-    연결·타임아웃)는 최대 _MAX_ATTEMPTS회(1초 간격) 재시도한다. JUSO(_juso_call_once)와 동일한
-    복원력 의도이며, None 기반 제어 흐름(무자료·platGbCd 폴백) 보존을 위해 tenacity 데코레이터 대신
-    명시적 유한 루프를 쓴다(소진 시 예외 전파 없이 None 반환 → 기존 200-graceful 동작 유지).
-    정상 무자료(totalCount==0)와 권한/등록류 비일시 오류는 재시도하지 않고 즉시 None."""
-    _MAX_ATTEMPTS = 3
+    data.go.kr 은 일시장애(05 SERVICETIMEOUT / 04 HTTP_ERROR)를 **HTTP 200 본문**으로도 반환한다
+    ({"OpenAPI_ServiceResponse":{"cmmMsgHeader":{"returnReasonCode":"05"}}}). 따라서 상태코드가
+    아니라 응답 본문으로 일시오류를 판정해 재시도한다(간헐적 05 때문에 정상 platGbCd 도 첫 시도가
+    실패할 수 있음). 정상 무자료(totalCount==0)와 비일시 오류는 재시도 없이 즉시 None."""
+    _MAX_ATTEMPTS = 4
     for _attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             _bparams = {
@@ -341,43 +340,41 @@ def _building_call_once(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: 
             # 한국 공공 API는 해외 IP 차단 → 반드시 프록시 경유(직접 폴백 없음: 직접은 어차피 차단).
             r = requests.get(f"{BUILDING_BASE}/{endpoint}", params=_bparams,
                              headers=BUILDING_HEADERS, proxies=get_proxies(), verify=False, timeout=25)
+            _btxt = (r.text or "")[:400]
             print(f"[BUILDING] {endpoint} platGbCd={plat_gb} HTTP={r.status_code} (attempt {_attempt}/{_MAX_ATTEMPTS})")
-            if r.status_code != 200:
-                # 환경변수 오염(공백/개행/따옴표) 진단: 키 길이와 repr로 숨은 문자 노출
-                _klen = len(BUILDING_KEY)
-                _khead = BUILDING_KEY[:6]
-                _ktail = BUILDING_KEY[-6:]
-                _krepr = repr(BUILDING_KEY[:3] + "..." + BUILDING_KEY[-3:])
-                print(f"[BUILDING-DIAG] {endpoint} platGbCd={plat_gb} status={r.status_code} keylen={_klen} head={_khead} tail={_ktail} repr={_krepr}")
-                # requests가 실제 전송한 URL의 serviceKey 인코딩 확인
-                _u = r.url
-                _sk = _u.split("serviceKey=")[-1].split("&")[0] if "serviceKey=" in _u else "(none)"
-                print(f"[BUILDING-DIAG] {endpoint} sent_serviceKey_head={_sk[:12]} sent_serviceKey_tail={_sk[-12:]}")
-                # 비정상 응답 본문 로깅 — data.go.kr returnReasonCode/errMsg 확보 (기존 미로깅 갭 보완)
-                _btxt = (r.text or "")[:300]
-                print(f"[BUILDING-BODY] {endpoint} platGbCd={plat_gb} status={r.status_code} body={_btxt}")
-                # 일시적 게이트웨이 오류만 재시도 (05 SERVICETIMEOUT / 04 HTTP_ERROR / 5xx).
-                # 권한/등록류(예: 30) 비일시 오류는 재시도 무의미 → 즉시 None.
-                _transient = (
-                    r.status_code >= 500
-                    or "SERVICETIMEOUT" in _btxt
-                    or "HTTP_ERROR" in _btxt
-                    or "<returnReasonCode>04</returnReasonCode>" in _btxt
-                    or "<returnReasonCode>05</returnReasonCode>" in _btxt
-                )
-                if _transient and _attempt < _MAX_ATTEMPTS:
-                    print(f"[BUILDING-RETRY] {endpoint} platGbCd={plat_gb} 일시오류 재시도 {_attempt}/{_MAX_ATTEMPTS}")
-                    time.sleep(1)
+
+            # 일시장애 판정 — 상태코드(5xx)든 HTTP 200 본문의 오류봉투든 모두 감지.
+            _transient = (
+                r.status_code >= 500
+                or "SERVICETIMEOUT" in _btxt
+                or "HTTP_ERROR" in _btxt
+                or "returnReasonCode>04" in _btxt
+                or "returnReasonCode>05" in _btxt
+                or '"returnReasonCode":"04"' in _btxt
+                or '"returnReasonCode":"05"' in _btxt
+                or '"returnReasonCode": "04"' in _btxt
+                or '"returnReasonCode": "05"' in _btxt
+            )
+            if _transient:
+                print(f"[BUILDING-RETRY] {endpoint} platGbCd={plat_gb} 일시오류(05/SERVICETIMEOUT) 재시도 {_attempt}/{_MAX_ATTEMPTS} body={_btxt[:120]}")
+                if _attempt < _MAX_ATTEMPTS:
+                    time.sleep(1.5)
                     continue
                 return None
+
+            if r.status_code != 200:
+                print(f"[BUILDING-BODY] {endpoint} platGbCd={plat_gb} status={r.status_code} body={_btxt}")
+                return None
+
             try:
                 data = r.json()
             except Exception:
-                print(f"[BUILDING] JSON 파싱 실패 응답: {r.text[:300]}")
+                print(f"[BUILDING] JSON 파싱 실패 응답: {_btxt}")
                 return None
 
             resp = data.get("response") if isinstance(data, dict) else None
             if not isinstance(resp, dict):
+                # 정상 구조가 아니면(오류봉투 등) 무자료 처리
                 return None
             body = resp.get("body")
             if not isinstance(body, dict):
@@ -401,10 +398,9 @@ def _building_call_once(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: 
         except (requests.exceptions.ConnectionError,
                 requests.exceptions.Timeout,
                 requests.exceptions.ChunkedEncodingError) as e:
-            # 연결/타임아웃도 일시장애로 간주해 재시도
             print(f"[BUILDING-RETRY] {endpoint} platGbCd={plat_gb} 연결/타임아웃 재시도 {_attempt}/{_MAX_ATTEMPTS}: {e}")
             if _attempt < _MAX_ATTEMPTS:
-                time.sleep(1)
+                time.sleep(1.5)
                 continue
             return None
         except Exception as e:
@@ -417,14 +413,12 @@ def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, r
     if not BUILDING_KEY:
         print(f"[BUILDING] BUILDING_API_KEY 미설정 — {endpoint} 스킵")
         return None
-    # 대지구분(platGbCd)은 건물관리번호의 산여부와 1:1 대응하지 않으므로,
-    # 대지(0) 우선 조회 후 결과가 없으면 산(1)으로 폴백한다. (공식 응답 검증: 대지 platGbCd=0)
-    first = "1" if str(plat_gb).strip() == "1" else "0"
-    second = "0" if first == "1" else "1"
-    items = _building_call_once(endpoint, sigungu, bjdong, bun, ji, rows, first)
+    # platGbCd 는 bdMgtSn 의 산 flag 와 1:1 이 아니다(실측: 개포동 아파트도 bdMgtSn[10]=1 이지만 platGbCd=0 에서 34건,
+    # platGbCd=1 은 05 SERVICETIMEOUT). → 대지(0) 우선, 없을 때만 산(1) 폴백으로 순서 고정. plat_gb 인자는 무시.
+    items = _building_call_once(endpoint, sigungu, bjdong, bun, ji, rows, "0")
     if items:
         return items
-    return _building_call_once(endpoint, sigungu, bjdong, bun, ji, rows, second)
+    return _building_call_once(endpoint, sigungu, bjdong, bun, ji, rows, "1")
 
 
 def get_building_title(sigungu, bjdong, bun, ji="0000", plat_gb="0"):
