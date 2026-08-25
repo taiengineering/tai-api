@@ -85,3 +85,15 @@ def kr_get(url, params=None, headers=None, timeout=25):
                 proxies=proxies, impersonate=_IMPERSONATE,
                 verify=False, timeout=timeout)
     return r.status_code, r.text
+
+
+def kr_post(url, json=None, data=None, params=None, headers=None, timeout=25):
+    """한국 공공 API POST — curl_cffi(impersonate)+프록시 경유. (status_code:int, text:str) 반환.
+    json= 로 JSON 바디, data= 로 폼 바디. 예외는 그대로 전파(호출부 try/except 유지)."""
+    from curl_cffi import requests as _cc
+    px = get_proxies()
+    proxies = {"http": px.get("http"), "https": px.get("https")} if px else None
+    r = _cc.post(url, json=json, data=data, params=params, headers=headers or {},
+                 proxies=proxies, impersonate=_IMPERSONATE,
+                 verify=False, timeout=timeout)
+    return r.status_code, r.text
