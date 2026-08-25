@@ -10,7 +10,9 @@ from typing import Optional
 import httpx
 import os
 import json
+import asyncio
 import xml.etree.ElementTree as ET
+from services.kr_public_api import kr_get
 
 router = APIRouter(prefix="/kosha", tags=["KOSHA공공API"])
 
@@ -69,31 +71,27 @@ def _parse_xml_response(text: str) -> dict:
 
 async def _kosha_get_raw(path: str, params: dict) -> tuple:
     params["serviceKey"] = _get_service_key()
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(f"{KOSHA_BASE}/{path}", params=params)
-        return resp.text, resp.status_code
+    _st, _tx = await asyncio.to_thread(kr_get, f"{KOSHA_BASE}/{path}", params=params, timeout=15)
+    return _tx, _st
 
 
 async def _kosha_get(path: str, params: dict) -> dict:
     params["serviceKey"] = _get_service_key()
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(f"{KOSHA_BASE}/{path}", params=params)
-            resp.raise_for_status()
-            text = resp.text
-            try:
-                data = json.loads(text)
-                if "response" in data and isinstance(data["response"], dict):
-                    return data["response"]
-                return data
-            except Exception:
-                return _parse_xml_response(text)
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"KOSHA API 오류 {e.response.status_code}: {e.response.text[:200]}"
-        )
-    except httpx.RequestError as e:
+        _st, _tx = await asyncio.to_thread(kr_get, f"{KOSHA_BASE}/{path}", params=params, timeout=15)
+        if _st >= 400:
+            raise HTTPException(status_code=502, detail=f"KOSHA HTTP {_st}: {_tx[:200]}")
+        text = _tx
+        try:
+            data = json.loads(text)
+            if "response" in data and isinstance(data["response"], dict):
+                return data["response"]
+            return data
+        except Exception:
+            return _parse_xml_response(text)
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(status_code=502, detail=f"KOSHA API 연결 실패: {str(e)}")
 
 
