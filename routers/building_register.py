@@ -11,7 +11,7 @@ from typing import Optional, Any, List
 import asyncio, re, requests, urllib3, os, traceback, time
 from urllib.parse import unquote, quote
 from supabase import create_client
-from services.kr_public_api import get_proxies
+from services.kr_public_api import get_proxies, kr_get
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -97,16 +97,18 @@ def _juso_call_once(keyword: str) -> Optional[dict]:
         has_road = any(x in keyword for x in ["로 ", "길 ", "대로 ", "로", "길", "대로"])
         first_sort = "road" if has_road else "location"
 
-        r = requests.get(JUSO_URL, params={
+        _js, _jt = kr_get(JUSO_URL, params={
             "confmKey":     JUSO_KEY,
             "currentPage":  1,
             "countPerPage": 1,
             "keyword":      keyword,
             "resultType":   "json",
             "firstSort":    first_sort,
-        }, headers=JUSO_HEADERS, proxies=get_proxies(), verify=False, timeout=15)
-        r.raise_for_status()
-        data = r.json()
+        }, headers=JUSO_HEADERS, timeout=15)
+        if _js >= 400:
+            raise requests.exceptions.HTTPError(f"JUSO HTTP {_js}")
+        import json as _json
+        data = _json.loads(_jt)
 
         if not isinstance(data, dict):
             return None
@@ -270,9 +272,11 @@ def _juso_search_list(keyword: str, current_page: int = 1, count_per_page: int =
         "keyword": keyword.strip(),
         "resultType": "json",
     }
-    r = requests.get(JUSO_URL, params=params, headers=JUSO_HEADERS, proxies=get_proxies(), verify=False, timeout=15)
-    r.raise_for_status()
-    data = r.json()
+    _js, _jt = kr_get(JUSO_URL, params=params, headers=JUSO_HEADERS, timeout=15)
+    if _js >= 400:
+        raise ValueError(f"JUSO HTTP {_js}")
+    import json as _json
+    data = _json.loads(_jt)
     if not isinstance(data, dict):
         raise ValueError("JUSO 응답 형식 오류")
     results = data.get("results") or {}
@@ -337,11 +341,20 @@ def _building_call_once(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: 
                 "pageNo":     1,
                 "_type":      "json"
             }
-            # 한국 공공 API는 해외 IP 차단 → 반드시 프록시 경유(직접 폴백 없음: 직접은 어차피 차단).
-            r = requests.get(f"{BUILDING_BASE}/{endpoint}", params=_bparams,
-                             headers=BUILDING_HEADERS, proxies=get_proxies(), verify=False, timeout=25)
-            _btxt = (r.text or "")[:400]
-            print(f"[BUILDING] {endpoint} platGbCd={plat_gb} HTTP={r.status_code} (attempt {_attempt}/{_MAX_ATTEMPTS})")
+            # 한국 공공 API: curl_cffi(TLS 지문 우회)+프록시 경유. 표준 requests 는 data.go.kr code10.
+            _status, _text = kr_get(f"{BUILDING_BASE}/{endpoint}", params=_bparams,
+                                    headers=BUILDING_HEADERS, timeout=25)
+            class _Resp:
+                pass
+            r = _Resp()
+            r.status_code = _status
+            r.text = _text
+            def _rjson(_t=_text):
+                import json as _json
+                return _json.loads(_t)
+            r.json = _rjson
+            _btxt = (_text or "")[:400]
+            print(f"[BUILDING] {endpoint} platGbCd={plat_gb} HTTP={_status} (attempt {_attempt}/{_MAX_ATTEMPTS})")
 
             # 일시장애 판정 — 상태코드(5xx)든 HTTP 200 본문의 오류봉투든 모두 감지.
             _transient = (
@@ -397,7 +410,8 @@ def _building_call_once(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: 
             return items or None
         except (requests.exceptions.ConnectionError,
                 requests.exceptions.Timeout,
-                requests.exceptions.ChunkedEncodingError) as e:
+                requests.exceptions.ChunkedEncodingError,
+                OSError) as e:
             print(f"[BUILDING-RETRY] {endpoint} platGbCd={plat_gb} 연결/타임아웃 재시도 {_attempt}/{_MAX_ATTEMPTS}: {e}")
             if _attempt < _MAX_ATTEMPTS:
                 time.sleep(1.0 * _attempt)
