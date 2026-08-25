@@ -646,6 +646,56 @@ def diagnose(address: str = Query("인천광역시 서구 가좌로 123", descri
     return result
 
 
+@router.get("/diag-curlcffi")
+def diag_curlcffi(address: str = Query("서울특별시 강남구 개포로109길 21")):
+    """진단 전용 — curl_cffi 의 여러 impersonate 프로필로 프록시 경유 건축물대장 호출을 실측.
+    어느 프로필이 data.go.kr 에서 200+데이터를 받는지 확인(현재 표준 requests 는 OpenSSL3.5.6 JA3 로 code10)."""
+    out = {"address": address}
+    juso = get_juso(address)
+    if not juso or not (juso.get("bdMgtSn") or "").strip():
+        out["error"] = "JUSO bdMgtSn 없음"
+        return out
+    p = parse_bdmgtsn((juso.get("bdMgtSn") or "").strip())
+    out["parsed"] = p
+    params = {
+        "serviceKey": BUILDING_KEY, "sigunguCd": p.get("sigunguCd"),
+        "bjdongCd": p.get("bjdongCd"), "platGbCd": "0",
+        "bun": p.get("bun"), "ji": p.get("ji"),
+        "numOfRows": 10, "pageNo": 1, "_type": "json",
+    }
+    px = get_proxies()
+    url = f"{BUILDING_BASE}/getBrTitleInfo"
+    # 표준 requests(대조군)
+    try:
+        import requests as _rq
+        _r = _rq.get(url, params=params, headers=BUILDING_HEADERS, proxies=px, verify=False, timeout=25)
+        _t = (_r.text or "")
+        out["baseline_requests"] = {"status": _r.status_code, "ok": ('"totalCount":"' in _t and '"resultCode":"00"' in _t), "head": _t[:120]}
+    except Exception as _e:
+        out["baseline_requests"] = {"error": f"{type(_e).__name__}: {_e}"}
+    # curl_cffi 여러 프로필
+    profiles = ["chrome110", "chrome116", "chrome120", "chrome99", "edge99", "safari15_5", "chrome107"]
+    out["curl_cffi"] = {}
+    try:
+        from curl_cffi import requests as _cc
+        for prof in profiles:
+            try:
+                _cr = _cc.get(url, params=params, headers=BUILDING_HEADERS,
+                              proxies={"http": px.get("http"), "https": px.get("https")} if px else None,
+                              impersonate=prof, verify=False, timeout=25)
+                _ct = (_cr.text or "")
+                out["curl_cffi"][prof] = {
+                    "status": _cr.status_code,
+                    "ok": ('"totalCount":"' in _ct and '"resultCode":"00"' in _ct),
+                    "head": _ct[:100],
+                }
+            except Exception as _e2:
+                out["curl_cffi"][prof] = {"error": f"{type(_e2).__name__}: {str(_e2)[:100]}"}
+    except Exception as _eimp:
+        out["curl_cffi_import_error"] = f"{type(_eimp).__name__}: {_eimp}"
+    return out
+
+
 @router.get("/search")
 async def search_building(
     address: str  = Query(..., description="도로명 또는 지번 주소"),
