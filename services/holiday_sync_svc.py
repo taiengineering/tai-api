@@ -31,6 +31,7 @@ v1.1.0 (2026-07-30) — 한국 egress 프록시 경유
 
 주의: 이 모듈은 tai-api 런타임에서 실행되며 org_holiday 에 직접 쓴다.
 """
+import json as _json
 import logging
 import os
 from datetime import date
@@ -39,6 +40,7 @@ from urllib.parse import quote
 
 import requests
 
+from services.kr_public_api import kr_get
 from db.supabase_client import get_supabase
 
 log = logging.getLogger(__name__)
@@ -70,36 +72,30 @@ def _key_param(key: str) -> str:
     return key if "%" in key else quote(key, safe="")
 
 
-def _proxies() -> Optional[dict]:
-    """한국 egress 프록시. data.go.kr 해외IP 403 우회용. 없으면 None(직접 호출)."""
-    p = (os.getenv(_ENV_PROXY, "") or os.getenv(_ENV_PROXY_FALLBACK, "")).strip()
-    return {"http": p, "https": p} if p else None
-
-
 def _fetch_month(year: int, month: int) -> List[dict]:
     """특정 연·월의 공휴일 항목 조회. isHoliday=Y 만 반환."""
     key = _key_param(_service_key())
     url = (f"{_BASE}?serviceKey={key}"
            f"&solYear={year}&solMonth={month:02d}&numOfRows=100&_type=json")
     try:
-        resp = requests.get(url, timeout=20, proxies=_proxies())
+        _st, _tx = kr_get(url, timeout=20)
     except Exception as e:
         raise HolidaySyncError(f"{year}-{month:02d} 특일정보 호출 실패: {e}")
 
-    if resp.status_code >= 400:
+    if _st >= 400:
         hint = ""
-        if resp.status_code in (401, 403):
+        if _st in (401, 403):
             hint = (" — data.go.kr 은 해외 IP 를 차단합니다. "
                     "DATA_GO_KR_HTTP_PROXY(또는 KMC_HTTP_PROXY)에 한국 egress 프록시를 설정하십시오.")
         raise HolidaySyncError(
-            f"{year}-{month:02d} 특일정보 HTTP {resp.status_code}: {resp.text[:150]}{hint}")
+            f"{year}-{month:02d} 특일정보 HTTP {_st}: {_tx[:150]}{hint}")
 
     try:
-        body = resp.json()["response"]["body"]
+        body = _json.loads(_tx)["response"]["body"]
     except Exception:
         # 인증 실패 등은 XML 로 온다 — 원문 앞부분을 그대로 노출해 원인 파악을 돕는다.
         raise HolidaySyncError(
-            f"{year}-{month:02d} 응답 파싱 실패(서비스키 확인 필요): {resp.text[:200]}")
+            f"{year}-{month:02d} 응답 파싱 실패(서비스키 확인 필요): {_tx[:200]}")
 
     items = (body or {}).get("items") or ""
     if not items:
