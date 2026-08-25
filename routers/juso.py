@@ -13,10 +13,13 @@
 
 from __future__ import annotations
 import os
+import json
+import asyncio
 import logging
 import httpx
 from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
+from services.kr_public_api import kr_get
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/juso", tags=["주소·좌표"])
@@ -44,16 +47,15 @@ async def _search_juso(query: str, count: int = 10) -> list[dict]:
         "currentPage": "1",
     }
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(JUSO_SEARCH_URL, params=params)
+    _st, _tx = await asyncio.to_thread(kr_get, JUSO_SEARCH_URL, params=params, timeout=10)
 
-    if resp.status_code != 200:
+    if _st != 200:
         raise HTTPException(
             status_code=502,
-            detail=f"행안부 주소 API 오류: HTTP {resp.status_code}"
+            detail=f"행안부 주소 API 오류: HTTP {_st}"
         )
 
-    body = resp.json()
+    body = json.loads(_tx)
     results = body.get("results", {})
     common  = results.get("common", {})
 
@@ -111,13 +113,12 @@ async def _get_coord(adm_cd: str, rn_mgt_sn: str, udrt_yn: str,
         "resultType": "json",
     }
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(JUSO_COORD_URL, params=params)
+    _st, _tx = await asyncio.to_thread(kr_get, JUSO_COORD_URL, params=params, timeout=10)
 
-    if resp.status_code != 200:
+    if _st != 200:
         return {"lat": None, "lng": None}
 
-    body = resp.json()
+    body = json.loads(_tx)
     results = body.get("results", {})
     juso_list = results.get("juso", [])
 
