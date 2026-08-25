@@ -18,9 +18,11 @@ BE-05: diagnosis 입력 자동조회 API
   NTS_API_KEY                국세청 사업자상태조회 API 키 (선택)
 """
 from __future__ import annotations
-import os, logging, httpx
+import os, logging, asyncio, json
 from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
+
+from services.kr_public_api import kr_get, kr_post
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/diagnosis/autofill", tags=["진단자동조회"])
@@ -41,15 +43,10 @@ NTS_BASE      = "https://api.odcloud.kr/api/nts-businessman/v1/status"
 # ── 공통 HTTP 헬퍼 ────────────────────────────────────────────────────────
 async def _get_json(url: str, params: dict, timeout: int = 15) -> dict:
     try:
-        async with httpx.AsyncClient(timeout=timeout) as c:
-            r = await c.get(url, params=params)
-        if r.status_code >= 400:
-            raise HTTPException(status_code=502, detail=f"외부 API 오류: {r.status_code}")
-        return r.json()
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="외부 API 타임아웃")
-    except httpx.ConnectError as e:
-        raise HTTPException(status_code=503, detail=f"외부 API 연결 실패: {e}")
+        _st, _tx = await asyncio.to_thread(kr_get, url, params=params, timeout=timeout)
+        if _st >= 400:
+            raise HTTPException(status_code=502, detail=f"외부 API 오류: {_st}")
+        return json.loads(_tx)
     except HTTPException:
         raise
     except Exception as e:
@@ -58,15 +55,10 @@ async def _get_json(url: str, params: dict, timeout: int = 15) -> dict:
 
 async def _post_json(url: str, json_body: dict, params: dict | None = None, timeout: int = 15) -> dict:
     try:
-        async with httpx.AsyncClient(timeout=timeout) as c:
-            r = await c.post(url, json=json_body, params=params or {})
-        if r.status_code >= 400:
-            raise HTTPException(status_code=502, detail=f"외부 API 오류: {r.status_code}")
-        return r.json()
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="외부 API 타임아웃")
-    except httpx.ConnectError as e:
-        raise HTTPException(status_code=503, detail=f"외부 API 연결 실패: {e}")
+        _st, _tx = await asyncio.to_thread(kr_post, url, json=json_body, params=params or {}, timeout=timeout)
+        if _st >= 400:
+            raise HTTPException(status_code=502, detail=f"외부 API 오류: {_st}")
+        return json.loads(_tx)
     except HTTPException:
         raise
     except Exception as e:
