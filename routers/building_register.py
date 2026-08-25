@@ -548,14 +548,30 @@ def test():
         _rqv = getattr(requests, "__version__", "?")
     except Exception:
         _rqv = "?"
-    return {
+    import sys as _sys, ssl as _ssl
+    out = {
         "message":      "Building Register API",
         "version":      VERSION,
         "building_key": "설정됨" if BUILDING_KEY else "❌ 미설정",
         "juso_key":     "설정됨" if JUSO_KEY else "❌ 미설정",
         "requests_version": _rqv,
         "urllib3_version":  _u3v,
+        "python_version": _sys.version.split()[0],
+        "openssl_version": _ssl.OPENSSL_VERSION,
     }
+    # TLS 지문 측정 — data.go.kr 이 보는 것과 동일 경로(프록시 경유)로 tls.peet.ws 호출
+    try:
+        _pr = requests.get("https://tls.peet.ws/api/all", proxies=get_proxies(),
+                           verify=False, timeout=20)
+        _d = _pr.json()
+        _tls = _d.get("tls", {}) if isinstance(_d, dict) else {}
+        out["tls_ja3"] = _tls.get("ja3_hash")
+        out["tls_ja4"] = _tls.get("ja4")
+        out["tls_peetprint"] = _tls.get("peetprint_hash")
+        out["tls_probe_status"] = _pr.status_code
+    except Exception as _e:
+        out["tls_probe_error"] = f"{type(_e).__name__}: {_e}"
+    return out
 
 
 @router.get("/diagnose")
