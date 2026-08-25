@@ -358,7 +358,7 @@ def _building_call_once(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: 
             if _transient:
                 print(f"[BUILDING-RETRY] {endpoint} platGbCd={plat_gb} 일시오류(05/SERVICETIMEOUT) 재시도 {_attempt}/{_MAX_ATTEMPTS} body={_btxt[:120]}")
                 if _attempt < _MAX_ATTEMPTS:
-                    time.sleep(1.5)
+                    time.sleep(1.0 * _attempt)
                     continue
                 return None
 
@@ -400,7 +400,7 @@ def _building_call_once(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: 
                 requests.exceptions.ChunkedEncodingError) as e:
             print(f"[BUILDING-RETRY] {endpoint} platGbCd={plat_gb} 연결/타임아웃 재시도 {_attempt}/{_MAX_ATTEMPTS}: {e}")
             if _attempt < _MAX_ATTEMPTS:
-                time.sleep(1.5)
+                time.sleep(1.0 * _attempt)
                 continue
             return None
         except Exception as e:
@@ -413,12 +413,8 @@ def _building_get(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: str, r
     if not BUILDING_KEY:
         print(f"[BUILDING] BUILDING_API_KEY 미설정 — {endpoint} 스킵")
         return None
-    # platGbCd 는 bdMgtSn 의 산 flag 와 1:1 이 아니다(실측: 개포동 아파트도 bdMgtSn[10]=1 이지만 platGbCd=0 에서 34건,
-    # platGbCd=1 은 05 SERVICETIMEOUT). → 대지(0) 우선, 없을 때만 산(1) 폴백으로 순서 고정. plat_gb 인자는 무시.
-    items = _building_call_once(endpoint, sigungu, bjdong, bun, ji, rows, "0")
-    if items:
-        return items
-    return _building_call_once(endpoint, sigungu, bjdong, bun, ji, rows, "1")
+    # 호출 폭주(→ data.go.kr rate-limit 503) 방지: platGbCd=0 단일 조회. 실측상 대지(0)에서 정상 반환.
+    return _building_call_once(endpoint, sigungu, bjdong, bun, ji, rows, "0")
 
 
 def get_building_title(sigungu, bjdong, bun, ji="0000", plat_gb="0"):
@@ -454,15 +450,14 @@ def fetch_all_building_data(bdmgtsn: str) -> dict:
     if not p:
         return {}
     sg, bj, bun, ji = p["sigunguCd"], p["bjdongCd"], p["bun"], p["ji"]
-    pg = p.get("mountain", "0")
     result = {"bdmgtsn": bdmgtsn, "parsed": p}
-    title = get_building_title(sg, bj, bun, ji, plat_gb=pg) or get_building_title(sg, bj, bun, "0000", plat_gb=pg)
-    if title:
-        ji = "0000"
+    # 자동채움은 표제부(title)만으로 충분(연면적·층수·용도·준공연도). 호출 폭주로 인한
+    # data.go.kr rate-limit(503) 방지를 위해 기본개요·층별·오수는 조회하지 않는다.
+    title = get_building_title(sg, bj, bun, ji) or get_building_title(sg, bj, bun, "0000")
     result["title"]  = title
-    result["basis"]  = get_building_basis(sg, bj, bun, ji, plat_gb=pg)
-    result["floors"] = get_floor_outline(sg, bj, bun, ji, plat_gb=pg)
-    result["sewage"] = get_sewage_info(sg, bj, bun, ji, plat_gb=pg)
+    result["basis"]  = []
+    result["floors"] = []
+    result["sewage"] = []
     return result
 
 
