@@ -3,7 +3,7 @@ uvicorn
 supabase
 psycopg2-binary>=2.9.9
 python-dotenv
-requests
+requests==2.31.0
 urllib3==2.0.7
 pandas
 openpyxl
@@ -25,10 +25,12 @@ sentry-sdk[fastapi]
 # 우회용. 누락 시 POST /payments/inicis/billing/prepare 가 ModuleNotFoundError로
 # 평문 500("Internal Server Error") 반환 → 프론트 JSON 파싱 실패.
 
-# urllib3==2.0.7: 프록시(OUTBOUND_PROXY) 경유 data.go.kr(공공데이터포털) HTTPS
-# 호출이 urllib3 2.5+ 에서 코드10(INVALID_REQUEST_PARAMETER)로 거부됨. 카페24
-# egress 서버(urllib3 2.0.7)는 정상 — 동일 버전으로 핀해 프록시 CONNECT 동작 일치.
-# KOSHA 수집(kosha_collect.py) 이 이 프록시 경로를 사용.
+# urllib3==2.0.7 + requests==2.31.0: 프록시(OUTBOUND_PROXY) 경유 data.go.kr
+# HTTPS 호출이 requests 2.32+ 에서 코드10(INVALID_REQUEST_PARAMETER)로 거부됨(프록시
+# CONNECT 구성 변경). 실측 확정: 동일 urllib3(2.0.7)·프록시·키·파라미터에서 requests
+# 2.31.0=정상(200), 2.34.2=코드10. 카페24 egress 서버가 2.31.0 이라 정상이었음.
+# 종전 #138 은 urllib3 만 핀하고 requests 를 bare 로 둬 2.34.2 로 떠올라 문제 잔존 →
+# requests==2.31.0 으로 핀해 확정 해결. (건축물대장/JUSO/KOSHA 프록시 경로 공통)
 
 # === TAI 법령엔진 v3.0 — Track A (2026-05-09 추가) ===
 # 형태소 분석기 (한국어). LLM 사용 금지 원칙(§2.1) 대체 도구.
