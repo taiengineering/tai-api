@@ -13,6 +13,7 @@ from datetime import datetime, date
 from typing import Any, List, Optional, Tuple
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from db.database import get_supabase
+from services.kr_public_api import kr_get
 from routers.messaging import EDGE_SMS_URL as SMS_URL, _call_edge_function as _call_messageme, _get_cfg
 
 router = APIRouter(prefix="/law-collector", tags=["법령 수집기"])
@@ -350,17 +351,15 @@ def fetch_law_list(query: str, display: int = 100, page: int = 1) -> dict:
             "pageIndex": page,
             "type": "xml",
         }
-        resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=30)
-        resp.encoding = "utf-8"
-        return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "data.go.kr"}
+        _st, _tx = kr_get(url, params=params, headers=DEFAULT_HEADERS, timeout=30)
+        return {"xml": _tx, "status": _st, "ok": _st < 400, "source": "data.go.kr"}
     else:
         # 폴백: law.go.kr (로컬 개발용)
         url = f"{LAW_API_BASE}/lawSearch.do"
         params = {"OC": LAW_API_OC, "target": "law", "type": "XML",
                   "query": query, "display": display, "page": page}
-        resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=30)
-        resp.encoding = "utf-8"
-        return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "law.go.kr"}
+        _st, _tx = kr_get(url, params=params, headers=DEFAULT_HEADERS, timeout=30)
+        return {"xml": _tx, "status": _st, "ok": _st < 400, "source": "law.go.kr"}
 
 
 def fetch_law_content(mst_no: str) -> dict:
@@ -368,15 +367,13 @@ def fetch_law_content(mst_no: str) -> dict:
     if DATA_GOV_KEY:
         url = f"{DATA_GOV_BASE}/lawService.do"
         params = {"serviceKey": DATA_GOV_KEY, "MST": mst_no, "type": "xml"}
-        resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=60)
-        resp.encoding = "utf-8"
-        return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "data.go.kr"}
+        _st, _tx = kr_get(url, params=params, headers=DEFAULT_HEADERS, timeout=60)
+        return {"xml": _tx, "status": _st, "ok": _st < 400, "source": "data.go.kr"}
     else:
         url = f"{LAW_API_BASE}/lawService.do"
         params = {"OC": LAW_API_OC, "target": "law", "MST": mst_no, "type": "XML"}
-        resp = requests.get(url, params=params, headers=DEFAULT_HEADERS, timeout=60)
-        resp.encoding = "utf-8"
-        return {"xml": resp.text, "status": resp.status_code, "ok": resp.ok, "source": "law.go.kr"}
+        _st, _tx = kr_get(url, params=params, headers=DEFAULT_HEADERS, timeout=60)
+        return {"xml": _tx, "status": _st, "ok": _st < 400, "source": "law.go.kr"}
 
 
 # ============================================================
