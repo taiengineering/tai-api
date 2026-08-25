@@ -138,7 +138,7 @@ def _juso_call_once(keyword: str) -> Optional[dict]:
             "keyword":      keyword,
             "resultType":   "json",
             "firstSort":    first_sort,
-        }, headers=JUSO_HEADERS, verify=False, timeout=10)
+        }, headers=JUSO_HEADERS, proxies=_proxies(), verify=False, timeout=15)
         r.raise_for_status()
         data = r.json()
 
@@ -304,7 +304,7 @@ def _juso_search_list(keyword: str, current_page: int = 1, count_per_page: int =
         "keyword": keyword.strip(),
         "resultType": "json",
     }
-    r = requests.get(JUSO_URL, params=params, verify=False, timeout=15)
+    r = requests.get(JUSO_URL, params=params, headers=JUSO_HEADERS, proxies=_proxies(), verify=False, timeout=15)
     r.raise_for_status()
     data = r.json()
     if not isinstance(data, dict):
