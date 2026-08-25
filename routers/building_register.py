@@ -553,39 +553,12 @@ def build_factory_update(juso: dict, building_data: dict) -> dict:
 
 @router.get("/test")
 def test():
-    try:
-        import urllib3 as _u3
-        _u3v = getattr(_u3, "__version__", "?")
-    except Exception:
-        _u3v = "?"
-    try:
-        _rqv = getattr(requests, "__version__", "?")
-    except Exception:
-        _rqv = "?"
-    import sys as _sys, ssl as _ssl
-    out = {
+    return {
         "message":      "Building Register API",
         "version":      VERSION,
         "building_key": "설정됨" if BUILDING_KEY else "❌ 미설정",
         "juso_key":     "설정됨" if JUSO_KEY else "❌ 미설정",
-        "requests_version": _rqv,
-        "urllib3_version":  _u3v,
-        "python_version": _sys.version.split()[0],
-        "openssl_version": _ssl.OPENSSL_VERSION,
     }
-    # TLS 지문 측정 — data.go.kr 이 보는 것과 동일 경로(프록시 경유)로 tls.peet.ws 호출
-    try:
-        _pr = requests.get("https://tls.peet.ws/api/all", proxies=get_proxies(),
-                           verify=False, timeout=20)
-        _d = _pr.json()
-        _tls = _d.get("tls", {}) if isinstance(_d, dict) else {}
-        out["tls_ja3"] = _tls.get("ja3_hash")
-        out["tls_ja4"] = _tls.get("ja4")
-        out["tls_peetprint"] = _tls.get("peetprint_hash")
-        out["tls_probe_status"] = _pr.status_code
-    except Exception as _e:
-        out["tls_probe_error"] = f"{type(_e).__name__}: {_e}"
-    return out
 
 
 @router.get("/diagnose")
@@ -658,56 +631,6 @@ def diagnose(address: str = Query("인천광역시 서구 가좌로 123", descri
         result["building_status"] = "⚠️ bdMgtSn 없음 — 건축물대장 조회 불가"
 
     return result
-
-
-@router.get("/diag-curlcffi")
-def diag_curlcffi(address: str = Query("서울특별시 강남구 개포로109길 21")):
-    """진단 전용 — curl_cffi 의 여러 impersonate 프로필로 프록시 경유 건축물대장 호출을 실측.
-    어느 프로필이 data.go.kr 에서 200+데이터를 받는지 확인(현재 표준 requests 는 OpenSSL3.5.6 JA3 로 code10)."""
-    out = {"address": address}
-    juso = get_juso(address)
-    if not juso or not (juso.get("bdMgtSn") or "").strip():
-        out["error"] = "JUSO bdMgtSn 없음"
-        return out
-    p = parse_bdmgtsn((juso.get("bdMgtSn") or "").strip())
-    out["parsed"] = p
-    params = {
-        "serviceKey": BUILDING_KEY, "sigunguCd": p.get("sigunguCd"),
-        "bjdongCd": p.get("bjdongCd"), "platGbCd": "0",
-        "bun": p.get("bun"), "ji": p.get("ji"),
-        "numOfRows": 10, "pageNo": 1, "_type": "json",
-    }
-    px = get_proxies()
-    url = f"{BUILDING_BASE}/getBrTitleInfo"
-    # 표준 requests(대조군)
-    try:
-        import requests as _rq
-        _r = _rq.get(url, params=params, headers=BUILDING_HEADERS, proxies=px, verify=False, timeout=25)
-        _t = (_r.text or "")
-        out["baseline_requests"] = {"status": _r.status_code, "ok": ('"totalCount":"' in _t and '"resultCode":"00"' in _t), "head": _t[:120]}
-    except Exception as _e:
-        out["baseline_requests"] = {"error": f"{type(_e).__name__}: {_e}"}
-    # curl_cffi 여러 프로필
-    profiles = ["chrome110", "chrome116", "chrome120", "chrome99", "edge99", "safari15_5", "chrome107"]
-    out["curl_cffi"] = {}
-    try:
-        from curl_cffi import requests as _cc
-        for prof in profiles:
-            try:
-                _cr = _cc.get(url, params=params, headers=BUILDING_HEADERS,
-                              proxies={"http": px.get("http"), "https": px.get("https")} if px else None,
-                              impersonate=prof, verify=False, timeout=25)
-                _ct = (_cr.text or "")
-                out["curl_cffi"][prof] = {
-                    "status": _cr.status_code,
-                    "ok": ('"totalCount":"' in _ct and '"resultCode":"00"' in _ct),
-                    "head": _ct[:100],
-                }
-            except Exception as _e2:
-                out["curl_cffi"][prof] = {"error": f"{type(_e2).__name__}: {str(_e2)[:100]}"}
-    except Exception as _eimp:
-        out["curl_cffi_import_error"] = f"{type(_eimp).__name__}: {_eimp}"
-    return out
 
 
 @router.get("/search")
