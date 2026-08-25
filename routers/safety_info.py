@@ -18,10 +18,12 @@ End Point: https://apis.data.go.kr/1741000/FcltsSafetyInfoService2025
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
-import httpx
 import os
 import json
+import asyncio
 import xml.etree.ElementTree as ET
+
+from services.kr_public_api import kr_get
 
 router = APIRouter(prefix="/safety-info", tags=["행안부안전정보"])
 
@@ -72,48 +74,45 @@ async def _safety_get(path: str, params: dict) -> dict:
     params["serviceKey"] = SERVICE_KEY
     params.setdefault("resultType", "json")
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(f"{SAFETY_BASE}{path}", params=params)
-            resp.raise_for_status()
-            text = resp.text
+        _st, _tx = await asyncio.to_thread(kr_get, f"{SAFETY_BASE}{path}", params=params, timeout=15)
+        if _st >= 400:
+            raise HTTPException(status_code=502, detail=f"안전정보 API HTTP {_st}")
+        text = _tx
 
-            # JSON 파싱 시도
+        # JSON 파싱 시도
+        try:
+            data = json.loads(text)
+            if "response" in data:
+                return data["response"]
+            return data
+        except Exception:
+            # XML fallback
             try:
-                data = json.loads(text)
-                if "response" in data:
-                    return data["response"]
-                return data
-            except Exception:
-                # XML fallback
-                try:
-                    root = ET.fromstring(text)
-                    # items 추출
-                    items_el = root.find(".//items")
-                    items = []
-                    if items_el is not None:
-                        for item in items_el.findall("item"):
-                            items.append(_xml_to_dict(item))
-                    total = root.findtext(".//totalCount") or "0"
-                    return {
-                        "header": {
-                            "resultCode": root.findtext(".//resultCode") or "00",
-                            "resultMsg":  root.findtext(".//resultMsg") or ""
-                        },
-                        "body": {
-                            "items":      {"item": items} if items else {},
-                            "totalCount": int(total),
-                            "pageNo":     int(root.findtext(".//pageNo") or 1),
-                            "numOfRows":  int(root.findtext(".//numOfRows") or 10),
-                        }
+                root = ET.fromstring(text)
+                # items 추출
+                items_el = root.find(".//items")
+                items = []
+                if items_el is not None:
+                    for item in items_el.findall("item"):
+                        items.append(_xml_to_dict(item))
+                total = root.findtext(".//totalCount") or "0"
+                return {
+                    "header": {
+                        "resultCode": root.findtext(".//resultCode") or "00",
+                        "resultMsg":  root.findtext(".//resultMsg") or ""
+                    },
+                    "body": {
+                        "items":      {"item": items} if items else {},
+                        "totalCount": int(total),
+                        "pageNo":     int(root.findtext(".//pageNo") or 1),
+                        "numOfRows":  int(root.findtext(".//numOfRows") or 10),
                     }
-                except Exception:
-                    return {"raw": text[:3000]}
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"행안부 안전정보 API 오류 {e.response.status_code}: {e.response.text[:200]}"
-        )
-    except httpx.RequestError as e:
+                }
+            except Exception:
+                return {"raw": text[:3000]}
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(status_code=502, detail=f"행안부 API 연결 실패: {str(e)}")
 
 
