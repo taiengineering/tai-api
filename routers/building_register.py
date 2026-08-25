@@ -11,6 +11,7 @@ from typing import Optional, Any, List
 import asyncio, re, requests, urllib3, os, traceback, time
 from urllib.parse import unquote, quote
 from supabase import create_client
+from services.kr_public_api import get_proxies
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -21,10 +22,6 @@ SUPABASE_URL  = os.getenv("SUPABASE_URL")
 SUPABASE_KEY  = os.getenv("SUPABASE_KEY")
 JUSO_KEY      = os.environ.get("JUSO_API_KEY", "U01TX0FVVEgyMDI2MDMxODEyMjUxNjExNzc1MTc=")
 BUILDING_KEY  = os.environ.get("BUILDING_API_KEY", "")
-OUTBOUND_PROXY = os.environ.get("OUTBOUND_PROXY", "").strip()
-PROXY_USER     = os.environ.get("PROXY_USER", "").strip()
-PROXY_PASS     = os.environ.get("PROXY_PASS", "").strip()
-PROXY_PORT     = os.environ.get("PORT", "").strip()
 VERSION       = "2.4.0"
 
 JUSO_URL      = "https://business.juso.go.kr/addrlink/addrLinkApi.do"
@@ -37,37 +34,6 @@ BUILDING_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (compatible; TAI-API/1.0)',
     'Accept': 'application/json',
 }
-
-def _build_proxy_url():
-    """OUTBOUND_PROXY 에 인증정보(PROXY_USER/PROXY_PASS)를 안전하게 주입해 완성된 프록시 URL 반환.
-    - 이미 user:pass@ 포함 시 그대로. 스킴 없으면 http:// 부여. 포트 없으면 PORT 보완.
-    - 자격증명은 URL-encode. data.go.kr 건축물대장은 해외/클라우드 IP를 차단하므로 한국 IP 프록시(cafe24)로 경유한다."""
-    raw = OUTBOUND_PROXY
-    if not raw:
-        return None
-    if "://" in raw:
-        scheme, rest = raw.split("://", 1)
-    else:
-        scheme, rest = "http", raw
-    if "@" in rest:
-        creds, hostpart = rest.split("@", 1)
-    else:
-        creds, hostpart = "", rest
-        if PROXY_USER:
-            creds = f"{quote(PROXY_USER, safe='')}:{quote(PROXY_PASS, safe='')}"
-    if ":" not in hostpart and PROXY_PORT:
-        hostpart = f"{hostpart}:{PROXY_PORT}"
-    if creds:
-        return f"{scheme}://{creds}@{hostpart}"
-    return f"{scheme}://{hostpart}"
-
-
-def _proxies():
-    """완성된 프록시 URL(_build_proxy_url) 을 http/https 양쪽에 적용. 미설정 시 None."""
-    purl = _build_proxy_url()
-    if purl:
-        return {"http": purl, "https": purl}
-    return None
 
 
 def get_supabase():
@@ -138,7 +104,7 @@ def _juso_call_once(keyword: str) -> Optional[dict]:
             "keyword":      keyword,
             "resultType":   "json",
             "firstSort":    first_sort,
-        }, headers=JUSO_HEADERS, proxies=_proxies(), verify=False, timeout=15)
+        }, headers=JUSO_HEADERS, proxies=get_proxies(), verify=False, timeout=15)
         r.raise_for_status()
         data = r.json()
 
@@ -304,7 +270,7 @@ def _juso_search_list(keyword: str, current_page: int = 1, count_per_page: int =
         "keyword": keyword.strip(),
         "resultType": "json",
     }
-    r = requests.get(JUSO_URL, params=params, headers=JUSO_HEADERS, proxies=_proxies(), verify=False, timeout=15)
+    r = requests.get(JUSO_URL, params=params, headers=JUSO_HEADERS, proxies=get_proxies(), verify=False, timeout=15)
     r.raise_for_status()
     data = r.json()
     if not isinstance(data, dict):
@@ -372,18 +338,9 @@ def _building_call_once(endpoint: str, sigungu: str, bjdong: str, bun: str, ji: 
                 "pageNo":     1,
                 "_type":      "json"
             }
-            _px = _proxies()
-            if _px:
-                try:
-                    r = requests.get(f"{BUILDING_BASE}/{endpoint}", params=_bparams,
-                                     headers=BUILDING_HEADERS, proxies=_px, verify=False, timeout=15)
-                except Exception as _pe:
-                    print(f"[BUILDING] 프록시 경유 실패 → 직접 호출 폴백: {type(_pe).__name__}: {_pe}")
-                    r = requests.get(f"{BUILDING_BASE}/{endpoint}", params=_bparams,
-                                     headers=BUILDING_HEADERS, verify=False, timeout=15)
-            else:
-                r = requests.get(f"{BUILDING_BASE}/{endpoint}", params=_bparams,
-                                 headers=BUILDING_HEADERS, verify=False, timeout=15)
+            # 한국 공공 API는 해외 IP 차단 → 반드시 프록시 경유(직접 폴백 없음: 직접은 어차피 차단).
+            r = requests.get(f"{BUILDING_BASE}/{endpoint}", params=_bparams,
+                             headers=BUILDING_HEADERS, proxies=get_proxies(), verify=False, timeout=25)
             print(f"[BUILDING] {endpoint} platGbCd={plat_gb} HTTP={r.status_code} (attempt {_attempt}/{_MAX_ATTEMPTS})")
             if r.status_code != 200:
                 # 환경변수 오염(공백/개행/따옴표) 진단: 키 길이와 repr로 숨은 문자 노출
