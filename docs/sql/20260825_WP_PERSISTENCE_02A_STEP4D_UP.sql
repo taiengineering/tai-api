@@ -5,12 +5,14 @@
 -- 목적: GEN-INSPECT-RESULT-001 을 CANDIDATE → APPROVED_BY_HUMAN
 --       → APPROVED_FOR_RUNTIME_USE 로 승격 (시스템 최초 APPROVED runtime schema).
 -- 대상 schema UUID: dc79ac3c-388c-42dc-b029-3dd9bda54a47
--- 원자성: 단일 DO 블록. 실패 시 전체 롤백. 부분 승격(field approved + schema candidate) 없음.
+-- 원자성: 단일 DO 블록. 실패 시 전체 롤백. 부분 승격 없음.
 -- candidate.status = 건드리지 않음 (§3, enum 에 승격값 없음).
 --
 -- ★ AUDIT 정책 (대표 결정 A = A-2 확정):
 --   status 승격 + runtime_form_audit_log 에 audit row 1건 INSERT.
 --   reviewer_id=NULL (nullable 확인, 결정 B-1). action='PROMOTE_TO_RUNTIME_USE'.
+-- 보강(2차): total field count=5 guard / preexisting promotion audit=0 guard /
+--   audit INSERT rowcount=1 / final promotion audit count=1 assertion.
 -- =====================================================================
 
 DO $$
@@ -34,6 +36,11 @@ BEGIN
     RAISE EXCEPTION 'ABORT: field precondition mismatch (not 5 CANDIDATE/CANDIDATE_ONLY). STOP.';
   END IF;
 
+  -- 전체 runtime_field count = 5 (예상 밖 6번째 field 방지)
+  IF (SELECT count(*) FROM runtime_field WHERE form_schema_id = v_schema_id) <> 5 THEN
+    RAISE EXCEPTION 'ABORT: total runtime_field count <> 5. STOP.';
+  END IF;
+
   -- exact key/type/order 5/5
   IF (SELECT count(*) FROM runtime_field WHERE form_schema_id = v_schema_id AND
         ( (field_key='inspection_subject' AND input_type='text'      AND field_order=1)
@@ -51,6 +58,13 @@ BEGIN
   END IF;
   IF (SELECT count(*) FROM runtime_document_data WHERE form_schema_id = v_schema_id) <> 0 THEN
     RAISE EXCEPTION 'ABORT: runtime_document_data already references schema. STOP.';
+  END IF;
+
+  -- preexisting promotion audit = 0 (실행 순간 재확인, STEP-4A 패턴)
+  IF (SELECT count(*) FROM runtime_form_audit_log
+      WHERE source_table = 'runtime_form_schema' AND source_id = v_schema_id
+        AND action = 'PROMOTE_TO_RUNTIME_USE') <> 0 THEN
+    RAISE EXCEPTION 'ABORT: preexisting promotion audit found. STOP.';
   END IF;
 
   -- before_state snapshot (audit / rollback 용)
@@ -184,6 +198,18 @@ BEGIN
      v_before, v_after, NULL,
      'Human approval explicitly authorized under WP-PERSISTENCE-02A STEP-4D governance. reviewer_id is NULL because no canonical schema-governance reviewer identity contract currently exists.',
      v_before, true);
+
+  GET DIAGNOSTICS v_cnt = ROW_COUNT;
+  IF v_cnt <> 1 THEN
+    RAISE EXCEPTION 'ABORT: promotion audit INSERT affected % rows (expected 1). ROLLBACK.', v_cnt;
+  END IF;
+
+  -- final: promotion audit 정확히 1건
+  IF (SELECT count(*) FROM runtime_form_audit_log
+      WHERE source_table = 'runtime_form_schema' AND source_id = v_schema_id
+        AND action = 'PROMOTE_TO_RUNTIME_USE') <> 1 THEN
+    RAISE EXCEPTION 'ABORT: promotion audit count <> 1. ROLLBACK.';
+  END IF;
 
   RAISE NOTICE 'PROMOTED OK: schema=% status=APPROVED_FOR_RUNTIME_USE fields=5 APPROVED_BY_HUMAN', v_schema_id;
 END $$;
