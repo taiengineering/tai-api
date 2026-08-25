@@ -547,95 +547,6 @@ def test():
     }
 
 
-def _diag_raw_building(parsed: dict) -> dict:
-    """진단 전용 — 앱이 프록시 경유로 data.go.kr 에서 실제로 받는 원본 응답을 노출.
-    값(키)은 마스킹하고 상태·본문머리·키지문만 반환한다. curl 은 되는데 앱만 실패하는 원인 판별용."""
-    import requests as _rq
-    out = {}
-    try:
-        import urllib3 as _u3
-        out["urllib3_version"] = getattr(_u3, "__version__", "?")
-    except Exception as _e:
-        out["urllib3_version"] = f"err:{type(_e).__name__}"
-    try:
-        out["requests_version"] = getattr(requests, "__version__", "?")
-    except Exception:
-        out["requests_version"] = "?"
-    # 키 지문 — 공백/개행/인코딩 오염 탐지 (값 자체는 노출 안 함)
-    k = BUILDING_KEY or ""
-    out["key_len"] = len(k)
-    out["key_head4"] = k[:4]
-    out["key_tail4"] = k[-4:]
-    out["key_has_space"] = (" " in k) or ("\t" in k)
-    out["key_has_newline"] = ("\n" in k) or ("\r" in k)
-    out["key_has_percent"] = "%" in k
-    out["key_has_plus_slash_eq"] = any(c in k for c in "+/=")
-    out["key_repr_edge"] = repr(k[:2] + "…" + k[-2:])
-    # 프록시 지문 (값 노출 없이 설정 여부/형태만)
-    _px = get_proxies()
-    out["proxy_set"] = bool(_px)
-    if _px:
-        pu = _px.get("https", "")
-        out["proxy_has_auth"] = "@" in pu
-        out["proxy_scheme"] = pu.split("://", 1)[0] if "://" in pu else ""
-        out["proxy_hostport"] = pu.split("@", 1)[-1] if "@" in pu else pu.split("://", 1)[-1]
-    # 앱과 100% 동일한 방식으로 1회 호출 (getBrTitleInfo, platGbCd=0)
-    try:
-        _bparams = {
-            "serviceKey": BUILDING_KEY,
-            "sigunguCd":  parsed.get("sigunguCd"),
-            "bjdongCd":   parsed.get("bjdongCd"),
-            "platGbCd":   "0",
-            "bun":        parsed.get("bun"),
-            "ji":         parsed.get("ji"),
-            "numOfRows":  10,
-            "pageNo":     1,
-            "_type":      "json",
-        }
-        r = _rq.get(f"{BUILDING_BASE}/getBrTitleInfo", params=_bparams,
-                    headers=BUILDING_HEADERS, proxies=_px, verify=False, timeout=25)
-        out["http_status"] = r.status_code
-        out["resp_len"] = len(r.text or "")
-        out["body_head"] = (r.text or "")[:250]
-        # requests 가 실제 전송한 URL 의 serviceKey 부분(인코딩 확인) — 값 일부만
-        _u = r.url or ""
-        _sk = _u.split("serviceKey=")[-1].split("&")[0] if "serviceKey=" in _u else ""
-        out["sent_key_head8"] = _sk[:8]
-        out["sent_key_tail8"] = _sk[-8:]
-        out["sent_key_len"] = len(_sk)
-    except Exception as e:
-        out["error"] = f"{type(e).__name__}: {e}"
-    # NO_PROXY / 환경 프록시 노출 — trust_env=True 인 bare requests 가 프록시를 우회하는지 판별
-    import os as _os
-    out["env_NO_PROXY"] = _os.environ.get("NO_PROXY", "") or _os.environ.get("no_proxy", "")
-    out["env_HTTP_PROXY"] = bool(_os.environ.get("HTTP_PROXY") or _os.environ.get("http_proxy"))
-    out["env_HTTPS_PROXY"] = bool(_os.environ.get("HTTPS_PROXY") or _os.environ.get("https_proxy"))
-    # 대조 호출: KOSHA 방식(trust_env=False + 명시 프록시)으로 동일 요청 — 이쪽이 성공하면 우회가 원인
-    try:
-        import requests as _rq2
-        _s = _rq2.Session()
-        _s.trust_env = False
-        _bp2 = {
-            "serviceKey": BUILDING_KEY,
-            "sigunguCd":  parsed.get("sigunguCd"),
-            "bjdongCd":   parsed.get("bjdongCd"),
-            "platGbCd":   "0",
-            "bun":        parsed.get("bun"),
-            "ji":         parsed.get("ji"),
-            "numOfRows":  10,
-            "pageNo":     1,
-            "_type":      "json",
-        }
-        _r2 = _s.get(f"{BUILDING_BASE}/getBrTitleInfo", params=_bp2,
-                     headers=BUILDING_HEADERS, proxies=get_proxies(), verify=False, timeout=25)
-        out["trustenv_false_status"] = _r2.status_code
-        out["trustenv_false_len"] = len(_r2.text or "")
-        out["trustenv_false_head"] = (_r2.text or "")[:200]
-    except Exception as _e2:
-        out["trustenv_false_error"] = f"{type(_e2).__name__}: {_e2}"
-    return out
-
-
 @router.get("/diagnose")
 def diagnose(address: str = Query("인천광역시 서구 가좌로 123", description="테스트 주소")):
     """
@@ -682,7 +593,6 @@ def diagnose(address: str = Query("인천광역시 서구 가좌로 123", descri
         try:
             parsed = parse_bdmgtsn(bdmgtsn)
             result["bdmgtsn_parsed"] = parsed
-            result["raw_building"] = _diag_raw_building(parsed)
             _pg = parsed.get("mountain", "0")
             title = get_building_title(parsed["sigunguCd"], parsed["bjdongCd"], parsed["bun"], parsed["ji"], plat_gb=_pg)
             if not title:
