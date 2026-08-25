@@ -64,3 +64,24 @@ def httpx_proxy() -> Optional[str]:
 def is_configured() -> bool:
     """프록시가 설정돼 있으면 True."""
     return bool(os.environ.get("OUTBOUND_PROXY", "").strip())
+
+
+# ─────────────────────────────────────────────────────────────
+# 한국 공공 API 요청 — curl_cffi 로 TLS 지문 우회
+# Railway 컨테이너의 OpenSSL 3.5.6 JA3 지문을 data.go.kr 이 code10 으로 거부한다(실측 확정).
+# curl_cffi 로 브라우저 TLS 지문을 흉내내면 프록시 경유로도 정상 응답을 받는다(chrome120 등 전부 200 실측).
+# 표준 requests 는 이 경로에서 쓰지 않는다.
+# ─────────────────────────────────────────────────────────────
+_IMPERSONATE = "chrome120"
+
+
+def kr_get(url, params=None, headers=None, timeout=25):
+    """한국 공공 API(data.go.kr / juso.go.kr) GET — curl_cffi(impersonate)+프록시 경유.
+    반환: (status_code:int, text:str). 예외는 그대로 전파(호출부 기존 try/except 유지)."""
+    from curl_cffi import requests as _cc
+    px = get_proxies()
+    proxies = {"http": px.get("http"), "https": px.get("https")} if px else None
+    r = _cc.get(url, params=params, headers=headers or {},
+                proxies=proxies, impersonate=_IMPERSONATE,
+                verify=False, timeout=timeout)
+    return r.status_code, r.text
