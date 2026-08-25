@@ -539,11 +539,22 @@ def build_factory_update(juso: dict, building_data: dict) -> dict:
 
 @router.get("/test")
 def test():
+    try:
+        import urllib3 as _u3
+        _u3v = getattr(_u3, "__version__", "?")
+    except Exception:
+        _u3v = "?"
+    try:
+        _rqv = getattr(requests, "__version__", "?")
+    except Exception:
+        _rqv = "?"
     return {
         "message":      "Building Register API",
         "version":      VERSION,
         "building_key": "설정됨" if BUILDING_KEY else "❌ 미설정",
         "juso_key":     "설정됨" if JUSO_KEY else "❌ 미설정",
+        "requests_version": _rqv,
+        "urllib3_version":  _u3v,
     }
 
 
