@@ -118,7 +118,8 @@ CREATE TRIGGER trg_sicr_append_only
 --    Folding contract: build the complete revision-0 base record first, then
 --    traverse the journal in revision ASC order and validate the before/after
 --    chain at every step. The current state is NEVER selected via a
---    latest-snapshot shortcut.
+--    latest-snapshot shortcut. Snapshot revision is compared as JSON (no cast)
+--    so corrupted snapshots fail-closed instead of raising.
 -- ==========================================================================
 CREATE OR REPLACE FUNCTION public.fn_resolve_inspection_record(p_inspection_id uuid)
 RETURNS jsonb
@@ -237,7 +238,8 @@ BEGIN
         IF (v_j.after_snapshot->>'inspection_id') IS DISTINCT FROM p_inspection_id::text THEN
             RETURN jsonb_build_object('error','JOURNAL_REVISION_GAP','detail','after_snapshot inspection mismatch at rev ' || v_j.revision::text);
         END IF;
-        IF (v_j.after_snapshot->>'revision')::bigint IS DISTINCT FROM v_j.revision THEN
+        -- JSON exact comparison (no ::bigint cast): corrupted snapshots fail-closed
+        IF (v_j.after_snapshot->'revision') IS DISTINCT FROM to_jsonb(v_j.revision) THEN
             RETURN jsonb_build_object('error','JOURNAL_REVISION_GAP','detail','after_snapshot revision mismatch at rev ' || v_j.revision::text);
         END IF;
         v_record := v_j.after_snapshot;   -- adopt ONLY after chain validation
@@ -394,10 +396,14 @@ BEGIN
                 RETURN jsonb_build_object('ok',false,'error','INVALID_CHANGE_FIELD','detail',v_key);
             END IF;
         END LOOP;
-        IF p_changes ? 'result_code'
-           AND NOT ((p_changes->>'result_code') IN ('NORMAL','ABNORMAL','HOLD')) THEN
-            RETURN jsonb_build_object('ok',false,'error','INVALID_CHANGE_FIELD',
-                'detail','result_code:' || COALESCE(p_changes->>'result_code','null'));
+        -- result_code (when present) MUST be a canonical string; explicit null,
+        -- non-string, or non-canonical value is rejected (no silent coercion).
+        IF p_changes ? 'result_code' THEN
+            IF jsonb_typeof(p_changes->'result_code') <> 'string'
+               OR NOT ((p_changes->>'result_code') IN ('NORMAL','ABNORMAL','HOLD')) THEN
+                RETURN jsonb_build_object('ok',false,'error','INVALID_CHANGE_FIELD',
+                    'detail','result_code:' || COALESCE(p_changes->>'result_code','null'));
+            END IF;
         END IF;
         SELECT jsonb_agg(
             CASE WHEN e->>'result_id' = p_target_result_id::text THEN e || p_changes ELSE e END

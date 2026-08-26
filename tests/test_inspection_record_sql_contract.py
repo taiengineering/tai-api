@@ -18,6 +18,22 @@ def _down() -> str:
     return _DOWN.read_text(encoding="utf-8")
 
 
+def _strip_sql_comments(sql: str) -> str:
+    """Return only executable SQL: drop full-line and trailing `--` comments.
+
+    This file contains no string literals with `--`, so a simple per-line cut is
+    safe. Mentioning a base table name in a comment or FK is NOT a violation;
+    only executable mutation statements are.
+    """
+    out = []
+    for ln in sql.splitlines():
+        idx = ln.find("--")
+        if idx != -1:
+            ln = ln[:idx]
+        out.append(ln)
+    return "\n".join(out)
+
+
 def test_up_creates_two_tables():
     up = _up()
     assert "CREATE TABLE IF NOT EXISTS public.safety_inspection_record_journal" in up
@@ -98,35 +114,41 @@ def test_append_only_triggers():
 
 
 def test_up_base_ledger_untouched():
-    up = _up()
-    # no ALTER/UPDATE/DELETE against base ledger in UP
-    assert "ALTER TABLE public.safety_inspections" not in up
-    assert "ALTER TABLE public.safety_inspection_results" not in up
-    assert "UPDATE public.safety_inspections" not in up
-    assert "UPDATE safety_inspections" not in up
-    assert "DELETE FROM public.safety_inspections" not in up
-    assert "DELETE FROM public.safety_inspection_results" not in up
+    # executable statements only: base ledger must never be mutated in UP
+    exe = _strip_sql_comments(_up())
+    assert "ALTER TABLE public.safety_inspections" not in exe
+    assert "ALTER TABLE public.safety_inspection_results" not in exe
+    assert "UPDATE public.safety_inspections" not in exe
+    assert "UPDATE safety_inspections" not in exe
+    assert "DELETE FROM public.safety_inspections" not in exe
+    assert "DELETE FROM public.safety_inspection_results" not in exe
     # base tables are only REFERENCE'd (FK) / SELECT'd, never mutated
-    assert "REFERENCES public.safety_inspections(id)" in up
+    assert "REFERENCES public.safety_inspections(id)" in exe
 
 
 def test_down_drops_only_no_base_no_create():
-    down = _down()
-    assert "CREATE TABLE" not in down
-    assert "CREATE FUNCTION" not in down
-    assert "CREATE TRIGGER" not in down
-    # DOWN must not touch base ledger at all
-    assert "safety_inspections" not in down
-    assert "safety_inspection_results" not in down
-    # DOWN drops foundation objects
-    assert "DROP TABLE IF EXISTS public.safety_inspection_command_receipt" in down
-    assert "DROP TABLE IF EXISTS public.safety_inspection_record_journal" in down
-    assert "DROP FUNCTION IF EXISTS public.fn_apply_inspection_record_command" in down
-    assert "DROP FUNCTION IF EXISTS public.fn_resolve_inspection_record" in down
+    # FIX-3: check EXECUTABLE statements only (strip `--` comments). Mentioning a
+    # base table name in a comment is not a violation; mutating it is.
+    exe = _strip_sql_comments(_down())
+    # DOWN adds nothing
+    assert "CREATE TABLE" not in exe
+    assert "CREATE FUNCTION" not in exe
+    assert "CREATE TRIGGER" not in exe
+    # DOWN performs no base-ledger mutation of any kind
+    assert "ALTER" not in exe
+    assert "UPDATE" not in exe
+    assert "DELETE" not in exe
+    assert "DROP TABLE IF EXISTS public.safety_inspections" not in exe
+    assert "DROP TABLE IF EXISTS public.safety_inspection_results" not in exe
+    # DOWN drops exactly the foundation objects
+    assert "DROP TABLE IF EXISTS public.safety_inspection_command_receipt" in exe
+    assert "DROP TABLE IF EXISTS public.safety_inspection_record_journal" in exe
+    assert "DROP FUNCTION IF EXISTS public.fn_apply_inspection_record_command" in exe
+    assert "DROP FUNCTION IF EXISTS public.fn_resolve_inspection_record" in exe
 
 
 # ----------------------------------------------------------------------------
-# COMMIT 5 — sequential journal folding contract (no latest-snapshot shortcut)
+# COMMIT 5/6 — sequential journal folding + hardening contract
 # ----------------------------------------------------------------------------
 
 def test_resolver_sequential_folding():
@@ -134,7 +156,8 @@ def test_resolver_sequential_folding():
     assert "ORDER BY revision ASC" in up
     assert "FOR v_j IN" in up                       # real journal traversal
     assert "before_snapshot IS DISTINCT FROM v_record" in up   # chain comparison
-    assert "(v_j.after_snapshot->>'revision')::bigint IS DISTINCT FROM v_j.revision" in up
+    # FIX-2: JSON exact comparison, no ::bigint cast
+    assert "(v_j.after_snapshot->'revision') IS DISTINCT FROM to_jsonb(v_j.revision)" in up
     assert "v_record := v_j.after_snapshot" in up   # adopt only after validation
 
 
@@ -145,3 +168,16 @@ def test_no_latest_snapshot_shortcut():
     assert "v_record := v_after" not in up
     assert "INTO v_after" not in up
     assert "v_max_rev" not in up
+
+
+def test_fix2_no_unsafe_revision_cast():
+    # FIX-2: the unsafe ::bigint cast on after_snapshot revision must be gone
+    up = _up()
+    assert "::bigint IS DISTINCT FROM v_j.revision" not in up
+
+
+def test_fix1_result_code_hardening():
+    # FIX-1: result_code correction rejects explicit null / non-string / non-canonical
+    up = _up()
+    assert "jsonb_typeof(p_changes->'result_code') <> 'string'" in up
+    assert "(p_changes->>'result_code') IN ('NORMAL','ABNORMAL','HOLD')" in up
