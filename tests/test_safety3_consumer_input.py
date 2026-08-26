@@ -32,9 +32,9 @@ class _Body:
 def test_allowlist_contains_new5():
     for f in _NEW5:
         assert f in _LEG_INPUT_FIELDS, f"{f} 누락"
-    # 기존 49 + 신규 5 = 54, 중복 없음
+    # 기존 49 + safety-3 5축 + wiring specific 2축(has_asbestos_demo·has_tower_crane) = 56, 중복 없음
     assert len(_LEG_INPUT_FIELDS) == len(set(_LEG_INPUT_FIELDS))
-    assert len(_LEG_INPUT_FIELDS) == 54
+    assert len(_LEG_INPUT_FIELDS) == 56
 
 
 def test_new3_not_in_nexas_numeric():
@@ -91,5 +91,19 @@ def test_existing_fields_unaffected():
     fac = build_facility(_Body({"worker_count": 50, "has_tower_crane": True, "total_floor_area": 400.0}))
     assert fac["worker_count"] == 50
     assert fac["total_floor_area"] == 400.0
-    # has_tower_crane는 allowlist에 없으므로(별도 축) 전달 안 됨 — 기존 계약 그대로
-    assert "has_tower_crane" not in fac
+    # WIRING-SPECIFIC-PASSTHROUGH: has_tower_crane는 이제 allowlist(specific 축)에 있으므로 그대로 전달된다.
+    assert fac["has_tower_crane"] is True
+    # 단, generic has_crane 은 alias 없이 무접촉이어야 한다(broadening 금지).
+    assert "has_crane" not in fac
+
+
+def test_wiring_specific_keys_present_generic_absent():
+    # WO-OBJ-WIRING-SAFETY-SPECIFIC-PASSTHROUGH: specific 축은 통과, generic 축은 무접촉.
+    for f in ("has_asbestos_demo", "has_tower_crane"):
+        assert f in _LEG_INPUT_FIELDS, f"{f} 누락"
+    fac = build_facility(_Body({"has_asbestos_demo": True, "has_tower_crane": True}))
+    assert fac.get("has_asbestos_demo") is True
+    assert fac.get("has_tower_crane") is True
+    # generic 은 alias 없이 절대 파생되지 않는다.
+    assert "has_asbestos" not in fac
+    assert "has_crane" not in fac
