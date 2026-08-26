@@ -309,6 +309,15 @@ def run_diagnosis(
         contract_amount_eok=body.contract_amount_eok or 0.0,
         user_tier=body.user_tier,
     )
+    # 무료 진단 정합: 결제 없는 요청은 무료 의도이므로 섹터별 무료 tier_code 로 확정한다.
+    # 프론트가 tier="FREE" 로 신호하나 nexas 어댑터가 이를 소비하므로, 여기서는 payment_ref
+    # 부재를 무료 의도로 본다(유료는 payment_ref 필수 → 영향 없음). tier_code 는 inp["tier_code"]
+    # 로 엔진 scope 에도 반영되므로 코드 자체를 무료로 교정한다.
+    if not body.payment_ref and tier_code not in free_tier_codes:
+        _root = "INDUSTRY" if sector in ("INDUSTRIAL", "INDUSTRY") else sector
+        _free_cand = "{}_FREE".format(_root)
+        if _free_cand in free_tier_codes:
+            tier_code = _free_cand
     is_free = tier_code in free_tier_codes
 
     if is_free:
