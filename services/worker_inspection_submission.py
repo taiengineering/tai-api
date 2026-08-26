@@ -10,6 +10,8 @@ Worker PWA 제출을 원자적 생성 RPC(fn_create_worker_inspection_record) �
   - submission_id = UUID5(고정 namespace, 정체성 = schedule_ref + 정규화 phone + submitted_at)
     * 정체성이 같으면 항상 같은 submission_id (오프라인 재전송 멱등의 앵커)
   - request_hash = SHA-256(정규 의미 페이로드) — 정체성이 같아도 내용이 바뀌면 hash 는 바뀐다
+    * 같은 canonical 페이로드를 p_request_payload 로도 넘겨, append-only receipt 만으로
+      SHA-256(canonical_request_json(p_request_payload)) == request_hash 재구성이 가능하다
   - RPC 정확히 1회 호출 후 typed 결과/에러 변환
 
 FORBIDDEN: safety_inspections / safety_inspection_results /
@@ -118,6 +120,32 @@ def _canonical_items(items: list[dict]) -> list[dict]:
     return out
 
 
+def build_canonical_request_payload(
+    *,
+    schedule_ref: str,
+    phone: str,
+    submitted_at: datetime,
+    inspection_type: Optional[str],
+    items: list[dict],
+) -> dict:
+    """request_hash 와 append-only creation receipt(p_request_payload)에 동일하게 쓰는
+    정규 의미 페이로드. source 는 receipt 의 별도 컬럼이므로 여기 넣지 않는다 —
+    이래야 감사자가 SHA-256(canonical_request_json(p_request_payload)) 로 request_hash 를
+    재구성/검증할 수 있다."""
+    return {
+        "schedule_ref": str(schedule_ref or ""),
+        "phone": normalize_phone(phone),
+        "submitted_at": _submitted_at_key(submitted_at),
+        "inspection_type": inspection_type or "",
+        "items": _canonical_items(items),
+    }
+
+
+def canonical_request_json(payload: dict) -> str:
+    """request_hash 계산에 쓰는 정규 직렬화(정렬 키·공백 없음·비-ASCII 보존)."""
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def compute_request_hash(
     *,
     schedule_ref: str,
@@ -127,15 +155,11 @@ def compute_request_hash(
     items: list[dict],
 ) -> str:
     """정규 의미 페이로드의 SHA-256. 의미가 같으면 같은 hash, 다르면 다른 hash."""
-    payload = {
-        "schedule_ref": str(schedule_ref or ""),
-        "phone": normalize_phone(phone),
-        "submitted_at": _submitted_at_key(submitted_at),
-        "inspection_type": inspection_type or "",
-        "items": _canonical_items(items),
-    }
-    blob = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    payload = build_canonical_request_payload(
+        schedule_ref=schedule_ref, phone=phone, submitted_at=submitted_at,
+        inspection_type=inspection_type, items=items,
+    )
+    return hashlib.sha256(canonical_request_json(payload).encode("utf-8")).hexdigest()
 
 
 def _rpc_results_payload(items: list[dict]) -> list[dict]:
@@ -185,18 +209,12 @@ def submit_worker_inspection(
         raise WorkerSubmissionError("EMPTY_RESULTS", "items required")
 
     submission_id = compute_submission_id(schedule_ref, phone, dt)
-    request_hash = compute_request_hash(
+    # hash 대상과 receipt 저장 payload 를 동일한 canonical 로 통일 (source 는 p_source 컬럼).
+    canonical_payload = build_canonical_request_payload(
         schedule_ref=schedule_ref, phone=phone, submitted_at=dt,
         inspection_type=inspection_type, items=items,
     )
-
-    request_payload = {
-        "schedule_ref": str(schedule_ref or ""),
-        "phone": normalize_phone(phone),
-        "submitted_at": _submitted_at_key(dt),
-        "inspection_type": inspection_type or "",
-        "source": source,
-    }
+    request_hash = hashlib.sha256(canonical_request_json(canonical_payload).encode("utf-8")).hexdigest()
 
     params = {
         "p_submission_id": str(submission_id),
@@ -207,7 +225,7 @@ def submit_worker_inspection(
         "p_inspector_id": (str(inspector_id) if inspector_id else None),
         "p_submitted_at": _submitted_at_key(dt),
         "p_results": _rpc_results_payload(items),
-        "p_request_payload": request_payload,
+        "p_request_payload": canonical_payload,
     }
 
     # RPC 정확히 1회. 직접 테이블 쓰기/revision 조회 없음.
