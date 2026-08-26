@@ -1,4 +1,5 @@
-# routers/auth.py — v3.8.2
+# routers/auth.py — v3.9.0
+# v3.9.0: POST /auth/change-password — 인앱 직접 비밀번호 변경(현재 비번 확인 후 갱신)
 # v3.8.2: dev_otp 응답 노출을 환경변수로 통제 + worker_registry 자동 배선 견고화·관측성 보강
 # v3.8.1: users INSERT 시 sector 명시 — 컬럼 기본값 'INDUSTRY' 가 users_sector_check 를 위반
 # v3.8.0: verify-otp 세션 발급 — OTP 통과 시 access_token 반환 + worker_registry 배선
@@ -126,6 +127,10 @@ class RegisterRequest(BaseModel):
 class FindPasswordRequest(BaseModel):
     phone: str
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password:     str
+
 class UpdateMeRequest(BaseModel):
     name:              Optional[str] = None
     phone:             Optional[str] = None
@@ -156,7 +161,7 @@ class VerifyOtpRequest(BaseModel):
 
 @router.get("/test")
 def test():
-    return {"message": "auth router alive", "version": "3.8.2"}
+    return {"message": "auth router alive", "version": "3.9.0"}
 
 
 # ════════════════════════════════════════════
@@ -1057,6 +1062,92 @@ def reset_password(req: FindPasswordRequest):
     parts = email.split("@")
     masked = parts[0][:2] + "**@" + parts[1] if len(parts) == 2 else email
     return {"status": "success", "message": f"재설정 링크를 {masked}로 발송했습니다"}
+
+
+# ── 비밀번호 변경(인앱 직접) ─────────────────────────
+# 현재 비밀번호를 확인한 뒤 새 비밀번호로 즉시 변경한다(메일 링크 불필요).
+# 검증은 로그인과 동일한 이중 확인: GoTrue sign_in_with_password → 실패 시 bcrypt(password_hash) 폴백.
+# 반영은 login 의 자가복구와 동일: GoTrue admin.update_user_by_id + users.password_hash 동기화.
+
+@router.post("/change-password")
+def change_password(req: ChangePasswordRequest, authorization: Optional[str] = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="토큰이 없습니다")
+    token = authorization.replace("Bearer ", "")
+    supabase = get_supabase()
+    try:
+        ur = supabase.auth.get_user(token)
+        if not ur or not ur.user:
+            raise HTTPException(status_code=401, detail="유효하지 않은 토큰")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="토큰 검증 실패")
+
+    res = supabase.table("users").select(
+        "id, email, auth_id, password_hash"
+    ).eq("auth_id", str(ur.user.id)).limit(1).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+    user = res.data[0]
+
+    current_pw = req.current_password or ""
+    new_pw = req.new_password or ""
+
+    if len(new_pw) < 8:
+        raise HTTPException(status_code=400, detail="새 비밀번호는 8자 이상이어야 합니다")
+    if new_pw == current_pw:
+        raise HTTPException(status_code=400, detail="새 비밀번호가 현재 비밀번호와 동일합니다")
+
+    login_email = user.get("email")
+    if not login_email:
+        raise HTTPException(status_code=400, detail="이 계정은 이메일이 설정되어 있지 않습니다")
+
+    # 현재 비밀번호 검증 — GoTrue 우선, 실패 시 bcrypt 폴백(로그인과 동일)
+    verified = False
+    try:
+        chk = supabase.auth.sign_in_with_password({"email": login_email, "password": current_pw})
+        if chk and chk.user and chk.session:
+            verified = True
+    except Exception:
+        verified = False
+    if not verified:
+        pw_hash = user.get("password_hash")
+        if pw_hash and bcrypt.checkpw(current_pw.encode("utf-8"), pw_hash.encode("utf-8")):
+            verified = True
+    if not verified:
+        raise HTTPException(status_code=401, detail="현재 비밀번호가 올바르지 않습니다")
+
+    # 새 비밀번호 반영 — GoTrue(관리자 API) + users.password_hash 동기화
+    try:
+        supabase_admin = get_supabase_admin()
+        if user.get("auth_id"):
+            supabase_admin.auth.admin.update_user_by_id(user["auth_id"], {"password": new_pw})
+        else:
+            new_auth = supabase_admin.auth.admin.create_user({
+                "email": login_email,
+                "password": new_pw,
+                "email_confirm": True,
+            })
+            supabase.table("users").update({
+                "auth_id": str(new_auth.user.id),
+                "updated_at": _now_iso(),
+            }).eq("id", user["id"]).execute()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"비밀번호 변경 실패: {str(e)}")
+
+    try:
+        new_hash = bcrypt.hashpw(new_pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        supabase.table("users").update({
+            "password_hash": new_hash,
+            "updated_at": _now_iso(),
+        }).eq("id", user["id"]).execute()
+    except Exception:
+        pass
+
+    return {"status": "success", "message": "비밀번호가 변경되었습니다"}
 
 
 # ── 토큰 검증 ───────────────────────────────────────
