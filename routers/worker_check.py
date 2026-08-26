@@ -1,12 +1,18 @@
 """
-작업자 현장 점검 제출 API — v1.4.1
+작업자 현장 점검 제출 API — v1.5.0
 
+v1.5.0 (2026-08-26, OBJ-01 KNOT-2 read cutover):
+  [READ CUTOVER] GET /recent · GET /history 가 safety_inspections.status_code 직독 대신
+        Effective Record 어댑터(fn_list_effective_inspection_records_by_inspector)를 소비한다.
+        각 항목: id / inspection_date / inspection_status / result_summary / status_code(legacy alias).
+        단일 RPC 로 inspector 유효 레코드 리스트를 받으므로 per-row Resolver N+1 = 0.
+        POST /submit(writer) 는 불변 — 이 커밋은 read 경로만 바꿼다.
 v1.4.1 (2026-08-17, Goal G-mswtdmi1-420f8c):
   [FIX] safety_inspections.assignment_id 의 FK 는 work_schedules(id) 를 참조한다(컬럼명과 대상 불일치).
         v1.4.0 이 work_assignments.id 를 그대로 넣어 FK 위반 → 500 → 앱이 "기기에 임시저장"으로 처리했다.
-        (8/09 옛 제출은 assignment_id 가 없어 FK 검사를 타지 않아 성공했고, 새 앱은 assignment_id 를 보내 위반.)
+        (8/09 옇 제출은 assignment_id 가 없어 FK 검사를 타지 않아 성공했고, 새 앱은 assignment_id 를 보내 위반.)
         → assignment_id(work_assignments.id)를 schedule_id(work_schedules.id)로 변환해 저장한다.
-        [별건] 컬럼명 assignment_id 인데 FK 는 work_schedules — 명명/설계 정합(FK 를 work_assignments 로 옮길지)은 기획 결정.
+        [별건] 컬럼명 assignment_id 인데 FK 는 work_schedules — 명명/설계 정합(FK 를 work_assignments 로 옆길지)은 기획 결정.
 v1.4.0 (2026-08-17, Goal G-mswtdmi1-420f8c):
   [FIX] 참조 검증을 assignment_id 3홉(work_assignments→work_schedules→inspection_set_id)으로 교체.
         safety_inspections.assignment_id 저장.
@@ -32,10 +38,39 @@ from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
 from services import inspection_sets_svc as _iss
+from services.inspection_record_resolver import (
+    InspectionRecordError,
+    list_effective_inspection_records_by_inspector,
+)
 from services.status_vocab import normalize_inspection_result_write
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/worker-check", tags=["WorkerCheck"])
+
+# result_summary(effective overall_result) → legacy status_code 별칭.
+# result_summary 가 None 이면 inspection_status 를 status_code 로 쓴다(아래 _effective_worker_item).
+_WORKER_STATUS_ALIAS = {"NORMAL": "COMPLETED", "ABNORMAL": "ISSUE", "HOLD": "HOLD"}
+
+
+def _effective_worker_item(rec: dict) -> dict:
+    """effective record → 워커 이력 항목 계약.
+
+    id / inspection_date / inspection_status / result_summary / status_code(legacy alias).
+    status_code 는 앱 구버전 호환용 별칭으로만 유도하며, effective 값을 재해석하지 않는다.
+    """
+    inspection_status = rec.get("inspection_status")
+    result_summary = rec.get("overall_result")
+    if result_summary is None:
+        status_code = inspection_status
+    else:
+        status_code = _WORKER_STATUS_ALIAS.get(result_summary, result_summary)
+    return {
+        "id": rec.get("inspection_id"),
+        "inspection_date": rec.get("inspection_date"),
+        "inspection_status": inspection_status,
+        "result_summary": result_summary,
+        "status_code": status_code,
+    }
 
 
 def _optional_auth(authorization: Optional[str] = Header(None)) -> Optional[dict]:
@@ -152,7 +187,7 @@ def submit_check(
     inspection_id = ins_res.data[0]["id"]
 
     # 3. 참조 검증(가공 차단): assignment_id 3홉으로 세트 항목만 참조로 인정하고,
-    #    참조가 맞으면 item_name 을 서버 마스터 값으로 덮어씀(이름 위조 경로 제거).
+    #    참조가 맞으면 item_name 을 서버 마스터 값으로 덮어씁(이름 위조 경로 제거).
     allowed: dict = {}
     set_id = _iss.resolve_set_id_for_assignment(body.assignment_id) if body.assignment_id else None
     if set_id:
@@ -239,7 +274,7 @@ def _resolve_inspector_id(supabase, worker_id: Optional[str], phone: Optional[st
 
 @router.get("/recent")
 def get_recent_checks(phone: str, limit: int = 5):
-    """점검자의 최근 점검 이력 조회"""
+    """점검자의 최근 점검 이력 조회 (effective record 어댑터 경유)."""
     supabase = get_supabase()
     clean = phone.replace("-", "").replace(" ", "")
 
@@ -253,13 +288,9 @@ def get_recent_checks(phone: str, limit: int = 5):
     if not inspector_id:
         return {"status": "success", "data": {"items": []}}
 
-    res = supabase.table("safety_inspections") \
-        .select("id, inspection_date, status_code") \
-        .eq("inspector_id", inspector_id) \
-        .order("inspection_date", desc=True) \
-        .limit(limit).execute()
-
-    return {"status": "success", "data": {"items": res.data or []}}
+    records = list_effective_inspection_records_by_inspector(inspector_id, limit, supabase)
+    items = [_effective_worker_item(r) for r in records]
+    return {"status": "success", "data": {"items": items}}
 
 
 @router.get("/history")
@@ -273,16 +304,14 @@ def get_check_history(
     앱 이력 화면이 GET /worker-check/history?worker_id=&phone= 로 호출한다.
     이 라우트가 없으면 항상 실패했고, 앱이 오류를 삼켜 '빈 이력'과 구분되지 않았다(결함 76).
     점검자를 못 찾으면 빈 목록을 돌려준다(정상 응답). 조회 자체 실패는 예외로 전파한다.
+
+    KNOT-2: safety_inspections 직독 대신 effective record 어댑터를 소비한다.
     """
     supabase = get_supabase()
     inspector_id = _resolve_inspector_id(supabase, worker_id, phone)
     if not inspector_id:
         return {"status": "success", "data": {"items": []}}
 
-    res = supabase.table("safety_inspections") \
-        .select("id, inspection_date, status_code") \
-        .eq("inspector_id", inspector_id) \
-        .order("inspection_date", desc=True) \
-        .limit(limit).execute()
-
-    return {"status": "success", "data": {"items": res.data or []}}
+    records = list_effective_inspection_records_by_inspector(inspector_id, limit, supabase)
+    items = [_effective_worker_item(r) for r in records]
+    return {"status": "success", "data": {"items": items}}
