@@ -1116,7 +1116,7 @@ def change_password(req: ChangePasswordRequest, authorization: Optional[str] = H
         if pw_hash and bcrypt.checkpw(current_pw.encode("utf-8"), pw_hash.encode("utf-8")):
             verified = True
     if not verified:
-        raise HTTPException(status_code=401, detail="현재 비밀번호가 올바르지 않습니다")
+        raise HTTPException(status_code=400, detail="현재 비밀번호가 올바르지 않습니다")
 
     # 새 비밀번호 반영 — GoTrue(관리자 API) + users.password_hash 동기화
     try:
