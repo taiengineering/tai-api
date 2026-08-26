@@ -172,6 +172,38 @@ def test_missing_schedule_ref_fail_closed_409(wired):
     assert wired["calls"] == []              # 서비스 호출 자체가 없어야 함
 
 
+def test_missing_submitted_at_returns_422_no_service_call(wired):
+    # BLOCKER A: 누락 submitted_at 은 서버 시각으로 대체하지 않고 fail-closed 422.
+    with pytest.raises(HTTPException) as ei:
+        wc.submit_check(_body([{"name": "소화기", "result": "ok"}], submitted_at=None), current_user=None)
+    assert ei.value.status_code == 422
+    assert ei.value.detail == {"error": "WORKER_SUBMISSION_TIMESTAMP_INVALID"}
+    assert wired["calls"] == []              # 서비스 호출 0
+
+
+def test_empty_submitted_at_returns_422_no_service_call(wired):
+    with pytest.raises(HTTPException) as ei:
+        wc.submit_check(_body([{"name": "소화기", "result": "ok"}], submitted_at=""), current_user=None)
+    assert ei.value.status_code == 422
+    assert wired["calls"] == []
+
+
+def test_invalid_submitted_at_maps_to_422(wired):
+    # invalid ISO 는 service 가 typed 에러로 올리고 router 는 422 로 매핑(500 아님).
+    wired["raise"] = WorkerSubmissionError("WORKER_SUBMISSION_TIMESTAMP_INVALID")
+    with pytest.raises(HTTPException) as ei:
+        wc.submit_check(_body([{"name": "소화기", "result": "ok"}], submitted_at="not-a-date"), current_user=None)
+    assert ei.value.status_code == 422
+    assert ei.value.detail == {"error": "WORKER_SUBMISSION_TIMESTAMP_INVALID"}
+
+
+def test_submitted_at_not_defaulted_to_server_now_static():
+    import inspect as _inspect
+    src = _inspect.getsource(wc.submit_check)
+    assert "body.submitted_at or now" not in src
+    assert "submitted_at=body.submitted_at," in src
+
+
 def test_recent_and_history_alias_unchanged(wired, monkeypatch):
     recs = [{"inspection_id": "R1", "inspection_date": "2026-08-27",
              "inspection_status": "COMPLETED", "overall_result": "ABNORMAL"}]
