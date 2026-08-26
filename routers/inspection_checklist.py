@@ -37,6 +37,10 @@ from services.status_vocab import (
     ws_completed_query_values,
     ws_write_scheduled,
 )
+from services.inspection_record_writer_bridge import (
+    complete_inspection_status,
+    InspectionStatusWriteError,
+)
 
 router = APIRouter(prefix="/inspection", tags=["점검리스트"])
 
@@ -439,10 +443,16 @@ async def record_inspection_results(inspection_id: str, body: dict, current: dic
                 supabase.table("work_schedules").update({
                     "status_code": "completed", "completed_at": date.today().isoformat()
                 }).eq("id", ws_id).execute()
-                supabase.table("safety_inspections").update({"status_code": "completed"}).eq("id", inspection_id).execute()
+                # KNOT-3A: 직접 base UPDATE 대신 STATUS_CHANGE 전표 append.
+                complete_inspection_status(
+                    supabase, inspection_id,
+                    actor_id=current["id"], reason="SAFE_RESULT_AUTO_COMPLETE",
+                )
         return {"status": "success", "message": f"{created}개 결과가 기록됐습니다.",
                 "data": {"inspection_id": inspection_id, "created": created}}
     except HTTPException: raise
+    except InspectionStatusWriteError as e:
+        raise HTTPException(status_code=409, detail={"code": e.code, "message": "점검 상태를 완료 처리할 수 없습니다."})
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -462,6 +472,21 @@ async def complete_inspection(work_schedule_id: str, body: dict = None, current:
         body = body or {}
         summary      = body.get("summary", "")
         completed_at = body.get("completed_at", date.today().isoformat())
+
+        # KNOT-3A: schedule mutation 전에 대상 inspection cardinality 확정 (fail-closed).
+        # assignment_id 당 inspection 은 0/1 만 허용. 2건 이상이면 각각 별도 전표화 시
+        # 중간 실패로 partial journal 이 생길 수 있으므로 schedule 변경 전에 HARD FAIL.
+        _linked = supabase.table("safety_inspections").select("id").eq(
+            "assignment_id", work_schedule_id
+        ).execute()
+        _linked_rows = _linked.data or []
+        if len(_linked_rows) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "INSPECTION_CARDINALITY_VIOLATION",
+                        "message": "점검 상태를 완료 처리할 수 없습니다."},
+            )
+        _target_inspection_id = _linked_rows[0]["id"] if _linked_rows else None
 
         # 완료 상태로 업데이트 (COMPLETED 리코드는 이후 건드리지 않음)
         ws_res = supabase.table("work_schedules").update({
@@ -531,8 +556,13 @@ async def complete_inspection(work_schedule_id: str, body: dict = None, current:
                     except Exception as e:
                         print(f"[COMPLETE] 다음 회차 생성 실패 (iset={inspection_set_id}): {e}")
 
-        supabase.table("safety_inspections").update({"status_code": "completed"})\
-            .eq("assignment_id", work_schedule_id).execute()
+        # KNOT-3A: 기존 bulk base UPDATE 대신, 연결된 inspection 1건에 한해
+        # STATUS_CHANGE 전표를 append 한다. 0건이면 schedule 완료/rolling 만 진행.
+        if _target_inspection_id is not None:
+            complete_inspection_status(
+                supabase, _target_inspection_id,
+                actor_id=current["id"], reason="SAFE_COMPLETE",
+            )
 
         return {
             "status":  "success",
@@ -546,6 +576,8 @@ async def complete_inspection(work_schedule_id: str, body: dict = None, current:
             }
         }
     except HTTPException: raise
+    except InspectionStatusWriteError as e:
+        raise HTTPException(status_code=409, detail={"code": e.code, "message": "점검 상태를 완료 처리할 수 없습니다."})
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
 
