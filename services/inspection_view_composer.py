@@ -1,15 +1,19 @@
 """WP-PERSISTENCE-03 — Web View Composer (READ-ONLY).
 
-inspection/result source DB → explicit set/schema resolution → GENERAL presentation
+OBJ-01 KNOT-2: 현재 점검값의 source 는 base ledger 직독이 아니라 Effective Record
+Resolver(fn_resolve_inspection_record) 이다. 이 모듈은 resolver 가 돌려준 current
+effective record 를 소비해 explicit set/schema resolution → GENERAL presentation
 schema View Model 을 lazy compose 한다.
 
-아키텍처 (STEP-0 REV-1 SEALED):
-    inspection → inspection_set (P-A primary / P-B corroboration)
+아키텍처 (STEP-0 REV-1 SEALED + KNOT-2 read cutover):
+    inspection(effective) → inspection_set (P-A primary / P-B corroboration)
     inspection_set → runtime_inspection_bridge → runtime_form_schema (approved + GENERAL v1 support gate)
     → GENERAL 5-field code contract View Model (Option B)
 
 READ-ONLY invariant:
-    이 모듈은 어떤 테이블에도 write 하지 않는다 (insert/update/delete/upsert/rpc/DDL/storage 금지).
+    이 모듈은 어떤 테이블에도 write 하지 않는다 (insert/update/delete/upsert/DDL/storage 금지).
+    current effective record 는 read-only resolver(fn_resolve_inspection_record) 를 통해
+    조회하며, base ledger(safety_inspections / safety_inspection_results) 를 직접 읽지 않는다.
     runtime_document_data / generated_document 를 생성하지 않는다. PDF/HTML/renderer 없음.
 
 AUTH invariant:
@@ -22,7 +26,12 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-# ── 고정 상수 (SEALED contract) ──────────────────────────────────────────────
+from services.inspection_record_resolver import (
+    InspectionRecordError,
+    resolve_inspection_record,
+)
+
+# ── 고정 상수 (SEALED contract) ────────────────────────────────────
 GENERAL_SCHEMA_ID = "dc79ac3c-388c-42dc-b029-3dd9bda54a47"
 GENERAL_FORM_CODE = "GEN-INSPECT-RESULT-001"
 GENERAL_SCHEMA_VERSION = 1
@@ -76,30 +85,62 @@ def compose_inspection_view(inspection_id: str, supabase: Any = None) -> Dict[st
 
         supabase = get_supabase()
 
-    # ── 1) inspection 기본 조회 ───────────────────────────────────────────────
-    insp_rows = _rows(
-        supabase.table("safety_inspections")
-        .select("id, assignment_id, asset_id, inspector_id, inspection_date, factory_id")
-        .eq("id", inspection_id)
-        .limit(1)
-        .execute()
-    )
-    if not insp_rows:
-        raise InspectionViewComposeError("INSPECTION_NOT_FOUND", inspection_id)
-    insp = insp_rows[0]
+    # ── 1) current effective record (base ledger + journal folding, READ-ONLY) ─
+    #      base 직독(safety_inspections/safety_inspection_results) 을 하지 않고
+    #      단일 정본 resolver 를 통해 현재 유효 레코드를 얻는다.
+    try:
+        record = resolve_inspection_record(inspection_id, supabase)
+    except InspectionRecordError as exc:
+        raise InspectionViewComposeError(exc.code, exc.detail)
 
-    # ── 2) result rows 전건 조회 (silent filter 금지) ─────────────────────────
-    results = _rows(
-        supabase.table("safety_inspection_results")
-        .select(
-            "id, inspection_id, inspection_set_item_id, item_name, result_code, "
-            "value_text, value_number, note, checked_at, photo_url, photo_urls, created_at"
+    active = record.get("is_active")
+    if active is False:
+        raise InspectionViewComposeError("INSPECTION_INACTIVE", inspection_id)
+    if not isinstance(active, bool):
+        raise InspectionViewComposeError("SOURCE_INTEGRITY_ERROR", f"inspection is_active {active!r}")
+
+    insp = {
+        "id": record.get("inspection_id"),
+        "assignment_id": record.get("assignment_id"),
+        "asset_id": record.get("asset_id"),
+        "inspector_id": record.get("inspector_id"),
+        "inspection_date": record.get("inspection_date"),
+        "factory_id": record.get("factory_id"),
+    }
+    if insp["id"] is None:
+        raise InspectionViewComposeError("SOURCE_INTEGRITY_ERROR", "effective record missing inspection_id")
+
+    # ── 2) effective ACTIVE results 만 소비 (result deactivation = 유일 정상 제외 사유) ─
+    raw_results = record.get("results")
+    if not isinstance(raw_results, list):
+        raise InspectionViewComposeError("SOURCE_INTEGRITY_ERROR", "effective results not a list")
+    results: List[Dict[str, Any]] = []
+    for e in raw_results:
+        ra = e.get("is_active")
+        if not isinstance(ra, bool):
+            raise InspectionViewComposeError(
+                "SOURCE_INTEGRITY_ERROR", f"result is_active {ra!r} (result {e.get('result_id')})"
+            )
+        if ra is False:
+            continue  # inactive result 는 Web View 에서 제외 (silent drop 아님: deactivation 정본)
+        results.append(
+            {
+                "id": e.get("result_id"),
+                "inspection_id": insp["id"],
+                "inspection_set_item_id": e.get("inspection_set_item_id"),
+                "item_name": e.get("item_name"),
+                "result_code": e.get("result_code"),  # effective canonical code (재해석 금지)
+                "value_text": e.get("value_text"),
+                "value_number": e.get("value_number"),
+                "note": e.get("note"),
+                "checked_at": e.get("checked_at"),
+                "photo_url": e.get("photo_url"),
+                "photo_urls": e.get("photo_urls"),
+                "created_at": e.get("created_at"),
+            }
         )
-        .eq("inspection_id", inspection_id)
-        .execute()
-    )
 
-    # ── 3) set_item batch 조회 (N+1 금지) ─────────────────────────────────────
+    # ── 3) set_item batch 조회 (N+1 금지) ────────────────────────────
     set_item_ids = sorted({r["inspection_set_item_id"] for r in results if r.get("inspection_set_item_id")})
     set_items: Dict[str, Dict[str, Any]] = {}
     if set_item_ids:
@@ -121,7 +162,7 @@ def compose_inspection_view(inspection_id: str, supabase: Any = None) -> Dict[st
     # ── 4) INSPECTION → SET resolution (P-A primary / P-B corroboration) ──────
     final_set_id = _resolve_set_id(insp, results, set_items, supabase)
 
-    # ── 5) inspection_set 조회 (title) ────────────────────────────────────────
+    # ── 5) inspection_set 조회 (title) ─────────────────────────────
     set_rows = _rows(
         supabase.table("inspection_sets")
         .select("id, inspection_set_name")
@@ -133,7 +174,7 @@ def compose_inspection_view(inspection_id: str, supabase: Any = None) -> Dict[st
         raise InspectionViewComposeError("SOURCE_INTEGRITY_ERROR", f"inspection_set {final_set_id} missing")
     inspection_title = set_rows[0].get("inspection_set_name")
 
-    # ── 6) SET → PRESENTATION SCHEMA (bridge) ─────────────────────────────────
+    # ── 6) SET → PRESENTATION SCHEMA (bridge) ────────────────────────
     bridge_rows = _rows(
         supabase.table("runtime_inspection_bridge")
         .select("id, inspection_set_id, runtime_form_schema_id")
@@ -148,7 +189,7 @@ def compose_inspection_view(inspection_id: str, supabase: Any = None) -> Dict[st
     if schema_id is None:
         raise InspectionViewComposeError("PRESENTATION_SCHEMA_NOT_MAPPED", final_set_id)
 
-    # ── 7) SCHEMA gate + GENERAL v1 support gate ──────────────────────────────
+    # ── 7) SCHEMA gate + GENERAL v1 support gate ───────────────────────
     schema_rows = _rows(
         supabase.table("runtime_form_schema")
         .select("id, status, version, field_count, source_trace")
@@ -175,7 +216,7 @@ def compose_inspection_view(inspection_id: str, supabase: Any = None) -> Dict[st
             f"id={schema.get('id')} form_code={form_code} version={schema.get('version')} field_count={schema.get('field_count')}",
         )
 
-    # ── 8) top-level fields ───────────────────────────────────────────────────
+    # ── 8) top-level fields ──────────────────────────────────────
     inspection_subject = _resolve_inspection_subject(insp, supabase)
     inspected_at = insp.get("inspection_date")
     inspector_display = _resolve_inspector_display(insp, supabase)
@@ -184,7 +225,7 @@ def compose_inspection_view(inspection_id: str, supabase: Any = None) -> Dict[st
     result_rows = [_compose_result_row(r, set_items) for r in results]
     result_rows = _deterministic_sort(result_rows, results, set_items)
 
-    # ── 10) completeness ──────────────────────────────────────────────────────
+    # ── 10) completeness ───────────────────────────────────────
     missing: List[str] = []
     if inspection_subject is None:
         missing.append("inspection_subject")
@@ -213,7 +254,7 @@ def compose_inspection_view(inspection_id: str, supabase: Any = None) -> Dict[st
     }
 
 
-# ── set resolution ────────────────────────────────────────────────────────────
+# ── set resolution ─────────────────────────────────────────────
 def _resolve_set_id(
     insp: Dict[str, Any],
     results: List[Dict[str, Any]],
@@ -271,7 +312,7 @@ def _resolve_set_id(
     return next(iter(resolved))
 
 
-# ── top-level field resolvers ─────────────────────────────────────────────────
+# ── top-level field resolvers ────────────────────────────────────
 def _resolve_inspection_subject(insp: Dict[str, Any], supabase: Any) -> Optional[str]:
     asset_id = insp.get("asset_id")
     if not asset_id:
@@ -300,7 +341,7 @@ def _resolve_inspector_display(insp: Dict[str, Any], supabase: Any) -> Optional[
     return rows[0].get("name")  # name NULL → None (NOT_REQUIRED)
 
 
-# ── result row / item_name contract ──────────────────────────────────────────
+# ── result row / item_name contract ──────────────────────────────
 def _resolve_item_name(r: Dict[str, Any], set_items: Dict[str, Dict[str, Any]]) -> Optional[str]:
     result_name = r.get("item_name")
     sid = r.get("inspection_set_item_id")
@@ -329,7 +370,7 @@ def _compose_result_row(r: Dict[str, Any], set_items: Dict[str, Dict[str, Any]])
         "result_id": r.get("id"),
         "set_item_id": r.get("inspection_set_item_id"),
         "item_name": _resolve_item_name(r, set_items),
-        "raw_code": r.get("result_code"),  # 그대로 (upper/normalize/ok-bad 금지)
+        "raw_code": r.get("result_code"),  # effective canonical code 그대로 (upper/normalize/ok-bad 금지)
         "value_text": r.get("value_text"),
         "value_number": r.get("value_number"),
         "note": r.get("note"),
