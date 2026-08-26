@@ -40,7 +40,8 @@ def check(name: str, cond: bool, detail: str = ""):
 def test_helper_vocab_allowlist():
     src = {
         "has_confined_space": True, "has_diving": True, "total_floor_area": 2800.0,
-        "has_tower_crane": True,        # NON-vocab (alias source) -> must drop
+        "has_tower_crane": True,        # WIRING-SPECIFIC: now vocab -> must KEEP (specific 축)
+        "has_chemical_substance": True, # NON-vocab (alias source, leg key=has_chemical) -> must drop
         "process_list": [{"x": 1}],     # NON-vocab (derivation source) -> must drop
         "random_field": 123,            # NON-vocab -> must drop
         "has_boiler": None,             # present-but-None -> must drop
@@ -48,7 +49,8 @@ def test_helper_vocab_allowlist():
     }
     out = canonical_applicability(src)
     check("helper.keeps_vocab_present", out.get("has_confined_space") is True and out.get("has_diving") is True and out.get("total_floor_area") == 2800.0)
-    check("helper.drops_alias_source(has_tower_crane)", "has_tower_crane" not in out)
+    check("helper.keeps_wiring_specific(has_tower_crane)", out.get("has_tower_crane") is True)
+    check("helper.drops_alias_source(has_chemical_substance)", "has_chemical_substance" not in out)
     check("helper.drops_derivation_source(process_list)", "process_list" not in out)
     check("helper.drops_nonvocab(random_field)", "random_field" not in out)
     check("helper.drops_none(has_boiler=None)", "has_boiler" not in out)
@@ -104,7 +106,8 @@ def test_negative_unknown_field():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# T5 — NEW ALIAS ABSENT (has_tower_crane !-> has_crane, has_asbestos_demo !-> has_asbestos)
+# T5 — WIRING SPECIFIC PASSTHROUGH, GENERIC ALIAS ABSENT
+#   has_tower_crane -> specific 통과(≠ has_crane), has_asbestos_demo -> specific 통과(≠ has_asbestos)
 # ─────────────────────────────────────────────────────────────────────────────
 def test_negative_no_new_alias():
     raw = {"auth_token": "t", "sector": "CONSTRUCTION", "worker_count": 30,
@@ -113,10 +116,12 @@ def test_negative_no_new_alias():
     inp = _simulate_run_diagnosis_inp(body)
     step1 = DiagnoseStep1Body(sector="CONSTRUCTION", input=inp, construction_type="건축")
     facility = build_facility(step1)
-    check("neg.no_alias_has_crane", facility.get("has_crane") is None)
-    check("neg.no_alias_has_asbestos", facility.get("has_asbestos") is None)
-    check("neg.alias_source_not_leaked_tower_crane", "has_tower_crane" not in facility)
-    check("neg.alias_source_not_leaked_asbestos_demo", "has_asbestos_demo" not in facility)
+    # SPECIFIC PASSTHROUGH YES — exact-name 보존
+    check("wire.specific_present_tower_crane", facility.get("has_tower_crane") is True)
+    check("wire.specific_present_asbestos_demo", facility.get("has_asbestos_demo") is True)
+    # GENERIC ALIAS NO — generic 축은 파생/broadening 되지 않는다
+    check("wire.no_generic_has_crane", facility.get("has_crane") is None)
+    check("wire.no_generic_has_asbestos", facility.get("has_asbestos") is None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

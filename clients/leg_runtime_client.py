@@ -150,6 +150,11 @@ _LEG_INPUT_FIELDS = (
     # numeric은 canonical_applicability VERBATIM 경로로 float 보존(Nexas _NUMERIC_FIELDS 미등록).
     "work_height_m", "has_truck_loading_unloading", "truck_loading_height_m",
     "has_manual_heavy_handling", "manual_handling_weight_kg",
+    # WO-OBJ-WIRING-SAFETY-SPECIFIC-PASSTHROUGH-IMPLEMENT-01: specific consumer-vocab 축 2개(append).
+    # production mapped_field(has_asbestos_demo·has_tower_crane)과 exact-name 일치 → RTM이
+    # specific atom(석면해체 7·타워크레인 5)만 매칭. generic has_asbestos/has_crane 무접촉
+    # (alias 없음 — SPECIFIC INPUT→SPECIFIC KEY→SPECIFIC mapped_field 원칙). derived/추정 없음.
+    "has_asbestos_demo", "has_tower_crane",
 )
 
 
