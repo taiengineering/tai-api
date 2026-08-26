@@ -164,13 +164,14 @@ def test_router_maps_adapter_output_1to1_no_filter():
     assert len(items) == len(recs)  # 1:1, no router-side filtering
 
 
-def test_submit_check_writer_unchanged_static():
-    # §18: submit_check 는 read cutover 의 영향을 받지 않는다 — effective 어댑터를 호출하지 않고
-    # 여전히 base ledger 에 write 한다.
+def test_submit_check_writer_is_atomic_rpc_no_direct_ledger_write():
+    # KNOT-3B: submit_check(writer) 는 base/results 직접 INSERT 대신 원자적 생성 서비스
+    # (submit_worker_inspection)를 1회 호출한다. read 어댑터는 여전히 호출하지 않는다.
     src = _inspect.getsource(W.submit_check)
     assert "list_effective_inspection_records_by_inspector" not in src
-    assert 'supabase.table("safety_inspections").insert(' in src
-    assert 'supabase.table("safety_inspection_results").insert(' in src
+    assert 'supabase.table("safety_inspections").insert(' not in src
+    assert 'supabase.table("safety_inspection_results").insert(' not in src
+    assert "submit_worker_inspection(" in src
 
 
 if __name__ == "__main__":
