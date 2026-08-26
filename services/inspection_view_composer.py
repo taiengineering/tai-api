@@ -31,7 +31,7 @@ from services.inspection_record_resolver import (
     resolve_inspection_record,
 )
 
-# ── 고정 상수 (SEALED contract) ────────────────────────────────────
+# - 고정 상수 (SEALED contract) -
 GENERAL_SCHEMA_ID = "dc79ac3c-388c-42dc-b029-3dd9bda54a47"
 GENERAL_FORM_CODE = "GEN-INSPECT-RESULT-001"
 GENERAL_SCHEMA_VERSION = 1
@@ -85,7 +85,7 @@ def compose_inspection_view(inspection_id: str, supabase: Any = None) -> Dict[st
 
         supabase = get_supabase()
 
-    # ── 1) current effective record (base ledger + journal folding, READ-ONLY) ─
+    # - 1) current effective record (base ledger + journal folding, READ-ONLY) -
     #      base 직독(safety_inspections/safety_inspection_results) 을 하지 않고
     #      단일 정본 resolver 를 통해 현재 유효 레코드를 얻는다.
     try:
@@ -110,7 +110,7 @@ def compose_inspection_view(inspection_id: str, supabase: Any = None) -> Dict[st
     if insp["id"] is None:
         raise InspectionViewComposeError("SOURCE_INTEGRITY_ERROR", "effective record missing inspection_id")
 
-    # ── 2) effective ACTIVE results 만 소비 (result deactivation = 유일 정상 제외 사유) ─
+    # - 2) effective ACTIVE results 만 소비 (result deactivation = 유일 정상 제외 사유) -
     raw_results = record.get("results")
     if not isinstance(raw_results, list):
         raise InspectionViewComposeError("SOURCE_INTEGRITY_ERROR", "effective results not a list")
@@ -140,7 +140,7 @@ def compose_inspection_view(inspection_id: str, supabase: Any = None) -> Dict[st
             }
         )
 
-    # ── 3) set_item batch 조회 (N+1 금지) ────────────────────────────
+    # - 3) set_item batch 조회 (N+1 금지) -
     set_item_ids = sorted({r["inspection_set_item_id"] for r in results if r.get("inspection_set_item_id")})
     set_items: Dict[str, Dict[str, Any]] = {}
     if set_item_ids:
@@ -159,10 +159,10 @@ def compose_inspection_view(inspection_id: str, supabase: Any = None) -> Dict[st
                     "RESULT_ITEM_UNRESOLVED", f"dangling set_item_id {sid} (result {r.get('id')})"
                 )
 
-    # ── 4) INSPECTION → SET resolution (P-A primary / P-B corroboration) ──────
+    # - 4) INSPECTION → SET resolution (P-A primary / P-B corroboration) -
     final_set_id = _resolve_set_id(insp, results, set_items, supabase)
 
-    # ── 5) inspection_set 조회 (title) ─────────────────────────────
+    # - 5) inspection_set 조회 (title) -
     set_rows = _rows(
         supabase.table("inspection_sets")
         .select("id, inspection_set_name")
@@ -174,7 +174,7 @@ def compose_inspection_view(inspection_id: str, supabase: Any = None) -> Dict[st
         raise InspectionViewComposeError("SOURCE_INTEGRITY_ERROR", f"inspection_set {final_set_id} missing")
     inspection_title = set_rows[0].get("inspection_set_name")
 
-    # ── 6) SET → PRESENTATION SCHEMA (bridge) ────────────────────────
+    # - 6) SET → PRESENTATION SCHEMA (bridge) -
     bridge_rows = _rows(
         supabase.table("runtime_inspection_bridge")
         .select("id, inspection_set_id, runtime_form_schema_id")
@@ -189,7 +189,7 @@ def compose_inspection_view(inspection_id: str, supabase: Any = None) -> Dict[st
     if schema_id is None:
         raise InspectionViewComposeError("PRESENTATION_SCHEMA_NOT_MAPPED", final_set_id)
 
-    # ── 7) SCHEMA gate + GENERAL v1 support gate ───────────────────────
+    # - 7) SCHEMA gate + GENERAL v1 support gate -
     schema_rows = _rows(
         supabase.table("runtime_form_schema")
         .select("id, status, version, field_count, source_trace")
@@ -216,16 +216,16 @@ def compose_inspection_view(inspection_id: str, supabase: Any = None) -> Dict[st
             f"id={schema.get('id')} form_code={form_code} version={schema.get('version')} field_count={schema.get('field_count')}",
         )
 
-    # ── 8) top-level fields ──────────────────────────────────────
+    # - 8) top-level fields -
     inspection_subject = _resolve_inspection_subject(insp, supabase)
     inspected_at = insp.get("inspection_date")
     inspector_display = _resolve_inspector_display(insp, supabase)
 
-    # ── 9) inspection_results (source fidelity, item_name contract) ───────────
+    # - 9) inspection_results (source fidelity, item_name contract) -
     result_rows = [_compose_result_row(r, set_items) for r in results]
     result_rows = _deterministic_sort(result_rows, results, set_items)
 
-    # ── 10) completeness ───────────────────────────────────────
+    # - 10) completeness -
     missing: List[str] = []
     if inspection_subject is None:
         missing.append("inspection_subject")
@@ -254,7 +254,7 @@ def compose_inspection_view(inspection_id: str, supabase: Any = None) -> Dict[st
     }
 
 
-# ── set resolution ─────────────────────────────────────────────
+# - set resolution -
 def _resolve_set_id(
     insp: Dict[str, Any],
     results: List[Dict[str, Any]],
@@ -312,7 +312,7 @@ def _resolve_set_id(
     return next(iter(resolved))
 
 
-# ── top-level field resolvers ────────────────────────────────────
+# - top-level field resolvers -
 def _resolve_inspection_subject(insp: Dict[str, Any], supabase: Any) -> Optional[str]:
     asset_id = insp.get("asset_id")
     if not asset_id:
@@ -341,7 +341,7 @@ def _resolve_inspector_display(insp: Dict[str, Any], supabase: Any) -> Optional[
     return rows[0].get("name")  # name NULL → None (NOT_REQUIRED)
 
 
-# ── result row / item_name contract ──────────────────────────────
+# - result row / item_name contract -
 def _resolve_item_name(r: Dict[str, Any], set_items: Dict[str, Dict[str, Any]]) -> Optional[str]:
     result_name = r.get("item_name")
     sid = r.get("inspection_set_item_id")

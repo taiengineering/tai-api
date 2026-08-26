@@ -28,7 +28,7 @@ from services.inspection_view_composer import (  # noqa: E402
 import services.inspection_view_composer as composer_mod  # noqa: E402
 
 
-# ── effective record 모사 (DB fn_resolve_inspection_record, journal=0) ────────
+# - effective record 모사 (DB fn_resolve_inspection_record, journal=0) -
 _LEGACY_STATUS = {
     "in_progress": "IN_PROGRESS",
     "IN_PROGRESS": "IN_PROGRESS",
@@ -99,7 +99,7 @@ def _resolve_record_from_tables(tables, inspection_id):
     }
 
 
-# ── Fake Supabase (READ-ONLY; base 직독 금지, resolver RPC만 허용) ────────────
+# - Fake Supabase (READ-ONLY; base 직독 금지, resolver RPC만 허용) -
 class _Query:
     def __init__(self, rows):
         self._rows = list(rows)
@@ -164,7 +164,7 @@ class FakeSupabase:
         )
 
 
-# ── fixtures (production-accurate) ───────────────────────────────
+# - fixtures (production-accurate) -
 POS_INSP = "3f9cf36f-5bbc-4dad-9ba6-e71643020e9a"
 NEG_INSP = "217f0c15-56d5-48a4-88ef-8027e0a06057"
 SET_ID = "7fee7518-0e77-445c-b822-d5178d069b3c"
@@ -223,7 +223,7 @@ def _pos_tables(**over):
 
 def _neg_tables():
     rows = []
-    for i, nm in enumerate(["작업 구역 정리정뀰", "보호구 착용 확인", "설비 이상 유무", "비상구·소화기 위치", "작업 허가서 확인"]):
+    for i, nm in enumerate(["작업 구역 정리정돈", "보호구 착용 확인", "설비 이상 유무", "비상구·소화기 위치", "작업 허가서 확인"]):
         rows.append({"id": f"neg{i}", "inspection_id": NEG_INSP, "inspection_set_item_id": None,
                      "item_name": nm, "result_code": "NORMAL", "value_text": None, "value_number": None,
                      "note": None, "checked_at": "2026-08-09T23:45:52.496926+00:00",
@@ -245,7 +245,7 @@ def _expect_error(fn, code):
     raise AssertionError(f"expected InspectionViewComposeError {code}, no error raised")
 
 
-# ── T01–T07 positive ─────────────────────────────────────────
+# - T01–T07 positive -
 def test_T01_positive_success_set_schema():
     vm = compose_inspection_view(POS_INSP, FakeSupabase(_pos_tables()))
     assert vm["inspection_id"] == POS_INSP
@@ -294,7 +294,7 @@ def test_T07_pa_primary_resolved():
     assert vm["inspection_set_id"] == SET_ID  # via assignment→ws.inspection_set_id
 
 
-# ── T08–T11 set resolution ───────────────────────────────────
+# - T08–T11 set resolution -
 def test_T08_pa_vs_pb_mismatch_integrity_error():
     t = _pos_tables()
     # ws set = SET_ID, but a set_item resolves to a different set
@@ -339,7 +339,7 @@ def test_T11_pb_multi_distinct_mixed():
     _expect_error(lambda: compose_inspection_view(POS_INSP, FakeSupabase(t)), "MIXED_INSPECTION_SET_SOURCE")
 
 
-# ── T12–T19 schema gate ─────────────────────────────────────
+# - T12–T19 schema gate -
 def test_T12_bridge_missing():
     t = _pos_tables()
     t["runtime_inspection_bridge"] = []
@@ -391,7 +391,7 @@ def test_T19_field_count_mismatch_unsupported():
     _expect_error(lambda: compose_inspection_view(POS_INSP, FakeSupabase(t)), "UNSUPPORTED_PRESENTATION_SCHEMA")
 
 
-# ── T20–T24 item_name contract ────────────────────────────────
+# - T20–T24 item_name contract -
 def test_T20_result_item_name_source_preservation():
     # CASE A: result.item_name non-null, set_item_id null
     t = _pos_tables()
@@ -429,7 +429,7 @@ def test_T24_dangling_setitem_unresolved():
     _expect_error(lambda: compose_inspection_view(POS_INSP, FakeSupabase(t)), "RESULT_ITEM_UNRESOLVED")
 
 
-# ── T25–T27 order / partial ──────────────────────────────────
+# - T25–T27 order / partial -
 def test_T25_deterministic_order_null_seq_created_id():
     # 동일/NULL item_seq 에서 created_at → id stable
     t = _pos_tables()
@@ -465,7 +465,7 @@ def test_T27_no_results_pa_resolved_empty_missing():
     assert "inspection_results" in vm["completeness"]["missing_required_fields"]
 
 
-# ── T28–T29 not found / negative ──────────────────────────────
+# - T28–T29 not found / negative -
 def test_T28_inspection_not_found():
     _expect_error(lambda: compose_inspection_view("no-such-id", FakeSupabase(_pos_tables())), "INSPECTION_NOT_FOUND")
 
@@ -474,7 +474,7 @@ def test_T29_negative_legacy_unresolved():
     _expect_error(lambda: compose_inspection_view(NEG_INSP, FakeSupabase(_neg_tables())), "INSPECTION_SET_UNRESOLVED")
 
 
-# ── T30 write prohibition ───────────────────────────────────
+# - T30 write prohibition -
 def test_T30_write_method_prohibited_static():
     src = _inspect.getsource(composer_mod)
     for bad in (".insert(", ".update(", ".delete(", ".upsert(", ".rpc("):
@@ -532,7 +532,7 @@ def test_T35_result_id_full_uuid_exact():
         assert len(rid) == 36 and rid.count("-") == 4  # full UUID shape
 
 
-# ── T36–T41 KNOT-2 read cutover ───────────────────────────────
+# - T36–T41 KNOT-2 read cutover -
 def test_T36_composer_no_direct_base_read_static():
     src = _inspect.getsource(composer_mod)
     assert '.table("safety_inspections")' not in src
@@ -603,7 +603,7 @@ def test_T41_abnormal_effective_reaches_raw_code():
     assert by_id[RID1]["raw_code"] == "ABNORMAL"
 
 
-# ── self-runner (pytest 없이 실행) ──────────────────────────────
+# - self-runner (pytest 없이 실행) -
 if __name__ == "__main__":
     g = dict(globals())
     tests = sorted((n, f) for n, f in g.items() if n.startswith("test_") and callable(f))
