@@ -111,9 +111,14 @@ CREATE TRIGGER trg_sicr_append_only
     FOR EACH ROW EXECUTE FUNCTION public.fn_reject_inspection_record_mutation();
 
 -- ==========================================================================
--- 5) RESOLVER — base ledger + journal folding -> current effective record
+-- 5) RESOLVER — base ledger + SEQUENTIAL journal folding -> effective record
 --    READ-ONLY. Returns the effective-record jsonb on success, or
 --    {"error":"<CODE>","detail":...} on a fail-closed condition.
+--
+--    Folding contract: build the complete revision-0 base record first, then
+--    traverse the journal in revision ASC order and validate the before/after
+--    chain at every step. The current state is NEVER selected via a
+--    latest-snapshot shortcut.
 -- ==========================================================================
 CREATE OR REPLACE FUNCTION public.fn_resolve_inspection_record(p_inspection_id uuid)
 RETURNS jsonb
@@ -123,15 +128,14 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $resolve$
 DECLARE
-    v_insp    public.safety_inspections%ROWTYPE;
-    v_status  text;
-    v_results jsonb := '[]'::jsonb;
-    v_bad     text;
-    v_record  jsonb;
-    v_overall text;
-    v_max_rev bigint := 0;
-    v_seq_ok  boolean;
-    v_after   jsonb;
+    v_insp     public.safety_inspections%ROWTYPE;
+    v_status   text;
+    v_results  jsonb := '[]'::jsonb;
+    v_bad      text;
+    v_record   jsonb;
+    v_overall  text;
+    v_j        record;
+    v_expected bigint := 1;
 BEGIN
     SELECT * INTO v_insp FROM public.safety_inspections WHERE id = p_inspection_id;
     IF NOT FOUND THEN
@@ -184,7 +188,8 @@ BEGIN
         RETURN jsonb_build_object('error','RESULT_CODE_UNRESOLVED','detail',v_bad);
     END IF;
 
-    -- base effective record (revision 0, all active)
+    -- complete revision-0 base record INCLUDING overall_result, so that it
+    -- equals the before_snapshot stored for revision 1 (chain anchor).
     v_record := jsonb_build_object(
         'inspection_id', v_insp.id,
         'revision', 0,
@@ -199,29 +204,47 @@ BEGIN
         'factory_id', v_insp.factory_id,
         'results', v_results
     );
+    SELECT CASE
+        WHEN count(*) FILTER (WHERE active) = 0 THEN NULL
+        WHEN count(*) FILTER (WHERE active AND code = 'ABNORMAL') > 0 THEN 'ABNORMAL'
+        WHEN count(*) FILTER (WHERE active AND code = 'HOLD') > 0 THEN 'HOLD'
+        ELSE 'NORMAL'
+    END
+    INTO v_overall
+    FROM (
+        SELECT e->>'result_code' AS code,
+               COALESCE((e->>'is_active')::boolean, true) AS active
+        FROM jsonb_array_elements(v_record->'results') e
+    ) s;
+    v_record := jsonb_set(v_record, '{revision}', to_jsonb(0::bigint));
+    v_record := jsonb_set(v_record, '{overall_result}', COALESCE(to_jsonb(v_overall), 'null'::jsonb));
 
-    -- journal folding: revision ASC contiguity; effective = latest after_snapshot
-    SELECT max(revision) INTO v_max_rev
-      FROM public.safety_inspection_record_journal WHERE inspection_id = p_inspection_id;
-    IF v_max_rev IS NULL THEN
-        v_max_rev := 0;
-    ELSE
-        SELECT (count(*) = v_max_rev
-                AND min(revision) = 1
-                AND max(revision) = v_max_rev
-                AND count(DISTINCT revision) = v_max_rev)
-          INTO v_seq_ok
-          FROM public.safety_inspection_record_journal WHERE inspection_id = p_inspection_id;
-        IF NOT COALESCE(v_seq_ok, false) THEN
-            RETURN jsonb_build_object('error','JOURNAL_REVISION_GAP','detail',p_inspection_id::text);
+    -- SEQUENTIAL journal folding: apply each voucher in revision ASC order and
+    -- validate the before/after chain at each step. No latest-snapshot shortcut.
+    v_expected := 1;
+    FOR v_j IN
+        SELECT revision, before_snapshot, after_snapshot
+        FROM public.safety_inspection_record_journal
+        WHERE inspection_id = p_inspection_id
+        ORDER BY revision ASC
+    LOOP
+        IF v_j.revision IS DISTINCT FROM v_expected THEN
+            RETURN jsonb_build_object('error','JOURNAL_REVISION_GAP','detail','revision gap at ' || v_expected::text);
         END IF;
-        SELECT after_snapshot INTO v_after
-          FROM public.safety_inspection_record_journal
-         WHERE inspection_id = p_inspection_id AND revision = v_max_rev;
-        v_record := v_after;
-    END IF;
+        IF v_j.before_snapshot IS DISTINCT FROM v_record THEN
+            RETURN jsonb_build_object('error','JOURNAL_REVISION_GAP','detail','before_snapshot mismatch at rev ' || v_j.revision::text);
+        END IF;
+        IF (v_j.after_snapshot->>'inspection_id') IS DISTINCT FROM p_inspection_id::text THEN
+            RETURN jsonb_build_object('error','JOURNAL_REVISION_GAP','detail','after_snapshot inspection mismatch at rev ' || v_j.revision::text);
+        END IF;
+        IF (v_j.after_snapshot->>'revision')::bigint IS DISTINCT FROM v_j.revision THEN
+            RETURN jsonb_build_object('error','JOURNAL_REVISION_GAP','detail','after_snapshot revision mismatch at rev ' || v_j.revision::text);
+        END IF;
+        v_record := v_j.after_snapshot;   -- adopt ONLY after chain validation
+        v_expected := v_expected + 1;
+    END LOOP;
 
-    -- overall_result from ACTIVE results only
+    -- final effective revision + canonical overall_result from ACTIVE results
     SELECT CASE
         WHEN count(*) FILTER (WHERE active) = 0 THEN NULL
         WHEN count(*) FILTER (WHERE active AND code = 'ABNORMAL') > 0 THEN 'ABNORMAL'
@@ -235,7 +258,7 @@ BEGIN
         FROM jsonb_array_elements(v_record->'results') e
     ) s;
 
-    v_record := jsonb_set(v_record, '{revision}', to_jsonb(v_max_rev));
+    v_record := jsonb_set(v_record, '{revision}', to_jsonb((v_expected - 1)::bigint));
     v_record := jsonb_set(v_record, '{overall_result}', COALESCE(to_jsonb(v_overall), 'null'::jsonb));
     RETURN v_record;
 END;

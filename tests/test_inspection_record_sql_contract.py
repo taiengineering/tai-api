@@ -123,3 +123,25 @@ def test_down_drops_only_no_base_no_create():
     assert "DROP TABLE IF EXISTS public.safety_inspection_record_journal" in down
     assert "DROP FUNCTION IF EXISTS public.fn_apply_inspection_record_command" in down
     assert "DROP FUNCTION IF EXISTS public.fn_resolve_inspection_record" in down
+
+
+# ----------------------------------------------------------------------------
+# COMMIT 5 — sequential journal folding contract (no latest-snapshot shortcut)
+# ----------------------------------------------------------------------------
+
+def test_resolver_sequential_folding():
+    up = _up()
+    assert "ORDER BY revision ASC" in up
+    assert "FOR v_j IN" in up                       # real journal traversal
+    assert "before_snapshot IS DISTINCT FROM v_record" in up   # chain comparison
+    assert "(v_j.after_snapshot->>'revision')::bigint IS DISTINCT FROM v_j.revision" in up
+    assert "v_record := v_j.after_snapshot" in up   # adopt only after validation
+
+
+def test_no_latest_snapshot_shortcut():
+    up = _up()
+    # the removed latest-only pattern must not reappear
+    assert "revision = v_max_rev" not in up
+    assert "v_record := v_after" not in up
+    assert "INTO v_after" not in up
+    assert "v_max_rev" not in up
