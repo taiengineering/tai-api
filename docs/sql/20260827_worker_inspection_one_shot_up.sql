@@ -30,11 +30,10 @@ CREATE TABLE public.safety_inspection_creation_receipt (
     created_at        timestamptz NOT NULL DEFAULT now()
 );
 
--- RLS on, zero policies (service_role bypasses; anon/authenticated blocked)
+-- RLS on, zero policies (service_role SELECT via explicit grant only)
 ALTER TABLE public.safety_inspection_creation_receipt ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.safety_inspection_creation_receipt FORCE ROW LEVEL SECURITY;
 
-REVOKE ALL ON TABLE public.safety_inspection_creation_receipt FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON TABLE public.safety_inspection_creation_receipt FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON TABLE public.safety_inspection_creation_receipt TO service_role;
 
 -- append-only: reuse the foundation reject function (blocks physical UPDATE/DELETE)
@@ -94,7 +93,7 @@ BEGIN
         RETURN jsonb_build_object('ok', false, 'error', 'EMPTY_RESULTS', 'detail', 'results required');
     END IF;
 
-    -- 2) creation receipt replay check (before any mutation)
+    -- 2) creation receipt replay check (fast path, before lock)
     SELECT * INTO v_existing
     FROM public.safety_inspection_creation_receipt
     WHERE submission_id = p_submission_id;
@@ -117,6 +116,20 @@ BEGIN
         RETURN jsonb_build_object('ok', false, 'error', 'WORK_SCHEDULE_NOT_FOUND', 'detail', p_schedule_id::text);
     END IF;
 
+    -- 3b) concurrency recheck (single recheck under lock, NOT a retry loop):
+    -- a concurrent request holding the lock first may have created the receipt.
+    SELECT * INTO v_existing
+    FROM public.safety_inspection_creation_receipt
+    WHERE submission_id = p_submission_id;
+    IF FOUND THEN
+        IF v_existing.request_hash = p_request_hash THEN
+            RETURN jsonb_build_object('ok', true, 'replayed', true, 'data', v_existing.response_snapshot);
+        ELSE
+            RETURN jsonb_build_object('ok', false, 'error', 'SUBMISSION_ID_REUSE_CONFLICT',
+                                      'detail', 'same submission_id, different request_hash');
+        END IF;
+    END IF;
+
     -- 4) factory match
     IF v_sched.factory_id IS DISTINCT FROM p_factory_id THEN
         RETURN jsonb_build_object('ok', false, 'error', 'FACTORY_MISMATCH',
@@ -132,13 +145,16 @@ BEGIN
                                   'detail', p_schedule_id::text);
     END IF;
 
-    -- 6) canonical result validation + aggregate
+    -- 6) canonical result validation (EXACT, no normalization) + aggregate
     FOR v_elem IN SELECT value FROM jsonb_array_elements(p_results) AS value
     LOOP
-        v_code := upper(coalesce(v_elem->>'result_code', ''));
+        IF jsonb_typeof(v_elem->'result_code') <> 'string' THEN
+            RETURN jsonb_build_object('ok', false, 'error', 'RESULT_CODE_UNRESOLVED', 'detail', 'result_code not a string');
+        END IF;
+        v_code := v_elem->>'result_code';
         IF v_code NOT IN ('NORMAL','ABNORMAL','HOLD') THEN
             RETURN jsonb_build_object('ok', false, 'error', 'RESULT_CODE_UNRESOLVED',
-                                      'detail', coalesce(v_elem->>'result_code',''));
+                                      'detail', coalesce(v_code, ''));
         END IF;
         v_total := v_total + 1;
         IF v_code = 'NORMAL' THEN
@@ -168,9 +184,9 @@ BEGIN
 
     -- 8) base header INSERT (lifecycle COMPLETED regardless of outcome)
     INSERT INTO public.safety_inspections
-        (id, assignment_id, inspector_id, inspection_date, status_code, factory_id, submitted_by)
+        (id, assignment_id, inspector_id, inspection_date, status_code, factory_id)
     VALUES
-        (v_inspection_id, p_schedule_id, p_inspector_id, p_submitted_at, 'COMPLETED', p_factory_id, p_inspector_id);
+        (v_inspection_id, p_schedule_id, p_inspector_id, p_submitted_at, 'COMPLETED', p_factory_id);
 
     -- 9) results INSERT (checked_at = submitted_at; canonical result_code)
     INSERT INTO public.safety_inspection_results
@@ -179,7 +195,7 @@ BEGIN
         v_inspection_id,
         nullif(e->>'inspection_set_item_id', '')::uuid,
         e->>'item_name',
-        upper(e->>'result_code'),
+        e->>'result_code',
         e->>'note',
         coalesce(e->'photo_urls', '[]'::jsonb),
         e->>'value_text',

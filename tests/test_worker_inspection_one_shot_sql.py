@@ -2,6 +2,9 @@
 
 DDL 을 실행하지 않고 docs/sql UP/DOWN 아티팩트의 구조 계약을 검증한다.
 프로덕션 적용은 별도 승인 게이트에서 이뤄진다.
+
+A-REV: BLOCKER 1..5 hardening (post-lock recheck ordering, exact canonical
+result, service_role in REVOKE, no FORCE RLS, no submitted_by).
 """
 from __future__ import annotations
 
@@ -45,8 +48,8 @@ def test_rls_enabled_zero_policies_service_role_select_only():
     assert "ENABLE ROW LEVEL SECURITY" in up
     # no policies at all
     assert "CREATE POLICY" not in up
-    # direct grants revoked, service_role SELECT only
-    assert re.search(r"REVOKE ALL ON TABLE public\.safety_inspection_creation_receipt FROM PUBLIC, anon, authenticated", up)
+    # direct grants revoked (incl. service_role), then service_role SELECT only
+    assert re.search(r"REVOKE ALL ON TABLE public\.safety_inspection_creation_receipt FROM PUBLIC, anon, authenticated, service_role", up)
     assert re.search(r"GRANT SELECT ON TABLE public\.safety_inspection_creation_receipt TO service_role", up)
     # no table-level INSERT/UPDATE/DELETE grant to anyone
     assert not re.search(r"GRANT[^;]*\b(INSERT|UPDATE|DELETE)\b[^;]*ON TABLE public\.safety_inspection_creation_receipt", up)
@@ -120,6 +123,79 @@ def test_down_drops_new_objects_only():
     assert "fn_apply_inspection_record_command" not in down
     assert "DROP FUNCTION IF EXISTS public.fn_reject_inspection_record_mutation" not in down
     assert "DROP TRIGGER" not in down.replace("DROP TRIGGER IF EXISTS trg_sicreation_append_only", "")
+
+
+# ── A-REV hardening (BLOCKER 1..5) ─────────────────────────────────────────
+
+def _receipt_lookup_positions(up):
+    """모든 receipt lookup(SELECT ... FROM creation_receipt WHERE submission_id) 시작 위치."""
+    return [m.start() for m in re.finditer(
+        r"FROM public\.safety_inspection_creation_receipt\s+WHERE submission_id = p_submission_id", up)]
+
+
+def test_arev_t1_receipt_lookup_before_lock():
+    up = _read(UP)
+    looks = _receipt_lookup_positions(up)
+    lock = up.find("FOR UPDATE")
+    assert len(looks) >= 2, "expected two receipt lookups (pre-lock + post-lock)"
+    assert looks[0] < lock, "first receipt lookup must precede FOR UPDATE"
+
+
+def test_arev_t2_receipt_lookup_again_after_lock_before_dupcheck():
+    up = _read(UP)
+    looks = _receipt_lookup_positions(up)
+    lock = up.find("FOR UPDATE")
+    dupcheck = up.find("SELECT count(*) INTO v_count")
+    assert len(looks) >= 2
+    # second lookup sits AFTER the lock and BEFORE the duplicate-inspection check
+    assert lock < looks[1] < dupcheck, "second receipt lookup must be post-lock and pre-duplicate-check"
+
+
+def test_arev_t3_and_t4_post_lock_replay_and_conflict_paths():
+    up = _read(UP)
+    lock = up.find("FOR UPDATE")
+    dupcheck = up.find("SELECT count(*) INTO v_count")
+    post_lock_block = up[lock:dupcheck]
+    # post-lock block must contain BOTH a replay return and a reuse-conflict return
+    assert "'replayed', true" in post_lock_block
+    assert "SUBMISSION_ID_REUSE_CONFLICT" in post_lock_block
+
+
+def test_arev_t5_no_upper_normalization_exact_canonical():
+    up = _read(UP)
+    assert "upper(" not in up, "no upper() normalization anywhere (exact canonical contract)"
+    # explicit string-type + exact-value validation
+    assert "jsonb_typeof(v_elem->'result_code') <> 'string'" in up
+    assert "v_code := v_elem->>'result_code';" in up
+    assert "v_code NOT IN ('NORMAL','ABNORMAL','HOLD')" in up
+
+
+def test_arev_t6_service_role_in_revoke_then_select_grant():
+    up = _read(UP)
+    assert re.search(
+        r"REVOKE ALL ON TABLE public\.safety_inspection_creation_receipt FROM PUBLIC, anon, authenticated, service_role",
+        up,
+    )
+    revoke_pos = up.find("REVOKE ALL ON TABLE public.safety_inspection_creation_receipt")
+    grant_pos = up.find("GRANT SELECT ON TABLE public.safety_inspection_creation_receipt TO service_role")
+    assert revoke_pos != -1 and grant_pos != -1 and revoke_pos < grant_pos
+
+
+def test_arev_t7_no_force_row_level_security():
+    up = _read(UP)
+    assert "FORCE ROW LEVEL SECURITY" not in up
+    assert "ENABLE ROW LEVEL SECURITY" in up
+
+
+def test_arev_t8_base_insert_omits_submitted_by():
+    up = _read(UP)
+    # locate the base header INSERT column list
+    m = re.search(r"INSERT INTO public\.safety_inspections\s*\(([^)]*)\)", up)
+    assert m, "base INSERT column list not found"
+    cols = m.group(1)
+    assert "submitted_by" not in cols, "submitted_by must not be written this KNOT"
+    for c in ("id", "assignment_id", "inspector_id", "inspection_date", "status_code", "factory_id"):
+        assert c in cols, c
 
 
 if __name__ == "__main__":
