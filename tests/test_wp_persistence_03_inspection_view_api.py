@@ -1,4 +1,4 @@
-"""WP-PERSISTENCE-03 STEP-2 — inspection view endpoint tests.
+"""WP-PERSISTENCE-03 STEP-2 - inspection view endpoint tests.
 
 FastAPI TestClient 대신 handler direct invocation + static contract 검증(환경상 full app
 부팅/의존성 제약 회피). auth ordering(guard before composer) 은 spy 로 반드시 증명한다.
@@ -19,9 +19,9 @@ import routers.inspection_view as V  # 실제 라우터 deliverable
 from fastapi import HTTPException
 from services.inspection_view_composer import InspectionViewComposeError
 
-# STEP-1 SEALED composer 파일 sha256 (unchanged 증명용)
-SEALED_COMPOSER_SHA = "4a8f38fbd1a297a360a80825314e888f6a0e3a7f6c2d20f38f9c1910497969d5"
-SEALED_COMPOSER_TEST_SHA = "36fab4373baa13a6fa48deb6c478740de24d5e959ec4bfd0d1fbe202346ad858"
+# KNOT-2 read cutover 후 composer/composer-test 파일 sha256 (SEALED, unchanged 증명용)
+SEALED_COMPOSER_SHA = "260e1c0f9b422f63c28debbeed79123e4c240dfa93c8c7f7f271e1bcf43ca279"
+SEALED_COMPOSER_TEST_SHA = "6a70d8aad941111b78e824c422dcf836b87aca9b199b9be5e6fdddcf9c16359c"
 
 POS_INSP = "3f9cf36f-5bbc-4dad-9ba6-e71643020e9a"
 NEG_INSP = "217f0c15-56d5-48a4-88ef-8027e0a06057"
@@ -76,7 +76,7 @@ def _vm():
     }
 
 
-# ── T01–T02 route / dependency ───────────────────────────────────────────────
+# - T01-T02 route / dependency -
 def test_T01_route_path_exact():
     from fastapi.routing import APIRoute
 
@@ -97,7 +97,7 @@ def test_T02_get_current_user_dependency_present():
     assert getattr(dep, "dependency", None) is V.get_current_user
 
 
-# ── T03–T07 auth ordering / same instances ───────────────────────────────────
+# - T03-T07 auth ordering / same instances -
 def test_T03_guard_before_composer_order():
     order = []
     guard = lambda sb, iid, cur: order.append("guard")
@@ -141,7 +141,7 @@ def test_T07_composer_receives_same_supabase():
     assert seen["sb"] is sb
 
 
-# ── T08–T09 unauthorized → composer not called ───────────────────────────────
+# - T08-T09 unauthorized -> composer not called -
 def test_T08_guard_404_composer_not_called():
     calls = {"c": 0}
     def guard(sb, iid, cur):
@@ -159,7 +159,7 @@ def test_T08_guard_404_composer_not_called():
 def test_T09_cross_company_unowned_404_composer_not_called():
     calls = {"c": 0}
     def guard(sb, iid, cur):
-        raise HTTPException(status_code=404, detail="hidden")  # 미소유 legacy row → 존재 은닉
+        raise HTTPException(status_code=404, detail="hidden")  # 미소유 legacy row -> 존재 은닉
     with _Patch(guard=guard, composer=lambda iid, supabase=None: calls.__setitem__("c", calls["c"] + 1)):
         try:
             _run(NEG_INSP)
@@ -168,7 +168,7 @@ def test_T09_cross_company_unowned_404_composer_not_called():
     assert calls["c"] == 0
 
 
-# ── T10–T12 success passthrough ──────────────────────────────────────────────
+# - T10-T12 success passthrough -
 def test_T10_success_exact_passthrough():
     vm = _vm()
     with _Patch(guard=lambda s, i, c: None, composer=lambda iid, supabase=None: vm):
@@ -192,7 +192,7 @@ def test_T12_success_top_level_keys_exactly_7():
     }
 
 
-# ── T13–T22 domain error → HTTP mapping ──────────────────────────────────────
+# - T13-T22 domain error -> HTTP mapping -
 def _raise_code(code):
     def comp(iid, supabase=None):
         raise InspectionViewComposeError(code, _INTERNAL_LEAK)
@@ -249,7 +249,7 @@ def test_T22_source_integrity_error_409():
     _expect_http("SOURCE_INTEGRITY_ERROR", 409)
 
 
-# ── T23–T25 leak / generic ───────────────────────────────────────────────────
+# - T23-T25 leak / generic -
 def test_T23_public_error_no_exc_detail():
     e = _expect_http("SOURCE_INTEGRITY_ERROR", 409)
     assert _INTERNAL_LEAK not in str(e.detail)
@@ -275,7 +275,7 @@ def test_T25_generic_exception_not_converted():
             assert "boom-unexpected" in str(e)
 
 
-# ── T26–T27 registry ─────────────────────────────────────────────────────────
+# - T26-T27 registry -
 def _registry_modules():
     import router_registry.inspection as reg
     import importlib
@@ -300,14 +300,14 @@ def test_T27_registry_preserves_existing_entries():
         assert expected in mods, f"registry lost {expected}"
 
 
-# ── T28 no-write in router ───────────────────────────────────────────────────
+# - T28 no-write in router -
 def test_T28_router_no_write_methods():
     src = _inspect.getsource(V)
     for bad in (".insert(", ".update(", ".delete(", ".upsert(", ".rpc("):
         assert bad not in src, f"forbidden write call {bad} in router"
 
 
-# ── T29–T30 composer files unchanged (SEALED) ────────────────────────────────
+# - T29-T30 composer files unchanged (SEALED, KNOT-2 refresh) -
 def _sha256(path):
     with open(path, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
@@ -323,7 +323,13 @@ def test_T30_composer_test_sha_unchanged():
     assert _sha256(path) == SEALED_COMPOSER_TEST_SHA
 
 
-# ── self-runner ──────────────────────────────────────────────────────────────
+# - T31 KNOT-2: inactive effective inspection -> 409 (INSPECTION_INACTIVE) -
+def test_T31_inspection_inactive_409():
+    # composer 가 INSPECTION_INACTIVE 를 raise 하면 router 의 non-NOT_FOUND 경로가 409 로 매핑한다.
+    _expect_http("INSPECTION_INACTIVE", 409)
+
+
+# - self-runner -
 if __name__ == "__main__":
     g = dict(globals())
     tests = sorted((n, f) for n, f in g.items() if n.startswith("test_") and callable(f))
