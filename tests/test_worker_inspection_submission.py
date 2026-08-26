@@ -195,6 +195,21 @@ def test_replay_flag_passthrough():
     assert _call(sb)["replayed"] is True
 
 
+def test_request_payload_is_the_hashed_canonical_with_items():
+    # BLOCKER B: append-only receipt 의 p_request_payload 는 request_hash 와 동일한
+    # canonical 이어야 감사자가 hash 를 재구성할 수 있다. items 포함, source 제외.
+    import hashlib
+    from services.worker_inspection_submission import canonical_request_json
+    sb = FakeSupabase(_ok_payload())
+    _call(sb)
+    _, params = sb.calls[0]
+    payload = params["p_request_payload"]
+    assert "items" in payload and len(payload["items"]) == 2
+    assert "source" not in payload            # source 는 receipt 별도 컬럼(p_source)
+    recomputed = hashlib.sha256(canonical_request_json(payload).encode("utf-8")).hexdigest()
+    assert recomputed == params["p_request_hash"]
+
+
 # ── typed error mapping ──────────────────────────────────────────────────────
 
 def test_rpc_error_becomes_typed_error():
