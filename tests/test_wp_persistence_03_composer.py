@@ -1,9 +1,13 @@
-"""WP-PERSISTENCE-03 STEP-1 — Composer tests.
+"""WP-PERSISTENCE-03 STEP-1 — Composer tests (OBJ-01 KNOT-2 read cutover).
 
 pytest 호환. pytest 미설치 환경에서도 `python test_wp_persistence_03_composer.py` 로
 self-runner 가 test_* 함수를 실행한다.
 
-Fake Supabase client 는 READ-ONLY: insert/update/delete/upsert/rpc 호출 시 즉시 실패.
+Fake Supabase client (KNOT-2):
+    - base ledger 직독(safety_inspections / safety_inspection_results) = 금지.
+    - read-only resolver RPC(fn_resolve_inspection_record) 만 허용하며, fixture 위에서
+      DB resolver 를 모사해 current effective record 를 합성한다 (journal=0 가정).
+    - 그 외 rpc / insert / update / delete / upsert = 즉시 실패.
 """
 from __future__ import annotations
 
@@ -24,7 +28,78 @@ from services.inspection_view_composer import (  # noqa: E402
 import services.inspection_view_composer as composer_mod  # noqa: E402
 
 
-# ── Fake Supabase (READ-ONLY) ────────────────────────────────────────────────
+# - effective record 모사 (DB fn_resolve_inspection_record, journal=0) -
+_LEGACY_STATUS = {
+    "in_progress": "IN_PROGRESS",
+    "IN_PROGRESS": "IN_PROGRESS",
+    "completed": "COMPLETED",
+    "COMPLETED": "COMPLETED",
+    "ISSUE": "COMPLETED",
+    "HOLD": "COMPLETED",
+}
+
+
+def _norm_result_code(code):
+    c = (code or "").lower()
+    if c in ("normal", "ok", "pass"):
+        return "NORMAL"
+    if c == "hold":
+        return "HOLD"
+    if c in ("abnormal", "bad", "fail", "issue", "ng"):
+        return "ABNORMAL"
+    return "RESULT_CODE_UNRESOLVED"
+
+
+def _resolve_record_from_tables(tables, inspection_id):
+    insp = [r for r in tables.get("safety_inspections", []) if r.get("id") == inspection_id]
+    if not insp:
+        return {"error": "INSPECTION_NOT_FOUND", "detail": inspection_id}
+    si = insp[0]
+    results = []
+    for r in tables.get("safety_inspection_results", []):
+        if r.get("inspection_id") != inspection_id:
+            continue
+        results.append({
+            "result_id": r.get("id"),
+            "is_active": r.get("_is_active", True),
+            "inspection_set_item_id": r.get("inspection_set_item_id"),
+            "item_name": r.get("item_name"),
+            "result_code": _norm_result_code(r.get("result_code")),
+            "value_text": r.get("value_text"),
+            "value_number": r.get("value_number"),
+            "note": r.get("note"),
+            "checked_at": r.get("checked_at"),
+            "photo_url": r.get("photo_url"),
+            "photo_urls": r.get("photo_urls"),
+            "created_at": r.get("created_at"),
+        })
+    active_codes = [e["result_code"] for e in results if e["is_active"]]
+    if not active_codes:
+        overall = None
+    elif "ABNORMAL" in active_codes:
+        overall = "ABNORMAL"
+    elif "HOLD" in active_codes:
+        overall = "HOLD"
+    else:
+        overall = "NORMAL"
+    return {
+        "inspection_id": si.get("id"),
+        "revision": 0,
+        "is_active": si.get("_is_active", True),
+        "inspection_status": _LEGACY_STATUS.get(si.get("status_code"), "COMPLETED"),
+        "legacy_raw_status_code": si.get("status_code"),
+        "assignment_id": si.get("assignment_id"),
+        "asset_id": si.get("asset_id"),
+        "inspector_id": si.get("inspector_id"),
+        "inspection_date": si.get("inspection_date"),
+        "submitted_by": si.get("submitted_by"),
+        "factory_id": si.get("factory_id"),
+        "results": results,
+        "overall_result": overall,
+    }
+
+
+# - Fake Supabase (READ-ONLY; base 직독 금지, resolver RPC만 허용) -
 class _Query:
     def __init__(self, rows):
         self._rows = list(rows)
@@ -58,20 +133,38 @@ class _Query:
     insert = update = delete = upsert = _forbid
 
 
+class _RpcCall:
+    def __init__(self, data):
+        self._data = data
+
+    def execute(self):
+        return type("Resp", (), {"data": self._data})()
+
+
 class FakeSupabase:
     def __init__(self, tables):
         self.tables = {k: list(v) for k, v in tables.items()}
         self.query_count = 0
 
     def table(self, name):
+        # KNOT-2: composer must NOT read the base ledger directly.
+        if name in ("safety_inspections", "safety_inspection_results"):
+            raise AssertionError(
+                f"DIRECT BASE READ FORBIDDEN: composer must resolve via RPC, not table({name!r})"
+            )
         self.query_count += 1
         return _Query(self.tables.get(name, []))
 
-    def rpc(self, *_a, **_k):
-        raise AssertionError("WRITE FORBIDDEN: rpc() not allowed in composer")
+    def rpc(self, name, params=None):
+        if name == "fn_resolve_inspection_record":
+            iid = (params or {}).get("p_inspection_id")
+            return _RpcCall(_resolve_record_from_tables(self.tables, iid))
+        raise AssertionError(
+            f"RPC FORBIDDEN: only read-only fn_resolve_inspection_record allowed, got {name!r}"
+        )
 
 
-# ── fixtures (production-accurate) ───────────────────────────────────────────
+# - fixtures (production-accurate) -
 POS_INSP = "3f9cf36f-5bbc-4dad-9ba6-e71643020e9a"
 NEG_INSP = "217f0c15-56d5-48a4-88ef-8027e0a06057"
 SET_ID = "7fee7518-0e77-445c-b822-d5178d069b3c"
@@ -152,7 +245,7 @@ def _expect_error(fn, code):
     raise AssertionError(f"expected InspectionViewComposeError {code}, no error raised")
 
 
-# ── T01–T07 positive ─────────────────────────────────────────────────────────
+# - T01–T07 positive -
 def test_T01_positive_success_set_schema():
     vm = compose_inspection_view(POS_INSP, FakeSupabase(_pos_tables()))
     assert vm["inspection_id"] == POS_INSP
@@ -162,11 +255,11 @@ def test_T01_positive_success_set_schema():
     assert vm["schema_version"] == 1
 
 
-def test_T02_source_result_count_equals_view_count():
+def test_T02_effective_active_result_count_equals_view_count():
     t = _pos_tables()
-    source_count = len(t["safety_inspection_results"])
+    active_count = len(t["safety_inspection_results"])  # all active in this fixture
     vm = compose_inspection_view(POS_INSP, FakeSupabase(t))
-    assert len(vm["fields"]["inspection_results"]) == source_count == 3  # SOURCE == VIEW count
+    assert len(vm["fields"]["inspection_results"]) == active_count == 3  # ACTIVE EFFECTIVE == VIEW count
 
 
 def test_T03_note_exact_preservation():
@@ -201,7 +294,7 @@ def test_T07_pa_primary_resolved():
     assert vm["inspection_set_id"] == SET_ID  # via assignment→ws.inspection_set_id
 
 
-# ── T08–T11 set resolution ───────────────────────────────────────────────────
+# - T08–T11 set resolution -
 def test_T08_pa_vs_pb_mismatch_integrity_error():
     t = _pos_tables()
     # ws set = SET_ID, but a set_item resolves to a different set
@@ -246,7 +339,7 @@ def test_T11_pb_multi_distinct_mixed():
     _expect_error(lambda: compose_inspection_view(POS_INSP, FakeSupabase(t)), "MIXED_INSPECTION_SET_SOURCE")
 
 
-# ── T12–T19 schema gate ──────────────────────────────────────────────────────
+# - T12–T19 schema gate -
 def test_T12_bridge_missing():
     t = _pos_tables()
     t["runtime_inspection_bridge"] = []
@@ -298,7 +391,7 @@ def test_T19_field_count_mismatch_unsupported():
     _expect_error(lambda: compose_inspection_view(POS_INSP, FakeSupabase(t)), "UNSUPPORTED_PRESENTATION_SCHEMA")
 
 
-# ── T20–T24 item_name contract ───────────────────────────────────────────────
+# - T20–T24 item_name contract -
 def test_T20_result_item_name_source_preservation():
     # CASE A: result.item_name non-null, set_item_id null
     t = _pos_tables()
@@ -336,7 +429,7 @@ def test_T24_dangling_setitem_unresolved():
     _expect_error(lambda: compose_inspection_view(POS_INSP, FakeSupabase(t)), "RESULT_ITEM_UNRESOLVED")
 
 
-# ── T25–T27 order / partial ──────────────────────────────────────────────────
+# - T25–T27 order / partial -
 def test_T25_deterministic_order_null_seq_created_id():
     # 동일/NULL item_seq 에서 created_at → id stable
     t = _pos_tables()
@@ -372,7 +465,7 @@ def test_T27_no_results_pa_resolved_empty_missing():
     assert "inspection_results" in vm["completeness"]["missing_required_fields"]
 
 
-# ── T28–T29 not found / negative ─────────────────────────────────────────────
+# - T28–T29 not found / negative -
 def test_T28_inspection_not_found():
     _expect_error(lambda: compose_inspection_view("no-such-id", FakeSupabase(_pos_tables())), "INSPECTION_NOT_FOUND")
 
@@ -381,19 +474,21 @@ def test_T29_negative_legacy_unresolved():
     _expect_error(lambda: compose_inspection_view(NEG_INSP, FakeSupabase(_neg_tables())), "INSPECTION_SET_UNRESOLVED")
 
 
-# ── T30 write prohibition ────────────────────────────────────────────────────
+# - T30 write prohibition -
 def test_T30_write_method_prohibited_static():
     src = _inspect.getsource(composer_mod)
     for bad in (".insert(", ".update(", ".delete(", ".upsert(", ".rpc("):
         assert bad not in src, f"forbidden write call {bad} found in composer source"
 
 
-def test_T31_raw_code_not_normalized():
+def test_T31_raw_code_is_effective_canonical():
+    # KNOT-2: raw_code = Resolver 의 CURRENT EFFECTIVE result_code (canonical).
+    # 소문자 등 legacy 표기는 resolver 가 정규화하며 Composer 는 재해석하지 않는다.
     t = _pos_tables()
     t["safety_inspection_results"][0] = dict(t["safety_inspection_results"][0], result_code="normal")
     vm = compose_inspection_view(POS_INSP, FakeSupabase(t))
     codes = [r["raw_code"] for r in vm["fields"]["inspection_results"]]
-    assert "normal" in codes  # 소문자 그대로, upper() 금지
+    assert all(c == "NORMAL" for c in codes)  # effective canonical, not "normal"
 
 
 def test_T32_photo_urls_null_vs_empty_preserved():
@@ -437,7 +532,78 @@ def test_T35_result_id_full_uuid_exact():
         assert len(rid) == 36 and rid.count("-") == 4  # full UUID shape
 
 
-# ── self-runner (pytest 없이 실행) ────────────────────────────────────────────
+# - T36–T41 KNOT-2 read cutover -
+def test_T36_composer_no_direct_base_read_static():
+    src = _inspect.getsource(composer_mod)
+    assert '.table("safety_inspections")' not in src
+    assert '.table("safety_inspection_results")' not in src
+
+
+def test_T37_rpc_resolve_allowed_other_forbidden():
+    fake = FakeSupabase(_pos_tables())
+    resp = fake.rpc("fn_resolve_inspection_record", {"p_inspection_id": POS_INSP}).execute()
+    assert resp.data["inspection_id"] == POS_INSP  # read-only resolver rpc allowed
+    try:
+        fake.rpc("fn_apply_inspection_record_command", {})
+        raise AssertionError("non-resolver rpc should be forbidden")
+    except AssertionError as e:
+        assert "RPC FORBIDDEN" in str(e)
+
+
+def test_T38_inactive_inspection_rejected():
+    t = _pos_tables()
+    t["safety_inspections"][0] = dict(t["safety_inspections"][0], _is_active=False)
+    _expect_error(lambda: compose_inspection_view(POS_INSP, FakeSupabase(t)), "INSPECTION_INACTIVE")
+
+
+def test_T39_inactive_result_excluded_count():
+    # 3 active + 1 inactive → Web View count 3
+    t = _pos_tables()
+    t["safety_inspection_results"].append({
+        "id": "dead0000-0000-0000-0000-000000000000", "inspection_id": POS_INSP,
+        "inspection_set_item_id": SI1, "item_name": None, "result_code": "ABNORMAL",
+        "value_text": None, "value_number": None, "note": "폐기된 결과",
+        "checked_at": "2026-05-14T07:49:43.778781+00:00", "photo_url": None, "photo_urls": [],
+        "created_at": "2026-05-14T07:49:44.232993", "_is_active": False,
+    })
+    vm = compose_inspection_view(POS_INSP, FakeSupabase(t))
+    assert len(vm["fields"]["inspection_results"]) == 3  # inactive excluded, not silent-dropped active
+
+
+def test_T40_inactive_cross_set_result_no_pb_contradiction():
+    # P-A unresolved; 3 active → SET_ID, plus 1 INACTIVE → SET-X.
+    # inactive result 는 P-B corroboration 에 참여하지 않으므로 MIXED 없이 SET_ID 로 해소.
+    t = _pos_tables()
+    t["safety_inspections"] = [
+        {"id": POS_INSP, "assignment_id": None, "asset_id": None, "inspector_id": None,
+         "inspection_date": "2026-05-14T00:00:00", "factory_id": "f-0003"}]
+    t["inspection_set_items"] = [
+        {"id": SI1, "inspection_set_id": SET_ID, "item_seq": 1, "item_name": "외관 상태 점검"},
+        {"id": SI2, "inspection_set_id": SET_ID, "item_seq": 2, "item_name": "작동 시험"},
+        {"id": SI3, "inspection_set_id": SET_ID, "item_seq": 3, "item_name": "안전장치 확인"},
+        {"id": "SX", "inspection_set_id": "SET-X", "item_seq": 9, "item_name": "타 세트 항목"},
+    ]
+    t["safety_inspection_results"].append({
+        "id": "dead0001-0000-0000-0000-000000000000", "inspection_id": POS_INSP,
+        "inspection_set_item_id": "SX", "item_name": None, "result_code": "NORMAL",
+        "value_text": None, "value_number": None, "note": None,
+        "checked_at": "2026-05-14T07:49:43.778781+00:00", "photo_url": None, "photo_urls": [],
+        "created_at": "2026-05-14T07:49:44.900000", "_is_active": False,
+    })
+    vm = compose_inspection_view(POS_INSP, FakeSupabase(t))
+    assert vm["inspection_set_id"] == SET_ID  # inactive cross-set row excluded before P-B
+
+
+def test_T41_abnormal_effective_reaches_raw_code():
+    # legacy alias "issue" → canonical ABNORMAL → raw_code ABNORMAL (재해석 없음)
+    t = _pos_tables()
+    t["safety_inspection_results"][0] = dict(t["safety_inspection_results"][0], result_code="issue")
+    vm = compose_inspection_view(POS_INSP, FakeSupabase(t))
+    by_id = {r["result_id"]: r for r in vm["fields"]["inspection_results"]}
+    assert by_id[RID1]["raw_code"] == "ABNORMAL"
+
+
+# - self-runner (pytest 없이 실행) -
 if __name__ == "__main__":
     g = dict(globals())
     tests = sorted((n, f) for n, f in g.items() if n.startswith("test_") and callable(f))
