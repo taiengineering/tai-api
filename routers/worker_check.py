@@ -30,7 +30,6 @@ API:
   GET  /worker-check/history  점검 이력 조회 (앱 이력 화면)
 """
 import logging
-from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -132,8 +131,13 @@ def submit_check(
        base header(COMPLETED) + results + creation receipt 가 한 트랜잭션.
     """
     supabase = get_supabase()
-    now = datetime.now(timezone.utc).isoformat()
     clean_phone = body.phone.replace("-", "").replace(" ", "")
+
+    # submitted_at 은 필수 — 누락/공백을 서버 시각으로 대체하지 않는다(fail-closed 422).
+    # submitted_at 은 오프라인 재전송 멱등의 정체성 앵커이므로, 서버 now 로 만들면
+    # 동일 재전송이 매번 다른 submission_id 가 되어 replay 대신 409 로 변질된다.
+    if not body.submitted_at:
+        raise HTTPException(status_code=422, detail={"error": "WORKER_SUBMISSION_TIMESTAMP_INVALID"})
 
     # 1. 점검자 ID 조회 (users 또는 worker_registry)
     inspector_id = None
@@ -210,8 +214,8 @@ def submit_check(
 
     # 4. 원자적 1회 생성: base header(COMPLETED) + results + creation receipt 가 한 트랜잭션.
     #    lifecycle 은 항상 COMPLETED; 결과 판정(NORMAL/ABNORMAL/HOLD)은 Resolver 가 결과에서 도출한다.
-    #    submitted_at 이 오면 오프라인 재전송 멱등(같은 정체성=replay); 없으면 서버 now 를 쓰고
-    #    RPC 의 일정 중복 가드(409)가 이중 생성을 막는다.
+    #    submitted_at 은 위에서 필수 검증됨 → 클라이언트가 보낸 값을 그대로 전달(서버 now 대체 없음).
+    #    같은 정체성 재전송은 receipt replay 로 멱등; invalid ISO 는 service 가 typed 에러로 막는다.
     try:
         _result = submit_worker_inspection(
             supabase,
@@ -220,11 +224,13 @@ def submit_check(
             factory_id=str(_parent_factory_id),
             inspector_id=inspector_id,
             phone=clean_phone,
-            submitted_at=body.submitted_at or now,
+            submitted_at=body.submitted_at,
             inspection_type=body.inspection_type,
             items=items_payload,
         )
     except WorkerSubmissionError as e:
+        if e.code == "WORKER_SUBMISSION_TIMESTAMP_INVALID":
+            raise HTTPException(status_code=422, detail={"error": e.code})
         if e.is_conflict:
             raise HTTPException(status_code=409, detail={"error": e.code})
         raise HTTPException(status_code=500, detail={"error": e.code})
