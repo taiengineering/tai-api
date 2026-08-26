@@ -78,8 +78,17 @@ def _vm():
 
 # ── T01–T02 route / dependency ───────────────────────────────────────────────
 def test_T01_route_path_exact():
-    routes = {(r["method"], r["full_path"]) for r in V.router.routes}
-    assert ("GET", "/inspection/{inspection_id}/view") in routes
+    from fastapi.routing import APIRoute
+
+    matched = [
+        route
+        for route in V.router.routes
+        if isinstance(route, APIRoute)
+        and route.path == "/inspection/{inspection_id}/view"
+    ]
+
+    assert len(matched) == 1
+    assert matched[0].methods == {"GET"}
 
 
 def test_T02_get_current_user_dependency_present():
