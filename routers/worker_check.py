@@ -30,7 +30,6 @@ API:
   GET  /worker-check/history  점검 이력 조회 (앱 이력 화면)
 """
 import logging
-from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -43,6 +42,10 @@ from services.inspection_record_resolver import (
     list_effective_inspection_records_by_inspector,
 )
 from services.status_vocab import normalize_inspection_result_write
+from services.worker_inspection_submission import (
+    WorkerSubmissionError,
+    submit_worker_inspection,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/worker-check", tags=["WorkerCheck"])
@@ -123,12 +126,18 @@ def submit_check(
     """
     작업자 점검 제출.
     1. users 테이블에서 전화번호로 inspector_id 조회
-    2. safety_inspections 점검 세션 생성
-    3. 참조 검증 후 safety_inspection_results 항목별 결과 저장
+    2. 일정 참조 해석 + parent work_schedules.factory_id companion (schedule-backed only)
+    3. 참조 검증 후 원자적 생성 RPC(submit_worker_inspection) 1회 —
+       base header(COMPLETED) + results + creation receipt 가 한 트랜잭션.
     """
     supabase = get_supabase()
-    now = datetime.now(timezone.utc).isoformat()
     clean_phone = body.phone.replace("-", "").replace(" ", "")
+
+    # submitted_at 은 필수 — 누락/공백을 서버 시각으로 대체하지 않는다(fail-closed 422).
+    # submitted_at 은 오프라인 재전송 멱등의 정체성 앵커이므로, 서버 now 로 만들면
+    # 동일 재전송이 매번 다른 submission_id 가 되어 replay 대신 409 로 변질된다.
+    if not body.submitted_at:
+        raise HTTPException(status_code=422, detail={"error": "WORKER_SUBMISSION_TIMESTAMP_INVALID"})
 
     # 1. 점검자 ID 조회 (users 또는 worker_registry)
     inspector_id = None
@@ -147,14 +156,10 @@ def submit_check(
         else:
             inspector_name = clean_phone
 
-    # 2. safety_inspections 점검 세션 생성
-    has_issue = any(item.result == "bad" for item in body.items)
-    has_hold = any((item.result or "").lower() == "hold" for item in body.items)
-    status_code = "ISSUE" if has_issue else ("HOLD" if has_hold else "COMPLETED")
-
+    # 2. 일정 참조 해석 (schedule-backed only).
     # safety_inspections.assignment_id 의 FK 는 work_schedules(id) 를 참조한다(컬럼명과 불일치, 별건).
-    # body.assignment_id 는 work_assignments.id 이므로 그대로 넣으면 FK 위반(500)이다.
-    # → schedule_id(work_schedules.id)로 변환해 저장한다. body.schedule_id 가 오면 그것을 우선한다.
+    # body.assignment_id 는 work_assignments.id 이므로 schedule_id(work_schedules.id)로 변환한다.
+    # body.schedule_id 가 오면 그것을 우선한다.
     schedule_ref = body.schedule_id
     if not schedule_ref and body.assignment_id:
         _wa = supabase.table("work_assignments").select("schedule_id").eq("id", body.assignment_id).limit(1).execute()
@@ -173,28 +178,16 @@ def submit_check(
     if not _parent_factory_id:
         raise HTTPException(status_code=409, detail="일정의 factory_id를 확인할 수 없습니다.")
 
-    ins_res = supabase.table("safety_inspections").insert({
-        "inspector_id": inspector_id,
-        "inspection_date": now,
-        "status_code": status_code,
-        "assignment_id": schedule_ref,
-        "factory_id": _parent_factory_id,   # WP-04D parent companion (request factory_id 미사용)
-    }).execute()
-
-    if not ins_res.data:
-        raise HTTPException(status_code=500, detail="점검 세션 생성 실패")
-
-    inspection_id = ins_res.data[0]["id"]
-
     # 3. 참조 검증(가공 차단): assignment_id 3홉으로 세트 항목만 참조로 인정하고,
-    #    참조가 맞으면 item_name 을 서버 마스터 값으로 덮어씁(이름 위조 경로 제거).
+    #    참조가 맞으면 item_name 을 서버 마스터 값으로 덮어씀(이름 위조 경로 제거).
+    #    KNOT-3B: 직접 INSERT 대신 검증된 항목을 원자적 생성 RPC 로 넘긴다(base 직접 생성 없음).
     allowed: dict = {}
     set_id = _iss.resolve_set_id_for_assignment(body.assignment_id) if body.assignment_id else None
     if set_id:
         arows = supabase.table("inspection_set_items").select("id, item_name").eq("inspection_set_id", set_id).execute().data or []
         allowed = {r["id"]: r.get("item_name") for r in arows}
 
-    result_rows = []
+    items_payload = []
     missing_ref = 0      # 참조 없음(구버전 앱)
     invalid_ref = 0      # 이 점검 세트의 항목이 아님 → 참조 버림
     unvalidated = 0      # assignment_id 없어 검증 불가 → 참조 유지
@@ -211,22 +204,43 @@ def submit_check(
             unvalidated += 1
         else:
             missing_ref += 1
-        row_data = {
-            "inspection_id": inspection_id,
-            "item_name": name,
-            "result_code": normalize_inspection_result_write(item.result),
-            "value_text": item.result,
+        items_payload.append({
+            "inspection_set_item_id": ref,          # 검증 실패 시 None
+            "name": name,
+            "result_code": normalize_inspection_result_write(item.result),  # canonical NORMAL/ABNORMAL/HOLD
             "note": item.memo or item.note or "",
-            "checked_at": now,
-        }
-        if ref:
-            row_data["inspection_set_item_id"] = ref
-        if item.photo_urls:
-            row_data["photo_urls"] = item.photo_urls
-        result_rows.append(row_data)
+            "photo_urls": item.photo_urls or [],
+        })
 
-    if result_rows:
-        supabase.table("safety_inspection_results").insert(result_rows).execute()
+    # 4. 원자적 1회 생성: base header(COMPLETED) + results + creation receipt 가 한 트랜잭션.
+    #    lifecycle 은 항상 COMPLETED; 결과 판정(NORMAL/ABNORMAL/HOLD)은 Resolver 가 결과에서 도출한다.
+    #    submitted_at 은 위에서 필수 검증됨 → 클라이언트가 보낸 값을 그대로 전달(서버 now 대체 없음).
+    #    같은 정체성 재전송은 receipt replay 로 멱등; invalid ISO 는 service 가 typed 에러로 막는다.
+    try:
+        _result = submit_worker_inspection(
+            supabase,
+            schedule_ref=str(schedule_ref),
+            schedule_id=str(schedule_ref),
+            factory_id=str(_parent_factory_id),
+            inspector_id=inspector_id,
+            phone=clean_phone,
+            submitted_at=body.submitted_at,
+            inspection_type=body.inspection_type,
+            items=items_payload,
+        )
+    except WorkerSubmissionError as e:
+        if e.code == "WORKER_SUBMISSION_TIMESTAMP_INVALID":
+            raise HTTPException(status_code=422, detail={"error": e.code})
+        if e.is_conflict:
+            raise HTTPException(status_code=409, detail={"error": e.code})
+        raise HTTPException(status_code=500, detail={"error": e.code})
+
+    snap = _result.get("data") or {}
+    inspection_id = snap.get("inspection_id")
+    overall = snap.get("overall_result")
+    # presentation alias 만 유도(NORMAL→COMPLETED, ABNORMAL→ISSUE, HOLD→HOLD); DB status_code 는 항상 COMPLETED.
+    status_alias = _WORKER_STATUS_ALIAS.get(overall, overall)
+    has_issue = overall == "ABNORMAL"
 
     if missing_ref or invalid_ref or unvalidated:
         log.warning(
@@ -236,14 +250,17 @@ def submit_check(
         )
 
     issue_items = [i.name for i in body.items if i.result == "bad"]
-    log.info(f"[WorkerCheck] 저장 inspection_id={inspection_id} issues={len(issue_items)}")
+    log.info(
+        f"[WorkerCheck] 저장 inspection_id={inspection_id} "
+        f"issues={len(issue_items)} replayed={_result.get('replayed')}"
+    )
 
     return {
         "status": "success",
         "message": "점검 결과가 저장됐습니다.",
         "data": {
             "inspection_id": inspection_id,
-            "status": status_code,
+            "status": status_alias,
             "has_issue": has_issue,
             "issue_items": issue_items,
             "inspector": inspector_name,
