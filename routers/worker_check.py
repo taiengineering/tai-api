@@ -171,10 +171,16 @@ def submit_check(
         raise HTTPException(status_code=409, detail="일정 참조가 없어 점검을 생성할 수 없습니다.")
 
     # WP-04D: parent work_schedules 에서 factory_id companion 확보 (body.factory_id 신뢰 금지).
-    _ws = supabase.table("work_schedules").select("id, factory_id").eq("id", schedule_ref).limit(1).execute()
-    if not _ws.data:
+    # REV-2: work_schedules identity = (id, factory_id). id 는 factory 간 중복 가능하므로
+    # limit(1) 로 임의 factory 를 고르지 않는다. 0→409(not-found), >1→409(AMBIGUOUS), 1→그 factory.
+    # ambiguous 를 body.factory_id 로 disambiguate 하지 않는다(parent DB 사실로만 결정, fail-closed).
+    _ws = supabase.table("work_schedules").select("id, factory_id").eq("id", schedule_ref).execute()
+    _ws_rows = _ws.data or []
+    if not _ws_rows:
         raise HTTPException(status_code=409, detail="일정을 찾을 수 없습니다.")
-    _parent_factory_id = _ws.data[0].get("factory_id")
+    if len(_ws_rows) > 1:
+        raise HTTPException(status_code=409, detail={"error": "WORK_SCHEDULE_ID_AMBIGUOUS"})
+    _parent_factory_id = _ws_rows[0].get("factory_id")
     if not _parent_factory_id:
         raise HTTPException(status_code=409, detail="일정의 factory_id를 확인할 수 없습니다.")
 
