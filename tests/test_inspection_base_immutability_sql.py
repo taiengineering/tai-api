@@ -233,6 +233,26 @@ def test_up_locks_both_tables_share_mode():
         r"lock table public\.safety_inspections, public\.safety_inspection_results in share mode", n)
 
 
+# T26 — header trigger set to ENABLE ALWAYS (fires regardless of replication role)
+def test_header_trigger_enable_always():
+    n = _norm(_up())
+    assert "alter table public.safety_inspections enable always trigger trg_safety_inspections_immutable" in n
+
+
+# T27 — result trigger set to ENABLE ALWAYS
+def test_result_trigger_enable_always():
+    n = _norm(_up())
+    assert "alter table public.safety_inspection_results enable always trigger trg_safety_inspection_results_immutable" in n
+
+
+# T28 — both triggers are ENABLE ALWAYS; neither left ordinary/replica/disabled
+def test_no_ordinary_enable_only():
+    n = _norm(_up())
+    assert n.count("enable always trigger") == 2
+    assert "enable replica trigger" not in n
+    assert "disable trigger" not in n
+
+
 if __name__ == "__main__":
     g = dict(globals())
     tests = sorted((k, v) for k, v in g.items() if k.startswith("test_") and callable(v))
