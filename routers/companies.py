@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TAI Companies 라우터 - 사업장 등록/관리 v2.2.0
+TAI Companies 라우터 - 사업장 등록/관리 v2.4.0
 
+v2.4.0: 회사 로고 업로드 — file_type='logo' 는 공개 버킷 company-logos 저장 + 영구 public URL + companies.logo_url 반영.
 v2.3.0: 인증·회사 스코프 (P13). nts/check-biz 공개, onboarding·create 로그인,
         get_companies ALL 전용, by-id 14개는 자기 회사(_ensure_own_company).
 v2.2.0: 어드민 전체 목록(get_companies)에서 데모(체험) 테넌트 제외 (companies.is_demo)
@@ -674,47 +675,84 @@ async def upload_company_file(
     if not chk.data:
         raise HTTPException(status_code=404, detail="회사를 찾을 수 없습니다.")
 
-    MAX_SIZE = 10 * 1024 * 1024
+    is_logo = (file_type == "logo")
+
+    MAX_SIZE = (2 * 1024 * 1024) if is_logo else (10 * 1024 * 1024)
     content = await file.read()
     if len(content) > MAX_SIZE:
-        raise HTTPException(status_code=400, detail="파일 크기가 초과되었습니다. (최대 10MB)")
+        raise HTTPException(
+            status_code=400,
+            detail=("로고 이미지는 최대 2MB까지 가능합니다." if is_logo else "파일 크기가 초과되었습니다. (최대 10MB)"),
+        )
 
-    allowed_types = ["application/pdf", "image/jpeg", "image/png"]
-    if file.content_type not in allowed_types:
-        raise HTTPException(status_code=400, detail="PDF, JPG, PNG 파일만 업로드 가능합니다.")
+    if is_logo:
+        allowed_types = ["image/png", "image/jpeg", "image/svg+xml", "image/webp"]
+        if file.content_type not in allowed_types:
+            raise HTTPException(status_code=400, detail="로고는 PNG, JPG, SVG, WEBP 이미지만 업로드 가능합니다.")
+    else:
+        allowed_types = ["application/pdf", "image/jpeg", "image/png"]
+        if file.content_type not in allowed_types:
+            raise HTTPException(status_code=400, detail="PDF, JPG, PNG 파일만 업로드 가능합니다.")
 
     ext = file.filename.split(".")[-1] if (file.filename and "." in file.filename) else "bin"
-    # 비공개 버킷 company-files 에 저장. 경로는 회사/파일종류/uuid.
+    # 로고는 공개 버킷 company-logos(영구 public URL), 그 외는 비공개 company-files(1년 signed URL).
+    bucket = "company-logos" if is_logo else "company-files"
     storage_path = f"{company_id}/{file_type}/{uuid.uuid4()}.{ext}"
 
     try:
-        supabase.storage.from_("company-files").upload(
+        supabase.storage.from_(bucket).upload(
             storage_path, content, {"content-type": file.content_type}
         )
-        # 비공개 버킷이므로 public URL 대신 signed URL(1년) 을 발급한다.
-        signed = supabase.storage.from_("company-files").create_signed_url(
-            storage_path, 60 * 60 * 24 * 365
-        )
-        signed_url = ""
-        if isinstance(signed, dict):
-            signed_url = (
-                signed.get("signedURL")
-                or signed.get("signedUrl")
-                or signed.get("signed_url")
-                or signed.get("url")
-                or ""
+        if is_logo:
+            pub = supabase.storage.from_(bucket).get_public_url(storage_path)
+            if isinstance(pub, dict):
+                file_url = (
+                    pub.get("publicUrl")
+                    or pub.get("publicURL")
+                    or pub.get("public_url")
+                    or pub.get("url")
+                    or ""
+                )
+            else:
+                file_url = pub or ""
+            if file_url and not file_url.startswith("http"):
+                base = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+                sep = "" if file_url.startswith("/") else "/"
+                file_url = f"{base}{sep}{file_url}"
+            file_url = file_url.rstrip("?")
+        else:
+            # 비공개 버킷이므로 public URL 대신 signed URL(1년) 을 발급한다.
+            signed = supabase.storage.from_(bucket).create_signed_url(
+                storage_path, 60 * 60 * 24 * 365
             )
-        elif isinstance(signed, str):
-            signed_url = signed
-        if signed_url and not signed_url.startswith("http"):
-            base = (os.getenv("SUPABASE_URL") or "").rstrip("/")
-            sep = "" if signed_url.startswith("/") else "/"
-            signed_url = f"{base}{sep}{signed_url}"
-        file_url = signed_url
+            signed_url = ""
+            if isinstance(signed, dict):
+                signed_url = (
+                    signed.get("signedURL")
+                    or signed.get("signedUrl")
+                    or signed.get("signed_url")
+                    or signed.get("url")
+                    or ""
+                )
+            elif isinstance(signed, str):
+                signed_url = signed
+            if signed_url and not signed_url.startswith("http"):
+                base = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+                sep = "" if signed_url.startswith("/") else "/"
+                signed_url = f"{base}{sep}{signed_url}"
+            file_url = signed_url
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"파일 업로드 실패: {str(e)}")
 
     now = datetime.now().isoformat()
+    # 로고는 companies.logo_url 에 즉시 반영(프론트가 별도 PATCH 없이 표시).
+    if is_logo:
+        try:
+            supabase.table("companies").update(
+                {"logo_url": file_url, "updated_at": now}
+            ).eq("id", company_id).execute()
+        except Exception:
+            pass
     # company_files 실측 컬럼에 맞춘다(storage_path 컬럼은 존재하지 않는다).
     meta = {
         "company_id":  company_id,
