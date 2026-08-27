@@ -35,7 +35,6 @@ from services.company_scope import (
 from services.status_vocab import (
     normalize_inspection_result_write,
     ws_completed_query_values,
-    ws_write_scheduled,
 )
 from services.inspection_record_writer_bridge import (
     complete_inspection_status,
@@ -49,6 +48,7 @@ from services.safe_inspection_result_batch import (
     record_safe_result_batch,
     SafeResultBatchError,
 )
+from services.inspection_rolling import ensure_next_rolling_schedule
 
 router = APIRouter(prefix="/inspection", tags=["점검리스트"])
 
@@ -480,14 +480,18 @@ async def record_inspection_results(inspection_id: str, body: dict, current: dic
                 for r in results
             )
             if ws_id and _all_normal:
+                # completion anchor freeze — 최초 완료일 고정(REPLAY 마다 today 덮어쓰기 금지)
+                _wsrow = supabase.table("work_schedules").select("completed_at").eq("id", ws_id).limit(1).execute()
+                _existing = (_wsrow.data[0].get("completed_at") if _wsrow.data else None)
+                _anchor_str = _existing or date.today().isoformat()
                 supabase.table("work_schedules").update({
-                    "status_code": "completed", "completed_at": date.today().isoformat()
+                    "status_code": "completed", "completed_at": _anchor_str,
                 }).eq("id", ws_id).execute()
-                # KNOT-3A: 직접 base UPDATE 대신 STATUS_CHANGE 전표 append.
                 complete_inspection_status(
                     supabase, inspection_id,
                     actor_id=current["id"], reason="SAFE_RESULT_AUTO_COMPLETE",
                 )
+                ensure_next_rolling_schedule(supabase, ws_id, date.fromisoformat(str(_anchor_str)[:10]))
         return {"status": "success", "message": f"{created}개 결과가 기록됐습니다.",
                 "data": {"inspection_id": inspection_id, "created": created}}
     except HTTPException: raise
@@ -536,7 +540,6 @@ async def complete_inspection(work_schedule_id: str, body: dict = None, current:
             raise HTTPException(status_code=404, detail="점검 일정을 찾을 수 없습니다.")
 
         ws                = ws_res.data[0]
-        factory_id        = ws.get("factory_id")
         inspection_set_id = ws.get("inspection_set_id")
         completed_date    = date.fromisoformat(str(completed_at))
 
@@ -544,57 +547,9 @@ async def complete_inspection(work_schedule_id: str, body: dict = None, current:
         next_planned_date     = None
 
         if inspection_set_id:
-            iset_res = supabase.table("inspection_sets").select(
-                "id, factory_id, company_id, cycle_unit, cycle_value, "
-                "inspection_set_name, inspection_category, source, schedule_end_date"
-            ).eq("id", inspection_set_id).limit(1).execute()
-
-            if iset_res.data:
-                iset        = iset_res.data[0]
-                cycle_unit  = (iset.get("cycle_unit") or "year").lower()
-                cycle_value = int(iset.get("cycle_value") or 1)
-
-                # 다음 planned_date = 완료일 + delta
-                next_date = _add_cycle(completed_date, cycle_unit, cycle_value)
-                next_planned_date = next_date.isoformat()
-
-                # schedule_end_date 검사
-                end_str  = iset.get("schedule_end_date")
-                past_end = end_str and next_date > date.fromisoformat(end_str)
-
-                if not past_end:
-                    try:
-                        company_res = supabase.table("factories").select("company_id").eq(
-                            "id", factory_id
-                        ).limit(1).execute()
-                        company_id = company_res.data[0].get("company_id") if company_res.data else iset.get("company_id")
-
-                        source_type = "LEGAL" if iset.get("source") == "LEGAL_ENGINE" else "MANUAL"
-
-                        # 다음 회차 1건 INSERT
-                        new_ws = supabase.table("work_schedules").insert({
-                            "inspection_set_id": inspection_set_id,
-                            "company_id":        company_id,
-                            "factory_id":        factory_id,
-                            "planned_date":       next_date.isoformat(),
-                            "start_date":         next_date.isoformat(),
-                            "end_date":           next_date.isoformat(),
-                            "status_code":        ws_write_scheduled(),
-                            "source_type":        source_type,
-                            "obligation_type":    iset.get("inspection_category") or "GENERAL",
-                            "summary":            iset.get("inspection_set_name") or "",
-                            "active_yn":          True,
-                            "assigned_user_id":   None,   # 배정은 안전관리자가 시행
-                        }).execute()
-                        next_schedule_created = bool(new_ws.data)
-
-                        # inspection_sets.next_planned_date 업데이트
-                        supabase.table("inspection_sets").update({
-                            "next_planned_date": next_date.isoformat(),
-                        }).eq("id", inspection_set_id).execute()
-
-                    except Exception as e:
-                        print(f"[COMPLETE] 다음 회차 생성 실패 (iset={inspection_set_id}): {e}")
+            _roll = ensure_next_rolling_schedule(supabase, work_schedule_id, completed_date)
+            next_schedule_created = _roll.get("created", False)
+            next_planned_date     = _roll.get("next_planned_date")
 
         # KNOT-3A: 기존 bulk base UPDATE 대신, 연결된 inspection 1건에 한해
         # STATUS_CHANGE 전표를 append 한다. 0건이면 schedule 완료/rolling 만 진행.
