@@ -1,6 +1,6 @@
 """OBJ-01 KNOT-3C1 — SAFE start atomic creator SQL contract tests.
 
-up.sql 아티팩트 텍스트에 대한 정적 계약 검증(T1-T10). DB 접속 없음.
+up.sql 아티팩트 텍스트에 대한 정적 계약 검증(T1-T10 + replay 사실성). DB 접속 없음.
 """
 from __future__ import annotations
 
@@ -68,6 +68,21 @@ def test_existing_one_replays_zero_mutation():
     idx_update = up.find("UPDATE public.work_schedules")
     idx_insert = up.find("INSERT INTO public.safety_inspections")
     assert 0 < idx_replay < idx_update < idx_insert
+
+
+# T5b — replay snapshot uses STORED facts (v_sched.inspector_name, existing inspection_date),
+#        never the second request's p_inspector_name / p_started_at
+def test_replay_snapshot_uses_stored_facts():
+    up = _up()
+    m = re.search(r"ELSIF v_count = 1 THEN(.*?)RETURN jsonb_build_object\('ok', true, 'replayed', true",
+                  up, re.S)
+    assert m, "replay branch not found"
+    branch = m.group(1)
+    # replay snapshot must map facts from storage, not from the request params
+    assert re.search(r"'inspector_name',\s*v_sched\.inspector_name", branch)
+    assert re.search(r"'started_at',\s*v_existing\.inspection_date", branch)
+    assert not re.search(r"'inspector_name',\s*p_inspector_name", branch)
+    assert not re.search(r"'started_at',\s*p_started_at", branch)
 
 
 # T6 — existing>1 → INSPECTION_CARDINALITY_VIOLATION
