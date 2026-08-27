@@ -77,26 +77,35 @@ def test_single_checked_at():
     assert "v_checked_at := now()" in n
 
 
-# S8 — worker-shaped existing rows → conflict (R11)
+# S8 — worker-shaped existing rows → conflict (R11); empty photo_urls '[]' is W3-shape (B3)
 def test_worker_shaped_conflict():
     n = _norm(_up())
     assert "item_name is not null or value_text is not null" in n
-    assert "value_number is not null or photo_urls is not null" in n
+    assert "photo_urls is not null and photo_urls <> '[]'::jsonb" in n
     assert "result_initial_batch_conflict" in n
 
 
-# S9 — canonical order-independent comparison → REPLAY / CONFLICT (R2..R6, R9, R10)
+# S9 — canonical order-independent STRUCTURED comparison → REPLAY / CONFLICT (R2..R6, R9, R10)
 def test_canonical_compare_replay_conflict():
     up = _up()
     n = _norm(up)
-    # order-independent: keys aggregated sorted
-    assert "array_agg(k order by k)" in n
+    # structured tuples (no text separator), aggregated sorted (order-independent)
+    assert "jsonb_build_array" in n
+    assert "array_agg(t order by t)" in n
     # compares the W3 business fields only
     assert "result_code" in n and "note" in n and "photo_url" in n and "inspection_set_item_id" in n
     # equal -> replay, else conflict
     assert "is not distinct from" in n
     assert "'mode', 'replay'" in n
     assert n.count("result_initial_batch_conflict") >= 2   # worker-shape + differ
+
+
+# S13 — B2: no text-separator key building (collision-proof structured comparison)
+def test_no_text_separator_key():
+    n = _norm(_up())
+    assert "concat_ws" not in n
+    assert "chr(31)" not in n
+    assert "jsonb[]" in n            # keys declared as jsonb arrays, not text
 
 
 # S10 — REPLAY inserts nothing: only one INSERT statement in the whole function,

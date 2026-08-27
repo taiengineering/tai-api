@@ -2,11 +2,12 @@
 
 Cursor 가 routers/inspection_checklist.py 를 편집한 뒤 실행. 실제 라우터 함수를
 import 하고, record_safe_result_batch / get_supabase / _ensure_inspection_own /
-complete_inspection_status 를 모킹해 R14/R15/R16 + 매핑 + 응답 shape 를 고정한다.
+complete_inspection_status 를 모킹해 R14/R15/R16 + 매핑 + 응답 shape + B1 을 고정한다.
 
 핵심 계약:
 - 직접 safety_inspection_results INSERT = 0 (RPC 서비스만)
 - CREATED 와 REPLAY 모두 auto-complete 후속 실행 (REPLAY early-return 금지)
+- auto-complete 판단은 CANONICAL (NORMAL only) 기준 — raw 문자열 아님 (B1)
 - conflict→409, not-found→404, empty→400, created=N, ownership guard 호출
 """
 from __future__ import annotations
@@ -125,6 +126,44 @@ def test_autocomplete_skipped_on_fail(wired):
     wired["rb_next"] = _created(2)
     _call({"results": [{"result": "ok"}, {"result": "FAIL"}]})
     assert wired["complete"] == []
+
+
+# ── B1: auto-complete decided on CANONICAL result, not raw string ──
+
+def test_b1_created_abnormal_no_autocomplete(wired):
+    wired["rb_next"] = _created(1)
+    _call({"results": [{"result": "FAIL"}]})          # FAIL -> ABNORMAL
+    assert wired["complete"] == []
+
+
+def test_b1_replay_abnormal_no_autocomplete(wired):
+    wired["rb_next"] = _replay(1)
+    _call({"results": [{"result": "ABNORMAL"}]})      # already canonical ABNORMAL
+    assert wired["complete"] == []
+
+
+def test_b1_hold_no_autocomplete(wired):
+    wired["rb_next"] = _created(1)
+    _call({"results": [{"result": "HOLD"}]})          # HOLD is not NORMAL
+    assert wired["complete"] == []
+
+
+def test_b1_alias_same_side_effect(wired):
+    # FAIL and ABNORMAL both normalize to ABNORMAL => identical (no) auto-complete,
+    # so a CREATED(FAIL) then REPLAY(ABNORMAL) retry cannot flip the side-effect.
+    wired["rb_next"] = _created(1)
+    _call({"results": [{"result": "FAIL"}]})
+    first = list(wired["complete"])
+    wired["complete"].clear()
+    wired["rb_next"] = _replay(1)
+    _call({"results": [{"result": "ABNORMAL"}]})
+    assert wired["complete"] == first == []
+
+
+def test_b1_normal_aliases_autocomplete(wired):
+    wired["rb_next"] = _created(3)
+    _call({"results": [{"result": "ok"}, {"result": "pass"}, {"result": "NORMAL"}]})
+    assert wired["complete"] == [("INS", "SAFE_RESULT_AUTO_COMPLETE")]
 
 
 def test_conflict_409(wired):

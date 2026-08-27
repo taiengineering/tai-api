@@ -17,11 +17,14 @@
 --          differ  -> RESULT_INITIAL_BATCH_CONFLICT (base INSERT 0)
 --
 -- Compared business fields (W3 shape only): inspection_set_item_id, result_code,
--- note (missing -> ''), photo_url (missing -> null). id/checked_at/created_at are
--- server-generated and excluded. If any stored row for the inspection carries
--- content W3 never writes (item_name / value_text / value_number / photo_urls),
+-- note (missing -> ''), photo_url (missing/JSON-null -> NULL). id/checked_at/
+-- created_at are server-generated and excluded. Rows are compared as STRUCTURED
+-- jsonb tuples (jsonb_build_array), so no text separator can ever collide and NULL
+-- stays distinct from ''. If any stored row for the inspection carries content W3
+-- never writes (item_name / value_text / value_number / a non-empty photo_urls),
 -- it is Worker-shaped and the request fails closed with the same conflict rather
--- than being mistaken for a W3 replay.
+-- than being mistaken for a W3 replay. An empty photo_urls ('[]', the column
+-- default that W3 rows carry) is W3-compatible and does NOT trip the guard.
 --
 -- Physical-immutability compatible: INSERT-only. Later business change flows only
 -- through the journal (RESULT_CORRECTION / RESULT_DEACTIVATION); this RPC never
@@ -44,12 +47,11 @@ DECLARE
     v_count       integer;
     v_nonw3       integer;
     v_n           integer;
-    v_in_keys     text[];
-    v_ex_keys     text[];
+    v_in_keys     jsonb[];
+    v_ex_keys     jsonb[];
     v_checked_at  timestamptz;
     v_elem        jsonb;
     v_code        text;
-    v_sep         text := chr(31);   -- unit separator; not expected in business text
 BEGIN
     -- 1) input validation
     IF p_inspection_id IS NULL THEN
@@ -107,38 +109,48 @@ BEGIN
                                   'data', jsonb_build_object('inspection_id', p_inspection_id, 'created', v_n));
     END IF;
 
-    -- 4-B) existing present: any Worker-shaped row => fail closed (not a W3 replay)
+    -- 4-B) existing present: any Worker-shaped row => fail closed (not a W3 replay).
+    -- An empty photo_urls ('[]') is the W3 default and is NOT Worker content.
     SELECT count(*) INTO v_nonw3
     FROM public.safety_inspection_results
     WHERE inspection_id = p_inspection_id
       AND (item_name IS NOT NULL OR value_text IS NOT NULL
-           OR value_number IS NOT NULL OR photo_urls IS NOT NULL);
+           OR value_number IS NOT NULL
+           OR (photo_urls IS NOT NULL AND photo_urls <> '[]'::jsonb));
     IF v_nonw3 > 0 THEN
         RETURN jsonb_build_object('ok', false, 'error', 'RESULT_INITIAL_BATCH_CONFLICT',
                                   'detail', 'existing results are not W3-shaped');
     END IF;
 
-    -- canonical, order-independent multiset keys (duplicates preserved)
-    SELECT array_agg(k ORDER BY k) INTO v_in_keys
+    -- canonical, order-independent multiset of STRUCTURED tuples. jsonb_build_array
+    -- avoids any text-separator collision and keeps NULL distinct from '' (a missing
+    -- or JSON-null photo_url is NULL, never the empty string).
+    SELECT array_agg(t ORDER BY t) INTO v_in_keys
     FROM (
-        SELECT concat_ws(v_sep,
-                   coalesce(nullif(e->>'inspection_set_item_id', '')::uuid::text, ''),
+        SELECT jsonb_build_array(
+                   nullif(e->>'inspection_set_item_id', '')::uuid,
                    e->>'result_code',
                    coalesce(e->>'note', ''),
-                   coalesce(e->>'photo_url', '')) AS k
+                   CASE
+                       WHEN NOT (e ? 'photo_url') OR jsonb_typeof(e->'photo_url') = 'null'
+                       THEN NULL
+                       ELSE e->>'photo_url'
+                   END
+               ) AS t
         FROM jsonb_array_elements(p_results) AS e
-    ) t;
+    ) s;
 
-    SELECT array_agg(k ORDER BY k) INTO v_ex_keys
+    SELECT array_agg(t ORDER BY t) INTO v_ex_keys
     FROM (
-        SELECT concat_ws(v_sep,
-                   coalesce(inspection_set_item_id::text, ''),
+        SELECT jsonb_build_array(
+                   inspection_set_item_id,
                    result_code,
                    coalesce(note, ''),
-                   coalesce(photo_url, '')) AS k
+                   photo_url
+               ) AS t
         FROM public.safety_inspection_results
         WHERE inspection_id = p_inspection_id
-    ) t;
+    ) s;
 
     IF v_in_keys IS NOT DISTINCT FROM v_ex_keys THEN
         -- same batch: replay, INSERT 0, external count = N
