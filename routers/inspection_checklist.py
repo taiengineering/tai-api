@@ -45,6 +45,10 @@ from services.inspection_record_start import (
     start_safe_inspection,
     SafeStartError,
 )
+from services.safe_inspection_result_batch import (
+    record_safe_result_batch,
+    SafeResultBatchError,
+)
 
 router = APIRouter(prefix="/inspection", tags=["점검리스트"])
 
@@ -452,12 +456,22 @@ async def record_inspection_results(inspection_id: str, body: dict, current: dic
         results = body.get("results", [])
         if not results:
             raise HTTPException(status_code=400, detail="results가 비어 있습니다.")
-        now = _now_iso()
-        insert_rows = [{"inspection_id": inspection_id, "inspection_set_item_id": r.get("inspection_set_item_id"),
-                        "result_code": normalize_inspection_result_write(r.get("result", "NA")), "note": r.get("note", ""),
-                        "photo_url": r.get("photo_url"), "checked_at": now} for r in results]
-        res = supabase.table("safety_inspection_results").insert(insert_rows).execute()
-        created = len(res.data or [])
+        # WO-DEBT-W3-02: 직접 batch INSERT 제거. inspection_id-scoped 원자 RPC 로
+        # initial batch 생성/replay/conflict 를 parent lock 하에 처리.
+        try:
+            _rb = record_safe_result_batch(supabase, inspection_id=inspection_id, results=results)
+        except SafeResultBatchError as e:
+            if e.is_not_found:
+                raise HTTPException(status_code=404, detail="점검 레코드를 찾을 수 없습니다.")
+            if e.is_conflict:
+                raise HTTPException(status_code=409,
+                                    detail={"code": e.code, "message": "이미 다른 결과가 기록된 점검입니다."})
+            if e.is_empty:
+                raise HTTPException(status_code=400, detail="results가 비어 있습니다.")
+            raise HTTPException(status_code=500, detail={"error": e.code})
+        created = _rb.get("count", 0)
+
+        # CREATED/REPLAY 공통으로 기존 auto-complete 로직 실행 (REPLAY early-return 금지).
         insp_res = supabase.table("safety_inspections").select("assignment_id").eq("id", inspection_id).limit(1).execute()
         if insp_res.data:
             ws_id = insp_res.data[0].get("assignment_id")
