@@ -71,6 +71,9 @@ BEGIN
     ELSIF v_count = 1 THEN
         -- idempotent replay: return the existing inspection, ZERO mutation.
         -- start is idempotent on (schedule_id, factory_id) regardless of lifecycle.
+        -- replay 는 저장된 사실만 반환한다: inspector_name 은 잠긴 work_schedules 행의
+        -- 값(v_sched.inspector_name), started_at 은 기존 inspection_date. 두 번째 요청의
+        -- p_inspector_name / p_started_at 은 replay 응답에 쓰지 않는다.
         SELECT * INTO v_existing
         FROM public.safety_inspections
         WHERE assignment_id = p_schedule_id AND factory_id = p_factory_id
@@ -81,7 +84,7 @@ BEGIN
             'factory_id',        p_factory_id,
             'inspection_status', v_existing.status_code,
             'started_at',        v_existing.inspection_date,
-            'inspector_name',    p_inspector_name
+            'inspector_name',    v_sched.inspector_name
         );
         RETURN jsonb_build_object('ok', true, 'replayed', true, 'data', v_snapshot);
     END IF;
