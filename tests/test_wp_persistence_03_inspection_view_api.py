@@ -329,6 +329,168 @@ def test_T31_inspection_inactive_409():
     _expect_http("INSPECTION_INACTIVE", 409)
 
 
+OWN_PATH_A = "co1/inspection/2026-08/a.jpg"
+OWN_PATH_B = "co1/inspection/2026-08/b.jpg"
+WS_ID = "a99fdc96-68b4-4433-84d5-c1c30f1b79c3"
+OWNER_CO = "co1"
+
+
+class _SignQ:
+    def __init__(self, client, name):
+        self.client = client
+        self.name = name
+        self._eq = {}
+        self._in = {}
+        self._is = {}
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, col, val):
+        self._eq[col] = val
+        return self
+
+    def in_(self, col, vals):
+        self._in[col] = list(vals)
+        return self
+
+    def is_(self, col, val):
+        self._is[col] = val
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def execute(self):
+        self.client.table_calls.append({
+            "name": self.name, "eq": dict(self._eq), "in_": dict(self._in), "is_": dict(self._is),
+        })
+        if self.name == "safety_inspections":
+            return type("Resp", (), {"data": [{
+                "id": POS_INSP, "assignment_id": WS_ID, "factory_id": "f1",
+            }]})()
+        if self.name == "work_schedules":
+            return type("Resp", (), {"data": [{
+                "id": WS_ID, "company_id": OWNER_CO, "factory_id": "f1",
+            }]})()
+        if self.name == "documents":
+            want = set(self._in.get("storage_path") or [])
+            rows = []
+            for doc in self.client.docs:
+                if doc.get("storage_path") not in want:
+                    continue
+                if doc.get("company_id") != self._eq.get("company_id"):
+                    continue
+                if doc.get("linked_id") != self._eq.get("linked_id"):
+                    continue
+                if doc.get("linked_table") != self._eq.get("linked_table"):
+                    continue
+                if doc.get("bucket_id") != self._eq.get("bucket_id"):
+                    continue
+                if self._eq.get("is_active") is True and doc.get("is_active") is not True:
+                    continue
+                if self._is.get("deleted_at") == "null" and doc.get("deleted_at") is not None:
+                    continue
+                rows.append({"storage_path": doc["storage_path"]})
+            return type("Resp", (), {"data": rows})()
+        return type("Resp", (), {"data": []})()
+
+
+class _SignSB:
+    def __init__(self, *, fail=False, docs=None):
+        self.fail = fail
+        self.calls = []
+        self.table_calls = []
+        self.docs = list(docs or [])
+        self.storage = self
+
+    def table(self, name):
+        return _SignQ(self, name)
+
+    def from_(self, bucket):
+        self.calls.append({"bucket": bucket})
+        return self
+
+    def create_signed_url(self, path, expires):
+        if self.fail:
+            raise RuntimeError("sign fail")
+        self.calls.append({"path": path, "expires": expires})
+        return {"signedURL": f"https://signed.example/{path}?token=ephemeral"}
+
+
+def _own_docs():
+    return [
+        {
+            "storage_path": OWN_PATH_A, "bucket_id": "company-docs",
+            "linked_table": "safety_inspections", "linked_id": POS_INSP,
+            "company_id": OWNER_CO, "is_active": True, "deleted_at": None,
+        },
+        {
+            "storage_path": OWN_PATH_B, "bucket_id": "company-docs",
+            "linked_table": "safety_inspections", "linked_id": POS_INSP,
+            "company_id": OWNER_CO, "is_active": True, "deleted_at": None,
+        },
+    ]
+
+
+def _vm_with_photos():
+    vm = _vm()
+    vm["fields"]["inspection_results"] = [
+        {
+            "result_id": "r1",
+            "item_name": "소화기",
+            "raw_code": "NORMAL",
+            "photo_url": f"storage://company-docs/{OWN_PATH_A}",
+            "photo_urls": [
+                f"storage://company-docs/{OWN_PATH_B}",
+                "https://legacy.example/old.jpg",
+            ],
+        },
+        {
+            "result_id": "r2",
+            "item_name": "레거시",
+            "raw_code": "HOLD",
+            "photo_url": "https://cdn.example/keep.jpg",
+            "photo_urls": None,
+        },
+    ]
+    return vm
+
+
+def test_T32_storage_ref_signed_https_passthrough():
+    vm = _vm_with_photos()
+    sb = _SignSB(docs=_own_docs())
+    with _Patch(sb=sb, guard=lambda s, i, c: None, composer=lambda iid, supabase=None: vm):
+        result = _run(POS_INSP)
+    assert result is vm
+    rows = result["fields"]["inspection_results"]
+    assert rows[0]["photo_url"] == f"https://signed.example/{OWN_PATH_A}?token=ephemeral"
+    assert rows[0]["photo_urls"][0] == f"https://signed.example/{OWN_PATH_B}?token=ephemeral"
+    assert rows[0]["photo_urls"][1] == "https://legacy.example/old.jpg"
+    assert rows[1]["photo_url"] == "https://cdn.example/keep.jpg"
+    assert rows[1]["photo_urls"] is None
+    assert rows[0]["raw_code"] == "NORMAL"
+    paths = [c["path"] for c in sb.calls if "path" in c]
+    assert paths == [OWN_PATH_A, OWN_PATH_B]
+    doc_calls = [c for c in sb.table_calls if c["name"] == "documents"]
+    assert len(doc_calls) == 1
+
+
+def test_T33_sign_failure_does_not_fail_view():
+    vm = _vm_with_photos()
+    with _Patch(sb=_SignSB(fail=True, docs=_own_docs()), guard=lambda s, i, c: None, composer=lambda iid, supabase=None: vm):
+        result = _run(POS_INSP)
+    assert result["fields"]["inspection_results"][0]["photo_url"].startswith("storage://")
+
+
+def test_T34_empty_results_no_storage_call():
+    sb = _SignSB(docs=_own_docs())
+    with _Patch(sb=sb, guard=lambda s, i, c: None, composer=lambda iid, supabase=None: _vm()):
+        _run(POS_INSP)
+    assert sb.calls == []
+    assert sb.table_calls == []
+
+
 # - self-runner -
 if __name__ == "__main__":
     g = dict(globals())

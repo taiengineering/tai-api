@@ -180,6 +180,77 @@ def _ensure_ws_own(sb, work_schedule_id, current):
     _ensure_own_company(r.data[0].get("company_id"), current, sb, "점검 일정을 찾을 수 없습니다.")
 
 
+def attach_schedule_inspection_ids(sb, items, factory_id):
+    """페이지의 work_schedule 행에 inspection_id 를 1회 batch 로 부착 (additive).
+
+    0건 → null · 1건 → exact id · ≥2 → 409 INSPECTION_CARDINALITY_VIOLATION.
+    N+1 금지. 기존 필드 삭제/변경 없음.
+    """
+    for row in items:
+        row["inspection_id"] = None
+    ids = [row.get("id") for row in items if row.get("id") is not None]
+    if not ids:
+        return
+    res = (
+        sb.table("safety_inspections")
+        .select("id,assignment_id")
+        .in_("assignment_id", ids)
+        .eq("factory_id", factory_id)
+        .execute()
+    )
+    grouped = {}
+    for rec in (res.data or []):
+        aid = rec.get("assignment_id")
+        grouped.setdefault(aid, []).append(rec.get("id"))
+    for row in items:
+        found = grouped.get(row.get("id"), [])
+        if len(found) >= 2:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "INSPECTION_CARDINALITY_VIOLATION",
+                    "message": "점검 기록이 중복되었습니다.",
+                },
+            )
+        row["inspection_id"] = found[0] if len(found) == 1 else None
+
+
+def resolve_inspection_owner_scope(sb, inspection_id):
+    """inspection → assignment(work_schedule) → 소유 company_id/factory_id (단일 사실원).
+
+    caller ownership 검증은 하지 않는다. _ensure_inspection_own 통과 후 사용.
+    document.company_id 등 저장 스코프는 current.company_id 가 아니라 이 값을 쓴다
+    (global/admin 이 타사 inspection 을 다뤄도 소유 company 를 유지).
+    """
+    insp = (
+        sb.table("safety_inspections")
+        .select("id, assignment_id, factory_id")
+        .eq("id", inspection_id)
+        .limit(1)
+        .execute()
+    )
+    if not insp.data:
+        raise HTTPException(status_code=404, detail="점검 레코드를 찾을 수 없습니다.")
+    assignment_id = insp.data[0].get("assignment_id")
+    insp_factory_id = insp.data[0].get("factory_id")
+    if not assignment_id:
+        raise HTTPException(status_code=404, detail="점검 레코드를 찾을 수 없습니다.")
+    ws = (
+        sb.table("work_schedules")
+        .select("id, company_id, factory_id")
+        .eq("id", assignment_id)
+        .limit(1)
+        .execute()
+    )
+    if not ws.data or not ws.data[0].get("company_id"):
+        raise HTTPException(status_code=404, detail="점검 레코드를 찾을 수 없습니다.")
+    return {
+        "company_id": ws.data[0].get("company_id"),
+        "factory_id": ws.data[0].get("factory_id") or insp_factory_id,
+        "assignment_id": assignment_id,
+    }
+
+
 def _ensure_inspection_own(sb, inspection_id, current):
     """safety_inspection → assignment(work_schedule) → company 경유 소유확인."""
     insp = sb.table("safety_inspections").select("id, assignment_id").eq("id", inspection_id).limit(1).execute()
@@ -386,11 +457,14 @@ async def list_schedules(
             row["cycle_unit"]  = iset.get("cycle_unit", "")
             row["cycle_value"] = iset.get("cycle_value", "")
             items.append(row)
+        attach_schedule_inspection_ids(supabase, items, factory_id)
         total = res.count or 0
         return {"status": "success", "data": {
             "items": items, "total": total, "page": page, "page_size": page_size,
             "total_pages": (total + page_size - 1) // page_size if total else 0,
         }}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

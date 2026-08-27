@@ -6,6 +6,7 @@ ROUTERS = [
     {"module": "routers.inspection_checklist"},
     {"module": "routers.inspection_view"},
     {"module": "routers.inspection_record_commands"},
+    {"module": "routers.inspection_record_read"},
     {"module": "routers.inspection_setup"},
     {"module": "routers.work_schedules"},
     {"module": "routers.schedule_engine"},
