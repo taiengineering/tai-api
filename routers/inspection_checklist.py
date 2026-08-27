@@ -41,6 +41,10 @@ from services.inspection_record_writer_bridge import (
     complete_inspection_status,
     InspectionStatusWriteError,
 )
+from services.inspection_record_start import (
+    start_safe_inspection,
+    SafeStartError,
+)
 
 router = APIRouter(prefix="/inspection", tags=["점검리스트"])
 
@@ -397,27 +401,45 @@ async def start_inspection(work_schedule_id: str, body: dict = None, current: di
         started_at     = body.get("started_at", date.today().isoformat())
 
         # WP-04D: parent factory companion PRE-READ (side-effect 전 fail-closed)
-        _ws = supabase.table("work_schedules").select("factory_id").eq("id", work_schedule_id).limit(1).execute()
-        if not _ws.data:
+        # REV-1B: schema 는 factory 간 동일 id 를 허용하므로 id 단독으로 임의 factory 를
+        # 고르지 않는다. 0→404, >1→409(WORK_SCHEDULE_ID_AMBIGUOUS), 1→그 factory 사용.
+        _ws = supabase.table("work_schedules").select("factory_id").eq("id", work_schedule_id).execute()
+        _ws_rows = _ws.data or []
+        if not _ws_rows:
             raise HTTPException(status_code=404, detail="점검 일정을 찾을 수 없습니다.")
-        _parent_factory_id = _ws.data[0].get("factory_id")
+        if len(_ws_rows) > 1:
+            raise HTTPException(status_code=409,
+                                detail={"code": "WORK_SCHEDULE_ID_AMBIGUOUS",
+                                        "message": "동일 id 의 일정이 여러 factory 에 존재합니다."})
+        _parent_factory_id = _ws_rows[0].get("factory_id")
         if not _parent_factory_id:
             raise HTTPException(status_code=409, detail="일정의 factory_id를 확인할 수 없습니다.")
 
-        ws_res = supabase.table("work_schedules").update({
-            "status_code": "in_progress", "inspector_name": inspector_name,
-        }).eq("id", work_schedule_id).execute()
-        if not ws_res.data:
-            raise HTTPException(status_code=404, detail="점검 일정을 찾을 수 없습니다.")
-        insp_res = supabase.table("safety_inspections").insert({
-            "assignment_id": work_schedule_id, "inspection_date": started_at, "status_code": "in_progress",
-            "factory_id": _parent_factory_id,   # WP-04D parent companion
-        }).execute()
-        if not insp_res.data:
-            raise HTTPException(status_code=500, detail="점검 레코드 생성 실패")
+        # KNOT-3C1: 직접 work_schedules UPDATE + safety_inspections INSERT 제거.
+        # 하나의 원자적 RPC(fn_start_safe_inspection_record)로 schedule lock →
+        # cardinality 확인 → in_progress → base IN_PROGRESS 를 한 트랜잭션으로 수행.
+        # 동일 (schedule, factory) 재호출은 replay(두 번째 생성 0). Worker one-shot 과
+        # 같은 parent lock 규율로 동시성 직렬화.
+        try:
+            _result = start_safe_inspection(
+                supabase,
+                schedule_id=work_schedule_id,
+                factory_id=str(_parent_factory_id),
+                started_at=started_at,
+                inspector_name=inspector_name,
+            )
+        except SafeStartError as e:
+            if e.is_not_found:
+                raise HTTPException(status_code=404, detail="점검 일정을 찾을 수 없습니다.")
+            if e.is_cardinality:
+                raise HTTPException(status_code=409,
+                                    detail={"code": e.code, "message": "점검 레코드가 이미 여러 건입니다."})
+            raise HTTPException(status_code=500, detail={"error": e.code})
+        snap = _result.get("data") or {}
         return {"status": "success", "message": "점검이 시작됐습니다.",
-                "data": {"work_schedule_id": work_schedule_id, "inspection_id": insp_res.data[0]["id"],
-                         "inspector_name": inspector_name, "started_at": started_at}}
+                "data": {"work_schedule_id": work_schedule_id, "inspection_id": snap.get("inspection_id"),
+                         "inspector_name": snap.get("inspector_name", inspector_name),
+                         "started_at": snap.get("started_at", started_at)}}
     except HTTPException: raise
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 

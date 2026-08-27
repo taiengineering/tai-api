@@ -79,10 +79,10 @@ def _snap(overall, iid="INS-9", replayed=False):
 @pytest.fixture
 def wired(monkeypatch):
     """get_supabase / submit_worker_inspection / _iss 를 스텁으로 교체하고 포착 상태를 돌려준다."""
-    state = {"forbidden": [], "calls": [], "next": _snap("NORMAL"), "raise": None}
+    state = {"forbidden": [], "calls": [], "next": _snap("NORMAL"), "raise": None, "store": None}
 
     def fake_get_supabase():
-        return FakeSupabase(_store(), state["forbidden"])
+        return FakeSupabase(state["store"] or _store(), state["forbidden"])
 
     def fake_submit(sb, **kw):
         state["calls"].append(kw)
@@ -213,3 +213,47 @@ def test_recent_and_history_alias_unchanged(wired, monkeypatch):
     assert it["id"] == "R1" and it["status_code"] == "ISSUE"   # ABNORMAL→ISSUE alias
     hist = wc.get_check_history(phone="010-1234-5678", limit=50)
     assert hist["data"]["items"][0]["status_code"] == "ISSUE"
+
+
+# ── REV-2: Worker ingress pair-identity fail-closed (W-A..W-D) ──
+def _store_ws(rows):
+    return {
+        "users": {"01012345678": [{"id": "INSP-1", "name": "홍길동"}]},
+        "work_schedules": {"SCH-1": rows},
+    }
+
+
+def test_ambiguous_schedule_id_rows2_returns_409_no_service(wired):
+    # W-A: 동일 id 가 두 factory 에 → 409 AMBIGUOUS, 서비스 호출 0
+    wired["store"] = _store_ws([{"id": "SCH-1", "factory_id": "FCT-1"},
+                                {"id": "SCH-1", "factory_id": "FCT-2"}])
+    with pytest.raises(HTTPException) as ei:
+        wc.submit_check(_body([{"name": "소화기", "result": "ok"}]), current_user=None)
+    assert ei.value.status_code == 409
+    assert ei.value.detail == {"error": "WORK_SCHEDULE_ID_AMBIGUOUS"}
+    assert wired["calls"] == []
+
+
+def test_single_row_passes_that_rows_factory(wired):
+    # W-B: rows=1 → 그 row 의 factory_id 를 service 로 전달(임의/기본값 아님)
+    wired["store"] = _store_ws([{"id": "SCH-1", "factory_id": "FCT-ONLY"}])
+    wc.submit_check(_body([{"name": "소화기", "result": "ok"}]), current_user=None)
+    assert wired["calls"][0]["factory_id"] == "FCT-ONLY"
+
+
+def test_zero_rows_not_found_409_no_service(wired):
+    # W-C: rows=0 → 기존 not-found 409, 서비스 호출 0
+    wired["store"] = {"users": {"01012345678": [{"id": "INSP-1", "name": "홍길동"}]},
+                      "work_schedules": {}}
+    with pytest.raises(HTTPException) as ei:
+        wc.submit_check(_body([{"name": "소화기", "result": "ok"}]), current_user=None)
+    assert ei.value.status_code == 409
+    assert wired["calls"] == []
+
+
+def test_parent_lookup_no_limit1_static():
+    # W-D: worker start path 의 work_schedules parent 조회에 limit(1) 없음
+    import inspect as _inspect
+    src = _inspect.getsource(wc.submit_check)
+    assert '.select("id, factory_id").eq("id", schedule_ref).limit(1)' not in src
+    assert '.select("id, factory_id").eq("id", schedule_ref).execute()' in src
