@@ -329,6 +329,78 @@ def test_T31_inspection_inactive_409():
     _expect_http("INSPECTION_INACTIVE", 409)
 
 
+class _SignSB:
+    def __init__(self, *, fail=False):
+        self.fail = fail
+        self.calls = []
+        self.storage = self
+
+    def from_(self, bucket):
+        self.calls.append({"bucket": bucket})
+        return self
+
+    def create_signed_url(self, path, expires):
+        if self.fail:
+            raise RuntimeError("sign fail")
+        self.calls.append({"path": path, "expires": expires})
+        return {"signedURL": f"https://signed.example/{path}?token=ephemeral"}
+
+
+def _vm_with_photos():
+    vm = _vm()
+    vm["fields"]["inspection_results"] = [
+        {
+            "result_id": "r1",
+            "item_name": "소화기",
+            "raw_code": "NORMAL",
+            "photo_url": "storage://company-docs/co1/inspection/2026-08/a.jpg",
+            "photo_urls": [
+                "storage://company-docs/co1/inspection/2026-08/b.jpg",
+                "https://legacy.example/old.jpg",
+            ],
+        },
+        {
+            "result_id": "r2",
+            "item_name": "레거시",
+            "raw_code": "HOLD",
+            "photo_url": "https://cdn.example/keep.jpg",
+            "photo_urls": None,
+        },
+    ]
+    return vm
+
+
+def test_T32_storage_ref_signed_https_passthrough():
+    vm = _vm_with_photos()
+    sb = _SignSB()
+    with _Patch(sb=sb, guard=lambda s, i, c: None, composer=lambda iid, supabase=None: vm):
+        result = _run(POS_INSP)
+    assert result is vm
+    rows = result["fields"]["inspection_results"]
+    assert rows[0]["photo_url"] == "https://signed.example/co1/inspection/2026-08/a.jpg?token=ephemeral"
+    assert rows[0]["photo_urls"][0] == "https://signed.example/co1/inspection/2026-08/b.jpg?token=ephemeral"
+    assert rows[0]["photo_urls"][1] == "https://legacy.example/old.jpg"
+    assert rows[1]["photo_url"] == "https://cdn.example/keep.jpg"
+    assert rows[1]["photo_urls"] is None
+    assert rows[0]["raw_code"] == "NORMAL"
+    paths = [c["path"] for c in sb.calls if "path" in c]
+    assert paths == ["co1/inspection/2026-08/a.jpg", "co1/inspection/2026-08/b.jpg"]
+
+
+def test_T33_sign_failure_does_not_fail_view():
+    vm = _vm_with_photos()
+    with _Patch(sb=_SignSB(fail=True), guard=lambda s, i, c: None, composer=lambda iid, supabase=None: vm):
+        result = _run(POS_INSP)
+    assert result["fields"]["inspection_results"][0]["photo_url"].startswith("storage://")
+
+
+def test_T34_empty_results_no_storage_call():
+    sb = _SignSB()
+    with _Patch(sb=sb, guard=lambda s, i, c: None, composer=lambda iid, supabase=None: _vm()):
+        _run(POS_INSP)
+    assert sb.calls == []
+
+
 # - self-runner -
 if __name__ == "__main__":
     g = dict(globals())
