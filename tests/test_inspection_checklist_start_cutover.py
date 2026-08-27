@@ -18,9 +18,10 @@ from services.inspection_record_start import SafeStartError
 
 
 class _Q:
-    def __init__(self, tbl, forbidden):
+    def __init__(self, tbl, forbidden, ws_rows):
         self.tbl = tbl
         self.forbidden = forbidden
+        self.ws_rows = ws_rows
         self._f = {}
 
     def select(self, *a, **k):
@@ -47,25 +48,28 @@ class _Q:
         r = R()
         # start_inspection 의 parent factory PRE-READ 만 데이터가 필요하다.
         if self.tbl == "work_schedules":
-            r.data = [{"factory_id": "FCT-1"}]
+            r.data = list(self.ws_rows)
         else:
             r.data = []
         return r
 
 
 class FakeSupabase:
-    def __init__(self, forbidden):
+    def __init__(self, forbidden, ws_rows):
         self.forbidden = forbidden
+        self.ws_rows = ws_rows
 
     def table(self, name):
-        return _Q(name, self.forbidden)
+        return _Q(name, self.forbidden, self.ws_rows)
 
 
 @pytest.fixture
 def wired(monkeypatch):
-    state = {"forbidden": [], "calls": [], "next": None, "raise": None}
+    state = {"forbidden": [], "calls": [], "next": None, "raise": None,
+             "ws_rows": [{"factory_id": "FCT-1"}]}
 
-    monkeypatch.setattr(ic, "get_supabase", lambda: FakeSupabase(state["forbidden"]))
+    monkeypatch.setattr(ic, "get_supabase",
+                        lambda: FakeSupabase(state["forbidden"], state["ws_rows"]))
     # ownership 가드는 호출 여부만 확인(부작용 없음)
     state["own_called"] = []
     monkeypatch.setattr(ic, "_ensure_ws_own",
@@ -126,6 +130,29 @@ def test_replay_returns_existing_id_no_second_create(wired):
     assert len(wired["calls"]) == 1            # 서비스 1회, 두 번째 생성 경로 없음
 
 
+# REV-1A — replay response returns STORED facts, not the second request's echo
+def test_replay_response_uses_stored_facts_not_request(wired):
+    # service replays the first stored facts (홍길동 / 08:00)
+    wired["next"] = {"data": {"inspection_id": "INS-EXIST", "work_schedule_id": "WS-1",
+                              "factory_id": "FCT-1", "inspection_status": "IN_PROGRESS",
+                              "started_at": "2026-08-01T08:00:00", "inspector_name": "홍길동"},
+                     "replayed": True}
+    # but the second request carries different values (김철수 / 10:00)
+    r = _start({"inspector_name": "김철수", "started_at": "2026-08-01T10:00:00"})
+    assert r["data"]["inspector_name"] == "홍길동"            # stored, not request
+    assert r["data"]["started_at"] == "2026-08-01T08:00:00"   # stored, not request
+    assert [f for f in wired["forbidden"] if f[1] == "insert"] == []   # second create 0
+
+
+# REV-1B — ambiguous work_schedule id (schema permits duplicate id across factories) → 409
+def test_ambiguous_schedule_id_returns_409(wired):
+    wired["ws_rows"] = [{"factory_id": "FCT-1"}, {"factory_id": "FCT-2"}]
+    with pytest.raises(HTTPException) as ei:
+        _start()
+    assert ei.value.status_code == 409
+    assert wired["calls"] == []              # 모호하면 서비스 호출 자체가 없어야 함
+
+
 # T19 — WORK_SCHEDULE_NOT_FOUND → 404
 def test_not_found_maps_to_404(wired):
     wired["raise"] = SafeStartError("WORK_SCHEDULE_NOT_FOUND")
@@ -149,7 +176,7 @@ def test_ownership_guard_invoked(wired):
     assert wired["own_called"] == ["WS-1"]
 
 
-# T22 — existing response contract preserved
+# T22 — response contract preserved (values sourced from the snapshot)
 def test_response_contract_preserved(wired):
     wired["next"] = _snap(iid="INS-9")
     r = _start({"inspector_name": "홍길동", "started_at": "2026-08-27"})
