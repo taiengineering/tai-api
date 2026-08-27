@@ -74,7 +74,13 @@ class _Q:
 
     def execute(self):
         if self.name == "safety_inspections":
-            return type("Resp", (), {"data": [{"id": _IID, "factory_id": "f1"}]})()
+            return type("Resp", (), {"data": [{
+                "id": _IID, "assignment_id": "ws-1", "factory_id": "f1",
+            }]})()
+        if self.name == "work_schedules":
+            return type("Resp", (), {"data": [{
+                "id": "ws-1", "company_id": _CO, "factory_id": "f1",
+            }]})()
         return type("Resp", (), {"data": []})()
 
 
@@ -176,6 +182,9 @@ def test_allowed_mimes_private_store(photo_env, name, blob, mime):
     assert captured["factory_id"] == "f1"
     assert captured["uploaded_by"] == _UID
     assert captured["file_bytes"] == blob
+    # storage filename is MIME-canonical; original name is title only
+    assert captured["file_name"].startswith("inspection.")
+    assert captured["title"] == name
 
 
 def test_get_current_user_dependency_present():

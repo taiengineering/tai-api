@@ -215,6 +215,42 @@ def attach_schedule_inspection_ids(sb, items, factory_id):
         row["inspection_id"] = found[0] if len(found) == 1 else None
 
 
+def resolve_inspection_owner_scope(sb, inspection_id):
+    """inspection → assignment(work_schedule) → 소유 company_id/factory_id (단일 사실원).
+
+    caller ownership 검증은 하지 않는다. _ensure_inspection_own 통과 후 사용.
+    document.company_id 등 저장 스코프는 current.company_id 가 아니라 이 값을 쓴다
+    (global/admin 이 타사 inspection 을 다뤄도 소유 company 를 유지).
+    """
+    insp = (
+        sb.table("safety_inspections")
+        .select("id, assignment_id, factory_id")
+        .eq("id", inspection_id)
+        .limit(1)
+        .execute()
+    )
+    if not insp.data:
+        raise HTTPException(status_code=404, detail="점검 레코드를 찾을 수 없습니다.")
+    assignment_id = insp.data[0].get("assignment_id")
+    insp_factory_id = insp.data[0].get("factory_id")
+    if not assignment_id:
+        raise HTTPException(status_code=404, detail="점검 레코드를 찾을 수 없습니다.")
+    ws = (
+        sb.table("work_schedules")
+        .select("id, company_id, factory_id")
+        .eq("id", assignment_id)
+        .limit(1)
+        .execute()
+    )
+    if not ws.data or not ws.data[0].get("company_id"):
+        raise HTTPException(status_code=404, detail="점검 레코드를 찾을 수 없습니다.")
+    return {
+        "company_id": ws.data[0].get("company_id"),
+        "factory_id": ws.data[0].get("factory_id") or insp_factory_id,
+        "assignment_id": assignment_id,
+    }
+
+
 def _ensure_inspection_own(sb, inspection_id, current):
     """safety_inspection → assignment(work_schedule) → company 경유 소유확인."""
     insp = sb.table("safety_inspections").select("id, assignment_id").eq("id", inspection_id).limit(1).execute()
