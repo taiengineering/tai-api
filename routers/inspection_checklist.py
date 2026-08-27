@@ -401,10 +401,17 @@ async def start_inspection(work_schedule_id: str, body: dict = None, current: di
         started_at     = body.get("started_at", date.today().isoformat())
 
         # WP-04D: parent factory companion PRE-READ (side-effect 전 fail-closed)
-        _ws = supabase.table("work_schedules").select("factory_id").eq("id", work_schedule_id).limit(1).execute()
-        if not _ws.data:
+        # REV-1B: schema 는 factory 간 동일 id 를 허용하므로 id 단독으로 임의 factory 를
+        # 고르지 않는다. 0→404, >1→409(WORK_SCHEDULE_ID_AMBIGUOUS), 1→그 factory 사용.
+        _ws = supabase.table("work_schedules").select("factory_id").eq("id", work_schedule_id).execute()
+        _ws_rows = _ws.data or []
+        if not _ws_rows:
             raise HTTPException(status_code=404, detail="점검 일정을 찾을 수 없습니다.")
-        _parent_factory_id = _ws.data[0].get("factory_id")
+        if len(_ws_rows) > 1:
+            raise HTTPException(status_code=409,
+                                detail={"code": "WORK_SCHEDULE_ID_AMBIGUOUS",
+                                        "message": "동일 id 의 일정이 여러 factory 에 존재합니다."})
+        _parent_factory_id = _ws_rows[0].get("factory_id")
         if not _parent_factory_id:
             raise HTTPException(status_code=409, detail="일정의 factory_id를 확인할 수 없습니다.")
 
@@ -431,7 +438,8 @@ async def start_inspection(work_schedule_id: str, body: dict = None, current: di
         snap = _result.get("data") or {}
         return {"status": "success", "message": "점검이 시작됐습니다.",
                 "data": {"work_schedule_id": work_schedule_id, "inspection_id": snap.get("inspection_id"),
-                         "inspector_name": inspector_name, "started_at": started_at}}
+                         "inspector_name": snap.get("inspector_name", inspector_name),
+                         "started_at": snap.get("started_at", started_at)}}
     except HTTPException: raise
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
