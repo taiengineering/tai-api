@@ -475,7 +475,11 @@ async def record_inspection_results(inspection_id: str, body: dict, current: dic
         insp_res = supabase.table("safety_inspections").select("assignment_id").eq("id", inspection_id).limit(1).execute()
         if insp_res.data:
             ws_id = insp_res.data[0].get("assignment_id")
-            if ws_id and not any(r.get("result") in ("FAIL", "NA") for r in results):
+            _all_normal = all(
+                normalize_inspection_result_write(r.get("result", "NA")) == "NORMAL"
+                for r in results
+            )
+            if ws_id and _all_normal:
                 supabase.table("work_schedules").update({
                     "status_code": "completed", "completed_at": date.today().isoformat()
                 }).eq("id", ws_id).execute()
