@@ -12,7 +12,8 @@
 -- unconditionally for every row and every role (service_role/postgres included).
 -- There is no role check, no session GUC, no reason/maintenance flag, no WHEN
 -- clause. The triggers fire BEFORE UPDATE OR DELETE only (never INSERT, never
--- TRUNCATE).
+-- TRUNCATE), and are set ENABLE ALWAYS so they cannot be skipped via replication
+-- role.
 --
 -- This migration is deliberately narrow: it installs one trigger function and two
 -- row triggers. It does NOT touch the pair UNIQUE index, RLS, GRANTs, FKs, the
@@ -92,9 +93,17 @@ BEFORE UPDATE OR DELETE ON public.safety_inspections
 FOR EACH ROW
 EXECUTE FUNCTION public.fn_reject_inspection_base_mutation();
 
+-- ENABLE ALWAYS so the trigger fires for every session (including replication-role
+-- sessions); an ordinary trigger (tgenabled='O') would be skipped under 'replica'.
+ALTER TABLE public.safety_inspections
+    ENABLE ALWAYS TRIGGER trg_safety_inspections_immutable;
+
 CREATE TRIGGER trg_safety_inspection_results_immutable
 BEFORE UPDATE OR DELETE ON public.safety_inspection_results
 FOR EACH ROW
 EXECUTE FUNCTION public.fn_reject_inspection_base_mutation();
+
+ALTER TABLE public.safety_inspection_results
+    ENABLE ALWAYS TRIGGER trg_safety_inspection_results_immutable;
 
 COMMIT;
