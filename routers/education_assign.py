@@ -1,6 +1,8 @@
 """
-교육 발령·이수 관리 라우터 — v1.1.0
+교육 발령·이수 관리 라우터 — v1.2.0
 
+v1.2.0 (§82 Phase D): POST /education/assignments/expire → 410 CRON_DIRECT_ONLY.
+  만료 처리는 scheduler DIRECT(direct://education_assignment_expire) + shared core 만.
 v1.1.0 (§82 G-mtchixh7-ab95bd Phase A): 발령 관리 엔드포인트 endpoint-local AUTH
   + company_scope Layer2. GET /education/{edu_id} · company-settings 3핸들러 FROZEN.
   expire 는 services.education_assignment_svc core 로 이동(HTTP route 유지, AUTH 없음).
@@ -22,7 +24,7 @@ endpoints (prefix /education):
   GET    /education/assignments                      목록 조회 (effective_url 포함)
   PATCH  /education/assignment/{id}/complete         이수 완료
   POST   /education/assignment/{id}/certificate      이수증 URL 저장
-  POST   /education/assignments/expire               만료 처리 (크론용)
+  POST   /education/assignments/expire               만료 처리 (Phase D: HTTP 410, DIRECT 전용)
   GET    /education/{edu_id}                         교육 마스터 단건 (작업자앱 교육 화면, 결함 75)
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -39,11 +41,10 @@ from services.company_scope import (
     apply_scoped_filter,
     scoped_filter,
 )
-from services.education_assignment_svc import expire_overdue_education_assignments
 
 router = APIRouter(prefix="/education", tags=["education_assign"])
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 
 def _now_iso() -> str:
@@ -597,20 +598,10 @@ def save_certificate(
 
 @router.post("/assignments/expire")
 def expire_assignments():
-    """
-    due_date < 오늘 AND status_code = 'PENDING' → 'OVERDUE'
-    크론에서 daily 실행. Phase A: HTTP 유지(AUTH 없음). core 는 DIRECT 와 공유.
-    """
-    try:
-        data = expire_overdue_education_assignments(get_supabase())
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"만료 처리 실패: {e}")
-
-    return {
-        "status":  "success",
-        "message": f"{data['updated']}건 만료 처리됐습니다.",
-        "data":    data,
-    }
+    """RETIRED (§82 Phase D). 만료 처리는 scheduler DIRECT 핸들러
+    (direct://education_assignment_expire → services.education_assignment_svc)만 수행한다.
+    HTTP 진입은 410 으로 폐쇄. core 호출·DB UPDATE 없음."""
+    raise HTTPException(status_code=410, detail="CRON_DIRECT_ONLY")
 
 
 # ============================================================
