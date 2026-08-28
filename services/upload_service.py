@@ -33,6 +33,11 @@ def _validate_file(file: UploadFile, contents: bytes) -> str:
     return MIME_TO_EXT[mime]
 
 
+def validate_image_file(file: UploadFile, contents: bytes) -> str:
+    """Public wrapper for image magic/size validation. Returns canonical extension."""
+    return _validate_file(file, contents)
+
+
 def _detect_mime(data: bytes) -> str | None:
     """파일 magic bytes로 MIME 타입 감지."""
     if data[:3] == b"\xff\xd8\xff":
