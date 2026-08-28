@@ -46,15 +46,22 @@ class MemTable:
         self._op = None
         self._payload = None
         self._filters = {}
+        self._null_filters = {}
         self._on_conflict = None
         self._ignore_dup = None
+        self._select_args = ()
 
     def select(self, *a, **k):
         self._op = "select"
+        self._select_args = a
         return self
 
     def eq(self, k, v):
         self._filters[k] = v
+        return self
+
+    def is_(self, k, v):
+        self._null_filters[k] = v
         return self
 
     def limit(self, n):
@@ -83,19 +90,39 @@ class MemTable:
 
     def execute(self):
         rows = self.db.tables.setdefault(self.name, [])
+        if self._op == "update":
+            matched = []
+            for r in rows:
+                if not all(r.get(k) == v for k, v in self._filters.items()):
+                    continue
+                null_ok = True
+                for k, v in self._null_filters.items():
+                    if str(v).lower() == "null":
+                        if r.get(k) is not None:
+                            null_ok = False
+                            break
+                    elif r.get(k) != v:
+                        null_ok = False
+                        break
+                if not null_ok:
+                    continue
+                r.update(self._payload)
+                matched.append(deepcopy(r))
+            if matched:
+                self.db.log.append((self.name, self._op, deepcopy(self._payload), dict(self._filters)))
+            return _Resp(matched)
         self.db.log.append((self.name, self._op, deepcopy(self._payload), dict(self._filters)))
         if self._op == "select":
             out = rows
             for k, v in self._filters.items():
                 out = [r for r in out if r.get(k) == v]
-            return _Resp(deepcopy(out))
-        if self._op == "update":
-            matched = []
-            for r in rows:
-                if all(r.get(k) == v for k, v in self._filters.items()):
-                    r.update(self._payload)
-                    matched.append(deepcopy(r))
-            return _Resp(matched)
+            out = deepcopy(out)
+            cols = " ".join(str(x) for x in getattr(self, "_select_args", ()))
+            if getattr(self.db, "concurrent_preread_null", False) and \
+                    "completed_at" in cols and "status_code" in cols:
+                for row in out:
+                    row["completed_at"] = None
+            return _Resp(out)
         if self._op == "insert":
             payload = self._payload
             items = payload if isinstance(payload, list) else [payload]
@@ -135,6 +162,7 @@ class MemDB:
         self.log = []
         self.upsert_kwargs = []
         self.lock = threading.Lock()
+        self.concurrent_preread_null = False
 
     def table(self, name):
         return MemTable(self, name)
@@ -225,6 +253,9 @@ def test_r4_first_create_and_complete_response_shape():
             return self
 
         def eq(self, *a, **k):
+            return self
+
+        def is_(self, *a, **k):
             return self
 
         def update(self, p):

@@ -310,3 +310,81 @@ def test_c4_repeat_repair_physical_delta_0():
     assert len(_ws_updates(db, "completed_at")) == n_ca
     assert len(_next_rows(db)) == n_next
     assert db.tables["work_schedules"][0]["completed_at"] == D1
+
+
+# ── REV-1 concurrent first-completion CAS ─────────────────────────────────
+
+def test_r1_concurrent_d1_d2_single_winner():
+    db = _seed(MemDB())
+    db.concurrent_preread_null = True
+    spy = _Bridge()
+    out1 = _complete(db, spy, {"completed_at": D1})
+    out2 = _complete(db, spy, {"completed_at": D2, "summary": "loser-summary"})
+    winner = D1
+    assert len(_ws_updates(db, "completed_at")) == 1
+    assert db.tables["work_schedules"][0]["completed_at"] == winner
+    assert out1["data"]["completed_at"] == winner
+    assert out2["data"]["completed_at"] == winner
+    assert out1["data"].get("mode") is None
+    assert out2["data"]["mode"] == "REPLAY"
+
+
+def test_r2_loser_other_date_no_second_completed_at_write():
+    db = _seed(MemDB())
+    db.concurrent_preread_null = True
+    spy = _Bridge()
+    _complete(db, spy, {"completed_at": D1})
+    n = len(_ws_updates(db, "completed_at"))
+    out = _complete(db, spy, {"completed_at": D2, "summary": "loser-summary"})
+    assert len(_ws_updates(db, "completed_at")) == n == 1
+    assert db.tables["work_schedules"][0]["completed_at"] == D1
+    assert out["data"]["summary"] != "loser-summary"
+    assert out["data"]["warning"] == {"code": "COMPLETION_DATE_IGNORED"}
+
+
+def test_r3_rolling_next_schedule_exactly_one_winner_anchor():
+    db = _seed(MemDB())
+    db.concurrent_preread_null = True
+    spy = _Bridge()
+    _complete(db, spy, {"completed_at": D1})
+    _complete(db, spy, {"completed_at": D2})
+    nxt = _next_rows(db)
+    assert len(nxt) == 1
+    assert nxt[0]["planned_date"] == "2027-03-01"
+
+
+def test_r4_next_planned_date_is_winner_plus_cycle():
+    db = _seed(MemDB())
+    db.concurrent_preread_null = True
+    spy = _Bridge()
+    _complete(db, spy, {"completed_at": D1})
+    _complete(db, spy, {"completed_at": D2})
+    assert db.tables["inspection_sets"][0]["next_planned_date"] == "2027-03-01"
+
+
+def test_r5_status_change_dup_0_on_race_loser():
+    db = _seed(MemDB())
+    db.concurrent_preread_null = True
+    spy = _Bridge()
+    _complete(db, spy, {"completed_at": D1})
+    assert spy.calls[0]["changed"] is True
+    _complete(db, spy, {"completed_at": D2})
+    assert spy.calls[-1]["changed"] is False
+    assert spy.calls[-1]["noop"] is True
+
+
+def test_r6_race_loser_still_runs_rolling_and_journal_repair():
+    db = _seed(MemDB())
+    db.concurrent_preread_null = True
+    spy = _Bridge()
+    _complete(db, spy, {"completed_at": D1})
+    db.tables["work_schedules"][:] = [
+        r for r in db.tables["work_schedules"] if r.get("id") == "WS-1"
+    ]
+    spy.calls.clear()
+    spy._done.clear()
+    out = _complete(db, spy, {"completed_at": D2})
+    assert out["data"]["mode"] == "REPLAY"
+    assert len(spy.calls) == 1
+    assert spy.calls[0]["reason"] == "SAFE_COMPLETE"
+    assert len(_next_rows(db)) == 1
