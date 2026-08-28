@@ -346,6 +346,31 @@ def test_A9_assigned_by_is_token_user_id(client, fake):
     assert fake.inserts[-1]["row"]["assigned_by"] == USER
 
 
+def test_A10_all_mismatched_worker_403(fake, monkeypatch):
+    r = _assign(_app(ADMIN, fake, monkeypatch), factory_id=FAC_OTHER, worker_ids=[W_OWN])
+    assert r.status_code == 403
+    assert fake.inserts == []
+
+
+def test_A11_all_mismatched_user_403(fake, monkeypatch):
+    r = _assign(
+        _app(ADMIN, fake, monkeypatch),
+        factory_id=FAC_OTHER, worker_ids=[], user_ids=[USER],
+    )
+    assert r.status_code == 403
+    assert fake.inserts == []
+
+
+def test_A12_all_matching_other_factory_worker_ok(fake, monkeypatch):
+    r = _assign(_app(ADMIN, fake, monkeypatch), factory_id=FAC_OTHER, worker_ids=[W_OTHER])
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["created"] == 1
+    row = fake.inserts[-1]["row"]
+    assert row["worker_id"] == W_OTHER
+    assert row["factory_id"] == FAC_OTHER
+    assert row["assigned_by"] == ADMIN_ID
+
+
 # ── LIST ──────────────────────────────────────────────────────────────────
 
 def test_L1_list_no_token_401(fake, monkeypatch):
@@ -382,6 +407,31 @@ def test_L5_foreign_tenant_exposure_0(client):
         assert item["id"] != ASG_OTHER
 
 
+def test_L6_all_company_id_other_only(fake, monkeypatch):
+    r = _app(ADMIN, fake, monkeypatch).get(
+        "/education/assignments", params={"company_id": CO_OTHER}
+    )
+    assert r.status_code == 200, r.text
+    ids = {i["id"] for i in r.json()["data"]["items"]}
+    assert ids == {ASG_OTHER}
+
+
+def test_L7_all_omit_company_id_all_rows(fake, monkeypatch):
+    r = _app(ADMIN, fake, monkeypatch).get("/education/assignments")
+    assert r.status_code == 200, r.text
+    ids = {i["id"] for i in r.json()["data"]["items"]}
+    assert ids == {ASG_OWN, ASG_OWN2, ASG_OTHER}
+
+
+def test_L8_non_all_foreign_company_id_token_scope(client):
+    r = client.get("/education/assignments", params={"company_id": CO_OTHER})
+    assert r.status_code == 200
+    ids = {i["id"] for i in r.json()["data"]["items"]}
+    assert ASG_OTHER not in ids
+    assert ASG_OWN in ids
+    assert ASG_OWN2 in ids
+
+
 # ── SUMMARY ───────────────────────────────────────────────────────────────
 
 def test_S1_summary_no_token_401(fake, monkeypatch):
@@ -412,6 +462,43 @@ def test_S4_foreign_factory_summary_exposure_0(client):
     assert r.status_code == 404
     r2 = client.get("/education/assignments/summary")
     assert r2.json()["data"]["total"] == 2
+
+
+def test_S5_all_company_id_other_total_1(fake, monkeypatch):
+    r = _app(ADMIN, fake, monkeypatch).get(
+        "/education/assignments/summary", params={"company_id": CO_OTHER}
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["total"] == 1
+    assert r.json()["data"]["pending"] == 1
+
+
+def test_S6_all_omit_company_id_total_3(fake, monkeypatch):
+    r = _app(ADMIN, fake, monkeypatch).get("/education/assignments/summary")
+    assert r.status_code == 200
+    assert r.json()["data"]["total"] == 3
+
+
+def test_S7_non_all_foreign_company_id_token_total_2(client):
+    r = client.get("/education/assignments/summary", params={"company_id": CO_OTHER})
+    assert r.status_code == 200
+    assert r.json()["data"]["total"] == 2
+
+
+def test_X1_all_factory_company_mismatch_empty(fake, monkeypatch):
+    r = _app(ADMIN, fake, monkeypatch).get(
+        "/education/assignments",
+        params={"factory_id": FAC_OTHER, "company_id": CO_OWN},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["items"] == []
+    assert r.json()["data"]["total"] == 0
+    s = _app(ADMIN, fake, monkeypatch).get(
+        "/education/assignments/summary",
+        params={"factory_id": FAC_OTHER, "company_id": CO_OWN},
+    )
+    assert s.status_code == 200
+    assert s.json()["data"]["total"] == 0
 
 
 # ── COMPLETE ──────────────────────────────────────────────────────────────

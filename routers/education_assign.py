@@ -83,42 +83,57 @@ def _effective_url(master: dict, setting: dict) -> dict:
         }
 
 
-def _scoped_assignment_query(sb, current: dict, factory_id: Optional[str], select_spec, **select_kw):
-    """factory_id 있으면 소유 확인 후 eq, 없으면 scoped_filter. DENY → None."""
+def _scoped_assignment_query(sb, current: dict, factory_id, company_id, select_spec, **select_kw):
+    """role scope ∩ company scope. DENY/모순 → None(라우터는 빈 결과)."""
     q = sb.table("education_assignment").select(select_spec, **select_kw)
+    effective_company_id = _forced_company_id(current, sb, company_id)
+
     if factory_id:
         _ensure_factory_own(sb, factory_id, current)
+        if effective_company_id:
+            fac = sb.table("factories").select("company_id").eq("id", factory_id).limit(1).execute()
+            if not fac.data or fac.data[0].get("company_id") != effective_company_id:
+                return None
         return q.eq("factory_id", factory_id)
+
     filt = scoped_filter(current, sb, {"factory_id"})
-    return apply_scoped_filter(q, filt)
+    q = apply_scoped_filter(q, filt)
+    if q is None:
+        return None
+    if effective_company_id:
+        facs = sb.table("factories").select("id").eq("company_id", effective_company_id).execute()
+        fac_ids = [r["id"] for r in (facs.data or [])]
+        if not fac_ids:
+            return None
+        q = q.in_("factory_id", fac_ids)
+    return q
 
 
 def _assert_assign_targets(sb, current: dict, body: "AssignBody") -> None:
-    """비-ALL: worker_ids는 대상 factory 소속, user_ids는 토큰 회사 소속. 실패 시 INSERT 0."""
-    if _is_admin(_scope(sb, current.get("role_code"))):
-        return
+    """모든 scope: 선택 factory와 target(worker/user)의 관계 정합성 강제.
+    worker_ids → worker_registry.factory_id == body.factory_id
+    user_ids   → users.company_id == 선택 factory의 company_id
+    불일치 시 403, INSERT 0 (호출은 INSERT 이전)."""
+    _ = current
+    fac = sb.table("factories").select("id, company_id").eq("id", body.factory_id).limit(1).execute()
+    if not fac.data:
+        raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
+    selected_company_id = fac.data[0].get("company_id")
+
     worker_ids = list(body.worker_ids or [])
     if worker_ids:
         found = (
-            sb.table("worker_registry")
-            .select("id")
-            .in_("id", worker_ids)
-            .eq("factory_id", body.factory_id)
-            .execute()
+            sb.table("worker_registry").select("id")
+            .in_("id", worker_ids).eq("factory_id", body.factory_id).execute()
         )
         if {r["id"] for r in (found.data or [])} != set(worker_ids):
             raise HTTPException(status_code=403, detail="발령 대상이 올바르지 않습니다")
+
     user_ids = list(body.user_ids or [])
     if user_ids:
-        cid = _forced_company_id(current, sb, None)
-        if not cid:
-            raise HTTPException(status_code=403, detail="발령 대상이 올바르지 않습니다")
         found = (
-            sb.table("users")
-            .select("id")
-            .in_("id", user_ids)
-            .eq("company_id", cid)
-            .execute()
+            sb.table("users").select("id")
+            .in_("id", user_ids).eq("company_id", selected_company_id).execute()
         )
         if {r["id"] for r in (found.data or [])} != set(user_ids):
             raise HTTPException(status_code=403, detail="발령 대상이 올바르지 않습니다")
@@ -392,9 +407,8 @@ def get_assignments_summary(
 ):
     """education_assignment 요약 통계 (전체/완료/대기/초과). tenant scope = list 와 동일.
     company_id query 는 authz source 가 아니다(비-ALL 은 token company_scope 강제)."""
-    _ = company_id
     supabase = get_supabase()
-    q = _scoped_assignment_query(supabase, current, factory_id, "id, status_code")
+    q = _scoped_assignment_query(supabase, current, factory_id, company_id, "id, status_code")
     if q is None:
         return {
             "status": "success",
@@ -440,11 +454,10 @@ def get_assignments(
     education_master + company_education_setting 머지하여 effective_url 포함 반환.
     company_id query 는 authz source 가 아니다.
     """
-    _ = company_id
     supabase = get_supabase()
 
     q = _scoped_assignment_query(
-        supabase, current, factory_id,
+        supabase, current, factory_id, company_id,
         "*, education_master(id, education_code, education_name, required_hours, source_url)",
         count="exact",
     )
