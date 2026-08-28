@@ -644,6 +644,68 @@ def test_D7_direct_mode_no_http(monkeypatch, fake):
     assert "http" not in inspect.getsource(sch._execute_direct).lower() or True
 
 
+def test_D8_http_expire_410_cron_direct_only(fake, monkeypatch):
+    r = _app(False, fake, monkeypatch).post("/education/assignments/expire")
+    assert r.status_code == 410
+    assert r.json()["detail"] == "CRON_DIRECT_ONLY"
+
+
+def test_D9_http_expire_does_not_call_core(fake, monkeypatch):
+    called = []
+
+    def spy(sb):
+        called.append(sb)
+        return {"updated": 99, "date": "x"}
+
+    monkeypatch.setattr(
+        "services.education_assignment_svc.expire_overdue_education_assignments", spy
+    )
+    r = _app(CALLER, fake, monkeypatch).post("/education/assignments/expire")
+    assert r.status_code == 410
+    assert called == []
+
+
+def test_D10_http_expire_no_db_update(fake, monkeypatch):
+    before = [dict(r) for r in fake.tables["education_assignment"]]
+    r = _app(CALLER, fake, monkeypatch).post("/education/assignments/expire")
+    assert r.status_code == 410
+    assert fake.updates == []
+    assert fake.tables["education_assignment"] == before
+
+
+def test_D11_direct_path_still_calls_shared_core(monkeypatch, fake):
+    sch._register_direct_handlers()
+    src = inspect.getsource(sch.DIRECT_HANDLERS["direct://education_assignment_expire"])
+    assert "expire_overdue_education_assignments" in src
+    called = []
+
+    def _core(sb):
+        called.append(sb)
+        return {"updated": 0, "date": "2026-01-01"}
+
+    monkeypatch.setattr(
+        "services.education_assignment_svc.expire_overdue_education_assignments", _core
+    )
+    monkeypatch.setattr("db.supabase_client.get_supabase", lambda: fake)
+    out = sch._execute_direct("direct://education_assignment_expire", {})
+    assert called == [fake]
+    assert out["updated"] == 0
+
+
+def test_D12_direct_core_regression():
+    sch._register_direct_handlers()
+    assert "direct://education_assignment_expire" in sch.DIRECT_HANDLERS
+    fake = FakeSB(_expire_seed())
+    out = expire_overdue_education_assignments(fake)
+    assert out["updated"] == 1
+    row = next(r for r in fake.tables["education_assignment"] if r["id"] == "e-overdue")
+    assert row["status_code"] == "OVERDUE"
+    future = next(r for r in fake.tables["education_assignment"] if r["id"] == "e-future")
+    assert future["status_code"] == "PENDING"
+    done = next(r for r in fake.tables["education_assignment"] if r["id"] == "e-done")
+    assert done["status_code"] == "COMPLETED"
+
+
 # ── FROZEN ────────────────────────────────────────────────────────────────
 
 def test_F1_worker_education_get_unauthenticated():
