@@ -1,5 +1,8 @@
-"""작업자 사진 업로드 / 배정업무 / 교육이수 API — v1.3.0
+"""작업자 사진 업로드 / 배정업무 / 교육이수 API — v1.3.1
 
+v1.3.1 (§81 REV-1 photo persistence): PHOTO_CONTEXTS={inspection,report}.
+  top-level url = storage:// stable ref (PWA photo_urls 정본). signed preview 는
+  data.preview_url, 실패해도 업로드 success. education memo 도 동일 prefix.
 v1.3.0 (Goal G-mtce7l8v-ab95bd, §81 WorkerAssets Authorization Boundary):
   POST /uploads/inspection-photo · GET /work-assignments · POST /education/worker-complete
   인증 강제(get_current_user). 사진 소유권/magic/stable-ref/signed preview.
@@ -41,7 +44,7 @@ log = logging.getLogger(__name__)
 router = APIRouter(tags=["WorkerAssets"])
 
 PHOTO_BUCKET = "company-docs"
-PHOTO_CONTEXTS = frozenset({"inspect", "construction_inspect", "report"})
+PHOTO_CONTEXTS = frozenset({"inspection", "report"})
 SIGNED_URL_EXPIRES = 3600
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _EXT_TO_MIME = {ext: mime for mime, ext in MIME_TO_EXT.items()}
@@ -89,7 +92,7 @@ def _resolve_worker(phone: str):
 
 
 def _stable_ref(storage_path: str) -> str:
-    return f"{PHOTO_BUCKET}/{storage_path}"
+    return f"storage://{PHOTO_BUCKET}/{storage_path}"
 
 
 def _signed_preview_url(storage, storage_path: str) -> str:
@@ -235,16 +238,22 @@ async def upload_inspection_photo(
     except Exception as e:
         log.error(f"[UploadPhoto] attachments 저장 실패 ref={stable}: {e}")
         raise HTTPException(status_code=500, detail="사진 업로드에 실패했습니다")
+    preview = None
     try:
-        preview = _signed_preview_url(supabase.storage, storage_path)
+        preview = _signed_preview_url(supabase.storage, storage_path) or None
     except Exception as e:
-        log.error(f"[UploadPhoto] signed URL 실패 path={storage_path}: {e}")
-        raise HTTPException(status_code=500, detail="사진 업로드에 실패했습니다")
+        log.warning(f"[UploadPhoto] signed URL 실패 path={storage_path}: {e}")
+        preview = None
     log.info(f"[UploadPhoto] 저장 context={context} size={len(contents)}")
     return {
         "status": "success",
-        "url": preview,
-        "data": {"url": preview, "file_name": file_name, "size": len(contents)},
+        "url": stable,
+        "data": {
+            "url": stable,
+            "preview_url": preview,
+            "file_name": file_name,
+            "size": len(contents),
+        },
     }
 
 

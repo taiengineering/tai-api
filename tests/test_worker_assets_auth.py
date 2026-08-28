@@ -148,6 +148,8 @@ class _Bucket:
         return True
 
     def create_signed_url(self, path, expires_in):
+        if self.sb.fail_sign:
+            raise RuntimeError("sign fail")
         url = "https://signed.example/%s?exp=%s" % (path, expires_in)
         self.sb.signed.append({"path": path, "expires": expires_in, "url": url})
         return {"signedURL": url, "signedUrl": url}
@@ -157,11 +159,12 @@ class _Bucket:
 
 
 class FakeSB:
-    def __init__(self, tables=None):
+    def __init__(self, tables=None, fail_sign=False):
         self.tables = {k: [dict(r) for r in v] for k, v in (tables or {}).items()}
         self.inserts = []
         self.uploads = []
         self.signed = []
+        self.fail_sign = fail_sign
         self.storage = self
 
     def table(self, name):
@@ -245,7 +248,7 @@ def client(fake, monkeypatch):
     return _app(CALLER, fake, monkeypatch)
 
 
-def _photo(client, *, context="inspect", inspection_id=INSP_OWN, filename="photo.png",
+def _photo(client, *, context="inspection", inspection_id=INSP_OWN, filename="photo.png",
            content=PNG, content_type="image/png", extra=None):
     data = {"context": context}
     if inspection_id is not None:
@@ -282,10 +285,10 @@ def test_P2_own_inspection_success(client, fake):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "success"
-    assert body["url"].startswith("https://signed.example/worker-photos/inspect/")
+    assert body["url"].startswith("storage://company-docs/worker-photos/inspection/")
     assert fake.uploads and fake.uploads[0]["bucket"] == "company-docs"
     path = fake.uploads[0]["path"]
-    assert path.startswith("worker-photos/inspect/")
+    assert path.startswith("worker-photos/inspection/")
     assert path.endswith(".png")
 
 
@@ -342,20 +345,23 @@ def test_P10_attachments_file_url_stable_ref(client, fake):
     assert r.status_code == 200
     att = [i["row"] for i in fake.inserts if i["table"] == "attachments"][-1]
     path = fake.uploads[0]["path"]
-    assert att["file_url"] == "company-docs/%s" % path
+    assert att["file_url"] == "storage://company-docs/%s" % path
     assert "signed" not in att["file_url"]
     assert "http" not in att["file_url"]
 
 
-def test_P11_response_url_is_signed_not_db_canonical(client, fake):
+def test_P11_response_url_is_stable_preview_is_signed(client, fake):
     r = _photo(client)
     assert r.status_code == 200
-    preview = r.json()["url"]
+    body = r.json()
     att = [i["row"] for i in fake.inserts if i["table"] == "attachments"][-1]
+    stable = body["url"]
+    preview = body["data"]["preview_url"]
+    assert stable == att["file_url"]
+    assert stable.startswith("storage://company-docs/worker-photos/")
+    assert body["data"]["url"] == stable
     assert preview.startswith("https://signed.example/")
-    assert preview != att["file_url"]
-    assert att["file_url"].startswith("company-docs/worker-photos/")
-    assert r.json()["data"]["url"] == preview
+    assert preview != stable
 
 
 # ── WORK ASSIGNMENTS ──────────────────────────────────────────────────────
@@ -540,7 +546,7 @@ def test_E16_valid_png_signature_ok(client, fake):
     assert len(ups) == 1
     assert ups[0]["path"].endswith(".png")
     hist = [i["row"] for i in fake.inserts if i["table"] == "education_history"][-1]
-    assert hist["memo"].startswith("작업자 확인 서명: company-docs/signatures/education/")
+    assert hist["memo"].startswith("작업자 확인 서명: storage://company-docs/signatures/education/")
     assert "signed" not in hist["memo"]
     assert "http" not in hist["memo"]
 
@@ -563,6 +569,103 @@ def test_E19_oversize_signature_413(client, fake):
     r = _edu(client, signature_data=_png_data_url(raw))
     assert r.status_code == 413
     assert fake.inserts == []
+
+
+# ── REV-1 PHOTO PERSISTENCE CONTRACT ──────────────────────────────────────
+
+def test_rev1_R1_context_inspection_accepted(client, fake):
+    r = _photo(client, context="inspection", inspection_id=None)
+    assert r.status_code == 200, r.text
+    path = fake.uploads[0]["path"]
+    assert path.startswith("worker-photos/inspection/")
+
+
+def test_rev1_R2_context_report_accepted(client, fake):
+    r = _photo(client, context="report", inspection_id=None)
+    assert r.status_code == 200, r.text
+    path = fake.uploads[0]["path"]
+    assert path.startswith("worker-photos/report/")
+
+
+def test_rev1_R3_context_inspect_rejected(client, fake):
+    r = _photo(client, context="inspect")
+    assert r.status_code == 422
+    assert fake.uploads == []
+
+
+def test_rev1_R4_context_construction_inspect_rejected(client, fake):
+    r = _photo(client, context="construction_inspect")
+    assert r.status_code == 422
+    assert fake.uploads == []
+
+
+def test_rev1_R5_stable_ref_exact_storage_prefix(client, fake):
+    r = _photo(client)
+    assert r.status_code == 200
+    path = fake.uploads[0]["path"]
+    assert r.json()["url"] == "storage://company-docs/%s" % path
+
+
+def test_rev1_R6_attachments_file_url_is_stable_ref(client, fake):
+    r = _photo(client)
+    assert r.status_code == 200
+    att = [i["row"] for i in fake.inserts if i["table"] == "attachments"][-1]
+    path = fake.uploads[0]["path"]
+    assert att["file_url"] == "storage://company-docs/%s" % path
+
+
+def test_rev1_R7_top_level_url_is_stable_ref(client, fake):
+    r = _photo(client)
+    assert r.status_code == 200
+    assert r.json()["url"].startswith("storage://company-docs/")
+
+
+def test_rev1_R8_data_url_is_stable_ref(client, fake):
+    r = _photo(client)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["data"]["url"] == body["url"]
+    assert body["data"]["url"].startswith("storage://company-docs/")
+
+
+def test_rev1_R9_data_preview_url_is_signed(client):
+    r = _photo(client)
+    assert r.status_code == 200
+    preview = r.json()["data"]["preview_url"]
+    assert preview.startswith("https://signed.example/")
+
+
+def test_rev1_R10_signed_preview_failure_is_nonfatal(fake, monkeypatch):
+    fake.fail_sign = True
+    client = _app(CALLER, fake, monkeypatch)
+    r = _photo(client)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    path = fake.uploads[0]["path"]
+    stable = "storage://company-docs/%s" % path
+    assert body["url"] == stable
+    assert body["data"]["url"] == stable
+    assert body["data"]["preview_url"] in (None, "")
+    att = [i["row"] for i in fake.inserts if i["table"] == "attachments"][-1]
+    assert att["file_url"] == stable
+
+
+def test_rev1_R11_attachments_do_not_store_signed_url(client, fake):
+    r = _photo(client)
+    assert r.status_code == 200
+    att = [i["row"] for i in fake.inserts if i["table"] == "attachments"][-1]
+    assert "signed" not in att["file_url"]
+    assert "http" not in att["file_url"]
+    assert att["file_url"].startswith("storage://company-docs/")
+
+
+def test_rev1_R12_education_signature_memo_storage_ref(client, fake):
+    r = _edu(client, signature_data=_png_data_url())
+    assert r.status_code == 200, r.text
+    hist = [i["row"] for i in fake.inserts if i["table"] == "education_history"][-1]
+    assert hist["memo"].startswith("작업자 확인 서명: storage://company-docs/signatures/education/")
+    assert "signed" not in hist["memo"]
+    assert "http" not in hist["memo"]
 
 
 # ── REGRESSION: GET /work-assignments/{id}/items ──────────────────────────
@@ -598,7 +701,7 @@ def test_contract_photo_response_shape(client):
     r = _photo(client)
     body = r.json()
     assert set(body) >= {"status", "url", "data"}
-    assert set(body["data"]) >= {"url", "file_name", "size"}
+    assert set(body["data"]) >= {"url", "preview_url", "file_name", "size"}
 
 
 def test_contract_edu_response_shape(client):
