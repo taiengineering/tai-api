@@ -588,8 +588,8 @@ async def complete_inspection(work_schedule_id: str, body: dict = None, current:
     _ensure_ws_own(supabase, work_schedule_id, current)
     try:
         body = body or {}
-        summary      = body.get("summary", "")
-        completed_at = body.get("completed_at", date.today().isoformat())
+        summary = body.get("summary", "")
+        requested_completed_at = body.get("completed_at", date.today().isoformat())
 
         # KNOT-3A: schedule mutation 전에 대상 inspection cardinality 확정 (fail-closed).
         # assignment_id 당 inspection 은 0/1 만 허용. 2건 이상이면 각각 별도 전표화 시
@@ -606,43 +606,78 @@ async def complete_inspection(work_schedule_id: str, body: dict = None, current:
             )
         _target_inspection_id = _linked_rows[0]["id"] if _linked_rows else None
 
-        # 완료 상태로 업데이트 (COMPLETED 리코드는 이후 건드리지 않음)
-        ws_res = supabase.table("work_schedules").update({
-            "status_code": "completed", "completed_at": completed_at, "summary": summary,
-        }).eq("id", work_schedule_id).execute()
-        if not ws_res.data:
+        # HARDENING-01: 기존 completed_at 을 읽은 뒤 앵커 freeze. 재완료는 덮어쓰지 않는다.
+        # REV-1: 최초 완료 UPDATE 는 completed_at IS NULL CAS. 동시 요청은 winner 1건만 write.
+        _cur_res = supabase.table("work_schedules").select(
+            "completed_at, status_code, inspection_set_id, summary"
+        ).eq("id", work_schedule_id).limit(1).execute()
+        if not _cur_res.data:
             raise HTTPException(status_code=404, detail="점검 일정을 찾을 수 없습니다.")
+        _cur = _cur_res.data[0]
+        _existing_completed = _cur.get("completed_at")
+        inspection_set_id = _cur.get("inspection_set_id")
+        persisted_summary = _cur.get("summary")
 
-        ws                = ws_res.data[0]
-        inspection_set_id = ws.get("inspection_set_id")
-        completed_date    = date.fromisoformat(str(completed_at))
+        if _existing_completed:
+            canonical_anchor = _existing_completed
+            replay = True
+        else:
+            ws_res = supabase.table("work_schedules").update({
+                "status_code": "completed",
+                "completed_at": requested_completed_at,
+                "summary": summary,
+            }).eq("id", work_schedule_id).is_("completed_at", "null").execute()
+            if ws_res.data:
+                canonical_anchor = requested_completed_at
+                replay = False
+                persisted_summary = summary
+            else:
+                _re = supabase.table("work_schedules").select(
+                    "completed_at, inspection_set_id, summary"
+                ).eq("id", work_schedule_id).limit(1).execute()
+                _re_row = (_re.data or [None])[0] if _re.data else None
+                if not _re_row or not _re_row.get("completed_at"):
+                    raise HTTPException(
+                        status_code=409,
+                        detail={"code": "COMPLETION_RACE_UNRESOLVED"},
+                    )
+                canonical_anchor = _re_row.get("completed_at")
+                replay = True
+                inspection_set_id = inspection_set_id or _re_row.get("inspection_set_id")
+                persisted_summary = _re_row.get("summary")
+
+        completed_date = date.fromisoformat(str(canonical_anchor)[:10])
 
         next_schedule_created = False
-        next_planned_date     = None
+        next_planned_date = None
 
+        # repair: FIRST winner · race loser · 순차 replay 모두 canonical_anchor (early-return 금지)
         if inspection_set_id:
             _roll = ensure_next_rolling_schedule(supabase, work_schedule_id, completed_date)
             next_schedule_created = _roll.get("created", False)
-            next_planned_date     = _roll.get("next_planned_date")
+            next_planned_date = _roll.get("next_planned_date")
 
-        # KNOT-3A: 기존 bulk base UPDATE 대신, 연결된 inspection 1건에 한해
-        # STATUS_CHANGE 전표를 append 한다. 0건이면 schedule 완료/rolling 만 진행.
         if _target_inspection_id is not None:
             complete_inspection_status(
                 supabase, _target_inspection_id,
                 actor_id=current["id"], reason="SAFE_COMPLETE",
             )
 
+        data = {
+            "work_schedule_id": work_schedule_id,
+            "completed_at": canonical_anchor,
+            "summary": persisted_summary,
+            "next_schedule_created": next_schedule_created,
+            "next_planned_date": next_planned_date,
+        }
+        if replay:
+            data["mode"] = "REPLAY"
+            if str(requested_completed_at)[:10] != str(canonical_anchor)[:10]:
+                data["warning"] = {"code": "COMPLETION_DATE_IGNORED"}
         return {
-            "status":  "success",
+            "status": "success",
             "message": "점검이 완료 처리됐습니다.",
-            "data": {
-                "work_schedule_id":     work_schedule_id,
-                "completed_at":         completed_at,
-                "summary":              summary,
-                "next_schedule_created": next_schedule_created,
-                "next_planned_date":    next_planned_date,
-            }
+            "data": data,
         }
     except HTTPException: raise
     except InspectionStatusWriteError as e:

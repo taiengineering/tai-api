@@ -91,7 +91,7 @@ def _patch(fake):
 def test_recent_uses_effective_adapter_single_rpc():
     fake = FakeSB(USERS, _records())
     with _patch(fake):
-        out = W.get_recent_checks(phone="010-1234-5678", limit=5)
+        out = W.get_recent_checks(phone="010-1234-5678", limit=5, current={"id": "u-1"})
     assert out["status"] == "success"
     assert len(out["data"]["items"]) == 4
     # single adapter RPC, no per-row resolver -> N+1 = 0
@@ -102,7 +102,7 @@ def test_recent_uses_effective_adapter_single_rpc():
 def test_history_uses_effective_adapter_worker_id():
     fake = FakeSB(USERS, _records())
     with _patch(fake):
-        out = W.get_check_history(worker_id="u-1", limit=50)
+        out = W.get_check_history(worker_id="u-1", limit=50, current={"id": "u-1"})
     assert len(out["data"]["items"]) == 4
     assert fake.rpc_calls == [("fn_list_effective_inspection_records_by_inspector", {"p_inspector_id": "u-1", "p_limit": 50})]
     assert all(c[0] != "fn_resolve_inspection_record" for c in fake.rpc_calls)
@@ -111,7 +111,7 @@ def test_history_uses_effective_adapter_worker_id():
 def test_item_contract_keys_exact():
     fake = FakeSB(USERS, _records())
     with _patch(fake):
-        items = W.get_recent_checks(phone="01012345678")["data"]["items"]
+        items = W.get_recent_checks(phone="01012345678", current={"id": "u-1"})["data"]["items"]
     for it in items:
         assert set(it.keys()) == {"id", "inspection_date", "inspection_status", "result_summary", "status_code"}
 
@@ -119,7 +119,7 @@ def test_item_contract_keys_exact():
 def test_status_code_alias_mapping():
     fake = FakeSB(USERS, _records())
     with _patch(fake):
-        items = W.get_recent_checks(phone="01012345678")["data"]["items"]
+        items = W.get_recent_checks(phone="01012345678", current={"id": "u-1"})["data"]["items"]
     by_id = {it["id"]: it for it in items}
     assert by_id["i1"]["status_code"] == "COMPLETED"   # NORMAL -> COMPLETED
     assert by_id["i2"]["status_code"] == "ISSUE"        # ABNORMAL -> ISSUE
@@ -129,7 +129,7 @@ def test_status_code_alias_mapping():
 def test_null_summary_status_code_is_inspection_status():
     fake = FakeSB(USERS, _records())
     with _patch(fake):
-        items = W.get_recent_checks(phone="01012345678")["data"]["items"]
+        items = W.get_recent_checks(phone="01012345678", current={"id": "u-1"})["data"]["items"]
     by_id = {it["id"]: it for it in items}
     assert by_id["i4"]["result_summary"] is None
     assert by_id["i4"]["status_code"] == "IN_PROGRESS"  # summary None -> inspection_status
@@ -138,7 +138,7 @@ def test_null_summary_status_code_is_inspection_status():
 def test_result_summary_passthrough_and_id_is_inspection_id():
     fake = FakeSB(USERS, _records())
     with _patch(fake):
-        items = W.get_recent_checks(phone="01012345678")["data"]["items"]
+        items = W.get_recent_checks(phone="01012345678", current={"id": "u-1"})["data"]["items"]
     assert [it["id"] for it in items] == ["i1", "i2", "i3", "i4"]  # adapter order preserved
     by_id = {it["id"]: it for it in items}
     assert by_id["i1"]["result_summary"] == "NORMAL"
@@ -146,11 +146,16 @@ def test_result_summary_passthrough_and_id_is_inspection_id():
 
 
 def test_inspector_not_found_empty_no_rpc():
+    # HARDENING-01: 타인/미해소 phone 은 빈 목록이 아니라 403 (IDOR 차단).
     fake = FakeSB([], _records())  # no matching user
     with _patch(fake):
-        out = W.get_recent_checks(phone="01099999999")
-    assert out["data"]["items"] == []
-    assert fake.rpc_calls == []  # no adapter call when inspector unresolved
+        try:
+            W.get_recent_checks(phone="01099999999", current={"id": "u-1"})
+            raise AssertionError("expected 403 FORBIDDEN_IDENTITY")
+        except W.HTTPException as e:
+            assert e.status_code == 403
+            assert e.detail == {"error": "FORBIDDEN_IDENTITY"}
+    assert fake.rpc_calls == []  # identity 실패 시 adapter 호출 0
 
 
 def test_router_maps_adapter_output_1to1_no_filter():
@@ -160,7 +165,7 @@ def test_router_maps_adapter_output_1to1_no_filter():
     ]
     fake = FakeSB(USERS, recs)
     with _patch(fake):
-        items = W.get_recent_checks(phone="01012345678")["data"]["items"]
+        items = W.get_recent_checks(phone="01012345678", current={"id": "u-1"})["data"]["items"]
     assert len(items) == len(recs)  # 1:1, no router-side filtering
 
 
