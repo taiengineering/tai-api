@@ -1,11 +1,15 @@
-# routers/cron_manager.py — 크론 관리 API v2
+# routers/cron_manager.py — 크론 관리 API v3
+# v3 (§83 G-mtcrc6ot-ab95bd): /cron/* 전부 platform ALL(_require_admin) 전용.
+#   MANUAL RUN audit identity = current.email or current.id (client user_email 불신).
 # v2: reload시 scheduler.start() 포함, DIRECT handler 수동실행 지원
 import os, logging
 from datetime import datetime
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from db.database import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _require_admin
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/cron", tags=["크론 관리"])
@@ -36,8 +40,9 @@ class CronJobCreate(BaseModel):
 
 # ── 목록
 @router.get("/jobs")
-def list_jobs():
+def list_jobs(current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     jobs = sb.table("cron_job_master").select(
         "*, cron_schedule_config(last_run_at, next_run_at, last_status, is_enabled)"
     ).order("category").order("job_name").execute()
@@ -46,8 +51,9 @@ def list_jobs():
 
 # ── 단건 조회
 @router.get("/jobs/{job_code}")
-def get_job(job_code: str):
+def get_job(job_code: str, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     job = sb.table("cron_job_master").select("*").eq("job_code", job_code).single().execute()
     if not job.data:
         raise HTTPException(status_code=404, detail="크론 작업을 찾을 수 없습니다")
@@ -58,8 +64,9 @@ def get_job(job_code: str):
 
 # ── 신규 등록
 @router.post("/jobs")
-def create_job(body: CronJobCreate):
+def create_job(body: CronJobCreate, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     job = sb.table("cron_job_master").insert(body.dict()).execute()
     if not job.data:
         raise HTTPException(status_code=500, detail="등록 실패")
@@ -78,8 +85,9 @@ def create_job(body: CronJobCreate):
 
 # ── 수정
 @router.patch("/jobs/{job_code}")
-def update_job(job_code: str, body: CronJobUpdate):
+def update_job(job_code: str, body: CronJobUpdate, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     update_data = {k: v for k, v in body.dict().items() if v is not None}
     update_data["updated_at"] = datetime.now().isoformat()
     job = sb.table("cron_job_master") \
@@ -99,8 +107,9 @@ def update_job(job_code: str, body: CronJobUpdate):
 
 # ── 삭제
 @router.delete("/jobs/{job_code}")
-def delete_job(job_code: str):
+def delete_job(job_code: str, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     job = sb.table("cron_job_master").select("is_system").eq("job_code", job_code).single().execute()
     if not job.data:
         raise HTTPException(status_code=404, detail="없는 작업")
@@ -112,17 +121,19 @@ def delete_job(job_code: str):
 
 # ── 수동 실행 (HTTP + DIRECT 지원)
 @router.post("/jobs/{job_code}/run")
-def run_job_now(job_code: str, user_email: str = "admin"):
+def run_job_now(job_code: str, current: dict = Depends(get_current_user)):
     sb = get_supabase()
+    _require_admin(current, sb)
     job = sb.table("cron_job_master").select("*").eq("job_code", job_code).single().execute()
     if not job.data:
         raise HTTPException(status_code=404, detail="없는 작업")
     j = job.data
+    audit_user = current.get("email") or str(current["id"])
 
     log = sb.table("cron_job_log").insert({
         "job_code":          job_code,
         "triggered_by":      "MANUAL",
-        "triggered_by_user": user_email,
+        "triggered_by_user": audit_user,
         "status":            "RUNNING",
     }).execute()
     log_id  = log.data[0]["id"]
@@ -210,8 +221,9 @@ def run_job_now(job_code: str, user_email: str = "admin"):
 
 # ── 스케줄러 리로드 + 시작
 @router.post("/reload")
-def reload_scheduler():
+def reload_scheduler(current: dict = Depends(get_current_user)):
     """스케줄러 리로드 + 미실행시 시작."""
+    _require_admin(current, get_supabase())
     try:
         from scheduler import load_jobs_from_db, scheduler
         load_jobs_from_db()
@@ -226,11 +238,12 @@ def reload_scheduler():
 
 # ── 스케줄러 상태
 @router.get("/scheduler-status")
-def get_scheduler_status():
+def get_scheduler_status(current: dict = Depends(get_current_user)):
     """APScheduler 실행 상태 확인 (admin cron-list UI)."""
+    sb = get_supabase()
+    _require_admin(current, sb)
     try:
         from scheduler import scheduler
-        sb = get_supabase()
         active = sb.table("cron_job_master").select("id", count="exact").eq("is_active", True).execute()
         jobs = scheduler.get_jobs()
         return {
@@ -248,8 +261,10 @@ def get_scheduler_status():
 
 # ── 로그 조회
 @router.get("/logs")
-def get_logs(job_code: str = None, status: str = None, limit: int = 50):
+def get_logs(job_code: str = None, status: str = None, limit: int = 50,
+             current: dict = Depends(get_current_user)):
     sb  = get_supabase()
+    _require_admin(current, sb)
     q   = sb.table("cron_job_log").select("*").order("started_at", desc=True).limit(limit)
     if job_code:
         q = q.eq("job_code", job_code)
@@ -261,8 +276,9 @@ def get_logs(job_code: str = None, status: str = None, limit: int = 50):
 
 # ── 통계
 @router.get("/stats")
-def get_stats():
+def get_stats(current: dict = Depends(get_current_user)):
     sb     = get_supabase()
+    _require_admin(current, sb)
     today  = datetime.now().strftime("%Y-%m-%d")
     total  = sb.table("cron_job_master").select("id", count="exact").execute()
     active = sb.table("cron_job_master").select("id", count="exact").eq("is_active", True).execute()
