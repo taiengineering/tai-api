@@ -1,5 +1,9 @@
 """
-교육 발령·이수 관리 라우터 — v1.0.0
+교육 발령·이수 관리 라우터 — v1.1.0
+
+v1.1.0 (§82 G-mtchixh7-ab95bd Phase A): 발령 관리 엔드포인트 endpoint-local AUTH
+  + company_scope Layer2. GET /education/{edu_id} · company-settings 3핸들러 FROZEN.
+  expire 는 services.education_assignment_svc core 로 이동(HTTP route 유지, AUTH 없음).
 
 학습자/작업자 단위 교육 발령, 이수 완료, 이수증 업로드, 회사별 교육 링크 설정
 
@@ -21,15 +25,25 @@ endpoints (prefix /education):
   POST   /education/assignments/expire               만료 처리 (크론용)
   GET    /education/{edu_id}                         교육 마스터 단건 (작업자앱 교육 화면, 결함 75)
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import (
+    _ensure_factory_own,
+    _forced_company_id,
+    _is_admin,
+    _scope,
+    apply_scoped_filter,
+    scoped_filter,
+)
+from services.education_assignment_svc import expire_overdue_education_assignments
 
 router = APIRouter(prefix="/education", tags=["education_assign"])
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 
 def _now_iso() -> str:
@@ -67,6 +81,62 @@ def _effective_url(master: dict, setting: dict) -> dict:
             "custom_note":         "이수증만 업로드하세요.",
             "has_custom":          False,
         }
+
+
+def _scoped_assignment_query(sb, current: dict, factory_id, company_id, select_spec, **select_kw):
+    """role scope ∩ company scope. DENY/모순 → None(라우터는 빈 결과)."""
+    q = sb.table("education_assignment").select(select_spec, **select_kw)
+    effective_company_id = _forced_company_id(current, sb, company_id)
+
+    if factory_id:
+        _ensure_factory_own(sb, factory_id, current)
+        if effective_company_id:
+            fac = sb.table("factories").select("company_id").eq("id", factory_id).limit(1).execute()
+            if not fac.data or fac.data[0].get("company_id") != effective_company_id:
+                return None
+        return q.eq("factory_id", factory_id)
+
+    filt = scoped_filter(current, sb, {"factory_id"})
+    q = apply_scoped_filter(q, filt)
+    if q is None:
+        return None
+    if effective_company_id:
+        facs = sb.table("factories").select("id").eq("company_id", effective_company_id).execute()
+        fac_ids = [r["id"] for r in (facs.data or [])]
+        if not fac_ids:
+            return None
+        q = q.in_("factory_id", fac_ids)
+    return q
+
+
+def _assert_assign_targets(sb, current: dict, body: "AssignBody") -> None:
+    """모든 scope: 선택 factory와 target(worker/user)의 관계 정합성 강제.
+    worker_ids → worker_registry.factory_id == body.factory_id
+    user_ids   → users.company_id == 선택 factory의 company_id
+    불일치 시 403, INSERT 0 (호출은 INSERT 이전)."""
+    _ = current
+    fac = sb.table("factories").select("id, company_id").eq("id", body.factory_id).limit(1).execute()
+    if not fac.data:
+        raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
+    selected_company_id = fac.data[0].get("company_id")
+
+    worker_ids = list(body.worker_ids or [])
+    if worker_ids:
+        found = (
+            sb.table("worker_registry").select("id")
+            .in_("id", worker_ids).eq("factory_id", body.factory_id).execute()
+        )
+        if {r["id"] for r in (found.data or [])} != set(worker_ids):
+            raise HTTPException(status_code=403, detail="발령 대상이 올바르지 않습니다")
+
+    user_ids = list(body.user_ids or [])
+    if user_ids:
+        found = (
+            sb.table("users").select("id")
+            .in_("id", user_ids).eq("company_id", selected_company_id).execute()
+        )
+        if {r["id"] for r in (found.data or [])} != set(user_ids):
+            raise HTTPException(status_code=403, detail="발령 대상이 올바르지 않습니다")
 
 
 # ============================================================
@@ -108,8 +178,10 @@ class CertBody(BaseModel):
 @router.get("/master")
 def get_education_master(
     is_active: Optional[bool] = Query(None),
+    current: dict = Depends(get_current_user),
 ):
-    """education_master 목록 조회."""
+    """education_master 목록 조회. 글로벌 마스터 — company filter 없음."""
+    _ = current
     supabase = get_supabase()
     q = supabase.table("education_master").select("*")
     if is_active is not None:
@@ -244,25 +316,31 @@ def reset_company_setting(
 # ============================================================
 
 @router.post("/assign")
-def assign_education(body: AssignBody):
+def assign_education(body: AssignBody, current: dict = Depends(get_current_user)):
     """
     교육 발령 (1인 1행).
     worker_ids 또는 user_ids 배열에 있는 모든 대상에 education_assignment 생성.
+    비-ALL 은 factory 소유 + 대상 membership 전량 검증 후 INSERT. assigned_by 는 토큰 users.id.
     """
     supabase = get_supabase()
 
     if not body.worker_ids and not body.user_ids:
         raise HTTPException(status_code=422, detail="worker_ids 또는 user_ids 중 하나는 필수입니다.")
 
-    # education_master 존재 확인
+    _ensure_factory_own(supabase, body.factory_id, current)
+
+    # education_master 존재·활성 확인
     edu = supabase.table("education_master").select(
         "id, education_name"
-    ).eq("id", body.education_id).limit(1).execute()
+    ).eq("id", body.education_id).eq("is_active", True).limit(1).execute()
     if not edu.data:
         raise HTTPException(status_code=404, detail="교육 링스터를 찾을 수 없습니다.")
 
+    _assert_assign_targets(supabase, current, body)
+
     now    = _now_iso()
     rows   = []
+    assigned_by = current["id"]
 
     for wid in (body.worker_ids or []):
         rows.append({
@@ -273,6 +351,7 @@ def assign_education(body: AssignBody):
             "due_date":     body.due_date,
             "status_code":  "PENDING",
             "assigned_at":  now,
+            "assigned_by":  assigned_by,
             "note":         body.note,
             "created_at":   now,
             "updated_at":   now,
@@ -287,6 +366,7 @@ def assign_education(body: AssignBody):
             "due_date":     body.due_date,
             "status_code":  "PENDING",
             "assigned_at":  now,
+            "assigned_by":  assigned_by,
             "note":         body.note,
             "created_at":   now,
             "updated_at":   now,
@@ -323,14 +403,19 @@ def assign_education(body: AssignBody):
 def get_assignments_summary(
     factory_id:  Optional[str] = Query(None),
     company_id:  Optional[str] = Query(None),
+    current: dict = Depends(get_current_user),
 ):
-    """education_assignment 요약 통계 (전체/완료/대기/초과)."""
+    """education_assignment 요약 통계 (전체/완료/대기/초과). tenant scope = list 와 동일.
+    company_id query 는 authz source 가 아니다(비-ALL 은 token company_scope 강제)."""
     supabase = get_supabase()
-    q = supabase.table("education_assignment").select("id, status_code")
-    if factory_id: q = q.eq("factory_id", factory_id)
-    if company_id:
-        # factory_id를 통한 company 필터 없으므로 스킵 or factories JOIN 생략
-        pass
+    q = _scoped_assignment_query(supabase, current, factory_id, company_id, "id, status_code")
+    if q is None:
+        return {
+            "status": "success",
+            "data": {
+                "total": 0, "completed": 0, "pending": 0, "overdue": 0, "rate": 0,
+            },
+        }
     res   = q.execute()
     rows  = res.data or []
     total     = len(rows)
@@ -362,18 +447,27 @@ def get_assignments(
     status_code:  Optional[str]  = Query(None, description="PENDING | COMPLETED | OVERDUE"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
+    current: dict = Depends(get_current_user),
 ):
     """
     education_assignment 목록.
     education_master + company_education_setting 머지하여 effective_url 포함 반환.
+    company_id query 는 authz source 가 아니다.
     """
     supabase = get_supabase()
 
-    q = supabase.table("education_assignment").select(
+    q = _scoped_assignment_query(
+        supabase, current, factory_id, company_id,
         "*, education_master(id, education_code, education_name, required_hours, source_url)",
-        count="exact"
+        count="exact",
     )
-    if factory_id:   q = q.eq("factory_id",   factory_id)
+    if q is None:
+        return {
+            "status": "success",
+            "data": {
+                "items": [], "total": 0, "page": page, "size": size, "total_pages": 0,
+            },
+        }
     if education_id: q = q.eq("education_id",  education_id)
     if status_code:  q = q.eq("status_code",   status_code)
 
@@ -429,14 +523,19 @@ def get_assignments(
 # ============================================================
 
 @router.patch("/assignment/{assignment_id}/complete")
-def complete_assignment(assignment_id: str, body: CompleteBody):
-    """education_assignment 이수 완료 처리."""
+def complete_assignment(
+    assignment_id: str,
+    body: CompleteBody,
+    current: dict = Depends(get_current_user),
+):
+    """education_assignment 이수 완료 처리. factory 소유 확인 후만 UPDATE."""
     supabase = get_supabase()
-    chk = supabase.table("education_assignment").select("id, status_code").eq(
+    chk = supabase.table("education_assignment").select("id, factory_id, status_code").eq(
         "id", assignment_id
     ).limit(1).execute()
     if not chk.data:
         raise HTTPException(status_code=404, detail="발령 레코드를 찾을 수 없습니다.")
+    _ensure_factory_own(supabase, chk.data[0].get("factory_id"), current)
 
     now = _now_iso()
     update_data: dict = {
@@ -462,18 +561,23 @@ def complete_assignment(assignment_id: str, body: CompleteBody):
 # ============================================================
 
 @router.post("/assignment/{assignment_id}/certificate")
-def save_certificate(assignment_id: str, body: CertBody):
+def save_certificate(
+    assignment_id: str,
+    body: CertBody,
+    current: dict = Depends(get_current_user),
+):
     """
     이수증 URL 저장.
     파일 업로드는 프론트에서 Supabase Storage 직접 업로드 후
     URL을 이 API로 저장하는 방식을 사용.
     """
     supabase = get_supabase()
-    chk = supabase.table("education_assignment").select("id").eq(
+    chk = supabase.table("education_assignment").select("id, factory_id").eq(
         "id", assignment_id
     ).limit(1).execute()
     if not chk.data:
         raise HTTPException(status_code=404, detail="발령 레코드를 찾을 수 없습니다.")
+    _ensure_factory_own(supabase, chk.data[0].get("factory_id"), current)
 
     res = supabase.table("education_assignment").update({
         "certificate_url": body.certificate_url,
@@ -495,24 +599,17 @@ def save_certificate(assignment_id: str, body: CertBody):
 def expire_assignments():
     """
     due_date < 오늘 AND status_code = 'PENDING' → 'OVERDUE'
-    크론에서 daily 실행. (크론: cron_job_master에 POST /education/assignments/expire 등록)
+    크론에서 daily 실행. Phase A: HTTP 유지(AUTH 없음). core 는 DIRECT 와 공유.
     """
-    supabase = get_supabase()
-    today = date.today().isoformat()
-
     try:
-        res = supabase.table("education_assignment").update({
-            "status_code": "OVERDUE",
-            "updated_at":  _now_iso(),
-        }).eq("status_code", "PENDING").lt("due_date", today).execute()
-        updated = len(res.data or [])
+        data = expire_overdue_education_assignments(get_supabase())
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"만료 처리 실패: {e}")
 
     return {
         "status":  "success",
-        "message": f"{updated}건 만료 처리됐습니다.",
-        "data":    {"updated": updated, "date": today},
+        "message": f"{data['updated']}건 만료 처리됐습니다.",
+        "data":    data,
     }
 
 

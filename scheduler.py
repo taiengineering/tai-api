@@ -63,6 +63,10 @@ def _register_direct_handlers():
     def _run_control_bridge_evaluate(p):
         from watch_engine.control_bridge.bridge_evaluator import evaluate_bridge
         return evaluate_bridge(window_minutes=p.get("window_minutes", 5), include_mock=True)
+    def _run_education_assignment_expire(p):
+        from services.education_assignment_svc import expire_overdue_education_assignments
+        from db.supabase_client import get_supabase
+        return expire_overdue_education_assignments(get_supabase())
 
     DIRECT_HANDLERS = {
         "direct://integrity_evaluate": _run_integrity_evaluate,
@@ -79,6 +83,7 @@ def _register_direct_handlers():
         "direct://synthetic_runtime_tick": _run_synthetic_runtime_tick,
         "direct://synthetic_chaos_injection": _run_synthetic_chaos_injection,
         "direct://control_bridge_evaluate": _run_control_bridge_evaluate,
+        "direct://education_assignment_expire": _run_education_assignment_expire,
     }
 
 
