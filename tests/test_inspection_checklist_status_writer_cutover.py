@@ -103,16 +103,26 @@ class _Patch:
         self._orig = {
             "g": R.get_supabase,
             "b": R.complete_inspection_status,
+            "rb": getattr(R, "record_safe_result_batch", None),
             "guard": getattr(R, self.guard_attr),
         }
         R.get_supabase = lambda: self.fake
         R.complete_inspection_status = self.spy
+        R.record_safe_result_batch = (
+            lambda sb, *, inspection_id, results: {
+                "mode": "CREATED",
+                "count": len(results),
+                "data": {"inspection_id": inspection_id, "created": len(results)},
+            }
+        )
         setattr(R, self.guard_attr, lambda *a, **k: None)
         return self
 
     def __exit__(self, *a):
         R.get_supabase = self._orig["g"]
         R.complete_inspection_status = self._orig["b"]
+        if self._orig["rb"] is not None:
+            R.record_safe_result_batch = self._orig["rb"]
         setattr(R, self.guard_attr, self._orig["guard"])
         return False
 
@@ -133,8 +143,8 @@ def test_record_normal_only_uses_bridge_once_no_direct_update():
         body = {"results": [{"result": "PASS", "inspection_set_item_id": "i1"},
                             {"result": "PASS", "inspection_set_item_id": "i2"}]}
         out = asyncio.run(R.record_inspection_results("insp-1", body, current=CUR))
-    # result INSERT 유지
-    assert ("safety_inspection_results", "insert") in fake.log
+    # DEBT-W3-02: 직접 results INSERT 없음 (RPC 서비스 1회)
+    assert ("safety_inspection_results", "insert") not in fake.log
     # schedule completed side effect 유지
     assert ("work_schedules", "update") in fake.log
     # writer bridge exactly 1 (direct safety_inspections UPDATE 은 fake 가 raise 하므로 도달 자체가 증거)
@@ -158,7 +168,7 @@ def test_record_with_fail_present_no_bridge():
         out = asyncio.run(R.record_inspection_results("insp-1", body, current=CUR))
     assert len(spy.calls) == 0                       # FAIL 있으면 완료 처리 안 함
     assert ("work_schedules", "update") not in fake.log
-    assert out["status"] == "success" and out["data"]["created"] == 1
+    assert out["status"] == "success" and out["data"]["created"] == 2
 
 
 def test_record_with_na_present_no_bridge():
@@ -196,6 +206,8 @@ def test_record_bridge_error_maps_409():
 def test_complete_zero_linked_schedule_only_no_bridge():
     resp = {
         ("safety_inspections", "select"): [],                       # cardinality 0
+        ("work_schedules", "select"): [{"id": "ws-1", "completed_at": None,
+                                        "status_code": "in_progress", "inspection_set_id": None}],
         ("work_schedules", "update"): [{"id": "ws-1", "factory_id": "f1", "inspection_set_id": None}],
     }
     fake = _FakeSB(resp); spy = _BridgeSpy()
@@ -209,6 +221,8 @@ def test_complete_zero_linked_schedule_only_no_bridge():
 def test_complete_one_linked_schedule_and_bridge_once():
     resp = {
         ("safety_inspections", "select"): [{"id": "insp-9"}],       # cardinality 1
+        ("work_schedules", "select"): [{"id": "ws-1", "completed_at": None,
+                                        "status_code": "in_progress", "inspection_set_id": None}],
         ("work_schedules", "update"): [{"id": "ws-1", "factory_id": "f1", "inspection_set_id": None}],
     }
     fake = _FakeSB(resp); spy = _BridgeSpy()
@@ -243,6 +257,8 @@ def test_complete_two_linked_409_before_schedule_update():
 def test_complete_bridge_error_maps_409():
     resp = {
         ("safety_inspections", "select"): [{"id": "insp-9"}],
+        ("work_schedules", "select"): [{"id": "ws-1", "completed_at": None,
+                                        "status_code": "in_progress", "inspection_set_id": None}],
         ("work_schedules", "update"): [{"id": "ws-1", "factory_id": "f1", "inspection_set_id": None}],
     }
     fake = _FakeSB(resp)

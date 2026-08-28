@@ -230,11 +230,15 @@ def test_r4_first_create_and_complete_response_shape():
         def update(self, p):
             return self
 
+        def limit(self, n):
+            return self
+
         def execute(self):
             if self.name == "safety_inspections":
                 return _Resp([{"id": "insp-9"}])
             if self.name == "work_schedules":
-                return _Resp([{"id": "ws-1", "inspection_set_id": "SET-1", "factory_id": "F-1"}])
+                return _Resp([{"id": "ws-1", "inspection_set_id": "SET-1", "factory_id": "F-1",
+                               "completed_at": None, "status_code": "in_progress"}])
             return _Resp([])
 
     class _SB:

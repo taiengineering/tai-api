@@ -87,8 +87,7 @@ def wired(monkeypatch):
 
 
 def _call(body):
-    return asyncio.get_event_loop().run_until_complete(
-        ic.record_inspection_results("INS", body, {"id": "U"}))
+    return asyncio.run(ic.record_inspection_results("INS", body, {"id": "U"}))
 
 
 def _created(n=3):

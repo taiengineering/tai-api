@@ -36,6 +36,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
 from services import inspection_sets_svc as _iss
 from services.inspection_record_resolver import (
     InspectionRecordError,
@@ -295,22 +296,39 @@ def _resolve_inspector_id(supabase, worker_id: Optional[str], phone: Optional[st
     return None
 
 
+def _authorized_inspector_id(
+    supabase,
+    current: dict,
+    *,
+    worker_id: Optional[str] = None,
+    phone: Optional[str] = None,
+) -> str:
+    """토큰 users.id 가 유일한 authorization identity. 타인 worker_id/phone 은 403.
+
+    worker_registry 로 해소된 id 가 users.id 와 같지 않으면 identity 로 쓰지 않는다.
+    """
+    caller_id = str(current["id"])
+    if worker_id:
+        if str(worker_id) != caller_id:
+            raise HTTPException(status_code=403, detail={"error": "FORBIDDEN_IDENTITY"})
+        return caller_id
+    if phone:
+        resolved_id = _resolve_inspector_id(supabase, None, phone)
+        if resolved_id is None or str(resolved_id) != caller_id:
+            raise HTTPException(status_code=403, detail={"error": "FORBIDDEN_IDENTITY"})
+        return caller_id
+    return caller_id
+
+
 @router.get("/recent")
-def get_recent_checks(phone: str, limit: int = 5):
-    """점검자의 최근 점검 이력 조회 (effective record 어댑터 경유)."""
+def get_recent_checks(
+    phone: Optional[str] = None,
+    limit: int = 5,
+    current: dict = Depends(get_current_user),
+):
+    """점검자의 최근 점검 이력 조회 (effective record 어댑터 경유). 자기 이력만."""
     supabase = get_supabase()
-    clean = phone.replace("-", "").replace(" ", "")
-
-    inspector_id = None
-    u = supabase.table("users").select("id").eq("phone", clean).limit(1).execute()
-    if not u.data:
-        u = supabase.table("users").select("id").eq("phone", f"{clean[:3]}-{clean[3:7]}-{clean[7:]}").limit(1).execute()
-    if u.data:
-        inspector_id = u.data[0]["id"]
-
-    if not inspector_id:
-        return {"status": "success", "data": {"items": []}}
-
+    inspector_id = _authorized_inspector_id(supabase, current, phone=phone)
     records = list_effective_inspection_records_by_inspector(inspector_id, limit, supabase)
     items = [_effective_worker_item(r) for r in records]
     return {"status": "success", "data": {"items": items}}
@@ -321,20 +339,19 @@ def get_check_history(
     worker_id: Optional[str] = None,
     phone: Optional[str] = None,
     limit: int = 50,
+    current: dict = Depends(get_current_user),
 ):
-    """점검자의 점검 이력 조회 (앱 이력 화면). worker_id(=users.id) 우선, 없으면 phone.
+    """점검자의 점검 이력 조회 (앱 이력 화면). 토큰 users.id 자기 이력만.
 
     앱 이력 화면이 GET /worker-check/history?worker_id=&phone= 로 호출한다.
-    이 라우트가 없으면 항상 실패했고, 앱이 오류를 삼켜 '빈 이력'과 구분되지 않았다(결함 76).
-    점검자를 못 찾으면 빈 목록을 돌려준다(정상 응답). 조회 자체 실패는 예외로 전파한다.
+    인증 성공 + 이력 0건은 200 {items:[]} (빈 이력과 401 혼동 금지).
 
     KNOT-2: safety_inspections 직독 대신 effective record 어댑터를 소비한다.
     """
     supabase = get_supabase()
-    inspector_id = _resolve_inspector_id(supabase, worker_id, phone)
-    if not inspector_id:
-        return {"status": "success", "data": {"items": []}}
-
+    inspector_id = _authorized_inspector_id(
+        supabase, current, worker_id=worker_id, phone=phone,
+    )
     records = list_effective_inspection_records_by_inspector(inspector_id, limit, supabase)
     items = [_effective_worker_item(r) for r in records]
     return {"status": "success", "data": {"items": items}}

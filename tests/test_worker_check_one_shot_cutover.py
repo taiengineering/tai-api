@@ -208,10 +208,10 @@ def test_recent_and_history_alias_unchanged(wired, monkeypatch):
     recs = [{"inspection_id": "R1", "inspection_date": "2026-08-27",
              "inspection_status": "COMPLETED", "overall_result": "ABNORMAL"}]
     monkeypatch.setattr(wc, "list_effective_inspection_records_by_inspector", lambda iid, lim, sb: recs)
-    rec = wc.get_recent_checks(phone="010-1234-5678", limit=5)
+    rec = wc.get_recent_checks(phone="010-1234-5678", limit=5, current={"id": "INSP-1"})
     it = rec["data"]["items"][0]
     assert it["id"] == "R1" and it["status_code"] == "ISSUE"   # ABNORMAL→ISSUE alias
-    hist = wc.get_check_history(phone="010-1234-5678", limit=50)
+    hist = wc.get_check_history(phone="010-1234-5678", limit=50, current={"id": "INSP-1"})
     assert hist["data"]["items"][0]["status_code"] == "ISSUE"
 
 
