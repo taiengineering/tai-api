@@ -48,14 +48,21 @@ from typing import Any, Dict, List, Optional, Tuple
 # ─────────────────────────────────────────────────────────────────────────────
 
 MATERIAL_VERSION = 1
-NORMALIZER_VERSION = 1
 
-DERIVATION_VERSIONS: Dict[str, str] = {
-    "R01": "R01_V1", "R02": "R02_V1", "R03": "R03_V1", "R04": "R04_V1",
-    "R05": "R05_V1", "R06": "R06_V1", "R07": "R07_V1", "R08": "R08_V1",
-    "R09": "R09_V1", "R10": "R10_V1", "R11": "R11_V1", "R12": "R12_V1",
-    "R13": "R13_V1", "R14": "R14_V1", "R15": "R15_V1", "R16": "R16_V1",
+# 규칙별 파생 버전. 같은 RAW + 같은 derivation version = 같은 결과(설계문서 Principle 4).
+# 규칙의 의미가 바뀌면 반드시 버전을 올린다.
+#   NORMALIZER v2 : RAW applicability 를 손실 없이 보존 (STEP3A REV-1 / O1)
+#   R01 v2        : distinct_law_count 에서 UNSPECIFIED 버킷 제외 (STEP3A REV-1 / O3)
+#   R02 v2        : article_count 에서 UNSPECIFIED 버킷 제외 (STEP3A REV-1 / O3)
+DERIVATION_RULE_VERSIONS: Dict[str, int] = {
+    "NORMALIZER": 2,
+    "R01": 2, "R02": 2, "R03": 1, "R04": 1,
+    "R05": 1, "R06": 1, "R07": 1, "R08": 1,
+    "R09": 1, "R10": 1, "R11": 1, "R12": 1,
+    "R13": 1, "R14": 1, "R15": 1, "R16": 1,
 }
+
+NORMALIZER_VERSION = DERIVATION_RULE_VERSIONS["NORMALIZER"]
 
 # availability enum (설계문서 §5)
 AVAILABLE = "AVAILABLE"
@@ -268,6 +275,11 @@ def _normalize_obligation(raw: Dict[str, Any], source_index: int) -> Dict[str, A
         "how": _text(detail.get("how")),
     }
     applicability = {
+        # STEP3A REV-1 / O1 — RAW applicability 를 손실 없이 보존한다.
+        # 현행 LEG 엔진에서 이 값은 하드코딩 상수이며(rtm/api.py:92), 비적용 원자는
+        # 응답 조립 이전 단계에서 이미 제거된다(rtm/engine.py:183-191).
+        # 따라서 이 값은 "무엇을 걸러내는 기준"이 아니라 "엔진이 붙인 원본 표기"로만 운반한다.
+        "engine_applicability": _text(raw.get("applicability")),
         "condition": _text(detail.get("condition")),
         "triggered_by": _listify(raw.get("triggered_by")),
         "consumer_status": _text(enrichment.get("consumer_status")),
@@ -333,10 +345,15 @@ def _r02_law_portfolio(obligations: List[Dict[str, Any]]) -> List[Dict[str, Any]
 
     rows: List[Dict[str, Any]] = []
     for law_name, members in groups.items():
+        # STEP3A REV-1 / O3 — article_count 는 실제 확인 가능한 조문(non-null)만 센다.
+        # 조문명이 없는 의무는 삭제하지 않고 별도 계수한다.
+        real_articles = {m["legal"]["law_article"] for m in members if m["legal"]["law_article"]}
+        unspecified_articles = [m for m in members if not m["legal"]["law_article"]]
         rows.append({
             "law_name": law_name,
             "obligation_count": len(members),
-            "article_count": len({_article_key(m) for m in members}),
+            "article_count": len(real_articles),
+            "unspecified_article_obligation_count": len(unspecified_articles),
             "obligation_type_counts": _counts(
                 [m["classification"]["obligation_type"] for m in members], UNCLASSIFIED),
             "content_type_counts": _counts(
@@ -349,18 +366,24 @@ def _r02_law_portfolio(obligations: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return rows
 
 
-def _r01_overview(obligations: List[Dict[str, Any]],
-                  law_portfolio: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _r01_overview(obligations: List[Dict[str, Any]]) -> Dict[str, Any]:
     """R01 — 전체 의무 구조의 규모와 구성.
 
     unknown obligation_type -> UNCLASSIFIED (ACTION 등으로 강제 편입하지 않는다)
     unknown content_type    -> UNKNOWN
     unknown verification    -> UNKNOWN
     각 counts 의 합계는 항상 total_obligation_count 와 같다.
+
+    STEP3A REV-1 / O3 — distinct_law_count 는 실제 법령명(non-null)의 distinct 수다.
+    법령명이 없는 의무는 UNSPECIFIED 버킷으로 보존하되 "관련 법령 1개"로 세지 않는다.
     """
+    unspecified_law = [o for o in obligations if not o["legal"]["law_name"]]
     return {
         "total_obligation_count": len(obligations),
-        "distinct_law_count": len(law_portfolio),
+        "distinct_law_count": len({
+            o["legal"]["law_name"] for o in obligations if o["legal"]["law_name"]
+        }),
+        "unspecified_law_obligation_count": len(unspecified_law),
         "obligation_type_counts": _counts(
             [o["classification"]["obligation_type"] for o in obligations], UNCLASSIFIED),
         "content_type_counts": _counts(
@@ -753,14 +776,15 @@ _MATERIAL_PROVENANCE: Dict[str, Dict[str, Any]] = {
             "obligations_raw[].atom_id", "obligations_raw[].source_atom_ids",
             "obligations_raw[].law_name", "obligations_raw[].law_article",
             "obligations_raw[].evidence", "obligations_raw[].triggered_by",
-            "obligations_raw[].check_result",
+            "obligations_raw[].applicability", "obligations_raw[].check_result",
             "obligations_raw[].obligation_detail.*", "obligations_raw[].enrichment.*",
         ],
     },
     "overview": {
         "material_type": "OBLIGATION_OVERVIEW", "derivation_rule": "R01",
         "source_fields": ["classification.obligation_type", "classification.content_type",
-                          "verification.check_result", "legal.law_name"],
+                          "verification.check_result", "legal.law_name",
+                          "legal.law_name(null presence)"],
     },
     "law_portfolio": {
         "material_type": "LAW_PORTFOLIO", "derivation_rule": "R02",
@@ -774,6 +798,7 @@ _MATERIAL_PROVENANCE: Dict[str, Dict[str, Any]] = {
     },
     "applicability_basis": {
         "material_type": "APPLICABILITY_BASIS", "derivation_rule": "R04",
+        # engine_applicability 는 NormalizedObligation 에만 보존한다(현행 엔진 상수 — R04 출력 미포함).
         "source_fields": ["applicability.condition", "applicability.triggered_by",
                           "applicability.consumer_status"],
     },
@@ -849,11 +874,12 @@ def _build_material_provenance(all_refs: List[int]) -> Dict[str, Dict[str, Any]]
     for key in sorted(_MATERIAL_PROVENANCE):
         spec = _MATERIAL_PROVENANCE[key]
         rule = spec["derivation_rule"]
+        rule_version = DERIVATION_RULE_VERSIONS[rule]
         entry: Dict[str, Any] = {
             "material_type": spec["material_type"],
             "material_version": MATERIAL_VERSION,
-            "derivation_rule": DERIVATION_VERSIONS.get(rule, "NORMALIZER_V{}".format(NORMALIZER_VERSION)),
-            "derivation_version": MATERIAL_VERSION,
+            "derivation_rule": "{}_V{}".format(rule, rule_version),
+            "derivation_version": rule_version,
             "source_fields": list(spec["source_fields"]),
         }
         if key in _OBLIGATION_SCOPED:
@@ -884,7 +910,7 @@ def build_paid_result_materials_v1(full_result: Any) -> Dict[str, Any]:
 
     # LEVEL 2 — DERIVED MATERIALS
     law_portfolio = _r02_law_portfolio(obligations)
-    overview = _r01_overview(obligations, law_portfolio)
+    overview = _r01_overview(obligations)
     duty_vs_prohibition = _r03_duty_vs_prohibition(obligations)
     applicability_basis = _r04_applicability_basis(obligations)
     legal_basis_bundles = _r05_legal_basis_bundles(obligations)
