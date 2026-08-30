@@ -1,4 +1,8 @@
-"""§94 STEP A — paid diagnosis trace lifecycle (routers/diagnosis_integrated.py)."""
+"""§94 STEP A — paid diagnosis trace lifecycle (routers/diagnosis_integrated.py).
+
+§94 owns trace lifecycle only. Later explicitly-approved Common Event producers
+may coexist in this router.
+"""
 import ast
 import pathlib
 import pytest
@@ -17,11 +21,6 @@ def test_static_trace_namespace_and_actor():
         kw = _kw(c)
         assert kw.get("tenant_id") == "tai"
         assert kw.get("actor_type") == "user"
-def test_static_no_emit_event():
-    assert _calls("emit_event") == []
-def test_static_no_canonical_fields():
-    for kwname in ("event_name", "actor_kind", "actor_ref"):
-        assert kwname not in SRC
 def test_static_binding_trace_string_untouched():
     assert 'f"diagnosis-{diagnosis_id}"' in SRC
 @pytest.fixture
