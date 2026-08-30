@@ -312,13 +312,15 @@ def run_diagnosis(
     _fd = getattr(body, "form_data", None) or {}
 
     def _fd_num(_key, _cast):
+        # E-C1 CORRECTION-01: 키 부재/빈값은 미제공(None). 그러나 키가 존재하는데 숫자로 변환
+        # 불가능하면 silent default 하지 않고 422 로 fail-closed(Nexas 제거 후 numeric 계약 경계 책임).
         _v = _fd.get(_key)
         if _v is None or _v == "":
             return None
         try:
             return _cast(float(_v))
         except (TypeError, ValueError):
-            return None
+            raise HTTPException(status_code=422, detail="'{}' 값이 올바른 숫자가 아닙니다: {!r}".format(_key, _v))
 
     _contract_eok = body.contract_amount_eok
     if _contract_eok is None:
@@ -391,11 +393,17 @@ def run_diagnosis(
     # 10 fact 가 그대로 materialize 된다(중복 배선 제거). has_chemical_substance 는 FIX-B2 step1 bridge 로 처리.
     for _code, _val in canonical_applicability(_available).items():
         inp.setdefault(_code, _val)
-    workers = _worker_count or body.direct_workers or 0
-    employees = body.employee_count or workers
+    # E-C1 CORRECTION-01: 0 은 명시적으로 제공된 값이므로 truthiness 로 버리지 않는다(is None 기준).
+    if _worker_count is not None:
+        workers = _worker_count
+    elif body.direct_workers is not None:
+        workers = body.direct_workers
+    else:
+        workers = 0
+    employees = body.employee_count if body.employee_count is not None else workers
     floor_area = body.floor_area or 400.0
     total_floor_area = body.total_floor_area or floor_area
-    contract_eok = _contract_eok or 1.0
+    contract_eok = _contract_eok if _contract_eok is not None else 1.0
 
     if engine_sector == "CONSTRUCTION":
         # WO-FE-CST-GAP-IMPL-001 FIX-B2: CONSTRUCTION chemical step1 bridge.
