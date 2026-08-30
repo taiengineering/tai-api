@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -49,6 +49,15 @@ class DiagnosisRunBody(BaseModel):
     has_high_pressure_gas: Optional[bool] = None
     has_chemical_substance: Optional[bool] = None
     project_amount: Optional[float] = None
+    # ── WO-FE-IND-GAP-051-TRANSPORT-001: paid structured RAW INPUT transport 계약 ──
+    # RAW ENVELOPE(사용자가 실제 입력한 구조화 값)이며 CANONICAL LEG APPLICABILITY 와 분리된다.
+    # 이 필드들은 backend 가 lossless 수신·보존(input_data JSONB)만 하며,
+    # canonical_applicability(CURRENT _LEG_INPUT_FIELDS exact-name allowlist) / build_facility
+    # semantic projection 에는 자동 주입하지 않는다(RAW ≠ CANONICAL). form_data(=canonical envelope)에 넣지 않는다.
+    input: Optional[Dict[str, Any]] = Field(None, description="paid STEP1 raw scalar/structured 값 (엔진 canonical 과 분리)")
+    process_list: Optional[List[Dict[str, Any]]] = Field(None, description="paid STEP2 공정 row raw 구조(process_name/hazard_codes/worker_count/is_primary/future activity_type[])")
+    equipment_list: Optional[List[Dict[str, Any]]] = Field(None, description="paid STEP3 설비 row raw 구조(equipment_type/asset_name/quantity/.../future usage_type[]/relation_type[])")
+    ksic_list: Optional[List[str]] = Field(None, description="paid 다중 KSIC 대분류 raw 목록")
 
 
 class UpgradeBody(BaseModel):

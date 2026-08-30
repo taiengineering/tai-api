@@ -9,7 +9,7 @@ Canonical 계약(``DiagnoseStep1Body.input``)까지 운반하기 위한 단일 �
     AVAILABLE INPUT
       -> canonical_applicability()  (vocab-allowlist, 값 존재 시만 보존)
       -> DiagnoseStep1Body.input
-      -> build_facility(_LEG_INPUT_FIELDS=49) EXISTING PROJECTION
+      -> build_facility(CURRENT _LEG_INPUT_FIELDS projection) EXISTING PROJECTION
       -> LEG RTM
 
 엄격 규칙:
