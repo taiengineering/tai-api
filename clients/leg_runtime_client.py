@@ -203,6 +203,11 @@ def build_facility(step1_body: Any) -> Dict[str, Any]:
             _ec = inp.get("elevator_count")
         if isinstance(_ec, (int, float)) and not isinstance(_ec, bool) and _ec > 0:
             facility["has_building_elevator"] = True
+    # WO-FE-CST-GAP-IMPL-001 CODE-C2: CONSTRUCTION has_chemical_substance exact-name.
+    # PSR mapped_field=has_chemical_substance (has_chemical=0 atom). facility key 를 exact 로 교정.
+    # sector-gated — 산업/건축은 기존 has_chemical 유지(INDUSTRIAL 동작 불변).
+    if _sector == "CONSTRUCTION" and "has_chemical" in facility:
+        facility["has_chemical_substance"] = facility.pop("has_chemical")
     return facility
 
 
