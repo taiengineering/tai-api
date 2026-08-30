@@ -322,12 +322,24 @@ def run_diagnosis(
         except (TypeError, ValueError):
             raise HTTPException(status_code=422, detail="'{}' 값이 올바른 숫자가 아닙니다: {!r}".format(_key, _v))
 
+    # E-C1 CORRECTION-02: project_amount→contract_amount_eok, project_address→region 은 CONSTRUCTION
+    # 전용 structural mapping 이다(sector-gated). 다른 sector(BUILDING/INDUSTRIAL)로 누출 금지 —
+    # 이 sector 들의 form_data.project_amount/project_address 는 매핑/검증하지 않는다(sector contract leakage 방지).
+    # contract_amount_eok/region/worker_count/construction_type/ksic 등 exact-name 은 sector 무관 유지.
+    _is_construction = (engine_sector == "CONSTRUCTION")
+
     _contract_eok = body.contract_amount_eok
     if _contract_eok is None:
-        _contract_eok = _fd_num("project_amount", float)
+        if _is_construction:
+            _contract_eok = _fd_num("project_amount", float)  # CONSTRUCTION 전용 alias
         if _contract_eok is None:
-            _contract_eok = _fd_num("contract_amount_eok", float)
-    _region_val = body.region if body.region else (_fd.get("project_address") or _fd.get("address") or _fd.get("region"))
+            _contract_eok = _fd_num("contract_amount_eok", float)  # exact-name(sector 무관)
+    if body.region:
+        _region_val = body.region
+    elif _is_construction and _fd.get("project_address"):
+        _region_val = _fd.get("project_address")  # CONSTRUCTION 전용 alias
+    else:
+        _region_val = _fd.get("region")  # exact-name(sector 무관); 미검증 generic 'address' 는 열지 않음
     _worker_count = body.worker_count
     if _worker_count is None:
         _worker_count = _fd_num("worker_count", int)
@@ -469,7 +481,6 @@ def run_diagnosis(
 
     # WO-FE-IND-GAP-051-TRANSPORT-001 (CORRECTION-01): raw envelope 은 `is not None` 기준으로만
     # 필터한다. {} / [] 는 "전송했고 0건" 이라는 사실값이므로 verbatim 보존(truthiness 로 버리지 않음).
-    # E-C1: process_list/equipment_list/ksic_list 도 top-level 없으면 form_data 값으로 보존(Nexas 격리 회귀 방지).
     _raw_structured_input = {
         _k: _v
         for _k, _v in {
