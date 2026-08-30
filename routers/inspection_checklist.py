@@ -49,6 +49,8 @@ from services.safe_inspection_result_batch import (
     SafeResultBatchError,
 )
 from services.inspection_rolling import ensure_next_rolling_schedule
+from watch_engine import create_trace
+from watch_engine.trace import clear_trace
 
 router = APIRouter(prefix="/inspection", tags=["점검리스트"])
 
@@ -526,6 +528,7 @@ async def start_inspection(work_schedule_id: str, body: dict = None, current: di
 async def record_inspection_results(inspection_id: str, body: dict, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     _ensure_inspection_own(supabase, inspection_id, current)
+    create_trace(flow_key="inspection_result_submit", tenant_id="tai", actor_type="user")
     try:
         results = body.get("results", [])
         if not results:
@@ -572,6 +575,8 @@ async def record_inspection_results(inspection_id: str, body: dict, current: dic
     except InspectionStatusWriteError as e:
         raise HTTPException(status_code=409, detail={"code": e.code, "message": "점검 상태를 완료 처리할 수 없습니다."})
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        clear_trace()
 
 
 @router.post("/complete/{work_schedule_id}")
@@ -586,6 +591,7 @@ async def complete_inspection(work_schedule_id: str, body: dict = None, current:
     """
     supabase = get_supabase()
     _ensure_ws_own(supabase, work_schedule_id, current)
+    create_trace(flow_key="inspection_complete", tenant_id="tai", actor_type="user")
     try:
         body = body or {}
         summary = body.get("summary", "")
@@ -683,6 +689,8 @@ async def complete_inspection(work_schedule_id: str, body: dict = None, current:
     except InspectionStatusWriteError as e:
         raise HTTPException(status_code=409, detail={"code": e.code, "message": "점검 상태를 완료 처리할 수 없습니다."})
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        clear_trace()
 
 
 @router.get("/schedules")
