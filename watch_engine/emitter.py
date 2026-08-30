@@ -8,13 +8,17 @@ Fail-safe guarantee:
     emit_event() NEVER blocks the service.
     If recording fails, a warning is logged and the service continues.
 
+    FAIL-SAFE means the business service is unaffected. It does NOT mean an
+    invalid event is converted into legacy data.
+
 Common Event Contract v1 (§87/§90):
-    emit_event() can additionally record the canonical v1 core
-    (event_name / event_version / occurred_at / actor_kind / actor_ref /
-    outcome). A row is promoted to event_version=1 ONLY when a COMPLETE,
-    non-placeholder canonical core is supplied. Otherwise the row is written
-    as a legacy event (event_version NULL) and a warning is logged — canonical
-    values are NEVER fabricated from legacy-only data (§7/§16).
+    Passing any of event_name / actor_kind / actor_ref / occurred_at / outcome
+    signals a request to record the canonical v1 core. Then exactly one of:
+        * the canonical core is valid  -> event_version=1 INSERT -> True
+        * the canonical core is invalid -> NO INSERT, warning, return False
+    A failed canonical request is NEVER silently downgraded to a legacy row
+    (§90 PATCH-1). When no canonical fields are passed, the legacy write path is
+    used unchanged.
 """
 
 import hashlib
@@ -94,16 +98,15 @@ def emit_event(
         3. Current context trace (contextvars)
         4. Defaults
 
-    Common Event Contract v1:
-        Passing any of event_name / actor_kind / actor_ref / occurred_at /
-        outcome signals a request to record the canonical v1 core. The row is
-        promoted to event_version=1 ONLY when the full canonical core is valid
-        and non-placeholder; otherwise it is recorded as a legacy event and a
-        warning is logged (no fabrication).
+    Common Event Contract v1 (§90 PATCH-1):
+        If any canonical field is supplied, the event is recorded as v1 or NOT
+        recorded at all. An invalid canonical request returns False and inserts
+        nothing — it is never downgraded to a legacy row.
 
     Returns:
-        True if event was recorded successfully.
-        False if recording failed (service continues normally).
+        True  if the event was recorded successfully.
+        False if recording failed or an invalid canonical event was rejected
+              (service continues normally; no exception propagates).
     """
     try:
         # ─── Resolve trace context ───
@@ -125,12 +128,12 @@ def emit_event(
         # ─── Compute hash ───
         p_hash = _compute_hash(cleaned_payload)
 
-        # ─── Common Event Contract v1 (optional, non-fabricating) ───
-        core = None
+        # ─── Common Event Contract v1 (succeed-or-do-not-record; §90 PATCH-1) ───
         canonical_requested = any(
             v is not None
             for v in (event_name, actor_kind, actor_ref, occurred_at, outcome)
         )
+        core = None
         if canonical_requested:
             core, core_errors = build_contract_core(
                 event_name=event_name,
@@ -145,11 +148,14 @@ def emit_event(
                 result=result,
             )
             if core is None:
+                # Invalid canonical request → do NOT record, do NOT downgrade to
+                # legacy (§17/§90 PATCH-1). Business continues (no exception).
                 logger.warning(
-                    "Canonical v1 requested but incomplete for %s/%s → recording as "
-                    "LEGACY (event_version NULL): %s",
+                    "Canonical v1 emission requested but INVALID for %s/%s → NOT "
+                    "recorded (no legacy downgrade): %s",
                     resolved_flow, step_key, core_errors,
                 )
+                return False
 
         _core = core or {}
 
@@ -179,7 +185,7 @@ def emit_event(
             outcome=_core.get("outcome"),
         )
 
-        # ─── Validate (legacy, non-blocking) ───
+        # ─── Legacy structural validation (non-blocking, warn only) ───
         is_valid, errors = validate_event(payload)
         if not is_valid:
             logger.warning(
@@ -187,23 +193,18 @@ def emit_event(
                 resolved_flow, step_key, errors,
             )
 
-        # ─── Validate v1 contract (application layer, §17; defensive) ───
-        if payload.event_version is not None:
+        # ─── v1 application validation layer (§17) ───
+        # Only runs for canonical requests. On failure the event is NOT recorded
+        # and NOT downgraded to legacy.
+        if canonical_requested:
             v1_ok, v1_errors = validate_contract_v1(payload)
             if not v1_ok:
-                # Never emit a malformed v1 row; fall back to legacy. Do not
-                # hide the error — log it loudly (§17).
                 logger.warning(
-                    "v1 contract validation failed for %s/%s → downgrading to "
-                    "LEGACY: %s",
+                    "Canonical v1 application validation failed for %s/%s → NOT "
+                    "recorded (no legacy downgrade): %s",
                     resolved_flow, step_key, v1_errors,
                 )
-                payload.event_name = None
-                payload.event_version = None
-                payload.occurred_at = None
-                payload.actor_kind = None
-                payload.actor_ref = None
-                payload.outcome = None
+                return False
 
         # ─── Insert ───
         sb = _get_supabase()
@@ -228,7 +229,7 @@ def emit_event(
             "result": payload.result,
             "payload_summary": payload.payload_summary,
             "payload_hash": payload.payload_hash,
-            # ─── Common Event Contract v1 (None values stripped below) ───
+            # ─── Common Event Contract v1 (present only for a valid v1 event) ───
             "event_name": payload.event_name,
             "event_version": payload.event_version,
             "occurred_at": payload.occurred_at,
@@ -250,7 +251,7 @@ def emit_event(
         return True
 
     except Exception as e:
-        # ─── FAIL-SAFE: swallow all exceptions ───
+        # ─── FAIL-SAFE: swallow all exceptions (business unaffected) ───
         logger.error(
             "emit_event FAILED (service unaffected): %s — flow=%s step=%s",
             str(e),

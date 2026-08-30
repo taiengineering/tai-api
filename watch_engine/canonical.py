@@ -2,13 +2,16 @@
 
 Single source of truth for turning caller-supplied canonical inputs into the
 physical v1 core written to ``business_event``. Pure and side-effect-free:
-building never raises and never touches the database. The emitter decides
-legacy-vs-v1 purely from whether a COMPLETE, non-placeholder core is produced.
+building never raises and never touches the database.
 
-v1 promotion rule (§16): an event becomes ``event_version = 1`` ONLY when the
-writer can supply a complete, non-placeholder canonical core. Otherwise it stays
-legacy (``event_version IS NULL``). No legacy fabrication (§7): this module never
-infers canonical values from legacy-only data.
+Contract of build_contract_core (§90 PATCH-1):
+    valid   -> (core_dict, [])
+    invalid -> (None, [errors])
+
+This module does NOT decide "legacy vs v1" and never implies a legacy
+fallback. Once a caller requests a canonical event, the emitter records it as
+v1 or does not record it at all (no silent legacy downgrade). No legacy
+fabrication (§7): canonical values are never inferred from legacy-only data.
 """
 
 from __future__ import annotations
@@ -68,6 +71,23 @@ def is_valid_outcome(outcome: Optional[str]) -> bool:
     return outcome is None or outcome in VALID_OUTCOMES
 
 
+def is_tz_aware_datetime(value: Optional[str]) -> bool:
+    """True iff value is a parseable, timezone-aware ISO-8601 timestamp (§12).
+
+    A trailing 'Z' is accepted as UTC. Naive datetimes (no offset) are rejected.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return False
+    s = value.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return False
+    return dt.tzinfo is not None and dt.utcoffset() is not None
+
+
 def derive_actor_kind(actor_type: Optional[str]) -> Optional[str]:
     """Map a server-side legacy actor_type to a canonical actor_kind.
 
@@ -107,15 +127,15 @@ def build_contract_core(
     outcome: Optional[str] = None,
     result: Optional[str] = None,
 ) -> "tuple[Optional[dict], list[str]]":
-    """Assemble the v1 canonical core, or return ``(None, errors)`` if incomplete.
+    """Assemble the v1 canonical core, or return ``(None, errors)`` if invalid.
 
     Never raises. Returns:
         ``(core_dict, [])``        when a COMPLETE valid v1 core is produced
-        ``(None, [error, ...])``   when canonical emission must fall back to legacy
+        ``(None, [error, ...])``   when the canonical request is invalid
 
-    ``core_dict`` keys: event_name, event_version, occurred_at, actor_kind,
-    actor_ref, and (optionally, §6) outcome. ``outcome`` is omitted when it
-    cannot be resolved losslessly.
+    The caller MUST NOT persist an invalid request in any other form (§90
+    PATCH-1). ``core_dict`` keys: event_name, event_version, occurred_at,
+    actor_kind, actor_ref, and (optionally, §6) outcome.
     """
     errors: list[str] = []
 
@@ -136,6 +156,18 @@ def build_contract_core(
     if not _nonempty(environment):
         errors.append("environment is required")
 
+    # §12 occurred_at: caller-supplied must be parseable + timezone-aware;
+    # when absent, a server-side UTC-aware timestamp is generated.
+    if occurred_at is not None:
+        if not is_tz_aware_datetime(occurred_at):
+            errors.append(
+                "occurred_at must be a parseable timezone-aware datetime: %r"
+                % (occurred_at,)
+            )
+        resolved_occurred = occurred_at
+    else:
+        resolved_occurred = now_occurred_at()
+
     # outcome: explicit value validated; else lossless mapping from result; else None.
     resolved_outcome = outcome if outcome is not None else map_outcome(result)
     if not is_valid_outcome(resolved_outcome):
@@ -148,7 +180,7 @@ def build_contract_core(
     core = {
         "event_name": event_name,
         "event_version": CONTRACT_VERSION,
-        "occurred_at": occurred_at if _nonempty(occurred_at) else now_occurred_at(),
+        "occurred_at": resolved_occurred,
         "actor_kind": actor_kind,
         "actor_ref": actor_ref,
     }

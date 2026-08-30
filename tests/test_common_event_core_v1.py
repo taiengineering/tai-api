@@ -1,10 +1,12 @@
-"""§90 Common Event Contract v1 — test suite (T1–T20).
+"""§90 Common Event Contract v1 — test suite (T1–T22).
 
 Covers the forward contract on business_event:
   * legacy rows remain valid and untouched,
-  * v1 rows require a complete, non-placeholder canonical core,
+  * a canonical request is recorded as v1 or NOT recorded at all — never
+    silently downgraded to a legacy row (§90 PATCH-1),
+  * occurred_at must be timezone-aware for v1,
   * lossless outcome mapping only (no fabrication),
-  * fail-safe / non-blocking emit preserved,
+  * fail-safe / non-blocking emit preserved (business unaffected),
   * legacy reader compatibility via the read adapter.
 
 The emitter's Supabase client and trace context are stubbed so tests never
@@ -30,6 +32,7 @@ class _FakeTable:
         if self._sink.get("raise_on_insert"):
             raise RuntimeError("db down")
         self._sink["row"] = row
+        self._sink["insert_count"] = self._sink.get("insert_count", 0) + 1
         return self
 
     def execute(self):
@@ -47,7 +50,7 @@ class _FakeSupabase:
 
 @pytest.fixture
 def sink(monkeypatch):
-    s = {}
+    s = {"insert_count": 0}
     monkeypatch.setattr(emitter_mod, "_get_supabase", lambda: _FakeSupabase(s))
     # Avoid ambient contextvar trace leaking into tests.
     monkeypatch.setattr(emitter_mod, "get_current_trace", lambda: None)
@@ -86,6 +89,7 @@ def _v1_payload(**overrides):
 def test_t1_legacy_row_accepted(sink):
     ok, row = _emit(sink)
     assert ok is True
+    assert sink["insert_count"] == 1
     assert "event_version" not in row
     assert row["event_type"] == "submit"
     assert row["result"] == "success"
@@ -97,11 +101,13 @@ def test_t2_v1_complete_accepted(sink):
         actor_kind="USER", actor_ref="user:abc",
     )
     assert ok is True
+    assert sink["insert_count"] == 1
     assert row["event_version"] == 1
     assert row["event_name"] == "INSPECTION_SUBMITTED"
     assert row["actor_kind"] == "USER"
     assert row["actor_ref"] == "user:abc"
-    assert row["occurred_at"]  # server-derived
+    assert row["occurred_at"]  # server-derived, tz-aware
+    assert canonical.is_tz_aware_datetime(row["occurred_at"])
 
 
 # ─── T3–T9: v1 rejection (application mirror of be_contract_v1_chk) ───
@@ -178,21 +184,22 @@ def test_t15_pending_does_not_fabricate_outcome():
     assert canonical.map_outcome("pending") is None
 
 
-# ─── T16–T17: fail-safe / non-blocking ───
+# ─── T16–T17: fail-safe / non-blocking (§90 PATCH-1) ───
 
 def test_t16_emit_db_failure_non_blocking(sink):
     sink["raise_on_insert"] = True
-    ok = emit_event(**_REAL)  # must not raise
+    ok = emit_event(**_REAL)  # legacy write; must not raise
     assert ok is False
 
 
-def test_t17_canonical_validation_failure_non_blocking(sink):
-    # invalid event_name → must not raise, records as legacy, returns True
+def test_t17_canonical_invalid_not_recorded(sink):
+    # invalid event_name → NOT recorded, no legacy downgrade, no exception.
     ok, row = _emit(
         sink, event_name="bad name", actor_kind="USER", actor_ref="user:abc",
     )
-    assert ok is True
-    assert "event_version" not in row
+    assert ok is False
+    assert row is None
+    assert sink["insert_count"] == 0
 
 
 # ─── T18: legacy reader compatibility ───
@@ -229,20 +236,21 @@ def test_t18_legacy_reader_remains_compatible():
 def test_t19_environment_value_preserved(sink):
     _, row = _emit(sink, environment="mock")
     assert row["environment"] == "mock"
-    sink.clear()
+    sink.pop("row", None)
     _, row = _emit(sink, environment="production")
     assert row["environment"] == "production"
 
 
-# ─── T20: placeholder trace cannot become v1 ───
+# ─── T20: placeholder trace cannot become v1 (rejected, not downgraded) ───
 
-def test_t20_placeholder_trace_cannot_become_v1(sink):
+def test_t20_placeholder_trace_not_recorded(sink):
     ok, row = _emit(
         sink, trace_id="no_trace", event_name="X_Y",
         actor_kind="SYSTEM", actor_ref="system:sched",
     )
-    assert ok is True
-    assert "event_version" not in row
+    assert ok is False
+    assert row is None
+    assert sink["insert_count"] == 0
     # canonical builder also refuses at the source
     core, errs = canonical.build_contract_core(
         event_name="X_Y", actor_kind="SYSTEM", actor_ref="system:sched",
@@ -251,3 +259,29 @@ def test_t20_placeholder_trace_cannot_become_v1(sink):
     )
     assert core is None
     assert any("trace_id" in e for e in errs)
+
+
+# ─── T21–T22: occurred_at timezone-awareness (§12) ───
+
+def test_t21_naive_occurred_at_rejected(sink):
+    # caller supplies a naive (no offset) occurred_at → NOT recorded.
+    ok, row = _emit(
+        sink, event_name="INSPECTION_SUBMITTED", actor_kind="USER",
+        actor_ref="user:abc", occurred_at="2026-01-01T00:00:00",
+    )
+    assert ok is False
+    assert row is None
+    assert sink["insert_count"] == 0
+    assert canonical.is_tz_aware_datetime("2026-01-01T00:00:00") is False
+
+
+def test_t22_aware_occurred_at_accepted(sink):
+    ok, row = _emit(
+        sink, event_name="INSPECTION_SUBMITTED", actor_kind="USER",
+        actor_ref="user:abc", occurred_at="2026-01-01T09:00:00+09:00",
+    )
+    assert ok is True
+    assert row["event_version"] == 1
+    assert row["occurred_at"] == "2026-01-01T09:00:00+09:00"
+    # 'Z' suffix is also accepted as UTC-aware
+    assert canonical.is_tz_aware_datetime("2026-01-01T00:00:00Z") is True

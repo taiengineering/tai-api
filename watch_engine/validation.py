@@ -16,6 +16,7 @@ from watch_engine.canonical import (
     is_valid_event_name,
     is_valid_actor_kind,
     is_valid_outcome,
+    is_tz_aware_datetime,
     PLACEHOLDER_TRACE,
 )
 
@@ -64,10 +65,10 @@ def validate_contract_v1(payload: EventPayload) -> tuple[bool, list[str]]:
     """Application-level mirror of be_contract_v1_chk (§17). Never raises.
 
     A payload is a valid Common Event Contract v1 row iff event_version == 1
-    AND the full canonical core is present and non-placeholder. Legacy payloads
-    (event_version is None) are NOT v1 and intentionally return (False, [...])
-    here; callers use this ONLY to gate v1 promotion, never to reject legacy
-    writes.
+    AND the full canonical core is present, non-placeholder, and occurred_at is
+    timezone-aware. Legacy payloads (event_version is None) are NOT v1 and
+    intentionally return (False, [...]) here; callers use this ONLY to gate v1
+    emission, never to reject legacy writes.
     """
     errors: list[str] = []
 
@@ -79,8 +80,14 @@ def validate_contract_v1(payload: EventPayload) -> tuple[bool, list[str]]:
         errors.append(f"actor_kind invalid/missing: {payload.actor_kind!r}")
     if not (isinstance(payload.actor_ref, str) and payload.actor_ref.strip()):
         errors.append("actor_ref is required and must be non-empty")
+
+    # §12 occurred_at: required, parseable, timezone-aware.
     if not payload.occurred_at:
         errors.append("occurred_at is required")
+    elif not is_tz_aware_datetime(payload.occurred_at):
+        errors.append(
+            f"occurred_at must be timezone-aware: {payload.occurred_at!r}"
+        )
 
     tid = payload.trace_id
     if not (isinstance(tid, str) and tid.strip()) or tid in PLACEHOLDER_TRACE:
