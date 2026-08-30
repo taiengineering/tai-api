@@ -12,6 +12,8 @@ from fastapi.responses import HTMLResponse
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user, get_current_user_optional
+from watch_engine import create_trace
+from watch_engine.trace import clear_trace
 from schemas.diagnosis_integrated import DiagnosisRunBody, DisclaimerBody, UpgradeBody
 from schemas.legal_engine import DiagnoseStep1Body
 from services.diagnosis_helpers import _auto_tier, _build_partial, _now, _sha256
@@ -240,56 +242,66 @@ def save_disclaimer(body: DisclaimerBody, request: Request):
 
 
 async def _run_diagnosis_impl(body: DiagnosisRunBody, current_user: Optional[dict] = None):
-    supabase = get_supabase()
-    run_body = nexas_run_body_from_request(body.model_dump())
-    result = diagnosis_integrated_svc.run_diagnosis(
-        supabase=supabase,
-        body=run_body,
-        run_step1_func=_run_step1_via_service,
-        auto_tier_func=_auto_tier,
-        build_partial_func=_build_partial,
-        now_func=_now,
-        paid_tier_prices=PAID_TIER_PRICES,
-        free_tier_codes=FREE_TIER_CODES,
-        engine_version=ENGINE_VERSION,
-        current_user=current_user,
-    )
+    # §94: paid diagnosis run trace — 성공 가능한 유료 run의 필요조건(member current_user
+    # AND payment_ref)일 때만 시작. 무료/guest path에는 paid trace를 만들지 않는다.
+    _trace_created = False
+    if current_user is not None and body.payment_ref:
+        create_trace(flow_key="paid_diagnosis_run", tenant_id="tai", actor_type="user")
+        _trace_created = True
+    try:
+        supabase = get_supabase()
+        run_body = nexas_run_body_from_request(body.model_dump())
+        result = diagnosis_integrated_svc.run_diagnosis(
+            supabase=supabase,
+            body=run_body,
+            run_step1_func=_run_step1_via_service,
+            auto_tier_func=_auto_tier,
+            build_partial_func=_build_partial,
+            now_func=_now,
+            paid_tier_prices=PAID_TIER_PRICES,
+            free_tier_codes=FREE_TIER_CODES,
+            engine_version=ENGINE_VERSION,
+            current_user=current_user,
+        )
 
-    factory_id = (body.factory_id or "").strip() or None
-    company_id = (body.company_id or "").strip() or None
-    if factory_id and not company_id:
-        try:
-            fac = (
-                supabase.table("factories")
-                .select("company_id")
-                .eq("id", factory_id)
-                .limit(1)
-                .execute()
-            )
-            if fac.data:
-                company_id = str(fac.data[0].get("company_id") or "").strip() or None
-        except Exception as e:
-            log.warning("Binding Engine company_id lookup failed (non-blocking): %s", e)
-
-    if factory_id and company_id:
-        try:
-            full_result = result.get("result") or {}
-            rules_for_binding = convert_rules_table_to_matched_rules(
-                full_result.get("rules_table") or []
-            )
-            if rules_for_binding:
-                diagnosis_id = result.get("diagnosis_id") or result.get("public_token") or "unknown"
-                binding_result = await project_rules(
-                    tenant_id=str(company_id),
-                    facility_id=str(factory_id),
-                    matched_rules=rules_for_binding,
-                    trace_id=f"diagnosis-{diagnosis_id}",
+        factory_id = (body.factory_id or "").strip() or None
+        company_id = (body.company_id or "").strip() or None
+        if factory_id and not company_id:
+            try:
+                fac = (
+                    supabase.table("factories")
+                    .select("company_id")
+                    .eq("id", factory_id)
+                    .limit(1)
+                    .execute()
                 )
-                log.info("Binding Engine: %s", binding_result.get("stats"))
-        except Exception as e:
-            log.warning("Binding Engine 호출 실패 (non-blocking): %s", e)
+                if fac.data:
+                    company_id = str(fac.data[0].get("company_id") or "").strip() or None
+            except Exception as e:
+                log.warning("Binding Engine company_id lookup failed (non-blocking): %s", e)
 
-    return build_nexas_run_response(result)
+        if factory_id and company_id:
+            try:
+                full_result = result.get("result") or {}
+                rules_for_binding = convert_rules_table_to_matched_rules(
+                    full_result.get("rules_table") or []
+                )
+                if rules_for_binding:
+                    diagnosis_id = result.get("diagnosis_id") or result.get("public_token") or "unknown"
+                    binding_result = await project_rules(
+                        tenant_id=str(company_id),
+                        facility_id=str(factory_id),
+                        matched_rules=rules_for_binding,
+                        trace_id=f"diagnosis-{diagnosis_id}",
+                    )
+                    log.info("Binding Engine: %s", binding_result.get("stats"))
+            except Exception as e:
+                log.warning("Binding Engine 호출 실패 (non-blocking): %s", e)
+
+        return build_nexas_run_response(result)
+    finally:
+        if _trace_created:
+            clear_trace()
 
 
 @router.post("/run")
@@ -309,16 +321,21 @@ async def run_diagnosis(
 
 
 async def _upgrade_diagnosis_impl(body: UpgradeBody, current_user: dict):
-    supabase = get_supabase()
-    return diagnosis_integrated_svc.upgrade_diagnosis(
-        supabase=supabase,
-        body=body,
-        run_step1_func=_run_step1_via_service,
-        build_partial_func=_build_partial,
-        paid_tier_prices=PAID_TIER_PRICES,
-        current_user=current_user,
-        now_func=_now,
-    )
+    # §94: paid diagnosis upgrade trace (upgrade는 get_current_user 필수 → 항상 유료).
+    create_trace(flow_key="paid_diagnosis_upgrade", tenant_id="tai", actor_type="user")
+    try:
+        supabase = get_supabase()
+        return diagnosis_integrated_svc.upgrade_diagnosis(
+            supabase=supabase,
+            body=body,
+            run_step1_func=_run_step1_via_service,
+            build_partial_func=_build_partial,
+            paid_tier_prices=PAID_TIER_PRICES,
+            current_user=current_user,
+            now_func=_now,
+        )
+    finally:
+        clear_trace()
 
 
 @router.post("/upgrade")
