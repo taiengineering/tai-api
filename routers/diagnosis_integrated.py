@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user, get_current_user_optional
-from watch_engine import create_trace
+from watch_engine import create_trace, emit_event
 from watch_engine.trace import clear_trace
 from schemas.diagnosis_integrated import DiagnosisRunBody, DisclaimerBody, UpgradeBody
 from schemas.legal_engine import DiagnoseStep1Body
@@ -263,6 +263,23 @@ async def _run_diagnosis_impl(body: DiagnosisRunBody, current_user: Optional[dic
             engine_version=ENGINE_VERSION,
             current_user=current_user,
         )
+
+        # §97-A: paid run Common Event v1 — service의 실제 outcome(is_free is False)일 때만,
+        # 그리고 server-resolved actor id가 있을 때만 기록. observability fail-soft
+        # (actor 없거나 emit 실패해도 business transaction 성공 유지). 무료/guest 미기록.
+        if result.get("is_free") is False:
+            _actor_id = str((current_user or {}).get("id") or "").strip()
+            if _actor_id:
+                emit_event(
+                    step_key="result_save",
+                    step_order=1,
+                    event_type="save",
+                    result="success",
+                    connector_type="database",
+                    event_name="DIAGNOSIS_COMPLETED",
+                    actor_kind="USER",
+                    actor_ref=f"user:{_actor_id}",
+                )
 
         factory_id = (body.factory_id or "").strip() or None
         company_id = (body.company_id or "").strip() or None
