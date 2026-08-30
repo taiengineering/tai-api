@@ -1,6 +1,5 @@
 # WO-FE-CST-GAP-IMPL-001 E-C — CONSTRUCTION 11 fact via official form_data envelope, REAL run_diagnosis.
-# E-C1: Nexas 격리 후 기존 필수 paid base input(project_amount/worker_count/construction_type/
-#       project_address/process_list) 보존까지 검증. real run_diagnosis→build_facility 관측.
+# E-C1: Nexas 격리 후 기존 필수 paid base input 보존. CORRECTION-01: 0≠None 보존 + invalid numeric 422.
 from schemas.diagnosis_integrated import DiagnosisRunBody
 from clients.leg_runtime_client import build_facility
 from services import diagnosis_integrated_svc as _svc
@@ -51,10 +50,8 @@ def test_chemical_exact_name():
     assert fac.get("has_chemical_substance") is True and "has_chemical" not in fac
 
 def test_industrial_firewall():
-    # 산업은 form_data.has_gas → 공통 canonical 배선(정상, 변경 없음)
     fac=_cap(_body("INDUSTRIAL",{"has_gas":True}))
     assert fac.get("has_gas") is True
-    # 산업 chemical 은 top-level body.has_chemical_substance(else 분기) — FIX-B2(CONSTRUCTION 전용) 무관.
     b=DiagnosisRunBody(auth_token="t",sector="INDUSTRIAL",disclaimer_log_id="disc1",has_chemical_substance=True)
     fac2=_cap(b)
     assert fac2.get("has_chemical") is True and "has_chemical_substance" not in fac2
@@ -68,7 +65,7 @@ def test_non_target_via_formdata():
     assert fac.get("has_welding") is True
 
 
-# ── WO-FE-CST-GAP-IMPL-001 E-C1: paid base input preservation after Nexas quarantine ──
+# ── E-C1: paid base input preservation after Nexas quarantine ──
 def _cap_all(body):
     """run_diagnosis 로 생성된 step1_body + 저장 row + auto_tier 전달값 캡처."""
     cap = {}
@@ -94,7 +91,6 @@ def _cap_all(body):
 
 
 def test_ec1_paid_base_input_preserved_form_data_only():
-    # 실제 Primary UI 와 동일하게 form_data only (top-level 미설정)
     fd = {
         "project_amount": 50, "worker_count": 100, "construction_type": "토목",
         "project_address": "서울시 강남구", "process_list": [{"process_name": "굴착"}],
@@ -106,16 +102,13 @@ def test_ec1_paid_base_input_preserved_form_data_only():
     assert float(s1.contract_amount_eok) == 50.0, s1.contract_amount_eok
     assert (s1.input or {}).get("region") == "서울시 강남구", (s1.input or {}).get("region")
     assert tier_seen["contract_amount_eok"] == 50.0, tier_seen
-    # raw structured storage
     rsi = (row.get("input_data") or {}).get("raw_structured_input") or {}
     assert rsi.get("process_list") == [{"process_name": "굴착"}], rsi
-    # Coverage 11 still materialize
     fac = build_facility(s1)
     assert all(fac.get(c) is True for c in CST11), {c: fac.get(c) for c in CST11}
 
 
 def test_ec1_top_level_precedence_over_form_data():
-    # top-level 명시값이 있으면 form_data 보다 우선
     b = DiagnosisRunBody(auth_token="t", sector="CONSTRUCTION", disclaimer_log_id="disc1",
                          worker_count=7, contract_amount_eok=3.0,
                          form_data={"worker_count": 100, "project_amount": 50})
@@ -123,3 +116,33 @@ def test_ec1_top_level_precedence_over_form_data():
     assert s1.worker_count == 7
     assert float(s1.contract_amount_eok) == 3.0
     assert tier_seen["contract_amount_eok"] == 3.0
+
+
+# ── E-C1 CORRECTION-01: zero preservation + invalid numeric fail-closed ──
+import pytest
+from fastapi import HTTPException
+
+
+def test_ec1c1_zero_preserved():
+    # 0 은 명시적 값 — tier·Step1·storage 에서 일관되게 0 유지(1.0 default 로 넘어가지 않음)
+    fd = {"project_amount": 0, "worker_count": 0, "construction_type": "토목"}
+    s1, row, tier_seen = _cap_all(_body("CONSTRUCTION", fd))
+    assert tier_seen["contract_amount_eok"] == 0.0, tier_seen
+    assert float(s1.contract_amount_eok) == 0.0, s1.contract_amount_eok
+    assert s1.worker_count == 0, s1.worker_count
+    idata = row.get("input_data") or {}
+    assert float(idata.get("contract_amount_eok")) == 0.0, idata
+    assert idata.get("workers") == 0, idata
+
+
+def test_ec1c1_invalid_project_amount_422():
+    # form_data 에 키가 있으나 숫자 변환 불가 → silent default 금지, 422 fail-closed
+    with pytest.raises(HTTPException) as ei:
+        _cap_all(_body("CONSTRUCTION", {"project_amount": "INVALID"}))
+    assert ei.value.status_code == 422
+
+
+def test_ec1c1_invalid_worker_count_422():
+    with pytest.raises(HTTPException) as ei:
+        _cap_all(_body("CONSTRUCTION", {"worker_count": "INVALID"}))
+    assert ei.value.status_code == 422
