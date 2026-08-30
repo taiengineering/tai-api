@@ -7,6 +7,14 @@ Fail-safe guarantee:
     emit_event() NEVER raises exceptions.
     emit_event() NEVER blocks the service.
     If recording fails, a warning is logged and the service continues.
+
+Common Event Contract v1 (§87/§90):
+    emit_event() can additionally record the canonical v1 core
+    (event_name / event_version / occurred_at / actor_kind / actor_ref /
+    outcome). A row is promoted to event_version=1 ONLY when a COMPLETE,
+    non-placeholder canonical core is supplied. Otherwise the row is written
+    as a legacy event (event_version NULL) and a warning is logged — canonical
+    values are NEVER fabricated from legacy-only data (§7/§16).
 """
 
 import hashlib
@@ -18,7 +26,8 @@ from typing import Optional
 from watch_engine.pii import strip_pii
 from watch_engine.trace import TraceContext, get_current_trace
 from watch_engine.types import EventPayload
-from watch_engine.validation import validate_event
+from watch_engine.validation import validate_event, validate_contract_v1
+from watch_engine.canonical import build_contract_core
 
 logger = logging.getLogger("watch_engine.emitter")
 
@@ -70,6 +79,12 @@ def emit_event(
     session_id: Optional[str] = None,
     scenario_run_id: Optional[str] = None,
     actor_type: Optional[str] = None,
+    # ─── Common Event Contract v1 (optional; §90) ───
+    event_name: Optional[str] = None,
+    actor_kind: Optional[str] = None,
+    actor_ref: Optional[str] = None,
+    occurred_at: Optional[str] = None,
+    outcome: Optional[str] = None,
 ) -> bool:
     """Record a business event. NEVER raises. NEVER blocks.
 
@@ -78,6 +93,13 @@ def emit_event(
         2. Explicit trace parameter
         3. Current context trace (contextvars)
         4. Defaults
+
+    Common Event Contract v1:
+        Passing any of event_name / actor_kind / actor_ref / occurred_at /
+        outcome signals a request to record the canonical v1 core. The row is
+        promoted to event_version=1 ONLY when the full canonical core is valid
+        and non-placeholder; otherwise it is recorded as a legacy event and a
+        warning is logged (no fabrication).
 
     Returns:
         True if event was recorded successfully.
@@ -103,6 +125,34 @@ def emit_event(
         # ─── Compute hash ───
         p_hash = _compute_hash(cleaned_payload)
 
+        # ─── Common Event Contract v1 (optional, non-fabricating) ───
+        core = None
+        canonical_requested = any(
+            v is not None
+            for v in (event_name, actor_kind, actor_ref, occurred_at, outcome)
+        )
+        if canonical_requested:
+            core, core_errors = build_contract_core(
+                event_name=event_name,
+                actor_kind=actor_kind,
+                actor_ref=actor_ref,
+                trace_id=resolved_trace_id,
+                service_key=resolved_service,
+                tenant_id=resolved_tenant,
+                environment=resolved_env,
+                occurred_at=occurred_at,
+                outcome=outcome,
+                result=result,
+            )
+            if core is None:
+                logger.warning(
+                    "Canonical v1 requested but incomplete for %s/%s → recording as "
+                    "LEGACY (event_version NULL): %s",
+                    resolved_flow, step_key, core_errors,
+                )
+
+        _core = core or {}
+
         # ─── Build payload ───
         payload = EventPayload(
             tenant_id=resolved_tenant,
@@ -121,15 +171,39 @@ def emit_event(
             scenario_run_id=resolved_scenario,
             payload_summary=cleaned_payload,
             payload_hash=p_hash,
+            event_name=_core.get("event_name"),
+            event_version=_core.get("event_version"),
+            occurred_at=_core.get("occurred_at"),
+            actor_kind=_core.get("actor_kind"),
+            actor_ref=_core.get("actor_ref"),
+            outcome=_core.get("outcome"),
         )
 
-        # ─── Validate ───
+        # ─── Validate (legacy, non-blocking) ───
         is_valid, errors = validate_event(payload)
         if not is_valid:
             logger.warning(
                 "Event validation failed for %s/%s: %s — recording anyway",
                 resolved_flow, step_key, errors,
             )
+
+        # ─── Validate v1 contract (application layer, §17; defensive) ───
+        if payload.event_version is not None:
+            v1_ok, v1_errors = validate_contract_v1(payload)
+            if not v1_ok:
+                # Never emit a malformed v1 row; fall back to legacy. Do not
+                # hide the error — log it loudly (§17).
+                logger.warning(
+                    "v1 contract validation failed for %s/%s → downgrading to "
+                    "LEGACY: %s",
+                    resolved_flow, step_key, v1_errors,
+                )
+                payload.event_name = None
+                payload.event_version = None
+                payload.occurred_at = None
+                payload.actor_kind = None
+                payload.actor_ref = None
+                payload.outcome = None
 
         # ─── Insert ───
         sb = _get_supabase()
@@ -154,6 +228,13 @@ def emit_event(
             "result": payload.result,
             "payload_summary": payload.payload_summary,
             "payload_hash": payload.payload_hash,
+            # ─── Common Event Contract v1 (None values stripped below) ───
+            "event_name": payload.event_name,
+            "event_version": payload.event_version,
+            "occurred_at": payload.occurred_at,
+            "actor_kind": payload.actor_kind,
+            "actor_ref": payload.actor_ref,
+            "outcome": payload.outcome,
         }
 
         # Remove None values for clean insert
@@ -162,8 +243,9 @@ def emit_event(
         sb.table("business_event").insert(row).execute()
 
         logger.debug(
-            "Event recorded: %s/%s [%s] result=%s",
+            "Event recorded: %s/%s [%s] result=%s ver=%s",
             resolved_flow, step_key, resolved_trace_id, result,
+            payload.event_version if payload.event_version else "legacy",
         )
         return True
 
