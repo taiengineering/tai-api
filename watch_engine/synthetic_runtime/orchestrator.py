@@ -182,6 +182,10 @@ def run_synthetic_tick(sb=None) -> dict:
                     "environment": "mock",
                 }, sb=sb)
             else:
+                # §91 A-NARROW canary: this is the ONLY event promoted to
+                # Common Event v1 (mock + workflow.completed). occurred_at is
+                # provided here, at the real event-occurrence point, as a
+                # timezone-aware server UTC timestamp. No other event carries it.
                 r = emit_runtime_event(ctx, {
                     "event_type": "workflow.completed",
                     "flow_key": scenario["flow_key"],
@@ -189,6 +193,7 @@ def run_synthetic_tick(sb=None) -> dict:
                     "severity": "INFO",
                     "tenant_id": tenant_id,
                     "environment": "mock",
+                    "occurred_at": datetime.now(timezone.utc).isoformat(),
                 }, sb=sb)
             stats["events"] += 1 if r.accepted else 0
             stats["workflows"] += 1
