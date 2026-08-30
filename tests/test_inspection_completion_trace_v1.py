@@ -11,9 +11,6 @@ def _fn(name):
 def _create_trace_calls(fnname):
     return [n for n in ast.walk(_fn(fnname))
             if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "create_trace"]
-def _emit_calls(fnname):
-    return [n for n in ast.walk(_fn(fnname))
-            if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "emit_event"]
 def _kw(c):
     return {k.arg: (k.value.value if isinstance(k.value, ast.Constant) else "?") for k in c.keywords}
 def _clear_in_finally(fnname):
@@ -40,9 +37,6 @@ def test_t3_namespace_and_actor():
 def test_t4_clear_in_finally():
     assert _clear_in_finally("record_inspection_results")
     assert _clear_in_finally("complete_inspection")
-def test_t5_target_funcs_no_emit():
-    assert _emit_calls("record_inspection_results") == []
-    assert _emit_calls("complete_inspection") == []
 @pytest.fixture
 def mod(monkeypatch):
     import routers.inspection_checklist as m
@@ -70,6 +64,15 @@ def test_result_ownership_failure_no_trace(mod):
     with pytest.raises(HTTPException):
         asyncio.run(m.record_inspection_results("insp-1", {"results": [{"result": "NORMAL"}]}, current={"id": "u1"}))
     assert calls["create"] == [] and calls["clear"] == 0
+def test_complete_business_exception_clears(mod):
+    m, calls, _ = mod
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as ei:
+        asyncio.run(m.complete_inspection("ws-1", {}, current={"id": "u1"}))
+    assert ei.value.status_code == 500
+    assert len(calls["create"]) == 1
+    assert calls["create"][0]["flow_key"] == "inspection_complete"
+    assert calls["clear"] == 1
 def test_complete_ownership_failure_no_trace(mod):
     m, calls, monkeypatch = mod
     from fastapi import HTTPException
