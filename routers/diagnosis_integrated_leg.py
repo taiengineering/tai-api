@@ -19,7 +19,6 @@ from routers.auth import get_current_user_optional
 from schemas.diagnosis_integrated import DiagnosisRunBody
 from services import diagnosis_integrated_svc
 from services.diagnosis_helpers import _auto_tier, _build_partial, _now
-from services.diagnosis_nexas_adapter import nexas_run_body_from_request
 from services.leg_diagnosis_svc import run_leg_diagnosis, LegDiagnosisError
 from clients.leg_runtime_client import LegRuntimeError, is_enabled
 # 유료 티어 가격/무료 코드는 TAI 유료 라우터의 정의를 재사용(단일 출처)
@@ -48,7 +47,10 @@ async def _run_leg_impl(body: DiagnosisRunBody, current_user: Optional[dict] = N
         raise HTTPException(status_code=503, detail="LEG_RUNTIME_URL이 설정되어 있지 않습니다.")
 
     supabase = get_supabase()
-    run_body = nexas_run_body_from_request(body.model_dump())
+    # WO-FE-CST-GAP-IMPL-001 E-C: Nexas 격리. official paid input envelope = DiagnosisRunBody.form_data.
+    # run_diagnosis 가 _available.update(form_data) → canonical_applicability → DiagnoseStep1Body.input 으로
+    # lossless materialize 하므로 nexas adapter 를 경유하지 않고 body 를 그대로 전달한다.
+    run_body = body
 
     # 오케스트레이션(인증·티어·과금·무료횟수·저장) 전부 재사용, 엔진만 LEG.
     result = diagnosis_integrated_svc.run_diagnosis(
