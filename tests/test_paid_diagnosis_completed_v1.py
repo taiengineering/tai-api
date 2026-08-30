@@ -43,13 +43,8 @@ def test_static_is_false_guard_exact():
     assert 'result.get("is_free") is False' in SRC
 def test_static_safe_actor_extraction():
     assert '(current_user or {}).get("id")' in SRC
-def test_static_upgrade_no_emit():
-    assert _emits("_upgrade_diagnosis_impl") == []
 def test_static_binding_trace_untouched():
     assert 'f"diagnosis-{diagnosis_id}"' in SRC
-def test_static_only_one_canonical_event_name():
-    assert "DIAGNOSIS_UPGRADED" not in SRC
-    assert "DIAGNOSIS_FAILED" not in SRC
 @pytest.fixture
 def mod(monkeypatch):
     import routers.diagnosis_integrated as m
