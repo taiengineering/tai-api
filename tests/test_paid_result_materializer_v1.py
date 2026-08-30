@@ -1,4 +1,4 @@
-"""tests/test_paid_result_materializer_v1.py — STEP3A T1~T18.
+"""tests/test_paid_result_materializer_v1.py — STEP3A T1~T18 + REV-1 T19~T22.
 
 대상: services/paid_result_materializer.build_paid_result_materials_v1
 
@@ -38,6 +38,7 @@ def _obligation(
     inspection_cycle=None,
     atom_id="atom-1",
     source_atom_ids=None,
+    applicability="APPLICABLE",
 ):
     detail = {}
     for key, value in (
@@ -65,7 +66,7 @@ def _obligation(
         "law_name": law_name,
         "law_article": law_article,
         "evidence": evidence,
-        "applicability": "APPLICABLE",
+        "applicability": applicability,
         "triggered_by": triggered_by if triggered_by is not None else [],
         "obligation_detail": detail,
         "enrichment": enrichment,
@@ -709,9 +710,15 @@ def test_provenance_present_for_every_material():
     for key, entry in registry.items():
         assert entry["material_type"]
         assert entry["material_version"] == 1
-        assert entry["derivation_rule"]
-        assert entry["derivation_version"] == 1
+        assert isinstance(entry["derivation_version"], int)
+        assert entry["derivation_version"] >= 1
+        # derivation_rule 라벨은 규칙명과 버전을 담는다 — 규칙 의미가 바뀌면 버전이 올라간다.
+        assert entry["derivation_rule"].endswith("_V{}".format(entry["derivation_version"]))
         assert isinstance(entry["source_fields"], list) and entry["source_fields"]
+    # STEP3A REV-1 에서 의미가 바뀐 규칙은 버전이 올라가 있어야 한다.
+    assert registry["normalized_obligations"]["derivation_rule"] == "NORMALIZER_V2"
+    assert registry["overview"]["derivation_rule"] == "R01_V2"
+    assert registry["law_portfolio"]["derivation_rule"] == "R02_V2"
     for key in ("normalized_obligations", "applicability_basis", "execution_seed"):
         assert registry[key]["source_obligation_refs"] == [0, 1, 2]
 
@@ -778,3 +785,116 @@ def test_non_dict_obligation_entries_are_ignored_not_invented():
     raw["obligations_raw"].extend([None, "x", 3])
     out = build_paid_result_materials_v1(raw)
     assert out["overview"]["total_obligation_count"] == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP3A REV-1 — T19~T22
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_t19_unspecified_law_is_not_counted_as_a_law():
+    obligations = [
+        _obligation(law_name="산업안전보건법", law_article="17", atom_id="a1"),
+        _obligation(law_name="건축법", law_article="41", atom_id="a2"),
+        _obligation(law_name=None, law_article="9", atom_id="a3"),
+    ]
+    out = build_paid_result_materials_v1(_full_result(obligations))
+
+    assert out["overview"]["distinct_law_count"] == 2
+    assert out["overview"]["unspecified_law_obligation_count"] == 1
+    # 총 의무 건수는 줄지 않는다 — 삭제가 아니라 분리 계수다.
+    assert out["overview"]["total_obligation_count"] == 3
+
+    # UNSPECIFIED 버킷 자체는 law_portfolio 에 보존된다.
+    names = [row["law_name"] for row in out["law_portfolio"]]
+    assert "UNSPECIFIED" in names
+    assert len(out["law_portfolio"]) == 3
+
+
+def test_t20_unspecified_article_is_not_counted_as_an_article():
+    obligations = [
+        _obligation(law_article="17", atom_id="a1"),
+        _obligation(law_article="18", atom_id="a2"),
+        _obligation(law_article=None, atom_id="a3"),
+    ]
+    out = build_paid_result_materials_v1(_full_result(obligations))
+
+    assert len(out["law_portfolio"]) == 1
+    row = out["law_portfolio"][0]
+    assert row["article_count"] == 2
+    assert row["unspecified_article_obligation_count"] == 1
+    assert row["obligation_count"] == 3
+
+    # R13 은 UNSPECIFIED group 을 유지한다(삭제 금지). 다만 실제 조문수로 세지 않는다.
+    articles = [b["law_article"] for b in out["article_bundles"]]
+    assert "UNSPECIFIED" in articles
+    assert len(out["article_bundles"]) == 3
+
+
+def test_t20b_unspecified_law_bucket_counts_its_own_articles_correctly():
+    obligations = [
+        _obligation(law_name=None, law_article="9", atom_id="a1"),
+        _obligation(law_name=None, law_article=None, atom_id="a2"),
+    ]
+    out = build_paid_result_materials_v1(_full_result(obligations))
+    row = [r for r in out["law_portfolio"] if r["law_name"] == "UNSPECIFIED"][0]
+    assert row["article_count"] == 1
+    assert row["unspecified_article_obligation_count"] == 1
+    assert out["overview"]["distinct_law_count"] == 0
+    assert out["overview"]["unspecified_law_obligation_count"] == 2
+
+
+def test_t21_raw_applicability_is_preserved_losslessly():
+    obligations = [
+        _obligation(applicability="APPLICABLE", atom_id="a1"),
+        _obligation(applicability="REQUIRED_ADDITIONAL_INPUT", law_article="38", atom_id="a2"),
+        _obligation(applicability=None, law_article="39", atom_id="a3"),
+    ]
+    out = build_paid_result_materials_v1(_full_result(obligations))
+
+    values = [o["applicability"]["engine_applicability"] for o in out["normalized_obligations"]]
+    assert values == ["APPLICABLE", "REQUIRED_ADDITIONAL_INPUT", None]
+
+    # 기존 applicability 필드는 삭제되지 않았다.
+    first = out["normalized_obligations"][0]["applicability"]
+    assert set(first) == {"engine_applicability", "condition", "triggered_by", "consumer_status"}
+
+    # availability 도 함께 표기된다.
+    assert out["normalized_obligations"][0]["availability"][
+        "applicability.engine_applicability"] == "AVAILABLE"
+    assert out["normalized_obligations"][2]["availability"][
+        "applicability.engine_applicability"] == "NULL"
+
+
+def test_t22_no_filter_implemented():
+    """FILTER RULE 미확정 → 어떤 상태로도 obligation 을 제외하지 않는다.
+
+    근거(STEP3A REV-1 / O1 조사):
+      · applicability 는 현행 엔진에서 하드코딩 상수이며(rtm/api.py:92),
+        비적용 원자는 응답 조립 전에 이미 제거된다(rtm/engine.py:183-191).
+      · check_result=NOT_APPLICABLE 은 clause 의 actor/target 메타 부재를 뜻하며
+        (check_engine/validator.py:143-154) 사업장 차원의 법적 비적용이 아니다.
+    따라서 어떤 필드로도 필터링하지 않는다.
+    """
+    obligations = [
+        _obligation(check_result="VERIFIED", consumer_status="applicable", atom_id="a1"),
+        _obligation(check_result="NOT_APPLICABLE", consumer_status="applicable",
+                    law_article="38", atom_id="a2"),
+        _obligation(check_result="BLOCKED", consumer_status="review_required",
+                    usable_for_evaluation=False, law_article="39", atom_id="a3"),
+        _obligation(check_result=None, consumer_status=None, law_article="40", atom_id="a4"),
+    ]
+    raw = _full_result(obligations)
+    out = build_paid_result_materials_v1(raw)
+
+    # 모수 = RAW 전건. 상태로 제외하지 않는다.
+    assert out["overview"]["total_obligation_count"] == 4
+    assert len(out["normalized_obligations"]) == 4
+    assert len(out["execution_seed"]) == 4
+    assert len(out["applicability_basis"]) == 4
+    assert sum(r["obligation_count"] for r in out["law_portfolio"]) == 4
+
+    # 상태는 감추지 않고 그대로 계수한다.
+    assert out["verification_summary"]["counts"] == {
+        "BLOCKED": 1, "NOT_APPLICABLE": 1, "UNKNOWN": 1, "VERIFIED": 1,
+    }
+    assert out["verification_summary"]["total"] == 4
