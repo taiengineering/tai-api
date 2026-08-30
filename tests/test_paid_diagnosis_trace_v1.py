@@ -1,4 +1,8 @@
-"""§94 STEP A — paid diagnosis trace lifecycle (routers/diagnosis_integrated.py)."""
+"""§94 STEP A — paid diagnosis trace lifecycle (routers/diagnosis_integrated.py).
+
+§94 owns trace lifecycle only. Later explicitly-approved Common Event producers
+may coexist in this router.
+"""
 import ast
 import pathlib
 import pytest
@@ -17,11 +21,6 @@ def test_static_trace_namespace_and_actor():
         kw = _kw(c)
         assert kw.get("tenant_id") == "tai"
         assert kw.get("actor_type") == "user"
-def test_static_no_emit_event():
-    assert _calls("emit_event") == []
-def test_static_no_canonical_fields():
-    for kwname in ("event_name", "actor_kind", "actor_ref"):
-        assert kwname not in SRC
 def test_static_binding_trace_string_untouched():
     assert 'f"diagnosis-{diagnosis_id}"' in SRC
 @pytest.fixture
@@ -43,7 +42,7 @@ import asyncio
 def test_r1_r5_paid_run_trace_lifecycle(mod):
     m, calls = mod
     m.diagnosis_integrated_svc.run_diagnosis = lambda **kw: {}
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         m._run_diagnosis_impl(_runbody(payment_ref="pay-1", factory_id=None), current_user={"id": "u-1"}))
     assert len(calls["create"]) == 1
     assert calls["create"][0]["flow_key"] == "paid_diagnosis_run"
@@ -55,19 +54,19 @@ def test_r6_paid_run_clear_on_exception(mod):
     def _boom(**kw): raise RuntimeError("svc down")
     m.diagnosis_integrated_svc.run_diagnosis = _boom
     with pytest.raises(RuntimeError):
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             m._run_diagnosis_impl(_runbody(payment_ref="pay-1"), current_user={"id": "u-1"}))
     assert calls["clear"] == 1
 def test_free1_guest_no_trace(mod):
     m, calls = mod
     m.diagnosis_integrated_svc.run_diagnosis = lambda **kw: {}
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         m._run_diagnosis_impl(_runbody(payment_ref=None), current_user=None))
     assert calls["create"] == [] and calls["clear"] == 0
 def test_free2_authed_no_payment_no_trace(mod):
     m, calls = mod
     m.diagnosis_integrated_svc.run_diagnosis = lambda **kw: {}
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         m._run_diagnosis_impl(_runbody(payment_ref=None), current_user={"id": "u-1"}))
     assert calls["create"] == [] and calls["clear"] == 0
 def test_u1_u5_upgrade_trace_lifecycle(mod):
@@ -75,7 +74,7 @@ def test_u1_u5_upgrade_trace_lifecycle(mod):
     m.diagnosis_integrated_svc.upgrade_diagnosis = lambda **kw: {}
     from schemas.diagnosis_integrated import UpgradeBody
     body = UpgradeBody(auth_token="t", public_token="p", target_tier_code="X", payment_ref="pay-1")
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         m._upgrade_diagnosis_impl(body, current_user={"id": "u-1"}))
     assert len(calls["create"]) == 1
     assert calls["create"][0]["flow_key"] == "paid_diagnosis_upgrade"
@@ -89,6 +88,6 @@ def test_u6_upgrade_clear_on_exception(mod):
     from schemas.diagnosis_integrated import UpgradeBody
     body = UpgradeBody(auth_token="t", public_token="p", target_tier_code="X", payment_ref="pay-1")
     with pytest.raises(RuntimeError):
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             m._upgrade_diagnosis_impl(body, current_user={"id": "u-1"}))
     assert calls["clear"] == 1
