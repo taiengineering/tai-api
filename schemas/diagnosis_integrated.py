@@ -16,8 +16,8 @@ class DiagnosisRunBody(BaseModel):
         None, description="면책 동의 ID (무료 필수, 유료 직입 시 서버 자동 생성 가능)"
     )
     sector: str = Field(..., description="BUILDING | INDUSTRY | INDUSTRIAL | CONSTRUCTION | SPECIAL_FACILITY")
-    tier: Optional[str] = Field(None, description="Nexas: FREE | PAID | BASIC | STANDARD | PREMIUM")
-    form_data: Optional[Dict[str, Any]] = Field(None, description="Nexas 동적 폼 값 (field_code → value)")
+    tier: Optional[str] = Field(None, description="FREE | PAID | BASIC | STANDARD | PREMIUM")
+    form_data: Optional[Dict[str, Any]] = Field(None, description="공식 유료 applicability envelope (field_code → value). run_diagnosis 가 canonical_applicability(_LEG_INPUT_FIELDS exact-name) 로 소비하여 DiagnoseStep1Body.input 으로 lossless materialize (WO-FE-CST-GAP-IMPL-001 E-B4 FROZEN, Nexas 무관)")
     floor_area: Optional[float] = Field(None, description="바닥면적(㎡) — BUILDING")
     total_floor_area: Optional[float] = Field(None, description="연면적(㎡)")
     contract_amount_eok: Optional[float] = Field(None, description="공사금액(억원) — CONSTRUCTION")
