@@ -1,7 +1,6 @@
 # WO-FE-CST-GAP-IMPL-001 E-C — CONSTRUCTION 11 fact via official form_data envelope, REAL run_diagnosis.
-# Nexas 격리 후: form_data(공식 유료 applicability envelope) → run_diagnosis(FIX-B1 CODE-C1 제거,
-# FIX-B2 chemical step1 bridge) → DiagnoseStep1Body → build_facility(FIX-B3 CODE-C2 유지) → facility.
-# 실제 run_diagnosis→build_facility 로 관측(CODE-C1 복제 없음).
+# E-C1: Nexas 격리 후 기존 필수 paid base input(project_amount/worker_count/construction_type/
+#       project_address/process_list) 보존까지 검증. real run_diagnosis→build_facility 관측.
 from schemas.diagnosis_integrated import DiagnosisRunBody
 from clients.leg_runtime_client import build_facility
 from services import diagnosis_integrated_svc as _svc
@@ -56,15 +55,71 @@ def test_industrial_firewall():
     fac=_cap(_body("INDUSTRIAL",{"has_gas":True}))
     assert fac.get("has_gas") is True
     # 산업 chemical 은 top-level body.has_chemical_substance(else 분기) — FIX-B2(CONSTRUCTION 전용) 무관.
-    # build_facility alias 로 facility.has_chemical 유지(C2 는 CONSTRUCTION-gated → 산업 facility.has_chemical 불변)
     b=DiagnosisRunBody(auth_token="t",sector="INDUSTRIAL",disclaimer_log_id="disc1",has_chemical_substance=True)
     fac2=_cap(b)
     assert fac2.get("has_chemical") is True and "has_chemical_substance" not in fac2
 
 def test_building_firewall():
     fac=_cap(_body("BUILDING",{"has_gas":True}))
-    assert fac.get("has_gas") is True  # 공통 canonical 배선(정상), CONSTRUCTION 전용 로직 미적용
+    assert fac.get("has_gas") is True
 
 def test_non_target_via_formdata():
     fac=_cap(_body("CONSTRUCTION",{"has_welding":True}))
-    assert fac.get("has_welding") is True  # has_welding 도 _LEG vocab → 공통 배선(정상). 11 밖이지만 canonical 은 vocab 전체 허용
+    assert fac.get("has_welding") is True
+
+
+# ── WO-FE-CST-GAP-IMPL-001 E-C1: paid base input preservation after Nexas quarantine ──
+def _cap_all(body):
+    """run_diagnosis 로 생성된 step1_body + 저장 row + auto_tier 전달값 캡처."""
+    cap = {}
+    def r1(sb, s1):
+        cap["s1"] = s1
+        return {"status": "success", "data": {"applicable_count": 0, "rules_table": []}}
+    class _T2(_T):
+        def insert(self, row):
+            if self._n == "anonymous_diagnosis_results":
+                cap["row"] = row
+            return super().insert(row)
+    class _S2:
+        def table(self, n): return _T2(n)
+    tier_seen = {}
+    def _auto_tier(sector, floor_area, contract_amount_eok, user_tier):
+        tier_seen["contract_amount_eok"] = contract_amount_eok
+        return "CONSTRUCTION_X"
+    _svc.run_diagnosis(_S2(), body, run_step1_func=r1,
+        auto_tier_func=_auto_tier, build_partial_func=lambda f: {}, now_func=lambda: "2026-01-01T00:00:00Z",
+        paid_tier_prices={}, free_tier_codes={"CONSTRUCTION_FREE", "INDUSTRY_FREE", "BUILDING_FREE"},
+        engine_version="t", current_user=None)
+    return cap["s1"], cap.get("row", {}), tier_seen
+
+
+def test_ec1_paid_base_input_preserved_form_data_only():
+    # 실제 Primary UI 와 동일하게 form_data only (top-level 미설정)
+    fd = {
+        "project_amount": 50, "worker_count": 100, "construction_type": "토목",
+        "project_address": "서울시 강남구", "process_list": [{"process_name": "굴착"}],
+        **{c: True for c in CST11},
+    }
+    s1, row, tier_seen = _cap_all(_body("CONSTRUCTION", fd))
+    assert s1.worker_count == 100, s1.worker_count
+    assert s1.construction_type == "토목", s1.construction_type
+    assert float(s1.contract_amount_eok) == 50.0, s1.contract_amount_eok
+    assert (s1.input or {}).get("region") == "서울시 강남구", (s1.input or {}).get("region")
+    assert tier_seen["contract_amount_eok"] == 50.0, tier_seen
+    # raw structured storage
+    rsi = (row.get("input_data") or {}).get("raw_structured_input") or {}
+    assert rsi.get("process_list") == [{"process_name": "굴착"}], rsi
+    # Coverage 11 still materialize
+    fac = build_facility(s1)
+    assert all(fac.get(c) is True for c in CST11), {c: fac.get(c) for c in CST11}
+
+
+def test_ec1_top_level_precedence_over_form_data():
+    # top-level 명시값이 있으면 form_data 보다 우선
+    b = DiagnosisRunBody(auth_token="t", sector="CONSTRUCTION", disclaimer_log_id="disc1",
+                         worker_count=7, contract_amount_eok=3.0,
+                         form_data={"worker_count": 100, "project_amount": 50})
+    s1, _, tier_seen = _cap_all(b)
+    assert s1.worker_count == 7
+    assert float(s1.contract_amount_eok) == 3.0
+    assert tier_seen["contract_amount_eok"] == 3.0
