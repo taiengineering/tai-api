@@ -414,6 +414,19 @@ def run_diagnosis(
     if is_free:
         expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
 
+    # WO-FE-IND-GAP-051-TRANSPORT-001 (CORRECTION-01): raw envelope 은 `is not None` 기준으로만
+    # 필터한다. {} / [] 는 "전송했고 0건" 이라는 사실값이므로 verbatim 보존(truthiness 로 버리지 않음).
+    _raw_structured_input = {
+        _k: _v
+        for _k, _v in {
+            "input": body.input,
+            "process_list": body.process_list,
+            "equipment_list": body.equipment_list,
+            "ksic_list": body.ksic_list,
+        }.items()
+        if _v is not None
+    }
+
     row = {
         "public_token": public_token,
         "input_data": {
@@ -426,20 +439,12 @@ def run_diagnosis(
             **({"company_id": company_id} if company_id else {}),
             # WO-FE-IND-GAP-051-TRANSPORT-001: paid RAW structured input 을 verbatim 보존.
             # RAW ENVELOPE 전용 — canonical_applicability/build_facility 로는 주입하지 않는다.
+            # 보존 판정은 truthiness 가 아니라 `is not None` 기준이다(CORRECTION-01):
+            #   None → 미보존 / {} 또는 [] → 그대로 보존(전송했고 0건이라는 사실 보존).
+            #   comprehension 결과가 비면(=4개 모두 None) raw_structured_input 자체를 생략한다.
             **(
-                {
-                    "raw_structured_input": {
-                        _k: _v
-                        for _k, _v in {
-                            "input": body.input,
-                            "process_list": body.process_list,
-                            "equipment_list": body.equipment_list,
-                            "ksic_list": body.ksic_list,
-                        }.items()
-                        if _v is not None
-                    }
-                }
-                if any([body.input, body.process_list, body.equipment_list, body.ksic_list])
+                {"raw_structured_input": _raw_structured_input}
+                if _raw_structured_input
                 else {}
             ),
         },
