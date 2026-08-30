@@ -25,6 +25,12 @@ v1.3.2: obligation 확장 2 + 소관부처 노출(add-only, 값 생성 없음).
         · check_result ← obligations_raw.check_result (검증 상태, 값 있을 때만)
         · governing_ministry ← check.collectors.agency.ministry (COLLECTED + 단일 법령만,
           결과 단위 1값. 제출처(submit_org)와 별개. 기존 DEFERRED 방침을 운영자 승인으로 해제)
+v1.4.0: FREE-DIAGNOSIS-RESULT-UX-01 WP-B — free_obligations additive contract(add-only).
+        · free_obligations[] = 무료 안전 투영(obligation_type·obligation_summary·law_name 3필드만).
+          표시용 전체(dedupe 후) rules_table에서 절단 없이 전건 투영. 유료 상세필드·rule_id 미포함.
+        · free_obligation_count = len(free_obligations) (사용자 표시 '의무 N건'의 정본).
+        기존 rules_table(무료 5건)·summary·applicable_count·law_badges·paid 동작 무변경(additive only).
+        엔진·DB·법령 무변경. 새 정규화 엔진 없음(기존 표시행의 최종값 재사용).
 """
 from __future__ import annotations
 
@@ -377,6 +383,27 @@ def _apply_collectors_to_leg_rows(full_result: Dict[str, Any], rules_table: List
             r["submit_org_label"] = submit_org_label
 
 
+# ─────────────────────────────────────────────────────────────
+# v1.4.0 무료 안전 투영 (FREE = WHAT APPLIES). 유료 상세필드·rule_id 미포함.
+#   표시용(dedupe 후) rules_table 행의 최종 표시값만 재사용 — 새 정규화/합성 없음.
+# ─────────────────────────────────────────────────────────────
+FREE_OBLIGATION_KEYS = ("obligation_type", "obligation_summary", "law_name")
+
+
+def _project_free_obligation(row: Dict[str, Any]) -> Dict[str, Any]:
+    """rules_table 표시행 → 무료 계약 3필드(정확히 이 키만). 유료 상세·내부 메타 제외."""
+    return {
+        "obligation_type": (row.get("obligation_type") or "").strip(),
+        "obligation_summary": (row.get("obligation_summary") or row.get("description") or "").strip(),
+        "law_name": (row.get("law_name") or "").strip(),
+    }
+
+
+def _build_free_obligations(rules_table: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """표시용 전체 rules_table(절단 전)에서 무료 안전 투영 전건 생성."""
+    return [_project_free_obligation(r) for r in rules_table]
+
+
 RECOMMEND_PLAN = {
     "BUILDING_V2":          {"name": "건물 소형 플랜",  "price": "월 59,000원~"},
     "BUILDING_LARGE_V2":    {"name": "건물 대형 플랜",  "price": "월 145,000원~"},
@@ -492,6 +519,11 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int]) 
     key_ob_out = key_obligations[:limit] if limit else key_obligations
     law_grp_out = law_group_list[:limit] if limit else law_group_list
 
+    # v1.4.0: 무료 안전 의무 목록(additive). 표시용 전체 rules_table에서 절단 없이 전건 투영.
+    #   rules_out(무료 5건 legacy)와 독립. summary.total/applicable_count(엔진 dedupe 전 값)과
+    #   다를 수 있으므로 사용자 표시 건수의 정본은 free_obligation_count(=len)로 한다.
+    free_obligations = _build_free_obligations(rules_table)
+
     engine_version = full_result.get("engine_version") or "v3.0-runtime-compiler"
 
     payload = {
@@ -527,6 +559,8 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int]) 
             "key_obligations": key_ob_out,
             "inspection_schedule": inspection_schedule if not is_free else {},
             "law_groups": law_grp_out,
+            "free_obligations": free_obligations,
+            "free_obligation_count": len(free_obligations),
             "input_data": {
                 "company_name": company_name,
                 "business_no": input_data.get("business_no") or "",
