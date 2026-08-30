@@ -303,10 +303,44 @@ def run_diagnosis(
 
     sector = normalize_sector_db(body.sector)
     engine_sector = "MANUFACTURING" if sector == "INDUSTRIAL" else sector
+
+    # WO-FE-CST-GAP-IMPL-001 E-C1: Nexas 격리 후 기존 필수 paid base input 을 official form_data 로 보존한다.
+    # Primary paid UI 는 DB field_code 를 form_data 로 전송하므로, top-level explicit 값이 없을 때만
+    # form_data 값을 사용한다(top-level 우선, form_data 보조). CONSTRUCTION UI/DB field_code → Step1 명칭이
+    # 다른 2건만 명시적 structural mapping(값 변환 아님): project_amount→contract_amount_eok, project_address→region.
+    # 나머지는 exact-name. 값 생성/추정 없음. False/0 과 None 을 구분한다.
+    _fd = getattr(body, "form_data", None) or {}
+
+    def _fd_num(_key, _cast):
+        _v = _fd.get(_key)
+        if _v is None or _v == "":
+            return None
+        try:
+            return _cast(float(_v))
+        except (TypeError, ValueError):
+            return None
+
+    _contract_eok = body.contract_amount_eok
+    if _contract_eok is None:
+        _contract_eok = _fd_num("project_amount", float)
+        if _contract_eok is None:
+            _contract_eok = _fd_num("contract_amount_eok", float)
+    _region_val = body.region if body.region else (_fd.get("project_address") or _fd.get("address") or _fd.get("region"))
+    _worker_count = body.worker_count
+    if _worker_count is None:
+        _worker_count = _fd_num("worker_count", int)
+        if _worker_count is None:
+            _worker_count = _fd_num("workers", int)
+    _construction_type_val = body.construction_type or _fd.get("construction_type")
+    _ksic_major_val = body.ksic_major or _fd.get("ksic_major") or _fd.get("ksic_code")
+    _process_list_val = body.process_list if body.process_list is not None else _fd.get("process_list")
+    _equipment_list_val = body.equipment_list if body.equipment_list is not None else _fd.get("equipment_list")
+    _ksic_list_val = body.ksic_list if body.ksic_list is not None else _fd.get("ksic_list")
+
     tier_code = auto_tier_func(
         sector,
         floor_area=body.floor_area or 0.0,
-        contract_amount_eok=body.contract_amount_eok or 0.0,
+        contract_amount_eok=_contract_eok or 0.0,
         user_tier=body.user_tier,
     )
     # 무료 진단 정합: 결제 없는 요청은 무료 의도이므로 섹터별 무료 tier_code 로 확정한다.
@@ -335,7 +369,7 @@ def run_diagnosis(
     factory_id = (getattr(body, "factory_id", None) or "").strip() or None
     company_id = (getattr(body, "company_id", None) or "").strip() or None
 
-    inp: dict = {"region": body.region or "", "anonymous_flow": True, "tier_code": tier_code}
+    inp: dict = {"region": _region_val or "", "anonymous_flow": True, "tier_code": tier_code}
     if factory_id:
         inp["factory_id"] = factory_id
     if company_id:
@@ -357,11 +391,11 @@ def run_diagnosis(
     # 10 fact 가 그대로 materialize 된다(중복 배선 제거). has_chemical_substance 는 FIX-B2 step1 bridge 로 처리.
     for _code, _val in canonical_applicability(_available).items():
         inp.setdefault(_code, _val)
-    workers = body.worker_count or body.direct_workers or 0
+    workers = _worker_count or body.direct_workers or 0
     employees = body.employee_count or workers
     floor_area = body.floor_area or 400.0
     total_floor_area = body.total_floor_area or floor_area
-    contract_eok = body.contract_amount_eok or 1.0
+    contract_eok = _contract_eok or 1.0
 
     if engine_sector == "CONSTRUCTION":
         # WO-FE-CST-GAP-IMPL-001 FIX-B2: CONSTRUCTION chemical step1 bridge.
@@ -375,7 +409,7 @@ def run_diagnosis(
             factory_id=factory_id,
             sector=engine_sector,
             input=inp,
-            construction_type=body.construction_type or "건축",
+            construction_type=_construction_type_val or "건축",
             contract_amount_eok=float(contract_eok),
             worker_count=workers,
             direct_workers=body.direct_workers or workers,
@@ -407,7 +441,7 @@ def run_diagnosis(
             employee_count=employees,
             floor_area=float(floor_area),
             total_floor_area=float(total_floor_area),
-            ksic_major=body.ksic_major or "",
+            ksic_major=_ksic_major_val or "",
             electric_capacity=body.electric_capacity,
             has_boiler=body.has_boiler,
             has_hazardous_material=body.has_hazardous_material,
@@ -427,13 +461,14 @@ def run_diagnosis(
 
     # WO-FE-IND-GAP-051-TRANSPORT-001 (CORRECTION-01): raw envelope 은 `is not None` 기준으로만
     # 필터한다. {} / [] 는 "전송했고 0건" 이라는 사실값이므로 verbatim 보존(truthiness 로 버리지 않음).
+    # E-C1: process_list/equipment_list/ksic_list 도 top-level 없으면 form_data 값으로 보존(Nexas 격리 회귀 방지).
     _raw_structured_input = {
         _k: _v
         for _k, _v in {
             "input": body.input,
-            "process_list": body.process_list,
-            "equipment_list": body.equipment_list,
-            "ksic_list": body.ksic_list,
+            "process_list": _process_list_val,
+            "equipment_list": _equipment_list_val,
+            "ksic_list": _ksic_list_val,
         }.items()
         if _v is not None
     }
