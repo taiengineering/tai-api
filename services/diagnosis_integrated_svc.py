@@ -310,8 +310,7 @@ def run_diagnosis(
         user_tier=body.user_tier,
     )
     # 무료 진단 정합: 결제 없는 요청은 무료 의도이므로 섹터별 무료 tier_code 로 확정한다.
-    # 프론트가 tier="FREE" 로 신호하나 nexas 어댑터가 이를 소비하므로, 여기서는 payment_ref
-    # 부재를 무료 의도로 본다(유료는 payment_ref 필수 → 영향 없음). tier_code 는 inp["tier_code"]
+    # payment_ref 부재를 무료 의도로 본다(유료는 payment_ref 필수 → 영향 없음). tier_code 는 inp["tier_code"]
     # 로 엔진 scope 에도 반영되므로 코드 자체를 무료로 교정한다.
     if not body.payment_ref and tier_code not in free_tier_codes:
         _root = "INDUSTRY" if sector in ("INDUSTRIAL", "INDUSTRY") else sector
@@ -352,27 +351,10 @@ def run_diagnosis(
 
     _available: dict = {f: getattr(body, f, None) for f in type(body).model_fields}
     _available.update(getattr(body, "form_data", None) or {})
-    # WO-FE-CST-GAP-IMPL-001 CODE-C1 (CORRECTION-01): CONSTRUCTION paid nested input(body.input)의
-    # 11개 coverage fact 만 canonical_applicability(_LEG_INPUT_FIELDS exact-name) 경유시킨다. sector-gated.
-    # top-level explicit value 우선 — top-level 이 None 일 때만 raw 값 사용(setdefault 금지: model_fields
-    # 가 None 으로 이미 존재하면 setdefault 가 raw 를 넣지 못한다). false 는 explicit value 이므로 보존.
-    # consumer→LEG reverse alias(has_chemical_substance→has_chemical); facility 출력 exact-name 은 CODE-C2.
-    if engine_sector == "CONSTRUCTION":
-        from clients.leg_runtime_client import _LEG_CODE_TO_CONSUMER
-        _rev_alias = {_v: _k for _k, _v in _LEG_CODE_TO_CONSUMER.items()}
-        _CST_COVERAGE_11 = {
-            "has_tower_crane", "has_subcontractor", "has_excavation", "has_demolition",
-            "has_asbestos", "has_chemical_substance", "has_gas", "has_high_pressure_gas",
-            "has_water_tank", "is_energy_intensive", "is_multi_use",
-        }
-        _raw_in = getattr(body, "input", None)
-        if isinstance(_raw_in, dict):
-            for _rk, _rv in _raw_in.items():
-                if _rk not in _CST_COVERAGE_11:
-                    continue  # 11개 외 fact 는 이번 WO 로 새로 열지 않는다
-                _target = _rev_alias.get(_rk, _rk)
-                if _available.get(_target) is None:  # top-level explicit 우선, None 일 때만 raw
-                    _available[_target] = _rv
+    # WO-FE-CST-GAP-IMPL-001 FIX-B1: CONSTRUCTION 전용 CODE-C1(body.input→canonical 우회) 제거.
+    # primary paid path(free-diagnosis runPaidDiagnosis)는 form_data 로 applicability 를 전달하므로
+    # 위 _available.update(form_data) → canonical_applicability(_LEG_INPUT_FIELDS exact) 공통 배선으로
+    # 10 fact 가 그대로 materialize 된다(중복 배선 제거). has_chemical_substance 는 FIX-B2 step1 bridge 로 처리.
     for _code, _val in canonical_applicability(_available).items():
         inp.setdefault(_code, _val)
     workers = body.worker_count or body.direct_workers or 0
@@ -382,6 +364,13 @@ def run_diagnosis(
     contract_eok = body.contract_amount_eok or 1.0
 
     if engine_sector == "CONSTRUCTION":
+        # WO-FE-CST-GAP-IMPL-001 FIX-B2: CONSTRUCTION chemical step1 bridge.
+        # has_chemical_substance 는 _LEG_INPUT_FIELDS 미등록(has_chemical + alias)이라 canonical 로는
+        # inp 에 실리지 않는다. form_data.has_chemical_substance 를 step1_body 로 전달하면 build_facility 의
+        # 기존 alias(_LEG_CODE_TO_CONSUMER: has_chemical→has_chemical_substance)가 facility[has_chemical] 을
+        # 생성하고, CODE-C2(build_facility CONSTRUCTION rename)가 facility.has_chemical_substance 로 교정한다.
+        # else(산업) 분기가 이미 쓰는 방식과 동일. 새 alias engine 없음.
+        _cst_fd = getattr(body, "form_data", None) or {}
         step1_body = DiagnoseStep1Body(
             factory_id=factory_id,
             sector=engine_sector,
@@ -391,6 +380,7 @@ def run_diagnosis(
             worker_count=workers,
             direct_workers=body.direct_workers or workers,
             subcon_workers=body.subcon_workers or 0,
+            has_chemical_substance=_cst_fd.get("has_chemical_substance"),
         )
     elif engine_sector == "BUILDING":
         step1_body = DiagnoseStep1Body(
