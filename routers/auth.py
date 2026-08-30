@@ -768,6 +768,9 @@ def login(req: LoginRequest):
         result="success",
         connector_type="api",
         payload_summary={"has_token": True},
+        event_name="AUTH_SESSION_ISSUED",
+        actor_kind="USER",
+        actor_ref=f"user:{user['id']}",
     )
     clear_trace()
     # companies.business_sector — 결제 시 확정되는 정확한 sector 구분값(BUILDING/INDUSTRY/CONSTRUCTION).
