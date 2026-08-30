@@ -352,18 +352,27 @@ def run_diagnosis(
 
     _available: dict = {f: getattr(body, f, None) for f in type(body).model_fields}
     _available.update(getattr(body, "form_data", None) or {})
-    # WO-FE-CST-GAP-IMPL-001 CODE-C1: CONSTRUCTION paid nested input(body.input)의 값을
-    # canonical_applicability(_LEG_INPUT_FIELDS exact-name allowlist) 경유시킨다. sector-gated —
-    # 산업/건축 동작 불변. exact-name 필터가 material_profile 등 비-vocab nested 를 배제(isolation 유지).
-    # consumer→LEG reverse alias 적용(has_chemical_substance→has_chemical): canonical 은 LEG code(exact)만
-    # 보존하므로, consumer vocab 을 LEG code 로 역매핑해야 inp 로 보존된다. facility 출력 exact-name 은 CODE-C2 가 교정.
+    # WO-FE-CST-GAP-IMPL-001 CODE-C1 (CORRECTION-01): CONSTRUCTION paid nested input(body.input)의
+    # 11개 coverage fact 만 canonical_applicability(_LEG_INPUT_FIELDS exact-name) 경유시킨다. sector-gated.
+    # top-level explicit value 우선 — top-level 이 None 일 때만 raw 값 사용(setdefault 금지: model_fields
+    # 가 None 으로 이미 존재하면 setdefault 가 raw 를 넣지 못한다). false 는 explicit value 이므로 보존.
+    # consumer→LEG reverse alias(has_chemical_substance→has_chemical); facility 출력 exact-name 은 CODE-C2.
     if engine_sector == "CONSTRUCTION":
         from clients.leg_runtime_client import _LEG_CODE_TO_CONSUMER
         _rev_alias = {_v: _k for _k, _v in _LEG_CODE_TO_CONSUMER.items()}
+        _CST_COVERAGE_11 = {
+            "has_tower_crane", "has_subcontractor", "has_excavation", "has_demolition",
+            "has_asbestos", "has_chemical_substance", "has_gas", "has_high_pressure_gas",
+            "has_water_tank", "is_energy_intensive", "is_multi_use",
+        }
         _raw_in = getattr(body, "input", None)
         if isinstance(_raw_in, dict):
             for _rk, _rv in _raw_in.items():
-                _available.setdefault(_rev_alias.get(_rk, _rk), _rv)
+                if _rk not in _CST_COVERAGE_11:
+                    continue  # 11개 외 fact 는 이번 WO 로 새로 열지 않는다
+                _target = _rev_alias.get(_rk, _rk)
+                if _available.get(_target) is None:  # top-level explicit 우선, None 일 때만 raw
+                    _available[_target] = _rv
     for _code, _val in canonical_applicability(_available).items():
         inp.setdefault(_code, _val)
     workers = body.worker_count or body.direct_workers or 0
