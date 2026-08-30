@@ -345,7 +345,7 @@ def run_diagnosis(
     # Phase 1 lossless canonical materialization
     # (WO-GATE8-CANONICAL-LOSSLESS-MATERIALIZATION-IMPLEMENT-01):
     # consumer 가 실제 제공한 RTM-vocab applicability(선언 attr + 보존된 form_data)를
-    # DiagnoseStep1Body.input 으로 손실 없이 전달한다. build_facility(49) 가 input[code]
+    # DiagnoseStep1Body.input 으로 손실 없이 전달한다. build_facility 가 input[code]
     # 로 사영하므로 스키마/매핑 확장 불요. alias/derivation/값 생성 없음.
     # setdefault 로 기존 inp 키(region/tier_code 등)는 덮어쓰지 않는다. FREE 경로 미영향.
     from services.canonical.materialization import canonical_applicability
@@ -424,6 +424,24 @@ def run_diagnosis(
             "workers": workers,
             **({"factory_id": factory_id} if factory_id else {}),
             **({"company_id": company_id} if company_id else {}),
+            # WO-FE-IND-GAP-051-TRANSPORT-001: paid RAW structured input 을 verbatim 보존.
+            # RAW ENVELOPE 전용 — canonical_applicability/build_facility 로는 주입하지 않는다.
+            **(
+                {
+                    "raw_structured_input": {
+                        _k: _v
+                        for _k, _v in {
+                            "input": body.input,
+                            "process_list": body.process_list,
+                            "equipment_list": body.equipment_list,
+                            "ksic_list": body.ksic_list,
+                        }.items()
+                        if _v is not None
+                    }
+                }
+                if any([body.input, body.process_list, body.equipment_list, body.ksic_list])
+                else {}
+            ),
         },
         "partial_result": build_partial_func(full_result),
         "full_result": full_result,
