@@ -277,6 +277,9 @@ async def _create_anonymous_diagnosis_impl(body: AnonymousDiagnosisCreate):
         event_type="save",
         result="success",
         connector_type="database",
+        event_name="DIAGNOSIS_COMPLETED",
+        actor_kind="EXTERNAL",
+        actor_ref="external:anonymous",
     )
 
     # ═══ Document Auto Activation Hook (TASK 23) ═══
