@@ -342,7 +342,7 @@ async def _upgrade_diagnosis_impl(body: UpgradeBody, current_user: dict):
     create_trace(flow_key="paid_diagnosis_upgrade", tenant_id="tai", actor_type="user")
     try:
         supabase = get_supabase()
-        return diagnosis_integrated_svc.upgrade_diagnosis(
+        result = diagnosis_integrated_svc.upgrade_diagnosis(
             supabase=supabase,
             body=body,
             run_step1_func=_run_step1_via_service,
@@ -351,6 +351,21 @@ async def _upgrade_diagnosis_impl(body: UpgradeBody, current_user: dict):
             current_user=current_user,
             now_func=_now,
         )
+        # §97-B: paid upgrade Common Event v1 — server-resolved actor id가 있을 때만 기록.
+        # observability fail-soft (actor 없거나 emit 실패해도 upgrade 성공 유지).
+        _actor_id = str((current_user or {}).get("id") or "").strip()
+        if _actor_id:
+            emit_event(
+                step_key="result_upgrade",
+                step_order=1,
+                event_type="update",
+                result="success",
+                connector_type="database",
+                event_name="DIAGNOSIS_UPGRADED",
+                actor_kind="USER",
+                actor_ref=f"user:{_actor_id}",
+            )
+        return result
     finally:
         clear_trace()
 
