@@ -1,5 +1,5 @@
 # WO-FE-CST-GAP-IMPL-001 E-C — CONSTRUCTION 11 fact via official form_data envelope, REAL run_diagnosis.
-# E-C1: Nexas 격리 후 기존 필수 paid base input 보존. CORRECTION-01: 0≠None 보존 + invalid numeric 422.
+# E-C1: paid base input 보존. CORRECTION-01: 0≠None + invalid 422. CORRECTION-02: structural mapping sector-gate.
 from schemas.diagnosis_integrated import DiagnosisRunBody
 from clients.leg_runtime_client import build_facility
 from services import diagnosis_integrated_svc as _svc
@@ -124,7 +124,6 @@ from fastapi import HTTPException
 
 
 def test_ec1c1_zero_preserved():
-    # 0 은 명시적 값 — tier·Step1·storage 에서 일관되게 0 유지(1.0 default 로 넘어가지 않음)
     fd = {"project_amount": 0, "worker_count": 0, "construction_type": "토목"}
     s1, row, tier_seen = _cap_all(_body("CONSTRUCTION", fd))
     assert tier_seen["contract_amount_eok"] == 0.0, tier_seen
@@ -136,7 +135,6 @@ def test_ec1c1_zero_preserved():
 
 
 def test_ec1c1_invalid_project_amount_422():
-    # form_data 에 키가 있으나 숫자 변환 불가 → silent default 금지, 422 fail-closed
     with pytest.raises(HTTPException) as ei:
         _cap_all(_body("CONSTRUCTION", {"project_amount": "INVALID"}))
     assert ei.value.status_code == 422
@@ -146,3 +144,34 @@ def test_ec1c1_invalid_worker_count_422():
     with pytest.raises(HTTPException) as ei:
         _cap_all(_body("CONSTRUCTION", {"worker_count": "INVALID"}))
     assert ei.value.status_code == 422
+
+
+# ── E-C1 CORRECTION-02: CONSTRUCTION structural mapping firewall (sector-gated) ──
+def test_ec1c2_building_project_amount_not_mapped():
+    _, _, tier_seen = _cap_all(_body("BUILDING", {"project_amount": 50}))
+    assert tier_seen["contract_amount_eok"] == 0.0, tier_seen  # BUILDING 은 project_amount 미매핑
+
+def test_ec1c2_industrial_project_amount_not_mapped():
+    _, _, tier_seen = _cap_all(_body("INDUSTRIAL", {"project_amount": 50}))
+    assert tier_seen["contract_amount_eok"] == 0.0, tier_seen
+
+def test_ec1c2_building_project_address_not_region():
+    s1, _, _ = _cap_all(_body("BUILDING", {"project_address": "서울시"}))
+    assert (s1.input or {}).get("region") in (None, ""), (s1.input or {}).get("region")
+
+def test_ec1c2_industrial_project_address_not_region():
+    s1, _, _ = _cap_all(_body("INDUSTRIAL", {"project_address": "서울시"}))
+    assert (s1.input or {}).get("region") in (None, ""), (s1.input or {}).get("region")
+
+def test_ec1c2_building_unrelated_invalid_project_amount_no_422():
+    # BUILDING 의 form_data.project_amount 는 CONSTRUCTION 전용 validator 대상 아님 → 422 아님
+    s1, _, tier_seen = _cap_all(_body("BUILDING", {"project_amount": "INVALID"}))
+    assert tier_seen["contract_amount_eok"] == 0.0
+
+def test_ec1c2_industrial_unrelated_invalid_project_amount_no_422():
+    s1, _, tier_seen = _cap_all(_body("INDUSTRIAL", {"project_amount": "INVALID"}))
+    assert tier_seen["contract_amount_eok"] == 0.0
+
+def test_ec1c2_construction_project_amount_still_mapped():
+    _, _, tier_seen = _cap_all(_body("CONSTRUCTION", {"project_amount": 50}))
+    assert tier_seen["contract_amount_eok"] == 50.0
