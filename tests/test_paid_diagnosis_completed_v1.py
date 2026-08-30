@@ -68,7 +68,7 @@ def _runbody(**kw):
     return DiagnosisRunBody(**base)
 def _run(m, result, current_user, payment_ref="pay-1"):
     m.diagnosis_integrated_svc.run_diagnosis = lambda **kw: result
-    return asyncio.get_event_loop().run_until_complete(
+    return asyncio.run(
         m._run_diagnosis_impl(_runbody(payment_ref=payment_ref, factory_id=None), current_user=current_user))
 def test_paid_emits_completed(mod):
     m, calls = mod
