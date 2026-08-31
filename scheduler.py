@@ -4,6 +4,7 @@
 import logging
 
 from services.time import now_kst, serialize_business_datetime
+from services.scheduler.gate import scheduler_enabled
 from services.scheduler.handlers import (
     DIRECT_HANDLERS,
     execute_direct as _handlers_execute_direct,
@@ -19,6 +20,9 @@ class _DispatcherHandle:
         self.running = False
 
     def start(self):
+        if not scheduler_enabled():
+            logger.info("[CRON] TAI_SCHEDULER_ENABLED off; dispatcher not started")
+            return
         from scheduler_worker import start_dispatcher_thread
         start_dispatcher_thread()
         self.running = True
@@ -146,6 +150,9 @@ def load_jobs_from_db():
 
 def start_scheduler():
     try:
+        if not scheduler_enabled():
+            logger.info("[CRON] TAI_SCHEDULER_ENABLED off; dispatcher not started")
+            return
         scheduler.start()
         logger.info("[CRON] KST dispatcher thread started")
     except Exception as e:

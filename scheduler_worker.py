@@ -10,6 +10,7 @@ import threading
 import time
 
 from services.scheduler.dispatcher import tick
+from services.scheduler.gate import scheduler_enabled
 from services.scheduler.store import InMemoryStore
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,9 @@ _thread: threading.Thread | None = None
 
 
 def start_dispatcher_thread(interval_seconds: float = 5.0) -> None:
+    if not scheduler_enabled():
+        logger.info("[SCHED] TAI_SCHEDULER_ENABLED off; thread not started")
+        return
     global _thread
     with _thread_lock:
         if _thread is not None and _thread.is_alive():
@@ -50,5 +54,10 @@ def run_forever(store: InMemoryStore | None = None, interval_seconds: float = 5.
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    if not scheduler_enabled():
+        logger.info("[SCHED] TAI_SCHEDULER_ENABLED off; worker not ticking")
+        while True:
+            time.sleep(60)
     from services.scheduler.db_store import DbStore
     run_forever(DbStore())
