@@ -15,6 +15,7 @@ scripts/collect_prec_casename.py — 방향 2: 사건명 검색(search=1)으로 
 import os, sys, time, re, argparse, requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from services.time import now_kst, serialize_external_utc
 
 LAW_OC = "taieng"
 LAW_SEARCH_URL = "http://www.law.go.kr/DRF/lawSearch.do"
@@ -234,7 +235,7 @@ def main():
                 rl = detail.get("참조조문","")
                 if rl: payload["violation_laws_raw"] = rl
                 payload["keywords"] = [master_law]
-                payload["collected_at"] = datetime.now(timezone.utc).isoformat()
+                payload["collected_at"] = serialize_external_utc(now_kst())
             ok, action, links = save_matched(payload, rule_ids)
             if ok:
                 if not already: total_saved += 1

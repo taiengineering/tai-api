@@ -43,6 +43,8 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+from services.time import now_kst
+
 try:
     from dotenv import load_dotenv
     _ENV_PATH = os.path.join(_ROOT, ".env")
@@ -233,7 +235,7 @@ def run_scan(domain_filter: Optional[str] = None,
         return 1
 
     print(f"\n{'=' * 80}")
-    print(f"🔍 법령 수집 품질 스캔 v1.2 ({datetime.now():%Y-%m-%d %H:%M:%S})")
+    print(f"🔍 법령 수집 품질 스캔 v1.2 ({now_kst():%Y-%m-%d %H:%M:%S})")
     if domain_filter: print(f"   도메인: {domain_filter.upper()}")
     if phase_filter:  print(f"   phase: {phase_filter.upper()}")
     print(f"   대상: {len(targets)}개")

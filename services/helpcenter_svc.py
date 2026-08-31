@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from db.supabase_client import get_supabase
 from services import helpcenter_visibility as vis
+from services.time import now_kst
 
 log = logging.getLogger(__name__)
 
@@ -476,7 +477,7 @@ def record_feedback(payload: Dict[str, Any]) -> Dict[str, Any]:
 def feedback_summary(period_days: int = 30) -> List[Dict[str, Any]]:
     """최근 period_days 일의 문서별 부정 비율 — 결손 되먹임(GapLoop)의 입력."""
     sb = get_supabase()
-    since = (datetime.now(timezone.utc) - timedelta(days=max(1, period_days))).isoformat()
+    since = (now_kst() - timedelta(days=max(1, period_days))).isoformat()
     res = (
         sb.table(_FEEDBACK).select("doc_id, verdict")
         .gte("created_at", since).limit(5000).execute()
@@ -502,7 +503,7 @@ def feedback_summary(period_days: int = 30) -> List[Dict[str, Any]]:
 def zero_result_terms(limit: int = 50, period_days: int = 30) -> List[Dict[str, Any]]:
     """최근 period_days 일의 결과 0건 검색어 — 문서 결손 목록."""
     sb = get_supabase()
-    since = (datetime.now(timezone.utc) - timedelta(days=max(1, period_days))).isoformat()
+    since = (now_kst() - timedelta(days=max(1, period_days))).isoformat()
     res = (
         sb.table(_SEARCH_LOG).select("q, ctx, created_at")
         .eq("result_count", 0).gte("created_at", since)

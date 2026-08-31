@@ -16,6 +16,7 @@ from routers.law_collector_admrul import (
     fetch_admrul_list,
     parse_admrul_list_xml,
 )
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/law-collector", tags=["법령 외부 카탈로그"])
 
@@ -97,7 +98,7 @@ def _upsert_catalog_entry(supabase, law_data, api_target, keyword, page):
 
 
 def _run_collect_catalog(rate_limit_sec: float = 0.4):
-    started_at = datetime.now()
+    started_at = now_kst()
     print(f"\n{'=' * 70}\n📚 외부 카탈로그 수집 시작 ({started_at.isoformat()})\n{'=' * 70}")
     print(f"law 키워드: {len(KEYWORDS_LAW)}개")
     print(f"admrul 키워드: {len(KEYWORDS_ADMRUL)}개")
@@ -168,7 +169,7 @@ def _run_collect_catalog(rate_limit_sec: float = 0.4):
                 break
         time.sleep(rate_limit_sec)
 
-    elapsed_min = (datetime.now() - started_at).total_seconds() / 60
+    elapsed_min = (now_kst() - started_at).total_seconds() / 60
     total_count = supabase.table("law_external_catalog").select("id", count="exact").execute()
     print(f"\n{'=' * 70}")
     print(f"🎉 카탈로그 수집 완료 (소요: {elapsed_min:.1f}분)")
@@ -188,7 +189,7 @@ async def trigger_collect_catalog(background_tasks: BackgroundTasks):
         "keywords_law": len(KEYWORDS_LAW),
         "keywords_admrul": len(KEYWORDS_ADMRUL),
         "estimated_duration_minutes": "30~60",
-        "started_at": datetime.now().isoformat(),
+        "started_at": serialize_business_datetime(now_kst()),
     }
 
 

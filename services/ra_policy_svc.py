@@ -34,6 +34,7 @@ from datetime import date
 from typing import Any, Dict, List, Optional
 
 from db.supabase_client import get_supabase
+from services.time import business_today
 
 log = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ def list_params(on_date: Optional[str] = None, use_cache: bool = True) -> Dict[s
     과거 시점의 판정도 당시 값으로 재현할 수 있다.
     반환: {"items": [...], "source": "db"|"fallback", "as_of": "YYYY-MM-DD"}
     """
-    ref = on_date or date.today().isoformat()
+    ref = on_date or business_today().isoformat()
 
     if use_cache and _cache["items"] is not None and _cache["as_of"] == ref \
             and (time.time() - _cache["at"]) < _CACHE_TTL_SEC:

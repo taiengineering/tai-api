@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class NoticeError(Exception):
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def list_admin(channel: Optional[str] = None, enabled: Optional[bool] = None) -> List[Dict[str, Any]]:

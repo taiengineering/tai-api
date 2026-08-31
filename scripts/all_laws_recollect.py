@@ -26,6 +26,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from services.time import now_kst, serialize_external_utc
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
@@ -120,7 +121,7 @@ def main() -> int:
     state = load_checkpoint() if args.resume else {"processed": [], "failed": [], "skipped": [], "started_at": None}
 
     if state["started_at"] is None:
-        state["started_at"] = datetime.now(timezone.utc).isoformat()
+        state["started_at"] = serialize_external_utc(now_kst())
 
     done_names = {r.get("law_name") for r in state["processed"] + state["failed"] + state["skipped"] if r.get("law_name")}
     targets = [t for t in all_targets if t not in done_names]

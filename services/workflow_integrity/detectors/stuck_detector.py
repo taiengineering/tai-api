@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone
 
 from services.workflow_integrity.schemas import DetectionResult
+from services.time import now_kst
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ def detect_stuck(
             message="occurred_at 파싱 실패",
         )
 
-    now = datetime.now(timezone.utc)
+    now = now_kst()
     elapsed_sec = (now - occurred_at).total_seconds()
 
     if elapsed_sec > window_sec:

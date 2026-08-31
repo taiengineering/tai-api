@@ -5,6 +5,7 @@ prefix: /notification-engine
 import logging
 from fastapi import APIRouter, Query
 from typing import Optional
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/notification-engine", tags=["알림엔진"])
@@ -211,7 +212,7 @@ def ack_notification(queue_id: str):
     try:
         from datetime import datetime, timezone
         _sb().table("runtime_notification_queue").update({
-            "delivery_status": "ACKNOWLEDGED", "acknowledged_at": datetime.now(timezone.utc).isoformat(),
+            "delivery_status": "ACKNOWLEDGED", "acknowledged_at": serialize_external_utc(now_kst()),
         }).eq("id", queue_id).execute()
         from services.notification_engine.audit import log_ack
         log_ack(queue_id=queue_id)
@@ -225,7 +226,7 @@ def resolve_notification(queue_id: str):
     try:
         from datetime import datetime, timezone
         _sb().table("runtime_notification_queue").update({
-            "delivery_status": "RESOLVED", "resolved_at": datetime.now(timezone.utc).isoformat(),
+            "delivery_status": "RESOLVED", "resolved_at": serialize_external_utc(now_kst()),
         }).eq("id", queue_id).execute()
         from services.notification_engine.audit import log_delivery
         log_delivery(queue_id=queue_id, event_id=queue_id, action="RESOLVED", channel="SYSTEM", delivery_status="RESOLVED")

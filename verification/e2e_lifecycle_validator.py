@@ -12,6 +12,7 @@
 
 import os, sys, json, math, uuid
 from datetime import datetime
+from services.time import now_kst, serialize_business_datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ['TAI_USE_RUNTIME_ENGINE'] = 'false'
@@ -265,7 +266,7 @@ def run_wave(wave_n, templates, run_label, out_path):
     print(f'\n=== Phase 10-A: {run_label} ({wave_n}개 Company) ===')
     run_res = sb.table('synthetic_company_runs').insert({
         'run_label': run_label, 'company_count': wave_n,
-        'meta': {'wave': wave_n, 'started_at': datetime.now().isoformat()},
+        'meta': {'wave': wave_n, 'started_at': serialize_business_datetime(now_kst())},
     }).execute()
     run_id = run_res.data[0]['id'] if run_res.data else str(uuid.uuid4())
 
@@ -403,7 +404,7 @@ def run_wave(wave_n, templates, run_label, out_path):
 
     report = {
         'run_id': run_id, 'run_label': run_label, 'wave': wave_n,
-        'executed_at': datetime.now().isoformat(),
+        'executed_at': serialize_business_datetime(now_kst()),
         'summary': {
             'company_count': wave_n, 'pass_count': pass_count, 'fail_count': fail_count,
             'pass_rate': round(pass_count / wave_n * 100, 1) if wave_n else 0,

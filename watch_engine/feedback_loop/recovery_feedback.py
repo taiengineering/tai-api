@@ -1,9 +1,10 @@
 """Recovery Feedback."""
 import logging
 from datetime import datetime,timezone,timedelta
+from services.time import now_kst
 logger=logging.getLogger("watch_engine.feedback.recovery")
 def track_recovery_feedback(sb,hours=24):
-    since=(datetime.now(timezone.utc)-timedelta(hours=hours)).isoformat()
+    since=(now_kst()-timedelta(hours=hours)).isoformat()
     try:
         actions=sb.table("incident_action_log").select("id,action_type,outcome_status").gte("created_at",since).execute()
         recovery_actions=[a for a in (actions.data or []) if a.get("action_type") in ("RECOVERY","RECOVERED","RETRY","FIX")]

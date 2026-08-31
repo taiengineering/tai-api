@@ -32,6 +32,7 @@ from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
+from services.time import now_kst, serialize_external_utc
 
 log    = logging.getLogger(__name__)
 router = APIRouter()   # prefix는 main.py에서 지정
@@ -42,7 +43,7 @@ FINAL_REPORT_BUCKET = "final-reports"   # 비공개, 50MB
 # ── 유틸 ──────────────────────────────────────────────────────────────
 def _now_iso() -> str:
     from datetime import timezone
-    return datetime.datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _require_admin(current_user: dict = Depends(get_current_user)) -> dict:

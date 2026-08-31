@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from services.rule_gen_ai import _call_claude_messages, _fetch_few_shot_examples, call_claude
 from services.rule_gen_builders import _build_draft_row, _build_master_payload, _build_reparse_prompt, _pick_reparse_targets
 from services.rule_gen_helpers import _is_blank, _normalize_submit_org_code, _validate_rule_row
+from services.time import now_kst, serialize_external_utc
 
 
 def _auto_approve_to_master(supabase, draft: dict) -> Optional[str]:
@@ -20,7 +21,7 @@ def _auto_approve_to_master(supabase, draft: dict) -> Optional[str]:
             {
                 "status": "APPROVED",
                 "registered_rule_id": rule_id,
-                "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                "reviewed_at": serialize_external_utc(now_kst()),
                 "reviewer_note": "자동 승인 (ai_confidence 기준)",
             }
         ).eq("id", draft["id"]).execute()
@@ -48,7 +49,7 @@ async def run_parse_article(supabase, body, build_full_context_fn, excluded_sect
         api_key,
     )
     if article_id:
-        supabase.table("law_article").update({"ai_parsed_at": datetime.now(timezone.utc).isoformat()}).eq("id", article_id).execute()
+        supabase.table("law_article").update({"ai_parsed_at": serialize_external_utc(now_kst())}).eq("id", article_id).execute()
     if not rules:
         return {"status": "success", "data": {"drafts": [], "message": "의무 없는 조문"}}
     saved = []
@@ -78,7 +79,7 @@ async def run_parse_batch(supabase, body, build_full_context_fn, excluded_sector
         q = q.is_("ai_parsed_at", "null")
     articles = q.order("article_no_sort").limit(max_articles).execute().data or []
     results = {"total": len(articles), "processed": 0, "skipped": 0, "drafts_created": 0, "special_excluded": 0, "errors": []}
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = serialize_external_utc(now_kst())
     for art in articles:
         try:
             art_text = (art.get("article_text") or "").strip()
@@ -126,7 +127,7 @@ async def run_auto_parse_and_approve(supabase, body, internal_secret, build_full
         .execute()
     ).data or []
     results = {"law_name": law_name, "total_articles": len(articles), "parsed": 0, "drafts_created": 0, "auto_approved": 0, "pending_review": 0, "errors": []}
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = serialize_external_utc(now_kst())
     for art in articles:
         try:
             art_text = (art.get("article_text") or "").strip()
@@ -185,12 +186,12 @@ def run_bulk_approve_unregistered(supabase, secret: str, internal_secret: str, l
             if supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute().data:
                 rule_id = rule_id + "-V2"
             if supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute().data:
-                supabase.table("law_rule_drafts").update({"registered_rule_id": rule_id, "reviewed_at": datetime.now(timezone.utc).isoformat()}).eq("id", d["id"]).execute()
+                supabase.table("law_rule_drafts").update({"registered_rule_id": rule_id, "reviewed_at": serialize_external_utc(now_kst())}).eq("id", d["id"]).execute()
                 skipped += 1
                 continue
             ins = supabase.table("master_building_legal_rules").insert(_build_master_payload(d, rule_id)).execute()
             if ins.data:
-                supabase.table("law_rule_drafts").update({"registered_rule_id": rule_id, "reviewed_at": datetime.now(timezone.utc).isoformat()}).eq("id", d["id"]).execute()
+                supabase.table("law_rule_drafts").update({"registered_rule_id": rule_id, "reviewed_at": serialize_external_utc(now_kst())}).eq("id", d["id"]).execute()
                 ok += 1
             else:
                 fail += 1

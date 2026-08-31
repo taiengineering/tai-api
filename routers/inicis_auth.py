@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
 from utils.seed_cipher import seed_cbc_decrypt
+from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ FAIL_URL = f"{BASE_URL}/auth/inicis/callback/fail"
 
 def _generate_mtx_id() -> str:
     """가맹점 트랜잭션 ID (20바이트 이내)."""
-    return ("TAI" + datetime.now().strftime("%y%m%d%H%M%S") + uuid.uuid4().hex[:5]).upper()[:20]
+    return ("TAI" + now_kst().strftime("%y%m%d%H%M%S") + uuid.uuid4().hex[:5]).upper()[:20]
 
 
 def _sha256(data: str) -> str:
@@ -82,7 +83,7 @@ def _ensure_diag_auth_token(mtx_id: str) -> Optional[str]:
         return None
 
     ci_hash = hashlib.sha256(ci.encode("utf-8")).hexdigest()
-    now = datetime.now(timezone.utc).isoformat()
+    now = serialize_external_utc(now_kst())
     payload = {
         "name": r.get("user_name") or "",
         "phone": r.get("user_phone") or "",
@@ -204,7 +205,7 @@ def create_auth_request(body: AuthRequestBody):
         "mtx_id": mtx_id,
         "svc_code": body.svc_code,
         "status": "REQUESTED",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": serialize_external_utc(now_kst()),
     }
     if body.user_id:
         row["user_id"] = body.user_id
@@ -291,7 +292,7 @@ async def callback_success(request: Request):
             "user_ci": user_ci,
             "user_di": user_di,
             "user_gender": user_gender,
-            "verified_at": datetime.now(timezone.utc).isoformat(),
+            "verified_at": serialize_external_utc(now_kst()),
         }).eq("mtx_id", mtx_id).execute()
     except Exception as e:
         log.exception("[inicis_auth] update failed mtx_id=%s", mtx_id)

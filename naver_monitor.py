@@ -28,6 +28,7 @@ import requests
 from supabase import create_client
 
 from services.slack_kin_blocks import build_kin_review_blocks
+from services.time import now_kst, parse_external_datetime, serialize_external_utc, to_external_utc
 
 # ── 기본값 ──
 NAVER_KIN_API    = "https://openapi.naver.com/v1/search/kin.json"
@@ -102,8 +103,8 @@ def is_within_hours(pub_date_str: str, hours: int = HOURS_LIMIT) -> bool:
     try:
         pub_dt = parsedate_to_datetime(pub_date_str)
         if pub_dt.tzinfo is None:
-            pub_dt = pub_dt.replace(tzinfo=timezone.utc)
-        return pub_dt >= datetime.now(timezone.utc) - timedelta(hours=hours)
+            pub_dt = to_external_utc(parse_external_datetime(pub_dt.isoformat(), source_timezone='UTC')) if pub_dt.tzinfo is None else to_external_utc(pub_dt)
+        return pub_dt >= now_kst() - timedelta(hours=hours)
     except Exception as e:
         logging.warning("pubDate 파싱 실패(%s) — 통과 처리: %s", pub_date_str, e)
         return True
@@ -168,7 +169,7 @@ def step_collect(sb: Any, naver_id: str, naver_secret: str, test: bool = False) 
         keywords = keywords[:1]
 
     display = 1 if test else COLLECT_DISPLAY
-    run_at  = datetime.now(timezone.utc).isoformat()
+    run_at  = serialize_external_utc(now_kst())
     stats   = {"keywords": keywords, "display_per_kw": display, "api_items": 0,
                 "skipped_old": 0, "skipped_duplicate": 0, "inserted": 0, "insert_errors": 0}
 
@@ -487,7 +488,7 @@ def main() -> None:
     step      = os.environ.get("STEP", "").strip().lower()
     test      = _test_mode()
     dashboard = supabase_dashboard_link(sb_url)
-    run_at    = datetime.now(timezone.utc).isoformat()
+    run_at    = serialize_external_utc(now_kst())
 
     if test:
         logging.info("🧪 TEST MODE 활성화")

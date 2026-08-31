@@ -32,6 +32,7 @@ from services.payment_helpers import (
     split_supply_vat,
     ts_ms,
 )
+from services.time import now_kst
 
 log = logging.getLogger(__name__)
 
@@ -350,7 +351,7 @@ def create_vbank_record(body: VbankPrepareBody, sign_key: str) -> dict:
     now = now_iso()
 
     vbank_expires_at = (
-        datetime.now(timezone.utc) + timedelta(minutes=body.vbank_expire_min)
+        now_kst() + timedelta(minutes=body.vbank_expire_min)
     ).isoformat()
 
     row: dict[str, Any] = {
@@ -572,7 +573,7 @@ def run_billing_prepare(body) -> Dict[str, Any]:
     cfg = _load_billing_config()
     supabase = get_supabase()
     now = now_iso()
-    oid = f"TAI-BIL-{datetime.now():%Y%m%d%H%M%S}-{uuid4().hex[:6].upper()}"
+    oid = f"TAI-BIL-{now_kst():%Y%m%d%H%M%S}-{uuid4().hex[:6].upper()}"
     timestamp = ts_ms()
     total_with_vat = add_vat(body.amount)
     price_str = str(total_with_vat)
@@ -695,7 +696,7 @@ def run_billing_charge(body) -> Dict[str, Any]:
     amount = int(body.amount or sub.get("price") or 0)
     if amount <= 0:
         raise PaymentPrepareError(400, "청구 금액이 올바르지 않습니다.")
-    oid = f"TAI-BIL-CHG-{datetime.now():%Y%m%d%H%M%S}-{uuid4().hex[:6].upper()}"
+    oid = f"TAI-BIL-CHG-{now_kst():%Y%m%d%H%M%S}-{uuid4().hex[:6].upper()}"
     payload = {
         "mid": cfg.mid,
         "billKey": key_row["bill_key"],

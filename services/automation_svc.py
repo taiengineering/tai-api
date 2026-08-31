@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from db.supabase_client import get_supabase
 from services import audit_svc
+from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
 
@@ -278,7 +279,7 @@ def list_ops_tasks(status: Optional[str] = None, company_id: Optional[str] = Non
 def close_ops_task(task_id: str, status: str = "DONE", actor: Optional[str] = None) -> Dict[str, Any]:
     if status not in ("DONE", "CANCELED"):
         raise AutomationError(400, "status 는 DONE 또는 CANCELED 여야 합니다.")
-    now = datetime.now(timezone.utc).isoformat()
+    now = serialize_external_utc(now_kst())
     res = (get_supabase().table("admin_ops_task")
            .update({"status": status, "done_at": now, "updated_at": now})
            .eq("id", task_id).execute())
@@ -297,7 +298,7 @@ def scan_expiring_subscriptions(days: int = 7) -> Dict[str, Any]:
     자동 발화 소스(수동 fire 외)를 넓히기 위한 진입점. 운영자/크론에서 주기 호출.
     개별 발화 실패는 삼켜서 스캔 전체를 막지 않는다.
     """
-    now = datetime.now(timezone.utc)
+    now = now_kst()
     deadline = (now + timedelta(days=days)).isoformat()
     rows = (
         get_supabase().table("v_payments_list")

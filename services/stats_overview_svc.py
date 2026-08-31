@@ -14,10 +14,11 @@ from typing import Any, Dict
 from services.stats_fulfillment_svc import get_fulfillment
 from services.stats_ops_svc import get_customers, get_funnel, get_revenue
 from services.stats_workers_svc import get_workers
+from services.time import now_kst, serialize_external_utc
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def get_overview(days: int = 90) -> Dict[str, Any]:

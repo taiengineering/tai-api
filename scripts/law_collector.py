@@ -27,6 +27,7 @@ import argparse
 import requests
 from pathlib import Path
 from datetime import date
+from services.time import business_today
 
 try:
     from openai import OpenAI
@@ -283,7 +284,7 @@ JSON 배열만 출력. 설명/서문 없이."""
 
 def save_results(rules: list, sector: str):
     """결과 JSON + CSV 저장"""
-    today = date.today().strftime("%Y%m%d")
+    today = business_today().strftime("%Y%m%d")
 
     # JSON 저장
     json_path = OUTPUT_DIR / f"rules_{sector.lower()}_{today}.json"

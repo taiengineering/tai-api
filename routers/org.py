@@ -17,13 +17,14 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, timezone
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(tags=["org"])
 VERSION = "1.0.0"
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 # ============================================================

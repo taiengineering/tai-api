@@ -22,6 +22,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from typing import Any
+from services.time import now_kst, serialize_external_utc
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
@@ -1140,7 +1141,7 @@ def run_verification_queries(conn) -> dict[str, Any]:
 
 def insert_verification_log(sb, metrics: dict[str, Any]) -> None:
     """§5.8 verification_log."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = serialize_external_utc(now_kst())
     rows = [
         {
             "stage": 2,
@@ -1233,7 +1234,7 @@ def insert_verification_log(sb, metrics: dict[str, Any]) -> None:
 
 def insert_verification_log_phase21(sb, metrics: dict[str, Any], zero_names: list[str]) -> None:
     """§6.8 Phase 2.1 verification_log."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = serialize_external_utc(now_kst())
     zm_note = ",".join(zero_names[:12]) if zero_names else ""
     rows = [
         {

@@ -15,6 +15,7 @@ from typing import Dict, Optional, Set, Tuple
 
 from fastapi import HTTPException, Request
 from starlette.responses import JSONResponse, Response
+from services.time import business_today, now_kst, serialize_external_utc
 
 log = logging.getLogger("permission_guard")
 
@@ -406,8 +407,8 @@ def active_entitlement(company_id: Optional[str]) -> bool:
     try:
         from db.supabase_client import get_supabase
         sb = get_supabase()
-        today = date.today().isoformat()
-        now = datetime.now(timezone.utc).isoformat()
+        today = business_today().isoformat()
+        now = serialize_external_utc(now_kst())
         sub = (
             sb.table("subscriptions")
             .select("id, ended_at")

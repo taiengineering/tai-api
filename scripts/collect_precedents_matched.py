@@ -22,6 +22,7 @@ import argparse
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from services.time import now_kst, serialize_external_utc
 
 LAW_OC = "taieng"
 LAW_SEARCH_URL = "http://www.law.go.kr/DRF/lawSearch.do"
@@ -213,7 +214,7 @@ def main():
                 if ref_laws:
                     payload["violation_laws_raw"] = ref_laws
                 payload["keywords"] = [key["law_name"]]
-                payload["collected_at"] = datetime.now(timezone.utc).isoformat()
+                payload["collected_at"] = serialize_external_utc(now_kst())
 
             ok, action, links = save_matched(payload, rule_ids)
             if ok:

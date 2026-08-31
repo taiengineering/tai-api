@@ -31,6 +31,7 @@ import os
 import sys
 import time
 from datetime import datetime
+from services.time import now_kst, serialize_business_datetime
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
@@ -136,7 +137,7 @@ def reparse_one_law(target: dict, supabase) -> dict:
                 "is_changed":            art["is_changed"],
                 "enforcement_date":      None,
                 "article_status_code":   "ACTIVE",
-                "updated_at":            datetime.now().isoformat(),
+                "updated_at":            serialize_business_datetime(now_kst()),
             }
             
             if ikey in existing_by_key:
@@ -157,7 +158,7 @@ def reparse_one_law(target: dict, supabase) -> dict:
             if old_key not in new_keys:
                 supabase.table("law_article").update({
                     "article_status_code": "DELETED",
-                    "updated_at": datetime.now().isoformat(),
+                    "updated_at": serialize_business_datetime(now_kst()),
                 }).eq("id", old_id).execute()
                 deleted += 1
         

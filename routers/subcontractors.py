@@ -14,6 +14,7 @@ from uuid import UUID
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_own_company
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/construction/subcontractors", tags=["하도급관리"])
 
@@ -208,7 +209,7 @@ async def update_subcontractor(subcontractor_id: UUID, body: SubcontractorUpdate
             payload["tier"] = int(parent["tier"] or 1) + 1
     if not payload:
         raise HTTPException(400, "수정할 항목이 없습니다.")
-    payload["updated_at"] = datetime.utcnow().isoformat()
+    payload["updated_at"] = serialize_business_datetime(now_kst())
     res = sb.table("subcontractors").update(payload).eq("id", str(subcontractor_id)).execute()
     if not res.data:
         raise HTTPException(404, "하도급업체를 찾을 수 없습니다.")
@@ -224,7 +225,7 @@ async def delete_subcontractor(subcontractor_id: UUID, current: dict = Depends(g
         raise HTTPException(400, "하위 수급인을 먼저 정리하세요.")
     # soft delete
     res = sb.table("subcontractors").update(
-        {"is_active": False, "status_code": "TERMINATED", "updated_at": datetime.utcnow().isoformat()}
+        {"is_active": False, "status_code": "TERMINATED", "updated_at": serialize_business_datetime(now_kst())}
     ).eq("id", str(subcontractor_id)).execute()
     if not res.data:
         raise HTTPException(404, "하도급업체를 찾을 수 없습니다.")

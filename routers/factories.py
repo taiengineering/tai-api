@@ -26,6 +26,7 @@ from datetime import datetime, date
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_factory_own, _forced_company_id, _is_admin, _scope
+from services.time import business_today, now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/factories", tags=["factories"])
 
@@ -234,7 +235,7 @@ def create_factory(req: FactoryCreate, current: dict = Depends(get_current_user)
     ).single().execute()
     if not company.data:
         raise HTTPException(status_code=404, detail="사업장(회사)을 찾을 수 없습니다")
-    now = datetime.now()
+    now = now_kst()
     data = {
         **req.dict(exclude_none=True),
         "factories_code": f"FAC-{now.strftime('%Y%m%d%H%M%S')}",
@@ -288,7 +289,7 @@ async def update_factory(factory_id: str, req: FactoryUpdate, current: dict = De
     if not update_data:
         return {"status": "success", "message": "변경된 내용이 없습니다.", "data": {}}
 
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
     res = supabase.table("factories").update(update_data).eq(
         "id", factory_id
     ).execute()
@@ -301,13 +302,13 @@ async def update_factory(factory_id: str, req: FactoryUpdate, current: dict = De
             await trigger_event_schedules(
                 factory_id = factory_id,
                 event_type = "CLOSURE",
-                event_date = date.today(),
+                event_date = business_today(),
             )
         else:
             await trigger_event_schedules(
                 factory_id = factory_id,
                 event_type = "CHANGE",
-                event_date = date.today(),
+                event_date = business_today(),
             )
     except Exception as e:
         print(f"[FACTORIES] 이벤트 트리거 실패 (factory={factory_id}): {e}")
@@ -335,7 +336,7 @@ def delete_factory(factory_id: str, current: dict = Depends(get_current_user)):
     supabase.table("factories").update({
         "is_active":   False,
         "status_code": "INACTIVE",
-        "updated_at":  datetime.now().isoformat(),
+        "updated_at":  serialize_business_datetime(now_kst()),
     }).eq("id", factory_id).execute()
     return {"status": "success", "message": "시설이 비활성화됐습니다"}
 
@@ -394,7 +395,7 @@ def add_factory_contact(factory_id: str, body: FactoryContactBody, current: dict
         supabase.table("factory_contacts").update({"is_primary": False}).eq(
             "factory_id", factory_id
         ).eq("is_primary", True).execute()
-    now = datetime.now().isoformat()
+    now = serialize_business_datetime(now_kst())
     res = supabase.table("factory_contacts").insert({
         "factory_id":   factory_id,
         "contact_type": body.contact_type,
@@ -430,7 +431,7 @@ def update_factory_contact(factory_id: str, contact_id: str, body: FactoryContac
             "factory_id", factory_id
         ).eq("is_primary", True).neq("id", contact_id).execute()
     update_data = {k: v for k, v in body.dict().items() if v is not None}
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
     res = supabase.table("factory_contacts").update(update_data).eq(
         "id", contact_id
     ).execute()
@@ -454,7 +455,7 @@ def delete_factory_contact(factory_id: str, contact_id: str, current: dict = Dep
         raise HTTPException(status_code=400, detail="대표담당자는 삭제할 수 없습니다.")
     supabase.table("factory_contacts").update({
         "is_active":  False,
-        "updated_at": datetime.now().isoformat(),
+        "updated_at": serialize_business_datetime(now_kst()),
     }).eq("id", contact_id).execute()
     return {"status": "success", "message": "담당자가 삭제됐습니다."}
 

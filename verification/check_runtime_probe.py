@@ -15,6 +15,7 @@
 
 import os, sys, json
 from datetime import datetime, timezone
+from services.time import now_kst, serialize_external_utc
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault('TAI_USE_RUNTIME_ENGINE', 'false')
@@ -43,7 +44,7 @@ def count(table, ctx_id=None, col='evaluation_context_id'):
 def snapshot(tables):
     return {t: count(t) for t in tables}
 
-report = {'factory_id': FACTORY_ID, 'executed_at': datetime.now(timezone.utc).isoformat(), 'steps': {}}
+report = {'factory_id': FACTORY_ID, 'executed_at': serialize_external_utc(now_kst()), 'steps': {}}
 
 # STEP 1: LEG 실행
 from services.legal_v510_svc import run_diagnose_step1_v510

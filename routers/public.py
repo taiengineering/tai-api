@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 import random
 
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/public", tags=["공개 API"])
 
@@ -27,12 +28,12 @@ STATUS_LABELS = {
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _gen_request_no(type_code: str) -> str:
     prefix = {"v1": "D1", "v2": "D2", "v3": "D3"}.get(type_code, "DX")
-    return f"TAI-{prefix}-{datetime.now().strftime('%Y%m%d')}-{random.randint(1000, 9999)}"
+    return f"TAI-{prefix}-{now_kst().strftime('%Y%m%d')}-{random.randint(1000, 9999)}"
 
 
 # ─────────────────────────────────────────────────
@@ -182,7 +183,7 @@ def create_inspection_request(body: InspectionRequestBody):
         raise HTTPException(status_code=422, detail="회사명을 입력해 주세요.")
 
     supabase   = get_supabase()
-    request_no = f"TAI-{datetime.now().strftime('%Y%m%d')}-{random.randint(1000,9999)}"
+    request_no = f"TAI-{now_kst().strftime('%Y%m%d')}-{random.randint(1000,9999)}"
     now        = _now()
 
     try:

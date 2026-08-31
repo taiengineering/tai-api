@@ -25,6 +25,7 @@ from routers.auth import get_current_user
 from schemas.payment import CancelBody, ManualConfirmBody
 from services import audit_svc
 from services.payment_helpers import SAAS_PRODUCT_TYPES, calc_expired_at, now_iso
+from services.time import now_kst
 
 log = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ def list_expiring_payments(
     current_user: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
-    now = datetime.now(timezone.utc)
+    now = now_kst()
     deadline = (now + timedelta(days=days)).isoformat()
     q = supabase.table("v_payments_list").select(
         "id, user_id, user_name, company_name, product_type, plan_code, "

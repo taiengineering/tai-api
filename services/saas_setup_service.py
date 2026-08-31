@@ -5,6 +5,7 @@ SaaS는 자동 의무등록기가 아니다.
 """
 import os, json
 from datetime import datetime, timezone
+from services.time import now_kst, serialize_external_utc
 
 
 def _get_sb():
@@ -112,7 +113,7 @@ class SaaSSetupService:
 
         sb.table('saas_setup_candidate').update({
             'approval_status': 'APPROVED_FOR_SAAS_SETUP',
-            'approved_at': datetime.now(timezone.utc).isoformat(),
+            'approved_at': serialize_external_utc(now_kst()),
             'approved_by': user_id,
         }).eq('id', setup_id).execute()
         return {'setup_id': setup_id, 'status': 'APPROVED_FOR_SAAS_SETUP'}

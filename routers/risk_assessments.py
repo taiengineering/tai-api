@@ -90,6 +90,7 @@ from services.ra_policy_svc import get_param_value, list_params
 from services.ra_decision_svc import assessment_readiness
 from services.ra_continuous_svc import judge_continuous
 from services.holiday_svc import holiday_map, get_work_weekdays
+from services.time import business_today, now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/risk-assessments", tags=["risk_assessments"])
 
@@ -120,7 +121,7 @@ _LIST_COLS_FALLBACK = _LIST_COLS_WITH_RETENTION.replace("retention_until, ", "")
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _is_leap(y: int) -> bool:
@@ -176,7 +177,7 @@ def _dday(target_date_str: Optional[str]) -> Optional[int]:
         return None
     try:
         target = date.fromisoformat(target_date_str)
-        return (target - date.today()).days
+        return (target - business_today()).days
     except Exception:
         return None
 
@@ -377,7 +378,7 @@ def get_continuous_status(
     if not company_id and not factory_id:
         raise HTTPException(status_code=422, detail="company_id 또는 factory_id 가 필요합니다.")
 
-    target_month = month or date.today().isoformat()[:7]
+    target_month = month or business_today().isoformat()[:7]
     try:
         month_first = date.fromisoformat(f"{target_month}-01")
     except Exception:
@@ -466,7 +467,7 @@ def create_assessment(body: RiskCreateBody, current: dict = Depends(get_current_
     if not title:
         raise HTTPException(status_code=422, detail="title 또는 work_name은 필수입니다.")
 
-    assessment_date = body.assessment_date or body.evaluated_at or date.today().isoformat()
+    assessment_date = body.assessment_date or body.evaluated_at or business_today().isoformat()
     created_by = body.created_by or body.evaluator_id
 
     items_json = body.items_json or []
@@ -699,7 +700,7 @@ def complete_assessment(assessment_id: str, current: dict = Depends(get_current_
         })
 
     years = _retention_years()
-    today = date.today()
+    today = business_today()
     retention_until = _add_years(today, years).isoformat()
 
     now = _now()

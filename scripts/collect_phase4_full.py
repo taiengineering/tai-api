@@ -26,6 +26,8 @@ PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from services.time import now_kst, serialize_external_utc
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -153,7 +155,7 @@ def phase_a(dry_run=False):
                 "saas_relevance": "CORE",
                 "is_in_collection_target": True,
                 "is_in_law_master": False,
-                "collected_at": datetime.now(timezone.utc).isoformat(),
+                "collected_at": serialize_external_utc(now_kst()),
                 "api_target": target,
                 "search_keyword": "S9_phase4_manual",
             }).execute()
@@ -328,7 +330,7 @@ def main():
     args = p.parse_args()
 
     print(f"\n{'=' * 60}")
-    print(f"  S9 Phase 4 v6 (직송 강제) — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  S9 Phase 4 v6 (직송 강제) — {now_kst().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'=' * 60}")
 
     if args.debug_first:

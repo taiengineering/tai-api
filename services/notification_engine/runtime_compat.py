@@ -12,6 +12,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger("notification_engine.runtime_compat")
 
@@ -25,7 +26,7 @@ def _mark_event_queued(event_id: str) -> None:
         sb = get_supabase()
         sb.table("runtime_notification_event").update({
             "event_status": "QUEUED",
-            "processed_at": datetime.now(timezone.utc).isoformat(),
+            "processed_at": serialize_external_utc(now_kst()),
         }).eq("id", event_id).execute()
     except Exception as e:
         logger.warning("Event status update failed: %s — %s", event_id, e)

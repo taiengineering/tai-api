@@ -36,6 +36,7 @@ from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _is_admin, _scope
 import random
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/diagnosis", tags=["diagnosis"])
 
@@ -56,15 +57,15 @@ VALID_PAY_METHODS = {"card", "transfer", "invoice"}
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _now_utc():
-    return datetime.now(timezone.utc)
+    return now_kst()
 
 
 def _gen_quote_no() -> str:
-    return f"QUO-DIAG-{datetime.now().strftime('%Y%m%d')}-{random.randint(1000, 9999)}"
+    return f"QUO-DIAG-{now_kst().strftime('%Y%m%d')}-{random.randint(1000, 9999)}"
 
 
 # ============================================================

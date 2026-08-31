@@ -15,6 +15,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from db.database import get_supabase
 from services.kr_public_api import kr_get
 from routers.messaging import EDGE_SMS_URL as SMS_URL, _call_edge_function as _call_messageme, _get_cfg
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/law-collector", tags=["법령 수집기"])
 
@@ -452,7 +453,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
         "announcement_date": str(law_info.get("announcement_date")) if law_info.get("announcement_date") else None,
         "enforcement_date": str(law_info.get("enforcement_date")) if law_info.get("enforcement_date") else None,
         "source_system": "data.go.kr/law", "is_active": True,
-        "updated_at": datetime.now().isoformat(),
+        "updated_at": serialize_business_datetime(now_kst()),
     }, on_conflict="law_key").execute()
     law_id = master_res.data[0]["id"]
 
@@ -470,7 +471,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
             "enforcement_date": str(law_info.get("enforcement_date")) if law_info.get("enforcement_date") else None,
             "effective_from": str(law_info.get("enforcement_date")) if law_info.get("enforcement_date") else None,
             "is_current": True, "version_status_code": "ACTIVE",
-            "raw_hash": raw_hash, "updated_at": datetime.now().isoformat(),
+            "raw_hash": raw_hash, "updated_at": serialize_business_datetime(now_kst()),
         }).execute()
         version_id = version_res.data[0]["id"]
         is_new_version = True
@@ -485,7 +486,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
         supabase.table("law_content_raw").insert({
             "law_version_id": version_id, "content_type_code": "XML",
             "raw_xml": raw_xml, "text_hash": raw_hash,
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": serialize_business_datetime(now_kst()),
         }).execute()
 
     article_count = 0
@@ -500,7 +501,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
                 "article_type": art["article_type"], "article_title": art["article_title"],
                 "article_text": art["article_text"], "is_changed": art["is_changed"],
                 "enforcement_date": str(art["enforcement_date"]) if art["enforcement_date"] else None,
-                "article_status_code": "ACTIVE", "updated_at": datetime.now().isoformat(),
+                "article_status_code": "ACTIVE", "updated_at": serialize_business_datetime(now_kst()),
             }).execute()
             article_id = art_res.data[0]["id"]
             article_count += 1
@@ -510,7 +511,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
                     "law_id": law_id,
                     "article_id": article_id, "paragraph_no": para["paragraph_no"],
                     "paragraph_no_sort": p_idx + 1, "paragraph_text": para["paragraph_text"],
-                    "paragraph_status_code": "ACTIVE", "updated_at": datetime.now().isoformat(),
+                    "paragraph_status_code": "ACTIVE", "updated_at": serialize_business_datetime(now_kst()),
                 }).execute()
                 paragraph_id = para_res.data[0]["id"]
 
@@ -520,7 +521,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
                         "paragraph_id": paragraph_id, "item_level_code": "HO",
                         "item_no": item["item_no"], "item_no_sort": i_idx + 1,
                         "item_text": item["item_text"], "item_status_code": "ACTIVE",
-                        "updated_at": datetime.now().isoformat(),
+                        "updated_at": serialize_business_datetime(now_kst()),
                     }).execute()
                     item_id = item_res.data[0]["id"]
 
@@ -530,15 +531,15 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
                             "paragraph_id": paragraph_id, "parent_item_id": item_id,
                             "item_level_code": "MOK", "item_no": sub["item_no"],
                             "item_no_sort": s_idx + 1, "item_text": sub["item_text"],
-                            "item_status_code": "ACTIVE", "updated_at": datetime.now().isoformat(),
+                            "item_status_code": "ACTIVE", "updated_at": serialize_business_datetime(now_kst()),
                         }).execute()
 
     supabase.table("law_update_tracking").upsert({
-        "law_id": law_id, "last_checked_at": datetime.now().isoformat(),
+        "law_id": law_id, "last_checked_at": serialize_business_datetime(now_kst()),
         "last_source_mst_no": law_mst_no, "last_source_hash": raw_hash,
         "last_collected_version_id": version_id, "update_needed": False,
         "job_status_code": "SUCCESS", "job_message": f"수집완료 - 조문 {article_count}개",
-        "updated_at": datetime.now().isoformat(),
+        "updated_at": serialize_business_datetime(now_kst()),
     }, on_conflict="law_id").execute()
 
     return {"law_id": law_id, "version_id": version_id,
@@ -553,8 +554,8 @@ def mark_rules_needs_review(law_name: str, change_summary: str, supabase) -> int
     res = supabase.table("law_rule_drafts").update({
         "status":          "NEEDS_REVIEW",
         "review_reason":   f"법령 개정 감지: {change_summary}",
-        "law_changed_at":  datetime.now().isoformat(),
-        "updated_at":      datetime.now().isoformat(),
+        "law_changed_at":  serialize_business_datetime(now_kst()),
+        "updated_at":      serialize_business_datetime(now_kst()),
     }).eq("law_name", law_name).eq("status", "APPROVED").execute()
     count = len(res.data) if res.data else 0
     return count
@@ -562,7 +563,7 @@ def mark_rules_needs_review(law_name: str, change_summary: str, supabase) -> int
 
 def _publish_law_revision_board(law_id: str, law_name: str, change_summary: str, supabase) -> None:
     try:
-        now_iso = datetime.now().isoformat()
+        now_iso = serialize_business_datetime(now_kst())
         supabase.table("law_revision_board").insert({
             "law_id": law_id, "law_name": law_name,
             "title": f"[법령개정] {law_name}",
@@ -604,7 +605,7 @@ def _notify_safety_managers_by_law_change(law_name: str, change_summary: str, su
                     "trigger_code": "LAW_CHANGED", "trigger_group": "LAW",
                     "title": title, "body": body, "priority": "HIGH",
                     "is_read": False, "channel": "push", "send_status": "SENT",
-                    "sent_at": datetime.now().isoformat(),
+                    "sent_at": serialize_business_datetime(now_kst()),
                 }).execute()
             except Exception as e:
                 print(f"[LAW_UPDATE] notifications INSERT 실패 user={u.get('id')}: {e}")
@@ -633,7 +634,7 @@ def _mark_inspection_items_law_changed(law_name: str, supabase) -> int:
         if not set_ids:
             return 0
         upd = supabase.table("inspection_set_items").update({
-            "is_law_changed": True, "updated_at": datetime.now().isoformat(),
+            "is_law_changed": True, "updated_at": serialize_business_datetime(now_kst()),
         }).in_("inspection_set_id", set_ids).execute()
         return len(upd.data or [])
     except Exception as e:
@@ -660,9 +661,9 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
     current_mst_no = current["law_mst_no"]
     if current_mst_no == last_mst_no:
         supabase.table("law_update_tracking").update({
-            "last_checked_at": datetime.now().isoformat(), "update_needed": False,
+            "last_checked_at": serialize_business_datetime(now_kst()), "update_needed": False,
             "job_status_code": "SUCCESS", "job_message": "변경 없음",
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": serialize_business_datetime(now_kst()),
         }).eq("law_id", law_id).execute()
         return {"changed": False, "law_name": law_name}
     content_result = fetch_law_content(current_mst_no)
@@ -683,23 +684,23 @@ def check_law_update(law_tracking: dict, supabase) -> dict:
     supabase.table("law_change_log").insert({
         "law_id": law_id, "old_version_id": old_version_id,
         "new_version_id": save_result["version_id"],
-        "change_detected_date": datetime.now().isoformat(),
+        "change_detected_date": serialize_business_datetime(now_kst()),
         "change_scope_code": "FULL" if "전부" in current.get("revision_type", "") else "PARTIAL",
         "changed_article_count": sum(1 for a in parsed["articles"] if a.get("is_changed")),
         "change_summary": change_summary,
-        "processed_status_code": "DETECTED", "updated_at": datetime.now().isoformat(),
+        "processed_status_code": "DETECTED", "updated_at": serialize_business_datetime(now_kst()),
     }).execute()
     needs_review_count = mark_rules_needs_review(law_name, change_summary, supabase)
     _publish_law_revision_board(law_id, law_name, change_summary, supabase)
     notified_count = _notify_safety_managers_by_law_change(law_name, change_summary, supabase)
     law_changed_items = _mark_inspection_items_law_changed(law_name, supabase)
     supabase.table("law_update_tracking").update({
-        "last_checked_at": datetime.now().isoformat(),
+        "last_checked_at": serialize_business_datetime(now_kst()),
         "last_source_mst_no": current_mst_no, "last_source_hash": new_hash,
         "last_collected_version_id": save_result["version_id"],
         "update_needed": False, "job_status_code": "SUCCESS",
         "job_message": f"개정 감지 — AI룰 {needs_review_count}개 재검토 표시",
-        "updated_at": datetime.now().isoformat(),
+        "updated_at": serialize_business_datetime(now_kst()),
     }).eq("law_id", law_id).execute()
     return {
         "changed": True, "law_name": law_name,

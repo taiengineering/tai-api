@@ -17,6 +17,7 @@ from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
 from dateutil.relativedelta import relativedelta
+from services.time import now_kst, serialize_external_utc
 
 SAAS_PRODUCT_TYPES: List[str] = [
     "SAAS_CONSTRUCTION",
@@ -89,15 +90,15 @@ def ts_ms() -> str:
 
 
 def ts_yyyymmddhhmmss() -> str:
-    return datetime.now().strftime("%Y%m%d%H%M%S")
+    return now_kst().strftime("%Y%m%d%H%M%S")
 
 
 def make_order_id() -> str:
-    return f"TAI{datetime.now():%Y%m%d%H%M%S}{uuid4().hex[:6].upper()}"
+    return f"TAI{now_kst():%Y%m%d%H%M%S}{uuid4().hex[:6].upper()}"
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def calc_expired_at(paid_at_iso: str, period_months: int) -> str:

@@ -75,6 +75,7 @@ from services.rule_gen_helpers import (
     _validate_rule_row,
 )
 from services.rule_gen_svc import _auto_approve_to_master
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/law-rule-generator", tags=["AI룰생성"])
 
@@ -382,7 +383,7 @@ async def parse_article(body: dict):
 
     if article_id:
         supabase.table("law_article").update({
-            "ai_parsed_at": datetime.now(timezone.utc).isoformat()
+            "ai_parsed_at": serialize_external_utc(now_kst())
         }).eq("id", article_id).execute()
 
     if not rules:
@@ -439,7 +440,7 @@ async def parse_batch(body: dict):
     results  = {"total": len(articles), "processed": 0, "skipped": 0,
                 "drafts_created": 0, "special_excluded": 0, "errors": []}
 
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = serialize_external_utc(now_kst())
 
     for art in articles:
         try:
@@ -522,7 +523,7 @@ async def auto_parse_and_approve(body: dict):
         "pending_review": 0,
         "errors": [],
     }
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = serialize_external_utc(now_kst())
 
     for art in articles:
         try:
@@ -618,7 +619,7 @@ async def bulk_approve_unregistered(
             if supabase.table("master_building_legal_rules").select("rule_id").eq("rule_id", rule_id).execute().data:
                 supabase.table("law_rule_drafts").update({
                     "registered_rule_id": rule_id,
-                    "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                    "reviewed_at": serialize_external_utc(now_kst()),
                 }).eq("id", d["id"]).execute()
                 skipped += 1
                 continue
@@ -630,7 +631,7 @@ async def bulk_approve_unregistered(
             if ins.data:
                 supabase.table("law_rule_drafts").update({
                     "registered_rule_id": rule_id,
-                    "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                    "reviewed_at": serialize_external_utc(now_kst()),
                 }).eq("id", d["id"]).execute()
                 ok += 1
             else:
@@ -794,7 +795,7 @@ async def _run_reparse_background(
                         patch.pop("submit_org_code", None)
 
                 if patch:
-                    patch["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    patch["updated_at"] = serialize_external_utc(now_kst())
                     supabase.table("master_building_legal_rules").update(patch).eq("id", row["id"]).execute()
                     updated += 1
                 else:
@@ -831,7 +832,7 @@ async def _run_reparse_background(
 
         supabase.table("reparse_job_log").update({
             "status": "COMPLETED",
-            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": serialize_external_utc(now_kst()),
             "processed": processed,
             "updated": updated,
             "skipped": skipped,
@@ -853,7 +854,7 @@ async def _run_reparse_background(
         try:
             supabase.table("reparse_job_log").update({
                 "status": "FAILED",
-                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": serialize_external_utc(now_kst()),
                 "error_details": [{"error": str(e)[:500]}],
             }).eq("job_id", job_id).execute()
         except Exception:
@@ -1041,7 +1042,7 @@ async def update_draft(draft_id: str, body: dict):
                "obligation_summary", "penalty_summary", "appointment_target",
                "diagnosis_stage", "reviewer_note"]
     data = {k: v for k, v in body.items() if k in allowed}
-    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    data["updated_at"] = serialize_external_utc(now_kst())
     data["status"] = "MODIFIED"
     res = supabase.table("law_rule_drafts").update(data).eq("id", draft_id).execute()
     if not res.data:
@@ -1075,7 +1076,7 @@ async def approve_draft(draft_id: str, body: dict = None):
     supabase.table("law_rule_drafts").update({
         "status": "APPROVED", "registered_rule_id": rule_id,
         "reviewer_note": body.get("reviewer_note"),
-        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        "reviewed_at": serialize_external_utc(now_kst()),
     }).eq("id", draft_id).execute()
 
     return {"status": "success", "rule_id": rule_id,
@@ -1089,8 +1090,8 @@ async def reject_draft(draft_id: str, body: dict = None):
     res = supabase.table("law_rule_drafts").update({
         "status": "REJECTED",
         "reviewer_note": body.get("reviewer_note"),
-        "reviewed_at":   datetime.now(timezone.utc).isoformat(),
-        "updated_at":    datetime.now(timezone.utc).isoformat(),
+        "reviewed_at":   serialize_external_utc(now_kst()),
+        "updated_at":    serialize_external_utc(now_kst()),
     }).eq("id", draft_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="초안 없음")

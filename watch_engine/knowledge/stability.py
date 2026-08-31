@@ -7,13 +7,14 @@ rule-based: STABLE / WATCH / UNSTABLE / CRITICAL.
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from services.time import now_kst
 
 logger = logging.getLogger("watch_engine.knowledge.stability")
 
 
 def compute_stability(sb, hours: int = 24, now: Optional[datetime] = None) -> list[dict]:
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = now_kst()
     since = (now - timedelta(hours=hours)).isoformat()
 
     try:

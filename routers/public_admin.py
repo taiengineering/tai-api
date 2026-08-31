@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_business_datetime, serialize_external_utc
 
 router = APIRouter(prefix="/admin/public-diagnosis-requests", tags=["관리 - 비회원진단"])
 
@@ -22,7 +23,7 @@ STATUS_LABELS = {
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 # ──────────────────────────────────────────────────────────────
@@ -183,7 +184,7 @@ def run_diagnosis(req_id: str):
             "engine_version":  ENGINE_VERSION,
             "sector":          sector,
             "request_type":    request_type,
-            "evaluated_at":    datetime.now().isoformat(),
+            "evaluated_at":    serialize_business_datetime(now_kst()),
             "applicable_count": total,
             "summary": {
                 "total":       total,
@@ -234,7 +235,7 @@ def _build_result_html(req: dict, result: dict) -> str:
     sector   = req.get("sector", "")
     summary  = result.get("summary", {})
     cs       = result.get("construction_summary", {})
-    today    = datetime.now().strftime("%Y년 %m월 %d일")
+    today    = now_kst().strftime("%Y년 %m월 %d일")
 
     req_type_label   = _REQUEST_TYPE_MAP.get(req.get("request_type", "v1"), "")
     addr_detail      = req.get("address_detail", "")

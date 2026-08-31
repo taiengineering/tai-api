@@ -19,6 +19,7 @@ from services.construction_svc import (
     run_diagnosis as _run_diagnosis_svc,
     run_generate_schedules as _run_generate_schedules_svc,
 )
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(tags=["건설안전"])
 router.include_router(construction_sites_router)
@@ -27,7 +28,7 @@ router.include_router(construction_workflow_router)
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _create_factory_for_site(supabase, site: dict) -> Optional[str]:

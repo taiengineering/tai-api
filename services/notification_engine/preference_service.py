@@ -6,6 +6,7 @@ Preference 저장/조회만 수행. 권한 계산 금지.
 import logging
 from typing import Optional, List
 from datetime import datetime, timezone
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger("notification_engine.preference")
 
@@ -46,7 +47,7 @@ def upsert_preference(
             "actor_id": actor_id,
             "source_type": source_type,
             "channel_key": channel_key,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": serialize_external_utc(now_kst()),
         }
         if tenant_id is not None:
             row["tenant_id"] = tenant_id

@@ -22,6 +22,7 @@ from services.legal_rules import get_construction_summary, normalize_sector_db, 
 from constants.sectors import to_mapping_sector
 
 from services import compiler_engine_gateway as compiler_gw
+from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
 
@@ -260,7 +261,7 @@ def create_temp_factory(supabase, body: DiagnoseStep1Body) -> str:
     sector_raw = body.sector.strip().upper()
     inp = normalize_consumer_inp(body)
     ctx = _input_to_facility_context(sector_raw, inp)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    ts = now_kst().strftime("%Y%m%d%H%M%S")
     building_use_code = str(
         inp.get("building_use_type") or inp.get("facility_type") or ctx.get("building_use_code") or ""
     ).strip()
@@ -283,8 +284,8 @@ def create_temp_factory(supabase, body: DiagnoseStep1Body) -> str:
         "subcontractor_worker_count": int(
             ctx.get("subcontractor_worker_count") or ctx.get("subcon_workers") or 0
         ),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": serialize_external_utc(now_kst()),
+        "updated_at": serialize_external_utc(now_kst()),
     }
     ksic = str(ctx.get("ksic_code") or "").strip()
     if ksic:
@@ -969,7 +970,7 @@ def run_anonymous_diagnosis(
 
     inp = normalize_consumer_inp(body)
     facility_ctx = _input_to_facility_context(sector_raw, inp)
-    evaluated_at = datetime.now(timezone.utc).isoformat()
+    evaluated_at = serialize_external_utc(now_kst())
 
     factory_id: Optional[str] = None
     try:

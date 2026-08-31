@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from services.legal_helpers import _normalize_target_code
 from services.legal_rules import _is_notify, _resolve_obligation_type
+from services.time import business_today
 
 APPOINTMENT_TARGET_MAP = {
     "safety_manager": "안전관리자",
@@ -104,7 +105,7 @@ def _calc_due_date(due_days) -> dict:
     if not due_days:
         return {}
     d = int(due_days)
-    return {"due_days": d, "due_date": (date.today() + timedelta(days=d)).isoformat(), "urgency": "IMMEDIATE" if d <= 3 else ("URGENT" if d <= 14 else "NORMAL")}
+    return {"due_days": d, "due_date": (business_today() + timedelta(days=d)).isoformat(), "urgency": "IMMEDIATE" if d <= 3 else ("URGENT" if d <= 14 else "NORMAL")}
 
 
 def _get_penalty_fallback(obligation_type: str) -> str:

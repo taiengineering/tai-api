@@ -16,6 +16,7 @@ from __future__ import annotations
 import inspect
 import time
 from datetime import datetime, timedelta, timezone
+from services.time import now_kst
 
 _probes: dict = {}
 
@@ -106,7 +107,7 @@ def build_alert_message_ko(status, failed_probes, results):
         ok_names = [_probes.get(n, {}).get("desc_ko", n) for n in ok_probes]
         lines.append(f"정상: {', '.join(ok_names)} ({len(ok_probes)}건)")
 
-    kst = datetime.now(timezone(timedelta(hours=9)))
+    kst = now_kst()
     lines.append(f"확인 시각: {kst.strftime('%Y-%m-%d %H:%M')} KST")
 
     return "\n".join(lines)

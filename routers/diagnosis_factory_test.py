@@ -35,6 +35,7 @@ from services.diagnosis_helpers import _build_partial
 from services.legal_rules import normalize_sector_db
 from constants.sectors import to_mapping_sector
 from services import check_engine
+from services.time import now_kst
 
 router = APIRouter(prefix="/diagnosis", tags=["진단검증하니스"])
 
@@ -71,7 +72,7 @@ _SECTOR_FROM_FACTORY = {
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return now_kst()
 
 
 class FactoryTestRunBody(BaseModel):

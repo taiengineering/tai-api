@@ -16,6 +16,7 @@ import argparse,json,os,re,subprocess,sys,tempfile
 from datetime import datetime,timezone,timedelta
 from pathlib import Path
 from html.parser import HTMLParser
+from services.time import now_kst, serialize_business_datetime
 
 try:
     from dotenv import load_dotenv; load_dotenv()
@@ -364,7 +365,7 @@ def extract_all(parsed, doc_id, file_name, form_name, source_path):
     status = "FAIL" if any(i.startswith("FAIL") for i in issues) else "PASS"
 
     # Audit
-    audit = {"compiler_version":SCRIPT_VERSION,"compiled_at":datetime.now(KST).isoformat(),
+    audit = {"compiler_version":SCRIPT_VERSION,"compiled_at":serialize_business_datetime(now_kst()),
         "source_file":file_name,"form_name_used":name_for_family,
         "extraction_counts":{"elements":len(elements),"fields":len(fields),
             "checklists":len(checklists),"evidence":len(evidence),
@@ -373,7 +374,7 @@ def extract_all(parsed, doc_id, file_name, form_name, source_path):
 
     return {
         "_schema_version":"3.0.0","_compiler":f"TAI Document Schema Compiler v{SCRIPT_VERSION}",
-        "_generated_at":datetime.now(KST).isoformat(),
+        "_generated_at":serialize_business_datetime(now_kst()),
         "document_id":doc_id,"file_name":file_name,"file_type":"HWP",
         "form_name":name_for_family,"source_path":source_path,
         "original_text_preserved":True,

@@ -14,6 +14,7 @@ Profile -> Compiler Input(AnonymousDiagnosisCreate) -> Live Engine(POST /anonymo
 import json, time, sys, os
 from datetime import datetime, timezone
 import urllib.request, urllib.error
+from services.time import now_kst, serialize_external_utc
 
 API_BASE = "https://api.taieng.co.kr"
 ENDPOINT = "/anonymous-diagnosis"
@@ -84,7 +85,7 @@ def main():
     d = json.load(open("profile_universe_v1.json"))
     profiles = {p["profile_id"]: p for p in d["profiles"]}
     targets = sys.argv[1:] or ["PF-0001", "PF-0019", "PF-0028", "PF-0037"]
-    run_ts = datetime.now(timezone.utc).isoformat()
+    run_ts = serialize_external_utc(now_kst())
     log = []
     os.makedirs("snapshots", exist_ok=True)
     for pid in targets:

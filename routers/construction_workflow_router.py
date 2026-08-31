@@ -43,12 +43,13 @@ from services.construction_svc import (
     update_record,
 )
 from services.status_vocab import ptw_filter_query_values
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(tags=["건설안전"])
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 # ── 회사 스코프 가드 (P13, Wave3 직접MCP) ──
@@ -165,7 +166,7 @@ def _enrich_inspection_rows(supabase, rows: list) -> list:
 
 
 def _ptw_number(site_id: str, supabase) -> str:
-    year = datetime.now().year
+    year = now_kst().year
     res = supabase.table("construction_works").select("id", count="exact").eq("site_id", site_id).execute()
     seq = (res.count or 0) + 1
     return f"CS-{year}-{seq:05d}"
@@ -521,7 +522,7 @@ async def issue_site_qr(site_id: str, body: SiteQrBody, current: dict = Depends(
         raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
 
     qr_code = (body.qr_code or "").strip() or site_id
-    now_naive = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+    now_naive = now_kst().replace(tzinfo=None).isoformat()
 
     # 같은 현장에 이미 발급된 QR 있으면 갱신, 없으면 신규
     exist = supabase.table("qr_entities").select("id").eq("site_id", site_id).eq("tag_type", "SITE").limit(1).execute()

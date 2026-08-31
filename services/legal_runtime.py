@@ -7,6 +7,7 @@ from services.legal_format import build_result
 from services.legal_helpers import get_sector_groups
 from services.legal_rules import _determine_risk_level, _evaluate_condition, _evaluate_conditions
 from services.legal_article_loader import fetch_article_contexts
+from services.time import business_today
 
 
 def _save_diagnosis_result(supabase, factory_id: str, sector: str, stage: int, input_data: dict, matched_rules: list) -> dict:
@@ -119,8 +120,8 @@ def _create_report_events_from_rules(supabase, factory_id: str, matched_rules: l
                     "factory_id": factory_id,
                     "rule_code": rule.get("rule_code") or rule.get("rule_id"),
                     "form_code": form_code,
-                    "trigger_date": date.today().isoformat(),
-                    "due_date": (date.today() + timedelta(days=due_days)).isoformat(),
+                    "trigger_date": business_today().isoformat(),
+                    "due_date": (business_today() + timedelta(days=due_days)).isoformat(),
                     "status": "PENDING",
                 }
             ).execute()

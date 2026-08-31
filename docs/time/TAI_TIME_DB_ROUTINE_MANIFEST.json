@@ -1,0 +1,15 @@
+{
+  "localtimestamp_in_tai_functions": 0,
+  "tai_naive_ts_functions": 0,
+  "pgroonga_escape": "extension OOS — not a TAI naive_ts writer",
+  "time_writer_triggers": [
+    {"name": "tai_set_updated_at", "clock": "now()", "change": "NO CHANGE"},
+    {"name": "fn_set_updated_at", "clock": "now()", "change": "NO CHANGE"},
+    {"name": "update_timestamp", "clock": "now()", "change": "NO CHANGE"},
+    {"name": "sync_construction_worker_to_registry", "clock": "now()", "change": "NO CHANGE"}
+  ],
+  "time_writer_trigger_count": 12,
+  "time_writer_trigger_functions_distinct": 4,
+  "active_triggers_expected": 30,
+  "note": "All 12 time-writer triggers call now() (session/transaction clock). No rewrite in PHASE 2 STEP D artifacts. After database timezone cutover, now() follows Asia/Seoul."
+}

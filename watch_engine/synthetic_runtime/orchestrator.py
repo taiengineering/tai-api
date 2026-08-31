@@ -15,6 +15,7 @@ import random
 import logging
 import uuid
 from datetime import datetime, timezone
+from services.time import now_kst
 
 logger = logging.getLogger("watch_engine.synthetic_runtime.orchestrator")
 
@@ -30,7 +31,7 @@ def run_synthetic_tick(sb=None) -> dict:
         from db.supabase_client import get_supabase
         sb = get_supabase()
 
-    now = datetime.now(timezone.utc)
+    now = now_kst()
     hour = now.hour
     stats = {"tenants": 0, "workflows": 0, "events": 0, "chaos": 0, "abandoned": 0, "failed": 0, "blocked": 0}
 

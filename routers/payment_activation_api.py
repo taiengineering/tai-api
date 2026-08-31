@@ -16,6 +16,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 
 from routers.auth import get_current_user
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/payment", tags=["결제검증"])
@@ -220,7 +221,7 @@ def activate_subscription(subscription_id: str, current_user: dict = Depends(get
             return {"status": "error", "message": f"\ube44\ud65c\uc131 \ud50c\ub79c: {s['plan_code']}. \ud65c\uc131\ud654 \ubd88\uac00."}
 
         # 3. \ud65c\uc131\ud654
-        now = datetime.now(timezone.utc).isoformat()
+        now = serialize_external_utc(now_kst())
         sb.table("subscriptions").update({
             "status": "ACTIVE",
             "started_at": now,
@@ -269,7 +270,7 @@ def detect_orphans(current_user: dict = Depends(get_current_user)):
             .eq("status", "ACTIVE").is_("factory_id", "null").execute()
 
         # PENDING payment > 7 days
-        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        week_ago = (now_kst() - timedelta(days=7)).isoformat()
         stale_pending = sb.table("payments").select("id,plan_code,created_at") \
             .eq("status_code", "PENDING").lt("created_at", week_ago).execute()
 

@@ -1,0 +1,32 @@
+{
+  "schema": "public",
+  "table": "work_schedules",
+  "partition_strategy": "HASH",
+  "partition_key": "factory_id",
+  "partition_key_is_reviewed_at": false,
+  "altered_column": "reviewed_at",
+  "altered_column_is_partition_key": false,
+  "modulus": 16,
+  "children": [
+    {"name": "work_schedules_p00", "remainder": 0},
+    {"name": "work_schedules_p01", "remainder": 1},
+    {"name": "work_schedules_p02", "remainder": 2},
+    {"name": "work_schedules_p03", "remainder": 3},
+    {"name": "work_schedules_p04", "remainder": 4},
+    {"name": "work_schedules_p05", "remainder": 5},
+    {"name": "work_schedules_p06", "remainder": 6},
+    {"name": "work_schedules_p07", "remainder": 7},
+    {"name": "work_schedules_p08", "remainder": 8},
+    {"name": "work_schedules_p09", "remainder": 9},
+    {"name": "work_schedules_p10", "remainder": 10},
+    {"name": "work_schedules_p11", "remainder": 11},
+    {"name": "work_schedules_p12", "remainder": 12},
+    {"name": "work_schedules_p13", "remainder": 13},
+    {"name": "work_schedules_p14", "remainder": 14},
+    {"name": "work_schedules_p15", "remainder": 15}
+  ],
+  "migration_group": "WORK_SCHEDULES_PARTITION",
+  "migration_action": "ALTER_ROOT_ONLY",
+  "child_alter_count": 0,
+  "note": "ALTER TABLE public.work_schedules ALTER COLUMN reviewed_at TYPE timestamptz USING reviewed_at AT TIME ZONE 'Asia/Seoul' — 16 children inherit; do not ALTER children individually."
+}

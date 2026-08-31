@@ -31,6 +31,7 @@ from services.anonymous_factory_service import (
     _mapping_sector_key,
     _is_token_text,
 )
+from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
 
@@ -261,7 +262,7 @@ def run_semantic_diagnosis(supabase, body: DiagnoseStep1Body, allowed_sectors) -
 
     inp = normalize_consumer_inp(body)
     facility_ctx = _input_to_facility_context(sector_raw, inp)
-    evaluated_at = datetime.now(timezone.utc).isoformat()
+    evaluated_at = serialize_external_utc(now_kst())
     sector_db = normalize_sector_db(sector_raw)
 
     allowed_article_ids = _load_sector_allowed_article_ids(supabase, sector_db)

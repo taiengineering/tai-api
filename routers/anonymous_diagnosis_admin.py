@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
+from services.time import now_kst
 
 router = APIRouter(prefix="/anonymous-diagnosis", tags=["익명 무료진단 (관리자)"])
 
@@ -24,7 +25,7 @@ ADMIN_ALLOWED_STATUS = frozenset({"ACTIVE", "CLAIMED", "EXPIRED"})
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return now_kst()
 
 
 class AdminAnonDiagPatch(BaseModel):

@@ -11,13 +11,14 @@ from fastapi import APIRouter, HTTPException, Header, Query
 from pydantic import BaseModel, Field
 
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger("site_public")
 router = APIRouter(tags=["공개 웹"])
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 _CATEGORY_LABEL = {

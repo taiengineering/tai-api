@@ -6,6 +6,7 @@
 import logging
 from datetime import datetime, timezone
 from typing import Optional
+from services.time import now_kst
 
 logger = logging.getLogger("notification_engine.e2e_executor")
 
@@ -63,7 +64,7 @@ def _run_normal(channel_key: str, result: dict):
         event_type="test_notification",
         source_engine="e2e_test",
         severity="INFO",
-        trace_id=f"E2E-NORMAL-{datetime.now(timezone.utc).strftime('%H%M%S')}",
+        trace_id=f"E2E-NORMAL-{now_kst().strftime('%H%M%S')}",
         source_domain="e2e_test",
     )
     pr = run_pipeline(event=event, message_title="E2E NORMAL",
@@ -95,7 +96,7 @@ def _run_mute(channel_key: str, result: dict):
         event_type="test_notification",
         source_engine="e2e_test",
         severity="INFO",
-        trace_id=f"E2E-MUTE-{datetime.now(timezone.utc).strftime('%H%M%S')}",
+        trace_id=f"E2E-MUTE-{now_kst().strftime('%H%M%S')}",
         source_domain="e2e_test",
     )
     pr = run_pipeline(event=event, message_title="E2E MUTE",
@@ -125,7 +126,7 @@ def _run_quiet_hour(channel_key: str, result: dict):
         event_type="test_notification",
         source_engine="e2e_test",
         severity="INFO",
-        trace_id=f"E2E-QH-{datetime.now(timezone.utc).strftime('%H%M%S')}",
+        trace_id=f"E2E-QH-{now_kst().strftime('%H%M%S')}",
         source_domain="e2e_test",
     )
     pr = run_pipeline(event=event, message_title="E2E QH",
@@ -156,7 +157,7 @@ def _run_critical_bypass(channel_key: str, result: dict):
         event_type="test_notification",
         source_engine="e2e_test",
         severity="CRITICAL",
-        trace_id=f"E2E-CRIT-{datetime.now(timezone.utc).strftime('%H%M%S')}",
+        trace_id=f"E2E-CRIT-{now_kst().strftime('%H%M%S')}",
         source_domain="e2e_test",
     )
     pr = run_pipeline(event=event, message_title="E2E CRITICAL",

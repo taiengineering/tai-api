@@ -33,6 +33,7 @@ from pydantic import BaseModel, field_validator, model_validator
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
+from services.time import now_kst, serialize_external_utc
 
 log    = logging.getLogger(__name__)
 router = APIRouter()   # prefix는 main.py에서 지정
@@ -52,7 +53,7 @@ VALID_WORK_TYPES   = {"RESIDENT", "NON_RESIDENT"}
 
 # ── 유틸 ──────────────────────────────────────────────────────────────────
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _get_user_name(user_id: str) -> str:

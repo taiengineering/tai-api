@@ -48,6 +48,7 @@ from pydantic import BaseModel
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import require_company_id, scoped_list_company, _ensure_own_company
+from services.time import business_today
 
 log = logging.getLogger(__name__)
 
@@ -133,7 +134,7 @@ def list_policy_params(
     법 개정 시 종전 행이 닫히고 신규 행이 추가되므로, 과거 시점 판정도 재현 가능하다.
     전사 공통 법정 상수라 공개 유지(get_policy_param 이 내부 함수로 호출).
     """
-    ref = on_date or date.today().isoformat()
+    ref = on_date or business_today().isoformat()
     try:
         q = get_supabase().table("ra_policy_param").select("*").eq("is_active", True)
         q = q.lte("effective_from", ref)

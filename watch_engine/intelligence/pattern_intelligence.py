@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from watch_engine.intelligence.intelligence_result import IntelligenceResult
+from services.time import now_kst
 
 logger = logging.getLogger("watch_engine.intelligence.pattern")
 
@@ -15,7 +16,7 @@ def analyze_patterns(
     sb, hours: int = 48, now: Optional[datetime] = None,
 ) -> list[IntelligenceResult]:
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = now_kst()
 
     try:
         # \uc2dc\uac04\ub300\ubcc4 \ubd84\ud3ec \ubd84\uc11d (\ucd5c\uadfc vs \uc774\uc804)

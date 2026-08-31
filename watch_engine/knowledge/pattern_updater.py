@@ -7,6 +7,7 @@ Scheduler에서 주기적 호출.
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from services.time import now_kst
 
 logger = logging.getLogger("watch_engine.knowledge.pattern_updater")
 
@@ -21,7 +22,7 @@ def update_patterns(
     """
     stats = {"patterns_updated": 0, "patterns_created": 0, "errors": 0}
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = now_kst()
 
     try:
         from db.supabase_client import get_supabase

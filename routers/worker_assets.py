@@ -39,6 +39,7 @@ from routers.auth import get_current_user
 from services import inspection_sets_svc as _iss
 from services.status_vocab import is_wa_done
 from services.upload_service import MAX_SIZE, MIME_TO_EXT, validate_image_file
+from services.time import now_kst
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["WorkerAssets"])
@@ -207,7 +208,7 @@ async def upload_inspection_photo(
     insp_id = (inspection_id or "").strip() or None
     if insp_id:
         _assert_inspection_photo_owner(supabase, insp_id, current_user["id"])
-    now = datetime.now(timezone.utc)
+    now = now_kst()
     storage_path = f"worker-photos/{context}/{now.strftime('%Y-%m')}/{uuid.uuid4()}.{ext}"
     try:
         supabase.storage.from_(PHOTO_BUCKET).upload(
@@ -282,7 +283,7 @@ def list_work_assignments(
     res = q.order("scheduled_date", desc=False).limit(limit).execute()
     items = res.data or []
     if overdue_only:
-        today = datetime.now(timezone.utc).date().isoformat()
+        today = now_kst().date().isoformat()
         items = [
             a for a in items
             if (a.get("overdue_level") or 0) > 0
@@ -379,7 +380,7 @@ def worker_complete_education(
         company_id = current_user.get("company_id")
         factory_id = current_user.get("factory_id")
 
-    server_date = datetime.now(timezone.utc).date().isoformat()
+    server_date = now_kst().date().isoformat()
     existing = (
         supabase.table("education_history")
         .select("id, education_code, completed_at")

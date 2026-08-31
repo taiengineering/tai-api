@@ -9,6 +9,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from db.database import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/connect/providers", tags=["TAI Fix 업체"])
 
@@ -49,7 +50,7 @@ class ProviderCreate(BaseModel):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 # ── POST /connect/providers — 업체 등록 (공개, 트랜잭션) ────────

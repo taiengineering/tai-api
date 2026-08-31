@@ -21,6 +21,7 @@ from typing import Optional
 from datetime import datetime, timezone
 
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/engine", tags=["engine-document"])
 
@@ -179,7 +180,7 @@ async def update_form(form_code: str, body: dict):
     for key in ("id", "form_code", "created_at"):
         body.pop(key, None)
 
-    body["updated_at"] = datetime.now(timezone.utc).isoformat()
+    body["updated_at"] = serialize_external_utc(now_kst())
 
     # form_templates 존재 여부 확인
     check = (

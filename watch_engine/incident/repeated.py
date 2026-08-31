@@ -7,6 +7,7 @@ v1.1: Mock environment 제외 (TASK 30).
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from services.time import now_kst
 
 logger = logging.getLogger("watch_engine.incident.repeated")
 
@@ -22,7 +23,7 @@ def detect_repeated_failures(
     """
     stats = {"detected": 0, "created": 0, "errors": 0}
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = now_kst()
 
     try:
         since = (now - timedelta(minutes=window_minutes)).isoformat()

@@ -5,6 +5,7 @@ from typing import Optional, List, Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/price-setting", tags=["가격 설정"])
 
@@ -179,7 +180,7 @@ def update_saas_plan(plan_id: str, body: SaasPlanUpdate):
     if not update_data:
         raise HTTPException(status_code=400, detail="변경할 항목이 없습니다")
 
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
     if body.updated_by:
         update_data["updated_by"] = body.updated_by
 
@@ -193,8 +194,8 @@ def create_saas_plan(body: SaasPlanUpdate):
     """SaaS 플랜 신규 생성."""
     sb = get_supabase()
     row = {k: v for k, v in body.dict().items() if v is not None and k != "updated_by"}
-    row["created_at"] = datetime.now().isoformat()
-    row["updated_at"] = datetime.now().isoformat()
+    row["created_at"] = serialize_business_datetime(now_kst())
+    row["updated_at"] = serialize_business_datetime(now_kst())
     res = sb.table("price_saas_plan").insert(row).execute()
     return {"status": "success", "data": res.data[0] if res.data else None}
 
@@ -221,7 +222,7 @@ def update_diagnosis_report(report_id: str, body: DiagnosisReportUpdate):
     update_data = {k: v for k, v in body.dict().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="변경할 항목이 없습니다")
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
 
     changed = _log_changes(sb, "price_diagnosis_report", report_id, old_res.data, update_data)
     res = sb.table("price_diagnosis_report").update(update_data).eq("id", report_id).execute()
@@ -261,7 +262,7 @@ def update_repair_brokerage(item_id: str, body: RepairBrokerageUpdate):
     update_data = {k: v for k, v in body.dict().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="변경할 항목이 없습니다")
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
     changed = _log_changes(sb, "price_repair_brokerage", item_id, old_res.data, update_data)
     res = sb.table("price_repair_brokerage").update(update_data).eq("id", item_id).execute()
     return {"status": "success", "data": res.data[0] if res.data else None, "changes_logged": changed}
@@ -285,7 +286,7 @@ def update_safety_management(item_id: str, body: SafetyManagementUpdate):
     update_data = {k: v for k, v in body.dict().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="변경할 항목이 없습니다")
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
     changed = _log_changes(sb, "price_safety_management", item_id, old_res.data, update_data)
     res = sb.table("price_safety_management").update(update_data).eq("id", item_id).execute()
     return {"status": "success", "data": res.data[0] if res.data else None, "changes_logged": changed}
@@ -309,7 +310,7 @@ def update_consulting(item_id: str, body: ConsultingUpdate):
     update_data = {k: v for k, v in body.dict().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="변경할 항목이 없습니다")
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
     changed = _log_changes(sb, "price_consulting", item_id, old_res.data, update_data)
     res = sb.table("price_consulting").update(update_data).eq("id", item_id).execute()
     return {"status": "success", "data": res.data[0] if res.data else None, "changes_logged": changed}

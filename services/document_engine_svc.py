@@ -8,6 +8,7 @@ v1.1.0: Audit 수정 — field_key 검증, evidence 검증, generate audit 추�
 """
 from datetime import datetime, timezone
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 
 # ═══════════════════════════════════════════════════════
@@ -101,7 +102,7 @@ def create_document(
     )
     if not schema.data:
         raise ValueError(f"schema not found: {form_schema_id}")
-    now = datetime.now(timezone.utc).isoformat()
+    now = serialize_external_utc(now_kst())
     record = {
         "form_schema_id": form_schema_id,
         "runtime_data_json": {},
@@ -186,7 +187,7 @@ def update_document(
         raise ValueError("ARCHIVED document cannot be modified")
 
     schema_id = before.data["form_schema_id"]
-    now = datetime.now(timezone.utc).isoformat()
+    now = serialize_external_utc(now_kst())
     update = {"updated_at": now}
     changes = {}
 
@@ -270,7 +271,7 @@ def change_status(
     if rule_row["requires_comment"] and not comment:
         raise ValueError("review_comment required for this transition")
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = serialize_external_utc(now_kst())
     update = {"status": to_status, "updated_at": now}
 
     if to_status == "SUBMITTED_FOR_REVIEW":

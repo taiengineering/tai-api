@@ -17,12 +17,13 @@ from typing import Optional, List
 from datetime import datetime, timezone
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/alert-messages", tags=["알럿 메시지 관리"])
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 # ──────────────────────────────────────────────

@@ -4,6 +4,7 @@ import uuid, logging
 from datetime import datetime, timezone
 from typing import Any
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger(__name__)
 TABLE = "operational_response_feedback"
@@ -22,7 +23,7 @@ async def record_response_feedback(
         "learning_notes": _build_learning_notes(outcome, operator_action),
         "recommended_future_response": [],
         "environment": environment,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": serialize_external_utc(now_kst()),
     }
     try:
         sb = get_supabase()

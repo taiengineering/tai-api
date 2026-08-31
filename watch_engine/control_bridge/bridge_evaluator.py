@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from watch_engine.control_bridge.severity_projection import project_severity
 from watch_engine.control_bridge.bridge_rules import ESCALATION_RULES
+from services.time import now_kst
 
 logger = logging.getLogger("watch_engine.control_bridge.evaluator")
 
@@ -17,7 +18,7 @@ def evaluate_bridge(sb=None, window_minutes: int = 5, include_mock: bool = True)
         from db.supabase_client import get_supabase
         sb = get_supabase()
 
-    since = (datetime.now(timezone.utc) - timedelta(minutes=window_minutes)).isoformat()
+    since = (now_kst() - timedelta(minutes=window_minutes)).isoformat()
 
     q = sb.table("business_event") \
         .select("id,tenant_id,flow_key,step_key,event_type,result,trace_id,environment,created_at") \
@@ -125,7 +126,7 @@ def _emit_escalation(sb, key, count, rule, stats):
             "environment": "mock",
             "service_key": "tai-api",
             "flow_key": key.split(":")[0] if ":" in key else key,
-            "trace_id": f"esc_{key}_{datetime.now(timezone.utc).strftime('%H%M')}",
+            "trace_id": f"esc_{key}_{now_kst().strftime('%H%M')}",
             "event_type": rule.get("event_type", "watch.integrity_detected"),
             "severity": rule.get("severity", "WARNING"),
             "integrity_status": "escalation",

@@ -6,6 +6,7 @@
 import os, json
 from datetime import datetime, timezone
 from uuid import uuid4
+from services.time import now_kst, serialize_external_utc
 
 
 def _get_sb():
@@ -87,7 +88,7 @@ class AdminReviewService:
         # update
         sb.table('admin_review_queue').update({
             'status': new_status,
-            'updated_at': datetime.now(timezone.utc).isoformat()
+            'updated_at': serialize_external_utc(now_kst())
         }).eq('id', review_id).execute()
 
         # audit
@@ -114,7 +115,7 @@ class FamilyService:
         if not source_examples:
             raise ValueError('source_examples 필수')
 
-        version_id = f"v_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        version_id = f"v_{now_kst().strftime('%Y%m%d_%H%M%S')}"
         data = {
             'family_name': family_name, 'family_type': family_type,
             'description': description, 'source_examples': json.dumps(source_examples),
@@ -149,7 +150,7 @@ class RegistryTokenService:
         if not source_examples:
             raise ValueError('source_examples 없는 token 추가 금지')
 
-        version_id = f"v_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        version_id = f"v_{now_kst().strftime('%Y%m%d_%H%M%S')}"
         data = {
             'raw_token': raw_token, 'canonical_token': canonical_token,
             'target_registry': target_registry, 'linked_family': linked_family,

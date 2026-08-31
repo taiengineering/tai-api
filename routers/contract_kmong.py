@@ -25,6 +25,7 @@ from services.legal_context import _input_to_facility_context
 from services.legal_engine_svc import ENGINE_VERSION, _evaluate_facility_conditions_db
 from services.legal_format import _classify_rules_db, format_rule_result_db
 from services.legal_rules import _risk_level
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/contract/kmong", tags=["contract-kmong"])
 log = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ class KmongPatchBody(BaseModel):
 # ──────────────────────────────────────────────
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _get_request_or_404(supabase, request_id: str) -> dict:

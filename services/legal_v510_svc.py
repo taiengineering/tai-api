@@ -22,6 +22,7 @@ from services.leg_candidate_adapter import to_candidate_contract
 from services.candidate_presentation import build_candidate_presentation  # Phase 8-B
 from services.legal_diagnosis_rules import fetch_diagnosis_rules
 from services.legal_runtime import _create_report_events_from_rules, _save_diagnosis_result
+from services.time import now_kst, serialize_business_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ def run_diagnose_step1_v510(supabase, body: DiagnoseStep1Body, allowed_sectors, 
     _apply_construction_conditions(inp, body, sector_raw)
 
     facility_ctx = _input_to_facility_context_v510(sector_raw, inp)
-    evaluated_at = datetime.now().isoformat()
+    evaluated_at = serialize_business_datetime(now_kst())
 
     eval_ctx = normalize_input(inp)
     eval_ctx["sector"] = sector_raw
@@ -265,7 +266,7 @@ def run_diagnose_step2_v510(supabase, body: DiagnoseStep2Body, engine_version: s
     _classify_rules_db(matched, triggered2)
 
     raw_leg_step2 = {
-        "engine_version": engine_version, "mode": sector, "evaluated_at": datetime.now().isoformat(),
+        "engine_version": engine_version, "mode": sector, "evaluated_at": serialize_business_datetime(now_kst()),
         "total_rules_checked": len(all_rules),
         "appointment_required": triggered2["appointment"],
         "inspection_required":  triggered2["inspection"],

@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .situation_builder import build_operational_situation
+from services.time import now_kst, serialize_external_utc
 
 
 def build_situation_snapshot(
@@ -47,7 +48,7 @@ def build_situation_snapshot(
         "confidence": situation.get("confidence", 0.5),
         "event_count": len(events),
         "source_event_ids": source_ids,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": serialize_external_utc(now_kst()),
         "environment": environment,
     }
 

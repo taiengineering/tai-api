@@ -3,6 +3,7 @@
 import logging
 from typing import Optional
 from datetime import datetime, timezone
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger("notification_engine.feed_query")
 
@@ -65,7 +66,7 @@ def mark_read(notification_id: str, read_by: Optional[str] = None) -> bool:
     try:
         from db.supabase_client import get_supabase
         get_supabase().table("notifications").update({
-            "is_read": True, "read_at": datetime.now(timezone.utc).isoformat(),
+            "is_read": True, "read_at": serialize_external_utc(now_kst()),
         }).eq("id", notification_id).execute()
         return True
     except Exception:

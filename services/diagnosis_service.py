@@ -8,6 +8,7 @@ import os
 from datetime import datetime, timezone
 
 from services.compiler_core_svc import fetch_compiler_candidates
+from services.time import now_kst, serialize_external_utc
 
 
 def _get_sb():
@@ -22,7 +23,7 @@ class DiagnosisService:
     @staticmethod
     def evaluate(sb, factory_id: str, input_data: dict) -> dict:
         """[1] 법령진단 실행. 결과 출력까지만."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = serialize_external_utc(now_kst())
 
         # Session 생성
         session = sb.table('diagnosis_session').insert({
@@ -120,7 +121,7 @@ class DiagnosisService:
                 'total_prohibitions': len(prohibitions),
                 'total_penalties': min(len(penalties),50),
                 'total_residuals': len(residuals),
-                'completed_at': datetime.now(timezone.utc).isoformat(),
+                'completed_at': serialize_external_utc(now_kst()),
             }).eq('id', sid).execute()
 
             return {
@@ -143,7 +144,7 @@ class DiagnosisService:
             sb.table('diagnosis_session').update({
                 'diagnosis_status': 'FAILED',
                 'validation_issues': json.dumps({'error': str(e)}),
-                'completed_at': datetime.now(timezone.utc).isoformat(),
+                'completed_at': serialize_external_utc(now_kst()),
             }).eq('id', sid).execute()
             raise
 

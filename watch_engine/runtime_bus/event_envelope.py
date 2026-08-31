@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
+from services.time import now_kst
 
 
 class EventEnvelope(BaseModel):
@@ -20,7 +21,7 @@ class EventEnvelope(BaseModel):
     tenant_id: str
     trace_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     source: str  # "legal_engine" | "runtime" | "notification" | ...
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: now_kst())
     payload: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: Optional[str] = None
 

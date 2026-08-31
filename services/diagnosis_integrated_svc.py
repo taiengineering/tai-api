@@ -10,6 +10,7 @@ from fastapi import HTTPException, Request
 
 from schemas.legal_engine import DiagnoseStep1Body
 from services.legal_rules import normalize_sector_db
+from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ def _save_diagnosis_purchase(
                 "invoice_requested": invoice_requested,
                 "invoice_biz_no": invoice_biz_no,
                 "invoice_email": invoice_email,
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": serialize_external_utc(now_kst()),
             }
         ).execute()
     except Exception as e:
@@ -81,7 +82,7 @@ def sync_diagnosis_auth_log_from_inicis(supabase, mtx_id: str) -> None:
     ci_hash = hashlib.sha256(ci.encode("utf-8")).hexdigest()
     name = row.get("user_name") or ""
     phone = row.get("user_phone") or ""
-    now = datetime.now(timezone.utc).isoformat()
+    now = serialize_external_utc(now_kst())
 
     existing = (
         supabase.table("diagnosis_auth_log")
@@ -507,7 +508,7 @@ def run_diagnosis(
     public_token = str(uuid.uuid4())
     expires_at = None
     if is_free:
-        expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        expires_at = (now_kst() + timedelta(days=7)).isoformat()
 
     _raw_structured_input = {
         _k: _v
@@ -707,7 +708,7 @@ def upgrade_diagnosis(
         supabase,
         auth_row,
         current_user,
-        (now_func or (lambda: datetime.now(timezone.utc).isoformat()))(),
+        (now_func or (lambda: serialize_external_utc(now_kst())))(),
     )
 
     return {

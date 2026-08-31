@@ -49,6 +49,7 @@ import re
 import sys
 import zipfile
 from datetime import datetime, timezone
+from services.time import now_kst, serialize_external_utc
 
 try:
     from dotenv import load_dotenv
@@ -342,7 +343,7 @@ def process_zip(zip_row: dict, args):
                 "file_format": fmt,
                 "file_size_bytes": len(file_content),
                 "download_status": "SUCCESS",
-                "downloaded_at": datetime.now(timezone.utc).isoformat(),
+                "downloaded_at": serialize_external_utc(now_kst()),
                 "storage_path": storage_path,
                 "download_error": None,
                 "storage_bucket": BUCKET,

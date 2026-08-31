@@ -21,6 +21,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from services.time import now_kst
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -186,7 +187,7 @@ def generate_sample(name: str, body: DiagnoseStep1Body, tier_code: str = "SAMPLE
     print(f"[{name}] 엔진 원본: {raw_rules} rules")
 
     token = f"SAMPLE-{name.upper()}-{uuid.uuid4().hex[:6]}"
-    now = datetime.now(timezone.utc)
+    now = now_kst()
     input_data = dict(body.input or {})
     for field in [
         "worker_count",

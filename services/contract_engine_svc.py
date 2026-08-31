@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from services.contract_ai import generate_contract_sections, revise_with_claude
 from services.contract_helpers import _entity_type_label, _expert_type_label
+from services.time import now_kst
 
 
 async def run_generate_contract(supabase, body, now: str, storage_bucket: str, contract_template: str):
@@ -56,7 +57,7 @@ async def run_generate_contract(supabase, body, now: str, storage_bucket: str, c
         proposal_note=result_data.get("proposal_note", ""),
     )
 
-    start_dt = datetime.now(timezone.utc)
+    start_dt = now_kst()
     end_dt = start_dt + timedelta(days=duration_months * 30)
     html = contract_template.format(
         contract_id="PENDING",

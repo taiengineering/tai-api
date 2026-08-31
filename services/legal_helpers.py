@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from services.time import now_kst, serialize_external_utc
 
 APPOINTMENT_TARGET_NORMALIZE = {
     "소방안전관리자": "fire_safety_manager",
@@ -58,7 +59,7 @@ def _to_int(*vals) -> int:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _parse_survey_data(raw: Any) -> Optional[Dict[str, Any]]:

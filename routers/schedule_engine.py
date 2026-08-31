@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException
 from db.supabase_client import get_supabase
 from datetime import date, datetime, timedelta
 import traceback
+from services.time import business_today
 
 router = APIRouter(prefix="/schedule-engine", tags=["schedule_engine"])
 
@@ -107,7 +108,7 @@ def generate_schedule(inspection_set_id: str):
         # ── 상태 결정 ──
         try:
             planned_dt = date.fromisoformat(planned_date_str)
-            status_code = "OVERDUE" if planned_dt < date.today() else "SCHEDULED"
+            status_code = "OVERDUE" if planned_dt < business_today() else "SCHEDULED"
         except Exception:
             status_code = "SCHEDULED"
 

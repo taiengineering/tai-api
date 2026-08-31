@@ -5,6 +5,7 @@ Worker에서 사용.
 
 import math
 from datetime import datetime, timezone, timedelta
+from services.time import now_kst
 
 # 기본 정책
 DEFAULT_MAX_RETRIES = 3
@@ -24,7 +25,7 @@ def calculate_next_retry_at(
     delay = min(base * multiplier^retry_count, max_delay)
     """
     delay = min(base_delay * (multiplier ** retry_count), max_delay)
-    return datetime.now(timezone.utc) + timedelta(seconds=delay)
+    return now_kst() + timedelta(seconds=delay)
 
 
 def should_retry(retry_count: int, max_retries: int = DEFAULT_MAX_RETRIES) -> bool:

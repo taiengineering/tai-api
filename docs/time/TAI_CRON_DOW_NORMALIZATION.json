@@ -1,0 +1,50 @@
+{
+  "numeric_before": 6,
+  "numeric_after": 0,
+  "contradiction_count": 0,
+  "contradictions": [],
+  "mappings": [
+    {
+      "job_code": "SCHEDULE_GENERATE_ALL",
+      "before": "0 7 * * 1",
+      "after": "0 7 * * mon",
+      "dow": "mon",
+      "schedule_desc": "매주 월요일 오전 7시"
+    },
+    {
+      "job_code": "PRECEDENT_COLLECT_WEEKLY",
+      "before": "0 5 * * 1",
+      "after": "0 5 * * mon",
+      "dow": "mon",
+      "schedule_desc": null
+    },
+    {
+      "job_code": "AUTO_PARSE_NEW",
+      "before": "0 4 * * 1",
+      "after": "0 4 * * mon",
+      "dow": "mon",
+      "schedule_desc": "매주 월요일 04:00 — 미파싱 조문 AI 파싱 + 자동승인"
+    },
+    {
+      "job_code": "LAW_COLLECT_MISSING",
+      "before": "0 4 * * 0",
+      "after": "0 4 * * sun",
+      "dow": "sun",
+      "schedule_desc": "매주 일요일 새벽 4시"
+    },
+    {
+      "job_code": "RULE_REPARSE",
+      "before": "0 4 * * 3",
+      "after": "0 4 * * wed",
+      "dow": "wed",
+      "schedule_desc": "매주 수요일 04:00 — 기존 master 룰 빈칸 AI 보강 (Sonnet)"
+    },
+    {
+      "job_code": "VALIDATE_MASTER",
+      "before": "0 6 * * 5",
+      "after": "0 6 * * fri",
+      "dow": "fri",
+      "schedule_desc": "매주 금요일 06:00 — 판정룰 무결성 검증 리포트"
+    }
+  ]
+}

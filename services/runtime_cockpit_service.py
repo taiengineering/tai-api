@@ -9,6 +9,7 @@ from datetime import date
 from typing import Optional
 
 from db.supabase_client import get_supabase
+from services.time import business_today
 
 
 async def get_cockpit_tasks(
@@ -80,7 +81,7 @@ async def get_cockpit_tasks(
         .execute()
     )
     sched_map: dict[str, dict] = {}
-    today = date.today().isoformat()
+    today = business_today().isoformat()
     for s in (sched_res.data or []):
         tid = s["task_id"]
         ndd = s.get("next_due_date")
@@ -163,7 +164,7 @@ async def get_task_detail(task_id: str) -> Optional[dict]:
         if (e.get("payload") or {}).get("task_id") == task_id
     ]
 
-    today = date.today().isoformat()
+    today = business_today().isoformat()
     return {
         "task": task,
         "documents": docs,

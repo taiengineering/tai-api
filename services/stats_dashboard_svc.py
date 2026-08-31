@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
 
@@ -32,13 +33,13 @@ def _day(iso: Optional[str]) -> Optional[str]:
 
 
 def _since_iso(days: int) -> str:
-    start = datetime.now(timezone.utc) - timedelta(days=days)
+    start = now_kst() - timedelta(days=days)
     return start.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
 
 
 def _date_axis(days: int) -> List[str]:
     """오늘 포함 최근 days 일의 날짜 라벨(오름차순)."""
-    today = datetime.now(timezone.utc).date()
+    today = now_kst().date()
     return [(today - timedelta(days=(days - 1 - i))).isoformat() for i in range(days)]
 
 
@@ -196,7 +197,7 @@ def get_dashboard(days: int = 90) -> Dict[str, Any]:
 
     return {
         "range_days": days,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": serialize_external_utc(now_kst()),
         "summary": summary,
         "revenue": revenue,
         "customers": customers,

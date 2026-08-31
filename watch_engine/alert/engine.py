@@ -13,6 +13,7 @@ Fail-safe: 절대 서비스 영향 없음.
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from services.time import now_kst
 
 logger = logging.getLogger("watch_engine.alert.engine")
 
@@ -25,7 +26,7 @@ def evaluate_and_alert(now: Optional[datetime] = None) -> dict:
     """
     stats = {"rules_checked": 0, "alerts_sent": 0, "suppressed": 0, "errors": 0}
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = now_kst()
 
     try:
         from db.supabase_client import get_supabase

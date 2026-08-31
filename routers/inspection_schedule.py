@@ -37,6 +37,7 @@ from services.inspection_sets_helpers import (
 )
 from services.legal_format import CYCLE_CODE_MAP, INSPECTION_CYCLE_UNIT_MAP
 from services.legal_helpers import get_sector_groups
+from services.time import business_today
 
 router = APIRouter(prefix="/inspection-schedule", tags=["inspection-schedule"])
 _MAX_LIST_FETCH = 10000
@@ -409,7 +410,7 @@ def get_summary(
 ):
     supabase = get_supabase()
     company_id = _forced_company_id(current, supabase, company_id)
-    today = date.today()
+    today = business_today()
     if not _is_admin(_scope(supabase, current.get("role_code"))) and not company_id:
         return {"status": "success", "data": {
             "total": 0, "pending_anchor": 0, "active": 0, "overdue": 0, "upcoming_7d": 0,
@@ -480,7 +481,7 @@ def list_inspection_sets(
         fk = factory_keyword.lower()
         rows = [r for r in rows if fk in str(r.get("factory_name") or "").lower()]
 
-    today = date.today()
+    today = business_today()
 
     def _sort_key(r):
         pend = 0 if r.get("status_code") == "PENDING_ANCHOR" else 1
@@ -517,7 +518,7 @@ def get_inspection_set(set_id: str, current: dict = Depends(get_current_user)):
     data["factory_name"] = fac.data[0].get("name") if fac.data else "-"
     data["anchor_type_label"] = ANCHOR_TYPE_LABEL.get(data.get("anchor_type") or "", "미분류")
     npd = _to_date(data.get("next_planned_date"))
-    data["days_until_next"] = (npd - date.today()).days if npd else None
+    data["days_until_next"] = (npd - business_today()).days if npd else None
     data["is_overdue"] = data["days_until_next"] is not None and data["days_until_next"] < 0
     return {"status": "success", "data": data}
 

@@ -20,6 +20,7 @@ import logging
 import os
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from services.time import now_kst
 
 logger = logging.getLogger("watch_engine.synthetic.cleanup")
 
@@ -52,7 +53,7 @@ def cleanup_synthetic_data(
     }
 
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = now_kst()
 
     try:
         from db.supabase_client import get_supabase

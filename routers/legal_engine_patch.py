@@ -25,6 +25,7 @@ from typing import Optional, List
 import uuid
 
 from db.supabase_client import get_supabase
+from services.time import business_today, now_kst, serialize_external_utc
 
 router = APIRouter(tags=["법령엔진"])
 
@@ -32,7 +33,7 @@ SAFETY_MANAGER_ROLES = {"003", "012"}  # 안전관리자 role_code
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 # ──────────────────────────────────────────────
@@ -121,7 +122,7 @@ def auto_assign_schedules(
 
     assigned_total = 0
     skipped_total  = 0
-    today_str = date.today().isoformat()
+    today_str = business_today().isoformat()
     now       = _now_iso()
 
     for fid, scheds in factory_map.items():
@@ -258,7 +259,7 @@ def generate_schedules_from_diagnosis(factory_id: str):
         r["rule_code"] for r in (existing.data or []) if r.get("rule_code")
     }
 
-    today   = date.today()
+    today   = business_today()
     rows    = []
     skipped = 0
 

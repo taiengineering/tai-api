@@ -24,6 +24,7 @@ from datetime import date, timedelta
 from typing import Dict, Iterable, List, Optional, Set
 
 from services.holiday_svc import DEFAULT_WORK_WEEKDAYS, workdays_between
+from services.time import business_today
 
 VERSION = "1.2.0"
 
@@ -63,7 +64,7 @@ def judge_continuous(
     work_weekdays  ISO 조업요일 집합(1=월…7=일). 미지정 시 기본 월~금.
     holidays       날짜→휴무 이름 목록(holiday_svc.holiday_map). 작업일에서 제외·표시.
     """
-    today = today or date.today()
+    today = today or business_today()
     first, last = _month_range(month)
     holidays = holidays or {}
     wd: Set[int] = set(int(x) for x in work_weekdays) if work_weekdays is not None else set(DEFAULT_WORK_WEEKDAYS)

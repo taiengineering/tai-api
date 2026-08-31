@@ -8,6 +8,7 @@ Escalation: L1~L4.
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from services.time import now_kst
 
 logger = logging.getLogger("watch_engine.governance.tenant_impact")
 
@@ -21,7 +22,7 @@ def compute_tenant_impact(
 ) -> list[dict]:
     """Compute per-tenant operational impact."""
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = now_kst()
     since = (now - timedelta(hours=hours)).isoformat()
 
     try:

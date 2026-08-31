@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, date, timedelta
 from db.supabase_client import get_supabase
+from services.time import business_today, now_kst, serialize_business_datetime
 
 router = APIRouter(tags=["notifications"])
 
@@ -97,7 +98,7 @@ def update_notification_setting(trigger_code: str, req: NotificationSettingUpdat
         raise HTTPException(status_code=404, detail="트리거를 찾을 수 없습니다")
 
     update_data = {k: v for k, v in req.dict().items() if v is not None}
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
 
     res = supabase.table("notification_settings")\
         .update(update_data).eq("trigger_code", trigger_code).execute()
@@ -210,8 +211,8 @@ def trigger_due_alerts():
     → link_url에 schedule_id 임베드, title에 label 포함하여 중복 판정
     """
     supabase = get_supabase()
-    today = date.today()
-    now   = datetime.now()
+    today = business_today()
+    now   = now_kst()
 
     DUE_TARGETS = [
         (0, "D-0",   "HIGH"),
@@ -305,7 +306,7 @@ def mark_as_read(notification_id: str):
 
     supabase.table("notifications").update({
         "is_read": True,
-        "read_at": datetime.now().isoformat(),
+        "read_at": serialize_business_datetime(now_kst()),
     }).eq("id", notification_id).execute()
 
     return {"status": "success", "message": "읽음 처리되었습니다"}
@@ -319,7 +320,7 @@ def mark_all_read(
     """전체 읽음 처리"""
     supabase = get_supabase()
     query = supabase.table("notifications")\
-        .update({"is_read": True, "read_at": datetime.now().isoformat()})\
+        .update({"is_read": True, "read_at": serialize_business_datetime(now_kst())})\
         .eq("is_read", False)
 
     if user_id:    query = query.eq("user_id", user_id)
@@ -363,7 +364,7 @@ def send_notification(req: NotificationSend):
         .eq("is_active", True)\
         .limit(1).execute()
 
-    now = datetime.now()
+    now = now_kst()
     results = []
 
     # 사이트 알림 저장 (즉시 사용 가능)
@@ -431,8 +432,8 @@ def create_notification(
             "channel":      "SITE",
             "is_read":      False,
             "send_status":  "SUCCESS",
-            "sent_at":      datetime.now().isoformat(),
-            "created_at":   datetime.now().isoformat(),
+            "sent_at":      serialize_business_datetime(now_kst()),
+            "created_at":   serialize_business_datetime(now_kst()),
         }).execute()
     except Exception as e:
         print(f"알림 생성 실패: {e}")

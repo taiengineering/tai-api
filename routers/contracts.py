@@ -51,6 +51,7 @@ from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_own_company, _is_admin, _scope
 import random
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(tags=["contracts"])
 
@@ -60,10 +61,10 @@ router = APIRouter(tags=["contracts"])
 # ============================================================
 
 def gen_quote_no() -> str:
-    return f"QUO-{datetime.now().strftime('%Y%m%d')}-{random.randint(1000,9999)}"
+    return f"QUO-{now_kst().strftime('%Y%m%d')}-{random.randint(1000,9999)}"
 
 def gen_contract_no() -> str:
-    return f"CON-{datetime.now().strftime('%Y%m%d')}-{random.randint(1000,9999)}"
+    return f"CON-{now_kst().strftime('%Y%m%d')}-{random.randint(1000,9999)}"
 
 def calc_vat(amount: int) -> int:
     return int(amount * 0.1)
@@ -210,7 +211,7 @@ def create_quote(req: QuoteCreate, current: dict = Depends(get_current_user)):
         supply_amount += subtotal
 
     vat_amount   = calc_vat(supply_amount)
-    now          = datetime.now()
+    now          = now_kst()
 
     res = supabase.table("quotes").insert({
         "quote_no":      gen_quote_no(),
@@ -268,7 +269,7 @@ def update_quote(quote_id: str, req: QuoteUpdate, current: dict = Depends(get_cu
         update_data["vat_amount"]    = calc_vat(supply)
         update_data["total_amount"]  = supply + update_data["vat_amount"]
 
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
     res = supabase.table("quotes").update(update_data).eq("id", quote_id).execute()
     return {"status": "success", "message": "견적이 수정됐습니다", "data": res.data[0] if res.data else {}}
 
@@ -285,7 +286,7 @@ def confirm_quote(quote_id: str, current: dict = Depends(get_current_user)):
 
     supabase.table("quotes").update({
         "status_code": "CONFIRMED",
-        "updated_at":  datetime.now().isoformat(),
+        "updated_at":  serialize_business_datetime(now_kst()),
     }).eq("id", quote_id).execute()
 
     return {"status": "success", "message": "견적이 확정됐습니다. 고객에게 이메일이 발송됩니다"}
@@ -303,7 +304,7 @@ def convert_to_contract(quote_id: str, current: dict = Depends(get_current_user)
     if q.data["status_code"] != "CONFIRMED":
         raise HTTPException(status_code=400, detail="견적확정 상태에서만 계약 전환 가능합니다")
 
-    now          = datetime.now()
+    now          = now_kst()
     service_type = q.data.get("service_type", "")
 
     contract_row = {
@@ -371,8 +372,8 @@ def get_contracts(
     if status_code:  query = query.eq("status_code", status_code)
     if search:       query = query.ilike("contract_no", f"%{search}%")
     if expiring:
-        expire_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-        today       = datetime.now().strftime("%Y-%m-%d")
+        expire_date = (now_kst() + timedelta(days=30)).strftime("%Y-%m-%d")
+        today       = now_kst().strftime("%Y-%m-%d")
         query = query.lte("end_date", expire_date)\
                      .gte("end_date", today)\
                      .eq("status_code", "ACTIVE")
@@ -397,7 +398,7 @@ def create_contract(req: ContractCreate, current: dict = Depends(get_current_use
         raise HTTPException(status_code=404, detail="회사를 찾을 수 없습니다")
 
     vat    = calc_vat(req.contract_amount)
-    now    = datetime.now()
+    now    = now_kst()
     status = "ACTIVE" if req.activate_now else "PENDING_PAYMENT"
 
     res = supabase.table("contracts").insert({
@@ -448,7 +449,7 @@ def update_contract(contract_id: str, req: ContractUpdate, current: dict = Depen
         vat = calc_vat(req.contract_amount)
         update_data["vat_amount"]   = vat
         update_data["total_amount"] = req.contract_amount + vat
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
 
     res = supabase.table("contracts").update(update_data).eq("id", contract_id).execute()
     return {"status": "success", "message": "계약이 수정됐습니다", "data": res.data[0] if res.data else {}}
@@ -478,7 +479,7 @@ def update_contract_status(contract_id: str, req: ContractStatusUpdate, current_
 
     target = req.status.upper()
     current = c.data["status_code"]
-    now = datetime.now()
+    now = now_kst()
 
     # ── ACTIVE 처리 ──────────────────────────────────────────
     if target == "ACTIVE":
@@ -561,7 +562,7 @@ def activate_contract(contract_id: str, current: dict = Depends(get_current_user
     if c.data["status_code"] != "PENDING_PAYMENT":
         raise HTTPException(status_code=400, detail="입금대기 상태에서만 활성화 가능합니다")
 
-    now = datetime.now()
+    now = now_kst()
     supabase.table("contracts").update({
         "status_code": "ACTIVE",
         "is_active":   True,
@@ -585,7 +586,7 @@ def confirm_payment(contract_id: str, req: PaymentConfirm, current: dict = Depen
     if not c.data:
         raise HTTPException(status_code=404, detail="계약을 찾을 수 없습니다")
 
-    now = datetime.now()
+    now = now_kst()
     supabase.table("contracts").update({
         "paid_amount": req.paid_amount,
         "paid_at":     now.isoformat(),
@@ -605,7 +606,7 @@ def suspend_contract(contract_id: str, req: SuspendRequest, current: dict = Depe
     if c.data["status_code"] != "ACTIVE":
         raise HTTPException(status_code=400, detail="활성화 상태에서만 정지 가능합니다")
 
-    now = datetime.now()
+    now = now_kst()
     supabase.table("contracts").update({
         "status_code":      "SUSPENDED",
         "suspended_at":     now.isoformat(),
@@ -626,7 +627,7 @@ def cancel_contract(contract_id: str, req: CancelRequest, current: dict = Depend
     if c.data["status_code"] in ["CANCELLED", "EXPIRED"]:
         raise HTTPException(status_code=400, detail="이미 취소/만료된 계약입니다")
 
-    now = datetime.now()
+    now = now_kst()
     supabase.table("contracts").update({
         "status_code":  "CANCELLED",
         "cancelled_at": now.isoformat(),

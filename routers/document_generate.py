@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from services.document_engine.generator import render_html, render_pdf, get_registry
+from services.time import business_today
 
 router = APIRouter(prefix="/documents", tags=["document-generate"])
 
@@ -45,7 +46,7 @@ def _params(body: GenerateBody) -> Dict[str, Any]:
 
 
 def _issue_code(doc_type: str, site_label: Optional[str], detail: Optional[str]) -> str:
-    d = date.today().strftime("%Y%m%d")
+    d = business_today().strftime("%Y%m%d")
     site = (site_label or "SITE").replace(" ", "")
     base = f"{doc_type}-{site}-{d}"
     return f"{base}-{detail}" if detail else base

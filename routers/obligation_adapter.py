@@ -64,6 +64,7 @@ from services.obligation_adapter_service import (
 )
 from services.trigger_generator import generate_trigger_codes
 from services.trigger_obligation_generator import generate_obligation_candidates
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(
     prefix="/obligation-adapter",
@@ -160,7 +161,7 @@ def _persist_result_data(
         "rule_count": obligation_count,
         "is_latest": True,
         "schema_version": SCHEMA_VERSION,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": serialize_external_utc(now_kst()),
     }
     if created_by:                      # WO-CREATEDBY-FIX-001: 인증 사용자면 권한 컬럼만 채움
         row["created_by"] = created_by

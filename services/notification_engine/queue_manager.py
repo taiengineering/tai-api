@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime, timezone, timedelta, time as dtime
 from typing import List, Optional
+from services.time import now_kst
 
 logger = logging.getLogger("notification_engine.queue")
 
@@ -20,7 +21,7 @@ def create_queue_items(
     try:
         from db.supabase_client import get_supabase
         sb = get_supabase()
-        now = datetime.now(timezone.utc)
+        now = now_kst()
         trace_id = event_row.get("trace_id", "")
         severity = event_row.get("severity", "INFO")
         event_type = event_row.get("event_type", "")

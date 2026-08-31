@@ -54,6 +54,7 @@ import sys
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
+from services.time import now_kst, serialize_external_utc
 
 try:
     from dotenv import load_dotenv
@@ -375,7 +376,7 @@ def main():
                 "file_format": f["fmt"],
                 "file_size_bytes": f["size"],
                 "download_status": "SUCCESS",
-                "downloaded_at": datetime.now(timezone.utc).isoformat(),
+                "downloaded_at": serialize_external_utc(now_kst()),
                 "storage_path": storage_path,
                 "download_error": None,
                 "storage_bucket": BUCKET,

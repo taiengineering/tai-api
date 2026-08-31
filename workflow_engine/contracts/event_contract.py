@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timezone
 import uuid
+from services.time import now_kst, serialize_external_utc
 
 
 class WorkflowEventContract(BaseModel):
@@ -36,7 +37,7 @@ class WorkflowEventContract(BaseModel):
             "tenant_id": self.tenant_id,
             "triggered_by": self.triggered_by,
             "payload": self.payload,
-            "occurred_at": self.occurred_at or datetime.now(timezone.utc).isoformat(),
+            "occurred_at": self.occurred_at or serialize_external_utc(now_kst()),
         }
 
     def to_notification_event_dict(self) -> dict:

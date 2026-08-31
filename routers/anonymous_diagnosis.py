@@ -56,6 +56,7 @@ from routers.diagnosis_transform import (
 )
 from watch_engine import create_trace, emit_event
 from watch_engine.trace import clear_trace
+from services.time import now_kst, parse_external_datetime, to_external_utc
 
 router = APIRouter(prefix="/anonymous-diagnosis", tags=["익명 무료진단"])
 
@@ -74,7 +75,7 @@ _SECTOR_NORMALIZE: Dict[str, str] = {
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return now_kst()
 
 
 # LEGACY [ISOLATED]: run_diagnose_step1_runtime (runtime_metadata_resolution) — Phase 2 replaced
@@ -428,7 +429,7 @@ def _fetch_row(token: str) -> Dict[str, Any]:
         try:
             exp_dt = datetime.fromisoformat(str(exp).replace("Z", "+00:00"))
             if exp_dt.tzinfo is None:
-                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                exp_dt = to_external_utc(parse_external_datetime(exp_dt.isoformat(), source_timezone='UTC')) if exp_dt.tzinfo is None else to_external_utc(exp_dt)
             if _now() > exp_dt:
                 raise HTTPException(status_code=410, detail="만료된 진단 결과입니다.")
         except HTTPException:

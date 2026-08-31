@@ -14,6 +14,7 @@ import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
+from services.time import now_kst
 
 # tai-api 루트를 path 에 추가
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -61,7 +62,7 @@ def _match_law_name(laws: list[dict], law_name: str) -> dict | None:
 def _check_emergency_stop(supabase) -> tuple[bool, str]:
     """긴급 중단 기준: 최근 1시간 revision board 삽입만 체크."""
     try:
-        since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        since = (now_kst() - timedelta(hours=1)).isoformat()
         recent = (
             supabase.table("law_revision_board")
             .select("id")

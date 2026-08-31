@@ -9,6 +9,7 @@ from db.supabase_client import get_supabase
 from schemas.inspection_sets import ManualInspectionSetBody
 from services.inspection_sets_helpers import UNIT_KO, _build_items_for_set, _get_delta
 from .errors import InspectionSetsSvcError
+from services.time import business_today
 
 
 def get_sets_list(factory_id, source, anchor_confirmed, page, size, company_id=None, deny_all=False) -> dict:
@@ -80,7 +81,7 @@ def get_preview_schedule(factory_id: str, months: int) -> dict:
         "schedule_end_date, anchor_confirmed, next_planned_date"
     ).eq("factory_id", factory_id).eq("anchor_confirmed", True).eq("is_active", True).execute()
     sets = sets_res.data or []
-    today = date.today()
+    today = business_today()
     end_date = today + relativedelta(months=months)
     preview = []
     for iset in sets:

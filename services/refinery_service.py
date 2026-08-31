@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from schemas.reverse_check_schema import ReverseCheckResult
 from schemas.stored_diagnosis_schema import ObligationItem, StoredDiagnosisResult
+from services.time import now_kst, serialize_external_utc
 
 
 def generate_obligation_text(trace: ReverseCheckResult) -> str:
@@ -107,7 +108,7 @@ def build_stored_diagnosis_result(
         total_count=after_dedup,
         before_dedup=before_dedup,
         after_dedup=after_dedup,
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        generated_at=serialize_external_utc(now_kst()),
         pipeline_version="WO-D-007-v1",
         pipeline_stages=pipeline_stages or {},
     )

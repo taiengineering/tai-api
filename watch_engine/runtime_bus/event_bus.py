@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from watch_engine.runtime_bus.runtime_context import RuntimeContext
 from watch_engine.runtime_bus.event_result import EventResult
 from watch_engine.runtime_bus.event_store import store_business_event, store_integrity_event
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger("watch_engine.runtime_bus")
 
@@ -43,7 +44,7 @@ def emit_runtime_event(
     if not event.get("trace_id"):
         event["trace_id"] = f"bus_{uuid.uuid4().hex[:12]}"
     if not event.get("timestamp"):
-        event["timestamp"] = datetime.now(timezone.utc).isoformat()
+        event["timestamp"] = serialize_external_utc(now_kst())
     if not event.get("tenant_id") and ctx.tenant_id:
         event["tenant_id"] = ctx.tenant_id
     if not event.get("source"):

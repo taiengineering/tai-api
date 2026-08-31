@@ -39,6 +39,7 @@ from services.workflow_integrity.detectors.missing_step_detector import (
 )
 from services.workflow_integrity.detectors.stuck_detector import detect_stuck
 from services.workflow_integrity.hooks.alert_hook import emit_integrity_alert
+from services.time import now_kst
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +157,7 @@ async def evaluate_workflow(
     return EvaluationReport(
         workflow_id=workflow_id,
         workflow_type=workflow_type,
-        evaluated_at=datetime.now(timezone.utc),
+        evaluated_at=now_kst(),
         total_rules_checked=len(rules),
         violations_found=len(violations),
         detections=detections,

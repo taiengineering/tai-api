@@ -16,6 +16,7 @@ from supabase import create_client, Client
 from services.health_registry import register_probe
 from routers.auth import get_current_user
 from services.company_scope import _ensure_factory_own, _forced_company_id, _is_admin, _scope
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter()
 
@@ -297,7 +298,7 @@ def upsert_company_education_setting(
         .limit(1)
         .execute()
     )
-    now = datetime.utcnow().isoformat()
+    now = serialize_business_datetime(now_kst())
     if existing.data:
         upd = {
             "custom_url": cu,
@@ -423,7 +424,7 @@ def update_education_setting(
         .maybe_single().execute()
 
     payload = {k: v for k, v in body.dict().items() if v is not None}
-    payload["updated_at"] = datetime.utcnow().isoformat()
+    payload["updated_at"] = serialize_business_datetime(now_kst())
 
     if existing.data:
         res = supabase.table("education_setting") \
@@ -603,8 +604,8 @@ def create_education_history(body: EducationHistoryCreate, supabase: Client = De
         "completed_date": str(body.completed_date) if body.completed_date else None,
         "due_date": str(body.due_date) if body.due_date else None,
         "status": "completed",
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": serialize_business_datetime(now_kst()),
+        "updated_at": serialize_business_datetime(now_kst()),
     }
 
     res = supabase.table("education_history").insert(payload).execute()
@@ -641,7 +642,7 @@ def create_pending_education_history(body: EducationPendingCreate, supabase: Cli
     if dup.data:
         raise HTTPException(status_code=400, detail="동일 교육이 이미 미이수로 배정되어 있습니다.")
 
-    now = datetime.utcnow().isoformat()
+    now = serialize_business_datetime(now_kst())
     payload = {
         "factory_id": body.factory_id,
         "user_id": body.user_id,
@@ -704,7 +705,7 @@ def update_education_history(
     payload = {k: v for k, v in body.dict().items() if v is not None}
     if "completed_date" in payload and payload["completed_date"]:
         payload["completed_date"] = str(payload["completed_date"])
-    payload["updated_at"] = datetime.utcnow().isoformat()
+    payload["updated_at"] = serialize_business_datetime(now_kst())
 
     res = supabase.table("education_history").update(payload).eq("id", history_id).execute()
     return {"success": True, "data": res.data[0] if res.data else {}}
@@ -765,7 +766,7 @@ async def upload_education_file(
         "doc_type": doc_type,
         "file_size": len(content),
         "mime_type": file.content_type,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": serialize_business_datetime(now_kst()),
     }
     res = supabase.table("education_files").insert(meta).execute()
 

@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from db.database import get_supabase
 from routers.auth import get_current_user
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/connect", tags=["연결 사전등록"])
 
@@ -130,7 +131,7 @@ def update_pre_registration(
         raise HTTPException(status_code=400, detail="변경할 항목이 없습니다")
 
     # 상태 전환 시 타임스탬프 자동 기록
-    now = datetime.now().isoformat()
+    now = serialize_business_datetime(now_kst())
     if body.status == "contacted" and not old.data.get("contacted_at"):
         update_data["contacted_at"] = now
     if body.status == "matched" and not old.data.get("matched_at"):

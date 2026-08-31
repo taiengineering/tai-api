@@ -7,6 +7,7 @@ from . import event_intake
 from . import recipient_resolver
 from . import queue_manager
 from . import registry
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger("notification_engine.pipeline")
 
@@ -78,7 +79,7 @@ def _mark_event_processed(event_id: str, status: str):
         from datetime import datetime, timezone
         get_supabase().table("runtime_notification_event").update({
             "event_status": status,
-            "processed_at": datetime.now(timezone.utc).isoformat(),
+            "processed_at": serialize_external_utc(now_kst()),
         }).eq("id", event_id).execute()
     except Exception as e:
         logger.error("Event status update failed: %s — %s", event_id, e)

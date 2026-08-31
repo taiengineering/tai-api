@@ -17,6 +17,7 @@ profile_universe_v1.json 전수 실행 -> 라이브 엔진 -> Snapshot + 메타�
 import json, time, os, sys
 from datetime import datetime, timezone
 import urllib.request, urllib.error
+from services.time import now_kst, serialize_external_utc
 
 API_BASE = os.getenv("TAI_API_BASE", "https://api.taieng.co.kr")
 ENDPOINT = "/anonymous-diagnosis"
@@ -70,7 +71,7 @@ def main():
     profiles = d["profiles"]
     targets = sys.argv[1:] or [p["profile_id"] for p in profiles]
     pmap = {p["profile_id"]: p for p in profiles}
-    run_ts = datetime.now(timezone.utc).isoformat()
+    run_ts = serialize_external_utc(now_kst())
     os.makedirs("snapshots_all", exist_ok=True)
     records, failures = [], []
     total = len(targets)

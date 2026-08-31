@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from routers.admin_inquiries import _next_inquiry_no
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger("member_inquiries")
 router = APIRouter(prefix="/me", tags=["회원 문의"])
@@ -46,7 +47,7 @@ INQUIRY_SOURCE = "saas"
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 class InquiryContextBody(BaseModel):

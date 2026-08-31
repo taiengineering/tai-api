@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from typing import Optional
 import logging
 from datetime import datetime
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/engine-publish", tags=["엔진 Publish 거버넌스"])
 logger = logging.getLogger("engine_publish")
@@ -143,7 +144,7 @@ def publish_release(request: Request, release_id: str):
 
     sb.table("engine_release_registry").update({
         "publish_status": "PUBLISHED",
-        "published_at": datetime.utcnow().isoformat(),
+        "published_at": serialize_business_datetime(now_kst()),
     }).eq("id", release_id).execute()
 
     sb.table("engine_integrity_event").insert({

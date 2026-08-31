@@ -24,6 +24,7 @@ import httpx
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _is_admin, _require_admin, _scope
+from services.time import now_kst
 
 router = APIRouter(prefix="/quotes", tags=["quotes"])
 
@@ -96,7 +97,7 @@ def _payload_dict(m) -> Dict[str, Any]:
 
 def _gen_no(prefix: str) -> str:
     import random
-    return f"{prefix}-{datetime.now().strftime('%Y%m%d')}-{random.randint(1000,9999)}"
+    return f"{prefix}-{now_kst().strftime('%Y%m%d')}-{random.randint(1000,9999)}"
 
 
 def _calc_vat(amount: int) -> int:
@@ -191,7 +192,7 @@ def submit_survey(
     - 응답: { success, data: { request_id, status } }
     """
     supabase = get_supabase()
-    now = datetime.utcnow()
+    now = now_kst()
 
     # ── 1. 토큰에서 유저 조회 (관대 처리) ─────────────────────
     token = None
@@ -357,7 +358,7 @@ def convert_survey_to_contract(
         raise HTTPException(status_code=409, detail="이미 계약이 존재합니다")
 
     import random
-    now = datetime.now()
+    now = now_kst()
     amount = req.contract_amount or q.data.get("total_amount") or 0
     vat    = _calc_vat(amount)
     start  = req.start_date or now.strftime("%Y-%m-%d")

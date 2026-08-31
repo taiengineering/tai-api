@@ -40,6 +40,7 @@ from pydantic import BaseModel, Field
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.support_taxonomy import project_labels, is_valid_type, is_valid_axis, taxonomy_snapshot
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/admin/inquiries", tags=["관리 - 통합 인박스"])
 
@@ -75,7 +76,7 @@ NONE_FILTER_TOKEN = "__none__"
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _notify_answer(row: Dict[str, Any], answer: str) -> Dict[str, Any]:
@@ -109,7 +110,7 @@ def _notify_answer(row: Dict[str, Any], answer: str) -> Dict[str, Any]:
 
 
 def _next_inquiry_no(supabase) -> str:
-    utc = datetime.now(timezone.utc)
+    utc = now_kst()
     day = utc.strftime("%Y%m%d")
     prefix = f"TAI-INQ-{day}-"
     start = utc.replace(hour=0, minute=0, second=0, microsecond=0)

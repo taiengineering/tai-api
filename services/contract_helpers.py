@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
+from services.time import now_kst, serialize_external_utc
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _expert_type_label(expert_type: str) -> str:
