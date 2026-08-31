@@ -394,3 +394,23 @@ class TestStability:
         a = self._fps(tmp_path, SRC_TWO)
         assert len(a) == 1
         assert next(iter(a.values())) == 2
+
+
+SRC_UTC_NOW = (
+    "from datetime import datetime, timezone\n"
+    "def f():\n"
+    "    return datetime.now(timezone.utc)\n"
+)
+
+
+def test_archive_quarantine_exempt(tmp_path):
+    _tree(tmp_path, {"_archive/routers_20260608/x.py": SRC_UTC_NOW})
+    cur = _scan(tmp_path)
+    assert sum(cur.values()) == 0
+
+
+def test_active_runtime_protected(tmp_path):
+    _tree(tmp_path, {"routers/x.py": SRC_UTC_NOW})
+    cur = _scan(tmp_path)
+    assert sum(cur.values()) > 0
+

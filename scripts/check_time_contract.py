@@ -6,7 +6,11 @@ ROOT = os.environ.get("TIME_CONTRACT_ROOT") or os.path.dirname(os.path.dirname(o
 BASELINE = os.path.join(ROOT, "time_debt_baseline.json")
 ALLOWLIST = os.path.join(ROOT, "time_exception_allowlist.json")
 GUARD_MARKERS = ["scripts/check_time_contract.py", "scripts/check-time-contract.mjs"]
-EXEMPT = ("services/time/", "tests/")
+EXEMPT = (
+    "services/time/",
+    "tests/",
+    "_archive/routers_20260608/",
+)
 SKIP_DIRS = {".git","node_modules","__pycache__",".venv","venv","dist","build"}
 def _fp(rule, rel, token):
     return hashlib.sha256(f"{rule}|{rel}|{token}".encode()).hexdigest()[:16]

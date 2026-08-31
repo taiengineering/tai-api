@@ -7,7 +7,6 @@ v1.1: Mock environment 제외 (TASK 30).
 import logging
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter
-from services.time import now_kst
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/watch-engine/incidents", tags=["인시던트"])
@@ -24,7 +23,7 @@ def get_incident_priority(hours: int = 24):
     try:
         from watch_engine.incident import calculate_priority, get_recommended_action
         sb = _sb()
-        since = (now_kst() - timedelta(hours=hours)).isoformat()
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
         # TASK 30: Mock 제외
         issues = sb.table("engine_integrity_event") \
@@ -97,7 +96,7 @@ def get_workflow_risk(hours: int = 24):
     try:
         from watch_engine.incident import compute_risk_score
         sb = _sb()
-        since = (now_kst() - timedelta(hours=hours)).isoformat()
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
         # TASK 30: Mock 제외
         issues = sb.table("engine_integrity_event") \
@@ -168,7 +167,7 @@ def get_repeated_failures(hours: int = 24):
     """반복 실패 이슈 목록."""
     try:
         sb = _sb()
-        since = (now_kst() - timedelta(hours=hours)).isoformat()
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
         # TASK 30: Mock 제외
         resp = sb.table("engine_integrity_event") \
             .select("*") \

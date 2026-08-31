@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
-from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/watch-engine/control", tags=["운영제어"])
@@ -47,7 +46,7 @@ class TemplateUpdate(BaseModel):
 def update_template(template_key: str, body: TemplateUpdate):
     try:
         update = {k: v for k, v in body.dict().items() if v is not None}
-        update["updated_at"] = serialize_external_utc(now_kst())
+        update["updated_at"] = datetime.now(timezone.utc).isoformat()
         _sb().table("message_template_registry").update(update).eq("template_key", template_key).execute()
         return {"status": "success", "message": f"{template_key} \uc218\uc815 \uc644\ub8cc"}
     except Exception as e:
@@ -78,7 +77,7 @@ class RoutingUpdate(BaseModel):
 def update_routing(route_key: str, body: RoutingUpdate):
     try:
         update = {k: v for k, v in body.dict().items() if v is not None}
-        update["updated_at"] = serialize_external_utc(now_kst())
+        update["updated_at"] = datetime.now(timezone.utc).isoformat()
         _sb().table("notification_routing_registry").update(update).eq("route_key", route_key).execute()
         return {"status": "success", "message": f"{route_key} \uc218\uc815 \uc644\ub8cc"}
     except Exception as e:

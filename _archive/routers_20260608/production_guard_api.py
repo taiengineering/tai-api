@@ -8,7 +8,6 @@ import os
 import logging
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter
-from services.time import now_kst
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/production", tags=["운영안정"])
@@ -123,7 +122,7 @@ def check_safety():
                           "message": f"\ud65c\uc131 Scheduler job {len(direct_jobs)}\uac1c (\uae30\ub300: 9+)"})
 
         # 3. Alert burst \uc704\ud5d8
-        hour_ago = (now_kst() - timedelta(hours=1)).isoformat()
+        hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
         recent_alerts = sb.table("alert_history").select("id", count="exact") \
             .gte("created_at", hour_ago).execute()
         if (recent_alerts.count or 0) > 50:
@@ -139,7 +138,7 @@ def check_safety():
                           "message": f"Production CRITICAL \ubbf8\ud574\uacb0 {critical.count}\uac74"})
 
         # 5. Stale PENDING \uacb0\uc81c
-        week_ago = (now_kst() - timedelta(days=7)).isoformat()
+        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
         stale = sb.table("payments").select("id", count="exact") \
             .eq("status_code", "PENDING").lt("created_at", week_ago).execute()
         if (stale.count or 0) > 20:

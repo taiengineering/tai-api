@@ -8,7 +8,6 @@ v3: synthetic-status, operational-density, synthetic-event-stream (TASK 46).
 import logging
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter
-from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/watch/intelligence", tags=["운영지능"])
@@ -87,7 +86,7 @@ def get_intelligence_summary(hours: int = 24):
             "recovery_actions": len(recovery),
             "top_risk_score": top_risk,
             "analysis_hours": hours,
-            "timestamp": serialize_external_utc(now_kst()),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -149,7 +148,7 @@ def get_event_stream(limit: int = 50, include_mock: bool = False):
 def get_incident_lifecycle(hours: int = 24):
     try:
         sb = _sb()
-        since = (now_kst() - timedelta(hours=hours)).isoformat()
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
         issues = sb.table("engine_integrity_event") \
             .select("id,resolved,ignored,severity,event_type") \
             .neq("environment", "mock").not_.is_("trace_id", "null") \
@@ -179,7 +178,7 @@ def get_synthetic_status(hours: int = 1):
     """Synthetic Runtime 실행 현황."""
     try:
         sb = _sb()
-        since = (now_kst() - timedelta(hours=hours)).isoformat()
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
         # Synthetic business_event
         be = sb.table("business_event").select("id,tenant_id,flow_key,result", count="exact") \
@@ -233,7 +232,7 @@ def get_synthetic_status(hours: int = 1):
             "severity_distribution": sev_counts,
             "chaos_events": chaos_count,
             "scheduler_recent": cron_logs.data or [],
-            "timestamp": serialize_external_utc(now_kst()),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -246,7 +245,7 @@ def get_operational_density(hours: int = 1):
     """운영 밀도 KPI."""
     try:
         sb = _sb()
-        since = (now_kst() - timedelta(hours=hours)).isoformat()
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
         be_count = sb.table("business_event").select("id", count="exact") \
             .eq("environment", "mock").gte("created_at", since).execute()
@@ -269,7 +268,7 @@ def get_operational_density(hours: int = 1):
             "warning_count": warnings.count or 0,
             "critical_count": criticals.count or 0,
             "total_events": wf_total + ie_total,
-            "timestamp": serialize_external_utc(now_kst()),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }}
     except Exception as e:
         return {"status": "error", "message": str(e)}

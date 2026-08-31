@@ -9,7 +9,6 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
-from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/watch-engine/alert", tags=["알림설정"])
@@ -45,7 +44,7 @@ class RuleUpdate(BaseModel):
 def update_alert_rule(rule_key: str, body: RuleUpdate):
     try:
         update = {k: v for k, v in body.dict().items() if v is not None}
-        update["updated_at"] = serialize_external_utc(now_kst())
+        update["updated_at"] = datetime.now(timezone.utc).isoformat()
         _sb().table("alert_rule_registry").update(update).eq("rule_key", rule_key).execute()
         return {"status": "success", "message": f"{rule_key} 수정 완료"}
     except Exception as e:
@@ -61,10 +60,10 @@ class MuteBody(BaseModel):
 @router.post("/rules/{rule_key}/mute")
 def mute_rule(rule_key: str, body: MuteBody):
     try:
-        muted_until = (now_kst() + timedelta(minutes=body.minutes)).isoformat()
+        muted_until = (datetime.now(timezone.utc) + timedelta(minutes=body.minutes)).isoformat()
         _sb().table("alert_rule_registry").update({
             "muted_until": muted_until,
-            "updated_at": serialize_external_utc(now_kst()),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("rule_key", rule_key).execute()
         return {"status": "success", "message": f"{rule_key} {body.minutes}분 무음 처리"}
     except Exception as e:
@@ -76,7 +75,7 @@ def unmute_rule(rule_key: str):
     try:
         _sb().table("alert_rule_registry").update({
             "muted_until": None,
-            "updated_at": serialize_external_utc(now_kst()),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("rule_key", rule_key).execute()
         return {"status": "success", "message": f"{rule_key} 무음 해제"}
     except Exception as e:

@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
-from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/control-runtime", tags=["\uad00\uc81c Gateway"])
@@ -164,7 +163,7 @@ def push_heartbeat(
     return {
         "status": "ok",
         "tenant_id": binding["tenant_id"],
-        "received_at": serialize_external_utc(now_kst()),
+        "received_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -207,5 +206,5 @@ def gateway_health():
     return {
         "status": "ok" if all_ok else "degraded",
         "checks": checks,
-        "timestamp": serialize_external_utc(now_kst()),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
