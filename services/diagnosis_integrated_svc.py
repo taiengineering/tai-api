@@ -320,7 +320,7 @@ def run_diagnosis(
     # member resolver 로 FREE 진단에 진입하는 경로를 차단(CORRECTION-02 BREAK-1: paid-only gate).
     if (getattr(body, "auth_token", None) or "").strip():
         auth_row = resolve_auth_log(supabase, body.auth_token)
-    elif current_user and getattr(body, "payment_ref", None):
+    elif current_user and (getattr(body, "payment_ref", None) or "").strip():
         auth_row = resolve_member_auth_log(supabase, current_user)
     else:
         raise HTTPException(status_code=401, detail="인증이 필요합니다. 본인인증 후 이용해 주세요.")
