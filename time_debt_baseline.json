@@ -1,3610 +1,2147 @@
 {
-  "ee10c2dae950879d": {
-    "rule": "PY_DIRECT_NOW",
+  "edc6ca60743a7a90": {
     "repo": "tai-api",
-    "file": "scheduler.py",
-    "symbol": "execute_cron_job",
-    "fp": "ee10c2dae950879d",
+    "fp": "edc6ca60743a7a90",
     "count": 9
   },
-  "33a58087be4fef03": {
-    "rule": "PY_DIRECT_NOW",
+  "83693e06defeabd9": {
     "repo": "tai-api",
-    "file": "naver_monitor.py",
-    "symbol": "is_within_hours",
-    "fp": "33a58087be4fef03",
+    "fp": "83693e06defeabd9",
+    "count": 4
+  },
+  "11d073074c411b82": {
+    "repo": "tai-api",
+    "fp": "11d073074c411b82",
+    "count": 3
+  },
+  "f63f8827b60437d1": {
+    "repo": "tai-api",
+    "fp": "f63f8827b60437d1",
     "count": 1
   },
-  "12efadad383386b3": {
-    "rule": "PY_DIRECT_NOW",
+  "6c2652b4aa24de92": {
     "repo": "tai-api",
-    "file": "naver_monitor.py",
-    "symbol": "step_collect",
-    "fp": "12efadad383386b3",
+    "fp": "6c2652b4aa24de92",
     "count": 1
   },
-  "39b1fbc2b3a7f0c3": {
-    "rule": "PY_DIRECT_NOW",
+  "3f6fe7849d0678f9": {
     "repo": "tai-api",
-    "file": "naver_monitor.py",
-    "symbol": "main",
-    "fp": "39b1fbc2b3a7f0c3",
-    "count": 1
-  },
-  "0d61254ed5375f19": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/repair.py",
-    "symbol": "_now_iso",
-    "fp": "0d61254ed5375f19",
-    "count": 1
-  },
-  "52bff2e271f74998": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/admin_inquiries.py",
-    "symbol": "_now_iso",
-    "fp": "52bff2e271f74998",
-    "count": 1
-  },
-  "bcb181a5743d383e": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/admin_inquiries.py",
-    "symbol": "_next_inquiry_no",
-    "fp": "bcb181a5743d383e",
-    "count": 1
-  },
-  "4bb31d1a14510305": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/law_collector.py",
-    "symbol": "save_law_to_db",
-    "fp": "4bb31d1a14510305",
-    "count": 9
-  },
-  "1fd5b1f7cf716634": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/law_collector.py",
-    "symbol": "mark_rules_needs_review",
-    "fp": "1fd5b1f7cf716634",
+    "fp": "3f6fe7849d0678f9",
     "count": 2
   },
-  "f25b8f055e25c407": {
-    "rule": "PY_DIRECT_NOW",
+  "d220c164cc0b2df7": {
     "repo": "tai-api",
-    "file": "routers/law_collector.py",
-    "symbol": "_publish_law_revision_board",
-    "fp": "f25b8f055e25c407",
+    "fp": "d220c164cc0b2df7",
+    "count": 2
+  },
+  "a6194aa4fe247730": {
+    "repo": "tai-api",
+    "fp": "a6194aa4fe247730",
+    "count": 20
+  },
+  "845c5276cf4c5139": {
+    "repo": "tai-api",
+    "fp": "845c5276cf4c5139",
     "count": 1
   },
-  "1feb0fc6524d9d9d": {
-    "rule": "PY_DIRECT_NOW",
+  "3831220114c9fd78": {
     "repo": "tai-api",
-    "file": "routers/law_collector.py",
-    "symbol": "_notify_safety_managers_by_law_change",
-    "fp": "1feb0fc6524d9d9d",
+    "fp": "3831220114c9fd78",
     "count": 1
   },
-  "56af0b916729210a": {
-    "rule": "PY_DIRECT_NOW",
+  "d01ba015ec66e3c5": {
     "repo": "tai-api",
-    "file": "routers/law_collector.py",
-    "symbol": "_mark_inspection_items_law_changed",
-    "fp": "56af0b916729210a",
+    "fp": "d01ba015ec66e3c5",
+    "count": 2
+  },
+  "a1f0a95084bd3627": {
+    "repo": "tai-api",
+    "fp": "a1f0a95084bd3627",
+    "count": 9
+  },
+  "edfe76d45a16f73c": {
+    "repo": "tai-api",
+    "fp": "edfe76d45a16f73c",
+    "count": 7
+  },
+  "842e56fbe950584f": {
+    "repo": "tai-api",
+    "fp": "842e56fbe950584f",
+    "count": 4
+  },
+  "4c4e9a819a189d0e": {
+    "repo": "tai-api",
+    "fp": "4c4e9a819a189d0e",
+    "count": 4
+  },
+  "45b6530a50496349": {
+    "repo": "tai-api",
+    "fp": "45b6530a50496349",
     "count": 1
   },
-  "fd5f5d6f3b5d4358": {
-    "rule": "PY_DIRECT_NOW",
+  "f12f44f7b2ae89e8": {
     "repo": "tai-api",
-    "file": "routers/law_collector.py",
-    "symbol": "check_law_update",
-    "fp": "fd5f5d6f3b5d4358",
+    "fp": "f12f44f7b2ae89e8",
+    "count": 1
+  },
+  "5e67c612b42b6d30": {
+    "repo": "tai-api",
+    "fp": "5e67c612b42b6d30",
+    "count": 1
+  },
+  "2f93c3323cab2f56": {
+    "repo": "tai-api",
+    "fp": "2f93c3323cab2f56",
+    "count": 1
+  },
+  "1d001d77ab1fc3fc": {
+    "repo": "tai-api",
+    "fp": "1d001d77ab1fc3fc",
+    "count": 3
+  },
+  "75fba00d8ac52873": {
+    "repo": "tai-api",
+    "fp": "75fba00d8ac52873",
+    "count": 1
+  },
+  "01e07304bbf7c1b2": {
+    "repo": "tai-api",
+    "fp": "01e07304bbf7c1b2",
+    "count": 1
+  },
+  "ceb617d2890245c7": {
+    "repo": "tai-api",
+    "fp": "ceb617d2890245c7",
+    "count": 1
+  },
+  "ce7d21bbb1fd802d": {
+    "repo": "tai-api",
+    "fp": "ce7d21bbb1fd802d",
+    "count": 3
+  },
+  "a2fa1b0d1b7f3cf7": {
+    "repo": "tai-api",
+    "fp": "a2fa1b0d1b7f3cf7",
+    "count": 3
+  },
+  "22f36864a052bbd4": {
+    "repo": "tai-api",
+    "fp": "22f36864a052bbd4",
+    "count": 2
+  },
+  "2817ce07aaba541d": {
+    "repo": "tai-api",
+    "fp": "2817ce07aaba541d",
+    "count": 2
+  },
+  "08cdddc55a798ea8": {
+    "repo": "tai-api",
+    "fp": "08cdddc55a798ea8",
+    "count": 1
+  },
+  "520d7f6206fb6adb": {
+    "repo": "tai-api",
+    "fp": "520d7f6206fb6adb",
+    "count": 1
+  },
+  "55521a5ecfc4892a": {
+    "repo": "tai-api",
+    "fp": "55521a5ecfc4892a",
+    "count": 1
+  },
+  "eb3d4545fdbb419c": {
+    "repo": "tai-api",
+    "fp": "eb3d4545fdbb419c",
+    "count": 2
+  },
+  "55b8a3ed04597946": {
+    "repo": "tai-api",
+    "fp": "55b8a3ed04597946",
+    "count": 1
+  },
+  "ab45ccbd08a398c2": {
+    "repo": "tai-api",
+    "fp": "ab45ccbd08a398c2",
+    "count": 1
+  },
+  "3a3ba9ccf0b62a72": {
+    "repo": "tai-api",
+    "fp": "3a3ba9ccf0b62a72",
+    "count": 1
+  },
+  "59fb81f908655af5": {
+    "repo": "tai-api",
+    "fp": "59fb81f908655af5",
+    "count": 1
+  },
+  "00902497e47271cf": {
+    "repo": "tai-api",
+    "fp": "00902497e47271cf",
+    "count": 1
+  },
+  "f3ba1c96ed18f389": {
+    "repo": "tai-api",
+    "fp": "f3ba1c96ed18f389",
+    "count": 1
+  },
+  "0f264940494bfcec": {
+    "repo": "tai-api",
+    "fp": "0f264940494bfcec",
+    "count": 1
+  },
+  "e037bbdfd573e9e7": {
+    "repo": "tai-api",
+    "fp": "e037bbdfd573e9e7",
+    "count": 7
+  },
+  "586b588bb411857a": {
+    "repo": "tai-api",
+    "fp": "586b588bb411857a",
+    "count": 2
+  },
+  "b8b4e987a400a133": {
+    "repo": "tai-api",
+    "fp": "b8b4e987a400a133",
+    "count": 1
+  },
+  "1f5a75a81312031b": {
+    "repo": "tai-api",
+    "fp": "1f5a75a81312031b",
+    "count": 1
+  },
+  "e4dd12b8a2b6b818": {
+    "repo": "tai-api",
+    "fp": "e4dd12b8a2b6b818",
+    "count": 1
+  },
+  "fead4e1612aa3dba": {
+    "repo": "tai-api",
+    "fp": "fead4e1612aa3dba",
+    "count": 13
+  },
+  "8dc34e19d2ac86fd": {
+    "repo": "tai-api",
+    "fp": "8dc34e19d2ac86fd",
+    "count": 3
+  },
+  "9827f4e50465221a": {
+    "repo": "tai-api",
+    "fp": "9827f4e50465221a",
+    "count": 1
+  },
+  "4bd3f97e6f1c6b66": {
+    "repo": "tai-api",
+    "fp": "4bd3f97e6f1c6b66",
+    "count": 5
+  },
+  "b983d6a73aba365e": {
+    "repo": "tai-api",
+    "fp": "b983d6a73aba365e",
+    "count": 1
+  },
+  "8a2f7d7536ac2ad3": {
+    "repo": "tai-api",
+    "fp": "8a2f7d7536ac2ad3",
+    "count": 1
+  },
+  "7276008faeefb47a": {
+    "repo": "tai-api",
+    "fp": "7276008faeefb47a",
+    "count": 1
+  },
+  "f37da1a1a135c490": {
+    "repo": "tai-api",
+    "fp": "f37da1a1a135c490",
+    "count": 1
+  },
+  "287dab70a9c5795a": {
+    "repo": "tai-api",
+    "fp": "287dab70a9c5795a",
+    "count": 1
+  },
+  "4b081063406fe46a": {
+    "repo": "tai-api",
+    "fp": "4b081063406fe46a",
+    "count": 1
+  },
+  "0423b2a31eee05e2": {
+    "repo": "tai-api",
+    "fp": "0423b2a31eee05e2",
+    "count": 1
+  },
+  "85ef3475f9929b27": {
+    "repo": "tai-api",
+    "fp": "85ef3475f9929b27",
+    "count": 1
+  },
+  "58f28db67bb55f2e": {
+    "repo": "tai-api",
+    "fp": "58f28db67bb55f2e",
+    "count": 2
+  },
+  "6123afd07890da4a": {
+    "repo": "tai-api",
+    "fp": "6123afd07890da4a",
+    "count": 1
+  },
+  "e5086ed7d2719970": {
+    "repo": "tai-api",
+    "fp": "e5086ed7d2719970",
+    "count": 1
+  },
+  "860e3249fb67e78a": {
+    "repo": "tai-api",
+    "fp": "860e3249fb67e78a",
+    "count": 3
+  },
+  "93c66e13a0bb453c": {
+    "repo": "tai-api",
+    "fp": "93c66e13a0bb453c",
+    "count": 1
+  },
+  "beb47544dcd41767": {
+    "repo": "tai-api",
+    "fp": "beb47544dcd41767",
+    "count": 1
+  },
+  "6da5b3650d436bf8": {
+    "repo": "tai-api",
+    "fp": "6da5b3650d436bf8",
+    "count": 1
+  },
+  "c3007bc996c5c1ff": {
+    "repo": "tai-api",
+    "fp": "c3007bc996c5c1ff",
+    "count": 3
+  },
+  "d8bf8c08ffd4bc6c": {
+    "repo": "tai-api",
+    "fp": "d8bf8c08ffd4bc6c",
+    "count": 1
+  },
+  "7ddcd2338a74b3fb": {
+    "repo": "tai-api",
+    "fp": "7ddcd2338a74b3fb",
+    "count": 1
+  },
+  "3eb1947d65874aa6": {
+    "repo": "tai-api",
+    "fp": "3eb1947d65874aa6",
+    "count": 1
+  },
+  "a7a18b9db2e1467b": {
+    "repo": "tai-api",
+    "fp": "a7a18b9db2e1467b",
+    "count": 2
+  },
+  "facb39efd236d35d": {
+    "repo": "tai-api",
+    "fp": "facb39efd236d35d",
+    "count": 1
+  },
+  "a1c7dc83fef9d0c7": {
+    "repo": "tai-api",
+    "fp": "a1c7dc83fef9d0c7",
+    "count": 1
+  },
+  "e450f44e9da59c45": {
+    "repo": "tai-api",
+    "fp": "e450f44e9da59c45",
+    "count": 1
+  },
+  "f96894dc878b7b15": {
+    "repo": "tai-api",
+    "fp": "f96894dc878b7b15",
+    "count": 1
+  },
+  "c17809beb3d4e051": {
+    "repo": "tai-api",
+    "fp": "c17809beb3d4e051",
+    "count": 1
+  },
+  "8e3a360a149e1fb1": {
+    "repo": "tai-api",
+    "fp": "8e3a360a149e1fb1",
+    "count": 1
+  },
+  "d12dab7278580ec5": {
+    "repo": "tai-api",
+    "fp": "d12dab7278580ec5",
+    "count": 12
+  },
+  "df711e58ffc71f00": {
+    "repo": "tai-api",
+    "fp": "df711e58ffc71f00",
+    "count": 7
+  },
+  "3c102cf851b39a8f": {
+    "repo": "tai-api",
+    "fp": "3c102cf851b39a8f",
+    "count": 2
+  },
+  "945bdf3c3f450e84": {
+    "repo": "tai-api",
+    "fp": "945bdf3c3f450e84",
+    "count": 1
+  },
+  "190de12ae63d22a7": {
+    "repo": "tai-api",
+    "fp": "190de12ae63d22a7",
+    "count": 1
+  },
+  "f858b0dd6527fe03": {
+    "repo": "tai-api",
+    "fp": "f858b0dd6527fe03",
     "count": 6
   },
-  "0f8cb377ce7acdc1": {
-    "rule": "PY_DIRECT_NOW",
+  "e330872ef40d577f": {
     "repo": "tai-api",
-    "file": "routers/legal_engine_patch.py",
-    "symbol": "_now_iso",
-    "fp": "0f8cb377ce7acdc1",
-    "count": 1
-  },
-  "eec069cac968c22d": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/legal_engine_patch.py",
-    "symbol": "auto_assign_schedules",
-    "fp": "eec069cac968c22d",
-    "count": 1
-  },
-  "34ba26b8544bf588": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/legal_engine_patch.py",
-    "symbol": "generate_schedules_from_diagnosis",
-    "fp": "34ba26b8544bf588",
-    "count": 1
-  },
-  "085b55709d217165": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/auth.py",
-    "symbol": "_now_iso",
-    "fp": "085b55709d217165",
-    "count": 1
-  },
-  "cde4ef17d1db51db": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/auth.py",
-    "symbol": "send_otp",
-    "fp": "cde4ef17d1db51db",
-    "count": 1
-  },
-  "856a16a3ba6defba": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/auth.py",
-    "symbol": "_ensure_user_row",
-    "fp": "856a16a3ba6defba",
-    "count": 1
-  },
-  "7c564f793e3ad8da": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/auth.py",
-    "symbol": "verify_otp",
-    "fp": "7c564f793e3ad8da",
+    "fp": "e330872ef40d577f",
     "count": 2
   },
-  "f30b9c6b7980aaff": {
-    "rule": "PY_DIRECT_NOW",
+  "8bf0caeda4b2063f": {
     "repo": "tai-api",
-    "file": "routers/auth.py",
-    "symbol": "register",
-    "fp": "f30b9c6b7980aaff",
+    "fp": "8bf0caeda4b2063f",
+    "count": 1
+  },
+  "23be2cfd6c8e40c6": {
+    "repo": "tai-api",
+    "fp": "23be2cfd6c8e40c6",
+    "count": 1
+  },
+  "aa740442dbbec4d3": {
+    "repo": "tai-api",
+    "fp": "aa740442dbbec4d3",
     "count": 2
   },
-  "1153b7f145111c39": {
-    "rule": "PY_DIRECT_NOW",
+  "e0a4b0e61ef50e1d": {
     "repo": "tai-api",
-    "file": "routers/auth.py",
-    "symbol": "ensure_user",
-    "fp": "1153b7f145111c39",
-    "count": 1
-  },
-  "d4380f3e64656846": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/auth.py",
-    "symbol": "verify_email",
-    "fp": "d4380f3e64656846",
-    "count": 1
-  },
-  "1e5f376415b79ff9": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/overdue_checker.py",
-    "symbol": "_today",
-    "fp": "1e5f376415b79ff9",
-    "count": 1
-  },
-  "c9dfeba9ce53f276": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/overdue_checker.py",
-    "symbol": "_write_notification",
-    "fp": "c9dfeba9ce53f276",
-    "count": 1
-  },
-  "a299793163825245": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/overdue_checker.py",
-    "symbol": "_process_one",
-    "fp": "a299793163825245",
-    "count": 1
-  },
-  "fdd6643ea6e40129": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/overdue_checker.py",
-    "symbol": "resolve_overdue",
-    "fp": "fdd6643ea6e40129",
-    "count": 1
-  },
-  "61a1e30552358443": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/payment_ops.py",
-    "symbol": "list_expiring_payments",
-    "fp": "61a1e30552358443",
-    "count": 1
-  },
-  "bdb67f43c6e7fe79": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/settlements.py",
-    "symbol": "_now_iso",
-    "fp": "bdb67f43c6e7fe79",
-    "count": 1
-  },
-  "39f6ec666d579ce3": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/public.py",
-    "symbol": "_now",
-    "fp": "39f6ec666d579ce3",
-    "count": 1
-  },
-  "faf82e9ec53652ab": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/public.py",
-    "symbol": "_gen_request_no",
-    "fp": "faf82e9ec53652ab",
-    "count": 1
-  },
-  "ac338a528031ad1b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/public.py",
-    "symbol": "create_inspection_request",
-    "fp": "ac338a528031ad1b",
-    "count": 1
-  },
-  "ee8a8fb04cfe569e": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/construction_sites_router.py",
-    "symbol": "_now_iso",
-    "fp": "ee8a8fb04cfe569e",
-    "count": 1
-  },
-  "5d985a02be313850": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/worker_assets.py",
-    "symbol": "upload_inspection_photo",
-    "fp": "5d985a02be313850",
-    "count": 1
-  },
-  "b2caf7bffa12292e": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/worker_assets.py",
-    "symbol": "list_work_assignments",
-    "fp": "b2caf7bffa12292e",
-    "count": 1
-  },
-  "a6ee597d6157b14c": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/worker_assets.py",
-    "symbol": "worker_complete_education",
-    "fp": "a6ee597d6157b14c",
-    "count": 1
-  },
-  "2a8b998c5e20baec": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/payment_activation_api.py",
-    "symbol": "activate_subscription",
-    "fp": "2a8b998c5e20baec",
-    "count": 1
-  },
-  "3814b8f9106af7f4": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/payment_activation_api.py",
-    "symbol": "detect_orphans",
-    "fp": "3814b8f9106af7f4",
-    "count": 1
-  },
-  "e6d2393f3ce2f2e3": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/member_inquiries.py",
-    "symbol": "_now_iso",
-    "fp": "e6d2393f3ce2f2e3",
-    "count": 1
-  },
-  "b66b2f69e3752201": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/anonymous_diagnosis.py",
-    "symbol": "_now",
-    "fp": "b66b2f69e3752201",
-    "count": 1
-  },
-  "25ab4a2f30660e42": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/org.py",
-    "symbol": "_now",
-    "fp": "25ab4a2f30660e42",
-    "count": 1
-  },
-  "d59e44029f78a254": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/document_generate.py",
-    "symbol": "_issue_code",
-    "fp": "d59e44029f78a254",
-    "count": 1
-  },
-  "b4dd0c12c228632e": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/admin_pricing.py",
-    "symbol": "_now",
-    "fp": "b4dd0c12c228632e",
-    "count": 1
-  },
-  "3407667a0beb5397": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/corrective_actions.py",
-    "symbol": "_now",
-    "fp": "3407667a0beb5397",
-    "count": 1
-  },
-  "8757e3b6c0fb4f4c": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/price_setting.py",
-    "symbol": "update_saas_plan",
-    "fp": "8757e3b6c0fb4f4c",
-    "count": 1
-  },
-  "57e0ce744fe9de06": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/price_setting.py",
-    "symbol": "create_saas_plan",
-    "fp": "57e0ce744fe9de06",
+    "fp": "e0a4b0e61ef50e1d",
     "count": 2
   },
-  "127d69250cbb673b": {
-    "rule": "PY_DIRECT_NOW",
+  "31c9e3aa5cb884e2": {
     "repo": "tai-api",
-    "file": "routers/price_setting.py",
-    "symbol": "update_diagnosis_report",
-    "fp": "127d69250cbb673b",
-    "count": 1
-  },
-  "cc135fcf334cb921": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/price_setting.py",
-    "symbol": "update_repair_brokerage",
-    "fp": "cc135fcf334cb921",
-    "count": 1
-  },
-  "2824d9a03233e50f": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/price_setting.py",
-    "symbol": "update_safety_management",
-    "fp": "2824d9a03233e50f",
-    "count": 1
-  },
-  "61128431750b8f6b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/price_setting.py",
-    "symbol": "update_consulting",
-    "fp": "61128431750b8f6b",
-    "count": 1
-  },
-  "190f7699c08cb123": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/price_master_admin.py",
-    "symbol": "update_price",
-    "fp": "190f7699c08cb123",
-    "count": 1
-  },
-  "60acbe796bc26e41": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/price_master_admin.py",
-    "symbol": "deactivate_price",
-    "fp": "60acbe796bc26e41",
-    "count": 1
-  },
-  "2260b0bf5738e5d8": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/building_register.py",
-    "symbol": "build_factory_update",
-    "fp": "2260b0bf5738e5d8",
-    "count": 1
-  },
-  "bf87338091901a49": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/engine_document.py",
-    "symbol": "update_form",
-    "fp": "bf87338091901a49",
-    "count": 1
-  },
-  "eee71f1a136a4daa": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/report_forms.py",
-    "symbol": "upload_html_template",
-    "fp": "eee71f1a136a4daa",
-    "count": 1
-  },
-  "8039678b983cda52": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/report_forms.py",
-    "symbol": "get_report_events",
-    "fp": "8039678b983cda52",
-    "count": 1
-  },
-  "c6c5131811e0f7ca": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/report_forms.py",
-    "symbol": "get_report_events",
-    "fp": "c6c5131811e0f7ca",
-    "count": 1
-  },
-  "265c5e7f1bb3a51b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/report_forms.py",
-    "symbol": "create_report_event",
-    "fp": "265c5e7f1bb3a51b",
+    "fp": "31c9e3aa5cb884e2",
     "count": 2
   },
-  "cb6bd9267afa5c73": {
-    "rule": "PY_DATE_TODAY",
+  "f9b9477fd11a53ef": {
     "repo": "tai-api",
-    "file": "routers/report_forms.py",
-    "symbol": "create_report_event",
-    "fp": "cb6bd9267afa5c73",
+    "fp": "f9b9477fd11a53ef",
     "count": 1
   },
-  "653c0807b92678fb": {
-    "rule": "PY_DIRECT_NOW",
+  "899d71a43fa3d2cf": {
     "repo": "tai-api",
-    "file": "routers/report_forms.py",
-    "symbol": "update_report_event_status",
-    "fp": "653c0807b92678fb",
-    "count": 2
+    "fp": "899d71a43fa3d2cf",
+    "count": 1
   },
-  "b8bb4891b40da347": {
-    "rule": "PY_DIRECT_NOW",
+  "e9b5d889acd015ec": {
     "repo": "tai-api",
-    "file": "routers/report_forms.py",
-    "symbol": "create_form_submission",
-    "fp": "b8bb4891b40da347",
+    "fp": "e9b5d889acd015ec",
+    "count": 1
+  },
+  "584d24887da521c5": {
+    "repo": "tai-api",
+    "fp": "584d24887da521c5",
+    "count": 1
+  },
+  "14f3db46fb83e9d4": {
+    "repo": "tai-api",
+    "fp": "14f3db46fb83e9d4",
     "count": 3
   },
-  "11df17c1daa73adb": {
-    "rule": "PY_DIRECT_NOW",
+  "3c6256303f38f30d": {
     "repo": "tai-api",
-    "file": "routers/report_forms.py",
-    "symbol": "update_form_submission",
-    "fp": "11df17c1daa73adb",
+    "fp": "3c6256303f38f30d",
+    "count": 2
+  },
+  "cf4b113604902988": {
+    "repo": "tai-api",
+    "fp": "cf4b113604902988",
+    "count": 1
+  },
+  "d7f297494ee1876c": {
+    "repo": "tai-api",
+    "fp": "d7f297494ee1876c",
+    "count": 1
+  },
+  "142deed720093f68": {
+    "repo": "tai-api",
+    "fp": "142deed720093f68",
+    "count": 1
+  },
+  "00648cd30ea9336e": {
+    "repo": "tai-api",
+    "fp": "00648cd30ea9336e",
+    "count": 1
+  },
+  "b423fdc1f46b48bb": {
+    "repo": "tai-api",
+    "fp": "b423fdc1f46b48bb",
     "count": 3
   },
-  "9c28e089a62715a6": {
-    "rule": "PY_DIRECT_NOW",
+  "8efd92e0e6bc499a": {
     "repo": "tai-api",
-    "file": "routers/report_forms.py",
-    "symbol": "generate_and_save_pdf",
-    "fp": "9c28e089a62715a6",
+    "fp": "8efd92e0e6bc499a",
     "count": 1
   },
-  "5f31aae3dcca454a": {
-    "rule": "PY_DATE_TODAY",
+  "656f9428bed0d473": {
     "repo": "tai-api",
-    "file": "routers/report_forms.py",
-    "symbol": "get_report_dashboard",
-    "fp": "5f31aae3dcca454a",
-    "count": 1
-  },
-  "127515bf07ab4a3a": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/schedule_engine.py",
-    "symbol": "generate_schedule",
-    "fp": "127515bf07ab4a3a",
-    "count": 1
-  },
-  "080facf6378a6ed7": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/users.py",
-    "symbol": "create_user",
-    "fp": "080facf6378a6ed7",
-    "count": 1
-  },
-  "0597861f9180546c": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/users.py",
-    "symbol": "update_user",
-    "fp": "0597861f9180546c",
-    "count": 1
-  },
-  "d931d438194c415f": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/users.py",
-    "symbol": "delete_user",
-    "fp": "d931d438194c415f",
-    "count": 1
-  },
-  "31787cc70c22616c": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/users.py",
-    "symbol": "update_user_status",
-    "fp": "31787cc70c22616c",
-    "count": 1
-  },
-  "eee0aa8944230c7f": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/users.py",
-    "symbol": "update_user_role",
-    "fp": "eee0aa8944230c7f",
-    "count": 1
-  },
-  "c4181077723dafc6": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/users.py",
-    "symbol": "update_user_role",
-    "fp": "c4181077723dafc6",
-    "count": 1
-  },
-  "ba64fccb5be0a76a": {
-    "rule": "PY_UTCNOW",
-    "repo": "tai-api",
-    "file": "routers/engine_publish.py",
-    "symbol": "publish_release",
-    "fp": "ba64fccb5be0a76a",
-    "count": 1
-  },
-  "3a5c38e1610933e9": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/construction.py",
-    "symbol": "_now_iso",
-    "fp": "3a5c38e1610933e9",
-    "count": 1
-  },
-  "579d80bdc033f6bf": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/health.py",
-    "symbol": "health_deep",
-    "fp": "579d80bdc033f6bf",
-    "count": 1
-  },
-  "130a0a65887a10f5": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/safety_meetings.py",
-    "symbol": "_now",
-    "fp": "130a0a65887a10f5",
-    "count": 1
-  },
-  "e95d7d3ef4f102f0": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/safety_meetings.py",
-    "symbol": "get_meeting_schedule",
-    "fp": "e95d7d3ef4f102f0",
+    "fp": "656f9428bed0d473",
     "count": 2
   },
-  "3735f965237edf05": {
-    "rule": "PY_DIRECT_NOW",
+  "02e7c48a46422000": {
     "repo": "tai-api",
-    "file": "routers/contract_kmong.py",
-    "symbol": "_now",
-    "fp": "3735f965237edf05",
-    "count": 1
-  },
-  "b712d033c576c188": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/public_admin.py",
-    "symbol": "_now",
-    "fp": "b712d033c576c188",
-    "count": 1
-  },
-  "f4ef9a6c2c9f081a": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/public_admin.py",
-    "symbol": "run_diagnosis",
-    "fp": "f4ef9a6c2c9f081a",
-    "count": 1
-  },
-  "2c5805908d87e7ba": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/public_admin.py",
-    "symbol": "_build_result_html",
-    "fp": "2c5805908d87e7ba",
-    "count": 1
-  },
-  "22c73aece79420b4": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/connect_provider.py",
-    "symbol": "_now_iso",
-    "fp": "22c73aece79420b4",
-    "count": 1
-  },
-  "39af22a55f36376e": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/system_codes.py",
-    "symbol": "create_code",
-    "fp": "39af22a55f36376e",
+    "fp": "02e7c48a46422000",
     "count": 2
   },
-  "3deb12df1a98858f": {
-    "rule": "PY_DIRECT_NOW",
+  "cbd36eb20f8cd09a": {
     "repo": "tai-api",
-    "file": "routers/system_codes.py",
-    "symbol": "update_code",
-    "fp": "3deb12df1a98858f",
+    "fp": "cbd36eb20f8cd09a",
     "count": 1
   },
-  "99e22c8c52973c4e": {
-    "rule": "PY_DIRECT_NOW",
+  "bb47021bc8437af6": {
     "repo": "tai-api",
-    "file": "routers/site_public.py",
-    "symbol": "_now",
-    "fp": "99e22c8c52973c4e",
+    "fp": "bb47021bc8437af6",
     "count": 1
   },
-  "779588d47f7159b8": {
-    "rule": "PY_UTCNOW",
+  "771746c108b58091": {
     "repo": "tai-api",
-    "file": "routers/legal_intake.py",
-    "symbol": "mark_review_required",
-    "fp": "779588d47f7159b8",
-    "count": 1
-  },
-  "872e7f7bac8fae7d": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/payment_billing.py",
-    "symbol": "_make_billing_oid",
-    "fp": "872e7f7bac8fae7d",
-    "count": 1
-  },
-  "85d972dd0b07b50d": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/payment_billing.py",
-    "symbol": "_ts_yyyymmddhhmmss",
-    "fp": "85d972dd0b07b50d",
-    "count": 1
-  },
-  "23c168da989c0b34": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/obligation_adapter.py",
-    "symbol": "_persist_result_data",
-    "fp": "23c168da989c0b34",
-    "count": 1
-  },
-  "7ef136eeee8802aa": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/product_pricing.py",
-    "symbol": "update_pricing",
-    "fp": "7ef136eeee8802aa",
-    "count": 1
-  },
-  "3a7afaa628a123af": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/diagnosis_roi.py",
-    "symbol": "_now_iso",
-    "fp": "3a7afaa628a123af",
-    "count": 1
-  },
-  "c5bf4afcf0a3ec2b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/cron_manager.py",
-    "symbol": "update_job",
-    "fp": "c5bf4afcf0a3ec2b",
+    "fp": "771746c108b58091",
     "count": 2
   },
-  "260a329991e2e3b6": {
-    "rule": "PY_DIRECT_NOW",
+  "7816dd1241b7cd24": {
     "repo": "tai-api",
-    "file": "routers/cron_manager.py",
-    "symbol": "run_job_now",
-    "fp": "260a329991e2e3b6",
-    "count": 9
-  },
-  "e674e8437ff5cb1c": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/cron_manager.py",
-    "symbol": "get_stats",
-    "fp": "e674e8437ff5cb1c",
-    "count": 1
-  },
-  "2c671021d8870132": {
-    "rule": "PY_UTCNOW",
-    "repo": "tai-api",
-    "file": "routers/education.py",
-    "symbol": "upsert_company_education_setting",
-    "fp": "2c671021d8870132",
-    "count": 1
-  },
-  "d0140ef64a74b0e4": {
-    "rule": "PY_UTCNOW",
-    "repo": "tai-api",
-    "file": "routers/education.py",
-    "symbol": "update_education_setting",
-    "fp": "d0140ef64a74b0e4",
-    "count": 1
-  },
-  "d8512aa9b173f160": {
-    "rule": "PY_UTCNOW",
-    "repo": "tai-api",
-    "file": "routers/education.py",
-    "symbol": "create_education_history",
-    "fp": "d8512aa9b173f160",
+    "fp": "7816dd1241b7cd24",
     "count": 2
   },
-  "a7b2a594febeb119": {
-    "rule": "PY_UTCNOW",
+  "f22d8dd3073ca07e": {
     "repo": "tai-api",
-    "file": "routers/education.py",
-    "symbol": "create_pending_education_history",
-    "fp": "a7b2a594febeb119",
+    "fp": "f22d8dd3073ca07e",
     "count": 1
   },
-  "bda3ad0d5221433c": {
-    "rule": "PY_UTCNOW",
+  "2607b98610a25727": {
     "repo": "tai-api",
-    "file": "routers/education.py",
-    "symbol": "update_education_history",
-    "fp": "bda3ad0d5221433c",
+    "fp": "2607b98610a25727",
     "count": 1
   },
-  "f0bfe884e88617d9": {
-    "rule": "PY_UTCNOW",
+  "fcef8a7c46daea77": {
     "repo": "tai-api",
-    "file": "routers/education.py",
-    "symbol": "upload_education_file",
-    "fp": "f0bfe884e88617d9",
+    "fp": "fcef8a7c46daea77",
     "count": 1
   },
-  "b8a0e36e9d487c36": {
-    "rule": "PY_DIRECT_NOW",
+  "74bf3b004ec9a9e1": {
     "repo": "tai-api",
-    "file": "routers/work_schedules.py",
-    "symbol": "_now",
-    "fp": "b8a0e36e9d487c36",
-    "count": 1
-  },
-  "b38cda8e0303789b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/work_schedules.py",
-    "symbol": "_apply_one_update",
-    "fp": "b38cda8e0303789b",
-    "count": 1
-  },
-  "c217eab3a782196d": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/ra_settings.py",
-    "symbol": "list_policy_params",
-    "fp": "c217eab3a782196d",
-    "count": 1
-  },
-  "5794e23450123ce2": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/factories.py",
-    "symbol": "create_factory",
-    "fp": "5794e23450123ce2",
-    "count": 1
-  },
-  "843525ddafaf67a8": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/factories.py",
-    "symbol": "update_factory",
-    "fp": "843525ddafaf67a8",
-    "count": 1
-  },
-  "03712500cc2d1fd0": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/factories.py",
-    "symbol": "update_factory",
-    "fp": "03712500cc2d1fd0",
+    "fp": "74bf3b004ec9a9e1",
     "count": 2
   },
-  "2f9b4f55e0c0428e": {
-    "rule": "PY_DIRECT_NOW",
+  "fbe5c0c655fea736": {
     "repo": "tai-api",
-    "file": "routers/factories.py",
-    "symbol": "delete_factory",
-    "fp": "2f9b4f55e0c0428e",
+    "fp": "fbe5c0c655fea736",
     "count": 1
   },
-  "adc77fdc9c4dbfd9": {
-    "rule": "PY_DIRECT_NOW",
+  "d2e7ed7ca7d80681": {
     "repo": "tai-api",
-    "file": "routers/factories.py",
-    "symbol": "add_factory_contact",
-    "fp": "adc77fdc9c4dbfd9",
+    "fp": "d2e7ed7ca7d80681",
     "count": 1
   },
-  "e5f63a712b1866c7": {
-    "rule": "PY_DIRECT_NOW",
+  "2c0dddc8a58a99a5": {
     "repo": "tai-api",
-    "file": "routers/factories.py",
-    "symbol": "update_factory_contact",
-    "fp": "e5f63a712b1866c7",
+    "fp": "2c0dddc8a58a99a5",
+    "count": 5
+  },
+  "798d0d16260b1928": {
+    "repo": "tai-api",
+    "fp": "798d0d16260b1928",
     "count": 1
   },
-  "5dee31a19ba3d3f0": {
-    "rule": "PY_DIRECT_NOW",
+  "5f3a4d31d87361a5": {
     "repo": "tai-api",
-    "file": "routers/factories.py",
-    "symbol": "delete_factory_contact",
-    "fp": "5dee31a19ba3d3f0",
+    "fp": "5f3a4d31d87361a5",
     "count": 1
   },
-  "a6305b366691384b": {
-    "rule": "PY_DIRECT_NOW",
+  "384124d5483078d8": {
     "repo": "tai-api",
-    "file": "routers/fix_providers_api.py",
-    "symbol": "_now",
-    "fp": "a6305b366691384b",
+    "fp": "384124d5483078d8",
     "count": 1
   },
-  "d619f58cfb20d583": {
-    "rule": "PY_DIRECT_NOW",
+  "1b347601781f13a4": {
     "repo": "tai-api",
-    "file": "routers/diagnosis_report.py",
-    "symbol": "_now_str",
-    "fp": "d619f58cfb20d583",
+    "fp": "1b347601781f13a4",
+    "count": 4
+  },
+  "31511c27daa95c4f": {
+    "repo": "tai-api",
+    "fp": "31511c27daa95c4f",
     "count": 1
   },
-  "8b50bf8037606a5c": {
-    "rule": "PY_DIRECT_NOW",
+  "ee54b856087280d8": {
     "repo": "tai-api",
-    "file": "routers/diagnosis_report.py",
-    "symbol": "_report_date_str",
-    "fp": "8b50bf8037606a5c",
+    "fp": "ee54b856087280d8",
     "count": 1
   },
-  "4673b58eb699f3aa": {
-    "rule": "PY_DATE_TODAY",
+  "96e9ac00c5a211da": {
     "repo": "tai-api",
-    "file": "routers/schedule_pipeline.py",
-    "symbol": "generate_schedules_from_diagnosis",
-    "fp": "4673b58eb699f3aa",
+    "fp": "96e9ac00c5a211da",
     "count": 1
   },
-  "525b4b2f8a5ebd8d": {
-    "rule": "PY_DATE_TODAY",
+  "51105c03cb8a7a54": {
     "repo": "tai-api",
-    "file": "routers/schedule_pipeline.py",
-    "symbol": "trigger_due_alerts",
-    "fp": "525b4b2f8a5ebd8d",
+    "fp": "51105c03cb8a7a54",
     "count": 1
   },
-  "ae1a3dcac862f632": {
-    "rule": "PY_DIRECT_NOW",
+  "9eccbe068c757a62": {
     "repo": "tai-api",
-    "file": "routers/schedule_pipeline.py",
-    "symbol": "trigger_due_alerts",
-    "fp": "ae1a3dcac862f632",
-    "count": 1
+    "fp": "9eccbe068c757a62",
+    "count": 15
   },
-  "b2dead8e9fda6bb0": {
-    "rule": "PY_DATE_TODAY",
+  "69b7a53a1da6c7a9": {
     "repo": "tai-api",
-    "file": "routers/compliance_report.py",
-    "symbol": "_assemble",
-    "fp": "b2dead8e9fda6bb0",
-    "count": 1
-  },
-  "242ecd1a645f8fee": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/equipment_checkins.py",
-    "symbol": "submit_checkin",
-    "fp": "242ecd1a645f8fee",
-    "count": 1
-  },
-  "a401ead5a06aa81a": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/diagnosis.py",
-    "symbol": "_now",
-    "fp": "a401ead5a06aa81a",
-    "count": 1
-  },
-  "808376b16be00cb7": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/diagnosis.py",
-    "symbol": "_now_utc",
-    "fp": "808376b16be00cb7",
-    "count": 1
-  },
-  "781bcf5fea565d6f": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/diagnosis.py",
-    "symbol": "_gen_quote_no",
-    "fp": "781bcf5fea565d6f",
-    "count": 1
-  },
-  "2bb486c5e63ecead": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/alert_messages.py",
-    "symbol": "_now",
-    "fp": "2bb486c5e63ecead",
-    "count": 1
-  },
-  "3d43415287f071f4": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/personnel.py",
-    "symbol": "_now_iso",
-    "fp": "3d43415287f071f4",
-    "count": 1
-  },
-  "33b64a47bf6752bb": {
-    "rule": "PY_UTCNOW",
-    "repo": "tai-api",
-    "file": "routers/tbm_templates.py",
-    "symbol": "update_template",
-    "fp": "33b64a47bf6752bb",
-    "count": 1
-  },
-  "baa630e8770fc6b4": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/tbm_templates.py",
-    "symbol": "use_template",
-    "fp": "baa630e8770fc6b4",
-    "count": 1
-  },
-  "e467c362bfbabf26": {
-    "rule": "PY_UTCNOW",
-    "repo": "tai-api",
-    "file": "routers/tbm_templates.py",
-    "symbol": "use_template",
-    "fp": "e467c362bfbabf26",
+    "fp": "69b7a53a1da6c7a9",
     "count": 2
   },
-  "42c205a70d105ed2": {
-    "rule": "PY_DIRECT_NOW",
+  "9b41ea5d5352c055": {
     "repo": "tai-api",
-    "file": "routers/payment_test.py",
-    "symbol": "_now_iso",
-    "fp": "42c205a70d105ed2",
-    "count": 1
-  },
-  "5722570ba3ddb9f9": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/payment_test.py",
-    "symbol": "_order_id",
-    "fp": "5722570ba3ddb9f9",
-    "count": 1
-  },
-  "da929d397c3c4d9d": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/anonymous_diagnosis_admin.py",
-    "symbol": "_now",
-    "fp": "da929d397c3c4d9d",
-    "count": 1
-  },
-  "e51b1746ae754b78": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/worker_permits.py",
-    "symbol": "participate_risk_assessment",
-    "fp": "e51b1746ae754b78",
-    "count": 1
-  },
-  "d54e8e682c471c7a": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/worker_permits.py",
-    "symbol": "create_work_permit",
-    "fp": "d54e8e682c471c7a",
-    "count": 1
-  },
-  "1fd3c85362d55729": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/ra_report.py",
-    "symbol": "semiannual_report",
-    "fp": "1fd3c85362d55729",
-    "count": 1
-  },
-  "cd5468d8de1087e6": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/engine_model.py",
-    "symbol": "_now_iso",
-    "fp": "cd5468d8de1087e6",
-    "count": 1
-  },
-  "9912c6c24eaa3d88": {
-    "rule": "PY_UTCNOW",
-    "repo": "tai-api",
-    "file": "routers/subcontractors.py",
-    "symbol": "update_subcontractor",
-    "fp": "9912c6c24eaa3d88",
-    "count": 1
-  },
-  "af5adbce0c6643af": {
-    "rule": "PY_UTCNOW",
-    "repo": "tai-api",
-    "file": "routers/subcontractors.py",
-    "symbol": "delete_subcontractor",
-    "fp": "af5adbce0c6643af",
-    "count": 1
-  },
-  "a13bf87db52dc0a6": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/inspection_checklist.py",
-    "symbol": "_now_iso",
-    "fp": "a13bf87db52dc0a6",
-    "count": 1
-  },
-  "ae6638116dd8670b": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/inspection_checklist.py",
-    "symbol": "generate_schedules",
-    "fp": "ae6638116dd8670b",
-    "count": 1
-  },
-  "79803ee2bd2b126a": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/inspection_checklist.py",
-    "symbol": "get_inspection_status",
-    "fp": "79803ee2bd2b126a",
-    "count": 1
-  },
-  "59955677e2812b48": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/inspection_checklist.py",
-    "symbol": "start_inspection",
-    "fp": "59955677e2812b48",
-    "count": 1
-  },
-  "b48beb398628f14f": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/inspection_checklist.py",
-    "symbol": "record_inspection_results",
-    "fp": "b48beb398628f14f",
-    "count": 1
-  },
-  "3ba825455d43038c": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/inspection_checklist.py",
-    "symbol": "complete_inspection",
-    "fp": "3ba825455d43038c",
-    "count": 1
-  },
-  "283d4e6e32965773": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/kosha_collect.py",
-    "symbol": "_make_id",
-    "fp": "283d4e6e32965773",
-    "count": 1
-  },
-  "74b4883fec0971df": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/risk_assessments.py",
-    "symbol": "_now",
-    "fp": "74b4883fec0971df",
-    "count": 1
-  },
-  "e7284a45b95b801d": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/risk_assessments.py",
-    "symbol": "_dday",
-    "fp": "e7284a45b95b801d",
-    "count": 1
-  },
-  "8583faff4c4024ee": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/risk_assessments.py",
-    "symbol": "get_continuous_status",
-    "fp": "8583faff4c4024ee",
-    "count": 1
-  },
-  "2620b64474748ae5": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/risk_assessments.py",
-    "symbol": "create_assessment",
-    "fp": "2620b64474748ae5",
-    "count": 1
-  },
-  "0c5913053bf47118": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/risk_assessments.py",
-    "symbol": "complete_assessment",
-    "fp": "0c5913053bf47118",
-    "count": 1
-  },
-  "a80f46b3d548d313": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/tbm.py",
-    "symbol": "_now",
-    "fp": "a80f46b3d548d313",
-    "count": 1
-  },
-  "91a57792c7421732": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/diagnosis_factory_test.py",
-    "symbol": "_now",
-    "fp": "91a57792c7421732",
-    "count": 1
-  },
-  "c811455e23807eb1": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/contracts.py",
-    "symbol": "gen_quote_no",
-    "fp": "c811455e23807eb1",
-    "count": 1
-  },
-  "12486b4f21a7be8f": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/contracts.py",
-    "symbol": "gen_contract_no",
-    "fp": "12486b4f21a7be8f",
-    "count": 1
-  },
-  "339a6606cb3b4975": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/contracts.py",
-    "symbol": "create_quote",
-    "fp": "339a6606cb3b4975",
-    "count": 1
-  },
-  "0ee4e7d20d644a67": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/contracts.py",
-    "symbol": "update_quote",
-    "fp": "0ee4e7d20d644a67",
-    "count": 1
-  },
-  "bebdadb9aec1bba0": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/contracts.py",
-    "symbol": "confirm_quote",
-    "fp": "bebdadb9aec1bba0",
-    "count": 1
-  },
-  "82d6d17080beaad2": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/contracts.py",
-    "symbol": "convert_to_contract",
-    "fp": "82d6d17080beaad2",
-    "count": 1
-  },
-  "2cb50fca6437d8db": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/contracts.py",
-    "symbol": "get_contracts",
-    "fp": "2cb50fca6437d8db",
+    "fp": "9b41ea5d5352c055",
     "count": 2
   },
-  "6f05c12bfc7477a1": {
-    "rule": "PY_DIRECT_NOW",
+  "abd379b4808191ca": {
     "repo": "tai-api",
-    "file": "routers/contracts.py",
-    "symbol": "create_contract",
-    "fp": "6f05c12bfc7477a1",
+    "fp": "abd379b4808191ca",
     "count": 1
   },
-  "1a4ae619a7c8e96e": {
-    "rule": "PY_DIRECT_NOW",
+  "9829bd53e9555c13": {
     "repo": "tai-api",
-    "file": "routers/contracts.py",
-    "symbol": "update_contract",
-    "fp": "1a4ae619a7c8e96e",
-    "count": 1
-  },
-  "abf9c365aee9a069": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/contracts.py",
-    "symbol": "update_contract_status",
-    "fp": "abf9c365aee9a069",
-    "count": 1
-  },
-  "e92cadbb14ec68ff": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/contracts.py",
-    "symbol": "activate_contract",
-    "fp": "e92cadbb14ec68ff",
-    "count": 1
-  },
-  "d3543195f7c418d5": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/contracts.py",
-    "symbol": "confirm_payment",
-    "fp": "d3543195f7c418d5",
-    "count": 1
-  },
-  "33a7e9c1797c1012": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/contracts.py",
-    "symbol": "suspend_contract",
-    "fp": "33a7e9c1797c1012",
-    "count": 1
-  },
-  "fdf29600577d7b01": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/contracts.py",
-    "symbol": "cancel_contract",
-    "fp": "fdf29600577d7b01",
-    "count": 1
-  },
-  "043d6d5f94c03d88": {
-    "rule": "PY_UTCNOW",
-    "repo": "tai-api",
-    "file": "routers/runtime_activation.py",
-    "symbol": "create_rollout",
-    "fp": "043d6d5f94c03d88",
-    "count": 1
-  },
-  "572e29a6167ca877": {
-    "rule": "PY_UTCNOW",
-    "repo": "tai-api",
-    "file": "routers/runtime_activation.py",
-    "symbol": "rollback_activation",
-    "fp": "572e29a6167ca877",
-    "count": 1
-  },
-  "f1c182be4444dda6": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/admin_connect.py",
-    "symbol": "_now",
-    "fp": "f1c182be4444dda6",
-    "count": 1
-  },
-  "37a02de231ff7bb3": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/admin_connect.py",
-    "symbol": "export_connect_registrations",
-    "fp": "37a02de231ff7bb3",
-    "count": 1
-  },
-  "6de5dd5d95fb636f": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/notifications.py",
-    "symbol": "update_notification_setting",
-    "fp": "6de5dd5d95fb636f",
-    "count": 1
-  },
-  "3c002d66eec884cf": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/notifications.py",
-    "symbol": "trigger_due_alerts",
-    "fp": "3c002d66eec884cf",
-    "count": 1
-  },
-  "21232d8923e4ee7d": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/notifications.py",
-    "symbol": "trigger_due_alerts",
-    "fp": "21232d8923e4ee7d",
-    "count": 1
-  },
-  "b4f6fdbaa36e3831": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/notifications.py",
-    "symbol": "mark_as_read",
-    "fp": "b4f6fdbaa36e3831",
-    "count": 1
-  },
-  "821a892456c206b1": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/notifications.py",
-    "symbol": "mark_all_read",
-    "fp": "821a892456c206b1",
-    "count": 1
-  },
-  "ae223400135b4e10": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/notifications.py",
-    "symbol": "send_notification",
-    "fp": "ae223400135b4e10",
-    "count": 1
-  },
-  "49498bf56faa57a8": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/notifications.py",
-    "symbol": "create_notification",
-    "fp": "49498bf56faa57a8",
-    "count": 2
-  },
-  "9b610f5533eb9f7a": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/connection_commission.py",
-    "symbol": "update_commission",
-    "fp": "9b610f5533eb9f7a",
-    "count": 1
-  },
-  "a84d0774ff4cb9fe": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/price_policy.py",
-    "symbol": "update_price_policy",
-    "fp": "a84d0774ff4cb9fe",
-    "count": 1
-  },
-  "d5ea5a22e799e752": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/inspection_schedule.py",
-    "symbol": "get_summary",
-    "fp": "d5ea5a22e799e752",
-    "count": 1
-  },
-  "6e4185cbcdf8975a": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/inspection_schedule.py",
-    "symbol": "list_inspection_sets",
-    "fp": "6e4185cbcdf8975a",
-    "count": 1
-  },
-  "1321ddb1a788bf3b": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/inspection_schedule.py",
-    "symbol": "get_inspection_set",
-    "fp": "1321ddb1a788bf3b",
-    "count": 1
-  },
-  "b1acbf37f696e528": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/education_assign.py",
-    "symbol": "_now_iso",
-    "fp": "b1acbf37f696e528",
-    "count": 1
-  },
-  "b030adc497af8b9d": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/fix_chat.py",
-    "symbol": "_now",
-    "fp": "b030adc497af8b9d",
-    "count": 1
-  },
-  "23bf98f298c1fe11": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/fix_chat.py",
-    "symbol": "admin_stats",
-    "fp": "23bf98f298c1fe11",
-    "count": 1
-  },
-  "998dd1dba0a6a1ab": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/quotes.py",
-    "symbol": "_gen_no",
-    "fp": "998dd1dba0a6a1ab",
-    "count": 1
-  },
-  "b3060799ac016475": {
-    "rule": "PY_UTCNOW",
-    "repo": "tai-api",
-    "file": "routers/quotes.py",
-    "symbol": "submit_survey",
-    "fp": "b3060799ac016475",
-    "count": 1
-  },
-  "231ad7de07fc550a": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/quotes.py",
-    "symbol": "convert_survey_to_contract",
-    "fp": "231ad7de07fc550a",
-    "count": 1
-  },
-  "e2c21f65551172f6": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/equipment_assets.py",
-    "symbol": "scan_equipment",
-    "fp": "e2c21f65551172f6",
-    "count": 1
-  },
-  "05979dd37a8bfac4": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/equipment_assets.py",
-    "symbol": "create_asset",
-    "fp": "05979dd37a8bfac4",
-    "count": 1
-  },
-  "47338a5706dfe370": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/equipment_assets.py",
-    "symbol": "generate_qr",
-    "fp": "47338a5706dfe370",
-    "count": 1
-  },
-  "bfe483be522f6387": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/worker_reports.py",
-    "symbol": "_gen_report_number",
-    "fp": "bfe483be522f6387",
-    "count": 1
-  },
-  "73b0680da88eb840": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/worker_reports.py",
-    "symbol": "confirm_safety_report",
-    "fp": "73b0680da88eb840",
-    "count": 1
+    "fp": "9829bd53e9555c13",
+    "count": 7
   },
-  "5097b81b1bf3c155": {
-    "rule": "PY_DIRECT_NOW",
+  "c3f4e0de360a670d": {
     "repo": "tai-api",
-    "file": "routers/construction_workflow_router.py",
-    "symbol": "_now_iso",
-    "fp": "5097b81b1bf3c155",
+    "fp": "c3f4e0de360a670d",
     "count": 1
   },
-  "b3cf630d190c71ff": {
-    "rule": "PY_DIRECT_NOW",
+  "a7f594f2db84dd02": {
     "repo": "tai-api",
-    "file": "routers/construction_workflow_router.py",
-    "symbol": "_ptw_number",
-    "fp": "b3cf630d190c71ff",
+    "fp": "a7f594f2db84dd02",
     "count": 1
   },
-  "b7681de6c6aaabea": {
-    "rule": "PY_DIRECT_NOW",
+  "6d6b0590efca6ff1": {
     "repo": "tai-api",
-    "file": "routers/construction_workflow_router.py",
-    "symbol": "issue_site_qr",
-    "fp": "b7681de6c6aaabea",
+    "fp": "6d6b0590efca6ff1",
     "count": 1
-  },
-  "558d1ef10693cd9d": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/worker_home.py",
-    "symbol": "_today",
-    "fp": "558d1ef10693cd9d",
-    "count": 1
-  },
-  "59f3c94fa5dcf7aa": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/companies.py",
-    "symbol": "onboarding",
-    "fp": "59f3c94fa5dcf7aa",
-    "count": 1
-  },
-  "66b30080c0b69c81": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/companies.py",
-    "symbol": "create_company",
-    "fp": "66b30080c0b69c81",
-    "count": 1
-  },
-  "8882e7fc1a6bcc9e": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/companies.py",
-    "symbol": "update_company",
-    "fp": "8882e7fc1a6bcc9e",
-    "count": 1
-  },
-  "e872d67e75169303": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/companies.py",
-    "symbol": "delete_company",
-    "fp": "e872d67e75169303",
-    "count": 1
-  },
-  "95f4d6302259123c": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/companies.py",
-    "symbol": "add_company_contact",
-    "fp": "95f4d6302259123c",
-    "count": 1
-  },
-  "c9f359c0e0e4a3ad": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/companies.py",
-    "symbol": "update_company_contact",
-    "fp": "c9f359c0e0e4a3ad",
-    "count": 1
-  },
-  "6d11de4a3e51630b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/companies.py",
-    "symbol": "delete_company_contact",
-    "fp": "6d11de4a3e51630b",
-    "count": 1
-  },
-  "37ca311484b71b62": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/companies.py",
-    "symbol": "add_company_file",
-    "fp": "37ca311484b71b62",
-    "count": 1
-  },
-  "1ec12ea51ce6466d": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/companies.py",
-    "symbol": "upload_company_file",
-    "fp": "1ec12ea51ce6466d",
-    "count": 1
-  },
-  "10f6cfb223375eb7": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/companies.py",
-    "symbol": "delete_company_file",
-    "fp": "10f6cfb223375eb7",
-    "count": 1
-  },
-  "525a66242ec28815": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/companies.py",
-    "symbol": "set_contract_url",
-    "fp": "525a66242ec28815",
-    "count": 1
-  },
-  "448ada1e0e24057f": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/experts.py",
-    "symbol": "_now_iso",
-    "fp": "448ada1e0e24057f",
-    "count": 1
-  },
-  "8ef351002bd74c49": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/admin_stats.py",
-    "symbol": "_now_iso",
-    "fp": "8ef351002bd74c49",
-    "count": 1
-  },
-  "6c4ef69103c08b02": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/ra_items.py",
-    "symbol": "_now",
-    "fp": "6c4ef69103c08b02",
-    "count": 1
-  },
-  "63254215044cf96c": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/notification_engine_api.py",
-    "symbol": "ack_notification",
-    "fp": "63254215044cf96c",
-    "count": 1
-  },
-  "8ea92a86c2bdf160": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/notification_engine_api.py",
-    "symbol": "resolve_notification",
-    "fp": "8ea92a86c2bdf160",
-    "count": 1
-  },
-  "32e4ed14731cf504": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/engine_qa.py",
-    "symbol": "run_engine_qa",
-    "fp": "32e4ed14731cf504",
-    "count": 2
-  },
-  "4267e7ee8d2ba336": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/holidays.py",
-    "symbol": "sync_holidays",
-    "fp": "4267e7ee8d2ba336",
-    "count": 1
-  },
-  "6001688f33986fbd": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/holidays.py",
-    "symbol": "list_holidays",
-    "fp": "6001688f33986fbd",
-    "count": 1
-  },
-  "b3883f5923991178": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/legal_status_api.py",
-    "symbol": "mark_factory_applied",
-    "fp": "b3883f5923991178",
-    "count": 1
-  },
-  "f0439f1c2e13b706": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/legal_status_api.py",
-    "symbol": "mark_factory_needs_update",
-    "fp": "f0439f1c2e13b706",
-    "count": 1
-  },
-  "35708ccc7d0e6d45": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/legal_status_api.py",
-    "symbol": "batch_apply_legal",
-    "fp": "35708ccc7d0e6d45",
-    "count": 1
-  },
-  "e09466f1ab069c15": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/law_catalog_collector.py",
-    "symbol": "_run_collect_catalog",
-    "fp": "e09466f1ab069c15",
-    "count": 2
-  },
-  "9fe0abcf5c727c3c": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/law_catalog_collector.py",
-    "symbol": "trigger_collect_catalog",
-    "fp": "9fe0abcf5c727c3c",
-    "count": 1
-  },
-  "6525e66664f30045": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/identity.py",
-    "symbol": "_now_iso",
-    "fp": "6525e66664f30045",
-    "count": 1
-  },
-  "9354a8a38c756837": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/identity.py",
-    "symbol": "_now_ts",
-    "fp": "9354a8a38c756837",
-    "count": 1
-  },
-  "785c37f277a053e7": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/connect_registration.py",
-    "symbol": "update_pre_registration",
-    "fp": "785c37f277a053e7",
-    "count": 1
-  },
-  "a27ed2d15b0f8624": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/diagnosis_proposal.py",
-    "symbol": "_now",
-    "fp": "a27ed2d15b0f8624",
-    "count": 1
-  },
-  "cb1d2e85e396061a": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/law_rule_generator.py",
-    "symbol": "parse_article",
-    "fp": "cb1d2e85e396061a",
-    "count": 1
-  },
-  "1a52e850c63849f3": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/law_rule_generator.py",
-    "symbol": "parse_batch",
-    "fp": "1a52e850c63849f3",
-    "count": 1
-  },
-  "97653ab75d33565c": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/law_rule_generator.py",
-    "symbol": "auto_parse_and_approve",
-    "fp": "97653ab75d33565c",
-    "count": 1
-  },
-  "094c3f053eee6fb6": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/law_rule_generator.py",
-    "symbol": "bulk_approve_unregistered",
-    "fp": "094c3f053eee6fb6",
-    "count": 2
   },
-  "0fefdaa1668d7862": {
-    "rule": "PY_DIRECT_NOW",
+  "24fdb99afa8e792b": {
     "repo": "tai-api",
-    "file": "routers/law_rule_generator.py",
-    "symbol": "_run_reparse_background",
-    "fp": "0fefdaa1668d7862",
+    "fp": "24fdb99afa8e792b",
     "count": 3
   },
-  "a8252e9d21356b89": {
-    "rule": "PY_DIRECT_NOW",
+  "984b9df0a79ae99c": {
     "repo": "tai-api",
-    "file": "routers/law_rule_generator.py",
-    "symbol": "update_draft",
-    "fp": "a8252e9d21356b89",
+    "fp": "984b9df0a79ae99c",
     "count": 1
   },
-  "fb428c7d6cb16726": {
-    "rule": "PY_DIRECT_NOW",
+  "8c860abfb81d85fb": {
     "repo": "tai-api",
-    "file": "routers/law_rule_generator.py",
-    "symbol": "approve_draft",
-    "fp": "fb428c7d6cb16726",
+    "fp": "8c860abfb81d85fb",
     "count": 1
   },
-  "6ca19a8011ec6eaa": {
-    "rule": "PY_DIRECT_NOW",
+  "4761e4ad002cedce": {
     "repo": "tai-api",
-    "file": "routers/law_rule_generator.py",
-    "symbol": "reject_draft",
-    "fp": "6ca19a8011ec6eaa",
+    "fp": "4761e4ad002cedce",
     "count": 2
   },
-  "1e96bc50e7e3a684": {
-    "rule": "PY_DATE_TODAY",
+  "2e0cfcf9298a588f": {
     "repo": "tai-api",
-    "file": "routers/event_trigger.py",
-    "symbol": "trigger_event_schedules",
-    "fp": "1e96bc50e7e3a684",
-    "count": 1
-  },
-  "806a7cf6a65e716b": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "routers/event_trigger.py",
-    "symbol": "manual_trigger",
-    "fp": "806a7cf6a65e716b",
-    "count": 1
-  },
-  "c86b71d62cab55cc": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/inicis_auth.py",
-    "symbol": "_generate_mtx_id",
-    "fp": "c86b71d62cab55cc",
-    "count": 1
-  },
-  "114cf45698c1320a": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/inicis_auth.py",
-    "symbol": "_ensure_diag_auth_token",
-    "fp": "114cf45698c1320a",
-    "count": 1
-  },
-  "81cbdf23f246f563": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/inicis_auth.py",
-    "symbol": "create_auth_request",
-    "fp": "81cbdf23f246f563",
-    "count": 1
-  },
-  "a4e8fe39f9e90f49": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/inicis_auth.py",
-    "symbol": "callback_success",
-    "fp": "a4e8fe39f9e90f49",
-    "count": 1
-  },
-  "a2db7480e623e08e": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/inspection_setup.py",
-    "symbol": "_now_iso",
-    "fp": "a2db7480e623e08e",
-    "count": 1
-  },
-  "af4fdca64bdcce40": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "routers/worker_registry.py",
-    "symbol": "_now_iso",
-    "fp": "af4fdca64bdcce40",
-    "count": 1
-  },
-  "f8ffc578cdff0e08": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "workflow_alert/lifecycle.py",
-    "symbol": "ack_alert",
-    "fp": "f8ffc578cdff0e08",
-    "count": 1
-  },
-  "b997161c4a27c848": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "workflow_alert/lifecycle.py",
-    "symbol": "resolve_alert",
-    "fp": "b997161c4a27c848",
-    "count": 1
-  },
-  "4be50f949cca90ca": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "workflow_alert/evaluator.py",
-    "symbol": "_is_in_cooldown",
-    "fp": "4be50f949cca90ca",
-    "count": 1
-  },
-  "414069a8644cedcd": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "tools/test_universe/e2e_runner.py",
-    "symbol": "main",
-    "fp": "414069a8644cedcd",
-    "count": 1
-  },
-  "77ccc7210402f113": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "tools/test_universe/e2e_runner_all.py",
-    "symbol": "main",
-    "fp": "77ccc7210402f113",
-    "count": 1
-  },
-  "779dd5f5b0d7d494": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "verification/check_runtime_probe.py",
-    "symbol": "<module>",
-    "fp": "779dd5f5b0d7d494",
-    "count": 1
-  },
-  "9cde826644eb8ba4": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "verification/e2e_lifecycle_validator.py",
-    "symbol": "run_wave",
-    "fp": "9cde826644eb8ba4",
+    "fp": "2e0cfcf9298a588f",
     "count": 2
   },
-  "62eb81713e5ba3fe": {
-    "rule": "PY_DIRECT_NOW",
+  "93e19afe282612d6": {
     "repo": "tai-api",
-    "file": "watch_engine/canonical.py",
-    "symbol": "now_occurred_at",
-    "fp": "62eb81713e5ba3fe",
-    "count": 1
-  },
-  "bfc0f6415009b1c9": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/control_bridge/bridge_evaluator.py",
-    "symbol": "evaluate_bridge",
-    "fp": "bfc0f6415009b1c9",
-    "count": 1
-  },
-  "b7391e860597fb30": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/control_bridge/bridge_evaluator.py",
-    "symbol": "_emit_escalation",
-    "fp": "b7391e860597fb30",
-    "count": 1
-  },
-  "32e3655e74338d73": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/trans_engine/operational_closure.py",
-    "symbol": "close_operational_situation",
-    "fp": "32e3655e74338d73",
-    "count": 1
-  },
-  "c373715a99e724a4": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/trans_engine/response_feedback.py",
-    "symbol": "record_response_feedback",
-    "fp": "c373715a99e724a4",
-    "count": 1
-  },
-  "b90c3d5bdd1a8d40": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/trans_engine/situation_snapshot_builder.py",
-    "symbol": "build_situation_snapshot",
-    "fp": "b90c3d5bdd1a8d40",
-    "count": 1
-  },
-  "2c9d4ddb89985e96": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/trans_engine/operator_activity.py",
-    "symbol": "build_activity_entry",
-    "fp": "2c9d4ddb89985e96",
-    "count": 1
-  },
-  "bfc6065ded4f8c14": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/intelligence/repeated_failure_intelligence.py",
-    "symbol": "analyze_repeated_failures",
-    "fp": "bfc6065ded4f8c14",
-    "count": 1
-  },
-  "f21fefb92a72663a": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/intelligence/tenant_degradation_intelligence.py",
-    "symbol": "analyze_tenant_degradation",
-    "fp": "f21fefb92a72663a",
-    "count": 1
-  },
-  "93488a736bf01ba7": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/intelligence/pattern_intelligence.py",
-    "symbol": "analyze_patterns",
-    "fp": "93488a736bf01ba7",
-    "count": 1
-  },
-  "1bfa468d00731a69": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/calibration/false_positive_tracker.py",
-    "symbol": "analyze_false_positives",
-    "fp": "1bfa468d00731a69",
-    "count": 1
-  },
-  "48ac52e714ed9750": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/alert/engine.py",
-    "symbol": "evaluate_and_alert",
-    "fp": "48ac52e714ed9750",
-    "count": 1
-  },
-  "8013b8b9e7af1476": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/document/__init__.py",
-    "symbol": "render_pdf_gotenberg",
-    "fp": "8013b8b9e7af1476",
-    "count": 1
-  },
-  "11fe55c703525c0a": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/document/__init__.py",
-    "symbol": "_build_default_html",
-    "fp": "11fe55c703525c0a",
-    "count": 1
-  },
-  "2fdff21713c164eb": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/knowledge/pattern_updater.py",
-    "symbol": "update_patterns",
-    "fp": "2fdff21713c164eb",
-    "count": 1
-  },
-  "9df7f0e9f9cb7296": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/knowledge/stability.py",
-    "symbol": "compute_stability",
-    "fp": "9df7f0e9f9cb7296",
-    "count": 1
-  },
-  "1a3f9e77f03b3019": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/synthetic/runner.py",
-    "symbol": "_generate_run_id",
-    "fp": "1a3f9e77f03b3019",
-    "count": 1
-  },
-  "9f7743b188cc66f5": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/synthetic/cleanup.py",
-    "symbol": "cleanup_synthetic_data",
-    "fp": "9f7743b188cc66f5",
-    "count": 1
-  },
-  "a99d4bc4960d0e71": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/governance/__init__.py",
-    "symbol": "compute_tenant_impact",
-    "fp": "a99d4bc4960d0e71",
-    "count": 1
-  },
-  "0634ae4c6a5586f1": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/integrity/flow_status.py",
-    "symbol": "compute_flow_status",
-    "fp": "0634ae4c6a5586f1",
-    "count": 1
-  },
-  "33100b71ff7a8213": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/integrity/evaluator.py",
-    "symbol": "evaluate_recent_events",
-    "fp": "33100b71ff7a8213",
-    "count": 1
-  },
-  "380391d7a03fb87b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/integrity/rules/stuck_detected.py",
-    "symbol": "check_stuck_detected",
-    "fp": "380391d7a03fb87b",
-    "count": 1
-  },
-  "9dd1f69e1d8e0d68": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/incident/repeated.py",
-    "symbol": "detect_repeated_failures",
-    "fp": "9dd1f69e1d8e0d68",
-    "count": 1
-  },
-  "992984a8f3498fb0": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/feedback_loop/degradation_feedback.py",
-    "symbol": "track_degradation_feedback",
-    "fp": "992984a8f3498fb0",
-    "count": 1
-  },
-  "69bfa436cd73030b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/feedback_loop/feedback_summary.py",
-    "symbol": "generate_feedback_summary",
-    "fp": "69bfa436cd73030b",
-    "count": 1
-  },
-  "e8d149eb93ffe359": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/feedback_loop/escalation_effectiveness.py",
-    "symbol": "track_escalation_effectiveness",
-    "fp": "e8d149eb93ffe359",
-    "count": 1
-  },
-  "c8fed06afcd43206": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/feedback_loop/alert_quality_tracker.py",
-    "symbol": "track_alert_quality",
-    "fp": "c8fed06afcd43206",
-    "count": 1
-  },
-  "9afdedc2cf2fdb84": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/feedback_loop/recovery_feedback.py",
-    "symbol": "track_recovery_feedback",
-    "fp": "9afdedc2cf2fdb84",
-    "count": 1
-  },
-  "5b5335be54a2e3d3": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/synthetic_runtime/orchestrator.py",
-    "symbol": "run_synthetic_tick",
-    "fp": "5b5335be54a2e3d3",
-    "count": 1
-  },
-  "c9ba797f8fdefafb": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/browser_synthetic/runner.py",
-    "symbol": "_generate_run_id",
-    "fp": "c9ba797f8fdefafb",
-    "count": 1
-  },
-  "24d5aa5643d1c787": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/runtime_bus/event_bus.py",
-    "symbol": "emit_runtime_event",
-    "fp": "24d5aa5643d1c787",
-    "count": 1
-  },
-  "f89293f405ed26c6": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "watch_engine/runtime_bus/event_envelope.py",
-    "symbol": "EventEnvelope",
-    "fp": "f89293f405ed26c6",
-    "count": 1
-  },
-  "5ac11a946943d390": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "scripts/law_collector.py",
-    "symbol": "save_results",
-    "fp": "5ac11a946943d390",
-    "count": 1
-  },
-  "6290496c425163be": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "scripts/collect_law_attachments.py",
-    "symbol": "process_one",
-    "fp": "6290496c425163be",
-    "count": 1
-  },
-  "8e76f539c7a47d0c": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "scripts/document_schema_compiler.py",
-    "symbol": "extract_all",
-    "fp": "8e76f539c7a47d0c",
+    "fp": "93e19afe282612d6",
     "count": 2
   },
-  "ca37e8bb6c0be9b6": {
-    "rule": "PY_DIRECT_NOW",
+  "0a57ee70139d2e10": {
     "repo": "tai-api",
-    "file": "scripts/collect_v2.py",
-    "symbol": "update_target_status",
-    "fp": "ca37e8bb6c0be9b6",
+    "fp": "0a57ee70139d2e10",
+    "count": 1
+  },
+  "4dc2bad3e02f3a5f": {
+    "repo": "tai-api",
+    "fp": "4dc2bad3e02f3a5f",
+    "count": 2
+  },
+  "9386b10a8a47bf06": {
+    "repo": "tai-api",
+    "fp": "9386b10a8a47bf06",
+    "count": 1
+  },
+  "ae8a850dc9df2743": {
+    "repo": "tai-api",
+    "fp": "ae8a850dc9df2743",
+    "count": 1
+  },
+  "05e6d04056cc72de": {
+    "repo": "tai-api",
+    "fp": "05e6d04056cc72de",
+    "count": 2
+  },
+  "d0162202dba1a518": {
+    "repo": "tai-api",
+    "fp": "d0162202dba1a518",
+    "count": 2
+  },
+  "d849d2b300c24bbe": {
+    "repo": "tai-api",
+    "fp": "d849d2b300c24bbe",
     "count": 3
   },
-  "7365554b64c5368e": {
-    "rule": "PY_DIRECT_NOW",
+  "8f868804bf7515df": {
     "repo": "tai-api",
-    "file": "scripts/collect_v2.py",
-    "symbol": "save_law_to_db",
-    "fp": "7365554b64c5368e",
-    "count": 10
-  },
-  "500b1ac45594839d": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "scripts/collect_v2.py",
-    "symbol": "verify_one_law",
-    "fp": "500b1ac45594839d",
-    "count": 1
-  },
-  "cc29fae93867f8fe": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "scripts/collect_v2.py",
-    "symbol": "collect_one_law",
-    "fp": "cc29fae93867f8fe",
+    "fp": "8f868804bf7515df",
     "count": 2
   },
-  "426caf9e4b049273": {
-    "rule": "PY_DIRECT_NOW",
+  "f040d77ae268517b": {
     "repo": "tai-api",
-    "file": "scripts/collect_v2.py",
-    "symbol": "cmd_retry",
-    "fp": "426caf9e4b049273",
+    "fp": "f040d77ae268517b",
     "count": 1
   },
-  "e910aed1b09b71c0": {
-    "rule": "PY_DIRECT_NOW",
+  "70214118c705a2a6": {
     "repo": "tai-api",
-    "file": "scripts/collect_v2.py",
-    "symbol": "cmd_monitor",
-    "fp": "e910aed1b09b71c0",
+    "fp": "70214118c705a2a6",
+    "count": 11
+  },
+  "11a2f0b4afbc89ea": {
+    "repo": "tai-api",
+    "fp": "11a2f0b4afbc89ea",
     "count": 1
   },
-  "e578be621effe2f8": {
-    "rule": "PY_DIRECT_NOW",
+  "f5fbeeda8898a2d6": {
     "repo": "tai-api",
-    "file": "scripts/track_e_phase2_run.py",
-    "symbol": "insert_verification_log",
-    "fp": "e578be621effe2f8",
+    "fp": "f5fbeeda8898a2d6",
     "count": 1
   },
-  "d5153869748316ba": {
-    "rule": "PY_DIRECT_NOW",
+  "fa2059f14ff86be2": {
     "repo": "tai-api",
-    "file": "scripts/track_e_phase2_run.py",
-    "symbol": "insert_verification_log_phase21",
-    "fp": "d5153869748316ba",
+    "fp": "fa2059f14ff86be2",
     "count": 1
   },
-  "7d87a4c29ae17afe": {
-    "rule": "PY_DIRECT_NOW",
+  "7324484406eb2fc6": {
     "repo": "tai-api",
-    "file": "scripts/collect_prec_casename.py",
-    "symbol": "main",
-    "fp": "7d87a4c29ae17afe",
+    "fp": "7324484406eb2fc6",
     "count": 1
   },
-  "8290b40466e59434": {
-    "rule": "PY_DIRECT_NOW",
+  "ac48955516bd2710": {
     "repo": "tai-api",
-    "file": "scripts/collect_prec_standard_rules.py",
-    "symbol": "main",
-    "fp": "8290b40466e59434",
+    "fp": "ac48955516bd2710",
     "count": 1
   },
-  "d37bc562e7da996f": {
-    "rule": "PY_DIRECT_NOW",
+  "9c671f904c9aeef1": {
     "repo": "tai-api",
-    "file": "scripts/collect_phase4_full.py",
-    "symbol": "phase_a",
-    "fp": "d37bc562e7da996f",
+    "fp": "9c671f904c9aeef1",
     "count": 1
   },
-  "aef577e8ff40de89": {
-    "rule": "PY_DIRECT_NOW",
+  "5ea3a138b73e6c94": {
     "repo": "tai-api",
-    "file": "scripts/collect_phase4_full.py",
-    "symbol": "main",
-    "fp": "aef577e8ff40de89",
-    "count": 1
-  },
-  "8fa72e3da4198021": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "scripts/all_laws_recollect.py",
-    "symbol": "main",
-    "fp": "8fa72e3da4198021",
-    "count": 1
-  },
-  "4294e309c886401b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "scripts/reparse_admrul.py",
-    "symbol": "reparse_one_law",
-    "fp": "4294e309c886401b",
+    "fp": "5ea3a138b73e6c94",
     "count": 2
   },
-  "abce8d4a2cb469af": {
-    "rule": "PY_DIRECT_NOW",
+  "4aa422301ca8fc24": {
     "repo": "tai-api",
-    "file": "scripts/generate_sample_data.py",
-    "symbol": "generate_sample",
-    "fp": "abce8d4a2cb469af",
-    "count": 1
-  },
-  "9fb485d7ac5cf6d9": {
-    "rule": "PY_UTCNOW",
-    "repo": "tai-api",
-    "file": "scripts/collect_precedents.py",
-    "symbol": "build_save_payload",
-    "fp": "9fb485d7ac5cf6d9",
-    "count": 1
-  },
-  "13ef4779a298933e": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "scripts/pilot2_recollect.py",
-    "symbol": "_check_emergency_stop",
-    "fp": "13ef4779a298933e",
-    "count": 1
-  },
-  "1954fd898bb3c0f9": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "scripts/auto_parse_parallel.py",
-    "symbol": "process",
-    "fp": "1954fd898bb3c0f9",
-    "count": 1
-  },
-  "2ea7765aaebe6223": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "scripts/quality_scan.py",
-    "symbol": "run_scan",
-    "fp": "2ea7765aaebe6223",
-    "count": 1
-  },
-  "acfb03166a68ec15": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "scripts/migrate_result_data_v2026_04.py",
-    "symbol": "upgrade_to_v202604",
-    "fp": "acfb03166a68ec15",
-    "count": 1
-  },
-  "53bb8da4f54d51ff": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "scripts/pilot3_recollect.py",
-    "symbol": "_check_emergency_stop",
-    "fp": "53bb8da4f54d51ff",
-    "count": 1
-  },
-  "da5c22b8b3e5e08b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "scripts/expand_law_zip_attachments.py",
-    "symbol": "process_zip",
-    "fp": "da5c22b8b3e5e08b",
-    "count": 1
-  },
-  "0236e744d992cb46": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "scripts/collect_precedents_matched.py",
-    "symbol": "main",
-    "fp": "0236e744d992cb46",
-    "count": 1
-  },
-  "b7fcc03052763f9b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "scripts/upload_local_attachments.py",
-    "symbol": "main",
-    "fp": "b7fcc03052763f9b",
-    "count": 1
-  },
-  "892e0192ec6892f5": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "workflow_engine/contracts/event_contract.py",
-    "symbol": "to_event_log_row",
-    "fp": "892e0192ec6892f5",
-    "count": 1
-  },
-  "a6d7a847642ce07d": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_alert_api.py",
-    "symbol": "update_alert_rule",
-    "fp": "a6d7a847642ce07d",
-    "count": 1
-  },
-  "0933cbf4f549e374": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_alert_api.py",
-    "symbol": "mute_rule",
-    "fp": "0933cbf4f549e374",
+    "fp": "4aa422301ca8fc24",
     "count": 2
   },
-  "38674a3f0fa14a31": {
-    "rule": "PY_DIRECT_NOW",
+  "7d1166de2ecc6e8a": {
     "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_alert_api.py",
-    "symbol": "unmute_rule",
-    "fp": "38674a3f0fa14a31",
-    "count": 1
-  },
-  "2b8426cf24b1e785": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_recovery_api.py",
-    "symbol": "record_action",
-    "fp": "2b8426cf24b1e785",
+    "fp": "7d1166de2ecc6e8a",
     "count": 2
   },
-  "0f632e1004a57679": {
-    "rule": "PY_DIRECT_NOW",
+  "636807f6a9067d7a": {
     "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_incident_api.py",
-    "symbol": "get_incident_priority",
-    "fp": "0f632e1004a57679",
-    "count": 1
-  },
-  "4ea3822db8ad0042": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_incident_api.py",
-    "symbol": "get_workflow_risk",
-    "fp": "4ea3822db8ad0042",
-    "count": 1
-  },
-  "90ceb91cfa15f56c": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_incident_api.py",
-    "symbol": "get_repeated_failures",
-    "fp": "90ceb91cfa15f56c",
-    "count": 1
-  },
-  "5aa1d40fc6716cdd": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_browser_api.py",
-    "symbol": "get_browser_status",
-    "fp": "5aa1d40fc6716cdd",
-    "count": 1
-  },
-  "b11b43efc2574c9b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_api.py",
-    "symbol": "get_top_failing_flows",
-    "fp": "b11b43efc2574c9b",
-    "count": 1
-  },
-  "934c2e794c320404": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_api.py",
-    "symbol": "acknowledge_issue",
-    "fp": "934c2e794c320404",
-    "count": 1
-  },
-  "d54a4a846eb5d18c": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_api.py",
-    "symbol": "resolve_issue",
-    "fp": "d54a4a846eb5d18c",
-    "count": 1
-  },
-  "99bb3eaa25c5e07f": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/production_guard_api.py",
-    "symbol": "check_safety",
-    "fp": "99bb3eaa25c5e07f",
+    "fp": "636807f6a9067d7a",
     "count": 2
   },
-  "e4f5ea9a995864ee": {
-    "rule": "PY_DIRECT_NOW",
+  "0ee9622e2594fc28": {
     "repo": "tai-api",
-    "file": "_archive/routers_20260608/synthetic_control_api.py",
-    "symbol": "start",
-    "fp": "e4f5ea9a995864ee",
-    "count": 1
-  },
-  "eb13147f4212c84c": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/synthetic_control_api.py",
-    "symbol": "tick",
-    "fp": "eb13147f4212c84c",
-    "count": 1
-  },
-  "98f1f8695907fdef": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/synthetic_control_api.py",
-    "symbol": "stats",
-    "fp": "98f1f8695907fdef",
-    "count": 1
-  },
-  "a30592cefd52ecf1": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/synthetic_control_api.py",
-    "symbol": "cleanup",
-    "fp": "a30592cefd52ecf1",
-    "count": 1
-  },
-  "0769caabccb1e27f": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_intelligence_api.py",
-    "symbol": "get_intelligence_summary",
-    "fp": "0769caabccb1e27f",
-    "count": 1
-  },
-  "78defa5cfaad6bba": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_intelligence_api.py",
-    "symbol": "get_incident_lifecycle",
-    "fp": "78defa5cfaad6bba",
-    "count": 1
-  },
-  "250bca9ac0fddea4": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_intelligence_api.py",
-    "symbol": "get_synthetic_status",
-    "fp": "250bca9ac0fddea4",
-    "count": 2
-  },
-  "886b15e3667b357d": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_intelligence_api.py",
-    "symbol": "get_operational_density",
-    "fp": "886b15e3667b357d",
-    "count": 2
-  },
-  "fcd270608209e325": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_sla_api.py",
-    "symbol": "get_sla_status",
-    "fp": "fcd270608209e325",
-    "count": 1
-  },
-  "5544471138fc0a3a": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_sla_api.py",
-    "symbol": "update_sla",
-    "fp": "5544471138fc0a3a",
-    "count": 1
-  },
-  "c18b9e44f0fd6dce": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/control_runtime_gateway_api.py",
-    "symbol": "push_heartbeat",
-    "fp": "c18b9e44f0fd6dce",
-    "count": 1
-  },
-  "283bcefa7591c2de": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/control_runtime_gateway_api.py",
-    "symbol": "gateway_health",
-    "fp": "283bcefa7591c2de",
-    "count": 1
-  },
-  "821db3da4537775e": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_control_api.py",
-    "symbol": "update_template",
-    "fp": "821db3da4537775e",
-    "count": 1
-  },
-  "4fbb8412424a3f56": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "_archive/routers_20260608/watch_engine_control_api.py",
-    "symbol": "update_routing",
-    "fp": "4fbb8412424a3f56",
-    "count": 1
-  },
-  "a1e38a7d23d2339b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "engine/iterator.py",
-    "symbol": "_isolate_fp_rows_psycopg2",
-    "fp": "a1e38a7d23d2339b",
-    "count": 1
-  },
-  "8d099e7508c67c25": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "engine/iterator.py",
-    "symbol": "_isolate_fp_rows_supabase",
-    "fp": "8d099e7508c67c25",
-    "count": 1
-  },
-  "d6842119fcde5084": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "engine/iterator.py",
-    "symbol": "_isolate_failed_subtypes_psycopg2",
-    "fp": "d6842119fcde5084",
-    "count": 1
-  },
-  "57a86635c262dd99": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "engine/iterator.py",
-    "symbol": "_isolate_failed_subtypes_supabase",
-    "fp": "57a86635c262dd99",
-    "count": 1
-  },
-  "536e596edfdbca84": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/runtime_evaluator_svc.py",
-    "symbol": "create_context",
-    "fp": "536e596edfdbca84",
-    "count": 1
-  },
-  "be7a91dee18be069": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/runtime_evaluator_svc.py",
-    "symbol": "evaluate",
-    "fp": "be7a91dee18be069",
+    "fp": "0ee9622e2594fc28",
     "count": 3
   },
-  "cf88b782daed2936": {
-    "rule": "PY_DATE_TODAY",
+  "973fb5f79f431427": {
     "repo": "tai-api",
-    "file": "services/inspection_sets_helpers.py",
-    "symbol": "_next_planned_from",
-    "fp": "cf88b782daed2936",
-    "count": 1
-  },
-  "bb35fe5de9ed9aca": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "services/legal_format.py",
-    "symbol": "_calc_due_date",
-    "fp": "bb35fe5de9ed9aca",
-    "count": 1
-  },
-  "5f1b3541bf86a82f": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "services/help_plan_level.py",
-    "symbol": "resolve_for_company",
-    "fp": "5f1b3541bf86a82f",
-    "count": 1
-  },
-  "d1bfc1c3c200843f": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/payment_svc.py",
-    "symbol": "create_vbank_record",
-    "fp": "d1bfc1c3c200843f",
-    "count": 1
-  },
-  "a95138716e957374": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/payment_svc.py",
-    "symbol": "run_billing_prepare",
-    "fp": "a95138716e957374",
-    "count": 1
-  },
-  "2e099c69598a1f89": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/payment_svc.py",
-    "symbol": "run_billing_charge",
-    "fp": "2e099c69598a1f89",
-    "count": 1
-  },
-  "61d2bd76f0bf9154": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "services/runtime_schedule_service.py",
-    "symbol": "check_overdue_schedules",
-    "fp": "61d2bd76f0bf9154",
-    "count": 1
-  },
-  "f19c6f2699a9cff6": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/contract_engine_svc.py",
-    "symbol": "run_generate_contract",
-    "fp": "f19c6f2699a9cff6",
-    "count": 1
-  },
-  "acc3e286540a449b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/diagnosis_service.py",
-    "symbol": "evaluate",
-    "fp": "acc3e286540a449b",
+    "fp": "973fb5f79f431427",
     "count": 3
   },
-  "211c069b74f5ea77": {
-    "rule": "PY_DIRECT_NOW",
+  "033740d75508065d": {
     "repo": "tai-api",
-    "file": "services/construction_svc.py",
-    "symbol": "run_diagnosis",
-    "fp": "211c069b74f5ea77",
+    "fp": "033740d75508065d",
+    "count": 2
+  },
+  "6c933d7bf6e9c5b2": {
+    "repo": "tai-api",
+    "fp": "6c933d7bf6e9c5b2",
+    "count": 2
+  },
+  "da92354552212121": {
+    "repo": "tai-api",
+    "fp": "da92354552212121",
+    "count": 1
+  },
+  "a9641d26fcacddd2": {
+    "repo": "tai-api",
+    "fp": "a9641d26fcacddd2",
+    "count": 1
+  },
+  "eb8aa25ee4a779f2": {
+    "repo": "tai-api",
+    "fp": "eb8aa25ee4a779f2",
+    "count": 2
+  },
+  "a4d70c3de5cb6c63": {
+    "repo": "tai-api",
+    "fp": "a4d70c3de5cb6c63",
+    "count": 12
+  },
+  "d98f4bc67f376530": {
+    "repo": "tai-api",
+    "fp": "d98f4bc67f376530",
+    "count": 12
+  },
+  "c6252c1145d68234": {
+    "repo": "tai-api",
+    "fp": "c6252c1145d68234",
+    "count": 2
+  },
+  "dbecda35f3f36fa2": {
+    "repo": "tai-api",
+    "fp": "dbecda35f3f36fa2",
+    "count": 4
+  },
+  "61e67d72a88a7674": {
+    "repo": "tai-api",
+    "fp": "61e67d72a88a7674",
     "count": 3
   },
-  "3beef069d4823ec0": {
-    "rule": "PY_DATE_TODAY",
+  "490b1b862862846a": {
     "repo": "tai-api",
-    "file": "services/construction_svc.py",
-    "symbol": "run_generate_schedules",
-    "fp": "3beef069d4823ec0",
+    "fp": "490b1b862862846a",
     "count": 1
   },
-  "b1a71172ffa07ff7": {
-    "rule": "PY_DIRECT_NOW",
+  "cdc06f1d148cc8af": {
     "repo": "tai-api",
-    "file": "services/anonymous_factory_service.py",
-    "symbol": "create_temp_factory",
-    "fp": "b1a71172ffa07ff7",
+    "fp": "cdc06f1d148cc8af",
+    "count": 1
+  },
+  "bf29037b308de664": {
+    "repo": "tai-api",
+    "fp": "bf29037b308de664",
+    "count": 1
+  },
+  "9216b9c6d2170c3a": {
+    "repo": "tai-api",
+    "fp": "9216b9c6d2170c3a",
+    "count": 1
+  },
+  "9db24950c001016c": {
+    "repo": "tai-api",
+    "fp": "9db24950c001016c",
+    "count": 2
+  },
+  "ed3fcb2f150dbb7e": {
+    "repo": "tai-api",
+    "fp": "ed3fcb2f150dbb7e",
+    "count": 2
+  },
+  "531689ef27661f96": {
+    "repo": "tai-api",
+    "fp": "531689ef27661f96",
+    "count": 1
+  },
+  "d6baf0bec059d158": {
+    "repo": "tai-api",
+    "fp": "d6baf0bec059d158",
+    "count": 1
+  },
+  "c825d664921e2508": {
+    "repo": "tai-api",
+    "fp": "c825d664921e2508",
+    "count": 1
+  },
+  "72722919d4d25f75": {
+    "repo": "tai-api",
+    "fp": "72722919d4d25f75",
+    "count": 1
+  },
+  "5d08aca6795f855c": {
+    "repo": "tai-api",
+    "fp": "5d08aca6795f855c",
+    "count": 1
+  },
+  "d33062f8a839a8ec": {
+    "repo": "tai-api",
+    "fp": "d33062f8a839a8ec",
+    "count": 1
+  },
+  "29fae8c1ac8b9c5c": {
+    "repo": "tai-api",
+    "fp": "29fae8c1ac8b9c5c",
+    "count": 1
+  },
+  "02da9a9827058e37": {
+    "repo": "tai-api",
+    "fp": "02da9a9827058e37",
+    "count": 1
+  },
+  "98d481eeb69b4da0": {
+    "repo": "tai-api",
+    "fp": "98d481eeb69b4da0",
+    "count": 2
+  },
+  "3eb6f5696d48f39f": {
+    "repo": "tai-api",
+    "fp": "3eb6f5696d48f39f",
+    "count": 1
+  },
+  "d68eac02e009748f": {
+    "repo": "tai-api",
+    "fp": "d68eac02e009748f",
+    "count": 1
+  },
+  "3732458c17c87dec": {
+    "repo": "tai-api",
+    "fp": "3732458c17c87dec",
+    "count": 2
+  },
+  "c9145fbcf80a9904": {
+    "repo": "tai-api",
+    "fp": "c9145fbcf80a9904",
+    "count": 2
+  },
+  "a135925dd330234d": {
+    "repo": "tai-api",
+    "fp": "a135925dd330234d",
+    "count": 1
+  },
+  "2ce9faa8951655ee": {
+    "repo": "tai-api",
+    "fp": "2ce9faa8951655ee",
+    "count": 1
+  },
+  "1479c0920c13fb53": {
+    "repo": "tai-api",
+    "fp": "1479c0920c13fb53",
+    "count": 1
+  },
+  "7f07051ac393a7a3": {
+    "repo": "tai-api",
+    "fp": "7f07051ac393a7a3",
+    "count": 1
+  },
+  "c026e2694b87043b": {
+    "repo": "tai-api",
+    "fp": "c026e2694b87043b",
+    "count": 1
+  },
+  "30a51a72946e5ddc": {
+    "repo": "tai-api",
+    "fp": "30a51a72946e5ddc",
+    "count": 1
+  },
+  "dec3782cf6981c83": {
+    "repo": "tai-api",
+    "fp": "dec3782cf6981c83",
+    "count": 1
+  },
+  "d9861571146649b9": {
+    "repo": "tai-api",
+    "fp": "d9861571146649b9",
+    "count": 1
+  },
+  "51d3c2ef15bdbeb3": {
+    "repo": "tai-api",
+    "fp": "51d3c2ef15bdbeb3",
+    "count": 1
+  },
+  "d76514e370d8b208": {
+    "repo": "tai-api",
+    "fp": "d76514e370d8b208",
+    "count": 1
+  },
+  "481a00a6d8339b8d": {
+    "repo": "tai-api",
+    "fp": "481a00a6d8339b8d",
+    "count": 1
+  },
+  "203d335e95421d02": {
+    "repo": "tai-api",
+    "fp": "203d335e95421d02",
+    "count": 1
+  },
+  "8372e73cc786a22b": {
+    "repo": "tai-api",
+    "fp": "8372e73cc786a22b",
+    "count": 1
+  },
+  "847f66d3fe93a786": {
+    "repo": "tai-api",
+    "fp": "847f66d3fe93a786",
+    "count": 1
+  },
+  "957f5c5b720220ac": {
+    "repo": "tai-api",
+    "fp": "957f5c5b720220ac",
+    "count": 1
+  },
+  "19b58e903a0f3e7d": {
+    "repo": "tai-api",
+    "fp": "19b58e903a0f3e7d",
+    "count": 1
+  },
+  "971b59c0ed33a422": {
+    "repo": "tai-api",
+    "fp": "971b59c0ed33a422",
+    "count": 1
+  },
+  "d15b4c2242ff77a8": {
+    "repo": "tai-api",
+    "fp": "d15b4c2242ff77a8",
+    "count": 1
+  },
+  "3a54bd524243b7cd": {
+    "repo": "tai-api",
+    "fp": "3a54bd524243b7cd",
+    "count": 2
+  },
+  "44e3e16561bea84b": {
+    "repo": "tai-api",
+    "fp": "44e3e16561bea84b",
+    "count": 2
+  },
+  "d6477a1ed7350da5": {
+    "repo": "tai-api",
+    "fp": "d6477a1ed7350da5",
+    "count": 1
+  },
+  "e956da133abfc282": {
+    "repo": "tai-api",
+    "fp": "e956da133abfc282",
+    "count": 1
+  },
+  "5720db62b927ad01": {
+    "repo": "tai-api",
+    "fp": "5720db62b927ad01",
+    "count": 1
+  },
+  "668bdcdd8a198b33": {
+    "repo": "tai-api",
+    "fp": "668bdcdd8a198b33",
+    "count": 1
+  },
+  "b37a31c5540212d6": {
+    "repo": "tai-api",
+    "fp": "b37a31c5540212d6",
+    "count": 1
+  },
+  "3903a916e2cbe62d": {
+    "repo": "tai-api",
+    "fp": "3903a916e2cbe62d",
+    "count": 1
+  },
+  "8b1a21b93ddea06f": {
+    "repo": "tai-api",
+    "fp": "8b1a21b93ddea06f",
+    "count": 1
+  },
+  "365f086f72bb3db0": {
+    "repo": "tai-api",
+    "fp": "365f086f72bb3db0",
+    "count": 1
+  },
+  "8ad1ff3dec77a220": {
+    "repo": "tai-api",
+    "fp": "8ad1ff3dec77a220",
+    "count": 1
+  },
+  "a88edb64e9b65e8a": {
+    "repo": "tai-api",
+    "fp": "a88edb64e9b65e8a",
+    "count": 1
+  },
+  "d3edc52193e4c2ed": {
+    "repo": "tai-api",
+    "fp": "d3edc52193e4c2ed",
+    "count": 1
+  },
+  "132890b5774676d7": {
+    "repo": "tai-api",
+    "fp": "132890b5774676d7",
+    "count": 1
+  },
+  "ce43a58f3e6b0510": {
+    "repo": "tai-api",
+    "fp": "ce43a58f3e6b0510",
+    "count": 1
+  },
+  "e64024af769a7753": {
+    "repo": "tai-api",
+    "fp": "e64024af769a7753",
+    "count": 1
+  },
+  "14217fea7a26683f": {
+    "repo": "tai-api",
+    "fp": "14217fea7a26683f",
+    "count": 1
+  },
+  "c4369429e1592954": {
+    "repo": "tai-api",
+    "fp": "c4369429e1592954",
+    "count": 1
+  },
+  "717a27b23d20558e": {
+    "repo": "tai-api",
+    "fp": "717a27b23d20558e",
+    "count": 1
+  },
+  "5427fd988f73a705": {
+    "repo": "tai-api",
+    "fp": "5427fd988f73a705",
+    "count": 1
+  },
+  "866b27513c3c9c83": {
+    "repo": "tai-api",
+    "fp": "866b27513c3c9c83",
+    "count": 1
+  },
+  "8dc118f951154f95": {
+    "repo": "tai-api",
+    "fp": "8dc118f951154f95",
+    "count": 1
+  },
+  "1f312afe7f26bff0": {
+    "repo": "tai-api",
+    "fp": "1f312afe7f26bff0",
+    "count": 1
+  },
+  "12dd9499311d84ef": {
+    "repo": "tai-api",
+    "fp": "12dd9499311d84ef",
+    "count": 1
+  },
+  "5dbd69c8c433c8be": {
+    "repo": "tai-api",
+    "fp": "5dbd69c8c433c8be",
+    "count": 1
+  },
+  "dd3a88f822be3a1e": {
+    "repo": "tai-api",
+    "fp": "dd3a88f822be3a1e",
+    "count": 1
+  },
+  "55f953b98d3fdf09": {
+    "repo": "tai-api",
+    "fp": "55f953b98d3fdf09",
+    "count": 1
+  },
+  "9c3feebcee5a4966": {
+    "repo": "tai-api",
+    "fp": "9c3feebcee5a4966",
+    "count": 1
+  },
+  "99375d75888e26c3": {
+    "repo": "tai-api",
+    "fp": "99375d75888e26c3",
+    "count": 1
+  },
+  "13901b0bb50756c7": {
+    "repo": "tai-api",
+    "fp": "13901b0bb50756c7",
+    "count": 1
+  },
+  "2276be0f1693497a": {
+    "repo": "tai-api",
+    "fp": "2276be0f1693497a",
+    "count": 1
+  },
+  "4b820fd1d53b80d0": {
+    "repo": "tai-api",
+    "fp": "4b820fd1d53b80d0",
+    "count": 1
+  },
+  "01f501ba4b4644ee": {
+    "repo": "tai-api",
+    "fp": "01f501ba4b4644ee",
+    "count": 1
+  },
+  "e099ea7726a47a1e": {
+    "repo": "tai-api",
+    "fp": "e099ea7726a47a1e",
+    "count": 1
+  },
+  "0a1e28984e7f15d4": {
+    "repo": "tai-api",
+    "fp": "0a1e28984e7f15d4",
+    "count": 1
+  },
+  "5c2c51db1da2bef0": {
+    "repo": "tai-api",
+    "fp": "5c2c51db1da2bef0",
+    "count": 1
+  },
+  "a4e9895bee40726f": {
+    "repo": "tai-api",
+    "fp": "a4e9895bee40726f",
+    "count": 1
+  },
+  "db30cd825c7437c5": {
+    "repo": "tai-api",
+    "fp": "db30cd825c7437c5",
+    "count": 1
+  },
+  "51b159ec883cfdc0": {
+    "repo": "tai-api",
+    "fp": "51b159ec883cfdc0",
+    "count": 1
+  },
+  "b6b0a0300d614c11": {
+    "repo": "tai-api",
+    "fp": "b6b0a0300d614c11",
+    "count": 2
+  },
+  "b7f6a8000f7abeb8": {
+    "repo": "tai-api",
+    "fp": "b7f6a8000f7abeb8",
+    "count": 18
+  },
+  "f2d499f1409fb0a3": {
+    "repo": "tai-api",
+    "fp": "f2d499f1409fb0a3",
+    "count": 2
+  },
+  "6f40525c7baf38f1": {
+    "repo": "tai-api",
+    "fp": "6f40525c7baf38f1",
+    "count": 2
+  },
+  "65165732a4d8fad4": {
+    "repo": "tai-api",
+    "fp": "65165732a4d8fad4",
+    "count": 1
+  },
+  "2d46e19c2aafe3a6": {
+    "repo": "tai-api",
+    "fp": "2d46e19c2aafe3a6",
+    "count": 1
+  },
+  "9a9666b9ba5f3f62": {
+    "repo": "tai-api",
+    "fp": "9a9666b9ba5f3f62",
+    "count": 1
+  },
+  "a37d493907df7bf0": {
+    "repo": "tai-api",
+    "fp": "a37d493907df7bf0",
+    "count": 1
+  },
+  "071f42d4e5e912b8": {
+    "repo": "tai-api",
+    "fp": "071f42d4e5e912b8",
+    "count": 2
+  },
+  "51ec8f4b25a19da5": {
+    "repo": "tai-api",
+    "fp": "51ec8f4b25a19da5",
+    "count": 1
+  },
+  "4c1028e4494d40c8": {
+    "repo": "tai-api",
+    "fp": "4c1028e4494d40c8",
+    "count": 1
+  },
+  "be720cd9b1ca5f7b": {
+    "repo": "tai-api",
+    "fp": "be720cd9b1ca5f7b",
+    "count": 1
+  },
+  "fb54b84926922cb8": {
+    "repo": "tai-api",
+    "fp": "fb54b84926922cb8",
+    "count": 2
+  },
+  "9b61d03daf802e00": {
+    "repo": "tai-api",
+    "fp": "9b61d03daf802e00",
+    "count": 1
+  },
+  "94bb61d14ac6dbf6": {
+    "repo": "tai-api",
+    "fp": "94bb61d14ac6dbf6",
+    "count": 1
+  },
+  "7ca7ac413fce3a22": {
+    "repo": "tai-api",
+    "fp": "7ca7ac413fce3a22",
+    "count": 1
+  },
+  "96159bc4f4370fd4": {
+    "repo": "tai-api",
+    "fp": "96159bc4f4370fd4",
+    "count": 1
+  },
+  "daff51ec9677422d": {
+    "repo": "tai-api",
+    "fp": "daff51ec9677422d",
+    "count": 1
+  },
+  "87049dc3d58ada2c": {
+    "repo": "tai-api",
+    "fp": "87049dc3d58ada2c",
+    "count": 1
+  },
+  "e47dc1f96926af57": {
+    "repo": "tai-api",
+    "fp": "e47dc1f96926af57",
+    "count": 1
+  },
+  "de03a0ab3a20b754": {
+    "repo": "tai-api",
+    "fp": "de03a0ab3a20b754",
+    "count": 1
+  },
+  "062d1c1cc88c9632": {
+    "repo": "tai-api",
+    "fp": "062d1c1cc88c9632",
+    "count": 1
+  },
+  "f0a15335016bc1ed": {
+    "repo": "tai-api",
+    "fp": "f0a15335016bc1ed",
+    "count": 1
+  },
+  "89c6a58986b20670": {
+    "repo": "tai-api",
+    "fp": "89c6a58986b20670",
+    "count": 1
+  },
+  "a099f18915eda7e6": {
+    "repo": "tai-api",
+    "fp": "a099f18915eda7e6",
+    "count": 1
+  },
+  "8b393ffb50e43aa0": {
+    "repo": "tai-api",
+    "fp": "8b393ffb50e43aa0",
+    "count": 1
+  },
+  "df29a24a262beb0e": {
+    "repo": "tai-api",
+    "fp": "df29a24a262beb0e",
+    "count": 1
+  },
+  "9194515d6257075a": {
+    "repo": "tai-api",
+    "fp": "9194515d6257075a",
+    "count": 1
+  },
+  "50eff09e2a2346c1": {
+    "repo": "tai-api",
+    "fp": "50eff09e2a2346c1",
+    "count": 1
+  },
+  "4ae6f3de61eeea29": {
+    "repo": "tai-api",
+    "fp": "4ae6f3de61eeea29",
+    "count": 1
+  },
+  "73b64ba3e904e7ee": {
+    "repo": "tai-api",
+    "fp": "73b64ba3e904e7ee",
+    "count": 1
+  },
+  "49a5e617d4544852": {
+    "repo": "tai-api",
+    "fp": "49a5e617d4544852",
+    "count": 1
+  },
+  "bf61501c8edfd4ce": {
+    "repo": "tai-api",
+    "fp": "bf61501c8edfd4ce",
+    "count": 1
+  },
+  "faa4ec44f186500f": {
+    "repo": "tai-api",
+    "fp": "faa4ec44f186500f",
+    "count": 4
+  },
+  "425ab5c139768f14": {
+    "repo": "tai-api",
+    "fp": "425ab5c139768f14",
+    "count": 4
+  },
+  "b6b6357b5f265e73": {
+    "repo": "tai-api",
+    "fp": "b6b6357b5f265e73",
+    "count": 2
+  },
+  "ad07d51772438c94": {
+    "repo": "tai-api",
+    "fp": "ad07d51772438c94",
+    "count": 2
+  },
+  "a684551d4197471b": {
+    "repo": "tai-api",
+    "fp": "a684551d4197471b",
     "count": 3
   },
-  "601231214b647da0": {
-    "rule": "PY_DIRECT_NOW",
+  "a9c4e9de33e0ce4a": {
     "repo": "tai-api",
-    "file": "services/anonymous_factory_service.py",
-    "symbol": "run_anonymous_diagnosis",
-    "fp": "601231214b647da0",
-    "count": 1
-  },
-  "a43c632e91ddac40": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/credit_svc.py",
-    "symbol": "_active_credits",
-    "fp": "a43c632e91ddac40",
-    "count": 1
-  },
-  "a5a5996e1d0867d4": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/notice_svc.py",
-    "symbol": "_now_iso",
-    "fp": "a5a5996e1d0867d4",
-    "count": 1
-  },
-  "8619c13bf31a1bd2": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "services/education_assignment_svc.py",
-    "symbol": "expire_overdue_education_assignments",
-    "fp": "8619c13bf31a1bd2",
-    "count": 1
-  },
-  "e4b7246522f95358": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/education_assignment_svc.py",
-    "symbol": "expire_overdue_education_assignments",
-    "fp": "e4b7246522f95358",
-    "count": 1
-  },
-  "571e54b78456bbe0": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "services/holiday_sync_svc.py",
-    "symbol": "sync_current_and_next",
-    "fp": "571e54b78456bbe0",
-    "count": 1
-  },
-  "1d76243e2cfbddc9": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/automation_svc.py",
-    "symbol": "close_ops_task",
-    "fp": "1d76243e2cfbddc9",
-    "count": 1
-  },
-  "5e250a72fc7b6365": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/automation_svc.py",
-    "symbol": "scan_expiring_subscriptions",
-    "fp": "5e250a72fc7b6365",
-    "count": 1
-  },
-  "ac64f4ac4ec68714": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/saas_setup_service.py",
-    "symbol": "approve",
-    "fp": "ac64f4ac4ec68714",
-    "count": 1
-  },
-  "f974014b2b344ed5": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/equipment_helpers.py",
-    "symbol": "_now_iso",
-    "fp": "f974014b2b344ed5",
-    "count": 1
-  },
-  "1ee8556d190f50ec": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/health_registry.py",
-    "symbol": "build_alert_message_ko",
-    "fp": "1ee8556d190f50ec",
-    "count": 1
-  },
-  "a011c7aa9ab76bf2": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/ops_home_svc.py",
-    "symbol": "_today_start_iso",
-    "fp": "a011c7aa9ab76bf2",
-    "count": 1
-  },
-  "19fffd084b11d80f": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/ops_home_svc.py",
-    "symbol": "_month_start_iso",
-    "fp": "19fffd084b11d80f",
-    "count": 1
-  },
-  "d7931dd2ec4ad1b9": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/ops_home_svc.py",
-    "symbol": "_days_ago_iso",
-    "fp": "d7931dd2ec4ad1b9",
-    "count": 1
-  },
-  "d0a7883bcd8f0029": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/ops_home_svc.py",
-    "symbol": "get_home",
-    "fp": "d0a7883bcd8f0029",
-    "count": 1
-  },
-  "44cdd127c819c9f6": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/contract_helpers.py",
-    "symbol": "_now_iso",
-    "fp": "44cdd127c819c9f6",
-    "count": 1
-  },
-  "4ca091971f58d859": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "services/runtime_cockpit_service.py",
-    "symbol": "get_cockpit_tasks",
-    "fp": "4ca091971f58d859",
-    "count": 1
-  },
-  "6976426432614a6a": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "services/runtime_cockpit_service.py",
-    "symbol": "get_task_detail",
-    "fp": "6976426432614a6a",
-    "count": 1
-  },
-  "557aafd80260cf30": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/rule_gen_reparse.py",
-    "symbol": "_run_reparse_background",
-    "fp": "557aafd80260cf30",
+    "fp": "a9c4e9de33e0ce4a",
     "count": 3
   },
-  "fdd5354591f2a9d4": {
-    "rule": "PY_DIRECT_NOW",
+  "c34d5622e6e6aea4": {
     "repo": "tai-api",
-    "file": "services/stats_fulfillment_svc.py",
-    "symbol": "_now",
-    "fp": "fdd5354591f2a9d4",
+    "fp": "c34d5622e6e6aea4",
     "count": 1
   },
-  "e452cb3c458812bf": {
-    "rule": "PY_DIRECT_NOW",
+  "7a3cb1f57d6b79c4": {
     "repo": "tai-api",
-    "file": "services/stats_ops_svc.py",
-    "symbol": "_now",
-    "fp": "e452cb3c458812bf",
+    "fp": "7a3cb1f57d6b79c4",
     "count": 1
   },
-  "dae2825e86ce7d19": {
-    "rule": "PY_DIRECT_NOW",
+  "62bb9051d9fbeb9d": {
     "repo": "tai-api",
-    "file": "services/legal_v510_svc.py",
-    "symbol": "run_diagnose_step1_v510",
-    "fp": "dae2825e86ce7d19",
-    "count": 1
+    "fp": "62bb9051d9fbeb9d",
+    "count": 3
   },
-  "14f58dac82f1cc4e": {
-    "rule": "PY_DIRECT_NOW",
+  "b69d0194163257eb": {
     "repo": "tai-api",
-    "file": "services/legal_v510_svc.py",
-    "symbol": "run_diagnose_step2_v510",
-    "fp": "14f58dac82f1cc4e",
-    "count": 1
+    "fp": "b69d0194163257eb",
+    "count": 3
   },
-  "e85d1c0f42249e82": {
-    "rule": "PY_DIRECT_NOW",
+  "b50697fe28b271d4": {
     "repo": "tai-api",
-    "file": "services/residual_intelligence.py",
-    "symbol": "_now",
-    "fp": "e85d1c0f42249e82",
-    "count": 1
-  },
-  "d891fe11c94a828f": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/residual_intelligence.py",
-    "symbol": "apply_update",
-    "fp": "d891fe11c94a828f",
-    "count": 1
-  },
-  "bb643492c3e1f969": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/legal_engine_svc.py",
-    "symbol": "run_diagnose_step1",
-    "fp": "bb643492c3e1f969",
-    "count": 1
-  },
-  "96f86aed52a42d12": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/document_engine_svc.py",
-    "symbol": "create_document",
-    "fp": "96f86aed52a42d12",
-    "count": 1
-  },
-  "a85ab615e0678ddb": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/document_engine_svc.py",
-    "symbol": "update_document",
-    "fp": "a85ab615e0678ddb",
-    "count": 1
-  },
-  "1bc8cc4d54c7d449": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/document_engine_svc.py",
-    "symbol": "change_status",
-    "fp": "1bc8cc4d54c7d449",
-    "count": 1
-  },
-  "2becb22719f49ecd": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/legal_helpers.py",
-    "symbol": "_now_iso",
-    "fp": "2becb22719f49ecd",
-    "count": 1
-  },
-  "2940ae78402c3966": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "services/ra_policy_svc.py",
-    "symbol": "list_params",
-    "fp": "2940ae78402c3966",
-    "count": 1
-  },
-  "71bba39c88a260ab": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/stats_dashboard_svc.py",
-    "symbol": "_since_iso",
-    "fp": "71bba39c88a260ab",
-    "count": 1
-  },
-  "3a36e9f980f0fe6d": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/stats_dashboard_svc.py",
-    "symbol": "_date_axis",
-    "fp": "3a36e9f980f0fe6d",
-    "count": 1
-  },
-  "0ed581f0e5d69a3b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/stats_dashboard_svc.py",
-    "symbol": "get_dashboard",
-    "fp": "0ed581f0e5d69a3b",
-    "count": 1
-  },
-  "e784d4dc5ddac548": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/matching_helpers.py",
-    "symbol": "now_iso",
-    "fp": "e784d4dc5ddac548",
-    "count": 1
-  },
-  "15ca754bad10d5e8": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/payment_helpers.py",
-    "symbol": "ts_yyyymmddhhmmss",
-    "fp": "15ca754bad10d5e8",
-    "count": 1
-  },
-  "93768bb775b55574": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/payment_helpers.py",
-    "symbol": "make_order_id",
-    "fp": "93768bb775b55574",
-    "count": 1
-  },
-  "7e6d1787129d9309": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/payment_helpers.py",
-    "symbol": "now_iso",
-    "fp": "7e6d1787129d9309",
-    "count": 1
-  },
-  "a2d73f18a793f319": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/stats_workers_svc.py",
-    "symbol": "_now",
-    "fp": "a2d73f18a793f319",
-    "count": 1
-  },
-  "64504f7b4d0c5293": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/admin_review.py",
-    "symbol": "approve",
-    "fp": "64504f7b4d0c5293",
-    "count": 1
-  },
-  "44f80f9a1f80446d": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/admin_review.py",
-    "symbol": "create",
-    "fp": "44f80f9a1f80446d",
-    "count": 1
-  },
-  "a6c478b3b89d62cb": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/admin_review.py",
-    "symbol": "add_token",
-    "fp": "a6c478b3b89d62cb",
-    "count": 1
-  },
-  "8733dc420b563112": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/rule_gen_svc.py",
-    "symbol": "_auto_approve_to_master",
-    "fp": "8733dc420b563112",
-    "count": 1
-  },
-  "a8a58d23076da8cc": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/rule_gen_svc.py",
-    "symbol": "run_parse_article",
-    "fp": "a8a58d23076da8cc",
-    "count": 1
-  },
-  "30f35791a4d361e6": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/rule_gen_svc.py",
-    "symbol": "run_parse_batch",
-    "fp": "30f35791a4d361e6",
-    "count": 1
-  },
-  "2e62ea844bdbd6d3": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/rule_gen_svc.py",
-    "symbol": "run_auto_parse_and_approve",
-    "fp": "2e62ea844bdbd6d3",
-    "count": 1
-  },
-  "3db2f31f4d9b6b5c": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/rule_gen_svc.py",
-    "symbol": "run_bulk_approve_unregistered",
-    "fp": "3db2f31f4d9b6b5c",
+    "fp": "b50697fe28b271d4",
     "count": 2
   },
-  "20eb4616028a55e2": {
-    "rule": "PY_DIRECT_NOW",
+  "14563fa1818a5a3a": {
     "repo": "tai-api",
-    "file": "services/diagnosis_runtime_step1.py",
-    "symbol": "run_diagnose_step1_runtime",
-    "fp": "20eb4616028a55e2",
-    "count": 1
-  },
-  "09eb2fc562fc962b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/stats_overview_svc.py",
-    "symbol": "_now",
-    "fp": "09eb2fc562fc962b",
-    "count": 1
-  },
-  "7939372d90006d64": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/helpcenter_svc.py",
-    "symbol": "feedback_summary",
-    "fp": "7939372d90006d64",
-    "count": 1
-  },
-  "3523b31f0ca9b626": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/helpcenter_svc.py",
-    "symbol": "zero_result_terms",
-    "fp": "3523b31f0ca9b626",
-    "count": 1
-  },
-  "f3db02e68ebc92a8": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/diagnosis_helpers.py",
-    "symbol": "_now",
-    "fp": "f3db02e68ebc92a8",
-    "count": 1
-  },
-  "f60647060e9928de": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/semantic_diagnosis_service.py",
-    "symbol": "run_semantic_diagnosis",
-    "fp": "f60647060e9928de",
-    "count": 1
-  },
-  "e918e33adcb0c671": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "services/ra_continuous_svc.py",
-    "symbol": "judge_continuous",
-    "fp": "e918e33adcb0c671",
-    "count": 1
-  },
-  "afa382e21f53f4eb": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/payment_post_process.py",
-    "symbol": "_gen_contract_no",
-    "fp": "afa382e21f53f4eb",
-    "count": 1
-  },
-  "7e998153c27a39cc": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "services/payment_post_process.py",
-    "symbol": "_activate_existing_contract",
-    "fp": "7e998153c27a39cc",
-    "count": 1
-  },
-  "92637e8484ee0525": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "services/payment_post_process.py",
-    "symbol": "_extend_contract_for_renewal",
-    "fp": "92637e8484ee0525",
+    "fp": "14563fa1818a5a3a",
     "count": 2
   },
-  "2b4d923a3c1585ce": {
-    "rule": "PY_DATE_TODAY",
+  "4501305e0ccc2e1f": {
     "repo": "tai-api",
-    "file": "services/payment_post_process.py",
-    "symbol": "_create_contract_from_payment",
-    "fp": "2b4d923a3c1585ce",
-    "count": 1
+    "fp": "4501305e0ccc2e1f",
+    "count": 4
   },
-  "81bc0b27c9154e44": {
-    "rule": "PY_DATE_TODAY",
+  "20d765fd976647e3": {
     "repo": "tai-api",
-    "file": "services/legal_runtime.py",
-    "symbol": "_create_report_events_from_rules",
-    "fp": "81bc0b27c9154e44",
+    "fp": "20d765fd976647e3",
+    "count": 4
+  },
+  "13ced018d3717b39": {
+    "repo": "tai-api",
+    "fp": "13ced018d3717b39",
+    "count": 6
+  },
+  "2a6d3df00330f567": {
+    "repo": "tai-api",
+    "fp": "2a6d3df00330f567",
+    "count": 6
+  },
+  "feab1c84dc69d8c4": {
+    "repo": "tai-api",
+    "fp": "feab1c84dc69d8c4",
     "count": 2
   },
-  "df244e5908fbaf2e": {
-    "rule": "PY_DIRECT_NOW",
+  "4e1eb948238f4f8a": {
     "repo": "tai-api",
-    "file": "services/upload_service.py",
-    "symbol": "upload_inspection_photo",
-    "fp": "df244e5908fbaf2e",
-    "count": 1
-  },
-  "52f62e2e7740ac48": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "services/permission_guard.py",
-    "symbol": "active_entitlement",
-    "fp": "52f62e2e7740ac48",
-    "count": 1
-  },
-  "893b26de1681cda4": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/permission_guard.py",
-    "symbol": "active_entitlement",
-    "fp": "893b26de1681cda4",
-    "count": 1
-  },
-  "df607fe8ef0b18ec": {
-    "rule": "PY_UTCNOW",
-    "repo": "tai-api",
-    "file": "services/document_svc.py",
-    "symbol": "_build_path",
-    "fp": "df607fe8ef0b18ec",
-    "count": 1
-  },
-  "1e9304dfe0e58e3a": {
-    "rule": "PY_UTCNOW",
-    "repo": "tai-api",
-    "file": "services/document_svc.py",
-    "symbol": "_build_retention_until",
-    "fp": "1e9304dfe0e58e3a",
-    "count": 1
-  },
-  "db5237d972ebd89e": {
-    "rule": "PY_UTCNOW",
-    "repo": "tai-api",
-    "file": "services/document_svc.py",
-    "symbol": "soft_delete",
-    "fp": "db5237d972ebd89e",
-    "count": 1
-  },
-  "deaeae4dacd4609d": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/refinery_service.py",
-    "symbol": "build_stored_diagnosis_result",
-    "fp": "deaeae4dacd4609d",
-    "count": 1
-  },
-  "9f6eb715695432c2": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/diagnosis_integrated_svc.py",
-    "symbol": "_save_diagnosis_purchase",
-    "fp": "9f6eb715695432c2",
-    "count": 1
-  },
-  "a0704fefd792d5dd": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/diagnosis_integrated_svc.py",
-    "symbol": "sync_diagnosis_auth_log_from_inicis",
-    "fp": "a0704fefd792d5dd",
-    "count": 1
-  },
-  "b266c6a60281a34d": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/diagnosis_integrated_svc.py",
-    "symbol": "run_diagnosis",
-    "fp": "b266c6a60281a34d",
-    "count": 1
-  },
-  "b50133af57c3a66b": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/diagnosis_integrated_svc.py",
-    "symbol": "upgrade_diagnosis",
-    "fp": "b50133af57c3a66b",
-    "count": 1
-  },
-  "344c98070f7d4f05": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/invoice_svc.py",
-    "symbol": "issue_tax_invoice",
-    "fp": "344c98070f7d4f05",
-    "count": 1
-  },
-  "12e2c1e93e695623": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/invoice_svc.py",
-    "symbol": "issue_cash_receipt",
-    "fp": "12e2c1e93e695623",
-    "count": 1
-  },
-  "154f0c519cb5b839": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/safe_db_update.py",
-    "symbol": "safe_update_master",
-    "fp": "154f0c519cb5b839",
-    "count": 1
-  },
-  "46fbed65d614b258": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/workflow_integrity/evaluator/integrity_evaluator.py",
-    "symbol": "evaluate_workflow",
-    "fp": "46fbed65d614b258",
-    "count": 1
-  },
-  "b6cb236f26af5062": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/workflow_integrity/detectors/stuck_detector.py",
-    "symbol": "detect_stuck",
-    "fp": "b6cb236f26af5062",
-    "count": 1
-  },
-  "b9cbddaedb0a4b0e": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/workflow_integrity/detectors/timeout_detector.py",
-    "symbol": "detect_timeout",
-    "fp": "b9cbddaedb0a4b0e",
-    "count": 1
-  },
-  "ce1ebe12ef657f48": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/workflow_integrity/events/integrity_event_store.py",
-    "symbol": "resolve_event",
-    "fp": "ce1ebe12ef657f48",
-    "count": 1
-  },
-  "1d9517dce6c28fe7": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/inspection_sets_svc/anchors.py",
-    "symbol": "set_anchor_bulk",
-    "fp": "1d9517dce6c28fe7",
-    "count": 1
-  },
-  "e1e79c8ab65a3092": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/inspection_sets_svc/anchors.py",
-    "symbol": "bulk_update_anchors",
-    "fp": "e1e79c8ab65a3092",
-    "count": 1
-  },
-  "d30a8376cb8404a5": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/inspection_sets_svc/anchors.py",
-    "symbol": "patch_set",
-    "fp": "d30a8376cb8404a5",
-    "count": 1
-  },
-  "c50581dfcc0614b0": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/inspection_sets_svc/anchors.py",
-    "symbol": "update_anchor",
-    "fp": "c50581dfcc0614b0",
-    "count": 1
-  },
-  "f7267fe366befabb": {
-    "rule": "PY_DATE_TODAY",
-    "repo": "tai-api",
-    "file": "services/inspection_sets_svc/queries.py",
-    "symbol": "get_preview_schedule",
-    "fp": "f7267fe366befabb",
-    "count": 1
-  },
-  "8e8185351a002a78": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/document_engine/renderer.py",
-    "symbol": "render_document_html",
-    "fp": "8e8185351a002a78",
-    "count": 1
-  },
-  "83c9073679624a9a": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/matching_svc/dashboard.py",
-    "symbol": "get_dashboard_stats",
-    "fp": "83c9073679624a9a",
-    "count": 1
-  },
-  "411349e19077d19f": {
-    "rule": "PY_DIRECT_NOW",
-    "repo": "tai-api",
-    "file": "services/browser_synthetic/runner/synthetic_runner.py",
-    "symbol": "run_check",
-    "fp": "411349e19077d19f",
+    "fp": "4e1eb948238f4f8a",
     "count": 2
   },
-  "529861dabd15959b": {
-    "rule": "PY_DIRECT_NOW",
+  "e7c02fc4b2cff3e7": {
     "repo": "tai-api",
-    "file": "services/notification_engine/metrics_aggregator.py",
-    "symbol": "collect_and_record",
-    "fp": "529861dabd15959b",
+    "fp": "e7c02fc4b2cff3e7",
+    "count": 2
+  },
+  "7c72387d17de1527": {
+    "repo": "tai-api",
+    "fp": "7c72387d17de1527",
+    "count": 2
+  },
+  "b4591404a3ddc21d": {
+    "repo": "tai-api",
+    "fp": "b4591404a3ddc21d",
+    "count": 2
+  },
+  "5c7cbf0e28855fbd": {
+    "repo": "tai-api",
+    "fp": "5c7cbf0e28855fbd",
+    "count": 2
+  },
+  "490508ceb6fe5a20": {
+    "repo": "tai-api",
+    "fp": "490508ceb6fe5a20",
+    "count": 4
+  },
+  "2c43cae94a7b6966": {
+    "repo": "tai-api",
+    "fp": "2c43cae94a7b6966",
+    "count": 4
+  },
+  "0fc533b3d548551e": {
+    "repo": "tai-api",
+    "fp": "0fc533b3d548551e",
+    "count": 4
+  },
+  "dce561d57e44e438": {
+    "repo": "tai-api",
+    "fp": "dce561d57e44e438",
+    "count": 4
+  },
+  "7d3882b8be757541": {
+    "repo": "tai-api",
+    "fp": "7d3882b8be757541",
     "count": 1
   },
-  "969f49d187be6f72": {
-    "rule": "PY_DIRECT_NOW",
+  "443563f854874839": {
     "repo": "tai-api",
-    "file": "services/notification_engine/metrics_aggregator.py",
-    "symbol": "get_runtime_summary",
-    "fp": "969f49d187be6f72",
+    "fp": "443563f854874839",
     "count": 1
   },
-  "0453d3e10db20112": {
-    "rule": "PY_DIRECT_NOW",
+  "fdec92f4449ed061": {
     "repo": "tai-api",
-    "file": "services/notification_engine/worker.py",
-    "symbol": "process_queue",
-    "fp": "0453d3e10db20112",
+    "fp": "fdec92f4449ed061",
     "count": 1
   },
-  "356c974505e3b320": {
-    "rule": "PY_DIRECT_NOW",
+  "77273ced251eb812": {
     "repo": "tai-api",
-    "file": "services/notification_engine/worker.py",
-    "symbol": "_deliver_item",
-    "fp": "356c974505e3b320",
+    "fp": "77273ced251eb812",
+    "count": 3
+  },
+  "d1f1f584a35f194d": {
+    "repo": "tai-api",
+    "fp": "d1f1f584a35f194d",
     "count": 1
   },
-  "c646fae7efef872c": {
-    "rule": "PY_DIRECT_NOW",
+  "ff99a1e4dd6e0c7b": {
     "repo": "tai-api",
-    "file": "services/notification_engine/runtime_compat.py",
-    "symbol": "_mark_event_queued",
-    "fp": "c646fae7efef872c",
+    "fp": "ff99a1e4dd6e0c7b",
     "count": 1
   },
-  "3a1972ddce1064b8": {
-    "rule": "PY_DIRECT_NOW",
+  "4622588e9bdead35": {
     "repo": "tai-api",
-    "file": "services/notification_engine/feed_query.py",
-    "symbol": "mark_read",
-    "fp": "3a1972ddce1064b8",
+    "fp": "4622588e9bdead35",
     "count": 1
   },
-  "bff7ae227d5b413b": {
-    "rule": "PY_DIRECT_NOW",
+  "82c76e80798de55e": {
     "repo": "tai-api",
-    "file": "services/notification_engine/e2e_executor.py",
-    "symbol": "_run_normal",
-    "fp": "bff7ae227d5b413b",
+    "fp": "82c76e80798de55e",
     "count": 1
   },
-  "df9ef424f71198f5": {
-    "rule": "PY_DIRECT_NOW",
+  "e11e0a2ff5f56069": {
     "repo": "tai-api",
-    "file": "services/notification_engine/e2e_executor.py",
-    "symbol": "_run_mute",
-    "fp": "df9ef424f71198f5",
+    "fp": "e11e0a2ff5f56069",
+    "count": 3
+  },
+  "a5843d87356e7710": {
+    "repo": "tai-api",
+    "fp": "a5843d87356e7710",
+    "count": 3
+  },
+  "296dd9f7e9b1408b": {
+    "repo": "tai-api",
+    "fp": "296dd9f7e9b1408b",
+    "count": 3
+  },
+  "b920ae3081efecc4": {
+    "repo": "tai-api",
+    "fp": "b920ae3081efecc4",
     "count": 1
   },
-  "93fc166dc546650c": {
-    "rule": "PY_DIRECT_NOW",
+  "da3f644759365a02": {
     "repo": "tai-api",
-    "file": "services/notification_engine/e2e_executor.py",
-    "symbol": "_run_quiet_hour",
-    "fp": "93fc166dc546650c",
+    "fp": "da3f644759365a02",
+    "count": 4
+  },
+  "f559d93cee0a248e": {
+    "repo": "tai-api",
+    "fp": "f559d93cee0a248e",
+    "count": 4
+  },
+  "e9d13cb6ab1f122a": {
+    "repo": "tai-api",
+    "fp": "e9d13cb6ab1f122a",
     "count": 1
   },
-  "113ca8379030597a": {
-    "rule": "PY_DIRECT_NOW",
+  "730633f06c6fad49": {
     "repo": "tai-api",
-    "file": "services/notification_engine/e2e_executor.py",
-    "symbol": "_run_critical_bypass",
-    "fp": "113ca8379030597a",
+    "fp": "730633f06c6fad49",
     "count": 1
   },
-  "6a0657c3ab5dc428": {
-    "rule": "PY_DIRECT_NOW",
+  "dc135c98ff198cde": {
     "repo": "tai-api",
-    "file": "services/notification_engine/schemas.py",
-    "symbol": "to_db_row",
-    "fp": "6a0657c3ab5dc428",
+    "fp": "dc135c98ff198cde",
     "count": 1
   },
-  "a0a50e9a4f10c948": {
-    "rule": "PY_DIRECT_NOW",
+  "1195e354344024f2": {
     "repo": "tai-api",
-    "file": "services/notification_engine/pipeline.py",
-    "symbol": "_mark_event_processed",
-    "fp": "a0a50e9a4f10c948",
+    "fp": "1195e354344024f2",
     "count": 1
   },
-  "ef0b0b2e73dcbe1b": {
-    "rule": "PY_DIRECT_NOW",
+  "7d91ffbf6cb3f7ba": {
     "repo": "tai-api",
-    "file": "services/notification_engine/retry_policy.py",
-    "symbol": "calculate_next_retry_at",
-    "fp": "ef0b0b2e73dcbe1b",
+    "fp": "7d91ffbf6cb3f7ba",
     "count": 1
   },
-  "0dd7f14089707c0b": {
-    "rule": "PY_DIRECT_NOW",
+  "76693a57c2537b58": {
     "repo": "tai-api",
-    "file": "services/notification_engine/preference_service.py",
-    "symbol": "upsert_preference",
-    "fp": "0dd7f14089707c0b",
+    "fp": "76693a57c2537b58",
     "count": 1
   },
-  "a40868d4b66e8d92": {
-    "rule": "PY_DIRECT_NOW",
+  "bbc419ddeb05f58a": {
     "repo": "tai-api",
-    "file": "services/notification_engine/queue_manager.py",
-    "symbol": "create_queue_items",
-    "fp": "a40868d4b66e8d92",
+    "fp": "bbc419ddeb05f58a",
     "count": 1
   },
-  "fc1a61206d3abfa3": {
-    "rule": "PY_DIRECT_NOW",
+  "21689a9838ec5efe": {
     "repo": "tai-api",
-    "file": "services/notification_engine/adapters/delivery_result.py",
-    "symbol": "__post_init__",
-    "fp": "fc1a61206d3abfa3",
+    "fp": "21689a9838ec5efe",
     "count": 1
   },
-  "d067d3a88140a1df": {
-    "rule": "PY_DIRECT_NOW",
+  "f7c063f17606c969": {
     "repo": "tai-api",
-    "file": "services/notification_engine/adapters/in_app.py",
-    "symbol": "send_in_app",
-    "fp": "d067d3a88140a1df",
+    "fp": "f7c063f17606c969",
+    "count": 2
+  },
+  "8edfbbe4f51dbf58": {
+    "repo": "tai-api",
+    "fp": "8edfbbe4f51dbf58",
+    "count": 2
+  },
+  "52e1ba4b3ec911a5": {
+    "repo": "tai-api",
+    "fp": "52e1ba4b3ec911a5",
     "count": 1
   },
-  "b38a680461be8003": {
-    "rule": "PY_DIRECT_NOW",
+  "4ce2b2c19172745c": {
     "repo": "tai-api",
-    "file": "schedulers/situation_snapshot_generate.py",
-    "symbol": "_since_5min",
-    "fp": "b38a680461be8003",
+    "fp": "4ce2b2c19172745c",
+    "count": 1
+  },
+  "3b6018aa0f0f8baa": {
+    "repo": "tai-api",
+    "fp": "3b6018aa0f0f8baa",
+    "count": 1
+  },
+  "ae33fb7fa9deac88": {
+    "repo": "tai-api",
+    "fp": "ae33fb7fa9deac88",
+    "count": 1
+  },
+  "47e6a57e608313fa": {
+    "repo": "tai-api",
+    "fp": "47e6a57e608313fa",
+    "count": 1
+  },
+  "53396d4a1064015d": {
+    "repo": "tai-api",
+    "fp": "53396d4a1064015d",
+    "count": 4
+  },
+  "34df35d3ea297819": {
+    "repo": "tai-api",
+    "fp": "34df35d3ea297819",
+    "count": 4
+  },
+  "f3dbbfb652d63749": {
+    "repo": "tai-api",
+    "fp": "f3dbbfb652d63749",
+    "count": 1
+  },
+  "025da2f847cd94d7": {
+    "repo": "tai-api",
+    "fp": "025da2f847cd94d7",
+    "count": 1
+  },
+  "09d04a82328e480c": {
+    "repo": "tai-api",
+    "fp": "09d04a82328e480c",
+    "count": 2
+  },
+  "191708b062a2f928": {
+    "repo": "tai-api",
+    "fp": "191708b062a2f928",
+    "count": 3
+  },
+  "f6129a4c0e3f0c67": {
+    "repo": "tai-api",
+    "fp": "f6129a4c0e3f0c67",
+    "count": 3
+  },
+  "87c573246220b86d": {
+    "repo": "tai-api",
+    "fp": "87c573246220b86d",
+    "count": 3
+  },
+  "11a63c3381c7f547": {
+    "repo": "tai-api",
+    "fp": "11a63c3381c7f547",
+    "count": 1
+  },
+  "544b59faf383f781": {
+    "repo": "tai-api",
+    "fp": "544b59faf383f781",
+    "count": 1
+  },
+  "bec1b0e07a019cdc": {
+    "repo": "tai-api",
+    "fp": "bec1b0e07a019cdc",
+    "count": 1
+  },
+  "cfcb0b26cb5f748c": {
+    "repo": "tai-api",
+    "fp": "cfcb0b26cb5f748c",
+    "count": 1
+  },
+  "446bcbb2c8737cda": {
+    "repo": "tai-api",
+    "fp": "446bcbb2c8737cda",
+    "count": 2
+  },
+  "449b20078de4e0cf": {
+    "repo": "tai-api",
+    "fp": "449b20078de4e0cf",
+    "count": 2
+  },
+  "3d92a9aa10a4e198": {
+    "repo": "tai-api",
+    "fp": "3d92a9aa10a4e198",
+    "count": 2
+  },
+  "83489a8cdfacdd90": {
+    "repo": "tai-api",
+    "fp": "83489a8cdfacdd90",
+    "count": 1
+  },
+  "3b76cb346dcb5f7b": {
+    "repo": "tai-api",
+    "fp": "3b76cb346dcb5f7b",
+    "count": 3
+  },
+  "ad6cf6f1c81ba2ac": {
+    "repo": "tai-api",
+    "fp": "ad6cf6f1c81ba2ac",
+    "count": 3
+  },
+  "0af8b1f87025e136": {
+    "repo": "tai-api",
+    "fp": "0af8b1f87025e136",
+    "count": 1
+  },
+  "bfdbe8274c97423f": {
+    "repo": "tai-api",
+    "fp": "bfdbe8274c97423f",
+    "count": 1
+  },
+  "e36a1d300372b02e": {
+    "repo": "tai-api",
+    "fp": "e36a1d300372b02e",
+    "count": 1
+  },
+  "88f52423765d72a2": {
+    "repo": "tai-api",
+    "fp": "88f52423765d72a2",
+    "count": 3
+  },
+  "29d7f9d1be5b52a2": {
+    "repo": "tai-api",
+    "fp": "29d7f9d1be5b52a2",
+    "count": 3
+  },
+  "9eb53f9eb24e6704": {
+    "repo": "tai-api",
+    "fp": "9eb53f9eb24e6704",
+    "count": 1
+  },
+  "20f397228ea03762": {
+    "repo": "tai-api",
+    "fp": "20f397228ea03762",
+    "count": 1
+  },
+  "413e8c7dc8114b67": {
+    "repo": "tai-api",
+    "fp": "413e8c7dc8114b67",
+    "count": 1
+  },
+  "f077df68afbb4e50": {
+    "repo": "tai-api",
+    "fp": "f077df68afbb4e50",
+    "count": 3
+  },
+  "6419e078d8cf2c7f": {
+    "repo": "tai-api",
+    "fp": "6419e078d8cf2c7f",
+    "count": 1
+  },
+  "16093dded59d595b": {
+    "repo": "tai-api",
+    "fp": "16093dded59d595b",
+    "count": 1
+  },
+  "5f0d5f56bf7525d6": {
+    "repo": "tai-api",
+    "fp": "5f0d5f56bf7525d6",
+    "count": 1
+  },
+  "3e943817a6a8d07a": {
+    "repo": "tai-api",
+    "fp": "3e943817a6a8d07a",
+    "count": 3
+  },
+  "0b0636b08fcf59e3": {
+    "repo": "tai-api",
+    "fp": "0b0636b08fcf59e3",
+    "count": 3
+  },
+  "23ac5e56bf7b7ffd": {
+    "repo": "tai-api",
+    "fp": "23ac5e56bf7b7ffd",
+    "count": 6
+  },
+  "66f9a84b4806176d": {
+    "repo": "tai-api",
+    "fp": "66f9a84b4806176d",
+    "count": 6
+  },
+  "1fd0b939e08a5988": {
+    "repo": "tai-api",
+    "fp": "1fd0b939e08a5988",
+    "count": 1
+  },
+  "062e61070f6b90a1": {
+    "repo": "tai-api",
+    "fp": "062e61070f6b90a1",
+    "count": 1
+  },
+  "f83342b36802a343": {
+    "repo": "tai-api",
+    "fp": "f83342b36802a343",
+    "count": 1
+  },
+  "ae84b27cb8aed9c1": {
+    "repo": "tai-api",
+    "fp": "ae84b27cb8aed9c1",
+    "count": 2
+  },
+  "7e035a0062d89262": {
+    "repo": "tai-api",
+    "fp": "7e035a0062d89262",
+    "count": 2
+  },
+  "8f31490d82b76096": {
+    "repo": "tai-api",
+    "fp": "8f31490d82b76096",
+    "count": 1
+  },
+  "3db98d9fca0c8c3b": {
+    "repo": "tai-api",
+    "fp": "3db98d9fca0c8c3b",
+    "count": 1
+  },
+  "9a0247b673e5bd9e": {
+    "repo": "tai-api",
+    "fp": "9a0247b673e5bd9e",
+    "count": 1
+  },
+  "b53e515dc15aa66b": {
+    "repo": "tai-api",
+    "fp": "b53e515dc15aa66b",
+    "count": 1
+  },
+  "5885d6805d6c7267": {
+    "repo": "tai-api",
+    "fp": "5885d6805d6c7267",
+    "count": 1
+  },
+  "714567a10b1d3186": {
+    "repo": "tai-api",
+    "fp": "714567a10b1d3186",
+    "count": 1
+  },
+  "0d69f37029598080": {
+    "repo": "tai-api",
+    "fp": "0d69f37029598080",
+    "count": 4
+  },
+  "1b5627bdbcfc3c10": {
+    "repo": "tai-api",
+    "fp": "1b5627bdbcfc3c10",
+    "count": 2
+  },
+  "b7ad9bfdcb8a87b6": {
+    "repo": "tai-api",
+    "fp": "b7ad9bfdcb8a87b6",
+    "count": 1
+  },
+  "779cd883e3cd8485": {
+    "repo": "tai-api",
+    "fp": "779cd883e3cd8485",
+    "count": 1
+  },
+  "0c8aa2b35118f29d": {
+    "repo": "tai-api",
+    "fp": "0c8aa2b35118f29d",
+    "count": 1
+  },
+  "1ef23df4e5eca437": {
+    "repo": "tai-api",
+    "fp": "1ef23df4e5eca437",
+    "count": 1
+  },
+  "8ac1e3b26d490f3e": {
+    "repo": "tai-api",
+    "fp": "8ac1e3b26d490f3e",
+    "count": 1
+  },
+  "98dcef88f6e878a0": {
+    "repo": "tai-api",
+    "fp": "98dcef88f6e878a0",
+    "count": 3
+  },
+  "96d014e5e042d4cc": {
+    "repo": "tai-api",
+    "fp": "96d014e5e042d4cc",
+    "count": 1
+  },
+  "eee121bd5907d2de": {
+    "repo": "tai-api",
+    "fp": "eee121bd5907d2de",
+    "count": 1
+  },
+  "4604c22c90b8d92f": {
+    "repo": "tai-api",
+    "fp": "4604c22c90b8d92f",
+    "count": 4
+  },
+  "a7488ab72fc66efc": {
+    "repo": "tai-api",
+    "fp": "a7488ab72fc66efc",
+    "count": 4
+  },
+  "d45376d56d401652": {
+    "repo": "tai-api",
+    "fp": "d45376d56d401652",
+    "count": 2
+  },
+  "00c38f81d770864b": {
+    "repo": "tai-api",
+    "fp": "00c38f81d770864b",
+    "count": 1
+  },
+  "602a8df4fc26c41d": {
+    "repo": "tai-api",
+    "fp": "602a8df4fc26c41d",
+    "count": 1
+  },
+  "8c9ec950645e7d50": {
+    "repo": "tai-api",
+    "fp": "8c9ec950645e7d50",
+    "count": 1
+  },
+  "b5ab2d13cea197b1": {
+    "repo": "tai-api",
+    "fp": "b5ab2d13cea197b1",
+    "count": 1
+  },
+  "7256c93a036ae531": {
+    "repo": "tai-api",
+    "fp": "7256c93a036ae531",
+    "count": 1
+  },
+  "49043ac3dd152ff9": {
+    "repo": "tai-api",
+    "fp": "49043ac3dd152ff9",
+    "count": 1
+  },
+  "6ce09cccae22b3ec": {
+    "repo": "tai-api",
+    "fp": "6ce09cccae22b3ec",
+    "count": 1
+  },
+  "e6d83e50c36cb5d6": {
+    "repo": "tai-api",
+    "fp": "e6d83e50c36cb5d6",
+    "count": 1
+  },
+  "daf5347856cb488d": {
+    "repo": "tai-api",
+    "fp": "daf5347856cb488d",
+    "count": 1
+  },
+  "bd3b1f0f7b629396": {
+    "repo": "tai-api",
+    "fp": "bd3b1f0f7b629396",
+    "count": 1
+  },
+  "23bc441384fea9da": {
+    "repo": "tai-api",
+    "fp": "23bc441384fea9da",
+    "count": 4
+  },
+  "bd19ee63737b3376": {
+    "repo": "tai-api",
+    "fp": "bd19ee63737b3376",
+    "count": 1
+  },
+  "e0ef6490e0a7da7d": {
+    "repo": "tai-api",
+    "fp": "e0ef6490e0a7da7d",
+    "count": 1
+  },
+  "285df5c6d0842616": {
+    "repo": "tai-api",
+    "fp": "285df5c6d0842616",
+    "count": 1
+  },
+  "2a46ab2f8bf8a9d8": {
+    "repo": "tai-api",
+    "fp": "2a46ab2f8bf8a9d8",
+    "count": 1
+  },
+  "a964e99fb3207414": {
+    "repo": "tai-api",
+    "fp": "a964e99fb3207414",
+    "count": 2
+  },
+  "671837bd8405d359": {
+    "repo": "tai-api",
+    "fp": "671837bd8405d359",
+    "count": 2
+  },
+  "48acfe6ebffed22d": {
+    "repo": "tai-api",
+    "fp": "48acfe6ebffed22d",
+    "count": 2
+  },
+  "462694455717d55c": {
+    "repo": "tai-api",
+    "fp": "462694455717d55c",
+    "count": 2
+  },
+  "76fc04b0aaee2334": {
+    "repo": "tai-api",
+    "fp": "76fc04b0aaee2334",
+    "count": 2
+  },
+  "c3edece2e942c446": {
+    "repo": "tai-api",
+    "fp": "c3edece2e942c446",
+    "count": 2
+  },
+  "daed82006d954c67": {
+    "repo": "tai-api",
+    "fp": "daed82006d954c67",
+    "count": 1
+  },
+  "8320fd0127c5db7f": {
+    "repo": "tai-api",
+    "fp": "8320fd0127c5db7f",
+    "count": 1
+  },
+  "9efbaf024d287d16": {
+    "repo": "tai-api",
+    "fp": "9efbaf024d287d16",
+    "count": 1
+  },
+  "8d1c0c696b2852a1": {
+    "repo": "tai-api",
+    "fp": "8d1c0c696b2852a1",
+    "count": 1
+  },
+  "b5d5758afe1cd9c6": {
+    "repo": "tai-api",
+    "fp": "b5d5758afe1cd9c6",
+    "count": 4
+  },
+  "922e7a4fe6ab4a3e": {
+    "repo": "tai-api",
+    "fp": "922e7a4fe6ab4a3e",
+    "count": 4
+  },
+  "b53ecef8d98f3475": {
+    "repo": "tai-api",
+    "fp": "b53ecef8d98f3475",
+    "count": 1
+  },
+  "b052a3c8cf5d3b1e": {
+    "repo": "tai-api",
+    "fp": "b052a3c8cf5d3b1e",
+    "count": 1
+  },
+  "fec5d84a045abb47": {
+    "repo": "tai-api",
+    "fp": "fec5d84a045abb47",
+    "count": 1
+  },
+  "14858d62c3b8a8e2": {
+    "repo": "tai-api",
+    "fp": "14858d62c3b8a8e2",
+    "count": 1
+  },
+  "d1289aefd1e58b38": {
+    "repo": "tai-api",
+    "fp": "d1289aefd1e58b38",
+    "count": 1
+  },
+  "0e6e694c411a0266": {
+    "repo": "tai-api",
+    "fp": "0e6e694c411a0266",
+    "count": 1
+  },
+  "68ce9a83b2dc8050": {
+    "repo": "tai-api",
+    "fp": "68ce9a83b2dc8050",
+    "count": 1
+  },
+  "525e44ed392e0277": {
+    "repo": "tai-api",
+    "fp": "525e44ed392e0277",
+    "count": 1
+  },
+  "02199acea03302fc": {
+    "repo": "tai-api",
+    "fp": "02199acea03302fc",
+    "count": 1
+  },
+  "4e37e42dfa6d626f": {
+    "repo": "tai-api",
+    "fp": "4e37e42dfa6d626f",
+    "count": 1
+  },
+  "5281d488f4390e07": {
+    "repo": "tai-api",
+    "fp": "5281d488f4390e07",
+    "count": 1
+  },
+  "529e82a957f43ed4": {
+    "repo": "tai-api",
+    "fp": "529e82a957f43ed4",
+    "count": 1
+  },
+  "f85b3be8cc416e51": {
+    "repo": "tai-api",
+    "fp": "f85b3be8cc416e51",
+    "count": 1
+  },
+  "22494dfb411af50e": {
+    "repo": "tai-api",
+    "fp": "22494dfb411af50e",
+    "count": 1
+  },
+  "2847bcc9cb9c09e1": {
+    "repo": "tai-api",
+    "fp": "2847bcc9cb9c09e1",
+    "count": 1
+  },
+  "f394e68dec1f079e": {
+    "repo": "tai-api",
+    "fp": "f394e68dec1f079e",
     "count": 1
   }
 }
