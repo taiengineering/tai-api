@@ -1,4 +1,4 @@
-"""tests/test_paid_result_contract_v1.py — STEP3B-A B1~B12 · STEP3B-A.1 P0~P20.
+"""tests/test_paid_result_contract_v1.py — STEP3B-A B1~B12 · STEP3B-A.1 P0~P20 · STEP4C-2 P21~P28c.
 
 대상: services.paid_result_contract_svc.build_paid_result_contract_v1
 
@@ -447,6 +447,8 @@ PROFILE_KEYS = {
     "profile_version",
     "company_name", "sector", "workers", "floor_area", "contract_amount_eok",
     "site_kind", "construction_type", "building_use_type", "address",
+    # STEP4C-2 PKG-0 — presence fact 2개 (additive)
+    "has_excavation", "has_hazardous_material",
     "available_facts",
 }
 
@@ -763,3 +765,212 @@ def test_p20_no_router_references_the_profile_layer():
 
     reader = (REPO_ROOT / "routers" / "diagnosis_result_web.py").read_text(encoding="utf-8")
     assert "diagnosis_profile" not in reader
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP4C-2 PKG-0 — PRODUCT CONTRACT PROFILE +2 (P21~P28)
+#
+# 경계: presence fact 는 저장된 값을 그대로 옮긴다.
+#       true -> True · false -> False · 키 없음 -> None.
+#       missing 을 False 로 만들지 않는다. 둘은 다른 사실이다.
+#       source 는 facility_used 하나뿐이며 input_data fallback 은 없다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+PRESENCE_FIELDS = ("has_excavation", "has_hazardous_material")
+
+
+# P21 ── stored true 는 True 로 보존된다
+def test_p21_presence_true_is_preserved():
+    profile = _profile({}, facility_used={
+        "has_excavation": True, "has_hazardous_material": True,
+    })
+    assert profile["has_excavation"] is True
+    assert profile["has_hazardous_material"] is True
+    # 1 / "true" 같은 다른 표현으로 바뀌지 않는다.
+    for field in PRESENCE_FIELDS:
+        assert isinstance(profile[field], bool), field
+
+
+# P22 ── stored false 는 False 로 보존된다 (버리지 않는다)
+def test_p22_presence_false_is_preserved_not_dropped():
+    profile = _profile({}, facility_used={
+        "has_excavation": False, "has_hazardous_material": False,
+    })
+    assert profile["has_excavation"] is False
+    assert profile["has_hazardous_material"] is False
+    # False 를 None 으로 접지 않는다. bool 타입 그대로여야 한다
+    # (False == 0 이 참이므로 값 비교가 아니라 타입으로 확인한다).
+    for field in PRESENCE_FIELDS:
+        assert profile[field] is not None, field
+        assert isinstance(profile[field], bool), field
+
+    # true 와 false 가 섞여도 각각 보존된다.
+    mixed = _profile({}, facility_used={
+        "has_excavation": True, "has_hazardous_material": False,
+    })
+    assert mixed["has_excavation"] is True
+    assert mixed["has_hazardous_material"] is False
+
+
+# P23 ── key 가 없으면 None. False 를 만들어 넣지 않는다
+def test_p23_missing_presence_key_is_none_never_false():
+    profile = _profile({}, facility_used={"worker_count": 45})
+    for field in PRESENCE_FIELDS:
+        assert profile[field] is None, field
+        assert profile[field] is not False, field
+        assert field not in profile["available_facts"], field
+
+    # facility_used 자체가 없는 row 도 같다.
+    bare = _profile({}, facility_used=None)
+    for field in PRESENCE_FIELDS:
+        assert bare[field] is None, field
+        assert field not in bare["available_facts"], field
+
+    # 명시적 null 도 None 이며 False 가 되지 않는다.
+    explicit_null = _profile({}, facility_used={
+        "has_excavation": None, "has_hazardous_material": None,
+    })
+    for field in PRESENCE_FIELDS:
+        assert explicit_null[field] is None, field
+        assert field not in explicit_null["available_facts"], field
+
+
+# P24 ── true 는 available_facts 에 들어간다
+def test_p24_true_presence_is_in_available_facts():
+    profile = _profile({}, facility_used={
+        "has_excavation": True, "has_hazardous_material": True,
+    })
+    assert "has_excavation" in profile["available_facts"]
+    assert "has_hazardous_material" in profile["available_facts"]
+    # 선언 순서 그대로 — 두 필드는 address 뒤에 온다.
+    assert profile["available_facts"] == ["has_excavation", "has_hazardous_material"]
+
+
+# P25 ── false 도 available_facts 에 들어간다 (값이 있었으므로)
+def test_p25_false_presence_is_in_available_facts():
+    """available_facts 의 기준은 '값이 있었는가' 이지 '참인가' 가 아니다.
+
+    truthiness 로 판정하면 저장된 False 가 사라진다.
+    """
+    profile = _profile({}, facility_used={
+        "has_excavation": False, "has_hazardous_material": False,
+    })
+    assert profile["available_facts"] == ["has_excavation", "has_hazardous_material"]
+
+    mixed = _profile({}, facility_used={
+        "has_excavation": True, "has_hazardous_material": False,
+    })
+    assert mixed["available_facts"] == ["has_excavation", "has_hazardous_material"]
+
+    # 0 도 같은 규칙이다 — 기존 숫자 필드에서 이미 지켜지던 원칙.
+    zero = _profile({"workers": 0}, facility_used=None)
+    assert zero["workers"] == 0
+    assert "workers" in zero["available_facts"]
+
+
+# P26 ── source 는 facility_used 뿐. input_data fallback = 0
+def test_p26_presence_source_is_facility_used_only():
+    """input_data 에 같은 key 가 있어도 읽지 않는다."""
+    profile = _profile(
+        {"has_excavation": True, "has_hazardous_material": True},
+        facility_used={"worker_count": 45},
+    )
+    for field in PRESENCE_FIELDS:
+        assert profile[field] is None, field
+        assert field not in profile["available_facts"], field
+
+    # facility_used 가 False 이고 input_data 가 True 여도 facility_used 가 이긴다.
+    conflict = _profile(
+        {"has_excavation": True},
+        facility_used={"has_excavation": False},
+    )
+    assert conflict["has_excavation"] is False
+
+    # 다른 필드로부터 추론하지 않는다: sector CONSTRUCTION 이라고 굴착이 되지 않는다.
+    inferred = _profile({"sector": "CONSTRUCTION"}, facility_used={"construction_type": "건축"})
+    assert inferred["has_excavation"] is None
+    assert inferred["has_hazardous_material"] is None
+
+
+# P27 ── non-scalar 는 통과하지 않는다
+def test_p27_non_scalar_presence_value_is_rejected():
+    profile = _profile({}, facility_used={
+        "has_excavation": {"value": True},
+        "has_hazardous_material": [True],
+    })
+    for field in PRESENCE_FIELDS:
+        assert profile[field] is None, field
+        assert field not in profile["available_facts"], field
+
+    # 구조가 profile 로 새어 나가지 않는다.
+    flat = json.dumps(profile, ensure_ascii=False)
+    assert "value" not in flat
+
+
+# P28 ── profile +2 이후에도 Materializer exact delegation 은 그대로
+def test_p28_presence_fields_do_not_reach_legal_material():
+    full_result = _full_result([
+        _obligation(atom_id="a1", when="상시", triggered_by=["has_excavation"]),
+        _obligation(atom_id="a2", law_name="건축법", law_article="41",
+                    content_type="PROHIBITION", obligation_type="PROHIBIT"),
+    ])
+    full_result["facility_used"] = {
+        "worker_count": 45, "has_excavation": True, "has_hazardous_material": False,
+    }
+    expected = build_paid_result_materials_v1(copy.deepcopy(full_result))
+
+    contract = build_paid_result_contract_v1(
+        _row(full_result=copy.deepcopy(full_result), input_data={"sector": "CONSTRUCTION"})
+    )
+
+    # 법적 재료는 profile 확장과 무관하게 동일하다.
+    assert contract["paid_result_materials_v1"] == expected
+    assert contract["diagnosis_profile"]["has_excavation"] is True
+    assert contract["diagnosis_profile"]["has_hazardous_material"] is False
+
+    # 계약 버전은 올리지 않는다 (미공개 v1 profile 의 additive 확장).
+    assert contract["contract_version"] == 1
+    assert contract["diagnosis_profile"]["profile_version"] == 1
+
+
+# P28b ── 입력 row mutation 0 · 결정성 유지
+def test_p28b_presence_extension_keeps_purity():
+    facility = {"has_excavation": True, "has_hazardous_material": False}
+    full_result = _full_result([_obligation()])
+    full_result["facility_used"] = facility
+    row = _row(full_result=full_result, input_data={"sector": "CONSTRUCTION"})
+    snapshot = copy.deepcopy(row)
+
+    first = build_paid_result_contract_v1(row)
+    second = build_paid_result_contract_v1(row)
+
+    assert row == snapshot                    # 입력 row 무변경
+    assert first == second                    # 같은 row 이면 같은 출력
+    assert first["diagnosis_profile"]["has_excavation"] is True
+    assert first["diagnosis_profile"]["has_hazardous_material"] is False
+
+
+# P28c ── 기존 9필드의 순서와 source priority 는 변하지 않았다
+def test_p28c_existing_nine_fields_are_untouched():
+    """확장은 append 다. 앞의 9개는 이름·순서·source 가 그대로여야 한다."""
+    from services.paid_result_contract_svc import PROFILE_FIELDS
+
+    assert PROFILE_FIELDS[:9] == (
+        "company_name", "sector", "workers", "floor_area", "contract_amount_eok",
+        "site_kind", "construction_type", "building_use_type", "address",
+    )
+    assert PROFILE_FIELDS[9:] == ("has_excavation", "has_hazardous_material")
+    assert len(PROFILE_FIELDS) == 11
+
+    # STEP3B-A.1 의 source priority 회귀 확인 (workers / floor_area).
+    assert _profile({"workers": 7}, facility_used={"worker_count": 45})["workers"] == 7
+    assert _profile({}, facility_used={"worker_count": 45})["workers"] == 45
+    assert _profile({"floor_area": 400.0},
+                    facility_used={"total_floor_area": 12400.0})["floor_area"] == 400.0
+    assert _profile({}, facility_used={"total_floor_area": 12400.0})["floor_area"] == 12400.0
+
+    # raw input_data passthrough 는 여전히 0 — presence key 를 넣어도 통과하지 않는다.
+    leaky = _profile({"has_excavation": True, "raw_structured_input": {"x": 1}},
+                     facility_used=None)
+    assert set(leaky) == PROFILE_KEYS
+    assert leaky["has_excavation"] is None
