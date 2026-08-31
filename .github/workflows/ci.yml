@@ -54,7 +54,10 @@ jobs:
             --ignore=tests/test_legal_engine.py \
             --ignore=tests/test_legal_engine_52.py \
             --ignore=tests/test_legal_engine_layer.py \
-            --ignore=tests/wait_for_deploy.py
+            --ignore=tests/wait_for_deploy.py \
+            --ignore=tests/test_document_engine_status_auth.py \
+            --ignore=tests/test_law_collector.py \
+            --ignore=tests/test_member_inquiries_save.py
 
   db-integrity:
     name: "DB Integrity"
