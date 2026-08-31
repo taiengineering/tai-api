@@ -11,7 +11,7 @@ class DisclaimerBody(BaseModel):
 
 
 class DiagnosisRunBody(BaseModel):
-    auth_token: str = Field(..., description="본인인증 auth_token")
+    auth_token: Optional[str] = Field(None, description="본인인증 auth_token. 없으면 로그인+본인인증 회원은 서버가 diagnosis_auth_log 를 복원(WO-006). anonymous 완화 아님")
     disclaimer_log_id: Optional[str] = Field(
         None, description="면책 동의 ID (무료 필수, 유료 직입 시 서버 자동 생성 가능)"
     )
@@ -52,8 +52,8 @@ class DiagnosisRunBody(BaseModel):
     # ── WO-FE-IND-GAP-051-TRANSPORT-001: paid structured RAW INPUT transport 계약 ──
     # RAW ENVELOPE(사용자가 실제 입력한 구조화 값)이며 CANONICAL LEG APPLICABILITY 와 분리된다.
     # 이 필드들은 backend 가 lossless 수신·보존(input_data JSONB)만 하며,
-    # canonical_applicability(CURRENT _LEG_INPUT_FIELDS exact-name allowlist) / build_facility
-    # semantic projection 에는 자동 주입하지 않는다(RAW ≠ CANONICAL). form_data(=canonical envelope)에 넣지 않는다.
+    # canonical_applicability(_LEG_INPUT_FIELDS) / build_facility semantic projection 에는
+    # 자동 주입하지 않는다(RAW ≠ CANONICAL). form_data(=canonical envelope)에 넣지 않는다.
     input: Optional[Dict[str, Any]] = Field(None, description="paid STEP1 raw scalar/structured 값 (엔진 canonical 과 분리)")
     process_list: Optional[List[Dict[str, Any]]] = Field(None, description="paid STEP2 공정 row raw 구조(process_name/hazard_codes/worker_count/is_primary/future activity_type[])")
     equipment_list: Optional[List[Dict[str, Any]]] = Field(None, description="paid STEP3 설비 row raw 구조(equipment_type/asset_name/quantity/.../future usage_type[]/relation_type[])")
