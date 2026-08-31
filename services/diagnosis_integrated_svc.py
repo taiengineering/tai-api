@@ -316,10 +316,11 @@ def run_diagnosis(
     current_user: Optional[dict] = None,
 ) -> Dict[str, Any]:
     # WO-006: 인증 결정. explicit body.auth_token 우선(기존 무료/legacy 경로 보존).
-    # auth_token 없고 로그인 유료 회원이면 verified persisted member 로 복원(anonymous 완화 아님).
+    # member fallback 은 유료 진입(payment_ref 존재) 에서만 연다 — auth_token 없는 무료 회원이
+    # member resolver 로 FREE 진단에 진입하는 경로를 차단(CORRECTION-02 BREAK-1: paid-only gate).
     if (getattr(body, "auth_token", None) or "").strip():
         auth_row = resolve_auth_log(supabase, body.auth_token)
-    elif current_user:
+    elif current_user and getattr(body, "payment_ref", None):
         auth_row = resolve_member_auth_log(supabase, current_user)
     else:
         raise HTTPException(status_code=401, detail="인증이 필요합니다. 본인인증 후 이용해 주세요.")
