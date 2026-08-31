@@ -91,7 +91,9 @@ def test_timezone_and_cron_sql_not_executed_markers():
     assert "localtimestamp" in cron.lower()  # mentioned as removed for job 11
     assert "now() - interval '30 days'" in cron
     assert "now() - interval '90 days'" in cron
+    assert "DROP VIEW public.v_demo_buildings" in up
     assert "DROP VIEW public.v_equipment_unified" in up
+    assert "DROP VIEW public.v_files_unified" in up
     assert "CASCADE" not in up.split("DROP VIEW")[1].split("\n")[0]
     assert "work_schedules" in up and "reviewed_at" in up
     assert "timestamp without time zone" in down
@@ -120,7 +122,13 @@ def test_generator_isolated_hard_fail():
                 "definition": f"SELECT 1 AS {n}",
                 "comment": None,
             }
-            for n in ("v_equipment_unified", "v_payments_list", "v_process_unified")
+            for n in (
+                "v_demo_buildings",
+                "v_equipment_unified",
+                "v_files_unified",
+                "v_payments_list",
+                "v_process_unified",
+            )
         ]
     }
     active = [
@@ -147,5 +155,5 @@ def test_sot_attached_260():
     assert len(cols) == 260
     assert len(iso) == 20
     assert len({r["object_name"] for r in iso}) == 13
-    assert len(views["views"]) == 3
+    assert len(views["views"]) == 5
     assert all(v.get("definition") for v in views["views"])

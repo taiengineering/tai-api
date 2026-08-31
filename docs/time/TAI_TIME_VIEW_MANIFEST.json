@@ -1,16 +1,57 @@
 {
-  "required_view_count": 3,
+  "required_view_count": 5,
+  "selection_rule": "pg_depend_on_alter_source_column",
+  "downstream_view_count": 0,
+  "non_view_rule_count": 0,
+  "uncovered_count": 0,
   "required_derived_timestamp_columns": 7,
   "owner": "postgres",
   "reloptions": null,
-  "acl_roles_full": ["anon", "authenticated", "postgres", "service_role"],
+  "acl_roles_full": [
+    "anon",
+    "authenticated",
+    "postgres",
+    "service_role"
+  ],
   "views": [
+    {
+      "name": "v_demo_buildings",
+      "kind": "ISOLATED_DEPENDENCY_ONLY",
+      "source": "factories.created_at",
+      "owner": "postgres",
+      "reloptions": null,
+      "definition": "SELECT f.id, f.name AS factory_name, f.main_purpose_name, f.building_area, f.floor_count, f.is_multi_use, f.occupant_capacity, f.status_code, f.remarks, f.address_sido, f.address_sigungu, c.name AS company_name, c.business_number, dr.rule_count, dr.diagnosis_stage, f.created_at\n   FROM factories f LEFT JOIN companies c ON c.id = f.company_id\n     LEFT JOIN factory_diagnosis_results dr ON dr.factory_id = f.id AND dr.is_latest = true\n  WHERE f.sector::text = 'BUILDING'::text AND f.remarks ~~ '%SEED_BUILDING_v1%'::text",
+      "comment": null,
+      "acl": {
+        "anon": "arwdDxtm",
+        "authenticated": "arwdDxtm",
+        "postgres": "arwdDxtm",
+        "service_role": "arwdDxtm"
+      }
+    },
     {
       "name": "v_equipment_unified",
       "owner": "postgres",
       "reloptions": null,
       "definition": "SELECT DISTINCT ON (industry_code_full, process_id, facility_name_std) id, industry_code_full, industry_name_full, process_id, process_path, facility_name_std, match_band, match_score, match_basis, source_type, equipment_source_file, process_source,\n    CASE source_type WHEN 'KOSHA_GUIDE'::text THEN 1 WHEN 'KOSHA_GUIDE_V2'::text THEN 1 WHEN 'EXISTING_FINAL'::text THEN 2 WHEN 'SYNTHETIC_PRIORITY'::text THEN 3 WHEN 'ENHANCED_ADDED'::text THEN 4 WHEN 'EXISTING_FILL'::text THEN 5 ELSE 6 END AS source_priority, created_at\n   FROM process_equipment_map\n  ORDER BY industry_code_full, process_id, facility_name_std, (CASE source_type WHEN 'KOSHA_GUIDE'::text THEN 1 WHEN 'KOSHA_GUIDE_V2'::text THEN 1 WHEN 'EXISTING_FINAL'::text THEN 2 WHEN 'SYNTHETIC_PRIORITY'::text THEN 3 WHEN 'ENHANCED_ADDED'::text THEN 4 WHEN 'EXISTING_FILL'::text THEN 5 ELSE 6 END);",
       "comment": "통합 설비 뷰 - KOSHA_GUIDE > EXISTING_FINAL > SYNTHETIC > ENHANCED 우선순위로 중복 제거",
+      "acl": {
+        "anon": "arwdDxtm",
+        "authenticated": "arwdDxtm",
+        "postgres": "arwdDxtm",
+        "service_role": "arwdDxtm"
+      },
+      "kind": "DEPENDENT_RECREATE",
+      "source": "process_equipment_map.created_at"
+    },
+    {
+      "name": "v_files_unified",
+      "kind": "DEPENDENT_RECREATE",
+      "source": "company_files.uploaded_at",
+      "owner": "postgres",
+      "reloptions": null,
+      "definition": "SELECT d.id::text AS id,\n    'documents'::text AS source,\n    d.company_id,\n    d.factory_id,\n    d.file_name,\n    COALESCE(d.storage_path, ''::text) AS file_ref,\n    d.category::text AS category,\n        CASE\n            WHEN d.deleted_at IS NOT NULL THEN 'DELETED'::text\n            WHEN d.is_active = false THEN 'INACTIVE'::text\n            ELSE 'ACTIVE'::text\n        END AS status,\n    d.file_size,\n    d.uploaded_at AS created_at\n   FROM documents d\nUNION ALL\n SELECT cf.id::text AS id,\n    'company_files'::text AS source,\n    cf.company_id,\n    NULL::uuid AS factory_id,\n    cf.file_name,\n    COALESCE(cf.file_url, ''::text) AS file_ref,\n    cf.file_type AS category,\n        CASE\n            WHEN cf.is_active = false THEN 'INACTIVE'::text\n            ELSE 'ACTIVE'::text\n        END AS status,\n    cf.file_size,\n    cf.uploaded_at AS created_at\n   FROM company_files cf\nUNION ALL\n SELECT gd.id::text AS id,\n    'generated_document'::text AS source,\n    f.company_id,\n    gd.factory_id,\n    gd.document_name AS file_name,\n    COALESCE(gd.download_url, gd.storage_path, ''::text) AS file_ref,\n    gd.form_code AS category,\n    gd.status,\n    NULL::integer AS file_size,\n    gd.created_at\n   FROM generated_document gd\n     LEFT JOIN factories f ON f.id = gd.factory_id",
+      "comment": "WO-9 파일 통합뷰: documents+company_files+generated_document(factory→company). 읽기 전용, company_id 축.",
       "acl": {
         "anon": "arwdDxtm",
         "authenticated": "arwdDxtm",
@@ -29,7 +70,9 @@
         "authenticated": "arwdDxtm",
         "postgres": "arwdDxtm",
         "service_role": "arwdDxtm"
-      }
+      },
+      "kind": "DEPENDENT_RECREATE",
+      "source": "payments.paid_at"
     },
     {
       "name": "v_process_unified",
@@ -42,7 +85,9 @@
         "authenticated": "arwdDxtm",
         "postgres": "arwdDxtm",
         "service_role": "arwdDxtm"
-      }
+      },
+      "kind": "DEPENDENT_RECREATE",
+      "source": "ksic_process_map.created_at"
     }
   ]
 }

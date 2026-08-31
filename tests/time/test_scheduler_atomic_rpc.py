@@ -307,7 +307,7 @@ def test_option_c_invariants_unchanged():
     assert len(alter_re.findall(down)) == 237
     views = json.loads((ROOT / "docs/time/TAI_TIME_VIEW_MANIFEST.json").read_text(encoding="utf-8"))
     vlist = views.get("views") or views
-    assert len(vlist) == 3
+    assert len(vlist) == 5
     iso = json.loads((ROOT / "docs/time/TAI_TIME_ISOLATED_ASSETS.json").read_text(encoding="utf-8"))
     icols = iso if isinstance(iso, list) else (iso.get("columns") or iso.get("rows") or [])
     iso_pairs = {(r["object_name"], r["column_name"]) for r in icols}

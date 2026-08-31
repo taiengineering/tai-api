@@ -3,8 +3,10 @@
 -- TAI Supabase vwlahtguyggrhvslabax: DO NOT RUN.
 
 BEGIN;
--- 3 view DROP (explicit, CASCADE 금지)
+-- 5 view DROP (pg_depend on ALTER source columns; explicit; CASCADE 금지)
+DROP VIEW public.v_demo_buildings;
 DROP VIEW public.v_equipment_unified;
+DROP VIEW public.v_files_unified;
 DROP VIEW public.v_payments_list;
 DROP VIEW public.v_process_unified;
 -- 237 column ALTER to timestamp without time zone (USING AT TIME ZONE Asia/Seoul)
@@ -245,12 +247,61 @@ ALTER TABLE public.users ALTER COLUMN signature_registered_at TYPE timestamp wit
 ALTER TABLE public.users ALTER COLUMN updated_at TYPE timestamp without time zone USING updated_at AT TIME ZONE 'Asia/Seoul';
 ALTER TABLE public.work_assignments ALTER COLUMN created_at TYPE timestamp without time zone USING created_at AT TIME ZONE 'Asia/Seoul';
 ALTER TABLE public.work_schedules ALTER COLUMN reviewed_at TYPE timestamp without time zone USING reviewed_at AT TIME ZONE 'Asia/Seoul';
--- 3 view EXACT recreate + OWNER / GRANT ALL / COMMENT
+-- 5 view EXACT recreate + OWNER / GRANT ALL / COMMENT (omit COMMENT when null)
+CREATE VIEW public.v_demo_buildings AS
+SELECT f.id, f.name AS factory_name, f.main_purpose_name, f.building_area, f.floor_count, f.is_multi_use, f.occupant_capacity, f.status_code, f.remarks, f.address_sido, f.address_sigungu, c.name AS company_name, c.business_number, dr.rule_count, dr.diagnosis_stage, f.created_at
+   FROM factories f LEFT JOIN companies c ON c.id = f.company_id
+     LEFT JOIN factory_diagnosis_results dr ON dr.factory_id = f.id AND dr.is_latest = true
+  WHERE f.sector::text = 'BUILDING'::text AND f.remarks ~~ '%SEED_BUILDING_v1%'::text;
 CREATE VIEW public.v_equipment_unified AS
 SELECT DISTINCT ON (industry_code_full, process_id, facility_name_std) id, industry_code_full, industry_name_full, process_id, process_path, facility_name_std, match_band, match_score, match_basis, source_type, equipment_source_file, process_source,
     CASE source_type WHEN 'KOSHA_GUIDE'::text THEN 1 WHEN 'KOSHA_GUIDE_V2'::text THEN 1 WHEN 'EXISTING_FINAL'::text THEN 2 WHEN 'SYNTHETIC_PRIORITY'::text THEN 3 WHEN 'ENHANCED_ADDED'::text THEN 4 WHEN 'EXISTING_FILL'::text THEN 5 ELSE 6 END AS source_priority, created_at
    FROM process_equipment_map
   ORDER BY industry_code_full, process_id, facility_name_std, (CASE source_type WHEN 'KOSHA_GUIDE'::text THEN 1 WHEN 'KOSHA_GUIDE_V2'::text THEN 1 WHEN 'EXISTING_FINAL'::text THEN 2 WHEN 'SYNTHETIC_PRIORITY'::text THEN 3 WHEN 'ENHANCED_ADDED'::text THEN 4 WHEN 'EXISTING_FILL'::text THEN 5 ELSE 6 END);
+CREATE VIEW public.v_files_unified AS
+SELECT d.id::text AS id,
+    'documents'::text AS source,
+    d.company_id,
+    d.factory_id,
+    d.file_name,
+    COALESCE(d.storage_path, ''::text) AS file_ref,
+    d.category::text AS category,
+        CASE
+            WHEN d.deleted_at IS NOT NULL THEN 'DELETED'::text
+            WHEN d.is_active = false THEN 'INACTIVE'::text
+            ELSE 'ACTIVE'::text
+        END AS status,
+    d.file_size,
+    d.uploaded_at AS created_at
+   FROM documents d
+UNION ALL
+ SELECT cf.id::text AS id,
+    'company_files'::text AS source,
+    cf.company_id,
+    NULL::uuid AS factory_id,
+    cf.file_name,
+    COALESCE(cf.file_url, ''::text) AS file_ref,
+    cf.file_type AS category,
+        CASE
+            WHEN cf.is_active = false THEN 'INACTIVE'::text
+            ELSE 'ACTIVE'::text
+        END AS status,
+    cf.file_size,
+    cf.uploaded_at AS created_at
+   FROM company_files cf
+UNION ALL
+ SELECT gd.id::text AS id,
+    'generated_document'::text AS source,
+    f.company_id,
+    gd.factory_id,
+    gd.document_name AS file_name,
+    COALESCE(gd.download_url, gd.storage_path, ''::text) AS file_ref,
+    gd.form_code AS category,
+    gd.status,
+    NULL::integer AS file_size,
+    gd.created_at
+   FROM generated_document gd
+     LEFT JOIN factories f ON f.id = gd.factory_id;
 CREATE VIEW public.v_payments_list AS
 SELECT p.id, p.user_id, p.company_id, p.contract_id, p.product_type, p.plan_code, p.period_months, p.total_amount, p.supply_amount, p.vat_amount, p.pg_method, p.payment_method, p.payment_type, p.status_code, p.service_status, p.paid_at, p.expired_at, p.cancelled_at, p.cancel_reason, p.fail_reason, p.inicis_order_id, p.inicis_auth_code, p.inicis_tid, p.inicis_card_name, p.memo, p.created_at, p.updated_at, u.name AS user_name, u.email AS user_email, u.phone AS user_phone, c.name AS company_name, c.business_number AS company_biz_no, c.phone AS company_phone
    FROM payments p
@@ -261,13 +312,23 @@ SELECT DISTINCT ON (industry_code_full, process_path) id, industry_code_full, in
     CASE process_source WHEN 'KOSHA_GUIDE'::text THEN 1 WHEN 'KOSHA_GUIDE_V2'::text THEN 1 WHEN 'TAI_EXISTING'::text THEN 2 WHEN 'TEMPLATE'::text THEN 3 ELSE 4 END AS source_priority, created_at
    FROM ksic_process_map
   ORDER BY industry_code_full, process_path, (CASE process_source WHEN 'KOSHA_GUIDE'::text THEN 1 WHEN 'KOSHA_GUIDE_V2'::text THEN 1 WHEN 'TAI_EXISTING'::text THEN 2 WHEN 'TEMPLATE'::text THEN 3 ELSE 4 END);
+ALTER VIEW public.v_demo_buildings OWNER TO postgres;
 ALTER VIEW public.v_equipment_unified OWNER TO postgres;
+ALTER VIEW public.v_files_unified OWNER TO postgres;
 ALTER VIEW public.v_payments_list OWNER TO postgres;
 ALTER VIEW public.v_process_unified OWNER TO postgres;
+GRANT ALL ON TABLE public.v_demo_buildings TO anon;
+GRANT ALL ON TABLE public.v_demo_buildings TO authenticated;
+GRANT ALL ON TABLE public.v_demo_buildings TO postgres;
+GRANT ALL ON TABLE public.v_demo_buildings TO service_role;
 GRANT ALL ON TABLE public.v_equipment_unified TO anon;
 GRANT ALL ON TABLE public.v_equipment_unified TO authenticated;
 GRANT ALL ON TABLE public.v_equipment_unified TO postgres;
 GRANT ALL ON TABLE public.v_equipment_unified TO service_role;
+GRANT ALL ON TABLE public.v_files_unified TO anon;
+GRANT ALL ON TABLE public.v_files_unified TO authenticated;
+GRANT ALL ON TABLE public.v_files_unified TO postgres;
+GRANT ALL ON TABLE public.v_files_unified TO service_role;
 GRANT ALL ON TABLE public.v_payments_list TO anon;
 GRANT ALL ON TABLE public.v_payments_list TO authenticated;
 GRANT ALL ON TABLE public.v_payments_list TO postgres;
@@ -277,5 +338,6 @@ GRANT ALL ON TABLE public.v_process_unified TO authenticated;
 GRANT ALL ON TABLE public.v_process_unified TO postgres;
 GRANT ALL ON TABLE public.v_process_unified TO service_role;
 COMMENT ON VIEW public.v_equipment_unified IS '통합 설비 뷰 - KOSHA_GUIDE > EXISTING_FINAL > SYNTHETIC > ENHANCED 우선순위로 중복 제거';
+COMMENT ON VIEW public.v_files_unified IS 'WO-9 파일 통합뷰: documents+company_files+generated_document(factory→company). 읽기 전용, company_id 축.';
 COMMENT ON VIEW public.v_process_unified IS '통합 공정 뷰 - KOSHA_GUIDE > TAI_EXISTING > TEMPLATE 우선순위로 process_path 중복 제거';
 COMMIT;

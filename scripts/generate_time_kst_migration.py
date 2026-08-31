@@ -13,7 +13,9 @@ Rules:
   ALTER_TYPE_USING_KST → ALTER TYPE (237 = DIRECT 236 + PARTITION_ROOT 1)
   PARENT_DRIVEN / DERIVED_RECREATE → no ALTER TYPE
   isolated (object_name, column_name) in ALTER set → sys.exit HARD FAIL (not skip)
-  DROP VIEW explicit 3 names, CASCADE forbidden
+  View census = pg_depend on ALTER source columns (not "view column is naive").
+  DROP VIEW explicit 5 names from view manifest, CASCADE forbidden.
+  v_demo_buildings is ISOLATED_DEPENDENCY_ONLY: DROP/CREATE only, no ALTER.
   defaults: not re-emitted (ALTER TYPE preserves existing DEFAULT)
 """
 from __future__ import annotations
@@ -34,7 +36,13 @@ DOWN_PATH = os.path.join(SQL, "20260831_tai_time_kst_cutover_down.sql")
 
 ALTER_ACTION = "ALTER_TYPE_USING_KST"
 SKIP_ACTIONS = {"PARENT_DRIVEN", "DERIVED_RECREATE"}
-VIEW_ORDER = ("v_equipment_unified", "v_payments_list", "v_process_unified")
+REQUIRED_VIEWS = (
+    "v_demo_buildings",
+    "v_equipment_unified",
+    "v_files_unified",
+    "v_payments_list",
+    "v_process_unified",
+)
 ACL_ROLES = ("anon", "authenticated", "postgres", "service_role")
 IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -153,11 +161,20 @@ def generate(active_doc, iso_doc, view_doc) -> tuple[str, str]:
         alter_rows.append(row)
 
     views = view_by_name(views_of(view_doc))
-    missing = [n for n in VIEW_ORDER if n not in views]
+    names = [v.get("name") or v.get("view_name") for v in views_of(view_doc)]
+    if names != list(REQUIRED_VIEWS):
+        sys.exit(f"HARD FAIL view manifest order/set {names!r} != {list(REQUIRED_VIEWS)!r}")
+    missing = [n for n in REQUIRED_VIEWS if n not in views]
     if missing:
         sys.exit(f"HARD FAIL view manifest missing {missing}")
+    if view_doc.get("required_view_count") != 5:
+        sys.exit("HARD FAIL view manifest required_view_count must be 5 (pg_depend)")
+    if view_doc.get("downstream_view_count") != 0:
+        sys.exit("HARD FAIL downstream views must be 0")
+    if view_doc.get("non_view_rule_count") != 0:
+        sys.exit("HARD FAIL non-view rewrite rules must be 0")
 
-    drops = [f"DROP VIEW {qtable(n)};" for n in VIEW_ORDER]
+    drops = [f"DROP VIEW {qtable(n)};" for n in REQUIRED_VIEWS]
     if any("CASCADE" in d.upper() for d in drops):
         sys.exit("HARD FAIL CASCADE on DROP VIEW")
 
@@ -173,7 +190,7 @@ def generate(active_doc, iso_doc, view_doc) -> tuple[str, str]:
     owners = []
     grants = []
     comments = []
-    for name in VIEW_ORDER:
+    for name in REQUIRED_VIEWS:
         v = views[name]
         creates.append(create_view_sql(name, definition_of(v)))
         owner = v.get("owner") or "postgres"
@@ -192,11 +209,11 @@ def generate(active_doc, iso_doc, view_doc) -> tuple[str, str]:
     up_parts = [
         header,
         "BEGIN;",
-        "-- 3 view DROP (explicit, CASCADE 금지)",
+        "-- 5 view DROP (pg_depend on ALTER source columns; explicit; CASCADE 금지)",
         *drops,
         f"-- {len(alters_up)} column ALTER to timestamptz (USING AT TIME ZONE Asia/Seoul)",
         *alters_up,
-        "-- 3 view EXACT recreate + OWNER / GRANT ALL / COMMENT",
+        "-- 5 view EXACT recreate + OWNER / GRANT ALL / COMMENT (omit COMMENT when null)",
         *creates,
         *owners,
         *grants,
@@ -207,11 +224,11 @@ def generate(active_doc, iso_doc, view_doc) -> tuple[str, str]:
     down_parts = [
         header,
         "BEGIN;",
-        "-- 3 view DROP (explicit, CASCADE 금지)",
+        "-- 5 view DROP (pg_depend on ALTER source columns; explicit; CASCADE 금지)",
         *drops,
         f"-- {len(alters_down)} column ALTER to timestamp without time zone (USING AT TIME ZONE Asia/Seoul)",
         *alters_down,
-        "-- 3 view EXACT recreate + OWNER / GRANT ALL / COMMENT",
+        "-- 5 view EXACT recreate + OWNER / GRANT ALL / COMMENT (omit COMMENT when null)",
         *creates,
         *owners,
         *grants,
