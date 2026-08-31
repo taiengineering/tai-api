@@ -33,14 +33,11 @@ def _row(ci_hash=CI_HASH, linked="u1", status="ACTIVE", rid="a1"):
 
 
 def test_member_exact_one_direct_hash_match_pass():
-    # identity_ci(=SHA256) == diagnosis_auth_log.ci_hash → 재해시 없이 직접 매칭 1건
     row = _svc.resolve_member_auth_log(_sup([_row()]), MEMBER)
     assert row["id"] == "a1"
 
 
 def test_member_double_hash_regression():
-    # double-hash 방어: resolver 가 identity_ci 를 재해시하면 SHA256(SHA256(CI)) 가 되어 절대 매칭 안 됨.
-    # auth_log 에는 정상 규약(ci_hash=CI_HASH)만 존재. resolver 가 재해시하면 0건이 되어 이 PASS 가 깨진다.
     rehashed = hashlib.sha256(CI_HASH.encode("utf-8")).hexdigest()
     row = _svc.resolve_member_auth_log(_sup([_row(ci_hash=CI_HASH)]), MEMBER)
     assert row["ci_hash"] == CI_HASH and row["ci_hash"] != rehashed
@@ -55,7 +52,7 @@ def test_member_zero_prior_authlog_fail_closed():
 def test_member_multi_match_fail_closed():
     with pytest.raises(HTTPException) as e:
         _svc.resolve_member_auth_log(_sup([_row(rid="a1"), _row(rid="a2")]), MEMBER)
-    assert e.value.status_code == 401  # latest/first 금지
+    assert e.value.status_code == 401
 
 
 def test_member_wrong_linked_user_fail_closed():
@@ -92,3 +89,36 @@ def test_member_none_user_fail_closed():
     with pytest.raises(HTTPException) as e:
         _svc.resolve_member_auth_log(_sup([_row()]), None)
     assert e.value.status_code == 401
+
+
+# ── CORRECTION-02 BREAK-1: member fallback paid-only gate (run_diagnosis 레벨) ──
+class _RunSup:
+    def __init__(s, authrows): s._a = authrows
+    def table(s, n):
+        rows = s._a if n == "diagnosis_auth_log" else []
+        class _T:
+            def __init__(t): t._f = {}
+            def select(t, *a, **k): return t
+            def eq(t, c, v): t._f[c] = v; return t
+            def limit(t, *a, **k): return t
+            def insert(t, r): t._p = r; return t
+            def update(t, *a, **k): return t
+            def execute(t):
+                r = rows
+                for c, v in t._f.items():
+                    r = [x for x in r if str(x.get(c)) == str(v)]
+                return type("R", (), {"data": r})()
+        return _T()
+
+
+def test_break1_member_free_intent_blocked():
+    # 로그인 verified member + auth_token 없음 + payment_ref 없음 → member resolver 미진입 → 401
+    from schemas.diagnosis_integrated import DiagnosisRunBody
+    b = DiagnosisRunBody(sector="CONSTRUCTION")  # auth_token None, payment_ref None
+    sup = _RunSup([_row()])
+    with pytest.raises(HTTPException) as e:
+        _svc.run_diagnosis(sup, b, run_step1_func=lambda *a, **k: {"status": "success", "data": {}},
+            auto_tier_func=lambda *a, **k: "CONSTRUCTION_X", build_partial_func=lambda f: {},
+            now_func=lambda: "t", paid_tier_prices={}, free_tier_codes={"CONSTRUCTION_FREE"},
+            engine_version="t", current_user=MEMBER)
+    assert e.value.status_code == 401  # paid context 없으면 member fallback 차단
