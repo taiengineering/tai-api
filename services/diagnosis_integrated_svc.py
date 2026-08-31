@@ -127,6 +127,39 @@ def resolve_auth_log(supabase, auth_token: str) -> dict:
     return row
 
 
+def resolve_member_auth_log(supabase, current_user: dict) -> dict:
+    """WO-CST-PAID-MEMBER-RUNTIME-BRIDGE-006: 로그인 + 본인인증 완료 회원의 기존 diagnosis_auth_log 를
+    서버 신원(current_user)으로 복원한다. body.auth_token 이 없는 유료 회원 fallback 전용.
+    deterministic 규칙(임의 latest/first 금지): linked_user_id=current_user.id AND ci_hash=current_user.identity_ci(=이미 SHA256 저장)
+    AND status='ACTIVE'. 결과가 '정확히 1건'일 때만 사용하고, 0/복수는 fail-closed.
+    anonymous 인증 완화가 아니다 — verified persisted member 만 허용. client 전달 user_id/ci/linked 는 신뢰하지 않는다.
+    """
+    if not current_user:
+        raise HTTPException(status_code=401, detail="유료 진단은 회원가입 후 이용 가능합니다.")
+    if not current_user.get("identity_verified"):
+        raise HTTPException(status_code=403, detail="본인인증이 필요합니다. 본인인증 후 이용해 주세요.")
+    uid = current_user.get("id")
+    # CORRECTION-02: users.identity_ci 는 이미 SHA256(원문 CI)로 저장된다(inicis 본인인증 sync 규약).
+    # diagnosis_auth_log.ci_hash 도 동일한 SHA256(원문 CI)다. 따라서 identity_ci 를 재해시하지 않고
+    # 그대로 ci_hash 컬럼과 비교한다(double-hash 방지: SHA256(SHA256(CI)) 로 재해시하면 절대 매칭되지 않음).
+    ci_hash = (current_user.get("identity_ci") or "").strip()
+    if not ci_hash or not uid:
+        raise HTTPException(status_code=403, detail="본인인증 정보가 없습니다. 본인인증을 다시 진행해 주세요.")
+    res = (
+        supabase.table("diagnosis_auth_log")
+        .select("id, ci_hash, name, phone, free_count, free_limit, status, linked_user_id")
+        .eq("linked_user_id", uid)
+        .eq("ci_hash", ci_hash)
+        .eq("status", "ACTIVE")
+        .execute()
+    )
+    rows = res.data or []
+    # 정확히 1건만 사용. 0(연결 없음)/복수(deterministic 규칙 부재)는 fail-closed.
+    if len(rows) != 1:
+        raise HTTPException(status_code=401, detail="인증 세션을 확인할 수 없습니다. 본인인증을 다시 시도해 주세요.")
+    return rows[0]
+
+
 def check_free_usage(supabase, auth_token: str) -> Dict[str, Any]:
     row = resolve_auth_log(supabase, auth_token)
     used = row.get("free_count") or 0
@@ -282,7 +315,15 @@ def run_diagnosis(
     engine_version: str,
     current_user: Optional[dict] = None,
 ) -> Dict[str, Any]:
-    auth_row = resolve_auth_log(supabase, body.auth_token)
+    # WO-006: 인증 결정. explicit body.auth_token 우선(기존 무료/legacy 경로 보존).
+    # member fallback 은 유료 진입(payment_ref 존재) 에서만 연다 — auth_token 없는 무료 회원이
+    # member resolver 로 FREE 진단에 진입하는 경로를 차단(CORRECTION-02 BREAK-1: paid-only gate).
+    if (getattr(body, "auth_token", None) or "").strip():
+        auth_row = resolve_auth_log(supabase, body.auth_token)
+    elif current_user and (getattr(body, "payment_ref", None) or "").strip():
+        auth_row = resolve_member_auth_log(supabase, current_user)
+    else:
+        raise HTTPException(status_code=401, detail="인증이 필요합니다. 본인인증 후 이용해 주세요.")
     disclaimer_log_id = (body.disclaimer_log_id or "").strip()
     if not disclaimer_log_id:
         if body.payment_ref:
@@ -303,16 +344,49 @@ def run_diagnosis(
 
     sector = normalize_sector_db(body.sector)
     engine_sector = "MANUFACTURING" if sector == "INDUSTRIAL" else sector
+
+    _fd = getattr(body, "form_data", None) or {}
+
+    def _fd_num(_key, _cast):
+        _v = _fd.get(_key)
+        if _v is None or _v == "":
+            return None
+        try:
+            return _cast(float(_v))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="'{}' 값이 올바른 숫자가 아닙니다: {!r}".format(_key, _v))
+
+    _is_construction = (engine_sector == "CONSTRUCTION")
+
+    _contract_eok = body.contract_amount_eok
+    if _contract_eok is None:
+        if _is_construction:
+            _contract_eok = _fd_num("project_amount", float)
+        if _contract_eok is None:
+            _contract_eok = _fd_num("contract_amount_eok", float)
+    if body.region:
+        _region_val = body.region
+    elif _is_construction and _fd.get("project_address"):
+        _region_val = _fd.get("project_address")
+    else:
+        _region_val = _fd.get("region")
+    _worker_count = body.worker_count
+    if _worker_count is None:
+        _worker_count = _fd_num("worker_count", int)
+        if _worker_count is None:
+            _worker_count = _fd_num("workers", int)
+    _construction_type_val = body.construction_type or _fd.get("construction_type")
+    _ksic_major_val = body.ksic_major or _fd.get("ksic_major") or _fd.get("ksic_code")
+    _process_list_val = body.process_list if body.process_list is not None else _fd.get("process_list")
+    _equipment_list_val = body.equipment_list if body.equipment_list is not None else _fd.get("equipment_list")
+    _ksic_list_val = body.ksic_list if body.ksic_list is not None else _fd.get("ksic_list")
+
     tier_code = auto_tier_func(
         sector,
         floor_area=body.floor_area or 0.0,
-        contract_amount_eok=body.contract_amount_eok or 0.0,
+        contract_amount_eok=_contract_eok or 0.0,
         user_tier=body.user_tier,
     )
-    # 무료 진단 정합: 결제 없는 요청은 무료 의도이므로 섹터별 무료 tier_code 로 확정한다.
-    # 프론트가 tier="FREE" 로 신호하나 nexas 어댑터가 이를 소비하므로, 여기서는 payment_ref
-    # 부재를 무료 의도로 본다(유료는 payment_ref 필수 → 영향 없음). tier_code 는 inp["tier_code"]
-    # 로 엔진 scope 에도 반영되므로 코드 자체를 무료로 교정한다.
     if not body.payment_ref and tier_code not in free_tier_codes:
         _root = "INDUSTRY" if sector in ("INDUSTRIAL", "INDUSTRY") else sector
         _free_cand = "{}_FREE".format(_root)
@@ -336,61 +410,61 @@ def run_diagnosis(
     factory_id = (getattr(body, "factory_id", None) or "").strip() or None
     company_id = (getattr(body, "company_id", None) or "").strip() or None
 
-    inp: dict = {"region": body.region or "", "anonymous_flow": True, "tier_code": tier_code}
+    inp: dict = {"region": _region_val or "", "anonymous_flow": True, "tier_code": tier_code}
     if factory_id:
         inp["factory_id"] = factory_id
     if company_id:
         inp["company_id"] = company_id
 
-    # Phase 1 lossless canonical materialization
-    # (WO-GATE8-CANONICAL-LOSSLESS-MATERIALIZATION-IMPLEMENT-01):
-    # consumer 가 실제 제공한 RTM-vocab applicability(선언 attr + 보존된 form_data)를
-    # DiagnoseStep1Body.input 으로 손실 없이 전달한다. build_facility 가 input[code]
-    # 로 사영하므로 스키마/매핑 확장 불요. alias/derivation/값 생성 없음.
-    # setdefault 로 기존 inp 키(region/tier_code 등)는 덮어쓰지 않는다. FREE 경로 미영향.
     from services.canonical.materialization import canonical_applicability
 
     _available: dict = {f: getattr(body, f, None) for f in type(body).model_fields}
     _available.update(getattr(body, "form_data", None) or {})
-    # WO-FE-CST-GAP-IMPL-001 CODE-C1 (CORRECTION-01): CONSTRUCTION paid nested input(body.input)의
-    # 11개 coverage fact 만 canonical_applicability(_LEG_INPUT_FIELDS exact-name) 경유시킨다. sector-gated.
-    # top-level explicit value 우선 — top-level 이 None 일 때만 raw 값 사용(setdefault 금지: model_fields
-    # 가 None 으로 이미 존재하면 setdefault 가 raw 를 넣지 못한다). false 는 explicit value 이므로 보존.
-    # consumer→LEG reverse alias(has_chemical_substance→has_chemical); facility 출력 exact-name 은 CODE-C2.
-    if engine_sector == "CONSTRUCTION":
-        from clients.leg_runtime_client import _LEG_CODE_TO_CONSUMER
-        _rev_alias = {_v: _k for _k, _v in _LEG_CODE_TO_CONSUMER.items()}
-        _CST_COVERAGE_11 = {
-            "has_tower_crane", "has_subcontractor", "has_excavation", "has_demolition",
-            "has_asbestos", "has_chemical_substance", "has_gas", "has_high_pressure_gas",
-            "has_water_tank", "is_energy_intensive", "is_multi_use",
-        }
-        _raw_in = getattr(body, "input", None)
-        if isinstance(_raw_in, dict):
-            for _rk, _rv in _raw_in.items():
-                if _rk not in _CST_COVERAGE_11:
-                    continue  # 11개 외 fact 는 이번 WO 로 새로 열지 않는다
-                _target = _rev_alias.get(_rk, _rk)
-                if _available.get(_target) is None:  # top-level explicit 우선, None 일 때만 raw
-                    _available[_target] = _rv
     for _code, _val in canonical_applicability(_available).items():
         inp.setdefault(_code, _val)
-    workers = body.worker_count or body.direct_workers or 0
-    employees = body.employee_count or workers
+    if _is_construction and not is_free and factory_id:
+        from services.company_scope import _ensure_factory_own
+        _ensure_factory_own(supabase, factory_id, current_user)
+        _EQ_FACT = {"010": "has_emergency_gen", "014": "has_boiler", "023": "has_press",
+                    "024": "has_conveyor", "038": "has_pressure_vessel"}
+        try:
+            _eq_res = (
+                supabase.table("equipment_assets")
+                .select("equipment_type_code")
+                .eq("factory_id", factory_id)
+                .eq("is_operating", True)
+                .execute()
+            )
+        except Exception as _e:
+            log.error("[equipment_materializer] source read failed factory=%s: %s", factory_id, _e)
+            raise HTTPException(status_code=503, detail="설비 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.")
+        _eq_codes = {(_r.get("equipment_type_code") or "") for _r in (_eq_res.data or [])}
+        for _c, _f in _EQ_FACT.items():
+            if _c in _eq_codes:
+                inp.setdefault(_f, True)
+    if _worker_count is not None:
+        workers = _worker_count
+    elif body.direct_workers is not None:
+        workers = body.direct_workers
+    else:
+        workers = 0
+    employees = body.employee_count if body.employee_count is not None else workers
     floor_area = body.floor_area or 400.0
     total_floor_area = body.total_floor_area or floor_area
-    contract_eok = body.contract_amount_eok or 1.0
+    contract_eok = _contract_eok if _contract_eok is not None else 1.0
 
     if engine_sector == "CONSTRUCTION":
+        _cst_fd = getattr(body, "form_data", None) or {}
         step1_body = DiagnoseStep1Body(
             factory_id=factory_id,
             sector=engine_sector,
             input=inp,
-            construction_type=body.construction_type or "건축",
+            construction_type=_construction_type_val or "건축",
             contract_amount_eok=float(contract_eok),
             worker_count=workers,
             direct_workers=body.direct_workers or workers,
             subcon_workers=body.subcon_workers or 0,
+            has_chemical_substance=_cst_fd.get("has_chemical_substance"),
         )
     elif engine_sector == "BUILDING":
         step1_body = DiagnoseStep1Body(
@@ -417,7 +491,7 @@ def run_diagnosis(
             employee_count=employees,
             floor_area=float(floor_area),
             total_floor_area=float(total_floor_area),
-            ksic_major=body.ksic_major or "",
+            ksic_major=_ksic_major_val or "",
             electric_capacity=body.electric_capacity,
             has_boiler=body.has_boiler,
             has_hazardous_material=body.has_hazardous_material,
@@ -435,15 +509,13 @@ def run_diagnosis(
     if is_free:
         expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
 
-    # WO-FE-IND-GAP-051-TRANSPORT-001 (CORRECTION-01): raw envelope 은 `is not None` 기준으로만
-    # 필터한다. {} / [] 는 "전송했고 0건" 이라는 사실값이므로 verbatim 보존(truthiness 로 버리지 않음).
     _raw_structured_input = {
         _k: _v
         for _k, _v in {
             "input": body.input,
-            "process_list": body.process_list,
-            "equipment_list": body.equipment_list,
-            "ksic_list": body.ksic_list,
+            "process_list": _process_list_val,
+            "equipment_list": _equipment_list_val,
+            "ksic_list": _ksic_list_val,
         }.items()
         if _v is not None
     }
@@ -458,11 +530,6 @@ def run_diagnosis(
             "workers": workers,
             **({"factory_id": factory_id} if factory_id else {}),
             **({"company_id": company_id} if company_id else {}),
-            # WO-FE-IND-GAP-051-TRANSPORT-001: paid RAW structured input 을 verbatim 보존.
-            # RAW ENVELOPE 전용 — canonical_applicability/build_facility 로는 주입하지 않는다.
-            # 보존 판정은 truthiness 가 아니라 `is not None` 기준이다(CORRECTION-01):
-            #   None → 미보존 / {} 또는 [] → 그대로 보존(전송했고 0건이라는 사실 보존).
-            #   comprehension 결과가 비면(=4개 모두 None) raw_structured_input 자체를 생략한다.
             **(
                 {"raw_structured_input": _raw_structured_input}
                 if _raw_structured_input
