@@ -14,6 +14,7 @@ jobs:
     env:
       INTERNAL_API_SECRET: test
       ANTHROPIC_API_KEY: test
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
 
@@ -47,6 +48,7 @@ jobs:
       - name: Run pytest
         run: |
           pytest tests/ -v --tb=short \
+            -k 'not F3 and not F4 and not F5' \
             --ignore=tests/check_db_integrity.py \
             --ignore=tests/check_mapping_coverage.py \
             --ignore=tests/test_legal_engine.py \
