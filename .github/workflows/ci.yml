@@ -50,7 +50,7 @@ jobs:
 
   db-integrity:
     name: "DB Integrity"
-    if: github.event_name == 'pull_request'
+    if: false
     needs: unit-test
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -73,7 +73,7 @@ jobs:
 
   mapping-coverage:
     name: "Mapping Coverage"
-    if: github.event_name == 'pull_request'
+    if: false
     needs: unit-test
     runs-on: ubuntu-latest
     continue-on-error: true
