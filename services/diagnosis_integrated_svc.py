@@ -130,7 +130,7 @@ def resolve_auth_log(supabase, auth_token: str) -> dict:
 def resolve_member_auth_log(supabase, current_user: dict) -> dict:
     """WO-CST-PAID-MEMBER-RUNTIME-BRIDGE-006: 로그인 + 본인인증 완료 회원의 기존 diagnosis_auth_log 를
     서버 신원(current_user)으로 복원한다. body.auth_token 이 없는 유료 회원 fallback 전용.
-    deterministic 규칙(임의 latest/first 금지): linked_user_id=current_user.id AND ci_hash=sha256(current_user.identity_ci)
+    deterministic 규칙(임의 latest/first 금지): linked_user_id=current_user.id AND ci_hash=current_user.identity_ci(=이미 SHA256 저장)
     AND status='ACTIVE'. 결과가 '정확히 1건'일 때만 사용하고, 0/복수는 fail-closed.
     anonymous 인증 완화가 아니다 — verified persisted member 만 허용. client 전달 user_id/ci/linked 는 신뢰하지 않는다.
     """
@@ -138,14 +138,13 @@ def resolve_member_auth_log(supabase, current_user: dict) -> dict:
         raise HTTPException(status_code=401, detail="유료 진단은 회원가입 후 이용 가능합니다.")
     if not current_user.get("identity_verified"):
         raise HTTPException(status_code=403, detail="본인인증이 필요합니다. 본인인증 후 이용해 주세요.")
-    ci_raw = (current_user.get("identity_ci") or "").strip()
     uid = current_user.get("id")
-    if not ci_raw or not uid:
+    # CORRECTION-02: users.identity_ci 는 이미 SHA256(원문 CI)로 저장된다(inicis 본인인증 sync 규약).
+    # diagnosis_auth_log.ci_hash 도 동일한 SHA256(원문 CI)다. 따라서 identity_ci 를 재해시하지 않고
+    # 그대로 ci_hash 컬럼과 비교한다(double-hash 방지: SHA256(SHA256(CI)) 로 재해시하면 절대 매칭되지 않음).
+    ci_hash = (current_user.get("identity_ci") or "").strip()
+    if not ci_hash or not uid:
         raise HTTPException(status_code=403, detail="본인인증 정보가 없습니다. 본인인증을 다시 진행해 주세요.")
-    # CORRECTION-01 (BREAK-B): diagnosis_auth_log.ci_hash 는 sha256(원문 CI)로 저장된다
-    # (sync_diagnosis_auth_log_from_inicis 규약). users.identity_ci(원문)를 동일 sha256 로 해시해 비교한다.
-    # 원문 CI 를 ci_hash 컬럼에 직접 비교하면 절대 매칭되지 않아 항상 0건(사실상 전면 차단)이 된다.
-    ci_hash = hashlib.sha256(ci_raw.encode("utf-8")).hexdigest()
     res = (
         supabase.table("diagnosis_auth_log")
         .select("id, ci_hash, name, phone, free_count, free_limit, status, linked_user_id")
@@ -345,16 +344,9 @@ def run_diagnosis(
     sector = normalize_sector_db(body.sector)
     engine_sector = "MANUFACTURING" if sector == "INDUSTRIAL" else sector
 
-    # WO-FE-CST-GAP-IMPL-001 E-C1: Nexas 격리 후 기존 필수 paid base input 을 official form_data 로 보존한다.
-    # Primary paid UI 는 DB field_code 를 form_data 로 전송하므로, top-level explicit 값이 없을 때만
-    # form_data 값을 사용한다(top-level 우선, form_data 보조). CONSTRUCTION UI/DB field_code → Step1 명칭이
-    # 다른 2건만 명시적 structural mapping(값 변환 아님): project_amount→contract_amount_eok, project_address→region.
-    # 나머지는 exact-name. 값 생성/추정 없음. False/0 과 None 을 구분한다.
     _fd = getattr(body, "form_data", None) or {}
 
     def _fd_num(_key, _cast):
-        # E-C1 CORRECTION-01: 키 부재/빈값은 미제공(None). 그러나 키가 존재하는데 숫자로 변환
-        # 불가능하면 silent default 하지 않고 422 로 fail-closed(Nexas 제거 후 numeric 계약 경계 책임).
         _v = _fd.get(_key)
         if _v is None or _v == "":
             return None
@@ -363,24 +355,20 @@ def run_diagnosis(
         except (TypeError, ValueError):
             raise HTTPException(status_code=422, detail="'{}' 값이 올바른 숫자가 아닙니다: {!r}".format(_key, _v))
 
-    # E-C1 CORRECTION-02: project_amount→contract_amount_eok, project_address→region 은 CONSTRUCTION
-    # 전용 structural mapping 이다(sector-gated). 다른 sector(BUILDING/INDUSTRIAL)로 누출 금지 —
-    # 이 sector 들의 form_data.project_amount/project_address 는 매핑/검증하지 않는다(sector contract leakage 방지).
-    # contract_amount_eok/region/worker_count/construction_type/ksic 등 exact-name 은 sector 무관 유지.
     _is_construction = (engine_sector == "CONSTRUCTION")
 
     _contract_eok = body.contract_amount_eok
     if _contract_eok is None:
         if _is_construction:
-            _contract_eok = _fd_num("project_amount", float)  # CONSTRUCTION 전용 alias
+            _contract_eok = _fd_num("project_amount", float)
         if _contract_eok is None:
-            _contract_eok = _fd_num("contract_amount_eok", float)  # exact-name(sector 무관)
+            _contract_eok = _fd_num("contract_amount_eok", float)
     if body.region:
         _region_val = body.region
     elif _is_construction and _fd.get("project_address"):
-        _region_val = _fd.get("project_address")  # CONSTRUCTION 전용 alias
+        _region_val = _fd.get("project_address")
     else:
-        _region_val = _fd.get("region")  # exact-name(sector 무관); 미검증 generic 'address' 는 열지 않음
+        _region_val = _fd.get("region")
     _worker_count = body.worker_count
     if _worker_count is None:
         _worker_count = _fd_num("worker_count", int)
@@ -398,9 +386,6 @@ def run_diagnosis(
         contract_amount_eok=_contract_eok or 0.0,
         user_tier=body.user_tier,
     )
-    # 무료 진단 정합: 결제 없는 요청은 무료 의도이므로 섹터별 무료 tier_code 로 확정한다.
-    # payment_ref 부재를 무료 의도로 본다(유료는 payment_ref 필수 → 영향 없음). tier_code 는 inp["tier_code"]
-    # 로 엔진 scope 에도 반영되므로 코드 자체를 무료로 교정한다.
     if not body.payment_ref and tier_code not in free_tier_codes:
         _root = "INDUSTRY" if sector in ("INDUSTRIAL", "INDUSTRY") else sector
         _free_cand = "{}_FREE".format(_root)
@@ -430,16 +415,12 @@ def run_diagnosis(
     if company_id:
         inp["company_id"] = company_id
 
-    # Phase 1 lossless canonical materialization
     from services.canonical.materialization import canonical_applicability
 
     _available: dict = {f: getattr(body, f, None) for f in type(body).model_fields}
     _available.update(getattr(body, "form_data", None) or {})
-    # WO-FE-CST-GAP-IMPL-001 FIX-B1: CONSTRUCTION 전용 CODE-C1 제거. form_data → canonical 공통 배선.
     for _code, _val in canonical_applicability(_available).items():
         inp.setdefault(_code, _val)
-    # WO-FE-CST-EQUIPMENT-CAPTURE-WIRING-001: 설비등록(equipment_assets)에서 승인된 5 equipment Legal Fact materialize.
-    # CONSTRUCTION PAID + owned factory gate, _ensure_factory_own, DB fail 503, 미등록 UNKNOWN, exact code equality.
     if _is_construction and not is_free and factory_id:
         from services.company_scope import _ensure_factory_own
         _ensure_factory_own(supabase, factory_id, current_user)
@@ -460,7 +441,6 @@ def run_diagnosis(
         for _c, _f in _EQ_FACT.items():
             if _c in _eq_codes:
                 inp.setdefault(_f, True)
-    # E-C1 CORRECTION-01: 0 은 명시적으로 제공된 값이므로 truthiness 로 버리지 않는다(is None 기준).
     if _worker_count is not None:
         workers = _worker_count
     elif body.direct_workers is not None:
@@ -473,7 +453,6 @@ def run_diagnosis(
     contract_eok = _contract_eok if _contract_eok is not None else 1.0
 
     if engine_sector == "CONSTRUCTION":
-        # WO-FE-CST-GAP-IMPL-001 FIX-B2: CONSTRUCTION chemical step1 bridge.
         _cst_fd = getattr(body, "form_data", None) or {}
         step1_body = DiagnoseStep1Body(
             factory_id=factory_id,
@@ -529,7 +508,6 @@ def run_diagnosis(
     if is_free:
         expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
 
-    # WO-FE-IND-GAP-051-TRANSPORT-001 (CORRECTION-01): raw envelope 은 `is not None` 기준으로만 필터.
     _raw_structured_input = {
         _k: _v
         for _k, _v in {
