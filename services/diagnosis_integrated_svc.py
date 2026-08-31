@@ -409,7 +409,13 @@ def run_diagnosis(
     # equipment Legal Fact 를 materialize 한다. TAI Consumer Input Materialization Boundary 에서만 수행
     # (LEG/canonical business 판단 아님). system_codes equipment_type 정본 code == equipment_type_code
     # exact equality 만 사용(runtime 문자열/name inference 금지). 등록 설비 = true, 미등록 = UNKNOWN(false 생성 안 함).
-    if factory_id:
+    # CORRECTION-01: (A) CONSTRUCTION PAID + owned factory 로 gate(sector leakage/free 차단; INDUSTRIAL FROZEN 보호)
+    #                (B) _ensure_factory_own 로 tenant ownership 검증(client factory_id 신뢰 금지)
+    #                (C) equipment source read 실패는 fail-closed(503) — DB error ≠ equipment absent(silent under-diagnosis 방지)
+    if _is_construction and not is_free and factory_id:
+        from services.company_scope import _ensure_factory_own
+        # 타사 factory 는 helper 의 기존 exception contract(403/404) 로 차단 → equipment read/fact 생성 0
+        _ensure_factory_own(supabase, factory_id, current_user)
         _EQ_FACT = {"010": "has_emergency_gen", "014": "has_boiler", "023": "has_press",
                     "024": "has_conveyor", "038": "has_pressure_vessel"}
         try:
@@ -420,12 +426,14 @@ def run_diagnosis(
                 .eq("is_operating", True)
                 .execute()
             )
-            _eq_codes = {(_r.get("equipment_type_code") or "") for _r in (_eq_res.data or [])}
-            for _c, _f in _EQ_FACT.items():
-                if _c in _eq_codes:
-                    inp.setdefault(_f, True)  # 등록 설비만 true; 미등록은 미설정(UNKNOWN)
         except Exception as _e:
-            log.warning("[equipment_materializer] factory=%s skip: %s", factory_id, _e)
+            log.error("[equipment_materializer] source read failed factory=%s: %s", factory_id, _e)
+            raise HTTPException(status_code=503, detail="설비 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.")
+        # 정상 조회: [] 이면 fact 0(UNKNOWN 유지). DB error(위)와 구분.
+        _eq_codes = {(_r.get("equipment_type_code") or "") for _r in (_eq_res.data or [])}
+        for _c, _f in _EQ_FACT.items():
+            if _c in _eq_codes:
+                inp.setdefault(_f, True)  # 등록 설비만 true; 미등록은 미설정(UNKNOWN)
     # E-C1 CORRECTION-01: 0 은 명시적으로 제공된 값이므로 truthiness 로 버리지 않는다(is None 기준).
     if _worker_count is not None:
         workers = _worker_count
