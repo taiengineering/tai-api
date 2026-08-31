@@ -31,6 +31,12 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements-test.txt
 
+      - name: Time Contract Guard
+        run: python scripts/check_time_contract.py --check
+      - name: Time baseline non-expansion
+        run: |
+          git fetch origin main --depth=1 || true
+          python scripts/check_baseline_no_expand.py origin/main
       - name: Run pytest
         run: |
           pytest tests/ -v --tb=short \
