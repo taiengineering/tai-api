@@ -1,0 +1,427 @@
+{
+  "universe_count": 46,
+  "master_count": 32,
+  "master_active": 21,
+  "config_count": 11,
+  "master_without_config": 21,
+  "config_without_master": 0,
+  "pgcron_count": 12,
+  "pgcron_active": 9,
+  "code_only_count": 2,
+  "jobs": [
+    {
+      "job_code": "ALERT_EVALUATE",
+      "cron_expression": "*/5 * * * *",
+      "is_active": true,
+      "endpoint": "direct://alert_evaluate",
+      "command_type": "DIRECT",
+      "handler": "direct://alert_evaluate",
+      "source": "master"
+    },
+    {
+      "job_code": "AUTO_PARSE_NEW",
+      "cron_expression": "0 4 * * mon",
+      "is_active": false,
+      "endpoint": "/law-rule-generator/auto-parse-and-approve",
+      "command_type": "HTTP",
+      "handler": "HTTP",
+      "source": "master"
+    },
+    {
+      "job_code": "CONTROL_BRIDGE_EVALUATE",
+      "cron_expression": "*/3 * * * *",
+      "is_active": true,
+      "endpoint": "direct://control_bridge_evaluate",
+      "command_type": "DIRECT",
+      "handler": "direct://control_bridge_evaluate",
+      "source": "master"
+    },
+    {
+      "job_code": "DB_STATS_COLLECT",
+      "cron_expression": "0 0 * * *",
+      "is_active": true,
+      "endpoint": "/admin/stats",
+      "command_type": "HTTP",
+      "handler": "HTTP",
+      "source": "master"
+    },
+    {
+      "job_code": "DUE_ALERT_DAILY",
+      "cron_expression": "0 8 * * *",
+      "is_active": true,
+      "endpoint": "/notifications/trigger-due-alerts",
+      "command_type": "HTTP",
+      "handler": "HTTP",
+      "source": "master"
+    },
+    {
+      "job_code": "EDU_EXPIRE_DAILY",
+      "cron_expression": "0 1 * * *",
+      "is_active": true,
+      "endpoint": "direct://education_assignment_expire",
+      "command_type": "DIRECT",
+      "handler": "direct://education_assignment_expire",
+      "source": "master"
+    },
+    {
+      "job_code": "INCIDENT_REPEATED",
+      "cron_expression": "*/5 * * * *",
+      "is_active": true,
+      "endpoint": "direct://incident_repeated",
+      "command_type": "DIRECT",
+      "handler": "direct://incident_repeated",
+      "source": "master"
+    },
+    {
+      "job_code": "INTEGRITY_EVALUATE",
+      "cron_expression": "*/5 * * * *",
+      "is_active": true,
+      "endpoint": "direct://integrity_evaluate",
+      "command_type": "DIRECT",
+      "handler": "direct://integrity_evaluate",
+      "source": "master"
+    },
+    {
+      "job_code": "KCSC_SYNC",
+      "cron_expression": "0 5 1 * *",
+      "is_active": true,
+      "endpoint": "/kcsc/sync",
+      "command_type": "HTTP",
+      "handler": "HTTP",
+      "source": "master"
+    },
+    {
+      "job_code": "LAW_COLLECT_MISSING",
+      "cron_expression": "0 4 * * sun",
+      "is_active": false,
+      "endpoint": "/law-collector/collect-missing",
+      "command_type": "HTTP",
+      "handler": "HTTP",
+      "source": "master"
+    },
+    {
+      "job_code": "LAW_RECOLLECT_15D",
+      "cron_expression": "0 3 1,16 * *",
+      "is_active": false,
+      "endpoint": "/law-collector/check-updates-v2",
+      "command_type": "HTTP",
+      "handler": "HTTP",
+      "source": "master"
+    },
+    {
+      "job_code": "LAW_UPDATE_CHECK",
+      "cron_expression": "0 3 * * *",
+      "is_active": false,
+      "endpoint": "/law-collector/check-updates",
+      "command_type": "HTTP",
+      "handler": "HTTP",
+      "source": "master"
+    },
+    {
+      "job_code": "NOTIFICATION_METRICS",
+      "cron_expression": "*/10 * * * *",
+      "is_active": true,
+      "endpoint": "direct://notification_collect_metrics",
+      "command_type": "DIRECT",
+      "handler": "direct://notification_collect_metrics",
+      "source": "master"
+    },
+    {
+      "job_code": "NOTIFICATION_QUEUE_WORKER",
+      "cron_expression": "* * * * *",
+      "is_active": true,
+      "endpoint": "direct://notification_queue_worker",
+      "command_type": "DIRECT",
+      "handler": "direct://notification_queue_worker",
+      "source": "master"
+    },
+    {
+      "job_code": "OVERDUE_DISPATCH",
+      "cron_expression": "*/10 5-10 * * *",
+      "is_active": false,
+      "endpoint": "/overdue/dispatch",
+      "command_type": "HTTP",
+      "handler": "HTTP",
+      "source": "master"
+    },
+    {
+      "job_code": "OVERDUE_PREPARE",
+      "cron_expression": "0 4 * * *",
+      "is_active": false,
+      "endpoint": "/overdue/prepare",
+      "command_type": "HTTP",
+      "handler": "HTTP",
+      "source": "master"
+    },
+    {
+      "job_code": "PATTERN_SYNC",
+      "cron_expression": "0 */6 * * *",
+      "is_active": true,
+      "endpoint": "direct://pattern_sync",
+      "command_type": "DIRECT",
+      "handler": "direct://pattern_sync",
+      "source": "master"
+    },
+    {
+      "job_code": "PRECEDENT_COLLECT_WEEKLY",
+      "cron_expression": "0 5 * * mon",
+      "is_active": true,
+      "endpoint": "/precedents/collect",
+      "command_type": "HTTP",
+      "handler": "HTTP",
+      "source": "master"
+    },
+    {
+      "job_code": "REPORT_DAILY",
+      "cron_expression": "0 8 * * *",
+      "is_active": true,
+      "endpoint": "/admin/stats",
+      "command_type": "HTTP",
+      "handler": "HTTP",
+      "source": "master"
+    },
+    {
+      "job_code": "RULE_REPARSE",
+      "cron_expression": "0 4 * * wed",
+      "is_active": false,
+      "endpoint": "/law-rule-generator/reparse-master",
+      "command_type": "HTTP",
+      "handler": "HTTP",
+      "source": "master"
+    },
+    {
+      "job_code": "SCHEDULE_GENERATE_ALL",
+      "cron_expression": "0 7 * * mon",
+      "is_active": false,
+      "endpoint": "/legal-engine/generate-schedules",
+      "command_type": "HTTP",
+      "handler": "HTTP",
+      "source": "master"
+    },
+    {
+      "job_code": "SITUATION_RETENTION_POLICY",
+      "cron_expression": "0 3 * * *",
+      "is_active": true,
+      "endpoint": "direct://situation_retention_policy",
+      "command_type": "DIRECT",
+      "handler": "direct://situation_retention_policy",
+      "source": "master"
+    },
+    {
+      "job_code": "SITUATION_SNAPSHOT_GENERATE",
+      "cron_expression": "*/5 * * * *",
+      "is_active": true,
+      "endpoint": "direct://situation_snapshot_generate",
+      "command_type": "DIRECT",
+      "handler": "direct://situation_snapshot_generate",
+      "source": "master"
+    },
+    {
+      "job_code": "SYNTHETIC_BROWSER_LOGIN",
+      "cron_expression": "*/15 * * * *",
+      "is_active": true,
+      "endpoint": "direct://browser_synthetic_login",
+      "command_type": "DIRECT",
+      "handler": "direct://browser_synthetic_login",
+      "source": "master"
+    },
+    {
+      "job_code": "SYNTHETIC_BROWSER_PROCESS",
+      "cron_expression": "*/15 * * * *",
+      "is_active": true,
+      "endpoint": "direct://browser_synthetic_process",
+      "command_type": "DIRECT",
+      "handler": "direct://browser_synthetic_process",
+      "source": "master"
+    },
+    {
+      "job_code": "SYNTHETIC_CHAOS_INJECTION",
+      "cron_expression": "*/5 * * * *",
+      "is_active": false,
+      "endpoint": "direct://synthetic_chaos_injection",
+      "command_type": "DIRECT",
+      "handler": "direct://synthetic_chaos_injection",
+      "source": "master"
+    },
+    {
+      "job_code": "SYNTHETIC_CLEANUP",
+      "cron_expression": "0 3 * * *",
+      "is_active": true,
+      "endpoint": "direct://synthetic_cleanup",
+      "command_type": "DIRECT",
+      "handler": "direct://synthetic_cleanup",
+      "source": "master"
+    },
+    {
+      "job_code": "SYNTHETIC_LOGIN",
+      "cron_expression": "*/5 * * * *",
+      "is_active": true,
+      "endpoint": "direct://synthetic_login",
+      "command_type": "DIRECT",
+      "handler": "direct://synthetic_login",
+      "source": "master"
+    },
+    {
+      "job_code": "SYNTHETIC_PROCESS_REG",
+      "cron_expression": "*/15 * * * *",
+      "is_active": true,
+      "endpoint": "direct://synthetic_process_reg",
+      "command_type": "DIRECT",
+      "handler": "direct://synthetic_process_reg",
+      "source": "master"
+    },
+    {
+      "job_code": "SYNTHETIC_RUNTIME_TICK",
+      "cron_expression": "*/3 * * * *",
+      "is_active": false,
+      "endpoint": "direct://synthetic_runtime_tick",
+      "command_type": "DIRECT",
+      "handler": "direct://synthetic_runtime_tick",
+      "source": "master"
+    },
+    {
+      "job_code": "SYSTEM_HEALTH_CHECK",
+      "cron_expression": "*/10 * * * *",
+      "is_active": true,
+      "endpoint": "/health",
+      "command_type": "HTTP",
+      "handler": "HTTP",
+      "source": "master"
+    },
+    {
+      "job_code": "VALIDATE_MASTER",
+      "cron_expression": "0 6 * * fri",
+      "is_active": false,
+      "endpoint": "/law-rule-generator/validate-master",
+      "command_type": "HTTP",
+      "handler": "HTTP",
+      "source": "master"
+    },
+    {
+      "job_code": "daily_assignments",
+      "source": "pgcron",
+      "cron_expression": "10 9 * * *",
+      "is_active": false,
+      "endpoint": "direct://generate_daily_assignments",
+      "command_type": "DB_FUNCTION",
+      "handler": "direct://generate_daily_assignments"
+    },
+    {
+      "job_code": "daily_health",
+      "source": "pgcron",
+      "cron_expression": "0 9 * * *",
+      "is_active": true,
+      "endpoint": "direct://daily_health_check",
+      "command_type": "DB_FUNCTION",
+      "handler": "direct://daily_health_check"
+    },
+    {
+      "job_code": "qa_send",
+      "source": "pgcron",
+      "cron_expression": "0,30 * * * *",
+      "is_active": false,
+      "endpoint": "direct://send_auto_qa_requests",
+      "command_type": "DB_FUNCTION",
+      "handler": "direct://send_auto_qa_requests"
+    },
+    {
+      "job_code": "qa_collect",
+      "source": "pgcron",
+      "cron_expression": "2,32 * * * *",
+      "is_active": false,
+      "endpoint": "direct://collect_auto_qa_results",
+      "command_type": "DB_FUNCTION",
+      "handler": "direct://collect_auto_qa_results"
+    },
+    {
+      "job_code": "kosha_construction_21",
+      "source": "pgcron",
+      "cron_expression": "0 6 * * *",
+      "is_active": true,
+      "endpoint": "direct://kosha_construction_safety_light",
+      "command_type": "HTTP",
+      "handler": "direct://kosha_construction_safety_light"
+    },
+    {
+      "job_code": "kosha_construction_03",
+      "source": "pgcron",
+      "cron_expression": "0 12 * * *",
+      "is_active": true,
+      "endpoint": "direct://kosha_construction_safety_light",
+      "command_type": "HTTP",
+      "handler": "direct://kosha_construction_safety_light"
+    },
+    {
+      "job_code": "kosha_construction_09",
+      "source": "pgcron",
+      "cron_expression": "0 18 * * *",
+      "is_active": true,
+      "endpoint": "direct://kosha_construction_safety_light",
+      "command_type": "HTTP",
+      "handler": "direct://kosha_construction_safety_light"
+    },
+    {
+      "job_code": "kosha_accidents",
+      "source": "pgcron",
+      "cron_expression": "0 2 * * *",
+      "is_active": true,
+      "endpoint": "direct://kosha_accident_cases",
+      "command_type": "HTTP",
+      "handler": "direct://kosha_accident_cases"
+    },
+    {
+      "job_code": "kosha_weekly",
+      "source": "pgcron",
+      "cron_expression": "0 3 * * mon",
+      "is_active": true,
+      "endpoint": "direct://kosha_safety_materials",
+      "command_type": "HTTP",
+      "handler": "direct://kosha_safety_materials"
+    },
+    {
+      "job_code": "health_cleanup",
+      "source": "pgcron",
+      "cron_expression": "0 12 * * *",
+      "is_active": true,
+      "endpoint": "direct://health_cleanup",
+      "command_type": "CLEANUP",
+      "handler": "direct://health_cleanup"
+    },
+    {
+      "job_code": "cron_job_log_retention",
+      "source": "pgcron",
+      "cron_expression": "17 * * * *",
+      "is_active": true,
+      "endpoint": "direct://cron_job_log_retention",
+      "command_type": "CLEANUP",
+      "handler": "direct://cron_job_log_retention"
+    },
+    {
+      "job_code": "business_event_retention",
+      "source": "pgcron",
+      "cron_expression": "27 3 * * *",
+      "is_active": true,
+      "endpoint": "direct://business_event_retention",
+      "command_type": "CLEANUP",
+      "handler": "direct://business_event_retention"
+    },
+    {
+      "job_code": "holiday_sync_annual",
+      "cron_expression": "10 3 1 12 *",
+      "is_active": true,
+      "endpoint": "direct://holiday_sync",
+      "command_type": "DIRECT",
+      "handler": "direct://holiday_sync",
+      "source": "code"
+    },
+    {
+      "job_code": "holiday_sync_quarterly",
+      "cron_expression": "10 3 1 1,4,7,10 *",
+      "is_active": true,
+      "endpoint": "direct://holiday_sync",
+      "command_type": "DIRECT",
+      "handler": "direct://holiday_sync",
+      "source": "code"
+    }
+  ]
+}

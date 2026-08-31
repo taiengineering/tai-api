@@ -1,0 +1,116 @@
+{
+  "mapped": 12,
+  "active_old": 9,
+  "inactive_old": 3,
+  "delete_unschedule": false,
+  "jobs": [
+    {
+      "jobid": 1,
+      "jobname": "daily_assignments",
+      "active_old": false,
+      "command_type": "DB_FUNCTION",
+      "kst_schedule": "10 9 * * *",
+      "handler": "direct://generate_daily_assignments",
+      "command": "SELECT generate_daily_assignments()"
+    },
+    {
+      "jobid": 2,
+      "jobname": "daily_health",
+      "active_old": true,
+      "command_type": "DB_FUNCTION",
+      "kst_schedule": "0 9 * * *",
+      "handler": "direct://daily_health_check",
+      "command": "SELECT daily_health_check()"
+    },
+    {
+      "jobid": 3,
+      "jobname": "qa_send",
+      "active_old": false,
+      "command_type": "DB_FUNCTION",
+      "kst_schedule": "0,30 * * * *",
+      "handler": "direct://send_auto_qa_requests",
+      "command": "SELECT send_auto_qa_requests()"
+    },
+    {
+      "jobid": 4,
+      "jobname": "qa_collect",
+      "active_old": false,
+      "command_type": "DB_FUNCTION",
+      "kst_schedule": "2,32 * * * *",
+      "handler": "direct://collect_auto_qa_results",
+      "command": "SELECT collect_auto_qa_results()"
+    },
+    {
+      "jobid": 5,
+      "jobname": "kosha_construction_21",
+      "active_old": true,
+      "command_type": "HTTP",
+      "kst_schedule": "0 6 * * *",
+      "handler": "direct://kosha_construction_safety_light",
+      "command": "POST /kosha-collect/construction-safety-light"
+    },
+    {
+      "jobid": 6,
+      "jobname": "kosha_construction_03",
+      "active_old": true,
+      "command_type": "HTTP",
+      "kst_schedule": "0 12 * * *",
+      "handler": "direct://kosha_construction_safety_light",
+      "command": "POST /kosha-collect/construction-safety-light"
+    },
+    {
+      "jobid": 7,
+      "jobname": "kosha_construction_09",
+      "active_old": true,
+      "command_type": "HTTP",
+      "kst_schedule": "0 18 * * *",
+      "handler": "direct://kosha_construction_safety_light",
+      "command": "POST /kosha-collect/construction-safety-light"
+    },
+    {
+      "jobid": 8,
+      "jobname": "kosha_accidents",
+      "active_old": true,
+      "command_type": "HTTP",
+      "kst_schedule": "0 2 * * *",
+      "handler": "direct://kosha_accident_cases",
+      "command": "POST /kosha-collect/accident-cases"
+    },
+    {
+      "jobid": 9,
+      "jobname": "kosha_weekly",
+      "active_old": true,
+      "command_type": "HTTP",
+      "kst_schedule": "0 3 * * mon",
+      "handler": "direct://kosha_safety_materials",
+      "command": "POST /kosha-collect/run?target=safety-materials"
+    },
+    {
+      "jobid": 10,
+      "jobname": "health_cleanup",
+      "active_old": true,
+      "command_type": "CLEANUP",
+      "kst_schedule": "0 12 * * *",
+      "handler": "direct://health_cleanup",
+      "command": "DELETE health_checks/health_alerts now()-30d"
+    },
+    {
+      "jobid": 11,
+      "jobname": "cron_job_log_retention",
+      "active_old": true,
+      "command_type": "CLEANUP",
+      "kst_schedule": "17 * * * *",
+      "handler": "direct://cron_job_log_retention",
+      "command": "cron_job_log started_at < now() - interval '30 days'"
+    },
+    {
+      "jobid": 12,
+      "jobname": "business_event_retention",
+      "active_old": true,
+      "command_type": "CLEANUP",
+      "kst_schedule": "27 3 * * *",
+      "handler": "direct://business_event_retention",
+      "command": "business_event created_at < now() - interval '90 days'"
+    }
+  ]
+}
