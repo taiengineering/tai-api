@@ -1,4 +1,8 @@
-"""Asia/Seoul dispatcher tick. Business jobs are DB rows, not APScheduler add_job."""
+"""Asia/Seoul dispatcher tick. Business jobs are DB rows, not APScheduler add_job.
+
+Contract: at-least-once + at-most-one-live-claim + fenced completion + no silent miss.
+Do not declare exactly-once. complete_and_advance is atomic; RPC failure does not advance.
+"""
 from __future__ import annotations
 
 import logging
@@ -68,9 +72,24 @@ def tick(
             status = "FAILED"
             detail = {"error": str(e)[:1000]}
             logger.error("[SCHED] %s FAILED scheduled_for=%s: %s", job.job_code, claim.scheduled_for, e)
-        store.complete(claim, status, detail, now)
         nxt = next_fire_after(job.cron_expression, claim.scheduled_for)
-        store.advance_next_run(job, claim.scheduled_for, nxt)
+        try:
+            fenced = store.complete_and_advance(claim, status, detail, now, nxt)
+        except Exception as e:
+            logger.error(
+                "[SCHED] complete failed; leaving RUNNING for replay job=%s scheduled_for=%s: %s",
+                job.job_code,
+                claim.scheduled_for,
+                e,
+            )
+            continue
+        if fenced:
+            logger.warning(
+                "[SCHED] fenced complete rejected job=%s attempt=%s",
+                job.job_code,
+                claim.attempt_no,
+            )
+            continue
         results.append({
             "job_code": job.job_code,
             "scheduled_for": serialize_business_datetime(claim.scheduled_for),
