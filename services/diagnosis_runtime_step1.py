@@ -27,6 +27,7 @@ from services.legal_rules import normalize_sector_db, risk_level
 from services.compiler_core_svc import fetch_compiler_candidates
 from services.legal_runtime_fetch import fetch_runtime_rules_as_v1
 from services.legal_step1_builder import build_step1_result_data
+from services.time import now_kst, serialize_business_datetime
 
 RUNTIME_ENGINE_VERSION = "v3.0-runtime-compiler"
 
@@ -456,7 +457,7 @@ def run_diagnose_step1_runtime(
             inp[k] = v
 
     facility_ctx = _input_to_facility_context(sector_raw, inp)
-    evaluated_at = datetime.now().isoformat()
+    evaluated_at = serialize_business_datetime(now_kst())
     applicable, not_applicable = evaluate_facility_conditions_db(
         facility_ctx, all_rules, sector_raw
     )

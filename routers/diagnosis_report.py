@@ -25,6 +25,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
 from db.supabase_client import get_supabase
+from services.time import now_kst
 
 log = logging.getLogger(__name__)
 
@@ -76,11 +77,11 @@ RECOMMEND_PLAN: Dict[str, Dict[str, str]] = {
 # ───────────────────────────────────────────────────────────
 
 def _now_str() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return now_kst().strftime("%Y-%m-%d %H:%M UTC")
 
 
 def _report_date_str() -> str:
-    return datetime.now(timezone.utc).strftime("%Y년 %m월 %d일")
+    return now_kst().strftime("%Y년 %m월 %d일")
 
 
 def _ob_label(ob_type: str) -> str:

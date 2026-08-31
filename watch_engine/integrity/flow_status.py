@@ -13,6 +13,7 @@ This module is the foundation for false positive suppression.
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from services.time import now_kst
 
 logger = logging.getLogger("watch_engine.integrity.flow_status")
 
@@ -49,7 +50,7 @@ def compute_flow_status(
         }
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = now_kst()
 
     # Build terminal step maps
     success_terminals = set()

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/connection-commission", tags=["연결수수료"])
 
@@ -52,6 +53,6 @@ def update_commission(commission_id: int, body: CommissionUpdate):
     if not update_data:
         raise HTTPException(status_code=400, detail="변경할 항목이 없습니다")
 
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
     res = sb.table("connection_commission").update(update_data).eq("id", commission_id).execute()
     return {"status": "success", "data": res.data[0] if res.data else None}

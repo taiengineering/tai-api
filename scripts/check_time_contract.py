@@ -64,6 +64,7 @@ def scan():
         for fn in fns:
             rel=os.path.relpath(os.path.join(dp,fn),ROOT).replace(os.sep,"/")
             if rel.startswith("scripts/check_time_contract") or rel.startswith("scripts/check_baseline"): continue
+            if rel.startswith("docs/sql/20260831_tai_time_"): continue
             if rel.startswith(EXEMPT): continue
             try: src=open(os.path.join(dp,fn),encoding="utf-8").read()
             except Exception: continue

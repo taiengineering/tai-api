@@ -1,9 +1,10 @@
 """Degradation Feedback."""
 import logging
 from datetime import datetime,timezone,timedelta
+from services.time import now_kst
 logger=logging.getLogger("watch_engine.feedback.degradation")
 def track_degradation_feedback(sb,hours=24):
-    since=(datetime.now(timezone.utc)-timedelta(hours=hours)).isoformat()
+    since=(now_kst()-timedelta(hours=hours)).isoformat()
     try:
         ie=sb.table("engine_integrity_event").select("id,resolved,ignored,severity,event_type").neq("environment","mock").gte("created_at",since).execute()
         total=len(ie.data or [])

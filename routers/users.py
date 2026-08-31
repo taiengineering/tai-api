@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, date
 from db.supabase_client import get_supabase
+from services.time import business_today, now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -173,7 +174,7 @@ def create_user(req: UserCreate):
         dup = supabase.table("users").select("id").eq("username", req.username).limit(1).execute()
         if dup.data:
             raise HTTPException(status_code=400, detail="이미 사용 중인 아이디입니다")
-    now = datetime.now()
+    now = now_kst()
     data = {
         **req.dict(exclude_none=True),
         "user_code":   f"USR-{now.strftime('%Y%m%d%H%M%S')}",
@@ -212,7 +213,7 @@ def update_user(user_id: str, req: UserUpdate):
     if not existing.data:
         raise HTTPException(status_code=404, detail="회원을 찾을 수 없습니다")
     update_data = {k: v for k, v in req.dict().items() if v is not None}
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
     res = supabase.table("users").update(update_data).eq("id", user_id).execute()
     return {"status": "success", "message": "회원 정보가 수정됐습니다", "data": res.data[0] if res.data else {}}
 
@@ -230,7 +231,7 @@ def delete_user(user_id: str):
     supabase.table("users").update({
         "is_active":   False,
         "status_code": "DELETED",
-        "updated_at":  datetime.now().isoformat(),
+        "updated_at":  serialize_business_datetime(now_kst()),
     }).eq("id", user_id).execute()
     unassigned = _unassign_user_schedules(supabase, user_id)
     return {"status": "success", "message": "회원이 비활성화됐습니다", "data": {"unassigned_schedules": unassigned}}
@@ -250,7 +251,7 @@ def update_user_status(user_id: str, req: StatusUpdate):
     supabase.table("users").update({
         "status_code": req.status_code,
         "is_active":   is_active,
-        "updated_at":  datetime.now().isoformat(),
+        "updated_at":  serialize_business_datetime(now_kst()),
     }).eq("id", user_id).execute()
     unassigned = 0
     if req.status_code in DEACTIVATE_STATUSES:
@@ -288,7 +289,7 @@ async def update_user_role(user_id: str, req: RoleUpdate):
 
     supabase.table("users").update({
         "role_code":  req.role_code,
-        "updated_at": datetime.now().isoformat(),
+        "updated_at": serialize_business_datetime(now_kst()),
     }).eq("id", user_id).execute()
 
     # APPOINTMENT 트리거: role_code='002'(안전관리자) + factory_id 있으면
@@ -299,7 +300,7 @@ async def update_user_role(user_id: str, req: RoleUpdate):
             await trigger_event_schedules(
                 factory_id = factory_id,
                 event_type = "APPOINTMENT",
-                event_date = date.today(),
+                event_date = business_today(),
                 context    = {"assigned_user_id": user_id},
             )
         except Exception as e:

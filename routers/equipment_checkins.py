@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_own_company, _ensure_factory_own, _scope, _is_admin
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/equipment-checkins", tags=["equipment_checkins"])
 
@@ -102,7 +103,7 @@ async def submit_checkin(body: EquipmentCheckinCreate):
             raise HTTPException(status_code=409, detail="설비와 일정의 사업장이 일치하지 않습니다")
 
     # 체크인 레코드 저장
-    now_iso     = datetime.now(timezone.utc).isoformat()
+    now_iso     = serialize_external_utc(now_kst())
     insert_data = {
         "equipment_asset_id": body.equipment_asset_id,
         "factory_id":         factory_id,

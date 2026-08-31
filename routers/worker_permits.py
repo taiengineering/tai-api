@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["WorkerPermits"])
@@ -158,7 +159,7 @@ def participate_risk_assessment(
 
     if prev.data:
         # 재서명 — 기존 행 갱신. 검토 상태는 다시 PENDING 으로 되돌린다.
-        row["updated_at"] = datetime.now(timezone.utc).isoformat()
+        row["updated_at"] = serialize_external_utc(now_kst())
         res = supabase.table("ra_participation").update(row).eq("id", prev.data[0]["id"]).execute()
         saved_id = prev.data[0]["id"]
     else:
@@ -334,7 +335,7 @@ def create_work_permit(
         requester_id, resolved_name = _resolve_worker(clean)
         requester_name = requester_name or resolved_name
 
-    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    today = now_kst().strftime("%Y%m%d")
     permit_number = f"WRQ-{today}-{random.randint(100000, 999999)}"
 
     row = {

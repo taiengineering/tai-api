@@ -41,6 +41,7 @@ from pydantic import BaseModel
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_own_company
+from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
 router = APIRouter(tags=["WorkerReport"])
@@ -145,7 +146,7 @@ def _gen_report_number(prefix: str) -> str:
     형식: <PREFIX>-YYYYMMDD-<6자리>
     프론트는 응답의 report_number 를 화면에 표시하므로 반드시 반환해야 한다.
     """
-    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    today = now_kst().strftime("%Y%m%d")
     return f"{prefix}-{today}-{random.randint(100000, 999999)}"
 
 
@@ -265,7 +266,7 @@ def confirm_safety_report(
 
     res = supabase.table("safety_reports").update({
         "status": "CONFIRMED",
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": serialize_external_utc(now_kst()),
     }).eq("id", report_id).execute()
 
     log.info(f"[SafetyReport] 조치확인 {report_id} by={body.confirmed_by}")

@@ -1,9 +1,10 @@
 """False Positive Tracker."""
 import logging
 from datetime import datetime,timezone,timedelta
+from services.time import now_kst
 logger=logging.getLogger("watch_engine.calibration.fp")
 def analyze_false_positives(sb,hours=24):
-    since=(datetime.now(timezone.utc)-timedelta(hours=hours)).isoformat()
+    since=(now_kst()-timedelta(hours=hours)).isoformat()
     try:
         all_ev=sb.table("engine_integrity_event").select("id,resolved,ignored,severity,event_type,created_at",count="exact").neq("environment","mock").gte("created_at",since).execute()
         total=all_ev.count or len(all_ev.data or [])

@@ -9,6 +9,7 @@ v1.0.0 (2026-04-25): 최초 작성 — reparse 에러 방지
 from datetime import datetime, timezone
 from typing import Any, Dict, Tuple
 import logging
+from services.time import now_kst, serialize_external_utc
 
 _logger = logging.getLogger("safe-db-update")
 
@@ -30,7 +31,7 @@ def safe_update_master(
     if not patch:
         return False, 0, 0
 
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = serialize_external_utc(now_kst())
     patch["updated_at"] = now_iso
 
     # 1차: 전체 batch UPDATE

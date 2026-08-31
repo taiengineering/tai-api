@@ -23,13 +23,14 @@ from services.construction_svc import (
 )
 from services.company_scope import _ensure_own_company, _forced_company_id, _is_admin, _scope
 from utils.logger import get_logger
+from services.time import now_kst, serialize_external_utc
 
 log = get_logger(__name__)
 router = APIRouter(tags=["건설안전"])
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _validate_uuid(value: str) -> str:

@@ -52,6 +52,7 @@ from services.company_scope import (
     require_company_id, scoped_list_company, _ensure_own_company, _ensure_factory_own,
 )
 from services.health_registry import register_probe
+from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ STORAGE_BUCKET = "signatures"
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _is_uuid(value: str) -> bool:

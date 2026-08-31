@@ -9,6 +9,7 @@ prefix: /admin
 from fastapi import APIRouter, HTTPException
 from datetime import datetime, timezone
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/admin", tags=["어드민통계"])
 
@@ -16,7 +17,7 @@ VERSION = "1.0.0"
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 # ─────────────────────────────────────────────────────

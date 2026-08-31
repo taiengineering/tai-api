@@ -11,13 +11,14 @@ import os
 import time
 from datetime import datetime
 from typing import Optional
+from services.time import now_kst
 
 logger = logging.getLogger("watch_engine.synthetic.runner")
 
 
 def _generate_run_id(prefix: str = "synthetic") -> str:
     """Generate scenario_run_id: synthetic_YYYYMMDD_HHMMSS"""
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = now_kst().strftime("%Y%m%d_%H%M%S")
     return f"{prefix}_{ts}"
 
 

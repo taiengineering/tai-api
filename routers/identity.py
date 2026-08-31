@@ -28,6 +28,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -52,11 +53,11 @@ _VERIFY_TOKENS: dict[str, dict] = {}
 
 # ── 유틸 ───────────────────────────────────────────────────────
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _now_ts() -> int:
-    return int(datetime.now(timezone.utc).timestamp())
+    return int(now_kst().timestamp())
 
 
 def _sha256(data: str) -> str:

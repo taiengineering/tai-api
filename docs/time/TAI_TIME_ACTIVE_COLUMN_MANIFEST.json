@@ -1,0 +1,24 @@
+{
+  "required_row_count": 260,
+  "row_count": 0,
+  "sot_status": "NOT_ATTACHED_TO_CURSOR_WORK_ORDER",
+  "expected_fields": [
+    "object_name",
+    "column_name",
+    "relkind",
+    "col_default",
+    "is_nullable",
+    "structure",
+    "migration_group",
+    "migration_action"
+  ],
+  "invariants": {
+    "active": 260,
+    "view_derived": 7,
+    "direct_alter": 236,
+    "partition_root_alter": 1,
+    "partition_children": 16,
+    "isolated_alter": 0
+  },
+  "columns": []
+}

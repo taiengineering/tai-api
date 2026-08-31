@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 from datetime import datetime
 
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/legal-engine", tags=["엔진QA"])
 
@@ -310,7 +311,7 @@ def run_engine_qa():
     - 전체 커버 시 100점, DB이슈 감점
     """
     supabase = get_supabase()
-    started_at = datetime.now().isoformat()
+    started_at = serialize_business_datetime(now_kst())
 
     test_results = []
     for tc in QA_TEST_CASES:
@@ -366,7 +367,7 @@ def run_engine_qa():
         "status": "success",
         "qa_version":  QA_VERSION,
         "started_at":  started_at,
-        "finished_at": datetime.now().isoformat(),
+        "finished_at": serialize_business_datetime(now_kst()),
         "note": "특수시설(SPECIAL_FACILITY)은 용도별 법령 적용 필요 — 나라장터 등록 후 추가 예정",
 
         "score": {

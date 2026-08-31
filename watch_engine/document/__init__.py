@@ -10,6 +10,7 @@ import io
 import os
 from datetime import datetime, timezone
 from typing import Optional
+from services.time import now_kst
 
 logger = logging.getLogger("watch_engine.document.activation")
 
@@ -185,7 +186,7 @@ async def render_pdf_gotenberg(sb, generated_doc_id: str) -> dict:
         pdf_bytes = response.content
 
         # 4. Supabase Storage 업로드
-        now_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        now_str = now_kst().strftime("%Y%m%d_%H%M%S")
         filename = f"TAI_{form_code}_{now_str}.pdf"
         tenant = g.get("tenant_id") or "general"
         storage_path = f"{tenant}/{filename}"
@@ -233,7 +234,7 @@ def _build_default_html(gen: dict, form: dict) -> str:
     form_name = form.get("form_name") or gen.get("document_name") or "문서"
     form_code = gen.get("form_code") or ""
     tenant_id = gen.get("tenant_id") or ""
-    now = datetime.now(timezone.utc).strftime("%Y년 %m월 %d일")
+    now = now_kst().strftime("%Y년 %m월 %d일")
 
     return f"""<!DOCTYPE html>
 <html lang="ko">

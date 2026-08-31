@@ -65,6 +65,7 @@ from services.payment_helpers import (
     ts_ms as _ts_ms,
 )
 from services.payment_svc import call_pay_auth as _call_pay_auth
+from services.time import now_kst
 
 log = logging.getLogger(__name__)
 
@@ -124,7 +125,7 @@ def _sha512(data: str) -> str:
 
 def _make_billing_oid() -> str:
     """빌링키 발급 주문번호 — TAI-BIL-YYYYMMDDhhmmss-xxxxxx"""
-    return f"TAI-BIL-{datetime.now():%Y%m%d%H%M%S}-{uuid4().hex[:6].upper()}"
+    return f"TAI-BIL-{now_kst():%Y%m%d%H%M%S}-{uuid4().hex[:6].upper()}"
 
 
 def _make_charge_moid(subscription_id: str, cycle: int) -> str:
@@ -135,7 +136,7 @@ def _make_charge_moid(subscription_id: str, cycle: int) -> str:
 
 def _ts_yyyymmddhhmmss() -> str:
     """빌링승인 API용 timestamp — YYYYMMDDhhmmss (STEP3의 밀리초와 다름)"""
-    return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    return now_kst().strftime("%Y%m%d%H%M%S")
 
 
 def _call_billing_charge_api(

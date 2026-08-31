@@ -15,6 +15,7 @@ from dateutil.relativedelta import relativedelta
 
 from db.supabase_client import get_supabase
 from services.payment_helpers import SAAS_PRODUCT_TYPES, now_iso
+from services.time import business_today, now_kst
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ def _fire_automation(event_type: str, payload: Dict[str, Any], trigger_ref: Opti
 
 
 def _gen_contract_no() -> str:
-    return f"CON-{datetime.now().strftime('%Y%m%d')}-{random.randint(1000, 9999)}"
+    return f"CON-{now_kst().strftime('%Y%m%d')}-{random.randint(1000, 9999)}"
 
 
 def _contract_end_date(start: date, period_months: int) -> date:
@@ -85,7 +86,7 @@ def _activate_existing_contract(sb, pay: dict, contract_id: str) -> None:
     }
     period_months = pay.get("period_months")
     if period_months:
-        start = date.today()
+        start = business_today()
         update["start_date"] = start.isoformat()
         update["end_date"] = _contract_end_date(start, int(period_months)).isoformat()
     sb.table("contracts").update(update).eq("id", contract_id).execute()
@@ -101,7 +102,7 @@ def _extend_contract_for_renewal(sb, pay: dict, contract_id: str) -> None:
     contract = ct_res.data[0]
     period_months = int(pay.get("period_months") or 1)
     current_end = _parse_contract_date(contract.get("end_date"))
-    base_start = current_end if current_end and current_end >= date.today() else date.today()
+    base_start = current_end if current_end and current_end >= business_today() else business_today()
     new_end = _contract_end_date(base_start, period_months)
     now = now_iso()
 
@@ -127,7 +128,7 @@ def _expire_other_active_contracts(sb, company_id: str, contract_id: str) -> Non
 def _create_contract_from_payment(sb, pay: dict) -> Optional[str]:
     plan_code = (pay.get("plan_code") or "INDUSTRY_PRO").upper()
     period_months = int(pay.get("period_months") or 12)
-    start = date.today()
+    start = business_today()
     end = _contract_end_date(start, period_months)
     now = now_iso()
 

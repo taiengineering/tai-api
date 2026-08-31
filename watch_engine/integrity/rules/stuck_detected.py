@@ -7,6 +7,7 @@ and the flow has not reached its final step.
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from services.time import now_kst
 
 logger = logging.getLogger("watch_engine.integrity.stuck_detected")
 
@@ -31,7 +32,7 @@ def check_stuck_detected(
         engine_integrity_event dict if stuck, None if ok.
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = now_kst()
 
     threshold_ms = flow_reg.get("stuck_threshold_ms") or 60000
     threshold = timedelta(milliseconds=threshold_ms)

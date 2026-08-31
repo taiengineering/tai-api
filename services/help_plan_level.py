@@ -26,6 +26,7 @@ from datetime import date
 from typing import Any, Dict, Optional
 
 from db.supabase_client import get_supabase
+from services.time import business_today
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ def resolve_for_company(company_id: Optional[str]) -> Dict[str, Any]:
     if not rows:
         return {**empty, "reason": "no_contract"}
 
-    today = date.today().isoformat()
+    today = business_today().isoformat()
     # 만료되지 않은 계약을 먼저 본다. end_date 가 비어 있으면 만료 판단 근거가 없으므로 유효로 본다.
     rows.sort(key=lambda r: (r.get("end_date") or "9999-12-31") >= today, reverse=True)
 

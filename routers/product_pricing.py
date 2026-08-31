@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/products/pricing", tags=["요금제"])
 
@@ -76,7 +77,7 @@ def update_pricing(plan_id: int, body: PricingUpdate):
     if not update_data:
         raise HTTPException(status_code=400, detail="변경할 항목이 없습니다")
 
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
 
     res = sb.table("product_pricing").update(update_data).eq("id", plan_id).execute()
     return {"status": "success", "data": res.data[0] if res.data else None}

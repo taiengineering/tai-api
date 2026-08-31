@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from typing import Optional
 import hashlib, logging
 from datetime import datetime
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/legal-intake", tags=["법령변경감시"])
 logger = logging.getLogger("legal_intake")
@@ -126,6 +127,6 @@ def mark_review_required(request: Request, candidate_id: str):
         raise HTTPException(404, "Candidate not found")
     sb.table("legal_intake_candidate").update({
         "review_status": "REVIEW_REQUIRED",
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": serialize_business_datetime(now_kst()),
     }).eq("id", candidate_id).execute()
     return {"status": "success", "candidate_id": candidate_id, "review_status": "REVIEW_REQUIRED"}

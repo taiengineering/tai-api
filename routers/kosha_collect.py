@@ -32,6 +32,7 @@ from fastapi import APIRouter, Query, BackgroundTasks
 from typing import Optional, Tuple
 from db.supabase_client import get_supabase
 from services.kr_public_api import kr_get
+from services.time import now_kst
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/kosha-collect", tags=["KOSHA데이터수집"])
@@ -213,7 +214,7 @@ def _make_id(prefix: str, *parts) -> str:
     raw = "|".join(str(p) for p in parts if p)
     if raw:
         return hashlib.md5(raw.encode()).hexdigest()[:16]
-    return f"{prefix}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    return f"{prefix}_{now_kst().strftime('%Y%m%d%H%M%S')}"
 
 
 # ─────────────────────────────────────────────────────

@@ -23,6 +23,7 @@ import argparse
 import requests
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from services.time import now_kst, serialize_business_datetime
 
 # ──── 설정 ────
 LAW_OC = "taieng"
@@ -169,7 +170,7 @@ def build_save_payload(item: dict, detail: dict, search_law: str) -> dict:
         "judicial_summary": (detail.get("판시사항") or "")[:2000],
         "violation_laws_raw": detail.get("참조조문"),
         "keywords": [search_law],
-        "collected_at": datetime.utcnow().isoformat(),
+        "collected_at": serialize_business_datetime(now_kst()),
         "is_active": True,
     }
 

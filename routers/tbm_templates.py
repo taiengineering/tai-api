@@ -43,6 +43,7 @@ from services.company_scope import (
     _ensure_own_company,
     _ensure_factory_own,
 )
+from services.time import business_today, now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/tbm-templates", tags=["tbm-templates"])
 
@@ -301,7 +302,7 @@ async def update_template(template_id: str, body: TbmTemplateUpdate, current: di
     sb = get_sb()
     _ensure_tbm_own_or_global(sb, template_id, current, write=True)
 
-    update: dict = {"updated_at": datetime.utcnow().isoformat()}
+    update: dict = {"updated_at": serialize_business_datetime(now_kst())}
     if body.template_name is not None:
         update["template_name"] = body.template_name.strip()
     if body.work_location is not None:
@@ -355,7 +356,7 @@ async def use_template(template_id: str, body: TbmUseBody, current: dict = Depen
     tmpl = _ensure_tbm_own_or_global(sb, template_id, current)
 
     # 날짜
-    work_date_str = body.work_date or date.today().isoformat()
+    work_date_str = body.work_date or business_today().isoformat()
 
     # 그룹 지정 시: team_id 유도 + 그룹원 자동 소집
     group_id = body.group_id
@@ -431,8 +432,8 @@ async def use_template(template_id: str, body: TbmUseBody, current: dict = Depen
     # use_count +1, last_used_at 업데이트
     sb.table("tbm_templates").update({
         "use_count":    (tmpl.get("use_count") or 0) + 1,
-        "last_used_at": datetime.utcnow().isoformat(),
-        "updated_at":   datetime.utcnow().isoformat(),
+        "last_used_at": serialize_business_datetime(now_kst()),
+        "updated_at":   serialize_business_datetime(now_kst()),
     }).eq("id", template_id).execute()
 
     return {

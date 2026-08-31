@@ -42,6 +42,7 @@ import requests
 
 from services.kr_public_api import kr_get
 from db.supabase_client import get_supabase
+from services.time import business_today
 
 log = logging.getLogger(__name__)
 
@@ -174,5 +175,5 @@ def sync_year(year: int, created_by: Optional[str] = None) -> Dict:
 
 def sync_current_and_next(created_by: Optional[str] = None) -> Dict:
     """올해와 내년을 함께 동기화(스케줄러 기본 동작). 내년 달력은 연말에 확정된다."""
-    y = date.today().year
+    y = business_today().year
     return {"results": [sync_year(y, created_by), sync_year(y + 1, created_by)]}

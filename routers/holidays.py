@@ -30,6 +30,7 @@ from db.supabase_client import get_supabase
 from services.health_registry import register_probe
 from services.holiday_svc import DEFAULT_WORK_WEEKDAYS, get_holidays, get_work_weekdays
 from services.holiday_sync_svc import HolidaySyncError, sync_year
+from services.time import business_today
 
 router = APIRouter(prefix="", tags=["휴무·작업일 캘린더"])
 
@@ -63,7 +64,7 @@ def sync_holidays(
     created_by: Optional[str] = Query(None),
 ):
     """공휴일 공식 API(한국천문연구원 특일정보)로 LEGAL 공휴일을 교체 동기화."""
-    target = year or date.today().year
+    target = year or business_today().year
     try:
         result = sync_year(target, created_by)
     except HolidaySyncError as e:
@@ -141,7 +142,7 @@ def list_holidays(
     date_to:    Optional[str] = Query(None, description="YYYY-MM-DD (기본: 올해 12/31)"),
 ):
     """법정공휴일 + 사업장 휴무를 병합해 돌려준다."""
-    year = date.today().year
+    year = business_today().year
     df = date_from or f"{year}-01-01"
     dt = date_to or f"{year}-12-31"
     rows = get_holidays(company_id, factory_id, df, dt)

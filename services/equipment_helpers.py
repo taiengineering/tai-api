@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 
 from dateutil.relativedelta import relativedelta
+from services.time import now_kst, serialize_external_utc
 
 
 CATEGORY_MAP = {
@@ -38,7 +39,7 @@ REPEAT_TYPE_MAP = {
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _build_schedules_for_repair(iset: dict, anchor: date, end: date) -> list:

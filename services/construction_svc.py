@@ -5,6 +5,7 @@ import httpx
 
 from services.construction_helpers import map_site_type_to_construction_type
 from utils.logger import get_logger
+from services.time import business_today, now_kst, serialize_business_datetime
 
 log = get_logger(__name__)
 FCM_URL = "https://fcm.googleapis.com/fcm/send"
@@ -77,7 +78,7 @@ def run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
         "construction_type": site_type_raw,
     }
     facility_ctx = _input_to_facility_context(sector_raw, inp)
-    evaluated_at = datetime.now().isoformat()
+    evaluated_at = serialize_business_datetime(now_kst())
     applicable, not_applicable = _evaluate_facility_conditions_db(facility_ctx, all_rules, sector_raw)
 
     triggered: Dict[str, List] = {
@@ -147,9 +148,9 @@ def run_diagnosis(supabase, factory_id: str, site: dict) -> dict:
         supabase.table("construction_sites").update(
             {
                 "diagnosis_step1_id": diagnosis_id,
-                "last_diagnosis_at": datetime.now().isoformat(),
+                "last_diagnosis_at": serialize_business_datetime(now_kst()),
                 "diagnosis_applicable_count": total_applicable,
-                "updated_at": datetime.now().isoformat(),
+                "updated_at": serialize_business_datetime(now_kst()),
             }
         ).eq("factory_id", factory_id).execute()
 
@@ -173,7 +174,7 @@ def run_generate_schedules(supabase, factory_id: str, inspection_rules: list, co
     )
     existing_codes = {r["rule_code"] for r in (existing.data or []) if r.get("rule_code")}
 
-    today_str = date.today().isoformat()
+    today_str = business_today().isoformat()
     rows = []
     for rule in inspection_rules:
         rule_id = (rule.get("rule_id") or rule.get("rule_code") or "").strip()

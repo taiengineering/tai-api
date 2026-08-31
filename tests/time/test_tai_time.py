@@ -1,5 +1,5 @@
 """TAI time contract unit tests. FixedClock only — OS clock is not a fixture."""
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -18,6 +18,8 @@ from services.time.tai_time import (
     parse_external_datetime,
     serialize_business_datetime,
     to_kst,
+    to_external_utc,
+    serialize_external_utc,
 )
 
 KST = ZoneInfo("Asia/Seoul")
@@ -128,3 +130,27 @@ def test_legacy_roundtrip():
     back = legacy_naive_utc_to_aware(naive)
     assert back == aware.astimezone(timezone.utc)
     assert to_kst(back) == aware
+
+
+def test_to_external_utc_same_instant():
+    kst = datetime(2026, 9, 1, 0, 0, tzinfo=KST)
+    utc = to_external_utc(kst)
+    assert utc == datetime(2026, 8, 31, 15, 0, tzinfo=timezone.utc)
+    s = serialize_external_utc(kst)
+    assert s.startswith("2026-08-31T15:00:00")
+    assert s.endswith("+00:00")
+
+
+def test_otp_expiry_absolute_comparison_not_string_replace():
+    """auth/OTP expiry must compare instants, not KST/UTC digit strings."""
+    issued = now_kst(_clk(2026, 9, 1, 0, 0))
+    expires = issued + timedelta(minutes=10)
+    assert now_kst(_clk(2026, 9, 1, 0, 9, 59)) <= expires
+    assert not (now_kst(_clk(2026, 9, 1, 0, 10, 1)) <= expires)
+    stored = serialize_external_utc(expires)
+    parsed = parse_external_datetime(stored)
+    assert now_kst(_clk(2026, 9, 1, 0, 9)) <= parsed
+    assert parsed == expires
+    # stored UTC iso is not a naive digit-string substitute of KST wall
+    assert not stored.startswith("2026-09-01T00:10")
+    assert stored.startswith("2026-08-31T15:10")

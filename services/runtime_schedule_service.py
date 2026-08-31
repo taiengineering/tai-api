@@ -12,6 +12,7 @@ from db.supabase_client import get_supabase
 from watch_engine.runtime_bus.event_envelope import (
     EventEnvelope, create_envelope, emit_envelope,
 )
+from services.time import business_today
 
 
 async def create_schedule(data: dict[str, Any]) -> dict:
@@ -40,7 +41,7 @@ async def check_overdue_schedules() -> list[dict]:
     - Intended to be called by a scheduler/cron
     """
     sb = get_supabase()
-    today = date.today().isoformat()
+    today = business_today().isoformat()
     res = (
         sb.table("runtime_schedule")
         .select("*, runtime_task!inner(id, tenant_id, title, status)")

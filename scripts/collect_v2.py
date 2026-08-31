@@ -35,6 +35,7 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+from services.time import now_kst, serialize_business_datetime
 from db.database import get_supabase
 from routers.law_collector import (
     fetch_law_list,
@@ -96,11 +97,11 @@ def update_target_status(
 ) -> None:
     update_data = {
         "collection_status": status,
-        "updated_at": datetime.now().isoformat(),
+        "updated_at": serialize_business_datetime(now_kst()),
     }
     
     if status in ("SUCCESS", "FAILED", "SKIPPED"):
-        update_data["last_collected_at"] = datetime.now().isoformat()
+        update_data["last_collected_at"] = serialize_business_datetime(now_kst())
     
     if checklist is not None:
         update_data["last_collection_result"] = json.dumps(checklist, ensure_ascii=False, default=str)
@@ -110,7 +111,7 @@ def update_target_status(
         target = supabase.table("law_collection_target") \
             .select("remarks").eq("id", target_id).single().execute()
         existing_remarks = (target.data.get("remarks") or "") if target.data else ""
-        ts = datetime.now().strftime("%m-%d %H:%M")
+        ts = now_kst().strftime("%m-%d %H:%M")
         new_remarks = f"{existing_remarks} | [{ts}] {error[:200]}"
         update_data["remarks"] = new_remarks.strip(" |")
     
@@ -173,7 +174,7 @@ def save_law_to_db(
             "data.go.kr/law" if os.environ.get("DATA_GOV_SERVICE_KEY") else "law.go.kr"
         ),
         "is_active": True,
-        "updated_at": datetime.now().isoformat(),
+        "updated_at": serialize_business_datetime(now_kst()),
     }, on_conflict="law_key").execute()
     
     if not master_res.data:
@@ -198,7 +199,7 @@ def save_law_to_db(
             "is_current": True,
             "version_status_code": "ACTIVE",
             "raw_hash": raw_hash,
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": serialize_business_datetime(now_kst()),
         }).eq("id", version_id).execute()
         is_new_version = False
     else:
@@ -213,7 +214,7 @@ def save_law_to_db(
             "is_current": True,
             "version_status_code": "ACTIVE",
             "raw_hash": raw_hash,
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": serialize_business_datetime(now_kst()),
         }).execute()
         version_id = version_res.data[0]["id"]
         is_new_version = True
@@ -228,7 +229,7 @@ def save_law_to_db(
     supabase.table("law_master").update({
         "current_version_id": version_id,
         "current_version_no": version_no,
-        "updated_at": datetime.now().isoformat(),
+        "updated_at": serialize_business_datetime(now_kst()),
     }).eq("id", law_id).execute()
     
     # ─── TX1-3: law_content_raw (버전당 1개) ───────────────
@@ -238,7 +239,7 @@ def save_law_to_db(
         "content_type_code": "XML",
         "raw_xml": raw_xml,
         "text_hash": raw_hash,
-        "updated_at": datetime.now().isoformat(),
+        "updated_at": serialize_business_datetime(now_kst()),
     }).execute()
     
     # ─── TX2: 조문 UPSERT (UUID 영구 유지) ─────────────────
@@ -278,7 +279,7 @@ def save_law_to_db(
             "is_changed": art["is_changed"],
             "enforcement_date": str(art["enforcement_date"]) if art["enforcement_date"] else None,
             "article_status_code": "ACTIVE",
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": serialize_business_datetime(now_kst()),
         }
         
         if existing.data:
@@ -309,7 +310,7 @@ def save_law_to_db(
                 "paragraph_no_sort": p_idx + 1,
                 "paragraph_text": para["paragraph_text"],
                 "paragraph_status_code": "ACTIVE",
-                "updated_at": datetime.now().isoformat(),
+                "updated_at": serialize_business_datetime(now_kst()),
             }).execute()
             paragraph_id = para_res.data[0]["id"]
             paragraph_count += 1
@@ -326,7 +327,7 @@ def save_law_to_db(
                     "item_no_sort": i_idx + 1,
                     "item_text": item["item_text"],
                     "item_status_code": "ACTIVE",
-                    "updated_at": datetime.now().isoformat(),
+                    "updated_at": serialize_business_datetime(now_kst()),
                 }).execute()
                 item_id = item_res.data[0]["id"]
                 item_count += 1
@@ -344,7 +345,7 @@ def save_law_to_db(
                         "item_no_sort": s_idx + 1,
                         "item_text": sub["item_text"],
                         "item_status_code": "ACTIVE",
-                        "updated_at": datetime.now().isoformat(),
+                        "updated_at": serialize_business_datetime(now_kst()),
                     }).execute()
                     item_count += 1
     
@@ -361,7 +362,7 @@ def save_law_to_db(
             if existing_art["article_internal_key"] not in current_keys:
                 supabase.table("law_article").update({
                     "article_status_code": "DELETED",
-                    "updated_at": datetime.now().isoformat(),
+                    "updated_at": serialize_business_datetime(now_kst()),
                 }).eq("id", existing_art["id"]).execute()
                 deleted_count += 1
     
@@ -424,7 +425,7 @@ def verify_one_law(target: dict, save_result: dict, parsed: dict, supabase) -> d
         "no_duplicate_created": True,
         "is_new_version": save_result.get("is_new_version", False),
         "is_admrul": _is_admrul(target),
-        "checked_at": datetime.now().isoformat(),
+        "checked_at": serialize_business_datetime(now_kst()),
     }
     
     required_checks = [
@@ -457,7 +458,7 @@ def collect_one_law(target: dict, supabase) -> dict:
         "error": None,
         "checklist": {},
         "save_result": None,
-        "started_at": datetime.now().isoformat(),
+        "started_at": serialize_business_datetime(now_kst()),
         "source_type": "admrul" if is_admrul else "law",
     }
     
@@ -540,7 +541,7 @@ def collect_one_law(target: dict, supabase) -> dict:
         print(f"   ❌ 실패: {error_msg}")
     
     finally:
-        result["completed_at"] = datetime.now().isoformat()
+        result["completed_at"] = serialize_business_datetime(now_kst())
     
     return result
 
@@ -728,7 +729,7 @@ def cmd_retry(rate_limit_sec: float = 0.5) -> int:
     for t in failed_targets:
         supabase.table("law_collection_target").update({
             "collection_status": "PENDING",
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": serialize_business_datetime(now_kst()),
         }).eq("id", t["id"]).execute()
     
     success_count = 0
@@ -789,7 +790,7 @@ def cmd_domain(domain_code: str, rate_limit_sec: float = 0.5) -> int:
 
 def cmd_monitor() -> int:
     supabase = get_supabase()
-    print(f"\n{'=' * 70}\n📊 법령 수집 진행상황 ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})\n{'=' * 70}\n")
+    print(f"\n{'=' * 70}\n📊 법령 수집 진행상황 ({now_kst().strftime('%H:%M:%S')})\n{'=' * 70}\n")
     
     all_targets = supabase.table("law_collection_target") \
         .select("collection_status,domain_code,added_in_phase,law_name,law_type_code,remarks") \

@@ -18,6 +18,7 @@ from engine.sample_accuracy import (
     _verify_row_reverse,
 )
 from engine.validator import CheckResult
+from services.time import now_kst, serialize_external_utc
 
 if TYPE_CHECKING:
     from supabase import Client as SupabaseClient
@@ -390,7 +391,7 @@ class Phase22V3Iterator:
             """,
             (law_id,),
         )
-        now = datetime.now(timezone.utc)
+        now = now_kst()
         for row in cur.fetchall():
             eid, st, stext = row[0], row[1], row[2]
             st_s = st or "UNCLASSIFIED"
@@ -422,7 +423,7 @@ class Phase22V3Iterator:
         from engine.clause_fetch import fetch_clauses_by_law_id
 
         n = 0
-        now = datetime.now(timezone.utc).isoformat()
+        now = serialize_external_utc(now_kst())
         clauses = fetch_clauses_by_law_id(self.supabase, law_id)
         for cl in clauses:
             cid = cl.get("id")
@@ -479,7 +480,7 @@ class Phase22V3Iterator:
             """,
             (law_id,),
         )
-        now = datetime.now(timezone.utc)
+        now = now_kst()
         for row in cur.fetchall():
             eid, st, stext = row[0], row[1], row[2]
             st_s = st or "UNCLASSIFIED"
@@ -511,7 +512,7 @@ class Phase22V3Iterator:
 
         n = 0
         reason = "WARNING_LOW_ACCURACY"
-        now = datetime.now(timezone.utc).isoformat()
+        now = serialize_external_utc(now_kst())
         clauses = fetch_clauses_by_law_id(self.supabase, law_id)
         for cl in clauses:
             cid = cl.get("id")

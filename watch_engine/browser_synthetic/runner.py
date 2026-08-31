@@ -7,12 +7,13 @@ import asyncio
 import logging
 import time
 from datetime import datetime
+from services.time import now_kst
 
 logger = logging.getLogger("watch_engine.browser_synthetic.runner")
 
 
 def _generate_run_id() -> str:
-    return f"browser_synth_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    return f"browser_synth_{now_kst().strftime('%Y%m%d_%H%M%S')}"
 
 
 def run_browser_synthetic(scenarios: list[str] = None) -> dict:

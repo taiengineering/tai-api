@@ -14,6 +14,7 @@ Notification direct send 금지.
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
+from services.time import now_kst
 
 logger = logging.getLogger("workflow_alert.evaluator")
 
@@ -120,7 +121,7 @@ def _process_rule(sb, rule, workflow_id, integrity_event_id,
 
 def _is_in_cooldown(sb, dedupe_key: str, cooldown_sec: int) -> bool:
     try:
-        since = (datetime.now(timezone.utc) - timedelta(seconds=cooldown_sec)).isoformat()
+        since = (now_kst() - timedelta(seconds=cooldown_sec)).isoformat()
         resp = sb.table("workflow_alert_event") \
             .select("id", count="exact") \
             .eq("dedupe_key", dedupe_key) \

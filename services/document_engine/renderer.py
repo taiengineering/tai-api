@@ -20,6 +20,7 @@ from typing import Any, Dict
 
 import httpx
 from jinja2 import Environment, FileSystemLoader
+from services.time import now_kst
 
 # 템플릿 디렉토리
 TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates" / "documents"
@@ -43,7 +44,7 @@ async def render_document_html(doc_id: str, data: Dict[str, Any]) -> str:
     template = _env.get_template(template_name)
 
     # 공통 변수 주입
-    data.setdefault("generated_at", datetime.now().strftime("%Y-%m-%d %H:%M"))
+    data.setdefault("generated_at", now_kst().strftime("%Y-%m-%d %H:%M"))
 
     return template.render(**data)
 

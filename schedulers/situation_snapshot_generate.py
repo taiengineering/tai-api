@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any
+from services.time import now_kst
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +138,7 @@ async def _fetch_recent_events() -> list[dict[str, Any]]:
 
 def _since_5min() -> str:
     """5분 전 ISO timestamp."""
-    return (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    return (now_kst() - timedelta(minutes=5)).isoformat()
 
 
 def _group_by_tenant(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:

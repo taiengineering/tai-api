@@ -65,6 +65,7 @@ from services.company_scope import (
     _tier,
 )
 from services.status_vocab import wa_active_query_values, wa_write_ready
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/work-schedules", tags=["work_schedules"])
 
@@ -72,7 +73,7 @@ VERSION = "1.2.7"
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _is_uuid(value: str) -> bool:
@@ -129,7 +130,7 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
             else:
                 supabase.table("work_assignments").insert({
                     "schedule_id": schedule_id, "assigned_user_id": auid,
-                    "scheduled_date": datetime.now().date().isoformat(),
+                    "scheduled_date": now_kst().date().isoformat(),
                     "status_code": wa_write_ready(), "created_at": now,
                     "factory_id": _parent_factory_id,   # WP-04C parent companion (PRE-READ 값)
                 }).execute()

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/watch-engine/recovery", tags=["복구대응"])
@@ -91,13 +92,13 @@ def record_action(incident_id: str, body: ActionBody):
         if body.action_type == "ACKNOWLEDGED":
             sb.table("engine_integrity_event").update({
                 "acknowledged": True,
-                "acknowledged_at": datetime.now(timezone.utc).isoformat(),
+                "acknowledged_at": serialize_external_utc(now_kst()),
                 "acknowledged_by": body.operator,
             }).eq("id", incident_id).execute()
         elif body.action_type == "RESOLVED":
             sb.table("engine_integrity_event").update({
                 "resolved": True,
-                "resolved_at": datetime.now(timezone.utc).isoformat(),
+                "resolved_at": serialize_external_utc(now_kst()),
                 "operator_note": body.action_note,
             }).eq("id", incident_id).execute()
         elif body.action_type == "IGNORED":

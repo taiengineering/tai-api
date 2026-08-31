@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 from db.supabase_client import get_supabase
 from .closure_summary import build_closure_summary
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ async def close_operational_situation(
     snapshot_id: str | None = None,
     environment: str = "production",
 ) -> dict[str, Any] | None:
-    now = datetime.now(timezone.utc).isoformat()
+    now = serialize_external_utc(now_kst())
     # 최신 snapshot에서 title 가져오기
     title = ""
     try:

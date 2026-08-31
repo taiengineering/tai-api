@@ -6,6 +6,7 @@
 from dataclasses import dataclass, field
 from typing import Optional
 from datetime import datetime, timezone
+from services.time import now_kst, serialize_external_utc
 
 
 @dataclass
@@ -18,6 +19,6 @@ class DeliveryResult:
 
     def __post_init__(self):
         if self.success and not self.delivered_at:
-            self.delivered_at = datetime.now(timezone.utc).isoformat()
+            self.delivered_at = serialize_external_utc(now_kst())
         if not self.success and not self.delivery_status:
             self.delivery_status = "FAILED"

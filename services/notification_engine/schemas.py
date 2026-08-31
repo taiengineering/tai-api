@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timezone
 import uuid
+from services.time import now_kst, serialize_external_utc
 
 
 class NotificationEventCreate(BaseModel):
@@ -22,7 +23,7 @@ class NotificationEventCreate(BaseModel):
     escalation_required: bool = False
 
     def to_db_row(self) -> dict:
-        now = datetime.now(timezone.utc).isoformat()
+        now = serialize_external_utc(now_kst())
         return {
             "event_type": self.event_type,
             "source_engine": self.source_engine,

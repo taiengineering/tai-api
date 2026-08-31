@@ -44,6 +44,7 @@ from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_factory_own, _scope, _is_admin
 from services.status_vocab import wa_write_done
+from services.time import now_kst, serialize_external_utc
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/overdue", tags=["\uc5c5\ubb34\uc9c0\uc5f0\uc5d0\uc2a4\ucf08\ub808\uc774\uc158"])
@@ -72,7 +73,7 @@ _LEVELS = [
 _WA_SKIP_STATUSES = ["DONE", "SKIP", "OVERDUE", "COMPLETED", "RESOLVED"]
 
 def _today() -> date:
-    return datetime.now(timezone.utc).date()
+    return now_kst().date()
 
 
 def _own_factory_ids(sb, current):
@@ -219,7 +220,7 @@ def _write_notification(
             "is_read":      False,
             "channel":      "push",
             "send_status":  "SENT",
-            "sent_at":      datetime.now(timezone.utc).isoformat(),
+            "sent_at":      serialize_external_utc(now_kst()),
         }).execute()
     except Exception as e:
         log.warning("[OVERDUE] notifications INSERT 실패: %s", e)
@@ -419,7 +420,7 @@ def _process_one(sb, wa: dict, today: date) -> dict:
     )
 
     # overdue_level + last_reminded_at 업데이트
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = serialize_external_utc(now_kst())
     try:
         sb.table("work_assignments").update({
             "overdue_level":    lvl,
@@ -636,7 +637,7 @@ def resolve_overdue(history_id: str, body: ResolveBody, current: dict = Depends(
     overdue_history 크 해소 표시 + 대상 work_assignment의 resolved_at 기록.
     """
     supabase = get_supabase()
-    now_iso  = datetime.now(timezone.utc).isoformat()
+    now_iso  = serialize_external_utc(now_kst())
 
     # 1. overdue_history 조회
     hist_res = supabase.table("overdue_history").select(

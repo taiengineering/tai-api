@@ -24,6 +24,7 @@ from services.stats_dashboard_svc import (
     _fetch,
     _since_iso,
 )
+from services.time import now_kst, serialize_external_utc
 
 # 실측 검증(2026-08-11): factory_test 5,624 · runtime_compiler_projection 2 = 테스트/엔진 트래픽.
 TEST_SOURCES = {"factory_test", "runtime_compiler_projection"}
@@ -41,7 +42,7 @@ SECTOR_LABELS = {
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _norm_sector(raw: str) -> str:

@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 from db.supabase_client import get_supabase
 from services import audit_svc
 from services.payment_helpers import now_iso
+from services.time import now_kst
 
 log = logging.getLogger(__name__)
 
@@ -131,7 +132,7 @@ def _active_credits(company_id: str) -> List[Dict[str, Any]]:
         .order("created_at", desc=False)
         .execute()
     )
-    now = datetime.now(timezone.utc)
+    now = now_kst()
     out = []
     for c in res.data or []:
         exp = c.get("expires_at")

@@ -5,11 +5,12 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from db.supabase_client import get_supabase
+from services.time import now_kst
 
 
 def get_dashboard_stats() -> dict:
     supabase = get_supabase()
-    now = datetime.now(timezone.utc)
+    now = now_kst()
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
     req_res = supabase.table("matching_requests").select("status, expert_type, created_at").execute()
     all_requests = req_res.data or []

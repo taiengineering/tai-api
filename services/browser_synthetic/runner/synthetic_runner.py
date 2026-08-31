@@ -27,6 +27,7 @@ from services.browser_synthetic.events.execution_log_store import (
 from services.browser_synthetic.hooks.integrity_hook import (
     emit_synthetic_integrity_event,
 )
+from services.time import now_kst
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ async def run_check(check: dict) -> dict:
     workflow_type = check.get("workflow_type", "COMMON")
 
     trace_id = f"syn-{uuid4().hex[:12]}"
-    started_at = datetime.now(timezone.utc)
+    started_at = now_kst()
     start_ts = time.monotonic()
 
     execution_status = "SUCCESS"
@@ -68,7 +69,7 @@ async def run_check(check: dict) -> dict:
         logger.error("Synthetic check %s error: %s", check_code, e)
 
     elapsed_ms = int((time.monotonic() - start_ts) * 1000)
-    completed_at = datetime.now(timezone.utc)
+    completed_at = now_kst()
 
     # Execution Log 저장
     log_entry = ExecutionLogCreate(

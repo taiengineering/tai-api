@@ -44,6 +44,7 @@ from services.company_scope import _ensure_own_company
 from services.ra_decision_svc import (
     DecisionError, ESCALATION_LABELS, HIERARCHY_LABELS, assessment_readiness, decide,
 )
+from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ VERSION = "1.1.0"
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _sb():

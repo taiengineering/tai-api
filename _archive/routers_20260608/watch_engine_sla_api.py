@@ -7,6 +7,7 @@ Cockpit UI에서 업무 완료 품질 확인.
 import logging
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/watch-engine/sla", tags=["SLA관제"])
@@ -22,7 +23,7 @@ def get_sla_status(hours: int = 24):
     """Workflow SLA 현황 + User Impact 요약."""
     try:
         sb = _sb()
-        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        since = (now_kst() - timedelta(hours=hours)).isoformat()
 
         # SLA registry
         registry = sb.table("workflow_sla_registry") \
@@ -156,7 +157,7 @@ def update_sla(flow_key: str, body: SlaUpdate):
     """SLA \uae30\uc900 \uc218\uc815 (UI\uc5d0\uc11c)."""
     try:
         update = {k: v for k, v in body.dict().items() if v is not None}
-        update["updated_at"] = datetime.now(timezone.utc).isoformat()
+        update["updated_at"] = serialize_external_utc(now_kst())
         _sb().table("workflow_sla_registry").update(update).eq("flow_key", flow_key).execute()
         return {"status": "success", "message": f"{flow_key} SLA \uc218\uc815 \uc644\ub8cc"}
     except Exception as e:

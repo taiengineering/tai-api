@@ -8,6 +8,7 @@ import os, logging
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from services.time import now_kst, serialize_business_datetime
 
 logger    = logging.getLogger(__name__)
 scheduler = BackgroundScheduler(timezone="Asia/Seoul")
@@ -92,16 +93,16 @@ def execute_cron_job(job_code, endpoint_url, http_method, payload, timeout):
     sb = get_supabase()
     log = sb.table("cron_job_log").insert({"job_code":job_code,"triggered_by":"SCHEDULE","status":"RUNNING"}).execute()
     log_id = log.data[0]["id"]
-    started = datetime.now()
+    started = now_kst()
     try:
         if endpoint_url and endpoint_url.startswith("direct://"):
             result = _execute_direct(endpoint_url, payload or {})
-            duration = (datetime.now()-started).total_seconds()
+            duration = (now_kst()-started).total_seconds()
             errors = result.get("errors",0) if isinstance(result,dict) else 0
             status = "WARNING" if errors>0 else "SUCCESS"
             summary = _build_summary(result)
-            sb.table("cron_job_log").update({"finished_at":datetime.now().isoformat(),"duration_seconds":duration,"status":status,"result_summary":summary[:500],"result_detail":result if isinstance(result,dict) else {"raw":str(result)}}).eq("id",log_id).execute()
-            sb.table("cron_schedule_config").update({"last_run_at":datetime.now().isoformat(),"last_status":status}).eq("job_code",job_code).execute()
+            sb.table("cron_job_log").update({"finished_at":serialize_business_datetime(now_kst()),"duration_seconds":duration,"status":status,"result_summary":summary[:500],"result_detail":result if isinstance(result,dict) else {"raw":str(result)}}).eq("id",log_id).execute()
+            sb.table("cron_schedule_config").update({"last_run_at":serialize_business_datetime(now_kst()),"last_status":status}).eq("job_code",job_code).execute()
             logger.info(f"[CRON] {job_code} {status} ({duration:.1f}s) [DIRECT]")
             return
         import requests
@@ -109,17 +110,17 @@ def execute_cron_job(job_code, endpoint_url, http_method, payload, timeout):
         url = base_url+endpoint_url
         method = (http_method or "POST").upper()
         resp = requests.post(url,json=payload or {},timeout=timeout) if method=="POST" else requests.get(url,timeout=timeout)
-        duration = (datetime.now()-started).total_seconds()
+        duration = (now_kst()-started).total_seconds()
         status = "SUCCESS" if resp.status_code<400 else "FAILED"
         result = {}
         try: result=resp.json()
         except: pass
-        sb.table("cron_job_log").update({"finished_at":datetime.now().isoformat(),"duration_seconds":duration,"status":status,"http_status_code":resp.status_code,"result_summary":str(result)[:300]}).eq("id",log_id).execute()
-        sb.table("cron_schedule_config").update({"last_run_at":datetime.now().isoformat(),"last_status":status}).eq("job_code",job_code).execute()
+        sb.table("cron_job_log").update({"finished_at":serialize_business_datetime(now_kst()),"duration_seconds":duration,"status":status,"http_status_code":resp.status_code,"result_summary":str(result)[:300]}).eq("id",log_id).execute()
+        sb.table("cron_schedule_config").update({"last_run_at":serialize_business_datetime(now_kst()),"last_status":status}).eq("job_code",job_code).execute()
         logger.info(f"[CRON] {job_code} {status} ({duration:.1f}s)")
     except Exception as e:
-        duration = (datetime.now()-started).total_seconds()
-        sb.table("cron_job_log").update({"finished_at":datetime.now().isoformat(),"duration_seconds":duration,"status":"FAILED","error_message":str(e)[:1000]}).eq("id",log_id).execute()
+        duration = (now_kst()-started).total_seconds()
+        sb.table("cron_job_log").update({"finished_at":serialize_business_datetime(now_kst()),"duration_seconds":duration,"status":"FAILED","error_message":str(e)[:1000]}).eq("id",log_id).execute()
         logger.error(f"[CRON] {job_code} FAILED: {e}")
 
 

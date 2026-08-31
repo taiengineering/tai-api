@@ -6,6 +6,7 @@ from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_factory_own, _require_admin, _scope, _is_admin
 from services.status_vocab import is_ws_completed
+from services.time import business_today, now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/equipment-assets", tags=["equipment_assets"])
 
@@ -219,7 +220,7 @@ def scan_equipment(
         ).eq("id", fpid).limit(1).execute()
         if proc.data:
             process_info = proc.data[0]
-    today = date.today().isoformat()
+    today = business_today().isoformat()
     pending = []
     if factory_id:
         sched = supabase.table("work_schedules").select(
@@ -336,7 +337,7 @@ async def create_asset(body: EquipmentAssetCreate, current: dict = Depends(get_c
     new_asset = res.data[0]
     try:
         from routers.event_trigger import trigger_event_schedules
-        await trigger_event_schedules(factory_id=body.factory_id, event_type="INSTALL", event_date=date.today(),
+        await trigger_event_schedules(factory_id=body.factory_id, event_type="INSTALL", event_date=business_today(),
             context={"equipment_id": new_asset["id"], "equipment_name": body.asset_name, "company_id": company_id})
     except Exception as e:
         print(f"[EQUIPMENT] INSTALL 트리거 실패 (asset={new_asset.get('id')}): {e}")
@@ -353,7 +354,7 @@ def generate_qr(asset_id: str, current: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="설비를 찾을 수 없습니다")
     asset = asset_res.data[0]
     qr_url = f"https://safe.taieng.co.kr/checkin?id={asset_id}"
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = serialize_external_utc(now_kst())
     supabase.table("equipment_assets").update({"qr_code": qr_url, "qr_code_generated_at": now_iso}).eq("id", asset_id).execute()
     return {"status": "success", "data": {"qr_url": qr_url, "asset_id": asset_id, "asset_name": asset["asset_name"], "asset_code": asset.get("asset_code"), "generated_at": now_iso}}
 

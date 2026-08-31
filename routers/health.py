@@ -15,6 +15,7 @@ from services.health_registry import (
     get_overall_status,
     run_all_probes,
 )
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(tags=["health"])
 
@@ -77,7 +78,7 @@ async def health_deep(secret: str = Query(...)):
     response = {
         "status": status,
         "status_ko": ERROR_MESSAGES_KO.get(status, ""),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": serialize_external_utc(now_kst()),
         "probe_count": len(results),
         "fail_count": len(failed),
         "warn_count": sum(1 for v in results.values() if v.get("status") == "warn"),

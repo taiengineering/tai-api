@@ -24,10 +24,11 @@ from services.stats_dashboard_svc import (
     _day,
     _fetch,
 )
+from services.time import now_kst, serialize_external_utc
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def get_fulfillment(days: int = 90) -> Dict[str, Any]:

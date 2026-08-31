@@ -7,6 +7,7 @@ Cockpit UI에서 브라우저 감시 상태 확인.
 import logging
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter
+from services.time import now_kst
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/watch-engine/browser", tags=["브라우저감시"])
@@ -34,7 +35,7 @@ def get_browser_status():
             job_status[jc] = last.data[0] if last.data else None
 
         # 최근 24h browser business_event 통계
-        since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        since = (now_kst() - timedelta(hours=24)).isoformat()
         events_24h = sb.table("business_event") \
             .select("flow_key,result", count="exact") \
             .eq("connector_type", "browser") \

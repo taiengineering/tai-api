@@ -16,6 +16,7 @@ from watch_engine.integrity.rules.sequence_violation import check_sequence_viola
 from watch_engine.integrity.rules.stuck_detected import check_stuck_detected
 from watch_engine.integrity.rules.timeout_exceeded import check_timeout_exceeded
 from watch_engine.integrity.rules.sla_violation import check_sla_violation
+from services.time import now_kst
 
 logger = logging.getLogger("watch_engine.integrity.evaluator")
 
@@ -48,7 +49,7 @@ def evaluate_recent_events(
             return stats
 
         if now is None:
-            now = datetime.now(timezone.utc)
+            now = now_kst()
         since = now - timedelta(minutes=last_minutes)
 
         # TASK 30: Mock environment 제외

@@ -6,6 +6,7 @@ HTTP `POST /education/assignments/expire` 와 scheduler DIRECT handler 가
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from services.time import business_today, now_kst, serialize_external_utc
 
 
 def expire_overdue_education_assignments(sb) -> dict:
@@ -13,12 +14,12 @@ def expire_overdue_education_assignments(sb) -> dict:
 
     반환: {"updated": int, "date": "YYYY-MM-DD"}
     """
-    today = date.today().isoformat()
+    today = business_today().isoformat()
     res = (
         sb.table("education_assignment")
         .update({
             "status_code": "OVERDUE",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": serialize_external_utc(now_kst()),
         })
         .eq("status_code", "PENDING")
         .lt("due_date", today)

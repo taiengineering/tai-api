@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from db.database import get_supabase
 from routers.auth import get_current_user
+from services.time import now_kst, serialize_external_utc
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/fix/chat", tags=["TAI Fix 대화"])
@@ -134,7 +135,7 @@ GUEST_LIMIT_MSG = (
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 async def _call_claude(messages: list, turn_index: int = 0) -> tuple:
@@ -475,7 +476,7 @@ def admin_stats(current_user: dict = Depends(get_current_user)):
         ut = r.get("user_type") or "UNKNOWN"
         by_user_type[ut] = by_user_type.get(ut, 0) + 1
 
-    today_str   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today_str   = now_kst().strftime("%Y-%m-%d")
     today_count = sum(1 for r in rows if (r.get("created_at") or "")[:10] == today_str)
     total_turns = sum(r.get("current_turn", 0) for r in rows)
 

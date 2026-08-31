@@ -1,0 +1,34 @@
+{
+  "required_view_count": 3,
+  "required_derived_timestamp_columns": 7,
+  "sot_status": "VIEWDEF_NOT_ATTACHED_TO_CURSOR_WORK_ORDER",
+  "owner": "postgres",
+  "reloptions": null,
+  "acl_roles_full": ["anon", "authenticated", "postgres", "service_role"],
+  "views": [
+    {
+      "name": "v_equipment_unified",
+      "owner": "postgres",
+      "reloptions": null,
+      "definition": null,
+      "comment": null,
+      "acl": {"anon": "ALL", "authenticated": "ALL", "postgres": "ALL", "service_role": "ALL"}
+    },
+    {
+      "name": "v_payments_list",
+      "owner": "postgres",
+      "reloptions": null,
+      "definition": null,
+      "comment": null,
+      "acl": {"anon": "ALL", "authenticated": "ALL", "postgres": "ALL", "service_role": "ALL"}
+    },
+    {
+      "name": "v_process_unified",
+      "owner": "postgres",
+      "reloptions": null,
+      "definition": null,
+      "comment": null,
+      "acl": {"anon": "ALL", "authenticated": "ALL", "postgres": "ALL", "service_role": "ALL"}
+    }
+  ]
+}

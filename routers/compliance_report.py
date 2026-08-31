@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from db.supabase_client import get_supabase
 from services.document_engine.renderer import generate_document_pdf
 from services.status_vocab import is_ws_completed
+from services.time import business_today
 
 router = APIRouter(prefix="/compliance-report", tags=["compliance-report"])
 
@@ -76,7 +77,7 @@ def _assemble(body: ComplianceReportBody) -> Dict[str, Any]:
         rows = ws.data or []
         planned = len(rows)
         done = sum(1 for r in rows if _is_done(r))
-        today = date.today().isoformat()
+        today = business_today().isoformat()
         overdue = sum(1 for r in rows if not _is_done(r) and str(r.get("planned_date") or "") < today)
         compliance = {
             "planned": planned,

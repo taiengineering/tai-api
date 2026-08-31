@@ -41,6 +41,7 @@ from services.company_scope import (
     _scope,
     _is_admin,
 )
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/corrective-actions", tags=["이창보고서"])
 
@@ -48,7 +49,7 @@ VERSION = "1.2.0"
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _normalize(row: Dict[str, Any]) -> Dict[str, Any]:

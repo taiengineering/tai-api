@@ -19,6 +19,7 @@ from typing import Optional, List
 from datetime import datetime
 import os
 from supabase import create_client
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/system-codes", tags=["system-codes"])
 
@@ -303,8 +304,8 @@ def create_code(body: dict):
         "is_active":     body.get("is_active", True),
         "is_system":     False,   # 항상 false
         "state":         "사용",
-        "created_at":    datetime.now().isoformat(),
-        "updated_at":    datetime.now().isoformat(),
+        "created_at":    serialize_business_datetime(now_kst()),
+        "updated_at":    serialize_business_datetime(now_kst()),
     }
 
     res = supabase.table("system_codes").insert(insert_data).execute()
@@ -347,7 +348,7 @@ def update_code(code_id: str, body: dict):
     if not update_data:
         raise HTTPException(status_code=400, detail="수정할 항목이 없습니다")
 
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
 
     updated = supabase.table("system_codes").update(update_data).eq("id", code_id).execute()
     if not updated.data:

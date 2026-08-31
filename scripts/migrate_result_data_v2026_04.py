@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from typing import Any
+from services.time import now_kst, serialize_external_utc
 
 # ── 레거시 코어 키 매핑하여 v2026.04 형식으로 변환 ──────────────────────────
 
@@ -145,7 +146,7 @@ def upgrade_to_v202604(record: dict) -> dict:
         len(obligations)
     )
 
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = serialize_external_utc(now_kst())
 
     return {
         "schema_version":    "2026.04",

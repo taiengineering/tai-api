@@ -41,6 +41,7 @@ from services.company_scope import (
     apply_scoped_filter,
     scoped_filter,
 )
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/education", tags=["education_assign"])
 
@@ -48,7 +49,7 @@ VERSION = "1.2.0"
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _effective_url(master: dict, setting: dict) -> dict:

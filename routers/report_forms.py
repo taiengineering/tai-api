@@ -35,6 +35,7 @@ from datetime import datetime, date, timedelta
 from pathlib import Path
 import os, io, re
 from supabase import create_client
+from services.time import business_today, now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/report-forms", tags=["신고서식"])
 
@@ -184,7 +185,7 @@ def upload_html_template(body: dict = Body(...)):
     # form_templates DB에 경로 업데이트
     supabase.table("form_templates").update({
         "html_storage_path": storage_path,
-        "updated_at": datetime.now().isoformat(),
+        "updated_at": serialize_business_datetime(now_kst()),
     }).eq("form_code", form_code).execute()
 
     return {
@@ -325,7 +326,7 @@ def get_report_events(
     q = q.order("due_date")
     res = q.execute()
     items = res.data or []
-    today = date.today()
+    today = business_today()
     result = []
     for item in items:
         due = item.get("due_date")
@@ -341,7 +342,7 @@ def get_report_events(
             )
             if item.get("status") == "PENDING" and days_left < 0:
                 supabase.table("report_events").update(
-                    {"status": "OVERDUE", "updated_at": datetime.now().isoformat()}
+                    {"status": "OVERDUE", "updated_at": serialize_business_datetime(now_kst())}
                 ).eq("id", item["id"]).execute()
                 item["status"] = "OVERDUE"
         if not include_overdue and item.get("is_overdue"):
@@ -384,13 +385,13 @@ def create_report_event(body: dict):
         "trigger_date": trigger_date,
         "due_date":     due.isoformat(),
         "status":       "PENDING",
-        "created_at":   datetime.now().isoformat(),
-        "updated_at":   datetime.now().isoformat(),
+        "created_at":   serialize_business_datetime(now_kst()),
+        "updated_at":   serialize_business_datetime(now_kst()),
     }).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="이벤트 생성 실패")
     event = res.data[0]
-    days_left = (due - date.today()).days
+    days_left = (due - business_today()).days
     event["days_left"]   = days_left
     event["d_day_label"] = (f"D-{days_left}" if days_left > 0
                              else ("D-Day" if days_left == 0 else f"D+{abs(days_left)}"))
@@ -406,9 +407,9 @@ def update_report_event_status(event_id: str, body: dict):
     status = body.get("status")
     if status and status not in allowed_status:
         raise HTTPException(status_code=400, detail=f"status는 {allowed_status} 중 하나")
-    update_data = {"updated_at": datetime.now().isoformat()}
+    update_data = {"updated_at": serialize_business_datetime(now_kst())}
     if status: update_data["status"] = status
-    if status == "COMPLETED": update_data["completed_at"] = datetime.now().isoformat()
+    if status == "COMPLETED": update_data["completed_at"] = serialize_business_datetime(now_kst())
     res = supabase.table("report_events").update(update_data).eq("id", event_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="이벤트를 찾을 수 없습니다")
@@ -484,14 +485,14 @@ def create_form_submission(body: dict):
         "factory_id": factory_id, "form_code": form_code,
         "event_id":   body.get("event_id"), "form_data": form_data,
         "created_by": body.get("created_by"),
-        "created_at": datetime.now().isoformat(),
-        "updated_at": datetime.now().isoformat(),
+        "created_at": serialize_business_datetime(now_kst()),
+        "updated_at": serialize_business_datetime(now_kst()),
     }).execute()
     if not res.data:
         raise HTTPException(status_code=500, detail="서류 저장 실패")
     if body.get("event_id"):
         supabase.table("report_events").update(
-            {"status": "IN_PROGRESS", "updated_at": datetime.now().isoformat()}
+            {"status": "IN_PROGRESS", "updated_at": serialize_business_datetime(now_kst())}
         ).eq("id", body["event_id"]).eq("status", "PENDING").execute()
     return {"status": "success", "message": "서류 저장됨", "data": res.data[0]}
 
@@ -501,7 +502,7 @@ def update_form_submission(submission_id: str, body: dict):
     supabase = get_supabase()
     allowed  = {"form_data", "pdf_url", "submitted_at"}
     update_data = {k: v for k, v in body.items() if k in allowed}
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
     if not update_data:
         raise HTTPException(status_code=400, detail="수정할 항목 없음")
     res = supabase.table("form_submissions").update(update_data).eq("id", submission_id).execute()
@@ -511,8 +512,8 @@ def update_form_submission(submission_id: str, body: dict):
         sub = res.data[0]
         if sub.get("event_id"):
             supabase.table("report_events").update(
-                {"status": "COMPLETED", "completed_at": datetime.now().isoformat(),
-                 "updated_at": datetime.now().isoformat()}
+                {"status": "COMPLETED", "completed_at": serialize_business_datetime(now_kst()),
+                 "updated_at": serialize_business_datetime(now_kst())}
             ).eq("id", sub["event_id"]).execute()
     return {"status": "success", "message": "서류 수정됨", "data": res.data[0]}
 
@@ -572,7 +573,7 @@ def generate_and_save_pdf(submission_id: str):
         # pdf_url을 버킷 내 경로로 저장 (외부 URL 아님)
         supabase.table("form_submissions").update({
             "pdf_url":    storage_path,
-            "updated_at": datetime.now().isoformat(),
+            "updated_at": serialize_business_datetime(now_kst()),
         }).eq("id", submission_id).execute()
 
         return StreamingResponse(
@@ -597,7 +598,7 @@ def get_report_dashboard(factory_id: str):
         "id, form_code, due_date, status, form_templates(form_name, submit_to)"
     ).eq("factory_id", factory_id).neq("status", "COMPLETED").execute()
     items = res.data or []
-    today = date.today()
+    today = business_today()
     urgent, upcoming, overdue = [], [], []
     for item in items:
         due = item.get("due_date")

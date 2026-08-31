@@ -1,9 +1,10 @@
 """Alert Quality Tracker."""
 import logging
 from datetime import datetime,timezone,timedelta
+from services.time import now_kst
 logger=logging.getLogger("watch_engine.feedback.alert")
 def track_alert_quality(sb,hours=24):
-    since=(datetime.now(timezone.utc)-timedelta(hours=hours)).isoformat()
+    since=(now_kst()-timedelta(hours=hours)).isoformat()
     try:
         alerts=sb.table("alert_history").select("id,rule_code,channel,sent_at,created_at",count="exact").gte("created_at",since).execute()
         total=alerts.count or len(alerts.data or [])

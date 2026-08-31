@@ -36,6 +36,7 @@ from datetime import datetime, timezone, date, timedelta
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import require_company_id, scoped_list_company, _ensure_own_company
+from services.time import business_today, now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/safety-meetings", tags=["safety_meetings"])
 
@@ -52,7 +53,7 @@ MEETING_CYCLE = {
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _is_uuid(value: str) -> bool:
@@ -160,7 +161,7 @@ def get_meeting_schedule(
     - CONTRACTOR_COUNCIL: 월별 개최 여부 (1~12월)
     """
     supabase = get_supabase()
-    target_year = year or date.today().year
+    target_year = year or business_today().year
     scoped_cid, deny_all = scoped_list_company(current, supabase, company_id)
     if deny_all or not scoped_cid:
         return {
@@ -206,7 +207,7 @@ def get_meeting_schedule(
         elif mt == "CONTRACTOR_COUNCIL":
             months[md.month].append(r)
 
-    today = date.today()
+    today = business_today()
     current_quarter = (today.month - 1) // 3 + 1
     current_month   = today.month
 

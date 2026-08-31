@@ -1,5 +1,6 @@
 """Feedback Summary."""
 from datetime import datetime,timezone
+from services.time import now_kst, serialize_external_utc
 def generate_feedback_summary(sb,hours=24):
     from watch_engine.feedback_loop.alert_quality_tracker import track_alert_quality
     from watch_engine.feedback_loop.escalation_effectiveness import track_escalation_effectiveness
@@ -14,5 +15,5 @@ def generate_feedback_summary(sb,hours=24):
     return {
         "alert_quality":aq,"escalation_quality":eq,"degradation_feedback":dq,
         "recovery_feedback":rq,"signal_quality":sq,
-        "hours":hours,"generated_at":datetime.now(timezone.utc).isoformat(),
+        "hours":hours,"generated_at":serialize_external_utc(now_kst()),
     }

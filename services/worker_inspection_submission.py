@@ -26,6 +26,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
+from services.time import parse_external_datetime, to_external_utc
 
 # 고정 namespace (변경 금지 — 변경 시 과거 제출의 submission_id 정체성이 깨진다)
 WORKER_SUBMISSION_NAMESPACE = uuid.UUID("6f6b3a1e-0e2a-5c7d-9b4f-1a2b3c4d5e6f")
@@ -82,13 +83,13 @@ def normalize_submitted_at(raw: Any) -> datetime:
             raise WorkerSubmissionError("WORKER_SUBMISSION_TIMESTAMP_INVALID", str(raw))
 
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        dt = parse_external_datetime(dt.isoformat(), source_timezone="UTC")
+    return to_external_utc(dt)
 
 
 def _submitted_at_key(dt: datetime) -> str:
     """정체성/해시에 쓰는 안정적 문자열 표현(마이크로초 포함 UTC ISO)."""
-    return dt.astimezone(timezone.utc).isoformat()
+    return to_external_utc(dt).isoformat()
 
 
 def compute_submission_id(schedule_ref: str, phone: str, submitted_at: datetime) -> uuid.UUID:

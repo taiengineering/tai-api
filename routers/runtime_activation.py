@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from typing import Optional
 import logging
 from datetime import datetime
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/runtime-activation", tags=["Runtime Activation"])
 logger = logging.getLogger("runtime_activation")
@@ -70,7 +71,7 @@ def create_rollout(request: Request, release_id: str = Query(...)):
         "rollout_percentage": 1,
         "regression_status": "PENDING",
         "drift_status": "CLEAN",
-        "activation_started_at": datetime.utcnow().isoformat(),
+        "activation_started_at": serialize_business_datetime(now_kst()),
         "source_trace": "STAGED_ROLLOUT",
     }
     r = sb.table("runtime_activation_registry").insert(row).execute()
@@ -157,7 +158,7 @@ def rollback_activation(request: Request, activation_id: str):
 
     sb.table("runtime_activation_registry").update({
         "activation_status": "ROLLED_BACK",
-        "activation_completed_at": datetime.utcnow().isoformat(),
+        "activation_completed_at": serialize_business_datetime(now_kst()),
     }).eq("id", activation_id).execute()
 
     sb.table("engine_integrity_event").insert({

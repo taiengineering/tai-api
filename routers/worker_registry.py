@@ -32,6 +32,7 @@ import os
 import re
 import logging
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/worker-registry", tags=["worker_registry"])
@@ -93,7 +94,7 @@ JOB_TYPE_MAP = {
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _normalize_phone(phone: str) -> str:

@@ -1,0 +1,9 @@
+{
+  "required_column_count": 20,
+  "required_table_count": 13,
+  "column_count": 0,
+  "table_count": 0,
+  "sot_status": "NOT_ATTACHED_TO_CURSOR_WORK_ORDER",
+  "migration_action": "DO_NOT_ALTER",
+  "columns": []
+}

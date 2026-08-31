@@ -6,6 +6,7 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_business_datetime
 
 RETENTION_DEFAULTS = {
     "inspection": 3,
@@ -27,7 +28,7 @@ BUCKET = "company-docs"
 
 
 def _build_path(company_id: str, category: str, ext: str) -> str:
-    now = datetime.utcnow()
+    now = now_kst()
     file_uuid = str(uuid.uuid4())
     suffix = f".{ext}" if ext else ""
     return f"{company_id}/{category}/{now.strftime('%Y-%m')}/{file_uuid}{suffix}"
@@ -40,7 +41,7 @@ def _get_ext(filename: str) -> str:
 def _build_retention_until(years: Optional[int]) -> Optional[str]:
     if not years:
         return None
-    now = datetime.utcnow()
+    now = now_kst()
     return date(now.year + years, now.month, now.day).isoformat()
 
 
@@ -216,7 +217,7 @@ async def update_document(doc_id: str, updates: Dict[str, Any]) -> Optional[Dict
 async def soft_delete(doc_id: str) -> bool:
     sb = get_supabase()
     result = sb.table("documents").update(
-        {"deleted_at": datetime.utcnow().isoformat(), "is_active": False}
+        {"deleted_at": serialize_business_datetime(now_kst()), "is_active": False}
     ).eq("id", doc_id).execute()
     return bool(result.data)
 

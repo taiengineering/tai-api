@@ -4,6 +4,7 @@ from datetime import date, timedelta
 from typing import List, Optional
 
 from dateutil.relativedelta import relativedelta
+from services.time import business_today
 
 VERSION = "2.1.0"
 
@@ -42,7 +43,7 @@ def _get_delta(cycle_unit: str, cycle_value: int):
 def _next_planned_from(base: date, cycle_unit: str, cycle_value: int) -> date:
     delta  = _get_delta(cycle_unit, cycle_value)
     cursor = base + delta
-    today  = date.today()
+    today  = business_today()
     while cursor < today:
         cursor += delta
     return cursor

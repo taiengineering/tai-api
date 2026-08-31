@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_own_company
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/inspection-checklist", tags=["점검항목 세팅"])
 
@@ -40,7 +41,7 @@ _L3_KEYWORDS = {"PRO", "PREMIUM", "ENTERPRISE", "CUSTOM"}
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _extract_tier(plan_code: str) -> int:

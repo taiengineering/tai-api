@@ -11,6 +11,8 @@ from services.time.tai_time import (
     parse_external_datetime,
     parse_business_datetime,
     serialize_business_datetime,
+    to_external_utc,
+    serialize_external_utc,
 )
 
 __all__ = [
@@ -25,4 +27,6 @@ __all__ = [
     "parse_external_datetime",
     "parse_business_datetime",
     "serialize_business_datetime",
+    "to_external_utc",
+    "serialize_external_utc",
 ]

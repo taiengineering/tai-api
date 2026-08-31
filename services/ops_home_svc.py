@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict
 
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 log = logging.getLogger(__name__)
 
@@ -37,17 +38,17 @@ _SUM_ROW_CAP = 20000
 
 
 def _today_start_iso() -> str:
-    now = datetime.now(timezone.utc)
+    now = now_kst()
     return now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
 
 
 def _month_start_iso() -> str:
-    now = datetime.now(timezone.utc)
+    now = now_kst()
     return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
 
 
 def _days_ago_iso(days: int) -> str:
-    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    return (now_kst() - timedelta(days=days)).isoformat()
 
 
 def _count(table: str, build) -> int:
@@ -187,5 +188,5 @@ def get_home() -> Dict[str, Any]:
         "alerts": alerts(),
         "kpi": kpi(),
         "today": today(),
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": serialize_external_utc(now_kst()),
     }

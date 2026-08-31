@@ -8,6 +8,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 from .delivery_result import DeliveryResult
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger("notification_engine.adapters.in_app")
 
@@ -59,7 +60,7 @@ def send_in_app(
             "is_read": False,
             "channel": "SITE",
             "send_status": "SENT",
-            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "sent_at": serialize_external_utc(now_kst()),
         }
         if company_id:
             row["company_id"] = company_id

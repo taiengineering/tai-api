@@ -17,6 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, Query, HTTPException
 
 from db.supabase_client import get_supabase
+from services.time import business_today
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/worker", tags=["worker_home"])
@@ -25,7 +26,7 @@ VERSION = "1.1.0"
 
 
 def _today() -> str:
-    return date.today().isoformat()
+    return business_today().isoformat()
 
 
 def _clean_phone(phone: str) -> str:

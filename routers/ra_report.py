@@ -31,6 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import scoped_list_company
+from services.time import business_today
 
 router = APIRouter(prefix="/ra", tags=["위험성평가 증적 리포트"])
 
@@ -60,7 +61,7 @@ def semiannual_report(
     half = (half or "H1").upper()
     if half not in ("H1", "H2"):
         raise HTTPException(status_code=422, detail="half 는 H1 또는 H2 여야 합니다.")
-    y = year or date.today().year
+    y = year or business_today().year
     lo, hi, half_label = _half_range(y, half)
 
     sb = get_supabase()

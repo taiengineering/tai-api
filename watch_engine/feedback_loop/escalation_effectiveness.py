@@ -1,9 +1,10 @@
 """Escalation Effectiveness."""
 import logging
 from datetime import datetime,timezone,timedelta
+from services.time import now_kst
 logger=logging.getLogger("watch_engine.feedback.escalation")
 def track_escalation_effectiveness(sb,hours=24):
-    since=(datetime.now(timezone.utc)-timedelta(hours=hours)).isoformat()
+    since=(now_kst()-timedelta(hours=hours)).isoformat()
     try:
         actions=sb.table("incident_action_log").select("id,action_type,outcome_status,created_at").gte("created_at",since).execute()
         escalations=[a for a in (actions.data or []) if a.get("action_type")=="ESCALATED"]

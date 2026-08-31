@@ -1,6 +1,7 @@
 import hashlib
 from datetime import datetime, timezone
 from typing import Any, Optional
+from services.time import now_kst, serialize_external_utc
 
 SOURCE_DIAGNOSIS = "DIAGNOSIS"
 
@@ -14,7 +15,7 @@ _PARTIAL_MESSAGE = (
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _sha256(data: str) -> str:

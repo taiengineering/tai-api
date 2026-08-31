@@ -7,6 +7,7 @@ from typing import Optional, List
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/price-master", tags=["가격 통합관리"])
 
@@ -111,7 +112,7 @@ def update_price(price_id: str, body: PriceMasterUpsert):
         update["service_type"] = update["service_type"].upper()
     if update.get("sector"):
         update["sector"] = update["sector"].upper()
-    update["updated_at"] = datetime.now().isoformat()
+    update["updated_at"] = serialize_business_datetime(now_kst())
     res = sb.table("price_master").update(update).eq("id", price_id).execute()
     return {"status": "success", "data": res.data[0] if res.data else None}
 
@@ -122,7 +123,7 @@ def deactivate_price(price_id: str):
     sb = get_supabase()
     res = (
         sb.table("price_master")
-        .update({"is_active": False, "updated_at": datetime.now().isoformat()})
+        .update({"is_active": False, "updated_at": serialize_business_datetime(now_kst())})
         .eq("id", price_id).execute()
     )
     return {"status": "success", "data": res.data[0] if res.data else None}

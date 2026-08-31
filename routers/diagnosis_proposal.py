@@ -24,6 +24,7 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 
 from db.supabase_client import get_supabase
 from services.legal_rules import normalize_sector_db
+from services.time import now_kst, parse_external_datetime, to_external_utc
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/diagnosis", tags=["기안PDF"])
@@ -48,7 +49,7 @@ SECTOR_NORMALIZE: Dict[str, str] = {
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return now_kst()
 
 
 def _parse_penalty_krw(text: Any) -> float:
@@ -211,7 +212,7 @@ def _fetch_row(token: str) -> Dict[str, Any]:
         try:
             exp_dt = datetime.fromisoformat(str(exp).replace("Z", "+00:00"))
             if exp_dt.tzinfo is None:
-                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                exp_dt = to_external_utc(parse_external_datetime(exp_dt.isoformat(), source_timezone='UTC')) if exp_dt.tzinfo is None else to_external_utc(exp_dt)
             if _now() > exp_dt:
                 raise HTTPException(status_code=410, detail="\ub9cc\ub8cc\ub41c \uc9c4\ub2e8 \uacb0\uacfc\uc785\ub2c8\ub2e4.")
         except HTTPException:

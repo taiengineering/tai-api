@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from db.database import get_supabase
 from routers.auth import get_current_user
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/admin", tags=["관리자 가격"])
 
@@ -30,7 +31,7 @@ class PricingPatchBody(BaseModel):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 # ── GET /admin/pricing/keys ───────────────────────────────────────────

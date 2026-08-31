@@ -51,6 +51,7 @@ from services.safe_inspection_result_batch import (
 from services.inspection_rolling import ensure_next_rolling_schedule
 from watch_engine import create_trace, emit_event
 from watch_engine.trace import clear_trace
+from services.time import business_today, now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/inspection", tags=["점검리스트"])
 
@@ -124,7 +125,7 @@ LEGAL_INSPECTION_ITEMS = {
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _add_cycle(base: date, cycle_unit: str, cycle_value: int) -> date:
@@ -311,7 +312,7 @@ async def generate_schedules(factory_id: str, body: Optional[dict] = None, curre
     _ensure_factory_own(supabase, factory_id, current)
     try:
         body = body or {}
-        start_str = body.get("start_date") or date.today().isoformat()
+        start_str = body.get("start_date") or business_today().isoformat()
         months    = int(body.get("months", 12))
         start_dt  = date.fromisoformat(start_str)
         end_month = start_dt.month - 1 + months
@@ -379,7 +380,7 @@ async def get_inspection_status(factory_id: str, current: dict = Depends(get_cur
     supabase = get_supabase()
     _ensure_factory_own(supabase, factory_id, current)
     try:
-        today      = date.today()
+        today      = business_today()
         today_str  = today.isoformat()
         month_start = today.replace(day=1).isoformat()
         month_end   = today.replace(day=calendar.monthrange(today.year, today.month)[1]).isoformat()
@@ -478,7 +479,7 @@ async def start_inspection(work_schedule_id: str, body: dict = None, current: di
     try:
         body = body or {}
         inspector_name = body.get("inspector_name", "")
-        started_at     = body.get("started_at", date.today().isoformat())
+        started_at     = body.get("started_at", business_today().isoformat())
 
         # WP-04D: parent factory companion PRE-READ (side-effect 전 fail-closed)
         # REV-1B: schema 는 factory 간 동일 id 를 허용하므로 id 단독으로 임의 factory 를
@@ -560,7 +561,7 @@ async def record_inspection_results(inspection_id: str, body: dict, current: dic
                 # completion anchor freeze — 최초 완료일 고정(REPLAY 마다 today 덮어쓰기 금지)
                 _wsrow = supabase.table("work_schedules").select("completed_at").eq("id", ws_id).limit(1).execute()
                 _existing = (_wsrow.data[0].get("completed_at") if _wsrow.data else None)
-                _anchor_str = _existing or date.today().isoformat()
+                _anchor_str = _existing or business_today().isoformat()
                 supabase.table("work_schedules").update({
                     "status_code": "completed", "completed_at": _anchor_str,
                 }).eq("id", ws_id).execute()
@@ -608,7 +609,7 @@ async def complete_inspection(work_schedule_id: str, body: dict = None, current:
     try:
         body = body or {}
         summary = body.get("summary", "")
-        requested_completed_at = body.get("completed_at", date.today().isoformat())
+        requested_completed_at = body.get("completed_at", business_today().isoformat())
 
         # KNOT-3A: schedule mutation 전에 대상 inspection cardinality 확정 (fail-closed).
         # assignment_id 당 inspection 은 0/1 만 허용. 2건 이상이면 각각 별도 전표화 시

@@ -13,6 +13,7 @@ from urllib.parse import unquote, quote
 from supabase import create_client
 from services.kr_public_api import get_proxies, kr_get
 from tenacity import retry, stop_after_attempt, wait_fixed
+from services.time import now_kst, serialize_business_datetime
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -476,7 +477,7 @@ def fetch_all_building_data(bdmgtsn: str) -> dict:
 
 
 def build_factory_update(juso: dict, building_data: dict) -> dict:
-    update = {"building_register_updated_at": datetime.now().isoformat()}
+    update = {"building_register_updated_at": serialize_business_datetime(now_kst())}
     if juso:
         update["bdmgtsn"] = juso.get("bdMgtSn", "")
         if juso.get("roadAddr"):  update["address_road"]    = juso.get("roadAddrPart1", "")

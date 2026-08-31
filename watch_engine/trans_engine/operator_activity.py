@@ -1,6 +1,7 @@
 """Operator Activity — 운영자 행동 기록."""
 from __future__ import annotations
 from typing import Any
+from services.time import now_kst, serialize_external_utc
 
 _ACTIVITY_LABELS = {
     "acknowledge": "상황 확인",
@@ -21,7 +22,7 @@ def build_activity_entry(action: str, operator_id: str, notes: str = "") -> dict
         "label": _ACTIVITY_LABELS.get(action, action),
         "operator_id": operator_id,
         "notes": notes,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": serialize_external_utc(now_kst()),
     }
 
 def get_activity_labels() -> dict[str, str]:

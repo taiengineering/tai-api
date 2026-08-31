@@ -3,6 +3,7 @@ import logging
 from datetime import datetime,timezone,timedelta
 from fastapi import APIRouter,HTTPException
 from pydantic import BaseModel
+from services.time import now_kst, serialize_external_utc
 logger=logging.getLogger(__name__)
 router=APIRouter(prefix="/synthetic",tags=["Synthetic"])
 def _sb():
@@ -33,7 +34,7 @@ def start(body:StartP):
         load_jobs_from_db()
         if not aps.running: aps.start()
     except Exception as e: logger.error("reload: %s",e)
-    _state.update(enabled=True,intensity=body.intensity,started_at=datetime.now(timezone.utc).isoformat())
+    _state.update(enabled=True,intensity=body.intensity,started_at=serialize_external_utc(now_kst()))
     return {"status":"success","message":f"Synthetic Runtime \uc2dc\uc791\ub428 (intensity={body.intensity})"}
 @router.post("/stop")
 def stop():
@@ -57,7 +58,7 @@ def tick():
     try:
         from watch_engine.synthetic_runtime.orchestrator import run_synthetic_tick
         s=run_synthetic_tick()
-        _state["ticks"]+=1;_state["events"]+=s.get("events",0);_state["last_tick"]=datetime.now(timezone.utc).isoformat();_state["last_stats"]=s
+        _state["ticks"]+=1;_state["events"]+=s.get("events",0);_state["last_tick"]=serialize_external_utc(now_kst());_state["last_stats"]=s
         return {"status":"success","data":s}
     except Exception as e: raise HTTPException(500,str(e))
 @router.post("/bridge")
@@ -68,7 +69,7 @@ def bridge():
     except Exception as e: raise HTTPException(500,str(e))
 @router.get("/stats")
 def stats(hours:int=24):
-    sb=_sb();since=(datetime.now(timezone.utc)-timedelta(hours=hours)).isoformat()
+    sb=_sb();since=(now_kst()-timedelta(hours=hours)).isoformat()
     be=sb.table("business_event").select("id",count="exact").eq("environment","mock").gte("created_at",since).execute()
     ie=sb.table("engine_integrity_event").select("id",count="exact").eq("environment","mock").gte("created_at",since).execute()
     return {"status":"success","data":{"hours":hours,"business_events":be.count or 0,"integrity_events":ie.count or 0,"total":(be.count or 0)+(ie.count or 0)}}
@@ -76,7 +77,7 @@ class CleanP(BaseModel):
     hours_to_keep:int=24
 @router.post("/cleanup")
 def cleanup(body:CleanP):
-    sb=_sb();cutoff=(datetime.now(timezone.utc)-timedelta(hours=body.hours_to_keep)).isoformat()
+    sb=_sb();cutoff=(now_kst()-timedelta(hours=body.hours_to_keep)).isoformat()
     bd=sb.table("business_event").delete().eq("environment","mock").lt("created_at",cutoff).execute()
     ie=sb.table("engine_integrity_event").delete().eq("environment","mock").lt("created_at",cutoff).execute()
     return {"status":"success","data":{"be_deleted":len(bd.data or []),"ie_deleted":len(ie.data or [])}}

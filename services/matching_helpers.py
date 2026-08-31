@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Dict, Set
+from services.time import now_kst, serialize_external_utc
 
 STATUS_TRANSITIONS: Dict[str, Set[str]] = {
     "RECEIVED": {"MATCHING", "CANCELLED"},
@@ -24,7 +25,7 @@ STATUS_TIMESTAMP_MAP: Dict[str, str] = {
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def validate_status_transition(current: str, target: str) -> None:

@@ -9,13 +9,14 @@ Deterministic Condition-Based Rule Activation Engine.
 """
 from datetime import datetime, timezone
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 
 # ═══ 1. Evaluation Context ═══
 
 def create_context(data: dict) -> dict:
     sb = get_supabase()
-    now = datetime.now(timezone.utc).isoformat()
+    now = serialize_external_utc(now_kst())
     rec = {
         "industry_code": data.get("industry_code"),
         "worker_count": data.get("worker_count"),
@@ -67,7 +68,7 @@ def evaluate(ctx_id: str) -> dict:
     ctx = sb.table("runtime_evaluation_context").select("*").eq("id", ctx_id).single().execute()
     if not ctx.data: raise ValueError("context not found")
     c = ctx.data
-    sb.table("runtime_evaluation_context").update({"evaluation_status": "EVALUATING", "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", ctx_id).execute()
+    sb.table("runtime_evaluation_context").update({"evaluation_status": "EVALUATING", "updated_at": serialize_external_utc(now_kst())}).eq("id", ctx_id).execute()
 
     results = {"rules": [], "tasks": [], "documents": [], "schedules": [], "penalties": [], "conflicts": [], "unknown": [], "ambiguous": []}
     try:
@@ -109,11 +110,11 @@ def evaluate(ctx_id: str) -> dict:
         results["unknown"] = [r for r in results["rules"] if r.get("status") == "UNKNOWN"]
         results["ambiguous"] = [r for r in results["rules"] if r.get("status") == "AMBIGUOUS"]
 
-        sb.table("runtime_evaluation_context").update({"evaluation_status": "COMPLETED", "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", ctx_id).execute()
+        sb.table("runtime_evaluation_context").update({"evaluation_status": "COMPLETED", "updated_at": serialize_external_utc(now_kst())}).eq("id", ctx_id).execute()
         _audit(sb, ctx_id, "EVALUATION_COMPLETED", None, None, None, f"rules={len(results['rules'])} tasks={len(results['tasks'])} docs={len(results['documents'])}", "system")
 
     except Exception as e:
-        sb.table("runtime_evaluation_context").update({"evaluation_status": "FAILED", "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", ctx_id).execute()
+        sb.table("runtime_evaluation_context").update({"evaluation_status": "FAILED", "updated_at": serialize_external_utc(now_kst())}).eq("id", ctx_id).execute()
         _audit(sb, ctx_id, "EVALUATION_FAILED", None, None, None, str(e), "system")
         raise
 

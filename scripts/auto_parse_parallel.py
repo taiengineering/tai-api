@@ -16,6 +16,7 @@ Supabase + Claude API 직접 호출, asyncio 병렬 처리.
 """
 import os, sys, json, time, re, asyncio, logging
 from datetime import datetime, timezone
+from services.time import now_kst, serialize_external_utc
 
 try:
     import httpx
@@ -101,7 +102,7 @@ async def process(client, art, stats, sem):
     async with sem:
         try:
             rules = await call_claude(client, art["law_name"], art.get("article_text",""))
-            now = datetime.now(timezone.utc).isoformat()
+            now = serialize_external_utc(now_kst())
             label = f"제{art.get('article_no','')}조{art.get('article_title','') or ''}"
             if not DRY_RUN:
                 sb.table("law_article").update({"ai_parsed_at":now}).eq("id",art["id"]).execute()

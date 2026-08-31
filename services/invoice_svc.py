@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 from db.supabase_client import get_supabase
 from services import audit_svc
 from services.payment_helpers import now_iso, split_supply_vat
+from services.time import now_kst
 
 log = logging.getLogger(__name__)
 
@@ -156,7 +157,7 @@ def issue_tax_invoice(payment_id: str, invoicee: Dict[str, str], created_by: Opt
     total = int(payment["total_amount"] or 0)
     supply, tax = split_supply_vat(total)
     mgt_key = _make_mgt_key(payment_id, "TAX_INVOICE")
-    write_date = datetime.now().strftime("%Y%m%d")
+    write_date = now_kst().strftime("%Y%m%d")
 
     invoice_id = _insert_invoice({
         "payment_id": payment_id,
@@ -231,7 +232,7 @@ def issue_cash_receipt(payment_id: str, trade_usage: str, identity_num: str,
     total = int(payment["total_amount"] or 0)
     supply, tax = split_supply_vat(total)
     mgt_key = _make_mgt_key(payment_id, "CASH_RECEIPT")
-    trade_dt = datetime.now().strftime("%Y%m%d%H%M%S")
+    trade_dt = now_kst().strftime("%Y%m%d%H%M%S")
 
     invoice_id = _insert_invoice({
         "payment_id": payment_id,

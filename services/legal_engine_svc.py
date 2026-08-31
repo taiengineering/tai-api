@@ -35,6 +35,7 @@ from services.legal_evaluator import (
     run_get_legal_result_from_quote,
     run_get_legal_summary,
 )
+from services.time import now_kst, serialize_business_datetime
 
 ENGINE_VERSION = "5.8.0"  # v5.8.0 (2026-04-23): 조문 본문 연결 (rule_article_mapping 활용)
 # 입력표준(INDUSTRIAL)과 엔진/룰표준(MANUFACTURING)을 모두 허용한다.
@@ -267,7 +268,7 @@ def run_diagnose_step1(
     from datetime import datetime
 
     facility_ctx = input_to_context_fn(sector_raw, inp)
-    evaluated_at = datetime.now().isoformat()
+    evaluated_at = serialize_business_datetime(now_kst())
     applicable, not_applicable = evaluate_facility_fn(facility_ctx, all_rules, sector_raw)
 
     # v5.8.0: supabase 전달하여 조문 본문 포함

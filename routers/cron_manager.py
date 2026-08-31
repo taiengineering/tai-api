@@ -10,6 +10,7 @@ from typing import Optional
 from db.database import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _require_admin
+from services.time import now_kst, serialize_business_datetime
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/cron", tags=["크론 관리"])
@@ -89,13 +90,13 @@ def update_job(job_code: str, body: CronJobUpdate, current: dict = Depends(get_c
     sb = get_supabase()
     _require_admin(current, sb)
     update_data = {k: v for k, v in body.dict().items() if v is not None}
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
     job = sb.table("cron_job_master") \
         .update(update_data).eq("job_code", job_code).execute()
     if body.cron_expression:
         sb.table("cron_schedule_config") \
             .update({"cron_expression": body.cron_expression,
-                     "updated_at": datetime.now().isoformat()}) \
+                     "updated_at": serialize_business_datetime(now_kst())}) \
             .eq("job_code", job_code).execute()
     try:
         from scheduler import load_jobs_from_db
@@ -137,7 +138,7 @@ def run_job_now(job_code: str, current: dict = Depends(get_current_user)):
         "status":            "RUNNING",
     }).execute()
     log_id  = log.data[0]["id"]
-    started = datetime.now()
+    started = now_kst()
 
     try:
         endpoint_url = j["endpoint_url"]
@@ -147,7 +148,7 @@ def run_job_now(job_code: str, current: dict = Depends(get_current_user)):
             from scheduler import _execute_direct
             payload = j.get("request_payload") or {}
             result = _execute_direct(endpoint_url, payload)
-            duration = (datetime.now() - started).total_seconds()
+            duration = (now_kst() - started).total_seconds()
 
             errors = 0
             if isinstance(result, dict):
@@ -155,7 +156,7 @@ def run_job_now(job_code: str, current: dict = Depends(get_current_user)):
             status = "WARNING" if errors > 0 else "SUCCESS"
 
             sb.table("cron_job_log").update({
-                "finished_at":      datetime.now().isoformat(),
+                "finished_at":      serialize_business_datetime(now_kst()),
                 "duration_seconds": duration,
                 "status":           status,
                 "result_summary":   str(result)[:500],
@@ -163,7 +164,7 @@ def run_job_now(job_code: str, current: dict = Depends(get_current_user)):
             }).eq("id", log_id).execute()
             try:
                 sb.table("cron_schedule_config").update({
-                    "last_run_at": datetime.now().isoformat(),
+                    "last_run_at": serialize_business_datetime(now_kst()),
                     "last_status": status,
                 }).eq("job_code", job_code).execute()
             except Exception:
@@ -181,7 +182,7 @@ def run_job_now(job_code: str, current: dict = Depends(get_current_user)):
 
         resp = req.post(url, json=payload, timeout=timeout) \
             if method == "POST" else req.get(url, timeout=timeout)
-        duration = (datetime.now() - started).total_seconds()
+        duration = (now_kst() - started).total_seconds()
         status   = "SUCCESS" if resp.status_code < 400 else "FAILED"
         result   = {}
         try:
@@ -190,7 +191,7 @@ def run_job_now(job_code: str, current: dict = Depends(get_current_user)):
             pass
 
         sb.table("cron_job_log").update({
-            "finished_at":    datetime.now().isoformat(),
+            "finished_at":    serialize_business_datetime(now_kst()),
             "duration_seconds": duration,
             "status":         status,
             "http_status_code": resp.status_code,
@@ -199,7 +200,7 @@ def run_job_now(job_code: str, current: dict = Depends(get_current_user)):
         }).eq("id", log_id).execute()
         try:
             sb.table("cron_schedule_config").update({
-                "last_run_at": datetime.now().isoformat(),
+                "last_run_at": serialize_business_datetime(now_kst()),
                 "last_status": status,
             }).eq("job_code", job_code).execute()
         except Exception:
@@ -209,9 +210,9 @@ def run_job_now(job_code: str, current: dict = Depends(get_current_user)):
                 "http_status": resp.status_code, "result": result}
 
     except Exception as e:
-        duration = (datetime.now() - started).total_seconds()
+        duration = (now_kst() - started).total_seconds()
         sb.table("cron_job_log").update({
-            "finished_at":    datetime.now().isoformat(),
+            "finished_at":    serialize_business_datetime(now_kst()),
             "duration_seconds": duration,
             "status":         "FAILED",
             "error_message":  str(e)[:1000],
@@ -279,7 +280,7 @@ def get_logs(job_code: str = None, status: str = None, limit: int = 50,
 def get_stats(current: dict = Depends(get_current_user)):
     sb     = get_supabase()
     _require_admin(current, sb)
-    today  = datetime.now().strftime("%Y-%m-%d")
+    today  = now_kst().strftime("%Y-%m-%d")
     total  = sb.table("cron_job_master").select("id", count="exact").execute()
     active = sb.table("cron_job_master").select("id", count="exact").eq("is_active", True).execute()
     today_runs = sb.table("cron_job_log").select("id", count="exact").gte("started_at", today).execute()

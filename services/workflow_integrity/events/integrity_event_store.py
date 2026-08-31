@@ -11,6 +11,7 @@ from uuid import UUID
 
 from db.supabase_client import get_supabase
 from services.workflow_integrity.schemas import IntegrityEventCreate
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ async def resolve_event(event_id: UUID) -> dict | None:
         sb.table("workflow_integrity_event")
         .update({
             "resolved": True,
-            "resolved_at": datetime.now(timezone.utc).isoformat(),
+            "resolved_at": serialize_external_utc(now_kst()),
         })
         .eq("id", str(event_id))
         .execute()

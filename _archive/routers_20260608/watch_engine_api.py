@@ -10,6 +10,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/watch-engine", tags=["감시엔진"])
@@ -132,7 +133,7 @@ def get_scheduler_status():
 def get_top_failing_flows(days: int = 7):
     try:
         sb = _sb()
-        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        since = (now_kst() - timedelta(days=days)).isoformat()
         issues = sb.table("engine_integrity_event") \
             .select("flow_key,event_type,severity,created_at") \
             .eq("resolved", False).eq("ignored", False).not_.is_("trace_id", "null") \
@@ -185,7 +186,7 @@ def acknowledge_issue(issue_id: str, body: AckBody):
         sb = _sb()
         sb.table("engine_integrity_event").update({
             "acknowledged": True,
-            "acknowledged_at": datetime.now(timezone.utc).isoformat(),
+            "acknowledged_at": serialize_external_utc(now_kst()),
             "acknowledged_by": body.operator,
         }).eq("id", issue_id).execute()
         return {"status": "success", "message": "확인 처리됨"}
@@ -200,7 +201,7 @@ def resolve_issue(issue_id: str, body: ResolveBody):
         sb = _sb()
         update = {
             "resolved": True,
-            "resolved_at": datetime.now(timezone.utc).isoformat(),
+            "resolved_at": serialize_external_utc(now_kst()),
         }
         if body.note:
             update["operator_note"] = body.note

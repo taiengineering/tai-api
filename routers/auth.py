@@ -21,6 +21,7 @@ from supabase import create_client
 from services.health_registry import register_probe
 from watch_engine import create_trace, emit_event
 from watch_engine.trace import clear_trace
+from services.time import now_kst, parse_external_datetime, serialize_external_utc, to_external_utc
 
 log = logging.getLogger("auth")
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -57,17 +58,17 @@ def is_email(value: str) -> bool:
     return "@" in value
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 def _parse_iso(s: str) -> datetime:
     s = s.replace("Z", "+00:00")
     try:
         dt = datetime.fromisoformat(s)
     except ValueError:
-        dt = datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+        dt = datetime.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
+        dt = parse_external_datetime(dt.isoformat(), source_timezone="UTC")
+    return to_external_utc(dt)
 
 
 # ════════════════════════════════════════════
@@ -173,7 +174,7 @@ def send_otp(req: SendOtpRequest):
     supabase = get_supabase()
     phone = normalize_phone(req.phone)
     otp_code = str(random.randint(100000, 999999))
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    expires_at = now_kst() + timedelta(minutes=10)
     try:
         supabase.table("otp_store").upsert({
             "phone":      phone,
@@ -360,7 +361,7 @@ def _ensure_user_row(supabase, phone: str) -> Optional[dict]:
         except Exception:
             pass
 
-    user_code = "USR-" + datetime.now().strftime("%Y%m%d") + "-" + "".join(random.choices(string.digits, k=4))
+    user_code = "USR-" + now_kst().strftime("%Y%m%d") + "-" + "".join(random.choices(string.digits, k=4))
     row = {
         "email":       _worker_email(clean),
         "phone":       clean,
@@ -447,7 +448,7 @@ def verify_otp(req: VerifyOtpRequest):
             row = otp_res.data[0]
             if row["otp"] == otp:
                 exp = _parse_iso(str(row["expires_at"]))
-                if datetime.now(timezone.utc) <= exp:
+                if now_kst() <= exp:
                     otp_valid = True
     except Exception:
         pass
@@ -461,7 +462,7 @@ def verify_otp(req: VerifyOtpRequest):
                     exp_str = meta.get("otp_exp", "")
                     if exp_str:
                         exp = _parse_iso(exp_str)
-                        if datetime.now(timezone.utc) <= exp:
+                        if now_kst() <= exp:
                             otp_valid = True
         except Exception:
             pass
@@ -858,7 +859,7 @@ def register(req: RegisterRequest):
         if not company_id:
             try:
                 cd = {"name": req.company_name, "company_type_code": req.company_type_code or "002",
-                      "company_code": f"COM-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                      "company_code": f"COM-{now_kst().strftime('%Y%m%d%H%M%S')}",
                       "status_code": "TRIAL", "is_active": True,
                       "created_at": _now_iso(), "updated_at": _now_iso()}
                 if req.business_number: cd["business_number"] = re.sub(r'[^0-9]', '', req.business_number)
@@ -869,7 +870,7 @@ def register(req: RegisterRequest):
                 company_id = cr.data[0]["id"] if cr.data else None
             except Exception:
                 pass
-    user_code = "USR-" + datetime.now().strftime("%Y%m%d") + "-" + ''.join(random.choices(string.digits, k=4))
+    user_code = "USR-" + now_kst().strftime("%Y%m%d") + "-" + ''.join(random.choices(string.digits, k=4))
     try:
         ur = supabase.table("users").insert({
             "auth_id": auth_id, "email": req.email, "phone": phone_normalized,
@@ -947,7 +948,7 @@ def ensure_user(authorization: Optional[str] = Header(None)):
     app_meta = getattr(auth_user, "app_metadata", None) or {}
     provider = app_meta.get("provider")
     name = meta.get("name") or meta.get("full_name") or (email.split("@")[0] if email else "사용자")
-    user_code = "USR-" + datetime.now().strftime("%Y%m%d") + "-" + "".join(random.choices(string.digits, k=4))
+    user_code = "USR-" + now_kst().strftime("%Y%m%d") + "-" + "".join(random.choices(string.digits, k=4))
     row = {
         "auth_id": auth_id, "email": email, "name": name, "username": email or user_code,
         "role_code": "002", "user_code": user_code, "status_code": "PENDING",
@@ -1303,7 +1304,7 @@ async def verify_email(req: VerifyEmailRequest):
         if sent_at_str:
             try:
                 sent_at = _parse_iso(str(sent_at_str))
-                if datetime.now(timezone.utc) - sent_at > timedelta(minutes=10):
+                if now_kst() - sent_at > timedelta(minutes=10):
                     raise HTTPException(status_code=400, detail="인증 코드가 만료되었습니다.")
             except HTTPException:
                 raise

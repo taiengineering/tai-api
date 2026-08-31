@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 from db.supabase_client import get_supabase
+from services.time import business_today, now_kst
 
 router = APIRouter(tags=["일정파이프"])
 
@@ -78,7 +79,7 @@ def generate_schedules_from_diagnosis(factory_id: str):
         r["rule_code"] for r in (existing_res.data or []) if r.get("rule_code")
     }
 
-    today   = date.today()
+    today   = business_today()
     created = 0
     skipped = 0
     rows    = []
@@ -135,8 +136,8 @@ def trigger_due_alerts():
     ★ assigned_user_id IS NOT NULL 필터 추가 — 담당자 없는 일정은 알림 미발송.
     """
     supabase = get_supabase()
-    today = date.today()
-    now   = datetime.now()
+    today = business_today()
+    now   = now_kst()
 
     due_targets = [
         (7, "D-7",   "NORMAL"),

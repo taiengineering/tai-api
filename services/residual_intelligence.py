@@ -10,10 +10,11 @@ import os, json
 from datetime import datetime, timezone
 from typing import Optional, List
 from uuid import uuid4
+from services.time import now_kst, serialize_external_utc
 
 
 def _now():
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _get_pool():
@@ -267,7 +268,7 @@ class ControlledRegistryUpdater:
         if d['decision'] not in ('CREATE_NEW_FAMILY','CREATE_NEW_REGISTRY_ENTRY','MAP_TO_EXISTING_FAMILY','LINK_TO_REFERENCE','LINK_TO_ATTACHMENT'):
             raise ValueError(f"Decision {d['decision']} is not an approval for registry update")
 
-        version_id = f"v_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{str(uuid4())[:8]}"
+        version_id = f"v_{now_kst().strftime('%Y%m%d_%H%M%S')}_{str(uuid4())[:8]}"
         data = {
             'registry_name': registry_name,
             'new_entry': json.dumps(new_entry),

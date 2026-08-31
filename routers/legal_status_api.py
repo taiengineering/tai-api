@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, List
 from datetime import datetime
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/legal-status", tags=["법령상태"])
 
@@ -54,7 +55,7 @@ def get_legal_status_summary(
 def mark_factory_applied(factory_id: str):
     """법령엔진 실행 완료 후 상태를 APPLIED로 갱신."""
     supabase = get_supabase()
-    now = datetime.now().isoformat()
+    now = serialize_business_datetime(now_kst())
 
     # 시설 상태 갱신
     res = supabase.table("factories").update({
@@ -90,7 +91,7 @@ def mark_factory_applied(factory_id: str):
 def mark_factory_needs_update(factory_id: str):
     """공정/설비 변경 시 상태를 NEEDS_UPDATE로 전환."""
     supabase = get_supabase()
-    now = datetime.now().isoformat()
+    now = serialize_business_datetime(now_kst())
 
     # APPLIED인 경우에만 NEEDS_UPDATE로 전환
     res = supabase.table("factories").update({
@@ -158,7 +159,7 @@ async def batch_apply_legal(
     results = []
     success_count = 0
     fail_count = 0
-    now = datetime.now().isoformat()
+    now = serialize_business_datetime(now_kst())
 
     for factory in targets:
         fid = factory["id"]

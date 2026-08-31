@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from db.database import get_supabase
 from routers.auth import get_current_user
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(tags=["연결 등록"])
 
@@ -45,7 +46,7 @@ STATUS_TYPES  = {"pending", "contacted", "matched", "closed", "cancelled"}
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 # ── POST /connect/register — 공개 ────────────────────────────────────
@@ -215,7 +216,7 @@ def export_connect_registrations(
         writer.writerow(row)
 
     output.seek(0)
-    filename = f"connect_registrations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    filename = f"connect_registrations_{now_kst().strftime('%Y%m%d_%H%M%S')}.csv"
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv; charset=utf-8-sig",

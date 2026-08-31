@@ -7,6 +7,7 @@ from db.supabase_client import get_supabase
 from schemas.inspection_sets import AnchorBody, AnchorBulkPatchBody, BulkAnchorBody, InspectionSetPatchBody
 from services.inspection_sets_helpers import _build_next_schedule_row
 from .errors import InspectionSetsSvcError
+from services.time import now_kst, serialize_business_datetime
 
 
 def set_anchor_bulk(body: BulkAnchorBody) -> dict:
@@ -22,7 +23,7 @@ def set_anchor_bulk(body: BulkAnchorBody) -> dict:
     for iset in sets:
         try:
             row, planned = _build_next_schedule_row(iset, anchor)
-            supabase.table("inspection_sets").update({"schedule_anchor_date": anchor.isoformat(), "next_planned_date": planned.isoformat(), "anchor_confirmed": True, "status_code": "ACTIVE", "updated_at": datetime.now().isoformat()}).eq("id", iset["id"]).execute()
+            supabase.table("inspection_sets").update({"schedule_anchor_date": anchor.isoformat(), "next_planned_date": planned.isoformat(), "anchor_confirmed": True, "status_code": "ACTIVE", "updated_at": serialize_business_datetime(now_kst())}).eq("id", iset["id"]).execute()
             supabase.table("work_schedules").delete().eq("inspection_set_id", iset["id"]).eq("status_code", "SCHEDULED").execute()
             r = supabase.table("work_schedules").insert(row).execute()
             c = len(r.data or [])
@@ -45,7 +46,7 @@ def bulk_update_anchors(body: AnchorBulkPatchBody) -> dict:
             iset = res.data[0]
             anchor = date.fromisoformat(item.schedule_anchor_date)
             row, planned = _build_next_schedule_row(iset, anchor)
-            upd = {"schedule_anchor_date": anchor.isoformat(), "next_planned_date": planned.isoformat(), "anchor_confirmed": True, "status_code": "ACTIVE", "updated_at": datetime.now().isoformat()}
+            upd = {"schedule_anchor_date": anchor.isoformat(), "next_planned_date": planned.isoformat(), "anchor_confirmed": True, "status_code": "ACTIVE", "updated_at": serialize_business_datetime(now_kst())}
             if item.last_inspection_date:
                 upd["last_inspection_date"] = item.last_inspection_date
             supabase.table("inspection_sets").update(upd).eq("id", item.id).execute()
@@ -66,7 +67,7 @@ def patch_set(inspection_set_id: str, body: InspectionSetPatchBody) -> dict:
     if not res.data:
         raise InspectionSetsSvcError(404, "점검세트를 찾을 수 없습니다.")
     iset = res.data[0]
-    upd: Dict[str, Any] = {"updated_at": datetime.now().isoformat()}
+    upd: Dict[str, Any] = {"updated_at": serialize_business_datetime(now_kst())}
     if body.is_active is not None:
         upd["is_active"] = body.is_active
     if body.last_inspection_date is not None:
@@ -110,7 +111,7 @@ def update_anchor(inspection_set_id: str, body: AnchorBody) -> dict:
     end_str = iset.get("schedule_end_date")
     if end_str and planned > date.fromisoformat(end_str):
         return {"status": "success", "message": "일정 종료일이 지나 생성 안 함.", "data": {"inspection_set_id": inspection_set_id, "anchor_date": anchor.isoformat(), "next_planned_date": planned.isoformat(), "anchor_confirmed": True, "created": 0}}
-    upd = {"schedule_anchor_date": anchor.isoformat(), "next_planned_date": planned.isoformat(), "anchor_confirmed": True, "status_code": "ACTIVE", "updated_at": datetime.now().isoformat()}
+    upd = {"schedule_anchor_date": anchor.isoformat(), "next_planned_date": planned.isoformat(), "anchor_confirmed": True, "status_code": "ACTIVE", "updated_at": serialize_business_datetime(now_kst())}
     if body.last_inspection_date:
         upd["last_inspection_date"] = body.last_inspection_date
     result = supabase.table("inspection_sets").update(upd).eq("id", inspection_set_id).execute()

@@ -8,6 +8,7 @@ from . import audit
 from . import retry_policy
 from . import deadletter
 from . import channel_registry
+from services.time import now_kst, serialize_external_utc
 
 logger = logging.getLogger("notification_engine.worker")
 
@@ -25,7 +26,7 @@ def process_queue(limit: int = 20) -> dict:
     try:
         from db.supabase_client import get_supabase
         sb = get_supabase()
-        now = datetime.now(timezone.utc).isoformat()
+        now = serialize_external_utc(now_kst())
 
         r1 = sb.table("runtime_notification_queue").select("*").eq("delivery_status", "QUEUED").order("created_at").limit(limit).execute()
         r2 = sb.table("runtime_notification_queue").select("*").eq("delivery_status", "RETRY_PENDING").lte("next_retry_at", now).order("next_retry_at").limit(limit).execute()
@@ -75,7 +76,7 @@ def _deliver_item(sb, item: dict, stats: dict):
     message = f"{title}\n{body}".strip() if title or body else f"[{item.get('notification_type')}]"
 
     success, error_msg = adapter_fn(message)
-    now = datetime.now(timezone.utc).isoformat()
+    now = serialize_external_utc(now_kst())
 
     if success:
         _update_queue(sb, queue_id, {"delivery_status": "DELIVERED", "delivered_at": now})

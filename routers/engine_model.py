@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 from datetime import datetime, timezone
 from db.supabase_client import get_supabase
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/engine-model", tags=["엔진모델마스터"])
 
@@ -31,7 +32,7 @@ PATCH_ALLOWED = {
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 # ─────────────────────────────────────────────────────

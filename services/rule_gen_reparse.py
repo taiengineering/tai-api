@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 from services.rule_gen_ai import _call_claude_messages, _fetch_few_shot_examples
 from services.rule_gen_builders import _build_reparse_prompt, _pick_reparse_targets
 from services.rule_gen_helpers import _is_blank, _normalize_submit_org_code, sanitize_master_patch
+from services.time import now_kst, serialize_external_utc
 
 
 async def _run_reparse_background(
@@ -97,7 +98,7 @@ async def _run_reparse_background(
                         patch.pop("submit_org_code", None)
 
                 if patch:
-                    patch["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    patch["updated_at"] = serialize_external_utc(now_kst())
                     sanitize_master_patch(patch)
                     supabase.table("master_building_legal_rules").update(patch).eq("id", row["id"]).execute()
                     updated += 1
@@ -127,7 +128,7 @@ async def _run_reparse_background(
 
         supabase.table("reparse_job_log").update({
             "status": "COMPLETED",
-            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at": serialize_external_utc(now_kst()),
             "processed": processed, "updated": updated, "skipped": skipped,
             "errors": errors_count, "error_details": error_details,
             "changed_fields": {**changed_fields_total, "_validation": validate_data or {}},
@@ -139,7 +140,7 @@ async def _run_reparse_background(
         try:
             supabase.table("reparse_job_log").update({
                 "status": "FAILED",
-                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": serialize_external_utc(now_kst()),
                 "error_details": [{"error": str(e)[:500]}],
             }).eq("job_id", job_id).execute()
         except Exception:

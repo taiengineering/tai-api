@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, UploadFile
 
 from db.supabase_client import get_supabase
+from services.time import now_kst
 
 BUCKET = "inspections"
 MAX_SIZE = 5 * 1024 * 1024  # 5 MB
@@ -62,7 +63,7 @@ def upload_inspection_photo(
     ext = _validate_file(file, contents)
 
     # 경로 생성
-    now = datetime.now(timezone.utc)
+    now = now_kst()
     ref_id = inspection_id or factory_id or site_id or "anon"
     seq = uuid.uuid4().hex[:8]
     path = f"{context}/{now.strftime('%Y/%m/%d')}/{ref_id}/{seq}.{ext}"

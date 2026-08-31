@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+from services.time import now_kst
 
 logger = logging.getLogger("notification_engine.metrics")
 
@@ -11,7 +12,7 @@ def collect_and_record(window_minutes: int = 10) -> dict:
     try:
         from db.supabase_client import get_supabase
         sb = get_supabase()
-        now = datetime.now(timezone.utc)
+        now = now_kst()
         since = (now - timedelta(minutes=window_minutes)).isoformat()
 
         counts = _count_queue_statuses(sb)
@@ -58,7 +59,7 @@ def get_runtime_summary() -> dict:
     try:
         from db.supabase_client import get_supabase
         sb = get_supabase()
-        now = datetime.now(timezone.utc)
+        now = now_kst()
         since = (now - timedelta(minutes=10)).isoformat()
 
         counts = _count_queue_statuses(sb)

@@ -16,17 +16,18 @@ from typing import Optional
 
 from db.supabase_client import get_supabase
 from services.payment_helpers import load_template
+from services.time import now_kst
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/payments/test", tags=["시험결제"])
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    return now_kst().strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
 def _order_id(prefix: str) -> str:
-    return f"{prefix}_{datetime.now(timezone.utc).strftime('%y%m%d%H%M%S')}_{uuid4().hex[:6]}"
+    return f"{prefix}_{now_kst().strftime('%y%m%d%H%M%S')}_{uuid4().hex[:6]}"
 
 
 # ── 페이지 ──────────────────────────────────────────────────

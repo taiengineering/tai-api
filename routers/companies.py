@@ -23,6 +23,7 @@ import uuid
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_own_company
+from services.time import now_kst, serialize_business_datetime
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 
@@ -293,7 +294,7 @@ def check_biz(business_number: str = Query(..., description="사업자등록번�
 def onboarding(req: OnboardingBody, current: dict = Depends(get_current_user)):
     """회사 + 시설 + 담당자를 한 번에 등록."""
     supabase = get_supabase()
-    now      = datetime.now()
+    now      = now_kst()
     result: dict = {}
 
     # 1. 회사 등록
@@ -424,7 +425,7 @@ def create_company(req: CompanyCreate, current: dict = Depends(get_current_user)
         ).limit(1).execute()
         if dup.data:
             raise HTTPException(status_code=400, detail="이미 등록된 법인번호입니다")
-    now = datetime.now()
+    now = now_kst()
     payload = req.dict(exclude_none=True)
     payload.pop("company_name", None)
     payload["name"] = display_name
@@ -470,7 +471,7 @@ def update_company(company_id: str, req: CompanyUpdate, current: dict = Depends(
     update_data = {k: v for k, v in req.dict().items() if v is not None}
     if "company_name" in update_data:
         update_data["name"] = update_data.pop("company_name")
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
     res = supabase.table("companies").update(update_data).eq("id", company_id).execute()
     return {"status": "success", "message": "사업장 정보가 수정됐습니다", "data": res.data[0] if res.data else {}}
 
@@ -489,7 +490,7 @@ def delete_company(company_id: str, current: dict = Depends(get_current_user)):
     supabase.table("companies").update({
         "is_active":   False,
         "status_code": "CANCELLED",
-        "updated_at":  datetime.now().isoformat(),
+        "updated_at":  serialize_business_datetime(now_kst()),
     }).eq("id", company_id).execute()
     return {"status": "success", "message": "사업장이 비활성화됐습니다"}
 
@@ -548,7 +549,7 @@ def add_company_contact(company_id: str, body: ContactBody, current: dict = Depe
         supabase.table("company_contacts").update({"is_primary": False}).eq(
             "company_id", company_id
         ).eq("is_primary", True).execute()
-    now = datetime.now().isoformat()
+    now = serialize_business_datetime(now_kst())
     res = supabase.table("company_contacts").insert({
         "company_id":   company_id,
         "contact_type": body.contact_type,
@@ -584,7 +585,7 @@ def update_company_contact(company_id: str, contact_id: str, body: ContactUpdate
             "company_id", company_id
         ).eq("is_primary", True).neq("id", contact_id).execute()
     update_data = {k: v for k, v in body.dict().items() if v is not None}
-    update_data["updated_at"] = datetime.now().isoformat()
+    update_data["updated_at"] = serialize_business_datetime(now_kst())
     res = supabase.table("company_contacts").update(update_data).eq("id", contact_id).execute()
     return {"status": "success", "message": "담당자가 수정됐습니다.", "data": res.data[0] if res.data else {}}
 
@@ -606,7 +607,7 @@ def delete_company_contact(company_id: str, contact_id: str, current: dict = Dep
         raise HTTPException(status_code=400, detail="대표담당자는 삭제할 수 없습니다. 다른 담당자를 대표담당자로 설정한 후 삭제하세요.")
     supabase.table("company_contacts").update({
         "is_active":  False,
-        "updated_at": datetime.now().isoformat(),
+        "updated_at": serialize_business_datetime(now_kst()),
     }).eq("id", contact_id).execute()
     return {"status": "success", "message": "담당자가 삭제됐습니다."}
 
@@ -635,7 +636,7 @@ def get_company_contracts(company_id: str, current: dict = Depends(get_current_u
 def add_company_file(company_id: str, body: FileBody, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     _ensure_own_company(company_id, current, supabase, "사업장을 찾을 수 없습니다")
-    now = datetime.now().isoformat()
+    now = serialize_business_datetime(now_kst())
     res = supabase.table("company_files").insert({
         "company_id":  company_id,
         "file_type":   body.file_type,
@@ -744,7 +745,7 @@ async def upload_company_file(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"파일 업로드 실패: {str(e)}")
 
-    now = datetime.now().isoformat()
+    now = serialize_business_datetime(now_kst())
     # 로고는 companies.logo_url 에 즉시 반영(프론트가 별도 PATCH 없이 표시).
     if is_logo:
         try:
@@ -796,7 +797,7 @@ def delete_company_file(company_id: str, file_id: str, current: dict = Depends(g
         raise HTTPException(status_code=404, detail="파일을 찾을 수 없습니다.")
     supabase.table("company_files").update({
         "is_active":  False,
-        "updated_at": datetime.now().isoformat(),
+        "updated_at": serialize_business_datetime(now_kst()),
     }).eq("id", file_id).execute()
     return {"status": "success", "message": "파일이 삭제됐습니다."}
 
@@ -812,7 +813,7 @@ def set_contract_url(company_id: str, body: ContractUrlBody, current: dict = Dep
     chk = supabase.table("companies").select("id").eq("id", company_id).limit(1).execute()
     if not chk.data:
         raise HTTPException(status_code=404, detail="회사를 찾을 수 없습니다.")
-    now = datetime.now().isoformat()
+    now = serialize_business_datetime(now_kst())
     exist = supabase.table("company_files").select("id").eq(
         "company_id", company_id
     ).eq("file_type", "contract_url").limit(1).execute()

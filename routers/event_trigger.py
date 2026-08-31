@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import date, timedelta, datetime
 from db.supabase_client import get_supabase
+from services.time import business_today
 
 router = APIRouter(tags=["event_trigger"])
 
@@ -44,7 +45,7 @@ async def trigger_event_schedules(
          "event_date": str, "schedules": [...]}
     """
     supabase   = get_supabase()
-    event_date = event_date or date.today()
+    event_date = event_date or business_today()
     created, skipped, schedules = 0, 0, []
 
     # 1. factory의 진단 결과에서 REPORT/NOTIFY 룰 조회
@@ -172,7 +173,7 @@ async def manual_trigger(body: ManualTriggerBody):
             detail=f"event_type은 {sorted(valid_types)} 중 하나여야 합니다."
         )
 
-    ev_date = date.fromisoformat(body.event_date) if body.event_date else date.today()
+    ev_date = date.fromisoformat(body.event_date) if body.event_date else business_today()
     result  = await trigger_event_schedules(
         factory_id = body.factory_id,
         event_type = body.event_type,

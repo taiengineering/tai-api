@@ -15,11 +15,12 @@ from typing import Optional, List
 from datetime import datetime, timezone
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
+from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(tags=["TAI Fix 공급자"])
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 # ─────────────────────────────────────────────────────

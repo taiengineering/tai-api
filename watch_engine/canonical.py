@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from typing import Optional
+from services.time import now_kst, serialize_external_utc
 
 CONTRACT_VERSION = 1
 
@@ -107,7 +108,7 @@ def map_outcome(result: Optional[str]) -> Optional[str]:
 
 def now_occurred_at() -> str:
     """Server-side UTC event time as an ISO-8601 timestamptz string (§12)."""
-    return datetime.now(timezone.utc).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def _nonempty(v: Optional[str]) -> bool:

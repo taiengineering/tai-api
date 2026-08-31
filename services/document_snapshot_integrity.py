@@ -47,6 +47,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 from uuid import UUID
+from services.time import to_external_utc
 
 # production code 가 import 할 수 있는 것은 이 둘 뿐이다.
 __all__ = [
@@ -211,7 +212,7 @@ def _build_canonical_snapshot_payload(
         raise _fail("confirmed_at must be timezone-aware (naive datetime 금지)")
     # 고정 형식: UTC · microsecond 6자리 항상 표기 · 'Z' suffix
     raw["confirmed_at"] = (
-        confirmed_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+        to_external_utc(confirmed_at).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     )
 
     if not isinstance(document_version, int) or isinstance(document_version, bool):

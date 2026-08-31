@@ -48,3 +48,13 @@ def serialize_business_datetime(value: datetime) -> str:
     if value.tzinfo is None:
         raise ValueError("serialize requires aware datetime")
     return value.astimezone(TAI_TIMEZONE).isoformat()   # +09:00
+
+def to_external_utc(value: datetime) -> datetime:
+    """Boundary helper: aware instant → UTC-aware datetime. Production code must not use timezone.utc."""
+    if value.tzinfo is None:
+        raise ValueError("to_external_utc requires aware datetime")
+    return value.astimezone(timezone.utc)
+
+def serialize_external_utc(value: datetime) -> str:
+    """UTC ISO-8601 with +00:00 (Python isoformat). Instant-preserving external serialization."""
+    return to_external_utc(value).isoformat()
