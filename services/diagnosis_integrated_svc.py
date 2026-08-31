@@ -130,7 +130,7 @@ def resolve_auth_log(supabase, auth_token: str) -> dict:
 def resolve_member_auth_log(supabase, current_user: dict) -> dict:
     """WO-CST-PAID-MEMBER-RUNTIME-BRIDGE-006: 로그인 + 본인인증 완료 회원의 기존 diagnosis_auth_log 를
     서버 신원(current_user)으로 복원한다. body.auth_token 이 없는 유료 회원 fallback 전용.
-    deterministic 규칙(임의 latest/first 금지): linked_user_id=current_user.id AND ci_hash=current_user.identity_ci
+    deterministic 규칙(임의 latest/first 금지): linked_user_id=current_user.id AND ci_hash=sha256(current_user.identity_ci)
     AND status='ACTIVE'. 결과가 '정확히 1건'일 때만 사용하고, 0/복수는 fail-closed.
     anonymous 인증 완화가 아니다 — verified persisted member 만 허용. client 전달 user_id/ci/linked 는 신뢰하지 않는다.
     """
@@ -138,15 +138,19 @@ def resolve_member_auth_log(supabase, current_user: dict) -> dict:
         raise HTTPException(status_code=401, detail="유료 진단은 회원가입 후 이용 가능합니다.")
     if not current_user.get("identity_verified"):
         raise HTTPException(status_code=403, detail="본인인증이 필요합니다. 본인인증 후 이용해 주세요.")
-    ci = (current_user.get("identity_ci") or "").strip()
+    ci_raw = (current_user.get("identity_ci") or "").strip()
     uid = current_user.get("id")
-    if not ci or not uid:
+    if not ci_raw or not uid:
         raise HTTPException(status_code=403, detail="본인인증 정보가 없습니다. 본인인증을 다시 진행해 주세요.")
+    # CORRECTION-01 (BREAK-B): diagnosis_auth_log.ci_hash 는 sha256(원문 CI)로 저장된다
+    # (sync_diagnosis_auth_log_from_inicis 규약). users.identity_ci(원문)를 동일 sha256 로 해시해 비교한다.
+    # 원문 CI 를 ci_hash 컬럼에 직접 비교하면 절대 매칭되지 않아 항상 0건(사실상 전면 차단)이 된다.
+    ci_hash = hashlib.sha256(ci_raw.encode("utf-8")).hexdigest()
     res = (
         supabase.table("diagnosis_auth_log")
         .select("id, ci_hash, name, phone, free_count, free_limit, status, linked_user_id")
         .eq("linked_user_id", uid)
-        .eq("ci_hash", ci)
+        .eq("ci_hash", ci_hash)
         .eq("status", "ACTIVE")
         .execute()
     )
@@ -427,31 +431,17 @@ def run_diagnosis(
         inp["company_id"] = company_id
 
     # Phase 1 lossless canonical materialization
-    # (WO-GATE8-CANONICAL-LOSSLESS-MATERIALIZATION-IMPLEMENT-01):
-    # consumer 가 실제 제공한 RTM-vocab applicability(선언 attr + 보존된 form_data)를
-    # DiagnoseStep1Body.input 으로 손실 없이 전달한다. build_facility 가 input[code]
-    # 로 사영하므로 스키마/매핑 확장 불요. alias/derivation/값 생성 없음.
-    # setdefault 로 기존 inp 키(region/tier_code 등)는 덮어쓰지 않는다. FREE 경로 미영향.
     from services.canonical.materialization import canonical_applicability
 
     _available: dict = {f: getattr(body, f, None) for f in type(body).model_fields}
     _available.update(getattr(body, "form_data", None) or {})
-    # WO-FE-CST-GAP-IMPL-001 FIX-B1: CONSTRUCTION 전용 CODE-C1(body.input→canonical 우회) 제거.
-    # primary paid path(free-diagnosis runPaidDiagnosis)는 form_data 로 applicability 를 전달하므로
-    # 위 _available.update(form_data) → canonical_applicability(_LEG_INPUT_FIELDS exact) 공통 배선으로
-    # 10 fact 가 그대로 materialize 된다(중복 배선 제거). has_chemical_substance 는 FIX-B2 step1 bridge 로 처리.
+    # WO-FE-CST-GAP-IMPL-001 FIX-B1: CONSTRUCTION 전용 CODE-C1 제거. form_data → canonical 공통 배선.
     for _code, _val in canonical_applicability(_available).items():
         inp.setdefault(_code, _val)
-    # WO-FE-CST-EQUIPMENT-CAPTURE-WIRING-001: 기존 설비등록(equipment_assets)에서 승인된 5개
-    # equipment Legal Fact 를 materialize 한다. TAI Consumer Input Materialization Boundary 에서만 수행
-    # (LEG/canonical business 판단 아님). system_codes equipment_type 정본 code == equipment_type_code
-    # exact equality 만 사용(runtime 문자열/name inference 금지). 등록 설비 = true, 미등록 = UNKNOWN(false 생성 안 함).
-    # CORRECTION-01: (A) CONSTRUCTION PAID + owned factory 로 gate(sector leakage/free 차단; INDUSTRIAL FROZEN 보호)
-    #                (B) _ensure_factory_own 로 tenant ownership 검증(client factory_id 신뢰 금지)
-    #                (C) equipment source read 실패는 fail-closed(503) — DB error ≠ equipment absent(silent under-diagnosis 방지)
+    # WO-FE-CST-EQUIPMENT-CAPTURE-WIRING-001: 설비등록(equipment_assets)에서 승인된 5 equipment Legal Fact materialize.
+    # CONSTRUCTION PAID + owned factory gate, _ensure_factory_own, DB fail 503, 미등록 UNKNOWN, exact code equality.
     if _is_construction and not is_free and factory_id:
         from services.company_scope import _ensure_factory_own
-        # 타사 factory 는 helper 의 기존 exception contract(403/404) 로 차단 → equipment read/fact 생성 0
         _ensure_factory_own(supabase, factory_id, current_user)
         _EQ_FACT = {"010": "has_emergency_gen", "014": "has_boiler", "023": "has_press",
                     "024": "has_conveyor", "038": "has_pressure_vessel"}
@@ -466,11 +456,10 @@ def run_diagnosis(
         except Exception as _e:
             log.error("[equipment_materializer] source read failed factory=%s: %s", factory_id, _e)
             raise HTTPException(status_code=503, detail="설비 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.")
-        # 정상 조회: [] 이면 fact 0(UNKNOWN 유지). DB error(위)와 구분.
         _eq_codes = {(_r.get("equipment_type_code") or "") for _r in (_eq_res.data or [])}
         for _c, _f in _EQ_FACT.items():
             if _c in _eq_codes:
-                inp.setdefault(_f, True)  # 등록 설비만 true; 미등록은 미설정(UNKNOWN)
+                inp.setdefault(_f, True)
     # E-C1 CORRECTION-01: 0 은 명시적으로 제공된 값이므로 truthiness 로 버리지 않는다(is None 기준).
     if _worker_count is not None:
         workers = _worker_count
@@ -485,11 +474,6 @@ def run_diagnosis(
 
     if engine_sector == "CONSTRUCTION":
         # WO-FE-CST-GAP-IMPL-001 FIX-B2: CONSTRUCTION chemical step1 bridge.
-        # has_chemical_substance 는 _LEG_INPUT_FIELDS 미등록(has_chemical + alias)이라 canonical 로는
-        # inp 에 실리지 않는다. form_data.has_chemical_substance 를 step1_body 로 전달하면 build_facility 의
-        # 기존 alias(_LEG_CODE_TO_CONSUMER: has_chemical→has_chemical_substance)가 facility[has_chemical] 을
-        # 생성하고, CODE-C2(build_facility CONSTRUCTION rename)가 facility.has_chemical_substance 로 교정한다.
-        # else(산업) 분기가 이미 쓰는 방식과 동일. 새 alias engine 없음.
         _cst_fd = getattr(body, "form_data", None) or {}
         step1_body = DiagnoseStep1Body(
             factory_id=factory_id,
@@ -545,8 +529,7 @@ def run_diagnosis(
     if is_free:
         expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
 
-    # WO-FE-IND-GAP-051-TRANSPORT-001 (CORRECTION-01): raw envelope 은 `is not None` 기준으로만
-    # 필터한다. {} / [] 는 "전송했고 0건" 이라는 사실값이므로 verbatim 보존(truthiness 로 버리지 않음).
+    # WO-FE-IND-GAP-051-TRANSPORT-001 (CORRECTION-01): raw envelope 은 `is not None` 기준으로만 필터.
     _raw_structured_input = {
         _k: _v
         for _k, _v in {
@@ -568,11 +551,6 @@ def run_diagnosis(
             "workers": workers,
             **({"factory_id": factory_id} if factory_id else {}),
             **({"company_id": company_id} if company_id else {}),
-            # WO-FE-IND-GAP-051-TRANSPORT-001: paid RAW structured input 을 verbatim 보존.
-            # RAW ENVELOPE 전용 — canonical_applicability/build_facility 로는 주입하지 않는다.
-            # 보존 판정은 truthiness 가 아니라 `is not None` 기준이다(CORRECTION-01):
-            #   None → 미보존 / {} 또는 [] → 그대로 보존(전송했고 0건이라는 사실 보존).
-            #   comprehension 결과가 비면(=4개 모두 None) raw_structured_input 자체를 생략한다.
             **(
                 {"raw_structured_input": _raw_structured_input}
                 if _raw_structured_input
