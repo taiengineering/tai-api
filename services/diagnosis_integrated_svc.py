@@ -127,6 +127,36 @@ def resolve_auth_log(supabase, auth_token: str) -> dict:
     return row
 
 
+def resolve_member_auth_log(supabase, current_user: dict) -> dict:
+    """WO-CST-PAID-MEMBER-RUNTIME-BRIDGE-006: 로그인 + 본인인증 완료 회원의 기존 diagnosis_auth_log 를
+    서버 신원(current_user)으로 복원한다. body.auth_token 이 없는 유료 회원 fallback 전용.
+    deterministic 규칙(임의 latest/first 금지): linked_user_id=current_user.id AND ci_hash=current_user.identity_ci
+    AND status='ACTIVE'. 결과가 '정확히 1건'일 때만 사용하고, 0/복수는 fail-closed.
+    anonymous 인증 완화가 아니다 — verified persisted member 만 허용. client 전달 user_id/ci/linked 는 신뢰하지 않는다.
+    """
+    if not current_user:
+        raise HTTPException(status_code=401, detail="유료 진단은 회원가입 후 이용 가능합니다.")
+    if not current_user.get("identity_verified"):
+        raise HTTPException(status_code=403, detail="본인인증이 필요합니다. 본인인증 후 이용해 주세요.")
+    ci = (current_user.get("identity_ci") or "").strip()
+    uid = current_user.get("id")
+    if not ci or not uid:
+        raise HTTPException(status_code=403, detail="본인인증 정보가 없습니다. 본인인증을 다시 진행해 주세요.")
+    res = (
+        supabase.table("diagnosis_auth_log")
+        .select("id, ci_hash, name, phone, free_count, free_limit, status, linked_user_id")
+        .eq("linked_user_id", uid)
+        .eq("ci_hash", ci)
+        .eq("status", "ACTIVE")
+        .execute()
+    )
+    rows = res.data or []
+    # 정확히 1건만 사용. 0(연결 없음)/복수(deterministic 규칙 부재)는 fail-closed.
+    if len(rows) != 1:
+        raise HTTPException(status_code=401, detail="인증 세션을 확인할 수 없습니다. 본인인증을 다시 시도해 주세요.")
+    return rows[0]
+
+
 def check_free_usage(supabase, auth_token: str) -> Dict[str, Any]:
     row = resolve_auth_log(supabase, auth_token)
     used = row.get("free_count") or 0
@@ -282,7 +312,14 @@ def run_diagnosis(
     engine_version: str,
     current_user: Optional[dict] = None,
 ) -> Dict[str, Any]:
-    auth_row = resolve_auth_log(supabase, body.auth_token)
+    # WO-006: 인증 결정. explicit body.auth_token 우선(기존 무료/legacy 경로 보존).
+    # auth_token 없고 로그인 유료 회원이면 verified persisted member 로 복원(anonymous 완화 아님).
+    if (getattr(body, "auth_token", None) or "").strip():
+        auth_row = resolve_auth_log(supabase, body.auth_token)
+    elif current_user:
+        auth_row = resolve_member_auth_log(supabase, current_user)
+    else:
+        raise HTTPException(status_code=401, detail="인증이 필요합니다. 본인인증 후 이용해 주세요.")
     disclaimer_log_id = (body.disclaimer_log_id or "").strip()
     if not disclaimer_log_id:
         if body.payment_ref:
