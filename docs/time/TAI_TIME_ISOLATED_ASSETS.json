@@ -1,9 +1,1 @@
-{
-  "required_column_count": 20,
-  "required_table_count": 13,
-  "column_count": 0,
-  "table_count": 0,
-  "sot_status": "NOT_ATTACHED_TO_CURSOR_WORK_ORDER",
-  "migration_action": "DO_NOT_ALTER",
-  "columns": []
-}
+[{"object_name":"_deprecated_master_legal_inspection_rules","column_name":"created_at"},{"object_name":"_deprecated_master_legal_inspection_rules","column_name":"updated_at"},{"object_name":"_deprecated_master_legal_requirement_conditions","column_name":"created_at"},{"object_name":"_deprecated_master_legal_requirement_conditions","column_name":"updated_at"},{"object_name":"_mig_ws_data_snapshot","column_name":"reviewed_at"},{"object_name":"inspection_master_v1_backup","column_name":"created_at"},{"object_name":"law_parsing_result_legacy_contaminated","column_name":"created_at"},{"object_name":"law_parsing_result_legacy_contaminated","column_name":"updated_at"},{"object_name":"master_building_legal_rules_legacy_contaminated","column_name":"created_at"},{"object_name":"master_building_legal_rules_legacy_contaminated","column_name":"updated_at"},{"object_name":"master_legal_rules_archive","column_name":"created_at"},{"object_name":"master_legal_rules_archive","column_name":"updated_at"},{"object_name":"master_legal_rules_pending_review_legacy_contaminated","column_name":"created_at"},{"object_name":"master_legal_rules_pending_review_legacy_contaminated","column_name":"updated_at"},{"object_name":"master_legal_rules_preserved_legacy_contaminated","column_name":"created_at"},{"object_name":"master_legal_rules_preserved_legacy_contaminated","column_name":"updated_at"},{"object_name":"v_demo_buildings","column_name":"created_at"},{"object_name":"work_schedules_old","column_name":"reviewed_at"},{"object_name":"zz_legacy_menus","column_name":"created_at"},{"object_name":"zz_legacy_role_site_permissions","column_name":"created_at"}]

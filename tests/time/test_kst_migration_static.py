@@ -23,17 +23,6 @@ TIME = ROOT / "docs" / "time"
 SQL = ROOT / "docs" / "sql"
 sys.path.insert(0, str(ROOT / "scripts"))
 
-def _active_len():
-    doc = json.loads((TIME / "TAI_TIME_ACTIVE_COLUMN_MANIFEST.json").read_text(encoding="utf-8"))
-    cols = doc if isinstance(doc, list) else (doc.get("columns") or doc.get("rows") or [])
-    return len(cols)
-
-
-pytestmark = pytest.mark.skipif(
-    _active_len() == 0,
-    reason="SoT json_agg not materialized — skip §23 until ACTIVE rows=260",
-)
-
 VIEW_ORDER = ("v_equipment_unified", "v_payments_list", "v_process_unified")
 ACL_ROLES = ("anon", "authenticated", "postgres", "service_role")
 CHILD_RE = re.compile(r"work_schedules_p\d{2}")
@@ -88,7 +77,7 @@ def test_manifest_count():
 def test_manifest_structure_sum():
     rows = _active()
     counts = Counter(r["structure"] for r in rows)
-    assert counts["DIRECT"] == 236
+    assert counts["DIRECT_PHYSICAL"] == 236
     assert counts["PARTITION_ROOT"] == 1
     assert counts["PARTITION_CHILD"] == 16
     assert counts["VIEW_DERIVED"] == 7

@@ -137,20 +137,15 @@ def test_generator_isolated_hard_fail():
         gen.generate(active, isolated, views)
 
 
-def test_active_isolated_view_sot_gap_is_explicit():
-    """json_agg / viewdef were not in the Cursor work-order payload — do not invent 260 rows."""
+def test_sot_attached_260():
+    """Live catalog json_agg is materialized (260). Isolated 20/13. Views have definitions."""
     active = _j("TAI_TIME_ACTIVE_COLUMN_MANIFEST.json")
     isolated = _j("TAI_TIME_ISOLATED_ASSETS.json")
     views = _j("TAI_TIME_VIEW_MANIFEST.json")
-    assert active["required_row_count"] == 260
-    assert active["invariants"]["direct_alter"] == 236
-    assert active["invariants"]["view_derived"] == 7
-    assert active["invariants"]["partition_root_alter"] == 1
-    assert active["invariants"]["partition_children"] == 16
-    assert active["columns"] == []
-    assert isolated["required_column_count"] == 20
-    assert isolated["required_table_count"] == 13
-    assert isolated["columns"] == []
+    cols = active if isinstance(active, list) else (active.get("columns") or [])
+    iso = isolated if isinstance(isolated, list) else (isolated.get("columns") or [])
+    assert len(cols) == 260
+    assert len(iso) == 20
+    assert len({r["object_name"] for r in iso}) == 13
     assert len(views["views"]) == 3
-    assert all(v["definition"] is None for v in views["views"])
-    assert active["sot_status"] == "NOT_ATTACHED_TO_CURSOR_WORK_ORDER"
+    assert all(v.get("definition") for v in views["views"])

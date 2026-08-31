@@ -17,7 +17,7 @@
     {"job_id": 8, "schedule": "0 2 * * *", "schedule_changed": true, "command_changed": false, "active": true, "active_preserved": true},
     {"job_id": 9, "schedule": "0 3 * * 1", "schedule_changed": true, "command_changed": false, "active": true, "active_preserved": true},
     {"job_id": 10, "schedule": "0 12 * * *", "schedule_changed": true, "command_changed": false, "active": true, "active_preserved": true},
-    {"job_id": 11, "schedule": "UNCHANGED", "schedule_changed": false, "command_changed": true, "command_predicate": "started_at < now() - interval '30 days'", "command_note": "replace localtimestamp with now(); remainder of existing command preserved", "active": true, "active_preserved": true},
-    {"job_id": 12, "schedule": "27 3 * * *", "schedule_changed": true, "command_changed": false, "command_predicate": "created_at < now() - interval '90 days'", "active": true, "active_preserved": true}
+    {"job_id": 11, "schedule": "UNCHANGED", "schedule_changed": false, "command_changed": true, "command": "WITH victims AS MATERIALIZED (SELECT id FROM public.cron_job_log WHERE started_at < now() - interval '30 days' ORDER BY started_at ASC, id ASC LIMIT 5000) DELETE FROM public.cron_job_log AS l USING victims AS v WHERE l.id = v.id;", "command_predicate": "started_at < now() - interval '30 days'", "command_note": "replace localtimestamp with now(); remainder of existing command preserved", "active": true, "active_preserved": true},
+    {"job_id": 12, "schedule": "27 3 * * *", "schedule_changed": true, "command_changed": false, "command": "WITH victims AS MATERIALIZED (SELECT id FROM public.business_event WHERE created_at < now() - interval '90 days' ORDER BY created_at ASC, id ASC LIMIT 5000) DELETE FROM public.business_event AS b USING victims AS v WHERE b.id = v.id;", "command_predicate": "created_at < now() - interval '90 days'", "active": true, "active_preserved": true}
   ]
 }

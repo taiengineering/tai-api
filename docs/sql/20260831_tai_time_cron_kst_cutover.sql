@@ -14,10 +14,7 @@ SELECT cron.alter_job(7, '0 18 * * *', NULL, NULL, NULL, true);
 SELECT cron.alter_job(8, '0 2 * * *', NULL, NULL, NULL, true);
 SELECT cron.alter_job(9, '0 3 * * 1', NULL, NULL, NULL, true);
 SELECT cron.alter_job(10, '0 12 * * *', NULL, NULL, NULL, true);
--- job 11 schedule unchanged. Full live command body was not attached to Cursor.
--- Required predicate after cutover (localtimestamp removed):
---   started_at < now() - interval '30 days'
-SELECT cron.alter_job(11, NULL, NULL, NULL, NULL, true);
--- job 12 schedule KST 03:27; command unchanged:
---   created_at < now() - interval '90 days'
-SELECT cron.alter_job(12, '27 3 * * *', NULL, NULL, NULL, true);
+-- job 11: schedule unchanged; command localtimestamp → now()
+SELECT cron.alter_job(11, NULL, $job11$WITH victims AS MATERIALIZED (SELECT id FROM public.cron_job_log WHERE started_at < now() - interval '30 days' ORDER BY started_at ASC, id ASC LIMIT 5000) DELETE FROM public.cron_job_log AS l USING victims AS v WHERE l.id = v.id;$job11$, NULL, NULL, true);
+-- job 12: schedule KST 03:27; command unchanged
+SELECT cron.alter_job(12, '27 3 * * *', $job12$WITH victims AS MATERIALIZED (SELECT id FROM public.business_event WHERE created_at < now() - interval '90 days' ORDER BY created_at ASC, id ASC LIMIT 5000) DELETE FROM public.business_event AS b USING victims AS v WHERE b.id = v.id;$job12$, NULL, NULL, true);

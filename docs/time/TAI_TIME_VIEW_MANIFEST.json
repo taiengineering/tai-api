@@ -1,7 +1,6 @@
 {
   "required_view_count": 3,
   "required_derived_timestamp_columns": 7,
-  "sot_status": "VIEWDEF_NOT_ATTACHED_TO_CURSOR_WORK_ORDER",
   "owner": "postgres",
   "reloptions": null,
   "acl_roles_full": ["anon", "authenticated", "postgres", "service_role"],
@@ -10,25 +9,40 @@
       "name": "v_equipment_unified",
       "owner": "postgres",
       "reloptions": null,
-      "definition": null,
-      "comment": null,
-      "acl": {"anon": "ALL", "authenticated": "ALL", "postgres": "ALL", "service_role": "ALL"}
+      "definition": "SELECT DISTINCT ON (industry_code_full, process_id, facility_name_std) id, industry_code_full, industry_name_full, process_id, process_path, facility_name_std, match_band, match_score, match_basis, source_type, equipment_source_file, process_source,\n    CASE source_type WHEN 'KOSHA_GUIDE'::text THEN 1 WHEN 'KOSHA_GUIDE_V2'::text THEN 1 WHEN 'EXISTING_FINAL'::text THEN 2 WHEN 'SYNTHETIC_PRIORITY'::text THEN 3 WHEN 'ENHANCED_ADDED'::text THEN 4 WHEN 'EXISTING_FILL'::text THEN 5 ELSE 6 END AS source_priority, created_at\n   FROM process_equipment_map\n  ORDER BY industry_code_full, process_id, facility_name_std, (CASE source_type WHEN 'KOSHA_GUIDE'::text THEN 1 WHEN 'KOSHA_GUIDE_V2'::text THEN 1 WHEN 'EXISTING_FINAL'::text THEN 2 WHEN 'SYNTHETIC_PRIORITY'::text THEN 3 WHEN 'ENHANCED_ADDED'::text THEN 4 WHEN 'EXISTING_FILL'::text THEN 5 ELSE 6 END);",
+      "comment": "통합 설비 뷰 - KOSHA_GUIDE > EXISTING_FINAL > SYNTHETIC > ENHANCED 우선순위로 중복 제거",
+      "acl": {
+        "anon": "arwdDxtm",
+        "authenticated": "arwdDxtm",
+        "postgres": "arwdDxtm",
+        "service_role": "arwdDxtm"
+      }
     },
     {
       "name": "v_payments_list",
       "owner": "postgres",
       "reloptions": null,
-      "definition": null,
+      "definition": "SELECT p.id, p.user_id, p.company_id, p.contract_id, p.product_type, p.plan_code, p.period_months, p.total_amount, p.supply_amount, p.vat_amount, p.pg_method, p.payment_method, p.payment_type, p.status_code, p.service_status, p.paid_at, p.expired_at, p.cancelled_at, p.cancel_reason, p.fail_reason, p.inicis_order_id, p.inicis_auth_code, p.inicis_tid, p.inicis_card_name, p.memo, p.created_at, p.updated_at, u.name AS user_name, u.email AS user_email, u.phone AS user_phone, c.name AS company_name, c.business_number AS company_biz_no, c.phone AS company_phone\n   FROM payments p\n     LEFT JOIN users u ON u.id = p.user_id\n     LEFT JOIN companies c ON c.id = COALESCE(p.company_id, u.company_id);",
       "comment": null,
-      "acl": {"anon": "ALL", "authenticated": "ALL", "postgres": "ALL", "service_role": "ALL"}
+      "acl": {
+        "anon": "arwdDxtm",
+        "authenticated": "arwdDxtm",
+        "postgres": "arwdDxtm",
+        "service_role": "arwdDxtm"
+      }
     },
     {
       "name": "v_process_unified",
       "owner": "postgres",
       "reloptions": null,
-      "definition": null,
-      "comment": null,
-      "acl": {"anon": "ALL", "authenticated": "ALL", "postgres": "ALL", "service_role": "ALL"}
+      "definition": "SELECT DISTINCT ON (industry_code_full, process_path) id, industry_code_full, industry_name_full, process_id, process_lv1, process_lv2, process_lv3, process_lv4, process_path, mapping_basis, process_source, template_source,\n    CASE process_source WHEN 'KOSHA_GUIDE'::text THEN 1 WHEN 'KOSHA_GUIDE_V2'::text THEN 1 WHEN 'TAI_EXISTING'::text THEN 2 WHEN 'TEMPLATE'::text THEN 3 ELSE 4 END AS source_priority, created_at\n   FROM ksic_process_map\n  ORDER BY industry_code_full, process_path, (CASE process_source WHEN 'KOSHA_GUIDE'::text THEN 1 WHEN 'KOSHA_GUIDE_V2'::text THEN 1 WHEN 'TAI_EXISTING'::text THEN 2 WHEN 'TEMPLATE'::text THEN 3 ELSE 4 END);",
+      "comment": "통합 공정 뷰 - KOSHA_GUIDE > TAI_EXISTING > TEMPLATE 우선순위로 process_path 중복 제거",
+      "acl": {
+        "anon": "arwdDxtm",
+        "authenticated": "arwdDxtm",
+        "postgres": "arwdDxtm",
+        "service_role": "arwdDxtm"
+      }
     }
   ]
 }
