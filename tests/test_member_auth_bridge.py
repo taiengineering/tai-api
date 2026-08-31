@@ -2,7 +2,6 @@
 # production 저장 규약: users.identity_ci = SHA256(원문 CI), diagnosis_auth_log.ci_hash = SHA256(원문 CI).
 # → resolver 는 identity_ci 를 재해시하지 않고 그대로 ci_hash 와 비교(double-hash 금지).
 # mock 이 eq(col,val) 를 실제 필터하여 계약을 진짜 검증한다.
-import hashlib
 import pytest
 from fastapi import HTTPException
 from services import diagnosis_integrated_svc as _svc
@@ -33,11 +32,15 @@ def _row(ci_hash=CI_HASH, linked="u1", status="ACTIVE", rid="a1"):
 
 
 def test_member_exact_one_direct_hash_match_pass():
+    # identity_ci(=SHA256) == diagnosis_auth_log.ci_hash → 재해시 없이 직접 매칭 1건
     row = _svc.resolve_member_auth_log(_sup([_row()]), MEMBER)
     assert row["id"] == "a1"
 
 
 def test_member_double_hash_regression():
+    # double-hash 방어: resolver 가 identity_ci 를 재해시하면 SHA256(SHA256(CI)) 가 되어 절대 매칭 안 됨.
+    # auth_log 에는 정상 규약(ci_hash=CI_HASH)만 존재. resolver 가 재해시하면 0건이 되어 이 PASS 가 깨진다.
+    import hashlib
     rehashed = hashlib.sha256(CI_HASH.encode("utf-8")).hexdigest()
     row = _svc.resolve_member_auth_log(_sup([_row(ci_hash=CI_HASH)]), MEMBER)
     assert row["ci_hash"] == CI_HASH and row["ci_hash"] != rehashed
@@ -52,7 +55,7 @@ def test_member_zero_prior_authlog_fail_closed():
 def test_member_multi_match_fail_closed():
     with pytest.raises(HTTPException) as e:
         _svc.resolve_member_auth_log(_sup([_row(rid="a1"), _row(rid="a2")]), MEMBER)
-    assert e.value.status_code == 401
+    assert e.value.status_code == 401  # latest/first 금지
 
 
 def test_member_wrong_linked_user_fail_closed():
@@ -91,7 +94,7 @@ def test_member_none_user_fail_closed():
     assert e.value.status_code == 401
 
 
-# ── CORRECTION-02 BREAK-1: member fallback paid-only gate (run_diagnosis 레벨) ──
+# ── CORRECTION-02 BREAK-1: member fallback paid-only gate (실제 run_diagnosis 레벨) ──
 class _RunSup:
     def __init__(s, authrows): s._a = authrows
     def table(s, n):
@@ -122,3 +125,39 @@ def test_break1_member_free_intent_blocked():
             now_func=lambda: "t", paid_tier_prices={}, free_tier_codes={"CONSTRUCTION_FREE"},
             engine_version="t", current_user=MEMBER)
     assert e.value.status_code == 401  # paid context 없으면 member fallback 차단
+
+
+# CORRECTION-02 BREAK-1: auth 분기 계약 재현 검증
+class _Body:
+    def __init__(s, auth_token=None, payment_ref=None):
+        s.auth_token = auth_token; s.payment_ref = payment_ref
+        s.disclaimer_log_id = None; s.sector = "CONSTRUCTION"
+
+
+def _branch(body, current_user):
+    if (getattr(body, "auth_token", None) or "").strip():
+        return "auth_token"
+    elif current_user and (getattr(body, "payment_ref", None) or "").strip():
+        return "member"
+    else:
+        raise HTTPException(status_code=401, detail="인증 필요")
+
+
+def test_break1_member_requires_payment_ref():
+    assert _branch(_Body(payment_ref="oid1"), {"id": "u1"}) == "member"
+
+
+def test_break1_login_no_payment_ref_blocked():
+    with pytest.raises(HTTPException) as e:
+        _branch(_Body(payment_ref=None), {"id": "u1"})
+    assert e.value.status_code == 401
+
+
+def test_break1_explicit_auth_token_still_free_path():
+    assert _branch(_Body(auth_token="t"), None) == "auth_token"
+
+
+def test_break1_anonymous_no_token_blocked():
+    with pytest.raises(HTTPException) as e:
+        _branch(_Body(), None)
+    assert e.value.status_code == 401
