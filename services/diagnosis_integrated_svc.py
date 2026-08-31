@@ -405,6 +405,27 @@ def run_diagnosis(
     # 10 fact 가 그대로 materialize 된다(중복 배선 제거). has_chemical_substance 는 FIX-B2 step1 bridge 로 처리.
     for _code, _val in canonical_applicability(_available).items():
         inp.setdefault(_code, _val)
+    # WO-FE-CST-EQUIPMENT-CAPTURE-WIRING-001: 기존 설비등록(equipment_assets)에서 승인된 5개
+    # equipment Legal Fact 를 materialize 한다. TAI Consumer Input Materialization Boundary 에서만 수행
+    # (LEG/canonical business 판단 아님). system_codes equipment_type 정본 code == equipment_type_code
+    # exact equality 만 사용(runtime 문자열/name inference 금지). 등록 설비 = true, 미등록 = UNKNOWN(false 생성 안 함).
+    if factory_id:
+        _EQ_FACT = {"010": "has_emergency_gen", "014": "has_boiler", "023": "has_press",
+                    "024": "has_conveyor", "038": "has_pressure_vessel"}
+        try:
+            _eq_res = (
+                supabase.table("equipment_assets")
+                .select("equipment_type_code")
+                .eq("factory_id", factory_id)
+                .eq("is_operating", True)
+                .execute()
+            )
+            _eq_codes = {(_r.get("equipment_type_code") or "") for _r in (_eq_res.data or [])}
+            for _c, _f in _EQ_FACT.items():
+                if _c in _eq_codes:
+                    inp.setdefault(_f, True)  # 등록 설비만 true; 미등록은 미설정(UNKNOWN)
+        except Exception as _e:
+            log.warning("[equipment_materializer] factory=%s skip: %s", factory_id, _e)
     # E-C1 CORRECTION-01: 0 은 명시적으로 제공된 값이므로 truthiness 로 버리지 않는다(is None 기준).
     if _worker_count is not None:
         workers = _worker_count
