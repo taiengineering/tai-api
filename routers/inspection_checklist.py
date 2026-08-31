@@ -49,6 +49,8 @@ from services.safe_inspection_result_batch import (
     SafeResultBatchError,
 )
 from services.inspection_rolling import ensure_next_rolling_schedule
+from watch_engine import create_trace, emit_event
+from watch_engine.trace import clear_trace
 
 router = APIRouter(prefix="/inspection", tags=["점검리스트"])
 
@@ -526,6 +528,7 @@ async def start_inspection(work_schedule_id: str, body: dict = None, current: di
 async def record_inspection_results(inspection_id: str, body: dict, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     _ensure_inspection_own(supabase, inspection_id, current)
+    create_trace(flow_key="inspection_result_submit", tenant_id="tai", actor_type="user")
     try:
         results = body.get("results", [])
         if not results:
@@ -561,10 +564,23 @@ async def record_inspection_results(inspection_id: str, body: dict, current: dic
                 supabase.table("work_schedules").update({
                     "status_code": "completed", "completed_at": _anchor_str,
                 }).eq("id", ws_id).execute()
-                complete_inspection_status(
+                _completion = complete_inspection_status(
                     supabase, inspection_id,
                     actor_id=current["id"], reason="SAFE_RESULT_AUTO_COMPLETE",
                 )
+                if isinstance(_completion, dict) and _completion.get("changed") is True:
+                    _actor_id = str((current or {}).get("id") or "").strip()
+                    if _actor_id:
+                        emit_event(
+                            step_key="inspection_complete",
+                            step_order=1,
+                            event_type="update",
+                            result="success",
+                            connector_type="database",
+                            event_name="INSPECTION_COMPLETED",
+                            actor_kind="USER",
+                            actor_ref=f"user:{_actor_id}",
+                        )
                 ensure_next_rolling_schedule(supabase, ws_id, date.fromisoformat(str(_anchor_str)[:10]))
         return {"status": "success", "message": f"{created}개 결과가 기록됐습니다.",
                 "data": {"inspection_id": inspection_id, "created": created}}
@@ -572,6 +588,8 @@ async def record_inspection_results(inspection_id: str, body: dict, current: dic
     except InspectionStatusWriteError as e:
         raise HTTPException(status_code=409, detail={"code": e.code, "message": "점검 상태를 완료 처리할 수 없습니다."})
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        clear_trace()
 
 
 @router.post("/complete/{work_schedule_id}")
@@ -586,6 +604,7 @@ async def complete_inspection(work_schedule_id: str, body: dict = None, current:
     """
     supabase = get_supabase()
     _ensure_ws_own(supabase, work_schedule_id, current)
+    create_trace(flow_key="inspection_complete", tenant_id="tai", actor_type="user")
     try:
         body = body or {}
         summary = body.get("summary", "")
@@ -658,10 +677,23 @@ async def complete_inspection(work_schedule_id: str, body: dict = None, current:
             next_planned_date = _roll.get("next_planned_date")
 
         if _target_inspection_id is not None:
-            complete_inspection_status(
+            _completion = complete_inspection_status(
                 supabase, _target_inspection_id,
                 actor_id=current["id"], reason="SAFE_COMPLETE",
             )
+            if isinstance(_completion, dict) and _completion.get("changed") is True:
+                _actor_id = str((current or {}).get("id") or "").strip()
+                if _actor_id:
+                    emit_event(
+                        step_key="inspection_complete",
+                        step_order=1,
+                        event_type="update",
+                        result="success",
+                        connector_type="database",
+                        event_name="INSPECTION_COMPLETED",
+                        actor_kind="USER",
+                        actor_ref=f"user:{_actor_id}",
+                    )
 
         data = {
             "work_schedule_id": work_schedule_id,
@@ -683,6 +715,8 @@ async def complete_inspection(work_schedule_id: str, body: dict = None, current:
     except InspectionStatusWriteError as e:
         raise HTTPException(status_code=409, detail={"code": e.code, "message": "점검 상태를 완료 처리할 수 없습니다."})
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        clear_trace()
 
 
 @router.get("/schedules")
