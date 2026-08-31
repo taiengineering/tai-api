@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 TIME = ROOT / "docs" / "time"
 SQL = ROOT / "docs" / "sql"
+sys.path.insert(0, str(ROOT / "scripts"))
 
 
 def _j(name: str):
@@ -39,6 +41,7 @@ def test_cron_manifest_12_jobs_schedule_map():
     assert m["alter_job_available"] is True
     assert m["job_count"] == 12
     jobs = {j["job_id"]: j for j in m["jobs"]}
+    assert sorted(jobs) == list(range(1, 13))
     assert jobs[1]["schedule"] == "10 9 * * *"
     assert jobs[2]["schedule"] == "0 9 * * *"
     assert jobs[5]["schedule"] == "0 6 * * *"
@@ -55,6 +58,10 @@ def test_cron_manifest_12_jobs_schedule_map():
     assert "now() - interval '30 days'" in jobs[11]["command_predicate"]
     assert "now() - interval '90 days'" in jobs[12]["command_predicate"]
     assert all(j["active_preserved"] for j in m["jobs"])
+    assert jobs[1]["active"] is False
+    assert jobs[3]["active"] is False
+    assert jobs[4]["active"] is False
+    assert m["inactive_job_ids"] == [1, 3, 4]
 
 
 def test_routine_manifest_writers_now_no_change():
@@ -79,8 +86,11 @@ def test_timezone_and_cron_sql_not_executed_markers():
     down = (SQL / "20260831_tai_time_kst_cutover_down.sql").read_text(encoding="utf-8")
     assert "ALTER DATABASE postgres SET timezone TO 'Asia/Seoul'" in tz
     assert "EXECUTE = 0" in tz
-    assert "cron.alter_job(1, '10 9 * * *')" in cron
+    assert "cron.alter_job(1, '10 9 * * *'" in cron
+    assert cron.count("SELECT cron.alter_job(") == 12
     assert "localtimestamp" in cron.lower()  # mentioned as removed for job 11
+    assert "now() - interval '30 days'" in cron
+    assert "now() - interval '90 days'" in cron
     assert "DROP VIEW public.v_equipment_unified" in up
     assert "CASCADE" not in up.split("DROP VIEW")[1].split("\n")[0]
     assert "work_schedules" in up and "reviewed_at" in up
@@ -96,6 +106,35 @@ def test_postmaster_md_not_executed():
     assert "Restart required" in md
     assert "NOT EXECUTED" in md
     assert "ALTER SYSTEM" in md
+
+
+def test_generator_isolated_hard_fail():
+    """isolated (object, column) in ALTER set must abort, not skip."""
+    import generate_time_kst_migration as gen
+
+    views = {
+        "views": [
+            {
+                "name": n,
+                "owner": "postgres",
+                "definition": f"SELECT 1 AS {n}",
+                "comment": None,
+            }
+            for n in ("v_equipment_unified", "v_payments_list", "v_process_unified")
+        ]
+    }
+    active = [
+        {
+            "object_name": "synthetic_clock",
+            "column_name": "ticked_at",
+            "migration_action": "ALTER_TYPE_USING_KST",
+        }
+    ]
+    isolated = {
+        "columns": [{"object_name": "synthetic_clock", "column_name": "ticked_at"}]
+    }
+    with pytest.raises(SystemExit, match="HARD FAIL isolated"):
+        gen.generate(active, isolated, views)
 
 
 def test_active_isolated_view_sot_gap_is_explicit():

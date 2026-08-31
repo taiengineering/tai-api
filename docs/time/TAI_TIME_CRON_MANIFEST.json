@@ -4,19 +4,20 @@
   "alter_job_signature": "cron.alter_job(job_id, schedule, command, database, username, active)",
   "null_arg_preserves_existing": true,
   "job_count": 12,
+  "inactive_job_ids": [1, 3, 4],
   "postmaster_timezone_cutover": "NOT IN THIS FILE — see TAI_TIME_CRON_POSTMASTER_CUTOVER.md",
   "jobs": [
-    {"job_id": 1, "schedule": "10 9 * * *", "schedule_changed": true, "command_changed": false, "active_preserved": true},
-    {"job_id": 2, "schedule": "0 9 * * *", "schedule_changed": true, "command_changed": false, "active_preserved": true},
-    {"job_id": 3, "schedule": "UNCHANGED", "schedule_changed": false, "command_changed": false, "active_preserved": true},
-    {"job_id": 4, "schedule": "UNCHANGED", "schedule_changed": false, "command_changed": false, "active_preserved": true},
-    {"job_id": 5, "schedule": "0 6 * * *", "schedule_changed": true, "command_changed": false, "active_preserved": true},
-    {"job_id": 6, "schedule": "0 12 * * *", "schedule_changed": true, "command_changed": false, "active_preserved": true},
-    {"job_id": 7, "schedule": "0 18 * * *", "schedule_changed": true, "command_changed": false, "active_preserved": true},
-    {"job_id": 8, "schedule": "0 2 * * *", "schedule_changed": true, "command_changed": false, "active_preserved": true},
-    {"job_id": 9, "schedule": "0 3 * * 1", "schedule_changed": true, "command_changed": false, "active_preserved": true},
-    {"job_id": 10, "schedule": "0 12 * * *", "schedule_changed": true, "command_changed": false, "active_preserved": true},
-    {"job_id": 11, "schedule": "UNCHANGED", "schedule_changed": false, "command_changed": true, "command_predicate": "started_at < now() - interval '30 days'", "command_note": "replace localtimestamp with now(); remainder of existing command preserved", "active_preserved": true},
-    {"job_id": 12, "schedule": "27 3 * * *", "schedule_changed": true, "command_changed": false, "command_predicate": "created_at < now() - interval '90 days'", "active_preserved": true}
+    {"job_id": 1, "schedule": "10 9 * * *", "schedule_changed": true, "command_changed": false, "active": false, "active_preserved": true},
+    {"job_id": 2, "schedule": "0 9 * * *", "schedule_changed": true, "command_changed": false, "active": true, "active_preserved": true},
+    {"job_id": 3, "schedule": "UNCHANGED", "schedule_changed": false, "command_changed": false, "active": false, "active_preserved": true},
+    {"job_id": 4, "schedule": "UNCHANGED", "schedule_changed": false, "command_changed": false, "active": false, "active_preserved": true},
+    {"job_id": 5, "schedule": "0 6 * * *", "schedule_changed": true, "command_changed": false, "active": true, "active_preserved": true},
+    {"job_id": 6, "schedule": "0 12 * * *", "schedule_changed": true, "command_changed": false, "active": true, "active_preserved": true},
+    {"job_id": 7, "schedule": "0 18 * * *", "schedule_changed": true, "command_changed": false, "active": true, "active_preserved": true},
+    {"job_id": 8, "schedule": "0 2 * * *", "schedule_changed": true, "command_changed": false, "active": true, "active_preserved": true},
+    {"job_id": 9, "schedule": "0 3 * * 1", "schedule_changed": true, "command_changed": false, "active": true, "active_preserved": true},
+    {"job_id": 10, "schedule": "0 12 * * *", "schedule_changed": true, "command_changed": false, "active": true, "active_preserved": true},
+    {"job_id": 11, "schedule": "UNCHANGED", "schedule_changed": false, "command_changed": true, "command_predicate": "started_at < now() - interval '30 days'", "command_note": "replace localtimestamp with now(); remainder of existing command preserved", "active": true, "active_preserved": true},
+    {"job_id": 12, "schedule": "27 3 * * *", "schedule_changed": true, "command_changed": false, "command_predicate": "created_at < now() - interval '90 days'", "active": true, "active_preserved": true}
   ]
 }
