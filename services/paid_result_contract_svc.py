@@ -5,6 +5,8 @@ DESIGN BASELINE
     tai-www DESIGN_paid-product-surface-v1_2026-08-30.md
     STEP3A Materializer @ 131c96022de2e564b4ff3b545361015907b819bb
     STEP3B-A.1 PRODUCT CONTRACT v1.1 — DIAGNOSIS PROFILE 작업지시
+    STEP4C-2 PKG-0 PRODUCT CONTRACT PROFILE +2 작업지시
+    tai-www docs 2026-08-31_PAID_DIAGNOSIS_PREMIUM_WEB_VALUE_SPEC_V2.md §6.7
 
 WHAT THIS IS
     저장된 진단 결과 row 를 상품 계약(Product Contract v1)으로 조립하는 얇은 계층.
@@ -41,6 +43,21 @@ DIAGNOSIS PROFILE 의 의미 (STEP3B-A.1 §9 — 경계 고정)
     금지 = 추정 · 역산 · 합성 · 등급화 라벨 생성
            (86 -> "중규모", 12400 -> "대형", 53 -> "고액 공사" 전부 금지)
            raw input_data 통째 pass-through 도 금지 — 허용목록 밖 key 는 통과 0.
+
+PRESENCE FACT 의 보존 규칙 (STEP4C-2 PKG-0)
+    has_excavation · has_hazardous_material 는 facility_used 의 저장값을 그대로 옮긴다.
+
+        SOURCE true     -> True
+        SOURCE false    -> False
+        SOURCE 키 없음    -> None
+
+    missing -> False 변환 = 금지.
+    bool(value) / value or False / default=False / "true" 문자열 생성 = 금지.
+    None 과 False 는 다른 사실이다. 전자는 기록되지 않은 것이고 후자는 아니라고
+    기록된 것이다. 계약은 이 구분을 소비자에게 그대로 넘긴다.
+
+    고객 화면 표현(해당 / 행 생략 등)은 이 계약의 책임이 아니다.
+    tai-www 가 정한다. 이 모듈은 한국어 label 을 만들지 않는다.
 
 NOT INCLUDED, BY DESIGN
     factory_id / company_id / public_token / auth_log_id / payment_ref /
@@ -138,6 +155,18 @@ PROFILE_SOURCE_PRIORITY: Tuple[Tuple[str, Tuple[Tuple[str, str], ...]], ...] = (
     ("address", (
         (PROFILE_SOURCE_INPUT, "address"),
     )),
+    # --- STEP4C-2 PKG-0 (v1.1 additive transport extension) -------------------
+    # presence fact 2개. source 는 facility_used 하나뿐이다.
+    #   input_data fallback = 0 · 다른 필드로부터의 추론 = 0
+    # 저장값을 그대로 운반한다: true -> True, false -> False, 키 없음 -> None.
+    # 현재 저장 데이터에 false 행이 0건이라는 사실은 계약이 false 를 버릴 근거가
+    # 아니다. 없는 사실을 만들지 않는 것과 있는 사실을 지우지 않는 것은 같은 규칙이다.
+    ("has_excavation", (
+        (PROFILE_SOURCE_FACILITY, "has_excavation"),
+    )),
+    ("has_hazardous_material", (
+        (PROFILE_SOURCE_FACILITY, "has_hazardous_material"),
+    )),
 )
 
 PROFILE_FIELDS: Tuple[str, ...] = tuple(field for field, _ in PROFILE_SOURCE_PRIORITY)
@@ -179,12 +208,20 @@ def _diagnosis_metadata(row: Dict[str, Any]) -> Dict[str, Any]:
 def _stored_value(value: Any) -> Optional[Any]:
     """저장값 정규화. 허용된 것만: trim · 빈 문자열 -> None · scalar 유지.
 
+    · bool 은 그대로 보존한다. True 도 False 도 실제 저장값이다.
+      (STEP4C-2 PKG-0) Python 에서 bool 은 int 의 subclass 라 아래 숫자 분기로도
+      결과적으로 통과하지만, presence fact 의 false 보존은 계약 규칙이지
+      언어 타입 특성에 기대는 우연이 아니다. 그래서 분기를 앞에 명시한다.
+      숫자 분기를 먼저 두면 False 가 0 으로 읽힐 여지도 생긴다.
     · 문자열은 trim 하고, 비면 값이 없는 것으로 본다.
     · 숫자는 타입 그대로 보존한다. 0 은 실제 저장값이므로 살린다.
     · dict / list 는 통과시키지 않는다. 허용된 key 라도 구조를 통째로
       내보내지 않기 위한 하드 가드다.
     · 등급·라벨로 바꾸지 않는다. 값의 의미는 손대지 않는다.
+    · 키가 없을 때 False 를 만들어 넣지 않는다. 없는 것은 None 이다.
     """
+    if isinstance(value, bool):
+        return value
     if isinstance(value, str):
         trimmed = value.strip()
         return trimmed or None
@@ -224,6 +261,9 @@ def _diagnosis_profile(row: Dict[str, Any]) -> Dict[str, Any]:
                 value = candidate
                 break
         profile[field] = value
+        # 판정 기준은 "값이 있었는가" 이지 "참인가" 가 아니다.
+        # False 와 0 은 저장된 값이므로 available_facts 에 들어간다.
+        # truthiness 로 바꾸면 저장된 사실이 사라진다.
         if value is not None:
             available_facts.append(field)
 
@@ -240,7 +280,8 @@ def build_paid_result_contract_v1(row: Any) -> Dict[str, Any]:
     조립만 한다:
       · paid_result_materials_v1 = build_paid_result_materials_v1(row["full_result"])
       · diagnosis                = row 컬럼 6개
-      · diagnosis_profile        = 저장된 사업장 사실 whitelist 9개 (STEP3B-A.1)
+      · diagnosis_profile        = 저장된 사업장 사실 whitelist 11개
+                                   (STEP3B-A.1 9개 + STEP4C-2 PKG-0 presence 2개)
     파생 계산(COUNT / GROUP / DISTINCT / timing / portfolio / coverage 등)은
     전부 STEP3A Materializer 의 책임이며 이 모듈에서 다시 구현하지 않는다.
     diagnosis_profile 은 Materializer 입력으로 들어가지 않으며 법적 재료를 바꾸지 않는다.
