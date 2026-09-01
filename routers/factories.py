@@ -69,6 +69,17 @@ CANONICAL_NULL_CLEAR_FIELDS = {
     # STEP3B: vocabulary 확정 후 쓰기 노출
     "building_composition_codes",
     "regulatory_designation_codes",
+    # WO-BLD-CANONICAL STEP3: BUILDING C10 (explicit-null clear 대상)
+    "has_sprinkler",
+    "has_fire_hydrant",
+    "has_emergency_broadcast",
+    "has_emergency_gen",
+    "has_gas",
+    "has_hazmat_storage",
+    "has_water_tank",
+    "water_tank_ton",
+    "multi_use_type",
+    "has_smoke_control",
 }
 
 
@@ -170,6 +181,17 @@ class FactoryCreate(BaseModel):
     # WO-CANONICAL STEP3B: vocabulary 확정 canonical 분류 코드 쓰기 노출(system_codes 검증)
     building_composition_codes:   Optional[CanonStrList] = None
     regulatory_designation_codes: Optional[CanonStrList] = None
+    # WO-BLD-CANONICAL STEP3: BUILDING C10 실제 건물/시설 fact (strict; default None; 기존 helper 재사용)
+    has_sprinkler:           Optional[StrictBool] = None
+    has_fire_hydrant:        Optional[StrictBool] = None
+    has_emergency_broadcast: Optional[StrictBool] = None
+    has_emergency_gen:       Optional[StrictBool] = None
+    has_gas:                 Optional[StrictBool] = None
+    has_hazmat_storage:      Optional[StrictBool] = None
+    has_water_tank:          Optional[StrictBool] = None
+    water_tank_ton:          Optional[CanonNum] = None
+    multi_use_type:          Optional[CanonStrList] = None
+    has_smoke_control:       Optional[StrictBool] = None
 
 
 class FactoryUpdate(BaseModel):
@@ -241,6 +263,17 @@ class FactoryUpdate(BaseModel):
     # WO-CANONICAL STEP3B: vocabulary 확정 canonical 분류 코드(system_codes 검증)
     building_composition_codes:   Optional[CanonStrList] = None
     regulatory_designation_codes: Optional[CanonStrList] = None
+    # WO-BLD-CANONICAL STEP3: BUILDING C10 실제 건물/시설 fact (strict; default None; 기존 helper 재사용)
+    has_sprinkler:           Optional[StrictBool] = None
+    has_fire_hydrant:        Optional[StrictBool] = None
+    has_emergency_broadcast: Optional[StrictBool] = None
+    has_emergency_gen:       Optional[StrictBool] = None
+    has_gas:                 Optional[StrictBool] = None
+    has_hazmat_storage:      Optional[StrictBool] = None
+    has_water_tank:          Optional[StrictBool] = None
+    water_tank_ton:          Optional[CanonNum] = None
+    multi_use_type:          Optional[CanonStrList] = None
+    has_smoke_control:       Optional[StrictBool] = None
 
 
 class FactoryContactBody(BaseModel):
