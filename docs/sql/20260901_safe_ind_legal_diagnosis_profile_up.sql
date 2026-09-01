@@ -1,124 +1,146 @@
--- WO-SAFE-LEGAL-IND-IMPLEMENT-001-R2 / STEP1 — SAFE INDUSTRIAL Marketing-Contract Adapter (UP)
+-- WO-SAFE-LEGAL-IND-CANONICAL-IMPLEMENT-001 / STEP1 — SAFE INDUSTRIAL Canonical Asset Extension (UP)
 --
--- Persist ONLY the Marketing INDUSTRIAL paid contract facts that Safe's existing domain
--- model (factories / factory_process / equipment_assets) does NOT already hold.
--- Contract SoT = tai-www 유료진단 INDUSTRIAL 현재 입력계약. CONTRACT = MKT_IND_PAID_CONTRACT_V1 (29).
+-- CORRECTION-002 CLOSED 결과: 법령진단 전용 profile 을 만들지 않는다. 사용자는 사실을 한 번만 등록하고,
+-- Marketing INDUSTRIAL 29 는 실제 자산(factories / factory_process / equipment_assets / factory_materials)에서
+-- 조립되는 transport contract 다. 본 migration 은 이전 R2 profile 설계를 완전 폐기하고 canonical 자산을 확장한다.
 --
--- R2 corrections (GPT CORRECTION-02, PREFLIGHT-003 semantic closure):
---   C1 total_floor_area REMOVED from profile. building_area(=연면적, 건축물대장 title.totArea provenance)
---      가 정본이므로 assembler 는 total_floor_area ← factories.building_area (TRANSFORM). profile 중복 SoT 금지.
---      → 컬럼/CHECK/COMMENT 삭제.
---   C2 normalized fallback overrides ADD: building_use_type_override, main_structure_override.
---      raw source(building_use_code=mainPurpsCdNm 명칭 / building_structure_code=대장 raw code)와 Marketing
---      normalized enum 이 동일 계약이 아니므로, deterministic map 실패/NULL 시에만 override 사용. NULL=unresolved.
---   (유지) R1 STEP2-PATCH-1: P1 material_profile shape helper / P3 server-only(service_role) / P5 UNIQUE index /
---          M2 array no-default(NULL=미확인·[]=명시적 없음) / M3 numeric>=0 or NULL / no local company_id.
---
--- NO synthetic default for any diagnosis input. Absence stays NULL. false/0/[] valid, distinct from NULL.
+-- 폐기(이 파일 이전 버전 대비): factory_legal_diagnosis_profile CREATE / trigger / RLS / grants / material helper /
+--   index, legal_* 컬럼, building_use_type_override / main_structure_override, ksic_list, material_profile JSONB.
+-- NO-STORAGE targets(assembler derive; 신규 저장 컬럼 금지): total_floor_area, building_use_type, main_structure,
+--   building_qualifications, regulated_facility_types.
+-- NULL=미확인 / []=명시적 없음 / false=명시적 아니오 / 0=실제 zero. array DEFAULT '{}' 금지. 추정/default 금지.
+-- facility_profiles / facility_condition = 진단 snapshot/cache (SoT 아님) → 변경/신규컬럼 0.
+-- factory_process_id = 동결(변경 0). building-register /apply 의존 0.
 -- APPLY POLICY: artifact only. DB APPLY = BLOCKED until GPT PASS.
 
 BEGIN;
 
 -- ---------------------------------------------------------------------------
--- 0) material_profile shape helper (P1) — CHECK 에서 subquery 없이 호출.
---    값 shape 만 검증(허용 key ⊆ {material_category, handling_modes}). vocabulary 검증은 backend validator.
+-- 1) factories — canonical extension (작업형태/작업환경 + 건물구성/규제지정 원자)
+--    9 신규 nullable 컬럼. building_composition_codes / regulatory_designation_codes 는
+--    Marketing building_qualifications / regulated_facility_types 저장 컬럼이 아니라 "실제 사실" 원자 저장이며
+--    Marketing 값은 assembler 가 이들 + 기존 canonical 에서 derive 한다(법적 판정 결과 저장 금지).
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION public.fn_fldp_material_profile_shape_ok(p jsonb)
-RETURNS boolean
-LANGUAGE plpgsql
-IMMUTABLE
-STRICT
-SET search_path = pg_catalog
-AS $fn$
-DECLARE
-    elem jsonb;
+ALTER TABLE public.factories
+    ADD COLUMN IF NOT EXISTS work_height_m                numeric,
+    ADD COLUMN IF NOT EXISTS has_truck_loading_unloading  boolean,
+    ADD COLUMN IF NOT EXISTS truck_loading_height_m       numeric,
+    ADD COLUMN IF NOT EXISTS has_manual_heavy_handling    boolean,
+    ADD COLUMN IF NOT EXISTS manual_handling_weight_kg    numeric,
+    ADD COLUMN IF NOT EXISTS business_activity_types      text[],
+    ADD COLUMN IF NOT EXISTS hazardous_work_environments  text[],
+    ADD COLUMN IF NOT EXISTS building_composition_codes   text[],
+    ADD COLUMN IF NOT EXISTS regulatory_designation_codes text[];
+
+-- factories numeric CHECK (NULL 허용, 음수 거부; idempotent conrelid-scoped)
+DO $ck$
 BEGIN
-    IF jsonb_typeof(p) <> 'array' THEN
-        RETURN false;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_factories_work_height_m' AND conrelid='public.factories'::regclass) THEN
+        ALTER TABLE public.factories ADD CONSTRAINT ck_factories_work_height_m
+            CHECK (work_height_m IS NULL OR work_height_m >= 0);
     END IF;
-
-    FOR elem IN
-        SELECT value FROM jsonb_array_elements(p) AS t(value)
-    LOOP
-        IF jsonb_typeof(elem) <> 'object' THEN
-            RETURN false;
-        END IF;
-        IF EXISTS (
-            SELECT 1 FROM jsonb_object_keys(elem) AS k
-            WHERE k NOT IN ('material_category', 'handling_modes')
-        ) THEN
-            RETURN false;
-        END IF;
-    END LOOP;
-
-    RETURN true;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_factories_truck_loading_height_m' AND conrelid='public.factories'::regclass) THEN
+        ALTER TABLE public.factories ADD CONSTRAINT ck_factories_truck_loading_height_m
+            CHECK (truck_loading_height_m IS NULL OR truck_loading_height_m >= 0);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_factories_manual_handling_weight_kg' AND conrelid='public.factories'::regclass) THEN
+        ALTER TABLE public.factories ADD CONSTRAINT ck_factories_manual_handling_weight_kg
+            CHECK (manual_handling_weight_kg IS NULL OR manual_handling_weight_kg >= 0);
+    END IF;
 END
-$fn$;
+$ck$;
+
+COMMENT ON COLUMN public.factories.work_height_m IS
+    'WO-CANONICAL: 시설 대표/최대 작업높이(m). NULL=미확인. 추정 금지.';
+COMMENT ON COLUMN public.factories.has_truck_loading_unloading IS
+    'WO-CANONICAL: 차량 상·하차 작업 유무. false=명시적 아니오 / NULL=미확인.';
+COMMENT ON COLUMN public.factories.truck_loading_height_m IS
+    'WO-CANONICAL: 상·하차 높이(m). NULL=미확인.';
+COMMENT ON COLUMN public.factories.has_manual_heavy_handling IS
+    'WO-CANONICAL: 중량물 수작업 유무. false=명시적 아니오 / NULL=미확인.';
+COMMENT ON COLUMN public.factories.manual_handling_weight_kg IS
+    'WO-CANONICAL: 중량물 무게(kg). 0=실제 zero / NULL=미확인.';
+COMMENT ON COLUMN public.factories.business_activity_types IS
+    'WO-CANONICAL: 실제 사업활동 유형(다중). NULL=미확인 / []=명시적 없음.';
+COMMENT ON COLUMN public.factories.hazardous_work_environments IS
+    'WO-CANONICAL: 실제 유해작업환경 유형(다중). NULL=미확인 / []=명시적 없음.';
+COMMENT ON COLUMN public.factories.building_composition_codes IS
+    'WO-CANONICAL: 실제 건물/단지 구성 사실 원자(다중). Marketing building_qualifications 저장컬럼 아님. 법적 판정(예: 의무관리대상 공동주택) 저장 금지 → assembler derive. NULL=미확인 / []=명시적 없음.';
+COMMENT ON COLUMN public.factories.regulatory_designation_codes IS
+    'WO-CANONICAL: 실제 취득/지정/허가 상태 원자(다중). Marketing regulated_facility_types 저장컬럼 아님. 법적 판정 결과(예: 안전성평가 대상시설) 저장 금지 → assembler derive. 물리시설 보유는 equipment_assets/기존 factory field 정본. NULL=미확인 / []=명시적 없음.';
 
 -- ---------------------------------------------------------------------------
--- 1) factory_legal_diagnosis_profile
---    supplemental = ADD 7 + GAP/normalized 6 (total_floor_area 제외; overrides 포함)
+-- 2) factory_process — canonical extension (legal_ prefix REJECT → 실제 공정 속성)
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS public.factory_legal_diagnosis_profile (
-    id                            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    factory_id                    uuid NOT NULL,
-    contract_version              text NOT NULL DEFAULT 'MKT_IND_PAID_CONTRACT_V1',
+ALTER TABLE public.factory_process
+    ADD COLUMN IF NOT EXISTS hazard_codes   text[],
+    ADD COLUMN IF NOT EXISTS worker_count   integer,
+    ADD COLUMN IF NOT EXISTS activity_types text[];
 
-    -- ADD 7
-    work_height_m                 numeric,
-    has_truck_loading_unloading   boolean,
-    truck_loading_height_m        numeric,
-    has_manual_heavy_handling     boolean,
-    manual_handling_weight_kg     numeric,
-    business_activity_types       text[],
-    hazardous_work_environments   text[],
+DO $wc$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='ck_factory_process_worker_count' AND conrelid='public.factory_process'::regclass) THEN
+        ALTER TABLE public.factory_process ADD CONSTRAINT ck_factory_process_worker_count
+            CHECK (worker_count IS NULL OR worker_count >= 0);
+    END IF;
+END
+$wc$;
 
-    -- GAP / normalized supplemental (기존 29 계약의 부족값; total_floor_area 는 factories.building_area TRANSFORM 이라 제외)
-    ksic_list                     text[],
-    material_profile              jsonb,
-    building_qualifications       text[],
-    regulated_facility_types      text[],
+COMMENT ON COLUMN public.factory_process.hazard_codes IS
+    'WO-CANONICAL: 공정 위험요인 코드(다중). Marketing process_list.hazard_codes 정본. NULL=미확인 / []=명시적 없음.';
+COMMENT ON COLUMN public.factory_process.worker_count IS
+    'WO-CANONICAL: 해당 공정 작업자 수. 0=해당 공정 작업자 0 / NULL=미확인 (factory.employee_count 와 별개).';
+COMMENT ON COLUMN public.factory_process.activity_types IS
+    'WO-CANONICAL: 공정 작업활동 유형(다중). Marketing process_list.activity_type 정본. NULL=미확인 / []=명시적 없음.';
 
-    -- normalized fallback overrides (deterministic source map 실패/NULL 시에만; NULL=unresolved)
-    building_use_type_override    text,
-    main_structure_override       text,
+-- ---------------------------------------------------------------------------
+-- 3) equipment_assets — canonical extension (legal_ prefix REJECT; TAG only)
+--    factory_process_id(실제 관계 FK) 변경 없음. relation_types 는 관계 semantic TAG, FK 대체 아님.
+-- ---------------------------------------------------------------------------
+ALTER TABLE public.equipment_assets
+    ADD COLUMN IF NOT EXISTS usage_types    text[],
+    ADD COLUMN IF NOT EXISTS relation_types text[];
 
-    created_at                    timestamptz NOT NULL DEFAULT now(),
-    updated_at                    timestamptz NOT NULL DEFAULT now(),
+COMMENT ON COLUMN public.equipment_assets.usage_types IS
+    'WO-CANONICAL: 설비 사용유형 태그(다중). Marketing equipment_list.usage_type 정본. NULL=미확인 / []=명시적 없음.';
+COMMENT ON COLUMN public.equipment_assets.relation_types IS
+    'WO-CANONICAL: 설비 관계유형 semantic TAG(다중). FK 대체 아님(실제 공정 관계=factory_process_id 동결). NULL=미확인 / []=명시적 없음.';
 
-    CONSTRAINT fk_fldp_factory
+-- ---------------------------------------------------------------------------
+-- 4) factory_materials — NEW real-world canonical asset (사업장 취급물질)
+--    1 row = 사업장이 실제 취급하는 하나의 물질/물질 프로파일. Marketing row 복사 테이블 아님.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.factory_materials (
+    id                      uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    factory_id              uuid NOT NULL,
+    material_name           text,
+    material_category_code  text,
+    handling_mode_codes     text[],
+    is_active               boolean NOT NULL DEFAULT true,
+    created_at              timestamptz NOT NULL DEFAULT now(),
+    updated_at              timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT fk_factory_materials_factory
         FOREIGN KEY (factory_id) REFERENCES public.factories(id) ON DELETE CASCADE,
-    CONSTRAINT uq_fldp_factory UNIQUE (factory_id),
 
-    -- M3 numeric constraints (NULL 허용; 음수 거부). total_floor_area CHECK 제거(C1).
-    CONSTRAINT ck_fldp_work_height        CHECK (work_height_m IS NULL OR work_height_m >= 0),
-    CONSTRAINT ck_fldp_truck_height       CHECK (truck_loading_height_m IS NULL OR truck_loading_height_m >= 0),
-    CONSTRAINT ck_fldp_manual_weight      CHECK (manual_handling_weight_kg IS NULL OR manual_handling_weight_kg >= 0),
-
-    -- P1 material_profile shape (no subquery; immutable helper call)
-    CONSTRAINT ck_fldp_material_profile_shape
-        CHECK (material_profile IS NULL OR public.fn_fldp_material_profile_shape_ok(material_profile))
+    -- identity: 이름/분류 둘 다 없는 무의미 row 금지 (빈 문자열도 불허)
+    CONSTRAINT ck_factory_materials_identity
+        CHECK ( (material_name IS NOT NULL AND btrim(material_name) <> '')
+             OR (material_category_code IS NOT NULL AND btrim(material_category_code) <> '') )
 );
 
-COMMENT ON TABLE public.factory_legal_diagnosis_profile IS
-    'WO-SAFE-LEGAL-IND-IMPLEMENT-001-R2: Marketing INDUSTRIAL paid-contract supplemental facts (ADD 7 + GAP/normalized 6) not held by factories base model. 1:1 with factories. Ownership via factory_id->factories.company_id (no local company_id). Server-only (service_role). total_floor_area is factories.building_area TRANSFORM (no duplicate SoT). Contract=MKT_IND_PAID_CONTRACT_V1.';
-COMMENT ON COLUMN public.factory_legal_diagnosis_profile.material_profile IS
-    'JSONB array; 허용 key = material_category, handling_modes 만(P1). vocabulary 검증은 backend validator.';
-COMMENT ON COLUMN public.factory_legal_diagnosis_profile.ksic_list IS
-    '추가 업종(다중). assembler: profile.ksic_list 있으면 사용, 없으면 [factories.ksic_code]. union 금지. NULL=미확인/[]=명시적 없음(M2).';
-COMMENT ON COLUMN public.factory_legal_diagnosis_profile.business_activity_types IS
-    'NULL=미확인 / []=명시적 없음(M2). Marketing multi_select vocabulary subset.';
-COMMENT ON COLUMN public.factory_legal_diagnosis_profile.hazardous_work_environments IS
-    'NULL=미확인 / []=명시적 없음(M2). Marketing multi_select vocabulary subset.';
-COMMENT ON COLUMN public.factory_legal_diagnosis_profile.building_use_type_override IS
-    'building_use_type normalized fallback. deterministic map(factories.building_use_code) 실패/NULL 시에만. raw source 미오염. NULL=unresolved.';
-COMMENT ON COLUMN public.factory_legal_diagnosis_profile.main_structure_override IS
-    'main_structure normalized fallback. deterministic map(factories.building_structure_code) 실패/NULL 시에만. unknown->OTHER 자동 금지. raw source 미오염. NULL=unresolved.';
+-- business-key UNIQUE 억지 생성 금지(같은 category 다수 물질 가능). PK id = identity.
+CREATE INDEX IF NOT EXISTS ix_factory_materials_factory_id ON public.factory_materials (factory_id);
 
--- P5: no separate ix_fldp_factory_id — UNIQUE(factory_id) already provides the index.
+COMMENT ON TABLE public.factory_materials IS
+    'WO-CANONICAL: 사업장 실제 취급물질 자산(1 row=1 물질/프로파일). Marketing material_profile transport 의 정본. 2-key 복사 테이블 아님. Ownership: material->factory->company (API 검증).';
+COMMENT ON COLUMN public.factory_materials.material_category_code IS
+    'WO-CANONICAL: 물질 분류 코드. vocabulary 검증은 후속 API/assembler 단계.';
+COMMENT ON COLUMN public.factory_materials.handling_mode_codes IS
+    'WO-CANONICAL: 취급형태 코드(다중). NULL=미확인 / []=명시적 없음.';
 
--- updated_at touch trigger (defensive; server also sets updated_at)
-CREATE OR REPLACE FUNCTION public.fn_fldp_touch_updated_at()
+-- updated_at touch trigger
+CREATE OR REPLACE FUNCTION public.fn_factory_materials_touch_updated_at()
 RETURNS trigger LANGUAGE plpgsql AS $tg$
 BEGIN
     NEW.updated_at := now();
@@ -126,60 +148,14 @@ BEGIN
 END
 $tg$;
 
-DROP TRIGGER IF EXISTS trg_fldp_touch_updated_at ON public.factory_legal_diagnosis_profile;
-CREATE TRIGGER trg_fldp_touch_updated_at
-    BEFORE UPDATE ON public.factory_legal_diagnosis_profile
-    FOR EACH ROW EXECUTE FUNCTION public.fn_fldp_touch_updated_at();
+DROP TRIGGER IF EXISTS trg_factory_materials_touch_updated_at ON public.factory_materials;
+CREATE TRIGGER trg_factory_materials_touch_updated_at
+    BEFORE UPDATE ON public.factory_materials
+    FOR EACH ROW EXECUTE FUNCTION public.fn_factory_materials_touch_updated_at();
 
--- P3 server-only access: RLS enabled with NO policies; service_role only (bypasses RLS).
--- Direct authenticated/anon Supabase access intentionally NOT opened (Safe access path =
--- tai-api authenticated route -> services/company_scope ownership -> service_role DB access).
-ALTER TABLE public.factory_legal_diagnosis_profile ENABLE ROW LEVEL SECURITY;
-
-REVOKE ALL ON TABLE public.factory_legal_diagnosis_profile FROM PUBLIC, anon, authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.factory_legal_diagnosis_profile TO service_role;
-
--- ---------------------------------------------------------------------------
--- 2) factory_process — process-level legal supplemental columns
--- ---------------------------------------------------------------------------
-ALTER TABLE public.factory_process
-    ADD COLUMN IF NOT EXISTS legal_hazard_codes   text[],
-    ADD COLUMN IF NOT EXISTS legal_worker_count   integer,
-    ADD COLUMN IF NOT EXISTS legal_activity_types text[];
-
--- M3 legal_worker_count >= 0 or NULL (idempotent; P4 conrelid-scoped existence check)
-DO $wc$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'ck_factory_process_legal_worker_count'
-          AND conrelid = 'public.factory_process'::regclass
-    ) THEN
-        ALTER TABLE public.factory_process
-            ADD CONSTRAINT ck_factory_process_legal_worker_count
-            CHECK (legal_worker_count IS NULL OR legal_worker_count >= 0);
-    END IF;
-END
-$wc$;
-
-COMMENT ON COLUMN public.factory_process.legal_hazard_codes IS
-    'WO-SAFE-LEGAL-IND-IMPLEMENT-001: Marketing process_list.hazard_codes[]. NULL=미확인/[]=명시적 없음(M2).';
-COMMENT ON COLUMN public.factory_process.legal_worker_count IS
-    'WO-SAFE-LEGAL-IND-IMPLEMENT-001: Marketing process_list.worker_count (>=0 or NULL).';
-COMMENT ON COLUMN public.factory_process.legal_activity_types IS
-    'WO-SAFE-LEGAL-IND-IMPLEMENT-001: Marketing process_list.activity_type[]. NULL=미확인/[]=명시적 없음(M2).';
-
--- ---------------------------------------------------------------------------
--- 3) equipment_assets — equipment-level legal supplemental columns
---    (factory_process_id 는 이 WO 에서 동결 — READ/WRITE 금지, 컬럼 미추가/미변경)
--- ---------------------------------------------------------------------------
-ALTER TABLE public.equipment_assets
-    ADD COLUMN IF NOT EXISTS legal_usage_types    text[],
-    ADD COLUMN IF NOT EXISTS legal_relation_types text[];
-
-COMMENT ON COLUMN public.equipment_assets.legal_usage_types IS
-    'WO-SAFE-LEGAL-IND-IMPLEMENT-001: Marketing equipment_list.usage_type[]. NULL=미확인/[]=명시적 없음(M2).';
-COMMENT ON COLUMN public.equipment_assets.legal_relation_types IS
-    'WO-SAFE-LEGAL-IND-IMPLEMENT-001: Marketing equipment_list.relation_type[]. NULL=미확인/[]=명시적 없음(M2).';
+-- server-only access (기존 Safe backend ownership 모델: API 경유 service_role)
+ALTER TABLE public.factory_materials ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.factory_materials FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.factory_materials TO service_role;
 
 COMMIT;
