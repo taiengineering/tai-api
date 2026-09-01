@@ -1,8 +1,10 @@
--- WO-SAFE-LEGAL-IND-IMPLEMENT-001-R1 / STEP2-PATCH-1 — SAFE INDUSTRIAL Marketing-Contract Adapter (DOWN)
+-- WO-SAFE-LEGAL-IND-IMPLEMENT-001-R2 / STEP1 — SAFE INDUSTRIAL Marketing-Contract Adapter (DOWN)
 -- Reverses the UP migration. Idempotent (repeat-safe). APPLY POLICY: artifact only. DB APPLY = BLOCKED.
 --
 -- P2: table DROP removes its own trigger/policies/constraints/indexes — no per-object DROP on a
 --     possibly-missing table (missing-table safe). Helper functions dropped after the table.
+-- R2: profile 컬럼 집합 변경(total_floor_area 제거, overrides 추가)은 테이블 전체 DROP 로 역전되므로
+--     down 로직 불변. factory_process / equipment_assets ALTER 컬럼은 개별 DROP.
 
 BEGIN;
 
