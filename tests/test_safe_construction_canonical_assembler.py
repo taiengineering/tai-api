@@ -444,3 +444,46 @@ def test_C4_P1_10_db_write_zero():
     subs = [{"id": "s1", "site_id": SID, "is_active": True, "company_name": "A", "work_type": "a", "worker_count": 1, "has_safety_manager": True}]
     r, sb = _asm(sites=[_site()], subs=subs)
     assert set(sb.reads) <= ALLOWED_TABLES and r["sector"] == "CONSTRUCTION"
+
+
+# ── STEP4-PATCH-2: subcontractor unresolved provenance accuracy ──
+_WORK_TYPE_ONLY_FALSE = "subcontractors(work_type 결측 active row)"
+
+
+def test_C4_P2_01_company_name_null_no_worktype_only_reason():
+    subs = [{"id": "s1", "site_id": SID, "is_active": True, "company_name": None, "work_type": "철근", "worker_count": 3, "has_safety_manager": True}]
+    r, _ = _asm(sites=[_site()], subs=subs)
+    assert r["values"]["subcontractor"] is None
+    assert r["provenance"]["subcontractor"]["mode"] == "UNRESOLVED"
+    assert r["provenance"]["subcontractor"]["source"] != _WORK_TYPE_ONLY_FALSE
+
+
+def test_C4_P2_02_worker_count_null_no_worktype_only_reason():
+    subs = [{"id": "s1", "site_id": SID, "is_active": True, "company_name": "A", "work_type": "철근", "worker_count": None, "has_safety_manager": False}]
+    r, _ = _asm(sites=[_site()], subs=subs)
+    assert r["values"]["subcontractor"] is None
+    assert r["provenance"]["subcontractor"]["source"] != _WORK_TYPE_ONLY_FALSE
+
+
+def test_C4_P2_03_generic_required_field_reason():
+    # 실패 원인 세 종류 모두 동일한 정확 포괄 provenance
+    for subs in (
+        [{"id": "s1", "site_id": SID, "is_active": True, "company_name": None, "work_type": "a", "worker_count": 1, "has_safety_manager": True}],
+        [{"id": "s1", "site_id": SID, "is_active": True, "company_name": "A", "work_type": None, "worker_count": 1, "has_safety_manager": True}],
+        [{"id": "s1", "site_id": SID, "is_active": True, "company_name": "A", "work_type": "a", "worker_count": None, "has_safety_manager": True}],
+    ):
+        r, _ = _asm(sites=[_site()], subs=subs)
+        src = r["provenance"]["subcontractor"]["source"]
+        assert "required" in src and "결측" in src
+        assert src != _WORK_TYPE_ONLY_FALSE
+
+
+def test_C4_P2_04_denominator_regression():
+    r, _ = _asm(sites=[_site()])
+    assert len(r["values"]) == 27 and list(r["values"].keys()) == TARGET_FIELDS
+
+
+def test_C4_P2_05_db_write_zero():
+    subs = [{"id": "s1", "site_id": SID, "is_active": True, "company_name": "A", "work_type": "a", "worker_count": 1, "has_safety_manager": True}]
+    r, sb = _asm(sites=[_site()], subs=subs)
+    assert set(sb.reads) <= ALLOWED_TABLES and r["sector"] == "CONSTRUCTION"
