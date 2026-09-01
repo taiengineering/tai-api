@@ -11,6 +11,8 @@ ROUTERS = [
     {"module": "routers.onboarding_ops"},  # WO-17 온보딩 체크리스트 (GET /companies/{id}/onboarding)
     {"module": "routers.global_search"},  # WO-11 통합 교차검색 (GET /search)
     {"module": "routers.factories"},
+    # WO-SAFE-LEGAL-IND-CANONICAL-IMPLEMENT-001 STEP6: 사업장 취급물질 canonical 자산 CRUD (/factory-materials)
+    {"module": "routers.factory_materials"},
     {"module": "routers.system_codes"},
     # {"module": "routers.file_upload"},  # 모듈 삭제됨 — 필요 시 재생성
     {"module": "routers.notifications"},
