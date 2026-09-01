@@ -1,14 +1,19 @@
-"""WO-SAFE-LEGAL-IND-IMPLEMENT-001 STEP 3 — facility supplemental persistence tests.
+"""WO-SAFE-LEGAL-IND-IMPLEMENT-001 STEP 3 (STEP3-PATCH-1) — facility supplemental persistence tests.
 
-Service-level + contract-body-level (FakeSupabase). No production DB, no app import.
-Router wiring is a thin (ownership _ensure_factory_own -> service) layer reusing the same
-pattern as every other /factories/{id}/... subroute; ownership (P05) is exercised via the
-reused helper contract and the flow test below.
+Service-level + contract-body-level + real router access-gate + route/import regression.
+No production DB (FakeSupabase). P05 imports the REAL router helper _ensure_profile_factory_access
+and monkeypatches only the shared dependency _ensure_factory_own (company_scope is not modified by
+this WO and cannot run standalone). P23 imports the real routers.factories / routers.factory_legal_diagnosis
+and asserts route preservation + no collision.
 """
 import copy
+import importlib
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
+
+import routers.factory_legal_diagnosis as fld_router
+from routers.factory_legal_diagnosis import _ensure_profile_factory_access
 
 from services.safe_industrial_legal_profile_svc import (
     CONTRACT_VERSION, FACILITY_SUPPLEMENTAL_FIELDS, SERVER_MANAGED_FIELDS,
@@ -79,10 +84,11 @@ class _Table:
 
 
 class FakeSupabase:
-    def __init__(self, profiles=None, dif=None):
+    def __init__(self, profiles=None, dif=None, factories=None):
         self.stores = {
             "factory_legal_diagnosis_profile": list(profiles or []),
             "diagnosis_input_fields": list(dif or DIF_ROWS),
+            "factories": list(factories or []),
         }
         self.counters = {"writes": 0}
     def table(self, name):
@@ -94,6 +100,10 @@ def _base_body(**over):
     b = {f: None for f in FACILITY_SUPPLEMENTAL_FIELDS}
     b.update(over)
     return b
+
+
+def _cur(company_id="C1", role_code="010"):
+    return {"company_id": company_id, "role_code": role_code}
 
 
 # -- P01 / P02 / P22 GET --
@@ -138,20 +148,50 @@ def test_P04_second_put_updates_same_row():
     assert rows[0]["work_height_m"] == 5.0
 
 
-# -- P05 ownership (router flow with injected ensure_own) --
-def test_P05_foreign_factory_404_blocks_db():
-    """Router flow: _ensure_factory_own 가 404 → service DB 접근 전에 중단."""
-    sb = FakeSupabase(profiles=[])
-
-    def ensure_own(_sb, _fid, _cur):
-        raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
-
-    # mirror router: ownership first, then service
-    with pytest.raises(HTTPException) as ei:
-        ensure_own(sb, "FOREIGN", {"company_id": "C2"})
-        get_profile(sb, "FOREIGN")
-    assert ei.value.status_code == 404
+# -- P05-A~E factory existence + ownership gate (REAL router helper) --
+def test_P05A_own_factory_access_pass(monkeypatch):
+    sb = FakeSupabase(factories=[{"id": "F1", "company_id": "C1"}])
+    monkeypatch.setattr(fld_router, "_ensure_factory_own", lambda s, f, c: None)  # own → pass
+    _ensure_profile_factory_access(sb, "F1", _cur())   # no raise
     assert sb.counters["writes"] == 0
+
+
+def test_P05B_foreign_factory_404(monkeypatch):
+    sb = FakeSupabase(factories=[{"id": "F1", "company_id": "C1"}])
+    def own(s, f, c): raise HTTPException(status_code=404, detail="foreign")
+    monkeypatch.setattr(fld_router, "_ensure_factory_own", own)
+    with pytest.raises(HTTPException) as ei:
+        _ensure_profile_factory_access(sb, "F1", _cur(company_id="C2"))
+    assert ei.value.status_code == 404
+
+
+def test_P05C_missing_factory_normal_user_404(monkeypatch):
+    sb = FakeSupabase(factories=[])   # F404 absent
+    called = {"n": 0}
+    def own(s, f, c): called["n"] += 1
+    monkeypatch.setattr(fld_router, "_ensure_factory_own", own)
+    with pytest.raises(HTTPException) as ei:
+        _ensure_profile_factory_access(sb, "F404", _cur())
+    assert ei.value.status_code == 404
+    assert called["n"] == 0            # existence check fires BEFORE ownership
+
+
+def test_P05D_missing_factory_ALL_admin_404(monkeypatch):
+    """★ regression: ALL 관리자여도 존재하지 않는 factory 는 404 (ownership 우회 방지)."""
+    sb = FakeSupabase(factories=[])
+    monkeypatch.setattr(fld_router, "_ensure_factory_own", lambda s, f, c: None)  # admin would bypass
+    with pytest.raises(HTTPException) as ei:
+        _ensure_profile_factory_access(sb, "F404", _cur(role_code="001"))
+    assert ei.value.status_code == 404
+
+
+def test_P05E_ownership_failure_no_db(monkeypatch):
+    sb = FakeSupabase(factories=[{"id": "F1", "company_id": "C1"}])
+    def own(s, f, c): raise HTTPException(status_code=404, detail="foreign")
+    monkeypatch.setattr(fld_router, "_ensure_factory_own", own)
+    with pytest.raises(HTTPException):
+        _ensure_profile_factory_access(sb, "F1", _cur(company_id="C2"))
+    assert sb.counters["writes"] == 0  # blocked before any profile read/write
 
 
 # -- P06 / P07 server-managed override rejection --
@@ -169,11 +209,9 @@ def test_P07_contract_version_server_fixed():
 
 
 def test_P06_P07_body_extra_forbidden():
-    # pydantic extra=forbid rejects company_id/contract_version/factory_id/etc.
     for bad in ("company_id", "contract_version", "factory_id", "created_at", "updated_at", "id"):
         with pytest.raises(ValidationError):
             LegalDiagnosisProfileBody(**{bad: "x"})
-    # legit body OK
     ok = LegalDiagnosisProfileBody(work_height_m=1.0, business_activity_types=[])
     assert ok.dict()["work_height_m"] == 1.0
     assert ok.dict()["business_activity_types"] == []
@@ -190,8 +228,8 @@ def test_P08_null_preserved():
 
 def test_P09_empty_list_preserved_distinct_from_null():
     cleaned = validate_profile(_base_body(business_activity_types=[], hazardous_work_environments=None), VOCAB)
-    assert cleaned["business_activity_types"] == []          # 명시적 없음
-    assert cleaned["hazardous_work_environments"] is None    # 미확인
+    assert cleaned["business_activity_types"] == []
+    assert cleaned["hazardous_work_environments"] is None
     assert cleaned["business_activity_types"] != cleaned["hazardous_work_environments"]
 
 
@@ -258,7 +296,6 @@ def test_P19_material_extra_key_rejected():
 def test_P20_material_empty_list_preserved():
     cleaned = validate_profile(_base_body(material_profile=[]), VOCAB)
     assert cleaned["material_profile"] == []
-    # valid rows accepted too
     ok = validate_profile(_base_body(material_profile=[
         {"material_category": "위험물", "handling_modes": ["취급", "저장"]}]), VOCAB)
     assert ok["material_profile"][0]["material_category"] == "위험물"
@@ -269,7 +306,22 @@ def test_P21_ksic_list_multi_preserved():
     cleaned = validate_profile(_base_body(ksic_list=["C", "D", "F"]), VOCAB)
     assert cleaned["ksic_list"] == ["C", "D", "F"]
     with pytest.raises(HTTPException):
-        validate_profile(_base_body(ksic_list=[1, 2]), VOCAB)  # non-string rejected
+        validate_profile(_base_body(ksic_list=[1, 2]), VOCAB)
+
+
+# -- P23 route/import regression (real modules) --
+def test_P23_router_import_and_route_regression():
+    fac = importlib.import_module("routers.factories")
+    fld = importlib.import_module("routers.factory_legal_diagnosis")
+    fac_pairs = {(m, r.path) for r in fac.router.routes for m in getattr(r, "methods", set())}
+    fld_pairs = {(m, r.path) for r in fld.router.routes for m in getattr(r, "methods", set())}
+    fac_paths = {r.path for r in fac.router.routes}
+    assert "/factories/{factory_id}" in fac_paths
+    assert "/factories/{factory_id}/contacts" in fac_paths
+    assert "/factories/{factory_id}/legal" in fac_paths
+    assert ("GET", "/factories/{factory_id}/legal-diagnosis/profile") in fld_pairs
+    assert ("PUT", "/factories/{factory_id}/legal-diagnosis/profile") in fld_pairs
+    assert fac_pairs.isdisjoint(fld_pairs)
 
 
 # -- load_marketing_vocab from DB source (SoT reuse, no hardcode) --
