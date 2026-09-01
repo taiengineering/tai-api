@@ -136,8 +136,16 @@ def assemble_construction_marketing_contract(supabase, site_id: str) -> Dict[str
         ok = True
         for s in sub_rows:
             wt = s.get("work_type")
-            if wt is None or (isinstance(wt, str) and wt.strip() == ""):
-                ok = False  # required work_scope 정확 생성 불가 → 조용히 버리지 않고 전체 unresolved
+            cn = s.get("company_name")
+            wc = s.get("worker_count")
+            # required: company_name, work_scope(work_type), worker_count. 하나라도 결측이면
+            # Marketing row 정확 생성 불가 → 조용히 버리지 않고 전체 unresolved (worker_count=0 은 valid).
+            if (
+                cn is None or (isinstance(cn, str) and cn.strip() == "")
+                or wt is None or (isinstance(wt, str) and wt.strip() == "")
+                or wc is None
+            ):
+                ok = False
                 break
             sm = s.get("has_safety_manager")
             safety_label = "있음" if sm is True else ("없음" if sm is False else "모름")
@@ -177,8 +185,14 @@ def assemble_construction_marketing_contract(supabase, site_id: str) -> Dict[str
     else:
         rows_out = []
         bad_token = False
+        bad_name = False
         for p in proc_rows:
             pid = p.get("id")
+            pname = p.get("process_name")
+            # required: name(process_name). NULL/blank active process → 조용히 삭제 금지, 전체 unresolved.
+            if pname is None or (isinstance(pname, str) and pname.strip() == ""):
+                bad_name = True
+                break
             toks: List[str] = []
             seen = set()
             for w in work_rows:
@@ -194,10 +208,12 @@ def assemble_construction_marketing_contract(supabase, site_id: str) -> Dict[str
             if bad_token:
                 break
             rows_out.append({
-                "name": p.get("process_name"),
+                "name": pname,
                 "hazard_codes": toks,
             })
-        if bad_token:
+        if bad_name:
+            _unresolved("process_list", "construction_site_processes.process_name(결측 active row)")
+        elif bad_token:
             _unresolved("process_list", "construction_works.hazard_codes(허용목록 밖 토큰)")
         else:
             _resolve("process_list", rows_out, "COMPOSITE", "construction_site_processes+construction_works")
