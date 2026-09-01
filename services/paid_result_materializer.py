@@ -54,12 +54,14 @@ MATERIAL_VERSION = 1
 #   NORMALIZER v2 : RAW applicability 를 손실 없이 보존 (STEP3A REV-1 / O1)
 #   R01 v2        : distinct_law_count 에서 UNSPECIFIED 버킷 제외 (STEP3A REV-1 / O3)
 #   R02 v2        : article_count 에서 UNSPECIFIED 버킷 제외 (STEP3A REV-1 / O3)
+#   D01 v1        : DIAGNOSIS FINDINGS — 기존 material 교차 집계 (STEP4C-1 REV-2 §8)
 DERIVATION_RULE_VERSIONS: Dict[str, int] = {
     "NORMALIZER": 2,
     "R01": 2, "R02": 2, "R03": 1, "R04": 1,
     "R05": 1, "R06": 1, "R07": 1, "R08": 1,
     "R09": 1, "R10": 1, "R11": 1, "R12": 1,
     "R13": 1, "R14": 1, "R15": 1, "R16": 1,
+    "D01": 1,
 }
 
 NORMALIZER_VERSION = DERIVATION_RULE_VERSIONS["NORMALIZER"]
@@ -855,6 +857,22 @@ _MATERIAL_PROVENANCE: Dict[str, Dict[str, Any]] = {
                           "full_result.contract.invalid_fields",
                           "verification.usable_for_evaluation"],
     },
+    "diagnosis_findings": {
+        "material_type": "DIAGNOSIS_FINDINGS", "derivation_rule": "D01",
+        "source_fields": [
+            "overview.total_obligation_count", "overview.distinct_law_count",
+            "overview.obligation_type_counts", "law_portfolio[].law_name",
+            "law_portfolio[].obligation_count", "article_bundles[].law_name",
+            "article_bundles[].law_article", "article_bundles[].count",
+            "duty_vs_prohibition.PROHIBITION.count",
+            "applicability_basis[].legal_condition",
+            "legal_actor_map[].actor", "legal_actor_map[].count",
+            "recipient_map[].recipient", "recipient_map[].count",
+            "legal_timing_profile.with_timing_count",
+            "information_gaps.obligation_information_gaps.obligation_count_with_gaps",
+            "applicability.triggered_by",
+        ],
+    },
     "execution_seed": {
         "material_type": "EXECUTION_SEED", "derivation_rule": "R16",
         "source_fields": ["legal.*", "classification.*", "duty.what", "duty.who",
@@ -886,6 +904,267 @@ def _build_material_provenance(all_refs: List[int]) -> Dict[str, Dict[str, Any]]
             entry["source_obligation_refs"] = list(all_refs)
         out[key] = entry
     return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# D01 — DIAGNOSIS FINDINGS (STEP4C-1 REV-2 §8 · OUTPUT CONTRACT 보충규격 v1)
+#
+# D01 은 새 사실을 만들지 않는다. R01~R16 이 이미 확정한 값을 교차해 읽고,
+# 그 결과를 감사 가능한 structured fact 로 고정한다.
+#
+#   CUSTOMER_TEXT = 0        문장은 tai-www presentation 계층이 만든다.
+#   catalog       = ALWAYS 14  F01~F14 는 eligible 여부와 무관하게 전부 남는다.
+#                              고객 화면에 무엇을 그릴지는 eligible 이 정하고,
+#                              그 판단은 후속 PKG-5B 의 몫이다.
+#   truncate      = 0        공동 1위가 상한을 넘어도 facts 에서 잘라내지 않는다.
+#                            상한은 '사실 삭제 규칙'이 아니라 eligibility 규칙이다.
+#
+# CANONICAL REUSE — 같은 상품 안에 같은 개념의 정의가 두 개 생기지 않게 한다.
+#   이미 canonical scalar 를 가진 값은 그 material 을 그대로 소비한다.
+#   예: F10 은 duty.when 을 다시 세지 않고 R10 의 with_timing_count 를 읽는다.
+#       (STEP4C-1 REV-2 §8.1 의 "COUNT duty.when" 은 SUPERSEDED — GPT 판정)
+#
+# UNSPECIFIED — R01 v2 / R02 v2 가 이미 정한 경계를 그대로 따른다.
+#   법령명·조문이 없는 의무는 버킷으로 보존되지만 "법령 1개 / 조문 1개" 로 세지 않는다.
+#   D01 이 이 경계를 다르게 잡으면 같은 화면에서 법령 수가 두 개가 된다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+DIAGNOSIS_FINDINGS_VERSION = 1
+
+# 공동 1위 나열 상한. 넘으면 facts 는 전부 보존하고 eligible 만 False 로 둔다.
+FINDING_TIE_ELIGIBLE_LIMIT = 4
+
+# derivation_rule 어휘. 새 고객 의미를 담는 문장을 여기에 넣지 않는다.
+RULE_COUNT_DISTINCT = "COUNT_DISTINCT_V1"
+RULE_COUNT_PRESENT = "COUNT_PRESENT_V1"
+RULE_COUNT_EXACT_ENUM = "COUNT_EXACT_ENUM_V1"
+RULE_GROUP_MAX_PRESERVE_TIES = "GROUP_MAX_PRESERVE_TIES_V1"
+RULE_DISTINCT_VALUES = "DISTINCT_VALUES_V1"
+RULE_PASS_THROUGH_COUNT = "PASS_THROUGH_COUNT_V1"
+
+OBLIGATION_TYPE_INSPECT = "INSPECT"
+OBLIGATION_TYPE_NOTIFY = "NOTIFY"
+
+
+def _finding(finding_id: str, finding_type: str, eligible: bool, facts: Dict[str, Any],
+             source_materials: List[str], source_fields: List[str],
+             derivation_rule: str) -> Dict[str, Any]:
+    """finding record 1건. shape 는 F01~F14 가 전부 동일하다."""
+    return {
+        "finding_id": finding_id,
+        "finding_type": finding_type,
+        "eligible": bool(eligible),
+        "facts": facts,
+        "provenance": {
+            "source_materials": sorted(source_materials),
+            "source_fields": sorted(source_fields),
+            "derivation_rule": derivation_rule,
+        },
+    }
+
+
+def _max_ties(rows: List[Dict[str, Any]], count_key: str,
+              sort_key: Any) -> Tuple[List[Dict[str, Any]], int]:
+    """공동 MAX 를 전부 돌려준다.
+
+    승자를 고르지 않는다 — 첫 행 · 사전순 1위 · 최근값 어느 것도 쓰지 않는다.
+    정렬은 나열 순서만 정하며 어떤 행이 이기는지에 관여하지 않는다.
+    """
+    if not rows:
+        return [], 0
+    top = max(_counts_value(row, count_key) for row in rows)
+    winners = [row for row in rows if _counts_value(row, count_key) == top]
+    winners.sort(key=sort_key)
+    return winners, top
+
+
+def _counts_value(row: Dict[str, Any], key: str) -> int:
+    value = row.get(key)
+    return value if isinstance(value, int) else 0
+
+
+def _tie_eligible(top: int, winners: List[Dict[str, Any]], minimum: int) -> bool:
+    return top >= minimum and 1 <= len(winners) <= FINDING_TIE_ELIGIBLE_LIMIT
+
+
+def _d01_diagnosis_findings(
+    obligations: List[Dict[str, Any]],
+    overview: Dict[str, Any],
+    law_portfolio: List[Dict[str, Any]],
+    article_bundles: List[Dict[str, Any]],
+    duty_vs_prohibition: Dict[str, Any],
+    applicability_basis: List[Dict[str, Any]],
+    legal_actor_map: List[Dict[str, Any]],
+    recipient_map: List[Dict[str, Any]],
+    legal_timing_profile: Dict[str, Any],
+    information_gaps: Dict[str, Any],
+) -> Dict[str, Any]:
+    """D01 — 진단 결과 findings 14종. 순서는 F01 -> F14 고정."""
+    total = _counts_value(overview, "total_obligation_count")
+    law_count = _counts_value(overview, "distinct_law_count")
+    type_counts = _dict_or_empty(overview.get("obligation_type_counts"))
+
+    # UNSPECIFIED 버킷은 R01 v2 / R02 v2 와 같은 기준으로 제외한다.
+    real_laws = [r for r in law_portfolio if r.get("law_name") != UNSPECIFIED]
+    real_articles = [
+        r for r in article_bundles
+        if r.get("law_name") != UNSPECIFIED and r.get("law_article") != UNSPECIFIED
+    ]
+    # UNKNOWN 은 수행주체·상대방의 이름이 아니라 "값이 없음"이다. 세지 않는다.
+    real_actors = [r for r in legal_actor_map if r.get("actor") != UNKNOWN]
+    real_recipients = [r for r in recipient_map if r.get("recipient") != UNKNOWN]
+
+    actor_winners, actor_top = _max_ties(
+        real_actors, "count", lambda r: r["actor"])
+    law_winners, law_top = _max_ties(
+        real_laws, "obligation_count", lambda r: r["law_name"])
+    article_winners, article_top = _max_ties(
+        real_articles, "count", lambda r: (r["law_name"], r["law_article"]))
+
+    article_count = len({(r["law_name"], r["law_article"]) for r in real_articles})
+    condition_count = sum(
+        1 for row in applicability_basis if row.get("legal_condition") is not None)
+    recipient_count = sum(_counts_value(r, "count") for r in real_recipients)
+    timing_count = _counts_value(legal_timing_profile, "with_timing_count")
+    gap_count = _counts_value(
+        _dict_or_empty(information_gaps.get("obligation_information_gaps")),
+        "obligation_count_with_gaps")
+
+    # triggered_by 는 RAW key 그대로 보존한다. 사전에 없는 trigger 도 버리지 않는다 —
+    # 고객 노출 여부는 presentation 이 safe dictionary 로 판단한다.
+    triggers = sorted({
+        value
+        for ob in obligations
+        for value in ob["applicability"]["triggered_by"]
+        if isinstance(value, str) and value
+    })
+
+    findings = [
+        _finding(
+            "F01", "OBLIGATION_LAW_COVERAGE", total >= 1,
+            {"obligation_count": total, "law_count": law_count},
+            ["overview"],
+            ["overview.distinct_law_count", "overview.total_obligation_count"],
+            RULE_COUNT_DISTINCT,
+        ),
+        _finding(
+            "F02", "LAW_ARTICLE_COVERAGE", article_count >= 1,
+            {"law_count": law_count, "article_count": article_count},
+            ["article_bundles", "overview"],
+            ["article_bundles[].law_article", "article_bundles[].law_name",
+             "overview.distinct_law_count"],
+            RULE_COUNT_DISTINCT,
+        ),
+        _finding(
+            "F03", "ACTOR_MAX_OBLIGATION_COUNT",
+            _tie_eligible(actor_top, actor_winners, 1),
+            {
+                "obligation_count": total,
+                "max_obligation_count": actor_top,
+                "actors": [
+                    {"actor": r["actor"], "count": _counts_value(r, "count")}
+                    for r in actor_winners
+                ],
+            },
+            ["legal_actor_map", "overview"],
+            ["legal_actor_map[].actor", "legal_actor_map[].count",
+             "overview.total_obligation_count"],
+            RULE_GROUP_MAX_PRESERVE_TIES,
+        ),
+        _finding(
+            "F04", "LEGAL_ACTOR_DIVERSITY", len(real_actors) >= 2,
+            {"actor_count": len(real_actors)},
+            ["legal_actor_map"], ["legal_actor_map[].actor"],
+            RULE_COUNT_DISTINCT,
+        ),
+        _finding(
+            "F05", "PROHIBITION_OBLIGATION_COUNT",
+            _counts_value(_dict_or_empty(duty_vs_prohibition.get(BUCKET_PROHIBITION)),
+                          "count") >= 1,
+            {"prohibition_count": _counts_value(
+                _dict_or_empty(duty_vs_prohibition.get(BUCKET_PROHIBITION)), "count")},
+            ["duty_vs_prohibition"], ["duty_vs_prohibition.PROHIBITION.count"],
+            RULE_PASS_THROUGH_COUNT,
+        ),
+        _finding(
+            "F06", "INSPECTION_OBLIGATION_COUNT",
+            _counts_value(type_counts, OBLIGATION_TYPE_INSPECT) >= 1,
+            {"inspection_count": _counts_value(type_counts, OBLIGATION_TYPE_INSPECT)},
+            ["overview"], ["overview.obligation_type_counts.INSPECT"],
+            RULE_COUNT_EXACT_ENUM,
+        ),
+        _finding(
+            "F07", "NOTIFICATION_OBLIGATION_COUNT",
+            _counts_value(type_counts, OBLIGATION_TYPE_NOTIFY) >= 1,
+            {"notification_count": _counts_value(type_counts, OBLIGATION_TYPE_NOTIFY)},
+            ["overview"], ["overview.obligation_type_counts.NOTIFY"],
+            RULE_COUNT_EXACT_ENUM,
+        ),
+        _finding(
+            "F08", "LAW_MAX_OBLIGATION_COUNT",
+            len(real_laws) >= 2 and 1 <= len(law_winners) <= FINDING_TIE_ELIGIBLE_LIMIT,
+            {
+                "obligation_count": law_top,
+                "laws": [
+                    {"law_name": r["law_name"],
+                     "count": _counts_value(r, "obligation_count")}
+                    for r in law_winners
+                ],
+            },
+            ["law_portfolio"],
+            ["law_portfolio[].law_name", "law_portfolio[].obligation_count"],
+            RULE_GROUP_MAX_PRESERVE_TIES,
+        ),
+        _finding(
+            "F09", "ARTICLE_MAX_OBLIGATION_COUNT",
+            _tie_eligible(article_top, article_winners, 2),
+            {
+                "obligation_count": article_top,
+                "articles": [
+                    {"law_name": r["law_name"], "law_article": r["law_article"],
+                     "count": _counts_value(r, "count")}
+                    for r in article_winners
+                ],
+            },
+            ["article_bundles"],
+            ["article_bundles[].count", "article_bundles[].law_article",
+             "article_bundles[].law_name"],
+            RULE_GROUP_MAX_PRESERVE_TIES,
+        ),
+        _finding(
+            "F10", "LEGAL_TIMING_COVERAGE", True,
+            {"timing_obligation_count": timing_count},
+            ["legal_timing_profile"], ["legal_timing_profile.with_timing_count"],
+            RULE_PASS_THROUGH_COUNT,
+        ),
+        _finding(
+            "F11", "CONDITION_COVERAGE", True,
+            {"condition_obligation_count": condition_count},
+            ["applicability_basis"], ["applicability_basis[].legal_condition"],
+            RULE_COUNT_PRESENT,
+        ),
+        _finding(
+            "F12", "RECIPIENT_COVERAGE", recipient_count >= 1,
+            {"recipient_obligation_count": recipient_count},
+            ["recipient_map"], ["recipient_map[].count", "recipient_map[].recipient"],
+            RULE_COUNT_PRESENT,
+        ),
+        _finding(
+            "F13", "TRIGGER_FACT_PROFILE", len(triggers) >= 1,
+            {"trigger_count": len(triggers), "triggers": triggers},
+            ["normalized_obligations"], ["applicability.triggered_by"],
+            RULE_DISTINCT_VALUES,
+        ),
+        _finding(
+            "F14", "OBLIGATION_INFORMATION_GAP_COUNT", gap_count >= 1,
+            {"obligation_gap_count": gap_count},
+            ["information_gaps"],
+            ["information_gaps.obligation_information_gaps.obligation_count_with_gaps"],
+            RULE_PASS_THROUGH_COUNT,
+        ),
+    ]
+
+    return {"version": DIAGNOSIS_FINDINGS_VERSION, "findings": findings}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -926,6 +1205,10 @@ def build_paid_result_materials_v1(full_result: Any) -> Dict[str, Any]:
         overview, duty_vs_prohibition, timing_character_summary, verification_summary)
     coverage_summary = _r15_coverage_summary(contract, obligations)
     execution_seed = _r16_execution_seed(obligations)
+    diagnosis_findings = _d01_diagnosis_findings(
+        obligations, overview, law_portfolio, article_bundles, duty_vs_prohibition,
+        applicability_basis, legal_actor_map, recipient_map, legal_timing_profile,
+        information_gaps)
 
     # LEVEL 3 — PRODUCT MATERIAL
     meta: Dict[str, Any] = {
@@ -958,6 +1241,7 @@ def build_paid_result_materials_v1(full_result: Any) -> Dict[str, Any]:
         "compliance_profile": compliance_profile,
         "coverage_summary": coverage_summary,
         "execution_seed": execution_seed,
+        "diagnosis_findings": diagnosis_findings,
     }
 
 
