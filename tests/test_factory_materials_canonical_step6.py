@@ -178,3 +178,41 @@ def test_no_marketing_legal_refs():
     assert "legal_material" not in code and "legal-diagnosis" not in code and "legal-material" not in code
     assert '"factory_process_id"' not in code and "factory_process_id=" not in code
     assert "create_client" not in code
+
+
+# ── STEP6-PATCH-1: DELETE success contract ──
+def test_M6_P1_delete_success_and_get_404(monkeypatch):
+    sb=_env(monkeypatch, mats=[{"id":"M1","factory_id":"F1","is_active":True,"material_name":"x"}])
+    fm.delete_material("M1", _Cur())
+    assert sb.stores["factory_materials"][0]["is_active"] is False
+    with pytest.raises(HTTPException) as e: fm.get_material("M1", _Cur())
+    assert e.value.status_code==404
+def test_M6_P1_delete_then_list_excluded(monkeypatch):
+    sb=_env(monkeypatch, mats=[{"id":"M1","factory_id":"F1","is_active":True,"material_name":"x"}])
+    fm.delete_material("M1", _Cur())
+    assert fm.list_materials("F1", _Cur())["data"]["total"]==0
+def test_M6_P1_zero_row_update_404(monkeypatch):
+    sb=_env(monkeypatch, mats=[{"id":"M1","factory_id":"F1","is_active":True,"material_name":"x"}])
+    orig=sb.table
+    class _Wrap:
+        def __init__(s,t): s.t=t
+        def select(s,*a,**k): return s.t.select(*a,**k)
+        def update(s,d):
+            for r in sb.stores["factory_materials"]:
+                if r["id"]=="M1": r["is_active"]=False   # flips inactive right before UPDATE
+            return s.t.update(d)
+        def eq(s,*a,**k): return s.t.eq(*a,**k)
+    monkeypatch.setattr(sb,"table",lambda n: _Wrap(orig(n)) if n=="factory_materials" else orig(n))
+    with pytest.raises(HTTPException) as e: fm.delete_material("M1", _Cur())
+    assert e.value.status_code==404
+def test_M6_P1_delete_predicate_id_and_active():
+    d=open("routers/factory_materials.py").read().split("def delete_material")[1]
+    assert '.eq("id", material_id)' in d and '.eq("is_active", True)' in d
+    assert "status_code=404" in d
+def test_M6_P1_foreign_inactive_no_update(monkeypatch):
+    sb=_env(monkeypatch, own_ok=False, mats=[{"id":"M1","factory_id":"F1","is_active":True,"material_name":"x"}])
+    with pytest.raises(HTTPException) as e: fm.delete_material("M1", _Cur())
+    assert e.value.status_code==404 and sb.counters["writes"]==0
+    sb2=_env(monkeypatch, mats=[{"id":"M2","factory_id":"F1","is_active":False,"material_name":"x"}])
+    with pytest.raises(HTTPException) as e2: fm.delete_material("M2", _Cur())
+    assert e2.value.status_code==404 and sb2.counters["writes"]==0
