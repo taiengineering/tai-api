@@ -324,6 +324,23 @@ def test_t16_sql_trace_id_added_backfill_zero():
     assert re.search(r"UPDATE\s+public\.cron_job_log\s+SET\s+trace_id", up, re.I) is None
 
 
+def test_t16b_sql_scheduled_trace_check_constraint():
+    runtime = SQL_RUNTIME.read_text(encoding="utf-8")
+    assert "cron_job_log_scheduled_trace_chk" in runtime
+    assert "scheduled_for IS NULL" in runtime
+    assert "trace_id IS NOT NULL" in runtime
+    assert "btrim(trace_id) <> ''" in runtime
+    assert "NOT IN ('unknown', 'no_trace')" in runtime
+    assert "unknown" in runtime
+    assert "no_trace" in runtime
+    assert "pg_constraint" in runtime
+    assert "IF NOT EXISTS" in runtime
+    assert "DO $$" in runtime
+    assert "SET trace_id" not in runtime
+    assert re.search(r"UPDATE\s+.*trace_id\s*=", runtime, re.I) is None
+    assert "NOT VALID" not in runtime
+
+
 def test_t17_sql_claim_returns_trace_reclaim_immutable():
     up = SQL_UP.read_text(encoding="utf-8")
     claim_body = up.split("$fn$")[1]

@@ -8,6 +8,26 @@ ALTER TABLE public.cron_job_log ADD COLUMN IF NOT EXISTS scheduled_for timestamp
 ALTER TABLE public.cron_job_log ADD COLUMN IF NOT EXISTS attempt_no integer NOT NULL DEFAULT 1;
 ALTER TABLE public.cron_job_log ADD COLUMN IF NOT EXISTS lease_until timestamptz;
 ALTER TABLE public.cron_job_log ADD COLUMN IF NOT EXISTS trace_id text;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'cron_job_log_scheduled_trace_chk'
+      AND conrelid = 'public.cron_job_log'::regclass
+  ) THEN
+    ALTER TABLE public.cron_job_log
+      ADD CONSTRAINT cron_job_log_scheduled_trace_chk
+      CHECK (
+        scheduled_for IS NULL
+        OR (
+          trace_id IS NOT NULL
+          AND btrim(trace_id) <> ''
+          AND trace_id NOT IN ('unknown', 'no_trace')
+        )
+      );
+  END IF;
+END
+$$;
 CREATE UNIQUE INDEX IF NOT EXISTS cron_job_log_occurrence_uidx
   ON public.cron_job_log (job_code, scheduled_for)
   WHERE scheduled_for IS NOT NULL;
