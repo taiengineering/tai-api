@@ -1,7 +1,21 @@
 from datetime import date, datetime
-from typing import Any, List, Optional
+from typing import Annotated, Any, List, Optional, Union
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, AfterValidator, BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt
+
+
+# ── WO-SAFE-LEGAL-CST-CANONICAL-IMPLEMENT-001 STEP3: 작업 canonical numeric 전용 strict 경계 ──
+#   NULL=unknown / 0=actual zero. bool·문자열·array·object·음수 거부. 기존 필드 coercion 불변.
+def _work_canon_nonneg(v):
+    if v is None:
+        return v
+    if v < 0:
+        raise ValueError("0 이상이어야 합니다")
+    return v
+
+
+# StrictInt/StrictFloat: bool·numeric string·coercion 거부. AfterValidator: 음수 거부.
+WorkCanonNum = Annotated[Union[StrictInt, StrictFloat], AfterValidator(_work_canon_nonneg)]
 
 
 class SiteCreate(BaseModel):
@@ -105,6 +119,12 @@ class WorkCreate(BaseModel):
     ppe_required: Optional[str] = None
     worker_count: Optional[int] = 0
     notes: Optional[str] = None
+    # WO-CST-CANONICAL STEP3: 실제 작업 canonical 속성 5개(strict; default None). omitted/None→INSERT 부재, false/0→보존.
+    work_height_m: Optional[WorkCanonNum] = None
+    has_truck_loading_unloading: Optional[StrictBool] = None
+    truck_loading_height_m: Optional[WorkCanonNum] = None
+    has_manual_heavy_handling: Optional[StrictBool] = None
+    manual_handling_weight_kg: Optional[WorkCanonNum] = None
 
 
 class WorkPatch(BaseModel):
@@ -121,6 +141,12 @@ class WorkPatch(BaseModel):
     worker_count: Optional[int] = None
     status_code: Optional[str] = None
     notes: Optional[str] = None
+    # WO-CST-CANONICAL STEP3: 실제 작업 canonical 속성 5개(strict; explicit-null clear는 라우터 sparse에서 처리).
+    work_height_m: Optional[WorkCanonNum] = None
+    has_truck_loading_unloading: Optional[StrictBool] = None
+    truck_loading_height_m: Optional[WorkCanonNum] = None
+    has_manual_heavy_handling: Optional[StrictBool] = None
+    manual_handling_weight_kg: Optional[WorkCanonNum] = None
 
 
 class PtwPatch(BaseModel):
