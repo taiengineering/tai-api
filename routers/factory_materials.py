@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-routers/factory_materials.py — 사업장 취급물질 canonical 자산 CRUD (v1.0.0)
-WO-SAFE-LEGAL-IND-CANONICAL-IMPLEMENT-001 / STEP6.
+routers/factory_materials.py — 사업장 취급물질 canonical 자산 CRUD (v1.0.1)
+WO-SAFE-LEGAL-IND-CANONICAL-IMPLEMENT-001 / STEP6 (+ STEP6-PATCH-1: DELETE result contract).
 
 STEP1 정본 테이블 factory_materials 를 그대로 결선한다(법령진단 전용 material profile 미생성).
   factory_materials: id PK, factory_id FK, material_name, material_category_code,
@@ -183,5 +183,14 @@ def update_material(material_id: str, body: FactoryMaterialUpdate, current: dict
 def delete_material(material_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     _ensure_material_own(supabase, material_id, current)   # active row + ownership (inactive -> 404)
-    supabase.table(TBL).update({"is_active": False, "updated_at": _now_iso()}).eq("id", material_id).execute()
+    # STEP6-PATCH-1: UPDATE(id + is_active=true) 결과 행이 실제 존재할 때만 success. 0-row -> 404.
+    res = (
+        supabase.table(TBL)
+        .update({"is_active": False, "updated_at": _now_iso()})
+        .eq("id", material_id)
+        .eq("is_active", True)
+        .execute()
+    )
+    if not (getattr(res, "data", None) or []):
+        raise HTTPException(status_code=404, detail="물질 자산을 찾을 수 없습니다")
     return {"status": "success", "message": "물질 자산이 비활성화됐습니다"}
