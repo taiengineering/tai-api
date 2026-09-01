@@ -10,9 +10,10 @@ Design:
 import uuid
 import time
 import logging
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Optional
+from typing import Iterator, Optional
 
 logger = logging.getLogger("watch_engine.trace")
 
@@ -38,6 +39,11 @@ def _generate_short_id() -> str:
         result.append(chars[combined % 36])
         combined //= 36
     return "".join(reversed(result))[:12]
+
+
+def generate_trace_id(flow_key: str) -> str:
+    """Public trace_id generator. Output contract: ``{flow_key}_{short}``."""
+    return f"{flow_key}_{_generate_short_id()}"
 
 
 @dataclass
@@ -68,7 +74,7 @@ def create_trace(
 
     Call once at flow start. The trace_id is immutable for the flow duration.
     """
-    trace_id = f"{flow_key}_{_generate_short_id()}"
+    trace_id = generate_trace_id(flow_key)
 
     ctx = TraceContext(
         trace_id=trace_id,
@@ -90,6 +96,20 @@ def create_trace(
 def get_current_trace() -> Optional[TraceContext]:
     """Get the current trace context (async-safe via contextvars)."""
     return _current_trace.get()
+
+
+@contextmanager
+def trace_scope(ctx: TraceContext) -> Iterator[TraceContext]:
+    """Bind ``ctx`` for the block, then restore the prior context exactly.
+
+    Nested scopes are safe. Exceptions still restore. Do not replace this
+    with ``clear_trace()`` — that would drop an outer context.
+    """
+    token = _current_trace.set(ctx)
+    try:
+        yield ctx
+    finally:
+        _current_trace.reset(token)
 
 
 def clear_trace() -> None:

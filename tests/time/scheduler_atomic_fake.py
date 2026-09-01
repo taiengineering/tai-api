@@ -80,6 +80,7 @@ class SchedulerStateDB:
         scheduled_for = _ts(params["p_scheduled_for"])
         now = _ts(params["p_now"])
         lease = _lease(params["p_lease"])
+        candidate = params.get("p_trace_id") or ""
         key = self._key(job_code, scheduled_for)
         with self.lock:
             existing = self.logs.get(key)
@@ -93,13 +94,18 @@ class SchedulerStateDB:
                     "attempt_no": 1,
                     "lease_until": now + lease,
                     "triggered_by": "SCHEDULE",
+                    "trace_id": candidate,
                 }
-                return [{"log_id": log_id, "attempt_no": 1}]
+                return [{"log_id": log_id, "attempt_no": 1, "trace_id": candidate}]
             if existing["status"] == "RUNNING" and existing["lease_until"] <= now:
                 existing["attempt_no"] = int(existing["attempt_no"]) + 1
                 existing["lease_until"] = now + lease
                 existing["status"] = "RUNNING"
-                return [{"log_id": existing["id"], "attempt_no": existing["attempt_no"]}]
+                return [{
+                    "log_id": existing["id"],
+                    "attempt_no": existing["attempt_no"],
+                    "trace_id": existing.get("trace_id") or "",
+                }]
             return []
 
     def complete(self, params: dict[str, Any]) -> bool:
