@@ -1,5 +1,10 @@
 """
-시설 공정 관리 라우터 — v3.3.0
+시설 공정 관리 라우터 — v3.4.0
+v3.4.0: (WO-SAFE-LEGAL-IND-CANONICAL-IMPLEMENT-001 STEP4) 공정 canonical 확장.
+  - 공통 supabase client 사용(로컬 create_client 제거).
+  - factory-scoped route 6개에 auth + factory ownership 결선(POST 는 trace 이전 소유권 확인).
+  - hazard_codes / worker_count / activity_types 실제 공정 속성 3개 결선(strict; PATCH explicit-null clear).
+  - factory_process_id / process 관계 / process_id / source 불변. legal_ namespace/route 미생성.
 v3.3.0: (LEDGER §39) GET /search 의 분류 옵션(hierarchy) 을 목록 limit 과 분리.
   - 옵션(lv1/lv2/lv3_options)을 해당 업종(ksic) 전체 distinct 로 집계(캐스케이드).
   - 종전에는 limit 로 잘린 items 에서 옵션을 만들어(화면이 limit=1 로 옵션만 조회) 대분류가
@@ -13,18 +18,16 @@ v3.1.0: 공정수동등록 보완
   - PATCH  /{factory_id}/processes/{process_record_id}: UUID(id) 기준 + process_name_manual/lv1/lv2/lv3 수정 지원
 v3.0.0: MANUAL 공정 등록, search, overview
 """
-from fastapi import APIRouter, Query, HTTPException
-from pydantic import BaseModel
-from typing import Optional
-import os
-from supabase import create_client
+from fastapi import APIRouter, Depends, Query, HTTPException
+from pydantic import BaseModel, StrictInt, StrictStr, AfterValidator
+from typing import Optional, List, Annotated
+from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _ensure_factory_own
 from watch_engine import create_trace, emit_event
 from watch_engine.trace import clear_trace
 
 router = APIRouter(prefix="/factory-process", tags=["factory-process"])
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 SOURCE_BADGE = {
     "KOSHA_GUIDE":    "KOSHA",
@@ -36,8 +39,46 @@ SOURCE_BADGE = {
 }
 
 
-def get_supabase():
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+# WO-CANONICAL STEP4: 공통 supabase client 사용(로컬 create_client 제거).
+# 신규 canonical process field 전용 strict 경계 (기존 필드 coercion 정책 불변).
+
+
+def _proc_nonneg_int(v):
+    if v is None:
+        return v
+    if not isinstance(v, int):
+        raise ValueError("정수여야 합니다")
+    if v < 0:
+        raise ValueError("0 이상이어야 합니다")
+    return v
+
+
+def _proc_str_list(v):
+    if v is None:
+        return v
+    if not isinstance(v, list):
+        raise ValueError("배열이어야 합니다")
+    for x in v:
+        if x.strip() == "":
+            raise ValueError("빈/공백 문자열 항목은 허용되지 않습니다")
+    return v
+
+
+# StrictInt: bool/문자열/float 거부. 음수 거부.
+ProcWorkerCount = Annotated[StrictInt, AfterValidator(_proc_nonneg_int)]
+# 항목 string only(StrictStr), 빈/공백 금지. NULL/[]/문자열 배열 허용.
+ProcStrList = Annotated[List[StrictStr], AfterValidator(_proc_str_list)]
+
+# PATCH 에서 explicit-null clear 를 허용하는 canonical process field (정확히 3개).
+PROCESS_CANONICAL_NULL_CLEAR_FIELDS = {"hazard_codes", "worker_count", "activity_types"}
+
+
+def _proc_apply_canonical(insert_data: dict, body) -> None:
+    """CREATE insert_data 에 canonical 3-field 를 provided(model_fields_set) 만 결선.
+    omitted → 미포함(DB NULL) / 0·[] → 보존."""
+    for f in ("hazard_codes", "worker_count", "activity_types"):
+        if f in body.model_fields_set:
+            insert_data[f] = getattr(body, f)
 
 
 # ── Pydantic 모델 ─────────────────────────────────────────
@@ -52,6 +93,10 @@ class ProcessCreateBody(BaseModel):
     process_lv3:         Optional[str] = None
     process_lv4:         Optional[str] = None
     is_primary:          bool = False
+    # WO-CANONICAL STEP4: 공정 canonical 실제 속성 3개(strict; default None)
+    hazard_codes:        Optional[ProcStrList] = None
+    worker_count:        Optional[ProcWorkerCount] = None
+    activity_types:      Optional[ProcStrList] = None
 
 
 class ProcessUpdateBody(BaseModel):
@@ -60,6 +105,10 @@ class ProcessUpdateBody(BaseModel):
     process_lv2:         Optional[str] = None
     process_lv3:         Optional[str] = None
     is_primary:          Optional[bool] = None
+    # WO-CANONICAL STEP4: 공정 canonical 실제 속성 3개(strict; explicit-null clear)
+    hazard_codes:        Optional[ProcStrList] = None
+    worker_count:        Optional[ProcWorkerCount] = None
+    activity_types:      Optional[ProcStrList] = None
 
 
 # ──────────────────────────────────────────────
@@ -242,12 +291,14 @@ async def search_kcsc_processes(
 # v3.1.0: display_name, is_manual 명시적 추가
 # ──────────────────────────────────────────────
 @router.get("/{factory_id}/processes")
-async def get_factory_processes(factory_id: str):
+async def get_factory_processes(factory_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
 
     res = supabase.table("factory_process").select(
         "id, factory_id, process_id, process_lv1, process_lv2, process_lv3, process_lv4, "
-        "process_path, process_name_manual, source, is_primary, is_active, created_at"
+        "process_path, process_name_manual, source, is_primary, is_active, created_at, "
+        "hazard_codes, worker_count, activity_types"
     ).eq("factory_id", factory_id).eq("is_active", True).execute()
 
     items = res.data or []
@@ -308,9 +359,10 @@ async def get_factory_processes(factory_id: str):
 # v3.2.0: source='KCSC' + kcs_code 처리 추가
 # ──────────────────────────────────────────────
 @router.post("/{factory_id}/processes")
-async def add_factory_process(factory_id: str, body: ProcessCreateBody):
-    create_trace(flow_key="process_registration", tenant_id="tai", actor_type="user")
+async def add_factory_process(factory_id: str, body: ProcessCreateBody, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)   # trace/event 이전에 소유권 확인(foreign/missing → 404, trace 미생성)
+    create_trace(flow_key="process_registration", tenant_id="tai", actor_type="user")
     import time
 
     source = (body.source or "DB").upper()
@@ -368,6 +420,7 @@ async def add_factory_process(factory_id: str, body: ProcessCreateBody):
             "is_primary":          body.is_primary,
             "is_active":           True,
         }
+        _proc_apply_canonical(insert_data, body)
 
     elif source == "KCSC":
         # v3.2.0: kcsc_process_master에서 kcs_code로 조회
@@ -409,6 +462,7 @@ async def add_factory_process(factory_id: str, body: ProcessCreateBody):
             "is_primary":          body.is_primary,
             "is_active":           True,
         }
+        _proc_apply_canonical(insert_data, body)
 
     else:
         # source == "DB"
@@ -443,6 +497,7 @@ async def add_factory_process(factory_id: str, body: ProcessCreateBody):
             "is_primary":  body.is_primary,
             "is_active":   True,
         }
+        _proc_apply_canonical(insert_data, body)
 
     emit_event(
         step_key="validate_input",
@@ -538,8 +593,9 @@ async def add_factory_process(factory_id: str, body: ProcessCreateBody):
 # POST /factory-process/{factory_id}/processes/bulk
 # ──────────────────────────────────────────────
 @router.post("/{factory_id}/processes/bulk")
-async def bulk_add_factory_processes(factory_id: str, body: dict):
+async def bulk_add_factory_processes(factory_id: str, body: dict, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     process_ids = body.get("process_ids", [])
     if not process_ids:
         raise HTTPException(status_code=400, detail="process_ids가 필요합니다.")
@@ -585,12 +641,13 @@ async def bulk_add_factory_processes(factory_id: str, body: dict):
 # v3.1.0: UUID(id) 기준 soft delete
 # ──────────────────────────────────────────────
 @router.delete("/{factory_id}/processes/{process_record_id}")
-async def delete_factory_process(factory_id: str, process_record_id: str):
+async def delete_factory_process(factory_id: str, process_record_id: str, current: dict = Depends(get_current_user)):
     """
     process_record_id = factory_process.id (UUID)
     MANUAL / KCSC 공정 포함 모든 공정 soft delete 가능.
     """
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     res = supabase.table("factory_process").update({"is_active": False}).eq(
         "id", process_record_id
     ).eq("factory_id", factory_id).execute()
@@ -606,14 +663,28 @@ async def delete_factory_process(factory_id: str, process_record_id: str):
 # v3.1.0: UUID(id) 기준 + process_name_manual/lv1/lv2/lv3 수정 지원
 # ──────────────────────────────────────────────
 @router.patch("/{factory_id}/processes/{process_record_id}")
-async def update_factory_process(factory_id: str, process_record_id: str, body: ProcessUpdateBody):
+async def update_factory_process(factory_id: str, process_record_id: str, body: ProcessUpdateBody, current: dict = Depends(get_current_user)):
     """
     process_record_id = factory_process.id (UUID)
-    수정 가능 필드: process_name_manual, process_lv1, process_lv2, process_lv3, is_primary
+    수정 가능 필드(legacy): process_name_manual, process_lv1, process_lv2, process_lv3, is_primary
+    STEP4: canonical 3-field(hazard_codes/worker_count/activity_types)는 sparse(explicit-null clear). 기존 필드 semantics 불변.
     """
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
+    # process row 존재확인(id+factory_id+is_active). foreign/missing/inactive → 404
+    chk = supabase.table("factory_process").select("id").eq(
+        "id", process_record_id
+    ).eq("factory_id", factory_id).eq("is_active", True).limit(1).execute()
+    if not chk.data:
+        raise HTTPException(status_code=404, detail="등록된 공정을 찾을 수 없습니다.")
 
-    update_data = {k: v for k, v in body.dict().items() if v is not None}
+    provided = body.dict(exclude_unset=True)
+    update_data = {}
+    for k, v in provided.items():
+        if k in PROCESS_CANONICAL_NULL_CLEAR_FIELDS:
+            update_data[k] = v            # None/0/[] 그대로(explicit-null clear)
+        elif v is not None:
+            update_data[k] = v            # legacy: None skip
     if not update_data:
         raise HTTPException(status_code=422, detail="수정할 내용이 없습니다.")
 
@@ -638,8 +709,10 @@ async def update_factory_process(factory_id: str, process_record_id: str, body: 
 async def recommend_equipment(
     factory_id:  str,
     band_filter: Optional[str] = Query(None),
+    current: dict = Depends(get_current_user),
 ):
     supabase = get_supabase()
+    _ensure_factory_own(supabase, factory_id, current)
     proc_res = supabase.table("factory_process").select("process_id, source").eq(
         "factory_id", factory_id
     ).eq("is_active", True).execute()
