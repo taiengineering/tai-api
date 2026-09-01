@@ -7,6 +7,7 @@ ALTER TABLE public.cron_schedule_config ADD COLUMN IF NOT EXISTS last_status tex
 ALTER TABLE public.cron_job_log ADD COLUMN IF NOT EXISTS scheduled_for timestamptz;
 ALTER TABLE public.cron_job_log ADD COLUMN IF NOT EXISTS attempt_no integer NOT NULL DEFAULT 1;
 ALTER TABLE public.cron_job_log ADD COLUMN IF NOT EXISTS lease_until timestamptz;
+ALTER TABLE public.cron_job_log ADD COLUMN IF NOT EXISTS trace_id text;
 CREATE UNIQUE INDEX IF NOT EXISTS cron_job_log_occurrence_uidx
   ON public.cron_job_log (job_code, scheduled_for)
   WHERE scheduled_for IS NOT NULL;

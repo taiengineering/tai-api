@@ -11,8 +11,10 @@ from typing import Any
 
 from services.scheduler.cron_grammar import next_fire_after, next_fire_at_or_after
 from services.scheduler.handlers import execute_direct
-from services.scheduler.store import InMemoryStore, JobRow
+from services.scheduler.store import Claim, InMemoryStore, JobRow
 from services.time import SYSTEM_CLOCK, Clock, now_kst, serialize_business_datetime
+from watch_engine.emitter import emit_event
+from watch_engine.trace import TraceContext, trace_scope
 
 logger = logging.getLogger(__name__)
 LEASE = timedelta(minutes=15)
@@ -46,6 +48,43 @@ def execute_job(job: JobRow) -> Any:
     return _http_execute(job)
 
 
+def _cron_trace_context(claim: Claim) -> TraceContext:
+    return TraceContext(
+        trace_id=claim.trace_id,
+        flow_key="cron_job",
+        tenant_id="platform",
+        service_key="tai-api",
+        actor_type="scheduler",
+    )
+
+
+def _emit_cron_job_failed(claim: Claim, worker_id: str) -> None:
+    """Fail-safe: emit False/exception must not change scheduler terminal result."""
+    try:
+        emit_event(
+            step_key="cron_job_failed",
+            step_order=1,
+            event_type="cron_failure",
+            result="failure",
+            connector_type="scheduler",
+            event_name="CRON_JOB_FAILED",
+            actor_kind="CRON",
+            actor_ref=f"cron:{claim.job_code}",
+            payload_summary={
+                "job_code": claim.job_code,
+                "scheduled_for": serialize_business_datetime(claim.scheduled_for),
+                "attempt_no": claim.attempt_no,
+                "log_id": claim.log_id,
+                "worker_id": worker_id,
+            },
+        )
+    except Exception:
+        logger.warning(
+            "[SCHED] CRON_JOB_FAILED emit failed; scheduler result unchanged job=%s",
+            claim.job_code,
+        )
+
+
 def tick(
     store: InMemoryStore,
     clock: Clock = SYSTEM_CLOCK,
@@ -64,38 +103,42 @@ def tick(
         claim = store.claim(job, worker_id=worker_id, now=now, lease=LEASE)
         if claim is None:
             continue
-        status = "SUCCESS"
-        detail: Any = None
-        try:
-            detail = execute_job(job)
-        except Exception as e:
-            status = "FAILED"
-            detail = {"error": str(e)[:1000]}
-            logger.error("[SCHED] %s FAILED scheduled_for=%s: %s", job.job_code, claim.scheduled_for, e)
-        nxt = next_fire_after(job.cron_expression, claim.scheduled_for)
-        try:
-            fenced = store.complete_and_advance(claim, status, detail, now, nxt)
-        except Exception as e:
-            logger.error(
-                "[SCHED] complete failed; leaving RUNNING for replay job=%s scheduled_for=%s: %s",
-                job.job_code,
-                claim.scheduled_for,
-                e,
-            )
-            continue
-        if fenced:
-            logger.warning(
-                "[SCHED] fenced complete rejected job=%s attempt=%s",
-                job.job_code,
-                claim.attempt_no,
-            )
-            continue
-        results.append({
-            "job_code": job.job_code,
-            "scheduled_for": serialize_business_datetime(claim.scheduled_for),
-            "status": status,
-            "next_run_at": serialize_business_datetime(nxt),
-            "attempt_no": claim.attempt_no,
-            "worker_id": worker_id,
-        })
+        ctx = _cron_trace_context(claim)
+        with trace_scope(ctx):
+            status = "SUCCESS"
+            detail: Any = None
+            try:
+                detail = execute_job(job)
+            except Exception as e:
+                status = "FAILED"
+                detail = {"error": str(e)[:1000]}
+                logger.error("[SCHED] %s FAILED scheduled_for=%s: %s", job.job_code, claim.scheduled_for, e)
+            nxt = next_fire_after(job.cron_expression, claim.scheduled_for)
+            try:
+                fenced = store.complete_and_advance(claim, status, detail, now, nxt)
+            except Exception as e:
+                logger.error(
+                    "[SCHED] complete failed; leaving RUNNING for replay job=%s scheduled_for=%s: %s",
+                    job.job_code,
+                    claim.scheduled_for,
+                    e,
+                )
+                continue
+            if fenced:
+                logger.warning(
+                    "[SCHED] fenced complete rejected job=%s attempt=%s",
+                    job.job_code,
+                    claim.attempt_no,
+                )
+                continue
+            if status == "FAILED":
+                _emit_cron_job_failed(claim, worker_id)
+            results.append({
+                "job_code": job.job_code,
+                "scheduled_for": serialize_business_datetime(claim.scheduled_for),
+                "status": status,
+                "next_run_at": serialize_business_datetime(nxt),
+                "attempt_no": claim.attempt_no,
+                "worker_id": worker_id,
+            })
     return results
