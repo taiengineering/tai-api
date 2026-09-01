@@ -135,6 +135,9 @@ def test_t1_empty_obligations_produces_full_structure():
         "verification_summary", "information_gaps", "legal_actor_map", "recipient_map",
         "legal_timing_profile", "timing_character_summary", "duplicate_groups",
         "article_bundles", "compliance_profile", "coverage_summary", "execution_seed",
+        # D01 (STEP4C-2 PKG-5A) — 신규 material. 이 검사의 목적은 "키 집합이 정확히
+        # 이것" 을 고정하는 것이므로, 검사를 느슨하게 푸는 대신 새 키를 명시한다.
+        "diagnosis_findings",
     }
     assert set(out) == expected_keys
 
