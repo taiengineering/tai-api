@@ -372,3 +372,75 @@ def test_contract_envelope():
     assert r["sector"] == "CONSTRUCTION"
     assert r["site_id"] == SID
     assert r["unresolved_fields"] == sorted(set(r["unresolved_fields"]))  # sorted+dedupe
+
+
+# ── STEP4-PATCH-1: required row completeness ──
+def test_C4_P1_01_sub_company_name_null():
+    subs = [{"id": "s1", "site_id": SID, "is_active": True, "company_name": None, "work_type": "철근", "worker_count": 3, "has_safety_manager": True}]
+    r, _ = _asm(sites=[_site()], subs=subs)
+    assert r["values"]["subcontractor"] is None
+    assert "subcontractor" in r["unresolved_fields"]
+    assert r["values"]["has_subcontractor"] is True and r["values"]["subcontractor_count"] == 1
+
+
+def test_C4_P1_02_sub_company_name_blank():
+    subs = [{"id": "s1", "site_id": SID, "is_active": True, "company_name": "   ", "work_type": "철근", "worker_count": 3, "has_safety_manager": True}]
+    r, _ = _asm(sites=[_site()], subs=subs)
+    assert r["values"]["subcontractor"] is None
+    assert "subcontractor" in r["unresolved_fields"]
+
+
+def test_C4_P1_03_sub_worker_count_null():
+    subs = [{"id": "s1", "site_id": SID, "is_active": True, "company_name": "A", "work_type": "철근", "worker_count": None, "has_safety_manager": False}]
+    r, _ = _asm(sites=[_site()], subs=subs)
+    assert r["values"]["subcontractor"] is None
+    assert "subcontractor" in r["unresolved_fields"]
+
+
+def test_C4_P1_04_sub_worker_count_zero_valid():
+    subs = [{"id": "s1", "site_id": SID, "is_active": True, "company_name": "A", "work_type": "철근", "worker_count": 0, "has_safety_manager": None}]
+    r, _ = _asm(sites=[_site()], subs=subs)
+    assert r["values"]["subcontractor"] is not None
+    assert r["values"]["subcontractor"][0]["worker_count"] == 0
+    assert r["values"]["subcontractor"][0]["safety_manager"] == "모름"
+    assert "subcontractor" not in r["unresolved_fields"]
+
+
+def test_C4_P1_05_process_name_null():
+    procs = [{"id": "p1", "site_id": SID, "is_active": True, "process_name": None}]
+    r, _ = _asm(sites=[_site()], processes=procs)
+    assert r["values"]["process_list"] is None
+    assert "process_list" in r["unresolved_fields"]
+
+
+def test_C4_P1_06_process_name_blank():
+    procs = [{"id": "p1", "site_id": SID, "is_active": True, "process_name": "  "}]
+    r, _ = _asm(sites=[_site()], processes=procs)
+    assert r["values"]["process_list"] is None
+    assert "process_list" in r["unresolved_fields"]
+
+
+def test_C4_P1_07_one_bad_process_among_valid():
+    procs = [
+        {"id": "p1", "site_id": SID, "is_active": True, "process_name": "터파기"},
+        {"id": "p2", "site_id": SID, "is_active": True, "process_name": None},
+    ]
+    r, _ = _asm(sites=[_site()], processes=procs)
+    assert r["values"]["process_list"] is None  # whole field unresolved, not silently dropped
+    assert "process_list" in r["unresolved_fields"]
+
+
+def test_C4_P1_08_denominator_regression():
+    r, _ = _asm(sites=[_site()])
+    assert len(r["values"]) == 27 and list(r["values"].keys()) == TARGET_FIELDS
+
+
+def test_C4_P1_09_e15_nonnull_zero():
+    r, _ = _asm(sites=[_site()])
+    assert [f for f in E15_FIELDS if r["values"][f] is not None] == []
+
+
+def test_C4_P1_10_db_write_zero():
+    subs = [{"id": "s1", "site_id": SID, "is_active": True, "company_name": "A", "work_type": "a", "worker_count": 1, "has_safety_manager": True}]
+    r, sb = _asm(sites=[_site()], subs=subs)
+    assert set(sb.reads) <= ALLOWED_TABLES and r["sector"] == "CONSTRUCTION"
