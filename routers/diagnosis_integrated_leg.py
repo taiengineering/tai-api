@@ -20,6 +20,7 @@ from schemas.diagnosis_integrated import DiagnosisRunBody
 from services import diagnosis_integrated_svc
 from services.diagnosis_helpers import _auto_tier, _build_partial, _now
 from services.leg_diagnosis_svc import run_leg_diagnosis, LegDiagnosisError
+from services.canonical.industrial_www import build_industrial_www_step1
 from clients.leg_runtime_client import LegRuntimeError, is_enabled
 # 유료 티어 가격/무료 코드는 TAI 유료 라우터의 정의를 재사용(단일 출처)
 from routers.diagnosis_integrated import PAID_TIER_PRICES, FREE_TIER_CODES
@@ -64,6 +65,7 @@ async def _run_leg_impl(body: DiagnosisRunBody, current_user: Optional[dict] = N
         free_tier_codes=FREE_TIER_CODES,
         engine_version=LEG_ENGINE_VERSION,
         current_user=current_user,
+        canonical_step1_factory_func=build_industrial_www_step1,
     )
 
     full = result.get("result") or {}
