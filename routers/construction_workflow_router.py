@@ -52,6 +52,17 @@ def _now_iso() -> str:
     return serialize_external_utc(now_kst())
 
 
+# WO-SAFE-LEGAL-CST-CANONICAL-IMPLEMENT-001 STEP3: PATCH 에서 explicit-null clear 를 허용하는
+# construction_works canonical field (정확히 5개; STEP2 migration 컬럼). 기존 legacy field semantics 불변.
+WORK_CANONICAL_NULL_CLEAR_FIELDS = {
+    "work_height_m",
+    "has_truck_loading_unloading",
+    "truck_loading_height_m",
+    "has_manual_heavy_handling",
+    "manual_handling_weight_kg",
+}
+
+
 # ── 회사 스코프 가드 (P13, Wave3 직접MCP) ──
 # 건설 리소스는 construction_sites.company_id 기준. 자식(process/work/worker/inspection)은
 # site_id 경유로 소유확인. 가드는 각 엔드포인트 try 앞에서 호출(404가 500으로 삼켜지는 것 방지).
@@ -325,7 +336,14 @@ async def update_work(work_id: str, body: WorkPatch, current: dict = Depends(get
     supabase = get_supabase()
     _ensure_child_site_own(supabase, "construction_works", work_id, current, "작업을 찾을 수 없습니다.")
     try:
-        data = body.model_dump(exclude_none=True)
+        # STEP3 sparse: canonical 5-field 는 explicit None 도 반영(DB NULL clear); 기존 legacy field 는 종전처럼 None skip.
+        provided = body.model_dump(exclude_unset=True)
+        data = {}
+        for k, v in provided.items():
+            if k in WORK_CANONICAL_NULL_CLEAR_FIELDS:
+                data[k] = v            # None(clear)/false/0 그대로
+            elif v is not None:
+                data[k] = v            # legacy: None skip (기존 exclude_none 동치)
         if not data:
             raise HTTPException(status_code=400, detail="수정할 항목이 없습니다.")
         data = normalize_date_fields(data, ("work_date",))
