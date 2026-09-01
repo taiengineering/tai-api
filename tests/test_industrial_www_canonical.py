@@ -1,4 +1,10 @@
-"""WO-DUAL-IND-STEP2 GATE-2 Path A — WWW INDUSTRIAL Canonical adapter + Runtime input + W1/W2 tests."""
+"""WO-DUAL-IND-STEP2 GATE-2 Path A — WWW INDUSTRIAL Canonical adapter + Runtime input + W1/W2 tests.
+
+CORRECTION-02:
+  - SAFE assembler 부재 검증을 substring → AST(import/call node) 기반으로 교체(정상 docstring 보존).
+  - LEG EXPECTED 14/14 exact-value 완전 검증(building_use_type 포함, denominator len==14).
+"""
+import ast
 import pytest
 from services.canonical.industrial_www import (
     build_industrial_www_canonical, build_industrial_www_step1, SECTOR,
@@ -43,10 +49,31 @@ def test_canonical_no_extra_keys():
     c = build_industrial_www_canonical({"garbage": 1, "worker_count": 3})
     assert set(c.keys()) == set(TARGET_FIELDS) and "garbage" not in c
 
-def test_canonical_no_safe_assembler_call():
+
+# ---- CORRECTION-02 P1/P2: SAFE assembler 실제 import/call 부재 (AST 기반, docstring 무관) ----
+def test_no_safe_assembler_import_or_call():
     import services.canonical.industrial_www as mod
-    src = open(mod.__file__).read()
-    assert "assemble_industrial_marketing_contract" not in src
+    tree = ast.parse(open(mod.__file__, encoding="utf-8").read())
+    imported_names = set()
+    called_names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for n in node.names:
+                imported_names.add(n.name)
+        elif isinstance(node, ast.Import):
+            for n in node.names:
+                imported_names.add(n.name.split(".")[0])
+        elif isinstance(node, ast.Call):
+            fn = node.func
+            if isinstance(fn, ast.Name):
+                called_names.add(fn.id)
+            elif isinstance(fn, ast.Attribute):
+                called_names.add(fn.attr)
+    # SAFE asset assembler 함수는 import 되지도, 호출되지도 않는다(실행 코드 기준). docstring 언급은 무관.
+    assert "assemble_industrial_marketing_contract" not in imported_names
+    assert "assemble_industrial_marketing_contract" not in called_names
+    # frozen denominator(TARGET_FIELDS) 재사용은 허용 — import 되어 있어야 한다.
+    assert "TARGET_FIELDS" in imported_names
 
 
 # ---- P2-02 official runtime input ----
@@ -75,22 +102,40 @@ def test_P2_04_chemical_alias():
     assert "has_chemical_substance" not in fac
 
 
-# ---- 14 LEG-EXPECTED exact-value at facility + transport-only excluded ----
+# ---- CORRECTION-02 P3: LEG EXPECTED 14/14 exact-value (building_use_type 포함, denominator 명시) ----
 def test_leg_expected_14_exact_value():
     fd = {
-        "ksic_major": "C25", "worker_count": 7, "total_floor_area": 5000, "building_use_type": "\uacf5\uc7a5",
+        "ksic_major": "C25", "worker_count": 7, "total_floor_area": 5000, "building_use_type": "공장",
         "has_safety_manager": True, "has_boiler": False, "has_chemical_substance": True,
         "has_high_pressure_gas": True, "gas_capacity_kg": 120, "work_height_m": 3.5,
         "has_truck_loading_unloading": True, "truck_loading_height_m": 2.0,
         "has_manual_heavy_handling": True, "manual_handling_weight_kg": 25,
-        "address": "\uc11c\uc6b8", "floor_count": 3, "process_list": [{"process_name": "x"}],
+        # transport-only(비LEG)도 함껸 넣어 facility 미포함 확인
+        "address": "서울", "floor_count": 3, "process_list": [{"process_name": "x"}],
     }
-    fac = leg.build_facility(build_industrial_www_step1(_Body(form_data=fd)))
-    assert fac["total_floor_area"] == 5000 and fac["worker_count"] == 7 and fac["ksic_major"] == "C25"
-    assert fac["has_safety_manager"] is True and fac["has_boiler"] is False and fac.get("has_chemical") is True
-    assert fac["has_high_pressure_gas"] is True and fac["gas_capacity_kg"] == 120
-    assert fac["work_height_m"] == 3.5 and fac["has_truck_loading_unloading"] is True
-    assert fac["truck_loading_height_m"] == 2.0 and fac["has_manual_heavy_handling"] is True
-    assert fac["manual_handling_weight_kg"] == 25
-    for k in ("address", "floor_count", "process_list"):
-        assert k not in fac
+    facility = leg.build_facility(build_industrial_www_step1(_Body(form_data=fd)))
+
+    # LEG EXPECTED 14 — consumer has_chemical_substance 는 승인 alias 로 LEG has_chemical 로 도달.
+    expected_facility = {
+        "ksic_major": "C25",
+        "worker_count": 7,
+        "total_floor_area": 5000,
+        "building_use_type": "공장",
+        "has_safety_manager": True,
+        "has_boiler": False,
+        "has_chemical": True,
+        "has_high_pressure_gas": True,
+        "gas_capacity_kg": 120,
+        "work_height_m": 3.5,
+        "has_truck_loading_unloading": True,
+        "truck_loading_height_m": 2.0,
+        "has_manual_heavy_handling": True,
+        "manual_handling_weight_kg": 25,
+    }
+    assert len(expected_facility) == 14
+    for key, value in expected_facility.items():
+        assert facility[key] == value, f"{key}: expected {value!r}, got {facility.get(key)!r}"
+
+    # consumer 원명(has_chemical_substance) 및 transport-only 는 facility 미포함
+    for k in ("has_chemical_substance", "address", "floor_count", "process_list"):
+        assert k not in facility
