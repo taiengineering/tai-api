@@ -11,8 +11,6 @@ ROUTERS = [
     {"module": "routers.onboarding_ops"},  # WO-17 온보딩 체크리스트 (GET /companies/{id}/onboarding)
     {"module": "routers.global_search"},  # WO-11 통합 교차검색 (GET /search)
     {"module": "routers.factories"},
-    # WO-SAFE-LEGAL-IND-IMPLEMENT-001 STEP3: /factories/{id}/legal-diagnosis/profile (0-drift 확장)
-    {"module": "routers.factory_legal_diagnosis"},
     {"module": "routers.system_codes"},
     # {"module": "routers.file_upload"},  # 모듈 삭제됨 — 필요 시 재생성
     {"module": "routers.notifications"},
