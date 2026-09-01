@@ -27,6 +27,7 @@ from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_factory_own, _forced_company_id, _is_admin, _scope
 from services.time import business_today, now_kst, serialize_business_datetime
+from services.factory_canonical_vocab_svc import validate_factory_canonical_codes
 
 # ============================================================
 # WO-SAFE-LEGAL-IND-CANONICAL-IMPLEMENT-001 STEP3A
@@ -56,7 +57,7 @@ CanonNum = Annotated[Union[StrictInt, StrictFloat], AfterValidator(_canon_nonneg
 # 항목 string only(StrictStr), 빈/공백 금지. NULL/[]/비어있지 않은 문자열 배열 허용.
 CanonStrList = Annotated[List[StrictStr], AfterValidator(_canon_str_list)]
 
-# PATCH 에서 explicit-null clear 를 허용하는 canonical nullable field (정확히 7개).
+# PATCH 에서 explicit-null clear 를 허용하는 canonical nullable field.
 CANONICAL_NULL_CLEAR_FIELDS = {
     "work_height_m",
     "has_truck_loading_unloading",
@@ -65,6 +66,9 @@ CANONICAL_NULL_CLEAR_FIELDS = {
     "manual_handling_weight_kg",
     "business_activity_types",
     "hazardous_work_environments",
+    # STEP3B: vocabulary 확정 후 쓰기 노출
+    "building_composition_codes",
+    "regulatory_designation_codes",
 }
 
 
@@ -163,6 +167,9 @@ class FactoryCreate(BaseModel):
     # WO-CANONICAL STEP3A: 건물구조 원천값(기존 DB 컬럼) API 결선
     building_structure_code:     Optional[str] = None
     building_structure_name:     Optional[str] = None
+    # WO-CANONICAL STEP3B: vocabulary 확정 canonical 분류 코드 쓰기 노출(system_codes 검증)
+    building_composition_codes:   Optional[CanonStrList] = None
+    regulatory_designation_codes: Optional[CanonStrList] = None
 
 
 class FactoryUpdate(BaseModel):
@@ -231,6 +238,9 @@ class FactoryUpdate(BaseModel):
     completion_year:             Optional[int] = None
     building_structure_code:     Optional[str] = None
     building_structure_name:     Optional[str] = None
+    # WO-CANONICAL STEP3B: vocabulary 확정 canonical 분류 코드(system_codes 검증)
+    building_composition_codes:   Optional[CanonStrList] = None
+    regulatory_designation_codes: Optional[CanonStrList] = None
 
 
 class FactoryContactBody(BaseModel):
@@ -313,6 +323,8 @@ def create_factory(req: FactoryCreate, current: dict = Depends(get_current_user)
     ).single().execute()
     if not company.data:
         raise HTTPException(status_code=404, detail="사업장(회사)을 찾을 수 없습니다")
+    # STEP3B: canonical vocabulary 검증(system_codes SoT; provided-only).
+    validate_factory_canonical_codes(req.dict(exclude_none=True), supabase)
     now = now_kst()
     data = {
         **req.dict(exclude_none=True),
@@ -366,6 +378,8 @@ async def update_factory(factory_id: str, req: FactoryUpdate, current: dict = De
 
     provided = req.dict(exclude_unset=True)
     update_data = _build_factory_update(provided)
+    # STEP3B: canonical vocabulary 검증(ownership/existence 통과 후, provided-only).
+    validate_factory_canonical_codes(update_data, supabase)
     if not update_data:
         return {"status": "success", "message": "변경된 내용이 없습니다.", "data": {}}
 
