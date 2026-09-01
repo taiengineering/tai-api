@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
+from watch_engine.trace import generate_trace_id
+
 
 TERMINAL = {"SUCCESS", "FAILED", "WARNING"}
 
@@ -32,6 +34,7 @@ class Claim:
     attempt_no: int
     lease_until: datetime
     log_id: str
+    trace_id: str
     status: str = "RUNNING"
 
 
@@ -64,6 +67,7 @@ class InMemoryStore:
         scheduled_for = job.next_run_at
         if scheduled_for is None:
             return None
+        candidate = generate_trace_id("cron_job")
         with self._lock:
             key = (job.job_code, scheduled_for)
             existing = self.logs.get(key)
@@ -78,6 +82,7 @@ class InMemoryStore:
                     "worker_id": worker_id,
                     "lease_until": now + lease,
                     "triggered_by": "SCHEDULE",
+                    "trace_id": candidate,
                 }
                 return Claim(
                     job_code=job.job_code,
@@ -86,6 +91,7 @@ class InMemoryStore:
                     attempt_no=1,
                     lease_until=now + lease,
                     log_id=log_id,
+                    trace_id=candidate,
                 )
             if existing["status"] in TERMINAL:
                 return None
@@ -103,6 +109,7 @@ class InMemoryStore:
                     attempt_no=existing["attempt_no"],
                     lease_until=existing["lease_until"],
                     log_id=existing["id"],
+                    trace_id=str(existing["trace_id"]),
                     status="RUNNING",
                 )
             return None

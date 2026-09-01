@@ -15,6 +15,13 @@ Usage:
 """
 
 from watch_engine.emitter import emit_event  # noqa: F401
-from watch_engine.trace import create_trace, TraceContext  # noqa: F401
+from watch_engine.trace import (  # noqa: F401
+    TraceContext,
+    clear_trace,
+    create_trace,
+    generate_trace_id,
+    get_current_trace,
+    trace_scope,
+)
 
 __version__ = "1.1.0"

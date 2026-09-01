@@ -8,6 +8,7 @@ from typing import Any
 from services.scheduler.cron_grammar import next_fire_after, next_fire_at_or_after
 from services.scheduler.store import Claim, InMemoryStore, JobRow, TERMINAL
 from services.time import serialize_business_datetime
+from watch_engine.trace import generate_trace_id
 
 logger = logging.getLogger(__name__)
 
@@ -127,12 +128,14 @@ class DbStore(InMemoryStore):
         scheduled_for = job.next_run_at
         if scheduled_for is None:
             return None
+        candidate = generate_trace_id("cron_job")
         try:
             res = self._client().rpc("tai_scheduler_claim_occurrence", {
                 "p_job_code": job.job_code,
                 "p_scheduled_for": serialize_business_datetime(scheduled_for),
                 "p_now": serialize_business_datetime(now),
                 "p_lease": f"{int(lease.total_seconds())} seconds",
+                "p_trace_id": candidate,
             }).execute()
         except Exception as e:
             logger.error("[SCHED] claim RPC failed job=%s: %s", job.job_code, e)
@@ -143,6 +146,7 @@ class DbStore(InMemoryStore):
         log_id = row.get("log_id") or row.get("id")
         if log_id is None:
             return None
+        persisted = row.get("trace_id")
         return Claim(
             job_code=job.job_code,
             scheduled_for=scheduled_for,
@@ -150,6 +154,7 @@ class DbStore(InMemoryStore):
             attempt_no=int(row.get("attempt_no") or 1),
             lease_until=now + lease,
             log_id=str(log_id),
+            trace_id=str(persisted) if persisted else "",
         )
 
     def complete(self, claim: Claim, status: str, detail: Any, now: datetime) -> None:
