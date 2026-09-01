@@ -158,7 +158,7 @@ def assemble_construction_marketing_contract(supabase, site_id: str) -> Dict[str
         if ok:
             _resolve("subcontractor", rows_out, "COMPOSITE", "subcontractors")
         else:
-            _unresolved("subcontractor", "subcontractors(work_type 결측 active row)")
+            _unresolved("subcontractor", "subcontractors(required field 결측 active row)")
 
     # ── construction_works (active) — hazard 원천 + C5 집계 ──
     work_res = (
