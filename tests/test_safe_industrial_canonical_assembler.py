@@ -96,7 +96,7 @@ def test_A7_building_qual_no_legal_guess():
 
 # ---- material ----
 def test_A7_material_active_rename_and_handling_preserve():
-    sb=_sb(factory_materials=[{"factory_id":"F1","is_active":True,"material_name":"톨루에","material_category_code":"FL","handling_mode_codes":[]}])
+    sb=_sb(factory_materials=[{"factory_id":"F1","is_active":True,"material_name":"톨루엔","material_category_code":"FL","handling_mode_codes":[]}])
     r=assemble_industrial_marketing_contract(sb, "F1")
     mp=r["values"]["material_profile"]
     assert mp==[{"material_category":"FL","handling_modes":[]}]  # material_name leak 0
@@ -162,3 +162,45 @@ def test_A7_no_db_write():
 def test_A7_no_diagnosis_input_fields_query():
     src=open("services/safe_industrial_canonical_assembler.py").read()
     assert '.table("diagnosis_input_fields")' not in src
+
+
+# ── STEP7-PATCH-1: building_qualifications / regulated_facility_types 항상 UNRESOLVED ──
+BC=[{"category":"factory_building_composition","code":"MIX","code_name":"도시형생활주택·타주택 복합","is_active":True}]
+RD=[{"category":"factory_regulatory_designation","code":"SOIL","code_name":"특정토양오염관리대상시설","is_active":True}]
+def test_A7P1_building_qual_valid_code_still_unresolved():
+    sb=_sb({"building_composition_codes":["MIX"]}, system_codes=BC)
+    r=assemble_industrial_marketing_contract(sb, "F1")
+    assert r["values"]["building_qualifications"] is None
+    assert "building_qualifications" in r["unresolved_fields"]
+    assert r["provenance"]["building_qualifications"]["mode"]=="UNRESOLVED"
+def test_A7P1_building_qual_empty_unresolved():
+    sb=_sb({"building_composition_codes":[]})
+    r=assemble_industrial_marketing_contract(sb, "F1")
+    assert r["values"]["building_qualifications"] is None and "building_qualifications" in r["unresolved_fields"]
+def test_A7P1_building_qual_null_unresolved():
+    r=assemble_industrial_marketing_contract(_sb({"building_composition_codes":None}), "F1")
+    assert r["values"]["building_qualifications"] is None and "building_qualifications" in r["unresolved_fields"]
+def test_A7P1_regulated_valid_code_still_unresolved():
+    sb=_sb({"regulatory_designation_codes":["SOIL"]}, system_codes=RD)
+    r=assemble_industrial_marketing_contract(sb, "F1")
+    assert r["values"]["regulated_facility_types"] is None
+    assert "regulated_facility_types" in r["unresolved_fields"]
+    assert r["provenance"]["regulated_facility_types"]["mode"]=="UNRESOLVED"
+def test_A7P1_regulated_empty_unresolved():
+    sb=_sb({"regulatory_designation_codes":[]})
+    r=assemble_industrial_marketing_contract(sb, "F1")
+    assert r["values"]["regulated_facility_types"] is None and "regulated_facility_types" in r["unresolved_fields"]
+def test_A7P1_no_partial_direct_label_output():
+    sb=_sb({"building_composition_codes":["MIX"],"regulatory_designation_codes":["SOIL"]}, system_codes=BC+RD)
+    r=assemble_industrial_marketing_contract(sb, "F1")
+    assert r["values"]["building_qualifications"] is None and r["values"]["regulated_facility_types"] is None
+def test_A7P1_business_hazard_regression_unchanged():
+    sb=_sb({"business_activity_types":["REMODEL_OPERATION"],"hazardous_work_environments":["INDOOR_HIGH_HEAT"]}, system_codes=SC)
+    r=assemble_industrial_marketing_contract(sb, "F1")
+    assert r["values"]["business_activity_types"]==["리모델링 수행"]
+    assert r["values"]["hazardous_work_environments"]==["고열작업(실내)"]
+def test_A7P1_denominator_and_no_write():
+    sb=_sb({"building_composition_codes":["MIX"]}, system_codes=BC)
+    r=assemble_industrial_marketing_contract(sb, "F1")
+    assert len(r["values"])==29 and list(r["values"].keys())==TARGET_FIELDS
+    assert sb.counters["writes"]==0
