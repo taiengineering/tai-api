@@ -1,6 +1,7 @@
 """services/safe_industrial_canonical_assembler.py
 
 WO-SAFE-LEGAL-IND-CANONICAL-IMPLEMENT-001 / STEP7 — INDUSTRIAL canonical → Marketing 29 assembler.
+STEP7-PATCH-1: building_qualifications / regulated_facility_types 는 항상 UNRESOLVED(부분-direct false completeness 제거).
 
 실제 SaaS 자산(factories / factory_process / equipment_assets / factory_materials)을 READ-ONLY 로 읽어
 Marketing INDUSTRIAL 계약(MKT_IND_PAID_CONTRACT_V1, 29 target)으로 조립한다. 저장모델/진단엔진 미접촉.
@@ -8,8 +9,9 @@ Marketing INDUSTRIAL 계약(MKT_IND_PAID_CONTRACT_V1, 29 target)으로 조립한
 원칙:
   - source NULL → output NULL. NULL→false/0/[] 승격 금지. 추정/현재연도/LLM/fuzzy 금지(no-invention).
   - false/0/[] 는 보존(truthy filter 금지).
-  - vocabulary(business_activity/hazardous_environment/building_composition/regulatory_designation)는
-    system_codes code → code_name EXACT 변환. unknown code 하나라도 있으면 그 field = NULL + unresolved.
+  - vocabulary(business_activity/hazardous_environment)는 system_codes code → code_name EXACT 변환.
+    unknown code 하나라도 있으면 그 field = NULL + unresolved.
+  - building_qualifications / regulated_facility_types = 항상 UNRESOLVED(법적/물리 파생 미완성; 부분값 반환 금지).
   - 법적 판단(의무관리대상 공동주택 / 안전성평가 대상시설 등) 신규 로직 작성 금지 → 미해결 시 NULL + unresolved.
   - is_hazardous_material/sewage 단순 가정으로 규제시설 자동출력 금지.
   - table/row 중 하나라도 정확히 표현 불가하면 해당 table field 전체 = NULL + unresolved(조용히 버리지 않음).
@@ -64,12 +66,16 @@ _TRANSFORM_RENAMES = {
     "electric_capacity",
 }
 
+# SAFE DIRECT VOCAB — 완전한 direct domain(code[] → code_name[] EXACT).
 VOCAB_ARRAY_MAP = {  # target -> (factories column, system_codes category)
     "business_activity_types": ("business_activity_types", "factory_business_activity"),
     "hazardous_work_environments": ("hazardous_work_environments", "factory_hazardous_environment"),
-    "building_qualifications": ("building_composition_codes", "factory_building_composition"),
-    "regulated_facility_types": ("regulatory_designation_codes", "factory_regulatory_designation"),
 }
+
+# INCOMPLETE COMPOSITE — direct canonical fact만으로 Marketing field 전체 의미 확정 불가.
+# (building_qualifications: 의무관리대상 등 LEGAL DERIVED 미연결 / regulated_facility_types: physical+legal+composite derive 미완성)
+# STEP7 에서는 항상 UNRESOLVED(부분-direct 배열을 완성값으로 반환 금지). 원천 factories 값은 보존.
+INCOMPLETE_COMPOSITE_FIELDS = ("building_qualifications", "regulated_facility_types")
 
 
 def _rows(res) -> List[dict]:
@@ -126,7 +132,7 @@ def assemble_industrial_marketing_contract(supabase, factory_id: str) -> Dict[st
     else:
         _unresolved("main_structure", "factories.building_structure_code(정규화 매핑 미확정)")
 
-    # ── vocabulary arrays (code[] → code_name[]) ──
+    # ── SAFE DIRECT VOCAB arrays (code[] → code_name[]) ──
     for field, (col, category) in VOCAB_ARRAY_MAP.items():
         raw = fac.get(col)
         if raw is None:
@@ -149,12 +155,14 @@ def assemble_industrial_marketing_contract(supabase, factory_id: str) -> Dict[st
         else:
             _unresolved(field, f"factories.{col}->{category}(unknown code)")
 
-    # building_qualifications / regulated_facility_types 는 위에서 direct code 매핑만 수행.
-    # 법적 파생(의무관리대상/안전성평가) 및 physical-derive 는 STEP7 에서 신규 작성 금지 →
-    # 매핑 성공해도 "composite 완전성"이 별도 승인 로직 없이는 보장되지 않으므로 provenance mode 를 COMPOSITE 로 표기.
-    for f in ("building_qualifications", "regulated_facility_types"):
-        if provenance.get(f, {}).get("mode") == "TRANSFORM":
-            provenance[f]["mode"] = "COMPOSITE"
+    # ── STEP7-PATCH-1: INCOMPLETE COMPOSITE — 항상 UNRESOLVED ──
+    # direct canonical fact 만으로 Marketing field 전체 의미 확정 불가 → source(NULL/[]/valid code) 무관 UNRESOLVED.
+    # 부분-direct 배열을 완성값으로 반환하지 않는다(false completeness 방지). 원천 값은 factories 에 보존.
+    for f in INCOMPLETE_COMPOSITE_FIELDS:
+        _unresolved(f, {
+            "building_qualifications": "factories.building_composition_codes(+법적 파생 미연결)",
+            "regulated_facility_types": "factories.regulatory_designation_codes(+physical/legal derive 미완성)",
+        }[f])
 
     # ── material_profile (factory_materials active) ──
     mat_res = (
