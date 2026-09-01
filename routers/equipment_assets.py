@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, StrictStr, AfterValidator
+from typing import Optional, List, Annotated
 from datetime import date, datetime, timezone
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
@@ -10,9 +10,13 @@ from services.time import business_today, now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/equipment-assets", tags=["equipment_assets"])
 
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 """
-equipment_assets.py v1.7.0
+equipment_assets.py v1.8.0
+v1.8.0: (WO-SAFE-LEGAL-IND-CANONICAL-IMPLEMENT-001 STEP5) 설비 canonical 확장.
+  - usage_types / relation_types 실제 설비 속성 2개 결선(strict array; PATCH explicit-null clear).
+  - 기존 auth/ownership(_ensure_asset_own→factory→company) 재사용. factory_process_id / identity 불변.
+  - Marketing diagnosis_input_fields 를 validation SoT 로 쓰지 않음(shape/type 만 보호). legal_ namespace/route 미생성.
 v1.7.0: GET 목록(get_assets) size 상한 100→1000 (LEDGER §31)
   - 「내 설비」 통계 4카드(전체·점검필요·30일이내·정상)는 목록 전체를 클라이언트가 집계하므로
     화면이 size=1000 을 보낸다. le=100 이라 422 → ①(res.ok 미검사)로 빈 배열 → 4카드 전부 0.
@@ -35,6 +39,26 @@ v1.1.0: INSTALL 이벤트 트리거
   목록/단건/변경은 자사 시설 스코프, /overview(전사 집계 뷰)는 ALL 전용,
   /model/search(마스터 카탈로그)는 로그인만.
 """
+
+
+# ── WO-CANONICAL STEP5: 설비 canonical 실제 속성 2개 전용 strict 경계 ──
+#   usage_types / relation_types. None=미확인 / []=명시적 없음 / string[]=실제값.
+#   Marketing diagnosis_input_fields 를 validation SoT 로 쓰지 않는다(shape/type 만 보호).
+
+def _eq_str_list(v):
+    if v is None:
+        return v
+    if not isinstance(v, list):
+        raise ValueError("배열이어야 합니다")
+    for x in v:
+        if x.strip() == "":
+            raise ValueError("빈/공백 문자열 항목은 허용되지 않습니다")
+    return v
+
+
+EqStrList = Annotated[List[StrictStr], AfterValidator(_eq_str_list)]
+
+EQUIPMENT_CANONICAL_NULL_CLEAR_FIELDS = {"usage_types", "relation_types"}
 
 
 def _own_factory_ids(sb, current):
@@ -76,6 +100,9 @@ class EquipmentAssetCreate(BaseModel):
     area_id:              Optional[str] = None
     ksic_code:            Optional[str] = None
     operation_status:     Optional[str] = "ACTIVE"  # ACTIVE|BROKEN|INACTIVE
+    # WO-CANONICAL STEP5: 설비 canonical 실제 속성 2개(strict; default None)
+    usage_types:          Optional[EqStrList] = None
+    relation_types:       Optional[EqStrList] = None
 
 
 class EquipmentAssetUpdate(BaseModel):
@@ -96,6 +123,9 @@ class EquipmentAssetUpdate(BaseModel):
     last_inspection_date: Optional[str] = None
     next_inspection_date: Optional[str] = None
     operation_status:     Optional[str] = None  # ★ v1.5.0 추가: ACTIVE|BROKEN|INACTIVE
+    # WO-CANONICAL STEP5: 설비 canonical 실제 속성 2개(strict; explicit-null clear)
+    usage_types:          Optional[EqStrList] = None
+    relation_types:       Optional[EqStrList] = None
 
 
 # ── 목록 조회 ─────────────────────────────────────────────
@@ -116,7 +146,7 @@ def get_assets(
         "install_year, manufacturer, equipment_model_id, "
         "last_inspection_date, next_inspection_date, "
         "is_legal_target, is_operating, operation_status, "
-        "location_detail, created_at",
+        "location_detail, created_at, usage_types, relation_types",
         count="exact"
     )
     if factory_id:
@@ -329,6 +359,8 @@ async def create_asset(body: EquipmentAssetCreate, current: dict = Depends(get_c
         "equipment_model_id": body.equipment_model_id,
         "area_id":          body.area_id,
         "ksic_code":        body.ksic_code,
+        "usage_types":      body.usage_types,       # STEP5: omitted(None)→drop / []→보존
+        "relation_types":   body.relation_types,
     }
     insert_data = {k: v for k, v in insert_data.items() if v is not None}
     res = supabase.table("equipment_assets").insert(insert_data).execute()
@@ -377,10 +409,13 @@ def increment_qr_print(asset_id: str, current: dict = Depends(get_current_user))
 def update_asset(asset_id: str, body: EquipmentAssetUpdate, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     _ensure_asset_own(supabase, asset_id, current)
+    provided = body.dict(exclude_unset=True)
     update_data = {}
-    for k, v in body.dict().items():
-        # None은 제외하되, is_legal_target/is_operating 같은 bool은 False도 포함
-        if v is not None:
+    for k, v in provided.items():
+        # STEP5: canonical 2-field 는 explicit-null clear([] 보존); 기존 field 는 None skip
+        if k in EQUIPMENT_CANONICAL_NULL_CLEAR_FIELDS:
+            update_data[k] = v
+        elif v is not None:
             update_data[k] = v
     if not update_data:
         raise HTTPException(status_code=422, detail="수정할 내용이 없습니다.")
