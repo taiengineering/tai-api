@@ -11,6 +11,8 @@ persistence 만 담당(assembler / input-preview / run-leg / process·equipment 
 STEP3-PATCH-1: factory existence gate 추가. 기존 _ensure_factory_own 은 ALL 관리자면 즉시 return 하므로
 존재하지 않는 factory 를 관리자에게 404 로 막지 못한다. 아래 좁은 helper 가 존재확인(없으면 404)을
 선행한 뒤 기존 ownership helper 를 호출한다. services/company_scope 는 미수정(공통 foundation 보호).
+
+R2 STEP3: PUT 은 body.dict(exclude_unset=True) 로 sparse partial-merge(omitted 보존/explicit NULL clear). 나머지 무변.
 """
 from fastapi import APIRouter, Depends, HTTPException
 from db.supabase_client import get_supabase
@@ -59,13 +61,13 @@ def put_legal_diagnosis_profile(
     body: LegalDiagnosisProfileBody,
     current: dict = Depends(get_current_user),
 ):
-    """facility supplemental profile idempotent upsert.
+    """facility supplemental profile sparse partial-merge upsert.
     순서: auth → existence → ownership → vocabulary → validate → upsert.
     타사/없는 factory 는 vocabulary/profile 을 읽기 전에 차단. contract_version 은 server 고정."""
     supabase = get_supabase()
     _ensure_profile_factory_access(supabase, factory_id, current)
     vocab = _fldp_vocab(supabase)
-    cleaned = _fldp_validate(body.dict(), vocab)
+    cleaned = _fldp_validate(body.dict(exclude_unset=True), vocab)  # R2: sparse partial-merge (omitted 보존/explicit NULL clear)
     return {
         "status": "success",
         "message": "법령진단 추가정보가 저장됐습니다",

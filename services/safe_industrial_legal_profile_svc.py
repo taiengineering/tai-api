@@ -1,32 +1,31 @@
 """services/safe_industrial_legal_profile_svc.py
 
-WO-SAFE-LEGAL-IND-IMPLEMENT-001 / STEP 3 — facility-level supplemental persistence.
+WO-SAFE-LEGAL-IND-IMPLEMENT-001-R2 / STEP 3 — facility-level supplemental persistence (R2 contract).
 
-Marketing INDUSTRIAL paid contract(29) 중 Safe 기본 factories model 에 없는
-facility-level supplemental 12개를 factory_legal_diagnosis_profile 에 저장/조회한다.
+R2 corrections vs R1:
+- total_floor_area REMOVED from profile (정본 = factories.building_area; assembler TRANSFORM. 중복 SoT 금지).
+- building_use_type_override / main_structure_override ADDED (string|NULL only; vocabulary 검증은 후속 단계).
+- PROFILE FIELD SET = 13 (ADD7 + GAP/normalized6).
+- sparse partial-merge: router 가 body.dict(exclude_unset=True) 를 넘김 → provided-only keys 만 처리.
+    omitted field = 기존 값 보존 / explicit NULL = NULL 로 clear (upsert_profile 이 existing 읽어 merge).
+- unknown field(총 total_floor_area 포함) → pydantic extra='forbid' 로 422.
 
-이 STEP 은 persistence 만 담당한다. 29-field assembler / process_list / equipment_list /
-input-preview / run-leg 는 후속 STEP. 여기서 process/equipment supplemental 도 다루지 않는다.
-
-원칙:
-- NULL=미확인 / []=명시적 없음 / false=명시적 아니오 / 0=실제 숫자 0 을 절대 병합하지 않는다(truthy filter 금지).
-- server-managed field(id/factory_id/contract_version/created_at/updated_at)는 client 가 덮어쓸 수 없다.
-- vocabulary 검증 SoT = current active Marketing INDUSTRIAL diagnosis_input_fields (하드카피 금지).
-- 추정/파생/자동 mutate 금지(예: has_*=false 라고 짝 numeric 을 0 으로 강제하지 않는다).
+불변 원칙: NULL(미확인) / [](명시적 없음) / false / 0 을 절대 병합/삭제하지 않는다(truthy filter 금지).
+server-managed(id/factory_id/contract_version/created_at/updated_at)는 client 가 못 덮어쓴다. company_id 미저장.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictStr
 
 from services.time import now_kst, serialize_business_datetime
 
 
 class LegalDiagnosisProfileBody(BaseModel):
-    """PUT body — 정확히 facility supplemental 12개만. 추가 key(company_id/contract_version/
-    factory_id/created_at/updated_at 등)는 extra=forbid 로 422 거부(WO §6/§17)."""
+    """PUT body — 정확히 facility supplemental 13개만. 추가 key(total_floor_area/company_id/contract_version/
+    factory_id/created_at/updated_at 등)는 extra=forbid 로 422 거부(R2 §7). overrides 는 StrictStr(문자열만)."""
     work_height_m: Optional[float] = None
     has_truck_loading_unloading: Optional[bool] = None
     truck_loading_height_m: Optional[float] = None
@@ -35,18 +34,19 @@ class LegalDiagnosisProfileBody(BaseModel):
     business_activity_types: Optional[List[str]] = None
     hazardous_work_environments: Optional[List[str]] = None
     ksic_list: Optional[List[str]] = None
-    total_floor_area: Optional[float] = None
     material_profile: Optional[List[Dict[str, Any]]] = None
     building_qualifications: Optional[List[str]] = None
     regulated_facility_types: Optional[List[str]] = None
+    building_use_type_override: Optional[StrictStr] = None
+    main_structure_override: Optional[StrictStr] = None
 
     class Config:
         extra = "forbid"
 
-# ── contract (server-fixed single SoT) ─────────────────────────────────
+# ── contract (server-fixed single SoT) ──────────────────
 CONTRACT_VERSION = "MKT_IND_PAID_CONTRACT_V1"
 
-# facility supplemental allowlist — 정확히 12개 (WO §6)
+# facility supplemental allowlist — 정확히 13개 (R2: ADD7 + GAP/normalized6; total_floor_area 제거)
 FACILITY_SUPPLEMENTAL_FIELDS = (
     "work_height_m",
     "has_truck_loading_unloading",
@@ -56,19 +56,19 @@ FACILITY_SUPPLEMENTAL_FIELDS = (
     "business_activity_types",
     "hazardous_work_environments",
     "ksic_list",
-    "total_floor_area",
     "material_profile",
     "building_qualifications",
     "regulated_facility_types",
+    "building_use_type_override",
+    "main_structure_override",
 )
 
-NUMERIC_FIELDS = ("work_height_m", "truck_loading_height_m", "manual_handling_weight_kg", "total_floor_area")
+NUMERIC_FIELDS = ("work_height_m", "truck_loading_height_m", "manual_handling_weight_kg")  # total_floor_area 제거
 BOOLEAN_FIELDS = ("has_truck_loading_unloading", "has_manual_heavy_handling")
-# diagnosis_input_fields.field_code 로 vocabulary 를 로드하는 multi_select 축
 VOCAB_ARRAY_FIELDS = ("business_activity_types", "hazardous_work_environments",
                       "building_qualifications", "regulated_facility_types")
+OVERRIDE_FIELDS = ("building_use_type_override", "main_structure_override")  # string|NULL only
 
-# server/DB 만 결정 — client body 에 오면 거부(라우터 pydantic extra=forbid) + row 조립에서 미반영
 SERVER_MANAGED_FIELDS = ("id", "factory_id", "contract_version", "created_at", "updated_at")
 
 
@@ -86,11 +86,7 @@ def _opt_value(o: Any) -> Optional[str]:
 
 
 def load_marketing_vocab(supabase) -> Dict[str, set]:
-    """current active INDUSTRIAL diagnosis_input_fields 에서 허용 vocabulary set 로드.
-
-    반환 key: 4개 multi_select field_code + 'material_category' + 'material_handling_modes'.
-    로드 실패는 호출부에서 fail-closed 처리(검증 불가 시 저장 거부).
-    """
+    """current active INDUSTRIAL diagnosis_input_fields 에서 허용 vocabulary set 로드(하드코딩 금지)."""
     res = (
         supabase.table("diagnosis_input_fields")
         .select("field_code, field_type, input_options")
@@ -117,23 +113,25 @@ def load_marketing_vocab(supabase) -> Dict[str, set]:
     return vocab
 
 
-# ── validation (pure; vocab injected) ──────────────────────────────
+# ── validation (pure; sparse provided-only; vocab injected) ──────────────
 def _reject(msg: str, code: int = 422):
     raise HTTPException(status_code=code, detail=msg)
 
 
 def validate_profile(body: Dict[str, Any], vocab: Dict[str, set]) -> Dict[str, Any]:
-    """body(dict) → cleaned dict(정확히 12 key). 값은 verbatim(변형/추정 없음).
+    """body(provided-only dict) → cleaned(provided-only, 동일 key). 값 verbatim.
 
-    None/[]/False/0 은 각각 보존한다. 잘못된 값만 422. truthy filter 금지.
+    sparse: body 에 없는 key 는 cleaned 에도 없음(omitted). 있는 key 만 검증(explicit NULL 포함).
+    None/[]/False/0 각각 보존. 잘못된 값만 422. omitted key 를 None 으로 만들지 않는다.
     """
     if not isinstance(body, dict):
         _reject("본문(dict) 형식이 아닙니다")
 
-    cleaned: Dict[str, Any] = {f: body.get(f) for f in FACILITY_SUPPLEMENTAL_FIELDS}
+    cleaned: Dict[str, Any] = {f: body[f] for f in FACILITY_SUPPLEMENTAL_FIELDS if f in body}
 
-    # numeric: None 허용, 0 허용, 음수 거부, bool 은 numeric 아님
     for f in NUMERIC_FIELDS:
+        if f not in cleaned:
+            continue
         v = cleaned[f]
         if v is None:
             continue
@@ -142,63 +140,74 @@ def validate_profile(body: Dict[str, Any], vocab: Dict[str, set]) -> Dict[str, A
         if v < 0:
             _reject(f"'{f}' 값은 0 이상이어야 합니다")
 
-    # boolean: None 허용, bool 만
     for f in BOOLEAN_FIELDS:
+        if f not in cleaned:
+            continue
         v = cleaned[f]
         if v is None:
             continue
         if not isinstance(v, bool):
             _reject(f"'{f}' 값이 boolean 이 아닙니다")
 
-    # vocab arrays: None 허용, [] 허용, 원소는 Marketing vocabulary subset
     for f in VOCAB_ARRAY_FIELDS:
+        if f not in cleaned:
+            continue
         v = cleaned[f]
         if v is None:
             continue
         if not isinstance(v, list):
             _reject(f"'{f}' 값이 배열이 아닙니다")
-        allowed = vocab.get(f) or set()
-        bad = [x for x in v if x not in allowed]
+        bad = [x for x in v if x not in (vocab.get(f) or set())]
         if bad:
             _reject(f"'{f}' 에 허용되지 않은 값: {bad}")
 
-    # ksic_list: None 허용, [] 허용, 문자열 배열(STEP3 는 vocab merge 하지 않음)
-    kv = cleaned["ksic_list"]
-    if kv is not None:
-        if not isinstance(kv, list) or any(not isinstance(x, str) for x in kv):
-            _reject("'ksic_list' 는 문자열 배열이어야 합니다")
+    if "ksic_list" in cleaned:
+        kv = cleaned["ksic_list"]
+        if kv is not None:
+            if not isinstance(kv, list) or any(not isinstance(x, str) for x in kv):
+                _reject("'ksic_list' 는 문자열 배열이어야 합니다")
 
-    # material_profile: None 허용, [] 허용, row exact keys ⊆ {material_category, handling_modes}
-    mp = cleaned["material_profile"]
-    if mp is not None:
-        if not isinstance(mp, list):
-            _reject("'material_profile' 는 배열이어야 합니다")
-        for row in mp:
-            if not isinstance(row, dict):
-                _reject("'material_profile' 원소는 object 여야 합니다")
-            extra = set(row.keys()) - {"material_category", "handling_modes"}
-            if extra:
-                _reject(f"'material_profile' 허용되지 않은 key: {sorted(extra)}")
-            mc = row.get("material_category")
-            if mc is None or mc not in (vocab.get("material_category") or set()):
-                _reject(f"'material_profile.material_category' 허용되지 않은 값: {mc!r}")
-            hm = row.get("handling_modes")
-            if hm is not None:
-                if not isinstance(hm, list):
-                    _reject("'material_profile.handling_modes' 는 배열이어야 합니다")
-                badm = [x for x in hm if x not in (vocab.get("material_handling_modes") or set())]
-                if badm:
-                    _reject(f"'material_profile.handling_modes' 허용되지 않은 값: {badm}")
+    if "material_profile" in cleaned:
+        mp = cleaned["material_profile"]
+        if mp is not None:
+            if not isinstance(mp, list):
+                _reject("'material_profile' 는 배열이어야 합니다")
+            for row in mp:
+                if not isinstance(row, dict):
+                    _reject("'material_profile' 원소는 object 여야 합니다")
+                extra = set(row.keys()) - {"material_category", "handling_modes"}
+                if extra:
+                    _reject(f"'material_profile' 허용되지 않은 key: {sorted(extra)}")
+                mc = row.get("material_category")
+                if mc is None or mc not in (vocab.get("material_category") or set()):
+                    _reject(f"'material_profile.material_category' 허용되지 않은 값: {mc!r}")
+                hm = row.get("handling_modes")
+                if hm is not None:
+                    if not isinstance(hm, list):
+                        _reject("'material_profile.handling_modes' 는 배열이어야 합니다")
+                    badm = [x for x in hm if x not in (vocab.get("material_handling_modes") or set())]
+                    if badm:
+                        _reject(f"'material_profile.handling_modes' 허용되지 않은 값: {badm}")
+
+    # overrides: string|NULL only (vocabulary 검증은 후속 단계; bool 은 str 아님 → 거부)
+    for f in OVERRIDE_FIELDS:
+        if f not in cleaned:
+            continue
+        v = cleaned[f]
+        if v is None:
+            continue
+        if not isinstance(v, str):
+            _reject(f"'{f}' 값은 문자열이어야 합니다")
 
     return cleaned
 
 
-# ── row build / representations (pure) ────────────────────────────
-def build_upsert_row(factory_id: str, cleaned: Dict[str, Any]) -> Dict[str, Any]:
-    """DB upsert row. server-managed field 강제(client 값 무시), 12 field verbatim."""
+# ── row build / representations (pure) ───────────────────
+def build_upsert_row(factory_id: str, effective: Dict[str, Any]) -> Dict[str, Any]:
+    """DB upsert row(full 13-field effective state). server-managed 강제, company_id 미포함."""
     row: Dict[str, Any] = {"factory_id": factory_id, "contract_version": CONTRACT_VERSION}
     for f in FACILITY_SUPPLEMENTAL_FIELDS:
-        row[f] = cleaned.get(f)  # None/[]/False/0 그대로
+        row[f] = effective.get(f)  # None/[]/False/0 그대로
     row["updated_at"] = _now_iso()
     return row
 
@@ -227,9 +236,9 @@ def to_response(factory_id: str, row: Dict[str, Any]) -> Dict[str, Any]:
     return d
 
 
-# ── DB thin wrappers ───────────────────────────────────────
+# ── DB thin wrappers ──────────────────────
 def get_profile(supabase, factory_id: str) -> Dict[str, Any]:
-    """profile 조회. 없으면 empty representation(=DB mutation 0)."""
+    """profile 조회. 없으면 empty representation(=DB mutation 0). total_floor_area ABSENT."""
     res = (
         supabase.table("factory_legal_diagnosis_profile")
         .select("*")
@@ -244,12 +253,33 @@ def get_profile(supabase, factory_id: str) -> Dict[str, Any]:
 
 
 def upsert_profile(supabase, factory_id: str, cleaned: Dict[str, Any]) -> Dict[str, Any]:
-    """1 factory : 1 profile upsert(factory_id UNIQUE). 반복 PUT = row 증가 0."""
-    row = build_upsert_row(factory_id, cleaned)
+    """sparse partial-merge upsert (R2 §4).
+
+    existing 13-field state 를 읽어 provided cleaned 로 overlay → full deterministic upsert.
+    omitted key = 기존 보존 / explicit NULL(cleaned 에 None) = NULL clear. truthy merge 금지.
+    factory_id UNIQUE → 반복 PUT row 증가 0.
+    """
     res = (
+        supabase.table("factory_legal_diagnosis_profile")
+        .select("*")
+        .eq("factory_id", factory_id)
+        .limit(1)
+        .execute()
+    )
+    rows = getattr(res, "data", None) or []
+    existing = rows[0] if rows else None
+
+    effective: Dict[str, Any] = {
+        f: (existing.get(f) if existing else None) for f in FACILITY_SUPPLEMENTAL_FIELDS
+    }
+    for f, value in cleaned.items():   # provided-only overlay (explicit None 포함)
+        effective[f] = value
+
+    row = build_upsert_row(factory_id, effective)
+    saved_res = (
         supabase.table("factory_legal_diagnosis_profile")
         .upsert(row, on_conflict="factory_id")
         .execute()
     )
-    saved = (getattr(res, "data", None) or [row])[0]
+    saved = (getattr(saved_res, "data", None) or [row])[0]
     return to_response(factory_id, saved)
