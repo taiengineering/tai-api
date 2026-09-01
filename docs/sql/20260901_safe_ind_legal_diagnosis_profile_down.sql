@@ -1,5 +1,8 @@
--- WO-SAFE-LEGAL-IND-IMPLEMENT-001-R1 / STEP 2A — SAFE INDUSTRIAL Marketing-Contract Adapter (DOWN)
--- Reverses the UP migration. Idempotent. APPLY POLICY: artifact only. DB APPLY = BLOCKED until GPT PASS-A.
+-- WO-SAFE-LEGAL-IND-IMPLEMENT-001-R1 / STEP2-PATCH-1 — SAFE INDUSTRIAL Marketing-Contract Adapter (DOWN)
+-- Reverses the UP migration. Idempotent (repeat-safe). APPLY POLICY: artifact only. DB APPLY = BLOCKED.
+--
+-- P2: table DROP removes its own trigger/policies/constraints/indexes — no per-object DROP on a
+--     possibly-missing table (missing-table safe). Helper functions dropped after the table.
 
 BEGIN;
 
@@ -16,11 +19,11 @@ ALTER TABLE public.factory_process
     DROP COLUMN IF EXISTS legal_worker_count,
     DROP COLUMN IF EXISTS legal_activity_types;
 
--- 1) factory_legal_diagnosis_profile (table drop removes columns/constraints/indexes/trigger/policies)
-DROP TRIGGER IF EXISTS trg_fldp_touch_updated_at ON public.factory_legal_diagnosis_profile;
-DROP POLICY IF EXISTS p_fldp_authenticated_company ON public.factory_legal_diagnosis_profile;
-DROP POLICY IF EXISTS p_fldp_service_all ON public.factory_legal_diagnosis_profile;
+-- 1) factory_legal_diagnosis_profile: table drop cascades trigger/policies/constraints/indexes.
 DROP TABLE IF EXISTS public.factory_legal_diagnosis_profile;
+
+-- helper functions (dropped after the table that referenced them)
 DROP FUNCTION IF EXISTS public.fn_fldp_touch_updated_at();
+DROP FUNCTION IF EXISTS public.fn_fldp_material_profile_shape_ok(jsonb);
 
 COMMIT;
