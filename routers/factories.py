@@ -20,13 +20,68 @@ v2.0.0: 담당자 관리 API 추가
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, StrictBool, StrictInt, StrictFloat, StrictStr, AfterValidator
+from typing import Optional, List, Union, Annotated
 from datetime import datetime, date
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_factory_own, _forced_company_id, _is_admin, _scope
 from services.time import business_today, now_kst, serialize_business_datetime
+
+# ============================================================
+# WO-SAFE-LEGAL-IND-CANONICAL-IMPLEMENT-001 STEP3A
+#   신규 canonical field 전용 strict 경계 (기존 필드 coercion 정책 불변).
+#   None=미확인 / false=명시적 아니오 / 0=실제 zero / []=명시적 없음.
+# ============================================================
+
+def _canon_nonneg(v):
+    if v is not None and v < 0:
+        raise ValueError("0 이상이어야 합니다")
+    return v
+
+
+def _canon_str_list(v):
+    if v is None:
+        return v
+    if not isinstance(v, list):
+        raise ValueError("배열이어야 합니다")
+    for x in v:
+        if x.strip() == "":
+            raise ValueError("빈/공백 문자열 항목은 허용되지 않습니다")
+    return v
+
+
+# int/float 허용, bool·문자열·coercion 거부(Strict). 음수 거부.
+CanonNum = Annotated[Union[StrictInt, StrictFloat], AfterValidator(_canon_nonneg)]
+# 항목 string only(StrictStr), 빈/공백 금지. NULL/[]/비어있지 않은 문자열 배열 허용.
+CanonStrList = Annotated[List[StrictStr], AfterValidator(_canon_str_list)]
+
+# PATCH 에서 explicit-null clear 를 허용하는 canonical nullable field (정확히 7개).
+CANONICAL_NULL_CLEAR_FIELDS = {
+    "work_height_m",
+    "has_truck_loading_unloading",
+    "truck_loading_height_m",
+    "has_manual_heavy_handling",
+    "manual_handling_weight_kg",
+    "business_activity_types",
+    "hazardous_work_environments",
+}
+
+
+def _build_factory_update(provided: dict) -> dict:
+    """sparse partial-merge (STEP3A).
+
+    canonical nullable field = provided 에 있으면 그대로(None/false/0/[] 포함) 반영(explicit-null clear).
+    기존 legacy field = 기존 semantics 유지(None 은 skip, 즉 clear 불가).
+    """
+    update_data: dict = {}
+    for k, v in provided.items():
+        if k in CANONICAL_NULL_CLEAR_FIELDS:
+            update_data[k] = v
+        elif v is not None:
+            update_data[k] = v
+    return update_data
+
 
 router = APIRouter(prefix="/factories", tags=["factories"])
 
@@ -97,6 +152,17 @@ class FactoryCreate(BaseModel):
     has_asbestos_demo:       Optional[bool] = None
     has_blasting:            Optional[bool] = None
     has_diving:              Optional[bool] = None
+    # WO-CANONICAL STEP3A: 작업형태/작업환경 canonical (strict; default None)
+    work_height_m:               Optional[CanonNum] = None
+    has_truck_loading_unloading: Optional[StrictBool] = None
+    truck_loading_height_m:      Optional[CanonNum] = None
+    has_manual_heavy_handling:   Optional[StrictBool] = None
+    manual_handling_weight_kg:   Optional[CanonNum] = None
+    business_activity_types:     Optional[CanonStrList] = None
+    hazardous_work_environments: Optional[CanonStrList] = None
+    # WO-CANONICAL STEP3A: 건물구조 원천값(기존 DB 컬럼) API 결선
+    building_structure_code:     Optional[str] = None
+    building_structure_name:     Optional[str] = None
 
 
 class FactoryUpdate(BaseModel):
@@ -153,6 +219,18 @@ class FactoryUpdate(BaseModel):
     has_asbestos_demo:       Optional[bool] = None
     has_blasting:            Optional[bool] = None
     has_diving:              Optional[bool] = None
+    # WO-CANONICAL STEP3A: 작업형태/작업환경 canonical (strict; default None; explicit-null clear)
+    work_height_m:               Optional[CanonNum] = None
+    has_truck_loading_unloading: Optional[StrictBool] = None
+    truck_loading_height_m:      Optional[CanonNum] = None
+    has_manual_heavy_handling:   Optional[StrictBool] = None
+    manual_handling_weight_kg:   Optional[CanonNum] = None
+    business_activity_types:     Optional[CanonStrList] = None
+    hazardous_work_environments: Optional[CanonStrList] = None
+    # WO-CANONICAL STEP3A: 기존 canonical gap 결선(built_year←completion_year, main_structure←구조원천)
+    completion_year:             Optional[int] = None
+    building_structure_code:     Optional[str] = None
+    building_structure_name:     Optional[str] = None
 
 
 class FactoryContactBody(BaseModel):
@@ -276,6 +354,7 @@ async def update_factory(factory_id: str, req: FactoryUpdate, current: dict = De
     v2.2.0: construction_type, subcontractor_worker_count 필드 저장·수정 가능
     v2.1.0: 실제 변경이 있으면 CHANGE 이벤트 트리거
             status_code='INACTIVE' 로 변경 시 CLOSURE 이벤트 트리거
+    STEP3A: canonical nullable field 는 sparse partial-merge(explicit-null clear). 기존 필드 semantics 불변.
     """
     supabase = get_supabase()
     _ensure_factory_own(supabase, factory_id, current)
@@ -285,7 +364,8 @@ async def update_factory(factory_id: str, req: FactoryUpdate, current: dict = De
     if not existing.data:
         raise HTTPException(status_code=404, detail="시설을 찾을 수 없습니다")
 
-    update_data = {k: v for k, v in req.dict().items() if v is not None}
+    provided = req.dict(exclude_unset=True)
+    update_data = _build_factory_update(provided)
     if not update_data:
         return {"status": "success", "message": "변경된 내용이 없습니다.", "data": {}}
 
