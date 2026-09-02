@@ -176,6 +176,29 @@ _LEG_INPUT_FIELDS = (
     "has_hazardous_material_in_out_event",
 )
 
+# WO-FIX-BUILDFACILITY-SECTOR-GATE-001: WIRING-016 append BUILDING N1 raw primitive 32축.
+# build_facility 는 이 축들을 sector=="BUILDING" 일 때만 facility 에 넣는다(다른 sector 유입 차단).
+# building_use_type 은 base 56 축(INDUSTRIAL 업종 등 공용)이라 여기 미포함(gate 대상 아님).
+# floor_count 등 이름 공유 축도 포함 — INDUSTRIAL/CONSTRUCTION 은 WIRING-016 이전에도 이 축을
+# build_facility 로 소비하지 않았으므로(원 56축 부재) gate 로 인한 회귀 0.
+_BUILDING_N1_FIELDS = frozenset({
+    "floor_count", "building_height_m", "floor_area_sum_at_or_above_11f",
+    "performance_use_floor_area_sum", "cantilever_projection_m", "column_span_m",
+    "flat_plate_column_section_ratio", "occupancy_capacity",
+    "underground_connection_entrance_distance_m", "connection_open_space_floor_area_m2",
+    "connection_open_space_open_area_ratio", "stair_or_ramp_effective_width_m",
+    "building_activity_type", "building_use_category",
+    "has_performance_assembly_use", "is_target_facility_in_basement",
+    "has_gas_boiler_heating_system", "has_centralized_gas_supply",
+    "is_collapse_risk_land", "has_land_preparation", "has_building_construction_activity",
+    "has_wet_land", "has_water_seepage_risk", "has_landfill_or_similar_ground",
+    "has_flat_plate_structure", "authority_designated_special_structure",
+    "article32_3_alternative_confirmation_subject",
+    "has_wall_between_connection_entrances", "wall_between_connection_entrances_is_fire_resistant",
+    "has_stair_or_ramp_in_open_space", "is_connected_to_subway_or_underground_mall",
+    "has_hazardous_material_in_out_event",
+})
+
 
 # 소비자 스키마 필드명 -> LEG Input Contract field_code (WO-E2E-SEM-001 승인: 의미 동일, 이름만 상이)
 # has_fall_risk 는 제외(추락위험 != 고소작업대, UNDECIDABLE — 별도 WO 승인 전 금지).
@@ -195,7 +218,11 @@ def build_facility(step1_body: Any) -> Dict[str, Any]:
     if not isinstance(inp, dict):
         inp = {}
     facility: Dict[str, Any] = {}
+    _sector = getattr(step1_body, "sector", None)
     for code in _LEG_INPUT_FIELDS:
+        # WO-FIX-BUILDFACILITY-SECTOR-GATE-001: BUILDING N1 32축은 BUILDING sector 에만 노출.
+        if code in _BUILDING_N1_FIELDS and _sector != "BUILDING":
+            continue
         val = getattr(step1_body, code, None)
         if val is None:
             val = inp.get(code)
@@ -215,7 +242,6 @@ def build_facility(step1_body: Any) -> Dict[str, Any]:
     # (_LEG_INPUT_FIELDS 미등록: sector 무관 복사 통로를 차단하여 direct injection 방지)
     # 명시적 sector==BUILDING gate — INDUSTRIAL/CONSTRUCTION elevator_count 오염 방지.
     # 산업 리프트(has_elevator, 산안규칙)와 분리된 축이며, has_elevator는 무접촉.
-    _sector = getattr(step1_body, "sector", None)
     if _sector == "BUILDING":
         _ec = getattr(step1_body, "elevator_count", None)
         if _ec is None:

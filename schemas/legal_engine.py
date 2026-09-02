@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DiagnoseStep1Body(BaseModel):
@@ -58,3 +58,32 @@ class DiagnoseStep3Body(BaseModel):
     diagnosis_id: Optional[str] = None
     equipments: List[Dict[str, Any]] = Field(default_factory=list)
     kcsc_work_ids: List[str] = Field(default_factory=list)
+
+
+# WO-DUAL-IND-STEP2-IMPLEMENT-001 GATE-4A: SAFE INDUSTRIAL 공식 LEG 진입 request.
+# input = SAFE MANUFACTURING 화면에서 직접 확보 가능한 canonical field 13 (신규 alias 0).
+# 기존 6(canonical exact 대응) + GATE-3 신규 7. UI None=미override(asset 유지), false/0/""=override.
+class SafeIndustrialConsumerInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ksic_major: Optional[str] = None
+    worker_count: Optional[int] = None
+    electric_capacity: Optional[float] = None
+    has_high_pressure_gas: Optional[bool] = None
+    has_chemical_substance: Optional[bool] = None
+    has_boiler: Optional[bool] = None
+
+    building_use_type: Optional[str] = None
+    has_safety_manager: Optional[bool] = None
+    work_height_m: Optional[float] = None
+    has_truck_loading_unloading: Optional[bool] = None
+    truck_loading_height_m: Optional[float] = None
+    has_manual_heavy_handling: Optional[bool] = None
+    manual_handling_weight_kg: Optional[float] = None
+
+
+class SafeIndustrialLegBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    factory_id: str
+    input: SafeIndustrialConsumerInput

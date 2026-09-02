@@ -5,9 +5,13 @@ from typing import Optional
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_factory_own
-from schemas.legal_engine import DiagnoseStep1Body, DiagnoseStep2Body, DiagnoseStep3Body
+from schemas.legal_engine import DiagnoseStep1Body, DiagnoseStep2Body, DiagnoseStep3Body, SafeIndustrialLegBody
 from services import legal_engine_svc
 from services.legal_v510_svc import run_diagnose_step1_v510
+from services.safe_industrial_leg_runtime import run_safe_industrial_leg
+from clients import leg_runtime_client
+from clients.leg_runtime_client import LegRuntimeError
+from services.leg_diagnosis_svc import LegDiagnosisError
 from services.legal_context import _factory_to_context, _survey_data_to_context
 from services.legal_format import CYCLE_CODE_MAP
 from services.legal_helpers import (
@@ -78,6 +82,27 @@ async def diagnose_step1(body: DiagnoseStep1Body, authorization: Optional[str] =
         raise HTTPException(status_code=400, detail=str(e))
     except LookupError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/diagnose/industrial-leg")
+async def diagnose_industrial_leg(body: SafeIndustrialLegBody, authorization: Optional[str] = Header(None)):
+    # WO-DUAL-IND-STEP2 GATE-4A: SAFE INDUSTRIAL 공식 LEG 진입.
+    # 순서: AUTH -> OWNERSHIP -> LEG enabled -> assembler(READ) -> override -> DiagnoseStep1Body -> run_leg_diagnosis.
+    supabase = get_supabase()
+    current = get_current_user(authorization)                 # AUTH first (실패 시 assembler DB read 금지)
+    _ensure_factory_own(supabase, body.factory_id, current)   # OWNERSHIP (타사 factory -> 404)
+    if not leg_runtime_client.is_enabled():                   # LEG availability (TAI fallback 금지)
+        raise HTTPException(status_code=503, detail="LEG runtime 미설정")
+    try:
+        out = run_safe_industrial_leg(supabase, body.factory_id, body.input)
+    except (LegDiagnosisError, LegRuntimeError) as e:
+        raise HTTPException(status_code=502, detail="LEG 실행 실패: {}".format(e))
+    return {
+        "status": "success",
+        "data": out["full_result"],
+        "contract_version": out["contract_version"],
+        "unresolved_fields": out["unresolved_fields"],
+    }
 
 
 @router.get("/quote-result/{quote_id}")
