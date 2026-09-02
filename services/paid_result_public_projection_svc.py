@@ -72,11 +72,12 @@ EVIDENCE_ARTICLE_FIELDS: Tuple[str, ...] = (
     "article_no", "article_sub_no", "article_title", "article_text", "law_name",
 )
 
-#: D01 finding_id -> public facts allowlist (STEP4C-2 PKG-5A catalog EXACT).
+#: D01 finding_id -> public facts allowlist (STEP8A REV-1 presentation 계약).
+#: F03/F08/F09 중첩 배열은 FINDING_NESTED_ALLOWLIST 로 재투영한다 (raw pass-through 금지).
 FINDING_FACTS_ALLOWLIST: Dict[str, Tuple[str, ...]] = {
     "F01": ("obligation_count", "law_count"),
     "F02": ("law_count", "article_count"),
-    "F03": ("obligation_count", "max_obligation_count", "actors"),
+    "F03": ("max_obligation_count", "actors"),
     "F04": ("actor_count",),
     "F05": ("prohibition_count",),
     "F06": ("inspection_count",),
@@ -86,20 +87,27 @@ FINDING_FACTS_ALLOWLIST: Dict[str, Tuple[str, ...]] = {
     "F10": ("timing_obligation_count",),
     "F11": ("condition_obligation_count",),
     "F12": ("recipient_obligation_count",),
-    "F13": ("trigger_count", "triggers"),
+    "F13": ("triggers",),
     "F14": ("obligation_gap_count",),
 }
 
-#: F13 public triggers. 이 8개만 고객 응답에 남긴다. 그 외 raw input-field code 제거.
+#: F03/F08/F09 nested 배열 → 새 dict 재투영. 미지정 키(count 등) drop.
+FINDING_NESTED_ALLOWLIST: Dict[str, Dict[str, Tuple[str, ...]]] = {
+    "F03": {"actors": ("actor",)},
+    "F08": {"laws": ("law_name",)},
+    "F09": {"articles": ("law_name", "law_article")},
+}
+
+#: F13 public triggers. presentation frozen 8키 EXACT. 새 trigger 어휘 생성 0.
 F13_TRIGGER_WHITELIST: Tuple[str, ...] = (
-    "has_asbestos",
-    "has_chemical",
-    "has_crane",
-    "has_elevator",
+    "worker_count",
+    "total_floor_area",
+    "contract_amount_eok",
+    "sector",
+    "construction_type",
+    "building_use_type",
     "has_excavation",
     "has_hazardous_material",
-    "has_scaffold",
-    "has_subcontractor",
 )
 _F13_TRIGGER_SET = frozenset(F13_TRIGGER_WHITELIST)
 
@@ -181,7 +189,23 @@ def _project_f13_facts(facts: Dict[str, Any]) -> Dict[str, Any]:
         item for item in _as_list(raw)
         if isinstance(item, str) and item in _F13_TRIGGER_SET
     ]
-    return {"trigger_count": len(triggers), "triggers": triggers}
+    return {"triggers": triggers}
+
+
+def _project_finding_facts(finding_id: Any, raw_facts: Dict[str, Any]) -> Dict[str, Any]:
+    allow = FINDING_FACTS_ALLOWLIST.get(finding_id)
+    if allow is None:
+        return {}
+    if finding_id == "F13":
+        return _project_f13_facts(raw_facts)
+    nested = FINDING_NESTED_ALLOWLIST.get(finding_id) or {}
+    facts: Dict[str, Any] = {}
+    for key in allow:
+        if key in nested:
+            facts[key] = _map_only(raw_facts.get(key), nested[key])
+        else:
+            facts[key] = raw_facts.get(key)
+    return facts
 
 
 def _project_findings(src: Any) -> Dict[str, Any]:
@@ -190,19 +214,11 @@ def _project_findings(src: Any) -> Dict[str, Any]:
         if not isinstance(finding, dict):
             continue
         finding_id = finding.get("finding_id")
-        allow = FINDING_FACTS_ALLOWLIST.get(finding_id)
-        raw_facts = _as_dict(finding.get("facts"))
-        if allow is None:
-            facts = {}
-        elif finding_id == "F13":
-            facts = _project_f13_facts(raw_facts)
-        else:
-            facts = {key: raw_facts.get(key) for key in allow}
         findings_out.append({
             "id": finding_id,
             "type": finding.get("finding_type"),
             "eligible": finding.get("eligible"),
-            "facts": facts,
+            "facts": _project_finding_facts(finding_id, _as_dict(finding.get("facts"))),
         })
     return {"findings": findings_out}
 
@@ -307,6 +323,7 @@ __all__ = [
     "PROJECTION_VERSION",
     "PROFILE_PUBLIC_FIELDS",
     "FINDING_FACTS_ALLOWLIST",
+    "FINDING_NESTED_ALLOWLIST",
     "F13_TRIGGER_WHITELIST",
     "build_public_premium_result_v1",
 ]

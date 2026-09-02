@@ -1,4 +1,4 @@
-"""tests/test_paid_result_public_projection_v1.py — WO-STEP8A B1~B14
+"""tests/test_paid_result_public_projection_v1.py — WO-STEP8A B1~B14 + REV-1 B15~B21
 
 대상:
   services/paid_result_public_projection_svc.py
@@ -201,9 +201,10 @@ def test_B11_unsafe_f13_trigger_removed():
         f["facts"] for f in out["materials"]["diagnosis_findings"]["findings"]
         if f["id"] == "F13"
     )
-    assert facts["triggers"] == ["has_excavation", "has_chemical"]
-    assert facts["trigger_count"] == 2
+    assert facts["triggers"] == ["has_excavation"]
+    assert "trigger_count" not in facts
     assert "has_unmapped_thing" not in json.dumps(out, ensure_ascii=False)
+    assert "has_chemical" not in json.dumps(out, ensure_ascii=False)
     for item in facts["triggers"]:
         assert item in F13_TRIGGER_WHITELIST
 
@@ -251,6 +252,98 @@ def test_B14_legacy_response_fields_unchanged(monkeypatch):
     assert data["public_token"] == "tok-1"
 
 
+PRESENTATION_F13_KEYS = (
+    "worker_count",
+    "total_floor_area",
+    "contract_amount_eok",
+    "sector",
+    "construction_type",
+    "building_use_type",
+    "has_excavation",
+    "has_hazardous_material",
+)
+
+
+def _finding_by_id(projected, finding_id):
+    return next(
+        f for f in projected["materials"]["diagnosis_findings"]["findings"]
+        if f["id"] == finding_id
+    )
+
+
+def test_B15_f13_whitelist_is_presentation_frozen_eight():
+    assert F13_TRIGGER_WHITELIST == PRESENTATION_F13_KEYS
+    assert len(F13_TRIGGER_WHITELIST) == 8
+    for removed in (
+        "has_asbestos", "has_chemical", "has_crane",
+        "has_elevator", "has_scaffold", "has_subcontractor",
+    ):
+        assert removed not in F13_TRIGGER_WHITELIST
+
+
+def test_B16_f13_trigger_count_absent_public():
+    projected = build_public_premium_result_v1(_sample_product())
+    facts = _finding_by_id(projected, "F13")["facts"]
+    assert "trigger_count" not in facts
+    assert "trigger_count" not in _keys(projected)
+
+
+def test_B17_f03_obligation_count_absent():
+    facts = _finding_by_id(build_public_premium_result_v1(_sample_product()), "F03")["facts"]
+    assert "obligation_count" not in facts
+    assert set(facts) == {"max_obligation_count", "actors"}
+
+
+def test_B18_f03_actors_count_absent():
+    facts = _finding_by_id(build_public_premium_result_v1(_sample_product()), "F03")["facts"]
+    assert facts["actors"]
+    for row in facts["actors"]:
+        assert set(row) == {"actor"}
+        assert "count" not in row
+
+
+def test_B19_f08_laws_count_absent():
+    facts = _finding_by_id(build_public_premium_result_v1(_sample_product()), "F08")["facts"]
+    assert facts["laws"]
+    for row in facts["laws"]:
+        assert set(row) == {"law_name"}
+        assert "count" not in row
+
+
+def test_B20_f09_articles_count_absent():
+    facts = _finding_by_id(build_public_premium_result_v1(_sample_product()), "F09")["facts"]
+    assert facts["articles"]
+    for row in facts["articles"]:
+        assert set(row) == {"law_name", "law_article"}
+        assert "count" not in row
+
+
+def test_B21_nested_unknown_key_injection_not_exposed():
+    product = _sample_product()
+    findings = product["paid_result_materials_v1"]["diagnosis_findings"]["findings"]
+    by_id = {f["finding_id"]: f for f in findings}
+    by_id["F03"]["facts"]["actors"] = [{
+        "actor": "사업주", "count": 2, "secret_nested": "LEAK_F03",
+    }]
+    by_id["F08"]["facts"]["laws"] = [{
+        "law_name": "산업안전보건법", "count": 9, "secret_nested": "LEAK_F08",
+    }]
+    by_id["F09"]["facts"]["articles"] = [{
+        "law_name": "산업안전보건법", "law_article": "38",
+        "count": 1, "secret_nested": "LEAK_F09",
+    }]
+    projected = build_public_premium_result_v1(product)
+    blob = json.dumps(projected, ensure_ascii=False)
+    assert "secret_nested" not in _keys(projected)
+    assert '"secret_nested"' not in blob
+    for leak in ("LEAK_F03", "LEAK_F08", "LEAK_F09"):
+        assert leak not in blob, leak
+    out = {f["id"]: f["facts"] for f in projected["materials"]["diagnosis_findings"]["findings"]}
+    assert out["F03"]["actors"] == [{"actor": "사업주"}]
+    assert out["F08"]["laws"] == [{"law_name": "산업안전보건법"}]
+    assert out["F09"]["articles"] == [{"law_name": "산업안전보건법", "law_article": "38"}]
+
+
 def test_projection_does_not_mutate_product():
     product = _sample_product()
     before = copy.deepcopy(product)
@@ -291,7 +384,28 @@ def _sample_product():
     findings = []
     for finding_id, keys in FINDING_FACTS_ALLOWLIST.items():
         facts = {key: ([] if key in ("triggers", "actors", "laws", "articles") else 1) for key in keys}
-        if finding_id == "F13":
+        if finding_id == "F03":
+            facts = {
+                "obligation_count": 99,
+                "max_obligation_count": 2,
+                "actors": [{"actor": "사업주", "count": 2, "secret_nested": "LEAK_F03"}],
+            }
+        elif finding_id == "F08":
+            facts = {
+                "obligation_count": 2,
+                "laws": [{"law_name": "산업안전보건법", "count": 2, "secret_nested": "LEAK_F08"}],
+            }
+        elif finding_id == "F09":
+            facts = {
+                "obligation_count": 1,
+                "articles": [{
+                    "law_name": "산업안전보건법",
+                    "law_article": "38",
+                    "count": 1,
+                    "secret_nested": "LEAK_F09",
+                }],
+            }
+        elif finding_id == "F13":
             facts = {
                 "trigger_count": 2,
                 "triggers": ["has_excavation", "has_unmapped_thing"],
