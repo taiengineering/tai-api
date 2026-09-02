@@ -46,6 +46,7 @@ from services.paid_result_product_svc import (
     SOURCE_TEXT_KEY,
     build_paid_result_product_v1,
 )
+from services.paid_result_public_projection_svc import build_public_premium_result_v1
 from routers.diagnosis_transform import (
     CATEGORY_MAP,
     _extract_obligations,
@@ -558,6 +559,8 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
     # WO-05D-A STEP 3/6/9/10: genuine paid + LEG path 에서만 Product Assembler(canonical caller)
     #   1회 호출 → source-text EXACT 만 additive 투영. legacy(raw_rules) 경로는 source_index
     #   provenance 부재로 부착 0(추측 금지). infra(DB/LEG Runtime) 실패는 성공 위장 금지(503).
+    # WO-STEP8A: 같은 _paid_product 를 public projection 에 재사용(assembler 2회 금지).
+    _paid_product = None
     if include_paid_product and not is_free and not raw_rules and rules_table:
         try:
             _paid_product = build_paid_result_product_v1(rec)
@@ -676,4 +679,6 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
         payload["data"]["contract"] = leg_contract
     if leg_ministry:
         payload["data"]["governing_ministry"] = leg_ministry
+    if _paid_product is not None:
+        payload["data"]["premium_result_v1"] = build_public_premium_result_v1(_paid_product)
     return payload
