@@ -315,6 +315,7 @@ def run_diagnosis(
     free_tier_codes,
     engine_version: str,
     current_user: Optional[dict] = None,
+    canonical_step1_factory_func: Optional[Callable[[Any], DiagnoseStep1Body]] = None,
 ) -> Dict[str, Any]:
     # WO-006: 인증 결정. explicit body.auth_token 우선(기존 무료/legacy 경로 보존).
     # member fallback 은 유료 진입(payment_ref 존재) 에서만 연다 — auth_token 없는 무료 회원이
@@ -454,7 +455,10 @@ def run_diagnosis(
     total_floor_area = body.total_floor_area or floor_area
     contract_eok = _contract_eok if _contract_eok is not None else 1.0
 
-    if engine_sector == "CONSTRUCTION":
+    if canonical_step1_factory_func is not None and sector == "INDUSTRIAL":
+        # GATE-2 Path A: WWW INDUSTRIAL LEG canonical path - legacy top-level default(400) bypass.
+        step1_body = canonical_step1_factory_func(body)
+    elif engine_sector == "CONSTRUCTION":
         _cst_fd = getattr(body, "form_data", None) or {}
         step1_body = DiagnoseStep1Body(
             factory_id=factory_id,
