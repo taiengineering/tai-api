@@ -8,6 +8,7 @@ source-text EXACT 안전 투영(canonical_source_text). T01~T18.
 from __future__ import annotations
 
 import copy
+import json
 
 import pytest
 
@@ -335,3 +336,88 @@ def test_T19_product_exception_log_excludes_public_token(monkeypatch):
     assert "tok-1" not in msg
     assert all("tok-1" not in str(a) for a in args)
     assert "public_token" not in msg
+
+
+# ─────────────────────────────────────────────────────────────
+# WO-DQ-WHAT-05D-A-PUBLIC-KEY-OBLIGATION-SANITIZE-001
+#   full_result.key_obligations → public payload allowlist projection.
+#   내부 provenance(source_atom_ids 등) 차단, denylist 아닌 allowlist fail-closed.
+# ─────────────────────────────────────────────────────────────
+def _rec_with_key_obligations(key_obs, *, tier="BUILDING_V2"):
+    rec = stored_rec([leg_obligation("a0", "점검")], tier=tier)
+    rec["full_result"]["key_obligations"] = key_obs
+    return rec
+
+
+def _paid_key_obligations(monkeypatch, key_obs):
+    rec = _rec_with_key_obligations(key_obs)
+    install(monkeypatch, rec, product_items=[source_item(0, "a0", "원문A")])
+    return rw.get_paid_result_web("tok-1")["data"]["key_obligations"]
+
+
+def test_K1_allowlist_preservation(monkeypatch):
+    row = {
+        "type": "APPOINT", "obligation_type": "APPOINT",
+        "obligation_summary": "요약", "description": "설명", "remarks": "비고",
+        "rule_name": "룰명", "law": "법", "law_name": "산업안전보건법",
+        "law_article": "38", "penalty": "벌칙", "penalty_summary": "과태료",
+    }
+    out = _paid_key_obligations(monkeypatch, [row])
+    assert len(out) == 1
+    for k, v in row.items():
+        assert out[0][k] == v          # allowlist 값 EXACT 보존
+
+
+def test_K2_known_internal_raw_strip(monkeypatch):
+    row = {
+        "obligation_summary": "요약", "law_name": "산업안전보건법",  # 보존
+        # 차단 대상(이번 raw key + provenance)
+        "applicability": "APPLICABLE", "atom_id": "a-1", "evidence": "근거원문",
+        "source": "LEG", "source_atom_ids": ["a-1"], "title": "제목", "triggered_by": ["x"],
+        "semantic_clause_id": "sc-1", "source_part_id": "sp-1", "source_sha256": "h",
+    }
+    out = _paid_key_obligations(monkeypatch, [row])[0]
+    for banned in ("applicability", "atom_id", "evidence", "source", "source_atom_ids",
+                   "title", "triggered_by", "semantic_clause_id", "source_part_id", "source_sha256"):
+        assert banned not in out, banned
+    assert out["obligation_summary"] == "요약"      # 보존은 유지
+    assert out["law_name"] == "산업안전보건법"
+
+
+def test_K3_unknown_future_field_fail_closed(monkeypatch):
+    row = {"obligation_summary": "요약", "_future_internal_field": "SECRET"}
+    out = _paid_key_obligations(monkeypatch, [row])[0]
+    assert "_future_internal_field" not in out       # allowlist라 미승인 신규 필드 자동 차단
+    assert "SECRET" not in json.dumps(out, ensure_ascii=False)
+    assert out["obligation_summary"] == "요약"
+
+
+def test_K4_order_and_count_preserved(monkeypatch):
+    # REV-1: non-dict(string) row 도 삭제하지 않고 {} 로 자리 보존(row count/order delta 0).
+    obs = [
+        {"obligation_summary": "s0", "source_atom_ids": ["a0"]},
+        "legacy-string",
+        {"obligation_summary": "s2", "source_atom_ids": ["a2"]},
+    ]
+    out = _paid_key_obligations(monkeypatch, obs)
+    assert len(out) == 3                                   # row count 유지(삭제 0)
+    assert out[0]["obligation_summary"] == "s0"
+    assert out[1] == {}                                    # non-dict → {} 자리 보존
+    assert out[2]["obligation_summary"] == "s2"
+    import json as _j
+    blob = _j.dumps(out, ensure_ascii=False)
+    assert "legacy-string" not in blob                     # raw string public 노출 0
+    assert "source_atom_ids" not in blob                   # internal 노출 0
+
+
+def test_K5_source_atom_ids_absent_end_to_end(monkeypatch):
+    # 전체 응답 재귀 스캔: 내부 provenance key 노출 0
+    rec = _rec_with_key_obligations([{"obligation_summary": "요약", "source_atom_ids": ["a0"],
+                                      "atom_id": "a0", "law_name": "산업안전보건법"}])
+    install(monkeypatch, rec, product_items=[source_item(0, "a0", "원문A")])
+    d = rw.get_paid_result_web("tok-1")["data"]
+    blob = json.dumps(d, ensure_ascii=False)
+    for banned in ("source_atom_ids", "semantic_clause_id", "source_part_id", "source_sha256",
+                   "__source_index", "paid_result_materials_v1", "paid_result_evidence_v1",
+                   "paid_result_source_text_v1"):
+        assert '"%s"' % banned not in blob, banned
