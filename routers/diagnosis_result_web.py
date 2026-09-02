@@ -281,6 +281,30 @@ def _leg_rule_row(o: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
+def _leg_rules_from_obligations_raw(obligations_raw: List[Any]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    seen_atom: set = set()
+    for source_index, o in enumerate(obligations_raw):
+        if not isinstance(o, dict):
+            continue
+        appl = (o.get("applicability") or "").strip().upper()
+        if appl and appl != "APPLICABLE":
+            continue
+        aid = str(o.get("atom_id") or "")
+        if aid and aid in seen_atom:
+            continue
+        if aid:
+            seen_atom.add(aid)
+        row = _leg_rule_row(o)
+        if not (row["law_name"] or row["obligation_summary"]):
+            continue
+        # WO-05D-A: canonical join axis. caller 가 dict-filter 후 넘긴 obligations_raw 의
+        # enumerate index = Materializer normalized_obligations.identity.source_index 와 정합.
+        row[_INTERNAL_SOURCE_INDEX] = source_index
+        rows.append(row)
+    return rows
+
+
 # ─────────────────────────────────────────────────────────────
 # WO-05D-A: paid-result canonical source-text SAFE PRESENTATION PROJECTION
 #   INTERNAL PRODUCT(paid_result_source_text_v1)의 EXACT 원문만 rules_table 표시행에
