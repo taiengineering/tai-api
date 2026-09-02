@@ -614,7 +614,7 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
     limit = free_preview_limit if is_free else None
     rules_out = rules_table[:limit] if limit else rules_table
     _key_ob_src = key_obligations[:limit] if limit else key_obligations
-    key_ob_out = [_public_key_obligation(r) for r in _key_ob_src if isinstance(r, dict)]
+    key_ob_out = [_public_key_obligation(r) for r in _key_ob_src]
     law_grp_out = law_group_list[:limit] if limit else law_group_list
 
     # v1.4.0: 무료 안전 의무 목록(additive). 표시용 전체 rules_table에서 절단 없이 전건 투영.

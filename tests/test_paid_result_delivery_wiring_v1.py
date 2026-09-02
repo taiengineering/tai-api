@@ -393,15 +393,21 @@ def test_K3_unknown_future_field_fail_closed(monkeypatch):
 
 
 def test_K4_order_and_count_preserved(monkeypatch):
+    # REV-1: non-dict(string) row 도 삭제하지 않고 {} 로 자리 보존(row count/order delta 0).
     obs = [
         {"obligation_summary": "s0", "source_atom_ids": ["a0"]},
-        {"obligation_summary": "s1", "source_atom_ids": ["a1"]},
+        "legacy-string",
         {"obligation_summary": "s2", "source_atom_ids": ["a2"]},
     ]
     out = _paid_key_obligations(monkeypatch, obs)
-    assert len(out) == 3
-    assert [r["obligation_summary"] for r in out] == ["s0", "s1", "s2"]
-    assert all("source_atom_ids" not in r for r in out)
+    assert len(out) == 3                                   # row count 유지(삭제 0)
+    assert out[0]["obligation_summary"] == "s0"
+    assert out[1] == {}                                    # non-dict → {} 자리 보존
+    assert out[2]["obligation_summary"] == "s2"
+    import json as _j
+    blob = _j.dumps(out, ensure_ascii=False)
+    assert "legacy-string" not in blob                     # raw string public 노출 0
+    assert "source_atom_ids" not in blob                   # internal 노출 0
 
 
 def test_K5_source_atom_ids_absent_end_to_end(monkeypatch):
