@@ -439,15 +439,21 @@ def build_paid_result_evidence_v1(
         if r["base_article_no"] is not None and r["evidence"] is not None
     })
 
-    loader = loader if loader is not None else SupabaseArticleLoader()
-
-    law_rows = loader.load_laws(law_names) if law_names else []
-    law_ids = sorted(
-        {row.get("id") for row in law_rows if isinstance(row, dict) and row.get("id") is not None},
-        key=str,
-    )
-    article_rows = loader.load_articles(law_ids, article_nos) if (law_ids and article_nos) else []
-
+    if loader is not None:
+        # INJECTED LOADER PATH — 기존 그대로 (backward-compat 테스트 보존)
+        law_rows = loader.load_laws(law_names) if law_names else []
+        law_ids = sorted({row.get("id") for row in law_rows
+                          if isinstance(row, dict) and row.get("id") is not None}, key=str)
+        article_rows = loader.load_articles(law_ids, article_nos) if (law_ids and article_nos) else []
+    else:
+        # PRODUCTION DEFAULT — LEG Runtime HTTP boundary. Supabase 직독 0.
+        if law_names and article_nos:
+            from clients.leg_runtime_client import fetch_evidence_rows   # lazy
+            resp = fetch_evidence_rows(law_names, article_nos)
+            law_rows = resp.get("laws") or []
+            article_rows = resp.get("articles") or []
+        else:
+            law_rows, article_rows = [], []
     return resolve_articles(obligations, law_rows, article_rows)
 
 
