@@ -61,10 +61,10 @@ from services.paid_result_contract_svc import build_paid_result_contract_v1
 from services.paid_result_evidence_svc import build_paid_result_evidence_v1
 from services.paid_result_source_text_svc import build_paid_result_source_text_v1
 
-#: payload 안에서 evidence 가 농이는 자리. 기존 4키 뒤에 붙는 다섯 번째다.
+#: payload 안에서 evidence 가 놓이는 자리. 기존 4키 뒤에 붙는 다섯 번째다.
 EVIDENCE_KEY = "paid_result_evidence_v1"
 
-#: payload 안에서 source-text sidecar 가 농이는 자리. 여섯 번째다(WO-05C).
+#: payload 안에서 source-text sidecar 가 놓이는 자리. 여섯 번째다(WO-05C).
 SOURCE_TEXT_KEY = "paid_result_source_text_v1"
 
 #: evidence / source-text 의 입력이 되는 계약 안의 자리. row["full_result"] 가 아니다.
