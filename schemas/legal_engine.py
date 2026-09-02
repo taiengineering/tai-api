@@ -109,6 +109,12 @@ class SafeConstructionConsumerInput(BaseModel):
     manual_handling_weight_kg: Optional[float] = None
     has_chemical_substance: Optional[bool] = None
     has_subcontractor: Optional[bool] = None
+    has_asbestos: Optional[bool] = None
+    has_gas: Optional[bool] = None
+    has_high_pressure_gas: Optional[bool] = None
+    has_water_tank: Optional[bool] = None
+    is_energy_intensive: Optional[bool] = None
+    is_multi_use: Optional[bool] = None
 
 
 class SafeConstructionLegBody(BaseModel):

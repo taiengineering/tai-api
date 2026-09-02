@@ -50,13 +50,10 @@ RUNTIME_INPUT_FIELDS = (
     "work_height_m", "has_truck_loading_unloading", "truck_loading_height_m",
     "has_manual_heavy_handling", "manual_handling_weight_kg",
     "has_chemical_substance",
-    # VERIFIER CORRECTION: has_subcontractor 는 subcon_workers>0 자동유도 금지(DERIVABLE=0),
-    #   LEG passthrough 대상 → RUNTIME_INPUT(사용자 명시 boolean 만). RUNTIME13 -> RUNTIME14.
+    # has_subcontractor: subcon_workers>0 자동유도 금지(DERIVABLE=0), LEG passthrough → RUNTIME.
     "has_subcontractor",
-)
-
-# 규제대상/기타 — LEG consumed 이나 SAFE 자산 직접 컬럼 없음 → RUNTIME_INPUT 성격(override 대상).
-_REGULATORY_RUNTIME = (
+    # CORRECTION-1: 규제 6축 — build_facility passthrough 대상이나 SAFE 직접 컬럼 없음 →
+    #   RUNTIME_INPUT(진단 시 사용자 명시). RUNTIME14 -> RUNTIME20.
     "has_asbestos", "has_gas", "has_high_pressure_gas",
     "has_water_tank", "is_energy_intensive", "is_multi_use",
 )
@@ -115,8 +112,6 @@ def assemble_construction_marketing_contract(supabase, site_id: str) -> Dict[str
     # ── RUNTIME_INPUT 14(위험작업+has_subcontractor) + 규제 = None + unresolved (override 대상) ──
     for f in RUNTIME_INPUT_FIELDS:
         _unresolved(f, "RUNTIME_INPUT(SAFE 자산 표준코드 없음 — 진단 시 사용자 확인)")
-    for f in _REGULATORY_RUNTIME:
-        _unresolved(f, "RUNTIME_INPUT(규제대상 — SAFE 직접 컬럼 없음, 진단 시 확인)")
 
     # ── NOT_CONSUMED table(process_list/subcontractor) = None + unresolved (LEG 미투입) ──
     for f in _NOT_CONSUMED_OR_TABLE:

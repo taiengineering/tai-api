@@ -45,7 +45,7 @@ class FakeSB:
 
 def _site(**kw):
     base = {"id": "S1", "factory_id": "F1", "total_workers": 30, "direct_workers": 10,
-            "subcon_workers": 20, "site_type": "건축", "site_address": "서울", "contract_amount": 50}
+            "subcon_workers": 20, "site_type": "BUILDING", "site_address": "서울", "contract_amount": 50}
     base.update(kw)
     return base
 
@@ -73,10 +73,10 @@ def test_A_worker_count_from_total_workers():
 # ── DIRECT_EXACT 4 원값 보존 ───────────────────────────────────────────
 def test_direct_exact_4():
     r = assemble_construction_marketing_contract(
-        _sb(site={"total_workers": 0, "site_type": "토목", "site_address": "부산", "contract_amount": 0}), "S1")
+        _sb(site={"total_workers": 0, "site_type": "CIVIL", "site_address": "부산", "contract_amount": 0}), "S1")
     v = r["values"]
     assert v["worker_count"] == 0            # 0 보존
-    assert v["construction_type"] == "토목"
+    assert v["construction_type"] == "CIVIL"
     assert v["project_address"] == "부산"
     assert v["project_amount"] == 0          # 0 보존(억 단위, 변환 없음)
     for f in ("worker_count", "construction_type", "project_address", "project_amount"):
@@ -127,7 +127,7 @@ def test_runtime14_unresolved_initial():
     r = assemble_construction_marketing_contract(_sb(), "S1")
     for f in RUNTIME_INPUT_FIELDS:
         assert r["values"][f] is None and f in r["unresolved_fields"], f
-    assert len(RUNTIME_INPUT_FIELDS) == 14
+    assert len(RUNTIME_INPUT_FIELDS) == 20
     assert "has_subcontractor" in RUNTIME_INPUT_FIELDS
     assert "subcontractor_count" not in RUNTIME_INPUT_FIELDS
 
@@ -187,7 +187,7 @@ def test_override_allowlist_14(monkeypatch):
     out = run_safe_construction_leg(_sb(), "S1", {"subcontractor_count": 5})
     assert cap["step1"].input["subcontractor_count"] is None
     assert "subcontractor_count" in out["unresolved_fields"]
-    assert len(SAFE_CST_OVERRIDE_FIELDS) == 14
+    assert len(SAFE_CST_OVERRIDE_FIELDS) == 20
 
 
 # ── canonical 27 불변 (override 후에도) ────────────────────────────────
@@ -226,3 +226,49 @@ def test_runtime_no_db_write(monkeypatch):
     sb = _sb()
     run_safe_construction_leg(sb, "S1", {"has_excavation": True})
     assert sb.counters["writes"] == 0
+
+
+
+# ── CORRECTION-1: RUNTIME20 + 규제 override + construction_type code fixture ──
+def test_T1_runtime_denominator_20():
+    assert len(RUNTIME_INPUT_FIELDS) == 20
+    assert len(set(RUNTIME_INPUT_FIELDS)) == 20
+
+def test_T2_request_schema_20():
+    from schemas.legal_engine import SafeConstructionConsumerInput
+    assert len(SafeConstructionConsumerInput.model_fields) == 20
+    for f in ("has_asbestos", "has_gas", "has_high_pressure_gas",
+              "has_water_tank", "is_energy_intensive", "is_multi_use"):
+        assert f in SafeConstructionConsumerInput.model_fields
+
+def test_T3_regulatory_false_preserved(monkeypatch):
+    cap = {"called": 0}; _patch_leg(monkeypatch, cap)
+    out = run_safe_construction_leg(_sb(), "S1", {"has_gas": False, "is_multi_use": False})
+    inp = cap["step1"].input
+    assert inp["has_gas"] is False and "has_gas" not in out["unresolved_fields"]
+    assert inp["is_multi_use"] is False and "is_multi_use" not in out["unresolved_fields"]
+
+def test_T4_regulatory_true(monkeypatch):
+    cap = {"called": 0}; _patch_leg(monkeypatch, cap)
+    out = run_safe_construction_leg(_sb(), "S1", {"has_high_pressure_gas": True})
+    assert cap["step1"].input["has_high_pressure_gas"] is True
+    assert "has_high_pressure_gas" not in out["unresolved_fields"]
+
+def test_T5_regulatory_none(monkeypatch):
+    cap = {"called": 0}; _patch_leg(monkeypatch, cap)
+    out = run_safe_construction_leg(_sb(), "S1", {"has_asbestos": None})
+    assert cap["step1"].input["has_asbestos"] is None
+    assert "has_asbestos" in out["unresolved_fields"]
+
+def test_T6_non_runtime_canonical_firewall():
+    from schemas.legal_engine import SafeConstructionLegBody
+    for bad in ("subcontractor_count", "process_list", "subcontractor"):
+        try:
+            SafeConstructionLegBody(site_id="S1", input={bad: 1})
+            assert False, f"{bad} should be rejected"
+        except Exception:
+            pass  # extra=forbid → reject
+
+def test_T7_construction_type_code_fixture():
+    r = assemble_construction_marketing_contract(_sb(site={"site_type": "BUILDING"}), "S1")
+    assert r["values"]["construction_type"] == "BUILDING"   # 한글 변환 없음
