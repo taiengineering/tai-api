@@ -23,7 +23,7 @@
 --   => anon/authenticated 직접 접근 차단(fail-closed). tai-api service_role 만 접근
 --      (service_role 은 RLS 를 우회하므로 backend 읽기/쓰기는 정상).
 
-CREATE TABLE IF NOT EXISTS public.factory_materials (
+CREATE TABLE public.factory_materials (
   id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 
   -- material row 는 반드시 특정 factory 소속. factory 삭제 시 orphan 을 남기지 않는다.
@@ -54,7 +54,7 @@ COMMENT ON COLUMN public.factory_materials.handling_mode_codes IS
   '취급방식 코드 목록. NULL=미확인, []=해당없음, {..}=명시. NULL과 [] 를 구분 보존';
 
 -- assembler query(factory_id = ? AND is_active = true)에 정확히 맞춘 인덱스.
-CREATE INDEX IF NOT EXISTS factory_materials_factory_active_idx
+CREATE INDEX factory_materials_factory_active_idx
   ON public.factory_materials (factory_id, is_active);
 
 -- 신규 테이블 보안: RLS enable + policy 0 => 브라우저(anon/authenticated) 직접 접근 차단.
@@ -62,3 +62,9 @@ CREATE INDEX IF NOT EXISTS factory_materials_factory_active_idx
 ALTER TABLE public.factory_materials ENABLE ROW LEVEL SECURITY;
 
 REVOKE ALL ON public.factory_materials FROM anon, authenticated;
+
+-- service_role TABLE privilege 를 migration 자체에 명시(환경 default ACL 비의존).
+--   RLS bypass 와 TABLE privilege 는 별개이므로 신규 정본에서 직접 부여한다.
+GRANT SELECT, INSERT, UPDATE, DELETE
+  ON TABLE public.factory_materials
+  TO service_role;
