@@ -27,7 +27,8 @@ from services.paid_result_evidence_svc import EVIDENCE_VERSION
 from services.paid_result_product_svc import (
     EVIDENCE_KEY,
     MATERIALS_KEY,
-    build_paid_result_product_v1,
+    SOURCE_TEXT_KEY,
+    build_paid_result_product_v1 as _raw_build_paid_result_product_v1,
 )
 
 LAW = "산업안전보건기준에 관한 규칙"
@@ -39,6 +40,30 @@ CONTRACT_KEYS = {
     "diagnosis_profile",
     "paid_result_materials_v1",
 }
+
+
+# WO-DQ-WHAT-05C: 기존 A-tests 가 source_text_loader 미주입으로 실 LEG Runtime HTTP 를
+# 부르지 않도록, wrapper 가 fake source loader 를 기본 주입한다(§21). 기존 호출부는 수정하지 않는다.
+def _default_fake_source_loader(atom_ids):
+    return {
+        "version": 1,
+        "source_mode": "LIVE_LEG_SOURCE",
+        "items": [
+            {"atom_id": a, "semantic_clause_id": "sc-" + a, "source_part_id": "sp-" + a,
+             "law_name": LAW, "law_article": "1", "text": "원문(" + a + ")",
+             "source_sha256": "sha-" + a, "resolution_status": "EXACT"}
+            for a in atom_ids
+        ],
+        "unresolved": [],
+    }
+
+
+def build_paid_result_product_v1(row, evidence_loader=None, source_text_loader=None):
+    """테스트 wrapper — source_text_loader 미주입 시 fake 를 주입(실 HTTP 차단)."""
+    if source_text_loader is None:
+        source_text_loader = _default_fake_source_loader
+    return _raw_build_paid_result_product_v1(
+        row, evidence_loader=evidence_loader, source_text_loader=source_text_loader)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 조문 원문 발췌 (public.law_article 실측)
@@ -214,8 +239,8 @@ class ExplodingLoader:
 def test_A01_top_level_keys_are_contract_four_plus_evidence_one():
     product = build_paid_result_product_v1(ROW, evidence_loader=RecordingLoader())
 
-    assert set(product) == CONTRACT_KEYS | {EVIDENCE_KEY}
-    assert len(product) == 5
+    assert set(product) == CONTRACT_KEYS | {EVIDENCE_KEY, SOURCE_TEXT_KEY}
+    assert len(product) == 6
     # 기존 4키가 그대로 있고, 이름이 바뀌거나 사라지지 않았다.
     for key in CONTRACT_KEYS:
         assert key in product
@@ -225,7 +250,7 @@ def test_A02_contract_part_is_exactly_the_base_contract():
     base = build_paid_result_contract_v1(ROW)
     product = build_paid_result_product_v1(ROW, evidence_loader=RecordingLoader())
 
-    stripped = {k: v for k, v in product.items() if k != EVIDENCE_KEY}
+    stripped = {k: v for k, v in product.items() if k not in (EVIDENCE_KEY, SOURCE_TEXT_KEY)}
     assert stripped == base
 
     # 세 조각 각각도 delta 0.
@@ -342,7 +367,7 @@ def test_A08_unresolved_obligation_still_produces_a_product():
     ])
     product = build_paid_result_product_v1(row, evidence_loader=RecordingLoader())
 
-    assert set(product) == CONTRACT_KEYS | {EVIDENCE_KEY}
+    assert set(product) == CONTRACT_KEYS | {EVIDENCE_KEY, SOURCE_TEXT_KEY}
     evidence = product[EVIDENCE_KEY]
     assert evidence["resolution"]["source_obligation_count"] == 5
     assert evidence["resolution"]["resolved_obligation_count"] == 3
@@ -391,7 +416,7 @@ def test_A11_base_contract_is_not_mutated():
     # 조립 뒤에도 계약을 따로 만들면 같은 값이 나온다.
     assert build_paid_result_contract_v1(ROW) == snapshot
     # 결과에서 evidence 를 떼면 그 값과 동일하다.
-    assert {k: v for k, v in product.items() if k != EVIDENCE_KEY} == snapshot
+    assert {k: v for k, v in product.items() if k not in (EVIDENCE_KEY, SOURCE_TEXT_KEY)} == snapshot
     # 새 dict 이고 계약 객체를 덮어쓴 것이 아니다.
     assert product is not base_before
 
@@ -453,3 +478,166 @@ def test_assembler_touches_no_public_surface():
         "supabase.table", "insert(", "update(", "delete(", "upsert(",
     ]:
         assert banned not in body, f"경계 위반: {banned}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P01 ~ P12 — WO-DQ-WHAT-05C: source-text sidecar 조립 (paid_result_source_text_v1)
+# source_text_loader 는 명시 주입한다. 실 LEG Runtime HTTP 는 부르지 않는다(§24 DEFERRED).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _recording_source_loader():
+    calls = {"n": 0, "atom_ids": None}
+
+    def _loader(atom_ids):
+        calls["n"] += 1
+        calls["atom_ids"] = list(atom_ids)
+        return {
+            "version": 1,
+            "source_mode": "LIVE_LEG_SOURCE",
+            "items": [
+                {"atom_id": a, "semantic_clause_id": "sc-" + a, "source_part_id": "sp-" + a,
+                 "law_name": LAW, "law_article": "1", "text": "원문(" + a + ")",
+                 "source_sha256": "sha-" + a, "resolution_status": "EXACT"}
+                for a in atom_ids
+            ],
+            "unresolved": [],
+        }
+
+    return _loader, calls
+
+
+class ExplodingSourceLoader:
+    """LEG Runtime 이 죽은 상황(HTTP 실패). 예외를 그대로 전파해야 한다."""
+
+    class Boom(RuntimeError):
+        pass
+
+    def __call__(self, atom_ids):
+        raise ExplodingSourceLoader.Boom("leg runtime unreachable")
+
+
+def test_P01_top_level_is_contract_four_plus_evidence_plus_source():
+    loader, _ = _recording_source_loader()
+    product = build_paid_result_product_v1(
+        ROW, evidence_loader=RecordingLoader(), source_text_loader=loader)
+    assert set(product) == CONTRACT_KEYS | {EVIDENCE_KEY, SOURCE_TEXT_KEY}
+    assert len(product) == 6
+
+
+def test_P02_contract_four_are_exactly_the_base_contract():
+    loader, _ = _recording_source_loader()
+    base = build_paid_result_contract_v1(ROW)
+    product = build_paid_result_product_v1(
+        ROW, evidence_loader=RecordingLoader(), source_text_loader=loader)
+    assert {k: v for k, v in product.items()
+            if k not in (EVIDENCE_KEY, SOURCE_TEXT_KEY)} == base
+
+
+def test_P03_contract_version_unchanged_with_source():
+    loader, _ = _recording_source_loader()
+    product = build_paid_result_product_v1(
+        ROW, evidence_loader=RecordingLoader(), source_text_loader=loader)
+    assert product["contract_version"] == CONTRACT_VERSION == 1
+
+
+def test_P04_materials_delta_zero_with_source():
+    loader, _ = _recording_source_loader()
+    base = build_paid_result_contract_v1(ROW)
+    product = build_paid_result_product_v1(
+        ROW, evidence_loader=RecordingLoader(), source_text_loader=loader)
+    assert product[MATERIALS_KEY] == base[MATERIALS_KEY]
+
+
+def test_P05_evidence_delta_zero_when_source_added():
+    with_source = build_paid_result_product_v1(
+        ROW, evidence_loader=RecordingLoader(),
+        source_text_loader=_recording_source_loader()[0])
+    other = build_paid_result_product_v1(
+        ROW, evidence_loader=RecordingLoader(),
+        source_text_loader=_recording_source_loader()[0])
+    assert with_source[EVIDENCE_KEY] == other[EVIDENCE_KEY]
+
+
+def test_P06_source_resolver_input_is_contract_materials():
+    seen: Dict[str, Any] = {}
+    import services.paid_result_product_svc as svc
+    real = svc.build_paid_result_source_text_v1
+
+    def spy(materials, loader=None):
+        seen["materials"] = materials
+        return real(materials, loader=loader)
+
+    svc.build_paid_result_source_text_v1 = spy
+    loader, _ = _recording_source_loader()
+    try:
+        product = build_paid_result_product_v1(
+            ROW, evidence_loader=RecordingLoader(), source_text_loader=loader)
+    finally:
+        svc.build_paid_result_source_text_v1 = real
+    # source resolver 의 입력은 계약이 만든 materials 그 객체다(row/full_result 아님).
+    assert seen["materials"] is product[MATERIALS_KEY]
+
+
+def test_P07_materializer_called_exactly_once_with_source():
+    import services.paid_result_contract_svc as contract_svc
+    calls = {"n": 0}
+    real = contract_svc.build_paid_result_materials_v1
+
+    def counting(full_result):
+        calls["n"] += 1
+        return real(full_result)
+
+    contract_svc.build_paid_result_materials_v1 = counting
+    loader, _ = _recording_source_loader()
+    try:
+        build_paid_result_product_v1(
+            ROW, evidence_loader=RecordingLoader(), source_text_loader=loader)
+    finally:
+        contract_svc.build_paid_result_materials_v1 = real
+    assert calls["n"] == 1
+
+
+def test_P08_injected_source_loader_is_used_once():
+    loader, calls = _recording_source_loader()
+    product = build_paid_result_product_v1(
+        ROW, evidence_loader=RecordingLoader(), source_text_loader=loader)
+    assert calls["n"] == 1                                   # HTTP roundtrip = 1
+    assert calls["atom_ids"] == ["atom-1", "atom-2", "atom-3"]
+    source = product[SOURCE_TEXT_KEY]
+    assert source["version"] == 1
+    assert source["source_mode"] == "LIVE_LEG_SOURCE"
+    # 1 obligation -> 1 item, obligation_ref = source_index.
+    assert [i["obligation_ref"] for i in source["items"]] == [0, 1, 2]
+
+
+def test_P09_source_failure_propagates_and_is_not_swallowed():
+    with pytest.raises(ExplodingSourceLoader.Boom):
+        build_paid_result_product_v1(
+            ROW, evidence_loader=RecordingLoader(),
+            source_text_loader=ExplodingSourceLoader())
+
+
+def test_P10_evidence_failure_propagates_with_source_present():
+    loader, _ = _recording_source_loader()
+    with pytest.raises(ExplodingLoader.Boom):
+        build_paid_result_product_v1(
+            ROW, evidence_loader=ExplodingLoader(), source_text_loader=loader)
+
+
+def test_P11_assembler_source_path_reads_no_full_result():
+    # source resolver 는 materials 만 읽는다 — assembler 실행부의 full_result 직접 접근 = 0.
+    assert "full_result" not in assembler_code()
+    loader, _ = _recording_source_loader()
+    product = build_paid_result_product_v1(
+        ROW, evidence_loader=RecordingLoader(), source_text_loader=loader)
+    assert product[SOURCE_TEXT_KEY]["items"]                 # materials 로부터 조립됨
+
+
+def test_P12_row_is_not_mutated_with_source():
+    loader, _ = _recording_source_loader()
+    row = copy.deepcopy(ROW)
+    before = copy.deepcopy(row)
+    build_paid_result_product_v1(
+        row, evidence_loader=RecordingLoader(), source_text_loader=loader)
+    assert row == before
