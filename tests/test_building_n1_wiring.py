@@ -92,10 +92,15 @@ _N1 = sorted(_BUILDING_N1_FIELDS)
 
 
 def test_lock_denominator_is_exactly_32():
-    # exact 32 — 축이 늘거나 줄면 이 lock 이 즉시 실패해야 한다.
-    assert len(_BUILDING_N1_FIELDS) == 32, len(_BUILDING_N1_FIELDS)
-    # building_use_type 은 N1 gate 대상이 아니다(base 56 공용).
+    # exact SET lock: WIRING-016 BUILDING 33 - shared building_use_type 1 = firewall 32.
+    #   len==32 만으로는 축 교체(하나 빠지고 다른 하나 들어옴)를 못 잡으므로
+    #   이름 집합 동일성으로 freeze 한다(drift-proof).
+    expected = set(BLD33) - {"building_use_type"}
+    assert len(expected) == 32, len(expected)
     assert "building_use_type" not in _BUILDING_N1_FIELDS
+    assert set(_BUILDING_N1_FIELDS) == expected, (
+        set(_BUILDING_N1_FIELDS) ^ expected
+    )
 
 
 def _n1_full_input():
