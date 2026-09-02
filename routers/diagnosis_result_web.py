@@ -42,6 +42,10 @@ from fastapi import APIRouter, HTTPException
 
 from db.supabase_client import get_supabase
 from services.diagnosis_runtime_step1 import enrich_rules_with_candidate_slots
+from services.paid_result_product_svc import (
+    SOURCE_TEXT_KEY,
+    build_paid_result_product_v1,
+)
 from routers.diagnosis_transform import (
     CATEGORY_MAP,
     _extract_obligations,
@@ -280,7 +284,7 @@ def _leg_rule_row(o: Dict[str, Any]) -> Dict[str, Any]:
 def _leg_rules_from_obligations_raw(obligations_raw: List[Any]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     seen_atom: set = set()
-    for o in obligations_raw:
+    for source_index, o in enumerate(obligations_raw):
         if not isinstance(o, dict):
             continue
         appl = (o.get("applicability") or "").strip().upper()
@@ -294,8 +298,72 @@ def _leg_rules_from_obligations_raw(obligations_raw: List[Any]) -> List[Dict[str
         row = _leg_rule_row(o)
         if not (row["law_name"] or row["obligation_summary"]):
             continue
+        # WO-05D-A: canonical join axis. caller 가 dict-filter 후 넘긴 obligations_raw 의
+        # enumerate index = Materializer normalized_obligations.identity.source_index 와 정합.
+        row[_INTERNAL_SOURCE_INDEX] = source_index
         rows.append(row)
     return rows
+
+
+# ─────────────────────────────────────────────────────────────
+# WO-05D-A: paid-result canonical source-text SAFE PRESENTATION PROJECTION
+#   INTERNAL PRODUCT(paid_result_source_text_v1)의 EXACT 원문만 rules_table 표시행에
+#   additive(canonical_source_text)로 투영. provenance(atom_id 외)·6-key raw 노출 0.
+# ─────────────────────────────────────────────────────────────
+# 내부 join axis. Materializer normalized_obligations[n].identity.source_index 와 정합.
+# HTTP response 노출 0 — 최종 payload 직전 반드시 제거(_strip_internal_source_index).
+_INTERNAL_SOURCE_INDEX = "__source_index"
+_CANONICAL_SOURCE_TEXT = "canonical_source_text"
+
+
+def _source_text_exact_items_by_ref(product: Any) -> Dict[Any, Dict[str, Any]]:
+    """paid_result_source_text_v1.items 중 resolution_status==EXACT 이고 text 가
+    non-empty 인 항목만 obligation_ref -> item 으로 매핑. SOURCE_MISMATCH/UNRESOLVED 제외."""
+    out: Dict[Any, Dict[str, Any]] = {}
+    sidecar = product.get(SOURCE_TEXT_KEY) if isinstance(product, dict) else None
+    items = sidecar.get("items") if isinstance(sidecar, dict) else None
+    if not isinstance(items, list):
+        return out
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        if it.get("resolution_status") != "EXACT":
+            continue
+        text = it.get("text")
+        if not (isinstance(text, str) and text):
+            continue
+        out[it.get("obligation_ref")] = it
+    return out
+
+
+def _attach_canonical_source_text(
+    rules_table: List[Dict[str, Any]], items_by_ref: Dict[Any, Dict[str, Any]]
+) -> None:
+    """STEP 6 — EXACT source_index join 이 성립할 때만 canonical_source_text 를 additive 부착.
+
+    조건(전부 만족): A) row 내부 source_index == item.obligation_ref EXACT ·
+    B) item.resolution_status==EXACT (items_by_ref 단계에서 보장) · C) item.text non-empty ·
+    D) row.atom_id 와 item.atom_id 가 모두 존재하면 EXACT equality.
+    duty.what/evidence 복사·SOURCE_MISMATCH·UNRESOLVED fallback·추측 매핑 금지. 기존 필드 무변경.
+    """
+    for row in rules_table:
+        if not isinstance(row, dict) or _INTERNAL_SOURCE_INDEX not in row:
+            continue
+        it = items_by_ref.get(row.get(_INTERNAL_SOURCE_INDEX))
+        if not it:
+            continue
+        row_atom = row.get("atom_id")
+        it_atom = it.get("atom_id")
+        if row_atom and it_atom and str(row_atom) != str(it_atom):
+            continue  # D: 둘 다 존재하는데 불일치 → 부착 안 함
+        row[_CANONICAL_SOURCE_TEXT] = it["text"]
+
+
+def _strip_internal_source_index(rules_table: List[Dict[str, Any]]) -> None:
+    """내부 join key(__source_index) 를 HTTP 노출 전에 제거. free/paid 양 경로 공통."""
+    for row in rules_table:
+        if isinstance(row, dict):
+            row.pop(_INTERNAL_SOURCE_INDEX, None)
 
 
 def _leg_summary_from_rules(rules: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -422,15 +490,16 @@ def get_diagnosis_result_web(public_token: str):
 
 @router.get("/paid-result/{public_token}")
 def get_paid_result_web(public_token: str):
-    return _build_result_payload(public_token, free_preview_limit=None)
+    return _build_result_payload(public_token, free_preview_limit=None, include_paid_product=True)
 
 
-def _build_result_payload(public_token: str, free_preview_limit: Optional[int]) -> Dict[str, Any]:
+def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
+                          include_paid_product: bool = False) -> Dict[str, Any]:
     supabase = get_supabase()
 
     res = (
         supabase.table("anonymous_diagnosis_results")
-        .select("id, public_token, tier_code, full_result, input_data, status, expires_at")
+        .select("id, public_token, tier_code, full_result, input_data, status, expires_at, created_at")
         .eq("public_token", public_token)
         .limit(1)
         .execute()
@@ -472,6 +541,21 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int]) 
             _contract = full_result.get("contract")
             if isinstance(_contract, dict) and _contract:
                 leg_contract = _contract
+
+    # WO-05D-A STEP 3/6/9/10: genuine paid + LEG path 에서만 Product Assembler(canonical caller)
+    #   1회 호출 → source-text EXACT 만 additive 투영. legacy(raw_rules) 경로는 source_index
+    #   provenance 부재로 부착 0(추측 금지). infra(DB/LEG Runtime) 실패는 성공 위장 금지(503).
+    if include_paid_product and not is_free and not raw_rules and rules_table:
+        try:
+            _paid_product = build_paid_result_product_v1(rec)
+        except Exception:
+            log.exception("paid_result_product build failed public_token=%s", public_token)
+            raise HTTPException(status_code=503, detail="유료 진단 법령 원문을 불러오지 못했습니다.")
+        _attach_canonical_source_text(rules_table, _source_text_exact_items_by_ref(_paid_product))
+
+    # 내부 join key(__source_index) 제거 — HTTP 노출 0(free/paid 공통).
+    _strip_internal_source_index(rules_table)
+
     warnings = _extract_warnings(full_result)
 
     inspection_required = [r for r in (full_result.get("inspection_required") or []) if isinstance(r, dict)]
