@@ -118,7 +118,13 @@ def assemble_industrial_marketing_contract(supabase, factory_id: str) -> Dict[st
 
     for field, col in FACTORY_DIRECT.items():
         mode = "TRANSFORM" if field in _TRANSFORM_RENAMES else "DIRECT"
-        _resolve(field, fac.get(col), mode, f"factories.{col}")  # None/false/0 보존
+        # WO-...-COMPAT-002 §5: physical column 부재 != DB NULL.
+        #   col 자체가 factories 스키마에 없으면 source unavailable -> UNRESOLVED.
+        #   col 존재 시에만 값 채택(None/false/0 보존 불변).
+        if col not in fac:
+            _unresolved(field, f"factories.{col}(source column unavailable)")
+        else:
+            _resolve(field, fac.get(col), mode, f"factories.{col}")  # None/false/0 보존
 
     # ── building_use_type / main_structure : deterministic normalization 없음 → unresolved (no-invention) ──
     # building_use_code / building_structure_code 의 Marketing accepted-enum exact map 이 확정되지 않았으므로
@@ -134,6 +140,10 @@ def assemble_industrial_marketing_contract(supabase, factory_id: str) -> Dict[st
 
     # ── SAFE DIRECT VOCAB arrays (code[] → code_name[]) ──
     for field, (col, category) in VOCAB_ARRAY_MAP.items():
+        # WO-...-COMPAT-002 §7: vocab source column 부재 -> UNRESOLVED (NULL 과 혼동 금지).
+        if col not in fac:
+            _unresolved(field, f"factories.{col}(source column unavailable)")
+            continue
         raw = fac.get(col)
         if raw is None:
             _resolve(field, None, "TRANSFORM", f"factories.{col}")
@@ -195,62 +205,46 @@ def assemble_industrial_marketing_contract(supabase, factory_id: str) -> Dict[st
     proc_res = (
         supabase.table("factory_process")
         .select("process_name_manual, process_lv1, process_lv2, process_lv3, process_lv4, "
-                "hazard_codes, worker_count, is_primary, activity_types, is_active")
+                "is_primary, is_active")
         .eq("factory_id", factory_id)
         .eq("is_active", True)
         .execute()
     )
     proc_rows = _rows(proc_res)
     if not proc_rows:
+        # zero active row = known none (RESOLVED None). UNRESOLVED 아님.
         _resolve("process_list", None, "COMPOSITE", "factory_process")
     else:
-        rows_out = []
-        ok = True
-        for p in proc_rows:
-            name = (p.get("process_name_manual") or p.get("process_lv4") or p.get("process_lv3")
-                    or p.get("process_lv2") or p.get("process_lv1"))
-            if not name:   # 이름 없는 active row → 전체 불완전
-                ok = False
-                break
-            rows_out.append({
-                "process_name": name,
-                "hazard_codes": p.get("hazard_codes"),
-                "worker_count": p.get("worker_count"),
-                "is_primary": p.get("is_primary"),
-                "activity_type": p.get("activity_types"),   # key singular, value multi(array)
-            })
-        if ok:
-            _resolve("process_list", rows_out, "COMPOSITE", "factory_process")
-        else:
-            _unresolved("process_list", "factory_process(이름 결측 row)")
+        # WO-...-COMPAT-002 §10: 현재 production factory_process 스키마만으로는
+        #   Marketing process row(hazard_codes/worker_count/activity_types)를 완전 표현 불가.
+        #   partial object(누락 필드 null)를 완성값으로 내보내면 "물리 부재"를 "DB NULL"로
+        #   오인시키므로 금지. 전체 field 를 UNRESOLVED 로 둔다.
+        _unresolved(
+            "process_list",
+            "factory_process(current schema lacks hazard_codes,worker_count,activity_types)",
+        )
 
     # ── equipment_list (equipment_assets operating) ──
     eq_res = (
         supabase.table("equipment_assets")
         .select("equipment_type_code, asset_name, quantity, capacity_value, capacity_unit, "
-                "is_legal_target, usage_types, relation_types, is_operating")
+                "is_legal_target, is_operating")
         .eq("factory_id", factory_id)
         .eq("is_operating", True)
         .execute()
     )
     eq_rows = _rows(eq_res)
     if not eq_rows:
+        # zero operating row = known none (RESOLVED None).
         _resolve("equipment_list", None, "COMPOSITE", "equipment_assets")
     else:
-        rows_out = []
-        for e in eq_rows:
-            rows_out.append({
-                "equipment_type": e.get("equipment_type_code"),
-                "asset_name": e.get("asset_name"),
-                "quantity": e.get("quantity"),
-                "capacity_value": e.get("capacity_value"),
-                "capacity_unit": e.get("capacity_unit"),
-                "is_legal_target": e.get("is_legal_target"),
-                "usage_type": e.get("usage_types"),
-                "relation_type": e.get("relation_types"),
-                # factory_process_id 는 transport field 아님 → 미출력
-            })
-        _resolve("equipment_list", rows_out, "COMPOSITE", "equipment_assets")
+        # WO-...-COMPAT-002 §12: 현재 production equipment_assets 스키마만으로는
+        #   canonical equipment composite(usage_types/relation_types)를 완전 표현 불가.
+        #   partial object 반환 금지 -> 전체 UNRESOLVED.
+        _unresolved(
+            "equipment_list",
+            "equipment_assets(current schema lacks usage_types,relation_types)",
+        )
 
     # 29 정합성(안전망)
     for f in TARGET_FIELDS:
