@@ -51,6 +51,19 @@ ERROR BEHAVIOR
     DB MUTATION = 0 · migration = 0 · requirements = 0
     paid_result_contract_svc.py / paid_result_evidence_svc.py /
     paid_result_materializer.py 변경 = 0 · LEG mutation = 0 · deploy = 0
+
+PUBLIC RELEASE REPRODUCIBILITY GATE = OPEN
+    paid_result_evidence_v1 은 live public.law_article 을 읽어 만들어진다.
+    paid_result_source_text_v1 은 LIVE_LEG_SOURCE 로, LEG Runtime 이 live
+    law_article_part.part_text 를 읽어 만든다. 두 산출물 모두 저장 진단에
+    source snapshot / immutable binding 을 남기지 않는다.
+
+    따라서 같은 저장 진단이라도 향후 법령 source 가 바뀌면 evidence /
+    source-text 가 달라질 수 있다. assembler · source-text sidecar 구현이
+    완료됐다고 해서 이 gate 가 닫히지 않는다.
+
+    snapshot / immutability / reproducibility 해결은 별도 RELEASE GATE 에서
+    수행한다. 이 gate 는 OPEN 상태를 유지한다.
 """
 
 from __future__ import annotations
