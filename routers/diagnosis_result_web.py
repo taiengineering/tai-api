@@ -467,6 +467,19 @@ def _project_free_obligation(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+_PUBLIC_KEY_OBLIGATION_FIELDS = (
+    "type", "obligation_type", "obligation_summary", "description", "remarks",
+    "rule_name", "law", "law_name", "law_article", "penalty", "penalty_summary",
+)
+
+
+def _public_key_obligation(row: Any) -> Dict[str, Any]:
+    """key_obligations public projection — allowlist only(내부 provenance 차단, 값 합성 0)."""
+    if not isinstance(row, dict):
+        return {}
+    return {k: row[k] for k in _PUBLIC_KEY_OBLIGATION_FIELDS if k in row}
+
+
 def _build_free_obligations(rules_table: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """표시용 전체 rules_table(절단 전)에서 무료 안전 투영 전건 생성."""
     return [_project_free_obligation(r) for r in rules_table]
@@ -600,7 +613,8 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
 
     limit = free_preview_limit if is_free else None
     rules_out = rules_table[:limit] if limit else rules_table
-    key_ob_out = key_obligations[:limit] if limit else key_obligations
+    _key_ob_src = key_obligations[:limit] if limit else key_obligations
+    key_ob_out = [_public_key_obligation(r) for r in _key_ob_src if isinstance(r, dict)]
     law_grp_out = law_group_list[:limit] if limit else law_group_list
 
     # v1.4.0: 무료 안전 의무 목록(additive). 표시용 전체 rules_table에서 절단 없이 전건 투영.
