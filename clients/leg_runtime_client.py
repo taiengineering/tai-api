@@ -155,6 +155,25 @@ _LEG_INPUT_FIELDS = (
     # specific atom(석면해체 7·타워크레인 5)만 매칭. generic has_asbestos/has_crane 무접촉
     # (alias 없음 — SPECIFIC INPUT→SPECIFIC KEY→SPECIFIC mapped_field 원칙). derived/추정 없음.
     "has_asbestos_demo", "has_tower_crane",
+    # WO-BLD-MKT-CONSUMER-INPUT-WIRING-016 STEP-2: BUILDING N1 raw primitive 32축(append).
+    # building_use_type 은 이미 위 목록에 존재(중복 추가 안 함). derived/proxy 없음 — exact-name passthrough.
+    # numeric(ratio 포함)/enum/boolean 모두 step1_body.input 통로로 전달, build_facility 가 None/blank 만 omit.
+    # WP-C(applicable.py) frozen tree 의 Leaf.field 와 exact 일치. LEG condition/의미 불변.
+    "floor_count", "building_height_m", "floor_area_sum_at_or_above_11f",
+    "performance_use_floor_area_sum", "cantilever_projection_m", "column_span_m",
+    "flat_plate_column_section_ratio", "occupancy_capacity",
+    "underground_connection_entrance_distance_m", "connection_open_space_floor_area_m2",
+    "connection_open_space_open_area_ratio", "stair_or_ramp_effective_width_m",
+    "building_activity_type", "building_use_category",
+    "has_performance_assembly_use", "is_target_facility_in_basement",
+    "has_gas_boiler_heating_system", "has_centralized_gas_supply",
+    "is_collapse_risk_land", "has_land_preparation", "has_building_construction_activity",
+    "has_wet_land", "has_water_seepage_risk", "has_landfill_or_similar_ground",
+    "has_flat_plate_structure", "authority_designated_special_structure",
+    "article32_3_alternative_confirmation_subject",
+    "has_wall_between_connection_entrances", "wall_between_connection_entrances_is_fire_resistant",
+    "has_stair_or_ramp_in_open_space", "is_connected_to_subway_or_underground_mall",
+    "has_hazardous_material_in_out_event",
 )
 
 
