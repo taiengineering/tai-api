@@ -1,7 +1,7 @@
 """WO-BLD-MKT-CONSUMER-INPUT-WIRING-016 STEP-2: build_facility BUILDING N1 33 primitive wiring."""
 import os, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from clients.leg_runtime_client import build_facility, _LEG_INPUT_FIELDS
+from clients.leg_runtime_client import build_facility, _LEG_INPUT_FIELDS, _BUILDING_N1_FIELDS
 
 BLD33=["floor_count","building_height_m","floor_area_sum_at_or_above_11f","performance_use_floor_area_sum",
  "cantilever_projection_m","column_span_m","flat_plate_column_section_ratio","occupancy_capacity",
@@ -80,3 +80,82 @@ def test_ratio_passthrough_no_conversion():
     # ratio 0~1 그대로(퍼센트 변환 없음)
     fac=build_facility(Body(sector="BUILDING", input={"connection_open_space_open_area_ratio":0.5,"flat_plate_column_section_ratio":0.25}))
     assert fac["connection_open_space_open_area_ratio"]==0.5 and fac["flat_plate_column_section_ratio"]==0.25
+
+
+# ── WO-FIX-BUILDFACILITY-SECTOR-GATE-001 / POST-MERGE TEST-LOCK ─────────────
+# BUILDING N1 32축 sector-firewall regression-lock.
+#   build_facility 의 gate: `code in _BUILDING_N1_FIELDS and sector != "BUILDING" -> continue`.
+#   denominator 는 production frozenset(_BUILDING_N1_FIELDS) 자체 → hardcode drift 차단.
+#   building_use_type 은 32축 밖(base 공용)이라 별도 보존 검증.
+
+_N1 = sorted(_BUILDING_N1_FIELDS)
+
+
+def test_lock_denominator_is_exactly_32():
+    # exact SET lock: WIRING-016 BUILDING 33 - shared building_use_type 1 = firewall 32.
+    #   len==32 만으로는 축 교체(하나 빠지고 다른 하나 들어옴)를 못 잡으므로
+    #   이름 집합 동일성으로 freeze 한다(drift-proof).
+    expected = set(BLD33) - {"building_use_type"}
+    assert len(expected) == 32, len(expected)
+    assert "building_use_type" not in _BUILDING_N1_FIELDS
+    assert set(_BUILDING_N1_FIELDS) == expected, (
+        set(_BUILDING_N1_FIELDS) ^ expected
+    )
+
+
+def _n1_full_input():
+    """32축 전부에 non-None 값을 채운 input(값 종류 무관 — 통과 여부만 본다)."""
+    d = {}
+    for c in _N1:
+        # bool/num/str 무관하게 truthy non-empty 값이면 build_facility 통과 대상
+        d[c] = 1 if c.startswith(("floor", "building_height", "occupancy")) else True
+    # enum 계열은 문자열로(빈문자 배제)
+    d["building_activity_type"] = "건축"
+    d["building_use_category"] = "RETAIL"
+    return d
+
+
+def _blocked_count(sector):
+    """sector 에서 32축 중 facility 에 실린 개수(0 이어야 blocked)."""
+    fac = build_facility(Body(sector=sector, input=_n1_full_input()))
+    return sum(1 for c in _N1 if c in fac)
+
+
+def _allowed_count(sector):
+    fac = build_facility(Body(sector=sector, input=_n1_full_input()))
+    return sum(1 for c in _N1 if c in fac)
+
+
+def test_lock_industrial_32_blocked():
+    assert _blocked_count("INDUSTRIAL") == 0
+
+
+def test_lock_manufacturing_32_blocked():
+    assert _blocked_count("MANUFACTURING") == 0
+
+
+def test_lock_construction_32_blocked():
+    assert _blocked_count("CONSTRUCTION") == 0
+
+
+def test_lock_special_facility_32_blocked():
+    assert _blocked_count("SPECIAL_FACILITY") == 0
+
+
+def test_lock_none_sector_32_blocked():
+    # sector 미지정(None)도 BUILDING 이 아니므로 전부 차단.
+    fac = build_facility(Body(sector=None, input=_n1_full_input()))
+    assert sum(1 for c in _N1 if c in fac) == 0
+
+
+def test_lock_building_32_allowed():
+    # BUILDING sector 에서는 32축 전부 통과(gate 미적용).
+    assert _allowed_count("BUILDING") == 32
+
+
+def test_lock_building_use_type_preserved_all_sectors():
+    # building_use_type 은 32축 gate 밖 → 모든 sector 에서 보존.
+    for sector in ("BUILDING", "INDUSTRIAL", "MANUFACTURING", "CONSTRUCTION",
+                   "SPECIAL_FACILITY", None):
+        fac = build_facility(Body(sector=sector, input={"building_use_type": "오피스텔"}))
+        assert fac.get("building_use_type") == "오피스텔", sector
