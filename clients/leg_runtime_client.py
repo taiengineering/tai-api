@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -248,6 +248,36 @@ def evaluate_rtm(facility: Dict[str, Any], *, timeout: Optional[float] = None) -
         )
     except Exception as e:
         raise LegRuntimeError("request failed: {}".format(e))
+    try:
+        return resp.json()
+    except Exception as e:
+        raise LegRuntimeError("invalid json: {}".format(e))
+
+
+# ── WO-DQ-WHAT-05C: LEG canonical source-text batch fetch (/rtm/source-texts) ──
+# atom_ids[] -> LEG Runtime source-text 계약(dict). retry 0 · fallback 0 · LEG DB direct 0.
+# non-200 에서 response body 를 예외문구에 싣지 않는다(status code 까지만 — raw repo detail leak 금지).
+
+def fetch_source_texts(atom_ids: Any, *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    """POST {LEG_RUNTIME_URL}/rtm/source-texts. payload EXACT {"atom_ids":[...]}. fail fast.
+
+    반환(그대로): {version, source_mode, items[], unresolved[]}.
+    LEG_RUNTIME_URL 미설정 / network / non-200 / invalid JSON -> LegRuntimeError.
+    """
+    if not is_enabled():
+        raise LegRuntimeError("LEG_RUNTIME_URL 미설정")
+    url = "{}/rtm/source-texts".format(LEG_RUNTIME_URL)
+    try:
+        resp = httpx.post(
+            url,
+            json={"atom_ids": list(atom_ids)},
+            timeout=timeout or LEG_RUNTIME_TIMEOUT,
+        )
+    except Exception as e:
+        raise LegRuntimeError("request failed: {}".format(e))
+    if resp.status_code != 200:
+        # status code 만 노출. resp.text(=LEG repository detail)는 싣지 않는다.
+        raise LegRuntimeError("HTTP {}".format(resp.status_code))
     try:
         return resp.json()
     except Exception as e:
