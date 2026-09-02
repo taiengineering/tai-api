@@ -5,6 +5,7 @@ run_leg_diagnosis / build_facility 는 monkeypatch(실 LEG 미호출).
 """
 import copy
 import pytest
+from pydantic import ValidationError
 
 from services.safe_construction_canonical_assembler import (
     assemble_construction_marketing_contract, TARGET_FIELDS, CONTRACT_VERSION, SECTOR,
@@ -122,8 +123,8 @@ def test_no_special_work_read():
     assert "hazard_type" not in code
 
 
-# ── RUNTIME14 unresolved 초기화 ────────────────────────────────────────
-def test_runtime14_unresolved_initial():
+# ── RUNTIME20 unresolved 초기화 ────────────────────────────────────────
+def test_runtime20_unresolved_initial():
     r = assemble_construction_marketing_contract(_sb(), "S1")
     for f in RUNTIME_INPUT_FIELDS:
         assert r["values"][f] is None and f in r["unresolved_fields"], f
@@ -179,8 +180,8 @@ def test_D_explicit_override_false_zero(monkeypatch):
     assert "has_demolition" in out["unresolved_fields"]         # 미override 유지
 
 
-# ── override allowlist = RUNTIME14 (subcontractor_count 제외) ───────────
-def test_override_allowlist_14(monkeypatch):
+# ── override allowlist = RUNTIME20 (subcontractor_count 제외) ───────────
+def test_override_allowlist_20(monkeypatch):
     cap = {"called": 0}
     _patch_leg(monkeypatch, cap)
     # subcontractor_count 는 override 대상 아님 → 넘겨도 canonical None 유지
@@ -237,9 +238,8 @@ def test_T1_runtime_denominator_20():
 def test_T2_request_schema_20():
     from schemas.legal_engine import SafeConstructionConsumerInput
     assert len(SafeConstructionConsumerInput.model_fields) == 20
-    for f in ("has_asbestos", "has_gas", "has_high_pressure_gas",
-              "has_water_tank", "is_energy_intensive", "is_multi_use"):
-        assert f in SafeConstructionConsumerInput.model_fields
+    # exact-set: request schema == RUNTIME_INPUT_FIELDS (EXTRA 0, MISSING 0).
+    assert set(SafeConstructionConsumerInput.model_fields) == set(RUNTIME_INPUT_FIELDS)
 
 def test_T3_regulatory_false_preserved(monkeypatch):
     cap = {"called": 0}; _patch_leg(monkeypatch, cap)
@@ -261,13 +261,11 @@ def test_T5_regulatory_none(monkeypatch):
     assert "has_asbestos" in out["unresolved_fields"]
 
 def test_T6_non_runtime_canonical_firewall():
+    # fail-closed: schema 가 실제로 REJECT 해야 PASS. ACCEPT 하면 ValidationError 미발생 → 테스트 FAIL.
     from schemas.legal_engine import SafeConstructionLegBody
     for bad in ("subcontractor_count", "process_list", "subcontractor"):
-        try:
+        with pytest.raises(ValidationError):
             SafeConstructionLegBody(site_id="S1", input={bad: 1})
-            assert False, f"{bad} should be rejected"
-        except Exception:
-            pass  # extra=forbid → reject
 
 def test_T7_construction_type_code_fixture():
     r = assemble_construction_marketing_contract(_sb(site={"site_type": "BUILDING"}), "S1")

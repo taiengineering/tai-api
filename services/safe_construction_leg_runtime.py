@@ -1,11 +1,11 @@
 """WO-DUAL-CST-STEP2-IMPLEMENT-001 GATE-1 — SAFE CONSTRUCTION 공식 LEG 진입.
 
 경로: assemble_construction_marketing_contract(SAFE 자산 READ) -> canonical27
-      -> consumer override(RUNTIME14, non-null) -> DiagnoseStep1Body(sector="CONSTRUCTION", input=values)
+      -> consumer override(RUNTIME20, non-null) -> DiagnoseStep1Body(sector="CONSTRUCTION", input=values)
       -> run_leg_diagnosis(공식 Runtime Delegate: build_facility -> /rtm/evaluate -> full_result).
 
 산업 GATE-4A(run_safe_industrial_leg)와 대칭. canonical denominator 27 불변.
-override allowlist = RUNTIME_INPUT_FIELDS(14). subcontractor_count 는 override 대상 아님
+override allowlist = RUNTIME_INPUT_FIELDS(20). subcontractor_count 는 override 대상 아님
 (CANONICAL_UNRESOLVED, LEG passthrough 아님 — VERIFIER CORRECTION).
 DB WRITE 0(READ-ONLY LEG diagnosis). factory 생성 side effect 0.
 """
@@ -24,8 +24,8 @@ class ConstructionSiteBridgeError(Exception):
     """site 에 factory_id 연결이 없을 때(진단 중 factory 생성 금지 — fail-closed)."""
 
 
-# SAFE 화면에서 진단 시 명시 가능한 canonical override field(RUNTIME14).
-#   assembler 가 값을 만들지 않는 위험작업/규제/has_subcontractor 축.
+# SAFE 화면에서 진단 시 명시 가능한 canonical override field(RUNTIME20).
+#   assembler 가 값을 만들지 않는 위험작업/규제/has_subcontractor 축(20).
 #   subcontractor_count 는 포함하지 않는다(정본 컬럼 없음 · LEG passthrough 아님).
 SAFE_CST_OVERRIDE_FIELDS = tuple(RUNTIME_INPUT_FIELDS)
 
@@ -43,7 +43,7 @@ def run_safe_construction_leg(supabase, site_id: str, consumer_input) -> Dict[st
     unresolved = set(contract.get("unresolved_fields") or [])
     provenance: Dict[str, Any] = dict(contract.get("provenance") or {})
 
-    # B. consumer override — RUNTIME14 만, non-null(None=미override, false/0=override).
+    # B. consumer override — RUNTIME20 만, non-null(None=미override, false/0=override).
     if hasattr(consumer_input, "model_dump"):
         overrides = consumer_input.model_dump(exclude_none=True)
     else:

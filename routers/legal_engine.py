@@ -110,7 +110,7 @@ async def diagnose_industrial_leg(body: SafeIndustrialLegBody, authorization: Op
 @router.post("/diagnose/construction-leg")
 async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization: Optional[str] = Header(None)):
     # WO-DUAL-CST-STEP2 GATE-1: SAFE CONSTRUCTION 공식 LEG 진입 (산업 GATE-4A 대칭).
-    # 순서: AUTH -> SITE OWNERSHIP -> LEG enabled -> assembler(READ) -> override(RUNTIME14)
+    # 순서: AUTH -> SITE OWNERSHIP -> LEG enabled -> assembler(READ) -> override(RUNTIME20)
     #       -> DiagnoseStep1Body -> run_leg_diagnosis. factory 생성/저장 side effect 0.
     supabase = get_supabase()
     current = get_current_user(authorization)                 # AUTH first

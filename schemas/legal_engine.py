@@ -90,7 +90,7 @@ class SafeIndustrialLegBody(BaseModel):
 
 
 class SafeConstructionConsumerInput(BaseModel):
-    """SAFE CONSTRUCTION 진단 시 사용자 명시 override(RUNTIME14). extra=forbid.
+    """SAFE CONSTRUCTION 진단 시 사용자 명시 override(RUNTIME20). extra=forbid.
     None=미override, false/0=명시값. 위험작업/규제 boolean + numeric + has_subcontractor.
     """
     model_config = ConfigDict(extra="forbid")
