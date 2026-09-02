@@ -227,6 +227,9 @@ def test_T11_existing_display_unchanged(monkeypatch):
 
 
 def test_T12_legacy_raw_rules_no_product_no_canonical(monkeypatch):
+    # WO-05D-A REV-1 / DECISION-C: T12 책임(legacy raw_rules→Product 미호출/canonical 미부착)
+    #   외의 legacy enrichment DB transport 를 격리. gate(not raw_rules)는 실제 route 로 평가.
+    monkeypatch.setattr(rw, "enrich_rules_with_candidate_slots", lambda *args, **kwargs: None)
     rules_table = [{"law_name": "L", "law_article": "1", "obligation_type": "INSPECT",
                     "obligation_summary": "레거시", "description": "레거시", "rule_id": "r1"}]
     rec = stored_rec([leg_obligation("a0", "무시")], tier="BUILDING_V2", rules_table=rules_table)
@@ -299,3 +302,36 @@ def test_source_index_enumerate_alignment():
     obs = [leg_obligation("a0", "w0"), leg_obligation("a1", "w1"), leg_obligation("a2", "w2")]
     rows = _leg_rules_from_obligations_raw(obs)
     assert [r[_INTERNAL_SOURCE_INDEX] for r in rows] == [0, 1, 2]
+
+
+# ─────────────────────────────────────────────────────────────
+# WO-DQ-WHAT-05D-A REV-1 — security hygiene: public_token must NOT reach logger
+#   T16(generic 503/detail 미노출)과 목적이 다름: 이 테스트는 우리 코드가
+#   public_token 을 log.exception 인자로 넘기지 않는 계약을 고정한다.
+# ─────────────────────────────────────────────────────────────
+def test_T19_product_exception_log_excludes_public_token(monkeypatch):
+    from fastapi import HTTPException
+
+    captured = {"calls": []}
+
+    def fake_exception(msg, *args, **kwargs):
+        captured["calls"].append((msg, args))
+
+    monkeypatch.setattr(rw.log, "exception", fake_exception)
+
+    rec = stored_rec([leg_obligation("a0", "점검")], tier="BUILDING_V2")  # public_token="tok-1"
+    install(monkeypatch, rec, product_exc=RuntimeError("leg down"))
+
+    with pytest.raises(HTTPException) as ei:
+        rw.get_paid_result_web("tok-1")
+    assert ei.value.status_code == 503
+
+    # 정확히 1회 로깅, 메시지는 토큰 없는 고정 문자열, positional args 비어있음.
+    assert len(captured["calls"]) == 1
+    msg, args = captured["calls"][0]
+    assert msg == "paid_result_product build failed"
+    assert args == ()
+    # public_token("tok-1")이 message/args 어디에도 없어야 함.
+    assert "tok-1" not in msg
+    assert all("tok-1" not in str(a) for a in args)
+    assert "public_token" not in msg

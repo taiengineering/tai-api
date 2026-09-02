@@ -549,7 +549,7 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
         try:
             _paid_product = build_paid_result_product_v1(rec)
         except Exception:
-            log.exception("paid_result_product build failed public_token=%s", public_token)
+            log.exception("paid_result_product build failed")
             raise HTTPException(status_code=503, detail="유료 진단 법령 원문을 불러오지 못했습니다.")
         _attach_canonical_source_text(rules_table, _source_text_exact_items_by_ref(_paid_product))
 
