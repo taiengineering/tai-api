@@ -87,3 +87,38 @@ class SafeIndustrialLegBody(BaseModel):
 
     factory_id: str
     input: SafeIndustrialConsumerInput
+
+
+class SafeConstructionConsumerInput(BaseModel):
+    """SAFE CONSTRUCTION 진단 시 사용자 명시 override(RUNTIME20). extra=forbid.
+    None=미override, false/0=명시값. 위험작업/규제 boolean + numeric + has_subcontractor.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    has_excavation: Optional[bool] = None
+    has_demolition: Optional[bool] = None
+    has_tower_crane: Optional[bool] = None
+    has_confined_space: Optional[bool] = None
+    has_asbestos_demo: Optional[bool] = None
+    has_blasting: Optional[bool] = None
+    has_diving: Optional[bool] = None
+    work_height_m: Optional[float] = None
+    has_truck_loading_unloading: Optional[bool] = None
+    truck_loading_height_m: Optional[float] = None
+    has_manual_heavy_handling: Optional[bool] = None
+    manual_handling_weight_kg: Optional[float] = None
+    has_chemical_substance: Optional[bool] = None
+    has_subcontractor: Optional[bool] = None
+    has_asbestos: Optional[bool] = None
+    has_gas: Optional[bool] = None
+    has_high_pressure_gas: Optional[bool] = None
+    has_water_tank: Optional[bool] = None
+    is_energy_intensive: Optional[bool] = None
+    is_multi_use: Optional[bool] = None
+
+
+class SafeConstructionLegBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    site_id: str
+    input: SafeConstructionConsumerInput

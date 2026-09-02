@@ -5,10 +5,12 @@ from typing import Optional
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_factory_own
-from schemas.legal_engine import DiagnoseStep1Body, DiagnoseStep2Body, DiagnoseStep3Body, SafeIndustrialLegBody
+from schemas.legal_engine import DiagnoseStep1Body, DiagnoseStep2Body, DiagnoseStep3Body, SafeIndustrialLegBody, SafeConstructionLegBody
 from services import legal_engine_svc
 from services.legal_v510_svc import run_diagnose_step1_v510
 from services.safe_industrial_leg_runtime import run_safe_industrial_leg
+from services.safe_construction_leg_runtime import run_safe_construction_leg, ConstructionSiteBridgeError
+from services.company_scope import _ensure_own_company
 from clients import leg_runtime_client
 from clients.leg_runtime_client import LegRuntimeError
 from services.leg_diagnosis_svc import LegDiagnosisError
@@ -95,6 +97,36 @@ async def diagnose_industrial_leg(body: SafeIndustrialLegBody, authorization: Op
         raise HTTPException(status_code=503, detail="LEG runtime 미설정")
     try:
         out = run_safe_industrial_leg(supabase, body.factory_id, body.input)
+    except (LegDiagnosisError, LegRuntimeError) as e:
+        raise HTTPException(status_code=502, detail="LEG 실행 실패: {}".format(e))
+    return {
+        "status": "success",
+        "data": out["full_result"],
+        "contract_version": out["contract_version"],
+        "unresolved_fields": out["unresolved_fields"],
+    }
+
+
+@router.post("/diagnose/construction-leg")
+async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization: Optional[str] = Header(None)):
+    # WO-DUAL-CST-STEP2 GATE-1: SAFE CONSTRUCTION 공식 LEG 진입 (산업 GATE-4A 대칭).
+    # 순서: AUTH -> SITE OWNERSHIP -> LEG enabled -> assembler(READ) -> override(RUNTIME20)
+    #       -> DiagnoseStep1Body -> run_leg_diagnosis. factory 생성/저장 side effect 0.
+    supabase = get_supabase()
+    current = get_current_user(authorization)                 # AUTH first
+    srow = (
+        supabase.table("construction_sites")
+        .select("company_id").eq("id", body.site_id).limit(1).execute()
+    )
+    if not srow.data:
+        raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+    _ensure_own_company(srow.data[0].get("company_id"), current, supabase, "현장을 찾을 수 없습니다.")
+    if not leg_runtime_client.is_enabled():                   # LEG availability (TAI fallback 금지)
+        raise HTTPException(status_code=503, detail="LEG runtime 미설정")
+    try:
+        out = run_safe_construction_leg(supabase, body.site_id, body.input)
+    except ConstructionSiteBridgeError as e:
+        raise HTTPException(status_code=409, detail=str(e))    # site↔factory 미연결 fail-closed
     except (LegDiagnosisError, LegRuntimeError) as e:
         raise HTTPException(status_code=502, detail="LEG 실행 실패: {}".format(e))
     return {
