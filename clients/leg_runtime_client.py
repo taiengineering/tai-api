@@ -308,3 +308,36 @@ def fetch_source_texts(atom_ids: Any, *, timeout: Optional[float] = None) -> Dic
         return resp.json()
     except Exception as e:
         raise LegRuntimeError("invalid json: {}".format(e))
+
+
+# ── WO-DQ-WHAT-05D-A0: LEG law_master/law_article row fetch (/rtm/evidence-rows) ──
+# law_names[] + article_nos[] -> LEG Runtime evidence-rows 계약(dict).
+# retry 0 · fallback 0 · LEG DB direct 0. non-200 body 미노출.
+
+def fetch_evidence_rows(law_names, article_nos, *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    """POST {LEG_RUNTIME_URL}/rtm/evidence-rows. payload EXACT {"law_names":[...],"article_nos":[...]}. fail fast."""
+    if not is_enabled():
+        raise LegRuntimeError("LEG_RUNTIME_URL 미설정")
+    url = "{}/rtm/evidence-rows".format(LEG_RUNTIME_URL)
+    try:
+        resp = httpx.post(
+            url,
+            json={"law_names": list(law_names), "article_nos": list(article_nos)},
+            timeout=timeout or LEG_RUNTIME_TIMEOUT,
+        )
+    except Exception as e:
+        raise LegRuntimeError("request failed: {}".format(e))
+    if resp.status_code != 200:
+        raise LegRuntimeError("HTTP {}".format(resp.status_code))   # body 미노출
+    try:
+        data = resp.json()
+    except Exception as e:
+        raise LegRuntimeError("invalid json: {}".format(e))
+    # malformed contract → LegRuntimeError (C08). 최소 shape 검증만(resolver 의미 판단 아님).
+    if (not isinstance(data, dict)
+            or data.get("version") != 1
+            or data.get("source_mode") != "LIVE_LEG_EVIDENCE"
+            or not isinstance(data.get("laws"), list)
+            or not isinstance(data.get("articles"), list)):
+        raise LegRuntimeError("malformed evidence-rows contract")
+    return data
