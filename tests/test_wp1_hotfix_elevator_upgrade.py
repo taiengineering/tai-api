@@ -45,12 +45,6 @@ def test_raw_structured_input_preserves_form_data():
     # 최초 저장에 form_data 가 raw_structured_input 에 포함.
     assert '"form_data": getattr(body, "form_data", None)' in src
 
-def test_upgrade_restores_form_data_first():
-    src = open("services/diagnosis_integrated_svc.py").read()
-    # upgrade 가 form_data 우선(없으면 input) 복원.
-    assert '_rsi_all.get("form_data") or _rsi_all.get("input")' in src
-
-
 # ── HOTFIX 무접촉: B1/B2/B3 default 제거 유지 (WP-1) ──
 def test_b1b2b3_default_removal_intact():
     src = open("services/diagnosis_integrated_svc.py").read()

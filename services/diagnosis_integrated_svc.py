@@ -657,7 +657,13 @@ def upgrade_diagnosis(
     # WP1-HOTFIX-001: upgrade canonical source = form_data(유료 정본) 우선, 없으면 input.
     #   최초 저장이 form_data 를 보존하므로 유료 BUILDING 소비자입력이 round-trip 된다.
     _rsi_all = input_data.get("raw_structured_input") or {}
-    _rsi = _rsi_all.get("form_data") or _rsi_all.get("input") or {}
+    # WP1-CORRECTION-002: form_data(유료 정본 canonical envelope)만 upgrade canonical source.
+    #   RAW input 은 canonical 승격 금지(RAW→CANONICAL FIREWALL). form_data 키가 있으면
+    #   그 값(빈 dict 포함)만 쓰고, 없으면 빈 dict — RAW input fallback 하지 않는다.
+    if "form_data" in _rsi_all:
+        _rsi = _rsi_all.get("form_data") or {}
+    else:
+        _rsi = {}
     if isinstance(_rsi, dict) and _rsi:
         from services.canonical.materialization import canonical_applicability
         for _c, _v in canonical_applicability(_rsi).items():
