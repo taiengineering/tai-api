@@ -492,8 +492,12 @@ def run_diagnosis(
             employee_count=employees,
             electric_capacity=body.electric_capacity,
             elevator_count=_bld_elev,
-            has_high_pressure_gas=body.has_gas if body.has_gas is not None else None,
-            has_hazardous_material=body.has_chemical if body.has_chemical is not None else None,
+            # WP3-BLOCKER-FIX-001: GAS/CHEM OVER-CLAIM 제거.
+            #   기존 has_high_pressure_gas=body.has_gas / has_hazardous_material=body.has_chemical 는
+            #   "가스 사용"(도시가스 가능)을 고압가스로, "화학물질 취급"을 산안 유해물질로 부정 발동시켰다
+            #   (별개 법령·외연; GAS-CHEM DECISION G1/C1 input_split 판정). top-level 부정매핑 삭제 →
+            #   build_facility 가 inp(사용자 명시값)만 사용. 사용자가 고압가스/유해물질을 명시적으로
+            #   보낼 때(building-leg UI G1/C1 분리 입력)까지 해당 조항 미발동.
         )
     else:
         step1_body = DiagnoseStep1Body(
