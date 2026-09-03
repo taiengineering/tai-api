@@ -492,8 +492,6 @@ def run_diagnosis(
             employee_count=employees,
             electric_capacity=body.electric_capacity,
             elevator_count=_bld_elev,
-            has_high_pressure_gas=body.has_gas if body.has_gas is not None else None,
-            has_hazardous_material=body.has_chemical if body.has_chemical is not None else None,
         )
     else:
         step1_body = DiagnoseStep1Body(
