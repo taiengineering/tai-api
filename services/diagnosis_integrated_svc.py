@@ -522,10 +522,13 @@ def run_diagnosis(
     if is_free:
         expires_at = (now_kst() + timedelta(days=7)).isoformat()
 
+    # WP1-HOTFIX-001: form_data(field_code envelope, 유료 정본 소비자입력)를 저장에 보존.
+    #   이전엔 input/process/equipment/ksic 만 담아 upgrade round-trip 시 form_data 유실.
     _raw_structured_input = {
         _k: _v
         for _k, _v in {
             "input": body.input,
+            "form_data": getattr(body, "form_data", None),
             "process_list": _process_list_val,
             "equipment_list": _equipment_list_val,
             "ksic_list": _ksic_list_val,
@@ -651,7 +654,10 @@ def upgrade_diagnosis(
     # WP-1 BLOCKER-FIX: 티어 업그레이드 재진단도 최초 저장된 소비자 원본
     #   (raw_structured_input.input)을 canonical 로 재적용해 사용자 입력을 살린다.
     #   (기존엔 building_use_type/floor_count 를 '사무실'/5 로 하드코딩해 원본을 유실).
-    _rsi = (input_data.get("raw_structured_input") or {}).get("input") or {}
+    # WP1-HOTFIX-001: upgrade canonical source = form_data(유료 정본) 우선, 없으면 input.
+    #   최초 저장이 form_data 를 보존하므로 유료 BUILDING 소비자입력이 round-trip 된다.
+    _rsi_all = input_data.get("raw_structured_input") or {}
+    _rsi = _rsi_all.get("form_data") or _rsi_all.get("input") or {}
     if isinstance(_rsi, dict) and _rsi:
         from services.canonical.materialization import canonical_applicability
         for _c, _v in canonical_applicability(_rsi).items():
