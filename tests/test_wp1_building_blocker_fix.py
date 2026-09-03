@@ -54,9 +54,11 @@ def test_B5_elevator_derivation_building():
     fac = build_facility(_bld(input={}, elevator_count=3))
     assert fac.get("has_building_elevator") is True
 
-def test_B5_elevator_zero_no_derivation():
+def test_B5_elevator_zero_is_false():
+    # WP1-HOTFIX-001: elevator_count=0 → has_building_elevator=False (이전엔 absent).
+    #   None → absent, 0 → False, 1+ → True.
     fac = build_facility(_bld(input={}, elevator_count=0))
-    assert "has_building_elevator" not in fac
+    assert fac.get("has_building_elevator") is False
 
 def test_B5_elevator_from_input():
     # elevator_count 가 input(rsi) 에 있을 때도 파생(build_facility 폴백).

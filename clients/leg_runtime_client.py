@@ -246,8 +246,11 @@ def build_facility(step1_body: Any) -> Dict[str, Any]:
         _ec = getattr(step1_body, "elevator_count", None)
         if _ec is None:
             _ec = inp.get("elevator_count")
-        if isinstance(_ec, (int, float)) and not isinstance(_ec, bool) and _ec > 0:
-            facility["has_building_elevator"] = True
+        # WP1-HOTFIX-001: elevator_count 명시값이면 has_building_elevator boolean 화.
+        #   None → absent (미확인). 0 → False (명시적 없음, 이전엔 absent 로 유실).
+        #   1+ → True. (승강기법 조항이 '승강기 없음' 을 판정하려면 False 가 필요.)
+        if isinstance(_ec, (int, float)) and not isinstance(_ec, bool):
+            facility["has_building_elevator"] = (_ec > 0)
     # WO-FE-CST-GAP-IMPL-001 CODE-C2: CONSTRUCTION has_chemical_substance exact-name.
     # PSR mapped_field=has_chemical_substance (has_chemical=0 atom). facility key 를 exact 로 교정.
     # sector-gated — 산업/건축은 기존 has_chemical 유지(INDUSTRIAL 동작 불변).
