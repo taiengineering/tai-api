@@ -472,18 +472,26 @@ def run_diagnosis(
             has_chemical_substance=_cst_fd.get("has_chemical_substance"),
         )
     elif engine_sector == "BUILDING":
+        # WP-1 BLOCKER-FIX: building_use_type/floor_count/total_floor_area 의 top-level default
+        #   ('사무실'/5/400)를 제거한다. 이 default 는 build_facility precedence(top-level>input)로
+        #   inp(canonical, 사용자 form_data 값)를 덮어써 사용자 입력이 유실되고 오판정을 유발했다.
+        #   3축 모두 _LEG_INPUT_FIELDS 이므로 top-level 미지정 시 build_facility 가 inp(사용자값)를
+        #   사용하며, 사용자 미입력이면 None → facility 미포함(None != 기본값 발명 금지).
+        #   B5: elevator_count 는 canonical 미통과(_LEG_INPUT_FIELDS 밖)이므로 form_data 원본에서
+        #   직접 전달해야 has_building_elevator 파생(elevator_count>0)이 실행된다.
+        _bld_fd = getattr(body, "form_data", None) or {}
+        _bld_elev = body.elevator_count
+        if _bld_elev is None:
+            _bld_elev = _bld_fd.get("elevator_count")
         step1_body = DiagnoseStep1Body(
             factory_id=factory_id,
             sector=engine_sector,
             input=inp,
-            building_use_type=body.building_use_type or "사무실",
             floor_area=float(floor_area),
-            total_floor_area=float(total_floor_area),
             worker_count=workers,
             employee_count=employees,
-            floor_count=body.floor_count or 5,
             electric_capacity=body.electric_capacity,
-            elevator_count=body.elevator_count,
+            elevator_count=_bld_elev,
             has_high_pressure_gas=body.has_gas if body.has_gas is not None else None,
             has_hazardous_material=body.has_chemical if body.has_chemical is not None else None,
         )
@@ -640,6 +648,14 @@ def upgrade_diagnosis(
 
     input_data = rec.get("input_data") or {}
     inp = {"tier_code": target_tier, "anonymous_flow": True, "upgrade": True}
+    # WP-1 BLOCKER-FIX: 티어 업그레이드 재진단도 최초 저장된 소비자 원본
+    #   (raw_structured_input.input)을 canonical 로 재적용해 사용자 입력을 살린다.
+    #   (기존엔 building_use_type/floor_count 를 '사무실'/5 로 하드코딩해 원본을 유실).
+    _rsi = (input_data.get("raw_structured_input") or {}).get("input") or {}
+    if isinstance(_rsi, dict) and _rsi:
+        from services.canonical.materialization import canonical_applicability
+        for _c, _v in canonical_applicability(_rsi).items():
+            inp.setdefault(_c, _v)
     sector = normalize_sector_db(str(input_data.get("sector") or ""))
     engine_sector = "MANUFACTURING" if sector == "INDUSTRIAL" else sector
     workers = int(input_data.get("workers") or 0)
@@ -657,16 +673,18 @@ def upgrade_diagnosis(
             subcon_workers=0,
         )
     elif engine_sector == "BUILDING":
+        # WP-1 BLOCKER-FIX: building_use_type/floor_count/total_floor_area 하드코딩 default
+        #   ('사무실'/5/floor_area) 제거. inp(canonical 재적용, 사용자 원본)를 사용한다.
+        #   B5: elevator_count 는 canonical 밖이므로 raw_structured_input.input 에서 직접 전달.
+        _up_elev = _rsi.get("elevator_count") if isinstance(_rsi, dict) else None
         step1_body = DiagnoseStep1Body(
             factory_id=None,
             sector=engine_sector,
             input=inp,
-            building_use_type="사무실",
             floor_area=floor_area,
-            total_floor_area=floor_area,
             worker_count=workers,
             employee_count=workers,
-            floor_count=5,
+            elevator_count=_up_elev,
         )
     else:
         step1_body = DiagnoseStep1Body(
