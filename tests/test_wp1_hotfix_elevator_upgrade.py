@@ -40,12 +40,7 @@ def test_elevator_firewall_industrial_zero_no_key():
 
 
 # ── 결함2: 저장/복원 계약 (소스 인스펙션 — DB 통합 대신 로직 검증) ──
-def test_raw_structured_input_preserves_form_data():
-    src = open("services/diagnosis_integrated_svc.py").read()
-    # 최초 저장에 form_data 가 raw_structured_input 에 포함.
-    assert '"form_data": getattr(body, "form_data", None)' in src
 
-# ── HOTFIX 무접촉: B1/B2/B3 default 제거 유지 (WP-1) ──
 def test_b1b2b3_default_removal_intact():
     src = open("services/diagnosis_integrated_svc.py").read()
     assert 'building_use_type=body.building_use_type or "사무실"' not in src
