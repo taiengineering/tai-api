@@ -1,4 +1,4 @@
-"""tests/test_paid_result_public_projection_v1.py — WO-STEP8A B1~B14 + REV-1 B15~B21
+"""tests/test_paid_result_public_projection_v1.py — WO-STEP8A B1~B14 + REV-1 B15~B23
 
 대상:
   services/paid_result_public_projection_svc.py
@@ -342,6 +342,39 @@ def test_B21_nested_unknown_key_injection_not_exposed():
     assert out["F03"]["actors"] == [{"actor": "사업주"}]
     assert out["F08"]["laws"] == [{"law_name": "산업안전보건법"}]
     assert out["F09"]["articles"] == [{"law_name": "산업안전보건법", "law_article": "38"}]
+
+
+def test_B22_f13_unsafe_only_triggers_empty():
+    product = _sample_product()
+    findings = product["paid_result_materials_v1"]["diagnosis_findings"]["findings"]
+    f13 = next(f for f in findings if f["finding_id"] == "F13")
+    f13["facts"] = {
+        "trigger_count": 3,
+        "triggers": ["has_asbestos", "has_chemical", "has_crane"],
+    }
+    out = build_public_premium_result_v1(product)
+    facts = _finding_by_id(out, "F13")["facts"]
+    assert facts["triggers"] == []
+    blob = json.dumps(out, ensure_ascii=False)
+    for unsafe in ("has_asbestos", "has_chemical", "has_crane"):
+        assert unsafe not in blob, unsafe
+    assert "trigger_count" not in facts
+
+
+def test_B23_f13_mixed_safe_unsafe_preserves_safe_order():
+    product = _sample_product()
+    findings = product["paid_result_materials_v1"]["diagnosis_findings"]["findings"]
+    f13 = next(f for f in findings if f["finding_id"] == "F13")
+    f13["facts"] = {
+        "trigger_count": 3,
+        "triggers": ["worker_count", "has_asbestos", "has_excavation"],
+    }
+    out = build_public_premium_result_v1(product)
+    facts = _finding_by_id(out, "F13")["facts"]
+    assert facts["triggers"] == ["worker_count", "has_excavation"]
+    blob = json.dumps(out, ensure_ascii=False)
+    assert "has_asbestos" not in blob
+    assert "trigger_count" not in facts
 
 
 def test_projection_does_not_mutate_product():
