@@ -6,8 +6,11 @@ from types import SimpleNamespace
 
 from clients.comwel_worker_client import (
     ComwelApiError,
+    address_match,
     get_worker_reference,
+    normalize_address,
     parse_items,
+    pick_reference,
     select_latest,
 )
 from services.ind_worker_validator import (
@@ -33,12 +36,24 @@ def _ref(count, date="20200101", fg="1", blanket=False):
     }
 
 
-def _item(cnt, dt, fg, name="사업장"):
+ADDR_SEOUL = "서울특별시 강남구 테헤란로 152"
+ADDR_CHEONAN = "충남 천안시 서북구 번영로 465"
+ADDR_SUWON = "경기 수원시 영통구 삼성로 129"
+ADDR_GIHEUNG = "경기 용인시 기흥구 삼성로 1"
+ADDR_GWANGJU = "광주광역시 광산구 하남산단6번로 107"
+ADDR_AMKOR = "광주광역시 광산구 앰코로 10"
+ADDR_GUMI = "경북 구미시 3공단3로 302"
+ADDR_ASAN = "충남 아산시 배방읍 배방로 123"
+ADDR_HWASEONG = "경기 화성시 삼성로 1120"
+ADDR_BUSAN = "부산광역시 해운대구 센텀중앙로 79"
+
+
+def _item(cnt, dt, fg, name="사업장", addr="서울"):
     return (
         "<item><sangsiInwonCnt>{}</sangsiInwonCnt><seongripDt>{}</seongripDt>"
         "<saeopFg>{}</saeopFg><saeopjangNm>{}</saeopjangNm>"
-        "<addr>서울</addr></item>"
-    ).format(cnt, dt, fg, name)
+        "<addr>{}</addr></item>"
+    ).format(cnt, dt, fg, name, addr)
 
 
 def _xml(*items, code="00"):
@@ -139,7 +154,7 @@ class _PaidBody:
     payment_ref = "PR1"
     disclaimer_log_id = None
     company_id = "C1"
-    form_data = {"worker_count": 40}
+    form_data = {"worker_count": 40, "address": ADDR_SUWON}
     worker_count = 40
     direct_workers = None
     employee_count = None
@@ -342,3 +357,183 @@ def test_building_paid_has_no_worker_validation(monkeypatch):
         (SVC.resolve_auth_log, SVC._assert_linkable, SVC._save_diagnosis_purchase,
          SVC._bind_linked_user_id, SVC._ensure_disclaimer_for_paid_entry) = orig
     assert "worker_validation" not in out
+
+
+def _samsung_items_distinct_addrs():
+    return [
+        _item(0, "19720101", "7", "삼성전자(주)", ADDR_SUWON),
+        _item(128093, "19950701", "1", "삼성전자(주)", ADDR_SUWON),
+        _item(1155, "19860101", "4", "삼성전자(주)", ADDR_SUWON),
+        _item(120563, "20110101", "3", "삼성전자(주)", ADDR_SUWON),
+        _item(4954, "19910103", "7", "삼성전자(주)", ADDR_SUWON),
+        _item(2818, "19970701", "7", "삼성전자(주)천안공장", ADDR_CHEONAN),
+        _item(671, "19900101", "7", "삼성전자(주)광주", ADDR_GWANGJU),
+        _item(2389, "19760101", "3", "삼성전자(주)본사스텝", ADDR_SUWON),
+        _item(26824, "19840403", "7", "삼성전자(주)기흥공장", ADDR_GIHEUNG),
+        _item(111, "19971001", "7", "삼성전자(주)광주(콤프제조)", ADDR_AMKOR),
+        _item(80, "19880101", "7", "삼성전자(주)구미", ADDR_GUMI),
+        _item(90, "19920101", "4", "삼성전자(주)온양", ADDR_ASAN),
+        _item(100, "19930101", "7", "삼성전자(주)화성", ADDR_HWASEONG),
+    ]
+
+
+def _http_xml(monkeypatch, xml):
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "dummy")
+
+    class Resp:
+        status_code = 200
+        text = xml
+
+    def boom(*a, **k):
+        raise AssertionError("httpx.get must not be called")
+
+    monkeypatch.setattr("clients.comwel_worker_client.httpx.get", lambda *a, **k: Resp())
+    return boom
+
+
+# ── address_match unit ─────────────────────────────────────────────────────
+def test_address_match_clear_true():
+    assert address_match(
+        "충청남도 천안시 서북구 번영로 465",
+        "충남 천안시 서북구 번영로 465 (성성동)",
+    ) is True
+
+
+def test_address_match_sido_abbrev_true():
+    assert "서울" in normalize_address("서울특별시 강남구 테헤란로 152")
+    assert "경기" in normalize_address("경기도 수원시 영통구 삼성로 129")
+    assert address_match(ADDR_SEOUL, "서울 강남구 테헤란로 152") is True
+    assert address_match(
+        "경기도 수원시 영통구 삼성로 129",
+        ADDR_SUWON,
+    ) is True
+
+
+def test_address_match_ambiguous_false():
+    assert address_match("천안", ADDR_CHEONAN) is False
+    assert address_match("서울", ADDR_SEOUL) is False
+    assert address_match(ADDR_SUWON, ADDR_GIHEUNG) is False
+    assert address_match(ADDR_SEOUL, ADDR_CHEONAN) is False
+
+
+# ── M1–M5 workplace address match ──────────────────────────────────────────
+def test_M1_same_biz_uses_cheonan_not_seoul():
+    recs = parse_items(_xml(
+        _item(99999, "19950701", "1", "서울공장", ADDR_SEOUL),
+        _item(2818, "19970701", "7", "천안공장", ADDR_CHEONAN),
+    ))
+    picked = pick_reference(recs, ADDR_CHEONAN)
+    assert picked is not None
+    assert picked["external_reference_count"] == 2818
+    assert picked["matched_address"] == ADDR_CHEONAN
+    assert picked["saeop_fg"] != "1"
+
+
+def test_M1_get_worker_reference_http_path(monkeypatch):
+    xml = _xml(
+        _item(99999, "19950701", "1", "서울공장", ADDR_SEOUL),
+        _item(2818, "19970701", "7", "천안공장", ADDR_CHEONAN),
+    )
+    _http_xml(monkeypatch, xml)
+    picked = get_worker_reference("1248100998", expected_address=ADDR_CHEONAN)
+    assert picked["external_reference_count"] == 2818
+    assert picked["matched_address"] == ADDR_CHEONAN
+
+
+def test_M2_no_address_match_no_data_diagnosis_continues():
+    recs = parse_items(_xml(
+        _item(99999, "19950701", "1", "서울공장", ADDR_SEOUL),
+        _item(2818, "19970701", "7", "천안공장", ADDR_CHEONAN),
+    ))
+    picked = pick_reference(recs, ADDR_BUSAN)
+    assert picked is None
+    out = compare(40, picked)
+    assert out["status"] == STATUS_NO_DATA
+    assert out["user_worker_count"] == 40
+
+    class Body(_PaidBody):
+        form_data = {"worker_count": 40, "address": ADDR_BUSAN}
+
+    def fake_none(*a, **k):
+        return None
+
+    out2 = build_worker_validation(
+        _PaidSB(), Body(), {"id": "U1", "company_id": "C1"}, 40, fetch_ref=fake_none,
+    )
+    assert out2["status"] == STATUS_NO_DATA
+    assert out2["user_worker_count"] == 40
+
+
+def test_M3_samsung_specific_plant_not_always_128093():
+    recs = parse_items(_xml(*_samsung_items_distinct_addrs()))
+    assert len([r for r in recs if r["sangsiInwonCnt"] > 0]) == 12
+    cheonan = pick_reference(recs, ADDR_CHEONAN)
+    assert cheonan["external_reference_count"] == 2818
+    assert cheonan["external_reference_count"] != 128093
+    giheung = pick_reference(recs, ADDR_GIHEUNG)
+    assert giheung["external_reference_count"] == 26824
+    assert giheung["external_reference_count"] != 128093
+    suwon = pick_reference(recs, ADDR_SUWON)
+    assert suwon["external_reference_count"] == 128093
+    assert suwon["matched_address"] == ADDR_SUWON
+
+
+def test_M4_biz_match_address_mismatch_is_no_data_not_recheck(monkeypatch):
+    xml = _xml(
+        _item(50, "19950701", "1", "서울공장", ADDR_SEOUL),
+    )
+    _http_xml(monkeypatch, xml)
+    picked = get_worker_reference("1248100998", expected_address=ADDR_CHEONAN)
+    assert picked is None
+    out = compare(40, picked)
+    assert out["status"] == STATUS_NO_DATA
+    assert out["status"] != STATUS_RECHECK_REQUIRED
+
+
+def test_M5_worker_count_original_preserved():
+    user = 40
+    out = compare(user, _ref(50))
+    assert out["user_worker_count"] == 40
+    assert out["external_reference_count"] == 50
+
+    def fake_ref(*a, **k):
+        return _ref(50)
+
+    built = build_worker_validation(
+        _PaidSB(), _PaidBody(), {"id": "U1", "company_id": "C1"}, user, fetch_ref=fake_ref,
+    )
+    assert built["user_worker_count"] == 40
+    assert built["user_worker_count"] != built["external_reference_count"]
+
+
+def test_empty_expected_address_returns_none_without_http(monkeypatch):
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "dummy")
+    called = []
+
+    def spy(*a, **k):
+        called.append(1)
+        raise AssertionError("must not HTTP without expected_address")
+
+    monkeypatch.setattr("clients.comwel_worker_client.httpx.get", spy)
+    assert get_worker_reference("1248100998") is None
+    assert get_worker_reference("1248100998", expected_address="  ") is None
+    assert called == []
+
+
+def test_missing_address_on_body_is_no_data():
+    class NoAddr(_PaidBody):
+        form_data = {"worker_count": 40}
+        region = None
+
+    called = []
+
+    def spy(*a, **k):
+        called.append(1)
+        return _ref(50)
+
+    out = build_worker_validation(
+        _PaidSB(), NoAddr(), {"id": "U1", "company_id": "C1"}, 40, fetch_ref=spy,
+    )
+    assert out["status"] == STATUS_NO_DATA
+    assert called == []
+    assert out["user_worker_count"] == 40

@@ -109,6 +109,20 @@ def api_error_payload(user_worker_count: Any) -> Dict[str, Any]:
     )
 
 
+def _workplace_address(body) -> Optional[str]:
+    """INDUSTRIAL 사업장 주소: form_data['address'] → body.address → body.region."""
+    fd = getattr(body, "form_data", None)
+    if isinstance(fd, dict):
+        raw = fd.get("address")
+        if raw is not None and str(raw).strip():
+            return str(raw).strip()
+    for attr in ("address", "region"):
+        raw = getattr(body, attr, None)
+        if raw is not None and str(raw).strip():
+            return str(raw).strip()
+    return None
+
+
 def lookup_company_business_number(supabase, body, current_user) -> Optional[str]:
     cid = (getattr(body, "company_id", None) or "").strip() or None
     if not cid and isinstance(current_user, dict):
@@ -143,9 +157,12 @@ def build_worker_validation(
     bn = lookup_company_business_number(supabase, body, current_user)
     if not bn:
         return compare(user, None)
+    addr = _workplace_address(body)
+    if not addr:
+        return compare(user, None)
     fetch = fetch_ref or get_worker_reference
     try:
-        ref = fetch(bn, boheom_fg=1, timeout=5)
+        ref = fetch(bn, expected_address=addr, boheom_fg=1, timeout=5)
     except ComwelApiError as e:
         log.warning("[IND-WORKER] ComwelApiError (continue diagnosis): %s", e)
         return api_error_payload(user)
