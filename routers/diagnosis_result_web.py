@@ -4,6 +4,7 @@ routers/diagnosis_result_web.py — v1.3.2
 유료/무료 진단 결과 웹 조회 API (JSON)
   GET /diagnosis/result/{public_token}
   GET /diagnosis/paid-result/{public_token}
+  GET /diagnosis/paid-result/{public_token}/excel  (on-demand XLSX, storage 0)
 
 v1.1.0: BE-08 Transform 정제 함수 연동 (rules_table dedupe + FAMILY→한글)
 v1.2.0: 의무 제목/설명 표시 보정 — obligation_summary/remarks가 코드 토큰일 때
@@ -34,11 +35,13 @@ v1.4.0: FREE-DIAGNOSIS-RESULT-UX-01 WP-B — free_obligations additive contract(
 """
 from __future__ import annotations
 
+import io
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from db.supabase_client import get_supabase
 from services.diagnosis_runtime_step1 import enrich_rules_with_candidate_slots
@@ -47,6 +50,11 @@ from services.paid_result_product_svc import (
     build_paid_result_product_v1,
 )
 from services.paid_result_public_projection_svc import build_public_premium_result_v1
+from services.paid_result_excel_v1 import (
+    build_paid_result_excel_v1,
+    content_disposition,
+    excel_filename,
+)
 from routers.diagnosis_transform import (
     CATEGORY_MAP,
     _extract_obligations,
@@ -500,6 +508,29 @@ RECOMMEND_PLAN = {
 @router.get("/result/{public_token}")
 def get_diagnosis_result_web(public_token: str):
     return _build_result_payload(public_token, free_preview_limit=5)
+
+
+@router.get("/paid-result/{public_token}/excel")
+def get_paid_result_excel(public_token: str):
+    """유료 결과 Excel. JSON paid-result 와 동일 access gate. on-demand, storage 0."""
+    payload = _build_result_payload(
+        public_token, free_preview_limit=None, include_paid_product=True,
+    )
+    data = payload.get("data") or {}
+    if data.get("is_free"):
+        raise HTTPException(status_code=403, detail="유료 진단 결과가 아닙니다.")
+    premium = data.get("premium_result_v1")
+    if not isinstance(premium, dict):
+        raise HTTPException(status_code=404, detail="진단 결과를 찾을 수 없습니다.")
+    raw = build_paid_result_excel_v1(premium)
+    filename = excel_filename(premium)
+    buf = io.BytesIO(raw)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": content_disposition(filename)},
+    )
 
 
 @router.get("/paid-result/{public_token}")
