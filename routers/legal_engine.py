@@ -5,11 +5,12 @@ from typing import Optional
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_factory_own
-from schemas.legal_engine import DiagnoseStep1Body, DiagnoseStep2Body, DiagnoseStep3Body, SafeIndustrialLegBody, SafeConstructionLegBody
+from schemas.legal_engine import DiagnoseStep1Body, DiagnoseStep2Body, DiagnoseStep3Body, SafeIndustrialLegBody, SafeConstructionLegBody, SafeBuildingLegBody
 from services import legal_engine_svc
 from services.legal_v510_svc import run_diagnose_step1_v510
 from services.safe_industrial_leg_runtime import run_safe_industrial_leg
 from services.safe_construction_leg_runtime import run_safe_construction_leg, ConstructionSiteBridgeError
+from services.safe_building_leg_runtime import run_safe_building_leg
 from services.company_scope import _ensure_own_company
 from clients import leg_runtime_client
 from clients.leg_runtime_client import LegRuntimeError
@@ -127,6 +128,27 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
         out = run_safe_construction_leg(supabase, body.site_id, body.input)
     except ConstructionSiteBridgeError as e:
         raise HTTPException(status_code=409, detail=str(e))    # site↔factory 미연결 fail-closed
+    except (LegDiagnosisError, LegRuntimeError) as e:
+        raise HTTPException(status_code=502, detail="LEG 실행 실패: {}".format(e))
+    return {
+        "status": "success",
+        "data": out["full_result"],
+        "contract_version": out["contract_version"],
+        "unresolved_fields": out["unresolved_fields"],
+    }
+
+
+
+@router.post("/diagnose/building-leg")
+async def diagnose_building_leg(body: SafeBuildingLegBody, authorization: Optional[str] = Header(None)):
+    # WO-BLD-FINALIZATION: SAFE BUILDING 공식 LEG 진입 (industrial 대칭, factory ownership).
+    supabase = get_supabase()
+    current = get_current_user(authorization)
+    _ensure_factory_own(supabase, body.factory_id, current)
+    if not leg_runtime_client.is_enabled():
+        raise HTTPException(status_code=503, detail="LEG runtime 미설정")
+    try:
+        out = run_safe_building_leg(supabase, body.factory_id, body.input)
     except (LegDiagnosisError, LegRuntimeError) as e:
         raise HTTPException(status_code=502, detail="LEG 실행 실패: {}".format(e))
     return {
