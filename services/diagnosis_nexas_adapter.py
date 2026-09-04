@@ -151,6 +151,8 @@ def build_nexas_run_response(svc_result: Dict[str, Any]) -> Dict[str, Any]:
         "rules_table": full.get("rules_table") or [],
         "pdf_url": svc_result.get("pdf_url") or full.get("pdf_url"),
     }
+    if svc_result.get("worker_validation") is not None:
+        data["worker_validation"] = svc_result["worker_validation"]
     return {
         "status": svc_result.get("status") or "success",
         "data": data,
