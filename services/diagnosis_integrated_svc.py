@@ -601,7 +601,7 @@ def run_diagnosis(
         )
         _bind_linked_user_id(supabase, auth_row, current_user, now_func())
 
-    return {
+    out = {
         "status": "success",
         "public_token": public_token,
         "diagnosis_id": str(created.get("id") or ""),
@@ -611,6 +611,17 @@ def run_diagnosis(
         "free_remaining_after": remaining_after if is_free else None,
         "result": full_result,
     }
+    if sector == "INDUSTRIAL" and not is_free:
+        try:
+            from services.ind_worker_validator import api_error_payload, build_worker_validation
+            out["worker_validation"] = build_worker_validation(
+                supabase, body, current_user, workers,
+            )
+        except Exception as e:
+            log.warning("[IND-WORKER] attach failed (non-blocking): %s", e)
+            from services.ind_worker_validator import api_error_payload
+            out["worker_validation"] = api_error_payload(workers)
+    return out
 
 
 def upgrade_diagnosis(
