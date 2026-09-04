@@ -4,10 +4,13 @@
   발화는 automation_svc.fire 위임. 규칙이 없으면 무동작이며, 예외는 삼켜서
   결제 후처리(계약 생성·알림)에 절대 영향을 주지 않는다(_fire_automation).
 
-[2026-09-04] 진단(DIAGNOSIS) 결제가 SaaS 계약을 자동 생성하지 않도록 가드 추가.
-  유료 법령진단은 1회성 상품이라 구독(SaaS) 계약이 없어야 한다. 기존에는
-  _should_auto_contract 가 plan_code 만 있으면 계약을 만들어, 진단 결제가
-  service_type=SAAS 계약으로 둔갑하던 문제를 차단한다(product_type=DIAGNOSIS 이면 계약 생성 안 함).
+[2026-09-04] 계약 자동생성 판정을 positive allowlist 로 정리.
+  기존 _should_auto_contract 는 product_type 무관 plan_code 만 있으면 계약을 만들어,
+  진단(DIAGNOSIS) 결제가 service_type=SAAS 계약으로 둔갑했다(1건 실측: contract 88ec1537).
+  실측(payments inventory): DIAGNOSIS + plan_code 는 97건이 계약 없음이 정상,
+  계약 붙은 건 이번 사고 1건뿐. SAAS 아닌데 plan_code 로 계약 생성에 의존하는 정상 writer 없음.
+  → 신규 계약 자동생성은 product_type in SAAS_PRODUCT_TYPES 일 때만 True.
+  plan_code 단독 fallback 제거(재발 구조 제거). 기존 contract_id 연결/renewal 경로는 무변경.
 """
 from __future__ import annotations
 
@@ -59,20 +62,19 @@ def _contract_end_date(start: date, period_months: int) -> date:
 
 
 def _should_auto_contract(pay: dict) -> bool:
+    """신규 SaaS 계약 자동생성 대상 판정 (positive allowlist).
+
+    계약(구독)은 SaaS 상품(SAAS_PRODUCT_TYPES)에서만 자동 생성한다.
+    진단(DIAGNOSIS) 등 1회성 상품은 plan_code 가 있어도 계약을 만들지 않는다.
+    (기존 plan_code 단독 fallback 은 진단→SAAS 계약 둔갑의 재발 구조라 제거)
+    기존 contract_id 연결 결제는 이 함수 이전 단계에서 activate/renewal 로 분기된다.
+    """
     if pay.get("contract_id"):
         return False
     if not pay.get("company_id"):
         return False
     product_type = pay.get("product_type") or ""
-    # 진단(DIAGNOSIS)은 1회성 상품 → SaaS 계약 자동생성 대상 아님.
-    # (기존: plan_code 만 있으면 계약 생성 → 진단 결제가 SAAS 계약으로 둔갑하던 문제 차단)
-    if product_type == "DIAGNOSIS":
-        return False
-    if product_type in SAAS_PRODUCT_TYPES:
-        return True
-    if pay.get("plan_code"):
-        return True
-    return False
+    return product_type in SAAS_PRODUCT_TYPES
 
 
 def _parse_contract_date(value: Any) -> Optional[date]:
