@@ -71,6 +71,19 @@ def run_leg_diagnosis(step1_body: Any) -> Dict[str, Any]:
         if ln and ln not in law_names:
             law_names.append(ln)
 
+    review_required = data.get("review_required") or []      # LEG raw, 재판정 금지
+    unconfirmed = []
+    for r in review_required:
+        law = (r.get("law_name") or "").strip()
+        article = (r.get("law_article") or "").strip()
+        title = " ".join(x for x in (law, article) if x) or "추가 확인 필요"
+        unconfirmed.append({
+            **r,
+            "title": title,
+            "reason_code": r.get("reason_code") or "MISSING_NUMERIC_INPUT",
+            "reason": "추가 수치 정보가 필요하여 적용 여부를 확정하지 못했습니다.",  # human 문장은 여기서 소유
+        })
+
     full_result: Dict[str, Any] = {
         # ── LEG 식별 메타 ──
         "engine_family": "LEG",
@@ -93,6 +106,10 @@ def run_leg_diagnosis(step1_body: Any) -> Dict[str, Any]:
         "contract": data.get("contract"),
         "obligations_raw": obligations,
         "facility_used": facility,
+        "review_required": review_required,
+        "review_required_count": len(review_required),
+        "unconfirmed": unconfirmed,
+        "unconfirmed_count": len(unconfirmed),
     }
     log.info(
         "leg_diagnosis status=%s obligations=%d laws=%d",
