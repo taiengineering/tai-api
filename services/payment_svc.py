@@ -37,6 +37,21 @@ from services.time import now_kst
 log = logging.getLogger(__name__)
 
 
+def _sector_from_plan_code(plan_code: Optional[str]) -> str:
+    """plan_code 앞부분에서 진단 sector 파생.
+
+    예: 'INDUSTRY_STARTER' -> 'INDUSTRY', 'BUILDING_V2' -> 'BUILDING',
+        'CONSTRUCTION_STANDARD' -> 'CONSTRUCTION'.
+    free-diagnosis 프론트가 ?paid=<sector> 로 소비하여 결제 후 상세입력(공정·설비)로
+    바로 진입하게 하기 위한 routing 값이다. 결제 권한/정산과 무관.
+    매칭 실패 시 빈 문자열(프론트는 기존 흐름 유지).
+    """
+    if not plan_code:
+        return ""
+    head = str(plan_code).strip().upper().split("_")[0]
+    return head if head in {"BUILDING", "INDUSTRY", "CONSTRUCTION"} else ""
+
+
 class PaymentPrepareError(Exception):
     """결제 준비 단계 비즈니스 오류 (라우터에서 HTTPException으로 변환)."""
 
@@ -224,6 +239,7 @@ def process_vbank_issued(
     *,
     goodname: str,
     price: str,
+    plan_code: Optional[str] = None,
 ) -> dict[str, Any]:
     """가상계좌 발급 완료(입금 전) — DB UPDATE 후 프론트 리다이렉트용 쿼리."""
     supabase = get_supabase()
@@ -245,19 +261,22 @@ def process_vbank_issued(
         }
     ).eq("id", payment_id).execute()
 
-    return {
-        "qs_params": {
-            "resultCode": "00",
-            "oid": order_id,
-            "goodname": goodname,
-            "price": price,
-            "paymethod": "VBANK",
-            "vbank_number": vbank_number,
-            "vbank_bank": vbank_bank,
-            "vbank_expire": vbank_expire,
-            "payment_id": payment_id,
-        }
+    qs: dict[str, Any] = {
+        "resultCode": "00",
+        "oid": order_id,
+        "goodname": goodname,
+        "price": price,
+        "paymethod": "VBANK",
+        "vbank_number": vbank_number,
+        "vbank_bank": vbank_bank,
+        "vbank_expire": vbank_expire,
+        "payment_id": payment_id,
     }
+    _sector = _sector_from_plan_code(plan_code)
+    if _sector:
+        qs["sector"] = _sector
+
+    return {"qs_params": qs}
 
 
 def process_card_success(
@@ -314,18 +333,21 @@ def process_card_success(
     if not with_redirect_qs:
         return None
 
-    return {
-        "qs_params": {
-            "resultCode": "00",
-            "oid": order_id,
-            "goodname": auth_result.get("goodName", goodname),
-            "price": auth_result.get("TotPrice", price),
-            "paymethod": paymethod,
-            "applnum": apply_num,
-            "payment_id": payment_id,
-            "expired_at": expired_at or "",
-        }
+    qs: dict[str, Any] = {
+        "resultCode": "00",
+        "oid": order_id,
+        "goodname": auth_result.get("goodName", goodname),
+        "price": auth_result.get("TotPrice", price),
+        "paymethod": paymethod,
+        "applnum": apply_num,
+        "payment_id": payment_id,
+        "expired_at": expired_at or "",
     }
+    _sector = _sector_from_plan_code(payment.get("plan_code"))
+    if _sector:
+        qs["sector"] = _sector
+
+    return {"qs_params": qs}
 
 
 def create_vbank_record(body: VbankPrepareBody, sign_key: str) -> dict:
@@ -374,6 +396,9 @@ def create_vbank_record(body: VbankPrepareBody, sign_key: str) -> dict:
         row["matching_contract_id"] = body.matching_contract_id
     if body.company_id:
         row["company_id"] = body.company_id
+    _plan_code = getattr(body, "plan_code", None)
+    if _plan_code:
+        row["plan_code"] = _plan_code
     if body.auth_token or body.public_token:
         row["memo"] = (
             f"diag_auth_token={body.auth_token or ''} "

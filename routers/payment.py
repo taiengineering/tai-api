@@ -13,6 +13,9 @@ v4.0.0 (2026-04-27)
 
 [2026-08-12 item3] 단건 콜백(inicis_return)이 returnUrl?front= 로 전달된 복귀 프론트 URL을
   허용 도메인 검증(safe_front_return_url) 후 리다이렉트에 사용. 값 없으면 기존 FRONT_RETURN_URL.
+
+[2026-09-04] 진단 결제 복귀 qs에 sector 전달 — vbank 발급 시 payment.plan_code를
+  process_vbank_issued에 넘겨 free-diagnosis 상세입력(공정·설비)으로 바로 진입하게 한다.
 """
 from __future__ import annotations
 
@@ -181,7 +184,11 @@ async def inicis_return(request: Request):
         pg_method = auth_result.get("payMethod", paymethod) or paymethod
 
         if pg_method in ("Vbank", "VBANK"):
-            out = process_vbank_issued(payment_id, order_id, auth_result, goodname=goodname, price=price)
+            out = process_vbank_issued(
+                payment_id, order_id, auth_result,
+                goodname=goodname, price=price,
+                plan_code=payment.get("plan_code"),
+            )
             qs = urllib.parse.urlencode(out["qs_params"])
             return RedirectResponse(f"{front}?{qs}", status_code=302)
 
