@@ -7,6 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from schemas.construction import SiteCreate, SitePatch
+from services.construction_amount_validator import (
+    fetch_external_contract_amount,
+    record_and_validate_site_amount,
+)
 from services.construction_sites_svc import (
     build_site_create_payload,
     build_site_stats,
@@ -112,13 +116,28 @@ async def update_site(site_id: str, body: SitePatch, current: dict = Depends(get
         data = body.model_dump(exclude_none=True)
         if not data:
             raise HTTPException(status_code=400, detail="수정할 항목이 없습니다.")
+        amount_in_patch = "contract_amount" in data
         site_res = supabase.table("construction_sites").select("site_type,contract_amount,total_workers").eq("id", site_id).limit(1).execute()
         cur = site_res.data[0] if site_res.data else {}
+        old_amount = cur.get("contract_amount")
         data = build_site_update_payload(body, cur, _now_iso)
         res = supabase.table("construction_sites").update(data).eq("id", site_id).execute()
         if not res.data:
             raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
-        return {"status": "success", "data": res.data[0]}
+        out = {"status": "success", "data": res.data[0]}
+        if amount_in_patch:
+            new_amount = res.data[0].get("contract_amount")
+            out["amount_validation"] = record_and_validate_site_amount(
+                supabase,
+                site_id=site_id,
+                old_amount=old_amount,
+                new_amount=new_amount,
+                amount_in_patch=True,
+                changed_by=current.get("id"),
+                now_iso=_now_iso(),
+                external=fetch_external_contract_amount(res.data[0]),
+            )
+        return out
     except HTTPException:
         raise
     except Exception as e:
