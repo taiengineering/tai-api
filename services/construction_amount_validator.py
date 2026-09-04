@@ -20,7 +20,7 @@ STATUS_CROSS_50_MISMATCH = "CROSS_50_MISMATCH"
 STATUS_DOWNWARD_RECHECK = "DOWNWARD_RECHECK"
 STATUS_UNVERIFIED = "UNVERIFIED"
 
-MSG_UNVERIFIED = "도급계약서상 총 도급금액을 확인했습니다."
+MSG_UNVERIFIED = "도급계약서상 총 도급금액을 확인해 주세요."
 MSG_DOWNWARD_RECHECK = (
     "이전에 확인된 동일 현장의 공사금액보다 낮으며 50억원 기준 구간이 변경되었습니다.\n"
     "도급계약서의 총 도급금액을 다시 확인해 주세요."
@@ -180,16 +180,20 @@ def validate_contract_amount(
 
 def fetch_same_site_amount_history(supabase, site_id: str) -> List[Dict[str, Any]]:
     """table_name+field_name+record_id=site_id 만. company/ci_hash/타 site 금지."""
-    res = (
-        supabase.table("price_change_log")
-        .select("old_value,new_value,changed_at,record_id,table_name,field_name")
-        .eq("table_name", TABLE_NAME)
-        .eq("field_name", FIELD_NAME)
-        .eq("record_id", site_id)
-        .order("changed_at")
-        .execute()
-    )
-    return list(res.data or [])
+    try:
+        res = (
+            supabase.table("price_change_log")
+            .select("old_value,new_value,changed_at,record_id,table_name,field_name")
+            .eq("table_name", TABLE_NAME)
+            .eq("field_name", FIELD_NAME)
+            .eq("record_id", site_id)
+            .order("changed_at")
+            .execute()
+        )
+        return list(res.data or [])
+    except Exception as e:
+        log.warning("[CST-AMOUNT] history read failed site=%s: %s", site_id, e)
+        return []
 
 
 def maybe_log_contract_amount_change(

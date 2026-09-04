@@ -27,9 +27,10 @@ SITE_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 
 
 class _LogQ:
-    def __init__(self, store, fail=False):
+    def __init__(self, store, fail=False, fail_select=False):
         self.store = store
         self.fail = fail
+        self.fail_select = fail_select
         self._filters = {}
         self._ins = None
         self._order = None
@@ -57,6 +58,8 @@ class _LogQ:
     def execute(self):
         if self._ins is not None:
             return SimpleNamespace(data=[self._ins])
+        if self.fail_select:
+            raise RuntimeError("price_change_log select failed")
         rows = list(self.store.get("price_change_log") or [])
         for k, v in self._filters.items():
             rows = [r for r in rows if r.get(k) == v]
@@ -67,13 +70,14 @@ class _LogQ:
 
 
 class _FakeSB:
-    def __init__(self, fail_log=False):
+    def __init__(self, fail_log=False, fail_select=False):
         self.store = {"price_change_log": []}
         self.fail_log = fail_log
+        self.fail_select = fail_select
 
     def table(self, name):
         assert name == "price_change_log"
-        return _LogQ(self.store, fail=self.fail_log)
+        return _LogQ(self.store, fail=self.fail_log, fail_select=self.fail_select)
 
 
 def _ext(amount, confidence="HIGH", **kw):
@@ -267,3 +271,16 @@ def test_log_insert_failure_does_not_raise():
         changed_by=None, now_iso="2026-09-04T01:00:00+09:00",
     )
     assert logged is False
+
+
+def test_R1_history_select_failure_degrades_unverified():
+    sb = _FakeSB(fail_select=True)
+    user = 49
+    out = record_and_validate_site_amount(
+        sb, site_id=SITE_A, old_amount=80, new_amount=user, amount_in_patch=True,
+        changed_by=None, now_iso="2026-09-04T01:00:00+09:00",
+    )
+    assert out["status"] == STATUS_UNVERIFIED
+    assert out["user_contract_amount"] == user
+    hist = fetch_same_site_amount_history(sb, SITE_A)
+    assert hist == []
