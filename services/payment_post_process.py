@@ -3,6 +3,11 @@
 [2026-07-29 P2-4] 결제 성공 시 automation 이벤트(payment.success) 발화 결선.
   발화는 automation_svc.fire 위임. 규칙이 없으면 무동작이며, 예외는 삼켜서
   결제 후처리(계약 생성·알림)에 절대 영향을 주지 않는다(_fire_automation).
+
+[2026-09-04] 진단(DIAGNOSIS) 결제가 SaaS 계약을 자동 생성하지 않도록 가드 추가.
+  유료 법령진단은 1회성 상품이라 구독(SaaS) 계약이 없어야 한다. 기존에는
+  _should_auto_contract 가 plan_code 만 있으면 계약을 만들어, 진단 결제가
+  service_type=SAAS 계약으로 둔갑하던 문제를 차단한다(product_type=DIAGNOSIS 이면 계약 생성 안 함).
 """
 from __future__ import annotations
 
@@ -59,6 +64,10 @@ def _should_auto_contract(pay: dict) -> bool:
     if not pay.get("company_id"):
         return False
     product_type = pay.get("product_type") or ""
+    # 진단(DIAGNOSIS)은 1회성 상품 → SaaS 계약 자동생성 대상 아님.
+    # (기존: plan_code 만 있으면 계약 생성 → 진단 결제가 SAAS 계약으로 둔갑하던 문제 차단)
+    if product_type == "DIAGNOSIS":
+        return False
     if product_type in SAAS_PRODUCT_TYPES:
         return True
     if pay.get("plan_code"):
