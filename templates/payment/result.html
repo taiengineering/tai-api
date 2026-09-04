@@ -36,13 +36,20 @@ function normSector(s){
   var v=(s||'').toString().toUpperCase();
   return (v==='BUILDING'||v==='INDUSTRY'||v==='CONSTRUCTION')?v:'';
 }
-// 결제 완료 후 진단 상세입력으로 이어가기 (회원 로그인 상태로 oid 들고 진입)
-// sector가 있으면 ?paid=<sector> 로 넘겨 free-diagnosis가 섹터 자동지정 + 공정·설비 입력을 바로 띄운다.
-// sector가 없으면 하위호환으로 paid=1.
+// 결제 완료 후 진단 상세입력으로 이어가기.
+// sector가 있으면 5단계 상세입력 페이지(paid-diagnosis-detail)로 직접 진입시켜
+// 기본→공정→설비→특수→검증 흐름을 태운다(3섹터 공통, 없는 단계 자동 스킵).
+// sector가 없으면 하위호환으로 기존 free-diagnosis?paid=1 로 폴백.
 function goDiagnosisInput(oid,sector){
   var sec=normSector(sector);
-  var u='https://taieng.co.kr/free-diagnosis?paid='+(sec||'1');
-  if(oid)u+='&oid='+encodeURIComponent(oid);
+  var u;
+  if(sec){
+    u='https://taieng.co.kr/paid-diagnosis-detail?sector='+encodeURIComponent(sec);
+    if(oid)u+='&oid='+encodeURIComponent(oid);
+  } else {
+    u='https://taieng.co.kr/free-diagnosis?paid=1';
+    if(oid)u+='&oid='+encodeURIComponent(oid);
+  }
   (window.top||window).location.href=u;
 }
 function renderOkDiagnosis(p){
