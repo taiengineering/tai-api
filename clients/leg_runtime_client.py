@@ -227,7 +227,10 @@ def build_facility(step1_body: Any) -> Dict[str, Any]:
         if val is None:
             val = inp.get(code)
         if val is None:
-            _alias = _LEG_CODE_TO_CONSUMER.get(code)
+            # PATCH-A-1: BUILDING has_chemical alias 차단(이중생성 방지).
+            #   has_chemical_substance 명시 시 has_chemical 순회가 alias 로 그 값을 집어
+            #   facility["has_chemical"] 이중 생성. BUILDING 은 exact-key(아래 blocks)로만.
+            _alias = None if (_sector == "BUILDING" and code == "has_chemical") else _LEG_CODE_TO_CONSUMER.get(code)
             if _alias:
                 val = getattr(step1_body, _alias, None)
                 if val is None:
@@ -256,6 +259,17 @@ def build_facility(step1_body: Any) -> Dict[str, Any]:
     # sector-gated — 산업/건축은 기존 has_chemical 유지(INDUSTRIAL 동작 불변).
     if _sector == "CONSTRUCTION" and "has_chemical" in facility:
         facility["has_chemical_substance"] = facility.pop("has_chemical")
+    # WO-BLD-FINALIZATION PATCH-A: BUILDING has_chemical_substance exact-key.
+    #   has_chemical_substance 는 _LEG_INPUT_FIELDS 미등록(순회 누락)이나 SafeBuildingConsumerInput 이
+    #   C1(화관법 도급) 명시 입력으로 받는다. BUILDING sector 에서 input 의 명시값을 facility 에
+    #   exact key 로 전달(화관법 atom has_chemical_substance 발동). has_chemical 자동변환 금지
+    #   (building 은 construction rename 대상 아님 — 명시 exact-key 만).
+    if _sector == "BUILDING":
+        _hcs = getattr(step1_body, "has_chemical_substance", None)
+        if _hcs is None:
+            _hcs = inp.get("has_chemical_substance")
+        if _hcs is not None:
+            facility["has_chemical_substance"] = _hcs
     return facility
 
 
