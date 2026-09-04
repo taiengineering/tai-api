@@ -230,6 +230,30 @@ def test_E06B_duplicate_canonical_fail_closed_even_if_identical():
     wb.close()
 
 
+def test_E06C_empty_string_canonical_is_unavailable():
+    p = _premium()
+    p["materials"]["obligations"] = [_ob(17)]
+    p["materials"]["overview"]["total_obligation_count"] = 1
+    p["canonical_sources"] = [{"ref": 17, "text": ""}]
+    wb = _load(build_paid_result_excel_v1(p))
+    header = _header(wb["Obligations"])
+    col = header.index("canonical_source_text")
+    assert _rows(wb["Obligations"])[0][col] == CANONICAL_UNAVAILABLE
+    wb.close()
+
+
+def test_E06D_whitespace_canonical_kept_exact_no_trim():
+    p = _premium()
+    p["materials"]["obligations"] = [_ob(17)]
+    p["materials"]["overview"]["total_obligation_count"] = 1
+    p["canonical_sources"] = [{"ref": 17, "text": "   "}]
+    wb = _load(build_paid_result_excel_v1(p))
+    header = _header(wb["Obligations"])
+    col = header.index("canonical_source_text")
+    assert _rows(wb["Obligations"])[0][col] == "   "
+    wb.close()
+
+
 def test_E07_evidence_article_text_exact():
     p = _premium()
     original = p["evidence"]["articles"][0]["article_text"]

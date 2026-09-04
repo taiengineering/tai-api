@@ -132,7 +132,7 @@ def canonical_source_text(premium_result: Dict[str, Any], obligation_ref: Any) -
         if item.get("ref") != obligation_ref:
             continue
         text = item.get("text")
-        if text is None:
+        if not isinstance(text, str) or text == "":
             continue
         matches.append(text)
     if len(matches) == 1:
