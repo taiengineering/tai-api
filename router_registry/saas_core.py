@@ -35,4 +35,6 @@ ROUTERS = [
     {"module": "routers.member_inquiries"},
     # 고객응대 MVP: 질문 진입점 결선 (POST /me/support/ask — routing→answer→handoff)
     {"module": "routers.member_support"},
+    # BACKEND-1: 회원 회사정보 조회·저장 (GET/PUT /me/company — 세금계산서 회사 SoT)
+    {"module": "routers.member_company"},
 ]

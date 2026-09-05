@@ -47,6 +47,8 @@ jobs:
         run: pytest tests/time/test_kst_migration_static.py -q --tb=short
       - name: Cron manager auth tests
         run: pytest tests/test_cron_manager_auth.py -q --tb=short
+      - name: Member company tests
+        run: pytest tests/test_member_company.py -q --tb=short
 
   db-integrity:
     name: "DB Integrity"
