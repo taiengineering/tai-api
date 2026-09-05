@@ -68,13 +68,13 @@ def _now_iso() -> str:
 
 
 def canonical_payment_instrument(pg_method: Optional[str]) -> str:
-    """pg_method(SoT) → canonical 결제수단. 중앙 helper(다른 곳 매핑 금지)."""
+    """pg_method(SoT) → canonical 결제수단. 중앙 helper(다른 곳 매핑·임의 alias 확장 금지)."""
     low = (pg_method or "").strip().lower()
     if low in ("card", "cardbilling"):
         return "CARD"
     if low == "directbank":
         return "ACCOUNT_TRANSFER"
-    if low in ("vbank", "vacct"):
+    if low == "vbank":
         return "VBANK"
     return "UNKNOWN"
 
@@ -87,7 +87,7 @@ def _norm_bn10(raw: Optional[str]) -> Optional[str]:
 
 
 def _company_missing(company: Dict[str, Any]) -> List[str]:
-    """invoice_svc 필수(business_number·name·representative_name) 기준 부족 필드."""
+    """invoice 필수(business_number·name·representative_name) 기준 부족 필드."""
     missing: List[str] = []
     if _norm_bn10(company.get("business_number")) is None:
         missing.append("business_number")

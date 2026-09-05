@@ -130,6 +130,9 @@ def test_canonical_method():
         assert svc.canonical_payment_instrument(v) == "VBANK"
     assert svc.canonical_payment_instrument("HPP") == "UNKNOWN"
     assert svc.canonical_payment_instrument(None) == "UNKNOWN"
+    # P0-3: vacct 는 canonical contract 에 없음 → UNKNOWN (임의 alias 확장 금지)
+    assert svc.canonical_payment_instrument("vacct") == "UNKNOWN"
+    assert svc.canonical_payment_instrument("VAcct") == "UNKNOWN"
 
 
 # ══ method/proof policy (T5~T16) ══
@@ -346,21 +349,36 @@ def test_t38_unrelated_db_error_500():
 
 
 # ══ no side-effect (T39~T42) ══
-def test_t39_t40_t41_t42_no_side_effects():
+def test_t39_t40_no_payment_or_tax_invoice_mutation():
     store = _store(payment=_payment(pg_method="VBank", proof_type="TAX_INVOICE"))
     before_payment = dict(store["payments"][0])
     sb = FakeSupabase(store)
     svc.create_request(sb, {"id": "u1", "company_id": "co1"}, store["payments"][0], "MYPAGE")
-    # T39 payments.proof_type 미변경 (payments UPDATE 없음)
+    # T39 payments.proof_type 미변경 (payments UPDATE/INSERT 없음)
     assert store["payments"][0] == before_payment
     ops = {(t, op) for (t, op) in sb.log}
     assert ("payments", "update") not in ops and ("payments", "insert") not in ops
-    # T40 tax_invoices 미변경
+    # T40 tax_invoices 미변경(select 만)
     assert all(op == "select" for (t, op) in sb.log if t == "tax_invoices")
-    # T41/T42 invoice_svc / Popbill 호출 없음(이 서비스가 import도 안 함) — 구조적 보장
+
+
+def test_t41_t42_no_invoice_svc_or_popbill_import_dependency():
+    # 설명문(docstring)의 invoice_svc/Popbill 언급은 허용. 실제 import/call dependency 만 금지.
+    import ast
+    from pathlib import Path
     import services.tax_invoice_request_svc as s
-    src = open(s.__file__, encoding="utf-8").read()
-    assert "invoice_svc" not in src and "popbill" not in src.lower()
+
+    tree = ast.parse(Path(s.__file__).read_text(encoding="utf-8"))
+    imports = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            imports.append(module)
+            imports.extend("{}.{}".format(module, alias.name) for alias in node.names)
+    assert "services.invoice_svc" not in imports  # T41 invoice_svc 미사용
+    assert not any("popbill" in name.lower() for name in imports)  # T42 Popbill 미사용
 
 
 # ══ ownership (T1~T4) — service load_and_authorize ══
