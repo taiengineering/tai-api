@@ -16,8 +16,8 @@ from services.safe_construction_canonical_assembler import (
     assemble_construction_marketing_contract, TARGET_FIELDS, CONTRACT_VERSION,
     RUNTIME_INPUT_FIELDS,
 )
+from services.canonical.saas_leg_source_adapter import build_saas_leg_step1
 from services.leg_diagnosis_svc import run_leg_diagnosis
-from schemas.legal_engine import DiagnoseStep1Body
 
 
 class ConstructionSiteBridgeError(Exception):
@@ -54,15 +54,16 @@ def run_safe_construction_leg(supabase, site_id: str, consumer_input) -> Dict[st
             provenance[f] = {"mode": "CONSUMER_OVERRIDE", "source": "safe.construction-diagnosis"}
             unresolved.discard(f)
 
-    # C. canonical denominator 불변: 정확히 27, TARGET_FIELDS exact.
-    values = {f: values[f] for f in TARGET_FIELDS}
-    assert len(values) == 27 and list(values.keys()) == list(TARGET_FIELDS)
+    # C. WO-010 STEP-2C : canonical27 final-cut 제거. TARGET_FIELDS / RUNTIME_INPUT_FIELDS 는
+    #    assembler 의 source contract 로 계속 import(unresolved_fields 반환용) — 계약 파일 delta 0.
+    #    source_facts 는 상한 없이 전량 전달하고 build_saas_leg_step1 이 _LEG_INPUT_FIELDS(103) 로
+    #    필터한다. R8 축 등 source 에 값이 있으면 배선 상한 없이 build_facility 에 도달.
+    #    construction_type synthetic 은 SaaS 에서 새로 만들지 않음 — source 있으면 전달, 없으면 ABSENT.
+    step1 = build_saas_leg_step1(
+        sector="CONSTRUCTION", source_facts=values, factory_id=factory_id,
+    )
 
-    # D. 공식 step1 — sector=CONSTRUCTION, canonical 은 input 에.
-    #    construction_type/contract_amount_eok 는 build_facility 통로상 canonical(input)에 이미 존재.
-    step1 = DiagnoseStep1Body(factory_id=factory_id, sector="CONSTRUCTION", input=values)
-
-    # E. 공식 Runtime Delegate 1회 (direct evaluate_rtm / master_building_legal_rules / v510 미사용).
+    # D. 공식 Runtime Delegate 1회 (direct evaluate_rtm / master_building_legal_rules / v510 미사용).
     full_result = run_leg_diagnosis(step1)
 
     return {
