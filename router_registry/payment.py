@@ -3,6 +3,8 @@ ROUTERS = [
     {"module": "routers.payment"},
     {"module": "routers.payment_test"},
     {"module": "routers.payment_ops"},
+    # BACKEND-2: 고객 세금계산서 eligibility/발행요청 (GET/POST /payments/{id}/tax-invoice/*)
+    {"module": "routers.member_tax_invoice"},
     {"module": "routers.payment_ledger"},  # WO-7 환불/크레딧/증빙 결선 + 결제원장 조회
     {"module": "routers.payment_billing"},
     {"module": "routers.payment_plan_resolver"},  # GET /payments/plan-amount — 기존계약 SaaS 월요금(price_master SSOT)
