@@ -304,6 +304,75 @@ def _assert_linkable(auth_row: dict, current_user: dict) -> None:
         raise HTTPException(status_code=403, detail="이미 다른 계정에 연결된 인증입니다.")
 
 
+def _build_unified_step1_body(
+    *,
+    engine_sector: str,
+    inp: Dict[str, Any],
+    workers: Any,
+    body: Any,
+    factory_id: Optional[str],
+    construction_type_fallback: Optional[str],
+    unified_factory: Callable[..., DiagnoseStep1Body],
+) -> DiagnoseStep1Body:
+    """WO-010 STEP-2B: run_diagnosis 의 unified 분기(build_unified_leg_input) 조립 helper.
+
+    별도 함수로 분리한 이유는 (a) test 에서 직접 재현 검증 가능하고 (b) run_diagnosis 본문을
+    짧게 유지하기 위함. legacy 분기(build_industrial_www_step1 / else) 는 무변경 보존.
+    """
+    from clients.leg_runtime_client import _LEG_CODE_TO_CONSUMER
+
+    runtime_facts: Dict[str, Any] = dict(inp)
+    # ── consumer alias source seeding ──
+    #   has_chemical_substance / has_high_work 같은 consumer-facing 키는 _LEG_INPUT_FIELDS 밖이라
+    #   canonical_applicability(_LEG_INPUT_FIELDS 필터) 를 통과하지 못한다. body/form_data 의 원본을
+    #   runtime_facts 에 시드로 넣어야 아래 alias 승격이 유효화되고, 나아가 BUILDING patch-A
+    #   (has_chemical_substance exact-key) 도 도달할 수 있다.
+    _fd_alias_src = getattr(body, "form_data", None) or {}
+    for _consumer_key in _LEG_CODE_TO_CONSUMER.values():
+        if _consumer_key in runtime_facts:
+            continue
+        _v = getattr(body, _consumer_key, None)
+        if _v is None and isinstance(_fd_alias_src, dict):
+            _v = _fd_alias_src.get(_consumer_key)
+        if _v is not None and not (isinstance(_v, str) and not _v.strip()):
+            runtime_facts[_consumer_key] = _v
+    for _canon, _consumer in _LEG_CODE_TO_CONSUMER.items():
+        # BUILDING has_chemical: BUILDING 은 build_facility patch-A(has_chemical_substance exact-key) 경로 유지.
+        #   여기서 has_chemical 로 승격하면 facility 에 has_chemical 이 새로 생겨 parity 가 깨진다.
+        if engine_sector == "BUILDING" and _canon == "has_chemical":
+            continue
+        if _canon not in runtime_facts:
+            _v = runtime_facts.get(_consumer)
+            if _v is not None and not (isinstance(_v, str) and not _v.strip()):
+                runtime_facts[_canon] = _v
+    # worker_count parity: legacy else 분기의 top-level worker_count=workers 와 등가하게
+    # runtime_facts 에 없으면 workers 를 실어준다(canonical 이 이미 넣었으면 그 값 우선).
+    runtime_facts.setdefault("worker_count", workers)
+    # ── WO-010 STEP-2B COMPAT FREEZE (STEP-3 synthetic cleanup 대상) ──
+    #   synthetic default "건축" 은 이번 STEP 유지. facility delta 를 IND intended-delta 로 격리하기 위함.
+    if engine_sector == "CONSTRUCTION" and not runtime_facts.get("construction_type"):
+        runtime_facts["construction_type"] = construction_type_fallback or "건축"
+    # BUILDING has_chemical_substance : legacy BUILDING elif 는 top-level/input 어디에도 세팅하지 않아
+    #   build_facility patch-A(inp exact-key) 가 미발동, facility 에 반영되지 않는다.
+    #   parity 를 위해 unified 분기도 body.input 에 실지 않는다(신규 delta 방지). 시드는 그대로 두지만
+    #   BUILDING alias 승격 스킵으로 has_chemical 도 만들어지지 않는다 → BUILDING facility 무영향.
+    step1_body = unified_factory(
+        sector=engine_sector, source_facts=runtime_facts, factory_id=factory_id,
+    )
+    if engine_sector == "BUILDING":
+        # elevator_count: derived source(103 vocab 밖). body 우선 → form_data 순.
+        _bld_fd = getattr(body, "form_data", None) or {}
+        _elev = getattr(body, "elevator_count", None)
+        if _elev is None:
+            _elev = _bld_fd.get("elevator_count")
+        if _elev is not None:
+            try:
+                step1_body.elevator_count = _elev
+            except (AttributeError, ValueError):
+                step1_body = step1_body.model_copy(update={"elevator_count": _elev})
+    return step1_body
+
+
 def run_diagnosis(
     supabase,
     body,
@@ -316,6 +385,7 @@ def run_diagnosis(
     engine_version: str,
     current_user: Optional[dict] = None,
     canonical_step1_factory_func: Optional[Callable[[Any], DiagnoseStep1Body]] = None,
+    unified_step1_factory_func: Optional[Callable[..., DiagnoseStep1Body]] = None,
 ) -> Dict[str, Any]:
     # WO-006: 인증 결정. explicit body.auth_token 우선(기존 무료/legacy 경로 보존).
     # member fallback 은 유료 진입(payment_ref 존재) 에서만 연다 — auth_token 없는 무료 회원이
@@ -455,7 +525,20 @@ def run_diagnosis(
     total_floor_area = body.total_floor_area or floor_area
     contract_eok = _contract_eok if _contract_eok is not None else 1.0
 
-    if canonical_step1_factory_func is not None and sector == "INDUSTRIAL":
+    if unified_step1_factory_func is not None:
+        # WO-010 STEP-2B: unified LEG input contract cutover(FREE/PAID marketing).
+        #   legacy INDUSTRIAL canonical29 우회를 걷어내고, sector 3면 모두 build_unified_leg_input 로 조립한다.
+        #   BUILDING/CONSTRUCTION 은 build_facility EXACT parity, INDUSTRIAL 은 WO-007 intended-delta 만 노출.
+        step1_body = _build_unified_step1_body(
+            engine_sector=engine_sector,
+            inp=inp,
+            workers=workers,
+            body=body,
+            factory_id=factory_id,
+            construction_type_fallback=_construction_type_val,
+            unified_factory=unified_step1_factory_func,
+        )
+    elif canonical_step1_factory_func is not None and sector == "INDUSTRIAL":
         # GATE-2 Path A: WWW INDUSTRIAL LEG canonical path - legacy top-level default(400) bypass.
         step1_body = canonical_step1_factory_func(body)
     elif engine_sector == "CONSTRUCTION":
