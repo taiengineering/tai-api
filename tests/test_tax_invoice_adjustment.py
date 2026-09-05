@@ -1,7 +1,7 @@
 """BACKEND-4 환불→수정세금계산서 단위테스트 (FakeSupabase + popbill mock).
 
 process_refund_tax_adjustment: inv.get_supabase/invoice_live/_popbill_conf/_popbill_issue_modified_tax monkeypatch.
-운영 DB/네트워크/실 popbill 불사용.
+운영 DB/네트워크/실 popbill 불사용. companies fake는 운영 SoT(name/contact_email/address_*)와 일치.
 """
 import uuid
 
@@ -108,8 +108,10 @@ def _refund(**kw):
 
 
 def _company(**kw):
-    base = {"id": "co1", "business_number": "1234567890", "company_name": "고객사", "representative_name": "홍길동",
-            "address": "서울", "business_type": "제조", "business_category": "전자"}
+    # 운영 SoT: companies.name (company_name 아님), contact_email, address_road/address_detail
+    base = {"id": "co1", "business_number": "1234567890", "name": "고객사", "representative_name": "홍길동",
+            "contact_email": "co@x.c", "address": "서울", "address_road": "서울로 1", "address_detail": "3층",
+            "business_type": "제조", "business_category": "전자"}
     base.update(kw); return base
 
 
@@ -174,12 +176,11 @@ def test_a4_partial_code2(monkeypatch):
     assert res["modify_code"] == 2
     kw = mock.calls[0]
     assert kw["total"] == -55000
-    assert abs(kw["supply"]) + abs(kw["vat"]) == 55000  # supply+vat = refund amount
+    assert abs(kw["supply"]) + abs(kw["vat"]) == 55000
 
 
 # A5 부분환불 후 remaining FULL → code 2 (NOT 4)
 def test_a5_partial_then_full_code2(monkeypatch):
-    # 이미 55000 부분환불 있었고, 이번 FULL 이 나머지 55000 (amount != total, cumulative == total)
     store = {"refunds": [_refund(refund_type="FULL", amount=55000, cumulative_refunded=110000)],
             "payments": [_payment()], "tax_invoices": [_original()], "companies": [_company()], "tax_invoice_requests": []}
     fake, mock = _setup(monkeypatch, store)
@@ -252,7 +253,6 @@ def test_a11_popbill_failure_modified_failed(monkeypatch):
     assert e.value.code == "MODIFIED_ISSUE_FAILED"
     mods = [r for r in store["tax_invoices"] if r.get("invoice_kind") == "MODIFIED"]
     assert len(mods) == 1 and mods[0]["status"] == "FAILED"
-    # refund 대장은 이 함수가 건드리지 않음
     assert store["refunds"][0]["status"] == "DONE"
 
 
@@ -264,6 +264,18 @@ def test_a11b_refund_hook_failsoft(monkeypatch):
     monkeypatch.setattr("services.invoice_svc.process_refund_tax_adjustment", _boom)
     monkeypatch.setattr(rf, "audit_svc", type("A", (), {"record": staticmethod(lambda *a, **k: None)}))
     rf._tax_adjustment_hook("rf1", "admin")  # 예외 전파 없어야 함
+
+
+# B4-P1-1 request snapshot 없음 + companies.name 있음 → invoicee corpName = companies.name
+def test_b4p1_1_company_fallback_uses_name(monkeypatch):
+    store = {"refunds": [_refund()], "payments": [_payment()], "tax_invoices": [_original()],
+            "companies": [_company(name="네임회사")], "tax_invoice_requests": []}
+    fake, mock = _setup(monkeypatch, store)
+    inv.process_refund_tax_adjustment("rf1", created_by="admin")
+    iv = mock.calls[0]["invoicee"]
+    assert iv["corpName"] == "네임회사"          # companies.name 사용
+    assert iv["email"] == "co@x.c"               # contact_email 사용
+    assert iv["addr"] == "서울로 1 3층"           # address_road + address_detail
 
 
 # invoicee snapshot 우선순위: request ISSUED snapshot 사용

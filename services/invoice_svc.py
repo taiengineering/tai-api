@@ -1,8 +1,9 @@
 """세금계산서·현금영수증 발행 서비스 (WO-4 + BACKEND-3 guard + BACKEND-4 수정세금계산서) — 팝빌 실연동.
 
 BACKEND-3: 저장금액 그대로 · 명시 supply_date · 중앙 issuance guard · ledger lifecycle · INVOICE_LIVE gate 선행 · popbill seam.
-BACKEND-4: 환불 DONE → 원 TAX_INVOICE ISSUED 있으면 수정세금계산서(전액철환불=코드4/그외=코드2),
+BACKEND-4: 환불 DONE → 원 TAX_INVOICE ISSUED 있으면 수정세금계산서(전액첫환불=코드4/그외=코드2),
   없으면 미발행 request CANCELLED. 동일 refund 중복방지(parent_invoice_id, refund_ref). INVOICE_LIVE gate 동일 적용.
+  수정사유일 = refund.created_at → KST(TAI Time Contract) 기준.
 
 [2026-07-30 A-2] INVOICE_LIVE(기본 off): 사람 게이트 전 실호출 차단(423, 원장 오염 없음).
 """
@@ -10,14 +11,14 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from db.supabase_client import get_supabase
 from services import audit_svc
 from services.payment_helpers import now_iso
 from services.tax_invoice_request_svc import canonical_payment_instrument
-from services.time import now_kst
+from services.time import now_kst, parse_external_datetime, to_kst
 
 log = logging.getLogger(__name__)
 
@@ -414,22 +415,18 @@ def _make_modified_mgt_key(refund_id: str) -> str:
 
 
 def _kst_yyyymmdd(ts) -> str:
+    """refund.created_at(timestamptz) → KST 날짜 YYYYMMDD. TAI Time Contract 사용."""
     if not ts:
         raise InvoiceError(409, "환불 완료시각을 확인할 수 없습니다.", "REFUND_DATE_MISSING")
-    s = str(ts).strip().replace("Z", "+00:00")
     try:
-        dt = datetime.fromisoformat(s)
-    except Exception:  # noqa: BLE001
-        try:
-            dt = datetime.strptime(s[:10], "%Y-%m-%d")
-        except Exception as e:  # noqa: BLE001
-            raise InvoiceError(409, "환불 완료시각 형식을 해석할 수 없습니다.", "REFUND_DATE_INVALID") from e
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone(timedelta(hours=9))).strftime("%Y%m%d")
+        dt = parse_external_datetime(str(ts).replace("Z", "+00:00"))
+    except Exception as e:  # noqa: BLE001
+        raise InvoiceError(409, "환불 완료시각 형식을 해석할 수 없습니다.", "REFUND_DATE_INVALID") from e
+    return to_kst(dt).strftime("%Y%m%d")
 
 
 def _resolve_modified_invoicee(sb, payment_id: str, original: Dict[str, Any]) -> Dict[str, Any]:
+    # 1) 원 request ISSUED snapshot 우선(발행 당시 고객이 확인한 법적정보 보존)
     res = (sb.table("tax_invoice_requests")
            .select("invoicee_business_number, invoicee_company_name, invoicee_representative_name, "
                    "invoicee_email, invoicee_address, invoicee_business_type, invoicee_business_category, status, doc_type")
@@ -442,16 +439,19 @@ def _resolve_modified_invoicee(sb, payment_id: str, original: Dict[str, Any]) ->
                     "ceoName": r["invoicee_representative_name"], "email": r.get("invoicee_email"),
                     "addr": r.get("invoicee_address"), "bizType": r.get("invoicee_business_type"),
                     "bizClass": r.get("invoicee_business_category")}
+    # 2) companies fallback (SoT: name / contact_email / address_road+address_detail)
     company_id = original.get("company_id")
     if company_id:
         cres = (sb.table("companies")
-                .select("business_number, company_name, representative_name, address, business_type, business_category")
+                .select("business_number, name, representative_name, contact_email, "
+                        "address, address_road, address_detail, business_type, business_category")
                 .eq("id", company_id).limit(1).execute())
         c = (cres.data or [None])[0]
-        if c and c.get("business_number") and c.get("company_name") and c.get("representative_name"):
-            return {"corpNum": c["business_number"], "corpName": c["company_name"],
-                    "ceoName": c["representative_name"], "email": None,
-                    "addr": c.get("address"), "bizType": c.get("business_type"), "bizClass": c.get("business_category")}
+        if c and c.get("business_number") and c.get("name") and c.get("representative_name"):
+            addr = " ".join(x for x in (c.get("address_road"), c.get("address_detail")) if x).strip() or c.get("address")
+            return {"corpNum": c["business_number"], "corpName": c["name"],
+                    "ceoName": c["representative_name"], "email": c.get("contact_email"),
+                    "addr": addr, "bizType": c.get("business_type"), "bizClass": c.get("business_category")}
     raise InvoiceError(409, "수정세금계산서 공급받는자 정보(사업자번호/상호/대표자)가 부족합니다.", "MODIFIED_INVOICEE_INCOMPLETE")
 
 
