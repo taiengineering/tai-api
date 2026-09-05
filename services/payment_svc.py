@@ -1,6 +1,12 @@
 """이니시스 결제 비즈니스 로직 (HTTP 제외).
 
 규칙: docs/DEV_RULES_SERVICE_LAYER.md STEP 3
+
+PROOF-TYPE-WRITER (2026-09-05):
+  - run_inicis_prepare / create_vbank_record: INSERT 시 body.proof_type 저장.
+  - process_card_success: 실제 paymethod가 canonical CARD 면 proof_type=CARD_RECEIPT (그 외 미설정->prepare값 보존).
+  - run_billing_charge: CardBilling payment INSERT 에 proof_type=CARD_RECEIPT.
+  - process_vbank_deposit: proof_type 미변경.
 """
 from __future__ import annotations
 
@@ -190,6 +196,9 @@ def run_inicis_prepare(body: PrepareBody) -> dict:
         row["plan_code"] = body.plan_code
     if body.period_months:
         row["period_months"] = body.period_months
+    # PROOF-TYPE-WRITER: 클라이언트 증빙선택(TAX_INVOICE/CASH_RECEIPT/NONE). 미지정은 NULL 유지.
+    if getattr(body, "proof_type", None):
+        row["proof_type"] = body.proof_type
 
     res = supabase.table("payments").insert(row).execute()
     if not res.data:
@@ -319,6 +328,12 @@ def process_card_success(
     if expired_at:
         update_row["expired_at"] = expired_at
 
+    # PROOF-TYPE-WRITER: 실제 승인 method가 canonical CARD 면 서버가 CARD_RECEIPT 확정.
+    # DirectBank/VBank/UNKNOWN 은 설정하지 않아 prepare 시점 선택값을 보존한다.
+    from services.tax_invoice_request_svc import canonical_payment_instrument
+    if canonical_payment_instrument(paymethod) == "CARD":
+        update_row["proof_type"] = "CARD_RECEIPT"
+
     supabase.table("payments").update(update_row).eq("id", payment_id).execute()
 
     try:
@@ -399,6 +414,9 @@ def create_vbank_record(body: VbankPrepareBody, sign_key: str) -> dict:
     _plan_code = getattr(body, "plan_code", None)
     if _plan_code:
         row["plan_code"] = _plan_code
+    # PROOF-TYPE-WRITER: VBANK 발급 시점이 writer. 클라이언트 증빙선택 그대로 저장.
+    if getattr(body, "proof_type", None):
+        row["proof_type"] = body.proof_type
     if body.auth_token or body.public_token:
         row["memo"] = (
             f"diag_auth_token={body.auth_token or ''} "
@@ -449,7 +467,10 @@ def process_vbank_deposit(
     depositor: str,
     raw_data: dict,
 ) -> str:
-    """VBANK 입금 노티 — payments / matching_contracts / matching_requests / notifications."""
+    """VBANK 입금 노티 — payments / matching_contracts / matching_requests / notifications.
+
+    PROOF-TYPE-WRITER: 이 경로에서 proof_type 를 다시 건드리지 않는다(발급 시점에 확정).
+    """
     supabase = get_supabase()
 
     pay_res = (
@@ -751,6 +772,8 @@ def run_billing_charge(body) -> Dict[str, Any]:
             "plan_code": sub.get("plan_code"),
             "payment_method": "INICIS_BILLING",
             "payment_type": "BILLING",
+            "pg_method": "CardBilling",
+            "proof_type": "CARD_RECEIPT",
             "total_amount": amount,
             "supply_amount": split_supply_vat(amount)[0],
             "vat_amount": split_supply_vat(amount)[1],
@@ -802,19 +825,13 @@ def run_billing_cancel(subscription_id: str, reason: str = "사용자 요청", c
 
 
 def run_partial_refund(payment_id: str, amount: int, reason: str = "", cancelled_by: Optional[str] = None) -> dict:
-    """부분 환불 — WO-1 refund_svc 위임 (이니시스 INIAPI 실연동).
-
-    본문은 services/refund_svc.py. 순환 import 방지를 위해 함수 내부에서 지연 import.
-    """
+    """부분 환불 — WO-1 refund_svc 위임 (이니시스 INIAPI 실연동)."""
     from services.refund_svc import run_partial_refund as _impl
     return _impl(payment_id, amount, reason, cancelled_by)
 
 
 def run_refund(payment_id: str, reason: str = "", cancelled_by: Optional[str] = None) -> dict:
-    """전체 환불 — WO-1 refund_svc 위임 (이니시스 INIAPI 실연동).
-
-    본문은 services/refund_svc.py. 순환 import 방지를 위해 함수 내부에서 지연 import.
-    """
+    """전체 환불 — WO-1 refund_svc 위임 (이니시스 INIAPI 실연동)."""
     from services.refund_svc import run_refund as _impl
     return _impl(payment_id, reason, cancelled_by)
 
