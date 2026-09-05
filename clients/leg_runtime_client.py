@@ -174,6 +174,12 @@ _LEG_INPUT_FIELDS = (
     "has_wall_between_connection_entrances", "wall_between_connection_entrances_is_fire_resistant",
     "has_stair_or_ramp_in_open_space", "is_connected_to_subway_or_underground_mall",
     "has_hazardous_material_in_out_event",
+    # WO-006 PATCH-2A: numeric 11 + trigger 4 (verbatim passthrough; no alias/derivation).
+    "scaffold_height_m", "grinding_wheel_diameter_cm", "breathing_gas_cylinder_pressure_kgf_cm2",
+    "structure_height_m", "object_drop_height_m", "construction_machine_weight_ton",
+    "hazmat_designated_quantity_multiple", "rotor_peripheral_speed_m_s", "rotor_shaft_weight_ton",
+    "same_site_construction_count", "diving_worker_count",
+    "has_structure", "has_object_drop", "has_construction_machine", "has_high_speed_rotor",
 )
 
 # WO-FIX-BUILDFACILITY-SECTOR-GATE-001: WIRING-016 append BUILDING N1 raw primitive 32축.
