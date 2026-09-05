@@ -13,8 +13,8 @@ from typing import Any, Dict, Optional
 from services.safe_industrial_canonical_assembler import (
     assemble_industrial_marketing_contract, TARGET_FIELDS, CONTRACT_VERSION,
 )
+from services.canonical.saas_leg_source_adapter import build_saas_leg_step1
 from services.leg_diagnosis_svc import run_leg_diagnosis
-from schemas.legal_engine import DiagnoseStep1Body
 
 # SAFE 화면에서 직접 확보 가능한 canonical override field 13 (기존6 + GATE-3 신규7).
 SAFE_UI_OVERRIDE_FIELDS = (
@@ -46,14 +46,15 @@ def run_safe_industrial_leg(supabase, factory_id: str, consumer_input) -> Dict[s
             provenance[f] = {"mode": "CONSUMER_OVERRIDE", "source": "safe.diagnosis-step1"}
             unresolved.discard(f)     # 명시 입력으로 해소(None 은 여기 안 옴)
 
-    # C. canonical denominator 불변: 정확히 29, TARGET_FIELDS exact.
-    values = {f: values[f] for f in TARGET_FIELDS}
-    assert len(values) == 29 and list(values.keys()) == list(TARGET_FIELDS)
+    # C. WO-010 STEP-2C : canonical29 final-cut 제거. TARGET_FIELDS 는 assembler 의 source contract
+    #    로 계속 import(unresolved_fields 반환용) — 계약 파일 delta 0. source_facts 는 상한 없이
+    #    전량 전달하고 build_saas_leg_step1 이 _LEG_INPUT_FIELDS(103) 로 필터한다. R1 축 등
+    #    source 에 값이 있으면 배선 상한 없이 build_facility 에 도달, 없으면 ABSENT/UNRESOLVED 유지.
+    step1 = build_saas_leg_step1(
+        sector="INDUSTRIAL", source_facts=values, factory_id=factory_id,
+    )
 
-    # D. 공식 step1 — sector=INDUSTRIAL, canonical 은 input 에(top-level shadow 금지).
-    step1 = DiagnoseStep1Body(factory_id=factory_id, sector="INDUSTRIAL", input=values)
-
-    # E. 공식 Runtime Delegate 1회 (direct evaluate_rtm / send_industrial_canonical_to_leg 미사용).
+    # D. 공식 Runtime Delegate 1회 (direct evaluate_rtm / send_industrial_canonical_to_leg 미사용).
     full_result = run_leg_diagnosis(step1)
 
     return {

@@ -165,6 +165,9 @@ def test_G_run_leg_exactly_once(monkeypatch):
 
 
 # ── D. explicit runtime override (false/0 보존) ────────────────────────
+# WO-010 STEP-2C : canonical27 final-cut 제거 이후 unified filter(_LEG_INPUT_FIELDS 103) 적용.
+#   None 값(has_demolition 미override) 은 step1.input 에서 배제된다(build_unified_leg_input 계약).
+#   unresolved_fields 반환 계약은 무변 — runtime 이 여전히 SAFE_CST_OVERRIDE_FIELDS 로 discard.
 def test_D_explicit_override_false_zero(monkeypatch):
     cap = {"called": 0}
     _patch_leg(monkeypatch, cap)
@@ -175,29 +178,38 @@ def test_D_explicit_override_false_zero(monkeypatch):
     assert inp["has_subcontractor"] is False          # explicit false 보존
     assert inp["has_excavation"] is True
     assert inp["work_height_m"] == 0                  # explicit 0 보존
-    assert inp["has_demolition"] is None              # None=미override → canonical None 유지
+    assert "has_demolition" not in inp                # None=미override → unified 필터 배제
     assert "has_subcontractor" not in out["unresolved_fields"]  # 명시 해소
     assert "has_demolition" in out["unresolved_fields"]         # 미override 유지
 
 
 # ── override allowlist = RUNTIME20 (subcontractor_count 제외) ───────────
+# STEP-2C : subcontractor_count 는 _LEG_INPUT_FIELDS 밖 & RUNTIME20 밖 → 어차피 통과 불가.
+#   unresolved 계약(subcontractor_count in unresolved_fields) 은 무변.
 def test_override_allowlist_20(monkeypatch):
     cap = {"called": 0}
     _patch_leg(monkeypatch, cap)
-    # subcontractor_count 는 override 대상 아님 → 넘겨도 canonical None 유지
+    # subcontractor_count 는 override 대상 아님 → 넘겨도 unified filter 로 배제
     out = run_safe_construction_leg(_sb(), "S1", {"subcontractor_count": 5})
-    assert cap["step1"].input["subcontractor_count"] is None
+    assert "subcontractor_count" not in cap["step1"].input
     assert "subcontractor_count" in out["unresolved_fields"]
     assert len(SAFE_CST_OVERRIDE_FIELDS) == 20
 
 
-# ── canonical 27 불변 (override 후에도) ────────────────────────────────
+# ── STEP-2C : canonical27 final-cut 제거 이후 계약 ──────────────────────
+# 원 계약(keys==TARGET_FIELDS, len==27) 은 assembler contract(source) 로만 남고,
+# runtime 은 build_saas_leg_step1(→ build_unified_leg_input, _LEG_INPUT_FIELDS 103 필터) 을 경유.
+# 값 있는 override(has_excavation True) 는 그대로 도달, None 슬롯은 unified filter 로 배제.
 def test_canonical_27_after_override(monkeypatch):
+    from clients.leg_runtime_client import _LEG_INPUT_FIELDS
     cap = {"called": 0}
     _patch_leg(monkeypatch, cap)
     run_safe_construction_leg(_sb(), "S1", {"has_excavation": True})
-    assert list(cap["step1"].input.keys()) == TARGET_FIELDS
-    assert len(cap["step1"].input) == 27
+    inp = cap["step1"].input
+    assert set(inp.keys()) <= set(_LEG_INPUT_FIELDS), (
+        "step1.input.keys() 는 _LEG_INPUT_FIELDS(103) 부분집합"
+    )
+    assert inp.get("has_excavation") is True   # override 도달
 
 
 # ── factory bridge fail-closed (factory 생성 0) ────────────────────────
@@ -255,9 +267,10 @@ def test_T4_regulatory_true(monkeypatch):
     assert "has_high_pressure_gas" not in out["unresolved_fields"]
 
 def test_T5_regulatory_none(monkeypatch):
+    # STEP-2C : None override 는 unified filter 로 배제(canonical None → 미포함). unresolved 계약은 유지.
     cap = {"called": 0}; _patch_leg(monkeypatch, cap)
     out = run_safe_construction_leg(_sb(), "S1", {"has_asbestos": None})
-    assert cap["step1"].input["has_asbestos"] is None
+    assert "has_asbestos" not in cap["step1"].input
     assert "has_asbestos" in out["unresolved_fields"]
 
 def test_T6_non_runtime_canonical_firewall():

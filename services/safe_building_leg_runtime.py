@@ -13,8 +13,8 @@ DB WRITE 0 (READ-ONLY LEG diagnosis). factory 생성 side effect 0.
 from __future__ import annotations
 from typing import Any, Dict
 
+from services.canonical.saas_leg_source_adapter import build_saas_leg_step1
 from services.leg_diagnosis_svc import run_leg_diagnosis
-from schemas.legal_engine import DiagnoseStep1Body
 
 # SEMANTIC-PROOF OWNED_EXACT 3 — factories exact-name SAFE READ (semantic 자명).
 _SAFE_OWNED_EXACT = ("floor_count", "has_boiler", "is_multi_use")
@@ -52,8 +52,14 @@ def run_safe_building_leg(supabase, factory_id: str, consumer_input) -> Dict[str
         values[k] = v
         unresolved.discard(k)
 
-    # C. 공식 step1 — sector=BUILDING, canonical 은 input 에(build_facility 가 N1 32 sector-gate 처리).
-    step1 = DiagnoseStep1Body(factory_id=factory_id, sector="BUILDING", input=values)
+    # C. WO-010 STEP-2C : unified LEG input contract 경유. values 는 OWNED_EXACT 3 + consumer
+    #    override(SafeBuildingConsumerInput extra=forbid 로 이미 검증된 축) 병합 dict. 상한 없이
+    #    전량 전달하고 build_saas_leg_step1 이 _LEG_INPUT_FIELDS(103) 필터 + BUILDING alias 규약
+    #    (has_chemical 승격 스킵 · has_chemical_substance exact-key patch-A 경로 유지) + elevator_count
+    #    derived setattr 를 적용한다. build_facility N1 32 sector-gate 는 중앙 로직 그대로.
+    step1 = build_saas_leg_step1(
+        sector="BUILDING", source_facts=values, factory_id=factory_id,
+    )
 
     # D. 공식 Runtime Delegate 1회.
     full_result = run_leg_diagnosis(step1)
