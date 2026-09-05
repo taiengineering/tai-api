@@ -1,15 +1,13 @@
-"""환불 서비스 (WO-1 RefundService) — 이니시스 INIAPI 취소/환불 실연동.
+"""환불 → 수정세금계산서 fail-soft 후처리 (BACKEND-4).
 
-Goal: G-ms4je4z3-33eada (게이트 보강 G-ms5pdquz-9e76e5)
-규격: docs/INICIS_INTEGRATION_SPEC.md §4 (전체취소/부분취소)
-- URL/키/IP는 payment_helpers의 env 상수만 참조 (R-008 하드코딩 금지)
-- 모든 성공/실패는 refunds 대장에 기록 (사유 필수, 누적환불 검증)
-- WO-2: 성공/실패 시 audit_svc.record로 감사 기록 (best-effort)
+refund DONE 뒤에만 훈을 붙인다:
+- 원 TAX_INVOICE ISSUED 없음 → 미발행 tax_invoice_requests CANCELLED(REFUNDED_BEFORE_ISSUE), 수정계산서 없음.
+- 원 TAX_INVOICE ISSUED 있음 → 수정세금계산서(전액=코드4 / 부분=코드2).
+- 동일 refund 중복발행 방지(parent_invoice_id, refund_ref UNIQUE).
+환불 성공은 수정계산서 성공과 독립: 훈 실패여도 refund DONE / payment 상태는 rollback 없음.
+실발행·popbill · gate 는 invoice_svc.process_refund_tax_adjustment 에 위임(INVOICE_LIVE OFF 면 423).
 
-[2026-07-30 실호출 게이트 B-1] REFUND_LIVE(기본 off):
-  운영 정책상 실환불(이니시스 실취소)은 사람 게이트가 완료되기 전까지 실호출을 막는다.
-  플래그가 꺼져 있으면 검증까지만 수행하고, 대장 오염 없이 423으로 차단하며 감사만 남긴다.
-  허용 소스: 배포 ENV(REFUND_LIVE=on) 또는 어드민 실행게이트(ops_feature_gate, 준비완료 통과 후 활성화).
+[기존] WO-1 RefundService — 이니시스 INIAPI 취소/환불 실연동(REFUND_LIVE 게이트, 누적환불 검증, 감사).
 """
 from __future__ import annotations
 
@@ -40,11 +38,7 @@ _REFUND_LIVE_ENV = "REFUND_LIVE"
 
 
 def refund_live() -> bool:
-    """실환불 실호출 허용 여부. 기본 off.
-
-    ENV(REFUND_LIVE=on) 또는 어드민 실행게이트(ops_feature_gate) 활성 시 허용.
-    게이트 서비스 오류 시 보수적으로 ENV 만 본다.
-    """
+    """실환불 실호출 허용 여부. 기본 off."""
     try:
         from services.ops_gate_svc import is_live
         return is_live(_REFUND_LIVE_ENV)
@@ -66,6 +60,24 @@ def _assert_refund_live(payment_id: str, refund_type: str, amount: int,
         "실환불 실호출이 운영 게이트로 잠겨 있습니다(REFUND_LIVE 비활성). "
         "실제 이니시스 취소는 나가지 않았습니다. 실행하려면 운영자가 실호출을 활성화해야 합니다.",
     )
+
+
+def _tax_adjustment_hook(refund_id: str, actor_id: Optional[str]) -> None:
+    """환불 DONE 후 세금계산서 정렬(fail-soft).
+
+    수정세금계산서 실패/게이트(423)가 환불 결과에 영향을 주지 않도록 예외는 로그/감사만 남긴다.
+    (refund DONE / payment 상태 rollback 절대 금지)
+    """
+    try:
+        from services.invoice_svc import process_refund_tax_adjustment
+        process_refund_tax_adjustment(refund_id, created_by=actor_id)
+    except Exception as e:  # noqa: BLE001 — fail-soft
+        log.warning("[REFUND] 세금계산서 수정 후처리 실패(best-effort): %s", e)
+        try:
+            audit_svc.record("REFUND_TAX_ADJUST_FAILED", "payment", entity_id=None,
+                             actor_id=actor_id, after={"refund_id": refund_id, "error": str(e)[:300]})
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _load_payment(payment_id: str) -> Dict[str, Any]:
@@ -192,6 +204,8 @@ def run_refund(payment_id: str, reason: str = "", cancelled_by: Optional[str] = 
             before={"status_code": payment["status_code"], "cumulative_done": done},
             after={"refund_id": refund_id, "amount": remaining, "status": "DONE", "result_code": "00"},
         )
+        # 환불 확정 후 세금계산서 정렬(fail-soft) — 환불 결과에 영향 없음.
+        _tax_adjustment_hook(refund_id, cancelled_by)
         return {"status": "success", "refund_id": refund_id, "amount": remaining, "inicis": result}
 
     _update_refund(refund_id, {"status": "FAILED", "inicis_raw": result})
@@ -277,6 +291,8 @@ def run_partial_refund(payment_id: str, amount: int, reason: str = "", cancelled
             after={"refund_id": refund_id, "amount": amount, "cumulative": new_cumulative,
                    "status": "DONE", "result_code": "00", "payment_status": new_status},
         )
+        # 환불 확정 후 세금계산서 정렬(fail-soft) — 환불 결과에 영향 없음.
+        _tax_adjustment_hook(refund_id, cancelled_by)
         return {
             "status": "success",
             "refund_id": refund_id,
