@@ -3,7 +3,9 @@
 service(sb 주입) 중심. 운영 DB/네트워크/ Popbill 불사용.
 payments.proof_type · tax_invoices · invoice_svc 미변경 검증 포함.
 """
+import ast
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -130,7 +132,7 @@ def test_canonical_method():
         assert svc.canonical_payment_instrument(v) == "VBANK"
     assert svc.canonical_payment_instrument("HPP") == "UNKNOWN"
     assert svc.canonical_payment_instrument(None) == "UNKNOWN"
-    # P0-3: vacct 는 canonical contract 에 없음 → UNKNOWN (임의 alias 확장 금지)
+    # P0-3: vacct 는 canonical contract 에 없음 → UNKNOWN (drift 방지)
     assert svc.canonical_payment_instrument("vacct") == "UNKNOWN"
     assert svc.canonical_payment_instrument("VAcct") == "UNKNOWN"
 
@@ -349,7 +351,7 @@ def test_t38_unrelated_db_error_500():
 
 
 # ══ no side-effect (T39~T42) ══
-def test_t39_t40_no_payment_or_tax_invoice_mutation():
+def test_t39_t40_no_payment_or_tax_invoices_mutation():
     store = _store(payment=_payment(pg_method="VBank", proof_type="TAX_INVOICE"))
     before_payment = dict(store["payments"][0])
     sb = FakeSupabase(store)
@@ -363,12 +365,10 @@ def test_t39_t40_no_payment_or_tax_invoice_mutation():
 
 
 def test_t41_t42_no_invoice_svc_or_popbill_import_dependency():
-    # 설명문(docstring)의 invoice_svc/Popbill 언급은 허용. 실제 import/call dependency 만 금지.
-    import ast
-    from pathlib import Path
+    """docstring 설명 문자열은 허용, 실제 import/call dependency 만 금지(AST)."""
     import services.tax_invoice_request_svc as s
-
-    tree = ast.parse(Path(s.__file__).read_text(encoding="utf-8"))
+    src = Path(s.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(src)
     imports = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -377,8 +377,8 @@ def test_t41_t42_no_invoice_svc_or_popbill_import_dependency():
             module = node.module or ""
             imports.append(module)
             imports.extend("{}.{}".format(module, alias.name) for alias in node.names)
-    assert "services.invoice_svc" not in imports  # T41 invoice_svc 미사용
-    assert not any("popbill" in name.lower() for name in imports)  # T42 Popbill 미사용
+    assert "services.invoice_svc" not in imports
+    assert not any("popbill" in name.lower() for name in imports)
 
 
 # ══ ownership (T1~T4) — service load_and_authorize ══
