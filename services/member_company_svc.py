@@ -64,6 +64,23 @@ def _bn_variants(digits: str) -> List[str]:
     return [digits, hy]
 
 
+def _is_business_number_unique_violation(e: Exception) -> bool:
+    """companies.business_number UNIQUE(23505) 위반만 True. 그 외 DB 오류는 False.
+
+    SDK 예외 code 우선(23505). 없으면 알려진 constraint name
+    (companies_business_number_unique) 보조 확인. 단순 'duplicate' 문자열 하나로 분류하지 않는다.
+    """
+    code = str(getattr(e, "code", "") or "")
+    parts = [str(getattr(e, a, "") or "") for a in ("code", "message", "details", "hint")]
+    text = " ".join(parts) + " " + str(e)
+    if "companies_business_number_unique" in text:
+        return True
+    # constraint 정보가 없고 code 만 23505 인 경우: 이 INSERT 의 유일 unique 후보는 business_number.
+    if code == "23505":
+        return True
+    return False
+
+
 def _clean(payload: Dict[str, Any]) -> Dict[str, Any]:
     """허용 필드(business_number 제외)만 추려 저장용으로 정리(strip)."""
     row: Dict[str, Any] = {}
@@ -169,14 +186,20 @@ def _create_and_bind(sb, current_user: Dict[str, Any], payload: Dict[str, Any]) 
     row["updated_at"] = _now_iso()
     try:
         ins = sb.table("companies").insert(row).execute()
-    except Exception as e:  # business_number UNIQUE race 등
+    except Exception as e:
+        # 예외를 먼저 분류하지 않고 user 재조회 — concurrent 가 이미 bind 했으면 winner 반환.
         cid2 = _user_company_id(sb, user_id)
         if cid2:
+            # loser payload 로 winner 를 수정하지 않는다(조회만).
             return _select_view(sb, cid2)
-        raise MemberCompanyError(
-            409, "BUSINESS_NUMBER_ALREADY_EXISTS",
-            "이미 등록된 사업자등록번호입니다. 기존 회사 관리자 연결이 필요합니다.",
-        ) from e
+        # 실제 business_number UNIQUE(23505/companies_business_number_unique) 만 409.
+        if _is_business_number_unique_violation(e):
+            raise MemberCompanyError(
+                409, "BUSINESS_NUMBER_ALREADY_EXISTS",
+                "이미 등록된 사업자등록번호입니다. 기존 회사 관리자 연결이 필요합니다.",
+            ) from e
+        # 그 외 모든 INSERT 오류는 500(409 위장 금지).
+        raise MemberCompanyError(500, "COMPANY_CREATE_FAILED", "회사 생성에 실패했습니다.") from e
     if not ins.data:
         raise MemberCompanyError(500, "COMPANY_CREATE_FAILED", "회사 생성에 실패했습니다.")
     new_company_id = ins.data[0]["id"]

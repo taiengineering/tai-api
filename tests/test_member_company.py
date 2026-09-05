@@ -6,14 +6,23 @@ service(sb 주입) + router(FastAPI TestClient + dependency_overrides + get_supa
 import uuid
 
 import pytest
-from fastapi import FastAPI, HTTPException
-from fastapi.testclient import TestClient
 
 import routers.member_company as mc
 from services import member_company_svc as svc
 
+# TestClient(httpx) 가 없는 환경에서도 service 단위테스트는 돌아가도록 router 테스트만 조건부 skip.
+try:
+    from fastapi import FastAPI, HTTPException
+    from fastapi.testclient import TestClient
+    import httpx  # noqa: F401  (TestClient 의존)
+    _HAS_CLIENT = True
+except Exception:  # noqa: BLE001
+    _HAS_CLIENT = False
 
-# ── FakeSupabase (in-memory, chainable) ───────────────────────────────────
+requires_client = pytest.mark.skipif(not _HAS_CLIENT, reason="httpx/TestClient 미설치")
+
+
+# ── FakeSupabase (in-memory, chainable, column projection 지원) ──────────────
 class _Result:
     def __init__(self, data):
         self.data = data
@@ -23,9 +32,9 @@ class _Result:
 class _Query:
     def __init__(self, store, table, log):
         self.store = store; self.table = table; self.log = log
-        self._op = None; self._payload = None; self._filters = []
+        self._op = None; self._payload = None; self._filters = []; self._cols = "*"
 
-    def select(self, *a, **k): self._op = "select"; return self
+    def select(self, cols="*", *a, **k): self._op = "select"; self._cols = cols or "*"; return self
     def insert(self, row): self._op = "insert"; self._payload = row; return self
     def update(self, patch): self._op = "update"; self._payload = patch; return self
     def delete(self): self._op = "delete"; return self
@@ -42,11 +51,17 @@ class _Query:
             if op == "is" and v == "null" and row.get(c) is not None: return False
         return True
 
+    def _project(self, row):
+        if not self._cols or self._cols == "*":
+            return dict(row)
+        keys = [c.strip() for c in self._cols.split(",") if c.strip()]
+        return {k: row.get(k) for k in keys}
+
     def execute(self):
         rows = self.store.setdefault(self.table, [])
         self.log.append((self.table, self._op))
         if self._op == "select":
-            return _Result([dict(r) for r in rows if self._match(r)])
+            return _Result([self._project(r) for r in rows if self._match(r)])
         if self._op == "insert":
             items = self._payload if isinstance(self._payload, list) else [self._payload]
             out = []
@@ -79,23 +94,23 @@ class FakeSupabase:
         return _Query(self.store, name, self.log)
 
 
-def _client(current_user, store):
-    app = FastAPI()
-    app.include_router(mc.router)
-    app.dependency_overrides[mc.get_current_user] = lambda: current_user
-    fake = FakeSupabase(store)
-    mc.get_supabase = lambda: fake  # noqa: 라우터 모듈 레벨 이름 대체
-    c = TestClient(app)
-    c._fake = fake
-    return c
-
-
 def _company(cid, **kw):
     base = {"id": cid, "name": "회사", "business_number": None}
     base.update(kw); return base
 
 
-# ── service 단위 (T9/T10/T11/T12/T13/T8/T14/T15/T16/T17/T18/T20/T21) ──
+def _client(current_user, store):
+    app = FastAPI()
+    app.include_router(mc.router)
+    app.dependency_overrides[mc.get_current_user] = lambda: current_user
+    fake = FakeSupabase(store)
+    mc.get_supabase = lambda: fake  # 라우터 모듈 레벨 이름 대체
+    c = TestClient(app)
+    c._fake = fake
+    return c
+
+
+# ══ service 단위 ══
 def test_t9_normalize_hyphen():
     assert svc.normalize_business_number("123-45-67890") == "1234567890"
     assert svc.normalize_business_number(" 123 45 67890 ") == "1234567890"
@@ -109,16 +124,15 @@ def test_t10_normalize_malformed():
     assert e.value.status_code == 400
 
 
-def test_t11_t12_duplicate_variants_block_create():
+def test_t11_t12_t13_duplicate_variants_block_create_no_autoclaim():
     for existing in ("1234567890", "123-45-67890"):
         store = {"companies": [_company("c-old", business_number=existing)], "users": [{"id": "u1", "company_id": None}]}
         sb = FakeSupabase(store)
         with pytest.raises(svc.MemberCompanyError) as e:
             svc.upsert_member_company(sb, {"id": "u1", "company_id": None},
                                       {"name": "새회사", "business_number": "123-45-67890"})
-        assert e.value.status_code == 409  # T13: 자동 claim 아님
-        # 기존 회사 소유권 자동 연결 안 됨
-        assert store["users"][0]["company_id"] is None
+        assert e.value.status_code == 409
+        assert store["users"][0]["company_id"] is None  # 자동 claim 안 됨
 
 
 def test_t8_company_less_create_and_bind():
@@ -131,43 +145,125 @@ def test_t8_company_less_create_and_bind():
     assert store["companies"][0]["business_number"] == "1234567890"
 
 
-def test_t14_bind_race_loser_compensation():
-    # bind 대상(company_id IS NULL) 없음 -> update 0 row -> 방금 만든 회사 보상삭제 + winner 반환
-    store = {"companies": [_company("c-win")], "users": [{"id": "u1", "company_id": "c-win"}]}
-    sb = FakeSupabase(store)
-    # current_user 는 아직 company_id NULL 로 진입했다고 가정하되, DB엔 이미 c-win bind됨(race)
-    out = svc.upsert_member_company(sb, {"id": "u1", "company_id": None}, {"name": "loser입력"})
-    assert out["id"] == "c-win"  # winner 반환
-    # orphan 0: 생성됐던 회사는 보상삭제되어 c-win 만 남음
+class _RaceFake(FakeSupabase):
+    """companies INSERT 직후 concurrent 가 user 를 winner(c-win) 에 bind 했다고 가정(1회)."""
+    def __init__(self, store):
+        super().__init__(store); self._flipped = False
+
+    def table(self, name):
+        q = super().table(name)
+        orig = q.execute
+
+        def exec2():
+            res = orig()
+            if name == "companies" and q._op == "insert" and not self._flipped:
+                self._flipped = True
+                for u in self.store.get("users", []):
+                    if u["id"] == "u1":
+                        u["company_id"] = "c-win"
+            return res
+        q.execute = exec2
+        return q
+
+
+def test_t14_true_bind_race_loser_compensation():
+    # 시간순: user NULL -> loser company INSERT -> concurrent winner bind -> conditional bind 0 row
+    #          -> loser 보상삭제 -> winner 재조회 -> winner 반환(loser payload 미적용)
+    store = {
+        "companies": [_company("c-win", name="WINNER", business_number="1111111111")],
+        "users": [{"id": "u1", "company_id": None}],
+    }
+    sb = _RaceFake(store)
+    out = svc.upsert_member_company(sb, {"id": "u1", "company_id": None}, {"name": "LOSER"})
+    # loser company 보상삭제되어 c-win 만 남음(orphan 0)
     assert [c["id"] for c in store["companies"]] == ["c-win"]
+    assert store["users"][0]["company_id"] == "c-win"
+    assert out["id"] == "c-win"
+    # winner 기존 필드가 loser payload 로 변경되지 않음
+    assert out["name"] == "WINNER"
+    assert [c for c in store["companies"] if c["id"] == "c-win"][0]["name"] == "WINNER"
 
 
-def test_t15_t16_bind_exception_and_compensation_fail():
-    # bind update 에서 예외 -> 회사 보상삭제 시도. 보상삭제도 실패하면 500 명시.
-    class BoomOnUserUpdate(FakeSupabase):
-        def __init__(self, store, fail_delete=False):
-            super().__init__(store); self.fail_delete = fail_delete
-        def table(self, name):
-            q = super().table(name)
-            orig_exec = q.execute
-            def exec2():
-                if name == "users" and q._op == "update":
-                    raise Exception("bind boom")
-                if name == "companies" and q._op == "delete" and self.fail_delete:
-                    raise Exception("delete boom")
-                return orig_exec()
-            q.execute = exec2
-            return q
-    # T15: 보상삭제 성공 -> 원 오류(COMPANY_BIND_FAILED 500)
+class _BoomFake(FakeSupabase):
+    """특정 (table, op) 에서 예외 발생. companies insert 는 code 없는 일반 오류(비-중복)."""
+    def __init__(self, store, boom):
+        super().__init__(store); self.boom = boom  # set of (table, op)
+
+    def table(self, name):
+        q = super().table(name)
+        orig = q.execute
+
+        def exec2():
+            if (name, q._op) in self.boom:
+                raise Exception("db down")  # code/constraint 없음
+            return orig()
+        q.execute = exec2
+        return q
+
+
+def test_p1_1_nonduplicate_insert_error_is_500_not_409():
     store = {"companies": [], "users": [{"id": "u1", "company_id": None}]}
-    sb = BoomOnUserUpdate(store)
+    sb = _BoomFake(store, boom={("companies", "insert")})
     with pytest.raises(svc.MemberCompanyError) as e:
         svc.upsert_member_company(sb, {"id": "u1", "company_id": None}, {"name": "X"})
     assert e.value.status_code == 500
-    assert store["companies"] == []  # 보상삭제로 orphan 0
-    # T16: 보상삭제도 실패 -> COMPANY_BIND_COMPENSATION_FAILED 500
+    assert e.value.code == "COMPANY_CREATE_FAILED"
+    assert e.value.code != "BUSINESS_NUMBER_ALREADY_EXISTS"
+
+
+class _DupInsertFake(FakeSupabase):
+    """companies insert 에서 23505/constraint 예외. flip=True 면 예외 전 user 를 winner bind."""
+    def __init__(self, store, flip=False):
+        super().__init__(store); self.flip = flip; self._done = False
+
+    def table(self, name):
+        q = super().table(name)
+        orig = q.execute
+
+        def exec2():
+            if name == "companies" and q._op == "insert" and not self._done:
+                self._done = True
+                if self.flip:
+                    for u in self.store.get("users", []):
+                        if u["id"] == "u1":
+                            u["company_id"] = "c-win"
+                raise Exception('duplicate key value violates unique constraint "companies_business_number_unique"')
+            return orig()
+        q.execute = exec2
+        return q
+
+
+def test_p1_2a_duplicate_insert_unbound_is_409():
+    store = {"companies": [], "users": [{"id": "u1", "company_id": None}]}
+    sb = _DupInsertFake(store, flip=False)
+    with pytest.raises(svc.MemberCompanyError) as e:
+        svc.upsert_member_company(sb, {"id": "u1", "company_id": None}, {"name": "X"})
+    assert e.value.status_code == 409
+    assert e.value.code == "BUSINESS_NUMBER_ALREADY_EXISTS"
+
+
+def test_p1_2b_duplicate_insert_but_bound_returns_winner():
+    store = {
+        "companies": [_company("c-win", name="WINNER")],
+        "users": [{"id": "u1", "company_id": None}],
+    }
+    sb = _DupInsertFake(store, flip=True)
+    out = svc.upsert_member_company(sb, {"id": "u1", "company_id": None}, {"name": "LOSER"})
+    assert out["id"] == "c-win"
+    assert out["name"] == "WINNER"  # loser payload 미적용
+
+
+def test_t15_t16_bind_exception_and_compensation_fail():
+    # T15: bind update 예외 -> 회사 보상삭제 성공 -> 500 COMPANY_BIND_FAILED, orphan 0
+    store = {"companies": [], "users": [{"id": "u1", "company_id": None}]}
+    sb = _BoomFake(store, boom={("users", "update")})
+    with pytest.raises(svc.MemberCompanyError) as e:
+        svc.upsert_member_company(sb, {"id": "u1", "company_id": None}, {"name": "X"})
+    assert e.value.status_code == 500
+    assert store["companies"] == []
+    # T16: bind 예외 + 보상삭제도 실패 -> COMPANY_BIND_COMPENSATION_FAILED
     store2 = {"companies": [], "users": [{"id": "u1", "company_id": None}]}
-    sb2 = BoomOnUserUpdate(store2, fail_delete=True)
+    sb2 = _BoomFake(store2, boom={("users", "update"), ("companies", "delete")})
     with pytest.raises(svc.MemberCompanyError) as e2:
         svc.upsert_member_company(sb2, {"id": "u1", "company_id": None}, {"name": "X"})
     assert e2.value.code == "COMPANY_BIND_COMPENSATION_FAILED"
@@ -178,11 +274,9 @@ def test_t17_t18_existing_update_conflict_and_isolation():
                             _company("c2", business_number="2222222222")],
              "users": [{"id": "u1", "company_id": "c1"}]}
     sb = FakeSupabase(store)
-    # T17: 타사(c2) 사업자번호로 변경 시도 -> 409
     with pytest.raises(svc.MemberCompanyError) as e:
         svc.upsert_member_company(sb, {"id": "u1", "company_id": "c1"}, {"business_number": "222-22-22222"})
     assert e.value.status_code == 409
-    # T18: 정상 자기회사 수정 -> c2 불변
     svc.upsert_member_company(sb, {"id": "u1", "company_id": "c1"}, {"name": "새이름"})
     c2 = [c for c in store["companies"] if c["id"] == "c2"][0]
     assert c2["name"] == "회사" and c2["business_number"] == "2222222222"
@@ -197,20 +291,34 @@ def test_t20_t21_no_payment_or_tax_mutation():
     assert "tax_invoice_requests" not in touched
 
 
-# ── router 레벨 (T1/T2/T3/T4/T5/T6/T7) ──
+# ══ router 레벨 ══
+@requires_client
 def test_t3_get_company_less_returns_null():
     c = _client({"id": "u1", "company_id": None, "role_code": "010"}, {"companies": [], "users": []})
     r = c.get("/me/company")
     assert r.status_code == 200 and r.json()["data"] is None
 
 
-def test_t2_get_bound_returns_own():
-    store = {"companies": [_company("c1", name="내회사", business_number="1234567890")]}
+@requires_client
+def test_t2_t19_get_bound_returns_only_legal_fields():
+    store = {"companies": [_company(
+        "c1", name="내회사", business_number="1234567890", representative_name="홍길동",
+        contact_email="a@b.c", contact_phone="010", zipcode="06236", address_road="테헤란로",
+        address_detail="3층", business_type="정보통신업", business_category="응용SW",
+        # 노출되면 안 되는 운영/권한 필드
+        status_code="ACTIVE", company_code="CO-1", is_active=True, created_by="admin",
+    )]}
     c = _client({"id": "u1", "company_id": "c1", "role_code": "010"}, store)
     r = c.get("/me/company")
-    assert r.status_code == 200 and r.json()["data"]["id"] == "c1" and r.json()["data"]["name"] == "내회사"
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert set(data.keys()) == set(svc.VIEW_FIELDS)  # 법적 필드만
+    for leaked in ("status_code", "company_code", "is_active", "created_by"):
+        assert leaked not in data
+    assert data["id"] == "c1" and data["name"] == "내회사"
 
 
+@requires_client
 def test_t1_unauth_get_401():
     app = FastAPI(); app.include_router(mc.router)
     def _raise():
@@ -220,12 +328,14 @@ def test_t1_unauth_get_401():
     assert r.status_code == 401
 
 
+@requires_client
 def test_t6_put_disallowed_role_403():
     c = _client({"id": "u1", "company_id": "c1", "role_code": "099"}, {"companies": [_company("c1")]})
     r = c.put("/me/company", json={"name": "X"})
     assert r.status_code == 403
 
 
+@requires_client
 def test_t5_put_allowed_role_updates():
     store = {"companies": [_company("c1", name="old")]}
     c = _client({"id": "u1", "company_id": "c1", "role_code": "001"}, store)
@@ -234,8 +344,8 @@ def test_t5_put_allowed_role_updates():
     assert [x for x in store["companies"] if x["id"] == "c1"][0]["name"] == "new"
 
 
+@requires_client
 def test_t7_t4_reject_id_injection():
-    # company_id/user_id 주입 -> extra=forbid 422 (ownership 은 토큰만)
     c = _client({"id": "u1", "company_id": "c1", "role_code": "001"}, {"companies": [_company("c1")]})
     for bad in ({"name": "X", "company_id": "c-other"}, {"name": "X", "user_id": "u-other"}):
         r = c.put("/me/company", json=bad)
