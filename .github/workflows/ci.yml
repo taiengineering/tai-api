@@ -53,6 +53,8 @@ jobs:
         run: pytest tests/test_tax_invoice_request.py -q --tb=short
       - name: Tax invoice processor tests
         run: pytest tests/test_tax_invoice_processor.py -q --tb=short
+      - name: Tax invoice adjustment tests
+        run: pytest tests/test_tax_invoice_adjustment.py -q --tb=short
 
   db-integrity:
     name: "DB Integrity"
