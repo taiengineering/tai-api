@@ -10,7 +10,11 @@
 
 [2026-08-20 §35] 고객 자사 조회 분리: GET /payments/my 신설.
   기존 관리자 엔드포인트(전체 조회)는 불변. /my 는 로그인 사용자의 소속 회사(current_user["company_id"])
-  결제만 반환한다 — client 가 보낸 company_id 를 신뢰하지 않는다(P13). 관리자 여부와 무관하게 자사만 조회.
+  결제만 반환한다 — client 가 보난 company_id 를 신뢰하지 않는다(P13). 관리자 여부와 무관하게 자사만 조회.
+
+[2026-09-05 FE-0] GET /payments/my 투영 보정: v_payments_list 에 proof_type 가 없어
+  payments 테이블을 명시 컴럼(proof_type 포함)으로 직접 조회. company ownership·envelope 불변.
+  관리자 list_payments 는 v_payments_list 그대로 유지.
 """
 from __future__ import annotations
 
@@ -94,14 +98,28 @@ def list_my_payments(
     고객 자사 결제 조회 (§35).
 
     로그인 사용자의 소속 회사 결제만 반환한다. 관리자 여부와 무관.
-    company_id 는 토큰(current_user)에서만 도출한다 — client 가 보낸 값을 신뢰하지 않는다(P13).
+    company_id 는 토큰(current_user)에서만 도출한다 — client 가 보난 값을 신뢰하지 않는다(P13).
+
+    FE-0: v_payments_list 에 proof_type 가 없으므로 payments 테이블을 명시 컴럼으로
+    직접 조회한다(proof_type 포함). 응답 envelope 와 company ownership 은 그대로 유지.
     """
     company_id = current_user.get("company_id")
     if not company_id:
         raise HTTPException(status_code=403, detail="소속 회사가 없어 조회할 수 없습니다.")
 
     supabase = get_supabase()
-    q = supabase.table("v_payments_list").select("*", count="exact").eq("company_id", company_id)
+    q = (
+        supabase.table("payments")
+        .select(
+            "id, product_type, plan_code, "
+            "total_amount, supply_amount, vat_amount, "
+            "status_code, service_status, "
+            "pg_method, proof_type, "
+            "period_months, paid_at, created_at, expired_at",
+            count="exact",
+        )
+        .eq("company_id", company_id)
+    )
 
     if status_code:
         q = q.eq("status_code", status_code)
