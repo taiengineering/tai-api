@@ -22,6 +22,16 @@ except Exception:  # noqa: BLE001
 requires_client = pytest.mark.skipif(not _HAS_CLIENT, reason="httpx/TestClient 미설치")
 
 
+class _PgErr(Exception):
+    """PostgREST/psycopg 유사 예외(code/message/details/hint 속성 보유)."""
+    def __init__(self, message="", code=None, details="", hint=""):
+        self.code = code
+        self.message = message
+        self.details = details
+        self.hint = hint
+        super().__init__(message)
+
+
 # ── FakeSupabase (in-memory, chainable, column projection 지원) ──────────────
 class _Result:
     def __init__(self, data):
@@ -92,6 +102,23 @@ class FakeSupabase:
 
     def table(self, name):
         return _Query(self.store, name, self.log)
+
+
+class _RaiseInsertFake(FakeSupabase):
+    """companies insert 에서 주어진 예외를 던진다(그 외 정상). user 는 unbound 유지."""
+    def __init__(self, store, exc):
+        super().__init__(store); self.exc = exc
+
+    def table(self, name):
+        q = super().table(name)
+        orig = q.execute
+
+        def exec2():
+            if name == "companies" and q._op == "insert":
+                raise self.exc
+            return orig()
+        q.execute = exec2
+        return q
 
 
 def _company(cid, **kw):
@@ -175,17 +202,15 @@ def test_t14_true_bind_race_loser_compensation():
     }
     sb = _RaceFake(store)
     out = svc.upsert_member_company(sb, {"id": "u1", "company_id": None}, {"name": "LOSER"})
-    # loser company 보상삭제되어 c-win 만 남음(orphan 0)
-    assert [c["id"] for c in store["companies"]] == ["c-win"]
+    assert [c["id"] for c in store["companies"]] == ["c-win"]  # orphan 0
     assert store["users"][0]["company_id"] == "c-win"
     assert out["id"] == "c-win"
-    # winner 기존 필드가 loser payload 로 변경되지 않음
-    assert out["name"] == "WINNER"
+    assert out["name"] == "WINNER"  # winner 필드 loser payload 미적용
     assert [c for c in store["companies"] if c["id"] == "c-win"][0]["name"] == "WINNER"
 
 
 class _BoomFake(FakeSupabase):
-    """특정 (table, op) 에서 예외 발생. companies insert 는 code 없는 일반 오류(비-중복)."""
+    """특정 (table, op) 에서 code 없는 일반 오류(비-중복) 발생."""
     def __init__(self, store, boom):
         super().__init__(store); self.boom = boom  # set of (table, op)
 
@@ -212,7 +237,7 @@ def test_p1_1_nonduplicate_insert_error_is_500_not_409():
 
 
 class _DupInsertFake(FakeSupabase):
-    """companies insert 에서 23505/constraint 예외. flip=True 면 예외 전 user 를 winner bind."""
+    """companies insert 에서 bn-constraint 예외. flip=True 면 예외 전 user 를 winner bind."""
     def __init__(self, store, flip=False):
         super().__init__(store); self.flip = flip; self._done = False
 
@@ -251,6 +276,34 @@ def test_p1_2b_duplicate_insert_but_bound_returns_winner():
     out = svc.upsert_member_company(sb, {"id": "u1", "company_id": None}, {"name": "LOSER"})
     assert out["id"] == "c-win"
     assert out["name"] == "WINNER"  # loser payload 미적용
+
+
+def test_p2_1_business_number_23505_is_409():
+    # helper 직접: constraint name / (23505+business_number)
+    assert svc._is_business_number_unique_violation(
+        _PgErr(code="23505", message='duplicate key ... "companies_business_number_unique"')) is True
+    assert svc._is_business_number_unique_violation(
+        _PgErr(code="23505", details="Key (business_number)=(1234567890) already exists")) is True
+    # service 경유 -> 409
+    store = {"companies": [], "users": [{"id": "u1", "company_id": None}]}
+    sb = _RaiseInsertFake(store, _PgErr(code="23505", details="Key (business_number)=(x) already exists"))
+    with pytest.raises(svc.MemberCompanyError) as e:
+        svc.upsert_member_company(sb, {"id": "u1", "company_id": None}, {"name": "X"})
+    assert e.value.status_code == 409 and e.value.code == "BUSINESS_NUMBER_ALREADY_EXISTS"
+
+
+def test_p2_2_company_code_or_bare_23505_is_500_not_409():
+    # helper 직접: company_code UNIQUE / bare 23505 = False
+    assert svc._is_business_number_unique_violation(
+        _PgErr(code="23505", message='duplicate key ... "companies_company_code_unique"')) is False
+    assert svc._is_business_number_unique_violation(_PgErr(code="23505")) is False
+    # service 경유: company_code 23505 -> 500 (409 아님)
+    store = {"companies": [], "users": [{"id": "u1", "company_id": None}]}
+    sb = _RaiseInsertFake(store, _PgErr(code="23505", message='duplicate key ... "companies_company_code_unique"'))
+    with pytest.raises(svc.MemberCompanyError) as e:
+        svc.upsert_member_company(sb, {"id": "u1", "company_id": None}, {"name": "X"})
+    assert e.value.status_code == 500 and e.value.code == "COMPANY_CREATE_FAILED"
+    assert e.value.code != "BUSINESS_NUMBER_ALREADY_EXISTS"
 
 
 def test_t15_t16_bind_exception_and_compensation_fail():
@@ -305,14 +358,13 @@ def test_t2_t19_get_bound_returns_only_legal_fields():
         "c1", name="내회사", business_number="1234567890", representative_name="홍길동",
         contact_email="a@b.c", contact_phone="010", zipcode="06236", address_road="테헤란로",
         address_detail="3층", business_type="정보통신업", business_category="응용SW",
-        # 노출되면 안 되는 운영/권한 필드
         status_code="ACTIVE", company_code="CO-1", is_active=True, created_by="admin",
     )]}
     c = _client({"id": "u1", "company_id": "c1", "role_code": "010"}, store)
     r = c.get("/me/company")
     assert r.status_code == 200
     data = r.json()["data"]
-    assert set(data.keys()) == set(svc.VIEW_FIELDS)  # 법적 필드만
+    assert set(data.keys()) == set(svc.VIEW_FIELDS)
     for leaked in ("status_code", "company_code", "is_active", "created_by"):
         assert leaked not in data
     assert data["id"] == "c1" and data["name"] == "내회사"

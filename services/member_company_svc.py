@@ -65,18 +65,23 @@ def _bn_variants(digits: str) -> List[str]:
 
 
 def _is_business_number_unique_violation(e: Exception) -> bool:
-    """companies.business_number UNIQUE(23505) 위반만 True. 그 외 DB 오류는 False.
+    """companies.business_number UNIQUE 위반만 True. bare 23505 는 False.
 
-    SDK 예외 code 우선(23505). 없으면 알려진 constraint name
-    (companies_business_number_unique) 보조 확인. 단순 'duplicate' 문자열 하나로 분류하지 않는다.
+    companies 에는 UNIQUE 가 2개(companies_business_number_unique, companies_company_code_unique)
+    이므로 code==23505 만으로는 사업자번호 중복을 확정할 수 없다.
+    constraint name 또는 business_number 식별이 있어야 한다('duplicate' 문자열 단독 금지).
     """
-    code = str(getattr(e, "code", "") or "")
-    parts = [str(getattr(e, a, "") or "") for a in ("code", "message", "details", "hint")]
-    text = " ".join(parts) + " " + str(e)
+    parts = [
+        str(getattr(e, "code", "") or ""),
+        str(getattr(e, "message", "") or ""),
+        str(getattr(e, "details", "") or ""),
+        str(getattr(e, "hint", "") or ""),
+        str(e),
+    ]
+    text = " ".join(parts)
     if "companies_business_number_unique" in text:
         return True
-    # constraint 정보가 없고 code 만 23505 인 경우: 이 INSERT 의 유일 unique 후보는 business_number.
-    if code == "23505":
+    if str(getattr(e, "code", "") or "") == "23505" and "business_number" in text:
         return True
     return False
 
@@ -192,13 +197,13 @@ def _create_and_bind(sb, current_user: Dict[str, Any], payload: Dict[str, Any]) 
         if cid2:
             # loser payload 로 winner 를 수정하지 않는다(조회만).
             return _select_view(sb, cid2)
-        # 실제 business_number UNIQUE(23505/companies_business_number_unique) 만 409.
+        # 실제 business_number UNIQUE(companies_business_number_unique / 23505+business_number) 만 409.
         if _is_business_number_unique_violation(e):
             raise MemberCompanyError(
                 409, "BUSINESS_NUMBER_ALREADY_EXISTS",
                 "이미 등록된 사업자등록번호입니다. 기존 회사 관리자 연결이 필요합니다.",
             ) from e
-        # 그 외 모든 INSERT 오류는 500(409 위장 금지).
+        # 그 외 모든 INSERT 오류는 500(409 위장 금지). bare 23505(company_code 등) 포함.
         raise MemberCompanyError(500, "COMPANY_CREATE_FAILED", "회사 생성에 실패했습니다.") from e
     if not ins.data:
         raise MemberCompanyError(500, "COMPANY_CREATE_FAILED", "회사 생성에 실패했습니다.")
