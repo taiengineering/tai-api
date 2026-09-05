@@ -1,11 +1,11 @@
 """세금계산서·현금영수증 발행 서비스 (WO-4 + BACKEND-3 issuance guard) — 팝빌 API 실연동.
 
 BACKEND-3 변경:
-- 금액 재계산(split_supply_vat) 완전 제거 → payments.supply_amount/vat_amount/total_amount EXACT.
-- writeDate/purchaseDT 는 명시 supply_date(YYYY-MM-DD) 만 사용(now 자동대체 금지).
+- 금액 재계산 제거 → payments.supply_amount/vat_amount/total_amount 저장값 그대로 사용.
+- writeDate/purchaseDT 는 명시 supply_date(YYYY-MM-DD) 만 사용(now 자동대체 없음).
 - 중앙 issuance guard(status/method/proof/상호배타) — 관리자 직접발행도 우회 불가.
-- ledger lifecycle: FAILED 동일 row 재사용(same id/mgt_key), PENDING→409, ISSUED→idempotent, CANCELLED→409.
-- INVOICE_LIVE gate 는 popbill config/ledger PENDING 변경보다 먼저(423, mutation 0).
+- ledger lifecycle: FAILED 동일 row 재사용(같은 mgt_key), PENDING→409, ISSUED→재발행없음, CANCELLED→409.
+- INVOICE_LIVE gate 는 popbill 설정/원장 PENDING 변경보다 먼저(423, mutation 0).
 - popbill 실의존은 _popbill_issue_tax/_cash seam 으로 격리(테스트 mock).
 
 [2026-07-30 A-2] INVOICE_LIVE(기본 off): 사람 게이트 전 실호출 차단(423, 원장 오염 없음).
@@ -253,10 +253,11 @@ def _popbill_issue_cash(conf: Dict[str, Any], *, mgt_key: str, trade_dt: str, tr
 # ── 세금계산서 발행 ──
 def issue_tax_invoice(payment_id: str, invoicee: Dict[str, str], supply_date: Optional[str],
                       created_by: Optional[str] = None) -> dict:
-    """매출 정발행. 저장 금액 EXACT + 명시 supply_date + 중앙 guard + ledger lifecycle."""
-    conf = _popbill_conf()
-    if not conf["corp_num"]:
-        raise InvoiceError(501, "공급자(TAI) 사업자번호(TAI_CORP_NUM)가 설정되지 않았습니다.")
+    """매출 정발행. 저장 금액 그대로 + 명시 supply_date + 중앙 guard + ledger lifecycle.
+
+    순서: 입력검증 → payment 조회 → 발행가능 guard → ledger idempotency →
+          INVOICE_LIVE gate → popbill 설정 → ledger PENDING → popbill.
+    """
     for k in ("corpNum", "corpName", "ceoName"):
         if not invoicee.get(k):
             raise InvoiceError(400, f"공급받는자 정보({k})가 필요합니다.", "INVOICEE_INCOMPLETE")
@@ -265,11 +266,9 @@ def issue_tax_invoice(payment_id: str, invoicee: Dict[str, str], supply_date: Op
     sb = get_supabase()
     payment = _load_payment(payment_id)
     _assert_tax_issuable(payment, sb)               # status/method/proof/상호배타 (reads)
-    supply, tax, total = _amounts(payment)          # 저장값 EXACT + 일치검증
+    supply, tax, total = _amounts(payment)          # 저장값 그대로 + 일치검증
     mgt_key = _make_mgt_key(payment_id, "TAX_INVOICE")
-    item_name = payment.get("product_type") or "TAI Safe 서비스"
 
-    # ledger lifecycle (reads → idempotency 분기)
     existing = _existing_original(sb, payment_id, "TAX_INVOICE")
     invoice_id: Optional[str] = None
     if existing:
@@ -280,13 +279,17 @@ def issue_tax_invoice(payment_id: str, invoicee: Dict[str, str], supply_date: Op
             raise InvoiceError(409, "발행 처리가 진행 중입니다.", "INVOICE_ALREADY_PROCESSING")
         if st == "CANCELLED":
             raise InvoiceError(409, "취소 이력이 있어 확인이 필요합니다.", "INVOICE_HISTORY_REVIEW")
-        invoice_id = existing["id"]              # FAILED → 같은 row 재사용
+        invoice_id = existing["id"]              # FAILED → 같은 row 재사용(같은 mgt_key)
         mgt_key = existing.get("mgt_key") or mgt_key
 
-    # gate: popbill config/ledger PENDING 변경보다 먼저(423, mutation 0)
+    # gate: popbill 설정/원장 PENDING 변경보다 먼저(423, mutation 0)
     _assert_invoice_live(payment_id, "TAX_INVOICE", "ISSUE", created_by)
 
-    # ledger PENDING (insert or reuse)
+    conf = _popbill_conf()
+    if not conf["corp_num"]:
+        raise InvoiceError(501, "공급자(TAI) 사업자번호(TAI_CORP_NUM)가 설정되지 않았습니다.")
+    item_name = payment.get("product_type") or "TAI Safe 서비스"
+
     if invoice_id:
         _update_invoice(invoice_id, {"status": "PENDING", "supply_cost": supply, "tax": tax,
                                      "total_amount": total, "updated_at": now_iso()})
@@ -325,16 +328,12 @@ def issue_cash_receipt(payment_id: str, trade_usage: str, identity_num: str,
         raise InvoiceError(400, "trade_usage는 소득공제용 또는 지출증빙용이어야 합니다.")
     if not identity_num:
         raise InvoiceError(400, "구매자 식별번호가 필요합니다.")
-    conf = _popbill_conf()
-    if not conf["corp_num"]:
-        raise InvoiceError(501, "가맹점(TAI) 사업자번호(TAI_CORP_NUM)가 설정되지 않았습니다.")
 
     sb = get_supabase()
     payment = _load_payment(payment_id)
     _assert_cash_issuable(payment, sb)              # status/CARD/proof/상호배타
     supply, tax, total = _amounts(payment)
     mgt_key = _make_mgt_key(payment_id, "CASH_RECEIPT")
-    trade_dt = now_kst().strftime("%Y%m%d%H%M%S")
 
     existing = _existing_original(sb, payment_id, "CASH_RECEIPT")
     invoice_id: Optional[str] = None
@@ -350,6 +349,11 @@ def issue_cash_receipt(payment_id: str, trade_usage: str, identity_num: str,
         mgt_key = existing.get("mgt_key") or mgt_key
 
     _assert_invoice_live(payment_id, "CASH_RECEIPT", "ISSUE", created_by)
+
+    conf = _popbill_conf()
+    if not conf["corp_num"]:
+        raise InvoiceError(501, "가맹점(TAI) 사업자번호(TAI_CORP_NUM)가 설정되지 않았습니다.")
+    trade_dt = now_kst().strftime("%Y%m%d%H%M%S")
 
     if invoice_id:
         _update_invoice(invoice_id, {"status": "PENDING", "supply_cost": supply, "tax": tax,

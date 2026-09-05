@@ -1,7 +1,9 @@
-"""세금계산서 발행 processor (BACKEND-3).
+"""세금계산서 발행 processor (BACKEND-3, SIMPLE FLOW).
 
-request(REQUESTED/FAILED) → 발행 직전 current-state 재검증 → 조건부 PROCESSING claim
-→ invoice_svc.issue_tax_invoice → ISSUED/FAILED. 명시 supply_date 필수. INVOICE_LIVE gate 최선행.
+얼은 위임자: request 상태확인 → supply_date 검증 → gate → snapshot invoicee → PROCESSING
+→ invoice_svc.issue_tax_invoice → ISSUED/FAILED.
+결제수단·상호배타·금액 판단은 invoice_svc 중앙 guard가 전담. 여기서는 recovery/drift/reconciliation
+상태머신을 두지 않는다(BACKEND-4 수정세금계산서에서 버개 처리).
 
 sb 는 호출측 주입(테스트 격리). 실발행·popbill 은 invoice_svc 위임.
 """
@@ -13,11 +15,10 @@ from typing import Any, Dict, Optional, Tuple
 from services.time import now_kst, serialize_external_utc
 
 _REQUEST_COLS = (
-    "id, payment_id, company_id, requested_by, source, doc_type, status, proof_type, "
+    "id, payment_id, company_id, status, doc_type, "
     "invoicee_business_number, invoicee_company_name, invoicee_representative_name, "
     "invoicee_email, invoicee_address, invoicee_business_type, invoicee_business_category, "
-    "supply_amount, vat_amount, total_amount, pg_method, paid_at, supply_date, product_type, "
-    "tax_invoice_id, failure_code, failure_reason, requested_at, processed_at, created_at, updated_at"
+    "supply_date, tax_invoice_id, failure_code, failure_reason, processed_at, updated_at"
 )
 
 
@@ -48,39 +49,6 @@ def _load_request(sb, request_id: str) -> Optional[Dict[str, Any]]:
     return data[0] if data else None
 
 
-def _load_payment(sb, payment_id: str) -> Optional[Dict[str, Any]]:
-    res = (
-        sb.table("payments")
-        .select("id, status_code, company_id, pg_method, proof_type, supply_amount, vat_amount, total_amount, paid_at, product_type")
-        .eq("id", payment_id).limit(1).execute()
-    )
-    data = res.data or []
-    return data[0] if data else None
-
-
-def _existing_issued_tax_invoice(sb, payment_id: str) -> Optional[Dict[str, Any]]:
-    res = (
-        sb.table("tax_invoices").select("id, doc_type, status, invoice_kind")
-        .eq("payment_id", payment_id).execute()
-    )
-    for r in (res.data or []):
-        if r.get("doc_type") == "TAX_INVOICE" and (r.get("invoice_kind") in (None, "ORIGINAL")) and r.get("status") == "ISSUED":
-            return r
-    return None
-
-
-def _cash_statuses(sb, payment_id: str) -> list:
-    res = sb.table("tax_invoices").select("doc_type, status").eq("payment_id", payment_id).execute()
-    return [r.get("status") for r in (res.data or []) if r.get("doc_type") == "CASH_RECEIPT"]
-
-
-def _int(v) -> int:
-    try:
-        return int(v or 0)
-    except Exception:  # noqa: BLE001
-        return 0
-
-
 def _mark(sb, request_id: str, patch: Dict[str, Any]) -> None:
     patch = dict(patch)
     patch["updated_at"] = _now_iso()
@@ -89,14 +57,14 @@ def _mark(sb, request_id: str, patch: Dict[str, Any]) -> None:
 
 def process_tax_invoice_request(sb, request_id: str, supply_date: Optional[str],
                                 actor_id: Optional[str]) -> Tuple[Dict[str, Any], str]:
-    """(row, outcome) 반환. outcome: ISSUED | RECONCILED. DENY/상태충돌은 ProcessorError."""
+    """(row, outcome) 반환. outcome: ISSUED. 상태충돌/게이트/검증은 ProcessorError."""
     from services.invoice_svc import InvoiceError, invoice_live, issue_tax_invoice
 
-    # 1) gate 최선행 — OFF 면 request/ledger mutation 0
+    # 1) gate 최선행 — OFF 면 request mutation 0
     if not invoice_live():
         raise ProcessorError(423, "INVOICE_GATED", "실발행 게이트 잠금(INVOICE_LIVE off).")
 
-    # 2) supply_date 조기 검증(claim 전)
+    # 2) supply_date 검증(mutation 전)
     _validate_supply_date(supply_date)
 
     # 3) request 상태머신
@@ -114,50 +82,14 @@ def process_tax_invoice_request(sb, request_id: str, supply_date: Optional[str],
         raise ProcessorError(409, "REQUEST_REVIEW_REQUIRED", "검토가 필요한 요청입니다.")
     # st in (REQUESTED, FAILED)
 
-    payment = _load_payment(sb, req["payment_id"])
-    if not payment:
-        raise ProcessorError(404, "PAYMENT_NOT_FOUND", "결제 건을 찾을 수 없습니다.")
+    # 4) 사업자 snapshot 필수 3개 확인(fail-fast, mutation 0)
+    if not (req.get("invoicee_business_number") and req.get("invoicee_company_name")
+            and req.get("invoicee_representative_name")):
+        raise ProcessorError(422, "INVOICEE_INCOMPLETE", "요청 사업자정보(사업자번호/상호/대표자)가 부족합니다.")
 
-    # 4) reconciliation: 이미 ORIGINAL TAX_INVOICE ISSUED → Popbill 재호출 없이 request 복구
-    issued_inv = _existing_issued_tax_invoice(sb, req["payment_id"])
-    if issued_inv:
-        _mark(sb, request_id, {"status": "ISSUED", "tax_invoice_id": issued_inv["id"],
-                               "failure_code": None, "failure_reason": None, "processed_at": _now_iso()})
-        return _load_request(sb, request_id) or req, "RECONCILED"
+    # 5) PROCESSING
+    _mark(sb, request_id, {"status": "PROCESSING", "supply_date": supply_date})
 
-    # 5) current-state 재검증 (snapshot drift / invoicee 결여 / 상대증빙 출현)
-    if (str(payment.get("company_id")) != str(req.get("company_id"))
-            or _int(payment.get("supply_amount")) != _int(req.get("supply_amount"))
-            or _int(payment.get("vat_amount")) != _int(req.get("vat_amount"))
-            or _int(payment.get("total_amount")) != _int(req.get("total_amount"))):
-        _mark(sb, request_id, {"status": "REVIEW_REQUIRED", "failure_code": "PAYMENT_SNAPSHOT_DRIFT",
-                               "failure_reason": "결제 금액/회사 스냅샷이 현재와 달라 확인 필요"})
-        raise ProcessorError(409, "PAYMENT_SNAPSHOT_DRIFT", "결제 스냅샷이 현재와 달라 발행을 멈췥니다.")
-
-    if not (req.get("invoicee_business_number") and req.get("invoicee_company_name") and req.get("invoicee_representative_name")):
-        _mark(sb, request_id, {"status": "REVIEW_REQUIRED", "failure_code": "REQUEST_SNAPSHOT_INCOMPLETE",
-                               "failure_reason": "요청 시점 법적정보 스냅샷이 불완전"})
-        raise ProcessorError(409, "REQUEST_SNAPSHOT_INCOMPLETE", "요청 시점 법적정보가 부족합니다.")
-
-    cr = _cash_statuses(sb, req["payment_id"])
-    if any(s in ("PENDING", "ISSUED", "FAILED", "CANCELLED") for s in cr):
-        _mark(sb, request_id, {"status": "REVIEW_REQUIRED", "failure_code": "CASH_RECEIPT_APPEARED",
-                               "failure_reason": "동일 결제에 현금영수증이 발생해 확인 필요"})
-        raise ProcessorError(409, "CASH_RECEIPT_APPEARED", "현금영수증이 발생해 세금계산서를 발행할 수 없습니다.")
-
-    # 6) 조건부 PROCESSING claim (REQUESTED/FAILED 만)
-    claim = (
-        sb.table("tax_invoice_requests")
-        .update({"status": "PROCESSING", "supply_date": supply_date, "updated_at": _now_iso()})
-        .eq("id", request_id).in_("status", ["REQUESTED", "FAILED"]).execute()
-    )
-    if not claim.data:
-        cur = _load_request(sb, request_id)
-        if cur and cur.get("status") == "ISSUED":
-            return cur, "ISSUED"
-        raise ProcessorError(409, "REQUEST_ALREADY_PROCESSING", "동시 처리 충돌입니다.")
-
-    # 7) invoice_svc 실발행 (snapshot invoicee 사용)
     invoicee = {
         "corpNum": req.get("invoicee_business_number"),
         "corpName": req.get("invoicee_company_name"),
@@ -167,6 +99,8 @@ def process_tax_invoice_request(sb, request_id: str, supply_date: Optional[str],
         "bizType": req.get("invoicee_business_type"),
         "bizClass": req.get("invoicee_business_category"),
     }
+
+    # 6) 실발행 위임 (금액/guard/원장은 invoice_svc)
     try:
         res = issue_tax_invoice(req["payment_id"], invoicee, supply_date, created_by=actor_id)
     except InvoiceError as e:
