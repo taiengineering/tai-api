@@ -2,15 +2,16 @@
 
 규칙: docs/DEV_RULES_SERVICE_LAYER.md STEP 2
 
+PROOF-TYPE-WRITER (2026-09-05)
+  - PrepareBody/VbankPrepareBody/DiagnosisVbankPrepareBody 에 proof_type 추가.
+  - 클라이언트 지정 허용값: TAX_INVOICE / CASH_RECEIPT / NONE. CARD_RECEIPT 는 서버 자동결정(422 차단).
+
 v2.1 (2026-04-28)
-  - BillingPrepareBody: plan_name + model_validator(goodname→plan_name) 추가
+  - BillingPrepareBody: plan_name + model_validator(goodname->plan_name) 추가
   - plan_code를 str 필수로 변경 (subscriptions.plan_code NOT NULL)
 
 v2.0 (2026-04-27)
   매뉴얼 기반 전면 재정리 — docs/INICIS_INTEGRATION_SPEC.md 참조
-  - BillingReturnBody: 이니시스 빌키발급 결과 파라미터 반영
-  - RefundBody: 취소/환불 API용 스키마 추가
-  - PartialRefundBody: 부분취소 스키마 추가
 """
 from __future__ import annotations
 
@@ -18,6 +19,20 @@ from typing import Any, Dict, Optional
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, field_validator, model_validator
+
+_CLIENT_PROOF_TYPES = {"TAX_INVOICE", "CASH_RECEIPT", "NONE"}
+
+
+def _validate_client_proof_type(v: Optional[str]) -> Optional[str]:
+    """클라이언트 지정 proof_type 검증. 미지정(None) 허용, CARD_RECEIPT/오타는 422."""
+    if v is None:
+        return None
+    v = str(v).strip().upper()
+    if v == "":
+        return None
+    if v not in _CLIENT_PROOF_TYPES:
+        raise ValueError("proof_type은 TAX_INVOICE, CASH_RECEIPT, NONE 중 하나여야 합니다.")
+    return v
 
 
 class PrepareBody(BaseModel):
@@ -32,6 +47,7 @@ class PrepareBody(BaseModel):
     plan_code: Optional[str] = None
     period_months: Optional[int] = None
     payment_type: Optional[str] = "CARD"
+    proof_type: Optional[str] = None
     buyername: Optional[str] = "고객"
     buyertel: Optional[str] = "00000000000"
     buyeremail: Optional[str] = None
@@ -49,6 +65,11 @@ class PrepareBody(BaseModel):
         except (ValueError, AttributeError):
             v = str(uuid4())
         return v
+
+    @field_validator("proof_type")
+    @classmethod
+    def _proof_type_valid(cls, v):
+        return _validate_client_proof_type(v)
 
     @field_validator("product_type")
     @classmethod
@@ -81,10 +102,16 @@ class VbankPrepareBody(BaseModel):
     goodname: str
     matching_contract_id: Optional[str] = None
     company_id: Optional[str] = None
+    proof_type: Optional[str] = None
     buyername: Optional[str] = "고객"
     buyertel: Optional[str] = "00000000000"
     buyeremail: Optional[str] = None
     vbank_expire_min: int = 4320
+
+    @field_validator("proof_type")
+    @classmethod
+    def _proof_type_valid(cls, v):
+        return _validate_client_proof_type(v)
 
     @field_validator("product_type")
     @classmethod
@@ -96,11 +123,15 @@ class VbankPrepareBody(BaseModel):
 
 
 class DiagnosisVbankPrepareBody(BaseModel):
-    """유료 진단 가상계좌 발급 준비."""
+    """유료 진단 가상계좌 발급 준비.
+
+    proof_type 신규(SoT). legacy invoice_* 필드는 프론트 호환을 위해 받아만 둔다(저장 안함).
+    """
     auth_token: Optional[str] = None
     public_token: Optional[str] = None
     amount: int
     goodname: str = "유료 법령진단"
+    proof_type: Optional[str] = None
     buyername: Optional[str] = "고객"
     buyertel: Optional[str] = "00000000000"
     buyeremail: Optional[str] = None
@@ -108,13 +139,18 @@ class DiagnosisVbankPrepareBody(BaseModel):
     invoice_biz_no: Optional[str] = None
     invoice_email: Optional[str] = None
 
+    @field_validator("proof_type")
+    @classmethod
+    def _proof_type_valid(cls, v):
+        return _validate_client_proof_type(v)
+
 
 # ── 구독(빌링) 스키마 ──────────────────────────────────────────────────
 
 class BillingPrepareBody(BaseModel):
     """빌링키 발급 준비 — POST /payments/inicis/billing/prepare
 
-    v2.1: goodname → plan_name fallback 추가.
+    v2.1: goodname -> plan_name fallback 추가.
     프론트 결제 페이지가 goodname을 보내므로 plan_name으로 자동 매핑.
     """
     user_id: str
@@ -132,7 +168,7 @@ class BillingPrepareBody(BaseModel):
 
     @model_validator(mode="after")
     def resolve_plan_name(self):
-        """goodname → plan_name fallback. 핸들러가 body.plan_name을 참조."""
+        """goodname -> plan_name fallback. 핸들러가 body.plan_name을 참조."""
         if not self.plan_name and self.goodname:
             self.plan_name = self.goodname
         return self
@@ -181,10 +217,7 @@ class BillingCancelBody(BaseModel):
 # ── 취소/환불 스키마 ───────────────────────────────────────────────────
 
 class RefundBody(BaseModel):
-    """전체 취소 — POST /payments/{payment_id}/refund
-
-    매뉴얼: https://manual.inicis.com/pay/cancel.html
-    """
+    """전체 취소 — POST /payments/{payment_id}/refund"""
     reason: str = "사용자 요청"
     cancelled_by: Optional[str] = None
 
@@ -201,7 +234,7 @@ class PartialRefundBody(BaseModel):
 class ManualConfirmBody(BaseModel):
     payment_id: str
     contract_id: str
-    by: Optional[str] = None  # 수동활성화 처리자(감사 actor). 프론트에서 'admin' 전달.
+    by: Optional[str] = None
 
 
 class CancelBody(BaseModel):
