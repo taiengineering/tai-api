@@ -6,6 +6,10 @@ WO-ISOLATE-001: routers/anonymous_diagnosis.py 에서 admin 핸들러만 분리.
 - admin(/admin/*) 은 tai-admin(anon-diagnosis-list)이 라이브 데이터(anonymous_diagnosis_results,
   source_type=free_diag/paid_diag/site_free/site_free_leg 포함) 조회에 사용하므로 이 파일로 보존한다.
 - 저장소 계약 불변: 동일 테이블 anonymous_diagnosis_results, 동일 URL(/anonymous-diagnosis/admin/*).
+
+신청자 식별(이름·전화번호): 무료진단은 본인인증(diagnosis_auth_log) 또는 인증한 회원만 가능하므로,
+anonymous_diagnosis_results.auth_log_id → diagnosis_auth_log(name, phone) 로 신청자를 구분한다.
+FK 미설정이라 PostgREST embed 대신 페이지 단위 2-step fetch 로 병합한다(엔진/법령 로직 무관).
 """
 from __future__ import annotations
 
@@ -28,6 +32,31 @@ def _now() -> datetime:
     return now_kst()
 
 
+def _attach_applicant(supabase, items: list) -> list:
+    """diagnosis_auth_log(name, phone) 를 auth_log_id 로 병합해 신청자 식별값을 부여한다.
+
+    무료진단은 본인인증을 거치므로 실사용 레코드는 auth_log_id 를 가진다. auth_log_id 가 없는
+    레코드(과거 테스트/익명 시드)는 applicant_name/applicant_phone 을 None 으로 둔다.
+    페이지 단위 소량(최대 size건)만 조회하므로 목록 성능 영향은 무시할 수준이다.
+    """
+    ids = list({r["auth_log_id"] for r in items if r.get("auth_log_id")})
+    log_map: dict = {}
+    if ids:
+        logs = (
+            supabase.table("diagnosis_auth_log")
+            .select("id,name,phone")
+            .in_("id", ids)
+            .execute()
+            .data
+        ) or []
+        log_map = {row["id"]: row for row in logs}
+    for r in items:
+        log = log_map.get(r.get("auth_log_id")) or {}
+        r["applicant_name"] = log.get("name")
+        r["applicant_phone"] = log.get("phone")
+    return items
+
+
 class AdminAnonDiagPatch(BaseModel):
     status: Optional[str] = Field(None, description="ACTIVE | CLAIMED | EXPIRED")
 
@@ -42,7 +71,7 @@ def list_anonymous_diagnoses(
 ):
     supabase = get_supabase()
     q = supabase.table("anonymous_diagnosis_results").select(
-        "id,public_token,input_data,created_at,expires_at,claimed_user_id,status,source_type",
+        "id,public_token,input_data,created_at,expires_at,claimed_user_id,status,source_type,auth_log_id",
         count="exact",
     )
     if status: q = q.eq("status", status)
@@ -50,8 +79,9 @@ def list_anonymous_diagnoses(
     if kw:     q = q.ilike("public_token", f"%{kw}%")
     offset = (page - 1) * size
     res = q.order("created_at", desc=True).range(offset, offset + size - 1).execute()
+    items = _attach_applicant(supabase, res.data or [])
     return {"status": "success", "data": {
-        "items": res.data, "total": res.count, "page": page, "size": size,
+        "items": items, "total": res.count, "page": page, "size": size,
         "total_pages": -(-res.count // size) if res.count else 0,
     }}
 
@@ -62,7 +92,8 @@ def admin_get_anonymous_diagnosis_detail(record_id: str, current_user: dict = De
     res = supabase.table("anonymous_diagnosis_results").select("*").eq("id", record_id).limit(1).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="레코드를 찾을 수 없습니다.")
-    return {"status": "success", "data": res.data[0]}
+    row = _attach_applicant(supabase, [res.data[0]])[0]
+    return {"status": "success", "data": row}
 
 
 @router.patch("/admin/{record_id}")
