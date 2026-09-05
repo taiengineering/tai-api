@@ -28,6 +28,9 @@ payments.py(단건결제)와는 별도 파일로 분리. 동일한 prefix="/paym
 
 [2026-08-12 item3] billing_return 이 returnUrl?front= 로 전달된 복귀 프론트 URL을
   허용 도메인 검증(safe_front_return_url) 후 리다이렉트에 사용. 값 없으면 기존 FRONT_RETURN_URL.
+
+[2026-09-05 PROOF-TYPE-WRITER PATCH-1] _charge_subscription_once payments INSERT 에
+  proof_type=CARD_RECEIPT 추가(실제 운영 CardBilling writer). 첫결제/반복결제 동일 함수.
 """
 from __future__ import annotations
 
@@ -289,6 +292,10 @@ def _charge_subscription_once(
     """
     한 주기 청구 실행. payments INSERT → 이니시스 호출 → 결과 반영.
     반환: {"success": bool, "payment_id": str, "result": dict}
+
+    PROOF-TYPE-WRITER: 이 함수가 실제 등록된 CardBilling writer.
+    첫결제(is_recurring=False)/반복결제(is_recurring=True) 모두 여기로 들어온다.
+    payments INSERT 에 proof_type=CARD_RECEIPT 를 확정 기록한다.
     """
     now             = _now_iso()
     subscription_id = subscription["id"]
@@ -318,6 +325,7 @@ def _charge_subscription_once(
         "payment_method":  "INICIS",
         "payment_type":    "CARD",
         "pg_method":       "CardBilling",
+        "proof_type":      "CARD_RECEIPT",
         "supply_amount":   supply,
         "vat_amount":      vat,
         "total_amount":    amount,
