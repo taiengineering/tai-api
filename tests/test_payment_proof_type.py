@@ -2,6 +2,9 @@
 
 결제 생성/승인 시 payments.proof_type 기록만 검증. 운영 DB/네트워크/popbill 불사용.
 서비스 get_supabase / 빌링 API seam 을 monkeypatch.
+
+PATCH-1: P2 를 실제 운영 CardBilling writer
+  routers.payment_billing._charge_subscription_once() 기준으로 교체(첫결제/반복결제).
 """
 import uuid
 
@@ -91,23 +94,37 @@ def test_p1_card_success_card_receipt(fake):
     assert "tax_invoice_requests" not in _tables_touched(fake)
 
 
-# P2 CardBilling payment insert -> CARD_RECEIPT
-def test_p2_cardbilling_insert_card_receipt(monkeypatch):
-    store = {
-        "subscriptions": [{"id": "s1", "price": 11000, "user_id": "u1", "company_id": "co1",
-                            "product_type": "SAAS_INDUSTRY", "plan_code": "IND"}],
-        "billing_keys": [{"id": "k1", "subscription_id": "s1", "status": "ACTIVE",
-                          "bill_key": "BK", "failure_count": 0}],
-    }
-    f = FakeSupabase(store)
-    monkeypatch.setattr(psvc, "get_supabase", lambda: f)
-    monkeypatch.setattr(psvc, "_load_billing_config",
-                        lambda: psvc.BillingConfig(mid="M", sign_key="S", api_url="http://x"))
-    monkeypatch.setattr(psvc, "_billing_api_post", lambda path, payload, cfg: {"resultCode": "0000", "tid": "t"})
-    body = type("B", (), {"subscription_id": "s1", "amount": None, "goodname": None})
-    psvc.run_billing_charge(body)
+# P2 실제 운영 CardBilling writer = routers.payment_billing._charge_subscription_once
+def _billing_charge_row(monkeypatch, is_recurring):
+    import routers.payment_billing as rpb
+    f = FakeSupabase()
+    monkeypatch.setattr(rpb, "_load_billing_iniapi_key", lambda: "k")
+    monkeypatch.setattr(rpb, "_load_client_ip", lambda: "1.1.1.1")
+    monkeypatch.setattr(rpb, "_call_billing_charge_api",
+                        lambda **kw: {"resultCode": "00", "tid": "t", "payAuthCode": "a"})
+    subscription = {"id": "s1", "user_id": "u1", "company_id": "co1",
+                    "product_type": "SAAS_INDUSTRY", "plan_code": "IND",
+                    "plan_name": "TAI Safe", "amount": 149000,
+                    "supply_amount": 135455, "vat_amount": 13545}
+    billing_key_row = {"id": "k1", "bill_key": "BK", "mid": "MID"}
+    rpb._charge_subscription_once(f, subscription=subscription,
+                                  billing_key_row=billing_key_row,
+                                  charge_cycle=1, is_recurring=is_recurring)
     ins = _inserts(f, "payments")
-    assert ins and ins[0].get("proof_type") == "CARD_RECEIPT"
+    assert ins
+    return ins[0]
+
+
+def test_p2_billing_writer_first_charge(monkeypatch):
+    row = _billing_charge_row(monkeypatch, is_recurring=False)
+    assert row.get("pg_method") == "CardBilling"
+    assert row.get("proof_type") == "CARD_RECEIPT"
+
+
+def test_p2_billing_writer_recurring(monkeypatch):
+    row = _billing_charge_row(monkeypatch, is_recurring=True)
+    assert row.get("pg_method") == "CardBilling"
+    assert row.get("proof_type") == "CARD_RECEIPT"
 
 
 def _prepare_row(fake, body):
