@@ -49,6 +49,8 @@ jobs:
         run: pytest tests/test_cron_manager_auth.py -q --tb=short
       - name: Member company tests
         run: pytest tests/test_member_company.py -q --tb=short
+      - name: Tax invoice request tests
+        run: pytest tests/test_tax_invoice_request.py -q --tb=short
 
   db-integrity:
     name: "DB Integrity"
