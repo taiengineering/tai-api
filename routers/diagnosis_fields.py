@@ -54,7 +54,7 @@ def get_diagnosis_fields(
     res = sb.table("diagnosis_input_fields").select(
         "field_code, field_name, field_type, field_group, "
         "unit, is_required, placeholder, help_text, auto_source, "
-        "input_options, sort_order, tier"
+        "input_options, sort_order, tier, visibility_condition"
     ).in_("sector", list(sector_codes_for_query(sector))).eq("is_active", True).in_("tier", tiers_to_fetch).order("sort_order").execute()
 
     rows = res.data or []
@@ -107,6 +107,8 @@ def get_diagnosis_fields(
             "auto_source":   row.get("auto_source"),
             "input_options": row.get("input_options"),
             "tier":          row.get("tier"),
+            # WO-007: NULL = always visible. Client fail-closed on malformed.
+            "visibility_condition": row.get("visibility_condition"),
         })
 
     groups = [{"group": g, "fields": group_map[g]} for g in group_order]
