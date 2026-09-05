@@ -1,12 +1,8 @@
-"""세금계산서·현금영수증 발행 서비스 (WO-4 + BACKEND-3 issuance guard) — 팝빌 API 실연동.
+"""세금계산서·현금영수증 발행 서비스 (WO-4 + BACKEND-3 guard + BACKEND-4 수정세금계산서) — 팝빌 실연동.
 
-BACKEND-3 변경:
-- 금액 재계산 제거 → payments.supply_amount/vat_amount/total_amount 저장값 그대로 사용.
-- writeDate/purchaseDT 는 명시 supply_date(YYYY-MM-DD) 만 사용(now 자동대체 없음).
-- 중앙 issuance guard(status/method/proof/상호배타) — 관리자 직접발행도 우회 불가.
-- ledger lifecycle: FAILED 동일 row 재사용(같은 mgt_key), PENDING→409, ISSUED→재발행없음, CANCELLED→409.
-- INVOICE_LIVE gate 는 popbill 설정/원장 PENDING 변경보다 먼저(423, mutation 0).
-- popbill 실의존은 _popbill_issue_tax/_cash seam 으로 격리(테스트 mock).
+BACKEND-3: 저장금액 그대로 · 명시 supply_date · 중앙 issuance guard · ledger lifecycle · INVOICE_LIVE gate 선행 · popbill seam.
+BACKEND-4: 환불 DONE → 원 TAX_INVOICE ISSUED 있으면 수정세금계산서(전액철환불=코드4/그외=코드2),
+  없으면 미발행 request CANCELLED. 동일 refund 중복방지(parent_invoice_id, refund_ref). INVOICE_LIVE gate 동일 적용.
 
 [2026-07-30 A-2] INVOICE_LIVE(기본 off): 사람 게이트 전 실호출 차단(423, 원장 오염 없음).
 """
@@ -14,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from db.supabase_client import get_supabase
@@ -183,7 +179,6 @@ def _assert_tax_issuable(payment: Dict[str, Any], sb) -> None:
     elif method == "VBANK":
         if proof == "CARD_RECEIPT":
             raise InvoiceError(409, "증빙 선택이 결제수단과 맞지 않습니다.", "PROOF_CONFLICT")
-    # 상호배타: CASH_RECEIPT ledger
     cr = _doc_statuses(sb, payment["id"], "CASH_RECEIPT")
     if any(s in ("PENDING", "ISSUED", "FAILED") for s in cr):
         raise InvoiceError(409, "현금영수증이 존재해 세금계산서를 발행할 수 없습니다.", "CASH_RECEIPT_EXISTS")
@@ -253,20 +248,16 @@ def _popbill_issue_cash(conf: Dict[str, Any], *, mgt_key: str, trade_dt: str, tr
 # ── 세금계산서 발행 ──
 def issue_tax_invoice(payment_id: str, invoicee: Dict[str, str], supply_date: Optional[str],
                       created_by: Optional[str] = None) -> dict:
-    """매출 정발행. 저장 금액 그대로 + 명시 supply_date + 중앙 guard + ledger lifecycle.
-
-    순서: 입력검증 → payment 조회 → 발행가능 guard → ledger idempotency →
-          INVOICE_LIVE gate → popbill 설정 → ledger PENDING → popbill.
-    """
+    """매출 정발행. 저장 금액 그대로 + 명시 supply_date + 중앙 guard + ledger lifecycle."""
     for k in ("corpNum", "corpName", "ceoName"):
         if not invoicee.get(k):
             raise InvoiceError(400, f"공급받는자 정보({k})가 필요합니다.", "INVOICEE_INCOMPLETE")
-    write_date = _fmt_supply_date(supply_date)  # 400 if missing/invalid
+    write_date = _fmt_supply_date(supply_date)
 
     sb = get_supabase()
     payment = _load_payment(payment_id)
-    _assert_tax_issuable(payment, sb)               # status/method/proof/상호배타 (reads)
-    supply, tax, total = _amounts(payment)          # 저장값 그대로 + 일치검증
+    _assert_tax_issuable(payment, sb)
+    supply, tax, total = _amounts(payment)
     mgt_key = _make_mgt_key(payment_id, "TAX_INVOICE")
 
     existing = _existing_original(sb, payment_id, "TAX_INVOICE")
@@ -279,10 +270,9 @@ def issue_tax_invoice(payment_id: str, invoicee: Dict[str, str], supply_date: Op
             raise InvoiceError(409, "발행 처리가 진행 중입니다.", "INVOICE_ALREADY_PROCESSING")
         if st == "CANCELLED":
             raise InvoiceError(409, "취소 이력이 있어 확인이 필요합니다.", "INVOICE_HISTORY_REVIEW")
-        invoice_id = existing["id"]              # FAILED → 같은 row 재사용(같은 mgt_key)
+        invoice_id = existing["id"]
         mgt_key = existing.get("mgt_key") or mgt_key
 
-    # gate: popbill 설정/원장 PENDING 변경보다 먼저(423, mutation 0)
     _assert_invoice_live(payment_id, "TAX_INVOICE", "ISSUE", created_by)
 
     conf = _popbill_conf()
@@ -331,7 +321,7 @@ def issue_cash_receipt(payment_id: str, trade_usage: str, identity_num: str,
 
     sb = get_supabase()
     payment = _load_payment(payment_id)
-    _assert_cash_issuable(payment, sb)              # status/CARD/proof/상호배타
+    _assert_cash_issuable(payment, sb)
     supply, tax, total = _amounts(payment)
     mgt_key = _make_mgt_key(payment_id, "CASH_RECEIPT")
 
@@ -389,7 +379,211 @@ def issue_cash_receipt(payment_id: str, trade_usage: str, identity_num: str,
         raise InvoiceError(400, f"현금영수증 발행 실패: {e}", "ISSUE_FAILED") from e
 
 
-# ── 취소 (BACKEND-4 영역 — 변경없음) ──
+# ── BACKEND-4: 환불 → 수정세금계산서 ──
+def _load_refund(sb, refund_id: str) -> Optional[Dict[str, Any]]:
+    res = (sb.table("refunds")
+           .select("id, payment_id, refund_type, amount, status, reason_text, created_at, cumulative_refunded")
+           .eq("id", refund_id).limit(1).execute())
+    data = res.data or []
+    return data[0] if data else None
+
+
+def _load_original_issued(sb, payment_id: str) -> Optional[Dict[str, Any]]:
+    res = (sb.table("tax_invoices")
+           .select("id, company_id, doc_type, invoice_kind, status, nts_confirm_num, supply_cost, tax, total_amount, mgt_key")
+           .eq("payment_id", payment_id).execute())
+    for r in (res.data or []):
+        if (r.get("doc_type") == "TAX_INVOICE" and r.get("invoice_kind") in (None, "ORIGINAL")
+                and r.get("status") == "ISSUED"):
+            return r
+    return None
+
+
+def _existing_modified(sb, parent_invoice_id: str, refund_id: str) -> Optional[Dict[str, Any]]:
+    res = (sb.table("tax_invoices")
+           .select("id, mgt_key, status, invoice_kind, parent_invoice_id, refund_ref, modify_code")
+           .eq("refund_ref", refund_id).execute())
+    for r in (res.data or []):
+        if r.get("invoice_kind") == "MODIFIED" and str(r.get("parent_invoice_id")) == str(parent_invoice_id):
+            return r
+    return None
+
+
+def _make_modified_mgt_key(refund_id: str) -> str:
+    return f"MT-{str(refund_id).replace('-', '')[:20]}"
+
+
+def _kst_yyyymmdd(ts) -> str:
+    if not ts:
+        raise InvoiceError(409, "환불 완료시각을 확인할 수 없습니다.", "REFUND_DATE_MISSING")
+    s = str(ts).strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s)
+    except Exception:  # noqa: BLE001
+        try:
+            dt = datetime.strptime(s[:10], "%Y-%m-%d")
+        except Exception as e:  # noqa: BLE001
+            raise InvoiceError(409, "환불 완료시각 형식을 해석할 수 없습니다.", "REFUND_DATE_INVALID") from e
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone(timedelta(hours=9))).strftime("%Y%m%d")
+
+
+def _resolve_modified_invoicee(sb, payment_id: str, original: Dict[str, Any]) -> Dict[str, Any]:
+    res = (sb.table("tax_invoice_requests")
+           .select("invoicee_business_number, invoicee_company_name, invoicee_representative_name, "
+                   "invoicee_email, invoicee_address, invoicee_business_type, invoicee_business_category, status, doc_type")
+           .eq("payment_id", payment_id).execute())
+    for r in (res.data or []):
+        if (r.get("doc_type") == "TAX_INVOICE" and r.get("status") == "ISSUED"
+                and r.get("invoicee_business_number") and r.get("invoicee_company_name")
+                and r.get("invoicee_representative_name")):
+            return {"corpNum": r["invoicee_business_number"], "corpName": r["invoicee_company_name"],
+                    "ceoName": r["invoicee_representative_name"], "email": r.get("invoicee_email"),
+                    "addr": r.get("invoicee_address"), "bizType": r.get("invoicee_business_type"),
+                    "bizClass": r.get("invoicee_business_category")}
+    company_id = original.get("company_id")
+    if company_id:
+        cres = (sb.table("companies")
+                .select("business_number, company_name, representative_name, address, business_type, business_category")
+                .eq("id", company_id).limit(1).execute())
+        c = (cres.data or [None])[0]
+        if c and c.get("business_number") and c.get("company_name") and c.get("representative_name"):
+            return {"corpNum": c["business_number"], "corpName": c["company_name"],
+                    "ceoName": c["representative_name"], "email": None,
+                    "addr": c.get("address"), "bizType": c.get("business_type"), "bizClass": c.get("business_category")}
+    raise InvoiceError(409, "수정세금계산서 공급받는자 정보(사업자번호/상호/대표자)가 부족합니다.", "MODIFIED_INVOICEE_INCOMPLETE")
+
+
+def _cancel_unissued_requests(sb, payment_id: str) -> int:
+    res = sb.table("tax_invoice_requests").select("id, status, doc_type").eq("payment_id", payment_id).execute()
+    n = 0
+    for r in (res.data or []):
+        if r.get("doc_type") == "TAX_INVOICE" and r.get("status") not in ("ISSUED", "CANCELLED"):
+            sb.table("tax_invoice_requests").update(
+                {"status": "CANCELLED", "failure_code": "REFUNDED_BEFORE_ISSUE", "updated_at": now_iso()}
+            ).eq("id", r["id"]).execute()
+            n += 1
+    return n
+
+
+def _popbill_issue_modified_tax(conf: Dict[str, Any], *, mgt_key: str, write_date: str, modify_code: int,
+                                org_nts: str, supply: int, vat: int, total: int,
+                                invoicee: Dict[str, str], item_name: str) -> Dict[str, Any]:
+    from popbill import Taxinvoice, TaxinvoiceDetail
+    svc = _tax_service(conf)
+    ti = Taxinvoice(
+        writeDate=write_date, issueType="정발행", taxType="과세", chargeDirection="정과금", purposeType="영수",
+        modifyCode=str(modify_code), orgNTSConfirmNum=org_nts,
+        supplyCostTotal=str(supply), taxTotal=str(vat), totalAmount=str(total),
+        invoicerCorpNum=conf["corp_num"], invoicerCorpName=conf["corp_name"], invoicerCEOName=conf["ceo_name"],
+        invoicerMgtKey=mgt_key, invoicerAddr=conf["corp_addr"] or None,
+        invoicerBizType=conf["biz_type"] or None, invoicerBizClass=conf["biz_class"] or None,
+        invoiceeType="사업자", invoiceeCorpNum=invoicee["corpNum"], invoiceeCorpName=invoicee["corpName"],
+        invoiceeCEOName=invoicee["ceoName"], invoiceeEmail1=invoicee.get("email"),
+        invoiceeAddr=invoicee.get("addr"), invoiceeBizType=invoicee.get("bizType"), invoiceeBizClass=invoicee.get("bizClass"),
+        detailList=[TaxinvoiceDetail(serialNum=1, purchaseDT=write_date, itemName=item_name,
+                                     supplyCost=str(supply), tax=str(vat))],
+    )
+    result = svc.registIssue(conf["corp_num"], ti, UserID=conf["user_id"] or None)
+    nts = getattr(result, "ntsConfirmNum", "") or ""
+    return {"nts": nts, "code": getattr(result, "code", None), "message": getattr(result, "message", None)}
+
+
+def process_refund_tax_adjustment(refund_id: str, created_by: Optional[str] = None) -> dict:
+    """환불 DONE 후처리: 원 TAX_INVOICE ISSUED 있으면 수정세금계산서, 없으면 미발행 request 취소."""
+    sb = get_supabase()
+    refund = _load_refund(sb, refund_id)
+    if not refund:
+        raise InvoiceError(404, "환불 건을 찾을 수 없습니다.", "REFUND_NOT_FOUND")
+    if refund.get("status") != "DONE":
+        raise InvoiceError(409, "환불완료(DONE) 건만 처리할 수 있습니다.", "REFUND_NOT_DONE")
+    payment_id = refund["payment_id"]
+    payment = _load_payment(payment_id)
+    original = _load_original_issued(sb, payment_id)
+    if not original or not original.get("nts_confirm_num"):
+        n = _cancel_unissued_requests(sb, payment_id)
+        return {"outcome": "REQUEST_CANCELLED" if n else "NOOP", "cancelled_requests": n, "modified_invoice_id": None}
+    return _issue_modified_for_refund(sb, refund, payment, original, created_by)
+
+
+def _issue_modified_for_refund(sb, refund: Dict[str, Any], payment: Dict[str, Any],
+                               original: Dict[str, Any], created_by: Optional[str]) -> dict:
+    mgt_key = _make_modified_mgt_key(refund["id"])
+    existing = _existing_modified(sb, original["id"], refund["id"])
+    invoice_id: Optional[str] = None
+    if existing:
+        st = existing.get("status")
+        if st == "ISSUED":
+            return {"outcome": "ISSUED", "modified_invoice_id": existing["id"],
+                    "modify_code": existing.get("modify_code"), "status": "ISSUED"}
+        if st == "PENDING":
+            raise InvoiceError(409, "수정세금계산서 처리가 진행 중입니다.", "INVOICE_ALREADY_PROCESSING")
+        invoice_id = existing["id"]              # FAILED → 재사용
+        mgt_key = existing.get("mgt_key") or mgt_key
+
+    total = int(payment.get("total_amount") or 0)
+    refund_amount = int(refund.get("amount") or 0)
+    cumulative = int(refund.get("cumulative_refunded") or 0)
+    o_supply = int(original.get("supply_cost") or 0)
+    o_tax = int(original.get("tax") or 0)
+    o_total = int(original.get("total_amount") or 0)
+    if refund_amount == total and cumulative == total:
+        modify_code = 4
+        neg_supply, neg_vat, neg_total = -o_supply, -o_tax, -o_total
+    else:
+        modify_code = 2
+        refund_supply = round(refund_amount * o_supply / o_total) if o_total else 0
+        refund_vat = refund_amount - refund_supply
+        neg_supply, neg_vat, neg_total = -refund_supply, -refund_vat, -refund_amount
+
+    reason_date = _kst_yyyymmdd(refund.get("created_at"))
+    invoicee = _resolve_modified_invoicee(sb, refund["payment_id"], original)
+    org_nts = original["nts_confirm_num"]
+    item_name = payment.get("product_type") or "TAI Safe 서비스"
+
+    _assert_invoice_live(refund["payment_id"], "TAX_INVOICE", "MODIFY", created_by)  # 423 no mutation
+    conf = _popbill_conf()
+    if not conf["corp_num"]:
+        raise InvoiceError(501, "공급자(TAI) 사업자번호(TAI_CORP_NUM)가 설정되지 않았습니다.")
+
+    if invoice_id:
+        _update_invoice(invoice_id, {"status": "PENDING", "supply_cost": neg_supply, "tax": neg_vat,
+                                     "total_amount": neg_total, "modify_code": modify_code, "updated_at": now_iso()})
+    else:
+        invoice_id = _insert_invoice({
+            "payment_id": refund["payment_id"], "company_id": original.get("company_id") or payment.get("company_id"),
+            "doc_type": "TAX_INVOICE", "invoice_kind": "MODIFIED", "mgt_key": mgt_key,
+            "parent_invoice_id": original["id"], "modify_code": modify_code,
+            "org_nts_confirm_num": org_nts, "refund_ref": refund["id"],
+            "adjustment_reason": refund.get("reason_text"), "invoicee_type": "사업자",
+            "supply_cost": neg_supply, "tax": neg_vat, "total_amount": neg_total,
+            "status": "PENDING", "created_by": created_by, "created_at": now_iso(),
+        })
+
+    try:
+        pr = _popbill_issue_modified_tax(conf, mgt_key=mgt_key, write_date=reason_date, modify_code=modify_code,
+                                         org_nts=org_nts, supply=neg_supply, vat=neg_vat, total=neg_total,
+                                         invoicee=invoicee, item_name=item_name)
+        _update_invoice(invoice_id, {
+            "status": "ISSUED", "nts_confirm_num": pr["nts"], "issued_at": now_iso(),
+            "popbill_raw": {"code": pr.get("code"), "message": pr.get("message"), "ntsConfirmNum": pr["nts"]},
+        })
+        audit_svc.record("INVOICE_MODIFY", "payment", entity_id=refund["payment_id"], actor_id=created_by,
+                         after={"invoice_id": invoice_id, "modify_code": modify_code, "refund_ref": refund["id"],
+                                "org_nts": org_nts, "amount": neg_total})
+        return {"outcome": "ISSUED", "modified_invoice_id": invoice_id, "modify_code": modify_code, "status": "ISSUED"}
+    except InvoiceError:
+        _update_invoice(invoice_id, {"status": "FAILED"})
+        raise
+    except Exception as e:  # noqa: BLE001
+        _update_invoice(invoice_id, {"status": "FAILED", "popbill_raw": {"error": str(e)}})
+        audit_svc.record("INVOICE_MODIFY", "payment", entity_id=refund["payment_id"], actor_id=created_by,
+                         after={"invoice_id": invoice_id, "status": "FAILED", "error": str(e)})
+        raise InvoiceError(400, f"수정세금계산서 발행 실패: {e}", "MODIFIED_ISSUE_FAILED") from e
+
+
+# ── 취소 (변경없음) ──
 def cancel(invoice_id: str, reason: str = "", created_by: Optional[str] = None) -> dict:
     res = get_supabase().table("tax_invoices").select("*").eq("id", invoice_id).limit(1).execute()
     if not res.data:

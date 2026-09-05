@@ -1,9 +1,9 @@
-"""결제 원장 결선 라우터 (WO-7 PaymentLedger + BACKEND-3 issuance).
+"""결제 원장 결선 라우터 (WO-7 PaymentLedger + BACKEND-3 issuance + BACKEND-4 수정세금계산서).
 
-[2026-08-15 P0-보정1 → BACKEND-3 실적용] 게이트/증빙 실발행 엔드포인트를
-  role 001(_require_admin)로 실제 적용(이전 docstring 주장과 달리 get_current_user 만 쓰던 것 보정).
-  증빙 발행은 invoice_svc 중앙 guard(저장금액·명시 supply_date·상호배타)를 공통 통과.
-  신규: POST /payments/tax-invoice-requests/{request_id}/process (processor).
+[2026-08-15 P0-보정1 → BACKEND-3 실적용] 게이트/증빙 실발행 엔드포인트를 role 001(_require_admin)로 실제 적용.
+  증빙 발행은 invoice_svc 중앙 guard(저장금액·명시 supply_date·상호배타) 공통 통과.
+  BACKEND-3 신규: POST /payments/tax-invoice-requests/{request_id}/process (processor).
+  BACKEND-4 신규: POST /payments/refunds/{refund_id}/tax-adjustment (수정세금계산서 재처리, 운영복구용).
 """
 from __future__ import annotations
 
@@ -156,6 +156,18 @@ def process_request(request_id: str, body: ProcessBody, current_user: dict = Dep
     except ProcessorError as e:
         raise HTTPException(status_code=e.status_code, detail={"code": e.code, "detail": e.detail})
     return {"status": "success", "data": {"outcome": outcome, "request": row}}
+
+
+# ── 수정세금계산서 재처리 (role 001, 운영복구용) ──
+@router.post("/refunds/{refund_id}/tax-adjustment")
+def refund_tax_adjustment(refund_id: str, current_user: dict = Depends(_require_admin)):
+    """환불 후처리 재실행. refund/original을 DB에서 직접 읽어 수정세금계산서/요청취소. INVOICE_LIVE OFF 면 423."""
+    from services.invoice_svc import InvoiceError, process_refund_tax_adjustment
+    try:
+        res = process_refund_tax_adjustment(refund_id, created_by=current_user["id"])
+        return {"status": "success", "data": res}
+    except InvoiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
 
 
 # ── 결제 원장 통합 조회 ──
