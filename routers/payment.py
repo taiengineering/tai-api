@@ -3,19 +3,14 @@
 
 v4.1.0 (2026-04-27)
   [FEAT] /payments/billing/pay — 빌링 결제 전용 페이지 추가
-         SaaS 페이지에서 이 URL로 리다이렉트하면 inilitepay.inicis.com 빌키발급 시작
 
 v4.0.0 (2026-04-27)
   매뉴얼 기반 전면 재작성
 
 [2026-07-29 P2-4] 카드 인증 실패 지점에 automation payment.failed 이벤트 발화 결선.
-  발화는 베스트에포트(_fire_automation) — 규칙 없으면 무동작, 예외는 삼켜 결제 흐름에 영향 없음.
-
-[2026-08-12 item3] 단건 콜백(inicis_return)이 returnUrl?front= 로 전달된 복귀 프론트 URL을
-  허용 도메인 검증(safe_front_return_url) 후 리다이렉트에 사용. 값 없으면 기존 FRONT_RETURN_URL.
-
-[2026-09-04] 진단 결제 복귀 qs에 sector 전달 — vbank 발급 시 payment.plan_code를
-  process_vbank_issued에 넘겨 free-diagnosis 상세입력(공정·설비)으로 바로 진입하게 한다.
+[2026-08-12 item3] 단건 콜백(inicis_return)이 returnUrl?front= 로 전달된 복귀 프론트 URL을 허용 도메인 검증 후 리다이렉트에 사용.
+[2026-09-04] 진단 결제 복귀 qs에 sector 전달.
+[2026-09-05 PROOF-TYPE-WRITER] diagnosis/vbank-prepare: proof_type 우선순위(explicit>invoice_requested>NONE) 전달 + stale diagnosis_purchases writer 제거.
 """
 from __future__ import annotations
 
@@ -55,7 +50,7 @@ router = APIRouter(prefix="/payments", tags=["결제"])
 
 
 def _fire_automation(event_type: str, payload: Dict[str, Any], trigger_ref: str = None) -> None:
-    """automation 이벤트 발화(베스트에포트). 규칙 없으면 무동작, 예외는 삼킨다."""
+    """automation 이벤트 발화(베스트에포트). 규칙 없으면 무동작, 예외는 삼킴다."""
     try:
         from services.automation_svc import fire
         fire(event_type, payload, trigger_ref=trigger_ref)
@@ -63,7 +58,7 @@ def _fire_automation(event_type: str, payload: Dict[str, Any], trigger_ref: str 
         log.warning("[AUTOMATION] %s 발화 실패: %s", event_type, e)
 
 
-# ── HTML 페이지 ────────────────────────────────────────────────────────
+# ── HTML 페이지 ───────────────────────────────────────
 
 @router.get("/pricing", response_class=HTMLResponse, include_in_schema=True)
 def payment_pricing_page():
@@ -83,27 +78,11 @@ def payment_billing_terms_page():
 
 @router.get("/billing/pay", response_class=HTMLResponse, include_in_schema=True)
 def payment_billing_pay_page():
-    """빌링 결제 전용 페이지 — SaaS 구독 결제 시작점.
-
-    사용법: SaaS 페이지에서 아래 URL로 리다이렉트
-    https://api.taieng.co.kr/payments/billing/pay
-      ?user_id={userId}
-      &amount={amount}
-      &product_type=SAAS_FACILITY
-      &goodname=TAI Safe 산업 STARTER
-      &plan_code=IND_STARTER
-      &company_id={companyId}
-      &buyername={name}
-      &buyertel={tel}
-      &buyeremail={email}
-
-    이 페이지가 /payments/inicis/billing/prepare API를 호출하고,
-    응답 파라미터로 inilitepay.inicis.com 빌키발급 폼을 자동 제출합니다.
-    """
+    """빌링 결제 전용 페이지 — SaaS 구독 결제 시작점."""
     return HTMLResponse(content=load_template("billing_pay.html"), status_code=200)
 
 
-# ── 단건결제 ───────────────────────────────────────────────────────────
+# ── 단건결제 ───────────────────────────────────────
 
 @router.post("/inicis/prepare")
 def inicis_prepare(body: PrepareBody):
@@ -116,8 +95,7 @@ def inicis_prepare(body: PrepareBody):
 
 @router.post("/inicis/return", include_in_schema=True)
 async def inicis_return(request: Request):
-    """결제 인증 콜백 — STEP2→STEP3"""
-    # 결제 후 복귀 프론트 URL: pay.html 이 returnUrl?front= 로 전달. 허용 도메인만 통과, 없으면 기본값.
+    """결제 인증 콜백 — STEP2->STEP3"""
     front = safe_front_return_url(request.query_params.get("front", "")) or FRONT_RETURN_URL
     try:
         form = await request.form()
@@ -192,7 +170,6 @@ async def inicis_return(request: Request):
             qs = urllib.parse.urlencode(out["qs_params"])
             return RedirectResponse(f"{front}?{qs}", status_code=302)
 
-        # 후처리(계약 생성·알림): process_card_success → on_payment_success_sync
         out = process_card_success(payment, auth_result, pg_method, order_id=order_id, goodname=goodname, price=price)
         qs = urllib.parse.urlencode(out["qs_params"])
         return RedirectResponse(f"{front}?{qs}", status_code=302)
@@ -258,7 +235,7 @@ async def inicis_noti(request: Request):
     return "OK"
 
 
-# ── VBANK (가상계좌) ───────────────────────────────────────────────────
+# ── VBANK (가상계좌) ────────────────────────────────────
 
 @router.post("/vbank/prepare")
 def vbank_prepare(body: VbankPrepareBody):
@@ -271,7 +248,18 @@ def vbank_prepare(body: VbankPrepareBody):
 
 @router.post("/diagnosis/vbank-prepare")
 def diagnosis_vbank_prepare(body: DiagnosisVbankPrepareBody):
-    """유료 진단 전용 가상계좌 발급 준비 (비회원 토큰 허용)."""
+    """유료 진단 전용 가상계좌 발급 준비 (비회원 토큰 허용).
+
+    proof_type 우선순위: explicit > legacy invoice_requested==true -> TAX_INVOICE > NONE.
+    기존 stale diagnosis_purchases invoice writer 는 제거(SoT=payments.proof_type).
+    """
+    if body.proof_type:
+        _proof = body.proof_type
+    elif body.invoice_requested:
+        _proof = "TAX_INVOICE"
+    else:
+        _proof = "NONE"
+
     proxy_body = VbankPrepareBody(
         user_id=None,
         auth_token=body.auth_token,
@@ -280,28 +268,12 @@ def diagnosis_vbank_prepare(body: DiagnosisVbankPrepareBody):
         amount=body.amount,
         goodname=body.goodname,
         matching_contract_id=None,
+        proof_type=_proof,
         buyername=body.buyername,
         buyertel=body.buyertel,
         buyeremail=body.buyeremail,
     )
-    result = vbank_prepare(proxy_body)
-
-    if body.invoice_requested and (body.invoice_biz_no or body.invoice_email):
-        try:
-            supabase = get_supabase()
-            payment_id = (result.get("data") or {}).get("payment_id")
-            if payment_id:
-                supabase.table("diagnosis_purchases").insert({
-                    "payment_ref": payment_id,
-                    "invoice_requested": True,
-                    "invoice_biz_no": body.invoice_biz_no,
-                    "invoice_email": body.invoice_email,
-                    "created_at": _now_iso(),
-                }).execute()
-        except Exception as e:
-            log.warning("[diagnosis vbank] invoice save failed: %s", e)
-
-    return result
+    return vbank_prepare(proxy_body)
 
 
 @router.post("/vbank/noti", include_in_schema=True)
@@ -324,7 +296,7 @@ async def vbank_noti(request: Request):
     return process_vbank_deposit(order_id, result_code, depositor, data)
 
 
-# ── 취소/환불 ──────────────────────────────────────────────────────────
+# ── 취소/환불 ───────────────────────────────────────
 
 @router.post("/{payment_id}/refund")
 def refund_payment(payment_id: str, body: RefundBody):
