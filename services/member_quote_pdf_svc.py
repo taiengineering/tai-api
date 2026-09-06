@@ -134,6 +134,7 @@ def _render_html(quote, item, supplier, quote_date) -> str:
         quote_no=quote.get("quote_no"),
         quote_date=quote_date,
         receiver=quote.get("company_name") or "",
+        contact=quote.get("contact_name") or None,
         supplier=supplier,
         service_type=item.get("service_type") or quote.get("service_type") or "",
         product_name=item.get("display_name"),

@@ -751,3 +751,217 @@ def test_REV1_company_name_snapshot_none_when_no_row():
     assert svc._company_name_snapshot(fake, "C-MISSING") is None
     assert svc._company_name_snapshot(fake, None) is None
     assert svc._company_name_snapshot(fake, "") is None
+
+
+# ══════════════════════════════════════════════════════════════════
+# WO-MYPAGE-QUOTE-CONTACT-SNAPSHOT-001 · CONTACT-01 ~ CONTACT-15
+#   SoT = quotes.contact_name (기존 컬럼, migration 0)
+#   순수 이름만 저장 (직급/님/귀하/회사결합 금지 — 표시는 템플릿 담당)
+# ══════════════════════════════════════════════════════════════════
+def test_CONTACT_01_normalize_none_returns_none():
+    assert svc.normalize_contact_name(None) is None
+
+
+def test_CONTACT_02_normalize_empty_returns_none():
+    assert svc.normalize_contact_name("") is None
+
+
+def test_CONTACT_03_normalize_whitespace_returns_none():
+    assert svc.normalize_contact_name("   ") is None
+    assert svc.normalize_contact_name("\t\n") is None
+
+
+def test_CONTACT_04_normalize_trims_outer_preserves_middle():
+    assert svc.normalize_contact_name(" 홍길동 ") == "홍길동"
+    assert svc.normalize_contact_name("홍 길동") == "홍 길동"     # 내부 공백 보존
+
+
+@requires_client
+def test_CONTACT_05_preview_echoes_normalized_contact():
+    """auto_preview 응답 data.contact_name = 정규화 결과 echo (display 용도)."""
+    store = _base_store()
+    c = _client(_company_user("C-A", "U-1"), store)
+    r = c.post("/me/quotes/auto/preview", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+        "contact_name": " 홍길동 ",
+    })
+    assert r.status_code == 200
+    assert r.json()["data"]["contact_name"] == "홍길동"
+
+
+@requires_client
+def test_CONTACT_06_preview_no_quote_write():
+    """auto_preview 는 contact_name 유무와 무관하게 quotes insert=0."""
+    store = _base_store()
+    c = _client(_company_user("C-A", "U-1"), store)
+    before = len(store["quotes"])
+    r = c.post("/me/quotes/auto/preview", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+        "contact_name": "홍길동",
+    })
+    assert r.status_code == 200
+    assert len(store["quotes"]) == before   # 불변
+    inserts = [(t, op) for (t, op) in c._fake.log if t == "quotes" and op == "insert"]
+    assert inserts == []
+
+
+@requires_client
+def test_CONTACT_07_preview_price_unchanged_and_no_pdf_side_effect():
+    """가격 3종 = calc_quote 결과 동일 (contact_name 유무 불변). auto_preview 는 pdf_svc 미참조."""
+    store = _base_store()
+    c = _client(_company_user("C-A", "U-1"), store)
+    r_no = c.post("/me/quotes/auto/preview", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+    })
+    r_yes = c.post("/me/quotes/auto/preview", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+        "contact_name": "홍길동",
+    })
+    assert r_no.status_code == 200 and r_yes.status_code == 200
+    d_no, d_yes = r_no.json()["data"], r_yes.json()["data"]
+    for k in ("unit_amount", "supply_amount", "vat_amount", "total_amount", "quantity", "term_months"):
+        assert d_no[k] == d_yes[k], f"{k} 편차 — contact_name 이 가격 계약을 흔들면 안 됨"
+    # contact_name 필드만 차이
+    assert d_no["contact_name"] is None
+    assert d_yes["contact_name"] == "홍길동"
+    # 소스 grep : auto_preview 는 pdf_svc 호출 없음
+    import inspect
+    src = inspect.getsource(mq.auto_preview)
+    assert "pdf_svc" not in src
+    assert "issue_or_get_quote_pdf" not in src
+
+
+@requires_client
+def test_CONTACT_08_auto_issue_stores_normalized_contact():
+    store = _base_store()
+    c = _client(_company_user("C-A", "U-1"), store)
+    r = c.post("/me/quotes/auto", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+        "contact_name": " 홍길동 ",
+    })
+    assert r.status_code == 200
+    row = r.json()["data"]
+    assert row["contact_name"] == "홍길동"
+    stored = [q for q in store["quotes"] if q["id"] == row["id"]][0]
+    assert stored["contact_name"] == "홍길동"
+
+
+@requires_client
+def test_CONTACT_09_auto_issue_missing_contact_stores_null():
+    store = _base_store()
+    c = _client(_company_user("C-A", "U-1"), store)
+    r = c.post("/me/quotes/auto", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+    })
+    assert r.status_code == 200
+    assert r.json()["data"]["contact_name"] is None
+
+
+@requires_client
+def test_CONTACT_10_auto_issue_blank_contact_stores_null():
+    store = _base_store()
+    c = _client(_company_user("C-A", "U-1"), store)
+    for blank in ("", "   ", "\t\n"):
+        r = c.post("/me/quotes/auto", json={
+            "service_type": "SAAS", "sector": "INDUSTRY",
+            "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+            "contact_name": blank,
+        })
+        assert r.status_code == 200, f"blank={blank!r}"
+        assert r.json()["data"]["contact_name"] is None, f"blank={blank!r} → NULL 아님"
+
+
+@requires_client
+def test_CONTACT_11_contact_does_not_affect_amounts_or_ownership():
+    """contact_name 유무가 company/price/items/amount/source/status/created_by 계약을 흔들지 않는다."""
+    store = _base_store()
+    c = _client(_company_user("C-A", "U-alice"), store)
+    r_no = c.post("/me/quotes/auto", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+    })
+    r_yes = c.post("/me/quotes/auto", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+        "contact_name": "홍길동",
+    })
+    d_no, d_yes = r_no.json()["data"], r_yes.json()["data"]
+    for k in ("company_id", "supply_amount", "vat_amount", "total_amount",
+              "source", "status_code", "service_type", "created_by"):
+        assert d_no[k] == d_yes[k], f"{k} 편차 감지 — contact_name 이 계약을 흔들면 안 됨"
+    assert d_no["source"] == "member_auto"
+    assert d_no["status_code"] == "ISSUED"
+    assert d_no["items"] == d_yes["items"]     # snapshot dict 동일
+
+
+@requires_client
+def test_CONTACT_12_custom_stores_contact():
+    store = _base_store()
+    c = _client(_company_user("C-A", "U-1"), store)
+    r = c.post("/me/quotes/custom", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "request_title": "맞춤 상담", "request_detail": "내부 검토",
+        "contact_name": " 홍길동 ",
+    })
+    assert r.status_code == 200
+    row = r.json()["data"]
+    assert row["contact_name"] == "홍길동"
+    assert row["source"] == "member_custom"
+    assert row["status_code"] == "REQUESTED"
+
+
+@requires_client
+def test_CONTACT_13_custom_missing_contact_stores_null():
+    store = _base_store()
+    c = _client(_company_user("C-A", "U-1"), store)
+    r = c.post("/me/quotes/custom", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "request_title": "맞춤 상담",
+    })
+    assert r.status_code == 200
+    assert r.json()["data"]["contact_name"] is None
+
+
+@requires_client
+def test_CONTACT_14_custom_survey_data_has_no_contact_duplication():
+    """CustomQuoteBody.contact_name 은 quotes.contact_name 에만 저장. survey_data 에 중복 X."""
+    store = _base_store()
+    c = _client(_company_user("C-A", "U-1"), store)
+    r = c.post("/me/quotes/custom", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "request_title": "맞춤 상담", "request_detail": "요청 상세",
+        "contact_name": "홍길동",
+    })
+    assert r.status_code == 200
+    sd = r.json()["data"]["survey_data"]
+    inner = sd.get("member_custom", {})
+    for k in ("contact_name", "contact", "담당자"):
+        assert k not in inner, f"survey_data.member_custom.{k} 중복 저장 금지"
+    for k in ("contact_name", "contact"):
+        assert k not in sd, f"survey_data.{k} 중복 저장 금지"
+
+
+@requires_client
+def test_CONTACT_15_detail_returns_contact_name_ownership_unchanged():
+    """GET /me/quotes/{id} 는 select('*') 로 quotes.contact_name 을 그대로 반환. 소유권 계약 불변(타사 404)."""
+    store = _base_store()
+    c = _client(_company_user("C-A", "U-alice"), store)
+    r_issue = c.post("/me/quotes/auto", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+        "contact_name": "홍길동",
+    })
+    qid = r_issue.json()["data"]["id"]
+    r_get = c.get(f"/me/quotes/{qid}")
+    assert r_get.status_code == 200
+    assert r_get.json()["data"]["contact_name"] == "홍길동"
+    # 소유권 계약 불변 : 타사는 여전히 404 (존재 은닉)
+    c_b = _client(_company_user("C-B", "U-B"), store)
+    r_x = c_b.get(f"/me/quotes/{qid}")
+    assert r_x.status_code == 404
