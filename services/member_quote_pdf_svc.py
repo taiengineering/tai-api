@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import datetime
 import os
 from typing import Any, Dict, Optional
 
@@ -127,14 +126,6 @@ def _won_to_hangul(n: int) -> str:
     return out + "원정"
 
 
-def _valid_until_kst(created_at, days: int = 30) -> Optional[str]:
-    try:
-        d = to_kst(parse_external_datetime(str(created_at).replace("Z", "+00:00")))
-        return (d + datetime.timedelta(days=days)).strftime("%Y-%m-%d")
-    except Exception:
-        return None
-
-
 def _render_html(quote, item, supplier, quote_date) -> str:
     def won(n):
         return "{:,}".format(int(n or 0))
@@ -142,7 +133,6 @@ def _render_html(quote, item, supplier, quote_date) -> str:
     return _jinja.get_template(_TEMPLATE_NAME).render(
         quote_no=quote.get("quote_no"),
         quote_date=quote_date,
-        valid_until=_valid_until_kst(quote.get("created_at")),
         receiver=quote.get("company_name") or "",
         supplier=supplier,
         service_type=item.get("service_type") or quote.get("service_type") or "",

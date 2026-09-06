@@ -51,12 +51,16 @@
   </div>
 
   <div class="titlewrap"><h1><span class="u">견 적 서</span></h1></div>
-  <div class="meta">견적번호: <b>{{ quote_no }}</b>&nbsp;&nbsp;|&nbsp;&nbsp;견적일자: <b>{{ quote_date }}</b>{% if valid_until %}&nbsp;&nbsp;|&nbsp;&nbsp;유효기간: <b>{{ valid_until }}</b>{% endif %}</div>
+  <div class="meta">견적번호: <b>{{ quote_no }}</b>&nbsp;&nbsp;|&nbsp;&nbsp;견적일자: <b>{{ quote_date }}</b></div>
 
   <div class="head">
     <div class="recv">
-      <div class="to">{{ receiver }} <small>귀하</small></div>
-      {% if contact %}<div class="cont">담당: {{ contact }} 님</div>{% endif %}
+      {% if contact %}
+      <div class="to">{{ receiver }}</div>
+      <div class="cont">담당: {{ contact }} 귀하</div>
+      {% else %}
+      <div class="to">{{ receiver }} <small>귀중</small></div>
+      {% endif %}
       <div class="phrase">아래와 같이 견적합니다.</div>
       <div class="grand-inline">합계금액(VAT 포함): <b>₩ {{ total }}</b>
         {% if total_hangul %}<span class="kor">金 {{ total_hangul }}</span>{% endif %}
