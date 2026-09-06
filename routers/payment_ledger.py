@@ -443,6 +443,107 @@ def admin_tax_invoice_detail(request_id: str, current_user: dict = Depends(_requ
     }}
 
 
+# ══════════════════════════════════════════════════════════════════
+# [WO-TAX-INVOICE-MANUAL-01 WP-B / WP-C / WP-D / WP-E] 관리자 수동발행 라우터
+# ══════════════════════════════════════════════════════════════════
+class ManualRequestBody(BaseModel):
+    """관리자 수동 발행 요청 body. 라우터 계층 whitelist — extra 필드 거부."""
+    idempotency_key: str
+    company_mode: str  # "EXISTING" | "MANUAL"
+    company_id: Optional[str] = None
+    # MANUAL 모드 (invoicee_* 세트)
+    invoicee_business_number: Optional[str] = None
+    invoicee_company_name: Optional[str] = None
+    invoicee_representative_name: Optional[str] = None
+    invoicee_email: Optional[str] = None
+    invoicee_address: Optional[str] = None
+    invoicee_business_type: Optional[str] = None
+    invoicee_business_category: Optional[str] = None
+    # 공통
+    supply_amount: int
+    vat_amount: int
+    supply_date: str            # YYYY-MM-DD (사용자 명시 입력)
+    item_name: str
+    issue_reason: str
+
+    class Config:
+        extra = "forbid"        # payment_id/source/status 등 우회 주입 거부
+
+
+# ── WP-B 업체조회 API (role 001) ──
+@router.get("/admin/tax-invoice-companies")
+def admin_search_companies(
+    q: Optional[str] = Query(None, description="회사명·사업자번호 검색어(ilike)"),
+    current_user: dict = Depends(_require_admin),
+):
+    """관리자 수동발행용 회사 검색. companies SoT. ≤20건 반환.
+
+    선택 후에도 서버가 companies 에서 재조회하여 snapshot 구성 (프론트 법적정보 불신뢰).
+    이 엔드포인트는 검색 편의 — 실제 발행은 POST manual 에서 companies 재조회.
+    """
+    sb = get_supabase()
+    query = sb.table("companies").select(
+        "id, name, business_number, representative_name, contact_email, contact_phone, "
+        "zipcode, address, address_road, address_detail, business_type, business_category"
+    )
+    if q and q.strip():
+        term = q.strip()
+        query = query.or_(f"name.ilike.%{term}%,business_number.ilike.%{term}%")
+    query = query.limit(20)
+    try:
+        res = query.execute()
+        items = res.data or []
+    except Exception as e:  # noqa: BLE001
+        log.warning("[MANUAL_TAX] 회사 검색 실패: %s", e)
+        items = []
+    return {"status": "success", "data": {"items": items, "count": len(items)}}
+
+
+# ── WP-C/D 수동 발행요청 생성 (role 001) ──
+@router.post("/admin/tax-invoices/manual")
+def admin_create_manual_tax_invoice_request(body: ManualRequestBody,
+                                            current_user: dict = Depends(_require_admin)):
+    """관리자 수동 세금계산서 발행요청 생성. 신규 201 / idempotent 기존 200 / 400·409·422 오류.
+
+    - source = ADMIN_MANUAL, payment_id = NULL
+    - EXISTING 모드: 서버가 companies 재조회 → snapshot (프론트 법적정보 무시)
+    - MANUAL 모드: body.invoicee_* 로 snapshot, companies INSERT 금지
+    - total_amount = supply + vat (서버 재계산; 프론트 total 무시)
+    - idempotency_key partial UNIQUE (DDL) → 더블클릭/재시도 안전
+    """
+    from services import tax_manual_svc as m_svc
+    from services.tax_invoice_request_svc import MemberTaxError
+    sb = get_supabase()
+    try:
+        row, created = m_svc.create_manual_request(sb, current_user["id"], body.dict())
+    except MemberTaxError as e:
+        detail = e.payload if e.payload is not None else {"code": e.code, "detail": e.detail}
+        raise HTTPException(status_code=e.status_code, detail=detail) from e
+    return {"status": "success", "data": row, "created": created}
+
+
+# ── WP-E 수동 발행 processor (role 001) ──
+@router.post("/admin/tax-invoices/manual/{request_id}/process")
+def admin_process_manual_tax_invoice(request_id: str,
+                                     current_user: dict = Depends(_require_admin)):
+    """관리자 수동 발행 processor. 기존 payment 기반 /invoice/tax 와 분리.
+
+    - GUARD: source=ADMIN_MANUAL, status ∈ {REQUESTED, FAILED}, payment_id NULL
+    - INVOICE_LIVE OFF → 423 (mutation 0, request.status=REQUESTED 유지 — FAILED 오염 금지)
+    - LIVE + provider 성공 → tax_invoices(payment_id NULL, ISSUED) + request.status=ISSUED
+    - provider 실패 → request/ledger FAILED, retry 가능 (same mgt_key, 중복 invoice 0)
+    """
+    from services import tax_manual_svc as m_svc
+    from services.tax_invoice_request_svc import MemberTaxError
+    sb = get_supabase()
+    try:
+        row, outcome = m_svc.process_manual_request(sb, request_id, current_user["id"])
+    except MemberTaxError as e:
+        detail = e.payload if e.payload is not None else {"code": e.code, "detail": e.detail}
+        raise HTTPException(status_code=e.status_code, detail=detail) from e
+    return {"status": "success", "data": {"outcome": outcome, "request": row}}
+
+
 # ── 결제 원장 통합 조회 ──
 @router.get("/{payment_id}/ledger")
 def get_payment_ledger(payment_id: str, current_user: dict = Depends(get_current_user)):

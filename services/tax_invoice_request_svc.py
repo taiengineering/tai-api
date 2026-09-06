@@ -15,10 +15,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from services.time import now_kst, serialize_external_utc
 
-_ALLOWED_SOURCES = ("MYPAGE", "SAAS", "AUTO_PAYMENT", "AUTO_SAAS")
+_ALLOWED_SOURCES = ("MYPAGE", "SAAS", "AUTO_PAYMENT", "AUTO_SAAS", "ADMIN_MANUAL")
 # MYPAGE/SAAS = 고객 UI/SaaS 셀프서비스 (라우터에서 이 두 값만 허용).
 # AUTO_PAYMENT = 결제성공 자동 오케스트레이터(tax_auto_svc). AUTO_SAAS = 예비.
-# AUTO_* 는 서버 내부 orchestrator 전용 — 라우터/외부 API 노출 금지.
+# ADMIN_MANUAL = 관리자 수동발행 (payment-less 허용, 별도 라우터/서비스).
+# AUTO_* / ADMIN_MANUAL 는 서버 내부 전용 — 고객 API (POST /payments/{id}/tax-invoice/request)
+# 노출 금지 (라우터에서 여전히 MYPAGE|SAAS 만 허용).
 
 REASON = {
     "ELIGIBLE": None,
