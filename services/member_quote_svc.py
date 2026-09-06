@@ -94,37 +94,73 @@ def _snapshot_item(c: Dict[str, Any]) -> Dict[str, Any]:
                               "term_months", "quantity", "supply_amount", "vat_rate")}
 
 
-def gen_quote_no(supabase, retries: int = 5) -> str:
-    """QT-YYYYMMDD-XXXXXXXX. survey 의 count+1(경쟁조건) 복제 금지. UNIQUE 충돌 시 재시도."""
-    day = now_kst().strftime("%Y%m%d")
-    for _ in range(retries):
-        cand = f"QT-{day}-{secrets.token_hex(4).upper()}"
-        if not supabase.table("quotes").select("id").eq("quote_no", cand).limit(1).execute().data:
-            return cand
-    return f"QT-{day}-{secrets.token_hex(4).upper()}"  # 최종 방어는 DB UNIQUE
+def _gen_quote_no_candidate() -> str:
+    """QT-YYYYMMDD-XXXXXXXX. 매 시도 새 후보."""
+    return f"QT-{now_kst().strftime('%Y%m%d')}-{secrets.token_hex(4).upper()}"
+
+
+def _is_quote_no_conflict(exc: Exception) -> bool:
+    """오직 quotes.quote_no UNIQUE(23505 + quotes_quote_no_key)만 True.
+    다른 23505·FK·검증·DB장애는 False → retry 금지."""
+    parts = []
+    for attr in ("code", "message", "details", "hint", "constraint"):
+        v = getattr(exc, attr, None)
+        if v:
+            parts.append(str(v))
+    if getattr(exc, "args", None):
+        parts.append(str(exc.args[0]))
+    blob = " ".join(parts) + " " + str(exc)
+    return ("23505" in blob) and (("quotes_quote_no_key" in blob) or ("quote_no" in blob))
+
+
+def _insert_quote_with_unique_retry(supabase, base_row: Dict[str, Any], retries: int = 5) -> Dict[str, Any]:
+    """quote_no 를 매 시도 새로 생성해 INSERT. quote_no UNIQUE 충돌만 재시도.
+    그 외 오류는 즉시 전파(retry 0). 소진 시 controlled MemberQuoteError(503)."""
+    for _ in range(max(1, retries)):
+        row = dict(base_row)
+        row["quote_no"] = _gen_quote_no_candidate()
+        try:
+            res = supabase.table("quotes").insert(row).execute()
+        except Exception as exc:  # noqa: BLE001
+            if _is_quote_no_conflict(exc):
+                continue
+            raise
+        if not res.data:
+            raise MemberQuoteError("INSERT_FAILED", "견적 저장 실패", 500)
+        return res.data[0]
+    raise MemberQuoteError("QUOTE_NO_CONFLICT", "견적번호 생성 재시도 소진", 503)
+
+
+def _company_name_snapshot(supabase, company_id) -> Optional[str]:
+    """발급 당시 수신 회사명 고정(내부결재 첨부 문서). 이후 회사명 변경돼도 불변.
+    best-effort — 회사행 없으면 None(발급 자체는 막지 않음)."""
+    if not company_id:
+        return None
+    try:
+        r = supabase.table("companies").select("name").eq("id", company_id).limit(1).execute()
+        return r.data[0].get("name") if r.data else None
+    except Exception:
+        return None
 
 
 def create_auto_quote(supabase, company_id, created_by, service_type, sector, tier_code, term_months):
     calc = calc_quote(supabase, service_type, sector, tier_code, term_months)  # 서버 재계산
     now = now_kst().isoformat()
-    row = {
-        "quote_no": gen_quote_no(supabase), "company_id": company_id, "created_by": created_by,
-        "source": "member_auto", "status_code": "ISSUED", "service_type": calc["service_type"],
-        "items": [_snapshot_item(calc)], "supply_amount": calc["supply_amount"],
-        "vat_amount": calc["vat_amount"], "total_amount": calc["total_amount"],
-        "is_active": True, "created_at": now, "updated_at": now,
+    base_row = {
+        "company_id": company_id, "company_name": _company_name_snapshot(supabase, company_id),
+        "created_by": created_by, "source": "member_auto", "status_code": "ISSUED",
+        "service_type": calc["service_type"], "items": [_snapshot_item(calc)],
+        "supply_amount": calc["supply_amount"], "vat_amount": calc["vat_amount"],
+        "total_amount": calc["total_amount"], "is_active": True, "created_at": now, "updated_at": now,
     }
-    res = supabase.table("quotes").insert(row).execute()
-    if not res.data:
-        raise MemberQuoteError("INSERT_FAILED", "견적 저장 실패", 500)
-    return res.data[0]
+    return _insert_quote_with_unique_retry(supabase, base_row)
 
 
 def create_custom_quote(supabase, company_id, created_by, service_type, sector, request_title, request_detail):
     now = now_kst().isoformat()
-    row = {
-        "quote_no": gen_quote_no(supabase), "company_id": company_id, "created_by": created_by,
-        "source": "member_custom", "status_code": "REQUESTED",
+    base_row = {
+        "company_id": company_id, "company_name": _company_name_snapshot(supabase, company_id),
+        "created_by": created_by, "source": "member_custom", "status_code": "REQUESTED",
         "service_type": (service_type or "").upper() or None,
         "items": [], "supply_amount": 0, "vat_amount": 0, "total_amount": 0,
         # 요청내용: survey_data 를 member_custom 네임스페이스로(설문 흐름과 형태 충돌 없음) + memo 요약
@@ -132,10 +168,7 @@ def create_custom_quote(supabase, company_id, created_by, service_type, sector, 
                                           "request_title": request_title, "request_detail": request_detail}},
         "memo": f"[개별견적] {request_title}", "is_active": True, "created_at": now, "updated_at": now,
     }
-    res = supabase.table("quotes").insert(row).execute()
-    if not res.data:
-        raise MemberQuoteError("INSERT_FAILED", "개별견적 저장 실패", 500)
-    return res.data[0]
+    return _insert_quote_with_unique_retry(supabase, base_row)
 
 
 _LIST_COLS = ("id, quote_no, service_type, status_code, source, items, "

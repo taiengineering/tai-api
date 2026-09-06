@@ -143,16 +143,20 @@ def _price_master_rows():
     ]
 
 
-def _base_store(quotes=None):
+def _base_store(quotes=None, companies=None):
     return {
         "price_master": _price_master_rows(),
         "quotes": list(quotes or []),
-        # role_data_scope: COMPANY tier default → 회사 강제
+        # role_data_scope: COMPANY tier default → 회사 강제. ALL 은 별도 명시.
         "role_data_scope": [
             {"role_code": "001", "scope_type": "ALL"},
             {"role_code": "002", "scope_type": "COMPANY"},
         ],
+        "companies": list(companies or []),
         "factories": [],
+        # contracts / payments : REV-1 PURPOSE-3/4 write=0 관측용
+        "contracts": [],
+        "payments": [],
     }
 
 
@@ -452,3 +456,289 @@ def test_REG_registry_line_present():
     idx = modules.index("routers.member_quotes")
     assert modules[idx - 1] == "routers.quotes"
     assert modules[idx + 1] == "routers.price_setting"
+
+
+# ══════════════════════════════════════════════════════════════════
+# STEP 2A REV-1 : 3 보정 (quote_no atomic retry · /me strict · company_name snapshot)
+# ══════════════════════════════════════════════════════════════════
+class _RaiseNTimesFake(FakeSupabase):
+    """quotes insert 첫 N회에 지정 예외 raise. 그 외 정상. 다른 테이블은 정상."""
+    def __init__(self, store, target_table, exc, n=1):
+        super().__init__(store)
+        self._target = target_table
+        self._exc = exc
+        self._remaining = int(n)
+        self.attempts = 0     # target insert 시도 카운트 (성공 포함)
+
+    def table(self, name):
+        q = super().table(name)
+        if name != self._target:
+            return q
+        orig_execute = q.execute
+
+        def exec2():
+            if q._op == "insert":
+                self.attempts += 1
+                if self._remaining > 0:
+                    self._remaining -= 1
+                    raise self._exc
+            return orig_execute()
+        q.execute = exec2
+        return q
+
+
+def _mk_uniq_exc(constraint="quotes_quote_no_key"):
+    """Postgres UNIQUE 위반 유사 예외 (code=23505, constraint 문자열 포함)."""
+    e = Exception('duplicate key value violates unique constraint "{}"'.format(constraint))
+    e.code = "23505"
+    e.constraint = constraint
+    return e
+
+
+# ── REV-1 PURPOSE (내부결재 첨부 문서 · contracts/payments write 0) ─────
+@requires_client
+def test_REV1_PURPOSE1_auto_status_issued():
+    store = _base_store(companies=[{"id": "C-A", "name": "TAI Corp"}])
+    c = _client(_company_user("C-A", "U-1"), store)
+    r = c.post("/me/quotes/auto", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+    })
+    assert r.status_code == 200
+    assert r.json()["data"]["status_code"] == "ISSUED"
+
+
+@requires_client
+def test_REV1_PURPOSE2_custom_status_requested():
+    store = _base_store(companies=[{"id": "C-A", "name": "TAI Corp"}])
+    c = _client(_company_user("C-A", "U-1"), store)
+    r = c.post("/me/quotes/custom", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "request_title": "맞춤 문의", "request_detail": "내부 검토 필요",
+    })
+    assert r.status_code == 200
+    assert r.json()["data"]["status_code"] == "REQUESTED"
+    assert r.json()["data"]["total_amount"] == 0
+
+
+@requires_client
+def test_REV1_PURPOSE3_auto_no_contract_no_payment_write():
+    store = _base_store(companies=[{"id": "C-A", "name": "TAI Corp"}])
+    c = _client(_company_user("C-A", "U-1"), store)
+    r = c.post("/me/quotes/auto", json={
+        "service_type": "DIAGNOSIS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_STARTER",
+    })
+    assert r.status_code == 200
+    assert store["contracts"] == []      # contract write 0
+    assert store["payments"] == []       # payment write 0
+    # supabase log 로도 이중 확인 : contracts/payments insert 로그 부재
+    assert not any(t == "contracts" and op == "insert" for (t, op) in c._fake.log)
+    assert not any(t == "payments" and op == "insert" for (t, op) in c._fake.log)
+
+
+@requires_client
+def test_REV1_PURPOSE4_custom_no_contract_no_payment_write():
+    store = _base_store(companies=[{"id": "C-A", "name": "TAI Corp"}])
+    c = _client(_company_user("C-A", "U-1"), store)
+    r = c.post("/me/quotes/custom", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "request_title": "맞춤", "request_detail": "",
+    })
+    assert r.status_code == 200
+    assert store["contracts"] == []
+    assert store["payments"] == []
+
+
+# ── REV-1 COMPANY (/me strict — ALL 이라도 자사만) ────────────────────
+@requires_client
+def test_REV1_COMPANY1_no_company_auto_403():
+    store = _base_store()
+    c = _client(_no_company_user(), store)   # role=002 (COMPANY), company_id=None
+    r = c.post("/me/quotes/auto", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+    })
+    assert r.status_code == 403
+
+
+@requires_client
+def test_REV1_COMPANY2_no_company_list_403():
+    store = _base_store()
+    c = _client(_no_company_user(), store)
+    r = c.get("/me/quotes")
+    assert r.status_code == 403
+
+
+@requires_client
+def test_REV1_COMPANY3_all_role_list_still_scoped_to_own():
+    """관리자(ALL) 이라도 /me/quotes 는 자사만. B 사 quote 는 미노출."""
+    store = _base_store([
+        # B 사 quote 이미 존재
+        {"id": "q-b", "quote_no": "QT-B", "company_id": "C-B",
+         "source": "member_auto", "status_code": "ISSUED", "service_type": "SAAS",
+         "items": [], "supply_amount": 0, "vat_amount": 0, "total_amount": 0,
+         "created_by": "U-B", "created_at": "2026-01-01T00:00:00"},
+    ], companies=[{"id": "C-A", "name": "A"}, {"id": "C-B", "name": "B"}])
+    # ALL user 인데 자기 회사는 C-A
+    all_user = {"id": "U-admin", "company_id": "C-A", "role_code": "001",
+                "factory_id": None, "team_id": None}
+    c = _client(all_user, store)
+    r = c.get("/me/quotes")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert all(it["id"] != "q-b" for it in data["items"])   # B 사 미노출
+    # (C-A 사 quote 는 아직 없으므로 목록은 비어있어야 함)
+    assert data["total"] == 0
+
+
+@requires_client
+def test_REV1_COMPANY4_all_role_detail_cross_company_404():
+    """ALL user 라도 다른 회사 quote_id 상세 조회 시 404 (존재 은닉)."""
+    store = _base_store([
+        {"id": "q-b-1", "quote_no": "QT-B-1", "company_id": "C-B",
+         "source": "member_auto", "status_code": "ISSUED", "service_type": "SAAS",
+         "items": [], "supply_amount": 0, "vat_amount": 0, "total_amount": 0,
+         "created_by": "U-B", "created_at": "2026-01-01T00:00:00"},
+    ], companies=[{"id": "C-A", "name": "A"}, {"id": "C-B", "name": "B"}])
+    all_user = {"id": "U-admin", "company_id": "C-A", "role_code": "001",
+                "factory_id": None, "team_id": None}
+    c = _client(all_user, store)
+    r = c.get("/me/quotes/q-b-1")
+    assert r.status_code == 404
+
+
+# ── REV-1 COMPANY-5 : company_name snapshot ──────────────────────────
+@requires_client
+def test_REV1_COMPANY5_company_name_snapshot():
+    store = _base_store(companies=[{"id": "C-A", "name": "정식법인명 주식회사"}])
+    c = _client(_company_user("C-A", "U-1"), store)
+    r = c.post("/me/quotes/auto", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+    })
+    assert r.status_code == 200
+    assert r.json()["data"]["company_name"] == "정식법인명 주식회사"
+
+    # 이후 companies.name 을 바꿔도 저장된 quote 는 불변 (snapshot 계약)
+    for row in store["companies"]:
+        if row["id"] == "C-A":
+            row["name"] = "이름 바뀐 회사"
+    stored = store["quotes"][-1]
+    assert stored["company_name"] == "정식법인명 주식회사"   # 스냅샷 유지
+
+
+# ── REV-1 SNAPSHOT-1 : price_master.amount 변경 후 기존 quote 불변 ────
+@requires_client
+def test_REV1_SNAPSHOT1_price_master_change_does_not_affect_existing_quote():
+    store = _base_store(companies=[{"id": "C-A", "name": "TAI"}])
+    c = _client(_company_user("C-A", "U-1"), store)
+    r = c.post("/me/quotes/auto", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+    })
+    assert r.status_code == 200
+    qid = r.json()["data"]["id"]
+    # 발급 후 price_master.amount 를 임의 변경
+    for row in store["price_master"]:
+        if row["tier_code"] == "INDUSTRY_BUSINESS":
+            row["amount"] = 999_999
+    # 저장된 quote 는 발급 당시 스냅샷 그대로
+    stored = next(q for q in store["quotes"] if q["id"] == qid)
+    assert stored["total_amount"] == 3_946_800
+    assert stored["items"][0]["unit_amount"] == 299_000
+
+
+# ── REV-1 QNO : quote_no atomic retry ───────────────────────────────
+@requires_client
+def test_REV1_QNO1_unique_conflict_retries_then_succeeds():
+    """첫 INSERT 는 quote_no UNIQUE 위반 → 새 번호로 재시도 → 성공(attempts>=2)."""
+    store = _base_store(companies=[{"id": "C-A", "name": "TAI"}])
+    fake = _RaiseNTimesFake(store, "quotes", _mk_uniq_exc(), n=1)
+    # _client 대신 직접 override (RaiseFake 주입)
+    app = FastAPI()
+    app.include_router(mq.router)
+    app.dependency_overrides[mq.get_current_user] = lambda: _company_user("C-A", "U-1")
+    mq.get_supabase = lambda: fake
+    c = TestClient(app)
+
+    r = c.post("/me/quotes/auto", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+    })
+    assert r.status_code == 200
+    assert fake.attempts >= 2, "실 INSERT 에서 재시도가 일어나야 한다 (attempts={})".format(fake.attempts)
+    # 성공한 quote 는 새 번호로 저장
+    saved = store["quotes"][-1]
+    assert saved["quote_no"].startswith("QT-")
+
+
+@requires_client
+def test_REV1_QNO2_retry_exhausted_returns_controlled_503():
+    """5회 UNIQUE 충돌 → controlled MemberQuoteError(503) — 무한루프·raw 예외 없음."""
+    store = _base_store(companies=[{"id": "C-A", "name": "TAI"}])
+    fake = _RaiseNTimesFake(store, "quotes", _mk_uniq_exc(), n=99)   # 항상 충돌
+
+    app = FastAPI()
+    app.include_router(mq.router)
+    app.dependency_overrides[mq.get_current_user] = lambda: _company_user("C-A", "U-1")
+    mq.get_supabase = lambda: fake
+    c = TestClient(app)
+
+    r = c.post("/me/quotes/auto", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+    })
+    assert r.status_code == 503
+    body = r.json()
+    assert body["detail"]["code"] == "QUOTE_NO_CONFLICT"
+    assert fake.attempts == 5   # 정확히 5회 시도 후 중단
+
+
+@requires_client
+def test_REV1_QNO3_non_quote_no_error_is_not_retried():
+    """quote_no 외 오류(다른 23505 · FK 등)는 즉시 전파 (retry 없음)."""
+    store = _base_store(companies=[{"id": "C-A", "name": "TAI"}])
+    other_exc = Exception('duplicate key value violates unique constraint "some_other_key"')
+    other_exc.code = "23505"
+    other_exc.constraint = "some_other_key"
+    fake = _RaiseNTimesFake(store, "quotes", other_exc, n=99)
+
+    app = FastAPI()
+    app.include_router(mq.router)
+    app.dependency_overrides[mq.get_current_user] = lambda: _company_user("C-A", "U-1")
+    mq.get_supabase = lambda: fake
+    c = TestClient(app, raise_server_exceptions=False)   # 원 예외 → 500 response
+
+    r = c.post("/me/quotes/auto", json={
+        "service_type": "SAAS", "sector": "INDUSTRY",
+        "tier_code": "INDUSTRY_BUSINESS", "term_months": 12,
+    })
+    # 원 예외 전파(200 아님) + 재시도 0 (attempts == 1). QUOTE_NO_CONFLICT 로 변환되면 안 됨.
+    assert r.status_code == 500
+    assert fake.attempts == 1, "quote_no 외 오류는 재시도 금지 (attempts={})".format(fake.attempts)
+
+
+# ── REV-1 helper 유닛 ─────────────────────────────────────────────────
+def test_REV1_conflict_detector_only_matches_quote_no_key():
+    """`_is_quote_no_conflict` : 23505 + (quotes_quote_no_key | quote_no) 조건만 True."""
+    yes = _mk_uniq_exc("quotes_quote_no_key")
+    assert svc._is_quote_no_conflict(yes) is True
+
+    other = Exception('duplicate key value violates unique constraint "another_uniq"')
+    other.code = "23505"; other.constraint = "another_uniq"
+    assert svc._is_quote_no_conflict(other) is False   # 23505 지만 quote_no 아님
+
+    fk = Exception('foreign key violation'); fk.code = "23503"
+    assert svc._is_quote_no_conflict(fk) is False
+
+    generic = RuntimeError("boom")
+    assert svc._is_quote_no_conflict(generic) is False
+
+
+def test_REV1_company_name_snapshot_none_when_no_row():
+    """companies 에 회사가 없으면 None (best-effort). 발급 자체는 막지 않음."""
+    fake = FakeSupabase(_base_store())   # companies 비어있음
+    assert svc._company_name_snapshot(fake, "C-MISSING") is None
+    assert svc._company_name_snapshot(fake, None) is None
+    assert svc._company_name_snapshot(fake, "") is None
