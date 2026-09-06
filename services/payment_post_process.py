@@ -303,6 +303,16 @@ def on_payment_success_sync(payment_id: str) -> None:
         "status": status,
     }, trigger_ref=payment_id)
 
+    # [WO-TAX-INVOICE-AUTO-01 STEP 2-A] 세금계산서 자동 발행(fail-soft).
+    # DirectBank/VBank + proof_type=TAX_INVOICE 결제는 자동으로 원본 세금계산서를 발행한다.
+    # helper 내부에서 카드/현금영수증/부적격은 조기 NOOP. 실패/423 은 결제 후처리에 영향 없음.
+    try:
+        from services.tax_auto_svc import maybe_auto_issue_tax_invoice
+        maybe_auto_issue_tax_invoice(sb, payment_id, "PAYMENT_SUCCESS",
+                                     actor_id=pay.get("user_id"))
+    except Exception as e:  # noqa: BLE001 — 계약 자동생성/알림에 영향 금지 (O11)
+        logger.warning("[AUTO_TAX] payment_success hook 실패: %s", e)
+
     existing_contract_id = pay.get("contract_id")
     if existing_contract_id:
         if (pay.get("payment_type") or "").upper() == "RENEWAL":
