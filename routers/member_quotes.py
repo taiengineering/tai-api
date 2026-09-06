@@ -26,6 +26,7 @@ class AutoQuoteBody(BaseModel):
     sector: str
     tier_code: str
     term_months: Optional[int] = None
+    contact_name: Optional[str] = None    # 선택, 표시 스냅샷 — 가격/소유권 무관
 
 
 class CustomQuoteBody(BaseModel):
@@ -33,6 +34,7 @@ class CustomQuoteBody(BaseModel):
     sector: str
     request_title: str
     request_detail: str = ""
+    contact_name: Optional[str] = None    # 선택
 
 
 def _raise(e: svc.MemberQuoteError):
@@ -56,10 +58,12 @@ def _require_member_company(current: dict, supabase) -> str:
 def auto_preview(body: AutoQuoteBody, current: dict = Depends(get_current_user)):
     """가격 미리보기 — DB write 없음."""
     try:
-        return {"status": "success", "data": svc.calc_quote(
-            get_supabase(), body.service_type, body.sector, body.tier_code, body.term_months)}
+        calc = svc.calc_quote(
+            get_supabase(), body.service_type, body.sector, body.tier_code, body.term_months)
     except svc.MemberQuoteError as e:
         _raise(e)
+    calc["contact_name"] = svc.normalize_contact_name(body.contact_name)  # display echo — not calc output
+    return {"status": "success", "data": calc}
 
 
 @router.post("/auto")
@@ -69,7 +73,8 @@ def auto_issue(body: AutoQuoteBody, current: dict = Depends(get_current_user)):
     company_id = _require_member_company(current, supabase)   # ALL 포함 자사강제 / 무회사 403
     try:
         row = svc.create_auto_quote(supabase, company_id, current.get("id"),
-                                    body.service_type, body.sector, body.tier_code, body.term_months)
+                                    body.service_type, body.sector, body.tier_code, body.term_months,
+                                    contact_name=body.contact_name)
     except svc.MemberQuoteError as e:
         _raise(e)
     return {"status": "success", "data": row}
@@ -85,7 +90,8 @@ def custom_request(body: CustomQuoteBody, current: dict = Depends(get_current_us
     try:
         row = svc.create_custom_quote(supabase, company_id, current.get("id"),
                                       body.service_type, body.sector,
-                                      body.request_title.strip(), (body.request_detail or "").strip())
+                                      body.request_title.strip(), (body.request_detail or "").strip(),
+                                      contact_name=body.contact_name)
     except svc.MemberQuoteError as e:
         _raise(e)
     return {"status": "success", "data": row}

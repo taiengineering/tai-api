@@ -1077,7 +1077,7 @@ def test_FORM3b_biz_env_missing_does_not_raise(monkeypatch):
 
 
 def test_FORM4_render_includes_hangul_no_exception(monkeypatch):
-    """_render_html 이 total_hangul 을 넘겨도 예외 없이 완료. contact/valid_until 은 미전달."""
+    """_render_html 이 total_hangul 을 넘겨도 예외 없이 완료. quote 에 contact_name 없으면 담당 줄 미표시."""
     _set_supplier_env(monkeypatch); _set_gotenberg_env(monkeypatch)
     from services.member_quote_pdf_svc import (
         _render_html, _supplier_config, _validate_snapshot, _quote_date_kst,
@@ -1090,19 +1090,19 @@ def test_FORM4_render_includes_hangul_no_exception(monkeypatch):
     assert "삼백구십사만육천팔백원정" in html
     # 회사명 / 금액 등 기존 슬롯은 그대로
     assert "테스트 주식회사" in html
-    # contact 미연결 : contact 값 자체가 렌더 HTML 에 텍스트로 삽입되지 않음
-    #   (템플릿의 {% if contact %} 는 undefined 를 falsy 로 취급하여 자동 숨김)
+    # contact_name 없는 fixture → contact=None → 템플릿 {% if contact %} else 분기 → 담당 줄 미출력
     assert "담당:" not in html
 
 
-def test_FORM4b_render_contact_and_validity_not_wired(monkeypatch):
-    """contact / valid_until 는 render kwargs 에 미포함 (CONTACT-SNAPSHOT · validity 정책 별건)."""
+def test_FORM4b_render_contact_wired_validity_not_wired(monkeypatch):
+    """contact 는 render kwargs 에 연결 (CONTACT-SNAPSHOT-001). valid_until 은 여전히 별건."""
     import inspect
     render_src = inspect.getsource(pdf_svc._render_html)
     # 한글금액은 render() call 에 반드시 포함
     assert "total_hangul=" in render_src
-    # contact / valid_until 는 이번엔 미연결
-    assert "contact=" not in render_src
+    # contact = CONTACT-SNAPSHOT-001 로 연결 (quote.contact_name → 템플릿 slot)
+    assert "contact=" in render_src, "CONTACT-SNAPSHOT-001 wiring incomplete"
+    # valid_until 은 여전히 별건 (invented 유효기간 금지)
     assert "valid_until=" not in render_src
 
 
@@ -1188,11 +1188,57 @@ def test_FORM_FINAL3_receiver_wording_no_contact_uses_gwijung(monkeypatch):
     )
 
 
-def test_FORM_FINAL4_render_call_has_no_contact_no_valid_until():
-    """_render_html render 호출 소스에 'contact=' / 'valid_until=' 부재 (grep)."""
+def test_FORM_FINAL4_render_call_has_contact_no_valid_until():
+    """_render_html render 호출 소스: contact= 존재 (CONTACT-SNAPSHOT-001), valid_until= 부재 (grep)."""
     import inspect
     render_src = inspect.getsource(pdf_svc._render_html)
-    assert "contact=" not in render_src, "contact backend 연결 금지 (CONTACT-SNAPSHOT WO 소관)"
+    assert "contact=" in render_src, "CONTACT-SNAPSHOT-001: contact wiring 필수"
     assert "valid_until=" not in render_src, "invented validity 파생 kwargs 금지"
     # 유지되어야 하는 kwargs
     assert "total_hangul=" in render_src
+
+
+# ══════════════════════════════════════════════════════════════════
+# WO-MYPAGE-QUOTE-CONTACT-SNAPSHOT-001 · CONTACT-16 ~ CONTACT-18
+#   SoT = quotes.contact_name (기존 컬럼). 재조회 0 (frozen snapshot).
+# ══════════════════════════════════════════════════════════════════
+def test_CONTACT_16_pdf_render_no_contact_shows_gwijung(monkeypatch):
+    """quote.contact_name 미저장 → '{회사명} 귀중' 노출, '담당:' 미출력. (WO CONTACT-16)"""
+    _set_supplier_env(monkeypatch); _set_gotenberg_env(monkeypatch)
+    from services.member_quote_pdf_svc import (
+        _render_html, _supplier_config, _validate_snapshot, _quote_date_kst,
+    )
+    q = _issued_quote()
+    assert q.get("contact_name") is None, "fixture 전제 : contact_name 미포함"
+    item = _validate_snapshot(q); supplier = _supplier_config()
+    html = _render_html(q, item, supplier, _quote_date_kst(q["created_at"]))
+    assert "귀중" in html
+    assert "담당:" not in html
+    assert "귀하" not in html, "contact 없을 때 '귀하' wording 금지"
+
+
+def test_CONTACT_17_pdf_render_with_contact_shows_damdang_gwiha(monkeypatch):
+    """quote.contact_name='홍길동' → '담당: 홍길동 귀하' 노출, '귀중' 미출력. (WO CONTACT-17)"""
+    _set_supplier_env(monkeypatch); _set_gotenberg_env(monkeypatch)
+    from services.member_quote_pdf_svc import (
+        _render_html, _supplier_config, _validate_snapshot, _quote_date_kst,
+    )
+    q = _issued_quote(contact_name="홍길동")
+    item = _validate_snapshot(q); supplier = _supplier_config()
+    html = _render_html(q, item, supplier, _quote_date_kst(q["created_at"]))
+    assert "담당: 홍길동 귀하" in html
+    # 템플릿상 '귀중' 은 else 분기(회사명 뒤) 에만 존재 → contact 진입 시 HTML 어디에도 없음
+    assert "귀중" not in html
+
+
+def test_CONTACT_18_pdf_svc_no_companies_no_user_requery():
+    """pdf_svc 는 quotes.company_name / quotes.contact_name snapshot 만 사용 — companies/users 재조회 0. (WO CONTACT-18)"""
+    import inspect
+    src = inspect.getsource(pdf_svc)
+    # companies (PDF-11 과 겹치나 CONTACT WO 시점 명시적 재검증)
+    assert 'table("companies")' not in src
+    assert "table('companies')" not in src
+    # 사용자 마스터 재조회 금지 (담당자명은 quote.contact_name snapshot 에서 온다)
+    for tbl in ("users", "auth_users", "user_profiles"):
+        assert f'table("{tbl}")' not in src, f"pdf_svc 가 {tbl} 재조회하면 안 됨 (frozen snapshot only)"
+        assert f"table('{tbl}')" not in src, f"pdf_svc 가 {tbl} 재조회하면 안 됨 (frozen snapshot only)"

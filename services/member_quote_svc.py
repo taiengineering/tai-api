@@ -15,6 +15,14 @@ from services.time import now_kst
 MEMBER_SOURCES = ("member_auto", "member_custom")
 
 
+def normalize_contact_name(value: Optional[str]) -> Optional[str]:
+    """None/빈문자/공백 → None, 그 외 trim. 순수 이름만(직급·'님'·'귀하'·회사결합 금지 — 표시는 템플릿 담당)."""
+    if value is None:
+        return None
+    v = str(value).strip()
+    return v or None
+
+
 class MemberQuoteError(Exception):
     """도메인 오류. code 로 라우터가 HTTP 로 번역한다."""
     def __init__(self, code: str, message: str, http_status: int = 400):
@@ -145,12 +153,14 @@ def _company_name_snapshot(supabase, company_id) -> Optional[str]:
         return None
 
 
-def create_auto_quote(supabase, company_id, created_by, service_type, sector, tier_code, term_months):
+def create_auto_quote(supabase, company_id, created_by, service_type, sector, tier_code, term_months,
+                      contact_name=None):
     calc = calc_quote(supabase, service_type, sector, tier_code, term_months)  # 서버 재계산
     now = now_kst().isoformat()
     base_row = {
         "company_id": company_id, "company_name": _company_name_snapshot(supabase, company_id),
         "created_by": created_by, "source": "member_auto", "status_code": "ISSUED",
+        "contact_name": normalize_contact_name(contact_name),
         "service_type": calc["service_type"], "items": [_snapshot_item(calc)],
         "supply_amount": calc["supply_amount"], "vat_amount": calc["vat_amount"],
         "total_amount": calc["total_amount"], "is_active": True, "created_at": now, "updated_at": now,
@@ -158,11 +168,13 @@ def create_auto_quote(supabase, company_id, created_by, service_type, sector, ti
     return _insert_quote_with_unique_retry(supabase, base_row)
 
 
-def create_custom_quote(supabase, company_id, created_by, service_type, sector, request_title, request_detail):
+def create_custom_quote(supabase, company_id, created_by, service_type, sector, request_title, request_detail,
+                        contact_name=None):
     now = now_kst().isoformat()
     base_row = {
         "company_id": company_id, "company_name": _company_name_snapshot(supabase, company_id),
         "created_by": created_by, "source": "member_custom", "status_code": "REQUESTED",
+        "contact_name": normalize_contact_name(contact_name),
         "service_type": (service_type or "").upper() or None,
         "items": [], "supply_amount": 0, "vat_amount": 0, "total_amount": 0,
         # 요청내용: survey_data 를 member_custom 네임스페이스로(설문 흐름과 형태 충돌 없음) + memo 요약
