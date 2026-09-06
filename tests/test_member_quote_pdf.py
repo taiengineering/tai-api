@@ -1004,3 +1004,195 @@ def test_FINAL_validate_runs_before_find_existing():
     assert 0 <= idx_validate < idx_find, (
         "validate before find (BLOCKER-1). validate={} find={}".format(idx_validate, idx_find)
     )
+
+
+# ══════════════════════════════════════════════════════════════════
+# STEP 2B-FORM : v2 템플릿 드롭인 (파일명 동일) + 파생 헬퍼 (한글금액·유효기간) +
+#                업태/종목 env (선택). GENERATED_BY 는 멱등키 → 불변.
+#                FORM-1 _won_to_hangul · FORM-2 _valid_until_kst · FORM-3 biz env optional ·
+#                FORM-4 render new vars · FORM-5 regression (GENERATED_BY unchanged)
+# ══════════════════════════════════════════════════════════════════
+def test_FORM1_won_to_hangul_representative_values():
+    """계약 금액 3,946,800 / 0 / 경계값 / 큰 수 검증."""
+    from services.member_quote_pdf_svc import _won_to_hangul
+    # 대표 payload total_amount = 3,946,800
+    assert _won_to_hangul(3_946_800) == "삼백구십사만육천팔백원정"
+    # zero
+    assert _won_to_hangul(0) == "영원정"
+    assert _won_to_hangul(None) == "영원정"
+    # 단위 boundary
+    assert _won_to_hangul(10_000) == "일만원정"
+    assert _won_to_hangul(100_000_000) == "일억원정"
+    # 십/백/천 단위 축약 (일십/일백/일천은 십/백/천)
+    assert _won_to_hangul(10) == "십원정"
+    assert _won_to_hangul(100) == "백원정"
+    assert _won_to_hangul(1_000) == "천원정"
+    # 모든 자리 채운 수 : 문자열 non-empty + "원정" 종결 (스모크)
+    got = _won_to_hangul(1_234_567_890)
+    assert got.endswith("원정")
+    assert len(got) > 4
+
+
+def test_FORM2_valid_until_removed_no_business_rule():
+    """FINAL PATCH: 유효기간 규칙 발명 금지. _valid_until_kst 심볼 부재 + validity rule 흔적 0."""
+    import inspect
+    # 심볼 부재
+    assert getattr(pdf_svc, "_valid_until_kst", None) is None, (
+        "_valid_until_kst 는 삭제되어야 한다 (invented 30-day validity rule 금지)"
+    )
+    # 소스 grep : validity rule 흔적 0
+    src = inspect.getsource(pdf_svc)
+    assert "_valid_until" not in src
+    assert "valid_until" not in src
+    assert "timedelta(days=" not in src, "days 단위 timedelta 로 validity rule 만들지 말 것"
+    assert "유효기간" not in src
+
+
+def test_FORM3_biz_type_class_optional_not_required(monkeypatch):
+    """TAI_BIZ_TYPE / TAI_BIZ_CLASS 는 선택 — 없어도 _supplier_config 정상. 있으면 값 반영."""
+    _set_supplier_env(monkeypatch)
+    # 미설정 : 필수 검증 미포함 → 성공, 빈 문자열
+    monkeypatch.delenv("TAI_BIZ_TYPE", raising=False)
+    monkeypatch.delenv("TAI_BIZ_CLASS", raising=False)
+    cfg = pdf_svc._supplier_config()
+    assert cfg["biz_type"] == ""
+    assert cfg["biz_class"] == ""
+
+    # 설정 : 값 반영
+    monkeypatch.setenv("TAI_BIZ_TYPE", "서비스")
+    monkeypatch.setenv("TAI_BIZ_CLASS", "산업안전 관리 플랫폼")
+    cfg2 = pdf_svc._supplier_config()
+    assert cfg2["biz_type"] == "서비스"
+    assert cfg2["biz_class"] == "산업안전 관리 플랫폼"
+
+
+def test_FORM3b_biz_env_missing_does_not_raise(monkeypatch):
+    """biz_type/biz_class 는 필수 6종에 포함되지 않음 (없어도 QUOTE_SUPPLIER_CONFIG_MISSING 미발동)."""
+    _set_supplier_env(monkeypatch)
+    monkeypatch.delenv("TAI_BIZ_TYPE", raising=False)
+    monkeypatch.delenv("TAI_BIZ_CLASS", raising=False)
+    # 예외 없이 통과
+    cfg = pdf_svc._supplier_config()
+    assert "biz_type" in cfg and "biz_class" in cfg
+
+
+def test_FORM4_render_includes_hangul_no_exception(monkeypatch):
+    """_render_html 이 total_hangul 을 넘겨도 예외 없이 완료. contact/valid_until 은 미전달."""
+    _set_supplier_env(monkeypatch); _set_gotenberg_env(monkeypatch)
+    from services.member_quote_pdf_svc import (
+        _render_html, _supplier_config, _validate_snapshot, _quote_date_kst,
+    )
+    q = _issued_quote(company_id="C-A")
+    item = _validate_snapshot(q)
+    supplier = _supplier_config()
+    html = _render_html(q, item, supplier, _quote_date_kst(q["created_at"]))
+    # 한글금액이 렌더 결과에 실제 반영됨 (템플릿 슬롯 채워짐)
+    assert "삼백구십사만육천팔백원정" in html
+    # 회사명 / 금액 등 기존 슬롯은 그대로
+    assert "테스트 주식회사" in html
+    # contact 미연결 : contact 값 자체가 렌더 HTML 에 텍스트로 삽입되지 않음
+    #   (템플릿의 {% if contact %} 는 undefined 를 falsy 로 취급하여 자동 숨김)
+    assert "담당:" not in html
+
+
+def test_FORM4b_render_contact_and_validity_not_wired(monkeypatch):
+    """contact / valid_until 는 render kwargs 에 미포함 (CONTACT-SNAPSHOT · validity 정책 별건)."""
+    import inspect
+    render_src = inspect.getsource(pdf_svc._render_html)
+    # 한글금액은 render() call 에 반드시 포함
+    assert "total_hangul=" in render_src
+    # contact / valid_until 는 이번엔 미연결
+    assert "contact=" not in render_src
+    assert "valid_until=" not in render_src
+
+
+def test_FORM5_generated_by_unchanged_idempotency_key():
+    """멱등 키는 GENERATED_BY. v2 폼업그레이드에도 값 불변 = member_quote_pdf_v1."""
+    assert pdf_svc.GENERATED_BY == "member_quote_pdf_v1"
+
+
+def test_FORM5b_template_version_bumped_to_v2():
+    """TEMPLATE_VERSION 만 v2. _TEMPLATE_NAME(파일명) 은 dropin 유지."""
+    assert pdf_svc.TEMPLATE_VERSION == "member_quote_v2"
+    assert pdf_svc._TEMPLATE_NAME == "member_quote_v1.html"
+
+
+def test_FORM5c_file_name_and_tags_unchanged():
+    """register_generated 호출 계약 : file_name / tags 는 불변 (소스 grep)."""
+    import inspect
+    src = inspect.getsource(pdf_svc.issue_or_get_quote_pdf)
+    assert 'file_name="TAI_견적서_{}.pdf".format(quote.get("quote_no"))' in src
+    assert 'tags=["quote", "member_auto"]' in src
+
+
+# ══════════════════════════════════════════════════════════════════
+# STEP 2B-FORM FINAL PATCH — GPT 블로커 2건 대응
+#   BLOCKER-1: invented 30-day validity 완전 제거
+#   BLOCKER-2: 수신 wording 계약 복원 (contact 미연결 = "{회사명} 귀중")
+# ══════════════════════════════════════════════════════════════════
+def test_FORM_FINAL1_no_validity_text_in_rendered_html(monkeypatch):
+    """실렌더 HTML 에 '유효기간' 문자열 부재 (invented business rule 0)."""
+    _set_supplier_env(monkeypatch); _set_gotenberg_env(monkeypatch)
+    from services.member_quote_pdf_svc import (
+        _render_html, _supplier_config, _validate_snapshot, _quote_date_kst,
+    )
+    q = _issued_quote(company_id="C-A")
+    item = _validate_snapshot(q)
+    supplier = _supplier_config()
+    html = _render_html(q, item, supplier, _quote_date_kst(q["created_at"]))
+    assert "유효기간" not in html, "invented 유효기간(30일 등) 노출 금지"
+    # +30일 산출 문자열도 실렌더에 없어야 한다
+    assert "2026-10-06" not in html
+
+
+def test_FORM_FINAL2_valid_until_symbol_and_validity_rule_absent():
+    """_valid_until_kst 심볼 부재 + svc 소스에 어떤 validity rule (+30 / timedelta days) 도 없음."""
+    import inspect
+    # 심볼 부재
+    assert getattr(pdf_svc, "_valid_until_kst", None) is None
+    # 소스 grep
+    src = inspect.getsource(pdf_svc)
+    assert "_valid_until" not in src
+    assert "valid_until" not in src
+    assert "timedelta(days=" not in src
+    assert "유효기간" not in src
+    # import datetime 도 이번엔 미사용 → 제거되었어야 함
+    assert "\nimport datetime\n" not in src, (
+        "_valid_until_kst 삭제 후 datetime import 는 미사용 → 함께 삭제"
+    )
+
+
+def test_FORM_FINAL3_receiver_wording_no_contact_uses_gwijung(monkeypatch):
+    """contact 미전달 렌더 → '{회사명} 귀중' 포함, '담당:' 미출력."""
+    _set_supplier_env(monkeypatch); _set_gotenberg_env(monkeypatch)
+    from services.member_quote_pdf_svc import (
+        _render_html, _supplier_config, _validate_snapshot, _quote_date_kst,
+    )
+    q = _issued_quote(company_id="C-A")
+    item = _validate_snapshot(q)
+    supplier = _supplier_config()
+    html = _render_html(q, item, supplier, _quote_date_kst(q["created_at"]))
+    # 실렌더에 회사명 뒤 '귀중' (contact 미연결 분기)
+    assert "귀중" in html
+    # '테스트 주식회사'와 '귀중'이 같은 to div 근접에 나타나야 함 (근접성 스모크)
+    idx_name = html.find("테스트 주식회사")
+    idx_gwi = html.find("귀중", idx_name)
+    assert idx_name >= 0 and idx_gwi > idx_name and (idx_gwi - idx_name) < 200, (
+        "'{회사명} 귀중' 형태 근접 미검출 (BLOCKER-2 미완료)"
+    )
+    # 담당 줄은 나오지 않아야 함 (contact 미전달)
+    assert "담당:" not in html
+    # 기존 '귀하' wording (이전 v2 실수) 부재 — 확정 계약 위반이었음
+    assert "귀하" not in html, (
+        "contact 미연결 상태에서 '귀하' wording 금지 (담당자 있을 때만 담당 줄에 붙음)"
+    )
+
+
+def test_FORM_FINAL4_render_call_has_no_contact_no_valid_until():
+    """_render_html render 호출 소스에 'contact=' / 'valid_until=' 부재 (grep)."""
+    import inspect
+    render_src = inspect.getsource(pdf_svc._render_html)
+    assert "contact=" not in render_src, "contact backend 연결 금지 (CONTACT-SNAPSHOT WO 소관)"
+    assert "valid_until=" not in render_src, "invented validity 파생 kwargs 금지"
+    # 유지되어야 하는 kwargs
+    assert "total_hangul=" in render_src
