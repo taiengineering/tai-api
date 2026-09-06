@@ -647,6 +647,15 @@ def test_REV1_SNAPSHOT1_price_master_change_does_not_affect_existing_quote():
     stored = next(q for q in store["quotes"] if q["id"] == qid)
     assert stored["total_amount"] == 3_946_800
     assert stored["items"][0]["unit_amount"] == 299_000
+    item = stored["items"][0]
+    # 발급 당시 금액 4종 불변 (price_master.amount=999_999 변경 후에도)
+    assert item["unit_amount"]   == 299_000
+    assert item["supply_amount"] == 3_588_000
+    assert item["vat_amount"]    == 358_800
+    assert item["total_amount"]  == 3_946_800
+    # 상위 row 금액 == item snapshot 금액 (정본 일치)
+    assert stored["vat_amount"]   == item["vat_amount"]
+    assert stored["total_amount"] == item["total_amount"]
 
 
 # ── REV-1 QNO : quote_no atomic retry ───────────────────────────────

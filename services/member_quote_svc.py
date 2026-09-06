@@ -88,10 +88,12 @@ def calc_quote(supabase, service_type: str, sector: str, tier_code: str,
 
 
 def _snapshot_item(c: Dict[str, Any]) -> Dict[str, Any]:
-    # 발행 당시 가격 snapshot — 이후 price_master.amount 변경돼도 기존 견적 불변
+    # 발행 당시 가격 snapshot(정본) — 이후 price_master.amount 변경돼도 기존 견적 불변.
+    # PDF 가 이 item 을 정본으로 읽도록 금액 3종(supply/vat/total) 모두 고정.
     return {k: c[k] for k in ("price_id", "service_type", "sector", "tier_code",
                               "display_name", "billing_unit", "unit_amount",
-                              "term_months", "quantity", "supply_amount", "vat_rate")}
+                              "term_months", "quantity", "supply_amount",
+                              "vat_rate", "vat_amount", "total_amount")}
 
 
 def _gen_quote_no_candidate() -> str:
