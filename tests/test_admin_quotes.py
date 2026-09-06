@@ -1189,3 +1189,103 @@ def test_P1_14_auth_and_pdf_eligibility_unchanged_after_patch():
             "supply_amount": 100, "vat_amount": 10, "total_amount": 110,
         })
     assert e.value.code == "PDF_NOT_AVAILABLE"
+
+
+# ════════════════════════════════════════════════════════════════════
+# STEP 2D-A PATCH-2 : CUSTOM PDF-READY SNAPSHOT GUARD
+#   블로커 : custom_issue 가 원 row 의 5필수 중 company_name 하나만 검증했음.
+#             → 나머지(id/company_id/quote_no/created_at)가 None/blank 이면
+#               발행은 성공하지만 뒤이은 PDF 발급이 QUOTE_SNAPSHOT_INCOMPLETE 로 실패.
+#   해소 : conditional UPDATE 이전에 pdf _validate_snapshot 상위 5필드를 동일하게 검증.
+#          누락 시 409 + UPDATE 0 + master 재조회 0.
+# ════════════════════════════════════════════════════════════════════
+def _make_custom_row_missing(field):
+    """5필드 중 하나만 지운 REQUESTED row 생성."""
+    row = _member_custom_requested()
+    row[field] = None
+    return row
+
+
+@requires_client
+def test_P2_01_company_id_missing_returns_409_no_update():
+    store = _base_store([_make_custom_row_missing("company_id")])
+    c = _client(_admin_user(), store)
+    r = c.post("/admin/quotes/q-custom-1/custom/issue", json=_custom_issue_body())
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "QUOTE_SNAPSHOT_INCOMPLETE"
+    assert not any(op == "update" and t == "quotes" for (t, op) in c._fake.log)
+
+
+@requires_client
+def test_P2_02_quote_no_missing_returns_409_no_update():
+    store = _base_store([_make_custom_row_missing("quote_no")])
+    c = _client(_admin_user(), store)
+    r = c.post("/admin/quotes/q-custom-1/custom/issue", json=_custom_issue_body())
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "QUOTE_SNAPSHOT_INCOMPLETE"
+    assert not any(op == "update" and t == "quotes" for (t, op) in c._fake.log)
+
+
+@requires_client
+def test_P2_03_quote_no_blank_returns_409_no_update():
+    """공백만 있는 문자열도 미비로 취급 (id/created_at 등 str 필드 공통)."""
+    row = _member_custom_requested()
+    row["quote_no"] = "   "
+    store = _base_store([row])
+    c = _client(_admin_user(), store)
+    r = c.post("/admin/quotes/q-custom-1/custom/issue", json=_custom_issue_body())
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "QUOTE_SNAPSHOT_INCOMPLETE"
+    assert not any(op == "update" and t == "quotes" for (t, op) in c._fake.log)
+
+
+@requires_client
+def test_P2_04_company_name_missing_returns_409_no_update():
+    """PATCH-1 계약 회귀 (5필드 루프 안으로 흡수됨)."""
+    store = _base_store([_make_custom_row_missing("company_name")])
+    c = _client(_admin_user(), store)
+    r = c.post("/admin/quotes/q-custom-1/custom/issue", json=_custom_issue_body())
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "QUOTE_SNAPSHOT_INCOMPLETE"
+    assert not any(op == "update" and t == "quotes" for (t, op) in c._fake.log)
+
+
+@requires_client
+def test_P2_05_created_at_missing_returns_409_no_update():
+    store = _base_store([_make_custom_row_missing("created_at")])
+    c = _client(_admin_user(), store)
+    r = c.post("/admin/quotes/q-custom-1/custom/issue", json=_custom_issue_body())
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "QUOTE_SNAPSHOT_INCOMPLETE"
+    assert not any(op == "update" and t == "quotes" for (t, op) in c._fake.log)
+
+
+@requires_client
+def test_P2_06_valid_snapshot_issues_same_row_to_ISSUED():
+    """5필드 모두 유효 → 정상 same-row ISSUED 전환."""
+    store = _base_store([_member_custom_requested()])
+    c = _client(_admin_user(), store)
+    r = c.post("/admin/quotes/q-custom-1/custom/issue", json=_custom_issue_body())
+    assert r.status_code == 200
+    saved = store["quotes"][0]
+    assert saved["id"] == "q-custom-1"
+    assert saved["status_code"] == "ISSUED"
+
+
+@requires_client
+def test_P2_07_issued_row_passes_pdf_validate_snapshot():
+    """최종 증거 : custom_issue 로 저장된 실제 row 를 pdf_svc._validate_snapshot 에 직접 투입.
+    hand-crafted fixture 가 아니라 실 발행 결과가 PDF 계약을 그대로 통과해야
+    "발행 = PDF 완결" 이 성립한다."""
+    store = _base_store([_member_custom_requested()])
+    c = _client(_admin_user(), store)
+    r = c.post("/admin/quotes/q-custom-1/custom/issue", json=_custom_issue_body())
+    assert r.status_code == 200
+
+    # store 에서 발행된 실 row 를 그대로 가져와 PDF validator 에 투입.
+    issued_row = store["quotes"][0]
+    assert issued_row["source"] == "member_custom"
+    assert issued_row["status_code"] == "ISSUED"
+
+    # 예외 없이 통과해야 한다. (예외 발생 시 발행 = PDF 완결 계약이 깨진 것)
+    pdf_svc._validate_snapshot(issued_row)

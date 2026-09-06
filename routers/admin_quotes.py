@@ -220,14 +220,17 @@ def custom_issue(quote_id: str, body: CustomIssueBody,
             "code": "NOT_CUSTOM_REQUESTED",
             "message": "개별 견적이 아닙니다.",
         })
-    # PATCH-1 : 기존 row 의 company_name snapshot 이 누락된 경우 발행 불가.
-    #   (재조회로 우회하지 않는다 — 스냅샷 무결성이 위반된 상태에서 발행 금지)
-    cn = row.get("company_name")
-    if not cn or not str(cn).strip():
-        raise HTTPException(status_code=409, detail={
-            "code": "QUOTE_SNAPSHOT_INCOMPLETE",
-            "message": "견적의 회사명 정보가 누락되어 발행할 수 없습니다.",
-        })
+    # PATCH-2 : 발행 = PDF 완결 보장.
+    #   PDF validator(_validate_snapshot) 의 상위 필수 5필드를 발행 전 검증한다.
+    #   누락값을 companies / users / price_master 재조회로 보충하지 않는다
+    #   (frozen snapshot 검증만; 우회 발행 금지). 실패 시 conditional UPDATE 진입 자체를 봉쇄.
+    for key in ("id", "company_id", "quote_no", "company_name", "created_at"):
+        v = row.get(key)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            raise HTTPException(status_code=409, detail={
+                "code": "QUOTE_SNAPSHOT_INCOMPLETE",
+                "message": "견적 필수 정보가 누락되어 발행할 수 없습니다.",
+            })
     service_type, sector = _resolve_custom_context(row)
     try:
         result = svc.issue_custom(
