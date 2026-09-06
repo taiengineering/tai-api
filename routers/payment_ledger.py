@@ -230,9 +230,11 @@ def admin_list_tax_invoices(
     query = (
         sb.table("tax_invoice_requests")
         .select(
+            # PATCH-2 A-P1: tax_invoice_id 추가 — ADMIN_MANUAL 은 payment_id NULL 이라
+            # 원장 조회에 tax_invoice_id 를 사용한다. 자동/고객경로는 payment_id 로 계속 조회.
             "id, payment_id, company_id, source, status, requested_at, created_at, "
             "invoicee_company_name, invoicee_business_number, proof_type, "
-            "supply_amount, vat_amount, total_amount",
+            "supply_amount, vat_amount, total_amount, tax_invoice_id",
             count="exact",
         )
         .eq("doc_type", "TAX_INVOICE")
@@ -282,6 +284,26 @@ def admin_list_tax_invoices(
             invoice_projection_ok = False
             log.warning("[admin tax] invoice projection 실패: %s", e)
 
+    # PATCH-2 A-P1: ADMIN_MANUAL 은 payment_id NULL — tax_invoice_id 로 별도 배치.
+    # 두 배치 모두 doc_type=TAX_INVOICE 경계 유지. N+1 = 0 (상수 쿼리).
+    manual_invoice_ids = list({r.get("tax_invoice_id") for r in reqs
+                               if r.get("source") == "ADMIN_MANUAL" and r.get("tax_invoice_id")})
+    inv_by_manual_id: dict = {}
+    if manual_invoice_ids:
+        try:
+            inv2 = (
+                sb.table("tax_invoices")
+                .select("id, invoice_kind, status, issued_at, nts_confirm_num")
+                .in_("id", manual_invoice_ids)
+                .eq("doc_type", "TAX_INVOICE")
+                .execute()
+            )
+            for iv in (inv2.data or []):
+                inv_by_manual_id[iv.get("id")] = iv
+        except Exception as e:  # noqa: BLE001
+            invoice_projection_ok = False
+            log.warning("[admin tax] manual invoice projection 실패: %s", e)
+
     st_rows = [{"id": pid} for pid in pay_ids]
     _attach_tax_status(sb, st_rows)
     tax_status_by_pid = {r["id"]: r["tax_status"] for r in st_rows}
@@ -291,33 +313,77 @@ def admin_list_tax_invoices(
         pid = r.get("payment_id")
         pay = payments.get(pid, {})
         co = companies.get(r.get("company_id"), {})
-        if invoice_projection_ok:
-            invs = inv_by_pid.get(pid, [])
-            originals = [i for i in invs if i.get("invoice_kind") != "MODIFIED"]
-            modifieds = [i for i in invs if i.get("invoice_kind") == "MODIFIED"]
-            orig = next((i for i in originals if str(i.get("status")) == "ISSUED"), None)
-            if orig is None and originals:
-                orig = originals[0]
-            inv_fields = {
-                "original_invoice_status": (orig or {}).get("status"),
-                "issued_at": (orig or {}).get("issued_at"),
-                "nts_confirm_num": (orig or {}).get("nts_confirm_num"),
-                "has_modified_invoice": len(modifieds) > 0,
-                "modified_count": len(modifieds),
-            }
+        is_manual = r.get("source") == "ADMIN_MANUAL"
+        rst = str(r.get("status") or "").upper()
+
+        if is_manual:
+            # PATCH-2 A-P2: manual invoice lookup — 실패시 UNKNOWN + null fields.
+            tii = r.get("tax_invoice_id")
+            manual_inv = inv_by_manual_id.get(tii) if (tii and invoice_projection_ok) else None
+            if invoice_projection_ok:
+                inv_fields = {
+                    "original_invoice_status": (manual_inv or {}).get("status"),
+                    "issued_at": (manual_inv or {}).get("issued_at"),
+                    "nts_confirm_num": (manual_inv or {}).get("nts_confirm_num"),
+                    "has_modified_invoice": False,   # 수동은 원본만
+                    "modified_count": 0,
+                }
+            else:
+                inv_fields = {
+                    "original_invoice_status": None,
+                    "issued_at": None,
+                    "nts_confirm_num": None,
+                    "has_modified_invoice": None,
+                    "modified_count": None,
+                }
+            # PATCH-2 A-P3: ADMIN_MANUAL 전용 tax_status 파생 — _attach_tax_status 불변.
+            #   REQUESTED/PROCESSING/FAILED/REVIEW_REQUIRED/CANCELLED → 그대로
+            #   ISSUED AND linked invoice.status=ISSUED         → ISSUED
+            #   ISSUED BUT invoice 없음/불일치/lookup 실패        → UNKNOWN (fail-safe)
+            if not invoice_projection_ok:
+                manual_tax_status = "UNKNOWN"
+            elif rst in ("REQUESTED", "PROCESSING", "FAILED", "REVIEW_REQUIRED", "CANCELLED"):
+                manual_tax_status = rst
+            elif rst == "ISSUED":
+                if manual_inv is not None and str(manual_inv.get("status")) == "ISSUED":
+                    manual_tax_status = "ISSUED"
+                else:
+                    manual_tax_status = "UNKNOWN"
+            else:
+                manual_tax_status = "UNKNOWN"
+            tax_status = manual_tax_status
         else:
-            inv_fields = {
-                "original_invoice_status": None,
-                "issued_at": None,
-                "nts_confirm_num": None,
-                "has_modified_invoice": None,
-                "modified_count": None,
-            }
+            if invoice_projection_ok:
+                invs = inv_by_pid.get(pid, [])
+                originals = [i for i in invs if i.get("invoice_kind") != "MODIFIED"]
+                modifieds = [i for i in invs if i.get("invoice_kind") == "MODIFIED"]
+                orig = next((i for i in originals if str(i.get("status")) == "ISSUED"), None)
+                if orig is None and originals:
+                    orig = originals[0]
+                inv_fields = {
+                    "original_invoice_status": (orig or {}).get("status"),
+                    "issued_at": (orig or {}).get("issued_at"),
+                    "nts_confirm_num": (orig or {}).get("nts_confirm_num"),
+                    "has_modified_invoice": len(modifieds) > 0,
+                    "modified_count": len(modifieds),
+                }
+            else:
+                inv_fields = {
+                    "original_invoice_status": None,
+                    "issued_at": None,
+                    "nts_confirm_num": None,
+                    "has_modified_invoice": None,
+                    "modified_count": None,
+                }
+            tax_status = tax_status_by_pid.get(pid, "UNKNOWN")
+
         item = {
             "request_id": r.get("id"),
             "payment_id": pid,
             "requested_at": r.get("requested_at") or r.get("created_at"),
             "request_status": r.get("status"),
+            # [WO-TAX-INVOICE-MANUAL-01] source 노출: 자동/고객/관리자수동 구분 UI 용
+            "source": r.get("source"),
             "company_name": r.get("invoicee_company_name") or co.get("name"),
             "business_number": r.get("invoicee_business_number") or co.get("business_number"),
             "payment_method": pay.get("pg_method"),
@@ -327,7 +393,7 @@ def admin_list_tax_invoices(
             "supply_amount": r.get("supply_amount") if r.get("supply_amount") is not None else pay.get("supply_amount"),
             "vat_amount": r.get("vat_amount") if r.get("vat_amount") is not None else pay.get("vat_amount"),
             "total_amount": r.get("total_amount") if r.get("total_amount") is not None else pay.get("total_amount"),
-            "tax_status": tax_status_by_pid.get(pid, "UNKNOWN"),
+            "tax_status": tax_status,
             "invoice_projection_ok": invoice_projection_ok,
         }
         item.update(inv_fields)
@@ -391,8 +457,24 @@ def admin_tax_invoice_detail(request_id: str, current_user: dict = Depends(_requ
             "business_category": co.get("business_category"),
         }
 
+    # PATCH-2 BLOCKER-1B: source 별 원장 조회 분기.
+    #   ADMIN_MANUAL → tax_invoice_id 로 ORIGINAL 하나 조회 (수정발급 없음)
+    #   그 외        → payment_id 로 원장 전체(원본+수정) 조회 (기존 계약 완전 불변)
+    is_manual_detail = r.get("source") == "ADMIN_MANUAL"
     invs = []
-    if pid:
+    if is_manual_detail:
+        tii = r.get("tax_invoice_id")
+        if tii:
+            iv = (
+                sb.table("tax_invoices").select(
+                    "id, invoice_kind, status, issued_at, nts_confirm_num, "
+                    "modify_code, adjustment_reason, refund_ref, "
+                    "supply_cost, tax, total_amount, created_at"
+                ).eq("id", tii).eq("doc_type", "TAX_INVOICE")
+                .order("created_at", desc=False).execute()
+            )
+            invs = iv.data or []
+    elif pid:
         iv = (
             sb.table("tax_invoices").select(
                 "id, invoice_kind, status, issued_at, nts_confirm_num, "
@@ -404,9 +486,25 @@ def admin_tax_invoice_detail(request_id: str, current_user: dict = Depends(_requ
     originals = [i for i in invs if i.get("invoice_kind") != "MODIFIED"]
     modifieds = [i for i in invs if i.get("invoice_kind") == "MODIFIED"]
 
-    st_rows = [{"id": pid}] if pid else []
-    _attach_tax_status(sb, st_rows)
-    tax_status = st_rows[0]["tax_status"] if st_rows else "UNKNOWN"
+    # PATCH-2 A-P3: ADMIN_MANUAL 은 _attach_tax_status 사용 금지 (payment 기반이라 부적합).
+    #   별도 파생 규칙: REQUESTED/FAILED/... → 그대로 / ISSUED+linked ISSUED → ISSUED /
+    #   ISSUED but no linked → UNKNOWN / lookup 실패(tii는 있는데 조회결과 비어있음) → UNKNOWN
+    if is_manual_detail:
+        rst = str(r.get("status") or "").upper()
+        original_inv = originals[0] if originals else None
+        if rst in ("REQUESTED", "PROCESSING", "FAILED", "REVIEW_REQUIRED", "CANCELLED"):
+            tax_status = rst
+        elif rst == "ISSUED":
+            if original_inv is not None and str(original_inv.get("status")) == "ISSUED":
+                tax_status = "ISSUED"
+            else:
+                tax_status = "UNKNOWN"
+        else:
+            tax_status = "UNKNOWN"
+    else:
+        st_rows = [{"id": pid}] if pid else []
+        _attach_tax_status(sb, st_rows)
+        tax_status = st_rows[0]["tax_status"] if st_rows else "UNKNOWN"
 
     return {"status": "success", "data": {
         "request": {
@@ -441,6 +539,107 @@ def admin_tax_invoice_detail(request_id: str, current_user: dict = Depends(_requ
             "modified": modifieds,
         },
     }}
+
+
+# ══════════════════════════════════════════════════════════════════
+# [WO-TAX-INVOICE-MANUAL-01 WP-B / WP-C / WP-D / WP-E] 관리자 수동발행 라우터
+# ══════════════════════════════════════════════════════════════════
+class ManualRequestBody(BaseModel):
+    """관리자 수동 발행 요청 body. 라우터 계층 whitelist — extra 필드 거부."""
+    idempotency_key: str
+    company_mode: str  # "EXISTING" | "MANUAL"
+    company_id: Optional[str] = None
+    # MANUAL 모드 (invoicee_* 세트)
+    invoicee_business_number: Optional[str] = None
+    invoicee_company_name: Optional[str] = None
+    invoicee_representative_name: Optional[str] = None
+    invoicee_email: Optional[str] = None
+    invoicee_address: Optional[str] = None
+    invoicee_business_type: Optional[str] = None
+    invoicee_business_category: Optional[str] = None
+    # 공통
+    supply_amount: int
+    vat_amount: int
+    supply_date: str            # YYYY-MM-DD (사용자 명시 입력)
+    item_name: str
+    issue_reason: str
+
+    class Config:
+        extra = "forbid"        # payment_id/source/status 등 우회 주입 거부
+
+
+# ── WP-B 업체조회 API (role 001) ──
+@router.get("/admin/tax-invoice-companies")
+def admin_search_companies(
+    q: Optional[str] = Query(None, description="회사명·사업자번호 검색어(ilike)"),
+    current_user: dict = Depends(_require_admin),
+):
+    """관리자 수동발행용 회사 검색. companies SoT. ≤20건 반환.
+
+    선택 후에도 서버가 companies 에서 재조회하여 snapshot 구성 (프론트 법적정보 불신뢰).
+    이 엔드포인트는 검색 편의 — 실제 발행은 POST manual 에서 companies 재조회.
+    """
+    sb = get_supabase()
+    query = sb.table("companies").select(
+        "id, name, business_number, representative_name, contact_email, contact_phone, "
+        "zipcode, address, address_road, address_detail, business_type, business_category"
+    )
+    if q and q.strip():
+        term = q.strip()
+        query = query.or_(f"name.ilike.%{term}%,business_number.ilike.%{term}%")
+    query = query.limit(20)
+    try:
+        res = query.execute()
+        items = res.data or []
+    except Exception as e:  # noqa: BLE001
+        log.warning("[MANUAL_TAX] 회사 검색 실패: %s", e)
+        items = []
+    return {"status": "success", "data": {"items": items, "count": len(items)}}
+
+
+# ── WP-C/D 수동 발행요청 생성 (role 001) ──
+@router.post("/admin/tax-invoices/manual")
+def admin_create_manual_tax_invoice_request(body: ManualRequestBody,
+                                            current_user: dict = Depends(_require_admin)):
+    """관리자 수동 세금계산서 발행요청 생성. 신규 201 / idempotent 기존 200 / 400·409·422 오류.
+
+    - source = ADMIN_MANUAL, payment_id = NULL
+    - EXISTING 모드: 서버가 companies 재조회 → snapshot (프론트 법적정보 무시)
+    - MANUAL 모드: body.invoicee_* 로 snapshot, companies INSERT 금지
+    - total_amount = supply + vat (서버 재계산; 프론트 total 무시)
+    - idempotency_key partial UNIQUE (DDL) → 더블클릭/재시도 안전
+    """
+    from services import tax_manual_svc as m_svc
+    from services.tax_invoice_request_svc import MemberTaxError
+    sb = get_supabase()
+    try:
+        row, created = m_svc.create_manual_request(sb, current_user["id"], body.dict())
+    except MemberTaxError as e:
+        detail = e.payload if e.payload is not None else {"code": e.code, "detail": e.detail}
+        raise HTTPException(status_code=e.status_code, detail=detail) from e
+    return {"status": "success", "data": row, "created": created}
+
+
+# ── WP-E 수동 발행 processor (role 001) ──
+@router.post("/admin/tax-invoices/manual/{request_id}/process")
+def admin_process_manual_tax_invoice(request_id: str,
+                                     current_user: dict = Depends(_require_admin)):
+    """관리자 수동 발행 processor. 기존 payment 기반 /invoice/tax 와 분리.
+
+    - GUARD: source=ADMIN_MANUAL, status ∈ {REQUESTED, FAILED}, payment_id NULL
+    - INVOICE_LIVE OFF → 423 (mutation 0, request.status=REQUESTED 유지 — FAILED 오염 금지)
+    - LIVE + provider 성공 → tax_invoices(payment_id NULL, ISSUED) + request.status=ISSUED
+    - provider 실패 → request/ledger FAILED, retry 가능 (same mgt_key, 중복 invoice 0)
+    """
+    from services import tax_manual_svc as m_svc
+    from services.tax_invoice_request_svc import MemberTaxError
+    sb = get_supabase()
+    try:
+        row, outcome = m_svc.process_manual_request(sb, request_id, current_user["id"])
+    except MemberTaxError as e:
+        detail = e.payload if e.payload is not None else {"code": e.code, "detail": e.detail}
+        raise HTTPException(status_code=e.status_code, detail=detail) from e
+    return {"status": "success", "data": {"outcome": outcome, "request": row}}
 
 
 # ── 결제 원장 통합 조회 ──

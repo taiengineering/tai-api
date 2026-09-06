@@ -312,6 +312,123 @@ def issue_tax_invoice(payment_id: str, invoicee: Dict[str, str], supply_date: Op
         raise InvoiceError(400, f"세금계산서 발행 실패: {e}", "ISSUE_FAILED") from e
 
 
+# ── [WO-TAX-INVOICE-MANUAL-01 WP-E] 관리자 수동 세금계산서 발행 ──
+def _make_manual_mgt_key(request_id: str) -> str:
+    """수동 발행 mgt_key: 기존 _make_mgt_key(TX prefix) 형식 유지, request_id 기반 deterministic.
+
+    같은 request_id 재시도 → 같은 mgt_key → UNIQUE(doc_type, mgt_key) 로 중복 invoice 방지.
+    """
+    return f"TX-M-{str(request_id).replace('-', '')[:18]}"
+
+
+def issue_manual_tax_invoice(request_id: str, invoicee: Dict[str, str],
+                             supply: int, vat: int, total: int,
+                             supply_date: str, item_name: str,
+                             company_id: Optional[str] = None,
+                             created_by: Optional[str] = None) -> dict:
+    """관리자 수동 세금계산서 발행 (payment-less).
+
+    기존 issue_tax_invoice (payment 기반) 는 건드리지 않음. 신규 함수.
+    Popbill seam _popbill_issue_tax 재사용 (복제 금지).
+
+    - INVOICE_LIVE OFF → 423 (mutation 0). 호출측에서 request.status 를 REQUESTED 로 유지.
+    - 중복 방지: mgt_key = _make_manual_mgt_key(request_id) deterministic + UNIQUE(doc_type, mgt_key).
+      더블클릭/재시도 → 기존 ledger row 반환 (idempotent).
+    - 성공 시 tax_invoices row: payment_id NULL, invoice_kind ORIGINAL, ISSUED, nts_confirm_num.
+    """
+    for k in ("corpNum", "corpName", "ceoName"):
+        if not invoicee.get(k):
+            raise InvoiceError(400, f"공급받는자 정보({k})가 필요합니다.", "INVOICEE_INCOMPLETE")
+
+    supply_i, vat_i, total_i = int(supply or 0), int(vat or 0), int(total or 0)
+    if supply_i < 0 or vat_i < 0:
+        raise InvoiceError(400, "공급가액/부가세는 0 이상이어야 합니다.", "INVALID_AMOUNT")
+    if supply_i + vat_i != total_i:
+        raise InvoiceError(409, "금액 구성(공급가+부가세=합계)이 일치하지 않습니다.",
+                           "MANUAL_AMOUNT_INCONSISTENT")
+
+    write_date = _fmt_supply_date(supply_date)
+    mgt_key = _make_manual_mgt_key(request_id)
+
+    sb = get_supabase()
+
+    # 기존 ledger row (재시도 시 재사용). doc_type=TAX_INVOICE + mgt_key 로 조회.
+    existing = None
+    try:
+        res = (sb.table("tax_invoices").select(
+            "id, mgt_key, status, nts_confirm_num, invoice_kind, doc_type"
+        ).eq("mgt_key", mgt_key).eq("doc_type", "TAX_INVOICE").limit(1).execute())
+        if res.data:
+            existing = res.data[0]
+    except Exception:  # noqa: BLE001
+        existing = None
+
+    invoice_id: Optional[str] = None
+    if existing:
+        st = existing.get("status")
+        if st == "ISSUED":
+            return {"invoice_id": existing["id"],
+                    "nts_confirm_num": existing.get("nts_confirm_num") or "",
+                    "status": "ISSUED"}
+        if st == "PENDING":
+            raise InvoiceError(409, "발행 처리가 진행 중입니다.", "INVOICE_ALREADY_PROCESSING")
+        if st == "CANCELLED":
+            raise InvoiceError(409, "취소 이력이 있어 확인이 필요합니다.", "INVOICE_HISTORY_REVIEW")
+        # FAILED → 재사용 (같은 row 를 다시 시도)
+        invoice_id = existing["id"]
+
+    # gate 선행 (mutation 0 원칙)
+    _assert_invoice_live(None, "TAX_INVOICE", "MANUAL_ISSUE", created_by)
+
+    conf = _popbill_conf()
+    if not conf["corp_num"]:
+        raise InvoiceError(501, "공급자(TAI) 사업자번호(TAI_CORP_NUM)가 설정되지 않았습니다.")
+    display_item = (item_name or "TAI Safe 서비스").strip() or "TAI Safe 서비스"
+
+    if invoice_id:
+        _update_invoice(invoice_id, {
+            "status": "PENDING", "supply_cost": supply_i, "tax": vat_i,
+            "total_amount": total_i, "updated_at": now_iso(),
+        })
+    else:
+        invoice_id = _insert_invoice({
+            "payment_id": None,                       # ADMIN_MANUAL 은 payment-less
+            "company_id": company_id,                 # EXISTING 모드에서만 채워짐
+            "doc_type": "TAX_INVOICE", "invoice_kind": "ORIGINAL", "mgt_key": mgt_key,
+            "invoicee_type": "사업자", "supply_cost": supply_i, "tax": vat_i,
+            "total_amount": total_i, "status": "PENDING",
+            "created_by": created_by, "created_at": now_iso(),
+        })
+
+    try:
+        pr = _popbill_issue_tax(conf, mgt_key=mgt_key, write_date=write_date,
+                                supply=supply_i, tax=vat_i, total=total_i,
+                                invoicee=invoicee, item_name=display_item)
+        _update_invoice(invoice_id, {
+            "status": "ISSUED", "nts_confirm_num": pr["nts"], "issued_at": now_iso(),
+            "popbill_raw": {"code": pr.get("code"), "message": pr.get("message"),
+                            "ntsConfirmNum": pr["nts"]},
+        })
+        audit_svc.record("INVOICE_MANUAL_ISSUE", "payment", entity_id=request_id,
+                         actor_id=created_by,
+                         after={"invoice_id": invoice_id, "doc_type": "TAX_INVOICE",
+                                "nts": pr["nts"], "amount": total_i,
+                                "manual_request_id": request_id})
+        return {"invoice_id": invoice_id, "nts_confirm_num": pr["nts"], "status": "ISSUED"}
+    except InvoiceError:
+        _update_invoice(invoice_id, {"status": "FAILED"})
+        raise
+    except Exception as e:  # noqa: BLE001
+        _update_invoice(invoice_id, {"status": "FAILED",
+                                     "popbill_raw": {"error": str(e)}})
+        audit_svc.record("INVOICE_MANUAL_ISSUE", "payment", entity_id=request_id,
+                         actor_id=created_by,
+                         after={"invoice_id": invoice_id, "status": "FAILED",
+                                "error": str(e), "manual_request_id": request_id})
+        raise InvoiceError(400, f"수동 세금계산서 발행 실패: {e}",
+                           "MANUAL_ISSUE_FAILED") from e
+
+
 # ── 현금영수증 발행 ──
 def issue_cash_receipt(payment_id: str, trade_usage: str, identity_num: str,
                        created_by: Optional[str] = None) -> dict:

@@ -70,6 +70,11 @@ jobs:
         run: pytest tests/test_tax_auto_modified.py -q --tb=short
       - name: Tax invoice amount projection tests
         run: pytest tests/test_tax_auto_amount_projection.py -q --tb=short
+      # [WO-TAX-INVOICE-MANUAL-01] 관리자 수동발행 (migration static + create/process/company search)
+      - name: Tax invoice manual migration static tests
+        run: pytest tests/test_tax_manual_migration_static.py -q --tb=short
+      - name: Tax invoice manual create/process/company search tests
+        run: pytest tests/test_tax_manual.py -q --tb=short
 
   db-integrity:
     name: "DB Integrity"
