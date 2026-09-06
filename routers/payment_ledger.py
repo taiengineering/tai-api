@@ -318,6 +318,8 @@ def admin_list_tax_invoices(
             "payment_id": pid,
             "requested_at": r.get("requested_at") or r.get("created_at"),
             "request_status": r.get("status"),
+            # [WO-TAX-INVOICE-MANUAL-01] source 노출: 자동/고객/관리자수동 구분 UI 용
+            "source": r.get("source"),
             "company_name": r.get("invoicee_company_name") or co.get("name"),
             "business_number": r.get("invoicee_business_number") or co.get("business_number"),
             "payment_method": pay.get("pg_method"),
