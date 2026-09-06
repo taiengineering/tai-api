@@ -10,6 +10,8 @@
   새 엔진/발행 로직 없음 — tax_invoice_requests/tax_invoices/payments/companies 조회만.
   doc_type=TAX_INVOICE 경계 필수(현금영수증 제외). N+1 금지(배치). tax_status 는 payment_ops._attach_tax_status 재사용.
   처리/재시도는 기존 processor(/tax-invoice-requests/{id}/process) 그대로 사용(신규 발행 엔드포인트 없음).
+  PATCH-1: (1) admin list tax_invoices 배치 조회 fail-safe — 조회 실패를 '없음'으로 위장하지 않고
+  invoice_projection_ok=false + 관련 필드 null. (2) q 검색에 companies fallback(name/business_number) 포함.
 """
 from __future__ import annotations
 
@@ -196,13 +198,29 @@ def admin_list_tax_invoices(
     status: Optional[str] = Query(None),
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
-    q: Optional[str] = Query(None, description="회사명·사업자번호(발행스냅샷) 검색"),
+    q: Optional[str] = Query(None, description="회사명·사업자번호 검색(스냅샷+companies fallback)"),
     payment_id: Optional[str] = Query(None),
     request_id: Optional[str] = Query(None),
     current_user: dict = Depends(_require_admin),
 ):
     """세금계산서 발행요청 운영 목록. doc_type=TAX_INVOICE 만(현금영수증 제외). 배치 조회(N+1 금지)."""
     sb = get_supabase()
+
+    # BLOCKER-2: q 검색은 발행요청 스냅샷 + companies fallback(표시값과 일치) 모두 대상.
+    #   companies 검색 1쿼리(상수)로 company_id 목록을 구해 request or 조건에 포함(로우 후처리 검색 아님).
+    matched_company_ids: list = []
+    if q:
+        try:
+            cres = (
+                sb.table("companies").select("id")
+                .or_(f"name.ilike.%{q}%,business_number.ilike.%{q}%")
+                .execute()
+            )
+            matched_company_ids = [c.get("id") for c in (cres.data or []) if c.get("id")]
+        except Exception as e:  # noqa: BLE001
+            log.warning("[admin tax] company 검색 실패: %s", e)
+            matched_company_ids = []
+
     query = (
         sb.table("tax_invoice_requests")
         .select(
@@ -223,7 +241,10 @@ def admin_list_tax_invoices(
     if date_to:
         query = query.lte("created_at", date_to)
     if q:
-        query = query.or_(f"invoicee_company_name.ilike.%{q}%,invoicee_business_number.ilike.%{q}%")
+        ors = [f"invoicee_company_name.ilike.%{q}%", f"invoicee_business_number.ilike.%{q}%"]
+        for cid in matched_company_ids:
+            ors.append(f"company_id.eq.{cid}")
+        query = query.or_(",".join(ors))
 
     offset = (page - 1) * size
     res = query.order("created_at", desc=True).range(offset, offset + size - 1).execute()
@@ -235,17 +256,23 @@ def admin_list_tax_invoices(
     payments = _batch_map(sb, "payments", pay_ids, "id", "id, total_amount, pg_method, proof_type, paid_at")
     companies = _batch_map(sb, "companies", co_ids, "id", "id, name, business_number")
 
+    # BLOCKER-1: invoice 배치 조회 fail-safe — 실패를 '없음'으로 위장하지 않고 null + ok=false.
+    invoice_projection_ok = True
     inv_by_pid: dict = {}
     if pay_ids:
-        inv = (
-            sb.table("tax_invoices")
-            .select("payment_id, invoice_kind, status, issued_at, nts_confirm_num")
-            .in_("payment_id", pay_ids)
-            .eq("doc_type", "TAX_INVOICE")
-            .execute()
-        )
-        for iv in (inv.data or []):
-            inv_by_pid.setdefault(iv.get("payment_id"), []).append(iv)
+        try:
+            inv = (
+                sb.table("tax_invoices")
+                .select("payment_id, invoice_kind, status, issued_at, nts_confirm_num")
+                .in_("payment_id", pay_ids)
+                .eq("doc_type", "TAX_INVOICE")
+                .execute()
+            )
+            for iv in (inv.data or []):
+                inv_by_pid.setdefault(iv.get("payment_id"), []).append(iv)
+        except Exception as e:  # noqa: BLE001 — fail-safe(조회 실패 != 0건)
+            invoice_projection_ok = False
+            log.warning("[admin tax] invoice projection 실패: %s", e)
 
     st_rows = [{"id": pid} for pid in pay_ids]
     _attach_tax_status(sb, st_rows)
@@ -256,13 +283,29 @@ def admin_list_tax_invoices(
         pid = r.get("payment_id")
         pay = payments.get(pid, {})
         co = companies.get(r.get("company_id"), {})
-        invs = inv_by_pid.get(pid, [])
-        originals = [i for i in invs if i.get("invoice_kind") != "MODIFIED"]
-        modifieds = [i for i in invs if i.get("invoice_kind") == "MODIFIED"]
-        orig = next((i for i in originals if str(i.get("status")) == "ISSUED"), None)
-        if orig is None and originals:
-            orig = originals[0]
-        items.append({
+        if invoice_projection_ok:
+            invs = inv_by_pid.get(pid, [])
+            originals = [i for i in invs if i.get("invoice_kind") != "MODIFIED"]
+            modifieds = [i for i in invs if i.get("invoice_kind") == "MODIFIED"]
+            orig = next((i for i in originals if str(i.get("status")) == "ISSUED"), None)
+            if orig is None and originals:
+                orig = originals[0]
+            inv_fields = {
+                "original_invoice_status": (orig or {}).get("status"),
+                "issued_at": (orig or {}).get("issued_at"),
+                "nts_confirm_num": (orig or {}).get("nts_confirm_num"),
+                "has_modified_invoice": len(modifieds) > 0,
+                "modified_count": len(modifieds),
+            }
+        else:
+            inv_fields = {
+                "original_invoice_status": None,
+                "issued_at": None,
+                "nts_confirm_num": None,
+                "has_modified_invoice": None,
+                "modified_count": None,
+            }
+        item = {
             "request_id": r.get("id"),
             "payment_id": pid,
             "requested_at": r.get("requested_at") or r.get("created_at"),
@@ -273,12 +316,10 @@ def admin_list_tax_invoices(
             "proof_type": r.get("proof_type") or pay.get("proof_type"),
             "total_amount": r.get("total_amount") if r.get("total_amount") is not None else pay.get("total_amount"),
             "tax_status": tax_status_by_pid.get(pid, "UNKNOWN"),
-            "original_invoice_status": (orig or {}).get("status"),
-            "issued_at": (orig or {}).get("issued_at"),
-            "nts_confirm_num": (orig or {}).get("nts_confirm_num"),
-            "has_modified_invoice": len(modifieds) > 0,
-            "modified_count": len(modifieds),
-        })
+            "invoice_projection_ok": invoice_projection_ok,
+        }
+        item.update(inv_fields)
+        items.append(item)
 
     return {"status": "success", "data": {"items": items, "total": total, "page": page, "size": size,
             "total_pages": (total + size - 1) // size if total else 0}}

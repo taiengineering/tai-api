@@ -1,7 +1,8 @@
-"""WO-TAX-INVOICE-ADMIN-01 — 관리자 세금계산서 조회 API 단위테스트.
+"""WO-TAX-INVOICE-ADMIN-01 — 관리자 세금계산서 조회 API 단위테스트 (PATCH-1 반영).
 
 GET /payments/admin/tax-invoices (list), /{request_id} (detail). role 001.
-doc_type=TAX_INVOICE 경계(현금영수증 제외) · N+1 금지 · tax_status 재사용 검증.
+doc_type=TAX_INVOICE 경계(현금영수증 제외) · N+1 금지 · tax_status 재사용.
+PATCH-1: invoice 배치 조회 fail-safe(ok=false), q 검색 companies fallback.
 운영 DB/네트워크 불사용.
 """
 import routers.payment_ledger as pl
@@ -97,14 +98,18 @@ class FakeSupabase:
 ADMIN = {'role_code': '001', 'id': 'admin1'}
 
 
-def _list(store, monkeypatch, **kw):
-    f = FakeSupabase(store)
+def _list_raw(f, monkeypatch, **kw):
     monkeypatch.setattr(pl, 'get_supabase', lambda: f)
     params = dict(page=1, size=50, status=None, date_from=None, date_to=None,
                   q=None, payment_id=None, request_id=None, current_user=ADMIN)
     params.update(kw)
-    out = pl.admin_list_tax_invoices(**params)
-    return out['data'], f
+    return pl.admin_list_tax_invoices(**params)['data']
+
+
+def _list(store, monkeypatch, **kw):
+    f = FakeSupabase(store)
+    data = _list_raw(f, monkeypatch, **kw)
+    return data, f
 
 
 def _detail(store, monkeypatch, request_id):
@@ -138,15 +143,11 @@ def test_a1_a2_a3_role_guard(monkeypatch):
     app.include_router(pl.router)
     f = FakeSupabase(_store(reqs=[_req('r1', 'p1')]))
     monkeypatch.setattr(pl, 'get_supabase', lambda: f)
-
-    # 001 → 200
     app.dependency_overrides[get_current_user] = lambda: {'role_code': '001', 'id': 'a'}
     c = TestClient(app)
     assert c.get('/payments/admin/tax-invoices').status_code == 200
-    # non-001 → 403
     app.dependency_overrides[get_current_user] = lambda: {'role_code': '002', 'id': 'b'}
     assert c.get('/payments/admin/tax-invoices').status_code == 403
-    # unauth → 401
     from fastapi import HTTPException
     def _raise():
         raise HTTPException(status_code=401, detail='unauth')
@@ -159,26 +160,23 @@ def test_a1_a2_a3_role_guard(monkeypatch):
 def test_a4_a5_tax_only_cash_excluded(monkeypatch):
     store = _store(
         reqs=[_req('r1', 'p1', status='REQUESTED'),
-              # CASH_RECEIPT 요청은 목록에 포함되지 않아야 함
               _req('rc', 'pc', status='ISSUED', doc_type='CASH_RECEIPT')],
         invoices=[{'payment_id': 'p1', 'doc_type': 'CASH_RECEIPT', 'invoice_kind': 'ORIGINAL', 'status': 'ISSUED'}],
-        payments=[{'id': 'p1', 'total_amount': 100000, 'pg_method': 'DirectBank', 'proof_type': 'TAX_INVOICE', 'paid_at': '2026-09-01'}],
     )
     data, _ = _list(store, monkeypatch)
-    ids = [i['request_id'] for i in data['items']]
-    assert ids == ['r1']                       # A4: TAX_INVOICE 요청만
+    assert [i['request_id'] for i in data['items']] == ['r1']
     row = data['items'][0]
-    assert row['tax_status'] == 'REQUESTED'     # A5: 현금영수증 ISSUED 는 발행완료로 오인 안됨
+    assert row['tax_status'] == 'REQUESTED'
     assert row['original_invoice_status'] is None
     assert row['has_modified_invoice'] is False
+    assert row['invoice_projection_ok'] is True
 
 
 # ── A6/A7/A8 상태 매핑 ──
 def test_a6_original_issued(monkeypatch):
     store = _store(reqs=[_req('r1', 'p1', status='ISSUED')],
                    invoices=[{'payment_id': 'p1', 'doc_type': 'TAX_INVOICE', 'invoice_kind': 'ORIGINAL', 'status': 'ISSUED', 'issued_at': '2026-09-02', 'nts_confirm_num': 'NTS-1'}])
-    data, _ = _list(store, monkeypatch)
-    row = data['items'][0]
+    row = _list(store, monkeypatch)[0]['items'][0]
     assert row['tax_status'] == 'ISSUED'
     assert row['original_invoice_status'] == 'ISSUED'
     assert row['issued_at'] == '2026-09-02'
@@ -199,23 +197,22 @@ def test_a7_modified(monkeypatch):
 
 def test_a8_failed(monkeypatch):
     store = _store(reqs=[_req('r1', 'p1', status='FAILED')])
-    row = _list(store, monkeypatch)[0]['items'][0]
-    assert row['tax_status'] == 'FAILED'
+    assert _list(store, monkeypatch)[0]['items'][0]['tax_status'] == 'FAILED'
 
 
-# ── A10 조회 실패 → UNKNOWN (tax_status 재사용) ──
-def test_a10_partial_failure_unknown(monkeypatch):
+# ── T1(구 A10) invoice projection 조회 실패 → 500 아님 + ok=false + 필드 null, 확정 REQUESTED 유지 ──
+def test_t1_invoice_projection_failsafe(monkeypatch):
     store = _store(reqs=[_req('r1', 'p1', status='REQUESTED')])
-    f = FakeSupabase(store, fail_tables=['tax_invoice_requests'])
-    # requests 조회는 목록용으로도 쓰이므로, tax_status 내부 request 조회만 실패시키기 위해
-    # 별도로 invoice 조회만 실패하는 케이스로 검증
-    store2 = _store(reqs=[_req('r1', 'p1', status='REQUESTED')])
-    f2 = FakeSupabase(store2, fail_tables=['tax_invoices'])
-    monkeypatch.setattr(pl, 'get_supabase', lambda: f2)
-    params = dict(page=1, size=50, status=None, date_from=None, date_to=None,
-                  q=None, payment_id=None, request_id=None, current_user=ADMIN)
-    row = pl.admin_list_tax_invoices(**params)['data']['items'][0]
-    # 최신 요청이 있으므로 REQUESTED (확정 사실). invoice 조회 실패는 요청상태에 영향없음.
+    f = FakeSupabase(store, fail_tables=['tax_invoices'])
+    data = _list_raw(f, monkeypatch)   # 예외 전파하면 여기서 raise → 테스트 실패
+    row = data['items'][0]
+    assert row['invoice_projection_ok'] is False
+    assert row['original_invoice_status'] is None
+    assert row['issued_at'] is None
+    assert row['nts_confirm_num'] is None
+    assert row['has_modified_invoice'] is None
+    assert row['modified_count'] is None
+    # 확정 요청(REQUESTED)은 _attach_tax_status 의미상 유지
     assert row['tax_status'] == 'REQUESTED'
 
 
@@ -237,12 +234,37 @@ def test_a13_status_filter(monkeypatch):
     assert [i['request_id'] for i in data['items']] == ['r2']
 
 
-# ── A14 search filter (q) ──
-def test_a14_search_filter(monkeypatch):
+# ── T3(구 A14) snapshot 회사명 검색 = HIT ──
+def test_t3_snapshot_name_search(monkeypatch):
     reqs = [_req('r1', 'p1', status='REQUESTED', invoicee_company_name='가나다상회', invoicee_business_number='111-11-11111'),
             _req('r2', 'p1', status='REQUESTED', invoicee_company_name='다른회사', invoicee_business_number='222-22-22222')]
     data, _ = _list(_store(reqs=reqs), monkeypatch, q='가나다')
     assert [i['request_id'] for i in data['items']] == ['r1']
+
+
+# ── T4 snapshot 없음 + companies.name 검색 = HIT ──
+def test_t4_company_name_fallback_search(monkeypatch):
+    # r1: company co1(데모상호), r2: company co2(다른곳). 스냅샷 없음.
+    reqs = [_req('r1', 'p1', status='REQUESTED', company_id='co1'),
+            _req('r2', 'p1', status='REQUESTED', company_id='co2')]
+    companies = [
+        {'id': 'co1', 'name': '데모상호', 'business_number': '123-45-67890'},
+        {'id': 'co2', 'name': '다른곳', 'business_number': '999-99-99999'},
+    ]
+    data, _ = _list(_store(reqs=reqs, companies=companies), monkeypatch, q='데모')
+    assert [i['request_id'] for i in data['items']] == ['r1']       # companies.name fallback HIT
+
+
+# ── T5 snapshot 없음 + companies.business_number 검색 = HIT ──
+def test_t5_company_biznum_fallback_search(monkeypatch):
+    reqs = [_req('r1', 'p1', status='REQUESTED', company_id='co1'),
+            _req('r2', 'p1', status='REQUESTED', company_id='co2')]
+    companies = [
+        {'id': 'co1', 'name': '데모상호', 'business_number': '123-45-67890'},
+        {'id': 'co2', 'name': '다른곳', 'business_number': '999-99-99999'},
+    ]
+    data, _ = _list(_store(reqs=reqs, companies=companies), monkeypatch, q='999-99')
+    assert [i['request_id'] for i in data['items']] == ['r2']       # companies.business_number fallback HIT
 
 
 # ── A15/A16/A17 detail ──
@@ -255,9 +277,8 @@ def test_a15_a16_detail_original_and_modified(monkeypatch):
         ])
     data, _ = _detail(store, monkeypatch, 'r1')
     assert data['invoice_ledger']['original']['nts_confirm_num'] == 'NTS-1'
-    assert len(data['invoice_ledger']['modified']) == 1                 # A16 배열
+    assert len(data['invoice_ledger']['modified']) == 1
     assert data['invoice_ledger']['modified'][0]['modify_code'] == 2
-    # A15: request 스냅샷 우선
     assert data['company_snapshot']['source'] == 'request_snapshot'
     assert data['company_snapshot']['company_name'] == '발행스냅상호'
 
@@ -267,23 +288,22 @@ def test_a17_cash_receipt_ledger_excluded(monkeypatch):
         reqs=[_req('r1', 'p1', status='REQUESTED')],
         invoices=[{'payment_id': 'p1', 'doc_type': 'CASH_RECEIPT', 'invoice_kind': 'ORIGINAL', 'status': 'ISSUED', 'created_at': '2026-09-02'}])
     data, _ = _detail(store, monkeypatch, 'r1')
-    assert data['invoice_ledger']['original'] is None                   # A17: 현금영수증 제외
+    assert data['invoice_ledger']['original'] is None
     assert data['invoice_ledger']['modified'] == []
 
 
 def test_detail_company_fallback_when_no_snapshot(monkeypatch):
-    store = _store(reqs=[_req('r1', 'p1', status='REQUESTED')])  # invoicee_* 없음
+    store = _store(reqs=[_req('r1', 'p1', status='REQUESTED')])
     data, _ = _detail(store, monkeypatch, 'r1')
     assert data['company_snapshot']['source'] == 'company'
     assert data['company_snapshot']['company_name'] == '데모상호'
 
 
-# ── A18 N+1 = 0 (row당 query 없음) ──
+# ── A18 N+1 = 0 (q 없을 때 row당 query 없음) ──
 def test_a18_no_n_plus_1(monkeypatch):
     reqs = [_req('r%d' % i, 'p%d' % i, status='REQUESTED') for i in range(1, 6)]
     payments = [{'id': 'p%d' % i, 'total_amount': 100000, 'pg_method': 'Card', 'proof_type': 'CARD_RECEIPT', 'paid_at': '2026-09-01'} for i in range(1, 6)]
-    store = _store(reqs=reqs, payments=payments)
-    data, f = _list(store, monkeypatch)
+    data, f = _list(_store(reqs=reqs, payments=payments), monkeypatch)
     assert len(data['items']) == 5
-    # requests1 + payments1 + companies1 + tax_invoices1 + _attach_tax_status(2) = 상수(≈8), row수 비례 X
+    # requests1 + payments1 + companies1 + tax_invoices1 + _attach_tax_status(2) = 상수(≈8)
     assert f.counter['n'] <= 8
