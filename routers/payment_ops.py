@@ -15,6 +15,12 @@
 [2026-09-05 FE-0] GET /payments/my 투영 보정: v_payments_list 에 proof_type 가 없어
   payments 테이블을 명시 컴럼(proof_type 포함)으로 직접 조회. company ownership·envelope 불변.
   관리자 list_payments 는 v_payments_list 그대로 유지.
+
+[2026-09-06 FE-0-2] GET /payments/my 각 행에 tax_status(세금계산서 원장 상태, 사실값) 추가.
+  PATCH-1: tax_invoices/tax_invoice_requests 를 doc_type=TAX_INVOICE 로 한정(현금영수증 오인 방지).
+  조회 실패는 NONE(미발급)가 아니라 UNKNOWN(fail-closed)로 표시. 확정 사실은 부분실패에도 사용.
+  tax_invoices.payment_id / tax_invoice_requests.payment_id 를 배치 2쿼리로 조회(N+1 금지).
+  envelope 불변(행에 필드 추가만). 정책 판정 아니라 원장 상태 조회—프론트는 라벨만 매핑.
 """
 from __future__ import annotations
 
@@ -34,6 +40,87 @@ from services.time import now_kst
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/payments", tags=["결제"])
+
+
+def _attach_tax_status(supabase, rows: list) -> None:
+    """각 결제행에 tax_status(세금계산서 원장 상태, 사실값) 부여. N+1 금지 — 배치 2쿼리.
+
+    값: MODIFIED(수정발급) / ISSUED(발행완료) / PROCESSING / REQUESTED / FAILED /
+         REVIEW_REQUIRED / CANCELLED / NONE(미발급) / UNKNOWN(상태 확인 불가)
+
+    PATCH-1 가드:
+      - tax_invoices 는 세금계산서+현금영수증 공용 원장이므로 doc_type=TAX_INVOICE 로 한정
+        (CASH_RECEIPT 는 tax_status 계산에 절대 참여하지 않음).
+      - 조회 실패는 NONE 가 아니다. 둘 다 조회 성공과 기록 부재가 확인될 때만 NONE,
+        그 외에 확정 사실이 없으면 UNKNOWN(fail-closed).
+
+    파생 우선순위:
+      1) TAX_INVOICE MODIFIED ISSUED  → MODIFIED
+      2) TAX_INVOICE ORIGINAL ISSUED 또는 최신 요청 ISSUED → ISSUED
+      3) 최신 TAX_INVOICE 요청 존재 → 그 상태
+      4) invoice_lookup_ok AND request_lookup_ok → NONE
+      5) 그 외 → UNKNOWN
+    정책 판정이 아닌 원장 사실 조회이다.
+    """
+    ids = [r["id"] for r in rows if r.get("id")]
+    if not ids:
+        for r in rows:
+            r["tax_status"] = "NONE"
+        return
+
+    invoice_lookup_ok = True
+    request_lookup_ok = True
+    issued_original: set = set()
+    issued_modified: set = set()
+    try:
+        inv = (
+            supabase.table("tax_invoices")
+            .select("payment_id, invoice_kind, status")
+            .in_("payment_id", ids)
+            .eq("doc_type", "TAX_INVOICE")
+            .execute()
+        )
+        for iv in (inv.data or []):
+            if str(iv.get("status")) == "ISSUED":
+                pid = iv.get("payment_id")
+                if iv.get("invoice_kind") == "MODIFIED":
+                    issued_modified.add(pid)
+                else:
+                    issued_original.add(pid)
+    except Exception as e:  # noqa: BLE001 — fail-closed(UNKNOWN)
+        invoice_lookup_ok = False
+        log.warning("[tax_status] tax_invoices lookup failed: %s", e)
+
+    latest_req: dict = {}
+    try:
+        reqs = (
+            supabase.table("tax_invoice_requests")
+            .select("payment_id, status, created_at")
+            .in_("payment_id", ids)
+            .eq("doc_type", "TAX_INVOICE")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        for rq in (reqs.data or []):
+            pid = rq.get("payment_id")
+            if pid and pid not in latest_req:  # desc 정렬 → 첫 등장이 최신
+                latest_req[pid] = rq.get("status")
+    except Exception as e:  # noqa: BLE001 — fail-closed(UNKNOWN)
+        request_lookup_ok = False
+        log.warning("[tax_status] tax_invoice_requests lookup failed: %s", e)
+
+    for r in rows:
+        pid = r.get("id")
+        if pid in issued_modified:
+            r["tax_status"] = "MODIFIED"
+        elif pid in issued_original or latest_req.get(pid) == "ISSUED":
+            r["tax_status"] = "ISSUED"
+        elif pid in latest_req:
+            r["tax_status"] = latest_req[pid]
+        elif invoice_lookup_ok and request_lookup_ok:
+            r["tax_status"] = "NONE"
+        else:
+            r["tax_status"] = "UNKNOWN"
 
 
 @router.get("")
@@ -102,6 +189,8 @@ def list_my_payments(
 
     FE-0: v_payments_list 에 proof_type 가 없으므로 payments 테이블을 명시 컴럼으로
     직접 조회한다(proof_type 포함). 응답 envelope 와 company ownership 은 그대로 유지.
+
+    FE-0-2(PATCH-1): 각 행에 tax_status(세금계산서 원장 상태, 사실값) 추가. envelope 불변.
     """
     company_id = current_user.get("company_id")
     if not company_id:
@@ -129,10 +218,12 @@ def list_my_payments(
     offset = (page - 1) * size
     res = q.order("created_at", desc=True).range(offset, offset + size - 1).execute()
     total = res.count or 0
+    rows = res.data or []
+    _attach_tax_status(supabase, rows)
     return {
         "status": "success",
         "data": {
-            "items": res.data or [],
+            "items": rows,
             "total": total,
             "page": page,
             "size": size,
