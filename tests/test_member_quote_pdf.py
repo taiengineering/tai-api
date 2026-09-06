@@ -768,3 +768,239 @@ def test_CONFIG3_missing_message_does_not_leak_values(monkeypatch):
     assert "홍길동" not in msg
     assert "123-45-67890" not in msg
     assert "테헤란로" not in msg
+
+
+# ══════════════════════════════════════════════════════════════════
+# STEP 2B FINAL PATCH : BLOCKER-1(validate 먼저) + BLOCKER-2(top snapshot) + PATCH-3(signed URL)
+# ══════════════════════════════════════════════════════════════════
+def _reuse_only_env(monkeypatch, *, existing_doc):
+    """FINAL-1/2 helper: 기존 PDF 존재 상태 + Gotenberg/register/signed URL 호출 카운트 spy."""
+    from services import document_svc as ds
+    _set_supplier_env(monkeypatch); _set_gotenberg_env(monkeypatch)
+    counts = {"reg": 0, "url": 0, "att": 0, "render": 0, "url_calls": []}
+
+    async def fake_att(t, i):
+        counts["att"] += 1
+        return [existing_doc]
+
+    async def fake_reg(**k):
+        counts["reg"] += 1
+        return {"id": "should-not-be-called"}
+
+    async def fake_url(doc_id, ttl):
+        counts["url"] += 1
+        counts["url_calls"].append(doc_id)
+        return "https://signed.example/" + doc_id
+
+    def fake_render(html, *, trace_id=None, timeout=30.0):
+        counts["render"] += 1
+        return _VALID_PDF_BYTES
+
+    monkeypatch.setattr(ds, "get_attachments", fake_att)
+    monkeypatch.setattr(ds, "register_generated", fake_reg)
+    monkeypatch.setattr(ds, "get_signed_url", fake_url)
+    monkeypatch.setattr(pdf_svc, "render_html_pdf", fake_render)
+    return counts
+
+
+@requires_client
+def test_FINAL1_existing_pdf_does_not_bypass_source_check(monkeypatch):
+    """member_custom/REQUESTED + 기존 PDF 존재 → 409 PDF_NOT_AVAILABLE + render/signed URL 호출 0."""
+    from services import document_svc as ds
+    existing = {"id": "doc-old", "company_id": "C-A",
+                "generated_by": "member_quote_pdf_v1", "source": "AUTO_GENERATED"}
+    counts = _reuse_only_env(monkeypatch, existing_doc=existing)
+
+    store = _base_store(_issued_quote(source="member_custom", status_code="REQUESTED"),
+                        companies=[{"id": "C-A", "name": "TAI"}])
+    app = FastAPI(); app.include_router(mq.router)
+    app.dependency_overrides[mq.get_current_user] = lambda: _company_user("C-A", "U-1")
+    fake = FakeSupabase(store); mq.get_supabase = lambda: fake; ds.get_supabase = lambda: fake
+    c = TestClient(app)
+
+    r = c.post("/me/quotes/q-1/pdf")
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "PDF_NOT_AVAILABLE"
+    # 재사용 우회 방지 : 기존 doc 이 있어도 검증 실패 시 signed URL / render 호출 0
+    assert counts["url"] == 0, "재사용 경로에서도 검증 우회 금지 — signed URL 호출 0"
+    assert counts["render"] == 0
+    assert counts["reg"] == 0
+
+
+@requires_client
+def test_FINAL2_existing_pdf_does_not_bypass_status_check(monkeypatch):
+    """member_auto/non-ISSUED + 기존 PDF 존재 → 409, 우회 없음."""
+    from services import document_svc as ds
+    existing = {"id": "doc-old", "company_id": "C-A",
+                "generated_by": "member_quote_pdf_v1", "source": "AUTO_GENERATED"}
+    counts = _reuse_only_env(monkeypatch, existing_doc=existing)
+
+    store = _base_store(_issued_quote(status_code="DRAFT"),
+                        companies=[{"id": "C-A", "name": "TAI"}])
+    app = FastAPI(); app.include_router(mq.router)
+    app.dependency_overrides[mq.get_current_user] = lambda: _company_user("C-A", "U-1")
+    fake = FakeSupabase(store); mq.get_supabase = lambda: fake; ds.get_supabase = lambda: fake
+    c = TestClient(app)
+
+    r = c.post("/me/quotes/q-1/pdf")
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "PDF_NOT_AVAILABLE"
+    assert counts["url"] == 0 and counts["render"] == 0 and counts["reg"] == 0
+
+
+@pytest.mark.parametrize("missing_key,bad_value", [
+    ("quote_no", None), ("quote_no", ""), ("quote_no", "   "),
+    ("company_name", None), ("company_name", ""), ("company_name", "   "),
+    ("created_at", None), ("created_at", ""), ("created_at", "   "),
+])
+def test_FINAL3_4_5_top_snapshot_incomplete(monkeypatch, missing_key, bad_value):
+    """quote_no / company_name / created_at 누락(None·''·공백) → 409, live company/price fallback 0."""
+    from services import document_svc as ds
+    q = _issued_quote()
+    q[missing_key] = bad_value
+
+    # companies / price_master 재조회 감시 카운터
+    reads = {"companies": 0, "price_master": 0}
+    orig_table = FakeSupabase.table
+
+    class _CountFake(FakeSupabase):
+        def table(self, name):
+            if name in reads:
+                reads[name] += 1
+            return orig_table(self, name)
+
+    _set_supplier_env(monkeypatch); _set_gotenberg_env(monkeypatch)
+    async def _no_att(t, i):
+        return []
+    async def _no_reg(**k):
+        raise AssertionError("register_generated 호출 금지 (검증 실패 경로)")
+    async def _no_url(d, t):
+        raise AssertionError("signed URL 호출 금지 (검증 실패 경로)")
+
+    monkeypatch.setattr(ds, "get_attachments", _no_att)
+    monkeypatch.setattr(ds, "register_generated", _no_reg)
+    monkeypatch.setattr(ds, "get_signed_url", _no_url)
+    render_calls = {"n": 0}
+
+    def _no_render(*a, **k):
+        render_calls["n"] += 1
+        raise AssertionError("Gotenberg render 호출 금지 (검증 실패 경로)")
+
+    monkeypatch.setattr(pdf_svc, "render_html_pdf", _no_render)
+
+    store = _base_store(q, companies=[{"id": q.get("company_id") or "C-A", "name": "TAI"}])
+    app = FastAPI(); app.include_router(mq.router)
+    app.dependency_overrides[mq.get_current_user] = lambda: _company_user(
+        q.get("company_id") or "C-A", "U-1")
+    fake = _CountFake(store); mq.get_supabase = lambda: fake; ds.get_supabase = lambda: fake
+    c = TestClient(app)
+
+    r = c.post("/me/quotes/{}/pdf".format(q.get("id") or "q-1"))
+    # id 자체가 None/"" 인 경우는 router 에서 quote_id path param 을 신뢰하므로 svc 검증까지 도달.
+    # 어느 경우든 200 아님이 규약.
+    assert r.status_code == 409, (
+        "상위 snapshot 누락({}={!r}) 은 반드시 409, got {}".format(missing_key, bad_value, r.status_code)
+    )
+    body = r.json()["detail"]
+    assert body["code"] == "QUOTE_SNAPSHOT_INCOMPLETE"
+    # live fallback 재조회 0 (companies · price_master · Gotenberg · document insert 어느 것도 발생하지 않음)
+    assert reads["companies"] == 0, "companies 재조회 금지 (frozen snapshot 만)"
+    assert reads["price_master"] == 0, "price_master 재조회 금지 (frozen snapshot 만)"
+    assert render_calls["n"] == 0
+
+
+@requires_client
+def test_FINAL6_existing_doc_signed_url_none_returns_503(monkeypatch):
+    """기존 doc 재사용 경로에서 signed URL None → 503 PDF_DOWNLOAD_UNAVAILABLE."""
+    from services import document_svc as ds
+    existing = {"id": "doc-old", "company_id": "C-A",
+                "generated_by": "member_quote_pdf_v1", "source": "AUTO_GENERATED"}
+    _set_supplier_env(monkeypatch); _set_gotenberg_env(monkeypatch)
+
+    async def _att(t, i): return [existing]
+    async def _reg(**k): raise AssertionError("reg 금지")
+    async def _url_none(d, t): return None
+    monkeypatch.setattr(ds, "get_attachments", _att)
+    monkeypatch.setattr(ds, "register_generated", _reg)
+    monkeypatch.setattr(ds, "get_signed_url", _url_none)
+    monkeypatch.setattr(pdf_svc, "render_html_pdf", lambda *a, **k: _VALID_PDF_BYTES)
+
+    store = _base_store(_issued_quote(), companies=[{"id": "C-A", "name": "TAI"}])
+    app = FastAPI(); app.include_router(mq.router)
+    app.dependency_overrides[mq.get_current_user] = lambda: _company_user("C-A", "U-1")
+    fake = FakeSupabase(store); mq.get_supabase = lambda: fake; ds.get_supabase = lambda: fake
+    c = TestClient(app)
+
+    r = c.post("/me/quotes/q-1/pdf")
+    assert r.status_code == 503
+    assert r.json()["detail"]["code"] == "PDF_DOWNLOAD_UNAVAILABLE"
+    # false-success 방지 : 응답에 url: null 등이 반환되면 안 된다
+    assert "url" not in r.json().get("data", {})
+
+
+@requires_client
+def test_FINAL7_new_doc_signed_url_none_returns_503(monkeypatch):
+    """신규 doc 생성 경로에서도 signed URL None → 503."""
+    from services import document_svc as ds
+    _set_supplier_env(monkeypatch); _set_gotenberg_env(monkeypatch)
+
+    async def _att(t, i): return []
+    async def _reg(**k):
+        return {"id": "doc-new", "company_id": k["company_id"], "file_name": k["file_name"]}
+    async def _url_empty(d, t): return "   "     # blank 도 fail
+    monkeypatch.setattr(ds, "get_attachments", _att)
+    monkeypatch.setattr(ds, "register_generated", _reg)
+    monkeypatch.setattr(ds, "get_signed_url", _url_empty)
+    monkeypatch.setattr(pdf_svc, "render_html_pdf", lambda *a, **k: _VALID_PDF_BYTES)
+
+    store = _base_store(_issued_quote(), companies=[{"id": "C-A", "name": "TAI"}])
+    app = FastAPI(); app.include_router(mq.router)
+    app.dependency_overrides[mq.get_current_user] = lambda: _company_user("C-A", "U-1")
+    fake = FakeSupabase(store); mq.get_supabase = lambda: fake; ds.get_supabase = lambda: fake
+    c = TestClient(app)
+
+    r = c.post("/me/quotes/q-1/pdf")
+    assert r.status_code == 503
+    assert r.json()["detail"]["code"] == "PDF_DOWNLOAD_UNAVAILABLE"
+
+
+@requires_client
+def test_FINAL8_signed_url_exception_returns_503_no_raw(monkeypatch):
+    """get_signed_url 예외 → 503 controlled. raw 예외 message 미노출."""
+    from services import document_svc as ds
+    _set_supplier_env(monkeypatch); _set_gotenberg_env(monkeypatch)
+
+    async def _att(t, i): return []
+    async def _reg(**k):
+        return {"id": "doc-new", "company_id": k["company_id"], "file_name": k["file_name"]}
+    async def _url_raise(d, t):
+        raise RuntimeError("supabase storage exploded: secret-token-abc123")
+    monkeypatch.setattr(ds, "get_attachments", _att)
+    monkeypatch.setattr(ds, "register_generated", _reg)
+    monkeypatch.setattr(ds, "get_signed_url", _url_raise)
+    monkeypatch.setattr(pdf_svc, "render_html_pdf", lambda *a, **k: _VALID_PDF_BYTES)
+
+    store = _base_store(_issued_quote(), companies=[{"id": "C-A", "name": "TAI"}])
+    app = FastAPI(); app.include_router(mq.router)
+    app.dependency_overrides[mq.get_current_user] = lambda: _company_user("C-A", "U-1")
+    fake = FakeSupabase(store); mq.get_supabase = lambda: fake; ds.get_supabase = lambda: fake
+    c = TestClient(app)
+
+    r = c.post("/me/quotes/q-1/pdf")
+    assert r.status_code == 503
+    body = r.json()["detail"]
+    assert body["code"] == "PDF_DOWNLOAD_UNAVAILABLE"
+    # raw 예외 message / 시크릿이 노출되면 안 된다
+    assert "supabase storage exploded" not in body["message"]
+    assert "secret-token-abc123" not in body["message"]
+
+
+def test_FINAL_validate_runs_before_find_existing():
+    """소스 레벨: issue_or_get_quote_pdf 안에서 _validate_snapshot 이 _find_existing_pdf 보다 먼저 호출."""
+    import inspect
+    src = inspect.getsource(pdf_svc.issue_or_get_quote_pdf)
+    idx_validate = src.find("_validate_snapshot(")
+    idx_find = src.find("_find_existing_pdf(")
+    assert 0 <= idx_validate < idx_find, (
+        "validate before find (BLOCKER-1). validate={} find={}".format(idx_validate, idx_find)
+    )

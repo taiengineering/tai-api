@@ -57,7 +57,12 @@ def _supplier_config() -> Dict[str, str]:
 
 
 def _validate_snapshot(quote: Dict[str, Any]) -> Dict[str, Any]:
-    """member_auto/ISSUED + items 스냅샷 무결성 검증. 가격 마스터 재조회 없음(정본=frozen items)."""
+    """상위 snapshot + member_auto/ISSUED + items 무결성. 정본=frozen(가격/회사 재조회 0)."""
+    # PATCH-2: 상위 필드 필수 (빈문자/공백도 누락). 회사 마스터·가격 마스터 재조회로 보충 금지 → fail-closed.
+    for k in ("id", "company_id", "quote_no", "company_name", "created_at"):
+        v = quote.get(k)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            raise QuotePdfError("QUOTE_SNAPSHOT_INCOMPLETE", "견적 필수 정보 누락: {}".format(k), 409)
     if quote.get("source") != "member_auto" or quote.get("status_code") != "ISSUED":
         raise QuotePdfError("PDF_NOT_AVAILABLE",
                             "자동 발급(ISSUED) 견적만 PDF 발급이 가능합니다.", 409)
@@ -119,20 +124,33 @@ async def _find_existing_pdf(quote_id, company_id) -> Optional[Dict[str, Any]]:
     return None
 
 
+async def _safe_signed_url(doc_id: str) -> str:
+    """PATCH-3: None/빈문자/예외 모두 controlled 503. raw 예외 미노출."""
+    try:
+        url = await document_svc.get_signed_url(doc_id, 3600)
+    except Exception as e:                                          # noqa: BLE001
+        raise QuotePdfError("PDF_DOWNLOAD_UNAVAILABLE",
+                            "PDF 다운로드 링크 발급에 실패했습니다.", 503) from e
+    if not url or not str(url).strip():
+        raise QuotePdfError("PDF_DOWNLOAD_UNAVAILABLE",
+                            "PDF 다운로드 링크를 발급할 수 없습니다.", 503)
+    return url
+
+
 async def issue_or_get_quote_pdf(quote: Dict[str, Any], current_user_id: str) -> Dict[str, Any]:
-    """멱등: 기존 PDF 재사용(generated=False) 또는 신규 생성. (라우터가 자사 소유권 선검증)"""
+    """멱등: 검증 통과 후 기존 PDF 재사용(generated=False) 또는 신규 생성. (라우터가 자사 소유권 선검증)"""
+    item = _validate_snapshot(quote)                                # PATCH-1: 재사용 전에 계약 검증
     quote_id, company_id = quote["id"], quote["company_id"]
-    existing = await _find_existing_pdf(quote_id, company_id)      # §15 sequential idempotency
+    existing = await _find_existing_pdf(quote_id, company_id)       # §15 sequential idempotency
     if existing:
         return {
             "document": existing,
             "generated": False,
-            "url": await document_svc.get_signed_url(existing["id"], 3600),
+            "url": await _safe_signed_url(existing["id"]),          # PATCH-3
         }
-    item = _validate_snapshot(quote)                               # §10·§11
-    supplier = _supplier_config()                                  # §4 (503 if missing)
+    supplier = _supplier_config()                                   # §4 (503 if missing)
     html = _render_html(quote, item, supplier, _quote_date_kst(quote.get("created_at")))
-    pdf_bytes = render_html_pdf(html, trace_id=quote.get("quote_no"))   # §6·§7 (PdfRenderError 전파)
+    pdf_bytes = render_html_pdf(html, trace_id=quote.get("quote_no"))
     doc = await document_svc.register_generated(
         file_bytes=pdf_bytes,
         file_name="TAI_견적서_{}.pdf".format(quote.get("quote_no")),
@@ -151,10 +169,10 @@ async def issue_or_get_quote_pdf(quote: Dict[str, Any], current_user_id: str) ->
         tags=["quote", "member_auto"],
         uploaded_by=current_user_id,
     )
-    if str(doc.get("company_id")) != str(company_id):              # §18 방어
+    if str(doc.get("company_id")) != str(company_id):               # §18 방어
         raise QuotePdfError("PDF_OWNERSHIP_MISMATCH", "문서 소유권 불일치.", 500)
     return {
         "document": doc,
         "generated": True,
-        "url": await document_svc.get_signed_url(doc["id"], 3600),
+        "url": await _safe_signed_url(doc["id"]),                   # PATCH-3
     }
