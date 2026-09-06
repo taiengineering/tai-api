@@ -4,18 +4,25 @@
   증빙 발행은 invoice_svc 중앙 guard(저장금액·명시 supply_date·상호배타) 공통 통과.
   BACKEND-3 신규: POST /payments/tax-invoice-requests/{request_id}/process (processor).
   BACKEND-4 신규: POST /payments/refunds/{refund_id}/tax-adjustment (수정세금계산서 재처리, 운영복구용).
+
+[2026-09-06 WO-TAX-INVOICE-ADMIN-01] 관리자 세금계산서 조회(read) 엔드포인트 추가(role 001):
+  GET /payments/admin/tax-invoices (목록), GET /payments/admin/tax-invoices/{request_id} (상세).
+  새 엔진/발행 로직 없음 — tax_invoice_requests/tax_invoices/payments/companies 조회만.
+  doc_type=TAX_INVOICE 경계 필수(현금영수증 제외). N+1 금지(배치). tax_status 는 payment_ops._attach_tax_status 재사용.
+  처리/재시도는 기존 processor(/tax-invoice-requests/{id}/process) 그대로 사용(신규 발행 엔드포인트 없음).
 """
 from __future__ import annotations
 
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from routers.matching_deps import _require_admin
+from routers.payment_ops import _attach_tax_status
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +63,17 @@ class GateBody(BaseModel):
 
 class ProcessBody(BaseModel):
     supply_date: str            # YYYY-MM-DD
+
+
+def _batch_map(sb, table: str, ids: list, key: str, columns: str) -> dict:
+    """id 목록을 1쿼리로 조회해 {key: row} 맵으로. N+1 금지용."""
+    if not ids:
+        return {}
+    res = sb.table(table).select(columns).in_(key, ids).execute()
+    out = {}
+    for row in (res.data or []):
+        out[row.get(key)] = row
+    return out
 
 
 # ── 실호출 게이트 상태 (조회는 인증만) ──
@@ -168,6 +186,196 @@ def refund_tax_adjustment(refund_id: str, current_user: dict = Depends(_require_
         return {"status": "success", "data": res}
     except InvoiceError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+# ── 관리자 세금계산서 목록 (role 001) ──
+@router.get("/admin/tax-invoices")
+def admin_list_tax_invoices(
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    status: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    q: Optional[str] = Query(None, description="회사명·사업자번호(발행스냅샷) 검색"),
+    payment_id: Optional[str] = Query(None),
+    request_id: Optional[str] = Query(None),
+    current_user: dict = Depends(_require_admin),
+):
+    """세금계산서 발행요청 운영 목록. doc_type=TAX_INVOICE 만(현금영수증 제외). 배치 조회(N+1 금지)."""
+    sb = get_supabase()
+    query = (
+        sb.table("tax_invoice_requests")
+        .select(
+            "id, payment_id, company_id, source, status, requested_at, created_at, "
+            "invoicee_company_name, invoicee_business_number, proof_type, total_amount",
+            count="exact",
+        )
+        .eq("doc_type", "TAX_INVOICE")
+    )
+    if status:
+        query = query.eq("status", status)
+    if request_id:
+        query = query.eq("id", request_id)
+    if payment_id:
+        query = query.eq("payment_id", payment_id)
+    if date_from:
+        query = query.gte("created_at", date_from)
+    if date_to:
+        query = query.lte("created_at", date_to)
+    if q:
+        query = query.or_(f"invoicee_company_name.ilike.%{q}%,invoicee_business_number.ilike.%{q}%")
+
+    offset = (page - 1) * size
+    res = query.order("created_at", desc=True).range(offset, offset + size - 1).execute()
+    reqs = res.data or []
+    total = res.count or 0
+
+    pay_ids = list({r["payment_id"] for r in reqs if r.get("payment_id")})
+    co_ids = list({r["company_id"] for r in reqs if r.get("company_id")})
+    payments = _batch_map(sb, "payments", pay_ids, "id", "id, total_amount, pg_method, proof_type, paid_at")
+    companies = _batch_map(sb, "companies", co_ids, "id", "id, name, business_number")
+
+    inv_by_pid: dict = {}
+    if pay_ids:
+        inv = (
+            sb.table("tax_invoices")
+            .select("payment_id, invoice_kind, status, issued_at, nts_confirm_num")
+            .in_("payment_id", pay_ids)
+            .eq("doc_type", "TAX_INVOICE")
+            .execute()
+        )
+        for iv in (inv.data or []):
+            inv_by_pid.setdefault(iv.get("payment_id"), []).append(iv)
+
+    st_rows = [{"id": pid} for pid in pay_ids]
+    _attach_tax_status(sb, st_rows)
+    tax_status_by_pid = {r["id"]: r["tax_status"] for r in st_rows}
+
+    items = []
+    for r in reqs:
+        pid = r.get("payment_id")
+        pay = payments.get(pid, {})
+        co = companies.get(r.get("company_id"), {})
+        invs = inv_by_pid.get(pid, [])
+        originals = [i for i in invs if i.get("invoice_kind") != "MODIFIED"]
+        modifieds = [i for i in invs if i.get("invoice_kind") == "MODIFIED"]
+        orig = next((i for i in originals if str(i.get("status")) == "ISSUED"), None)
+        if orig is None and originals:
+            orig = originals[0]
+        items.append({
+            "request_id": r.get("id"),
+            "payment_id": pid,
+            "requested_at": r.get("requested_at") or r.get("created_at"),
+            "request_status": r.get("status"),
+            "company_name": r.get("invoicee_company_name") or co.get("name"),
+            "business_number": r.get("invoicee_business_number") or co.get("business_number"),
+            "payment_method": pay.get("pg_method"),
+            "proof_type": r.get("proof_type") or pay.get("proof_type"),
+            "total_amount": r.get("total_amount") if r.get("total_amount") is not None else pay.get("total_amount"),
+            "tax_status": tax_status_by_pid.get(pid, "UNKNOWN"),
+            "original_invoice_status": (orig or {}).get("status"),
+            "issued_at": (orig or {}).get("issued_at"),
+            "nts_confirm_num": (orig or {}).get("nts_confirm_num"),
+            "has_modified_invoice": len(modifieds) > 0,
+            "modified_count": len(modifieds),
+        })
+
+    return {"status": "success", "data": {"items": items, "total": total, "page": page, "size": size,
+            "total_pages": (total + size - 1) // size if total else 0}}
+
+
+# ── 관리자 세금계산서 상세 (role 001) ──
+@router.get("/admin/tax-invoices/{request_id}")
+def admin_tax_invoice_detail(request_id: str, current_user: dict = Depends(_require_admin)):
+    """발행요청 상세: 요청/결제/사업자스냅샷/원장(원본+수정[]). doc_type=TAX_INVOICE 경계."""
+    sb = get_supabase()
+    rq = (
+        sb.table("tax_invoice_requests").select("*")
+        .eq("id", request_id).eq("doc_type", "TAX_INVOICE").limit(1).execute()
+    )
+    if not rq.data:
+        raise HTTPException(status_code=404, detail="세금계산서 발행요청을 찾을 수 없습니다.")
+    r = rq.data[0]
+    pid = r.get("payment_id")
+
+    pay = {}
+    if pid:
+        p = sb.table("payments").select(
+            "id, total_amount, pg_method, proof_type, paid_at, product_type"
+        ).eq("id", pid).limit(1).execute()
+        pay = (p.data or [{}])[0] if p.data else {}
+
+    # COMPANY SNAPSHOT: 발행요청 스냅샷이 있으면 그대로 우선(합쳐서 덮어쓰지 않음), 없으면 companies.
+    if r.get("invoicee_business_number"):
+        snapshot = {
+            "source": "request_snapshot",
+            "company_name": r.get("invoicee_company_name"),
+            "business_number": r.get("invoicee_business_number"),
+            "representative_name": r.get("invoicee_representative_name"),
+            "email": r.get("invoicee_email"),
+            "address": r.get("invoicee_address"),
+            "business_type": r.get("invoicee_business_type"),
+            "business_category": r.get("invoicee_business_category"),
+        }
+    else:
+        co = {}
+        if r.get("company_id"):
+            c = sb.table("companies").select(
+                "name, business_number, representative_name, contact_email, "
+                "contact_phone, zipcode, address_road, address_detail, address, "
+                "business_type, business_category"
+            ).eq("id", r["company_id"]).limit(1).execute()
+            co = (c.data or [{}])[0] if c.data else {}
+        addr = " ".join([x for x in [co.get("zipcode"), co.get("address_road"), co.get("address_detail")] if x]) or co.get("address")
+        snapshot = {
+            "source": "company",
+            "company_name": co.get("name"),
+            "business_number": co.get("business_number"),
+            "representative_name": co.get("representative_name"),
+            "email": co.get("contact_email"),
+            "address": addr,
+            "business_type": co.get("business_type"),
+            "business_category": co.get("business_category"),
+        }
+
+    invs = []
+    if pid:
+        iv = (
+            sb.table("tax_invoices").select(
+                "id, invoice_kind, status, issued_at, nts_confirm_num, "
+                "modify_code, adjustment_reason, refund_ref, total_amount, created_at"
+            ).eq("payment_id", pid).eq("doc_type", "TAX_INVOICE")
+            .order("created_at", desc=False).execute()
+        )
+        invs = iv.data or []
+    originals = [i for i in invs if i.get("invoice_kind") != "MODIFIED"]
+    modifieds = [i for i in invs if i.get("invoice_kind") == "MODIFIED"]
+
+    st_rows = [{"id": pid}] if pid else []
+    _attach_tax_status(sb, st_rows)
+    tax_status = st_rows[0]["tax_status"] if st_rows else "UNKNOWN"
+
+    return {"status": "success", "data": {
+        "request": {
+            "request_id": r.get("id"), "status": r.get("status"),
+            "requested_at": r.get("requested_at") or r.get("created_at"),
+            "source": r.get("source"),
+            "failure_code": r.get("failure_code"),
+            "failure_reason": r.get("failure_reason"),
+            "updated_at": r.get("updated_at"),
+        },
+        "payment": {
+            "payment_id": pid, "amount": pay.get("total_amount"),
+            "payment_method": pay.get("pg_method"), "proof_type": pay.get("proof_type"),
+            "paid_at": pay.get("paid_at"),
+        },
+        "company_snapshot": snapshot,
+        "invoice_ledger": {
+            "tax_status": tax_status,
+            "original": originals[0] if originals else None,
+            "modified": modifieds,
+        },
+    }}
 
 
 # ── 결제 원장 통합 조회 ──
