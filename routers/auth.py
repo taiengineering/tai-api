@@ -1293,6 +1293,32 @@ def change_phone(req: ChangePhoneRequest, authorization: Optional[str] = Header(
         if dup.data:
             raise HTTPException(status_code=400, detail="이미 다른 계정에서 인증된 본인인증 정보입니다.")
 
+    # ── mtx ownership 원자적 확정 (users.phone 변경 이전) ──────────────
+    # owner 규칙: NULL→선점 / ==현재유저→idempotent / !=현재유저→403.
+    # NULL 은 조건부 claim(user_id IS NULL) 으로 원자 선점하고, 반영을 실제 확인한다.
+    # 이 경로에서는 예외를 삼키지 않는다(실패 시 phone 불변으로 fail-closed).
+    if owner and str(owner) == str(user["id"]):
+        pass  # 이미 현재 사용자 소유 — idempotent 재호출 허용
+    else:
+        # owner!=현재유저는 위(SUCCESS 조회 직후)에서 이미 403 처리됨 → 여기 도달 시 owner is NULL
+        try:
+            claim = supabase.table("inicis_auth_requests").update(
+                {"user_id": user["id"]}
+            ).eq("mtx_id", req.mtx_id).is_("user_id", "null").execute()
+        except Exception as e:
+            log.error(f"[change-phone] mtx claim 오류 mtx_id={req.mtx_id}: {e}")
+            raise HTTPException(status_code=500, detail="본인인증 결과 처리에 실패했습니다.")
+
+        claimed = bool(claim.data) and str(claim.data[0].get("user_id")) == str(user["id"])
+        if not claimed:
+            # 경쟁 요청이 먼저 선점했을 수 있음 → owner 재조회로 확정
+            recheck = supabase.table("inicis_auth_requests").select("user_id").eq(
+                "mtx_id", req.mtx_id).limit(1).execute()
+            new_owner = recheck.data[0].get("user_id") if recheck.data else None
+            if not new_owner or str(new_owner) != str(user["id"]):
+                raise HTTPException(status_code=403, detail="이 인증 결과는 다른 계정의 것입니다.")
+    # ────────────────────────────────────────────────────────────────
+
     upd = {
         "phone":                new_phone,
         "identity_phone":       row.get("user_phone"),
@@ -1308,13 +1334,6 @@ def change_phone(req: ChangePhoneRequest, authorization: Optional[str] = Header(
             upd["identity_birth"] = row.get("user_birthday")
 
     supabase.table("users").update(upd).eq("id", user["id"]).execute()
-
-    if not owner:
-        try:
-            supabase.table("inicis_auth_requests").update(
-                {"user_id": user["id"]}).eq("mtx_id", req.mtx_id).execute()
-        except Exception:
-            pass
 
     return {"status": "success", "data": {"phone": new_phone, "identity_verified": True}}
 
