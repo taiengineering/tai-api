@@ -231,7 +231,8 @@ def admin_list_tax_invoices(
         sb.table("tax_invoice_requests")
         .select(
             "id, payment_id, company_id, source, status, requested_at, created_at, "
-            "invoicee_company_name, invoicee_business_number, proof_type, total_amount",
+            "invoicee_company_name, invoicee_business_number, proof_type, "
+            "supply_amount, vat_amount, total_amount",
             count="exact",
         )
         .eq("doc_type", "TAX_INVOICE")
@@ -259,7 +260,8 @@ def admin_list_tax_invoices(
 
     pay_ids = list({r["payment_id"] for r in reqs if r.get("payment_id")})
     co_ids = list({r["company_id"] for r in reqs if r.get("company_id")})
-    payments = _batch_map(sb, "payments", pay_ids, "id", "id, total_amount, pg_method, proof_type, paid_at")
+    payments = _batch_map(sb, "payments", pay_ids, "id",
+                          "id, supply_amount, vat_amount, total_amount, pg_method, proof_type, paid_at")
     companies = _batch_map(sb, "companies", co_ids, "id", "id, name, business_number")
 
     # BLOCKER-1: invoice 배치 조회 fail-safe — 실패를 '없음'으로 위장하지 않고 null + ok=false.
@@ -320,6 +322,10 @@ def admin_list_tax_invoices(
             "business_number": r.get("invoicee_business_number") or co.get("business_number"),
             "payment_method": pay.get("pg_method"),
             "proof_type": r.get("proof_type") or pay.get("proof_type"),
+            # [WO-TAX-INVOICE-AUTO-01 STEP 5] 3분할 금액 투영 (request snapshot 우선, payments SoT fallback).
+            # 프론트 계산 금지 — authoritative 값 그대로. 재계산(total/1.1 등) 금지.
+            "supply_amount": r.get("supply_amount") if r.get("supply_amount") is not None else pay.get("supply_amount"),
+            "vat_amount": r.get("vat_amount") if r.get("vat_amount") is not None else pay.get("vat_amount"),
             "total_amount": r.get("total_amount") if r.get("total_amount") is not None else pay.get("total_amount"),
             "tax_status": tax_status_by_pid.get(pid, "UNKNOWN"),
             "invoice_projection_ok": invoice_projection_ok,
@@ -348,7 +354,7 @@ def admin_tax_invoice_detail(request_id: str, current_user: dict = Depends(_requ
     pay = {}
     if pid:
         p = sb.table("payments").select(
-            "id, total_amount, pg_method, proof_type, paid_at, product_type"
+            "id, supply_amount, vat_amount, total_amount, pg_method, proof_type, paid_at, product_type"
         ).eq("id", pid).limit(1).execute()
         pay = (p.data or [{}])[0] if p.data else {}
 
@@ -412,8 +418,19 @@ def admin_tax_invoice_detail(request_id: str, current_user: dict = Depends(_requ
             "failure_reason": r.get("failure_reason"),
             "updated_at": r.get("updated_at"),
         },
+        # [PATCH-1 A-P3] 3분할 fallback 규칙 통일: request.<x> ?? payment.<x> 로 supply/vat/total 동시 결정.
+        # amount(alias) = resolved total_amount (시점 혼합 금지 — list 와 detail 동일 규칙).
         "payment": {
-            "payment_id": pid, "amount": pay.get("total_amount"),
+            "payment_id": pid,
+            "supply_amount": (r.get("supply_amount") if r.get("supply_amount") is not None
+                              else pay.get("supply_amount")),
+            "vat_amount": (r.get("vat_amount") if r.get("vat_amount") is not None
+                           else pay.get("vat_amount")),
+            "total_amount": (r.get("total_amount") if r.get("total_amount") is not None
+                             else pay.get("total_amount")),
+            # amount 는 resolved total_amount 와 동일 값 (하위호환 alias).
+            "amount": (r.get("total_amount") if r.get("total_amount") is not None
+                       else pay.get("total_amount")),
             "payment_method": pay.get("pg_method"), "proof_type": pay.get("proof_type"),
             "paid_at": pay.get("paid_at"),
         },

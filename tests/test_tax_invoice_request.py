@@ -252,12 +252,29 @@ def test_t28_t29_source_accept():
         assert created is True and row["source"] == s
 
 
-def test_t30_source_auto_saas_rejected():
+def test_t30_source_auto_sources_svc_allowed_router_blocked():
+    """[WO-TAX-INVOICE-AUTO-01] AUTO_PAYMENT / AUTO_SAAS 는 서버 orchestrator 전용:
+    svc 계층은 허용(내부 orchestrator 가 호출), 라우터 계층은 MYPAGE|SAAS 만 허용
+    (고객이 AUTO_* 를 body 로 주입 못 함).
+    """
+    assert "AUTO_PAYMENT" in svc._ALLOWED_SOURCES
+    assert "AUTO_SAAS" in svc._ALLOWED_SOURCES
+    # svc.create_request 는 AUTO_PAYMENT 를 성공적으로 처리
     store = _store(payment=_payment(pg_method="VBank", proof_type="TAX_INVOICE"))
     sb = FakeSupabase(store)
-    with pytest.raises(svc.MemberTaxError) as e:
-        svc.create_request(sb, {"id": "u1", "company_id": "co1"}, store["payments"][0], "AUTO_SAAS")
-    assert e.value.status_code == 422
+    row, created = svc.create_request(sb, {"id": None, "company_id": "co1"},
+                                      store["payments"][0], "AUTO_PAYMENT")
+    assert created is True and row["source"] == "AUTO_PAYMENT"
+
+
+def test_t30b_router_still_rejects_auto_sources_from_client():
+    """라우터 계층 whitelist: MYPAGE|SAAS 만 허용 (AUTO_* 는 서버 orchestrator 전용)."""
+    import inspect
+    from routers import member_tax_invoice
+    src = inspect.getsource(member_tax_invoice.create_tax_invoice_request)
+    assert '("MYPAGE", "SAAS")' in src, (
+        "라우터는 여전히 MYPAGE/SAAS 만 허용해야 함 (AUTO_* 는 서버 orchestrator 전용)"
+    )
 
 
 # ══ lifecycle / idempotency (T31~T38) ══

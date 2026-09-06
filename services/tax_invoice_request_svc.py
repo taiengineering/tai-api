@@ -15,7 +15,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from services.time import now_kst, serialize_external_utc
 
-_ALLOWED_SOURCES = ("MYPAGE", "SAAS")  # AUTO_SAAS 는 향후 결제후처리 전용(이번 금지)
+_ALLOWED_SOURCES = ("MYPAGE", "SAAS", "AUTO_PAYMENT", "AUTO_SAAS")
+# MYPAGE/SAAS = 고객 UI/SaaS 셀프서비스 (라우터에서 이 두 값만 허용).
+# AUTO_PAYMENT = 결제성공 자동 오케스트레이터(tax_auto_svc). AUTO_SAAS = 예비.
+# AUTO_* 는 서버 내부 orchestrator 전용 — 라우터/외부 API 노출 금지.
 
 REASON = {
     "ELIGIBLE": None,
@@ -351,4 +354,99 @@ def create_request(sb, current_user: Dict[str, Any], payment: Dict[str, Any],
     new_id = ins.data[0]["id"]
     row = _select_request(sb, new_id) or ins.data[0]
     _audit(payment["id"], new_id, source, "REQUESTED", elig["payment_method"], current_user.get("id"))
+    return row, True
+
+
+# ═════════════════════════════════════════════════════════════════════
+# [WO-TAX-INVOICE-AUTO-01 PATCH-1 A-P1] AUTO 예외큐 helper.
+# 자동 orchestrator 전용 — 고객 라우터/create_request/evaluate_eligibility 계약은 불변.
+# 목적: eligibility REVIEW_REQUIRED 또는 자동 복구 가능 DENY (COMPANY_PROFILE_INCOMPLETE) 시,
+#       tax_invoice_requests 에 REVIEW_REQUIRED row 를 남겨 Admin 예외콘솔에서 노출.
+# ═════════════════════════════════════════════════════════════════════
+def ensure_auto_exception_request(sb, payment: Dict[str, Any], source: str,
+                                  reason_code: str, reason: Optional[str] = None,
+                                  missing_fields: Optional[List[str]] = None
+                                  ) -> Tuple[Dict[str, Any], bool]:
+    """AUTO 경로 예외큐 기록 (신규 table 금지 — 기존 tax_invoice_requests 재사용).
+
+    Args:
+        sb: supabase client
+        payment: authoritative payment row (payments SoT)
+        source: AUTO_PAYMENT 등 (라우터에서 오는 MYPAGE/SAAS 아님)
+        reason_code: eligibility.reason_code 또는 helper 내부 코드
+                     (예: COMPANY_PROFILE_INCOMPLETE, LEGACY_PROOF_UNKNOWN,
+                          SUPPLY_DATE_UNRESOLVED, ...)
+        reason: 사람 읽기 텍스트 (없으면 REASON dict 에서 조회)
+        missing_fields: COMPANY_PROFILE_INCOMPLETE 시 상세 (audit only)
+
+    Returns:
+        (row, created)  created=True → INSERT, False → UPDATE(기존 예외 갱신) 또는 활성 request 존재로 no-op
+
+    계약:
+      - status = REVIEW_REQUIRED, source = AUTO_PAYMENT (or 입력값), doc_type = TAX_INVOICE
+      - failure_code = reason_code, failure_reason = reason
+      - 기존 활성 request (REQUESTED / PROCESSING / ISSUED) 는 절대 덮어쓰지 않음
+        → 정상 발행 상태를 예외로 승격 금지. 이 경우 (existing, False) 반환.
+      - 기존 FAILED / REVIEW_REQUIRED / CANCELLED row 는 REVIEW_REQUIRED 로 갱신 (멱등)
+      - 신규 INSERT 는 _snapshot 재사용 (금액 = payments SoT 그대로, 재계산 0)
+    """
+    if source not in _ALLOWED_SOURCES:
+        raise MemberTaxError(422, "INVALID_SOURCE", "source 는 허용 목록에 없습니다.")
+
+    reason_text = reason if reason is not None else REASON.get(reason_code)
+
+    existing = _load_existing_request(sb, payment["id"])
+    if existing:
+        st = str(existing.get("status") or "").upper()
+        # 활성 request 는 절대 예외로 승격 금지 (정상 발행 흐름 우선)
+        if st in ("REQUESTED", "PROCESSING", "ISSUED"):
+            return existing, False
+        # 기존 예외/실패 row 를 REVIEW_REQUIRED 로 갱신 (멱등)
+        patch = {
+            "status": "REVIEW_REQUIRED",
+            "source": source,
+            "failure_code": reason_code,
+            "failure_reason": (reason_text or "")[:500] if reason_text else None,
+            "processed_at": None,
+            "updated_at": _now_iso(),
+        }
+        sb.table("tax_invoice_requests").update(patch).eq("id", existing["id"]).execute()
+        row = _select_request(sb, existing["id"]) or existing
+        _audit(payment["id"], existing["id"], source, "REVIEW_REQUIRED",
+               canonical_payment_instrument(payment.get("pg_method")),
+               None)  # AUTO 경로 → actor_id None
+        return row, False
+
+    # 신규 INSERT (예외 request)
+    company = _load_company(sb, payment.get("company_id"))
+    # AUTO 는 system user (id=None). snapshot 은 _snapshot 재사용 — 금액 재계산 0.
+    system_user = {"id": None, "company_id": payment.get("company_id")}
+    snap = _snapshot(system_user, payment, company, source)
+    insert_row = dict(snap)
+    insert_row.update({
+        "status": "REVIEW_REQUIRED",
+        "failure_code": reason_code,
+        "failure_reason": (reason_text or "")[:500] if reason_text else None,
+        "requested_at": _now_iso(),
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+    })
+    try:
+        ins = sb.table("tax_invoice_requests").insert(insert_row).execute()
+    except Exception as e:  # noqa: BLE001 — 동시성/UNIQUE 재조회
+        if _is_payment_doc_unique(e):
+            ex = _load_existing_request(sb, payment["id"])
+            if ex:
+                # 위 branch 로 재분기 — 활성이면 그대로, 아니면 REVIEW 갱신
+                return ensure_auto_exception_request(sb, payment, source, reason_code,
+                                                     reason=reason, missing_fields=missing_fields)
+        raise MemberTaxError(500, "AUTO_EXCEPTION_CREATE_FAILED",
+                             "자동 예외큐 생성에 실패했습니다.") from e
+    if not ins.data:
+        raise MemberTaxError(500, "AUTO_EXCEPTION_CREATE_FAILED",
+                             "자동 예외큐 생성에 실패했습니다.")
+    new_id = ins.data[0]["id"]
+    row = _select_request(sb, new_id) or ins.data[0]
+    _audit(payment["id"], new_id, source, "REVIEW_REQUIRED",
+           canonical_payment_instrument(payment.get("pg_method")), None)
     return row, True
