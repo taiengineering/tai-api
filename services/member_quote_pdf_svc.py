@@ -65,9 +65,13 @@ def _validate_snapshot(quote: Dict[str, Any]) -> Dict[str, Any]:
         v = quote.get(k)
         if v is None or (isinstance(v, str) and not v.strip()):
             raise QuotePdfError("QUOTE_SNAPSHOT_INCOMPLETE", "견적 필수 정보 누락: {}".format(k), 409)
-    if quote.get("source") != "member_auto" or quote.get("status_code") != "ISSUED":
+    # STEP 2D-A: PDF eligibility 확장.
+    #   허용 : member_auto / member_custom / admin_manual 이며 status_code=ISSUED.
+    #   차단 : 다른 source(survey_web 등), REQUESTED / DRAFT 등 non-ISSUED.
+    if quote.get("source") not in ("member_auto", "member_custom", "admin_manual") \
+            or quote.get("status_code") != "ISSUED":
         raise QuotePdfError("PDF_NOT_AVAILABLE",
-                            "자동 발급(ISSUED) 견적만 PDF 발급이 가능합니다.", 409)
+                            "발행 완료된 견적만 PDF 발급이 가능합니다.", 409)
     items = quote.get("items") or []
     if not isinstance(items, list) or not items:
         raise QuotePdfError("QUOTE_SNAPSHOT_INCOMPLETE", "견적 품목 snapshot이 없습니다.", 409)
@@ -88,6 +92,19 @@ def _quote_date_kst(created_at) -> str:
         return to_kst(parse_external_datetime(str(created_at).replace("Z", "+00:00"))).strftime("%Y-%m-%d")
     except Exception as e:
         raise QuotePdfError("QUOTE_SNAPSHOT_INVALID", "견적일자를 확인할 수 없습니다.", 409) from e
+
+
+def _quote_date_for_pdf(quote: Dict[str, Any]) -> str:
+    """STEP 2D-A: PDF 상단 발행일자 분기.
+      member_auto / admin_manual : created_at (동시 발행)
+      member_custom(ISSUED)      : updated_at (관리자 발행 시점 = 실 발행일)
+                                    · updated_at 누락 시 created_at 로 fallback (fail-open)
+    """
+    if quote.get("source") == "member_custom" and quote.get("status_code") == "ISSUED":
+        d = quote.get("updated_at") or quote.get("created_at")
+    else:
+        d = quote.get("created_at")
+    return _quote_date_kst(d)
 
 
 def _period_label(item: Dict[str, Any]) -> str:
@@ -135,6 +152,7 @@ def _render_html(quote, item, supplier, quote_date) -> str:
         quote_date=quote_date,
         receiver=quote.get("company_name") or "",
         contact=quote.get("contact_name") or None,
+        remark=quote.get("memo") or None,
         supplier=supplier,
         service_type=item.get("service_type") or quote.get("service_type") or "",
         product_name=item.get("display_name"),
@@ -183,7 +201,7 @@ async def issue_or_get_quote_pdf(quote: Dict[str, Any], current_user_id: str) ->
             "url": await _safe_signed_url(existing["id"]),          # PATCH-3
         }
     supplier = _supplier_config()                                   # §4 (503 if missing)
-    html = _render_html(quote, item, supplier, _quote_date_kst(quote.get("created_at")))
+    html = _render_html(quote, item, supplier, _quote_date_for_pdf(quote))
     pdf_bytes = render_html_pdf(html, trace_id=quote.get("quote_no"))
     doc = await document_svc.register_generated(
         file_bytes=pdf_bytes,
@@ -200,7 +218,7 @@ async def issue_or_get_quote_pdf(quote: Dict[str, Any], current_user_id: str) ->
         },
         linked_table="quotes",
         linked_id=quote_id,
-        tags=["quote", "member_auto"],
+        tags=["quote", quote.get("source") or "member_auto"],       # STEP 2D-A: source-aware tag
         uploaded_by=current_user_id,
     )
     if str(doc.get("company_id")) != str(company_id):               # §18 방어
