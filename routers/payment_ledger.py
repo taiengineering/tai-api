@@ -12,10 +12,13 @@
   처리/재시도는 기존 processor(/tax-invoice-requests/{id}/process) 그대로 사용(신규 발행 엔드포인트 없음).
   PATCH-1: (1) admin list tax_invoices 배치 조회 fail-safe — 조회 실패를 '없음'으로 위장하지 않고
   invoice_projection_ok=false + 관련 필드 null. (2) q 검색에 companies fallback(name/business_number) 포함.
+  PATCH-2: (A-P1) 기간검색을 requested_at 기준 + civil date 입력(422) + KST 경계([date]T00:00:00+09:00 ~ T23:59:59.999999+09:00)
+  로 수정(종료일 당일 포함). (A-P2) detail request 섹션에 기존 supply_date 투영.
 """
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -196,18 +199,21 @@ def admin_list_tax_invoices(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     status: Optional[str] = Query(None),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
     q: Optional[str] = Query(None, description="회사명·사업자번호 검색(스냅샷+companies fallback)"),
     payment_id: Optional[str] = Query(None),
     request_id: Optional[str] = Query(None),
     current_user: dict = Depends(_require_admin),
 ):
-    """세금계산서 발행요청 운영 목록. doc_type=TAX_INVOICE 만(현금영수증 제외). 배치 조회(N+1 금지)."""
+    """세금계산서 발행요청 운영 목록. doc_type=TAX_INVOICE 만(현금영수증 제외). 배치 조회(N+1 금지).
+
+    기간검색(PATCH-2): requested_at(화면 표시 요청일) 기준, civil date 입력(잘못된 값 422),
+    KST 경계 [date]T00:00:00+09:00 ~ T23:59:59.999999+09:00 (종료일 당일 포함).
+    """
     sb = get_supabase()
 
     # BLOCKER-2: q 검색은 발행요청 스냅샷 + companies fallback(표시값과 일치) 모두 대상.
-    #   companies 검색 1쿼리(상수)로 company_id 목록을 구해 request or 조건에 포함(로우 후처리 검색 아님).
     matched_company_ids: list = []
     if q:
         try:
@@ -237,9 +243,9 @@ def admin_list_tax_invoices(
     if payment_id:
         query = query.eq("payment_id", payment_id)
     if date_from:
-        query = query.gte("created_at", date_from)
+        query = query.gte("requested_at", f"{date_from.isoformat()}T00:00:00+09:00")
     if date_to:
-        query = query.lte("created_at", date_to)
+        query = query.lte("requested_at", f"{date_to.isoformat()}T23:59:59.999999+09:00")
     if q:
         ors = [f"invoicee_company_name.ilike.%{q}%", f"invoicee_business_number.ilike.%{q}%"]
         for cid in matched_company_ids:
@@ -401,6 +407,7 @@ def admin_tax_invoice_detail(request_id: str, current_user: dict = Depends(_requ
             "request_id": r.get("id"), "status": r.get("status"),
             "requested_at": r.get("requested_at") or r.get("created_at"),
             "source": r.get("source"),
+            "supply_date": r.get("supply_date"),
             "failure_code": r.get("failure_code"),
             "failure_reason": r.get("failure_reason"),
             "updated_at": r.get("updated_at"),
