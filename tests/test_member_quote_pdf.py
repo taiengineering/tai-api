@@ -1117,12 +1117,14 @@ def test_FORM5b_template_version_bumped_to_v2():
     assert pdf_svc._TEMPLATE_NAME == "member_quote_v1.html"
 
 
-def test_FORM5c_file_name_and_tags_unchanged():
-    """register_generated 호출 계약 : file_name / tags 는 불변 (소스 grep)."""
+def test_FORM5c_file_name_and_tags_source_aware():
+    """register_generated 호출 계약 : file_name 불변, tags 는 STEP 2D-A source-aware.
+    tag[1] = quote.source (member_auto/member_custom/admin_manual 반영).
+    None fallback 만 'member_auto' (기존 계약 하한 유지)."""
     import inspect
     src = inspect.getsource(pdf_svc.issue_or_get_quote_pdf)
     assert 'file_name="TAI_견적서_{}.pdf".format(quote.get("quote_no"))' in src
-    assert 'tags=["quote", "member_auto"]' in src
+    assert 'tags=["quote", quote.get("source") or "member_auto"]' in src
 
 
 # ══════════════════════════════════════════════════════════════════

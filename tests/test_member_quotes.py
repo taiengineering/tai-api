@@ -448,14 +448,15 @@ def test_REG_legacy_quotes_router_module_intact():
 
 
 def test_REG_registry_line_present():
-    """router_registry/payment.py 에 신규 라우터 등록이 존재 (order/의존 유지)."""
+    """router_registry/payment.py 에 신규 라우터 등록이 존재 (order/의존 유지).
+    STEP 2D-A: member_quotes 와 price_setting 사이에 admin_quotes 등록."""
     import router_registry.payment as rp
     modules = [r.get("module") for r in rp.ROUTERS]
     assert "routers.member_quotes" in modules
-    # 기존 라우터 순서 유지 (quotes → member_quotes → price_setting)
     idx = modules.index("routers.member_quotes")
-    assert modules[idx - 1] == "routers.quotes"
-    assert modules[idx + 1] == "routers.price_setting"
+    assert modules[idx - 1] == "routers.quotes"                       # legacy 앞자리 유지
+    assert modules[idx + 1] == "routers.admin_quotes"                  # STEP 2D-A
+    assert modules[idx + 2] == "routers.price_setting"                 # 뒤쪽 순서 유지
 
 
 # ══════════════════════════════════════════════════════════════════
