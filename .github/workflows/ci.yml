@@ -63,6 +63,13 @@ jobs:
         run: pytest tests/test_payment_my_tax_status.py -q --tb=short
       - name: Admin tax invoices tests
         run: pytest tests/test_admin_tax_invoices.py -q --tb=short
+      # [WO-TAX-INVOICE-AUTO-01] 자동발행 오케스트레이터 / 자동수정발행 회귀 / 3분할 금액 투영
+      - name: Tax invoice auto original tests
+        run: pytest tests/test_tax_auto_svc.py -q --tb=short
+      - name: Tax invoice auto modified tests
+        run: pytest tests/test_tax_auto_modified.py -q --tb=short
+      - name: Tax invoice amount projection tests
+        run: pytest tests/test_tax_auto_amount_projection.py -q --tb=short
 
   db-integrity:
     name: "DB Integrity"

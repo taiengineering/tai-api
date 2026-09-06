@@ -241,18 +241,27 @@ def test_O4_cash_receipt_noop(monkeypatch):
 
 
 # ═════════════════════════════════════════════════════════════════════
-# O5  회사정보 부족 → eligibility DENY (COMPANY_PROFILE_INCOMPLETE), provider 0
+# O5  [PATCH-1] 회사정보 부족 → 자동 복구 가능 DENY → 예외큐 REVIEW_REQUIRED
+#      (계약 변경: 이전 ELIGIBLE_DENIED → 이제 ELIGIBLE_REVIEW + queue)
 # ═════════════════════════════════════════════════════════════════════
-def test_O5_company_incomplete_denied(monkeypatch):
+def test_O5_company_incomplete_becomes_exception_queue(monkeypatch):
     store, fake, mock = _setup(monkeypatch)
     # 대표자명 제거 → 회사정보 부족
     store["companies"][0]["representative_name"] = ""
     out = auto.maybe_auto_issue_tax_invoice(fake, "pay-1", "PAYMENT_SUCCESS")
-    assert out["outcome"] == "ELIGIBLE_DENIED"
+    # PATCH-1: COMPANY_PROFILE_INCOMPLETE 는 자동 복구 가능 DENY → 예외큐 생성
+    assert out["outcome"] == "ELIGIBLE_REVIEW", out
     assert out["reason"] == "COMPANY_PROFILE_INCOMPLETE"
+    assert out["request_id"] is not None
+    # provider 는 호출되지 않음
     assert mock.calls == []
-    assert store["tax_invoice_requests"] == []
     assert store["tax_invoices"] == []
+    # 예외큐 request row 생성 (REVIEW_REQUIRED)
+    reqs = store["tax_invoice_requests"]
+    assert len(reqs) == 1
+    assert reqs[0]["status"] == "REVIEW_REQUIRED"
+    assert reqs[0]["source"] == "AUTO_PAYMENT"
+    assert reqs[0]["failure_code"] == "COMPANY_PROFILE_INCOMPLETE"
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -405,3 +414,179 @@ def test_no_new_engine_imports():
     assert "evaluate_eligibility" in src
     assert "create_request" in src
     assert "process_tax_invoice_request" in src
+
+
+# ═════════════════════════════════════════════════════════════════════
+# [PATCH-1 A-P5] E1~E9 — AUTO 예외큐 완결성 + supply_date 추정 금지 + fallback 정합
+# ═════════════════════════════════════════════════════════════════════
+
+# E1: REVIEW_REQUIRED eligibility → tax_invoice_requests REVIEW_REQUIRED 1건, processor 0
+def test_E1_review_required_creates_exception_queue(monkeypatch):
+    store, fake, mock = _setup(monkeypatch)
+    # LEGACY_PROOF_UNKNOWN: ACCOUNT_TRANSFER + proof=None → REVIEW_REQUIRED
+    store["payments"][0]["pg_method"] = "DirectBank"
+    store["payments"][0]["proof_type"] = "TAX_INVOICE"
+    # 다른 결제에 이미 CASH_RECEIPT ISSUED 이력 남기면 CASH_RECEIPT_HISTORY_REVIEW 유도 대신,
+    # 직접 payment.proof_type = None 로 LEGACY_PROOF_UNKNOWN 유도
+    store["payments"][0]["proof_type"] = None
+    out = auto.maybe_auto_issue_tax_invoice(fake, "pay-1", "PAYMENT_SUCCESS")
+    # 사전 필터에서 걸릴 것 (proof != TAX_INVOICE)
+    assert out["outcome"] == "NOOP"
+    assert store["tax_invoice_requests"] == []
+    # → REVIEW_REQUIRED 검증은 eligibility 가 REVIEW_REQUIRED 를 돌려주는 명확한 케이스로 재구성
+    #   TAX_INVOICE 이력만 존재 + FAILED (E4 케이스 유사) 로 CASH_RECEIPT_HISTORY_REVIEW 유도
+    store["payments"][0]["proof_type"] = "TAX_INVOICE"
+    store["tax_invoices"] = [{"payment_id": "pay-1", "doc_type": "CASH_RECEIPT",
+                              "status": "CANCELLED", "invoice_kind": "ORIGINAL"}]
+    out2 = auto.maybe_auto_issue_tax_invoice(fake, "pay-1", "PAYMENT_SUCCESS")
+    # eligibility → CASH_RECEIPT_HISTORY_REVIEW (REVIEW_REQUIRED)
+    assert out2["outcome"] == "ELIGIBLE_REVIEW", out2
+    assert out2["reason"] == "CASH_RECEIPT_HISTORY_REVIEW"
+    assert out2["request_id"] is not None
+    reqs = store["tax_invoice_requests"]
+    assert len(reqs) == 1
+    assert reqs[0]["status"] == "REVIEW_REQUIRED"
+    assert reqs[0]["source"] == "AUTO_PAYMENT"
+    assert reqs[0]["failure_code"] == "CASH_RECEIPT_HISTORY_REVIEW"
+    assert mock.calls == []
+
+
+# E2: COMPANY_PROFILE_INCOMPLETE → 예외큐 REVIEW_REQUIRED (failure_code 정확), processor 0
+def test_E2_company_incomplete_exception_queued(monkeypatch):
+    store, fake, mock = _setup(monkeypatch)
+    store["companies"][0]["representative_name"] = ""
+    out = auto.maybe_auto_issue_tax_invoice(fake, "pay-1", "PAYMENT_SUCCESS")
+    assert out["outcome"] == "ELIGIBLE_REVIEW"
+    assert out["reason"] == "COMPANY_PROFILE_INCOMPLETE"
+    reqs = store["tax_invoice_requests"]
+    assert len(reqs) == 1
+    assert reqs[0]["status"] == "REVIEW_REQUIRED"
+    assert reqs[0]["failure_code"] == "COMPANY_PROFILE_INCOMPLETE"
+    # 금액 snapshot 은 payments SoT 그대로 (재계산 0)
+    assert reqs[0]["supply_amount"] == 100000
+    assert reqs[0]["vat_amount"] == 10000
+    assert reqs[0]["total_amount"] == 110000
+    assert mock.calls == []
+    assert store["tax_invoices"] == []
+
+
+# E3: 영구 DENY (CARD_RECEIPT_IS_EVIDENCE) → 예외큐 미생성
+def test_E3_permanent_deny_card_no_queue(monkeypatch):
+    store, fake, mock = _setup(monkeypatch)
+    # 사전 필터로 이미 CARD 는 NOOP — 그러나 사전 필터 우회 시(예: canonical_payment_instrument 가 CARD 반환)
+    # eligibility CARD_RECEIPT_IS_EVIDENCE 로 진입해도 예외큐 미생성이 계약이어야 함.
+    # canonical_payment_instrument 는 method=CARD 로 반환 → 사전 필터에 걸림 = NOOP 이며 큐 0 이 유지
+    store["payments"][0]["pg_method"] = "Card"
+    out = auto.maybe_auto_issue_tax_invoice(fake, "pay-1", "PAYMENT_SUCCESS")
+    assert out["outcome"] == "NOOP"
+    assert store["tax_invoice_requests"] == [], "카드 결제는 예외큐 생성 0"
+
+
+# E4: 영구 DENY (CASH_RECEIPT_SELECTED) → 예외큐 미생성
+def test_E4_permanent_deny_cash_receipt_no_queue(monkeypatch):
+    store, fake, mock = _setup(monkeypatch)
+    # proof=CASH_RECEIPT 는 사전 필터에서 걸림 (proof != TAX_INVOICE) → NOOP
+    store["payments"][0]["proof_type"] = "CASH_RECEIPT"
+    out = auto.maybe_auto_issue_tax_invoice(fake, "pay-1", "PAYMENT_SUCCESS")
+    assert out["outcome"] == "NOOP"
+    assert store["tax_invoice_requests"] == [], "현금영수증 선택은 예외큐 생성 0"
+
+
+# E4b: 영구 DENY (TAX_INVOICE_ALREADY_EXISTS) → 예외큐 미생성 (사전 필터 통과 후 eligibility DENY)
+def test_E4b_permanent_deny_tax_invoice_already_no_queue(monkeypatch):
+    store, fake, mock = _setup(monkeypatch)
+    # 원본 세금계산서가 이미 ISSUED → TAX_INVOICE_ALREADY_EXISTS (permanent)
+    store["tax_invoices"] = [{"payment_id": "pay-1", "doc_type": "TAX_INVOICE",
+                              "status": "ISSUED", "invoice_kind": "ORIGINAL"}]
+    out = auto.maybe_auto_issue_tax_invoice(fake, "pay-1", "PAYMENT_SUCCESS")
+    assert out["outcome"] == "ELIGIBLE_DENIED"
+    assert out["reason"] == "TAX_INVOICE_ALREADY_EXISTS"
+    # 예외큐 생성 0 (큐 오염 방지)
+    assert store["tax_invoice_requests"] == []
+    assert mock.calls == []
+
+
+# E5: 중복 REVIEW event → 예외큐 1건 (멱등)
+def test_E5_duplicate_review_events_idempotent(monkeypatch):
+    store, fake, mock = _setup(monkeypatch)
+    store["companies"][0]["representative_name"] = ""  # COMPANY_PROFILE_INCOMPLETE 유도
+    out1 = auto.maybe_auto_issue_tax_invoice(fake, "pay-1", "PAYMENT_SUCCESS")
+    out2 = auto.maybe_auto_issue_tax_invoice(fake, "pay-1", "PAYMENT_SUCCESS")
+    assert out1["outcome"] == "ELIGIBLE_REVIEW"
+    assert out2["outcome"] == "ELIGIBLE_REVIEW"
+    # UNIQUE(payment_id, doc_type) → 예외 request 는 하나만
+    reqs = store["tax_invoice_requests"]
+    assert len(reqs) == 1
+    assert reqs[0]["status"] == "REVIEW_REQUIRED"
+    assert reqs[0]["failure_code"] == "COMPANY_PROFILE_INCOMPLETE"
+
+
+# E6: paid_at null → business_today 사용 0, REVIEW_REQUIRED(SUPPLY_DATE_UNRESOLVED), processor 0
+def test_E6_paid_at_null_supply_date_unresolved(monkeypatch):
+    store, fake, mock = _setup(monkeypatch)
+    store["payments"][0]["paid_at"] = None
+
+    # business_today 를 호출하면 실패하도록 감시
+    called = {"business_today": 0}
+    from services import time as time_svc
+    orig_bt = time_svc.business_today
+
+    def _spy():
+        called["business_today"] += 1
+        return orig_bt()
+
+    monkeypatch.setattr(time_svc, "business_today", _spy)
+
+    out = auto.maybe_auto_issue_tax_invoice(fake, "pay-1", "PAYMENT_SUCCESS")
+    assert out["outcome"] == "SUPPLY_DATE_UNRESOLVED", out
+    assert out["reason"] == "SUPPLY_DATE_UNRESOLVED"
+    assert out["request_id"] is not None
+    # provider 호출 0
+    assert mock.calls == []
+    # 예외큐 request row 생성
+    reqs = store["tax_invoice_requests"]
+    assert len(reqs) == 1
+    assert reqs[0]["status"] == "REVIEW_REQUIRED"
+    assert reqs[0]["failure_code"] == "SUPPLY_DATE_UNRESOLVED"
+    # business_today 는 orchestrator 경로에서 호출되지 않음 (PATCH-1 A-P2)
+    #   ※ 다른 서비스 (계약 자동생성 등) 는 별개 — 여기서는 orchestrator 만 실행
+    assert called["business_today"] == 0, "AUTO 경로에서 supply_date 추정용 business_today 호출 금지"
+
+
+# E7: paid_at malformed → REVIEW_REQUIRED(SUPPLY_DATE_UNRESOLVED), processor 0
+def test_E7_paid_at_malformed_supply_date_unresolved(monkeypatch):
+    store, fake, mock = _setup(monkeypatch)
+    store["payments"][0]["paid_at"] = "not-a-date"
+
+    out = auto.maybe_auto_issue_tax_invoice(fake, "pay-1", "PAYMENT_SUCCESS")
+    assert out["outcome"] == "SUPPLY_DATE_UNRESOLVED"
+    assert out["reason"] == "SUPPLY_DATE_UNRESOLVED"
+    assert mock.calls == []
+    reqs = store["tax_invoice_requests"]
+    assert len(reqs) == 1
+    assert reqs[0]["status"] == "REVIEW_REQUIRED"
+    assert reqs[0]["failure_code"] == "SUPPLY_DATE_UNRESOLVED"
+
+
+# 회귀: business_today import 부재 (AST) — A-P2 계약 검증
+def test_E6b_no_business_today_import_in_auto_svc():
+    """PATCH-1 A-P2: tax_auto_svc 는 supply_date 추정을 위해 business_today 를 import 하지 않는다."""
+    import ast
+    import inspect
+    src = inspect.getsource(auto)
+    tree = ast.parse(src)
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for a in node.names:
+                imported.add(a.name)
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                imported.add(a.name)
+    assert "business_today" not in imported, (
+        "PATCH-1 A-P2: business_today import 금지 — supply_date 추정 금지"
+    )
+
+
+# E8/E9: detail 3분할 fallback 정합은 tests/test_tax_auto_amount_projection.py 에 추가로 커버.
+# (여기 파일은 orchestrator 단위 테스트 범위 — E8/E9 는 admin detail 라우터 통합이라 별도 파일)

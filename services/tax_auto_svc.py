@@ -1,4 +1,4 @@
-"""자동 세금계산서 오케스트레이터 (WO-TAX-INVOICE-AUTO-01 STEP 2).
+"""자동 세금계산서 오케스트레이터 (WO-TAX-INVOICE-AUTO-01 STEP 2 + PATCH-1).
 
 역할: 얇은 helper — 재사용 앵커만 조립.
   1) payment authoritative read
@@ -18,6 +18,18 @@ Idempotency:
   - 이미 ISSUED/PROCESSING 인 request 는 processor 호출 없이 NOOP.
   - 중복 payment.success / 재시도 / 고객 재클릭 → ORIGINAL 최대 1.
 
+[PATCH-1 A-P1] 예외큐 자동 기록:
+  - REVIEW_REQUIRED eligibility → tax_invoice_requests(status=REVIEW_REQUIRED, source=AUTO_PAYMENT)
+    이 row 는 Admin 예외콘솔에서 [상세 확인] 액션 대상.
+  - 자동 복구 가능 DENY (COMPANY_PROFILE_INCOMPLETE) → 예외큐 REVIEW_REQUIRED
+  - 영구 비대상 DENY (CARD_RECEIPT_IS_EVIDENCE / CASH_RECEIPT_SELECTED / TAX_INVOICE_ALREADY_EXISTS /
+    CASH_RECEIPT_EXISTS / PAYMENT_NOT_SUCCESS / REQUEST_CANCELLED) → 예외큐 미생성 (큐 오염 방지)
+  - 활성 request (REQUESTED / PROCESSING / ISSUED) 는 절대 예외로 승격 금지 (helper 내부 guard)
+
+[PATCH-1 A-P2] supply_date 추정 금지:
+  - payment.paid_at 의 KST YYYY-MM-DD 만 허용.
+  - paid_at 없음/parse 실패 → 예외큐(REVIEW_REQUIRED, SUPPLY_DATE_UNRESOLVED), processor 호출 0.
+
 Trigger:
   - PAYMENT_SUCCESS: on_payment_success_sync 훅에서 호출.
   - CUSTOMER_REQUEST: POST /payments/{id}/tax-invoice/request 후 호출.
@@ -28,19 +40,35 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from services.time import business_today, parse_external_datetime, to_kst
+from services.time import parse_external_datetime, to_kst
 
 log = logging.getLogger(__name__)
 
 # outcome enum (문자열)
 OUTCOME_NOOP = "NOOP"                              # 조기 종료 (proof_type/method 등 자동 대상 아님)
-OUTCOME_ELIGIBLE_DENIED = "ELIGIBLE_DENIED"        # eligibility DENY (예: CARD/CASH_RECEIPT/이미발행)
-OUTCOME_ELIGIBLE_REVIEW = "ELIGIBLE_REVIEW"        # eligibility REVIEW_REQUIRED
+OUTCOME_ELIGIBLE_DENIED = "ELIGIBLE_DENIED"        # 영구 비대상 DENY (예: CARD/CASH_RECEIPT/이미발행) — 예외큐 미생성
+OUTCOME_ELIGIBLE_REVIEW = "ELIGIBLE_REVIEW"        # eligibility REVIEW_REQUIRED (또는 자동복구가능 DENY) → 예외큐 REVIEW_REQUIRED
+OUTCOME_SUPPLY_DATE_UNRESOLVED = "SUPPLY_DATE_UNRESOLVED"  # paid_at 없음/malformed → 예외큐 REVIEW_REQUIRED
 OUTCOME_REQUEST_CREATED_ONLY = "REQUEST_CREATED_ONLY"  # request 만 확보, processor 스킵(이미 ISSUED/PROCESSING)
 OUTCOME_ISSUED = "ISSUED"                          # processor 성공 → ISSUED
 OUTCOME_GATED = "GATED"                            # INVOICE_LIVE OFF (423)
 OUTCOME_PROCESSOR_FAILED = "PROCESSOR_FAILED"      # processor 4xx/5xx (request FAILED 로 기록됨)
 OUTCOME_ERROR = "ERROR"                            # 예상 밖 예외 (fail-soft 삼킴)
+
+# eligibility DENY reason_code 중 "자동 복구 가능" — 예외큐 REVIEW_REQUIRED 로 기록
+AUTO_RECOVERABLE_DENY_CODES = frozenset({
+    "COMPANY_PROFILE_INCOMPLETE",  # 회사 정보만 보완하면 자동 재시도 가능
+})
+
+# eligibility DENY reason_code 중 "영구 비대상" — 예외큐 미생성 (큐 오염 방지)
+PERMANENT_DENY_CODES = frozenset({
+    "CARD_RECEIPT_IS_EVIDENCE",
+    "CASH_RECEIPT_SELECTED",
+    "TAX_INVOICE_ALREADY_EXISTS",
+    "CASH_RECEIPT_EXISTS",
+    "PAYMENT_NOT_SUCCESS",
+    "REQUEST_CANCELLED",
+})
 
 
 def _audit_auto(event: str, payment_id: Optional[str], trigger: str,
@@ -56,18 +84,21 @@ def _audit_auto(event: str, payment_id: Optional[str], trigger: str,
         pass
 
 
-def _resolve_supply_date(payment: Dict[str, Any]) -> str:
-    """자동 경로 supply_date: payment.paid_at 의 KST 날짜, 없으면 business_today().
+def _resolve_supply_date(payment: Dict[str, Any]) -> Optional[str]:
+    """자동 경로 supply_date: payment.paid_at 의 KST YYYY-MM-DD 만 허용.
 
+    [PATCH-1 A-P2] paid_at 없음/parse 실패 → None 반환 (business_today() fallback 금지).
+    호출측(maybe_auto_issue_tax_invoice) 이 None 을 받으면 예외큐(REVIEW_REQUIRED,
+    SUPPLY_DATE_UNRESOLVED) 로 기록하고 processor 호출 0.
     프론트/사용자 입력 금지 — 자동 경로 SoT.
     """
     paid = payment.get("paid_at")
-    if paid:
-        try:
-            return to_kst(parse_external_datetime(str(paid).replace("Z", "+00:00"))).strftime("%Y-%m-%d")
-        except Exception:  # noqa: BLE001
-            pass
-    return business_today().strftime("%Y-%m-%d")
+    if not paid:
+        return None
+    try:
+        return to_kst(parse_external_datetime(str(paid).replace("Z", "+00:00"))).strftime("%Y-%m-%d")
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _load_payment(sb, payment_id: str) -> Optional[Dict[str, Any]]:
@@ -77,6 +108,31 @@ def _load_payment(sb, payment_id: str) -> Optional[Dict[str, Any]]:
         data = res.data or []
         return data[0] if data else None
     except Exception:  # noqa: BLE001
+        return None
+
+
+def _queue_exception(sb, payment: Dict[str, Any], reason_code: str, reason: Optional[str],
+                     trigger: str, actor_id: Optional[str],
+                     missing_fields: Optional[list] = None) -> Optional[str]:
+    """AUTO 예외큐 REVIEW_REQUIRED row 생성/갱신 (best-effort, 실패해도 orchestrator 결과에 영향 0).
+
+    Returns: 생성/갱신된 request_id 또는 None (실패/활성 request 존재).
+    """
+    try:
+        from services.tax_invoice_request_svc import ensure_auto_exception_request
+        row, _created = ensure_auto_exception_request(
+            sb, payment, "AUTO_PAYMENT", reason_code, reason=reason,
+            missing_fields=missing_fields,
+        )
+        rid = row.get("id") if isinstance(row, dict) else None
+        _audit_auto("AUTO_TAX_INVOICE_QUEUED", payment.get("id"), trigger,
+                    {"request_id": rid, "reason_code": reason_code}, actor_id)
+        return rid
+    except Exception as e:  # noqa: BLE001
+        log.warning("[AUTO_TAX] 예외큐 기록 실패 payment=%s reason=%s: %s",
+                    payment.get("id"), reason_code, e)
+        _audit_auto("AUTO_TAX_INVOICE_QUEUE_FAILED", payment.get("id"), trigger,
+                    {"reason_code": reason_code, "error": str(e)[:200]}, actor_id)
         return None
 
 
@@ -123,18 +179,44 @@ def maybe_auto_issue_tax_invoice(sb, payment_id: str, trigger: str,
         elig = evaluate_eligibility(sb, payment)
         decision = str(elig.get("decision") or "").upper()
         reason_code = elig.get("reason_code")
+        reason_text = elig.get("reason")
+        missing_fields = elig.get("missing_fields") or []
+
         if decision == "DENY":
+            # [PATCH-1 A-P1] 자동 복구 가능 DENY 는 예외큐 REVIEW_REQUIRED 로 기록.
+            #                영구 비대상 DENY 는 큐 오염 방지 위해 미기록(audit 만).
+            if reason_code in AUTO_RECOVERABLE_DENY_CODES:
+                rid = _queue_exception(sb, payment, reason_code, reason_text,
+                                       trigger, actor_id, missing_fields)
+                result.update({"outcome": OUTCOME_ELIGIBLE_REVIEW,
+                               "reason": reason_code, "request_id": rid})
+                return result
             _audit_auto("AUTO_TAX_INVOICE_DENIED", payment_id, trigger,
                         {"reason_code": reason_code}, actor_id)
             result.update({"outcome": OUTCOME_ELIGIBLE_DENIED, "reason": reason_code})
             return result
+
         if decision == "REVIEW_REQUIRED":
-            _audit_auto("AUTO_TAX_INVOICE_REVIEW", payment_id, trigger,
-                        {"reason_code": reason_code}, actor_id)
-            result.update({"outcome": OUTCOME_ELIGIBLE_REVIEW, "reason": reason_code})
+            # [PATCH-1 A-P1] REVIEW_REQUIRED 는 반드시 예외큐 생성 (관리자가 확인할 대상).
+            rid = _queue_exception(sb, payment, reason_code, reason_text,
+                                   trigger, actor_id, missing_fields)
+            result.update({"outcome": OUTCOME_ELIGIBLE_REVIEW,
+                           "reason": reason_code, "request_id": rid})
             return result
+
         if decision != "ALLOW":
             result["reason"] = "UNKNOWN_DECISION"
+            return result
+
+        # [PATCH-1 A-P2] supply_date 사전 검증 (mutation 전).
+        # paid_at 없음/malformed → 예외큐(REVIEW_REQUIRED, SUPPLY_DATE_UNRESOLVED), processor 0.
+        supply_date = _resolve_supply_date(payment)
+        if not supply_date:
+            rid = _queue_exception(sb, payment, "SUPPLY_DATE_UNRESOLVED",
+                                   "결제 완료 시각(paid_at)이 없거나 형식이 올바르지 않아 자동 발행 공급일자를 확정할 수 없습니다.",
+                                   trigger, actor_id)
+            result.update({"outcome": OUTCOME_SUPPLY_DATE_UNRESOLVED,
+                           "reason": "SUPPLY_DATE_UNRESOLVED", "request_id": rid})
             return result
 
         # 4) create_request (system user, source 는 trigger 별)
@@ -169,7 +251,6 @@ def maybe_auto_issue_tax_invoice(sb, payment_id: str, trigger: str,
             result.update({"outcome": OUTCOME_ERROR, "reason": "PROCESSOR_IMPORT"})
             return result
 
-        supply_date = _resolve_supply_date(payment)
         try:
             issued_row, outcome = process_tax_invoice_request(sb, request_id, supply_date, actor_id)
         except ProcessorError as e:

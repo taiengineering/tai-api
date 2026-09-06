@@ -418,13 +418,19 @@ def admin_tax_invoice_detail(request_id: str, current_user: dict = Depends(_requ
             "failure_reason": r.get("failure_reason"),
             "updated_at": r.get("updated_at"),
         },
+        # [PATCH-1 A-P3] 3분할 fallback 규칙 통일: request.<x> ?? payment.<x> 로 supply/vat/total 동시 결정.
+        # amount(alias) = resolved total_amount (시점 혼합 금지 — list 와 detail 동일 규칙).
         "payment": {
             "payment_id": pid,
-            # amount = total_amount (기존 필드 유지, 하위 호환). supply_amount/vat_amount 신규 투영.
-            "amount": pay.get("total_amount"),
-            "supply_amount": r.get("supply_amount") if r.get("supply_amount") is not None else pay.get("supply_amount"),
-            "vat_amount": r.get("vat_amount") if r.get("vat_amount") is not None else pay.get("vat_amount"),
-            "total_amount": pay.get("total_amount"),
+            "supply_amount": (r.get("supply_amount") if r.get("supply_amount") is not None
+                              else pay.get("supply_amount")),
+            "vat_amount": (r.get("vat_amount") if r.get("vat_amount") is not None
+                           else pay.get("vat_amount")),
+            "total_amount": (r.get("total_amount") if r.get("total_amount") is not None
+                             else pay.get("total_amount")),
+            # amount 는 resolved total_amount 와 동일 값 (하위호환 alias).
+            "amount": (r.get("total_amount") if r.get("total_amount") is not None
+                       else pay.get("total_amount")),
             "payment_method": pay.get("pg_method"), "proof_type": pay.get("proof_type"),
             "paid_at": pay.get("paid_at"),
         },

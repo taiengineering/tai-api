@@ -240,3 +240,55 @@ def test_A4_no_server_side_amount_recompute():
     # 3분할은 반드시 request/payments SoT 에서 유래
     assert "supply_amount" in src
     assert "vat_amount" in src
+
+
+# ═════════════════════════════════════════════════════════════════════
+# [PATCH-1 A-P3 / A-P5 E8/E9] detail 3분할 fallback 정합 (시점 혼합 금지)
+# request.<x> ?? payment.<x> 규칙을 supply/vat/total 세 필드 모두 동일하게 적용.
+# amount(alias) = resolved total_amount.
+# ═════════════════════════════════════════════════════════════════════
+@requires_client
+def test_E8_detail_snapshot_exact_when_payment_differs(monkeypatch):
+    """request snapshot 이 있으면 payments 와 값이 달라도 snapshot 이 정본 (시점 혼합 금지).
+    snapshot = 499000/49900/548900, payment 은 다른 값(위조/현재값).
+    detail.payment.{supply|vat|total}_amount 는 모두 snapshot 값이어야 함.
+    amount alias 는 resolved total_amount 와 동일.
+    """
+    store = _qa_mock_store()
+    # payments 를 다른 값으로 오염 (예: 나중에 부분환불로 값이 달라진 상황 시뮬)
+    store["payments"][0]["supply_amount"] = 300000
+    store["payments"][0]["vat_amount"] = 30000
+    store["payments"][0]["total_amount"] = 330000
+    c = _client(store, monkeypatch)
+    r = c.get("/payments/admin/tax-invoices/req-qa")
+    assert r.status_code == 200, r.text
+    pay = r.json()["data"]["payment"]
+    # snapshot 정본
+    assert pay["supply_amount"] == 499000
+    assert pay["vat_amount"] == 49900
+    assert pay["total_amount"] == 548900
+    # amount alias = resolved total_amount
+    assert pay["amount"] == 548900
+    # 시점 혼합 금지: payment 오염값은 절대 나오면 안 됨
+    assert pay["supply_amount"] != 300000
+    assert pay["total_amount"] != 330000
+
+
+@requires_client
+def test_E9_detail_payment_fallback_when_snapshot_all_null(monkeypatch):
+    """request snapshot 이 supply/vat/total 모두 null → payments SoT 로 폴백. 세 필드 모두 동일 규칙.
+    amount alias 도 resolved total_amount 로 fallback 후 payments 값.
+    """
+    store = _qa_mock_store()
+    store["tax_invoice_requests"][0]["supply_amount"] = None
+    store["tax_invoice_requests"][0]["vat_amount"] = None
+    store["tax_invoice_requests"][0]["total_amount"] = None
+    c = _client(store, monkeypatch)
+    r = c.get("/payments/admin/tax-invoices/req-qa")
+    assert r.status_code == 200, r.text
+    pay = r.json()["data"]["payment"]
+    # payments 로 fallback
+    assert pay["supply_amount"] == 499000
+    assert pay["vat_amount"] == 49900
+    assert pay["total_amount"] == 548900
+    assert pay["amount"] == 548900
