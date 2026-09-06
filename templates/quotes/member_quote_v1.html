@@ -1,48 +1,103 @@
 <!doctype html><html lang="ko"><head><meta charset="utf-8">
 <style>
-  @page { size: A4; margin: 14mm; }
-  * { font-family: -apple-system, "Malgun Gothic", "Nanum Gothic", sans-serif; box-sizing: border-box; }
-  body { color:#111; font-size:12px; }
-  h1 { text-align:center; letter-spacing:12px; font-size:26px; margin:0 0 18px; }
-  .meta { text-align:right; font-size:11px; color:#333; margin-bottom:14px; }
-  .receiver { font-size:15px; font-weight:700; margin:10px 0 4px; }
-  .receiver small { font-weight:400; color:#666; }
-  table { width:100%; border-collapse:collapse; margin-top:10px; }
-  th,td { border:1px solid #bbb; padding:7px 8px; }
-  th { background:#f2f4f6; font-weight:700; }
-  td.num, th.num { text-align:right; }
-  .supplier { margin-top:22px; width:60%; float:right; font-size:11px; }
-  .supplier td,.supplier th { border:none; padding:2px 6px; }
-  .totals { margin-top:14px; width:45%; float:right; }
-  .totals td { border:none; padding:4px 8px; }
-  .totals .grand { border-top:2px solid #111; font-size:15px; font-weight:800; }
-  .foot { clear:both; margin-top:60px; font-size:10px; color:#777; border-top:1px solid #ddd; padding-top:8px; }
+  @page { size: A4; margin: 12mm; }
+  * { font-family: -apple-system, "Malgun Gothic", "Nanum Gothic", "Noto Sans CJK KR", "NanumGothic", sans-serif; box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { color:#1a1a1a; font-size:11px; margin:0; }
+  .doc { border:2px solid #0d2b4e; padding:0; }
+  .brandbar { background:#0d2b4e; color:#fff; padding:7px 14px; display:flex; justify-content:space-between; align-items:center; }
+  .brand { font-size:15px; font-weight:800; letter-spacing:1px; }
+  .brand .accent { color:#4bb3c4; }
+  .brandbar .tag { font-size:10px; color:#c7d6e6; letter-spacing:2px; }
+  .titlewrap { text-align:center; padding:14px 0 6px; }
+  h1 { margin:0; font-size:30px; letter-spacing:16px; font-weight:800; color:#0d2b4e; }
+  h1 .u { border-bottom:3px solid #0d2b4e; padding-bottom:3px; }
+  .meta { text-align:right; font-size:10.5px; color:#333; padding:0 14px 8px; }
+  .meta b { color:#0d2b4e; }
+  .head { display:flex; gap:0; padding:0 14px; }
+  .recv { flex:1; padding:8px 12px 4px 2px; }
+  .recv .to { font-size:16px; font-weight:800; }
+  .recv .to small { font-size:11px; font-weight:400; color:#666; }
+  .recv .cont { font-size:12px; margin-top:3px; }
+  .recv .phrase { margin-top:10px; font-size:11px; color:#444; }
+  .recv .grand-inline { margin-top:12px; border:1.5px solid #0d2b4e; background:#eef3f8; padding:7px 10px; font-size:12px; }
+  .recv .grand-inline b { font-size:15px; color:#0d2b4e; }
+  .recv .grand-inline .kor { display:block; font-size:10px; color:#555; margin-top:2px; }
+  .sup { width:52%; border:1.5px solid #0d2b4e; display:flex; }
+  .sup .vlabel { width:22px; background:#0d2b4e; color:#fff; font-size:11px; font-weight:700; writing-mode:vertical-rl; text-align:center; letter-spacing:4px; display:flex; align-items:center; justify-content:center; }
+  .sup table { width:100%; border-collapse:collapse; }
+  .sup td { border:0.5px solid #cbd5e1; padding:3px 6px; font-size:10.5px; vertical-align:middle; }
+  .sup td.k { background:#f2f6fa; font-weight:700; width:64px; color:#0d2b4e; white-space:nowrap; }
+  .seal { position:relative; }
+  .seal .stamp { position:absolute; right:6px; top:50%; transform:translateY(-50%); width:44px; height:44px; border:2px solid #c0392b; border-radius:50%; color:#c0392b; font-size:7px; font-weight:800; line-height:1.05; display:flex; align-items:center; justify-content:center; text-align:center; opacity:.9; }
+  .items { width:calc(100% - 28px); margin:12px 14px 0; border-collapse:collapse; }
+  .items th, .items td { border:1px solid #b9c4d0; padding:6px 7px; font-size:10.5px; }
+  .items thead th { background:#0d2b4e; color:#fff; font-weight:700; }
+  .items td.num, .items th.num { text-align:right; }
+  .items td.c, .items th.c { text-align:center; }
+  .items .empty td { height:20px; }
+  .sum { width:calc(100% - 28px); margin:0 14px; border-collapse:collapse; }
+  .sum td { border:1px solid #b9c4d0; border-top:0; padding:6px 7px; font-size:11px; }
+  .sum td.k { background:#f2f6fa; font-weight:700; text-align:center; color:#0d2b4e; width:110px; }
+  .sum td.num { text-align:right; }
+  .sum tr.total td { background:#0d2b4e; color:#fff; font-weight:800; font-size:13px; }
+  .remark { margin:10px 14px 0; font-size:10px; color:#444; }
+  .remark .box { border:1px solid #cbd5e1; padding:6px 8px; min-height:26px; white-space:pre-line; }
+  .foot { margin:12px 14px 12px; padding-top:7px; border-top:1px dashed #b9c4d0; font-size:9px; color:#777; }
 </style></head><body>
-  <h1>견 적 서</h1>
-  <div class="meta">견적번호: {{ quote_no }}<br>견적일자: {{ quote_date }}</div>
-  <div class="receiver">수신: {{ receiver }} <small>귀중</small></div>
-  <table>
-    <thead><tr><th>서비스</th><th>상품/티어</th><th>이용기간</th>
-      <th class="num">수량</th><th class="num">단가</th><th class="num">공급가액</th></tr></thead>
-    <tbody><tr>
-      <td>{{ service_type }}</td><td>{{ product_name }}</td><td>{{ period }}</td>
-      <td class="num">{{ quantity }}</td><td class="num">{{ unit_amount }}</td><td class="num">{{ supply }}</td>
-    </tr></tbody>
+<div class="doc">
+  <div class="brandbar">
+    <span class="brand">TAI<span class="accent"> </span> 엔지니어링</span>
+    <span class="tag">TAI SAFE · 산업안전 관리 플랫폼</span>
+  </div>
+
+  <div class="titlewrap"><h1><span class="u">견 적 서</span></h1></div>
+  <div class="meta">견적번호: <b>{{ quote_no }}</b>&nbsp;&nbsp;|&nbsp;&nbsp;견적일자: <b>{{ quote_date }}</b>{% if valid_until %}&nbsp;&nbsp;|&nbsp;&nbsp;유효기간: <b>{{ valid_until }}</b>{% endif %}</div>
+
+  <div class="head">
+    <div class="recv">
+      <div class="to">{{ receiver }} <small>귀하</small></div>
+      {% if contact %}<div class="cont">담당: {{ contact }} 님</div>{% endif %}
+      <div class="phrase">아래와 같이 견적합니다.</div>
+      <div class="grand-inline">합계금액(VAT 포함): <b>₩ {{ total }}</b>
+        {% if total_hangul %}<span class="kor">金 {{ total_hangul }}</span>{% endif %}
+      </div>
+    </div>
+    <div class="sup">
+      <div class="vlabel">공 급 자</div>
+      <table>
+        <tr><td class="k">등록번호</td><td colspan="3">{{ supplier.business_no }}</td></tr>
+        <tr><td class="k">상 호</td><td>{{ supplier.name }}</td><td class="k">성 명</td><td class="seal">{{ supplier.representative }}<span class="stamp">TAI<br>엔지니어링<br>㊞</span></td></tr>
+        <tr><td class="k">주 소</td><td colspan="3">{{ supplier.address }}</td></tr>
+        {% if supplier.biz_type or supplier.biz_class %}<tr><td class="k">업태/종목</td><td colspan="3">{{ supplier.biz_type }}{% if supplier.biz_class %} / {{ supplier.biz_class }}{% endif %}</td></tr>{% endif %}
+        <tr><td class="k">전 화</td><td>{{ supplier.tel }}</td><td class="k">이메일</td><td>{{ supplier.email }}</td></tr>
+        {% if supplier.fax %}<tr><td class="k">FAX</td><td colspan="3">{{ supplier.fax }}</td></tr>{% endif %}
+      </table>
+    </div>
+  </div>
+
+  <table class="items">
+    <thead><tr>
+      <th class="c" style="width:34px">No</th><th>서비스 / 품목</th><th class="c">상품·티어</th>
+      <th class="c">이용기간</th><th class="num" style="width:46px">수량</th>
+      <th class="num" style="width:92px">단가</th><th class="num" style="width:100px">공급가액</th>
+    </tr></thead>
+    <tbody>
+      <tr><td class="c">1</td><td>{{ service_type }}</td><td class="c">{{ product_name }}</td>
+        <td class="c">{{ period }}</td><td class="num">{{ quantity }}</td>
+        <td class="num">{{ unit_amount }}</td><td class="num">{{ supply }}</td></tr>
+      <tr class="empty"><td class="c">&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+      <tr class="empty"><td class="c">&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+    </tbody>
   </table>
-  <table class="totals">
-    <tr><td>공급가액</td><td class="num">{{ supply }} 원</td></tr>
-    <tr><td>부가가치세</td><td class="num">{{ vat }} 원</td></tr>
-    <tr class="grand"><td>총 견적금액</td><td class="num">{{ total }} 원</td></tr>
+
+  <table class="sum">
+    <tr><td class="k">공급가액</td><td class="num">{{ supply }} 원</td></tr>
+    <tr><td class="k">부가가치세</td><td class="num">{{ vat }} 원</td></tr>
+    <tr class="total"><td class="k" style="background:#0d2b4e">합계금액</td><td class="num">{{ total }} 원</td></tr>
   </table>
-  <table class="supplier">
-    <tr><th>공급자</th><td></td></tr>
-    <tr><td>상호</td><td>{{ supplier.name }}</td></tr>
-    <tr><td>대표자</td><td>{{ supplier.representative }}</td></tr>
-    <tr><td>사업자등록번호</td><td>{{ supplier.business_no }}</td></tr>
-    <tr><td>주소</td><td>{{ supplier.address }}</td></tr>
-    <tr><td>TEL</td><td>{{ supplier.tel }}</td></tr>
-    {% if supplier.fax %}<tr><td>FAX</td><td>{{ supplier.fax }}</td></tr>{% endif %}
-    <tr><td>EMAIL</td><td>{{ supplier.email }}</td></tr>
-  </table>
-  <div class="foot">본 견적서는 서비스 이용 검토 및 고객사 내부결재를 위한 견적서입니다. 계약서·결제확정서·세금계산서가 아닙니다.</div>
+
+  {% if remark %}<div class="remark"><div class="box">{{ remark }}</div></div>{% endif %}
+
+  <div class="foot">본 견적서는 서비스 이용 검토 및 고객사 내부결재(지결·품의·구매결재)를 위한 견적 자료입니다. 계약서 · 결제확정서 · 세금계산서가 아닙니다.</div>
+</div>
 </body></html>

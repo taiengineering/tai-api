@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import datetime
 import os
 from typing import Any, Dict, Optional
 
@@ -15,7 +16,7 @@ from services.gotenberg_svc import render_html_pdf
 from services.time import to_kst, parse_external_datetime
 
 GENERATED_BY = "member_quote_pdf_v1"
-TEMPLATE_VERSION = "member_quote_v1"
+TEMPLATE_VERSION = "member_quote_v2"
 _TEMPLATE_NAME = "member_quote_v1.html"
 _TEMPLATE_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -45,6 +46,8 @@ def _supplier_config() -> Dict[str, str]:
         "tel": (os.getenv("QUOTE_SUPPLIER_TEL") or "").strip(),
         "fax": (os.getenv("QUOTE_SUPPLIER_FAX") or "").strip(),         # 선택
         "email": (os.getenv("QUOTE_SUPPLIER_EMAIL") or "").strip(),
+        "biz_type": (os.getenv("TAI_BIZ_TYPE") or "").strip(),          # 선택
+        "biz_class": (os.getenv("TAI_BIZ_CLASS") or "").strip(),        # 선택
     }
     missing = [k for k in ("name", "representative", "business_no", "address", "tel", "email") if not cfg[k]]
     if missing:
@@ -94,6 +97,44 @@ def _period_label(item: Dict[str, Any]) -> str:
     return "1회"
 
 
+_UNIT_HANGUL = "영일이삼사오육칠팔구"
+_POS = ["", "십", "백", "천"]
+_GRP = ["", "만", "억", "조"]
+
+
+def _won_to_hangul(n: int) -> str:
+    n = int(n or 0)
+    if n == 0:
+        return "영원정"
+    s = str(n)
+    groups = []
+    while s:
+        groups.append(s[-4:])
+        s = s[:-4]
+    out = ""
+    for gi in range(len(groups) - 1, -1, -1):
+        g = int(groups[gi])
+        if g == 0:
+            continue
+        gs = str(g).zfill(4)
+        part = ""
+        for i, ch in enumerate(gs):
+            v = int(ch)
+            if v == 0:
+                continue
+            part += ("" if (v == 1 and (3 - i) > 0) else _UNIT_HANGUL[v]) + _POS[3 - i]
+        out += part + _GRP[gi]
+    return out + "원정"
+
+
+def _valid_until_kst(created_at, days: int = 30) -> Optional[str]:
+    try:
+        d = to_kst(parse_external_datetime(str(created_at).replace("Z", "+00:00")))
+        return (d + datetime.timedelta(days=days)).strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+
 def _render_html(quote, item, supplier, quote_date) -> str:
     def won(n):
         return "{:,}".format(int(n or 0))
@@ -101,6 +142,7 @@ def _render_html(quote, item, supplier, quote_date) -> str:
     return _jinja.get_template(_TEMPLATE_NAME).render(
         quote_no=quote.get("quote_no"),
         quote_date=quote_date,
+        valid_until=_valid_until_kst(quote.get("created_at")),
         receiver=quote.get("company_name") or "",
         supplier=supplier,
         service_type=item.get("service_type") or quote.get("service_type") or "",
@@ -111,6 +153,7 @@ def _render_html(quote, item, supplier, quote_date) -> str:
         supply=won(quote.get("supply_amount")),
         vat=won(quote.get("vat_amount")),
         total=won(quote.get("total_amount")),
+        total_hangul=_won_to_hangul(quote.get("total_amount")),
     )
 
 

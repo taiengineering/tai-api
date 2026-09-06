@@ -1004,3 +1004,125 @@ def test_FINAL_validate_runs_before_find_existing():
     assert 0 <= idx_validate < idx_find, (
         "validate before find (BLOCKER-1). validate={} find={}".format(idx_validate, idx_find)
     )
+
+
+# ══════════════════════════════════════════════════════════════════
+# STEP 2B-FORM : v2 템플릿 드롭인 (파일명 동일) + 파생 헬퍼 (한글금액·유효기간) +
+#                업태/종목 env (선택). GENERATED_BY 는 멱등키 → 불변.
+#                FORM-1 _won_to_hangul · FORM-2 _valid_until_kst · FORM-3 biz env optional ·
+#                FORM-4 render new vars · FORM-5 regression (GENERATED_BY unchanged)
+# ══════════════════════════════════════════════════════════════════
+def test_FORM1_won_to_hangul_representative_values():
+    """계약 금액 3,946,800 / 0 / 경계값 / 큰 수 검증."""
+    from services.member_quote_pdf_svc import _won_to_hangul
+    # 대표 payload total_amount = 3,946,800
+    assert _won_to_hangul(3_946_800) == "삼백구십사만육천팔백원정"
+    # zero
+    assert _won_to_hangul(0) == "영원정"
+    assert _won_to_hangul(None) == "영원정"
+    # 단위 boundary
+    assert _won_to_hangul(10_000) == "일만원정"
+    assert _won_to_hangul(100_000_000) == "일억원정"
+    # 십/백/천 단위 축약 (일십/일백/일천은 십/백/천)
+    assert _won_to_hangul(10) == "십원정"
+    assert _won_to_hangul(100) == "백원정"
+    assert _won_to_hangul(1_000) == "천원정"
+    # 모든 자리 채운 수 : 문자열 non-empty + "원정" 종결 (스모크)
+    got = _won_to_hangul(1_234_567_890)
+    assert got.endswith("원정")
+    assert len(got) > 4
+
+
+def test_FORM2_valid_until_kst_adds_30_days():
+    """created_at + 30일 (KST 기준) YYYY-MM-DD. 파싱 실패 시 None."""
+    from services.member_quote_pdf_svc import _valid_until_kst
+    # 2026-09-06 00:00 UTC → KST 2026-09-06 09:00 → +30일 → 2026-10-06
+    assert _valid_until_kst("2026-09-06T00:00:00+00:00") == "2026-10-06"
+    # KST literal 유지
+    assert _valid_until_kst("2026-09-06T00:00:00+09:00") == "2026-10-06"
+    # Z 표기
+    assert _valid_until_kst("2026-09-06T00:00:00Z") == "2026-10-06"
+    # 파싱 불가 → None (fail-open, 템플릿 슬롯 자동 숨김)
+    assert _valid_until_kst("not-a-date") is None
+    assert _valid_until_kst(None) is None
+    assert _valid_until_kst("") is None
+
+
+def test_FORM3_biz_type_class_optional_not_required(monkeypatch):
+    """TAI_BIZ_TYPE / TAI_BIZ_CLASS 는 선택 — 없어도 _supplier_config 정상. 있으면 값 반영."""
+    _set_supplier_env(monkeypatch)
+    # 미설정 : 필수 검증 미포함 → 성공, 빈 문자열
+    monkeypatch.delenv("TAI_BIZ_TYPE", raising=False)
+    monkeypatch.delenv("TAI_BIZ_CLASS", raising=False)
+    cfg = pdf_svc._supplier_config()
+    assert cfg["biz_type"] == ""
+    assert cfg["biz_class"] == ""
+
+    # 설정 : 값 반영
+    monkeypatch.setenv("TAI_BIZ_TYPE", "서비스")
+    monkeypatch.setenv("TAI_BIZ_CLASS", "산업안전 관리 플랫폼")
+    cfg2 = pdf_svc._supplier_config()
+    assert cfg2["biz_type"] == "서비스"
+    assert cfg2["biz_class"] == "산업안전 관리 플랫폼"
+
+
+def test_FORM3b_biz_env_missing_does_not_raise(monkeypatch):
+    """biz_type/biz_class 는 필수 6종에 포함되지 않음 (없어도 QUOTE_SUPPLIER_CONFIG_MISSING 미발동)."""
+    _set_supplier_env(monkeypatch)
+    monkeypatch.delenv("TAI_BIZ_TYPE", raising=False)
+    monkeypatch.delenv("TAI_BIZ_CLASS", raising=False)
+    # 예외 없이 통과
+    cfg = pdf_svc._supplier_config()
+    assert "biz_type" in cfg and "biz_class" in cfg
+
+
+def test_FORM4_render_includes_new_vars_no_exception(monkeypatch):
+    """_render_html 이 valid_until / total_hangul 을 넘겨도 예외 없이 완료.
+    contact 는 이번 미연결(템플릿 자동 숨김 — {% if contact %}), undefined 로 렌더 통과.
+    """
+    _set_supplier_env(monkeypatch); _set_gotenberg_env(monkeypatch)
+    from services.member_quote_pdf_svc import (
+        _render_html, _supplier_config, _validate_snapshot, _quote_date_kst,
+    )
+    q = _issued_quote(company_id="C-A")
+    item = _validate_snapshot(q)
+    supplier = _supplier_config()
+    html = _render_html(q, item, supplier, _quote_date_kst(q["created_at"]))
+    # 한글금액 + 유효기간이 렌더 결과에 실제 반영됨 (템플릿 슬롯 채워짐)
+    assert "삼백구십사만육천팔백원정" in html
+    assert "2026-10-06" in html
+    # 회사명 / 금액 등 기존 슬롯은 그대로
+    assert "테스트 주식회사" in html
+    # contact 미연결 : contact 값 자체가 렌더 HTML 에 텍스트로 삽입되지 않음
+    #   (템플릿의 {% if contact %} 는 undefined 를 falsy 로 취급하여 자동 숨김)
+    assert "담당:" not in html
+
+
+def test_FORM4b_render_contact_hidden_when_missing(monkeypatch):
+    """contact 는 _render_html 호출 kwargs 에 포함되지 않음 (CONTACT-SNAPSHOT WO 소관)."""
+    import inspect
+    render_src = inspect.getsource(pdf_svc._render_html)
+    # 새 변수는 render() call 에 반드시 포함
+    assert "valid_until=" in render_src
+    assert "total_hangul=" in render_src
+    # contact 는 이번엔 미연결
+    assert "contact=" not in render_src
+
+
+def test_FORM5_generated_by_unchanged_idempotency_key():
+    """멱등 키는 GENERATED_BY. v2 폼업그레이드에도 값 불변 = member_quote_pdf_v1."""
+    assert pdf_svc.GENERATED_BY == "member_quote_pdf_v1"
+
+
+def test_FORM5b_template_version_bumped_to_v2():
+    """TEMPLATE_VERSION 만 v2. _TEMPLATE_NAME(파일명) 은 dropin 유지."""
+    assert pdf_svc.TEMPLATE_VERSION == "member_quote_v2"
+    assert pdf_svc._TEMPLATE_NAME == "member_quote_v1.html"
+
+
+def test_FORM5c_file_name_and_tags_unchanged():
+    """register_generated 호출 계약 : file_name / tags 는 불변 (소스 grep)."""
+    import inspect
+    src = inspect.getsource(pdf_svc.issue_or_get_quote_pdf)
+    assert 'file_name="TAI_견적서_{}.pdf".format(quote.get("quote_no"))' in src
+    assert 'tags=["quote", "member_auto"]' in src
