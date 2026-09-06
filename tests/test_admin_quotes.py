@@ -182,6 +182,11 @@ class FakeSupabase:
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────
+# PATCH-1 : _require_company_name 이 재조회를 강제하므로 기본 store 에 C-A 회사 포함.
+#   companies 를 명시 지정한 테스트는 override(기존 동작 유지).
+_DEFAULT_COMPANIES = [{"id": "C-A", "name": "A사"}]
+
+
 def _base_store(quotes=None, companies=None):
     return {
         "quotes": list(quotes or []),
@@ -190,7 +195,7 @@ def _base_store(quotes=None, companies=None):
             {"role_code": "001", "scope_type": "ALL"},
             {"role_code": "002", "scope_type": "COMPANY"},
         ],
-        "companies": list(companies or []),
+        "companies": list(companies) if companies is not None else list(_DEFAULT_COMPANIES),
         "factories": [],
     }
 
@@ -554,7 +559,7 @@ def test_A29_manual_preview_echoes_company_snapshot_and_contact():
     c = _client(_admin_user(), store)
     r = c.post("/admin/quotes/manual/preview", json={
         "company_id": "C-A", "billing_unit": "MONTHLY", "term_months": 12,
-        "unit_amount": 100000, "contact_name": " 김담당 ",
+        "unit_amount": 100000, "contact_name": " 김담당 ", "display_name": "산업 프로",
     })
     d = r.json()["data"]
     assert d["company_name"] == "A 주식회사"
@@ -565,7 +570,8 @@ def test_A29_manual_preview_echoes_company_snapshot_and_contact():
 def test_A30_manual_preview_no_quote_no():
     c = _client(_admin_user(), _base_store())
     r = c.post("/admin/quotes/manual/preview", json={
-        "company_id": "C-A", "billing_unit": "MONTHLY", "term_months": 12, "unit_amount": 100000,
+        "company_id": "C-A", "billing_unit": "MONTHLY", "term_months": 12,
+        "unit_amount": 100000, "display_name": "산업 프로",
     })
     d = r.json()["data"]
     assert "quote_no" not in d
@@ -618,7 +624,8 @@ def test_A34_manual_issue_company_name_snapshot():
     store = _base_store(companies=[{"id": "C-A", "name": "테스트 주식회사"}])
     c = _client(_admin_user(), store)
     r = c.post("/admin/quotes/manual", json={
-        "company_id": "C-A", "billing_unit": "MONTHLY", "term_months": 12, "unit_amount": 100000,
+        "company_id": "C-A", "billing_unit": "MONTHLY", "term_months": 12,
+        "unit_amount": 100000, "display_name": "산업 프로",
     })
     assert r.json()["data"]["company_name"] == "테스트 주식회사"
 
@@ -628,11 +635,11 @@ def test_A35_manual_issue_contact_name_normalized_and_blank_null():
     c = _client(_admin_user(), _base_store())
     r1 = c.post("/admin/quotes/manual", json={
         "company_id": "C-A", "billing_unit": "MONTHLY", "term_months": 1, "unit_amount": 100000,
-        "contact_name": " 이담당 ",
+        "contact_name": " 이담당 ", "display_name": "T",
     })
     r2 = c.post("/admin/quotes/manual", json={
         "company_id": "C-A", "billing_unit": "MONTHLY", "term_months": 1, "unit_amount": 100000,
-        "contact_name": "   ",
+        "contact_name": "   ", "display_name": "T",
     })
     assert r1.json()["data"]["contact_name"] == "이담당"
     assert r2.json()["data"]["contact_name"] is None
@@ -644,6 +651,7 @@ def test_A36_manual_issue_ignores_client_forged_amounts():
     c = _client(_admin_user(), _base_store())
     r = c.post("/admin/quotes/manual", json={
         "company_id": "C-A", "billing_unit": "MONTHLY", "term_months": 12, "unit_amount": 100000,
+        "display_name": "산업 프로",
         "supply_amount": 1, "vat_amount": 1, "total_amount": 1,             # 위조 시도 (extra ignored)
     })
     d = r.json()["data"]
@@ -689,7 +697,7 @@ def test_A40_manual_issue_vat_rate_recorded_in_item():
     c = _client(_admin_user(), _base_store())
     r = c.post("/admin/quotes/manual", json={
         "company_id": "C-A", "billing_unit": "MONTHLY", "term_months": 1, "unit_amount": 100000,
-        "vat_rate": 0.05,
+        "vat_rate": 0.05, "display_name": "T",
     })
     it = r.json()["data"]["items"][0]
     assert it["vat_rate"] == 0.05
@@ -706,7 +714,7 @@ def test_A41_custom_preview_requires_requested():
         _member_auto_quote(),                                                # member_auto (409)
     ])
     c = _client(_admin_user(), store)
-    body = {"billing_unit": "ONCE", "quantity": 1, "unit_amount": 100000}
+    body = {"billing_unit": "ONCE", "quantity": 1, "unit_amount": 100000, "display_name": "산업 상담"}
     assert c.post("/admin/quotes/q-custom-1/custom/preview", json=body).status_code == 200
     assert c.post("/admin/quotes/q-ci/custom/preview", json=body).status_code == 409
     assert c.post("/admin/quotes/q-auto-1/custom/preview", json=body).status_code == 409
@@ -717,7 +725,7 @@ def test_A42_custom_preview_row_immutable_no_write():
     store = _base_store([_member_custom_requested()])
     c = _client(_admin_user(), store)
     before = dict(store["quotes"][0])
-    body = {"billing_unit": "ONCE", "quantity": 1, "unit_amount": 100000}
+    body = {"billing_unit": "ONCE", "quantity": 1, "unit_amount": 100000, "display_name": "산업 상담"}
     c.post("/admin/quotes/q-custom-1/custom/preview", json=body)
     assert store["quotes"][0] == before
     assert not any(op == "update" and t == "quotes" for (t, op) in c._fake.log)
@@ -728,7 +736,7 @@ def test_A42_custom_preview_row_immutable_no_write():
 def test_A43_custom_preview_sector_fallback_survey_data():
     store = _base_store([_member_custom_requested()])
     c = _client(_admin_user(), store)
-    body = {"billing_unit": "ONCE", "quantity": 1, "unit_amount": 100000}
+    body = {"billing_unit": "ONCE", "quantity": 1, "unit_amount": 100000, "display_name": "산업 상담"}
     r = c.post("/admin/quotes/q-custom-1/custom/preview", json=body)
     it = r.json()["data"]["item"]
     assert it["sector"] == "INDUSTRY"  # survey_data.member_custom.sector 값
@@ -738,7 +746,7 @@ def test_A43_custom_preview_sector_fallback_survey_data():
 def test_A44_custom_preview_service_type_fallback_row():
     store = _base_store([_member_custom_requested()])   # service_type='SAAS'
     c = _client(_admin_user(), store)
-    body = {"billing_unit": "ONCE", "quantity": 1, "unit_amount": 100000}
+    body = {"billing_unit": "ONCE", "quantity": 1, "unit_amount": 100000, "display_name": "산업 상담"}
     r = c.post("/admin/quotes/q-custom-1/custom/preview", json=body)
     assert r.json()["data"]["item"]["service_type"] == "SAAS"
 
@@ -748,7 +756,7 @@ def test_A45_custom_preview_non_admin_403_no_write():
     store = _base_store([_member_custom_requested()])
     c = _client(_non_admin_user(), store)
     r = c.post("/admin/quotes/q-custom-1/custom/preview",
-               json={"billing_unit": "ONCE", "quantity": 1, "unit_amount": 100000})
+               json={"billing_unit": "ONCE", "quantity": 1, "unit_amount": 100000, "display_name": "산업 상담"})
     assert r.status_code == 403
     assert not any(op == "update" and t == "quotes" for (t, op) in c._fake.log)
 
@@ -1002,3 +1010,182 @@ def test_INV_STATIC_router_registry_has_admin_quotes():
     i_m = modules.index("routers.member_quotes")
     i_a = modules.index("routers.admin_quotes")
     assert i_a == i_m + 1
+
+
+# ════════════════════════════════════════════════════════════════════
+# STEP 2D-A PATCH-1 : 3블로커 대응
+#   블로커 1 : CustomIssueBody 에 service_type/sector 를 노출해서 관리자가
+#              회원의 신청 컨텍스트를 임의로 갈아치울 수 있었음
+#   블로커 2 : calc_manual_quote 가 display_name None/빈문자를 허용 → PDF 렌더 시
+#              product_name 슬롯이 비어 나감(검증 실패 or 상품 불명 견적)
+#   블로커 3 : manual issue/preview 가 존재하지 않는 company_id 로도 통과 → 이름 스냅샷 None,
+#              custom issue 가 원래 row 의 company_name 이 None 인 채로 발행 가능
+# ════════════════════════════════════════════════════════════════════
+def test_P1_01_custom_issue_body_no_service_type_field():
+    """블로커 1a : CustomIssueBody 에 service_type 필드 부재 (Pydantic 스키마)."""
+    fields = set(aq.CustomIssueBody.model_fields.keys())
+    assert "service_type" not in fields, \
+        "CustomIssueBody 에 service_type 을 노출하면 안 된다 (관리자가 회원 컨텍스트 override 금지)"
+
+
+def test_P1_02_custom_issue_body_no_sector_field():
+    """블로커 1b : CustomIssueBody 에 sector 필드 부재 (Pydantic 스키마)."""
+    fields = set(aq.CustomIssueBody.model_fields.keys())
+    assert "sector" not in fields, \
+        "CustomIssueBody 에 sector 를 노출하면 안 된다"
+
+
+def test_P1_03_resolve_custom_context_service_type_from_row():
+    """블로커 1c : _resolve_custom_context 는 row.service_type 만 사용 (body 인자 없음)."""
+    row = {"service_type": "SAAS",
+           "survey_data": {"member_custom": {"sector": "INDUSTRY"}}}
+    st, sec = aq._resolve_custom_context(row)
+    assert st == "SAAS"
+
+
+def test_P1_04_resolve_custom_context_sector_from_survey_data():
+    """블로커 1d : sector 는 survey_data.member_custom.sector 만."""
+    row = {"service_type": "SAAS",
+           "survey_data": {"member_custom": {"sector": "INDUSTRY"}}}
+    _st, sec = aq._resolve_custom_context(row)
+    assert sec == "INDUSTRY"
+    # survey_data 없으면 None
+    row2 = {"service_type": "SAAS"}
+    _st2, sec2 = aq._resolve_custom_context(row2)
+    assert sec2 is None
+
+
+def test_P1_05_display_name_none_raises_422():
+    """블로커 2a : calc_manual_quote(display_name=None) → 422 DISPLAY_NAME_REQUIRED."""
+    with pytest.raises(svc.AdminQuoteError) as e:
+        svc.calc_manual_quote("SAAS", "INDUSTRY", "T", None,
+                              "MONTHLY", 1, None, 100000, 0.1)
+    assert e.value.code == "DISPLAY_NAME_REQUIRED"
+    assert e.value.http_status == 422
+
+
+def test_P1_06_display_name_blank_raises_422():
+    """블로커 2b : 빈문자/공백만인 display_name → 422."""
+    for blank in ("", "   ", "\t\n"):
+        with pytest.raises(svc.AdminQuoteError) as e:
+            svc.calc_manual_quote("SAAS", "INDUSTRY", "T", blank,
+                                  "MONTHLY", 1, None, 100000, 0.1)
+        assert e.value.code == "DISPLAY_NAME_REQUIRED", f"blank={blank!r}"
+
+
+def test_P1_07_display_name_normalized_trim_preserves_middle():
+    """블로커 2c : 저장 값은 trim (외곽 공백 제거, 내부 공백 보존)."""
+    it = svc.calc_manual_quote("SAAS", "INDUSTRY", "T", "  산업 프로  ",
+                               "MONTHLY", 1, None, 100000, 0.1)
+    assert it["display_name"] == "산업 프로"
+
+
+@requires_client
+def test_P1_08_manual_preview_nonexistent_company_returns_404():
+    """블로커 3a : preview 도 존재하지 않는 company_id 는 404 (재조회 강제)."""
+    store = _base_store(companies=[])   # 빈 회사 리스트
+    c = _client(_admin_user(), store)
+    r = c.post("/admin/quotes/manual/preview", json={
+        "company_id": "C-NONE", "billing_unit": "MONTHLY", "term_months": 1,
+        "unit_amount": 100000, "display_name": "T",
+    })
+    assert r.status_code == 404
+    body = r.json()
+    assert body["detail"]["code"] == "COMPANY_NOT_FOUND"
+
+
+@requires_client
+def test_P1_09_manual_issue_nonexistent_company_404_no_insert():
+    """블로커 3b : issue 도 404 + quotes insert 0 (fail-closed)."""
+    store = _base_store(companies=[])
+    c = _client(_admin_user(), store)
+    r = c.post("/admin/quotes/manual", json={
+        "company_id": "C-NONE", "billing_unit": "MONTHLY", "term_months": 1,
+        "unit_amount": 100000, "display_name": "T",
+    })
+    assert r.status_code == 404
+    assert r.json()["detail"]["code"] == "COMPANY_NOT_FOUND"
+    assert not any(op == "insert" and t == "quotes" for (t, op) in c._fake.log)
+
+
+def test_P1_10_require_company_name_helper():
+    """블로커 3c : _require_company_name 헬퍼 계약."""
+    # 미존재 → 404 COMPANY_NOT_FOUND
+    fake_empty = FakeSupabase({"companies": []})
+    with pytest.raises(svc.AdminQuoteError) as e:
+        svc._require_company_name(fake_empty, "C-X")
+    assert e.value.code == "COMPANY_NOT_FOUND" and e.value.http_status == 404
+    # 존재 → 이름 반환
+    fake_ok = FakeSupabase({"companies": [{"id": "C-A", "name": "A사"}]})
+    assert svc._require_company_name(fake_ok, "C-A") == "A사"
+    # 빈 이름 → 404
+    fake_blank = FakeSupabase({"companies": [{"id": "C-B", "name": "  "}]})
+    with pytest.raises(svc.AdminQuoteError) as e2:
+        svc._require_company_name(fake_blank, "C-B")
+    assert e2.value.code == "COMPANY_NOT_FOUND"
+
+
+@requires_client
+def test_P1_11_custom_issue_missing_company_name_returns_409():
+    """블로커 3d : 원래 row 의 company_name 이 없으면 발행 금지 (409 QUOTE_SNAPSHOT_INCOMPLETE)."""
+    row = _member_custom_requested()
+    row["company_name"] = None
+    store = _base_store([row])
+    c = _client(_admin_user(), store)
+    r = c.post("/admin/quotes/q-custom-1/custom/issue", json=_custom_issue_body())
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "QUOTE_SNAPSHOT_INCOMPLETE"
+
+
+@requires_client
+def test_P1_12_custom_issue_incomplete_snapshot_zero_mutation():
+    """블로커 3e : 발행 실패 케이스에서 row 어떤 필드도 변경되지 않음."""
+    row = _member_custom_requested()
+    row["company_name"] = None
+    store = _base_store([row])
+    orig = dict(store["quotes"][0])
+    c = _client(_admin_user(), store)
+    c.post("/admin/quotes/q-custom-1/custom/issue", json=_custom_issue_body())
+    assert store["quotes"][0] == orig
+    assert not any(op == "update" and t == "quotes" for (t, op) in c._fake.log)
+
+
+@requires_client
+def test_P1_13_conditional_update_still_works_after_patch():
+    """정상 케이스 회귀 : PATCH-1 이후에도 REQUESTED→ISSUED same-row conditional UPDATE 정상."""
+    store = _base_store([_member_custom_requested()])
+    c = _client(_admin_user(), store)
+    r = c.post("/admin/quotes/q-custom-1/custom/issue", json=_custom_issue_body())
+    assert r.status_code == 200
+    assert store["quotes"][0]["status_code"] == "ISSUED"
+    assert store["quotes"][0]["quote_no"] == "QT-20260906-CUSTOM"
+
+
+@requires_client
+def test_P1_14_auth_and_pdf_eligibility_unchanged_after_patch():
+    """회귀 : AUTH(non-admin 403) + PDF eligibility(3소스 + ISSUED) 그대로."""
+    # AUTH
+    c = _client(_non_admin_user(), _base_store())
+    assert c.get("/admin/quotes").status_code == 403
+    # PDF eligibility : admin_manual + ISSUED 유효
+    pdf_svc._validate_snapshot({
+        "id": "q", "company_id": "C", "quote_no": "QT", "company_name": "A",
+        "created_at": "2026-09-01T00:00:00+00:00",
+        "updated_at": "2026-09-01T00:00:00+00:00",
+        "source": "admin_manual", "status_code": "ISSUED",
+        "items": [{"display_name": "T", "billing_unit": "ONCE", "unit_amount": 100,
+                   "quantity": 1, "supply_amount": 100, "vat_amount": 10, "total_amount": 110}],
+        "supply_amount": 100, "vat_amount": 10, "total_amount": 110,
+    })
+    # member_custom + REQUESTED : 여전히 차단
+    with pytest.raises(pdf_svc.QuotePdfError) as e:
+        pdf_svc._validate_snapshot({
+            "id": "q", "company_id": "C", "quote_no": "QT", "company_name": "A",
+            "created_at": "2026-09-01T00:00:00+00:00",
+            "updated_at": "2026-09-01T00:00:00+00:00",
+            "source": "member_custom", "status_code": "REQUESTED",
+            "items": [{"display_name": "T", "billing_unit": "ONCE", "unit_amount": 100,
+                       "quantity": 1, "supply_amount": 100, "vat_amount": 10, "total_amount": 110}],
+            "supply_amount": 100, "vat_amount": 10, "total_amount": 110,
+        })
+    assert e.value.code == "PDF_NOT_AVAILABLE"

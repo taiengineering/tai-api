@@ -30,6 +30,29 @@ class AdminQuoteError(Exception):
         self.http_status = http_status
 
 
+# ─ PATCH-1 helpers ────────────────────────────────────────────────────
+def _normalize_display_name(value: Optional[str]) -> str:
+    """None/빈문자/공백 → 422 DISPLAY_NAME_REQUIRED. 그 외 trim.
+    (PATCH-1 : PDF 슬롯 채움을 보증하기 위해 필수화 · 서버 재계산 SoT 규율과 정합)."""
+    if value is None:
+        raise AdminQuoteError("DISPLAY_NAME_REQUIRED",
+                              "상품명(display_name)은 필수입니다.", 422)
+    v = str(value).strip()
+    if not v:
+        raise AdminQuoteError("DISPLAY_NAME_REQUIRED",
+                              "상품명(display_name)은 필수입니다.", 422)
+    return v
+
+
+def _require_company_name(supabase, company_id: str) -> str:
+    """company_id 로 회사명 재조회. 미존재/공백 → 404 COMPANY_NOT_FOUND.
+    (PATCH-1 : company snapshot 이 None 인 채로 quote 를 발행/발송하는 것을 차단)."""
+    name = mq_svc._company_name_snapshot(supabase, company_id)
+    if not name or not str(name).strip():
+        raise AdminQuoteError("COMPANY_NOT_FOUND", "회사를 찾을 수 없습니다.", 404)
+    return name
+
+
 def calc_manual_quote(service_type, sector, tier_code, display_name,
                       billing_unit, term_months, quantity, unit_amount,
                       vat_rate: Optional[float] = 0.1) -> Dict[str, Any]:
@@ -44,6 +67,8 @@ def calc_manual_quote(service_type, sector, tier_code, display_name,
 
     출력 = single item snapshot (member_auto shape 와 동일 key set — PDF 재사용 정합).
     """
+    # PATCH-1 : display_name 필수 (정규화된 값을 item 에 저장).
+    display_name = _normalize_display_name(display_name)
     bu = (billing_unit or "").upper()
     try:
         ua = int(unit_amount)
@@ -100,15 +125,20 @@ def create_admin_manual(supabase, admin_user_id, company_id, contact_name,
                         billing_unit, term_months, quantity, unit_amount,
                         vat_rate: Optional[float] = 0.1,
                         memo: Optional[str] = None) -> Dict[str, Any]:
-    """admin_manual/ISSUED 신규 견적 발행 (single-item)."""
+    """admin_manual/ISSUED 신규 견적 발행 (single-item).
+
+    PATCH-1 : company_name 재조회를 _require_company_name 로 강제 (미존재 → 404, insert 0).
+    """
     if not company_id:
         raise AdminQuoteError("COMPANY_REQUIRED", "회사 지정이 필요합니다.", 422)
+    # PATCH-1 : 회사 존재/이름 스냅샷을 calc 이전에 확인. calc 도중 예외로 insert 이 시도되는 경로 봉쇄.
+    company_name = _require_company_name(supabase, company_id)
     item = calc_manual_quote(service_type, sector, tier_code, display_name,
                              billing_unit, term_months, quantity, unit_amount, vat_rate)
     now = now_kst().isoformat()
     base_row = {
         "company_id": company_id,
-        "company_name": mq_svc._company_name_snapshot(supabase, company_id),
+        "company_name": company_name,
         "created_by": admin_user_id,
         "source": "admin_manual",
         "status_code": "ISSUED",

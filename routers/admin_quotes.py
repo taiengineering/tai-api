@@ -45,9 +45,10 @@ class ManualQuoteBody(BaseModel):
 
 
 class CustomIssueBody(BaseModel):
-    # 모두 optional : 기존 REQUESTED row 값 / survey_data 값 우선 사용, body 미제공 시 fallback.
-    service_type: Optional[str] = None
-    sector: Optional[str] = None
+    # PATCH-1 : service_type / sector 는 클라이언트가 override 못 한다.
+    #   service_type = 기존 row.service_type
+    #   sector       = survey_data.member_custom.sector
+    # 관리자는 상품/티어/과금/기간/수량/단가/부가세율/메모만 조작한다.
     tier_code: Optional[str] = None
     display_name: Optional[str] = None
     billing_unit: str
@@ -62,15 +63,15 @@ def _raise(e: svc.AdminQuoteError):
     raise HTTPException(status_code=e.http_status, detail={"code": e.code, "message": e.message})
 
 
-def _resolve_custom_context(row: dict, body: CustomIssueBody):
-    """custom preview/issue : service_type / sector fallback 규칙.
+def _resolve_custom_context(row: dict):
+    """custom preview/issue : service_type / sector 는 오직 기존 row / survey_data 만.
 
-    body.service_type 우선, 없으면 기존 row.service_type.
-    body.sector 우선, 없으면 survey_data.member_custom.sector.
+    PATCH-1 : body override 제거. 관리자는 회원의 신청 컨텍스트를 그대로 사용해야 한다
+    (관리자가 임의로 서비스/섹터를 바꾸는 경로 봉쇄).
     """
-    service_type = body.service_type or row.get("service_type")
+    service_type = row.get("service_type")
     sd = (row.get("survey_data") or {}).get("member_custom") or {}
-    sector = body.sector or sd.get("sector")
+    sector = sd.get("sector")
     return service_type, sector
 
 
@@ -113,13 +114,14 @@ def get_quote(quote_id: str, current: dict = Depends(get_current_user)):
 @router.post("/manual/preview")
 def manual_preview(body: ManualQuoteBody, current: dict = Depends(get_current_user)):
     """수동 견적 미리보기 — DB write 0 · PDF call 0. quote_no 발급 없음.
-    회사명 snapshot 은 미리보기용으로 참고 표시 (실 저장은 issue 시 재조회)."""
+    PATCH-1 : 회사 존재를 _require_company_name 으로 강제(재조회, 미존재 → 404)."""
     supabase = get_supabase()
     _require_admin(current, supabase)
     if not body.company_id:
         raise HTTPException(status_code=422, detail={"code": "COMPANY_REQUIRED",
                                                      "message": "회사 지정이 필요합니다."})
     try:
+        company_name = svc._require_company_name(supabase, body.company_id)
         item = svc.calc_manual_quote(
             body.service_type, body.sector, body.tier_code, body.display_name,
             body.billing_unit, body.term_months, body.quantity, body.unit_amount,
@@ -129,7 +131,7 @@ def manual_preview(body: ManualQuoteBody, current: dict = Depends(get_current_us
         _raise(e)
     return {"status": "success", "data": {
         "company_id": body.company_id,
-        "company_name": mq_svc._company_name_snapshot(supabase, body.company_id),
+        "company_name": company_name,
         "contact_name": mq_svc.normalize_contact_name(body.contact_name),
         "item": item,
         "service_type": item["service_type"],
@@ -178,7 +180,7 @@ def custom_preview(quote_id: str, body: CustomIssueBody,
             "code": "NOT_CUSTOM_REQUESTED",
             "message": "요청 상태의 개별 견적만 미리보기 대상입니다.",
         })
-    service_type, sector = _resolve_custom_context(row, body)
+    service_type, sector = _resolve_custom_context(row)
     try:
         item = svc.calc_manual_quote(
             service_type, sector, body.tier_code, body.display_name,
@@ -218,7 +220,15 @@ def custom_issue(quote_id: str, body: CustomIssueBody,
             "code": "NOT_CUSTOM_REQUESTED",
             "message": "개별 견적이 아닙니다.",
         })
-    service_type, sector = _resolve_custom_context(row, body)
+    # PATCH-1 : 기존 row 의 company_name snapshot 이 누락된 경우 발행 불가.
+    #   (재조회로 우회하지 않는다 — 스냅샷 무결성이 위반된 상태에서 발행 금지)
+    cn = row.get("company_name")
+    if not cn or not str(cn).strip():
+        raise HTTPException(status_code=409, detail={
+            "code": "QUOTE_SNAPSHOT_INCOMPLETE",
+            "message": "견적의 회사명 정보가 누락되어 발행할 수 없습니다.",
+        })
+    service_type, sector = _resolve_custom_context(row)
     try:
         result = svc.issue_custom(
             supabase, quote_id, service_type, sector, body.tier_code, body.display_name,
