@@ -59,6 +59,8 @@ jobs:
         run: pytest tests/test_payment_proof_type.py -q --tb=short
       - name: Payment my projection tests
         run: pytest tests/test_payment_my_projection.py -q --tb=short
+      - name: Payment my tax status tests
+        run: pytest tests/test_payment_my_tax_status.py -q --tb=short
 
   db-integrity:
     name: "DB Integrity"

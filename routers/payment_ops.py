@@ -15,6 +15,11 @@
 [2026-09-05 FE-0] GET /payments/my 투영 보정: v_payments_list 에 proof_type 가 없어
   payments 테이블을 명시 컴럼(proof_type 포함)으로 직접 조회. company ownership·envelope 불변.
   관리자 list_payments 는 v_payments_list 그대로 유지.
+
+[2026-09-06 FE-0-2] GET /payments/my 각 행에 tax_status(세금계산서 원장 상태, 사실값) 추가.
+  tax_invoices.payment_id / tax_invoice_requests.payment_id 를 배치 2쿼리로 조회(N+1 금지).
+  fail-soft: tax 조회 실패해도 결제목록은 정상(tax_status=NONE). envelope 불변(행에 필드 추가만).
+  정책 판정 아니라 원장 상태 조회—프론트는 라벨만 매핑.
 """
 from __future__ import annotations
 
@@ -34,6 +39,67 @@ from services.time import now_kst
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/payments", tags=["결제"])
+
+
+def _attach_tax_status(supabase, rows: list) -> None:
+    """각 결제행에 tax_status(세금계산서 원장 상태, 사실값) 부여. N+1 금지 — 배치 2쿼리.
+
+    값: MODIFIED(수정발급) / ISSUED(발행완료) / PROCESSING / REQUESTED / FAILED /
+         REVIEW_REQUIRED / CANCELLED / NONE(미발급)
+    파생 우선순위: 발행된 수정세금계산서 > 발행완료 > 최신 요청 상태 > NONE.
+    정책 판정이 아닌 원장(tax_invoices/tax_invoice_requests) 사실 조회. fail-soft.
+    """
+    ids = [r["id"] for r in rows if r.get("id")]
+    if not ids:
+        for r in rows:
+            r["tax_status"] = "NONE"
+        return
+
+    issued_original: set = set()
+    issued_modified: set = set()
+    try:
+        inv = (
+            supabase.table("tax_invoices")
+            .select("payment_id, invoice_kind, status")
+            .in_("payment_id", ids)
+            .execute()
+        )
+        for iv in (inv.data or []):
+            if str(iv.get("status")) == "ISSUED":
+                pid = iv.get("payment_id")
+                if iv.get("invoice_kind") == "MODIFIED":
+                    issued_modified.add(pid)
+                else:
+                    issued_original.add(pid)
+    except Exception as e:  # noqa: BLE001 — fail-soft
+        log.warning("[tax_status] tax_invoices lookup failed: %s", e)
+
+    latest_req: dict = {}
+    try:
+        reqs = (
+            supabase.table("tax_invoice_requests")
+            .select("payment_id, status, created_at")
+            .in_("payment_id", ids)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        for rq in (reqs.data or []):
+            pid = rq.get("payment_id")
+            if pid and pid not in latest_req:  # desc 정렬 → 첫 등장이 최신
+                latest_req[pid] = rq.get("status")
+    except Exception as e:  # noqa: BLE001 — fail-soft
+        log.warning("[tax_status] tax_invoice_requests lookup failed: %s", e)
+
+    for r in rows:
+        pid = r.get("id")
+        if pid in issued_modified:
+            r["tax_status"] = "MODIFIED"
+        elif pid in issued_original or latest_req.get(pid) == "ISSUED":
+            r["tax_status"] = "ISSUED"
+        elif pid in latest_req:
+            r["tax_status"] = latest_req[pid]
+        else:
+            r["tax_status"] = "NONE"
 
 
 @router.get("")
@@ -102,6 +168,8 @@ def list_my_payments(
 
     FE-0: v_payments_list 에 proof_type 가 없으므로 payments 테이블을 명시 컴럼으로
     직접 조회한다(proof_type 포함). 응답 envelope 와 company ownership 은 그대로 유지.
+
+    FE-0-2: 각 행에 tax_status(세금계산서 원장 상태, 사실값) 추가(배치 조회). envelope 불변.
     """
     company_id = current_user.get("company_id")
     if not company_id:
@@ -129,10 +197,12 @@ def list_my_payments(
     offset = (page - 1) * size
     res = q.order("created_at", desc=True).range(offset, offset + size - 1).execute()
     total = res.count or 0
+    rows = res.data or []
+    _attach_tax_status(supabase, rows)
     return {
         "status": "success",
         "data": {
-            "items": res.data or [],
+            "items": rows,
             "total": total,
             "page": page,
             "size": size,
