@@ -339,3 +339,147 @@ def test_a18_no_n_plus_1(monkeypatch):
     data, f = _list(_store(reqs=reqs, payments=payments), monkeypatch)
     assert len(data['items']) == 5
     assert f.counter['n'] <= 8
+
+
+# ═════════════════════════════════════════════════════════════════════
+# [PATCH-2] BLOCKER-1 — ADMIN_MANUAL 발행원장 조회 결선 (L1~L8)
+# ═════════════════════════════════════════════════════════════════════
+
+def _manual_req(rid, tax_invoice_id=None, status='REQUESTED', **kw):
+    """ADMIN_MANUAL 스텁 request row. payment_id NULL, source=ADMIN_MANUAL."""
+    base = _req(rid, None, status=status,
+                source='ADMIN_MANUAL',
+                invoicee_company_name='수동회사', invoicee_business_number='999-88-77777',
+                tax_invoice_id=tax_invoice_id,
+                supply_amount=100000, vat_amount=10000, total_amount=110000,
+                item_name='품목', issue_reason='사유', supply_date='2026-09-05')
+    base.update(kw); return base
+
+
+def test_L1_manual_requested_no_link(monkeypatch):
+    """REQUESTED + tax_invoice_id NULL → tax_status=REQUESTED, original 없음, modified=false/0."""
+    store = _store(reqs=[_manual_req('r1', tax_invoice_id=None, status='REQUESTED')])
+    data, _ = _list(store, monkeypatch)
+    row = data['items'][0]
+    assert row['source'] == 'ADMIN_MANUAL'
+    assert row['payment_id'] is None
+    assert row['tax_status'] == 'REQUESTED'
+    assert row['original_invoice_status'] is None
+    assert row['issued_at'] is None
+    assert row['nts_confirm_num'] is None
+    assert row['has_modified_invoice'] is False
+    assert row['modified_count'] == 0
+    assert row['invoice_projection_ok'] is True
+
+
+def test_L2_manual_issued_linked_invoice(monkeypatch):
+    """ISSUED + linked invoice ISSUED → tax_status=ISSUED, nts/issued_at exact."""
+    store = _store(
+        reqs=[_manual_req('r1', tax_invoice_id='ti-1', status='ISSUED')],
+        invoices=[{'id': 'ti-1', 'payment_id': None, 'doc_type': 'TAX_INVOICE',
+                   'invoice_kind': 'ORIGINAL', 'status': 'ISSUED',
+                   'issued_at': '2026-09-05T10:00:00+09:00',
+                   'nts_confirm_num': 'NTS-MAN-1'}])
+    row = _list(store, monkeypatch)[0]['items'][0]
+    assert row['tax_status'] == 'ISSUED'
+    assert row['original_invoice_status'] == 'ISSUED'
+    assert row['issued_at'] == '2026-09-05T10:00:00+09:00'
+    assert row['nts_confirm_num'] == 'NTS-MAN-1'
+    assert row['has_modified_invoice'] is False    # 수동은 원본만
+    assert row['modified_count'] == 0
+
+
+def test_L3_manual_detail_lookup_by_tax_invoice_id(monkeypatch):
+    """detail: payment_id NULL, tax_invoice_id 로 original 조회 (payment_id 경로 사용 금지)."""
+    store = _store(
+        reqs=[_manual_req('r1', tax_invoice_id='ti-1', status='ISSUED')],
+        invoices=[
+            # 관련 없는 payment 기반 invoice 는 결과에 섞이면 안 됨
+            {'id': 'other', 'payment_id': 'p1', 'doc_type': 'TAX_INVOICE',
+             'invoice_kind': 'ORIGINAL', 'status': 'ISSUED', 'nts_confirm_num': 'NTS-OTHER',
+             'created_at': '2026-09-01'},
+            {'id': 'ti-1', 'payment_id': None, 'doc_type': 'TAX_INVOICE',
+             'invoice_kind': 'ORIGINAL', 'status': 'ISSUED',
+             'issued_at': '2026-09-05', 'nts_confirm_num': 'NTS-MAN-DETAIL',
+             'created_at': '2026-09-05'},
+        ])
+    data, _ = _detail(store, monkeypatch, 'r1')
+    assert data['payment']['payment_id'] is None
+    assert data['invoice_ledger']['tax_status'] == 'ISSUED'
+    assert data['invoice_ledger']['original']['id'] == 'ti-1'
+    assert data['invoice_ledger']['original']['nts_confirm_num'] == 'NTS-MAN-DETAIL'
+    assert data['invoice_ledger']['modified'] == []
+
+
+def test_L4_manual_issued_but_invoice_missing_is_unknown(monkeypatch):
+    """request.status=ISSUED 지만 tax_invoices 에 매칭 row 없음 → UNKNOWN (fail-safe)."""
+    store = _store(reqs=[_manual_req('r1', tax_invoice_id='ti-ghost', status='ISSUED')],
+                   invoices=[])
+    row = _list(store, monkeypatch)[0]['items'][0]
+    assert row['tax_status'] == 'UNKNOWN', \
+        "linked invoice 없이 ISSUED 를 그대로 노출하면 안 됨 (fail-safe UNKNOWN)"
+    assert row['original_invoice_status'] is None
+
+
+def test_L5_manual_invoice_lookup_fail_is_unknown(monkeypatch):
+    """tax_invoices 조회 실패 → invoice_projection_ok=false + tax_status UNKNOWN + null fields."""
+    store = _store(reqs=[_manual_req('r1', tax_invoice_id='ti-1', status='ISSUED')])
+    f = FakeSupabase(store, fail_tables=['tax_invoices'])
+    data = _list_raw(f, monkeypatch)
+    row = data['items'][0]
+    assert row['invoice_projection_ok'] is False
+    assert row['tax_status'] == 'UNKNOWN'
+    assert row['original_invoice_status'] is None
+    assert row['nts_confirm_num'] is None
+    assert row['has_modified_invoice'] is None
+    assert row['modified_count'] is None
+
+
+def test_L6_cash_receipt_still_excluded_for_manual(monkeypatch):
+    """CASH_RECEIPT doc_type 인 ADMIN_MANUAL row 는 목록에서 여전히 제외 (경계 불변)."""
+    store = _store(
+        reqs=[_manual_req('r1', tax_invoice_id='ti-1', status='ISSUED'),
+              _manual_req('rc', tax_invoice_id='ti-cr', status='ISSUED', doc_type='CASH_RECEIPT')],
+        invoices=[{'id': 'ti-1', 'payment_id': None, 'doc_type': 'TAX_INVOICE',
+                   'invoice_kind': 'ORIGINAL', 'status': 'ISSUED', 'nts_confirm_num': 'X'}])
+    data, _ = _list(store, monkeypatch)
+    assert [i['request_id'] for i in data['items']] == ['r1']
+
+
+def test_L7_payment_based_rows_unchanged(monkeypatch):
+    """혼합 목록: payment 기반 기존 row 결과는 완전 불변 (회귀 방지)."""
+    store = _store(
+        reqs=[_req('r1', 'p1', status='ISSUED'),
+              _manual_req('r2', tax_invoice_id='ti-m', status='ISSUED')],
+        invoices=[
+            {'payment_id': 'p1', 'doc_type': 'TAX_INVOICE', 'invoice_kind': 'ORIGINAL',
+             'status': 'ISSUED', 'issued_at': '2026-09-02', 'nts_confirm_num': 'NTS-PAY'},
+            {'id': 'ti-m', 'payment_id': None, 'doc_type': 'TAX_INVOICE',
+             'invoice_kind': 'ORIGINAL', 'status': 'ISSUED',
+             'issued_at': '2026-09-05', 'nts_confirm_num': 'NTS-MAN'},
+        ])
+    data, _ = _list(store, monkeypatch)
+    by_rid = {i['request_id']: i for i in data['items']}
+    # payment-based (source=MYPAGE) — 기존 계약 완전 불변
+    assert by_rid['r1']['source'] == 'MYPAGE'
+    assert by_rid['r1']['payment_id'] == 'p1'
+    assert by_rid['r1']['tax_status'] == 'ISSUED'
+    assert by_rid['r1']['nts_confirm_num'] == 'NTS-PAY'
+    # manual
+    assert by_rid['r2']['source'] == 'ADMIN_MANUAL'
+    assert by_rid['r2']['payment_id'] is None
+    assert by_rid['r2']['nts_confirm_num'] == 'NTS-MAN'
+
+
+def test_L8_manual_list_no_n_plus_1(monkeypatch):
+    """ADMIN_MANUAL 5건이 있어도 쿼리 수 상수(≤ 9). 배치 2쿼리(payment, manual) 원칙."""
+    reqs = [_manual_req('r%d' % i, tax_invoice_id='ti-%d' % i, status='ISSUED') for i in range(1, 6)]
+    invoices = [{'id': 'ti-%d' % i, 'payment_id': None, 'doc_type': 'TAX_INVOICE',
+                 'invoice_kind': 'ORIGINAL', 'status': 'ISSUED',
+                 'nts_confirm_num': 'NTS-%d' % i} for i in range(1, 6)]
+    data, f = _list(_store(reqs=reqs, invoices=invoices), monkeypatch)
+    assert len(data['items']) == 5
+    assert all(i['tax_status'] == 'ISSUED' for i in data['items'])
+    # 상수: reqs(1) + payments(0 or 1) + companies(1) + inv_by_pid(0 or 1)
+    #      + inv_by_manual(1) + _attach_tax_status(2) = 최대 8~9
+    assert f.counter['n'] <= 9, f"N+1 의심 (쿼리 {f.counter['n']}건)"

@@ -313,6 +313,18 @@ def process_manual_request(sb, request_id: str, actor_id: Optional[str]) -> tupl
         raise MemberTaxError(422, "MANUAL_METADATA_MISSING",
                              "품목명/발행사유가 없습니다.")
 
+    # PATCH-2 B-P1: INVOICE_LIVE gate 를 mutation 앞으로 선행. OFF 면 여기서 423.
+    #   → request UPDATE 0 / tax_invoices INSERT/UPDATE 0 / provider 호출 0.
+    #   invoice_svc 와 동일 gate helper 사용 (신설 금지).
+    #   내부 issue_manual_tax_invoice._assert_invoice_live 는 defense-in-depth 로 유지.
+    from services.invoice_svc import invoice_live
+    if not invoice_live():
+        raise MemberTaxError(
+            423, "INVOICE_GATED",
+            "실발행 실호출이 운영 게이트로 잠겨 있습니다(INVOICE_LIVE 비활성). "
+            "실제 팝빌 발행/취소는 나가지 않았습니다.",
+        )
+
     # 상태 전이 PROCESSING
     sb.table("tax_invoice_requests").update({
         "status": "PROCESSING", "updated_at": _now_iso(),
@@ -339,7 +351,9 @@ def process_manual_request(sb, request_id: str, actor_id: Optional[str]) -> tupl
             created_by=actor_id,
         )
     except InvoiceError as e:
-        # INVOICE_LIVE OFF (423) → request.status 는 REQUESTED 로 되돌림 (FAILED 오염 금지).
+        # PATCH-2 B-P2: 정상 경로에선 outer gate 로 이미 차단되어 여기 도달 안 함.
+        # 남겨두는 이유는 gate 가 outer 통과 후 flip 되는 race — defense-in-depth.
+        # 이 경로에서만 PROCESSING → REQUESTED 원복이 필요 (FAILED 오염 금지).
         if getattr(e, "code", None) == "INVOICE_GATED" or e.status_code == 423:
             sb.table("tax_invoice_requests").update({
                 "status": "REQUESTED", "updated_at": _now_iso(),

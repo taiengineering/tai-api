@@ -582,6 +582,51 @@ def test_M11_retry_success_same_mgt_key_no_duplicate(monkeypatch):
 
 
 @requires_client
+def test_G1_gate_off_zero_mutation(monkeypatch):
+    """[PATCH-2 B-P1] INVOICE_LIVE OFF → gate 를 mutation 앞으로 선행:
+       - request.status UPDATE 0 (PROCESSING 로 갔다가 되돌아오는 것도 금지)
+       - tax_invoices INSERT/UPDATE 0
+       - provider 호출 0
+       - final request.status = REQUESTED
+       - HTTP 423 + code=INVOICE_GATED
+    """
+    c = _client(monkeypatch, live=False)
+    body = {
+        "idempotency_key": _idem(),
+        "company_mode": "EXISTING", "company_id": "co-1",
+        "supply_amount": 100000, "vat_amount": 10000,
+        "supply_date": "2026-09-06", "item_name": "품목", "issue_reason": "사유",
+    }
+    r = c.post("/payments/admin/tax-invoices/manual", json=body)
+    request_id = r.json()["data"]["id"]
+
+    # 이 시점까지의 로그를 기준선으로 저장 (create 단계 조작은 무관)
+    log_before = list(c._fake.log)
+
+    pr = c.post(f"/payments/admin/tax-invoices/manual/{request_id}/process")
+    assert pr.status_code == 423, pr.text
+    assert pr.json()["detail"]["code"] == "INVOICE_GATED"
+
+    # process 단계에서 새로 추가된 로그만 검사
+    delta = c._fake.log[len(log_before):]
+    updates_on_req = [x for x in delta if x == ("tax_invoice_requests", "update")]
+    inserts_on_inv = [x for x in delta if x == ("tax_invoices", "insert")]
+    updates_on_inv = [x for x in delta if x == ("tax_invoices", "update")]
+    assert updates_on_req == [], (
+        f"OFF gate 는 tax_invoice_requests UPDATE 0 여야 함, "
+        f"실제 UPDATE 발생: {updates_on_req}"
+    )
+    assert inserts_on_inv == [], "OFF gate 는 tax_invoices INSERT 0"
+    assert updates_on_inv == [], "OFF gate 는 tax_invoices UPDATE 0"
+
+    # provider 호출 0
+    assert c._mock.calls == []
+    # 최종 상태 = REQUESTED (변화 없음)
+    req = c._store["tax_invoice_requests"][0]
+    assert req["status"] == "REQUESTED"
+
+
+@requires_client
 def test_M12_guard_non_admin_manual_source_rejected(monkeypatch):
     """수동 process 엔드포인트에 다른 source (MYPAGE 등) 요청 넣으면 409."""
     c = _client(monkeypatch)

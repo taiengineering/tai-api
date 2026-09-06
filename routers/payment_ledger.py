@@ -230,9 +230,11 @@ def admin_list_tax_invoices(
     query = (
         sb.table("tax_invoice_requests")
         .select(
+            # PATCH-2 A-P1: tax_invoice_id 추가 — ADMIN_MANUAL 은 payment_id NULL 이라
+            # 원장 조회에 tax_invoice_id 를 사용한다. 자동/고객경로는 payment_id 로 계속 조회.
             "id, payment_id, company_id, source, status, requested_at, created_at, "
             "invoicee_company_name, invoicee_business_number, proof_type, "
-            "supply_amount, vat_amount, total_amount",
+            "supply_amount, vat_amount, total_amount, tax_invoice_id",
             count="exact",
         )
         .eq("doc_type", "TAX_INVOICE")
@@ -282,6 +284,26 @@ def admin_list_tax_invoices(
             invoice_projection_ok = False
             log.warning("[admin tax] invoice projection 실패: %s", e)
 
+    # PATCH-2 A-P1: ADMIN_MANUAL 은 payment_id NULL — tax_invoice_id 로 별도 배치.
+    # 두 배치 모두 doc_type=TAX_INVOICE 경계 유지. N+1 = 0 (상수 쿼리).
+    manual_invoice_ids = list({r.get("tax_invoice_id") for r in reqs
+                               if r.get("source") == "ADMIN_MANUAL" and r.get("tax_invoice_id")})
+    inv_by_manual_id: dict = {}
+    if manual_invoice_ids:
+        try:
+            inv2 = (
+                sb.table("tax_invoices")
+                .select("id, invoice_kind, status, issued_at, nts_confirm_num")
+                .in_("id", manual_invoice_ids)
+                .eq("doc_type", "TAX_INVOICE")
+                .execute()
+            )
+            for iv in (inv2.data or []):
+                inv_by_manual_id[iv.get("id")] = iv
+        except Exception as e:  # noqa: BLE001
+            invoice_projection_ok = False
+            log.warning("[admin tax] manual invoice projection 실패: %s", e)
+
     st_rows = [{"id": pid} for pid in pay_ids]
     _attach_tax_status(sb, st_rows)
     tax_status_by_pid = {r["id"]: r["tax_status"] for r in st_rows}
@@ -291,28 +313,70 @@ def admin_list_tax_invoices(
         pid = r.get("payment_id")
         pay = payments.get(pid, {})
         co = companies.get(r.get("company_id"), {})
-        if invoice_projection_ok:
-            invs = inv_by_pid.get(pid, [])
-            originals = [i for i in invs if i.get("invoice_kind") != "MODIFIED"]
-            modifieds = [i for i in invs if i.get("invoice_kind") == "MODIFIED"]
-            orig = next((i for i in originals if str(i.get("status")) == "ISSUED"), None)
-            if orig is None and originals:
-                orig = originals[0]
-            inv_fields = {
-                "original_invoice_status": (orig or {}).get("status"),
-                "issued_at": (orig or {}).get("issued_at"),
-                "nts_confirm_num": (orig or {}).get("nts_confirm_num"),
-                "has_modified_invoice": len(modifieds) > 0,
-                "modified_count": len(modifieds),
-            }
+        is_manual = r.get("source") == "ADMIN_MANUAL"
+        rst = str(r.get("status") or "").upper()
+
+        if is_manual:
+            # PATCH-2 A-P2: manual invoice lookup — 실패시 UNKNOWN + null fields.
+            tii = r.get("tax_invoice_id")
+            manual_inv = inv_by_manual_id.get(tii) if (tii and invoice_projection_ok) else None
+            if invoice_projection_ok:
+                inv_fields = {
+                    "original_invoice_status": (manual_inv or {}).get("status"),
+                    "issued_at": (manual_inv or {}).get("issued_at"),
+                    "nts_confirm_num": (manual_inv or {}).get("nts_confirm_num"),
+                    "has_modified_invoice": False,   # 수동은 원본만
+                    "modified_count": 0,
+                }
+            else:
+                inv_fields = {
+                    "original_invoice_status": None,
+                    "issued_at": None,
+                    "nts_confirm_num": None,
+                    "has_modified_invoice": None,
+                    "modified_count": None,
+                }
+            # PATCH-2 A-P3: ADMIN_MANUAL 전용 tax_status 파생 — _attach_tax_status 불변.
+            #   REQUESTED/PROCESSING/FAILED/REVIEW_REQUIRED/CANCELLED → 그대로
+            #   ISSUED AND linked invoice.status=ISSUED         → ISSUED
+            #   ISSUED BUT invoice 없음/불일치/lookup 실패        → UNKNOWN (fail-safe)
+            if not invoice_projection_ok:
+                manual_tax_status = "UNKNOWN"
+            elif rst in ("REQUESTED", "PROCESSING", "FAILED", "REVIEW_REQUIRED", "CANCELLED"):
+                manual_tax_status = rst
+            elif rst == "ISSUED":
+                if manual_inv is not None and str(manual_inv.get("status")) == "ISSUED":
+                    manual_tax_status = "ISSUED"
+                else:
+                    manual_tax_status = "UNKNOWN"
+            else:
+                manual_tax_status = "UNKNOWN"
+            tax_status = manual_tax_status
         else:
-            inv_fields = {
-                "original_invoice_status": None,
-                "issued_at": None,
-                "nts_confirm_num": None,
-                "has_modified_invoice": None,
-                "modified_count": None,
-            }
+            if invoice_projection_ok:
+                invs = inv_by_pid.get(pid, [])
+                originals = [i for i in invs if i.get("invoice_kind") != "MODIFIED"]
+                modifieds = [i for i in invs if i.get("invoice_kind") == "MODIFIED"]
+                orig = next((i for i in originals if str(i.get("status")) == "ISSUED"), None)
+                if orig is None and originals:
+                    orig = originals[0]
+                inv_fields = {
+                    "original_invoice_status": (orig or {}).get("status"),
+                    "issued_at": (orig or {}).get("issued_at"),
+                    "nts_confirm_num": (orig or {}).get("nts_confirm_num"),
+                    "has_modified_invoice": len(modifieds) > 0,
+                    "modified_count": len(modifieds),
+                }
+            else:
+                inv_fields = {
+                    "original_invoice_status": None,
+                    "issued_at": None,
+                    "nts_confirm_num": None,
+                    "has_modified_invoice": None,
+                    "modified_count": None,
+                }
+            tax_status = tax_status_by_pid.get(pid, "UNKNOWN")
+
         item = {
             "request_id": r.get("id"),
             "payment_id": pid,
@@ -329,7 +393,7 @@ def admin_list_tax_invoices(
             "supply_amount": r.get("supply_amount") if r.get("supply_amount") is not None else pay.get("supply_amount"),
             "vat_amount": r.get("vat_amount") if r.get("vat_amount") is not None else pay.get("vat_amount"),
             "total_amount": r.get("total_amount") if r.get("total_amount") is not None else pay.get("total_amount"),
-            "tax_status": tax_status_by_pid.get(pid, "UNKNOWN"),
+            "tax_status": tax_status,
             "invoice_projection_ok": invoice_projection_ok,
         }
         item.update(inv_fields)
@@ -393,8 +457,24 @@ def admin_tax_invoice_detail(request_id: str, current_user: dict = Depends(_requ
             "business_category": co.get("business_category"),
         }
 
+    # PATCH-2 BLOCKER-1B: source 별 원장 조회 분기.
+    #   ADMIN_MANUAL → tax_invoice_id 로 ORIGINAL 하나 조회 (수정발급 없음)
+    #   그 외        → payment_id 로 원장 전체(원본+수정) 조회 (기존 계약 완전 불변)
+    is_manual_detail = r.get("source") == "ADMIN_MANUAL"
     invs = []
-    if pid:
+    if is_manual_detail:
+        tii = r.get("tax_invoice_id")
+        if tii:
+            iv = (
+                sb.table("tax_invoices").select(
+                    "id, invoice_kind, status, issued_at, nts_confirm_num, "
+                    "modify_code, adjustment_reason, refund_ref, "
+                    "supply_cost, tax, total_amount, created_at"
+                ).eq("id", tii).eq("doc_type", "TAX_INVOICE")
+                .order("created_at", desc=False).execute()
+            )
+            invs = iv.data or []
+    elif pid:
         iv = (
             sb.table("tax_invoices").select(
                 "id, invoice_kind, status, issued_at, nts_confirm_num, "
@@ -406,9 +486,25 @@ def admin_tax_invoice_detail(request_id: str, current_user: dict = Depends(_requ
     originals = [i for i in invs if i.get("invoice_kind") != "MODIFIED"]
     modifieds = [i for i in invs if i.get("invoice_kind") == "MODIFIED"]
 
-    st_rows = [{"id": pid}] if pid else []
-    _attach_tax_status(sb, st_rows)
-    tax_status = st_rows[0]["tax_status"] if st_rows else "UNKNOWN"
+    # PATCH-2 A-P3: ADMIN_MANUAL 은 _attach_tax_status 사용 금지 (payment 기반이라 부적합).
+    #   별도 파생 규칙: REQUESTED/FAILED/... → 그대로 / ISSUED+linked ISSUED → ISSUED /
+    #   ISSUED but no linked → UNKNOWN / lookup 실패(tii는 있는데 조회결과 비어있음) → UNKNOWN
+    if is_manual_detail:
+        rst = str(r.get("status") or "").upper()
+        original_inv = originals[0] if originals else None
+        if rst in ("REQUESTED", "PROCESSING", "FAILED", "REVIEW_REQUIRED", "CANCELLED"):
+            tax_status = rst
+        elif rst == "ISSUED":
+            if original_inv is not None and str(original_inv.get("status")) == "ISSUED":
+                tax_status = "ISSUED"
+            else:
+                tax_status = "UNKNOWN"
+        else:
+            tax_status = "UNKNOWN"
+    else:
+        st_rows = [{"id": pid}] if pid else []
+        _attach_tax_status(sb, st_rows)
+        tax_status = st_rows[0]["tax_status"] if st_rows else "UNKNOWN"
 
     return {"status": "success", "data": {
         "request": {
