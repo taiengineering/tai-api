@@ -1,0 +1,48 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<style>
+  @page { size: A4; margin: 14mm; }
+  * { font-family: -apple-system, "Malgun Gothic", "Nanum Gothic", sans-serif; box-sizing: border-box; }
+  body { color:#111; font-size:12px; }
+  h1 { text-align:center; letter-spacing:12px; font-size:26px; margin:0 0 18px; }
+  .meta { text-align:right; font-size:11px; color:#333; margin-bottom:14px; }
+  .receiver { font-size:15px; font-weight:700; margin:10px 0 4px; }
+  .receiver small { font-weight:400; color:#666; }
+  table { width:100%; border-collapse:collapse; margin-top:10px; }
+  th,td { border:1px solid #bbb; padding:7px 8px; }
+  th { background:#f2f4f6; font-weight:700; }
+  td.num, th.num { text-align:right; }
+  .supplier { margin-top:22px; width:60%; float:right; font-size:11px; }
+  .supplier td,.supplier th { border:none; padding:2px 6px; }
+  .totals { margin-top:14px; width:45%; float:right; }
+  .totals td { border:none; padding:4px 8px; }
+  .totals .grand { border-top:2px solid #111; font-size:15px; font-weight:800; }
+  .foot { clear:both; margin-top:60px; font-size:10px; color:#777; border-top:1px solid #ddd; padding-top:8px; }
+</style></head><body>
+  <h1>견 적 서</h1>
+  <div class="meta">견적번호: {{ quote_no }}<br>견적일자: {{ quote_date }}</div>
+  <div class="receiver">수신: {{ receiver }} <small>귀중</small></div>
+  <table>
+    <thead><tr><th>서비스</th><th>상품/티어</th><th>이용기간</th>
+      <th class="num">수량</th><th class="num">단가</th><th class="num">공급가액</th></tr></thead>
+    <tbody><tr>
+      <td>{{ service_type }}</td><td>{{ product_name }}</td><td>{{ period }}</td>
+      <td class="num">{{ quantity }}</td><td class="num">{{ unit_amount }}</td><td class="num">{{ supply }}</td>
+    </tr></tbody>
+  </table>
+  <table class="totals">
+    <tr><td>공급가액</td><td class="num">{{ supply }} 원</td></tr>
+    <tr><td>부가가치세</td><td class="num">{{ vat }} 원</td></tr>
+    <tr class="grand"><td>총 견적금액</td><td class="num">{{ total }} 원</td></tr>
+  </table>
+  <table class="supplier">
+    <tr><th>공급자</th><td></td></tr>
+    <tr><td>상호</td><td>{{ supplier.name }}</td></tr>
+    <tr><td>대표자</td><td>{{ supplier.representative }}</td></tr>
+    <tr><td>사업자등록번호</td><td>{{ supplier.business_no }}</td></tr>
+    <tr><td>주소</td><td>{{ supplier.address }}</td></tr>
+    <tr><td>TEL</td><td>{{ supplier.tel }}</td></tr>
+    {% if supplier.fax %}<tr><td>FAX</td><td>{{ supplier.fax }}</td></tr>{% endif %}
+    <tr><td>EMAIL</td><td>{{ supplier.email }}</td></tr>
+  </table>
+  <div class="foot">본 견적서는 서비스 이용 검토 및 고객사 내부결재를 위한 견적서입니다. 계약서·결제확정서·세금계산서가 아닙니다.</div>
+</body></html>

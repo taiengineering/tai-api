@@ -14,6 +14,8 @@ from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import require_company_id
 from services import member_quote_svc as svc
+from services import member_quote_pdf_svc as pdf_svc
+from services.gotenberg_svc import PdfRenderError
 
 router = APIRouter(prefix="/me/quotes", tags=["member-quotes"])
 _NOT_FOUND = "견적을 찾을 수 없습니다"
@@ -107,3 +109,26 @@ def get_my_quote(quote_id: str, current: dict = Depends(get_current_user)):
     if not row or str(row.get("company_id")) != str(company_id):   # ALL 도 타사 404
         raise HTTPException(status_code=404, detail=_NOT_FOUND)
     return {"status": "success", "data": row}
+
+
+@router.post("/{quote_id}/pdf")
+async def issue_quote_pdf(quote_id: str, current: dict = Depends(get_current_user)):
+    """내부결재 첨부용 견적서 PDF — member_auto/ISSUED 만. /me strict 소유권. 멱등."""
+    supabase = get_supabase()
+    company_id = _require_member_company(current, supabase)
+    row = svc.get_member_quote(supabase, quote_id)
+    if not row or str(row.get("company_id")) != str(company_id):   # 타사·비회원소스 404
+        raise HTTPException(status_code=404, detail=_NOT_FOUND)
+    try:
+        result = await pdf_svc.issue_or_get_quote_pdf(row, current.get("id"))
+    except (pdf_svc.QuotePdfError, PdfRenderError) as e:
+        raise HTTPException(status_code=e.http_status, detail={"code": e.code, "message": e.message})
+    doc = result["document"]
+    return {"status": "success", "data": {
+        "quote_id": quote_id,
+        "document_id": doc.get("id"),
+        "file_name": doc.get("file_name"),
+        "generated": result["generated"],
+        "url": result["url"],
+        "expires_in": 3600,
+    }}
