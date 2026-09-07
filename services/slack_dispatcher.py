@@ -68,6 +68,19 @@ EVENT_TYPE_CHANNEL = {
     "FREE_DIAGNOSIS_COMPLETED": CHANNEL_FREE_DIAGNOSIS,
 }
 
+# WO-SLACK-EVENT-HUB-001 PR-③: event_type → admin 링크 (전부 LIST · 딥링크 미지원 확인됨).
+# 이 매핑에 있는 event_type 은, 호출부가 blocks 를 제공하지 않은 경우에만 dispatcher 가
+# text + "어드민에서 보기" 버튼 블록을 자동 조립한다. 호출부가 blocks 를 제공하면
+# (INQUIRY/WISH 의 build_blocks 경로) 버튼 append 를 하지 않는다(중복 방지).
+ADMIN_BASE_URL = "https://admin.taieng.co.kr"
+EVENT_TYPE_ADMIN_PATH = {
+    "INQUIRY_CREATED":          "/inquiry-list",
+    "TAI_WISH_CREATED":         "/inquiry-list",
+    "QUOTE_MANUAL_REQUESTED":   "/quote-list",
+    "FREE_DIAGNOSIS_COMPLETED": "/anon-diagnosis-list",
+    # APPROVAL_CREATED — source deferred, path 미할당
+}
+
 # severity → 이모지
 SEVERITY_EMOJI = {
     "CRITICAL": "🔴",
@@ -162,7 +175,21 @@ async def send_slack(
 
     payload = {"channel": channel_id, "text": text, "unfurl_links": False}
     if blocks:
+        # 호출부가 blocks 를 제공한 경로(INQUIRY/WISH · build_blocks) — 버튼 append 금지(중복 방지).
         payload["blocks"] = blocks
+    else:
+        # QUOTE/FREE 처럼 blocks 없이 들어오는 이벤트: text + "어드민에서 보기" 버튼 자동 조립.
+        # 매핑에 없는 event_type(alert/ops/engine 등)은 text-only 유지(회귀 0).
+        admin_path = EVENT_TYPE_ADMIN_PATH.get(event_type)
+        if admin_path:
+            payload["blocks"] = [
+                {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+                {"type": "actions", "elements": [{
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "어드민에서 보기"},
+                    "url": f"{ADMIN_BASE_URL}{admin_path}",
+                }]},
+            ]
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:

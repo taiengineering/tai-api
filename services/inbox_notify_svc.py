@@ -11,9 +11,10 @@ from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
-ADMIN_BASE_URL = (
-    "https://admin.taieng.co.kr/html/horizontal-menu-template/inquiry-list.html"
-)
+# WO-SLACK-EVENT-HUB-001 PR-③: Vue3 admin 라우트로 통일.
+# dispatcher.EVENT_TYPE_ADMIN_PATH 의 INQUIRY_CREATED/TAI_WISH_CREATED 매핑값과 일치.
+ADMIN_BASE_URL = "https://admin.taieng.co.kr"
+ADMIN_INQUIRY_URL = f"{ADMIN_BASE_URL}/inquiry-list"
 
 # 소스 라벨
 SOURCE_LABEL = {
@@ -91,7 +92,7 @@ def build_blocks(record: Dict[str, Any]) -> List[Dict[str, Any]]:
                 {
                     "type": "button",
                     "text": {"type": "plain_text", "text": "어드민에서 보기"},
-                    "url": ADMIN_BASE_URL,
+                    "url": ADMIN_INQUIRY_URL,
                 }
             ],
         },
