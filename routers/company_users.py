@@ -1,8 +1,11 @@
 # routers/company_users.py — v1.0.0 (WO-SAFE-COMPANY-ACCESS-001 · WP-A)
 """회사 사용자 관리 · 초대 라우터.
 
-전 endpoint: Depends(get_current_user) → _require_company_user_admin(action) + (mutation)
-require_active_company_saas. target = current.company_id. body/query 에 company_id 없음.
+전 endpoint: Depends(get_current_user) → _require_company_user_admin(action).
+require_active_company_saas 는 mutation (POST/PATCH/DELETE) 에만 적용.
+GET (list_users/list_user_roles/list_invites) 는 entitlement 만료여도 READ 허용
+(WP-A FINAL POLICY : AUTH ≠ ENTITLEMENT ≠ RBAC, 만료 후 로그인·READ 허용 · WRITE 금지).
+target = current.company_id. body/query 에 company_id 없음.
 cross-company = 404 (존재 은닉).
 
 /user-invites/{token}/info 는 공개(permission_guard PUBLIC allowlist).
@@ -192,8 +195,8 @@ def get_company_access(current: dict = Depends(get_current_user)):
 def list_users(current: dict = Depends(get_current_user)):
     sb = get_supabase()
     svc._require_company_user_admin(current, sb, "LIST")
-    # PATCH-2 BLOCKER-2C : management surface 도 strict entitlement.
-    svc.require_active_company_saas(sb, current.get("company_id"))
+    # WP-A FINAL POLICY : READ 는 entitlement 만료 후에도 허용 (AUTH ≠ ENTITLEMENT).
+    # capability + company boundary + RBAC 는 계속 적용.
     company_id = current["company_id"]
     users = svc.list_company_users(sb, company_id)
     return {"status": "success", "data": {"items": users, "total": len(users)}}
@@ -206,8 +209,7 @@ def list_users(current: dict = Depends(get_current_user)):
 def list_user_roles(current: dict = Depends(get_current_user)):
     sb = get_supabase()
     svc._require_company_user_admin(current, sb, "LIST")
-    # PATCH-2 BLOCKER-2C : management surface strict entitlement.
-    svc.require_active_company_saas(sb, current.get("company_id"))
+    # WP-A FINAL POLICY : READ 는 entitlement 만료 후에도 허용.
     roles = svc.list_assignable_roles(sb)
     return {"status": "success", "data": {"items": roles, "total": len(roles)}}
 
@@ -219,8 +221,7 @@ def list_user_roles(current: dict = Depends(get_current_user)):
 def list_invites(current: dict = Depends(get_current_user)):
     sb = get_supabase()
     svc._require_company_user_admin(current, sb, "LIST")
-    # PATCH-2 BLOCKER-2C : management surface strict entitlement.
-    svc.require_active_company_saas(sb, current.get("company_id"))
+    # WP-A FINAL POLICY : READ 는 entitlement 만료 후에도 허용.
     company_id = current["company_id"]
     try:
         rows = (sb.table("company_user_invites")
