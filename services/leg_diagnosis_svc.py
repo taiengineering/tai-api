@@ -63,6 +63,15 @@ def run_leg_diagnosis(step1_body: Any) -> Dict[str, Any]:
         )
 
     obligations = data.get("obligations") or []
+
+    # WO-ACTOR-SHADOW-INTEGRATION-IMPLEMENT-001: SHADOW-ONLY actor census lookup.
+    #   flag ACTOR_CENSUS_SHADOW_ENABLED(default off). fail-open: 예외/실패는 진단을 깨지 않는다.
+    #   log-only. full_result/obligations/key_obl/applicability/결과 어느 것도 변경하지 않는다.
+    try:
+        from services.actor_census_shadow import shadow_lookup as _actor_shadow_lookup
+        _actor_shadow_lookup(obligations)  # 반환값 미사용(관측은 내부 log). 결과 부착 없음.
+    except Exception:  # noqa: BLE001 — 절대 진단을 깨지 않는다
+        pass
     key_obl = [_obligation_to_key_item(o) for o in obligations]
 
     law_names: List[str] = []
