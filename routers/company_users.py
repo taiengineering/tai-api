@@ -250,6 +250,24 @@ def create_invite(body: InviteCreateBody, current: dict = Depends(get_current_us
         svc.assert_assignable_role(sb, role_code)
     except svc.CompanyUserError as e:
         _raise(e)
+    # PATCH-3 BLOCKER-2B 잔여 : FACTORY/TEAM scope role 은 factory_id/team_id 필수
+    #   (patch_user_role 과 동일 규율).
+    try:
+        s = (sb.table("role_data_scope").select("scope_type")
+             .eq("role_code", role_code).limit(1).execute()).data or []
+    except Exception:
+        s = []
+    scope = s[0].get("scope_type") if s else None
+    if scope == "FACTORY" and not body.factory_id:
+        raise HTTPException(status_code=422, detail={
+            "code": "FACTORY_REQUIRED",
+            "message": "FACTORY 스코프 역할은 시설이 필요합니다.",
+        })
+    if scope == "TEAM" and not body.team_id:
+        raise HTTPException(status_code=422, detail={
+            "code": "TEAM_REQUIRED",
+            "message": "TEAM 스코프 역할은 팀이 필요합니다.",
+        })
     # 기존 user 충돌
     try:
         er = (sb.table("users").select("id, company_id, status_code")

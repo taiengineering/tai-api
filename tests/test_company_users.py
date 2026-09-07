@@ -304,7 +304,8 @@ def test_C02_body_override_company_id_ignored_in_invite():
     store = _base_store()
     c = _client(admin, store)
     r = c.post("/me/company/user-invites", json={
-        "email": "n@a.co.kr", "role_code": "020",
+        # PATCH-3 : COMPANY scope role (010) 사용 · FACTORY_REQUIRED 회피
+        "email": "n@a.co.kr", "role_code": "010",
         "company_id": "C-OTHER",              # 무시되어야 함
     })
     assert r.status_code == 200
@@ -347,7 +348,7 @@ def test_D01_invite_stores_token_hash_only_not_raw():
     store = _base_store()
     c = _client(admin, store)
     r = c.post("/me/company/user-invites",
-               json={"email": "new@a.co.kr", "role_code": "020"})
+               json={"email": "new@a.co.kr", "role_code": "010"})  # PATCH-3 : COMPANY scope
     assert r.status_code == 200
     row = store["company_user_invites"][0]
     # raw token 은 응답에는 있으나 저장에는 없다.
@@ -367,11 +368,12 @@ def test_D03_dup_pending_invite_returns_409():
     admin = _admin_user()
     store = _base_store()
     c = _client(admin, store)
+    # PATCH-3 : COMPANY scope role
     r1 = c.post("/me/company/user-invites",
-                json={"email": "dup@a.co.kr", "role_code": "020"})
+                json={"email": "dup@a.co.kr", "role_code": "010"})
     assert r1.status_code == 200
     r2 = c.post("/me/company/user-invites",
-                json={"email": "dup@a.co.kr", "role_code": "020"})
+                json={"email": "dup@a.co.kr", "role_code": "010"})
     assert r2.status_code == 409
     assert r2.json()["detail"]["code"] == "INVITE_PENDING_EXISTS"
 
@@ -385,7 +387,7 @@ def test_D04_conflict_user_belongs_to_another_company():
     ])
     c = _client(admin, store)
     r = c.post("/me/company/user-invites",
-               json={"email": "x@x.co.kr", "role_code": "020"})
+               json={"email": "x@x.co.kr", "role_code": "010"})  # PATCH-3 : COMPANY scope
     assert r.status_code == 409
     assert r.json()["detail"]["code"] == "USER_BELONGS_TO_ANOTHER_COMPANY"
 
@@ -397,7 +399,7 @@ def test_D05_accept_uses_invite_email_not_body():
     store = _base_store(inicis_auth_requests=[_inicis_success("MTX-D05", user_ci="CI-D05")])
     c = _client(admin, store)
     r = c.post("/me/company/user-invites",
-               json={"email": "signup@a.co.kr", "role_code": "020"})
+               json={"email": "signup@a.co.kr", "role_code": "010"})  # PATCH-3 : COMPANY scope
     raw = r.json()["data"]["token"]
     # accept
     r2 = c.post(f"/user-invites/{raw}/accept",
@@ -420,15 +422,16 @@ def test_D06_accept_frozen_company_and_role_from_invite():
     admin = _admin_user()
     store = _base_store(inicis_auth_requests=[_inicis_success("MTX-D06", user_ci="CI-D06")])
     c = _client(admin, store)
+    # PATCH-3 : COMPANY scope role (010) · invite-frozen 검증은 값 자체가 아닌 "invite 값 보존" 이 요지
     r = c.post("/me/company/user-invites",
-               json={"email": "frozen@a.co.kr", "role_code": "030"})
+               json={"email": "frozen@a.co.kr", "role_code": "010"})
     raw = r.json()["data"]["token"]
     r2 = c.post(f"/user-invites/{raw}/accept",
                 json={"name": "김프", "phone": "010-2222-3333",
                       "password": "pw1234567", "mtx_id": "MTX-D06"})
     d = r2.json()["data"]
     assert d["company_id"] == "C-A"                                # invite frozen
-    assert d["role_code"] == "030"                                 # invite frozen
+    assert d["role_code"] == "010"                                 # invite frozen
 
 
 @requires_client
@@ -437,7 +440,7 @@ def test_D07_accept_expired_returns_410():
     store = _base_store(inicis_auth_requests=[_inicis_success("MTX-D07", user_ci="CI-D07")])
     c = _client(admin, store)
     r = c.post("/me/company/user-invites",
-               json={"email": "old@a.co.kr", "role_code": "020"})
+               json={"email": "old@a.co.kr", "role_code": "010"})  # PATCH-3 : COMPANY scope
     raw = r.json()["data"]["token"]
     # 만료 처리
     inv = store["company_user_invites"][0]
@@ -455,7 +458,7 @@ def test_D08_accept_cancelled_returns_410():
     store = _base_store(inicis_auth_requests=[_inicis_success("MTX-D08", user_ci="CI-D08")])
     c = _client(admin, store)
     r = c.post("/me/company/user-invites",
-               json={"email": "cancel@a.co.kr", "role_code": "020"})
+               json={"email": "cancel@a.co.kr", "role_code": "010"})  # PATCH-3 : COMPANY scope
     raw = r.json()["data"]["token"]
     inv_id = store["company_user_invites"][0]["id"]
     c.delete(f"/me/company/user-invites/{inv_id}")
@@ -488,7 +491,7 @@ def test_D10_invite_info_public_masked_email():
     store = _base_store()
     c = _client(admin, store)
     r = c.post("/me/company/user-invites",
-               json={"email": "aaaa@a.co.kr", "role_code": "020"})
+               json={"email": "aaaa@a.co.kr", "role_code": "010"})  # PATCH-3 : COMPANY scope
     raw = r.json()["data"]["token"]
     r2 = c.get(f"/user-invites/{raw}/info")
     d = r2.json()["data"]
@@ -518,7 +521,7 @@ def test_D12_accept_valid_mtx_saves_sha256_identity_ci():
     store = _base_store(inicis_auth_requests=[_inicis_success("MTX-D12", user_ci=raw_ci)])
     c = _client(admin, store)
     r = c.post("/me/company/user-invites",
-               json={"email": "d12@a.co.kr", "role_code": "020"})
+               json={"email": "d12@a.co.kr", "role_code": "010"})  # PATCH-3 : COMPANY scope
     raw = r.json()["data"]["token"]
     r2 = c.post(f"/user-invites/{raw}/accept",
                 json={"name": "이름", "phone": "010-3333-4444",
@@ -552,7 +555,7 @@ def test_D13_accept_ci_already_used_returns_409_no_insert():
     )
     c = _client(admin, store)
     r = c.post("/me/company/user-invites",
-               json={"email": "d13@a.co.kr", "role_code": "020"})
+               json={"email": "d13@a.co.kr", "role_code": "010"})  # PATCH-3 : COMPANY scope
     raw = r.json()["data"]["token"]
     users_before = len(store["users"])
     r2 = c.post(f"/user-invites/{raw}/accept",
@@ -573,7 +576,7 @@ def test_D14_accept_mtx_status_not_success_returns_400():
     store = _base_store(inicis_auth_requests=[ir])
     c = _client(admin, store)
     r = c.post("/me/company/user-invites",
-               json={"email": "d14@a.co.kr", "role_code": "020"})
+               json={"email": "d14@a.co.kr", "role_code": "010"})  # PATCH-3 : COMPANY scope
     raw = r.json()["data"]["token"]
     r2 = c.post(f"/user-invites/{raw}/accept",
                 json={"name": "이름", "phone": "010-1111-1111",
@@ -589,7 +592,7 @@ def test_D15_accept_without_mtx_id_returns_400():
     store = _base_store()
     c = _client(admin, store)
     r = c.post("/me/company/user-invites",
-               json={"email": "d15@a.co.kr", "role_code": "020"})
+               json={"email": "d15@a.co.kr", "role_code": "010"})  # PATCH-3 : COMPANY scope
     raw = r.json()["data"]["token"]
     r2 = c.post(f"/user-invites/{raw}/accept",
                 json={"name": "이름", "phone": "010-7777-8888",
@@ -868,6 +871,96 @@ def test_P2_2C_access_endpoint_still_returns_200_without_entitlement():
     d = r.json()["data"]
     assert d["entitlement"]["active"] is False
     assert d["company_id"] == "C-B"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# PATCH-3 : create_invite scope-required (BLOCKER-2B 잔여)
+#   FACTORY/TEAM scope role 은 factory_id/team_id 필수 (patch_user_role 정합).
+# ═══════════════════════════════════════════════════════════════════
+@requires_client
+def test_P3_1_invite_factory_role_without_factory_id_422():
+    """FACTORY scope role (020) + factory_id 없음 → 422 FACTORY_REQUIRED."""
+    admin = _admin_user()
+    store = _base_store()
+    c = _client(admin, store)
+    r = c.post("/me/company/user-invites",
+               json={"email": "p3f@a.co.kr", "role_code": "020"})
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "FACTORY_REQUIRED"
+
+
+@requires_client
+def test_P3_2_invite_factory_role_with_own_factory_passes():
+    """FACTORY scope role (020) + own-company factory_id → 200."""
+    admin = _admin_user()
+    store = _base_store(factories=[{"id": "F-A1", "company_id": "C-A"}])
+    c = _client(admin, store)
+    r = c.post("/me/company/user-invites",
+               json={"email": "p3fp@a.co.kr", "role_code": "020",
+                     "factory_id": "F-A1"})
+    assert r.status_code == 200
+    inv = store["company_user_invites"][0]
+    assert inv["role_code"] == "020"
+    assert inv["factory_id"] == "F-A1"
+
+
+@requires_client
+def test_P3_3_invite_team_role_without_team_id_422():
+    """TEAM scope role + team_id 없음 → 422 TEAM_REQUIRED."""
+    admin = _admin_user()
+    # 040 TEAM scope role · assignable (COMPANY 그룹 필터에 TEAM 포함되어 있음)
+    roles = list([
+        {"role_code": "002", "role_name": "회사관리자", "is_active": True},
+        {"role_code": "040", "role_name": "팀장", "is_active": True},
+    ])
+    scopes = list([
+        {"role_code": "002", "scope_type": "COMPANY"},
+        {"role_code": "040", "scope_type": "TEAM"},
+    ])
+    menu_perms = list([
+        {"role_code": "002", "menu_code": "worker-list",
+         "can_list": True, "can_read": True, "can_create": True,
+         "can_update": True, "can_delete": True},
+    ])
+    store = _base_store(roles=roles, role_data_scope=scopes,
+                        role_menu_permissions=menu_perms)
+    c = _client(admin, store)
+    r = c.post("/me/company/user-invites",
+               json={"email": "p3t@a.co.kr", "role_code": "040"})
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "TEAM_REQUIRED"
+
+
+@requires_client
+def test_P3_4_invite_team_role_with_own_team_passes():
+    """TEAM scope role + own-company team (team.factory.company_id=C-A) → 200."""
+    admin = _admin_user()
+    roles = list([
+        {"role_code": "002", "role_name": "회사관리자", "is_active": True},
+        {"role_code": "040", "role_name": "팀장", "is_active": True},
+    ])
+    scopes = list([
+        {"role_code": "002", "scope_type": "COMPANY"},
+        {"role_code": "040", "scope_type": "TEAM"},
+    ])
+    menu_perms = list([
+        {"role_code": "002", "menu_code": "worker-list",
+         "can_list": True, "can_read": True, "can_create": True,
+         "can_update": True, "can_delete": True},
+    ])
+    store = _base_store(
+        roles=roles, role_data_scope=scopes, role_menu_permissions=menu_perms,
+        factories=[{"id": "F-A1", "company_id": "C-A"}],
+        teams=[{"id": "T-1", "factory_id": "F-A1"}],
+    )
+    c = _client(admin, store)
+    r = c.post("/me/company/user-invites",
+               json={"email": "p3tp@a.co.kr", "role_code": "040",
+                     "team_id": "T-1"})
+    assert r.status_code == 200
+    inv = store["company_user_invites"][0]
+    assert inv["role_code"] == "040"
+    assert inv["team_id"] == "T-1"
 
 
 # ── migration : invited_by NOT NULL ───────────────────────────────
