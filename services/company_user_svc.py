@@ -105,8 +105,13 @@ def _require_company_user_admin(current: dict, sb, action: str) -> None:
                             detail={"code": "UNKNOWN_ACTION",
                                     "message": "지원하지 않는 관리 액션입니다."})
     try:
+        # WP-C PRECONDITION : role_menu_permissions 스키마 정합.
+        # 운영 컬럼 = can_list / can_create / can_update / can_delete / can_export.
+        # 없는 컬럼을 select 하면 PostgREST 42703 → except → 503 fail-closed 로
+        # 회사 사용자관리 전부 막힘. _ACTION_TO_CRUD 매핑 (LIST/INVITE/APPROVE/ROLE/
+        # STATUS/CANCEL → can_list/create/update/update/update/delete) 만 select 한다.
         p = (sb.table("role_menu_permissions")
-             .select("can_list, can_create, can_read, can_update, can_delete")
+             .select("can_list, can_create, can_update, can_delete")
              .eq("role_code", role_code).eq("menu_code", WORKER_LIST_MENU_CODE)
              .limit(1).execute())
         row = p.data[0] if p.data else None
