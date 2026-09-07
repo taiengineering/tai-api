@@ -9,6 +9,7 @@ POST /diagnosis/run-leg : 인증·티어·과금·저장 오케스트레이션(d
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Dict, Optional
 
@@ -25,6 +26,7 @@ from clients.leg_runtime_client import LegRuntimeError, is_enabled
 # 유료 티어 가격/무료 코드는 TAI 유료 라우터의 정의를 재사용(단일 출처)
 from routers.diagnosis_integrated import PAID_TIER_PRICES, FREE_TIER_CODES
 
+log = logging.getLogger("diagnosis_integrated_leg")
 router = APIRouter(prefix="/diagnosis", tags=["진단통합 (LEG)"])
 
 LEG_PIPELINE_ENABLED = os.getenv("LEG_PIPELINE_ENABLED", "").lower() in ("1", "true", "yes")
@@ -69,6 +71,27 @@ async def _run_leg_impl(body: DiagnosisRunBody, current_user: Optional[dict] = N
     )
 
     full = result.get("result") or {}
+
+    # WO-SLACK-EVENT-HUB-001 PR-② : 무료(익명) 진단 완료 시에만 1회.
+    # is_free 가드 → 유료는 발송 0. 채널은 dispatcher 라우팅(FREE_DIAGNOSIS_COMPLETED → FREE_DIAGNOSIS).
+    # async 컨텍스트 → await 로 발송 완료까지 대기(fire-and-forget 금지). Slack 실패는 진단 성공 유지.
+    if result.get("is_free") is True:
+        try:
+            from services.slack_dispatcher import send_slack
+            sector = ((run_body.form_data or {}).get("sector")
+                      if hasattr(run_body, "form_data") else None) or "-"
+            tier_code = result.get("tier_code") or "-"
+            title = f"무료진단 완료 · {sector} · {tier_code}"
+            detail = (
+                f"public_token: {result.get('public_token') or '-'}\n"
+                f"diagnosis_id: {result.get('diagnosis_id') or '-'}\n"
+                f"의무 건수: {full.get('applicable_count') if full.get('applicable_count') is not None else '-'}\n"
+                f"엔진: {LEG_ENGINE_VERSION}"
+            )
+            await send_slack("FREE_DIAGNOSIS_COMPLETED", "INFO", title, detail)
+        except Exception as e:  # noqa: BLE001
+            log.warning("[free-diag slack] dispatch failed: %s", e)
+
     return {
         "status": "success",
         "publicToken": result.get("public_token"),
