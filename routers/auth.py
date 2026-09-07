@@ -134,7 +134,6 @@ class ChangePasswordRequest(BaseModel):
 
 class UpdateMeRequest(BaseModel):
     name:              Optional[str] = None
-    phone:             Optional[str] = None
     department:        Optional[str] = None
     position:          Optional[str] = None
     profile_image_url: Optional[str] = None
@@ -142,6 +141,10 @@ class UpdateMeRequest(BaseModel):
     allow_sms:         Optional[bool] = None
     allow_email:       Optional[bool] = None
     allow_kakao:       Optional[bool] = None
+
+
+class ChangePhoneRequest(BaseModel):
+    mtx_id: str
 
 class SendVerifyEmailRequest(BaseModel):
     email: str
@@ -1249,11 +1252,90 @@ def update_me(req: UpdateMeRequest, authorization: Optional[str] = Header(None))
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
     uid = res.data[0]["id"]
     update_data = {k: v for k, v in req.dict().items() if v is not None}
-    if "phone" in update_data:
-        update_data["phone"] = normalize_phone(update_data["phone"])
     update_data["updated_at"] = _now_iso()
     result = supabase.table("users").update(update_data).eq("id", uid).execute()
     return {"status": "success", "data": result.data[0] if result.data else {}}
+
+
+@router.post("/change-phone")
+def change_phone(req: ChangePhoneRequest, authorization: Optional[str] = Header(None)):
+    """휴대폰 변경 — 본인인증(SA) 성공 mtx_id 로만. 직접 phone 주입 불가.
+    CASE A(identity_ci 존재): 동일 CI 재인증만 허용. CASE B(없음): 최초부착 + 타계정 CI중복 차단."""
+    user = get_current_user(authorization=authorization)
+    supabase = get_supabase()
+
+    ia = supabase.table("inicis_auth_requests").select(
+        "status, user_ci, user_name, user_phone, user_birthday, user_id"
+    ).eq("mtx_id", req.mtx_id).limit(1).execute()
+    if not ia.data or ia.data[0].get("status") != "SUCCESS":
+        raise HTTPException(status_code=400, detail="본인인증이 필요합니다. 본인인증을 먼저 완료해 주세요.")
+    row = ia.data[0]
+
+    owner = row.get("user_id")
+    if owner and str(owner) != str(user["id"]):
+        raise HTTPException(status_code=403, detail="이 인증 결과는 다른 계정의 것입니다.")
+
+    ci = (row.get("user_ci") or "").strip()
+    new_phone = normalize_phone(row.get("user_phone") or "")
+    if not ci:
+        raise HTTPException(status_code=400, detail="본인인증 정보를 확인할 수 없습니다.")
+    if not new_phone:
+        raise HTTPException(status_code=400, detail="인증된 휴대폰 번호를 확인할 수 없습니다.")
+    ci_hash = hashlib.sha256(ci.encode("utf-8")).hexdigest()
+
+    existing_ci = (user.get("identity_ci") or "").strip()
+    if existing_ci:
+        if ci_hash != existing_ci:
+            raise HTTPException(status_code=403, detail="본인인증 정보가 계정과 일치하지 않습니다.")
+    else:
+        dup = supabase.table("users").select("id").eq(
+            "identity_ci", ci_hash).neq("id", user["id"]).limit(1).execute()
+        if dup.data:
+            raise HTTPException(status_code=400, detail="이미 다른 계정에서 인증된 본인인증 정보입니다.")
+
+    # ── mtx ownership 원자적 확정 (users.phone 변경 이전) ──────────────
+    # owner 규칙: NULL→선점 / ==현재유저→idempotent / !=현재유저→403.
+    # NULL 은 조건부 claim(user_id IS NULL) 으로 원자 선점하고, 반영을 실제 확인한다.
+    # 이 경로에서는 예외를 삼키지 않는다(실패 시 phone 불변으로 fail-closed).
+    if owner and str(owner) == str(user["id"]):
+        pass  # 이미 현재 사용자 소유 — idempotent 재호출 허용
+    else:
+        # owner!=현재유저는 위(SUCCESS 조회 직후)에서 이미 403 처리됨 → 여기 도달 시 owner is NULL
+        try:
+            claim = supabase.table("inicis_auth_requests").update(
+                {"user_id": user["id"]}
+            ).eq("mtx_id", req.mtx_id).is_("user_id", "null").execute()
+        except Exception as e:
+            log.error(f"[change-phone] mtx claim 오류 mtx_id={req.mtx_id}: {e}")
+            raise HTTPException(status_code=500, detail="본인인증 결과 처리에 실패했습니다.")
+
+        claimed = bool(claim.data) and str(claim.data[0].get("user_id")) == str(user["id"])
+        if not claimed:
+            # 경쟁 요청이 먼저 선점했을 수 있음 → owner 재조회로 확정
+            recheck = supabase.table("inicis_auth_requests").select("user_id").eq(
+                "mtx_id", req.mtx_id).limit(1).execute()
+            new_owner = recheck.data[0].get("user_id") if recheck.data else None
+            if not new_owner or str(new_owner) != str(user["id"]):
+                raise HTTPException(status_code=403, detail="이 인증 결과는 다른 계정의 것입니다.")
+    # ────────────────────────────────────────────────────────────────
+
+    upd = {
+        "phone":                new_phone,
+        "identity_phone":       row.get("user_phone"),
+        "identity_verified":    True,
+        "identity_verified_at": _now_iso(),
+        "updated_at":           _now_iso(),
+    }
+    if not existing_ci:
+        upd["identity_ci"] = ci_hash
+        if row.get("user_name"):
+            upd["identity_name"] = row.get("user_name")
+        if row.get("user_birthday"):
+            upd["identity_birth"] = row.get("user_birthday")
+
+    supabase.table("users").update(upd).eq("id", user["id"]).execute()
+
+    return {"status": "success", "data": {"phone": new_phone, "identity_verified": True}}
 
 
 # ── 이메일 인증 ─────────────────────────────────────
