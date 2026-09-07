@@ -1,0 +1,14 @@
+{
+  "actor_census_version": "v1",
+  "actor_census_sha256": "3a6965d07ff156e89c7a9f9ec31adaff49143f6826fdc12666b2a0dad7328628",
+  "mapping_version": "v1",
+  "mapping_sha256": "3885cbf729772e58e0bd86e8d289e6fe8bbf58e5d768ca0dd90b520fc8edde1e",
+  "counts": {
+    "TOTAL_ATOMS": 337,
+    "MATCHED_ACTOR_CENSUS": 2,
+    "OUTSIDE_ACTOR_CENSUS_SCOPE": 335,
+    "ACTOR_CENSUS_ROW_MISSING": 0,
+    "ATOM_MAPPING_BROKEN": 0
+  },
+  "source_rebase_map_sha256": "63465a355435e788421314f6a3125c28bde0fa31b56b2fc655436169cba7a480"
+}
