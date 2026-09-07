@@ -232,6 +232,43 @@ def test_F07_non_saas_payment_no_bootstrap():
     assert u["status_code"] == "PENDING"
 
 
+# ── PATCH-2 BLOCKER-2D : bootstrap predicate 분리 ────────────────
+def test_P2_2D_saas_renewal_with_contract_id_enters_bootstrap():
+    """SaaS renewal (contract_id 있음) 도 bootstrap 대상.
+    _is_saas_payment 판정으로 진입 · case B 로 002 승격되어야 함."""
+    buyer = {"id": "U-R", "company_id": "C-A", "role_code": "020",
+             "status_code": "PENDING", "is_active": False}
+    sb = FakeSupabase(_base_store(users=[buyer]))
+    pay = _saas_payment("U-R", "C-A", product_type="SAAS_INDUSTRY")
+    pay["contract_id"] = "CT-EXISTING"                                # renewal · 기존 계약
+    pay["payment_type"] = "RENEWAL"
+    pp._bootstrap_buyer_company_admin(sb, pay)
+    u = [x for x in sb.store["users"] if x["id"] == "U-R"][0]
+    # renewal 이라도 bootstrap 실행 → capability 0 + non-capability → 002 승격 (case B)
+    assert u["role_code"] == "002"
+    assert u["status_code"] == "ACTIVE" and u["is_active"] is True
+
+
+def test_P2_2D_is_saas_payment_predicate_contract_id_agnostic():
+    """_is_saas_payment 는 contract_id 유무와 무관하게 SaaS + company_id 만 확인."""
+    assert pp._is_saas_payment({"product_type": "SAAS_INDUSTRY", "company_id": "C-A"}) is True
+    assert pp._is_saas_payment({"product_type": "SAAS_INDUSTRY", "company_id": "C-A",
+                                 "contract_id": "CT-1"}) is True                  # renewal
+    assert pp._is_saas_payment({"product_type": "DIAGNOSIS", "company_id": "C-A"}) is False
+    assert pp._is_saas_payment({"product_type": "SAAS_INDUSTRY"}) is False        # company_id 없음
+    assert pp._is_saas_payment({}) is False
+
+
+def test_P2_2D_INV_bootstrap_uses_new_predicate_not_auto_contract():
+    """소스에서 bootstrap 이 _is_saas_payment 사용 · _should_auto_contract 미사용."""
+    import inspect
+    src = inspect.getsource(pp._bootstrap_buyer_company_admin)
+    assert "_is_saas_payment(pay)" in src, \
+        "PATCH-2 BLOCKER-2D: _bootstrap_buyer_company_admin 은 _is_saas_payment 를 사용해야 한다"
+    assert "_should_auto_contract" not in src, \
+        "PATCH-2 BLOCKER-2D: bootstrap 이 _should_auto_contract 를 재사용하면 안 된다 (renewal 누락)"
+
+
 # ════════════════════════════════════════════════════════════════════
 # INV : 신규 코드에 총원 제한 카운터 부재 (unlimited invariant)
 # ════════════════════════════════════════════════════════════════════

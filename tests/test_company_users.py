@@ -718,3 +718,168 @@ def test_INV_STATIC_PATCH1_uses_correct_inicis_table():
     # SHA-256 hash 로 identity_ci 산출
     assert "hashlib.sha256" in src or "sha256(" in src, \
         "PATCH-1: identity_ci 는 SHA-256(user_ci) 이어야 한다"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# PATCH-2 : 4 blocker
+#   2A public accept · 2B assignable-role · 2C strict entitlement 확장 ·
+#   2D bootstrap SaaS predicate + migration invited_by NOT NULL
+# ═══════════════════════════════════════════════════════════════════
+
+# ── 2A : POST /user-invites/{token}/accept public allowlist ──────
+def test_P2_2A_permission_guard_public_covers_post_accept():
+    """permission_guard._PUBLIC 에 POST /user-invites/ 추가되어 미로그인 accept 허용."""
+    from services import permission_guard as pg
+    # POST accept 는 public
+    assert pg.is_public("POST", "/user-invites/abc123/accept") is True
+    # GET info 도 여전히 public
+    assert pg.is_public("GET", "/user-invites/xyz/info") is True
+    # /me/company/* 는 절대 public 아님
+    assert pg.is_public("GET", "/me/company/access") is False
+    assert pg.is_public("GET", "/me/company/users") is False
+    assert pg.is_public("POST", "/me/company/user-invites") is False
+
+
+# ── 2B : assignable-role 서버 강제 (invite create + role PATCH) ──
+@requires_client
+def test_P2_2B_invite_create_platform_role_422_not_assignable():
+    """platform role (001/031/032/033) 로 초대 → 422 ROLE_NOT_ASSIGNABLE."""
+    admin = _admin_user()
+    store = _base_store()
+    c = _client(admin, store)
+    for bad in ("001", "031"):
+        r = c.post("/me/company/user-invites",
+                   json={"email": f"bad{bad}@a.co.kr", "role_code": bad})
+        assert r.status_code == 422, f"role={bad}"
+        assert r.json()["detail"]["code"] == "ROLE_NOT_ASSIGNABLE"
+
+
+@requires_client
+def test_P2_2B_invite_create_inactive_role_422():
+    """is_active=false role 로 초대 → 422 ROLE_NOT_ASSIGNABLE."""
+    admin = _admin_user()
+    # 020 role 을 비활성화한 fixture
+    roles = [
+        {"role_code": "002", "role_name": "회사관리자", "is_active": True},
+        {"role_code": "020", "role_name": "일반사용자", "is_active": False},
+    ]
+    scopes = [
+        {"role_code": "002", "scope_type": "COMPANY"},
+        {"role_code": "020", "scope_type": "FACTORY"},
+    ]
+    store = _base_store(roles=roles, role_data_scope=scopes)
+    c = _client(admin, store)
+    r = c.post("/me/company/user-invites",
+               json={"email": "x@a.co.kr", "role_code": "020"})
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "ROLE_NOT_ASSIGNABLE"
+
+
+@requires_client
+def test_P2_2B_role_patch_platform_role_422_not_assignable():
+    """role PATCH 로 001/031 지정 → 422 ROLE_NOT_ASSIGNABLE."""
+    admin = _admin_user()
+    store = _base_store(users=[
+        admin,
+        {"id": "U-X", "email": "x@a.co.kr", "name": "X",
+         "role_code": "020", "company_id": "C-A",
+         "status_code": "ACTIVE", "is_active": True},
+    ])
+    c = _client(admin, store)
+    r = c.patch("/me/company/users/U-X/role",
+                json={"role_code": "001"})
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "ROLE_NOT_ASSIGNABLE"
+
+
+@requires_client
+def test_P2_2B_role_patch_valid_role_passes():
+    """정상 role (010 COMPANY scope active) 지정 → 통과."""
+    admin = _admin_user()
+    store = _base_store(users=[
+        admin,
+        {"id": "U-X2", "email": "x2@a.co.kr", "name": "X2",
+         "role_code": "020", "company_id": "C-A",
+         "status_code": "ACTIVE", "is_active": True},
+    ])
+    c = _client(admin, store)
+    r = c.patch("/me/company/users/U-X2/role",
+                json={"role_code": "010"})
+    assert r.status_code == 200
+
+
+# ── 2C : management surface strict entitlement ───────────────────
+@requires_client
+def test_P2_2C_list_users_without_entitlement_403():
+    """entitlement 없는 회사에서 GET /me/company/users → 403 SAAS_ENTITLEMENT_REQUIRED."""
+    # C-B 는 default subs 에 포함 안 됨 → entitlement 없음
+    admin = _admin_user(uid="U-BADM", cid="C-B")
+    store = _base_store(companies=[{"id": "C-B", "name": "B사"}])
+    c = _client(admin, store)
+    r = c.get("/me/company/users")
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "SAAS_ENTITLEMENT_REQUIRED"
+
+
+@requires_client
+def test_P2_2C_list_user_roles_without_entitlement_403():
+    admin = _admin_user(uid="U-BADM2", cid="C-B")
+    store = _base_store(companies=[{"id": "C-B", "name": "B사"}])
+    c = _client(admin, store)
+    r = c.get("/me/company/user-roles")
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "SAAS_ENTITLEMENT_REQUIRED"
+
+
+@requires_client
+def test_P2_2C_list_invites_without_entitlement_403():
+    admin = _admin_user(uid="U-BADM3", cid="C-B")
+    store = _base_store(companies=[{"id": "C-B", "name": "B사"}])
+    c = _client(admin, store)
+    r = c.get("/me/company/user-invites")
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "SAAS_ENTITLEMENT_REQUIRED"
+
+
+@requires_client
+def test_P2_2C_cancel_invite_without_entitlement_403():
+    admin = _admin_user(uid="U-BADM4", cid="C-B")
+    store = _base_store(
+        companies=[{"id": "C-B", "name": "B사"}],
+        invites=[{"id": "IV-1", "company_id": "C-B",
+                  "email": "x@b.co.kr", "role_code": "020",
+                  "status": "PENDING", "token_hash": "h",
+                  "expires_at": "2030-01-01T00:00:00+00:00"}],
+    )
+    c = _client(admin, store)
+    r = c.delete("/me/company/user-invites/IV-1")
+    assert r.status_code == 403
+    assert r.json()["detail"]["code"] == "SAAS_ENTITLEMENT_REQUIRED"
+
+
+@requires_client
+def test_P2_2C_access_endpoint_still_returns_200_without_entitlement():
+    """/me/company/access 는 entitlement 게이트 없음 (상태 반환 · Safe 진입 판정 소스)."""
+    admin = _admin_user(uid="U-BADM5", cid="C-B")
+    store = _base_store(companies=[{"id": "C-B", "name": "B사"}])
+    c = _client(admin, store)
+    r = c.get("/me/company/access")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d["entitlement"]["active"] is False
+    assert d["company_id"] == "C-B"
+
+
+# ── migration : invited_by NOT NULL ───────────────────────────────
+def test_P2_migration_invited_by_not_null():
+    import os
+    here = os.path.dirname(os.path.abspath(__file__))
+    sql_path = os.path.join(here, "..", "docs", "sql",
+                             "20260907_company_user_invites.sql")
+    with open(sql_path, encoding="utf-8") as f:
+        sql = f.read()
+    # invited_by NOT NULL + ON DELETE RESTRICT
+    import re
+    m = re.search(r"invited_by\s+uuid\s+NOT NULL[^\n]*ON DELETE RESTRICT", sql)
+    assert m is not None, \
+        "migration invited_by 는 NOT NULL + ON DELETE RESTRICT 이어야 한다"

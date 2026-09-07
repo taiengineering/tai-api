@@ -165,6 +165,45 @@ def require_active_company_saas(sb, company_id: Optional[str]) -> None:
                                 "message": "이 회사에는 활성화된 TAI Safe 이용권이 없습니다."})
 
 
+# ── Assignable role validation (invite create + role patch 공통) ─
+# PATCH-2 BLOCKER-2B : list_assignable_roles 필터를 mutation 경로에서도 강제.
+def assert_assignable_role(sb, role_code: Optional[str]) -> None:
+    """지정 가능한 role 인지 서버 강제 검증.
+
+    필터 (list_assignable_roles 와 동일):
+      - role_code 가 001 / 031 / 032 / 033 이면 거부 (platform · super admin)
+      - roles.is_active == True
+      - role_data_scope.scope_type in (COMPANY / FACTORY / TEAM / ASSIGNED)
+        (ALL / PLATFORM 은 거부)
+
+    위반 시 422 ROLE_NOT_ASSIGNABLE 예외 (라우터가 HTTPException 로 변환).
+    """
+    if not role_code:
+        raise CompanyUserError("ROLE_REQUIRED", "역할이 필요합니다.", 422)
+    if role_code in _EXCLUDED_ROLE_CODES:
+        raise CompanyUserError("ROLE_NOT_ASSIGNABLE",
+                               "지정할 수 없는 역할입니다.", 422)
+    try:
+        r = (sb.table("roles").select("role_code, is_active")
+             .eq("role_code", role_code).limit(1).execute()).data or []
+    except Exception:
+        raise CompanyUserError("ROLE_LOOKUP_FAILED",
+                               "역할 조회에 실패했습니다.", 503)
+    if not r or not bool(r[0].get("is_active")):
+        raise CompanyUserError("ROLE_NOT_ASSIGNABLE",
+                               "지정할 수 없는 역할입니다.", 422)
+    try:
+        s = (sb.table("role_data_scope").select("scope_type")
+             .eq("role_code", role_code).limit(1).execute()).data or []
+    except Exception:
+        raise CompanyUserError("ROLE_LOOKUP_FAILED",
+                               "역할 스코프 조회에 실패했습니다.", 503)
+    scope = s[0].get("scope_type") if s else None
+    if scope not in _MEMBER_ROLE_SCOPES:
+        raise CompanyUserError("ROLE_NOT_ASSIGNABLE",
+                               "지정할 수 없는 역할입니다.", 422)
+
+
 # ── Company Admin capability (bootstrap 용 · role 이름 아님) ──────
 def _has_company_admin_capability(sb, role_code: str) -> bool:
     """role_code 가 회사 사용자 관리 capability 를 가지는가.

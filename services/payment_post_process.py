@@ -275,6 +275,19 @@ def send_payment_notification(pay: dict, plan_code: str, plan_info: dict) -> Non
         logger.error("Slack sales notify failed: %s", e)
 
 
+def _is_saas_payment(pay: dict) -> bool:
+    """PATCH-2 BLOCKER-2D : bootstrap 진입 판정 · contract_id 무관.
+
+    _should_auto_contract 는 "새 계약 자동 생성" 판정으로 renewal / 기존 contract_id 있는
+    결제를 제외한다. 그러나 bootstrap 은 "SaaS 결제면 항상" 대상이어야 하므로 분리한다.
+    - product_type 이 SAAS_PRODUCT_TYPES 에 속하고
+    - company_id 가 있으면 True
+    - contract_id 유무는 판단하지 않음 (renewal 포함).
+    """
+    return ((pay.get("product_type") or "") in SAAS_PRODUCT_TYPES
+            and bool(pay.get("company_id")))
+
+
 def _bootstrap_buyer_company_admin(sb, pay: dict) -> None:
     """WP-A Payment buyer bootstrap — SaaS 성공만.
 
@@ -291,7 +304,9 @@ def _bootstrap_buyer_company_admin(sb, pay: dict) -> None:
 
     idempotent : 반복 후처리 시 role churn 0 (이미 정상 상태면 변경 없음).
     """
-    if not _should_auto_contract(pay):
+    # PATCH-2 BLOCKER-2D : auto-contract 판정 대신 _is_saas_payment 사용.
+    # renewal (contract_id 있는 SaaS 결제) 도 bootstrap 대상.
+    if not _is_saas_payment(pay):
         return                                                       # SaaS 성공만
     buyer_id = pay.get("user_id")
     company_id = pay.get("company_id")

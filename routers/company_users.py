@@ -188,6 +188,8 @@ def get_company_access(current: dict = Depends(get_current_user)):
 def list_users(current: dict = Depends(get_current_user)):
     sb = get_supabase()
     svc._require_company_user_admin(current, sb, "LIST")
+    # PATCH-2 BLOCKER-2C : management surface 도 strict entitlement.
+    svc.require_active_company_saas(sb, current.get("company_id"))
     company_id = current["company_id"]
     users = svc.list_company_users(sb, company_id)
     return {"status": "success", "data": {"items": users, "total": len(users)}}
@@ -200,6 +202,8 @@ def list_users(current: dict = Depends(get_current_user)):
 def list_user_roles(current: dict = Depends(get_current_user)):
     sb = get_supabase()
     svc._require_company_user_admin(current, sb, "LIST")
+    # PATCH-2 BLOCKER-2C : management surface strict entitlement.
+    svc.require_active_company_saas(sb, current.get("company_id"))
     roles = svc.list_assignable_roles(sb)
     return {"status": "success", "data": {"items": roles, "total": len(roles)}}
 
@@ -211,6 +215,8 @@ def list_user_roles(current: dict = Depends(get_current_user)):
 def list_invites(current: dict = Depends(get_current_user)):
     sb = get_supabase()
     svc._require_company_user_admin(current, sb, "LIST")
+    # PATCH-2 BLOCKER-2C : management surface strict entitlement.
+    svc.require_active_company_saas(sb, current.get("company_id"))
     company_id = current["company_id"]
     try:
         rows = (sb.table("company_user_invites")
@@ -239,6 +245,11 @@ def create_invite(body: InviteCreateBody, current: dict = Depends(get_current_us
     if not role_code:
         raise HTTPException(status_code=422, detail={"code": "ROLE_REQUIRED",
                                                      "message": "역할이 필요합니다."})
+    # PATCH-2 BLOCKER-2B : assignable role 서버 강제 (평문 role_code 직접 지정 방지).
+    try:
+        svc.assert_assignable_role(sb, role_code)
+    except svc.CompanyUserError as e:
+        _raise(e)
     # 기존 user 충돌
     try:
         er = (sb.table("users").select("id, company_id, status_code")
@@ -338,6 +349,8 @@ def create_invite(body: InviteCreateBody, current: dict = Depends(get_current_us
 def cancel_invite(invite_id: str, current: dict = Depends(get_current_user)):
     sb = get_supabase()
     svc._require_company_user_admin(current, sb, "CANCEL")
+    # PATCH-2 BLOCKER-2C : management surface strict entitlement (delete 도 차단).
+    svc.require_active_company_saas(sb, current.get("company_id"))
     company_id = current["company_id"]
     now = now_kst().isoformat()
     res = (sb.table("company_user_invites")
@@ -385,16 +398,15 @@ def patch_user_role(user_id: str, body: RolePatchBody,
     if not body.role_code:
         raise HTTPException(status_code=422, detail={"code": "ROLE_REQUIRED",
                                                      "message": "역할이 필요합니다."})
-    # role scope 유효성
+    # PATCH-2 BLOCKER-2B : assignable role 서버 강제 (scope 검증 이전).
     try:
-        s = (sb.table("role_data_scope").select("scope_type")
-             .eq("role_code", body.role_code).limit(1).execute()).data or []
-    except Exception:
-        s = []
-    if not s:
-        raise HTTPException(status_code=422, detail={"code": "ROLE_NOT_FOUND",
-                                                     "message": "역할을 찾을 수 없습니다."})
-    scope = s[0].get("scope_type")
+        svc.assert_assignable_role(sb, body.role_code)
+    except svc.CompanyUserError as e:
+        _raise(e)
+    # role scope 조회 (assignable 검증 완료 → 항상 존재)
+    s = (sb.table("role_data_scope").select("scope_type")
+         .eq("role_code", body.role_code).limit(1).execute()).data or []
+    scope = s[0].get("scope_type") if s else None
     if scope == "FACTORY" and not body.factory_id:
         raise HTTPException(status_code=422, detail={"code": "FACTORY_REQUIRED",
                                                      "message": "FACTORY 스코프 역할은 시설이 필요합니다."})

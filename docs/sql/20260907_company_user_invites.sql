@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS company_user_invites (
     team_id             uuid    NULL REFERENCES teams(id)       ON DELETE SET NULL,
     status              text    NOT NULL DEFAULT 'PENDING',
     token_hash          text    NOT NULL,
-    invited_by          uuid    NULL REFERENCES users(id)       ON DELETE SET NULL,
+    -- PATCH-2 : invited_by 는 NOT NULL. 초대 이력 감사를 위해 초대자 삭제 시 초대 이력 보존(RESTRICT).
+    invited_by          uuid    NOT NULL REFERENCES users(id)   ON DELETE RESTRICT,
     accepted_user_id    uuid    NULL REFERENCES users(id)       ON DELETE SET NULL,
     expires_at          timestamptz NOT NULL,
     created_at          timestamptz NOT NULL DEFAULT now(),

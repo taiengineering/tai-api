@@ -76,8 +76,12 @@ _PUBLIC: Tuple[Tuple[str, str], ...] = (
     ("GET", "/help/doc/"),
     ("GET", "/faqs"),
     ("POST", "/contacts"),
-    # WP-A (WO-SAFE-COMPANY-ACCESS-001): 회사 사용자 초대 토큰 정보 (미로그인 검증).
-    ("GET", "/user-invites/"),
+    # WP-A (WO-SAFE-COMPANY-ACCESS-001): 회사 사용자 초대 토큰 계약 (미로그인 신규 가입자).
+    # GET  /user-invites/{token}/info   — 토큰 유효성 표시용
+    # POST /user-invites/{token}/accept — 신규 가입자는 토큰만 있음 (로그인 전).
+    # /me/company/* 는 별도 · 여전히 인증 필요.
+    ("GET",  "/user-invites/"),
+    ("POST", "/user-invites/"),
 )
 
 _RESOURCE_PREFIX = {
