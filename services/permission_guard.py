@@ -76,6 +76,8 @@ _PUBLIC: Tuple[Tuple[str, str], ...] = (
     ("GET", "/help/doc/"),
     ("GET", "/faqs"),
     ("POST", "/contacts"),
+    # WP-A (WO-SAFE-COMPANY-ACCESS-001): 회사 사용자 초대 토큰 정보 (미로그인 검증).
+    ("GET", "/user-invites/"),
 )
 
 _RESOURCE_PREFIX = {

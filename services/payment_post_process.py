@@ -275,6 +275,88 @@ def send_payment_notification(pay: dict, plan_code: str, plan_info: dict) -> Non
         logger.error("Slack sales notify failed: %s", e)
 
 
+def _bootstrap_buyer_company_admin(sb, pay: dict) -> None:
+    """WP-A Payment buyer bootstrap — SaaS 성공만.
+
+    buyer = payment.user_id · company = payment.company_id.
+
+    - buyer.company_id 가 payment.company_id 와 다르면 NOOP + warning (자동 재소속 금지).
+    - case A : 회사 관리 capability ACTIVE 사용자 0 명 + buyer 가 이미
+               COMPANY 관리 capability role 을 가짐 → role 유지 + ACTIVE
+               (010 대표이사 / 011 안전보건책임자 등 그대로 보존).
+    - case B : capability ACTIVE 0 + buyer 가 non-capability role → role_code=002 +
+               ACTIVE.
+    - case C : 이미 관리 capability ACTIVE 사용자 존재 → buyer 자동 승격/덮어쓰기 금지
+               (PENDING 이면 유지, 기존 관리자 approve 로 활성화 대상).
+
+    idempotent : 반복 후처리 시 role churn 0 (이미 정상 상태면 변경 없음).
+    """
+    if not _should_auto_contract(pay):
+        return                                                       # SaaS 성공만
+    buyer_id = pay.get("user_id")
+    company_id = pay.get("company_id")
+    if not buyer_id or not company_id:
+        return
+    try:
+        u = (sb.table("users")
+             .select("id, company_id, role_code, status_code, is_active")
+             .eq("id", buyer_id).limit(1).execute()).data or []
+    except Exception:
+        logger.warning("[WP-A bootstrap] buyer 조회 실패 payment=%s", pay.get("id"))
+        return
+    if not u:
+        return
+    buyer = u[0]
+    if str(buyer.get("company_id")) != str(company_id):
+        logger.warning("[WP-A bootstrap] mismatch buyer.company_id=%s pay.company_id=%s payment=%s NOOP",
+                       buyer.get("company_id"), company_id, pay.get("id"))
+        return
+    # capability import (지연 import 로 순환 회피)
+    from services.company_user_svc import (
+        _company_admin_active_count as _cap_count,
+        _has_company_admin_capability as _has_cap,
+    )
+    active_admins = _cap_count(sb, company_id)
+    now = now_iso()
+    if active_admins > 0:
+        # case C : 이미 관리자 존재 → NOOP (덮어쓰기 금지).
+        logger.info("[WP-A bootstrap] case=C active_admins=%d buyer=%s NOOP",
+                    active_admins, buyer_id)
+        return
+    # active_admins == 0
+    buyer_has_cap = _has_cap(sb, buyer.get("role_code"))
+    if buyer_has_cap:
+        # case A : buyer 가 이미 capability role (010/011 등) → role 유지 + ACTIVE.
+        patch = {"updated_at": now}
+        if buyer.get("status_code") != "ACTIVE":
+            patch["status_code"] = "ACTIVE"
+        if not bool(buyer.get("is_active")):
+            patch["is_active"] = True
+        if "status_code" in patch or "is_active" in patch:
+            try:
+                sb.table("users").update(patch).eq("id", buyer_id).execute()
+                logger.info("[WP-A bootstrap] case=A buyer=%s role=%s activated",
+                            buyer_id, buyer.get("role_code"))
+            except Exception:
+                logger.warning("[WP-A bootstrap] case=A update 실패 buyer=%s", buyer_id)
+        else:
+            logger.info("[WP-A bootstrap] case=A buyer=%s already ACTIVE, no churn", buyer_id)
+        return
+    # case B : capability 없음 → role_code=002 + ACTIVE.
+    patch = {"role_code": "002", "status_code": "ACTIVE", "is_active": True, "updated_at": now}
+    # idempotent : 이미 002/ACTIVE/is_active 면 no-op skip
+    if (buyer.get("role_code") == "002"
+            and buyer.get("status_code") == "ACTIVE"
+            and bool(buyer.get("is_active"))):
+        logger.info("[WP-A bootstrap] case=B buyer=%s already 002/ACTIVE, no churn", buyer_id)
+        return
+    try:
+        sb.table("users").update(patch).eq("id", buyer_id).execute()
+        logger.info("[WP-A bootstrap] case=B buyer=%s → role=002/ACTIVE", buyer_id)
+    except Exception:
+        logger.warning("[WP-A bootstrap] case=B update 실패 buyer=%s", buyer_id)
+
+
 def on_payment_success_sync(payment_id: str) -> None:
     """결제 성공 시 계약 자동생성 + 알림 (동기)."""
     sb = get_supabase()
@@ -288,6 +370,12 @@ def on_payment_success_sync(payment_id: str) -> None:
     if status not in PAID_STATUS_CODES:
         logger.warning("Payment %s status=%s, skip post-process", payment_id, status)
         return
+
+    # WP-A: buyer bootstrap (SaaS 성공만; 3-case + idempotent).
+    try:
+        _bootstrap_buyer_company_admin(sb, pay)
+    except Exception:  # noqa: BLE001
+        logger.exception("[WP-A bootstrap] 예외 (계약 자동생성/알림에 영향 금지)")
 
     plan_code = (pay.get("plan_code") or "INDUSTRY_PRO").upper()
     plan_info = PLAN_MAP.get(plan_code, {"sector": "INDUSTRIAL", "level": 3})

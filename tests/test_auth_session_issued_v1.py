@@ -36,6 +36,7 @@ class _SB:
             return _Q([{
                 "id": "u-123", "email": "a@b.com", "name": "N", "role_code": "002",
                 "company_id": None, "factory_id": None, "status_code": "ACTIVE",
+                "is_active": True,                                    # WP-A ACTIVE gate
                 "profile_image_url": None, "password_hash": None, "auth_id": "auth-1",
                 "phone": "010",
             }])
