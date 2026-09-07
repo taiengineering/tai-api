@@ -25,17 +25,28 @@ from fastapi.testclient import TestClient
 # helpers / recorder
 # ══════════════════════════════════════════════════════════════
 class SentRecorder:
-    """monkey-patched httpx.AsyncClient replacement — records dispatched payloads."""
-    def __init__(self):
+    """monkey-patched httpx.AsyncClient replacement — records dispatched payloads.
+
+    Configurable per-instance to simulate Slack outcomes:
+      * status_code: HTTP status code the fake response returns (default 200)
+      * body:        JSON body dict (default {"ok": True})
+      * raise_exc:   exception instance to raise inside post() (default None)
+    """
+    def __init__(self, status_code: int = 200,
+                 body: Optional[Dict[str, Any]] = None,
+                 raise_exc: Optional[BaseException] = None):
         self.calls: List[Dict[str, Any]] = []
+        self.status_code = status_code
+        self.body = body if body is not None else {"ok": True}
+        self.raise_exc = raise_exc
 
     def install(self, monkeypatch, module):
         rec = self
 
         class _Resp:
-            status_code = 200
+            status_code = rec.status_code
             def json(self):  # noqa: D401
-                return {"ok": True}
+                return rec.body
 
         class _Client:
             def __init__(self, *a, **k): pass
@@ -43,6 +54,8 @@ class SentRecorder:
             async def __aexit__(self, *a): return False
             async def post(self, url, headers=None, json=None):
                 rec.calls.append({"url": url, "headers": headers, "json": json})
+                if rec.raise_exc is not None:
+                    raise rec.raise_exc
                 return _Resp()
 
         monkeypatch.setattr(module, "httpx", type("H", (), {"AsyncClient": _Client}))
@@ -269,11 +282,12 @@ def test_i9_notify_awaits_send_slack_source_evidence():
 
 
 def test_i9b_notify_response_reflects_send_attempt(notify_client, monkeypatch):
-    """Behavior confirms: response.sent == True only after send_slack completed (not scheduled)."""
+    """Behavior confirms: response.sent reflects real bool from send_slack (not merely 'attempted')."""
     called = {"done": False}
 
     async def _slow_but_completed(*a, **k):
         called["done"] = True
+        return True  # PATCH-1 contract: send_slack returns True on success
 
     monkeypatch.setattr("routers.internal_inbox.send_slack", _slow_but_completed)
     r = notify_client.post("/internal/inbox/notify",
@@ -283,3 +297,123 @@ def test_i9b_notify_response_reflects_send_attempt(notify_client, monkeypatch):
     assert r.status_code == 200
     assert r.json()["sent"] is True
     assert called["done"] is True  # send actually finished before response
+
+
+# ══════════════════════════════════════════════════════════════
+# S1..S7 — send_slack() bool contract (PATCH-1)
+# ══════════════════════════════════════════════════════════════
+def test_s1_slack_ok_true_returns_true_and_endpoint_sent_true(monkeypatch, notify_client):
+    _prepare_env(monkeypatch)
+    monkeypatch.setenv("INTERNAL_API_SECRET", "s3cret")
+    from services import slack_dispatcher as sd
+    rec = SentRecorder(status_code=200, body={"ok": True})
+    rec.install(monkeypatch, sd)
+
+    # (a) direct call bool
+    result = asyncio.run(sd.send_slack("INQUIRY_CREATED", "INFO", "t", blocks=[{"type": "section"}]))
+    assert result is True
+
+    # (b) endpoint sent=true
+    rec.calls.clear()
+    r = notify_client.post("/internal/inbox/notify",
+                           headers={"X-Internal-Secret": "s3cret"},
+                           json={"record": {"id": "s1", "inquiry_type": "INQUIRY", "content": "x"}})
+    assert r.status_code == 200
+    assert r.json()["sent"] is True
+
+
+def test_s2_channel_missing_returns_false(monkeypatch, notify_client):
+    _prepare_env(monkeypatch)
+    monkeypatch.setenv("INTERNAL_API_SECRET", "s3cret")
+    # remove ALL possible INQUIRY channel sources (env + fallback)
+    for k in ("SLACK_CH_INQUIRY", "SLACK_CHANNEL_ID_INBOX", "SLACK_CHANNEL_ID"):
+        monkeypatch.delenv(k, raising=False)
+    from services import slack_dispatcher as sd
+    rec = SentRecorder(status_code=200, body={"ok": True}); rec.install(monkeypatch, sd)
+
+    result = asyncio.run(sd.send_slack("INQUIRY_CREATED", "INFO", "t", blocks=[{"type": "section"}]))
+    assert result is False
+    assert rec.calls == []  # no HTTP attempted
+
+    r = notify_client.post("/internal/inbox/notify",
+                           headers={"X-Internal-Secret": "s3cret"},
+                           json={"record": {"id": "s2", "inquiry_type": "INQUIRY", "content": "x"}})
+    assert r.status_code == 200
+    assert r.json()["sent"] is False
+
+
+def test_s3_token_missing_returns_false(monkeypatch):
+    _prepare_env(monkeypatch)
+    monkeypatch.delenv("SLACK_BOT_TOKEN1", raising=False)
+    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+    from services import slack_dispatcher as sd
+    rec = SentRecorder(); rec.install(monkeypatch, sd)
+
+    result = asyncio.run(sd.send_slack("INQUIRY_CREATED", "INFO", "t", blocks=[{"type": "section"}]))
+    assert result is False
+    assert rec.calls == []
+
+
+def test_s4_slack_api_ok_false_returns_false(monkeypatch):
+    _prepare_env(monkeypatch)
+    from services import slack_dispatcher as sd
+    rec = SentRecorder(status_code=200, body={"ok": False, "error": "invalid_auth"})
+    rec.install(monkeypatch, sd)
+
+    result = asyncio.run(sd.send_slack("INQUIRY_CREATED", "INFO", "t", blocks=[{"type": "section"}]))
+    assert result is False
+    assert len(rec.calls) == 1  # HTTP was attempted
+
+
+def test_s5_http_non200_returns_false(monkeypatch):
+    _prepare_env(monkeypatch)
+    from services import slack_dispatcher as sd
+    rec = SentRecorder(status_code=500, body={})
+    rec.install(monkeypatch, sd)
+
+    result = asyncio.run(sd.send_slack("INQUIRY_CREATED", "INFO", "t", blocks=[{"type": "section"}]))
+    assert result is False
+    assert len(rec.calls) == 1
+
+
+def test_s6_network_exception_returns_false(monkeypatch, notify_client):
+    _prepare_env(monkeypatch)
+    monkeypatch.setenv("INTERNAL_API_SECRET", "s3cret")
+    from services import slack_dispatcher as sd
+    rec = SentRecorder(raise_exc=RuntimeError("network down"))
+    rec.install(monkeypatch, sd)
+
+    # (a) direct
+    result = asyncio.run(sd.send_slack("INQUIRY_CREATED", "INFO", "t", blocks=[{"type": "section"}]))
+    assert result is False
+
+    # (b) endpoint still 200, sent=false, exception absorbed by dispatcher
+    r = notify_client.post("/internal/inbox/notify",
+                           headers={"X-Internal-Secret": "s3cret"},
+                           json={"record": {"id": "s6", "inquiry_type": "INQUIRY", "content": "x"}})
+    assert r.status_code == 200
+    assert r.json()["sent"] is False
+
+
+def test_s7_alert_ops_engine_regression(monkeypatch):
+    """S7 restatement: severity-based legacy paths still route/send correctly with bool contract."""
+    _prepare_env(monkeypatch)
+    from services import slack_dispatcher as sd
+
+    # alert
+    rec = SentRecorder(status_code=200, body={"ok": True}); rec.install(monkeypatch, sd)
+    result = asyncio.run(sd.send_slack("MANUAL_ALERT", "CRITICAL", "boom"))
+    assert result is True
+    assert rec.calls[0]["json"]["channel"] == "C_ALERT"
+
+    # ops
+    rec = SentRecorder(status_code=200, body={"ok": True}); rec.install(monkeypatch, sd)
+    result = asyncio.run(sd.send_slack("OPS_EVENT", "INFO", "hi"))
+    assert result is True
+    assert rec.calls[0]["json"]["channel"] == "C_OPS"
+
+    # engine event
+    rec = SentRecorder(status_code=200, body={"ok": True}); rec.install(monkeypatch, sd)
+    result = asyncio.run(sd.send_slack("OBLIGATION_DRIFT_DETECTED", "INFO", "drift"))
+    assert result is True
+    assert rec.calls[0]["json"]["channel"] == "C_ENGINE"

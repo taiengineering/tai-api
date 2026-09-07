@@ -43,17 +43,17 @@ async def notify_inbox(
     title = fallback_title(record)
 
     # §6: fire-and-forget 금지 — send_slack 완료(전송 시도 종료)까지 await.
-    # Slack 자체 실패는 business rollback 을 유발하지 않음(DB trigger 는 INSERT 성공 후 호출).
+    # send_slack 은 계약상 예외를 흡수하고 bool 을 반환한다.
+    # 방어적: 계약이 깨져 예외가 새어나오더라도 endpoint 는 200 을 유지하고 sent=False.
     try:
-        await send_slack(event_type, "INFO", title, blocks=blocks)
-        sent_attempted = True
+        sent = await send_slack(event_type, "INFO", title, blocks=blocks)
     except Exception as e:  # noqa: BLE001
         logger.warning("[internal_inbox] dispatcher call failed: %s", e)
-        sent_attempted = False
+        sent = False
 
     return {
         "ok": True,
-        "sent": sent_attempted,
+        "sent": sent,
         "event_type": event_type,
         "row_id": record.get("id"),
     }

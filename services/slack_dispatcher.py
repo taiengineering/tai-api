@@ -124,8 +124,12 @@ async def send_slack(
     detail: str = "",
     channel_override: Optional[str] = None,
     blocks: Optional[List[dict]] = None,
-):
-    """이벤트를 Slack으로 발송.
+) -> bool:
+    """이벤트를 Slack으로 발송. 실제 전송 성공 여부를 bool 로 반환.
+
+    성공 = HTTP 200 AND Slack API body.ok == true.
+    실패(각 사유별): disabled / token 없음 / channel 없음 / API ok=false / HTTP != 200 / 네트워크 예외.
+    예외는 함수 안에서 흡수(호출측 business fail-safe 유지) 후 False.
 
     Args:
         event_type: 이벤트 타입 (e.g. WORK_OVERDUE, INQUIRY_CREATED)
@@ -138,18 +142,18 @@ async def send_slack(
     enabled = os.environ.get("SLACK_WEBHOOK_ENABLED", "true").strip().lower()
     if enabled != "true":
         logger.debug(f"Slack disabled, skip: {event_type}")
-        return
+        return False
 
     token = (os.environ.get("SLACK_BOT_TOKEN1", "") or os.environ.get("SLACK_BOT_TOKEN", "")).strip()
     if not token:
         logger.warning("SLACK_BOT_TOKEN1/SLACK_BOT_TOKEN not set, skip slack dispatch")
-        return
+        return False
 
     channel_type = channel_override or _resolve_channel(event_type, severity)
     channel_id = _get_channel_id(channel_type)
     if not channel_id:
         logger.warning(f"No channel ID for {channel_type} (event={event_type}), skip")
-        return
+        return False
 
     emoji = SEVERITY_EMOJI.get(severity, "ℹ️")
     text = f"{emoji} *[{severity}]* {title}"
@@ -172,12 +176,15 @@ async def send_slack(
             )
             if resp.status_code == 200:
                 body = resp.json()
-                if not body.get("ok"):
-                    logger.error(f"Slack API error: {body.get('error')}")
-            else:
-                logger.error(f"Slack HTTP {resp.status_code}")
+                if body.get("ok"):
+                    return True
+                logger.error(f"Slack API error: {body.get('error')}")
+                return False
+            logger.error(f"Slack HTTP {resp.status_code}")
+            return False
     except Exception as e:
         logger.exception(f"Slack dispatch failed: {e}")
+        return False
 
 
 def send_slack_sync(
