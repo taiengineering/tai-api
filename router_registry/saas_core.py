@@ -37,4 +37,6 @@ ROUTERS = [
     {"module": "routers.member_support"},
     # BACKEND-1: 회원 회사정보 조회·저장 (GET/PUT /me/company — 세금계산서 회사 SoT)
     {"module": "routers.member_company"},
+    # WP-A (WO-SAFE-COMPANY-ACCESS-001): 회사 사용자 관리 · 초대 (/me/company/*, /user-invites/*)
+    {"module": "routers.company_users"},
 ]

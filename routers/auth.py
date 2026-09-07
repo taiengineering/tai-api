@@ -75,6 +75,30 @@ def _parse_iso(s: str) -> datetime:
 # v3.4.1: FastAPI Depends용 인증 의존성 함수
 # ════════════════════════════════════════════
 
+def _require_active_account(user: dict) -> None:
+    """WP-A ACTIVE ACCOUNT GATE.
+    status_code=='ACTIVE' and is_active else 403 (worker OTP 자동생성 user 는 ACTIVE 유지).
+    status code 별 응답 code 를 분기 (특정 상태 → 명확한 code, 나머지 → ACCOUNT_INACTIVE)."""
+    if not user:
+        raise HTTPException(status_code=401, detail="사용자 정보가 없습니다")
+    status = user.get("status_code")
+    is_active = bool(user.get("is_active"))
+    if status == "ACTIVE" and is_active:
+        return
+    if status == "PENDING":
+        raise HTTPException(status_code=403,
+                            detail={"code": "ACCOUNT_PENDING_APPROVAL",
+                                    "message": "관리자 승인 대기 중인 계정입니다."})
+    if status in ("SUSPENDED", "DELETED"):
+        raise HTTPException(status_code=403,
+                            detail={"code": f"ACCOUNT_{status}",
+                                    "message": "접근 불가 계정입니다."})
+    # ACTIVE 인데 is_active=false 인 drift · INACTIVE · 그 외 알 수 없는 상태
+    raise HTTPException(status_code=403,
+                        detail={"code": "ACCOUNT_INACTIVE",
+                                "message": "비활성 상태 계정입니다."})
+
+
 def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="토큰이 없습니다")
@@ -91,7 +115,10 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     res = supabase.table("users").select("*").eq("auth_id", str(ur.user.id)).limit(1).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
-    return res.data[0]
+    user = res.data[0]
+    # WP-A: 기발급 토큰도 PENDING/INACTIVE 면 protected 접근 차단.
+    _require_active_account(user)
+    return user
 
 
 def get_current_user_optional(authorization: Optional[str] = Header(None)) -> Optional[dict]:
@@ -621,7 +648,7 @@ def login(req: LoginRequest):
     try:
         if is_email(identifier):
             rows = supabase.table("users").select(
-                "id, email, name, phone, role_code, company_id, factory_id, status_code, profile_image_url, password_hash, auth_id"
+                "id, email, name, phone, role_code, company_id, factory_id, status_code, is_active, profile_image_url, password_hash, auth_id"
             ).eq("email", identifier).limit(1).execute()
             if not rows.data:
                 emit_event(
@@ -637,7 +664,7 @@ def login(req: LoginRequest):
         else:
             phone_norm = normalize_phone(identifier)
             rows = supabase.table("users").select(
-                "id, email, name, phone, role_code, company_id, factory_id, status_code, profile_image_url, password_hash, auth_id"
+                "id, email, name, phone, role_code, company_id, factory_id, status_code, is_active, profile_image_url, password_hash, auth_id"
             ).eq("phone", phone_norm).limit(1).execute()
             if not rows.data:
                 emit_event(
@@ -664,7 +691,10 @@ def login(req: LoginRequest):
         raise HTTPException(status_code=500, detail=f"사용자 조회 오류: {str(e)}")
     user = rows.data[0]
     status = user.get("status_code", "ACTIVE")
-    if status in ("SUSPENDED", "DELETED", "INACTIVE"):
+    is_active = bool(user.get("is_active"))
+    # WP-A: PENDING 도 로그인 게이트에 포함(토큰 발급 금지). worker OTP 자동생성 user 는
+    # is_active=true / ACTIVE 라 정상 통과.
+    if status in ("SUSPENDED", "DELETED", "INACTIVE") or (not is_active) or status == "PENDING":
         emit_event(
             step_key="validate_auth",
             step_order=1,
@@ -674,7 +704,15 @@ def login(req: LoginRequest):
             payload_summary={"auth_result": "failure"},
         )
         clear_trace()
-        raise HTTPException(status_code=403, detail=f"접근 불가 계정입니다 ({status})")
+        if status == "PENDING":
+            raise HTTPException(status_code=403,
+                                detail={"code": "ACCOUNT_PENDING_APPROVAL",
+                                        "message": "관리자 승인 대기 중인 계정입니다."})
+        if status in ("SUSPENDED", "DELETED"):
+            raise HTTPException(status_code=403, detail=f"접근 불가 계정입니다 ({status})")
+        raise HTTPException(status_code=403,
+                            detail={"code": "ACCOUNT_INACTIVE",
+                                    "message": "비활성 상태 계정입니다."})
     login_email = user.get("email")
     if not login_email:
         emit_event(
