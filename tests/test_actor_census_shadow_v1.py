@@ -88,3 +88,60 @@ def test_R5b_exception_never_raises(monkeypatch):
     out = sh.shadow_lookup([{"atom_id": None}, {}])
     # broken 관측이거나 None(비활성)일 수 있으나 예외는 없어야 한다
     assert out is None or "records" in out
+
+
+# ── PATCH-1: R1 INTEGRATION deep-equal at run_leg_diagnosis level ──
+def _fake_rtm_data():
+    return {
+        "status": "OK",
+        "obligations": [
+            {"atom_id": "274f72ca-8a26-5da6-8937-c1b5e340dcee", "law_name": "L1", "law_article": "1", "evidence": "e", "source_atom_ids": ["274f72ca-8a26-5da6-8937-c1b5e340dcee"]},
+            {"atom_id": "006c122a-8b95-5c40-b225-b8c4639280c4", "law_name": "L2", "law_article": "2", "evidence": "e", "source_atom_ids": ["006c122a-8b95-5c40-b225-b8c4639280c4"]},
+        ],
+        "obligation_count": 2,
+        "review_required": [],
+        "provenance": {"x": 1},
+        "contract": {"y": 2},
+        "trace_id": "t-1",
+    }
+
+
+class _Body:
+    sector = "MANUFACTURING"
+
+
+def _run_full_result(monkeypatch, flag_value):
+    import importlib
+    import services.leg_diagnosis_svc as svc
+    import clients.leg_runtime_client as client
+    if flag_value is None:
+        monkeypatch.delenv("ACTOR_CENSUS_SHADOW_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("ACTOR_CENSUS_SHADOW_ENABLED", flag_value)
+    _reset()
+    monkeypatch.setattr(client, "build_facility", lambda b: {"f": 1})
+    monkeypatch.setattr(client, "evaluate_rtm", lambda facility, **kw: _fake_rtm_data())
+    return svc.run_leg_diagnosis(_Body())
+
+
+def test_R1_off_on_full_result_deep_equal(monkeypatch):
+    off = _run_full_result(monkeypatch, None)
+    on = _run_full_result(monkeypatch, "true")
+    assert off == on, "shadow ON must not change full_result"
+    # consumer/full_result에 shadow metadata가 없어야 함
+    assert not any(str(k).lower().startswith("shadow") or "actor_shadow" in str(k).lower() for k in on.keys())
+
+
+def test_R1_flag_off_no_file_io(monkeypatch):
+    import services.actor_census_shadow as sh2
+    monkeypatch.delenv("ACTOR_CENSUS_SHADOW_ENABLED", raising=False)
+    _reset()
+    calls = {"n": 0}
+    orig = sh2._load
+    def _spy():
+        calls["n"] += 1
+        return orig()
+    monkeypatch.setattr(sh2, "_load", _spy)
+    out = sh2.shadow_lookup([{"atom_id": "274f72ca-8a26-5da6-8937-c1b5e340dcee"}])
+    assert out is None
+    assert calls["n"] == 0, "flag OFF must not trigger loader/file IO"

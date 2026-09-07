@@ -10,5 +10,19 @@
     "ACTOR_CENSUS_ROW_MISSING": 0,
     "ATOM_MAPPING_BROKEN": 0
   },
-  "source_rebase_map_sha256": "63465a355435e788421314f6a3125c28bde0fa31b56b2fc655436169cba7a480"
+  "source_rebase_map_sha256": "63465a355435e788421314f6a3125c28bde0fa31b56b2fc655436169cba7a480",
+  "provenance": {
+    "actor_census_sha256": "3a6965d07ff156e89c7a9f9ec31adaff49143f6826fdc12666b2a0dad7328628",
+    "psr_337_source_sha256": "a568a4a9c024f5c25836b1a0ac1d4c45689ff141d1e6328ab8f510669cab494f",
+    "rebase_map_sha256": "63465a355435e788421314f6a3125c28bde0fa31b56b2fc655436169cba7a480",
+    "mapping_sha256": "3885cbf729772e58e0bd86e8d289e6fe8bbf58e5d768ca0dd90b520fc8edde1e",
+    "counts": {
+      "TOTAL_ATOMS": 337,
+      "MATCHED_ACTOR_CENSUS": 2,
+      "OUTSIDE_ACTOR_CENSUS_SCOPE": 335,
+      "ACTOR_CENSUS_ROW_MISSING": 0,
+      "ATOM_MAPPING_BROKEN": 0
+    },
+    "note": "337 PSR (distinct 337, dup 0, idset EXACT SEMREPO-RC1) → atom_shadow_map_337 → census v1 join. 357 SUPERSEDED."
+  }
 }
