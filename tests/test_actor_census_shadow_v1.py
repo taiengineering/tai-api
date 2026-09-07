@@ -145,3 +145,50 @@ def test_R1_flag_off_no_file_io(monkeypatch):
     out = sh2.shadow_lookup([{"atom_id": "274f72ca-8a26-5da6-8937-c1b5e340dcee"}])
     assert out is None
     assert calls["n"] == 0, "flag OFF must not trigger loader/file IO"
+
+
+# ── PATCH-2: frozen mapping SHA enforcement ──
+def test_P2_expected_mapping_sha_constant():
+    import services.actor_census_shadow as sh3
+    assert sh3._EXPECTED_MAPPING_SHA == "3885cbf729772e58e0bd86e8d289e6fe8bbf58e5d768ca0dd90b520fc8edde1e"
+    # 실제 map 파일 SHA도 frozen 상수와 일치해야 한다
+    assert sh3._sha256_file(sh3._MAP_PATH) == sh3._EXPECTED_MAPPING_SHA
+
+
+def test_P2_manifest_mapping_sha_tampered_disables(monkeypatch, tmp_path):
+    import json, shutil, services.actor_census_shadow as sh3
+    # data 디렉토리를 tmp로 복제 후 manifest의 mapping_sha256만 위조
+    dst = tmp_path / "actor_census"
+    shutil.copytree(sh3._DATA_DIR, dst)
+    m = json.load(open(dst / "manifest.json", encoding="utf-8"))
+    m["mapping_sha256"] = "0" * 64
+    json.dump(m, open(dst / "manifest.json", "w", encoding="utf-8"))
+    monkeypatch.setenv("ACTOR_CENSUS_SHADOW_ENABLED", "true")
+    monkeypatch.setattr(sh3, "_DATA_DIR", str(dst))
+    monkeypatch.setattr(sh3, "_MAP_PATH", str(dst / "actor_shadow_map_v1.jsonl"))
+    monkeypatch.setattr(sh3, "_MANIFEST_PATH", str(dst / "manifest.json"))
+    _reset()
+    out = sh3.shadow_lookup([{"atom_id": "274f72ca-8a26-5da6-8937-c1b5e340dcee"}])
+    assert out is None  # manifest 위조 → 3-way 불일치 → shadow disabled, 예외 없음
+
+
+def test_P2_map_file_tampered_disables(monkeypatch, tmp_path):
+    import json, shutil, services.actor_census_shadow as sh3
+    dst = tmp_path / "actor_census"
+    shutil.copytree(sh3._DATA_DIR, dst)
+    # map 파일에 한 줄 추가(내용 변조) + manifest도 그 새 SHA로 맞춰줌(공모 시나리오)
+    mp = dst / "actor_shadow_map_v1.jsonl"
+    with open(mp, "a", encoding="utf-8") as f:
+        f.write('{"atom_id": "00000000-0000-0000-0000-000000000000", "scope_status": "OUTSIDE_ACTOR_CENSUS_SCOPE", "family_root_id": null}\n')
+    new_sha = sh3._sha256_file(str(mp))
+    m = json.load(open(dst / "manifest.json", encoding="utf-8"))
+    m["mapping_sha256"] = new_sha  # manifest도 공모 변경
+    json.dump(m, open(dst / "manifest.json", "w", encoding="utf-8"))
+    monkeypatch.setenv("ACTOR_CENSUS_SHADOW_ENABLED", "true")
+    monkeypatch.setattr(sh3, "_DATA_DIR", str(dst))
+    monkeypatch.setattr(sh3, "_MAP_PATH", str(mp))
+    monkeypatch.setattr(sh3, "_MANIFEST_PATH", str(dst / "manifest.json"))
+    _reset()
+    out = sh3.shadow_lookup([{"atom_id": "274f72ca-8a26-5da6-8937-c1b5e340dcee"}])
+    # manifest+map 공모 변경이어도 frozen 상수(_EXPECTED_MAPPING_SHA)와 불일치 → disabled
+    assert out is None

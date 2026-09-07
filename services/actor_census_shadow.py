@@ -22,6 +22,7 @@ _MAP_PATH = os.path.join(_DATA_DIR, "actor_shadow_map_v1.jsonl")
 _MANIFEST_PATH = os.path.join(_DATA_DIR, "manifest.json")
 
 _EXPECTED_CENSUS_SHA = "3a6965d07ff156e89c7a9f9ec31adaff49143f6826fdc12666b2a0dad7328628"
+_EXPECTED_MAPPING_SHA = "3885cbf729772e58e0bd86e8d289e6fe8bbf58e5d768ca0dd90b520fc8edde1e"
 
 MATCHED = "MATCHED_ACTOR_CENSUS"
 OUTSIDE = "OUTSIDE_ACTOR_CENSUS_SCOPE"
@@ -57,11 +58,12 @@ def _load() -> None:
                         manifest.get("actor_census_sha256"), census_sha, _EXPECTED_CENSUS_SHA)
             _STATE["ok"] = False
             return
-        # mapping SHA 검증
+        # mapping SHA 검증: manifest == 실제 파일 == frozen 상수 (3-way EXACT).
+        #   frozen mapping artifact(337/2/335) 변조 방지 — manifest+map 동시 변경도 상수 불일치로 차단.
         map_sha = _sha256_file(_MAP_PATH)
-        if manifest.get("mapping_sha256") != map_sha:
-            log.warning("actor_census_shadow disabled: mapping SHA mismatch manifest=%s file=%s",
-                        manifest.get("mapping_sha256"), map_sha)
+        if manifest.get("mapping_sha256") != map_sha or map_sha != _EXPECTED_MAPPING_SHA:
+            log.warning("actor_census_shadow disabled: mapping SHA mismatch manifest=%s file=%s expected=%s",
+                        manifest.get("mapping_sha256"), map_sha, _EXPECTED_MAPPING_SHA)
             _STATE["ok"] = False
             return
         amap: Dict[str, Any] = {}
