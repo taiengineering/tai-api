@@ -811,37 +811,39 @@ def test_P2_2B_role_patch_valid_role_passes():
     assert r.status_code == 200
 
 
-# ── 2C : management surface strict entitlement ───────────────────
+# ── 2C : WP-A FINAL POLICY (SUPERSEDED) ──────────────────────────
+#   AUTH ≠ ENTITLEMENT ≠ RBAC. entitlement 만료 → 로그인·READ 허용 · WRITE 금지.
+#   GET (list_users/roles/invites) : entitlement 없어도 200 (capability + boundary 유지).
+#   DELETE/POST/PATCH (mutation) : entitlement 없으면 여전히 403.
 @requires_client
-def test_P2_2C_list_users_without_entitlement_403():
-    """entitlement 없는 회사에서 GET /me/company/users → 403 SAAS_ENTITLEMENT_REQUIRED."""
-    # C-B 는 default subs 에 포함 안 됨 → entitlement 없음
+def test_P2_2C_list_users_without_entitlement_200_read_allowed():
+    """WP-A FINAL POLICY : entitlement 없는 회사도 GET /me/company/users → 200 (READ 허용).
+    capability + company boundary 는 계속 적용된다."""
     admin = _admin_user(uid="U-BADM", cid="C-B")
     store = _base_store(companies=[{"id": "C-B", "name": "B사"}])
     c = _client(admin, store)
     r = c.get("/me/company/users")
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "SAAS_ENTITLEMENT_REQUIRED"
+    assert r.status_code == 200, f"WP-A FINAL: READ 허용. 응답: {r.json()}"
 
 
 @requires_client
-def test_P2_2C_list_user_roles_without_entitlement_403():
+def test_P2_2C_list_user_roles_without_entitlement_200_read_allowed():
+    """WP-A FINAL POLICY : entitlement 없어도 role 목록 조회 허용 (READ)."""
     admin = _admin_user(uid="U-BADM2", cid="C-B")
     store = _base_store(companies=[{"id": "C-B", "name": "B사"}])
     c = _client(admin, store)
     r = c.get("/me/company/user-roles")
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "SAAS_ENTITLEMENT_REQUIRED"
+    assert r.status_code == 200
 
 
 @requires_client
-def test_P2_2C_list_invites_without_entitlement_403():
+def test_P2_2C_list_invites_without_entitlement_200_read_allowed():
+    """WP-A FINAL POLICY : entitlement 없어도 초대 목록 조회 허용 (READ)."""
     admin = _admin_user(uid="U-BADM3", cid="C-B")
     store = _base_store(companies=[{"id": "C-B", "name": "B사"}])
     c = _client(admin, store)
     r = c.get("/me/company/user-invites")
-    assert r.status_code == 403
-    assert r.json()["detail"]["code"] == "SAAS_ENTITLEMENT_REQUIRED"
+    assert r.status_code == 200
 
 
 @requires_client
