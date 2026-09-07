@@ -5,6 +5,7 @@ routers/diagnosis_result_web.py — v1.3.2
   GET /diagnosis/result/{public_token}
   GET /diagnosis/paid-result/{public_token}
   GET /diagnosis/paid-result/{public_token}/excel  (on-demand XLSX, storage 0)
+  GET /diagnosis/paid-result/{public_token}/pdf    (on-demand PDF, storage 0)
 
 v1.1.0: BE-08 Transform 정제 함수 연동 (rules_table dedupe + FAMILY→한글)
 v1.2.0: 의무 제목/설명 표시 보정 — obligation_summary/remarks가 코드 토큰일 때
@@ -41,7 +42,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from db.supabase_client import get_supabase
 from services.diagnosis_runtime_step1 import enrich_rules_with_candidate_slots
@@ -54,6 +55,12 @@ from services.paid_result_excel_v1 import (
     build_paid_result_excel_v1,
     content_disposition,
     excel_filename,
+)
+from services.paid_result_pdf_v1 import (
+    PaidResultPdfTransportError,
+    generate_paid_result_pdf_v1,
+    pdf_content_disposition,
+    pdf_filename,
 )
 from routers.diagnosis_transform import (
     CATEGORY_MAP,
@@ -530,6 +537,30 @@ def get_paid_result_excel(public_token: str):
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": content_disposition(filename)},
+    )
+
+
+@router.get("/paid-result/{public_token}/pdf")
+async def get_paid_result_pdf(public_token: str):
+    """유료 결과 PDF. JSON/Excel paid-result 와 동일 access gate. on-demand, storage 0."""
+    payload = _build_result_payload(
+        public_token, free_preview_limit=None, include_paid_product=True,
+    )
+    data = payload.get("data") or {}
+    if data.get("is_free"):
+        raise HTTPException(status_code=403, detail="유료 진단 결과가 아닙니다.")
+    premium = data.get("premium_result_v1")
+    if not isinstance(premium, dict):
+        raise HTTPException(status_code=404, detail="진단 결과를 찾을 수 없습니다.")
+    try:
+        raw = await generate_paid_result_pdf_v1(premium)
+    except PaidResultPdfTransportError as exc:
+        raise HTTPException(status_code=500, detail=exc.detail) from exc
+    filename = pdf_filename(premium)
+    return Response(
+        content=raw,
+        media_type="application/pdf",
+        headers={"Content-Disposition": pdf_content_disposition(filename)},
     )
 
 
