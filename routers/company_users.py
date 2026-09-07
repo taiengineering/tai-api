@@ -16,6 +16,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+# PATCH-1 : Inicis CI 계약을 register(routers/auth.py) 와 정확히 동일하게 맞춘다.
+#   실제 테이블 = inicis_auth_requests (mtx_id → status='SUCCESS', user_ci 등).
+#   identity_ci = SHA-256(user_ci) hex.  users.identity_ci 로 CI 중복가입 차단.
+#   초대 가입도 본인인증을 필수로 취급(register 와 동일 강도).
+
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services import company_user_svc as svc
@@ -536,26 +541,53 @@ def accept_invite(token: str, body: InviteAcceptBody):
     if not phone_norm:
         raise HTTPException(status_code=422, detail={"code": "INVALID_PHONE",
                                                      "message": "전화번호가 유효하지 않습니다."})
-    # Inicis CI 검증 (/auth/register 와 동일 로직 재사용).
+    # ── Inicis 본인인증 검증 (routers.auth.register 와 동일 계약) ──
+    #   inicis_auth_requests: mtx_id → status='SUCCESS', user_ci
+    #   identity_ci = SHA-256(user_ci) hex. users.identity_ci 와 대조해 CI 중복가입 차단.
+    #   PATCH-1 정책 : 초대 가입도 register 와 동일 강도 → mtx_id 필수.
     identity_ci = None
-    if body.mtx_id:
-        try:
-            v = (sb.table("inicis_verifications").select("ci")
-                 .eq("mtx_id", body.mtx_id).limit(1).execute()).data or []
-            identity_ci = v[0].get("ci") if v else None
-        except Exception:
-            identity_ci = None
-        if identity_ci:
-            try:
-                dup = (sb.table("users").select("id")
-                       .eq("identity_ci", identity_ci).limit(1).execute()).data or []
-            except Exception:
-                dup = []
-            if dup:
-                raise HTTPException(status_code=409, detail={
-                    "code": "CI_ALREADY_USED",
-                    "message": "이미 본인확인된 계정이 있습니다.",
-                })
+    identity_fields: dict = {}
+    if not body.mtx_id:
+        raise HTTPException(status_code=400, detail={
+            "code": "IDENTITY_VERIFICATION_REQUIRED",
+            "message": "본인인증이 필요합니다. 본인인증을 먼저 완료해 주세요.",
+        })
+    try:
+        ia = (sb.table("inicis_auth_requests")
+              .select("status, user_ci, user_name, user_phone, user_birthday")
+              .eq("mtx_id", body.mtx_id).limit(1).execute()).data or []
+    except Exception:
+        ia = []
+    if not ia or ia[0].get("status") != "SUCCESS":
+        raise HTTPException(status_code=400, detail={
+            "code": "IDENTITY_VERIFICATION_REQUIRED",
+            "message": "본인인증이 필요합니다. 본인인증을 먼저 완료해 주세요.",
+        })
+    _ci = (ia[0].get("user_ci") or "").strip()
+    if not _ci:
+        raise HTTPException(status_code=400, detail={
+            "code": "IDENTITY_CI_MISSING",
+            "message": "본인인증 정보를 확인할 수 없습니다.",
+        })
+    identity_ci = hashlib.sha256(_ci.encode("utf-8")).hexdigest()
+    try:
+        dup = (sb.table("users").select("id")
+               .eq("identity_ci", identity_ci).limit(1).execute()).data or []
+    except Exception:
+        dup = []
+    if dup:
+        raise HTTPException(status_code=409, detail={
+            "code": "CI_ALREADY_USED",
+            "message": "이미 본인확인된 계정이 있습니다.",
+        })
+    identity_fields = {
+        "identity_verified": True,
+        "identity_verified_at": now_kst().isoformat(),
+        "identity_name": ia[0].get("user_name"),
+        "identity_phone": ia[0].get("user_phone"),
+        "identity_birth": ia[0].get("user_birthday"),
+        "identity_ci": identity_ci,
+    }
     # phone 중복
     try:
         pd = (sb.table("users").select("id").eq("phone", phone_norm)
@@ -580,10 +612,11 @@ def accept_invite(token: str, body: InviteAcceptBody):
         "team_id": invite.get("team_id"),
         "status_code": "PENDING",
         "is_active": False,
-        "identity_ci": identity_ci,
         "created_at": now_kst().isoformat(),
         "updated_at": now_kst().isoformat(),
     }
+    # PATCH-1 : identity_fields (identity_verified/at/name/phone/birth/ci) 병합.
+    user_row.update(identity_fields)
     try:
         ins = sb.table("users").insert(user_row).execute()
     except Exception as e:

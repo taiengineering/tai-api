@@ -127,7 +127,8 @@ class FakeSupabase:
 def _base_store(users=None, companies=None, invites=None,
                 factories=None, teams=None, roles=None,
                 role_data_scope=None, role_menu_permissions=None,
-                subscriptions=None, contracts=None):
+                subscriptions=None, contracts=None,
+                inicis_auth_requests=None):
     default_roles = [
         {"role_code": "001", "role_name": "슈퍼관리자", "is_active": True},
         {"role_code": "002", "role_name": "회사관리자", "is_active": True},
@@ -178,8 +179,17 @@ def _base_store(users=None, companies=None, invites=None,
         "role_menu_permissions": list(role_menu_permissions or default_menu_perms),
         "subscriptions": list(subscriptions or default_subs),
         "contracts": list(contracts or []),
-        "inicis_verifications": [],
+        # PATCH-1 : Inicis 실제 계약(register 와 동일) — 초대 accept 는 inicis_auth_requests 를 참조.
+        "inicis_auth_requests": list(inicis_auth_requests or []),
     }
+
+
+# PATCH-1 : 유효한 Inicis 검증 fixture row 생성 헬퍼.
+def _inicis_success(mtx_id, user_ci="CI-USER-XYZ-01",
+                    name="홍길동", phone="01012345678", birth="1990-01-01"):
+    return {"mtx_id": mtx_id, "status": "SUCCESS",
+            "user_ci": user_ci, "user_name": name,
+            "user_phone": phone, "user_birthday": birth}
 
 
 def _admin_user(uid="U-ADMIN", role="002", cid="C-A"):
@@ -382,15 +392,17 @@ def test_D04_conflict_user_belongs_to_another_company():
 
 @requires_client
 def test_D05_accept_uses_invite_email_not_body():
+    """PATCH-1 : accept 는 mtx_id 필수 · fixture 에 valid inicis_auth_requests 제공."""
     admin = _admin_user()
-    store = _base_store()
+    store = _base_store(inicis_auth_requests=[_inicis_success("MTX-D05", user_ci="CI-D05")])
     c = _client(admin, store)
     r = c.post("/me/company/user-invites",
                json={"email": "signup@a.co.kr", "role_code": "020"})
     raw = r.json()["data"]["token"]
     # accept
     r2 = c.post(f"/user-invites/{raw}/accept",
-                json={"name": "홍길동", "phone": "010-1234-5678", "password": "pw12345678"})
+                json={"name": "홍길동", "phone": "010-1234-5678",
+                      "password": "pw12345678", "mtx_id": "MTX-D05"})
     assert r2.status_code == 200
     d = r2.json()["data"]
     # email 은 invite 값
@@ -406,13 +418,14 @@ def test_D05_accept_uses_invite_email_not_body():
 @requires_client
 def test_D06_accept_frozen_company_and_role_from_invite():
     admin = _admin_user()
-    store = _base_store()
+    store = _base_store(inicis_auth_requests=[_inicis_success("MTX-D06", user_ci="CI-D06")])
     c = _client(admin, store)
     r = c.post("/me/company/user-invites",
                json={"email": "frozen@a.co.kr", "role_code": "030"})
     raw = r.json()["data"]["token"]
     r2 = c.post(f"/user-invites/{raw}/accept",
-                json={"name": "김프", "phone": "010-2222-3333", "password": "pw1234567"})
+                json={"name": "김프", "phone": "010-2222-3333",
+                      "password": "pw1234567", "mtx_id": "MTX-D06"})
     d = r2.json()["data"]
     assert d["company_id"] == "C-A"                                # invite frozen
     assert d["role_code"] == "030"                                 # invite frozen
@@ -421,7 +434,7 @@ def test_D06_accept_frozen_company_and_role_from_invite():
 @requires_client
 def test_D07_accept_expired_returns_410():
     admin = _admin_user()
-    store = _base_store()
+    store = _base_store(inicis_auth_requests=[_inicis_success("MTX-D07", user_ci="CI-D07")])
     c = _client(admin, store)
     r = c.post("/me/company/user-invites",
                json={"email": "old@a.co.kr", "role_code": "020"})
@@ -430,7 +443,8 @@ def test_D07_accept_expired_returns_410():
     inv = store["company_user_invites"][0]
     inv["expires_at"] = "2000-01-01T00:00:00+00:00"
     r2 = c.post(f"/user-invites/{raw}/accept",
-                json={"name": "만료", "phone": "010-9999-9999", "password": "pw12345678"})
+                json={"name": "만료", "phone": "010-9999-9999",
+                      "password": "pw12345678", "mtx_id": "MTX-D07"})
     assert r2.status_code == 410
     assert r2.json()["detail"]["code"] == "INVITE_EXPIRED"
 
@@ -438,7 +452,7 @@ def test_D07_accept_expired_returns_410():
 @requires_client
 def test_D08_accept_cancelled_returns_410():
     admin = _admin_user()
-    store = _base_store()
+    store = _base_store(inicis_auth_requests=[_inicis_success("MTX-D08", user_ci="CI-D08")])
     c = _client(admin, store)
     r = c.post("/me/company/user-invites",
                json={"email": "cancel@a.co.kr", "role_code": "020"})
@@ -446,7 +460,8 @@ def test_D08_accept_cancelled_returns_410():
     inv_id = store["company_user_invites"][0]["id"]
     c.delete(f"/me/company/user-invites/{inv_id}")
     r2 = c.post(f"/user-invites/{raw}/accept",
-                json={"name": "취소", "phone": "010-8888-9999", "password": "pw12345678"})
+                json={"name": "취소", "phone": "010-8888-9999",
+                      "password": "pw12345678", "mtx_id": "MTX-D08"})
     assert r2.status_code == 410
     assert r2.json()["detail"]["code"] == "INVITE_CANCELLED"
 
@@ -491,6 +506,96 @@ def test_D11_invite_info_unknown_token_returns_invalid_not_404():
     # 미로그인 접근이라도 존재 은닉 위해 valid:false 반환.
     assert r.status_code == 200
     assert r.json()["data"]["valid"] is False
+
+
+# ── PATCH-1 : BLOCKER-INICIS · register 계약 정합 ──────────────────
+@requires_client
+def test_D12_accept_valid_mtx_saves_sha256_identity_ci():
+    """valid mtx_id (inicis_auth_requests status=SUCCESS) → identity_ci = sha256(user_ci) 저장."""
+    import hashlib
+    admin = _admin_user()
+    raw_ci = "CI-USER-D12-ABC"
+    store = _base_store(inicis_auth_requests=[_inicis_success("MTX-D12", user_ci=raw_ci)])
+    c = _client(admin, store)
+    r = c.post("/me/company/user-invites",
+               json={"email": "d12@a.co.kr", "role_code": "020"})
+    raw = r.json()["data"]["token"]
+    r2 = c.post(f"/user-invites/{raw}/accept",
+                json={"name": "이름", "phone": "010-3333-4444",
+                      "password": "pw12345678", "mtx_id": "MTX-D12"})
+    assert r2.status_code == 200
+    # 저장된 실제 user row 확인
+    saved = [u for u in store["users"] if u.get("email") == "d12@a.co.kr"][0]
+    assert saved["status_code"] == "PENDING"
+    assert saved["is_active"] is False
+    expected_hash = hashlib.sha256(raw_ci.encode("utf-8")).hexdigest()
+    assert saved["identity_ci"] == expected_hash
+    # identity_fields 병합 확인 (register 와 동일 필드셋)
+    assert saved.get("identity_verified") is True
+    assert saved.get("identity_name") == "홍길동"
+    assert saved.get("identity_phone") == "01012345678"
+
+
+@requires_client
+def test_D13_accept_ci_already_used_returns_409_no_insert():
+    """이미 등록된 identity_ci 가 있으면 409 CI_ALREADY_USED · users insert 0."""
+    import hashlib
+    admin = _admin_user()
+    raw_ci = "CI-USER-D13-XY"
+    existing_hash = hashlib.sha256(raw_ci.encode("utf-8")).hexdigest()
+    store = _base_store(
+        users=[{"id": "U-EX", "email": "ex@a.co.kr", "phone": "01099998888",
+                "role_code": "020", "company_id": "C-A",
+                "status_code": "ACTIVE", "is_active": True,
+                "identity_ci": existing_hash}],
+        inicis_auth_requests=[_inicis_success("MTX-D13", user_ci=raw_ci)],
+    )
+    c = _client(admin, store)
+    r = c.post("/me/company/user-invites",
+               json={"email": "d13@a.co.kr", "role_code": "020"})
+    raw = r.json()["data"]["token"]
+    users_before = len(store["users"])
+    r2 = c.post(f"/user-invites/{raw}/accept",
+                json={"name": "새이름", "phone": "010-5555-6666",
+                      "password": "pw12345678", "mtx_id": "MTX-D13"})
+    assert r2.status_code == 409
+    assert r2.json()["detail"]["code"] == "CI_ALREADY_USED"
+    # users insert 발생 안 함
+    assert len(store["users"]) == users_before
+
+
+@requires_client
+def test_D14_accept_mtx_status_not_success_returns_400():
+    """mtx_id 존재하지만 status != SUCCESS → 400 IDENTITY_VERIFICATION_REQUIRED."""
+    admin = _admin_user()
+    ir = _inicis_success("MTX-D14", user_ci="CI-D14")
+    ir["status"] = "PENDING"                                     # SUCCESS 가 아님
+    store = _base_store(inicis_auth_requests=[ir])
+    c = _client(admin, store)
+    r = c.post("/me/company/user-invites",
+               json={"email": "d14@a.co.kr", "role_code": "020"})
+    raw = r.json()["data"]["token"]
+    r2 = c.post(f"/user-invites/{raw}/accept",
+                json={"name": "이름", "phone": "010-1111-1111",
+                      "password": "pw12345678", "mtx_id": "MTX-D14"})
+    assert r2.status_code == 400
+    assert r2.json()["detail"]["code"] == "IDENTITY_VERIFICATION_REQUIRED"
+
+
+@requires_client
+def test_D15_accept_without_mtx_id_returns_400():
+    """PATCH-1 정책 : 초대 가입에서도 mtx_id 필수 (register 와 동일). 없으면 400."""
+    admin = _admin_user()
+    store = _base_store()
+    c = _client(admin, store)
+    r = c.post("/me/company/user-invites",
+               json={"email": "d15@a.co.kr", "role_code": "020"})
+    raw = r.json()["data"]["token"]
+    r2 = c.post(f"/user-invites/{raw}/accept",
+                json={"name": "이름", "phone": "010-7777-8888",
+                      "password": "pw12345678"})                # mtx_id 미전송
+    assert r2.status_code == 400
+    assert r2.json()["detail"]["code"] == "IDENTITY_VERIFICATION_REQUIRED"
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -600,3 +705,16 @@ def test_INV_STATIC_uses_new_guard_only():
         "회사 사용자 관리 라우터가 신규 guard 를 호출해야 한다"
     assert "require_active_company_saas" in src, \
         "라우터가 strict entitlement 헬퍼를 호출해야 한다"
+
+
+def test_INV_STATIC_PATCH1_uses_correct_inicis_table():
+    """PATCH-1 : 잘못된 inicis_verifications 참조 완전 제거, inicis_auth_requests 사용."""
+    import inspect
+    src = inspect.getsource(cu)
+    assert "inicis_verifications" not in src, \
+        "PATCH-1: 잘못된 테이블 inicis_verifications 참조가 남아있다"
+    assert "inicis_auth_requests" in src, \
+        "PATCH-1: register 와 동일한 inicis_auth_requests 테이블을 사용해야 한다"
+    # SHA-256 hash 로 identity_ci 산출
+    assert "hashlib.sha256" in src or "sha256(" in src, \
+        "PATCH-1: identity_ci 는 SHA-256(user_ci) 이어야 한다"
