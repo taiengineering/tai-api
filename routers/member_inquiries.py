@@ -16,7 +16,8 @@
       더해 넘길 수 있다. 이 파일은 context 를 그대로 저장하고, 운영자 Slack 통지에 support 요약을
       한 줄 덧붙인다(저장 계약·정규 컬럼 불변).
 - 채번은 admin_inquiries._next_inquiry_no 재사용(TAI-INQ-YYYYMMDD-NNNN).
-- 운영자 통지는 기존 services.slack_dispatcher.ops 재사용(베스트에포트 — 실패해도 저장 성공).
+- 운영자 통지는 이곳에서 직접 발송하지 않는다(WO-SLACK-EVENT-HUB-001 PR-①):
+  INSERT → 운영 DB trigger trg_inquiries_notify → POST /internal/inbox/notify → slack_dispatcher(INQUIRY_CREATED).
 
 저장 로직은 _save_member_inquiry() 공통 함수로 추출한다.
   → POST /me/inquiries 와 POST /me/support/ask(HANDOFF)가 같은 저장 로직을 재사용한다(복붙 금지).
@@ -183,28 +184,9 @@ def _save_member_inquiry(
         raise RuntimeError("등록 후 데이터를 확인할 수 없습니다.")
     saved = res.data[0]
 
-    # 운영자 통지(베스트에포트). 실패해도 저장 결과에 영향 없음.
-    try:
-        from services.slack_dispatcher import ops
-        ctx_line = ""
-        if context:
-            parts = []
-            if context.get("factory_id"):
-                parts.append(f"factory={context['factory_id']}")
-            if context.get("object_type"):
-                parts.append(f"{context['object_type']}={context.get('object_id')}")
-            if parts:
-                ctx_line = "\nContext: " + ", ".join(parts)
-        support_line = _support_slack_line(context)  # Enriched HANDOFF 요약(있으면)
-        reason_line = f"\n(자동응대 이관 사유: {handoff_reason})" if handoff_reason else ""
-        detail = (
-            f"회원: {row['name'] or '-'} (user={user_id} / company={company_id or '-'})\n"
-            f"화면: {row['page_url'] or '-'}{ctx_line}{support_line}{reason_line}\n"
-            f"내용: {row['content'][:800]}"
-        )
-        ops(f"새 SaaS 문의 · {row['name'] or '회원'}", detail)
-    except Exception:  # noqa: BLE001
-        logger.exception("member inquiry slack notify failed")
+    # WO-SLACK-EVENT-HUB-001 PR-①: writer 의 직접 Slack 발송 제거.
+    # Slack authority = 운영 DB trigger trg_inquiries_notify → POST /internal/inbox/notify
+    # → slack_dispatcher(INQUIRY_CREATED · TAI_WISH_CREATED). 이곳에서 이중발송 금지.
 
     return saved
 

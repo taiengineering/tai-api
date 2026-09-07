@@ -79,20 +79,9 @@ def submit_public_contact(body: PublicContactBody):
 
     saved = res.data[0] if res.data else row
 
-    try:
-        from services.slack_dispatcher import ops
-        cat_label = _CATEGORY_LABEL.get(category, category or "문의")
-        plain = _strip_html(body.content)
-        detail = (
-            f"분야: {cat_label}\n"
-            f"성함: {row['name']} / 회사: {company or '-'}\n"
-            f"연락처: {row['phone'] or '-'} / 이메일: {row['email']}\n"
-            f"제목: {row['title'] or '-'}\n"
-            f"내용: {plain[:800]}"
-        )
-        ops(f"새 문의 접수 · {cat_label} · {row['name']}", detail)
-    except Exception:
-        logger.exception("contact slack notify failed")
+    # WO-SLACK-EVENT-HUB-001 PR-①: writer 의 직접 Slack 발송 제거.
+    # Slack authority = 운영 DB trigger trg_inquiries_notify → POST /internal/inbox/notify
+    # → slack_dispatcher(INQUIRY_CREATED). 이곳에서 이중발송 금지.
 
     return {"status": "success", "data": saved}
 
