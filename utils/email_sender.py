@@ -103,14 +103,19 @@ def payment_success_email(user_name: str, company_name: str, plan_code: str,
           </tr>
         </table>
         
+        <div style="background:#f8fafc;border-left:4px solid #7367f0;padding:14px 16px;margin:20px 0;border-radius:6px;">
+          <p style="margin:0;font-size:14px;color:#334155;line-height:1.6;">
+            결제가 완료되었습니다. 회사와 사업장 정보를 확인한 후 TAI Safe를 시작할 수 있습니다.
+          </p>
+        </div>
+
         <div style="text-align:center;margin:24px 0;">
-          <a href="https://safe.taieng.co.kr" style="display:inline-block;background:#7367f0;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;">
+          <a href="https://taieng.co.kr/mypage/onboarding" style="display:inline-block;background:#7367f0;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:600;font-size:15px;">
             TAI Safe 시작하기
           </a>
         </div>
-        
+
         <p style="font-size:13px;color:#888;margin-top:20px;">
-          로그인 후 대시보드에서 안전관리 세팅을 시작하세요.<br>
           문의사항이 있으시면 tai@taieng.co.kr로 연락 부탁드립니다.
         </p>
       </div>
@@ -124,7 +129,8 @@ def payment_success_email(user_name: str, company_name: str, plan_code: str,
         f"{user_name}님, 결제가 완료되었습니다.\n"
         f"플랜: {plan_code}\n"
         f"금액: {total_amount:,}원\n"
-        f"지금 바로 이용하세요 → https://safe.taieng.co.kr"
+        f"회사와 사업장 정보를 확인한 후 TAI Safe를 시작할 수 있습니다.\n"
+        f"시작하기 → https://taieng.co.kr/mypage/onboarding"
     )
     
     return subject, html, text
