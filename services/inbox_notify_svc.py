@@ -1,18 +1,16 @@
 """
-Inbox Slack 알림 빌더 + 발송
+Inbox 알림 빌더 (formatter-only).
 
 Doc: docs/inbox-system/PHASE3_NOTIFY_ENDPOINT.md
+WO-SLACK-EVENT-HUB-001 PR-①: 이 모듈은 inquiries row → Block Kit 변환만 담당하며,
+실제 발송은 services.slack_dispatcher 경유로 라우터가 수행한다. 이 파일에는
+외부 API URL / 봇 토큰 env / 채널 env 를 직접 참조하는 코드가 없어야 한다.
 """
-import json
 import logging
-import os
 from typing import Any, Dict, List
-
-import httpx
 
 logger = logging.getLogger(__name__)
 
-SLACK_API = "https://slack.com/api/chat.postMessage"
 ADMIN_BASE_URL = (
     "https://admin.taieng.co.kr/html/horizontal-menu-template/inquiry-list.html"
 )
@@ -100,45 +98,18 @@ def build_blocks(record: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
-async def send_inbox_notification(record: Dict[str, Any]) -> bool:
-    """슬랙 알림 발송. 실패 시 로그만 남기고 False 반환."""
-    token = os.environ.get("SLACK_BOT_TOKEN")
-    channel = os.environ.get("SLACK_CHANNEL_ID_INBOX")
+def resolve_event_type(record: Dict[str, Any]) -> str:
+    """inquiries row → WO 이벤트명. inquiry_type 기준(category/source 로 추론 금지).
 
-    if not token or not channel:
-        logger.warning(
-            "[inbox_notify] missing slack env vars (token=%s, channel=%s)",
-            bool(token),
-            bool(channel),
-        )
-        return False
+    - inquiry_type == 'FEEDBACK' → TAI_WISH_CREATED
+    - else                        → INQUIRY_CREATED
+    """
+    return "TAI_WISH_CREATED" if record.get("inquiry_type") == "FEEDBACK" else "INQUIRY_CREATED"
 
-    blocks = build_blocks(record)
-    payload = {
-        "channel": channel,
-        "blocks": blocks,
-        "text": "새 인박스 메시지",  # fallback
-    }
 
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(
-                SLACK_API,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json; charset=utf-8",
-                },
-                json=payload,
-            )
-        data = resp.json()
-        if not data.get("ok"):
-            logger.warning(
-                "[inbox_notify] slack error: %s — %s",
-                data.get("error"),
-                json.dumps(data)[:500],
-            )
-            return False
-        return True
-    except Exception as e:
-        logger.warning("[inbox_notify] exception: %s", e)
-        return False
+def fallback_title(record: Dict[str, Any]) -> str:
+    """Slack blocks 미표시 클라이언트/알림용 fallback text."""
+    is_fb = record.get("inquiry_type") == "FEEDBACK"
+    label = "TAI에 바란다" if is_fb else "도입 문의"
+    who = record.get("name") or "익명"
+    return f"{label} · {who}"
