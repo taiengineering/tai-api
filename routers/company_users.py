@@ -76,8 +76,12 @@ def _entitlement_snapshot(sb, company_id: str) -> dict:
                 "start_date": None, "end_date": None}
     try:
         now = serialize_external_utc(now_kst())
+        # HOTFIX (WP-A ENTITLEMENT): subscriptions 테이블에는 start_date 컬럼이 없다 (started_at 사용).
+        # 이전 select 는 없는 컬럼을 요청해 PostgREST 오류 → except 로 흡수되며 contract 조회에
+        # 도달하지 못했다. 그 결과 유효 SaaS 계약이 있어도 무조건 active=false 반환되었다.
+        # → subscriptions 실제 컬럼(started_at)으로 교체. 응답 shape 의 start_date 는 유지.
         sub = (sb.table("subscriptions")
-               .select("id, product_type, start_date, ended_at, plan_code")
+               .select("id, product_type, started_at, ended_at, plan_code")
                .eq("company_id", company_id).eq("status", "ACTIVE")
                .ilike("product_type", "SAAS%").limit(20).execute()).data or []
         for row in sub:
@@ -85,7 +89,7 @@ def _entitlement_snapshot(sb, company_id: str) -> dict:
             if not ended or str(ended) > now:
                 return {"active": True, "source": "subscription",
                         "plan_code": row.get("plan_code"),
-                        "start_date": row.get("start_date"),
+                        "start_date": row.get("started_at"),   # subscriptions 실 컬럼
                         "end_date": ended}
         con = (sb.table("contracts")
                .select("id, service_type, plan_code, start_date, end_date, is_active")
