@@ -30,7 +30,7 @@
 ### 3. IPv4 연결 문제
 - **증상**: Railway(IPv4) → Supabase(IPv6) 연결 실패
 - **해결**: Supabase IPv4 add-on 활성화 ($4/월)
-- **DATABASE_URL**: `postgresql://postgres:Dmgmgj%21%40345@db.vwlahtguyggrhvslabax.supabase.co:5432/postgres`
+- **DATABASE_URL**: `postgresql://postgres:***@db.vwlahtguyggrhvslabax.supabase.co:5432/postgres`
 
 ### 4. billing_pay.html 프론트엔드 이슈 (5건)
 1. **필드명 불일치**: inilitepay 폼 POST 방식 → INIStdPay.pay() 팝업 방식으로 전환
