@@ -5,7 +5,8 @@
 가격 SoT: price_master(서버 계산). 클라이언트 금액/company_id/created_by/source/status 불신.
 설문견적(/quotes/survey/*)과 분리 — 이 라우터는 source in (member_auto, member_custom) 만 다룬다.
 """
-from typing import Optional
+import logging
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -17,6 +18,7 @@ from services import member_quote_svc as svc
 from services import member_quote_pdf_svc as pdf_svc
 from services.gotenberg_svc import PdfRenderError
 
+logger = logging.getLogger("member_quotes")
 router = APIRouter(prefix="/me/quotes", tags=["member-quotes"])
 _NOT_FOUND = "견적을 찾을 수 없습니다"
 
@@ -80,6 +82,19 @@ def auto_issue(body: AutoQuoteBody, current: dict = Depends(get_current_user)):
     return {"status": "success", "data": row}
 
 
+def _quote_manual_slack_detail(row: Dict[str, Any]) -> str:
+    """수동 견적요청 알림 detail (실측 필드만, 개인정보 최소)."""
+    sd = (row.get("survey_data") or {}).get("member_custom") or {}
+    return (
+        f"견적번호: {row.get('quote_no') or '-'}\n"
+        f"회사: {row.get('company_name') or '-'}\n"
+        f"요청자: {row.get('contact_name') or '-'}\n"
+        f"서비스: {row.get('service_type') or '-'} / 섹터: {sd.get('sector') or '-'}\n"
+        f"제목: {sd.get('request_title') or '-'}\n"
+        f"내용: {(sd.get('request_detail') or '')[:400]}"
+    )
+
+
 @router.post("/custom")
 def custom_request(body: CustomQuoteBody, current: dict = Depends(get_current_user)):
     """개별견적 요청 — 클라이언트 금액 없음. 서버가 0원으로 접수."""
@@ -94,6 +109,17 @@ def custom_request(body: CustomQuoteBody, current: dict = Depends(get_current_us
                                       contact_name=body.contact_name)
     except svc.MemberQuoteError as e:
         _raise(e)
+
+    # WO-SLACK-EVENT-HUB-001 PR-② : create_custom_quote 성공 반환 직후 1회.
+    # sync handler 이므로 send_slack_sync 사용(fire-and-forget). 채널은 dispatcher 라우팅
+    # (EVENT_TYPE_CHANNEL: QUOTE_MANUAL_REQUESTED → APPROVAL). 실패해도 견적요청 성공 유지.
+    try:
+        from services.slack_dispatcher import send_slack_sync
+        title = f"수동 견적요청 · {row.get('company_name') or '-'} · {row.get('contact_name') or '-'}"
+        send_slack_sync("QUOTE_MANUAL_REQUESTED", "INFO", title, _quote_manual_slack_detail(row))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[quote_manual slack] dispatch failed: %s", e)
+
     return {"status": "success", "data": row}
 
 
