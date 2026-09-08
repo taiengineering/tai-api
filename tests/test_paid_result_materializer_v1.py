@@ -698,7 +698,7 @@ def test_t18b_module_source_has_no_forbidden_logic():
             imported.add(stripped.split()[1].split(".")[0])
         elif stripped.startswith("from ") and " import " in stripped:
             imported.add(stripped.split()[1].split(".")[0])
-    assert imported == {"__future__", "copy", "hashlib", "re", "unicodedata", "typing"}, imported
+    assert imported == {"__future__", "copy", "hashlib", "re", "unicodedata", "typing", "services"}, imported
 
 
 # ─────────────────────────────────────────────────────────────────────────────

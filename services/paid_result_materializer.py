@@ -43,6 +43,8 @@ import re
 import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
+from services.obligation_presentation_mapper import map_diagnosis_presentation
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 버전 상수
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1184,7 +1186,13 @@ def build_paid_result_materials_v1(full_result: Any) -> Dict[str, Any]:
     contract = _dict_or_empty(raw.get("contract"))
 
     # LEVEL 1 — NORMALIZED
-    obligations = [_normalize_obligation(o, i) for i, o in enumerate(raw_obligations)]
+    # presentation = map_diagnosis_presentation(raw) · source_index 1:1 (enumerate i).
+    # fuzzy/law+article/text join = 0 · input mutation 0 · absent≠null 유지.
+    obligations = []
+    for i, raw_ob in enumerate(raw_obligations):
+        normalized = _normalize_obligation(raw_ob, i)
+        normalized["presentation"] = map_diagnosis_presentation(raw_ob)
+        obligations.append(normalized)
     all_refs = [_ref(o) for o in obligations]
 
     # LEVEL 2 — DERIVED MATERIALS

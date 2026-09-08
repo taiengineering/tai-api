@@ -239,6 +239,8 @@ def _project_obligation(ob: Any) -> Optional[Dict[str, Any]]:
         "verification": {"check_result": verification.get("check_result")},
         "timing": _only(ob.get("timing"), OBLIGATION_TIMING_FIELDS),
         "decision_input_count": _count_list(triggered),
+        # ADDITIVE — Diagnosis Presentation ViewModel (mapper PURE output as-is).
+        "presentation": ob.get("presentation"),
     }
 
 
