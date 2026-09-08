@@ -6,8 +6,12 @@ from typing import Any, Dict
 from db.supabase_client import get_supabase
 from schemas.inspection_sets import AnchorBody, AnchorBulkPatchBody, BulkAnchorBody, InspectionSetPatchBody
 from services.inspection_sets_helpers import _build_next_schedule_row
+from .canonical_writer import has_explicit_schedule_cycle
 from .errors import InspectionSetsSvcError
 from services.time import now_kst, serialize_business_datetime
+
+_CYCLE_SKIP_REASON = "주기가 설정되지 않았습니다."
+_CYCLE_REQUIRED_422 = "점검 주기를 먼저 설정해주세요."
 
 
 def set_anchor_bulk(body: BulkAnchorBody) -> dict:
@@ -21,6 +25,14 @@ def set_anchor_bulk(body: BulkAnchorBody) -> dict:
     anchor = date.fromisoformat(body.anchor_date)
     results, total_created = [], 0
     for iset in sets:
+        if not has_explicit_schedule_cycle(iset):
+            results.append({
+                "id": iset["id"],
+                "name": iset.get("inspection_set_name"),
+                "status": "skipped",
+                "reason": _CYCLE_SKIP_REASON,
+            })
+            continue
         try:
             row, planned = _build_next_schedule_row(iset, anchor)
             supabase.table("inspection_sets").update({"schedule_anchor_date": anchor.isoformat(), "next_planned_date": planned.isoformat(), "anchor_confirmed": True, "status_code": "ACTIVE", "updated_at": serialize_business_datetime(now_kst())}).eq("id", iset["id"]).execute()
@@ -44,6 +56,9 @@ def bulk_update_anchors(body: AnchorBulkPatchBody) -> dict:
                 errors.append({"id": item.id, "reason": "점검 세트를 찾을 수 없습니다."})
                 continue
             iset = res.data[0]
+            if not has_explicit_schedule_cycle(iset):
+                errors.append({"id": item.id, "reason": _CYCLE_SKIP_REASON})
+                continue
             anchor = date.fromisoformat(item.schedule_anchor_date)
             row, planned = _build_next_schedule_row(iset, anchor)
             upd = {"schedule_anchor_date": anchor.isoformat(), "next_planned_date": planned.isoformat(), "anchor_confirmed": True, "status_code": "ACTIVE", "updated_at": serialize_business_datetime(now_kst())}
@@ -79,6 +94,8 @@ def patch_set(inspection_set_id: str, body: InspectionSetPatchBody) -> dict:
     schedule_updated = False
     if body.schedule_anchor_date is not None:
         if body.schedule_anchor_date:
+            if not has_explicit_schedule_cycle(iset):
+                raise InspectionSetsSvcError(422, _CYCLE_REQUIRED_422)
             anchor = date.fromisoformat(body.schedule_anchor_date)
             row, planned = _build_next_schedule_row(iset, anchor)
             upd.update({"schedule_anchor_date": body.schedule_anchor_date, "next_planned_date": planned.isoformat(), "anchor_confirmed": True, "status_code": "ACTIVE"})
@@ -106,6 +123,8 @@ def update_anchor(inspection_set_id: str, body: AnchorBody) -> dict:
     if not res.data:
         raise InspectionSetsSvcError(404, "점검 세트를 찾을 수 없습니다.")
     iset = res.data[0]
+    if not has_explicit_schedule_cycle(iset):
+        raise InspectionSetsSvcError(422, _CYCLE_REQUIRED_422)
     anchor = date.fromisoformat(anchor_str)
     row, planned = _build_next_schedule_row(iset, anchor)
     end_str = iset.get("schedule_end_date")

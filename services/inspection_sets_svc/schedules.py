@@ -4,7 +4,10 @@ from datetime import date
 
 from db.supabase_client import get_supabase
 from services.inspection_sets_helpers import _build_next_schedule_row
+from .canonical_writer import has_explicit_schedule_cycle
 from .law_engine import run_generate_law_engine
+
+_CYCLE_SKIP_REASON = "주기가 설정되지 않았습니다."
 
 
 def generate_schedules_all() -> dict:
@@ -45,6 +48,10 @@ def generate_schedules_for_factory(factory_id: str, mode: str, force: bool) -> d
         if not anchor_str:
             skipped += 1
             results.append({"id": set_id, "name": name, "status": "skipped", "reason": "기준일 없음"})
+            continue
+        if not has_explicit_schedule_cycle(iset):
+            skipped += 1
+            results.append({"id": set_id, "name": name, "status": "skipped", "reason": _CYCLE_SKIP_REASON})
             continue
         existing = supabase.table("work_schedules").select("id").eq("inspection_set_id", set_id).eq("status_code", "SCHEDULED").limit(1).execute()
         if existing.data and not force:
