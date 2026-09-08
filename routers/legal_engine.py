@@ -100,11 +100,35 @@ async def diagnose_industrial_leg(body: SafeIndustrialLegBody, authorization: Op
         out = run_safe_industrial_leg(supabase, body.factory_id, body.input)
     except (LegDiagnosisError, LegRuntimeError) as e:
         raise HTTPException(status_code=502, detail="LEG 실행 실패: {}".format(e))
+    from services.saas_diagnosis_result_persistence import (
+        SaasPersistError,
+        run_saas_c10_and_materialize,
+    )
+    full_result = out["full_result"]
+    # authoritative company_id: factories WHERE id=body.factory_id (body/full_result 추론 금지)
+    fac = (
+        supabase.table("factories")
+        .select("company_id")
+        .eq("id", body.factory_id)
+        .limit(1)
+        .execute()
+    )
+    if not fac.data:
+        raise HTTPException(status_code=404, detail="사업장을 찾을 수 없습니다.")
+    company_id = fac.data[0].get("company_id")
+    if not (isinstance(company_id, str) and company_id.strip()):
+        raise HTTPException(status_code=422, detail="company_id required")
+    try:
+        wiring = run_saas_c10_and_materialize(supabase, body.factory_id, company_id, full_result)
+    except SaasPersistError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
     return {
         "status": "success",
-        "data": out["full_result"],
+        "data": full_result,
         "contract_version": out["contract_version"],
         "unresolved_fields": out["unresolved_fields"],
+        "diagnosis_id": wiring["diagnosis_id"],
+        "inspection_materialization": wiring["inspection_materialization"],
     }
 
 

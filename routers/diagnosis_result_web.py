@@ -563,7 +563,7 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
 
     res = (
         supabase.table("anonymous_diagnosis_results")
-        .select("id, public_token, tier_code, full_result, input_data, status, expires_at, created_at")
+        .select("id, public_token, tier_code, full_result, input_data, status, expires_at, created_at, source_type")
         .eq("public_token", public_token)
         .limit(1)
         .execute()
@@ -574,6 +574,8 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
     rec = res.data[0]
     if rec.get("status") != "ACTIVE":
         raise HTTPException(status_code=410, detail="비활성화된 진단 결과입니다.")
+    if rec.get("source_type") == "saas":
+        raise HTTPException(status_code=404, detail="진단 결과를 찾을 수 없습니다.")
 
     tier_code = rec.get("tier_code") or ""
     is_free = tier_code in FREE_TIER_CODES or tier_code.endswith("_FREE") or "FREE" in tier_code.upper()
