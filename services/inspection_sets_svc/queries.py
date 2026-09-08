@@ -24,7 +24,8 @@ def get_sets_list(factory_id, source, anchor_confirmed, page, size, company_id=N
         "obligation_type, obligation_summary, cycle_unit, cycle_value, "
         "cycle_base_type, cycle_base_guide, anchor_type, schedule_anchor_date, "
         "last_inspection_date, next_planned_date, anchor_confirmed, description, source, "
-        "is_active, status_code, assignee_user_id, created_at, updated_at",
+        "is_active, status_code, assignee_user_id, created_at, updated_at, "
+        "legal_obligation_atom_id",   # ← REV 4B-1 additive: official obligation exact identity carrier
         count="exact",
     )
     if factory_id:
