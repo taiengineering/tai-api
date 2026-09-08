@@ -61,6 +61,7 @@ from routers.diagnosis_transform import (
     _extract_warnings,
     _normalize_category,
 )
+from services.diagnosis_result_input_projection import project_free_input_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -700,6 +701,7 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
                 "address": input_data.get("address") or "",
                 "worker_count": worker_count,
                 "floor_area": input_data.get("floor_area") or input_data.get("total_floor_area") or "",
+                "form_data": project_free_input_snapshot(supabase, sector, input_data),
             },
             "recommended_plan": plan_info,
             "pdf_url": f"/diagnosis/report-pdf/{public_token}",
