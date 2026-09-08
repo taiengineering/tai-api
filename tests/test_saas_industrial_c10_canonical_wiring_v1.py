@@ -1,14 +1,17 @@
-"""WO-SAAS-INDUSTRIAL-C10-CANONICAL-WIRING-001 STEP 4B-4C — persist + guard + orchestration.
+"""WO-SAAS-INDUSTRIAL-C10-CANONICAL-WIRING-001 STEP 4B-4C — persist + guard + orchestration + route.
 
-helper 단위(T1~T21의 pure/mock 부분). route wiring(legal_engine.py) / public guard(diagnosis_result_web.py) /
-T22~T30 route·security 회귀 = 이 파일에 APPEND(Cursor). DB/network 불필요.
+helper 단위(T2~T21) + route wiring(legal_engine.py INDUSTRIAL) / public guard(diagnosis_result_web.py) /
+T22~T30. DB/network 불필요.
 """
 from __future__ import annotations
 
+import asyncio
 import copy
+import inspect
 import logging
 
 import pytest
+from fastapi import HTTPException
 
 from services.saas_diagnosis_result_persistence import (
     SaasPersistError,
@@ -208,3 +211,226 @@ def test_canonical_writer_untouched():
     src = inspect.getsource(M)
     assert "materialize_canonical_inspection_sets" in src
     assert "def materialize_canonical_inspection_sets" not in src
+
+
+# ── T22~T30: public saas 404 + FREE/PAID 회귀 + INDUSTRIAL seam / other-sector delta 0 ──
+
+_NOT_FOUND = "진단 결과를 찾을 수 없습니다."
+
+
+def _web_rec(*, source_type=None, tier="BUILDING_FREE"):
+    rec = {
+        "id": "row-1",
+        "public_token": "tok-1",
+        "tier_code": tier,
+        "status": "ACTIVE",
+        "expires_at": None,
+        "created_at": "2026-09-08T00:00:00+00:00",
+        "input_data": {"company_name": "샘플", "sector": "BUILDING"},
+        "full_result": {
+            "sector": "BUILDING",
+            "contract": {"missing_fields": ["a"], "unknown_fields": [], "invalid_fields": []},
+            "obligations_raw": [
+                {"enrichment": {"missing_fields": ["f1"], "usable_for_evaluation": True}},
+            ],
+        },
+    }
+    if source_type is not None:
+        rec["source_type"] = source_type
+    return rec
+
+
+class _WebQ:
+    def __init__(self, sb, rec):
+        self.sb = sb
+        self._rec = rec
+
+    def select(self, cols, *a, **k):
+        self.sb.last_select = cols
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def in_(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def execute(self):
+        class R:
+            data = [self._rec]
+        return R()
+
+
+class _WebSB:
+    def __init__(self, rec):
+        self._rec = rec
+        self.last_select = None
+
+    def table(self, *a, **k):
+        return _WebQ(self, self._rec)
+
+
+def _install_web(monkeypatch, rec):
+    import routers.diagnosis_result_web as rw
+    sb = _WebSB(rec)
+    monkeypatch.setattr(rw, "get_supabase", lambda: sb)
+    monkeypatch.setattr(rw, "build_paid_result_product_v1", lambda row: {
+        "contract_version": 1,
+        "diagnosis": {},
+        "diagnosis_profile": {},
+        "paid_result_materials_v1": {},
+        "paid_result_evidence_v1": {},
+        rw.SOURCE_TEXT_KEY: {"version": 1, "source_mode": "LIVE_LEG_SOURCE", "items": [], "unresolved": []},
+    })
+    return rw, sb
+
+
+def test_T22_saas_token_result_404(monkeypatch):
+    rw, sb = _install_web(monkeypatch, _web_rec(source_type="saas"))
+    with pytest.raises(HTTPException) as ei:
+        rw.get_diagnosis_result_web("tok-1")
+    assert ei.value.status_code == 404
+    assert ei.value.detail == _NOT_FOUND
+    assert "source_type" in sb.last_select
+
+
+def test_T23_saas_token_paid_result_404(monkeypatch):
+    rw, _sb = _install_web(monkeypatch, _web_rec(source_type="saas", tier="BUILDING_V2"))
+    with pytest.raises(HTTPException) as ei:
+        rw.get_paid_result_web("tok-1")
+    assert ei.value.status_code == 404
+    assert ei.value.detail == _NOT_FOUND
+
+
+def test_T24_saas_token_excel_404(monkeypatch):
+    rw, _sb = _install_web(monkeypatch, _web_rec(source_type="saas", tier="BUILDING_V2"))
+    with pytest.raises(HTTPException) as ei:
+        rw.get_paid_result_excel("tok-1")
+    assert ei.value.status_code == 404
+    assert ei.value.detail == _NOT_FOUND
+
+
+def test_T25_free_result_regression(monkeypatch):
+    rw, _sb = _install_web(monkeypatch, _web_rec(tier="BUILDING_FREE"))
+    data = rw.get_diagnosis_result_web("tok-1")["data"]
+    assert data["is_free"] is True
+    assert "additional_information" in data
+
+
+def test_T26_paid_result_regression(monkeypatch):
+    rw, _sb = _install_web(monkeypatch, _web_rec(tier="BUILDING_V2"))
+    data = rw.get_paid_result_web("tok-1")["data"]
+    assert data["is_free"] is False
+    assert "additional_information" not in data
+
+
+def test_T27_legacy_writer_auto_create_call_zero():
+    import routers.legal_engine as LE
+    src = inspect.getsource(LE.diagnose_industrial_leg)
+    assert "auto_create_inspection_sets_from_diagnosis" not in src
+    assert "inspection_set_auto" not in src
+    assert "run_saas_c10_and_materialize" in src
+
+
+def test_T28_cycle_anchor_write_zero():
+    import routers.legal_engine as LE
+    src = inspect.getsource(LE.diagnose_industrial_leg)
+    for banned in ("cycle_unit", "cycle_value", "anchor_confirmed",
+                   "next_planned_date", "schedule_anchor"):
+        assert banned not in src
+
+
+def test_T29_schedule_write_zero():
+    import routers.legal_engine as LE
+    src = inspect.getsource(LE.diagnose_industrial_leg)
+    assert "work_schedules" not in src
+    assert "generate_schedules" not in src
+
+
+def test_T30_building_construction_delta_zero():
+    import routers.legal_engine as LE
+    assert "run_saas_c10_and_materialize" not in inspect.getsource(LE.diagnose_building_leg)
+    assert "run_saas_c10_and_materialize" not in inspect.getsource(LE.diagnose_construction_leg)
+    b_ret = inspect.getsource(LE.diagnose_building_leg)
+    c_ret = inspect.getsource(LE.diagnose_construction_leg)
+    assert "diagnosis_id" not in b_ret
+    assert "inspection_materialization" not in b_ret
+    assert "diagnosis_id" not in c_ret
+    assert "inspection_materialization" not in c_ret
+
+
+def test_industrial_leg_explicit_return_additive_company_id_from_factory(monkeypatch):
+    """explicit return 2필드 additive · public_token 미반환 · company_id 서버 read."""
+    import routers.legal_engine as LE
+    from schemas.legal_engine import SafeIndustrialConsumerInput, SafeIndustrialLegBody
+
+    captured = {}
+    full = {"sector": "INDUSTRIAL", "obligations_raw": []}
+
+    class _FacQ:
+        def __init__(self, sb):
+            self.sb = sb
+
+        def select(self, cols, *a, **k):
+            self.sb.factory_select = cols
+            return self
+
+        def eq(self, c, v):
+            self.sb.factory_eq = (c, v)
+            return self
+
+        def limit(self, n):
+            return self
+
+        def execute(self):
+            class R:
+                data = [{"company_id": "c-server"}]
+            return R()
+
+    class _FacSB:
+        def __init__(self):
+            self.factory_select = None
+            self.factory_eq = None
+
+        def table(self, name):
+            assert name == "factories"
+            return _FacQ(self)
+
+    sb = _FacSB()
+    monkeypatch.setattr(LE, "get_supabase", lambda: sb)
+    monkeypatch.setattr(LE, "get_current_user", lambda authorization=None: {"id": "u"})
+    monkeypatch.setattr(LE, "_ensure_factory_own", lambda *a, **k: None)
+    monkeypatch.setattr(LE.leg_runtime_client, "is_enabled", lambda: True)
+    monkeypatch.setattr(LE, "run_safe_industrial_leg", lambda *a, **k: {
+        "full_result": full,
+        "contract_version": "v-test",
+        "unresolved_fields": [],
+    })
+
+    def _fake_wiring(supabase, factory_id, company_id, full_result):
+        captured["args"] = (factory_id, company_id, full_result)
+        return {
+            "diagnosis_id": "diag-x",
+            "inspection_materialization": {"status": "MATERIALIZED"},
+            "public_token": "must-not-leak",
+        }
+
+    monkeypatch.setattr(
+        "services.saas_diagnosis_result_persistence.run_saas_c10_and_materialize",
+        _fake_wiring,
+    )
+    body = SafeIndustrialLegBody(factory_id="f1", input=SafeIndustrialConsumerInput())
+    out = asyncio.run(LE.diagnose_industrial_leg(body, authorization="Bearer x"))
+    assert captured["args"] == ("f1", "c-server", full)
+    assert sb.factory_select == "company_id"
+    assert sb.factory_eq == ("id", "f1")
+    assert out["status"] == "success"
+    assert out["data"] is full
+    assert out["contract_version"] == "v-test"
+    assert out["unresolved_fields"] == []
+    assert out["diagnosis_id"] == "diag-x"
+    assert out["inspection_materialization"] == {"status": "MATERIALIZED"}
+    assert "public_token" not in out
