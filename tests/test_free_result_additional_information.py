@@ -1,6 +1,7 @@
 """Unit tests — services.free_result_additional_information (WO-FREE-RESULT-ADDITIONAL-INFORMATION-001).
 
 full_result 형태는 GATE-0 실측 기준. DB/network 불필요.
+PATCH-1(B): malformed obligation guard.
 """
 import importlib
 
@@ -30,7 +31,6 @@ def test_input_gaps_counts():  # BE-T1
 def test_no_raw_arrays_or_field_codes_in_output():  # BE-T2
     fr = _fr(contract={"missing_fields": ["secret_code_1", "secret_code_2"]})
     out = project(fr)
-    # 출력은 count 만. 배열/field_code 문자열이 어디에도 없어야 한다.
     import json
     blob = json.dumps(out, ensure_ascii=False)
     assert "secret_code_1" not in blob and "secret_code_2" not in blob
@@ -84,6 +84,37 @@ def test_no_obligations_fail_closed():  # BE-T8
     assert out["input_gaps"]["missing_count"] == 1
     assert out["obligation_gaps"] == {"affected_count": 0}
     assert out["coverage"] == {"evaluable_count": 0, "not_evaluable_count": 0, "unknown_count": 0}
+
+
+def test_malformed_obligation_items_skipped():  # BE-T9 (PATCH-1 B)
+    out = project(_fr(obligations=[None, "bad", 123]))
+    assert out["obligation_gaps"]["affected_count"] == 0
+    assert out["coverage"] == {"evaluable_count": 0, "not_evaluable_count": 0, "unknown_count": 0}
+
+
+def test_enrichment_null_is_unknown():  # BE-T10 (PATCH-1 B)
+    out = project(_fr(obligations=[{"enrichment": None}]))
+    assert out["coverage"] == {"evaluable_count": 0, "not_evaluable_count": 0, "unknown_count": 1}
+    assert out["obligation_gaps"]["affected_count"] == 0
+
+
+def test_enrichment_malformed_nondict_skipped():  # BE-T11 (PATCH-1 B)
+    out = project(_fr(obligations=[{"enrichment": "broken"}, {"enrichment": []}, {"enrichment": 7}]))
+    assert out["coverage"] == {"evaluable_count": 0, "not_evaluable_count": 0, "unknown_count": 0}
+    assert out["obligation_gaps"]["affected_count"] == 0
+
+
+def test_mixed_valid_and_malformed():
+    obligations = [
+        {"enrichment": {"missing_fields": ["f"], "usable_for_evaluation": True}},  # affected + evaluable
+        None,                                                                       # skip
+        {"enrichment": "broken"},                                                   # skip
+        {"enrichment": None},                                                       # unknown
+        {"enrichment": {"usable_for_evaluation": False}},                           # not_evaluable
+    ]
+    out = project(_fr(obligations=obligations))
+    assert out["obligation_gaps"]["affected_count"] == 1
+    assert out["coverage"] == {"evaluable_count": 1, "not_evaluable_count": 1, "unknown_count": 1}
 
 
 def test_malformed_full_result_fail_closed():
