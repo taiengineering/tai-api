@@ -13,6 +13,7 @@ from routers.diagnosis_result_web import (
 )
 
 FREE_KEYS = {"obligation_type", "obligation_summary", "law_name"}
+ALLOWED_KEYS = FREE_KEYS | {"presentation"}
 FORBIDDEN = [
     "rule_id", "atom_id", "law_article", "evidence", "penalty_summary",
     "inspection_cycle", "executor_type_label", "submit_org_label", "condition",
@@ -47,6 +48,18 @@ def test_count_matches_input(n):
 def test_strict_keys_only(n):
     for r in _build_free_obligations(_rich_rows(n)):
         assert set(r.keys()) == FREE_KEYS
+
+
+@pytest.mark.parametrize("n", [1, 5, 6])
+def test_presentation_additive_only_when_present(n):
+    rows = _rich_rows(n)
+    for i, row in enumerate(rows):
+        row["presentation"] = {"action": f"행위 {i}"}
+    for r in _build_free_obligations(rows):
+        assert set(r.keys()) == ALLOWED_KEYS
+        assert r["presentation"]["action"].startswith("행위")
+        for k in FREE_KEYS:
+            assert k in r
 
 
 @pytest.mark.parametrize("n", [1, 6, 50])
