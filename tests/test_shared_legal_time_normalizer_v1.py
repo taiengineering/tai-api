@@ -1,4 +1,4 @@
-"""WO-SHARED-LEGAL-TIME-NORMALIZER-V1-001 STEP 4B-4A — N01~N32 + 실값 회귀 + static boundary.
+"""WO-SHARED-LEGAL-TIME-NORMALIZER-V1-001 STEP 4B-4A (+PATCH-1) — N01~N32 + 실값 회귀 + static boundary + PATCH-1 negatives.
 
 PURE module 단위테스트. DB/network/LLM 불필요.
 """
@@ -66,7 +66,7 @@ def test_N10_within_no_basis():
     r = N("14일 이내")
     assert r["type"] == "EVENT_DEADLINE"
     assert (r["value"], r["unit"], r["operator"]) == (14, "DAY", "WITHIN")
-    assert "basis_text" not in r  # basis 발명 0
+    assert "basis_text" not in r
 
 
 def test_N11_before_basis_no_numeric():
@@ -74,7 +74,7 @@ def test_N11_before_basis_no_numeric():
     assert r["type"] == "EVENT_DEADLINE"
     assert r["operator"] == "BEFORE"
     assert r["basis_text"] == "작업 시작"
-    assert "value" not in r and "unit" not in r  # 0 DAY 금지
+    assert "value" not in r and "unit" not in r
 
 
 def test_N12_before_variant_source_preserved():
@@ -129,13 +129,11 @@ def test_N21_delegation_raw_only():
 
 
 def test_N22_quarter_hours_raw_only():
-    # 교육 수행량 — schedule cycle 아님
     assert N("분기 3시간") == {"source_text": "분기 3시간", "status": "RAW_ONLY"}
     assert N("분기3시간")["status"] == "RAW_ONLY"
 
 
 def test_N23_twice_per_year_raw_only():
-    # "연 2회" 는 v1 미지원 → RAW_ONLY (연 1회만 지원)
     assert N("연 2회")["status"] == "RAW_ONLY"
     assert N("월 2회")["status"] == "RAW_ONLY"
     assert N("주 3회")["status"] == "RAW_ONLY"
@@ -158,17 +156,15 @@ def test_N26_N27_N28_obligation_timing_cycle_independent():
     }
     out = normalize_obligation_legal_time(ob)
     assert out["version"] == "v1"
-    assert out["timing"]["type"] == "EVENT_DEADLINE"      # N26 when → timing
-    assert out["cycle"]["type"] == "RECURRING"            # N27 inspection_cycle → cycle
-    assert out["timing"]["source_text"] == "작업 시작 전"  # N28 독립 보존
+    assert out["timing"]["type"] == "EVENT_DEADLINE"
+    assert out["cycle"]["type"] == "RECURRING"
+    assert out["timing"]["source_text"] == "작업 시작 전"
     assert out["cycle"]["source_text"] == "1년에 1회"
 
 
 def test_N29_absent_not_null():
-    # cycle 만 있고 when 없음 → timing key 자체 미생성
     out = normalize_obligation_legal_time({"enrichment": {"inspection_cycle": "매년"}})
     assert "cycle" in out and "timing" not in out
-    # 둘 다 없음 → None
     assert normalize_obligation_legal_time({"obligation_detail": {}, "enrichment": {}}) is None
     assert normalize_obligation_legal_time({}) is None
     assert normalize_obligation_legal_time(None) is None
@@ -196,7 +192,7 @@ def test_N32_no_db_network_llm_dependency():
         assert banned not in src
 
 
-# ── 실측값 회귀 (fixture only; schedule_json DB 미사용) ──
+# ── 실측값 회귀 (fixture only) ──
 def test_real_value_regression():
     cases = {
         "14일이내": ("EVENT_DEADLINE", "NORMALIZED"),
@@ -217,10 +213,50 @@ def test_real_value_regression():
 
 
 def test_within_no_basis_variants():
-    # "14일이내"(공백 없음)도 이내 패턴 매치
     r = N("14일이내")
     assert (r["type"], r["value"], r["unit"], r["operator"]) == ("EVENT_DEADLINE", 14, "DAY", "WITHIN")
     assert "basis_text" not in r
+
+
+# ── PATCH-1: source_text EXACT (공백 보존) ──
+def test_patch1_source_text_exact_with_whitespace():
+    r = N("  15일마다  ")
+    assert r["status"] == "NORMALIZED" and r["type"] == "RECURRING"
+    assert r["value"] == 15 and r["unit"] == "DAY"
+    assert r["source_text"] == "  15일마다  "   # 원문 EXACT(trim 안 함)
+    # cycle 원문 공백도 보존
+    out = normalize_obligation_legal_time({"enrichment": {"inspection_cycle": " 상시 "}})
+    assert out["cycle"]["type"] == "CONTINUOUS"
+    assert out["cycle"]["source_text"] == " 상시 "
+
+
+# ── PATCH-1: CONTINUOUS/IMMEDIATE over-normalization 차단 ──
+def test_patch1_continuous_immediate_compound_raw_only():
+    assert N("상시 또는 필요시")["status"] == "RAW_ONLY"
+    assert N("즉시 또는 14일 이내")["status"] == "RAW_ONLY"
+    assert N("상시 점검")["status"] == "RAW_ONLY"
+    assert N("즉시 보고 후 조치")["status"] == "RAW_ONLY"
+    # 정확/괄호주석만 NORMALIZED 유지
+    assert N("상시")["type"] == "CONTINUOUS"
+    assert N("상시(설비운용시)")["type"] == "CONTINUOUS"
+    assert N("즉시")["type"] == "IMMEDIATE"
+
+
+# ── PATCH-1: WITHIN full-match (복합문 앞부분 있으면 RAW_ONLY) ──
+def test_patch1_within_fullmatch_only():
+    assert N("필요시 14일 이내")["status"] == "RAW_ONLY"    # 기준(후/부터) 없이 접두어만 → RAW_ONLY
+    assert N("즉시 또는 14일 이내")["status"] == "RAW_ONLY"
+    # 허용 형태
+    assert N("14일 이내")["type"] == "EVENT_DEADLINE"
+    assert N("설치 후 30일 이내")["basis_text"] == "설치"
+    assert N("선임사유부터 14일 이내")["basis_text"] == "선임사유"
+
+
+# ── PATCH-1: BEFORE 도 접속절 붙으면 RAW_ONLY ──
+def test_patch1_before_compound_raw_only():
+    assert N("작업 시작 전 또는 변경 시")["status"] == "RAW_ONLY"
+    assert N("작업 시작 전")["type"] == "EVENT_DEADLINE"
+    assert N("작업시작전(재시작포함)")["type"] == "EVENT_DEADLINE"
 
 
 # ── static boundary: 공용 pure module 고정 ──
