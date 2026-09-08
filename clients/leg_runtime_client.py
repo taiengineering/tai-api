@@ -180,6 +180,12 @@ _LEG_INPUT_FIELDS = (
     "hazmat_designated_quantity_multiple", "rotor_peripheral_speed_m_s", "rotor_shaft_weight_ton",
     "same_site_construction_count", "diving_worker_count",
     "has_structure", "has_object_drop", "has_construction_machine", "has_high_speed_rotor",
+    # WO-E2E-OBJ-SEM-001: SUBCONTRACTOR domain/event specific facts (append). verbatim, alias/derive 0.
+    "has_construction_subcontract_direct_payment_condition",
+    "has_construction_subcontract_price_adjustment_condition",
+    "has_construction_subcontract_completion_notice",
+    "has_fire_facility_subcontract", "has_fire_facility_subcontract_payment_received",
+    "has_ict_subcontract", "has_ict_subcontract_payment_received",
 )
 
 # WO-FIX-BUILDFACILITY-SECTOR-GATE-001: WIRING-016 append BUILDING N1 raw primitive 32축.
