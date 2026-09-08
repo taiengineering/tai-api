@@ -1,6 +1,6 @@
 """무료 결과 '추가 확인 정보' count projection.
 
-WO-FREE-RESULT-ADDITIONAL-INFORMATION-001 (READ-ONLY / additive).
+WO-FREE-RESULT-ADDITIONAL-INFORMATION-001 (READ-ONLY / additive) + PATCH-1(B).
 
 무료진단 당시 저장된 full_result 만으로 count 를 뽑는다.
 새 법령판정/유료진단 재실행/raw 재판정 = 0.
@@ -16,6 +16,10 @@ WO-FREE-RESULT-ADDITIONAL-INFORMATION-001 (READ-ONLY / additive).
   - review_required_count/unconfirmed_count 를 재사용하지 않는다(의미 혼입 방지, WO 7).
   - usable_for_evaluation 은 'true'/'false' 문자열을 bool 로 추론하지 않는다(WO 8).
   - fail-closed: 원천 부재·malformed → 해당 count 0. 절대 raise 하지 않는다(WO 9).
+  - PATCH-1(B): malformed obligation record 를 고객용 숫자로 변환하지 않는다.
+      obligation item 이 dict 아님 → 해당 의무 skip.
+      enrichment 없음/null → valid obligation, coverage 상태 없음 → unknown 허용.
+      enrichment 가 dict 아님(malformed) → 해당 의무 skip.
 """
 from __future__ import annotations
 
@@ -64,8 +68,16 @@ def project_additional_information(full_result: Any) -> Dict[str, Any]:
         not_evaluable = 0
         cov_unknown = 0
         for ob in obligations:
-            enr = ob.get("enrichment") if isinstance(ob, dict) else None
-            enr = enr if isinstance(enr, dict) else {}
+            if not isinstance(ob, dict):
+                continue  # malformed record → skip(고객 숫자로 변환 금지, PATCH-1 B)
+            if "enrichment" in ob:
+                enr = ob.get("enrichment")
+                if enr is not None and not isinstance(enr, dict):
+                    continue  # enrichment 가 malformed(non-dict) → 해당 의무 skip
+                enr = enr if isinstance(enr, dict) else {}
+            else:
+                enr = {}  # enrichment 없음 → 상태 없음(아래 usable else 에서 unknown)
+
             if _is_nonempty_list(enr.get("missing_fields")):
                 affected += 1
             usable = enr.get("usable_for_evaluation")
