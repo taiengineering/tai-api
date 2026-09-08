@@ -150,7 +150,7 @@ def test_B9_free_response_field_delta_zero_presentation_additive_only(monkeypatc
     assert data["free_obligation_count"] == 8
     for i, item in enumerate(fo):
         assert set(FREE_KEYS) <= set(item.keys())
-        assert set(item.keys()) <= set(FREE_KEYS) | {"presentation"}
+        assert set(item.keys()) <= set(FREE_KEYS) | {"presentation", "canonical_obligation_type"}
         assert item["presentation"] == map_diagnosis_presentation(raws[i])
         if i < 5:
             src_row = rules_out[i]
