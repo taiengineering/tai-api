@@ -1,16 +1,16 @@
-"""WO-SAAS-CANONICAL-INSPECTION-WRITER-001 STEP 4B-3 REV-1 — writer W1~W16.
+"""WO-SAAS-CANONICAL-INSPECTION-WRITER-001 STEP 4B-3 REV-1 — writer + guard 배선.
 
-W1 INSPECT+atom+action→payload · W2 non-INSPECT→0 · W3 atom absent→0 · W4 action absent→0 ·
-W5 atom EXACT · W6 legal_operation_presentation==mapper · W7 law/action/type transport ·
-W8 cycle NULL/next_planned NULL/default year1 0 · W9 timing "즉시" 보존·schedule 변환 0 ·
-W10 cycle "상시" 보존·cycle_unit 생성 0 · W11 dup atom INSERT 0 · W12 operation state preserve(refresh) ·
-W13 legacy legal_rule_id 대입 0 · W14 legacy writer delta 0 · W15 input mutation 0 · guard predicate.
-(W16 diagnosis delta / W17~W24 anchor route guard = route 테스트, Cursor.)
+W1~W15 payload/filter/refresh/dup/guard predicate · G1~G15 writer 회귀 ·
+W17~W24 anchor/schedule write 경계 fail-close.
+DB/network/LEG/LLM 불필요.
 """
 from __future__ import annotations
 
 import copy
 import inspect
+
+import pytest
+from fastapi import HTTPException
 
 from services.inspection_sets_svc.canonical_writer import (
     build_canonical_set_payload,
@@ -203,3 +203,432 @@ def test_W14_legacy_writer_delta_zero():
 def test_no_candidates_returns_zero():
     out = materialize_canonical_inspection_sets(_SB(), "f1", "c1", [_raw(ob_type="ACTION")])
     assert out == {"candidates": 0, "inserted": 0, "refreshed": 0, "skipped": 0}
+
+
+# ── G1~G15: writer 회귀 (cycle_text 파싱 0 · atom exact · guard fail-close) ──
+
+def test_G1_atom_id_exact():
+    p = build_canonical_set_payload(_raw(atom="atom-G1"), "f1", "c1")
+    assert p["legal_obligation_atom_id"] == "atom-G1"
+
+
+def test_G2_legal_rule_id_does_not_synthesize_atom():
+    r = _raw(atom="atom-A")
+    r["legal_rule_id"] = "CON3-SCF-002"
+    p = build_canonical_set_payload(r, "f1", "c1")
+    assert p["legal_obligation_atom_id"] == "atom-A"
+    assert p["legal_rule_id"] is None
+    r2 = _raw()
+    r2.pop("atom_id")
+    r2["legal_rule_id"] = "CON3-SCF-002"
+    assert build_canonical_set_payload(r2, "f1", "c1") is None
+
+
+def test_G3_cycle_text_verbatim():
+    p = build_canonical_set_payload(_raw(when="즉시", cycle="상시"), "f1", "c1")
+    assert p["legal_operation_presentation"]["timing"] == "즉시"
+    assert p["legal_operation_presentation"]["cycle"] == "상시"
+
+
+def test_G4_one_year_text_not_year1():
+    p = build_canonical_set_payload(_raw(when="1년", cycle="1년"), "f1", "c1")
+    assert p["legal_operation_presentation"]["timing"] == "1년"
+    assert p["legal_operation_presentation"]["cycle"] == "1년"
+    assert p["cycle_unit"] is None and p["cycle_value"] is None
+
+
+def test_G5_monthly_text_not_month1():
+    p = build_canonical_set_payload(_raw(when="매월", cycle="매월"), "f1", "c1")
+    assert p["legal_operation_presentation"]["cycle"] == "매월"
+    assert p["cycle_unit"] is None and p["cycle_value"] is None
+
+
+def test_G6_before_work_not_numeric():
+    p = build_canonical_set_payload(_raw(when="작업 시작 전", cycle="작업시작전"), "f1", "c1")
+    assert p["legal_operation_presentation"]["timing"] == "작업 시작 전"
+    assert p["cycle_unit"] is None and p["cycle_value"] is None
+
+
+def test_G7_always_on_not_numeric():
+    p = build_canonical_set_payload(_raw(when="상시", cycle="상시"), "f1", "c1")
+    assert p["legal_operation_presentation"]["cycle"] == "상시"
+    assert p["cycle_unit"] is None and p["cycle_value"] is None
+
+
+def test_G8_next_planned_null():
+    p = build_canonical_set_payload(_raw(), "f1", "c1")
+    assert p["next_planned_date"] is None
+    assert p["schedule_anchor_date"] is None
+    assert p["anchor_confirmed"] is False
+    assert p["status_code"] == "PENDING_ANCHOR"
+
+
+def test_G9_cycle_unit_value_null():
+    p = build_canonical_set_payload(_raw(), "f1", "c1")
+    assert p["cycle_unit"] is None
+    assert p["cycle_value"] is None
+
+
+def test_G10_legacy_writer_delta_zero():
+    from routers.inspection_set_auto import auto_create_inspection_sets_from_diagnosis
+    src = inspect.getsource(auto_create_inspection_sets_from_diagnosis)
+    assert "canonical_writer" not in src
+    assert "has_explicit_schedule_cycle" not in src
+
+
+def test_G11_guard_false_on_canonical_payload():
+    p = build_canonical_set_payload(_raw(), "f1", "c1")
+    assert has_explicit_schedule_cycle(p) is False
+
+
+def test_G12_mapper_input_mutation_zero():
+    raw = _raw()
+    before = copy.deepcopy(raw)
+    build_canonical_set_payload(raw, "f1", "c1")
+    map_operation_presentation(raw)
+    assert raw == before
+
+
+def test_G13_leg_call_zero():
+    import services.inspection_sets_svc.canonical_writer as W
+    src = inspect.getsource(W)
+    for banned in ("rtm_engine", "fetch_clause", "/rtm/", "leg-runtime"):
+        assert banned not in src
+
+
+def test_G14_llm_fuzzy_regex_parse_zero():
+    import services.inspection_sets_svc.canonical_writer as W
+    import services.inspection_sets_svc.anchors as A
+    import services.inspection_sets_svc.schedules as S
+    blob = (
+        inspect.getsource(W)
+        + inspect.getsource(A.set_anchor_bulk)
+        + inspect.getsource(A.bulk_update_anchors)
+        + inspect.getsource(A.patch_set)
+        + inspect.getsource(A.update_anchor)
+        + inspect.getsource(S.generate_schedules_for_factory)
+    )
+    for banned in ("openai", "anthropic", "ChatCompletion", "fuzzy", "difflib", "re.search", "re.match"):
+        assert banned not in blob
+
+
+def test_G15_legal_text_without_structured_schedule_is_absent():
+    p = build_canonical_set_payload(_raw(when="즉시", cycle="상시"), "f1", "c1")
+    assert p["legal_operation_presentation"]["timing"] == "즉시"
+    assert p["legal_operation_presentation"]["cycle"] == "상시"
+    assert p["cycle_unit"] is None and p["cycle_value"] is None
+    assert has_explicit_schedule_cycle(p) is False
+    from services.inspection_sets_helpers import _build_next_schedule_row
+    src = inspect.getsource(_build_next_schedule_row)
+    assert 'or "year"' in src and "or 1" in src
+
+
+# ── W17~W24: 5 write 경계 guard (canonical NULL-cycle → helper 진입 0) ──
+
+_SKIP = "주기가 설정되지 않았습니다."
+_NEED_CYCLE = "점검 주기를 먼저 설정해주세요."
+
+
+def _canonical_row(**over):
+    row = {
+        "id": "set-c",
+        "factory_id": "f1",
+        "company_id": "c1",
+        "inspection_set_name": "방호장치를 점검하여야 한다",
+        "inspection_category": "INSPECT",
+        "source": "LEGAL_ENGINE",
+        "status_code": "PENDING_ANCHOR",
+        "is_active": True,
+        "cycle_unit": None,
+        "cycle_value": None,
+        "schedule_anchor_date": None,
+        "next_planned_date": None,
+        "anchor_confirmed": False,
+        "legal_obligation_atom_id": "atom-A",
+    }
+    row.update(over)
+    return row
+
+
+def _legacy_row(**over):
+    row = {
+        "id": "set-l",
+        "factory_id": "f1",
+        "company_id": "c1",
+        "inspection_set_name": "산안법 점검",
+        "inspection_category": "INSPECT",
+        "source": "LEGAL_ENGINE",
+        "status_code": "PENDING_ANCHOR",
+        "is_active": True,
+        "cycle_unit": "month",
+        "cycle_value": 1,
+        "schedule_anchor_date": None,
+        "next_planned_date": None,
+        "anchor_confirmed": False,
+        "legal_rule_id": "CON3-SCF-002",
+    }
+    row.update(over)
+    return row
+
+
+class _Resp:
+    def __init__(self, data=None):
+        self.data = data if data is not None else []
+
+
+class _WQ:
+    def __init__(self, sb, name):
+        self.sb = sb
+        self.name = name
+        self._op = "select"
+        self._eq = {}
+        self._payload = None
+
+    def select(self, *a, **k):
+        self._op = "select"
+        return self
+
+    def eq(self, col, val):
+        self._eq[col] = val
+        return self
+
+    def limit(self, n):
+        return self
+
+    def update(self, payload):
+        self._op = "update"
+        self._payload = payload
+        return self
+
+    def insert(self, row):
+        self._op = "insert"
+        self._payload = row
+        return self
+
+    def delete(self):
+        self._op = "delete"
+        return self
+
+    def execute(self):
+        self.sb.calls.append({
+            "name": self.name, "op": self._op,
+            "eq": dict(self._eq), "payload": self._payload,
+        })
+        if self.name == "inspection_sets":
+            if self._op == "select":
+                rows = [copy.deepcopy(r) for r in self.sb.sets]
+                for col, val in self._eq.items():
+                    rows = [r for r in rows if r.get(col) == val]
+                return _Resp(rows)
+            if self._op == "update":
+                sid = self._eq.get("id")
+                updated = []
+                for r in self.sb.sets:
+                    if r.get("id") == sid:
+                        r.update(self._payload)
+                        updated.append(copy.deepcopy(r))
+                self.sb.set_updates.append({"id": sid, "payload": dict(self._payload)})
+                return _Resp(updated)
+        if self.name == "work_schedules":
+            if self._op == "insert":
+                rows = self._payload if isinstance(self._payload, list) else [self._payload]
+                self.sb.schedule_inserts.extend(rows)
+                return _Resp(list(rows))
+            if self._op == "delete":
+                self.sb.schedule_deletes.append(dict(self._eq))
+                return _Resp([])
+            if self._op == "select":
+                sid = self._eq.get("inspection_set_id")
+                found = [s for s in self.sb.existing_schedules if s.get("inspection_set_id") == sid]
+                return _Resp(found)
+        return _Resp([])
+
+
+class _WriteSB:
+    def __init__(self, sets, existing_schedules=None):
+        self.sets = [copy.deepcopy(s) for s in sets]
+        self.existing_schedules = existing_schedules or []
+        self.calls = []
+        self.set_updates = []
+        self.schedule_inserts = []
+        self.schedule_deletes = []
+
+    def table(self, name):
+        return _WQ(self, name)
+
+
+def _install_anchors(monkeypatch, sb):
+    import services.inspection_sets_svc.anchors as A
+    monkeypatch.setattr(A, "get_supabase", lambda: sb)
+    seen = []
+    real = A._build_next_schedule_row
+
+    def spy(iset, anchor):
+        seen.append(copy.deepcopy(iset))
+        assert has_explicit_schedule_cycle(iset)
+        return real(iset, anchor)
+
+    monkeypatch.setattr(A, "_build_next_schedule_row", spy)
+    return A, seen
+
+
+def _install_schedules(monkeypatch, sb):
+    import services.inspection_sets_svc.schedules as S
+    monkeypatch.setattr(S, "get_supabase", lambda: sb)
+    seen = []
+    real = S._build_next_schedule_row
+
+    def spy(iset, anchor):
+        seen.append(copy.deepcopy(iset))
+        assert has_explicit_schedule_cycle(iset)
+        return real(iset, anchor)
+
+    monkeypatch.setattr(S, "_build_next_schedule_row", spy)
+    return S, seen
+
+
+def test_W17_set_anchor_bulk_skips_canonical_null_cycle(monkeypatch):
+    from schemas.inspection_sets import BulkAnchorBody
+    sb = _WriteSB([_canonical_row(), _legacy_row()])
+    A, seen = _install_anchors(monkeypatch, sb)
+    out = A.set_anchor_bulk(BulkAnchorBody(factory_id="f1", anchor_date="2026-01-15"))
+    skip = [r for r in out["data"]["results"] if r.get("status") == "skipped"]
+    ok = [r for r in out["data"]["results"] if r.get("id") == "set-l"]
+    assert len(skip) == 1 and skip[0]["id"] == "set-c"
+    assert skip[0]["reason"] == _SKIP
+    assert len(ok) == 1 and "error" not in ok[0]
+    assert [s["id"] for s in seen] == ["set-l"]
+    assert all(u["id"] != "set-c" for u in sb.set_updates)
+    assert all((ins.get("inspection_set_id") != "set-c") for ins in sb.schedule_inserts)
+    canon = next(r for r in sb.sets if r["id"] == "set-c")
+    assert canon["status_code"] == "PENDING_ANCHOR"
+    assert canon["anchor_confirmed"] is False
+    assert canon["next_planned_date"] is None
+    legacy = next(r for r in sb.sets if r["id"] == "set-l")
+    assert legacy["status_code"] == "ACTIVE"
+    assert legacy["anchor_confirmed"] is True
+
+
+def test_W18_set_anchor_bulk_legacy_regression(monkeypatch):
+    from schemas.inspection_sets import BulkAnchorBody
+    sb = _WriteSB([_legacy_row()])
+    A, seen = _install_anchors(monkeypatch, sb)
+    out = A.set_anchor_bulk(BulkAnchorBody(factory_id="f1", anchor_date="2026-01-15"))
+    assert out["data"]["total_created"] >= 1
+    assert seen and seen[0]["id"] == "set-l"
+    assert sb.schedule_inserts
+    assert sb.sets[0]["status_code"] == "ACTIVE"
+
+
+def test_W19_bulk_update_anchors_skips_canonical(monkeypatch):
+    from schemas.inspection_sets import AnchorBulkItem, AnchorBulkPatchBody
+    sb = _WriteSB([_canonical_row()])
+    A, seen = _install_anchors(monkeypatch, sb)
+    out = A.bulk_update_anchors(AnchorBulkPatchBody(items=[
+        AnchorBulkItem(id="set-c", schedule_anchor_date="2026-01-15"),
+    ]))
+    assert out["data"]["updated"] == 0
+    assert out["data"]["errors"] == [{"id": "set-c", "reason": _SKIP}]
+    assert seen == []
+    assert sb.set_updates == []
+    assert sb.schedule_inserts == []
+
+
+def test_W20_bulk_update_anchors_legacy_regression(monkeypatch):
+    from schemas.inspection_sets import AnchorBulkItem, AnchorBulkPatchBody
+    sb = _WriteSB([_legacy_row()])
+    A, seen = _install_anchors(monkeypatch, sb)
+    out = A.bulk_update_anchors(AnchorBulkPatchBody(items=[
+        AnchorBulkItem(id="set-l", schedule_anchor_date="2026-01-15"),
+    ]))
+    assert out["data"]["updated"] == 1
+    assert out["data"]["failed"] == 0
+    assert seen and seen[0]["id"] == "set-l"
+    assert sb.sets[0]["status_code"] == "ACTIVE"
+    assert sb.schedule_inserts
+
+
+def test_W21_patch_set_canonical_anchor_422(monkeypatch):
+    from schemas.inspection_sets import InspectionSetPatchBody
+    sb = _WriteSB([_canonical_row()])
+    A, seen = _install_anchors(monkeypatch, sb)
+    import routers.inspection_sets as R
+    monkeypatch.setattr(R, "get_supabase", lambda: sb)
+    monkeypatch.setattr(R, "_ensure_set_own", lambda *a, **k: None)
+    with pytest.raises(HTTPException) as ei:
+        R.patch_inspection_set(
+            "set-c",
+            InspectionSetPatchBody(schedule_anchor_date="2026-01-15"),
+            current={"id": "u"},
+        )
+    assert ei.value.status_code == 422
+    assert ei.value.detail == _NEED_CYCLE
+    assert seen == []
+    assert sb.set_updates == []
+    assert sb.schedule_inserts == []
+    # non-anchor patch on canonical still allowed
+    out = A.patch_set("set-c", InspectionSetPatchBody(description="메모"))
+    assert out["status"] == "success"
+    assert sb.sets[0]["description"] == "메모"
+    assert sb.sets[0]["status_code"] == "PENDING_ANCHOR"
+    assert sb.sets[0]["next_planned_date"] is None
+
+
+def test_W22_patch_set_legacy_anchor_regression(monkeypatch):
+    from schemas.inspection_sets import InspectionSetPatchBody
+    sb = _WriteSB([_legacy_row()])
+    A, seen = _install_anchors(monkeypatch, sb)
+    out = A.patch_set("set-l", InspectionSetPatchBody(schedule_anchor_date="2026-01-15"))
+    assert out["status"] == "success"
+    assert seen and seen[0]["id"] == "set-l"
+    assert sb.sets[0]["status_code"] == "ACTIVE"
+    assert sb.sets[0]["anchor_confirmed"] is True
+    assert sb.schedule_inserts
+
+
+def test_W23_update_anchor_canonical_422_legacy_ok(monkeypatch):
+    from schemas.inspection_sets import AnchorBody
+    sb = _WriteSB([_canonical_row()])
+    A, seen = _install_anchors(monkeypatch, sb)
+    import routers.inspection_sets as R
+    monkeypatch.setattr(R, "get_supabase", lambda: sb)
+    monkeypatch.setattr(R, "_ensure_set_own", lambda *a, **k: None)
+    with pytest.raises(HTTPException) as ei:
+        R.update_inspection_anchor(
+            "set-c", AnchorBody(anchor_date="2026-01-15"), current={"id": "u"},
+        )
+    assert ei.value.status_code == 422
+    assert ei.value.detail == _NEED_CYCLE
+    assert seen == []
+    assert sb.schedule_inserts == []
+
+    sb2 = _WriteSB([_legacy_row()])
+    A2, seen2 = _install_anchors(monkeypatch, sb2)
+    out = A2.update_anchor("set-l", AnchorBody(anchor_date="2026-01-15"))
+    assert out["status"] == "success"
+    assert seen2 and seen2[0]["id"] == "set-l"
+    assert sb2.sets[0]["status_code"] == "ACTIVE"
+
+
+def test_W24_generate_schedules_anchor_mode_skips_null_cycle(monkeypatch):
+    canon = _canonical_row(
+        status_code="ACTIVE",
+        anchor_confirmed=True,
+        schedule_anchor_date="2026-01-15",
+    )
+    legacy = _legacy_row(
+        status_code="ACTIVE",
+        anchor_confirmed=True,
+        schedule_anchor_date="2026-01-15",
+    )
+    sb = _WriteSB([canon, legacy])
+    S, seen = _install_schedules(monkeypatch, sb)
+    out = S.generate_schedules_for_factory("f1", "anchor", False)
+    skip = [r for r in out["data"]["results"] if r.get("status") == "skipped"]
+    created = [r for r in out["data"]["results"] if r.get("status") == "created"]
+    assert skip == [{"id": "set-c", "name": canon["inspection_set_name"],
+                     "status": "skipped", "reason": _SKIP}]
+    assert len(created) == 1 and created[0]["id"] == "set-l"
+    assert [s["id"] for s in seen] == ["set-l"]
+    assert all(ins.get("inspection_set_id") != "set-c" for ins in sb.schedule_inserts)
+    assert any(ins.get("inspection_set_id") == "set-l" for ins in sb.schedule_inserts)
