@@ -399,9 +399,9 @@ def test_T7_building_facility_parity_free_and_paid():
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# T8: CONSTRUCTION FACILITY PARITY + construction_type COMPAT
+# T8: CONSTRUCTION FACILITY PARITY + missing construction_type ABSENT
 # ─────────────────────────────────────────────────────────────────────────
-def test_T8_construction_facility_parity_and_compat():
+def test_T8_construction_facility_parity_and_missing_absent():
     fd_cases = [
         {"worker_count": 20, "construction_type": "건축", "has_chemical_substance": True},
         {"worker_count": 30},  # construction_type 미지정 → COMPAT "건축"
@@ -417,13 +417,19 @@ def test_T8_construction_facility_parity_and_compat():
         old = build_facility(_old_construction_step1(body, workers, 10.0))
         new = _new_facility(body, engine_sector="CONSTRUCTION")
         added, removed, changed = _facility_diff(old, new)
-        assert added == set() and removed == set() and changed == set(), (
-            "CST facility diff 0 위반. fd={} · added={} removed={} changed={}"
-            .format(fd, added, removed, changed)
-        )
-        # COMPAT : form_data 에 construction_type 없어도 "건축" 도달
+        # WO-CST-SYNTHETIC-CONSTRUCTION-TYPE-HOTFIX-001: intended delta 를 딱 1필드로 제한.
+        #   missing construction_type: old(synthetic "건축") -> new(ABSENT). removed={construction_type} 만 허용.
+        #   explicit construction_type("건축"/"토목"): parity 유지(diff=0).
         if "construction_type" not in fd:
-            assert new.get("construction_type") == "건축", "construction_type COMPAT 유지 실패"
+            assert added == set(), "CST missing: added 위반 {}".format(added)
+            assert changed == set(), "CST missing: changed 위반 {}".format(changed)
+            assert removed == {"construction_type"}, "CST missing: removed 위반 {}".format(removed)
+            assert "construction_type" not in new, "missing 인데 new 에 생성됨"
+        else:
+            assert added == set() and removed == set() and changed == set(), (
+                "CST explicit facility diff 0 위반. fd={} · added={} removed={} changed={}"
+                .format(fd, added, removed, changed)
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────

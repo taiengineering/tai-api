@@ -348,10 +348,11 @@ def _build_unified_step1_body(
     # worker_count parity: legacy else 분기의 top-level worker_count=workers 와 등가하게
     # runtime_facts 에 없으면 workers 를 실어준다(canonical 이 이미 넣었으면 그 값 우선).
     runtime_facts.setdefault("worker_count", workers)
-    # ── WO-010 STEP-2B COMPAT FREEZE (STEP-3 synthetic cleanup 대상) ──
-    #   synthetic default "건축" 은 이번 STEP 유지. facility delta 를 IND intended-delta 로 격리하기 위함.
-    if engine_sector == "CONSTRUCTION" and not runtime_facts.get("construction_type"):
-        runtime_facts["construction_type"] = construction_type_fallback or "건축"
+    # WO-CST-SYNTHETIC-CONSTRUCTION-TYPE-HOTFIX-001: CST construction_type synthetic default 제거.
+    #   소비자가 construction_type 을 입력하지 않으면 ABSENT 로 둔다(Unified "미입력=ABSENT" 계약).
+    #   이전엔 "건축" 을 생성해 Unified/Facility 로 전달 → LEG 가 construction_type 을 ENUM 미등록으로
+    #   boolean 정규화하다 실패(INPUT_REJECTED). 명시 입력값은 unified_factory(source_facts=runtime_facts)로
+    #   그대로 보존된다(runtime_facts 에 이미 있으면 미변경). LEG enum 미등록은 별도 QA.
     # BUILDING has_chemical_substance : legacy BUILDING elif 는 top-level/input 어디에도 세팅하지 않아
     #   build_facility patch-A(inp exact-key) 가 미발동, facility 에 반영되지 않는다.
     #   parity 를 위해 unified 분기도 body.input 에 실지 않는다(신규 delta 방지). 시드는 그대로 두지만
