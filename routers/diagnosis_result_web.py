@@ -63,6 +63,7 @@ from routers.diagnosis_transform import (
 )
 from services.diagnosis_result_input_projection import project_free_input_snapshot
 from services.free_result_additional_information import project_additional_information
+from services.obligation_presentation_mapper import map_diagnosis_presentation
 
 log = logging.getLogger(__name__)
 
@@ -289,6 +290,8 @@ def _leg_rule_row(o: Dict[str, Any]) -> Dict[str, Any]:
     check_result = (o.get("check_result") or "").strip()
     if check_result:
         row["check_result"] = check_result         # 검증 상태(VERIFIED 등)
+    # STEP 3 — canonical presentation (PURE mapper single owner, additive)
+    row["presentation"] = map_diagnosis_presentation(o)
     return row
 
 
@@ -470,12 +473,19 @@ FREE_OBLIGATION_KEYS = ("obligation_type", "obligation_summary", "law_name")
 
 
 def _project_free_obligation(row: Dict[str, Any]) -> Dict[str, Any]:
-    """rules_table 표시행 → 무료 계약 3필드(정확히 이 키만). 유료 상세·내부 메타 제외."""
-    return {
+    """rules_table 표시행 → 무료 계약 3필드 + presentation additive.
+
+    3키(obligation_type·obligation_summary·law_name) 값 매핑은 불변.
+    presentation 은 _leg_rule_row mapper 결과만 통과(재조립 0). 유료 상세·내부 메타 제외.
+    """
+    out: Dict[str, Any] = {
         "obligation_type": (row.get("obligation_type") or "").strip(),
         "obligation_summary": (row.get("obligation_summary") or row.get("description") or "").strip(),
         "law_name": (row.get("law_name") or "").strip(),
     }
+    if "presentation" in row:
+        out["presentation"] = row["presentation"]
+    return out
 
 
 _PUBLIC_KEY_OBLIGATION_FIELDS = (

@@ -151,14 +151,18 @@ def test_B9_existing_premium_obligation_fields_delta_zero():
     assert ob["presentation"]["action"] == "점검을 해야 한다"
 
 
-def test_B10_free_route_presentation_wiring_zero(monkeypatch):
+def test_B10_free_route_premium_materializer_zero(monkeypatch):
     rec = stored_rec([leg_obligation("a0", "점검")], tier="BUILDING_FREE")
-    install(monkeypatch, rec, product_items=[source_item(0, "a0", "원문A")])
+    _, calls = install(monkeypatch, rec, product_items=[source_item(0, "a0", "원문A")])
     data = rw.get_paid_result_web("tok-1")["data"]
     assert "premium_result_v1" not in data
+    assert calls["n"] == 0
     free = data.get("free_obligations") or []
-    blob = str(free)
-    assert "presentation" not in blob
+    assert free
+    # STEP 3: free_obligations.presentation 은 _leg_rule_row mapper (materializer 0).
+    assert free[0]["presentation"] == map_diagnosis_presentation(
+        rec["full_result"]["obligations_raw"][0]
+    )
 
 
 def test_mapper_parity_with_materializer_presentation():
