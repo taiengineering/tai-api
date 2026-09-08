@@ -290,6 +290,11 @@ def _leg_rule_row(o: Dict[str, Any]) -> Dict[str, Any]:
     check_result = (o.get("check_result") or "").strip()
     if check_result:
         row["check_result"] = check_result         # 검증 상태(VERIFIED 등)
+    # REV-1 — canonical obligation_type (정본 enrichment.obligation_type EXACT, additive)
+    #   _leg_obligation_type collapse(PROHIBIT/TRAINING→ACTION) 우회. 기존 obligation_type 무변경.
+    canonical_type = (enr.get("obligation_type") or "").strip()
+    if canonical_type:
+        row["canonical_obligation_type"] = canonical_type
     # STEP 3 — canonical presentation (PURE mapper single owner, additive)
     row["presentation"] = map_diagnosis_presentation(o)
     return row
@@ -483,6 +488,8 @@ def _project_free_obligation(row: Dict[str, Any]) -> Dict[str, Any]:
         "obligation_summary": (row.get("obligation_summary") or row.get("description") or "").strip(),
         "law_name": (row.get("law_name") or "").strip(),
     }
+    if "canonical_obligation_type" in row:
+        out["canonical_obligation_type"] = row["canonical_obligation_type"]
     if "presentation" in row:
         out["presentation"] = row["presentation"]
     return out
