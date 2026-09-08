@@ -62,6 +62,7 @@ from routers.diagnosis_transform import (
     _normalize_category,
 )
 from services.diagnosis_result_input_projection import project_free_input_snapshot
+from services.free_result_additional_information import project_additional_information
 
 log = logging.getLogger(__name__)
 
@@ -707,6 +708,8 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
             "pdf_url": f"/diagnosis/report-pdf/{public_token}",
         },
     }
+    if is_free:
+        payload["data"]["additional_information"] = project_additional_information(full_result)
     # v1.3.1: LEG top-level contract (입력 부족 고지용) — 비어있지 않을 때만 add-only.
     if leg_contract is not None:
         payload["data"]["contract"] = leg_contract
