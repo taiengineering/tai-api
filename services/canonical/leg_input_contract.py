@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 
 from clients.leg_runtime_client import _LEG_INPUT_FIELDS   # 103 direct vocabulary = 단일 SoT (second list 금지)
 from schemas.legal_engine import DiagnoseStep1Body
+from services.canonical.subcontractor_source_expansion import expand_subcontractor_work_types  # WO-E2E-OBJ-SEM-001-REV1
 
 
 def build_unified_leg_input(
@@ -25,6 +26,9 @@ def build_unified_leg_input(
       - sector projection(BUILDING N1 gate 등)은 build_facility 담당. 여기서 자르지 않는다.
     """
     facts = source_facts if isinstance(source_facts, dict) else {}
+    # WO-E2E-OBJ-SEM-001-REV1: subcontractor_work_types(multi_select) → domain boolean deterministic expansion.
+    #   Source Adapter 경계(§8). LEG 값 파생 아님 — source fact 확장. key ABSENT → 확장 없음.
+    facts = expand_subcontractor_work_types(facts)
     unified: Dict[str, Any] = {}
     for code in _LEG_INPUT_FIELDS:
         if code not in facts:
