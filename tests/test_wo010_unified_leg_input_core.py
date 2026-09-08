@@ -33,9 +33,9 @@ PATCH2A_15_AXES = (
 
 
 def test_T1_vocabulary_len_and_distinct():
-    """T1: len(_LEG_INPUT_FIELDS) == 103 && distinct == 103 (실측)."""
-    assert len(_LEG_INPUT_FIELDS) == 103
-    assert len(set(_LEG_INPUT_FIELDS)) == 103
+    """T1: len(_LEG_INPUT_FIELDS) == 105 && distinct == 105 (WO-E2E-OBJ-SEM-001-REV1: +2 domain fields)."""
+    assert len(_LEG_INPUT_FIELDS) == 105
+    assert len(set(_LEG_INPUT_FIELDS)) == 105
 
 
 def test_T2_no_second_vocabulary():

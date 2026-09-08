@@ -345,6 +345,15 @@ def _build_unified_step1_body(
             _v = runtime_facts.get(_consumer)
             if _v is not None and not (isinstance(_v, str) and not _v.strip()):
                 runtime_facts[_canon] = _v
+    # WO-E2E-OBJ-SEM-001-REV1-PATCH2: subcontractor_work_types source-only seed.
+    #   canonical_applicability(_LEG_INPUT_FIELDS 필터)가 work_types(LEG vocabulary 아님)를 drop 하므로
+    #   form_data 원본을 runtime_facts 에 seed 해야 build_unified_leg_input 의 expansion 이 값을 본다.
+    #   원본 그대로만 전달(추정/기본값/alias 없음). LEG vocabulary 승격/build_facility 직접전달 아님 —
+    #   expand_subcontractor_work_types 가 이를 domain boolean 으로 변환하고 work_types 자체는 미전달.
+    if "subcontractor_work_types" not in runtime_facts:
+        _swt = _fd_alias_src.get("subcontractor_work_types") if isinstance(_fd_alias_src, dict) else None
+        if _swt is not None:
+            runtime_facts["subcontractor_work_types"] = _swt
     # worker_count parity: legacy else 분기의 top-level worker_count=workers 와 등가하게
     # runtime_facts 에 없으면 workers 를 실어준다(canonical 이 이미 넣었으면 그 값 우선).
     runtime_facts.setdefault("worker_count", workers)

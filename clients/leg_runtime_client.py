@@ -180,6 +180,10 @@ _LEG_INPUT_FIELDS = (
     "hazmat_designated_quantity_multiple", "rotor_peripheral_speed_m_s", "rotor_shaft_weight_ton",
     "same_site_construction_count", "diving_worker_count",
     "has_structure", "has_object_drop", "has_construction_machine", "has_high_speed_rotor",
+    # WO-E2E-OBJ-SEM-001-REV1: SUBCONTRACTOR domain facts (2). verbatim, alias/derive 0.
+    # payment/건산 state facts 는 STATEFUL_BACKLOG(POST_LAUNCH). subcontractor_work_types(source)가
+    # source adapter 에서 이 2 boolean 으로 deterministic expansion 됨.
+    "has_fire_facility_subcontract", "has_ict_subcontract",
 )
 
 # WO-FIX-BUILDFACILITY-SECTOR-GATE-001: WIRING-016 append BUILDING N1 raw primitive 32축.
