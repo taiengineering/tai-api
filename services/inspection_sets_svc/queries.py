@@ -9,6 +9,7 @@ from db.supabase_client import get_supabase
 from schemas.inspection_sets import ManualInspectionSetBody
 from services.inspection_sets_helpers import UNIT_KO, _build_items_for_set, _get_delta
 from .errors import InspectionSetsSvcError
+from .legal_time_read_model import attach_legal_time_normalized
 from services.time import business_today
 
 
@@ -25,7 +26,8 @@ def get_sets_list(factory_id, source, anchor_confirmed, page, size, company_id=N
         "cycle_base_type, cycle_base_guide, anchor_type, schedule_anchor_date, "
         "last_inspection_date, next_planned_date, anchor_confirmed, description, source, "
         "is_active, status_code, assignee_user_id, created_at, updated_at, "
-        "legal_obligation_atom_id",   # ← REV 4B-1 additive: official obligation exact identity carrier
+        "legal_obligation_atom_id, "   # ← REV 4B-1 additive: official obligation exact identity carrier
+        "legal_operation_presentation",  # ← 4B-4B: legal_time_normalized read-model source
         count="exact",
     )
     if factory_id:
@@ -53,6 +55,8 @@ def get_sets_list(factory_id, source, anchor_confirmed, page, size, company_id=N
         item["online_system"] = ""
         item["system_url"] = ""
         item["cycle_base_guide_rule"] = item.get("cycle_base_guide") or ""
+    # 4B-4B: 기존 projection 이후 마지막 단계에서 legal_time_normalized additive 부착(새 dict 반환).
+    items = [attach_legal_time_normalized(item) for item in items]
     return {"status": "success", "data": {"items": items, "total": res.count or 0, "page": page, "size": size, "total_pages": ((res.count or 0) + size - 1) // size if res.count else 0}}
 
 
@@ -170,4 +174,5 @@ def get_set_by_id(inspection_set_id: str) -> dict:
     result = supabase.table("inspection_sets").select("*").eq("id", inspection_set_id).single().execute()
     if not result.data:
         raise InspectionSetsSvcError(404, "점검세트를 찾을 수 없습니다")
-    return {"status": "success", "data": result.data}
+    # 4B-4B: 반환 직전 legal_time_normalized additive 부착(select "*" 유지, 원본 mutation 0).
+    return {"status": "success", "data": attach_legal_time_normalized(result.data)}
