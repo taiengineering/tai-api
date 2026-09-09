@@ -43,3 +43,9 @@ class InspectionSetPatchBody(BaseModel):
     last_inspection_date: Optional[str] = None
     assignee_user_id: Optional[str] = None
     description: Optional[str] = None
+
+
+class OperationCycleBody(BaseModel):
+    # WO-SAAS-OPERATION-CYCLE-SETTER-001: 사용자 확정 운영주기(cycle)만. 법정주기 해석 아님.
+    cycle_unit: str
+    cycle_value: int
