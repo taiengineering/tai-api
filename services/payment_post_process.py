@@ -416,6 +416,13 @@ def on_payment_success_sync(payment_id: str) -> None:
     except Exception as e:  # noqa: BLE001 — 계약 자동생성/알림에 영향 금지 (O11)
         logger.warning("[AUTO_TAX] payment_success hook 실패: %s", e)
 
+    # B3: UPGRADE 는 신규계약/갱신/기존활성화가 아니다. 전용 writer 만.
+    if (pay.get("payment_type") or "").upper() == "UPGRADE":
+        from services.tier_upgrade_svc import apply_saas_tier_upgrade
+        apply_saas_tier_upgrade(payment_id, sb)
+        send_payment_notification(pay, plan_code, plan_info)
+        return
+
     existing_contract_id = pay.get("contract_id")
     if existing_contract_id:
         if (pay.get("payment_type") or "").upper() == "RENEWAL":

@@ -26,8 +26,8 @@ class TierGateError(Exception):
         super().__init__(self.message)
 
 
-def evaluate_saas_tier_gate(supabase, current, *, factory_id=None, site_id=None) -> dict:
-    """현재 계약 tier vs 필요 tier. current 는 인증 주체(ownership 은 라우터)."""
+def resolve_saas_tier_gate_context(supabase, current, *, factory_id=None, site_id=None) -> dict:
+    """B2 판정 정본 context. evaluate 와 upgrade prepare 가 이 한 길을 공유한다."""
     _ = current
     fid = _id_or_none(factory_id)
     sid = _id_or_none(site_id)
@@ -73,9 +73,27 @@ def evaluate_saas_tier_gate(supabase, current, *, factory_id=None, site_id=None)
     return {
         "status": status,
         "sector": sector,
-        "current_plan": _plan_view(current_plan),
-        "required_plan": _plan_view(required_plan),
+        "current_plan": current_plan,
+        "required_plan": required_plan,
         "metric": metric,
+        "company_id": company_id,
+        "contract": contract,
+        "entity_type": "factory" if target == "factory" else "site",
+        "entity_id": fid or sid,
+    }
+
+
+def evaluate_saas_tier_gate(supabase, current, *, factory_id=None, site_id=None) -> dict:
+    """현재 계약 tier vs 필요 tier. current 는 인증 주체(ownership 은 라우터)."""
+    ctx = resolve_saas_tier_gate_context(
+        supabase, current, factory_id=factory_id, site_id=site_id
+    )
+    return {
+        "status": ctx["status"],
+        "sector": ctx["sector"],
+        "current_plan": _plan_view(ctx["current_plan"]),
+        "required_plan": _plan_view(ctx["required_plan"]),
+        "metric": ctx["metric"],
     }
 
 

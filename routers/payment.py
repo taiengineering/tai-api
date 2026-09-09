@@ -25,11 +25,13 @@ from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_factory_own, _ensure_own_company
 from services.tier_payment_gate_svc import TierGateError, evaluate_saas_tier_gate
+from services.tier_upgrade_svc import TierUpgradeError, prepare_saas_tier_upgrade
 from schemas.payment import (
     DiagnosisVbankPrepareBody,
     PartialRefundBody,
     PrepareBody,
     RefundBody,
+    UpgradePrepareBody,
     VbankPrepareBody,
 )
 from services.payment_svc import (
@@ -98,16 +100,21 @@ _TIER_GATE_HTTP = {
     "MISSING_SCALE_VALUE": 409,
     "INVALID_PLAN_ORDER": 409,
     "PRICING_NOT_FOUND": 503,
+    "ALREADY_FIT": 409,
+    "MANUAL_QUOTE_REQUIRED": 409,
+    "UNSUPPORTED_PRICE_CONTRACT": 409,
+    "INVALID_UPGRADE_DELTA": 409,
+    "AMBIGUOUS_ACTIVE_SUBSCRIPTION": 409,
+    "TRANSITION_PERSIST_FAILED": 500,
 }
 
 
-@router.get("/tier-gate")
-def get_tier_gate(
-    factory_id: Optional[str] = Query(None),
-    site_id: Optional[str] = Query(None),
-    authorization: Optional[str] = Header(None),
+def _require_tier_entity(
+    factory_id: Optional[str],
+    site_id: Optional[str],
+    authorization: Optional[str],
 ):
-    """현재 계약 tier vs 필요 tier. factory_id XOR site_id. UPGRADE_REQUIRED 는 200."""
+    """LEG 와 동일 ownership. factory_id XOR site_id."""
     fid = (factory_id or "").strip() or None
     sid = (site_id or "").strip() or None
     if (fid is None) == (sid is None):
@@ -115,10 +122,8 @@ def get_tier_gate(
             status_code=422,
             detail="factory_id 또는 site_id 중 하나만 전달해야 합니다.",
         )
-
     current = get_current_user(authorization)
     supabase = get_supabase()
-
     if fid:
         _ensure_factory_own(supabase, fid, current)
     else:
@@ -134,16 +139,55 @@ def get_tier_gate(
         _ensure_own_company(
             srow.data[0].get("company_id"), current, supabase, "현장을 찾을 수 없습니다."
         )
+    return current, supabase, fid, sid
 
+
+def _tier_http(err) -> HTTPException:
+    return HTTPException(
+        status_code=_TIER_GATE_HTTP.get(err.code, 409),
+        detail={"code": err.code, "message": err.message},
+    )
+
+
+@router.get("/tier-gate")
+def get_tier_gate(
+    factory_id: Optional[str] = Query(None),
+    site_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+):
+    """현재 계약 tier vs 필요 tier. factory_id XOR site_id. UPGRADE_REQUIRED 는 200."""
+    current, supabase, fid, sid = _require_tier_entity(factory_id, site_id, authorization)
     try:
         return evaluate_saas_tier_gate(
             supabase, current, factory_id=fid, site_id=sid
         )
     except TierGateError as e:
-        raise HTTPException(
-            status_code=_TIER_GATE_HTTP.get(e.code, 409),
-            detail={"code": e.code, "message": e.message},
-        ) from e
+        raise _tier_http(e) from e
+
+
+@router.post("/tier-upgrade/prepare")
+def prepare_tier_upgrade(
+    body: UpgradePrepareBody,
+    authorization: Optional[str] = Header(None),
+):
+    """서버권위 SaaS 업그레이드 결제 준비. client amount/plan 미수신."""
+    current, supabase, fid, sid = _require_tier_entity(
+        body.factory_id, body.site_id, authorization
+    )
+    try:
+        return prepare_saas_tier_upgrade(
+            supabase,
+            current,
+            factory_id=fid,
+            site_id=sid,
+            buyername=body.buyername,
+            buyertel=body.buyertel,
+            buyeremail=body.buyeremail,
+        )
+    except (TierGateError, TierUpgradeError) as e:
+        raise _tier_http(e) from e
+    except PaymentPrepareError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
 # ── 단건결제 ───────────────────────────────────────
