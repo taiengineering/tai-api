@@ -4,7 +4,7 @@
   - 전 엔드포인트 로그인 필수(get_current_user).
   - factory 직결(list·preview·manual·anchor/bulk·generate-schedules/{factory_id}·factory/{id})
     → _ensure_factory_own.
-  - set 단건(patch·anchor·generate-items·{id}·{id}/items) → _ensure_set_own(행 company_id).
+  - set 단건(patch·anchor·operation-cycle·generate-items·{id}·{id}/items) → _ensure_set_own(행 company_id).
   - set 배치(anchor/bulk PATCH) → _ensure_sets_own(items[].id).
   - company/{company_id} → _ensure_own_company(path 값 토큰 대조, 타사 404).
   - 전사 batch(generate-all-items 무 factory_id · generate-schedules-all) → _require_admin(ALL 전용).
@@ -34,6 +34,7 @@ from schemas.inspection_sets import (
     BulkAnchorBody,
     InspectionSetPatchBody,
     ManualInspectionSetBody,
+    OperationCycleBody,
 )
 from services import inspection_sets_svc as svc
 
@@ -154,6 +155,15 @@ def generate_schedules_for_factory(
     sb = get_supabase()
     _ensure_factory_own(sb, factory_id, current)
     return _call(svc.generate_schedules_for_factory, factory_id, mode, force)
+
+
+# 주의: /{inspection_set_id} 캐치 라우트보다 위에 둠 — 정적 세그먼트 우선(operation-cycle).
+@router.patch("/{inspection_set_id}/operation-cycle")
+def set_operation_cycle(inspection_set_id: str, body: OperationCycleBody, current: dict = Depends(get_current_user)):
+    """canonical row 에 사용자 확정 운영주기(cycle_unit/value)만 기록. 법정주기 해석 아님."""
+    sb = get_supabase()
+    _ensure_set_own(sb, inspection_set_id, current)
+    return _call(svc.set_operation_cycle, inspection_set_id, body)
 
 
 @router.patch("/{inspection_set_id}")
