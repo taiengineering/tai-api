@@ -230,7 +230,7 @@ def _project_obligation(ob: Any) -> Optional[Dict[str, Any]]:
     applicability = _as_dict(ob.get("applicability"))
     verification = _as_dict(ob.get("verification"))
     triggered = applicability.get("triggered_by")
-    return {
+    projected = {
         "ref": identity.get("source_index"),
         "legal": _only(ob.get("legal"), OBLIGATION_LEGAL_FIELDS),
         "classification": _only(ob.get("classification"), OBLIGATION_CLASS_FIELDS),
@@ -242,6 +242,9 @@ def _project_obligation(ob: Any) -> Optional[Dict[str, Any]]:
         # ADDITIVE — Diagnosis Presentation ViewModel (mapper PURE output as-is).
         "presentation": ob.get("presentation"),
     }
+    if "legal_time_normalized" in ob:
+        projected["legal_time_normalized"] = ob["legal_time_normalized"]
+    return projected
 
 
 def _project_materials(product: Dict[str, Any]) -> Dict[str, Any]:
