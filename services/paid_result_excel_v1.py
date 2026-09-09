@@ -44,6 +44,15 @@ SUMMARY_FIELDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
     ("total_obligation_count", ("materials", "overview", "total_obligation_count")),
     ("distinct_law_count", ("materials", "overview", "distinct_law_count")),
 )
+_LEGAL_TIME_NODE_FIELDS: Tuple[str, ...] = (
+    "source_text", "status", "type", "operator", "value", "unit", "basis_text",
+)
+LEGAL_TIMING_COLUMNS: Tuple[str, ...] = tuple(
+    "legal_timing_{}".format(f) for f in _LEGAL_TIME_NODE_FIELDS
+)
+LEGAL_CYCLE_COLUMNS: Tuple[str, ...] = tuple(
+    "legal_cycle_{}".format(f) for f in _LEGAL_TIME_NODE_FIELDS
+)
 OBLIGATION_COLUMNS: Tuple[str, ...] = (
     "ref",
     "law_name",
@@ -59,7 +68,7 @@ OBLIGATION_COLUMNS: Tuple[str, ...] = (
     "inspection_cycle",
     "check_result",
     "canonical_source_text",
-)
+) + LEGAL_TIMING_COLUMNS + LEGAL_CYCLE_COLUMNS
 SCHEDULE_COLUMNS: Tuple[str, ...] = (
     "ref",
     "law_name",
@@ -68,7 +77,7 @@ SCHEDULE_COLUMNS: Tuple[str, ...] = (
     "inspection_cycle",
     "raw_cycle",
     "conflict",
-)
+) + LEGAL_TIMING_COLUMNS + LEGAL_CYCLE_COLUMNS
 ASSIGNMENT_COLUMNS: Tuple[str, ...] = (
     "ref",
     "law_name",
@@ -227,6 +236,19 @@ def _write_summary(ws: Worksheet, premium: Dict[str, Any]) -> None:
     _style_used(ws)
 
 
+def _flatten_legal_time_normalized(ob: Dict[str, Any]) -> Dict[str, Any]:
+    """legal_time_normalized.timing/cycle fields → cell keys. 재계산 0."""
+    lt = ob.get("legal_time_normalized")
+    lt = lt if isinstance(lt, dict) else {}
+    out: Dict[str, Any] = {}
+    for axis, prefix in (("timing", "legal_timing"), ("cycle", "legal_cycle")):
+        node = lt.get(axis)
+        node = node if isinstance(node, dict) else {}
+        for field in _LEGAL_TIME_NODE_FIELDS:
+            out["{}_{}".format(prefix, field)] = node.get(field)
+    return out
+
+
 def _obligation_base(ob: Dict[str, Any]) -> Dict[str, Any]:
     legal = _as_dict(ob.get("legal"))
     classification = _as_dict(ob.get("classification"))
@@ -234,7 +256,7 @@ def _obligation_base(ob: Dict[str, Any]) -> Dict[str, Any]:
     timing = _as_dict(ob.get("timing"))
     applicability = _as_dict(ob.get("applicability"))
     verification = _as_dict(ob.get("verification"))
-    return {
+    base = {
         "ref": ob.get("ref"),
         "law_name": legal.get("law_name"),
         "law_article": legal.get("law_article"),
@@ -251,6 +273,8 @@ def _obligation_base(ob: Dict[str, Any]) -> Dict[str, Any]:
         "conflict": timing.get("conflict"),
         "check_result": verification.get("check_result"),
     }
+    base.update(_flatten_legal_time_normalized(ob))
+    return base
 
 
 def _write_obligations(ws: Worksheet, premium: Dict[str, Any], rows: List[Dict[str, Any]]) -> None:

@@ -44,6 +44,7 @@ import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from services.obligation_presentation_mapper import map_diagnosis_presentation
+from services.legal_time_normalizer import normalize_obligation_legal_time
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 버전 상수
@@ -1192,6 +1193,9 @@ def build_paid_result_materials_v1(full_result: Any) -> Dict[str, Any]:
     for i, raw_ob in enumerate(raw_obligations):
         normalized = _normalize_obligation(raw_ob, i)
         normalized["presentation"] = map_diagnosis_presentation(raw_ob)
+        legal_time = normalize_obligation_legal_time(raw_ob)
+        if legal_time is not None:
+            normalized["legal_time_normalized"] = legal_time
         obligations.append(normalized)
     all_refs = [_ref(o) for o in obligations]
 

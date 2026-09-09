@@ -500,7 +500,8 @@ def test_schedule_and_assignments_are_1to1():
     wb = _load(build_paid_result_excel_v1(p))
     assert len(_rows(wb["Schedule"])) == 2
     assert len(_rows(wb["Assignments"])) == 2
-    assert _header(wb["Schedule"]) == [
+    sched = _header(wb["Schedule"])
+    assert sched[:7] == [
         "ref", "law_name", "law_article", "when", "inspection_cycle", "raw_cycle", "conflict",
     ]
     dumped = "\n".join("" if v is None else str(v) for v in _cell_values(wb))
