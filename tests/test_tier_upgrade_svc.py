@@ -466,6 +466,105 @@ def test_b3_11_postprocess_upgrade_bypasses_contract_writers(patch_prepare_sb, s
     assert calls["new"] == 0
 
 
+def test_c1_1_migration_enables_rls_without_policies():
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "migrations"
+        / "2026-09-10_saas_tier_upgrade_transitions.sql"
+    ).read_text()
+    assert "ENABLE ROW LEVEL SECURITY" in src
+    assert "CREATE POLICY" not in src.upper()
+
+
+def test_c1_2_transition_persist_fail_marks_payment_failed(patch_prepare_sb):
+    sb = patch_prepare_sb
+    real_table = sb.table
+
+    def table(name):
+        q = real_table(name)
+        if name == "saas_tier_upgrade_transitions":
+            q.insert = lambda payload: (_ for _ in ()).throw(RuntimeError("insert-fail"))
+        return q
+
+    sb.table = table
+    with pytest.raises(TierUpgradeError) as ei:
+        _prepare(sb)
+    assert ei.value.code == "TRANSITION_PERSIST_FAILED"
+    pays = [w for w in sb.writes if w[0] == "insert" and w[1] == "payments"]
+    assert len(pays) == 1
+    pay_id = pays[0][2]["id"]
+    row = next(p for p in sb.store["payments"] if p["id"] == pay_id)
+    assert row["status_code"] == "FAILED"
+    assert row["fail_reason"] == "TIER_UPGRADE_TRANSITION_PERSIST_FAILED"
+    failed_updates = [
+        w for w in sb.writes
+        if w[0] == "update" and w[1] == "payments" and w[2].get("status_code") == "FAILED"
+    ]
+    assert len(failed_updates) == 1
+    assert sb.store["saas_tier_upgrade_transitions"] == []
+
+
+def test_c1_3_cleanup_failure_preserves_transition_persist_error(patch_prepare_sb):
+    sb = patch_prepare_sb
+    real_table = sb.table
+
+    def table(name):
+        q = real_table(name)
+        if name == "saas_tier_upgrade_transitions":
+            q.insert = lambda payload: (_ for _ in ()).throw(RuntimeError("insert-fail"))
+        if name == "payments":
+            orig_update = q.update
+
+            def boom_update(payload):
+                if payload.get("status_code") == "FAILED":
+                    raise RuntimeError("cleanup-fail")
+                return orig_update(payload)
+
+            q.update = boom_update
+        return q
+
+    sb.table = table
+    with pytest.raises(TierUpgradeError) as ei:
+        _prepare(sb)
+    assert ei.value.code == "TRANSITION_PERSIST_FAILED"
+    assert "cleanup-fail" not in ei.value.message
+    assert "cleanup-fail" not in str(ei.value)
+
+
+def _postprocess_upgrade_notif(monkeypatch, sb, apply_status):
+    pay = _paid_upgrade(sb)
+    notif = {"n": 0}
+
+    def apply_spy(payment_id, supabase=None):
+        return {"status": apply_status}
+
+    monkeypatch.setattr(pp, "get_supabase", lambda: sb)
+    monkeypatch.setattr(pp, "_bootstrap_buyer_company_admin", lambda *a, **k: None)
+    monkeypatch.setattr(pp, "_fire_automation", lambda *a, **k: None)
+    monkeypatch.setattr(pp, "send_payment_notification", lambda *a, **k: notif.__setitem__("n", notif["n"] + 1))
+    monkeypatch.setattr("services.tier_upgrade_svc.apply_saas_tier_upgrade", apply_spy)
+    pp.on_payment_success_sync(pay["id"])
+    return notif["n"], pay
+
+
+def test_c1_4_applied_sends_notification(patch_prepare_sb, monkeypatch):
+    n, pay = _postprocess_upgrade_notif(monkeypatch, patch_prepare_sb, "APPLIED")
+    assert n == 1
+    assert pay["status_code"] == "PAID"
+
+
+def test_c1_5_apply_failed_skips_notification(patch_prepare_sb, monkeypatch):
+    n, pay = _postprocess_upgrade_notif(monkeypatch, patch_prepare_sb, "APPLY_FAILED")
+    assert n == 0
+    assert pay["status_code"] == "PAID"
+
+
+def test_c1_6_skip_skips_notification(patch_prepare_sb, monkeypatch):
+    n, pay = _postprocess_upgrade_notif(monkeypatch, patch_prepare_sb, "SKIP")
+    assert n == 0
+    assert pay["status_code"] == "PAID"
+
+
 def test_static_schema_and_source_guards():
     fields = set(UpgradePrepareBody.model_fields)
     forbidden = {

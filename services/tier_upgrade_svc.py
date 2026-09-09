@@ -145,6 +145,20 @@ def prepare_saas_tier_upgrade(
             raise RuntimeError("empty insert")
     except Exception as e:  # noqa: BLE001
         log.error("tier upgrade transition insert failed payment=%s: %s", payment_id, e)
+        try:
+            supabase.table("payments").update(
+                {
+                    "status_code": "FAILED",
+                    "fail_reason": "TIER_UPGRADE_TRANSITION_PERSIST_FAILED",
+                    "updated_at": now_iso(),
+                }
+            ).eq("id", payment_id).execute()
+        except Exception as cleanup_exc:  # noqa: BLE001
+            log.error(
+                "tier upgrade payment FAILED cleanup failed payment=%s: %s",
+                payment_id,
+                cleanup_exc,
+            )
         raise TierUpgradeError(
             "TRANSITION_PERSIST_FAILED",
             "업그레이드 이력을 저장하지 못해 결제를 진행할 수 없습니다.",

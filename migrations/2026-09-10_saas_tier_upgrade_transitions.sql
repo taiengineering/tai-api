@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS public.saas_tier_upgrade_transitions (
         CHECK (status IN ('PREPARED', 'APPLIED', 'APPLY_FAILED'))
 );
 
+-- backend service-role 전용. user-facing policy 0 (anon/authenticated direct = deny).
+ALTER TABLE public.saas_tier_upgrade_transitions
+    ENABLE ROW LEVEL SECURITY;
+
 DO $$
 BEGIN
     IF NOT EXISTS (
