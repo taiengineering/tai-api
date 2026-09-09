@@ -16,6 +16,7 @@ from clients import leg_runtime_client
 from clients.leg_runtime_client import LegRuntimeError
 from services.leg_diagnosis_svc import LegDiagnosisError
 from services.saas_diagnosis_result_persistence import SaasPersistError, finalize_saas_leg_result
+from services.tier_payment_gate_svc import TierGateError, evaluate_saas_tier_gate
 from services.legal_context import _factory_to_context, _survey_data_to_context
 from services.legal_format import CYCLE_CODE_MAP
 from services.legal_helpers import (
@@ -41,6 +42,33 @@ def _finalize_saas_leg_http(supabase, *, factory_id: str, leg_out: dict):
         raise HTTPException(status_code=404, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+_LEG_TIER_HTTP = {"PRICING_NOT_FOUND": 503}  # 그 외 contract/plan/entity/config = 409
+
+
+def _assert_saas_tier_fit_http(supabase, current, *, factory_id=None, site_id=None):
+    """SaaS LEG 실행 전 commercial gate. B2 evaluate 재사용. FIT 만 통과."""
+    try:
+        gate = evaluate_saas_tier_gate(supabase, current, factory_id=factory_id, site_id=site_id)
+    except TierGateError as e:
+        raise HTTPException(
+            status_code=_LEG_TIER_HTTP.get(e.code, 409),
+            detail={"code": e.code, "message": e.message},
+        ) from e
+    if gate.get("status") != "FIT":
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "SAAS_TIER_UPGRADE_REQUIRED",
+                "message": "현재 SaaS 이용등급으로는 이 법령의무 추출을 실행할 수 없습니다.",
+                "sector": gate.get("sector"),
+                "current_plan": gate.get("current_plan"),
+                "required_plan": gate.get("required_plan"),
+                "metric": gate.get("metric"),
+            },
+        )
+    return gate
 
 
 # v5.8.0 (2026-04-23): 조문 본문 연결 (rule_article_mapping 활용)
@@ -111,6 +139,7 @@ async def diagnose_industrial_leg(body: SafeIndustrialLegBody, authorization: Op
     supabase = get_supabase()
     current = get_current_user(authorization)                 # AUTH first (실패 시 assembler DB read 금지)
     _ensure_factory_own(supabase, body.factory_id, current)   # OWNERSHIP (타사 factory -> 404)
+    _assert_saas_tier_fit_http(supabase, current, factory_id=body.factory_id)
     if not leg_runtime_client.is_enabled():                   # LEG availability (TAI fallback 금지)
         raise HTTPException(status_code=503, detail="LEG runtime 미설정")
     try:
@@ -134,6 +163,7 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
     if not srow.data:
         raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
     _ensure_own_company(srow.data[0].get("company_id"), current, supabase, "현장을 찾을 수 없습니다.")
+    _assert_saas_tier_fit_http(supabase, current, site_id=body.site_id)
     if not leg_runtime_client.is_enabled():                   # LEG availability (TAI fallback 금지)
         raise HTTPException(status_code=503, detail="LEG runtime 미설정")
     try:
@@ -152,6 +182,7 @@ async def diagnose_building_leg(body: SafeBuildingLegBody, authorization: Option
     supabase = get_supabase()
     current = get_current_user(authorization)
     _ensure_factory_own(supabase, body.factory_id, current)
+    _assert_saas_tier_fit_http(supabase, current, factory_id=body.factory_id)
     if not leg_runtime_client.is_enabled():
         raise HTTPException(status_code=503, detail="LEG runtime 미설정")
     try:
