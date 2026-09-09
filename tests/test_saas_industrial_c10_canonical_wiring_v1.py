@@ -332,7 +332,8 @@ def test_T27_legacy_writer_auto_create_call_zero():
     src = inspect.getsource(LE.diagnose_industrial_leg)
     assert "auto_create_inspection_sets_from_diagnosis" not in src
     assert "inspection_set_auto" not in src
-    assert "run_saas_c10_and_materialize" in src
+    assert "_finalize_saas_leg_http" in src
+    assert "run_saas_c10_and_materialize" not in src
 
 
 def test_T28_cycle_anchor_write_zero():
@@ -350,16 +351,14 @@ def test_T29_schedule_write_zero():
     assert "generate_schedules" not in src
 
 
-def test_T30_building_construction_delta_zero():
+def test_T30_building_construction_share_common_finalizer():
     import routers.legal_engine as LE
-    assert "run_saas_c10_and_materialize" not in inspect.getsource(LE.diagnose_building_leg)
-    assert "run_saas_c10_and_materialize" not in inspect.getsource(LE.diagnose_construction_leg)
-    b_ret = inspect.getsource(LE.diagnose_building_leg)
-    c_ret = inspect.getsource(LE.diagnose_construction_leg)
-    assert "diagnosis_id" not in b_ret
-    assert "inspection_materialization" not in b_ret
-    assert "diagnosis_id" not in c_ret
-    assert "inspection_materialization" not in c_ret
+    for fn in (LE.diagnose_industrial_leg, LE.diagnose_building_leg, LE.diagnose_construction_leg):
+        src = inspect.getsource(fn)
+        assert "_finalize_saas_leg_http" in src
+        assert "run_saas_c10_and_materialize" not in src
+    helper = inspect.getsource(LE._finalize_saas_leg_http)
+    assert "finalize_saas_leg_result" in helper
 
 
 def test_industrial_leg_explicit_return_additive_company_id_from_factory(monkeypatch):

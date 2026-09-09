@@ -136,9 +136,30 @@ def run_saas_c10_and_materialize(
     }
 
 
+def finalize_saas_leg_result(supabase: Any, *, factory_id: str, leg_out: dict) -> dict:
+    """Official LEG out → C-10 persist + canonical materialization. HTTP 오류변환은 라우터."""
+    full_result = leg_out["full_result"]  # STEP A EXACT (transform 0)
+    fac = supabase.table("factories").select("company_id").eq("id", factory_id).limit(1).execute()
+    if not fac.data:
+        raise LookupError("사업장을 찾을 수 없습니다.")  # STEP B (domain error)
+    company_id = fac.data[0].get("company_id")
+    if not (isinstance(company_id, str) and company_id.strip()):
+        raise ValueError("company_id required")
+    wiring = run_saas_c10_and_materialize(supabase, factory_id, company_id, full_result)  # STEP C
+    return {  # STEP D common result
+        "status": "success",
+        "data": full_result,
+        "contract_version": leg_out["contract_version"],
+        "unresolved_fields": leg_out["unresolved_fields"],
+        "diagnosis_id": wiring["diagnosis_id"],
+        "inspection_materialization": wiring["inspection_materialization"],
+    }
+
+
 __all__ = [
     "persist_saas_full_result",
     "materialize_saas_inspection",
     "run_saas_c10_and_materialize",
+    "finalize_saas_leg_result",
     "SaasPersistError",
 ]

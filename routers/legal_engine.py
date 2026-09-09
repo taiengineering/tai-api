@@ -15,6 +15,7 @@ from services.company_scope import _ensure_own_company
 from clients import leg_runtime_client
 from clients.leg_runtime_client import LegRuntimeError
 from services.leg_diagnosis_svc import LegDiagnosisError
+from services.saas_diagnosis_result_persistence import SaasPersistError, finalize_saas_leg_result
 from services.legal_context import _factory_to_context, _survey_data_to_context
 from services.legal_format import CYCLE_CODE_MAP
 from services.legal_helpers import (
@@ -25,6 +26,22 @@ from services.legal_helpers import (
 )
 
 router = APIRouter(prefix="/legal-engine", tags=["법령엔진"])
+
+
+def _finalize_saas_leg_http(supabase, *, factory_id: str, leg_out: dict):
+    """Common SaaS LEG finalizer. HTTP 오류변환은 라우터. sector runtime except 와 분리.
+
+    SaasPersistError 는 ValueError 하위이므로 persist 실패(500)를 company_id(422)보다 먼저 매핑한다.
+    """
+    try:
+        return finalize_saas_leg_result(supabase, factory_id=factory_id, leg_out=leg_out)
+    except SaasPersistError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
 
 # v5.8.0 (2026-04-23): 조문 본문 연결 (rule_article_mapping 활용)
 #   - Phase A-1: fetch_article_contexts 헬퍼 + format_rule_result_db 확장
@@ -100,36 +117,7 @@ async def diagnose_industrial_leg(body: SafeIndustrialLegBody, authorization: Op
         out = run_safe_industrial_leg(supabase, body.factory_id, body.input)
     except (LegDiagnosisError, LegRuntimeError) as e:
         raise HTTPException(status_code=502, detail="LEG 실행 실패: {}".format(e))
-    from services.saas_diagnosis_result_persistence import (
-        SaasPersistError,
-        run_saas_c10_and_materialize,
-    )
-    full_result = out["full_result"]
-    # authoritative company_id: factories WHERE id=body.factory_id (body/full_result 추론 금지)
-    fac = (
-        supabase.table("factories")
-        .select("company_id")
-        .eq("id", body.factory_id)
-        .limit(1)
-        .execute()
-    )
-    if not fac.data:
-        raise HTTPException(status_code=404, detail="사업장을 찾을 수 없습니다.")
-    company_id = fac.data[0].get("company_id")
-    if not (isinstance(company_id, str) and company_id.strip()):
-        raise HTTPException(status_code=422, detail="company_id required")
-    try:
-        wiring = run_saas_c10_and_materialize(supabase, body.factory_id, company_id, full_result)
-    except SaasPersistError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
-    return {
-        "status": "success",
-        "data": full_result,
-        "contract_version": out["contract_version"],
-        "unresolved_fields": out["unresolved_fields"],
-        "diagnosis_id": wiring["diagnosis_id"],
-        "inspection_materialization": wiring["inspection_materialization"],
-    }
+    return _finalize_saas_leg_http(supabase, factory_id=body.factory_id, leg_out=out)
 
 
 @router.post("/diagnose/construction-leg")
@@ -154,12 +142,7 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
         raise HTTPException(status_code=409, detail=str(e))    # site↔factory 미연결 fail-closed
     except (LegDiagnosisError, LegRuntimeError) as e:
         raise HTTPException(status_code=502, detail="LEG 실행 실패: {}".format(e))
-    return {
-        "status": "success",
-        "data": out["full_result"],
-        "contract_version": out["contract_version"],
-        "unresolved_fields": out["unresolved_fields"],
-    }
+    return _finalize_saas_leg_http(supabase, factory_id=out["factory_id"], leg_out=out)
 
 
 
@@ -175,12 +158,7 @@ async def diagnose_building_leg(body: SafeBuildingLegBody, authorization: Option
         out = run_safe_building_leg(supabase, body.factory_id, body.input)
     except (LegDiagnosisError, LegRuntimeError) as e:
         raise HTTPException(status_code=502, detail="LEG 실행 실패: {}".format(e))
-    return {
-        "status": "success",
-        "data": out["full_result"],
-        "contract_version": out["contract_version"],
-        "unresolved_fields": out["unresolved_fields"],
-    }
+    return _finalize_saas_leg_http(supabase, factory_id=body.factory_id, leg_out=out)
 
 
 @router.get("/quote-result/{quote_id}")
