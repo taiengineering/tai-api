@@ -70,4 +70,5 @@ def run_safe_construction_leg(supabase, site_id: str, consumer_input) -> Dict[st
         "full_result": full_result,
         "contract_version": CONTRACT_VERSION,
         "unresolved_fields": sorted(unresolved),
+        "factory_id": factory_id,
     }

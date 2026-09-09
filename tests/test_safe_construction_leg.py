@@ -162,6 +162,7 @@ def test_G_run_leg_exactly_once(monkeypatch):
     assert cap["called"] == 1
     assert out["contract_version"] == CONTRACT_VERSION
     assert out["full_result"]["engine_family"] == "LEG"
+    assert out["factory_id"] == "F1"
 
 
 # ── D. explicit runtime override (false/0 보존) ────────────────────────
