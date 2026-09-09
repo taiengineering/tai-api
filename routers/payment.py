@@ -16,12 +16,15 @@ from __future__ import annotations
 
 import logging
 import urllib.parse
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _ensure_factory_own, _ensure_own_company
+from services.tier_payment_gate_svc import TierGateError, evaluate_saas_tier_gate
 from schemas.payment import (
     DiagnosisVbankPrepareBody,
     PartialRefundBody,
@@ -80,6 +83,67 @@ def payment_billing_terms_page():
 def payment_billing_pay_page():
     """빌링 결제 전용 페이지 — SaaS 구독 결제 시작점."""
     return HTMLResponse(content=load_template("billing_pay.html"), status_code=200)
+
+
+# ── SaaS tier gate (B2: READ + RESOLVE + COMPARE, 금액/결제 0) ──
+
+_TIER_GATE_HTTP = {
+    "INVALID_TARGET": 422,
+    "ENTITY_NOT_FOUND": 404,
+    "NO_ACTIVE_SAAS_CONTRACT": 409,
+    "AMBIGUOUS_ACTIVE_SAAS_CONTRACT": 409,
+    "UNKNOWN_CURRENT_PLAN": 409,
+    "AMBIGUOUS_CURRENT_PLAN": 409,
+    "ENTITY_SECTOR_MISMATCH": 409,
+    "MISSING_SCALE_VALUE": 409,
+    "INVALID_PLAN_ORDER": 409,
+    "PRICING_NOT_FOUND": 503,
+}
+
+
+@router.get("/tier-gate")
+def get_tier_gate(
+    factory_id: Optional[str] = Query(None),
+    site_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+):
+    """현재 계약 tier vs 필요 tier. factory_id XOR site_id. UPGRADE_REQUIRED 는 200."""
+    fid = (factory_id or "").strip() or None
+    sid = (site_id or "").strip() or None
+    if (fid is None) == (sid is None):
+        raise HTTPException(
+            status_code=422,
+            detail="factory_id 또는 site_id 중 하나만 전달해야 합니다.",
+        )
+
+    current = get_current_user(authorization)
+    supabase = get_supabase()
+
+    if fid:
+        _ensure_factory_own(supabase, fid, current)
+    else:
+        srow = (
+            supabase.table("construction_sites")
+            .select("company_id")
+            .eq("id", sid)
+            .limit(1)
+            .execute()
+        )
+        if not srow.data:
+            raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+        _ensure_own_company(
+            srow.data[0].get("company_id"), current, supabase, "현장을 찾을 수 없습니다."
+        )
+
+    try:
+        return evaluate_saas_tier_gate(
+            supabase, current, factory_id=fid, site_id=sid
+        )
+    except TierGateError as e:
+        raise HTTPException(
+            status_code=_TIER_GATE_HTTP.get(e.code, 409),
+            detail={"code": e.code, "message": e.message},
+        ) from e
 
 
 # ── 단건결제 ───────────────────────────────────────
