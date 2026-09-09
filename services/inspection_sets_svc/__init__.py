@@ -3,6 +3,7 @@ from services.health_registry import register_probe
 from .anchors import bulk_update_anchors, patch_set, set_anchor_bulk, update_anchor
 from .errors import InspectionSetsSvcError
 from .items import get_items_for_assignment, get_set_items, resolve_set_id_for_assignment
+from .operation_cycle import set_operation_cycle
 from .queries import (
     create_manual_set,
     generate_all_items,
@@ -27,6 +28,7 @@ __all__ = [
     "generate_schedules_for_factory",
     "patch_set",
     "update_anchor",
+    "set_operation_cycle",
     "generate_items_for_set",
     "get_company_sets",
     "get_factory_sets",
