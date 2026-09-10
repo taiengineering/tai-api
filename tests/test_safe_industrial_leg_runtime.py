@@ -16,6 +16,12 @@ from services import safe_industrial_leg_runtime as R
 from services.safe_industrial_canonical_assembler import TARGET_FIELDS, CONTRACT_VERSION
 from schemas.legal_engine import SafeIndustrialConsumerInput, SafeIndustrialLegBody, DiagnoseStep1Body
 
+def _fit_gate(*a, **k):
+    return {"status": "FIT", "sector": "INDUSTRY",
+            "current_plan": {"tier_code": "TEST_CURRENT"},
+            "required_plan": {"tier_code": "TEST_REQUIRED"}, "metric": {}}
+
+
 # ---- fake assembler contract (29 canonical) ----
 def _asset_contract(**over):
     values = {f: None for f in TARGET_FIELDS}
@@ -191,6 +197,7 @@ def test_G4A_leg_disabled_503(monkeypatch):
     monkeypatch.setattr(LE, "get_supabase", lambda: object())
     monkeypatch.setattr(LE, "get_current_user", lambda auth: {"id":"u1"})
     monkeypatch.setattr(LE, "_ensure_factory_own", lambda sb,fid,cur: None)
+    monkeypatch.setattr(LE, "evaluate_saas_tier_gate", _fit_gate)
     monkeypatch.setattr(LE.leg_runtime_client, "is_enabled", lambda: False)
     app=FastAPI(); app.include_router(LE.router); c=TestClient(app, raise_server_exceptions=False)
     r=c.post("/legal-engine/diagnose/industrial-leg", json={"factory_id":"F1","input":{}})
@@ -203,6 +210,7 @@ def test_G4A_leg_fail_502(monkeypatch):
     monkeypatch.setattr(LE, "get_supabase", lambda: object())
     monkeypatch.setattr(LE, "get_current_user", lambda auth: {"id":"u1"})
     monkeypatch.setattr(LE, "_ensure_factory_own", lambda sb,fid,cur: None)
+    monkeypatch.setattr(LE, "evaluate_saas_tier_gate", _fit_gate)
     monkeypatch.setattr(LE.leg_runtime_client, "is_enabled", lambda: True)
     monkeypatch.setattr(LE, "run_safe_industrial_leg",
                         lambda sb,fid,ci: (_ for _ in ()).throw(LE.LegRuntimeError("rtm down")))
