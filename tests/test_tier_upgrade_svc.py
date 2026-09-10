@@ -748,17 +748,46 @@ def test_c1_t5_other_company_contract_allowed(patch_prepare_sb, store, monkeypat
     assert companies == {CO_OWN, co2}
 
 
-@pytest.mark.parametrize("terminal", ["APPLIED", "APPLY_FAILED"])
-def test_c1_t6_terminal_transition_allows_new_prepare(patch_prepare_sb, store, monkeypatch, terminal):
+def test_c1_t6_applied_transition_allows_new_prepare(patch_prepare_sb, store, monkeypatch):
     calls = _spy_run_inicis(monkeypatch)
     _prepare(patch_prepare_sb)
-    store["saas_tier_upgrade_transitions"][0]["status"] = terminal
+    store["saas_tier_upgrade_transitions"][0]["status"] = "APPLIED"
     out = _prepare(patch_prepare_sb)
     assert out["status"] == "success"
     assert calls["n"] == 2
     assert len(store["payments"]) == 2
     prepared = [t for t in store["saas_tier_upgrade_transitions"] if t["status"] == "PREPARED"]
     assert len(prepared) == 1
+
+
+def test_c1_t6b_apply_failed_blocks_reprepare(patch_prepare_sb, store, monkeypatch):
+    calls = _spy_run_inicis(monkeypatch)
+    _prepare(patch_prepare_sb)
+    store["saas_tier_upgrade_transitions"][0]["status"] = "APPLY_FAILED"
+    pay_n = len(store["payments"])
+    tr_n = len(store["saas_tier_upgrade_transitions"])
+    with pytest.raises(TierUpgradeError) as ei:
+        _prepare(patch_prepare_sb)
+    assert ei.value.code == "TIER_UPGRADE_REPAIR_REQUIRED"
+    assert ei.value.message == (
+        "이미 결제된 업그레이드가 있으나 적용에 실패했습니다. 관리자 확인이 필요합니다."
+    )
+    assert calls["n"] == 1
+    assert len(store["payments"]) == pay_n
+    assert len(store["saas_tier_upgrade_transitions"]) == tr_n
+
+
+def test_c1_t6c_apply_failed_but_fit_is_already_fit(patch_prepare_sb, store, monkeypatch):
+    calls = _spy_run_inicis(monkeypatch)
+    _prepare(patch_prepare_sb)
+    store["saas_tier_upgrade_transitions"][0]["status"] = "APPLY_FAILED"
+    store["factories"][0]["employee_count"] = 10
+    store["contracts"][0]["plan_code"] = "INDUSTRY_PRO"
+    with pytest.raises(TierUpgradeError) as ei:
+        _prepare(patch_prepare_sb)
+    assert ei.value.code == "ALREADY_FIT"
+    assert calls["n"] == 1
+    assert len(store["payments"]) == 1
 
 
 def test_c1_t7_fit_wins_over_pending_guard(patch_prepare_sb, store):
@@ -822,5 +851,26 @@ def test_router_c1_already_pending_409(patch_prepare_sb, monkeypatch):
     assert second.status_code == 409
     assert second.json()["detail"]["code"] == "TIER_UPGRADE_ALREADY_PENDING"
     assert second.json()["detail"]["message"] == "이미 진행 중인 추가결제가 있습니다."
+    assert len(patch_prepare_sb.store["payments"]) == 1
+
+
+@requires_client
+def test_router_c1_apply_failed_repair_required_409(patch_prepare_sb, monkeypatch):
+    import routers.payment as pay_mod
+
+    monkeypatch.setattr(pay_mod, "get_supabase", lambda: patch_prepare_sb)
+    monkeypatch.setattr(pay_mod, "get_current_user", lambda authorization=None: CALLER)
+    app = FastAPI()
+    app.include_router(pay_mod.router)
+    with TestClient(app) as c:
+        first = c.post("/payments/tier-upgrade/prepare", json={"factory_id": FAC_IND})
+        patch_prepare_sb.store["saas_tier_upgrade_transitions"][0]["status"] = "APPLY_FAILED"
+        second = c.post("/payments/tier-upgrade/prepare", json={"factory_id": FAC_IND})
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert second.json()["detail"]["code"] == "TIER_UPGRADE_REPAIR_REQUIRED"
+    assert second.json()["detail"]["message"] == (
+        "이미 결제된 업그레이드가 있으나 적용에 실패했습니다. 관리자 확인이 필요합니다."
+    )
     assert len(patch_prepare_sb.store["payments"]) == 1
 

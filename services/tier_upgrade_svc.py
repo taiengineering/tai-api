@@ -88,7 +88,7 @@ def prepare_saas_tier_upgrade(
     target_code = (target_plan.get("tier_code") or "").strip()
     display = target_plan.get("display_name") or target_code
 
-    _reject_if_prepared_attempt_open(
+    _reject_if_open_attempt(
         supabase,
         company_id=ctx["company_id"],
         contract_id=ctx["contract"]["id"],
@@ -239,7 +239,7 @@ def apply_saas_tier_upgrade(payment_id: str, supabase=None) -> dict:
         return {"status": "APPLY_FAILED", "code": code}
 
 
-def _reject_if_prepared_attempt_open(
+def _reject_if_open_attempt(
     supabase,
     *,
     company_id,
@@ -248,18 +248,17 @@ def _reject_if_prepared_attempt_open(
     entity_id,
     target_plan_code,
 ) -> None:
-    """동일 대상 PREPARED attempt 가 있으면 새 PENDING 생성 금지. 조회 실패는 fail-closed."""
+    """PREPARED=진행중, APPLY_FAILED=결제됨·복구필요. 둘 다 새 PENDING 금지. 조회 실패는 fail-closed."""
     try:
         res = (
             supabase.table("saas_tier_upgrade_transitions")
-            .select("id")
+            .select("id, status")
             .eq("company_id", company_id)
             .eq("contract_id", contract_id)
             .eq("entity_type", entity_type)
             .eq("entity_id", entity_id)
             .eq("target_plan_code", target_plan_code)
-            .eq("status", "PREPARED")
-            .limit(1)
+            .in_("status", ["PREPARED", "APPLY_FAILED"])
             .execute()
         )
         existing = res.data
@@ -274,10 +273,16 @@ def _reject_if_prepared_attempt_open(
             "TRANSITION_PERSIST_FAILED",
             "진행 중인 추가결제를 확인하지 못해 결제를 진행할 수 없습니다.",
         )
-    if existing:
+    statuses = {(row.get("status") or "").strip().upper() for row in existing}
+    if "PREPARED" in statuses:
         raise TierUpgradeError(
             "TIER_UPGRADE_ALREADY_PENDING",
             "이미 진행 중인 추가결제가 있습니다.",
+        )
+    if "APPLY_FAILED" in statuses:
+        raise TierUpgradeError(
+            "TIER_UPGRADE_REPAIR_REQUIRED",
+            "이미 결제된 업그레이드가 있으나 적용에 실패했습니다. 관리자 확인이 필요합니다.",
         )
 
 
