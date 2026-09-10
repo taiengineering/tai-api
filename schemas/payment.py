@@ -102,6 +102,7 @@ class UpgradePrepareBody(BaseModel):
     buyername: Optional[str] = None
     buyertel: Optional[str] = None
     buyeremail: Optional[str] = None
+    return_url: Optional[str] = None
 
 
 class VbankPrepareBody(BaseModel):

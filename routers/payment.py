@@ -48,6 +48,17 @@ from services.payment_svc import (
     run_refund,
 )
 from services.payment_helpers import FRONT_RETURN_URL, load_template, now_iso as _now_iso, safe_front_return_url
+from services.payment_launch_svc import (
+    PaymentLaunchError,
+    assert_launchable_payment,
+    assert_launchable_transition,
+    attach_tier_upgrade_launch,
+    launch_security_headers,
+    render_launch_failure,
+    render_launch_success,
+    require_payment_launch_config,
+    verify_payment_launch_token,
+)
 
 log = logging.getLogger(__name__)
 
@@ -174,8 +185,15 @@ def prepare_tier_upgrade(
     current, supabase, fid, sid = _require_tier_entity(
         body.factory_id, body.site_id, authorization
     )
+    front = None
+    raw_front = (body.return_url or "").strip()
+    if raw_front:
+        front = safe_front_return_url(raw_front)
+        if not front:
+            raise HTTPException(status_code=422, detail="return_url이 허용되지 않습니다.")
     try:
-        return prepare_saas_tier_upgrade(
+        require_payment_launch_config()
+        prepared = prepare_saas_tier_upgrade(
             supabase,
             current,
             factory_id=fid,
@@ -184,10 +202,78 @@ def prepare_tier_upgrade(
             buyertel=body.buyertel,
             buyeremail=body.buyeremail,
         )
+        return attach_tier_upgrade_launch(prepared, front_return_url=front)
     except (TierGateError, TierUpgradeError) as e:
         raise _tier_http(e) from e
     except PaymentPrepareError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+    except PaymentLaunchError as e:
+        raise HTTPException(status_code=e.http_status, detail=e.message) from e
+
+
+_PAY_SELECT = "id,status_code,payment_type,inicis_order_id,total_amount"
+_TRANSITION_SELECT = "payment_id,status"
+
+
+async def _launch_token_from_request(request: Request) -> str:
+    try:
+        form = await request.form()
+        token = form.get("token")
+        if token:
+            return str(token)
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+@router.post("/tier-upgrade/pay", response_class=HTMLResponse)
+async def tier_upgrade_pay(request: Request):
+    """이미 준비된 UPGRADE 결제 1건을 검증해 INIStdPay 로 전달. DB mutation 0."""
+    headers = launch_security_headers()
+    try:
+        require_payment_launch_config()
+        token = await _launch_token_from_request(request)
+        envelope = verify_payment_launch_token(token)
+        payment_id = envelope["payment_id"]
+        provider = envelope["provider"]
+        supabase = get_supabase()
+        pay_res = (
+            supabase.table("payments")
+            .select(_PAY_SELECT)
+            .eq("id", payment_id)
+            .limit(1)
+            .execute()
+        )
+        payment = (pay_res.data or [None])[0]
+        assert_launchable_payment(payment, provider)
+        tr_res = (
+            supabase.table("saas_tier_upgrade_transitions")
+            .select(_TRANSITION_SELECT)
+            .eq("payment_id", payment_id)
+            .limit(1)
+            .execute()
+        )
+        transition = (tr_res.data or [None])[0]
+        assert_launchable_transition(transition, payment_id)
+        return HTMLResponse(
+            content=render_launch_success(provider),
+            status_code=200,
+            headers=headers,
+        )
+    except PaymentLaunchError as e:
+        log.warning("tier-upgrade launch rejected code=%s", e.code)
+        return HTMLResponse(
+            content=render_launch_failure(),
+            status_code=e.http_status,
+            headers=headers,
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("tier-upgrade launch rejected code=LAUNCH_INTERNAL")
+        return HTMLResponse(
+            content=render_launch_failure(),
+            status_code=403,
+            headers=headers,
+        )
 
 
 # ── 단건결제 ───────────────────────────────────────

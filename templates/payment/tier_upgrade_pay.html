@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>결제</title>
+  <style>
+    body{margin:0;font-family:sans-serif;background:#f8fafc;display:flex;justify-content:center;align-items:center;min-height:100vh}
+    .box{text-align:center;padding:40px}
+    p{color:#64748b;font-size:14px}
+  </style>
+</head>
+<body>
+  <div class="box">
+    <p id="statusText">결제창을 여는 중...</p>
+  </div>
+
+  <form id="SendPayForm_id" style="display:none">
+    <input type="hidden" name="version" value="1.0">
+    <input type="hidden" name="currency" value="WON">
+    <input type="hidden" name="mid" value="__mid__">
+    <input type="hidden" name="mKey" value="__mKey__">
+    <input type="hidden" name="oid" value="__oid__">
+    <input type="hidden" name="price" value="__price__">
+    <input type="hidden" name="goodname" value="__goodname__">
+    <input type="hidden" name="buyername" value="__buyername__">
+    <input type="hidden" name="buyertel" value="__buyertel__">
+    <input type="hidden" name="buyeremail" value="__buyeremail__">
+    <input type="hidden" name="timestamp" value="__timestamp__">
+    <input type="hidden" name="signature" value="__signature__">
+    <input type="hidden" name="verification" value="__verification__">
+    <input type="hidden" name="use_chkfake" value="__use_chkfake__">
+    <input type="hidden" name="returnUrl" value="__returnUrl__">
+    <input type="hidden" name="closeUrl" value="__closeUrl__">
+    <input type="hidden" name="charset" value="__charset__">
+    <input type="hidden" name="gopaymethod" value="__gopaymethod__">
+  </form>
+
+  <script src="https://stdpay.inicis.com/stdjs/INIStdPay.js" charset="UTF-8"></script>
+  <script>
+    INIStdPay.pay('SendPayForm_id');
+  </script>
+</body>
+</html>
