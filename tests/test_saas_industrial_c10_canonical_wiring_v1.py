@@ -21,6 +21,12 @@ from services.saas_diagnosis_result_persistence import (
 )
 
 
+def _fit_gate(*a, **k):
+    return {"status": "FIT", "sector": "INDUSTRY",
+            "current_plan": {"tier_code": "TEST_CURRENT"},
+            "required_plan": {"tier_code": "TEST_REQUIRED"}, "metric": {}}
+
+
 def _full(**over):
     f = {
         "sector": "INDUSTRIAL",
@@ -402,6 +408,7 @@ def test_industrial_leg_explicit_return_additive_company_id_from_factory(monkeyp
     monkeypatch.setattr(LE, "get_supabase", lambda: sb)
     monkeypatch.setattr(LE, "get_current_user", lambda authorization=None: {"id": "u"})
     monkeypatch.setattr(LE, "_ensure_factory_own", lambda *a, **k: None)
+    monkeypatch.setattr(LE, "evaluate_saas_tier_gate", _fit_gate)
     monkeypatch.setattr(LE.leg_runtime_client, "is_enabled", lambda: True)
     monkeypatch.setattr(LE, "run_safe_industrial_leg", lambda *a, **k: {
         "full_result": full,

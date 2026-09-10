@@ -92,6 +92,19 @@ class PrepareBody(BaseModel):
         return v
 
 
+class UpgradePrepareBody(BaseModel):
+    """SaaS 티어 업그레이드 준비 — POST /payments/tier-upgrade/prepare.
+
+    client 는 대상 식별자만. amount/plan/sector/contract/company 는 서버가 결정한다.
+    """
+    factory_id: Optional[str] = None
+    site_id: Optional[str] = None
+    buyername: Optional[str] = None
+    buyertel: Optional[str] = None
+    buyeremail: Optional[str] = None
+    return_url: Optional[str] = None
+
+
 class VbankPrepareBody(BaseModel):
     """VBANK 전용 결제 준비 — 연결 서비스(선임/컨설팅/수선) 전용"""
     user_id: Optional[str] = None

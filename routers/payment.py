@@ -16,17 +16,22 @@ from __future__ import annotations
 
 import logging
 import urllib.parse
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from db.supabase_client import get_supabase
+from routers.auth import get_current_user
+from services.company_scope import _ensure_factory_own, _ensure_own_company
+from services.tier_payment_gate_svc import TierGateError, evaluate_saas_tier_gate
+from services.tier_upgrade_svc import TierUpgradeError, prepare_saas_tier_upgrade
 from schemas.payment import (
     DiagnosisVbankPrepareBody,
     PartialRefundBody,
     PrepareBody,
     RefundBody,
+    UpgradePrepareBody,
     VbankPrepareBody,
 )
 from services.payment_svc import (
@@ -43,6 +48,17 @@ from services.payment_svc import (
     run_refund,
 )
 from services.payment_helpers import FRONT_RETURN_URL, load_template, now_iso as _now_iso, safe_front_return_url
+from services.payment_launch_svc import (
+    PaymentLaunchError,
+    assert_launchable_payment,
+    assert_launchable_transition,
+    attach_tier_upgrade_launch,
+    launch_security_headers,
+    render_launch_failure,
+    render_launch_success,
+    require_payment_launch_config,
+    verify_payment_launch_token,
+)
 
 log = logging.getLogger(__name__)
 
@@ -80,6 +96,186 @@ def payment_billing_terms_page():
 def payment_billing_pay_page():
     """빌링 결제 전용 페이지 — SaaS 구독 결제 시작점."""
     return HTMLResponse(content=load_template("billing_pay.html"), status_code=200)
+
+
+# ── SaaS tier gate (B2: READ + RESOLVE + COMPARE, 금액/결제 0) ──
+
+_TIER_GATE_HTTP = {
+    "INVALID_TARGET": 422,
+    "ENTITY_NOT_FOUND": 404,
+    "NO_ACTIVE_SAAS_CONTRACT": 409,
+    "AMBIGUOUS_ACTIVE_SAAS_CONTRACT": 409,
+    "UNKNOWN_CURRENT_PLAN": 409,
+    "AMBIGUOUS_CURRENT_PLAN": 409,
+    "ENTITY_SECTOR_MISMATCH": 409,
+    "MISSING_SCALE_VALUE": 409,
+    "INVALID_PLAN_ORDER": 409,
+    "PRICING_NOT_FOUND": 503,
+    "ALREADY_FIT": 409,
+    "MANUAL_QUOTE_REQUIRED": 409,
+    "UNSUPPORTED_PRICE_CONTRACT": 409,
+    "INVALID_UPGRADE_DELTA": 409,
+    "AMBIGUOUS_ACTIVE_SUBSCRIPTION": 409,
+    "TIER_UPGRADE_ALREADY_PENDING": 409,
+    "TIER_UPGRADE_REPAIR_REQUIRED": 409,
+    "TRANSITION_PERSIST_FAILED": 500,
+}
+
+
+def _require_tier_entity(
+    factory_id: Optional[str],
+    site_id: Optional[str],
+    authorization: Optional[str],
+):
+    """LEG 와 동일 ownership. factory_id XOR site_id."""
+    fid = (factory_id or "").strip() or None
+    sid = (site_id or "").strip() or None
+    if (fid is None) == (sid is None):
+        raise HTTPException(
+            status_code=422,
+            detail="factory_id 또는 site_id 중 하나만 전달해야 합니다.",
+        )
+    current = get_current_user(authorization)
+    supabase = get_supabase()
+    if fid:
+        _ensure_factory_own(supabase, fid, current)
+    else:
+        srow = (
+            supabase.table("construction_sites")
+            .select("company_id")
+            .eq("id", sid)
+            .limit(1)
+            .execute()
+        )
+        if not srow.data:
+            raise HTTPException(status_code=404, detail="현장을 찾을 수 없습니다.")
+        _ensure_own_company(
+            srow.data[0].get("company_id"), current, supabase, "현장을 찾을 수 없습니다."
+        )
+    return current, supabase, fid, sid
+
+
+def _tier_http(err) -> HTTPException:
+    return HTTPException(
+        status_code=_TIER_GATE_HTTP.get(err.code, 409),
+        detail={"code": err.code, "message": err.message},
+    )
+
+
+@router.get("/tier-gate")
+def get_tier_gate(
+    factory_id: Optional[str] = Query(None),
+    site_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+):
+    """현재 계약 tier vs 필요 tier. factory_id XOR site_id. UPGRADE_REQUIRED 는 200."""
+    current, supabase, fid, sid = _require_tier_entity(factory_id, site_id, authorization)
+    try:
+        return evaluate_saas_tier_gate(
+            supabase, current, factory_id=fid, site_id=sid
+        )
+    except TierGateError as e:
+        raise _tier_http(e) from e
+
+
+@router.post("/tier-upgrade/prepare")
+def prepare_tier_upgrade(
+    body: UpgradePrepareBody,
+    authorization: Optional[str] = Header(None),
+):
+    """서버권위 SaaS 업그레이드 결제 준비. client amount/plan 미수신."""
+    current, supabase, fid, sid = _require_tier_entity(
+        body.factory_id, body.site_id, authorization
+    )
+    front = None
+    raw_front = (body.return_url or "").strip()
+    if raw_front:
+        front = safe_front_return_url(raw_front)
+        if not front:
+            raise HTTPException(status_code=422, detail="return_url이 허용되지 않습니다.")
+    try:
+        require_payment_launch_config()
+        prepared = prepare_saas_tier_upgrade(
+            supabase,
+            current,
+            factory_id=fid,
+            site_id=sid,
+            buyername=body.buyername,
+            buyertel=body.buyertel,
+            buyeremail=body.buyeremail,
+        )
+        return attach_tier_upgrade_launch(prepared, front_return_url=front)
+    except (TierGateError, TierUpgradeError) as e:
+        raise _tier_http(e) from e
+    except PaymentPrepareError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+    except PaymentLaunchError as e:
+        raise HTTPException(status_code=e.http_status, detail=e.message) from e
+
+
+_PAY_SELECT = "id,status_code,payment_type,inicis_order_id,total_amount"
+_TRANSITION_SELECT = "payment_id,status"
+
+
+async def _launch_token_from_request(request: Request) -> str:
+    try:
+        form = await request.form()
+        token = form.get("token")
+        if token:
+            return str(token)
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+@router.post("/tier-upgrade/pay", response_class=HTMLResponse)
+async def tier_upgrade_pay(request: Request):
+    """이미 준비된 UPGRADE 결제 1건을 검증해 INIStdPay 로 전달. DB mutation 0."""
+    headers = launch_security_headers()
+    try:
+        require_payment_launch_config()
+        token = await _launch_token_from_request(request)
+        envelope = verify_payment_launch_token(token)
+        payment_id = envelope["payment_id"]
+        provider = envelope["provider"]
+        supabase = get_supabase()
+        pay_res = (
+            supabase.table("payments")
+            .select(_PAY_SELECT)
+            .eq("id", payment_id)
+            .limit(1)
+            .execute()
+        )
+        payment = (pay_res.data or [None])[0]
+        assert_launchable_payment(payment, provider)
+        tr_res = (
+            supabase.table("saas_tier_upgrade_transitions")
+            .select(_TRANSITION_SELECT)
+            .eq("payment_id", payment_id)
+            .limit(1)
+            .execute()
+        )
+        transition = (tr_res.data or [None])[0]
+        assert_launchable_transition(transition, payment_id)
+        return HTMLResponse(
+            content=render_launch_success(provider),
+            status_code=200,
+            headers=headers,
+        )
+    except PaymentLaunchError as e:
+        log.warning("tier-upgrade launch rejected code=%s", e.code)
+        return HTMLResponse(
+            content=render_launch_failure(),
+            status_code=e.http_status,
+            headers=headers,
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("tier-upgrade launch rejected code=LAUNCH_INTERNAL")
+        return HTMLResponse(
+            content=render_launch_failure(),
+            status_code=403,
+            headers=headers,
+        )
 
 
 # ── 단건결제 ───────────────────────────────────────

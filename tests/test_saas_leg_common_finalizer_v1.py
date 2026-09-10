@@ -27,6 +27,12 @@ _COMMON_KEYS = {
 }
 
 
+def _fit_gate(*a, **k):
+    return {"status": "FIT", "sector": "INDUSTRY",
+            "current_plan": {"tier_code": "TEST_CURRENT"},
+            "required_plan": {"tier_code": "TEST_REQUIRED"}, "metric": {}}
+
+
 class _FacQ:
     def __init__(self, sb):
         self.sb = sb
@@ -142,6 +148,7 @@ def test_T6_industrial_response_exact(monkeypatch):
     monkeypatch.setattr(LE, "get_supabase", lambda: sb)
     monkeypatch.setattr(LE, "get_current_user", lambda authorization=None: {"id": "u"})
     monkeypatch.setattr(LE, "_ensure_factory_own", lambda *a, **k: None)
+    monkeypatch.setattr(LE, "evaluate_saas_tier_gate", _fit_gate)
     monkeypatch.setattr(LE.leg_runtime_client, "is_enabled", lambda: True)
     monkeypatch.setattr(LE, "run_safe_industrial_leg", lambda *a, **k: _leg_out(full, contract_version="v-test", unresolved_fields=[]))
     body = SafeIndustrialLegBody(factory_id="f1", input=SafeIndustrialConsumerInput())
@@ -179,6 +186,7 @@ def test_T7_building_finalize_uses_body_factory_id(monkeypatch):
     monkeypatch.setattr(LE, "get_supabase", lambda: object())
     monkeypatch.setattr(LE, "get_current_user", lambda authorization=None: {"id": "u"})
     monkeypatch.setattr(LE, "_ensure_factory_own", lambda *a, **k: None)
+    monkeypatch.setattr(LE, "evaluate_saas_tier_gate", _fit_gate)
     monkeypatch.setattr(LE.leg_runtime_client, "is_enabled", lambda: True)
     monkeypatch.setattr(LE, "run_safe_building_leg", lambda *a, **k: _leg_out(full, contract_version="bld-v", unresolved_fields=["u1"]))
     monkeypatch.setattr(LE, "finalize_saas_leg_result", _fin)
@@ -234,6 +242,7 @@ def test_T8_construction_factory_id_from_runtime_not_site_id(monkeypatch):
     monkeypatch.setattr(LE, "get_supabase", lambda: _SiteSB())
     monkeypatch.setattr(LE, "get_current_user", lambda authorization=None: {"id": "u"})
     monkeypatch.setattr(LE, "_ensure_own_company", lambda *a, **k: None)
+    monkeypatch.setattr(LE, "evaluate_saas_tier_gate", _fit_gate)
     monkeypatch.setattr(LE.leg_runtime_client, "is_enabled", lambda: True)
     monkeypatch.setattr(LE, "run_safe_construction_leg", lambda *a, **k: {
         "full_result": full,
