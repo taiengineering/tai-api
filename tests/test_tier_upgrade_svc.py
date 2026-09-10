@@ -662,3 +662,165 @@ def test_router_b3_4_already_fit_409(monkeypatch):
     assert r.status_code == 409
     assert r.json()["detail"]["code"] == "ALREADY_FIT"
     assert store["payments"] == []
+
+
+def _spy_run_inicis(monkeypatch):
+    calls = {"n": 0}
+    orig = upgrade_svc.run_inicis_prepare
+
+    def wrapped(*a, **k):
+        calls["n"] += 1
+        return orig(*a, **k)
+
+    monkeypatch.setattr(upgrade_svc, "run_inicis_prepare", wrapped)
+    return calls
+
+
+def test_c1_t1_first_prepare_inserts_once(patch_prepare_sb, store, monkeypatch):
+    calls = _spy_run_inicis(monkeypatch)
+    out = _prepare(patch_prepare_sb)
+    assert out["status"] == "success"
+    assert calls["n"] == 1
+    assert len(store["payments"]) == 1
+    assert len(store["saas_tier_upgrade_transitions"]) == 1
+    assert store["saas_tier_upgrade_transitions"][0]["status"] == "PREPARED"
+
+
+def test_c1_t2_t3_repeat_same_target_blocked(patch_prepare_sb, store, monkeypatch):
+    calls = _spy_run_inicis(monkeypatch)
+    _prepare(patch_prepare_sb)
+    assert calls["n"] == 1
+    pay_n = len(store["payments"])
+    tr_n = len(store["saas_tier_upgrade_transitions"])
+    with pytest.raises(TierUpgradeError) as ei:
+        _prepare(patch_prepare_sb)
+    assert ei.value.code == "TIER_UPGRADE_ALREADY_PENDING"
+    assert ei.value.message == "이미 진행 중인 추가결제가 있습니다."
+    assert calls["n"] == 1
+    assert len(store["payments"]) == pay_n
+    assert len(store["saas_tier_upgrade_transitions"]) == tr_n
+
+
+def test_c1_t4_other_factory_allowed(patch_prepare_sb, store, monkeypatch):
+    fac2 = "fac-ind-2"
+    store["factories"].append(
+        {"id": fac2, "company_id": CO_OWN, "employee_count": 80, "building_area": 500}
+    )
+    calls = _spy_run_inicis(monkeypatch)
+    _prepare(patch_prepare_sb, factory_id=FAC_IND)
+    out = _prepare(patch_prepare_sb, factory_id=fac2)
+    assert out["status"] == "success"
+    assert calls["n"] == 2
+    assert len(store["payments"]) == 2
+    assert len(store["saas_tier_upgrade_transitions"]) == 2
+    entities = {t["entity_id"] for t in store["saas_tier_upgrade_transitions"]}
+    assert entities == {FAC_IND, fac2}
+
+
+def test_c1_t5_other_company_contract_allowed(patch_prepare_sb, store, monkeypatch):
+    co2 = "co-other"
+    fac2 = "fac-other"
+    store["factories"].append(
+        {"id": fac2, "company_id": co2, "employee_count": 80, "building_area": 500}
+    )
+    store["contracts"].append(
+        {
+            "id": "ct-other",
+            "company_id": co2,
+            "plan_code": "INDUSTRY_BUSINESS",
+            "service_type": "SAAS",
+            "status_code": "ACTIVE",
+            "is_active": True,
+            "start_date": "2026-01-01",
+            "end_date": "2026-12-31",
+            "contract_amount": CURRENT_SUPPLY,
+            "vat_amount": add_vat(CURRENT_SUPPLY) - CURRENT_SUPPLY,
+            "total_amount": add_vat(CURRENT_SUPPLY),
+            "paid_amount": add_vat(CURRENT_SUPPLY),
+        }
+    )
+    calls = _spy_run_inicis(monkeypatch)
+    _prepare(patch_prepare_sb, factory_id=FAC_IND)
+    out = _prepare(patch_prepare_sb, factory_id=fac2)
+    assert out["status"] == "success"
+    assert calls["n"] == 2
+    companies = {t["company_id"] for t in store["saas_tier_upgrade_transitions"]}
+    assert companies == {CO_OWN, co2}
+
+
+@pytest.mark.parametrize("terminal", ["APPLIED", "APPLY_FAILED"])
+def test_c1_t6_terminal_transition_allows_new_prepare(patch_prepare_sb, store, monkeypatch, terminal):
+    calls = _spy_run_inicis(monkeypatch)
+    _prepare(patch_prepare_sb)
+    store["saas_tier_upgrade_transitions"][0]["status"] = terminal
+    out = _prepare(patch_prepare_sb)
+    assert out["status"] == "success"
+    assert calls["n"] == 2
+    assert len(store["payments"]) == 2
+    prepared = [t for t in store["saas_tier_upgrade_transitions"] if t["status"] == "PREPARED"]
+    assert len(prepared) == 1
+
+
+def test_c1_t7_fit_wins_over_pending_guard(patch_prepare_sb, store):
+    _prepare(patch_prepare_sb)
+    store["factories"][0]["employee_count"] = 10
+    store["contracts"][0]["plan_code"] = "INDUSTRY_PRO"
+    with pytest.raises(TierUpgradeError) as ei:
+        _prepare(patch_prepare_sb)
+    assert ei.value.code == "ALREADY_FIT"
+    assert len(store["payments"]) == 1
+
+
+def test_c1_manual_quote_still_wins_over_pending(patch_prepare_sb, store):
+    _prepare(patch_prepare_sb)
+    store["factories"][0]["employee_count"] = 400
+    with pytest.raises(TierUpgradeError) as ei:
+        _prepare(patch_prepare_sb)
+    assert ei.value.code == "MANUAL_QUOTE_REQUIRED"
+    assert len(store["payments"]) == 1
+
+
+def test_c1_t8_pending_lookup_fail_closed(monkeypatch, store):
+    class _LookupFailSB(_FakeSB):
+        def table(self, name):
+            q = super().table(name)
+            if name != "saas_tier_upgrade_transitions":
+                return q
+            orig = q.execute
+
+            def execute():
+                if q._op == "select":
+                    raise RuntimeError("lookup failed")
+                return orig()
+
+            q.execute = execute
+            return q
+
+    sb = _LookupFailSB(store)
+    monkeypatch.setattr("services.payment_svc.get_supabase", lambda: sb)
+    calls = _spy_run_inicis(monkeypatch)
+    with pytest.raises(TierUpgradeError) as ei:
+        _prepare(sb)
+    assert ei.value.code == "TRANSITION_PERSIST_FAILED"
+    assert store["payments"] == []
+    assert store["saas_tier_upgrade_transitions"] == []
+    assert calls["n"] == 0
+
+
+@requires_client
+def test_router_c1_already_pending_409(patch_prepare_sb, monkeypatch):
+    import routers.payment as pay_mod
+
+    monkeypatch.setattr(pay_mod, "get_supabase", lambda: patch_prepare_sb)
+    monkeypatch.setattr(pay_mod, "get_current_user", lambda authorization=None: CALLER)
+    app = FastAPI()
+    app.include_router(pay_mod.router)
+    with TestClient(app) as c:
+        first = c.post("/payments/tier-upgrade/prepare", json={"factory_id": FAC_IND})
+        second = c.post("/payments/tier-upgrade/prepare", json={"factory_id": FAC_IND})
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert second.json()["detail"]["code"] == "TIER_UPGRADE_ALREADY_PENDING"
+    assert second.json()["detail"]["message"] == "이미 진행 중인 추가결제가 있습니다."
+    assert len(patch_prepare_sb.store["payments"]) == 1
+

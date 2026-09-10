@@ -489,9 +489,13 @@ def test_prepare_contract_adds_launch(monkeypatch):
 
 @requires_client
 def test_prepare_return_url_allowed_and_rejected(monkeypatch):
-    from tests.test_tier_upgrade_svc import CALLER, FAC_IND, _FakeSB, _base_store
+    from tests.test_tier_upgrade_svc import CALLER, CO_OWN, FAC_IND, _FakeSB, _base_store
 
     store = _base_store()
+    fac2 = "fac-ind-root"
+    store["factories"].append(
+        {"id": fac2, "company_id": CO_OWN, "employee_count": 80, "building_area": 500}
+    )
     sb = _FakeSB(store)
     monkeypatch.setattr("services.payment_svc.get_supabase", lambda: sb)
     import routers.payment as pay_mod
@@ -519,7 +523,7 @@ def test_prepare_return_url_allowed_and_rejected(monkeypatch):
         )
         ok_root = c.post(
             "/payments/tier-upgrade/prepare",
-            json={"factory_id": FAC_IND, "return_url": "https://taieng.co.kr/ok"},
+            json={"factory_id": fac2, "return_url": "https://taieng.co.kr/ok"},
         )
     assert ok.status_code == 200
     env = verify_payment_launch_token(ok.json()["launch"]["token"])
