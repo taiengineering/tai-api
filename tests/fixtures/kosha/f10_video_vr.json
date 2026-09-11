@@ -1,0 +1,20 @@
+{
+  "result": "success",
+  "payload": {
+    "list": [
+      {
+        "medSeq": 50127,
+        "medName": "[VR 콘텐츠 미리보기] 중대재해 사고사례",
+        "medNote": "미리보기",
+        "contsRegYmd": "20251028",
+        "contsFbctnShpCd": "2",
+        "contsFbctnShpNm": "동영상",
+        "medGonggongnuri": "04",
+        "medGonggongnuriNm": "제4유형",
+        "medThumbnailPath": "/t/50127.jpg",
+        "medFileYn": "N",
+        "ytbUrlAddr": null
+      }
+    ]
+  }
+}

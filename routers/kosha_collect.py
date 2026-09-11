@@ -39,6 +39,9 @@ from services.kosha_safety_material_sync import (
     sync_safety_materials,
     SupabaseSnapshotStore,
 )
+from services.kosha_safety_material_enrichment import dry_run_plan, run_one_batch
+from services.kosha_safety_materials.enrichment import snapshot_precondition
+from services.kosha_safety_materials.writer import SupabaseStore as EnrichmentStore
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/kosha-collect", tags=["KOSHA데이터수집"])
@@ -220,6 +223,29 @@ async def _collect_safety_materials(
     return {"target": "safety_materials", "start_page": start_page, "upserted": inserted, **result}
 
 
+def _collect_safety_material_details(dry_run: bool = True, batch_size: int = 100) -> dict:
+    """One batch of current-membership detail enrichment. Default dry_run=True."""
+    store = EnrichmentStore()
+    if dry_run:
+        plan = dry_run_plan(store, batch_size=batch_size)
+        _log("safety_material_details", "success", 0)
+        return {"target": "safety_material_details", **plan}
+    pre = snapshot_precondition(store)
+    result = run_one_batch(
+        store,
+        run_snapshot_id=pre["snapshot"]["id"],
+        batch_size=batch_size,
+        dry_run=False,
+    )
+    inserted = int(result.get("new_detail_rows") or 0)
+    status = result.get("status")
+    if status in ("BATCH_OK", "FULL_SWEEP_COMPLETE"):
+        _log("safety_material_details", "success", inserted)
+    else:
+        _log("safety_material_details", "fail", inserted, str(result.get("stop_reason") or status)[:300])
+    return {"target": "safety_material_details", **result}
+
+
 async def _collect_construction_accidents(since_date: str = INIT_DATE, full_refresh: bool = False) -> dict:
     sb = get_supabase()
     since = INIT_DATE if full_refresh else since_date
@@ -381,7 +407,8 @@ async def collect_all(
     full_refresh: bool = Query(False),
     background:   bool = Query(False),
     start_page:   int  = Query(1, ge=1, description="safety-materials 이어받기용 시작 페이지 (snapshot path는 1만 유효)"),
-    dry_run:      bool = Query(True, description="safety-materials snapshot: True면 DB mutation 0"),
+    dry_run:      bool = Query(True, description="safety-materials snapshot / details: True면 업무 DML 0"),
+    batch_size:   int  = Query(100, ge=1, le=200, description="safety-material-details 한 호출당 건수"),
 ):
     targets = [target] if target else [
         "accident-cases", "safety-materials", "construction-accidents",
@@ -392,7 +419,7 @@ async def collect_all(
         for t in targets:
             try:
                 since = since_date if full_refresh else _get_last_collected(t)
-                await _dispatch(t, since, full_refresh, start_page, dry_run)
+                await _dispatch(t, since, full_refresh, start_page, dry_run, batch_size)
             except Exception as e:
                 _log(t, "fail", 0, str(e)[:300])
 
@@ -406,7 +433,7 @@ async def collect_all(
     for t in targets:
         try:
             since = since_date if full_refresh else _get_last_collected(t)
-            r = await _dispatch(t, since, full_refresh, start_page, dry_run)
+            r = await _dispatch(t, since, full_refresh, start_page, dry_run, batch_size)
             results.append(r)
         except Exception as e:
             _log(t, "fail", 0, str(e)[:300])
@@ -414,9 +441,10 @@ async def collect_all(
     return {"status": "done", "results": results}
 
 
-async def _dispatch(target: str, since_date: str, full_refresh: bool, start_page: int = 1, dry_run: bool = True):
+async def _dispatch(target: str, since_date: str, full_refresh: bool, start_page: int = 1, dry_run: bool = True, batch_size: int = 100):
     if target == "accident-cases":            return await _collect_accident_cases(since_date, full_refresh)
     elif target == "safety-materials":        return await _collect_safety_materials(since_date, full_refresh, start_page, dry_run)
+    elif target == "safety-material-details": return _collect_safety_material_details(dry_run, batch_size)
     elif target == "construction-accidents":  return await _collect_construction_accidents(since_date, full_refresh)
     elif target == "construction-safety-light": return await _collect_safety_light()
     elif target == "risk-assessment":         return await _collect_risk_assessment(since_date, full_refresh)
