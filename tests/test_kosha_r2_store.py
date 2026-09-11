@@ -30,6 +30,9 @@ class FakeS3:
         self.heads = 0
         self.auth = False
         self.transient = False
+        self.read_chunk = 8
+        self.incomplete_reads = 0
+        self.reset_reads = 0
 
     def head_object(self, Bucket, Key):
         self.heads += 1
@@ -51,7 +54,19 @@ class FakeS3:
         self.gets += 1
         if Key not in self.objects:
             raise FakeErr("404", 404)
-        return {"Body": _Body(self.objects[Key]["Body"])}
+        data = self.objects[Key]["Body"]
+        body = self._body_for(data)
+        declared = getattr(body, "declared_length", len(data))
+        return {"Body": body, "ContentLength": declared}
+
+    def _body_for(self, data):
+        if self.incomplete_reads:
+            self.incomplete_reads -= 1
+            return IncompleteBody(data, keep=max(1, len(data) // 3))
+        if self.reset_reads:
+            self.reset_reads -= 1
+            return ResetBody(data, after=1)
+        return ChunkedBody(data, chunk=self.read_chunk)
 
     def put_object(self, Bucket, Key, Body, ContentType=None, Metadata=None):
         self.puts += 1
@@ -63,14 +78,42 @@ class FakeS3:
         }
 
 
-class _Body:
-    def __init__(self, data):
+class ChunkedBody:
+    """botocore-like: read(n) returns at most n, and may return even fewer."""
+
+    def __init__(self, data, chunk=8):
         self._d = data
+        self._i = 0
+        self._chunk = chunk
+        self.reads = 0
 
     def read(self, n=-1):
-        if n is None or n < 0:
-            return self._d
-        return self._d[:n]
+        self.reads += 1
+        if self._i >= len(self._d):
+            return b""
+        take = self._chunk
+        if n is not None and n >= 0:
+            take = min(take, n)
+        out = self._d[self._i:self._i + take]
+        self._i += len(out)
+        return out
+
+
+class IncompleteBody(ChunkedBody):
+    def __init__(self, data, keep=1):
+        super().__init__(data[:keep], chunk=8)
+        self.declared_length = len(data)
+
+
+class ResetBody(ChunkedBody):
+    def __init__(self, data, after=1):
+        super().__init__(data, chunk=8)
+        self._after = after
+
+    def read(self, n=-1):
+        if self.reads >= self._after:
+            raise ConnectionResetError("reset during body")
+        return super().read(n)
 
 
 def test_bucket_guards():
@@ -217,3 +260,89 @@ def test_classify_404_403_5xx():
     assert classify_client_error(FakeErr("404", 404)) == "MISSING"
     assert classify_client_error(FakeErr("AccessDenied", 403)) == "AUTH"
     assert classify_client_error(FakeErr("InternalError", 500)) == "TRANSIENT"
+
+
+def test_streaming_partial_chunks_and_large_object_sha():
+    from services.kosha_safety_materials.storage.r2_store import GET_ATTEMPTS
+
+    data = b"%PDF-" + bytes(range(256)) * 20
+    sha = hashlib.sha256(data).hexdigest()
+    s3 = FakeS3()
+    s3.read_chunk = 3
+    s3.objects["k"] = {"Body": data, "ContentType": "application/pdf", "Metadata": {}, "ETag": '"x"'}
+    st = R2Store(s3)
+    got = st.readback_verify("k", sha, sleeper=lambda s: None)
+    assert got["byte_count"] == len(data)
+    assert got["sha256"] == sha
+    assert s3.gets == 1
+
+    big = b"%PDF-" + (b"\x00" * (6_500_000))
+    big_sha = hashlib.sha256(big).hexdigest()
+    s3b = FakeS3()
+    s3b.read_chunk = 64 * 1024
+    s3b.objects["big"] = {"Body": big, "ContentType": "application/pdf", "Metadata": {}, "ETag": '"x"'}
+    st2 = R2Store(s3b)
+    got2 = st2.readback_verify("big", big_sha, sleeper=lambda s: None)
+    assert got2["byte_count"] == len(big)
+    assert GET_ATTEMPTS == 3
+
+
+def test_short_read_and_reset_retry_then_exhaust():
+    data = b"%PDF-complete-bytes"
+    sha = hashlib.sha256(data).hexdigest()
+    s3 = FakeS3()
+    s3.objects["k"] = {"Body": data, "ContentType": "application/pdf", "Metadata": {}, "ETag": '"x"'}
+    s3.incomplete_reads = 1
+    st = R2Store(s3)
+    st.readback_verify("k", sha, sleeper=lambda s: None)
+    assert s3.gets == 2
+
+    s3b = FakeS3()
+    s3b.objects["k"] = {"Body": data, "ContentType": "application/pdf", "Metadata": {}, "ETag": '"x"'}
+    s3b.reset_reads = 1
+    R2Store(s3b).readback_verify("k", sha, sleeper=lambda s: None)
+    assert s3b.gets == 2
+
+    s3c = FakeS3()
+    s3c.objects["k"] = {"Body": data, "ContentType": "application/pdf", "Metadata": {}, "ETag": '"x"'}
+    s3c.reset_reads = 99
+    try:
+        R2Store(s3c).readback_verify("k", sha, sleeper=lambda s: None)
+        assert False
+    except R2Error as e:
+        assert e.code == "R2_TRANSIENT"
+    assert s3c.gets == 3
+
+
+def test_complete_sha_mismatch_does_not_retry():
+    s3 = FakeS3()
+    st = R2Store(s3)
+    sha = hashlib.sha256(b"AAA").hexdigest()
+    st.put_new("k", b"AAA", content_type="application/octet-stream",
+               source_asset_key="s", material_id="m", content_sha256=sha)
+    s3.objects["k"]["Body"] = b"TAMPERED-FULL"
+    gets_before = s3.gets
+    try:
+        st.readback_verify("k", sha, sleeper=lambda s: None)
+        assert False
+    except R2Error as e:
+        assert e.code == "READBACK_MISMATCH"
+    assert s3.gets == gets_before + 1
+
+
+def test_verify_existing_does_full_get_even_when_metadata_sha_matches():
+    sha = hashlib.sha256(b"%PDF-ok").hexdigest()
+    s3 = FakeS3()
+    s3.objects["meta"] = {
+        "Body": b"%PDF-ok", "ContentType": "application/pdf",
+        "Metadata": {"tai-content-sha256": sha}, "ETag": '"not-sha"',
+    }
+    st = R2Store(s3)
+    assert st.verify_existing("meta", sha, sleeper=lambda s: None) == "OBJECT_EXISTS_VERIFIED"
+    assert s3.gets == 1
+    s3.objects["meta"]["Body"] = b"%PDF-NO"
+    try:
+        st.verify_existing("meta", sha, sleeper=lambda s: None)
+        assert False
+    except R2Error as e:
+        assert e.code == "R2_OBJECT_CONFLICT"

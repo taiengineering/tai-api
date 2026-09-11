@@ -36,9 +36,10 @@ def store_asset_original(
     version_payload: dict,
     dry_run: bool = False,
 ) -> dict:
-    """license → key → fetch → SHA → HEAD → PUT if absent → read-back → promote.
+    """license → fetch → source SHA → key → HEAD → PUT if absent → always full-byte readback → promote.
 
     dry_run: KOSHA GET 0, R2 PUT 0, version DML 0.
+    Existing object is never overwritten. Readback runs for PUT and OBJECT_EXISTS_VERIFIED.
     """
     if membership_ids is not None:
         assert_current_member(material_id, membership_ids)
@@ -77,8 +78,12 @@ def store_asset_original(
             material_id=material_id,
             content_sha256=sha,
         )
-        if put_status == "PUT":
+        try:
             r2.readback_verify(key, sha)
+        except R2Error as e:
+            if e.code == "READBACK_MISMATCH" and put_status != "PUT":
+                raise R2Error("R2_OBJECT_CONFLICT", key) from e
+            raise
     except R2Error as e:
         if e.code == "READBACK_MISMATCH":
             raise StorageError("READBACK_MISMATCH") from e

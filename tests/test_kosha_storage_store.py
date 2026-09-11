@@ -244,3 +244,89 @@ def test_transient_retry_creates_one_version_and_exhausted_does_no_dml(tmp_path)
     assert s3b.puts == 0
     assert vsb.rows == []
     assert vsb.dml == 0
+
+
+def test_always_readback_before_promote_for_existing_orphan():
+    sha = hashlib.sha256(PDF).hexdigest()
+    s3 = FakeS3()
+    r2 = R2Store(s3)
+    vs = MemoryVersionStore()
+
+    def fetch(**k):
+        return {"data": PDF, "sha256": sha, "content_type": "application/pdf"}
+
+    first = store_asset_original(
+        kogl_type="1", content_type="PDF", material_id="m1",
+        atcfl_no="N", atcfl_seq=1, file_name="a.pdf",
+        membership_ids={"m1"}, fetch_fn=fetch, r2=r2, versions=vs, version_payload=_payload(),
+    )
+    key = first["storage_key"]
+    assert s3.puts == 1
+    gets_after_first = s3.gets
+    assert gets_after_first >= 1
+
+    vs2 = MemoryVersionStore()
+    r2b = R2Store(s3)
+    resume = store_asset_original(
+        kogl_type="1", content_type="PDF", material_id="m1",
+        atcfl_no="N", atcfl_seq=1, file_name="a.pdf",
+        membership_ids={"m1"}, fetch_fn=fetch, r2=r2b, versions=vs2, version_payload=_payload(),
+    )
+    assert resume["status"] == "NEW_VERSION"
+    assert resume["put"] == "OBJECT_EXISTS_VERIFIED"
+    assert s3.puts == 1
+    assert s3.gets > gets_after_first
+    assert len(vs2.rows) == 1
+
+    vs3 = MemoryVersionStore()
+    s3.objects[key]["Body"] = b"%PDF-TAMPER"
+    try:
+        store_asset_original(
+            kogl_type="1", content_type="PDF", material_id="m1",
+            atcfl_no="N", atcfl_seq=1, file_name="a.pdf",
+            membership_ids={"m1"}, fetch_fn=fetch, r2=R2Store(s3), versions=vs3, version_payload=_payload(),
+        )
+        assert False
+    except StorageError as e:
+        assert e.code == "R2_OBJECT_CONFLICT"
+    assert vs3.dml == 0
+    assert vs3.rows == []
+    assert s3.puts == 1
+
+
+def test_readback_mismatch_is_not_hold_and_does_not_delete():
+    from services.kosha_safety_materials.storage.hold_store import MemoryHoldStore
+
+    sha = hashlib.sha256(PDF).hexdigest()
+    s3 = FakeS3()
+    r2 = R2Store(s3)
+    vs = MemoryVersionStore()
+    holds = MemoryHoldStore()
+
+    def fetch(**k):
+        return {"data": PDF, "sha256": sha, "content_type": "application/pdf"}
+
+    orig_put = r2.put_new
+
+    def put_then_tamper(*a, **kw):
+        st = orig_put(*a, **kw)
+        s3.objects[a[0]]["Body"] = b"TAMPER"
+        return st
+
+    r2.put_new = put_then_tamper  # type: ignore
+    try:
+        store_asset_original(
+            kogl_type="1", content_type="PDF", material_id="m1",
+            atcfl_no="N", atcfl_seq=1, file_name="a.pdf",
+            membership_ids={"m1"}, fetch_fn=fetch, r2=r2, versions=vs, version_payload=_payload(),
+        )
+        assert False
+    except StorageError as e:
+        assert e.code == "READBACK_MISMATCH"
+    assert vs.dml == 0
+    assert holds.rows == []
+    try:
+        r2.delete("any")
+        assert False
+    except R2Error as e:
+        assert e.code == "R2_DELETE_FORBIDDEN"

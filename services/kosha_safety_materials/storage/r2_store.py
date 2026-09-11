@@ -1,13 +1,17 @@
-"""Private R2 (S3-compatible) client — WP-1C-5A.
+"""Private R2 (S3-compatible) client — WP-1C-5A / PATCH-5B-R2-READBACK.
 
 CLI object-store helpers 금지. public URL / r2.dev 금지. DELETE 금지.
 ETag 는 content SHA 가 아니다.
+GET Body.read(amt) 는 at most amt — EOF까지 chunk loop 로만 완전 소비한다.
 """
 from __future__ import annotations
 
 import hashlib
+import http.client
 import os
-import tempfile
+import socket
+import ssl
+import time
 from typing import Any, Optional
 
 ALLOWED_BUCKET = "tai-kosha-originals"
@@ -16,6 +20,18 @@ PRIVATE_ENDPOINT_SUFFIX = ".r2.cloudflarestorage.com"
 META_SHA = "tai-content-sha256"
 META_SOURCE_KEY = "tai-source-asset-key"
 META_MATERIAL_ID = "tai-material-id"
+MAX_BYTES = 20 * 1024 * 1024
+READ_CHUNK = 64 * 1024
+GET_ATTEMPTS = 3
+GET_TRANSIENT_BACKOFF = (1.0, 3.0)
+_TRANSIENT_NET = (
+    ConnectionResetError,
+    TimeoutError,
+    BrokenPipeError,
+    socket.timeout,
+    ssl.SSLError,
+    http.client.IncompleteRead,
+)
 
 
 class R2Error(Exception):
@@ -88,6 +104,8 @@ def _http_status(exc: Exception) -> int | None:
 
 
 def classify_client_error(exc: Exception) -> str:
+    if isinstance(exc, _TRANSIENT_NET):
+        return "TRANSIENT"
     code = _code_of(exc)
     st = _http_status(exc)
     if code in ("404", "NoSuchKey", "NotFound", "404 Not Found") or st == 404:
@@ -97,6 +115,76 @@ def classify_client_error(exc: Exception) -> str:
     if (st is not None and st >= 500) or code in ("500", "503", "SlowDown", "InternalError"):
         return "TRANSIENT"
     return "HEAD_ERROR"
+
+
+def is_get_transient(exc: Exception) -> bool:
+    if isinstance(exc, R2Error) and exc.code in ("R2_READ_INCOMPLETE", "R2_TRANSIENT", "R2_HEAD_TRANSIENT"):
+        return True
+    return classify_client_error(exc) == "TRANSIENT"
+
+
+def consume_streaming_body(
+    body,
+    *,
+    declared_length: int | None = None,
+    max_bytes: int = MAX_BYTES,
+    chunk: int = READ_CHUNK,
+    collect: bool = False,
+) -> dict:
+    """Read until EOF. body.read(n) is at most n bytes — loop until empty."""
+    digest = hashlib.sha256()
+    total = 0
+    parts: list[bytes] = []
+    raw = body
+    if not hasattr(body, "read"):
+        if not isinstance(body, (bytes, bytearray)):
+            raise R2Error("R2_READ_INCOMPLETE", type(body).__name__)
+        raw_b = bytes(body)
+        total = len(raw_b)
+        if total > max_bytes:
+            raise R2Error("RESPONSE_TOO_LARGE")
+        if declared_length is not None and int(declared_length) != total:
+            raise R2Error("R2_READ_INCOMPLETE", f"declared={declared_length} actual={total}")
+        digest.update(raw_b)
+        return {
+            "sha256": digest.hexdigest(),
+            "byte_count": total,
+            "declared_length": declared_length,
+            "data": raw_b if collect else None,
+        }
+    try:
+        while True:
+            try:
+                piece = raw.read(chunk)
+            except _TRANSIENT_NET as e:
+                raise R2Error("R2_READ_INCOMPLETE", type(e).__name__) from e
+            if piece is None:
+                break
+            if not isinstance(piece, (bytes, bytearray)):
+                raise R2Error("R2_READ_INCOMPLETE", type(piece).__name__)
+            if len(piece) == 0:
+                break
+            total += len(piece)
+            if total > max_bytes:
+                raise R2Error("RESPONSE_TOO_LARGE")
+            digest.update(piece)
+            if collect:
+                parts.append(bytes(piece))
+    finally:
+        closer = getattr(raw, "close", None)
+        if callable(closer):
+            try:
+                closer()
+            except Exception:
+                pass
+    if declared_length is not None and int(declared_length) != total:
+        raise R2Error("R2_READ_INCOMPLETE", f"declared={declared_length} actual={total}")
+    return {
+        "sha256": digest.hexdigest(),
+        "byte_count": total,
+        "declared_length": declared_length,
+        "data": b"".join(parts) if collect else None,
+    }
 
 
 class R2Store:
@@ -134,43 +222,83 @@ class R2Store:
             "sha256_metadata": meta.get(META_SHA) or meta.get("tai-content-sha256"),
         }
 
-    def get_bytes(self, key: str, max_bytes: int = 20 * 1024 * 1024) -> bytes:
-        """Private R2 read-back only. Not a KOSHA source GET."""
-        self.gets += 1
-        r = self.client.get_object(Bucket=self.bucket, Key=key)
-        body = r["Body"]
-        data = body.read(max_bytes + 1) if hasattr(body, "read") else body
-        if len(data) > max_bytes:
-            raise R2Error("RESPONSE_TOO_LARGE")
-        return data
+    def _get_once(self, key: str, *, max_bytes: int, collect: bool) -> dict:
+        try:
+            r = self.client.get_object(Bucket=self.bucket, Key=key)
+        except R2Error:
+            raise
+        except Exception as e:
+            kind = classify_client_error(e)
+            if kind == "MISSING":
+                raise R2Error("VERSION_OBJECT_MISSING", key) from e
+            if kind == "AUTH":
+                raise R2Error("R2_ACCESS_BLOCKED", kind) from e
+            if kind == "TRANSIENT":
+                raise R2Error("R2_TRANSIENT", kind) from e
+            raise R2Error("R2_GET_ERROR", kind) from e
+        declared = r.get("ContentLength")
+        if declared is None:
+            meta = r.get("ResponseMetadata") or {}
+            headers = meta.get("HTTPHeaders") or {}
+            declared = headers.get("content-length")
+        if declared is not None:
+            try:
+                declared = int(declared)
+            except (TypeError, ValueError):
+                declared = None
+        return consume_streaming_body(
+            r.get("Body"),
+            declared_length=declared,
+            max_bytes=max_bytes,
+            collect=collect,
+        )
 
-    def verify_existing(self, key: str, expected_sha: str) -> str:
-        """HEAD then optional legacy GET. PUT/DELETE 없음. ETag ≠ SHA."""
+    def stream_get(
+        self,
+        key: str,
+        *,
+        max_bytes: int = MAX_BYTES,
+        collect: bool = False,
+        sleeper=time.sleep,
+    ) -> dict:
+        """Private R2 GET until EOF. Short/reset reads retry; complete SHA mismatch is not retried here."""
+        last: R2Error | None = None
+        for attempt in range(GET_ATTEMPTS):
+            self.gets += 1
+            try:
+                return self._get_once(key, max_bytes=max_bytes, collect=collect)
+            except R2Error as e:
+                if e.code in ("READBACK_MISMATCH", "RESPONSE_TOO_LARGE", "R2_ACCESS_BLOCKED",
+                              "VERSION_OBJECT_MISSING", "R2_OBJECT_CONFLICT"):
+                    raise
+                if e.code not in ("R2_READ_INCOMPLETE", "R2_TRANSIENT"):
+                    raise
+                last = e
+            except Exception as e:
+                if not is_get_transient(e):
+                    raise R2Error("R2_GET_ERROR", type(e).__name__) from e
+                last = R2Error("R2_TRANSIENT", type(e).__name__)
+            if attempt >= GET_ATTEMPTS - 1:
+                raise R2Error("R2_TRANSIENT", str(last) if last else "exhausted")
+            sleeper(GET_TRANSIENT_BACKOFF[attempt])
+        raise R2Error("R2_TRANSIENT")
+
+    def get_bytes(self, key: str, max_bytes: int = MAX_BYTES, *, sleeper=time.sleep) -> bytes:
+        """Private R2 read-back only. Not a KOSHA source GET. Streams to EOF."""
+        got = self.stream_get(key, max_bytes=max_bytes, collect=True, sleeper=sleeper)
+        return got["data"] or b""
+
+    def verify_existing(self, key: str, expected_sha: str, *, sleeper=time.sleep) -> str:
+        """HEAD then full-byte GET. PUT/DELETE 없음. ETag ≠ SHA. metadata SHA is not sufficient."""
         h = self.head(key)
         if not h["exists"]:
             raise R2Error("VERSION_OBJECT_MISSING", key)
-        meta_sha = h.get("sha256_metadata")
-        etag = (h.get("etag") or "").strip('"')
-        if meta_sha:
-            if meta_sha == expected_sha:
-                if etag and etag == expected_sha:
-                    pass  # coincidence only; SHA SoT is metadata
-                return "OBJECT_EXISTS_VERIFIED"
+        got = self.stream_get(key, collect=False, sleeper=sleeper)
+        if got["sha256"] != expected_sha:
             raise R2Error("R2_OBJECT_CONFLICT", key)
-        tmp = None
-        try:
-            fd, tmp = tempfile.mkstemp(prefix="kosha_r2_legacy_")
-            os.close(fd)
-            data = self.get_bytes(key)
-            with open(tmp, "wb") as f:
-                f.write(data)
-            calc = hashlib.sha256(data).hexdigest()
-            if calc != expected_sha:
-                raise R2Error("R2_OBJECT_CONFLICT", key)
-            return "LEGACY_OBJECT"
-        finally:
-            if tmp and os.path.isfile(tmp):
-                os.remove(tmp)
+        if h.get("sha256_metadata"):
+            return "OBJECT_EXISTS_VERIFIED"
+        return "LEGACY_OBJECT"
 
     def put_new(
         self,
@@ -184,10 +312,7 @@ class R2Store:
     ) -> str:
         h = self.head(key)
         if h["exists"]:
-            status = self.verify_existing(key, content_sha256)
-            if status in ("OBJECT_EXISTS_VERIFIED", "LEGACY_OBJECT"):
-                return "OBJECT_EXISTS_VERIFIED"
-            raise R2Error("R2_OBJECT_CONFLICT", key)
+            return "OBJECT_EXISTS_VERIFIED"
         meta = {
             META_SHA: content_sha256,
             META_SOURCE_KEY: source_asset_key,
@@ -212,11 +337,11 @@ class R2Store:
             raise R2Error("R2_PUT_ERROR", kind) from e
         return "PUT"
 
-    def readback_verify(self, key: str, expected_sha: str) -> None:
-        data = self.get_bytes(key)
-        calc = hashlib.sha256(data).hexdigest()
-        if calc != expected_sha:
+    def readback_verify(self, key: str, expected_sha: str, *, sleeper=time.sleep) -> dict:
+        got = self.stream_get(key, collect=False, sleeper=sleeper)
+        if got["sha256"] != expected_sha:
             raise R2Error("READBACK_MISMATCH", key)
+        return got
 
     def delete(self, key: str) -> None:
         raise R2Error("R2_DELETE_FORBIDDEN", key)
