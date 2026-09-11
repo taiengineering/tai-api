@@ -51,11 +51,41 @@ BLOCKED_CONTENT_TYPES = frozenset({
 
 class BinaryFetchError(Exception):
     def __init__(self, code: str, message: str = "", status: int | None = None,
-                 body_bytes_read: int = 0):
+                 body_bytes_read: int = 0, declared_content_length=None):
         super().__init__(message or code)
         self.code = code
         self.status = status
         self.body_bytes_read = body_bytes_read
+        self.declared_content_length = declared_content_length
+
+
+def is_http_200_empty_body(err: BinaryFetchError) -> bool:
+    """Confirmed empty download: HTTP 200 and zero body. Other EMPTY_BODY stays STOP."""
+    return (
+        getattr(err, "code", None) == "EMPTY_BODY"
+        and getattr(err, "status", None) == 200
+        and int(getattr(err, "body_bytes_read", 0) or 0) == 0
+    )
+
+
+def confirm_empty_binary_get(fetch_once):
+    """One confirmation GET after HTTP 200 + empty body. Does not HOLD HTML/PDF/JSON failures."""
+    try:
+        return fetch_once()
+    except BinaryFetchError as e:
+        if not is_http_200_empty_body(e):
+            raise
+        try:
+            return fetch_once()
+        except BinaryFetchError as e2:
+            if is_http_200_empty_body(e2):
+                raise BinaryFetchError(
+                    "SOURCE_BINARY_UNAVAILABLE",
+                    status=200,
+                    body_bytes_read=0,
+                    declared_content_length=getattr(e2, "declared_content_length", None),
+                ) from e2
+            raise
 
 
 def assert_binary_allowed(kogl_type: str | None, content_type: str | None) -> None:
@@ -177,6 +207,7 @@ def fetch_https_binary(
                 raise BinaryFetchError(
                     "TRANSIENT_UPSTREAM_FAILURE", str(e),
                     status=e.status, body_bytes_read=e.body_bytes_read,
+                    declared_content_length=getattr(e, "declared_content_length", None),
                 ) from e
             sleeper(DOWNLOAD_TRANSIENT_BACKOFF[attempt])
     raise last or BinaryFetchError("TRANSIENT_UPSTREAM_FAILURE")
@@ -226,20 +257,26 @@ def _fetch_https_binary_once(
         final = getattr(resp, "geturl", lambda: url)()
         assert_https_allowed(final, redirect=True if final != url else False)
         cl_raw = resp.headers.get("Content-Length") if resp.headers else None
+
+        def _fail(code, *, body=None, message=""):
+            return BinaryFetchError(
+                code, message,
+                status=getattr(resp, "status", None),
+                body_bytes_read=body_bytes_read if body is None else body,
+                declared_content_length=cl_raw,
+            )
+
         if cl_raw not in (None, ""):
             try:
                 cl_i = int(cl_raw)
             except (TypeError, ValueError):
                 cl_i = None
             if cl_i is not None and cl_i > max_bytes:
-                raise BinaryFetchError(
-                    "SOURCE_ASSET_OVERSIZE_POLICY", status=getattr(resp, "status", None),
-                    body_bytes_read=0,
-                )
+                raise _fail("SOURCE_ASSET_OVERSIZE_POLICY", body=0)
         ctype = _content_type(resp.headers)
         pre = classify_non_binary(ctype, b"")
         if pre:
-            raise BinaryFetchError(pre, status=getattr(resp, "status", None), body_bytes_read=0)
+            raise _fail(pre, body=0)
 
         hasher = hashlib.sha256()
         parent = os.path.dirname(dest_path)
@@ -254,43 +291,43 @@ def _fetch_https_binary_once(
                     raise
                 except Exception as e:
                     if is_download_transient(e):
-                        raise BinaryFetchError(
-                            "DOWNLOAD_TRANSIENT", type(e).__name__,
-                            status=getattr(resp, "status", None),
-                            body_bytes_read=body_bytes_read,
-                        ) from e
+                        raise _fail("DOWNLOAD_TRANSIENT", message=type(e).__name__) from e
                     raise
                 if not chunk:
                     break
                 body_bytes_read += len(chunk)
                 if body_bytes_read > max_bytes:
-                    raise BinaryFetchError(
-                        "SOURCE_ASSET_OVERSIZE_POLICY", status=getattr(resp, "status", None),
-                        body_bytes_read=body_bytes_read,
-                    )
+                    raise _fail("SOURCE_ASSET_OVERSIZE_POLICY")
                 if not first:
                     first = chunk[:16]
                     if expect_pdf:
-                        assert_pdf_payload(ctype, first)
+                        try:
+                            assert_pdf_payload(ctype, first)
+                        except BinaryFetchError as e:
+                            raise _fail(e.code) from e
                     else:
                         blocked = classify_non_binary(ctype, first)
                         if blocked:
-                            raise BinaryFetchError(blocked, status=getattr(resp, "status", None),
-                                                   body_bytes_read=body_bytes_read)
+                            raise _fail(blocked)
                 hasher.update(chunk)
                 out.write(chunk)
 
         if body_bytes_read <= 0:
-            raise BinaryFetchError("EMPTY_BODY", status=getattr(resp, "status", None), body_bytes_read=0)
+            raise _fail("EMPTY_BODY", body=0)
         if expect_pdf:
-            assert_pdf_payload(ctype, first)
+            try:
+                assert_pdf_payload(ctype, first)
+            except BinaryFetchError as e:
+                raise _fail(e.code) from e
 
         status = getattr(resp, "status", None)
         if status is None:
             status = getattr(resp, "code", 200)
         if not (200 <= int(status) < 300):
-            raise BinaryFetchError("DOWNLOAD_HTTP_ERROR", f"http {status}", status=status,
-                                   body_bytes_read=body_bytes_read)
+            raise BinaryFetchError(
+                "DOWNLOAD_HTTP_ERROR", f"http {status}", status=status,
+                body_bytes_read=body_bytes_read, declared_content_length=cl_raw,
+            )
         used_chain = rh.chain if rh is not None else chain
         return {
             "ok": True,

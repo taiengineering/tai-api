@@ -30,6 +30,13 @@ OVERSIZE_MIGRATION = os.path.abspath(os.path.join(
     HERE, "..", "supabase", "migrations",
     "20260912010000_kosha_safety_material_storage_holds_oversize.sql",
 ))
+UNAVAILABLE_SQL = os.path.abspath(os.path.join(
+    HERE, "..", "docs", "sql", "20260912_kosha_safety_material_storage_holds_unavailable.sql"
+))
+UNAVAILABLE_MIGRATION = os.path.abspath(os.path.join(
+    HERE, "..", "supabase", "migrations",
+    "20260912020000_kosha_safety_material_storage_holds_unavailable.sql",
+))
 
 
 def test_docs_sql_and_migration_are_identical():
@@ -59,6 +66,19 @@ def test_oversize_reason_additive_check_only():
     n = _norm(_sql(OVERSIZE_SQL))
     assert _sql(OVERSIZE_SQL) == _sql(OVERSIZE_MIGRATION)
     assert "drop constraint if exists kosha_safety_material_storage_holds_reason_check" in n
+    assert "source_asset_oversize_policy" in n
+    assert "create table" not in n
+    assert "drop table" not in n
+    assert "update " not in n
+    assert "delete " not in n
+    assert "alter table kosha_safety_materials" not in n
+
+
+def test_unavailable_reason_additive_check_only():
+    n = _norm(_sql(UNAVAILABLE_SQL))
+    assert _sql(UNAVAILABLE_SQL) == _sql(UNAVAILABLE_MIGRATION)
+    assert "drop constraint if exists kosha_safety_material_storage_holds_reason_check" in n
+    assert "source_binary_unavailable" in n
     assert "source_asset_oversize_policy" in n
     assert "create table" not in n
     assert "drop table" not in n

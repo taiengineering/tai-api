@@ -10,7 +10,12 @@ from .. import license_policy
 from .. import parser
 from ..detail_client import StopRun, fetch_attachments, fetch_detail
 from ..enrichment import snapshot_precondition
-from .binary_fetch import BinaryFetchError, fetch_attachment_binary, fetch_file_list
+from .binary_fetch import (
+    BinaryFetchError,
+    confirm_empty_binary_get,
+    fetch_attachment_binary,
+    fetch_file_list,
+)
 from .eligibility import (
     EligibilityError,
     is_eligible_asset,
@@ -20,7 +25,7 @@ from .eligibility import (
     require_asset_id,
     sort_pending_key,
 )
-from .hold_store import HOLD_REASONS, HoldError, assert_production_holds, oversize_report
+from .hold_store import HOLD_REASONS, HoldError, UNAVAILABLE_REASON, assert_production_holds, oversize_report
 from .limits import MAX_BINARY_BYTES, OVERSIZE_REASON, is_metadata_oversize, oversize_observed, parsed_file_size
 from .r2_store import R2Error, R2Store, credentials_from_env, make_s3_client
 from .resolve import ResolutionError, match_downloadable_file, match_logical_attachment
@@ -33,6 +38,19 @@ from .version_service import (
 
 BATCH_SIZE = 20
 CONCURRENCY = 1
+
+STOP_EVIDENCE_KEYS = (
+    "asset_id",
+    "material_id",
+    "file_name",
+    "file_size",
+    "source_med_seq",
+    "stop_reason",
+    "stop_subreason",
+    "http_status",
+    "body_bytes_read",
+    "declared_content_length",
+)
 
 
 def _utc() -> str:
@@ -51,6 +69,63 @@ def map_fetch_stop(err: Exception) -> None:
         raise StopRun("TRANSIENT_UPSTREAM_FAILURE")
     if getattr(err, "reason", None) in ("QUOTA_BLOCKED", "ACCESS_BLOCKED", "TRANSIENT_UPSTREAM_FAILURE"):
         raise err
+
+
+def stop_evidence_from_item(item: dict, *, reason: str, err=None, http_status=None) -> dict:
+    """Item + error fields for STOP JSON. Does not change HOLD/STOP policy."""
+    sub = None
+    body = None
+    declared = None
+    st = http_status
+    if err is not None:
+        sub = getattr(err, "subreason", None)
+        if not sub:
+            code = getattr(err, "code", None)
+            if code and code != reason:
+                sub = code
+            elif str(err) and str(err) != reason:
+                sub = str(err)
+        if st is None:
+            st = getattr(err, "http_status", None)
+        if st is None:
+            st = getattr(err, "status", None)
+        body = getattr(err, "body_bytes_read", None)
+        declared = getattr(err, "declared_content_length", None)
+    return {
+        "asset_id": item.get("asset_id"),
+        "material_id": item.get("material_id"),
+        "file_name": item.get("file_name"),
+        "file_size": item.get("file_size"),
+        "source_med_seq": item.get("source_med_seq"),
+        "stop_reason": reason,
+        "stop_subreason": sub,
+        "http_status": st,
+        "body_bytes_read": body,
+        "declared_content_length": declared,
+    }
+
+
+def attach_stop_evidence(stop: StopRun, item: dict, err=None) -> StopRun:
+    incoming = stop_evidence_from_item(
+        item, reason=stop.reason, err=err, http_status=stop.http_status,
+    )
+    for k, v in incoming.items():
+        if stop.evidence.get(k) is None:
+            stop.evidence[k] = v
+    if stop.http_status is None:
+        stop.http_status = incoming.get("http_status")
+    return stop
+
+
+def stop_run_payload(stop: StopRun) -> dict:
+    ev = stop.evidence or {}
+    out = {k: ev.get(k) for k in STOP_EVIDENCE_KEYS}
+    out["status"] = stop.reason
+    if out.get("stop_reason") is None:
+        out["stop_reason"] = stop.reason
+    if out.get("http_status") is None:
+        out["http_status"] = stop.http_status
+    return out
 
 
 class StorageQuery:
@@ -352,7 +427,11 @@ def _store_one(
         raise StorageError("BINARY_INTEGRITY_BLOCKED", type(e).__name__) from e
     parsed = parser.parse_detail(raw.get("json"), medseq, raw.get("status"))
     if parsed["status"] != "OK":
-        raise StorageError("BINARY_INTEGRITY_BLOCKED", parsed.get("failure_reason") or parsed["status"])
+        raise StorageError(
+            "BINARY_INTEGRITY_BLOCKED",
+            parsed.get("failure_reason") or parsed["status"],
+            subreason=parsed.get("failure_reason") or parsed["status"],
+        )
     fields = parsed["fields"]
     live_kogl = license_policy.normalize_kogl_type(None if fields.get("medGonggongnuri") is None else str(fields.get("medGonggongnuri")))
     changed = live_kogl_ok(item["kogl_type"], live_kogl)
@@ -390,7 +469,7 @@ def _store_one(
     expect_pdf = (item.get("asset_type") or "").upper() == "PDF"
 
     def fetch_fn(**kwargs):
-        try:
+        def _one_get():
             return fetch_binary_fn(
                 kogl_type=live_kogl,
                 content_type=item.get("content_type") or item.get("asset_type"),
@@ -400,13 +479,22 @@ def _store_one(
                 mime_type=dl.get("mime_type") or item.get("mime_type"),
                 expect_pdf=expect_pdf,
             )
+
+        try:
+            return confirm_empty_binary_get(_one_get)
         except BinaryFetchError as e:
-            if e.code == OVERSIZE_REASON:
+            if e.code in (OVERSIZE_REASON, UNAVAILABLE_REASON):
                 raise
             map_fetch_stop(e)
             if e.code == "TRANSIENT_UPSTREAM_FAILURE":
                 raise StopRun("TRANSIENT_UPSTREAM_FAILURE") from e
-            raise StorageError("BINARY_INTEGRITY_BLOCKED", e.code) from e
+            raise StorageError(
+                "BINARY_INTEGRITY_BLOCKED", e.code,
+                subreason=e.code,
+                http_status=e.status,
+                body_bytes_read=e.body_bytes_read,
+                declared_content_length=getattr(e, "declared_content_length", None),
+            ) from e
 
     payload = {
         "asset_id": item.get("asset_id"),
@@ -452,6 +540,21 @@ def _store_one(
                     extra={"body_bytes_read": e.body_bytes_read, "http_status": e.status},
                 ),
             )
+        if e.code == UNAVAILABLE_REASON:
+            held = _hold_asset(
+                holds, snapshot_id=snapshot_id, item=item, material_id=mid,
+                source_med_seq=medseq, reason=UNAVAILABLE_REASON,
+                observed_files=[{
+                    "file_name": item.get("file_name") or dl.get("file_name"),
+                    "expected_file_size": item.get("file_size"),
+                    "http_status": 200,
+                    "body_bytes_read": 0,
+                    "confirmation_count": 2,
+                    "observed_at": _utc(),
+                }],
+            )
+            held["binary_get"] = 2
+            return held
         raise
     cur = versions.current(out["source_asset_key"])
     if not cur or cur.get("content_checksum") != out["content_checksum"] or cur.get("storage_key") != out["storage_key"]:
@@ -486,18 +589,27 @@ def apply_assets(
                 item, membership_ids=membership_ids, r2=r2, versions=versions,
                 snapshot_id=snapshot_id, holds=holds,
             )
-        except StopRun:
+        except StopRun as e:
+            attach_stop_evidence(e, item, e.__cause__)
             raise
         except HoldError as e:
-            raise StopRun(e.code) from e
+            sr = StopRun(e.code)
+            attach_stop_evidence(sr, item, e)
+            raise sr from e
         except StorageError as e:
-            raise StopRun(e.code) from e
+            sr = StopRun(e.code, http_status=e.http_status)
+            attach_stop_evidence(sr, item, e)
+            raise sr from e
         except R2Error as e:
             if e.code in ("R2_HEAD_AUTH", "R2_ACCESS_BLOCKED"):
-                raise StopRun("R2_ACCESS_BLOCKED") from e
-            if e.code in ("R2_HEAD_TRANSIENT", "R2_TRANSIENT"):
-                raise StopRun("R2_TRANSIENT") from e
-            raise StopRun(e.code) from e
+                reason = "R2_ACCESS_BLOCKED"
+            elif e.code in ("R2_HEAD_TRANSIENT", "R2_TRANSIENT"):
+                reason = "R2_TRANSIENT"
+            else:
+                reason = e.code
+            sr = StopRun(reason)
+            attach_stop_evidence(sr, item, e)
+            raise sr from e
         last = r
         st = r.get("status")
         if st == "NO_CHANGE":

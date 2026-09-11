@@ -14,6 +14,7 @@ from services.kosha_safety_materials.storage.runner import (
     collect_eligible,
     dry_run_plan,
     lookup_eligible_item,
+    stop_run_payload,
     verify_pilot_objects,
 )
 from services.kosha_safety_materials.storage.store import StorageError
@@ -115,7 +116,7 @@ if __name__ == "__main__":
             extra = oversize_report(holds, snap.get("id"))
         except Exception:
             extra = {}
-        _print({"status": e.reason, "http_status": e.http_status, **extra}, 2)
+        _print({**stop_run_payload(e), **extra}, 2)
     except StorageError as e:
         _print({"status": e.code}, 2)
     except R2Error as e:

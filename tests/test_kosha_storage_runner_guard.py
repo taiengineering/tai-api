@@ -48,6 +48,8 @@ def test_apply_fail_closed_on_storage_error(monkeypatch):
         assert False
     except StopRun as e:
         assert e.reason == "BINARY_INTEGRITY_BLOCKED"
+        assert e.evidence.get("asset_id") == 1
+        assert e.evidence.get("material_id") == "m1"
 
 
 def test_apply_bulk_stops_when_pending_does_not_decrease(monkeypatch):

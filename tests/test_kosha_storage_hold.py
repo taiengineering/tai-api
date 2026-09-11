@@ -232,6 +232,7 @@ def test_empty_body_is_integrity_stop_not_hold():
         assert False
     except StorageError as e:
         assert e.code == "BINARY_INTEGRITY_BLOCKED"
+        assert e.subreason == "EMPTY_BODY"
         assert "EMPTY_BODY" in str(e)
     except StopRun as e:
         assert e.reason != "HOLD"

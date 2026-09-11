@@ -32,11 +32,13 @@ TRANSIENT_BACKOFF = (1.0, 3.0)
 
 
 class StopRun(Exception):
-    def __init__(self, reason: str, http_status: int | None = None, endpoint: str | None = None):
+    def __init__(self, reason: str, http_status: int | None = None, endpoint: str | None = None,
+                 evidence: dict | None = None):
         super().__init__(reason)
         self.reason = reason
         self.http_status = http_status
         self.endpoint = endpoint
+        self.evidence = dict(evidence or {})
 
 
 class MaterialFetchError(Exception):

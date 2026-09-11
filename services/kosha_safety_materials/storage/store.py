@@ -10,9 +10,22 @@ from .version_service import VersionError
 
 
 class StorageError(Exception):
-    def __init__(self, code: str, message: str = ""):
+    def __init__(
+        self,
+        code: str,
+        message: str = "",
+        *,
+        subreason: str | None = None,
+        http_status: int | None = None,
+        body_bytes_read=None,
+        declared_content_length=None,
+    ):
         super().__init__(message or code)
         self.code = code
+        self.subreason = subreason if subreason is not None else (message or None)
+        self.http_status = http_status
+        self.body_bytes_read = body_bytes_read
+        self.declared_content_length = declared_content_length
 
 
 def assert_current_member(material_id: str, membership_ids: set[str]) -> None:
