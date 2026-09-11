@@ -1018,6 +1018,18 @@ def test_T13_manual_row_without_assignee_still_schedules(monkeypatch):
     assert sb3.schedule_inserts
 
 
+def test_T13b_manual_with_assignee_keeps_schedule_assigned_none(monkeypatch):
+    """PATCH-1: MANUAL + assignee on set must NOT leak into work_schedules.assigned_user_id."""
+    from schemas.inspection_sets import InspectionSetPatchBody
+    sb = _WriteSB([_manual_row(assignee_user_id="USER-MANUAL")])
+    A, _ = _install_anchors(monkeypatch, sb)
+    out = A.patch_set("set-m", InspectionSetPatchBody(schedule_anchor_date="2026-01-15"))
+    assert out["status"] == "success"
+    assert sb.sets[0]["assignee_user_id"] == "USER-MANUAL"
+    assert len(sb.schedule_inserts) == 1
+    assert sb.schedule_inserts[0]["assigned_user_id"] is None
+
+
 def test_T14_legal_actor_not_used_as_assignee(monkeypatch):
     from schemas.inspection_sets import InspectionSetPatchBody
     row = _legacy_row(assignee_user_id=None)
