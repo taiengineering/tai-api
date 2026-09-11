@@ -43,13 +43,36 @@ def live_kogl_ok(db_kogl: str, live_kogl: str) -> str | None:
     return "LICENSE_CHANGED_REVIEW_REQUIRED"
 
 
+def _file_size_int(item: dict) -> int | None:
+    size = item.get("file_size")
+    if isinstance(size, bool):
+        return None
+    if isinstance(size, int):
+        return size
+    if isinstance(size, str) and size.isdigit():
+        return int(size)
+    return None
+
+
 def sort_pending_key(item: dict) -> tuple:
+    """Type1 → PDF → positive known size (small first) → size 0/NULL last.
+
+    Does not drop size 0/NULL from eligibility; those remain pending, just later.
+    """
     kogl = str(item.get("kogl_type") or "9")
     atype = str(item.get("asset_type") or "")
     pdf = 0 if atype == "PDF" else 1
-    size = item.get("file_size")
-    size_i = int(size) if isinstance(size, int) or (isinstance(size, str) and str(size).isdigit()) else 10**18
-    return (0 if kogl == "1" else 1, pdf, size_i, str(item.get("material_id") or ""), int(item.get("asset_id") or 0))
+    size_i = _file_size_int(item)
+    unknown = 0 if (size_i is not None and size_i > 0) else 1
+    size_rank = size_i if (size_i is not None and size_i > 0) else 0
+    return (
+        0 if kogl == "1" else 1,
+        pdf,
+        unknown,
+        size_rank,
+        str(item.get("material_id") or ""),
+        int(item.get("asset_id") or 0),
+    )
 
 
 def pending_without_version(eligible: list[dict], versioned_keys: set[str]) -> list[dict]:

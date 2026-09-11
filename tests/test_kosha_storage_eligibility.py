@@ -40,6 +40,19 @@ def test_eligibility_gates():
     assert live_kogl_ok("1", "3") == "LICENSE_CHANGED_REVIEW_REQUIRED"
 
 
+def test_pending_sort_positive_size_before_zero_and_keeps_zero():
+    elig = [
+        {"source_asset_key": "zero", "kogl_type": "1", "asset_type": "PDF", "file_size": 0, "material_id": "m0", "asset_id": 2029},
+        {"source_asset_key": "null", "kogl_type": "1", "asset_type": "PDF", "file_size": None, "material_id": "mN", "asset_id": 3},
+        {"source_asset_key": "big", "kogl_type": "1", "asset_type": "PDF", "file_size": 100, "material_id": "m2", "asset_id": 2},
+        {"source_asset_key": "small", "kogl_type": "1", "asset_type": "PDF", "file_size": 10, "material_id": "m1", "asset_id": 1},
+        {"source_asset_key": "img", "kogl_type": "1", "asset_type": "IMAGE", "file_size": 5, "material_id": "mI", "asset_id": 4},
+    ]
+    pending = pending_without_version(elig, set())
+    assert [p["source_asset_key"] for p in pending] == ["small", "big", "zero", "null", "img"]
+    assert "zero" in {p["source_asset_key"] for p in pending}
+
+
 def test_pending_excludes_versioned_and_historical():
     elig = [
         {"source_asset_key": "a", "kogl_type": "1", "asset_type": "PDF", "file_size": 9, "material_id": "m1", "asset_id": 2},
