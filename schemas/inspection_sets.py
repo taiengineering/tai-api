@@ -66,4 +66,4 @@ class OperationTimeRuleBody(BaseModel):
     basis_text: Optional[str] = None
     month: Annotated[Optional[int], Field(default=None, strict=True, ge=1, le=12)] = None
     day: Annotated[Optional[int], Field(default=None, strict=True, ge=1, le=31)] = None
-    # PATCH-R1: schedule materialization owned by daily generator — no create_schedule.
+    # PATCH-R1/R2: schedule materialization owned by daily generator — save-only body.
