@@ -1,5 +1,6 @@
 """WP-1C-5B eligibility + attachment resolution."""
 from services.kosha_safety_materials.storage.eligibility import (
+    EligibilityError,
     is_eligible_asset,
     is_eligible_detail,
     live_kogl_ok,
@@ -53,12 +54,32 @@ def test_pending_sort_positive_size_before_zero_and_keeps_zero():
     assert "zero" in {p["source_asset_key"] for p in pending}
 
 
+def test_pending_excludes_by_asset_id_even_if_checksum_differs():
+    elig = [
+        {"source_asset_key": "checksum-a", "kogl_type": "1", "asset_type": "PDF", "file_size": 9, "material_id": "m1", "asset_id": 10},
+        {"source_asset_key": "checksum-b", "kogl_type": "1", "asset_type": "PDF", "file_size": 3, "material_id": "m1", "asset_id": 11},
+    ]
+    pending = pending_without_version(elig, {10})
+    assert [p["asset_id"] for p in pending] == [11]
+
+
+def test_pending_null_asset_id_fail_closed():
+    try:
+        pending_without_version(
+            [{"source_asset_key": "x", "kogl_type": "1", "asset_type": "PDF", "file_size": 1, "material_id": "m1", "asset_id": None}],
+            set(),
+        )
+        assert False
+    except EligibilityError as e:
+        assert e.code == "ASSET_ID_REQUIRED"
+
+
 def test_pending_excludes_versioned_and_historical():
     elig = [
         {"source_asset_key": "a", "kogl_type": "1", "asset_type": "PDF", "file_size": 9, "material_id": "m1", "asset_id": 2},
         {"source_asset_key": "b", "kogl_type": "1", "asset_type": "PDF", "file_size": 3, "material_id": "m1", "asset_id": 1},
     ]
-    pending = pending_without_version(elig, {"a"})
+    pending = pending_without_version(elig, {2})
     assert [p["source_asset_key"] for p in pending] == ["b"]
 
 

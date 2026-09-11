@@ -12,10 +12,12 @@ from ..detail_client import StopRun, fetch_attachments, fetch_detail
 from ..enrichment import snapshot_precondition
 from .binary_fetch import BinaryFetchError, fetch_attachment_binary, fetch_file_list
 from .eligibility import (
+    EligibilityError,
     is_eligible_asset,
     is_eligible_detail,
     live_kogl_ok,
     pending_without_version,
+    require_asset_id,
     sort_pending_key,
 )
 from .r2_store import R2Error, R2Store, credentials_from_env, make_s3_client
@@ -54,24 +56,26 @@ class StorageQuery:
     def _range(self, q, start, n=1000):
         return q.range(start, start + n - 1).execute()
 
-    def versioned_source_keys(self) -> set[str]:
-        keys: set[str] = set()
+    def versioned_asset_ids(self) -> set:
+        ids: set = set()
         start = 0
         while True:
             r = self._range(
                 self.sb.table("kosha_safety_material_asset_versions")
-                .select("source_asset_key")
+                .select("asset_id")
                 .eq("is_current_version", True),
                 start,
             )
             batch = r.data or []
             for row in batch:
-                if row.get("source_asset_key"):
-                    keys.add(row["source_asset_key"])
+                aid = row.get("asset_id")
+                if aid is None or aid == "" or aid == "pending":
+                    raise StopRun("ASSET_ID_REQUIRED")
+                ids.add(aid)
             if len(batch) < 1000:
                 break
             start += 1000
-        return keys
+        return ids
 
     def details_for(self, material_ids: list[str]) -> dict[str, dict]:
         out: dict[str, dict] = {}
@@ -166,15 +170,18 @@ def collect_eligible(store, query: StorageQuery) -> dict:
             type1 += 1
         elif d.get("kogl_type") == "3":
             type3 += 1
-    versioned = query.versioned_source_keys()
-    pending = pending_without_version(eligible, versioned)
+    versioned_ids = query.versioned_asset_ids()
+    try:
+        pending = pending_without_version(eligible, versioned_ids)
+    except EligibilityError as e:
+        raise StopRun(e.code) from e
     return {
         "snapshot_id": snap["id"],
         "snapshot_hash": snap.get("snapshot_hash"),
         "membership": len(members),
         "eligible_materials": len({e["material_id"] for e in eligible}),
         "eligible_assets": len(eligible),
-        "already_versioned": sum(1 for e in eligible if e["source_asset_key"] in versioned),
+        "already_versioned": sum(1 for e in eligible if e.get("asset_id") in versioned_ids),
         "pending": pending,
         "pending_count": len(pending),
         "Type1": type1,
@@ -234,6 +241,10 @@ def _store_one(
     sleeper=time.sleep,
 ) -> dict:
     assert_production_versions(versions)
+    try:
+        require_asset_id(item)
+    except EligibilityError as e:
+        raise StorageError(e.code) from e
     mid = item["material_id"]
     if mid not in membership_ids:
         raise StorageError("HISTORICAL_STORAGE_FORBIDDEN")
@@ -391,16 +402,20 @@ def apply_bulk(store, query, r2, versions, *, batch_size: int = BATCH_SIZE, log=
     while True:
         plan = collect_eligible(store, query)
         pending = plan["pending"]
-        if not pending:
+        pending_before = len(pending)
+        if pending_before == 0:
             return {**totals, "remaining": 0, "status": "FULL_BULK_COMPLETE"}
         if max_batches is not None and totals["batches"] >= max_batches:
-            return {**totals, "remaining": len(pending), "status": "BATCH_OK"}
+            return {**totals, "remaining": pending_before, "status": "BATCH_OK"}
         chunk = pending[: max(1, min(int(batch_size), 50))]
-        log(f"batch selected={len(chunk)} remaining_before={len(pending)}")
+        log(f"batch selected={len(chunk)} remaining_before={pending_before}")
         r = apply_assets(chunk, store=store, query=query, r2=r2, versions=versions, log=log)
         totals["batches"] += 1
         for k in ("attempted", "stored", "NO_CHANGE", "NEW_VERSION", "PROMOTED_EXISTING_VERSION"):
             totals[k] += r[k]
-        if len(chunk) < batch_size:
-            plan2 = collect_eligible(store, query)
-            return {**totals, "remaining": plan2["pending_count"], "status": "FULL_BULK_COMPLETE" if plan2["pending_count"] == 0 else "BATCH_OK"}
+        plan2 = collect_eligible(store, query)
+        remaining = plan2["pending_count"]
+        if remaining >= pending_before:
+            raise StopRun("PENDING_NO_PROGRESS")
+        if remaining == 0:
+            return {**totals, "remaining": 0, "status": "FULL_BULK_COMPLETE"}

@@ -75,7 +75,26 @@ def sort_pending_key(item: dict) -> tuple:
     )
 
 
-def pending_without_version(eligible: list[dict], versioned_keys: set[str]) -> list[dict]:
-    out = [e for e in eligible if e.get("source_asset_key") not in versioned_keys]
+class EligibilityError(Exception):
+    def __init__(self, code: str, message: str = ""):
+        super().__init__(message or code)
+        self.code = code
+
+
+def require_asset_id(item: dict):
+    aid = item.get("asset_id")
+    if aid is None or aid == "" or aid == "pending":
+        raise EligibilityError("ASSET_ID_REQUIRED")
+    return aid
+
+
+def pending_without_version(eligible: list[dict], versioned_asset_ids: set) -> list[dict]:
+    """Pending = eligible whose asset_id has no current version. checksum is not the checkpoint."""
+    out = []
+    versioned = set(versioned_asset_ids)
+    for e in eligible:
+        aid = require_asset_id(e)
+        if aid not in versioned:
+            out.append(e)
     out.sort(key=sort_pending_key)
     return out
