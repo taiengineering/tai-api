@@ -88,13 +88,22 @@ def require_asset_id(item: dict):
     return aid
 
 
-def pending_without_version(eligible: list[dict], versioned_asset_ids: set) -> list[dict]:
-    """Pending = eligible whose asset_id has no current version. checksum is not the checkpoint."""
+def pending_without_version(
+    eligible: list[dict],
+    versioned_asset_ids: set,
+    held_asset_ids: set | None = None,
+) -> list[dict]:
+    """Actionable pending = eligible minus current versions minus OPEN holds.
+
+    Holds are not storage completion. checksum is not the checkpoint.
+    """
     out = []
     versioned = set(versioned_asset_ids)
+    held = set(held_asset_ids or ())
     for e in eligible:
         aid = require_asset_id(e)
-        if aid not in versioned:
-            out.append(e)
+        if aid in versioned or aid in held:
+            continue
+        out.append(e)
     out.sort(key=sort_pending_key)
     return out

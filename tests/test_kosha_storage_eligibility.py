@@ -99,14 +99,14 @@ def test_logical_match_exact_and_blocks():
             requested_med_seq="10", response_med_seq="99",
         )
         assert False
-    except ResolutionError:
-        pass
+    except ResolutionError as e:
+        assert e.code == "SOURCE_ASSET_RESOLUTION_BLOCKED"
     js0 = {"payload": {"list": []}}
     try:
         match_logical_attachment(material_id="m1", expected_checksum=sak, expected_filename="a.pdf", atch_json=js0)
         assert False
-    except ResolutionError:
-        pass
+    except ResolutionError as e:
+        assert e.code == "SOURCE_ASSET_ZERO_MATCH"
     js2 = {"payload": {"list": [
         {"contsAtcflNo": "NO", "contsAtcflSeq": 1, "orgnlAtchFileNm": "a.pdf"},
         {"contsAtcflNo": "NO", "contsAtcflSeq": 1, "orgnlAtchFileNm": "a.pdf"},
@@ -114,15 +114,15 @@ def test_logical_match_exact_and_blocks():
     try:
         match_logical_attachment(material_id="m1", expected_checksum=sak, expected_filename="a.pdf", atch_json=js2)
         assert False
-    except ResolutionError:
-        pass
+    except ResolutionError as e:
+        assert e.code == "SOURCE_ASSET_MULTI_MATCH"
     try:
         match_logical_attachment(
             material_id="m1", expected_checksum=sak, expected_filename="other.pdf", atch_json=js,
         )
         assert False
-    except ResolutionError:
-        pass
+    except ResolutionError as e:
+        assert e.code == "SOURCE_ASSET_FILENAME_MISMATCH"
 
 
 def test_downloadable_file_exact_and_blocks():
@@ -132,15 +132,41 @@ def test_downloadable_file_exact_and_blocks():
     try:
         match_downloadable_file([], file_name="a.pdf", atcfl_no="NO")
         assert False
-    except ResolutionError:
-        pass
+    except ResolutionError as e:
+        assert e.code == "SOURCE_ASSET_ZERO_MATCH"
     try:
         match_downloadable_file(files + files, file_name="a.pdf", atcfl_no="NO")
         assert False
-    except ResolutionError:
-        pass
+    except ResolutionError as e:
+        assert e.code == "SOURCE_ASSET_MULTI_MATCH"
     try:
         match_downloadable_file(files, file_name="b.pdf", atcfl_no="NO")
         assert False
-    except ResolutionError:
-        pass
+    except ResolutionError as e:
+        assert e.code == "SOURCE_ASSET_FILENAME_MISMATCH"
+
+
+def test_4523_style_filename_mismatch_is_hold_reason_not_fuzzy():
+    files = [
+        {"atcflNo": "FL00014173601", "atcflSeq": 1, "orgnlAtchFileNm": "[2017-교육미디어-405]-리프트 점검_표지.ai"},
+        {"atcflNo": "FL00014173601", "atcflSeq": 2, "orgnlAtchFileNm": "[2017-교육미디어-405] 리프트 점검.pdf"},
+    ]
+    try:
+        match_downloadable_file(
+            files, file_name="[2017-교육미디어-405]-리프트 점검_표지.pdf", atcfl_no="FL00014173601",
+        )
+        assert False
+    except ResolutionError as e:
+        assert e.code == "SOURCE_ASSET_FILENAME_MISMATCH"
+        names = [x["file_name"] for x in e.observed_files]
+        assert "[2017-교육미디어-405]-리프트 점검_표지.ai" in names
+        assert "[2017-교육미디어-405] 리프트 점검.pdf" in names
+
+
+def test_pending_excludes_open_holds_but_not_as_versioned():
+    elig = [
+        {"source_asset_key": "a", "kogl_type": "1", "asset_type": "PDF", "file_size": 9, "material_id": "m1", "asset_id": 4523},
+        {"source_asset_key": "b", "kogl_type": "1", "asset_type": "PDF", "file_size": 3, "material_id": "m1", "asset_id": 1},
+    ]
+    pending = pending_without_version(elig, set(), {4523})
+    assert [p["asset_id"] for p in pending] == [1]

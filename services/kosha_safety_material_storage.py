@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from services.kosha_safety_materials.detail_client import StopRun
+from services.kosha_safety_materials.storage.hold_store import SupabaseHoldStore
 from services.kosha_safety_materials.storage.r2_store import R2Error, R2Store, credentials_from_env, make_s3_client
 from services.kosha_safety_materials.storage.runner import (
     apply_assets,
@@ -65,8 +66,9 @@ if __name__ == "__main__":
     args = p.parse_args()
     store = SupabaseStore()
     query = StorageQuery(store.sb)
+    holds = SupabaseHoldStore(store.sb)
     if args.dry_run or (not args.apply and not args.verify_pilot):
-        out = dry_run_plan(store, query)
+        out = dry_run_plan(store, query, holds=holds)
         try:
             credentials_from_env()
             out["r2_credentials"] = "PRESENT"
@@ -85,13 +87,13 @@ if __name__ == "__main__":
             out["status"] = "PILOT_OK"
             _print(out, 0)
         if args.apply and args.limit:
-            plan = collect_eligible(store, query)
+            plan = collect_eligible(store, query, holds=holds)
             items = plan["pending"][: args.limit]
-            out = apply_assets(items, store=store, query=query, r2=r2, versions=versions)
+            out = apply_assets(items, store=store, query=query, r2=r2, versions=versions, holds=holds)
             out["status"] = "CONTROLLED"
             _print(out, 0)
         if args.apply:
-            out = apply_bulk(store, query, r2, versions, batch_size=args.batch_size)
+            out = apply_bulk(store, query, r2, versions, holds=holds, batch_size=args.batch_size)
             _print(out, 0)
     except StopRun as e:
         _print({"status": e.reason, "http_status": e.http_status}, 2)

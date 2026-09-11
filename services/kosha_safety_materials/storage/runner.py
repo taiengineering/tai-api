@@ -20,6 +20,7 @@ from .eligibility import (
     require_asset_id,
     sort_pending_key,
 )
+from .hold_store import HOLD_REASONS, HoldError, assert_production_holds
 from .r2_store import R2Error, R2Store, credentials_from_env, make_s3_client
 from .resolve import ResolutionError, match_downloadable_file, match_logical_attachment
 from .store import StorageError, store_asset_original
@@ -130,7 +131,11 @@ class StorageQuery:
         return rows
 
 
-def collect_eligible(store, query: StorageQuery) -> dict:
+def _sweep_status(held: int) -> str:
+    return "FULL_BULK_COMPLETE" if int(held or 0) == 0 else "STORAGE_SWEEP_COMPLETE"
+
+
+def collect_eligible(store, query: StorageQuery, *, holds=None) -> dict:
     pre = snapshot_precondition(store)
     snap = pre["snapshot"]
     members = pre["membership"]
@@ -173,17 +178,24 @@ def collect_eligible(store, query: StorageQuery) -> dict:
         elif d.get("kogl_type") == "3":
             type3 += 1
     versioned_ids = query.versioned_asset_ids()
+    held_ids: set = set()
+    if holds is not None:
+        held_ids = set(holds.open_asset_ids(snap["id"]))
     try:
-        pending = pending_without_version(eligible, versioned_ids)
+        pending = pending_without_version(eligible, versioned_ids, held_ids)
     except EligibilityError as e:
         raise StopRun(e.code) from e
+    already_versioned = sum(1 for e in eligible if e.get("asset_id") in versioned_ids)
+    held = sum(1 for e in eligible if e.get("asset_id") in held_ids and e.get("asset_id") not in versioned_ids)
     return {
         "snapshot_id": snap["id"],
         "snapshot_hash": snap.get("snapshot_hash"),
         "membership": len(members),
         "eligible_materials": len({e["material_id"] for e in eligible}),
         "eligible_assets": len(eligible),
-        "already_versioned": sum(1 for e in eligible if e.get("asset_id") in versioned_ids),
+        "already_versioned": already_versioned,
+        "held": held,
+        "actionable_pending": len(pending),
         "pending": pending,
         "pending_count": len(pending),
         "Type1": type1,
@@ -193,8 +205,8 @@ def collect_eligible(store, query: StorageQuery) -> dict:
     }
 
 
-def dry_run_plan(store, query: StorageQuery) -> dict:
-    plan = collect_eligible(store, query)
+def dry_run_plan(store, query: StorageQuery, *, holds=None) -> dict:
+    plan = collect_eligible(store, query, holds=holds)
     pending = plan.pop("pending")
     t1 = sum(1 for p in pending if p["kogl_type"] == "1")
     t3 = sum(1 for p in pending if p["kogl_type"] == "3")
@@ -207,6 +219,7 @@ def dry_run_plan(store, query: StorageQuery) -> dict:
         "kosha_binary_get": 0,
         "r2_put": 0,
         "version_dml": 0,
+        "hold_dml": 0,
     }
 
 
@@ -236,6 +249,8 @@ def _store_one(
     membership_ids: set[str],
     r2: R2Store,
     versions,
+    snapshot_id: str | None = None,
+    holds=None,
     fetch_detail_fn=fetch_detail,
     fetch_atch_fn=fetch_attachments,
     fetch_file_list_fn=fetch_file_list,
@@ -285,7 +300,31 @@ def _store_one(
     except StopRun:
         raise
     except ResolutionError as e:
-        raise StorageError(e.code) from e
+        if e.code in HOLD_REASONS:
+            if holds is None:
+                raise StorageError("HOLD_STORE_REQUIRED") from e
+            assert_production_holds(holds)
+            if not snapshot_id:
+                raise StorageError("HOLD_STORE_REQUIRED", "snapshot_id") from e
+            recorded = holds.record_open(
+                snapshot_id=snapshot_id,
+                asset_id=item.get("asset_id"),
+                material_id=mid,
+                source_med_seq=medseq,
+                reason=e.code,
+                expected_file_name=item.get("file_name"),
+                observed_files=e.observed_files,
+            )
+            return {
+                "status": "HOLD",
+                "reason": e.code,
+                "asset_id": item.get("asset_id"),
+                "hold_inserted": recorded.get("inserted"),
+                "r2_put": 0,
+                "version_dml": 0,
+                "binary_get": 0,
+            }
+        raise StorageError("SOURCE_ASSET_RESOLUTION_BLOCKED") from e
     except Exception as e:
         map_fetch_stop(e)
         raise StorageError("SOURCE_ASSET_RESOLUTION_BLOCKED") from e
@@ -356,6 +395,7 @@ def apply_assets(
     query: StorageQuery,
     r2: R2Store,
     versions,
+    holds=None,
     log=print,
 ) -> dict:
     if CONCURRENCY != 1:
@@ -363,14 +403,20 @@ def apply_assets(
     assert_production_versions(versions)
     pre = snapshot_precondition(store)
     membership_ids = {m["material_id"] for m in pre["membership"]}
-    attempted = stored = no_change = new_v = promoted = 0
+    snapshot_id = pre["snapshot"]["id"]
+    attempted = stored = no_change = new_v = promoted = held = 0
     last = None
     for item in items:
         attempted += 1
         try:
-            r = _store_one(item, membership_ids=membership_ids, r2=r2, versions=versions)
+            r = _store_one(
+                item, membership_ids=membership_ids, r2=r2, versions=versions,
+                snapshot_id=snapshot_id, holds=holds,
+            )
         except StopRun:
             raise
+        except HoldError as e:
+            raise StopRun(e.code) from e
         except StorageError as e:
             raise StopRun(e.code) from e
         except R2Error as e:
@@ -389,6 +435,10 @@ def apply_assets(
         elif st == "PROMOTED_EXISTING_VERSION":
             promoted += 1
             stored += 1
+        elif st == "HOLD":
+            held += 1
+            log(f"held asset_id={item.get('asset_id')} material_id={item.get('material_id')} reason={r.get('reason')}")
+            continue
         log(f"stored asset_id={item.get('asset_id')} material_id={item.get('material_id')} status={st}")
     return {
         "attempted": attempted,
@@ -396,30 +446,40 @@ def apply_assets(
         "NO_CHANGE": no_change,
         "NEW_VERSION": new_v,
         "PROMOTED_EXISTING_VERSION": promoted,
+        "HOLD": held,
         "last": last,
     }
 
 
-def apply_bulk(store, query, r2, versions, *, batch_size: int = BATCH_SIZE, log=print, max_batches=None) -> dict:
+def apply_bulk(store, query, r2, versions, *, holds=None, batch_size: int = BATCH_SIZE, log=print, max_batches=None) -> dict:
     assert_production_versions(versions)
-    totals = {"batches": 0, "attempted": 0, "stored": 0, "NO_CHANGE": 0, "NEW_VERSION": 0, "PROMOTED_EXISTING_VERSION": 0}
+    try:
+        assert_production_holds(holds)
+    except HoldError as e:
+        raise StopRun(e.code) from e
+    totals = {
+        "batches": 0, "attempted": 0, "stored": 0, "NO_CHANGE": 0,
+        "NEW_VERSION": 0, "PROMOTED_EXISTING_VERSION": 0, "HOLD": 0,
+    }
     while True:
-        plan = collect_eligible(store, query)
+        plan = collect_eligible(store, query, holds=holds)
         pending = plan["pending"]
         pending_before = len(pending)
+        held_n = int(plan.get("held") or 0)
         if pending_before == 0:
-            return {**totals, "remaining": 0, "status": "FULL_BULK_COMPLETE"}
+            return {**totals, "remaining": 0, "held": held_n, "status": _sweep_status(held_n)}
         if max_batches is not None and totals["batches"] >= max_batches:
-            return {**totals, "remaining": pending_before, "status": "BATCH_OK"}
+            return {**totals, "remaining": pending_before, "held": held_n, "status": "BATCH_OK"}
         chunk = pending[: max(1, min(int(batch_size), 50))]
-        log(f"batch selected={len(chunk)} remaining_before={pending_before}")
-        r = apply_assets(chunk, store=store, query=query, r2=r2, versions=versions, log=log)
+        log(f"batch selected={len(chunk)} remaining_before={pending_before} held={held_n}")
+        r = apply_assets(chunk, store=store, query=query, r2=r2, versions=versions, holds=holds, log=log)
         totals["batches"] += 1
-        for k in ("attempted", "stored", "NO_CHANGE", "NEW_VERSION", "PROMOTED_EXISTING_VERSION"):
-            totals[k] += r[k]
-        plan2 = collect_eligible(store, query)
+        for k in ("attempted", "stored", "NO_CHANGE", "NEW_VERSION", "PROMOTED_EXISTING_VERSION", "HOLD"):
+            totals[k] += r.get(k, 0)
+        plan2 = collect_eligible(store, query, holds=holds)
         remaining = plan2["pending_count"]
+        held_n = int(plan2.get("held") or 0)
         if remaining >= pending_before:
             raise StopRun("PENDING_NO_PROGRESS")
         if remaining == 0:
-            return {**totals, "remaining": 0, "status": "FULL_BULK_COMPLETE"}
+            return {**totals, "remaining": 0, "held": held_n, "status": _sweep_status(held_n)}
