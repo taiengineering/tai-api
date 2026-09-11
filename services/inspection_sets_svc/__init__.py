@@ -4,6 +4,7 @@ from .anchors import bulk_update_anchors, patch_set, set_anchor_bulk, update_anc
 from .errors import InspectionSetsSvcError
 from .items import get_items_for_assignment, get_set_items, resolve_set_id_for_assignment
 from .operation_cycle import set_operation_cycle
+from .operation_time_rule import set_operation_time_rule
 from .queries import (
     create_manual_set,
     generate_all_items,
@@ -29,6 +30,7 @@ __all__ = [
     "patch_set",
     "update_anchor",
     "set_operation_cycle",
+    "set_operation_time_rule",
     "generate_items_for_set",
     "get_company_sets",
     "get_factory_sets",

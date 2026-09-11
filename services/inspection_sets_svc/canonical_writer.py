@@ -14,7 +14,7 @@ SaaS inspection_sets 미스케줄(operation) row 로 materialize 한다.
 - review_required collection 은 이 writer 입력에 합류하지 않음 (호출측 obligations_raw 만).
 - 필수 = atom_id + presentation.action. 하나라도 없으면 row 0 (fail-close, 제목/원문 fallback 0).
 - CASE C: cycle_unit/cycle_value/anchor/next_planned = 명시 NULL (자연어 timing/cycle → schedule 변환 0, default year/1 0).
-- 기존 atom(재진단): LEGAL snapshot 만 refresh, 운영값(cycle/anchor/assignee/status/next_planned)은 보존.
+- 기존 atom(재진단): LEGAL snapshot 만 refresh, 운영값(cycle/anchor/assignee/status/next_planned/operation_time_rule)은 보존.
 - legal_rule_id/legal_rule_code = NULL (atom/law match 대입 0). partial unique (factory_id, legal_obligation_atom_id) 사용.
 - 이 파일은 anchor/schedule 을 생성하지 않는다. has_explicit_schedule_cycle 는 anchor/schedule write 경계에서 쓰는 guard predicate.
 """
@@ -25,7 +25,8 @@ from typing import Any, Dict, List, Optional
 from services.inspection_sets_svc.canonical_bridge import build_canonical_inspection_identity
 from services.obligation_presentation_mapper import map_operation_presentation  # noqa: F401 (계약 재사용 명시)
 
-#: 동일 atom 재진단 시 refresh 허용(법령 파생). 운영값은 절대 포함하지 않는다.
+#: 동일 atom 재진단 시 refresh 허용(법령 파생). 운영값(cycle/anchor/assignee/status/
+#: next_planned/operation_time_rule 포함)은 절대 포함하지 않는다.
 _REFRESH_FIELDS = (
     "law_name", "law_article", "obligation_type",
     "obligation_summary", "description", "legal_operation_presentation",

@@ -50,3 +50,20 @@ class OperationCycleBody(BaseModel):
     # strict int — Pydantic 의 bool→int / "1"→int / 1.0→int coercion 을 차단(true/false/"1"/1.0 → 422).
     cycle_unit: str
     cycle_value: Annotated[int, Field(strict=True, ge=1)]
+
+
+class OperationTimeRuleBody(BaseModel):
+    """WO-SAFE-OPERATION-TIME-BACKEND-V1-001 — operator-aware OPERATION rule (LEGAL 아님).
+
+    dedicated endpoint 전용. /operation-cycle(cycle_unit/value only) 과 분리.
+    """
+    version: str = "v1"
+    source: str  # LEGAL_DEFAULT | USER_EDITED
+    operator: str  # EVERY | WITHIN | BEFORE | UNTIL
+    value: Annotated[Optional[int], Field(default=None, strict=True, ge=1)] = None
+    unit: Optional[str] = None
+    basis_date: Optional[str] = None  # YYYY-MM-DD
+    basis_text: Optional[str] = None
+    month: Annotated[Optional[int], Field(default=None, strict=True, ge=1, le=12)] = None
+    day: Annotated[Optional[int], Field(default=None, strict=True, ge=1, le=31)] = None
+    # PATCH-R1/R2: schedule materialization owned by daily generator — save-only body.
