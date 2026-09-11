@@ -29,86 +29,24 @@ from __future__ import annotations
 import os, logging, httpx, json, hashlib, re, asyncio
 from datetime import datetime, timezone
 from fastapi import APIRouter, Query, BackgroundTasks
-from typing import Optional, Tuple
+from typing import Optional
 from db.supabase_client import get_supabase
 from services.kr_public_api import kr_get
-from services.time import now_kst
+from services.kosha_safety_material_sync import (
+    kosha_service_key as _get_service_key,
+    make_id as _make_id,
+    media_list_params,
+    sync_safety_materials,
+    SupabaseSnapshotStore,
+)
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/kosha-collect", tags=["KOSHA데이터수집"])
-
-def _get_service_key() -> str:
-    return (
-        os.getenv("DATA_GO_KR_SERVICE_KEY")
-        or os.getenv("KOSHA_SERVICE_KEY")
-        or os.getenv("BUILDING_API_KEY", "")
-    )
-
 
 BASE      = "https://apis.data.go.kr/B552468"
 MAX_ROWS  = 100
 MAX_PAGES = 500   # v1.6.0: 100→500 (10,000건 한도 해제. 실 totalCount 기반으로 자동 중단됨)
 INIT_DATE = "2024-01-01"
-
-
-# ─────────────────────────────────────────────────────
-# 자동 분류 — v1.5.0
-# ─────────────────────────────────────────────────────
-
-# 카테고리 분류 규칙 (우선순위 순)
-_CATEGORY_RULES: list[Tuple[str, str]] = [
-    # 외국인자료 (다른 카테고리와 중복되므로 먼저)
-    (r'(외국인|다문화|foreign)', 'FOREIGN'),
-    (r'\((몽골|라오스|미얀마|캄보디아|키르기스|네팔|태국|베트남|중국|우즈베|필리핀|인도네|파키스|방글라|스리랑카|티모르|영어|일본|러시아)', 'FOREIGN'),
-    # 영상·VR
-    (r'(VR|메타버스|HMD용|동영상|숙폼|현장르포|당신의 선택|UCC)', 'VIDEO_VR'),
-    # 교육자료
-    (r'(SIF 교안|SIF교안|\(교안\)|교재|교육과정|위탁과정|교육프로그램|관리자용|이러닝|e-learning)', 'EDUCATION'),
-    # 사고사례
-    (r'(OPL|스토리텔링|사고사례|재해사례|재해예방 OPS|\[OPS\])', 'CASE_STUDY'),
-    # 포스터·홍보물
-    (r'(포스터|스티커|픽토그램|안전보건표지|리플릿|리플렛|브로슈어|홍보물|배너|현수막)', 'POSTER'),
-    # 가이드·매뉴얼
-    (r'(가이드|GUIDE|guide|매뉴얼|manual|안전수칙|작업절차|바로알기|편람)', 'GUIDE'),
-    # 체크리스트
-    (r'(체크리스트|점검표|자율점검)', 'CHECKLIST'),
-    # 연구·보고서
-    (r'(연구|보고서|논문|학술|조사|분석|평가|검토|통계|현황|연보|연감|요약집)', 'RESEARCH'),
-    # 보건·건강
-    (r'(건강|보건|검진|직업병|질환|화학물질|유해물질|MSDS|작업환경|소음|분진|석면)', 'HEALTH'),
-    # 법령
-    (r'(법령|규정|고시|시행령|시행규칙)', 'REGULATION'),
-    # 교육 (넓은 범위)
-    (r'(교육|교안|학습)', 'EDUCATION'),
-    # 사고·재해 관련
-    (r'(사고|사례|재해|재해예방)', 'CASE_STUDY'),
-]
-
-# 업종 분류 규칙
-_SECTOR_RULES: list[Tuple[str, str]] = [
-    (r'(건설|건설업|건설현장|콘크리트|타워크레인|비계|거푸집|굴착|항타|갱폼|공사)', 'CONSTRUCTION'),
-    (r'(제조|제조업|프레스|선반|절단기|용접|사출|전단기|절곡기|컨베이어|크레인|지게차|보일러|압력용기)', 'MANUFACTURING'),
-    (r'(서비스|배달|이륨차|물류|운반|운송|택배|청소|조리)', 'SERVICE'),
-]
-
-
-def _classify_material(title: str) -> Tuple[str, str]:
-    """
-    제목 기반 카테고리 + 업종 자동 분류.
-    Returns (category, sector)
-    """
-    t = title or ""
-    category = "OTHER"
-    sector = "COMMON"
-    for pattern, cat in _CATEGORY_RULES:
-        if re.search(pattern, t):
-            category = cat
-            break
-    for pattern, sec in _SECTOR_RULES:
-        if re.search(pattern, t):
-            sector = sec
-            break
-    return category, sector
 
 
 def _parse_kosha_text(text: str) -> dict:
@@ -210,13 +148,6 @@ def _after_since(date_str: str, since_date: str) -> bool:
     return d >= since_date
 
 
-def _make_id(prefix: str, *parts) -> str:
-    raw = "|".join(str(p) for p in parts if p)
-    if raw:
-        return hashlib.md5(raw.encode()).hexdigest()[:16]
-    return f"{prefix}_{now_kst().strftime('%Y%m%d%H%M%S')}"
-
-
 # ─────────────────────────────────────────────────────
 # 수집함수
 # ─────────────────────────────────────────────────────
@@ -255,48 +186,38 @@ async def _collect_accident_cases(since_date: str = INIT_DATE, full_refresh: boo
     return {"target": "accident_cases", "since": since, "upserted": total_upserted}
 
 
+async def _fetch_safety_materials_page(page_no: int):
+    params = media_list_params(page_no, MAX_ROWS)
+    resp = await KoshaAPI.get("selectMediaList01/getselectMediaList01", params)
+    return KoshaAPI.items(resp), KoshaAPI.total(resp)
+
+
 async def _collect_safety_materials(
     since_date: str = INIT_DATE,
     full_refresh: bool = False,
-    start_page: int = 1,        # v1.6.0: 이어받기용 — 101부터 시작하면 기존 10,000건 건너뜀
+    start_page: int = 1,
+    dry_run: bool = True,
 ) -> dict:
+    """Current snapshot sync. start_page must be 1. Default dry_run=True (no DML).
+
+    Historical start_page continuation is not a valid current snapshot.
     """
-    v1.6.0: start_page 파라미터 추가 — 101 이상 지정 시 기존 수집분 건너뛰고 추가분만 수집.
-    v1.5.0: 수집 시 category/sector 자동 분류 적용.
-    UPSERT(on_conflict=id) 방식이라 중복 걱정 없음.
-    """
-    sb = get_supabase()
-    total_upserted = 0
-    for page in range(start_page, MAX_PAGES + 1):
-        resp  = await KoshaAPI.get(
-            "selectMediaList01/getselectMediaList01",
-            {"callApiId": "1030", "pageNo": page, "numOfRows": MAX_ROWS}
-        )
-        items = KoshaAPI.items(resp)
-        if not items: break
-        rows = []
-        for i, it in enumerate(items):
-            title = it.get("MED_SJ_NM") or it.get("title") or it.get("mediaTitle") or ""
-            url   = it.get("MED_URL") or it.get("url") or it.get("mediaUrl") or ""
-            rid   = it.get("mediaId") or it.get("MED_SEQ") or _make_id("mat", url, title)
-            category, sector = _classify_material(title)
-            rows.append({
-                "id": str(rid),
-                "title": title,
-                "product_type": it.get("productType") or it.get("MED_CL_NM") or "",
-                "industry": it.get("industry") or "",
-                "accident_type": it.get("accidentType") or "",
-                "url": url,
-                "category": category,
-                "sector": sector,
-                "raw_json": it,
-            })
-        if rows:
-            sb.table("kosha_safety_materials").upsert(rows, on_conflict="id").execute()
-            total_upserted += len(rows)
-        if len(items) < MAX_ROWS: break
-    _log("safety_materials", "success", total_upserted)
-    return {"target": "safety_materials", "start_page": start_page, "upserted": total_upserted}
+    del since_date, full_refresh  # snapshot is always a full official set
+    store = SupabaseSnapshotStore()
+    result = await sync_safety_materials(
+        fetch_page=_fetch_safety_materials_page,
+        store=store,
+        dry_run=dry_run,
+        start_page=start_page,
+        max_pages=MAX_PAGES,
+    )
+    inserted = int(result.get("catalog_dml") or 0)
+    status = result.get("status")
+    if status in ("COMPLETED", "SNAPSHOT_NO_CHANGE", "DRY_RUN"):
+        _log("safety_materials", "success", inserted)
+    else:
+        _log("safety_materials", "fail", inserted, str(result.get("failure_reason") or status)[:300])
+    return {"target": "safety_materials", "start_page": start_page, "upserted": inserted, **result}
 
 
 async def _collect_construction_accidents(since_date: str = INIT_DATE, full_refresh: bool = False) -> dict:
@@ -459,7 +380,8 @@ async def collect_all(
     since_date:   str  = Query(INIT_DATE),
     full_refresh: bool = Query(False),
     background:   bool = Query(False),
-    start_page:   int  = Query(1, ge=1, description="safety-materials 이어받기용 시작 페이지 (기본 1, 추가수집 시 101 지정)"),
+    start_page:   int  = Query(1, ge=1, description="safety-materials 이어받기용 시작 페이지 (snapshot path는 1만 유효)"),
+    dry_run:      bool = Query(True, description="safety-materials snapshot: True면 DB mutation 0"),
 ):
     targets = [target] if target else [
         "accident-cases", "safety-materials", "construction-accidents",
@@ -470,7 +392,7 @@ async def collect_all(
         for t in targets:
             try:
                 since = since_date if full_refresh else _get_last_collected(t)
-                await _dispatch(t, since, full_refresh, start_page)
+                await _dispatch(t, since, full_refresh, start_page, dry_run)
             except Exception as e:
                 _log(t, "fail", 0, str(e)[:300])
 
@@ -478,13 +400,13 @@ async def collect_all(
         background_tasks.add_task(run_all)
         return {"status": "queued", "targets": targets,
                 "since_date": since_date, "full_refresh": full_refresh,
-                "start_page": start_page}
+                "start_page": start_page, "dry_run": dry_run}
 
     results = []
     for t in targets:
         try:
             since = since_date if full_refresh else _get_last_collected(t)
-            r = await _dispatch(t, since, full_refresh, start_page)
+            r = await _dispatch(t, since, full_refresh, start_page, dry_run)
             results.append(r)
         except Exception as e:
             _log(t, "fail", 0, str(e)[:300])
@@ -492,9 +414,9 @@ async def collect_all(
     return {"status": "done", "results": results}
 
 
-async def _dispatch(target: str, since_date: str, full_refresh: bool, start_page: int = 1):
+async def _dispatch(target: str, since_date: str, full_refresh: bool, start_page: int = 1, dry_run: bool = True):
     if target == "accident-cases":            return await _collect_accident_cases(since_date, full_refresh)
-    elif target == "safety-materials":        return await _collect_safety_materials(since_date, full_refresh, start_page)
+    elif target == "safety-materials":        return await _collect_safety_materials(since_date, full_refresh, start_page, dry_run)
     elif target == "construction-accidents":  return await _collect_construction_accidents(since_date, full_refresh)
     elif target == "construction-safety-light": return await _collect_safety_light()
     elif target == "risk-assessment":         return await _collect_risk_assessment(since_date, full_refresh)
