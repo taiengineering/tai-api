@@ -31,6 +31,9 @@ class _ProdHolds:
     def open_asset_ids(self, snapshot_id):
         return self._inner.open_asset_ids(snapshot_id)
 
+    def open_rows(self, snapshot_id, reason=None):
+        return self._inner.open_rows(snapshot_id, reason)
+
     def record_open(self, **k):
         return self._inner.record_open(**k)
 

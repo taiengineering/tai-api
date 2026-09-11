@@ -14,6 +14,7 @@ HOLD_REASONS = frozenset({
     "SOURCE_ASSET_FILENAME_MISMATCH",
     "SOURCE_ASSET_ZERO_MATCH",
     "SOURCE_ASSET_MULTI_MATCH",
+    "SOURCE_ASSET_OVERSIZE_POLICY",
 })
 HOLD_STATUSES = frozenset({"OPEN", "RESOLVED"})
 
@@ -53,6 +54,16 @@ class MemoryHoldStore:
             r["asset_id"] for r in self.rows
             if r["snapshot_id"] == snapshot_id and r.get("status") == "OPEN"
         }
+
+    def open_rows(self, snapshot_id: str, reason: str | None = None) -> list[dict]:
+        out = []
+        for r in self.rows:
+            if r["snapshot_id"] != snapshot_id or r.get("status") != "OPEN":
+                continue
+            if reason is not None and r.get("reason") != reason:
+                continue
+            out.append(dict(r))
+        return out
 
     def record_open(
         self,
@@ -124,6 +135,26 @@ class SupabaseHoldStore:
             start += 1000
         return ids
 
+    def open_rows(self, snapshot_id: str, reason: str | None = None) -> list[dict]:
+        rows: list[dict] = []
+        start = 0
+        while True:
+            q = (
+                self.sb.table(HOLD_TABLE)
+                .select("asset_id,reason,observed_files,expected_file_name")
+                .eq("snapshot_id", snapshot_id)
+                .eq("status", "OPEN")
+            )
+            if reason is not None:
+                q = q.eq("reason", reason)
+            r = q.range(start, start + 999).execute()
+            batch = r.data or []
+            rows.extend(dict(x) for x in batch)
+            if len(batch) < 1000:
+                break
+            start += 1000
+        return rows
+
     def record_open(
         self,
         *,
@@ -172,3 +203,28 @@ class SupabaseHoldStore:
         if inserted and row.get("status") != "OPEN":
             raise HoldError("HOLD_WRITE_FAILED", "status")
         return {"status": "HOLD", "inserted": inserted, "id": row.get("id"), "reason": reason, "row": row}
+
+
+def oversize_report(holds, snapshot_id: str) -> dict:
+    empty = {"oversize_hold_count": 0, "oversize_max_file_size": 0, "oversize_asset_ids": []}
+    if holds is None or not snapshot_id or not hasattr(holds, "open_rows"):
+        return empty
+    from .limits import OVERSIZE_REASON, parsed_file_size
+
+    rows = holds.open_rows(snapshot_id, OVERSIZE_REASON)
+    ids = []
+    max_sz = 0
+    for r in rows:
+        aid = r.get("asset_id")
+        if aid is not None:
+            ids.append(aid)
+        for obs in r.get("observed_files") or []:
+            n = parsed_file_size(obs.get("file_size") if isinstance(obs, dict) else None)
+            if n is not None and n > max_sz:
+                max_sz = n
+    ids_sorted = sorted(ids)
+    return {
+        "oversize_hold_count": len(ids_sorted),
+        "oversize_max_file_size": max_sz if ids_sorted else 0,
+        "oversize_asset_ids": ids_sorted,
+    }

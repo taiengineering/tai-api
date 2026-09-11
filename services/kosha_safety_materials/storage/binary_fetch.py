@@ -19,11 +19,13 @@ from urllib.parse import urlparse
 
 from ..hosts import ALLOWED_HOSTS, DEFAULT_UA
 from .. import license_policy
+from .limits import MAX_BINARY_BYTES
 
 DOWNLOAD_URL = "https://portal.kosha.or.kr/api/portal24/bizA/p/files/downloadAtchFile"
 FILE_LIST_URL = "https://portal.kosha.or.kr/api/portal24/bizA/p/files/getFileList"
 TIMEOUT = 30
-MAX_BYTES = 20 * 1024 * 1024
+MAX_BYTES = MAX_BINARY_BYTES
+FILE_LIST_MAX_BYTES = 2 * 1024 * 1024
 CHUNK = 64 * 1024
 PDF_MAGIC = b"%PDF"
 DOWNLOAD_ATTEMPTS = 3
@@ -166,6 +168,8 @@ def fetch_https_binary(
             )
         except BinaryFetchError as e:
             if e.code != "DOWNLOAD_TRANSIENT":
+                if e.code == "SOURCE_ASSET_OVERSIZE_POLICY":
+                    _discard_partial(dest_path)
                 raise
             last = e
             _discard_partial(dest_path)
@@ -228,8 +232,10 @@ def _fetch_https_binary_once(
             except (TypeError, ValueError):
                 cl_i = None
             if cl_i is not None and cl_i > max_bytes:
-                raise BinaryFetchError("RESPONSE_TOO_LARGE", status=getattr(resp, "status", None),
-                                       body_bytes_read=0)
+                raise BinaryFetchError(
+                    "SOURCE_ASSET_OVERSIZE_POLICY", status=getattr(resp, "status", None),
+                    body_bytes_read=0,
+                )
         ctype = _content_type(resp.headers)
         pre = classify_non_binary(ctype, b"")
         if pre:
@@ -258,8 +264,10 @@ def _fetch_https_binary_once(
                     break
                 body_bytes_read += len(chunk)
                 if body_bytes_read > max_bytes:
-                    raise BinaryFetchError("RESPONSE_TOO_LARGE", status=getattr(resp, "status", None),
-                                           body_bytes_read=body_bytes_read)
+                    raise BinaryFetchError(
+                        "SOURCE_ASSET_OVERSIZE_POLICY", status=getattr(resp, "status", None),
+                        body_bytes_read=body_bytes_read,
+                    )
                 if not first:
                     first = chunk[:16]
                     if expect_pdf:
@@ -328,7 +336,7 @@ def fetch_file_list(atcfl_no: str) -> list[dict]:
     opener, _rh = build_guarded_opener()
     try:
         with opener.open(req, timeout=TIMEOUT) as resp:
-            raw = resp.read(MAX_BYTES)
+            raw = resp.read(FILE_LIST_MAX_BYTES)
             ctype = _content_type(resp.headers)
             if ctype and "json" not in ctype:
                 raise BinaryFetchError("FILE_LIST_NOT_JSON", ctype, status=getattr(resp, "status", None))

@@ -99,7 +99,7 @@ def test_apply_bulk_storage_sweep_complete_when_only_holds_remain(monkeypatch):
         lambda *a, **k: {"attempted": 1, "stored": 0, "NO_CHANGE": 0, "NEW_VERSION": 0, "PROMOTED_EXISTING_VERSION": 0, "HOLD": 1, "last": {"status": "HOLD"}},
     )
     out = apply_bulk(_FakeStore(), query=None, r2=None, versions=_Prod(), holds=_ProdHolds(), batch_size=20)
-    assert out["status"] == "STORAGE_SWEEP_COMPLETE"
+    assert out["status"] == "STORAGE_SWEEP_COMPLETE_WITH_HOLDS"
     assert out["HOLD"] == 1
     assert out["remaining"] == 0
     assert out["held"] == 1

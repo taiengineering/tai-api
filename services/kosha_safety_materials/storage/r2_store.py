@@ -14,13 +14,15 @@ import ssl
 import time
 from typing import Any, Optional
 
+from .limits import MAX_BINARY_BYTES
+
 ALLOWED_BUCKET = "tai-kosha-originals"
 FORBIDDEN_BUCKETS = frozenset({"45cm-backup"})
 PRIVATE_ENDPOINT_SUFFIX = ".r2.cloudflarestorage.com"
 META_SHA = "tai-content-sha256"
 META_SOURCE_KEY = "tai-source-asset-key"
 META_MATERIAL_ID = "tai-material-id"
-MAX_BYTES = 20 * 1024 * 1024
+MAX_BYTES = MAX_BINARY_BYTES
 READ_CHUNK = 64 * 1024
 GET_ATTEMPTS = 3
 GET_TRANSIENT_BACKOFF = (1.0, 3.0)

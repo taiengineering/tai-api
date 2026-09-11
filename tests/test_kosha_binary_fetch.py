@@ -20,6 +20,7 @@ from services.kosha_safety_materials.storage.binary_fetch import (
     fetch_https_binary,
     pick_first_pdf,
 )
+from services.kosha_safety_materials.storage.limits import MAX_BINARY_BYTES
 
 PDF = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n"
 
@@ -142,7 +143,7 @@ def test_evil_redirect_before_follow():
 def test_oversize_html_json_and_no_net_blocks():
     with tempfile.TemporaryDirectory() as td:
         dest = os.path.join(td, "e.pdf")
-        huge = str(20 * 1024 * 1024 + 1)
+        huge = str(MAX_BINARY_BYTES + 1)
         table = {
             "https://portal.kosha.or.kr/big": (
                 200, {"Content-Type": "application/pdf", "Content-Length": huge}, PDF * 10,
@@ -153,7 +154,7 @@ def test_oversize_html_json_and_no_net_blocks():
             fetch_https_binary("https://portal.kosha.or.kr/big", dest, opener=opener, expect_pdf=True)
             assert False
         except BinaryFetchError as e:
-            assert e.code == "RESPONSE_TOO_LARGE"
+            assert e.code == "SOURCE_ASSET_OVERSIZE_POLICY"
             assert e.body_bytes_read == 0
 
     with tempfile.TemporaryDirectory() as td:
@@ -224,8 +225,9 @@ def test_stream_overflow_and_direct_pdf():
             )
             assert False
         except BinaryFetchError as e:
-            assert e.code == "RESPONSE_TOO_LARGE"
+            assert e.code == "SOURCE_ASSET_OVERSIZE_POLICY"
             assert e.body_bytes_read > 0
+            assert not os.path.isfile(dest) or os.path.getsize(dest) == 0
 
 
 class _ResetResp(io.BytesIO):

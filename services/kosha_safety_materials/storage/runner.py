@@ -20,7 +20,8 @@ from .eligibility import (
     require_asset_id,
     sort_pending_key,
 )
-from .hold_store import HOLD_REASONS, HoldError, assert_production_holds
+from .hold_store import HOLD_REASONS, HoldError, assert_production_holds, oversize_report
+from .limits import MAX_BINARY_BYTES, OVERSIZE_REASON, is_metadata_oversize, oversize_observed, parsed_file_size
 from .r2_store import R2Error, R2Store, credentials_from_env, make_s3_client
 from .resolve import ResolutionError, match_downloadable_file, match_logical_attachment
 from .store import StorageError, store_asset_original
@@ -132,7 +133,7 @@ class StorageQuery:
 
 
 def _sweep_status(held: int) -> str:
-    return "FULL_BULK_COMPLETE" if int(held or 0) == 0 else "STORAGE_SWEEP_COMPLETE"
+    return "FULL_BULK_COMPLETE" if int(held or 0) == 0 else "STORAGE_SWEEP_COMPLETE_WITH_HOLDS"
 
 
 def collect_eligible(store, query: StorageQuery, *, holds=None) -> dict:
@@ -202,7 +203,49 @@ def collect_eligible(store, query: StorageQuery, *, holds=None) -> dict:
         "Type3": type3,
         "VIDEO_excluded": video_excluded,
         "fixed": True,
+        "eligible_gt_20mib": sum(1 for e in eligible if (parsed_file_size(e.get("file_size")) or 0) > 20 * 1024 * 1024),
+        "eligible_gt_64mib": sum(1 for e in eligible if is_metadata_oversize(e.get("file_size"))),
+        "max_eligible_file_size": max((parsed_file_size(e.get("file_size")) or 0) for e in eligible) if eligible else 0,
+        "max_binary_bytes": MAX_BINARY_BYTES,
     }
+
+
+def lookup_eligible_item(store, query: StorageQuery, asset_id: int, *, holds=None) -> dict | None:
+    """Find an eligible asset even if it already has a current version or OPEN hold."""
+    plan = collect_eligible(store, query, holds=None)
+    pending = plan.get("pending") or []
+    for item in pending:
+        if int(item.get("asset_id") or 0) == int(asset_id):
+            return item
+    pre = snapshot_precondition(store)
+    members = pre["membership"]
+    member_ids = [m["material_id"] for m in members]
+    membership = set(member_ids)
+    details = query.details_for(member_ids)
+    for a in query.assets_for(member_ids):
+        if int(a.get("id") or 0) != int(asset_id):
+            continue
+        d = details.get(a.get("material_id") or "")
+        if not d or not is_eligible_asset(a, d, membership):
+            return None
+        return {
+            "asset_id": a.get("id"),
+            "material_id": a["material_id"],
+            "asset_type": a.get("asset_type"),
+            "file_name": a.get("file_name"),
+            "file_size": a.get("file_size"),
+            "mime_type": a.get("mime_type"),
+            "source_asset_key": a.get("checksum"),
+            "checksum": a.get("checksum"),
+            "kogl_type": d.get("kogl_type"),
+            "content_type": d.get("content_type"),
+            "source_med_seq": d.get("source_med_seq"),
+            "source_url": d.get("source_url"),
+            "source_title": d.get("source_title"),
+            "license_name": d.get("license_name"),
+            "license_source_url": d.get("license_source_url"),
+        }
+    return None
 
 
 def dry_run_plan(store, query: StorageQuery, *, holds=None) -> dict:
@@ -243,6 +286,32 @@ def verify_pilot_objects(query: StorageQuery, r2: R2Store) -> dict:
     return {"integrity": "2/2", "rows": results, "r2_put": 0, "r2_delete": 0}
 
 
+def _hold_asset(holds, *, snapshot_id, item, material_id, source_med_seq, reason, observed_files) -> dict:
+    if holds is None:
+        raise StorageError("HOLD_STORE_REQUIRED")
+    assert_production_holds(holds)
+    if not snapshot_id:
+        raise StorageError("HOLD_STORE_REQUIRED", "snapshot_id")
+    recorded = holds.record_open(
+        snapshot_id=snapshot_id,
+        asset_id=item.get("asset_id"),
+        material_id=material_id,
+        source_med_seq=source_med_seq,
+        reason=reason,
+        expected_file_name=item.get("file_name"),
+        observed_files=observed_files,
+    )
+    return {
+        "status": "HOLD",
+        "reason": reason,
+        "asset_id": item.get("asset_id"),
+        "hold_inserted": recorded.get("inserted"),
+        "r2_put": 0,
+        "version_dml": 0,
+        "binary_get": 0,
+    }
+
+
 def _store_one(
     item: dict,
     *,
@@ -266,6 +335,14 @@ def _store_one(
     if mid not in membership_ids:
         raise StorageError("HISTORICAL_STORAGE_FORBIDDEN")
     medseq = str(item["source_med_seq"])
+    if is_metadata_oversize(item.get("file_size")):
+        return _hold_asset(
+            holds, snapshot_id=snapshot_id, item=item, material_id=mid,
+            source_med_seq=medseq, reason=OVERSIZE_REASON,
+            observed_files=oversize_observed(
+                file_size=item.get("file_size"), file_name=item.get("file_name"),
+            ),
+        )
     try:
         raw = fetch_detail_fn(medseq)
     except StopRun:
@@ -301,29 +378,10 @@ def _store_one(
         raise
     except ResolutionError as e:
         if e.code in HOLD_REASONS:
-            if holds is None:
-                raise StorageError("HOLD_STORE_REQUIRED") from e
-            assert_production_holds(holds)
-            if not snapshot_id:
-                raise StorageError("HOLD_STORE_REQUIRED", "snapshot_id") from e
-            recorded = holds.record_open(
-                snapshot_id=snapshot_id,
-                asset_id=item.get("asset_id"),
-                material_id=mid,
-                source_med_seq=medseq,
-                reason=e.code,
-                expected_file_name=item.get("file_name"),
-                observed_files=e.observed_files,
+            return _hold_asset(
+                holds, snapshot_id=snapshot_id, item=item, material_id=mid,
+                source_med_seq=medseq, reason=e.code, observed_files=e.observed_files,
             )
-            return {
-                "status": "HOLD",
-                "reason": e.code,
-                "asset_id": item.get("asset_id"),
-                "hold_inserted": recorded.get("inserted"),
-                "r2_put": 0,
-                "version_dml": 0,
-                "binary_get": 0,
-            }
         raise StorageError("SOURCE_ASSET_RESOLUTION_BLOCKED") from e
     except Exception as e:
         map_fetch_stop(e)
@@ -343,6 +401,8 @@ def _store_one(
                 expect_pdf=expect_pdf,
             )
         except BinaryFetchError as e:
+            if e.code == OVERSIZE_REASON:
+                raise
             map_fetch_stop(e)
             if e.code == "TRANSIENT_UPSTREAM_FAILURE":
                 raise StopRun("TRANSIENT_UPSTREAM_FAILURE") from e
@@ -365,21 +425,34 @@ def _store_one(
         "med_gonggongnuri_nm_raw": None if fields.get("medGonggongnuriNm") is None else str(fields.get("medGonggongnuriNm")),
         "is_derivative": False,
     }
-    out = store_asset_original(
-        kogl_type=live_kogl,
-        content_type=item.get("content_type") or item.get("asset_type"),
-        material_id=mid,
-        atcfl_no=dl["atcfl_no"],
-        atcfl_seq=dl["atcfl_seq"],
-        file_name=dl.get("file_name") or item.get("file_name") or "file",
-        mime_type=dl.get("mime_type") or item.get("mime_type"),
-        membership_ids=membership_ids,
-        fetch_fn=fetch_fn,
-        r2=r2,
-        versions=versions,
-        version_payload=payload,
-        dry_run=False,
-    )
+    try:
+        out = store_asset_original(
+            kogl_type=live_kogl,
+            content_type=item.get("content_type") or item.get("asset_type"),
+            material_id=mid,
+            atcfl_no=dl["atcfl_no"],
+            atcfl_seq=dl["atcfl_seq"],
+            file_name=dl.get("file_name") or item.get("file_name") or "file",
+            mime_type=dl.get("mime_type") or item.get("mime_type"),
+            membership_ids=membership_ids,
+            fetch_fn=fetch_fn,
+            r2=r2,
+            versions=versions,
+            version_payload=payload,
+            dry_run=False,
+        )
+    except BinaryFetchError as e:
+        if e.code == OVERSIZE_REASON:
+            return _hold_asset(
+                holds, snapshot_id=snapshot_id, item=item, material_id=mid,
+                source_med_seq=medseq, reason=OVERSIZE_REASON,
+                observed_files=oversize_observed(
+                    file_size=item.get("file_size"),
+                    file_name=item.get("file_name") or dl.get("file_name"),
+                    extra={"body_bytes_read": e.body_bytes_read, "http_status": e.status},
+                ),
+            )
+        raise
     cur = versions.current(out["source_asset_key"])
     if not cur or cur.get("content_checksum") != out["content_checksum"] or cur.get("storage_key") != out["storage_key"]:
         raise StorageError("VERSION_READBACK_MISMATCH")
@@ -467,9 +540,16 @@ def apply_bulk(store, query, r2, versions, *, holds=None, batch_size: int = BATC
         pending_before = len(pending)
         held_n = int(plan.get("held") or 0)
         if pending_before == 0:
-            return {**totals, "remaining": 0, "held": held_n, "status": _sweep_status(held_n)}
+            return {
+                **totals, "remaining": 0, "held": held_n,
+                "status": _sweep_status(held_n),
+                **oversize_report(holds, plan.get("snapshot_id")),
+            }
         if max_batches is not None and totals["batches"] >= max_batches:
-            return {**totals, "remaining": pending_before, "held": held_n, "status": "BATCH_OK"}
+            return {
+                **totals, "remaining": pending_before, "held": held_n, "status": "BATCH_OK",
+                **oversize_report(holds, plan.get("snapshot_id")),
+            }
         chunk = pending[: max(1, min(int(batch_size), 50))]
         log(f"batch selected={len(chunk)} remaining_before={pending_before} held={held_n}")
         r = apply_assets(chunk, store=store, query=query, r2=r2, versions=versions, holds=holds, log=log)
@@ -482,4 +562,8 @@ def apply_bulk(store, query, r2, versions, *, holds=None, batch_size: int = BATC
         if remaining >= pending_before:
             raise StopRun("PENDING_NO_PROGRESS")
         if remaining == 0:
-            return {**totals, "remaining": 0, "held": held_n, "status": _sweep_status(held_n)}
+            return {
+                **totals, "remaining": 0, "held": held_n,
+                "status": _sweep_status(held_n),
+                **oversize_report(holds, plan2.get("snapshot_id")),
+            }
