@@ -1,13 +1,17 @@
 """services/inspection_sets_svc/canonical_writer.py
 
-WO-SAAS-CANONICAL-INSPECTION-WRITER-001 / STEP 4B-3 REV-1 (A-GUARDED).
+WO-SAFE-ALL-OBLIGATION-MATERIALIZATION-IMPLEMENT-001
+(prior: WO-SAAS-CANONICAL-INSPECTION-WRITER-001 / STEP 4B-3 REV-1).
 
-official obligations_raw[] 중 canonical **INSPECT** obligation 만
+official obligations_raw[] 의 **FINAL_EXTRACTED_OBLIGATIONS** (= raw 전체) 를
 SaaS inspection_sets 미스케줄(operation) row 로 materialize 한다.
 
 원칙:
 - LEGAL TRUTH = official raw obligation. LEGAL PRESENTATION = map_operation_presentation(raw)(재사용, 신규 mapper 0).
-- 대상 = enrichment.obligation_type == "INSPECT" EXACT (대소문자/별칭/내용 추정 0). 그 외 SKIP.
+- Membership = obligations_raw[] as-is. obligation_type 은 attribute only (생성 gate 아님).
+- INSPECT EXACT membership gate = 제거. ACTION→INSPECT 등 type 변환/강제 저장 = 금지.
+- check_result / applicability = membership gate 아님 (후단 재판정 필터 0).
+- review_required collection 은 이 writer 입력에 합류하지 않음 (호출측 obligations_raw 만).
 - 필수 = atom_id + presentation.action. 하나라도 없으면 row 0 (fail-close, 제목/원문 fallback 0).
 - CASE C: cycle_unit/cycle_value/anchor/next_planned = 명시 NULL (자연어 timing/cycle → schedule 변환 0, default year/1 0).
 - 기존 atom(재진단): LEGAL snapshot 만 refresh, 운영값(cycle/anchor/assignee/status/next_planned)은 보존.
@@ -20,8 +24,6 @@ from typing import Any, Dict, List, Optional
 
 from services.inspection_sets_svc.canonical_bridge import build_canonical_inspection_identity
 from services.obligation_presentation_mapper import map_operation_presentation  # noqa: F401 (계약 재사용 명시)
-
-_INSPECT = "INSPECT"
 
 #: 동일 atom 재진단 시 refresh 허용(법령 파생). 운영값은 절대 포함하지 않는다.
 _REFRESH_FIELDS = (
@@ -43,6 +45,7 @@ def has_explicit_schedule_cycle(iset: Any) -> bool:
 
 
 def _obligation_type(raw: Any) -> Optional[str]:
+    """enrichment.obligation_type 실값 운반. 없으면 None. 정규화/추정/강제 INSPECT = 0."""
     enr = raw.get("enrichment") if isinstance(raw, dict) else None
     return enr.get("obligation_type") if isinstance(enr, dict) else None
 
@@ -50,9 +53,10 @@ def _obligation_type(raw: Any) -> Optional[str]:
 def build_canonical_set_payload(
     raw_obligation: Any, factory_id: Any, company_id: Any
 ) -> Optional[Dict[str, Any]]:
-    """INSPECT + atom_id + presentation.action 있을 때만 신규 canonical row payload. 아니면 None(fail-close)."""
-    if _obligation_type(raw_obligation) != _INSPECT:      # EXACT "INSPECT" 만
-        return None
+    """atom_id + presentation.action 있을 때만 신규 canonical row payload. 아니면 None(fail-close).
+
+    obligation_type 은 membership gate 가 아니다. LEG enrichment 실값을 그대로 저장한다.
+    """
     identity = build_canonical_inspection_identity(raw_obligation)  # atom_id 없으면 None
     if identity is None:
         return None
@@ -73,7 +77,7 @@ def build_canonical_set_payload(
         "inspection_set_name": action,
         "law_name": raw.get("law_name"),
         "law_article": raw.get("law_article"),
-        "obligation_type": _INSPECT,
+        "obligation_type": _obligation_type(raw),  # attribute only · INSPECT hardcode 0
         "obligation_summary": action,
         "description": action,
         # CASE C — 명시 NULL (legacy year/1 schedule fallback 차단)
@@ -98,10 +102,11 @@ def build_canonical_set_payload(
 def materialize_canonical_inspection_sets(
     supabase: Any, factory_id: Any, company_id: Any, obligations_raw: Any
 ) -> Dict[str, int]:
-    """INSPECT canonical rows materialize.
+    """obligations_raw membership → canonical rows materialize.
 
     신규 atom → INSERT. 기존 atom → LEGAL snapshot refresh(운영값 보존). 동일 atom 중복 INSERT 0.
     입력 obligations_raw mutation 없음. 이 함수는 anchor/schedule 을 만들지 않는다.
+    check_result / applicability 로 재필터하지 않는다.
     """
     rows = obligations_raw if isinstance(obligations_raw, list) else []
     seen: set = set()

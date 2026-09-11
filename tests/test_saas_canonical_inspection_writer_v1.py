@@ -1,7 +1,7 @@
-"""WO-SAAS-CANONICAL-INSPECTION-WRITER-001 STEP 4B-3 REV-1 — writer + guard 배선.
+"""WO-SAFE-ALL-OBLIGATION-MATERIALIZATION-IMPLEMENT-001
+(+ prior WO-SAAS-CANONICAL-INSPECTION-WRITER-001 STEP 4B-3 REV-1).
 
-W1~W15 payload/filter/refresh/dup/guard predicate · G1~G15 writer 회귀 ·
-W17~W24 anchor/schedule write 경계 fail-close.
+T1~T16 all-obligation membership · W1~W15/G1~G15/W17~W24 회귀.
 DB/network/LEG/LLM 불필요.
 """
 from __future__ import annotations
@@ -51,12 +51,15 @@ def test_W1_inspect_atom_action_payload():
     assert p["source"] == "LEGAL_ENGINE"
 
 
-def test_W2_non_inspect_zero():
+def test_W2_non_inspect_materialize_type_preserved():
+    """obligation_type 은 membership gate 아님 · 실값 보존 · INSPECT 강제 0."""
     for t in ("ACTION", "PROHIBIT", "APPOINT", "REPORT", "NOTIFY", "TRAINING", "OTHER"):
-        assert build_canonical_set_payload(_raw(ob_type=t), "f1", "c1") is None
-    # 대소문자/별칭 추정 0
-    assert build_canonical_set_payload(_raw(ob_type="inspect"), "f1", "c1") is None
-    assert build_canonical_set_payload(_raw(ob_type=None), "f1", "c1") is None
+        p = build_canonical_set_payload(_raw(ob_type=t), "f1", "c1")
+        assert p is not None
+        assert p["obligation_type"] == t
+    # 추정/정규화 0 — 원문 그대로 보존
+    assert build_canonical_set_payload(_raw(ob_type="inspect"), "f1", "c1")["obligation_type"] == "inspect"
+    assert build_canonical_set_payload(_raw(ob_type=None), "f1", "c1")["obligation_type"] is None
 
 
 def test_W3_atom_absent_zero():
@@ -201,8 +204,140 @@ def test_W14_legacy_writer_delta_zero():
 
 
 def test_no_candidates_returns_zero():
-    out = materialize_canonical_inspection_sets(_SB(), "f1", "c1", [_raw(ob_type="ACTION")])
+    # integrity fail-close (atom 없음) — type 무관
+    r = _raw(ob_type="ACTION")
+    r.pop("atom_id")
+    out = materialize_canonical_inspection_sets(_SB(), "f1", "c1", [r])
     assert out == {"candidates": 0, "inserted": 0, "refreshed": 0, "skipped": 0}
+
+
+# ── T1~T16: APPROVED TARGET membership (obligations_raw as-is) ──
+
+def test_T1_final_inspect_yes():
+    p = build_canonical_set_payload(_raw(ob_type="INSPECT"), "f1", "c1")
+    assert p is not None and p["obligation_type"] == "INSPECT"
+
+
+def test_T2_final_action_yes_type_preserved():
+    p = build_canonical_set_payload(_raw(ob_type="ACTION", action="안전조치를 하여야 한다"), "f1", "c1")
+    assert p is not None
+    assert p["obligation_type"] == "ACTION"
+    assert p["obligation_type"] != "INSPECT"
+
+
+def test_T3_final_report_yes():
+    p = build_canonical_set_payload(_raw(ob_type="REPORT", action="결과를 보고하여야 한다"), "f1", "c1")
+    assert p is not None and p["obligation_type"] == "REPORT"
+
+
+def test_T4_final_appoint_yes():
+    p = build_canonical_set_payload(_raw(ob_type="APPOINT", action="관리자를 선임하여야 한다"), "f1", "c1")
+    assert p is not None and p["obligation_type"] == "APPOINT"
+
+
+def test_T5_final_notify_training_yes():
+    for t, act in (("NOTIFY", "게시하여야 한다"), ("TRAINING", "교육을 실시하여야 한다")):
+        p = build_canonical_set_payload(_raw(ob_type=t, action=act), "f1", "c1")
+        assert p is not None and p["obligation_type"] == t
+
+
+def test_T6_review_required_not_in_writer_input():
+    """review_required 는 obligations_raw 가 아님 — writer 는 raw list 만 본다."""
+    out = materialize_canonical_inspection_sets(_SB(), "f1", "c1", [])
+    assert out["candidates"] == 0
+    # raw 에 넣은 것만 대상
+    out2 = materialize_canonical_inspection_sets(
+        _SB(), "f1", "c1", [_raw(ob_type="ACTION", atom="a-rr")]
+    )
+    assert out2["candidates"] == 1 and out2["inserted"] == 1
+
+
+def test_T7_atom_id_absent_fail_close():
+    r = _raw(ob_type="ACTION")
+    r.pop("atom_id")
+    assert build_canonical_set_payload(r, "f1", "c1") is None
+
+
+def test_T8_action_absent_fail_close_no_fallback():
+    assert build_canonical_set_payload(_raw(ob_type="REPORT", action=None), "f1", "c1") is None
+
+
+def test_T9_rediagnose_upsert_ops_preserved():
+    raw_list = [_raw(atom="same", ob_type="ACTION", action="조치를 하여야 한다")]
+    sb = _SB(existing=[{"id": "set-same", "legal_obligation_atom_id": "same"}])
+    out = materialize_canonical_inspection_sets(sb, "f1", "c1", raw_list)
+    assert out["refreshed"] == 1 and out["inserted"] == 0
+    patch = sb.updates[0]
+    assert patch["obligation_type"] == "ACTION"
+    for forbidden in ("cycle_unit", "cycle_value", "schedule_anchor_date",
+                      "next_planned_date", "assignee_user_id", "status_code", "anchor_confirmed"):
+        assert forbidden not in patch
+
+
+def test_T10_new_row_pending_anchor_schedule_zero():
+    p = build_canonical_set_payload(_raw(ob_type="ACTION"), "f1", "c1")
+    assert p["status_code"] == "PENDING_ANCHOR"
+    assert p["anchor_confirmed"] is False
+    assert p["assignee_user_id"] is None
+    for k in _NULL_SCHED:
+        assert p[k] is None, k
+
+
+def test_T11_human_schedule_still_needs_explicit_cycle():
+    """사람 cycle 확정 전 기존 guard — canonical NULL cycle → schedule helper 진입 0."""
+    p = build_canonical_set_payload(_raw(ob_type="ACTION"), "f1", "c1")
+    assert has_explicit_schedule_cycle(p) is False
+
+
+def test_T12_obligation_type_change_refresh_identity_stable():
+    raw_list = [_raw(atom="atom-chg", ob_type="REPORT", action="보고하여야 한다")]
+    sb = _SB(existing=[{"id": "set-chg", "legal_obligation_atom_id": "atom-chg"}])
+    out = materialize_canonical_inspection_sets(sb, "f1", "c1", raw_list)
+    assert out["refreshed"] == 1 and out["inserted"] == 0
+    assert sb.updates[0]["obligation_type"] == "REPORT"
+
+
+def test_T13_check_result_not_applicable_still_materialize():
+    r = _raw(ob_type="ACTION", atom="atom-na")
+    r["check_result"] = "NOT_APPLICABLE"
+    p = build_canonical_set_payload(r, "f1", "c1")
+    assert p is not None
+    assert p["obligation_type"] == "ACTION"
+    out = materialize_canonical_inspection_sets(_SB(), "f1", "c1", [r])
+    assert out["candidates"] == 1 and out["inserted"] == 1
+
+
+def test_T14_applicability_not_membership_gate():
+    r = _raw(ob_type="ACTION", atom="atom-ap")
+    r["applicability"] = "NOT_APPLICABLE"
+    assert build_canonical_set_payload(r, "f1", "c1") is not None
+
+
+def test_T15_no_inspect_hardcode_in_payload():
+    p = build_canonical_set_payload(_raw(ob_type="PROHIBIT", action="사용하여서는 아니 된다"), "f1", "c1")
+    assert p["obligation_type"] == "PROHIBIT"
+    import services.inspection_sets_svc.canonical_writer as W
+    src = inspect.getsource(W.build_canonical_set_payload)
+    assert '"obligation_type": _INSPECT' not in src
+    assert 'obligation_type": "INSPECT"' not in src
+
+
+def test_T16_writer_has_no_check_result_or_applicability_filter():
+    import services.inspection_sets_svc.canonical_writer as W
+    # executable gate 부재: 필드 lookup/비교로 membership 재판정하지 않음
+    body = (
+        inspect.getsource(W.build_canonical_set_payload)
+        + inspect.getsource(W.materialize_canonical_inspection_sets)
+        + inspect.getsource(W._obligation_type)
+    )
+    assert 'get("check_result")' not in body
+    assert '["check_result"]' not in body
+    assert 'get("applicability")' not in body
+    assert '["applicability"]' not in body
+    assert '== "INSPECT"' not in body
+    assert '!= "INSPECT"' not in body
+    assert "_INSPECT" not in body
+    assert '"obligation_type": "INSPECT"' not in body
 
 
 # ── G1~G15: writer 회귀 (cycle_text 파싱 0 · atom exact · guard fail-close) ──

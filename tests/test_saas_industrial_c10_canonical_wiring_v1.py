@@ -163,9 +163,13 @@ def test_T16_T17_legacy_absent_writer_runs():
     sb = _SB(legacy_rows=[])
     out = materialize_saas_inspection(sb, "f1", "c1", _full())
     assert out["status"] == "MATERIALIZED"
-    assert out["candidates"] == 1        # INSPECT atom a0 만 (a1=ACTION skip)
-    assert out["inserted"] == 1
-    assert sb.writer_inserts and sb.writer_inserts[0][0]["legal_obligation_atom_id"] == "a0"
+    # obligations_raw 전체 (a0=INSPECT, a1=ACTION) — type gate 없음
+    assert out["candidates"] == 2
+    assert out["inserted"] == 2
+    atoms = {r["legal_obligation_atom_id"] for r in sb.writer_inserts[0]}
+    assert atoms == {"a0", "a1"}
+    types = {r["legal_obligation_atom_id"]: r["obligation_type"] for r in sb.writer_inserts[0]}
+    assert types == {"a0": "INSPECT", "a1": "ACTION"}
 
 
 # ── orchestration ──
@@ -182,7 +186,8 @@ def test_orchestration_materialized():
     sb = _SB(legacy_rows=[])
     out = run_saas_c10_and_materialize(sb, "f1", "c1", _full())
     assert out["inspection_materialization"]["status"] == "MATERIALIZED"
-    assert out["inspection_materialization"]["inserted"] == 1
+    assert out["inspection_materialization"]["inserted"] == 2
+    assert out["inspection_materialization"]["candidates"] == 2
 
 
 def test_T14_orch_c10_fail_no_writer():
