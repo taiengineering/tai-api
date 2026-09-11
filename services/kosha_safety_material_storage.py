@@ -1,40 +1,102 @@
-"""WP-1C-5A storage probe. Default dry-run: KOSHA GET 0, R2 PUT 0, version DML 0."""
+"""WP-1C-5B storage CLI — dry-run default; apply requires production version store."""
 from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
-from services.kosha_safety_materials.enrichment import snapshot_precondition
-from services.kosha_safety_materials.storage.r2_store import R2Error, credentials_from_env
+from services.kosha_safety_materials.detail_client import StopRun
+from services.kosha_safety_materials.storage.r2_store import R2Error, R2Store, credentials_from_env, make_s3_client
+from services.kosha_safety_materials.storage.runner import (
+    apply_assets,
+    apply_bulk,
+    collect_eligible,
+    dry_run_plan,
+    verify_pilot_objects,
+)
+from services.kosha_safety_materials.storage.store import StorageError
+from services.kosha_safety_materials.storage.version_service import (
+    SupabaseVersionStore,
+    assert_production_versions,
+)
 from services.kosha_safety_materials.writer import SupabaseStore
 
 
-def dry_run_probe(store) -> dict:
-    pre = snapshot_precondition(store)
-    return {
-        "status": "DRY_RUN",
-        "run_snapshot_id": pre["snapshot"]["id"],
-        "membership": pre["membership_count"],
-        "kosha_binary_get": 0,
-        "r2_put": 0,
-        "version_dml": 0,
-        "wrangler": 0,
-    }
+def _load_env() -> None:
+    root = Path(__file__).resolve().parents[1]
+    env_path = root / ".env"
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(env_path)
+        load_dotenv()
+    except Exception:
+        if env_path.is_file():
+            for line in env_path.read_text().splitlines():
+                s = line.strip()
+                if not s or s.startswith("#") or "=" not in s:
+                    continue
+                k, v = s.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip("'").strip('"'))
+    if not os.getenv("SUPABASE_SERVICE_KEY") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
+        os.environ["SUPABASE_SERVICE_KEY"] = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+
+
+def _r2():
+    creds = credentials_from_env()
+    return R2Store(make_s3_client(creds), bucket=creds["bucket"])
+
+
+def _print(obj: dict, code: int = 0) -> None:
+    print(json.dumps(obj, ensure_ascii=False, indent=2, default=str))
+    raise SystemExit(code)
 
 
 if __name__ == "__main__":
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-    except Exception:
-        pass
-    if not os.getenv("SUPABASE_SERVICE_KEY") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
-        os.environ["SUPABASE_SERVICE_KEY"] = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+    import argparse
+    from services.kosha_safety_materials.storage.runner import StorageQuery
+
+    _load_env()
+    p = argparse.ArgumentParser(description="KOSHA Type1/3 original storage")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--apply", action="store_true")
+    p.add_argument("--limit", type=int, default=0, help="controlled N assets (Gate-3/4)")
+    p.add_argument("--batch-size", type=int, default=20)
+    p.add_argument("--verify-pilot", action="store_true")
+    args = p.parse_args()
     store = SupabaseStore()
-    out = dry_run_probe(store)
+    query = StorageQuery(store.sb)
+    if args.dry_run or (not args.apply and not args.verify_pilot):
+        out = dry_run_plan(store, query)
+        try:
+            credentials_from_env()
+            out["r2_credentials"] = "PRESENT"
+        except R2Error as e:
+            out["r2_credentials"] = e.code
+        _print(out, 0)
     try:
-        credentials_from_env()
-        out["r2_credentials"] = "present"
+        r2 = _r2()
     except R2Error as e:
-        out["r2_credentials"] = e.code
-    print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
+        _print({"status": "R2_INTEGRATION_BLOCKED", "code": e.code}, 2)
+    versions = SupabaseVersionStore()
+    assert_production_versions(versions)
+    try:
+        if args.verify_pilot:
+            out = verify_pilot_objects(query, r2)
+            out["status"] = "PILOT_OK"
+            _print(out, 0)
+        if args.apply and args.limit:
+            plan = collect_eligible(store, query)
+            items = plan["pending"][: args.limit]
+            out = apply_assets(items, store=store, query=query, r2=r2, versions=versions)
+            out["status"] = "CONTROLLED"
+            _print(out, 0)
+        if args.apply:
+            out = apply_bulk(store, query, r2, versions, batch_size=args.batch_size)
+            _print(out, 0)
+    except StopRun as e:
+        _print({"status": e.reason, "http_status": e.http_status}, 2)
+    except StorageError as e:
+        _print({"status": e.code}, 2)
+    except R2Error as e:
+        _print({"status": e.code}, 2)
+    _print({"status": "NOOP"}, 0)

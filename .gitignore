@@ -7,6 +7,7 @@ venv/
 .env.local
 .env.clean
 .env.prod
+.env.r2
 
 # SESSION 1 law XML samples (regenerate: python3 scripts/debug/fetch_law_raw_xml.py)
 scripts/debug/*.xml

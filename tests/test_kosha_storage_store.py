@@ -129,3 +129,69 @@ def test_orphan_when_promote_fails_after_put():
         assert e.code == "ORPHAN_OBJECT_CANDIDATE"
     assert s3.puts == 1
     assert vs.rows == []
+
+
+def test_second_run_no_change_put_zero_and_orphan_resume():
+    s3 = FakeS3()
+    r2 = R2Store(s3)
+    vs = MemoryVersionStore()
+    sha = hashlib.sha256(PDF).hexdigest()
+
+    def fetch(**k):
+        return {"data": PDF, "sha256": sha, "content_type": "application/pdf"}
+
+    first = store_asset_original(
+        kogl_type="1", content_type="PDF", material_id="m1",
+        atcfl_no="N", atcfl_seq=1, file_name="a.pdf",
+        membership_ids={"m1"}, fetch_fn=fetch, r2=r2, versions=vs, version_payload=_payload(),
+    )
+    assert first["status"] == "NEW_VERSION"
+    assert s3.puts == 1
+    vid = vs.current(first["source_asset_key"])["id"]
+    second = store_asset_original(
+        kogl_type="1", content_type="PDF", material_id="m1",
+        atcfl_no="N", atcfl_seq=1, file_name="a.pdf",
+        membership_ids={"m1"}, fetch_fn=fetch, r2=r2, versions=vs, version_payload=_payload(),
+    )
+    assert second["status"] == "NO_CHANGE"
+    assert s3.puts == 1
+    assert vs.current(first["source_asset_key"])["id"] == vid
+    assert vs.current(first["source_asset_key"])["content_checksum"] == sha
+    assert vs.current(first["source_asset_key"])["storage_key"] == first["storage_key"]
+
+    vs3 = MemoryVersionStore()
+    r2b = R2Store(s3)
+    resume = store_asset_original(
+        kogl_type="1", content_type="PDF", material_id="m1",
+        atcfl_no="N", atcfl_seq=1, file_name="a.pdf",
+        membership_ids={"m1"}, fetch_fn=fetch, r2=r2b, versions=vs3, version_payload=_payload(),
+    )
+    assert resume["status"] == "NEW_VERSION"
+    assert resume["put"] == "OBJECT_EXISTS_VERIFIED"
+    assert s3.puts == 1
+
+
+def test_store_blocks_video_and_type2():
+    s3 = FakeS3()
+    try:
+        store_asset_original(
+            kogl_type="1", content_type="VIDEO", material_id="m1",
+            atcfl_no="N", atcfl_seq=1, file_name="a.mp4",
+            membership_ids={"m1"},
+            fetch_fn=lambda **k: (_ for _ in ()).throw(AssertionError("no fetch")),
+            r2=R2Store(s3), versions=MemoryVersionStore(), version_payload=_payload(),
+        )
+        assert False
+    except Exception as e:
+        assert getattr(e, "code", "") == "VIDEO_BINARY_FORBIDDEN"
+    try:
+        store_asset_original(
+            kogl_type="2", content_type="PDF", material_id="m1",
+            atcfl_no="N", atcfl_seq=1, file_name="a.pdf",
+            membership_ids={"m1"},
+            fetch_fn=lambda **k: (_ for _ in ()).throw(AssertionError("no fetch")),
+            r2=R2Store(s3), versions=MemoryVersionStore(), version_payload=_payload(),
+        )
+        assert False
+    except Exception as e:
+        assert getattr(e, "code", "") == "LICENSE_STORAGE_FORBIDDEN"

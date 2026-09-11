@@ -195,6 +195,24 @@ def test_readback_mismatch_stops_before_promotion_hook():
         assert e.code == "READBACK_MISMATCH"
 
 
+def test_put_auth_maps_to_access_blocked():
+    s3 = FakeS3()
+    st = R2Store(s3)
+
+    def deny(**k):
+        raise FakeErr("AccessDenied", 403)
+
+    s3.put_object = deny  # type: ignore
+    sha = hashlib.sha256(b"x").hexdigest()
+    try:
+        st.put_new("k", b"x", content_type="application/octet-stream",
+                   source_asset_key="s", material_id="m", content_sha256=sha)
+        assert False
+    except R2Error as e:
+        assert e.code == "R2_ACCESS_BLOCKED"
+    assert s3.puts == 0
+
+
 def test_classify_404_403_5xx():
     assert classify_client_error(FakeErr("404", 404)) == "MISSING"
     assert classify_client_error(FakeErr("AccessDenied", 403)) == "AUTH"

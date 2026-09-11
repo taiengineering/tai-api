@@ -194,13 +194,22 @@ class R2Store:
             META_MATERIAL_ID: material_id,
         }
         self.puts += 1
-        self.client.put_object(
-            Bucket=self.bucket,
-            Key=key,
-            Body=data,
-            ContentType=content_type or "application/octet-stream",
-            Metadata=meta,
-        )
+        try:
+            self.client.put_object(
+                Bucket=self.bucket,
+                Key=key,
+                Body=data,
+                ContentType=content_type or "application/octet-stream",
+                Metadata=meta,
+            )
+        except Exception as e:
+            self.puts -= 1
+            kind = classify_client_error(e)
+            if kind == "AUTH":
+                raise R2Error("R2_ACCESS_BLOCKED", kind) from e
+            if kind == "TRANSIENT":
+                raise R2Error("R2_TRANSIENT", kind) from e
+            raise R2Error("R2_PUT_ERROR", kind) from e
         return "PUT"
 
     def readback_verify(self, key: str, expected_sha: str) -> None:
