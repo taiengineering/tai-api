@@ -173,7 +173,7 @@ def set_operation_time_rule(
     body: OperationTimeRuleBody,
     current: dict = Depends(get_current_user),
 ):
-    """operator-aware OPERATION_TIME_RULE 저장(+optional schedule). LEGAL overwrite 0."""
+    """operator-aware OPERATION_TIME_RULE 저장. schedule materialization side-effect 0. LEGAL overwrite 0."""
     sb = get_supabase()
     _ensure_set_own(sb, inspection_set_id, current)
     return _call(svc.set_operation_time_rule, inspection_set_id, body)

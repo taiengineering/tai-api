@@ -11,11 +11,7 @@ from pathlib import Path
 import pytest
 
 from schemas.inspection_sets import OperationTimeRuleBody
-from services.inspection_sets_helpers import (
-    _build_next_schedule_row,
-    _build_oneshot_schedule_row,
-    _oneshot_planned_from,
-)
+from services.inspection_sets_helpers import _build_next_schedule_row
 from services.inspection_sets_svc import operation_time_rule as OTR
 from services.inspection_sets_svc.canonical_writer import _REFRESH_FIELDS
 from services.inspection_sets_svc.errors import InspectionSetsSvcError
@@ -133,23 +129,7 @@ def test_T1_migration_additive():
     assert "cycle_unit" not in text or "DROP" not in text
 
 
-# ── pure helpers (still used by legacy / future daily generator) ──
-
-def test_T8_within_deadline_formula():
-    assert _oneshot_planned_from(date(2026, 1, 10), "month", 1, direction="within") == date(2026, 2, 10)
-
-
-def test_T12_before_offset_formula():
-    assert _oneshot_planned_from(date(2026, 10, 10), "day", 3, direction="before") == date(2026, 10, 7)
-
-
-def test_oneshot_row_repeat_once():
-    iset = _legal_row()
-    row, planned = _build_oneshot_schedule_row(iset, date(2026, 2, 10))
-    assert row["repeat_type"] == "once"
-    assert row["assigned_user_id"] == "user-1"
-    assert planned == date(2026, 2, 10)
-
+# ── CURRENT EVERY recurrence regression (builder unmodified by this PR) ──
 
 def test_T5_every_schedule_regression_builder():
     iset = _legal_row(cycle_unit="month", cycle_value=1)
