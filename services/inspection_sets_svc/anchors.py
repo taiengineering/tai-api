@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, datetime
-from typing import Any, Dict
+from datetime import date
+from typing import Any, Dict, Optional
 
 from db.supabase_client import get_supabase
 from schemas.inspection_sets import AnchorBody, AnchorBulkPatchBody, BulkAnchorBody, InspectionSetPatchBody
@@ -12,12 +12,39 @@ from services.time import now_kst, serialize_business_datetime
 
 _CYCLE_SKIP_REASON = "주기가 설정되지 않았습니다."
 _CYCLE_REQUIRED_422 = "점검 주기를 먼저 설정해주세요."
+_ASSIGNEE_SKIP_REASON = "담당자가 지정되지 않았습니다."
+_ASSIGNEE_REQUIRED_422 = "담당자를 먼저 지정해주세요."
+
+_SET_SELECT = (
+    "id, factory_id, company_id, cycle_value, cycle_unit, inspection_set_name, "
+    "inspection_category, source, assignee_user_id"
+)
+
+
+def _is_legal_engine(iset: dict) -> bool:
+    return iset.get("source") == "LEGAL_ENGINE"
+
+
+def _has_assignee(iset: dict) -> bool:
+    return bool(iset.get("assignee_user_id"))
+
+
+def _require_legal_assignee(iset: dict) -> None:
+    """LEGAL_ENGINE schedule write: fail-close before any DB mutation."""
+    if _is_legal_engine(iset) and not _has_assignee(iset):
+        raise InspectionSetsSvcError(422, _ASSIGNEE_REQUIRED_422)
+
+
+def _legal_assignee_skip_reason(iset: dict) -> Optional[str]:
+    if _is_legal_engine(iset) and not _has_assignee(iset):
+        return _ASSIGNEE_SKIP_REASON
+    return None
 
 
 def set_anchor_bulk(body: BulkAnchorBody) -> dict:
     supabase = get_supabase()
     sets_res = supabase.table("inspection_sets").select(
-        "id, factory_id, company_id, cycle_value, cycle_unit, inspection_set_name, inspection_category, source"
+        _SET_SELECT
     ).eq("factory_id", body.factory_id).eq("status_code", "PENDING_ANCHOR").eq("is_active", True).execute()
     sets = sets_res.data or []
     if not sets:
@@ -31,6 +58,15 @@ def set_anchor_bulk(body: BulkAnchorBody) -> dict:
                 "name": iset.get("inspection_set_name"),
                 "status": "skipped",
                 "reason": _CYCLE_SKIP_REASON,
+            })
+            continue
+        skip_assignee = _legal_assignee_skip_reason(iset)
+        if skip_assignee:
+            results.append({
+                "id": iset["id"],
+                "name": iset.get("inspection_set_name"),
+                "status": "skipped",
+                "reason": skip_assignee,
             })
             continue
         try:
@@ -51,13 +87,17 @@ def bulk_update_anchors(body: AnchorBulkPatchBody) -> dict:
     updated_count, errors = 0, []
     for item in body.items:
         try:
-            res = supabase.table("inspection_sets").select("id, cycle_value, cycle_unit, factory_id, company_id, inspection_set_name, inspection_category, source").eq("id", item.id).limit(1).execute()
+            res = supabase.table("inspection_sets").select(_SET_SELECT).eq("id", item.id).limit(1).execute()
             if not res.data:
                 errors.append({"id": item.id, "reason": "점검 세트를 찾을 수 없습니다."})
                 continue
             iset = res.data[0]
             if not has_explicit_schedule_cycle(iset):
                 errors.append({"id": item.id, "reason": _CYCLE_SKIP_REASON})
+                continue
+            skip_assignee = _legal_assignee_skip_reason(iset)
+            if skip_assignee:
+                errors.append({"id": item.id, "reason": skip_assignee})
                 continue
             anchor = date.fromisoformat(item.schedule_anchor_date)
             row, planned = _build_next_schedule_row(iset, anchor)
@@ -78,7 +118,9 @@ def bulk_update_anchors(body: AnchorBulkPatchBody) -> dict:
 
 def patch_set(inspection_set_id: str, body: InspectionSetPatchBody) -> dict:
     supabase = get_supabase()
-    res = supabase.table("inspection_sets").select("id, cycle_value, cycle_unit, factory_id, company_id, inspection_set_name, inspection_category, source, schedule_anchor_date").eq("id", inspection_set_id).limit(1).execute()
+    res = supabase.table("inspection_sets").select(
+        _SET_SELECT + ", schedule_anchor_date"
+    ).eq("id", inspection_set_id).limit(1).execute()
     if not res.data:
         raise InspectionSetsSvcError(404, "점검세트를 찾을 수 없습니다.")
     iset = res.data[0]
@@ -91,13 +133,21 @@ def patch_set(inspection_set_id: str, body: InspectionSetPatchBody) -> dict:
         upd["assignee_user_id"] = body.assignee_user_id or None
     if body.description is not None:
         upd["description"] = body.description
+
+    # Same-request assignee + anchor: use request assignee as effective (omit → stored).
+    effective_iset = dict(iset)
+    if body.assignee_user_id is not None:
+        effective_iset["assignee_user_id"] = body.assignee_user_id or None
+
     schedule_updated = False
+    row = None
     if body.schedule_anchor_date is not None:
         if body.schedule_anchor_date:
             if not has_explicit_schedule_cycle(iset):
                 raise InspectionSetsSvcError(422, _CYCLE_REQUIRED_422)
+            _require_legal_assignee(effective_iset)
             anchor = date.fromisoformat(body.schedule_anchor_date)
-            row, planned = _build_next_schedule_row(iset, anchor)
+            row, planned = _build_next_schedule_row(effective_iset, anchor)
             upd.update({"schedule_anchor_date": body.schedule_anchor_date, "next_planned_date": planned.isoformat(), "anchor_confirmed": True, "status_code": "ACTIVE"})
             schedule_updated = True
         else:
@@ -105,7 +155,7 @@ def patch_set(inspection_set_id: str, body: InspectionSetPatchBody) -> dict:
     result = supabase.table("inspection_sets").update(upd).eq("id", inspection_set_id).execute()
     if not result.data:
         raise InspectionSetsSvcError(500, "업데이트 실패")
-    if schedule_updated:
+    if schedule_updated and row is not None:
         try:
             supabase.table("work_schedules").delete().eq("inspection_set_id", inspection_set_id).eq("status_code", "SCHEDULED").execute()
             supabase.table("work_schedules").insert(row).execute()
@@ -119,12 +169,15 @@ def update_anchor(inspection_set_id: str, body: AnchorBody) -> dict:
     anchor_str = body.anchor_date or body.schedule_anchor_date
     if not anchor_str:
         raise InspectionSetsSvcError(422, "anchor_date 필수")
-    res = supabase.table("inspection_sets").select("id, cycle_value, cycle_unit, factory_id, company_id, inspection_set_name, inspection_category, source, schedule_end_date").eq("id", inspection_set_id).limit(1).execute()
+    res = supabase.table("inspection_sets").select(
+        _SET_SELECT + ", schedule_end_date"
+    ).eq("id", inspection_set_id).limit(1).execute()
     if not res.data:
         raise InspectionSetsSvcError(404, "점검 세트를 찾을 수 없습니다.")
     iset = res.data[0]
     if not has_explicit_schedule_cycle(iset):
         raise InspectionSetsSvcError(422, _CYCLE_REQUIRED_422)
+    _require_legal_assignee(iset)
     anchor = date.fromisoformat(anchor_str)
     row, planned = _build_next_schedule_row(iset, anchor)
     end_str = iset.get("schedule_end_date")

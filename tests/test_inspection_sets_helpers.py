@@ -32,3 +32,28 @@ def test_build_next_schedule_row_source_mapping():
         date.today(),
     )
     assert row["source_type"] == "LEGAL"
+    assert row["assigned_user_id"] is None
+
+
+def test_build_next_schedule_row_propagates_assignee_exact():
+    row, _ = h._build_next_schedule_row(
+        {
+            "id": "s1",
+            "factory_id": "f1",
+            "company_id": "c1",
+            "cycle_unit": "month",
+            "cycle_value": 1,
+            "source": "LEGAL_ENGINE",
+            "inspection_category": "INSPECT",
+            "inspection_set_name": "이름",
+            "assignee_user_id": "USER-EXACT",
+            "legal_actor": "사업주",  # must NOT become assigned_user_id
+        },
+        date.today(),
+    )
+    assert row["assigned_user_id"] == "USER-EXACT"
+    src = __import__("inspect").getsource(h._build_next_schedule_row)
+    assert "legal_actor" not in src
+    assert 'iset.get("assignee_user_id")' in src
+    assert '"assigned_user_id":  None' not in src
+    assert '"assigned_user_id": None' not in src

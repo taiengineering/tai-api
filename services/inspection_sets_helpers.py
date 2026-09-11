@@ -115,7 +115,7 @@ def _build_next_schedule_row(iset: dict, base: date):
         "obligation_type":   iset.get("inspection_category") or "GENERAL",
         "summary":           iset.get("inspection_set_name") or "",
         "active_yn":         True,
-        "assigned_user_id":  None,
+        "assigned_user_id":  iset.get("assignee_user_id"),
     }, planned
 
 
