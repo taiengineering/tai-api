@@ -14,6 +14,10 @@ VERSION = "2.1.0"
 #   없어 동작하지 않는 설정이었다. 공용 휴무 캘린더(services/holiday_svc, org_holiday)가
 #   생기면서 실제로 동작한다. 값이 BEFORE/AFTER 가 아니면 보정하지 않으므로
 #   기존 세트의 동작은 바뀌지 않는다.
+#
+# v2.2.0 (2026-09-11, WO-SAFE-OPERATION-TIME-BACKEND-V1-001)
+#   WITHIN/BEFORE one-shot schedule row builder additive.
+#   EVERY recurrence path (_build_next_schedule_row) 불변.
 
 DELTA_MAP = {
     "day":       lambda v: relativedelta(days=v),
@@ -51,6 +55,14 @@ def _next_planned_from(base: date, cycle_unit: str, cycle_value: int) -> date:
 
 # public alias — inspection_schedule.py 등 외부에서 import 가능
 next_planned_from = _next_planned_from
+
+
+def _oneshot_planned_from(base: date, unit: str, value: int, *, direction: str) -> date:
+    """WITHIN (+interval) / BEFORE (−interval) one-shot. No recurring roll-forward."""
+    delta = _get_delta(unit, value)
+    if direction == "before":
+        return base - delta
+    return base + delta
 
 
 def adjust_planned_for_holiday(
@@ -117,6 +129,34 @@ def _build_next_schedule_row(iset: dict, base: date):
         "active_yn":         True,
         # LEGAL_ENGINE only: preserve inspection_sets.assignee_user_id.
         # MANUAL keeps prior semantics (assigned_user_id always None).
+        "assigned_user_id":  (
+            iset.get("assignee_user_id")
+            if iset.get("source") == "LEGAL_ENGINE"
+            else None
+        ),
+    }, planned
+
+
+def _build_oneshot_schedule_row(iset: dict, planned: date):
+    """WITHIN/BEFORE one-shot row. repeat_type=once — recurring projection 금지."""
+    planned = adjust_planned_for_holiday(
+        planned, iset.get("company_id"), iset.get("factory_id"),
+        iset.get("holiday_process_type"))
+    source_type = "LEGAL" if iset.get("source") == "LEGAL_ENGINE" else "MANUAL"
+    return {
+        "factory_id":        iset["factory_id"],
+        "company_id":        iset.get("company_id"),
+        "inspection_set_id": iset["id"],
+        "planned_date":      planned.isoformat(),
+        "start_date":        planned.isoformat(),
+        "end_date":          planned.isoformat(),
+        "repeat_type":       "once",
+        "repeat_interval":   1,
+        "status_code":       "SCHEDULED",
+        "source_type":       source_type,
+        "obligation_type":   iset.get("inspection_category") or "GENERAL",
+        "summary":           iset.get("inspection_set_name") or "",
+        "active_yn":         True,
         "assigned_user_id":  (
             iset.get("assignee_user_id")
             if iset.get("source") == "LEGAL_ENGINE"

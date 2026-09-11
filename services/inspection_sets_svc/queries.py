@@ -27,7 +27,8 @@ def get_sets_list(factory_id, source, anchor_confirmed, page, size, company_id=N
         "last_inspection_date, next_planned_date, anchor_confirmed, description, source, "
         "is_active, status_code, assignee_user_id, created_at, updated_at, "
         "legal_obligation_atom_id, "   # ← REV 4B-1 additive: official obligation exact identity carrier
-        "legal_operation_presentation",  # ← 4B-4B: legal_time_normalized read-model source
+        "legal_operation_presentation, "  # ← 4B-4B: legal_time_normalized read-model source
+        "operation_time_rule",  # ← WO-SAFE-OPERATION-TIME-BACKEND-V1-001
         count="exact",
     )
     if factory_id:

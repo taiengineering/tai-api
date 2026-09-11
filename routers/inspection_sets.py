@@ -35,6 +35,7 @@ from schemas.inspection_sets import (
     InspectionSetPatchBody,
     ManualInspectionSetBody,
     OperationCycleBody,
+    OperationTimeRuleBody,
 )
 from services import inspection_sets_svc as svc
 
@@ -157,13 +158,25 @@ def generate_schedules_for_factory(
     return _call(svc.generate_schedules_for_factory, factory_id, mode, force)
 
 
-# 주의: /{inspection_set_id} 캐치 라우트보다 위에 둠 — 정적 세그먼트 우선(operation-cycle).
+# 주의: /{inspection_set_id} 캐치 라우트보다 위에 둠 — 정적 세그먼트 우선(operation-cycle / operation-time-rule).
 @router.patch("/{inspection_set_id}/operation-cycle")
 def set_operation_cycle(inspection_set_id: str, body: OperationCycleBody, current: dict = Depends(get_current_user)):
     """canonical row 에 사용자 확정 운영주기(cycle_unit/value)만 기록. 법정주기 해석 아님."""
     sb = get_supabase()
     _ensure_set_own(sb, inspection_set_id, current)
     return _call(svc.set_operation_cycle, inspection_set_id, body)
+
+
+@router.patch("/{inspection_set_id}/operation-time-rule")
+def set_operation_time_rule(
+    inspection_set_id: str,
+    body: OperationTimeRuleBody,
+    current: dict = Depends(get_current_user),
+):
+    """operator-aware OPERATION_TIME_RULE 저장(+optional schedule). LEGAL overwrite 0."""
+    sb = get_supabase()
+    _ensure_set_own(sb, inspection_set_id, current)
+    return _call(svc.set_operation_time_rule, inspection_set_id, body)
 
 
 @router.patch("/{inspection_set_id}")
