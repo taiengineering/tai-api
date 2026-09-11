@@ -1,43 +1,45 @@
 """services/inspection_sets_svc/operation_time_rule.py
 
-WO-SAFE-OPERATION-TIME-BACKEND-V1-001.
+WO-SAFE-OPERATION-TIME-BACKEND-V1-001 / PATCH-R1.
 
 LEGAL_NORMALIZED_TIME ≠ OPERATION_TIME_RULE ≠ SCHEDULE.
 
-- dedicated PATCH …/operation-time-rule (cycle-only /operation-cycle 과 분리).
+- dedicated PATCH …/operation-time-rule = PERSIST OPERATION TRUTH ONLY.
+- work_schedules mutation = 0 (daily generator owns materialization).
 - EVERY → cycle_unit/value compatibility projection.
-- WITHIN/BEFORE → cycle_* fake projection 금지 · one-shot schedule.
-- UNTIL → persist candidate · annual inference 0 · v1 schedule 0 (NOT READY).
+- WITHIN/BEFORE/UNTIL → cycle_* fake recurrence projection 금지.
+- UNTIL → persist candidate · annual inference 0 · v1 NOT READY.
 - event basis_date → last_inspection_date 자동 기록 0.
-- LEGAL_ENGINE assignee fail-close (PR #316) 유지.
+- schedule-start lock = 0 (세트는 수정 가능).
 """
 from __future__ import annotations
 
 import calendar
+import re
 from datetime import date
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from db.supabase_client import get_supabase
 from schemas.inspection_sets import OperationTimeRuleBody
-from services.inspection_sets_helpers import (
-    DELTA_MAP,
-    _build_next_schedule_row,
-    _build_oneshot_schedule_row,
-    _oneshot_planned_from,
-)
+from services.inspection_sets_helpers import DELTA_MAP
 from services.time import serialize_business_datetime, now_kst
 from .errors import InspectionSetsSvcError
 
 ALLOWED_SOURCES = frozenset({"LEGAL_DEFAULT", "USER_EDITED"})
 ALLOWED_OPERATORS = frozenset({"EVERY", "WITHIN", "BEFORE", "UNTIL"})
 ALLOWED_UNITS = frozenset(DELTA_MAP.keys())
+_EXACT_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _parse_iso_date(raw: Optional[str], *, field: str) -> date:
-    if not isinstance(raw, str) or not raw.strip():
+    """Exact YYYY-MM-DD only. Reject datetime suffixes / slash / invalid calendar days."""
+    if not isinstance(raw, str):
+        raise InspectionSetsSvcError(422, f"{field} 는 YYYY-MM-DD 형식이어야 합니다.")
+    s = raw.strip()
+    if not _EXACT_ISO_DATE.fullmatch(s):
         raise InspectionSetsSvcError(422, f"{field} 는 YYYY-MM-DD 형식이어야 합니다.")
     try:
-        return date.fromisoformat(raw.strip()[:10])
+        return date.fromisoformat(s)
     except ValueError as e:
         raise InspectionSetsSvcError(422, f"{field} 는 YYYY-MM-DD 형식이어야 합니다.") from e
 
@@ -48,7 +50,7 @@ def _valid_month_day(month: int, day: int) -> bool:
 
 
 def normalize_operation_time_rule(body: OperationTimeRuleBody) -> Dict[str, Any]:
-    """Validate + return JSONB-ready rule dict (create_schedule 제외)."""
+    """Validate + return JSONB-ready rule dict (schedule side-effects 없음)."""
     if (body.version or "").strip() != "v1":
         raise InspectionSetsSvcError(422, "version 은 v1 이어야 합니다.")
     source = (body.source or "").strip().upper()
@@ -74,11 +76,11 @@ def normalize_operation_time_rule(body: OperationTimeRuleBody) -> Dict[str, Any]
                 )
             if body.basis_date is None:
                 raise InspectionSetsSvcError(422, "basis_date 는 YYYY-MM-DD 형식이어야 합니다.")
-            _parse_iso_date(body.basis_date, field="basis_date")
+            basis = _parse_iso_date(body.basis_date, field="basis_date")
             rule["value"] = val
             rule["unit"] = unit
-            rule["basis_date"] = body.basis_date.strip()[:10]
-        else:  # BEFORE — draft may omit offset; schedule requires them later
+            rule["basis_date"] = basis.isoformat()
+        else:  # BEFORE — draft may omit offset; daily generator waits until ready
             if val is not None:
                 if isinstance(val, bool) or not isinstance(val, int) or val < 1:
                     raise InspectionSetsSvcError(422, "value 는 1 이상의 정수여야 합니다.")
@@ -90,8 +92,8 @@ def normalize_operation_time_rule(body: OperationTimeRuleBody) -> Dict[str, Any]
                     )
                 rule["unit"] = unit
             if body.basis_date is not None:
-                _parse_iso_date(body.basis_date, field="basis_date")
-                rule["basis_date"] = body.basis_date.strip()[:10]
+                basis = _parse_iso_date(body.basis_date, field="basis_date")
+                rule["basis_date"] = basis.isoformat()
         if isinstance(body.basis_text, str) and body.basis_text.strip():
             rule["basis_text"] = body.basis_text.strip()
 
@@ -105,15 +107,15 @@ def normalize_operation_time_rule(body: OperationTimeRuleBody) -> Dict[str, Any]
         rule["month"] = int(body.month)
         rule["day"] = int(body.day)
         if body.basis_date is not None:
-            _parse_iso_date(body.basis_date, field="basis_date")
-            rule["basis_date"] = body.basis_date.strip()[:10]
+            basis = _parse_iso_date(body.basis_date, field="basis_date")
+            rule["basis_date"] = basis.isoformat()
         # annual recurrence fields: NEVER invent
 
     return rule
 
 
 def is_operation_time_ready(rule: Optional[dict], assignee_user_id: Any) -> bool:
-    """Server readiness (LEGAL_ENGINE schedule gate). UNTIL v1 always False."""
+    """Server readiness signal for future daily generator gate. UNTIL v1 always False."""
     if not isinstance(rule, dict):
         return False
     if not assignee_user_id:
@@ -128,12 +130,8 @@ def is_operation_time_ready(rule: Optional[dict], assignee_user_id: Any) -> bool
     return False
 
 
-def _has_assignee(iset: dict) -> bool:
-    return bool(iset.get("assignee_user_id"))
-
-
 def set_operation_time_rule(inspection_set_id: str, body: OperationTimeRuleBody) -> Dict[str, Any]:
-    """Persist operation_time_rule; optional schedule when ready + create_schedule."""
+    """Persist operation_time_rule only. No work_schedules INSERT/UPDATE/DELETE."""
     rule = normalize_operation_time_rule(body)
     supabase = get_supabase()
     res = (
@@ -168,100 +166,22 @@ def set_operation_time_rule(inspection_set_id: str, body: OperationTimeRuleBody)
         upd["cycle_unit"] = rule["unit"]
         upd["cycle_value"] = rule["value"]
     else:
-        # clear legacy recurring projection so old anchor path cannot invent monthly schedule
         upd["cycle_unit"] = None
         upd["cycle_value"] = None
 
     # event basis → last_inspection false-write = 0 (never touch last_inspection_date here)
+    # existing schedules / anchor fields do not block save (mutable set contract)
 
-    ready = is_operation_time_ready(rule, iset.get("assignee_user_id"))
-    schedule_created = 0
-    planned_out: Optional[str] = None
+    upd_res = (
+        supabase.table("inspection_sets")
+        .update(upd)
+        .eq("id", inspection_set_id)
+        .eq("source", "LEGAL_ENGINE")
+        .execute()
+    )
+    if not upd_res.data:
+        raise InspectionSetsSvcError(409, "운영시간 규칙 저장에 실패했습니다.")
 
-    if body.create_schedule:
-        if op == "UNTIL":
-            raise InspectionSetsSvcError(
-                422,
-                "UNTIL 은 이번 버전에서 일정 생성이 불가합니다 (calendar deadline persist only · annual 추론 금지).",
-            )
-        if not ready:
-            if op == "BEFORE" and (rule.get("value") is None or not rule.get("unit")):
-                raise InspectionSetsSvcError(
-                    422, "BEFORE 일정 생성에는 운영 offset value/unit 과 basis_date · 담당자가 필요합니다."
-                )
-            if not _has_assignee(iset):
-                raise InspectionSetsSvcError(422, "담당자를 지정한 뒤에 일정을 생성할 수 있습니다.")
-            raise InspectionSetsSvcError(422, "운영시간 규칙이 일정 생성 준비 상태가 아닙니다.")
-
-        effective = dict(iset)
-        effective["operation_time_rule"] = rule
-        if op == "EVERY":
-            effective["cycle_unit"] = rule["unit"]
-            effective["cycle_value"] = rule["value"]
-        basis = _parse_iso_date(rule["basis_date"], field="basis_date")
-
-        if op == "EVERY":
-            row, planned = _build_next_schedule_row(effective, basis)
-            # EVERY: basis_date may align with schedule_anchor_date (not forced to last_inspection)
-            upd["schedule_anchor_date"] = basis.isoformat()
-            upd["next_planned_date"] = planned.isoformat()
-            upd["anchor_confirmed"] = True
-            upd["status_code"] = "ACTIVE"
-        elif op == "WITHIN":
-            planned0 = _oneshot_planned_from(basis, rule["unit"], int(rule["value"]), direction="within")
-            row, planned = _build_oneshot_schedule_row(effective, planned0)
-            upd["schedule_anchor_date"] = basis.isoformat()  # confirmed event date — NOT last_inspection
-            upd["next_planned_date"] = planned.isoformat()
-            upd["anchor_confirmed"] = True
-            upd["status_code"] = "ACTIVE"
-        elif op == "BEFORE":
-            planned0 = _oneshot_planned_from(basis, rule["unit"], int(rule["value"]), direction="before")
-            row, planned = _build_oneshot_schedule_row(effective, planned0)
-            upd["schedule_anchor_date"] = basis.isoformat()
-            upd["next_planned_date"] = planned.isoformat()
-            upd["anchor_confirmed"] = True
-            upd["status_code"] = "ACTIVE"
-        else:
-            raise InspectionSetsSvcError(422, "지원하지 않는 operator 입니다.")
-
-        # duplicate guard — existing unique (inspection_set_id, planned_date, factory_id)
-        dup = (
-            supabase.table("work_schedules")
-            .select("id")
-            .eq("inspection_set_id", inspection_set_id)
-            .eq("planned_date", planned.isoformat())
-            .eq("factory_id", iset["factory_id"])
-            .limit(1)
-            .execute()
-        )
-        if dup.data:
-            raise InspectionSetsSvcError(409, "동일 예정일의 일정이 이미 존재합니다.")
-
-        # persist set first, then schedule (fail-close order: set update then insert)
-        upd_res = (
-            supabase.table("inspection_sets")
-            .update(upd)
-            .eq("id", inspection_set_id)
-            .eq("source", "LEGAL_ENGINE")
-            .execute()
-        )
-        if not upd_res.data:
-            raise InspectionSetsSvcError(409, "운영시간 규칙 저장에 실패했습니다.")
-        supabase.table("work_schedules").insert(row).execute()
-        schedule_created = 1
-        planned_out = planned.isoformat()
-    else:
-        upd_res = (
-            supabase.table("inspection_sets")
-            .update(upd)
-            .eq("id", inspection_set_id)
-            .eq("source", "LEGAL_ENGINE")
-            .execute()
-        )
-        if not upd_res.data:
-            raise InspectionSetsSvcError(409, "운영시간 규칙 저장에 실패했습니다.")
-
-    # recompute ready against stored assignee
     ready = is_operation_time_ready(rule, iset.get("assignee_user_id"))
     return {
         "status": "success",
@@ -270,10 +190,8 @@ def set_operation_time_rule(inspection_set_id: str, body: OperationTimeRuleBody)
             "inspection_set_id": inspection_set_id,
             "operation_time_rule": rule,
             "readiness": ready,
-            "schedule_created": schedule_created,
-            "planned_date": planned_out,
-            "cycle_unit": upd.get("cycle_unit", iset.get("cycle_unit")),
-            "cycle_value": upd.get("cycle_value", iset.get("cycle_value")),
+            "cycle_unit": upd.get("cycle_unit"),
+            "cycle_value": upd.get("cycle_value"),
         },
     }
 
