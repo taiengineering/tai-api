@@ -7,8 +7,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 import ssl
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,6 +26,15 @@ TIMEOUT = 30
 MAX_BYTES = 20 * 1024 * 1024
 CHUNK = 64 * 1024
 PDF_MAGIC = b"%PDF"
+DOWNLOAD_ATTEMPTS = 3
+DOWNLOAD_TRANSIENT_BACKOFF = (1.0, 3.0)
+_TRANSIENT_NET = (
+    ConnectionResetError,
+    TimeoutError,
+    BrokenPipeError,
+    socket.timeout,
+    ssl.SSLError,
+)
 ALLOWED_HTTPS_HOSTS = frozenset(ALLOWED_HOSTS)
 BLOCKED_CONTENT_TYPES = frozenset({
     "text/html",
@@ -97,6 +108,24 @@ def assert_pdf_payload(ctype: str, head: bytes) -> None:
         raise BinaryFetchError("PDF_MAGIC_MISMATCH")
 
 
+def is_download_transient(exc: BaseException) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return False
+    if isinstance(exc, _TRANSIENT_NET):
+        return True
+    if isinstance(exc, urllib.error.URLError):
+        return is_download_transient(exc.reason) if isinstance(exc.reason, BaseException) else False
+    return False
+
+
+def _discard_partial(path: str | None) -> None:
+    if path and os.path.isfile(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 class GuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Inspect Location before the next request. Disallowed host body is never read."""
 
@@ -119,6 +148,37 @@ def build_guarded_opener(chain: Optional[list] = None, extra_handlers=()):
 
 
 def fetch_https_binary(
+    url: str,
+    dest_path: str,
+    *,
+    headers: Optional[dict] = None,
+    opener=None,
+    expect_pdf: bool = False,
+    max_bytes: int = MAX_BYTES,
+    sleeper=time.sleep,
+) -> dict:
+    last: BinaryFetchError | None = None
+    for attempt in range(DOWNLOAD_ATTEMPTS):
+        try:
+            return _fetch_https_binary_once(
+                url, dest_path, headers=headers, opener=opener,
+                expect_pdf=expect_pdf, max_bytes=max_bytes,
+            )
+        except BinaryFetchError as e:
+            if e.code != "DOWNLOAD_TRANSIENT":
+                raise
+            last = e
+            _discard_partial(dest_path)
+            if attempt >= DOWNLOAD_ATTEMPTS - 1:
+                raise BinaryFetchError(
+                    "TRANSIENT_UPSTREAM_FAILURE", str(e),
+                    status=e.status, body_bytes_read=e.body_bytes_read,
+                ) from e
+            sleeper(DOWNLOAD_TRANSIENT_BACKOFF[attempt])
+    raise last or BinaryFetchError("TRANSIENT_UPSTREAM_FAILURE")
+
+
+def _fetch_https_binary_once(
     url: str,
     dest_path: str,
     *,
@@ -151,8 +211,12 @@ def fetch_https_binary(
         raise
     except urllib.error.HTTPError as e:
         raise BinaryFetchError("DOWNLOAD_HTTP_ERROR", f"http {e.code}", status=e.code) from e
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        raise BinaryFetchError("DOWNLOAD_HTTP_ERROR", type(e).__name__) from e
+    except Exception as e:
+        if is_download_transient(e):
+            raise BinaryFetchError("DOWNLOAD_TRANSIENT", type(e).__name__) from e
+        if isinstance(e, (urllib.error.URLError, TimeoutError, OSError)):
+            raise BinaryFetchError("DOWNLOAD_HTTP_ERROR", type(e).__name__) from e
+        raise
 
     try:
         final = getattr(resp, "geturl", lambda: url)()
@@ -178,7 +242,18 @@ def fetch_https_binary(
         first = b""
         with open(dest_path, "wb") as out:
             while True:
-                chunk = resp.read(CHUNK)
+                try:
+                    chunk = resp.read(CHUNK)
+                except BinaryFetchError:
+                    raise
+                except Exception as e:
+                    if is_download_transient(e):
+                        raise BinaryFetchError(
+                            "DOWNLOAD_TRANSIENT", type(e).__name__,
+                            status=getattr(resp, "status", None),
+                            body_bytes_read=body_bytes_read,
+                        ) from e
+                    raise
                 if not chunk:
                     break
                 body_bytes_read += len(chunk)
@@ -301,6 +376,7 @@ def fetch_attachment_binary(
     dest_path: str | None = None,
     opener=None,
     expect_pdf: bool = False,
+    sleeper=time.sleep,
 ) -> dict:
     assert_binary_allowed(kogl_type, content_type)
     q: dict[str, str] = {
@@ -322,7 +398,7 @@ def fetch_attachment_binary(
     headers = {"User-Agent": DEFAULT_UA, "Accept": "*/*", "chnlId": "portal24"}
     try:
         return fetch_https_binary(
-            url, path, headers=headers, opener=opener, expect_pdf=expect_pdf,
+            url, path, headers=headers, opener=opener, expect_pdf=expect_pdf, sleeper=sleeper,
         )
     except Exception:
         if tmp_owned and path and os.path.isfile(path):

@@ -195,3 +195,52 @@ def test_store_blocks_video_and_type2():
         assert False
     except Exception as e:
         assert getattr(e, "code", "") == "LICENSE_STORAGE_FORBIDDEN"
+
+
+def test_transient_retry_creates_one_version_and_exhausted_does_no_dml(tmp_path):
+    import os
+    from services.kosha_safety_materials.storage.binary_fetch import BinaryFetchError, fetch_https_binary
+    from tests.test_kosha_binary_fetch import PDF as BINPDF, _flaky_opener
+
+    url = "https://portal.kosha.or.kr/file"
+    dest = str(tmp_path / "ok.pdf")
+    opener, h = _flaky_opener(BINPDF, succeed_on=2, mode="before")
+
+    def fetch_ok(**k):
+        got = fetch_https_binary(url, dest, opener=opener, expect_pdf=True, sleeper=lambda s: None)
+        data = open(got["dest_path"], "rb").read()
+        return {"data": data, "sha256": got["sha256"], "content_type": "application/pdf"}
+
+    s3 = FakeS3()
+    vs = MemoryVersionStore()
+    out = store_asset_original(
+        kogl_type="1", content_type="PDF", material_id="m1",
+        atcfl_no="N", atcfl_seq=1, file_name="a.pdf",
+        membership_ids={"m1"}, fetch_fn=fetch_ok, r2=R2Store(s3), versions=vs, version_payload=_payload(),
+    )
+    assert out["status"] == "NEW_VERSION"
+    assert len(vs.rows) == 1
+    assert s3.puts == 1
+    assert h.opens == 2
+
+    dest2 = str(tmp_path / "fail.pdf")
+    opener2, h2 = _flaky_opener(BINPDF, succeed_on=99, mode="before")
+
+    def fetch_fail(**k):
+        return fetch_https_binary(url, dest2, opener=opener2, expect_pdf=True, sleeper=lambda s: None)
+
+    s3b = FakeS3()
+    vsb = MemoryVersionStore()
+    try:
+        store_asset_original(
+            kogl_type="1", content_type="PDF", material_id="m1",
+            atcfl_no="N", atcfl_seq=1, file_name="a.pdf",
+            membership_ids={"m1"}, fetch_fn=fetch_fail, r2=R2Store(s3b), versions=vsb, version_payload=_payload(),
+        )
+        assert False
+    except BinaryFetchError as e:
+        assert e.code == "TRANSIENT_UPSTREAM_FAILURE"
+    assert h2.opens == 3
+    assert s3b.puts == 0
+    assert vsb.rows == []
+    assert vsb.dml == 0

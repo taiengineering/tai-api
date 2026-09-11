@@ -45,6 +45,8 @@ def map_fetch_stop(err: Exception) -> None:
         raise StopRun("ACCESS_BLOCKED", http_status=status)
     if status and int(status) >= 500:
         raise StopRun("TRANSIENT_UPSTREAM_FAILURE", http_status=status)
+    if getattr(err, "code", None) == "TRANSIENT_UPSTREAM_FAILURE":
+        raise StopRun("TRANSIENT_UPSTREAM_FAILURE")
     if getattr(err, "reason", None) in ("QUOTA_BLOCKED", "ACCESS_BLOCKED", "TRANSIENT_UPSTREAM_FAILURE"):
         raise err
 
@@ -303,6 +305,8 @@ def _store_one(
             )
         except BinaryFetchError as e:
             map_fetch_stop(e)
+            if e.code == "TRANSIENT_UPSTREAM_FAILURE":
+                raise StopRun("TRANSIENT_UPSTREAM_FAILURE") from e
             raise StorageError("BINARY_INTEGRITY_BLOCKED", e.code) from e
 
     payload = {

@@ -226,3 +226,158 @@ def test_stream_overflow_and_direct_pdf():
         except BinaryFetchError as e:
             assert e.code == "RESPONSE_TOO_LARGE"
             assert e.body_bytes_read > 0
+
+
+class _ResetResp(io.BytesIO):
+    def __init__(self, data, headers, url, status, reset_before=False, reset_after=None):
+        super().__init__(data)
+        self.headers = headers
+        self._url = url
+        self.status = status
+        self.code = status
+        self.msg = "OK"
+        self.reset_before = reset_before
+        self.reset_after = reset_after
+        self.emitted = 0
+
+    def geturl(self):
+        return self._url
+
+    def info(self):
+        return self.headers
+
+    def read(self, n=-1):
+        if self.reset_before:
+            raise ConnectionResetError(54, "Connection reset by peer")
+        if self.reset_after is not None and self.emitted > 0:
+            raise ConnectionResetError(54, "Connection reset by peer")
+        take = 4 if self.reset_after is not None else n
+        chunk = super().read(take if take != -1 else n)
+        self.emitted += len(chunk)
+        return chunk
+
+
+class FlakyPdfHandler(urllib.request.BaseHandler):
+    handler_order = 1
+
+    def __init__(self, body, succeed_on, mode):
+        self.body = body
+        self.succeed_on = succeed_on
+        self.mode = mode
+        self.opens = 0
+
+    def http_open(self, req):
+        return self._open(req)
+
+    def https_open(self, req):
+        return self._open(req)
+
+    def _open(self, req):
+        self.opens += 1
+        hdr = email.message.Message()
+        hdr["Content-Type"] = "application/pdf"
+        ok = self.opens >= self.succeed_on
+        if ok:
+            return _ResetResp(self.body, hdr, req.full_url, 200)
+        if self.mode == "before":
+            return _ResetResp(self.body, hdr, req.full_url, 200, reset_before=True)
+        return _ResetResp(self.body, hdr, req.full_url, 200, reset_after=1)
+
+
+class StatusErrorHandler(urllib.request.BaseHandler):
+    handler_order = 1
+
+    def __init__(self, code):
+        self.code = code
+        self.opens = 0
+
+    def https_open(self, req):
+        self.opens += 1
+        hdr = email.message.Message()
+        raise urllib.error.HTTPError(req.full_url, self.code, "err", hdr, io.BytesIO(b""))
+
+
+def _flaky_opener(body, succeed_on, mode):
+    h = FlakyPdfHandler(body, succeed_on, mode)
+    rh = GuardedRedirectHandler([])
+    return urllib.request.build_opener(rh, h), h
+
+
+def test_read_reset_retries_then_succeeds():
+    url = "https://portal.kosha.or.kr/file"
+    slept = []
+    with tempfile.TemporaryDirectory() as td:
+        dest = os.path.join(td, "a.pdf")
+        opener, h = _flaky_opener(PDF, succeed_on=2, mode="before")
+        got = fetch_https_binary(url, dest, opener=opener, expect_pdf=True, sleeper=slept.append)
+        assert got["ok"]
+        assert h.opens == 2
+        assert slept == [1.0]
+        assert open(dest, "rb").read().startswith(b"%PDF")
+
+    slept = []
+    with tempfile.TemporaryDirectory() as td:
+        dest = os.path.join(td, "b.pdf")
+        opener, h = _flaky_opener(PDF, succeed_on=2, mode="after")
+        got = fetch_https_binary(url, dest, opener=opener, expect_pdf=True, sleeper=slept.append)
+        assert got["ok"]
+        assert h.opens == 2
+        assert not dest.endswith("partial")
+
+    slept = []
+    with tempfile.TemporaryDirectory() as td:
+        dest = os.path.join(td, "c.pdf")
+        opener, h = _flaky_opener(PDF, succeed_on=3, mode="before")
+        got = fetch_https_binary(url, dest, opener=opener, expect_pdf=True, sleeper=slept.append)
+        assert got["ok"] and h.opens == 3
+        assert slept == [1.0, 3.0]
+
+
+def test_three_resets_are_transient_not_integrity():
+    url = "https://portal.kosha.or.kr/file"
+    slept = []
+    with tempfile.TemporaryDirectory() as td:
+        dest = os.path.join(td, "d.pdf")
+        opener, h = _flaky_opener(PDF, succeed_on=99, mode="before")
+        try:
+            fetch_https_binary(url, dest, opener=opener, expect_pdf=True, sleeper=slept.append)
+            assert False
+        except BinaryFetchError as e:
+            assert e.code == "TRANSIENT_UPSTREAM_FAILURE"
+        assert h.opens == 3
+        assert slept == [1.0, 3.0]
+        assert not os.path.isfile(dest)
+
+
+def test_http_429_403_and_pdf_magic_do_not_retry():
+    url = "https://portal.kosha.or.kr/file"
+    rh = GuardedRedirectHandler([])
+    h429 = StatusErrorHandler(429)
+    try:
+        fetch_https_binary(url, "/tmp/x.pdf", opener=urllib.request.build_opener(rh, h429), expect_pdf=True, sleeper=lambda s: None)
+        assert False
+    except BinaryFetchError as e:
+        assert e.code == "DOWNLOAD_HTTP_ERROR"
+        assert e.status == 429
+    assert h429.opens == 1
+
+    h403 = StatusErrorHandler(403)
+    try:
+        fetch_https_binary(url, "/tmp/y.pdf", opener=urllib.request.build_opener(GuardedRedirectHandler([]), h403), expect_pdf=True, sleeper=lambda s: None)
+        assert False
+    except BinaryFetchError as e:
+        assert e.code == "DOWNLOAD_HTTP_ERROR"
+        assert e.status == 403
+    assert h403.opens == 1
+
+    with tempfile.TemporaryDirectory() as td:
+        dest = os.path.join(td, "bad.pdf")
+        opener, mock, _ = opener_for({
+            url: (200, {"Content-Type": "application/pdf"}, b"NOT-A-PDF"),
+        })
+        try:
+            fetch_https_binary(url, dest, opener=opener, expect_pdf=True, sleeper=lambda s: None)
+            assert False
+        except BinaryFetchError as e:
+            assert e.code == "PDF_MAGIC_MISMATCH"
+        assert len(mock.opened) == 1

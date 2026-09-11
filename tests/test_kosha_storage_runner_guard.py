@@ -1,6 +1,7 @@
 """WP-1C-5B production runner — MemoryVersionStore apply forbidden."""
 from services.kosha_safety_materials.detail_client import StopRun
-from services.kosha_safety_materials.storage.runner import apply_assets, apply_bulk
+from services.kosha_safety_materials.storage.binary_fetch import BinaryFetchError
+from services.kosha_safety_materials.storage.runner import apply_assets, apply_bulk, map_fetch_stop
 from services.kosha_safety_materials.storage.store import StorageError
 from services.kosha_safety_materials.storage.version_service import MemoryVersionStore, VersionError
 
@@ -56,3 +57,11 @@ def test_apply_bulk_stops_when_pending_does_not_decrease(monkeypatch):
         assert False
     except StopRun as e:
         assert e.reason == "PENDING_NO_PROGRESS"
+
+
+def test_transient_upstream_is_not_integrity():
+    try:
+        map_fetch_stop(BinaryFetchError("TRANSIENT_UPSTREAM_FAILURE"))
+        assert False
+    except StopRun as e:
+        assert e.reason == "TRANSIENT_UPSTREAM_FAILURE"
