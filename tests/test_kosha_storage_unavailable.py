@@ -190,7 +190,7 @@ def test_second_get_binary_stores_normally():
     assert holds.inserts == 0
 
 
-def test_second_get_html_stops_not_hold():
+def test_second_get_html_is_review_hold():
     holds = _ProdHolds()
     n = {"c": 0}
 
@@ -200,28 +200,26 @@ def test_second_get_html_stops_not_hold():
             raise BinaryFetchError("EMPTY_BODY", status=200, body_bytes_read=0)
         raise BinaryFetchError("HTML_NOT_BINARY", status=200, body_bytes_read=0)
 
-    try:
-        _store_one(
-            _item(),
-            membership_ids={MID},
-            r2=R2Store(FakeS3()),
-            versions=_ProdVersions(),
-            snapshot_id="snap-1",
-            holds=holds,
-            fetch_detail_fn=lambda medseq: _detail_json(medseq),
-            fetch_atch_fn=lambda medseq: _atch_json(),
-            fetch_file_list_fn=lambda atcfl_no: _files(),
-            fetch_binary_fn=fetch_binary,
-        )
-        assert False
-    except StorageError as e:
-        assert e.code == "BINARY_INTEGRITY_BLOCKED"
-        assert e.subreason == "HTML_NOT_BINARY"
-    assert holds.inserts == 0
+    out = _store_one(
+        _item(),
+        membership_ids={MID},
+        r2=R2Store(FakeS3()),
+        versions=_ProdVersions(),
+        snapshot_id="snap-1",
+        holds=holds,
+        fetch_detail_fn=lambda medseq: _detail_json(medseq),
+        fetch_atch_fn=lambda medseq: _atch_json(),
+        fetch_file_list_fn=lambda atcfl_no: _files(),
+        fetch_binary_fn=fetch_binary,
+    )
+    assert out["status"] == "HOLD"
+    assert out["reason"] == "SOURCE_ASSET_REVIEW_REQUIRED"
+    assert out["subreason"] == "HTML_NOT_BINARY"
+    assert holds.inserts == 1
     assert n["c"] == 2
 
 
-def test_pdf_magic_mismatch_does_not_confirm_or_hold():
+def test_pdf_magic_mismatch_is_review_hold_without_confirm():
     holds = _ProdHolds()
     n = {"c": 0}
 
@@ -229,22 +227,20 @@ def test_pdf_magic_mismatch_does_not_confirm_or_hold():
         n["c"] += 1
         raise BinaryFetchError("PDF_MAGIC_MISMATCH", status=200, body_bytes_read=8)
 
-    try:
-        _store_one(
-            _item(),
-            membership_ids={MID},
-            r2=R2Store(FakeS3()),
-            versions=_ProdVersions(),
-            snapshot_id="snap-1",
-            holds=holds,
-            fetch_detail_fn=lambda medseq: _detail_json(medseq),
-            fetch_atch_fn=lambda medseq: _atch_json(),
-            fetch_file_list_fn=lambda atcfl_no: _files(),
-            fetch_binary_fn=fetch_binary,
-        )
-        assert False
-    except StorageError as e:
-        assert e.code == "BINARY_INTEGRITY_BLOCKED"
-        assert e.subreason == "PDF_MAGIC_MISMATCH"
+    out = _store_one(
+        _item(),
+        membership_ids={MID},
+        r2=R2Store(FakeS3()),
+        versions=_ProdVersions(),
+        snapshot_id="snap-1",
+        holds=holds,
+        fetch_detail_fn=lambda medseq: _detail_json(medseq),
+        fetch_atch_fn=lambda medseq: _atch_json(),
+        fetch_file_list_fn=lambda atcfl_no: _files(),
+        fetch_binary_fn=fetch_binary,
+    )
+    assert out["status"] == "HOLD"
+    assert out["reason"] == "SOURCE_ASSET_REVIEW_REQUIRED"
+    assert out["subreason"] == "PDF_MAGIC_MISMATCH"
     assert n["c"] == 1
-    assert holds.inserts == 0
+    assert holds.inserts == 1

@@ -16,8 +16,10 @@ HOLD_REASONS = frozenset({
     "SOURCE_ASSET_MULTI_MATCH",
     "SOURCE_ASSET_OVERSIZE_POLICY",
     "SOURCE_BINARY_UNAVAILABLE",
+    "SOURCE_ASSET_REVIEW_REQUIRED",
 })
 UNAVAILABLE_REASON = "SOURCE_BINARY_UNAVAILABLE"
+REVIEW_REASON = "SOURCE_ASSET_REVIEW_REQUIRED"
 HOLD_STATUSES = frozenset({"OPEN", "RESOLVED"})
 
 
@@ -229,4 +231,52 @@ def oversize_report(holds, snapshot_id: str) -> dict:
         "oversize_hold_count": len(ids_sorted),
         "oversize_max_file_size": max_sz if ids_sorted else 0,
         "oversize_asset_ids": ids_sorted,
+    }
+
+
+def hold_breakdown(holds, snapshot_id: str) -> dict:
+    from .classify import REVIEW_REASON, REVIEW_SUBREASONS
+
+    reasons = [
+        "SOURCE_ASSET_FILENAME_MISMATCH",
+        "SOURCE_ASSET_ZERO_MATCH",
+        "SOURCE_ASSET_MULTI_MATCH",
+        "SOURCE_ASSET_OVERSIZE_POLICY",
+        "SOURCE_BINARY_UNAVAILABLE",
+        REVIEW_REASON,
+    ]
+    counts = {r: 0 for r in reasons}
+    ids = {r: [] for r in reasons}
+    review_subs = {s: 0 for s in sorted(REVIEW_SUBREASONS)}
+    review_ids = {s: [] for s in sorted(REVIEW_SUBREASONS)}
+    if holds is None or not snapshot_id or not hasattr(holds, "open_rows"):
+        return {
+            "hold_counts": counts,
+            "hold_asset_ids": ids,
+            "review_subreasons": review_subs,
+            "review_subreason_ids": review_ids,
+        }
+    for r in holds.open_rows(snapshot_id):
+        reason = r.get("reason")
+        aid = r.get("asset_id")
+        if reason in counts:
+            counts[reason] += 1
+            if aid is not None:
+                ids[reason].append(aid)
+        if reason == REVIEW_REASON:
+            obs = (r.get("observed_files") or [{}])
+            sub = obs[0].get("subreason") if obs and isinstance(obs[0], dict) else None
+            if sub in review_subs:
+                review_subs[sub] += 1
+                if aid is not None:
+                    review_ids[sub].append(aid)
+    for k in ids:
+        ids[k] = sorted(ids[k])
+    for k in review_ids:
+        review_ids[k] = sorted(review_ids[k])
+    return {
+        "hold_counts": counts,
+        "hold_asset_ids": ids,
+        "review_subreasons": review_subs,
+        "review_subreason_ids": review_ids,
     }

@@ -90,14 +90,14 @@ def test_zero_and_null_size_are_not_pre_network_oversize():
                 versions=_ProdVersions(),
                 snapshot_id="snap-1",
                 holds=holds,
-                fetch_detail_fn=lambda medseq: _detail_json("999"),
+                fetch_detail_fn=lambda medseq: _detail_json(medseq),
                 fetch_atch_fn=lambda medseq: (_ for _ in ()).throw(AssertionError("no atch")),
                 fetch_file_list_fn=lambda n: (_ for _ in ()).throw(AssertionError("no files")),
                 fetch_binary_fn=lambda **k: (_ for _ in ()).throw(AssertionError("binary GET 0")),
             )
             assert False
         except StorageError as e:
-            assert e.code == "BINARY_INTEGRITY_BLOCKED"
+            assert e.code == "SOURCE_ASSET_RESOLUTION_BLOCKED"
         assert holds.inserts == 0
 
 

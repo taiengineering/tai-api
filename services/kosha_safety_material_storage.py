@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 from services.kosha_safety_materials.detail_client import StopRun
-from services.kosha_safety_materials.storage.hold_store import SupabaseHoldStore, oversize_report
+from services.kosha_safety_materials.storage.hold_store import SupabaseHoldStore, hold_breakdown, oversize_report
 from services.kosha_safety_materials.storage.r2_store import R2Error, R2Store, credentials_from_env, make_s3_client
 from services.kosha_safety_materials.storage.runner import (
     apply_assets,
@@ -113,7 +113,10 @@ if __name__ == "__main__":
         extra = {}
         try:
             snap = store.latest_completed() or {}
-            extra = oversize_report(holds, snap.get("id"))
+            extra = {
+                **oversize_report(holds, snap.get("id")),
+                **hold_breakdown(holds, snap.get("id")),
+            }
         except Exception:
             extra = {}
         _print({**stop_run_payload(e), **extra}, 2)

@@ -25,7 +25,19 @@ from .eligibility import (
     require_asset_id,
     sort_pending_key,
 )
-from .hold_store import HOLD_REASONS, HoldError, UNAVAILABLE_REASON, assert_production_holds, oversize_report
+from .classify import (
+    ContentAnomalyGuard,
+    classify_asset_failure,
+    REVIEW_REASON,
+)
+from .hold_store import (
+    HOLD_REASONS,
+    HoldError,
+    UNAVAILABLE_REASON,
+    assert_production_holds,
+    hold_breakdown,
+    oversize_report,
+)
 from .limits import MAX_BINARY_BYTES, OVERSIZE_REASON, is_metadata_oversize, oversize_observed, parsed_file_size
 from .r2_store import R2Error, R2Store, credentials_from_env, make_s3_client
 from .resolve import ResolutionError, match_downloadable_file, match_logical_attachment
@@ -379,12 +391,24 @@ def _hold_asset(holds, *, snapshot_id, item, material_id, source_med_seq, reason
     return {
         "status": "HOLD",
         "reason": reason,
+        "subreason": None,
         "asset_id": item.get("asset_id"),
         "hold_inserted": recorded.get("inserted"),
         "r2_put": 0,
         "version_dml": 0,
         "binary_get": 0,
     }
+
+
+def _review_hold(holds, *, snapshot_id, item, material_id, source_med_seq, decision, binary_get=0) -> dict:
+    held = _hold_asset(
+        holds, snapshot_id=snapshot_id, item=item, material_id=material_id,
+        source_med_seq=source_med_seq, reason=decision.reason,
+        observed_files=[decision.evidence],
+    )
+    held["subreason"] = decision.subreason
+    held["binary_get"] = binary_get
+    return held
 
 
 def _store_one(
@@ -427,15 +451,29 @@ def _store_one(
         raise StorageError("BINARY_INTEGRITY_BLOCKED", type(e).__name__) from e
     parsed = parser.parse_detail(raw.get("json"), medseq, raw.get("status"))
     if parsed["status"] != "OK":
+        fail = parsed.get("failure_reason") or parsed["status"]
+        if parsed["status"] == "MEDSEQ_MISMATCH" or fail == "MEDSEQ_MISMATCH":
+            d = classify_asset_failure("SOURCE_MEDSEQ_MISMATCH", item=item, source_med_seq=medseq)
+            if d.action == "HOLD":
+                return _review_hold(
+                    holds, snapshot_id=snapshot_id, item=item, material_id=mid,
+                    source_med_seq=medseq, decision=d, binary_get=0,
+                )
         raise StorageError(
             "BINARY_INTEGRITY_BLOCKED",
-            parsed.get("failure_reason") or parsed["status"],
-            subreason=parsed.get("failure_reason") or parsed["status"],
+            fail,
+            subreason=fail,
         )
     fields = parsed["fields"]
     live_kogl = license_policy.normalize_kogl_type(None if fields.get("medGonggongnuri") is None else str(fields.get("medGonggongnuri")))
     changed = live_kogl_ok(item["kogl_type"], live_kogl)
     if changed:
+        d = classify_asset_failure(changed, item=item, source_med_seq=medseq)
+        if d.action == "HOLD":
+            return _review_hold(
+                holds, snapshot_id=snapshot_id, item=item, material_id=mid,
+                source_med_seq=medseq, decision=d, binary_get=0,
+            )
         raise StorageError(changed)
     try:
         atch = fetch_atch_fn(medseq)
@@ -456,6 +494,12 @@ def _store_one(
     except StopRun:
         raise
     except ResolutionError as e:
+        d = classify_asset_failure(e.code, item=item, source_med_seq=medseq)
+        if d.action == "HOLD" and d.reason == REVIEW_REASON:
+            return _review_hold(
+                holds, snapshot_id=snapshot_id, item=item, material_id=mid,
+                source_med_seq=medseq, decision=d, binary_get=0,
+            )
         if e.code in HOLD_REASONS:
             return _hold_asset(
                 holds, snapshot_id=snapshot_id, item=item, material_id=mid,
@@ -484,6 +528,14 @@ def _store_one(
             return confirm_empty_binary_get(_one_get)
         except BinaryFetchError as e:
             if e.code in (OVERSIZE_REASON, UNAVAILABLE_REASON):
+                raise
+            d = classify_asset_failure(
+                e.code, item=item, http_status=e.status,
+                body_bytes_read=e.body_bytes_read,
+                declared_content_length=getattr(e, "declared_content_length", None),
+                source_med_seq=medseq,
+            )
+            if d.action == "HOLD":
                 raise
             map_fetch_stop(e)
             if e.code == "TRANSIENT_UPSTREAM_FAILURE":
@@ -555,6 +607,17 @@ def _store_one(
             )
             held["binary_get"] = 2
             return held
+        d = classify_asset_failure(
+            e.code, item=item, http_status=e.status,
+            body_bytes_read=e.body_bytes_read,
+            declared_content_length=getattr(e, "declared_content_length", None),
+            source_med_seq=medseq,
+        )
+        if d.action == "HOLD":
+            return _review_hold(
+                holds, snapshot_id=snapshot_id, item=item, material_id=mid,
+                source_med_seq=medseq, decision=d, binary_get=1,
+            )
         raise
     cur = versions.current(out["source_asset_key"])
     if not cur or cur.get("content_checksum") != out["content_checksum"] or cur.get("storage_key") != out["storage_key"]:
@@ -582,6 +645,7 @@ def apply_assets(
     snapshot_id = pre["snapshot"]["id"]
     attempted = stored = no_change = new_v = promoted = held = 0
     last = None
+    guard = ContentAnomalyGuard()
     for item in items:
         attempted += 1
         try:
@@ -597,9 +661,23 @@ def apply_assets(
             attach_stop_evidence(sr, item, e)
             raise sr from e
         except StorageError as e:
-            sr = StopRun(e.code, http_status=e.http_status)
-            attach_stop_evidence(sr, item, e)
-            raise sr from e
+            d = classify_asset_failure(
+                e.subreason or e.code, item=item, http_status=e.http_status,
+                body_bytes_read=e.body_bytes_read,
+                declared_content_length=e.declared_content_length,
+                source_med_seq=item.get("source_med_seq"),
+            )
+            if d.action == "HOLD":
+                r = _review_hold(
+                    holds, snapshot_id=snapshot_id, item=item,
+                    material_id=item.get("material_id"),
+                    source_med_seq=item.get("source_med_seq"),
+                    decision=d,
+                )
+            else:
+                sr = StopRun(e.code, http_status=e.http_status)
+                attach_stop_evidence(sr, item, e)
+                raise sr from e
         except R2Error as e:
             if e.code in ("R2_HEAD_AUTH", "R2_ACCESS_BLOCKED"):
                 reason = "R2_ACCESS_BLOCKED"
@@ -610,20 +688,38 @@ def apply_assets(
             sr = StopRun(reason)
             attach_stop_evidence(sr, item, e)
             raise sr from e
+        except Exception as e:
+            sr = StopRun(getattr(e, "code", None) or type(e).__name__)
+            attach_stop_evidence(sr, item, e)
+            raise sr from e
         last = r
         st = r.get("status")
         if st == "NO_CHANGE":
             no_change += 1
+            guard.note(status=st, subreason=None)
         elif st == "NEW_VERSION":
             new_v += 1
             stored += 1
+            guard.note(status=st, subreason=None)
         elif st == "PROMOTED_EXISTING_VERSION":
             promoted += 1
             stored += 1
+            guard.note(status=st, subreason=None)
         elif st == "HOLD":
             held += 1
-            log(f"held asset_id={item.get('asset_id')} material_id={item.get('material_id')} reason={r.get('reason')}")
+            log(
+                f"HOLD asset_id={item.get('asset_id')} reason={r.get('reason')} "
+                f"subreason={r.get('subreason')}"
+            )
+            stop = guard.note(status="HOLD", subreason=r.get("subreason"))
+            if stop:
+                sr = StopRun(stop)
+                attach_stop_evidence(sr, item)
+                sr.evidence["stop_subreason"] = r.get("subreason")
+                raise sr
             continue
+        else:
+            guard.note(status=st, subreason=None)
         log(f"stored asset_id={item.get('asset_id')} material_id={item.get('material_id')} status={st}")
     return {
         "attempted": attempted,
@@ -656,11 +752,13 @@ def apply_bulk(store, query, r2, versions, *, holds=None, batch_size: int = BATC
                 **totals, "remaining": 0, "held": held_n,
                 "status": _sweep_status(held_n),
                 **oversize_report(holds, plan.get("snapshot_id")),
+                **hold_breakdown(holds, plan.get("snapshot_id")),
             }
         if max_batches is not None and totals["batches"] >= max_batches:
             return {
                 **totals, "remaining": pending_before, "held": held_n, "status": "BATCH_OK",
                 **oversize_report(holds, plan.get("snapshot_id")),
+                **hold_breakdown(holds, plan.get("snapshot_id")),
             }
         chunk = pending[: max(1, min(int(batch_size), 50))]
         log(f"batch selected={len(chunk)} remaining_before={pending_before} held={held_n}")
@@ -678,4 +776,5 @@ def apply_bulk(store, query, r2, versions, *, holds=None, batch_size: int = BATC
                 **totals, "remaining": 0, "held": held_n,
                 "status": _sweep_status(held_n),
                 **oversize_report(holds, plan2.get("snapshot_id")),
+                **hold_breakdown(holds, plan2.get("snapshot_id")),
             }

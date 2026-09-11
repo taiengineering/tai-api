@@ -37,6 +37,13 @@ UNAVAILABLE_MIGRATION = os.path.abspath(os.path.join(
     HERE, "..", "supabase", "migrations",
     "20260912020000_kosha_safety_material_storage_holds_unavailable.sql",
 ))
+REVIEW_SQL = os.path.abspath(os.path.join(
+    HERE, "..", "docs", "sql", "20260912_kosha_safety_material_storage_holds_review.sql"
+))
+REVIEW_MIGRATION = os.path.abspath(os.path.join(
+    HERE, "..", "supabase", "migrations",
+    "20260912030000_kosha_safety_material_storage_holds_review.sql",
+))
 
 
 def test_docs_sql_and_migration_are_identical():
@@ -85,3 +92,14 @@ def test_unavailable_reason_additive_check_only():
     assert "update " not in n
     assert "delete " not in n
     assert "alter table kosha_safety_materials" not in n
+
+
+def test_review_reason_additive_check_only():
+    n = _norm(_sql(REVIEW_SQL))
+    assert _sql(REVIEW_SQL) == _sql(REVIEW_MIGRATION)
+    assert "source_asset_review_required" in n
+    assert "source_binary_unavailable" in n
+    assert "create table" not in n
+    assert "drop table" not in n
+    assert "update " not in n
+    assert "delete " not in n

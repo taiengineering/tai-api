@@ -165,46 +165,46 @@ def test_held_asset_is_not_retried_from_pending():
     assert [p["asset_id"] for p in pending] == [1]
 
 
-def test_medseq_mismatch_is_stop_not_hold():
+def test_medseq_mismatch_is_review_hold_not_store():
     holds = _ProdHolds()
-    try:
-        _store_one(
-            _item(),
-            membership_ids={MID},
-            r2=R2Store(FakeS3()),
-            versions=_ProdVersions(),
-            snapshot_id="snap-1",
-            holds=holds,
-            fetch_detail_fn=lambda medseq: _detail_json("999"),
-            fetch_atch_fn=lambda medseq: (_ for _ in ()).throw(AssertionError("no atch")),
-            fetch_file_list_fn=lambda n: (_ for _ in ()).throw(AssertionError("no files")),
-            fetch_binary_fn=lambda **k: (_ for _ in ()).throw(AssertionError("binary GET 0")),
-        )
-        assert False
-    except StorageError as e:
-        assert e.code == "BINARY_INTEGRITY_BLOCKED"
-    assert holds.inserts == 0
+    out = _store_one(
+        _item(),
+        membership_ids={MID},
+        r2=R2Store(FakeS3()),
+        versions=_ProdVersions(),
+        snapshot_id="snap-1",
+        holds=holds,
+        fetch_detail_fn=lambda medseq: _detail_json("999"),
+        fetch_atch_fn=lambda medseq: (_ for _ in ()).throw(AssertionError("no atch")),
+        fetch_file_list_fn=lambda n: (_ for _ in ()).throw(AssertionError("no files")),
+        fetch_binary_fn=lambda **k: (_ for _ in ()).throw(AssertionError("binary GET 0")),
+    )
+    assert out["status"] == "HOLD"
+    assert out["reason"] == "SOURCE_ASSET_REVIEW_REQUIRED"
+    assert out["subreason"] == "SOURCE_MEDSEQ_MISMATCH"
+    assert out["binary_get"] == 0
+    assert holds.inserts == 1
 
 
-def test_license_change_is_stop_not_hold():
+def test_license_change_is_review_hold_not_store():
     holds = _ProdHolds()
-    try:
-        _store_one(
-            _item(),
-            membership_ids={MID},
-            r2=R2Store(FakeS3()),
-            versions=_ProdVersions(),
-            snapshot_id="snap-1",
-            holds=holds,
-            fetch_detail_fn=lambda medseq: _detail_json(medseq, kogl="02"),
-            fetch_atch_fn=lambda medseq: (_ for _ in ()).throw(AssertionError("no atch")),
-            fetch_file_list_fn=lambda n: (_ for _ in ()).throw(AssertionError("no files")),
-            fetch_binary_fn=lambda **k: (_ for _ in ()).throw(AssertionError("binary GET 0")),
-        )
-        assert False
-    except StorageError as e:
-        assert e.code == "LICENSE_CHANGED_REVIEW_REQUIRED"
-    assert holds.inserts == 0
+    out = _store_one(
+        _item(),
+        membership_ids={MID},
+        r2=R2Store(FakeS3()),
+        versions=_ProdVersions(),
+        snapshot_id="snap-1",
+        holds=holds,
+        fetch_detail_fn=lambda medseq: _detail_json(medseq, kogl="02"),
+        fetch_atch_fn=lambda medseq: (_ for _ in ()).throw(AssertionError("no atch")),
+        fetch_file_list_fn=lambda n: (_ for _ in ()).throw(AssertionError("no files")),
+        fetch_binary_fn=lambda **k: (_ for _ in ()).throw(AssertionError("binary GET 0")),
+    )
+    assert out["status"] == "HOLD"
+    assert out["reason"] == "SOURCE_ASSET_REVIEW_REQUIRED"
+    assert out["subreason"] == "LICENSE_CHANGED_REVIEW_REQUIRED"
+    assert out["binary_get"] == 0
+    assert holds.inserts == 1
 
 
 def test_empty_body_is_integrity_stop_not_hold():

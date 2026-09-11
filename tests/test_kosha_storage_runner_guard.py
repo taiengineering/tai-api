@@ -86,6 +86,21 @@ def test_apply_bulk_rejects_memory_holds():
         assert e.reason == "MEMORY_HOLD_STORE_FORBIDDEN"
 
 
+def test_apply_unknown_exception_is_stop(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr("services.kosha_safety_materials.storage.runner._store_one", boom)
+    try:
+        apply_assets(
+            [{"asset_id": 1, "material_id": "m1"}],
+            store=_FakeStore(), query=None, r2=None, versions=_Prod(),
+        )
+        assert False
+    except StopRun as e:
+        assert e.reason == "RuntimeError"
+
+
 def test_apply_bulk_storage_sweep_complete_when_only_holds_remain(monkeypatch):
     calls = {"n": 0}
 

@@ -100,7 +100,7 @@ def test_logical_match_exact_and_blocks():
         )
         assert False
     except ResolutionError as e:
-        assert e.code == "SOURCE_ASSET_RESOLUTION_BLOCKED"
+        assert e.code == "SOURCE_MEDSEQ_MISMATCH"
     js0 = {"payload": {"list": []}}
     try:
         match_logical_attachment(material_id="m1", expected_checksum=sak, expected_filename="a.pdf", atch_json=js0)

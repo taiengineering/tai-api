@@ -45,7 +45,7 @@ def match_logical_attachment(
     response_med_seq: str | None = None,
 ) -> dict:
     if requested_med_seq and response_med_seq and str(requested_med_seq) != str(response_med_seq):
-        raise ResolutionError("SOURCE_ASSET_RESOLUTION_BLOCKED")
+        raise ResolutionError("SOURCE_MEDSEQ_MISMATCH")
     parsed = parse_attachments(
         atch_json, material_id=material_id, source_url="https://portal.kosha.or.kr/",
         video_storage_false=True, http_status=http_status,
