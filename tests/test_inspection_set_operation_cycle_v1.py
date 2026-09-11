@@ -210,7 +210,16 @@ def test_P6_eligible_conditional_update_writes_cycle_only(monkeypatch):
 def test_static_no_schedule_side_effects():
     import inspect
     import services.inspection_sets_svc.operation_cycle as M
-    src = inspect.getsource(M)
+    # Module docstring may mention write-0 boundaries; assert against executable body only.
+    body = inspect.getsource(M.set_operation_cycle)
     for banned in ("work_schedules", "generate_schedules", "_build_next_schedule_row",
                    "canonical_writer", "DELTA_MAP", "relativedelta"):
-        assert banned not in src
+        assert banned not in body
+    # Top-level imports / constants must also stay schedule-free.
+    mod_src = inspect.getsource(M)
+    assert "from services.inspection_sets_helpers" not in mod_src
+    assert "import relativedelta" not in mod_src
+    assert "canonical_writer" not in mod_src
+    assert "generate_schedules" not in mod_src
+    assert "table(\"work_schedules\")" not in mod_src
+    assert "table('work_schedules')" not in mod_src

@@ -8,6 +8,15 @@ from .canonical_writer import has_explicit_schedule_cycle
 from .law_engine import run_generate_law_engine
 
 _CYCLE_SKIP_REASON = "주기가 설정되지 않았습니다."
+_ASSIGNEE_SKIP_REASON = "담당자가 지정되지 않았습니다."
+
+
+def _is_legal_engine(iset: dict) -> bool:
+    return iset.get("source") == "LEGAL_ENGINE"
+
+
+def _has_assignee(iset: dict) -> bool:
+    return bool(iset.get("assignee_user_id"))
 
 
 def generate_schedules_all() -> dict:
@@ -35,7 +44,7 @@ def generate_schedules_for_factory(factory_id: str, mode: str, force: bool) -> d
         return {"status": "success", "message": f"{r['total_sets']}개 세트 처리 — LAW_ENGINE 스케줄 {r['created']}건 생성", "data": {"factory_id": factory_id, "mode": "law_engine", "total_sets": r["total_sets"], "created": r["created"], "skipped_duplicate": r["skipped_dup"], "skipped_no_condition": r["skipped_no_condition"]}}
     sets = supabase.table("inspection_sets").select(
         "id, factory_id, company_id, cycle_value, cycle_unit, inspection_set_name, "
-        "inspection_category, source, schedule_anchor_date, next_planned_date"
+        "inspection_category, source, schedule_anchor_date, next_planned_date, assignee_user_id"
     ).eq("factory_id", factory_id).eq("anchor_confirmed", True).eq("is_active", True).execute().data or []
     if not sets:
         return {"status": "success", "message": "생성할 점검세트가 없습니다 (기준일 미설정 또는 없음)", "data": {"factory_id": factory_id, "mode": "anchor", "total": 0, "created": 0, "skipped": 0}}
@@ -52,6 +61,11 @@ def generate_schedules_for_factory(factory_id: str, mode: str, force: bool) -> d
         if not has_explicit_schedule_cycle(iset):
             skipped += 1
             results.append({"id": set_id, "name": name, "status": "skipped", "reason": _CYCLE_SKIP_REASON})
+            continue
+        # LEGAL_ENGINE readiness: cycle + anchor + assignee. Check before force/delete mutation.
+        if _is_legal_engine(iset) and not _has_assignee(iset):
+            skipped += 1
+            results.append({"id": set_id, "name": name, "status": "skipped", "reason": _ASSIGNEE_SKIP_REASON})
             continue
         existing = supabase.table("work_schedules").select("id").eq("inspection_set_id", set_id).eq("status_code", "SCHEDULED").limit(1).execute()
         if existing.data and not force:

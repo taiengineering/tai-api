@@ -501,6 +501,29 @@ def _legacy_row(**over):
         "next_planned_date": None,
         "anchor_confirmed": False,
         "legal_rule_id": "CON3-SCF-002",
+        # LEGAL_ENGINE schedule readiness: cycle + anchor + assignee
+        "assignee_user_id": "user-ready",
+    }
+    row.update(over)
+    return row
+
+
+def _manual_row(**over):
+    row = {
+        "id": "set-m",
+        "factory_id": "f1",
+        "company_id": "c1",
+        "inspection_set_name": "수동 점검",
+        "inspection_category": "GENERAL",
+        "source": "MANUAL",
+        "status_code": "PENDING_ANCHOR",
+        "is_active": True,
+        "cycle_unit": "month",
+        "cycle_value": 1,
+        "schedule_anchor_date": None,
+        "next_planned_date": None,
+        "anchor_confirmed": False,
+        "assignee_user_id": None,
     }
     row.update(over)
     return row
@@ -767,3 +790,258 @@ def test_W24_generate_schedules_anchor_mode_skips_null_cycle(monkeypatch):
     assert [s["id"] for s in seen] == ["set-l"]
     assert all(ins.get("inspection_set_id") != "set-c" for ins in sb.schedule_inserts)
     assert any(ins.get("inspection_set_id") == "set-l" for ins in sb.schedule_inserts)
+    assert sb.schedule_inserts[0]["assigned_user_id"] == "user-ready"
+
+
+# ── WO-SAFE-SCHEDULE-READINESS-ASSIGNEE-001 (T1~T14) ──
+
+_ASSIGNEE_SKIP = "담당자가 지정되지 않았습니다."
+_NEED_ASSIGNEE = "담당자를 먼저 지정해주세요."
+
+
+def test_T1_legal_engine_anchor_no_assignee_422(monkeypatch):
+    """patch_set single: cycle OK, anchor request, assignee missing → 422, mutation 0."""
+    from schemas.inspection_sets import InspectionSetPatchBody
+    row = _legacy_row(assignee_user_id=None)
+    sb = _WriteSB([row])
+    A, seen = _install_anchors(monkeypatch, sb)
+    with pytest.raises(Exception) as ei:
+        A.patch_set("set-l", InspectionSetPatchBody(schedule_anchor_date="2026-01-15"))
+    from services.inspection_sets_svc.errors import InspectionSetsSvcError
+    assert isinstance(ei.value, InspectionSetsSvcError)
+    assert ei.value.status_code == 422
+    assert ei.value.detail == _NEED_ASSIGNEE
+    assert seen == []
+    assert sb.set_updates == []
+    assert sb.schedule_inserts == []
+    assert sb.sets[0]["status_code"] == "PENDING_ANCHOR"
+    assert sb.sets[0]["schedule_anchor_date"] is None
+    assert sb.sets[0]["anchor_confirmed"] is False
+
+
+def test_T2_legal_engine_stored_assignee_anchor_ok(monkeypatch):
+    from schemas.inspection_sets import InspectionSetPatchBody
+    sb = _WriteSB([_legacy_row(assignee_user_id="USER-STORED")])
+    A, seen = _install_anchors(monkeypatch, sb)
+    out = A.patch_set("set-l", InspectionSetPatchBody(schedule_anchor_date="2026-01-15"))
+    assert out["status"] == "success"
+    assert seen and seen[0]["id"] == "set-l"
+    assert len(sb.schedule_inserts) == 1
+    assert sb.schedule_inserts[0]["assigned_user_id"] == "USER-STORED"
+
+
+def test_T3_patch_set_same_request_assignee_and_anchor(monkeypatch):
+    from schemas.inspection_sets import InspectionSetPatchBody
+    sb = _WriteSB([_legacy_row(assignee_user_id=None)])
+    A, seen = _install_anchors(monkeypatch, sb)
+    out = A.patch_set(
+        "set-l",
+        InspectionSetPatchBody(assignee_user_id="USER-REQ", schedule_anchor_date="2026-01-15"),
+    )
+    assert out["status"] == "success"
+    assert sb.sets[0]["assignee_user_id"] == "USER-REQ"
+    assert len(sb.schedule_inserts) == 1
+    assert sb.schedule_inserts[0]["assigned_user_id"] == "USER-REQ"
+    assert seen[0]["assignee_user_id"] == "USER-REQ"
+
+
+def test_T4_update_anchor_no_assignee_422(monkeypatch):
+    from schemas.inspection_sets import AnchorBody
+    sb = _WriteSB([_legacy_row(assignee_user_id=None)])
+    A, seen = _install_anchors(monkeypatch, sb)
+    from services.inspection_sets_svc.errors import InspectionSetsSvcError
+    with pytest.raises(InspectionSetsSvcError) as ei:
+        A.update_anchor("set-l", AnchorBody(anchor_date="2026-01-15"))
+    assert ei.value.status_code == 422
+    assert ei.value.detail == _NEED_ASSIGNEE
+    assert seen == []
+    assert sb.schedule_inserts == []
+    assert sb.set_updates == []
+
+
+def test_T5_set_anchor_bulk_mixed_assignee(monkeypatch):
+    from schemas.inspection_sets import BulkAnchorBody
+    a = _legacy_row(id="set-a", assignee_user_id="USER-A")
+    b = _legacy_row(id="set-b", assignee_user_id=None, inspection_set_name="B")
+    sb = _WriteSB([a, b])
+    A, seen = _install_anchors(monkeypatch, sb)
+    out = A.set_anchor_bulk(BulkAnchorBody(factory_id="f1", anchor_date="2026-01-15"))
+    skip = [r for r in out["data"]["results"] if r.get("status") == "skipped"]
+    ok = [r for r in out["data"]["results"] if r.get("id") == "set-a" and "error" not in r]
+    assert len(ok) == 1
+    assert skip == [{"id": "set-b", "name": "B", "status": "skipped", "reason": _ASSIGNEE_SKIP}]
+    assert [s["id"] for s in seen] == ["set-a"]
+    assert all(u["id"] != "set-b" for u in sb.set_updates)
+    assert all(ins.get("inspection_set_id") != "set-b" for ins in sb.schedule_inserts)
+    assert sb.schedule_inserts[0]["assigned_user_id"] == "USER-A"
+    b_row = next(r for r in sb.sets if r["id"] == "set-b")
+    assert b_row["status_code"] == "PENDING_ANCHOR"
+    assert b_row["anchor_confirmed"] is False
+
+
+def test_T6_bulk_update_anchors_mixed_assignee(monkeypatch):
+    from schemas.inspection_sets import AnchorBulkItem, AnchorBulkPatchBody
+    a = _legacy_row(id="set-a", assignee_user_id="USER-A")
+    b = _legacy_row(id="set-b", assignee_user_id=None)
+    sb = _WriteSB([a, b])
+    A, seen = _install_anchors(monkeypatch, sb)
+    out = A.bulk_update_anchors(AnchorBulkPatchBody(items=[
+        AnchorBulkItem(id="set-a", schedule_anchor_date="2026-01-15"),
+        AnchorBulkItem(id="set-b", schedule_anchor_date="2026-01-15"),
+    ]))
+    assert out["data"]["updated"] == 1
+    assert out["data"]["failed"] == 1
+    assert out["data"]["errors"] == [{"id": "set-b", "reason": _ASSIGNEE_SKIP}]
+    assert [s["id"] for s in seen] == ["set-a"]
+    assert all(ins.get("inspection_set_id") != "set-b" for ins in sb.schedule_inserts)
+
+
+def test_T7_generate_anchor_mode_no_assignee_skip(monkeypatch):
+    row = _legacy_row(
+        assignee_user_id=None,
+        status_code="ACTIVE",
+        anchor_confirmed=True,
+        schedule_anchor_date="2026-01-15",
+    )
+    sb = _WriteSB([row], existing_schedules=[{"id": "ws-old", "inspection_set_id": "set-l"}])
+    S, seen = _install_schedules(monkeypatch, sb)
+    out = S.generate_schedules_for_factory("f1", "anchor", False)
+    assert out["data"]["created"] == 0
+    assert out["data"]["results"] == [{
+        "id": "set-l",
+        "name": row["inspection_set_name"],
+        "status": "skipped",
+        "reason": _ASSIGNEE_SKIP,
+    }]
+    assert seen == []
+    assert sb.schedule_inserts == []
+    assert sb.schedule_deletes == []
+
+
+def test_T8_generate_anchor_mode_with_assignee_create(monkeypatch):
+    row = _legacy_row(
+        assignee_user_id="USER-OK",
+        status_code="ACTIVE",
+        anchor_confirmed=True,
+        schedule_anchor_date="2026-01-15",
+    )
+    sb = _WriteSB([row])
+    S, seen = _install_schedules(monkeypatch, sb)
+    out = S.generate_schedules_for_factory("f1", "anchor", False)
+    assert out["data"]["created"] >= 1
+    assert seen and seen[0]["assignee_user_id"] == "USER-OK"
+    assert sb.schedule_inserts[0]["assigned_user_id"] == "USER-OK"
+
+
+def test_T9_force_true_no_assignee_no_delete(monkeypatch):
+    row = _legacy_row(
+        assignee_user_id=None,
+        status_code="ACTIVE",
+        anchor_confirmed=True,
+        schedule_anchor_date="2026-01-15",
+    )
+    sb = _WriteSB([row], existing_schedules=[{"id": "ws-old", "inspection_set_id": "set-l", "status_code": "SCHEDULED"}])
+    S, seen = _install_schedules(monkeypatch, sb)
+    out = S.generate_schedules_for_factory("f1", "anchor", True)
+    assert out["data"]["created"] == 0
+    assert out["data"]["results"][0]["reason"] == _ASSIGNEE_SKIP
+    assert seen == []
+    assert sb.schedule_deletes == []
+    assert sb.schedule_inserts == []
+
+
+def test_T10_cycle_missing_still_422_even_with_assignee(monkeypatch):
+    from schemas.inspection_sets import InspectionSetPatchBody
+    sb = _WriteSB([_canonical_row(assignee_user_id="USER-X")])
+    A, seen = _install_anchors(monkeypatch, sb)
+    from services.inspection_sets_svc.errors import InspectionSetsSvcError
+    with pytest.raises(InspectionSetsSvcError) as ei:
+        A.patch_set("set-c", InspectionSetPatchBody(schedule_anchor_date="2026-01-15"))
+    assert ei.value.status_code == 422
+    assert ei.value.detail == _NEED_CYCLE
+    assert seen == []
+    assert sb.schedule_inserts == []
+
+
+def test_T11_law_engine_mode_unchanged_delegation(monkeypatch):
+    """mode=law_engine still delegates to run_generate_law_engine (no assignee rewrite here)."""
+    import services.inspection_sets_svc.schedules as S
+    called = {}
+
+    def fake_run(fid, sb):
+        called["fid"] = fid
+        return {"total_sets": 2, "created": 1, "skipped_dup": 0, "skipped_no_condition": 1}
+
+    monkeypatch.setattr(S, "get_supabase", lambda: object())
+    monkeypatch.setattr(S, "run_generate_law_engine", fake_run)
+    out = S.generate_schedules_for_factory("f1", "law_engine", False)
+    assert called["fid"] == "f1"
+    assert out["data"]["mode"] == "law_engine"
+    assert out["data"]["created"] == 1
+    assert out["data"]["skipped_no_condition"] == 1
+
+
+def test_T12_operation_cycle_no_schedule_gate(monkeypatch):
+    """operation_cycle remains cycle-only; assignee presence irrelevant; schedule 0."""
+    import inspect as ins
+    import services.inspection_sets_svc.operation_cycle as OC
+    # Code body (exclude module docstring): no assignee gate / schedule builder.
+    body = ins.getsource(OC.set_operation_cycle)
+    assert "assignee_user_id" not in body
+    assert "_build_next_schedule_row" not in body
+    assert "generate_schedules" not in body
+    assert "table(\"work_schedules\")" not in body
+    assert "table('work_schedules')" not in body
+
+
+def test_T13_manual_row_without_assignee_still_schedules(monkeypatch):
+    """MANUAL semantics: assignee readiness not forced."""
+    from schemas.inspection_sets import InspectionSetPatchBody, BulkAnchorBody, AnchorBody
+    sb = _WriteSB([_manual_row()])
+    A, seen = _install_anchors(monkeypatch, sb)
+    out = A.patch_set("set-m", InspectionSetPatchBody(schedule_anchor_date="2026-01-15"))
+    assert out["status"] == "success"
+    assert sb.schedule_inserts
+    assert sb.schedule_inserts[0]["assigned_user_id"] is None
+    assert sb.sets[0]["status_code"] == "ACTIVE"
+
+    sb2 = _WriteSB([_manual_row(id="set-m2")])
+    A2, _ = _install_anchors(monkeypatch, sb2)
+    out2 = A2.set_anchor_bulk(BulkAnchorBody(factory_id="f1", anchor_date="2026-01-15"))
+    assert out2["data"]["total_created"] >= 1
+    assert all(r.get("status") != "skipped" for r in out2["data"]["results"])
+
+    sb3 = _WriteSB([_manual_row(id="set-m3")])
+    A3, _ = _install_anchors(monkeypatch, sb3)
+    out3 = A3.update_anchor("set-m3", AnchorBody(anchor_date="2026-01-15"))
+    assert out3["status"] == "success"
+    assert sb3.schedule_inserts
+
+
+def test_T13b_manual_with_assignee_keeps_schedule_assigned_none(monkeypatch):
+    """PATCH-1: MANUAL + assignee on set must NOT leak into work_schedules.assigned_user_id."""
+    from schemas.inspection_sets import InspectionSetPatchBody
+    sb = _WriteSB([_manual_row(assignee_user_id="USER-MANUAL")])
+    A, _ = _install_anchors(monkeypatch, sb)
+    out = A.patch_set("set-m", InspectionSetPatchBody(schedule_anchor_date="2026-01-15"))
+    assert out["status"] == "success"
+    assert sb.sets[0]["assignee_user_id"] == "USER-MANUAL"
+    assert len(sb.schedule_inserts) == 1
+    assert sb.schedule_inserts[0]["assigned_user_id"] is None
+
+
+def test_T14_legal_actor_not_used_as_assignee(monkeypatch):
+    from schemas.inspection_sets import InspectionSetPatchBody
+    row = _legacy_row(assignee_user_id=None)
+    row["legal_actor"] = "사업주"
+    sb = _WriteSB([row])
+    A, seen = _install_anchors(monkeypatch, sb)
+    from services.inspection_sets_svc.errors import InspectionSetsSvcError
+    with pytest.raises(InspectionSetsSvcError) as ei:
+        A.patch_set("set-l", InspectionSetPatchBody(schedule_anchor_date="2026-01-15"))
+    assert ei.value.detail == _NEED_ASSIGNEE
+    assert seen == []
+    assert sb.schedule_inserts == []
+    import services.inspection_sets_svc.anchors as Anch
+    blob = inspect.getsource(Anch)
+    assert "legal_actor" not in blob

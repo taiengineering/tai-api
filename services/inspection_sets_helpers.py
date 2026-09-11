@@ -115,7 +115,13 @@ def _build_next_schedule_row(iset: dict, base: date):
         "obligation_type":   iset.get("inspection_category") or "GENERAL",
         "summary":           iset.get("inspection_set_name") or "",
         "active_yn":         True,
-        "assigned_user_id":  None,
+        # LEGAL_ENGINE only: preserve inspection_sets.assignee_user_id.
+        # MANUAL keeps prior semantics (assigned_user_id always None).
+        "assigned_user_id":  (
+            iset.get("assignee_user_id")
+            if iset.get("source") == "LEGAL_ENGINE"
+            else None
+        ),
     }, planned
 
 
