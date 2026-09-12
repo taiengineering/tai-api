@@ -111,7 +111,6 @@ OLD BASELINE = comparison reference ≠ Golden.
   - 그 외 동일 계열 관측: `has_elevator` → 특정 승강기 유형 / 설치·조립·수리 전제 의무. `has_welding` → 아세틸렌 발생기 / 가스집합용접 / 터널·고압작업 등 세부조건 의무. `has_dust_work` → 특정 분진원·물질·터널작업 전제 의무. `has_boiler` → 보일러 내부 특정 작업 전제 의무. `has_pressure_vessel` → 압축공기 작업실 등 세부 전제 의무.
 - 범위: Official LEG AFTER / 복수 Profile.
 - 영향: High. Confidence: 등장 사실 High.
-- Root Cause: NOT ANALYZED.
 
 ### Obs-008 — 철거 입력 Profile에서 타 대상 철거 의무 관측
 
