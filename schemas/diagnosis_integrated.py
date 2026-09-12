@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool, StrictInt, field_validator
 
 
 class DisclaimerBody(BaseModel):
@@ -44,6 +44,19 @@ class DiagnosisRunBody(BaseModel):
         None,
         description="해당 공사가 토목공사업 해당 여부. True=예, False=아니오, None=미확정",
     )
+    # WO-SM-CORE22-AP01-05-EXPLICIT-APPENDIX3-INPUT-CONTRACT-001
+    # Explicit legal classification fact (별표 3 호). Strict JSON integer 1..49.
+    # Not KSIC/sector/industry derived. Internal AP01~05 leaves are not user fields.
+    appendix3_item_no: Optional[StrictInt] = Field(
+        None,
+        ge=1,
+        le=49,
+        description="산업안전보건법 시행령 별표 3 사업 종류 호. JSON integer 1..49 only.",
+    )
+    is_real_estate_management: Optional[StrictBool] = Field(
+        None,
+        description="별표 3 제37호(부동산업)인 경우에만 사용. 부동산 관리업 여부. missing≠false.",
+    )
     region: Optional[str] = None
     payment_ref: Optional[str] = Field(None, description="유료 결제 참조 번호 (무료이면 생략)")
     invoice_requested: bool = Field(False, description="세금계산서 요청 여부")
@@ -73,6 +86,24 @@ class DiagnosisRunBody(BaseModel):
     process_list: Optional[List[Dict[str, Any]]] = Field(None, description="paid STEP2 공정 row raw 구조(process_name/hazard_codes/worker_count/is_primary/future activity_type[])")
     equipment_list: Optional[List[Dict[str, Any]]] = Field(None, description="paid STEP3 설비 row raw 구조(equipment_type/asset_name/quantity/.../future usage_type[]/relation_type[])")
     ksic_list: Optional[List[str]] = Field(None, description="paid 다중 KSIC 대분류 raw 목록")
+
+    @field_validator("appendix3_item_no", mode="before")
+    @classmethod
+    def _strict_appendix3_item_no(cls, v):
+        if v is None:
+            return None
+        if type(v) is not int or type(v) is bool:
+            raise ValueError("appendix3_item_no must be a JSON integer 1..49")
+        return v
+
+    @field_validator("is_real_estate_management", mode="before")
+    @classmethod
+    def _strict_is_real_estate_management(cls, v):
+        if v is None:
+            return None
+        if type(v) is not bool:
+            raise ValueError("is_real_estate_management must be a JSON boolean")
+        return v
 
 
 class UpgradeBody(BaseModel):
