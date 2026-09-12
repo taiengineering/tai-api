@@ -168,6 +168,8 @@ class _PaidBody:
     region = None
     construction_type = None
     ksic_major = None
+    appendix3_item_no = 28
+    is_real_estate_management = None
     invoice_requested = False
     invoice_biz_no = None
     invoice_email = None

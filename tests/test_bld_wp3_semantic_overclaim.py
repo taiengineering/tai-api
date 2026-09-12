@@ -72,7 +72,7 @@ def _run_live(**fields):
     orig = _patch_auth()
     try:
         sink = {}; sb = _FakeSB({}, sink)
-        body = DiagnosisRunBody(sector="BUILDING", auth_token="tok", payment_ref="PR", **fields)
+        body = DiagnosisRunBody(sector="BUILDING", auth_token="tok", payment_ref="PR", appendix3_item_no=1, **fields)
         svc.run_diagnosis(supabase=sb, body=body, run_step1_func=fake_run_step1,
                           auto_tier_func=lambda *a, **k: "PAID2", build_partial_func=lambda x: {},
                           now_func=lambda: "2026-09-04T00:00:00",
@@ -98,7 +98,7 @@ def _run_upgrade(form_data):
     try:
         sink = {}; store = {}; sb = _FakeSB(store, sink)
         body = DiagnosisRunBody(sector="BUILDING", auth_token="tok", payment_ref="PR",
-                                form_data=form_data)
+                                appendix3_item_no=1, form_data=form_data)
         svc.run_diagnosis(supabase=sb, body=body, run_step1_func=fake_run_step1,
                           auto_tier_func=lambda *a, **k: "PAID2", build_partial_func=lambda x: {},
                           now_func=lambda: "2026-09-04T00:00:00",

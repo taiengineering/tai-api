@@ -15,6 +15,7 @@ from services.canonical.explicit_appendix3_classification import (
     prepare_available_and_projection,
     sanitize_form_data_for_persist,
     stored_appendix3_body,
+    validate_explicit_appendix3_classification,
 )
 from services.canonical.explicit_construction_predicates import (
     collect_explicit_construction_predicates,
@@ -421,6 +422,9 @@ def run_diagnosis(
     # WO-SM-CORE22-CONSTRUCTION-PREDICATE-SERVER-FAIL-CLOSED-001
     # After auth read, before disclaimer / quota / engine / persist.
     validate_explicit_construction_predicates(body, getattr(body, "sector", None))
+    # WO-SM-CORE22-AP01-05-APPENDIX3-SERVER-FAIL-CLOSED-001
+    # After Construction fail-closed, before disclaimer / quota / canonical / Runtime / persist.
+    validate_explicit_appendix3_classification(body, getattr(body, "sector", None))
     disclaimer_log_id = (body.disclaimer_log_id or "").strip()
     if not disclaimer_log_id:
         if body.payment_ref:
@@ -781,6 +785,12 @@ def upgrade_diagnosis(
     # After diagnosis read, before Runtime / result update / purchase write.
     validate_explicit_construction_predicates(
         stored_explicit_predicate_body(input_data),
+        str(input_data.get("sector") or ""),
+    )
+    # WO-SM-CORE22-AP01-05-APPENDIX3-SERVER-FAIL-CLOSED-001
+    # After Construction predicate validation, before pricing / runtime / purchase / result write.
+    validate_explicit_appendix3_classification(
+        stored_appendix3_body(input_data),
         str(input_data.get("sector") or ""),
     )
 

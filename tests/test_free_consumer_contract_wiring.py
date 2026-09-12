@@ -65,9 +65,12 @@ _PRICES: Dict[str, int] = {}
 
 def _run(sector: str, form_data: Dict[str, Any]) -> None:
     _CAPTURED.clear()
+    fd = dict(form_data or {})
+    if str(sector or "").upper() in ("BUILDING", "INDUSTRIAL", "INDUSTRY", "MANUFACTURING"):
+        fd.setdefault("appendix3_item_no", 28)
     body = nexas_run_body_from_request({
         "auth_token": "tok", "disclaimer_log_id": "disc1",
-        "sector": sector, "tier": "FREE", "form_data": form_data,
+        "sector": sector, "tier": "FREE", "form_data": fd,
     })
     svc.run_diagnosis(
         supabase=_StubSupabase(), body=body,

@@ -53,6 +53,7 @@ def _run_full_roundtrip(form_data=None, raw_input=None):
         store = {}; sb = _FakeSB(store, sink)
         # disclaimer_log_id 미지정 + payment_ref → _ensure_disclaimer_for_paid_entry(mock) 경로.
         body = DiagnosisRunBody(sector="BUILDING", auth_token="tok", payment_ref="PR",
+                               appendix3_item_no=1,
                                input=(raw_input or {}), form_data=form_data)
         svc.run_diagnosis(supabase=sb, body=body, run_step1_func=fake_run_step1,
                           auto_tier_func=lambda *a, **k: "PAID2", build_partial_func=lambda x: {},

@@ -362,7 +362,11 @@ def test_run_T7_raw_bypass_422():
 
 def test_run_T8_building_no_predicates_engine():
     body = DiagnosisRunBody(
-        sector="BUILDING", auth_token="t", disclaimer_log_id="disc1", worker_count=10
+        sector="BUILDING",
+        auth_token="t",
+        disclaimer_log_id="disc1",
+        worker_count=10,
+        appendix3_item_no=1,
     )
     _out, _sb, calls, _disc = _capture_run(
         body, auto_tier_func=lambda *a, **k: "BUILDING_FREE"
@@ -372,7 +376,11 @@ def test_run_T8_building_no_predicates_engine():
 
 def test_run_T9_industrial_no_predicates_engine():
     body = DiagnosisRunBody(
-        sector="INDUSTRIAL", auth_token="t", disclaimer_log_id="disc1", worker_count=10
+        sector="INDUSTRIAL",
+        auth_token="t",
+        disclaimer_log_id="disc1",
+        worker_count=10,
+        appendix3_item_no=28,
     )
     _out, _sb, calls, _disc = _capture_run(
         body, auto_tier_func=lambda *a, **k: "INDUSTRY_FREE"
@@ -543,7 +551,12 @@ def test_upgrade_building_no_predicates_still_runs():
         "tier_code": "PAID2",
         "paid_amount": 149000,
         "status": "ACTIVE",
-        "input_data": {"sector": "BUILDING", "workers": 10, "floor_area": 400},
+        "input_data": {
+            "sector": "BUILDING",
+            "workers": 10,
+            "floor_area": 400,
+            "appendix3_item_no": 1,
+        },
     }
     sb = _SB(existing_result=existing)
     calls = {"step1": 0}
