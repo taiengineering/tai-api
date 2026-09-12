@@ -77,6 +77,8 @@ jobs:
         run: pytest tests/test_tax_manual.py -q --tb=short
       - name: WAVE2 KOSHA Smart Search tests
         run: pytest tests/test_kosha_smart_search.py -q --tb=short
+      - name: OBJ-GRAPH knowledge graph tests
+        run: pytest tests/test_knowledge_graph.py -q --tb=short
 
   db-integrity:
     name: "DB Integrity"
