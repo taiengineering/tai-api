@@ -164,7 +164,7 @@ def test_t5_happy_insert_factory_id_equals_parent(monkeypatch):
 # ── W3 _apply_one_update ──────────────────────────────────────────
 
 def test_t6_parent_factory_null_http_409():
-    sb = FakeSB({"work_schedules": [{"id": SID, "factory_id": None}]})
+    sb = FakeSB({"work_schedules": [{"id": SID, "factory_id": None, "active_yn": True}]})
     with pytest.raises(HTTPException) as ei:
         _apply_one_update(sb, SID, {"assigned_user_id": UID}, NOW)
     assert ei.value.status_code == 409
@@ -172,14 +172,14 @@ def test_t6_parent_factory_null_http_409():
 
 
 def test_t7_parent_factory_null_no_schedule_update():
-    sb = FakeSB({"work_schedules": [{"id": SID, "factory_id": None}]})
+    sb = FakeSB({"work_schedules": [{"id": SID, "factory_id": None, "active_yn": True}]})
     with pytest.raises(HTTPException):
         _apply_one_update(sb, SID, {"assigned_user_id": UID}, NOW)
     assert [c for c in sb.updates if c["table"] == "work_schedules"] == []
 
 
 def test_t8_parent_factory_null_no_assignment_write():
-    sb = FakeSB({"work_schedules": [{"id": SID, "factory_id": None}]})
+    sb = FakeSB({"work_schedules": [{"id": SID, "factory_id": None, "active_yn": True}]})
     with pytest.raises(HTTPException):
         _apply_one_update(sb, SID, {"assigned_user_id": UID}, NOW)
     assert [c for c in sb.inserts if c["table"] == "work_assignments"] == []
@@ -188,7 +188,7 @@ def test_t8_parent_factory_null_no_assignment_write():
 
 def test_t9_new_assignment_factory_id_equals_parent():
     sb = FakeSB({
-        "work_schedules": [{"id": SID, "factory_id": FID}],
+        "work_schedules": [{"id": SID, "factory_id": FID, "active_yn": True}],
         "work_assignments": [],
     })
     updated = _apply_one_update(sb, SID, {"assigned_user_id": UID}, NOW)
@@ -201,8 +201,8 @@ def test_t9_new_assignment_factory_id_equals_parent():
 
 def test_t10_existing_assignment_update_path_no_factory_change():
     sb = FakeSB({
-        "work_schedules": [{"id": SID, "factory_id": FID}],
-        "work_assignments": [{"id": AID, "schedule_id": SID, "status_code": "READY"}],
+        "work_schedules": [{"id": SID, "factory_id": FID, "active_yn": True}],
+        "work_assignments": [{"id": AID, "schedule_id": SID, "factory_id": FID, "status_code": "READY"}],
     })
     updated = _apply_one_update(sb, SID, {"assigned_user_id": UID}, NOW)
     assert updated is True
@@ -211,13 +211,13 @@ def test_t10_existing_assignment_update_path_no_factory_change():
     assert len(wa_updates) == 1
     assert wa_updates[0]["payload"] == {"assigned_user_id": UID, "updated_at": NOW}
     assert "factory_id" not in wa_updates[0]["payload"]
-    assert wa_updates[0]["eq"] == {"id": AID}
+    assert wa_updates[0]["eq"] == {"id": AID, "factory_id": FID}
 
 
 def test_t11_unassign_cancelled_path_no_regression():
     sb = FakeSB({
-        "work_schedules": [{"id": SID, "factory_id": FID}],
-        "work_assignments": [{"id": AID, "schedule_id": SID, "status_code": "READY"}],
+        "work_schedules": [{"id": SID, "factory_id": FID, "active_yn": True}],
+        "work_assignments": [{"id": AID, "schedule_id": SID, "factory_id": FID, "status_code": "READY"}],
     })
     updated = _apply_one_update(sb, SID, {"assigned_user_id": None}, NOW)
     assert updated is True
@@ -226,6 +226,42 @@ def test_t11_unassign_cancelled_path_no_regression():
     assert len(wa_updates) == 1
     assert wa_updates[0]["payload"] == {"status_code": "CANCELLED", "updated_at": NOW}
     assert "factory_id" not in wa_updates[0]["payload"]
+    assert wa_updates[0]["eq"].get("factory_id") == FID
     ws_updates = [c for c in sb.updates if c["table"] == "work_schedules"]
     assert len(ws_updates) == 1
     assert ws_updates[0]["payload"]["assigned_user_id"] is None
+    assert ws_updates[0]["eq"] == {"id": SID, "factory_id": FID}
+
+
+def test_t12_same_id_mixed_active_does_not_update_inactive_factory():
+    """PATCH-R4: active F-A must not cause id-only update of inactive F-B."""
+    same = "same-sched-id"
+    sb = FakeSB({
+        "work_schedules": [
+            {"id": same, "factory_id": "FA", "active_yn": True, "company_id": "c1"},
+            {"id": same, "factory_id": "FB", "active_yn": False, "company_id": "c1"},
+        ],
+        "work_assignments": [],
+    })
+    updated = _apply_one_update(sb, same, {"assigned_user_id": UID}, NOW)
+    assert updated is True
+    ws_updates = [c for c in sb.updates if c["table"] == "work_schedules"]
+    assert len(ws_updates) == 1
+    assert ws_updates[0]["eq"] == {"id": same, "factory_id": "FA"}
+    wa_inserts = [c for c in sb.inserts if c["table"] == "work_assignments"]
+    assert wa_inserts[0]["payload"]["factory_id"] == "FA"
+
+
+def test_t13_same_id_two_active_factories_fail_close():
+    same = "same-sched-id"
+    sb = FakeSB({
+        "work_schedules": [
+            {"id": same, "factory_id": "FA", "active_yn": True, "company_id": "c1"},
+            {"id": same, "factory_id": "FB", "active_yn": True, "company_id": "c1"},
+        ],
+    })
+    with pytest.raises(HTTPException) as ei:
+        _apply_one_update(sb, same, {"assigned_user_id": UID}, NOW)
+    assert ei.value.status_code == 409
+    assert sb.updates == []
+    assert sb.inserts == []

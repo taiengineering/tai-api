@@ -513,6 +513,7 @@ def test_worker_home_hard_hides_inactive_and_null_schedule(monkeypatch):
             {
                 "id": "wa-active",
                 "schedule_id": "ws-a",
+                "factory_id": "fa-1",
                 "asset_id": None,
                 "status_code": "PENDING",
                 "inspection_set_id": "set1",
@@ -522,6 +523,7 @@ def test_worker_home_hard_hides_inactive_and_null_schedule(monkeypatch):
             {
                 "id": "wa-inactive",
                 "schedule_id": "ws-off",
+                "factory_id": "fa-1",
                 "asset_id": None,
                 "status_code": "PENDING",
                 "inspection_set_id": "set1",
@@ -531,6 +533,7 @@ def test_worker_home_hard_hides_inactive_and_null_schedule(monkeypatch):
             {
                 "id": "wa-null",
                 "schedule_id": "ws-null",
+                "factory_id": "fa-1",
                 "asset_id": None,
                 "status_code": "PENDING",
                 "inspection_set_id": "set1",
@@ -541,6 +544,7 @@ def test_worker_home_hard_hides_inactive_and_null_schedule(monkeypatch):
         "work_schedules": [
             {
                 "id": "ws-a",
+                "factory_id": "fa-1",
                 "active_yn": True,
                 "description": "ok",
                 "law_name": "L",
@@ -548,6 +552,7 @@ def test_worker_home_hard_hides_inactive_and_null_schedule(monkeypatch):
             },
             {
                 "id": "ws-off",
+                "factory_id": "fa-1",
                 "active_yn": False,
                 "description": "hidden",
                 "law_name": "L",
@@ -555,6 +560,7 @@ def test_worker_home_hard_hides_inactive_and_null_schedule(monkeypatch):
             },
             {
                 "id": "ws-null",
+                "factory_id": "fa-1",
                 "active_yn": None,
                 "description": "hidden-null",
                 "law_name": "L",
@@ -575,6 +581,38 @@ def test_worker_home_hard_hides_inactive_and_null_schedule(monkeypatch):
     assert ids == {"wa-active"}
     assert inspections[0].get("description") == "ok"
     assert ("eq", "active_yn", True) in sb.last["work_schedules"]._ops
+
+
+def test_worker_home_same_schedule_id_mixed_factory_active(monkeypatch):
+    """PATCH-R4: A active / B inactive same schedule_id — only A assignment survives."""
+    from routers import worker_home as wh
+
+    same = "ws-shared"
+    rows = {
+        "work_assignments": [
+            {
+                "id": "wa-A", "schedule_id": same, "factory_id": "FA",
+                "status_code": "PENDING", "inspection_set_id": None,
+                "scheduled_date": "2026-09-12", "assigned_user_id": "u1",
+            },
+            {
+                "id": "wa-B", "schedule_id": same, "factory_id": "FB",
+                "status_code": "PENDING", "inspection_set_id": None,
+                "scheduled_date": "2026-09-12", "assigned_user_id": "u1",
+            },
+        ],
+        "work_schedules": [
+            {"id": same, "factory_id": "FA", "active_yn": True, "description": "A"},
+            {"id": same, "factory_id": "FB", "active_yn": False, "description": "B"},
+        ],
+        "inspection_sets": [],
+    }
+    sb = _SB(rows)
+    monkeypatch.setattr(wh, "get_supabase", lambda: sb)
+    monkeypatch.setattr(wh, "_today", lambda: "2026-09-12")
+    out = wh.get_today_tasks(user_id="u1", factory_id=None, company_id=None)
+    ids = {i["assignment_id"] for i in out["data"]["tasks"]["inspections"]}
+    assert ids == {"wa-A"}
 
 
 def test_event_schedules_list_active_gate(monkeypatch):
@@ -610,7 +648,11 @@ def test_apply_one_update_still_gates_active_parent():
     import inspect
 
     src = inspect.getsource(ws._apply_one_update)
-    assert "require_active_executable" in src
+    assert "_resolve_exact_active_occurrence" in src
+    assert '.eq("factory_id", factory_id)' in src.replace(" \\\n", "")
+    helper = inspect.getsource(ws._resolve_exact_active_occurrence)
+    assert "require_active_executable" in helper
+    assert "len(rows) > 1" in helper
 
 
 def test_no_work_schedules_is_active_write_in_stage1_surfaces():

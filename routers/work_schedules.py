@@ -85,6 +85,37 @@ def _is_uuid(value: str) -> bool:
         return False
 
 
+def _resolve_exact_active_occurrence(supabase, schedule_id: str) -> dict:
+    """EXECUTABLE direct-id: exactly one ACTIVE_EXECUTABLE (id, factory_id).
+
+    Do not pick an arbitrary first row. Zero / many active occurrences → fail-close.
+    Missing factory_id on the sole candidate → 409 (WP-04C).
+    """
+    res = (
+        require_active_executable(
+            supabase.table("work_schedules")
+            .select("id, factory_id, company_id")
+            .eq("id", schedule_id)
+        )
+        .execute()
+    )
+    rows = res.data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
+    if len(rows) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="일정의 시설(factory)을 유일하게 결정할 수 없습니다.",
+        )
+    row = rows[0]
+    if not row.get("factory_id"):
+        raise HTTPException(
+            status_code=409,
+            detail="일정의 factory_id를 확인할 수 없습니다.",
+        )
+    return row
+
+
 def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> bool:
     """단일 work_schedules 행 갱신 + assigned_user_id 변경 시 work_assignments 동기화.
 
@@ -93,6 +124,8 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
 
     WP-04C: 신규 work_assignments 생성 시 factory_id = parent work_schedules.factory_id(companion).
             parent factory_id 확인 불가 시 어떤 side-effect(work_schedules UPDATE 포함)보다 먼저 409.
+
+    PATCH-R4: all read/update/WA linkage scoped to exact (id, factory_id) occurrence.
     """
     payload: dict = {"updated_at": now}
     for k in ("is_excluded", "excluded_reason", "custom_cycle", "status_code", "resolved_at", "planned_date"):
@@ -102,44 +135,49 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
     if assign_changed:
         payload["assigned_user_id"] = fields["assigned_user_id"]
 
-    # WP-04C parent factory PRE-READ (side-effect 전 fail-closed).
-    # 신규 assignment INSERT가 발생하는 경우(assigned_user_id 실제 값)만 검사한다.
-    _parent_factory_id = None
-    if assign_changed and fields["assigned_user_id"]:
-        _parent = require_active_executable(
-            supabase.table("work_schedules").select("factory_id").eq("id", schedule_id)
-        ).limit(1).execute()
-        _parent_factory_id = _parent.data[0].get("factory_id") if _parent.data else None
-        if not _parent_factory_id:
-            raise HTTPException(
-                status_code=409,
-                detail="일정의 factory_id를 확인할 수 없습니다.",
-            )
+    # Exact ACTIVE_EXECUTABLE occurrence before any side-effect.
+    parent = _resolve_exact_active_occurrence(supabase, schedule_id)
+    factory_id = parent["factory_id"]
 
-    # fail-closed 통과 후에만 기존 work_schedules UPDATE 수행
-    res = supabase.table("work_schedules").update(payload).eq("id", schedule_id).execute()
+    # fail-closed 통과 후에만 기존 work_schedules UPDATE 수행 (composite identity)
+    res = (
+        supabase.table("work_schedules")
+        .update(payload)
+        .eq("id", schedule_id)
+        .eq("factory_id", factory_id)
+        .execute()
+    )
     updated = bool(res.data)
 
     if assign_changed:
         auid = fields["assigned_user_id"]
         if auid:
-            existing = supabase.table("work_assignments").select("id") \
-                .eq("schedule_id", schedule_id).in_("status_code", wa_active_query_values()).limit(1).execute()
+            existing = (
+                supabase.table("work_assignments")
+                .select("id")
+                .eq("schedule_id", schedule_id)
+                .eq("factory_id", factory_id)
+                .in_("status_code", wa_active_query_values())
+                .limit(1)
+                .execute()
+            )
             if existing.data:
                 supabase.table("work_assignments").update({
                     "assigned_user_id": auid, "updated_at": now,
-                }).eq("id", existing.data[0]["id"]).execute()
+                }).eq("id", existing.data[0]["id"]).eq("factory_id", factory_id).execute()
             else:
                 supabase.table("work_assignments").insert({
                     "schedule_id": schedule_id, "assigned_user_id": auid,
                     "scheduled_date": now_kst().date().isoformat(),
                     "status_code": wa_write_ready(), "created_at": now,
-                    "factory_id": _parent_factory_id,   # WP-04C parent companion (PRE-READ 값)
+                    "factory_id": factory_id,
                 }).execute()
         else:
             supabase.table("work_assignments").update({
                 "status_code": "CANCELLED", "updated_at": now,
-            }).eq("schedule_id", schedule_id).in_("status_code", wa_active_query_values()).execute()
+            }).eq("schedule_id", schedule_id).eq("factory_id", factory_id).in_(
+                "status_code", wa_active_query_values()
+            ).execute()
     return updated
 
 
@@ -472,11 +510,14 @@ def get_work_schedule(schedule_id: str, current: dict = Depends(get_current_user
     if not _is_uuid(schedule_id):
         raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
     supabase = get_supabase()
+    row = _resolve_exact_active_occurrence(supabase, schedule_id)
+    # Re-fetch full row for response (exact pair — occurrence already proven unique/active).
     result = (
         require_active_executable(
             supabase.table("work_schedules")
             .select("*")
             .eq("id", schedule_id)
+            .eq("factory_id", row["factory_id"])
         )
         .limit(1)
         .execute()
@@ -497,18 +538,8 @@ def patch_work_schedule(schedule_id: str, body: SchedulePatchBody, current: dict
     if not _is_uuid(schedule_id):
         raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
     supabase = get_supabase()
-    _own = (
-        require_active_executable(
-            supabase.table("work_schedules")
-            .select("company_id,factory_id")
-            .eq("id", schedule_id)
-        )
-        .limit(1)
-        .execute()
-    )
-    if not _own.data:
-        raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
-    _ensure_ws_row(_own.data[0], current, supabase)
+    own = _resolve_exact_active_occurrence(supabase, schedule_id)
+    _ensure_ws_row(own, current, supabase)
     now = _now()
 
     fields: dict = {}
@@ -532,5 +563,12 @@ def patch_work_schedule(schedule_id: str, body: SchedulePatchBody, current: dict
     if not updated:
         raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
 
-    row = supabase.table("work_schedules").select("*").eq("id", schedule_id).limit(1).execute()
+    row = (
+        supabase.table("work_schedules")
+        .select("*")
+        .eq("id", schedule_id)
+        .eq("factory_id", own["factory_id"])
+        .limit(1)
+        .execute()
+    )
     return {"status": "success", "data": (row.data[0] if row.data else None)}

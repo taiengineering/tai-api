@@ -185,22 +185,22 @@ def _seed():
             {"id": INSP_OTHER, "assignment_id": WS_OTHER},
         ],
         "work_schedules": [
-            {"id": WS_OWN, "assigned_user_id": USER, "inspection_set_id": SET_OWN, "active_yn": True},
-            {"id": WS_OTHER, "assigned_user_id": OTHER, "inspection_set_id": "set-other", "active_yn": True},
+            {"id": WS_OWN, "assigned_user_id": USER, "inspection_set_id": SET_OWN, "active_yn": True, "factory_id": "fa-1"},
+            {"id": WS_OTHER, "assigned_user_id": OTHER, "inspection_set_id": "set-other", "active_yn": True, "factory_id": "fa-2"},
         ],
         "work_assignments": [
             {
-                "id": WA_OWN, "assigned_user_id": USER, "schedule_id": WS_OWN,
+                "id": WA_OWN, "assigned_user_id": USER, "schedule_id": WS_OWN, "factory_id": "fa-1",
                 "status_code": "PENDING", "overdue_level": 1, "resolved_at": None,
                 "scheduled_date": "2026-01-01", "due_date": "2026-01-02",
             },
             {
-                "id": WA_OWN_DONE, "assigned_user_id": USER, "schedule_id": WS_OWN,
+                "id": WA_OWN_DONE, "assigned_user_id": USER, "schedule_id": WS_OWN, "factory_id": "fa-1",
                 "status_code": "DONE", "overdue_level": 0, "resolved_at": "2026-01-03",
                 "scheduled_date": "2026-01-03", "due_date": "2026-01-03",
             },
             {
-                "id": WA_OTHER, "assigned_user_id": OTHER, "schedule_id": WS_OTHER,
+                "id": WA_OTHER, "assigned_user_id": OTHER, "schedule_id": WS_OTHER, "factory_id": "fa-2",
                 "status_code": "PENDING", "overdue_level": 9, "resolved_at": None,
                 "scheduled_date": "2026-01-01", "due_date": "2026-01-02",
             },
@@ -718,3 +718,80 @@ def test_does_not_import_private_validate_or_wrong_bucket_uploader():
     assert "_validate_file" not in src
     assert "upload_service.upload_inspection_photo" not in src
     assert "get_public_url" not in src
+
+
+INSP_WA_LINKED = "4a4a4a4a-4a4a-4a4a-8a4a-4a4a4a4a4a4a"
+INSP_WA_INACTIVE = "5b5b5b5b-5b5b-5b5b-8b5b-5b5b5b5b5b5b"
+WS_INACTIVE_PARENT = "ws-inactive-parent"
+
+
+def test_P_wa_linked_photo_ok_when_parent_active(client, fake):
+    """PATCH-R4: WA-linked inspection requires active parent schedule pair."""
+    fake.tables["safety_inspections"].append(
+        {"id": INSP_WA_LINKED, "assignment_id": WA_OWN, "factory_id": "fa-1"}
+    )
+    r = _photo(client, inspection_id=INSP_WA_LINKED)
+    assert r.status_code == 200
+
+
+def test_P_wa_linked_photo_404_when_parent_inactive(client, fake):
+    fake.tables["work_schedules"].append(
+        {
+            "id": WS_INACTIVE_PARENT,
+            "assigned_user_id": USER,
+            "inspection_set_id": SET_OWN,
+            "active_yn": False,
+            "factory_id": "fa-1",
+        }
+    )
+    wa_inactive = "wa-inactive-parent"
+    fake.tables["work_assignments"].append(
+        {
+            "id": wa_inactive,
+            "assigned_user_id": USER,
+            "schedule_id": WS_INACTIVE_PARENT,
+            "factory_id": "fa-1",
+            "status_code": "PENDING",
+        }
+    )
+    fake.tables["safety_inspections"].append(
+        {"id": INSP_WA_INACTIVE, "assignment_id": wa_inactive, "factory_id": "fa-1"}
+    )
+    r = _photo(client, inspection_id=INSP_WA_INACTIVE)
+    assert r.status_code == 404
+
+
+def test_P_wa_linked_photo_404_when_parent_null_active(client, fake):
+    ws_null = "ws-null-active"
+    wa_null = "wa-null-active"
+    insp = "6c6c6c6c-6c6c-6c6c-8c6c-6c6c6c6c6c6c"
+    fake.tables["work_schedules"].append(
+        {
+            "id": ws_null,
+            "assigned_user_id": USER,
+            "inspection_set_id": SET_OWN,
+            "active_yn": None,
+            "factory_id": "fa-1",
+        }
+    )
+    fake.tables["work_assignments"].append(
+        {
+            "id": wa_null,
+            "assigned_user_id": USER,
+            "schedule_id": ws_null,
+            "factory_id": "fa-1",
+            "status_code": "PENDING",
+        }
+    )
+    fake.tables["safety_inspections"].append(
+        {"id": insp, "assignment_id": wa_null, "factory_id": "fa-1"}
+    )
+    r = _photo(client, inspection_id=insp)
+    assert r.status_code == 404
+
+
+def test_P_wa_linked_assert_source_checks_active_parent():
+    src = inspect.getsource(wa._assert_inspection_photo_owner)
+    assert "require_active_executable" in src
+    assert "schedule_id" in src
+    assert "factory_id" in src

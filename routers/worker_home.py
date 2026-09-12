@@ -80,34 +80,40 @@ def get_today_tasks(
     # work_assignments에서 오늘 날짜 + assigned_user_id 기준
     if user_id:
         wa_q = supabase.table("work_assignments") \
-            .select("id, schedule_id, asset_id, status_code, inspection_set_id, scheduled_date") \
+            .select("id, schedule_id, factory_id, asset_id, status_code, inspection_set_id, scheduled_date") \
             .eq("assigned_user_id", user_id) \
             .eq("scheduled_date", today) \
             .neq("status_code", "CANCELLED")
         wa_res = wa_q.execute()
         wa_rows = wa_res.data or []
 
-        # Stage1: hard-hide assignments whose parent schedule is not ACTIVE_EXECUTABLE.
-        # Batch enrich once (no N+1 growth vs prior per-row schedule select).
+        # Stage1/R4: hard-hide by exact (schedule_id, factory_id) ACTIVE_EXECUTABLE pair.
         schedule_ids = [wa["schedule_id"] for wa in wa_rows if wa.get("schedule_id")]
         active_ws: dict = {}
         if schedule_ids:
             ws_res = require_active_executable(
                 supabase.table("work_schedules")
-                .select("id, description, law_name, obligation_type")
+                .select("id, factory_id, description, law_name, obligation_type")
                 .in_("id", schedule_ids)
             ).execute()
-            active_ws = {r["id"]: r for r in (ws_res.data or [])}
+            active_ws = {
+                (r["id"], r.get("factory_id")): r
+                for r in (ws_res.data or [])
+                if r.get("factory_id")
+            }
 
         for wa in wa_rows:
             sid = wa.get("schedule_id")
-            # schedule_id present but inactive/null/missing → drop entire task
-            if sid and sid not in active_ws:
-                continue
+            fid = wa.get("factory_id")
+            # schedule linked but missing factory or inactive pair → drop entire task
+            if sid:
+                if not fid or (sid, fid) not in active_ws:
+                    continue
 
             item = {
                 "assignment_id": wa["id"],
                 "schedule_id":   wa["schedule_id"],
+                "factory_id":    fid,
                 "asset_id":      wa.get("asset_id"),
                 "status_code":   wa.get("status_code", "PENDING"),
                 "scheduled_date": wa.get("scheduled_date"),
@@ -123,8 +129,8 @@ def get_today_tasks(
                     item["inspection_set_name"] = is_res.data[0].get("inspection_set_name", "")
                     item["cycle_unit"]          = is_res.data[0].get("cycle_unit", "")
 
-            if sid and sid in active_ws:
-                ws = active_ws[sid]
+            if sid and fid and (sid, fid) in active_ws:
+                ws = active_ws[(sid, fid)]
                 item["description"]     = ws.get("description", "")
                 item["law_name"]        = ws.get("law_name", "")
                 item["obligation_type"] = ws.get("obligation_type", "")
