@@ -112,6 +112,8 @@ class _Q:
                     "ignore_duplicates": self._ignore_dup,
                 }
             )
+            if getattr(self.sb, "block_upsert", False):
+                return _Resp([])
             row = dict(self._payload)
             if "id" not in row:
                 row["id"] = f"gen-{len(rows)+1}"
@@ -148,11 +150,13 @@ class _Q:
             updated = []
             for r in rows:
                 if self._match(r):
-                    # assignee-only sync must not touch other fields via callers;
-                    # fake applies payload as-is.
+                    rid = r.get("id")
+                    if rid in getattr(self.sb, "fail_update_ids", set()):
+                        raise RuntimeError("injected update failure")
+                    # assignee-only / active_yn-only sync — fake applies payload as-is.
                     r.update(dict(self._payload))
                     updated.append(r)
-                    self.sb.updates.append({"id": r.get("id"), "payload": dict(self._payload)})
+                    self.sb.updates.append({"id": rid, "payload": dict(self._payload)})
             return _Resp(updated)
 
         if self._op == "delete":
@@ -177,6 +181,8 @@ class _SB:
         self.upsert_calls: List[dict] = []
         self.deletes: List[dict] = []
         self.delete_ops = 0
+        self.fail_update_ids: set = set()
+        self.block_upsert = False
 
     def table(self, name: str):
         return _Q(self, name)
@@ -234,6 +240,23 @@ def _before(basis="2026-10-10", value=3, unit="day") -> dict:
         "unit": unit,
         "basis_date": basis,
     }
+
+
+
+def _ws(**kw) -> dict:
+    """Canonical LEGAL active schedule row for Stage2 fixtures."""
+    base = {
+        "factory_id": "f1",
+        "inspection_set_id": "set-1",
+        "status_code": "scheduled",
+        "source_type": "LEGAL",
+        "assigned_user_id": "user-1",
+        "active_yn": True,
+        "is_excluded": False,
+        "excluded_reason": None,
+    }
+    base.update(kw)
+    return base
 
 
 @pytest.fixture
@@ -364,15 +387,11 @@ def test_T18_T19_exact_identity_duplicate_and_conflict(freeze_today):
     rule = _within(basis="2026-10-01", value=1, unit="month")  # → 2026-11-01
     sb.inspection_sets = [_iset(operation_time_rule=rule)]
     planned = "2026-11-01"
-    sb.work_schedules = [{
-        "id": "ws-exist",
-        "factory_id": "f1",
-        "inspection_set_id": "set-1",
-        "planned_date": planned,
-        "status_code": "scheduled",
-        "source_type": "LEGAL",
-        "assigned_user_id": "user-1",
-    }]
+    sb.work_schedules = [_ws(
+        id="ws-exist",
+        planned_date=planned,
+        assigned_user_id="user-1",
+    )]
     out = LE.run_generate_operation_schedules("f1", sb)
     assert out["created"] == 0
     assert out["skipped_dup"] == 1
@@ -392,11 +411,10 @@ def test_T20_completed_preserve(freeze_today):
     sb = _SB()
     rule = _within(basis="2026-10-01", value=1, unit="month")
     sb.inspection_sets = [_iset(operation_time_rule=rule)]
-    sb.work_schedules = [{
-        "id": "ws-c", "factory_id": "f1", "inspection_set_id": "set-1",
-        "planned_date": "2026-11-01", "status_code": "completed",
-        "source_type": "LEGAL", "assigned_user_id": "old",
-    }]
+    sb.work_schedules = [_ws(
+        id="ws-c", planned_date="2026-11-01", status_code="completed",
+        assigned_user_id="old",
+    )]
     out = LE.run_generate_operation_schedules("f1", sb)
     assert out["created"] == 0
     assert out["preserved_existing"] == 1
@@ -407,11 +425,10 @@ def test_T21_in_progress_preserve(freeze_today):
     sb = _SB()
     rule = _within(basis="2026-10-01", value=1, unit="month")
     sb.inspection_sets = [_iset(operation_time_rule=rule)]
-    sb.work_schedules = [{
-        "id": "ws-i", "factory_id": "f1", "inspection_set_id": "set-1",
-        "planned_date": "2026-11-01", "status_code": "in_progress",
-        "source_type": "LEGAL", "assigned_user_id": "old",
-    }]
+    sb.work_schedules = [_ws(
+        id="ws-i", planned_date="2026-11-01", status_code="in_progress",
+        assigned_user_id="old",
+    )]
     out = LE.run_generate_operation_schedules("f1", sb)
     assert out["preserved_existing"] == 1
     assert sb.updates == []
@@ -421,11 +438,9 @@ def test_T22_child_linked_preserve(freeze_today):
     sb = _SB()
     rule = _within(basis="2026-10-01", value=1, unit="month")
     sb.inspection_sets = [_iset(operation_time_rule=rule, assignee_user_id="user-NEW")]
-    sb.work_schedules = [{
-        "id": "ws-ch", "factory_id": "f1", "inspection_set_id": "set-1",
-        "planned_date": "2026-11-01", "status_code": "scheduled",
-        "source_type": "LEGAL", "assigned_user_id": "old",
-    }]
+    sb.work_schedules = [_ws(
+        id="ws-ch", planned_date="2026-11-01", assigned_user_id="old",
+    )]
     sb.work_assignments = [{"id": "wa1", "schedule_id": "ws-ch", "factory_id": "f1"}]
     out = LE.run_generate_operation_schedules("f1", sb)
     assert out["preserved_child_linked"] == 1
@@ -438,12 +453,10 @@ def test_T23_T24_child_free_assignee_sync_only(freeze_today):
     sb = _SB()
     rule = _within(basis="2026-10-01", value=1, unit="month")
     sb.inspection_sets = [_iset(operation_time_rule=rule, assignee_user_id="user-NEW")]
-    sb.work_schedules = [{
-        "id": "ws-cf", "factory_id": "f1", "inspection_set_id": "set-1",
-        "planned_date": "2026-11-01", "status_code": "scheduled",
-        "source_type": "LEGAL", "assigned_user_id": "old",
-        "repeat_type": "once", "repeat_interval": 1,
-    }]
+    sb.work_schedules = [_ws(
+        id="ws-cf", planned_date="2026-11-01", assigned_user_id="old",
+        repeat_type="once", repeat_interval=1,
+    )]
     out = LE.run_generate_operation_schedules("f1", sb)
     assert out["assignee_synced"] == 1
     assert sb.updates
@@ -456,49 +469,42 @@ def test_T23_T24_child_free_assignee_sync_only(freeze_today):
 
 
 def test_R8_stale_child_free_future_preserved_and_latest_created(freeze_today):
-    """PATCH-R2: old 12/01 preserved; latest OTR 11/01 created; no DELETE/date rewrite."""
+    """Stage2: old 12/01 physically preserved + active_yn=false; latest 11/01 created."""
     sb = _SB()
     rule = _within(basis="2026-10-01", value=1, unit="month")  # → 2026-11-01
     sb.inspection_sets = [_iset(operation_time_rule=rule)]
-    sb.work_schedules = [{
-        "id": "ws-old", "factory_id": "f1", "inspection_set_id": "set-1",
-        "planned_date": "2026-12-01", "status_code": "scheduled",
-        "source_type": "LEGAL", "assigned_user_id": "user-1",
-    }]
+    sb.work_schedules = [_ws(id="ws-old", planned_date="2026-12-01")]
     out = LE.run_generate_operation_schedules("f1", sb)
-    assert out["stale_preserved"] == 1
     assert out["created"] == 1
+    assert out["stale_inactivated"] == 1
+    assert out["stale_preserved"] == 0
     assert sb.deletes == []
     assert not any("planned_date" in (u.get("payload") or {}) for u in sb.updates)
     old = next(r for r in sb.work_schedules if r["id"] == "ws-old")
     assert old["planned_date"] == "2026-12-01"
+    assert old["active_yn"] is False
     dates = {r["planned_date"] for r in sb.work_schedules if r.get("inspection_set_id") == "set-1"}
     assert dates == {"2026-12-01", "2026-11-01"}
     assert any(r.get("planned_date") == "2026-11-01" and r["id"] != "ws-old" for r in sb.work_schedules)
 
 
 def test_R8b_exact_plus_stale_both_preserved(freeze_today):
-    """When latest identity already exists, leftover stale is also preserved (DELETE 0)."""
+    """Stage2: exact latest already active; leftover stale inactivated (DELETE 0)."""
     sb = _SB()
     rule = _within(basis="2026-10-01", value=1, unit="month")
     sb.inspection_sets = [_iset(operation_time_rule=rule)]
     sb.work_schedules = [
-        {
-            "id": "ws-new", "factory_id": "f1", "inspection_set_id": "set-1",
-            "planned_date": "2026-11-01", "status_code": "scheduled",
-            "source_type": "LEGAL", "assigned_user_id": "user-1",
-        },
-        {
-            "id": "ws-old", "factory_id": "f1", "inspection_set_id": "set-1",
-            "planned_date": "2026-12-01", "status_code": "scheduled",
-            "source_type": "LEGAL", "assigned_user_id": "user-1",
-        },
+        _ws(id="ws-new", planned_date="2026-11-01"),
+        _ws(id="ws-old", planned_date="2026-12-01"),
     ]
     out = LE.run_generate_operation_schedules("f1", sb)
     assert out["created"] == 0
-    assert out["stale_preserved"] == 1
+    assert out["stale_inactivated"] == 1
+    assert out["stale_preserved"] == 0
     assert sb.deletes == []
-    assert sb.updates == []
+    old = next(r for r in sb.work_schedules if r["id"] == "ws-old")
+    assert old["active_yn"] is False
+    assert old["planned_date"] == "2026-12-01"
     dates = {r["planned_date"] for r in sb.work_schedules if r.get("inspection_set_id") == "set-1"}
     assert dates == {"2026-11-01", "2026-12-01"}
 
@@ -532,15 +538,16 @@ def test_R8c_non_legal_exact_identity_preserved_no_takeover(freeze_today):
     sb = _SB()
     rule = _within(basis="2026-10-01", value=1, unit="month")
     sb.inspection_sets = [_iset(operation_time_rule=rule, assignee_user_id="user-NEW")]
-    sb.work_schedules = [{
-        "id": "ws-man", "factory_id": "f1", "inspection_set_id": "set-1",
-        "planned_date": "2026-11-01", "status_code": "scheduled",
-        "source_type": "MANUAL", "assigned_user_id": "user-OLD",
-    }]
+    sb.work_schedules = [_ws(
+        id="ws-man", planned_date="2026-11-01", source_type="MANUAL",
+        assigned_user_id="user-OLD",
+    )]
     out = LE.run_generate_operation_schedules("f1", sb)
     assert out["created"] == 0
     assert out["assignee_synced"] == 0
     assert out["preserved_existing"] == 1
+    assert out["latest_not_secured"] == 1
+    assert out["stale_inactivated"] == 0
     assert sb.updates == []
     assert sb.deletes == []
     ws = sb.work_schedules[0]
@@ -554,15 +561,13 @@ def test_T30_factory_id_predicates_in_queries(freeze_today):
     rule = _within(basis="2026-10-01", value=1, unit="month")
     sb.inspection_sets = [_iset(operation_time_rule=rule)]
     # Existing exact identity so update path with factory_id is exercised too
-    sb.work_schedules = [{
-        "id": "ws-x", "factory_id": "f1", "inspection_set_id": "set-1",
-        "planned_date": "2026-11-01", "status_code": "planned",
-        "source_type": "LEGAL", "assigned_user_id": "old",
-    }]
+    sb.work_schedules = [_ws(
+        id="ws-x", planned_date="2026-11-01", status_code="planned",
+        assigned_user_id="old",
+    )]
     LE.run_generate_operation_schedules("f1", sb)
-    src = inspect.getsource(LE.run_generate_operation_schedules)
+    src = inspect.getsource(LE)
     assert '.eq("factory_id"' in src or ".eq('factory_id'" in src
-    # child check + exact fetch + update all require factory_id
     assert src.count("factory_id") >= 5
 
 
@@ -575,6 +580,7 @@ def test_T31_T32_generate_schedules_all_factory_loop(freeze_today, monkeypatch):
             "total_sets": 1, "created": 1, "skipped_dup": 0, "skipped_no_condition": 0,
             "assignee_synced": 0, "preserved_existing": 0,
             "preserved_child_linked": 0, "stale_preserved": 0,
+            "reactivated": 0, "stale_inactivated": 0, "latest_not_secured": 0,
         }
 
     sb = _SB()
@@ -600,6 +606,7 @@ def test_T33_mode_law_engine_delegates(freeze_today, monkeypatch):
             "total_sets": 2, "created": 1, "skipped_dup": 0, "skipped_no_condition": 1,
             "assignee_synced": 0, "preserved_existing": 0,
             "preserved_child_linked": 0, "stale_preserved": 0,
+            "reactivated": 0, "stale_inactivated": 0, "latest_not_secured": 0,
         }
 
     sb = _SB()
@@ -660,11 +667,10 @@ def test_legacy_aliases_pending_scheduled_read_as_preserve_or_sync(freeze_today)
     sb = _SB()
     rule = _within(basis="2026-10-01", value=1, unit="month")
     sb.inspection_sets = [_iset(operation_time_rule=rule, assignee_user_id="u2")]
-    sb.work_schedules = [{
-        "id": "ws-legacy", "factory_id": "f1", "inspection_set_id": "set-1",
-        "planned_date": "2026-11-01", "status_code": "SCHEDULED",
-        "source_type": "LEGAL", "assigned_user_id": "u1",
-    }]
+    sb.work_schedules = [_ws(
+        id="ws-legacy", planned_date="2026-11-01", status_code="SCHEDULED",
+        assigned_user_id="u1",
+    )]
     out = LE.run_generate_operation_schedules("f1", sb)
     assert out["assignee_synced"] == 1
 
@@ -702,11 +708,9 @@ def test_R9_completed_old_date_preserved_while_creating_latest(freeze_today):
     sb = _SB()
     rule = _within(basis="2026-10-01", value=1, unit="month")
     sb.inspection_sets = [_iset(operation_time_rule=rule)]
-    sb.work_schedules = [{
-        "id": "ws-done", "factory_id": "f1", "inspection_set_id": "set-1",
-        "planned_date": "2026-12-01", "status_code": "completed",
-        "source_type": "LEGAL", "assigned_user_id": "user-1",
-    }]
+    sb.work_schedules = [_ws(
+        id="ws-done", planned_date="2026-12-01", status_code="completed",
+    )]
     out = LE.run_generate_operation_schedules("f1", sb)
     assert out["created"] == 1
     assert sb.deletes == []
@@ -719,11 +723,9 @@ def test_R10_in_progress_old_date_preserved(freeze_today):
     sb = _SB()
     rule = _within(basis="2026-10-01", value=1, unit="month")
     sb.inspection_sets = [_iset(operation_time_rule=rule)]
-    sb.work_schedules = [{
-        "id": "ws-ip", "factory_id": "f1", "inspection_set_id": "set-1",
-        "planned_date": "2026-12-01", "status_code": "in_progress",
-        "source_type": "LEGAL", "assigned_user_id": "user-1",
-    }]
+    sb.work_schedules = [_ws(
+        id="ws-ip", planned_date="2026-12-01", status_code="in_progress",
+    )]
     out = LE.run_generate_operation_schedules("f1", sb)
     assert sb.deletes == []
     assert sb.delete_ops == 0
@@ -735,53 +737,55 @@ def test_R11_wa_linked_stale_preserved(freeze_today):
     sb = _SB()
     rule = _within(basis="2026-10-01", value=1, unit="month")
     sb.inspection_sets = [_iset(operation_time_rule=rule)]
-    sb.work_schedules = [{
-        "id": "ws-wa", "factory_id": "f1", "inspection_set_id": "set-1",
-        "planned_date": "2026-12-01", "status_code": "scheduled",
-        "source_type": "LEGAL", "assigned_user_id": "user-1",
-    }]
+    sb.work_schedules = [_ws(id="ws-wa", planned_date="2026-12-01")]
     sb.work_assignments = [{"id": "wa1", "schedule_id": "ws-wa", "factory_id": "f1"}]
     out = LE.run_generate_operation_schedules("f1", sb)
     assert sb.deletes == []
     assert sb.delete_ops == 0
-    assert any(r["id"] == "ws-wa" and r["planned_date"] == "2026-12-01" for r in sb.work_schedules)
+    stale = next(r for r in sb.work_schedules if r["id"] == "ws-wa")
+    assert stale["planned_date"] == "2026-12-01"
+    assert stale["active_yn"] is True
     assert out["created"] == 1  # latest identity still created
     assert out["stale_preserved"] == 1
+    assert out["stale_inactivated"] == 0
 
 
 def test_R12_equipment_child_linked_preserved(freeze_today):
     sb = _SB()
     rule = _within(basis="2026-10-01", value=1, unit="month")
     sb.inspection_sets = [_iset(operation_time_rule=rule)]
-    sb.work_schedules = [{
-        "id": "ws-ec", "factory_id": "f1", "inspection_set_id": "set-1",
-        "planned_date": "2026-12-01", "status_code": "scheduled",
-        "source_type": "LEGAL", "assigned_user_id": "user-1",
-    }]
+    sb.work_schedules = [_ws(id="ws-ec", planned_date="2026-12-01")]
     sb.equipment_checkins = [{"id": "ec1", "schedule_id": "ws-ec", "factory_id": "f1"}]
     out = LE.run_generate_operation_schedules("f1", sb)
     assert sb.deletes == []
     assert sb.delete_ops == 0
-    assert any(r["id"] == "ws-ec" for r in sb.work_schedules)
+    stale = next(r for r in sb.work_schedules if r["id"] == "ws-ec")
+    assert stale["active_yn"] is True
     assert out["stale_preserved"] == 1
+    assert out["stale_inactivated"] == 0
 
 
 def test_R13_R14_idempotent_second_run(freeze_today):
     sb = _SB()
     rule = _within(basis="2026-10-01", value=1, unit="month")
     sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [_ws(id="ws-old", planned_date="2026-12-01")]
     out1 = LE.run_generate_operation_schedules("f1", sb)
     assert out1["created"] == 1
+    assert out1["stale_inactivated"] == 1
     n = len(sb.work_schedules)
     updates_before = len(sb.updates)
     deletes_before = sb.delete_ops
     out2 = LE.run_generate_operation_schedules("f1", sb)
     assert out2["created"] == 0
+    assert out2["reactivated"] == 0
+    assert out2["stale_inactivated"] == 0
     assert out2["stale_preserved"] == 0
     assert sb.delete_ops == deletes_before == 0
     assert len(sb.work_schedules) == n
-    assert len(sb.updates) == updates_before  # assignee already matched
     assert not any("planned_date" in (u.get("payload") or {}) for u in sb.updates)
+    # second run: no new active_yn mutations on already-inactive stale
+    assert len([u for u in sb.updates[updates_before:] if "active_yn" in (u.get("payload") or {})]) == 0
 
 
 def test_R15_R16_R17_canonical_write_and_no_cancelled(freeze_today):
@@ -796,3 +800,264 @@ def test_R15_R16_R17_canonical_write_and_no_cancelled(freeze_today):
     assert row["status_code"] != "cancelled"
     assert 'status_code": "cancel' not in inspect.getsource(LE)
     assert "status_code': 'cancel" not in inspect.getsource(LE)
+
+
+# ── Stage2 contract matrix (PATCH-R3) ──────────────────────────────
+
+
+def test_P3_exact_inactive_eligible_reactivate_then_stale(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule, assignee_user_id="user-NEW")]
+    sb.work_schedules = [
+        _ws(
+            id="ws-exact", planned_date="2026-11-01", active_yn=False,
+            assigned_user_id="user-OLD",
+        ),
+        _ws(id="ws-old", planned_date="2026-12-01"),
+    ]
+    out = LE.run_generate_operation_schedules("f1", sb)
+    assert out["created"] == 0
+    assert out["reactivated"] == 1
+    assert out["stale_inactivated"] == 1
+    exact = next(r for r in sb.work_schedules if r["id"] == "ws-exact")
+    assert exact["active_yn"] is True
+    assert exact["assigned_user_id"] == "user-NEW"
+    assert exact["planned_date"] == "2026-11-01"
+    stale = next(r for r in sb.work_schedules if r["id"] == "ws-old")
+    assert stale["active_yn"] is False
+    assert sb.deletes == []
+
+
+def test_P4_exact_inactive_is_excluded_no_reactivate(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [
+        _ws(id="ws-exact", planned_date="2026-11-01", active_yn=False, is_excluded=True),
+        _ws(id="ws-old", planned_date="2026-12-01"),
+    ]
+    out = LE.run_generate_operation_schedules("f1", sb)
+    assert out["reactivated"] == 0
+    assert out["latest_not_secured"] == 1
+    assert out["stale_inactivated"] == 0
+    assert next(r for r in sb.work_schedules if r["id"] == "ws-exact")["active_yn"] is False
+    assert next(r for r in sb.work_schedules if r["id"] == "ws-old")["active_yn"] is True
+
+
+def test_P5_exact_inactive_excluded_reason_no_reactivate(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [
+        _ws(
+            id="ws-exact", planned_date="2026-11-01", active_yn=False,
+            excluded_reason="manual_hold",
+        ),
+        _ws(id="ws-old", planned_date="2026-12-01"),
+    ]
+    out = LE.run_generate_operation_schedules("f1", sb)
+    assert out["reactivated"] == 0
+    assert out["latest_not_secured"] == 1
+    assert out["stale_inactivated"] == 0
+    assert next(r for r in sb.work_schedules if r["id"] == "ws-old")["active_yn"] is True
+
+
+def test_P6_exact_active_yn_null_no_reactivate(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [
+        _ws(id="ws-exact", planned_date="2026-11-01", active_yn=None),
+        _ws(id="ws-old", planned_date="2026-12-01"),
+    ]
+    out = LE.run_generate_operation_schedules("f1", sb)
+    assert out["reactivated"] == 0
+    assert out["latest_not_secured"] == 1
+    assert out["stale_inactivated"] == 0
+    assert next(r for r in sb.work_schedules if r["id"] == "ws-old")["active_yn"] is True
+
+
+def test_P7_exact_inactive_child_linked_no_reactivate(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [
+        _ws(id="ws-exact", planned_date="2026-11-01", active_yn=False),
+        _ws(id="ws-old", planned_date="2026-12-01"),
+    ]
+    sb.work_assignments = [{"id": "wa1", "schedule_id": "ws-exact", "factory_id": "f1"}]
+    out = LE.run_generate_operation_schedules("f1", sb)
+    assert out["reactivated"] == 0
+    assert out["latest_not_secured"] == 1
+    assert out["stale_inactivated"] == 0
+    assert next(r for r in sb.work_schedules if r["id"] == "ws-old")["active_yn"] is True
+
+
+def test_P10_child_query_exception_fail_close_preserve(freeze_today):
+    class BoomSB(_SB):
+        def table(self, name: str):
+            if name in ("work_assignments", "safety_inspections", "equipment_checkins"):
+                raise RuntimeError("child table boom")
+            return _Q(self, name)
+
+    sb2 = BoomSB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb2.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb2.work_schedules = [
+        _ws(id="ws-new", planned_date="2026-11-01"),
+        _ws(id="ws-old", planned_date="2026-12-01"),
+    ]
+    out = LE.run_generate_operation_schedules("f1", sb2)
+    assert out["created"] == 0
+    assert out["stale_preserved"] == 1
+    assert out["stale_inactivated"] == 0
+    assert next(r for r in sb2.work_schedules if r["id"] == "ws-old")["active_yn"] is True
+
+
+def test_P11_latest_insert_verify_failure_stale_remains_active(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [_ws(id="ws-old", planned_date="2026-12-01")]
+    sb.block_upsert = True
+    out = LE.run_generate_operation_schedules("f1", sb)
+    assert out["created"] == 0
+    assert out["latest_not_secured"] == 1
+    assert out["stale_inactivated"] == 0
+    assert next(r for r in sb.work_schedules if r["id"] == "ws-old")["active_yn"] is True
+
+
+def test_P12_latest_reactivation_failure_stale_remains_active(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [
+        _ws(id="ws-exact", planned_date="2026-11-01", active_yn=False),
+        _ws(id="ws-old", planned_date="2026-12-01"),
+    ]
+    sb.fail_update_ids.add("ws-exact")
+    try:
+        LE.run_generate_operation_schedules("f1", sb)
+        raised = False
+    except RuntimeError:
+        raised = True
+    assert raised is True
+    assert next(r for r in sb.work_schedules if r["id"] == "ws-old")["active_yn"] is True
+    assert next(r for r in sb.work_schedules if r["id"] == "ws-exact")["active_yn"] is False
+
+
+def test_P13_partial_stale_update_failure_latest_remains(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [
+        _ws(id="ws-new", planned_date="2026-11-01"),
+        _ws(id="ws-old-a", planned_date="2026-12-01"),
+        _ws(id="ws-old-b", planned_date="2026-12-15"),
+    ]
+    sb.fail_update_ids.add("ws-old-a")
+    try:
+        LE.run_generate_operation_schedules("f1", sb)
+        raised = False
+    except RuntimeError:
+        raised = True
+    assert raised is True
+    latest = next(r for r in sb.work_schedules if r["id"] == "ws-new")
+    assert latest["active_yn"] is True
+
+
+def test_P15_completed_stale_preserve(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [
+        _ws(id="ws-new", planned_date="2026-11-01"),
+        _ws(id="ws-done", planned_date="2026-12-01", status_code="completed"),
+    ]
+    out = LE.run_generate_operation_schedules("f1", sb)
+    assert out["stale_inactivated"] == 0
+    assert next(r for r in sb.work_schedules if r["id"] == "ws-done")["active_yn"] is True
+
+
+def test_P16_in_progress_stale_preserve(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [
+        _ws(id="ws-new", planned_date="2026-11-01"),
+        _ws(id="ws-ip", planned_date="2026-12-01", status_code="in_progress"),
+    ]
+    out = LE.run_generate_operation_schedules("f1", sb)
+    assert out["stale_inactivated"] == 0
+    assert next(r for r in sb.work_schedules if r["id"] == "ws-ip")["active_yn"] is True
+
+
+def test_P17_unknown_stale_preserve(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [
+        _ws(id="ws-new", planned_date="2026-11-01"),
+        _ws(id="ws-unk", planned_date="2026-12-01", status_code="unknown_status"),
+    ]
+    out = LE.run_generate_operation_schedules("f1", sb)
+    assert out["stale_inactivated"] == 0
+    assert next(r for r in sb.work_schedules if r["id"] == "ws-unk")["active_yn"] is True
+
+
+def test_P18_non_legal_exact_no_takeover_stale_zero(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [
+        _ws(id="ws-man", planned_date="2026-11-01", source_type="MANUAL"),
+        _ws(id="ws-old", planned_date="2026-12-01"),
+    ]
+    out = LE.run_generate_operation_schedules("f1", sb)
+    assert out["created"] == 0
+    assert out["latest_not_secured"] == 1
+    assert out["stale_inactivated"] == 0
+    assert next(r for r in sb.work_schedules if r["id"] == "ws-old")["active_yn"] is True
+
+
+def test_P19_force_true_legal_anchor_delete_0(freeze_today, monkeypatch):
+    sb = _SB()
+    sb.inspection_sets = [
+        _iset(
+            id="leg-1",
+            source="LEGAL_ENGINE",
+            schedule_anchor_date="2026-01-01",
+            cycle_unit="month",
+            cycle_value=1,
+            assignee_user_id="user-1",
+            operation_time_rule=None,
+            anchor_confirmed=True,
+        ),
+    ]
+    for r in sb.inspection_sets:
+        r["anchor_confirmed"] = True
+        r["is_active"] = True
+    monkeypatch.setattr(S, "get_supabase", lambda: sb)
+    out = S.generate_schedules_for_factory("f1", "anchor", True)
+    assert sb.delete_ops == 0
+    assert sb.deletes == []
+    assert out["data"]["created"] == 0
+
+
+def test_P20_static_guards_stage2(freeze_today):
+    src = inspect.getsource(LE)
+    assert ".delete(" not in src
+    assert "def _delete_stale" not in src
+    assert "def _converge_payload" not in src
+    react = inspect.getsource(LE._reactivate_exact)
+    assert '{"active_yn": True}' in react
+    assert "planned_date" not in react
+    assert "start_date" not in react
+    assert "end_date" not in react
+    inac = inspect.getsource(LE._inactivate_stale)
+    assert '{"active_yn": False}' in inac
+    assert "planned_date" not in inac
+    assert "start_date" not in inac
+    assert "end_date" not in inac
+    assert "status_code" not in inac
