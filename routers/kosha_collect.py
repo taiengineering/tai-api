@@ -2,15 +2,16 @@
 KOSHA 데이터 수집 — DB 저장 + 크론 갱신
 prefix: /kosha-collect
 
+v1.8.0 (2026-09-13):
+  [OBJ-KG] _collect_guide() → services.kosha_guide_sync full-set atomic current.
+        callApiId=1050 고정(주입 불가). dry_run 지원. page-by-page current 제거.
+        라이브 probe에서 Railway kr_get 경로로 GUIDE JSON 확인.
+        과거 Cafe24-only 주석은 인프라 추정이므로 재고정하지 않는다.
+
 v1.7.0 (2026-08-10):
   [FIX] _collect_guide() 신 KOSHA GUIDE 전용 API 전환 — kosha_guide 0건 해소.
         폐기된 srch/smartSearch 키워드 우회 → getKoshaGuide(koshaguide) 전용 API.
         callApiId=1050 필수. 응답 body.items.item[] (techGdlnNm/No/OfancYmd/fileDownloadUrl).
-
-  [주의] tai-api(Railway) egress 는 data.go.kr 프록시 경유 시 코드10(실측 확정,
-        urllib3 버전 무관 — 인프라 원인). KOSHA 수집은 카페24 서버(고정 IP)에서
-        직접 실행하는 스크립트(kosha_guide_collect.py)로 수행한다. 이 라우터의
-        /run 은 프록시 미설정 환경(직접 나가는 곳)에서만 정상 동작한다.
 
 v1.6.0 (2026-05-02):
   [FIX] MAX_PAGES 100→500 (10,000건 한도 해제)
@@ -42,6 +43,7 @@ from services.kosha_safety_material_sync import (
 from services.kosha_safety_material_enrichment import dry_run_plan, run_one_batch
 from services.kosha_safety_materials.enrichment import snapshot_precondition
 from services.kosha_safety_materials.writer import SupabaseStore as EnrichmentStore
+from services.kosha_guide_sync import sync_kosha_guides
 
 log    = logging.getLogger(__name__)
 router = APIRouter(prefix="/kosha-collect", tags=["KOSHA데이터수집"])
@@ -350,49 +352,24 @@ async def _collect_risk_assessment(since_date: str = INIT_DATE, full_refresh: bo
     return {"target": "risk_assessment", "since": since, "upserted": total_upserted}
 
 
-async def _collect_guide(full_refresh: bool = False, call_api_id: str = "1050") -> dict:
-    """
-    v1.7.0: 신 KOSHA GUIDE 전용 API(getKoshaGuide) 전환.
-    - 엔드포인트: koshaguide/getKoshaGuide (Base apis.data.go.kr/B552468)
-    - 필수: callApiId (미입력시 에러99). serviceKey 는 KoshaAPI.get 이 주입.
-    - 응답: body.items.item[] — techGdlnNm(규정명)/techGdlnNo(규정번호)/
-            techGdlnOfancYmd(공표일자)/fileDownloadUrl(다운로드링크).
-    - kosha_guide 스키마(guide_no/guide_title/category/guide_url/regist_date/raw_json) 매핑.
+async def _collect_guide(full_refresh: bool = False, dry_run: bool = True) -> dict:
+    """GUIDE Source Adapter wrapper. Catalog table is kosha_guide.
 
-    참고: tai-api 에서 프록시 경유 시 data.go.kr 코드10(인프라). 실제 수집은 고정 IP
-    서버 스크립트(kosha_guide_collect.py)로 수행하며, 이미 kosha_guide 1039건 적재됨.
+    Current promotion is latest COMPLETED snapshot membership, not page-by-page
+    upsert. callApiId is fixed at 1050 inside kosha_guide_sync (not injectable).
+    Missing techGdlnNo is REJECT — no fallback id generation.
     """
-    sb = get_supabase()
-    total_upserted = 0
-    for page in range(1, MAX_PAGES + 1):
-        resp = await KoshaAPI.get(
-            "koshaguide/getKoshaGuide",
-            {"callApiId": call_api_id, "pageNo": page, "numOfRows": MAX_ROWS}
-        )
-        items = KoshaAPI.items(resp)
-        if not items:
-            break
-        rows = []
-        for i, it in enumerate(items):
-            no  = str(it.get("techGdlnNo") or "").strip()
-            rid = no if no else _make_id("guide", page, i)
-            rows.append({
-                "id": rid,
-                "guide_no": no,
-                "guide_title": it.get("techGdlnNm") or "",
-                # 신 API 는 분야코드 필드가 없음 — 빈값(필요 시 techGdlnNo 접두로 후분류).
-                "category": "",
-                "guide_url": it.get("fileDownloadUrl") or "",
-                "regist_date": it.get("techGdlnOfancYmd") or "",
-                "raw_json": it,
-            })
-        if rows:
-            sb.table("kosha_guide").upsert(rows, on_conflict="id").execute()
-            total_upserted += len(rows)
-        if len(items) < MAX_ROWS:
-            break
-    _log("guide", "success", total_upserted)
-    return {"target": "guide", "upserted": total_upserted}
+    del full_refresh
+    from dataclasses import asdict
+    result = await asyncio.to_thread(sync_kosha_guides, dry_run=dry_run)
+    payload = asdict(result)
+    upserted = int(result.catalog_upserted or 0)
+    payload["upserted"] = upserted
+    if result.status in ("COMPLETED", "SNAPSHOT_NO_CHANGE", "DRY_RUN"):
+        _log("guide", "success", upserted)
+    else:
+        _log("guide", "fail", upserted, str(result.failure_reason or result.status)[:300])
+    return payload
 
 
 # ─────────────────────────────────────────────────────
@@ -407,7 +384,7 @@ async def collect_all(
     full_refresh: bool = Query(False),
     background:   bool = Query(False),
     start_page:   int  = Query(1, ge=1, description="safety-materials 이어받기용 시작 페이지 (snapshot path는 1만 유효)"),
-    dry_run:      bool = Query(True, description="safety-materials snapshot / details: True면 업무 DML 0"),
+    dry_run:      bool = Query(True, description="safety-materials / guide: True면 업무 DML 0"),
     batch_size:   int  = Query(100, ge=1, le=200, description="safety-material-details 한 호출당 건수"),
 ):
     targets = [target] if target else [
@@ -448,7 +425,7 @@ async def _dispatch(target: str, since_date: str, full_refresh: bool, start_page
     elif target == "construction-accidents":  return await _collect_construction_accidents(since_date, full_refresh)
     elif target == "construction-safety-light": return await _collect_safety_light()
     elif target == "risk-assessment":         return await _collect_risk_assessment(since_date, full_refresh)
-    elif target == "guide":                   return await _collect_guide(full_refresh)
+    elif target == "guide":                   return await _collect_guide(full_refresh, dry_run)
     raise ValueError(f"Unknown target: {target}")
 
 
