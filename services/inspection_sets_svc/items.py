@@ -23,31 +23,67 @@ def get_set_items(inspection_set_id: str) -> dict:
 
 
 def resolve_set_id_for_assignment(assignment_id: str):
-    """work_assignments -> work_schedules -> inspection_set_id (없으면 None). worker_check 검증용."""
+    """work_assignments -> work_schedules -> inspection_set_id (없으면 None). worker_check 검증용.
+
+    PATCH-R5: use WA (schedule_id, factory_id) exact pair; no active sibling promotion.
+    """
     supabase = get_supabase()
-    wa = supabase.table("work_assignments").select("schedule_id").eq("id", assignment_id).limit(1).execute()
+    wa = (
+        supabase.table("work_assignments")
+        .select("schedule_id, factory_id")
+        .eq("id", assignment_id)
+        .limit(1)
+        .execute()
+    )
     if not wa.data or not wa.data[0].get("schedule_id"):
         return None
-    ws = require_active_executable(
-        supabase.table("work_schedules").select("inspection_set_id").eq("id", wa.data[0]["schedule_id"])
-    ).limit(1).execute()
-    if not ws.data:
+    sid = wa.data[0]["schedule_id"]
+    fid = wa.data[0].get("factory_id")
+    q = (
+        require_active_executable(
+            supabase.table("work_schedules")
+            .select("inspection_set_id, factory_id")
+            .eq("id", sid)
+        )
+    )
+    if fid:
+        q = q.eq("factory_id", fid)
+    ws = q.execute()
+    rows = ws.data or []
+    if not rows:
         return None
-    return ws.data[0].get("inspection_set_id")
+    if not fid and len(rows) > 1:
+        return None
+    return rows[0].get("inspection_set_id")
 
 
 def get_items_for_assignment(assignment_id: str) -> dict:
     """배정->세트->항목. 배정/일정 없음=404(ERROR), 세트 미연결=200+[](EMPTY, 검토 ⓑ)."""
     supabase = get_supabase()
-    wa = supabase.table("work_assignments").select("schedule_id").eq("id", assignment_id).limit(1).execute()
+    wa = (
+        supabase.table("work_assignments")
+        .select("schedule_id, factory_id")
+        .eq("id", assignment_id)
+        .limit(1)
+        .execute()
+    )
     if not wa.data or not wa.data[0].get("schedule_id"):
         raise InspectionSetsSvcError(404, "배정된 점검을 찾을 수 없습니다")
-    ws = require_active_executable(
-        supabase.table("work_schedules").select("inspection_set_id").eq("id", wa.data[0]["schedule_id"])
-    ).limit(1).execute()
-    if not ws.data:
+    sid = wa.data[0]["schedule_id"]
+    fid = wa.data[0].get("factory_id")
+    q = require_active_executable(
+        supabase.table("work_schedules")
+        .select("inspection_set_id, factory_id")
+        .eq("id", sid)
+    )
+    if fid:
+        q = q.eq("factory_id", fid)
+    rows = q.execute().data or []
+    if not rows:
         raise InspectionSetsSvcError(404, "배정된 점검을 찾을 수 없습니다")
-    set_id = ws.data[0].get("inspection_set_id")
+    if not fid and len(rows) > 1:
+        raise InspectionSetsSvcError(409, "일정의 시설(factory)을 유일하게 결정할 수 없습니다.")
+    set_id = rows[0].get("inspection_set_id")
     if not set_id:
         return {"status": "success", "data": {"items": []}}
     res = (

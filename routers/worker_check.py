@@ -38,7 +38,6 @@ from pydantic import BaseModel
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services import inspection_sets_svc as _iss
-from services.work_schedule_executability import require_active_executable
 from services.inspection_record_resolver import (
     InspectionRecordError,
     list_effective_inspection_records_by_inspector,
@@ -163,28 +162,42 @@ def submit_check(
     # body.assignment_id 는 work_assignments.id 이므로 schedule_id(work_schedules.id)로 변환한다.
     # body.schedule_id 가 오면 그것을 우선한다.
     schedule_ref = body.schedule_id
-    if not schedule_ref and body.assignment_id:
-        _wa = supabase.table("work_assignments").select("schedule_id").eq("id", body.assignment_id).limit(1).execute()
+    wa_factory_id = None
+    if body.assignment_id:
+        _wa = (
+            supabase.table("work_assignments")
+            .select("schedule_id, factory_id")
+            .eq("id", body.assignment_id)
+            .limit(1)
+            .execute()
+        )
         if _wa.data:
-            schedule_ref = _wa.data[0].get("schedule_id")
+            wa_factory_id = _wa.data[0].get("factory_id")
+            if not schedule_ref:
+                schedule_ref = _wa.data[0].get("schedule_id")
 
     # WP-04D: schedule-backed only. 신규 standalone(assignment_id NULL) 생성 금지 → fail-closed.
     if not schedule_ref:
         raise HTTPException(status_code=409, detail="일정 참조가 없어 점검을 생성할 수 없습니다.")
 
-    # WP-04D: parent work_schedules 에서 factory_id companion 확보 (body.factory_id 신뢰 금지).
-    # REV-2: work_schedules identity = (id, factory_id). id 는 factory 간 중복 가능하므로
-    # limit(1) 로 임의 factory 를 고르지 않는다. 0→409(not-found), >1→409(AMBIGUOUS), 1→그 factory.
-    # ambiguous 를 body.factory_id 로 disambiguate 하지 않는다(parent DB 사실로만 결정, fail-closed).
-    _ws = require_active_executable(
-        supabase.table("work_schedules").select("id, factory_id").eq("id", schedule_ref)
-    ).execute()
-    _ws_rows = _ws.data or []
+    # PATCH-R5: exact occurrence first. WA carries factory_id; schedule_id-only must be unique.
+    # Never promote another factory's active sibling of an inactive WA parent.
+    _ws_q = (
+        supabase.table("work_schedules")
+        .select("id, factory_id, active_yn")
+        .eq("id", schedule_ref)
+    )
+    if wa_factory_id:
+        _ws_q = _ws_q.eq("factory_id", wa_factory_id)
+    _ws_rows = _ws_q.execute().data or []
     if not _ws_rows:
         raise HTTPException(status_code=409, detail="일정을 찾을 수 없습니다.")
-    if len(_ws_rows) > 1:
+    if not wa_factory_id and len(_ws_rows) > 1:
         raise HTTPException(status_code=409, detail={"error": "WORK_SCHEDULE_ID_AMBIGUOUS"})
-    _parent_factory_id = _ws_rows[0].get("factory_id")
+    _ws_row = _ws_rows[0]
+    if _ws_row.get("active_yn") is not True:
+        raise HTTPException(status_code=409, detail="일정을 찾을 수 없습니다.")
+    _parent_factory_id = _ws_row.get("factory_id")
     if not _parent_factory_id:
         raise HTTPException(status_code=409, detail="일정의 factory_id를 확인할 수 없습니다.")
 

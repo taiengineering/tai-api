@@ -66,14 +66,33 @@ class FakeSupabase:
 @pytest.fixture
 def wired(monkeypatch):
     state = {"forbidden": [], "calls": [], "next": None, "raise": None,
-             "ws_rows": [{"factory_id": "FCT-1"}]}
+             "ws_rows": [{"id": "WS-1", "factory_id": "FCT-1", "active_yn": True, "company_id": "C1"}]}
 
     monkeypatch.setattr(ic, "get_supabase",
                         lambda: FakeSupabase(state["forbidden"], state["ws_rows"]))
-    # ownership 가드는 호출 여부만 확인(부작용 없음)
+    # ownership: exact occurrence semantics (mirror production helper)
     state["own_called"] = []
-    monkeypatch.setattr(ic, "_ensure_ws_own",
-                        lambda sb, wsid, cur: state["own_called"].append(wsid))
+
+    def fake_own(sb, wsid, cur):
+        state["own_called"].append(wsid)
+        rows = list(state["ws_rows"] or [])
+        if not rows:
+            raise HTTPException(status_code=404, detail="점검 일정을 찾을 수 없습니다.")
+        if len(rows) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "WORK_SCHEDULE_ID_AMBIGUOUS",
+                    "message": "동일 id 의 일정이 여러 factory 에 존재합니다.",
+                },
+            )
+        row = dict(rows[0])
+        row.setdefault("id", wsid)
+        row.setdefault("active_yn", True)
+        row.setdefault("company_id", "C1")
+        return row
+
+    monkeypatch.setattr(ic, "_ensure_ws_own", fake_own)
 
     def fake_start(sb, **kw):
         state["calls"].append(kw)

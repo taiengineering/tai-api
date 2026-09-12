@@ -252,10 +252,12 @@ def test_zero_rows_not_found_409_no_service(wired):
 
 
 def test_parent_lookup_no_limit1_static():
-    # W-D: worker start path 의 work_schedules parent 조회에 limit(1) 없음
+    # PATCH-R5: work_schedules parent resolve must not active-first + limit(1)
     import inspect as _inspect
     src = _inspect.getsource(wc.submit_check)
-    assert "limit(1)" not in src.split("schedule_ref")[1].split("_ws_rows")[0]
-    assert "require_active_executable" in src
-    assert '.eq("id", schedule_ref)' in src
-    assert "schedule_ref" in src
+    chunk = src.split("# PATCH-R5: exact occurrence first")[1].split("_parent_factory_id =")[0]
+    assert "limit(1)" not in chunk
+    assert "require_active_executable" not in chunk
+    assert "active_yn" in chunk
+    assert "wa_factory_id" in chunk
+    assert '.eq("id", schedule_ref)' in chunk

@@ -233,8 +233,8 @@ def test_t11_unassign_cancelled_path_no_regression():
     assert ws_updates[0]["eq"] == {"id": SID, "factory_id": FID}
 
 
-def test_t12_same_id_mixed_active_does_not_update_inactive_factory():
-    """PATCH-R4: active F-A must not cause id-only update of inactive F-B."""
+def test_t12_owned_inactive_does_not_promote_active_sibling():
+    """PATCH-R5: FB owned+inactive must NOT mutate FA active sibling of same id."""
     same = "same-sched-id"
     sb = FakeSB({
         "work_schedules": [
@@ -243,16 +243,17 @@ def test_t12_same_id_mixed_active_does_not_update_inactive_factory():
         ],
         "work_assignments": [],
     })
-    updated = _apply_one_update(sb, same, {"assigned_user_id": UID}, NOW)
-    assert updated is True
-    ws_updates = [c for c in sb.updates if c["table"] == "work_schedules"]
-    assert len(ws_updates) == 1
-    assert ws_updates[0]["eq"] == {"id": same, "factory_id": "FA"}
-    wa_inserts = [c for c in sb.inserts if c["table"] == "work_assignments"]
-    assert wa_inserts[0]["payload"]["factory_id"] == "FA"
+    with pytest.raises(HTTPException) as ei:
+        _apply_one_update(sb, same, {"assigned_user_id": UID}, NOW, factory_id="FB")
+    assert ei.value.status_code == 404
+    assert sb.updates == []
+    assert sb.inserts == []
+    # FA untouched when targeting FB
+    fa = next(r for r in sb.rows["work_schedules"] if r["factory_id"] == "FA")
+    assert fa.get("assigned_user_id") is None
 
 
-def test_t13_same_id_two_active_factories_fail_close():
+def test_t13_same_id_two_active_factories_fail_close_without_factory():
     same = "same-sched-id"
     sb = FakeSB({
         "work_schedules": [
@@ -265,3 +266,19 @@ def test_t13_same_id_two_active_factories_fail_close():
     assert ei.value.status_code == 409
     assert sb.updates == []
     assert sb.inserts == []
+
+
+def test_t14_sole_active_without_factory_still_works():
+    """Id-only path OK when exactly one occurrence exists and is active."""
+    same = "solo"
+    sb = FakeSB({
+        "work_schedules": [
+            {"id": same, "factory_id": "FA", "active_yn": True, "company_id": "c1"},
+            {"id": same, "factory_id": "FB", "active_yn": False, "company_id": "c1"},
+        ],
+        "work_assignments": [],
+    })
+    # Without factory_id: occurrence resolve sees 2 rows → 409 (not active-first pick)
+    with pytest.raises(HTTPException) as ei:
+        _apply_one_update(sb, same, {"assigned_user_id": UID}, NOW)
+    assert ei.value.status_code == 409

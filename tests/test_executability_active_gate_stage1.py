@@ -208,7 +208,7 @@ def test_upcoming_excludes_inactive_preserves_status_predicate(monkeypatch):
 
 
 def test_start_pre_read_rejects_inactive(monkeypatch):
-    state = {"ws_rows": [{"factory_id": "F1", "active_yn": False, "id": "ws1"}]}
+    state = {"ws_rows": [{"factory_id": "F1", "active_yn": False, "id": "ws1", "company_id": "c1"}]}
 
     class Q:
         def __init__(self):
@@ -230,7 +230,12 @@ def test_start_pre_read_rejects_inactive(monkeypatch):
             return Q()
 
     monkeypatch.setattr(ic, "get_supabase", lambda: SB())
-    monkeypatch.setattr(ic, "_ensure_ws_own", lambda *a, **k: None)
+    # Real ownership return — inactive pair must fail active gate on start
+    monkeypatch.setattr(
+        ic,
+        "_ensure_ws_own",
+        lambda *a, **k: state["ws_rows"][0],
+    )
 
     with pytest.raises(HTTPException) as ei:
         asyncio.run(ic.start_inspection("ws1", body={}, current={"id": "u"}))
@@ -274,9 +279,9 @@ def test_get_work_schedules_active_gate_and_factory(monkeypatch):
 
 def test_resolve_set_id_excludes_inactive(monkeypatch):
     rows = {
-        "work_assignments": [{"id": "wa1", "schedule_id": "ws1"}],
+        "work_assignments": [{"id": "wa1", "schedule_id": "ws1", "factory_id": "f1"}],
         "work_schedules": [
-            {"id": "ws1", "inspection_set_id": "set1", "active_yn": False},
+            {"id": "ws1", "factory_id": "f1", "inspection_set_id": "set1", "active_yn": False},
         ],
     }
     sb = _SB(rows)
@@ -288,11 +293,13 @@ def test_resolve_set_id_excludes_inactive(monkeypatch):
 
 
 def test_complete_ownership_helper_not_gated_by_active_yn():
-    """_ensure_ws_own must remain lifecycle/ownership only (complete path preserve)."""
+    """_ensure_ws_own must remain ownership/exact-id only (complete path preserve)."""
     import inspect
     src = inspect.getsource(ic._ensure_ws_own)
     assert "require_active_executable" not in src
-    assert "active_yn" not in src
+    # May select active_yn for callers, but must not fail-close on inactive itself
+    assert "active_yn is not True" not in src
+    assert "require_active" not in src
 
 
 def test_status_counts_path_not_using_active_gate_helper():
@@ -476,11 +483,13 @@ def test_confirm_active_does_not_cross_factory_same_id(monkeypatch):
     assert "reviewed_at" not in f2
 
 def test_owned_ids_ownership_only_includes_inactive(monkeypatch):
-    """PATCH-R3: _owned_ids must NOT apply active_yn (NON_EXECUTABLE helper)."""
+    """PATCH-R3/R5: ownership helpers must NOT apply active_yn."""
     import inspect
 
-    src = inspect.getsource(ws._owned_ids)
+    src = inspect.getsource(ws._owned_pairs)
     assert "require_active_executable" not in src
+    assert ".eq(\"active_yn\"" not in src
+    assert ".eq('active_yn'" not in src
 
     rows = [
         {"id": "a", "factory_id": "f1", "company_id": "c1", "active_yn": True},
@@ -499,9 +508,37 @@ def test_owned_ids_ownership_only_includes_inactive(monkeypatch):
     DENY = object()
     monkeypatch.setattr(ws, "DENY", DENY)
 
-    owned = ws._owned_ids(sb, ["a", "b", "c"], {"id": "u", "role_code": "010"})
-    assert owned == {"a", "b", "c"}
+    owned = ws._owned_pairs(sb, ["a", "b", "c"], {"id": "u", "role_code": "010"})
+    assert owned == {("a", "f1"), ("b", "f1"), ("c", "f1")}
     assert ("eq", "active_yn", True) not in sb.last["work_schedules"]._ops
+
+
+def test_batch_owned_inactive_does_not_mutate_active_sibling(monkeypatch):
+    """PATCH-R5: FB-scoped ownership of inactive pair must not update FA."""
+    same = "shared-id"
+    rows = [
+        {"id": same, "factory_id": "FA", "company_id": "c1", "active_yn": True},
+        {"id": same, "factory_id": "FB", "company_id": "c1", "active_yn": False},
+    ]
+    sb = _SB({"work_schedules": rows, "work_assignments": []})
+    monkeypatch.setattr(ws, "get_supabase", lambda: sb)
+    monkeypatch.setattr(ws, "_now", lambda: "2026-09-12T00:00:00+00:00")
+    # Simulate FB factory scope ownership
+    monkeypatch.setattr(
+        ws,
+        "_owned_pairs",
+        lambda *a, **k: {(same, "FB")},
+    )
+    out = ws.batch_update_schedules(
+        ws.BatchUpdateBody(
+            updates=[ws.ScheduleUpdateItem(id=same, assigned_user_id="user-NEW")]
+        ),
+        current={"id": "u", "role_code": "010", "factory_id": "FB"},
+    )
+    assert out["data"]["updated"] == 0
+    assert sb.updates == []
+    fa = next(r for r in rows if r["factory_id"] == "FA")
+    assert fa.get("assigned_user_id") is None
 
 
 def test_worker_home_hard_hides_inactive_and_null_schedule(monkeypatch):
@@ -649,10 +686,28 @@ def test_apply_one_update_still_gates_active_parent():
 
     src = inspect.getsource(ws._apply_one_update)
     assert "_resolve_exact_active_occurrence" in src
-    assert '.eq("factory_id", factory_id)' in src.replace(" \\\n", "")
-    helper = inspect.getsource(ws._resolve_exact_active_occurrence)
-    assert "require_active_executable" in helper
+    assert "factory_id" in src
+    helper = inspect.getsource(ws._resolve_exact_occurrence)
+    assert "require_active" in helper
     assert "len(rows) > 1" in helper
+
+
+def test_resolve_set_id_excludes_inactive_pair(monkeypatch):
+    """PATCH-R5: WA factory FB inactive must not resolve via FA active sibling."""
+    rows = {
+        "work_assignments": [
+            {"id": "wa1", "schedule_id": "ws1", "factory_id": "FB"},
+        ],
+        "work_schedules": [
+            {"id": "ws1", "factory_id": "FA", "inspection_set_id": "setA", "active_yn": True},
+            {"id": "ws1", "factory_id": "FB", "inspection_set_id": "setB", "active_yn": False},
+        ],
+    }
+    sb = _SB(rows)
+    monkeypatch.setattr(items_svc, "get_supabase", lambda: sb)
+    assert items_svc.resolve_set_id_for_assignment("wa1") is None
+    rows["work_schedules"][1]["active_yn"] = True
+    assert items_svc.resolve_set_id_for_assignment("wa1") == "setB"
 
 
 def test_no_work_schedules_is_active_write_in_stage1_surfaces():
