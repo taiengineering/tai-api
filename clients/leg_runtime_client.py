@@ -190,6 +190,10 @@ _LEG_INPUT_FIELDS = (
     # payment/건산 state facts 는 STATEFUL_BACKLOG(POST_LAUNCH). subcontractor_work_types(source)가
     # source adapter 에서 이 2 boolean 으로 deterministic expansion 됨.
     "has_fire_facility_subcontract", "has_ict_subcontract",
+    # WO-SM-CORE22-CONSTRUCTION-PREDICATE-EXPLICIT-INPUT-CONTRACT-001
+    # Published CORE22 Leaf.field exact-name. No alias/renaming/sector/order_type/kcsc adapter.
+    # False is a value. None/missing is omitted. Default false = 0.
+    "is_construction", "is_relationship_contractor", "is_civil_construction",
 )
 
 # WO-FIX-BUILDFACILITY-SECTOR-GATE-001: WIRING-016 append BUILDING N1 raw primitive 32축.

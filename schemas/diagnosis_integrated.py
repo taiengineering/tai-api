@@ -29,6 +29,21 @@ class DiagnosisRunBody(BaseModel):
     ksic_major: Optional[str] = None
     building_use_type: Optional[str] = None
     construction_type: Optional[str] = Field(None, description="음/토/건축/기능 등")
+    # WO-SM-CORE22-CONSTRUCTION-PREDICATE-EXPLICIT-INPUT-CONTRACT-001
+    # Explicit canonical legal facts. Optional additive. missing != false.
+    # No alias. No sector/order_type/kcsc derivation. Server fail-closed is later.
+    is_construction: Optional[bool] = Field(
+        None,
+        description="산업안전보건법 시행령 별표 3 제49호 건설업 해당 여부. True=예, False=아니오, None=미확정",
+    )
+    is_relationship_contractor: Optional[bool] = Field(
+        None,
+        description="이 공사에서 관계수급인 해당 여부. True=예, False=아니오, None=미확정",
+    )
+    is_civil_construction: Optional[bool] = Field(
+        None,
+        description="해당 공사가 토목공사업 해당 여부. True=예, False=아니오, None=미확정",
+    )
     region: Optional[str] = None
     payment_ref: Optional[str] = Field(None, description="유료 결제 참조 번호 (무료이면 생략)")
     invoice_requested: bool = Field(False, description="세금계산서 요청 여부")

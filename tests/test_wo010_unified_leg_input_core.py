@@ -33,9 +33,9 @@ PATCH2A_15_AXES = (
 
 
 def test_T1_vocabulary_len_and_distinct():
-    """T1: len(_LEG_INPUT_FIELDS) == 106 && distinct == 106 (SM transport: +contract_amount_eok)."""
-    assert len(_LEG_INPUT_FIELDS) == 106
-    assert len(set(_LEG_INPUT_FIELDS)) == 106
+    """T1: len(_LEG_INPUT_FIELDS) == 109 && distinct == 109 (+3 explicit CORE22 predicates)."""
+    assert len(_LEG_INPUT_FIELDS) == 109
+    assert len(set(_LEG_INPUT_FIELDS)) == 109
     assert "contract_amount_eok" in _LEG_INPUT_FIELDS
 
 
