@@ -1053,7 +1053,7 @@ def _seed_hydrate(sb: FakeSB):
     sb.seed("kosha_safety_materials", {"id": "m-old", "title": "비현재 자료", "category": "EDU"})
     sb.seed("law_revision_board", {"id": "law-pub", "law_name": "공개 법령", "summary": "s", "status": "PUBLISHED", "is_public": True, "enforcement_date": "2022-01-01"})
     sb.seed("law_revision_board", {"id": "law-draft", "law_name": "미공개", "summary": "s", "status": "DRAFT", "is_public": False})
-    sb.seed("kosha_accident_cases", {"id": "acc-1", "title": "사고", "occurred_at": "2019-01-01"})
+    sb.seed("kosha_accident_cases", {"id": "acc-1", "title": "사고", "reg_dt": "2019-01-01", "file_url": "https://kosha.example/acc"})
     sb.seed("industrial_accident_precedents", {"id": "p1", "case_name": "판례", "summary": "추락"})
 
 
@@ -1369,3 +1369,95 @@ def test_g91_evidence_id_immutable_on_conflict():
     )
     after = store.list_evidence(edge["id"])[0]["id"]
     assert before == after
+
+
+def test_g92_domestic_accident_source_normalized():
+    sb = FakeSB()
+    sb.seed(
+        "kosha_accident_cases",
+        {"id": "acc-d1", "title": "지게차 전복", "reg_dt": "2019-03-01", "file_url": "https://kosha.example/d1"},
+    )
+    items, errors = load_production_sources(sb, {"accident"})
+    assert errors == {}
+    row = next(r for r in items["accident"] if r["content_id"] == "acc-d1")
+    assert row["published_at"] == "2019-03-01"
+    assert row["source_url"] == "https://kosha.example/d1"
+
+
+def test_g93_construction_accident_source_normalized():
+    sb = FakeSB()
+    sb.seed(
+        "kosha_construction_accidents",
+        {
+            "id": "acc-c1",
+            "accident_summary": "굴착 중 붕괴",
+            "work_type": "굴착",
+            "accident_type": "붕괴",
+            "occurrence_date": "2020-04-02",
+        },
+    )
+    items, errors = load_production_sources(sb, {"accident"})
+    assert errors == {}
+    row = next(r for r in items["accident"] if r["content_id"] == "acc-c1")
+    assert row["published_at"] == "2020-04-02"
+    assert "source_url" not in row or row.get("source_url") is None
+
+
+def test_g94_hydrator_domestic_production_columns():
+    sb = FakeSB()
+    sb.seed(
+        "kosha_accident_cases",
+        {"id": "acc-d1", "title": "지게차 전복", "reg_dt": "2019-03-01", "file_url": "https://kosha.example/d1"},
+    )
+    rec = ProductionKnowledgeHydrator(sb).get("ACCIDENT", "acc-d1")
+    assert rec is not None
+    assert rec.title == "지게차 전복"
+    assert rec.published_at == "2019-03-01"
+    assert rec.source_url == "https://kosha.example/d1"
+    assert rec.content_type == "ACCIDENT"
+    assert rec.is_public_current is True
+
+
+def test_g95_hydrator_construction_production_columns():
+    sb = FakeSB()
+    sb.seed(
+        "kosha_construction_accidents",
+        {
+            "id": "acc-c1",
+            "accident_summary": "굴착 중 붕괴",
+            "work_type": "굴착",
+            "accident_type": "붕괴",
+            "occurrence_date": "2020-04-02",
+        },
+    )
+    rec = ProductionKnowledgeHydrator(sb).get("ACCIDENT", "acc-c1")
+    assert rec is not None
+    assert rec.summary == "굴착 중 붕괴"
+    assert rec.published_at == "2020-04-02"
+    assert rec.source_url is None
+    assert rec.content_type == "ACCIDENT"
+    assert rec.is_public_current is True
+
+
+def test_g96_accident_adapter_selects_production_columns():
+    files = [
+        ROOT / "scripts/refresh_knowledge_graph.py",
+        ROOT / "services/knowledge_graph_hydrate.py",
+    ]
+    forbidden = (
+        "occurred_at",
+        "id,title,url",
+        "id,title,occurred_at,url",
+        "accident_type,occurred_at",
+    )
+    for path in files:
+        src = path.read_text(encoding="utf-8")
+        for token in forbidden:
+            assert token not in src, f"{path.name} still selects {token}"
+    refresh = (ROOT / "scripts/refresh_knowledge_graph.py").read_text(encoding="utf-8")
+    hydrate = (ROOT / "services/knowledge_graph_hydrate.py").read_text(encoding="utf-8")
+    assert "id,title,reg_dt,file_url" in refresh
+    assert "id,accident_summary,work_type,accident_type,occurrence_date" in refresh
+    assert "id,title,reg_dt,file_url" in hydrate
+    assert "id,accident_summary,work_type,accident_type,occurrence_date" in hydrate
+

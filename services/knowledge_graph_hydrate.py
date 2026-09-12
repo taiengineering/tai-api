@@ -149,7 +149,7 @@ class ProductionKnowledgeHydrator:
 
     def _accidents(self, ids: list[str]) -> dict[tuple[str, str], KnowledgeRecord]:
         out = {}
-        domestic = self._in(ACCIDENT_DOMESTIC, "id", ids, "id,title,url,occurred_at")
+        domestic = self._in(ACCIDENT_DOMESTIC, "id", ids, "id,title,reg_dt,file_url")
         for row in domestic:
             cid = str(row.get("id") or "")
             if not cid:
@@ -161,8 +161,8 @@ class ProductionKnowledgeHydrator:
                 summary=None,
                 tai_url=default_tai_url("ACCIDENT", cid),
                 source_name="KOSHA",
-                source_url=row.get("url"),
-                published_at=row.get("occurred_at"),
+                source_url=row.get("file_url"),
+                published_at=row.get("reg_dt"),
                 category=None,
                 is_public_current=True,
             )
@@ -170,7 +170,7 @@ class ProductionKnowledgeHydrator:
             ACCIDENT_CONSTRUCTION,
             "id",
             ids,
-            "id,accident_summary,work_type,accident_type,occurred_at",
+            "id,accident_summary,work_type,accident_type,occurrence_date",
         )
         for row in construction:
             cid = str(row.get("id") or "")
@@ -184,7 +184,7 @@ class ProductionKnowledgeHydrator:
                 tai_url=default_tai_url("ACCIDENT", cid, construction=True),
                 source_name="KOSHA",
                 source_url=None,
-                published_at=row.get("occurred_at"),
+                published_at=row.get("occurrence_date"),
                 category=row.get("work_type") or row.get("accident_type"),
                 is_public_current=True,
             )

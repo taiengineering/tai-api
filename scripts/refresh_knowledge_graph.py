@@ -169,14 +169,20 @@ def load_production_sources(
             errors["material"] = str(exc)
     if "accident" in wanted:
         try:
-            domestic = _paged(sb, "kosha_accident_cases", "id,title,occurred_at,url")
+            domestic = _paged(sb, "kosha_accident_cases", "id,title,reg_dt,file_url")
             construction = _paged(
                 sb,
                 "kosha_construction_accidents",
-                "id,accident_summary,work_type,accident_type,occurred_at",
+                "id,accident_summary,work_type,accident_type,occurrence_date",
             )
             items["accident"] = [
-                {"content_id": r.get("id"), "id": r.get("id"), "title": r.get("title"), "source_url": r.get("url"), "published_at": r.get("occurred_at")}
+                {
+                    "content_id": r.get("id"),
+                    "id": r.get("id"),
+                    "title": r.get("title"),
+                    "source_url": r.get("file_url"),
+                    "published_at": r.get("reg_dt"),
+                }
                 for r in domestic
                 if r.get("id")
             ] + [
@@ -186,7 +192,7 @@ def load_production_sources(
                     "accident_summary": r.get("accident_summary"),
                     "work_type": r.get("work_type"),
                     "accident_type": r.get("accident_type"),
-                    "published_at": r.get("occurred_at"),
+                    "published_at": r.get("occurrence_date"),
                 }
                 for r in construction
                 if r.get("id")
