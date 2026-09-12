@@ -301,7 +301,8 @@ def confirm_schedules(factory_id: str, body: ConfirmBody, current: dict = Depend
         }
         if row.get("custom_cycle"):
             update_payload["cycle_code"] = row["custom_cycle"]
-        supabase.table("work_schedules").update(update_payload).eq("id", row["id"]).execute()
+        supabase.table("work_schedules").update(update_payload)\
+            .eq("id", row["id"]).eq("factory_id", factory_id).execute()
         confirmed += 1
 
     excluded_res = supabase.table("work_schedules") \
@@ -320,7 +321,7 @@ def confirm_schedules(factory_id: str, body: ConfirmBody, current: dict = Depend
                 "status_code": "EXCLUDED",
                 "active_yn":   False,
                 "updated_at":  now,
-            }).in_("id", batch).execute()
+            }).in_("id", batch).eq("factory_id", factory_id).execute()
         excluded = len(excluded_rows)
 
     return {

@@ -348,6 +348,17 @@ def test_confirm_excluded_writes_active_yn_false_not_is_active(monkeypatch):
     payload = excl_updates[0]["payload"]
     assert payload.get("active_yn") is False
     assert "is_active" not in payload
+    assert excl_updates[0]["filters"].get("factory_id") == fid
+    assert "ex1" in excl_updates[0]["in"].get("id", [])
+
+    # active confirm write also factory-scoped
+    active_updates = [
+        u for u in sb.updates
+        if "reviewed_at" in u["payload"] and u["payload"].get("status_code") != "EXCLUDED"
+    ]
+    assert active_updates
+    assert all(u["filters"].get("factory_id") == fid for u in active_updates)
+    assert all(u["filters"].get("id") for u in active_updates)
 
     # row mutated in place
     ex = next(r for r in rows if r["id"] == "ex1")
@@ -395,3 +406,75 @@ def test_confirm_schedules_source_has_no_is_active_write():
     src = inspect.getsource(ws.confirm_schedules)
     assert '"is_active"' not in src
     assert '"active_yn":   False' in src or '"active_yn": False' in src
+    assert '.eq("factory_id", factory_id)' in src
+    # both UPDATE chains must include factory_id after id / in_(id)
+    assert 'eq("id", row["id"]).eq("factory_id", factory_id)' in src.replace(" \\\n", "").replace("\n", "")
+    assert 'in_("id", batch).eq("factory_id", factory_id)' in src.replace(" \\\n", "").replace("\n", "")
+
+
+def test_confirm_excluded_does_not_cross_factory_same_id(monkeypatch):
+    """PATCH-R2 CASE A: identical schedule id in F2 must stay active_yn=true."""
+    same_id = "SAME"
+    rows = [
+        {
+            "id": same_id, "factory_id": "F1", "is_excluded": True,
+            "active_yn": True, "status_code": "planned", "custom_cycle": None,
+        },
+        {
+            "id": same_id, "factory_id": "F2", "is_excluded": True,
+            "active_yn": True, "status_code": "planned", "custom_cycle": None,
+        },
+    ]
+    sb = _SB({"work_schedules": rows})
+    monkeypatch.setattr(ws, "get_supabase", lambda: sb)
+    monkeypatch.setattr(ws, "_ensure_ws_factory_access", lambda *a, **k: None)
+    monkeypatch.setattr(ws, "_now", lambda: "2026-09-12T00:00:00+00:00")
+
+    out = ws.confirm_schedules("F1", ws.ConfirmBody(reviewed_by="user-1"), current={"id": "u"})
+    assert out["data"]["excluded"] == 1
+    assert out["data"]["confirmed"] == 0
+
+    f1 = next(r for r in rows if r["factory_id"] == "F1")
+    f2 = next(r for r in rows if r["factory_id"] == "F2")
+    assert f1["active_yn"] is False
+    assert f1["status_code"] == "EXCLUDED"
+    assert f2["active_yn"] is True
+    assert f2["status_code"] == "planned"
+
+    excl = [u for u in sb.updates if u["payload"].get("status_code") == "EXCLUDED"]
+    assert len(excl) == 1
+    assert excl[0]["filters"].get("factory_id") == "F1"
+    assert same_id in excl[0]["in"].get("id", [])
+
+
+def test_confirm_active_does_not_cross_factory_same_id(monkeypatch):
+    """PATCH-R2 CASE B: reviewed_at only on target factory composite identity."""
+    same_id = "SAME2"
+    rows = [
+        {
+            "id": same_id, "factory_id": "F1", "is_excluded": False,
+            "active_yn": True, "status_code": "planned", "custom_cycle": None,
+        },
+        {
+            "id": same_id, "factory_id": "F2", "is_excluded": False,
+            "active_yn": True, "status_code": "planned", "custom_cycle": None,
+        },
+    ]
+    sb = _SB({"work_schedules": rows})
+    monkeypatch.setattr(ws, "get_supabase", lambda: sb)
+    monkeypatch.setattr(ws, "_ensure_ws_factory_access", lambda *a, **k: None)
+    monkeypatch.setattr(ws, "_now", lambda: "2026-09-12T12:00:00+00:00")
+
+    out = ws.confirm_schedules("F1", ws.ConfirmBody(reviewed_by="user-1"), current={"id": "u"})
+    assert out["data"]["confirmed"] == 1
+    assert out["data"]["excluded"] == 0
+
+    f1 = next(r for r in rows if r["factory_id"] == "F1")
+    f2 = next(r for r in rows if r["factory_id"] == "F2")
+    assert "reviewed_at" in f1
+    assert f1["reviewed_by"] == "user-1"
+    assert "reviewed_at" not in f2
+
+    active_updates = [u for u in sb.updates if "reviewed_at" in u["payload"]]
+    assert len(active_updates) == 1
+    assert active_updates[0]["filters"] == {"id": same_id, "factory_id": "F1"}
