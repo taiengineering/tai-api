@@ -1,13 +1,15 @@
 """OBJ-GRAPH persistence and public read model.
 
 Producer candidates in, semantic edges/evidence out. No source-table writes.
-Stale mutation only after a COMPLETED apply run, and only for completed sources.
+Stale mutation only after a COMPLETED apply run, and only for completed
+producer-family scopes (source + edge_kind + relation_type/family).
 """
 
 from __future__ import annotations
 
 import hashlib
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Protocol
 
@@ -44,7 +46,19 @@ SOURCE_KEYS = {
     "knowledge": "KNOWLEDGE_CENTER",
 }
 
+GUIDE_SHADOW_SOURCE_KEY = "guide_shadow"
+FAMILY_CONTEXT_CONTROLLED = "CONTEXT_CONTROLLED"
+FAMILY_GUIDE_MATERIAL_SHADOW = "GUIDE_MATERIAL_SHADOW"
+
 CONTENT_TO_SOURCE = {v: k for k, v in SOURCE_KEYS.items()}
+
+
+@dataclass(frozen=True)
+class StaleOwnership:
+    source_content_type: str
+    edge_kind: str
+    producer_family: str
+    relation_type: str | None = None
 
 TAI_ORIGIN = "https://taieng.co.kr"
 
@@ -126,6 +140,7 @@ class KnowledgeRecord:
 class GraphStore(Protocol):
     def insert_run(self, row: dict[str, Any]) -> dict[str, Any]: ...
     def update_run(self, run_id: str, patch: dict[str, Any]) -> None: ...
+    def get_run(self, run_id: str) -> dict[str, Any] | None: ...
     def get_edge_by_key(self, edge_key: str) -> dict[str, Any] | None: ...
     def upsert_edge(self, row: dict[str, Any]) -> dict[str, Any]: ...
     def get_evidence(self, edge_id: str, evidence_key: str) -> dict[str, Any] | None: ...
@@ -155,6 +170,10 @@ class MemoryGraphStore:
 
     def update_run(self, run_id: str, patch: dict[str, Any]) -> None:
         self.runs[run_id].update(patch)
+
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        row = self.runs.get(run_id)
+        return dict(row) if row else None
 
     def get_edge_by_key(self, edge_key: str) -> dict[str, Any] | None:
         row = self.edges.get(edge_key)
@@ -230,6 +249,30 @@ def default_tai_url(content_type: str, content_id: str, *, construction: bool = 
     return None
 
 
+def _edge_key_for(cand: GraphCandidate) -> str:
+    if cand.edge_kind == "CONTEXT" and not cand.relation_key:
+        raise ValueError("CONTEXT_RELATION_KEY_REQUIRED")
+    if cand.edge_kind == "DIRECT" and (not cand.target_content_type or not cand.target_content_id):
+        raise ValueError("DIRECT_TARGET_REQUIRED")
+    return make_edge_key(
+        edge_kind=cand.edge_kind,
+        source_content_type=cand.source_content_type,
+        source_content_id=cand.source_content_id,
+        relation_type=cand.relation_type,
+        relation_key=cand.relation_key,
+        target_content_type=cand.target_content_type,
+        target_content_id=cand.target_content_id,
+    )
+
+
+def aggregate_edge_status(candidates: Iterable[GraphCandidate]) -> str:
+    """Same-run evidence vote. Order independent. Prior ACCEPTED is not sticky."""
+    support = list(candidates)
+    if any(c.status == "ACCEPTED" for c in support):
+        return "ACCEPTED"
+    return "REJECTED"
+
+
 def persist_candidates(
     store: GraphStore,
     candidates: Iterable[GraphCandidate],
@@ -238,38 +281,31 @@ def persist_candidates(
     clock=None,
 ) -> dict[str, int]:
     ts = _ts(clock)
+    grouped: dict[str, list[GraphCandidate]] = defaultdict(list)
+    for cand in candidates:
+        grouped[_edge_key_for(cand)].append(cand)
     accepted = 0
     rejected = 0
     duplicate_prevented = 0
     semantic_edges = 0
     evidence_count = 0
     reactivated = 0
-    for cand in candidates:
-        if cand.edge_kind == "CONTEXT" and not cand.relation_key:
-            raise ValueError("CONTEXT_RELATION_KEY_REQUIRED")
-        if cand.edge_kind == "DIRECT" and (not cand.target_content_type or not cand.target_content_id):
-            raise ValueError("DIRECT_TARGET_REQUIRED")
-        edge_key = make_edge_key(
-            edge_kind=cand.edge_kind,
-            source_content_type=cand.source_content_type,
-            source_content_id=cand.source_content_id,
-            relation_type=cand.relation_type,
-            relation_key=cand.relation_key,
-            target_content_type=cand.target_content_type,
-            target_content_id=cand.target_content_id,
-        )
+    for edge_key in sorted(grouped):
+        group = grouped[edge_key]
+        head = next((c for c in group if c.status == "ACCEPTED"), group[0])
+        edge_status = aggregate_edge_status(group)
         existing = store.get_edge_by_key(edge_key)
         edge_row = {
             "edge_key": edge_key,
-            "edge_kind": cand.edge_kind,
-            "source_content_type": cand.source_content_type,
-            "source_content_id": cand.source_content_id,
-            "relation_type": cand.relation_type,
-            "relation_key": cand.relation_key,
-            "relation_label": cand.relation_label,
-            "target_content_type": cand.target_content_type,
-            "target_content_id": cand.target_content_id,
-            "status": cand.status,
+            "edge_kind": head.edge_kind,
+            "source_content_type": head.source_content_type,
+            "source_content_id": head.source_content_id,
+            "relation_type": head.relation_type,
+            "relation_key": head.relation_key,
+            "relation_label": head.relation_label,
+            "target_content_type": head.target_content_type,
+            "target_content_id": head.target_content_id,
+            "status": edge_status,
             "is_active": True,
             "last_seen_run_id": run_id,
             "stale_at": None,
@@ -281,44 +317,43 @@ def persist_candidates(
             edge_row["created_at"] = existing.get("created_at") or ts
             if existing.get("is_active") is False or existing.get("stale_at"):
                 reactivated += 1
-            if existing.get("status") == "ACCEPTED" and cand.status != "ACCEPTED":
-                edge_row["status"] = "ACCEPTED"
         else:
             edge_row["first_seen_run_id"] = run_id
             edge_row["created_at"] = ts
             semantic_edges += 1
         stored_edge = store.upsert_edge(edge_row)
-        if cand.status == "ACCEPTED":
-            accepted += 1
-        else:
-            rejected += 1
-        ev_payload = {
-            "method": cand.method,
-            "evidence_type": cand.evidence_type,
-            "source_field": cand.source_field,
-            "evidence_value": cand.evidence_value,
-            "rule_id": cand.rule_id,
-            "rule_version": cand.rule_version,
-            "source_version": cand.source_version,
-            "source_content_hash": cand.source_content_hash,
-        }
-        evidence_key = make_evidence_key(ev_payload)
-        found = store.get_evidence(stored_edge["id"], evidence_key)
-        if found:
-            store.update_evidence(found["id"], {"last_seen_run_id": run_id})
-            duplicate_prevented += 1
-        else:
-            store.insert_evidence(
-                {
-                    "edge_id": stored_edge["id"],
-                    "evidence_key": evidence_key,
-                    **ev_payload,
-                    "evidence_json": {},
-                    "created_at": ts,
-                    "last_seen_run_id": run_id,
-                }
-            )
-            evidence_count += 1
+        for cand in group:
+            if cand.status == "ACCEPTED":
+                accepted += 1
+            else:
+                rejected += 1
+            ev_payload = {
+                "method": cand.method,
+                "evidence_type": cand.evidence_type,
+                "source_field": cand.source_field,
+                "evidence_value": cand.evidence_value,
+                "rule_id": cand.rule_id,
+                "rule_version": cand.rule_version,
+                "source_version": cand.source_version,
+                "source_content_hash": cand.source_content_hash,
+            }
+            evidence_key = make_evidence_key(ev_payload)
+            found = store.get_evidence(stored_edge["id"], evidence_key)
+            if found:
+                store.update_evidence(found["id"], {"last_seen_run_id": run_id})
+                duplicate_prevented += 1
+            else:
+                store.insert_evidence(
+                    {
+                        "edge_id": stored_edge["id"],
+                        "evidence_key": evidence_key,
+                        **ev_payload,
+                        "evidence_json": {},
+                        "created_at": ts,
+                        "last_seen_run_id": run_id,
+                    }
+                )
+                evidence_count += 1
     return {
         "accepted": accepted,
         "rejected": rejected,
@@ -329,28 +364,94 @@ def persist_candidates(
     }
 
 
+def completed_stale_scopes(
+    produced_by_source: dict[str, list[GraphCandidate]],
+    failed_sources: dict[str, str] | None = None,
+    *,
+    context_filter: tuple[str, str] | None = None,
+) -> list[StaleOwnership]:
+    failed_sources = failed_sources or {}
+    scopes: list[StaleOwnership] = []
+    for key in produced_by_source:
+        if key in failed_sources:
+            continue
+        if key == GUIDE_SHADOW_SOURCE_KEY:
+            if context_filter:
+                continue
+            scopes.append(
+                StaleOwnership(
+                    source_content_type="KOSHA_GUIDE",
+                    edge_kind="DIRECT",
+                    producer_family=FAMILY_GUIDE_MATERIAL_SHADOW,
+                    relation_type="RELATED_TO",
+                )
+            )
+            continue
+        if key not in SOURCE_KEYS:
+            continue
+        scopes.append(
+            StaleOwnership(
+                source_content_type=SOURCE_KEYS[key],
+                edge_kind="CONTEXT",
+                producer_family=FAMILY_CONTEXT_CONTROLLED,
+                relation_type=context_filter[0] if context_filter else None,
+            )
+        )
+    return scopes
+
+
+def _edge_in_stale_scope(
+    edge: dict[str, Any],
+    scopes: Iterable[StaleOwnership],
+    context_filter: tuple[str, str] | None,
+) -> bool:
+    for scope in scopes:
+        if edge.get("source_content_type") != scope.source_content_type:
+            continue
+        if edge.get("edge_kind") != scope.edge_kind:
+            continue
+        if scope.relation_type and edge.get("relation_type") != scope.relation_type:
+            continue
+        if context_filter:
+            if edge.get("edge_kind") != "CONTEXT":
+                continue
+            rel_type, rel_key = context_filter
+            if edge.get("relation_type") != rel_type or edge.get("relation_key") != rel_key:
+                continue
+        return True
+    return False
+
+
 def stale_unseen_edges(
     store: GraphStore,
     *,
     run_id: str,
-    completed_content_types: set[str],
-    context_filter: tuple[str, str] | None,
+    scopes: Iterable[StaleOwnership] | None = None,
+    completed_content_types: set[str] | None = None,
+    context_filter: tuple[str, str] | None = None,
     clock=None,
 ) -> int:
-    if not completed_content_types:
+    """Stale only after the run is COMPLETED. RUNNING/FAILED mutation = 0."""
+    run = store.get_run(run_id)
+    if not run or run.get("status") != "COMPLETED":
+        return 0
+    if scopes is None and completed_content_types:
+        scopes = [
+            StaleOwnership(
+                source_content_type=content_type,
+                edge_kind="CONTEXT",
+                producer_family=FAMILY_CONTEXT_CONTROLLED,
+            )
+            for content_type in completed_content_types
+        ]
+    scope_list = list(scopes or [])
+    if not scope_list:
         return 0
     ts = _ts(clock)
     count = 0
     for edge in store.list_edges():
-        if edge.get("source_content_type") not in completed_content_types:
+        if not _edge_in_stale_scope(edge, scope_list, context_filter):
             continue
-        if context_filter:
-            rel_type, rel_key = context_filter
-            if edge.get("edge_kind") == "CONTEXT":
-                if edge.get("relation_type") != rel_type or edge.get("relation_key") != rel_key:
-                    continue
-            else:
-                continue
         if edge.get("last_seen_run_id") == run_id:
             continue
         if edge.get("is_active") is False and edge.get("stale_at"):
@@ -534,20 +635,7 @@ def refresh_graph(
     report.semantic_edges = metrics["semantic_edges"]
     report.evidence_count = metrics["evidence_count"]
     report.reactivated_count = metrics["reactivated"]
-    completed_types = {
-        SOURCE_KEYS[k]
-        for k in produced_by_source
-        if k not in failed_sources and k in SOURCE_KEYS
-    }
-    report.stale_count = stale_unseen_edges(
-        store,
-        run_id=run["id"],
-        completed_content_types=completed_types,
-        context_filter=context_filter,
-        clock=clock,
-    )
     report.source_errors = failed_sources
-    report.status = "COMPLETED"
     store.update_run(
         run["id"],
         {
@@ -557,6 +645,36 @@ def refresh_graph(
             "rejected": report.rejected,
             "duplicate_prevented": report.duplicate_prevented,
             "no_relation_items": report.no_relation_items,
+            "metrics_json": {
+                "by_source": report.by_source,
+                "by_relation_type": report.by_relation_type,
+                "by_method": report.by_method,
+                "stale_count": 0,
+                "source_errors": failed_sources,
+            },
+        },
+    )
+    confirmed = store.get_run(run["id"])
+    if not confirmed or confirmed.get("status") != "COMPLETED":
+        report.status = "FAILED"
+        report.error_code = "COMPLETED_CONFIRM_FAILED"
+        report.error_message = "stale mutation skipped because run was not COMPLETED"
+        return report
+    report.status = "COMPLETED"
+    report.stale_count = stale_unseen_edges(
+        store,
+        run_id=run["id"],
+        scopes=completed_stale_scopes(
+            produced_by_source,
+            failed_sources,
+            context_filter=context_filter,
+        ),
+        context_filter=context_filter,
+        clock=clock,
+    )
+    store.update_run(
+        run["id"],
+        {
             "metrics_json": {
                 "by_source": report.by_source,
                 "by_relation_type": report.by_relation_type,

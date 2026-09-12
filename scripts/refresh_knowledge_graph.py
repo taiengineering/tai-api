@@ -223,7 +223,7 @@ def produce_all(items_by_source: dict[str, list], current_ids: dict[str, set[str
     if "guide" in items_by_source:
         out["guide"] = produce_guide_relations(items_by_source["guide"], current_ids=current_ids.get("guide"))
         if "material" in items_by_source:
-            out["guide"] = list(out["guide"]) + produce_guide_material_shadow(
+            out["guide_shadow"] = produce_guide_material_shadow(
                 items_by_source["guide"],
                 items_by_source["material"],
                 current_guide_ids=current_ids.get("guide"),

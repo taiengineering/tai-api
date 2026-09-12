@@ -102,6 +102,9 @@ REVOKE ALL ON public.knowledge_relation_runs FROM anon, authenticated;
 REVOKE ALL ON public.knowledge_relation_edges FROM anon, authenticated;
 REVOKE ALL ON public.knowledge_relation_evidence FROM anon, authenticated;
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.knowledge_relation_runs TO service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.knowledge_relation_edges TO service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.knowledge_relation_evidence TO service_role;
+GRANT SELECT, INSERT, UPDATE ON public.knowledge_relation_runs TO service_role;
+GRANT SELECT, INSERT, UPDATE ON public.knowledge_relation_edges TO service_role;
+GRANT SELECT, INSERT, UPDATE ON public.knowledge_relation_evidence TO service_role;
+REVOKE DELETE ON public.knowledge_relation_runs FROM service_role;
+REVOKE DELETE ON public.knowledge_relation_edges FROM service_role;
+REVOKE DELETE ON public.knowledge_relation_evidence FROM service_role;

@@ -1,4 +1,4 @@
-"""OBJ-GRAPH G01–G45 + GUIDE shadow compatibility. No production DB."""
+"""OBJ-GRAPH G01–G51 + GUIDE shadow compatibility. No production DB."""
 from __future__ import annotations
 
 import ast
@@ -26,12 +26,14 @@ from services.knowledge_graph_svc import (
     KnowledgeRecord,
     MemoryGraphStore,
     MemoryHydrator,
+    StaleOwnership,
     make_edge_key,
     persist_candidates,
     read_context,
     read_item_contexts,
     read_related,
     refresh_graph,
+    stale_unseen_edges,
 )
 import routers.public_knowledge_graph as graph_router
 from scripts.refresh_knowledge_graph import main as refresh_main
@@ -509,7 +511,10 @@ def test_migration_additive_and_rls():
     assert "grant" in lowered and "anon" in lowered
     assert "revoke all on public.knowledge_relation_edges from anon" in lowered
     assert "unique (edge_id, evidence_key)" in lowered.replace("\n", " ")
-    assert "edge_key text not null unique" in lowered
+    grants = [ln for ln in SQL.splitlines() if ln.strip().upper().startswith("GRANT")]
+    assert grants
+    assert all("DELETE" not in ln.upper() for ln in grants)
+    assert "revoke delete on public.knowledge_relation_edges from service_role" in lowered
 
 
 def test_guide_shadow_compatibility_sample():
@@ -626,3 +631,126 @@ def test_time_contract_no_datetime_now():
         src = path.read_text(encoding="utf-8")
         assert "datetime.now(" not in src
         assert "datetime.utcnow" not in src
+
+
+def _insert_run(store: MemoryGraphStore, status: str, run_id: str):
+    return store.insert_run(
+        {
+            "id": run_id,
+            "run_type": "TEST",
+            "scope_json": {},
+            "rule_set_version": "GRAPH_RULES_V1",
+            "status": status,
+            "dry_run": False,
+            "started_at": "2026-09-13T00:00:00+09:00",
+        }
+    )
+
+
+def _guide_context_scope():
+    return [
+        StaleOwnership(
+            source_content_type="KOSHA_GUIDE",
+            edge_kind="CONTEXT",
+            producer_family="CONTEXT_CONTROLLED",
+        )
+    ]
+
+
+def test_g46_running_run_stale_zero():
+    store = MemoryGraphStore()
+    persist_candidates(store, [_cand()], run_id="seed")
+    _insert_run(store, "RUNNING", "running")
+    mutated = stale_unseen_edges(store, run_id="running", scopes=_guide_context_scope())
+    edge = next(iter(store.edges.values()))
+    assert mutated == 0
+    assert edge["is_active"] is True
+    assert edge.get("stale_at") is None
+
+
+def test_g47_failed_run_stale_zero():
+    store = MemoryGraphStore()
+    persist_candidates(store, [_cand()], run_id="seed")
+    _insert_run(store, "FAILED", "failed")
+    mutated = stale_unseen_edges(store, run_id="failed", scopes=_guide_context_scope())
+    edge = next(iter(store.edges.values()))
+    assert mutated == 0
+    assert edge["is_active"] is True
+
+
+def test_g48_completed_run_scoped_stale():
+    store = MemoryGraphStore()
+    persist_candidates(store, [_cand()], run_id="seed")
+    _insert_run(store, "COMPLETED", "done")
+    mutated = stale_unseen_edges(store, run_id="done", scopes=_guide_context_scope())
+    edge = next(iter(store.edges.values()))
+    assert mutated == 1
+    assert edge["is_active"] is False
+    assert edge.get("stale_at")
+
+
+def test_guide_direct_not_stale_when_shadow_producer_not_run():
+    store = MemoryGraphStore()
+    guides = [{"guide_no": "A-1-2018", "guide_title": "지게차 운전 작업 안전", "content_id": "A-1-2018"}]
+    materials = [{"id": "m1", "title": "지게차 운전 교육자료", "in_current_snapshot": True}]
+    ctx = produce_guide_relations(guides, current_ids={"A-1-2018"})
+    shadow = produce_guide_material_shadow(
+        guides, materials, current_guide_ids={"A-1-2018"}, current_material_ids={"m1"}
+    )
+    mats = produce_safety_material_relations(materials, current_ids={"m1"})
+    assert ctx and shadow
+    refresh_graph(
+        store=store,
+        produced_by_source={"guide": ctx, "guide_shadow": shadow, "material": mats},
+        scanned_by_source={"guide": 1, "material": 1},
+        apply=True,
+    )
+    refresh_graph(
+        store=store,
+        produced_by_source={"guide": ctx},
+        scanned_by_source={"guide": 1},
+        apply=True,
+    )
+    direct = [e for e in store.list_edges() if e["edge_kind"] == "DIRECT"]
+    context = [e for e in store.list_edges() if e["edge_kind"] == "CONTEXT" and e["source_content_type"] == "KOSHA_GUIDE"]
+    assert direct and direct[0]["is_active"] is True
+    assert direct[0].get("stale_at") is None
+    assert context and context[0]["is_active"] is True
+
+
+def test_g49_accepted_not_sticky_when_run_all_rejected():
+    store = MemoryGraphStore()
+    persist_candidates(store, [_cand()], run_id="r1")
+    persist_candidates(store, [_cand(status="REJECTED", evidence_value="지게차-dropped")], run_id="r2")
+    edge = next(iter(store.edges.values()))
+    assert edge["status"] == "REJECTED"
+    body = read_context(store, MemoryHydrator([_rec()]), relation_type="equipment", relation_key="forklift")
+    assert body["total"] == 0
+
+
+def test_g50_rejected_plus_accepted_is_accepted():
+    store = MemoryGraphStore()
+    persist_candidates(
+        store,
+        [
+            _cand(status="REJECTED", method="CONTROLLED_KEYWORD", evidence_value="weak"),
+            _cand(status="ACCEPTED", method="SOURCE_NATIVE", rule_id="NATIVE", evidence_value="forklift"),
+        ],
+        run_id="r1",
+    )
+    edge = next(iter(store.edges.values()))
+    assert edge["status"] == "ACCEPTED"
+    assert len(store.list_evidence(edge["id"])) == 2
+
+
+def test_g51_candidate_order_does_not_change_status():
+    a = [
+        _cand(status="REJECTED", method="CONTROLLED_KEYWORD", evidence_value="weak"),
+        _cand(status="ACCEPTED", method="SOURCE_NATIVE", rule_id="NATIVE", evidence_value="forklift"),
+    ]
+    b = list(reversed(a))
+    store_a = MemoryGraphStore()
+    store_b = MemoryGraphStore()
+    persist_candidates(store_a, a, run_id="r1")
+    persist_candidates(store_b, b, run_id="r1")
+    assert next(iter(store_a.edges.values()))["status"] == next(iter(store_b.edges.values()))["status"] == "ACCEPTED"
