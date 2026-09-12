@@ -184,13 +184,16 @@ def test_a5_official_no_result_ok_empty(monkeypatch):
     assert body["total"] == 0
 
 
-def test_a5_nodata_result_code_ok_empty(monkeypatch):
+def test_a5_nodata_result_code_unavailable(monkeypatch):
     _patch_key(monkeypatch)
     payload = _ok_payload([], total=0, result_code="03")
     _capture(monkeypatch, lambda *a, **k: (200, json.dumps(payload)))
-    body = _client().get(PUBLIC, params={"q": "없는검색어xyz"}).json()
-    assert body["status"] == "ok"
+    res = _client().get(PUBLIC, params={"q": "없는검색어xyz"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "unavailable"
     assert body["items"] == []
+    assert body["provider_error"] == "upstream_error"
 
 
 def test_a6_timeout_normalized_unavailable(monkeypatch):
@@ -248,6 +251,97 @@ def test_a9_items_wrong_type_unavailable(monkeypatch):
     body = _client().get(PUBLIC, params={"q": "지게차"}).json()
     assert body["status"] == "unavailable"
     assert body["provider_error"] == "schema_error"
+
+
+def test_success_total_count_missing_schema_error(monkeypatch):
+    _patch_key(monkeypatch)
+    payload = {
+        "header": {"resultCode": "00", "resultMsg": "NORMAL_CODE"},
+        "body": {"items": {"item": []}},
+    }
+    _capture(monkeypatch, lambda *a, **k: (200, json.dumps(payload)))
+    res = _client().get(PUBLIC, params={"q": "지게차"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "unavailable"
+    assert body["items"] == []
+    assert body["provider_error"] == "schema_error"
+
+
+def test_success_total_count_malformed_schema_error(monkeypatch):
+    _patch_key(monkeypatch)
+    payload = {
+        "header": {"resultCode": "00", "resultMsg": "NORMAL_CODE"},
+        "body": {"totalCount": "broken", "items": {"item": []}},
+    }
+    _capture(monkeypatch, lambda *a, **k: (200, json.dumps(payload)))
+    res = _client().get(PUBLIC, params={"q": "지게차"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "unavailable"
+    assert body["items"] == []
+    assert body["provider_error"] == "schema_error"
+
+
+def test_success_total_positive_items_missing_schema_error(monkeypatch):
+    _patch_key(monkeypatch)
+    payload = {
+        "header": {"resultCode": "00", "resultMsg": "NORMAL_CODE"},
+        "body": {"totalCount": 5},
+    }
+    _capture(monkeypatch, lambda *a, **k: (200, json.dumps(payload)))
+    res = _client().get(PUBLIC, params={"q": "지게차"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "unavailable"
+    assert body["items"] == []
+    assert body["provider_error"] == "schema_error"
+
+
+def test_success_wrong_item_schema_schema_error(monkeypatch):
+    _patch_key(monkeypatch)
+    payload = {
+        "header": {"resultCode": "00", "resultMsg": "NORMAL_CODE"},
+        "body": {
+            "totalCount": 1,
+            "items": {"item": [{"lawNm": "산안법", "url": "https://example.invalid"}]},
+        },
+    }
+    _capture(monkeypatch, lambda *a, **k: (200, json.dumps(payload)))
+    res = _client().get(PUBLIC, params={"q": "지게차"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "unavailable"
+    assert body["items"] == []
+    assert body["provider_error"] == "schema_error"
+
+
+def test_success_core_fields_present_null_values_ok(monkeypatch):
+    _patch_key(monkeypatch)
+    payload = {
+        "header": {"resultCode": "00", "resultMsg": "NORMAL_CODE"},
+        "body": {
+            "totalCount": 1,
+            "items": {
+                "item": [{
+                    "doc_id": None,
+                    "title": "",
+                    "content": None,
+                    "category": "",
+                }]
+            },
+        },
+    }
+    _capture(monkeypatch, lambda *a, **k: (200, json.dumps(payload)))
+    res = _client().get(PUBLIC, params={"q": "지게차"})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "ok"
+    assert len(body["items"]) == 1
+    assert body["items"][0]["external_id"] is None
+    assert body["items"][0]["title"] is None
+    assert body["items"][0]["summary"] is None
+    assert body["items"][0]["category"] is None
 
 
 def test_a10_service_key_not_in_response_or_logs(monkeypatch, caplog):

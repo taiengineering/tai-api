@@ -33,7 +33,7 @@ MIN_PAGE = 1
 MIN_PAGE_SIZE = 1
 MAX_PAGE_SIZE = 50
 REQUEST_TIMEOUT_SECONDS = 15
-SUCCESS_RESULT_CODES = frozenset({"00", "0", "000", "03"})
+SUCCESS_RESULT_CODES = frozenset({"00"})
 RATE_LIMIT_RESULT_CODES = frozenset({"22"})
 TIMEOUT_RESULT_CODES = frozenset({"05"})
 CONTEXT_PARAM_BLOCKLIST = frozenset({
@@ -47,6 +47,7 @@ CONTEXT_PARAM_BLOCKLIST = frozenset({
     "keyword",
 })
 
+CORE_ITEM_FIELDS = ("doc_id", "title", "content", "category")
 _ITEM_PASSTHROUGH = (
     ("doc_id", "external_id"),
     ("title", "title"),
@@ -162,16 +163,35 @@ def parse_kosha_payload(text: str) -> dict[str, Any]:
     return data
 
 
-def _unwrap_items(body: Any) -> list[dict[str, Any]]:
-    if not isinstance(body, dict):
+def _require_total(body: dict[str, Any]) -> int:
+    if "totalCount" not in body:
         raise ValueError("schema_error")
-    node = body.get("items")
-    if node is None:
+    raw = body["totalCount"]
+    if raw is None or raw == "" or isinstance(raw, bool):
+        raise ValueError("schema_error")
+    try:
+        total = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("schema_error") from exc
+    if total < 0:
+        raise ValueError("schema_error")
+    return total
+
+
+def _unwrap_items(body: dict[str, Any], *, required: bool) -> list[dict[str, Any]]:
+    if "items" not in body or body.get("items") is None:
+        if required:
+            raise ValueError("schema_error")
         return []
+    node = body["items"]
     if isinstance(node, list):
         raw_items = node
     elif isinstance(node, dict):
-        inner = node.get("item", [])
+        if "item" not in node:
+            if required:
+                raise ValueError("schema_error")
+            return []
+        inner = node["item"]
         if inner is None or inner == "":
             raw_items = []
         elif isinstance(inner, list):
@@ -184,22 +204,15 @@ def _unwrap_items(body: Any) -> list[dict[str, Any]]:
         raise ValueError("schema_error")
     items = []
     for row in raw_items:
-        if row is None:
-            continue
         if not isinstance(row, dict):
             raise ValueError("schema_error")
+        for field in CORE_ITEM_FIELDS:
+            if field not in row:
+                raise ValueError("schema_error")
         items.append(row)
+    if required and not items:
+        raise ValueError("schema_error")
     return items
-
-
-def _parse_total(body: dict[str, Any]) -> Optional[int]:
-    raw = body.get("totalCount")
-    if raw is None or raw == "":
-        return None
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return None
 
 
 def normalize_item(raw: dict[str, Any], secret: str) -> dict[str, Any]:
@@ -253,7 +266,7 @@ def _ok(
     query: str,
     page: int,
     page_size: int,
-    total: Optional[int],
+    total: int,
     items: list[dict[str, Any]],
     secret: str,
 ) -> dict[str, Any]:
@@ -263,7 +276,7 @@ def _ok(
         "query": _redact(query, secret),
         "page": page,
         "page_size": page_size,
-        "total": total if total is not None else 0,
+        "total": total,
         "items": items,
     }
 
@@ -374,13 +387,14 @@ async def search_kosha_public(
                 http_status=status,
                 result_code=result_code,
             )
-        raw_items = _unwrap_items(body)
+        total = _require_total(body)
+        raw_items = _unwrap_items(body, required=total > 0)
         items = [normalize_item(row, secret) for row in raw_items]
         return _ok(
             query=query,
             page=page,
             page_size=page_size,
-            total=_parse_total(body),
+            total=total,
             items=items,
             secret=secret,
         )
