@@ -9,7 +9,6 @@ WO-SAFE-DAILY-SCHEDULE-MATERIALIZER-V1-001 — REUSE_WITH_PATCH.
 """
 from __future__ import annotations
 
-from datetime import date
 from typing import List, Optional
 
 from services.inspection_rolling import CONFLICT_KEY
