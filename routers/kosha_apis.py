@@ -13,6 +13,10 @@ import json
 import asyncio
 import xml.etree.ElementTree as ET
 from services.kr_public_api import kr_get
+from services.kosha_smart_search import (
+    KoshaTransportError,
+    fetch_smart_search_raw,
+)
 
 router = APIRouter(prefix="/kosha", tags=["KOSHA공공API"])
 
@@ -158,10 +162,19 @@ async def law_search(
     page_no: int = Query(1, ge=1),
     num_of_rows: int = Query(10, ge=1, le=100),
 ):
-    result = await _kosha_get("srch/smartSearch", {
-        "keyword": keyword, "pageNo": page_no,
-        "numOfRows": num_of_rows, "returnType": "json",
-    })
+    try:
+        result = await fetch_smart_search_raw(
+            search_value=keyword,
+            page_no=page_no,
+            num_of_rows=num_of_rows,
+        )
+    except KoshaTransportError as exc:
+        if exc.http_status >= 400:
+            raise HTTPException(
+                status_code=502,
+                detail=f"KOSHA HTTP {exc.http_status}: {exc.snippet}",
+            ) from exc
+        raise HTTPException(status_code=502, detail="KOSHA API 연결 실패") from exc
     return {"status": "success", "data": result}
 
 
