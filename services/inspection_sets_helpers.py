@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from dateutil.relativedelta import relativedelta
 from services.time import business_today
@@ -27,6 +27,9 @@ REPEAT_TYPE_MAP = {
     "day": "daily", "week": "weekly", "month": "monthly",
     "quarter": "quarterly", "half_year": "half_yearly", "year": "yearly",
 }
+# One-shot WITHIN/BEFORE — platform bridge maps once→one_time
+# (docs/platform-core/runtime-input-bridge.md). Schema = text nullable.
+ONESHOT_REPEAT_TYPE = "once"
 UNIT_KO = {"year": "년", "month": "개월", "quarter": "분기", "half_year": "반기"}
 CHECK_TYPE_MAP = {
     "INSPECT": "PASS_FAIL", "APPOINT": "CHECK", "REPORT": "DATE",
@@ -181,4 +184,75 @@ def _build_law_engine_row(iset: dict) -> dict:
         "status_code":       "PENDING",
         "active_yn":         True,
         "rule_code":         iset.get("legal_rule_code") or iset.get("legal_rule_id") or "",
+    }
+
+
+def _operation_planned_date(rule: dict) -> Tuple[Optional[date], Optional[str]]:
+    """Compute planned_date from persisted OTR only.
+
+    Returns (planned_date, skip_reason). skip_reason set ⇒ write 0.
+    UNTIL / incomplete callers should not reach here (readiness fail-close).
+    """
+    op = (rule.get("operator") or "").upper()
+    if op == "UNTIL":
+        return None, "UNTIL_NOT_READY"
+    try:
+        basis = date.fromisoformat(str(rule["basis_date"])[:10])
+        unit = str(rule["unit"]).lower()
+        value = int(rule["value"])
+    except (KeyError, TypeError, ValueError):
+        return None, "INVALID_OTR"
+    if unit not in DELTA_MAP or value < 1:
+        return None, "INVALID_OTR"
+
+    if op == "EVERY":
+        # Recurring: shared fast-forward to current/future next occurrence.
+        return _next_planned_from(basis, unit, value), None
+
+    if op == "WITHIN":
+        planned = basis + _get_delta(unit, value)
+        if planned < business_today():
+            return None, "PAST_DUE_ONE_SHOT"
+        return planned, None
+
+    if op == "BEFORE":
+        planned = basis - _get_delta(unit, value)
+        if planned < business_today():
+            return None, "PAST_DUE_ONE_SHOT"
+        return planned, None
+
+    return None, "UNSUPPORTED_OPERATOR"
+
+
+def _build_operation_schedule_row(iset: dict, planned: date, rule: dict) -> dict:
+    """Canonical LEGAL_ENGINE materializer row — lowercase scheduled · source LEGAL."""
+    from services.status_vocab import ws_write_scheduled
+
+    op = (rule.get("operator") or "").upper()
+    if op == "EVERY":
+        unit = str(rule["unit"]).lower()
+        repeat_type = REPEAT_TYPE_MAP.get(unit, "yearly")
+        repeat_interval = int(rule["value"])
+    else:
+        # WITHIN / BEFORE one-shot — platform once→one_time contract
+        repeat_type = ONESHOT_REPEAT_TYPE
+        repeat_interval = int(rule["value"])
+
+    planned_s = planned.isoformat()
+    return {
+        "factory_id":        iset["factory_id"],
+        "company_id":        iset.get("company_id"),
+        "inspection_set_id": iset["id"],
+        "planned_date":      planned_s,
+        "start_date":        planned_s,
+        "end_date":          planned_s,
+        "repeat_type":       repeat_type,
+        "repeat_interval":   repeat_interval,
+        "status_code":       ws_write_scheduled(),
+        "source_type":       "LEGAL",
+        "obligation_type":   iset.get("inspection_category") or "GENERAL",
+        "summary":           iset.get("inspection_set_name") or "",
+        "description":       (iset.get("description") or "").strip(),
+        "active_yn":         True,
+        "assigned_user_id":  iset.get("assignee_user_id"),
     }

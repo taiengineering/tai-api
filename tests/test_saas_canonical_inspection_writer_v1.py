@@ -964,7 +964,7 @@ def test_T10_cycle_missing_still_422_even_with_assignee(monkeypatch):
 
 
 def test_T11_law_engine_mode_unchanged_delegation(monkeypatch):
-    """mode=law_engine still delegates to run_generate_law_engine (no assignee rewrite here)."""
+    """mode=law_engine delegates to official OTR materializer (compat mode name retained)."""
     import services.inspection_sets_svc.schedules as S
     called = {}
 
@@ -973,7 +973,7 @@ def test_T11_law_engine_mode_unchanged_delegation(monkeypatch):
         return {"total_sets": 2, "created": 1, "skipped_dup": 0, "skipped_no_condition": 1}
 
     monkeypatch.setattr(S, "get_supabase", lambda: object())
-    monkeypatch.setattr(S, "run_generate_law_engine", fake_run)
+    monkeypatch.setattr(S, "run_generate_operation_schedules", fake_run)
     out = S.generate_schedules_for_factory("f1", "law_engine", False)
     assert called["fid"] == "f1"
     assert out["data"]["mode"] == "law_engine"
