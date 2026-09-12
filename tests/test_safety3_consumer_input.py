@@ -32,9 +32,7 @@ class _Body:
 def test_allowlist_contains_new5():
     for f in _NEW5:
         assert f in _LEG_INPUT_FIELDS, f"{f} 누락"
-    # 기존 49 + safety-3 5축 + wiring specific 2축(has_asbestos_demo·has_tower_crane) = 56, 중복 없음
     assert len(_LEG_INPUT_FIELDS) == len(set(_LEG_INPUT_FIELDS))
-    assert len(_LEG_INPUT_FIELDS) == 56
 
 
 def test_new3_not_in_nexas_numeric():

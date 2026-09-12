@@ -136,6 +136,12 @@ def run_shadow_compare(step1_body: Any, diagnosis_id: str,
 # 추정 금지 — step1_body에 없는 필드는 미포함(LEG가 NO_APPLICABLE/EVIDENCE_GAP 반환).
 _LEG_INPUT_FIELDS = (
     "worker_count", "total_floor_area", "building_use_type", "construction_type",
+    # WO-SM-CORE22-PRODUCTION-INPUT-MATERIALIZATION-REPAIR-001:
+    # RTM S1 exact-name authority: CANONICAL_EOK_FIELDS / NUMERIC_FIELDS / production
+    # missing_fields. Verbatim EOK passthrough. No /10000, no *1e8, no synthetic default.
+    # direct_workers / subcon_workers are NOT appended: they are absent from RTM
+    # condition vocabulary (not missing_fields, not NUMERIC_FIELDS, not CORE22 Leaf.field).
+    "contract_amount_eok",
     "ksic_major", "has_chemical", "has_elevator", "has_noise_work", "has_asbestos",
     "has_crane", "has_excavation", "has_concrete_work", "has_hazardous_material",
     "has_gas", "is_multi_use", "has_safety_manager", "has_subcontractor", "has_scaffold",
