@@ -149,8 +149,11 @@ def generate_schedules_all(current: dict = Depends(get_current_user)):
 @router.post("/generate-schedules/{factory_id}")
 def generate_schedules_for_factory(
     factory_id: str,
-    mode: str = Query("law_engine", description="'law_engine'(4조건) 또는 'anchor'(anchor_confirmed 기반)"),
-    force: bool = Query(False, description="anchor 모드에서 기존 SCHEDULED 삭제 후 재생성"),
+    mode: str = Query(
+        "law_engine",
+        description="'law_engine'=OTR materializer · 'anchor'=legacy/manual anchor path (LEGAL_ENGINE excluded)",
+    ),
+    force: bool = Query(False, description="anchor 모드(MANUAL 등)에서 기존 SCHEDULED 삭제 후 재생성"),
     current: dict = Depends(get_current_user),
 ):
     sb = get_supabase()

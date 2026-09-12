@@ -461,6 +461,7 @@ def test_G15_legal_text_without_structured_schedule_is_absent():
 # ── W17~W24: 5 write 경계 guard (canonical NULL-cycle → helper 진입 0) ──
 
 _SKIP = "주기가 설정되지 않았습니다."
+_LEGAL_ANCHOR_SKIP = "LEGAL_ENGINE_REQUIRES_OTR_MATERIALIZER"
 _NEED_CYCLE = "점검 주기를 먼저 설정해주세요."
 
 
@@ -769,28 +770,30 @@ def test_W23_update_anchor_canonical_422_legacy_ok(monkeypatch):
 
 
 def test_W24_generate_schedules_anchor_mode_skips_null_cycle(monkeypatch):
+    """LEGAL_ENGINE excluded from anchor; MANUAL with cycle still creates."""
     canon = _canonical_row(
         status_code="ACTIVE",
         anchor_confirmed=True,
         schedule_anchor_date="2026-01-15",
     )
-    legacy = _legacy_row(
+    manual = _manual_row(
         status_code="ACTIVE",
         anchor_confirmed=True,
         schedule_anchor_date="2026-01-15",
+        cycle_unit="month",
+        cycle_value=1,
+        assignee_user_id="user-ready",
     )
-    sb = _WriteSB([canon, legacy])
+    sb = _WriteSB([canon, manual])
     S, seen = _install_schedules(monkeypatch, sb)
     out = S.generate_schedules_for_factory("f1", "anchor", False)
     skip = [r for r in out["data"]["results"] if r.get("status") == "skipped"]
     created = [r for r in out["data"]["results"] if r.get("status") == "created"]
-    assert skip == [{"id": "set-c", "name": canon["inspection_set_name"],
-                     "status": "skipped", "reason": _SKIP}]
-    assert len(created) == 1 and created[0]["id"] == "set-l"
-    assert [s["id"] for s in seen] == ["set-l"]
+    assert any(r["id"] == "set-c" and r["reason"] == _LEGAL_ANCHOR_SKIP for r in skip)
+    assert len(created) == 1 and created[0]["id"] == "set-m"
+    assert [s["id"] for s in seen] == ["set-m"]
     assert all(ins.get("inspection_set_id") != "set-c" for ins in sb.schedule_inserts)
-    assert any(ins.get("inspection_set_id") == "set-l" for ins in sb.schedule_inserts)
-    assert sb.schedule_inserts[0]["assigned_user_id"] == "user-ready"
+    assert any(ins.get("inspection_set_id") == "set-m" for ins in sb.schedule_inserts)
 
 
 # ── WO-SAFE-SCHEDULE-READINESS-ASSIGNEE-001 (T1~T14) ──
@@ -897,6 +900,7 @@ def test_T6_bulk_update_anchors_mixed_assignee(monkeypatch):
 
 
 def test_T7_generate_anchor_mode_no_assignee_skip(monkeypatch):
+    """LEGAL_ENGINE is excluded from anchor before assignee/cycle legacy checks."""
     row = _legacy_row(
         assignee_user_id=None,
         status_code="ACTIVE",
@@ -911,7 +915,7 @@ def test_T7_generate_anchor_mode_no_assignee_skip(monkeypatch):
         "id": "set-l",
         "name": row["inspection_set_name"],
         "status": "skipped",
-        "reason": _ASSIGNEE_SKIP,
+        "reason": _LEGAL_ANCHOR_SKIP,
     }]
     assert seen == []
     assert sb.schedule_inserts == []
@@ -919,21 +923,26 @@ def test_T7_generate_anchor_mode_no_assignee_skip(monkeypatch):
 
 
 def test_T8_generate_anchor_mode_with_assignee_create(monkeypatch):
-    row = _legacy_row(
+    """MANUAL anchor path still materializes with assignee (LEGAL_ENGINE excluded)."""
+    row = _manual_row(
         assignee_user_id="USER-OK",
         status_code="ACTIVE",
         anchor_confirmed=True,
         schedule_anchor_date="2026-01-15",
+        cycle_unit="month",
+        cycle_value=1,
     )
     sb = _WriteSB([row])
     S, seen = _install_schedules(monkeypatch, sb)
     out = S.generate_schedules_for_factory("f1", "anchor", False)
     assert out["data"]["created"] >= 1
     assert seen and seen[0]["assignee_user_id"] == "USER-OK"
-    assert sb.schedule_inserts[0]["assigned_user_id"] == "USER-OK"
+    # MANUAL builder leaves assigned_user_id None by design
+    assert sb.schedule_inserts[0]["source_type"] == "MANUAL"
 
 
 def test_T9_force_true_no_assignee_no_delete(monkeypatch):
+    """LEGAL_ENGINE+force still does not enter legacy delete/create path."""
     row = _legacy_row(
         assignee_user_id=None,
         status_code="ACTIVE",
@@ -944,7 +953,7 @@ def test_T9_force_true_no_assignee_no_delete(monkeypatch):
     S, seen = _install_schedules(monkeypatch, sb)
     out = S.generate_schedules_for_factory("f1", "anchor", True)
     assert out["data"]["created"] == 0
-    assert out["data"]["results"][0]["reason"] == _ASSIGNEE_SKIP
+    assert out["data"]["results"][0]["reason"] == _LEGAL_ANCHOR_SKIP
     assert seen == []
     assert sb.schedule_deletes == []
     assert sb.schedule_inserts == []
@@ -964,7 +973,7 @@ def test_T10_cycle_missing_still_422_even_with_assignee(monkeypatch):
 
 
 def test_T11_law_engine_mode_unchanged_delegation(monkeypatch):
-    """mode=law_engine still delegates to run_generate_law_engine (no assignee rewrite here)."""
+    """mode=law_engine delegates to official OTR materializer (compat mode name retained)."""
     import services.inspection_sets_svc.schedules as S
     called = {}
 
@@ -973,7 +982,7 @@ def test_T11_law_engine_mode_unchanged_delegation(monkeypatch):
         return {"total_sets": 2, "created": 1, "skipped_dup": 0, "skipped_no_condition": 1}
 
     monkeypatch.setattr(S, "get_supabase", lambda: object())
-    monkeypatch.setattr(S, "run_generate_law_engine", fake_run)
+    monkeypatch.setattr(S, "run_generate_operation_schedules", fake_run)
     out = S.generate_schedules_for_factory("f1", "law_engine", False)
     assert called["fid"] == "f1"
     assert out["data"]["mode"] == "law_engine"
