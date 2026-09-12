@@ -5,6 +5,7 @@ ROUTERS = [
     {"module": "routers.site_public", "attr": "admin_router"},
     {"module": "routers.public_admin"},
     {"module": "routers.public_pricing"},
+    {"module": "routers.kosha_public_materials"},  # WP-2 read-only stored material + signed GET
     # WO-ISOLATE-001: 축3 익명진단 생성/조회/claim 격리.
     #   라이브(tai-www)는 /diagnosis/run(생성)·/diagnosis/result(조회)만 사용 → 축3 URL 미사용.
     #   파일 routers/anonymous_diagnosis.py 는 보존(anonymous_diagnosis_leg 가 _build_step1_body 등 import).

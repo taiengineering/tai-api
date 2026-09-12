@@ -1,0 +1,23 @@
+{
+  "result": "success",
+  "payload": {
+    "list": [
+      {
+        "medSeq": 30576,
+        "medName": "사고사망재해 예방 홍보 리플릿",
+        "medNote": "제조업",
+        "contsRegYmd": "20120221",
+        "frstRegDt": "2012-02-21T00:00:00",
+        "contsFbctnShpCd": "6",
+        "contsFbctnShpNm": "리플릿",
+        "medGonggongnuri": "02",
+        "medGonggongnuriNm": "제2유형[출처 표시 + 상업적 이용 금지]",
+        "medThumbnailPath": "/t/30576.jpg",
+        "thumbPath": "/t/30576.jpg",
+        "medFileYn": "Y",
+        "ytbUrlAddr": null,
+        "totHitSum": 1
+      }
+    ]
+  }
+}

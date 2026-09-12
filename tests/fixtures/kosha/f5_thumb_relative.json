@@ -1,0 +1,21 @@
+{
+  "result": "success",
+  "payload": {
+    "list": [
+      {
+        "medSeq": 1,
+        "medName": "썸네일 상대경로",
+        "medNote": "x",
+        "contsRegYmd": "20200101",
+        "contsFbctnShpNm": "책자",
+        "contsFbctnShpCd": "1",
+        "medGonggongnuri": "01",
+        "medGonggongnuriNm": "제1유형",
+        "medThumbnailPath": "/archive/thumb/1.jpg",
+        "thumbPath": "javascript:alert(1)",
+        "medFileYn": "N",
+        "ytbUrlAddr": null
+      }
+    ]
+  }
+}
