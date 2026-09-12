@@ -25,6 +25,7 @@ FILENAME_MISMATCH_REASON = "SOURCE_ASSET_FILENAME_MISMATCH"
 
 RESOLUTION_NOTE_MULTI = "STORED_AFTER_STABLE_IDENTITY_DEDUPE"
 RESOLUTION_NOTE_BINARY = "STORED_AFTER_BINARY_RETRY"
+RESOLUTION_NOTE_STALE = "CURRENT_VERSION_ALREADY_PRESENT_VERIFIED"
 RESOLUTION_NOTES = {
     MULTI_MATCH_REASON: RESOLUTION_NOTE_MULTI,
     BINARY_UNAVAILABLE_REASON: RESOLUTION_NOTE_BINARY,
@@ -51,6 +52,7 @@ SYSTEM_STOP_CODES = frozenset({
     "REDIRECT_HOST_BLOCKED",
     "SCHEME_NOT_ALLOWED",
     "HOLD_RESOLVE_FAILED",
+    "VERSION_IDENTITY_MISMATCH",
 })
 
 FROZEN_SNAPSHOT_ID = "5fbc70e6-0bce-4bd9-ba29-0e3fca72b572"
@@ -104,6 +106,45 @@ def current_versions_for_asset(versions, asset_id) -> list[dict]:
             if r.get("asset_id") == asset_id and r.get("is_current_version")
         ]
     return []
+
+
+def expected_source_asset_key(item: dict) -> str | None:
+    key = item.get("source_asset_key")
+    if key:
+        return key
+    return item.get("checksum")
+
+
+def verify_existing_current_for_recovery(cur: dict, item: dict, r2) -> dict:
+    """Idempotent recovery after storage success + hold-resolve failure.
+
+    Does not fetch binary, PUT R2, or write a version. Fail closed on identity
+    or integrity mismatch — never resolve because asset_id merely matches.
+    """
+    expected = expected_source_asset_key(item)
+    if (
+        cur.get("asset_id") != item.get("asset_id")
+        or not expected
+        or cur.get("source_asset_key") != expected
+    ):
+        raise StorageError("VERSION_IDENTITY_MISMATCH")
+    if cur.get("is_current_version") is not True:
+        raise StorageError("CURRENT_NOT_UNIQUE")
+    if cur.get("is_derivative"):
+        raise StorageError("DERIVATIVE_FORBIDDEN")
+    if cur.get("storage_bucket") != ALLOWED_BUCKET:
+        raise StorageError("UNEXPECTED_BUCKET", str(cur.get("storage_bucket")))
+    if not cur.get("storage_key"):
+        raise StorageError("VERSION_OBJECT_MISSING")
+    if not cur.get("content_checksum"):
+        raise StorageError("VERSION_READBACK_MISMATCH")
+    try:
+        r2.readback_verify(cur["storage_key"], cur["content_checksum"])
+    except R2Error as e:
+        if e.code in SYSTEM_STOP_CODES:
+            raise StorageError(e.code, e.message) from e
+        raise StorageError("READBACK_MISMATCH", e.code) from e
+    return cur
 
 
 def assert_ready_to_resolve(versions, r2, item: dict, store_out: dict) -> dict:
@@ -251,13 +292,39 @@ def apply_targeted_hold_retry(
                 continue
             preexisting = current_versions_for_asset(versions, asset_id)
             if preexisting:
+                if len(preexisting) != 1:
+                    _stop("CURRENT_NOT_UNIQUE", item)
+                try:
+                    verify_existing_current_for_recovery(preexisting[0], item, r2)
+                except StorageError as e:
+                    _stop(e.code, item, e)
+                except R2Error as e:
+                    code = e.code if e.code in SYSTEM_STOP_CODES else "READBACK_MISMATCH"
+                    _stop(code, item, e)
+                try:
+                    resolved_out = holds.resolve_open(
+                        snapshot_id=snapshot_id,
+                        asset_id=asset_id,
+                        reason=reason,
+                        resolution_note=RESOLUTION_NOTE_STALE,
+                    )
+                except HoldError as e:
+                    _stop("HOLD_RESOLVE_FAILED", item, e)
+                except Exception as e:
+                    _stop("HOLD_RESOLVE_FAILED", item, e)
+                if resolved_out.get("status") not in ("RESOLVED", "ALREADY_RESOLVED"):
+                    _stop("HOLD_RESOLVE_FAILED", item)
+                resolved += 1
                 stale += 1
                 results.append({
-                    "status": "STALE_OPEN_HOLD",
+                    "status": resolved_out["status"],
                     "asset_id": asset_id,
                     "hold_reason": reason,
+                    "resolution_note": RESOLUTION_NOTE_STALE,
+                    "recovery": RESOLUTION_NOTE_STALE,
                     "binary_get": 0,
-                    "current_version_count": len(preexisting),
+                    "r2_put": 0,
+                    "version_dml": 0,
                 })
                 continue
             kwargs = dict(

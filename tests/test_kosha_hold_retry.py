@@ -12,6 +12,7 @@ from services.kosha_safety_materials.storage.hold_retry import (
     MULTI_MATCH_REASON,
     RESOLUTION_NOTE_BINARY,
     RESOLUTION_NOTE_MULTI,
+    RESOLUTION_NOTE_STALE,
     RETRYABLE_REASONS,
     apply_targeted_hold_retry,
     assert_retryable_reason,
@@ -368,40 +369,185 @@ def test_resolve_failure_after_storage_stops():
     assert r2.puts == 1
 
 
-def test_preexisting_current_version_skips_binary():
-    holds = _ProdHolds()
-    _record(holds, 6484, MULTI_MATCH_REASON)
+def _verified_current_fixture(*, storage_key="kosha/x", body=b"%PDF-1.4 stale", **overrides):
+    item = _item(asset_id=6484)
+    item["source_asset_key"] = item["checksum"]
+    sha = hashlib.sha256(body).hexdigest()
+    s3 = FakeS3()
+    s3.objects[storage_key] = {
+        "Body": body,
+        "ContentType": "application/pdf",
+        "Metadata": {},
+        "ETag": '"not-sha"',
+    }
     vs = _WritableVersions()
-    vs.rows["pre"] = {
+    row = {
         "asset_id": 6484,
         "is_current_version": True,
         "is_derivative": False,
         "storage_bucket": ALLOWED_BUCKET,
-        "storage_key": "kosha/x",
-        "content_checksum": "a" * 64,
-        "source_asset_key": "pre",
+        "storage_key": storage_key,
+        "content_checksum": sha,
+        "source_asset_key": item["source_asset_key"],
     }
-    called = {"n": 0}
+    row.update(overrides)
+    vs.rows[row["source_asset_key"]] = row
+    return item, vs, R2Store(s3), s3
 
-    def fetch_binary(**k):
-        called["n"] += 1
-        raise AssertionError("binary GET 0 for stale hold")
 
-    out = apply_targeted_hold_retry(
+def _stale_retry(holds, item, vs, r2, fetch_binary):
+    return apply_targeted_hold_retry(
         snapshot_id="snap-1",
         holds=holds,
-        items_by_asset_id={6484: _item(asset_id=6484)},
+        items_by_asset_id={item["asset_id"]: item},
         membership_ids={MID},
-        r2=R2Store(FakeS3()),
+        r2=r2,
         versions=vs,
         fetch_detail_fn=lambda medseq: (_ for _ in ()).throw(AssertionError("no detail")),
         fetch_atch_fn=lambda medseq: (_ for _ in ()).throw(AssertionError("no atch")),
         fetch_file_list_fn=lambda n: (_ for _ in ()).throw(AssertionError("no files")),
         fetch_binary_fn=fetch_binary,
     )
-    assert out["stale"] == 1
-    assert out["resolved"] == 0
+
+
+def test_verified_existing_current_resolves_without_binary_or_version_dml():
+    holds = _ProdHolds()
+    _record(holds, 6484, MULTI_MATCH_REASON)
+    item, vs, r2, s3 = _verified_current_fixture()
+    called = {"n": 0}
+
+    def fetch_binary(**k):
+        called["n"] += 1
+        raise AssertionError("binary GET 0 for verified stale recovery")
+
+    dml0 = vs.dml
+    puts0 = r2.puts
+    out = _stale_retry(holds, item, vs, r2, fetch_binary)
+    assert out["resolved"] == 1
     assert called["n"] == 0
+    assert vs.dml == dml0 == 0
+    assert r2.puts == puts0 == 0
+    assert s3.puts == 0
+    row = holds.rows[0]
+    assert row["status"] == "RESOLVED"
+    assert row["resolution_note"] == RESOLUTION_NOTE_STALE
+    assert row["resolved_at"].endswith("+09:00")
+
+
+def test_existing_current_source_asset_key_mismatch_stops_open():
+    holds = _ProdHolds()
+    _record(holds, 6484, MULTI_MATCH_REASON)
+    item, vs, r2, _s3 = _verified_current_fixture(source_asset_key="other-identity")
+    called = {"n": 0}
+
+    def fetch_binary(**k):
+        called["n"] += 1
+        raise AssertionError("binary GET 0")
+
+    try:
+        _stale_retry(holds, item, vs, r2, fetch_binary)
+        assert False
+    except StopRun as e:
+        assert e.reason == "VERSION_IDENTITY_MISMATCH"
+    assert called["n"] == 0
+    assert vs.dml == 0
+    assert r2.puts == 0
+    assert holds.rows[0]["status"] == "OPEN"
+
+
+def test_existing_current_count_gt_one_stops_open():
+    holds = _ProdHolds()
+    _record(holds, 6484, MULTI_MATCH_REASON)
+    item, vs, r2, _s3 = _verified_current_fixture()
+    vs.rows["other"] = dict(vs.rows[item["source_asset_key"]], source_asset_key="other")
+    called = {"n": 0}
+
+    def fetch_binary(**k):
+        called["n"] += 1
+        raise AssertionError("binary GET 0")
+
+    try:
+        _stale_retry(holds, item, vs, r2, fetch_binary)
+        assert False
+    except StopRun as e:
+        assert e.reason == "CURRENT_NOT_UNIQUE"
+    assert called["n"] == 0
+    assert holds.rows[0]["status"] == "OPEN"
+
+
+def test_existing_current_r2_readback_failure_stops_open():
+    holds = _ProdHolds()
+    _record(holds, 6484, MULTI_MATCH_REASON)
+    item, vs, r2, s3 = _verified_current_fixture()
+    s3.objects["kosha/x"]["Body"] = b"tampered-not-matching-checksum"
+    called = {"n": 0}
+
+    def fetch_binary(**k):
+        called["n"] += 1
+        raise AssertionError("binary GET 0")
+
+    try:
+        _stale_retry(holds, item, vs, r2, fetch_binary)
+        assert False
+    except StopRun as e:
+        assert e.reason == "READBACK_MISMATCH"
+    assert called["n"] == 0
+    assert vs.dml == 0
+    assert r2.puts == 0
+    assert holds.rows[0]["status"] == "OPEN"
+
+
+def test_existing_current_missing_storage_fields_stops_open():
+    called = {"n": 0}
+
+    def fetch_binary(**k):
+        called["n"] += 1
+        raise AssertionError("binary GET 0")
+
+    holds = _ProdHolds()
+    _record(holds, 6484, MULTI_MATCH_REASON)
+    item, vs, r2, _s3 = _verified_current_fixture(storage_key="")
+    try:
+        _stale_retry(holds, item, vs, r2, fetch_binary)
+        assert False
+    except StopRun as e:
+        assert e.reason == "VERSION_OBJECT_MISSING"
+    assert holds.rows[0]["status"] == "OPEN"
+
+    holds2 = _ProdHolds()
+    _record(holds2, 6484, MULTI_MATCH_REASON)
+    item2, vs2, r22, _s32 = _verified_current_fixture(content_checksum="")
+    try:
+        _stale_retry(holds2, item2, vs2, r22, fetch_binary)
+        assert False
+    except StopRun as e:
+        assert e.reason == "VERSION_READBACK_MISMATCH"
+    assert called["n"] == 0
+    assert holds2.rows[0]["status"] == "OPEN"
+
+
+def test_verified_stale_resolve_db_failure_stops_open():
+    class _FailResolve(_ProdHolds):
+        def resolve_open(self, **k):
+            raise HoldError("HOLD_WRITE_FAILED")
+
+    holds = _FailResolve()
+    _record(holds, 6484, MULTI_MATCH_REASON)
+    item, vs, r2, _s3 = _verified_current_fixture()
+    called = {"n": 0}
+
+    def fetch_binary(**k):
+        called["n"] += 1
+        raise AssertionError("binary GET 0")
+
+    try:
+        _stale_retry(holds, item, vs, r2, fetch_binary)
+        assert False
+    except StopRun as e:
+        assert e.reason == "HOLD_RESOLVE_FAILED"
+    assert called["n"] == 0
+    assert vs.dml == 0
+    assert r2.puts == 0
     assert holds.rows[0]["status"] == "OPEN"
 
 
