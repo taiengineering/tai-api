@@ -155,9 +155,9 @@ def _owned_ids(supabase, ids, current):
     filt = scoped_filter(current, supabase, {"company_id", "factory_id"})
     if filt is DENY:
         return set()
-    q = require_active_executable(
-        supabase.table("work_schedules").select("id").in_("id", list(ids))
-    )
+    # Ownership only — NON_EXECUTABLE. Do NOT apply active_yn gate here
+    # (inactive rows must remain addressable for admin/history/preserve).
+    q = supabase.table("work_schedules").select("id").in_("id", list(ids))
     q = apply_scoped_filter(q, filt)
     if q is None:
         return set()

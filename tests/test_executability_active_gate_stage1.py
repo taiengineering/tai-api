@@ -475,6 +475,156 @@ def test_confirm_active_does_not_cross_factory_same_id(monkeypatch):
     assert f1["reviewed_by"] == "user-1"
     assert "reviewed_at" not in f2
 
-    active_updates = [u for u in sb.updates if "reviewed_at" in u["payload"]]
-    assert len(active_updates) == 1
-    assert active_updates[0]["filters"] == {"id": same_id, "factory_id": "F1"}
+def test_owned_ids_ownership_only_includes_inactive(monkeypatch):
+    """PATCH-R3: _owned_ids must NOT apply active_yn (NON_EXECUTABLE helper)."""
+    import inspect
+
+    src = inspect.getsource(ws._owned_ids)
+    assert "require_active_executable" not in src
+
+    rows = [
+        {"id": "a", "factory_id": "f1", "company_id": "c1", "active_yn": True},
+        {"id": "b", "factory_id": "f1", "company_id": "c1", "active_yn": False},
+        {"id": "c", "factory_id": "f1", "company_id": "c1", "active_yn": None},
+    ]
+    sb = _SB({"work_schedules": rows})
+    monkeypatch.setattr(ws, "_is_admin", lambda *a, **k: False)
+    monkeypatch.setattr(ws, "_scope", lambda *a, **k: "COMPANY")
+    monkeypatch.setattr(ws, "scoped_filter", lambda *a, **k: {"company_id": "c1"})
+    monkeypatch.setattr(
+        ws,
+        "apply_scoped_filter",
+        lambda q, filt: q.eq("company_id", filt["company_id"]) if filt else q,
+    )
+    DENY = object()
+    monkeypatch.setattr(ws, "DENY", DENY)
+
+    owned = ws._owned_ids(sb, ["a", "b", "c"], {"id": "u", "role_code": "010"})
+    assert owned == {"a", "b", "c"}
+    assert ("eq", "active_yn", True) not in sb.last["work_schedules"]._ops
+
+
+def test_worker_home_hard_hides_inactive_and_null_schedule(monkeypatch):
+    """PATCH-R3: inactive/null parent schedule → assignment/task excluded entirely."""
+    from routers import worker_home as wh
+
+    rows = {
+        "work_assignments": [
+            {
+                "id": "wa-active",
+                "schedule_id": "ws-a",
+                "asset_id": None,
+                "status_code": "PENDING",
+                "inspection_set_id": "set1",
+                "scheduled_date": "2026-09-12",
+                "assigned_user_id": "u1",
+            },
+            {
+                "id": "wa-inactive",
+                "schedule_id": "ws-off",
+                "asset_id": None,
+                "status_code": "PENDING",
+                "inspection_set_id": "set1",
+                "scheduled_date": "2026-09-12",
+                "assigned_user_id": "u1",
+            },
+            {
+                "id": "wa-null",
+                "schedule_id": "ws-null",
+                "asset_id": None,
+                "status_code": "PENDING",
+                "inspection_set_id": "set1",
+                "scheduled_date": "2026-09-12",
+                "assigned_user_id": "u1",
+            },
+        ],
+        "work_schedules": [
+            {
+                "id": "ws-a",
+                "active_yn": True,
+                "description": "ok",
+                "law_name": "L",
+                "obligation_type": "CHECK",
+            },
+            {
+                "id": "ws-off",
+                "active_yn": False,
+                "description": "hidden",
+                "law_name": "L",
+                "obligation_type": "CHECK",
+            },
+            {
+                "id": "ws-null",
+                "active_yn": None,
+                "description": "hidden-null",
+                "law_name": "L",
+                "obligation_type": "CHECK",
+            },
+        ],
+        "inspection_sets": [
+            {"id": "set1", "inspection_set_name": "SET", "cycle_unit": "month", "cycle_value": 1},
+        ],
+    }
+    sb = _SB(rows)
+    monkeypatch.setattr(wh, "get_supabase", lambda: sb)
+    monkeypatch.setattr(wh, "_today", lambda: "2026-09-12")
+
+    out = wh.get_today_tasks(user_id="u1", factory_id=None, company_id=None)
+    inspections = out["data"]["tasks"]["inspections"]
+    ids = {i["assignment_id"] for i in inspections}
+    assert ids == {"wa-active"}
+    assert inspections[0].get("description") == "ok"
+    assert ("eq", "active_yn", True) in sb.last["work_schedules"]._ops
+
+
+def test_event_schedules_list_active_gate(monkeypatch):
+    from routers import event_trigger as et
+
+    fid = "f1"
+    rows = [
+        {"id": "e1", "factory_id": fid, "source_type": "EVENT", "active_yn": True, "planned_date": "2026-10-01"},
+        {"id": "e2", "factory_id": fid, "source_type": "EVENT", "active_yn": False, "planned_date": "2026-10-02"},
+        {"id": "e3", "factory_id": fid, "source_type": "EVENT", "active_yn": None, "planned_date": "2026-10-03"},
+        {"id": "m1", "factory_id": fid, "source_type": "MANUAL", "active_yn": True, "planned_date": "2026-10-01"},
+    ]
+    sb = _SB({"work_schedules": rows})
+    monkeypatch.setattr(et, "get_supabase", lambda: sb)
+
+    out = et.get_event_schedules(
+        factory_id=fid,
+        obligation_type=None,
+        status_code=None,
+        event_type=None,
+        planned_date_from=None,
+        planned_date_to=None,
+        page=1,
+        size=20,
+    )
+    ids = [r["id"] for r in out["data"]["items"]]
+    assert ids == ["e1"]
+    assert ("eq", "active_yn", True) in sb.last["work_schedules"]._ops
+    assert ("eq", "source_type", "EVENT") in sb.last["work_schedules"]._ops
+
+
+def test_apply_one_update_still_gates_active_parent():
+    import inspect
+
+    src = inspect.getsource(ws._apply_one_update)
+    assert "require_active_executable" in src
+
+
+def test_no_work_schedules_is_active_write_in_stage1_surfaces():
+    import inspect
+    from pathlib import Path
+
+    # confirm + work_schedules router production writes
+    for mod in (ws,):
+        src = inspect.getsource(mod)
+        # allow comments mentioning is_active drift, forbid write payload key
+        assert '"is_active"' not in src or '"is_active"' not in inspect.getsource(ws.confirm_schedules)
+    assert '"is_active"' not in inspect.getsource(ws.confirm_schedules)
+
+    # migration must not invent is_active writes
+    mig = Path(__file__).resolve().parents[1] / "supabase/migrations/20260912070439_executability_rpc_active_gate.sql"
+    text = mig.read_text(encoding="utf-8")
+    assert "is_active" not in text

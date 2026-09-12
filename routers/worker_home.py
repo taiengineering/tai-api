@@ -85,8 +85,26 @@ def get_today_tasks(
             .eq("scheduled_date", today) \
             .neq("status_code", "CANCELLED")
         wa_res = wa_q.execute()
+        wa_rows = wa_res.data or []
 
-        for wa in (wa_res.data or []):
+        # Stage1: hard-hide assignments whose parent schedule is not ACTIVE_EXECUTABLE.
+        # Batch enrich once (no N+1 growth vs prior per-row schedule select).
+        schedule_ids = [wa["schedule_id"] for wa in wa_rows if wa.get("schedule_id")]
+        active_ws: dict = {}
+        if schedule_ids:
+            ws_res = require_active_executable(
+                supabase.table("work_schedules")
+                .select("id, description, law_name, obligation_type")
+                .in_("id", schedule_ids)
+            ).execute()
+            active_ws = {r["id"]: r for r in (ws_res.data or [])}
+
+        for wa in wa_rows:
+            sid = wa.get("schedule_id")
+            # schedule_id present but inactive/null/missing → drop entire task
+            if sid and sid not in active_ws:
+                continue
+
             item = {
                 "assignment_id": wa["id"],
                 "schedule_id":   wa["schedule_id"],
@@ -105,17 +123,11 @@ def get_today_tasks(
                     item["inspection_set_name"] = is_res.data[0].get("inspection_set_name", "")
                     item["cycle_unit"]          = is_res.data[0].get("cycle_unit", "")
 
-            # 업무일정 정보 보강
-            if wa.get("schedule_id"):
-                ws_res = require_active_executable(
-                    supabase.table("work_schedules")
-                    .select("description, law_name, obligation_type")
-                    .eq("id", wa["schedule_id"])
-                ).limit(1).execute()
-                if ws_res.data:
-                    item["description"]     = ws_res.data[0].get("description", "")
-                    item["law_name"]        = ws_res.data[0].get("law_name", "")
-                    item["obligation_type"] = ws_res.data[0].get("obligation_type", "")
+            if sid and sid in active_ws:
+                ws = active_ws[sid]
+                item["description"]     = ws.get("description", "")
+                item["law_name"]        = ws.get("law_name", "")
+                item["obligation_type"] = ws.get("obligation_type", "")
 
             tasks["inspections"].append(item)
 
