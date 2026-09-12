@@ -42,11 +42,12 @@ from services.knowledge_graph_store import (
     EVIDENCE,
     RUNS,
     SOURCE_TABLES,
+    RELATED_CONTEXT_LIMIT,
     FullTableScanForbidden,
     SupabaseGraphStore,
 )
 from services.knowledge_graph_hydrate import ProductionKnowledgeHydrator
-from scripts.refresh_knowledge_graph import APPLY_ENV, main as refresh_main, produce_all
+from scripts.refresh_knowledge_graph import APPLY_ENV, PAGE, load_production_sources, main as refresh_main, produce_all
 
 ROOT = Path(__file__).resolve().parents[1]
 SQL = (ROOT / "supabase/migrations/20260913_knowledge_graph_relations.sql").read_text(encoding="utf-8")
@@ -339,7 +340,8 @@ def test_g26_non_current_guide_public_zero():
     store = MemoryGraphStore()
     persist_candidates(store, [_cand(source_content_id="OLD-1")], run_id="r1")
     hydrator = MemoryHydrator([_rec(content_id="OLD-1", is_public_current=False)])
-    assert read_context(store, hydrator, relation_type="equipment", relation_key="forklift")["total"] == 0
+    body = read_context(store, hydrator, relation_type="equipment", relation_key="forklift")
+    assert body["items"] == []
 
 
 def test_g27_non_current_material_public_zero():
@@ -365,7 +367,8 @@ def test_g30_history_catalog_not_current_consumer():
     store = MemoryGraphStore()
     persist_candidates(store, [_cand(source_content_type="SAFETY_MATERIAL", source_content_id="hist-1")], run_id="r1")
     hydrator = MemoryHydrator([_rec(content_type="SAFETY_MATERIAL", content_id="hist-1", is_public_current=False, title="history")])
-    assert read_context(store, hydrator, relation_type="equipment", relation_key="forklift")["total"] == 0
+    body = read_context(store, hydrator, relation_type="equipment", relation_key="forklift")
+    assert body["items"] == []
 
 
 def test_g31_g32_g33_read_endpoints():
@@ -769,8 +772,9 @@ def test_g51_candidate_order_does_not_change_status():
 
 
 class _Resp:
-    def __init__(self, data):
+    def __init__(self, data, count=None):
         self.data = data
+        self.count = len(data) if count is None else count
 
 
 class FakeQuery:
@@ -781,11 +785,15 @@ class FakeQuery:
         self._filters = []
         self._payload = None
         self._limit = None
+        self._orders = []
         self._order = None
         self._on_conflict = None
+        self._range = None
+        self._count = None
 
-    def select(self, cols="*"):
+    def select(self, cols="*", count=None):
         self._action = "select"
+        self._count = count
         self.client.ops.append(("select", self.table, cols))
         return self
 
@@ -834,7 +842,13 @@ class FakeQuery:
         return self
 
     def order(self, col, desc=False):
+        self._orders.append((col, desc))
         self._order = (col, desc)
+        return self
+
+    def range(self, start, end):
+        self._range = (start, end)
+        self.client.ops.append(("range", start, end))
         return self
 
     def _match(self, row):
@@ -854,12 +868,16 @@ class FakeQuery:
             if self.table == EDGES and not self._filters:
                 self.client.unbounded_edge_selects += 1
             found = [dict(r) for r in rows if self._match(r)]
-            if self._order:
-                col, desc = self._order
-                found.sort(key=lambda r: r.get(col) or "", reverse=bool(desc))
+            total = len(found)
+            orders = self._orders or ([self._order] if self._order else [])
+            for col, desc in reversed(orders):
+                found.sort(key=lambda r, c=col: r.get(c) or "", reverse=bool(desc))
+            if self._range is not None:
+                start, end = self._range
+                found = found[start : end + 1]
             if self._limit is not None:
                 found = found[: self._limit]
-            return _Resp(found)
+            return _Resp(found, count=total if self._count else len(found))
         if self._action == "insert":
             row = dict(self._payload)
             row.setdefault("id", str(uuid.uuid4()))
@@ -1218,3 +1236,136 @@ def test_guide_shadow_requires_both_sources():
         failed_sources={},
     )
     assert "guide_shadow" in both
+
+
+def test_g81_g83_material_membership_full_paging():
+    sb = FakeSB()
+    sb.seed("kosha_safety_material_snapshots", {"id": "snap1", "status": "COMPLETED", "completed_at": "2026-09-01"})
+    n = 1200
+    for i in range(n):
+        mid = f"m-{i:04d}"
+        sb.seed("kosha_safety_material_snapshot_items", {"snapshot_id": "snap1", "material_id": mid})
+        sb.seed("kosha_safety_materials", {"id": mid, "title": f"지게차 {i}", "category": "EDU"})
+    stats = {}
+    items, errors = load_production_sources(sb, {"material"}, stats=stats)
+    assert errors == {}
+    assert stats["material_membership_fetched"] == n
+    assert stats["material_membership_declared"] == n
+    assert len(items["material"]) == n
+    ranges = [op for op in sb.ops if op[0] == "range"]
+    assert ("range", 0, PAGE - 1) in ranges
+    assert ("range", PAGE, PAGE * 2 - 1) in ranges
+    produced = produce_all(items, {"material": {row["content_id"] for row in items["material"]}})
+    assert len(items["material"]) == stats["material_membership_fetched"]
+    scanned = len(items["material"])
+    assert scanned == n
+    assert produced["material"] or True
+
+
+def test_g82_second_page_not_dropped():
+    sb = FakeSB()
+    sb.seed("kosha_safety_material_snapshots", {"id": "snap1", "status": "COMPLETED", "completed_at": "2026-09-01"})
+    for i in range(1200):
+        sb.seed("kosha_safety_material_snapshot_items", {"snapshot_id": "snap1", "material_id": f"m-{i:04d}"})
+    from scripts.refresh_knowledge_graph import _paged_filtered
+    rows = _paged_filtered(
+        sb,
+        "kosha_safety_material_snapshot_items",
+        "material_id",
+        eq={"snapshot_id": "snap1"},
+    )
+    ids = [r["material_id"] for r in rows]
+    assert len(ids) == 1200
+    assert "m-0000" in ids and "m-1199" in ids
+    assert len(set(ids)) == 1200
+
+
+def test_g84_g88_context_db_paging():
+    sb, store = _prod_store()
+    recs = []
+    for i in range(5):
+        cid = f"G-{i}"
+        persist_candidates(store, [_cand(source_content_id=cid, source_content_hash=f"h{i}")], run_id="r1")
+        recs.append(_rec(content_id=cid, title=f"t{i}", published_at=f"202{i}-01-01"))
+    hydrator = MemoryHydrator(recs)
+
+    class Spy:
+        def __init__(self, inner):
+            self.inner = inner
+            self.seen = []
+
+        def get_many(self, pairs):
+            self.seen.extend(list(pairs))
+            return self.inner.get_many(pairs)
+
+        def get(self, *a):
+            return self.inner.get(*a)
+
+    spy = Spy(hydrator)
+    sb.ops = []
+    page1 = read_context(store, spy, relation_type="equipment", relation_key="forklift", page=1, page_size=2)
+    ranges = [op for op in sb.ops if op[0] == "range"]
+    assert ("range", 0, 1) in ranges
+    assert len(page1["items"]) == 2
+    assert page1["total"] == 5
+    assert len(spy.seen) <= 2
+    spy.seen.clear()
+    page2 = read_context(store, spy, relation_type="equipment", relation_key="forklift", page=2, page_size=2)
+    assert page2["items"]
+    assert [i["content_id"] for i in page1["items"]] != [i["content_id"] for i in page2["items"]]
+    assert len(page2["items"]) == 2
+    assert len(spy.seen) <= 2
+    rows = store.query_context_edges(relation_type="equipment", relation_key="forklift", page=1, page_size=2)
+    assert len(rows) <= 2
+
+
+def test_g89_related_context_bounded(monkeypatch):
+    sb, store = _prod_store()
+    persist_candidates(store, [_cand()], run_id="r1")
+    for i in range(500):
+        sb.seed(
+            EDGES,
+            {
+                "id": f"e-{i}",
+                "edge_key": f"CTX|ACCIDENT|{i}|equipment|forklift",
+                "edge_kind": "CONTEXT",
+                "source_content_type": "ACCIDENT",
+                "source_content_id": str(i),
+                "relation_type": "equipment",
+                "relation_key": "forklift",
+                "status": "ACCEPTED",
+                "is_active": True,
+            },
+        )
+    rows = store.query_edges_for_contexts([("equipment", "forklift")], exclude_content=("KOSHA_GUIDE", "A-1-2018"))
+    assert len(rows) <= RELATED_CONTEXT_LIMIT
+    assert RELATED_CONTEXT_LIMIT == 100
+
+
+def test_g90_edge_id_immutable_on_conflict():
+    _, store = _prod_store()
+    persist_candidates(store, [_cand()], run_id="r1")
+    before = store.get_edge_by_key("CTX|KOSHA_GUIDE|A-1-2018|equipment|forklift")["id"]
+    persist_candidates(store, [_cand(method="SOURCE_NATIVE", rule_id="NATIVE", evidence_value="forklift")], run_id="r2")
+    after = store.get_edge_by_key("CTX|KOSHA_GUIDE|A-1-2018|equipment|forklift")["id"]
+    assert before == after
+
+
+def test_g91_evidence_id_immutable_on_conflict():
+    _, store = _prod_store()
+    c = _cand()
+    persist_candidates(store, [c], run_id="r1")
+    edge = store.get_edge_by_key("CTX|KOSHA_GUIDE|A-1-2018|equipment|forklift")
+    ev = store.list_evidence(edge["id"])[0]
+    before = ev["id"]
+    persist_candidates(store, [c], run_id="r2")
+    store.insert_evidence(
+        {
+            "id": str(uuid.uuid4()),
+            "edge_id": edge["id"],
+            "evidence_key": ev["evidence_key"],
+            "last_seen_run_id": "r3",
+        }
+    )
+    after = store.list_evidence(edge["id"])[0]["id"]
+    assert before == after

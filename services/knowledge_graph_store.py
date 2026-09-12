@@ -83,6 +83,8 @@ RUN_COLS = (
 )
 
 EDGE_SELECT = ",".join(EDGE_COLS)
+RELATED_CONTEXT_LIMIT = 100
+CONTEXT_ORDER = ("source_content_type", "source_content_id")
 IN_CHUNK = 200
 
 
@@ -140,14 +142,22 @@ class SupabaseGraphStore:
 
     def upsert_edge(self, row: dict[str, Any]) -> dict[str, Any]:
         payload = _pick(row, EDGE_COLS)
-        if not payload.get("id"):
-            existing = self.get_edge_by_key(row["edge_key"])
-            if existing:
-                payload["id"] = existing["id"]
-            else:
-                payload["id"] = str(uuid.uuid4())
-        self.sb.table(EDGES).upsert(payload, on_conflict="edge_key").execute()
-        self.graph_writes += 1
+        payload.pop("id", None)
+        existing = self.get_edge_by_key(row["edge_key"])
+        if existing:
+            self.sb.table(EDGES).update(payload).eq("id", existing["id"]).execute()
+            self.graph_writes += 1
+            return self.get_edge_by_key(row["edge_key"]) or existing
+        try:
+            self.sb.table(EDGES).insert(payload).execute()
+            self.graph_writes += 1
+        except Exception:
+            raced = self.get_edge_by_key(row["edge_key"])
+            if not raced:
+                raise
+            self.sb.table(EDGES).update(payload).eq("id", raced["id"]).execute()
+            self.graph_writes += 1
+            return self.get_edge_by_key(row["edge_key"]) or raced
         return self.get_edge_by_key(row["edge_key"]) or payload
 
     def get_evidence(self, edge_id: str, evidence_key: str) -> dict[str, Any] | None:
@@ -164,11 +174,28 @@ class SupabaseGraphStore:
 
     def insert_evidence(self, row: dict[str, Any]) -> dict[str, Any]:
         payload = _pick(row, EVIDENCE_COLS)
-        payload.setdefault("id", str(uuid.uuid4()))
+        payload.pop("id", None)
         payload.setdefault("evidence_json", {})
-        self.sb.table(EVIDENCE).upsert(payload, on_conflict="edge_id,evidence_key").execute()
-        self.graph_writes += 1
-        return self.get_evidence(payload["edge_id"], payload["evidence_key"]) or payload
+        existing = self.get_evidence(row["edge_id"], row["evidence_key"])
+        if existing:
+            self.sb.table(EVIDENCE).update({"last_seen_run_id": payload.get("last_seen_run_id")}).eq(
+                "id", existing["id"]
+            ).execute()
+            self.graph_writes += 1
+            return self.get_evidence(row["edge_id"], row["evidence_key"]) or existing
+        try:
+            self.sb.table(EVIDENCE).insert(payload).execute()
+            self.graph_writes += 1
+        except Exception:
+            raced = self.get_evidence(row["edge_id"], row["evidence_key"])
+            if not raced:
+                raise
+            self.sb.table(EVIDENCE).update({"last_seen_run_id": payload.get("last_seen_run_id")}).eq(
+                "id", raced["id"]
+            ).execute()
+            self.graph_writes += 1
+            return self.get_evidence(row["edge_id"], row["evidence_key"]) or raced
+        return self.get_evidence(row["edge_id"], row["evidence_key"]) or payload
 
     def update_evidence(self, evidence_id: str, patch: dict[str, Any]) -> None:
         self.sb.table(EVIDENCE).update(patch).eq("id", evidence_id).execute()
@@ -178,15 +205,7 @@ class SupabaseGraphStore:
         resp = self.sb.table(EVIDENCE).select("*").eq("edge_id", edge_id).execute()
         return [dict(r) for r in (resp.data or [])]
 
-    def query_context_edges(
-        self,
-        *,
-        relation_type: str,
-        relation_key: str,
-        content_type: str | None = None,
-        page: int = 1,
-        page_size: int = 20,
-    ) -> list[dict[str, Any]]:
+    def _context_base_query(self, *, relation_type: str, relation_key: str, content_type: str | None = None):
         q = (
             self.sb.table(EDGES)
             .select(EDGE_SELECT)
@@ -198,7 +217,50 @@ class SupabaseGraphStore:
         )
         if content_type:
             q = q.eq("source_content_type", content_type)
-        resp = q.execute()
+        return q
+
+    def count_context_edges(
+        self,
+        *,
+        relation_type: str,
+        relation_key: str,
+        content_type: str | None = None,
+    ) -> int:
+        q = (
+            self.sb.table(EDGES)
+            .select("id", count="exact")
+            .eq("edge_kind", "CONTEXT")
+            .eq("relation_type", relation_type)
+            .eq("relation_key", relation_key)
+            .eq("status", "ACCEPTED")
+            .eq("is_active", True)
+        )
+        if content_type:
+            q = q.eq("source_content_type", content_type)
+        resp = q.limit(1).execute()
+        return int(getattr(resp, "count", None) or 0)
+
+    def query_context_edges(
+        self,
+        *,
+        relation_type: str,
+        relation_key: str,
+        content_type: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> list[dict[str, Any]]:
+        page_n = max(int(page), 1)
+        size_n = max(int(page_size), 1)
+        start = (page_n - 1) * size_n
+        end = start + size_n - 1
+        q = self._context_base_query(
+            relation_type=relation_type,
+            relation_key=relation_key,
+            content_type=content_type,
+        )
+        for col in CONTEXT_ORDER:
+            q = q.order(col)
+        resp = q.range(start, end).execute()
         return [dict(r) for r in (resp.data or [])]
 
     def query_item_context_edges(self, *, content_type: str, content_id: str) -> list[dict[str, Any]]:
@@ -219,12 +281,17 @@ class SupabaseGraphStore:
         contexts: list[tuple[str, str]],
         *,
         exclude_content: tuple[str, str] | None = None,
+        limit: int = RELATED_CONTEXT_LIMIT,
     ) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         seen = set()
+        bound = max(int(limit), 1)
         for relation_type, relation_key in contexts:
-            rows = self.query_context_edges(relation_type=relation_type, relation_key=relation_key)
-            for row in rows:
+            q = self._context_base_query(relation_type=relation_type, relation_key=relation_key)
+            for col in CONTEXT_ORDER:
+                q = q.order(col)
+            resp = q.range(0, bound - 1).execute()
+            for row in resp.data or []:
                 if exclude_content and (
                     row.get("source_content_type"),
                     row.get("source_content_id"),
@@ -234,7 +301,7 @@ class SupabaseGraphStore:
                 if key in seen:
                     continue
                 seen.add(key)
-                out.append(row)
+                out.append(dict(row))
         return out
 
     def query_stale_scope_edges(

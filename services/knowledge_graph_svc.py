@@ -158,6 +158,13 @@ class GraphStore(Protocol):
         page: int = 1,
         page_size: int = 20,
     ) -> list[dict[str, Any]]: ...
+    def count_context_edges(
+        self,
+        *,
+        relation_type: str,
+        relation_key: str,
+        content_type: str | None = None,
+    ) -> int: ...
     def query_item_context_edges(self, *, content_type: str, content_id: str) -> list[dict[str, Any]]: ...
     def query_edges_for_contexts(
         self,
@@ -208,11 +215,13 @@ class MemoryGraphStore:
     def upsert_edge(self, row: dict[str, Any]) -> dict[str, Any]:
         existing = self.edges.get(row["edge_key"])
         if existing:
+            keep_id = existing.get("id") or str(uuid.uuid4())
             existing.update(row)
-            existing["id"] = existing.get("id") or str(uuid.uuid4())
+            existing["id"] = keep_id
             return dict(existing)
         stored = dict(row)
-        stored["id"] = stored.get("id") or str(uuid.uuid4())
+        stored.pop("id", None)
+        stored["id"] = str(uuid.uuid4())
         self.edges[stored["edge_key"]] = stored
         return dict(stored)
 
@@ -221,9 +230,15 @@ class MemoryGraphStore:
         return dict(row) if row else None
 
     def insert_evidence(self, row: dict[str, Any]) -> dict[str, Any]:
+        key = (row["edge_id"], row["evidence_key"])
+        existing = self.evidence.get(key)
+        if existing:
+            existing["last_seen_run_id"] = row.get("last_seen_run_id", existing.get("last_seen_run_id"))
+            return dict(existing)
         stored = dict(row)
-        stored["id"] = stored.get("id") or str(uuid.uuid4())
-        self.evidence[(stored["edge_id"], stored["evidence_key"])] = stored
+        stored.pop("id", None)
+        stored["id"] = str(uuid.uuid4())
+        self.evidence[key] = stored
         return dict(stored)
 
     def update_evidence(self, evidence_id: str, patch: dict[str, Any]) -> None:
@@ -247,16 +262,38 @@ class MemoryGraphStore:
         page: int = 1,
         page_size: int = 20,
     ) -> list[dict[str, Any]]:
-        del page, page_size
+        out = self._matching_context_edges(relation_type, relation_key, content_type)
+        start = max(int(page) - 1, 0) * max(int(page_size), 1)
+        end = start + max(int(page_size), 1)
+        return out[start:end]
+
+    def count_context_edges(
+        self,
+        *,
+        relation_type: str,
+        relation_key: str,
+        content_type: str | None = None,
+    ) -> int:
+        return len(self._matching_context_edges(relation_type, relation_key, content_type))
+
+    def _matching_context_edges(
+        self,
+        relation_type: str,
+        relation_key: str,
+        content_type: str | None = None,
+    ) -> list[dict[str, Any]]:
         out = []
         for edge in self.list_edges():
             if edge.get("edge_kind") != "CONTEXT":
+                continue
+            if edge.get("status") != "ACCEPTED" or edge.get("is_active") is not True:
                 continue
             if edge.get("relation_type") != relation_type or edge.get("relation_key") != relation_key:
                 continue
             if content_type and edge.get("source_content_type") != content_type:
                 continue
             out.append(edge)
+        out.sort(key=lambda e: (e.get("source_content_type") or "", e.get("source_content_id") or ""))
         return out
 
     def query_item_context_edges(self, *, content_type: str, content_id: str) -> list[dict[str, Any]]:
@@ -273,21 +310,27 @@ class MemoryGraphStore:
         contexts: list[tuple[str, str]],
         *,
         exclude_content: tuple[str, str] | None = None,
+        limit: int = 100,
     ) -> list[dict[str, Any]]:
-        wanted = set(contexts)
+        from services.knowledge_graph_store import RELATED_CONTEXT_LIMIT
+
+        bound = max(int(limit or RELATED_CONTEXT_LIMIT), 1)
+        wanted = list(contexts)
         out = []
-        for edge in self.list_edges():
-            if edge.get("edge_kind") != "CONTEXT":
-                continue
-            ident = (edge.get("relation_type"), edge.get("relation_key"))
-            if ident not in wanted:
-                continue
-            if exclude_content and (
-                edge.get("source_content_type"),
-                edge.get("source_content_id"),
-            ) == exclude_content:
-                continue
-            out.append(edge)
+        seen = set()
+        for relation_type, relation_key in wanted:
+            rows = self._matching_context_edges(relation_type, relation_key)[:bound]
+            for edge in rows:
+                if exclude_content and (
+                    edge.get("source_content_type"),
+                    edge.get("source_content_id"),
+                ) == exclude_content:
+                    continue
+                key = edge.get("id") or edge.get("edge_key")
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(edge)
         return out
 
     def query_stale_scope_edges(
@@ -864,11 +907,11 @@ def read_context(
             continue
         seen.add(ident)
         items.append(rec)
-    items.sort(key=lambda r: ((r.published_at or ""), r.content_type, r.content_id), reverse=False)
-    items.sort(key=lambda r: r.published_at or "", reverse=True)
-    total = len(items)
-    start = max(page - 1, 0) * page_size
-    page_items = items[start:start + page_size]
+    total = store.count_context_edges(
+        relation_type=relation_type,
+        relation_key=relation_key,
+        content_type=content_type,
+    )
     return strip_forbidden(
         {
             "status": "ok",
@@ -878,7 +921,7 @@ def read_context(
                 "relation_label": label,
             },
             "total": total,
-            "items": [strip_forbidden(r.public_item()) for r in page_items],
+            "items": [strip_forbidden(r.public_item()) for r in items],
         }
     )
 

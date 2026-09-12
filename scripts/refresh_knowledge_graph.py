@@ -55,11 +55,15 @@ def _parse_context(raw: str | None) -> tuple[str, str] | None:
     return rel_type.strip(), rel_key.strip()
 
 
-def _paged(sb, table: str, columns: str) -> list[dict]:
+def _paged_filtered(sb, table: str, columns: str, eq: dict | None = None) -> list[dict]:
     rows: list[dict] = []
     start = 0
+    filters = dict(eq or {})
     while True:
-        resp = sb.table(table).select(columns).range(start, start + PAGE - 1).execute()
+        q = sb.table(table).select(columns)
+        for key, value in filters.items():
+            q = q.eq(key, value)
+        resp = q.range(start, start + PAGE - 1).execute()
         batch = list(resp.data or [])
         rows.extend(batch)
         if len(batch) < PAGE:
@@ -68,10 +72,17 @@ def _paged(sb, table: str, columns: str) -> list[dict]:
     return rows
 
 
-def load_production_sources(sb, wanted: set[str]) -> tuple[dict[str, list], dict[str, str]]:
+def _paged(sb, table: str, columns: str) -> list[dict]:
+    return _paged_filtered(sb, table, columns)
+
+
+def load_production_sources(
+    sb, wanted: set[str], stats: dict | None = None
+) -> tuple[dict[str, list], dict[str, str]]:
     """Fetch current public contracts. Does not write source tables."""
     items: dict[str, list] = {}
     errors: dict[str, str] = {}
+    stats = stats if stats is not None else {}
     if "guide" in wanted:
         try:
             rows = _paged(
@@ -107,14 +118,26 @@ def load_production_sources(sb, wanted: set[str]) -> tuple[dict[str, list], dict
             snap = (snaps.data or [None])[0]
             if not snap:
                 items["material"] = []
+                stats["material_membership_declared"] = 0
+                stats["material_membership_fetched"] = 0
             else:
-                mem = (
+                count_resp = (
                     sb.table("kosha_safety_material_snapshot_items")
-                    .select("material_id")
+                    .select("material_id", count="exact")
                     .eq("snapshot_id", snap["id"])
+                    .limit(1)
                     .execute()
                 )
-                ids = [r["material_id"] for r in (mem.data or []) if r.get("material_id")]
+                declared = int(getattr(count_resp, "count", None) or 0)
+                mem = _paged_filtered(
+                    sb,
+                    "kosha_safety_material_snapshot_items",
+                    "material_id",
+                    eq={"snapshot_id": snap["id"]},
+                )
+                ids = [r["material_id"] for r in mem if r.get("material_id")]
+                stats["material_membership_declared"] = declared or len(ids)
+                stats["material_membership_fetched"] = len(ids)
                 catalog = []
                 details = {}
                 for i in range(0, len(ids), PAGE):
@@ -172,12 +195,11 @@ def load_production_sources(sb, wanted: set[str]) -> tuple[dict[str, list], dict
             errors["accident"] = str(exc)
     if "law" in wanted:
         try:
-            rows = (
-                sb.table("law_revision_board")
-                .select("id,law_name,summary,status,is_public,enforcement_date")
-                .eq("is_public", True)
-                .eq("status", "PUBLISHED")
-                .execute()
+            rows = _paged_filtered(
+                sb,
+                "law_revision_board",
+                "id,law_name,summary,status,is_public,enforcement_date",
+                eq={"is_public": True, "status": "PUBLISHED"},
             )
             items["law"] = [
                 {
@@ -189,7 +211,7 @@ def load_production_sources(sb, wanted: set[str]) -> tuple[dict[str, list], dict
                     "is_public": r.get("is_public"),
                     "published_at": r.get("enforcement_date"),
                 }
-                for r in (rows.data or [])
+                for r in rows
             ]
         except Exception as exc:
             errors["law"] = str(exc)
@@ -291,6 +313,7 @@ def main(argv: list[str] | None = None, *, graph_store=None) -> int:
     context_filter = _parse_context(args.context)
 
     failed = {}
+    source_stats: dict = {}
     if args.fixture_json:
         with open(args.fixture_json, encoding="utf-8") as fh:
             items_by_source = json.load(fh)
@@ -298,7 +321,7 @@ def main(argv: list[str] | None = None, *, graph_store=None) -> int:
     else:
         from db.supabase_client import get_supabase
         sb = get_supabase()
-        items_by_source, failed = load_production_sources(sb, wanted)
+        items_by_source, failed = load_production_sources(sb, wanted, stats=source_stats)
 
     current_ids = {
         key: {str(item.get("content_id")) for item in rows if item.get("content_id")}
@@ -326,6 +349,7 @@ def main(argv: list[str] | None = None, *, graph_store=None) -> int:
         )
         payload = report.as_dict()
         payload["db_write"] = 1
+        payload["source_stats"] = source_stats
         payload["graph_tables"] = sorted(GRAPH_TABLES)
         payload["source_tables"] = sorted(SOURCE_TABLES)
         payload["source_writes"] = store.source_writes()
@@ -342,6 +366,7 @@ def main(argv: list[str] | None = None, *, graph_store=None) -> int:
     )
     payload = report.as_dict()
     payload["db_write"] = 0
+    payload["source_stats"] = source_stats
     payload["started_at"] = now_kst().isoformat()
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if report.status in {"DRY_RUN", "COMPLETED"} else 1
