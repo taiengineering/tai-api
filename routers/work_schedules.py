@@ -277,7 +277,8 @@ def confirm_schedules(factory_id: str, body: ConfirmBody, current: dict = Depend
     """
     v1.1.0: 검토 완료 후 스케줄 확정.
     1. is_excluded=FALSE → reviewed_at/reviewed_by, custom_cycle→cycle_code
-    2. is_excluded=TRUE → status_code='EXCLUDED', is_active=FALSE
+    2. is_excluded=TRUE → status_code='EXCLUDED', active_yn=FALSE
+       (executability axis = active_yn; do not write non-column is_active)
     """
     supabase = get_supabase()
     _ensure_ws_factory_access(supabase, factory_id, current)   # 타사·타시설 404
@@ -317,7 +318,7 @@ def confirm_schedules(factory_id: str, body: ConfirmBody, current: dict = Depend
             batch = exc_ids[i:i+50]
             supabase.table("work_schedules").update({
                 "status_code": "EXCLUDED",
-                "is_active":   False,
+                "active_yn":   False,
                 "updated_at":  now,
             }).in_("id", batch).execute()
         excluded = len(excluded_rows)

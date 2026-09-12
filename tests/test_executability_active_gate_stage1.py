@@ -20,14 +20,24 @@ from services.work_schedule_executability import require_active_executable
 class _Chain:
     """Minimal Supabase query chain that records filters and returns matching rows."""
 
-    def __init__(self, rows, name="work_schedules"):
+    def __init__(self, rows, name="work_schedules", client=None):
         self.name = name
         self.rows = rows
+        self.client = client
         self.filters = {}
         self._in = {}
         self._ops = []
+        self._op = "select"
+        self._payload = None
 
     def select(self, *a, **k):
+        self._op = "select"
+        return self
+
+    def update(self, payload):
+        self._op = "update"
+        self._payload = dict(payload)
+        self._ops.append(("update", payload))
         return self
 
     def eq(self, k, v):
@@ -66,6 +76,25 @@ class _Chain:
         return self
 
     def execute(self):
+        if self._op == "update":
+            if self.client is not None:
+                self.client.updates.append(
+                    {"table": self.name, "payload": dict(self._payload), "filters": dict(self.filters), "in": dict(self._in)}
+                )
+            for r in self.rows:
+                ok = True
+                for k, v in self.filters.items():
+                    if r.get(k) != v:
+                        ok = False
+                        break
+                if ok and self._in:
+                    for k, vals in self._in.items():
+                        if r.get(k) not in vals:
+                            ok = False
+                            break
+                if ok:
+                    r.update(self._payload)
+            return SimpleNamespace(data=[{"ok": True}])
         out = []
         for r in self.rows:
             ok = True
@@ -88,9 +117,10 @@ class _SB:
     def __init__(self, rows_by_table):
         self.rows_by_table = rows_by_table
         self.last = {}
+        self.updates = []
 
     def table(self, name):
-        ch = _Chain(self.rows_by_table.get(name, []), name)
+        ch = _Chain(self.rows_by_table.get(name, []), name, client=self)
         self.last[name] = ch
         return ch
 
@@ -158,7 +188,7 @@ def test_upcoming_excludes_inactive_preserves_status_predicate(monkeypatch):
     class SB2(_SB):
         def table(self, name):
             # count queries use select id count=exact — still return Chain
-            ch = _Chain(self.rows_by_table.get(name, []), name)
+            ch = _Chain(self.rows_by_table.get(name, []), name, client=self)
             self.last[name] = ch
             return ch
 
@@ -273,3 +303,95 @@ def test_status_counts_path_not_using_active_gate_helper():
     # Verify helper appears once-ish in upcoming branch only by checking overdue block.
     assert "overdue_res = supabase.table" in src or "overdue_res = supabase.table(" in src.replace("\n", " ")
     assert "require_active_executable(upcoming_q)" in src
+
+
+def test_confirm_excluded_writes_active_yn_false_not_is_active(monkeypatch):
+    """PATCH-R1: confirm exclusion aligns executability axis to active_yn=false."""
+    fid = "f-confirm"
+    rows = [
+        {
+            "id": "ex1",
+            "factory_id": fid,
+            "is_excluded": True,
+            "active_yn": True,
+            "status_code": "planned",
+            "custom_cycle": None,
+        },
+        {
+            "id": "ok1",
+            "factory_id": fid,
+            "is_excluded": False,
+            "active_yn": True,
+            "status_code": "planned",
+            "custom_cycle": None,
+        },
+        {
+            "id": "already_off",
+            "factory_id": fid,
+            "is_excluded": False,
+            "active_yn": False,
+            "status_code": "planned",
+            "custom_cycle": None,
+        },
+    ]
+    sb = _SB({"work_schedules": rows})
+    monkeypatch.setattr(ws, "get_supabase", lambda: sb)
+    monkeypatch.setattr(ws, "_ensure_ws_factory_access", lambda *a, **k: None)
+    monkeypatch.setattr(ws, "_now", lambda: "2026-09-12T00:00:00+00:00")
+
+    out = ws.confirm_schedules(fid, ws.ConfirmBody(reviewed_by="user-1"), current={"id": "u"})
+    assert out["data"]["excluded"] == 1
+    assert out["data"]["confirmed"] == 1  # only active_yn=true + not excluded
+
+    excl_updates = [u for u in sb.updates if u["payload"].get("status_code") == "EXCLUDED"]
+    assert len(excl_updates) == 1
+    payload = excl_updates[0]["payload"]
+    assert payload.get("active_yn") is False
+    assert "is_active" not in payload
+
+    # row mutated in place
+    ex = next(r for r in rows if r["id"] == "ex1")
+    assert ex["active_yn"] is False
+    assert ex["status_code"] == "EXCLUDED"
+
+    # active branch must still require active_yn=true (already_off not confirmed)
+    ok = next(r for r in rows if r["id"] == "ok1")
+    assert ok["active_yn"] is True
+    assert "reviewed_at" in ok
+
+    already = next(r for r in rows if r["id"] == "already_off")
+    assert already["active_yn"] is False
+    assert "reviewed_at" not in already
+
+    # executable list excludes inactivated excluded row
+    monkeypatch.setattr(ws, "_is_admin", lambda *a, **k: True)
+    monkeypatch.setattr(ws, "_scope", lambda *a, **k: "ALL")
+    monkeypatch.setattr(ws, "_tier", lambda *a, **k: "ALL")
+    monkeypatch.setattr(ws, "scoped_filter", lambda *a, **k: {})
+    monkeypatch.setattr(ws, "apply_scoped_filter", lambda q, filt: q)
+
+    listed = ws.get_work_schedules(
+        company_id="c1",
+        factory_id=fid,
+        status_code=None,
+        source_type=None,
+        obligation_type=None,
+        is_assigned=None,
+        planned_date_from=None,
+        planned_date_to=None,
+        keyword=None,
+        page=1,
+        size=50,
+        current={"id": "u", "role_code": "001"},
+    )
+    ids = {r["id"] for r in listed["data"]["items"]}
+    assert "ex1" not in ids
+    assert "ok1" in ids
+    assert "already_off" not in ids
+
+
+def test_confirm_schedules_source_has_no_is_active_write():
+    import inspect
+    src = inspect.getsource(ws.confirm_schedules)
+    assert '"is_active"' not in src
+    assert '"active_yn":   False' in src or '"active_yn": False' in src
