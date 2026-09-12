@@ -1,0 +1,16 @@
+{
+  "result": "success",
+  "payload": {
+    "list": [
+      {
+        "contsAplyNo": 42686,
+        "contsAtcflNo": "FL00015908839",
+        "contsAtcflSeq": 1,
+        "contsAtcflSeCd": "20",
+        "contsAtcflScrnIndctYn": "Y",
+        "orgnlAtchFileNm": "sample-opl.pdf",
+        "atcflSz": 1281462
+      }
+    ]
+  }
+}
