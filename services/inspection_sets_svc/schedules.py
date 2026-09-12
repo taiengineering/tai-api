@@ -41,9 +41,7 @@ def generate_schedules_all() -> dict:
             "assignee_synced": r.get("assignee_synced", 0),
             "preserved_existing": r.get("preserved_existing", 0),
             "preserved_child_linked": r.get("preserved_child_linked", 0),
-            "stale_converged": r.get("stale_converged", 0),
-            "stale_removed": r.get("stale_removed", 0),
-            "delete_count": r.get("delete_count", 0),
+            "stale_preserved": r.get("stale_preserved", 0),
         })
     return {
         "status": "success",
@@ -78,9 +76,7 @@ def generate_schedules_for_factory(factory_id: str, mode: str, force: bool) -> d
                 "assignee_synced": r.get("assignee_synced", 0),
                 "preserved_existing": r.get("preserved_existing", 0),
                 "preserved_child_linked": r.get("preserved_child_linked", 0),
-                "stale_converged": r.get("stale_converged", 0),
-                "stale_removed": r.get("stale_removed", 0),
-                "delete_count": r.get("delete_count", 0),
+                "stale_preserved": r.get("stale_preserved", 0),
             },
         }
     sets = supabase.table("inspection_sets").select(
