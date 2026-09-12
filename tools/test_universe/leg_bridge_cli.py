@@ -14,13 +14,13 @@ import hashlib
 import json
 import sys
 from collections import Counter
-from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from services.time import now_kst, serialize_external_utc  # noqa: E402
 from leg_bridge import (  # noqa: E402
     EXPECTED_PROFILE_COUNT,
     MAPPING_VERSION,
@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
 
     type_counts = summary["type_counts"]
     summary.update({
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "generated_at_utc": serialize_external_utc(now_kst()),
         "universe_path": str(universe_path),
         "universe_sha256": _sha256_file(universe_path),
         "out": str(out.resolve()),
