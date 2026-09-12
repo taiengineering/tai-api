@@ -227,6 +227,62 @@ def _stop(code: str, item: dict, err=None) -> None:
     raise sr from err
 
 
+def catalog_items_for_asset_ids(store, query, asset_ids) -> tuple[dict, set, str]:
+    """Load eligible catalog rows for OPEN HOLD retry. Does not hardcode IDs."""
+    from ..enrichment import snapshot_precondition
+    from .eligibility import is_eligible_asset
+
+    pre = snapshot_precondition(store)
+    snapshot_id = pre["snapshot"]["id"]
+    member_ids = [m["material_id"] for m in pre["membership"]]
+    membership = set(member_ids)
+    details = query.details_for(member_ids)
+    want = set()
+    for x in asset_ids:
+        if x is None:
+            continue
+        want.add(x)
+        try:
+            want.add(int(x))
+        except (TypeError, ValueError):
+            pass
+    items: dict = {}
+    for a in query.assets_for(member_ids):
+        aid = a.get("id")
+        if aid not in want:
+            try:
+                if int(aid) not in want:
+                    continue
+            except (TypeError, ValueError):
+                continue
+        d = details.get(a.get("material_id") or "")
+        if not d or not is_eligible_asset(a, d, membership):
+            continue
+        row = {
+            "asset_id": aid,
+            "material_id": a["material_id"],
+            "asset_type": a.get("asset_type"),
+            "file_name": a.get("file_name"),
+            "file_size": a.get("file_size"),
+            "mime_type": a.get("mime_type"),
+            "source_asset_key": a.get("checksum"),
+            "checksum": a.get("checksum"),
+            "kogl_type": d.get("kogl_type"),
+            "content_type": d.get("content_type"),
+            "source_med_seq": d.get("source_med_seq"),
+            "source_url": d.get("source_url"),
+            "source_title": d.get("source_title"),
+            "license_name": d.get("license_name"),
+            "license_source_url": d.get("license_source_url"),
+        }
+        items[aid] = row
+        try:
+            items[int(aid)] = row
+        except (TypeError, ValueError):
+            pass
+    return items, membership, snapshot_id
+
+
 def apply_targeted_hold_retry(
     *,
     snapshot_id: str,

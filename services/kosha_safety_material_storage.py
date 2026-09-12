@@ -6,7 +6,12 @@ import os
 from pathlib import Path
 
 from services.kosha_safety_materials.detail_client import StopRun
-from services.kosha_safety_materials.storage.hold_store import SupabaseHoldStore, hold_breakdown, oversize_report
+from services.kosha_safety_materials.storage.hold_retry import (
+    apply_targeted_hold_retry,
+    catalog_items_for_asset_ids,
+    hold_retry_dry_run,
+)
+from services.kosha_safety_materials.storage.hold_store import HoldError, SupabaseHoldStore, hold_breakdown, oversize_report
 from services.kosha_safety_materials.storage.r2_store import R2Error, R2Store, credentials_from_env, make_s3_client
 from services.kosha_safety_materials.storage.runner import (
     apply_assets,
@@ -66,11 +71,26 @@ if __name__ == "__main__":
     p.add_argument("--asset-id", type=int, default=0, help="controlled single asset_id")
     p.add_argument("--batch-size", type=int, default=20)
     p.add_argument("--verify-pilot", action="store_true")
+    p.add_argument("--hold-retry-dry-run", action="store_true")
+    p.add_argument("--hold-retry-apply", action="store_true")
     args = p.parse_args()
     store = SupabaseStore()
     query = StorageQuery(store.sb)
     holds = SupabaseHoldStore(store.sb)
-    if args.dry_run or (not args.apply and not args.verify_pilot):
+    if args.hold_retry_dry_run:
+        snap = store.latest_completed() or {}
+        snapshot_id = snap.get("id")
+        try:
+            out = hold_retry_dry_run(
+                snapshot_id=snapshot_id,
+                holds=holds,
+                versioned_asset_ids=query.versioned_asset_ids(),
+                enforce_baseline=True,
+            )
+        except HoldError as e:
+            _print({"status": e.code, "detail": str(e)}, 2)
+        _print(out, 0)
+    if args.dry_run or (not args.apply and not args.verify_pilot and not args.hold_retry_apply):
         out = dry_run_plan(store, query, holds=holds)
         try:
             credentials_from_env()
@@ -88,6 +108,31 @@ if __name__ == "__main__":
         if args.verify_pilot:
             out = verify_pilot_objects(query, r2)
             out["status"] = "PILOT_OK"
+            _print(out, 0)
+        if args.hold_retry_apply:
+            snap = store.latest_completed() or {}
+            snapshot_id = snap.get("id")
+            plan = hold_retry_dry_run(
+                snapshot_id=snapshot_id,
+                holds=holds,
+                versioned_asset_ids=query.versioned_asset_ids(),
+                enforce_baseline=True,
+            )
+            target_ids = list(plan["multi_match_target_ids"]) + list(plan["binary_retry_target_ids"])
+            items, membership, snap_id = catalog_items_for_asset_ids(store, query, target_ids)
+            out = apply_targeted_hold_retry(
+                snapshot_id=snap_id,
+                holds=holds,
+                items_by_asset_id=items,
+                membership_ids=membership,
+                r2=r2,
+                versions=versions,
+            )
+            out["dry_run"] = {
+                "target_total": plan["target_total"],
+                "multi_match_open": plan["multi_match_open"],
+                "binary_unavailable_open": plan["binary_unavailable_open"],
+            }
             _print(out, 0)
         if args.apply and args.asset_id:
             plan = collect_eligible(store, query, holds=holds)
@@ -122,6 +167,8 @@ if __name__ == "__main__":
         _print({**stop_run_payload(e), **extra}, 2)
     except StorageError as e:
         _print({"status": e.code}, 2)
+    except HoldError as e:
+        _print({"status": e.code, "detail": str(e)}, 2)
     except R2Error as e:
         _print({"status": e.code}, 2)
     _print({"status": "NOOP"}, 0)
