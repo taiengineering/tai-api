@@ -9,15 +9,10 @@ from .law_engine import run_generate_operation_schedules
 
 
 _CYCLE_SKIP_REASON = "주기가 설정되지 않았습니다."
-_ASSIGNEE_SKIP_REASON = "담당자가 지정되지 않았습니다."
 
 
 def _is_legal_engine(iset: dict) -> bool:
     return iset.get("source") == "LEGAL_ENGINE"
-
-
-def _has_assignee(iset: dict) -> bool:
-    return bool(iset.get("assignee_user_id"))
 
 
 def generate_schedules_all() -> dict:
@@ -46,7 +41,9 @@ def generate_schedules_all() -> dict:
             "assignee_synced": r.get("assignee_synced", 0),
             "preserved_existing": r.get("preserved_existing", 0),
             "preserved_child_linked": r.get("preserved_child_linked", 0),
-            "preserved_stale_future": r.get("preserved_stale_future", 0),
+            "stale_converged": r.get("stale_converged", 0),
+            "stale_removed": r.get("stale_removed", 0),
+            "delete_count": r.get("delete_count", 0),
         })
     return {
         "status": "success",
@@ -81,7 +78,9 @@ def generate_schedules_for_factory(factory_id: str, mode: str, force: bool) -> d
                 "assignee_synced": r.get("assignee_synced", 0),
                 "preserved_existing": r.get("preserved_existing", 0),
                 "preserved_child_linked": r.get("preserved_child_linked", 0),
-                "preserved_stale_future": r.get("preserved_stale_future", 0),
+                "stale_converged": r.get("stale_converged", 0),
+                "stale_removed": r.get("stale_removed", 0),
+                "delete_count": r.get("delete_count", 0),
             },
         }
     sets = supabase.table("inspection_sets").select(
@@ -95,6 +94,16 @@ def generate_schedules_for_factory(factory_id: str, mode: str, force: bool) -> d
     for iset in sets:
         set_id = iset["id"]
         name = iset.get("inspection_set_name") or ""
+        # LEGAL_ENGINE must not use legacy cycle/anchor materializer (OPERATION-only).
+        if _is_legal_engine(iset):
+            skipped += 1
+            results.append({
+                "id": set_id,
+                "name": name,
+                "status": "skipped",
+                "reason": "LEGAL_ENGINE_REQUIRES_OTR_MATERIALIZER",
+            })
+            continue
         anchor_str = iset.get("schedule_anchor_date")
         if not anchor_str:
             skipped += 1
@@ -103,11 +112,6 @@ def generate_schedules_for_factory(factory_id: str, mode: str, force: bool) -> d
         if not has_explicit_schedule_cycle(iset):
             skipped += 1
             results.append({"id": set_id, "name": name, "status": "skipped", "reason": _CYCLE_SKIP_REASON})
-            continue
-        # LEGAL_ENGINE readiness: cycle + anchor + assignee. Check before force/delete mutation.
-        if _is_legal_engine(iset) and not _has_assignee(iset):
-            skipped += 1
-            results.append({"id": set_id, "name": name, "status": "skipped", "reason": _ASSIGNEE_SKIP_REASON})
             continue
         existing = supabase.table("work_schedules").select("id").eq("inspection_set_id", set_id).eq("status_code", "SCHEDULED").limit(1).execute()
         if existing.data and not force:

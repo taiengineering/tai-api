@@ -113,6 +113,8 @@ class _Q:
                 }
             )
             row = dict(self._payload)
+            if "id" not in row:
+                row["id"] = f"gen-{len(rows)+1}"
             key = (row.get("inspection_set_id"), row.get("planned_date"), row.get("factory_id"))
             for existing in rows:
                 ekey = (
@@ -134,9 +136,12 @@ class _Q:
             batch = payload if isinstance(payload, list) else [payload]
             out = []
             for row in batch:
-                rows.append(dict(row))
-                self.sb.inserts.append(dict(row))
-                out.append(dict(row))
+                r = dict(row)
+                if "id" not in r:
+                    r["id"] = f"ins-{len(rows)+1}"
+                rows.append(r)
+                self.sb.inserts.append(dict(r))
+                out.append(dict(r))
             return _Resp(out)
 
         if self._op == "update":
@@ -449,38 +454,69 @@ def test_T23_T24_child_free_assignee_sync_only(freeze_today):
     assert ws["source_type"] == "LEGAL"
 
 
-def test_T25_T26_date_drift_preserve_and_create_new(freeze_today):
+def test_R8_stale_child_free_future_converges_via_update(freeze_today):
+    """PATCH-R1: old 12/01 scheduled → UPDATE to latest OTR 11/01 (no dual executable)."""
     sb = _SB()
-    rule = _within(basis="2026-10-01", value=1, unit="month")  # new = 2026-11-01
+    rule = _within(basis="2026-10-01", value=1, unit="month")  # → 2026-11-01
     sb.inspection_sets = [_iset(operation_time_rule=rule)]
     sb.work_schedules = [{
         "id": "ws-old", "factory_id": "f1", "inspection_set_id": "set-1",
         "planned_date": "2026-12-01", "status_code": "scheduled",
-        "assigned_user_id": "user-1",
+        "source_type": "LEGAL", "assigned_user_id": "user-1",
     }]
     out = LE.run_generate_operation_schedules("f1", sb)
-    assert out["created"] == 1
-    assert out["preserved_stale_future"] >= 1
-    assert sb.delete_ops == 0
-    assert any(r.get("planned_date") == "2026-11-01" for r in sb.inserts)
-    # old date untouched
-    assert any(r["id"] == "ws-old" and r["planned_date"] == "2026-12-01" for r in sb.work_schedules)
+    assert out["stale_converged"] == 1
+    assert out["created"] == 0
+    assert out["stale_removed"] == 0
+    assert len([r for r in sb.work_schedules if r.get("inspection_set_id") == "set-1"]) == 1
+    ws = sb.work_schedules[0]
+    assert ws["id"] == "ws-old"
+    assert ws["planned_date"] == "2026-11-01"
+    assert ws["status_code"] == "scheduled"
+    assert ws["source_type"] == "LEGAL"
+    assert not any(r.get("planned_date") == "2026-12-01" for r in sb.work_schedules)
+
+
+def test_R8b_dual_row_leftover_stale_removed_when_unique_blocks(freeze_today):
+    """When latest identity already exists, leftover child-free stale is removed (UNIQUE blocks UPDATE)."""
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [
+        {
+            "id": "ws-new", "factory_id": "f1", "inspection_set_id": "set-1",
+            "planned_date": "2026-11-01", "status_code": "scheduled",
+            "source_type": "LEGAL", "assigned_user_id": "user-1",
+        },
+        {
+            "id": "ws-old", "factory_id": "f1", "inspection_set_id": "set-1",
+            "planned_date": "2026-12-01", "status_code": "scheduled",
+            "source_type": "LEGAL", "assigned_user_id": "user-1",
+        },
+    ]
+    out = LE.run_generate_operation_schedules("f1", sb)
+    assert out["stale_removed"] == 1
+    assert out["delete_count"] == 1
+    assert out["created"] == 0
+    dates = {r["planned_date"] for r in sb.work_schedules if r.get("inspection_set_id") == "set-1"}
+    assert dates == {"2026-11-01"}
 
 
 def test_T27_T28_T29_static_guards_official_source():
     src = inspect.getsource(LE)
-    # official module must not write these literals in upsert/update payloads builders
-    # Allow comments? WO: '"PENDING"' = 0 write — check string literals used as write values.
-    # Hard ban on these string tokens in law_engine.py official path:
     assert '"PENDING"' not in src
     assert "'PENDING'" not in src
     assert '"SCHEDULED"' not in src
     assert "'SCHEDULED'" not in src
     assert '"LAW_ENGINE"' not in src
     assert "'LAW_ENGINE'" not in src
-    assert ".delete(" not in src
+    assert 'status_code": "cancel' not in src
+    assert "status_code': 'cancel" not in src
     assert "legal_actor" not in src
     assert "source_text" not in src
+    # DELETE only via narrow _delete_stale helper (UNIQUE leftover path)
+    assert "def _delete_stale" in src
+    assert inspect.getsource(LE._delete_stale).count(".delete(") == 1
 
 
 def test_T30_factory_id_predicates_in_queries(freeze_today):
@@ -491,7 +527,7 @@ def test_T30_factory_id_predicates_in_queries(freeze_today):
     sb.work_schedules = [{
         "id": "ws-x", "factory_id": "f1", "inspection_set_id": "set-1",
         "planned_date": "2026-11-01", "status_code": "planned",
-        "assigned_user_id": "old",
+        "source_type": "LEGAL", "assigned_user_id": "old",
     }]
     LE.run_generate_operation_schedules("f1", sb)
     src = inspect.getsource(LE.run_generate_operation_schedules)
@@ -508,7 +544,8 @@ def test_T31_T32_generate_schedules_all_factory_loop(freeze_today, monkeypatch):
         return {
             "total_sets": 1, "created": 1, "skipped_dup": 0, "skipped_no_condition": 0,
             "assignee_synced": 0, "preserved_existing": 0,
-            "preserved_child_linked": 0, "preserved_stale_future": 0,
+            "preserved_child_linked": 0, "stale_converged": 0,
+            "stale_removed": 0, "delete_count": 0,
         }
 
     sb = _SB()
@@ -533,7 +570,8 @@ def test_T33_mode_law_engine_delegates(freeze_today, monkeypatch):
         return {
             "total_sets": 2, "created": 1, "skipped_dup": 0, "skipped_no_condition": 1,
             "assignee_synced": 0, "preserved_existing": 0,
-            "preserved_child_linked": 0, "preserved_stale_future": 0,
+            "preserved_child_linked": 0, "stale_converged": 0,
+            "stale_removed": 0, "delete_count": 0,
         }
 
     sb = _SB()
@@ -597,7 +635,131 @@ def test_legacy_aliases_pending_scheduled_read_as_preserve_or_sync(freeze_today)
     sb.work_schedules = [{
         "id": "ws-legacy", "factory_id": "f1", "inspection_set_id": "set-1",
         "planned_date": "2026-11-01", "status_code": "SCHEDULED",
-        "assigned_user_id": "u1",
+        "source_type": "LEGAL", "assigned_user_id": "u1",
     }]
     out = LE.run_generate_operation_schedules("f1", sb)
     assert out["assignee_synced"] == 1
+
+
+def test_R7_legal_engine_excluded_from_anchor(freeze_today, monkeypatch):
+    sb = _SB()
+    sb.inspection_sets = [
+        _iset(
+            id="leg-1",
+            source="LEGAL_ENGINE",
+            schedule_anchor_date="2026-01-01",
+            cycle_unit="month",
+            cycle_value=1,
+            assignee_user_id="user-1",
+            operation_time_rule=None,
+            anchor_confirmed=True,
+        ),
+    ]
+    # Fake needs anchor_confirmed filter — add to sets and filter in _match via eq chain
+    for r in sb.inspection_sets:
+        r["anchor_confirmed"] = True
+        r["is_active"] = True
+    monkeypatch.setattr(S, "get_supabase", lambda: sb)
+    out = S.generate_schedules_for_factory("f1", "anchor", False)
+    assert out["data"]["created"] == 0
+    assert any(
+        x.get("reason") == "LEGAL_ENGINE_REQUIRES_OTR_MATERIALIZER"
+        for x in out["data"]["results"]
+    )
+    assert sb.inserts == []
+    assert sb.delete_ops == 0
+
+
+def test_R9_completed_old_date_preserved_while_creating_latest(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [{
+        "id": "ws-done", "factory_id": "f1", "inspection_set_id": "set-1",
+        "planned_date": "2026-12-01", "status_code": "completed",
+        "source_type": "LEGAL", "assigned_user_id": "user-1",
+    }]
+    out = LE.run_generate_operation_schedules("f1", sb)
+    assert out["created"] == 1
+    assert out["stale_removed"] == 0
+    assert any(r["id"] == "ws-done" and r["planned_date"] == "2026-12-01" for r in sb.work_schedules)
+    assert any(r.get("planned_date") == "2026-11-01" for r in sb.inserts)
+
+
+def test_R10_in_progress_old_date_preserved(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [{
+        "id": "ws-ip", "factory_id": "f1", "inspection_set_id": "set-1",
+        "planned_date": "2026-12-01", "status_code": "in_progress",
+        "source_type": "LEGAL", "assigned_user_id": "user-1",
+    }]
+    out = LE.run_generate_operation_schedules("f1", sb)
+    assert out["stale_removed"] == 0
+    assert any(r["id"] == "ws-ip" for r in sb.work_schedules)
+    assert out["created"] == 1
+
+
+def test_R11_wa_linked_stale_preserved(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [{
+        "id": "ws-wa", "factory_id": "f1", "inspection_set_id": "set-1",
+        "planned_date": "2026-12-01", "status_code": "scheduled",
+        "source_type": "LEGAL", "assigned_user_id": "user-1",
+    }]
+    sb.work_assignments = [{"id": "wa1", "schedule_id": "ws-wa", "factory_id": "f1"}]
+    out = LE.run_generate_operation_schedules("f1", sb)
+    assert out["stale_removed"] == 0
+    assert any(r["id"] == "ws-wa" and r["planned_date"] == "2026-12-01" for r in sb.work_schedules)
+    assert out["created"] == 1  # latest identity still created
+
+
+def test_R12_equipment_child_linked_preserved(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    sb.work_schedules = [{
+        "id": "ws-ec", "factory_id": "f1", "inspection_set_id": "set-1",
+        "planned_date": "2026-12-01", "status_code": "scheduled",
+        "source_type": "LEGAL", "assigned_user_id": "user-1",
+    }]
+    sb.equipment_checkins = [{"id": "ec1", "schedule_id": "ws-ec", "factory_id": "f1"}]
+    out = LE.run_generate_operation_schedules("f1", sb)
+    assert out["stale_removed"] == 0
+    assert any(r["id"] == "ws-ec" for r in sb.work_schedules)
+
+
+def test_R13_R14_idempotent_second_run(freeze_today):
+    sb = _SB()
+    rule = _within(basis="2026-10-01", value=1, unit="month")
+    sb.inspection_sets = [_iset(operation_time_rule=rule)]
+    out1 = LE.run_generate_operation_schedules("f1", sb)
+    assert out1["created"] == 1
+    n = len(sb.work_schedules)
+    updates_before = len(sb.updates)
+    deletes_before = sb.delete_ops
+    out2 = LE.run_generate_operation_schedules("f1", sb)
+    assert out2["created"] == 0
+    assert out2["stale_converged"] == 0
+    assert out2["stale_removed"] == 0
+    assert out2["delete_count"] == 0
+    assert len(sb.work_schedules) == n
+    assert len(sb.updates) == updates_before  # assignee already matched
+    assert sb.delete_ops == deletes_before
+
+
+def test_R15_R16_R17_canonical_write_and_no_cancelled(freeze_today):
+    sb = _SB()
+    sb.inspection_sets = [_iset(operation_time_rule=_within(basis="2026-10-01", value=1, unit="month"))]
+    LE.run_generate_operation_schedules("f1", sb)
+    row = sb.inserts[0]
+    assert row["status_code"] == "scheduled"
+    assert row["source_type"] == "LEGAL"
+    assert row["status_code"] not in ("PENDING", "SCHEDULED")
+    assert row["source_type"] != "LAW_ENGINE"
+    assert row["status_code"] != "cancelled"
+    assert 'status_code": "cancel' not in inspect.getsource(LE)
+    assert "status_code': 'cancel" not in inspect.getsource(LE)
