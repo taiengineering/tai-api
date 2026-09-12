@@ -1,0 +1,13 @@
+{
+  "result": "success",
+  "payload": {
+    "list": [
+      {
+        "medSeq": 99999,
+        "medName": "다른 자료",
+        "medGonggongnuri": "04",
+        "contsFbctnShpNm": "책자"
+      }
+    ]
+  }
+}

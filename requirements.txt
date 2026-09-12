@@ -21,6 +21,8 @@ python-dateutil>=2.8.2
 firebase-admin
 openai>=1.0.0
 sentry-sdk[fastapi]
+boto3>=1.34.0,<2
+# boto3: KOSHA R2 private S3 client (WP-1C-5A). measured local 1.42.91. wrangler/npx 금지.
 
 # psycopg2-binary: 정기결제 직접 SQL(db/direct_sql.py) — PostgREST 스키마캐시
 # 우회용. 누락 시 POST /payments/inicis/billing/prepare 가 ModuleNotFoundError로
