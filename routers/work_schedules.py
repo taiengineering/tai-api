@@ -65,6 +65,7 @@ from services.company_scope import (
     _tier,
 )
 from services.status_vocab import wa_active_query_values, wa_write_ready
+from services.work_schedule_executability import require_active_executable
 from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/work-schedules", tags=["work_schedules"])
@@ -84,7 +85,62 @@ def _is_uuid(value: str) -> bool:
         return False
 
 
-def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> bool:
+def _resolve_exact_occurrence(
+    supabase,
+    schedule_id: str,
+    *,
+    factory_id: Optional[str] = None,
+    require_active: bool = True,
+) -> dict:
+    """Exact work_schedules occurrence by (id[, factory_id]).
+
+    PATCH-R5: resolve the pair FIRST (no active-first sibling promotion).
+    Then optionally require active_yn IS TRUE on that same pair.
+
+    - factory_id given: that pair only
+    - factory_id omitted: all rows with id; 0→404, >1→409, 1→that row
+    - require_active: inactive/null on the resolved pair → 404 (not executable)
+    """
+    q = (
+        supabase.table("work_schedules")
+        .select("id, factory_id, company_id, active_yn")
+        .eq("id", schedule_id)
+    )
+    if factory_id:
+        q = q.eq("factory_id", factory_id)
+    rows = q.execute().data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
+    if not factory_id and len(rows) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="일정의 시설(factory)을 유일하게 결정할 수 없습니다.",
+        )
+    row = rows[0]
+    if not row.get("factory_id"):
+        raise HTTPException(
+            status_code=409,
+            detail="일정의 factory_id를 확인할 수 없습니다.",
+        )
+    if require_active and row.get("active_yn") is not True:
+        raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
+    return row
+
+
+def _resolve_exact_active_occurrence(supabase, schedule_id: str, factory_id: Optional[str] = None) -> dict:
+    """EXECUTABLE: exact occurrence then active_yn hard gate (compat wrapper)."""
+    return _resolve_exact_occurrence(
+        supabase, schedule_id, factory_id=factory_id, require_active=True
+    )
+
+
+def _apply_one_update(
+    supabase,
+    schedule_id: str,
+    fields: dict,
+    now: str,
+    factory_id: Optional[str] = None,
+) -> bool:
     """단일 work_schedules 행 갱신 + assigned_user_id 변경 시 work_assignments 동기화.
 
     fields 에 'assigned_user_id' 키가 있으면(None 포함) 배정 변경으로 본다(batch-update 와 동일).
@@ -92,6 +148,9 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
 
     WP-04C: 신규 work_assignments 생성 시 factory_id = parent work_schedules.factory_id(companion).
             parent factory_id 확인 불가 시 어떤 side-effect(work_schedules UPDATE 포함)보다 먼저 409.
+
+    PATCH-R5: when factory_id is provided by the caller (batch/bulk owned pair), use THAT
+    pair only — never promote a different factory's active sibling.
     """
     payload: dict = {"updated_at": now}
     for k in ("is_excluded", "excluded_reason", "custom_cycle", "status_code", "resolved_at", "planned_date"):
@@ -101,64 +160,95 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
     if assign_changed:
         payload["assigned_user_id"] = fields["assigned_user_id"]
 
-    # WP-04C parent factory PRE-READ (side-effect 전 fail-closed).
-    # 신규 assignment INSERT가 발생하는 경우(assigned_user_id 실제 값)만 검사한다.
-    _parent_factory_id = None
-    if assign_changed and fields["assigned_user_id"]:
-        _parent = supabase.table("work_schedules").select("factory_id") \
-            .eq("id", schedule_id).limit(1).execute()
-        _parent_factory_id = _parent.data[0].get("factory_id") if _parent.data else None
-        if not _parent_factory_id:
-            raise HTTPException(
-                status_code=409,
-                detail="일정의 factory_id를 확인할 수 없습니다.",
-            )
+    parent = _resolve_exact_active_occurrence(supabase, schedule_id, factory_id=factory_id)
+    fid = parent["factory_id"]
 
-    # fail-closed 통과 후에만 기존 work_schedules UPDATE 수행
-    res = supabase.table("work_schedules").update(payload).eq("id", schedule_id).execute()
+    res = (
+        supabase.table("work_schedules")
+        .update(payload)
+        .eq("id", schedule_id)
+        .eq("factory_id", fid)
+        .execute()
+    )
     updated = bool(res.data)
 
     if assign_changed:
         auid = fields["assigned_user_id"]
         if auid:
-            existing = supabase.table("work_assignments").select("id") \
-                .eq("schedule_id", schedule_id).in_("status_code", wa_active_query_values()).limit(1).execute()
+            existing = (
+                supabase.table("work_assignments")
+                .select("id")
+                .eq("schedule_id", schedule_id)
+                .eq("factory_id", fid)
+                .in_("status_code", wa_active_query_values())
+                .limit(1)
+                .execute()
+            )
             if existing.data:
                 supabase.table("work_assignments").update({
                     "assigned_user_id": auid, "updated_at": now,
-                }).eq("id", existing.data[0]["id"]).execute()
+                }).eq("id", existing.data[0]["id"]).eq("factory_id", fid).execute()
             else:
                 supabase.table("work_assignments").insert({
                     "schedule_id": schedule_id, "assigned_user_id": auid,
                     "scheduled_date": now_kst().date().isoformat(),
                     "status_code": wa_write_ready(), "created_at": now,
-                    "factory_id": _parent_factory_id,   # WP-04C parent companion (PRE-READ 값)
+                    "factory_id": fid,
                 }).execute()
         else:
             supabase.table("work_assignments").update({
                 "status_code": "CANCELLED", "updated_at": now,
-            }).eq("schedule_id", schedule_id).in_("status_code", wa_active_query_values()).execute()
+            }).eq("schedule_id", schedule_id).eq("factory_id", fid).in_(
+                "status_code", wa_active_query_values()
+            ).execute()
     return updated
 
 
-def _owned_ids(supabase, ids, current):
-    """비-ALL: 자기 스코프 소유 schedule id 집합만. ALL: 전체 그대로.
+def _owned_pairs(supabase, ids, current):
+    """Authorized (id, factory_id) pairs — ownership only (NON_EXECUTABLE).
 
-    E-1: FACTORY/TEAM(team_id 없는 테이블)은 factory_id 까지 좁힘.
+    Does NOT filter active_yn. Returns set[(id, factory_id)].
     """
-    if _is_admin(_scope(supabase, current.get("role_code"))):
-        return set(ids)
     if not ids:
         return set()
+    if _is_admin(_scope(supabase, current.get("role_code"))):
+        res = (
+            supabase.table("work_schedules")
+            .select("id, factory_id")
+            .in_("id", list(ids))
+            .execute()
+        )
+        return {
+            (r["id"], r["factory_id"])
+            for r in (res.data or [])
+            if r.get("id") and r.get("factory_id")
+        }
     filt = scoped_filter(current, supabase, {"company_id", "factory_id"})
     if filt is DENY:
         return set()
-    q = supabase.table("work_schedules").select("id").in_("id", list(ids))
+    q = supabase.table("work_schedules").select("id, factory_id").in_("id", list(ids))
     q = apply_scoped_filter(q, filt)
     if q is None:
         return set()
     res = q.execute()
-    return {r["id"] for r in (res.data or [])}
+    return {
+        (r["id"], r["factory_id"])
+        for r in (res.data or [])
+        if r.get("id") and r.get("factory_id")
+    }
+
+
+def _owned_ids(supabase, ids, current):
+    """Compat: id set derived from authorized pairs (tests / non-mutation callers)."""
+    return {sid for sid, _fid in _owned_pairs(supabase, ids, current)}
+
+
+def _unique_owned_factory(owned_pairs, schedule_id: str) -> Optional[str]:
+    """Exactly one authorized factory for schedule_id, else None (skip / ambiguous)."""
+    matches = [fid for sid, fid in owned_pairs if sid == schedule_id]
+    if len(matches) != 1:
+        return None
+    return matches[0]
 
 
 def _ensure_ws_factory_access(supabase, factory_id, current) -> None:
@@ -226,14 +316,18 @@ def batch_update_schedules(body: BatchUpdateBody, current: dict = Depends(get_cu
     v1.1.0: 복수 work_schedules 일괄 업데이트.
     - is_excluded / excluded_reason / custom_cycle 업데이트
     - assigned_user_id 있으면 work_assignments에도 반영(PENDING UPDATE/INSERT, null→CANCELLED)
+
+    PATCH-R5: mutate only authorized (id, factory_id) pairs — never promote
+    another factory's active sibling of the same id.
     """
     supabase = get_supabase()
     now      = _now()
     updated  = 0
-    owned = _owned_ids(supabase, [it.id for it in body.updates], current)
+    owned = _owned_pairs(supabase, [it.id for it in body.updates], current)
 
     for item in body.updates:
-        if item.id not in owned:
+        fid = _unique_owned_factory(owned, item.id)
+        if not fid:
             continue
         fields: dict = {}
         if item.is_excluded is not None:
@@ -244,8 +338,14 @@ def batch_update_schedules(body: BatchUpdateBody, current: dict = Depends(get_cu
             fields["custom_cycle"] = item.custom_cycle
         if "assigned_user_id" in item.__fields_set__:
             fields["assigned_user_id"] = item.assigned_user_id
-        if _apply_one_update(supabase, item.id, fields, now):
-            updated += 1
+        try:
+            if _apply_one_update(supabase, item.id, fields, now, factory_id=fid):
+                updated += 1
+        except HTTPException as e:
+            # owned inactive pair → skip (do not fall through to sibling)
+            if e.status_code in (404, 409):
+                continue
+            raise
 
     return {"status": "success", "data": {"updated": updated}}
 
@@ -257,14 +357,20 @@ def bulk_assign_schedules(body: BulkAssignBody, current: dict = Depends(get_curr
     now = _now()
     auid = body.assigned_user_id if body.assigned_user_id is not None else body.assignee_id
     updated = 0
-    owned = _owned_ids(supabase, body.ids, current)
+    owned = _owned_pairs(supabase, body.ids, current)
     for sid in body.ids:
         if not _is_uuid(sid):
             continue
-        if sid not in owned:
+        fid = _unique_owned_factory(owned, sid)
+        if not fid:
             continue
-        if _apply_one_update(supabase, sid, {"assigned_user_id": auid}, now):
-            updated += 1
+        try:
+            if _apply_one_update(supabase, sid, {"assigned_user_id": auid}, now, factory_id=fid):
+                updated += 1
+        except HTTPException as e:
+            if e.status_code in (404, 409):
+                continue
+            raise
     return {"status": "success", "data": {"updated": updated}}
 
 
@@ -273,7 +379,8 @@ def confirm_schedules(factory_id: str, body: ConfirmBody, current: dict = Depend
     """
     v1.1.0: 검토 완료 후 스케줄 확정.
     1. is_excluded=FALSE → reviewed_at/reviewed_by, custom_cycle→cycle_code
-    2. is_excluded=TRUE → status_code='EXCLUDED', is_active=FALSE
+    2. is_excluded=TRUE → status_code='EXCLUDED', active_yn=FALSE
+       (executability axis = active_yn; do not write non-column is_active)
     """
     supabase = get_supabase()
     _ensure_ws_factory_access(supabase, factory_id, current)   # 타사·타시설 404
@@ -296,7 +403,8 @@ def confirm_schedules(factory_id: str, body: ConfirmBody, current: dict = Depend
         }
         if row.get("custom_cycle"):
             update_payload["cycle_code"] = row["custom_cycle"]
-        supabase.table("work_schedules").update(update_payload).eq("id", row["id"]).execute()
+        supabase.table("work_schedules").update(update_payload)\
+            .eq("id", row["id"]).eq("factory_id", factory_id).execute()
         confirmed += 1
 
     excluded_res = supabase.table("work_schedules") \
@@ -313,9 +421,9 @@ def confirm_schedules(factory_id: str, body: ConfirmBody, current: dict = Depend
             batch = exc_ids[i:i+50]
             supabase.table("work_schedules").update({
                 "status_code": "EXCLUDED",
-                "is_active":   False,
+                "active_yn":   False,
                 "updated_at":  now,
-            }).in_("id", batch).execute()
+            }).in_("id", batch).eq("factory_id", factory_id).execute()
         excluded = len(excluded_rows)
 
     return {
@@ -371,7 +479,9 @@ def get_work_schedules(
         if factory_id and "factory_id" not in filt:
             filt = {**filt, "factory_id": factory_id}
 
-    q = supabase.table("work_schedules").select("*", count="exact")
+    q = require_active_executable(
+        supabase.table("work_schedules").select("*", count="exact")
+    )
     q = apply_scoped_filter(q, filt)
     if q is None:
         return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0}}
@@ -417,9 +527,11 @@ def get_factory_work_schedules(factory_id: str, current: dict = Depends(get_curr
     supabase = get_supabase()
     _ensure_ws_factory_access(supabase, factory_id, current)   # 타사·타시설 404
     result = (
-        supabase.table("work_schedules")
-        .select("*")
-        .eq("factory_id", factory_id)
+        require_active_executable(
+            supabase.table("work_schedules")
+            .select("*")
+            .eq("factory_id", factory_id)
+        )
         .order("created_at", desc=True)
         .execute()
     )
@@ -430,9 +542,11 @@ def get_factory_work_schedules(factory_id: str, current: dict = Depends(get_curr
 def get_inspection_set_work_schedules(inspection_set_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     result = (
-        supabase.table("work_schedules")
-        .select("*")
-        .eq("inspection_set_id", inspection_set_id)
+        require_active_executable(
+            supabase.table("work_schedules")
+            .select("*")
+            .eq("inspection_set_id", inspection_set_id)
+        )
         .order("created_at", desc=True)
         .execute()
     )
@@ -460,10 +574,15 @@ def get_work_schedule(schedule_id: str, current: dict = Depends(get_current_user
     if not _is_uuid(schedule_id):
         raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
     supabase = get_supabase()
+    row = _resolve_exact_active_occurrence(supabase, schedule_id)
+    # Re-fetch full row for response (exact pair — occurrence already proven unique/active).
     result = (
-        supabase.table("work_schedules")
-        .select("*")
-        .eq("id", schedule_id)
+        require_active_executable(
+            supabase.table("work_schedules")
+            .select("*")
+            .eq("id", schedule_id)
+            .eq("factory_id", row["factory_id"])
+        )
         .limit(1)
         .execute()
     )
@@ -483,16 +602,8 @@ def patch_work_schedule(schedule_id: str, body: SchedulePatchBody, current: dict
     if not _is_uuid(schedule_id):
         raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
     supabase = get_supabase()
-    _own = (
-        supabase.table("work_schedules")
-        .select("company_id,factory_id")
-        .eq("id", schedule_id)
-        .limit(1)
-        .execute()
-    )
-    if not _own.data:
-        raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
-    _ensure_ws_row(_own.data[0], current, supabase)
+    own = _resolve_exact_active_occurrence(supabase, schedule_id)
+    _ensure_ws_row(own, current, supabase)
     now = _now()
 
     fields: dict = {}
@@ -516,5 +627,12 @@ def patch_work_schedule(schedule_id: str, body: SchedulePatchBody, current: dict
     if not updated:
         raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
 
-    row = supabase.table("work_schedules").select("*").eq("id", schedule_id).limit(1).execute()
+    row = (
+        supabase.table("work_schedules")
+        .select("*")
+        .eq("id", schedule_id)
+        .eq("factory_id", own["factory_id"])
+        .limit(1)
+        .execute()
+    )
     return {"status": "success", "data": (row.data[0] if row.data else None)}

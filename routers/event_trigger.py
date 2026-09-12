@@ -202,10 +202,15 @@ def get_event_schedules(
     factory의 이벤트 기반 신고·보고 일정 목록.
     work_schedules에서 source_type='EVENT'인 항목만 반환.
     """
+    from services.work_schedule_executability import require_active_executable
+
     supabase = get_supabase()
-    query    = supabase.table("work_schedules").select("*", count="exact").eq(
-        "factory_id", factory_id
-    ).eq("source_type", "EVENT")
+    # EXECUTABLE surface (discovery): event execution targets — active_yn hard gate.
+    query    = require_active_executable(
+        supabase.table("work_schedules").select("*", count="exact").eq(
+            "factory_id", factory_id
+        ).eq("source_type", "EVENT")
+    )
 
     if obligation_type:   query = query.eq("obligation_type",  obligation_type)
     if status_code:       query = query.eq("status_code",       status_code)

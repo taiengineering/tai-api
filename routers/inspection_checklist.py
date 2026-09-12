@@ -36,6 +36,7 @@ from services.status_vocab import (
     normalize_inspection_result_write,
     ws_completed_query_values,
 )
+from services.work_schedule_executability import require_active_executable
 from services.inspection_record_writer_bridge import (
     complete_inspection_status,
     InspectionStatusWriteError,
@@ -176,11 +177,30 @@ def _own_factory_ids(sb, current):
 
 
 def _ensure_ws_own(sb, work_schedule_id, current):
-    """work_schedule 소유확인(행 company_id 경유). 없으면/타사면 404."""
-    r = sb.table("work_schedules").select("id, company_id").eq("id", work_schedule_id).limit(1).execute()
-    if not r.data:
+    """work_schedule 소유확인 — exact occurrence first (id ambiguity → 409).
+
+    Ownership only (NON_EXECUTABLE): does not require active_yn.
+    Returns the exact row for callers that need factory_id / active_yn next.
+    """
+    r = (
+        sb.table("work_schedules")
+        .select("id, company_id, factory_id, active_yn")
+        .eq("id", work_schedule_id)
+        .execute()
+    )
+    rows = r.data or []
+    if not rows:
         raise HTTPException(status_code=404, detail="점검 일정을 찾을 수 없습니다.")
-    _ensure_own_company(r.data[0].get("company_id"), current, sb, "점검 일정을 찾을 수 없습니다.")
+    if len(rows) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "WORK_SCHEDULE_ID_AMBIGUOUS",
+                "message": "동일 id 의 일정이 여러 factory 에 존재합니다.",
+            },
+        )
+    _ensure_own_company(rows[0].get("company_id"), current, sb, "점검 일정을 찾을 수 없습니다.")
+    return rows[0]
 
 
 def attach_schedule_inspection_ids(sb, items, factory_id):
@@ -404,12 +424,12 @@ async def get_inspection_status(factory_id: str, current: dict = Depends(get_cur
             .lt("planned_date", today_str).limit(0).execute()
         overdue_count = overdue_res.count or 0
 
-        upcoming_res = supabase.table("work_schedules").select(
+        upcoming_q = supabase.table("work_schedules").select(
             "id, planned_date, status_code, inspection_set_id, "
             "inspection_sets(inspection_set_name, law_name)"
         ).eq("factory_id", factory_id).gte("planned_date", today_str)\
-         .lte("planned_date", in_30_days).in_("status_code", ["planned", "in_progress"])\
-         .order("planned_date").limit(10).execute()
+         .lte("planned_date", in_30_days).in_("status_code", ["planned", "in_progress"])
+        upcoming_res = require_active_executable(upcoming_q).order("planned_date").limit(10).execute()
 
         upcoming = []
         for s in (upcoming_res.data or []):
@@ -439,10 +459,12 @@ async def list_schedules(
     supabase = get_supabase()
     _ensure_factory_own(supabase, factory_id, current)
     try:
-        query = supabase.table("work_schedules").select(
-            "*, inspection_sets(inspection_set_name, law_name, law_article, cycle_unit, cycle_value)",
-            count="exact"
-        ).eq("factory_id", factory_id)
+        query = require_active_executable(
+            supabase.table("work_schedules").select(
+                "*, inspection_sets(inspection_set_name, law_name, law_article, cycle_unit, cycle_value)",
+                count="exact"
+            ).eq("factory_id", factory_id)
+        )
         if month:
             y, m = int(month[:4]), int(month[5:7])
             last_day = calendar.monthrange(y, m)[1]
@@ -475,26 +497,17 @@ async def list_schedules(
 @router.post("/start/{work_schedule_id}")
 async def start_inspection(work_schedule_id: str, body: dict = None, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
-    _ensure_ws_own(supabase, work_schedule_id, current)
+    # PATCH-R5: exact occurrence first (all statuses), then ACTIVE_EXECUTABLE on same pair.
+    ws_row = _ensure_ws_own(supabase, work_schedule_id, current)
+    if ws_row.get("active_yn") is not True:
+        raise HTTPException(status_code=404, detail="점검 일정을 찾을 수 없습니다.")
+    _parent_factory_id = ws_row.get("factory_id")
+    if not _parent_factory_id:
+        raise HTTPException(status_code=409, detail="일정의 factory_id를 확인할 수 없습니다.")
     try:
         body = body or {}
         inspector_name = body.get("inspector_name", "")
         started_at     = body.get("started_at", business_today().isoformat())
-
-        # WP-04D: parent factory companion PRE-READ (side-effect 전 fail-closed)
-        # REV-1B: schema 는 factory 간 동일 id 를 허용하므로 id 단독으로 임의 factory 를
-        # 고르지 않는다. 0→404, >1→409(WORK_SCHEDULE_ID_AMBIGUOUS), 1→그 factory 사용.
-        _ws = supabase.table("work_schedules").select("factory_id").eq("id", work_schedule_id).execute()
-        _ws_rows = _ws.data or []
-        if not _ws_rows:
-            raise HTTPException(status_code=404, detail="점검 일정을 찾을 수 없습니다.")
-        if len(_ws_rows) > 1:
-            raise HTTPException(status_code=409,
-                                detail={"code": "WORK_SCHEDULE_ID_AMBIGUOUS",
-                                        "message": "동일 id 의 일정이 여러 factory 에 존재합니다."})
-        _parent_factory_id = _ws_rows[0].get("factory_id")
-        if not _parent_factory_id:
-            raise HTTPException(status_code=409, detail="일정의 factory_id를 확인할 수 없습니다.")
 
         # KNOT-3C1: 직접 work_schedules UPDATE + safety_inspections INSERT 제거.
         # 하나의 원자적 RPC(fn_start_safe_inspection_record)로 schedule lock →
@@ -730,7 +743,9 @@ async def list_inspection_schedules(
 ):
     """점검 일정 목록 (work_schedules 기반)"""
     supabase = get_supabase()
-    q = supabase.table("work_schedules").select("*", count="exact")
+    q = require_active_executable(
+        supabase.table("work_schedules").select("*", count="exact")
+    )
     # ── 회사 스코프 (P13): factory 지정 시 소유확인, 아니면 자사 factory 제한 ──
     if factory_id:
         _ensure_factory_own(supabase, factory_id, current)

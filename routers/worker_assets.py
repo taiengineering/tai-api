@@ -38,6 +38,7 @@ from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services import inspection_sets_svc as _iss
 from services.status_vocab import is_wa_done
+from services.work_schedule_executability import require_active_executable
 from services.upload_service import MAX_SIZE, MIME_TO_EXT, validate_image_file
 from services.time import now_kst
 
@@ -115,13 +116,16 @@ def _assert_inspection_photo_owner(supabase, inspection_id: str, user_id: str) -
 
     safety_inspections.assignment_id FK 는 work_schedules(id) 를 가리킨다(컬럼명과 대상 불일치).
     방어적으로 work_assignments.id 로도 조회한다. 부재 404 · 타인 배정 403.
+
+    PATCH-R4: WA-linked path must also prove exact parent work_schedules
+    (schedule_id, factory_id) is ACTIVE_EXECUTABLE before allowing photo mutation.
     """
     parsed = _parse_uuid(inspection_id)
     if not parsed:
         raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다")
     insp = (
         supabase.table("safety_inspections")
-        .select("id, assignment_id")
+        .select("id, assignment_id, factory_id")
         .eq("id", parsed)
         .limit(1)
         .execute()
@@ -134,35 +138,63 @@ def _assert_inspection_photo_owner(supabase, inspection_id: str, user_id: str) -
 
     wa_by_id = (
         supabase.table("work_assignments")
-        .select("id, assigned_user_id")
+        .select("id, assigned_user_id, schedule_id, factory_id")
         .eq("id", parent_id)
         .limit(1)
         .execute()
     )
     if wa_by_id.data:
-        if wa_by_id.data[0].get("assigned_user_id") == user_id:
-            return
-        raise HTTPException(status_code=403, detail="본인에게 배정된 점검만 업로드할 수 있습니다")
-
-    ws = (
-        supabase.table("work_schedules")
-        .select("id, assigned_user_id")
-        .eq("id", parent_id)
-        .limit(1)
-        .execute()
-    )
-    if not ws.data:
-        raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다")
-    if ws.data[0].get("assigned_user_id") == user_id:
+        wa = wa_by_id.data[0]
+        if wa.get("assigned_user_id") != user_id:
+            raise HTTPException(status_code=403, detail="본인에게 배정된 점검만 업로드할 수 있습니다")
+        sid = wa.get("schedule_id")
+        fid = wa.get("factory_id") or insp.data[0].get("factory_id")
+        if not sid or not fid:
+            raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다")
+        parent_ws = (
+            require_active_executable(
+                supabase.table("work_schedules")
+                .select("id")
+                .eq("id", sid)
+                .eq("factory_id", fid)
+            )
+            .limit(1)
+            .execute()
+        )
+        if not parent_ws.data:
+            raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다")
         return
-    wa_on_schedule = (
+
+    # Fallback: assignment_id treated as work_schedules.id
+    # PATCH-R6: occurrence FIRST (raw id), then ambiguity, then active_yn — no active-first.
+    insp_fid = insp.data[0].get("factory_id")
+    ws_q = (
+        supabase.table("work_schedules")
+        .select("id, assigned_user_id, factory_id, active_yn")
+        .eq("id", parent_id)
+    )
+    if insp_fid:
+        ws_q = ws_q.eq("factory_id", insp_fid)
+    rows = list((ws_q.execute().data) or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다")
+    if not insp_fid and len(rows) > 1:
+        raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다")
+    ws_row = rows[0]
+    if ws_row.get("active_yn") is not True:
+        raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다")
+    if ws_row.get("assigned_user_id") == user_id:
+        return
+    wa_on_schedule_q = (
         supabase.table("work_assignments")
         .select("id")
         .eq("schedule_id", parent_id)
         .eq("assigned_user_id", user_id)
-        .limit(1)
-        .execute()
     )
+    fid = ws_row.get("factory_id")
+    if fid:
+        wa_on_schedule_q = wa_on_schedule_q.eq("factory_id", fid)
+    wa_on_schedule = wa_on_schedule_q.limit(1).execute()
     if wa_on_schedule.data:
         return
     raise HTTPException(status_code=403, detail="본인에게 배정된 점검만 업로드할 수 있습니다")
