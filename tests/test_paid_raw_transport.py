@@ -170,7 +170,7 @@ def _run_capture(body):
 
 
 def _paid_free_body(**over):
-    kw = dict(auth_token="t", sector="INDUSTRIAL", disclaimer_log_id="disc1")
+    kw = dict(auth_token="t", sector="INDUSTRIAL", disclaimer_log_id="disc1", appendix3_item_no=28)
     kw.update(over)
     return DiagnosisRunBody(**kw)
 

@@ -40,7 +40,10 @@ def _body(sector,fd):
         fd.setdefault("is_construction", True)
         fd.setdefault("is_relationship_contractor", False)
         fd.setdefault("is_civil_construction", False)
-    return DiagnosisRunBody(auth_token="t",sector=sector,disclaimer_log_id="disc1",form_data=fd)
+    extra = {}
+    if sector in ("BUILDING", "INDUSTRIAL", "INDUSTRY", "MANUFACTURING"):
+        extra["appendix3_item_no"] = 28
+    return DiagnosisRunBody(auth_token="t",sector=sector,disclaimer_log_id="disc1",form_data=fd, **extra)
 
 def test_11_true_via_formdata():
     fac=_cap(_body("CONSTRUCTION",{c:True for c in CST11}))
@@ -57,7 +60,7 @@ def test_chemical_exact_name():
 def test_industrial_firewall():
     fac=_cap(_body("INDUSTRIAL",{"has_gas":True}))
     assert fac.get("has_gas") is True
-    b=DiagnosisRunBody(auth_token="t",sector="INDUSTRIAL",disclaimer_log_id="disc1",has_chemical_substance=True)
+    b=DiagnosisRunBody(auth_token="t",sector="INDUSTRIAL",disclaimer_log_id="disc1",has_chemical_substance=True,appendix3_item_no=28)
     fac2=_cap(b)
     assert fac2.get("has_chemical") is True and "has_chemical_substance" not in fac2
 

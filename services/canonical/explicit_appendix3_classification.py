@@ -1,21 +1,28 @@
 """Explicit Appendix3 item → Published AP01~05 Runtime Leaf projection.
 
 WO-SM-CORE22-AP01-05-EXPLICIT-APPENDIX3-INPUT-CONTRACT-001
-CODE-READY ONLY. Server fail-closed for missing item is NOT activated here.
+WO-SM-CORE22-AP01-05-APPENDIX3-SERVER-FAIL-CLOSED-001
 
 Canonical source is the user-selected 별표 3 호 (`appendix3_item_no`).
 The four group booleans are representation expansion of that one legal fact,
 not a new inference and not a user-supplied Runtime authority.
 
+BUILDING / INDUSTRIAL (after normalize_sector_db) require explicit source
+before disclaimer / quota / Runtime. CONSTRUCTION and SPECIAL_FACILITY are
+not gated here.
+
 NOT: KSIC mapping, sector mapping, industry_type, building_use_type.
 NOT: item 49 → is_construction, item ≤48 → is_construction=false.
+missing ≠ false. KSIC / internal leaves cannot satisfy the completeness gate.
 """
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from fastapi import HTTPException
+
+from services.legal_rules import normalize_sector_db
 
 APPENDIX3_LAW_VERSION_ID = "1fa1f5af-3575-461d-8d8c-4389d0e128d8"
 APPENDIX3_APPENDIX_NO = "별표 3"
@@ -43,6 +50,10 @@ ERROR_ITEM_RANGE = "APPENDIX3_ITEM_NO_RANGE"
 ERROR_ITEM_CONFLICT = "APPENDIX3_ITEM_NO_CONFLICT"
 ERROR_SUBTYPE_TYPE = "APPENDIX3_SUBTYPE_TYPE"
 ERROR_SUBTYPE_CONFLICT = "APPENDIX3_SUBTYPE_CONFLICT"
+ERROR_REQUIRED = "APPENDIX3_EXPLICIT_CLASSIFICATION_REQUIRED"
+
+# Completeness gate scope only. Not a legal-item inference from sector.
+GATED_NORMALIZED_SECTORS = frozenset({"BUILDING", "INDUSTRIAL"})
 
 
 class Appendix3SourceError(ValueError):
@@ -107,7 +118,8 @@ def collect_explicit_appendix3_source(body: Any) -> Dict[str, Any]:
     """Collect explicit Appendix3 source. Top-level wins over form_data.
 
     Both present and unequal → FAIL (no silent override).
-    Invalid types FAIL. Missing item is allowed (fail-closed not activated).
+    Invalid types FAIL. Missing item is omitted here; completeness is
+    missing_explicit_appendix3_fields / validate_explicit_appendix3_classification.
     Item 37 + missing subtype is incomplete: subtype key omitted, no invented false.
     Item != 37: subtype is not authority (omitted, not synthesized false).
     """
@@ -174,6 +186,42 @@ def collect_explicit_appendix3_source_http(body: Any) -> Dict[str, Any]:
             status_code=422,
             detail={"code": exc.code, "detail": exc.message},
         ) from exc
+
+
+def missing_explicit_appendix3_fields(body: Any, sector: Any) -> List[str]:
+    """Return missing explicit Appendix3 source fields. Empty = completeness PASS.
+
+    Gated only after normalize_sector_db ∈ {BUILDING, INDUSTRIAL}.
+    INDUSTRY / MANUFACTURING normalize to INDUSTRIAL and are gated.
+    CONSTRUCTION / SPECIAL_FACILITY are no-op.
+
+    KSIC / sector / internal leaves never satisfy this gate.
+    False is answered. missing ≠ false.
+    Type / range / conflict still raise Appendix3SourceError (existing codes).
+    """
+    if normalize_sector_db(str(sector or "")) not in GATED_NORMALIZED_SECTORS:
+        return []
+    source = collect_explicit_appendix3_source(body)
+    if SOURCE_ITEM_FIELD not in source:
+        return [SOURCE_ITEM_FIELD]
+    if source[SOURCE_ITEM_FIELD] == 37 and SOURCE_SUBTYPE_FIELD not in source:
+        return [SOURCE_SUBTYPE_FIELD]
+    return []
+
+
+def validate_explicit_appendix3_classification(body: Any, sector: Any) -> None:
+    try:
+        missing = missing_explicit_appendix3_fields(body, sector)
+    except Appendix3SourceError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "detail": exc.message},
+        ) from exc
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": ERROR_REQUIRED, "missing_fields": missing},
+        )
 
 
 def project_explicit_appendix3_classification(

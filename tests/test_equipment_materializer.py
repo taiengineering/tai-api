@@ -47,6 +47,8 @@ def _run(sector, codes, factory="f1", paid=True, own=True, eqfail=False):
         kw["is_construction"] = True
         kw["is_relationship_contractor"] = False
         kw["is_civil_construction"] = False
+    elif sector in ("BUILDING", "INDUSTRIAL", "INDUSTRY", "MANUFACTURING"):
+        kw["appendix3_item_no"] = 28
     if factory: kw["factory_id"] = factory
     if paid: kw["payment_ref"] = "oid1"
     b = DiagnosisRunBody(**kw)

@@ -39,6 +39,8 @@ class FakeBody:
             fd.setdefault("is_construction", True)
             fd.setdefault("is_relationship_contractor", False)
             fd.setdefault("is_civil_construction", False)
+        elif str(sector or "").upper() in ("BUILDING", "INDUSTRIAL", "INDUSTRY", "MANUFACTURING"):
+            fd.setdefault("appendix3_item_no", 28)
         self.sector = sector; self.form_data = fd
         self.auth_token = auth_token; self.disclaimer_log_id = "D1"; self.payment_ref = None
     def __getattr__(self, name):
