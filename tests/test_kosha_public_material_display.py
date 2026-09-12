@@ -12,13 +12,15 @@ class FakeSigner:
         self.deletes = 0
         self.presigns = 0
         self.keys = []
+        self.dispositions = []
 
-    def sign(self, bucket, key, *, mime=None, filename=None):
+    def sign(self, bucket, key, *, mime=None, filename=None, disposition="inline"):
         assert_bucket(bucket)
         assert bucket == ALLOWED_BUCKET
         self.presigns += 1
         self.keys.append(key)
-        return f"https://signed.test/{key}?ttl={SIGNED_TTL_SECONDS}"
+        self.dispositions.append(disposition)
+        return f"https://signed.test/{key}?d={disposition}&ttl={SIGNED_TTL_SECONDS}"
 
 
 class FakeS3:
@@ -86,7 +88,13 @@ def test_type1_pdf_signed_url():
     a = body["assets"][0]
     assert a["internally_available"] is True
     assert a["view_url"].startswith("https://signed.test/")
-    assert sg.presigns == 1
+    assert "d=inline" in a["view_url"]
+    assert a["download_url"].startswith("https://signed.test/")
+    assert "d=attachment" in a["download_url"]
+    assert a["view_url"].split("?")[0] == a["download_url"].split("?")[0]
+    assert sg.presigns == 2
+    assert sg.keys[0] == sg.keys[1]
+    assert sg.dispositions == ["inline", "attachment"]
     assert sg.puts == 0 and sg.deletes == 0
     assert st.writes == w0 == 0
     assert st.kosha_network == 0 and st.r2_put == 0 and st.r2_delete == 0
@@ -100,6 +108,9 @@ def test_type3_pdf_signed_url():
     assert body["source"]["license_type"] == "3"
     assert body["assets"][0]["internally_available"] is True
     assert body["assets"][0]["view_url"]
+    assert "d=inline" in body["assets"][0]["view_url"]
+    assert body["assets"][0]["download_url"]
+    assert "d=attachment" in body["assets"][0]["download_url"]
 
 
 def test_type2_no_internal_asset():
@@ -110,6 +121,7 @@ def test_type2_no_internal_asset():
     body = load_public_material("m1", store=st, signer=sg)
     assert body["assets"][0]["internally_available"] is False
     assert body["assets"][0]["view_url"] is None
+    assert body["assets"][0]["download_url"] is None
     assert sg.presigns == 0
 
 
@@ -120,6 +132,8 @@ def test_type4_no_internal_asset():
     sg = FakeSigner()
     body = load_public_material("m1", store=st, signer=sg)
     assert body["assets"][0]["internally_available"] is False
+    assert body["assets"][0]["view_url"] is None
+    assert body["assets"][0]["download_url"] is None
     assert sg.presigns == 0
 
 
@@ -130,6 +144,8 @@ def test_unknown_no_internal_asset():
     body = load_public_material("m1", store=st, signer=sg)
     assert body["source"]["license_type"] == "UNKNOWN"
     assert body["assets"][0]["internally_available"] is False
+    assert body["assets"][0]["view_url"] is None
+    assert body["assets"][0]["download_url"] is None
     assert sg.presigns == 0
 
 
@@ -143,6 +159,8 @@ def test_video_no_internal_binary():
     sg = FakeSigner()
     body = load_public_material("m1", store=st, signer=sg)
     assert body["assets"][0]["internally_available"] is False
+    assert body["assets"][0]["view_url"] is None
+    assert body["assets"][0]["download_url"] is None
     assert sg.presigns == 0
 
 
@@ -154,6 +172,7 @@ def test_non_current_version_not_returned():
     body = load_public_material("m1", store=st, signer=sg)
     assert body["assets"][0]["internally_available"] is False
     assert "old.pdf" not in (body["assets"][0]["view_url"] or "")
+    assert body["assets"][0]["download_url"] is None
     assert sg.presigns == 0
 
 
@@ -165,6 +184,7 @@ def test_wrong_bucket_fail_no_url():
     body = load_public_material("m1", store=st, signer=sg)
     assert body["assets"][0]["internally_available"] is False
     assert body["assets"][0]["view_url"] is None
+    assert body["assets"][0]["download_url"] is None
     assert sg.presigns == 0
 
 
@@ -175,6 +195,8 @@ def test_derivative_fail_no_url():
     sg = FakeSigner()
     body = load_public_material("m1", store=st, signer=sg)
     assert body["assets"][0]["internally_available"] is False
+    assert body["assets"][0]["view_url"] is None
+    assert body["assets"][0]["download_url"] is None
     assert sg.presigns == 0
 
 
@@ -195,6 +217,7 @@ def test_hold_without_version_is_fallback_not_error():
     st.assets.append(_pdf_asset())
     body = load_public_material("m1", store=st, signer=FakeSigner())
     assert body["assets"][0]["internally_available"] is False
+    assert body["assets"][0]["download_url"] is None
     assert body["source"]["source_url"]
 
 
@@ -213,6 +236,9 @@ def test_multiple_assets_all_listed():
     body = load_public_material("m1", store=st, signer=FakeSigner())
     assert [a["file_name"] for a in body["assets"]] == ["one.pdf", "two.jpg"]
     assert all(a["internally_available"] for a in body["assets"])
+    assert all(a["view_url"] and a["download_url"] for a in body["assets"])
+    assert all("d=inline" in a["view_url"] for a in body["assets"])
+    assert all("d=attachment" in a["download_url"] for a in body["assets"])
 
 
 def test_raw_key_query_not_accepted_by_loader():
@@ -236,6 +262,38 @@ def test_r2_signer_get_object_only():
     assert exp == 600
     assert "inline" in params["ResponseContentDisposition"]
     assert "a.pdf" in params["ResponseContentDisposition"]
+    assert "filename*=UTF-8''" in params["ResponseContentDisposition"]
+    assert exp == SIGNED_TTL_SECONDS
+
+
+def test_r2_signer_attachment_disposition():
+    s3 = FakeS3()
+    signer = R2GetSigner(s3, ttl=600)
+    signer.sign(
+        ALLOWED_BUCKET,
+        "kosha/a.pdf",
+        mime="application/pdf",
+        filename="원본 자료.pdf",
+        disposition="attachment",
+    )
+    op, params, exp = s3.calls[0]
+    assert op == "get_object"
+    assert exp == SIGNED_TTL_SECONDS == 600
+    disp = params["ResponseContentDisposition"]
+    assert disp.startswith("attachment;")
+    assert "filename*=UTF-8''" in disp
+    assert signer.puts == 0 and signer.deletes == 0 and s3.puts == 0 and s3.deletes == 0
+
+
+def test_r2_signer_rejects_invalid_disposition():
+    s3 = FakeS3()
+    signer = R2GetSigner(s3)
+    try:
+        signer.sign(ALLOWED_BUCKET, "kosha/a.pdf", disposition="inline-attachment")
+        raise AssertionError("should fail")
+    except ValueError as e:
+        assert str(e) == "INVALID_CONTENT_DISPOSITION"
+    assert s3.calls == []
 
 
 def test_r2_signer_rejects_wrong_bucket():
@@ -280,5 +338,8 @@ def test_router_type1_ok(monkeypatch):
     app.include_router(mod.router)
     r = TestClient(app).get("/public/kosha/materials/m1")
     assert r.status_code == 200
-    assert r.json()["assets"][0]["internally_available"] is True
-    assert "key" not in (r.json()["assets"][0])
+    asset = r.json()["assets"][0]
+    assert asset["internally_available"] is True
+    assert "d=inline" in asset["view_url"]
+    assert "d=attachment" in asset["download_url"]
+    assert "key" not in asset
