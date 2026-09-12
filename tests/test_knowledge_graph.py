@@ -1398,9 +1398,7 @@ def test_g93_construction_accident_source_normalized():
     )
     items, errors = load_production_sources(sb, {"accident"})
     assert errors == {}
-    row = next(r for r in items["accident"] if r["content_id"] == "acc-c1")
-    assert row["published_at"] == "2020-04-02"
-    assert "source_url" not in row or row.get("source_url") is None
+    assert items.get("accident") == []
 
 
 def test_g94_hydrator_domestic_production_columns():
@@ -1431,12 +1429,7 @@ def test_g95_hydrator_construction_production_columns():
         },
     )
     rec = ProductionKnowledgeHydrator(sb).get("ACCIDENT", "acc-c1")
-    assert rec is not None
-    assert rec.summary == "굴착 중 붕괴"
-    assert rec.published_at == "2020-04-02"
-    assert rec.source_url is None
-    assert rec.content_type == "ACCIDENT"
-    assert rec.is_public_current is True
+    assert rec is None
 
 
 def test_g96_accident_adapter_selects_production_columns():
@@ -1449,15 +1442,99 @@ def test_g96_accident_adapter_selects_production_columns():
         "id,title,url",
         "id,title,occurred_at,url",
         "accident_type,occurred_at",
+        "kosha_construction_accidents",
     )
     for path in files:
         src = path.read_text(encoding="utf-8")
         for token in forbidden:
-            assert token not in src, f"{path.name} still selects {token}"
+            assert token not in src, f"{path.name} still uses {token}"
     refresh = (ROOT / "scripts/refresh_knowledge_graph.py").read_text(encoding="utf-8")
     hydrate = (ROOT / "services/knowledge_graph_hydrate.py").read_text(encoding="utf-8")
     assert "id,title,reg_dt,file_url" in refresh
-    assert "id,accident_summary,work_type,accident_type,occurrence_date" in refresh
     assert "id,title,reg_dt,file_url" in hydrate
-    assert "id,accident_summary,work_type,accident_type,occurrence_date" in hydrate
+
+
+def test_g97_g98_same_id_keeps_domestic_title():
+    sb = FakeSB()
+    sb.seed(
+        "kosha_accident_cases",
+        {"id": "X", "title": "지게차 전복", "reg_dt": "2019-03-01", "file_url": "https://kosha.example/x"},
+    )
+    sb.seed(
+        "kosha_construction_accidents",
+        {
+            "id": "X",
+            "accident_summary": "",
+            "work_type": "",
+            "accident_type": "",
+            "occurrence_date": "2020-04-02",
+        },
+    )
+    items, errors = load_production_sources(sb, {"accident"})
+    assert errors == {}
+    rows = [r for r in items["accident"] if r["content_id"] == "X"]
+    assert len(rows) == 1
+    assert rows[0]["title"] == "지게차 전복"
+    assert rows[0]["published_at"] == "2019-03-01"
+    assert rows[0]["source_url"] == "https://kosha.example/x"
+
+
+def test_g99_hydrator_ignores_blank_construction_overwrite():
+    sb = FakeSB()
+    sb.seed(
+        "kosha_accident_cases",
+        {"id": "X", "title": "지게차 전복", "reg_dt": "2019-03-01", "file_url": "https://kosha.example/x"},
+    )
+    sb.seed(
+        "kosha_construction_accidents",
+        {"id": "X", "accident_summary": "", "work_type": "", "accident_type": ""},
+    )
+    hydrator = ProductionKnowledgeHydrator(sb)
+    rec = hydrator.get("ACCIDENT", "X")
+    assert rec is not None
+    assert rec.title == "지게차 전복"
+    assert rec.published_at == "2019-03-01"
+    assert rec.source_url == "https://kosha.example/x"
+    assert not any(op[0] == "select" and op[1] == "kosha_construction_accidents" for op in sb.ops)
+
+
+def test_g100_loader_does_not_use_construction_as_candidate_input():
+    src = inspect.getsource(load_production_sources)
+    assert "kosha_accident_cases" in src
+    assert "kosha_construction_accidents" not in src
+    sb = FakeSB()
+    sb.seed("kosha_accident_cases", {"id": "d1", "title": "지게차", "reg_dt": "2019-01-01"})
+    sb.seed("kosha_construction_accidents", {"id": "c1", "accident_summary": "굴착", "work_type": "굴착"})
+    items, errors = load_production_sources(sb, {"accident"})
+    assert errors == {}
+    ids = {r["content_id"] for r in items["accident"]}
+    assert ids == {"d1"}
+    produced = produce_accident_relations(items["accident"])
+    assert all(c.source_content_id != "c1" for c in produced)
+
+
+def test_g101_accident_identity_is_raw_id():
+    cands = produce_accident_relations([{"id": "abc-1", "title": "지게차 전복", "content_id": "abc-1"}])
+    assert cands
+    assert all(c.source_content_id == "abc-1" for c in cands)
+    assert all(not str(c.source_content_id).startswith(("domestic:", "construction:")) for c in cands)
+    refresh = (ROOT / "scripts/refresh_knowledge_graph.py").read_text(encoding="utf-8")
+    hydrate = (ROOT / "services/knowledge_graph_hydrate.py").read_text(encoding="utf-8")
+    assert '"domestic:"' not in refresh and "'domestic:'" not in refresh
+    assert '"construction:"' not in refresh and "'construction:'" not in refresh
+    assert '"domestic:"' not in hydrate and "'domestic:'" not in hydrate
+    assert '"construction:"' not in hydrate and "'construction:'" not in hydrate
+
+
+def test_g102_same_domestic_id_rerun_no_semantic_duplicate():
+    store = MemoryGraphStore()
+    cands = produce_accident_relations([{"id": "abc-1", "title": "지게차 전복", "content_id": "abc-1"}])
+    persist_candidates(store, cands, run_id="r1")
+    first = len(store.list_edges())
+    persist_candidates(store, cands, run_id="r2")
+    accident_edges = [e for e in store.list_edges() if e["source_content_type"] == "ACCIDENT" and e["source_content_id"] == "abc-1"]
+    assert accident_edges
+    assert len(store.list_edges()) == first
+    assert len({e["edge_key"] for e in accident_edges}) == len(accident_edges)
+    assert all(e["source_content_id"] == "abc-1" for e in accident_edges)
 

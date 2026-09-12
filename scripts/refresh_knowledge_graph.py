@@ -170,11 +170,6 @@ def load_production_sources(
     if "accident" in wanted:
         try:
             domestic = _paged(sb, "kosha_accident_cases", "id,title,reg_dt,file_url")
-            construction = _paged(
-                sb,
-                "kosha_construction_accidents",
-                "id,accident_summary,work_type,accident_type,occurrence_date",
-            )
             items["accident"] = [
                 {
                     "content_id": r.get("id"),
@@ -184,17 +179,6 @@ def load_production_sources(
                     "published_at": r.get("reg_dt"),
                 }
                 for r in domestic
-                if r.get("id")
-            ] + [
-                {
-                    "content_id": r.get("id"),
-                    "id": r.get("id"),
-                    "accident_summary": r.get("accident_summary"),
-                    "work_type": r.get("work_type"),
-                    "accident_type": r.get("accident_type"),
-                    "published_at": r.get("occurrence_date"),
-                }
-                for r in construction
                 if r.get("id")
             ]
         except Exception as exc:

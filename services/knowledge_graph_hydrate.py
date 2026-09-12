@@ -14,7 +14,6 @@ MATERIAL_CATALOG = "kosha_safety_materials"
 MATERIAL_SNAPSHOTS = "kosha_safety_material_snapshots"
 MATERIAL_ITEMS = "kosha_safety_material_snapshot_items"
 ACCIDENT_DOMESTIC = "kosha_accident_cases"
-ACCIDENT_CONSTRUCTION = "kosha_construction_accidents"
 LAW_TABLE = "law_revision_board"
 PRECEDENT_TABLE = "industrial_accident_precedents"
 
@@ -164,28 +163,6 @@ class ProductionKnowledgeHydrator:
                 source_url=row.get("file_url"),
                 published_at=row.get("reg_dt"),
                 category=None,
-                is_public_current=True,
-            )
-        construction = self._in(
-            ACCIDENT_CONSTRUCTION,
-            "id",
-            ids,
-            "id,accident_summary,work_type,accident_type,occurrence_date",
-        )
-        for row in construction:
-            cid = str(row.get("id") or "")
-            if not cid:
-                continue
-            out[("ACCIDENT", cid)] = KnowledgeRecord(
-                content_type="ACCIDENT",
-                content_id=cid,
-                title=None,
-                summary=row.get("accident_summary"),
-                tai_url=default_tai_url("ACCIDENT", cid, construction=True),
-                source_name="KOSHA",
-                source_url=None,
-                published_at=row.get("occurrence_date"),
-                category=row.get("work_type") or row.get("accident_type"),
                 is_public_current=True,
             )
         return out
