@@ -633,6 +633,10 @@ def run_diagnosis(
         if _v is not None
     }
 
+    from services.canonical.explicit_construction_predicates import (
+        collect_explicit_construction_predicates,
+    )
+
     row = {
         "public_token": public_token,
         "input_data": {
@@ -648,6 +652,9 @@ def run_diagnosis(
                 if _raw_structured_input
                 else {}
             ),
+            # Explicit CORE22 facts only when the user actually answered.
+            # False is stored. missing is omitted. No default false.
+            **collect_explicit_construction_predicates(body),
         },
         "partial_result": build_partial_func(full_result),
         "full_result": full_result,
