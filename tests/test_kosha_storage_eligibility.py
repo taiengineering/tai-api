@@ -8,6 +8,8 @@ from services.kosha_safety_materials.storage.eligibility import (
 )
 from services.kosha_safety_materials.storage.resolve import (
     ResolutionError,
+    collapse_exact_duplicate_hits,
+    file_list_stable_identity,
     match_downloadable_file,
     match_logical_attachment,
 )
@@ -111,11 +113,11 @@ def test_logical_match_exact_and_blocks():
         {"contsAtcflNo": "NO", "contsAtcflSeq": 1, "orgnlAtchFileNm": "a.pdf"},
         {"contsAtcflNo": "NO", "contsAtcflSeq": 1, "orgnlAtchFileNm": "a.pdf"},
     ]}}
-    try:
-        match_logical_attachment(material_id="m1", expected_checksum=sak, expected_filename="a.pdf", atch_json=js2)
-        assert False
-    except ResolutionError as e:
-        assert e.code == "SOURCE_ASSET_MULTI_MATCH"
+    dup = match_logical_attachment(
+        material_id="m1", expected_checksum=sak, expected_filename="a.pdf", atch_json=js2,
+    )
+    assert dup["checksum"] == sak
+    assert dup["contsAtcflNo"] == "NO"
     try:
         match_logical_attachment(
             material_id="m1", expected_checksum=sak, expected_filename="other.pdf", atch_json=js,
@@ -134,11 +136,9 @@ def test_downloadable_file_exact_and_blocks():
         assert False
     except ResolutionError as e:
         assert e.code == "SOURCE_ASSET_ZERO_MATCH"
-    try:
-        match_downloadable_file(files + files, file_name="a.pdf", atcfl_no="NO")
-        assert False
-    except ResolutionError as e:
-        assert e.code == "SOURCE_ASSET_MULTI_MATCH"
+    dup = match_downloadable_file(files + files, file_name="a.pdf", atcfl_no="NO")
+    assert dup["atcfl_seq"] == 1
+    assert dup["file_name"] == "a.pdf"
     try:
         match_downloadable_file(files, file_name="b.pdf", atcfl_no="NO")
         assert False
@@ -161,6 +161,90 @@ def test_4523_style_filename_mismatch_is_hold_reason_not_fuzzy():
         names = [x["file_name"] for x in e.observed_files]
         assert "[2017-교육미디어-405]-리프트 점검_표지.ai" in names
         assert "[2017-교육미디어-405] 리프트 점검.pdf" in names
+
+
+def test_exact_duplicate_eleven_rows_collapse_to_one_identity():
+    sak = source_asset_key("m1", "NO", 1, "a.pdf")
+    row = {"contsAtcflNo": "NO", "contsAtcflSeq": 1, "orgnlAtchFileNm": "a.pdf"}
+    js = {"payload": {"list": [row] * 11}}
+    hit = match_logical_attachment(
+        material_id="m1", expected_checksum=sak, expected_filename="a.pdf", atch_json=js,
+    )
+    assert hit["checksum"] == sak
+    files = [{"atcflNo": "NO", "atcflSeq": 1, "orgnlAtchFileNm": "a.pdf"}] * 11
+    dl = match_downloadable_file(files, file_name="a.pdf", atcfl_no="NO")
+    assert dl["atcfl_seq"] == 1
+    collapsed = collapse_exact_duplicate_hits(files, file_list_stable_identity)
+    assert len(collapsed) == 1
+
+
+def test_different_identities_are_not_deduped():
+    seq = [
+        {"atcflNo": "FL001", "atcflSeq": 1, "orgnlAtchFileNm": "abc.pdf"},
+        {"atcflNo": "FL001", "atcflSeq": 2, "orgnlAtchFileNm": "abc.pdf"},
+    ]
+    name = [
+        {"atcflNo": "FL001", "atcflSeq": 1, "orgnlAtchFileNm": "abc.pdf"},
+        {"atcflNo": "FL001", "atcflSeq": 1, "orgnlAtchFileNm": "xyz.pdf"},
+    ]
+    nos = [
+        {"atcflNo": "FL001", "atcflSeq": 1, "orgnlAtchFileNm": "abc.pdf"},
+        {"atcflNo": "FL002", "atcflSeq": 1, "orgnlAtchFileNm": "abc.pdf"},
+    ]
+    assert len(collapse_exact_duplicate_hits(seq, file_list_stable_identity)) == 2
+    assert len(collapse_exact_duplicate_hits(name, file_list_stable_identity)) == 2
+    assert len(collapse_exact_duplicate_hits(nos, file_list_stable_identity)) == 2
+
+
+def test_different_seq_stays_multi_match():
+    files = [
+        {"atcflNo": "FL001", "atcflSeq": 1, "orgnlAtchFileNm": "abc.pdf"},
+        {"atcflNo": "FL001", "atcflSeq": 2, "orgnlAtchFileNm": "abc.pdf"},
+    ]
+    try:
+        match_downloadable_file(files, file_name="abc.pdf", atcfl_no="FL001")
+        assert False
+    except ResolutionError as e:
+        assert e.code == "SOURCE_ASSET_MULTI_MATCH"
+
+
+def test_different_filename_same_seq_stays_multi_match():
+    files = [
+        {"atcflNo": "FL001", "atcflSeq": 1, "orgnlAtchFileNm": "abc.pdf"},
+        {"atcflNo": "FL001", "atcflSeq": 1, "orgnlAtchFileNm": "xyz.pdf"},
+    ]
+    # filename filter yields one hit for abc.pdf — still unique, not MULTI
+    hit = match_downloadable_file(files, file_name="abc.pdf", atcfl_no="FL001")
+    assert hit["file_name"] == "abc.pdf"
+    # without filename, both identities share atcflNo → MULTI
+    try:
+        match_downloadable_file(files, file_name=None, atcfl_no="FL001")
+        assert False
+    except ResolutionError as e:
+        assert e.code == "SOURCE_ASSET_MULTI_MATCH"
+
+
+def test_different_atcfl_no_stays_multi_match():
+    sak = source_asset_key("m1", "FL001", 1, "abc.pdf")
+    # checksum is identity-specific; two different nos cannot share expected checksum.
+    # getFileList hits by filename across different atcflNo stay MULTI.
+    files = [
+        {"atcflNo": "FL001", "atcflSeq": 1, "orgnlAtchFileNm": "abc.pdf"},
+        {"atcflNo": "FL002", "atcflSeq": 1, "orgnlAtchFileNm": "abc.pdf"},
+    ]
+    try:
+        match_downloadable_file(files, file_name="abc.pdf", atcfl_no="FL001")
+        assert False
+    except ResolutionError as e:
+        assert e.code == "SOURCE_ASSET_MULTI_MATCH"
+    js = {"payload": {"list": [
+        {"contsAtcflNo": "FL001", "contsAtcflSeq": 1, "orgnlAtchFileNm": "abc.pdf"},
+        {"contsAtcflNo": "FL002", "contsAtcflSeq": 1, "orgnlAtchFileNm": "abc.pdf"},
+    ]}}
+    hit = match_logical_attachment(
+        material_id="m1", expected_checksum=sak, expected_filename="abc.pdf", atch_json=js,
+    )
+    assert hit["contsAtcflNo"] == "FL001"
 
 
 def test_pending_excludes_open_holds_but_not_as_versioned():

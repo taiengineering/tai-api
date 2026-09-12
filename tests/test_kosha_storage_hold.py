@@ -37,6 +37,9 @@ class _ProdHolds:
     def record_open(self, **k):
         return self._inner.record_open(**k)
 
+    def resolve_open(self, **k):
+        return self._inner.resolve_open(**k)
+
     @property
     def inserts(self):
         return self._inner.inserts
