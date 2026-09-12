@@ -9,16 +9,17 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timezone
+
+from services.time import now_kst
 
 
 def main() -> int:
-    started_at = datetime.now(timezone.utc).isoformat()
+    started_at = now_kst().isoformat()
     try:
         from services.inspection_sets_svc.schedules import generate_schedules_all
 
         result = generate_schedules_all()
-        finished_at = datetime.now(timezone.utc).isoformat()
+        finished_at = now_kst().isoformat()
         print(
             json.dumps(
                 {
@@ -35,7 +36,7 @@ def main() -> int:
             return 1
         return 0
     except Exception as exc:
-        finished_at = datetime.now(timezone.utc).isoformat()
+        finished_at = now_kst().isoformat()
         print(
             json.dumps(
                 {
