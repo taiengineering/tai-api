@@ -1,15 +1,24 @@
-"""Public read-only KOSHA stored-material display — WP-2.
+"""Public read-only KOSHA stored-material display — WP-2 + WP-3.
 
+GET /public/kosha/materials
+GET /public/kosha/materials/stats
 GET /public/kosha/materials/{material_id}
-DB SELECT + R2 GET presign only. No KOSHA fetch, no PUT/DELETE, no DML.
+
+List/stats: latest COMPLETED snapshot membership only. No KOSHA, no R2, no DML.
+Detail: WP-2 contract frozen (SELECT + R2 GET presign only).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from services.kosha_safety_materials.display import (
+    CurrentSnapshotUnavailable,
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
     SupabaseDisplayStore,
+    list_current_materials,
     load_public_material,
+    stats_current_materials,
 )
 from services.kosha_safety_materials.storage.r2_store import (
     R2Error,
@@ -37,6 +46,35 @@ def get_signer():
         creds = credentials_from_env()
         _signer = R2GetSigner(make_s3_client(creds))
     return _signer
+
+
+@router.get("/materials")
+def list_public_materials(
+    q: str = "",
+    cat: str = "ALL",
+    sec: str = "ALL",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+):
+    try:
+        return list_current_materials(
+            get_store(),
+            q=q,
+            cat=cat,
+            sec=sec,
+            page=page,
+            page_size=page_size,
+        )
+    except CurrentSnapshotUnavailable:
+        raise HTTPException(status_code=503, detail="CURRENT_SNAPSHOT_UNAVAILABLE")
+
+
+@router.get("/materials/stats")
+def stats_public_materials():
+    try:
+        return stats_current_materials(get_store())
+    except CurrentSnapshotUnavailable:
+        raise HTTPException(status_code=503, detail="CURRENT_SNAPSHOT_UNAVAILABLE")
 
 
 @router.get("/materials/{material_id}")
