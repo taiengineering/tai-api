@@ -35,6 +35,11 @@ def _cap(body):
     return build_facility(cap["s1"])
 
 def _body(sector,fd):
+    fd = dict(fd or {})
+    if sector == "CONSTRUCTION":
+        fd.setdefault("is_construction", True)
+        fd.setdefault("is_relationship_contractor", False)
+        fd.setdefault("is_civil_construction", False)
     return DiagnosisRunBody(auth_token="t",sector=sector,disclaimer_log_id="disc1",form_data=fd)
 
 def test_11_true_via_formdata():
@@ -111,6 +116,8 @@ def test_ec1_paid_base_input_preserved_form_data_only():
 def test_ec1_top_level_precedence_over_form_data():
     b = DiagnosisRunBody(auth_token="t", sector="CONSTRUCTION", disclaimer_log_id="disc1",
                          worker_count=7, contract_amount_eok=3.0,
+                         is_construction=True, is_relationship_contractor=False,
+                         is_civil_construction=False,
                          form_data={"worker_count": 100, "project_amount": 50})
     s1, _, tier_seen = _cap_all(b)
     assert s1.worker_count == 7

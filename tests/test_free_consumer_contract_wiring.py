@@ -81,6 +81,8 @@ def _run(sector: str, form_data: Dict[str, Any]) -> None:
 def test_construction_worker_count_preserved():
     _run("CONSTRUCTION", {
         "worker_count": 37, "project_address": "seoul",
+        "is_construction": True, "is_relationship_contractor": False,
+        "is_civil_construction": False,
         "facility": {"worker_count": 37}, "process": [], "equipment": [],
     })
     s1 = _CAPTURED["step1_body"]
