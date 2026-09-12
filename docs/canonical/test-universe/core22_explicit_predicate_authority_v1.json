@@ -1,0 +1,171 @@
+{
+  "authority_type": "OWNER_APPROVED_E2E_FIXTURE_FACT",
+  "status": "CANDIDATE",
+  "frozen_profile_count": 112,
+  "construction_profile_count": 27,
+  "frozen_profile_sha256": "4818a63ab261c5a36c1432647b6b17e7636641071801d36fd1b85d1361af751b",
+  "profiles": [
+    {
+      "profile_id": "PF-0028",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0029",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0030",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0031",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0032",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0033",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0034",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0035",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0036",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0052",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0053",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0054",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0055",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0056",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0057",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0094",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0095",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0096",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0097",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0098",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0099",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0100",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0101",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0102",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0103",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0104",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    },
+    {
+      "profile_id": "PF-0105",
+      "is_construction": null,
+      "is_relationship_contractor": null,
+      "is_civil_construction": null
+    }
+  ]
+}
