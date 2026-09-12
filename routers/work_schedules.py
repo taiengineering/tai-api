@@ -65,6 +65,7 @@ from services.company_scope import (
     _tier,
 )
 from services.status_vocab import wa_active_query_values, wa_write_ready
+from services.work_schedule_executability import require_active_executable
 from services.time import now_kst, serialize_external_utc
 
 router = APIRouter(prefix="/work-schedules", tags=["work_schedules"])
@@ -105,8 +106,9 @@ def _apply_one_update(supabase, schedule_id: str, fields: dict, now: str) -> boo
     # 신규 assignment INSERT가 발생하는 경우(assigned_user_id 실제 값)만 검사한다.
     _parent_factory_id = None
     if assign_changed and fields["assigned_user_id"]:
-        _parent = supabase.table("work_schedules").select("factory_id") \
-            .eq("id", schedule_id).limit(1).execute()
+        _parent = require_active_executable(
+            supabase.table("work_schedules").select("factory_id").eq("id", schedule_id)
+        ).limit(1).execute()
         _parent_factory_id = _parent.data[0].get("factory_id") if _parent.data else None
         if not _parent_factory_id:
             raise HTTPException(
@@ -153,7 +155,9 @@ def _owned_ids(supabase, ids, current):
     filt = scoped_filter(current, supabase, {"company_id", "factory_id"})
     if filt is DENY:
         return set()
-    q = supabase.table("work_schedules").select("id").in_("id", list(ids))
+    q = require_active_executable(
+        supabase.table("work_schedules").select("id").in_("id", list(ids))
+    )
     q = apply_scoped_filter(q, filt)
     if q is None:
         return set()
@@ -371,7 +375,9 @@ def get_work_schedules(
         if factory_id and "factory_id" not in filt:
             filt = {**filt, "factory_id": factory_id}
 
-    q = supabase.table("work_schedules").select("*", count="exact")
+    q = require_active_executable(
+        supabase.table("work_schedules").select("*", count="exact")
+    )
     q = apply_scoped_filter(q, filt)
     if q is None:
         return {"status": "success", "data": {"items": [], "total": 0, "page": page, "size": size, "total_pages": 0}}
@@ -417,9 +423,11 @@ def get_factory_work_schedules(factory_id: str, current: dict = Depends(get_curr
     supabase = get_supabase()
     _ensure_ws_factory_access(supabase, factory_id, current)   # 타사·타시설 404
     result = (
-        supabase.table("work_schedules")
-        .select("*")
-        .eq("factory_id", factory_id)
+        require_active_executable(
+            supabase.table("work_schedules")
+            .select("*")
+            .eq("factory_id", factory_id)
+        )
         .order("created_at", desc=True)
         .execute()
     )
@@ -430,9 +438,11 @@ def get_factory_work_schedules(factory_id: str, current: dict = Depends(get_curr
 def get_inspection_set_work_schedules(inspection_set_id: str, current: dict = Depends(get_current_user)):
     supabase = get_supabase()
     result = (
-        supabase.table("work_schedules")
-        .select("*")
-        .eq("inspection_set_id", inspection_set_id)
+        require_active_executable(
+            supabase.table("work_schedules")
+            .select("*")
+            .eq("inspection_set_id", inspection_set_id)
+        )
         .order("created_at", desc=True)
         .execute()
     )
@@ -461,9 +471,11 @@ def get_work_schedule(schedule_id: str, current: dict = Depends(get_current_user
         raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
     supabase = get_supabase()
     result = (
-        supabase.table("work_schedules")
-        .select("*")
-        .eq("id", schedule_id)
+        require_active_executable(
+            supabase.table("work_schedules")
+            .select("*")
+            .eq("id", schedule_id)
+        )
         .limit(1)
         .execute()
     )
@@ -484,9 +496,11 @@ def patch_work_schedule(schedule_id: str, body: SchedulePatchBody, current: dict
         raise HTTPException(status_code=404, detail="일정을 찾을 수 없습니다")
     supabase = get_supabase()
     _own = (
-        supabase.table("work_schedules")
-        .select("company_id,factory_id")
-        .eq("id", schedule_id)
+        require_active_executable(
+            supabase.table("work_schedules")
+            .select("company_id,factory_id")
+            .eq("id", schedule_id)
+        )
         .limit(1)
         .execute()
     )

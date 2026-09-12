@@ -125,7 +125,7 @@ def test_t2_matching_pair_inserts_schedule_and_asset_factory(monkeypatch):
     sb = FakeSB({
         "equipment_assets": [{"id": ASSET_ID, "asset_name": "펌프", "factory_id": FACTORY_A}],
         "factories": [{"id": FACTORY_A, "company_id": "C1"}],
-        "work_schedules": [{"id": SCHED_ID, "factory_id": FACTORY_A}],
+        "work_schedules": [{"id": SCHED_ID, "factory_id": FACTORY_A, "active_yn": True}],
     })
     out = _run(monkeypatch, sb, _body(schedule_id=SCHED_ID))
     assert out["status"] == "success"
@@ -151,7 +151,7 @@ def test_t4_schedule_factory_null_409_no_insert(monkeypatch):
     sb = FakeSB({
         "equipment_assets": [{"id": ASSET_ID, "asset_name": "펌프", "factory_id": FACTORY_A}],
         "factories": [{"id": FACTORY_A, "company_id": "C1"}],
-        "work_schedules": [{"id": SCHED_ID, "factory_id": None}],
+        "work_schedules": [{"id": SCHED_ID, "factory_id": None, "active_yn": True}],
     })
     with pytest.raises(HTTPException) as ei:
         _run(monkeypatch, sb, _body(schedule_id=SCHED_ID))
@@ -162,7 +162,7 @@ def test_t4_schedule_factory_null_409_no_insert(monkeypatch):
 def test_t5_asset_factory_null_409_no_insert(monkeypatch):
     sb = FakeSB({
         "equipment_assets": [{"id": ASSET_ID, "asset_name": "펌프", "factory_id": None}],
-        "work_schedules": [{"id": SCHED_ID, "factory_id": FACTORY_A}],
+        "work_schedules": [{"id": SCHED_ID, "factory_id": FACTORY_A, "active_yn": True}],
     })
     with pytest.raises(HTTPException) as ei:
         _run(monkeypatch, sb, _body(schedule_id=SCHED_ID))
@@ -175,7 +175,7 @@ def test_t6_cross_factory_409_no_side_effects(monkeypatch):
     sb = FakeSB({
         "equipment_assets": [{"id": ASSET_ID, "asset_name": "펌프", "factory_id": FACTORY_A}],
         "factories": [{"id": FACTORY_A, "company_id": "C1"}],
-        "work_schedules": [{"id": SCHED_ID, "factory_id": FACTORY_B}],
+        "work_schedules": [{"id": SCHED_ID, "factory_id": FACTORY_B, "active_yn": True}],
     })
     with pytest.raises(HTTPException) as ei:
         _run(monkeypatch, sb, _body(schedule_id=SCHED_ID, overall_result="NG"), notify_calls=notify_calls)
@@ -206,7 +206,7 @@ def test_t9_ok_matching_pair_updates_schedule_done(monkeypatch):
     sb = FakeSB({
         "equipment_assets": [{"id": ASSET_ID, "asset_name": "펌프", "factory_id": FACTORY_A}],
         "factories": [{"id": FACTORY_A, "company_id": "C1"}],
-        "work_schedules": [{"id": SCHED_ID, "factory_id": FACTORY_A}],
+        "work_schedules": [{"id": SCHED_ID, "factory_id": FACTORY_A, "active_yn": True}],
     })
     _run(monkeypatch, sb, _body(schedule_id=SCHED_ID, overall_result="OK"))
     assert len(_ec_inserts(sb)) == 1
@@ -221,7 +221,7 @@ def test_t10_ng_with_factory_notifies(monkeypatch):
     sb = FakeSB({
         "equipment_assets": [{"id": ASSET_ID, "asset_name": "펌프", "factory_id": FACTORY_A}],
         "factories": [{"id": FACTORY_A, "company_id": "C1"}],
-        "work_schedules": [{"id": SCHED_ID, "factory_id": FACTORY_A}],
+        "work_schedules": [{"id": SCHED_ID, "factory_id": FACTORY_A, "active_yn": True}],
     })
     _run(
         monkeypatch,

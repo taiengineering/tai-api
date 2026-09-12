@@ -24,6 +24,7 @@ from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services.company_scope import _ensure_own_company, _ensure_factory_own, _scope, _is_admin
 from services.time import now_kst, serialize_external_utc
+from services.work_schedule_executability import require_active_executable
 
 router = APIRouter(prefix="/equipment-checkins", tags=["equipment_checkins"])
 
@@ -89,8 +90,10 @@ async def submit_checkin(body: EquipmentCheckinCreate):
     # WP-04E: schedule_id 제공 시 asset.factory_id 와 schedule.factory_id pair 일치 검증 (side-effect 전 fail-closed).
     #   ASSET = factory authority. cross-factory / 미해결 pair 는 INSERT/UPDATE/notify 이전에 중단.
     if body.schedule_id:
-        _ws = supabase.table("work_schedules").select("id, factory_id").eq(
-            "id", body.schedule_id
+        _ws = require_active_executable(
+            supabase.table("work_schedules").select("id, factory_id").eq(
+                "id", body.schedule_id
+            )
         ).limit(1).execute()
         if not _ws.data:
             raise HTTPException(status_code=409, detail="점검 일정을 찾을 수 없습니다")

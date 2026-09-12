@@ -185,8 +185,8 @@ def _seed():
             {"id": INSP_OTHER, "assignment_id": WS_OTHER},
         ],
         "work_schedules": [
-            {"id": WS_OWN, "assigned_user_id": USER, "inspection_set_id": SET_OWN},
-            {"id": WS_OTHER, "assigned_user_id": OTHER, "inspection_set_id": "set-other"},
+            {"id": WS_OWN, "assigned_user_id": USER, "inspection_set_id": SET_OWN, "active_yn": True},
+            {"id": WS_OTHER, "assigned_user_id": OTHER, "inspection_set_id": "set-other", "active_yn": True},
         ],
         "work_assignments": [
             {

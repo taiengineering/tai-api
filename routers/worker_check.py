@@ -38,6 +38,7 @@ from pydantic import BaseModel
 from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services import inspection_sets_svc as _iss
+from services.work_schedule_executability import require_active_executable
 from services.inspection_record_resolver import (
     InspectionRecordError,
     list_effective_inspection_records_by_inspector,
@@ -175,7 +176,9 @@ def submit_check(
     # REV-2: work_schedules identity = (id, factory_id). id 는 factory 간 중복 가능하므로
     # limit(1) 로 임의 factory 를 고르지 않는다. 0→409(not-found), >1→409(AMBIGUOUS), 1→그 factory.
     # ambiguous 를 body.factory_id 로 disambiguate 하지 않는다(parent DB 사실로만 결정, fail-closed).
-    _ws = supabase.table("work_schedules").select("id, factory_id").eq("id", schedule_ref).execute()
+    _ws = require_active_executable(
+        supabase.table("work_schedules").select("id, factory_id").eq("id", schedule_ref)
+    ).execute()
     _ws_rows = _ws.data or []
     if not _ws_rows:
         raise HTTPException(status_code=409, detail="일정을 찾을 수 없습니다.")

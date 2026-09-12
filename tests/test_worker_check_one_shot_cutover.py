@@ -61,7 +61,7 @@ class FakeSupabase:
 def _store():
     return {
         "users": {"01012345678": [{"id": "INSP-1", "name": "홍길동"}]},
-        "work_schedules": {"SCH-1": [{"id": "SCH-1", "factory_id": "FCT-1"}]},
+        "work_schedules": {"SCH-1": [{"id": "SCH-1", "factory_id": "FCT-1", "active_yn": True}]},
     }
 
 
@@ -225,8 +225,8 @@ def _store_ws(rows):
 
 def test_ambiguous_schedule_id_rows2_returns_409_no_service(wired):
     # W-A: 동일 id 가 두 factory 에 → 409 AMBIGUOUS, 서비스 호출 0
-    wired["store"] = _store_ws([{"id": "SCH-1", "factory_id": "FCT-1"},
-                                {"id": "SCH-1", "factory_id": "FCT-2"}])
+    wired["store"] = _store_ws([{"id": "SCH-1", "factory_id": "FCT-1", "active_yn": True},
+                                {"id": "SCH-1", "factory_id": "FCT-2", "active_yn": True}])
     with pytest.raises(HTTPException) as ei:
         wc.submit_check(_body([{"name": "소화기", "result": "ok"}]), current_user=None)
     assert ei.value.status_code == 409
@@ -236,7 +236,7 @@ def test_ambiguous_schedule_id_rows2_returns_409_no_service(wired):
 
 def test_single_row_passes_that_rows_factory(wired):
     # W-B: rows=1 → 그 row 의 factory_id 를 service 로 전달(임의/기본값 아님)
-    wired["store"] = _store_ws([{"id": "SCH-1", "factory_id": "FCT-ONLY"}])
+    wired["store"] = _store_ws([{"id": "SCH-1", "factory_id": "FCT-ONLY", "active_yn": True}])
     wc.submit_check(_body([{"name": "소화기", "result": "ok"}]), current_user=None)
     assert wired["calls"][0]["factory_id"] == "FCT-ONLY"
 
@@ -255,5 +255,7 @@ def test_parent_lookup_no_limit1_static():
     # W-D: worker start path 의 work_schedules parent 조회에 limit(1) 없음
     import inspect as _inspect
     src = _inspect.getsource(wc.submit_check)
-    assert '.select("id, factory_id").eq("id", schedule_ref).limit(1)' not in src
-    assert '.select("id, factory_id").eq("id", schedule_ref).execute()' in src
+    assert "limit(1)" not in src.split("schedule_ref")[1].split("_ws_rows")[0]
+    assert "require_active_executable" in src
+    assert '.eq("id", schedule_ref)' in src
+    assert "schedule_ref" in src

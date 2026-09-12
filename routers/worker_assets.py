@@ -38,6 +38,7 @@ from db.supabase_client import get_supabase
 from routers.auth import get_current_user
 from services import inspection_sets_svc as _iss
 from services.status_vocab import is_wa_done
+from services.work_schedule_executability import require_active_executable
 from services.upload_service import MAX_SIZE, MIME_TO_EXT, validate_image_file
 from services.time import now_kst
 
@@ -145,9 +146,11 @@ def _assert_inspection_photo_owner(supabase, inspection_id: str, user_id: str) -
         raise HTTPException(status_code=403, detail="본인에게 배정된 점검만 업로드할 수 있습니다")
 
     ws = (
-        supabase.table("work_schedules")
-        .select("id, assigned_user_id")
-        .eq("id", parent_id)
+        require_active_executable(
+            supabase.table("work_schedules")
+            .select("id, assigned_user_id")
+            .eq("id", parent_id)
+        )
         .limit(1)
         .execute()
     )

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from db.supabase_client import get_supabase
+from services.work_schedule_executability import require_active_executable
 from .errors import InspectionSetsSvcError
 
 _ITEM_COLS = "id, item_seq, item_name, description, risk_type, is_required, check_type"
@@ -27,7 +28,9 @@ def resolve_set_id_for_assignment(assignment_id: str):
     wa = supabase.table("work_assignments").select("schedule_id").eq("id", assignment_id).limit(1).execute()
     if not wa.data or not wa.data[0].get("schedule_id"):
         return None
-    ws = supabase.table("work_schedules").select("inspection_set_id").eq("id", wa.data[0]["schedule_id"]).limit(1).execute()
+    ws = require_active_executable(
+        supabase.table("work_schedules").select("inspection_set_id").eq("id", wa.data[0]["schedule_id"])
+    ).limit(1).execute()
     if not ws.data:
         return None
     return ws.data[0].get("inspection_set_id")
@@ -39,7 +42,9 @@ def get_items_for_assignment(assignment_id: str) -> dict:
     wa = supabase.table("work_assignments").select("schedule_id").eq("id", assignment_id).limit(1).execute()
     if not wa.data or not wa.data[0].get("schedule_id"):
         raise InspectionSetsSvcError(404, "배정된 점검을 찾을 수 없습니다")
-    ws = supabase.table("work_schedules").select("inspection_set_id").eq("id", wa.data[0]["schedule_id"]).limit(1).execute()
+    ws = require_active_executable(
+        supabase.table("work_schedules").select("inspection_set_id").eq("id", wa.data[0]["schedule_id"])
+    ).limit(1).execute()
     if not ws.data:
         raise InspectionSetsSvcError(404, "배정된 점검을 찾을 수 없습니다")
     set_id = ws.data[0].get("inspection_set_id")

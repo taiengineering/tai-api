@@ -18,6 +18,7 @@ from fastapi import APIRouter, Query, HTTPException
 
 from db.supabase_client import get_supabase
 from services.time import business_today
+from services.work_schedule_executability import require_active_executable
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/worker", tags=["worker_home"])
@@ -106,10 +107,11 @@ def get_today_tasks(
 
             # 업무일정 정보 보강
             if wa.get("schedule_id"):
-                ws_res = supabase.table("work_schedules") \
-                    .select("description, law_name, obligation_type") \
-                    .eq("id", wa["schedule_id"]) \
-                    .limit(1).execute()
+                ws_res = require_active_executable(
+                    supabase.table("work_schedules")
+                    .select("description, law_name, obligation_type")
+                    .eq("id", wa["schedule_id"])
+                ).limit(1).execute()
                 if ws_res.data:
                     item["description"]     = ws_res.data[0].get("description", "")
                     item["law_name"]        = ws_res.data[0].get("law_name", "")
