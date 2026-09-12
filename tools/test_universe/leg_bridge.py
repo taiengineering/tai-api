@@ -12,6 +12,23 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 from clients.leg_runtime_client import _LEG_CODE_TO_CONSUMER, _LEG_INPUT_FIELDS
 from schemas.diagnosis_integrated import DiagnosisRunBody
 
+try:
+    from tools.test_universe.explicit_predicate_authority import (
+        AUTHORITY_MISSING,
+        PREDICATE_NAMES,
+        FixtureAuthorityError,
+        load_approved_authority_index,
+        require_construction_facts,
+    )
+except ImportError:  # CLI inserts tools/test_universe on sys.path
+    from explicit_predicate_authority import (  # type: ignore
+        AUTHORITY_MISSING,
+        PREDICATE_NAMES,
+        FixtureAuthorityError,
+        load_approved_authority_index,
+        require_construction_facts,
+    )
+
 MAPPING_VERSION = "leg-112-bridge-v1"
 WO = "WO-SM-CORE22-E2E-112-BRIDGE-CONTRACT-001"
 EXPECTED_PROFILE_COUNT = 112
@@ -57,6 +74,12 @@ _LIVE_AUTH_FIELDS = ("auth_token", "disclaimer_log_id")
 
 class BridgeContractError(RuntimeError):
     """Fail closed: Profile cannot be projected without guesswork or missing required Official field."""
+
+
+def _authority_fail(exc: BaseException | None = None) -> None:
+    if exc is not None:
+        raise BridgeContractError(AUTHORITY_MISSING) from exc
+    raise BridgeContractError(AUTHORITY_MISSING)
 
 
 def load_profile_universe(path: str | Path) -> dict:
@@ -131,8 +154,17 @@ def consumer_entry_sector(profile_sector: str) -> str:
     return src
 
 
-def profile_to_leg_request(profile: Mapping[str, Any]) -> dict:
-    """Project one frozen Profile into a DiagnosisRunBody-compatible dict. No HTTP."""
+def profile_to_leg_request(
+    profile: Mapping[str, Any],
+    *,
+    authority_index: Optional[Mapping[str, Mapping[str, bool]]] = None,
+) -> dict:
+    """Project one frozen Profile into a DiagnosisRunBody-compatible dict. No HTTP.
+
+    Construction predicates come only from Owner-approved companion authority
+    via profile_id exact lookup. Raw construction_type_code / order_type are
+    never used to compute them.
+    """
     pid = str(profile.get("profile_id") or "")
     sector = profile.get("sector")
     if not pid:
@@ -475,6 +507,49 @@ def profile_to_leg_request(profile: Mapping[str, Any]) -> dict:
             )
         )
 
+    if source_sector == "CONSTRUCTION":
+        index = authority_index
+        if index is None:
+            try:
+                index = load_approved_authority_index()
+            except FixtureAuthorityError as exc:
+                _authority_fail(exc)
+        try:
+            facts = require_construction_facts(pid, index)
+        except FixtureAuthorityError as exc:
+            _authority_fail(exc)
+        for name in PREDICATE_NAMES:
+            val = facts[name]
+            if type(val) is not bool:
+                _authority_fail()
+            if name in body and body[name] != val:
+                raise BridgeContractError("E2E_FIXTURE_AUTHORITY_CONFLICT")
+            if name in form_data and form_data[name] != val:
+                raise BridgeContractError("E2E_FIXTURE_AUTHORITY_CONFLICT")
+            _put_body(body, name, val)
+            _put_form(form_data, name, val)
+            records.append(
+                _rec(
+                    layer="e2e_fixture_authority",
+                    source_field=name,
+                    source_unit="bool",
+                    request_field=name,
+                    request_unit="bool",
+                    mapping_type=DIRECT,
+                    production_normalizer=(
+                        "OWNER_APPROVED_E2E_FIXTURE_FACT profile_id exact lookup; "
+                        "not derived from sector/order_type/construction_type_code"
+                    ),
+                    loss="0",
+                    evidence="docs/canonical/test-universe/core22_explicit_predicate_authority_v1.json",
+                    value=val,
+                )
+            )
+    else:
+        for name in PREDICATE_NAMES:
+            if name in body or name in form_data:
+                raise BridgeContractError("E2E_FIXTURE_NON_CONSTRUCTION_PREDICATE")
+
     if form_data:
         _put_body(body, "form_data", form_data)
 
@@ -517,17 +592,57 @@ def profile_to_leg_request(profile: Mapping[str, Any]) -> dict:
     }
 
 
-def project_universe(profiles: List[Mapping[str, Any]]) -> Tuple[List[dict], dict]:
+def project_universe(
+    profiles: List[Mapping[str, Any]],
+    *,
+    authority_index: Optional[Mapping[str, Mapping[str, bool]]] = None,
+) -> Tuple[List[dict], dict]:
     assert_universe_integrity(profiles)
+    try:
+        index = (
+            dict(authority_index)
+            if authority_index is not None
+            else load_approved_authority_index()
+        )
+    except FixtureAuthorityError as exc:
+        _authority_fail(exc)
+    construction_ids = {
+        str(p.get("profile_id") or "")
+        for p in profiles
+        if p.get("sector") == "CONSTRUCTION"
+    }
+    if construction_ids != set(index):
+        _authority_fail()
     built: List[dict] = []
     for p in profiles:
-        built.append(profile_to_leg_request(p))
+        built.append(profile_to_leg_request(p, authority_index=index))
     if len(built) != EXPECTED_PROFILE_COUNT:
         raise BridgeContractError("REQUEST_BUILD_COUNT")
     types = {"DIRECT": 0, "PRODUCTION_ADAPTER": 0, "UNSUPPORTED": 0, "NOT_APPLICABLE": 0, "GAP": 0}
+    construction_complete = 0
+    non_construction_injection = 0
     for item in built:
         for r in item["records"]:
             types[r["mapping_type"]] = types.get(r["mapping_type"], 0) + 1
+        req = item["request"]
+        form = req.get("form_data") or {}
+        if item["sector"] == "CONSTRUCTION":
+            ok = True
+            for name in PREDICATE_NAMES:
+                val = req.get(name)
+                form_val = form.get(name)
+                if type(val) is not bool or type(form_val) is not bool or val != form_val:
+                    ok = False
+                    break
+            if not ok:
+                _authority_fail()
+            construction_complete += 1
+        else:
+            for name in PREDICATE_NAMES:
+                if name in req or name in form:
+                    non_construction_injection += 1
+    if non_construction_injection:
+        raise BridgeContractError("E2E_FIXTURE_NON_CONSTRUCTION_PREDICATE")
     summary = {
         "wo": WO,
         "mapping_version": MAPPING_VERSION,
@@ -535,6 +650,8 @@ def project_universe(profiles: List[Mapping[str, Any]]) -> Tuple[List[dict], dic
         "request_build": len(built),
         "fail": 0,
         "construction_profiles": sum(1 for x in built if x["sector"] == "CONSTRUCTION"),
+        "construction_predicates_complete": construction_complete,
+        "non_construction_predicate_injection": non_construction_injection,
         "type_counts": types,
         "official_entrypoint": "POST /diagnosis/run-leg",
         "official_request_model": "schemas.diagnosis_integrated.DiagnosisRunBody",

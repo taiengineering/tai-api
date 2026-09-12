@@ -138,6 +138,9 @@ def main(argv: list[str] | None = None) -> int:
             amount_map[pid] = {
                 "profile_eok": (layers.get("construction") or {}).get("contract_amount_eok"),
                 "request_eok": req.get("contract_amount_eok"),
+                "is_construction": req.get("is_construction"),
+                "is_relationship_contractor": req.get("is_relationship_contractor"),
+                "is_civil_construction": req.get("is_civil_construction"),
             }
 
     type_counts = summary["type_counts"]
@@ -148,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
         "out": str(out.resolve()),
         "mapping_version": MAPPING_VERSION,
         "pf_0052_0057_amount": amount_map,
+        "construction_predicates_complete": summary.get("construction_predicates_complete"),
+        "non_construction_predicate_injection": summary.get("non_construction_predicate_injection"),
         "double_normalization": 0,
         "synthetic_default": 0,
         "production_http_execution": 0,
@@ -173,6 +178,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"UNSUPPORTED = {type_counts.get('UNSUPPORTED', 0)}")
     print(f"NOT_APPLICABLE = {type_counts.get('NOT_APPLICABLE', 0)}")
     print(f"GAP = {type_counts.get('GAP', 0)}")
+    print(
+        "CONSTRUCTION PREDICATES COMPLETE = "
+        f"{summary.get('construction_predicates_complete')} / {summary.get('construction_profiles')}"
+    )
+    print(
+        "NON-CONSTRUCTION PREDICATE INJECTION = "
+        f"{summary.get('non_construction_predicate_injection')}"
+    )
     print(f"OUT = {out}")
     return 0
 
