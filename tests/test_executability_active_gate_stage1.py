@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from routers import inspection_checklist as ic
 from routers import work_schedules as ws
 from services.inspection_sets_svc import items as items_svc
+from services.inspection_sets_svc.errors import InspectionSetsSvcError
 from services.work_schedule_executability import require_active_executable
 
 
@@ -708,6 +709,25 @@ def test_resolve_set_id_excludes_inactive_pair(monkeypatch):
     assert items_svc.resolve_set_id_for_assignment("wa1") is None
     rows["work_schedules"][1]["active_yn"] = True
     assert items_svc.resolve_set_id_for_assignment("wa1") == "setB"
+
+
+def test_R6_wa_factory_null_no_active_sibling_set_promotion(monkeypatch):
+    """PATCH-R6 A: WA.factory_id NULL + FA active / FB inactive → do not pick FA set."""
+    rows = {
+        "work_assignments": [
+            {"id": "wa-null-fid", "schedule_id": "S", "factory_id": None},
+        ],
+        "work_schedules": [
+            {"id": "S", "factory_id": "FA", "inspection_set_id": "setA", "active_yn": True},
+            {"id": "S", "factory_id": "FB", "inspection_set_id": "setB", "active_yn": False},
+        ],
+    }
+    sb = _SB(rows)
+    monkeypatch.setattr(items_svc, "get_supabase", lambda: sb)
+    assert items_svc.resolve_set_id_for_assignment("wa-null-fid") is None
+    with pytest.raises(InspectionSetsSvcError) as ei:
+        items_svc.get_items_for_assignment("wa-null-fid")
+    assert ei.value.status_code == 409
 
 
 def test_no_work_schedules_is_active_write_in_stage1_surfaces():

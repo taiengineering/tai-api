@@ -166,24 +166,23 @@ def _assert_inspection_photo_owner(supabase, inspection_id: str, user_id: str) -
         return
 
     # Fallback: assignment_id treated as work_schedules.id
+    # PATCH-R6: occurrence FIRST (raw id), then ambiguity, then active_yn — no active-first.
     insp_fid = insp.data[0].get("factory_id")
-    ws_res = (
-        require_active_executable(
-            supabase.table("work_schedules")
-            .select("id, assigned_user_id, factory_id")
-            .eq("id", parent_id)
-        )
-        .execute()
+    ws_q = (
+        supabase.table("work_schedules")
+        .select("id, assigned_user_id, factory_id, active_yn")
+        .eq("id", parent_id)
     )
-    rows = list(ws_res.data or [])
     if insp_fid:
-        rows = [r for r in rows if r.get("factory_id") == insp_fid]
+        ws_q = ws_q.eq("factory_id", insp_fid)
+    rows = list((ws_q.execute().data) or [])
     if not rows:
         raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다")
-    if len(rows) > 1:
-        # Ambiguous same-id multi-factory without exact factory — fail-close
+    if not insp_fid and len(rows) > 1:
         raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다")
     ws_row = rows[0]
+    if ws_row.get("active_yn") is not True:
+        raise HTTPException(status_code=404, detail="점검을 찾을 수 없습니다")
     if ws_row.get("assigned_user_id") == user_id:
         return
     wa_on_schedule_q = (

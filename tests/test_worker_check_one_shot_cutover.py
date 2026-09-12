@@ -255,9 +255,38 @@ def test_parent_lookup_no_limit1_static():
     # PATCH-R5: work_schedules parent resolve must not active-first + limit(1)
     import inspect as _inspect
     src = _inspect.getsource(wc.submit_check)
-    chunk = src.split("# PATCH-R5: exact occurrence first")[1].split("_parent_factory_id =")[0]
+    chunk = src.split("# Exact occurrence FIRST")[1].split("_parent_factory_id =")[0]
     assert "limit(1)" not in chunk
     assert "require_active_executable" not in chunk
     assert "active_yn" in chunk
     assert "wa_factory_id" in chunk
     assert '.eq("id", schedule_ref)' in chunk
+
+
+def test_R6_schedule_assignment_mismatch_409_zero_service(wired):
+    """PATCH-R6 B: body.schedule_id ≠ WA.schedule_id → 409, service call 0."""
+    wired["store"] = {
+        "users": {"01012345678": [{"id": "INSP-1", "name": "홍길동"}]},
+        "work_assignments": {
+            "WA-1": [{"id": "WA-1", "schedule_id": "SCH-1", "factory_id": "FCT-1"}],
+        },
+        "work_schedules": {
+            "SCH-2": [{"id": "SCH-2", "factory_id": "FCT-1", "active_yn": True}],
+        },
+    }
+    with pytest.raises(HTTPException) as ei:
+        wc.submit_check(
+            _body(
+                [{"name": "소화기", "result": "ok"}],
+                schedule_id="SCH-2",
+                assignment_id="WA-1",
+            ),
+            current_user=None,
+        )
+    assert ei.value.status_code == 409
+    detail = ei.value.detail
+    assert detail == {"error": "SCHEDULE_ASSIGNMENT_MISMATCH"} or (
+        isinstance(detail, dict) and detail.get("error") == "SCHEDULE_ASSIGNMENT_MISMATCH"
+    )
+    assert wired["calls"] == []
+    assert wired["forbidden"] == []

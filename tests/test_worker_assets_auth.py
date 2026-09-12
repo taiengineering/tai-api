@@ -795,3 +795,35 @@ def test_P_wa_linked_assert_source_checks_active_parent():
     assert "require_active_executable" in src
     assert "schedule_id" in src
     assert "factory_id" in src
+
+
+INSP_FALLBACK_NULL_FID = "7d7d7d7d-7d7d-7d7d-8d7d-7d7d7d7d7d7d"
+WS_SHARED_FALLBACK = "ws-shared-fallback"
+
+
+def test_P_R6_fallback_null_insp_factory_no_active_sibling(client, fake):
+    """PATCH-R6 C: schedule-id fallback + insp.factory_id NULL must not promote FA."""
+    fake.tables["work_schedules"].extend(
+        [
+            {
+                "id": WS_SHARED_FALLBACK,
+                "assigned_user_id": USER,
+                "inspection_set_id": SET_OWN,
+                "active_yn": True,
+                "factory_id": "fa-1",
+            },
+            {
+                "id": WS_SHARED_FALLBACK,
+                "assigned_user_id": OTHER,
+                "inspection_set_id": "set-other",
+                "active_yn": False,
+                "factory_id": "fa-2",
+            },
+        ]
+    )
+    # assignment_id = schedule id (fallback path); no WA row with that id
+    fake.tables["safety_inspections"].append(
+        {"id": INSP_FALLBACK_NULL_FID, "assignment_id": WS_SHARED_FALLBACK, "factory_id": None}
+    )
+    r = _photo(client, inspection_id=INSP_FALLBACK_NULL_FID)
+    assert r.status_code == 404
