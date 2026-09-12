@@ -254,6 +254,7 @@ def _asset_payload(asset: dict, version: Optional[dict], decision, signer) -> di
         "file_size": size,
         "internally_available": False,
         "view_url": None,
+        "download_url": None,
     }
     if atype == "VIDEO" or not decision.internal_serve_allowed:
         return out
@@ -270,6 +271,14 @@ def _asset_payload(asset: dict, version: Optional[dict], decision, signer) -> di
         key,
         mime=out["mime_type"],
         filename=out["file_name"],
+        disposition="inline",
+    )
+    out["download_url"] = signer.sign(
+        bucket,
+        key,
+        mime=out["mime_type"],
+        filename=out["file_name"],
+        disposition="attachment",
     )
     out["internally_available"] = True
     return out

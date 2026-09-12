@@ -316,4 +316,7 @@ def test_wp2_detail_regression_still_signs(monkeypatch):
     app.include_router(mod.router)
     r = TestClient(app).get("/public/kosha/materials/m1")
     assert r.status_code == 200
-    assert r.json()["assets"][0]["internally_available"] is True
+    asset = r.json()["assets"][0]
+    assert asset["internally_available"] is True
+    assert asset["view_url"]
+    assert asset["download_url"]
