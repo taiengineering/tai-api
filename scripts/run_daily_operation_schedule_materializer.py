@@ -8,7 +8,10 @@ Thin CLI: invoke the official orchestrator once and exit.
 from __future__ import annotations
 
 import json
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.time import now_kst
 
