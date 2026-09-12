@@ -114,6 +114,12 @@ class MemoryVersionStore:
             if r["source_asset_key"] == source_asset_key and r.get("is_current_version")
         )
 
+    def current_for_asset(self, asset_id) -> list[dict]:
+        return [
+            _copy(r) for r in self.rows
+            if r.get("asset_id") == asset_id and r.get("is_current_version")
+        ]
+
     def promote(self, payload: dict) -> dict:
         key = payload["source_asset_key"]
         sha = payload["content_checksum"]
@@ -230,3 +236,14 @@ class SupabaseVersionStore:
         )
         rows = r.data or []
         return dict(rows[0]) if rows else None
+
+    def current_for_asset(self, asset_id) -> list[dict]:
+        r = (
+            self.sb.table("kosha_safety_material_asset_versions")
+            .select("*")
+            .eq("asset_id", asset_id)
+            .eq("is_current_version", True)
+            .limit(2)
+            .execute()
+        )
+        return [dict(x) for x in (r.data or [])]

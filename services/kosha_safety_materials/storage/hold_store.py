@@ -106,6 +106,23 @@ class MemoryHoldStore:
             self.inserts += 1
             return {"status": "HOLD", "inserted": 1, "id": row["id"], "reason": reason, "row": dict(row)}
 
+    def resolve_open(
+        self,
+        *,
+        snapshot_id: str,
+        asset_id,
+        reason: str,
+        resolution_note: str,
+    ) -> dict:
+        return _resolve_open_in_rows(
+            self.rows,
+            snapshot_id=snapshot_id,
+            asset_id=asset_id,
+            reason=reason,
+            resolution_note=resolution_note,
+            lock=self._lock,
+        )
+
 
 class SupabaseHoldStore:
     def __init__(self, sb=None):
@@ -208,6 +225,125 @@ class SupabaseHoldStore:
         if inserted and row.get("status") != "OPEN":
             raise HoldError("HOLD_WRITE_FAILED", "status")
         return {"status": "HOLD", "inserted": inserted, "id": row.get("id"), "reason": reason, "row": row}
+
+    def resolve_open(
+        self,
+        *,
+        snapshot_id: str,
+        asset_id,
+        reason: str,
+        resolution_note: str,
+    ) -> dict:
+        note = _require_resolution_note(resolution_note)
+        assert_hold_reason(reason)
+        try:
+            found = (
+                self.sb.table(HOLD_TABLE)
+                .select("*")
+                .eq("snapshot_id", snapshot_id)
+                .eq("asset_id", asset_id)
+                .eq("reason", reason)
+                .limit(2)
+                .execute()
+            )
+        except Exception as e:
+            raise HoldError("HOLD_RESOLVE_FAILED", type(e).__name__) from e
+        rows = found.data or []
+        if not rows:
+            raise HoldError("HOLD_NOT_FOUND")
+        if len(rows) != 1:
+            raise HoldError("HOLD_RESOLVE_FAILED", "CURRENT_NOT_UNIQUE")
+        row = dict(rows[0])
+        if row.get("status") == "RESOLVED":
+            return {
+                "status": "ALREADY_RESOLVED",
+                "id": row.get("id"),
+                "reason": reason,
+                "row": row,
+            }
+        if row.get("status") != "OPEN":
+            raise HoldError("HOLD_NOT_FOUND")
+        patch = {
+            "status": "RESOLVED",
+            "resolution_note": note,
+            "resolved_at": _now_kst(),
+        }
+        q = self.sb.table(HOLD_TABLE).update(patch)
+        if row.get("id") is not None:
+            q = q.eq("id", row["id"])
+        else:
+            q = (
+                q.eq("snapshot_id", snapshot_id)
+                .eq("asset_id", asset_id)
+                .eq("reason", reason)
+            )
+        try:
+            upd = q.eq("status", "OPEN").execute()
+        except Exception as e:
+            raise HoldError("HOLD_RESOLVE_FAILED", type(e).__name__) from e
+        updated = upd.data or []
+        if not updated:
+            raise HoldError("HOLD_RESOLVE_FAILED", "OPEN row not updated")
+        out = dict(updated[0])
+        return {
+            "status": "RESOLVED",
+            "id": out.get("id"),
+            "reason": reason,
+            "row": out,
+        }
+
+
+def _require_resolution_note(resolution_note: str) -> str:
+    note = (resolution_note or "").strip()
+    if not note:
+        raise HoldError("RESOLUTION_NOTE_REQUIRED")
+    return note
+
+
+def _resolve_open_in_rows(
+    rows: list[dict],
+    *,
+    snapshot_id: str,
+    asset_id,
+    reason: str,
+    resolution_note: str,
+    lock=None,
+) -> dict:
+    note = _require_resolution_note(resolution_note)
+    assert_hold_reason(reason)
+    key = (snapshot_id, asset_id, reason)
+
+    def _run() -> dict:
+        found = None
+        for r in rows:
+            if (r["snapshot_id"], r["asset_id"], r["reason"]) == key:
+                found = r
+                break
+        if found is None:
+            raise HoldError("HOLD_NOT_FOUND")
+        if found.get("status") == "RESOLVED":
+            return {
+                "status": "ALREADY_RESOLVED",
+                "id": found["id"],
+                "reason": reason,
+                "row": dict(found),
+            }
+        if found.get("status") != "OPEN":
+            raise HoldError("HOLD_NOT_FOUND")
+        found["status"] = "RESOLVED"
+        found["resolution_note"] = note
+        found["resolved_at"] = _now_kst()
+        return {
+            "status": "RESOLVED",
+            "id": found["id"],
+            "reason": reason,
+            "row": dict(found),
+        }
+
+    if lock is None:
+        return _run()
+    with lock:
+        return _run()
 
 
 def oversize_report(holds, snapshot_id: str) -> dict:

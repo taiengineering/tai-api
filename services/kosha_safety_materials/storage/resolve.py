@@ -34,6 +34,34 @@ def observed_from_assets(assets: list[dict] | None) -> list[dict]:
     return out
 
 
+def logical_stable_identity(asset: dict) -> tuple:
+    """Exact live identity. No filename heuristic, no first-hit selection."""
+    no = asset.get("contsAtcflNo")
+    if no is None:
+        no = asset.get("atcfl_no")
+    seq = asset.get("contsAtcflSeq")
+    if seq is None:
+        seq = asset.get("atcfl_seq")
+    return (str(no or ""), seq, asset.get("file_name"))
+
+
+def file_list_stable_identity(item: dict) -> tuple:
+    no = item.get("atcflNo")
+    if no is None:
+        no = item.get("contsAtcflNo")
+    return (str(no or ""), item.get("atcflSeq"), item.get("orgnlAtchFileNm"))
+
+
+def collapse_exact_duplicate_hits(hits: list[dict], identity_fn) -> list[dict]:
+    """Keep N exact-duplicate rows as one identity. Different tuples stay MULTI."""
+    if len(hits) <= 1:
+        return hits
+    identities = {identity_fn(h) for h in hits}
+    if len(identities) == 1:
+        return [hits[0]]
+    return hits
+
+
 def match_logical_attachment(
     *,
     material_id: str,
@@ -57,6 +85,7 @@ def match_logical_attachment(
     hits = [a for a in assets if a.get("checksum") == expected_checksum]
     if len(hits) == 0:
         raise ResolutionError("SOURCE_ASSET_ZERO_MATCH", observed_files=observed)
+    hits = collapse_exact_duplicate_hits(hits, logical_stable_identity)
     if len(hits) != 1:
         raise ResolutionError("SOURCE_ASSET_MULTI_MATCH", observed_files=observed)
     hit = hits[0]
@@ -81,6 +110,7 @@ def match_downloadable_file(file_list: list[dict], *, file_name: str | None, atc
         raise ResolutionError("SOURCE_ASSET_FILENAME_MISMATCH", observed_files=observed)
     if len(hits) == 0:
         raise ResolutionError("SOURCE_ASSET_ZERO_MATCH", observed_files=observed)
+    hits = collapse_exact_duplicate_hits(hits, file_list_stable_identity)
     if len(hits) != 1:
         raise ResolutionError("SOURCE_ASSET_MULTI_MATCH", observed_files=observed)
     it = hits[0]
