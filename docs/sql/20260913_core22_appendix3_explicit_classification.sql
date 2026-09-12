@@ -45,8 +45,9 @@ FROM (VALUES
 ) AS c(sector, tier);
 
 -- Q2 is_real_estate_management: 제37호일 때만 필요. missing ≠ false.
--- 현재 유료 UI visibility engine 은 value:true 만 인식. APPLY 후에도 producer 가
--- item!=37 이면 subtype key 를 제거한다. generic visibility UX fix 는 별도 WO.
+-- visibility_condition value:37 유지 (boolean workaround 금지).
+-- FREE UI PATCH-1: eq scalar (boolean|number|string) 소비. PAID detail
+-- generic visibility UX 는 별도 follow-up. producer 는 item!=37 이면 subtype key 제거.
 INSERT INTO public.diagnosis_input_fields
   (sector, tier, field_code, field_type, field_name, field_group, is_active, is_required,
    visibility_condition, sort_order, help_text)
