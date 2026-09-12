@@ -194,6 +194,12 @@ _LEG_INPUT_FIELDS = (
     # Published CORE22 Leaf.field exact-name. No alias/renaming/sector/order_type/kcsc adapter.
     # False is a value. None/missing is omitted. Default false = 0.
     "is_construction", "is_relationship_contractor", "is_civil_construction",
+    # WO-SM-CORE22-AP01-05-EXPLICIT-APPENDIX3-INPUT-CONTRACT-001
+    # Published AP01~05 Leaf.field exact-name. Server projection only.
+    # Client must not supply these as authority. appendix3_item_no is the source, not a Leaf.
+    "is_appendix3_1_27", "is_appendix3_28_48",
+    "is_appendix3_item_37", "is_appendix3_item_40",
+    "is_real_estate_management",
 )
 
 # WO-FIX-BUILDFACILITY-SECTOR-GATE-001: WIRING-016 append BUILDING N1 raw primitive 32축.

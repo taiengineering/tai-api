@@ -9,6 +9,13 @@ from typing import Any, Callable, Dict, Optional
 from fastapi import HTTPException, Request
 
 from schemas.legal_engine import DiagnoseStep1Body
+from services.canonical.explicit_appendix3_classification import (
+    merge_projection_after_canonical,
+    persist_explicit_appendix3_source,
+    prepare_available_and_projection,
+    sanitize_form_data_for_persist,
+    stored_appendix3_body,
+)
 from services.canonical.explicit_construction_predicates import (
     collect_explicit_construction_predicates,
     stored_explicit_predicate_body,
@@ -510,8 +517,15 @@ def run_diagnosis(
 
     _available: dict = {f: getattr(body, f, None) for f in type(body).model_fields}
     _available.update(getattr(body, "form_data", None) or {})
-    for _code, _val in canonical_applicability(_available).items():
-        inp.setdefault(_code, _val)
+    # FIRST SAFE INSERTION POINT (WO-SM-CORE22-AP01-05-EXPLICIT-APPENDIX3-INPUT-CONTRACT-001)
+    # Function: run_diagnosis
+    # After external raw merge (_available = model_fields + form_data)
+    # Before canonical_applicability → DiagnoseStep1Body.input → build_facility → RTM
+    # Order: strip internal projected leaves → validate explicit source → server projection → inject
+    _appendix3_source, _appendix3_proj = prepare_available_and_projection(body, _available)
+    merge_projection_after_canonical(
+        inp, canonical_applicability(_available), _appendix3_proj
+    )
     if _is_construction and not is_free and factory_id:
         from services.company_scope import _ensure_factory_own
         _ensure_factory_own(supabase, factory_id, current_user)
@@ -629,11 +643,16 @@ def run_diagnosis(
 
     # WP1-HOTFIX-001: form_data(field_code envelope, 유료 정본 소비자입력)를 저장에 보존.
     #   이전엔 input/process/equipment/ksic 만 담아 upgrade round-trip 시 form_data 유실.
+    _form_data_persist = getattr(body, "form_data", None)
+    if _form_data_persist is not None:
+        _form_data_persist = sanitize_form_data_for_persist(
+            _form_data_persist, _appendix3_source
+        )
     _raw_structured_input = {
         _k: _v
         for _k, _v in {
             "input": body.input,
-            "form_data": getattr(body, "form_data", None),
+            "form_data": _form_data_persist,
             "process_list": _process_list_val,
             "equipment_list": _equipment_list_val,
             "ksic_list": _ksic_list_val,
@@ -659,6 +678,9 @@ def run_diagnosis(
             # Explicit CORE22 facts only when the user actually answered.
             # False is stored. missing is omitted. No default false.
             **collect_explicit_construction_predicates(body),
+            # Explicit Appendix3 source + server law-version metadata.
+            # Projected internal leaves are not stored as user answers.
+            **persist_explicit_appendix3_source(_appendix3_source),
         },
         "partial_result": build_partial_func(full_result),
         "full_result": full_result,
@@ -789,10 +811,17 @@ def upgrade_diagnosis(
         _rsi = _rsi_all.get("form_data") or {}
     else:
         _rsi = {}
-    if isinstance(_rsi, dict) and _rsi:
-        from services.canonical.materialization import canonical_applicability
-        for _c, _v in canonical_applicability(_rsi).items():
-            inp.setdefault(_c, _v)
+    if not isinstance(_rsi, dict):
+        _rsi = {}
+    else:
+        _rsi = dict(_rsi)
+    from services.canonical.materialization import canonical_applicability
+    _, _apx_proj = prepare_available_and_projection(
+        stored_appendix3_body(input_data), _rsi
+    )
+    merge_projection_after_canonical(
+        inp, canonical_applicability(_rsi) if _rsi else {}, _apx_proj
+    )
     sector = normalize_sector_db(str(input_data.get("sector") or ""))
     engine_sector = "MANUFACTURING" if sector == "INDUSTRIAL" else sector
     workers = int(input_data.get("workers") or 0)

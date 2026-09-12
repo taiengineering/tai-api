@@ -1,0 +1,213 @@
+{
+  "artifact_type": "product_input_option_snapshot",
+  "not_a_new_law_sot": true,
+  "law_version_id": "1fa1f5af-3575-461d-8d8c-4389d0e128d8",
+  "law_id": "5562eb48-01d9-4d53-9a8a-1018e79b34c0",
+  "appendix_no": "별표 3",
+  "source_binding": {
+    "table": "law_appendix",
+    "project_ref": "wrfcedzgdrfupenzqhur",
+    "extraction": "first-column numbered items 1..49 from appendix_text box table",
+    "read_only": true,
+    "ksic_mapping": false
+  },
+  "item_count": 49,
+  "items": [
+    {
+      "item_no": 1,
+      "label": "토사석 광업"
+    },
+    {
+      "item_no": 2,
+      "label": "식료품 제조업, 음료 제조업"
+    },
+    {
+      "item_no": 3,
+      "label": "섬유제품 제조업; 의복 제외"
+    },
+    {
+      "item_no": 4,
+      "label": "목재 및 나무제품 제조업; 가구 제외"
+    },
+    {
+      "item_no": 5,
+      "label": "펄프, 종이 및 종이제품 제조업"
+    },
+    {
+      "item_no": 6,
+      "label": "코크스, 연탄 및 석유정제품 제조업"
+    },
+    {
+      "item_no": 7,
+      "label": "화학물질 및 화학제품 제조업; 의약품 제외"
+    },
+    {
+      "item_no": 8,
+      "label": "의료용 물질 및 의약품 제조업"
+    },
+    {
+      "item_no": 9,
+      "label": "고무 및 플라스틱제품 제조업"
+    },
+    {
+      "item_no": 10,
+      "label": "비금속 광물제품 제조업"
+    },
+    {
+      "item_no": 11,
+      "label": "1차 금속 제조업"
+    },
+    {
+      "item_no": 12,
+      "label": "금속가공제품 제조업; 기계 및 가구 제외"
+    },
+    {
+      "item_no": 13,
+      "label": "전자부품, 컴퓨터, 영상, 음향 및 통신장비 제조업"
+    },
+    {
+      "item_no": 14,
+      "label": "의료, 정밀, 광학기기 및 시계 제조업"
+    },
+    {
+      "item_no": 15,
+      "label": "전기장비 제조업"
+    },
+    {
+      "item_no": 16,
+      "label": "기타 기계 및 장비 제조업"
+    },
+    {
+      "item_no": 17,
+      "label": "자동차 및 트레일러 제조업"
+    },
+    {
+      "item_no": 18,
+      "label": "기타 운송장비 제조업"
+    },
+    {
+      "item_no": 19,
+      "label": "가구 제조업"
+    },
+    {
+      "item_no": 20,
+      "label": "기타 제품 제조업"
+    },
+    {
+      "item_no": 21,
+      "label": "산업용 기계 및 장비 수리업"
+    },
+    {
+      "item_no": 22,
+      "label": "서적, 잡지 및 기타 인쇄물 출판업"
+    },
+    {
+      "item_no": 23,
+      "label": "폐기물 수집, 운반, 처리 및 원료 재생업"
+    },
+    {
+      "item_no": 24,
+      "label": "환경 정화 및 복원업"
+    },
+    {
+      "item_no": 25,
+      "label": "자동차 종합 수리업, 자동차 전문 수리업"
+    },
+    {
+      "item_no": 26,
+      "label": "발전업"
+    },
+    {
+      "item_no": 27,
+      "label": "운수 및 창고업"
+    },
+    {
+      "item_no": 28,
+      "label": "농업, 임업 및 어업"
+    },
+    {
+      "item_no": 29,
+      "label": "제2호부터 제21호까지의 사업을 제외한 제조업"
+    },
+    {
+      "item_no": 30,
+      "label": "전기, 가스, 증기 및 공기조절 공급업(발전업은 제외한다)"
+    },
+    {
+      "item_no": 31,
+      "label": "수도, 하수 및 폐기물 처리, 원료 재생업(제23호 및 제24호에 해당하는 사업은 제외한다)"
+    },
+    {
+      "item_no": 32,
+      "label": "도매 및 소매업"
+    },
+    {
+      "item_no": 33,
+      "label": "숙박 및 음식점업"
+    },
+    {
+      "item_no": 34,
+      "label": "영상ㆍ오디오 기록물 제작 및 배급업"
+    },
+    {
+      "item_no": 35,
+      "label": "라디오 방송업 및 텔레비전 방송업"
+    },
+    {
+      "item_no": 36,
+      "label": "우편 및 통신업"
+    },
+    {
+      "item_no": 37,
+      "label": "부동산업"
+    },
+    {
+      "item_no": 38,
+      "label": "임대업; 부동산 제외"
+    },
+    {
+      "item_no": 39,
+      "label": "연구개발업"
+    },
+    {
+      "item_no": 40,
+      "label": "사진처리업"
+    },
+    {
+      "item_no": 41,
+      "label": "사업시설 관리 및 조경 서비스업"
+    },
+    {
+      "item_no": 42,
+      "label": "청소년 수련시설 운영업"
+    },
+    {
+      "item_no": 43,
+      "label": "보건업"
+    },
+    {
+      "item_no": 44,
+      "label": "예술, 스포츠 및 여가 관련 서비스업"
+    },
+    {
+      "item_no": 45,
+      "label": "개인 및 소비용품수리업(제25호에 해당하는 사업은 제외한다)"
+    },
+    {
+      "item_no": 46,
+      "label": "기타 개인 서비스업"
+    },
+    {
+      "item_no": 47,
+      "label": "공공행정(청소, 시설관리, 조리 등 현업업무에 종사하는 사람으로서 고용노동부장관이 정하여 고시하는 사람으로 한정한다)"
+    },
+    {
+      "item_no": 48,
+      "label": "교육서비스업 중 초등ㆍ중등ㆍ고등 교육기관, 특수학교ㆍ외국인학교 및 대안학교(청소, 시설관리, 조리 등 현업업무에 종사하는 사람으로서 고용노동부장관이 정하여 고시하는 사람으로 한정한다)"
+    },
+    {
+      "item_no": 49,
+      "label": "건설업"
+    }
+  ]
+}
