@@ -6,7 +6,7 @@ Infrastructure, integrity, security, and unknown codes STOP.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from services.time import now_kst
 
 REVIEW_REASON = "SOURCE_ASSET_REVIEW_REQUIRED"
 REVIEW_SUBREASONS = frozenset({
@@ -66,8 +66,8 @@ class FailureDecision:
     evidence: dict = field(default_factory=dict)
 
 
-def _utc() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _now_kst() -> str:
+    return now_kst().isoformat()
 
 
 def classify_asset_failure(
@@ -90,7 +90,7 @@ def classify_asset_failure(
         "file_name": item.get("file_name"),
         "file_size": item.get("file_size"),
         "source_med_seq": source_med_seq or item.get("source_med_seq"),
-        "observed_at": _utc(),
+        "observed_at": _now_kst(),
     }
     if code in REVIEW_SUBREASONS:
         return FailureDecision("HOLD", REVIEW_REASON, code, evidence)

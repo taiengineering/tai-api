@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime, timezone
 from typing import Callable, Optional
+
+from services.time import now_kst
 
 from .. import license_policy
 from .. import parser
@@ -65,8 +66,8 @@ STOP_EVIDENCE_KEYS = (
 )
 
 
-def _utc() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _now_kst() -> str:
+    return now_kst().isoformat()
 
 
 def map_fetch_stop(err: Exception) -> None:
@@ -553,8 +554,8 @@ def _store_one(
         "source_file_name": dl.get("file_name") or item.get("file_name"),
         "source_content_type": dl.get("mime_type") or item.get("mime_type"),
         "source_file_size": item.get("file_size"),
-        "source_fetched_at": _utc(),
-        "license_observed_at": _utc(),
+        "source_fetched_at": _now_kst(),
+        "license_observed_at": _now_kst(),
         "license_observed_type": live_kogl,
         "license_name": fields.get("medGonggongnuriNm"),
         "license_source_url": item.get("source_url"),
@@ -602,7 +603,7 @@ def _store_one(
                     "http_status": 200,
                     "body_bytes_read": 0,
                     "confirmation_count": 2,
-                    "observed_at": _utc(),
+                    "observed_at": _now_kst(),
                 }],
             )
             held["binary_get"] = 2

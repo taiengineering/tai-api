@@ -6,8 +6,9 @@ Holds are not storage completion.
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timezone
 from typing import Any, Optional
+
+from services.time import now_kst
 
 HOLD_TABLE = "kosha_safety_material_storage_holds"
 HOLD_REASONS = frozenset({
@@ -29,8 +30,8 @@ class HoldError(Exception):
         self.code = code
 
 
-def _utc() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _now_kst() -> str:
+    return now_kst().isoformat()
 
 
 def assert_hold_reason(reason: str) -> str:
@@ -95,7 +96,7 @@ class MemoryHoldStore:
                 "reason": reason,
                 "expected_file_name": expected_file_name,
                 "observed_files": list(observed_files or []),
-                "observed_at": _utc(),
+                "observed_at": _now_kst(),
                 "status": "OPEN",
                 "resolution_note": None,
                 "resolved_at": None,
@@ -179,7 +180,7 @@ class SupabaseHoldStore:
             "reason": reason,
             "expected_file_name": expected_file_name,
             "observed_files": list(observed_files or []),
-            "observed_at": _utc(),
+            "observed_at": _now_kst(),
             "status": "OPEN",
         }
         try:

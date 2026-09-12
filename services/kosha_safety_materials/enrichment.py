@@ -5,8 +5,9 @@ latest COMPLETED snapshot only. data.go.kr 금지. binary/R2/asset_versions 금�
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
 from typing import Any, Callable, Optional
+
+from services.time import now_kst
 
 from . import asset_parser
 from . import normalizer
@@ -135,7 +136,7 @@ def validate_and_write_failure(
 ) -> dict:
     identity = {"material_id": material_id, "source_url": url, "medseq": medseq}
     fail = prepare_failure(material_id, url, title, medseq, reason)
-    fail["source_checked_at"] = datetime.now(timezone.utc).isoformat()
+    fail["source_checked_at"] = now_kst().isoformat()
     fail["source_content_hash"] = normalizer.canonical_hash(fail, [])
     errs = validator.validate(fail, [], catalog_exists=True, requested_med_seq=medseq)
     if errs:
@@ -235,7 +236,7 @@ def enrich_one(
         official_embed_confirmed=OFFICIAL_EMBED_CONFIRMED,
         enrichment_status="OK",
     )
-    detail["source_checked_at"] = datetime.now(timezone.utc).isoformat()
+    detail["source_checked_at"] = now_kst().isoformat()
     detail["source_content_hash"] = normalizer.canonical_hash(detail, assets)
     errs = validator.validate(detail, assets, catalog_exists=True, requested_med_seq=medseq)
     if errs:

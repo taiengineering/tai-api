@@ -14,7 +14,6 @@ import re
 import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional, Tuple
 
 from services.time import now_kst
@@ -656,10 +655,6 @@ async def fetch_official_full(
     }
 
 
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 async def sync_safety_materials(
     *,
     fetch_page: FetchPage,
@@ -771,7 +766,7 @@ async def sync_safety_materials(
             "counts_after": after,
         }
 
-    started = _now().isoformat()
+    started = now_kst().isoformat()
     snapshot_id = None
     inserted = 0
     try:
@@ -800,7 +795,7 @@ async def sync_safety_materials(
             if r.get("medseq_status") == VALID_MEDSEQ and r.get("medseq") and r["medseq"] not in db_by_medseq:
                 db_by_medseq[r["medseq"]] = r
 
-        observed = _now().isoformat()
+        observed = now_kst().isoformat()
         membership_rows = []
         missing_ids = []
         for it in off_diff_items:
@@ -821,7 +816,7 @@ async def sync_safety_materials(
             store.update_snapshot(snapshot_id, {
                 "status": STATUS_FAILED,
                 "failure_reason": "MEMBERSHIP_INCOMPLETE",
-                "completed_at": _now().isoformat(),
+                "completed_at": now_kst().isoformat(),
             })
             return {
                 **base,
@@ -843,7 +838,7 @@ async def sync_safety_materials(
             store.update_snapshot(snapshot_id, {
                 "status": STATUS_FAILED,
                 "failure_reason": "MEMBERSHIP_COUNT_MISMATCH",
-                "completed_at": _now().isoformat(),
+                "completed_at": now_kst().isoformat(),
             })
             return {
                 **base,
@@ -861,7 +856,7 @@ async def sync_safety_materials(
 
         store.update_snapshot(snapshot_id, {
             "status": STATUS_COMPLETED,
-            "completed_at": _now().isoformat(),
+            "completed_at": now_kst().isoformat(),
             "failure_reason": None,
         })
         after = store.counts()
@@ -882,7 +877,7 @@ async def sync_safety_materials(
                 store.update_snapshot(snapshot_id, {
                     "status": STATUS_FAILED,
                     "failure_reason": str(e)[:300],
-                    "completed_at": _now().isoformat(),
+                    "completed_at": now_kst().isoformat(),
                 })
             except Exception:
                 pass
