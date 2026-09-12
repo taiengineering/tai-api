@@ -9,6 +9,11 @@ from typing import Any, Callable, Dict, Optional
 from fastapi import HTTPException, Request
 
 from schemas.legal_engine import DiagnoseStep1Body
+from services.canonical.explicit_construction_predicates import (
+    collect_explicit_construction_predicates,
+    stored_explicit_predicate_body,
+    validate_explicit_construction_predicates,
+)
 from services.legal_rules import normalize_sector_db
 from services.time import now_kst, serialize_external_utc
 
@@ -406,6 +411,9 @@ def run_diagnosis(
         auth_row = resolve_member_auth_log(supabase, current_user)
     else:
         raise HTTPException(status_code=401, detail="인증이 필요합니다. 본인인증 후 이용해 주세요.")
+    # WO-SM-CORE22-CONSTRUCTION-PREDICATE-SERVER-FAIL-CLOSED-001
+    # After auth read, before disclaimer / quota / engine / persist.
+    validate_explicit_construction_predicates(body, getattr(body, "sector", None))
     disclaimer_log_id = (body.disclaimer_log_id or "").strip()
     if not disclaimer_log_id:
         if body.payment_ref:
@@ -633,10 +641,6 @@ def run_diagnosis(
         if _v is not None
     }
 
-    from services.canonical.explicit_construction_predicates import (
-        collect_explicit_construction_predicates,
-    )
-
     row = {
         "public_token": public_token,
         "input_data": {
@@ -751,6 +755,13 @@ def upgrade_diagnosis(
     if rec["ci_hash"] != auth_row["ci_hash"]:
         raise HTTPException(status_code=403, detail="자신의 진단만 업그레이드할 수 있습니다.")
 
+    input_data = rec.get("input_data") or {}
+    # After diagnosis read, before Runtime / result update / purchase write.
+    validate_explicit_construction_predicates(
+        stored_explicit_predicate_body(input_data),
+        str(input_data.get("sector") or ""),
+    )
+
     current_tier = rec.get("tier_code") or ""
     target_tier = body.target_tier_code
     current_price = paid_tier_prices.get(current_tier, 0)
@@ -764,7 +775,6 @@ def upgrade_diagnosis(
     diff_price = target_price - current_price
     log.info("[UPGRADE] %s → %s, diff=%d, payment_ref=%s", current_tier, target_tier, diff_price, body.payment_ref)
 
-    input_data = rec.get("input_data") or {}
     inp = {"tier_code": target_tier, "anonymous_flow": True, "upgrade": True}
     # WP-1 BLOCKER-FIX: 티어 업그레이드 재진단도 최초 저장된 소비자 원본
     #   (raw_structured_input.input)을 canonical 로 재적용해 사용자 입력을 살린다.

@@ -34,7 +34,12 @@ class FakeSB:
 class FakeBody:
     model_fields = {}
     def __init__(self, sector, form_data, auth_token="t"):
-        self.sector = sector; self.form_data = form_data
+        fd = dict(form_data or {})
+        if str(sector or "").upper() == "CONSTRUCTION":
+            fd.setdefault("is_construction", True)
+            fd.setdefault("is_relationship_contractor", False)
+            fd.setdefault("is_civil_construction", False)
+        self.sector = sector; self.form_data = fd
         self.auth_token = auth_token; self.disclaimer_log_id = "D1"; self.payment_ref = None
     def __getattr__(self, name):
         return None
