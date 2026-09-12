@@ -29,9 +29,11 @@ from services.knowledge_graph_svc import (
     SOURCE_KEYS,
     refresh_graph,
 )
+from services.knowledge_graph_store import GRAPH_TABLES, SOURCE_TABLES, SupabaseGraphStore
 from services.time import now_kst
 
 PAGE = 1000
+APPLY_ENV = "KNOWLEDGE_GRAPH_APPLY_ENABLED"
 
 
 def _load_env() -> None:
@@ -218,18 +220,27 @@ def load_production_sources(sb, wanted: set[str]) -> tuple[dict[str, list], dict
     return items, errors
 
 
-def produce_all(items_by_source: dict[str, list], current_ids: dict[str, set[str] | None]) -> dict[str, list]:
+def produce_all(
+    items_by_source: dict[str, list],
+    current_ids: dict[str, set[str] | None],
+    failed_sources: dict[str, str] | None = None,
+) -> dict[str, list]:
+    failed = failed_sources or {}
     out = {}
     if "guide" in items_by_source:
         out["guide"] = produce_guide_relations(items_by_source["guide"], current_ids=current_ids.get("guide"))
-        if "material" in items_by_source:
+        if (
+            "material" in items_by_source
+            and "guide" not in failed
+            and "material" not in failed
+        ):
             out["guide_shadow"] = produce_guide_material_shadow(
                 items_by_source["guide"],
                 items_by_source["material"],
                 current_guide_ids=current_ids.get("guide"),
                 current_material_ids=current_ids.get("material"),
             )
-    if "material" in items_by_source:
+    if "material" in items_by_source and "material" not in failed:
         out["material"] = produce_safety_material_relations(items_by_source["material"], current_ids=current_ids.get("material"))
     if "accident" in items_by_source:
         out["accident"] = produce_accident_relations(items_by_source["accident"])
@@ -242,10 +253,24 @@ def produce_all(items_by_source: dict[str, list], current_ids: dict[str, set[str
     return out
 
 
-def main(argv: list[str] | None = None) -> int:
+def _blocked(message: str) -> int:
+    raise SystemExit(
+        json.dumps(
+            {
+                "status": "BLOCKED",
+                "error_code": "PRODUCTION_APPLY_GATED",
+                "error_message": message,
+                "started_at": now_kst().isoformat(),
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+def main(argv: list[str] | None = None, *, graph_store=None) -> int:
     _load_env()
     p = argparse.ArgumentParser(description="OBJ-GRAPH manual refresh (default dry-run)")
-    p.add_argument("--apply", action="store_true", help="Write Graph tables. Default is dry-run.")
+    p.add_argument("--apply", action="store_true", help="Write Graph tables. Requires KNOWLEDGE_GRAPH_APPLY_ENABLED=1.")
     p.add_argument("--all", action="store_true")
     p.add_argument(
         "--source",
@@ -279,23 +304,36 @@ def main(argv: list[str] | None = None) -> int:
         key: {str(item.get("content_id")) for item in rows if item.get("content_id")}
         for key, rows in items_by_source.items()
     }
-    produced = produce_all(items_by_source, current_ids)
+    produced = produce_all(items_by_source, current_ids, failed_sources=failed)
     scanned = {key: len(rows) for key, rows in items_by_source.items()}
-    store = MemoryGraphStore()
-    if args.apply:
-        raise SystemExit(
-            json.dumps(
-                {
-                    "status": "BLOCKED",
-                    "error_code": "PRODUCTION_APPLY_GATED",
-                    "error_message": "WO-SAFETY-KNOWLEDGE-OBJ-GRAPH-IMPL-001: --apply is blocked until GPT core review. Dry-run only.",
-                    "started_at": now_kst().isoformat(),
-                },
-                ensure_ascii=False,
-            )
+    apply = bool(args.apply)
+    if apply and os.getenv(APPLY_ENV) != "1":
+        return _blocked("two-key apply required: --apply and KNOWLEDGE_GRAPH_APPLY_ENABLED=1")
+    if apply:
+        store = graph_store
+        if store is None:
+            from db.supabase_client import get_supabase
+            store = SupabaseGraphStore(get_supabase())
+        if isinstance(store, MemoryGraphStore):
+            return _blocked("MemoryGraphStore is forbidden on --apply")
+        report = refresh_graph(
+            store=store,
+            produced_by_source=produced,
+            scanned_by_source=scanned,
+            failed_sources=failed,
+            apply=True,
+            context_filter=context_filter,
         )
+        payload = report.as_dict()
+        payload["db_write"] = 1
+        payload["graph_tables"] = sorted(GRAPH_TABLES)
+        payload["source_tables"] = sorted(SOURCE_TABLES)
+        payload["source_writes"] = store.source_writes()
+        payload["started_at"] = now_kst().isoformat()
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0 if report.status == "COMPLETED" else 1
     report = refresh_graph(
-        store=store,
+        store=MemoryGraphStore(),
         produced_by_source=produced,
         scanned_by_source=scanned,
         failed_sources=failed,

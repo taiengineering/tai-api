@@ -149,6 +149,32 @@ class GraphStore(Protocol):
     def list_edges(self) -> list[dict[str, Any]]: ...
     def list_evidence(self, edge_id: str) -> list[dict[str, Any]]: ...
     def source_writes(self) -> int: ...
+    def query_context_edges(
+        self,
+        *,
+        relation_type: str,
+        relation_key: str,
+        content_type: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> list[dict[str, Any]]: ...
+    def query_item_context_edges(self, *, content_type: str, content_id: str) -> list[dict[str, Any]]: ...
+    def query_edges_for_contexts(
+        self,
+        contexts: list[tuple[str, str]],
+        *,
+        exclude_content: tuple[str, str] | None = None,
+    ) -> list[dict[str, Any]]: ...
+    def query_stale_scope_edges(
+        self,
+        *,
+        source_content_type: str,
+        edge_kind: str,
+        relation_type: str | None = None,
+        relation_key: str | None = None,
+        exclude_run_id: str,
+    ) -> list[dict[str, Any]]: ...
+    def mark_edges_stale(self, edge_ids: list[str], *, stale_at: str, updated_at: str) -> int: ...
 
 
 class MemoryGraphStore:
@@ -212,6 +238,96 @@ class MemoryGraphStore:
     def list_evidence(self, edge_id: str) -> list[dict[str, Any]]:
         return [dict(row) for row in self.evidence.values() if row.get("edge_id") == edge_id]
 
+    def query_context_edges(
+        self,
+        *,
+        relation_type: str,
+        relation_key: str,
+        content_type: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> list[dict[str, Any]]:
+        del page, page_size
+        out = []
+        for edge in self.list_edges():
+            if edge.get("edge_kind") != "CONTEXT":
+                continue
+            if edge.get("relation_type") != relation_type or edge.get("relation_key") != relation_key:
+                continue
+            if content_type and edge.get("source_content_type") != content_type:
+                continue
+            out.append(edge)
+        return out
+
+    def query_item_context_edges(self, *, content_type: str, content_id: str) -> list[dict[str, Any]]:
+        return [
+            edge
+            for edge in self.list_edges()
+            if edge.get("edge_kind") == "CONTEXT"
+            and edge.get("source_content_type") == content_type
+            and edge.get("source_content_id") == content_id
+        ]
+
+    def query_edges_for_contexts(
+        self,
+        contexts: list[tuple[str, str]],
+        *,
+        exclude_content: tuple[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        wanted = set(contexts)
+        out = []
+        for edge in self.list_edges():
+            if edge.get("edge_kind") != "CONTEXT":
+                continue
+            ident = (edge.get("relation_type"), edge.get("relation_key"))
+            if ident not in wanted:
+                continue
+            if exclude_content and (
+                edge.get("source_content_type"),
+                edge.get("source_content_id"),
+            ) == exclude_content:
+                continue
+            out.append(edge)
+        return out
+
+    def query_stale_scope_edges(
+        self,
+        *,
+        source_content_type: str,
+        edge_kind: str,
+        relation_type: str | None = None,
+        relation_key: str | None = None,
+        exclude_run_id: str,
+    ) -> list[dict[str, Any]]:
+        out = []
+        for edge in self.list_edges():
+            if edge.get("source_content_type") != source_content_type:
+                continue
+            if edge.get("edge_kind") != edge_kind:
+                continue
+            if relation_type and edge.get("relation_type") != relation_type:
+                continue
+            if relation_key and edge.get("relation_key") != relation_key:
+                continue
+            if edge.get("last_seen_run_id") == exclude_run_id:
+                continue
+            if edge.get("is_active") is False and edge.get("stale_at"):
+                continue
+            out.append(edge)
+        return out
+
+    def mark_edges_stale(self, edge_ids: list[str], *, stale_at: str, updated_at: str) -> int:
+        wanted = set(edge_ids)
+        count = 0
+        for edge in self.edges.values():
+            if edge.get("id") not in wanted:
+                continue
+            edge["is_active"] = False
+            edge["stale_at"] = stale_at
+            edge["updated_at"] = updated_at
+            count += 1
+        return count
+
 
 class MemoryHydrator:
     def __init__(self, records: Iterable[KnowledgeRecord] | None = None):
@@ -231,7 +347,7 @@ class MemoryHydrator:
         return out
 
 
-def default_tai_url(content_type: str, content_id: str, *, construction: bool = False) -> str:
+def default_tai_url(content_type: str, content_id: str, *, construction: bool = False) -> str | None:
     if content_type == "KOSHA_GUIDE":
         return f"{TAI_ORIGIN}/safety-guide/{content_id}"
     if content_type == "SAFETY_MATERIAL":
@@ -449,22 +565,24 @@ def stale_unseen_edges(
         return 0
     ts = _ts(clock)
     count = 0
-    for edge in store.list_edges():
-        if not _edge_in_stale_scope(edge, scope_list, context_filter):
+    for scope in scope_list:
+        if context_filter and scope.edge_kind != "CONTEXT":
             continue
-        if edge.get("last_seen_run_id") == run_id:
-            continue
-        if edge.get("is_active") is False and edge.get("stale_at"):
-            continue
-        store.upsert_edge(
-            {
-                **edge,
-                "is_active": False,
-                "stale_at": ts,
-                "updated_at": ts,
-            }
+        relation_key = None
+        relation_type = scope.relation_type
+        if context_filter:
+            relation_type, relation_key = context_filter
+            if scope.relation_type and scope.relation_type != relation_type:
+                continue
+        rows = store.query_stale_scope_edges(
+            source_content_type=scope.source_content_type,
+            edge_kind=scope.edge_kind,
+            relation_type=relation_type,
+            relation_key=relation_key,
+            exclude_run_id=run_id,
         )
-        count += 1
+        ids = [str(row.get("id")) for row in rows if row.get("id")]
+        count += store.mark_edges_stale(ids, stale_at=ts, updated_at=ts)
     return count
 
 
@@ -687,14 +805,19 @@ def refresh_graph(
     return report
 
 
-def _public_edge(edge: dict[str, Any], hydrator: MemoryHydrator) -> tuple[dict[str, Any], KnowledgeRecord] | None:
+def _public_edge(
+    edge: dict[str, Any],
+    hydrator,
+    records: dict[tuple[str, str], KnowledgeRecord] | None = None,
+) -> tuple[dict[str, Any], KnowledgeRecord] | None:
     if edge.get("status") != "ACCEPTED":
         return None
     if edge.get("is_active") is not True:
         return None
     if edge.get("stale_at"):
         return None
-    rec = hydrator.get(edge["source_content_type"], edge["source_content_id"])
+    key = (edge["source_content_type"], edge["source_content_id"])
+    rec = records.get(key) if records is not None else hydrator.get(*key)
     if rec is None or not rec.is_public_current:
         return None
     return edge, rec
@@ -706,7 +829,7 @@ def strip_forbidden(payload: dict[str, Any]) -> dict[str, Any]:
 
 def read_context(
     store: GraphStore,
-    hydrator: MemoryHydrator,
+    hydrator,
     *,
     relation_type: str,
     relation_key: str,
@@ -714,16 +837,20 @@ def read_context(
     page_size: int = 20,
     content_type: str | None = None,
 ) -> dict[str, Any]:
+    edges = store.query_context_edges(
+        relation_type=relation_type,
+        relation_key=relation_key,
+        content_type=content_type,
+        page=page,
+        page_size=page_size,
+    )
+    records = hydrator.get_many(
+        [(e.get("source_content_type"), e.get("source_content_id")) for e in edges]
+    )
     matched = []
     label = None
-    for edge in store.list_edges():
-        if edge.get("edge_kind") != "CONTEXT":
-            continue
-        if edge.get("relation_type") != relation_type or edge.get("relation_key") != relation_key:
-            continue
-        if content_type and edge.get("source_content_type") != content_type:
-            continue
-        public = _public_edge(edge, hydrator)
+    for edge in edges:
+        public = _public_edge(edge, hydrator, records)
         if not public:
             continue
         edge, rec = public
@@ -758,22 +885,19 @@ def read_context(
 
 def read_item_contexts(
     store: GraphStore,
-    hydrator: MemoryHydrator,
+    hydrator,
     *,
     content_type: str,
     content_id: str,
 ) -> dict[str, Any]:
-    rec = hydrator.get(content_type, content_id)
+    loaded = hydrator.get_many([(content_type, content_id)])
+    rec = loaded.get((content_type, content_id))
     if rec is None or not rec.is_public_current:
         return strip_forbidden({"content_type": content_type, "content_id": content_id, "contexts": []})
     contexts = []
     seen = set()
-    for edge in store.list_edges():
-        if edge.get("edge_kind") != "CONTEXT":
-            continue
-        if edge.get("source_content_type") != content_type or edge.get("source_content_id") != content_id:
-            continue
-        if not _public_edge(edge, hydrator):
+    for edge in store.query_item_context_edges(content_type=content_type, content_id=content_id):
+        if not _public_edge(edge, hydrator, loaded):
             continue
         ident = (edge.get("relation_type"), edge.get("relation_key"))
         if ident in seen:
@@ -798,37 +922,33 @@ def read_item_contexts(
 
 def read_related(
     store: GraphStore,
-    hydrator: MemoryHydrator,
+    hydrator,
     *,
     content_type: str,
     content_id: str,
 ) -> dict[str, Any]:
+    own = hydrator.get_many([(content_type, content_id)])
     source_contexts = []
-    for edge in store.list_edges():
-        if edge.get("edge_kind") != "CONTEXT":
-            continue
-        if edge.get("source_content_type") != content_type or edge.get("source_content_id") != content_id:
-            continue
-        if not _public_edge(edge, hydrator):
+    for edge in store.query_item_context_edges(content_type=content_type, content_id=content_id):
+        if not _public_edge(edge, hydrator, own):
             continue
         source_contexts.append((edge.get("relation_type"), edge.get("relation_key")))
-    context_set = set(source_contexts)
+    related_edges = store.query_edges_for_contexts(
+        source_contexts,
+        exclude_content=(content_type, content_id),
+    )
+    records = hydrator.get_many(
+        [(e.get("source_content_type"), e.get("source_content_id")) for e in related_edges]
+    )
     counts: dict[tuple[str, str], dict[str, Any]] = {}
-    for edge in store.list_edges():
-        if edge.get("edge_kind") != "CONTEXT":
-            continue
-        ident = (edge.get("relation_type"), edge.get("relation_key"))
-        if ident not in context_set:
-            continue
-        if edge.get("source_content_type") == content_type and edge.get("source_content_id") == content_id:
-            continue
-        public = _public_edge(edge, hydrator)
+    for edge in related_edges:
+        public = _public_edge(edge, hydrator, records)
         if not public:
             continue
         _, rec = public
         key = (rec.content_type, rec.content_id)
         slot = counts.setdefault(key, {"rec": rec, "shared": set()})
-        slot["shared"].add(ident)
+        slot["shared"].add((edge.get("relation_type"), edge.get("relation_key")))
     ranked = []
     for slot in counts.values():
         rec = slot["rec"]

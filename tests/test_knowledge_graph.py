@@ -1,9 +1,10 @@
-"""OBJ-GRAPH G01–G51 + GUIDE shadow compatibility. No production DB."""
+"""OBJ-GRAPH G01–G80 + GUIDE shadow compatibility. No production DB."""
 from __future__ import annotations
 
 import ast
 import inspect
 import json
+import uuid
 from pathlib import Path
 
 import pytest
@@ -36,7 +37,16 @@ from services.knowledge_graph_svc import (
     stale_unseen_edges,
 )
 import routers.public_knowledge_graph as graph_router
-from scripts.refresh_knowledge_graph import main as refresh_main
+from services.knowledge_graph_store import (
+    EDGES,
+    EVIDENCE,
+    RUNS,
+    SOURCE_TABLES,
+    FullTableScanForbidden,
+    SupabaseGraphStore,
+)
+from services.knowledge_graph_hydrate import ProductionKnowledgeHydrator
+from scripts.refresh_knowledge_graph import APPLY_ENV, main as refresh_main, produce_all
 
 ROOT = Path(__file__).resolve().parents[1]
 SQL = (ROOT / "supabase/migrations/20260913_knowledge_graph_relations.sql").read_text(encoding="utf-8")
@@ -44,6 +54,8 @@ GRAPH_PY = [
     ROOT / "services/knowledge_graph_svc.py",
     ROOT / "services/knowledge_graph_producers.py",
     ROOT / "services/knowledge_graph_rules.py",
+    ROOT / "services/knowledge_graph_store.py",
+    ROOT / "services/knowledge_graph_hydrate.py",
     ROOT / "routers/public_knowledge_graph.py",
     ROOT / "scripts/refresh_knowledge_graph.py",
 ]
@@ -754,3 +766,455 @@ def test_g51_candidate_order_does_not_change_status():
     persist_candidates(store_a, a, run_id="r1")
     persist_candidates(store_b, b, run_id="r1")
     assert next(iter(store_a.edges.values()))["status"] == next(iter(store_b.edges.values()))["status"] == "ACCEPTED"
+
+
+class _Resp:
+    def __init__(self, data):
+        self.data = data
+
+
+class FakeQuery:
+    def __init__(self, client, table):
+        self.client = client
+        self.table = table
+        self._action = "select"
+        self._filters = []
+        self._payload = None
+        self._limit = None
+        self._order = None
+        self._on_conflict = None
+
+    def select(self, cols="*"):
+        self._action = "select"
+        self.client.ops.append(("select", self.table, cols))
+        return self
+
+    def insert(self, row):
+        self._action = "insert"
+        self._payload = row
+        self.client.ops.append(("insert", self.table))
+        return self
+
+    def upsert(self, row, on_conflict=None):
+        self._action = "upsert"
+        self._payload = row
+        self._on_conflict = on_conflict
+        self.client.ops.append(("upsert", self.table, on_conflict))
+        return self
+
+    def update(self, patch):
+        self._action = "update"
+        self._payload = patch
+        self.client.ops.append(("update", self.table))
+        return self
+
+    def delete(self):
+        self._action = "delete"
+        self.client.ops.append(("delete", self.table))
+        self.client.delete_calls += 1
+        return self
+
+    def eq(self, col, val):
+        self._filters.append(("eq", col, val))
+        self.client.ops.append(("eq", col, val))
+        return self
+
+    def neq(self, col, val):
+        self._filters.append(("neq", col, val))
+        self.client.ops.append(("neq", col, val))
+        return self
+
+    def in_(self, col, vals):
+        self._filters.append(("in", col, list(vals)))
+        self.client.ops.append(("in", col, list(vals)))
+        return self
+
+    def limit(self, n):
+        self._limit = n
+        return self
+
+    def order(self, col, desc=False):
+        self._order = (col, desc)
+        return self
+
+    def _match(self, row):
+        for kind, col, val in self._filters:
+            cell = row.get(col)
+            if kind == "eq" and cell != val:
+                return False
+            if kind == "neq" and cell == val:
+                return False
+            if kind == "in" and cell not in val:
+                return False
+        return True
+
+    def execute(self):
+        rows = self.client.tables.setdefault(self.table, [])
+        if self._action == "select":
+            if self.table == EDGES and not self._filters:
+                self.client.unbounded_edge_selects += 1
+            found = [dict(r) for r in rows if self._match(r)]
+            if self._order:
+                col, desc = self._order
+                found.sort(key=lambda r: r.get(col) or "", reverse=bool(desc))
+            if self._limit is not None:
+                found = found[: self._limit]
+            return _Resp(found)
+        if self._action == "insert":
+            row = dict(self._payload)
+            row.setdefault("id", str(uuid.uuid4()))
+            rows.append(row)
+            self.client.writes.append((self.table, "insert"))
+            return _Resp([row])
+        if self._action == "upsert":
+            row = dict(self._payload)
+            keys = [k.strip() for k in (self._on_conflict or "").split(",") if k.strip()]
+            idx = None
+            for i, existing in enumerate(rows):
+                if keys and all(existing.get(k) == row.get(k) for k in keys):
+                    idx = i
+                    break
+            if idx is None:
+                row.setdefault("id", str(uuid.uuid4()))
+                rows.append(row)
+            else:
+                merged = dict(rows[idx])
+                merged.update(row)
+                merged["id"] = rows[idx].get("id") or row.get("id") or str(uuid.uuid4())
+                rows[idx] = merged
+                row = merged
+            self.client.writes.append((self.table, "upsert"))
+            return _Resp([row])
+        if self._action == "update":
+            updated = []
+            for row in rows:
+                if self._match(row):
+                    row.update(self._payload)
+                    updated.append(dict(row))
+            self.client.writes.append((self.table, "update"))
+            return _Resp(updated)
+        if self._action == "delete":
+            self.client.writes.append((self.table, "delete"))
+            return _Resp([])
+        return _Resp([])
+
+
+class FakeSB:
+    def __init__(self):
+        self.tables: dict[str, list] = {}
+        self.ops = []
+        self.writes = []
+        self.delete_calls = 0
+        self.unbounded_edge_selects = 0
+
+    def table(self, name):
+        return FakeQuery(self, name)
+
+    def seed(self, table, row):
+        self.tables.setdefault(table, []).append(dict(row))
+
+
+def _prod_store():
+    sb = FakeSB()
+    return sb, SupabaseGraphStore(sb)
+
+
+def test_g52_supabase_edge_conflict_one_semantic_edge():
+    sb, store = _prod_store()
+    persist_candidates(store, [_cand(), _cand(method="SOURCE_NATIVE", rule_id="NATIVE", evidence_value="forklift")], run_id="r1")
+    assert len(sb.tables[EDGES]) == 1
+
+
+def test_g53_evidence_conflict_no_duplicate():
+    sb, store = _prod_store()
+    c = _cand()
+    persist_candidates(store, [c], run_id="r1")
+    out = persist_candidates(store, [c], run_id="r2")
+    assert len(sb.tables[EVIDENCE]) == 1
+    assert out["duplicate_prevented"] == 1
+
+
+def test_g54_context_query_not_full_scan():
+    sb, store = _prod_store()
+    persist_candidates(store, [_cand()], run_id="r1")
+    sb.unbounded_edge_selects = 0
+    rows = store.query_context_edges(relation_type="equipment", relation_key="forklift")
+    assert rows
+    assert sb.unbounded_edge_selects == 0
+    assert ("eq", "relation_type", "equipment") in sb.ops
+    assert ("eq", "relation_key", "forklift") in sb.ops
+    with pytest.raises(FullTableScanForbidden):
+        store.list_edges()
+
+
+def test_g55_item_contexts_bounded_query():
+    sb, store = _prod_store()
+    persist_candidates(store, [_cand()], run_id="r1")
+    store.query_item_context_edges(content_type="KOSHA_GUIDE", content_id="A-1-2018")
+    assert ("eq", "source_content_type", "KOSHA_GUIDE") in sb.ops
+    assert ("eq", "source_content_id", "A-1-2018") in sb.ops
+    assert sb.unbounded_edge_selects == 0
+
+
+def test_g56_related_query_is_context_bounded():
+    sb, store = _prod_store()
+    persist_candidates(
+        store,
+        [_cand(), _cand(source_content_type="SAFETY_MATERIAL", source_content_id="m1", source_content_hash="h2")],
+        run_id="r1",
+    )
+    rows = store.query_edges_for_contexts([("equipment", "forklift")], exclude_content=("KOSHA_GUIDE", "A-1-2018"))
+    assert any(r["source_content_id"] == "m1" for r in rows)
+    assert sb.unbounded_edge_selects == 0
+    assert ("eq", "relation_type", "equipment") in sb.ops
+
+
+def test_g57_stale_production_query_has_scope_where():
+    sb, store = _prod_store()
+    persist_candidates(store, [_cand()], run_id="seed")
+    store.query_stale_scope_edges(
+        source_content_type="KOSHA_GUIDE",
+        edge_kind="CONTEXT",
+        relation_type="equipment",
+        relation_key="forklift",
+        exclude_run_id="done",
+    )
+    assert ("eq", "source_content_type", "KOSHA_GUIDE") in sb.ops
+    assert ("eq", "edge_kind", "CONTEXT") in sb.ops
+    assert ("neq", "last_seen_run_id", "done") in sb.ops
+    assert sb.unbounded_edge_selects == 0
+
+
+def test_g58_running_production_stale_zero():
+    sb, store = _prod_store()
+    persist_candidates(store, [_cand()], run_id="seed")
+    store.insert_run({"id": "running", "status": "RUNNING", "run_type": "TEST", "rule_set_version": "v", "started_at": "t"})
+    n = stale_unseen_edges(store, run_id="running", scopes=_guide_context_scope())
+    assert n == 0
+    assert sb.tables[EDGES][0]["is_active"] is True
+
+
+def test_g59_failed_production_stale_zero():
+    _, store = _prod_store()
+    persist_candidates(store, [_cand()], run_id="seed")
+    store.insert_run({"id": "failed", "status": "FAILED", "run_type": "TEST", "rule_set_version": "v", "started_at": "t"})
+    assert stale_unseen_edges(store, run_id="failed", scopes=_guide_context_scope()) == 0
+
+
+def test_g60_completed_production_stale_scoped_only():
+    sb, store = _prod_store()
+    persist_candidates(store, [_cand()], run_id="seed")
+    persist_candidates(
+        store,
+        [
+            _cand(
+                edge_kind="DIRECT",
+                relation_type="RELATED_TO",
+                relation_key=None,
+                target_content_type="SAFETY_MATERIAL",
+                target_content_id="m1",
+                method="DETERMINISTIC_RULE",
+            )
+        ],
+        run_id="seed",
+    )
+    store.insert_run({"id": "done", "status": "COMPLETED", "run_type": "TEST", "rule_set_version": "v", "started_at": "t"})
+    n = stale_unseen_edges(store, run_id="done", scopes=_guide_context_scope())
+    assert n == 1
+    ctx = [e for e in sb.tables[EDGES] if e["edge_kind"] == "CONTEXT"][0]
+    direct = [e for e in sb.tables[EDGES] if e["edge_kind"] == "DIRECT"][0]
+    assert ctx["is_active"] is False
+    assert direct["is_active"] is True
+
+
+def _seed_hydrate(sb: FakeSB):
+    sb.seed("kosha_guide_current", {"guide_no": "A-1-2018", "guide_title": "지게차 안전", "category_name": "기계", "guide_url": "https://kosha.example/a", "regist_date": "2020-01-01"})
+    sb.seed("kosha_safety_material_snapshots", {"id": "snap1", "status": "COMPLETED", "completed_at": "2026-09-01"})
+    sb.seed("kosha_safety_material_snapshot_items", {"snapshot_id": "snap1", "material_id": "m1"})
+    sb.seed("kosha_safety_materials", {"id": "m1", "title": "지게차 자료", "category": "EDU", "url": "https://kosha.example/m", "collected_at": "2021-01-01"})
+    sb.seed("kosha_safety_materials", {"id": "m-old", "title": "비현재 자료", "category": "EDU"})
+    sb.seed("law_revision_board", {"id": "law-pub", "law_name": "공개 법령", "summary": "s", "status": "PUBLISHED", "is_public": True, "enforcement_date": "2022-01-01"})
+    sb.seed("law_revision_board", {"id": "law-draft", "law_name": "미공개", "summary": "s", "status": "DRAFT", "is_public": False})
+    sb.seed("kosha_accident_cases", {"id": "acc-1", "title": "사고", "occurred_at": "2019-01-01"})
+    sb.seed("industrial_accident_precedents", {"id": "p1", "case_name": "판례", "summary": "추락"})
+
+
+def test_g61_guide_current_hydration():
+    sb = FakeSB()
+    _seed_hydrate(sb)
+    recs = ProductionKnowledgeHydrator(sb).get_many([("KOSHA_GUIDE", "A-1-2018")])
+    rec = recs[("KOSHA_GUIDE", "A-1-2018")]
+    assert rec.title == "지게차 안전"
+    assert rec.is_public_current is True
+
+
+def test_g62_material_current_snapshot_hydration():
+    sb = FakeSB()
+    _seed_hydrate(sb)
+    recs = ProductionKnowledgeHydrator(sb).get_many([("SAFETY_MATERIAL", "m1")])
+    assert recs[("SAFETY_MATERIAL", "m1")].title == "지게차 자료"
+
+
+def test_g63_non_current_material_excluded():
+    sb = FakeSB()
+    _seed_hydrate(sb)
+    recs = ProductionKnowledgeHydrator(sb).get_many([("SAFETY_MATERIAL", "m-old")])
+    assert recs == {}
+
+
+def test_g64_unpublished_law_excluded():
+    sb = FakeSB()
+    _seed_hydrate(sb)
+    recs = ProductionKnowledgeHydrator(sb).get_many([("LAW_UPDATE", "law-draft"), ("LAW_UPDATE", "law-pub")])
+    assert ("LAW_UPDATE", "law-draft") not in recs
+    assert ("LAW_UPDATE", "law-pub") in recs
+
+
+def test_g65_mixed_ids_batch_by_source():
+    sb = FakeSB()
+    _seed_hydrate(sb)
+    hydrator = ProductionKnowledgeHydrator(sb)
+    recs = hydrator.get_many([("KOSHA_GUIDE", "A-1-2018"), ("SAFETY_MATERIAL", "m1"), ("ACCIDENT", "acc-1")])
+    assert len(recs) == 3
+    assert hydrator.batch_queries <= 8
+
+
+def test_g66_missing_content_omitted():
+    sb = FakeSB()
+    _seed_hydrate(sb)
+    recs = ProductionKnowledgeHydrator(sb).get_many([("KOSHA_GUIDE", "MISSING")])
+    assert recs == {}
+
+
+def test_g67_hydration_not_n_plus_one():
+    sb = FakeSB()
+    for i in range(5):
+        sb.seed("kosha_guide_current", {"guide_no": f"G-{i}", "guide_title": "지게차"})
+    hydrator = ProductionKnowledgeHydrator(sb)
+    recs = hydrator.get_many([("KOSHA_GUIDE", f"G-{i}") for i in range(5)])
+    assert len(recs) == 5
+    guide_selects = [op for op in sb.ops if op[0] == "select" and op[1] == "kosha_guide_current"]
+    assert len(guide_selects) == 1
+    assert hydrator.batch_queries == 1
+
+
+def test_g68_g70_production_provider_http_ok():
+    sb, store = _prod_store()
+    persist_candidates(
+        store,
+        [_cand(), _cand(source_content_type="SAFETY_MATERIAL", source_content_id="m1", source_content_hash="h2")],
+        run_id="r1",
+    )
+    _seed_hydrate(sb)
+    hydrator = ProductionKnowledgeHydrator(sb)
+    client = _client(store, hydrator)
+    ctx = client.get("/public/knowledge-graph/context", params={"relation_type": "equipment", "relation_key": "forklift"})
+    assert ctx.status_code == 200
+    assert ctx.json()["total"] >= 1
+    item_ctx = client.get("/public/knowledge-graph/items/KOSHA_GUIDE/A-1-2018/contexts")
+    assert item_ctx.status_code == 200
+    related = client.get("/public/knowledge-graph/items/KOSHA_GUIDE/A-1-2018/related")
+    assert related.status_code == 200
+
+
+def test_g71_backend_unavailable_safe_503(monkeypatch):
+    graph_router.reset_graph_read()
+
+    def boom():
+        raise RuntimeError("no db")
+
+    monkeypatch.setattr(graph_router, "_lazy_production", boom)
+    app = FastAPI()
+    app.include_router(graph_router.router)
+    r = TestClient(app).get(
+        "/public/knowledge-graph/context",
+        params={"relation_type": "equipment", "relation_key": "forklift"},
+    )
+    assert r.status_code == 503
+    assert r.json()["detail"] == "GRAPH_READ_UNAVAILABLE"
+    assert "Traceback" not in r.text
+    graph_router.reset_graph_read()
+
+
+def test_g72_non_public_status_zero():
+    sb, store = _prod_store()
+    persist_candidates(store, [_cand(status="REJECTED")], run_id="r1")
+    _seed_hydrate(sb)
+    body = read_context(store, ProductionKnowledgeHydrator(sb), relation_type="equipment", relation_key="forklift")
+    assert body["total"] == 0
+
+
+def test_g73_g74_public_omits_evidence_and_legal():
+    sb, store = _prod_store()
+    persist_candidates(store, [_cand()], run_id="r1")
+    _seed_hydrate(sb)
+    client = _client(store, ProductionKnowledgeHydrator(sb))
+    payload = json.dumps(
+        client.get("/public/knowledge-graph/context", params={"relation_type": "equipment", "relation_key": "forklift"}).json()
+    )
+    for banned in ("evidence_key", "rule_id", "legal_applicable", "legal_score", "user_id"):
+        assert banned not in payload
+
+
+def test_g75_apply_without_env_blocked(tmp_path, monkeypatch):
+    monkeypatch.delenv(APPLY_ENV, raising=False)
+    fixture = tmp_path / "sources.json"
+    fixture.write_text(json.dumps({"guide": []}), encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        refresh_main(["--apply", "--source", "guide", "--fixture-json", str(fixture)])
+    assert "PRODUCTION_APPLY_GATED" in str(exc.value)
+
+
+def test_g76_env_without_apply_is_dry_run(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv(APPLY_ENV, "1")
+    fixture = tmp_path / "sources.json"
+    fixture.write_text(
+        json.dumps({"guide": [{"guide_no": "A-1-2018", "guide_title": "지게차 안전", "content_id": "A-1-2018"}]}),
+        encoding="utf-8",
+    )
+    rc = refresh_main(["--source", "guide", "--fixture-json", str(fixture)])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["dry_run"] is True
+    assert payload["db_write"] == 0
+
+
+def test_g77_g80_two_key_apply_writes_graph_only(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv(APPLY_ENV, "1")
+    fixture = tmp_path / "sources.json"
+    fixture.write_text(
+        json.dumps({"guide": [{"guide_no": "A-1-2018", "guide_title": "지게차 안전", "content_id": "A-1-2018"}]}),
+        encoding="utf-8",
+    )
+    sb, store = _prod_store()
+    rc = refresh_main(
+        ["--apply", "--source", "guide", "--fixture-json", str(fixture)],
+        graph_store=store,
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["status"] == "COMPLETED"
+    written = {table for table, _op in sb.writes}
+    assert written <= {RUNS, EDGES, EVIDENCE}
+    assert store.source_writes() == 0
+    assert sb.delete_calls == 0
+    assert not any(op[0] == "delete" for op in sb.ops)
+    assert not any(table in SOURCE_TABLES for table, _op in sb.writes)
+
+
+def test_guide_shadow_requires_both_sources():
+    produced = produce_all(
+        {"guide": [{"guide_no": "A-1-2018", "guide_title": "지게차 운전 작업 안전", "content_id": "A-1-2018"}]},
+        {"guide": {"A-1-2018"}},
+        failed_sources={"material": "SNAPSHOT_UNAVAILABLE"},
+    )
+    assert "guide_shadow" not in produced
+    both = produce_all(
+        {
+            "guide": [{"guide_no": "A-1-2018", "guide_title": "지게차 운전 작업 안전", "content_id": "A-1-2018"}],
+            "material": [{"id": "m1", "title": "지게차 운전 교육자료", "in_current_snapshot": True}],
+        },
+        {"guide": {"A-1-2018"}, "material": {"m1"}},
+        failed_sources={},
+    )
+    assert "guide_shadow" in both
