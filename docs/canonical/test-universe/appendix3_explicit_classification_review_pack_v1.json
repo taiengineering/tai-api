@@ -1,0 +1,3384 @@
+{
+  "wo": "WO-E2E-APPENDIX3-FIXTURE-AUTHORITY-STAGE-A-001",
+  "status": "CANDIDATE",
+  "authority_type": "OWNER_APPROVED_E2E_FIXTURE_FACT_CANDIDATE",
+  "stage": "A",
+  "frozen112_mutation": 0,
+  "production_derivation": 0,
+  "frozen_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+  "frozen_profile_sha256": "4818a63ab261c5a36c1432647b6b17e7636641071801d36fd1b85d1361af751b",
+  "frozen_profile_count": 112,
+  "gated_total": 75,
+  "ungated_total": 37,
+  "total": 112,
+  "gated_sectors": {
+    "MANUFACTURING": 46,
+    "BUILDING": 29
+  },
+  "ungated_sectors": {
+    "CONSTRUCTION": 27,
+    "SPECIAL_FACILITY": 10
+  },
+  "legal_catalog": {
+    "source": "FOUND",
+    "path": "docs/canonical/legal-input/appendix3_items_v1.json",
+    "law_version_id": "1fa1f5af-3575-461d-8d8c-4389d0e128d8",
+    "law_id": "5562eb48-01d9-4d53-9a8a-1018e79b34c0",
+    "appendix_no": "별표 3",
+    "table": "law_appendix",
+    "project_ref": "wrfcedzgdrfupenzqhur",
+    "item_count": 49,
+    "item_range": "1..49",
+    "item_37_label": "부동산업",
+    "item_37_subtype_field": "is_real_estate_management",
+    "item_37_subtype_rule": "appendix3_item_no != 37 → is_real_estate_management = null allowed; appendix3_item_no == 37 → Stage B approval must set explicit true/false. Stage A does not assign.",
+    "ksic_mapping": false,
+    "note": "Catalog location only. This pack does not map profiles to item_no."
+  },
+  "approved_authority_file": "NOT_CREATED_UNTIL_STAGE_B",
+  "profiles": [
+    {
+      "profile_id": "PF-0001",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[자동차]사업장001",
+        "industry": "자동차",
+        "ksic_major": "30",
+        "ksic_name": "자동차 및 트레일러 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 3000.0,
+        "floor_count": 3,
+        "worker_count": 15,
+        "facility": [
+          {
+            "code": "has_press",
+            "value": true
+          },
+          {
+            "code": "has_crane",
+            "value": true
+          },
+          {
+            "code": "has_forklift",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "프레스",
+            "process_ksic": "30"
+          },
+          {
+            "process_name": "용접",
+            "process_ksic": "30"
+          },
+          {
+            "process_name": "도장",
+            "process_ksic": "30"
+          }
+        ],
+        "work": [
+          "용접",
+          "고소작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0002",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[자동차]사업장002",
+        "industry": "자동차",
+        "ksic_major": "30",
+        "ksic_name": "자동차 및 트레일러 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 60000.0,
+        "floor_count": 3,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_press",
+            "value": true
+          },
+          {
+            "code": "has_conveyor",
+            "value": true
+          },
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "프레스",
+            "process_ksic": "30"
+          },
+          {
+            "process_name": "용접",
+            "process_ksic": "30"
+          },
+          {
+            "process_name": "도장",
+            "process_ksic": "30"
+          },
+          {
+            "process_name": "조립",
+            "process_ksic": "30"
+          }
+        ],
+        "work": [
+          "용접",
+          "도장",
+          "지게차"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0003",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[조선]사업장003",
+        "industry": "조선",
+        "ksic_major": "31",
+        "ksic_name": "기타 운송장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 60000.0,
+        "floor_count": 3,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          },
+          {
+            "code": "has_pressure_vessel",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "블록조립",
+            "process_ksic": "31"
+          },
+          {
+            "process_name": "용접",
+            "process_ksic": "31"
+          },
+          {
+            "process_name": "도장",
+            "process_ksic": "31"
+          }
+        ],
+        "work": [
+          "용접",
+          "고소작업",
+          "밀폐공간"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0004",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[철강]사업장004",
+        "industry": "철강",
+        "ksic_major": "24",
+        "ksic_name": "1차 금속 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          },
+          {
+            "code": "has_boiler",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "주조",
+            "process_ksic": "24"
+          },
+          {
+            "process_name": "압연",
+            "process_ksic": "24"
+          },
+          {
+            "process_name": "열처리",
+            "process_ksic": "24"
+          }
+        ],
+        "work": [
+          "용접",
+          "화학물질취급"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0005",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[철강]사업장005",
+        "industry": "철강",
+        "ksic_major": "24",
+        "ksic_name": "1차 금속 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 60000.0,
+        "floor_count": 3,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          },
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_pressure_vessel",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "주조",
+            "process_ksic": "24"
+          },
+          {
+            "process_name": "압연",
+            "process_ksic": "24"
+          },
+          {
+            "process_name": "열처리",
+            "process_ksic": "24"
+          }
+        ],
+        "work": [
+          "고소작업",
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0006",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[화학]사업장006",
+        "industry": "화학",
+        "ksic_major": "20",
+        "ksic_name": "화학 물질 및 화학제품 제조업; 의약품 제외",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_pressure_vessel",
+            "value": true
+          },
+          {
+            "code": "has_high_pressure_gas",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "혼합",
+            "process_ksic": "20"
+          },
+          {
+            "process_name": "반응",
+            "process_ksic": "20"
+          },
+          {
+            "process_name": "충전",
+            "process_ksic": "20"
+          }
+        ],
+        "work": [
+          "화학물질취급",
+          "밀폐공간"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0007",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[화학]사업장007",
+        "industry": "화학",
+        "ksic_major": "20",
+        "ksic_name": "화학 물질 및 화학제품 제조업; 의약품 제외",
+        "building_use_type": "공장",
+        "total_floor_area": 60000.0,
+        "floor_count": 3,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_pressure_vessel",
+            "value": true
+          },
+          {
+            "code": "has_high_pressure_gas",
+            "value": true
+          },
+          {
+            "code": "has_boiler",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "혼합",
+            "process_ksic": "20"
+          },
+          {
+            "process_name": "반응",
+            "process_ksic": "20"
+          }
+        ],
+        "work": [
+          "화학물질취급"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0008",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[반도체전자]사업장008",
+        "industry": "반도체전자",
+        "ksic_major": "26",
+        "ksic_name": "전자 부품, 컴퓨터, 영상, 음향 및 통신장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 60000.0,
+        "floor_count": 3,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_high_pressure_gas",
+            "value": true
+          },
+          {
+            "code": "has_chemical_substance",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "증착",
+            "process_ksic": "26"
+          },
+          {
+            "process_name": "식각",
+            "process_ksic": "26"
+          },
+          {
+            "process_name": "세정",
+            "process_ksic": "26"
+          }
+        ],
+        "work": [
+          "화학물질취급",
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0009",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[반도체전자]사업장009",
+        "industry": "반도체전자",
+        "ksic_major": "26",
+        "ksic_name": "전자 부품, 컴퓨터, 영상, 음향 및 통신장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_conveyor",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "조립",
+            "process_ksic": "26"
+          },
+          {
+            "process_name": "검사",
+            "process_ksic": "26"
+          }
+        ],
+        "work": [
+          "전기작업",
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0010",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[식품]사업장010",
+        "industry": "식품",
+        "ksic_major": "10",
+        "ksic_name": "식료품 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 3000.0,
+        "floor_count": 3,
+        "worker_count": 15,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_conveyor",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "10"
+          },
+          {
+            "process_name": "포장",
+            "process_ksic": "10"
+          }
+        ],
+        "work": [
+          "밀폐공간",
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0011",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[식품]사업장011",
+        "industry": "식품",
+        "ksic_major": "10",
+        "ksic_name": "식료품 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_pressure_vessel",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "10"
+          },
+          {
+            "process_name": "살균",
+            "process_ksic": "10"
+          },
+          {
+            "process_name": "포장",
+            "process_ksic": "10"
+          }
+        ],
+        "work": [
+          "밀폐공간"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0012",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[일반기계]사업장012",
+        "industry": "일반기계",
+        "ksic_major": "29",
+        "ksic_name": "기타 기계 및 장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 3000.0,
+        "floor_count": 3,
+        "worker_count": 15,
+        "facility": [
+          {
+            "code": "has_press",
+            "value": true
+          },
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "절삭",
+            "process_ksic": "29"
+          },
+          {
+            "process_name": "용접",
+            "process_ksic": "29"
+          },
+          {
+            "process_name": "조립",
+            "process_ksic": "29"
+          }
+        ],
+        "work": [
+          "용접",
+          "지게차"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0013",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[일반기계]사업장013",
+        "industry": "일반기계",
+        "ksic_major": "29",
+        "ksic_name": "기타 기계 및 장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_press",
+            "value": true
+          },
+          {
+            "code": "has_crane",
+            "value": true
+          },
+          {
+            "code": "has_forklift",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "절삭",
+            "process_ksic": "29"
+          },
+          {
+            "process_name": "용접",
+            "process_ksic": "29"
+          },
+          {
+            "process_name": "도장",
+            "process_ksic": "29"
+          }
+        ],
+        "work": [
+          "용접",
+          "고소작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0014",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[금속가공]사업장014",
+        "industry": "금속가공",
+        "ksic_major": "25",
+        "ksic_name": "금속 가공제품 제조업; 기계 및 가구 제외",
+        "building_use_type": "공장",
+        "total_floor_area": 3000.0,
+        "floor_count": 3,
+        "worker_count": 15,
+        "facility": [
+          {
+            "code": "has_press",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "프레스",
+            "process_ksic": "25"
+          },
+          {
+            "process_name": "용접",
+            "process_ksic": "25"
+          }
+        ],
+        "work": [
+          "용접"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0015",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[전기장비]사업장015",
+        "industry": "전기장비",
+        "ksic_major": "28",
+        "ksic_name": "전기장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_conveyor",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "권선",
+            "process_ksic": "28"
+          },
+          {
+            "process_name": "조립",
+            "process_ksic": "28"
+          },
+          {
+            "process_name": "검사",
+            "process_ksic": "28"
+          }
+        ],
+        "work": [
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0016",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[고무플라스틱]사업장016",
+        "industry": "고무플라스틱",
+        "ksic_major": "22",
+        "ksic_name": "고무 및 플라스틱제품 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 3000.0,
+        "floor_count": 3,
+        "worker_count": 15,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "사출",
+            "process_ksic": "22"
+          },
+          {
+            "process_name": "성형",
+            "process_ksic": "22"
+          }
+        ],
+        "work": [
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0017",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[섬유]사업장017",
+        "industry": "섬유",
+        "ksic_major": "13",
+        "ksic_name": "섬유제품 제조업; 의복 제외",
+        "building_use_type": "공장",
+        "total_floor_area": 3000.0,
+        "floor_count": 3,
+        "worker_count": 15,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_chemical_substance",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "방적",
+            "process_ksic": "13"
+          },
+          {
+            "process_name": "염색",
+            "process_ksic": "13"
+          }
+        ],
+        "work": [
+          "화학물질취급"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0018",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[가구]사업장018",
+        "industry": "가구",
+        "ksic_major": "32",
+        "ksic_name": "가구 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 3000.0,
+        "floor_count": 3,
+        "worker_count": 15,
+        "facility": [
+          {
+            "code": "has_dust_work",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "절단",
+            "process_ksic": "32"
+          },
+          {
+            "process_name": "도장",
+            "process_ksic": "32"
+          },
+          {
+            "process_name": "조립",
+            "process_ksic": "32"
+          }
+        ],
+        "work": [
+          "도장",
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0019",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[병원]사업장019",
+        "industry": "병원",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "의료·복지",
+        "total_floor_area": 60000.0,
+        "floor_count": 15,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_emergency_gen",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          },
+          {
+            "code": "has_elevator",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "유지보수",
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0020",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[병원]사업장020",
+        "industry": "병원",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "의료·복지",
+        "total_floor_area": 15000.0,
+        "floor_count": 5,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          },
+          {
+            "code": "has_elevator",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0021",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[학교]사업장021",
+        "industry": "학교",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "학교",
+        "total_floor_area": 15000.0,
+        "floor_count": 5,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          },
+          {
+            "code": "has_elevator",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0022",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[아파트]사업장022",
+        "industry": "아파트",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "공동주택",
+        "total_floor_area": 60000.0,
+        "floor_count": 15,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_elevator",
+            "value": true
+          },
+          {
+            "code": "has_mech_parking",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "유지보수",
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0023",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[물류센터]사업장023",
+        "industry": "물류센터",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "물류창고",
+        "total_floor_area": 60000.0,
+        "floor_count": 15,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_forklift",
+            "value": true
+          },
+          {
+            "code": "has_conveyor",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "지게차",
+          "고소작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0024",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[호텔]사업장024",
+        "industry": "호텔",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "숙박시설",
+        "total_floor_area": 60000.0,
+        "floor_count": 15,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          },
+          {
+            "code": "has_elevator",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0025",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[업무빌딩]사업장025",
+        "industry": "업무빌딩",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "업무시설",
+        "total_floor_area": 15000.0,
+        "floor_count": 5,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_elevator",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0026",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[판매시설]사업장026",
+        "industry": "판매시설",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "판매시설",
+        "total_floor_area": 15000.0,
+        "floor_count": 5,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_elevator",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          },
+          {
+            "code": "has_conveyor",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0027",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[폐기물처리]사업장027",
+        "industry": "폐기물처리",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "자원순환관련시설",
+        "total_floor_area": 15000.0,
+        "floor_count": 5,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_high_pressure_gas",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "화학물질취급"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0040",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[경계]일반기계040",
+        "industry": "일반기계",
+        "ksic_major": "29",
+        "ksic_name": "기타 기계 및 장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 49,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "29"
+          }
+        ],
+        "work": [
+          "용접"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0041",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[경계]일반기계041",
+        "industry": "일반기계",
+        "ksic_major": "29",
+        "ksic_name": "기타 기계 및 장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "29"
+          }
+        ],
+        "work": [
+          "용접"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0042",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[경계]일반기계042",
+        "industry": "일반기계",
+        "ksic_major": "29",
+        "ksic_name": "기타 기계 및 장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 51,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "29"
+          }
+        ],
+        "work": [
+          "용접"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0043",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[경계]일반기계043",
+        "industry": "일반기계",
+        "ksic_major": "29",
+        "ksic_name": "기타 기계 및 장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 99,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "29"
+          }
+        ],
+        "work": [
+          "용접"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0044",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[경계]일반기계044",
+        "industry": "일반기계",
+        "ksic_major": "29",
+        "ksic_name": "기타 기계 및 장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 100,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "29"
+          }
+        ],
+        "work": [
+          "용접"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0045",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[경계]일반기계045",
+        "industry": "일반기계",
+        "ksic_major": "29",
+        "ksic_name": "기타 기계 및 장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 101,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "29"
+          }
+        ],
+        "work": [
+          "용접"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0046",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[경계]일반기계046",
+        "industry": "일반기계",
+        "ksic_major": "29",
+        "ksic_name": "기타 기계 및 장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 299,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "29"
+          }
+        ],
+        "work": [
+          "용접"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0047",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[경계]일반기계047",
+        "industry": "일반기계",
+        "ksic_major": "29",
+        "ksic_name": "기타 기계 및 장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "29"
+          }
+        ],
+        "work": [
+          "용접"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0048",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[경계]일반기계048",
+        "industry": "일반기계",
+        "ksic_major": "29",
+        "ksic_name": "기타 기계 및 장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 301,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "29"
+          }
+        ],
+        "work": [
+          "용접"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0049",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[경계]건물049",
+        "industry": "업무빌딩",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "업무시설",
+        "total_floor_area": 4999.0,
+        "floor_count": 5,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_elevator",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0050",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[경계]건물050",
+        "industry": "업무빌딩",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "업무시설",
+        "total_floor_area": 5000.0,
+        "floor_count": 5,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_elevator",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0051",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[경계]건물051",
+        "industry": "업무빌딩",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "업무시설",
+        "total_floor_area": 5001.0,
+        "floor_count": 5,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_elevator",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0058",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[경계]보일러058",
+        "industry": "식품",
+        "ksic_major": "10",
+        "ksic_name": "식료품 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "boiler_capacity_kw",
+            "value": 500
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "10"
+          }
+        ],
+        "work": [
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0059",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[경계]자동차061",
+        "industry": "자동차",
+        "ksic_major": "30",
+        "ksic_name": "자동차 및 트레일러 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "30"
+          }
+        ],
+        "work": [
+          "용접"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0060",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[경계]화학062",
+        "industry": "화학",
+        "ksic_major": "20",
+        "ksic_name": "화학 물질 및 화학제품 제조업; 의약품 제외",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "20"
+          }
+        ],
+        "work": [
+          "용접"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0061",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[경계]철강063",
+        "industry": "철강",
+        "ksic_major": "24",
+        "ksic_name": "1차 금속 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 100,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "24"
+          }
+        ],
+        "work": [
+          "용접"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0062",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[경계]건물064",
+        "industry": "업무빌딩",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "판매시설",
+        "total_floor_area": 2999.0,
+        "floor_count": 5,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_elevator",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0063",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[경계]건물065",
+        "industry": "업무빌딩",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "판매시설",
+        "total_floor_area": 3000.0,
+        "floor_count": 5,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_elevator",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0064",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[경계]건물066",
+        "industry": "업무빌딩",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "판매시설",
+        "total_floor_area": 3001.0,
+        "floor_count": 5,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_elevator",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0065",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[자동차]사업장069",
+        "industry": "자동차",
+        "ksic_major": "30",
+        "ksic_name": "자동차 및 트레일러 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_press",
+            "value": true
+          },
+          {
+            "code": "has_forklift",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "프레스",
+            "process_ksic": "30"
+          },
+          {
+            "process_name": "조립",
+            "process_ksic": "30"
+          }
+        ],
+        "work": [
+          "지게차",
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0066",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[조선]사업장070",
+        "industry": "조선",
+        "ksic_major": "31",
+        "ksic_name": "기타 운송장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          },
+          {
+            "code": "has_high_pressure_gas",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "용접",
+            "process_ksic": "31"
+          },
+          {
+            "process_name": "도장",
+            "process_ksic": "31"
+          }
+        ],
+        "work": [
+          "용접",
+          "도장"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0067",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[철강]사업장071",
+        "industry": "철강",
+        "ksic_major": "24",
+        "ksic_name": "1차 금속 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 3000.0,
+        "floor_count": 3,
+        "worker_count": 15,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "압연",
+            "process_ksic": "24"
+          }
+        ],
+        "work": [
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0068",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[화학]사업장072",
+        "industry": "화학",
+        "ksic_major": "20",
+        "ksic_name": "화학 물질 및 화학제품 제조업; 의약품 제외",
+        "building_use_type": "공장",
+        "total_floor_area": 3000.0,
+        "floor_count": 3,
+        "worker_count": 15,
+        "facility": [
+          {
+            "code": "has_chemical_substance",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "혼합",
+            "process_ksic": "20"
+          }
+        ],
+        "work": [
+          "화학물질취급"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0069",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[반도체전자]사업장073",
+        "industry": "반도체전자",
+        "ksic_major": "26",
+        "ksic_name": "전자 부품, 컴퓨터, 영상, 음향 및 통신장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 3000.0,
+        "floor_count": 3,
+        "worker_count": 15,
+        "facility": [],
+        "process": [
+          {
+            "process_name": "검사",
+            "process_ksic": "26"
+          }
+        ],
+        "work": [
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0070",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[식품]사업장074",
+        "industry": "식품",
+        "ksic_major": "10",
+        "ksic_name": "식료품 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 60000.0,
+        "floor_count": 3,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_conveyor",
+            "value": true
+          },
+          {
+            "code": "has_forklift",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "가공",
+            "process_ksic": "10"
+          },
+          {
+            "process_name": "살균",
+            "process_ksic": "10"
+          },
+          {
+            "process_name": "포장",
+            "process_ksic": "10"
+          }
+        ],
+        "work": [
+          "밀폐공간",
+          "지게차"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0071",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[일반기계]사업장075",
+        "industry": "일반기계",
+        "ksic_major": "29",
+        "ksic_name": "기타 기계 및 장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 60000.0,
+        "floor_count": 3,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_press",
+            "value": true
+          },
+          {
+            "code": "has_crane",
+            "value": true
+          },
+          {
+            "code": "has_conveyor",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "절삭",
+            "process_ksic": "29"
+          },
+          {
+            "process_name": "용접",
+            "process_ksic": "29"
+          },
+          {
+            "process_name": "도장",
+            "process_ksic": "29"
+          },
+          {
+            "process_name": "조립",
+            "process_ksic": "29"
+          }
+        ],
+        "work": [
+          "용접",
+          "도장",
+          "지게차"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0072",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[금속가공]사업장076",
+        "industry": "금속가공",
+        "ksic_major": "25",
+        "ksic_name": "금속 가공제품 제조업; 기계 및 가구 제외",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_press",
+            "value": true
+          },
+          {
+            "code": "has_dust_work",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "프레스",
+            "process_ksic": "25"
+          },
+          {
+            "process_name": "용접",
+            "process_ksic": "25"
+          },
+          {
+            "process_name": "도금",
+            "process_ksic": "25"
+          }
+        ],
+        "work": [
+          "용접",
+          "화학물질취급"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0073",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[전기장비]사업장077",
+        "industry": "전기장비",
+        "ksic_major": "28",
+        "ksic_name": "전기장비 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 3000.0,
+        "floor_count": 3,
+        "worker_count": 15,
+        "facility": [],
+        "process": [
+          {
+            "process_name": "조립",
+            "process_ksic": "28"
+          }
+        ],
+        "work": [
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0074",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[고무플라스틱]사업장078",
+        "industry": "고무플라스틱",
+        "ksic_major": "22",
+        "ksic_name": "고무 및 플라스틱제품 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_conveyor",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "사출",
+            "process_ksic": "22"
+          },
+          {
+            "process_name": "성형",
+            "process_ksic": "22"
+          },
+          {
+            "process_name": "포장",
+            "process_ksic": "22"
+          }
+        ],
+        "work": [
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0075",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[섬유]사업장079",
+        "industry": "섬유",
+        "ksic_major": "13",
+        "ksic_name": "섬유제품 제조업; 의복 제외",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_chemical_substance",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "방적",
+            "process_ksic": "13"
+          },
+          {
+            "process_name": "염색",
+            "process_ksic": "13"
+          },
+          {
+            "process_name": "건조",
+            "process_ksic": "13"
+          }
+        ],
+        "work": [
+          "화학물질취급"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0076",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[가구]사업장080",
+        "industry": "가구",
+        "ksic_major": "32",
+        "ksic_name": "가구 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_dust_work",
+            "value": true
+          },
+          {
+            "code": "has_conveyor",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "절단",
+            "process_ksic": "32"
+          },
+          {
+            "process_name": "도장",
+            "process_ksic": "32"
+          },
+          {
+            "process_name": "조립",
+            "process_ksic": "32"
+          }
+        ],
+        "work": [
+          "도장"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0077",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[화학]사업장081",
+        "industry": "화학",
+        "ksic_major": "20",
+        "ksic_name": "화학 물질 및 화학제품 제조업; 의약품 제외",
+        "building_use_type": "공장",
+        "total_floor_area": 60000.0,
+        "floor_count": 3,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_pressure_vessel",
+            "value": true
+          },
+          {
+            "code": "has_high_pressure_gas",
+            "value": true
+          },
+          {
+            "code": "has_boiler",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "반응",
+            "process_ksic": "20"
+          },
+          {
+            "process_name": "증류",
+            "process_ksic": "20"
+          },
+          {
+            "process_name": "충전",
+            "process_ksic": "20"
+          }
+        ],
+        "work": [
+          "화학물질취급",
+          "밀폐공간"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0078",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[자동차]사업장082",
+        "industry": "자동차",
+        "ksic_major": "30",
+        "ksic_name": "자동차 및 트레일러 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 60000.0,
+        "floor_count": 3,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_press",
+            "value": true
+          },
+          {
+            "code": "has_conveyor",
+            "value": true
+          },
+          {
+            "code": "has_crane",
+            "value": true
+          },
+          {
+            "code": "has_forklift",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "프레스",
+            "process_ksic": "30"
+          },
+          {
+            "process_name": "용접",
+            "process_ksic": "30"
+          },
+          {
+            "process_name": "도장",
+            "process_ksic": "30"
+          },
+          {
+            "process_name": "조립",
+            "process_ksic": "30"
+          },
+          {
+            "process_name": "검사",
+            "process_ksic": "30"
+          }
+        ],
+        "work": [
+          "용접",
+          "도장",
+          "지게차",
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0079",
+      "sector": "MANUFACTURING",
+      "raw_context": {
+        "company_name": "[철강]사업장083",
+        "industry": "철강",
+        "ksic_major": "24",
+        "ksic_name": "1차 금속 제조업",
+        "building_use_type": "공장",
+        "total_floor_area": 15000.0,
+        "floor_count": 3,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_crane",
+            "value": true
+          },
+          {
+            "code": "has_boiler",
+            "value": true
+          }
+        ],
+        "process": [
+          {
+            "process_name": "주조",
+            "process_ksic": "24"
+          },
+          {
+            "process_name": "열처리",
+            "process_ksic": "24"
+          }
+        ],
+        "work": [
+          "용접",
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0080",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[병원]사업장084",
+        "industry": "병원",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "의료·복지",
+        "total_floor_area": 60000.0,
+        "floor_count": 15,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_emergency_gen",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          },
+          {
+            "code": "has_elevator",
+            "value": true
+          },
+          {
+            "code": "has_high_pressure_gas",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "유지보수",
+          "전기작업",
+          "화학물질취급"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0081",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[학교]사업장085",
+        "industry": "학교",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "학교",
+        "total_floor_area": 60000.0,
+        "floor_count": 15,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          },
+          {
+            "code": "has_elevator",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "유지보수",
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0082",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[아파트]사업장086",
+        "industry": "아파트",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "공동주택",
+        "total_floor_area": 15000.0,
+        "floor_count": 5,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_elevator",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0083",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[물류센터]사업장087",
+        "industry": "물류센터",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "물류창고",
+        "total_floor_area": 15000.0,
+        "floor_count": 5,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_forklift",
+            "value": true
+          },
+          {
+            "code": "has_conveyor",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "지게차"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0084",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[호텔]사업장088",
+        "industry": "호텔",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "숙박시설",
+        "total_floor_area": 15000.0,
+        "floor_count": 5,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          },
+          {
+            "code": "has_elevator",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0085",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[업무빌딩]사업장089",
+        "industry": "업무빌딩",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "업무시설",
+        "total_floor_area": 60000.0,
+        "floor_count": 15,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_elevator",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          },
+          {
+            "code": "has_emergency_gen",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "전기작업",
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0086",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[판매시설]사업장090",
+        "industry": "판매시설",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "판매시설",
+        "total_floor_area": 60000.0,
+        "floor_count": 15,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_elevator",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          },
+          {
+            "code": "has_conveyor",
+            "value": true
+          },
+          {
+            "code": "has_mech_parking",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "유지보수",
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0087",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[폐기물처리]사업장091",
+        "industry": "폐기물처리",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "자원순환관련시설",
+        "total_floor_area": 60000.0,
+        "floor_count": 15,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_high_pressure_gas",
+            "value": true
+          },
+          {
+            "code": "has_pressure_vessel",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "화학물질취급",
+          "밀폐공간"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0088",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[병원]사업장092",
+        "industry": "병원",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "의료·복지",
+        "total_floor_area": 15000.0,
+        "floor_count": 5,
+        "worker_count": 50,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0089",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[아파트]사업장093",
+        "industry": "아파트",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "공동주택",
+        "total_floor_area": 60000.0,
+        "floor_count": 15,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_elevator",
+            "value": true
+          },
+          {
+            "code": "has_mech_parking",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          },
+          {
+            "code": "has_emergency_gen",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "유지보수",
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0090",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[물류센터]사업장094",
+        "industry": "물류센터",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "물류창고",
+        "total_floor_area": 60000.0,
+        "floor_count": 15,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_forklift",
+            "value": true
+          },
+          {
+            "code": "has_conveyor",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          },
+          {
+            "code": "has_elevator",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "지게차",
+          "고소작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0091",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[학교]사업장095",
+        "industry": "학교",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "학교",
+        "total_floor_area": 3000.0,
+        "floor_count": 5,
+        "worker_count": 15,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "유지보수"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0092",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[호텔]사업장096",
+        "industry": "호텔",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "숙박시설",
+        "total_floor_area": 60000.0,
+        "floor_count": 15,
+        "worker_count": 300,
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          },
+          {
+            "code": "has_elevator",
+            "value": true
+          },
+          {
+            "code": "has_emergency_gen",
+            "value": true
+          },
+          {
+            "code": "has_mech_parking",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "유지보수",
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    },
+    {
+      "profile_id": "PF-0093",
+      "sector": "BUILDING",
+      "raw_context": {
+        "company_name": "[업무빌딩]사업장097",
+        "industry": "업무빌딩",
+        "ksic_major": "",
+        "ksic_name": "",
+        "building_use_type": "업무시설",
+        "total_floor_area": 3000.0,
+        "floor_count": 5,
+        "worker_count": 15,
+        "facility": [
+          {
+            "code": "has_elevator",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "전기작업"
+        ]
+      },
+      "candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "classification_status": "PENDING_GPT_OWNER_REVIEW",
+      "evidence": {
+        "profile_source": "/Users/taiwangsim/45cm-test/profile_universe_v1.json",
+        "legal_source": "docs/canonical/legal-input/appendix3_items_v1.json",
+        "note": "Raw profile context is review evidence only. It is not a production derivation rule and does not automatically determine Appendix3 classification."
+      }
+    }
+  ]
+}
