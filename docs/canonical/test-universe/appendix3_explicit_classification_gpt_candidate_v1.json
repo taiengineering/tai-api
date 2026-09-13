@@ -3,22 +3,22 @@
   "pr": 345,
   "based_on_review_pack": "docs/canonical/test-universe/appendix3_explicit_classification_review_pack_v1.json",
   "review_pack_sha256_note": "Stage A historical evidence; this file does not mutate it",
-  "status": "GPT_CANDIDATE_PENDING_OWNER_APPROVAL",
+  "status": "OWNER_FACT_RESOLUTION_COMPLETE_PENDING_FINAL_SNAPSHOT_APPROVAL",
   "authority_type": "OWNER_APPROVED_E2E_FIXTURE_FACT_CANDIDATE",
   "production_derivation_rule": "NONE",
   "frozen112_mutation": 0,
-  "owner_approval": "PENDING",
+  "owner_approval": "PENDING_FINAL_SNAPSHOT_APPROVAL",
   "stage_b": "BLOCKED",
   "gated_total": 75,
   "gpt_classifiable": 63,
-  "not_judgable": 12,
+  "not_judgable": 0,
   "manufacturing_classifiable": 46,
   "building_classifiable": 17,
-  "apartment_unresolved": 3,
-  "office_building_unresolved": 9,
-  "item37_assigned": 0,
-  "is_real_estate_management_assigned": 0,
-  "note": "Synthetic E2E fixture candidate classification for these 75 Frozen Profiles only. Not a production KSIC/sector/building_use mapping rule.",
+  "apartment_unresolved": 0,
+  "office_building_unresolved": 0,
+  "item37_assigned": 3,
+  "is_real_estate_management_assigned": 3,
+  "note": "Synthetic E2E fixture candidate classification for these 75 Frozen Profiles only. Not a production KSIC/sector/building_use mapping rule. Owner fact resolution applies only to the 12 exact profile IDs.",
   "profiles": [
     {
       "profile_id": "PF-0001",
@@ -321,16 +321,18 @@
       "profile_id": "PF-0022",
       "sector": "BUILDING",
       "gpt_candidate": {
-        "appendix3_item_no": null,
-        "is_real_estate_management": null
+        "appendix3_item_no": 37,
+        "is_real_estate_management": true
       },
-      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
-      "owner_approval": "PENDING",
-      "unresolved_group": "APARTMENT",
+      "gpt_status": "OWNER_FACT_RESOLVED",
+      "owner_approval": "PENDING_FINAL_SNAPSHOT_APPROVAL",
       "review_input": {
         "industry": "아파트",
         "building_use_type": "공동주택"
-      }
+      },
+      "decision_basis": "OWNER_DEFINED_SYNTHETIC_BUSINESS_CHARACTER",
+      "owner_defined_business": "공동주택 관리사업장",
+      "historical_unresolved_group": "APARTMENT"
     },
     {
       "profile_id": "PF-0023",
@@ -366,16 +368,18 @@
       "profile_id": "PF-0025",
       "sector": "BUILDING",
       "gpt_candidate": {
-        "appendix3_item_no": null,
+        "appendix3_item_no": 41,
         "is_real_estate_management": null
       },
-      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
-      "owner_approval": "PENDING",
-      "unresolved_group": "OFFICE_BUILDING",
+      "gpt_status": "OWNER_FACT_RESOLVED",
+      "owner_approval": "PENDING_FINAL_SNAPSHOT_APPROVAL",
       "review_input": {
         "industry": "업무빌딩",
         "building_use_type": "업무시설"
-      }
+      },
+      "decision_basis": "OWNER_DEFINED_SYNTHETIC_BUSINESS_CHARACTER",
+      "owner_defined_business": "빌딩/시설 관리사업장",
+      "historical_unresolved_group": "OFFICE_BUILDING"
     },
     {
       "profile_id": "PF-0026",
@@ -537,46 +541,52 @@
       "profile_id": "PF-0049",
       "sector": "BUILDING",
       "gpt_candidate": {
-        "appendix3_item_no": null,
+        "appendix3_item_no": 41,
         "is_real_estate_management": null
       },
-      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
-      "owner_approval": "PENDING",
-      "unresolved_group": "OFFICE_BUILDING",
+      "gpt_status": "OWNER_FACT_RESOLVED",
+      "owner_approval": "PENDING_FINAL_SNAPSHOT_APPROVAL",
       "review_input": {
         "industry": "업무빌딩",
         "building_use_type": "업무시설"
-      }
+      },
+      "decision_basis": "OWNER_DEFINED_SYNTHETIC_BUSINESS_CHARACTER",
+      "owner_defined_business": "빌딩/시설 관리사업장",
+      "historical_unresolved_group": "OFFICE_BUILDING"
     },
     {
       "profile_id": "PF-0050",
       "sector": "BUILDING",
       "gpt_candidate": {
-        "appendix3_item_no": null,
+        "appendix3_item_no": 41,
         "is_real_estate_management": null
       },
-      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
-      "owner_approval": "PENDING",
-      "unresolved_group": "OFFICE_BUILDING",
+      "gpt_status": "OWNER_FACT_RESOLVED",
+      "owner_approval": "PENDING_FINAL_SNAPSHOT_APPROVAL",
       "review_input": {
         "industry": "업무빌딩",
         "building_use_type": "업무시설"
-      }
+      },
+      "decision_basis": "OWNER_DEFINED_SYNTHETIC_BUSINESS_CHARACTER",
+      "owner_defined_business": "빌딩/시설 관리사업장",
+      "historical_unresolved_group": "OFFICE_BUILDING"
     },
     {
       "profile_id": "PF-0051",
       "sector": "BUILDING",
       "gpt_candidate": {
-        "appendix3_item_no": null,
+        "appendix3_item_no": 41,
         "is_real_estate_management": null
       },
-      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
-      "owner_approval": "PENDING",
-      "unresolved_group": "OFFICE_BUILDING",
+      "gpt_status": "OWNER_FACT_RESOLVED",
+      "owner_approval": "PENDING_FINAL_SNAPSHOT_APPROVAL",
       "review_input": {
         "industry": "업무빌딩",
         "building_use_type": "업무시설"
-      }
+      },
+      "decision_basis": "OWNER_DEFINED_SYNTHETIC_BUSINESS_CHARACTER",
+      "owner_defined_business": "빌딩/시설 관리사업장",
+      "historical_unresolved_group": "OFFICE_BUILDING"
     },
     {
       "profile_id": "PF-0058",
@@ -638,46 +648,52 @@
       "profile_id": "PF-0062",
       "sector": "BUILDING",
       "gpt_candidate": {
-        "appendix3_item_no": null,
+        "appendix3_item_no": 41,
         "is_real_estate_management": null
       },
-      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
-      "owner_approval": "PENDING",
-      "unresolved_group": "OFFICE_BUILDING",
+      "gpt_status": "OWNER_FACT_RESOLVED",
+      "owner_approval": "PENDING_FINAL_SNAPSHOT_APPROVAL",
       "review_input": {
         "industry": "업무빌딩",
         "building_use_type": "판매시설"
-      }
+      },
+      "decision_basis": "OWNER_DEFINED_SYNTHETIC_BUSINESS_CHARACTER",
+      "owner_defined_business": "빌딩/시설 관리사업장",
+      "historical_unresolved_group": "OFFICE_BUILDING"
     },
     {
       "profile_id": "PF-0063",
       "sector": "BUILDING",
       "gpt_candidate": {
-        "appendix3_item_no": null,
+        "appendix3_item_no": 41,
         "is_real_estate_management": null
       },
-      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
-      "owner_approval": "PENDING",
-      "unresolved_group": "OFFICE_BUILDING",
+      "gpt_status": "OWNER_FACT_RESOLVED",
+      "owner_approval": "PENDING_FINAL_SNAPSHOT_APPROVAL",
       "review_input": {
         "industry": "업무빌딩",
         "building_use_type": "판매시설"
-      }
+      },
+      "decision_basis": "OWNER_DEFINED_SYNTHETIC_BUSINESS_CHARACTER",
+      "owner_defined_business": "빌딩/시설 관리사업장",
+      "historical_unresolved_group": "OFFICE_BUILDING"
     },
     {
       "profile_id": "PF-0064",
       "sector": "BUILDING",
       "gpt_candidate": {
-        "appendix3_item_no": null,
+        "appendix3_item_no": 41,
         "is_real_estate_management": null
       },
-      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
-      "owner_approval": "PENDING",
-      "unresolved_group": "OFFICE_BUILDING",
+      "gpt_status": "OWNER_FACT_RESOLVED",
+      "owner_approval": "PENDING_FINAL_SNAPSHOT_APPROVAL",
       "review_input": {
         "industry": "업무빌딩",
         "building_use_type": "판매시설"
-      }
+      },
+      "decision_basis": "OWNER_DEFINED_SYNTHETIC_BUSINESS_CHARACTER",
+      "owner_defined_business": "빌딩/시설 관리사업장",
+      "historical_unresolved_group": "OFFICE_BUILDING"
     },
     {
       "profile_id": "PF-0065",
@@ -923,16 +939,18 @@
       "profile_id": "PF-0082",
       "sector": "BUILDING",
       "gpt_candidate": {
-        "appendix3_item_no": null,
-        "is_real_estate_management": null
+        "appendix3_item_no": 37,
+        "is_real_estate_management": true
       },
-      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
-      "owner_approval": "PENDING",
-      "unresolved_group": "APARTMENT",
+      "gpt_status": "OWNER_FACT_RESOLVED",
+      "owner_approval": "PENDING_FINAL_SNAPSHOT_APPROVAL",
       "review_input": {
         "industry": "아파트",
         "building_use_type": "공동주택"
-      }
+      },
+      "decision_basis": "OWNER_DEFINED_SYNTHETIC_BUSINESS_CHARACTER",
+      "owner_defined_business": "공동주택 관리사업장",
+      "historical_unresolved_group": "APARTMENT"
     },
     {
       "profile_id": "PF-0083",
@@ -968,16 +986,18 @@
       "profile_id": "PF-0085",
       "sector": "BUILDING",
       "gpt_candidate": {
-        "appendix3_item_no": null,
+        "appendix3_item_no": 41,
         "is_real_estate_management": null
       },
-      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
-      "owner_approval": "PENDING",
-      "unresolved_group": "OFFICE_BUILDING",
+      "gpt_status": "OWNER_FACT_RESOLVED",
+      "owner_approval": "PENDING_FINAL_SNAPSHOT_APPROVAL",
       "review_input": {
         "industry": "업무빌딩",
         "building_use_type": "업무시설"
-      }
+      },
+      "decision_basis": "OWNER_DEFINED_SYNTHETIC_BUSINESS_CHARACTER",
+      "owner_defined_business": "빌딩/시설 관리사업장",
+      "historical_unresolved_group": "OFFICE_BUILDING"
     },
     {
       "profile_id": "PF-0086",
@@ -1028,16 +1048,18 @@
       "profile_id": "PF-0089",
       "sector": "BUILDING",
       "gpt_candidate": {
-        "appendix3_item_no": null,
-        "is_real_estate_management": null
+        "appendix3_item_no": 37,
+        "is_real_estate_management": true
       },
-      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
-      "owner_approval": "PENDING",
-      "unresolved_group": "APARTMENT",
+      "gpt_status": "OWNER_FACT_RESOLVED",
+      "owner_approval": "PENDING_FINAL_SNAPSHOT_APPROVAL",
       "review_input": {
         "industry": "아파트",
         "building_use_type": "공동주택"
-      }
+      },
+      "decision_basis": "OWNER_DEFINED_SYNTHETIC_BUSINESS_CHARACTER",
+      "owner_defined_business": "공동주택 관리사업장",
+      "historical_unresolved_group": "APARTMENT"
     },
     {
       "profile_id": "PF-0090",
@@ -1088,16 +1110,25 @@
       "profile_id": "PF-0093",
       "sector": "BUILDING",
       "gpt_candidate": {
-        "appendix3_item_no": null,
+        "appendix3_item_no": 41,
         "is_real_estate_management": null
       },
-      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
-      "owner_approval": "PENDING",
-      "unresolved_group": "OFFICE_BUILDING",
+      "gpt_status": "OWNER_FACT_RESOLVED",
+      "owner_approval": "PENDING_FINAL_SNAPSHOT_APPROVAL",
       "review_input": {
         "industry": "업무빌딩",
         "building_use_type": "업무시설"
-      }
+      },
+      "decision_basis": "OWNER_DEFINED_SYNTHETIC_BUSINESS_CHARACTER",
+      "owner_defined_business": "빌딩/시설 관리사업장",
+      "historical_unresolved_group": "OFFICE_BUILDING"
     }
-  ]
+  ],
+  "wo_owner_fact": "WO-E2E-APPENDIX3-FIXTURE-AUTHORITY-OWNER-FACT-RESOLUTION-001",
+  "owner_fact_resolution": "COMPLETE",
+  "owner_fact_resolved": 12,
+  "building_owner_fact_resolved": 12,
+  "item37_real_estate_management_true": 3,
+  "item41_assigned": 9,
+  "null_appendix3_item_no": 0
 }
