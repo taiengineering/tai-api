@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+  <header>
+    <resultCode>00</resultCode>
+    <resultMsg>NORMAL SERVICE.</resultMsg>
+  </header>
+  <body>
+    <items>
+      <item>
+      <itemDetail>인화성 액체 : 구분2|발암성 : 구분1B</itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>B02</msdsItemCode>
+      <msdsItemNameKor>유해성·위험성 분류</msdsItemNameKor>
+      <ordrIdx>10</ordrIdx>
+      <upMsdsItemCode>B</upMsdsItemCode>
+      </item>
+      <item>
+      <itemDetail>GHS02.gif|GHS08.gif</itemDetail>
+      <lev>2</lev>
+      <msdsItemCode>B0402</msdsItemCode>
+      <msdsItemNameKor>그림문자</msdsItemNameKor>
+      <ordrIdx>12</ordrIdx>
+      <upMsdsItemCode>B04</upMsdsItemCode>
+      </item>
+      <item>
+      <itemDetail>위험</itemDetail>
+      <lev>2</lev>
+      <msdsItemCode>B0404</msdsItemCode>
+      <msdsItemNameKor>신호어</msdsItemNameKor>
+      <ordrIdx>13</ordrIdx>
+      <upMsdsItemCode>B04</upMsdsItemCode>
+      </item>
+    </items>
+  </body>
+</response>

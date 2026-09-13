@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+  <header>
+    <resultCode>00</resultCode>
+    <resultMsg>NORMAL SERVICE.</resultMsg>
+  </header>
+  <body>
+    <items>
+      <item>
+        <chemId>047134</chemId>
+        <chemNameKor>아닐린과 1,4-비스(클로로메틸)벤젠의 공중합체와 2,5-퓨란디온의 반응생성물</chemNameKor>
+        <koshaConfirm></koshaConfirm>
+        <lastDate>2018-04-02</lastDate>
+        <openYn></openYn>
+      </item>
+    </items>
+    <numOfRows>1</numOfRows>
+    <pageNo>1</pageNo>
+    <totalCount>1</totalCount>
+  </body>
+</response>

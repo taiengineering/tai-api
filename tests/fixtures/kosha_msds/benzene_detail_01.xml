@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+  <header>
+    <resultCode>00</resultCode>
+    <resultMsg>NORMAL SERVICE.</resultMsg>
+  </header>
+  <body>
+    <items>
+      <item>
+      <itemDetail>벤젠</itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>A02</msdsItemCode>
+      <msdsItemNameKor>제품명</msdsItemNameKor>
+      <ordrIdx>1</ordrIdx>
+      <upMsdsItemCode>A</upMsdsItemCode>
+      </item>
+      <item>
+      <itemDetail></itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>A04</msdsItemCode>
+      <msdsItemNameKor>제품의 권고 용도와 사용상의 제한</msdsItemNameKor>
+      <ordrIdx>2</ordrIdx>
+      <upMsdsItemCode>A</upMsdsItemCode>
+      </item>
+      <item>
+      <itemDetail>고분자, 세제, 농약</itemDetail>
+      <lev>2</lev>
+      <msdsItemCode>A0401</msdsItemCode>
+      <msdsItemNameKor>제품의 권고 용도</msdsItemNameKor>
+      <ordrIdx>3</ordrIdx>
+      <upMsdsItemCode>A04</upMsdsItemCode>
+      </item>
+    </items>
+  </body>
+</response>

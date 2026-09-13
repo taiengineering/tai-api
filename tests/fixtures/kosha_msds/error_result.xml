@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+  <header>
+    <resultCode>10</resultCode>
+    <resultMsg>INVALID REQUEST PARAMETER ERROR.</resultMsg>
+  </header>
+  <body/>
+</response>

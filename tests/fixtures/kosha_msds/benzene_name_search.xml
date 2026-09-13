@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+  <header>
+    <resultCode>00</resultCode>
+    <resultMsg>NORMAL SERVICE.</resultMsg>
+  </header>
+  <body>
+    <items>
+      <item>
+        <casNo>71-43-2</casNo>
+        <chemId>001008</chemId>
+        <chemNameKor>벤젠</chemNameKor>
+        <keNo>KE-02150</keNo>
+        <lastDate>2025-09-17</lastDate>
+      </item>
+      <item>
+        <casNo>100-41-4</casNo>
+        <chemId>001089</chemId>
+        <chemNameKor>에틸벤젠</chemNameKor>
+        <keNo>KE-13532</keNo>
+        <lastDate>2025-08-08</lastDate>
+      </item>
+      <item>
+        <casNo>103-33-3</casNo>
+        <chemId>001633</chemId>
+        <chemNameKor>아조벤젠</chemNameKor>
+        <lastDate>2025-07-23</lastDate>
+      </item>
+    </items>
+    <numOfRows>20</numOfRows>
+    <pageNo>1</pageNo>
+    <totalCount>777</totalCount>
+  </body>
+</response>
