@@ -146,3 +146,14 @@ Obs-004는 before_clean 당시의 역사적 관측으로 유지한다. Official 
 | Obs-009 | Consumer Work 입력의 canonical applicability 미표현 | Official LEG consumer input contract | High |
 | Obs-010 | Manufacturing ksic_major Runtime contract 관측 | Manufacturing 46 / 46 | High |
 
+## Obs-007 Object Progress
+
+```text
+OBJECT = crane
+STATUS = ANALYZED
+ANALYSIS = docs/canonical/test-universe/ANALYSIS_obs007-crane_v1.md
+PRODUCTION_MUTATION = 0
+E2E_RERUN = 0
+GPT_VERDICT = PENDING
+```
+
