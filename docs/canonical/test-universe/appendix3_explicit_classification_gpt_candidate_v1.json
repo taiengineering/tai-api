@@ -1,0 +1,1103 @@
+{
+  "wo": "WO-E2E-APPENDIX3-FIXTURE-AUTHORITY-STAGE-A-GPT-REVIEW-001",
+  "pr": 345,
+  "based_on_review_pack": "docs/canonical/test-universe/appendix3_explicit_classification_review_pack_v1.json",
+  "review_pack_sha256_note": "Stage A historical evidence; this file does not mutate it",
+  "status": "GPT_CANDIDATE_PENDING_OWNER_APPROVAL",
+  "authority_type": "OWNER_APPROVED_E2E_FIXTURE_FACT_CANDIDATE",
+  "production_derivation_rule": "NONE",
+  "frozen112_mutation": 0,
+  "owner_approval": "PENDING",
+  "stage_b": "BLOCKED",
+  "gated_total": 75,
+  "gpt_classifiable": 63,
+  "not_judgable": 12,
+  "manufacturing_classifiable": 46,
+  "building_classifiable": 17,
+  "apartment_unresolved": 3,
+  "office_building_unresolved": 9,
+  "item37_assigned": 0,
+  "is_real_estate_management_assigned": 0,
+  "note": "Synthetic E2E fixture candidate classification for these 75 Frozen Profiles only. Not a production KSIC/sector/building_use mapping rule.",
+  "profiles": [
+    {
+      "profile_id": "PF-0001",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 17,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "자동차 및 트레일러 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0002",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 17,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "자동차 및 트레일러 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0003",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 18,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "기타 운송장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0004",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 11,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "1차 금속 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0005",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 11,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "1차 금속 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0006",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 7,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "화학 물질 및 화학제품 제조업; 의약품 제외"
+      }
+    },
+    {
+      "profile_id": "PF-0007",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 7,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "화학 물질 및 화학제품 제조업; 의약품 제외"
+      }
+    },
+    {
+      "profile_id": "PF-0008",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 13,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "전자 부품, 컴퓨터, 영상, 음향 및 통신장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0009",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 13,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "전자 부품, 컴퓨터, 영상, 음향 및 통신장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0010",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 2,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "식료품 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0011",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 2,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "식료품 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0012",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 16,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "기타 기계 및 장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0013",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 16,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "기타 기계 및 장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0014",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 12,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "금속 가공제품 제조업; 기계 및 가구 제외"
+      }
+    },
+    {
+      "profile_id": "PF-0015",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 15,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "전기장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0016",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 9,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "고무 및 플라스틱제품 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0017",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 3,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "섬유제품 제조업; 의복 제외"
+      }
+    },
+    {
+      "profile_id": "PF-0018",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 19,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "가구 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0019",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 43,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "병원",
+        "building_use_type": "의료·복지"
+      }
+    },
+    {
+      "profile_id": "PF-0020",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 43,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "병원",
+        "building_use_type": "의료·복지"
+      }
+    },
+    {
+      "profile_id": "PF-0021",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 48,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "학교",
+        "building_use_type": "학교"
+      }
+    },
+    {
+      "profile_id": "PF-0022",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
+      "owner_approval": "PENDING",
+      "unresolved_group": "APARTMENT",
+      "review_input": {
+        "industry": "아파트",
+        "building_use_type": "공동주택"
+      }
+    },
+    {
+      "profile_id": "PF-0023",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 27,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "물류센터",
+        "building_use_type": "물류창고"
+      }
+    },
+    {
+      "profile_id": "PF-0024",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 33,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "호텔",
+        "building_use_type": "숙박시설"
+      }
+    },
+    {
+      "profile_id": "PF-0025",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
+      "owner_approval": "PENDING",
+      "unresolved_group": "OFFICE_BUILDING",
+      "review_input": {
+        "industry": "업무빌딩",
+        "building_use_type": "업무시설"
+      }
+    },
+    {
+      "profile_id": "PF-0026",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 32,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "판매시설",
+        "building_use_type": "판매시설"
+      }
+    },
+    {
+      "profile_id": "PF-0027",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 23,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "폐기물처리",
+        "building_use_type": "자원순환관련시설"
+      }
+    },
+    {
+      "profile_id": "PF-0040",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 16,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "기타 기계 및 장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0041",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 16,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "기타 기계 및 장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0042",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 16,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "기타 기계 및 장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0043",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 16,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "기타 기계 및 장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0044",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 16,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "기타 기계 및 장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0045",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 16,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "기타 기계 및 장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0046",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 16,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "기타 기계 및 장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0047",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 16,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "기타 기계 및 장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0048",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 16,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "기타 기계 및 장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0049",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
+      "owner_approval": "PENDING",
+      "unresolved_group": "OFFICE_BUILDING",
+      "review_input": {
+        "industry": "업무빌딩",
+        "building_use_type": "업무시설"
+      }
+    },
+    {
+      "profile_id": "PF-0050",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
+      "owner_approval": "PENDING",
+      "unresolved_group": "OFFICE_BUILDING",
+      "review_input": {
+        "industry": "업무빌딩",
+        "building_use_type": "업무시설"
+      }
+    },
+    {
+      "profile_id": "PF-0051",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
+      "owner_approval": "PENDING",
+      "unresolved_group": "OFFICE_BUILDING",
+      "review_input": {
+        "industry": "업무빌딩",
+        "building_use_type": "업무시설"
+      }
+    },
+    {
+      "profile_id": "PF-0058",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 2,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "식료품 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0059",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 17,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "자동차 및 트레일러 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0060",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 7,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "화학 물질 및 화학제품 제조업; 의약품 제외"
+      }
+    },
+    {
+      "profile_id": "PF-0061",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 11,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "1차 금속 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0062",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
+      "owner_approval": "PENDING",
+      "unresolved_group": "OFFICE_BUILDING",
+      "review_input": {
+        "industry": "업무빌딩",
+        "building_use_type": "판매시설"
+      }
+    },
+    {
+      "profile_id": "PF-0063",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
+      "owner_approval": "PENDING",
+      "unresolved_group": "OFFICE_BUILDING",
+      "review_input": {
+        "industry": "업무빌딩",
+        "building_use_type": "판매시설"
+      }
+    },
+    {
+      "profile_id": "PF-0064",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
+      "owner_approval": "PENDING",
+      "unresolved_group": "OFFICE_BUILDING",
+      "review_input": {
+        "industry": "업무빌딩",
+        "building_use_type": "판매시설"
+      }
+    },
+    {
+      "profile_id": "PF-0065",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 17,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "자동차 및 트레일러 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0066",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 18,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "기타 운송장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0067",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 11,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "1차 금속 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0068",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 7,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "화학 물질 및 화학제품 제조업; 의약품 제외"
+      }
+    },
+    {
+      "profile_id": "PF-0069",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 13,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "전자 부품, 컴퓨터, 영상, 음향 및 통신장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0070",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 2,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "식료품 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0071",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 16,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "기타 기계 및 장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0072",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 12,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "금속 가공제품 제조업; 기계 및 가구 제외"
+      }
+    },
+    {
+      "profile_id": "PF-0073",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 15,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "전기장비 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0074",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 9,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "고무 및 플라스틱제품 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0075",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 3,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "섬유제품 제조업; 의복 제외"
+      }
+    },
+    {
+      "profile_id": "PF-0076",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 19,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "가구 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0077",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 7,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "화학 물질 및 화학제품 제조업; 의약품 제외"
+      }
+    },
+    {
+      "profile_id": "PF-0078",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 17,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "자동차 및 트레일러 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0079",
+      "sector": "MANUFACTURING",
+      "gpt_candidate": {
+        "appendix3_item_no": 11,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "ksic_name": "1차 금속 제조업"
+      }
+    },
+    {
+      "profile_id": "PF-0080",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 43,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "병원",
+        "building_use_type": "의료·복지"
+      }
+    },
+    {
+      "profile_id": "PF-0081",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 48,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "학교",
+        "building_use_type": "학교"
+      }
+    },
+    {
+      "profile_id": "PF-0082",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
+      "owner_approval": "PENDING",
+      "unresolved_group": "APARTMENT",
+      "review_input": {
+        "industry": "아파트",
+        "building_use_type": "공동주택"
+      }
+    },
+    {
+      "profile_id": "PF-0083",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 27,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "물류센터",
+        "building_use_type": "물류창고"
+      }
+    },
+    {
+      "profile_id": "PF-0084",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 33,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "호텔",
+        "building_use_type": "숙박시설"
+      }
+    },
+    {
+      "profile_id": "PF-0085",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
+      "owner_approval": "PENDING",
+      "unresolved_group": "OFFICE_BUILDING",
+      "review_input": {
+        "industry": "업무빌딩",
+        "building_use_type": "업무시설"
+      }
+    },
+    {
+      "profile_id": "PF-0086",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 32,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "판매시설",
+        "building_use_type": "판매시설"
+      }
+    },
+    {
+      "profile_id": "PF-0087",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 23,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "폐기물처리",
+        "building_use_type": "자원순환관련시설"
+      }
+    },
+    {
+      "profile_id": "PF-0088",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 43,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "병원",
+        "building_use_type": "의료·복지"
+      }
+    },
+    {
+      "profile_id": "PF-0089",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
+      "owner_approval": "PENDING",
+      "unresolved_group": "APARTMENT",
+      "review_input": {
+        "industry": "아파트",
+        "building_use_type": "공동주택"
+      }
+    },
+    {
+      "profile_id": "PF-0090",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 27,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "물류센터",
+        "building_use_type": "물류창고"
+      }
+    },
+    {
+      "profile_id": "PF-0091",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 48,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "학교",
+        "building_use_type": "학교"
+      }
+    },
+    {
+      "profile_id": "PF-0092",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 33,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "PENDING",
+      "review_input": {
+        "industry": "호텔",
+        "building_use_type": "숙박시설"
+      }
+    },
+    {
+      "profile_id": "PF-0093",
+      "sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": null,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "NOT_JUDGABLE_OWNER_FACT_REQUIRED",
+      "owner_approval": "PENDING",
+      "unresolved_group": "OFFICE_BUILDING",
+      "review_input": {
+        "industry": "업무빌딩",
+        "building_use_type": "업무시설"
+      }
+    }
+  ]
+}
