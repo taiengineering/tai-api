@@ -52,9 +52,11 @@ reason           = AUTOMATION_RIGHT/CONTRACT_CONFIRMATION_REQUIRED
 official complete chemId enumeration = NO
 official bulk source                 = NO
 N                                    = UNKNOWN
-WEB_ADVISORY_COUNT(t2 header)        = 20568
-observed_at(t2)                      = 2026-09-14 KST
+WEB_ADVISORY_COUNT                   = 20568 (live header; N not frozen)
+observed_at                          = 2026-09-14 KST
 PRODUCTION ACCOUNT PATH              = CONFIRMED
+TRAFFIC INCREASE PATH                = CONFIRMED
+EXACT ACCOUNT FORM                   = NOT VERIFIED
 QUOTA_APPROVAL                       = PENDING_OWNER_ACTION
 QPS                                  = UNKNOWN
 INCREMENTAL SYNC                     = UNRESOLVED
@@ -142,28 +144,31 @@ middle     GET+POST pageIndex=1029
 last       GET+POST pageIndex=2057
 ```
 
-```text
-observed_at            = 2026-09-14 KST
-WEB_ADVISORY_COUNT     = 20568   (header 총 N건)
-observed_pages         = 2057
-page_size              = 10
-last_page_rows         = 7
-last_page arithmetic   = 2056×10 + 7 = 20567
-header vs arithmetic   = 20568 ≠ 20567
-prior operator observe = 20567 / 2057 pages
-```
-
 Name this value **WEB_ADVISORY_COUNT**. Do **not** store it as `expected_count`, official snapshot count, or FULL_OFFICIAL N.
 
-Count drift:
+Last-page row count is **observation evidence only**. It is not a frozen arithmetic fact.
 
 ```text
-t1 operator WEB_ADVISORY_COUNT ≈ 20567
-t2 CHEM-03 header              = 20568
-t2 last-page arithmetic        = 20567
+OPERATOR_OBSERVATION (feat/obj-chem-03 pageIndex=2057 fetch, 2026-09-14 KST)
+  header           = 20568
+  pages            = 2057
+  page_size        = 10
+  last-page rows   = 7
+  arithmetic       = 2056×10 + 7 = 20567
+  exact observation evidence only
+
+GPT_INDEPENDENT_RECHECK (same official last page, later the same night)
+  header           = 20568
+  last-page rows   = 8
+  arithmetic       = 2056×10 + 8 = 20568
+
+prior live advisory (CHEM-03 kickoff) ≈ 20567 / 2057 pages
+
+persistent mismatch = NOT VERIFIED
+web list live/non-frozen = accepted
 ```
 
-Difference is **not an error**. It is evidence the web total is a live advisory and that even header vs last-page arithmetic is not a frozen contract. Snapshot window design must assume source drift.
+The 7-row vs 8-row difference may be add/delete, cache, or fetch-time skew. CHEM-03 SoT does **not** freeze `header vs arithmetic = 20568 ≠ 20567` as a standing fact. Snapshot window design must still assume source drift because the count is live.
 
 Row identity:
 
@@ -232,7 +237,7 @@ FULL_OFFICIAL remains **blocked**. Acceptance A–H are not jointly satisfied:
 |---|---|
 | A official provider-backed | web UI yes; OpenAPI dump-all no |
 | B finite | UI shows a finite page count |
-| C complete | NOT VERIFIED (header≠last-page arithmetic; no omission test) |
+| C complete | NOT VERIFIED (no official census / omission test; web count is advisory and non-frozen) |
 | D reproducible | pageIndex reproducible as HTML, not as a published API contract |
 | E every chemId obtainable | technically present per row; harvesting 2,057 pages is forbidden here |
 | F no guessed identifiers | web rows carry chemId; brute-force IDs would guess |
@@ -311,13 +316,15 @@ documented path             = YES
 운영계정 트래픽             = 활용사례 등록 시 신청하면 트래픽 증가 가능
 numeric default ops quota   = NOT STATED on this dataset page
 QPS numeric cap             = UNKNOWN (resultCode 23 exists; value unpublished)
-traffic increase fields     = 운영계정 신청 시 활용자가 필요 트래픽 작성 (portal-wide procedure)
-활용사례 등록               = 운영 전환에 필요
+운영 트래픽 증가            = 활용사례 등록 시 신청 가능 (공식 페이지 문구)
+운영 전환 신청화면 필수필드 = LOGIN SCREEN / 실제 신청화면 미확인
 account mutation this step  = NOT SUBMITTED
 ```
 
 ```text
 PRODUCTION ACCOUNT PATH = CONFIRMED
+TRAFFIC INCREASE PATH   = CONFIRMED
+EXACT ACCOUNT FORM      = NOT VERIFIED
 QUOTA_APPROVAL          = PENDING_OWNER_ACTION
 ```
 
@@ -325,7 +332,7 @@ QUOTA_APPROVAL          = PENDING_OWNER_ACTION
 
 ## H. Application Draft (do not submit in CHEM-03)
 
-제출 직전 완성본. 계정 credential / 사업자등록번호 / 담당자 개인정보는 비워 둔다. 사용자가 포털 마이페이지에서 운영계정·활용사례 화면에 붙여 넣을 문안이다.
+제출 직전 완성본. 계정 credential / 사업자등록번호 / 담당자 개인정보는 비워 둔다. 사용자가 포털에서 운영계정 심의 및 트래픽 증가 신청 시 붙여 넣을 문안이다. 활용사례 등록은 공식 페이지상 **운영계정 트래픽 증가 신청 경로/조건**으로 명시되어 있으며, 운영 전환 자체에 필수인지는 신청화면 미실측이다.
 
 ### 서비스명
 
@@ -416,9 +423,9 @@ lastDate alone != incremental enumeration
 1. No documented OpenAPI dump-all → FULL_OFFICIAL cannot be opened from E1.
 2. No official chemId bulk file → E2 closed.
 3. KOSHA hub chemList.do is undocumented for automation → harvesting it is NOT APPROVED.
-4. WEB_ADVISORY_COUNT drifts (20567/20568) and header≠last-page arithmetic.
+4. WEB_ADVISORY_COUNT is live/non-frozen (kickoff ≈20567, later header 20568). Transient last-page 7 vs 8 was not independently reproduced.
 5. 개발계정 1,000/day cannot seed ~16N details.
-6. 운영계정은 심의승인 + 활용사례 + 트래픽 신청. 승인 전 production ingest 금지.
+6. 운영단계 = 심의승인. 운영 트래픽 증가 = 활용사례 등록 시 신청 가능. 전환 신청화면 세부 필수필드는 미실측. 승인 전 production ingest 금지.
 7. QPS unpublished; resultCode 23 exists → throttle design required even after daily quota.
 8. chemId values are not a dense 1..N range → guessing IDs is both forbidden and incomplete.
 9. kosha_msds_chemicals.is_current is unused by kosha_msds_current; revisit at production-migration preflight, not now.
