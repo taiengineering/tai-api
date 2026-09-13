@@ -1,0 +1,324 @@
+{
+  "authority_type": "OWNER_APPROVED_E2E_FIXTURE_FACT",
+  "status": "APPROVED",
+  "version": 1,
+  "frozen_profile_sha256": "4818a63ab261c5a36c1432647b6b17e7636641071801d36fd1b85d1361af751b",
+  "frozen_profile_count": 112,
+  "approved_candidate_sha256": "3d0e99704b423ba00af37cebfcb5e4383b45ac9071eea4aa9c6e55cd4b99e611",
+  "production_derivation_rule": "NONE",
+  "raw_context_as_authority": false,
+  "gated_row_count": 75,
+  "approval": {
+    "wo": "WO-E2E-APPENDIX3-FIXTURE-AUTHORITY-STAGE-B-FREEZE-001",
+    "pr": 345,
+    "head_at_approval": "017ff4071d27c40658e861f4b9e27ada993300e4",
+    "owner_final_snapshot_approval": "APPROVED",
+    "authority": "OWNER_APPROVED_E2E_FIXTURE_FACT",
+    "meaning": "Synthetic E2E fixture facts for these Frozen112 profile IDs only. Not a production derivation or mapping rule."
+  },
+  "rows": [
+    {
+      "profile_id": "PF-0001",
+      "appendix3_item_no": 17
+    },
+    {
+      "profile_id": "PF-0002",
+      "appendix3_item_no": 17
+    },
+    {
+      "profile_id": "PF-0003",
+      "appendix3_item_no": 18
+    },
+    {
+      "profile_id": "PF-0004",
+      "appendix3_item_no": 11
+    },
+    {
+      "profile_id": "PF-0005",
+      "appendix3_item_no": 11
+    },
+    {
+      "profile_id": "PF-0006",
+      "appendix3_item_no": 7
+    },
+    {
+      "profile_id": "PF-0007",
+      "appendix3_item_no": 7
+    },
+    {
+      "profile_id": "PF-0008",
+      "appendix3_item_no": 13
+    },
+    {
+      "profile_id": "PF-0009",
+      "appendix3_item_no": 13
+    },
+    {
+      "profile_id": "PF-0010",
+      "appendix3_item_no": 2
+    },
+    {
+      "profile_id": "PF-0011",
+      "appendix3_item_no": 2
+    },
+    {
+      "profile_id": "PF-0012",
+      "appendix3_item_no": 16
+    },
+    {
+      "profile_id": "PF-0013",
+      "appendix3_item_no": 16
+    },
+    {
+      "profile_id": "PF-0014",
+      "appendix3_item_no": 12
+    },
+    {
+      "profile_id": "PF-0015",
+      "appendix3_item_no": 15
+    },
+    {
+      "profile_id": "PF-0016",
+      "appendix3_item_no": 9
+    },
+    {
+      "profile_id": "PF-0017",
+      "appendix3_item_no": 3
+    },
+    {
+      "profile_id": "PF-0018",
+      "appendix3_item_no": 19
+    },
+    {
+      "profile_id": "PF-0019",
+      "appendix3_item_no": 43
+    },
+    {
+      "profile_id": "PF-0020",
+      "appendix3_item_no": 43
+    },
+    {
+      "profile_id": "PF-0021",
+      "appendix3_item_no": 48
+    },
+    {
+      "profile_id": "PF-0022",
+      "appendix3_item_no": 37,
+      "is_real_estate_management": true
+    },
+    {
+      "profile_id": "PF-0023",
+      "appendix3_item_no": 27
+    },
+    {
+      "profile_id": "PF-0024",
+      "appendix3_item_no": 33
+    },
+    {
+      "profile_id": "PF-0025",
+      "appendix3_item_no": 41
+    },
+    {
+      "profile_id": "PF-0026",
+      "appendix3_item_no": 32
+    },
+    {
+      "profile_id": "PF-0027",
+      "appendix3_item_no": 23
+    },
+    {
+      "profile_id": "PF-0040",
+      "appendix3_item_no": 16
+    },
+    {
+      "profile_id": "PF-0041",
+      "appendix3_item_no": 16
+    },
+    {
+      "profile_id": "PF-0042",
+      "appendix3_item_no": 16
+    },
+    {
+      "profile_id": "PF-0043",
+      "appendix3_item_no": 16
+    },
+    {
+      "profile_id": "PF-0044",
+      "appendix3_item_no": 16
+    },
+    {
+      "profile_id": "PF-0045",
+      "appendix3_item_no": 16
+    },
+    {
+      "profile_id": "PF-0046",
+      "appendix3_item_no": 16
+    },
+    {
+      "profile_id": "PF-0047",
+      "appendix3_item_no": 16
+    },
+    {
+      "profile_id": "PF-0048",
+      "appendix3_item_no": 16
+    },
+    {
+      "profile_id": "PF-0049",
+      "appendix3_item_no": 41
+    },
+    {
+      "profile_id": "PF-0050",
+      "appendix3_item_no": 41
+    },
+    {
+      "profile_id": "PF-0051",
+      "appendix3_item_no": 41
+    },
+    {
+      "profile_id": "PF-0058",
+      "appendix3_item_no": 2
+    },
+    {
+      "profile_id": "PF-0059",
+      "appendix3_item_no": 17
+    },
+    {
+      "profile_id": "PF-0060",
+      "appendix3_item_no": 7
+    },
+    {
+      "profile_id": "PF-0061",
+      "appendix3_item_no": 11
+    },
+    {
+      "profile_id": "PF-0062",
+      "appendix3_item_no": 41
+    },
+    {
+      "profile_id": "PF-0063",
+      "appendix3_item_no": 41
+    },
+    {
+      "profile_id": "PF-0064",
+      "appendix3_item_no": 41
+    },
+    {
+      "profile_id": "PF-0065",
+      "appendix3_item_no": 17
+    },
+    {
+      "profile_id": "PF-0066",
+      "appendix3_item_no": 18
+    },
+    {
+      "profile_id": "PF-0067",
+      "appendix3_item_no": 11
+    },
+    {
+      "profile_id": "PF-0068",
+      "appendix3_item_no": 7
+    },
+    {
+      "profile_id": "PF-0069",
+      "appendix3_item_no": 13
+    },
+    {
+      "profile_id": "PF-0070",
+      "appendix3_item_no": 2
+    },
+    {
+      "profile_id": "PF-0071",
+      "appendix3_item_no": 16
+    },
+    {
+      "profile_id": "PF-0072",
+      "appendix3_item_no": 12
+    },
+    {
+      "profile_id": "PF-0073",
+      "appendix3_item_no": 15
+    },
+    {
+      "profile_id": "PF-0074",
+      "appendix3_item_no": 9
+    },
+    {
+      "profile_id": "PF-0075",
+      "appendix3_item_no": 3
+    },
+    {
+      "profile_id": "PF-0076",
+      "appendix3_item_no": 19
+    },
+    {
+      "profile_id": "PF-0077",
+      "appendix3_item_no": 7
+    },
+    {
+      "profile_id": "PF-0078",
+      "appendix3_item_no": 17
+    },
+    {
+      "profile_id": "PF-0079",
+      "appendix3_item_no": 11
+    },
+    {
+      "profile_id": "PF-0080",
+      "appendix3_item_no": 43
+    },
+    {
+      "profile_id": "PF-0081",
+      "appendix3_item_no": 48
+    },
+    {
+      "profile_id": "PF-0082",
+      "appendix3_item_no": 37,
+      "is_real_estate_management": true
+    },
+    {
+      "profile_id": "PF-0083",
+      "appendix3_item_no": 27
+    },
+    {
+      "profile_id": "PF-0084",
+      "appendix3_item_no": 33
+    },
+    {
+      "profile_id": "PF-0085",
+      "appendix3_item_no": 41
+    },
+    {
+      "profile_id": "PF-0086",
+      "appendix3_item_no": 32
+    },
+    {
+      "profile_id": "PF-0087",
+      "appendix3_item_no": 23
+    },
+    {
+      "profile_id": "PF-0088",
+      "appendix3_item_no": 43
+    },
+    {
+      "profile_id": "PF-0089",
+      "appendix3_item_no": 37,
+      "is_real_estate_management": true
+    },
+    {
+      "profile_id": "PF-0090",
+      "appendix3_item_no": 27
+    },
+    {
+      "profile_id": "PF-0091",
+      "appendix3_item_no": 48
+    },
+    {
+      "profile_id": "PF-0092",
+      "appendix3_item_no": 33
+    },
+    {
+      "profile_id": "PF-0093",
+      "appendix3_item_no": 41
+    }
+  ]
+}
