@@ -150,10 +150,12 @@ Obs-004는 before_clean 당시의 역사적 관측으로 유지한다. Official 
 
 ```text
 OBJECT = crane
-STATUS = ANALYZED
+STATUS = DESIGNED
 ANALYSIS = docs/canonical/test-universe/ANALYSIS_obs007-crane_v1.md
+DESIGN = docs/canonical/test-universe/DESIGN_obs007-crane_v1.md
+GPT_VERDICT = CHG_REQUIRED
+IMPLEMENTATION = PENDING
 PRODUCTION_MUTATION = 0
 E2E_RERUN = 0
-GPT_VERDICT = PENDING
 ```
 
