@@ -64,7 +64,9 @@ def is_current_material(item: dict[str, Any], current_ids: set[str] | None) -> b
 
 
 def is_current_accident(item: dict[str, Any]) -> bool:
-    # Source table has no current=true column. Public list contract = row exists with identity.
+    # Source table has no current=true column. Public/Graph contract = identity exists and is not HOLD.
+    if str(item.get("identity_status") or "") == "HOLD":
+        return False
     return bool(item.get("content_id") or item.get("id"))
 
 
@@ -97,9 +99,16 @@ def _field_map_for(content_type: str, item: dict[str, Any]) -> dict[str, str]:
         return {
             "title": str(item.get("title") or ""),
             "accident_summary": str(item.get("accident_summary") or item.get("summary") or ""),
-            "work_type": str(item.get("work_type") or ""),
+            "work_type": str(item.get("work_type") or item.get("work_process") or ""),
             "accident_type": str(item.get("accident_type") or ""),
             "summary": str(item.get("accident_summary") or item.get("summary") or ""),
+            "process_major": str(item.get("process_major") or ""),
+            "process_minor": str(item.get("process_minor") or ""),
+            "work_process": str(item.get("work_process") or ""),
+            "object_major": str(item.get("object_major") or ""),
+            "object_minor": str(item.get("object_minor") or ""),
+            "accident_type_major": str(item.get("accident_type_major") or ""),
+            "construction_type": str(item.get("construction_type") or ""),
         }
     if content_type == "LAW_UPDATE":
         return {
