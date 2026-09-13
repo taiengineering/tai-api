@@ -1,22 +1,24 @@
 ---
-wo: WO-E2E-OBS007-SPECIAL10-APPENDIX3-AUTHORITY-FREEZE-001
+wo: WO-E2E-OBS007-SPECIAL10-APPENDIX3-OWNER-FINAL-SNAPSHOT-APPROVAL-001
 class: records
 type: registry
 scope: canonical
 project: test-universe
-title: SPECIAL10 Appendix3 Explicit Classification Authority v1 (APPROVED)
+title: SPECIAL10 Appendix3 Explicit Classification Authority v1 pending owner final snapshot approval
 version: 1
-status: approved
+status: pending
 owner: taiwang
 ---
 
-# REGISTRY — SPECIAL10 Appendix3 Explicit Classification Authority v1 (APPROVED)
+# REGISTRY — SPECIAL10 Appendix3 Explicit Classification Authority v1 (PENDING OWNER FINAL SNAPSHOT APPROVAL)
 
 ```text
 Authority Type =
 OWNER_APPROVED_E2E_FIXTURE_FACT
 
-Status = APPROVED
+AUTHORITY_CONTENT = READY
+OWNER_FINAL_SNAPSHOT_APPROVAL = PENDING
+Status = PENDING_OWNER_FINAL_SNAPSHOT_APPROVAL
 Coverage = SPECIAL10
 
 Frozen Source =
@@ -42,8 +44,14 @@ Authority Rows = 10
 Production Derivation Rule = NONE
 ksic_mapping = false
 
-AUTHORITY_JSON_SHA256 =
+PREVIOUS_AUTHORITY_JSON_SHA256 =
 f5e86a97787b2d9d7eb400e7d53e6761b759176f99a02815b11f39fe5c373823
+
+AUTHORITY_JSON_SHA256 =
+2c64ae58efa6b53137faf231dfbff2d7b572996087dfe739e9447a354d172893
+
+SEMANTIC_ROWS = SAME
+GOVERNANCE_METADATA = CORRECTED
 ```
 
 > These are exact synthetic E2E fixture facts, not production mapping rules.
@@ -79,7 +87,7 @@ APPROVED_75_SHA256 =
 APPROVED_75_AUTHORITY_DELTA = 0
 ```
 
-Runner still loads only the 75-row file. SPECIAL10 injection is the next Runner REVISE gate, not this freeze.
+Runner still loads only the 75-row file. SPECIAL10 injection remains BLOCKED until Owner Final Snapshot Approval, then a separate Runner REVISE PR.
 
 ---
 
@@ -101,7 +109,9 @@ Candidate SHA256 =
 9cb133e345227ab2fdfccf259f3829825fcd903c628a00774d816465561caaf9
 ```
 
-Stage B Authority is projected from that approved snapshot only. No new legal classification was made in this freeze.
+Authority content is projected from that candidate snapshot. No new legal classification was made.
+
+Owner Final Snapshot Approval of this 10-row snapshot is still PENDING. Premature `APPROVED` governance metadata was corrected; row values were not changed.
 
 ---
 
@@ -179,7 +189,9 @@ PF-0109 → 31 수도, 하수 및 폐기물 처리, 원료 재생업(제23호 �
 Stage A review pack is historical and unchanged.
 
 ```text
-AUTHORITY_FREEZE = THIS_WO
+AUTHORITY_CONTENT = READY
+OWNER_FINAL_SNAPSHOT_APPROVAL = PENDING
+AUTHORITY_FREEZE_FINAL = BLOCKED_OWNER_FINAL_APPROVAL
 RUNNER_REVISE = BLOCKED
 HTTP = 0
 MEASUREMENT = BLOCKED

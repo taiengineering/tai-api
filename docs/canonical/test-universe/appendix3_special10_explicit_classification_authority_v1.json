@@ -1,6 +1,6 @@
 {
   "authority_type": "OWNER_APPROVED_E2E_FIXTURE_FACT",
-  "status": "APPROVED",
+  "status": "PENDING_OWNER_FINAL_SNAPSHOT_APPROVAL",
   "version": 1,
   "coverage": "SPECIAL10",
   "frozen_profile_sha256": "4818a63ab261c5a36c1432647b6b17e7636641071801d36fd1b85d1361af751b",
@@ -25,7 +25,7 @@
     "stage_a_head": "80a14fe633de99dc6a58d1b85ba44e058cca75bb",
     "gpt_classification_comment": "https://github.com/taiengineering/tai-api/pull/349#issuecomment-5657077068",
     "owner_decision_comment": "https://github.com/taiengineering/tai-api/pull/349#issuecomment-5657083864",
-    "owner_final_snapshot_approval": "APPROVED",
+    "owner_final_snapshot_approval": "PENDING",
     "authority": "OWNER_APPROVED_E2E_FIXTURE_FACT",
     "meaning": "Synthetic E2E fixture facts for these Frozen112 SPECIAL10 profile IDs only. Not a production derivation or mapping rule."
   },
@@ -80,5 +80,13 @@
       "profile_id": "PF-0112",
       "appendix3_item_no": 36
     }
-  ]
+  ],
+  "authority_content": "READY",
+  "governance_correction": {
+    "wo": "WO-E2E-OBS007-SPECIAL10-APPENDIX3-OWNER-FINAL-SNAPSHOT-APPROVAL-001",
+    "reason": "Premature owner_final_snapshot_approval=APPROVED corrected to PENDING before Owner Final Snapshot Approval",
+    "semantic_rows": "SAME",
+    "governance_metadata": "CORRECTED",
+    "previous_authority_sha256": "f5e86a97787b2d9d7eb400e7d53e6761b759176f99a02815b11f39fe5c373823"
+  }
 }
