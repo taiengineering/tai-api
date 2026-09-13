@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+  <header>
+    <resultCode>00</resultCode>
+    <resultMsg>NORMAL SERVICE.</resultMsg>
+  </header>
+  <body>
+    <items>
+      <item>
+      <lev>1</lev>
+      <msdsItemCode>H02</msdsItemCode>
+      <msdsItemNameKor>화학물질의 노출기준, 생물학적 노출기준 등</msdsItemNameKor>
+      <ordrIdx>1142</ordrIdx>
+      <upMsdsItemCode>H</upMsdsItemCode>
+      </item>
+    </items>
+  </body>
+</response>

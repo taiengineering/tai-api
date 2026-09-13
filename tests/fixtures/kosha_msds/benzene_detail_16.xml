@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+  <header>
+    <resultCode>00</resultCode>
+    <resultMsg>NORMAL SERVICE.</resultMsg>
+  </header>
+  <body>
+    <items>
+      <item>
+      <itemDetail>2025-09-17</itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>P06</msdsItemCode>
+      <msdsItemNameKor>최종 개정일자</msdsItemNameKor>
+      <ordrIdx>300</ordrIdx>
+      <upMsdsItemCode>P</upMsdsItemCode>
+      </item>
+    </items>
+  </body>
+</response>

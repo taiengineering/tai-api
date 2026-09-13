@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+  <header>
+    <resultCode>00</resultCode>
+    <resultMsg>NORMAL SERVICE.</resultMsg>
+  </header>
+  <body>
+    <items>
+      <item>
+      <itemDetail>눈에 묻으면:몇 분간 물로 조심해서 씻으시오.가능하면 콘택트렌즈를 제거하시오.계속 씻으시오.|눈에 자극이 지속되면:의학적인 조치/조언을 받으시오.</itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>D02</msdsItemCode>
+      <msdsItemNameKor>눈에 들어갔을 때</msdsItemNameKor>
+      <ordrIdx>1062</ordrIdx>
+      <upMsdsItemCode>D</upMsdsItemCode>
+      </item>
+      <item>
+      <itemDetail>피부(또는 머리카락)에 묻으면:오염된 모든 의류를 즉시 벗으시오.피부를 물로 씻으시오[또는 샤워하시오].|피부 자극이 나타나면:의학적인 조치/조언을 받으시오.|오염된 옷과 신발을 제거하고 오염지역을 격리하시오|화상의 경우 즉시 찬물로 가능한 오래 해당부위를 식히고, 피부에 들러붙은 옷은 제거하지 마시오|비누와 물로 피부를 씻으시오</itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>D04</msdsItemCode>
+      <msdsItemNameKor>피부에 접촉했을 때</msdsItemNameKor>
+      <ordrIdx>1064</ordrIdx>
+      <upMsdsItemCode>D</upMsdsItemCode>
+      </item>
+      <item>
+      <itemDetail>노출되거나 노출이 우려되면:의학적인 조치/조언을 받으시오.|토하게 하지 마시오.|신선한 공기가 있는 곳으로 옮기시오|호흡하지 않는 경우 인공호흡을 실시하시오|호흡이 힘들 경우 산소를 공급하시오</itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>D06</msdsItemCode>
+      <msdsItemNameKor>흡입했을 때</msdsItemNameKor>
+      <ordrIdx>1066</ordrIdx>
+      <upMsdsItemCode>D</upMsdsItemCode>
+      </item>
+      <item>
+      <itemDetail>삼켰다면:즉시 의료기관/의사/…의 진찰을 받으시오.|토하게 하지 마시오.</itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>D08</msdsItemCode>
+      <msdsItemNameKor>먹었을 때</msdsItemNameKor>
+      <ordrIdx>1068</ordrIdx>
+      <upMsdsItemCode>D</upMsdsItemCode>
+      </item>
+      <item>
+      <itemDetail>폭로시 의료진에게 연락하고 추적조사 등의 특별한 응급조치를 취하시오.|접촉·흡입하여 생긴 증상은 지연될 수 있음|의료인력이 해당물질에 대해 인지하고 보호조치를 취하도록 하시오</itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>D12</msdsItemCode>
+      <msdsItemNameKor>기타 의사의 주의사항</msdsItemNameKor>
+      <ordrIdx>1096</ordrIdx>
+      <upMsdsItemCode>D</upMsdsItemCode>
+      </item>
+    </items>
+  </body>
+</response>

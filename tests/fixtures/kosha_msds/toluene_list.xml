@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+  <header>
+    <resultCode>00</resultCode>
+    <resultMsg>NORMAL SERVICE.</resultMsg>
+  </header>
+  <body>
+    <items>
+      <item>
+        <casNo>108-88-3</casNo>
+        <chemId>001032</chemId>
+        <chemNameKor>톨루엔</chemNameKor>
+        <enNo>203-625-9</enNo>
+        <keNo>KE-33936</keNo>
+        <koshaConfirm></koshaConfirm>
+        <lastDate>2025-08-08</lastDate>
+        <openYn></openYn>
+        <unNo>1294</unNo>
+      </item>
+    </items>
+    <numOfRows>10</numOfRows>
+    <pageNo>1</pageNo>
+    <totalCount>1</totalCount>
+  </body>
+</response>

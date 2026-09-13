@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+  <header>
+    <resultCode>00</resultCode>
+    <resultMsg>NORMAL SERVICE.</resultMsg>
+  </header>
+  <body>
+    <items>
+      <item>
+      <itemDetail>벤젠</itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>C02</msdsItemCode>
+      <msdsItemNameKor>물질명</msdsItemNameKor>
+      <ordrIdx>20</ordrIdx>
+      <upMsdsItemCode>C</upMsdsItemCode>
+      </item>
+      <item>
+      <itemDetail>71-43-2</itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>C06</msdsItemCode>
+      <msdsItemNameKor>CAS 번호</msdsItemNameKor>
+      <ordrIdx>22</ordrIdx>
+      <upMsdsItemCode>C</upMsdsItemCode>
+      </item>
+      <item>
+      <itemDetail>100%</itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>C08</msdsItemCode>
+      <msdsItemNameKor>함유량(%)</msdsItemNameKor>
+      <ordrIdx>23</ordrIdx>
+      <upMsdsItemCode>C</upMsdsItemCode>
+      </item>
+    </items>
+  </body>
+</response>

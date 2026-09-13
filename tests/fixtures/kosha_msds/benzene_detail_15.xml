@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+  <header>
+    <resultCode>00</resultCode>
+    <resultMsg>NORMAL SERVICE.</resultMsg>
+  </header>
+  <body>
+    <items>
+      <item>
+      <itemDetail>작업환경측정대상물질|특별관리물질</itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>O02</msdsItemCode>
+      <msdsItemNameKor>산업안전보건법에 의한 규제</msdsItemNameKor>
+      <ordrIdx>200</ordrIdx>
+      <upMsdsItemCode>O</upMsdsItemCode>
+      </item>
+      <item>
+      <itemDetail>제4류 인화성액체 제1석유류 비수용성액체 (200L)</itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>O06</msdsItemCode>
+      <msdsItemNameKor>위험물안전관리법에 의한 규제</msdsItemNameKor>
+      <ordrIdx>203</ordrIdx>
+      <upMsdsItemCode>O</upMsdsItemCode>
+      </item>
+    </items>
+  </body>
+</response>
