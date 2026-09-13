@@ -1,5 +1,5 @@
 ---
-wo: WO-E2E-OBS007-CRANE-DESIGN-PATCH1
+wo: WO-E2E-OBS007-CRANE-DESIGN-PATCH2
 class: plans
 type: design
 scope: canonical
@@ -12,21 +12,24 @@ owner: taiwang
 
 # DESIGN — Obs-007 object crane
 
-WO = `WO-E2E-OBS007-CRANE-DESIGN-PATCH1`
+WO = `WO-E2E-OBS007-CRANE-DESIGN-PATCH2`
 
 PR = `#343`
-PATCH of `WO-E2E-OBS007-CRANE-DESIGN-001`
+PATCH of `WO-E2E-OBS007-CRANE-DESIGN-PATCH1` (GPT re-verify PASS)
+CURRENT_HEAD_BEFORE = `41b3bdb1c5abdc05ad6bc60733a2fa521a0d7453`
 
-DESIGN REVISE. Implementation = BLOCKED. Production mutation = 0. E2E rerun = 0.
+DESIGN FINAL PENDING GPT. Implementation = BLOCKED. Production mutation = 0. E2E rerun = 0.
 
 OBJECT = `crane`
 CANONICAL_INPUT = `has_crane`
 
 ```text
 CHG_REQUIRED = 유지
-DESIGN_VERDICT = REVISE
+DESIGN_VERDICT = PATCH2_COMPLETE_PENDING_GPT
 IMPLEMENTATION = BLOCKED
-STATUS = DESIGN_REVISED_PENDING_GPT
+STATUS = DESIGN_FINAL_PENDING_GPT
+DESIGN_FROZEN = NO
+IMPLEMENTATION_APPROVED = NO
 ```
 
 GPT independent legal verification is still required. This document does not mutate LEG, API, UI, fixtures, or Sidecar.
@@ -58,6 +61,50 @@ Article 139 travelling = broad family removed; A not confirmed; conclusion C HOL
 Article 141 = atomic verbs including assembly, excluding adjustment
 Article 144 = subtype-only APPLICABLE forbidden; passageway HOLD
 Article 148 = has_mobile_crane alone discarded; hydraulic aligned with 136 HOLD
+```
+
+## 0.1 PATCH-2 delta (what changed vs HEAD 41b3bdb)
+
+PATCH-1 GPT re-verify = PASS. Remaining correction = hydraulic applicability only.
+
+Committed:
+
+```text
+has_hydraulic_crane
+의미 = 크레인이 유압을 동력으로 사용하는지 여부
+NOT has_jib_crane
+NOT has_mobile_crane
+NOT has_crane
+generic crane → hydraulic 자동추론 금지
+mobile crane → hydraulic 자동추론 금지
+```
+
+Article 136:
+
+```text
+INSUFFICIENT_EVIDENCE / HOLD
+→ COMPOSITE_CONDITION_REQUIRED
+has_crane AND has_hydraulic_crane
+지브 정격하중 괄호 = not an applicability subtype
+has_jib_crane is not a trigger
+```
+
+Article 148:
+
+```text
+INSUFFICIENT_EVIDENCE / HOLD
+→ COMPOSITE_CONDITION_REQUIRED
+has_mobile_crane AND has_hydraulic_crane
+has_mobile_crane alone → APPLICABLE forbidden
+```
+
+Unchanged HOLD:
+
+```text
+Article 139 travelling = INSUFFICIENT_EVIDENCE / HOLD
+Article 144 = INSUFFICIENT_EVIDENCE / HOLD
+Article 37 = has_tower_crane AND atomic tower operations
+Article 150 = mobile only
 ```
 
 ## 1. Scope and locked analysis facts
@@ -165,14 +212,14 @@ A future UI may ask one multi_select such as:
 
 Backend may map those choices deterministically to atomic canonical facts. This DESIGN does not implement UI. Canonical facts remain separate.
 
-## 3. Atom classification (18/18 after PATCH-1)
+## 3. Atom classification (18/18 after PATCH-2)
 
 | atom_id | article | 현재 mapped_field | 법령상 대상 (AFTER evidence) | 필요한 explicit fact | generic has_crane만으로 충분? | 설계 상태 |
 |---|---|---|---|---|---|---|
 | `5aec15bb-9ba9-5d54-87db-13dcacf41cf9` | 37 | has_crane | 타워크레인의 설치ㆍ수리ㆍ점검 또는 해체. 순간풍속 초당 10미터 초과 시 중지 | `has_tower_crane` AND (installation OR repair OR inspection OR dismantling). Wind = duty content, not input | NO. `has_crane` forbidden | COMPOSITE_CONDITION_REQUIRED |
 | `16ce5107-52c3-5e80-80b7-8c54ca0caf94` | 86 | has_crane | 이동식 크레인을 사용하여 근로자를 운반 | `has_mobile_crane` AND `crane_transporting_workers` | NO | COMPOSITE_CONDITION_REQUIRED |
 | `c924dad5-4d8f-5f2d-b0e8-6d537f75a087` | 86 | has_crane | 크레인을 사용하여 근로자를 운반 | `has_crane` AND `crane_transporting_workers` | NO | OPERATION_CONDITION_REQUIRED |
-| `84001932-7ef6-5789-885f-34913213e810` | 136 | has_crane | 유압을 동력으로 사용하는 크레인. 지브는 정격하중 괄호 | hydraulic crane. No existing hydraulic field. Not jib-only | NO | INSUFFICIENT_EVIDENCE |
+| `84001932-7ef6-5789-885f-34913213e810` | 136 | has_crane | 유압을 동력으로 사용하는 크레인. 지브는 정격하중 괄호 | `has_crane` AND `has_hydraulic_crane`. Not `has_jib_crane` | NO | COMPOSITE_CONDITION_REQUIRED |
 | `63092974-a3c8-556a-b855-cbe3be96dee5` | 137 | has_crane | 그 크레인을 사용하여 짐을 운반하는 경우 | `has_crane` | YES | GENERIC_OK |
 | `2437c873-e072-5c12-9257-21ee2a4a5a30` | 138 | has_crane | 지브 크레인을 사용하여 작업 | `has_jib_crane` | NO | SUBTYPE_REQUIRED |
 | `44b2d064-d1f1-52a8-9c2a-ccbcc17ac3bc` | 139 | has_crane | 갠트리 크레인 등 바닥 고정 레일 주행 크레인 새들 안전공간 | `has_gantry_crane` | NO | SUBTYPE_REQUIRED |
@@ -182,28 +229,28 @@ Backend may map those choices deterministically to atomic canonical facts. This 
 | `95bdc756-b7c7-5839-84a7-ee1688be09aa` | 146 | has_crane | 크레인을 사용하여 작업을 하는 경우 | `has_crane` | YES | GENERIC_OK |
 | `a20d913d-52a7-5425-bb2c-8c2d91b1b5a8` | 146 | has_crane | 조종석이 설치되지 아니한 크레인 | `has_crane_without_operator_cab` | NO | SUBTYPE_REQUIRED |
 | `d788dd1e-8b22-5328-ad28-849a3b5ce3ab` | 147 | has_crane | 이동식 크레인을 사용하는 경우 | `has_mobile_crane` | NO | SUBTYPE_REQUIRED |
-| `1e7527a6-2e7e-5b9e-81b0-bcc4562e9644` | 148 | has_crane | 유압을 동력으로 사용하는 이동식 크레인 | candidate `has_mobile_crane` AND hydraulic. Hydraulic field HOLD | NO | INSUFFICIENT_EVIDENCE |
+| `1e7527a6-2e7e-5b9e-81b0-bcc4562e9644` | 148 | has_crane | 유압을 동력으로 사용하는 이동식 크레인 | `has_mobile_crane` AND `has_hydraulic_crane`. `has_mobile_crane` alone forbidden | NO | COMPOSITE_CONDITION_REQUIRED |
 | `d018d484-e92a-5588-b8b2-44e6b7e70955` | 149 | has_crane | 이동식 크레인을 사용하여 하물을 운반 | `has_mobile_crane` | NO | SUBTYPE_REQUIRED |
 | `17b44c74-9e68-5b7a-9b5c-216cb3c86ed2` | 150 | has_crane | 이동식 크레인 명세서의 지브 경사각 | `has_mobile_crane` only. Not `has_jib_crane` | NO | SUBTYPE_REQUIRED |
 | `5b9a8f66-4e0f-58bb-acdf-23c80b3b6c63` | 168 | has_crane | 크레인 또는 이동식 크레인 고리걸이용구 | KEEP `has_crane`; later OR `has_mobile_crane` | YES (crane branch) | GENERIC_OK |
 | `ea92a57d-be66-5d07-bdab-eb032faac006` | 170 | has_crane | 크레인 또는 이동식 크레인 고리걸이용구 | KEEP `has_crane`; later OR `has_mobile_crane` | YES (crane branch) | GENERIC_OK |
 
-### Counts (recomputed; previous 4/7/2/4/1 not preserved)
+### Counts (recomputed after PATCH-2; PATCH-1 was 4/6/2/2/4)
 
 ```text
 GENERIC_OK = 4
 SUBTYPE_REQUIRED = 6
 OPERATION_CONDITION_REQUIRED = 2
-COMPOSITE_CONDITION_REQUIRED = 2
-INSUFFICIENT_EVIDENCE = 4
+COMPOSITE_CONDITION_REQUIRED = 4
+INSUFFICIENT_EVIDENCE = 2
 TOTAL = 18
 ```
 
 GENERIC_OK: 137, 146(사용), 168, 170.
 SUBTYPE_REQUIRED: 138, 139 gantry, 146 cabless, 147, 149, 150.
 OPERATION_CONDITION_REQUIRED: 86 generic, 141.
-COMPOSITE_CONDITION_REQUIRED: 37, 86 mobile.
-INSUFFICIENT_EVIDENCE: 136, 139 travelling, 144, 148.
+COMPOSITE_CONDITION_REQUIRED: 37, 86 mobile, 136, 148.
+INSUFFICIENT_EVIDENCE: 139 travelling, 144.
 
 ## 4. Special articles
 
@@ -359,7 +406,19 @@ Until then this atom is not designed as APPLICABLE on subtype presence.
 
 Design state: `INSUFFICIENT_EVIDENCE`.
 
-### 4.5 Article 136 / 148 hydraulic alignment
+### 4.5 Article 136 / 148 hydraulic (PATCH-2 committed)
+
+Shared canonical fact:
+
+```text
+has_hydraulic_crane
+의미 = 크레인이 유압을 동력으로 사용하는지 여부
+HYDRAULIC_FACT_STATUS = COMMITTED_IN_DESIGN
+NOT implemented in runtime/API/UI in this WO
+FORBIDDEN inference:
+  has_crane → has_hydraulic_crane
+  has_mobile_crane → has_hydraulic_crane
+```
 
 Article 136 evidence:
 
@@ -368,12 +427,16 @@ Article 136 evidence:
 ```
 
 ```text
-DECISION = HOLD — insufficient evidence
+DECISION = REQUIRE compound condition
+has_crane
+AND
+has_hydraulic_crane
 generic has_crane APPLICABLE = forbidden
-DO NOT REMAP to has_jib_crane
-hydraulic exact field = none
-has_hydraulic_crane = HOLD (not committed)
+DO NOT use has_jib_crane as trigger
+지브 크레인은 최대의 정격하중 = rated-load calculation, not applicability subtype
 ```
+
+Design state: `COMPOSITE_CONDITION_REQUIRED`.
 
 Article 148 evidence:
 
@@ -382,16 +445,17 @@ Article 148 evidence:
 ```
 
 ```text
-has_mobile_crane alone = discarded
-candidate = has_mobile_crane AND has_hydraulic_crane
-has_hydraulic_crane existing exact field = none
-input design for hydraulic = insufficient
-DECISION = HOLD — same hydraulic vocabulary principle as Article 136
+DECISION = REQUIRE compound condition
+has_mobile_crane
+AND
+has_hydraulic_crane
+has_mobile_crane alone → APPLICABLE forbidden
 ```
 
-Both articles share one hydraulic concept. Neither commits `has_hydraulic_crane` in this PATCH. Designed open state when only `has_crane` or only `has_mobile_crane` is known: REVIEW_REQUIRED / 미판정, not APPLICABLE.
+Design state: `COMPOSITE_CONDITION_REQUIRED`.
 
-Design state for both: `INSUFFICIENT_EVIDENCE`.
+When only `has_crane` is known: Article 136 = REVIEW_REQUIRED / 미판정, not APPLICABLE.
+When only `has_mobile_crane` is known: Article 148 = REVIEW_REQUIRED / 미판정, not APPLICABLE.
 
 ### 4.6 Article 150 — unchanged
 
@@ -404,9 +468,9 @@ NOT has_jib_crane
 
 Design state: `SUBTYPE_REQUIRED`. Unchanged from DESIGN-001.
 
-## 5. Explicit fact catalog (PATCH-1)
+## 5. Explicit fact catalog (PATCH-2)
 
-Status tags: `확정재사용` / `후보` / `HOLD`. No field is implemented here.
+Status tags: `확정재사용` / `설계확정` / `후보` / `HOLD`. No field is implemented in runtime here.
 
 ### A. Existing reuse (`확정재사용`)
 
@@ -421,14 +485,24 @@ Not reused as crane-operation or crane-dismantle: `has_demolition`, `crane_count
 
 | candidate | atoms | status |
 |---|---|---|
-| `has_mobile_crane` | 86-mobile, 147, 149, 150; later OR 168/170; 148 candidate only | 후보 |
+| `has_mobile_crane` | 86-mobile, 147, 148 compound, 149, 150; later OR 168/170 | 후보 |
 | `has_jib_crane` | 138 only | 후보 |
 | `has_gantry_crane` | 139 gantry | 후보 |
 | `has_travelling_crane` | 139 travelling candidate, 144 candidate | 후보 |
 | `has_slewing_crane` | 144 candidate | 후보 |
 | `has_crane_without_operator_cab` | 146 cabless | 후보 |
 
-`has_hydraulic_crane` is **not** in this group. See HOLD.
+### B2. New committed applicability fact (`설계확정`)
+
+```text
+has_hydraulic_crane
+HYDRAULIC_FACT_STATUS = COMMITTED_IN_DESIGN
+atoms = 136, 148
+136 = has_crane AND has_hydraulic_crane
+148 = has_mobile_crane AND has_hydraulic_crane
+not in existing runtime/API/UI vocabulary (survey 0 exact hits)
+not inferred from has_crane or has_mobile_crane
+```
 
 ### C. New operation/context fact
 
@@ -444,10 +518,9 @@ Operation (`후보`; no existing exact field):
 | `crane_dismantling_work` | 37, 141 |
 | `crane_transporting_workers` | 86 both atoms |
 
-Context / hydraulic (`HOLD`; not committed):
+Context (`HOLD`; not committed):
 
 ```text
-has_hydraulic_crane                 (136, 148)
 passageway context                  (144)
 same-runway parallel installation   (139 travelling)
 work on runway                      (139 travelling)
@@ -467,14 +540,15 @@ crane_erect_service_dismantle_work
 |---|---|---|---|---:|---|
 | `has_crane` | YES | YES 38/112 | YES | 4 GENERIC_OK + 141 + 86-generic | already |
 | `has_tower_crane` | YES | NO | YES | 1 (article 37) | construction exists; Official LEG manufacturing/building did not collect |
-| `has_mobile_crane` | NO | NO | NO | 5 primary (+148 HOLD) | new if committed |
+| `has_mobile_crane` | NO | NO | NO | 5 primary + 148 compound | new if committed |
 | `has_jib_crane` | NO | NO | NO | 1 | new if committed |
 | `has_gantry_crane` | NO | NO | NO | 1 | new if committed |
 | `has_travelling_crane` | NO | NO | NO | HOLD/candidate 2 | new if committed |
 | `has_slewing_crane` | NO | NO | NO | HOLD/candidate 1 | new if committed |
 | `has_crane_without_operator_cab` | NO | NO | NO | 1 | new if committed |
+| `has_hydraulic_crane` | NO | NO | NO | 2 (136, 148) | new if implemented; COMMITTED_IN_DESIGN |
 | atomic operation facts (7) | NO | NO | NO | 37, 86, 139 travelling, 141 | future multi_select allowed; not implemented |
-| hydraulic / passageway / runway context | NO | NO | NO | 136, 139 travelling, 144, 148 | HOLD |
+| passageway / runway context | NO | NO | NO | 139 travelling, 144 | HOLD |
 
 Minimum change path remains unimplemented:
 
@@ -495,17 +569,18 @@ KEEP GENERIC_OK atoms do not remap `mapped_field`.
 | Article 37 | not APPLICABLE; needs `has_tower_crane` and atomic tower operations |
 | Article 141 | not APPLICABLE; needs atomic 141 verbs |
 | Articles 138 / 139 gantry / 146 cabless / 147 / 149 / 150 | not APPLICABLE without that subtype fact |
-| 136 / 139 travelling / 144 / 148 | REVIEW_REQUIRED / 미판정 (HOLD) |
+| Article 136 | not APPLICABLE; needs `has_crane` AND `has_hydraulic_crane` |
+| Article 148 | not APPLICABLE; needs `has_mobile_crane` AND `has_hydraulic_crane` |
+| 139 travelling / 144 | REVIEW_REQUIRED / 미판정 (HOLD) |
 | 86 both | not APPLICABLE without transporting-workers (and mobile for the mobile atom) |
 
 ## 8. Open questions (not CHG)
 
 1. Article 139 travelling: GPT confirm C HOLD vs a frozen B layout-fact set once full statutory text (not truncated evidence) is available.
 2. Article 144: commit a passageway context fact vs keep HOLD.
-3. Article 136/148: commit shared hydraulic vocabulary vs keep HOLD.
-4. Article 37: whether `has_tower_crane` without operations may ever be APPLICABLE, or always REVIEW_REQUIRED.
-5. Whether future UI multi_select is the collection surface for the seven atomic operation facts.
-6. Construction AFTER sent `has_crane` not `has_tower_crane`; do not infer.
-7. `applicability=APPLICABLE` vs `check_result=NOT_APPLICABLE` on 684 rows: deferred Observation.
+3. Article 37: whether `has_tower_crane` without operations may ever be APPLICABLE, or always REVIEW_REQUIRED.
+4. Whether future UI multi_select is the collection surface for the seven atomic operation facts.
+5. Construction AFTER sent `has_crane` not `has_tower_crane`; do not infer.
+6. `applicability=APPLICABLE` vs `check_result=NOT_APPLICABLE` on 684 rows: deferred Observation.
 
-GPT re-verifies before any implementation WO.
+GPT Freeze 판정 전까지 `DESIGN_FROZEN` / `IMPLEMENTATION_APPROVED` 를 쓰지 않는다.
