@@ -46,6 +46,18 @@ def _load_env() -> None:
         os.environ["SUPABASE_SERVICE_KEY"] = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 
 
+def _production_supabase():
+    """HTTP/1.1 client. HTTP/2 stream IDs cap around 19999 and abort large applies."""
+    import httpx
+    from supabase import create_client
+    from supabase.lib.client_options import SyncClientOptions
+
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_KEY") or os.environ.get("SUPABASE_KEY")
+    http = httpx.Client(http2=False, timeout=120.0)
+    return create_client(url, key, options=SyncClientOptions(httpx_client=http))
+
+
 def _parse_context(raw: str | None) -> tuple[str, str] | None:
     if not raw:
         return None
@@ -309,8 +321,7 @@ def main(argv: list[str] | None = None, *, graph_store=None) -> int:
             items_by_source = json.load(fh)
         items_by_source = {k: v for k, v in items_by_source.items() if k in wanted}
     else:
-        from db.supabase_client import get_supabase
-        sb = get_supabase()
+        sb = _production_supabase()
         items_by_source, failed = load_production_sources(sb, wanted, stats=source_stats)
 
     current_ids = {
@@ -325,8 +336,7 @@ def main(argv: list[str] | None = None, *, graph_store=None) -> int:
     if apply:
         store = graph_store
         if store is None:
-            from db.supabase_client import get_supabase
-            store = SupabaseGraphStore(get_supabase())
+            store = SupabaseGraphStore(_production_supabase())
         if isinstance(store, MemoryGraphStore):
             return _blocked("MemoryGraphStore is forbidden on --apply")
         report = refresh_graph(
