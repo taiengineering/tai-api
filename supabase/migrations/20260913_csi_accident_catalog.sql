@@ -22,7 +22,7 @@ COMMENT ON COLUMN public.csi_accident_cases.source_key IS
 COMMENT ON COLUMN public.csi_accident_cases.identity_fingerprint IS
   'CSI_EVENT_FINGERPRINT_V1 reconciliation key. Not public content_id.';
 COMMENT ON COLUMN public.csi_accident_cases.identity_status IS
-  'READY = unique fingerprint. HOLD = collision/ambiguous. HOLD is not public/Graph eligible.';
+  'Catalog convenience only. Matching/public/Graph status truth is COMPLETED snapshot_items.identity_status.';
 
 CREATE INDEX IF NOT EXISTS csi_accident_cases_fp_idx
   ON public.csi_accident_cases (identity_fingerprint);
@@ -112,9 +112,12 @@ ALTER TABLE public.csi_accident_snapshot_items ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.csi_accident_cases FROM anon, authenticated;
 REVOKE ALL ON public.csi_accident_snapshots FROM anon, authenticated;
 REVOKE ALL ON public.csi_accident_snapshot_items FROM anon, authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.csi_accident_cases TO service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.csi_accident_snapshots TO service_role;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.csi_accident_snapshot_items TO service_role;
+GRANT SELECT, INSERT, UPDATE ON public.csi_accident_cases TO service_role;
+GRANT SELECT, INSERT, UPDATE ON public.csi_accident_snapshots TO service_role;
+GRANT SELECT, INSERT, UPDATE ON public.csi_accident_snapshot_items TO service_role;
+REVOKE DELETE ON public.csi_accident_cases FROM service_role;
+REVOKE DELETE ON public.csi_accident_snapshots FROM service_role;
+REVOKE DELETE ON public.csi_accident_snapshot_items FROM service_role;
 
 CREATE OR REPLACE VIEW public.csi_accident_current AS
 SELECT

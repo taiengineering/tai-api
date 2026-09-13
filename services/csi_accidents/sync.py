@@ -110,8 +110,9 @@ def assert_file_contract(data: bytes, *, filename: str) -> dict:
 
 
 def _history(store: Any) -> list[CaseRecord]:
+    """Matching history is COMPLETED snapshot evidence only."""
     recs: list[CaseRecord] = []
-    for row in store.list_cases():
+    for row in store.load_reconciliation_history():
         recs.append(
             CaseRecord(
                 content_id=row["content_id"],
@@ -298,6 +299,7 @@ def sync_csi_accidents(
     extra["collision_fingerprint_ids"] = id_stats["collision_fingerprints"]
     extra["row_count_mismatch_recorded"] = mismatch
     extra["declared_vs_parsed"] = {"declared": DECLARED_ROWS, "parsed": parsed_n}
+    extra["history_source"] = "COMPLETED_SNAPSHOTS_ONLY"
 
     if dry_run:
         result.status = "DRY_RUN"
@@ -347,9 +349,9 @@ def sync_csi_accidents(
         "failure_reason": None,
     }
     try:
+        store.insert_running_snapshot(running)
         store.upsert_cases([_case_row(a, now_s) for a in assigned])
         store.mark_hold(id_stats["hold_content_ids"], "FINGERPRINT_COLLISION")
-        store.insert_running_snapshot(running)
         store.insert_membership([_item_row(a, snapshot_id) for a in assigned])
         store.complete_snapshot(snapshot_id, now_s)
     except Exception as e:

@@ -417,3 +417,126 @@ def test_current_view_sql_uses_completed_only():
     assert "status = 'completed'" in n
     assert "current boolean" not in n
     assert "is_current" not in n
+
+
+def test_c26_failed_membership_isolated_from_history(apply_on):
+    r1, store = _sync([_row("유지", "2018-01-01 01:00")], dry_run=False)
+    prior = store.get_latest_completed()["id"]
+    prior_ids = store.current_content_ids()
+    hist_before = {r["content_id"] for r in store.load_reconciliation_history()}
+    store.fail_on_membership = True
+    r2, store = _sync([_row("실패전용", "2018-02-02 02:00")], store=store, dry_run=False)
+    assert r1.status == "COMPLETED"
+    assert r2.status == "FAILED"
+    assert store.get_latest_completed()["id"] == prior
+    assert store.current_content_ids() == prior_ids
+    assert any(s["id"] == r2.snapshot_id and s["status"] == "FAILED" for s in store.snapshots)
+    hist_after = {r["content_id"] for r in store.load_reconciliation_history()}
+    assert hist_after == hist_before
+    failed_only = set(store.cases) - hist_after
+    assert failed_only
+    assert all(cid not in hist_after for cid in failed_only)
+    src = inspect.getsource(sync_mod.sync_csi_accidents)
+    assert src.find("insert_running_snapshot") < src.find("upsert_cases")
+    assert src.find("insert_running_snapshot") < src.find("insert_membership")
+
+
+def test_c27_failed_only_hash_not_exact_row_match(apply_on):
+    store = MemoryCsiStore()
+    r1, store = _sync([_row("기존", "2019-01-01 00:00")], store=store, dry_run=False)
+    failed_row = _row("실패해시", "2019-02-02 00:00", **{"사고경위": "failed-only"})
+    h_failed = source_content_hash(failed_row)
+    store.fail_on_membership = True
+    r2, store = _sync([failed_row], store=store, dry_run=False)
+    assert r2.status == "FAILED"
+    hist_hashes = set()
+    for rec in store.load_reconciliation_history():
+        hist_hashes |= rec["source_content_hashes"]
+    assert h_failed not in hist_hashes
+    failed_cids = set(store.cases) - {r["content_id"] for r in store.load_reconciliation_history()}
+    store.fail_on_membership = False
+    r3, store = _sync([failed_row], store=store, dry_run=False)
+    assert r3.status == "COMPLETED"
+    latest = [i for i in store.items if i["snapshot_id"] == r3.snapshot_id]
+    assert latest[0]["identity_reason"] != "EXACT_ROW_HASH"
+    assert latest[0]["identity_reason"] == "UNIQUE_FINGERPRINT"
+    assert latest[0]["content_id"] not in failed_cids
+
+
+def test_c28_failed_hold_does_not_pollute_ready(apply_on):
+    ready_row = _row("안정", "2020-01-01 10:00", **{"사고경위": "v1"})
+    r1, store = _sync([ready_row], dry_run=False)
+    cid = store.current_content_ids()[0]
+    assert store.load_reconciliation_history()[0]["identity_status"] == "READY"
+    store.fail_on_membership = True
+    collide = [
+        _row("안정", "2020-01-01 10:00", **{"사고경위": "충돌1"}),
+        _row("안정", "2020-01-01 10:00", **{"사고경위": "충돌2"}),
+    ]
+    r2, store = _sync(collide, store=store, dry_run=False)
+    assert r2.status == "FAILED"
+    hist = [r for r in store.load_reconciliation_history() if r["content_id"] == cid]
+    assert len(hist) == 1
+    assert hist[0]["identity_status"] == "READY"
+    store.fail_on_membership = False
+    later = [_row("안정", "2020-01-01 10:00", **{"사고경위": "v2-성공"})]
+    r3, store = _sync(later, store=store, dry_run=False)
+    assert r3.status == "COMPLETED"
+    latest = [i for i in store.items if i["snapshot_id"] == r3.snapshot_id][0]
+    assert latest["content_id"] == cid
+    assert latest["identity_reason"] == "UNIQUE_HISTORICAL_FINGERPRINT"
+    assert latest["identity_status"] == "READY"
+
+
+def test_c29_running_failed_items_excluded_from_history(apply_on):
+    r1, store = _sync([_row("완료", "2021-01-01 00:00")], dry_run=False)
+    store.fail_on_complete = True
+    r2, store = _sync([_row("실패아이템", "2021-02-02 00:00")], store=store, dry_run=False)
+    assert r2.status == "FAILED"
+    failed_items = [i for i in store.items if i["snapshot_id"] == r2.snapshot_id]
+    assert failed_items
+    hist = store.load_reconciliation_history()
+    hist_ids = {r["content_id"] for r in hist}
+    hist_hashes = set().union(*(r["source_content_hashes"] for r in hist))
+    assert failed_items[0]["content_id"] not in hist_ids
+    assert {i["source_content_hash"] for i in failed_items}.isdisjoint(hist_hashes)
+    assert r1.snapshot_id == store.get_latest_completed()["id"]
+
+
+def test_c30_completed_items_included_in_history(apply_on):
+    row = _row("히스토리", "2021-03-03 00:00")
+    r, store = _sync([row], dry_run=False)
+    assert r.status == "COMPLETED"
+    hist = store.load_reconciliation_history()
+    assert len(hist) == 1
+    assert hist[0]["content_id"] == store.current_content_ids()[0]
+    assert source_content_hash(row) in hist[0]["source_content_hashes"]
+    assert hist[0]["identity_status"] == "READY"
+    assert r.extra["history_source"] == "COMPLETED_SNAPSHOTS_ONLY"
+    hist_src = inspect.getsource(sync_mod._history)
+    assert "load_reconciliation_history" in hist_src
+    assert "list_cases" not in hist_src
+
+
+def test_c31_service_role_delete_grant_zero():
+    sql = pathlib.Path(SQL).read_text(encoding="utf-8")
+    grants = [
+        ln.strip().lower()
+        for ln in sql.splitlines()
+        if ln.strip().lower().startswith("grant ") and "csi_accident" in ln.lower()
+    ]
+    assert grants
+    for g in grants:
+        assert "delete" not in g
+    n = sql.lower()
+    assert "revoke delete on public.csi_accident_cases from service_role" in n
+    assert "revoke delete on public.csi_accident_snapshots from service_role" in n
+    assert "revoke delete on public.csi_accident_snapshot_items from service_role" in n
+
+
+def test_c32_no_drop_or_truncate():
+    sql = pathlib.Path(SQL).read_text(encoding="utf-8")
+    n = re.sub(r"\s+", " ", sql).lower()
+    assert "drop table" not in n
+    assert "truncate" not in n
+    assert "drop view" not in n
