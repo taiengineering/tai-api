@@ -5,6 +5,7 @@ Does not modify e2e_runner_all.py (historical Compiler Core runner).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
@@ -71,6 +72,29 @@ _BUILDING_UNSUPPORTED = frozenset({"facility_type"})
 # Live HTTP (not this WO) requires these; they are not Profile layers.
 _LIVE_AUTH_FIELDS = ("auth_token", "disclaimer_log_id")
 
+GATED_APPENDIX3_SECTORS = frozenset({"MANUFACTURING", "BUILDING"})
+APPENDIX3_SOURCE_KEYS = ("appendix3_item_no", "is_real_estate_management")
+APPENDIX3_INTERNAL_LEAVES = (
+    "is_appendix3_1_27",
+    "is_appendix3_28_48",
+    "is_appendix3_item_37",
+    "is_appendix3_item_40",
+)
+DEFAULT_APPENDIX3_AUTHORITY_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "docs"
+    / "canonical"
+    / "test-universe"
+    / "appendix3_explicit_classification_authority_v1.json"
+)
+EXPECTED_APPENDIX3_AUTHORITY_SHA256 = (
+    "06b31f56d9d5eb92fcdebc48716494634c5f0ed189ab1304b7b430a6c7d64f46"
+)
+EXPECTED_FROZEN_PROFILE_SHA256 = (
+    "4818a63ab261c5a36c1432647b6b17e7636641071801d36fd1b85d1361af751b"
+)
+EXPECTED_APPENDIX3_AUTHORITY_ROWS = 75
+
 
 class BridgeContractError(RuntimeError):
     """Fail closed: Profile cannot be projected without guesswork or missing required Official field."""
@@ -80,6 +104,178 @@ def _authority_fail(exc: BaseException | None = None) -> None:
     if exc is not None:
         raise BridgeContractError(AUTHORITY_MISSING) from exc
     raise BridgeContractError(AUTHORITY_MISSING)
+
+
+def _appendix3_fail(code: str, exc: BaseException | None = None) -> None:
+    if exc is not None:
+        raise BridgeContractError(code) from exc
+    raise BridgeContractError(code)
+
+
+def load_appendix3_authority_document(path: str | Path | None = None) -> dict:
+    loc = Path(path) if path is not None else DEFAULT_APPENDIX3_AUTHORITY_PATH
+    if not loc.is_file():
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_FILE_MISSING")
+    raw = loc.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != EXPECTED_APPENDIX3_AUTHORITY_SHA256:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_SHA_MISMATCH")
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID", exc)
+    if not isinstance(data, dict):
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    return data
+
+
+def build_appendix3_authority_index(document: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
+    if document.get("authority_type") != "OWNER_APPROVED_E2E_FIXTURE_FACT":
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_METADATA_MISMATCH")
+    if document.get("status") != "APPROVED":
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_METADATA_MISMATCH")
+    if document.get("production_derivation_rule") != "NONE":
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_METADATA_MISMATCH")
+    if document.get("frozen_profile_sha256") != EXPECTED_FROZEN_PROFILE_SHA256:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_METADATA_MISMATCH")
+    if document.get("gated_row_count") != EXPECTED_APPENDIX3_AUTHORITY_ROWS:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_METADATA_MISMATCH")
+    rows = document.get("rows")
+    if not isinstance(rows, list) or len(rows) != EXPECTED_APPENDIX3_AUTHORITY_ROWS:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    index: Dict[str, Dict[str, Any]] = {}
+    item37 = 0
+    item37_true = 0
+    item41 = 0
+    non37_subtype = 0
+    for row in rows:
+        if not isinstance(row, Mapping):
+            _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+        pid = row.get("profile_id")
+        if not isinstance(pid, str) or not pid or pid in index:
+            _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+        item = row.get("appendix3_item_no")
+        if type(item) is not int or type(item) is bool or item < 1 or item > 49:
+            _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+        facts: Dict[str, Any] = {"appendix3_item_no": item}
+        if item == 37:
+            if "is_real_estate_management" not in row:
+                _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+            subtype = row["is_real_estate_management"]
+            if type(subtype) is not bool:
+                _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+            facts["is_real_estate_management"] = subtype
+            item37 += 1
+            if subtype is True:
+                item37_true += 1
+        elif "is_real_estate_management" in row:
+            non37_subtype += 1
+            _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+        if item == 41:
+            item41 += 1
+        extra = set(row.keys()) - {"profile_id", "appendix3_item_no", "is_real_estate_management"}
+        if extra:
+            _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+        index[pid] = facts
+    if len(index) != EXPECTED_APPENDIX3_AUTHORITY_ROWS:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    if item37 != 3 or item37_true != 3 or item41 != 9 or non37_subtype != 0:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    return index
+
+
+def load_approved_appendix3_authority_index(
+    path: str | Path | None = None,
+) -> Dict[str, Dict[str, Any]]:
+    return build_appendix3_authority_index(load_appendix3_authority_document(path))
+
+
+def _appendix3_source_present(body: Mapping[str, Any], form: Mapping[str, Any]) -> bool:
+    for key in APPENDIX3_SOURCE_KEYS:
+        if key in body or key in form:
+            return True
+    return False
+
+
+def _internal_appendix3_leaf_present(body: Mapping[str, Any], form: Mapping[str, Any]) -> bool:
+    for key in APPENDIX3_INTERNAL_LEAVES:
+        if key in body or key in form:
+            return True
+    return False
+
+
+def _apply_appendix3_authority(
+    *,
+    profile_id: str,
+    source_sector: str,
+    body: dict,
+    form_data: dict,
+    records: List[dict],
+    appendix3_authority_index: Optional[Mapping[str, Mapping[str, Any]]],
+) -> None:
+    if _internal_appendix3_leaf_present(body, form_data):
+        _appendix3_fail("E2E_FIXTURE_AUTHORITY_CONFLICT")
+    preexisting = _appendix3_source_present(body, form_data)
+    gated = source_sector in GATED_APPENDIX3_SECTORS and profile_id in EXPECTED_ID_RANGE
+    if not gated:
+        if preexisting:
+            _appendix3_fail("E2E_FIXTURE_AUTHORITY_CONFLICT")
+        return
+    if preexisting:
+        _appendix3_fail("E2E_FIXTURE_AUTHORITY_CONFLICT")
+    index = appendix3_authority_index
+    if index is None:
+        index = load_approved_appendix3_authority_index()
+    row = index.get(profile_id)
+    if not isinstance(row, Mapping):
+        _appendix3_fail(f"E2E_FIXTURE_AUTHORITY_MISSING:appendix3:{profile_id}")
+    item = row.get("appendix3_item_no")
+    if type(item) is not int or type(item) is bool or item < 1 or item > 49:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    _put_body(body, "appendix3_item_no", item)
+    records.append(
+        _rec(
+            layer="e2e_fixture_authority",
+            source_field="appendix3_item_no",
+            source_unit="int",
+            request_field="appendix3_item_no",
+            request_unit="int",
+            mapping_type=DIRECT,
+            production_normalizer=(
+                "OWNER_APPROVED_E2E_FIXTURE_FACT profile_id exact lookup; "
+                "not derived from KSIC/sector/building_use_type"
+            ),
+            loss="0",
+            evidence="docs/canonical/test-universe/appendix3_explicit_classification_authority_v1.json",
+            value=item,
+        )
+    )
+    if item == 37:
+        subtype = row.get("is_real_estate_management")
+        if type(subtype) is not bool:
+            _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+        _put_body(body, "is_real_estate_management", subtype)
+        records.append(
+            _rec(
+                layer="e2e_fixture_authority",
+                source_field="is_real_estate_management",
+                source_unit="bool",
+                request_field="is_real_estate_management",
+                request_unit="bool",
+                mapping_type=DIRECT,
+                production_normalizer=(
+                    "OWNER_APPROVED_E2E_FIXTURE_FACT profile_id exact lookup; "
+                    "item 37 subtype only; not default false"
+                ),
+                loss="0",
+                evidence="docs/canonical/test-universe/appendix3_explicit_classification_authority_v1.json",
+                value=subtype,
+            )
+        )
+    elif "is_real_estate_management" in row:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    if _internal_appendix3_leaf_present(body, form_data):
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
 
 
 def load_profile_universe(path: str | Path) -> dict:
@@ -158,6 +354,7 @@ def profile_to_leg_request(
     profile: Mapping[str, Any],
     *,
     authority_index: Optional[Mapping[str, Mapping[str, bool]]] = None,
+    appendix3_authority_index: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> dict:
     """Project one frozen Profile into a DiagnosisRunBody-compatible dict. No HTTP.
 
@@ -550,6 +747,15 @@ def profile_to_leg_request(
             if name in body or name in form_data:
                 raise BridgeContractError("E2E_FIXTURE_NON_CONSTRUCTION_PREDICATE")
 
+    _apply_appendix3_authority(
+        profile_id=pid,
+        source_sector=source_sector,
+        body=body,
+        form_data=form_data,
+        records=records,
+        appendix3_authority_index=appendix3_authority_index,
+    )
+
     if form_data:
         _put_body(body, "form_data", form_data)
 
@@ -596,6 +802,7 @@ def project_universe(
     profiles: List[Mapping[str, Any]],
     *,
     authority_index: Optional[Mapping[str, Mapping[str, bool]]] = None,
+    appendix3_authority_index: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> Tuple[List[dict], dict]:
     assert_universe_integrity(profiles)
     try:
@@ -606,6 +813,11 @@ def project_universe(
         )
     except FixtureAuthorityError as exc:
         _authority_fail(exc)
+    appendix3_index = (
+        dict(appendix3_authority_index)
+        if appendix3_authority_index is not None
+        else load_approved_appendix3_authority_index()
+    )
     construction_ids = {
         str(p.get("profile_id") or "")
         for p in profiles
@@ -613,14 +825,34 @@ def project_universe(
     }
     if construction_ids != set(index):
         _authority_fail()
+    gated_ids = {
+        str(p.get("profile_id") or "")
+        for p in profiles
+        if p.get("sector") in GATED_APPENDIX3_SECTORS
+    }
+    if gated_ids != set(appendix3_index):
+        _appendix3_fail("E2E_FIXTURE_AUTHORITY_MISSING")
     built: List[dict] = []
     for p in profiles:
-        built.append(profile_to_leg_request(p, authority_index=index))
+        built.append(
+            profile_to_leg_request(
+                p,
+                authority_index=index,
+                appendix3_authority_index=appendix3_index,
+            )
+        )
     if len(built) != EXPECTED_PROFILE_COUNT:
         raise BridgeContractError("REQUEST_BUILD_COUNT")
     types = {"DIRECT": 0, "PRODUCTION_ADAPTER": 0, "UNSUPPORTED": 0, "NOT_APPLICABLE": 0, "GAP": 0}
     construction_complete = 0
     non_construction_injection = 0
+    appendix3_injected = 0
+    ungated_appendix3_injected = 0
+    item37 = 0
+    item37_true = 0
+    item41 = 0
+    non37_subtype = 0
+    internal_leaves = 0
     for item in built:
         for r in item["records"]:
             types[r["mapping_type"]] = types.get(r["mapping_type"], 0) + 1
@@ -641,8 +873,34 @@ def project_universe(
             for name in PREDICATE_NAMES:
                 if name in req or name in form:
                     non_construction_injection += 1
+        if item["sector"] in GATED_APPENDIX3_SECTORS:
+            if "appendix3_item_no" not in req:
+                _appendix3_fail(f"E2E_FIXTURE_AUTHORITY_MISSING:appendix3:{item['profile_id']}")
+            appendix3_injected += 1
+            item_no = req["appendix3_item_no"]
+            if item_no == 37:
+                item37 += 1
+                if req.get("is_real_estate_management") is True:
+                    item37_true += 1
+            elif "is_real_estate_management" in req or "is_real_estate_management" in form:
+                non37_subtype += 1
+            if item_no == 41:
+                item41 += 1
+            if any(k in form for k in APPENDIX3_SOURCE_KEYS):
+                _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+        else:
+            if any(k in req or k in form for k in APPENDIX3_SOURCE_KEYS):
+                ungated_appendix3_injected += 1
+        if any(k in req or k in form for k in APPENDIX3_INTERNAL_LEAVES):
+            internal_leaves += 1
     if non_construction_injection:
         raise BridgeContractError("E2E_FIXTURE_NON_CONSTRUCTION_PREDICATE")
+    if ungated_appendix3_injected:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    if internal_leaves:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    if non37_subtype:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
     summary = {
         "wo": WO,
         "mapping_version": MAPPING_VERSION,
@@ -652,6 +910,13 @@ def project_universe(
         "construction_profiles": sum(1 for x in built if x["sector"] == "CONSTRUCTION"),
         "construction_predicates_complete": construction_complete,
         "non_construction_predicate_injection": non_construction_injection,
+        "appendix3_injected": appendix3_injected,
+        "ungated_appendix3_injected": ungated_appendix3_injected,
+        "item37": item37,
+        "item37_true": item37_true,
+        "item41": item41,
+        "non37_subtype": non37_subtype,
+        "internal_runtime_leaf_injected": internal_leaves,
         "type_counts": types,
         "official_entrypoint": "POST /diagnosis/run-leg",
         "official_request_model": "schemas.diagnosis_integrated.DiagnosisRunBody",
