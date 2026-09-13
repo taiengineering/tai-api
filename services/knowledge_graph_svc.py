@@ -395,6 +395,8 @@ def default_tai_url(content_type: str, content_id: str, *, construction: bool = 
         return f"{TAI_ORIGIN}/safety-guide/{content_id}"
     if content_type == "SAFETY_MATERIAL":
         return f"{TAI_ORIGIN}/safety-news-detail.html?id={content_id}"
+    if content_type == "ACCIDENT" and str(content_id).startswith("CSI:"):
+        return f"{TAI_ORIGIN}/accident/csi/{str(content_id).split('CSI:', 1)[1]}"
     if content_type == "ACCIDENT" and construction:
         return f"{TAI_ORIGIN}/accident-case-detail.html?id={content_id}&tab=construction"
     if content_type == "ACCIDENT":

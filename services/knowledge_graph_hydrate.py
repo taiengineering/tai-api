@@ -147,24 +147,54 @@ class ProductionKnowledgeHydrator:
         return out
 
     def _accidents(self, ids: list[str]) -> dict[tuple[str, str], KnowledgeRecord]:
+        from services.csi_accidents.graph_adapter import is_csi_content_id
+        from services.csi_accidents.public import SOURCE_NAME as CSI_SOURCE_NAME, csi_tai_url
+
         out = {}
-        domestic = self._in(ACCIDENT_DOMESTIC, "id", ids, "id,title,reg_dt,file_url")
-        for row in domestic:
-            cid = str(row.get("id") or "")
-            if not cid:
-                continue
-            out[("ACCIDENT", cid)] = KnowledgeRecord(
-                content_type="ACCIDENT",
-                content_id=cid,
-                title=row.get("title"),
-                summary=None,
-                tai_url=default_tai_url("ACCIDENT", cid),
-                source_name="KOSHA",
-                source_url=row.get("file_url"),
-                published_at=row.get("reg_dt"),
-                category=None,
-                is_public_current=True,
+        kosha_ids = [i for i in ids if not is_csi_content_id(i)]
+        csi_ids = [i for i in ids if is_csi_content_id(i)]
+        if kosha_ids:
+            domestic = self._in(ACCIDENT_DOMESTIC, "id", kosha_ids, "id,title,reg_dt,file_url")
+            for row in domestic:
+                cid = str(row.get("id") or "")
+                if not cid:
+                    continue
+                out[("ACCIDENT", cid)] = KnowledgeRecord(
+                    content_type="ACCIDENT",
+                    content_id=cid,
+                    title=row.get("title"),
+                    summary=None,
+                    tai_url=default_tai_url("ACCIDENT", cid),
+                    source_name="KOSHA",
+                    source_url=row.get("file_url"),
+                    published_at=row.get("reg_dt"),
+                    category=None,
+                    is_public_current=True,
+                )
+        if csi_ids:
+            rows = self._in(
+                "csi_accident_current",
+                "content_id",
+                csi_ids,
+                "content_id,title,summary,occurred_at,accident_type,construction_type,source_dataset_url,identity_status",
+                extra_eq=[("identity_status", "READY")],
             )
+            for row in rows:
+                cid = str(row.get("content_id") or "")
+                if not cid or str(row.get("identity_status") or "") != "READY":
+                    continue
+                out[("ACCIDENT", cid)] = KnowledgeRecord(
+                    content_type="ACCIDENT",
+                    content_id=cid,
+                    title=row.get("title"),
+                    summary=row.get("summary"),
+                    tai_url=csi_tai_url(cid),
+                    source_name=CSI_SOURCE_NAME,
+                    source_url=row.get("source_dataset_url"),
+                    published_at=row.get("occurred_at"),
+                    category=row.get("accident_type") or row.get("construction_type"),
+                    is_public_current=True,
+                )
         return out
 
     def _laws(self, ids: list[str]) -> dict[tuple[str, str], KnowledgeRecord]:

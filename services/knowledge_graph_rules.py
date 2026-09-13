@@ -75,7 +75,7 @@ CONTROLLED_RULES: tuple[ControlledRule, ...] = (
         relation_key="forklift",
         relation_label="지게차",
         aliases=("지게차", "포크리프트", "forklift"),
-        allowed_fields=("title", "summary", "category", "guide_title", "description", "accident_summary"),
+        allowed_fields=("title", "summary", "category", "guide_title", "description", "accident_summary", "object_major", "object_minor"),
         match_mode="CONTROLLED_PHRASE",
     ),
     ControlledRule(
@@ -85,7 +85,7 @@ CONTROLLED_RULES: tuple[ControlledRule, ...] = (
         relation_key="welding",
         relation_label="용접",
         aliases=("용접작업", "용접", "welding"),
-        allowed_fields=("title", "summary", "category", "guide_title", "description", "accident_summary", "work_type"),
+        allowed_fields=("title", "summary", "category", "guide_title", "description", "accident_summary", "work_type", "process_major", "process_minor", "work_process"),
         match_mode="CONTROLLED_PHRASE",
     ),
     ControlledRule(
@@ -95,7 +95,7 @@ CONTROLLED_RULES: tuple[ControlledRule, ...] = (
         relation_key="excavation",
         relation_label="굴착",
         aliases=("굴착작업", "굴착", "excavation"),
-        allowed_fields=("title", "summary", "category", "guide_title", "description", "accident_summary", "work_type"),
+        allowed_fields=("title", "summary", "category", "guide_title", "description", "accident_summary", "work_type", "process_major", "process_minor", "work_process"),
         match_mode="CONTROLLED_PHRASE",
     ),
     ControlledRule(
@@ -105,7 +105,7 @@ CONTROLLED_RULES: tuple[ControlledRule, ...] = (
         relation_key="fall",
         relation_label="추락",
         aliases=("떨어짐", "추락", "fall"),
-        allowed_fields=("title", "summary", "category", "guide_title", "description", "accident_summary", "accident_type", "hazard_type"),
+        allowed_fields=("title", "summary", "category", "guide_title", "description", "accident_summary", "accident_type", "hazard_type", "accident_type_major"),
         match_mode="CONTROLLED_PHRASE",
     ),
     ControlledRule(

@@ -182,7 +182,7 @@ def load_production_sources(
     if "accident" in wanted:
         try:
             domestic = _paged(sb, "kosha_accident_cases", "id,title,reg_dt,file_url")
-            items["accident"] = [
+            kosha_items = [
                 {
                     "content_id": r.get("id"),
                     "id": r.get("id"),
@@ -193,6 +193,45 @@ def load_production_sources(
                 for r in domestic
                 if r.get("id")
             ]
+            csi_rows = _paged_filtered(
+                sb,
+                "csi_accident_current",
+                "content_id,title,summary,occurred_at,construction_type,process_major,"
+                "process_minor,object_major,object_minor,work_process,accident_type_major,"
+                "accident_type,source_content_hash,source_dataset_url,identity_status",
+                eq={"identity_status": "READY"},
+            )
+            csi_items = []
+            for r in csi_rows:
+                cid = r.get("content_id")
+                if not cid or str(r.get("identity_status") or "") != "READY":
+                    continue
+                summary = r.get("summary")
+                csi_items.append(
+                    {
+                        "content_id": cid,
+                        "id": cid,
+                        "title": r.get("title"),
+                        "summary": summary,
+                        "accident_summary": summary,
+                        "construction_type": r.get("construction_type"),
+                        "process_major": r.get("process_major"),
+                        "process_minor": r.get("process_minor"),
+                        "object_major": r.get("object_major"),
+                        "object_minor": r.get("object_minor"),
+                        "work_process": r.get("work_process"),
+                        "accident_type_major": r.get("accident_type_major"),
+                        "accident_type": r.get("accident_type"),
+                        "source_url": r.get("source_dataset_url"),
+                        "published_at": r.get("occurred_at"),
+                        "source_version": r.get("source_content_hash"),
+                        "identity_status": "READY",
+                    }
+                )
+            items["accident"] = kosha_items + csi_items
+            stats["accident_kosha_scanned"] = len(kosha_items)
+            stats["accident_csi_scanned"] = len(csi_items)
+            stats["accident_construction_included"] = 0
         except Exception as exc:
             errors["accident"] = str(exc)
     if "law" in wanted:
@@ -266,7 +305,7 @@ def produce_all(
             )
     if "material" in items_by_source and "material" not in failed:
         out["material"] = produce_safety_material_relations(items_by_source["material"], current_ids=current_ids.get("material"))
-    if "accident" in items_by_source:
+    if "accident" in items_by_source and "accident" not in failed:
         out["accident"] = produce_accident_relations(items_by_source["accident"])
     if "law" in items_by_source:
         out["law"] = produce_law_relations(items_by_source["law"])
@@ -275,6 +314,37 @@ def produce_all(
     if "knowledge" in items_by_source:
         out["knowledge"] = produce_knowledge_center_relations(items_by_source["knowledge"] or None)
     return out
+
+
+def _accident_origin_report(candidates) -> dict:
+    kosha = []
+    csi = []
+    for cand in candidates:
+        sample = {
+            "content_id": cand.source_content_id,
+            "source_field": cand.source_field,
+            "evidence_value": cand.evidence_value,
+            "relation_type": cand.relation_type,
+            "relation_key": cand.relation_key,
+        }
+        if str(cand.source_content_id).startswith("CSI:"):
+            csi.append(sample)
+        else:
+            kosha.append(sample)
+    return {
+        "kosha": len(kosha),
+        "csi": len(csi),
+        "combined": len(kosha) + len(csi),
+        "csi_samples": csi[:10],
+    }
+
+
+def _scoped_accidents(produced: dict, context_filter: tuple[str, str] | None):
+    cands = list(produced.get("accident") or [])
+    if not context_filter:
+        return cands
+    rel_type, rel_key = context_filter
+    return [c for c in cands if c.relation_type == rel_type and c.relation_key == rel_key]
 
 
 def _blocked(message: str) -> int:
@@ -350,6 +420,7 @@ def main(argv: list[str] | None = None, *, graph_store=None) -> int:
         payload = report.as_dict()
         payload["db_write"] = 1
         payload["source_stats"] = source_stats
+        payload["accident_origin_counts"] = _accident_origin_report(_scoped_accidents(produced, context_filter))
         payload["graph_tables"] = sorted(GRAPH_TABLES)
         payload["source_tables"] = sorted(SOURCE_TABLES)
         payload["source_writes"] = store.source_writes()
@@ -367,6 +438,7 @@ def main(argv: list[str] | None = None, *, graph_store=None) -> int:
     payload = report.as_dict()
     payload["db_write"] = 0
     payload["source_stats"] = source_stats
+    payload["accident_origin_counts"] = _accident_origin_report(_scoped_accidents(produced, context_filter))
     payload["started_at"] = now_kst().isoformat()
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0 if report.status in {"DRY_RUN", "COMPLETED"} else 1

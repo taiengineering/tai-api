@@ -837,6 +837,10 @@ class FakeQuery:
         self.client.ops.append(("in", col, list(vals)))
         return self
 
+    def or_(self, clause):
+        self.client.ops.append(("or_", clause))
+        return self
+
     def limit(self, n):
         self._limit = n
         return self
@@ -1433,25 +1437,15 @@ def test_g95_hydrator_construction_production_columns():
 
 
 def test_g96_accident_adapter_selects_production_columns():
-    files = [
-        ROOT / "scripts/refresh_knowledge_graph.py",
-        ROOT / "services/knowledge_graph_hydrate.py",
-    ]
-    forbidden = (
-        "occurred_at",
-        "id,title,url",
-        "id,title,occurred_at,url",
-        "accident_type,occurred_at",
-        "kosha_construction_accidents",
-    )
-    for path in files:
-        src = path.read_text(encoding="utf-8")
-        for token in forbidden:
-            assert token not in src, f"{path.name} still uses {token}"
     refresh = (ROOT / "scripts/refresh_knowledge_graph.py").read_text(encoding="utf-8")
     hydrate = (ROOT / "services/knowledge_graph_hydrate.py").read_text(encoding="utf-8")
-    assert "id,title,reg_dt,file_url" in refresh
-    assert "id,title,reg_dt,file_url" in hydrate
+    for src in (refresh, hydrate):
+        assert "kosha_construction_accidents" not in src
+        assert "id,title,url" not in src
+        assert "id,title,occurred_at,url" not in src
+        assert "id,title,reg_dt,file_url" in src
+    assert '_paged(sb, "kosha_accident_cases", "id,title,reg_dt,file_url")' in refresh
+    assert 'self._in(ACCIDENT_DOMESTIC, "id", kosha_ids, "id,title,reg_dt,file_url")' in hydrate
 
 
 def test_g97_g98_same_id_keeps_domestic_title():

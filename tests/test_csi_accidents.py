@@ -1,15 +1,18 @@
-"""OBJ-CSI CSI-02/03 core: C01–C25 source contract, identity, snapshot."""
+"""OBJ-CSI CSI-02/05 core: C01–C62 source contract, public read, graph adapter."""
 from __future__ import annotations
 
 import csv
 import inspect
 import io
+import json
 import os
 import pathlib
 import re
 import uuid
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from services.csi_accidents.contract import (
     APPLY_ENABLE_ENV,
@@ -625,3 +628,465 @@ def test_c38_hardening_migration_no_destructive_execution():
     assert "delete from" not in non_revoke
     assert "insert into" not in non_revoke
     assert re.search(r"\bupdate\s+public\.", non_revoke) is None
+
+
+READY_UUID = "12345678-1234-4123-8123-123456789abc"
+HOLD_UUID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+READY_ID = f"CSI:{READY_UUID}"
+HOLD_ID = f"CSI:{HOLD_UUID}"
+FORBIDDEN_PUBLIC = (
+    "raw_json",
+    "identity_fingerprint",
+    "identity_reason",
+    "source_content_hash",
+    "snapshot_id",
+    "row_number",
+    "user_id",
+    "company_id",
+    "factory_id",
+    "diagnosis_id",
+    "file_sha256",
+    "case_no",
+)
+
+
+def _pub_row(uid, status="READY", occurred="2020-01-02T00:00:00+09:00", **over):
+    row = {
+        "content_id": f"CSI:{uid}",
+        "identity_status": status,
+        "identity_fingerprint": "SECRET_FP",
+        "identity_reason": "COLLISION",
+        "source_content_hash": "abc123",
+        "snapshot_id": "snap-1",
+        "row_number": 99,
+        "raw_json": {"사고명": "secret"},
+        "title": "READY 지게차 사고",
+        "summary": "용접 작업 중 발생",
+        "occurred_at": occurred,
+        "construction_type": "건축",
+        "process_major": "건축",
+        "process_minor": "철골",
+        "object_major": "건설기계",
+        "object_minor": "지게차",
+        "work_process": "하역",
+        "accident_type_major": "떨어짐",
+        "accident_type": "떨어짐",
+        "cause_major": "관리적원인",
+        "cause_mid": "작업관리",
+        "cause_minor": "작업방법",
+        "cause_detail": "신호 미흡",
+        "death_count": 0,
+        "injury_count": 1,
+        "source_dataset_url": "https://www.data.go.kr/data/15108262/fileData.do",
+        "source_item_url": "https://evil.example/case/1",
+        "user_id": "u1",
+        "company_id": "c1",
+        "factory_id": "f1",
+        "diagnosis_id": "d1",
+        "file_sha256": "deadbeef",
+        "case_no": "FABRICATED",
+    }
+    row.update(over)
+    return row
+
+
+def _csi_client(rows):
+    from services.csi_accidents.public import MemoryCsiPublicStore
+    import routers.public_csi_accidents as csi_router
+
+    store = MemoryCsiPublicStore(rows)
+    csi_router.configure_csi_public(store)
+    app = FastAPI()
+    app.include_router(csi_router.router)
+    return TestClient(app), store, csi_router
+
+
+def test_c39_public_list_ready_only():
+    client, _, router = _csi_client(
+        [
+            _pub_row(READY_UUID, title="READY만"),
+            _pub_row(HOLD_UUID, status="HOLD", title="HOLD제목", occurred="2021-01-01T00:00:00+09:00"),
+        ]
+    )
+    try:
+        r = client.get("/public/accidents/csi")
+        assert r.status_code == 200
+        body = r.json()
+        ids = [i["content_id"] for i in body["items"]]
+        assert ids == [READY_ID]
+        assert body["total"] == 1
+        assert body["content_type"] == "ACCIDENT"
+    finally:
+        router.reset_csi_public()
+
+
+def test_c40_hold_excluded_from_list():
+    from services.csi_accidents.public import MemoryCsiPublicStore, list_public_accidents
+
+    store = MemoryCsiPublicStore(
+        [
+            _pub_row(READY_UUID),
+            _pub_row(HOLD_UUID, status="HOLD", title="HOLD는검색제외", summary="지게차"),
+        ]
+    )
+    body = list_public_accidents(store)
+    assert all(i["content_id"] != HOLD_ID for i in body["items"])
+    assert body["total"] == 1
+
+
+def test_c41_hold_detail_404():
+    client, _, router = _csi_client(
+        [_pub_row(HOLD_UUID, status="HOLD", title="HOLD상세")]
+    )
+    try:
+        r = client.get(f"/public/accidents/csi/{HOLD_UUID}")
+        assert r.status_code == 404
+        assert r.json()["detail"] == "NOT_FOUND"
+    finally:
+        router.reset_csi_public()
+
+
+def test_c42_uuid_maps_to_csi_namespace():
+    from services.csi_accidents.public import content_id_from_uuid
+
+    assert content_id_from_uuid(READY_UUID) == READY_ID
+    client, _, router = _csi_client([_pub_row(READY_UUID)])
+    try:
+        r = client.get(f"/public/accidents/csi/{READY_UUID}")
+        assert r.status_code == 200
+        assert r.json()["content_id"] == READY_ID
+        assert r.json()["content_type"] == "ACCIDENT"
+    finally:
+        router.reset_csi_public()
+
+
+def test_c43_public_response_forbidden_fields_absent():
+    client, _, router = _csi_client([_pub_row(READY_UUID)])
+    try:
+        listed = client.get("/public/accidents/csi").json()["items"][0]
+        detail = client.get(f"/public/accidents/csi/{READY_UUID}").json()
+        for payload in (listed, detail):
+            for field in FORBIDDEN_PUBLIC:
+                assert field not in payload
+            dumped = json.dumps(payload, ensure_ascii=False)
+            assert "SECRET_FP" not in dumped
+            assert "secret" not in dumped
+            assert "FABRICATED" not in dumped
+            assert "deadbeef" not in dumped
+    finally:
+        router.reset_csi_public()
+
+
+def test_c44_pagination_db_bounded():
+    from services.csi_accidents.public import SupabaseCsiPublicStore
+    from tests.test_knowledge_graph import FakeSB
+
+    src = inspect.getsource(SupabaseCsiPublicStore.list_ready)
+    assert ".range(" in src
+    assert "execute().data" not in src.split(".range")[0]
+    sb = FakeSB()
+    for i in range(5):
+        sb.seed(
+            "csi_accident_current",
+            _pub_row(f"12345678-1234-4123-8123-123456789ab{i}", occurred=f"2020-01-0{i+1}T00:00:00+09:00"),
+        )
+    out = SupabaseCsiPublicStore(sb).list_ready(q=None, page=2, page_size=2)
+    assert ("range", 2, 3) in sb.ops
+    assert len(out.items) <= 2
+    assert not any(op[0] in {"insert", "update", "delete"} for op in sb.ops)
+
+
+def test_c45_deterministic_ordering():
+    from services.csi_accidents.public import MemoryCsiPublicStore, list_public_accidents
+
+    u1 = "00000000-0000-4000-8000-000000000001"
+    u2 = "00000000-0000-4000-8000-000000000002"
+    u3 = "00000000-0000-4000-8000-000000000003"
+    store = MemoryCsiPublicStore(
+        [
+            _pub_row(u2, occurred="2020-01-01T00:00:00+09:00", title="same-day-b"),
+            _pub_row(u1, occurred="2020-01-01T00:00:00+09:00", title="same-day-a"),
+            _pub_row(u3, occurred="2021-01-01T00:00:00+09:00", title="later"),
+        ]
+    )
+    ids = [i["content_id"] for i in list_public_accidents(store)["items"]]
+    assert ids == [f"CSI:{u3}", f"CSI:{u1}", f"CSI:{u2}"]
+
+
+def test_c46_q_search_ready_only():
+    from services.csi_accidents.public import MemoryCsiPublicStore, list_public_accidents
+
+    store = MemoryCsiPublicStore(
+        [
+            _pub_row(READY_UUID, title="지게차 READY"),
+            _pub_row(HOLD_UUID, status="HOLD", title="지게차 HOLD", object_minor="지게차"),
+        ]
+    )
+    body = list_public_accidents(store, q="지게차")
+    assert body["total"] == 1
+    assert body["items"][0]["content_id"] == READY_ID
+    assert body["items"][0]["content_type"] == "ACCIDENT"
+
+
+def test_c47_search_input_sanitizer_filter_injection_guard():
+    from services.csi_accidents.public import PublicCsiQueryError, sanitize_q, SupabaseCsiPublicStore
+
+    for raw in (
+        "title.eq.1",
+        "*,identity_status.eq.HOLD",
+        "a,b",
+        "foo%bar",
+        "foo_bar",
+        "x);select",
+        "지게차.*",
+    ):
+        with pytest.raises(PublicCsiQueryError) as exc:
+            sanitize_q(raw)
+        assert exc.value.code == "Q_INVALID"
+    with pytest.raises(PublicCsiQueryError) as exc:
+        sanitize_q("가" * 81)
+    assert exc.value.code == "Q_TOO_LONG"
+    assert sanitize_q(" 지게차 ") == "지게차"
+    src = inspect.getsource(SupabaseCsiPublicStore.list_ready)
+    assert "sanitize_q(q)" in src
+    assert "escape_ilike" in src
+
+
+def test_c48_source_attribution_exact():
+    client, _, router = _csi_client([_pub_row(READY_UUID)])
+    try:
+        item = client.get(f"/public/accidents/csi/{READY_UUID}").json()
+        assert item["source_id"] == "CSI"
+        assert item["source_name"] == "국토안전관리원(CSI)"
+        assert item["source_dataset_url"] == "https://www.data.go.kr/data/15108262/fileData.do"
+        assert item["tai_url"] == f"https://taieng.co.kr/accident/csi/{READY_UUID}"
+    finally:
+        router.reset_csi_public()
+
+
+def test_c49_source_item_url_and_case_no_not_fabricated():
+    from services.csi_accidents.public import public_item
+
+    item = public_item(_pub_row(READY_UUID))
+    assert item["source_item_url"] is None
+    assert "case_no" not in item
+    src = pathlib.Path("routers/public_csi_accidents.py").read_text(encoding="utf-8") + pathlib.Path(
+        "services/csi_accidents/public.py"
+    ).read_text(encoding="utf-8")
+    assert "safe.csi.go.kr" not in src
+    assert "사고번호" not in src
+
+
+def test_c50_kosha_accident_hydration_unchanged():
+    from services.knowledge_graph_hydrate import ProductionKnowledgeHydrator
+    from tests.test_knowledge_graph import FakeSB
+
+    sb = FakeSB()
+    sb.seed(
+        "kosha_accident_cases",
+        {"id": "acc-d1", "title": "지게차 전복", "reg_dt": "2019-03-01", "file_url": "https://kosha.example/d1"},
+    )
+    rec = ProductionKnowledgeHydrator(sb).get("ACCIDENT", "acc-d1")
+    assert rec is not None
+    assert rec.content_type == "ACCIDENT"
+    assert rec.content_id == "acc-d1"
+    assert rec.source_name == "KOSHA"
+    assert rec.tai_url == "https://taieng.co.kr/accident/acc-d1"
+    assert rec.published_at == "2019-03-01"
+
+
+def test_c51_csi_hydration_current_ready_only():
+    from services.knowledge_graph_hydrate import ProductionKnowledgeHydrator
+    from tests.test_knowledge_graph import FakeSB
+
+    sb = FakeSB()
+    sb.seed("csi_accident_current", _pub_row(READY_UUID))
+    rec = ProductionKnowledgeHydrator(sb).get("ACCIDENT", READY_ID)
+    assert rec is not None
+    assert rec.content_type == "ACCIDENT"
+    assert rec.content_id == READY_ID
+    assert rec.source_name == "국토안전관리원(CSI)"
+    assert rec.summary == "용접 작업 중 발생"
+    assert rec.published_at == "2020-01-02T00:00:00+09:00"
+    assert rec.is_public_current is True
+
+
+def test_c52_csi_hold_hydration_zero():
+    from services.knowledge_graph_hydrate import ProductionKnowledgeHydrator
+    from tests.test_knowledge_graph import FakeSB
+
+    sb = FakeSB()
+    sb.seed("csi_accident_current", _pub_row(HOLD_UUID, status="HOLD"))
+    rec = ProductionKnowledgeHydrator(sb).get("ACCIDENT", HOLD_ID)
+    assert rec is None
+
+
+def test_c53_construction_table_query_zero():
+    from services.knowledge_graph_hydrate import ProductionKnowledgeHydrator
+    from tests.test_knowledge_graph import FakeSB
+    from scripts.refresh_knowledge_graph import load_production_sources
+
+    sb = FakeSB()
+    sb.seed("kosha_accident_cases", {"id": "d1", "title": "지게차", "reg_dt": "2019-01-01"})
+    sb.seed("csi_accident_current", _pub_row(READY_UUID))
+    sb.seed("kosha_construction_accidents", {"id": "c1", "accident_summary": "굴착"})
+    ProductionKnowledgeHydrator(sb).get_many([("ACCIDENT", "d1"), ("ACCIDENT", READY_ID)])
+    load_production_sources(sb, {"accident"})
+    assert not any(op[0] == "select" and op[1] == "kosha_construction_accidents" for op in sb.ops)
+
+
+def test_c54_csi_tai_url_future_route_exact():
+    from services.csi_accidents.public import csi_tai_url
+    from services.knowledge_graph_svc import default_tai_url
+
+    assert csi_tai_url(READY_ID) == f"https://taieng.co.kr/accident/csi/{READY_UUID}"
+    assert default_tai_url("ACCIDENT", READY_ID) == f"https://taieng.co.kr/accident/csi/{READY_UUID}"
+    assert default_tai_url("ACCIDENT", "acc-d1") == "https://taieng.co.kr/accident/acc-d1"
+
+
+def test_c55_accident_loader_kosha_plus_csi_ready():
+    from scripts.refresh_knowledge_graph import load_production_sources
+    from tests.test_knowledge_graph import FakeSB
+
+    sb = FakeSB()
+    sb.seed("kosha_accident_cases", {"id": "d1", "title": "KOSHA", "reg_dt": "2019-01-01", "file_url": "u"})
+    sb.seed("csi_accident_current", _pub_row(READY_UUID))
+    sb.seed("csi_accident_current", _pub_row(HOLD_UUID, status="HOLD"))
+    stats = {}
+    items, errors = load_production_sources(sb, {"accident"}, stats=stats)
+    assert errors == {}
+    ids = {r["content_id"] for r in items["accident"]}
+    assert ids == {"d1", READY_ID}
+    assert stats["accident_kosha_scanned"] == 1
+    assert stats["accident_csi_scanned"] == 1
+    assert stats["accident_construction_included"] == 0
+
+
+def test_c56_csi_source_content_hash_used_as_source_version():
+    from services.knowledge_graph_producers import produce_accident_relations
+
+    cands = produce_accident_relations(
+        [
+            {
+                "content_id": READY_ID,
+                "title": "지게차 전복",
+                "summary": "요약",
+                "object_minor": "지게차",
+                "source_version": "hash-from-current",
+                "identity_status": "READY",
+            }
+        ]
+    )
+    assert cands
+    assert all(c.source_version == "hash-from-current" for c in cands)
+    assert all(c.source_content_type == "ACCIDENT" for c in cands)
+    assert all(c.source_content_id == READY_ID for c in cands)
+
+
+def test_c57_kosha_load_fail_accident_fail_closed():
+    from scripts.refresh_knowledge_graph import load_production_sources, produce_all
+    from tests.test_knowledge_graph import FakeSB
+
+    class Boom(FakeSB):
+        def table(self, name):
+            if name == "kosha_accident_cases":
+                raise RuntimeError("KOSHA_DOWN")
+            return super().table(name)
+
+    sb = Boom()
+    sb.seed("csi_accident_current", _pub_row(READY_UUID))
+    items, errors = load_production_sources(sb, {"accident"})
+    assert "accident" in errors
+    assert "accident" not in items
+    produced = produce_all(items, {}, failed_sources=errors)
+    assert "accident" not in produced
+
+
+def test_c58_csi_load_fail_accident_fail_closed():
+    from scripts.refresh_knowledge_graph import load_production_sources, produce_all
+    from tests.test_knowledge_graph import FakeSB
+
+    class Boom(FakeSB):
+        def table(self, name):
+            if name == "csi_accident_current":
+                raise RuntimeError("CSI_DOWN")
+            return super().table(name)
+
+    sb = Boom()
+    sb.seed("kosha_accident_cases", {"id": "d1", "title": "KOSHA", "reg_dt": "2019-01-01"})
+    items, errors = load_production_sources(sb, {"accident"})
+    assert "accident" in errors
+    assert "accident" not in items
+    produced = produce_all({"accident": [{"content_id": "d1", "title": "지게차"}]}, {}, failed_sources=errors)
+    assert "accident" not in produced
+
+
+def test_c59_no_partial_stale_on_source_failure():
+    from services.knowledge_graph_producers import produce_accident_relations
+    from services.knowledge_graph_svc import MemoryGraphStore, refresh_graph
+
+    store = MemoryGraphStore()
+    cands = produce_accident_relations([{"content_id": "abc-1", "id": "abc-1", "title": "지게차 전복"}])
+    first = refresh_graph(store=store, produced_by_source={"accident": cands}, scanned_by_source={"accident": 1}, apply=True)
+    assert first.status == "COMPLETED"
+    edge = next(iter(store.edges.values()))
+    report = refresh_graph(
+        store=store,
+        produced_by_source={},
+        scanned_by_source={"accident": 0},
+        failed_sources={"accident": "CSI_LOAD_FAIL"},
+        apply=True,
+    )
+    assert report.stale_count == 0
+    assert edge["is_active"] is True
+    assert edge.get("stale_at") is None
+
+
+def test_c60_graph_dry_run_writes_zero(tmp_path, capsys):
+    from scripts.refresh_knowledge_graph import main as refresh_main
+    from services.csi_accidents.graph_adapter import GRAPH_WRITES_OPEN
+
+    assert GRAPH_WRITES_OPEN is False
+    fixture = tmp_path / "acc.json"
+    fixture.write_text(
+        json.dumps({"accident": [{"content_id": READY_ID, "title": "지게차 전복", "object_minor": "지게차"}]}),
+        encoding="utf-8",
+    )
+    rc = refresh_main(["--source", "accident", "--fixture-json", str(fixture), "--context", "equipment:forklift"])
+    payload = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert payload["db_write"] == 0
+    assert payload.get("dry_run") is True
+
+
+def test_c61_existing_relation_aliases_unchanged():
+    from services.knowledge_graph_rules import CONTROLLED_RULES
+
+    aliases = {r.relation_key: r.aliases for r in CONTROLLED_RULES}
+    assert aliases["forklift"] == ("지게차", "포크리프트", "forklift")
+    assert aliases["welding"] == ("용접작업", "용접", "welding")
+    assert aliases["excavation"] == ("굴착작업", "굴착", "excavation")
+    assert aliases["fall"] == ("떨어짐", "추락", "fall")
+    methods = {r.relation_key: r.method for r in CONTROLLED_RULES if r.relation_key in aliases}
+    assert methods["forklift"] == "CONTROLLED_KEYWORD"
+    src = pathlib.Path("services/knowledge_graph_rules.py").read_text(encoding="utf-8")
+    assert "rule_id=\"EQUIPMENT_FORKLIFT_V1\"" in src or 'rule_id="EQUIPMENT_FORKLIFT_V1"' in src
+
+
+def test_c62_content_type_remains_accident():
+    from services.knowledge_graph_producers import produce_accident_relations
+    from services.knowledge_graph_hydrate import ProductionKnowledgeHydrator
+    from tests.test_knowledge_graph import FakeSB
+
+    cands = produce_accident_relations(
+        [{"content_id": READY_ID, "title": "지게차", "object_minor": "지게차", "identity_status": "READY"}]
+    )
+    assert cands
+    assert all(c.source_content_type == "ACCIDENT" for c in cands)
+    sb = FakeSB()
+    sb.seed("csi_accident_current", _pub_row(READY_UUID))
+    rec = ProductionKnowledgeHydrator(sb).get("ACCIDENT", READY_ID)
+    assert rec.content_type == "ACCIDENT"
+    pub = pathlib.Path("router_registry/public.py").read_text(encoding="utf-8")
+    assert "routers.public_csi_accidents" in pub
+    assert "content_type = CSI" not in pathlib.Path("services/csi_accidents/public.py").read_text(encoding="utf-8")
