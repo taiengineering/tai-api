@@ -27,6 +27,7 @@ from services.kosha_msds.contract import (
     SECTION_MIN,
     SERVICE_KEY_ENV,
     SUCCESS_RESULT_CODES,
+    WORKING_PAGE_SIZE,
 )
 from services.kosha_msds.identity import ListCandidate, candidate_from_list_item, normalize_chem_id
 from services.kosha_msds.parse import (
@@ -179,6 +180,52 @@ class KoshaMsdsClient:
                 "numOfRows": str(num_of_rows),
             },
         )
+        try:
+            parsed = parse_list_xml(text, require_success=True)
+        except KoshaMsdsResultError as exc:
+            if exc.result_code in RATE_LIMIT_DAILY_CODES | RATE_LIMIT_SECOND_CODES:
+                raise KoshaMsdsClientError("RATE_LIMIT", redact_secret(exc.result_msg, key)) from exc
+            raise KoshaMsdsClientError("RESULT_CODE", redact_secret(exc.result_msg, key)) from exc
+        candidates = [candidate_from_list_item(item) for item in parsed.items]
+        return SearchResult(
+            total_count=parsed.total_count,
+            page_no=parsed.page_no,
+            num_of_rows=parsed.num_of_rows,
+            result_code=parsed.result_code,
+            result_msg=parsed.result_msg,
+            candidates=candidates,
+        )
+
+    def list_page(
+        self,
+        *,
+        page_no: int = 1,
+        num_of_rows: int = WORKING_PAGE_SIZE,
+        search_cnd: Optional[int] = None,
+        search_wrd: Optional[str] = None,
+    ) -> SearchResult:
+        """One getChemList page. Omitting searchCnd/searchWrd is the dump-all attempt.
+
+        CHEM-04 live probe: omit/blank/default → totalCount=0 (not a corpus).
+        """
+        if page_no < 0:
+            raise KoshaMsdsClientError("PAGE_INVALID", "pageNo must be >= 0")
+        if num_of_rows < 1 or num_of_rows > MAX_NUM_OF_ROWS:
+            raise KoshaMsdsClientError(
+                "ROWS_INVALID",
+                f"numOfRows must be 1..{MAX_NUM_OF_ROWS}",
+            )
+        params: dict[str, str] = {
+            "pageNo": str(page_no),
+            "numOfRows": str(num_of_rows),
+        }
+        if search_cnd is not None:
+            if search_cnd not in ALLOWED_SEARCH_CND:
+                raise KoshaMsdsClientError("SEARCH_CND_INVALID", "searchCnd must be 0..4")
+            params["searchCnd"] = str(search_cnd)
+        if search_wrd is not None:
+            params["searchWrd"] = search_wrd
+        _, text, key = self._get(LIST_OPERATION, params)
         try:
             parsed = parse_list_xml(text, require_success=True)
         except KoshaMsdsResultError as exc:

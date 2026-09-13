@@ -6,11 +6,13 @@ from typing import Optional
 
 from services.kosha_msds.contract import (
     CHEM02_ALLOWED_ENUMERATION,
+    CHEM04_ALLOWED_ENUMERATION,
     ENUMERATION_FULL_OFFICIAL,
     ENUMERATION_PROBE,
     PUBLISH_NOT_PUBLISHED,
     PUBLISH_PUBLISHED_FULL,
     SNAPSHOT_COMPLETED,
+    SNAPSHOT_RUNNING,
     SOURCE_CONTRACT_VERSION,
     SOURCE_ID,
 )
@@ -44,6 +46,11 @@ def validate_enumeration_mode(mode: str, *, chem02: bool = True) -> str:
         raise KoshaMsdsSnapshotError(
             "FULL_OFFICIAL_BLOCKED",
             "FULL_OFFICIAL is forbidden before corpus enumeration gate",
+        )
+    if not chem02 and mode not in CHEM04_ALLOWED_ENUMERATION:
+        raise KoshaMsdsSnapshotError(
+            "ENUMERATION_FORBIDDEN",
+            f"CHEM-04 allows only {sorted(CHEM04_ALLOWED_ENUMERATION)}; got {mode}",
         )
     return mode
 
@@ -79,3 +86,37 @@ def new_probe_spec() -> SnapshotSpec:
     )
     assert_probe_not_full(spec)
     return spec
+
+
+def new_full_official_spec(expected_count: int, *, run_type: str = "FULL_SYNC") -> SnapshotSpec:
+    """CHEM-04 candidate snapshot. Does not publish. expected_count must be API totalCount."""
+    validate_enumeration_mode(ENUMERATION_FULL_OFFICIAL, chem02=False)
+    if expected_count <= 0:
+        raise KoshaMsdsSnapshotError(
+            "FULL_LIST_BLOCKED",
+            "FULL_OFFICIAL expected_count must be API totalCount > 0",
+        )
+    return SnapshotSpec(
+        enumeration_mode=ENUMERATION_FULL_OFFICIAL,
+        status=SNAPSHOT_RUNNING,
+        publish_state=PUBLISH_NOT_PUBLISHED,
+        expected_count=expected_count,
+        run_type=run_type,
+    )
+
+
+def evaluate_publish_full(
+    spec: SnapshotSpec,
+    *,
+    incomplete_count: int,
+    census_ok: bool,
+) -> bool:
+    """PUBLISHED_FULL is allowed only after census+detail gates. This WO does not promote."""
+    return (
+        spec.enumeration_mode == ENUMERATION_FULL_OFFICIAL
+        and spec.status == SNAPSHOT_COMPLETED
+        and spec.publish_state == PUBLISH_PUBLISHED_FULL
+        and census_ok
+        and incomplete_count == 0
+        and can_publish_global_current(spec)
+    )
