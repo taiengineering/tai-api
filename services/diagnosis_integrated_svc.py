@@ -326,6 +326,7 @@ def _build_unified_step1_body(
     factory_id: Optional[str],
     construction_type_fallback: Optional[str],
     unified_factory: Callable[..., DiagnoseStep1Body],
+    contract_amount_eok: Optional[float] = None,
 ) -> DiagnoseStep1Body:
     """WO-010 STEP-2B: run_diagnosis 의 unified 분기(build_unified_leg_input) 조립 helper.
 
@@ -370,6 +371,13 @@ def _build_unified_step1_body(
     # worker_count parity: legacy else 분기의 top-level worker_count=workers 와 등가하게
     # runtime_facts 에 없으면 workers 를 실어준다(canonical 이 이미 넣었으면 그 값 우선).
     runtime_facts.setdefault("worker_count", workers)
+    # WO-E2E200-CERT1-REVISE-001 KD-001: CONSTRUCTION resolved _contract_eok
+    # (body.contract_amount_eok → form_data.project_amount → form_data.contract_amount_eok)
+    # must reach unified source_facts as exact-name contract_amount_eok.
+    # setdefault: existing canonical value is not overwritten. None stays absent.
+    # No /10000, no *1e8, no 1.0 synthetic. Non-construction does not receive this bridge.
+    if engine_sector == "CONSTRUCTION" and contract_amount_eok is not None:
+        runtime_facts.setdefault("contract_amount_eok", contract_amount_eok)
     # WO-CST-SYNTHETIC-CONSTRUCTION-TYPE-HOTFIX-001: CST construction_type synthetic default 제거.
     #   소비자가 construction_type 을 입력하지 않으면 ABSENT 로 둔다(Unified "미입력=ABSENT" 계약).
     #   이전엔 "건축" 을 생성해 Unified/Facility 로 전달 → LEG 가 construction_type 을 ENUM 미등록으로
@@ -573,6 +581,7 @@ def run_diagnosis(
             factory_id=factory_id,
             construction_type_fallback=_construction_type_val,
             unified_factory=unified_step1_factory_func,
+            contract_amount_eok=_contract_eok if _is_construction else None,
         )
     elif canonical_step1_factory_func is not None and sector == "INDUSTRIAL":
         # GATE-2 Path A: WWW INDUSTRIAL LEG canonical path - legacy top-level default(400) bypass.
