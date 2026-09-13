@@ -371,13 +371,17 @@ def _build_unified_step1_body(
     # worker_count parity: legacy else 분기의 top-level worker_count=workers 와 등가하게
     # runtime_facts 에 없으면 workers 를 실어준다(canonical 이 이미 넣었으면 그 값 우선).
     runtime_facts.setdefault("worker_count", workers)
-    # WO-E2E200-CERT1-REVISE-001 KD-001: CONSTRUCTION resolved _contract_eok
-    # (body.contract_amount_eok → form_data.project_amount → form_data.contract_amount_eok)
-    # must reach unified source_facts as exact-name contract_amount_eok.
-    # setdefault: existing canonical value is not overwritten. None stays absent.
-    # No /10000, no *1e8, no 1.0 synthetic. Non-construction does not receive this bridge.
+    # WO-E2E200-CERT1-REVISE-001 KD-001 / PATCH1 KD-001B:
+    # CONSTRUCTION resolved _contract_eok is single authority for LEG:
+    #   body.contract_amount_eok
+    #   → (CONSTRUCTION) form_data.project_amount
+    #   → form_data.contract_amount_eok
+    #   → absent
+    # Assign, do not setdefault: competing canonical form_data.contract_amount_eok
+    # must not diverge auto_tier from LEG. None stays absent. No /10000, no *1e8,
+    # no 1.0 synthetic. Non-construction does not receive this bridge.
     if engine_sector == "CONSTRUCTION" and contract_amount_eok is not None:
-        runtime_facts.setdefault("contract_amount_eok", contract_amount_eok)
+        runtime_facts["contract_amount_eok"] = contract_amount_eok
     # WO-CST-SYNTHETIC-CONSTRUCTION-TYPE-HOTFIX-001: CST construction_type synthetic default 제거.
     #   소비자가 construction_type 을 입력하지 않으면 ABSENT 로 둔다(Unified "미입력=ABSENT" 계약).
     #   이전엔 "건축" 을 생성해 Unified/Facility 로 전달 → LEG 가 construction_type 을 ENUM 미등록으로

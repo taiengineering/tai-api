@@ -102,25 +102,38 @@ def _unified_step1(body: DiagnosisRunBody, *, contract_amount_eok=None, engine_s
 
 def _cap(body: DiagnosisRunBody, *, auto_tier="CONSTRUCTION_FREE"):
     cap = {}
+    orig = _svc._build_unified_step1_body
+
+    def wrapped(**kwargs):
+        cap["resolved"] = kwargs.get("contract_amount_eok")
+        return orig(**kwargs)
 
     def r1(_sb, s1):
         cap["s1"] = s1
         return {"status": "success", "data": {"applicable_count": 0, "rules_table": []}}
 
-    _svc.run_diagnosis(
-        _S(),
-        body,
-        run_step1_func=r1,
-        auto_tier_func=lambda *a, **k: auto_tier,
-        build_partial_func=lambda f: {},
-        now_func=lambda: "2026-01-01T00:00:00Z",
-        paid_tier_prices={},
-        free_tier_codes={"CONSTRUCTION_FREE", "INDUSTRY_FREE", "BUILDING_FREE"},
-        engine_version="t",
-        current_user=None,
-        unified_step1_factory_func=build_unified_leg_input,
-    )
-    return cap["s1"], build_facility(cap["s1"])
+    def auto_tier_func(*_a, **k):
+        cap["auto_tier_eok"] = k.get("contract_amount_eok")
+        return auto_tier
+
+    _svc._build_unified_step1_body = wrapped
+    try:
+        _svc.run_diagnosis(
+            _S(),
+            body,
+            run_step1_func=r1,
+            auto_tier_func=auto_tier_func,
+            build_partial_func=lambda f: {},
+            now_func=lambda: "2026-01-01T00:00:00Z",
+            paid_tier_prices={},
+            free_tier_codes={"CONSTRUCTION_FREE", "INDUSTRY_FREE", "BUILDING_FREE"},
+            engine_version="t",
+            current_user=None,
+            unified_step1_factory_func=build_unified_leg_input,
+        )
+    finally:
+        _svc._build_unified_step1_body = orig
+    return cap, cap["s1"], build_facility(cap["s1"])
 
 
 def _cst_body(form_data, **extra):
@@ -163,7 +176,8 @@ def test_t1_project_amount_reaches_unified_and_facility():
 
 def test_t1_run_diagnosis_form_data_project_amount():
     for eok in T1_EOK:
-        step1, fac = _cap(_cst_body({"project_amount": eok, "worker_count": 50}))
+        cap, step1, fac = _cap(_cst_body({"project_amount": eok, "worker_count": 50}))
+        assert cap["resolved"] == float(eok)
         assert step1.input.get("contract_amount_eok") == float(eok)
         _assert_verbatim_eok(fac, eok)
         assert "project_amount" not in fac
@@ -181,31 +195,35 @@ def test_t2_absent_stays_absent_no_synthetic_one():
 
 
 def test_t2_run_diagnosis_absent_no_synthetic_one():
-    step1, fac = _cap(_cst_body({"worker_count": 10}))
+    cap, step1, fac = _cap(_cst_body({"worker_count": 10}))
+    assert cap["resolved"] is None
     assert "contract_amount_eok" not in step1.input
     assert "contract_amount_eok" not in fac
     assert fac.get("contract_amount_eok") != 1.0
 
 
-# --- T3 existing canonical eok is not overwritten ---
+# --- T3 resolved authority overwrites competing canonical eok ---
 
 def test_t3_existing_canonical_eok_not_overwritten():
+    # PATCH1: competing form_data.contract_amount_eok in canonical inp is
+    # overwritten by resolved _contract_eok. Name kept; contract is now assign.
     body = DiagnosisRunBody(
         sector="CONSTRUCTION",
         contract_amount_eok=50.0,
-        form_data={"project_amount": 999.0},
+        form_data={"project_amount": 888.0, "contract_amount_eok": 999.0},
     )
-    step1 = _unified_step1(body, contract_amount_eok=999.0)
+    step1 = _unified_step1(body, contract_amount_eok=50.0)
     fac = build_facility(step1)
     assert step1.input["contract_amount_eok"] == 50.0
     assert fac["contract_amount_eok"] == 50.0
 
 
 def test_t3_run_diagnosis_body_eok_precedes_project_amount():
-    step1, fac = _cap(_cst_body(
+    cap, step1, fac = _cap(_cst_body(
         {"project_amount": 999.0, "worker_count": 50},
         contract_amount_eok=50.0,
     ))
+    assert cap["resolved"] == 50.0
     assert step1.input["contract_amount_eok"] == 50.0
     assert fac["contract_amount_eok"] == 50.0
 
@@ -244,7 +262,8 @@ def test_t4_run_diagnosis_industrial_project_amount_no_eok():
         appendix3_item_no=28,
         form_data={"project_amount": 50.0, "worker_count": 10},
     )
-    step1, fac = _cap(body, auto_tier="INDUSTRY_FREE")
+    cap, step1, fac = _cap(body, auto_tier="INDUSTRY_FREE")
+    assert cap["resolved"] is None
     assert "contract_amount_eok" not in step1.input
     assert "contract_amount_eok" not in fac
 
@@ -257,7 +276,8 @@ def test_t4_run_diagnosis_building_project_amount_no_eok():
         appendix3_item_no=28,
         form_data={"project_amount": 50.0, "worker_count": 10},
     )
-    step1, fac = _cap(body, auto_tier="BUILDING_FREE")
+    cap, step1, fac = _cap(body, auto_tier="BUILDING_FREE")
+    assert cap["resolved"] is None
     assert "contract_amount_eok" not in step1.input
     assert "contract_amount_eok" not in fac
 
@@ -272,13 +292,15 @@ def test_t5_published_identities_unchanged_constants():
 
 def test_t5_ap06_lower_upper_noncivil_via_project_amount():
     for eok in (AP06_LOWER, AP06_UPPER_NONCIVIL):
-        step1, fac = _cap(_cst_body({
+        cap, step1, fac = _cap(_cst_body({
             "project_amount": eok,
             "worker_count": 50,
             "is_construction": True,
             "is_relationship_contractor": False,
             "is_civil_construction": False,
         }))
+        assert cap["resolved"] == float(eok)
+        assert step1.input["contract_amount_eok"] == float(eok)
         _assert_verbatim_eok(fac, eok)
         assert fac["is_construction"] is True
         assert fac["is_relationship_contractor"] is False
@@ -286,13 +308,15 @@ def test_t5_ap06_lower_upper_noncivil_via_project_amount():
 
 
 def test_t5_relationship_lower_threshold_via_project_amount():
-    step1, fac = _cap(_cst_body({
+    cap, step1, fac = _cap(_cst_body({
         "project_amount": RELATIONSHIP_LOWER,
         "worker_count": 50,
         "is_construction": True,
         "is_relationship_contractor": True,
         "is_civil_construction": False,
     }))
+    assert cap["resolved"] == RELATIONSHIP_LOWER
+    assert step1.input["contract_amount_eok"] == RELATIONSHIP_LOWER
     _assert_verbatim_eok(fac, RELATIONSHIP_LOWER)
     assert fac["is_relationship_contractor"] is True
     assert fac["is_civil_construction"] is False
@@ -300,13 +324,15 @@ def test_t5_relationship_lower_threshold_via_project_amount():
 
 def test_t5_civil_ap06_ap07_boundary_via_project_amount():
     for eok in (149.0, CIVIL_AP06_UPPER):
-        step1, fac = _cap(_cst_body({
+        cap, step1, fac = _cap(_cst_body({
             "project_amount": eok,
             "worker_count": 50,
             "is_construction": True,
             "is_relationship_contractor": False,
             "is_civil_construction": True,
         }))
+        assert cap["resolved"] == float(eok)
+        assert step1.input["contract_amount_eok"] == float(eok)
         _assert_verbatim_eok(fac, eok)
         assert fac["is_civil_construction"] is True
         assert fac["is_relationship_contractor"] is False
@@ -314,13 +340,110 @@ def test_t5_civil_ap06_ap07_boundary_via_project_amount():
 
 def test_t5_ap07_ap08_800_boundary_via_project_amount():
     for eok in (799.0, AP08_LOWER):
-        step1, fac = _cap(_cst_body({
+        cap, step1, fac = _cap(_cst_body({
             "project_amount": eok,
             "worker_count": 50,
             "is_construction": True,
             "is_relationship_contractor": False,
             "is_civil_construction": False,
         }))
+        assert cap["resolved"] == float(eok)
+        assert step1.input["contract_amount_eok"] == float(eok)
         _assert_verbatim_eok(fac, eok)
         assert fac["is_construction"] is True
         assert fac["is_civil_construction"] is False
+
+
+def _assert_triple(cap, step1, fac, expected):
+    """_contract_eok, DiagnoseStep1Body.input, build_facility must match."""
+    assert cap["resolved"] == expected
+    if expected is None:
+        assert "contract_amount_eok" not in step1.input
+        assert "contract_amount_eok" not in fac
+        assert fac.get("contract_amount_eok") != 1.0
+        return
+    assert step1.input.get("contract_amount_eok") == expected
+    _assert_verbatim_eok(fac, expected)
+    assert cap["auto_tier_eok"] == expected
+
+
+# --- PATCH1 conflict matrix P1–P6 ---
+
+def test_p1_body_eok_precedes_form_project_amount():
+    cap, step1, fac = _cap(_cst_body(
+        {"project_amount": 999.0, "worker_count": 50},
+        contract_amount_eok=50.0,
+    ))
+    _assert_triple(cap, step1, fac, 50.0)
+
+
+def test_p2_body_eok_precedes_form_contract_amount_eok():
+    cap, step1, fac = _cap(_cst_body(
+        {"contract_amount_eok": 999.0, "worker_count": 50},
+        contract_amount_eok=50.0,
+    ))
+    _assert_triple(cap, step1, fac, 50.0)
+
+
+def test_p3_project_amount_precedes_form_contract_amount_eok():
+    cap, step1, fac = _cap(_cst_body({
+        "project_amount": 120.0,
+        "contract_amount_eok": 999.0,
+        "worker_count": 50,
+    }))
+    _assert_triple(cap, step1, fac, 120.0)
+
+
+def test_p4_only_form_contract_amount_eok():
+    cap, step1, fac = _cap(_cst_body({
+        "contract_amount_eok": 150.0,
+        "worker_count": 50,
+    }))
+    _assert_triple(cap, step1, fac, 150.0)
+
+
+def test_p5_amount_all_absent_key_absent():
+    cap, step1, fac = _cap(_cst_body({"worker_count": 10}))
+    _assert_triple(cap, step1, fac, None)
+
+
+def test_p6_industrial_conflict_no_construction_bridge():
+    body = DiagnosisRunBody(
+        auth_token="t",
+        sector="INDUSTRIAL",
+        disclaimer_log_id="disc1",
+        appendix3_item_no=28,
+        contract_amount_eok=50.0,
+        form_data={
+            "project_amount": 120.0,
+            "contract_amount_eok": 999.0,
+            "worker_count": 10,
+        },
+    )
+    cap, step1, fac = _cap(body, auto_tier="INDUSTRY_FREE")
+    assert cap["resolved"] is None
+    assert fac.get("contract_amount_eok") != 120.0
+    assert fac.get("contract_amount_eok") != 50.0
+    assert step1.input.get("contract_amount_eok") == 999.0
+    assert fac.get("contract_amount_eok") == 999.0
+
+
+def test_p6_building_conflict_no_construction_bridge():
+    body = DiagnosisRunBody(
+        auth_token="t",
+        sector="BUILDING",
+        disclaimer_log_id="disc1",
+        appendix3_item_no=28,
+        contract_amount_eok=50.0,
+        form_data={
+            "project_amount": 120.0,
+            "contract_amount_eok": 999.0,
+            "worker_count": 10,
+        },
+    )
+    cap, step1, fac = _cap(body, auto_tier="BUILDING_FREE")
+    assert cap["resolved"] is None
+    assert fac.get("contract_amount_eok") != 120.0
+    assert fac.get("contract_amount_eok") != 50.0
+    assert step1.input.get("contract_amount_eok") == 999.0
+    assert fac.get("contract_amount_eok") == 999.0
