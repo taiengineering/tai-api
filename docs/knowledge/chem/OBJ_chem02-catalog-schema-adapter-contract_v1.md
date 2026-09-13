@@ -12,7 +12,7 @@ owner: taiwang
 # OBJ-CHEM-02 — Catalog Schema + Source Adapter + Contract Tests
 
 ```text
-CHEM-02 = COMPLETE (not production-applied)
+CHEM-02 = IN_PROGRESS (PATCH-1 on PR #344, not merged, not production-applied)
 FULL PRODUCTION INGEST = BLOCKED
 reason = CORPUS_ENUMERATION + PRODUCTION_QUOTA
 CHEM-03 = NOT OPEN
@@ -22,7 +22,8 @@ CHEM-03 = NOT OPEN
 
 ```text
 branch = feat/obj-chem-02
-base SHA / HEAD = fe2632dd71bdcc4ec606c880df1516c8f58f3a09
+base SHA = fe2632dd71bdcc4ec606c880df1516c8f58f3a09
+PATCH-1 parent = 6956fa8241605d85c846ae540e1a37dc5c8014a9
 production migration applied = NO
 production chemical rows written = 0
 Graph mutation = 0
@@ -31,7 +32,7 @@ R2 mutation = 0
 live probe performed = YES
 live chemId = 001008
 16-section result = COMPLETE (16/16 resultCode=00)
-tests = 31 passed / 0 failed
+live re-probe this PATCH = NO (local /tmp/obj-chem01 evidence reused for section 04)
 ```
 
 Parent of this HEAD is CHEM-01 SHA `501a583e`. Extra commit on main (`#343`) is crane DESIGN ONLY docs.
@@ -106,9 +107,12 @@ cas_no NULLABLE                    -- no UNIQUE(cas_no)
 section_no BETWEEN 1 AND 16
 UNIQUE (chemical_id, section_no)
 PUBLISHED_FULL only if FULL_OFFICIAL AND COMPLETED
+enumeration_mode immutable after INSERT (BEFORE UPDATE trigger)
+sections.chem_id removed; identity = chemical_id JOIN
+snapshot_items.source_key removed; identity = chemical_id JOIN
 ```
 
-Indexes: chem_id, cas_no, identity_status, (chem_id, section_no), snapshot status, snapshot source_key.
+Indexes: chemicals chem_id / cas_no / identity_status, snapshot status. Child identity is parent `chemical_id` only.
 
 RLS enabled, no public policies, service_role SELECT/INSERT/UPDATE, DELETE revoked. Current view SELECT-only for service_role.
 
@@ -140,23 +144,45 @@ Search returns `candidates[]`. No first-row auto identity.
 searchCnd=1 searchWrd=71-43-2 → totalCount=1 chemId=001008
 getChemDetail01-16 → COMPLETE
 item counts = 8,11,4,5,3,3,2,11,21,4,26,12,2,8,20,6
-hash = 1d8f28d1084aa3b74497d100e4d2476e668589ba3996d80da8a1096e83ce55c0
+live hash = 1d8f28d1084aa3b74497d100e4d2476e668589ba3996d80da8a1096e83ce55c0
 ```
 
 Matches CHEM-01 benzene detail row counts. No extra corpus exploration.
+
+## PATCH-1 fixture / hash provenance
+
+`benzene_detail_04.xml` is reconstructed from local CHEM-01 probe evidence (`getChemDetail04` / `chemId=001008`, 5 items). It is not a live re-probe. `serviceKey` is not stored.
+
+`empty_success_section.xml` is the synthetic `resultCode=00` empty-items fixture. `EMPTY_BUT_VALID` tests use that file only.
+
+```text
+fixture-based benzene hash =
+4e71b781f7966b40f1eed24ac7409ce395a9808c45491c4bee83f85a91f2d393
+live handoff hash =
+1d8f28d1084aa3b74497d100e4d2476e668589ba3996d80da8a1096e83ce55c0
+match = NO
+```
+
+Cause: remaining `benzene_detail_01..16` fixtures are truncated contract samples, not the full live 16-section payload. After PATCH-1, section 04 matches live row count (5). Other sections still differ:
+
+```text
+fixture row counts = 3,3,3,5,0,0,0,1,0,0,0,0,0,0,2,1
+live row counts    = 8,11,4,5,3,3,2,11,21,4,26,12,2,8,20,6
+```
+
+Hash is not forced to match. Replacing all 16 fixtures with live XML is out of PATCH-1 scope.
 
 ---
 
 ## Tests
 
 ```text
-31 passed / 0 failed
 python3 -m pytest tests/test_kosha_msds_catalog.py
 ```
 
-Cover search params/pagination/XML/totalCount/0-results/substring, identity (chemId, CAS NULL, CAS not PK, duplicate names), detail 16/16 + 15/16 + empty-valid + resultCode + malformed XML + timeout, hash stability, PROBE cannot FULL_OFFICIAL / cannot publish current, schema freeze, Graph chemical DISABLED.
+Cover search params/pagination/XML/totalCount/0-results/substring, identity (chemId, CAS NULL, CAS not PK, duplicate names), detail 16/16 + 15/16 + benzene section04=5 + synthetic empty-valid + resultCode + malformed XML + timeout, hash stability, PROBE cannot FULL_OFFICIAL / cannot publish current, enumeration_mode immutable SQL guard, child identity owned by parent chemical_id, schema freeze, Graph chemical DISABLED.
 
-CI does not call live KOSHA. Fixtures have no serviceKey.
+CI does not call live KOSHA. Fixtures have no serviceKey. Catalog tests are included in GitHub Unit Tests.
 
 ---
 

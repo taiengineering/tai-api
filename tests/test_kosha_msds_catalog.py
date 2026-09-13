@@ -67,6 +67,16 @@ def _norm(sql: str) -> str:
     return re.sub(r"\s+", " ", sql).lower()
 
 
+def _create_table_body(sql: str, table: str) -> str:
+    match = re.search(
+        rf"CREATE TABLE IF NOT EXISTS public\.{table} \((.*?)\);",
+        sql,
+        flags=re.S,
+    )
+    assert match, table
+    return match.group(1)
+
+
 def _client(handler) -> KoshaMsdsClient:
     def fake_get(url, params=None, headers=None, timeout=25):
         return handler(url, params, timeout)
@@ -214,7 +224,8 @@ def test_sixteen_of_sixteen_complete():
     assert detail.failed_sections == ()
     assert len(detail.sections) == 16
     assert detail.sections["01"].status == DETAIL_COMPLETE
-    assert detail.sections["04"].status == DETAIL_EMPTY_BUT_VALID
+    assert detail.sections["04"].status == DETAIL_COMPLETE
+    assert len(detail.sections["04"].items) == 5
     assert detail.sections["08"].items[0].get("itemDetail") is None
 
 
@@ -232,11 +243,23 @@ def test_fifteen_of_sixteen_failure_incomplete():
     assert len(detail.sections) == 15
 
 
-def test_empty_but_success_section_valid():
+def test_benzene_section04_live_row_count():
     parsed = parse_section_xml(fx("benzene_detail_04.xml"))
     assert parsed.ok
-    assert parsed.empty_but_valid
+    assert not parsed.empty_but_valid
+    assert len(parsed.items) == 5
     fetched = _client(lambda u, p, t: (200, fx("benzene_detail_04.xml"))).get_detail_section("001008", 4)
+    assert fetched.status == DETAIL_COMPLETE
+    assert len(fetched.items) == 5
+
+
+def test_empty_but_success_section_valid():
+    parsed = parse_section_xml(fx("empty_success_section.xml"))
+    assert parsed.ok
+    assert parsed.empty_but_valid
+    fetched = _client(lambda u, p, t: (200, fx("empty_success_section.xml"))).get_detail_section(
+        "001008", 4
+    )
     assert fetched.status == DETAIL_EMPTY_BUT_VALID
 
 
@@ -398,6 +421,49 @@ def test_schema_sql_contract():
     assert SOURCE_ID.lower() in n or "kosha_msds" in n
     assert "cas_no text," in n
     assert DATASET_ID in sql
+    assert "create function public.fn_kosha_msds_snapshot_enumeration_immutable" in n
+    assert "before update on public.kosha_msds_snapshots" in n
+    assert "old.enumeration_mode is distinct from new.enumeration_mode" in n
+    assert "kosha_msds_enumeration_mode_immutable" in n
+    assert "enable always trigger trg_kosha_msds_snapshot_enumeration_immutable" in n
+
+
+def test_schema_enumeration_mode_immutable_guard_exists():
+    sql = SQL.read_text(encoding="utf-8")
+    n = _norm(sql)
+    assert "create trigger trg_kosha_msds_snapshot_enumeration_immutable" in n
+    assert "before update on public.kosha_msds_snapshots" in n
+    assert "old.enumeration_mode is distinct from new.enumeration_mode" in n
+    assert "raise exception" in n
+    assert "probe" in n and "full_official" in n
+    # Static stand-in for INSERT PROBE / UPDATE enumeration_mode=FULL_OFFICIAL → FAIL.
+    # Migration is not production-applied; no live DB mutation in CHEM-02.
+    assert "cannot change % to %" in sql
+    forbidden = (
+        "PROBE→FULL_OFFICIAL",
+        "PROBE→BOUNDED_SEARCH",
+        "BOUNDED_SEARCH→FULL_OFFICIAL",
+    )
+    comment = sql.split("COMMENT ON FUNCTION public.fn_kosha_msds_snapshot_enumeration_immutable()")[1]
+    for token in forbidden:
+        assert token in comment
+
+
+def test_schema_child_identity_owned_by_parent():
+    sql = SQL.read_text(encoding="utf-8")
+    sections = _create_table_body(sql, "kosha_msds_sections")
+    items = _create_table_body(sql, "kosha_msds_snapshot_items")
+    chemicals = _create_table_body(sql, "kosha_msds_chemicals")
+    assert re.search(r"\bchem_id\b", sections) is None
+    assert re.search(r"\bsource_key\b", items) is None
+    assert "chemical_id uuid NOT NULL REFERENCES public.kosha_msds_chemicals(id)" in sections
+    assert "chemical_id uuid NOT NULL REFERENCES public.kosha_msds_chemicals(id)" in items
+    assert "chem_id text NOT NULL" in chemicals
+    assert "source_key text NOT NULL" in chemicals
+    assert "CHECK (source_key = chem_id)" in chemicals
+    n = _norm(sql)
+    assert "create index if not exists kosha_msds_sections_chem_id_idx" not in n
+    assert "create index if not exists kosha_msds_snapshot_items_source_key_idx" not in n
 
 
 def test_schema_file_location():

@@ -51,7 +51,6 @@ CREATE INDEX IF NOT EXISTS kosha_msds_chemicals_status_idx
 CREATE TABLE IF NOT EXISTS public.kosha_msds_sections (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   chemical_id uuid NOT NULL REFERENCES public.kosha_msds_chemicals(id),
-  chem_id text NOT NULL,
   section_no integer NOT NULL CHECK (section_no BETWEEN 1 AND 16),
   payload_json jsonb NOT NULL,
   section_hash text NOT NULL,
@@ -63,12 +62,11 @@ CREATE TABLE IF NOT EXISTS public.kosha_msds_sections (
 );
 
 COMMENT ON TABLE public.kosha_msds_sections IS
-  'Lossless normalized payload for getChemDetail01-16. Empty successful section is valid. Raw XML is not stored.';
+  'Lossless normalized payload for getChemDetail01-16. Identity owner is chemical_id only; chemId is obtained via JOIN to kosha_msds_chemicals. Empty successful section is valid. Raw XML is not stored.';
 COMMENT ON COLUMN public.kosha_msds_sections.payload_json IS
   'Canonical item array. fetched_at is column-only and excluded from chemical source_content_hash.';
-
-CREATE INDEX IF NOT EXISTS kosha_msds_sections_chem_id_idx
-  ON public.kosha_msds_sections (chem_id, section_no);
+COMMENT ON COLUMN public.kosha_msds_sections.chemical_id IS
+  'Parent kosha_msds_chemicals.id. Duplicate chem_id column is forbidden to prevent identity drift.';
 
 CREATE TABLE IF NOT EXISTS public.kosha_msds_snapshots (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -97,15 +95,45 @@ COMMENT ON TABLE public.kosha_msds_snapshots IS
 COMMENT ON COLUMN public.kosha_msds_snapshots.expected_count IS
   'Official census only. Must stay NULL while N is UNKNOWN. Do not store unofficial web totals such as 20568.';
 COMMENT ON COLUMN public.kosha_msds_snapshots.enumeration_mode IS
-  'PROBE=bounded known chemId set. FULL_OFFICIAL requires a verified dump-all contract.';
+  'Immutable provenance after INSERT. PROBE=bounded known chemId set. FULL_OFFICIAL requires a verified dump-all contract and must be set at INSERT. PROBE/BOUNDED_SEARCH cannot be updated to FULL_OFFICIAL.';
 
 CREATE INDEX IF NOT EXISTS kosha_msds_snapshots_status_idx
   ON public.kosha_msds_snapshots (status, completed_at DESC);
 
+CREATE FUNCTION public.fn_kosha_msds_snapshot_enumeration_immutable()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $fn$
+BEGIN
+  IF OLD.enumeration_mode IS DISTINCT FROM NEW.enumeration_mode THEN
+    RAISE EXCEPTION
+      'KOSHA_MSDS_ENUMERATION_MODE_IMMUTABLE: cannot change % to %',
+      OLD.enumeration_mode,
+      NEW.enumeration_mode
+      USING ERRCODE = '23001';
+  END IF;
+  RETURN NEW;
+END
+$fn$;
+
+COMMENT ON FUNCTION public.fn_kosha_msds_snapshot_enumeration_immutable() IS
+  'Fail-closed snapshot provenance. Blocks PROBE→FULL_OFFICIAL, PROBE→BOUNDED_SEARCH, BOUNDED_SEARCH→FULL_OFFICIAL, and any other enumeration_mode rewrite.';
+
+REVOKE ALL ON FUNCTION public.fn_kosha_msds_snapshot_enumeration_immutable() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.fn_kosha_msds_snapshot_enumeration_immutable() TO postgres, service_role;
+
+CREATE TRIGGER trg_kosha_msds_snapshot_enumeration_immutable
+BEFORE UPDATE ON public.kosha_msds_snapshots
+FOR EACH ROW
+EXECUTE FUNCTION public.fn_kosha_msds_snapshot_enumeration_immutable();
+
+ALTER TABLE public.kosha_msds_snapshots
+  ENABLE ALWAYS TRIGGER trg_kosha_msds_snapshot_enumeration_immutable;
+
 CREATE TABLE IF NOT EXISTS public.kosha_msds_snapshot_items (
   snapshot_id uuid NOT NULL REFERENCES public.kosha_msds_snapshots(id),
   chemical_id uuid NOT NULL REFERENCES public.kosha_msds_chemicals(id),
-  source_key text NOT NULL,
   source_content_hash text,
   identity_status text NOT NULL CHECK (identity_status IN ('READY', 'HOLD')),
   detail_status text NOT NULL CHECK (detail_status IN ('COMPLETE', 'INCOMPLETE', 'EMPTY_BUT_VALID')),
@@ -114,10 +142,9 @@ CREATE TABLE IF NOT EXISTS public.kosha_msds_snapshot_items (
 );
 
 COMMENT ON TABLE public.kosha_msds_snapshot_items IS
-  'Membership of a KOSHA MSDS snapshot. Partial/PROBE membership is not global current.';
-
-CREATE INDEX IF NOT EXISTS kosha_msds_snapshot_items_source_key_idx
-  ON public.kosha_msds_snapshot_items (source_key);
+  'Membership of a KOSHA MSDS snapshot. Identity owner is chemical_id; source_key is obtained via JOIN to kosha_msds_chemicals. Partial/PROBE membership is not global current.';
+COMMENT ON COLUMN public.kosha_msds_snapshot_items.chemical_id IS
+  'Parent kosha_msds_chemicals.id. Duplicate source_key column is forbidden to prevent identity drift.';
 
 ALTER TABLE public.kosha_msds_chemicals ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.kosha_msds_sections ENABLE ROW LEVEL SECURITY;
