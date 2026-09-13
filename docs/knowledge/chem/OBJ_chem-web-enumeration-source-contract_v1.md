@@ -12,7 +12,7 @@ owner: taiwang
 # CHEM-ENUM-GATE-01 — KOSHA Web Enumeration Source Contract & Rights Gate
 
 ```text
-CHEM-ENUM-GATE-01 = IN_PROGRESS (GPT review before merge)
+CHEM-ENUM-GATE-01 = IN_PROGRESS (PATCH-1 on PR #348, not merged)
 CHEM-01 = CLOSED / PASS_WITH_INGEST_GATE
 CHEM-02 = DONE / CLOSED
 CHEM-03 = CLOSED / CONDITIONAL
@@ -44,7 +44,13 @@ CHEM impact =
 NO
 branch =
 research/chem-enum-gate-01
+PR =
+#348
+PATCH-1 parent =
+369a84ee3ed8b1a240166630972a1e0f9f53f3e6
 ```
+
+PATCH-1 (GPT review CHG_REQUIRED): R1 OpenAPI collect/store/process = **CLEAR**. R2–R4 and `WEB_ENUMERATION_GATE` remain CONDITIONAL. Inquiry no longer asks OpenAPI storage rights.
 
 ---
 
@@ -55,7 +61,7 @@ OFFICIAL GUIDE getChemList searchWrd required = YES
 OFFICIAL GUIDE getChemList searchCnd required = YES
 documented ALL mode                           = NO
 documented bulk/index                         = NO
-R1 OPENAPI DATA RIGHTS                        = CONDITIONAL
+R1 OPENAPI DATA RIGHTS                        = CLEAR
 R2 WEBSITE MACHINE ACCESS                     = CONDITIONAL
 R3 IDENTITY METADATA REUSE                    = CONDITIONAL
 R4 MSDS CONTENT REPUBLICATION                 = CONDITIONAL (not approval target)
@@ -160,7 +166,18 @@ data.go.kr OpenAPI 이용허락
 KOSHA 웹사이트 HTML 전체의 자동수집 허가
 ```
 
-공공데이터포털 이용정책(`ugs/selectPortalPolicyView.do`)은 공공누리 제0유형(자유이용, 상업적 가능) 등을 설명한다. dataset `15157612` 표시는 **「이용허락범위 제한 없음」**이다. 이 라벨을 제0유형과 동일하다고 **이 Gate에서 단정하지 않는다.** 포털 FAQ는 「공공데이터의 제공 및 이용 활성화에 관한 법률」 시행으로 **공공데이터의 상업적 활용이 가능**하다고 안내한다. 그 안내는 **공표된 공공데이터(여기선 OpenAPI 15157612)**에 대한 것이지, `chemList.do` HTML 크롤 허가로 확장하지 않는다.
+공공데이터포털은 공공데이터 제공을 기계판독 가능한 형태로 접근 가능하게 하는 것으로 정의하고, 저작물이 포함된 공공데이터는 제공기관이 이용허락 범위를 표시하도록 규정한다. dataset `15157612`의 공식 표시는 **비용 무료 / 이용허락범위 제한 없음**이다. 이 Gate는 그 표시를 **OpenAPI 응답의 수집·저장·처리(R1)**에 대한 CLEAR로 읽는다. 공공누리 제0유형과 문자열 동일인지는 **단정하지 않으며**, R1 CLEAR의 필요조건으로 두지 않는다.
+
+KOSHA/dataset의 「참고용」 문구는 **이용권 제한이 아니라 데이터의 법적 역할·신뢰 범위 제한**이다. 포털도 참고용이라고 밝히면서 동시에 이용허락범위는 제한 없음으로 표시한다.
+
+```text
+OPENAPI 이용권                              = CLEAR
+법적 MSDS 원본 대체                         = NO
+Legal Engine 판단근거 자동승격              = NO
+KOSHA 웹 HTML 자동수집 권한                 = 별개 / CONDITIONAL
+```
+
+포털 안내는 **공표된 공공데이터(여기선 OpenAPI 15157612)**에 대한 것이지, `chemList.do` HTML 크롤 허가로 확장하지 않는다.
 
 ---
 
@@ -246,23 +263,38 @@ CHEM-01 already has `chemId=001008` (leading zeros), CAS-null `047134`, exact CA
 
 Inference-only `CLEAR` is forbidden. Each verdict cites official text.
 
-### R1 OPENAPI DATA RIGHTS = CONDITIONAL
+### R1 OPENAPI DATA RIGHTS = CLEAR
 
 Question: may TAI collect / store / process `getChemList` and `getChemDetail01-16` responses?
 
-Official for:
+```text
+R1 scope (CLEAR) =
+getChemList / getChemDetail01~16
+공식 OpenAPI 응답의
+수집
+저장
+처리
+TAI 내부 reference catalog 활용
+```
 
-- Dataset `15157612` is published as OpenAPI for 「목록 및 내용」.
-- 이용허락범위 **제한 없음**, 비용 **무료**.
+Official source:
+
+- Dataset `15157612` official delivery channel = data.go.kr OpenAPI.
+- Catalog/portal label: 비용 **무료**, 이용허락범위 **제한 없음**.
 - KOSHA 사이트가 Open API 활용신청을 공공데이터포털로 안내.
-- 공공데이터법 체계에서 공표 공공데이터의 상업적 활용이 가능하다고 포털이 안내.
+- 공공데이터포털 정책: 공공데이터는 기계판독 가능한 형태로 접근 가능하게 제공하고, 저작물이 포함된 경우 제공기관이 이용허락 범위를 표시.
 
-Official against treating it as unlimited SaaS MSDS:
+Not included in R1 CLEAR:
 
-- 같은 dataset description: 「공단에서 제공하는 화학물질정보는 MSDS 작성과 검토 시 참고용으로만」.
-- 웹 MSDS검색 고지: 상업적·외부 용도 시 저작권법 위배될 수 있음 (웹 고지이며 OpenAPI 페이지 문장은 아님. 자동 동일시 금지이나 **병행 고지**는 남음).
+```text
+KOSHA web HTML crawling
+MSDS 법적 원본 대체
+제조·수입자 MSDS 대체
+Legal Engine verdict 자동승격
+웹사이트 저작물 재게시 권리
+```
 
-Not `CLEAR`. Not `BLOCKED` (OpenAPI is the designated paid-free public dataset). CHEM-01 role freeze (`PUBLIC/REFERENCE`, not Legal Engine / not workplace MSDS substitute) remains required if R1 is later used.
+「참고용」은 R1을 CONDITIONAL로 되돌리지 않는다. 그것은 이용권 제한이 아니라 **법적 역할·신뢰 범위**다. CHEM-01 `PUBLIC / REFERENCE` 역할 경계는 그대로 유지한다.
 
 ### R2 WEBSITE MACHINE ACCESS = CONDITIONAL
 
@@ -300,9 +332,12 @@ source: `msdssearchMsds.do`. This Gate **does not approve** republication of MSD
 ```text
 WEB_ENUMERATION_GATE = CONDITIONAL
 method candidate     = KOSHA_OFFICIAL_WEB_IDENTITY_LIST
+R1                   = CLEAR
 R2                   = CONDITIONAL
 R3                   = CONDITIONAL
 full crawl           = NO
+FULL_OFFICIAL        = BLOCKED
+reason               = R1 is settled; R2 + R3 are not CLEAR
 ```
 
 Acceptance for FULL identity enumerator (A–J):
@@ -328,10 +363,10 @@ Because B and C are not CLEAR, **FULL_OFFICIAL enumeration PASS is forbidden.** 
 
 ```text
 1. Does KOSHA allow automated chemId harvest from chemList.do for system-to-system seed/re-enum?
-2. Allowed request interval / traffic if yes.
+2. Allowed web request interval / traffic if yes.
 3. Separate official bulk/index still NOT_FOUND (CHEM-03).
-4. Mapping of portal 「이용허락범위 제한 없음」 to 공공누리 제0유형 = not asserted here.
-5. Whether website MSDS copyright warning applies to OpenAPI-stored reference catalog display.
+4. Mapping of portal 「이용허락범위 제한 없음」 to 공공누리 제0유형 = not asserted; not required for R1 CLEAR.
+5. OpenAPI collect/store/process (R1) is CLEAR. Remaining copyright/republication question is R4, not R1.
 6. Production quota approval = still PENDING_OWNER_ACTION (out of this WO).
 ```
 
@@ -340,25 +375,19 @@ Because B and C are not CLEAR, **FULL_OFFICIAL enumeration PASS is forbidden.** 
 ## 11. Inquiry draft — do not send
 
 수신: 한국산업안전보건공단 디지털계획부 / 시스템 이용 042-869-0319, OpenAPI 1566-0025  
-데이터: 15157612 OpenAPI 및 `MSDSInfo/mgr/hub/chemList.do`
+대상 화면: `MSDSInfo/mgr/hub/chemList.do`
 
-목적 (좁게):
+목적 (좁게): 웹 목록 metadata의 **chemId identity enumeration** 허용 여부만 확인.
 
-```text
-KOSHA 화학물질정보 사이트의 MSDS 전체 목록 페이지에서 제공되는
-chemId / 물질명 / CAS No. 등의 목록 metadata를
-TAI Safe가 시스템 간 연계를 위한 OpenAPI 조회 식별자 목록으로
-자동 수집하여 사용하는 것이 허용되는지 확인 요청
-```
-
-**MSDS 본문 재배포 허가 요청과 섞지 않음.**
+**묻지 않음:** OpenAPI `getChemList` / `getChemDetail01~16` 응답의 일반적인 수집·저장·처리 가능 여부 (R1 = CLEAR).  
+**섞지 않음:** MSDS 본문 재배포 허가 요청.
 
 ```text
-1. chemList.do 목록의 chemId 자동열거 허용 여부
-2. 최초 약 2만 건 identity seed 목적의 사용 가능 여부
-3. 정기 변경감지 목적 재열거 가능 여부
-4. 허용되는 호출 간격/traffic 기준
-5. 별도의 bulk/index 제공 방식 존재 여부
+1. chemList.do HTML에서 chemId 자동열거 허용 여부
+2. 최초 약 2만건 identity seed 목적의 machine access 허용 여부
+3. 정기적인 identity 재열거 허용 여부
+4. 허용되는 웹 요청 빈도/traffic
+5. 별도의 공식 bulk/index 제공 가능 여부
 ```
 
 `inquiry sent = NO`
@@ -411,6 +440,8 @@ python3 -m pytest tests/test_kosha_msds_catalog.py -q --tb=line
 ```text
 WEB_ENUMERATION_GATE = CONDITIONAL
 FULL_OFFICIAL        = BLOCKED
-next Owner action    = send or refuse the inquiry draft
+R1                   = CLEAR
+remaining blocker    = R2 + R3 (web chemId harvest), not OpenAPI storage
+next Owner action    = send or refuse the narrowed inquiry draft
 CHEM-04              = NOT OPENED until this Gate is PASS
 ```
