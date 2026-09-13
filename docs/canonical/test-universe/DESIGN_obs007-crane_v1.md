@@ -1,5 +1,5 @@
 ---
-wo: WO-E2E-OBS007-CRANE-DESIGN-PATCH2
+wo: WO-E2E-OBS007-CRANE-DESIGN-FREEZE-001
 class: plans
 type: design
 scope: canonical
@@ -12,27 +12,29 @@ owner: taiwang
 
 # DESIGN — Obs-007 object crane
 
-WO = `WO-E2E-OBS007-CRANE-DESIGN-PATCH2`
+WO = `WO-E2E-OBS007-CRANE-DESIGN-FREEZE-001`
 
 PR = `#343`
-PATCH of `WO-E2E-OBS007-CRANE-DESIGN-PATCH1` (GPT re-verify PASS)
-CURRENT_HEAD_BEFORE = `41b3bdb1c5abdc05ad6bc60733a2fa521a0d7453`
+PATCH of `WO-E2E-OBS007-CRANE-DESIGN-PATCH2` (GPT re-verify PASS)
+EXPECTED_HEAD_BEFORE = `602bece3f5cb713c15fbef5415f1a2bcd788c5bd`
 
-DESIGN FINAL PENDING GPT. Implementation = BLOCKED. Production mutation = 0. E2E rerun = 0.
+STATUS CLOSEOUT ONLY. Design content unchanged. Implementation = BLOCKED_UNTIL_DESIGN_PR_MERGE. Production mutation = 0. E2E rerun = 0.
 
 OBJECT = `crane`
 CANONICAL_INPUT = `has_crane`
 
 ```text
-CHG_REQUIRED = 유지
-DESIGN_VERDICT = PATCH2_COMPLETE_PENDING_GPT
-IMPLEMENTATION = BLOCKED
-STATUS = DESIGN_FINAL_PENDING_GPT
-DESIGN_FROZEN = NO
-IMPLEMENTATION_APPROVED = NO
+GPT_FINAL_DESIGN_VERDICT = PASS
+CHG_REQUIRED = YES
+
+DESIGN_STATUS = DESIGN_FROZEN
+DESIGN_FROZEN = YES
+
+IMPLEMENTATION_APPROVED = PENDING_MERGE
+IMPLEMENTATION = BLOCKED_UNTIL_DESIGN_PR_MERGE
 ```
 
-GPT independent legal verification is still required. This document does not mutate LEG, API, UI, fixtures, or Sidecar.
+GPT_FINAL_DESIGN_VERDICT = PASS. Design content is frozen. This document does not mutate LEG, API, UI, fixtures, or Sidecar.
 
 ## 0. PATCH-1 delta (what changed vs HEAD 6065dc8b)
 
@@ -583,4 +585,4 @@ KEEP GENERIC_OK atoms do not remap `mapped_field`.
 5. Construction AFTER sent `has_crane` not `has_tower_crane`; do not infer.
 6. `applicability=APPLICABLE` vs `check_result=NOT_APPLICABLE` on 684 rows: deferred Observation.
 
-GPT Freeze 판정 전까지 `DESIGN_FROZEN` / `IMPLEMENTATION_APPROVED` 를 쓰지 않는다.
+GPT Freeze 판정 PASS. DESIGN_FROZEN = YES. IMPLEMENTATION_APPROVED = PENDING_MERGE. PR #343 merge is not part of this WO.
