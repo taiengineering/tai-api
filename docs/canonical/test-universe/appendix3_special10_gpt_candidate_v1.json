@@ -1,0 +1,204 @@
+{
+  "wo": "WO-E2E-OBS007-SPECIAL10-APPENDIX3-AUTHORITY-FREEZE-001",
+  "pr": 349,
+  "based_on_review_pack": "docs/canonical/test-universe/appendix3_special10_review_pack_v1.json",
+  "review_pack_commit": "80a14fe633de99dc6a58d1b85ba44e058cca75bb",
+  "status": "APPROVED_FOR_AUTHORITY_FREEZE",
+  "authority_type": "OWNER_APPROVED_E2E_FIXTURE_FACT_CANDIDATE",
+  "production_derivation_rule": "NONE",
+  "ksic_mapping": false,
+  "frozen112_mutation": 0,
+  "frozen_profile_sha256": "4818a63ab261c5a36c1432647b6b17e7636641071801d36fd1b85d1361af751b",
+  "profile_count": 10,
+  "gpt_classifiable": 7,
+  "owner_resolved": 3,
+  "not_judgable": 0,
+  "total_resolved": 10,
+  "note": "Synthetic E2E fixture candidate classification for these 10 Frozen SPECIAL_FACILITY profile IDs only. Not a production KSIC/sector/facility_type mapping rule. Owner fact resolution applies only to PF-0038, PF-0107, PF-0112.",
+  "owner_synthetic_fixture_fact": {
+    "profile_ids": [
+      "PF-0038",
+      "PF-0107",
+      "PF-0112"
+    ],
+    "defined_as": "데이터센터를 “통신업을 영위하는 데이터센터 사업장”으로 정의",
+    "appendix3_item_no": 36,
+    "catalog_label_ref": "우편 및 통신업",
+    "not_a_general_rule": true,
+    "must_not_generalize": [
+      "데이터센터 -> 36호",
+      "facility_type -> 36호",
+      "sector mapping",
+      "KSIC mapping",
+      "runtime inference"
+    ]
+  },
+  "profiles": [
+    {
+      "profile_id": "PF-0037",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 39,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "APPROVED",
+      "review_input": {
+        "industry": "연구소"
+      },
+      "catalog_label_ref": "연구개발업"
+    },
+    {
+      "profile_id": "PF-0038",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 36,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "OWNER_FACT_RESOLVED",
+      "decision_basis": "OWNER_DEFINED_SYNTHETIC_BUSINESS_CHARACTER",
+      "owner_approval": "APPROVED",
+      "owner_defined_business": "통신업을 영위하는 데이터센터 사업장",
+      "historical_unresolved_group": "DATA_CENTER",
+      "review_input": {
+        "industry": "데이터센터"
+      },
+      "catalog_label_ref": "우편 및 통신업"
+    },
+    {
+      "profile_id": "PF-0039",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 26,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "APPROVED",
+      "review_input": {
+        "industry": "발전시설"
+      },
+      "catalog_label_ref": "발전업"
+    },
+    {
+      "profile_id": "PF-0106",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 39,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "APPROVED",
+      "review_input": {
+        "industry": "연구소"
+      },
+      "catalog_label_ref": "연구개발업"
+    },
+    {
+      "profile_id": "PF-0107",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 36,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "OWNER_FACT_RESOLVED",
+      "decision_basis": "OWNER_DEFINED_SYNTHETIC_BUSINESS_CHARACTER",
+      "owner_approval": "APPROVED",
+      "owner_defined_business": "통신업을 영위하는 데이터센터 사업장",
+      "historical_unresolved_group": "DATA_CENTER",
+      "review_input": {
+        "industry": "데이터센터"
+      },
+      "catalog_label_ref": "우편 및 통신업"
+    },
+    {
+      "profile_id": "PF-0108",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 26,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "APPROVED",
+      "review_input": {
+        "industry": "발전시설"
+      },
+      "catalog_label_ref": "발전업"
+    },
+    {
+      "profile_id": "PF-0109",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 31,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "APPROVED",
+      "review_input": {
+        "industry": "정수장"
+      },
+      "catalog_label_ref": "수도, 하수 및 폐기물 처리, 원료 재생업(제23호 및 제24호에 해당하는 사업은 제외한다)"
+    },
+    {
+      "profile_id": "PF-0110",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 39,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "APPROVED",
+      "review_input": {
+        "industry": "연구소"
+      },
+      "catalog_label_ref": "연구개발업"
+    },
+    {
+      "profile_id": "PF-0111",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 26,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "CLASSIFIABLE",
+      "decision_basis": "GPT_SYNTHETIC_FIXTURE_REVIEW",
+      "owner_approval": "APPROVED",
+      "review_input": {
+        "industry": "발전시설"
+      },
+      "catalog_label_ref": "발전업"
+    },
+    {
+      "profile_id": "PF-0112",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "gpt_candidate": {
+        "appendix3_item_no": 36,
+        "is_real_estate_management": null
+      },
+      "gpt_status": "OWNER_FACT_RESOLVED",
+      "decision_basis": "OWNER_DEFINED_SYNTHETIC_BUSINESS_CHARACTER",
+      "owner_approval": "APPROVED",
+      "owner_defined_business": "통신업을 영위하는 데이터센터 사업장",
+      "historical_unresolved_group": "DATA_CENTER",
+      "review_input": {
+        "industry": "데이터센터"
+      },
+      "catalog_label_ref": "우편 및 통신업"
+    }
+  ]
+}
