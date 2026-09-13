@@ -46,6 +46,15 @@ SQL = os.path.abspath(
         "20260913_csi_accident_catalog.sql",
     )
 )
+HARDENING_SQL = os.path.abspath(
+    os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "supabase",
+        "migrations",
+        "20260913_csi_accident_privilege_hardening.sql",
+    )
+)
 OFFICIAL_CSV = "/tmp/csi-01/dataset.bin"
 
 
@@ -540,3 +549,79 @@ def test_c32_no_drop_or_truncate():
     assert "drop table" not in n
     assert "truncate" not in n
     assert "drop view" not in n
+
+
+def _hardening():
+    return pathlib.Path(HARDENING_SQL).read_text(encoding="utf-8")
+
+
+def _hardening_norm():
+    return re.sub(r"\s+", " ", _hardening()).lower()
+
+
+def test_c33_public_table_privileges_explicit_revoke():
+    n = _hardening_norm()
+    for table in (
+        "public.csi_accident_cases",
+        "public.csi_accident_snapshots",
+        "public.csi_accident_snapshot_items",
+    ):
+        assert f"revoke all on {table} from public" in n
+
+
+def test_c34_anon_authenticated_table_privileges_revoke():
+    n = _hardening_norm()
+    for table in (
+        "public.csi_accident_cases",
+        "public.csi_accident_snapshots",
+        "public.csi_accident_snapshot_items",
+    ):
+        assert f"revoke all on {table} from anon" in n
+        assert f"revoke all on {table} from authenticated" in n
+
+
+def test_c35_service_role_dangerous_table_privileges_revoke():
+    n = _hardening_norm()
+    for table in (
+        "public.csi_accident_cases",
+        "public.csi_accident_snapshots",
+        "public.csi_accident_snapshot_items",
+    ):
+        assert f"grant select, insert, update on {table} to service_role" in n
+        assert f"revoke delete, truncate, references, trigger on {table} from service_role" in n
+
+
+def test_c36_current_view_public_anon_authenticated_revoke():
+    n = _hardening_norm()
+    assert "revoke all on public.csi_accident_current from public" in n
+    assert "revoke all on public.csi_accident_current from anon" in n
+    assert "revoke all on public.csi_accident_current from authenticated" in n
+
+
+def test_c37_current_view_service_role_select_only():
+    n = _hardening_norm()
+    assert "grant select on public.csi_accident_current to service_role" in n
+    grants = [
+        ln.strip().lower()
+        for ln in _hardening().splitlines()
+        if ln.strip().lower().startswith("grant ") and "csi_accident_current" in ln.lower()
+    ]
+    assert grants == ["grant select on public.csi_accident_current to service_role;"]
+    assert "revoke insert, update, delete, truncate, references, trigger on public.csi_accident_current from service_role" in n
+
+
+def test_c38_hardening_migration_no_destructive_execution():
+    sql = _hardening()
+    n = re.sub(r"\s+", " ", sql).lower()
+    assert "drop table" not in n
+    assert "drop view" not in n
+    non_revoke = "\n".join(
+        ln
+        for ln in sql.splitlines()
+        if not ln.strip().lower().startswith(("revoke ", "grant ", "--"))
+        and ln.strip()
+    ).lower()
+    assert "truncate" not in non_revoke
+    assert "delete from" not in non_revoke
+    assert "insert into" not in non_revoke
+    assert re.search(r"\bupdate\s+public\.", non_revoke) is None
