@@ -1,0 +1,648 @@
+{
+  "artifact_type": "appendix3_fixture_authority_review_pack",
+  "wo": "WO-E2E-OBS007-SPECIAL10-APPENDIX3-REVISE-STAGE-A-001",
+  "status": "PENDING_GPT_REVIEW",
+  "authority": false,
+  "profile_source": "~/45cm-test/profile_universe_v1.json",
+  "frozen_profile_sha256": "4818a63ab261c5a36c1432647b6b17e7636641071801d36fd1b85d1361af751b",
+  "frozen_profile_count": 112,
+  "profile_count": 10,
+  "reason": "SPECIAL_FACILITY projects to Official request sector BUILDING",
+  "production_derivation": 0,
+  "ksic_mapping": false,
+  "legal_catalog": {
+    "path": "docs/canonical/legal-input/appendix3_items_v1.json",
+    "item_count": 49,
+    "item_range": "1..49",
+    "read_only": true,
+    "ksic_mapping": false,
+    "note": "Catalog labels are a read-only reference list. This pack does not map profiles to item_no.",
+    "items": [
+      {
+        "item_no": 1,
+        "label": "토사석 광업"
+      },
+      {
+        "item_no": 2,
+        "label": "식료품 제조업, 음료 제조업"
+      },
+      {
+        "item_no": 3,
+        "label": "섬유제품 제조업; 의복 제외"
+      },
+      {
+        "item_no": 4,
+        "label": "목재 및 나무제품 제조업; 가구 제외"
+      },
+      {
+        "item_no": 5,
+        "label": "펄프, 종이 및 종이제품 제조업"
+      },
+      {
+        "item_no": 6,
+        "label": "코크스, 연탄 및 석유정제품 제조업"
+      },
+      {
+        "item_no": 7,
+        "label": "화학물질 및 화학제품 제조업; 의약품 제외"
+      },
+      {
+        "item_no": 8,
+        "label": "의료용 물질 및 의약품 제조업"
+      },
+      {
+        "item_no": 9,
+        "label": "고무 및 플라스틱제품 제조업"
+      },
+      {
+        "item_no": 10,
+        "label": "비금속 광물제품 제조업"
+      },
+      {
+        "item_no": 11,
+        "label": "1차 금속 제조업"
+      },
+      {
+        "item_no": 12,
+        "label": "금속가공제품 제조업; 기계 및 가구 제외"
+      },
+      {
+        "item_no": 13,
+        "label": "전자부품, 컴퓨터, 영상, 음향 및 통신장비 제조업"
+      },
+      {
+        "item_no": 14,
+        "label": "의료, 정밀, 광학기기 및 시계 제조업"
+      },
+      {
+        "item_no": 15,
+        "label": "전기장비 제조업"
+      },
+      {
+        "item_no": 16,
+        "label": "기타 기계 및 장비 제조업"
+      },
+      {
+        "item_no": 17,
+        "label": "자동차 및 트레일러 제조업"
+      },
+      {
+        "item_no": 18,
+        "label": "기타 운송장비 제조업"
+      },
+      {
+        "item_no": 19,
+        "label": "가구 제조업"
+      },
+      {
+        "item_no": 20,
+        "label": "기타 제품 제조업"
+      },
+      {
+        "item_no": 21,
+        "label": "산업용 기계 및 장비 수리업"
+      },
+      {
+        "item_no": 22,
+        "label": "서적, 잡지 및 기타 인쇄물 출판업"
+      },
+      {
+        "item_no": 23,
+        "label": "폐기물 수집, 운반, 처리 및 원료 재생업"
+      },
+      {
+        "item_no": 24,
+        "label": "환경 정화 및 복원업"
+      },
+      {
+        "item_no": 25,
+        "label": "자동차 종합 수리업, 자동차 전문 수리업"
+      },
+      {
+        "item_no": 26,
+        "label": "발전업"
+      },
+      {
+        "item_no": 27,
+        "label": "운수 및 창고업"
+      },
+      {
+        "item_no": 28,
+        "label": "농업, 임업 및 어업"
+      },
+      {
+        "item_no": 29,
+        "label": "제2호부터 제21호까지의 사업을 제외한 제조업"
+      },
+      {
+        "item_no": 30,
+        "label": "전기, 가스, 증기 및 공기조절 공급업(발전업은 제외한다)"
+      },
+      {
+        "item_no": 31,
+        "label": "수도, 하수 및 폐기물 처리, 원료 재생업(제23호 및 제24호에 해당하는 사업은 제외한다)"
+      },
+      {
+        "item_no": 32,
+        "label": "도매 및 소매업"
+      },
+      {
+        "item_no": 33,
+        "label": "숙박 및 음식점업"
+      },
+      {
+        "item_no": 34,
+        "label": "영상ㆍ오디오 기록물 제작 및 배급업"
+      },
+      {
+        "item_no": 35,
+        "label": "라디오 방송업 및 텔레비전 방송업"
+      },
+      {
+        "item_no": 36,
+        "label": "우편 및 통신업"
+      },
+      {
+        "item_no": 37,
+        "label": "부동산업"
+      },
+      {
+        "item_no": 38,
+        "label": "임대업; 부동산 제외"
+      },
+      {
+        "item_no": 39,
+        "label": "연구개발업"
+      },
+      {
+        "item_no": 40,
+        "label": "사진처리업"
+      },
+      {
+        "item_no": 41,
+        "label": "사업시설 관리 및 조경 서비스업"
+      },
+      {
+        "item_no": 42,
+        "label": "청소년 수련시설 운영업"
+      },
+      {
+        "item_no": 43,
+        "label": "보건업"
+      },
+      {
+        "item_no": 44,
+        "label": "예술, 스포츠 및 여가 관련 서비스업"
+      },
+      {
+        "item_no": 45,
+        "label": "개인 및 소비용품수리업(제25호에 해당하는 사업은 제외한다)"
+      },
+      {
+        "item_no": 46,
+        "label": "기타 개인 서비스업"
+      },
+      {
+        "item_no": 47,
+        "label": "공공행정(청소, 시설관리, 조리 등 현업업무에 종사하는 사람으로서 고용노동부장관이 정하여 고시하는 사람으로 한정한다)"
+      },
+      {
+        "item_no": 48,
+        "label": "교육서비스업 중 초등ㆍ중등ㆍ고등 교육기관, 특수학교ㆍ외국인학교 및 대안학교(청소, 시설관리, 조리 등 현업업무에 종사하는 사람으로서 고용노동부장관이 정하여 고시하는 사람으로 한정한다)"
+      },
+      {
+        "item_no": 49,
+        "label": "건설업"
+      }
+    ]
+  },
+  "approved_75_authority": {
+    "path": "docs/canonical/test-universe/appendix3_explicit_classification_authority_v1.json",
+    "delta": 0,
+    "note": "Stage A does not modify approved MFG+BUILDING 75 rows."
+  },
+  "rows": [
+    {
+      "profile_id": "PF-0037",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "raw_facts": {
+        "company": {
+          "name": "[연구소]시설037",
+          "industry": "연구소",
+          "ksic_major": "",
+          "ksic_name": "",
+          "region": "서울",
+          "workers": 50,
+          "worker_count": 50,
+          "scale": "medium"
+        },
+        "building": {
+          "facility_type": "특수연구시설",
+          "total_floor_area": 15000.0,
+          "floor_area": 15000.0
+        },
+        "facility": [
+          {
+            "code": "has_high_pressure_gas",
+            "value": true
+          },
+          {
+            "code": "has_chemical_substance",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "화학물질취급",
+          "전기작업"
+        ],
+        "boundary": false
+      },
+      "appendix3_item_no": null,
+      "is_real_estate_management": null,
+      "judgment": "PENDING_GPT_REVIEW"
+    },
+    {
+      "profile_id": "PF-0038",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "raw_facts": {
+        "company": {
+          "name": "[데이터센터]시설038",
+          "industry": "데이터센터",
+          "ksic_major": "",
+          "ksic_name": "",
+          "region": "경기",
+          "workers": 300,
+          "worker_count": 300,
+          "scale": "large"
+        },
+        "building": {
+          "facility_type": "특수정보시설",
+          "total_floor_area": 60000.0,
+          "floor_area": 60000.0
+        },
+        "facility": [
+          {
+            "code": "has_emergency_gen",
+            "value": true
+          },
+          {
+            "code": "has_high_pressure_gas",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "전기작업",
+          "유지보수"
+        ],
+        "boundary": false
+      },
+      "appendix3_item_no": null,
+      "is_real_estate_management": null,
+      "judgment": "PENDING_GPT_REVIEW"
+    },
+    {
+      "profile_id": "PF-0039",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "raw_facts": {
+        "company": {
+          "name": "[발전시설]시설039",
+          "industry": "발전시설",
+          "ksic_major": "",
+          "ksic_name": "",
+          "region": "인천",
+          "workers": 300,
+          "worker_count": 300,
+          "scale": "large"
+        },
+        "building": {
+          "facility_type": "특수에너지시설",
+          "total_floor_area": 60000.0,
+          "floor_area": 60000.0
+        },
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_pressure_vessel",
+            "value": true
+          },
+          {
+            "code": "has_high_pressure_gas",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "용접",
+          "밀폐공간"
+        ],
+        "boundary": false
+      },
+      "appendix3_item_no": null,
+      "is_real_estate_management": null,
+      "judgment": "PENDING_GPT_REVIEW"
+    },
+    {
+      "profile_id": "PF-0106",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "raw_facts": {
+        "company": {
+          "name": "[연구소]시설110",
+          "industry": "연구소",
+          "ksic_major": "",
+          "ksic_name": "",
+          "region": "경기",
+          "workers": 300,
+          "worker_count": 300,
+          "scale": "large"
+        },
+        "building": {
+          "facility_type": "특수연구시설",
+          "total_floor_area": 60000.0,
+          "floor_area": 60000.0
+        },
+        "facility": [
+          {
+            "code": "has_high_pressure_gas",
+            "value": true
+          },
+          {
+            "code": "has_chemical_substance",
+            "value": true
+          },
+          {
+            "code": "has_boiler",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "화학물질취급",
+          "전기작업",
+          "밀폐공간"
+        ],
+        "boundary": false
+      },
+      "appendix3_item_no": null,
+      "is_real_estate_management": null,
+      "judgment": "PENDING_GPT_REVIEW"
+    },
+    {
+      "profile_id": "PF-0107",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "raw_facts": {
+        "company": {
+          "name": "[데이터센터]시설111",
+          "industry": "데이터센터",
+          "ksic_major": "",
+          "ksic_name": "",
+          "region": "인천",
+          "workers": 50,
+          "worker_count": 50,
+          "scale": "medium"
+        },
+        "building": {
+          "facility_type": "특수정보시설",
+          "total_floor_area": 15000.0,
+          "floor_area": 15000.0
+        },
+        "facility": [
+          {
+            "code": "has_emergency_gen",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "전기작업"
+        ],
+        "boundary": false
+      },
+      "appendix3_item_no": null,
+      "is_real_estate_management": null,
+      "judgment": "PENDING_GPT_REVIEW"
+    },
+    {
+      "profile_id": "PF-0108",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "raw_facts": {
+        "company": {
+          "name": "[발전시설]시설112",
+          "industry": "발전시설",
+          "ksic_major": "",
+          "ksic_name": "",
+          "region": "부산",
+          "workers": 300,
+          "worker_count": 300,
+          "scale": "large"
+        },
+        "building": {
+          "facility_type": "특수에너지시설",
+          "total_floor_area": 60000.0,
+          "floor_area": 60000.0
+        },
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_pressure_vessel",
+            "value": true
+          },
+          {
+            "code": "has_high_pressure_gas",
+            "value": true
+          },
+          {
+            "code": "has_crane",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "용접",
+          "밀폐공간",
+          "고소작업"
+        ],
+        "boundary": false
+      },
+      "appendix3_item_no": null,
+      "is_real_estate_management": null,
+      "judgment": "PENDING_GPT_REVIEW"
+    },
+    {
+      "profile_id": "PF-0109",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "raw_facts": {
+        "company": {
+          "name": "[정수장]시설113",
+          "industry": "정수장",
+          "ksic_major": "",
+          "ksic_name": "",
+          "region": "울산",
+          "workers": 50,
+          "worker_count": 50,
+          "scale": "medium"
+        },
+        "building": {
+          "facility_type": "특수환경시설",
+          "total_floor_area": 15000.0,
+          "floor_area": 15000.0
+        },
+        "facility": [
+          {
+            "code": "has_pressure_vessel",
+            "value": true
+          },
+          {
+            "code": "has_chemical_substance",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "화학물질취급",
+          "유지보수"
+        ],
+        "boundary": false
+      },
+      "appendix3_item_no": null,
+      "is_real_estate_management": null,
+      "judgment": "PENDING_GPT_REVIEW"
+    },
+    {
+      "profile_id": "PF-0110",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "raw_facts": {
+        "company": {
+          "name": "[연구소]시설114",
+          "industry": "연구소",
+          "ksic_major": "",
+          "ksic_name": "",
+          "region": "경남",
+          "workers": 50,
+          "worker_count": 50,
+          "scale": "medium"
+        },
+        "building": {
+          "facility_type": "특수연구시설",
+          "total_floor_area": 15000.0,
+          "floor_area": 15000.0
+        },
+        "facility": [
+          {
+            "code": "has_chemical_substance",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "화학물질취급"
+        ],
+        "boundary": false
+      },
+      "appendix3_item_no": null,
+      "is_real_estate_management": null,
+      "judgment": "PENDING_GPT_REVIEW"
+    },
+    {
+      "profile_id": "PF-0111",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "raw_facts": {
+        "company": {
+          "name": "[발전시설]시설115",
+          "industry": "발전시설",
+          "ksic_major": "",
+          "ksic_name": "",
+          "region": "충남",
+          "workers": 50,
+          "worker_count": 50,
+          "scale": "medium"
+        },
+        "building": {
+          "facility_type": "특수에너지시설",
+          "total_floor_area": 15000.0,
+          "floor_area": 15000.0
+        },
+        "facility": [
+          {
+            "code": "has_boiler",
+            "value": true
+          },
+          {
+            "code": "has_pressure_vessel",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "용접",
+          "유지보수"
+        ],
+        "boundary": false
+      },
+      "appendix3_item_no": null,
+      "is_real_estate_management": null,
+      "judgment": "PENDING_GPT_REVIEW"
+    },
+    {
+      "profile_id": "PF-0112",
+      "source_sector": "SPECIAL_FACILITY",
+      "request_sector": "BUILDING",
+      "raw_facts": {
+        "company": {
+          "name": "[데이터센터]시설116",
+          "industry": "데이터센터",
+          "ksic_major": "",
+          "ksic_name": "",
+          "region": "전남",
+          "workers": 300,
+          "worker_count": 300,
+          "scale": "large"
+        },
+        "building": {
+          "facility_type": "특수정보시설",
+          "total_floor_area": 60000.0,
+          "floor_area": 60000.0
+        },
+        "facility": [
+          {
+            "code": "has_emergency_gen",
+            "value": true
+          },
+          {
+            "code": "has_high_pressure_gas",
+            "value": true
+          },
+          {
+            "code": "has_sprinkler",
+            "value": true
+          }
+        ],
+        "process": [],
+        "work": [
+          "전기작업",
+          "유지보수"
+        ],
+        "boundary": false
+      },
+      "appendix3_item_no": null,
+      "is_real_estate_management": null,
+      "judgment": "PENDING_GPT_REVIEW"
+    }
+  ]
+}

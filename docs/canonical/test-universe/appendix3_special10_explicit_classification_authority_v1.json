@@ -1,0 +1,103 @@
+{
+  "authority_type": "OWNER_APPROVED_E2E_FIXTURE_FACT",
+  "status": "APPROVED",
+  "version": 1,
+  "coverage": "SPECIAL10",
+  "frozen_profile_sha256": "4818a63ab261c5a36c1432647b6b17e7636641071801d36fd1b85d1361af751b",
+  "frozen_profile_count": 112,
+  "approved_candidate": "docs/canonical/test-universe/appendix3_special10_gpt_candidate_v1.json",
+  "approved_candidate_sha256": "9cb133e345227ab2fdfccf259f3829825fcd903c628a00774d816465561caaf9",
+  "production_derivation_rule": "NONE",
+  "raw_context_as_authority": false,
+  "ksic_mapping": false,
+  "gated_row_count": 10,
+  "source_sector": "SPECIAL_FACILITY",
+  "request_sector": "BUILDING",
+  "approved_75_authority": {
+    "path": "docs/canonical/test-universe/appendix3_explicit_classification_authority_v1.json",
+    "sha256": "06b31f56d9d5eb92fcdebc48716494634c5f0ed189ab1304b7b430a6c7d64f46",
+    "gated_row_count": 75,
+    "delta": 0
+  },
+  "approval": {
+    "wo": "WO-E2E-OBS007-SPECIAL10-APPENDIX3-AUTHORITY-FREEZE-001",
+    "pr": 349,
+    "stage_a_head": "80a14fe633de99dc6a58d1b85ba44e058cca75bb",
+    "gpt_classification_comment": "https://github.com/taiengineering/tai-api/pull/349#issuecomment-5657077068",
+    "owner_decision_comment": "https://github.com/taiengineering/tai-api/pull/349#issuecomment-5657083864",
+    "owner_final_snapshot_approval": "APPROVED",
+    "authority": "OWNER_APPROVED_E2E_FIXTURE_FACT",
+    "meaning": "Synthetic E2E fixture facts for these Frozen112 SPECIAL10 profile IDs only. Not a production derivation or mapping rule.",
+    "owner_final_snapshot_approval_comment": "https://github.com/taiengineering/tai-api/pull/349#issuecomment-5657188362",
+    "head_at_approval": "aa4613cee4162d5c9cbbb55a6ef6271cb67c3ead",
+    "receipt_wo": "WO-E2E-OBS007-SPECIAL10-APPENDIX3-OWNER-APPROVAL-RECEIPT-001"
+  },
+  "owner_synthetic_fixture_fact": {
+    "profile_ids": [
+      "PF-0038",
+      "PF-0107",
+      "PF-0112"
+    ],
+    "defined_as": "데이터센터를 “통신업을 영위하는 데이터센터 사업장”으로 정의",
+    "appendix3_item_no": 36,
+    "not_a_general_rule": true
+  },
+  "rows": [
+    {
+      "profile_id": "PF-0037",
+      "appendix3_item_no": 39
+    },
+    {
+      "profile_id": "PF-0038",
+      "appendix3_item_no": 36
+    },
+    {
+      "profile_id": "PF-0039",
+      "appendix3_item_no": 26
+    },
+    {
+      "profile_id": "PF-0106",
+      "appendix3_item_no": 39
+    },
+    {
+      "profile_id": "PF-0107",
+      "appendix3_item_no": 36
+    },
+    {
+      "profile_id": "PF-0108",
+      "appendix3_item_no": 26
+    },
+    {
+      "profile_id": "PF-0109",
+      "appendix3_item_no": 31
+    },
+    {
+      "profile_id": "PF-0110",
+      "appendix3_item_no": 39
+    },
+    {
+      "profile_id": "PF-0111",
+      "appendix3_item_no": 26
+    },
+    {
+      "profile_id": "PF-0112",
+      "appendix3_item_no": 36
+    }
+  ],
+  "authority_content": "FROZEN",
+  "governance_correction": {
+    "wo": "WO-E2E-OBS007-SPECIAL10-APPENDIX3-OWNER-FINAL-SNAPSHOT-APPROVAL-001",
+    "reason": "Premature owner_final_snapshot_approval=APPROVED corrected to PENDING before Owner Final Snapshot Approval",
+    "semantic_rows": "SAME",
+    "governance_metadata": "CORRECTED",
+    "previous_authority_sha256": "f5e86a97787b2d9d7eb400e7d53e6761b759176f99a02815b11f39fe5c373823"
+  },
+  "approval_receipt": {
+    "wo": "WO-E2E-OBS007-SPECIAL10-APPENDIX3-OWNER-APPROVAL-RECEIPT-001",
+    "pr": 349,
+    "head_at_approval": "aa4613cee4162d5c9cbbb55a6ef6271cb67c3ead",
+    "comment": "https://github.com/taiengineering/tai-api/pull/349#issuecomment-5657188362",
+    "semantic_rows": "SAME",
+    "pre_approval_authority_sha256": "2c64ae58efa6b53137faf231dfbff2d7b572996087dfe739e9447a354d172893"
+  }
+}
