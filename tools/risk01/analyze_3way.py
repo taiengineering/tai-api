@@ -8,7 +8,6 @@ import json
 import re
 import unicodedata
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -159,10 +158,6 @@ def letter_bucket(values: Counter) -> dict[str, int]:
             buckets["OTHER"] += n
             buckets[f"OTHER:{text}"] += n
     return dict(buckets)
-
-
-def iso_mtime(path: Path) -> str:
-    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
 
 
 def main() -> dict:
@@ -456,7 +451,6 @@ def main() -> dict:
             "filename": "cic_annex_works.txt",
             "note": "PDF bytes saved with .txt suffix; 법제처 건설사업정보운용지침 별표",
             "source_url": "https://www.calspia.go.kr/portal/intro/introStandard04.do",
-            "downloaded_at": iso_mtime(ROOT / "source_a/cic_annex_works.txt"),
             "bytes": (ROOT / "source_a/cic_annex_works.txt").stat().st_size,
             "SHA256": sha256_file(ROOT / "source_a/cic_annex_works.txt"),
             "row_count": len(a_nodes),
@@ -465,7 +459,6 @@ def main() -> dict:
             "filename": "kosha_construction_process.csv",
             "portal_filename": "한국산업안전보건공단_건설업 공종별 세부공정 목록_20210910",
             "source_url": "https://www.data.go.kr/data/15087828/fileData.do",
-            "downloaded_at": iso_mtime(ROOT / "source_b/kosha_construction_process.csv"),
             "bytes": b_stats["bytes"],
             "SHA256": b_stats["sha256"],
             "row_count": b_stats["parsed_rows"],
@@ -474,7 +467,6 @@ def main() -> dict:
             "filename": "kalis_risk_profile.csv",
             "portal_filename": "국토안전관리원_위험요소프로파일_20260814",
             "source_url": "https://www.data.go.kr/data/15090644/fileData.do",
-            "downloaded_at": iso_mtime(ROOT / "source_c/kalis_risk_profile.csv"),
             "bytes": c_stats["bytes"],
             "SHA256": c_stats["sha256"],
             "row_count": c_stats["parsed_rows"],
