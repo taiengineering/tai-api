@@ -208,6 +208,28 @@ _LEG_INPUT_FIELDS = (
     "building_elevator_installation_work", "building_elevator_assembly_work",
     "building_elevator_repair_work", "building_elevator_inspection_work",
     "building_elevator_dismantling_work",
+    # WO-E2E-OBS007-WELDING-MINIMUM-MODIFY-001: Frozen 2-layer welding Leaf.field exact-name.
+    # No alias from has_welding / has_gas / has_high_pressure_gas / has_confined_space /
+    # has_tunnel / construction_tunnel / has_tunnel_bridge. No 127kPa / copper-70 trigger.
+    # has_high_pressure_work is DEC-P4 이상기압/고압작업 exact reuse (Art542 parent, not welding child).
+    "uses_gases_for_welding_cutting_heating",
+    "handles_gas_cylinders_for_welding_cutting_heating",
+    "uses_acetylene_welding_equipment",
+    "installs_acetylene_generator",
+    "stores_unused_mobile_acetylene_welding_equipment",
+    "has_acetylene_welding_equipment",
+    "acetylene_generator_and_gas_cylinder_separated",
+    "pipes_gas_manifold_welding_equipment",
+    "has_dissolved_acetylene_gas_manifold_welding_equipment",
+    "uses_gas_manifold_welding_equipment",
+    "has_nonautomatic_arc_welding",
+    "has_nonautomatic_ac_arc_welder",
+    "welding_in_conductive_enclosed_place",
+    "welding_at_height_ge_2m_with_conductive_contact_risk",
+    "welding_in_wet_conductive_condition",
+    "has_tunnel_construction_work",
+    "performs_welding_cutting_heating_inside_tunnel",
+    "has_high_pressure_work",
     # WO-SM-CORE22-CONSTRUCTION-PREDICATE-EXPLICIT-INPUT-CONTRACT-001
     # Published CORE22 Leaf.field exact-name. No alias/renaming/sector/order_type/kcsc adapter.
     # False is a value. None/missing is omitted. Default false = 0.
