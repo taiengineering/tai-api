@@ -217,8 +217,10 @@ Do **not** open `WO-CHEM-04-HYDRATE-001` yet.
 Next required decision:
 
 ```text
-GATE: how far TAI accepts structurally complete secondary content as bootstrap
-      before official current verification
+GATE: WO-CHEM-04-BOOTSTRAP-DECISION-001
+how far TAI accepts structurally complete secondary content as bootstrap
+before official current verification
+STATUS: EVIDENCE COMPLETE / BOOTSTRAP POLICY = NOT DECIDED
 ```
 
 Until that gate is decided:
