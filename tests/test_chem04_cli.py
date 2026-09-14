@@ -17,6 +17,7 @@ from tools.chem04 import (
     bootstrap_seed,
     collect_current_index,
     join_current_identity,
+    live_sample_compare,
     report,
 )
 
@@ -39,6 +40,11 @@ def test_bootstrap_refuses_bare_invocation():
 def test_content_audit_refuses_bare_invocation():
     with pytest.raises(SystemExit):
         audit_secondary_content.main([])
+
+
+def test_live_sample_refuses_bare_invocation():
+    with pytest.raises(SystemExit):
+        live_sample_compare.main([])
 
 
 def test_collect_refuses_bare_invocation():
