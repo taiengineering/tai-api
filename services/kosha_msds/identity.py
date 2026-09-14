@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from services.kosha_msds.contract import (
+    CHEM_ID_WIDTH,
     CONTENT_ID_PREFIX,
     IDENTITY_HOLD,
     IDENTITY_READY,
@@ -23,6 +24,13 @@ def new_content_id(uuid_fn: Optional[UuidFn] = None) -> str:
 
 def normalize_chem_id(value: Optional[str]) -> Optional[str]:
     return normalize_optional(value)
+
+
+def format_numeric_chem_id(n: int) -> str:
+    """Zero-padded 6-digit chemId. Leading zeros are identity, not decoration."""
+    if type(n) is not int or n < 0 or n > (10**CHEM_ID_WIDTH) - 1:
+        raise ValueError("chemId candidate must be int 0..999999")
+    return f"{n:0{CHEM_ID_WIDTH}d}"
 
 
 def identity_status_for_chem_id(chem_id: Optional[str]) -> str:

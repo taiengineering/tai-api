@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 from urllib.parse import urlencode
@@ -27,6 +28,7 @@ from services.kosha_msds.contract import (
     SECTION_MIN,
     SERVICE_KEY_ENV,
     SUCCESS_RESULT_CODES,
+    WORKING_PAGE_SIZE,
 )
 from services.kosha_msds.identity import ListCandidate, candidate_from_list_item, normalize_chem_id
 from services.kosha_msds.parse import (
@@ -117,6 +119,18 @@ class FullDetail:
     failed_sections: tuple[int, ...] = ()
 
 
+@dataclass(frozen=True)
+class Detail01Raw:
+    """Transport envelope for Detail01 existence probe. Caller classifies ERROR vs ABSENT."""
+
+    chem_id: str
+    http_status: Optional[int] = None
+    body: Optional[str] = None
+    error_code: Optional[str] = None
+    error_text: Optional[str] = None
+    elapsed_ms: float = 0.0
+
+
 @dataclass
 class KoshaMsdsClient:
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
@@ -195,6 +209,53 @@ class KoshaMsdsClient:
             candidates=candidates,
         )
 
+    def list_page(
+        self,
+        *,
+        page_no: int = 1,
+        num_of_rows: int = WORKING_PAGE_SIZE,
+        search_cnd: Optional[int] = None,
+        search_wrd: Optional[str] = None,
+    ) -> SearchResult:
+        """One getChemList page. Official contract: searchCnd + searchWrd required.
+
+        Omitting search is not a documented dump-all. Live CHEM-04: omit/blank →
+        resultCode=00 totalCount=0, which matches search-only (not an outage).
+        """
+        if page_no < 1:
+            raise KoshaMsdsClientError("PAGE_INVALID", "pageNo must be >= 1")
+        if num_of_rows < 1 or num_of_rows > MAX_NUM_OF_ROWS:
+            raise KoshaMsdsClientError(
+                "ROWS_INVALID",
+                f"numOfRows must be 1..{MAX_NUM_OF_ROWS}",
+            )
+        params: dict[str, str] = {
+            "pageNo": str(page_no),
+            "numOfRows": str(num_of_rows),
+        }
+        if search_cnd is not None:
+            if search_cnd not in ALLOWED_SEARCH_CND:
+                raise KoshaMsdsClientError("SEARCH_CND_INVALID", "searchCnd must be 0..4")
+            params["searchCnd"] = str(search_cnd)
+        if search_wrd is not None:
+            params["searchWrd"] = search_wrd
+        _, text, key = self._get(LIST_OPERATION, params)
+        try:
+            parsed = parse_list_xml(text, require_success=True)
+        except KoshaMsdsResultError as exc:
+            if exc.result_code in RATE_LIMIT_DAILY_CODES | RATE_LIMIT_SECOND_CODES:
+                raise KoshaMsdsClientError("RATE_LIMIT", redact_secret(exc.result_msg, key)) from exc
+            raise KoshaMsdsClientError("RESULT_CODE", redact_secret(exc.result_msg, key)) from exc
+        candidates = [candidate_from_list_item(item) for item in parsed.items]
+        return SearchResult(
+            total_count=parsed.total_count,
+            page_no=parsed.page_no,
+            num_of_rows=parsed.num_of_rows,
+            result_code=parsed.result_code,
+            result_msg=parsed.result_msg,
+            candidates=candidates,
+        )
+
     def get_detail_section(self, chem_id: str, section: int | str) -> SectionFetch:
         cid = normalize_chem_id(chem_id)
         if not cid:
@@ -218,6 +279,39 @@ class KoshaMsdsClient:
             items=parsed.items,
             status=status,
         )
+
+    def fetch_detail01_raw(self, chem_id: str) -> Detail01Raw:
+        """One getChemDetail01 call. Errors stay errors; never coerced to empty/ABSENT."""
+        cid = normalize_chem_id(chem_id)
+        if not cid:
+            raise KoshaMsdsClientError("CHEM_ID_REQUIRED", "detail fetch requires chemId")
+        t0 = time.perf_counter()
+        try:
+            status, text, _key = self._get(
+                f"{DETAIL_OPERATION_PREFIX}01",
+                {"chemId": cid},
+            )
+            return Detail01Raw(
+                chem_id=cid,
+                http_status=status,
+                body=text,
+                elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+            )
+        except KoshaMsdsTransportError as exc:
+            return Detail01Raw(
+                chem_id=cid,
+                http_status=exc.http_status if exc.http_status else None,
+                error_code="TRANSPORT",
+                error_text=exc.snippet,
+                elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+            )
+        except KoshaMsdsParseError as exc:
+            return Detail01Raw(
+                chem_id=cid,
+                error_code=exc.code,
+                error_text=exc.message,
+                elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+            )
 
     def get_full_detail(self, chem_id: str) -> FullDetail:
         cid = normalize_chem_id(chem_id)

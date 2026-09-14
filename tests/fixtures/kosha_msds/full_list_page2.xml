@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+  <header>
+    <resultCode>00</resultCode>
+    <resultMsg>NORMAL SERVICE.</resultMsg>
+  </header>
+  <body>
+    <items>
+      <item>
+        <chemId>047134</chemId>
+        <chemNameKor>CAS없음</chemNameKor>
+        <enNo></enNo>
+        <keNo></keNo>
+        <koshaConfirm></koshaConfirm>
+        <lastDate>2023-06-01</lastDate>
+        <openYn></openYn>
+        <unNo></unNo>
+      </item>
+      <item>
+        <casNo>108-88-3</casNo>
+        <chemId>009098</chemId>
+        <chemNameKor>톨루엔</chemNameKor>
+        <enNo></enNo>
+        <keNo></keNo>
+        <koshaConfirm></koshaConfirm>
+        <lastDate>2024-12-31</lastDate>
+        <openYn></openYn>
+        <unNo></unNo>
+      </item>
+    </items>
+    <numOfRows>2</numOfRows>
+    <pageNo>2</pageNo>
+    <totalCount>4</totalCount>
+  </body>
+</response>

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+  <header>
+    <resultCode>00</resultCode>
+    <resultMsg>NORMAL SERVICE.</resultMsg>
+  </header>
+  <body>
+    <items>
+      <item>
+        <casNo>71-43-2</casNo>
+        <chemId>001008</chemId>
+        <chemNameKor>벤젠</chemNameKor>
+        <lastDate>2025-09-17</lastDate>
+      </item>
+      <item>
+        <casNo>71-43-2</casNo>
+        <chemId>001008</chemId>
+        <chemNameKor>벤젠중복</chemNameKor>
+        <lastDate>2025-09-17</lastDate>
+      </item>
+    </items>
+    <numOfRows>2</numOfRows>
+    <pageNo>1</pageNo>
+    <totalCount>2</totalCount>
+  </body>
+</response>
