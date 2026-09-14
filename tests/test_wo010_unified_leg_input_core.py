@@ -33,9 +33,9 @@ PATCH2A_15_AXES = (
 
 
 def test_T1_vocabulary_len_and_distinct():
-    """T1: len(_LEG_INPUT_FIELDS) == 114 && distinct == 114 (+3 construction +5 Appendix3 leaves)."""
-    assert len(_LEG_INPUT_FIELDS) == 114
-    assert len(set(_LEG_INPUT_FIELDS)) == 114
+    """T1: len(_LEG_INPUT_FIELDS) == 125 && distinct == 125 (+11 crane Frozen Design leaves)."""
+    assert len(_LEG_INPUT_FIELDS) == 125
+    assert len(set(_LEG_INPUT_FIELDS)) == 125
     assert "contract_amount_eok" in _LEG_INPUT_FIELDS
 
 
