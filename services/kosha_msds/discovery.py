@@ -15,7 +15,6 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -42,6 +41,7 @@ from services.kosha_msds.contract import (
 )
 from services.kosha_msds.identity import format_numeric_chem_id
 from services.kosha_msds.parse import KoshaMsdsParseError, parse_section_xml
+from services.time import now_kst, serialize_external_utc, to_external_utc
 
 TAIL_EXTEND = "EXTEND_NEXT_BLOCK"
 TAIL_UPPER_BOUND_PASS = "UPPER_BOUND_CANDIDATE_PASS"
@@ -58,7 +58,7 @@ class KoshaMsdsDiscoveryError(Exception):
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return serialize_external_utc(now_kst())
 
 
 def clamp_workers(n: int) -> int:
@@ -623,7 +623,7 @@ def run_empirical_census(
     started = time.perf_counter()
     workers = clamp_workers(workers)
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = to_external_utc(now_kst()).strftime("%Y%m%dT%H%M%SZ")
     checkpoint = checkpoint_path or (artifact_dir / "checkpoint.json")
     if artifact_path is not None:
         artifact = artifact_path
