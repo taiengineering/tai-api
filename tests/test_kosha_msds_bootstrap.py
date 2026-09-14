@@ -36,6 +36,7 @@ from services.kosha_msds.current_index import (
     OfficialCurrentRow,
     collect_current_index,
     diff_current_snapshots,
+    inspect_list_html,
     parse_list_html,
 )
 from services.kosha_msds.discovery import DiscoveryCheckpoint, main as discovery_main
@@ -91,6 +92,8 @@ def test_cas_exact_unique_match():
     joined = join_official_to_secondary(official, secondary)
     assert joined[0].match_method == MATCH_CAS_EXACT
     assert joined[0].secondary_chem_id == "001008"
+    assert joined[0].resolved_chem_id == "001008"
+    assert joined[0].present_in_secondary is True
 
 
 def test_duplicate_cas_ambiguous():
@@ -138,7 +141,9 @@ def test_official_id_precedes_secondary():
     secondary = [_id("001008", cas="71-43-2", name_ko="벤젠")]
     joined = join_official_to_secondary(official, secondary)
     assert joined[0].match_method == MATCH_DIRECT_OFFICIAL_ID
-    assert joined[0].secondary_chem_id == "000001"
+    assert joined[0].resolved_chem_id == "000001"
+    assert joined[0].present_in_secondary is False
+    assert joined[0].secondary_chem_id is None
 
 
 def test_unmatched_preserved():
@@ -158,6 +163,32 @@ def test_current_row_count_reconciliation():
     assert len(rows) == total
 
 
+def test_apostrophe_chem_name_not_dropped():
+    html = (FIXTURES / "chemlist_apostrophe.html").read_text(encoding="utf-8")
+    stats = inspect_list_html(html)
+    rows, total, page_no, page_count = parse_list_html(html, page=1)
+    assert page_no == 1
+    assert page_count == 1
+    assert total == 3
+    assert stats.legacy_selectchem == 1
+    assert stats.href_selectchem == 3
+    assert stats.parsed_selectchem == 3
+    assert stats.data_tr_without_selectchem == 0
+    assert len(rows) == 3
+    ids = {row.chem_id for row in rows}
+    assert ids == {"134818", "000001", "427917"}
+    pcb = next(row for row in rows if row.chem_id == "134818")
+    assert "2,2'" in (pcb.official_name or "")
+
+
+def test_header_gap_not_force_fit_when_short():
+    html = (FIXTURES / "chemlist_page1.html").read_text(encoding="utf-8")
+    rows, total, *_ = parse_list_html(html, page=1)
+    stats = inspect_list_html(html)
+    assert len(rows) == total
+    assert stats.data_tr_without_selectchem == 0
+
+
 def test_join_unique_chem_id():
     official = [
         _off(chem_id="000001", cas="50-01-1", name="염산 구아니딘"),
@@ -167,6 +198,9 @@ def test_join_unique_chem_id():
     joined = join_official_to_secondary(official, secondary)
     counts = join_counts(joined)
     assert counts["mapped_unique_chemId"] == 2
+    assert counts["resolved_unique_chemId"] == 2
+    assert counts["present_in_secondary"] == 2
+    assert counts["official_only"] == 0
     assert counts[MATCH_DIRECT_OFFICIAL_ID] == 2
 
 

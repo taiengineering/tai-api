@@ -22,7 +22,10 @@ GetFn = Callable[[str, dict[str, str]], tuple[int, str]]
 HEADER_RE = re.compile(
     r"총<span class=\"FontBold01\">(\d+)</span>건 \[(\d+)/(\d+) 페이지\]"
 )
-SELECT_RE = re.compile(r"selectChem\('([^']*)','([^']*)','([^']*)'\)")
+# Legacy [^']* on chemName drops rows whose name contains an apostrophe (2,2'-PCB …).
+LEGACY_SELECT_RE = re.compile(r"selectChem\('([^']*)','([^']*)','([^']*)'\)")
+SELECT_RE = re.compile(r"selectChem\('([^']*)','([^']*)','(.*?)'\)")
+HREF_SELECT_RE = re.compile(r"javascript:selectChem\(", re.I)
 TR_RE = re.compile(r"<tr[^>]*>(.*?)</tr>", re.I | re.S)
 
 
@@ -65,6 +68,55 @@ def detect_access_block(http_status: int, body: str) -> Optional[str]:
     if "anti-bot" in low or "cf-challenge" in low:
         return "ANTI_BOT"
     return None
+
+
+@dataclass(frozen=True)
+class ListPageStats:
+    header_total: int
+    page_no: int
+    page_count: int
+    parsed_selectchem: int
+    legacy_selectchem: int
+    href_selectchem: int
+    data_tr: int
+    data_tr_without_selectchem: int
+
+    @property
+    def apostrophe_name_recovered(self) -> int:
+        return max(0, self.parsed_selectchem - self.legacy_selectchem)
+
+    @property
+    def parser_undercount(self) -> int:
+        return max(0, self.href_selectchem - self.parsed_selectchem)
+
+
+def inspect_list_html(html: str) -> ListPageStats:
+    header = HEADER_RE.search(html or "")
+    if not header:
+        raise CurrentIndexError("HEADER_MISSING", "official list header not found")
+    total, page_no, page_count = (int(header.group(1)), int(header.group(2)), int(header.group(3)))
+    data_tr = 0
+    data_tr_without = 0
+    for tr in TR_RE.finditer(html or ""):
+        inner = tr.group(1)
+        if "<th" in inner.lower():
+            continue
+        tds = re.findall(r"<td[^>]*>(.*?)</td>", inner, re.I | re.S)
+        if not tds:
+            continue
+        data_tr += 1
+        if "selectchem(" not in inner.lower():
+            data_tr_without += 1
+    return ListPageStats(
+        header_total=total,
+        page_no=page_no,
+        page_count=page_count,
+        parsed_selectchem=len(SELECT_RE.findall(html or "")),
+        legacy_selectchem=len(LEGACY_SELECT_RE.findall(html or "")),
+        href_selectchem=len(HREF_SELECT_RE.findall(html or "")),
+        data_tr=data_tr,
+        data_tr_without_selectchem=data_tr_without,
+    )
 
 
 def parse_list_html(html: str, *, page: int) -> tuple[list[OfficialCurrentRow], int, int, int]:
@@ -128,6 +180,7 @@ def collect_current_index(
     if block:
         raise CurrentIndexError(block, "official current index STOP")
     first_rows, total, page_no, page_count = parse_list_html(first_body, page=1)
+    first_stats = inspect_list_html(first_body)
     if page_no != 1:
         raise CurrentIndexError("PAGE_MISMATCH", f"expected page 1, got {page_no}")
     last_page = page_count if max_pages is None else min(page_count, max_pages)
@@ -140,6 +193,27 @@ def collect_current_index(
             start_page = max(r.official_page for r in existing) + 1
             mode = "a"
     all_rows = list(existing)
+    diag = {
+        "href_selectchem": 0,
+        "legacy_selectchem": 0,
+        "parsed_selectchem": 0,
+        "data_tr": 0,
+        "data_tr_without_selectchem": 0,
+        "apostrophe_name_recovered": 0,
+        "pages_inspected": 0,
+    }
+
+    def _add_stats(stats: ListPageStats) -> None:
+        diag["href_selectchem"] += stats.href_selectchem
+        diag["legacy_selectchem"] += stats.legacy_selectchem
+        diag["parsed_selectchem"] += stats.parsed_selectchem
+        diag["data_tr"] += stats.data_tr
+        diag["data_tr_without_selectchem"] += stats.data_tr_without_selectchem
+        diag["apostrophe_name_recovered"] += stats.apostrophe_name_recovered
+        diag["pages_inspected"] += 1
+
+    if start_page <= 1:
+        _add_stats(first_stats)
     with dest.open(mode, encoding="utf-8") as fh:
         if start_page <= 1:
             for row in first_rows:
@@ -167,6 +241,7 @@ def collect_current_index(
                     raise CurrentIndexError("PAGE_MISMATCH", f"expected page {page}, got {got_page}")
                 last_len = len(page_rows)
                 if page_rows:
+                    _add_stats(inspect_list_html(body))
                     break
                 sleep_fn(1.0 * attempt)
             if not page_rows:
@@ -179,15 +254,37 @@ def collect_current_index(
                 print(f"INDEX page={page}/{last_page} rows={len(all_rows)}", flush=True)
     cas_values = [r.official_cas for r in all_rows if r.official_cas]
     unique_ids = [r.chem_id for r in all_rows if r.chem_id]
+    parsed = len(all_rows)
+    header_delta = total - parsed if total else None
+    if parsed == total:
+        gap_class = "HEADER_MATCH"
+    elif diag["data_tr_without_selectchem"] > 0:
+        gap_class = "NO_SELECTCHEM_DISPLAY_ROWS"
+    elif diag["apostrophe_name_recovered"] > 0 and diag["href_selectchem"] == diag["parsed_selectchem"]:
+        gap_class = "PARSER_APOSTROPHE_NAME"
+    elif diag["parsed_selectchem"] < diag["href_selectchem"]:
+        gap_class = "PARSER_UNDERCOUNT"
+    elif diag["href_selectchem"] == diag["parsed_selectchem"] and header_delta:
+        gap_class = "HEADER_VS_SELECTCHEM_MISMATCH"
+    else:
+        gap_class = "UNEXPLAINED"
     return {
-        "row_count": len(all_rows),
+        "row_count": parsed,
         "header_total": total,
+        "header_delta": header_delta,
         "page_count": last_page,
         "unique_cas": len(set(cas_values)),
         "cas_null": sum(1 for r in all_rows if not r.official_cas),
         "duplicate_cas": len(cas_values) - len(set(cas_values)),
         "direct_official_id": len(unique_ids),
         "unique_chem_id": len(set(unique_ids)),
+        "href_selectchem": diag["href_selectchem"],
+        "legacy_selectchem": diag["legacy_selectchem"],
+        "data_tr": diag["data_tr"],
+        "data_tr_without_selectchem": diag["data_tr_without_selectchem"],
+        "apostrophe_name_recovered": diag["apostrophe_name_recovered"],
+        "pages_inspected": diag["pages_inspected"],
+        "gap_classification": gap_class,
         "written_at": serialize_external_utc(now_kst()),
         "artifact_path": str(dest),
     }

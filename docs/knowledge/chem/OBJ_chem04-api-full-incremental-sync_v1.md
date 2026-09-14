@@ -12,7 +12,7 @@ owner: taiwang
 # OBJ-CHEM-04 — Official OpenAPI search contract + incremental runner
 
 ```text
-CHEM-04 = IN_PROGRESS (PATCH-4 on PR #350, not merged)
+CHEM-04 = IN_PROGRESS (PATCH-5 on PR #350, not merged)
 CHEM-01 = CLOSED / PASS_WITH_INGEST_GATE
 CHEM-02 = DONE / CLOSED
 CHEM-03 = CLOSED / CONDITIONAL
@@ -38,8 +38,8 @@ This PATCH does not invent a dump-all OpenAPI. Sequential Detail01 scan is prese
 ## 0. Revision guard
 
 ```text
-PR #350 PATCH-4 parent (PATCH-3 reviewed head) =
-417069ac4e5586948ef018dec4265cc7fa1b0928
+PR #350 PATCH-5 parent (PATCH-4 reviewed head) =
+d50ecf8a9d4d643b7ea5f99c21d54394588856fa
 branch =
 feature/chem04-api-full-sync
 ```
@@ -522,8 +522,15 @@ python -m tools.chem04.bootstrap_seed --download
 python -m tools.chem04.bootstrap_seed --local-jsonl /path/to/train.jsonl --verify-sha256
 
 python -m tools.chem04.collect_current_index --full --resume --delay 1.0
-python -m tools.chem04.join_current_identity
-python -m tools.chem04.report
+python -m tools.chem04.diagnose_header_gap --pages 1,4,102,1493,2057
+# local full diagnosis after parser fix:
+# python -m tools.chem04.diagnose_header_gap --full --delay 1.0
+python -m tools.chem04.join_current_identity \
+  --official artifacts/chem04/official_current/kosha_current_index.jsonl \
+  --seed artifacts/chem04/secondary_identity_seed.jsonl
+python -m tools.chem04.report \
+  --seed artifacts/chem04/secondary_identity_seed.jsonl \
+  --official artifacts/chem04/official_current/kosha_current_index.jsonl
 ```
 
 Safety:
@@ -576,8 +583,41 @@ JOIN (deterministic; no fuzzy / LLM):
 ```text
 DIRECT_OFFICIAL_ID > CAS_EXACT unique > NAME_EXACT (NFC/trim/whitespace)
 > COMPOUND_EXACT (name_en) > UNMATCHED | AMBIGUOUS
-full join counts        = LOCAL_RUN_PENDING
+resolved_chem_id        = official chemId when present
+present_in_secondary    = official chemId ∈ secondary seed
+secondary_chem_id       = null when official-only
+full join counts        = LOCAL_RERUN_PENDING after parser fix
 ```
+
+---
+
+## 16. PATCH-5 — header 20,568 vs parsed 19,870
+
+GPT review `CHG_REQUIRED`. Classification from live HTML probe (pages 1, 4, 102, 1493, 2057), not a second 2,057-page crawl:
+
+```text
+data_tr without selectChem     = 0
+unpublished/hidden row         = NOT OBSERVED
+other onclick                  = NOT OBSERVED
+legacy parse [^']* chemName    = DROPS apostrophe names (2,2'-PCB, 4,4'-…)
+fixed parse (.*?) chemName     = href count == parsed count on probed pages
+page 1493                      = legacy 3 / href 10 / fixed 10
+page 4                         = legacy 9 / href 10 / fixed 10
+page 102                       = legacy 5 / href 10 / fixed 10
+page 2057                      = legacy 7 / href 8 / fixed 8
+header 20568                   = consistent with 2056×10 + last page 8
+UNEXPLAINED HEADER DELTA       = PARSER_APOSTROPHE_NAME (not force-fit 19870)
+CURRENT FULL CENSUS            = CONDITIONAL until local re-collect with fixed parser
+```
+
+Report path: `artifacts/chem04/secondary_identity_seed.jsonl` is accepted as a fallback. `--seed` / `--official` / `--join` / `--manifest` override defaults.
+
+```text
+python -m tools.chem04.diagnose_header_gap --pages 1,4,102,1493,2057
+python -m tools.chem04.collect_current_index --full --delay 1.0
+```
+
+Do not resume the 19,870 JSONL after this parser change — start a new `--full` collect (or delete the old artifact first). `--resume` would keep the under-parsed rows.
 
 OpenAPI this PATCH:
 
@@ -600,7 +640,10 @@ EMPIRICAL_API_CENSUS = NOT FULL_OFFICIAL
 50-DAY NUMERIC SCAN = NO
 CURSOR FULL DATA EXECUTION = NO
 LOCAL FULL DATA EXECUTION = YES
-FULL INDEX / SEED / JOIN COUNTS = LOCAL_RUN_PENDING
+FULL INDEX / SEED / JOIN COUNTS = LOCAL_RERUN_PENDING (apostrophe parser fix)
+HEADER 20568 vs ROWS 19870 = PARSER_APOSTROPHE_NAME
+CURRENT FULL CENSUS = CONDITIONAL
+REPORT PATH = FALLBACK + CLI ARGS
 INITIAL_SEED_CANDIDATE = BLOCKED
 PORTAL 1000/day HARD LIMIT OBSERVED = YES
 INITIAL FULL SEED = BLOCKED

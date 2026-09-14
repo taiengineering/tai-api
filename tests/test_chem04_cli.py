@@ -87,6 +87,8 @@ def test_join_cli_fixture(tmp_path):
     joined = [json.loads(line) for line in dest.read_text(encoding="utf-8").splitlines()]
     assert len(joined) == 3
     assert {row["match_method"] for row in joined} == {"DIRECT_OFFICIAL_ID"}
+    assert all(row["present_in_secondary"] is True for row in joined)
+    assert all(row["resolved_chem_id"] == row["secondary_chemId"] for row in joined)
     assert "serviceKey" not in dest.read_text(encoding="utf-8")
 
 
@@ -98,3 +100,29 @@ def test_report_secret_free(capsys):
     assert "LOCAL" in text
     payload = json.loads(text)
     assert payload["production_ingest"] == "NO"
+
+
+def test_report_seed_path_arg(tmp_path, capsys):
+    seed = tmp_path / "secondary_identity_seed.jsonl"
+    seed.write_text(json.dumps({"chemId": "000001"}) + "\n", encoding="utf-8")
+    official = tmp_path / "official.jsonl"
+    official.write_text("{}\n", encoding="utf-8")
+    join = tmp_path / "join.jsonl"
+    join.write_text("{}\n", encoding="utf-8")
+    rc = report.main(
+        [
+            "--seed",
+            str(seed),
+            "--official",
+            str(official),
+            "--join",
+            str(join),
+            "--manifest",
+            str(tmp_path / "missing.json"),
+        ]
+    )
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["secondary_seed_rows"] == 1
+    assert payload["manifest_present"] is False
+    assert payload["secondary_seed_sha256"]
