@@ -45,7 +45,7 @@ class _Body:
 def test_T11_leg_review_required_preserved_into_consumer_unconfirmed(monkeypatch):
     captured = {}
 
-    def fake_eval(facility, *, timeout=None):
+    def fake_eval(facility, *, timeout=None, context=None):
         captured["facility"] = facility
         return {
             "status": "OK",

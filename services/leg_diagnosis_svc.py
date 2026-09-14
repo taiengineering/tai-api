@@ -53,7 +53,8 @@ def _obligation_to_key_item(o: Dict[str, Any]) -> Dict[str, Any]:
 def run_leg_diagnosis(step1_body: Any) -> Dict[str, Any]:
     """LEG 전용 진단. 반환 = full_result(LEG). 실패 시 LegDiagnosisError/LegRuntimeError 전파."""
     facility = leg_client.build_facility(step1_body)
-    data = leg_client.evaluate_rtm(facility)  # net/parse 실패 시 LegRuntimeError
+    context = leg_client.build_engine_context(step1_body)
+    data = leg_client.evaluate_rtm(facility, context=context or None)  # net/parse 실패 시 LegRuntimeError
 
     status = data.get("status")
     error_code = data.get("error_code")
@@ -115,6 +116,7 @@ def run_leg_diagnosis(step1_body: Any) -> Dict[str, Any]:
         "contract": data.get("contract"),
         "obligations_raw": obligations,
         "facility_used": facility,
+        "engine_context": context,
         "review_required": review_required,
         "review_required_count": len(review_required),
         "unconfirmed": unconfirmed,

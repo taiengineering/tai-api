@@ -142,7 +142,9 @@ _LEG_INPUT_FIELDS = (
     # direct_workers / subcon_workers are NOT appended: they are absent from RTM
     # condition vocabulary (not missing_fields, not NUMERIC_FIELDS, not CORE22 Leaf.field).
     "contract_amount_eok",
-    "ksic_major", "has_chemical", "has_elevator", "has_noise_work", "has_asbestos",
+    # WO-E2E-OBS010-KSIC-MAJOR-MINIMUM-MODIFY-001: ksic_major removed from LEG
+    # transport (186 after removing transport-only ksic_major). Consumer schema kept.
+    "has_chemical", "has_elevator", "has_noise_work", "has_asbestos",
     "has_crane", "has_excavation", "has_concrete_work", "has_hazardous_material",
     "has_gas", "is_multi_use", "has_safety_manager", "has_subcontractor", "has_scaffold",
     "has_diving", "has_dust_work", "has_forklift", "has_high_pressure_gas", "has_pile_work",
@@ -384,20 +386,58 @@ def build_facility(step1_body: Any) -> Dict[str, Any]:
     return facility
 
 
-def evaluate_rtm(facility: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+def _context_nonblank(val: Any) -> bool:
+    if val is None:
+        return False
+    if isinstance(val, str) and not val.strip():
+        return False
+    return True
+
+
+# WO-E2E-OBS010-KSIC-MAJOR-ENGINE-CONTEXT-REV1-001:
+# Engine Context metadata. Not LEG applicability facts. Do not merge into facility.
+_CONTEXT_FIELDS = ("sector", "ksic_major")
+
+
+def build_engine_context(step1_body: Any) -> Dict[str, Any]:
+    """DiagnoseStep1Body -> engine_context (sector, ksic_major). Verbatim. No alias/derive."""
+    inp = getattr(step1_body, "input", None) or {}
+    if not isinstance(inp, dict):
+        inp = {}
+    context: Dict[str, Any] = {}
+    for code in _CONTEXT_FIELDS:
+        val = getattr(step1_body, code, None)
+        if val is None:
+            val = inp.get(code)
+        if not _context_nonblank(val):
+            continue
+        context[code] = val
+    return context
+
+
+def evaluate_rtm(
+    facility: Dict[str, Any],
+    *,
+    context: Optional[Dict[str, Any]] = None,
+    timeout: Optional[float] = None,
+) -> Dict[str, Any]:
     """POST {LEG_RUNTIME_URL}/rtm/evaluate. 사업장 배치 판정 -> obligations. retry 0, fail fast.
 
     반환(그대로): {status, obligations[], obligation_count, provenance, contract,
-                  trace_id, error_code, error}. 4xx/5xx도 body를 반환하며 호출자가 status로 분기.
+                  trace_id, error_code, error, context?}. 4xx/5xx도 body를 반환하며 호출자가 status로 분기.
     네트워크/파싱 실패만 LegRuntimeError로 올린다(호출자가 처리, fallback 금지).
+    context가 비어 있으면 payload에서 context 키를 생략한다(레거시 {facility} 호환).
     """
     if not is_enabled():
         raise LegRuntimeError("LEG_RUNTIME_URL 미설정")
     url = "{}/rtm/evaluate".format(LEG_RUNTIME_URL)
+    payload: Dict[str, Any] = {"facility": facility}
+    if context:
+        payload["context"] = context
     try:
         resp = httpx.post(
             url,
-            json={"facility": facility},
+            json=payload,
             timeout=timeout or LEG_RUNTIME_TIMEOUT,
         )
     except Exception as e:
