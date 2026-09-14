@@ -4,7 +4,7 @@ type: report
 scope: knowledge
 project: chem
 title: OBJ-CHEM-04 secondary content bootstrap Decision Gate
-version: 3
+version: 4
 status: active
 owner: taiwang
 ---
@@ -13,7 +13,8 @@ owner: taiwang
 
 ```text
 WO-CHEM-04-BOOTSTRAP-DECISION-001 = EVIDENCE COMPLETE / POLICY BLOCKED
-WO-CHEM-04-OPTIONC-LIVE-SAMPLE-001 = CODE READY / LOCAL_RUN_PENDING
+WO-CHEM-04-OPTIONC-LIVE-SAMPLE-001 = BLOCKED
+WO-CHEM-04-OPTIONC-FETCH-DIAG-001 = IN_PROGRESS
 WO-CHEM-04-CONTENT-LOCAL-001      = PASS
 PR #359                           = OPEN / UNMERGED
 current HEAD                      = 65f0efdc56db5f299b92c6fe82866ea19045f057
@@ -381,3 +382,60 @@ authoritative_verified     = false
 ```
 
 16 sample match ≠ 9,124 current verified.
+
+---
+
+## LIVE SAMPLE MEASURED RUN (256)
+
+Does not replace the addendum above.
+
+```text
+WO-CHEM-04-OPTIONC-LIVE-SAMPLE-001 = BLOCKED
+HEAD                      = d62c1a6b9d621c2fbb532fe7d5258a1bd4a3c282
+attempted sections        = 256
+successful official fetch = 0
+API_ERROR                 = 256
+comparable sections       = 0
+fidelity                  = NOT MEASURED
+quota issue               = NO
+429                       = 0
+resultCode22              = 0
+secret leak               = 0
+comparison SHA256         = 6016e9a949b45d4026669e7437a152de6e00cd914e8d175592e8409aa24d1d9e
+live_sample_report SHA256 = 969b5b6153df21e76c92b1045a42b7f6302ff115ea3dc5912a820fe085ea925b
+failure checkpoint SHA256 = 7e83e02fd1afc930d2a4e574eedd402854f2c1867e958e780722a192672e4bab
+checkpoint                = KEEP (do not delete until preflight OK)
+TECHNICAL OPTION C GATE   = BLOCKED
+```
+
+Cause was not classifiable: `run_live_sample()` dropped the redacted fetch_error token from `fetch_official_xml()`.
+
+---
+
+## FETCH DIAG ADDENDUM
+
+```text
+WO-CHEM-04-OPTIONC-FETCH-DIAG-001
+scope = redacted fetch_error on API_ERROR rows
+      + error_token_counts
+      + preflight 001008 × getChemDetail01 (1 call)
+256 re-run              = NOT AUTHORIZED
+failure checkpoint      = KEEP
+transport/key guessing  = NO
+kr_get path             = UNCHANGED
+OPTION C                = BLOCKED
+OPTION B                = NO
+MERGE                   = NOT AUTHORIZED
+HYDRATE-001             = NOT OPENED
+PRODUCTION              = NO
+```
+
+Preflight only (after this patch, operator local terminal):
+
+```bash
+export KOSHA_SERVICE_KEY='...'
+python3 -m tools.chem04.live_sample_compare --preflight
+```
+
+Do not pass `--local-run` until GPT authorizes a new 256 after preflight OK. If `--local-run` is used later, preflight runs first and a FAIL does not write the sample checkpoint.
+

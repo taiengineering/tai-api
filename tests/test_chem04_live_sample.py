@@ -29,6 +29,7 @@ from services.kosha_msds.live_sample import (
     live_sample_key,
     load_sample_rows,
     run_live_sample,
+    run_preflight,
     scan_secret_free_dir,
 )
 from tools.chem04 import live_sample_compare
@@ -446,6 +447,8 @@ def test_cli_refuses_bare_and_requires_mode():
         live_sample_compare.main([])
     with pytest.raises(SystemExit):
         live_sample_compare.main(["--probe", "--local-run"])
+    with pytest.raises(SystemExit):
+        live_sample_compare.main(["--preflight", "--local-run"])
 
 
 def test_cli_probe_without_key(monkeypatch):
@@ -518,3 +521,167 @@ def test_planned_calls_constant():
     assert LIVE_SAMPLE_MAX_CALLS == 256
     assert LIVE_SAMPLE_HARD_CAP == 320
     assert len(_sample()) * 16 == 256
+
+
+def test_fetch_error_http_and_result_tokens(tmp_path):
+    xml99 = (FIXTURES / "result_code_99.xml").read_text(encoding="utf-8")
+
+    def get_fn(url, params=None, timeout=30, **_):
+        return 200, xml99
+
+    with pytest.raises(LiveSampleError):
+        run_live_sample(
+            sample_rows=_sample(),
+            secondary_by_chem=_secondary_all("x"),
+            get_fn=get_fn,
+            service_key=FAKE_KEY,
+            max_calls=2,
+            max_chems=1,
+            checkpoint_path=tmp_path / "cp99.json",
+        )
+    rows = json.loads((tmp_path / "cp99.json").read_text(encoding="utf-8"))["rows"]
+    assert {row["fetch_error"] for row in rows} == {"RESULT_99"}
+
+    def forbidden(url, params=None, timeout=30, **_):
+        return 403, "no"
+
+    result = run_live_sample(
+        sample_rows=_sample(),
+        secondary_by_chem=_secondary_all("x"),
+        get_fn=forbidden,
+        service_key=FAKE_KEY,
+        max_calls=16,
+        max_chems=1,
+    )
+    assert result["report"]["error_token_counts"] == {"HTTP_403": 16}
+    assert all(row["fetch_error"] == "HTTP_403" for row in result["rows"])
+    dumped = json.dumps(result, ensure_ascii=False)
+    assert FAKE_KEY not in dumped
+
+
+def test_fetch_error_parse_and_timeout():
+    status, token = fetch_official_xml(
+        chem_id="001008",
+        section_no=1,
+        get_fn=lambda url, params=None, timeout=30, **_: (200, "<html>not-xml"),
+        service_key=FAKE_KEY,
+    )
+    assert status == "API_ERROR"
+    assert token == "PARSE"
+
+    def boom(url, params=None, timeout=30, **_):
+        raise TimeoutError("timed out")
+
+    status, token = fetch_official_xml(
+        chem_id="001008",
+        section_no=1,
+        get_fn=boom,
+        service_key=FAKE_KEY,
+    )
+    assert status == "API_ERROR"
+    assert token == "TIMEOUT"
+
+
+def test_preflight_fail_stops_without_writing_checkpoint(tmp_path):
+    checkpoint = tmp_path / "live_sample.json"
+    original = '{"done":[["000002",1]],"attempted_calls":1,"rows":[]}\n'
+    checkpoint.write_text(original, encoding="utf-8")
+    calls = []
+
+    def get_fn(url, params=None, timeout=30, **_):
+        calls.append(params["chemId"])
+        return 401, "denied"
+
+    result = run_live_sample(
+        sample_rows=_sample(),
+        secondary_by_chem=_secondary_all("x"),
+        get_fn=get_fn,
+        service_key=FAKE_KEY,
+        max_calls=16,
+        max_chems=1,
+        checkpoint_path=checkpoint,
+        require_preflight=True,
+    )
+    assert calls == ["001008"]
+    assert result["rows"] == []
+    assert result["report"]["preflight"]["fetch_error"] == "HTTP_401"
+    assert result["report"]["error_token_counts"] == {"HTTP_401": 1}
+    assert result["report"]["TECHNICAL_OPTION_C_GATE"] == "BLOCKED"
+    assert checkpoint.read_text(encoding="utf-8") == original
+
+
+def test_preflight_ok_then_sample_starts():
+    xml = _success_xml("ok")
+    calls = []
+
+    def get_fn(url, params=None, timeout=30, **_):
+        calls.append(params["chemId"])
+        return 200, xml
+
+    with pytest.raises(LiveSampleError) as exc:
+        run_live_sample(
+            sample_rows=_sample(),
+            secondary_by_chem=_secondary_all(flatten_msds_xml(xml)),
+            get_fn=get_fn,
+            service_key=FAKE_KEY,
+            max_calls=1,
+            max_chems=1,
+            require_preflight=True,
+        )
+    assert exc.value.code == "MAX_CALLS"
+    assert calls[0] == "001008"
+    assert calls[1] == "000002"
+    assert len(calls) == 2
+
+
+def test_cli_preflight_skips_train_and_checkpoint(tmp_path, monkeypatch):
+    monkeypatch.setenv("KOSHA_SERVICE_KEY", FAKE_KEY)
+    captured = {}
+
+    def fake_preflight(**kwargs):
+        captured.update(kwargs)
+        return {
+            "preflight": "FAIL",
+            "chemId": "001008",
+            "sectionNo": 1,
+            "fetch_error": "RESULT_30",
+            "official_fetch": "API_ERROR",
+            "http_requests": 1,
+        }
+
+    checkpoint = tmp_path / "live_sample.json"
+    checkpoint.write_text('{"done":[],"attempted_calls":256}\n', encoding="utf-8")
+    before = checkpoint.read_bytes()
+    monkeypatch.setattr(live_sample_compare, "run_preflight", fake_preflight)
+    monkeypatch.setattr(live_sample_compare, "DECISION", tmp_path)
+    monkeypatch.setattr(live_sample_compare, "DECISION_CHECKPOINTS", tmp_path)
+    rc = live_sample_compare.main(
+        [
+            "--preflight",
+            "--sample-manifest",
+            str(MANIFEST),
+            "--checkpoint",
+            str(checkpoint),
+            "--out-preflight",
+            str(tmp_path / "preflight_report.json"),
+        ]
+    )
+    assert rc == 2
+    assert captured["get_fn"] is not None
+    assert checkpoint.read_bytes() == before
+    payload = json.loads((tmp_path / "preflight_report.json").read_text(encoding="utf-8"))
+    assert payload["fetch_error"] == "RESULT_30"
+    assert payload["error_token_counts"] == {"RESULT_30": 1}
+    assert payload["sample_checkpoint_written"] is False
+    assert FAKE_KEY not in json.dumps(payload)
+
+
+def test_run_preflight_ok_fixture():
+    xml = (FIXTURES / "benzene_detail_01.xml").read_text(encoding="utf-8")
+    result = run_preflight(
+        get_fn=lambda url, params=None, timeout=30, **_: (200, xml),
+        service_key=FAKE_KEY,
+    )
+    assert result["preflight"] == "OK"
+    assert result["chemId"] == "001008"
+    assert result["fetch_error"] is None

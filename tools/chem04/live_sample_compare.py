@@ -1,6 +1,7 @@
 """Live sample compare: frozen 16 chemId × Detail01~16. No production write.
 
-Cursor: --probe (max 1 chemId). Local PC: --local-run (16 × 16).
+Cursor: --probe (max 1 chemId) or --preflight (001008 × Detail01).
+Local PC: --local-run (preflight then 16 × 16). 256 re-run is separately authorized.
 Service key is read from the environment only and is never logged or serialized.
 """
 from __future__ import annotations
@@ -29,6 +30,7 @@ from services.kosha_msds.live_sample import (
     live_sample_key,
     load_sample_rows,
     run_live_sample,
+    run_preflight,
     scan_secret_free_dir,
 )
 from tools.chem04.paths import (
@@ -42,24 +44,36 @@ from tools.chem04.paths import (
 )
 
 FIXTURE_MANIFEST = Path("tests/fixtures/kosha_msds/optionc_live_sample_manifest.json")
+PREFLIGHT_REPORT = DECISION / "preflight_report.json"
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="CHEM-04 OPTION C live sample compare")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--probe", action="store_true", help="Cursor only: 1 chemId × 16 sections")
-    mode.add_argument("--local-run", action="store_true", help="LOCAL PC only: frozen 16 × 16")
+    mode.add_argument("--local-run", action="store_true", help="LOCAL PC only: preflight then frozen 16 × 16")
+    mode.add_argument("--preflight", action="store_true", help="001008 × getChemDetail01 once; does not resume sample")
     parser.add_argument("--sample-manifest", default=str(FIXTURE_MANIFEST))
     parser.add_argument("--expected-sha", default=EXPECTED_OPTIONC_SAMPLE_SHA256)
     parser.add_argument("--train-jsonl", default=str(CONTENT_SOURCE / "train.jsonl"))
     parser.add_argument("--checkpoint", default=str(DECISION_CHECKPOINTS / "live_sample.json"))
     parser.add_argument("--out-report", default=str(DECISION / "live_sample_report.json"))
     parser.add_argument("--out-comparison", default=str(DECISION / "comparison.jsonl"))
+    parser.add_argument("--out-preflight", default=str(PREFLIGHT_REPORT))
     return parser
 
 
 def _get(url, params=None, timeout=30, **_):
     return kr_get(url, params=params, timeout=timeout)
+
+
+def _print_report(report: dict, extra: dict | None = None) -> None:
+    public = {k: v for k, v in report.items() if k != "chemical_status"}
+    if extra:
+        public.update(extra)
+    printed = json.dumps(public, ensure_ascii=False, indent=2)
+    assert_secret_free(printed)
+    print(printed)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -71,6 +85,31 @@ def main(argv: list[str] | None = None) -> int:
     sample_path = Path(args.sample_manifest)
     rows = load_sample_rows(sample_path)
     actual = assert_manifest_sha(rows, expected=args.expected_sha)
+
+    if args.preflight:
+        result = run_preflight(get_fn=_get, service_key=key)
+        report = {
+            "WO": "WO-CHEM-04-OPTIONC-FETCH-DIAG-001",
+            "sample_manifest_sha256_actual": actual,
+            "MANIFEST_MATCH": "PASS" if actual == args.expected_sha else "FAIL",
+            "production_writer": None,
+            "BOOTSTRAP_POLICY": "NOT DECIDED",
+            "live_bulk_hydration": "NO",
+            "production_ingest": "NO",
+            "sample_checkpoint_written": False,
+            **result,
+        }
+        if result.get("fetch_error"):
+            report["error_token_counts"] = {str(result["fetch_error"]): 1}
+        else:
+            report["error_token_counts"] = {}
+        report_path = Path(args.out_preflight)
+        report["live_sample_report_sha256"] = canonical_json_hash(report)
+        write_json(report_path, report)
+        scan_secret_free_dir(report_path.parent, extra_tokens=(key,))
+        _print_report(report, extra={"preflight_report_file_sha256": sha256_file(report_path)})
+        return 0 if result.get("preflight") == "OK" else 2
+
     dest_manifest = DECISION / "sample_manifest.json"
     dest_manifest.parent.mkdir(parents=True, exist_ok=True)
     dest_manifest.write_text(
@@ -99,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         raw_dir=DECISION_RAW,
         normalized_dir=DECISION_NORMALIZED,
         production_writer=None,
+        require_preflight=bool(args.local_run),
     )
     report = dict(result["report"])
     comparison_path = Path(args.out_comparison)
@@ -110,12 +150,8 @@ def main(argv: list[str] | None = None) -> int:
     report["live_sample_report_sha256"] = canonical_json_hash(report)
     write_json(report_path, report)
     scan_secret_free_dir(DECISION, extra_tokens=(key,))
-    public = {k: v for k, v in report.items() if k != "chemical_status"}
-    public["live_sample_report_file_sha256"] = sha256_file(report_path)
-    printed = json.dumps(public, ensure_ascii=False, indent=2)
-    assert_secret_free(printed)
-    print(printed)
-    if report.get("quota_stop"):
+    _print_report(report, extra={"live_sample_report_file_sha256": sha256_file(report_path)})
+    if report.get("quota_stop") or (report.get("preflight") or {}).get("preflight") == "FAIL":
         return 2
     return 0
 
