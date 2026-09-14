@@ -87,13 +87,46 @@ DEFAULT_APPENDIX3_AUTHORITY_PATH = (
     / "test-universe"
     / "appendix3_explicit_classification_authority_v1.json"
 )
+DEFAULT_SPECIAL10_APPENDIX3_AUTHORITY_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "docs"
+    / "canonical"
+    / "test-universe"
+    / "appendix3_special10_explicit_classification_authority_v1.json"
+)
 EXPECTED_APPENDIX3_AUTHORITY_SHA256 = (
     "06b31f56d9d5eb92fcdebc48716494634c5f0ed189ab1304b7b430a6c7d64f46"
+)
+EXPECTED_SPECIAL10_APPENDIX3_AUTHORITY_SHA256 = (
+    "c424c56fcbb619fde4cc5f77b5dbcea06b5ac281e488281fba554039e50725db"
 )
 EXPECTED_FROZEN_PROFILE_SHA256 = (
     "4818a63ab261c5a36c1432647b6b17e7636641071801d36fd1b85d1361af751b"
 )
 EXPECTED_APPENDIX3_AUTHORITY_ROWS = 75
+EXPECTED_SPECIAL10_APPENDIX3_AUTHORITY_ROWS = 10
+EXPECTED_EFFECTIVE_APPENDIX3_AUTHORITY_ROWS = 85
+EXPECTED_SPECIAL10_PROFILE_IDS = frozenset(
+    {
+        "PF-0037",
+        "PF-0038",
+        "PF-0039",
+        "PF-0106",
+        "PF-0107",
+        "PF-0108",
+        "PF-0109",
+        "PF-0110",
+        "PF-0111",
+        "PF-0112",
+    }
+)
+APPENDIX3_EVIDENCE_75 = (
+    "docs/canonical/test-universe/appendix3_explicit_classification_authority_v1.json"
+)
+APPENDIX3_EVIDENCE_SPECIAL10 = (
+    "docs/canonical/test-universe/appendix3_special10_explicit_classification_authority_v1.json"
+)
+_APPENDIX3_INDEX_EVIDENCE_KEY = "_authority_evidence"
 
 
 class BridgeContractError(RuntimeError):
@@ -190,6 +223,100 @@ def load_approved_appendix3_authority_index(
     return build_appendix3_authority_index(load_appendix3_authority_document(path))
 
 
+def load_special10_appendix3_authority_document(path: str | Path | None = None) -> dict:
+    loc = Path(path) if path is not None else DEFAULT_SPECIAL10_APPENDIX3_AUTHORITY_PATH
+    if not loc.is_file():
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_FILE_MISSING")
+    raw = loc.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != EXPECTED_SPECIAL10_APPENDIX3_AUTHORITY_SHA256:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_SHA_MISMATCH")
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID", exc)
+    if not isinstance(data, dict):
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    return data
+
+
+def build_special10_appendix3_authority_index(document: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
+    if document.get("authority_type") != "OWNER_APPROVED_E2E_FIXTURE_FACT":
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_METADATA_MISMATCH")
+    if document.get("status") != "APPROVED":
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_METADATA_MISMATCH")
+    if document.get("authority_content") != "FROZEN":
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_METADATA_MISMATCH")
+    if document.get("production_derivation_rule") != "NONE":
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_METADATA_MISMATCH")
+    if document.get("frozen_profile_sha256") != EXPECTED_FROZEN_PROFILE_SHA256:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_METADATA_MISMATCH")
+    if document.get("gated_row_count") != EXPECTED_SPECIAL10_APPENDIX3_AUTHORITY_ROWS:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_METADATA_MISMATCH")
+    if document.get("source_sector") != "SPECIAL_FACILITY":
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_METADATA_MISMATCH")
+    if document.get("request_sector") != "BUILDING":
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_METADATA_MISMATCH")
+    rows = document.get("rows")
+    if not isinstance(rows, list) or len(rows) != EXPECTED_SPECIAL10_APPENDIX3_AUTHORITY_ROWS:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    index: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+        pid = row.get("profile_id")
+        if not isinstance(pid, str) or not pid or pid in index:
+            _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+        if pid not in EXPECTED_SPECIAL10_PROFILE_IDS:
+            _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+        item = row.get("appendix3_item_no")
+        if type(item) is not int or type(item) is bool or item < 1 or item > 49:
+            _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+        if "is_real_estate_management" in row:
+            _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+        extra = set(row.keys()) - {"profile_id", "appendix3_item_no"}
+        if extra:
+            _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+        index[pid] = {"appendix3_item_no": item}
+    if set(index) != EXPECTED_SPECIAL10_PROFILE_IDS:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    if len(index) != EXPECTED_SPECIAL10_APPENDIX3_AUTHORITY_ROWS:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    return index
+
+
+def load_special10_appendix3_authority_index(
+    path: str | Path | None = None,
+) -> Dict[str, Dict[str, Any]]:
+    return build_special10_appendix3_authority_index(
+        load_special10_appendix3_authority_document(path)
+    )
+
+
+def load_effective_appendix3_authority_index() -> Dict[str, Dict[str, Any]]:
+    existing75 = load_approved_appendix3_authority_index()
+    special10 = load_special10_appendix3_authority_index()
+    if len(existing75) != EXPECTED_APPENDIX3_AUTHORITY_ROWS:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    if len(special10) != EXPECTED_SPECIAL10_APPENDIX3_AUTHORITY_ROWS:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    overlap = set(existing75) & set(special10)
+    if overlap:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    combined: Dict[str, Dict[str, Any]] = {}
+    for pid, facts in existing75.items():
+        row = dict(facts)
+        row[_APPENDIX3_INDEX_EVIDENCE_KEY] = APPENDIX3_EVIDENCE_75
+        combined[pid] = row
+    for pid, facts in special10.items():
+        row = dict(facts)
+        row[_APPENDIX3_INDEX_EVIDENCE_KEY] = APPENDIX3_EVIDENCE_SPECIAL10
+        combined[pid] = row
+    if len(combined) != EXPECTED_EFFECTIVE_APPENDIX3_AUTHORITY_ROWS:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    return combined
+
+
 def _appendix3_source_present(body: Mapping[str, Any], form: Mapping[str, Any]) -> bool:
     for key in APPENDIX3_SOURCE_KEYS:
         if key in body or key in form:
@@ -207,7 +334,7 @@ def _internal_appendix3_leaf_present(body: Mapping[str, Any], form: Mapping[str,
 def _apply_appendix3_authority(
     *,
     profile_id: str,
-    source_sector: str,
+    request_sector: str,
     body: dict,
     form_data: dict,
     records: List[dict],
@@ -216,7 +343,7 @@ def _apply_appendix3_authority(
     if _internal_appendix3_leaf_present(body, form_data):
         _appendix3_fail("E2E_FIXTURE_AUTHORITY_CONFLICT")
     preexisting = _appendix3_source_present(body, form_data)
-    gated = source_sector in GATED_APPENDIX3_SECTORS and profile_id in EXPECTED_ID_RANGE
+    gated = request_sector in GATED_APPENDIX3_SECTORS and profile_id in EXPECTED_ID_RANGE
     if not gated:
         if preexisting:
             _appendix3_fail("E2E_FIXTURE_AUTHORITY_CONFLICT")
@@ -225,12 +352,15 @@ def _apply_appendix3_authority(
         _appendix3_fail("E2E_FIXTURE_AUTHORITY_CONFLICT")
     index = appendix3_authority_index
     if index is None:
-        index = load_approved_appendix3_authority_index()
+        index = load_effective_appendix3_authority_index()
     row = index.get(profile_id)
     if not isinstance(row, Mapping):
         _appendix3_fail(f"E2E_FIXTURE_AUTHORITY_MISSING:appendix3:{profile_id}")
     item = row.get("appendix3_item_no")
     if type(item) is not int or type(item) is bool or item < 1 or item > 49:
+        _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
+    evidence = row.get(_APPENDIX3_INDEX_EVIDENCE_KEY) or APPENDIX3_EVIDENCE_75
+    if not isinstance(evidence, str) or not evidence:
         _appendix3_fail("E2E_APPENDIX3_AUTHORITY_INVALID")
     _put_body(body, "appendix3_item_no", item)
     records.append(
@@ -246,7 +376,7 @@ def _apply_appendix3_authority(
                 "not derived from KSIC/sector/building_use_type"
             ),
             loss="0",
-            evidence="docs/canonical/test-universe/appendix3_explicit_classification_authority_v1.json",
+            evidence=evidence,
             value=item,
         )
     )
@@ -268,7 +398,7 @@ def _apply_appendix3_authority(
                     "item 37 subtype only; not default false"
                 ),
                 loss="0",
-                evidence="docs/canonical/test-universe/appendix3_explicit_classification_authority_v1.json",
+                evidence=evidence,
                 value=subtype,
             )
         )
@@ -749,7 +879,7 @@ def profile_to_leg_request(
 
     _apply_appendix3_authority(
         profile_id=pid,
-        source_sector=source_sector,
+        request_sector=request_sector,
         body=body,
         form_data=form_data,
         records=records,
@@ -816,7 +946,7 @@ def project_universe(
     appendix3_index = (
         dict(appendix3_authority_index)
         if appendix3_authority_index is not None
-        else load_approved_appendix3_authority_index()
+        else load_effective_appendix3_authority_index()
     )
     construction_ids = {
         str(p.get("profile_id") or "")
@@ -828,7 +958,7 @@ def project_universe(
     gated_ids = {
         str(p.get("profile_id") or "")
         for p in profiles
-        if p.get("sector") in GATED_APPENDIX3_SECTORS
+        if consumer_entry_sector(str(p.get("sector") or "")) in GATED_APPENDIX3_SECTORS
     }
     if gated_ids != set(appendix3_index):
         _appendix3_fail("E2E_FIXTURE_AUTHORITY_MISSING")
@@ -873,7 +1003,7 @@ def project_universe(
             for name in PREDICATE_NAMES:
                 if name in req or name in form:
                     non_construction_injection += 1
-        if item["sector"] in GATED_APPENDIX3_SECTORS:
+        if item["request_sector"] in GATED_APPENDIX3_SECTORS:
             if "appendix3_item_no" not in req:
                 _appendix3_fail(f"E2E_FIXTURE_AUTHORITY_MISSING:appendix3:{item['profile_id']}")
             appendix3_injected += 1
