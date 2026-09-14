@@ -54,4 +54,7 @@ def build_industrial_leg_facility(canonical_contract: Dict[str, Any]) -> Dict[st
 def send_industrial_canonical_to_leg(canonical_contract: Dict[str, Any]) -> Dict[str, Any]:
     """facility 생성 → 기존 evaluate_rtm(facility) 호출 → LEG raw response 그대로 반환. 결과 가공 0."""
     facility = build_industrial_leg_facility(canonical_contract)
-    return leg_runtime_client.evaluate_rtm(facility)
+    values = (canonical_contract or {}).get("values") or {}
+    step1 = _CanonicalStep1Adapter(values)
+    context = leg_runtime_client.build_engine_context(step1)
+    return leg_runtime_client.evaluate_rtm(facility, context=context or None)

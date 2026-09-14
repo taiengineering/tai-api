@@ -58,7 +58,7 @@ def _drive(sector, form_data, factory, monkeypatch, auth_token="t", capture_faci
         if capture_facility:
             seen["order"].append("run_leg_diagnosis")
             monkeypatch.setattr(legc, "LEG_RUNTIME_URL", "http://leg.test")
-            def _eval(facility, *, timeout=None):
+            def _eval(facility, *, timeout=None, context=None):
                 seen["order"].append("evaluate_rtm"); seen["facility"] = facility
                 return {"status": "OK", "obligations": [], "obligation_count": 0, "trace_id": "t"}
             monkeypatch.setattr(legc, "build_facility",
@@ -103,14 +103,15 @@ def test_C2b_04_W2_has_chemical(monkeypatch):
 
 def test_C2b_05_leg_expected_14_14(monkeypatch):
     _, seen = _drive("INDUSTRY", FD14, build_industrial_www_step1, monkeypatch, capture_facility=True)
-    exp = {"ksic_major": "C25", "worker_count": 7, "total_floor_area": 5000, "building_use_type": "공장",
+    exp = {"worker_count": 7, "total_floor_area": 5000, "building_use_type": "공장",
            "has_safety_manager": True, "has_boiler": False, "has_chemical": True,
            "has_high_pressure_gas": True, "gas_capacity_kg": 120, "work_height_m": 3.5,
            "has_truck_loading_unloading": True, "truck_loading_height_m": 2.0,
            "has_manual_heavy_handling": True, "manual_handling_weight_kg": 25}
-    assert len(exp) == 14
+    assert len(exp) == 13
     for k, v in exp.items():
         assert seen["facility"][k] == v, f"{k}: {v!r} != {seen['facility'].get(k)!r}"
+    assert "ksic_major" not in seen["facility"]
     for k in ("has_chemical_substance", "address", "floor_count", "process_list"):
         assert k not in seen["facility"]
 

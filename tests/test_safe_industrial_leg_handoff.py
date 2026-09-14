@@ -63,7 +63,7 @@ def test_H8_12_13_no_db(monkeypatch):
     assert "supabase" not in src and "get_supabase" not in src
 def test_H8_14_15_16_evaluate_called_once_payload_passthrough(monkeypatch):
     calls=[]
-    def fake_eval(facility, *, timeout=None):
+    def fake_eval(facility, *, timeout=None, context=None):
         calls.append(facility)
         return {"status":"OK","obligations":[{"x":1}],"raw":"LEG"}
     monkeypatch.setattr(H.leg_runtime_client,"evaluate_rtm",fake_eval)
@@ -73,6 +73,6 @@ def test_H8_14_15_16_evaluate_called_once_payload_passthrough(monkeypatch):
     assert calls[0]==fac
     assert resp=={"status":"OK","obligations":[{"x":1}],"raw":"LEG"}
 def test_H8_17_no_result_processing(monkeypatch):
-    monkeypatch.setattr(H.leg_runtime_client,"evaluate_rtm",lambda f,*,timeout=None:{"weird":"shape","no_status":True})
+    monkeypatch.setattr(H.leg_runtime_client,"evaluate_rtm",lambda f,*,timeout=None,context=None:{"weird":"shape","no_status":True})
     resp=H.send_industrial_canonical_to_leg(_contract({"worker_count":1}))
     assert resp=={"weird":"shape","no_status":True}
