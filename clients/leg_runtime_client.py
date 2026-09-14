@@ -394,13 +394,14 @@ def _context_nonblank(val: Any) -> bool:
     return True
 
 
-# WO-E2E-OBS010-KSIC-MAJOR-ENGINE-CONTEXT-REV1-001:
+# WO-E2E-OBS010-KSIC-MAJOR-CONTEXT-FINALIZE-001:
 # Engine Context metadata. Not LEG applicability facts. Do not merge into facility.
-_CONTEXT_FIELDS = ("sector", "ksic_major")
+# CASE C: ksic_major stays SaaS/process-equipment; not engine context.
+_CONTEXT_FIELDS = ("sector",)
 
 
 def build_engine_context(step1_body: Any) -> Dict[str, Any]:
-    """DiagnoseStep1Body -> engine_context (sector, ksic_major). Verbatim. No alias/derive."""
+    """DiagnoseStep1Body -> engine_context (sector). Verbatim. No alias/derive."""
     inp = getattr(step1_body, "input", None) or {}
     if not isinstance(inp, dict):
         inp = {}
