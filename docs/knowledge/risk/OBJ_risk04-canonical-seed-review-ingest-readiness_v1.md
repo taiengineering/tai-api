@@ -359,20 +359,50 @@ Owner/GPT starts with Batch 001 (100 rows). Full 3103-row universe is local-only
 ## Next decision
 
 ```text
-RECOMMENDATION         = REVIEW_READY
+RECOMMENDATION         = CHG_REQUIRED then CHG1 PASS CANDIDATE
 OWNER REVIEW           = REQUIRED
 RISK-04-APPROVE-001    = NOT OPENED
-WO-RISK-04-CHG1        = NOT OPENED
+WO-RISK-04-CHG1        = PASS CANDIDATE
 MERGE                  = NOT AUTHORIZED
-NEXT                   = GPT VERIFY
+NEXT                   = GPT VERIFY CHG1
 ```
 
 After GPT/Owner verify the review pack, a separate WO may convert approved proposals into an `approved_seed_manifest` and only then mint canonical UUIDs.
 
 ---
 
+## PRE-CHG1 / POST-CHG1
+
+PRE-CHG1 (frozen Batch 001 / REVIEW-001 evidence; numbers not deleted):
+
+```text
+PROCESS PROPOSALS (source-kind) = 1722
+TASK PROPOSALS (source-kind)    = 1381
+CIC_W → PROCESS ALL             = in force
+KALIS same-name multi-parent    = auto HOLD
+PENDING MAPPING CANDIDATES      = 3103  (review-wait relation universe)
+```
+
+POST-CHG1 (`WO-RISK-04-CHG1`):
+
+```text
+SOURCE PROPOSAL UNIVERSE              = 3103
+semantic PROCESS                      = 24
+semantic TASK                         = 1381
+semantic AMBIGUOUS                    = 1688
+CIC_W unreviewed PROCESS              = 0
+CIC_W unreviewed AMBIGUOUS            = 1672
+KALIS same-name multi-parent auto HOLD = 0
+SOURCE RELATION REVIEW UNIVERSE       = 3103
+mapping approval coverage             = 0
+```
+
+See `OBJ_risk04-chg1-semantic-kind-gate_v1.md`.
+
+---
+
 ## Tests
 
-`tests/test_risk04_seed_review.py` covers deterministic proposal keys, no canonical UUID generation, same-name different-parent HOLD, no cross-source auto-merge, no auto `APPROVED`, B collision occurrence preservation, C record exclusion, `NO_MATCH` null target, Batch 001 cap/determinism, committed TSV shape, and full census when `artifacts/risk01` exists.
+`tests/test_risk04_seed_review.py` covers deterministic proposal keys, no canonical UUID generation, KALIS same-name different-parent as mechanical flag (not auto HOLD), no cross-source auto-merge, no auto `APPROVED`, B collision occurrence preservation, C record exclusion, `NO_MATCH` null target, Batch 001 cap/determinism, committed TSV shape, and full census when `artifacts/risk01` exists.
 
 CI: `pytest tests/test_risk04_seed_review.py`. Full census is skip-if-missing on GitHub runners.

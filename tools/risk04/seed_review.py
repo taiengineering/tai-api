@@ -82,10 +82,17 @@ def build_seed_proposals(
             }
         )
         merge_review = bool(other_sources_name)
-        hold = incompatible
+        # KALIS same-name + different parent is a mechanical flag, not auto HOLD.
+        hold = incompatible and node["source_id"] != SOURCE_KALIS
         review_status = "HOLD" if hold else "REVIEW_READY"
         if review_status in FORBIDDEN_REVIEW:
             raise ValueError("generator emitted forbidden status")
+        if hold:
+            reason = "same normalized name with incompatible parent context"
+        elif incompatible and node["source_id"] == SOURCE_KALIS:
+            reason = "same-name multi-parent is review flag only; not auto HOLD"
+        else:
+            reason = "deterministic source promotion candidate; not approved"
         rows.append(
             {
                 "seed_proposal_key": seed_proposal_key(node["source_id"], node["source_key"], kind),
@@ -106,11 +113,7 @@ def build_seed_proposals(
                 "source_occurrence_support": occurrence,
                 "risk_occurrence_count": risk_occ,
                 "review_status": review_status,
-                "review_reason": (
-                    "same normalized name with incompatible parent context"
-                    if hold
-                    else "deterministic source promotion candidate; not approved"
-                ),
+                "review_reason": reason,
                 "ambiguity_status": "HOLD" if hold else "NONE",
                 "merge_review_required": merge_review,
                 "canonical_uuid": None,
@@ -119,6 +122,7 @@ def build_seed_proposals(
                     "source_node_type": node["node_type"],
                     "priority_score_is_not_approval": True,
                     "auto_merged": False,
+                    "same_name_multi_parent": incompatible,
                 },
             }
         )
@@ -209,7 +213,7 @@ def universe_sha(rows: list[dict], *fields: str) -> str:
     return sha256_parts(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
-def build_seed_plan(root: Path = DEFAULT_ROOT) -> dict:
+def build_raw_seed_plan(root: Path = DEFAULT_ROOT) -> dict:
     source_plan = build_plan(root)
     a_nodes, b_nodes, c_nodes = eligible_nodes(source_plan)
     eligible = a_nodes + b_nodes + c_nodes
@@ -252,11 +256,16 @@ def build_seed_plan(root: Path = DEFAULT_ROOT) -> dict:
         "metrics": metrics,
         "no_match_candidates": no_match,
         "pending_mapping_candidates": len(mappings),
+        "source_relation_review_universe": len(mappings),
         "seed_universe_sha": seed_sha,
         "mapping_review_sha": mapping_sha,
         "source_plan": source_plan,
         "eligible": {"A": a_nodes, "B": b_nodes, "C": c_nodes},
     }
+
+
+def build_seed_plan(root: Path = DEFAULT_ROOT) -> dict:
+    return build_raw_seed_plan(root)
 
 
 def no_match_candidate(source_id: str, source_key: str) -> dict:
@@ -319,8 +328,10 @@ def build_report(root: Path = DEFAULT_ROOT) -> dict:
             "review_ready": sum(1 for row in batch_view if row["review_status"] == "REVIEW_READY"),
             "sha256": batch_sha(batch_view),
         },
+        "SOURCE_RELATION_REVIEW_UNIVERSE": seed["source_relation_review_universe"],
         "PENDING_MAPPING_CANDIDATES": seed["pending_mapping_candidates"],
         "NO_MATCH_CANDIDATES": seed["no_match_candidates"],
+        "mapping_approval_coverage": 0,
         "SOURCE_INGEST": readiness["status"],
         "source_node_orphan": readiness["source_node_orphan"],
         "snapshot_orphan": readiness["snapshot_orphan"],
@@ -338,7 +349,8 @@ def build_report(root: Path = DEFAULT_ROOT) -> dict:
         "customer_data_used": 0,
         "db_write": 0,
         "OWNER_REVIEW": "REQUIRED",
-        "RECOMMENDATION": "REVIEW_READY" if readiness["status"] != "NOT_READY" else "BLOCKED",
+        "RECOMMENDATION": "CHG_REQUIRED / IN REVIEW",
+        "RISK_04_APPROVE_001": "NOT OPENED",
     }
     summary["_plan"] = {"proposals": seed["proposals"], "mappings": seed["mappings"], "batch": batch_view}
     return summary
@@ -364,12 +376,9 @@ def write_local_artifacts(summary: dict) -> None:
 
 
 def main() -> None:
+    # Frozen Batch 001 TSV is not rewritten. CHG1 artifacts are written by semantic_gate.
     summary = build_report(DEFAULT_ROOT)
     write_local_artifacts(summary)
-    dest = Path("docs/knowledge/risk/RISK04_BATCH001.tsv")
-    from tools.risk04.review_batch import write_batch_tsv
-
-    write_batch_tsv(summary["_plan"]["batch"], dest)
     slim = {k: v for k, v in summary.items() if k != "_plan"}
     print(json.dumps(slim, ensure_ascii=False, indent=2))
 

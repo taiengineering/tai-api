@@ -281,3 +281,25 @@ RISK-04-APPROVE-001 stays closed until those semantic decisions are confirmed.
 NEXT = GPT SEMANTIC REVIEW
 MERGE = NOT AUTHORIZED
 ```
+
+---
+
+## GPT semantic review result (append; original facts above are unchanged)
+
+```text
+WO-RISK-04-REVIEW-001 = SEMANTIC REVIEW COMPLETE
+KEEP_AS_DISTINCT      = 49
+MERGE_CANDIDATE       = 22
+HOLD                  = 17
+REJECT                = 12
+SYSTEMIC_KIND_RULE_ISSUE = YES
+CIC_W → PROCESS ALL   = REJECTED
+KALIS MULTI-PARENT ALL HOLD = REJECTED
+approval_state        = NOT_APPROVED
+```
+
+Manifest recorded in CHG1: `docs/knowledge/risk/RISK04_BATCH001_GPT_REVIEW_v1.tsv`. Original `RISK04_BATCH001_REVIEW_INPUT.tsv` owner columns remain `PENDING` as the evidence snapshot.
+
+```text
+NEXT = WO-RISK-04-CHG1
+```

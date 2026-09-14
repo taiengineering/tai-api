@@ -67,14 +67,15 @@ def test_proposal_key_deterministic_and_not_uuid():
     assert "datetime" not in src.lower()
 
 
-def test_same_name_different_parent_is_hold():
+def test_same_name_different_parent_is_flag_not_auto_hold():
     nodes = [
         _node(SOURCE_KALIS, "TASK", "터파기", "건축 > 토공사 > 터파기"),
         _node(SOURCE_KALIS, "TASK", "터파기", "토목 > 굴착공사 > 터파기"),
     ]
     proposals = build_seed_proposals(nodes)
-    assert all(row["review_status"] == "HOLD" for row in proposals)
-    assert all(row["ambiguity_status"] == "HOLD" for row in proposals)
+    assert all(row["metadata"]["same_name_multi_parent"] is True for row in proposals)
+    assert all(row["review_status"] != "HOLD" for row in proposals)
+    assert all(row["review_status"] == "REVIEW_READY" for row in proposals)
     assert all(row["canonical_uuid"] is None for row in proposals)
 
 
@@ -188,6 +189,8 @@ def test_full_seed_census_and_determinism():
     assert first["SOURCE_INGEST"] == "READY_WITH_HOLD"
     assert first["CANONICAL_INGEST"] == "NOT AUTHORIZED"
     assert first["MAPPING_INGEST"] == "NOT AUTHORIZED"
+    assert first["mapping_approval_coverage"] == 0
+    assert first["SOURCE_RELATION_REVIEW_UNIVERSE"] == 3103
     assert first["SEED_UNIVERSE_SHA"] == second["SEED_UNIVERSE_SHA"]
     assert first["MAPPING_REVIEW_SHA"] == second["MAPPING_REVIEW_SHA"]
     assert first["READINESS_SHA"] == second["READINESS_SHA"]
