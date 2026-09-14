@@ -4,7 +4,7 @@ type: report
 scope: knowledge
 project: chem
 title: OBJ-CHEM-04 API-only full list and incremental sync
-version: 1
+version: 2
 status: active
 owner: taiwang
 ---
@@ -766,3 +766,20 @@ PRODUCTION INGEST = NO
 CHEM-04 = IN_PROGRESS
 MERGE = NOT AUTHORIZED
 ```
+
+---
+
+## Official quota text (2026-09-14 freeze)
+
+Does not replace the Detail01 census measurement above.
+
+Portal page for dataset 15157612 states 개발계정 트래픽 **1,000** and error **22** as 일일 호출 허용량 초과. That is **service-level** wording. Independent 1,000/day per `getChemDetail01`…`16` is **not documented**.
+
+```text
+Detail01 ~1000 HTTP 429 on 2026-09-14 = OBSERVED (that scan only)
+PER-ENDPOINT 1,000                    = NOT DOCUMENTED
+SERVICE-WIDE 1,000                    = WORKING ASSUMPTION
+AUTH KEY CHANGE                       = NO
+```
+
+See `OBJ_chem04-bootstrap-decision-gate_v1.md` QUOTA POLICY ADDENDUM.
