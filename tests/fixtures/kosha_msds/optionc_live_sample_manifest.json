@@ -1,0 +1,69 @@
+{
+  "sample": [
+    {
+      "chemId": "000002",
+      "stratum": "S1_GENERAL_COMPLETE"
+    },
+    {
+      "chemId": "000003",
+      "stratum": "S1_GENERAL_COMPLETE"
+    },
+    {
+      "chemId": "000004",
+      "stratum": "S1_GENERAL_COMPLETE"
+    },
+    {
+      "chemId": "000005",
+      "stratum": "S1_GENERAL_COMPLETE"
+    },
+    {
+      "chemId": "000006",
+      "stratum": "S1_GENERAL_COMPLETE"
+    },
+    {
+      "chemId": "000010",
+      "stratum": "S3_SPECIAL_NAME"
+    },
+    {
+      "chemId": "000043",
+      "stratum": "S3_SPECIAL_NAME"
+    },
+    {
+      "chemId": "000178",
+      "stratum": "S3_SPECIAL_NAME"
+    },
+    {
+      "chemId": "001846",
+      "stratum": "S4_RECENT_OFFICIAL_DATE"
+    },
+    {
+      "chemId": "007764",
+      "stratum": "S4_RECENT_OFFICIAL_DATE"
+    },
+    {
+      "chemId": "134944",
+      "stratum": "S4_RECENT_OFFICIAL_DATE"
+    },
+    {
+      "chemId": "001809",
+      "stratum": "S5_OLD_OFFICIAL_DATE"
+    },
+    {
+      "chemId": "013842",
+      "stratum": "S5_OLD_OFFICIAL_DATE"
+    },
+    {
+      "chemId": "014097",
+      "stratum": "S5_OLD_OFFICIAL_DATE"
+    },
+    {
+      "chemId": "000001",
+      "stratum": "S6_KNOWN_VALIDATED"
+    },
+    {
+      "chemId": "001008",
+      "stratum": "S6_KNOWN_VALIDATED"
+    }
+  ],
+  "sample_manifest_sha256": "b404725ade87b289e124abcca0652e91ec4bace1f5094d79f251860035af2351"
+}
