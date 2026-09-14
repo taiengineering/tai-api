@@ -33,9 +33,9 @@ PATCH2A_15_AXES = (
 
 
 def test_T1_vocabulary_len_and_distinct():
-    """T1: len(_LEG_INPUT_FIELDS) == 157 && distinct == 157 (+18 welding Frozen evidence leaves)."""
-    assert len(_LEG_INPUT_FIELDS) == 157
-    assert len(set(_LEG_INPUT_FIELDS)) == 157
+    """T1: len(_LEG_INPUT_FIELDS) == 179 && distinct == 179 (+22 dust Frozen evidence leaves)."""
+    assert len(_LEG_INPUT_FIELDS) == 179
+    assert len(set(_LEG_INPUT_FIELDS)) == 179
     assert "has_building_elevator" not in _LEG_INPUT_FIELDS
     assert "has_furniture_moving_lift" in _LEG_INPUT_FIELDS
     assert "has_welding" in _LEG_INPUT_FIELDS

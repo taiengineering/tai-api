@@ -118,7 +118,7 @@ def test_allowlist_contains_published_leaves_not_source_item():
         assert name in _LEG_INPUT_FIELDS
     assert "appendix3_item_no" not in _LEG_INPUT_FIELDS
     assert len(_LEG_INPUT_FIELDS) == len(set(_LEG_INPUT_FIELDS))
-    assert len(_LEG_INPUT_FIELDS) == 157
+    assert len(_LEG_INPUT_FIELDS) == 179
 
 
 def _proj_keys(item, subtype=None):
