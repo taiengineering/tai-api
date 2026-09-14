@@ -17,6 +17,11 @@ CONTENT_QUEUES = CONTENT / "queues"
 CONTENT_CHECKPOINTS = CONTENT / "checkpoints"
 CONTENT_MANIFESTS = CONTENT / "manifests"
 CONTENT_REPORTS = CONTENT / "reports"
+DECISION = ROOT / "decision"
+DECISION_RAW = DECISION / "live_raw"
+DECISION_NORMALIZED = DECISION / "normalized"
+DECISION_CHECKPOINTS = DECISION / "checkpoints"
+DECISION_MANIFESTS = DECISION / "manifests"
 
 
 def ensure_layout() -> None:
@@ -33,5 +38,10 @@ def ensure_layout() -> None:
         CONTENT_CHECKPOINTS,
         CONTENT_MANIFESTS,
         CONTENT_REPORTS,
+        DECISION,
+        DECISION_RAW,
+        DECISION_NORMALIZED,
+        DECISION_CHECKPOINTS,
+        DECISION_MANIFESTS,
     ):
         path.mkdir(parents=True, exist_ok=True)

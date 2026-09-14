@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<response>
+  <header>
+    <resultCode>00</resultCode>
+    <resultMsg>NORMAL SERVICE.</resultMsg>
+  </header>
+  <body>
+    <items>
+      <item>
+      <itemDetail>자료없음</itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>Z01</msdsItemCode>
+      <msdsItemNameKor>비고</msdsItemNameKor>
+      <ordrIdx>1</ordrIdx>
+      </item>
+      <item>
+      <itemDetail>있음</itemDetail>
+      <lev>1</lev>
+      <msdsItemCode>Z02</msdsItemCode>
+      <msdsItemNameKor>내용</msdsItemNameKor>
+      <ordrIdx>2</ordrIdx>
+      </item>
+    </items>
+  </body>
+</response>

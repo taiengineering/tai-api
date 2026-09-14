@@ -4,7 +4,7 @@ type: report
 scope: knowledge
 project: chem
 title: OBJ-CHEM-04 secondary content bootstrap Decision Gate
-version: 2
+version: 3
 status: active
 owner: taiwang
 ---
@@ -13,6 +13,7 @@ owner: taiwang
 
 ```text
 WO-CHEM-04-BOOTSTRAP-DECISION-001 = EVIDENCE COMPLETE / POLICY BLOCKED
+WO-CHEM-04-OPTIONC-LIVE-SAMPLE-001 = CODE READY / LOCAL_RUN_PENDING
 WO-CHEM-04-CONTENT-LOCAL-001      = PASS
 PR #359                           = OPEN / UNMERGED
 current HEAD                      = 65f0efdc56db5f299b92c6fe82866ea19045f057
@@ -330,3 +331,53 @@ bulk hydration             = NO
 FULL DETAIL HYDRATION      = NOT STARTED
 CHEM-04                    = IN_PROGRESS
 ```
+
+---
+
+## LIVE SAMPLE ADDENDUM
+
+Does not replace Decision Gate evidence or the STOP block above.
+
+```text
+WO-CHEM-04-OPTIONC-LIVE-SAMPLE-001
+start HEAD                 = 37b057ebe1265fa37c90332450e36ab45f2ed1cf
+sample manifest SHA256     = b404725ade87b289e124abcca0652e91ec4bace1f5094d79f251860035af2351
+sample chemicals selected  = 16
+planned sections           = 256
+hard cap                   = 320
+Cursor live probe          = max 1 chemId × 16
+LOCAL 16×16                = operator machine only
+serviceKey                 = env only (KOSHA_SERVICE_KEY then DATA_GO_KR_SERVICE_KEY)
+production writer          = NONE
+live metrics               = LOCAL_RUN_PENDING
+TECHNICAL OPTION C GATE    = LOCAL_RUN_PENDING
+BOOTSTRAP POLICY           = NOT DECIDED
+OPTION B auto-approve      = NO
+WO-CHEM-04-HYDRATE-001     = NOT OPENED
+PR #359 merge              = NOT AUTHORIZED
+```
+
+CLI (LOCAL PC only for the frozen 16×16):
+
+```bash
+export KOSHA_SERVICE_KEY='...'   # or DATA_GO_KR_SERVICE_KEY; never commit
+python3 -m tools.chem04.live_sample_compare --local-run
+```
+
+Cursor may run `--probe` (1 chemId) only. Full sample execution is not done in this worktree.
+
+Until the operator local run returns SHA256 for `comparison.jsonl` and `live_sample_report.json`:
+
+```text
+section fidelity %         = LOCAL_RUN_PENDING
+CONTENT_DIFFERENT          = LOCAL_RUN_PENDING
+API_ERROR                  = LOCAL_RUN_PENDING
+PROVENANCE                 = CONDITIONAL
+RIGHTS                     = CONDITIONAL
+customer display           = separate rights check; not solved by this WO
+content_origin             = SECONDARY_BOOTSTRAP (if later approved)
+current_verified           = false
+authoritative_verified     = false
+```
+
+16 sample match ≠ 9,124 current verified.
