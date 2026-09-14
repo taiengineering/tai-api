@@ -142,7 +142,9 @@ _LEG_INPUT_FIELDS = (
     # direct_workers / subcon_workers are NOT appended: they are absent from RTM
     # condition vocabulary (not missing_fields, not NUMERIC_FIELDS, not CORE22 Leaf.field).
     "contract_amount_eok",
-    "ksic_major", "has_chemical", "has_elevator", "has_noise_work", "has_asbestos",
+    # WO-E2E-OBS010-KSIC-MAJOR-MINIMUM-MODIFY-001: ksic_major removed from LEG
+    # transport (186 after removing transport-only ksic_major). Consumer schema kept.
+    "has_chemical", "has_elevator", "has_noise_work", "has_asbestos",
     "has_crane", "has_excavation", "has_concrete_work", "has_hazardous_material",
     "has_gas", "is_multi_use", "has_safety_manager", "has_subcontractor", "has_scaffold",
     "has_diving", "has_dust_work", "has_forklift", "has_high_pressure_gas", "has_pile_work",

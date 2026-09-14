@@ -66,10 +66,11 @@ def test_G4A03_canonical_29(patched):
     assert set(inp.keys()) <= set(_LEG_INPUT_FIELDS), (
         "step1.input.keys() 는 _LEG_INPUT_FIELDS(103) 부분집합이어야 한다"
     )
-    # 값 있는 canonical29 축은 통과(worker_count 50 / ksic_major "C10"). has_chemical_substance 는
-    # _LEG_INPUT_FIELDS 밖 → 필터 배제. alias 승격으로 has_chemical=True 가 대신 입장.
+    # 값 있는 canonical29 축 중 LEG vocab 축은 통과(worker_count 50).
+    # ksic_major 는 consumer canonical 유지, LEG transport surplus 로 필터 배제.
+    # has_chemical_substance 는 _LEG_INPUT_FIELDS 밖 → 필터 배제. alias 승격으로 has_chemical=True 가 대신 입장.
     assert inp.get("worker_count") == 50
-    assert inp.get("ksic_major") == "C10"
+    assert "ksic_major" not in inp
     assert inp.get("has_chemical") is True
     assert "has_chemical_substance" not in inp   # _LEG_INPUT_FIELDS 밖 → unified 필터 배제
 
