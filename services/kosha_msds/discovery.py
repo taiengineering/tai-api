@@ -770,17 +770,27 @@ def run_empirical_census(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="KOSHA Detail01 empirical chemId census")
+    parser = argparse.ArgumentParser(description="KOSHA Detail01 empirical chemId census (fallback only)")
     parser.add_argument("--start", type=int, default=DISCOVERY_RANGE_START)
     parser.add_argument("--end", type=int, default=DISCOVERY_RANGE_END)
     parser.add_argument("--workers", type=int, default=DISCOVERY_WORKERS_START)
     parser.add_argument("--artifact-dir", default=str(DEFAULT_ARTIFACT_DIR))
     parser.add_argument("--no-tail", action="store_true")
+    parser.add_argument(
+        "--enable-primary-scan",
+        action="store_true",
+        help="Fallback/validation only. Sequential Detail01 scan is not primary enumeration.",
+    )
     return parser
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    if not args.enable_primary_scan:
+        print("PRIMARY ENUMERATION = NO")
+        print("DETAIL01 sequential scan is disabled as primary.")
+        print("Role = FALLBACK / VALIDATION TOOL. Pass --enable-primary-scan to run.")
+        return 2
     client = KoshaMsdsClient(max_attempts=1, timeout_seconds=20)
     summary = run_empirical_census(
         client,

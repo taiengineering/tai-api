@@ -12,7 +12,7 @@ owner: taiwang
 # OBJ-CHEM-04 — Official OpenAPI search contract + incremental runner
 
 ```text
-CHEM-04 = IN_PROGRESS (PATCH-3 on PR #350, not merged)
+CHEM-04 = IN_PROGRESS (PATCH-4 on PR #350, not merged)
 CHEM-01 = CLOSED / PASS_WITH_INGEST_GATE
 CHEM-02 = DONE / CLOSED
 CHEM-03 = CLOSED / CONDITIONAL
@@ -23,21 +23,23 @@ OPENAPI DETAIL CONTRACT = PASS
 INCREMENTAL RUNNER = IMPLEMENTED
 DOCUMENTED FULL ENUMERATION API = NOT AVAILABLE
 OPENAPI LIST CONTRACT = SEARCH-ONLY
-DETAIL01_ID_DISCOVERY = IN_PROGRESS
-EMPIRICAL_API_CENSUS = IN_PROGRESS
-INITIAL FULL SEED = BLOCKED until INITIAL_SEED_CANDIDATE = PASS
-PRODUCTION FULL INGEST = BLOCKED
+DETAIL01_ID_DISCOVERY = PASS / FALLBACK_VALIDATION
+PRIMARY ENUMERATION = KOSHA WEB CURRENT INDEX + SECONDARY BOOTSTRAP
+50-DAY NUMERIC SCAN = NO
+CURSOR FULL DATA EXECUTION = NO
+LOCAL FULL DATA EXECUTION  = YES
+PRODUCTION FULL INGEST = BLOCKED until GPT approval
 ```
 
-This PATCH freezes the **official OpenAPI 활용가이드 contract** and adds empirical `getChemDetail01` identity discovery. It does not invent a dump-all. It does not crawl `chemList.do`. Empirical census is **not** `FULL_OFFICIAL`.
+This PATCH does not invent a dump-all OpenAPI. Sequential Detail01 scan is preserved as a fallback tool and is **not** primary enumeration.
 
 ---
 
 ## 0. Revision guard
 
 ```text
-PR #350 PATCH-3 parent (PATCH-2 reviewed head) =
-998d54b6c22728220d45a5fbafbe02178818e796
+PR #350 PATCH-4 parent (PATCH-3 reviewed head) =
+417069ac4e5586948ef018dec4265cc7fa1b0928
 branch =
 feature/chem04-api-full-sync
 ```
@@ -313,10 +315,16 @@ merge                    = NO
 ## 11. Tests
 
 ```text
-python3 -m pytest tests/test_kosha_msds_catalog.py tests/test_kosha_msds_full_sync.py tests/test_kosha_msds_discovery.py -q --tb=line
+python3 -m pytest \
+  tests/test_kosha_msds_catalog.py \
+  tests/test_kosha_msds_full_sync.py \
+  tests/test_kosha_msds_discovery.py \
+  tests/test_kosha_msds_bootstrap.py \
+  tests/test_chem04_cli.py \
+  -q --tb=line
 ```
 
-CI: mock transport only. No live KOSHA calls. No additional getChemList dump-all probe.
+CI: mock transport + fixture probe only. No live KOSHA calls. No Hugging Face 883MB download. No additional getChemList dump-all probe.
 
 ---
 
@@ -430,6 +438,155 @@ INITIAL_SEED_CANDIDATE         = BLOCKED
 
 Runtime truth this run: after about 1,000 Detail01 calls the API returned HTTP 429. Portal displayed 1,000/day was not assumed; it was observed. Resume from checkpoint is possible on a later day. No Detail02~16 hydration. No production ingest.
 
+PATCH-3 sequential Detail01 scan is **FALLBACK / VALIDATION only**. It is not the primary way to build the current chemId census. A 50-day 1,000/day numeric scan is **not** required.
+
+---
+
+## 13. PATCH-4 role split — Cursor agent ≠ local bulk runner
+
+Cursor the IDE and the Cursor conversation agent are not the same execution subject.
+
+```text
+GPT
+= 설계 / 작업지시 / 결과 검증 / 승인
+
+Cursor agent
+= 수집기·정합화 코드 작성
+= 테스트 작성
+= dry-run / fixture / 10~100건 샘플 검증
+= PR 관리
+
+Local PC terminal
+= 대량 데이터 다운로드
+= KOSHA current index 전체 수집
+= 48,966건 seed 처리
+= JOIN / diff / checksum
+= 대용량 artifact 생성
+= checkpoint / resume
+
+Supabase Production
+= 검증·승인 완료 후에만 적재
+```
+
+```text
+1. Cursor implements collectors + join + tests
+2. fixture / 10~100 dry-run
+3. commit + PR
+4. LOCAL terminal FULL RUN of the same code
+5. local artifact 생성
+6. 결과 요약만 Cursor/GPT에 전달
+7. GPT 독립검증
+8. 승인 후 production ingest
+```
+
+```text
+Cursor FULL DATA EXECUTION = NO
+LOCAL FULL DATA EXECUTION  = YES
+Cursor responsibility      = IMPLEMENT + TEST + SMALL PROBE
+Local responsibility       = DOWNLOAD + FULL COLLECT + FULL JOIN + ARTIFACT
+Production responsibility  = NONE until GPT approval
+```
+
+Bulk originals are **not** committed to Git.
+
+```text
+artifacts/chem04/
+  secondary_seed/
+  official_current/
+  joins/
+  manifests/
+  checkpoints/
+```
+
+`.gitignore` covers `artifacts/chem04/`. Git keeps collection code, schema/constants, manifest **format**, and tests.
+
+---
+
+## 14. Local CLIs
+
+Same code Cursor tests; the operator machine runs the full job.
+
+```bash
+# Cursor / CI probe — fixture only
+python -m tools.chem04.bootstrap_seed \
+  --local-jsonl tests/fixtures/kosha_msds/secondary_seed_sample.jsonl \
+  --max-rows 10 \
+  --out /tmp/chem04-seed.jsonl \
+  --manifest /tmp/chem04-manifest.json
+
+python -m tools.chem04.collect_current_index --max-pages 3
+
+# Local FULL RUN — operator terminal, not the Cursor agent
+python -m tools.chem04.bootstrap_seed --download
+# or reuse an already downloaded official train.jsonl:
+python -m tools.chem04.bootstrap_seed --local-jsonl /path/to/train.jsonl --verify-sha256
+
+python -m tools.chem04.collect_current_index --full --resume --delay 1.0
+python -m tools.chem04.join_current_identity
+python -m tools.chem04.report
+```
+
+Safety:
+
+```text
+python -m tools.chem04.bootstrap_seed            → refused (need --local-jsonl or --download)
+python -m tools.chem04.collect_current_index     → refused (need --max-pages or --full)
+python -m services.kosha_msds.discovery          → refused (need --enable-primary-scan)
+```
+
+---
+
+## 15. PATCH-4 source contract (code-ready; full N = LOCAL_RUN_PENDING)
+
+Secondary bootstrap (Hugging Face `Yuyongkim/inconvenience-msds`):
+
+```text
+role                    = BOOTSTRAP IDENTITY SEED (not TAI SoT, not FULL_OFFICIAL)
+revision                = 5db49df655360dc69cc250ecb41058bf464553fa
+train.jsonl bytes       = 882524767
+train.jsonl sha256      = 2c342e638e403540076f0e0d13d0018f7671b11747b5a40cb67a5245d13a4227
+github HEAD (code repo) = f98915d4d1a89a90083e7b70914cdb1b49e14ccf
+advertised rows         = 48966
+observed identity fields= chem_id, name_ko, cas_no, name_en
+absent                  = lastDate, openYn, KE, UN, EN, snapshot date
+sections/braille/body   = DROPPED; production ingest = NO
+full unique chemId N    = LOCAL_RUN_PENDING
+```
+
+Do not invent `lastDate` comparison from the secondary dataset. Do not force-fit 48,966.
+
+KOSHA official current web index:
+
+```text
+https://msds.kosha.or.kr/MSDSInfo/mgr/hub/chemList.do
+robots.txt              = 404 (no robots file; not an explicit ban)
+identity                = javascript:selectChem('chemId','casNo','chemName')
+columns                 = No. / 물질명 / CAS No. / 개정일
+listType                = msds
+workers                 = 1
+pageSize guessing       = FORBIDDEN
+header N                = live; do not hardcode
+row count per page      = live; last page and some middle pages may be short
+full page crawl         = LOCAL_RUN_PENDING
+STOP                    = robots deny / CAPTCHA / HTTP 403 / HTTP 429
+```
+
+JOIN (deterministic; no fuzzy / LLM):
+
+```text
+DIRECT_OFFICIAL_ID > CAS_EXACT unique > NAME_EXACT (NFC/trim/whitespace)
+> COMPOUND_EXACT (name_en) > UNMATCHED | AMBIGUOUS
+full join counts        = LOCAL_RUN_PENDING
+```
+
+OpenAPI this PATCH:
+
+```text
+API calls this PATCH    = 0
+same-day Detail01 retry = FORBIDDEN (quota already observed)
+validation runner max   = 100 (later quota window only)
+```
+
 ---
 
 ## STOP
@@ -438,12 +595,17 @@ Runtime truth this run: after about 1,000 Detail01 calls the API returned HTTP 4
 OPENAPI LIST CONTRACT = SEARCH-ONLY
 DOCUMENTED FULL ENUMERATION API = NOT AVAILABLE
 API_FULL_ENUMERATION = BLOCKED_BY_SOURCE_CONTRACT
-DETAIL01_ID_DISCOVERY = PASS (implemented; live census quota STOP)
+DETAIL01_ID_DISCOVERY = PASS / FALLBACK_VALIDATION
 EMPIRICAL_API_CENSUS = NOT FULL_OFFICIAL
+50-DAY NUMERIC SCAN = NO
+CURSOR FULL DATA EXECUTION = NO
+LOCAL FULL DATA EXECUTION = YES
+FULL INDEX / SEED / JOIN COUNTS = LOCAL_RUN_PENDING
 INITIAL_SEED_CANDIDATE = BLOCKED
 PORTAL 1000/day HARD LIMIT OBSERVED = YES
 INITIAL FULL SEED = BLOCKED
 SYNC RUNNER = PRESERVED
+PRODUCTION INGEST = NO
 CHEM-04 = IN_PROGRESS
 MERGE = NOT AUTHORIZED
 ```

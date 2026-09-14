@@ -13,5 +13,11 @@ venv/
 scripts/debug/*.xml
 form_originals_hwp/
 
-# CHEM-04 empirical census (local only; do not commit)
+# CHEM-04 local bulk artifacts — never commit
+# Layout (created by tools.chem04.* on the operator machine):
+#   artifacts/chem04/secondary_seed/
+#   artifacts/chem04/official_current/
+#   artifacts/chem04/joins/
+#   artifacts/chem04/manifests/
+#   artifacts/chem04/checkpoints/
 artifacts/chem04/
