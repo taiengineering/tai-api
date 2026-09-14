@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS public.risk_snapshots (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   status text NOT NULL
     CHECK (status IN ('STAGED', 'VALIDATED', 'ACCEPTED', 'REJECTED')),
-  UNIQUE (source_id, source_sha256)
+  UNIQUE (source_id, source_sha256),
+  UNIQUE (id, source_id)
 );
 
 COMMENT ON TABLE public.risk_snapshots IS
@@ -119,7 +120,10 @@ CREATE TABLE IF NOT EXISTS public.risk_records (
   severity text,
   design_control text,
   construction_control text,
-  UNIQUE (source_id, content_key)
+  UNIQUE (source_id, content_key),
+  CONSTRAINT risk_records_task_node_fkey
+    FOREIGN KEY (source_id, task_source_key)
+    REFERENCES public.risk_source_nodes (source_id, source_key)
 );
 
 COMMENT ON TABLE public.risk_records IS
@@ -132,6 +136,8 @@ COMMENT ON COLUMN public.risk_records.raw_payload IS
   'Lossless 19-field object. Derived columns must not replace it.';
 COMMENT ON COLUMN public.risk_records.task_source_key IS
   'Native KALIS task node source_key. Not a TAI canonical task id.';
+COMMENT ON CONSTRAINT risk_records_task_node_fkey ON public.risk_records IS
+  'Record must point at an existing same-source C task node. Nonexistent task keys are forbidden.';
 COMMENT ON COLUMN public.risk_records.likelihood IS
   'Source-native 사고가능성. Not a TAI legal risk score.';
 COMMENT ON COLUMN public.risk_records.severity IS
@@ -141,12 +147,15 @@ CREATE INDEX IF NOT EXISTS risk_records_task_idx
   ON public.risk_records (source_id, task_source_key);
 
 CREATE TABLE IF NOT EXISTS public.risk_snapshot_memberships (
-  snapshot_id uuid NOT NULL REFERENCES public.risk_snapshots (id),
+  snapshot_id uuid NOT NULL,
   member_kind text NOT NULL CHECK (member_kind IN ('NODE', 'RECORD')),
   source_id text NOT NULL REFERENCES public.risk_sources (source_id),
   member_key text NOT NULL,
   occurrence_count integer NOT NULL CHECK (occurrence_count >= 1),
-  PRIMARY KEY (snapshot_id, member_kind, source_id, member_key)
+  PRIMARY KEY (snapshot_id, member_kind, source_id, member_key),
+  CONSTRAINT risk_snapshot_memberships_snapshot_source_fkey
+    FOREIGN KEY (snapshot_id, source_id)
+    REFERENCES public.risk_snapshots (id, source_id)
 );
 
 COMMENT ON TABLE public.risk_snapshot_memberships IS
@@ -154,7 +163,10 @@ COMMENT ON TABLE public.risk_snapshot_memberships IS
 COMMENT ON COLUMN public.risk_snapshot_memberships.member_key IS
   'NODE = source_key. RECORD = content_key.';
 COMMENT ON COLUMN public.risk_snapshot_memberships.occurrence_count IS
-  'Source occurrence N for one knowledge entity. SUM(RECORD) must equal raw_row_count.';
+  'Source occurrence N for one knowledge entity. B DETAIL_PROCESS SUM must equal 626. C RECORD SUM must equal 47559.';
+COMMENT ON CONSTRAINT risk_snapshot_memberships_snapshot_source_fkey
+  ON public.risk_snapshot_memberships IS
+  'Membership source_id must match the snapshot source. Cross-source membership is forbidden.';
 
 CREATE INDEX IF NOT EXISTS risk_snapshot_memberships_member_idx
   ON public.risk_snapshot_memberships (source_id, member_kind, member_key);
@@ -237,7 +249,7 @@ INSERT INTO public.risk_sources (
     'latest accepted official CSV = 20210910 filename',
     '수시(1회성)',
     true,
-    '{"dataset_id":"15087828","model_d":"USEFUL_BRIDGE"}'::jsonb
+    '{"dataset_id":"15087828","model_d":"USEFUL_BRIDGE","identity_status":"HOLD","duplicate_path_groups":3,"rows_in_duplicate_paths":9}'::jsonb
   ),
   (
     'KALIS_RISK_PROFILE',

@@ -16,7 +16,13 @@ from tools.risk02.identity import (
     path_source_key,
     sha256_parts,
 )
-from tools.risk02.plan_source_core import _a_nodes, _b_nodes, _c_plan, build_plan
+from tools.risk02.plan_source_core import (
+    _a_nodes,
+    _b_nodes,
+    _c_plan,
+    b_membership_occurrence,
+    build_plan,
+)
 
 SQL = Path("supabase/migrations/20260915_risk_source_catalog.sql")
 PLANNER = Path("tools/risk02/plan_source_core.py")
@@ -51,6 +57,24 @@ def test_sql_physical_schema_is_risk_family_not_graph():
     assert "kosha_msds" not in text
     assert "occurrence_count" in text
     assert "raw_payload jsonb" in text
+    assert "UNIQUE (id, source_id)" in text
+    assert "CONSTRAINT risk_snapshot_memberships_snapshot_source_fkey" in text
+    assert "FOREIGN KEY (snapshot_id, source_id)" in text
+    assert "REFERENCES public.risk_snapshots (id, source_id)" in text
+    assert "CONSTRAINT risk_records_task_node_fkey" in text
+    assert "FOREIGN KEY (source_id, task_source_key)" in text
+    assert "REFERENCES public.risk_source_nodes (source_id, source_key)" in text
+    assert '"identity_status":"HOLD"' in text
+    assert '"duplicate_path_groups":3' in text
+    assert '"rows_in_duplicate_paths":9' in text
+
+
+def test_sql_forbids_cross_source_snapshot_membership():
+    text = SQL.read_text(encoding="utf-8")
+    assert "CONSTRAINT risk_snapshot_memberships_snapshot_source_fkey" in text
+    assert "FOREIGN KEY (snapshot_id, source_id)" in text
+    assert "REFERENCES public.risk_snapshots (id, source_id)" in text
+    assert "Cross-source membership is forbidden" in text
 
 
 def test_a_native_code_identity_and_parent():
@@ -76,6 +100,28 @@ def test_b_path_identity_excludes_row_number():
     assert metrics["identity"] == "HOLD"
 
 
+def test_b_duplicate_path_preserves_leaf_occurrence():
+    header = ["번호", "공사종류", "공종명", "세부공정명"]
+    rows = [
+        ["148", "빌딩", "조적", "미장 및 견출작업"],
+        ["149", "빌딩", "조적", "미장 및 견출작업"],
+        ["150", "빌딩", "조적", "미장 및 견출작업"],
+    ]
+    nodes, metrics = _b_nodes(header, rows)
+    leaves = [n for n in nodes if n["node_type"] == "DETAIL_PROCESS"]
+    parents = [n for n in nodes if n["node_type"] != "DETAIL_PROCESS"]
+    assert metrics["rows"] == 3
+    assert metrics["leaf_membership_rows"] == 1
+    assert metrics["leaf_occurrence_sum"] == 3
+    assert metrics["duplicate_extras"] == 2
+    assert metrics["occurrence_preservation"] == "PASS"
+    assert metrics["identity"] == "HOLD"
+    assert len(leaves) == 1
+    leaf_occ = metrics["leaf_occurrence_counts"]
+    assert b_membership_occurrence(leaves[0], leaf_occ) == 3
+    assert all(b_membership_occurrence(n, leaf_occ) == 1 for n in parents)
+
+
 def test_b_unique_path_is_pass():
     header = ["번호", "공사종류", "공종명", "세부공정명"]
     rows = [
@@ -86,6 +132,9 @@ def test_b_unique_path_is_pass():
     assert metrics["identity"] == "PASS"
     assert metrics["path_identities"] == 2
     assert metrics["orphan_parent"] == 0
+    assert metrics["occurrence_preservation"] == "PASS"
+    assert metrics["leaf_membership_rows"] == 2
+    assert metrics["leaf_occurrence_sum"] == 2
     assert any(n["node_type"] == "DETAIL_PROCESS" for n in nodes)
 
 
@@ -168,6 +217,33 @@ def test_full_dry_run_census_and_determinism():
     assert first["A"]["identity"] == "PASS"
     assert first["A"]["duplicate_source_key"] == 0
     assert first["B"]["rows"] == 626
+    assert first["B"]["path_identities"] == 620
+    assert first["B"]["duplicate_path_groups"] == 3
+    assert first["B"]["rows_in_duplicate_paths"] == 9
+    assert first["B"]["duplicate_extras"] == 6
+    assert first["B"]["leaf_membership_rows"] == 620
+    assert first["B"]["leaf_occurrence_sum"] == 626
+    assert first["B"]["occurrence_preservation"] == "PASS"
+    assert first["B"]["identity"] == "HOLD"
+    b_nodes = first["_plan"]["b_nodes"]
+    leaf_keys = {n["source_key"] for n in b_nodes if n["node_type"] == "DETAIL_PROCESS"}
+    b_leaf_mem = [
+        m
+        for m in first["_plan"]["membership"]
+        if m["source_id"] == SOURCE_KOSHA
+        and m["member_kind"] == "NODE"
+        and m["member_key"] in leaf_keys
+    ]
+    b_parent_mem = [
+        m
+        for m in first["_plan"]["membership"]
+        if m["source_id"] == SOURCE_KOSHA
+        and m["member_kind"] == "NODE"
+        and m["member_key"] not in leaf_keys
+    ]
+    assert len(b_leaf_mem) == 620
+    assert sum(m["occurrence_count"] for m in b_leaf_mem) == 626
+    assert all(m["occurrence_count"] == 1 for m in b_parent_mem)
     assert first["C"]["raw_rows"] == 47559
     assert first["C"]["unique_content"] == 30696
     assert first["C"]["duplicate_groups"] == 5730

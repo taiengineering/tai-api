@@ -15,9 +15,11 @@ MODEL D remains APPROVED / FROZEN. This WO does not create TAI canonical process
 
 ```text
 WO-RISK-01           = PASS / CLOSED
+WO-RISK-02-CHG1      = LOCAL PASS / PR OPEN
 base main HEAD       = ed2c4ac810ce02025c1bfedb618b5e9c24c7270f
+previous RISK-02 HEAD= d9777b7ee81a0d8a23e295fdc5f7640a764ae9f6
 OBJ-RISK             = IN_PROGRESS
-RISK-02              = IN_PROGRESS
+RISK-02              = PASS CANDIDATE
 RISK-03              = NOT OPENED
 production mutation  = 0
 Graph mutation       = 0
@@ -25,6 +27,7 @@ Legal Engine mutation= 0
 CHEM API calls       = 0
 LLM                  = 0
 fuzzy                = 0
+MERGE                = NOT AUTHORIZED
 ```
 
 ---
@@ -160,6 +163,29 @@ Exact collisions (번호 listed only as collision evidence, not as identity):
 
 No `-1` / `-2` / row-number suffix was added. Leaf nodes stored = 620 unique paths, not 626 fake keys.
 
+Occurrence is preserved separately from identity:
+
+```text
+B raw rows                  = 626
+B leaf membership rows      = 620
+B leaf occurrence sum       = 626
+B duplicate extras          = 6
+B occurrence preservation   = PASS
+B identity                  = HOLD
+```
+
+`DETAIL_PROCESS` membership uses normalized full-path source row count. The three collision paths have `occurrence_count=3`. Unique paths have `occurrence_count=1`. `PROJECT_KIND` / `WORK_TYPE` stay taxonomy nodes with `occurrence_count=1` and are not inflated to source row counts.
+
+KOSHA catalog metadata records HOLD so consumers do not treat B as PASS identity:
+
+```json
+{
+  "identity_status": "HOLD",
+  "duplicate_path_groups": 3,
+  "rows_in_duplicate_paths": 9
+}
+```
+
 ---
 
 ## C identity
@@ -201,6 +227,12 @@ Command: `PYTHONPATH=. python3 tools/risk02/plan_source_core.py`
 ```text
 A nodes                 = 1722
 B rows                  = 626
+B path identities       = 620
+B leaf membership rows  = 620
+B leaf occurrence sum   = 626
+B duplicate extras      = 6
+B identity              = HOLD
+B occurrence preservation = PASS
 C raw rows              = 47559
 C content entities      = 30696
 C duplicate groups      = 5730
@@ -223,19 +255,37 @@ snapshot membership orphan   = 0
 record without snapshot      = 0
 ```
 
-B path collisions are identity HOLD, not hidden orphans.
+DB constraints (git-pinned, production apply = 0):
+
+```text
+risk_snapshots UNIQUE (id, source_id)
+risk_snapshot_memberships
+  FOREIGN KEY (snapshot_id, source_id)
+  REFERENCES risk_snapshots (id, source_id)
+risk_records
+  FOREIGN KEY (source_id, task_source_key)
+  REFERENCES risk_source_nodes (source_id, source_key)
+```
+
+Cross-source membership (CIC_W snapshot + KALIS member) is prohibited by the snapshot/source composite FK.
+
+Polymorphic `member_key` (NODE vs RECORD) has no new trigger. Member target existence remains the planner gate `snapshot membership orphan = 0`.
+
+B path collisions are identity HOLD, not hidden orphans. HOLD identity and PASS occurrence preservation are separate.
 
 ---
 
 ## Determinism
 
-Two full dry-runs on the same artifacts:
+Two full dry-runs on the same artifacts after CHG1:
 
 ```text
-DETERMINISM RUN 1 SHA = fd19e4d329682285abbfab4d2602e6a74bbbd8aca6a827acec1d4705fa082e0a
-DETERMINISM RUN 2 SHA = fd19e4d329682285abbfab4d2602e6a74bbbd8aca6a827acec1d4705fa082e0a
+DETERMINISM RUN 1 SHA = 886d45cdaaf9478d066f22e2bfca3ee35128d5bfbda2eddfff664f87ffa7bbfa
+DETERMINISM RUN 2 SHA = 886d45cdaaf9478d066f22e2bfca3ee35128d5bfbda2eddfff664f87ffa7bbfa
 DETERMINISM           = PASS
 ```
+
+Previous RISK-02 SHA `fd19e4d329682285abbfab4d2602e6a74bbbd8aca6a827acec1d4705fa082e0a` changed because B leaf occurrence entered the payload. The gate is RUN1 == RUN2.
 
 Hash inputs exclude timestamps, UUIDs, row numbers, `downloaded_at`.
 
@@ -251,8 +301,8 @@ Stored on `risk_sources` as catalog columns. Values frozen from RISK-01. Not rew
 
 ```text
 B IDENTITY HOLD
-  3 normalized path groups collide (9 rows).
-  Next consumer WO may decide how to represent occurrence on B paths.
+  3 normalized path groups collide (9 rows, 6 extras).
+  Occurrence on those paths is preserved (leaf occurrence sum = 626).
   Do not invent suffixes in RISK-02.
 
 C portal metadata drift remains YES / CAUSE UNKNOWN.
@@ -265,6 +315,6 @@ Source mapping A↔B↔C is not designed here.
 
 ## Tests
 
-`tests/test_risk02_source_core.py` covers native A codes, B path collisions, C 19-field hash, occurrence preservation, raw payload, forbidden hash inputs, MODEL D separation, and full census when `artifacts/risk01` exists.
+`tests/test_risk02_source_core.py` covers native A codes, B path collisions, B leaf occurrence preservation, C 19-field hash, occurrence preservation, raw payload, forbidden hash inputs, MODEL D separation, snapshot/source and record/task composite FKs, and full census when `artifacts/risk01` exists.
 
-CI: `pytest tests/test_risk02_source_core.py`. Full 47,559 census is skip-if-missing on GitHub runners.
+CI: `pytest tests/test_risk02_source_core.py`. Full 47,559 census is skip-if-missing on GitHub runners. Local full census is the 47,559-row evidence.

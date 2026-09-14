@@ -177,12 +177,28 @@ def _b_nodes(header: list[str], rows: list[list[str]]) -> tuple[list[dict], dict
             ident["path_normalized"],
         )
 
+    leaf_occ: Counter[str] = Counter()
+    for ident in identities:
+        leaf_occ[ident["source_key"]] += 1
+    dup_extras = sum(n - 1 for n in leaf_occ.values() if n > 1)
+    leaf_membership_rows = len(leaf_occ)
+    leaf_occurrence_sum = sum(leaf_occ.values())
+    occurrence_preservation = (
+        "PASS"
+        if leaf_occurrence_sum == len(rows) and leaf_membership_rows == unique_paths
+        else "FAIL"
+    )
+
     node_keys = {n["source_key"] for n in nodes}
     metrics = {
         "rows": len(rows),
         "path_identities": unique_paths,
         "duplicate_path_groups": len(dup_paths),
         "rows_in_duplicate_paths": sum(dup_paths.values()),
+        "duplicate_extras": dup_extras,
+        "leaf_membership_rows": leaf_membership_rows,
+        "leaf_occurrence_sum": leaf_occurrence_sum,
+        "occurrence_preservation": occurrence_preservation,
         "null_component_count": null_components,
         "identity": identity_status,
         "nodes": len(nodes),
@@ -195,8 +211,16 @@ def _b_nodes(header: list[str], rows: list[list[str]]) -> tuple[list[dict], dict
             1 for n in nodes if n["parent_source_key"] and n["parent_source_key"] not in node_keys
         ),
         "sample_duplicate_paths": sorted(dup_paths)[:10],
+        "leaf_occurrence_counts": dict(leaf_occ),
     }
     return nodes, metrics
+
+
+def b_membership_occurrence(node: dict, leaf_occ: dict[str, int]) -> int:
+    """Leaf DETAIL_PROCESS uses source row count. Parent taxonomy nodes stay 1."""
+    if node["node_type"] == "DETAIL_PROCESS":
+        return int(leaf_occ[node["source_key"]])
+    return 1
 
 
 def _c_plan(header: list[str], rows: list[list[str]]) -> tuple[list[dict], list[dict], dict]:
@@ -350,12 +374,13 @@ def build_plan(root: Path = DEFAULT_ROOT) -> dict:
         }
         for n in a_nodes
     ]
+    b_leaf_occ = b_metrics["leaf_occurrence_counts"]
     b_membership = [
         {
             "member_kind": "NODE",
             "source_id": SOURCE_KOSHA,
             "member_key": n["source_key"],
-            "occurrence_count": 1,
+            "occurrence_count": b_membership_occurrence(n, b_leaf_occ),
         }
         for n in b_nodes
     ]
@@ -404,7 +429,7 @@ def build_plan(root: Path = DEFAULT_ROOT) -> dict:
             "sha256": b_stats["sha256"],
             "expected_sha256": B_SHA256,
             "encoding": b_enc,
-            **b_metrics,
+            **{k: v for k, v in b_metrics.items() if k != "leaf_occurrence_counts"},
         },
         "C": {
             "source_id": SOURCE_KALIS,
@@ -426,13 +451,23 @@ def build_plan(root: Path = DEFAULT_ROOT) -> dict:
     determinism_payload = {
         "a_keys": sorted(n["source_key"] for n in a_nodes),
         "b_keys": sorted(n["source_key"] for n in b_nodes),
+        "b_leaf_occ": sorted((k, n) for k, n in b_metrics["leaf_occurrence_counts"].items()),
         "c_content": sorted(rec["content_key"] for rec in c_records),
         "c_occ": sorted((k, n) for k, n in c_metrics["occurrence_counts"].items()),
         "metrics": {
             "A": {k: a_metrics[k] for k in ("nodes", "duplicate_source_key", "orphan_parent", "identity")},
             "B": {
                 k: b_metrics[k]
-                for k in ("rows", "path_identities", "duplicate_path_groups", "identity")
+                for k in (
+                    "rows",
+                    "path_identities",
+                    "duplicate_path_groups",
+                    "duplicate_extras",
+                    "leaf_membership_rows",
+                    "leaf_occurrence_sum",
+                    "occurrence_preservation",
+                    "identity",
+                )
             },
             "C": {
                 k: c_metrics[k]
