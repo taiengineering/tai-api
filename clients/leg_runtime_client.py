@@ -230,6 +230,32 @@ _LEG_INPUT_FIELDS = (
     "has_tunnel_construction_work",
     "performs_welding_cutting_heating_inside_tunnel",
     "has_high_pressure_work",
+    # WO-E2E-OBS007-DUST-WORK-MINIMUM-MODIFY-001: Frozen 2-layer / reroute Leaf.field exact-name.
+    # No alias from has_dust_work / has_grinding / has_cutting / has_blasting /
+    # has_confined_space / has_chemical / has_mixing_process / has_tunnel /
+    # construction_tunnel. Art353 reuses has_tunnel_construction_work (already listed).
+    # appendix16_item26 absent must not infer other_than_item26.
+    "dust_heavily_airborne_in_workplace",
+    "has_appendix16_item_5_25_dust_work",
+    "dust_work_in_indoor_workplace",
+    "dust_work_in_mine_workplace",
+    "has_regular_dust_work",
+    "has_dust_work_other_than_appendix16_item26",
+    "has_harmful_airborne_substance_local_exhaust_system",
+    "has_fixed_harmful_airborne_substance_local_exhaust_system",
+    "has_nonexempt_harmful_airborne_substance_local_exhaust_system",
+    "has_harmful_airborne_substance_discharge_equipment",
+    "has_harmful_airborne_substance_general_ventilation_system",
+    "has_harmful_airborne_substance_work",
+    "has_indoor_harmful_airborne_substance_emission",
+    "manufactures_handles_or_uses_flammable_liquid_vapor_or_gas",
+    "manufactures_or_uses_flammable_solid",
+    "has_flammable_substance_explosion_fire_risk_location",
+    "tunnel_visibility_significantly_limited_by_exhaust_or_dust",
+    "handles_managed_hazardous_substance_in_indoor_workplace",
+    "has_beryllium_manufacturing_or_use_work",
+    "has_office_workplace",
+    "has_pesticide_raw_material_mixing_work",
     # WO-SM-CORE22-CONSTRUCTION-PREDICATE-EXPLICIT-INPUT-CONTRACT-001
     # Published CORE22 Leaf.field exact-name. No alias/renaming/sector/order_type/kcsc adapter.
     # False is a value. None/missing is omitted. Default false = 0.
