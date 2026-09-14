@@ -257,6 +257,12 @@ _LEG_INPUT_FIELDS = (
     "has_beryllium_manufacturing_or_use_work",
     "has_office_workplace",
     "has_pesticide_raw_material_mixing_work",
+    # WO-E2E-OBS007-BOILER-MINIMUM-MODIFY-001: Art629/630 reroute Leaf.field exact-name.
+    # No alias from has_boiler / has_welding / has_confined_space / has_gas /
+    # has_high_pressure_gas / has_pressure_vessel / has_centralized_gas_supply /
+    # has_gas_boiler_heating_system. Art116/117/119 stay Leaf(has_boiler).
+    "performs_welding_or_cutting_in_insufficiently_ventilated_place",
+    "works_in_place_with_appendix18_item13_inert_gas_discharge_piping",
     # WO-SM-CORE22-CONSTRUCTION-PREDICATE-EXPLICIT-INPUT-CONTRACT-001
     # Published CORE22 Leaf.field exact-name. No alias/renaming/sector/order_type/kcsc adapter.
     # False is a value. None/missing is omitted. Default false = 0.
