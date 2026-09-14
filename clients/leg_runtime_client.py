@@ -190,6 +190,13 @@ _LEG_INPUT_FIELDS = (
     # payment/건산 state facts 는 STATEFUL_BACKLOG(POST_LAUNCH). subcontractor_work_types(source)가
     # source adapter 에서 이 2 boolean 으로 deterministic expansion 됨.
     "has_fire_facility_subcontract", "has_ict_subcontract",
+    # WO-E2E-OBS007-CRANE-MINIMUM-MODIFY-001: Frozen Design Leaf.field exact-name.
+    # No alias, no has_crane collapse, no crane_adjustment_work.
+    "has_mobile_crane", "has_jib_crane", "has_gantry_crane",
+    "has_hydraulic_crane", "has_crane_without_operator_cab",
+    "crane_transporting_workers",
+    "crane_installation_work", "crane_assembly_work", "crane_repair_work",
+    "crane_inspection_work", "crane_dismantling_work",
     # WO-SM-CORE22-CONSTRUCTION-PREDICATE-EXPLICIT-INPUT-CONTRACT-001
     # Published CORE22 Leaf.field exact-name. No alias/renaming/sector/order_type/kcsc adapter.
     # False is a value. None/missing is omitted. Default false = 0.
