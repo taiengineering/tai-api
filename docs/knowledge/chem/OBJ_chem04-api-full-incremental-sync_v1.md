@@ -12,7 +12,7 @@ owner: taiwang
 # OBJ-CHEM-04 — Official OpenAPI search contract + incremental runner
 
 ```text
-CHEM-04 = IN_PROGRESS (PATCH-5 on PR #350, not merged)
+CHEM-04 = IN_PROGRESS (PATCH-5/6 on PR #350, not merged)
 CHEM-01 = CLOSED / PASS_WITH_INGEST_GATE
 CHEM-02 = DONE / CLOSED
 CHEM-03 = CLOSED / CONDITIONAL
@@ -25,6 +25,7 @@ DOCUMENTED FULL ENUMERATION API = NOT AVAILABLE
 OPENAPI LIST CONTRACT = SEARCH-ONLY
 DETAIL01_ID_DISCOVERY = PASS / FALLBACK_VALIDATION
 PRIMARY ENUMERATION = KOSHA WEB CURRENT INDEX + SECONDARY BOOTSTRAP
+OFFICIAL WEB CURRENT CENSUS = 20568
 50-DAY NUMERIC SCAN = NO
 CURSOR FULL DATA EXECUTION = NO
 LOCAL FULL DATA EXECUTION  = YES
@@ -646,6 +647,50 @@ python -m tools.chem04.report --seed artifacts/chem04/secondary_identity_seed.js
 
 Do **not** re-run `--full` for these 19. Repair refetches only the short pages.
 
+### Local repair 2026-09-14 — HEADER MATCH
+
+```text
+pages_repaired             = 16
+rows_added                 = 19
+pages                      = 2057 / 2057
+non-last pages             = 2056 × 10
+last page 2057             = 8
+header_total               = 20568
+parsed rows                = 20568
+unique chemId              = 20568
+null chemId                = 0
+header delta               = 0
+HEADER MATCH               = PASS
+official sha256            = b3343a9266281279bf035d0384281ccea19b9d4ce9d467f3fce5c4d5a4d39a8a
+join sha256                = e6b22ca2cc3988a574c45222fa378fbf524f72399e7e5808bba945cf91417de9
+seed sha256                = 42a1fb7816854c94919be9f23da48a4e006a492420a099b6db9ca56457dd4ade
+
+DIRECT_OFFICIAL_ID         = 20568
+CAS/NAME/COMPOUND/UNMATCHED/AMBIGUOUS = 0
+present_in_secondary       = 18478
+official_only              = 2090
+secondary_chemId null      = 2090
+secondary seed             = 48963
+secondary only             = 30485
+secondary overlap          = 89.84%
+
+PATCH-3 DISCOVERED         = 998
+DISCOVERED ∩ secondary     = 998
+DISCOVERED ∩ official      = 997
+DISCOVERED not official    = 000158
+```
+
+```text
+OFFICIAL WEB CURRENT CENSUS = 20568
+FULL_OFFICIAL               = NOT YET (no production ingest)
+50-DAY NUMERIC SCAN         = NO
+production ingest           = NO
+```
+
+---
+
+## STOP
+
 OpenAPI this PATCH:
 
 ```text
@@ -667,9 +712,10 @@ EMPIRICAL_API_CENSUS = NOT FULL_OFFICIAL
 50-DAY NUMERIC SCAN = NO
 CURSOR FULL DATA EXECUTION = NO
 LOCAL FULL DATA EXECUTION = YES
-FULL INDEX / SEED / JOIN COUNTS = LOCAL_RERUN_PENDING (apostrophe parser fix)
-HEADER 20568 vs ROWS 20549 = PARSER_NEWLINE_NAME (19 remaining; repair CLI)
-CURRENT FULL CENSUS = CONDITIONAL until repair_short_pages
+FULL INDEX / SEED / JOIN COUNTS = LOCAL_RUN_PASS
+HEADER 20568 vs ROWS 20568 = HEADER_MATCH
+OFFICIAL WEB CURRENT CENSUS = 20568
+CURRENT FULL CENSUS = PASS (web index; not production FULL_OFFICIAL)
 REPORT PATH = FALLBACK + CLI ARGS
 INITIAL_SEED_CANDIDATE = BLOCKED
 PORTAL 1000/day HARD LIMIT OBSERVED = YES
