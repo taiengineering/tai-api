@@ -4,7 +4,7 @@ type: report
 scope: knowledge
 project: chem
 title: OBJ-CHEM-04 secondary content bootstrap Decision Gate
-version: 4
+version: 5
 status: active
 owner: taiwang
 ---
@@ -14,7 +14,7 @@ owner: taiwang
 ```text
 WO-CHEM-04-BOOTSTRAP-DECISION-001 = EVIDENCE COMPLETE / POLICY BLOCKED
 WO-CHEM-04-OPTIONC-LIVE-SAMPLE-001 = BLOCKED
-WO-CHEM-04-OPTIONC-FETCH-DIAG-001 = IN_PROGRESS
+WO-CHEM-04-OPTIONC-FETCH-DIAG-001 = FAIL / QUOTA STOP
 WO-CHEM-04-CONTENT-LOCAL-001      = PASS
 PR #359                           = OPEN / UNMERGED
 current HEAD                      = 65f0efdc56db5f299b92c6fe82866ea19045f057
@@ -438,4 +438,92 @@ python3 -m tools.chem04.live_sample_compare --preflight
 ```
 
 Do not pass `--local-run` until GPT authorizes a new 256 after preflight OK. If `--local-run` is used later, preflight runs first and a FAIL does not write the sample checkpoint.
+
+---
+
+## FETCH DIAG MEASURED RUN (preflight)
+
+Does not replace the 256 measured run. Does **not** reclassify those 256 `API_ERROR` rows as quota.
+
+```text
+WO-CHEM-04-OPTIONC-FETCH-DIAG-001 = FAIL / QUOTA STOP
+preflight              = FAIL
+chemId                 = 001008
+section                = Detail01
+HTTP 429               = 1
+resultCode 22          = 1
+quota_stop             = YES
+http_requests          = 1
+retry                  = 0
+preflight report SHA256 =
+e82c7e1415129fd7e52cf63fa7cbfa21c72df6db5316346becacc42398cbc821
+preflight file SHA256  =
+5954d8003e1fad1b8f970ae9ea7457749f2a6301d0ea59a65046653ba42615fb
+failure checkpoint SHA =
+7e83e02fd1afc930d2a4e574eedd402854f2c1867e958e780722a192672e4bab
+256 re-run             = NOT AUTHORIZED
+TODAY ADDITIONAL CALL  = NO
+```
+
+Official error map ([data.go.kr 15157612](https://www.data.go.kr/data/15157612/openapi.do)):
+
+```text
+22 LIMITED_NUMBER_OF_SERVICE_REQUESTS_EXCEEDS_ERROR
+   = API 서비스의 일일 호출 허용량 초과
+20 SERVICE_ACCESS_DENIED_ERROR
+   = 접근 권한 문제 (not observed here)
+30 SERVICE_KEY_IS_NOT_REGISTERED_ERROR
+   = 미등록/잘못된 인증키 (not observed here)
+```
+
+This preflight returned HTTP 429 and resultCode 22. That is daily service traffic limit, not key format and not chemId/parameter error. Gateway accepted the key far enough to enforce quota.
+
+---
+
+## QUOTA POLICY ADDENDUM
+
+Official portal text for this service ([data.go.kr 15157612](https://www.data.go.kr/data/15157612/openapi.do)):
+
+```text
+개발계정 신청 가능 트래픽 = 1,000
+운영계정                 = 활용사례 등록 시 트래픽 증가 신청 가능
+```
+
+Swagger 가이드는 `serviceKey`에 **일반 인증키(Decoding)** 입력을 안내한다 ([gateway swagger guide](https://www.data.go.kr/images/biz/swagger-guide/gw/gateway_swagger_guide.pdf)). 이번 22 응답은 키 교체 사유가 아니다.
+
+```text
+AUTH KEY CHANGE          = NO
+AUTH KEY FORMAT ISSUE    = NO EVIDENCE
+PARAMETER ISSUE          = NO EVIDENCE
+CURRENT ROOT CAUSE       = DAILY SERVICE TRAFFIC LIMIT
+OFFICIAL DEV TRAFFIC     = 1,000/day
+PER-ENDPOINT 1,000       = NOT DOCUMENTED
+SERVICE-WIDE 1,000       = WORKING ASSUMPTION
+if_1000_per_day_per_endpoint 21-day strict
+                         = undocumented assumption; not official
+if_1000_per_day_global
+                         = conservative calendar (329088 → 330일,
+                           51940 → 52일) under service-wide 1,000
+OPTION C                 = BLOCKED BY QUOTA
+BOOTSTRAP POLICY         = NOT DECIDED
+HYDRATE-001              = NOT OPENED
+51,940 structural hydration
+                         = not solvable on a 1,000/day 개발계정
+```
+
+2026-09-14 Detail01 census (`PORTAL 1000/day HARD LIMIT OBSERVED`) remains a **Detail01-that-day observation**. It does not prove 16 independent 1,000 buckets.
+
+Do not treat 개발계정 1,000 as the path to 51,940 structural calls. Official increase path: 운영계정 심의 + 활용사례 등록 후 트래픽 증설 신청.
+
+Next investigation (no extra OpenAPI today):
+
+```text
+1. 현재 KOSHA MSDS 활용신청 = 개발계정 or 운영계정
+2. 현재 승인 일일 트래픽이 실제 1,000인지
+3. 운영계정 전환 / 트래픽 증설 가능 수량
+4. 1,000 quota가 getChemDetail01~16 전체 공유인지
+```
+
+Code and generic `serviceKey` env handling are unchanged in this freeze.
+
 
