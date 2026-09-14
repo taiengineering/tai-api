@@ -19,13 +19,21 @@ from tools.test_universe.explicit_predicate_authority import (
 )
 from tools.test_universe.leg_bridge import (
     EXPECTED_APPENDIX3_AUTHORITY_SHA256,
+    EXPECTED_SPECIAL10_APPENDIX3_AUTHORITY_SHA256,
     EXPECTED_FROZEN_PROFILE_SHA256,
     EXPECTED_PROFILE_COUNT,
+    EXPECTED_SPECIAL10_PROFILE_IDS,
+    APPENDIX3_EVIDENCE_75,
+    APPENDIX3_EVIDENCE_SPECIAL10,
     APPENDIX3_INTERNAL_LEAVES,
     APPENDIX3_SOURCE_KEYS,
     DEFAULT_APPENDIX3_AUTHORITY_PATH,
+    DEFAULT_SPECIAL10_APPENDIX3_AUTHORITY_PATH,
+    GATED_APPENDIX3_SECTORS,
     BridgeContractError,
     load_approved_appendix3_authority_index,
+    load_effective_appendix3_authority_index,
+    load_special10_appendix3_authority_index,
     load_profile_universe,
     profile_to_leg_request,
     project_universe,
@@ -36,6 +44,19 @@ UNIVERSE = Path.home() / "45cm-test/profile_universe_v1.json"
 BRIDGE = ROOT / "tools/test_universe/leg_bridge.py"
 CORE22_AUTHORITY = DEFAULT_AUTHORITY_PATH
 APPENDIX3_AUTHORITY = DEFAULT_APPENDIX3_AUTHORITY_PATH
+SPECIAL10_AUTHORITY = DEFAULT_SPECIAL10_APPENDIX3_AUTHORITY_PATH
+SPECIAL10_ITEMS = {
+    "PF-0037": 39,
+    "PF-0038": 36,
+    "PF-0039": 26,
+    "PF-0106": 39,
+    "PF-0107": 36,
+    "PF-0108": 26,
+    "PF-0109": 31,
+    "PF-0110": 39,
+    "PF-0111": 26,
+    "PF-0112": 36,
+}
 ITEM37_IDS = ("PF-0022", "PF-0082", "PF-0089")
 ITEM41_IDS = (
     "PF-0025",
@@ -68,11 +89,16 @@ def _pmap():
 def test_anchors_unmutated():
     assert _sha256(UNIVERSE) == EXPECTED_FROZEN_PROFILE_SHA256
     assert _sha256(APPENDIX3_AUTHORITY) == EXPECTED_APPENDIX3_AUTHORITY_SHA256
+    assert _sha256(SPECIAL10_AUTHORITY) == EXPECTED_SPECIAL10_APPENDIX3_AUTHORITY_SHA256
     before_u = _sha256(UNIVERSE)
     before_a = _sha256(APPENDIX3_AUTHORITY)
+    before_s = _sha256(SPECIAL10_AUTHORITY)
     project_universe(_profiles())
     assert _sha256(UNIVERSE) == before_u == EXPECTED_FROZEN_PROFILE_SHA256
     assert _sha256(APPENDIX3_AUTHORITY) == before_a == EXPECTED_APPENDIX3_AUTHORITY_SHA256
+    assert _sha256(SPECIAL10_AUTHORITY) == before_s == EXPECTED_SPECIAL10_APPENDIX3_AUTHORITY_SHA256
+    assert "SPECIAL_FACILITY" not in GATED_APPENDIX3_SECTORS
+    assert GATED_APPENDIX3_SECTORS == frozenset({"MANUFACTURING", "BUILDING"})
 
 
 def test_authority_load_fail_closed():
@@ -81,12 +107,29 @@ def test_authority_load_fail_closed():
     assert len(index) == len(set(index))
 
 
+def test_special10_and_effective_index():
+    existing75 = load_approved_appendix3_authority_index()
+    special10 = load_special10_appendix3_authority_index()
+    effective = load_effective_appendix3_authority_index()
+    assert len(existing75) == 75
+    assert len(special10) == 10
+    assert set(special10) == EXPECTED_SPECIAL10_PROFILE_IDS
+    assert set(special10) == set(SPECIAL10_ITEMS)
+    assert len(effective) == 85
+    assert set(existing75).isdisjoint(special10)
+    assert len(set(existing75) & set(special10)) == 0
+    assert set(effective) == set(existing75) | set(special10)
+    for pid, item in SPECIAL10_ITEMS.items():
+        assert special10[pid]["appendix3_item_no"] == item
+        assert "is_real_estate_management" not in special10[pid]
+
+
 @needs_universe
 def test_dry_112_gated_ungated_counts():
     built, summary = project_universe(_profiles())
     assert summary["request_build"] == EXPECTED_PROFILE_COUNT
     assert summary["fail"] == 0
-    assert summary["appendix3_injected"] == 75
+    assert summary["appendix3_injected"] == 85
     assert summary["ungated_appendix3_injected"] == 0
     assert summary["item37"] == 3
     assert summary["item37_true"] == 3
@@ -94,10 +137,15 @@ def test_dry_112_gated_ungated_counts():
     assert summary["non37_subtype"] == 0
     assert summary["internal_runtime_leaf_injected"] == 0
     assert summary["http_executed"] == 0
-    gated = [x for x in built if x["sector"] in {"MANUFACTURING", "BUILDING"}]
-    ungated = [x for x in built if x["sector"] not in {"MANUFACTURING", "BUILDING"}]
-    assert len(gated) == 75
-    assert len(ungated) == 37
+    assert sum(1 for x in built if x["sector"] == "MANUFACTURING") == 46
+    assert sum(1 for x in built if x["sector"] == "BUILDING") == 29
+    assert sum(1 for x in built if x["sector"] == "CONSTRUCTION") == 27
+    assert sum(1 for x in built if x["sector"] == "SPECIAL_FACILITY") == 10
+    gated = [x for x in built if x["request_sector"] in {"MANUFACTURING", "BUILDING"}]
+    ungated = [x for x in built if x["request_sector"] not in {"MANUFACTURING", "BUILDING"}]
+    assert len(gated) == 85
+    assert len(ungated) == 27
+    assert all(x["request_sector"] == "CONSTRUCTION" for x in ungated)
     for item in gated:
         req = item["request"]
         form = req.get("form_data") or {}
@@ -221,3 +269,41 @@ def test_bridge_does_not_invent_mapping_or_http():
     data = json.loads(APPENDIX3_AUTHORITY.read_text(encoding="utf-8"))
     assert data["production_derivation_rule"] == "NONE"
     assert data["authority_type"] == "OWNER_APPROVED_E2E_FIXTURE_FACT"
+    special = json.loads(SPECIAL10_AUTHORITY.read_text(encoding="utf-8"))
+    assert special["production_derivation_rule"] == "NONE"
+    assert special["authority_content"] == "FROZEN"
+
+
+@needs_universe
+def test_special10_exact_items_and_building_request_sector():
+    pmap = _pmap()
+    assert set(SPECIAL10_ITEMS) == EXPECTED_SPECIAL10_PROFILE_IDS
+    for pid, item_no in SPECIAL10_ITEMS.items():
+        built = profile_to_leg_request(pmap[pid])
+        req = built["request"]
+        form = req.get("form_data") or {}
+        assert built["sector"] == "SPECIAL_FACILITY"
+        assert built["request_sector"] == "BUILDING"
+        assert req["sector"] == "BUILDING"
+        assert req["appendix3_item_no"] == item_no
+        assert "is_real_estate_management" not in req
+        assert "is_real_estate_management" not in form
+        assert "appendix3_item_no" not in form
+        evidence = [
+            r["evidence"]
+            for r in built["records"]
+            if r["official_request_field"] == "appendix3_item_no"
+        ]
+        assert evidence == [APPENDIX3_EVIDENCE_SPECIAL10]
+
+
+@needs_universe
+def test_existing75_evidence_path_unchanged():
+    built = profile_to_leg_request(_pmap()["PF-0001"])
+    evidence = [
+        r["evidence"]
+        for r in built["records"]
+        if r["official_request_field"] == "appendix3_item_no"
+    ]
+    assert evidence == [APPENDIX3_EVIDENCE_75]
+    assert built["request"]["appendix3_item_no"] == 17
