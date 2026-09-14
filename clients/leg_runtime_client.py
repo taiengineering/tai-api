@@ -263,6 +263,12 @@ _LEG_INPUT_FIELDS = (
     # has_gas_boiler_heating_system. Art116/117/119 stay Leaf(has_boiler).
     "performs_welding_or_cutting_in_insufficiently_ventilated_place",
     "works_in_place_with_appendix18_item13_inert_gas_discharge_piping",
+    # WO-E2E-OBS007-PRESSURE-VESSEL-MINIMUM-MODIFY-001: Frozen exact Leaf.field.
+    # No alias from has_pressure_vessel / has_high_pressure_gas / has_high_pressure_work /
+    # has_confined_space / has_gas / has_boiler. Cover/guard/stamp/temperature are duty.
+    "has_air_compressor",
+    "has_worker_risk_rotating_parts_on_pressure_vessel_or_air_compressor",
+    "supplies_air_to_high_pressure_workroom_or_airlock",
     # WO-SM-CORE22-CONSTRUCTION-PREDICATE-EXPLICIT-INPUT-CONTRACT-001
     # Published CORE22 Leaf.field exact-name. No alias/renaming/sector/order_type/kcsc adapter.
     # False is a value. None/missing is omitted. Default false = 0.
