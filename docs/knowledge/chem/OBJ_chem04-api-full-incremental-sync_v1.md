@@ -619,6 +619,33 @@ python -m tools.chem04.collect_current_index --full --delay 1.0
 
 Do not resume the 19,870 JSONL after this parser change — start a new `--full` collect (or delete the old artifact first). `--resume` would keep the under-parsed rows.
 
+Local re-collect 2026-09-14 (apostrophe fix):
+
+```text
+pages                      = 2057 / 2057
+header_total               = 20568
+href_selectchem            = 20568
+data_tr                    = 20568
+data_tr_without_selectchem = 0
+legacy_selectchem          = 19870
+parsed rows                = 20549
+apostrophe recovered       = 688
+remaining delta            = 19
+gap_classification         = PARSER_UNDERCOUNT
+```
+
+The remaining 19 are **literal newlines inside `selectChem` chemName** (HTML attribute wraps). Not unpublished rows. Last page 8 is complete. 16 non-last pages were short.
+
+```text
+python -m tools.chem04.repair_short_pages --delay 1.0
+python -m tools.chem04.join_current_identity \
+  --official artifacts/chem04/official_current/kosha_current_index.jsonl \
+  --seed artifacts/chem04/secondary_identity_seed.jsonl
+python -m tools.chem04.report --seed artifacts/chem04/secondary_identity_seed.jsonl
+```
+
+Do **not** re-run `--full` for these 19. Repair refetches only the short pages.
+
 OpenAPI this PATCH:
 
 ```text
@@ -641,8 +668,8 @@ EMPIRICAL_API_CENSUS = NOT FULL_OFFICIAL
 CURSOR FULL DATA EXECUTION = NO
 LOCAL FULL DATA EXECUTION = YES
 FULL INDEX / SEED / JOIN COUNTS = LOCAL_RERUN_PENDING (apostrophe parser fix)
-HEADER 20568 vs ROWS 19870 = PARSER_APOSTROPHE_NAME
-CURRENT FULL CENSUS = CONDITIONAL
+HEADER 20568 vs ROWS 20549 = PARSER_NEWLINE_NAME (19 remaining; repair CLI)
+CURRENT FULL CENSUS = CONDITIONAL until repair_short_pages
 REPORT PATH = FALLBACK + CLI ARGS
 INITIAL_SEED_CANDIDATE = BLOCKED
 PORTAL 1000/day HARD LIMIT OBSERVED = YES

@@ -181,6 +181,40 @@ def test_apostrophe_chem_name_not_dropped():
     assert "2,2'" in (pcb.official_name or "")
 
 
+def test_multiline_chem_name_not_dropped():
+    html = (FIXTURES / "chemlist_multiline.html").read_text(encoding="utf-8")
+    stats = inspect_list_html(html)
+    rows, total, *_ = parse_list_html(html, page=1)
+    assert total == 2
+    assert stats.href_selectchem == 2
+    assert len(rows) == 2
+    acid = next(row for row in rows if row.chem_id == "428211")
+    assert acid.official_name == "6-chlorohexanoic acid"
+    assert "\n" not in (acid.official_name or "")
+
+
+def test_repair_short_pages_refetches_only_short(tmp_path):
+    dest = tmp_path / "idx.jsonl"
+    dest.write_text(
+        json.dumps({"chemId": "000001", "official_name": "a", "official_page": 1})
+        + "\n"
+        + json.dumps({"chemId": "000002", "official_name": "b", "official_page": 2})
+        + "\n",
+        encoding="utf-8",
+    )
+    html = (FIXTURES / "chemlist_page1.html").read_text(encoding="utf-8")
+
+    def get_fn(url, params):
+        return 200, html
+
+    from services.kosha_msds.current_index import repair_short_pages
+
+    summary = repair_short_pages(dest=dest, get_fn=get_fn, delay_s=0)
+    assert 1 in summary["pages_repaired"]
+    assert 2 not in summary["pages_repaired"]
+    assert summary["row_count"] == 4
+
+
 def test_header_gap_not_force_fit_when_short():
     html = (FIXTURES / "chemlist_page1.html").read_text(encoding="utf-8")
     rows, total, *_ = parse_list_html(html, page=1)

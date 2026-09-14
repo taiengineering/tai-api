@@ -24,9 +24,17 @@ HEADER_RE = re.compile(
 )
 # Legacy [^']* on chemName drops rows whose name contains an apostrophe (2,2'-PCB …).
 LEGACY_SELECT_RE = re.compile(r"selectChem\('([^']*)','([^']*)','([^']*)'\)")
-SELECT_RE = re.compile(r"selectChem\('([^']*)','([^']*)','(.*?)'\)")
+SELECT_RE = re.compile(r"selectChem\('([^']*)','([^']*)','(.*?)'\)", re.S)
 HREF_SELECT_RE = re.compile(r"javascript:selectChem\(", re.I)
 TR_RE = re.compile(r"<tr[^>]*>(.*?)</tr>", re.I | re.S)
+
+
+def clean_cell(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).replace("\u000d", " ").replace("_x000D_", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text or None
 
 
 class CurrentIndexError(Exception):
@@ -127,8 +135,8 @@ def parse_list_html(html: str, *, page: int) -> tuple[list[OfficialCurrentRow], 
     rows: list[OfficialCurrentRow] = []
     for match in SELECT_RE.finditer(html or ""):
         chem_id = normalize_chem_id(match.group(1))
-        cas = (match.group(2) or "").strip() or None
-        name = (match.group(3) or "").strip() or None
+        cas = clean_cell(match.group(2))
+        name = clean_cell(match.group(3))
         after = html[match.end() :]
         end = after.lower().find("</tr>")
         chunk = after[:end] if end >= 0 else after[:500]
@@ -146,6 +154,78 @@ def parse_list_html(html: str, *, page: int) -> tuple[list[OfficialCurrentRow], 
             )
         )
     return rows, total, page_no, page_count
+
+
+OBSERVED_NON_LAST_PAGE_ROWS = 10  # live default row count; not a guessed pageSize query param
+
+
+def rewrite_current_index(path: Path, rows: list[OfficialCurrentRow]) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row.as_row(), ensure_ascii=False) + "\n")
+    tmp.replace(path)
+
+
+def repair_short_pages(
+    *,
+    dest: Path,
+    get_fn: Optional[GetFn] = None,
+    delay_s: float = 1.0,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    log_progress: bool = False,
+) -> dict[str, object]:
+    """Refetch pages whose parsed row count is below the observed non-last page size."""
+    fetch = get_fn or default_get
+    existing = load_current_rows(dest)
+    if not existing:
+        raise CurrentIndexError("EMPTY_INDEX", f"no rows in {dest}")
+    by_page: dict[int, list[OfficialCurrentRow]] = {}
+    for row in existing:
+        by_page.setdefault(row.official_page, []).append(row)
+    last_page = max(by_page)
+    url = f"{KOSHA_WEB_HOST}{KOSHA_WEB_LIST_PATH}"
+    repaired: list[int] = []
+    added = 0
+    for page in sorted(by_page):
+        if page == last_page:
+            continue
+        if len(by_page[page]) >= OBSERVED_NON_LAST_PAGE_ROWS:
+            continue
+        if delay_s:
+            sleep_fn(delay_s)
+        status, body = fetch(url, {"pageIndex": str(page), "listType": KOSHA_WEB_LIST_TYPE})
+        block = detect_access_block(status, body)
+        if block:
+            raise CurrentIndexError(block, f"STOP at page {page}")
+        page_rows, header_total, got_page, page_count = parse_list_html(body, page=page)
+        if got_page != page:
+            raise CurrentIndexError("PAGE_MISMATCH", f"expected page {page}, got {got_page}")
+        stats = inspect_list_html(body)
+        if log_progress:
+            print(
+                f"REPAIR page={page} before={len(by_page[page])} after={len(page_rows)} href={stats.href_selectchem}",
+                flush=True,
+            )
+        added += len(page_rows) - len(by_page[page])
+        by_page[page] = page_rows
+        repaired.append(page)
+    ordered: list[OfficialCurrentRow] = []
+    for page in sorted(by_page):
+        ordered.extend(by_page[page])
+    rewrite_current_index(dest, ordered)
+    unique_ids = [r.chem_id for r in ordered if r.chem_id]
+    return {
+        "pages_repaired": repaired,
+        "pages_repaired_n": len(repaired),
+        "rows_added": added,
+        "row_count": len(ordered),
+        "unique_chem_id": len(set(unique_ids)),
+        "last_page": last_page,
+        "last_page_rows": len(by_page[last_page]),
+        "artifact_path": str(dest),
+        "written_at": serialize_external_utc(now_kst()),
+    }
 
 
 def default_get(url: str, params: dict[str, str]) -> tuple[int, str]:
