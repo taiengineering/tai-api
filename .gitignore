@@ -21,3 +21,6 @@ form_originals_hwp/
 #   artifacts/chem04/manifests/
 #   artifacts/chem04/checkpoints/
 artifacts/chem04/
+
+# RISK-01 local source snapshots — never commit bulk files
+artifacts/risk01/
