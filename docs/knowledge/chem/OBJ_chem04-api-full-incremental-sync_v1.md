@@ -12,7 +12,7 @@ owner: taiwang
 # OBJ-CHEM-04 — Official OpenAPI search contract + incremental runner
 
 ```text
-CHEM-04 = IN_PROGRESS (PATCH-5/6 on PR #350, not merged)
+CHEM-04 = IN_PROGRESS (doc status cleanup on PR #350, not merged)
 CHEM-01 = CLOSED / PASS_WITH_INGEST_GATE
 CHEM-02 = DONE / CLOSED
 CHEM-03 = CLOSED / CONDITIONAL
@@ -26,21 +26,26 @@ OPENAPI LIST CONTRACT = SEARCH-ONLY
 DETAIL01_ID_DISCOVERY = PASS / FALLBACK_VALIDATION
 PRIMARY ENUMERATION = KOSHA WEB CURRENT INDEX + SECONDARY BOOTSTRAP
 OFFICIAL WEB CURRENT CENSUS = 20568
+OFFICIAL CURRENT CHEMID SEED = PASS
+FULL_OFFICIAL CONTENT INGEST = NOT YET
+PUBLISHED_FULL = NO
 50-DAY NUMERIC SCAN = NO
 CURSOR FULL DATA EXECUTION = NO
 LOCAL FULL DATA EXECUTION  = YES
-PRODUCTION FULL INGEST = BLOCKED until GPT approval
+PRODUCTION FULL INGEST = NO
 ```
 
 This PATCH does not invent a dump-all OpenAPI. Sequential Detail01 scan is preserved as a fallback tool and is **not** primary enumeration.
+
+Identity seed (20,568 current chemId) is established. That is **not** Detail01~16 hydration and **not** production ingest.
 
 ---
 
 ## 0. Revision guard
 
 ```text
-PR #350 PATCH-5 parent (PATCH-4 reviewed head) =
-d50ecf8a9d4d643b7ea5f99c21d54394588856fa
+PR #350 doc-status parent (census freeze head) =
+b52fa9807c3e0cc63718e0909154b1beb2f2aea8
 branch =
 feature/chem04-api-full-sync
 ```
@@ -61,17 +66,22 @@ DETAIL  = getChemDetail01~16 (chemId required)
 ### B. Full identity source
 
 ```text
-DOCUMENTED ENUMERATION API = NOT AVAILABLE
-EMPIRICAL_API_CENSUS       = PATCH-3 Detail01 ID discovery (not FULL_OFFICIAL)
+DOCUMENTED ENUMERATION API     = NOT AVAILABLE
+OFFICIAL CURRENT CHEMID SEED   = PASS
+source                         = KOSHA official web current index
+count                          = 20568
+EMPIRICAL_API_CENSUS           = PATCH-3 Detail01 ID discovery (fallback; not FULL_OFFICIAL)
+FULL_OFFICIAL CONTENT INGEST   = NOT YET
 ```
 
 ```text
 A = AVAILABLE
-B.official = NOT YET ESTABLISHED
-B.empirical = DETAIL01_ID_DISCOVERY
+B.official = PASS (current chemId identity only)
+B.empirical = DETAIL01_ID_DISCOVERY / FALLBACK
+B.content  = NOT STARTED (Detail01~16 hydration / production ingest)
 ```
 
-The PR #350 runner is **B-consumer + A-detail hydrator**, not an OpenAPI dump-all finder.
+The PR #350 runner is **B-identity-consumer + A-detail hydrator**. Identity census exists. Detail hydration is **not started**. This is not an OpenAPI dump-all finder.
 
 ---
 
@@ -120,7 +130,7 @@ It is **not** the global KOSHA chemical corpus size.
 
 예: `searchCnd=0 searchWrd=벤젠` → 그 검색 결과 건수 (CHEM-01: 777). 그것이 N이 아니다.
 
-`kosha_msds_snapshots.expected_count` for FULL_OFFICIAL may only come from an **official chemId census**, never from a search `totalCount`.
+`kosha_msds_snapshots.expected_count` for FULL_OFFICIAL may only come from an **official chemId census**, never from a search `totalCount`. The official current web index census is **20,568**. That number is not yet written to production snapshots.
 
 ---
 
@@ -211,104 +221,118 @@ PATCH-3 adds a separate **identity discovery** path (`getChemDetail01` only). It
 
 ## 7. Initial Seed Gate
 
-```text
-INITIAL FULL INGEST requires official chemId census source
-INITIAL_FULL_SEED = BLOCKED
-EMPIRICAL_API_CENSUS ≠ FULL_OFFICIAL
-```
-
-Required identity field: `chemId`.
-
-Acceptable later as **official** seed (none established now):
+Do not mix identity seed with content ingest.
 
 ```text
-1. KOSHA 공식 전체목록
-2. data.go.kr 공식 file dataset
-3. KOSHA official bulk/index
-4. future official enumeration API
+OFFICIAL CURRENT CHEMID SEED     = PASS
+source                           = KOSHA official web current index
+count                            = 20568
+FULL_OFFICIAL CONTENT INGEST     = NOT YET
+PUBLISHED_FULL                   = NO
+PRODUCTION INGEST                = NO
+INITIAL_SEED_CANDIDATE (Detail01 numeric 000001~050000) = BLOCKED / FALLBACK
+EMPIRICAL_API_CENSUS             ≠ FULL_OFFICIAL
 ```
 
-PATCH-3 adds an **empirical** candidate, not an official source:
+Required identity field: `chemId`. The current official web index supplies it for every current row (null chemId = 0).
+
+Acceptable **official identity** sources:
+
+```text
+1. KOSHA official current web index     = PASS (this PATCH; 20568)
+2. data.go.kr 공식 file dataset         = NOT USED
+3. KOSHA official bulk/index (other)    = NOT USED
+4. future official enumeration API      = NOT AVAILABLE
+```
+
+PATCH-3 empirical Detail01 scan is **not** the official seed. It remains a fallback/validation tool:
 
 ```text
 DETAIL01_ID_DISCOVERY / EMPIRICAL_API_CENSUS
 000001 ~ 050000 Detail01 existence scan
 + 10,000 trailing zero-discovery tail
-→ INITIAL_SEED_CANDIDATE (not FULL_OFFICIAL)
+→ INITIAL_SEED_CANDIDATE (not FULL_OFFICIAL; live run quota-STOP)
 ```
 
-Forbidden:
+Forbidden as a substitute for the official current index:
 
 ```text
-웹 scraping
+getChemList hidden ALL / undocumented list dump
 검색어 사전 조합
 가나다/알파벳 brute-force
 CAS brute-force
-getChemList hidden ALL / undocumented list dump
 undocumented endpoint
+50-day numeric Detail01 scan as primary enumeration
 N × Detail02~16 hydration in this PATCH
 ```
 
-`chemId` 6-digit Detail01 existence scan is authorized here as empirical discovery only. It is not a documented enumeration API.
+Official current `chemList.do` collect is **authorized** under PATCH-4 (R2 CONDITIONAL; STOP on robots deny / CAPTCHA / 403 / 429). It is identity metadata only.
 
-Seed acceptance for FULL_OFFICIAL (all required):
+`chemId` 6-digit Detail01 existence scan remains empirical fallback only. It is not a documented enumeration API.
+
+FULL_OFFICIAL **content** ingest still requires all of:
 
 ```text
-official source = YES
-chemId available = YES
-complete/final finite enumeration = YES
-reproducible acquisition = YES
-source version/date recordable = YES
+official identity census     = YES (20568)
+chemId available             = YES
+complete/final finite enum   = YES for current public list
+reproducible acquisition     = YES (local CLI + artifact hash)
+source version/date          = YES (collect written_at)
+Detail01~16 hydration        = NOT STARTED
+production snapshot write    = NO
+PUBLISHED_FULL coverage      = NO
 ```
 
 ---
 
 ## 8. Incremental (kept)
 
-After an official seed exists:
+Official current identity seed exists (20,568). Incremental **content** sync is not started:
 
 ```text
-NEW / CHANGED(lastDate) → Detail01~16
+NEW / CHANGED(lastDate) → Detail01~16   = NOT STARTED
 UNCHANGED → 0 detail calls
 REMOVED_CANDIDATE → no DELETE
 ```
 
-OpenAPI search still cannot detect “a new chemId was added to the global corpus”. Global NEW discovery also needs official seed refresh. Empirical Detail01 census refresh is a later decision.
+OpenAPI search still cannot detect “a new chemId was added to the global corpus”. Global NEW discovery refreshes from the official current web index, not from getChemList. Empirical Detail01 census refresh is fallback only.
 
 ---
 
 ## 9. Publish
 
-FULL_OFFICIAL constructor requires `seed_source ∈ OFFICIAL_SEED_SOURCES`.
+FULL_OFFICIAL **content** constructor still requires `seed_source ∈ OFFICIAL_SEED_SOURCES` at ingest time. Mapping the 20,568 web index into that enum is an ingest PATCH, not this documentation cleanup.
 
 `EMPIRICAL_API_CENSUS` is **not** in `OFFICIAL_SEED_SOURCES`.
 
-PUBLISHED_FULL still requires PATCH-1 coverage:
+PUBLISHED_FULL still requires PATCH-1 coverage of **hydrated** details:
 
 ```text
 covered_detail_count == census.total_count
 missing_detail_count == 0
 COMPLETE or EMPTY_BUT_VALID for every census chemId
 BOUNDED_SEARCH → PUBLISHED_FULL = NO
+FULL DETAIL HYDRATION            = NOT STARTED
+PUBLISHED_FULL                   = NO
 ```
 
-This PR does **not** publish.
+This PR does **not** publish and does **not** ingest.
 
 ---
 
 ## 10. Production boundary
 
 ```text
-production mutation      = 0
-production migration     = NO
+production mutation       = 0
+production migration      = NO
 production catalog ingest = NO
-full Detail02~16 hydration = NO
-web crawl                = NO
-file seed                = NO
-Graph mutation           = 0
-Legal Engine mutation    = 0
-KOSHA inquiry sent       = NO
-merge                    = NO
+full Detail01~16 hydration = NO
+official current index    = LOCAL ARTIFACT ONLY (20568)
+secondary identity seed   = LOCAL ARTIFACT ONLY (48963)
+Graph mutation            = 0
+Legal Engine mutation     = 0
+KOSHA inquiry sent        = NO
+merge                     = NO
 ```
 
 ---
@@ -682,7 +706,8 @@ DISCOVERED not official    = 000158
 
 ```text
 OFFICIAL WEB CURRENT CENSUS = 20568
-FULL_OFFICIAL               = NOT YET (no production ingest)
+FULL_OFFICIAL CONTENT INGEST = NOT YET
+PUBLISHED_FULL              = NO
 50-DAY NUMERIC SCAN         = NO
 production ingest           = NO
 ```
@@ -712,15 +737,20 @@ EMPIRICAL_API_CENSUS = NOT FULL_OFFICIAL
 50-DAY NUMERIC SCAN = NO
 CURSOR FULL DATA EXECUTION = NO
 LOCAL FULL DATA EXECUTION = YES
-FULL INDEX / SEED / JOIN COUNTS = LOCAL_RUN_PASS
-HEADER 20568 vs ROWS 20568 = HEADER_MATCH
-OFFICIAL WEB CURRENT CENSUS = 20568
-CURRENT FULL CENSUS = PASS (web index; not production FULL_OFFICIAL)
-REPORT PATH = FALLBACK + CLI ARGS
-INITIAL_SEED_CANDIDATE = BLOCKED
+OFFICIAL CURRENT IDENTITY CENSUS = PASS
+OFFICIAL CURRENT CHEMID SEED = PASS
+source = KOSHA official web current index
+count = 20568
+SECONDARY BOOTSTRAP = PASS
+PARSER COMPLETENESS = PASS
+HEADER MATCH = PASS
+JOIN CONTRACT = PASS
+REPORT PATH = PASS
+FULL DETAIL HYDRATION = NOT STARTED
+PUBLISHED_FULL = NO
+FULL_OFFICIAL CONTENT INGEST = NOT YET
+INITIAL_SEED_CANDIDATE (Detail01 numeric) = BLOCKED / FALLBACK
 PORTAL 1000/day HARD LIMIT OBSERVED = YES
-INITIAL FULL SEED = BLOCKED
-SYNC RUNNER = PRESERVED
 PRODUCTION INGEST = NO
 CHEM-04 = IN_PROGRESS
 MERGE = NOT AUTHORIZED
