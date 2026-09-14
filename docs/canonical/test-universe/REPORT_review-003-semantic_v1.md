@@ -146,18 +146,65 @@ Obs-004는 before_clean 당시의 역사적 관측으로 유지한다. Official 
 | Obs-009 | Consumer Work 입력의 canonical applicability 미표현 | Official LEG consumer input contract | High |
 | Obs-010 | Manufacturing ksic_major Runtime contract 관측 | Manufacturing 46 / 46 | High |
 
-## Obs-007 Object Progress
+## Current Resolution Status — 2026-09-15
+
+> 위 Observation 본문은 당시 관측을 보존하기 위한 역사기록이다. 현재 해결상태·merge/live 결과·진행 object의 SoT는 `docs/canonical/test-universe/STATUS_e2e-integration-current_v1.md`를 따른다.
 
 ```text
-OBJECT = crane
-STATUS = DESIGN_FROZEN
-ANALYSIS = docs/canonical/test-universe/ANALYSIS_obs007-crane_v1.md
-DESIGN = docs/canonical/test-universe/DESIGN_obs007-crane_v1.md
-GPT_VERDICT = CHG_REQUIRED
-GPT_FINAL_DESIGN_VERDICT = PASS
-DESIGN_FROZEN = YES
-IMPLEMENTATION = BLOCKED_UNTIL_DESIGN_PR_MERGE
-PRODUCTION_MUTATION = 0
-E2E_RERUN = 0
+Obs007 = CLOSED
+  crane = CLOSED
+  elevator = CLOSED
+  welding = CLOSED
+  dust_work = CLOSED
+  boiler = CLOSED
+  pressure_vessel = CLOSED
+
+Obs008 = CLOSED
+  demolition = CLOSED
+
+Obs010 = CLOSED
+  ksic_major transport surplus = RESOLVED
+  KSIC_TO_INDUSTRY_NAME = NO
+  INDUSTRY_NAME_TO_LEG = NO
+
+Obs009 = OPEN
+  current object = OBS009-A-CONFINED-SPACE
+  current stage = GPT_OBS009A_CONFINED_SPACE_DESIGN_VERIFY
 ```
 
+Current closed-object Live112 regression anchors:
+
+```text
+CRANE = 152
+ELEVATOR = 92
+WELDING = 0
+DUST = 3
+BOILER = 87
+PRESSURE_VESSEL = 14
+DEMOLITION = 0
+
+context.ksic_major = 0/112
+facility.ksic_major = 0/112
+LEG unknown_fields.ksic_major = 0
+```
+
+Obs009-A semantic design principle:
+
+```text
+has_confined_space = 장소 존재
+performs_confined_space_work = 실제 밀폐공간 작업 수행
+
+장소 true != 작업 true
+작업 true != 모든 detail true
+missing != false
+```
+
+Current repository anchors at documentation refresh time:
+
+```text
+TAI_API_REPO_MAIN = 2855091d5edd0dbcc8e558e4cd0cbd24ef66589a
+TAI_API_E2E_BEHAVIORAL_ANCHOR = 8bc144ffbad4b0ac0717a748afd2bd12a7371001
+LEG_MAIN = 46a07c1ac3c1d171eaad97bfb7a3c85b7d0c41d9
+```
+
+상세 merge SHA, Obs007 family별 결과, Obs008/010 closeout, Obs009 deep evidence와 current design은 `STATUS_e2e-integration-current_v1.md`에서 관리한다.
