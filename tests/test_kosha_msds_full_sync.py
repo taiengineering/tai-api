@@ -14,6 +14,7 @@ from services.kosha_msds.client import (
 )
 from services.kosha_msds.contract import (
     ALLOWED_SECTIONS,
+    API_FULL_ENUMERATION,
     BASE_URL,
     DETAIL_COMPLETE,
     DETAIL_EMPTY_BUT_VALID,
@@ -21,16 +22,27 @@ from services.kosha_msds.contract import (
     DIFF_CHANGED,
     DIFF_NEW,
     DIFF_UNCHANGED,
+    DOCUMENTED_FULL_ENUMERATION_API,
+    ENUMERATION_BOUNDED_SEARCH,
     ENUMERATION_FULL_OFFICIAL,
-    FULL_LIST_API,
     LIST_OPERATION,
+    OPENAPI_LIST_CONTRACT,
     PUBLISH_NOT_PUBLISHED,
     PUBLISH_PUBLISHED_FULL,
     REMOVED_CANDIDATE,
+    SEED_FUTURE_ENUMERATION_API,
     SNAPSHOT_COMPLETED,
     SOURCE_ID,
+    TOTAL_COUNT_SEMANTICS,
 )
-from services.kosha_msds.snapshot import SnapshotSpec, new_full_official_spec
+from services.kosha_msds.snapshot import (
+    KoshaMsdsSnapshotError,
+    SnapshotSpec,
+    assert_not_published_full_unless_full_official,
+    assert_search_total_not_global_census,
+    can_publish_global_current,
+    new_full_official_spec,
+)
 from services.kosha_msds.sync import (
     HydrationRecord,
     KoshaMsdsSyncError,
@@ -46,10 +58,17 @@ from services.kosha_msds.sync import (
 HERE = pathlib.Path(__file__).resolve().parent
 FIXTURES = HERE / "fixtures" / "kosha_msds"
 SECRET = "LIVE_SERVICE_KEY_MUST_NEVER_LEAK"
+SEED = SEED_FUTURE_ENUMERATION_API
 
 
 def fx(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")
+
+
+def _census_collect(client, **kwargs):
+    kwargs.setdefault("seed_source", SEED)
+    kwargs.setdefault("require_corpus", True)
+    return collect_list_census(client, **kwargs)
 
 
 def _client(handler) -> KoshaMsdsClient:
@@ -99,7 +118,7 @@ CORPUS_PAGES = {"1": fx("full_list_page1.xml"), "2": fx("full_list_page2.xml")}
 
 def test_full_list_first_page_omits_search_and_keeps_leading_zero():
     captured = []
-    census = collect_list_census(
+    census = _census_collect(
         _client(_list_handler({"1": fx("full_list_page1.xml"), "2": fx("full_list_page2.xml")}, captured)),
         num_of_rows=2,
     )
@@ -113,7 +132,7 @@ def test_full_list_first_page_omits_search_and_keeps_leading_zero():
 
 
 def test_pagination_next_page_returns_different_rows():
-    census = collect_list_census(_client(_list_handler(CORPUS_PAGES)), num_of_rows=2)
+    census = _census_collect(_client(_list_handler(CORPUS_PAGES)), num_of_rows=2)
     page1 = {row.chem_id for row in census.rows[:2]}
     page2 = {row.chem_id for row in census.rows[2:]}
     assert page1 == {"000001", "001008"}
@@ -123,14 +142,14 @@ def test_pagination_next_page_returns_different_rows():
 
 
 def test_total_count_handling():
-    census = collect_list_census(_client(_list_handler(CORPUS_PAGES)), num_of_rows=2)
+    census = _census_collect(_client(_list_handler(CORPUS_PAGES)), num_of_rows=2)
     assert census.total_count == 4
     assert len(census.chem_ids) == 4
     assert census.total_count == len(census.chem_ids)
 
 
 def test_leading_zero_chem_id_preservation():
-    census = collect_list_census(_client(_list_handler(CORPUS_PAGES)), num_of_rows=2)
+    census = _census_collect(_client(_list_handler(CORPUS_PAGES)), num_of_rows=2)
     assert "000001" in census.chem_ids
     assert "001008" in census.chem_ids
     assert all(cid == cid.strip() and not cid.startswith(" ") for cid in census.chem_ids)
@@ -139,7 +158,7 @@ def test_leading_zero_chem_id_preservation():
 
 def test_duplicate_chem_id_fail_closed():
     with pytest.raises(KoshaMsdsSyncError) as exc:
-        collect_list_census(
+        _census_collect(
             _client(_list_handler({"1": fx("full_list_duplicate.xml")})),
             num_of_rows=2,
         )
@@ -148,7 +167,7 @@ def test_duplicate_chem_id_fail_closed():
 
 def test_missing_chem_id_fail_closed():
     with pytest.raises(KoshaMsdsSyncError) as exc:
-        collect_list_census(
+        _census_collect(
             _client(_list_handler({"1": fx("full_list_missing_chemid.xml")})),
             num_of_rows=1,
         )
@@ -157,7 +176,7 @@ def test_missing_chem_id_fail_closed():
 
 def test_collected_count_not_equal_total_count_fails():
     with pytest.raises(KoshaMsdsSyncError) as exc:
-        collect_list_census(
+        _census_collect(
             _client(
                 _list_handler(
                     {
@@ -173,7 +192,7 @@ def test_collected_count_not_equal_total_count_fails():
 
 
 def test_initial_diff_all_new():
-    census = collect_list_census(_client(_list_handler(CORPUS_PAGES)), num_of_rows=2)
+    census = _census_collect(_client(_list_handler(CORPUS_PAGES)), num_of_rows=2)
     plan = initial_sync_plan(census.identity_map)
     assert set(plan.diff.new) == set(census.chem_ids)
     assert plan.diff.changed == ()
@@ -224,7 +243,7 @@ def test_removed_chem_id_is_removed_candidate():
 
 def test_unchanged_makes_zero_detail_calls():
     log: list = []
-    census = collect_list_census(_client(_full_handler(CORPUS_PAGES, log=log)), num_of_rows=2)
+    census = _census_collect(_client(_full_handler(CORPUS_PAGES, log=log)), num_of_rows=2)
     plan = plan_incremental(census.identity_map, census.identity_map)
     assert plan.unchanged_detail_calls == 0
     assert plan.detail_calls_planned == 0
@@ -238,10 +257,10 @@ def test_unchanged_makes_zero_detail_calls():
 def test_new_triggers_detail16():
     log: list = []
     client = _client(_full_handler(CORPUS_PAGES, log=log))
-    census = collect_list_census(client, num_of_rows=2)
+    census = _census_collect(client, num_of_rows=2)
     plan = initial_sync_plan({"000001": census.last_dates["000001"]})
     # only hydrate the one NEW in this isolated map
-    one = collect_list_census(client, num_of_rows=2)
+    one = _census_collect(client, num_of_rows=2)
     subset_plan = initial_sync_plan({"000001": one.last_dates["000001"]})
     checkpoint = SyncCheckpoint()
     log.clear()
@@ -257,7 +276,7 @@ def test_new_triggers_detail16():
 def test_changed_triggers_detail16():
     log: list = []
     client = _client(_full_handler(CORPUS_PAGES, log=log))
-    census = collect_list_census(client, num_of_rows=2)
+    census = _census_collect(client, num_of_rows=2)
     previous = dict(census.identity_map)
     previous["001008"] = "1999-01-01"
     plan = plan_incremental(previous, census.identity_map)
@@ -274,7 +293,7 @@ def test_changed_triggers_detail16():
 def test_retry_resume_is_idempotent():
     log: list = []
     client = _client(_full_handler(CORPUS_PAGES, log=log))
-    census = collect_list_census(client, num_of_rows=2)
+    census = _census_collect(client, num_of_rows=2)
     targets = ("000001", "001008")
     checkpoint = SyncCheckpoint()
     log.clear()
@@ -297,11 +316,11 @@ def test_retry_resume_is_idempotent():
 
 def test_incomplete_detail_does_not_publish():
     client = _client(_full_handler(CORPUS_PAGES, fail_section_for="000001"))
-    census = collect_list_census(client, num_of_rows=2)
+    census = _census_collect(client, num_of_rows=2)
     checkpoint = SyncCheckpoint()
     records = run_hydration(client, census, ("000001",), checkpoint)
     assert records[0].detail.detail_status == DETAIL_INCOMPLETE
-    spec = new_full_official_spec(census.total_count)
+    spec = new_full_official_spec(census.total_count, seed_source=SEED)
     spec_completed = SnapshotSpec(
         enumeration_mode=spec.enumeration_mode,
         status=SNAPSHOT_COMPLETED,
@@ -318,19 +337,21 @@ def test_service_key_leakage_is_zero():
         assert "serviceKey" not in text
         assert SECRET not in text
     captured = []
-    collect_list_census(_client(_list_handler(CORPUS_PAGES, captured)), num_of_rows=2)
+    _census_collect(_client(_list_handler(CORPUS_PAGES, captured)), num_of_rows=2)
     blob = redact_secret(str(captured), SECRET)
     assert SECRET not in blob
-    assert FULL_LIST_API == "BLOCKED"
+    assert API_FULL_ENUMERATION == "BLOCKED_BY_SOURCE_CONTRACT"
+    assert DOCUMENTED_FULL_ENUMERATION_API == "NOT_AVAILABLE"
+    assert OPENAPI_LIST_CONTRACT == "SEARCH-ONLY"
     assert SOURCE_ID == "KOSHA_MSDS"
     with pytest.raises(KoshaMsdsSyncError) as exc:
         collect_list_census(_client(_list_handler({"1": fx("empty_list.xml")})), num_of_rows=1)
-    assert exc.value.code == "FULL_LIST_BLOCKED"
+    assert exc.value.code == "SEARCH_IS_NOT_CORPUS"
     assert SECRET not in str(exc.value)
 
 
 def test_cas_null_is_not_identity():
-    census = collect_list_census(_client(_list_handler(CORPUS_PAGES)), num_of_rows=2)
+    census = _census_collect(_client(_list_handler(CORPUS_PAGES)), num_of_rows=2)
     row = next(r for r in census.rows if r.chem_id == "047134")
     assert row.cas_no is None
     assert row.chem_id == "047134"
@@ -448,3 +469,56 @@ def test_page_no_zero_fail_closed():
     with pytest.raises(KoshaMsdsClientError) as exc:
         client.list_page(page_no=0, num_of_rows=10)
     assert exc.value.code == "PAGE_INVALID"
+
+
+def test_omitted_search_cannot_promote_to_full_corpus():
+    with pytest.raises(KoshaMsdsSyncError) as exc:
+        collect_list_census(
+            _client(_list_handler({"1": fx("empty_list.xml")})),
+            num_of_rows=10,
+            require_corpus=True,
+        )
+    assert exc.value.code == "SEARCH_IS_NOT_CORPUS"
+
+
+def test_search_total_count_is_not_global_expected_count():
+    with pytest.raises(KoshaMsdsSnapshotError) as exc:
+        assert_search_total_not_global_census(777, semantics=TOTAL_COUNT_SEMANTICS)
+    assert exc.value.code == "SEARCH_TOTAL_NOT_GLOBAL_CENSUS"
+    with pytest.raises(KoshaMsdsSyncError) as exc2:
+        collect_list_census(
+            _client(_list_handler({"1": fx("benzene_list.xml")})),
+            search_cnd=1,
+            search_wrd="71-43-2",
+            num_of_rows=10,
+            require_corpus=True,
+        )
+    assert exc2.value.code == "INITIAL_FULL_SEED_BLOCKED"
+
+
+def test_full_official_requires_known_official_seed():
+    with pytest.raises(KoshaMsdsSnapshotError) as exc:
+        new_full_official_spec(4, seed_source="")
+    assert exc.value.code == "INITIAL_FULL_SEED_BLOCKED"
+    with pytest.raises(KoshaMsdsSnapshotError) as exc2:
+        new_full_official_spec(4, seed_source="SEARCH")
+    assert exc2.value.code == "INITIAL_FULL_SEED_BLOCKED"
+    spec = new_full_official_spec(4, seed_source=SEED)
+    assert spec.enumeration_mode == ENUMERATION_FULL_OFFICIAL
+    assert spec.publish_state == PUBLISH_NOT_PUBLISHED
+
+
+def test_bounded_search_snapshot_cannot_publish_full():
+    spec = SnapshotSpec(
+        enumeration_mode=ENUMERATION_BOUNDED_SEARCH,
+        status=SNAPSHOT_COMPLETED,
+        publish_state=PUBLISH_PUBLISHED_FULL,
+        expected_count=4,
+    )
+    assert can_publish_global_current(spec) is False
+    with pytest.raises(KoshaMsdsSnapshotError) as exc:
+        assert_not_published_full_unless_full_official(spec)
+    assert exc.value.code == "BOUNDED_SEARCH_CANNOT_PUBLISH_FULL"
+    census = _census(("000001", "001008", "047134", "009098"))
+    records = [_rec(cid) for cid in census.chem_ids]
+    assert publish_full_allowed(spec, census, records, publish_state=PUBLISH_PUBLISHED_FULL) is False

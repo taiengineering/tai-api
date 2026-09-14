@@ -204,9 +204,10 @@ class KoshaMsdsClient:
         search_cnd: Optional[int] = None,
         search_wrd: Optional[str] = None,
     ) -> SearchResult:
-        """One getChemList page. Omitting searchCnd/searchWrd is the dump-all attempt.
+        """One getChemList page. Official contract: searchCnd + searchWrd required.
 
-        CHEM-04 live probe: omit/blank/default → totalCount=0 (not a corpus).
+        Omitting search is not a documented dump-all. Live CHEM-04: omit/blank →
+        resultCode=00 totalCount=0, which matches search-only (not an outage).
         """
         if page_no < 1:
             raise KoshaMsdsClientError("PAGE_INVALID", "pageNo must be >= 1")

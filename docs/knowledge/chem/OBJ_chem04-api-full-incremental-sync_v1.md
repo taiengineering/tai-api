@@ -9,257 +9,285 @@ status: active
 owner: taiwang
 ---
 
-# OBJ-CHEM-04 — KOSHA OpenAPI full list + incremental sync
+# OBJ-CHEM-04 — Official OpenAPI search contract + incremental runner
 
 ```text
-CHEM-04 = IN_PROGRESS (PATCH-1 on PR #350, not merged)
+CHEM-04 = IN_PROGRESS (PATCH-2 on PR #350, not merged)
 CHEM-01 = CLOSED / PASS_WITH_INGEST_GATE
 CHEM-02 = DONE / CLOSED
 CHEM-03 = CLOSED / CONDITIONAL
 CHEM-ENUM-GATE-01 = CLOSED / CONDITIONAL (historical)
 R1 OPENAPI DATA RIGHTS = CLEAR
-R2/R3 = NOT APPLICABLE on this API-only path
-CHEM-ENUM-GATE-01 web harvest = not used
+OPENAPI SEARCH CONTRACT = PASS
+OPENAPI DETAIL CONTRACT = PASS
+INCREMENTAL RUNNER = IMPLEMENTED
+DOCUMENTED FULL ENUMERATION API = NOT AVAILABLE
+INITIAL FULL SEED = BLOCKED
+PRODUCTION FULL INGEST = BLOCKED
 ```
 
-This work order does **not** crawl `chemList.do`, send a KOSHA inquiry, brute-force chemId/CAS/search words, apply production migration, or run production Detail ingest.
+This PATCH freezes the **official OpenAPI 활용가이드 contract**. It does not invent a dump-all. It does not crawl `chemList.do`.
 
 ---
 
 ## 0. Revision guard
 
 ```text
-authorized origin/main =
-3e65de0b59fe765398d14986f361279390232ac5
+PR #350 reviewed head (PATCH-2 parent) =
+d5ada607e1532c79c651b852e5fa0b83e53b99e0
 branch =
 feature/chem04-api-full-sync
 ```
 
+`origin/main` may have moved with unrelated E2E docs after CHEM-ENUM-GATE-01 merge. CHEM impact of that delta = NO. This PATCH does not rebase.
+
 ---
 
-## 1. Existing CHEM-02 implementation (reused, not replaced)
+## A vs B — do not mix
+
+### A. OpenAPI (available)
+
+```text
+SEARCH  = getChemList (searchCnd + searchWrd required)
+DETAIL  = getChemDetail01~16 (chemId required)
+```
+
+### B. Full identity source (not yet established)
+
+```text
+ENUMERATION / CENSUS of every chemId
+```
+
+```text
+A = AVAILABLE
+B = NOT YET ESTABLISHED
+```
+
+The PR #350 runner is **B-consumer + A-detail hydrator**, not an OpenAPI dump-all finder.
+
+---
+
+## 1. Official getChemList contract (HWP freeze)
+
+Owner document: 한국산업안전보건공단 물질안전보건자료 오픈API 활용가이드.
+
+```text
+operation = getChemList
+purpose   = 화학물질 검색 목록 조회
+OPENAPI LIST CONTRACT = SEARCH-ONLY
+searchWrd = REQUIRED
+searchCnd = REQUIRED
+  0 = 국문명
+  1 = CAS No
+  2 = UN No
+  3 = KE No
+  4 = EN No
+pageNo    = OPTIONAL
+numOfRows = OPTIONAL
+```
+
+Response fields (no guessed extras):
+
+```text
+chemId, chemNameKor, casNo, unNo, keNo, enNo,
+koshaConfirm, lastDate, openYn,
+pageNo, numOfRows, totalCount
+```
+
+```text
+identity = KOSHA_MSDS + chemId (text, keep leading zeros)
+cas_no   = nullable, not identity
+```
+
+---
+
+## 2. totalCount semantics
+
+```text
+totalCount = SEARCH RESULT COUNT
+           = count for this searchWrd + searchCnd
+```
+
+It is **not** the global KOSHA chemical corpus size.
+
+예: `searchCnd=0 searchWrd=벤젠` → 그 검색 결과 건수 (CHEM-01: 777). 그것이 N이 아니다.
+
+`kosha_msds_snapshots.expected_count` for FULL_OFFICIAL may only come from an **official chemId census**, never from a search `totalCount`.
+
+---
+
+## 3. Documented functions that do not exist
+
+```text
+searchWrd omitted → ALL
+searchWrd blank → ALL
+searchWrd = *
+searchWrd = %
+searchCnd = ALL
+getAllChemList
+bulk-list API
+updatedSince
+global chemId enumeration API
+```
+
+```text
+DOCUMENTED_OPENAPI_FULL_ENUMERATION = NO
+DOCUMENTED_FULL_ENUMERATION_API     = NOT AVAILABLE
+API_FULL_ENUMERATION                = BLOCKED_BY_SOURCE_CONTRACT
+```
+
+의미: API 장애 아님, 구현 실패 아님, 서비스키 문제 아님. 공식 API가 search-oriented contract이다.
+
+---
+
+## 4. Live probe (historical; do not repeat)
+
+CHEM-04 Stage A (6 calls, no further probing):
+
+omit / blank / default / `searchCnd=0` without `searchWrd` → `resultCode=00`, `totalCount=0`.
+
+This **matches** the official search-only contract. It is not an outage and not a reason to hunt hidden parameters.
+
+```text
+ADDITIONAL FULL-LIST PROBE = 0
+```
+
+금지: `*`, `%`, blank variation, undocumented ALL mode, web scrape, file download, KOSHA 문의.
+
+---
+
+## 5. Existing CHEM-02 pieces (reused)
 
 | piece | location |
 |---|---|
-| getChemList / getChemDetail01–16 client | `services/kosha_msds/client.py` (`search`, `get_detail_section`, `get_full_detail`) |
-| XML parse / resultCode | `services/kosha_msds/parse.py` |
-| retry/timeout | `KoshaMsdsClient._get` (`DEFAULT_MAX_ATTEMPTS=3`, `DEFAULT_TIMEOUT_SECONDS=30`) |
-| canonical hash | `services/kosha_msds/hash.py` |
-| identity = chemId text | `services/kosha_msds/identity.py` |
-| fixtures | `tests/fixtures/kosha_msds/` |
-| DB contract | `supabase/migrations/20260914_kosha_msds_catalog.sql` (not applied) |
-
-No second KOSHA client. Existing `/kosha/msds` router stays stale and untouched.
-
-New:
-
-```text
-services/public_data_sync/census.py
-  LIST identity census + previous/current diff
-services/kosha_msds/sync.py
-  pagination, fail-closed census, incremental plan, resume hydration
-KoshaMsdsClient.list_page
-  getChemList page with optional omitted searchCnd/searchWrd
-```
+| search / detail client | `services/kosha_msds/client.py` |
+| XML / resultCode | `services/kosha_msds/parse.py` |
+| retry/timeout | `KoshaMsdsClient._get` |
+| hash | `services/kosha_msds/hash.py` |
+| identity | `services/kosha_msds/identity.py` |
+| schema | `supabase/migrations/20260914_kosha_msds_catalog.sql` (not applied) |
 
 ---
 
-## 2. Official API Guide frozen facts (unchanged)
+## 6. Runner — preserved, role restated
+
+Kept:
 
 ```text
-getChemList searchWrd required (HWP) = YES
-getChemList searchCnd required (HWP) = YES
-documented ALL mode                 = NO
-documented bulk/index               = NO
-```
-
----
-
-## 3. Stage A — live getChemList full-list probe
-
-Transport: existing `kr_get` via Railway `tai-api-prod` production env (serviceKey never printed). Budget: **6 calls** (max 10). CHEM-01 `searchCnd=0 searchWrd=""` was **not** repeated.
-
-| # | request (serviceKey omitted from log) | HTTP | resultCode | totalCount | items |
-|---|---|---|---|---|---|
-| 1 | pageNo=1 numOfRows=10 (searchWrd/searchCnd **OMITTED**) | 200 | 00 | **0** | 0 |
-| 2 | serviceKey only (swagger/default) | 200 | 00 | **0** | 0 |
-| 3 | searchWrd=BLANK, searchCnd **OMITTED**, pageNo=1 numOfRows=10 | 200 | 00 | **0** | 0 |
-| 4 | pageNo=1 numOfRows=100 (search omitted) | 200 | 00 | **0** | 0 |
-| 5 | searchCnd=0, searchWrd **OMITTED**, pageNo=1 numOfRows=10 | 200 | 00 | **0** | 0 |
-| 6 | pageNo=0 numOfRows=10 (search omitted) | 200 | 00 | **0** | 0 |
-
-```text
-FULL_LIST_API = BLOCKED
-actual full-list request =
-GET /getChemList?pageNo=1&numOfRows=10
-(searchWrd OMITTED, searchCnd OMITTED)
-searchWrd = OMITTED / BLANK
-searchCnd = OMITTED / VALUE 0
-totalCount = 0
-N = UNKNOWN
-sample page 1 count = 0
-sample page 2 count = NOT REACHED
-chemId present = NO (zero rows)
-```
-
-No guessed search words. No `%` / alphabet combinatorics. No chemList.do. No Detail01–16 in this probe.
-
-`numOfRows` 10 and 100 were accepted on the empty dump-all shape. **1000 was not re-probed on dump-all** (empty contract already fail-closed; CHEM-01 already showed 1000 works on **search**).
-
-```text
-WORKING_PAGE_SIZE = 1000
-meaning =
-CHEM-01 search-measured practical page size (10/100/1000 accepted)
-NOT an official maximum
-dump-all page size = UNMEASURED (0 items)
-```
-
----
-
-## 4. FULL_LIST_API PASS criteria vs this probe
-
-| clause | live |
-|---|---|
-| 1 totalCount at corpus scale | **NO** (0) |
-| 2 pageNo increase returns different rows | NOT REACHED |
-| 3 last page reachable | NOT REACHED |
-| 4 each row has chemId | NOT REACHED |
-| 5 repeatable pagination | NOT REACHED |
-| 6 no guessed chemId | YES (none guessed) |
-
-```text
-FULL ENUMERATION = BLOCKED
-```
-
-Do **not** substitute KOSHA web advisory 20,568 as `N` or `expected_count`.
-
----
-
-## 5. Identity / list fields (CHEM-02, reused)
-
-When a list row exists, store only observed fields:
-
-```text
-chemId, chemNameKor, casNo, unNo, keNo, enNo, koshaConfirm, lastDate, openYn
-```
-
-```text
-source_id  = KOSHA_MSDS
-source_key = chemId   # text, keep leading zeros ("000001")
-cas_no     = nullable, not identity
-```
-
----
-
-## 6. Runner design (implemented; live dump-all fail-closed)
-
-`collect_list_census` paginates `list_page` then fail-closes if:
-
-```text
-missing chemId
-duplicate chemId
-collected != totalCount
-totalCount <= 0   # live dump-all
-```
-
-Checkpoint / resume:
-
-```text
+pagination
+identity census validation
+NEW / CHANGED / UNCHANGED / REMOVED_CANDIDATE
+Detail01~16 hydration
 IN_PROCESS RESUME = PASS
 PROCESS-RESTART RESUME = NOT_IMPLEMENTED
-checkpoint = in-memory SyncCheckpoint only
-durable DB/file checkpoint = not in this PR
+PUBLISHED_FULL coverage guard
+incremental PUBLISHED_FULL = FORBIDDEN (no DB-backed prior coverage)
 ```
 
-Rate limit: optional `sleep_s` between pages/details. Retry/backoff remains CHEM-02 client `_get`.
-
-Idempotency: completed chemId is not re-fetched on resume. Hash compare on CHANGED can skip a new logical version when payload is identical.
-
-Initial plan: previous map empty → all current chemId = **NEW** → Detail01–16 each.
-
-Incremental:
+Role:
 
 ```text
-NEW      = current - previous          → Detail01–16
-CHANGED  = intersection, lastDate !=   → Detail01–16, then canonical hash
-UNCHANGED= intersection, lastDate ==   → 0 detail calls
-REMOVED  = previous - current          → REMOVED_CANDIDATE
-           no DELETE; historical rows stay
+Known chemical identity census
++
+KOSHA OpenAPI Detail01~16
++
+incremental change synchronization
 ```
 
-Additional change indicators: **none used**. lastDate only.
+Not:
+
+```text
+OpenAPI 자체가 전체 chemId를 찾아주는 runner
+```
+
+When an official chemId seed exists, the same runner can hydrate and incrementally update.
+
+`list_page` still allows omitted search params so a **future official list transport** can reuse pagination. OpenAPI omitted-search results cannot be promoted to FULL corpus (`SEARCH_IS_NOT_CORPUS`). `pageNo < 1` fail-closed.
 
 ---
 
-## 7. Snapshot / publish
-
-CHEM-02 schema reused. No new chemical master. No schema expansion this WO.
+## 7. Initial Seed Gate
 
 ```text
-FULL_OFFICIAL snapshot = candidate constructor exists
-PUBLISHED_FULL         = NOT performed
-production ingest      = NO
+INITIAL FULL INGEST requires official chemId census source
+INITIAL_FULL_SEED = BLOCKED
 ```
 
-Publish gate (evaluated, not applied):
+Required identity field: `chemId`.
+
+Acceptable later (none established now):
 
 ```text
-enumerated rows == totalCount
-missing/duplicate chemId = 0
+1. KOSHA 공식 전체목록
+2. data.go.kr 공식 file dataset
+3. KOSHA official bulk/index
+4. future official enumeration API
+```
+
+Forbidden:
+
+```text
+웹 scraping
+검색어 사전 조합
+가나다/알파벳 brute-force
+CAS brute-force
+chemId 숫자 추측
+undocumented endpoint
+```
+
+Seed acceptance (all required):
+
+```text
+official source = YES
+chemId available = YES
+complete/final finite enumeration = YES
+reproducible acquisition = YES
+source version/date recordable = YES
+```
+
+---
+
+## 8. Incremental (kept)
+
+After an official seed exists:
+
+```text
+NEW / CHANGED(lastDate) → Detail01~16
+UNCHANGED → 0 detail calls
+REMOVED_CANDIDATE → no DELETE
+```
+
+OpenAPI search still cannot detect “a new chemId was added to the global corpus”. Global NEW discovery also needs official seed refresh.
+
+---
+
+## 9. Publish
+
+FULL_OFFICIAL constructor requires `seed_source ∈ OFFICIAL_SEED_SOURCES`.
+
+PUBLISHED_FULL still requires PATCH-1 coverage:
+
+```text
 covered_detail_count == census.total_count
 missing_detail_count == 0
-every census chemId COMPLETE or EMPTY_BUT_VALID
-INCOMPLETE = 0
-incremental PUBLISHED_FULL = FORBIDDEN
-  (no DB-backed prior full coverage in this PR)
+COMPLETE or EMPTY_BUT_VALID for every census chemId
+BOUNDED_SEARCH → PUBLISHED_FULL = NO
 ```
 
-Partial NEW/CHANGED records cannot publish even if those few rows are COMPLETE.
-
-PATCH-1: `list_page` rejects `pageNo < 1` (pageNo=0 fail-closed).
-
----
-
-## 8. REMOVED_CANDIDATE — schema proposal only
-
-Existing columns already cover a non-delete stale mark:
-
-```text
-kosha_msds_chemicals.last_seen_at
-kosha_msds_snapshot_items.in_snapshot
-kosha_msds_chemicals.is_current  (stays false until PUBLISHED_FULL)
-```
-
-Proposal (not migrated here): a chemId absent from the new census is omitted from the new snapshot membership (`in_snapshot` only for current census) while the chemical row remains. Optional later: `last_seen_at` not updated. **No DELETE. No new inactive column in this PR.**
-
----
-
-## 9. DETAIL_CALLS / quota
-
-```text
-N = UNKNOWN (API totalCount on dump-all = 0)
-DETAIL_CALLS = 16 × N = UNKNOWN
-development quota = 1,000/day
-production traffic increase = Owner approval (not this PR)
-```
-
-This PR did **not** call Detail01–16 live and did **not** paginate a full corpus.
+This PR does **not** publish.
 
 ---
 
 ## 10. Production boundary
 
 ```text
-production DB write          = 0
-production migration         = NO
-production full ingest       = NO
-FULL_OFFICIAL publication    = NO
-Graph mutation               = 0
-factory_material link        = NO
-Legal Engine link            = NO
-frontend                     = NO
-web chemList.do crawl        = NO
-KOSHA inquiry sent           = NO
+production mutation      = 0
+production migration     = NO
+production full ingest   = NO
+web crawl                = NO
+Graph mutation           = 0
+Legal Engine mutation    = 0
+KOSHA inquiry sent       = NO
 ```
 
 ---
@@ -267,38 +295,21 @@ KOSHA inquiry sent           = NO
 ## 11. Tests
 
 ```text
-python3 -m pytest tests/test_kosha_msds_catalog.py -q --tb=line
-34 passed / 0 failed
-python3 -m pytest tests/test_kosha_msds_full_sync.py -q --tb=line
-24 passed / 0 failed
+python3 -m pytest tests/test_kosha_msds_catalog.py tests/test_kosha_msds_full_sync.py -q --tb=line
 ```
 
-CI: mock transport only. No live KOSHA calls.
-
----
-
-## 12. Unused paths (explicitly discarded)
-
-```text
-KOSHA web chemList.do crawl
-file-based enumeration
-chemId brute force
-search-word combinatorics
-KOSHA inquiry
-lazy/on-demand-only catalog as the CHEM-04 SoT
-```
+CI: mock transport only. No live KOSHA calls. No additional full-list probe.
 
 ---
 
 ## STOP
 
 ```text
-FULL_LIST_API = BLOCKED
-FULL ENUMERATION = BLOCKED
-IN_PROCESS RESUME = PASS
-PROCESS-RESTART RESUME = NOT_IMPLEMENTED
-incremental PUBLISHED_FULL = FORBIDDEN
-next = do not bypass with web/file
-      wait GPT; if pagination later PASS, then quota → migration → ingest
+OPENAPI LIST CONTRACT = SEARCH-ONLY
+DOCUMENTED FULL ENUMERATION API = NOT AVAILABLE
+API_FULL_ENUMERATION = BLOCKED_BY_SOURCE_CONTRACT
+INITIAL FULL SEED = BLOCKED
+SYNC RUNNER = PRESERVED
 CHEM-04 = IN_PROGRESS
+MERGE = NOT AUTHORIZED
 ```

@@ -1,4 +1,4 @@
-"""PROBE-only snapshot rules. FULL_OFFICIAL / global current are CHEM-03+."""
+"""Snapshot rules. FULL_OFFICIAL needs an official chemId seed, not getChemList search."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,14 +7,17 @@ from typing import Optional
 from services.kosha_msds.contract import (
     CHEM02_ALLOWED_ENUMERATION,
     CHEM04_ALLOWED_ENUMERATION,
+    ENUMERATION_BOUNDED_SEARCH,
     ENUMERATION_FULL_OFFICIAL,
     ENUMERATION_PROBE,
+    OFFICIAL_SEED_SOURCES,
     PUBLISH_NOT_PUBLISHED,
     PUBLISH_PUBLISHED_FULL,
     SNAPSHOT_COMPLETED,
     SNAPSHOT_RUNNING,
     SOURCE_CONTRACT_VERSION,
     SOURCE_ID,
+    TOTAL_COUNT_SEMANTICS,
 )
 
 
@@ -63,6 +66,19 @@ def can_publish_global_current(spec: SnapshotSpec) -> bool:
     )
 
 
+def assert_not_published_full_unless_full_official(spec: SnapshotSpec) -> None:
+    if spec.enumeration_mode != ENUMERATION_FULL_OFFICIAL and spec.publish_state == PUBLISH_PUBLISHED_FULL:
+        code = (
+            "BOUNDED_SEARCH_CANNOT_PUBLISH_FULL"
+            if spec.enumeration_mode == ENUMERATION_BOUNDED_SEARCH
+            else "ENUMERATION_CANNOT_PUBLISH_FULL"
+        )
+        raise KoshaMsdsSnapshotError(
+            code,
+            f"{spec.enumeration_mode} snapshot cannot become PUBLISHED_FULL",
+        )
+
+
 def assert_probe_not_full(spec: SnapshotSpec) -> None:
     validate_enumeration_mode(spec.enumeration_mode, chem02=True)
     if spec.enumeration_mode == ENUMERATION_PROBE and spec.publish_state == PUBLISH_PUBLISHED_FULL:
@@ -88,13 +104,32 @@ def new_probe_spec() -> SnapshotSpec:
     return spec
 
 
-def new_full_official_spec(expected_count: int, *, run_type: str = "FULL_SYNC") -> SnapshotSpec:
-    """CHEM-04 candidate snapshot. Does not publish. expected_count must be API totalCount."""
+def assert_search_total_not_global_census(total_count: int, *, semantics: str = TOTAL_COUNT_SEMANTICS) -> None:
+    """getChemList totalCount is the search hit count, never KOSHA global N."""
+    if semantics == TOTAL_COUNT_SEMANTICS:
+        raise KoshaMsdsSnapshotError(
+            "SEARCH_TOTAL_NOT_GLOBAL_CENSUS",
+            f"search totalCount={total_count} is not a global corpus expected_count",
+        )
+
+
+def new_full_official_spec(
+    expected_count: int,
+    *,
+    seed_source: str,
+    run_type: str = "FULL_SYNC",
+) -> SnapshotSpec:
+    """FULL_OFFICIAL requires an official chemId seed. Search totalCount is not N."""
     validate_enumeration_mode(ENUMERATION_FULL_OFFICIAL, chem02=False)
+    if seed_source not in OFFICIAL_SEED_SOURCES:
+        raise KoshaMsdsSnapshotError(
+            "INITIAL_FULL_SEED_BLOCKED",
+            f"FULL_OFFICIAL requires an official chemId seed; got {seed_source!r}",
+        )
     if expected_count <= 0:
         raise KoshaMsdsSnapshotError(
-            "FULL_LIST_BLOCKED",
-            "FULL_OFFICIAL expected_count must be API totalCount > 0",
+            "INITIAL_FULL_SEED_BLOCKED",
+            "FULL_OFFICIAL expected_count must be official census N > 0",
         )
     return SnapshotSpec(
         enumeration_mode=ENUMERATION_FULL_OFFICIAL,

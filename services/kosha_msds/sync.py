@@ -1,9 +1,8 @@
-"""KOSHA MSDS API-only full list pagination, census, incremental plan, resume.
+"""KOSHA MSDS identity census + OpenAPI detail hydration + incremental sync.
 
-Live dump-all (omit searchCnd/searchWrd) measured CHEM-04: totalCount=0 → BLOCKED.
-This module still implements the runner against a list transport so a future
-working list contract can plug in without a new client. It does not crawl
-chemList.do, guess chemId, or apply production ingest.
+getChemList is a documented search list, not a global enumerator.
+This runner hydrates a *known* chemId census (official seed) via Detail01–16.
+It does not crawl chemList.do, guess identities, or apply production ingest.
 """
 from __future__ import annotations
 
@@ -14,6 +13,7 @@ from typing import Callable, Mapping, Optional
 
 from services.kosha_msds.client import FullDetail, KoshaMsdsClient
 from services.kosha_msds.contract import (
+    ALLOWED_SEARCH_CND,
     ALLOWED_SECTIONS,
     DETAIL_COMPLETE,
     DETAIL_EMPTY_BUT_VALID,
@@ -21,8 +21,9 @@ from services.kosha_msds.contract import (
     DIFF_CHANGED,
     DIFF_NEW,
     DIFF_UNCHANGED,
-    FULL_LIST_API,
+    OFFICIAL_SEED_SOURCES,
     REMOVED_CANDIDATE,
+    TOTAL_COUNT_SEMANTICS,
     WORKING_PAGE_SIZE,
 )
 from services.kosha_msds.hash import source_content_hash
@@ -53,6 +54,8 @@ class ListCensus:
     chem_ids: tuple[str, ...]
     last_dates: Mapping[str, Optional[str]]
     rows: tuple[ListCandidate, ...]
+    seed_source: Optional[str] = None
+    total_count_semantics: str = TOTAL_COUNT_SEMANTICS
 
     @property
     def identity_map(self) -> dict[str, Optional[str]]:
@@ -101,14 +104,33 @@ class SyncPlan:
         return out
 
 
-def assert_full_list_corpus(total_count: int) -> None:
-    if FULL_LIST_API == "BLOCKED" and total_count <= 0:
+def is_documented_search(search_cnd: Optional[int], search_wrd: Optional[str]) -> bool:
+    return search_cnd in ALLOWED_SEARCH_CND and bool((search_wrd or "").strip())
+
+
+def assert_omitted_search_not_corpus(
+    *,
+    search_cnd: Optional[int],
+    search_wrd: Optional[str],
+    seed_source: Optional[str],
+) -> None:
+    """Omitted/blank getChemList is the documented search-only contract, not a dump-all."""
+    official = seed_source in OFFICIAL_SEED_SOURCES
+    if official:
+        return
+    if not is_documented_search(search_cnd, search_wrd):
         raise KoshaMsdsSyncError(
-            "FULL_LIST_BLOCKED",
-            "getChemList omit/blank/default search returns totalCount=0; not a corpus dump",
+            "SEARCH_IS_NOT_CORPUS",
+            "omitted/blank getChemList cannot be promoted to a full KOSHA corpus",
         )
-    if total_count <= 0:
-        raise KoshaMsdsSyncError("FULL_LIST_BLOCKED", "totalCount=0 is not a full list")
+
+
+def assert_official_seed_for_corpus(seed_source: Optional[str]) -> None:
+    if seed_source not in OFFICIAL_SEED_SOURCES:
+        raise KoshaMsdsSyncError(
+            "INITIAL_FULL_SEED_BLOCKED",
+            "full census requires an official chemId seed source",
+        )
 
 
 def collect_list_census(
@@ -117,18 +139,29 @@ def collect_list_census(
     num_of_rows: int = WORKING_PAGE_SIZE,
     search_cnd: Optional[int] = None,
     search_wrd: Optional[str] = None,
-    require_corpus: bool = True,
+    require_corpus: bool = False,
+    seed_source: Optional[str] = None,
     sleep_s: float = 0.0,
     sleep_fn: SleepFn = time.sleep,
 ) -> ListCensus:
+    assert_omitted_search_not_corpus(
+        search_cnd=search_cnd,
+        search_wrd=search_wrd,
+        seed_source=seed_source,
+    )
+    if require_corpus:
+        assert_official_seed_for_corpus(seed_source)
+        if is_documented_search(search_cnd, search_wrd):
+            raise KoshaMsdsSyncError(
+                "SEARCH_IS_NOT_CORPUS",
+                "getChemList search totalCount is not a full KOSHA corpus",
+            )
     first = client.list_page(
         page_no=1,
         num_of_rows=num_of_rows,
         search_cnd=search_cnd,
         search_wrd=search_wrd,
     )
-    if require_corpus:
-        assert_full_list_corpus(first.total_count)
     pages = [first]
     page_size = first.num_of_rows or num_of_rows
     if page_size < 1:
@@ -157,6 +190,11 @@ def collect_list_census(
         raise KoshaMsdsSyncError(exc.code, exc.message) from exc
     by_id = {row.chem_id: row for row in rows if row.chem_id}
     last_dates = {cid: by_id[cid].last_date for cid in chem_ids}
+    semantics = (
+        "OFFICIAL_SEED_CENSUS"
+        if seed_source in OFFICIAL_SEED_SOURCES
+        else TOTAL_COUNT_SEMANTICS
+    )
     return ListCensus(
         total_count=first.total_count,
         page_count=len(pages),
@@ -164,6 +202,8 @@ def collect_list_census(
         chem_ids=chem_ids,
         last_dates=last_dates,
         rows=tuple(rows),
+        seed_source=seed_source,
+        total_count_semantics=semantics,
     )
 
 
@@ -308,7 +348,7 @@ def publish_full_allowed(
 
 
 def candidate_full_official_spec(census: ListCensus) -> SnapshotSpec:
-    return new_full_official_spec(census.total_count)
+    return new_full_official_spec(census.total_count, seed_source=census.seed_source or "")
 
 
 def detail_calls_estimate(n: int) -> int:
