@@ -4,7 +4,7 @@ type: report
 scope: knowledge
 project: chem
 title: OBJ-CHEM-04 local secondary content audit and hydration queue
-version: 1
+version: 2
 status: active
 owner: taiwang
 ---
@@ -51,6 +51,16 @@ text_ko
 braille
 ```
 
+Content-audit scope (policy B):
+
+```text
+presence + canonical hash = text_ko / textKo only
+braille                   = observed on source, excluded from audit
+BRAILLE_IN_CONTENT_AUDIT  = False
+```
+
+Braille-only sections are `EMPTY`, not `PRESENT`. Braille changes do not change `content_hash`.
+
 Fields **not** present on the sampled raw record (do not invent):
 
 ```text
@@ -91,6 +101,7 @@ Artifacts (gitignored):
 artifacts/chem04/content/indexes/secondary_content_index.jsonl
 artifacts/chem04/content/coverage/current_content_coverage.jsonl
 artifacts/chem04/content/queues/hydration_queue.jsonl
+artifacts/chem04/content/queues/structural_delta_queue.jsonl
 artifacts/chem04/content/reports/content_audit_report.json
 artifacts/chem04/content/manifests/content_manifest.json
 ```
@@ -100,13 +111,30 @@ artifacts/chem04/content/manifests/content_manifest.json
 ## Queue contract
 
 ```text
-STRICT_API_CALLS = official_current × 16
-DELTA_API_CALLS  = section rows actually queued
+STRICT_API_CALLS            = official_current × 16
+STRUCTURAL_DELTA_CALLS      = missing / invalid / official-only / empty-valid
+AUTHORITATIVE_VERIFY_CALLS  = STRUCTURAL_DELTA
+                            + REVISION_UNKNOWN
+                            + REVISION_CHANGED
+DELTA_API_CALLS             = AUTHORITATIVE_VERIFY_CALLS
 ```
 
-Do not materialize `20,568 × 16` queue rows. COMPLETE secondary with `DATE_UNKNOWN` is a bootstrap candidate (`needs_api=unknown`); it is not queued on the delta path.
+Do not materialize a blind `20,568 × 16` queue. `hydration_queue.jsonl` is the authoritative-verify set. `structural_delta_queue.jsonl` is the bootstrap-hole set.
 
-Secondary COMPLETE is structural completeness only. It is not official current authoritative content.
+`REVISION_UNKNOWN` complete records **are** queued on the verify path. Secondary has no `lastDate`/`revision` on the observed schema, so COMPLETE ≠ current authoritative confirmed.
+
+`CURRENT_MATCH` complete is not queued.
+
+Operator sequence:
+
+```text
+구현/테스트
+→ LOCAL FULL RUN
+→ GPT 결과 검증
+→ merge authorization
+```
+
+Local full run is **before** merge, not after.
 
 ```text
 PRODUCTION AUTHORITATIVE CONTENT = NO
@@ -126,9 +154,12 @@ SECONDARY_PARTIAL        = LOCAL_RUN_PENDING
 SECONDARY_EMPTY_VALID    = LOCAL_RUN_PENDING
 SECONDARY_INVALID        = LOCAL_RUN_PENDING
 SECONDARY_MISSING        = LOCAL_RUN_PENDING
-STRICT_API_CALLS         = LOCAL_RUN_PENDING
-DELTA_API_CALLS          = LOCAL_RUN_PENDING
-API CALL REDUCTION       = LOCAL_RUN_PENDING
+STRICT_API_CALLS              = LOCAL_RUN_PENDING
+STRUCTURAL_DELTA_CALLS        = LOCAL_RUN_PENDING
+AUTHORITATIVE_VERIFY_CALLS    = LOCAL_RUN_PENDING
+DELTA_API_CALLS               = LOCAL_RUN_PENDING
+API CALL REDUCTION            = LOCAL_RUN_PENDING
+STRUCTURAL_API_CALL_REDUCTION = LOCAL_RUN_PENDING
 ```
 
 Next hydration strategy is `WO-CHEM-04-HYDRATE-001` and is not opened by this WO.
