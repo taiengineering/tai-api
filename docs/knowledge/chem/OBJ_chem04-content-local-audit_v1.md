@@ -4,7 +4,7 @@ type: report
 scope: knowledge
 project: chem
 title: OBJ-CHEM-04 local secondary content audit and hydration queue
-version: 4
+version: 5
 status: active
 owner: taiwang
 ---
@@ -220,7 +220,11 @@ Next required decision:
 GATE: WO-CHEM-04-BOOTSTRAP-DECISION-001
 how far TAI accepts structurally complete secondary content as bootstrap
 before official current verification
-STATUS: EVIDENCE COMPLETE / BOOTSTRAP POLICY = NOT DECIDED
+STATUS: EVIDENCE COMPLETE / POLICY BLOCKED
+BOOTSTRAP POLICY = NOT DECIDED
+OPTION C resume  = ≤320 live sample + fidelity ≥ 99%
+                 + CONTENT_DIFFERENT 0 or explained
+OPTION B auto    = NO
 ```
 
 Until that gate is decided:

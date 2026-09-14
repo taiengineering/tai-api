@@ -4,7 +4,7 @@ type: report
 scope: knowledge
 project: chem
 title: OBJ-CHEM-04 secondary content bootstrap Decision Gate
-version: 1
+version: 2
 status: active
 owner: taiwang
 ---
@@ -12,11 +12,15 @@ owner: taiwang
 # OBJ-CHEM-04 — Secondary Content Bootstrap Decision Gate
 
 ```text
-WO-CHEM-04-BOOTSTRAP-DECISION-001 = EVIDENCE COMPLETE / POLICY NOT DECIDED
+WO-CHEM-04-BOOTSTRAP-DECISION-001 = EVIDENCE COMPLETE / POLICY BLOCKED
 WO-CHEM-04-CONTENT-LOCAL-001      = PASS
 PR #359                           = OPEN / UNMERGED
+current HEAD                      = 65f0efdc56db5f299b92c6fe82866ea19045f057
 implementation HEAD               = d04487a0a2da60eaae46172bc9f4e37101e9dd97
 docs freeze HEAD                  = d2259ab85eedbe1dd846acf1d7fb2ff883f8c826
+decision evidence HEAD            = 65f0efdc56db5f299b92c6fe82866ea19045f057
+PROVENANCE                        = CONDITIONAL
+RIGHTS                            = CONDITIONAL
 MERGE                             = NOT AUTHORIZED
 FULL DETAIL HYDRATION             = NOT STARTED
 WO-CHEM-04-HYDRATE-001            = NOT OPENED
@@ -276,6 +280,7 @@ OPTION B auto-approve is forbidden by this WO.
 ```text
 RECOMMENDATION     = BLOCKED
 BOOTSTRAP POLICY   = NOT DECIDED
+WO status          = EVIDENCE COMPLETE / POLICY BLOCKED
 ```
 
 Reasons:
@@ -288,14 +293,40 @@ Reasons:
 
 After a ≤320-call live sample on the 16 (or filled-to-20) chemIds, GPT can reopen C vs A. Do not infer currentness of 9,124 from that sample.
 
+Independent confirmation 2026-09-14: freeze this Gate as **evidence complete / policy blocked**. `SECONDARY_COMPLETE 9,124` is not current-authoritative.
+
+---
+
+## OPTION C resume (only next opening)
+
+Do not auto-approve OPTION B. Do not merge PR #359. Do not open HYDRATE-001.
+
+```text
+OPTION C 재개 조건
+= ≤320 live sample 비교 완료
++ section fidelity ≥ 99%
++ CONTENT_DIFFERENT = 0 또는 설명 가능
+```
+
+Until that sample exists:
+
+```text
+POLICY = BLOCKED
+BOOTSTRAP POLICY = NOT DECIDED
+```
+
 ---
 
 ## STOP
 
 ```text
+WO-CHEM-04-BOOTSTRAP-DECISION-001 = EVIDENCE COMPLETE / POLICY BLOCKED
 PR #359 merge              = NOT AUTHORIZED
 WO-CHEM-04-HYDRATE-001     = NOT OPENED
+OPTION B auto-approve      = NO
 production ingest          = NO
 live API calls this WO     = 0
 bulk hydration             = NO
+FULL DETAIL HYDRATION      = NOT STARTED
+CHEM-04                    = IN_PROGRESS
 ```
