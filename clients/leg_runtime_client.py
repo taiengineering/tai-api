@@ -248,6 +248,7 @@ _LEG_INPUT_FIELDS = (
     "has_harmful_airborne_substance_general_ventilation_system",
     "has_harmful_airborne_substance_work",
     "has_indoor_harmful_airborne_substance_emission",
+    "prepares_explosion_hazard_area_classification_drawing",
     "manufactures_handles_or_uses_flammable_liquid_vapor_or_gas",
     "manufactures_or_uses_flammable_solid",
     "has_flammable_substance_explosion_fire_risk_location",

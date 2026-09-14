@@ -20,6 +20,7 @@ REROUTE_FACTS = (
     "has_harmful_airborne_substance_general_ventilation_system",
     "has_harmful_airborne_substance_work",
     "has_indoor_harmful_airborne_substance_emission",
+    "prepares_explosion_hazard_area_classification_drawing",
     "manufactures_handles_or_uses_flammable_liquid_vapor_or_gas",
     "manufactures_or_uses_flammable_solid",
     "has_flammable_substance_explosion_fire_risk_location",
@@ -36,8 +37,8 @@ def test_dust_exact_fields_in_allowlist():
     assert "has_tunnel_construction_work" in _LEG_INPUT_FIELDS
     for name in DUST_DETAILS + REROUTE_FACTS:
         assert name in _LEG_INPUT_FIELDS, name
-    assert len(_LEG_INPUT_FIELDS) == 178
-    assert len(set(_LEG_INPUT_FIELDS)) == 178
+    assert len(_LEG_INPUT_FIELDS) == 179
+    assert len(set(_LEG_INPUT_FIELDS)) == 179
 
 
 def test_has_dust_work_does_not_infer_details():
@@ -107,4 +108,15 @@ def test_tunnel_construction_not_aliased_from_has_tunnel():
     fac = build_facility(body)
     assert fac.get("has_tunnel_construction_work") is True
     assert "tunnel_visibility_significantly_limited_by_exhaust_or_dust" not in fac
+    assert "has_dust_work" not in fac
+
+
+def test_art230_place_fact_does_not_infer_drawing():
+    body = SimpleNamespace(
+        sector="INDUSTRIAL",
+        input={"manufactures_handles_or_uses_flammable_liquid_vapor_or_gas": True},
+    )
+    fac = build_facility(body)
+    assert fac.get("manufactures_handles_or_uses_flammable_liquid_vapor_or_gas") is True
+    assert "prepares_explosion_hazard_area_classification_drawing" not in fac
     assert "has_dust_work" not in fac
