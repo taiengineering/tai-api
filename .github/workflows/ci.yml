@@ -95,6 +95,8 @@ jobs:
         run: pytest tests/test_risk01_3way.py -q --tb=short
       - name: OBJ-RISK RISK-02 source core tests
         run: pytest tests/test_risk02_source_core.py -q --tb=short
+      - name: OBJ-RISK RISK-03 canonical mapping tests
+        run: pytest tests/test_risk03_canonical_mapping.py -q --tb=short
       - name: KOSHA GUIDE sync tests
         run: pytest tests/test_kosha_guide_sync.py -q --tb=short
 
