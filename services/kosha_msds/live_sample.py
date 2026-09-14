@@ -14,7 +14,7 @@ from services.kosha_msds.bootstrap_decision import (
     flatten_msds_xml,
     sample_manifest_hash,
 )
-from services.kosha_msds.client import redact_secret, section_token
+from services.kosha_msds.client import section_token
 from services.kosha_msds.contract import (
     ALLOWED_SECTIONS,
     BASE_URL,
@@ -24,6 +24,8 @@ from services.kosha_msds.contract import (
     LIVE_SAMPLE_KEY_ENV,
     LIVE_SAMPLE_MAX_CALLS,
     LIVE_SAMPLE_RETRY_MAX,
+    PREFLIGHT_CHEM_ID,
+    PREFLIGHT_SECTION,
     RATE_LIMIT_DAILY_CODES,
 )
 from services.kosha_msds.content_audit import ContentAuditError, assert_secret_free
@@ -46,6 +48,33 @@ class QuotaStop(LiveSampleError):
         super().__init__("QUOTA_STOP", message)
         self.http_429 = http_429
         self.result_code_22 = result_code_22
+
+
+class PreflightStop(LiveSampleError):
+    def __init__(self, fetch_error: str):
+        super().__init__("PREFLIGHT_FAIL", f"preflight {PREFLIGHT_CHEM_ID} Detail01 failed: {fetch_error}")
+        self.fetch_error = fetch_error
+
+
+def error_token_counts(rows: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        token = row.get("fetch_error")
+        if token:
+            counts[str(token)] = counts.get(str(token), 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def classify_fetch_error_token(detail: str) -> str:
+    token = (detail or "").strip() or "TRANSPORT"
+    if token.startswith("HTTP_") or token.startswith("RESULT_"):
+        return token
+    if token in {"PARSE", "TIMEOUT", "TRANSPORT"}:
+        return token
+    lowered = token.lower()
+    if "timeout" in lowered or "timed out" in lowered:
+        return "TIMEOUT"
+    return "TRANSPORT"
 
 
 def live_sample_key() -> str:
@@ -142,17 +171,23 @@ def comparison_metrics(rows: list[dict]) -> dict[str, object]:
         "chemical_all_match_pct": round((all_match / chem_n * 100.0), 2) if chem_n else None,
         "chemical_status": chem_status,
         "difference_causes": causes,
+        "error_token_counts": error_token_counts(rows),
     }
 
 
 def technical_option_c_gate(report: dict) -> str:
     if report.get("quota_stop") or report.get("secret_leak"):
         return "BLOCKED"
+    preflight = report.get("preflight") or {}
+    if isinstance(preflight, dict) and preflight.get("preflight") == "FAIL":
+        return "BLOCKED"
     completed = int(report.get("sample_chemicals_completed") or 0)
     planned = int(report.get("planned_sections") or 0)
     rows_n = int(report.get("compared_sections") or 0)
     if completed < 16 or rows_n < planned:
         return "LOCAL_RUN_PENDING"
+    if int(report.get("API_ERROR") or 0) and not int(report.get("comparable_sections") or 0):
+        return "BLOCKED"
     return "PENDING_GPT"
 
 
@@ -196,7 +231,7 @@ def fetch_official_xml(
         except Exception as exc:
             if _is_retryable_timeout(exc) and attempt < LIVE_SAMPLE_RETRY_MAX:
                 continue
-            return "API_ERROR", redact_secret(str(exc), service_key)
+            return "API_ERROR", "TIMEOUT" if _is_retryable_timeout(exc) else "TRANSPORT"
         last_status, last_body = status, body or ""
         if status == 429 or _quota_from_body(last_body):
             http_429 = 1 if status == 429 else 0
@@ -218,6 +253,52 @@ def fetch_official_xml(
     if last_status >= 500:
         return "API_ERROR", f"HTTP_{last_status}"
     return "API_ERROR", "TRANSPORT"
+
+
+def run_preflight(
+    *,
+    get_fn: GetFn,
+    service_key: str,
+    http_counter: Optional[list[int]] = None,
+    hard_cap: int = LIVE_SAMPLE_HARD_CAP,
+) -> dict[str, object]:
+    """One getChemDetail01 call for chemId 001008. Does not write the sample checkpoint."""
+    payload: dict[str, object] = {
+        "preflight": "FAIL",
+        "chemId": PREFLIGHT_CHEM_ID,
+        "sectionNo": PREFLIGHT_SECTION,
+        "fetch_error": None,
+        "official_fetch": "API_ERROR",
+        "http_requests": 0,
+    }
+    counter = http_counter if http_counter is not None else [0]
+    before = counter[0]
+    try:
+        status, detail = fetch_official_xml(
+            chem_id=PREFLIGHT_CHEM_ID,
+            section_no=PREFLIGHT_SECTION,
+            get_fn=get_fn,
+            service_key=service_key,
+            http_counter=counter,
+            hard_cap=hard_cap,
+        )
+    except QuotaStop as exc:
+        token = "HTTP_429" if exc.http_429 else "RESULT_22"
+        payload["fetch_error"] = token
+        payload["official_fetch"] = "API_ERROR"
+        payload["http_requests"] = counter[0] - before
+        payload["quota_stop"] = True
+        payload["HTTP_429"] = exc.http_429
+        payload["resultCode_22"] = exc.result_code_22
+        return payload
+    payload["http_requests"] = counter[0] - before
+    if status == "OK":
+        payload["preflight"] = "OK"
+        payload["official_fetch"] = "OK"
+        payload["fetch_error"] = None
+        return payload
+    payload["fetch_error"] = classify_fetch_error_token(detail)
+    return payload
 
 
 def compare_section(secondary: Optional[str], official_xml: Optional[str], fetch_status: str) -> dict:
@@ -284,6 +365,7 @@ def run_live_sample(
     normalized_dir: Optional[Path] = None,
     production_writer: Optional[ProductionWriter] = None,
     hard_cap: int = LIVE_SAMPLE_HARD_CAP,
+    require_preflight: bool = False,
 ) -> dict[str, object]:
     if production_writer is not None:
         raise LiveSampleError("PRODUCTION_WRITER", "production writer is forbidden")
@@ -291,6 +373,62 @@ def run_live_sample(
         raise LiveSampleError("CALL_CAP", f"max_calls {max_calls} > {min(hard_cap, LIVE_SAMPLE_HARD_CAP)}")
     assert_manifest_sha(sample_rows)
     exec_rows = sample_rows[:max_chems] if max_chems is not None else sample_rows
+    http_counter = [0]
+    preflight = None
+    preflight_http = 0
+    if require_preflight:
+        preflight = run_preflight(
+            get_fn=get_fn,
+            service_key=service_key,
+            http_counter=http_counter,
+            hard_cap=hard_cap,
+        )
+        if preflight.get("preflight") != "OK":
+            report = {
+                "WO": "WO-CHEM-04-OPTIONC-FETCH-DIAG-001",
+                "sample_manifest_sha256": sample_manifest_hash(sample_rows),
+                "sample_chemicals_selected": len(sample_rows),
+                "sample_chemicals_attempted": 0,
+                "sample_chemicals_completed": 0,
+                "planned_sections": len(sample_rows) * 16,
+                "compared_sections": 0,
+                "quota_stop": bool(preflight.get("quota_stop")),
+                "HTTP_429": int(preflight.get("HTTP_429") or 0),
+                "resultCode_22": int(preflight.get("resultCode_22") or 0),
+                "secret_leak": 0,
+                "production_writer": None,
+                "BOOTSTRAP_POLICY": "NOT DECIDED",
+                "OPTION_B_auto_approve": "NO",
+                "live_bulk_hydration": "NO",
+                "production_ingest": "NO",
+                "attempted_api_calls": 0,
+                "http_requests": http_counter[0],
+                "execution_success_pct": None,
+                "preflight": preflight,
+                "error_token_counts": (
+                    {str(preflight.get("fetch_error")): 1} if preflight.get("fetch_error") else {}
+                ),
+                "EXACT": 0,
+                "NORMALIZED_EQUAL": 0,
+                "CONTENT_DIFFERENT": 0,
+                "SECONDARY_MISSING": 0,
+                "OFFICIAL_EMPTY": 0,
+                "SECONDARY_EMPTY": 0,
+                "API_ERROR": 0,
+                "comparable_sections": 0,
+                "section_fidelity_pct": None,
+                "successful_api_calls": 0,
+                "chemical_ALL_MATCH": 0,
+                "chemical_HAS_DIFFERENCE": 0,
+                "chemical_HAS_EMPTY_CONFLICT": 0,
+                "chemical_UNVERIFIED": 0,
+                "chemical_all_match_pct": None,
+                "chemical_status": {},
+                "difference_causes": {},
+            }
+            report["TECHNICAL_OPTION_C_GATE"] = technical_option_c_gate(report)
+            return {"rows": [], "report": report, "attempted_calls": 0, "preflight": preflight}
+    preflight_http = http_counter[0]
     cp = read_checkpoint(checkpoint_path)
     done = {(str(a), int(b)) for a, b in cp.get("done") or []}
     attempted = int(cp.get("attempted_calls") or 0)
@@ -329,6 +467,7 @@ def run_live_sample(
                     rc22 += exc.result_code_22
                     raise
                 compared = compare_section(secondary, body if fetch_status == "OK" else None, fetch_status)
+                fetch_error = classify_fetch_error_token(body) if fetch_status != "OK" else None
                 if fetch_status == "OK" and raw_dir:
                     assert_secret_free(body)
                     if service_key and service_key in body:
@@ -353,6 +492,7 @@ def run_live_sample(
                     "possible_cause": compared["possible_cause"],
                     "attempted_calls": 1,
                     "official_fetch": fetch_status,
+                    "fetch_error": fetch_error,
                 }
                 if compared["class"] == "CONTENT_DIFFERENT":
                     row["diff_excerpt"] = {
@@ -368,6 +508,7 @@ def run_live_sample(
                                 "class": compared["class"],
                                 "secondary_sha256": row["secondary_sha256"],
                                 "official_sha256": row["official_sha256"],
+                                "fetch_error": fetch_error,
                             },
                             ensure_ascii=False,
                             indent=2,
@@ -427,6 +568,8 @@ def run_live_sample(
         "attempted_api_calls": attempted,
         "http_requests": http_counter[0],
         "execution_success_pct": round((successful / attempted * 100.0), 2) if attempted else None,
+        "preflight": preflight,
+        "preflight_http_requests": preflight_http,
         **metrics,
     }
     report["TECHNICAL_OPTION_C_GATE"] = technical_option_c_gate(report)
