@@ -1,6 +1,6 @@
 {
   "authority_type": "OWNER_APPROVED_E2E_FIXTURE_FACT",
-  "status": "PENDING_OWNER_FINAL_SNAPSHOT_APPROVAL",
+  "status": "APPROVED",
   "version": 1,
   "coverage": "SPECIAL10",
   "frozen_profile_sha256": "4818a63ab261c5a36c1432647b6b17e7636641071801d36fd1b85d1361af751b",
@@ -25,9 +25,12 @@
     "stage_a_head": "80a14fe633de99dc6a58d1b85ba44e058cca75bb",
     "gpt_classification_comment": "https://github.com/taiengineering/tai-api/pull/349#issuecomment-5657077068",
     "owner_decision_comment": "https://github.com/taiengineering/tai-api/pull/349#issuecomment-5657083864",
-    "owner_final_snapshot_approval": "PENDING",
+    "owner_final_snapshot_approval": "APPROVED",
     "authority": "OWNER_APPROVED_E2E_FIXTURE_FACT",
-    "meaning": "Synthetic E2E fixture facts for these Frozen112 SPECIAL10 profile IDs only. Not a production derivation or mapping rule."
+    "meaning": "Synthetic E2E fixture facts for these Frozen112 SPECIAL10 profile IDs only. Not a production derivation or mapping rule.",
+    "owner_final_snapshot_approval_comment": "https://github.com/taiengineering/tai-api/pull/349#issuecomment-5657188362",
+    "head_at_approval": "aa4613cee4162d5c9cbbb55a6ef6271cb67c3ead",
+    "receipt_wo": "WO-E2E-OBS007-SPECIAL10-APPENDIX3-OWNER-APPROVAL-RECEIPT-001"
   },
   "owner_synthetic_fixture_fact": {
     "profile_ids": [
@@ -81,12 +84,20 @@
       "appendix3_item_no": 36
     }
   ],
-  "authority_content": "READY",
+  "authority_content": "FROZEN",
   "governance_correction": {
     "wo": "WO-E2E-OBS007-SPECIAL10-APPENDIX3-OWNER-FINAL-SNAPSHOT-APPROVAL-001",
     "reason": "Premature owner_final_snapshot_approval=APPROVED corrected to PENDING before Owner Final Snapshot Approval",
     "semantic_rows": "SAME",
     "governance_metadata": "CORRECTED",
     "previous_authority_sha256": "f5e86a97787b2d9d7eb400e7d53e6761b759176f99a02815b11f39fe5c373823"
+  },
+  "approval_receipt": {
+    "wo": "WO-E2E-OBS007-SPECIAL10-APPENDIX3-OWNER-APPROVAL-RECEIPT-001",
+    "pr": 349,
+    "head_at_approval": "aa4613cee4162d5c9cbbb55a6ef6271cb67c3ead",
+    "comment": "https://github.com/taiengineering/tai-api/pull/349#issuecomment-5657188362",
+    "semantic_rows": "SAME",
+    "pre_approval_authority_sha256": "2c64ae58efa6b53137faf231dfbff2d7b572996087dfe739e9447a354d172893"
   }
 }

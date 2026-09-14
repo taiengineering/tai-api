@@ -1,24 +1,24 @@
 ---
-wo: WO-E2E-OBS007-SPECIAL10-APPENDIX3-OWNER-FINAL-SNAPSHOT-APPROVAL-001
+wo: WO-E2E-OBS007-SPECIAL10-APPENDIX3-OWNER-APPROVAL-RECEIPT-001
 class: records
 type: registry
 scope: canonical
 project: test-universe
-title: SPECIAL10 Appendix3 Explicit Classification Authority v1 pending owner final snapshot approval
+title: SPECIAL10 Appendix3 Explicit Classification Authority v1 owner approval receipt
 version: 1
-status: pending
+status: approved
 owner: taiwang
 ---
 
-# REGISTRY — SPECIAL10 Appendix3 Explicit Classification Authority v1 (PENDING OWNER FINAL SNAPSHOT APPROVAL)
+# REGISTRY — SPECIAL10 Appendix3 Explicit Classification Authority v1 (APPROVED)
 
 ```text
 Authority Type =
 OWNER_APPROVED_E2E_FIXTURE_FACT
 
-AUTHORITY_CONTENT = READY
-OWNER_FINAL_SNAPSHOT_APPROVAL = PENDING
-Status = PENDING_OWNER_FINAL_SNAPSHOT_APPROVAL
+AUTHORITY_CONTENT = FROZEN
+OWNER_FINAL_SNAPSHOT_APPROVAL = APPROVED
+Status = APPROVED
 Coverage = SPECIAL10
 
 Frozen Source =
@@ -44,14 +44,14 @@ Authority Rows = 10
 Production Derivation Rule = NONE
 ksic_mapping = false
 
-PREVIOUS_AUTHORITY_JSON_SHA256 =
-f5e86a97787b2d9d7eb400e7d53e6761b759176f99a02815b11f39fe5c373823
-
-AUTHORITY_JSON_SHA256 =
+PRE_APPROVAL_AUTHORITY_JSON_SHA256 =
 2c64ae58efa6b53137faf231dfbff2d7b572996087dfe739e9447a354d172893
 
+FINAL_SPECIAL10_AUTHORITY_SHA256 =
+c424c56fcbb619fde4cc5f77b5dbcea06b5ac281e488281fba554039e50725db
+
 SEMANTIC_ROWS = SAME
-GOVERNANCE_METADATA = CORRECTED
+GOVERNANCE_METADATA = OWNER_APPROVAL_RECEIPT
 ```
 
 > These are exact synthetic E2E fixture facts, not production mapping rules.
@@ -87,7 +87,7 @@ APPROVED_75_SHA256 =
 APPROVED_75_AUTHORITY_DELTA = 0
 ```
 
-Runner still loads only the 75-row file. SPECIAL10 injection remains BLOCKED until Owner Final Snapshot Approval, then a separate Runner REVISE PR.
+Runner still loads only the 75-row file. SPECIAL10 injection remains BLOCKED until GPT verifies this receipt SHA, then a separate Runner REVISE PR.
 
 ---
 
@@ -105,13 +105,19 @@ https://github.com/taiengineering/tai-api/pull/349#issuecomment-5657077068
 Owner decision comment =
 https://github.com/taiengineering/tai-api/pull/349#issuecomment-5657083864
 
+Owner Final Snapshot Approval comment =
+https://github.com/taiengineering/tai-api/pull/349#issuecomment-5657188362
+
+HEAD at Owner Final Snapshot Approval =
+aa4613cee4162d5c9cbbb55a6ef6271cb67c3ead
+
 Candidate SHA256 =
 9cb133e345227ab2fdfccf259f3829825fcd903c628a00774d816465561caaf9
 ```
 
 Authority content is projected from that candidate snapshot. No new legal classification was made.
 
-Owner Final Snapshot Approval of this 10-row snapshot is still PENDING. Premature `APPROVED` governance metadata was corrected; row values were not changed.
+Owner Final Snapshot Approval of this 10-row snapshot is APPROVED. Receipt metadata only was updated; row values were not changed.
 
 ---
 
@@ -189,9 +195,9 @@ PF-0109 → 31 수도, 하수 및 폐기물 처리, 원료 재생업(제23호 �
 Stage A review pack is historical and unchanged.
 
 ```text
-AUTHORITY_CONTENT = READY
-OWNER_FINAL_SNAPSHOT_APPROVAL = PENDING
-AUTHORITY_FREEZE_FINAL = BLOCKED_OWNER_FINAL_APPROVAL
+AUTHORITY_CONTENT = FROZEN
+OWNER_FINAL_SNAPSHOT_APPROVAL = APPROVED
+AUTHORITY_FREEZE_FINAL = PENDING_GPT_VERIFY
 RUNNER_REVISE = BLOCKED
 HTTP = 0
 MEASUREMENT = BLOCKED
