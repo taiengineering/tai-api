@@ -269,6 +269,12 @@ _LEG_INPUT_FIELDS = (
     "has_air_compressor",
     "has_worker_risk_rotating_parts_on_pressure_vessel_or_air_compressor",
     "supplies_air_to_high_pressure_workroom_or_airlock",
+    # WO-E2E-OBS008-DEMOLITION-MINIMUM-MODIFY-001: Frozen exact Leaf.field.
+    # No alias from has_demolition / has_asbestos_demo / has_asbestos / has_structure /
+    # has_building_construction_activity / has_hazardous_material. Radius/entry measures are duty.
+    "management_entity_bans_use_closes_or_demolishes_childrens_play_facility",
+    "performs_structure_toppling_work_during_demolition",
+    "has_structure_overturn_explosion_or_collapse_risk_due_to_loads_snow_wind_seismic_vibration_or_impact",
     # WO-SM-CORE22-CONSTRUCTION-PREDICATE-EXPLICIT-INPUT-CONTRACT-001
     # Published CORE22 Leaf.field exact-name. No alias/renaming/sector/order_type/kcsc adapter.
     # False is a value. None/missing is omitted. Default false = 0.
