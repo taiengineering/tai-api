@@ -179,16 +179,43 @@ FK:
 
 ```text
 (source_id, source_key) → risk_source_nodes (source_id, source_key)
-canonical_id → risk_canonical_nodes (id)
+canonical_id → risk_canonical_nodes (id)  (NULL allowed only for NO_MATCH)
 ```
 
 Cardinality: 1:1, 1:N, N:1 via explicit mapping rows. Unique `(source_id, source_key, canonical_id, mapping_type)`.
 
+NO_MATCH persistence:
+
+```text
+NO_MATCH =
+source node에 대해 현재 승인 가능한 canonical target이 없다는
+controlled mapping evidence.
+canonical_id = NULL
+mapping_status = HOLD 또는 REJECTED
+consumer eligible = NO
+```
+
+DB CHECK:
+
+```text
+NO_MATCH → canonical_id NULL and status HOLD/REJECTED
+non-NO_MATCH → canonical_id NOT NULL
+```
+
+Partial unique index: one `NO_MATCH` row per source node.
+
+NO_MATCH + APPROVED, NO_MATCH + target, and POSSIBLE_RELATED/EXACT_EQUIVALENT/AMBIGUOUS + NULL are forbidden.
+
+This WO does not insert production mapping rows:
+
+```text
+production NO_MATCH rows = 0
+production mapping rows = 0
+```
+
 Partial unique index: one `APPROVED + EXACT_EQUIVALENT` per source node.
 
 No confidence column. Confidence would not equal approval.
-
-UNMATCHED / `NO_MATCH` candidates are local evidence. They are not DB mapping rows because a mapping row requires a real canonical target.
 
 ---
 

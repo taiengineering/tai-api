@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS public.risk_source_mappings (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   source_id text NOT NULL,
   source_key text NOT NULL,
-  canonical_id uuid NOT NULL REFERENCES public.risk_canonical_nodes (id),
+  canonical_id uuid REFERENCES public.risk_canonical_nodes (id),
   mapping_type text NOT NULL
     CHECK (mapping_type IN (
       'EXACT_EQUIVALENT',
@@ -72,19 +72,40 @@ CREATE TABLE IF NOT EXISTS public.risk_source_mappings (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   UNIQUE (source_id, source_key, canonical_id, mapping_type),
   FOREIGN KEY (source_id, source_key)
-    REFERENCES public.risk_source_nodes (source_id, source_key)
+    REFERENCES public.risk_source_nodes (source_id, source_key),
+  CONSTRAINT risk_source_mappings_target_contract
+    CHECK (
+      (
+        mapping_type = 'NO_MATCH'
+        AND canonical_id IS NULL
+        AND mapping_status IN ('HOLD', 'REJECTED')
+      )
+      OR
+      (
+        mapping_type <> 'NO_MATCH'
+        AND canonical_id IS NOT NULL
+      )
+    )
 );
 
 COMMENT ON TABLE public.risk_source_mappings IS
   'Controlled mapping from A/B/C source nodes to TAI canonical nodes. Source rows are not copied.';
+COMMENT ON COLUMN public.risk_source_mappings.canonical_id IS
+  'NULL only for NO_MATCH evidence. All other mapping types require a real canonical target.';
 COMMENT ON COLUMN public.risk_source_mappings.mapping_status IS
-  'PROPOSED/HOLD/REJECTED are not consumer-eligible. Only APPROVED may be consumed.';
+  'PROPOSED/HOLD/REJECTED are not consumer-eligible. Only APPROVED may be consumed. NO_MATCH cannot be APPROVED.';
 COMMENT ON COLUMN public.risk_source_mappings.evidence IS
   'source_path, canonical_path, normalization rule, candidate reason, review note.';
+COMMENT ON CONSTRAINT risk_source_mappings_target_contract ON public.risk_source_mappings IS
+  'NO_MATCH has no target and is HOLD/REJECTED. Non-NO_MATCH mappings require canonical_id.';
 
 CREATE UNIQUE INDEX IF NOT EXISTS risk_source_mappings_one_approved_exact
   ON public.risk_source_mappings (source_id, source_key)
   WHERE mapping_status = 'APPROVED' AND mapping_type = 'EXACT_EQUIVALENT';
+
+CREATE UNIQUE INDEX IF NOT EXISTS risk_source_mappings_one_no_match
+  ON public.risk_source_mappings (source_id, source_key)
+  WHERE mapping_type = 'NO_MATCH';
 
 CREATE INDEX IF NOT EXISTS risk_source_mappings_canonical_idx
   ON public.risk_source_mappings (canonical_id, mapping_status);

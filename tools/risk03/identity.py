@@ -18,6 +18,16 @@ def is_consumer_eligible(mapping_status: str) -> bool:
     return mapping_status == CONSUMER_ELIGIBLE_STATUS
 
 
+def mapping_target_allowed(
+    mapping_type: str,
+    canonical_id: str | None,
+    mapping_status: str,
+) -> bool:
+    if mapping_type == "NO_MATCH":
+        return canonical_id is None and mapping_status in ("HOLD", "REJECTED")
+    return canonical_id is not None
+
+
 def canonical_path(nodes_by_id: dict[str, dict], node: dict) -> str:
     parts: list[str] = []
     current: dict | None = node

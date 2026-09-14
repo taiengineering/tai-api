@@ -29,7 +29,12 @@ from tools.risk03.contract import (
     PHYSICAL_MODEL_DECISION,
 )
 from tools.risk03.fixtures import ambiguity_canonical_nodes, synthetic_canonical_nodes
-from tools.risk03.identity import canonical_path, is_consumer_eligible, proposal_key
+from tools.risk03.identity import (
+    canonical_path,
+    is_consumer_eligible,
+    mapping_target_allowed,
+    proposal_key,
+)
 
 SQL = Path("supabase/migrations/20260916_risk_canonical_mapping.sql")
 RISK02_SQL = Path("supabase/migrations/20260915_risk_source_catalog.sql")
@@ -80,9 +85,20 @@ def test_sql_canonical_identity_and_mapping_contract():
     assert "DEFAULT 'DRAFT'" in text
     assert "FOREIGN KEY (source_id, source_key)" in text
     assert "REFERENCES public.risk_source_nodes (source_id, source_key)" in text
-    assert "canonical_id uuid NOT NULL REFERENCES public.risk_canonical_nodes (id)" in text
+    mappings_sql = text.split("CREATE TABLE IF NOT EXISTS public.risk_source_mappings")[1]
+    mappings_sql = mappings_sql.split("CREATE UNIQUE INDEX")[0]
+    assert "canonical_id uuid REFERENCES public.risk_canonical_nodes (id)" in mappings_sql
+    assert "canonical_id uuid NOT NULL" not in mappings_sql
+    assert "CONSTRAINT risk_source_mappings_target_contract" in text
+    assert "mapping_type = 'NO_MATCH'" in text
+    assert "canonical_id IS NULL" in text
+    assert "mapping_status IN ('HOLD', 'REJECTED')" in text
+    assert "mapping_type <> 'NO_MATCH'" in text
+    assert "canonical_id IS NOT NULL" in text
     assert "risk_source_mappings_one_approved_exact" in text
     assert "WHERE mapping_status = 'APPROVED' AND mapping_type = 'EXACT_EQUIVALENT'" in text
+    assert "risk_source_mappings_one_no_match" in text
+    assert "WHERE mapping_type = 'NO_MATCH'" in text
     assert "CHECK (sector_code" not in text
     assert "CONSTRUCTION')" not in text.split("risk_canonical_nodes")[1][:800]
     assert "FACILITY" not in text
@@ -191,6 +207,29 @@ def test_unmatched_is_no_match_hold_evidence():
     assert rows[0]["mapping_type"] == "NO_MATCH"
     assert rows[0]["mapping_status"] == "HOLD"
     assert rows[0]["canonical_id"] is None
+    assert mapping_target_allowed("NO_MATCH", None, "HOLD") is True
+    assert is_consumer_eligible(rows[0]["mapping_status"]) is False
+
+
+def test_no_match_target_contract():
+    assert mapping_target_allowed("NO_MATCH", None, "HOLD") is True
+    assert mapping_target_allowed("NO_MATCH", None, "REJECTED") is True
+    assert mapping_target_allowed("NO_MATCH", FIXTURE_PROCESS_ID, "HOLD") is False
+    assert mapping_target_allowed("NO_MATCH", None, "APPROVED") is False
+    assert mapping_target_allowed("POSSIBLE_RELATED", None, "PROPOSED") is False
+    assert mapping_target_allowed("EXACT_EQUIVALENT", None, "APPROVED") is False
+    assert mapping_target_allowed("AMBIGUOUS", None, "HOLD") is False
+    assert mapping_target_allowed("POSSIBLE_RELATED", FIXTURE_PROCESS_ID, "PROPOSED") is True
+    text = SQL.read_text(encoding="utf-8")
+    assert "CONSTRAINT risk_source_mappings_target_contract" in text
+    assert "AND mapping_status IN ('HOLD', 'REJECTED')" in text
+
+
+def test_no_match_unique_index_one_row_per_source_node():
+    text = SQL.read_text(encoding="utf-8")
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS risk_source_mappings_one_no_match" in text
+    assert "ON public.risk_source_mappings (source_id, source_key)" in text
+    assert "WHERE mapping_type = 'NO_MATCH'" in text
 
 
 def test_approved_exact_equivalent_cannot_fork():
