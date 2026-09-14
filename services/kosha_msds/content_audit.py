@@ -10,6 +10,8 @@ from typing import Callable, Iterable, Optional
 from services.kosha_msds.bootstrap import BootstrapSeedError, require_padded_chem_id
 from services.kosha_msds.contract import (
     ALLOWED_SECTIONS,
+    BRAILLE_IN_CONTENT_AUDIT,
+    CONTENT_AUDIT_TEXT_FIELDS,
     CONTENT_SECONDARY_COMPLETE,
     CONTENT_SECONDARY_EMPTY_VALID,
     CONTENT_SECONDARY_INVALID,
@@ -79,7 +81,7 @@ def classify_section_payload(item: Optional[dict]) -> str:
     if not isinstance(item, dict) or item.get("_invalid"):
         return SECTION_INVALID
     texts: list[str] = []
-    for key in ("text_ko", "textKo", "braille"):
+    for key in CONTENT_AUDIT_TEXT_FIELDS:
         value = item.get(key)
         if value is None:
             continue
@@ -87,6 +89,7 @@ def classify_section_payload(item: Optional[dict]) -> str:
             return SECTION_INVALID
         if value.strip():
             texts.append(value.strip())
+    assert BRAILLE_IN_CONTENT_AUDIT is False
     return SECTION_PRESENT if texts else SECTION_EMPTY
 
 
@@ -133,6 +136,7 @@ def content_status_from_sections(statuses: dict[int, str]) -> str:
 
 
 def canonical_content_hash(chem_id: str, by_no: dict[int, dict], statuses: dict[int, str]) -> str:
+    # Braille is observed on secondary records but excluded from TAI content audit.
     payload = {
         "chemId": chem_id,
         "sections": [
@@ -383,7 +387,12 @@ def _q(chem_id, section_no, reason, row, sec_status, *, priority: int) -> dict:
     }
 
 
-def delta_queue_rows(coverage: Iterable[dict]) -> list[dict]:
+def structural_queue_rows(coverage: Iterable[dict]) -> list[dict]:
+    """Bootstrap holes only: official-only, empty-valid, missing, invalid.
+
+    Does not queue REVISION_UNKNOWN or REVISION_CHANGED. That path assumes
+    secondary body can be used as a bootstrap candidate as-is.
+    """
     queue: list[dict] = []
     for row in coverage:
         status = row["content_status"]
@@ -396,16 +405,6 @@ def delta_queue_rows(coverage: Iterable[dict]) -> list[dict]:
             for n in ALLOWED_SECTIONS:
                 queue.append(_q(chem_id, n, REASON_SECONDARY_EMPTY_VALID, row, SECTION_EMPTY, priority=2))
             continue
-        if row["reason"] == REASON_REVISION_CHANGED:
-            for n in ALLOWED_SECTIONS:
-                queue.append(
-                    _q(chem_id, n, REASON_REVISION_CHANGED, row, row[f"section{n:02d}_present"], priority=3)
-                )
-            continue
-        if row["reason"] == REASON_REVISION_UNKNOWN and status == CONTENT_SECONDARY_COMPLETE:
-            continue
-        if row["reason"] == REASON_SECONDARY_COMPLETE_CANDIDATE:
-            continue
         for n in ALLOWED_SECTIONS:
             sec = row[f"section{n:02d}_present"]
             if sec == SECTION_MISSING:
@@ -416,6 +415,52 @@ def delta_queue_rows(coverage: Iterable[dict]) -> list[dict]:
     return queue
 
 
+def authoritative_verify_queue_rows(coverage: Iterable[dict]) -> list[dict]:
+    """Structural holes plus date-unknown and revision-changed verification.
+
+    COMPLETE + DATE_UNKNOWN is not current-authoritative confirmed. Those
+    sections are queued with REVISION_UNKNOWN. CURRENT_MATCH complete is not queued.
+    """
+    rows = list(coverage)
+    by_key: dict[tuple[str, int], dict] = {}
+    for item in structural_queue_rows(rows):
+        by_key[(item["chemId"], int(item["sectionNo"]))] = item
+    for row in rows:
+        status = row["content_status"]
+        chem_id = row["chemId"]
+        if status in {CONTENT_SECONDARY_MISSING, CONTENT_SECONDARY_EMPTY_VALID}:
+            continue
+        if row.get("reason") == REASON_SECONDARY_COMPLETE_CANDIDATE:
+            continue
+        fresh = row["freshness"]
+        if fresh == FRESHNESS_CURRENT_MATCH:
+            continue
+        extra_reason = (
+            REASON_REVISION_CHANGED if fresh == FRESHNESS_CURRENT_CHANGED else REASON_REVISION_UNKNOWN
+        )
+        extra_priority = 3 if extra_reason == REASON_REVISION_CHANGED else 5
+        for n in ALLOWED_SECTIONS:
+            key = (chem_id, n)
+            if key in by_key:
+                continue
+            by_key[key] = _q(
+                chem_id,
+                n,
+                extra_reason,
+                row,
+                row[f"section{n:02d}_present"],
+                priority=extra_priority,
+            )
+    queue = list(by_key.values())
+    queue.sort(key=lambda r: (r["priority"], r["chemId"], r["sectionNo"]))
+    return queue
+
+
+def delta_queue_rows(coverage: Iterable[dict]) -> list[dict]:
+    """Default hydration queue = authoritative verify, not structural-only."""
+    return authoritative_verify_queue_rows(coverage)
+
+
 def endpoint_counts(queue: list[dict]) -> dict[int, int]:
     counts = {n: 0 for n in ALLOWED_SECTIONS}
     for row in queue:
@@ -423,13 +468,18 @@ def endpoint_counts(queue: list[dict]) -> dict[int, int]:
     return counts
 
 
-def coverage_metrics(coverage: list[dict], queue: list[dict]) -> dict[str, object]:
+def coverage_metrics(coverage: list[dict], queue: list[dict] | None = None) -> dict[str, object]:
+    del queue
     official_n = len(coverage)
     strict = official_n * len(ALLOWED_SECTIONS)
-    delta = len(queue)
-    reduction = strict - delta
-    pct = round((reduction / strict * 100.0), 2) if strict else 0.0
-    delta_ep = endpoint_counts(queue)
+    structural = structural_queue_rows(coverage)
+    verify = authoritative_verify_queue_rows(coverage)
+    structural_n = len(structural)
+    verify_n = len(verify)
+    structural_reduction = strict - structural_n
+    verify_reduction = strict - verify_n
+    structural_ep = endpoint_counts(structural)
+    verify_ep = endpoint_counts(verify)
 
     def n_status(code: str) -> int:
         return sum(1 for r in coverage if r["content_status"] == code)
@@ -449,31 +499,52 @@ def coverage_metrics(coverage: list[dict], queue: list[dict]) -> dict[str, objec
         "revision_changed": n_fresh(FRESHNESS_CURRENT_CHANGED),
         "revision_unknown": n_fresh(FRESHNESS_DATE_UNKNOWN),
         "STRICT_API_CALLS": strict,
-        "DELTA_API_CALLS": delta,
-        "API_CALL_REDUCTION": reduction,
-        "API_CALL_REDUCTION_PCT": pct,
+        "STRUCTURAL_DELTA_CALLS": structural_n,
+        "AUTHORITATIVE_VERIFY_CALLS": verify_n,
+        "DELTA_API_CALLS": verify_n,
+        "DELTA_API_CALLS_MEANS": "AUTHORITATIVE_VERIFY_CALLS",
+        "API_CALL_REDUCTION": verify_reduction,
+        "API_CALL_REDUCTION_PCT": round((verify_reduction / strict * 100.0), 2) if strict else 0.0,
+        "STRUCTURAL_API_CALL_REDUCTION": structural_reduction,
+        "STRUCTURAL_API_CALL_REDUCTION_PCT": round((structural_reduction / strict * 100.0), 2) if strict else 0.0,
         "live_bulk_api_calls": 0,
         "production_ingest": "NO",
         "production_content_publication": SECONDARY_CONTENT_PRODUCTION_INGEST,
         "FULL_DETAIL_HYDRATION": "NOT STARTED",
+        "secondary_complete_not_authoritative": True,
     }
     for n in ALLOWED_SECTIONS:
         metrics[f"DETAIL{n:02d}_strict"] = official_n
-        metrics[f"DETAIL{n:02d}_delta"] = delta_ep[n]
+        metrics[f"DETAIL{n:02d}_structural"] = structural_ep[n]
+        metrics[f"DETAIL{n:02d}_verify"] = verify_ep[n]
+        metrics[f"DETAIL{n:02d}_delta"] = verify_ep[n]
     return metrics
 
 
-def quota_scenarios(delta_calls: int, strict_calls: int, delta_by_endpoint: dict[int, int]) -> dict[str, object]:
+def quota_scenarios(
+    delta_calls: int,
+    strict_calls: int,
+    delta_by_endpoint: dict[int, int],
+    *,
+    structural_calls: Optional[int] = None,
+    structural_by_endpoint: Optional[dict[int, int]] = None,
+) -> dict[str, object]:
     daily = DETAIL01_OBSERVED_DAILY_STOP
+    structural_n = delta_calls if structural_calls is None else structural_calls
+    structural_ep = delta_by_endpoint if structural_by_endpoint is None else structural_by_endpoint
     return {
         "observed_detail01_daily_stop": daily,
         "quota_status": "OBSERVED_NOT_PER_ENDPOINT_FACT",
         "if_1000_per_day_global": {
             "strict_days": math.ceil(strict_calls / daily) if daily else None,
+            "structural_delta_days": math.ceil(structural_n / daily) if daily and structural_n else 0,
+            "authoritative_verify_days": math.ceil(delta_calls / daily) if daily and delta_calls else 0,
             "delta_days": math.ceil(delta_calls / daily) if daily and delta_calls else 0,
         },
         "if_1000_per_day_per_endpoint": {
             "strict_days": math.ceil((strict_calls / len(ALLOWED_SECTIONS)) / daily) if daily else None,
+            "structural_delta_days": max((math.ceil(n / daily) for n in structural_ep.values()), default=0),
+            "authoritative_verify_days": max((math.ceil(n / daily) for n in delta_by_endpoint.values()), default=0),
             "delta_days": max((math.ceil(n / daily) for n in delta_by_endpoint.values()), default=0),
         },
         "note": "Detail01 HTTP 429 after ~1000/day was observed once. Not a per-endpoint fact.",

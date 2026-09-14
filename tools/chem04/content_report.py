@@ -5,13 +5,13 @@ import argparse
 import json
 from pathlib import Path
 
+from services.kosha_msds.contract import ALLOWED_SECTIONS
 from services.kosha_msds.content_audit import (
     assert_secret_free,
     canonical_json_hash,
     count_jsonl,
     coverage_metrics,
     delta_queue_rows,
-    endpoint_counts,
     quota_scenarios,
     sha256_file,
     write_json,
@@ -31,6 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--index", default=str(CONTENT_INDEXES / "secondary_content_index.jsonl"))
     parser.add_argument("--coverage", default=str(CONTENT_COVERAGE / "current_content_coverage.jsonl"))
     parser.add_argument("--queue", default=str(CONTENT_QUEUES / "hydration_queue.jsonl"))
+    parser.add_argument(
+        "--structural-queue",
+        default=str(CONTENT_QUEUES / "structural_delta_queue.jsonl"),
+    )
     parser.add_argument("--out", default=str(CONTENT_REPORTS / "content_audit_report.json"))
     parser.add_argument("--manifest", default=str(CONTENT_MANIFESTS / "content_manifest.json"))
     return parser
@@ -53,11 +57,13 @@ def main(argv: list[str] | None = None) -> int:
     coverage = _load_jsonl(Path(args.coverage))
     queue_path = Path(args.queue)
     queue = _load_jsonl(queue_path) if queue_path.exists() else delta_queue_rows(coverage)
-    metrics = coverage_metrics(coverage, queue)
+    metrics = coverage_metrics(coverage)
     quota = quota_scenarios(
-        int(metrics["DELTA_API_CALLS"]),
+        int(metrics["AUTHORITATIVE_VERIFY_CALLS"]),
         int(metrics["STRICT_API_CALLS"]),
-        endpoint_counts(queue),
+        {n: int(metrics[f"DETAIL{n:02d}_verify"]) for n in ALLOWED_SECTIONS},
+        structural_calls=int(metrics["STRUCTURAL_DELTA_CALLS"]),
+        structural_by_endpoint={n: int(metrics[f"DETAIL{n:02d}_structural"]) for n in ALLOWED_SECTIONS},
     )
     canonical = {
         "WO": "WO-CHEM-04-CONTENT-LOCAL-001",
@@ -89,6 +95,13 @@ def main(argv: list[str] | None = None) -> int:
             "path": args.queue,
             "sha256": sha256_file(queue_path),
             "row_count": len(queue),
+            "kind": "AUTHORITATIVE_VERIFY",
+        },
+        "structural_delta_queue": {
+            "path": args.structural_queue,
+            "sha256": sha256_file(Path(args.structural_queue)),
+            "row_count": count_jsonl(Path(args.structural_queue)),
+            "kind": "STRUCTURAL_DELTA",
         },
         "report": {
             "path": str(dest),

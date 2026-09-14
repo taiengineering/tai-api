@@ -9,6 +9,7 @@ import pytest
 from services.kosha_msds.contract import (
     ABSENT_SECONDARY_CONTENT_FIELDS,
     ALLOWED_SECTIONS,
+    BRAILLE_IN_CONTENT_AUDIT,
     CONTENT_SECONDARY_COMPLETE,
     CONTENT_SECONDARY_EMPTY_VALID,
     CONTENT_SECONDARY_INVALID,
@@ -33,6 +34,7 @@ from services.kosha_msds.contract import (
 from services.kosha_msds.content_audit import (
     ContentAuditError,
     assert_secret_free,
+    authoritative_verify_queue_rows,
     canonical_content_hash,
     canonical_json_hash,
     coverage_metrics,
@@ -44,6 +46,7 @@ from services.kosha_msds.content_audit import (
     parse_section_map,
     stream_index_from_path,
     stream_secondary_index,
+    structural_queue_rows,
 )
 from services.kosha_msds.current_index import OfficialCurrentRow
 from tools.chem04 import (
@@ -135,9 +138,14 @@ def test_one_section_missing_is_partial():
     assert row["content_status"] == CONTENT_SECONDARY_PARTIAL
     assert row["section04_present"] == SECTION_MISSING
     coverage = join_coverage([_off("001008")], {"001008": row})
-    queue = delta_queue_rows(coverage)
-    assert [(q["chemId"], q["sectionNo"]) for q in queue] == [("001008", 4)]
-    assert queue[0]["reason"] == REASON_SECONDARY_MISSING_SECTION
+    structural = structural_queue_rows(coverage)
+    assert [(q["chemId"], q["sectionNo"]) for q in structural] == [("001008", 4)]
+    assert structural[0]["reason"] == REASON_SECONDARY_MISSING_SECTION
+    verify = authoritative_verify_queue_rows(coverage)
+    assert len(verify) == 16
+    assert ("001008", 4, REASON_SECONDARY_MISSING_SECTION) in {
+        (q["chemId"], q["sectionNo"], q["reason"]) for q in verify
+    }
 
 
 def test_explicit_empty_is_not_missing():
@@ -158,7 +166,11 @@ def test_invalid_section_status():
     assert row["section07_present"] == SECTION_INVALID
     assert row["content_status"] == CONTENT_SECONDARY_INVALID
     queue = delta_queue_rows(join_coverage([_off("000003")], {"000003": row}))
-    assert queue[0]["sectionNo"] == 7
+    assert 7 in {q["sectionNo"] for q in queue if q["reason"] != REASON_REVISION_UNKNOWN}
+    structural = structural_queue_rows(join_coverage([_off("000003")], {"000003": row}))
+    assert [(q["sectionNo"], q["reason"]) for q in structural] == [
+        (7, "SECONDARY_INVALID_SECTION")
+    ]
 
 
 def test_no_cas_name_fallback():
@@ -238,28 +250,70 @@ def test_timestamps_excluded_from_canonical_hash():
     assert canonical_json_hash(payload) == canonical_json_hash({"official_current": 1})
 
 
+def test_braille_excluded_from_presence_and_hash():
+    assert BRAILLE_IN_CONTENT_AUDIT is False
+    rec_a = _raw("000001", text="same")
+    rec_b = _raw("000001", text="same")
+    rec_a["sections"][0]["braille"] = "AAA"
+    rec_b["sections"][0]["braille"] = "BBB"
+    assert index_row_from_raw(rec_a, source_revision=REV)["content_hash"] == index_row_from_raw(
+        rec_b, source_revision=REV
+    )["content_hash"]
+    braille_only = _raw("000001", text="")
+    for item in braille_only["sections"]:
+        item["text_ko"] = ""
+        item["braille"] = "dots"
+    row = index_row_from_raw(braille_only, source_revision=REV)
+    assert row["content_status"] == CONTENT_SECONDARY_EMPTY_VALID
+    assert row["section01_present"] == SECTION_EMPTY
+
+
 def test_strict_queue_count_not_materialized():
     coverage = join_coverage([_off("000001"), _off("999999")], {"000001": index_row_from_raw(_raw("000001"), source_revision=REV)})
-    queue = delta_queue_rows(coverage)
-    metrics = coverage_metrics(coverage, queue)
+    structural = structural_queue_rows(coverage)
+    verify = authoritative_verify_queue_rows(coverage)
+    metrics = coverage_metrics(coverage)
     assert metrics["STRICT_API_CALLS"] == 32
-    assert metrics["DELTA_API_CALLS"] == 16
-    assert len(queue) != metrics["STRICT_API_CALLS"]
+    assert metrics["STRUCTURAL_DELTA_CALLS"] == 16
+    assert metrics["AUTHORITATIVE_VERIFY_CALLS"] == 32
+    assert metrics["DELTA_API_CALLS"] == 32
+    assert metrics["DELTA_API_CALLS_MEANS"] == "AUTHORITATIVE_VERIFY_CALLS"
+    assert len(structural) == 16
+    assert len(verify) == 32
+    assert delta_queue_rows(coverage) == verify
 
 
-def test_delta_queue_only_missing_or_changed():
+def test_structural_delta_excludes_revision_unknown_complete():
     complete = index_row_from_raw(_raw("000001"), source_revision=REV)
     partial = index_row_from_raw(_raw("001008", missing={4}), source_revision=REV)
     coverage = join_coverage(
         [_off("000001"), _off("001008"), _off("999999")],
         {"000001": complete, "001008": partial},
     )
-    queue = delta_queue_rows(coverage)
-    keys = {(q["chemId"], q["sectionNo"], q["reason"]) for q in queue}
+    structural = structural_queue_rows(coverage)
+    keys = {(q["chemId"], q["sectionNo"], q["reason"]) for q in structural}
     assert ("000001", 1, REASON_REVISION_UNKNOWN) not in keys
     assert ("001008", 4, REASON_SECONDARY_MISSING_SECTION) in keys
-    assert all(q["chemId"] != "000001" for q in queue)
-    assert len([q for q in queue if q["chemId"] == "999999"]) == 16
+    assert all(q["chemId"] != "000001" for q in structural)
+    assert len([q for q in structural if q["chemId"] == "999999"]) == 16
+    assert len([q for q in structural if q["chemId"] == "001008"]) == 1
+
+
+def test_authoritative_verify_includes_revision_unknown():
+    complete = index_row_from_raw(_raw("000001"), source_revision=REV)
+    partial = index_row_from_raw(_raw("001008", missing={4}), source_revision=REV)
+    coverage = join_coverage(
+        [_off("000001"), _off("001008"), _off("999999")],
+        {"000001": complete, "001008": partial},
+    )
+    verify = authoritative_verify_queue_rows(coverage)
+    keys = {(q["chemId"], q["sectionNo"], q["reason"]) for q in verify}
+    assert ("000001", 1, REASON_REVISION_UNKNOWN) in keys
+    assert len([q for q in verify if q["chemId"] == "000001"]) == 16
+    assert ("001008", 4, REASON_SECONDARY_MISSING_SECTION) in keys
+    assert ("001008", 1, REASON_REVISION_UNKNOWN) in keys
+    assert len([q for q in verify if q["chemId"] == "001008"]) == 16
+    assert len([q for q in verify if q["chemId"] == "999999"]) == 16
 
 
 def test_endpoint_call_counts():
@@ -267,23 +321,31 @@ def test_endpoint_call_counts():
         [_off("001008"), _off("999999")],
         {"001008": index_row_from_raw(_raw("001008", missing={4}), source_revision=REV)},
     )
-    queue = delta_queue_rows(coverage)
-    counts = endpoint_counts(queue)
-    assert counts[4] == 2
-    assert counts[1] == 1
-    metrics = coverage_metrics(coverage, queue)
+    structural = structural_queue_rows(coverage)
+    verify = authoritative_verify_queue_rows(coverage)
+    structural_counts = endpoint_counts(structural)
+    verify_counts = endpoint_counts(verify)
+    assert structural_counts[4] == 2
+    assert structural_counts[1] == 1
+    assert verify_counts[4] == 2
+    assert verify_counts[1] == 2
+    metrics = coverage_metrics(coverage)
     assert metrics["DETAIL04_strict"] == 2
-    assert metrics["DETAIL04_delta"] == 2
-    assert metrics["DETAIL01_delta"] == 1
+    assert metrics["DETAIL04_structural"] == 2
+    assert metrics["DETAIL01_structural"] == 1
+    assert metrics["DETAIL04_verify"] == 2
+    assert metrics["DETAIL01_verify"] == 2
+    assert metrics["DETAIL01_delta"] == 2
 
 
 def test_revision_changed():
     row = index_row_from_raw(_raw("000002", extra={"lastDate": "2024-01-01"}), source_revision=REV)
     coverage = join_coverage([_off("000002", rev="2026-01-01")], {"000002": row})
     assert coverage[0]["freshness"] == FRESHNESS_CURRENT_CHANGED
-    queue = delta_queue_rows(coverage)
-    assert len(queue) == 16
-    assert {q["reason"] for q in queue} == {REASON_REVISION_CHANGED}
+    assert structural_queue_rows(coverage) == []
+    verify = authoritative_verify_queue_rows(coverage)
+    assert len(verify) == 16
+    assert {q["reason"] for q in verify} == {REASON_REVISION_CHANGED}
 
 
 def test_revision_match_and_unknown_preserved():
@@ -298,9 +360,11 @@ def test_revision_match_and_unknown_preserved():
     assert by_id["000001"]["freshness"] == FRESHNESS_DATE_UNKNOWN
     assert by_id["000001"]["needs_api"] == "unknown"
     assert by_id["000001"]["reason"] == REASON_REVISION_UNKNOWN
-    queue = delta_queue_rows(coverage)
-    assert all(q["chemId"] != "000001" for q in queue)
-    assert all(q["chemId"] != "000002" for q in queue)
+    assert structural_queue_rows(coverage) == []
+    verify = authoritative_verify_queue_rows(coverage)
+    assert all(q["chemId"] != "000002" for q in verify)
+    assert len(verify) == 16
+    assert {q["reason"] for q in verify} == {REASON_REVISION_UNKNOWN}
 
 
 def test_streaming_full_reader(tmp_path):
@@ -436,7 +500,10 @@ def test_cli_probe_and_report(tmp_path, capsys):
     coverage = tmp_path / "cov.jsonl"
     assert build_content_coverage.main(["--official", str(official), "--index", str(index), "--out", str(coverage)]) == 0
     queue = tmp_path / "q.jsonl"
-    assert build_hydration_queue.main(["--coverage", str(coverage), "--out", str(queue)]) == 0
+    structural = tmp_path / "structural.jsonl"
+    assert build_hydration_queue.main(
+        ["--coverage", str(coverage), "--out", str(queue), "--structural-out", str(structural)]
+    ) == 0
     report = tmp_path / "report.json"
     assert content_report.main(
         [
@@ -446,6 +513,8 @@ def test_cli_probe_and_report(tmp_path, capsys):
             str(coverage),
             "--queue",
             str(queue),
+            "--structural-queue",
+            str(structural),
             "--out",
             str(report),
             "--manifest",
@@ -454,7 +523,10 @@ def test_cli_probe_and_report(tmp_path, capsys):
     ) == 0
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["metrics"]["STRICT_API_CALLS"] == 96
-    assert payload["metrics"]["DELTA_API_CALLS"] == len(queue.read_text(encoding="utf-8").splitlines())
+    assert payload["metrics"]["DELTA_API_CALLS"] == payload["metrics"]["AUTHORITATIVE_VERIFY_CALLS"]
+    assert payload["metrics"]["AUTHORITATIVE_VERIFY_CALLS"] == len(queue.read_text(encoding="utf-8").splitlines())
+    assert payload["metrics"]["STRUCTURAL_DELTA_CALLS"] == len(structural.read_text(encoding="utf-8").splitlines())
+    assert payload["metrics"]["STRUCTURAL_DELTA_CALLS"] < payload["metrics"]["AUTHORITATIVE_VERIFY_CALLS"]
     assert payload["live_bulk_api_calls"] == 0
     assert "serviceKey" not in capsys.readouterr().out
 
