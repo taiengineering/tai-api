@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 from urllib.parse import urlencode
@@ -116,6 +117,18 @@ class FullDetail:
     sections: dict[str, SectionFetch]
     detail_status: str
     failed_sections: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class Detail01Raw:
+    """Transport envelope for Detail01 existence probe. Caller classifies ERROR vs ABSENT."""
+
+    chem_id: str
+    http_status: Optional[int] = None
+    body: Optional[str] = None
+    error_code: Optional[str] = None
+    error_text: Optional[str] = None
+    elapsed_ms: float = 0.0
 
 
 @dataclass
@@ -266,6 +279,39 @@ class KoshaMsdsClient:
             items=parsed.items,
             status=status,
         )
+
+    def fetch_detail01_raw(self, chem_id: str) -> Detail01Raw:
+        """One getChemDetail01 call. Errors stay errors; never coerced to empty/ABSENT."""
+        cid = normalize_chem_id(chem_id)
+        if not cid:
+            raise KoshaMsdsClientError("CHEM_ID_REQUIRED", "detail fetch requires chemId")
+        t0 = time.perf_counter()
+        try:
+            status, text, _key = self._get(
+                f"{DETAIL_OPERATION_PREFIX}01",
+                {"chemId": cid},
+            )
+            return Detail01Raw(
+                chem_id=cid,
+                http_status=status,
+                body=text,
+                elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+            )
+        except KoshaMsdsTransportError as exc:
+            return Detail01Raw(
+                chem_id=cid,
+                http_status=exc.http_status if exc.http_status else None,
+                error_code="TRANSPORT",
+                error_text=exc.snippet,
+                elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+            )
+        except KoshaMsdsParseError as exc:
+            return Detail01Raw(
+                chem_id=cid,
+                error_code=exc.code,
+                error_text=exc.message,
+                elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+            )
 
     def get_full_detail(self, chem_id: str) -> FullDetail:
         cid = normalize_chem_id(chem_id)
