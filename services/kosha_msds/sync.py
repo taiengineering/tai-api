@@ -251,18 +251,44 @@ def incomplete_count(records: list[HydrationRecord]) -> int:
     return sum(1 for rec in records if chemical_detail_status(rec.detail) == DETAIL_INCOMPLETE)
 
 
+def covered_detail_identities(records: list[HydrationRecord]) -> frozenset[str]:
+    covered = set()
+    for rec in records:
+        if chemical_detail_status(rec.detail) in {DETAIL_COMPLETE, DETAIL_EMPTY_BUT_VALID}:
+            covered.add(rec.chem_id)
+    return frozenset(covered)
+
+
+def detail_coverage_counts(
+    census: ListCensus,
+    records: list[HydrationRecord],
+) -> tuple[int, int]:
+    census_ids = set(census.chem_ids)
+    covered = covered_detail_identities(records) & census_ids
+    missing = census_ids - covered
+    return len(covered), len(missing)
+
+
 def publish_full_allowed(
     spec: SnapshotSpec,
     census: ListCensus,
     records: list[HydrationRecord],
     *,
     publish_state: str,
+    incremental: bool = False,
 ) -> bool:
+    """PUBLISHED_FULL only when every census chemId has COMPLETE/EMPTY_BUT_VALID detail.
+
+    Incremental publish is fail-closed in this PR: no DB-backed prior coverage.
+    """
+    if incremental:
+        return False
     census_ok = (
         len(census.chem_ids) == census.total_count
         and len(set(census.chem_ids)) == census.total_count
         and census.total_count > 0
     )
+    covered_detail_count, missing_detail_count = detail_coverage_counts(census, records)
     promoted = SnapshotSpec(
         enumeration_mode=spec.enumeration_mode,
         status=spec.status if spec.status == "COMPLETED" else "COMPLETED",
@@ -274,6 +300,10 @@ def publish_full_allowed(
         promoted,
         incomplete_count=incomplete_count(records),
         census_ok=census_ok,
+        covered_detail_count=covered_detail_count,
+        missing_detail_count=missing_detail_count,
+        expected_count=census.total_count,
+        incremental=False,
     )
 
 

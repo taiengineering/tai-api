@@ -110,8 +110,20 @@ def evaluate_publish_full(
     *,
     incomplete_count: int,
     census_ok: bool,
+    covered_detail_count: int,
+    missing_detail_count: int,
+    expected_count: int,
+    incremental: bool = False,
 ) -> bool:
-    """PUBLISHED_FULL is allowed only after census+detail gates. This WO does not promote."""
+    """PUBLISHED_FULL requires full-census detail coverage. Incremental is forbidden here."""
+    if incremental:
+        return False
+    if expected_count <= 0:
+        return False
+    if covered_detail_count != expected_count:
+        return False
+    if missing_detail_count != 0:
+        return False
     return (
         spec.enumeration_mode == ENUMERATION_FULL_OFFICIAL
         and spec.status == SNAPSHOT_COMPLETED

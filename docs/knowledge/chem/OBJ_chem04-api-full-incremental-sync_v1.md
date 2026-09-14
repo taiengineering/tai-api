@@ -12,7 +12,7 @@ owner: taiwang
 # OBJ-CHEM-04 — KOSHA OpenAPI full list + incremental sync
 
 ```text
-CHEM-04 = IN_PROGRESS (GPT review before merge)
+CHEM-04 = IN_PROGRESS (PATCH-1 on PR #350, not merged)
 CHEM-01 = CLOSED / PASS_WITH_INGEST_GATE
 CHEM-02 = DONE / CLOSED
 CHEM-03 = CLOSED / CONDITIONAL
@@ -165,10 +165,10 @@ totalCount <= 0   # live dump-all
 Checkpoint / resume:
 
 ```text
-hydration_targets ordered from census
-completed_chem_ids
-last_completed_chem_id
-resume = remaining_targets()  # skip completed; do not restart
+IN_PROCESS RESUME = PASS
+PROCESS-RESTART RESUME = NOT_IMPLEMENTED
+checkpoint = in-memory SyncCheckpoint only
+durable DB/file checkpoint = not in this PR
 ```
 
 Rate limit: optional `sleep_s` between pages/details. Retry/backoff remains CHEM-02 client `_get`.
@@ -206,9 +206,17 @@ Publish gate (evaluated, not applied):
 ```text
 enumerated rows == totalCount
 missing/duplicate chemId = 0
-every hydrated chemId COMPLETE or EMPTY_BUT_VALID
+covered_detail_count == census.total_count
+missing_detail_count == 0
+every census chemId COMPLETE or EMPTY_BUT_VALID
 INCOMPLETE = 0
+incremental PUBLISHED_FULL = FORBIDDEN
+  (no DB-backed prior full coverage in this PR)
 ```
+
+Partial NEW/CHANGED records cannot publish even if those few rows are COMPLETE.
+
+PATCH-1: `list_page` rejects `pageNo < 1` (pageNo=0 fail-closed).
 
 ---
 
@@ -262,7 +270,7 @@ KOSHA inquiry sent           = NO
 python3 -m pytest tests/test_kosha_msds_catalog.py -q --tb=line
 34 passed / 0 failed
 python3 -m pytest tests/test_kosha_msds_full_sync.py -q --tb=line
-19 passed / 0 failed
+24 passed / 0 failed
 ```
 
 CI: mock transport only. No live KOSHA calls.
@@ -287,6 +295,9 @@ lazy/on-demand-only catalog as the CHEM-04 SoT
 ```text
 FULL_LIST_API = BLOCKED
 FULL ENUMERATION = BLOCKED
+IN_PROCESS RESUME = PASS
+PROCESS-RESTART RESUME = NOT_IMPLEMENTED
+incremental PUBLISHED_FULL = FORBIDDEN
 next = do not bypass with web/file
       wait GPT; if pagination later PASS, then quota → migration → ingest
 CHEM-04 = IN_PROGRESS

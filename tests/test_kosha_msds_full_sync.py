@@ -5,14 +5,23 @@ import pathlib
 
 import pytest
 
-from services.kosha_msds.client import KoshaMsdsClient, redact_secret
+from services.kosha_msds.client import (
+    FullDetail,
+    KoshaMsdsClient,
+    KoshaMsdsClientError,
+    SectionFetch,
+    redact_secret,
+)
 from services.kosha_msds.contract import (
     ALLOWED_SECTIONS,
     BASE_URL,
+    DETAIL_COMPLETE,
+    DETAIL_EMPTY_BUT_VALID,
     DETAIL_INCOMPLETE,
     DIFF_CHANGED,
     DIFF_NEW,
     DIFF_UNCHANGED,
+    ENUMERATION_FULL_OFFICIAL,
     FULL_LIST_API,
     LIST_OPERATION,
     PUBLISH_NOT_PUBLISHED,
@@ -23,7 +32,9 @@ from services.kosha_msds.contract import (
 )
 from services.kosha_msds.snapshot import SnapshotSpec, new_full_official_spec
 from services.kosha_msds.sync import (
+    HydrationRecord,
     KoshaMsdsSyncError,
+    ListCensus,
     SyncCheckpoint,
     collect_list_census,
     initial_sync_plan,
@@ -323,3 +334,117 @@ def test_cas_null_is_not_identity():
     row = next(r for r in census.rows if r.chem_id == "047134")
     assert row.cas_no is None
     assert row.chem_id == "047134"
+
+
+def _detail(chem_id: str, status: str) -> FullDetail:
+    if status == DETAIL_INCOMPLETE:
+        return FullDetail(
+            chem_id=chem_id,
+            sections={},
+            detail_status=DETAIL_INCOMPLETE,
+            failed_sections=(16,),
+        )
+    section_status = DETAIL_EMPTY_BUT_VALID if status == DETAIL_EMPTY_BUT_VALID else DETAIL_COMPLETE
+    sections = {
+        f"{n:02d}": SectionFetch(
+            section_no=n,
+            result_code="00",
+            result_msg="ok",
+            items=[],
+            status=section_status,
+        )
+        for n in ALLOWED_SECTIONS
+    }
+    return FullDetail(chem_id=chem_id, sections=sections, detail_status=DETAIL_COMPLETE, failed_sections=())
+
+
+def _rec(chem_id: str, status: str = DETAIL_COMPLETE) -> HydrationRecord:
+    return HydrationRecord(
+        chem_id=chem_id,
+        detail=_detail(chem_id, status),
+        source_content_hash="x",
+        list_item={"chemId": chem_id},
+    )
+
+
+def _census(ids: tuple[str, ...]) -> ListCensus:
+    return ListCensus(
+        total_count=len(ids),
+        page_count=1,
+        working_page_size=len(ids) or 1,
+        chem_ids=ids,
+        last_dates={cid: "2024-01-01" for cid in ids},
+        rows=(),
+    )
+
+
+def _publish_spec(n: int) -> SnapshotSpec:
+    return SnapshotSpec(
+        enumeration_mode=ENUMERATION_FULL_OFFICIAL,
+        status=SNAPSHOT_COMPLETED,
+        publish_state=PUBLISH_PUBLISHED_FULL,
+        expected_count=n,
+    )
+
+
+def test_partial_records_do_not_publish_full():
+    ids = ("000001", "001008", "047134", "009098")
+    census = _census(ids)
+    records = [_rec("000001")]
+    assert publish_full_allowed(
+        _publish_spec(4), census, records, publish_state=PUBLISH_PUBLISHED_FULL
+    ) is False
+
+
+def test_full_census_complete_or_empty_valid_can_publish():
+    ids = ("000001", "001008", "047134", "009098")
+    census = _census(ids)
+    records = [
+        _rec("000001"),
+        _rec("001008", DETAIL_EMPTY_BUT_VALID),
+        _rec("047134"),
+        _rec("009098"),
+    ]
+    assert publish_full_allowed(
+        _publish_spec(4), census, records, publish_state=PUBLISH_PUBLISHED_FULL
+    ) is True
+
+
+def test_incremental_new_without_prior_coverage_cannot_publish():
+    ids = ("000001", "001008", "047134", "009098")
+    census = _census(ids)
+    records = [_rec("009098")]
+    assert publish_full_allowed(
+        _publish_spec(4),
+        census,
+        records,
+        publish_state=PUBLISH_PUBLISHED_FULL,
+        incremental=True,
+    ) is False
+    assert publish_full_allowed(
+        _publish_spec(4), census, records, publish_state=PUBLISH_PUBLISHED_FULL
+    ) is False
+
+
+def test_one_chem_id_detail_missing_cannot_publish():
+    ids = ("000001", "001008", "047134", "009098")
+    census = _census(ids)
+    records = [
+        _rec("000001"),
+        _rec("001008"),
+        _rec("047134"),
+        _rec("009098", DETAIL_INCOMPLETE),
+    ]
+    assert publish_full_allowed(
+        _publish_spec(4), census, records, publish_state=PUBLISH_PUBLISHED_FULL
+    ) is False
+
+
+def test_page_no_zero_fail_closed():
+    def handler(url, params, timeout):
+        raise AssertionError("transport must not run")
+
+    client = _client(handler)
+    with pytest.raises(KoshaMsdsClientError) as exc:
+        client.list_page(page_no=0, num_of_rows=10)
+    assert exc.value.code == "PAGE_INVALID"

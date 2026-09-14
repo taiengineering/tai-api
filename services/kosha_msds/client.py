@@ -208,8 +208,8 @@ class KoshaMsdsClient:
 
         CHEM-04 live probe: omit/blank/default → totalCount=0 (not a corpus).
         """
-        if page_no < 0:
-            raise KoshaMsdsClientError("PAGE_INVALID", "pageNo must be >= 0")
+        if page_no < 1:
+            raise KoshaMsdsClientError("PAGE_INVALID", "pageNo must be >= 1")
         if num_of_rows < 1 or num_of_rows > MAX_NUM_OF_ROWS:
             raise KoshaMsdsClientError(
                 "ROWS_INVALID",
