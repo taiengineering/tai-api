@@ -1,6 +1,6 @@
-"""WO-E2E-OBS010-KSIC-MAJOR-ENGINE-CONTEXT-REV1-001.
+"""WO-E2E-OBS010-KSIC-MAJOR-CONTEXT-FINALIZE-001.
 
-ksic_major is Engine Context, not a LEG applicability input.
+ksic_major is SaaS classification, not LEG applicability or engine context.
 """
 from types import SimpleNamespace
 
@@ -23,9 +23,14 @@ def _body(**kwargs):
 
 def test_ksic_major_removed_from_leg_transport_allowlist():
     assert "ksic_major" not in _LEG_INPUT_FIELDS
+    assert "industry" not in _LEG_INPUT_FIELDS
+    assert "industry_name" not in _LEG_INPUT_FIELDS
+    assert "ksic_name" not in _LEG_INPUT_FIELDS
+    assert "business_type" not in _LEG_INPUT_FIELDS
+    assert "process_type" not in _LEG_INPUT_FIELDS
     assert len(_LEG_INPUT_FIELDS) == 186
     assert len(set(_LEG_INPUT_FIELDS)) == 186
-    assert _CONTEXT_FIELDS == ("sector", "ksic_major")
+    assert _CONTEXT_FIELDS == ("sector",)
 
 
 def test_build_facility_omits_ksic_major_keeps_worker_count():
@@ -39,14 +44,28 @@ def test_build_facility_omits_ksic_major_keeps_worker_count():
     assert "ksic_major" not in fac
 
 
-def test_build_engine_context_carries_sector_and_ksic_verbatim():
+def test_build_engine_context_carries_sector_omits_ksic():
     body = _body(
         sector="MANUFACTURING",
         ksic_major="29",
         input={"ksic_major": "29", "worker_count": 100},
     )
     ctx = build_engine_context(body)
-    assert ctx == {"sector": "MANUFACTURING", "ksic_major": "29"}
+    assert ctx == {"sector": "MANUFACTURING"}
+    assert "ksic_major" not in ctx
+
+
+def test_build_engine_context_drops_industry_name():
+    body = _body(
+        sector="MANUFACTURING",
+        ksic_major="29",
+        industry_name="기타 기계 및 장비 제조업",
+        input={"industry_name": "기타 기계 및 장비 제조업", "ksic_major": "29"},
+    )
+    ctx = build_engine_context(body)
+    assert ctx == {"sector": "MANUFACTURING"}
+    assert "industry_name" not in ctx
+    assert "ksic_major" not in ctx
 
 
 def test_build_engine_context_omits_blank_ksic():
@@ -91,9 +110,10 @@ def test_evaluate_rtm_payload_separates_context(monkeypatch):
     evaluate_rtm(fac, context=ctx)
     assert captured["json"] == {
         "facility": {"worker_count": 100},
-        "context": {"sector": "MANUFACTURING", "ksic_major": "29"},
+        "context": {"sector": "MANUFACTURING"},
     }
     assert "ksic_major" not in captured["json"]["facility"]
+    assert "ksic_major" not in captured["json"]["context"]
 
 
 def test_evaluate_rtm_omits_empty_context_key(monkeypatch):
