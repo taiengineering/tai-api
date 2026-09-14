@@ -197,6 +197,17 @@ _LEG_INPUT_FIELDS = (
     "crane_transporting_workers",
     "crane_installation_work", "crane_assembly_work", "crane_repair_work",
     "crane_inspection_work", "crane_dismantling_work",
+    # WO-E2E-OBS007-ELEVATOR-MINIMUM-MODIFY-001: Frozen evidence Leaf.field exact-name.
+    # No alias, no has_elevator collapse, no has_building_elevator passthrough.
+    # has_building_elevator remains BUILDING+elevator_count derived-only.
+    "has_furniture_moving_lift", "has_lift_without_onboard_controls",
+    "has_lift_with_internal_controls_only",
+    "lift_pit_cleaning_work",
+    "lift_installation_work", "lift_assembly_work", "lift_repair_work",
+    "lift_inspection_work", "lift_dismantling_work",
+    "building_elevator_installation_work", "building_elevator_assembly_work",
+    "building_elevator_repair_work", "building_elevator_inspection_work",
+    "building_elevator_dismantling_work",
     # WO-SM-CORE22-CONSTRUCTION-PREDICATE-EXPLICIT-INPUT-CONTRACT-001
     # Published CORE22 Leaf.field exact-name. No alias/renaming/sector/order_type/kcsc adapter.
     # False is a value. None/missing is omitted. Default false = 0.
