@@ -21,12 +21,12 @@ from tools.risk04.review005f_decisions import (
     GPT004F_FIELDS,
     GPT_004F_PATH,
     MERGE_CANDIDATE,
+    MERGE_COUNTERPART,
     MERGE_RELATIONS,
     MERGE_SELF,
     NAMED_KIND,
     RESULT_004F_PATH,
     build_004f_gpt_manifest,
-    cicw_proposal_keys,
     manifest_004f_sha,
     merge_keys_for,
 )
@@ -85,12 +85,11 @@ def test_004f_gpt_manifest_counts_and_merge_relations():
     assert all(row["approval_state"] == APPROVAL_STATE for row in rows)
     assert all(row["semantic_kind_before"] == "AMBIGUOUS" for row in rows)
     by_no = {int(row["review_no"]): row for row in rows}
-    proposal_keys = cicw_proposal_keys()
     for no in sorted(MERGE_CANDIDATE):
         assert by_no[no]["semantic_kind_after"] == "PROCESS"
         assert by_no[no]["semantic_review_decision"] == "MERGE_CANDIDATE"
         assert by_no[no]["source_key"] == MERGE_SELF[no]
-        assert by_no[no]["merge_candidate_keys"] == merge_keys_for(no, MERGE_SELF[no], proposal_keys)
+        assert by_no[no]["merge_candidate_keys"] == merge_keys_for(no, MERGE_SELF[no]) == MERGE_COUNTERPART[no]
         assert by_no[no]["source_key"] in MERGE_RELATIONS[no]
     empty = [row for row in rows if int(row["review_no"]) not in MERGE_CANDIDATE]
     assert len(empty) == 167

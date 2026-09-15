@@ -11,7 +11,7 @@ owner: taiwang
 
 # OBJ-RISK-04-REVIEW-005F-DECISION-001 — LEAF Batch004F GPT Decision Freeze
 
-This WO freezes GPT's completed semantic review of LEAF Batch004F (181 rows). Cursor does not invent kind or KEEP/MERGE/HOLD/REJECT. Compact pack and frozen 004F input are not overwritten. Merge keys are resolved by existing CIC_W source-key lookup, not by name similarity.
+This WO freezes GPT's completed semantic review of LEAF Batch004F (181 rows). Cursor does not invent kind or KEEP/MERGE/HOLD/REJECT. Compact pack and frozen 004F input are not overwritten. Merge counterpart proposal keys were resolved once by existing CIC_W source-key lookup and then frozen as explicit strings so CI does not rebuild the seed plan. This is not name similarity.
 
 ```text
 WO-RISK-04-REVIEW-005F     = PASS / CLOSED

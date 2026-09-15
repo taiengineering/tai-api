@@ -4,7 +4,6 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
-from tools.risk04.review003_decisions import cicw_proposal_keys
 from tools.risk04.review004_leaf_routing import load_leaf_batch
 from tools.risk04.review005f_pack import (
     FROZEN_004F_SHA,
@@ -76,6 +75,23 @@ MERGE_SELF = {
     1862: "8631",
     1864: "8641",
     1866: "9121",
+}
+# Counterpart proposal keys resolved once via cicw_proposal_keys(); frozen so CI need not rebuild seed plan.
+MERGE_COUNTERPART = {
+    1718: "bc0a4d662ca7b0941b18787498ac8e30f6e33685ce168afed16810ad25ee929e",
+    1719: "cfc316505b91f515b236b535dd0c5eb1db0852793a57837ffcc5d855577f9829",
+    1739: "2cd5380b46c25ebe366a610accb7c2a9896377f1679e394367c8976dc5513886",
+    1764: "825fafb2cb0c673e04be97f4b5951a6ee10a97422da44fabc817689fa15d0b35",
+    1765: "5b2b1b50650cc366df922ba1bb6f8a8b3c7d34b465948b859afc640e34ddaee7",
+    1792: "e066088663d01d820767c3f0971b34fad3f3e906d1fc5237d06f74f293fb3ac2",
+    1797: "cdd59d0734b914f44b5e6cb52823916adb204ac8c117ecfc2656b8261f512d03",
+    1799: "229db50c74c354e18b6457206c64fb830f0d02fa46e3b2ae916af1743d349b31 | a3535fa6836e0e8e66cd0b9b64611148cf9b2c72b48a554d16d2301b942d74dd | 73d311c8d9d65139be81ac55e8cf8a4a6237baf090c49709d93b57caacae7c89",
+    1817: "be3f8539a8d95a286eddcc524bd4392df0ff4652858972562bfbe6ee74ec5a15",
+    1851: "96527325df7971e7f4c1d22c14a05d134d66fe99b39dcd22c452bd101e80424b",
+    1860: "88c0dada461143da9fec7a2d6d7847c8d729b73c49e551a8b4a4b12688bf9e4d",
+    1862: "6657f500b9d1bfe59b90e693c9d3fabc9d494f04b2f72d9ec0ff1560bc83fc17 | f5b741c5432767b697db7c6b3ed10a4f5da683bad0a3f3cd5934dad29d2e2cb3",
+    1864: "2be093b6b695a920b45aac3c2b1c265a3b6cc36cd5900805256cf1213d30778b",
+    1866: "63506a7a577baed3c7ee7e0e1e9945e209308bed1d4fcd9b7c50f22bb2d8db7e",
 }
 NAMED_KIND = {
     1694: ("강재제작설치 조립공사", "TASK"),
@@ -184,7 +200,7 @@ def _validate_coverage() -> None:
         raise ValueError(f"004F kind overlap {overlap}")
     if MERGE_CANDIDATE - PROCESS_KIND:
         raise ValueError("004F MERGE_CANDIDATE must be PROCESS")
-    if set(MERGE_SELF) != set(MERGE_RELATIONS):
+    if set(MERGE_SELF) != set(MERGE_RELATIONS) or set(MERGE_COUNTERPART) != set(MERGE_RELATIONS):
         raise ValueError("004F MERGE_SELF drift")
 
 
@@ -221,7 +237,7 @@ def review_basis(kind: str, decision: str) -> str:
     return f"GPT_004F_{decision}_{kind}"
 
 
-def merge_keys_for(review_no: int, source_key: str, proposal_keys: dict[str, str]) -> str:
+def merge_keys_for(review_no: int, source_key: str) -> str:
     if review_no not in MERGE_RELATIONS:
         return "EMPTY"
     members = MERGE_RELATIONS[review_no]
@@ -229,16 +245,7 @@ def merge_keys_for(review_no: int, source_key: str, proposal_keys: dict[str, str
         raise ValueError(f"{review_no} source_key {source_key} not in {members}")
     if source_key != MERGE_SELF[review_no]:
         raise ValueError(f"{review_no} expected source_key {MERGE_SELF[review_no]}")
-    counterparts = []
-    for key in members:
-        if key == source_key:
-            continue
-        resolved = proposal_keys.get(key)
-        if not resolved:
-            raise ValueError(f"merge counterpart {key} missing from proposal universe")
-        counterparts.append((key, resolved))
-    counterparts.sort(key=lambda item: item[0])
-    return " | ".join(item[1] for item in counterparts)
+    return MERGE_COUNTERPART[review_no]
 
 
 def assert_frozen_004f_pack() -> list[dict]:
@@ -263,13 +270,12 @@ def build_004f_gpt_manifest() -> list[dict]:
     frozen = assert_frozen_004f_pack()
     input_rows = load_leaf_batch(INPUT_004F_PATH)
     before = {row["review_no"]: row["current_semantic_kind"] for row in input_rows}
-    proposal_keys = cicw_proposal_keys()
     rows = []
     for row in frozen:
         review_no = int(row["review_no"])
         kind = kind_for_004f(review_no)
         decision = decision_for_004f(review_no, kind)
-        merge_keys = merge_keys_for(review_no, row["source_key"], proposal_keys)
+        merge_keys = merge_keys_for(review_no, row["source_key"])
         if decision == "MERGE_CANDIDATE" and merge_keys == "EMPTY":
             raise ValueError(f"MERGE_CANDIDATE {review_no} missing counterparts")
         if decision != "MERGE_CANDIDATE" and merge_keys != "EMPTY":
