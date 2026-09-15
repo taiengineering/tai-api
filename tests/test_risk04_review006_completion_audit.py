@@ -209,8 +209,12 @@ def test_kosha_kalis_unchanged():
 
 def test_no_classifier_or_auto_approval():
     src = Path("tools/risk04/review006_completion_audit.py").read_text(encoding="utf-8")
-    assert "openai" not in src.lower()
-    assert "rapidfuzz" not in src.lower()
+    lowered = src.lower()
+    assert "openai" not in lowered
+    assert "embedding" not in lowered
+    assert "rapidfuzz" not in lowered
+    assert "levenshtein" not in lowered
+    assert "semantic_auto_merge" not in lowered
     assert "re.compile" not in src
     assert "uuid4" not in src
     assert "This is an explicit completion audit, not a classifier." in src
@@ -219,9 +223,13 @@ def test_no_classifier_or_auto_approval():
     stats = audit_stats(_rows())
     assert stats["auto_merged"] == 0
     assert stats["auto_approved"] == 0
+    assert stats["vector_model_calls"] == 0
+    assert stats["fuzzy"] == 0
+    assert stats["llm_calls"] == 0
     report = AUDIT_REPORT_PATH.read_text(encoding="utf-8")
     assert "GLOBAL AUTO CLASSIFIER = NOT SAFE" in report
     assert "RISK-04-APPROVE-001 = NOT OPENED" in report
+    assert "vector model calls = 0" in report
     for path in FROZEN_GPT:
         text = path.read_text(encoding="utf-8")
         assert text.splitlines()[0].startswith("batch_no\t") or text.splitlines()[0].startswith("review_no\t")

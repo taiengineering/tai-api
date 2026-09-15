@@ -162,7 +162,7 @@ AUTO APPROVED = 0
 NEW MIGRATION = 0
 production mutation = 0
 LLM calls = 0
-embedding = 0
+vector model calls = 0
 fuzzy = 0
 ```
 

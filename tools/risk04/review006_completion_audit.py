@@ -409,7 +409,7 @@ def audit_stats(rows: list[dict] | None = None) -> dict:
         "new_migration": 0,
         "production_mutation": 0,
         "llm_calls": 0,
-        "embedding": 0,
+        "vector_model_calls": 0,
         "fuzzy": 0,
         "semantic_unreviewed": 0,
     }
@@ -590,7 +590,7 @@ AUTO APPROVED = {stats["auto_approved"]}
 NEW MIGRATION = {stats["new_migration"]}
 production mutation = {stats["production_mutation"]}
 LLM calls = {stats["llm_calls"]}
-embedding = {stats["embedding"]}
+vector model calls = {stats["vector_model_calls"]}
 fuzzy = {stats["fuzzy"]}
 ```
 
