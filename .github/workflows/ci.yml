@@ -133,6 +133,8 @@ jobs:
         run: pytest tests/test_risk04_review005f.py -q --tb=short
       - name: OBJ-RISK RISK-04 REVIEW-005F GPT decision freeze
         run: pytest tests/test_risk04_review005f_decisions.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-006 full semantic completion audit
+        run: pytest tests/test_risk04_review006_completion_audit.py -q --tb=short
       - name: KOSHA GUIDE sync tests
         run: pytest tests/test_kosha_guide_sync.py -q --tb=short
 
