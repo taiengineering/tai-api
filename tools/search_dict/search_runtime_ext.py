@@ -84,12 +84,15 @@ class TokenTier:
         if not qt:
             return []
         qc = self._noun_concat(query)  # e.g., "근로기준법을" -> "근로기준법"
+        n_q = len(qt)
         # rank by (score desc, subject_key asc) — deterministic. Score = overlap
         # + bonus if qc is a substring of, or equal to, any subject compact.
         hits = []
         for skf, toks in self._subject_tokens.items():
             overlap = len(qt & toks)
             substr_bonus = 0.0
+            equal_compact = False
+            substr_shorter_len = 0  # length of shortest compact that matched
             if qc:
                 for c in self._subject_compacts.get(skf, ()):
                     if qc == c:
@@ -98,6 +101,7 @@ class TokenTier:
                         # e.g. `근로기준법을` (qc=`근로기준법`) resolves to
                         # `근로기준법` not `근로기준법 시행규칙`.
                         substr_bonus = 10.0
+                        equal_compact = True
                         break
                     if qc in c or c in qc:
                         # Length-ratio guard: reject tiny-fragment substring
@@ -108,8 +112,56 @@ class TokenTier:
                         short, long = (c, qc) if len(c) < len(qc) else (qc, c)
                         if len(short) / max(len(long), 1) >= 0.40:
                             substr_bonus = max(substr_bonus, 2.0)
+                            if substr_shorter_len == 0 or len(short) > substr_shorter_len:
+                                substr_shorter_len = len(short)
             score = overlap + substr_bonus
-            if score >= min_overlap and (overlap or substr_bonus):
+            coverage = overlap / n_q
+            skey = self._subject[skf]["subject_key"]
+            # -- Precision gates (WO-2 verification follow-up) --
+            #
+            # G1: Require ONE of:
+            #   - actual noun-overlap >= 1
+            #   - equal_compact (query strips to exactly this subject; needed
+            #     for cases where Kiwi tokenizes bare `수도법` as {수도법}
+            #     but `수도법을` as {수도, 법} — overlap=0 with subject)
+            #   - substr_bonus from a subject compact of length >= 2 (rescues
+            #     MORPHOLOGY like "공고이"→공고 where Kiwi bundles the query
+            #     as a single unknown NNG but the subject compact is a real
+            #     prefix). The 2-char floor blocks "없는법령명입니다" (noun
+            #     "법령") from leaking to subject `법` (1 char).
+            if (overlap < 1
+                    and not equal_compact
+                    and substr_shorter_len < 2):
+                continue
+            # G2: Strong-signal requirement. Emit only if one of:
+            #   (a) equal_compact — the query strips to exactly this subject
+            #   (b) overlap >= 2 AND coverage >= 0.60 — meaningful multi hit
+            #       (rejects "건설기관계리법" 4-noun overlap-2 on
+            #       `건설기술 진흥법` = 50% coverage → let TRIGRAM catch
+            #       the real 건설기계관리법)
+            #   (c) overlap == 1 AND coverage == 1.0 — query IS the noun
+            #       (e.g., "감전을" -> 감전)
+            #   (d) overlap == 1 AND substr_bonus > 0 — compound + suffix or
+            #       compound + verb phrase (e.g., "국소배기장치 점검",
+            #       "국소배기장치 안전관리"). The length-ratio guard on
+            #       substr_bonus already excludes short-subject noise like
+            #       "화학물리법"→`법` (25% ratio → no bonus → no rule d).
+            strong = (
+                equal_compact
+                or (overlap >= 2 and coverage >= 0.60)
+                or (overlap == 1 and coverage >= 1.0)
+                or (overlap == 1 and substr_bonus > 0)
+                or (overlap == 0 and substr_bonus > 0 and substr_shorter_len >= 2)
+            )
+            if not strong:
+                continue
+            # G3 removed (WO-2 verification follow-up): the intent was to
+            # protect short subjects (`법`, `규칙`, `고시`) from noise,
+            # but G1 (overlap>=1 or equal_compact) + G2 (strong signal
+            # requirement) already cover the leak paths without also
+            # rejecting legitimate inflected queries like "고시을"→고시.
+
+            if score >= min_overlap:
                 jac = overlap / len(qt | toks) if (qt or toks) else 0.0
                 hits.append((score, overlap, jac, skf))
         hits.sort(key=lambda x: (-x[0], -x[2], x[3]))

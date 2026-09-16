@@ -122,7 +122,10 @@ def lookup(q: str, limit: int = 10, subject_type: str | None = None) -> dict:
     active_tiers = ["T1_EXACT", "T2_NORMALIZED_EXACT", "T2b_PUNCTUATION",
                     "T3_EXPANSION"]
 
-    # T4 (Kiwi TOKEN) — only if we still have room and Kiwi is available.
+    # T4 (Kiwi TOKEN) — invoke when core didn't already fill `limit` results.
+    # We over-emit up to limit*2 so the final rerank can pick winners across
+    # tiers (WO-2 verification follow-up: always give TRIGRAM a chance to
+    # rescue TYPO cases where TOKEN emits weak overlaps).
     if len(items) < limit:
         tok = _get_token_tier()
         if tok is not None:
@@ -145,26 +148,35 @@ def lookup(q: str, limit: int = 10, subject_type: str | None = None) -> dict:
                 if len(items) >= limit * 2:
                     break
 
-    # T6 (pg_trgm) — only if we still lack results and scratch DSN is present.
-    if len(items) < limit:
-        trg = _get_trigram_tier()
-        if trg is not None:
-            active_tiers.append("T6_TRIGRAM")
-            for c in trg.candidates(q, limit=limit):
-                key = (c["subject_type"], c["subject_key"])
-                if key in seen:
-                    continue
-                if subject_type and c["subject_type"] != subject_type:
-                    continue
-                items.append({
-                    "subject_type": c["subject_type"],
-                    "subject_key": c["subject_key"],
-                    "display_name": c["subject_key"],
-                    "matched_term": c["matched_term"],
-                    "match_type": "TRIGRAM",
-                    "score": _FALLBACK_TRIGRAM_BASE + int(c["similarity"] * 10),
-                })
-                seen.add(key)
+    # T6 (pg_trgm) — ALWAYS invoke when scratch DSN is present. Even if TOKEN
+    # filled the slots, a strong-sim TRIGRAM can outrank a weak TOKEN on the
+    # final score-based rerank (WO-2 verification follow-up).
+    trg = _get_trigram_tier()
+    if trg is not None:
+        active_tiers.append("T6_TRIGRAM")
+        for c in trg.candidates(q, limit=limit):
+            key = (c["subject_type"], c["subject_key"])
+            if key in seen:
+                continue
+            if subject_type and c["subject_type"] != subject_type:
+                continue
+            items.append({
+                "subject_type": c["subject_type"],
+                "subject_key": c["subject_key"],
+                "display_name": c["subject_key"],
+                "matched_term": c["matched_term"],
+                "match_type": "TRIGRAM",
+                # Rebalanced multiplier (WO-2 verification follow-up):
+                # base 30 + sim*50 → range 30..80. Strong-sim TRIGRAM
+                # (sim>=0.44) beats weak TOKEN (overlap=2, ~42) and even
+                # equal_compact TOKEN (~52) when sim>=0.5. Rescues cases
+                # where Kiwi mistokenization inflates TOKEN score
+                # (e.g., "건축본법" → noun-concat "건축법" spuriously
+                # equal to subject `건축법`). For correct MORPHOLOGY hits,
+                # TRIGRAM's top candidate is usually the same subject.
+                "score": 30 + int(c["similarity"] * 50),
+            })
+            seen.add(key)
 
     items.sort(key=lambda x: (-x["score"], x["subject_key"]))
     result["items"] = items[:limit]

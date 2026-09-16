@@ -251,7 +251,7 @@ def main(out_dir):
                 "display_name": c["subject_key"],
                 "matched_term": c["matched_term"],
                 "match_type": c["match_type"],
-                "score": search_core.MATCH_SCORE["TRIGRAM"] + int(c["similarity"] * 10),
+                "score": 30 + int(c["similarity"] * 50),
             })
             seen.add(key)
         exacts.sort(key=lambda x: (-x["score"], x["subject_key"]))
