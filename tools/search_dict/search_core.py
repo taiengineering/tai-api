@@ -27,6 +27,7 @@ import normalize as N  # noqa: E402
 MATCH_SCORE = {
     "EXACT": 100,
     "NORMALIZED_EXACT": 90,
+    "PUNCTUATION": 88,
     "ABBREVIATION_OF": 80,
     "SPACING_VARIANT_OF": 78,
     "PUNCTUATION_VARIANT_OF": 76,
@@ -47,6 +48,7 @@ class SearchEngine:
         # indexes (only APPROVED, production terms)
         self._by_norm = {}     # term_normalized -> set(subject_key_full)
         self._by_compact = {}  # term_compact -> set(subject_key_full)
+        self._by_nopunct = {}  # term_no_punctuation -> set(subject_key_full)
         self._subject = {}     # subject_key_full -> subject
         for s in self.subjects:
             skf = f"{s['subject_type']}::{s['subject_key']}"
@@ -56,10 +58,18 @@ class SearchEngine:
                     continue  # PROPOSED not used in production tiers (WO §52)
                 self._by_norm.setdefault(t["term_normalized"], set()).add(skf)
                 self._by_compact.setdefault(t["term_compact"], set()).add(skf)
+                npc = t.get("term_no_punctuation")
+                if npc:
+                    self._by_nopunct.setdefault(npc, set()).add(skf)
         self._expand = {}      # from_compact -> [(subject_key_full, relation_type)]
+        self._expand_np = {}   # from_nopunct -> [(subject_key_full, relation_type)]
         for e in self.expansions:
             self._expand.setdefault(e["from_compact"], []).append(
                 (e["to_subject"], e["relation_type"]))
+            npf = e.get("from_nopunct")
+            if npf:
+                self._expand_np.setdefault(npf, []).append(
+                    (e["to_subject"], e["relation_type"]))
 
     def _display(self, skf: str) -> str:
         s = self._subject.get(skf, {})
@@ -68,6 +78,7 @@ class SearchEngine:
     def search(self, q: str, limit: int = 10, subject_type: str | None = None):
         qn = N.normalize_basic(q)
         qc = N.compact(q)
+        qp = N.no_punctuation(q)
         hits = {}  # (subject_key_full) -> best (score, match_type, matched_term)
 
         def offer(skf, score, mtype, matched):
@@ -83,9 +94,14 @@ class SearchEngine:
         # T2 normalized/compact exact
         for skf in self._by_compact.get(qc, ()):
             offer(skf, MATCH_SCORE["NORMALIZED_EXACT"], "NORMALIZED_EXACT", qc)
-        # T3 approved alias/synonym expansion
+        # T2b punctuation-insensitive exact (KR law-name separators)
+        for skf in self._by_nopunct.get(qp, ()):
+            offer(skf, MATCH_SCORE["PUNCTUATION"], "PUNCTUATION", qp)
+        # T3 approved alias/synonym expansion (compact, then punct-insensitive)
         for (skf, rtype) in self._expand.get(qc, ()):
             offer(skf, MATCH_SCORE.get(rtype, 50), rtype, qc)
+        for (skf, rtype) in self._expand_np.get(qp, ()):
+            offer(skf, MATCH_SCORE.get(rtype, 50), rtype, qp)
 
         items = []
         for skf, (score, mtype, matched) in hits.items():

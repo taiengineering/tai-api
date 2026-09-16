@@ -29,7 +29,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import normalize as N  # noqa: E402
-import seed_v1 as S  # noqa: E402
+import importlib  # noqa: E402
+_SEED_MOD = os.environ.get("SEARCH_DICT_SEED", "seed_v1")
+S = importlib.import_module(_SEED_MOD)  # noqa: E402
 
 # ---- Contract enums (must match SEARCH_TERM_CONTRACT_v1.md) --------------
 TERM_TYPES = {
@@ -189,6 +191,7 @@ def build_projection(terms, relations):
         subjects[key]["terms"].append({
             "term_normalized": t["term_normalized"],
             "term_compact": t["term_compact"],
+            "term_no_punctuation": t["term_no_punctuation"],
             "term_type": t["term_type"],
             "status": t["status"],
             "non_production": t["status"] != "APPROVED",
@@ -204,12 +207,13 @@ def build_projection(terms, relations):
             continue
         expansions.append({
             "from_compact": s["term_compact"],
+            "from_nopunct": s["term_no_punctuation"],
             "to_subject": f"{tt['subject_type']}::{tt['subject_key']}",
             "relation_type": r["relation_type"],
         })
     for v in subjects.values():
         v["terms"].sort(key=lambda x: (x["term_normalized"], x["term_type"]))
-    expansions.sort(key=lambda x: (x["from_compact"], x["to_subject"], x["relation_type"]))
+    expansions.sort(key=lambda x: (x["from_compact"], x["from_nopunct"], x["to_subject"], x["relation_type"]))
     return {
         "snapshot_id": S.SNAPSHOT_ID,
         "snapshot_date": S.SNAPSHOT_DATE,
