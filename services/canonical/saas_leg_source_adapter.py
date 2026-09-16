@@ -6,9 +6,11 @@ alias/derived 만 적용 → build_unified_leg_input.
 
 FREEZE 규칙:
   - 새 alias/derivation/synthetic 생성 = 0.
-    · 승인 alias 는 clients.leg_runtime_client._LEG_CODE_TO_CONSUMER 2개(has_chemical,
-      has_high_place_work) 뿐이고, BUILDING 은 has_chemical 승격 스킵(BUILDING patch-A
+    · 승인 alias 는 clients.leg_runtime_client._LEG_CODE_TO_CONSUMER 의 has_chemical
+      뿐이고, BUILDING 은 has_chemical 승격 스킵(BUILDING patch-A
       exact-key 경로 유지 = STEP-2B 파리티 규약과 동일).
+    · has_high_work → has_high_place_work alias 는 OBS009 SOURCE IMPLEMENT 에서 제거
+      (generic high work ≠ MEWP).
     · elevator_count 는 103 vocabulary 밖의 derived source 로만 사용(build_facility 가
       elevator_count>0 을 has_building_elevator 로 파생). BUILDING 에서만 setattr.
     · construction_type "건축" synthetic 은 SaaS 에서 새로 만들지 않는다(GATE-0 정정 반영).
@@ -23,6 +25,7 @@ from typing import Any, Dict, Optional
 from clients.leg_runtime_client import _LEG_CODE_TO_CONSUMER
 from schemas.legal_engine import DiagnoseStep1Body
 from services.canonical.leg_input_contract import build_unified_leg_input
+from services.work_source.merge import merge_or_raise
 
 
 def build_saas_leg_step1(
@@ -30,6 +33,7 @@ def build_saas_leg_step1(
     sector: str,
     source_facts: Dict[str, Any],
     factory_id: Optional[str] = None,
+    work_rows: Optional[list] = None,
 ) -> DiagnoseStep1Body:
     """SaaS source facts → DiagnoseStep1Body via unified LEG input contract.
 
@@ -45,9 +49,12 @@ def build_saas_leg_step1(
         DiagnoseStep1Body.factory_id 로 전달.
     """
     facts: Dict[str, Any] = dict(source_facts or {})
+    if work_rows:
+        facts = merge_or_raise(facts, work_rows=work_rows)
 
     # ── 승인된 alias 만 canonical key 로 승격 (신규 alias 0) ──
-    #   consumer key(has_chemical_substance / has_high_work) 값이 있고 canonical key 미존재 시만.
+    #   consumer key(has_chemical_substance) 값이 있고 canonical key 미존재 시만.
+    #   has_high_work 는 MEWP(has_high_place_work) 로 승격하지 않는다.
     #   BUILDING has_chemical 승격은 스킵 — BUILDING patch-A(has_chemical_substance exact-key) 경로 유지
     #   (STEP-2B _build_unified_step1_body 와 동일한 파리티 규약).
     for _canon, _consumer in _LEG_CODE_TO_CONSUMER.items():

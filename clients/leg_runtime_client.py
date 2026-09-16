@@ -296,6 +296,18 @@ _LEG_INPUT_FIELDS = (
     "confined_space_work_with_exposed_live_parts_in_manhole_or_basement",
     "work_in_basement_or_pit_with_piping_through_confined_space",
     "performs_confined_space_rescue_work",
+    # WO-E2E-OBS009-COMMON-WORK-SOURCE-IMPLEMENT-001: Common Work projector outputs.
+    # Transport allowlist only. PSR/Atom unchanged this WO. missing != false.
+    # has_forklift remains possession. uses_forklift is actual use. No derivation.
+    "uses_forklift",
+    "performs_work_with_fall_risk",
+    "performs_work_on_roof",
+    "performs_spray_work_with_flammable_liquid_in_enclosed_space",
+    "performs_powered_machinery_maintenance_or_servicing",
+    "performs_electrical_work",
+    "performs_deenergized_circuit_electrical_work",
+    "performs_electrical_work_near_deenergized_circuit",
+    "performs_energized_circuit_electrical_work",
 )
 
 # WO-FIX-BUILDFACILITY-SECTOR-GATE-001: WIRING-016 append BUILDING N1 raw primitive 32축.
@@ -323,10 +335,11 @@ _BUILDING_N1_FIELDS = frozenset({
 
 
 # 소비자 스키마 필드명 -> LEG Input Contract field_code (WO-E2E-SEM-001 승인: 의미 동일, 이름만 상이)
-# has_fall_risk 는 제외(추락위험 != 고소작업대, UNDECIDABLE — 별도 WO 승인 전 금지).
+# WO-E2E-OBS009-COMMON-WORK-SOURCE-IMPLEMENT-001:
+#   has_high_work (generic high work) MUST NOT produce has_high_place_work (MEWP).
+#   Alias removed. Other aliases untouched. MEWP stays missing unless explicit.
 _LEG_CODE_TO_CONSUMER = {
     "has_chemical": "has_chemical_substance",
-    "has_high_place_work": "has_high_work",
 }
 
 

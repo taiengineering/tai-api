@@ -328,10 +328,9 @@ def test_T5_cst_chemical_substance_rename(hcs_val):
 
 
 def test_T5_no_new_alias_registered():
-    """신규 alias 0 : _LEG_CODE_TO_CONSUMER 는 승인 2개만."""
+    """OBS009: has_high_work→MEWP alias removed. Remaining approved alias is chemical only."""
     assert _LEG_CODE_TO_CONSUMER == {
         "has_chemical": "has_chemical_substance",
-        "has_high_place_work": "has_high_work",
     }
 
 
@@ -516,5 +515,5 @@ def test_T14_contract_files_still_importable_and_stable():
         "process_list", "equipment_list",
     ]
     assert hasattr(m4, "DiagnoseStep1Body")
-    assert len(m5._LEG_INPUT_FIELDS) == 193
+    assert len(m5._LEG_INPUT_FIELDS) == 202
     assert len(m5._BUILDING_N1_FIELDS) == 32

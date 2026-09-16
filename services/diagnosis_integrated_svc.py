@@ -562,6 +562,20 @@ def run_diagnosis(
         for _c, _f in _EQ_FACT.items():
             if _c in _eq_codes:
                 inp.setdefault(_f, True)
+    # WO-E2E-OBS009-COMMON-WORK-SOURCE-IMPLEMENT-001:
+    # stored work → projector → merge. Explicit request keys are not overwritten.
+    if factory_id:
+        from services.work_source.merge import WorkSourceMergeConflict, merge_or_raise
+        from services.work_source.store import load_work_rows_optional
+        try:
+            inp = merge_or_raise(
+                inp, work_rows=load_work_rows_optional(supabase, factory_id)
+            )
+        except WorkSourceMergeConflict as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "WORK_SOURCE_CONFLICT", "conflicts": exc.conflicts},
+            ) from exc
     if _worker_count is not None:
         workers = _worker_count
     elif body.direct_workers is not None:

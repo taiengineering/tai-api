@@ -368,11 +368,10 @@ def test_T10_contract_files_still_importable_and_stable():
     from services import safe_construction_canonical_assembler as m_cst_asm
     import schemas.legal_engine as m_sch
 
-    assert len(m_leg._LEG_INPUT_FIELDS) == 193
+    assert len(m_leg._LEG_INPUT_FIELDS) == 202
     assert len(m_leg._BUILDING_N1_FIELDS) == 32
     assert m_leg._LEG_CODE_TO_CONSUMER == {
         "has_chemical": "has_chemical_substance",
-        "has_high_place_work": "has_high_work",
     }
     assert hasattr(m_core, "build_unified_leg_input")
     assert hasattr(m_iw, "build_industrial_www_step1")
@@ -422,5 +421,4 @@ def test_T11_bld_chemical_exact_key(hcs):
 def test_T11_no_new_alias_registered():
     assert _LEG_CODE_TO_CONSUMER == {
         "has_chemical": "has_chemical_substance",
-        "has_high_place_work": "has_high_work",
     }

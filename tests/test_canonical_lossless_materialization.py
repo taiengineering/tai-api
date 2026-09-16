@@ -161,11 +161,12 @@ def test_free_regression_projection():
 # T7 — build_facility existing behavior unchanged (approved aliases still work)
 # ─────────────────────────────────────────────────────────────────────────────
 def test_build_facility_existing_aliases():
-    # approved alias: has_chemical <- has_chemical_substance ; has_high_place_work <- has_high_work
+    # approved alias remaining: has_chemical <- has_chemical_substance
+    # OBS009: has_high_work does not produce has_high_place_work (MEWP)
     step1 = DiagnoseStep1Body(sector="MANUFACTURING", input={}, has_chemical_substance=True, has_high_work=True)
     facility = build_facility(step1)
     check("t7.approved_alias_has_chemical", facility.get("has_chemical") is True)
-    check("t7.approved_alias_has_high_place_work", facility.get("has_high_place_work") is True)
+    check("t7.has_high_work_does_not_alias_mewp", "has_high_place_work" not in facility)
 
 
 if __name__ == "__main__":
