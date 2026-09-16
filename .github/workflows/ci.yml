@@ -97,6 +97,72 @@ jobs:
         run: pytest tests/test_risk02_source_core.py -q --tb=short
       - name: OBJ-RISK RISK-03 canonical mapping tests
         run: pytest tests/test_risk03_canonical_mapping.py -q --tb=short
+      - name: OBJ-RISK RISK-04 seed review tests
+        run: pytest tests/test_risk04_seed_review.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-001 evidence tests
+        run: pytest tests/test_risk04_review001.py -q --tb=short
+      - name: OBJ-RISK RISK-04 CHG1 semantic gate tests
+        run: pytest tests/test_risk04_chg1.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-002 scale-out tests
+        run: pytest tests/test_risk04_review002.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-003 W_MID leaf-family evidence tests
+        run: pytest tests/test_risk04_review003.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-004 W_MID freeze + leaf routing
+        run: pytest tests/test_risk04_review004.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-005A GPT review-pack tests
+        run: pytest tests/test_risk04_review005a.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-005A GPT decision freeze
+        run: pytest tests/test_risk04_review005a_decisions.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-005B GPT review-pack tests
+        run: pytest tests/test_risk04_review005b.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-005B GPT decision freeze
+        run: pytest tests/test_risk04_review005b_decisions.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-005C GPT review-pack tests
+        run: pytest tests/test_risk04_review005c.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-005C GPT decision freeze
+        run: pytest tests/test_risk04_review005c_decisions.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-005D GPT review-pack tests
+        run: pytest tests/test_risk04_review005d.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-005D GPT decision freeze
+        run: pytest tests/test_risk04_review005d_decisions.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-005E GPT review-pack tests
+        run: pytest tests/test_risk04_review005e.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-005E GPT decision freeze
+        run: pytest tests/test_risk04_review005e_decisions.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-005F GPT review-pack tests
+        run: pytest tests/test_risk04_review005f.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-005F GPT decision freeze
+        run: pytest tests/test_risk04_review005f_decisions.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-006 full semantic completion audit
+        run: pytest tests/test_risk04_review006_completion_audit.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-007 pre-approval review readiness
+        run: pytest tests/test_risk04_review007_preapproval_readiness.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-008 merge-hold resolution context
+        run: pytest tests/test_risk04_review008_resolution_context.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-009 GPT merge-hold resolution freeze
+        run: pytest tests/test_risk04_review009_resolution_freeze.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-010 pre-approval candidate universe
+        run: pytest tests/test_risk04_review010_candidate_universe.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-011 hierarchy-label-search readiness
+        run: pytest tests/test_risk04_review011_hierarchy_label_search_readiness.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-013 semantic resolution freeze
+        run: pytest tests/test_risk04_review013_resolution_freeze.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-014 remaining parent-label evidence
+        run: pytest tests/test_risk04_review014_remaining_parent_label_evidence.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-015 remaining-5 semantic resolution freeze
+        run: pytest tests/test_risk04_review015_remaining5_resolution_freeze.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-016 preapproval manifest blocker audit
+        run: pytest tests/test_risk04_review016_preapproval_manifest_audit.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-017 final blocker resolution pack
+        run: pytest tests/test_risk04_review017_final_blocker_resolution_pack.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-018 final resolution owner package
+        run: pytest tests/test_risk04_review018_final_resolution_owner_package.py -q --tb=short
+      - name: OBJ-RISK RISK-04 APPROVE-001 owner approval binding
+        run: pytest tests/test_risk04_approve001_owner_approval.py -q --tb=short
+      - name: OBJ-RISK RISK-04 MATERIALIZE-001 approved canonical draft plan
+        run: pytest tests/test_risk04_materialize001_approved_canonical_draft.py -q --tb=short
+      - name: OBJ-RISK RISK-04 RECOVERY-001 parent amendment schema bootstrap
+        run: pytest tests/test_risk04_recovery001_parent_amendment.py -q --tb=short
       - name: KOSHA GUIDE sync tests
         run: pytest tests/test_kosha_guide_sync.py -q --tb=short
 
