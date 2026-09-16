@@ -50,6 +50,13 @@ def patched(monkeypatch):
         "services.work_source.store.load_work_rows_optional",
         lambda supabase, factory_id: [],
     )
+    # WO-OBS009-MATERIAL-CANONICAL-RUNTIME-WIRING-PATCH-001: material loader stubbed
+    # (supabase fake is object()); default empty means no chemical canonical facts injected,
+    # which preserves prior contract for these tests (canonical29 + Work Source only).
+    monkeypatch.setattr(
+        "services.material_source.store.load_factory_material_rows_optional",
+        lambda supabase, factory_id: [],
+    )
     return calls
 
 # G4A-01 assembler 1회 READ

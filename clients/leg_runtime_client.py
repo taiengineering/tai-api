@@ -308,6 +308,14 @@ _LEG_INPUT_FIELDS = (
     "performs_deenergized_circuit_electrical_work",
     "performs_electrical_work_near_deenergized_circuit",
     "performs_energized_circuit_electrical_work",
+    # WO-OBS009-MATERIAL-CANONICAL-RUNTIME-WIRING-PATCH-001: Common Material canonical
+    # adapter outputs (OPTION A per-factory boolean presence). Transport allowlist only.
+    # PSR/Atom unchanged this WO. missing != false — omit on absence, never inject false.
+    # No alias / no derivation / no fallback. Aggregated across active factory_materials
+    # via material_legal_classifications; free-text without material_master_key = ABSENT.
+    "is_managed_hazardous_substance",
+    "is_permit_required_hazardous_substance",
+    "is_special_management_substance",
 )
 
 # WO-FIX-BUILDFACILITY-SECTOR-GATE-001: WIRING-016 append BUILDING N1 raw primitive 32축.

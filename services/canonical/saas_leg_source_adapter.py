@@ -25,6 +25,10 @@ from typing import Any, Dict, Optional
 from clients.leg_runtime_client import _LEG_CODE_TO_CONSUMER
 from schemas.legal_engine import DiagnoseStep1Body
 from services.canonical.leg_input_contract import build_unified_leg_input
+from services.material_source.canonical_adapter import (
+    merge_or_raise as merge_material_or_raise,
+    project_material_canonical_facts_from_rows,
+)
 from services.work_source.merge import merge_or_raise
 
 
@@ -34,6 +38,7 @@ def build_saas_leg_step1(
     source_facts: Dict[str, Any],
     factory_id: Optional[str] = None,
     work_rows: Optional[list] = None,
+    material_rows: Optional[list] = None,
 ) -> DiagnoseStep1Body:
     """SaaS source facts → DiagnoseStep1Body via unified LEG input contract.
 
@@ -44,13 +49,27 @@ def build_saas_leg_step1(
     source_facts : dict
         assembler(canonical29/27) values + consumer override(RUNTIME_INPUT_FIELDS/SAFE_UI_OVERRIDE_FIELDS/
         SafeBuildingConsumerInput) 병합 dict. 상한(29/27) 없이 전량 전달 — 이 adapter 가
-        _LEG_INPUT_FIELDS(103) 로 필터한다.
+        _LEG_INPUT_FIELDS(103+) 로 필터한다.
     factory_id : optional
         DiagnoseStep1Body.factory_id 로 전달.
+    work_rows : optional
+        factory_work_facts rows (Common Work Source). Merged via services.work_source.merge —
+        explicit wins on disagreement; missing != false.
+    material_rows : optional
+        factory_materials rows (Common Material Source). Reduced to per-factory boolean
+        canonical facts via services.material_source.canonical_adapter (OPTION A):
+        is_managed_hazardous_substance / is_permit_required_hazardous_substance /
+        is_special_management_substance. Same merge policy as work_rows — explicit wins;
+        missing != false; no free-text bind; classification_code is authority.
+        WO-OBS009-MATERIAL-CANONICAL-RUNTIME-WIRING-PATCH-001.
     """
     facts: Dict[str, Any] = dict(source_facts or {})
     if work_rows:
         facts = merge_or_raise(facts, work_rows=work_rows)
+    if material_rows:
+        projected = project_material_canonical_facts_from_rows(material_rows)
+        if projected:
+            facts = merge_material_or_raise(facts, projected=projected)
 
     # ── 승인된 alias 만 canonical key 로 승격 (신규 alias 0) ──
     #   consumer key(has_chemical_substance) 값이 있고 canonical key 미존재 시만.

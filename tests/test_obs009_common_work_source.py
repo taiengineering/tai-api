@@ -246,8 +246,11 @@ def test_chemical_alias_untouched_high_work_alias_removed():
 def test_transport_allowlist_appends_work_facts_only():
     for name in OBS009_CWS_FACTS:
         assert name in _LEG_INPUT_FIELDS
-    assert len(_LEG_INPUT_FIELDS) == 202
-    assert len(set(_LEG_INPUT_FIELDS)) == 202
+    # WO-OBS009-MATERIAL-CANONICAL-RUNTIME-WIRING-PATCH-001: +3 chemical canonical
+    # booleans (is_managed_/is_permit_required_/is_special_management_hazardous_substance)
+    # were appended by that patch. Baseline 202 → 205. Uniqueness invariant preserved.
+    assert len(_LEG_INPUT_FIELDS) == 205
+    assert len(set(_LEG_INPUT_FIELDS)) == 205
     assert KSIC_NOT_IN_TRANSPORT not in _LEG_INPUT_FIELDS
     assert "has_welding" in _LEG_INPUT_FIELDS
     assert "has_demolition" in _LEG_INPUT_FIELDS
