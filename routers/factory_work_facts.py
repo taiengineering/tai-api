@@ -16,12 +16,21 @@ from services.company_scope import _ensure_factory_own
 from services.work_source.merge import WorkSourceMergeConflict, merge_or_raise
 from services.work_source.registry import registry_public
 from services.work_source.store import (
+    WorkSourceLoadError,
     WorkSourceValidationError,
     create_work_fact,
     deactivate_work_fact,
     list_work_facts,
     update_work_fact,
 )
+
+
+def _unavailable(exc: WorkSourceLoadError) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={"code": "WORK_SOURCE_UNAVAILABLE", "message": str(exc)},
+    )
+
 
 router = APIRouter(tags=["factory-work-facts"])
 
@@ -63,7 +72,10 @@ def get_factory_work_facts(
 ):
     supabase = get_supabase()
     _ensure_factory_own(supabase, factory_id, current)
-    items = list_work_facts(supabase, factory_id, include_inactive=include_inactive)
+    try:
+        items = list_work_facts(supabase, factory_id, include_inactive=include_inactive)
+    except WorkSourceLoadError as exc:
+        raise _unavailable(exc) from exc
     return {"status": "success", "data": {"items": items, "total": len(items)}}
 
 
@@ -123,7 +135,10 @@ def get_factory_work_projection(
     """Projector output for operators. Not a client write path for LEG booleans."""
     supabase = get_supabase()
     _ensure_factory_own(supabase, factory_id, current)
-    items = list_work_facts(supabase, factory_id, include_inactive=False)
+    try:
+        items = list_work_facts(supabase, factory_id, include_inactive=False)
+    except WorkSourceLoadError as exc:
+        raise _unavailable(exc) from exc
     try:
         facts = merge_or_raise({}, items)
     except WorkSourceMergeConflict as exc:

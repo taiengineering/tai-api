@@ -19,7 +19,12 @@ from services.work_source.merge import (
 )
 from services.work_source.projector import project_work_row, project_work_rows
 from services.work_source.registry import ALLOWED_WORK_TYPES, registry_public
-from services.work_source.store import WorkSourceValidationError, validate_payload
+from services.work_source.store import (
+    WorkSourceLoadError,
+    WorkSourceValidationError,
+    load_work_rows_optional,
+    validate_payload,
+)
 
 
 OBS009_CWS_FACTS = (
@@ -316,3 +321,145 @@ def test_validate_rejects_unknown_family_table_style_type():
     except WorkSourceValidationError:
         return
     raise AssertionError("unknown work_type must be rejected")
+
+
+class _OkQuery:
+    def __init__(self, data, error=None):
+        self._data = data
+        self._error = error
+
+    def table(self, name):
+        return self
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def execute(self):
+        return SimpleNamespace(data=self._data, error=self._error)
+
+
+class _BoomQuery:
+    def table(self, name):
+        raise RuntimeError("relation factory_work_facts does not exist")
+
+
+def test_query_failure_is_not_empty_work():
+    try:
+        load_work_rows_optional(_BoomQuery(), "F1")
+    except WorkSourceLoadError as exc:
+        assert exc.code == "WORK_SOURCE_UNAVAILABLE"
+        return
+    raise AssertionError("query failure must not become []")
+
+
+def test_successful_empty_list_is_no_work_not_error():
+    assert load_work_rows_optional(_OkQuery([]), "F1") == []
+
+
+def test_missing_factory_id_skips_query():
+    class MustNotQuery:
+        def table(self, name):
+            raise AssertionError("no query without factory_id")
+
+    assert load_work_rows_optional(MustNotQuery(), None) == []
+    assert load_work_rows_optional(MustNotQuery(), "") == []
+
+
+def test_non_list_payload_is_load_error():
+    try:
+        load_work_rows_optional(_OkQuery({"rows": []}), "F1")
+    except WorkSourceLoadError:
+        return
+    raise AssertionError("non-list payload must not become []")
+
+
+def test_query_error_field_is_load_error():
+    try:
+        load_work_rows_optional(_OkQuery([], error="permission denied"), "F1")
+    except WorkSourceLoadError:
+        return
+    raise AssertionError("res.error must not become []")
+
+
+def test_runtime_load_error_does_not_call_leg(monkeypatch):
+    from schemas.legal_engine import SafeIndustrialConsumerInput
+    from services import safe_industrial_leg_runtime as R
+    from services.safe_industrial_canonical_assembler import TARGET_FIELDS, CONTRACT_VERSION
+
+    calls = {"leg": 0}
+    values = {f: None for f in TARGET_FIELDS}
+    values["worker_count"] = 50
+    monkeypatch.setattr(
+        R,
+        "assemble_industrial_marketing_contract",
+        lambda supabase, factory_id: {
+            "contract_version": CONTRACT_VERSION,
+            "sector": "INDUSTRIAL",
+            "factory_id": factory_id,
+            "values": {f: values[f] for f in TARGET_FIELDS},
+            "unresolved_fields": [],
+            "provenance": {},
+        },
+    )
+    monkeypatch.setattr(
+        R,
+        "run_leg_diagnosis",
+        lambda step1: calls.__setitem__("leg", calls["leg"] + 1) or {},
+    )
+    monkeypatch.setattr(
+        "services.work_source.store.load_work_rows_optional",
+        lambda *a, **k: (_ for _ in ()).throw(
+            WorkSourceLoadError("db down", factory_id="F1")
+        ),
+    )
+    try:
+        R.run_safe_industrial_leg(object(), "F1", SafeIndustrialConsumerInput())
+    except WorkSourceLoadError:
+        assert calls["leg"] == 0
+        return
+    raise AssertionError("diagnosis must abort on work source load error")
+
+
+def test_industrial_leg_route_maps_load_error_to_503(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    import routers.legal_engine as LE
+
+    monkeypatch.setattr(LE, "get_supabase", lambda: object())
+    monkeypatch.setattr(LE, "get_current_user", lambda auth: {"id": "u1"})
+    monkeypatch.setattr(LE, "_ensure_factory_own", lambda sb, fid, cur: None)
+    monkeypatch.setattr(
+        LE,
+        "evaluate_saas_tier_gate",
+        lambda *a, **k: {
+            "status": "FIT",
+            "sector": "INDUSTRY",
+            "current_plan": {"tier_code": "TEST_CURRENT"},
+            "required_plan": {"tier_code": "TEST_REQUIRED"},
+            "metric": {},
+        },
+    )
+    monkeypatch.setattr(LE.leg_runtime_client, "is_enabled", lambda: True)
+    monkeypatch.setattr(
+        LE,
+        "run_safe_industrial_leg",
+        lambda sb, fid, ci: (_ for _ in ()).throw(
+            WorkSourceLoadError("db down", factory_id=fid)
+        ),
+    )
+    app = FastAPI()
+    app.include_router(LE.router)
+    client = TestClient(app, raise_server_exceptions=False)
+    res = client.post(
+        "/legal-engine/diagnose/industrial-leg",
+        json={"factory_id": "F1", "input": {}},
+    )
+    assert res.status_code == 503
+    assert res.json()["detail"]["code"] == "WORK_SOURCE_UNAVAILABLE"

@@ -12,6 +12,7 @@ class _Q:
     def select(s,*a,**k): return s
     def eq(s,*a,**k): return s
     def limit(s,*a,**k): return s
+    def order(s,*a,**k): return s
     def execute(s): return _Res(s._rows)
 class _FakeSB:
     def __init__(s, fac): s._fac = fac; s.writes = 0

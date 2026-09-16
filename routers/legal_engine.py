@@ -16,6 +16,7 @@ from clients import leg_runtime_client
 from clients.leg_runtime_client import LegRuntimeError
 from services.leg_diagnosis_svc import LegDiagnosisError
 from services.work_source.merge import WorkSourceMergeConflict
+from services.work_source.store import WorkSourceLoadError
 from services.saas_diagnosis_result_persistence import SaasPersistError, finalize_saas_leg_result
 from services.tier_payment_gate_svc import TierGateError, evaluate_saas_tier_gate
 from services.legal_context import _factory_to_context, _survey_data_to_context
@@ -145,6 +146,11 @@ async def diagnose_industrial_leg(body: SafeIndustrialLegBody, authorization: Op
         raise HTTPException(status_code=503, detail="LEG runtime 미설정")
     try:
         out = run_safe_industrial_leg(supabase, body.factory_id, body.input)
+    except WorkSourceLoadError as e:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "WORK_SOURCE_UNAVAILABLE", "message": str(e)},
+        ) from e
     except WorkSourceMergeConflict as e:
         raise HTTPException(
             status_code=409,
@@ -176,6 +182,11 @@ async def diagnose_construction_leg(body: SafeConstructionLegBody, authorization
         out = run_safe_construction_leg(supabase, body.site_id, body.input)
     except ConstructionSiteBridgeError as e:
         raise HTTPException(status_code=409, detail=str(e))    # site↔factory 미연결 fail-closed
+    except WorkSourceLoadError as e:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "WORK_SOURCE_UNAVAILABLE", "message": str(e)},
+        ) from e
     except WorkSourceMergeConflict as e:
         raise HTTPException(
             status_code=409,
@@ -198,6 +209,11 @@ async def diagnose_building_leg(body: SafeBuildingLegBody, authorization: Option
         raise HTTPException(status_code=503, detail="LEG runtime 미설정")
     try:
         out = run_safe_building_leg(supabase, body.factory_id, body.input)
+    except WorkSourceLoadError as e:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "WORK_SOURCE_UNAVAILABLE", "message": str(e)},
+        ) from e
     except WorkSourceMergeConflict as e:
         raise HTTPException(
             status_code=409,

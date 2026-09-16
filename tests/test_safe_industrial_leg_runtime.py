@@ -46,6 +46,10 @@ def patched(monkeypatch):
                 "facility_used": {"worker_count": step1.input.get("worker_count")}}
     monkeypatch.setattr(R, "assemble_industrial_marketing_contract", fake_assemble)
     monkeypatch.setattr(R, "run_leg_diagnosis", fake_run_leg)
+    monkeypatch.setattr(
+        "services.work_source.store.load_work_rows_optional",
+        lambda supabase, factory_id: [],
+    )
     return calls
 
 # G4A-01 assembler 1회 READ

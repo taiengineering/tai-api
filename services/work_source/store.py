@@ -20,6 +20,16 @@ class WorkSourceValidationError(ValueError):
     pass
 
 
+class WorkSourceLoadError(RuntimeError):
+    """DB/query failure. Must not be treated as empty work."""
+
+    code = "WORK_SOURCE_UNAVAILABLE"
+
+    def __init__(self, message: str, *, factory_id: Optional[str] = None):
+        super().__init__(message)
+        self.factory_id = factory_id
+
+
 def _blank(val: Any) -> bool:
     return val is None or (isinstance(val, str) and not val.strip())
 
@@ -83,29 +93,52 @@ def validate_payload(payload: Dict[str, Any], *, partial: bool = False) -> Dict[
     return out
 
 
-def list_work_facts(supabase, factory_id: str, *, include_inactive: bool = False) -> List[Dict[str, Any]]:
-    q = supabase.table(TABLE).select(
-        "id, factory_id, work_type, work_subtype, equipment_ref, material_ref, "
-        "location_ref, attributes, active, created_at, updated_at"
-    ).eq("factory_id", factory_id)
-    if not include_inactive:
-        q = q.eq("active", True)
-    res = q.order("created_at").execute()
+def _rows_or_raise(res: Any, factory_id: str) -> List[Dict[str, Any]]:
+    error = getattr(res, "error", None)
+    if error:
+        raise WorkSourceLoadError(
+            "factory_work_facts query error: {}".format(error),
+            factory_id=factory_id,
+        )
     data = getattr(res, "data", None)
     if not isinstance(data, list):
-        return []
+        raise WorkSourceLoadError(
+            "factory_work_facts returned non-list payload",
+            factory_id=factory_id,
+        )
     return data
 
 
-def load_work_rows_optional(supabase, factory_id: Optional[str]) -> List[Dict[str, Any]]:
-    """Diagnosis seam. Missing table / factory → empty list. Never invents facts."""
-    if not factory_id or supabase is None:
-        return []
+def list_work_facts(supabase, factory_id: str, *, include_inactive: bool = False) -> List[Dict[str, Any]]:
     try:
-        return list_work_facts(supabase, factory_id, include_inactive=False)
-    except Exception as exc:  # noqa: BLE001 — table may not exist until migration apply
-        log.warning("factory_work_facts load skipped factory=%s: %s", factory_id, exc)
+        q = supabase.table(TABLE).select(
+            "id, factory_id, work_type, work_subtype, equipment_ref, material_ref, "
+            "location_ref, attributes, active, created_at, updated_at"
+        ).eq("factory_id", factory_id)
+        if not include_inactive:
+            q = q.eq("active", True)
+        res = q.order("created_at").execute()
+    except WorkSourceLoadError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — missing table / transport / client errors
+        log.error("factory_work_facts query failed factory=%s: %s", factory_id, exc)
+        raise WorkSourceLoadError(
+            "factory_work_facts query failed",
+            factory_id=factory_id,
+        ) from exc
+    return _rows_or_raise(res, factory_id)
+
+
+def load_work_rows_optional(supabase, factory_id: Optional[str]) -> List[Dict[str, Any]]:
+    """Diagnosis seam. No factory_id → no query. Query failure is not empty work."""
+    if not factory_id:
         return []
+    if supabase is None:
+        raise WorkSourceLoadError(
+            "work source client missing",
+            factory_id=factory_id,
+        )
+    return list_work_facts(supabase, factory_id, include_inactive=False)
 
 
 def create_work_fact(supabase, factory_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:

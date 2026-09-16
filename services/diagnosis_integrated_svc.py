@@ -566,11 +566,16 @@ def run_diagnosis(
     # stored work → projector → merge. Explicit request keys are not overwritten.
     if factory_id:
         from services.work_source.merge import WorkSourceMergeConflict, merge_or_raise
-        from services.work_source.store import load_work_rows_optional
+        from services.work_source.store import WorkSourceLoadError, load_work_rows_optional
         try:
             inp = merge_or_raise(
                 inp, work_rows=load_work_rows_optional(supabase, factory_id)
             )
+        except WorkSourceLoadError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "WORK_SOURCE_UNAVAILABLE", "message": str(exc)},
+            ) from exc
         except WorkSourceMergeConflict as exc:
             raise HTTPException(
                 status_code=409,
