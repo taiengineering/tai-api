@@ -175,6 +175,8 @@ jobs:
         run: pytest tests/test_risk_map001_cicw_governance.py -q --tb=short
       - name: OBJ-RISK MAP-APPROVE-001 owner mapping approval binding
         run: pytest tests/test_risk_map_approve001_owner_binding.py -q --tb=short
+      - name: OBJ-RISK MAP-MATERIALIZE-001 approved production mappings
+        run: pytest tests/test_risk_map_materialize001.py -q --tb=short
       - name: KOSHA GUIDE sync tests
         run: pytest tests/test_kosha_guide_sync.py -q --tb=short
 
