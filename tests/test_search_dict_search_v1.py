@@ -52,3 +52,16 @@ def test_every_result_is_explainable(engine):
     for it in engine.search("MSDS")["items"]:
         assert it["match_type"]
         assert it["matched_term"]
+
+
+@pytest.mark.skipif(
+    os.environ.get("SEARCH_DICT_SEED") != "seed_v2",
+    reason="PUNCTUATION-variant law names (ㆍ) only in leg-prod seed_v2 corpus",
+)
+def test_punctuation_insensitive_law_name(engine):
+    # '소음ㆍ진동관리법' is APPROVED in seed_v2; query without ㆍ must resolve
+    # via the PUNCTUATION tier (match_type=PUNCTUATION).
+    top = _top(engine, "소음진동관리법")
+    assert top is not None
+    assert top["subject_key"] == "소음ㆍ진동관리법"
+    assert top["match_type"] == "PUNCTUATION"
