@@ -1,0 +1,1850 @@
+[
+  {
+    "material_key": "ISHL-ENF-ART88-0088001-P-H1",
+    "classification_code": "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_item:0088001-P-H1",
+    "source_version": "2026-07-28_36540",
+    "source_hash": "ac37678b6cba123062477e7516e41ff425c9bd2d7b159c7a74da0b2507c112c0",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-ENF-ART88-0088001-P-H10",
+    "classification_code": "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_item:0088001-P-H10",
+    "source_version": "2026-07-28_36540",
+    "source_hash": "ac37678b6cba123062477e7516e41ff425c9bd2d7b159c7a74da0b2507c112c0",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-ENF-ART88-0088001-P-H11",
+    "classification_code": "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_item:0088001-P-H11",
+    "source_version": "2026-07-28_36540",
+    "source_hash": "ac37678b6cba123062477e7516e41ff425c9bd2d7b159c7a74da0b2507c112c0",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-ENF-ART88-0088001-P-H12",
+    "classification_code": "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_item:0088001-P-H12",
+    "source_version": "2026-07-28_36540",
+    "source_hash": "ac37678b6cba123062477e7516e41ff425c9bd2d7b159c7a74da0b2507c112c0",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-ENF-ART88-0088001-P-H2",
+    "classification_code": "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_item:0088001-P-H2",
+    "source_version": "2026-07-28_36540",
+    "source_hash": "ac37678b6cba123062477e7516e41ff425c9bd2d7b159c7a74da0b2507c112c0",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-ENF-ART88-0088001-P-H3",
+    "classification_code": "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_item:0088001-P-H3",
+    "source_version": "2026-07-28_36540",
+    "source_hash": "ac37678b6cba123062477e7516e41ff425c9bd2d7b159c7a74da0b2507c112c0",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-ENF-ART88-0088001-P-H4",
+    "classification_code": "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_item:0088001-P-H4",
+    "source_version": "2026-07-28_36540",
+    "source_hash": "ac37678b6cba123062477e7516e41ff425c9bd2d7b159c7a74da0b2507c112c0",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-ENF-ART88-0088001-P-H5",
+    "classification_code": "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_item:0088001-P-H5",
+    "source_version": "2026-07-28_36540",
+    "source_hash": "ac37678b6cba123062477e7516e41ff425c9bd2d7b159c7a74da0b2507c112c0",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-ENF-ART88-0088001-P-H6",
+    "classification_code": "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_item:0088001-P-H6",
+    "source_version": "2026-07-28_36540",
+    "source_hash": "ac37678b6cba123062477e7516e41ff425c9bd2d7b159c7a74da0b2507c112c0",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-ENF-ART88-0088001-P-H7",
+    "classification_code": "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_item:0088001-P-H7",
+    "source_version": "2026-07-28_36540",
+    "source_hash": "ac37678b6cba123062477e7516e41ff425c9bd2d7b159c7a74da0b2507c112c0",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-ENF-ART88-0088001-P-H8",
+    "classification_code": "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_item:0088001-P-H8",
+    "source_version": "2026-07-28_36540",
+    "source_hash": "ac37678b6cba123062477e7516e41ff425c9bd2d7b159c7a74da0b2507c112c0",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-ENF-ART88-0088001-P-H9",
+    "classification_code": "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_item:0088001-P-H9",
+    "source_version": "2026-07-28_36540",
+    "source_hash": "ac37678b6cba123062477e7516e41ff425c9bd2d7b159c7a74da0b2507c112c0",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I001",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I001",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I002",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I002",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I003",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I003",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I004",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I004",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I005",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I005",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I006",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I006",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I007",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I007",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I007",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I007",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I008",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I008",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I009",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I009",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I009",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I009",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I010",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I010",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I011",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I011",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I012",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I012",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I012",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I012",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I013",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I013",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I013",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I013",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I014",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I014",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I014",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I014",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I015",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I015",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I016",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I016",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I017",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I017",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I018",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I018",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I019",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I019",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I020",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I020",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I021",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I021",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I022",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I022",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I023",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I023",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I024",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I024",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I025",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I025",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I025",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I025",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I026",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I026",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I027",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I027",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I027",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I027",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I028",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I028",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I029",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I029",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I030",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I030",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I031",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I031",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I031",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I031",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I032",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I032",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I032",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I032",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I033",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I033",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I034",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I034",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I035",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I035",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I036",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I036",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I037",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I037",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I038",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I038",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I039",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I039",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I040",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I040",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I041",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I041",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I042",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I042",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I043",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I043",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I044",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I044",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I045",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I045",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I046",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I046",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I046",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I046",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I047",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I047",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I047",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I047",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I048",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I048",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I048",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I048",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I049",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I049",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I050",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I050",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I051",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I051",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I052",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I052",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I053",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I053",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I054",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I054",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I054",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I054",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I055",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I055",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I055",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I055",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I056",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I056",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I057",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I057",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I058",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I058",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I059",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I059",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I059",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I059",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I060",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I060",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I061",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I061",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I062",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I062",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I063",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I063",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I064",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I064",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I065",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I065",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I066",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I066",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I067",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I067",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I068",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I068",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I069",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I069",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I070",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I070",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I071",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I071",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I071",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I071",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I072",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I072",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I072",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I072",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I073",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I073",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I074",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I074",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I075",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I075",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I075",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I075",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I076",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I076",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I076",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I076",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I077",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I077",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I078",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I078",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I079",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I079",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I080",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I080",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I081",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I081",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I082",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I082",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I083",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I083",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I083",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I083",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I084",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I084",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I085",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I085",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I085",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I085",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I086",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I086",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I086",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I086",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I087",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I087",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I087",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I087",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I088",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I088",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I088",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I088",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I089",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I089",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I090",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I090",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I091",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I091",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I092",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I092",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I093",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I093",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I094",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I094",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I095",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I095",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I096",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I096",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I097",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I097",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I098",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I098",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I099",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I099",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I100",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I100",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I101",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I101",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I102",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I102",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I103",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I103",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I104",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I104",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I105",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I105",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I106",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I106",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I107",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I107",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I108",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I108",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I109",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I109",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I109",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I109",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I110",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I110",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I110",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I110",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I111",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I111",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I111",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I111",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I112",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I112",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I112",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I112",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I113",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I113",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I114",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I114",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I114",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I114",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I115",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I115",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I115",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I115",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I116",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I116",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I116",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I116",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I117",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I117",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I118",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I118",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I119",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I119",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I120",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I120",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I121",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I121",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I122",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I122",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I122",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I122",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I123",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I123",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G1-I123",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G1-I123",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I001",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I001",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I002",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I002",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I002",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I002",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I003",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I003",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I004",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I004",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I005",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I005",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I006",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I006",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I007",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I007",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I008",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I008",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I008",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I008",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I009",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I009",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I010",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I010",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I011",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I011",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I012",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I012",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I013",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I013",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I014",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I014",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I015",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I015",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I016",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I016",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I017",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I017",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I018",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I018",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I019",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I019",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I020",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I020",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I021",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I021",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I022",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I022",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I022",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I022",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I023",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I023",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I024",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I024",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G2-I025",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G2-I025",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I001",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I001",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I002",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I002",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I003",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I003",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I004",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I004",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I005",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I005",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I006",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I006",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I006",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I006",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I007",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I007",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I008",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I008",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I009",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I009",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I010",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I010",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I011",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I011",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I012",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I012",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I013",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I013",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I014",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I014",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I015",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I015",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I016",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I016",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I017",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I017",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G3-I018",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G3-I018",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I001",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I001",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I002",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I002",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I003",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I003",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I003",
+    "classification_code": "SPECIAL_MANAGEMENT_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I003",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I004",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I004",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I005",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I005",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I006",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I006",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I007",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I007",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I008",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I008",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I009",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I009",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I010",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I010",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I011",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I011",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I012",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I012",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I013",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I013",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I014",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I014",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  },
+  {
+    "material_key": "ISHL-RULE-APP12-G4-I015",
+    "classification_code": "MANAGED_HAZARDOUS_SUBSTANCE",
+    "source_ref": "law_appendix:c30fab34-43e9-42a6-9393-9d041fc6d2d2#G4-I015",
+    "source_version": "2025-12-01_00454",
+    "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+    "active": true
+  }
+]

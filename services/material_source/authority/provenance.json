@@ -1,0 +1,59 @@
+{
+  "SOURCE_SYSTEM": "LEG_LAW_CORPUS",
+  "SOURCE_OBJECT": [
+    {
+      "classification_codes": [
+        "MANAGED_HAZARDOUS_SUBSTANCE",
+        "SPECIAL_MANAGEMENT_SUBSTANCE"
+      ],
+      "law_name": "산업안전보건기준에 관한 규칙",
+      "law_id": "0f62d48d-7061-423a-a87f-1f05b7a4b5f2",
+      "law_key": "007363_273603",
+      "law_mst_no": "280187",
+      "law_version_id": "aa8993de-579a-44bd-914d-0f727d38fa9d",
+      "version_no": "2025-12-01_00454",
+      "enforcement_date": "2025-12-01",
+      "appendix_id": "c30fab34-43e9-42a6-9393-9d041fc6d2d2",
+      "appendix_no": "별표 12",
+      "appendix_title": "관리대상 유해물질의 종류(제420조, 제439조 및 제440조 관련)",
+      "source_hash": "2ceca7d96cbc07926368836d21d9c290626c59c931fa4b8322f25b69afe02eba",
+      "source_text_chars": 19554,
+      "source_text_bytes": 23456,
+      "identity_rule": "ISHL-RULE-APP12-G{group_no}-I{item_no:03d}"
+    },
+    {
+      "classification_codes": [
+        "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE"
+      ],
+      "law_name": "산업안전보건법 시행령",
+      "law_id": "5562eb48-01d9-4d53-9a8a-1018e79b34c0",
+      "law_key": "003786_288347",
+      "law_mst_no": "288347",
+      "law_version_id": "1fa1f5af-3575-461d-8d8c-4389d0e128d8",
+      "version_no": "2026-07-28_36540",
+      "enforcement_date": "2026-08-01",
+      "article_id": "1d70c88a-0555-4df7-90ca-6e618ac3b74a",
+      "article_no": 88,
+      "article_internal_key": "0088001",
+      "article_title": "허가 대상 유해물질",
+      "pointer_rule_article": "산업안전보건기준에 관한 규칙 제452조 → 영 제88조",
+      "version_raw_hash": "cad29f9ced2ad1ff5da9b9b18d3b38b7972aae9c972ee4c97a4f031f6844b1cd",
+      "identity_rule": "ISHL-ENF-ART88-{item_internal_key without trailing dot}"
+    }
+  ],
+  "SOURCE_IDENTITY_RULE": "material_key is derived only from source item identity (appendix group+item or law_item_internal_key). material_name / display_name is never used as identity.",
+  "SOURCE_PROVENANCE": "Existing LEG approved law corpus (project wrfcedzgdrfupenzqhur). No new web legal search. Mixture/residual/ministerial-list rows are not named materials. SPECIAL membership is only the explicit in-list marker (특별관리물질) after mechanical wrap-join; conditional notes are not SPECIAL.",
+  "FORBIDDEN_AUTHORITY": [
+    "has_hazardous_material",
+    "has_chemical_substance",
+    "factories.hazardous_material",
+    "factories.is_hazardous_material",
+    "material_category_code",
+    "material_name substring",
+    "kosha_safety_materials",
+    "master_dangerous_goods",
+    "system_codes",
+    "LLM",
+    "fuzzy matching"
+  ]
+}
