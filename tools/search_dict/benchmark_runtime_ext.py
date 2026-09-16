@@ -295,16 +295,15 @@ def main(out_dir):
                 updated.append(f"{parts[0]}\t0\ttop3\tN/A\t-\tNO_CASES\tMEASURED (extension)")
             else:
                 val = t3 / n
-                # Draft gates (WO §T4): MORPH/COMPOUND >=0.95, TYPO/TRIGRAM >=0.90.
-                # Per WO §T4 last line, hold PASS/FAIL when gates are draft; emit
-                # PROVISIONAL so the owner sees the measured value + draft gate
-                # without a premature verdict.
-                thr = 0.95 if parts[0] in ("MORPHOLOGY", "COMPOUND_NOUN") else 0.90
+                # Confirmed gates (owner-fixed): MORPH/COMPOUND >=0.95,
+                # TYPO/TRIGRAM >=0.85.
+                thr = 0.95 if parts[0] in ("MORPHOLOGY", "COMPOUND_NOUN") else 0.85
                 delta = val - thr
+                verdict = "PASS" if val >= thr else "FAIL"
                 marker = "+" if delta >= 0 else ""
                 updated.append(
-                    f"{parts[0]}\t{n}\ttop3\t{val:.4f}\t>={thr:.2f} (draft)\t"
-                    f"PROVISIONAL({marker}{delta:.4f})\tMEASURED (extension)"
+                    f"{parts[0]}\t{n}\ttop3\t{val:.4f}\t>={thr:.2f}\t"
+                    f"{verdict}({marker}{delta:.4f})\tMEASURED (extension)"
                 )
         else:
             updated.append(line)
