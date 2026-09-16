@@ -15,8 +15,8 @@ def test_pressure_vessel_exact_fields_in_allowlist():
     assert "has_pressure_vessel" in _LEG_INPUT_FIELDS
     for name in PV_NEW:
         assert name in _LEG_INPUT_FIELDS, name
-    assert len(_LEG_INPUT_FIELDS) == 186
-    assert len(set(_LEG_INPUT_FIELDS)) == 186
+    assert len(_LEG_INPUT_FIELDS) == 193
+    assert len(set(_LEG_INPUT_FIELDS)) == 193
 
 
 def test_has_pressure_vessel_does_not_infer_new_facts():

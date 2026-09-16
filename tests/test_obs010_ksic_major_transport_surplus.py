@@ -28,8 +28,8 @@ def test_ksic_major_removed_from_leg_transport_allowlist():
     assert "ksic_name" not in _LEG_INPUT_FIELDS
     assert "business_type" not in _LEG_INPUT_FIELDS
     assert "process_type" not in _LEG_INPUT_FIELDS
-    assert len(_LEG_INPUT_FIELDS) == 186
-    assert len(set(_LEG_INPUT_FIELDS)) == 186
+    assert len(_LEG_INPUT_FIELDS) == 193
+    assert len(set(_LEG_INPUT_FIELDS)) == 193
     assert _CONTEXT_FIELDS == ("sector",)
 
 
