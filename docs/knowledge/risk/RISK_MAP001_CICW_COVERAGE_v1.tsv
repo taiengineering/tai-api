@@ -1,0 +1,14 @@
+bucket	count	note
+CIC_W_TOTAL_NODES	1722	risk_source_nodes count for source_id=CIC_W
+MAPPING_PROPOSED	1139	OWNER_APPROVED_CONCEPT_MEMBERSHIP → EXACT_EQUIVALENT / PROPOSED
+UNIQUE_SOURCE_KEYS	1139	one source key maps to exactly one canonical target
+CANONICAL_TARGETS_COVERED	1110	of 1110 DRAFT canonical rows
+PROMOTED_TARGETS	1082	1082 mapping rows (1:1)
+MERGED_TARGETS	28	57 mapping rows (N:1)
+UNMAPPED_HOLD_LABEL	1	source_key=673; semantic label HOLD, not NO_MATCH
+SEMANTIC_EXCLUSIONS	582	carried forward from RISK04_PREAPPROVAL_EXCLUSIONS_v1.tsv
+ACCOUNTING_SUM	1722	MAPPING + HOLD + EXCLUSIONS = CIC_W total
+OVERLAP_EXCLUSIONS_VS_MAPPING	0	no source_key appears in both
+KOSHA_MAPPING	0	out of scope in WO-RISK-MAP-001
+KALIS_MAPPING	0	out of scope in WO-RISK-MAP-001
+PRODUCTION_MAPPING_WRITE	0	immutable proposal freeze only
