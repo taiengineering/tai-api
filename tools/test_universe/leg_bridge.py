@@ -749,7 +749,7 @@ def profile_to_leg_request(
                     mapping_type=PRODUCTION_ADAPTER,
                     production_normalizer=(
                         "_build_unified_step1_body seeds _LEG_CODE_TO_CONSUMER consumer keys "
-                        "then promotes to 103 canonical (has_chemical / has_high_place_work)"
+                        "then promotes remaining approved alias (has_chemical)"
                     ),
                     loss="0",
                     evidence="clients.leg_runtime_client._LEG_CODE_TO_CONSUMER (WO-E2E-SEM-001 approved alias)",

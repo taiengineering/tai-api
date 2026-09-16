@@ -59,8 +59,12 @@ def run_safe_construction_leg(supabase, site_id: str, consumer_input) -> Dict[st
     #    source_facts 는 상한 없이 전량 전달하고 build_saas_leg_step1 이 _LEG_INPUT_FIELDS(103) 로
     #    필터한다. R8 축 등 source 에 값이 있으면 배선 상한 없이 build_facility 에 도달.
     #    construction_type synthetic 은 SaaS 에서 새로 만들지 않음 — source 있으면 전달, 없으면 ABSENT.
+    from services.work_source.store import load_work_rows_optional
     step1 = build_saas_leg_step1(
-        sector="CONSTRUCTION", source_facts=values, factory_id=factory_id,
+        sector="CONSTRUCTION",
+        source_facts=values,
+        factory_id=factory_id,
+        work_rows=load_work_rows_optional(supabase, factory_id),
     )
 
     # D. 공식 Runtime Delegate 1회 (direct evaluate_rtm / master_building_legal_rules / v510 미사용).

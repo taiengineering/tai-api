@@ -24,6 +24,7 @@ class _Q:
     def select(s, *a, **k): return s
     def eq(s, col, val): s._f[col] = val; return s
     def limit(s, n): return s
+    def order(s, *a, **k): return s
     def insert(s, *a, **k): s.c["writes"] += 1; return s
     def update(s, *a, **k): s.c["writes"] += 1; return s
     def delete(s, *a, **k): s.c["writes"] += 1; return s
