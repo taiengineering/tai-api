@@ -163,6 +163,8 @@ jobs:
         run: pytest tests/test_risk04_materialize001_approved_canonical_draft.py -q --tb=short
       - name: OBJ-RISK RISK-04 RECOVERY-001 parent amendment schema bootstrap
         run: pytest tests/test_risk04_recovery001_parent_amendment.py -q --tb=short
+      - name: OBJ-RISK RISK-04 APPROVE-002 parent amendment binding
+        run: pytest tests/test_risk04_approve002_parent_amendment.py -q --tb=short
       - name: KOSHA GUIDE sync tests
         run: pytest tests/test_kosha_guide_sync.py -q --tb=short
 
