@@ -215,7 +215,9 @@ def main(out_dir):
                 "display_name": c["subject_key"],
                 "matched_term": c["matched_term"],
                 "match_type": c["match_type"],
-                "score": search_core.MATCH_SCORE["TOKEN"] + c["overlap"],
+                # TokenTier now returns a composite score (overlap + substring
+                # bonus, WO-2 R2). Use it directly instead of overlap.
+                "score": search_core.MATCH_SCORE["TOKEN"] + c.get("score", c["overlap"]),
             })
             seen.add(key)
         exacts.sort(key=lambda x: (-x["score"], x["subject_key"]))

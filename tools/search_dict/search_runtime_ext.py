@@ -40,16 +40,29 @@ class TokenTier:
         # subject_key_full -> set of tokens (from APPROVED surfaces)
         self._subject_tokens: dict[str, set[str]] = {}
         self._subject: dict[str, dict] = {}
+        # WO-2 R1/R2: also index a "compact" form of each subject (subject_key +
+        # each APPROVED surface with whitespace stripped). Used for the ordered-
+        # noun-concat substring boost — this rescues cases where Kiwi bundles a
+        # bare compound differently than its spaced/inflected form (e.g.,
+        # "근로기준법" → {기준법, 근로} but "근로기준법을" → {근로, 기준, 법}).
+        self._subject_compacts: dict[str, set[str]] = {}
         for s in projection.get("subjects", []):
             skf = f"{s['subject_type']}::{s['subject_key']}"
             self._subject[skf] = s
             toks: set[str] = set()
+            compacts: set[str] = set()
+            compacts.add(s["subject_key"].replace(" ", ""))
             for t in s["terms"]:
                 if t.get("non_production"):
                     continue
                 toks |= self._noun_tokens(t["term_normalized"])
+                compacts.add(t["term_compact"])
+                np = t.get("term_no_punctuation")
+                if np:
+                    compacts.add(np)
             if toks:
                 self._subject_tokens[skf] = toks
+            self._subject_compacts[skf] = {c for c in compacts if c}
 
     def _noun_tokens(self, s: str) -> set[str]:
         r = self.kiwi.analyze(s, top_n=1)
@@ -58,21 +71,50 @@ class TokenTier:
         toks, _score = r[0]
         return {t.form for t in toks if t.tag in KIWI_NOUN_TAGS}
 
+    def _noun_concat(self, s: str) -> str:
+        """Concatenate noun tokens in analysis order (particles stripped)."""
+        r = self.kiwi.analyze(s, top_n=1)
+        if not r:
+            return ""
+        toks, _score = r[0]
+        return "".join(t.form for t in toks if t.tag in KIWI_NOUN_TAGS)
+
     def candidates(self, query: str, min_overlap: int = 1):
         qt = self._noun_tokens(query)
         if not qt:
             return []
-        # rank by (overlap desc, subject_key asc) — deterministic
+        qc = self._noun_concat(query)  # e.g., "근로기준법을" -> "근로기준법"
+        # rank by (score desc, subject_key asc) — deterministic. Score = overlap
+        # + bonus if qc is a substring of, or equal to, any subject compact.
         hits = []
         for skf, toks in self._subject_tokens.items():
             overlap = len(qt & toks)
-            if overlap >= min_overlap:
-                # jaccard(0..1) as an explainability signal
+            substr_bonus = 0.0
+            if qc:
+                for c in self._subject_compacts.get(skf, ()):
+                    if qc == c:
+                        # Equal-compact match is a near-canonical signal; must
+                        # dominate mere overlap counts within the TOKEN tier so
+                        # e.g. `근로기준법을` (qc=`근로기준법`) resolves to
+                        # `근로기준법` not `근로기준법 시행규칙`.
+                        substr_bonus = 10.0
+                        break
+                    if qc in c or c in qc:
+                        # Length-ratio guard: reject tiny-fragment substring
+                        # coincidences (e.g., subject `법` inside query
+                        # `화학물리법` → 1/5=20%). TOKEN tier is for
+                        # morphology/compound, not general fuzzy — leave that
+                        # to TRIGRAM. Require at least 40% length ratio.
+                        short, long = (c, qc) if len(c) < len(qc) else (qc, c)
+                        if len(short) / max(len(long), 1) >= 0.40:
+                            substr_bonus = max(substr_bonus, 2.0)
+            score = overlap + substr_bonus
+            if score >= min_overlap and (overlap or substr_bonus):
                 jac = overlap / len(qt | toks) if (qt or toks) else 0.0
-                hits.append((overlap, jac, skf))
-        hits.sort(key=lambda x: (-x[0], -x[1], x[2]))
+                hits.append((score, overlap, jac, skf))
+        hits.sort(key=lambda x: (-x[0], -x[2], x[3]))
         out = []
-        for overlap, jac, skf in hits:
+        for score, overlap, jac, skf in hits:
             s = self._subject[skf]
             out.append({
                 "subject_type": s["subject_type"],
@@ -81,6 +123,7 @@ class TokenTier:
                 "match_type": "TOKEN",
                 "overlap": overlap,
                 "jaccard": jac,
+                "score": score,
             })
         return out
 
@@ -107,6 +150,13 @@ class TrigramTier:
         self._subject_by_surface: dict[str, dict] = {}
         self._prepare(projection)
 
+    # Tuning (WO-2 R2): widen indexed surfaces (normalized + compact + no_punctuation)
+    # so a query with spacing/punctuation differences can still hit; lower per-query
+    # threshold so short-Korean typos (2-3 char words) survive; keep post-filter as a
+    # relevance floor so noise doesn't outrank real matches at rerank time.
+    DEFAULT_MIN_SIM = 0.15
+    PG_TRGM_THRESHOLD = 0.10
+
     def _prepare(self, projection: dict) -> None:
         rows = []
         for s in projection.get("subjects", []):
@@ -114,12 +164,17 @@ class TrigramTier:
             for t in s["terms"]:
                 if t.get("non_production"):
                     continue
-                surface = t["term_normalized"]
-                rows.append((surface, s["subject_type"], s["subject_key"]))
-                self._subject_by_surface[surface] = {
-                    "subject_type": s["subject_type"],
-                    "subject_key": s["subject_key"],
-                }
+                # Include all 3 surface forms; dedup happens at PK. Same subject may
+                # thus contribute up to 3 rows -> more forgiving trigram recall.
+                for surface in (t["term_normalized"], t["term_compact"],
+                                t.get("term_no_punctuation")):
+                    if not surface:
+                        continue
+                    rows.append((surface, s["subject_type"], s["subject_key"]))
+                    self._subject_by_surface[surface] = {
+                        "subject_type": s["subject_type"],
+                        "subject_key": s["subject_key"],
+                    }
         with self._psycopg.connect(self.dsn) as conn, conn.cursor() as cur:
             cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
             cur.execute("""
@@ -142,29 +197,44 @@ class TrigramTier:
             conn.commit()
         self._nrows = len(rows)
 
-    def candidates(self, query: str, limit: int = 5, min_sim: float = 0.3):
+    def candidates(self, query: str, limit: int = 5, min_sim: float | None = None):
+        if min_sim is None:
+            min_sim = self.DEFAULT_MIN_SIM
         with self._psycopg.connect(self.dsn) as conn, conn.cursor() as cur:
+            # Lower pg_trgm threshold for this session so `%` returns more candidates;
+            # then we rank by similarity DESC and post-filter with min_sim. `SET` does
+            # not accept placeholders → use set_config().
+            cur.execute("SELECT set_config('pg_trgm.similarity_threshold', %s, false)",
+                        (str(self.PG_TRGM_THRESHOLD),))
             cur.execute(
                 "SELECT surface, subject_type, subject_key, "
                 "similarity(surface, %s) AS sim "
                 "FROM tai_search_surfaces_scratch "
                 "WHERE surface %% %s "
                 "ORDER BY sim DESC, surface ASC LIMIT %s",
-                (query, query, limit),
+                (query, query, limit * 3),  # oversample to survive dedup
             )
             rows = cur.fetchall()
-        out = []
+        # dedup by subject: keep best-similarity row per subject
+        best: dict[tuple, tuple] = {}
         for surface, subject_type, subject_key, sim in rows:
             if float(sim) < min_sim:
                 continue
-            out.append({
+            key = (subject_type, subject_key)
+            cur_best = best.get(key)
+            if cur_best is None or float(sim) > cur_best[3]:
+                best[key] = (surface, subject_type, subject_key, float(sim))
+        ordered = sorted(best.values(), key=lambda r: (-r[3], r[2]))[:limit]
+        return [
+            {
                 "subject_type": subject_type,
                 "subject_key": subject_key,
                 "matched_term": surface,
                 "match_type": "TRIGRAM",
-                "similarity": float(sim),
-            })
-        return out
+                "similarity": sim,
+            }
+            for (surface, subject_type, subject_key, sim) in ordered
+        ]
 
 
 def build_from_projection_path(

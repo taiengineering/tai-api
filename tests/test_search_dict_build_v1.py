@@ -33,11 +33,11 @@ GOLDEN_BY_SEED = {
     },
     "seed_v2": {
         "TAI_TERM_MASTER_v1.tsv":
-            "236b3288fda16662bb5cdb1cad096e2e48ad97fb9800b1645241369591f7cb6c",
+            "a906b95aa66a014601978ade18a1f1ef541c0cb96727070cfec1b6c66082d422",
         "TAI_TERM_RELATIONS_v1.tsv":
             "2395054b487303ac455f66fc6f753fdf93e97b442463a61dc490558a4349b444",
         "TAI_SEARCH_RUNTIME_PROJECTION_v1.json":
-            "104f04bb96b2b708dfd734fc73519b59bbc0f24525f7a90ba089a18e5edf0ace",
+            "4c1c7bb9bceafd8ccd700b2c130060d32776dbec1f7523f8ece0aeaf9f6677e1",
         "TAI_KIWI_TERMS_v1.tsv":
             "20e48580904e769a1d1473673459de39c2cd6e4a91979534cea17df6101a07e6",
         "TAI_KIWI_USER_DICTIONARY_v1.txt":

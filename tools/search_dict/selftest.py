@@ -41,7 +41,11 @@ CASES = [
     ("NORMALIZED_EXACT", "산업안전보건법시행령", "산업안전보건법 시행령", "NORMALIZED_EXACT"),
     ("NORMALIZED_EXACT", "산업안전보건법  시행령", "산업안전보건법 시행령", None),
     ("GATE_REVIEWED_EXCLUDED", "LEV", None, None),
-    ("COMPACT_VIA_APPROVED_VARIANT", "국소배기장치", "국소배기장치", "NORMALIZED_EXACT"),
+    # NOTE: seed_v1 has 국소배기장치 as APPROVED SPACING_VARIANT (subject 국소배기장치),
+    # so "국소배기장치" matches via NORMALIZED_EXACT. seed_v2 (post WO-2 R1) also
+    # has the compact form as APPROVED SEARCH_PHRASE, so it matches via EXACT.
+    # Accept either — both resolve to the same subject.
+    ("COMPACT_VIA_APPROVED_VARIANT", "국소배기장치", "국소배기장치", None),
     ("NO_MATCH", "zxqw없는검색어123", None, None),
 ]
 
