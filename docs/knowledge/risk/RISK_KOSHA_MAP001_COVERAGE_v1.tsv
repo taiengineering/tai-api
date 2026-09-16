@@ -1,0 +1,18 @@
+bucket	count	note
+KOSHA_TOTAL_NODES	787	PROJECT_KIND + WORK_TYPE + DETAIL_PROCESS
+PROJECT_KIND_CONTEXT_ONLY	6	not a mapping target
+WORK_TYPE_CONTEXT_ONLY	161	not a mapping target
+DETAIL_PROCESS_REVIEW_UNIVERSE	620	620 review rows in this WO
+RAW_LEAF_OCCURRENCES	626	must equal 626 (KOSHA raw source rows)
+PATH_IDENTITIES	620	unique DETAIL_PROCESS identities preserved
+IDENTITY_STATUS	HOLD	frozen from RISK-02; not lifted by this WO
+DUPLICATE_OCCURRENCE_GROUPS	3	leaf identities with occurrence_count > 1
+DUPLICATE_RAW_EXTRAS	6	extra raw rows collapsed onto duplicate identities
+EXACT_NAME_SOURCE_HITS	12	unique canonical TASK by name_normalized
+NO_EXACT_NAME_ROWS	608	SEMANTIC_SEARCH_REQUIRED — NOT NO_MATCH
+MULTI_TARGET_EXACT_NAME_AMBIGUITY	0	0 by frozen production canonical anchor
+SEMANTIC_DECISIONS	0	deferred to GPT semantic review WO
+APPROVED_DECISIONS	0	no owner mapping approval yet
+NO_MATCH_DECISIONS	0	cannot be assigned mechanically
+PRODUCTION_KOSHA_MAPPINGS	0	no DB write in this WO
+EXACT_NAME_FAMILIES	발파=6;콘크리트양생=6	candidate evidence only — same name != EXACT_EQUIVALENT
