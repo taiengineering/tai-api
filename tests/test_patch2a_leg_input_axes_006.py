@@ -59,6 +59,93 @@ def test_U7_none_and_blank_omitted():
     assert fac["has_object_drop"] is True
 
 
+OBS009A_NEW7 = [
+    "performs_confined_space_work",
+    "confined_space_has_always_on_supply_exhaust_ventilation",
+    "oxygen_deficiency_or_hazardous_gas_fall_risk",
+    "oxygen_deficiency_or_hazardous_gas_asphyxiation_fire_or_explosion_risk",
+    "confined_space_work_with_exposed_live_parts_in_manhole_or_basement",
+    "work_in_basement_or_pit_with_piping_through_confined_space",
+    "performs_confined_space_rescue_work",
+]
+OBS009A_DETAILS = OBS009A_NEW7[1:]
+OBS009A_EXCEPTION = (
+    "confined_space_ventilation_impracticable_due_to_explosion_oxidation_or_work_nature"
+)
+
+
+def test_obs009a_T1_all_true_passthrough():
+    inp = {name: True for name in OBS009A_NEW7}
+    fac = build_facility(DiagnoseStep1Body(sector="CONSTRUCTION", input=inp))
+    for name in OBS009A_NEW7:
+        assert fac[name] is True, name
+    assert OBS009A_EXCEPTION not in fac
+
+
+def test_obs009a_T2_false_preservation():
+    inp = {name: False for name in OBS009A_NEW7}
+    fac = build_facility(DiagnoseStep1Body(sector="CONSTRUCTION", input=inp))
+    for name in OBS009A_NEW7:
+        assert name in fac, name
+        assert fac[name] is False, name
+
+
+def test_obs009a_T3_location_does_not_synthesize_work():
+    fac = build_facility(DiagnoseStep1Body(
+        sector="CONSTRUCTION",
+        input={"has_confined_space": True},
+    ))
+    assert fac["has_confined_space"] is True
+    assert "performs_confined_space_work" not in fac
+    for name in OBS009A_DETAILS:
+        assert name not in fac, name
+
+
+def test_obs009a_T4_work_does_not_synthesize_detail():
+    fac = build_facility(DiagnoseStep1Body(
+        sector="CONSTRUCTION",
+        input={
+            "has_confined_space": True,
+            "performs_confined_space_work": True,
+        },
+    ))
+    assert fac["has_confined_space"] is True
+    assert fac["performs_confined_space_work"] is True
+    for name in OBS009A_DETAILS:
+        assert name not in fac, name
+
+
+def test_obs009a_T5_one_detail_stays_one_detail():
+    fac = build_facility(DiagnoseStep1Body(
+        sector="CONSTRUCTION",
+        input={
+            "has_confined_space": True,
+            "performs_confined_space_work": True,
+            "oxygen_deficiency_or_hazardous_gas_fall_risk": True,
+        },
+    ))
+    assert fac["has_confined_space"] is True
+    assert fac["performs_confined_space_work"] is True
+    assert fac["oxygen_deficiency_or_hazardous_gas_fall_risk"] is True
+    for name in OBS009A_DETAILS:
+        if name == "oxygen_deficiency_or_hazardous_gas_fall_risk":
+            continue
+        assert name not in fac, name
+
+
+def test_obs009a_T6_unregistered_exception_no_passthrough():
+    fac = build_facility(DiagnoseStep1Body(
+        sector="CONSTRUCTION",
+        input={
+            "has_confined_space": True,
+            OBS009A_EXCEPTION: True,
+        },
+    ))
+    assert fac["has_confined_space"] is True
+    assert OBS009A_EXCEPTION not in _LEG_INPUT_FIELDS
+    assert OBS009A_EXCEPTION not in fac
+
+
 def test_U8_complete_input_regression_existing_keys():
     base = {
         "has_scaffold": True,

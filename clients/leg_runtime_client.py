@@ -287,6 +287,15 @@ _LEG_INPUT_FIELDS = (
     "is_appendix3_1_27", "is_appendix3_28_48",
     "is_appendix3_item_37", "is_appendix3_item_40",
     "is_real_estate_management",
+    # OBS009-A confined-space exact canonical facts.
+    # No alias / derive / parent->detail expansion.
+    "performs_confined_space_work",
+    "confined_space_has_always_on_supply_exhaust_ventilation",
+    "oxygen_deficiency_or_hazardous_gas_fall_risk",
+    "oxygen_deficiency_or_hazardous_gas_asphyxiation_fire_or_explosion_risk",
+    "confined_space_work_with_exposed_live_parts_in_manhole_or_basement",
+    "work_in_basement_or_pit_with_piping_through_confined_space",
+    "performs_confined_space_rescue_work",
 )
 
 # WO-FIX-BUILDFACILITY-SECTOR-GATE-001: WIRING-016 append BUILDING N1 raw primitive 32축.
