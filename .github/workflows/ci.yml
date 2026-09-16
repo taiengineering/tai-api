@@ -145,6 +145,8 @@ jobs:
         run: pytest tests/test_risk04_review010_candidate_universe.py -q --tb=short
       - name: OBJ-RISK RISK-04 REVIEW-011 hierarchy-label-search readiness
         run: pytest tests/test_risk04_review011_hierarchy_label_search_readiness.py -q --tb=short
+      - name: OBJ-RISK RISK-04 REVIEW-013 semantic resolution freeze
+        run: pytest tests/test_risk04_review013_resolution_freeze.py -q --tb=short
       - name: KOSHA GUIDE sync tests
         run: pytest tests/test_kosha_guide_sync.py -q --tb=short
 
