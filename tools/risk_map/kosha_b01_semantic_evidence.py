@@ -180,24 +180,46 @@ def _tokens(value: str) -> tuple[str, ...]:
 # ---------------------------------------------------------------------------
 
 
-def _load_gpt_pack_b01() -> list[dict]:
+def load_gpt_pack_batch(
+    batch_no: str,
+    expected_rows: int,
+    expected_exact: int,
+    expected_semantic: int,
+) -> list[dict]:
+    """Load one batch from the frozen GPT review pack. Shared across B01..B07."""
     all_rows = load_tsv(GPT_REVIEW_PACK_PATH)
     if universe_sha(all_rows, *GPT_REVIEW_PACK_FIELDS) != FROZEN_GPT_REVIEW_PACK_SHA:
         raise SystemExit("GPT_REVIEW_PACK_SHA_DRIFT")
-    b01 = [r for r in all_rows if r["batch_no"] == BATCH_ID]
-    if len(b01) != EXPECTED_B01_ROWS:
-        raise SystemExit(f"B01_ROW_COUNT_DRIFT {len(b01)}")
-    if len({r["review_key"] for r in b01}) != EXPECTED_B01_ROWS:
-        raise SystemExit("B01_REVIEW_KEY_DUPLICATE")
-    if len({r["source_key"] for r in b01}) != EXPECTED_B01_ROWS:
-        raise SystemExit("B01_SOURCE_KEY_DUPLICATE")
-    exact = sum(1 for r in b01 if r["candidate_class"] == "EXACT_NAME_CANDIDATE")
-    semantic = sum(1 for r in b01 if r["candidate_class"] == "SEMANTIC_SEARCH_REQUIRED")
-    if exact != EXPECTED_EXACT_NAME_ROWS:
-        raise SystemExit(f"B01_EXACT_NAME_COUNT_DRIFT {exact}")
-    if semantic != EXPECTED_SEMANTIC_SEARCH_ROWS:
-        raise SystemExit(f"B01_SEMANTIC_SEARCH_COUNT_DRIFT {semantic}")
-    return b01
+    batch = [r for r in all_rows if r["batch_no"] == batch_no]
+    if len(batch) != expected_rows:
+        raise SystemExit(f"{batch_no}_ROW_COUNT_DRIFT {len(batch)}")
+    if len({r["review_key"] for r in batch}) != expected_rows:
+        raise SystemExit(f"{batch_no}_REVIEW_KEY_DUPLICATE")
+    if len({r["source_key"] for r in batch}) != expected_rows:
+        raise SystemExit(f"{batch_no}_SOURCE_KEY_DUPLICATE")
+    exact = sum(1 for r in batch if r["candidate_class"] == "EXACT_NAME_CANDIDATE")
+    semantic = sum(1 for r in batch if r["candidate_class"] == "SEMANTIC_SEARCH_REQUIRED")
+    if exact != expected_exact:
+        raise SystemExit(f"{batch_no}_EXACT_NAME_COUNT_DRIFT {exact}")
+    if semantic != expected_semantic:
+        raise SystemExit(f"{batch_no}_SEMANTIC_SEARCH_COUNT_DRIFT {semantic}")
+    for r in batch:
+        if r["source_id"] != "KOSHA_CONSTRUCTION_PROCESS":
+            raise SystemExit(f"{batch_no}_SCOPE_VIOLATION_SOURCE_ID")
+        if r["source_identity_status"] != "HOLD":
+            raise SystemExit(f"{batch_no}_SCOPE_VIOLATION_IDENTITY_STATUS")
+        if r["canonical_kind_required"] != "TASK":
+            raise SystemExit(f"{batch_no}_SCOPE_VIOLATION_CANONICAL_KIND")
+    return batch
+
+
+def _load_gpt_pack_b01() -> list[dict]:
+    return load_gpt_pack_batch(
+        BATCH_ID,
+        EXPECTED_B01_ROWS,
+        EXPECTED_EXACT_NAME_ROWS,
+        EXPECTED_SEMANTIC_SEARCH_ROWS,
+    )
 
 
 def _load_canonical_receipt() -> list[dict]:
@@ -390,13 +412,23 @@ def _preserve_exact_first(candidates: list[dict], forced_canonical_id: str) -> l
     return exact + others
 
 
-def build_b01_evidence() -> tuple[list[dict], list[dict]]:
-    b01 = _load_gpt_pack_b01()
+def build_batch_evidence(
+    batch_no: str,
+    expected_rows: int,
+    expected_exact: int,
+    expected_semantic: int,
+) -> tuple[list[dict], list[dict]]:
+    """Shared deterministic retrieval engine for KOSHA batch evidence packs.
+
+    Same mechanical semantics as B01 — no LLM, no fuzzy, no embedding, no
+    synonym expansion. Returns (evidence_rows, canonical_task_reference_rows).
+    """
+    batch = load_gpt_pack_batch(batch_no, expected_rows, expected_exact, expected_semantic)
     reference_rows = build_canonical_task_reference()
     canonical_index = _canonical_index(reference_rows)
 
     out: list[dict] = []
-    for row in b01:
+    for row in batch:
         src = _build_source(row)
         scored: list[dict] = []
         for canonical in canonical_index:
@@ -472,6 +504,16 @@ def build_b01_evidence() -> tuple[list[dict], list[dict]]:
 
     out.sort(key=lambda r: (r["review_key"],))
     return out, reference_rows
+
+
+def build_b01_evidence() -> tuple[list[dict], list[dict]]:
+    """B01-frozen thin wrapper. Preserves the B01 SHA regression."""
+    return build_batch_evidence(
+        BATCH_ID,
+        EXPECTED_B01_ROWS,
+        EXPECTED_EXACT_NAME_ROWS,
+        EXPECTED_SEMANTIC_SEARCH_ROWS,
+    )
 
 
 def b01_evidence_sha(rows: list[dict]) -> str:
