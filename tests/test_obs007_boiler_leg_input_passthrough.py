@@ -15,8 +15,8 @@ def test_boiler_exact_fields_in_allowlist():
     assert "has_gas_boiler_heating_system" in _LEG_INPUT_FIELDS
     for name in BOILER_REROUTE:
         assert name in _LEG_INPUT_FIELDS, name
-    assert len(_LEG_INPUT_FIELDS) == 202
-    assert len(set(_LEG_INPUT_FIELDS)) == 202
+    assert len(_LEG_INPUT_FIELDS) == 205
+    assert len(set(_LEG_INPUT_FIELDS)) == 205
 
 
 def test_has_boiler_does_not_infer_reroute_facts():

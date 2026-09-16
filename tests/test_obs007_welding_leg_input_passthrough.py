@@ -30,8 +30,8 @@ def test_welding_detail_fields_in_allowlist():
     assert "has_high_pressure_work" in _LEG_INPUT_FIELDS
     for name in WELDING_DETAILS:
         assert name in _LEG_INPUT_FIELDS, name
-    assert len(_LEG_INPUT_FIELDS) == 202
-    assert len(set(_LEG_INPUT_FIELDS)) == 202
+    assert len(_LEG_INPUT_FIELDS) == 205
+    assert len(set(_LEG_INPUT_FIELDS)) == 205
 
 
 def test_has_welding_does_not_infer_details():

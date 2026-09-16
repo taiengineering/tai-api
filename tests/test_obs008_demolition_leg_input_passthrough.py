@@ -15,8 +15,8 @@ def test_demolition_exact_fields_in_allowlist():
     assert "has_demolition" in _LEG_INPUT_FIELDS
     for name in DEMO_NEW:
         assert name in _LEG_INPUT_FIELDS, name
-    assert len(_LEG_INPUT_FIELDS) == 202
-    assert len(set(_LEG_INPUT_FIELDS)) == 202
+    assert len(_LEG_INPUT_FIELDS) == 205
+    assert len(set(_LEG_INPUT_FIELDS)) == 205
 
 
 def test_has_demolition_does_not_infer_new_facts():

@@ -51,11 +51,17 @@ def run_safe_industrial_leg(supabase, factory_id: str, consumer_input) -> Dict[s
     #    전량 전달하고 build_saas_leg_step1 이 _LEG_INPUT_FIELDS(103) 로 필터한다. R1 축 등
     #    source 에 값이 있으면 배선 상한 없이 build_facility 에 도달, 없으면 ABSENT/UNRESOLVED 유지.
     from services.work_source.store import load_work_rows_optional
+    from services.material_source.store import load_factory_material_rows_optional
     step1 = build_saas_leg_step1(
         sector="INDUSTRIAL",
         source_facts=values,
         factory_id=factory_id,
         work_rows=load_work_rows_optional(supabase, factory_id),
+        # WO-OBS009-MATERIAL-CANONICAL-RUNTIME-WIRING-PATCH-001: Common Material canonical
+        # adapter feeds is_managed_/is_permit_required_/is_special_management_hazardous_substance
+        # into the LEG input bag. READ FAILURE != EMPTY SOURCE — MaterialSourceLoadError
+        # propagates fail-closed and LEG is NOT called on material read failure.
+        material_rows=load_factory_material_rows_optional(supabase, factory_id),
     )
 
     # D. 공식 Runtime Delegate 1회 (direct evaluate_rtm / send_industrial_canonical_to_leg 미사용).

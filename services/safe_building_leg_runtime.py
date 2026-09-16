@@ -58,11 +58,18 @@ def run_safe_building_leg(supabase, factory_id: str, consumer_input) -> Dict[str
     #    (has_chemical 승격 스킵 · has_chemical_substance exact-key patch-A 경로 유지) + elevator_count
     #    derived setattr 를 적용한다. build_facility N1 32 sector-gate 는 중앙 로직 그대로.
     from services.work_source.store import load_work_rows_optional
+    from services.material_source.store import load_factory_material_rows_optional
     step1 = build_saas_leg_step1(
         sector="BUILDING",
         source_facts=values,
         factory_id=factory_id,
         work_rows=load_work_rows_optional(supabase, factory_id),
+        # WO-OBS009-MATERIAL-CANONICAL-RUNTIME-WIRING-PATCH-001: Common Material canonical
+        # adapter feeds is_managed_/is_permit_required_/is_special_management_hazardous_substance.
+        # BUILDING has_chemical_substance patch-A path preserved separately (line ~85):
+        # the 3 new canonical booleans are DIFFERENT keys, not aliases; no collapse.
+        # READ FAILURE != EMPTY SOURCE — MaterialSourceLoadError propagates fail-closed.
+        material_rows=load_factory_material_rows_optional(supabase, factory_id),
     )
 
     # D. 공식 Runtime Delegate 1회.
