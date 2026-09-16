@@ -1,4 +1,10 @@
-"""WO-RISK-KOSHA-MAP-001A KOSHA review universe contract tests. No DB required."""
+"""WO-RISK-KOSHA-MAP-001A KOSHA review universe contract tests. No DB required.
+
+Tests that call `ku.build_review_universe()` need the frozen RISK-01 source
+artifacts on disk, which are not committed to the repo. In CI those tests are
+skipped; the committed TSV artifacts are still validated by the
+`test_written_*_when_present` tests and the static-analysis tests.
+"""
 from __future__ import annotations
 
 import ast
@@ -6,8 +12,16 @@ import re
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
+from tools.risk02.ingest001_source_core import artifacts_available
 from tools.risk04.review_decisions import load_tsv
 from tools.risk_map import kosha_map001_review_universe as ku
+
+_requires_artifacts = pytest.mark.skipif(
+    not artifacts_available(),
+    reason="frozen RISK-01 source artifacts required for full plan",
+)
 
 GENERATOR = Path("tools/risk_map/kosha_map001_review_universe.py")
 UNIVERSE_TSV = Path("docs/knowledge/risk/RISK_KOSHA_MAP001_REVIEW_UNIVERSE_v1.tsv")
@@ -43,6 +57,7 @@ def test_expected_census_constants():
     assert ku.BATCH_SIZE == 100
 
 
+@_requires_artifacts
 def test_review_universe_shape_deterministic():
     rows_a, _ = ku.build_review_universe()
     rows_b, _ = ku.build_review_universe()
@@ -50,6 +65,7 @@ def test_review_universe_shape_deterministic():
     assert ku.universe_sha_for_rows(rows_a) == ku.universe_sha_for_rows(rows_b)
 
 
+@_requires_artifacts
 def test_review_universe_census_and_scope():
     rows, _ = ku.build_review_universe()
     assert len(rows) == 620
@@ -76,6 +92,7 @@ def test_review_universe_census_and_scope():
     assert not any(r["source_id"] == "KALIS_RISK_PROFILE" for r in rows)
 
 
+@_requires_artifacts
 def test_exact_name_inventory():
     rows, _ = ku.build_review_universe()
     exact_rows = [r for r in rows if r["candidate_class"] == "EXACT_NAME_CANDIDATE"]
@@ -111,6 +128,7 @@ def test_exact_name_inventory():
         assert r["mapping_method_hint"] == ""
 
 
+@_requires_artifacts
 def test_no_multi_target_ambiguity():
     rows, _ = ku.build_review_universe()
     hits = Counter(
@@ -120,6 +138,7 @@ def test_no_multi_target_ambiguity():
     assert set(hits) <= {0, 1}
 
 
+@_requires_artifacts
 def test_no_premature_decisions():
     rows, _ = ku.build_review_universe()
     # Semantic decision fields must all be blank in this WO.
@@ -132,6 +151,7 @@ def test_no_premature_decisions():
         assert r["recommended_mapping_type"] != "APPROVED"
 
 
+@_requires_artifacts
 def test_no_premature_no_match():
     rows, _ = ku.build_review_universe()
     # Missing exact-name must NOT be recorded as NO_MATCH here.
@@ -140,6 +160,7 @@ def test_no_premature_no_match():
         assert r["recommended_mapping_type"] != "NO_MATCH"
 
 
+@_requires_artifacts
 def test_frozen_shas_stable():
     rows, _ = ku.build_review_universe()
     assert ku.universe_sha_for_rows(rows) == FROZEN_UNIVERSE_SHA
@@ -158,6 +179,9 @@ def test_written_review_universe_when_present():
     semantic_rows = [r for r in rows if r["candidate_class"] == "SEMANTIC_SEARCH_REQUIRED"]
     assert len(exact_rows) == 12
     assert len(semantic_rows) == 608
+    # Frozen review universe SHA is stable across environments — validated against
+    # the committed TSV itself, so this runs even in CI without source artifacts.
+    assert ku.universe_sha_for_rows(rows) == FROZEN_UNIVERSE_SHA
 
 
 def test_written_gpt_pack_when_present():
@@ -166,6 +190,7 @@ def test_written_gpt_pack_when_present():
     rows = load_tsv(PACK_TSV)
     assert len(rows) == 620
     assert list(rows[0].keys()) == list(ku.GPT_REVIEW_PACK_FIELDS)
+    assert ku.pack_sha_for_rows(rows) == FROZEN_PACK_SHA
     # 7 batches: 6 × 100 + 1 × 20 (last batch 20).
     from collections import Counter as C
     counts = C(r["batch_no"] for r in rows)
