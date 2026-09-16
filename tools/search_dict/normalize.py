@@ -20,6 +20,10 @@ import unicodedata
 # Unicode categories treated as "punctuation/symbol" for the no-punct copy.
 _PUNCT_CATS = {"Pc", "Pd", "Pe", "Pf", "Pi", "Po", "Ps", "Sk", "Sm", "So", "Sc"}
 _WS_RE = re.compile(r"\s+")
+# Hangul araea "ㅍ" (U+318D) and katakana middle dot "・" (U+30FB) are
+# categorized as letters but function as list separators in KR law
+# names (소음ㅍ진동관리법); strip them from the punctuation search copy.
+_EXTRA_SEP = {"\u318d", "\u30fb"}
 
 
 def nfc(text: str) -> str:
@@ -55,7 +59,8 @@ def no_punctuation(text: str) -> str:
     Never applied to the stored original.
     """
     t = nfc(text)
-    kept = [ch for ch in t if unicodedata.category(ch) not in _PUNCT_CATS]
+    kept = [ch for ch in t if unicodedata.category(ch) not in _PUNCT_CATS
+            and ch not in _EXTRA_SEP]
     return _WS_RE.sub("", "".join(kept)).strip()
 
 
