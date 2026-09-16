@@ -165,6 +165,8 @@ jobs:
         run: pytest tests/test_risk04_recovery001_parent_amendment.py -q --tb=short
       - name: OBJ-RISK RISK-04 APPROVE-002 parent amendment binding
         run: pytest tests/test_risk04_approve002_parent_amendment.py -q --tb=short
+      - name: OBJ-RISK RISK-04 MATERIALIZE-001-R1 effective approved plan
+        run: pytest tests/test_risk04_materialize001_resume.py -q --tb=short
       - name: KOSHA GUIDE sync tests
         run: pytest tests/test_kosha_guide_sync.py -q --tb=short
 
