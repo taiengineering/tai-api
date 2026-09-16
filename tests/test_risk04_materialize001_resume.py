@@ -1,6 +1,7 @@
 """RISK-04-MATERIALIZE-001-R1 effective overlay plan. v1 frozen. No ACTIVE write."""
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 from tools.risk04.approve001_owner_approval_binding import (
@@ -26,15 +27,19 @@ from tools.risk04.materialize001_approved_canonical_draft import (
 from tools.risk04.materialize001_resume_effective_plan import (
     CHILD_KEY,
     FROZEN_AMENDMENT_BINDING_SHA,
+    FROZEN_RECEIPT_SHA,
     FROZEN_V1_PLAN_SHA,
     FROZEN_V1_SQL_SHA,
     L02_KEY,
     NEW_PARENT_KEY,
+    RECEIPT_FIELDS,
+    RECEIPT_PATH,
     V2_PLAN_FIELDS,
     V2_PLAN_PATH,
     V2_SQL_PATH,
     assemble_v2_plan,
     l02_parent_leak,
+    receipt_sha,
     render_v2_sql,
     v2_plan_sha,
 )
@@ -120,3 +125,38 @@ def test_determinism_two_runs():
     second = assemble_v2_plan()
     assert v2_plan_sha(first) == v2_plan_sha(second) == v2_plan_sha(load_tsv(V2_PLAN_PATH))
     assert sql_sha(render_v2_sql(first)) == sql_sha(render_v2_sql(second)) == sql_sha(V2_SQL_PATH.read_text(encoding="utf-8"))
+
+
+def test_receipt_contract():
+    receipt = load_tsv(RECEIPT_PATH)
+    plan = {row["review_concept_key"]: row for row in load_tsv(V2_PLAN_PATH)}
+    by_key = {row["review_concept_key"]: row for row in receipt}
+    ids = [row["canonical_id"] for row in receipt]
+    child = by_key[CHILD_KEY]
+    parent = by_key[NEW_PARENT_KEY]
+    parent_mismatch = 0
+    for row in receipt:
+        uuid.UUID(row["canonical_id"])
+        if row["parent_canonical_id"] not in {"", "EMPTY"}:
+            uuid.UUID(row["parent_canonical_id"])
+            linked = by_key[row["parent_review_concept_key"]]
+            if linked["canonical_id"] != row["parent_canonical_id"]:
+                parent_mismatch += 1
+        assert row["name"] == plan[row["review_concept_key"]]["name"]
+        assert row["status"] == "DRAFT"
+        assert row["approval_id"] == "RISK-04-APPROVE-001"
+        assert row["approval_package_sha"] == FROZEN_OWNER_PACKAGE_SHA
+        assert row["materialization_id"] == "RISK-04-MATERIALIZE-001"
+        assert row["canonical_id"] != row["parent_canonical_id"]
+    assert list(receipt[0].keys()) == list(RECEIPT_FIELDS)
+    assert len(receipt) == 1110
+    assert len(set(ids)) == 1110
+    assert len(by_key) == 1110
+    assert sum(1 for row in receipt if row["status"] == "ACTIVE") == 0
+    assert L02_KEY not in by_key
+    assert child["parent_canonical_id"] == parent["canonical_id"]
+    assert child["parent_review_concept_key"] == NEW_PARENT_KEY
+    assert child["amendment_approval_id"] == "RISK-04-APPROVE-002"
+    assert child["amendment_package_sha"] == FROZEN_AMENDMENT_SHA
+    assert parent_mismatch == 0
+    assert receipt_sha(receipt) == FROZEN_RECEIPT_SHA
