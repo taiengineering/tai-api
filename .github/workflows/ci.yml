@@ -169,6 +169,10 @@ jobs:
         run: pytest tests/test_risk04_materialize001_resume.py -q --tb=short
       - name: OBJ-RISK RISK-02 INGEST-001 production source core
         run: pytest tests/test_risk02_ingest001_source_core.py -q --tb=short
+      - name: OBJ-RISK RISK-02 INGEST-001-R1 local executor contract
+        run: pytest tests/test_risk02_ingest001_local_exec.py -q --tb=short
+      - name: OBJ-RISK MAP-001 CIC_W source mapping governance
+        run: pytest tests/test_risk_map001_cicw_governance.py -q --tb=short
       - name: KOSHA GUIDE sync tests
         run: pytest tests/test_kosha_guide_sync.py -q --tb=short
 
