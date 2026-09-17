@@ -37,11 +37,28 @@ hard safety cap           = 40,000
 
 ## Runner behaviour
 
+Both segments below are the same `tools/chem04/official_hydrate_v12.py`
+runner (only code path that writes to `artifacts/chem04/official_v12/`).
+The main segment resumed from the exact next queue row after the
+pre-run's last completed pair (idempotent on `(chemId, sectionNo)`).
+
 ```text
-started_at                = 2026-09-17T21:36:30Z
-ended_at                  = 2026-09-17T23:11:06Z
-elapsed                   = ~1h35m
-stop_reason               = QUOTA_LIMIT
+pre-run segment (interrupted)
+  started_at (UTC)        = 2026-09-17T21:28:17Z
+  ended_at   (UTC)        = 2026-09-17T21:29:05Z
+  started_at (KST)        = 2026-09-18 06:28:17+09:00
+  ended_at   (KST)        = 2026-09-18 06:29:05+09:00
+  records                 = 361
+  last completed          = chemId=097377 / sectionNo=9
+
+main segment (WO run)
+  started_at (UTC)        = 2026-09-17T21:36:30Z
+  ended_at   (UTC)        = 2026-09-17T23:11:06Z
+  started_at (KST)        = 2026-09-18 06:36:30+09:00
+  ended_at   (KST)        = 2026-09-18 08:11:06+09:00
+  elapsed                 = ~1h34m35s
+  first fetched pair      = chemId=097377 / sectionNo=10  (resume)
+  stop_reason             = QUOTA_LIMIT
 ```
 
 ## Batch 1 result
@@ -62,13 +79,48 @@ resultCode 23             = 0
 consecutive error budget  = untriggered
 ```
 
+## Start-361 provenance
+
+The 361 records the main run resumed from are NOT from Option-C
+sampling and NOT from the v1.2 contract smoke. They come from a
+prior, interrupted execution of the same
+`official_hydrate_v12.py` runner in the same quota window:
+
+```text
+pre-run runner                 = tools/chem04/official_hydrate_v12.py
+pre-run window (UTC)           = 2026-09-17T21:28:17Z → 21:29:05Z (48 seconds)
+pre-run window (KST)           = 2026-09-18 06:28:17 → 06:29:05 +09:00
+pre-run records                = 361
+pre-run source (all 361)       = KOSHA_OFFICIAL
+pre-run contract (all 361)     = KOSHA_MSDS_OPENAPI_V1_2
+pre-run operations (all 361)   = v1.2 format (getChemDetail{01..16}1)
+pre-run authoritative_verified = true (all 361)
+pre-run last completed pair    = chemId=097377 / sectionNo=9
+main-run first fetched pair    = chemId=097377 / sectionNo=10   (resume)
+Option-C import into responses = 0  (no code path exists)
+v1.2 smoke import into responses = 0  (no code path exists)
+```
+
+Only `tools/chem04/official_hydrate_v12.py` writes to
+`artifacts/chem04/official_v12/responses.jsonl` (grep-verified);
+`live_sample_compare.py` and `v12_contract_smoke.py` output to
+different paths entirely. So the 361-corpus is authoritative
+KOSHA-fetched hydration data, identical in provenance to the
+31,600 new records of the main run.
+
+Note: the runner emits a checkpoint every 200 completed rows. In
+the pre-run this fired at row 200 (chemId=097364 / sectionNo=8);
+that checkpoint is what earlier reports observed and quoted as
+"HTTP requests = 200 / last completed = 097364 / 8". The pre-run
+continued past the checkpoint and stopped at 361, not at 200.
+
 ## Per-operation call counts IN THIS RUN
 
-These are PER-OPERATION CALLS IN THIS RUN only — not a daily
-ceiling. Batch 1 started with 361 pairs pre-existing on disk (from
-prior Option-C sampling / v1.2 smoke), and v1.2 smoke calls may
-also have consumed some of the same quota window. Treat the
-numbers below strictly as this run's own send counts.
+These are PER-OPERATION CALLS IN THE MAIN RUN only — not a daily
+ceiling. Batch 1 also included the 361-record pre-run segment
+above, and v1.2 smoke calls also consumed some of the same quota
+window. Treat the numbers below strictly as this main run's own
+send counts.
 
 ```text
 getChemDetail011          = 1,975
@@ -96,7 +148,8 @@ TOTAL                     = 31,601
 first quota HTTP status   = 429
 first quota operation     = getChemDetail101
 first quota chemId        = 432377
-detected at               = 2026-09-17T23:11:06Z (KST 2026-09-18 08:11)
+detected at (UTC)         = 2026-09-17T23:11:06Z
+detected at (KST)         = 2026-09-18 08:11:06+09:00
 retry                     = 0    (immediate STOP per WO §18)
 additional probes         = 0    (WO §40)
 ```
@@ -136,11 +189,11 @@ those two models requires an explicit probe of a different
 operation immediately after a per-op 429, which WO §40 forbids
 during Batch 1.
 
-Also: 1,975 / 1,976 are PER-OPERATION CALLS IN THIS RUN — not a
-daily ceiling. Batch 1 started with 361 pairs already completed
-(from earlier work in the same quota window), and v1.2 smoke
-calls also count against that window. So these counts cannot be
-subtracted from 2,000 to infer headroom.
+Also: 1,975 / 1,976 are PER-OPERATION CALLS IN THIS MAIN RUN —
+not a daily ceiling. Batch 1 also includes the 361-record pre-run
+segment (~22-23 calls per operation, same day, same runner), and
+v1.2 smoke calls also count against that window. So these counts
+cannot be subtracted from 2,000 to infer headroom.
 
 Working ceiling for planning purposes (not a contractual guarantee
 — KOSHA can change enforcement without notice):
