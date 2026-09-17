@@ -89,47 +89,40 @@ Note per WO §5: Q4 does NOT block the Gate. If public docs don't
 resolve service-wide vs per-endpoint, we return `QUOTA SCOPE =
 UNVERIFIED` and proceed with Q1–Q3.
 
-## Account-specific state (Q1 / Q2 / Q3)
+## Account-specific state (Q1 / Q2 / Q3) — Owner-confirmed 2026-09-18
 
 ```text
-ACCOUNT-SPECIFIC STATE            = USER_ACTION_REQUIRED
-ACCOUNT TYPE                      = UNKNOWN
-CURRENT APPROVED DAILY TRAFFIC    = UNKNOWN
-OPERATING ACCOUNT TRANSITION      = UNKNOWN
-TRAFFIC INCREASE                  = UNKNOWN
+ACCOUNT-SPECIFIC STATE            = CONFIRMED
+ACCOUNT TYPE                      = DEVELOPMENT
+STATUS                            = APPROVED
+VALID                             = 2026-09-17 ~ 2028-09-17
+
+CURRENT APPROVED DAILY TRAFFIC    = 2,000 / day  (portal displayed, per operation)
+OPERATING ACCOUNT TRANSITION      = AVAILABLE
+TRAFFIC INCREASE                  = AVAILABLE (on operating account)
 ```
 
-Reason: `Claude Code` cannot log in to <https://www.data.go.kr> as
-the account holder. The values above live behind the authenticated
-"마이페이지 → OpenAPI 활용신청 현황" view of the account that owns
-the current `KOSHA_SERVICE_KEY` / `DATA_GO_KR_SERVICE_KEY`. Guessing
-is forbidden (WO §22 STOP condition). Exit path is **Exit B —
-`USER_ACCOUNT_EVIDENCE_REQUIRED`**.
-
-### Minimum Owner-side check (single pass)
-
-Log in to data.go.kr with the account that generated the current
-KOSHA service key, then capture **exactly** these values from the
-detail screen of the KOSHA MSDS 화학물질정보 OpenAPI activation:
+Portal display captured from Owner's `data.go.kr → 마이페이지 →
+OpenAPI 활용신청 현황 → 한국산업안전보건공단_MSDS 화학물질정보서비스`:
 
 ```text
-Navigate:
-  data.go.kr
-  → 마이페이지
-  → OpenAPI 활용신청 현황
-  → 서비스명: 한국산업안전보건공단_MSDS 화학물질정보서비스
-    (data.go.kr dataset id ≈ 15157612)
-
-Capture (screenshot or text, single pass):
-  1. 신청 유형 :  개발계정 / 운영계정
-  2. 심의 상태 :  승인 / 심의중 / 반려
-  3. 활용기간 :  YYYY-MM-DD ~ YYYY-MM-DD
-  4. 일일 트래픽 :  <n> 회 / 일
-  5. "운영계정 신청" / "트래픽 증가 신청" 버튼 존재 여부
-  6. 활용사례 등록 여부  (등록 / 미등록)
+getChemList001                    = 2,000 / day
+getChemDetail011                  = 2,000 / day
+getChemDetail021                  = 2,000 / day
+...                               = ...
+getChemDetail161                  = 2,000 / day
 ```
 
-That single capture closes Q1 / Q2 / Q3 for this Gate.
+Runtime enforcement scope of the portal-displayed value (whether
+each operation truly has its own 2,000 bucket, or the number is
+displayed per-op but enforced service-wide) is **still**
+unverified. It will be measured by the next hydration WO under a
+fail-closed policy (see §Runtime measurement plan below).
+
+```text
+PORTAL DISPLAY PER OPERATION      = CONFIRMED
+RUNTIME ENFORCEMENT SCOPE         = TO BE MEASURED
+```
 
 ## Q4 — quota scope (service-wide vs per-endpoint)
 
@@ -137,21 +130,33 @@ That single capture closes Q1 / Q2 / Q3 for this Gate.
 QUOTA SCOPE                       = UNVERIFIED
 ```
 
-Basis: <https://www.data.go.kr>'s KOSHA MSDS 화학물질정보서비스 detail
-page publishes a single `일일 트래픽 = 1,000` value in the service
-metadata section, without disambiguating whether that number is the
-cap of the entire service (all Detail01–16 operations pooled) or
-each named operation independently. The prior measurement (HTTP 429
-/ resultCode 22) exhausted the cap after a mix of calls but did not
-by itself distinguish the two scopes. Since WO §5 permits leaving
-Q4 as `UNVERIFIED` and not blocking on it, this value is not
-challenged further in this Gate.
+Basis: `data.go.kr`'s activation-status detail page displays a
+per-operation daily traffic number (2,000 / day for the account
+that owns the current service key, per the Owner capture in
+§Account-specific state). It does not disambiguate whether the
+underlying gateway enforces that quota per operation
+independently or pools it across the whole service. The prior
+measurement (2026-09-14 HTTP 429 / resultCode 22) exhausted the
+cap after a mix of calls but did not by itself distinguish
+between the two enforcement scopes. Per WO §5, `QUOTA SCOPE =
+UNVERIFIED` is accepted and does not block the Gate.
+
+The next hydration WO will resolve this by observation:
+
+```text
+Runtime measurement plan
+  do NOT pre-stop at 2,000
+  DO fail-closed at HTTP 429 or resultCode 22 or 23
+  save a checkpoint at the point of first quota-hit
+  next quota window: resume from checkpoint
+```
 
 Working assumption carried forward (documented, not asserted):
 
 ```text
-SERVICE-WIDE 1,000/day            = WORKING ASSUMPTION
-PER-ENDPOINT 1,000/day            = NOT DOCUMENTED
+PORTAL DISPLAY (per operation)    = 2,000 / day
+SERVICE-WIDE 2,000/day            = TO BE MEASURED
+PER-ENDPOINT 2,000/day            = TO BE MEASURED
 ```
 
 Owner may verify this in the same pass via the "제공기관 문의" /
@@ -297,11 +302,14 @@ Owner가 GPT의 quota target 판정 이후에 확정한다. 참고 목표:
 ## Return values
 
 ```text
-CURRENT APPROVED TRAFFIC          = UNKNOWN                       (Q1/Q2)
-OPERATING ACCOUNT AVAILABLE       = YES                           (public procedure)
-TRAFFIC INCREASE AVAILABLE        = YES on operating account      (public procedure)
+ACCOUNT TYPE                      = DEVELOPMENT                   (Q1, Owner-confirmed 2026-09-18)
+STATUS                            = APPROVED
+VALID                             = 2026-09-17 ~ 2028-09-17
+CURRENT APPROVED TRAFFIC          = 2,000 / operation / day (portal display)  (Q2)
+OPERATING ACCOUNT AVAILABLE       = YES                           (public procedure) (Q3)
+TRAFFIC INCREASE AVAILABLE        = YES on operating account      (public procedure) (Q3)
 PUBLIC MAX TRAFFIC                = NOT_PUBLISHED
-QUOTA SCOPE                       = UNVERIFIED                    (Q4)
+QUOTA SCOPE                       = UNVERIFIED                    (Q4, to be measured)
 
 30-DAY REQUIRED DAILY             = 10,970 / day
 14-DAY REQUIRED DAILY             = 23,507 / day
@@ -322,15 +330,18 @@ CHEM identity / content re-scan   = NOT PERFORMED
 ## Verdict
 
 ```text
-WO-CHEM-04-QUOTA-ACCOUNT-001      = BLOCKED / USER_ACCOUNT_EVIDENCE_REQUIRED
+WO-CHEM-04-QUOTA-ACCOUNT-001      = PASS / QUOTA_DECISION_READY
+                                    (Exit A per WO §23 — account state now confirmed)
+
 CHANGED FILES                     = 1 (this document)
 LIVE API CALL                     = 0
 PRODUCTION INGEST                 = 0
 DB WRITE                          = 0
 MERGE                             = NOT AUTHORIZED (Claude Code does not merge)
-NEXT                              = Owner single-pass account-screen capture
-                                    → GPT quota target decision
-                                    → Owner submits 운영계정 전환 or 트래픽 증가 신청
-                                    → after approval, resume official hydration under a future WO
+NEXT                              = GPT quota target decision (see the 30/14/7-day math above)
+                                    → Owner submits 운영계정 전환 or 트래픽 증가 신청 (draft included)
+                                    → after approval, resume official hydration under a
+                                      future WO-CHEM-04-OFFICIAL-HYDRATE-V12-001
+                                      (fail-closed at real 429/rc22, not pre-stopped at 2,000)
 STOP
 ```
