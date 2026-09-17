@@ -15,6 +15,9 @@ from tools.risk_map import kalis_map001_review_universe as gen
 
 GENERATOR = Path("tools/risk_map/kalis_map001_review_universe.py")
 
+FROZEN_TASK_UNIVERSE_SHA = (
+    "6efd9047b4f6c001321c43496f27c21b538556b76fd2b90a6035cc2972db6ad4"
+)
 FROZEN_REVIEW_UNIVERSE_SHA = (
     "50446a5c9fa421f09beb1425ffe8d90649b29e50bafe93f46d8913a085ed497d"
 )
@@ -32,6 +35,16 @@ def test_input_universe_matches_expected_census():
     assert len(work_mid_pairs) == 48
     assert len({t["source_key"] for t in tasks}) == 761
     assert len({t["name_normalized"] for t in tasks}) == 40
+
+
+def test_frozen_task_universe_sha():
+    """The 761-row TASK universe is a committed intermediate SoT so CI can
+    reproduce the review artifacts without the 10MB raw CSV."""
+    from tools.risk04.seed_review import universe_sha
+    rows = load_tsv(gen.TASK_UNIVERSE_PATH)
+    assert len(rows) == 761
+    assert list(rows[0].keys()) == list(gen.TASK_UNIVERSE_FIELDS)
+    assert universe_sha(rows, *gen.TASK_UNIVERSE_FIELDS) == FROZEN_TASK_UNIVERSE_SHA
 
 
 def test_review_universe_row_shape():

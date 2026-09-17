@@ -47,7 +47,23 @@ SOURCE_ID = "KALIS_RISK_PROFILE"
 _ROOT = Path("docs/knowledge/risk")
 _ARTIFACTS_ROOT = Path("artifacts/risk01")
 
+# Raw KALIS CSV (gitignored, 10MB) — only used by --bootstrap. Once the
+# committed task-universe TSV exists it becomes the SoT and CI reads from it.
 KALIS_CSV_PATH = _ARTIFACTS_ROOT / "source_c/kalis_risk_profile.csv"
+
+# Frozen intermediate — the 761 TASK nodes as a small, committed TSV. Same role
+# as RISK_KOSHA_MAP001_GPT_REVIEW_PACK_v1.tsv on the KOSHA side.
+TASK_UNIVERSE_PATH = _ROOT / "RISK_KALIS_MAP001_TASK_UNIVERSE_v1.tsv"
+
+TASK_UNIVERSE_FIELDS: tuple[str, ...] = (
+    "source_key",
+    "parent_source_key",
+    "work_big",
+    "work_mid",
+    "name_raw",
+    "name_normalized",
+    "path_raw",
+)
 
 CANONICAL_TASK_REFERENCE_PATH = _ROOT / "RISK_KOSHA_B01_CANONICAL_TASK_REFERENCE_v1.tsv"
 FROZEN_CANONICAL_TASK_REFERENCE_SHA = (
@@ -148,10 +164,16 @@ def _family_key(name_normalized: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _load_kalis_task_nodes() -> list[dict]:
+def _derive_task_nodes_from_csv() -> list[dict]:
+    """One-time bootstrap: derive the 761 TASK universe from the raw CSV.
+
+    Reused by --bootstrap; NOT invoked by --run or the test suite. Once the
+    frozen `RISK_KALIS_MAP001_TASK_UNIVERSE_v1.tsv` is committed, it becomes
+    the SoT and this function is only re-run when the source CSV changes.
+    """
     if not KALIS_CSV_PATH.exists():
         raise SystemExit(f"MISSING_KALIS_SOURCE_CSV {KALIS_CSV_PATH}")
-    enc, header, rows, _stats = read_csv_rows(KALIS_CSV_PATH)
+    _enc, header, rows, _stats = read_csv_rows(KALIS_CSV_PATH)
     _records, nodes, _meta = _c_plan(header, rows)
 
     by_type: Counter[str] = Counter(n["node_type"] for n in nodes)
@@ -169,7 +191,6 @@ def _load_kalis_task_nodes() -> list[dict]:
     node_by_key = {n["source_key"]: n for n in nodes}
     tasks = [n for n in nodes if n["node_type"] == "TASK"]
 
-    # Attach work_big / work_mid via parent chain.
     enriched: list[dict] = []
     for t in tasks:
         mid = node_by_key.get(t["parent_source_key"])
@@ -189,17 +210,47 @@ def _load_kalis_task_nodes() -> list[dict]:
                 "path_raw": t["path_raw"],
             }
         )
-
-    # Sort deterministically by (name_normalized, path_raw, source_key).
     enriched.sort(key=lambda r: (r["name_normalized"], r["path_raw"], r["source_key"]))
-
-    distinct_names = {t["name_normalized"] for t in enriched}
-    if len(distinct_names) != EXPECTED_DISTINCT_TASK_NAMES:
-        raise SystemExit(
-            f"DISTINCT_TASK_NAME_DRIFT {len(distinct_names)} expected={EXPECTED_DISTINCT_TASK_NAMES}"
-        )
-
+    _assert_task_universe(enriched)
     return enriched
+
+
+def _assert_task_universe(rows: list[dict]) -> None:
+    if len(rows) != EXPECTED_TASK:
+        raise SystemExit(f"TASK_UNIVERSE_ROW_DRIFT {len(rows)}")
+    if len({r["source_key"] for r in rows}) != EXPECTED_TASK:
+        raise SystemExit("TASK_UNIVERSE_SOURCE_KEY_NOT_UNIQUE")
+    work_big = {r["work_big"] for r in rows}
+    work_mid_pairs = {(r["work_big"], r["work_mid"]) for r in rows}
+    if len(work_big) != EXPECTED_WORK_BIG:
+        raise SystemExit(f"TASK_UNIVERSE_WORK_BIG_DRIFT {len(work_big)}")
+    if len(work_mid_pairs) != EXPECTED_WORK_MID:
+        raise SystemExit(f"TASK_UNIVERSE_WORK_MID_DRIFT {len(work_mid_pairs)}")
+    if len({r["name_normalized"] for r in rows}) != EXPECTED_DISTINCT_TASK_NAMES:
+        raise SystemExit("TASK_UNIVERSE_DISTINCT_NAME_DRIFT")
+
+
+def _load_kalis_task_nodes() -> list[dict]:
+    """Read the 761 TASK universe from the frozen committed TSV (SoT).
+
+    CI does not have `artifacts/risk01/` available (gitignored). The frozen
+    intermediate TSV is committed and serves as the reproducible source. Use
+    `--bootstrap` locally to regenerate the frozen TSV from the raw CSV.
+    """
+    if not TASK_UNIVERSE_PATH.exists():
+        raise SystemExit(
+            f"MISSING_TASK_UNIVERSE {TASK_UNIVERSE_PATH} — run --bootstrap"
+        )
+    rows = load_tsv(TASK_UNIVERSE_PATH)
+    _assert_task_universe(rows)
+    return rows
+
+
+def bootstrap_task_universe() -> str:
+    """Derive from CSV and write the frozen TSV; return its SHA."""
+    rows = _derive_task_nodes_from_csv()
+    write_tsv(rows, TASK_UNIVERSE_PATH, TASK_UNIVERSE_FIELDS)
+    return universe_sha(rows, *TASK_UNIVERSE_FIELDS)
 
 
 # ---------------------------------------------------------------------------
@@ -638,7 +689,18 @@ def write_all() -> dict:
 
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=f"{WO_ID} evidence generator")
-    parser.parse_args(list(argv) if argv is not None else None)
+    parser.add_argument(
+        "--bootstrap",
+        action="store_true",
+        help="Derive frozen TASK universe TSV from the raw CSV (requires "
+             "artifacts/risk01/source_c/kalis_risk_profile.csv)",
+    )
+    args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.bootstrap:
+        sha = bootstrap_task_universe()
+        print(json.dumps({"task_universe_sha": sha, "path": str(TASK_UNIVERSE_PATH)},
+                         ensure_ascii=True, sort_keys=True, indent=2))
+        return 0
     result = write_all()
     print(json.dumps(result, ensure_ascii=True, sort_keys=True, indent=2))
     return 0
