@@ -1,0 +1,555 @@
+canonical_id	name	name_normalized	parent_canonical_id	parent_name	canonical_path	origin_type	status	cicw_approved_mapping_count	cicw_source_names
+b12ddccf-08fb-4bc8-9866-419a99873dd8	가스설비관련기기설치공사	가스설비관련기기설치공사	8c831cd1-fa96-4c78-913a-a4b0d1c636fe	가스설비관련기기설비공사	가스설비공사 > 가스설비관련기기설비공사 > 가스설비관련기기설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	가스설비관련기기설치공사
+3cd47cb4-db75-4b91-b2c7-8a38f4aa502a	가스설비관련기기제작공사	가스설비관련기기제작공사	8c831cd1-fa96-4c78-913a-a4b0d1c636fe	가스설비관련기기설비공사	가스설비공사 > 가스설비관련기기설비공사 > 가스설비관련기기제작공사	PROMOTED_FROM_SOURCE	DRAFT	1	가스설비관련기기제작공사
+10a63c24-c2a9-49ff-be08-1bf1db6f87b3	저장탱크설치공사	저장탱크설치공사	98336564-d693-4026-b357-a545e100700c	저장탱크공사	가스설비공사 > 저장탱크공사 > 저장탱크설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	저장탱크설치공사
+39aa05ed-5b82-4bd6-a22a-1394fc8e1501	계단 회랑 통로난간설치	계단 회랑 통로난간설치	8bb17a44-1e90-43ad-96d0-4880fb5b9771	금속바닥판및부속설비설치	강구조물공사 > 금속바닥판및부속설비설치 > 계단 회랑 통로난간설치	PROMOTED_FROM_SOURCE	DRAFT	1	계단 회랑 통로난간설치
+813be6a8-13c4-4c96-9c90-36bd04348fb5	바닥판깔기	바닥판깔기	8bb17a44-1e90-43ad-96d0-4880fb5b9771	금속바닥판및부속설비설치	강구조물공사 > 금속바닥판및부속설비설치 > 바닥판깔기	PROMOTED_FROM_SOURCE	DRAFT	1	바닥판깔기
+478ea098-1a8c-47ef-bdbb-3f5c590c71b3	철골계단설치	철골계단설치	8bb17a44-1e90-43ad-96d0-4880fb5b9771	금속바닥판및부속설비설치	강구조물공사 > 금속바닥판및부속설비설치 > 철골계단설치	PROMOTED_FROM_SOURCE	DRAFT	1	철골계단설치
+b9b9aacc-4d24-4e6e-9f80-2a9b6e3f5875	토목잡철물제작 설치	토목잡철물제작 설치	8bb17a44-1e90-43ad-96d0-4880fb5b9771	금속바닥판및부속설비설치	강구조물공사 > 금속바닥판및부속설비설치 > 토목잡철물제작 설치	PROMOTED_FROM_SOURCE	DRAFT	1	토목잡철물제작 설치
+6f5a7b75-ec27-4b7e-8067-335e394d2a3d	회랑 통로설치	회랑 통로설치	8bb17a44-1e90-43ad-96d0-4880fb5b9771	금속바닥판및부속설비설치	강구조물공사 > 금속바닥판및부속설비설치 > 회랑 통로설치	PROMOTED_FROM_SOURCE	DRAFT	1	회랑 통로설치
+591a51da-3333-4845-b60e-03458681ab39	철골공장가공 제작	철골공장가공 제작	fe6d0740-d16e-4954-8ce2-d0dbbce0c032	철골가공 제작	강구조물공사 > 철골가공 제작 > 철골공장가공 제작	PROMOTED_FROM_SOURCE	DRAFT	1	철골공장가공 제작
+af6c19b4-40c5-48d1-adbd-cefa9f42ab75	철골현장가공 제작	철골현장가공 제작	fe6d0740-d16e-4954-8ce2-d0dbbce0c032	철골가공 제작	강구조물공사 > 철골가공 제작 > 철골현장가공 제작	PROMOTED_FROM_SOURCE	DRAFT	1	철골현장가공 제작
+a33abdd9-3d7d-415e-ae9d-cacc4e40a242	철골 강교도장	철골 강교도장	69c4e40d-02de-47fc-abd8-480f392c6761	철골내화피복및도장	강구조물공사 > 철골내화피복및도장 > 철골 강교도장	PROMOTED_FROM_SOURCE	DRAFT	1	철골 강교도장
+4c3bef34-deec-4c80-a0a6-058e1e56d097	철골내화피복	철골내화피복	69c4e40d-02de-47fc-abd8-480f392c6761	철골내화피복및도장	강구조물공사 > 철골내화피복및도장 > 철골내화피복	PROMOTED_FROM_SOURCE	DRAFT	1	철골내화피복
+995ba818-1aac-4a5b-82cf-6e83ee485bbc	강교조립및설치	강교조립및설치	1064868c-41b7-481e-b6c6-b6a0d72c24ca	철골조립및설치	강구조물공사 > 철골조립및설치 > 강교조립및설치	PROMOTED_FROM_SOURCE	DRAFT	1	강교조립및설치
+af9b0594-96e9-4564-bea6-f80a261c55fc	건축철골조립및설치	건축철골조립및설치	1064868c-41b7-481e-b6c6-b6a0d72c24ca	철골조립및설치	강구조물공사 > 철골조립및설치 > 건축철골조립및설치	PROMOTED_FROM_SOURCE	DRAFT	1	건축철골조립및설치
+a035ac37-3280-4f2a-8b57-a3416a5061d0	경량철골조립및설치	경량철골조립및설치	1064868c-41b7-481e-b6c6-b6a0d72c24ca	철골조립및설치	강구조물공사 > 철골조립및설치 > 경량철골조립및설치	PROMOTED_FROM_SOURCE	DRAFT	1	경량철골조립및설치
+7436bc8c-bba8-4685-9d26-7246d975a4ca	구조용알루미늄조립및설치	구조용알루미늄조립및설치	1064868c-41b7-481e-b6c6-b6a0d72c24ca	철골조립및설치	강구조물공사 > 철골조립및설치 > 구조용알루미늄조립및설치	PROMOTED_FROM_SOURCE	DRAFT	1	구조용알루미늄조립및설치
+b3a8c23a-2b82-4926-8455-53f507b0667c	플랜트철골조립및설치	플랜트철골조립및설치	1064868c-41b7-481e-b6c6-b6a0d72c24ca	철골조립및설치	강구조물공사 > 철골조립및설치 > 플랜트철골조립및설치	PROMOTED_FROM_SOURCE	DRAFT	1	플랜트철골조립및설치
+f7a46c9c-1334-4f1e-9d80-def9c46953d2	검측 기성	검측 기성	EMPTY		검측 기성	PROMOTED_FROM_SOURCE	DRAFT	1	검측 기성
+e9ce532d-9509-4c4c-bded-03d6fc383be0	교량정적계측	교량정적계측	351f17df-5f06-404d-8c36-49a5e51dba53	교량공사계측	계측 > 교량공사계측 > 교량정적계측	PROMOTED_FROM_SOURCE	DRAFT	1	교량정적계측
+9a7a04c1-b008-4e1d-9719-8d5e1cdad256	구조체정적계측	구조체정적계측	ac018e40-20ae-468c-bbf0-78257d139fa1	구조체계측	계측 > 구조체계측 > 구조체정적계측	PROMOTED_FROM_SOURCE	DRAFT	1	구조체정적계측
+c6bedcb0-30cf-4f1e-9fa3-26259c7421b1	누수량측정	누수량측정	ac018e40-20ae-468c-bbf0-78257d139fa1	구조체계측	계측 > 구조체계측 > 누수량측정	PROMOTED_FROM_SOURCE	DRAFT	1	누수량측정
+8fd5bb0e-18b3-41ec-be34-9d9d065aa9e4	하중측정	하중측정	ac018e40-20ae-468c-bbf0-78257d139fa1	구조체계측	계측 > 구조체계측 > 하중측정	PROMOTED_FROM_SOURCE	DRAFT	1	하중측정
+af3621c8-15bc-4ab6-b5ce-63f3cd83ebd1	동적계측	동적계측	f0d60f4d-849f-4ef2-aa5b-5535bca53c2a	계측	계측 > 동적계측	MERGED_FROM_REVIEWED_SOURCES	DRAFT	2	동적계측
+06e686fc-0062-46af-b4f2-72027b7a4668	RockBolt축력및인발측정	RockBolt축력및인발측정	48506cef-8fc8-4838-bbd7-86e32129f825	터널공사계측	계측 > 터널공사계측 > RockBolt축력및인발측정	PROMOTED_FROM_SOURCE	DRAFT	1	RockBolt축력및인발측정
+49c2fe76-d45d-4e42-9b5c-1a793492c97d	Shotcrete응력측정	Shotcrete응력측정	48506cef-8fc8-4838-bbd7-86e32129f825	터널공사계측	계측 > 터널공사계측 > Shotcrete응력측정	PROMOTED_FROM_SOURCE	DRAFT	1	Shotcrete응력측정
+b4675b66-9e65-4de3-ab16-8593b87f66c0	지표및지중침하측정	지표및지중침하측정	48506cef-8fc8-4838-bbd7-86e32129f825	터널공사계측	계측 > 터널공사계측 > 지표및지중침하측정	PROMOTED_FROM_SOURCE	DRAFT	1	지표및지중침하측정
+0cad8b63-dc57-4a41-81c9-1aa43d51bc24	터널내공변위측정	터널내공변위측정	48506cef-8fc8-4838-bbd7-86e32129f825	터널공사계측	계측 > 터널공사계측 > 터널내공변위측정	PROMOTED_FROM_SOURCE	DRAFT	1	터널내공변위측정
+ba489302-8e06-48a5-8e14-25c1809cf5d8	터널내지중변위측정	터널내지중변위측정	48506cef-8fc8-4838-bbd7-86e32129f825	터널공사계측	계측 > 터널공사계측 > 터널내지중변위측정	PROMOTED_FROM_SOURCE	DRAFT	1	터널내지중변위측정
+408aac7a-26ff-4304-af2b-d26089b4c56d	터널천단침하측정	터널천단침하측정	48506cef-8fc8-4838-bbd7-86e32129f825	터널공사계측	계측 > 터널공사계측 > 터널천단침하측정	PROMOTED_FROM_SOURCE	DRAFT	1	터널천단침하측정
+b5e8da0b-94c9-4971-aa82-7590e3487425	응력측정(StrainGauge)	응력측정(StrainGauge)	fc10356e-8340-408d-b01e-9fa1a04457e2	토공사계측	계측 > 토공사계측 > 응력측정(StrainGauge)	PROMOTED_FROM_SOURCE	DRAFT	1	응력측정(StrainGauge)
+dac34e33-3e42-455e-8174-3036b893a646	인접구조물경사도및균열측정	인접구조물경사도및균열측정	fc10356e-8340-408d-b01e-9fa1a04457e2	토공사계측	계측 > 토공사계측 > 인접구조물경사도및균열측정	PROMOTED_FROM_SOURCE	DRAFT	1	인접구조물경사도및균열측정
+c1966878-5ed9-4ca1-b343-9b727cf82889	지중수평변위측정	지중수평변위측정	fc10356e-8340-408d-b01e-9fa1a04457e2	토공사계측	계측 > 토공사계측 > 지중수평변위측정	PROMOTED_FROM_SOURCE	DRAFT	1	지중수평변위측정
+f0482ce2-917d-4304-8a73-7bc49997e105	지하수측정	지하수측정	fc10356e-8340-408d-b01e-9fa1a04457e2	토공사계측	계측 > 토공사계측 > 지하수측정	PROMOTED_FROM_SOURCE	DRAFT	1	지하수측정
+79edc07b-6516-44e8-8912-971db2a62c6b	진동소음측정	진동소음측정	fc10356e-8340-408d-b01e-9fa1a04457e2	토공사계측	계측 > 토공사계측 > 진동소음측정	PROMOTED_FROM_SOURCE	DRAFT	1	진동소음측정
+d4fe9abe-9afb-4788-88be-d209637f833d	토압측정(PressureCell)	토압측정(PressureCell)	fc10356e-8340-408d-b01e-9fa1a04457e2	토공사계측	계측 > 토공사계측 > 토압측정(PressureCell)	PROMOTED_FROM_SOURCE	DRAFT	1	토압측정(PressureCell)
+345c6066-3bbd-464b-a3a8-c6a8ce7d9568	하중측정(LoadCell)	하중측정(LoadCell)	fc10356e-8340-408d-b01e-9fa1a04457e2	토공사계측	계측 > 토공사계측 > 하중측정(LoadCell)	PROMOTED_FROM_SOURCE	DRAFT	1	하중측정(LoadCell)
+93282807-6170-487e-9344-43d765055467	공사회의	공사회의	EMPTY		공사회의	PROMOTED_FROM_SOURCE	DRAFT	1	공사회의
+c4926c9e-355f-4786-9e61-f5abdb8e5fa4	교량측량및계측설비설치	교량측량및계측설비설치	363117e3-bba6-4adc-8f4f-e36f8526ea52	교량부속공사	교량공사 > 교량부속공사 > 교량측량및계측설비설치	PROMOTED_FROM_SOURCE	DRAFT	1	교량측량및계측설비설치
+827a6ae0-f009-4eb5-bb93-0ac0fa874d31	다웰바설치	다웰바설치	363117e3-bba6-4adc-8f4f-e36f8526ea52	교량부속공사	교량공사 > 교량부속공사 > 다웰바설치	PROMOTED_FROM_SOURCE	DRAFT	1	다웰바설치
+517767c0-f4d7-4d49-830d-77226236abc6	건널목깔기(개량형)	건널목깔기(개량형)	c1680b32-68b5-4fc5-8c80-efd711650709	건널목공사	궤도및철로공사 > 건널목공사 > 건널목깔기(개량형)	PROMOTED_FROM_SOURCE	DRAFT	1	건널목깔기(개량형)
+510af8b0-bdd1-4a31-a12f-c2c225fdb2c6	건널목깔기(구형)	건널목깔기(구형)	c1680b32-68b5-4fc5-8c80-efd711650709	건널목공사	궤도및철로공사 > 건널목공사 > 건널목깔기(구형)	PROMOTED_FROM_SOURCE	DRAFT	1	건널목깔기(구형)
+89cc64a7-aab9-473f-a6a1-b9ce157c51de	궤도교정및시험	궤도교정및시험	6f2f4427-709e-41a5-a43f-2b7cc6d6216b	궤도부설	궤도및철로공사 > 궤도부설 > 궤도교정및시험	PROMOTED_FROM_SOURCE	DRAFT	1	궤도교정및시험
+8228d5a8-83c2-437a-92c5-0aa7eea6378c	궤도부설및레일체결	궤도부설및레일체결	6f2f4427-709e-41a5-a43f-2b7cc6d6216b	궤도부설	궤도및철로공사 > 궤도부설 > 궤도부설및레일체결	PROMOTED_FROM_SOURCE	DRAFT	1	궤도부설및레일체결
+5a6c4a42-c593-4659-855d-e3db80f99f78	궤도자재준비	궤도자재준비	6f2f4427-709e-41a5-a43f-2b7cc6d6216b	궤도부설	궤도및철로공사 > 궤도부설 > 궤도자재준비	PROMOTED_FROM_SOURCE	DRAFT	1	궤도자재준비
+bf3841d0-71ea-4464-a7d9-d0dcdc3dfa33	궤도현장용접	궤도현장용접	6f2f4427-709e-41a5-a43f-2b7cc6d6216b	궤도부설	궤도및철로공사 > 궤도부설 > 궤도현장용접	PROMOTED_FROM_SOURCE	DRAFT	1	궤도현장용접
+8cb5a832-c41a-4ea7-82fe-dd79c5021ea7	레일신축이음장치설치	레일신축이음장치설치	6f2f4427-709e-41a5-a43f-2b7cc6d6216b	궤도부설	궤도및철로공사 > 궤도부설 > 레일신축이음장치설치	PROMOTED_FROM_SOURCE	DRAFT	1	레일신축이음장치설치
+a242b595-4cfe-4cec-b437-4d996752d19d	분기부궤도부설	분기부궤도부설	6f2f4427-709e-41a5-a43f-2b7cc6d6216b	궤도부설	궤도및철로공사 > 궤도부설 > 분기부궤도부설	PROMOTED_FROM_SOURCE	DRAFT	1	분기부궤도부설
+c8cf512b-7446-44ff-841b-b27baf300a57	웨인뎃트포인트붙이기	웨인뎃트포인트붙이기	6f2f4427-709e-41a5-a43f-2b7cc6d6216b	궤도부설	궤도및철로공사 > 궤도부설 > 웨인뎃트포인트붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	웨인뎃트포인트붙이기
+9711360d-0c13-458d-b7a7-a50568dee57a	침목깔기	침목깔기	6f2f4427-709e-41a5-a43f-2b7cc6d6216b	궤도부설	궤도및철로공사 > 궤도부설 > 침목깔기	PROMOTED_FROM_SOURCE	DRAFT	1	침목깔기
+ecee51d1-bdac-4a87-8368-5d069b6b4f02	자갈살포고르기	자갈살포고르기	f17b6a9e-331e-42d3-85cb-f8bba038414c	도상설치공사	궤도및철로공사 > 도상설치공사 > 자갈살포고르기	PROMOTED_FROM_SOURCE	DRAFT	1	자갈살포고르기
+e44cae29-ba9f-429b-af29-46a61ae90852	자갈살포다지기	자갈살포다지기	f17b6a9e-331e-42d3-85cb-f8bba038414c	도상설치공사	궤도및철로공사 > 도상설치공사 > 자갈살포다지기	PROMOTED_FROM_SOURCE	DRAFT	1	자갈살포다지기
+e60090a6-8197-4214-9573-f107a4236c95	콘크리트도상설치	콘크리트도상설치	f17b6a9e-331e-42d3-85cb-f8bba038414c	도상설치공사	궤도및철로공사 > 도상설치공사 > 콘크리트도상설치	PROMOTED_FROM_SOURCE	DRAFT	1	콘크리트도상설치
+184d5aae-718b-44c7-9ba8-631a84c316e3	프리케스트도상설치	프리케스트도상설치	f17b6a9e-331e-42d3-85cb-f8bba038414c	도상설치공사	궤도및철로공사 > 도상설치공사 > 프리케스트도상설치	PROMOTED_FROM_SOURCE	DRAFT	1	프리케스트도상설치
+8cc42f80-da0d-4668-824d-871db57dc06a	일반궤도분기기설치	일반궤도분기기설치	eeca97e5-ac34-47f0-b903-da44abe0636f	분기기설치	궤도및철로공사 > 분기기설치 > 일반궤도분기기설치	PROMOTED_FROM_SOURCE	DRAFT	1	일반궤도분기기설치
+abc8d3e4-bd04-4864-bbb5-82d54b881950	치하철분기기설치	치하철분기기설치	eeca97e5-ac34-47f0-b903-da44abe0636f	분기기설치	궤도및철로공사 > 분기기설치 > 치하철분기기설치	PROMOTED_FROM_SOURCE	DRAFT	1	치하철분기기설치
+d6e9455e-0b8e-4822-80d3-06872e64654c	레일도유기설치	레일도유기설치	6dc08165-a122-4030-9079-20084f2fa59c	철도부속설비	궤도및철로공사 > 철도부속설비 > 레일도유기설치	PROMOTED_FROM_SOURCE	DRAFT	1	레일도유기설치
+e561f58e-d92b-43b7-9c0d-a206a49a970a	도상보수	도상보수	2e8138ce-e3ca-439b-8e9c-de616f5e6dec	철로보선작업	궤도및철로공사 > 철로보선작업 > 도상보수	PROMOTED_FROM_SOURCE	DRAFT	1	도상보수
+a92aaf6c-ef7e-4358-84ec-76fcc1f42d3b	레일보선	레일보선	2e8138ce-e3ca-439b-8e9c-de616f5e6dec	철로보선작업	궤도및철로공사 > 철로보선작업 > 레일보선	PROMOTED_FROM_SOURCE	DRAFT	1	레일보선
+3332edb4-fc10-405b-bb65-b5ee9de4dde0	분기부레일보선	분기부레일보선	2e8138ce-e3ca-439b-8e9c-de616f5e6dec	철로보선작업	궤도및철로공사 > 철로보선작업 > 분기부레일보선	PROMOTED_FROM_SOURCE	DRAFT	1	분기부레일보선
+27a9183d-0d02-4ce8-a0bb-39371098cfb7	철도부대시설보수	철도부대시설보수	2e8138ce-e3ca-439b-8e9c-de616f5e6dec	철로보선작업	궤도및철로공사 > 철로보선작업 > 철도부대시설보수	PROMOTED_FROM_SOURCE	DRAFT	1	철도부대시설보수
+bd3d6af4-8b27-4219-a3a6-7a4cc3667d04	철도자재교환	철도자재교환	2e8138ce-e3ca-439b-8e9c-de616f5e6dec	철로보선작업	궤도및철로공사 > 철로보선작업 > 철도자재교환	PROMOTED_FROM_SOURCE	DRAFT	1	철도자재교환
+3ae990fd-0a05-4448-b74d-827b9c369e9e	침목및체결보선	침목및체결보선	2e8138ce-e3ca-439b-8e9c-de616f5e6dec	철로보선작업	궤도및철로공사 > 철로보선작업 > 침목및체결보선	PROMOTED_FROM_SOURCE	DRAFT	1	침목및체결보선
+98b21d59-42c5-4184-9ed3-846402a90466	바닥금속마감	바닥금속마감	d29022bc-5dd6-4a51-9dc6-8744789240bd	금속마감	금속공사 > 금속마감 > 바닥금속마감	PROMOTED_FROM_SOURCE	DRAFT	1	바닥금속마감
+a8c1bbe0-b76b-4f6f-9b24-b05a0a5b494a	벽체금속마감	벽체금속마감	d29022bc-5dd6-4a51-9dc6-8744789240bd	금속마감	금속공사 > 금속마감 > 벽체금속마감	PROMOTED_FROM_SOURCE	DRAFT	1	벽체금속마감
+1ef615dd-fc8d-4f56-8c87-6bf5bbeea00d	천정금속마감	천정금속마감	d29022bc-5dd6-4a51-9dc6-8744789240bd	금속마감	금속공사 > 금속마감 > 천정금속마감	PROMOTED_FROM_SOURCE	DRAFT	1	천정금속마감
+9f683835-9eee-4582-bec3-e572dc8830ff	금속조인트(줄눈)덮개및트림제작 설치	금속조인트(줄눈)덮개및트림제작 설치	1aee87d8-146d-43ae-b343-d1a09cd64fe0	금속부속물설치	금속공사 > 금속부속물설치 > 금속조인트(줄눈)덮개및트림제작 설치	PROMOTED_FROM_SOURCE	DRAFT	1	금속조인트(줄눈)덮개및트림제작 설치
+7ed34a97-86e9-4d04-b121-00c3269098ee	기타금속부속물설치	기타금속부속물설치	1aee87d8-146d-43ae-b343-d1a09cd64fe0	금속부속물설치	금속공사 > 금속부속물설치 > 기타금속부속물설치	PROMOTED_FROM_SOURCE	DRAFT	1	기타금속부속물설치
+6fe57b7f-7891-4288-97aa-d8e3663f0ee1	배관관리및시험	배관관리및시험	0d24428d-8d2b-4b43-b9d2-189481059c08	기계 프랜트공통시험 시운전공사	기계 플랜트 산업설비 전기 통신시험 시운전공사 > 기계 프랜트공통시험 시운전공사 > 배관관리및시험	PROMOTED_FROM_SOURCE	DRAFT	1	배관관리및시험
+00629e84-90c9-44a0-869b-bad577162cee	강재제작설치 조립공사	강재제작설치 조립공사	23c12507-241e-4e79-a855-4ab96b1ce94d	설비․시설잡공사	기계 플랜트시설공통공사 > 설비․시설잡공사 > 강재제작설치 조립공사	PROMOTED_FROM_SOURCE	DRAFT	1	강재제작설치 조립공사
+7e3429db-70f6-4228-a52e-fd2869b0125e	도장및방청공사	도장및방청공사	23c12507-241e-4e79-a855-4ab96b1ce94d	설비․시설잡공사	기계 플랜트시설공통공사 > 설비․시설잡공사 > 도장및방청공사	PROMOTED_FROM_SOURCE	DRAFT	1	도장및방청공사
+2729e10b-6484-4f98-bf01-260a56335293	터파기및되메우기공사	터파기및되메우기공사	23c12507-241e-4e79-a855-4ab96b1ce94d	설비․시설잡공사	기계 플랜트시설공통공사 > 설비․시설잡공사 > 터파기및되메우기공사	PROMOTED_FROM_SOURCE	DRAFT	1	터파기및되메우기공사
+249debe5-e013-4236-8dc0-936a7b24c88a	도막형벽체단열	도막형벽체단열	69f8d873-5093-4204-9150-57d65de28751	벽체단열	단열 방음공사 > 벽체단열 > 도막형벽체단열	PROMOTED_FROM_SOURCE	DRAFT	1	도막형벽체단열
+bd0a341a-ad36-497b-a019-2fabef384a1e	보드형벽체단열	보드형벽체단열	69f8d873-5093-4204-9150-57d65de28751	벽체단열	단열 방음공사 > 벽체단열 > 보드형벽체단열	PROMOTED_FROM_SOURCE	DRAFT	1	보드형벽체단열
+ac6f8edf-db7a-4b43-8111-cf08693e635f	뿜칠형벽체단열	뿜칠형벽체단열	69f8d873-5093-4204-9150-57d65de28751	벽체단열	단열 방음공사 > 벽체단열 > 뿜칠형벽체단열	PROMOTED_FROM_SOURCE	DRAFT	1	뿜칠형벽체단열
+90930af3-0b18-4126-8112-35d3f4cad886	시트벽체단열	시트벽체단열	69f8d873-5093-4204-9150-57d65de28751	벽체단열	단열 방음공사 > 벽체단열 > 시트벽체단열	PROMOTED_FROM_SOURCE	DRAFT	1	시트벽체단열
+fae0a7c9-10ee-4f4a-95eb-599bfd8d4710	현장포말벽체단열	현장포말벽체단열	69f8d873-5093-4204-9150-57d65de28751	벽체단열	단열 방음공사 > 벽체단열 > 현장포말벽체단열	PROMOTED_FROM_SOURCE	DRAFT	1	현장포말벽체단열
+d3b426fc-98b4-4fd9-80be-9373b75ed495	도막형슬래브하부단열	도막형슬래브하부단열	204fd2b5-6d67-42c3-aeda-94977217033f	슬래브하부단열	단열 방음공사 > 슬래브하부단열 > 도막형슬래브하부단열	PROMOTED_FROM_SOURCE	DRAFT	1	도막형슬래브하부단열
+4879080a-30d5-46e4-9897-25c95f942541	보드형슬래브하부단열	보드형슬래브하부단열	204fd2b5-6d67-42c3-aeda-94977217033f	슬래브하부단열	단열 방음공사 > 슬래브하부단열 > 보드형슬래브하부단열	PROMOTED_FROM_SOURCE	DRAFT	1	보드형슬래브하부단열
+91fa03a0-b6ad-4324-b478-8e0da77f41cf	뿜칠형슬래브하부단열	뿜칠형슬래브하부단열	204fd2b5-6d67-42c3-aeda-94977217033f	슬래브하부단열	단열 방음공사 > 슬래브하부단열 > 뿜칠형슬래브하부단열	PROMOTED_FROM_SOURCE	DRAFT	1	뿜칠형슬래브하부단열
+4d62899d-5bd0-4225-8839-c808dc373ac9	시트슬래브하부단열	시트슬래브하부단열	204fd2b5-6d67-42c3-aeda-94977217033f	슬래브하부단열	단열 방음공사 > 슬래브하부단열 > 시트슬래브하부단열	PROMOTED_FROM_SOURCE	DRAFT	1	시트슬래브하부단열
+8505e126-ffbd-4e69-88a1-d2dc46ba52cf	도막형외벽단열	도막형외벽단열	1b598b23-9ab8-4973-ad1a-4b87bfa67ea0	외벽단열	단열 방음공사 > 외벽단열 > 도막형외벽단열	PROMOTED_FROM_SOURCE	DRAFT	1	도막형외벽단열
+26768222-6b67-4bb0-8bd3-23528d0a6468	보드형외벽단열	보드형외벽단열	1b598b23-9ab8-4973-ad1a-4b87bfa67ea0	외벽단열	단열 방음공사 > 외벽단열 > 보드형외벽단열	PROMOTED_FROM_SOURCE	DRAFT	1	보드형외벽단열
+d951eca8-bd00-4144-a9af-d16bd382d0d8	뿜칠형외벽단열	뿜칠형외벽단열	1b598b23-9ab8-4973-ad1a-4b87bfa67ea0	외벽단열	단열 방음공사 > 외벽단열 > 뿜칠형외벽단열	PROMOTED_FROM_SOURCE	DRAFT	1	뿜칠형외벽단열
+1c72585a-6ee2-4d01-b47f-24731cb0fdef	시트외벽단열	시트외벽단열	1b598b23-9ab8-4973-ad1a-4b87bfa67ea0	외벽단열	단열 방음공사 > 외벽단열 > 시트외벽단열	PROMOTED_FROM_SOURCE	DRAFT	1	시트외벽단열
+d4469b22-d2d8-4b55-a7cb-6c948cb54aa8	현장포말외벽단열	현장포말외벽단열	1b598b23-9ab8-4973-ad1a-4b87bfa67ea0	외벽단열	단열 방음공사 > 외벽단열 > 현장포말외벽단열	PROMOTED_FROM_SOURCE	DRAFT	1	현장포말외벽단열
+2420c1b2-98b0-42f0-90b6-3f8d2faaafc4	다공성재료지붕 바닥단열	다공성재료지붕 바닥단열	55947deb-7b2c-422e-b07a-2492c8dd55c2	지붕및바닥단열공사	단열 방음공사 > 지붕및바닥단열공사 > 다공성재료지붕 바닥단열	PROMOTED_FROM_SOURCE	DRAFT	1	다공성재료지붕 바닥단열
+75b8aeed-ce25-4e35-bb6a-78718ece5482	도막형바닥단열	도막형바닥단열	55947deb-7b2c-422e-b07a-2492c8dd55c2	지붕및바닥단열공사	단열 방음공사 > 지붕및바닥단열공사 > 도막형바닥단열	PROMOTED_FROM_SOURCE	DRAFT	1	도막형바닥단열
+58228f07-8190-4e76-83a2-03e742043de3	보드형지붕 바닥단열	보드형지붕 바닥단열	55947deb-7b2c-422e-b07a-2492c8dd55c2	지붕및바닥단열공사	단열 방음공사 > 지붕및바닥단열공사 > 보드형지붕 바닥단열	PROMOTED_FROM_SOURCE	DRAFT	1	보드형지붕 바닥단열
+5ad36109-48d4-41d5-9d69-d0404c627892	뿜칠형지붕 바닥단열	뿜칠형지붕 바닥단열	55947deb-7b2c-422e-b07a-2492c8dd55c2	지붕및바닥단열공사	단열 방음공사 > 지붕및바닥단열공사 > 뿜칠형지붕 바닥단열	PROMOTED_FROM_SOURCE	DRAFT	1	뿜칠형지붕 바닥단열
+dc899bdd-c64b-4c1a-8bd7-6887e85296ef	시트지붕 바닥단열	시트지붕 바닥단열	55947deb-7b2c-422e-b07a-2492c8dd55c2	지붕및바닥단열공사	단열 방음공사 > 지붕및바닥단열공사 > 시트지붕 바닥단열	PROMOTED_FROM_SOURCE	DRAFT	1	시트지붕 바닥단열
+435dbc48-0281-4181-8995-b3fe72e450c6	현장포말지붕 바닥단열	현장포말지붕 바닥단열	55947deb-7b2c-422e-b07a-2492c8dd55c2	지붕및바닥단열공사	단열 방음공사 > 지붕및바닥단열공사 > 현장포말지붕 바닥단열	PROMOTED_FROM_SOURCE	DRAFT	1	현장포말지붕 바닥단열
+59af9acf-9dab-4cbd-af97-02b53123df88	보드형천정단열	보드형천정단열	8c908499-6b1c-4e72-b21a-4820cbc13213	천정단열	단열 방음공사 > 천정단열 > 보드형천정단열	PROMOTED_FROM_SOURCE	DRAFT	1	보드형천정단열
+2c461a8a-fd83-4a04-95dc-07c691fb131a	현장포말천정단열	현장포말천정단열	8c908499-6b1c-4e72-b21a-4820cbc13213	천정단열	단열 방음공사 > 천정단열 > 현장포말천정단열	PROMOTED_FROM_SOURCE	DRAFT	1	현장포말천정단열
+4e0fd542-545f-4fad-8857-ade865d8d841	Riprap재료축조	Riprap재료축조	efdfffad-db97-4a7f-b30a-19a78c418d13	댐공사	댐공사 > Riprap재료축조	PROMOTED_FROM_SOURCE	DRAFT	1	Riprap재료축조
+e8657c9f-3d2d-4fa3-bd59-bedca9b614e8	랜덤재료축조	랜덤재료축조	efdfffad-db97-4a7f-b30a-19a78c418d13	댐공사	댐공사 > 랜덤재료축조	PROMOTED_FROM_SOURCE	DRAFT	1	랜덤재료축조
+d9d52f99-bfb9-4335-892e-7481e33663e0	불투수성재료축조	불투수성재료축조	efdfffad-db97-4a7f-b30a-19a78c418d13	댐공사	댐공사 > 불투수성재료축조	PROMOTED_FROM_SOURCE	DRAFT	1	불투수성재료축조
+5dbe818f-f9dd-4298-b545-b8c935cbfe0a	사력재료축조	사력재료축조	efdfffad-db97-4a7f-b30a-19a78c418d13	댐공사	댐공사 > 사력재료축조	PROMOTED_FROM_SOURCE	DRAFT	1	사력재료축조
+8bca0a0b-924a-4c3a-b6a0-8d606e759efc	암석재료축조	암석재료축조	efdfffad-db97-4a7f-b30a-19a78c418d13	댐공사	댐공사 > 암석재료축조	PROMOTED_FROM_SOURCE	DRAFT	1	암석재료축조
+adb3f5d0-c684-4568-83a0-6f58bce8f4bc	휠터재료축조	휠터재료축조	efdfffad-db97-4a7f-b30a-19a78c418d13	댐공사	댐공사 > 휠터재료축조	PROMOTED_FROM_SOURCE	DRAFT	1	휠터재료축조
+5751cb34-0ee5-4298-9f45-22a07d7007f2	금속제바탕처리	금속제바탕처리	1c3217dc-73b3-45fd-9119-13508993a96d	바탕처리	도장공사 > 바탕처리 > 금속제바탕처리	PROMOTED_FROM_SOURCE	DRAFT	1	금속제바탕처리
+21ceb6d0-5fd1-45ac-963a-89b946e6c95c	기타도장바탕처리	기타도장바탕처리	1c3217dc-73b3-45fd-9119-13508993a96d	바탕처리	도장공사 > 바탕처리 > 기타도장바탕처리	PROMOTED_FROM_SOURCE	DRAFT	1	기타도장바탕처리
+699a7a8d-8214-4551-8250-359d4930b902	목재바탕처리	목재바탕처리	1c3217dc-73b3-45fd-9119-13508993a96d	바탕처리	도장공사 > 바탕처리 > 목재바탕처리	PROMOTED_FROM_SOURCE	DRAFT	1	목재바탕처리
+3c9f449a-7220-445e-ab8e-f9d0c68a6ff3	목재방부칠	목재방부칠	1c3217dc-73b3-45fd-9119-13508993a96d	바탕처리	도장공사 > 바탕처리 > 목재방부칠	PROMOTED_FROM_SOURCE	DRAFT	1	목재방부칠
+720f44ba-565c-4ca2-b197-9558afa79332	미장및콘크리트면바탕처리	미장및콘크리트면바탕처리	1c3217dc-73b3-45fd-9119-13508993a96d	바탕처리	도장공사 > 바탕처리 > 미장및콘크리트면바탕처리	PROMOTED_FROM_SOURCE	DRAFT	1	미장및콘크리트면바탕처리
+ebde9eb8-cb0c-4286-9b69-4ded6d031c6d	석고보드 종이면바탕처리	석고보드 종이면바탕처리	1c3217dc-73b3-45fd-9119-13508993a96d	바탕처리	도장공사 > 바탕처리 > 석고보드 종이면바탕처리	PROMOTED_FROM_SOURCE	DRAFT	1	석고보드 종이면바탕처리
+e7228658-b7ce-41b5-a87f-722d8fc0550c	기초그라우팅	기초그라우팅	54ecd392-a22a-4337-8852-a7e2ffc110c0	기초보강공사	말뚝공사 > 기초보강공사 > 기초그라우팅	PROMOTED_FROM_SOURCE	DRAFT	1	기초그라우팅
+69417f4b-f30d-47d4-9a4a-9ac8e2820e30	기초올리기	기초올리기	54ecd392-a22a-4337-8852-a7e2ffc110c0	기초보강공사	말뚝공사 > 기초보강공사 > 기초올리기	PROMOTED_FROM_SOURCE	DRAFT	1	기초올리기
+fcb638f8-d660-427b-aebe-c00d81f4e628	기초지반보강	기초지반보강	54ecd392-a22a-4337-8852-a7e2ffc110c0	기초보강공사	말뚝공사 > 기초보강공사 > 기초지반보강	PROMOTED_FROM_SOURCE	DRAFT	1	기초지반보강
+97fe7699-d8b4-4b6b-8416-ee7dd366574c	기초지지보설치	기초지지보설치	54ecd392-a22a-4337-8852-a7e2ffc110c0	기초보강공사	말뚝공사 > 기초보강공사 > 기초지지보설치	PROMOTED_FROM_SOURCE	DRAFT	1	기초지지보설치
+374a3a38-c207-4f94-a159-764a15deb2f0	기계식굴착	기계식굴착	ad059346-dd94-4306-a6fb-52c8dc75b63c	현장타설말뚝	말뚝공사 > 현장타설말뚝 > 기계식굴착	PROMOTED_FROM_SOURCE	DRAFT	1	기계식굴착
+3ce604d9-c812-417e-8063-78db152ba713	목재천정마감	목재천정마감	82b93dc9-88a1-49f8-bd54-3874f569ced2	마감목공사	목공사 > 마감목공사 > 목재천정마감	PROMOTED_FROM_SOURCE	DRAFT	1	목재천정마감
+2e168dd5-b5ef-4a2c-977d-dec24b76635f	목조바닥깔기	목조바닥깔기	82b93dc9-88a1-49f8-bd54-3874f569ced2	마감목공사	목공사 > 마감목공사 > 목조바닥깔기	PROMOTED_FROM_SOURCE	DRAFT	1	목조바닥깔기
+0da5efda-23b3-4ec2-a3eb-53aa7c01343e	목조지붕널덮기	목조지붕널덮기	82b93dc9-88a1-49f8-bd54-3874f569ced2	마감목공사	목공사 > 마감목공사 > 목조지붕널덮기	PROMOTED_FROM_SOURCE	DRAFT	1	목조지붕널덮기
+e579aba1-ab0b-453f-8ca8-7f345b3bf041	벽체띠장설치	벽체띠장설치	82b93dc9-88a1-49f8-bd54-3874f569ced2	마감목공사	목공사 > 마감목공사 > 벽체띠장설치	PROMOTED_FROM_SOURCE	DRAFT	1	벽체띠장설치
+47aea020-47a2-4461-8d5f-d58e59b0af1e	벽체목재마감	벽체목재마감	82b93dc9-88a1-49f8-bd54-3874f569ced2	마감목공사	목공사 > 마감목공사 > 벽체목재마감	PROMOTED_FROM_SOURCE	DRAFT	1	벽체목재마감
+4eafc93b-3402-4a12-b9f0-0bfd4570354d	내신축처리	내신축처리	128af189-99ce-4b61-b638-1ae7b9cc7267	목재처리	목공사 > 목재처리 > 내신축처리	PROMOTED_FROM_SOURCE	DRAFT	1	내신축처리
+29121c97-8f71-4f5d-a5a5-0185d0d7d386	내화처리	내화처리	128af189-99ce-4b61-b638-1ae7b9cc7267	목재처리	목공사 > 목재처리 > 내화처리	PROMOTED_FROM_SOURCE	DRAFT	1	내화처리
+e9cdc042-6f11-43d5-a359-009a0375a4f5	방부처리	방부처리	128af189-99ce-4b61-b638-1ae7b9cc7267	목재처리	목공사 > 목재처리 > 방부처리	PROMOTED_FROM_SOURCE	DRAFT	1	방부처리
+e0cff068-017a-484e-8000-8443611b24ed	방충처리	방충처리	128af189-99ce-4b61-b638-1ae7b9cc7267	목재처리	목공사 > 목재처리 > 방충처리	PROMOTED_FROM_SOURCE	DRAFT	1	방충처리
+a0be5890-1478-4fac-9cec-3ebcfcc99ec6	목재난간설치	목재난간설치	fcfefcab-8631-45fd-85b7-cd29d3e9ff6f	목조부속목공사	목공사 > 목조부속목공사 > 목재난간설치	PROMOTED_FROM_SOURCE	DRAFT	1	목재난간설치
+c38f68ae-6223-4351-9010-5bbe81e051cf	목재마감목설치	목재마감목설치	fcfefcab-8631-45fd-85b7-cd29d3e9ff6f	목조부속목공사	목공사 > 목조부속목공사 > 목재마감목설치	PROMOTED_FROM_SOURCE	DRAFT	1	목재마감목설치
+14fcfb2a-fe8f-49f8-a005-2ad05933436a	목재창선반설치	목재창선반설치	fcfefcab-8631-45fd-85b7-cd29d3e9ff6f	목조부속목공사	목공사 > 목조부속목공사 > 목재창선반설치	PROMOTED_FROM_SOURCE	DRAFT	1	목재창선반설치
+95e54761-e5e5-4dd3-a063-228eb1038654	미장면마감	미장면마감	1d0bd5eb-b7c8-4bed-9ada-c52ccf609496	미장부속공사	미장공사 > 미장부속공사 > 미장면마감	PROMOTED_FROM_SOURCE	DRAFT	1	미장면마감
+e57ed06d-b7fa-4db6-a061-4a244fa0c59e	미장바탕충전	미장바탕충전	1d0bd5eb-b7c8-4bed-9ada-c52ccf609496	미장부속공사	미장공사 > 미장부속공사 > 미장바탕충전	PROMOTED_FROM_SOURCE	DRAFT	1	미장바탕충전
+f24192ea-a772-4f8e-9ca2-e7e0450ce26b	미장보강	미장보강	bb494f3d-604c-4aa5-a93f-7e34af3e27ab	온돌바닥공사	미장공사 > 온돌바닥공사 > 미장보강	PROMOTED_FROM_SOURCE	DRAFT	1	미장보강
+f8d0c9aa-87a7-4efe-bdf4-f6bc4b2d2962	온돌바닥미장	온돌바닥미장	bb494f3d-604c-4aa5-a93f-7e34af3e27ab	온돌바닥공사	미장공사 > 온돌바닥공사 > 온돌바닥미장	PROMOTED_FROM_SOURCE	DRAFT	1	온돌바닥미장
+f05c8db7-9606-411c-8abe-3128233e1dc0	걸레받이인조석바름및갈기	걸레받이인조석바름및갈기	073b0acc-4e0d-4ce6-9d93-d13feeeddd07	인조석(테라조)미장및물갈기	미장공사 > 인조석(테라조)미장및물갈기 > 걸레받이인조석바름및갈기	PROMOTED_FROM_SOURCE	DRAFT	1	걸레받이인조석바름및갈기
+b70048ca-31a4-485e-934c-dae29266d62a	계단인조석바름및갈기	계단인조석바름및갈기	073b0acc-4e0d-4ce6-9d93-d13feeeddd07	인조석(테라조)미장및물갈기	미장공사 > 인조석(테라조)미장및물갈기 > 계단인조석바름및갈기	PROMOTED_FROM_SOURCE	DRAFT	1	계단인조석바름및갈기
+a74f7959-f4e8-43f4-b033-580946cc7500	바닥인조석바름및갈기	바닥인조석바름및갈기	073b0acc-4e0d-4ce6-9d93-d13feeeddd07	인조석(테라조)미장및물갈기	미장공사 > 인조석(테라조)미장및물갈기 > 바닥인조석바름및갈기	PROMOTED_FROM_SOURCE	DRAFT	1	바닥인조석바름및갈기
+53046929-f19e-4338-8bf2-99fe515d0b1c	벽인조석바름및갈기	벽인조석바름및갈기	073b0acc-4e0d-4ce6-9d93-d13feeeddd07	인조석(테라조)미장및물갈기	미장공사 > 인조석(테라조)미장및물갈기 > 벽인조석바름및갈기	PROMOTED_FROM_SOURCE	DRAFT	1	벽인조석바름및갈기
+d2831aea-2641-48ef-9495-8f134101b54d	골재나타내기미장	골재나타내기미장	daab7a35-f93b-48b3-b605-f99fb38fb1a0	특수미장	미장공사 > 특수미장 > 골재나타내기미장	PROMOTED_FROM_SOURCE	DRAFT	1	골재나타내기미장
+b574f55c-e86a-49b1-bdd9-bee87b5c6dc3	그래뉼뿜칠미장	그래뉼뿜칠미장	daab7a35-f93b-48b3-b605-f99fb38fb1a0	특수미장	미장공사 > 특수미장 > 그래뉼뿜칠미장	PROMOTED_FROM_SOURCE	DRAFT	1	그래뉼뿜칠미장
+41ced568-9e4d-43d7-afad-ed3700539c04	시멘트페이스트바름	시멘트페이스트바름	daab7a35-f93b-48b3-b605-f99fb38fb1a0	특수미장	미장공사 > 특수미장 > 시멘트페이스트바름	PROMOTED_FROM_SOURCE	DRAFT	1	시멘트페이스트바름
+89461b83-12be-4c91-8064-ce5e4ff8bfec	하드너바르기	하드너바르기	daab7a35-f93b-48b3-b605-f99fb38fb1a0	특수미장	미장공사 > 특수미장 > 하드너바르기	PROMOTED_FROM_SOURCE	DRAFT	1	하드너바르기
+14e7149c-7e23-4b8a-968b-4a7c5dade5c0	흙벽미장	흙벽미장	daab7a35-f93b-48b3-b605-f99fb38fb1a0	특수미장	미장공사 > 특수미장 > 흙벽미장	PROMOTED_FROM_SOURCE	DRAFT	1	흙벽미장
+2ccfbd4e-dd01-4740-95cd-296808302bcc	회반죽미장	회반죽미장	51606bb5-d9c3-411f-8e33-3cb20fc8f923	미장공사	미장공사 > 회반죽미장	PROMOTED_FROM_SOURCE	DRAFT	1	회반죽미장
+290b6155-d3f3-404c-bb91-902b712d9eff	회사미장	회사미장	51606bb5-d9c3-411f-8e33-3cb20fc8f923	미장공사	미장공사 > 회사미장	PROMOTED_FROM_SOURCE	DRAFT	1	회사미장
+9d2347a9-2671-40e6-a7a5-76b9789f58d2	복수설비설치공사	복수설비설치공사	9d9bafff-1019-48f3-b2bb-cd5e9bfca11f	발전설비관련공사	발전설비공사 > 발전설비관련공사 > 복수설비설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	복수설비설치공사
+a0d1e8aa-a7d1-4bb1-9ad3-dfe617e013b1	터빈및발전기설치공사	터빈및발전기설치공사	9d9bafff-1019-48f3-b2bb-cd5e9bfca11f	발전설비관련공사	발전설비공사 > 발전설비관련공사 > 터빈및발전기설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	터빈및발전기설치공사
+3c1e39bb-df9b-4fa6-9bf5-2124685dfedb	동판방수	동판방수	00704352-b4d4-471f-84cc-d40a744cbbde	금속방수	방수공사 > 금속방수 > 동판방수	PROMOTED_FROM_SOURCE	DRAFT	1	동판방수
+db0a2eab-93a7-45fa-99e1-5896db788e31	스테인레스강판방수	스테인레스강판방수	00704352-b4d4-471f-84cc-d40a744cbbde	금속방수	방수공사 > 금속방수 > 스테인레스강판방수	PROMOTED_FROM_SOURCE	DRAFT	1	스테인레스강판방수
+a5368af3-dd14-40f3-a1af-e68b27467561	도막방수	도막방수	65bb4730-cda3-4c07-9e85-935b900e156d	멤브레인방수	방수공사 > 멤브레인방수 > 도막방수	PROMOTED_FROM_SOURCE	DRAFT	1	도막방수
+21246998-0955-4802-af80-33213af8176f	아스팔트방수	아스팔트방수	65bb4730-cda3-4c07-9e85-935b900e156d	멤브레인방수	방수공사 > 멤브레인방수 > 아스팔트방수	PROMOTED_FROM_SOURCE	DRAFT	1	아스팔트방수
+ca0b9798-7c9f-40bf-9eab-03fc1e6628e4	탄성시트방수	탄성시트방수	65bb4730-cda3-4c07-9e85-935b900e156d	멤브레인방수	방수공사 > 멤브레인방수 > 탄성시트방수	PROMOTED_FROM_SOURCE	DRAFT	1	탄성시트방수
+4fc58e35-f60e-4478-a376-4beb0a5b8c1b	발수성도장방습	발수성도장방습	7b1c268e-1120-45b8-bcd5-0716c1f785a1	방습	방수공사 > 방습 > 발수성도장방습	PROMOTED_FROM_SOURCE	DRAFT	1	발수성도장방습
+f1e6e2c0-410b-4786-bc9a-3bc6bcca7d6b	배수판설치	배수판설치	7b1c268e-1120-45b8-bcd5-0716c1f785a1	방습	방수공사 > 방습 > 배수판설치	PROMOTED_FROM_SOURCE	DRAFT	1	배수판설치
+0bbd5856-190d-4c3e-98c6-14d7735f1c7d	시멘트성방습	시멘트성방습	7b1c268e-1120-45b8-bcd5-0716c1f785a1	방습	방수공사 > 방습 > 시멘트성방습	PROMOTED_FROM_SOURCE	DRAFT	1	시멘트성방습
+115c9ef5-5872-4fa1-97c8-8c829e28e1fb	아스팔트계방습	아스팔트계방습	7b1c268e-1120-45b8-bcd5-0716c1f785a1	방습	방수공사 > 방습 > 아스팔트계방습	PROMOTED_FROM_SOURCE	DRAFT	1	아스팔트계방습
+169c3877-384c-4d26-abb5-a00fab864483	탄성시트방습	탄성시트방습	7b1c268e-1120-45b8-bcd5-0716c1f785a1	방습	방수공사 > 방습 > 탄성시트방습	PROMOTED_FROM_SOURCE	DRAFT	1	탄성시트방습
+43238aa9-de07-4d8c-81ed-e9c47a612abb	벤토나이트복합시트방수	벤토나이트복합시트방수	af0a9b1a-5106-4a6e-94a5-80dc7fc0779e	벤토나이트방수	방수공사 > 벤토나이트방수 > 벤토나이트복합시트방수	PROMOTED_FROM_SOURCE	DRAFT	1	벤토나이트복합시트방수
+915d5258-278c-4e35-a2a0-8ddb4055ac93	벤토나이트판넬방수	벤토나이트판넬방수	af0a9b1a-5106-4a6e-94a5-80dc7fc0779e	벤토나이트방수	방수공사 > 벤토나이트방수 > 벤토나이트판넬방수	PROMOTED_FROM_SOURCE	DRAFT	1	벤토나이트판넬방수
+002e76e6-1a76-4cb2-a0fe-172a0717a69a	기타액체및모르터방수	기타액체및모르터방수	df822a06-8422-4944-801d-5d29ada48bb3	액체방수및모르터방수	방수공사 > 액체방수및모르터방수 > 기타액체및모르터방수	PROMOTED_FROM_SOURCE	DRAFT	1	기타액체및모르터방수
+135ee736-28f6-41b9-b543-ae627f1fae2b	모르터방수	모르터방수	df822a06-8422-4944-801d-5d29ada48bb3	액체방수및모르터방수	방수공사 > 액체방수및모르터방수 > 모르터방수	PROMOTED_FROM_SOURCE	DRAFT	1	모르터방수
+90013697-f9a3-4c34-833f-c87ada0f06ed	시멘트액체방수	시멘트액체방수	df822a06-8422-4944-801d-5d29ada48bb3	액체방수및모르터방수	방수공사 > 액체방수및모르터방수 > 시멘트액체방수	PROMOTED_FROM_SOURCE	DRAFT	1	시멘트액체방수
+f571c346-9b60-4eba-8c6c-285df3bc9d68	무기질침투성방수	무기질침투성방수	4c8434c9-d7d1-4ff9-8b99-c5131c6e6669	침투성방수	방수공사 > 침투성방수 > 무기질침투성방수	PROMOTED_FROM_SOURCE	DRAFT	1	무기질침투성방수
+de827037-069d-4e92-af11-3d03b16438d3	유기질침투성방수	유기질침투성방수	4c8434c9-d7d1-4ff9-8b99-c5131c6e6669	침투성방수	방수공사 > 침투성방수 > 유기질침투성방수	PROMOTED_FROM_SOURCE	DRAFT	1	유기질침투성방수
+c377be69-6ab3-4048-9d38-05fa755a8267	소방설비기기류별설치공사	소방설비기기류별설치공사	2250286c-d9a8-4e68-9898-296bb3d42be1	소방기계설비공사	방재기계설비공사 > 소방기계설비공사 > 소방설비기기류별설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	소방설비기기류별설치공사
+f1e3dbfc-c439-4a46-a2ac-320a90ae031c	소방전기설비개별기기설치공사	소방전기설비개별기기설치공사	0ff5876a-fb3f-4283-949b-cad5d0278b91	소방전기설비공사	방재전기설비공사 > 소방전기설비공사 > 소방전기설비개별기기설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	소방전기설비개별기기설치공사
+1e1cb456-1c37-493b-a260-5dd23744f258	서류및샘플제출	서류및샘플제출	EMPTY		서류및샘플제출	PROMOTED_FROM_SOURCE	DRAFT	1	서류및샘플제출
+23cda004-8f02-43f1-8a9a-9cfedc4fe2e8	경계석(마감석)붙이기	경계석(마감석)붙이기	0b5224ee-1c0d-41eb-8367-a80e2762d7bf	기타부위석재붙이기	석재판재공사 > 기타부위석재붙이기 > 경계석(마감석)붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	경계석(마감석)붙이기
+0130841f-94a5-4de6-8bb2-ff4bfc591698	도어씰붙이기	도어씰붙이기	0b5224ee-1c0d-41eb-8367-a80e2762d7bf	기타부위석재붙이기	석재판재공사 > 기타부위석재붙이기 > 도어씰붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	도어씰붙이기
+23a1bffc-7e95-4d93-9e75-c94c1b2d4b85	두겁돌붙이기	두겁돌붙이기	0b5224ee-1c0d-41eb-8367-a80e2762d7bf	기타부위석재붙이기	석재판재공사 > 기타부위석재붙이기 > 두겁돌붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	두겁돌붙이기
+ea385556-01e4-4f7f-b9bf-647a78935d14	창대석붙이기	창대석붙이기	0b5224ee-1c0d-41eb-8367-a80e2762d7bf	기타부위석재붙이기	석재판재공사 > 기타부위석재붙이기 > 창대석붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	창대석붙이기
+3aa0b429-5bd1-4dd2-83a4-ad0fd0e83efb	계단디딤판(트레드)석재붙이기	계단디딤판(트레드)석재붙이기	742c2cb1-a9d4-4ac8-a301-af0cba9f59d6	석재계단붙이기	석재판재공사 > 석재계단붙이기 > 계단디딤판(트레드)석재붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	계단디딤판(트레드)석재붙이기
+99619801-45dc-4214-9f6c-e5fbc2395974	계단채임판(라이저)석재붙이기	계단채임판(라이저)석재붙이기	742c2cb1-a9d4-4ac8-a301-af0cba9f59d6	석재계단붙이기	석재판재공사 > 석재계단붙이기 > 계단채임판(라이저)석재붙이기	MERGED_FROM_REVIEWED_SOURCES	DRAFT	2	계단채임판(라이저)석재붙이기
+5cb30a9a-6982-46ca-b9c0-ccd60cf64565	통석재계단놓기	통석재계단놓기	742c2cb1-a9d4-4ac8-a301-af0cba9f59d6	석재계단붙이기	석재판재공사 > 석재계단붙이기 > 통석재계단놓기	PROMOTED_FROM_SOURCE	DRAFT	1	통석재계단놓기
+1bf29c9b-d407-4683-ac40-bee69c29f05e	대리석구조물밑면붙이기	대리석구조물밑면붙이기	80558c18-8f48-44cc-bc82-270cb0571b63	석재구조물밑면붙이기	석재판재공사 > 석재구조물밑면붙이기 > 대리석구조물밑면붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	대리석구조물밑면붙이기
+e9f718e9-82b7-40c4-abde-f1b46dbc732e	사암구조물밑면붙이기	사암구조물밑면붙이기	80558c18-8f48-44cc-bc82-270cb0571b63	석재구조물밑면붙이기	석재판재공사 > 석재구조물밑면붙이기 > 사암구조물밑면붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	사암구조물밑면붙이기
+82fbca4c-81ce-4131-aadf-8b021ccc74cd	인조석구조물밑면붙이기	인조석구조물밑면붙이기	80558c18-8f48-44cc-bc82-270cb0571b63	석재구조물밑면붙이기	석재판재공사 > 석재구조물밑면붙이기 > 인조석구조물밑면붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	인조석구조물밑면붙이기
+a1002845-9933-4155-b3c9-34056dbcb041	천연슬래이트구조물밑면붙이기	천연슬래이트구조물밑면붙이기	80558c18-8f48-44cc-bc82-270cb0571b63	석재구조물밑면붙이기	석재판재공사 > 석재구조물밑면붙이기 > 천연슬래이트구조물밑면붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	천연슬래이트구조물밑면붙이기
+0e147c7e-e237-40a5-832d-ca92f3da69ba	테라조구조물밑면붙이기	테라조구조물밑면붙이기	80558c18-8f48-44cc-bc82-270cb0571b63	석재구조물밑면붙이기	석재판재공사 > 석재구조물밑면붙이기 > 테라조구조물밑면붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	테라조구조물밑면붙이기
+44895320-971a-4ad2-9d06-15e97c082d4f	화강석구조물밑면붙이기	화강석구조물밑면붙이기	80558c18-8f48-44cc-bc82-270cb0571b63	석재구조물밑면붙이기	석재판재공사 > 석재구조물밑면붙이기 > 화강석구조물밑면붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	화강석구조물밑면붙이기
+45cde2e5-92ce-4370-b53a-8fe6dd293aef	대리석내벽붙이기	대리석내벽붙이기	b6103826-0560-4525-9cc9-2b7bf8f0d63b	석재내벽붙이기	석재판재공사 > 석재내벽붙이기 > 대리석내벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	대리석내벽붙이기
+f9c0f5da-b106-46a9-b4c1-152f5dc6e336	사암내벽붙이기	사암내벽붙이기	b6103826-0560-4525-9cc9-2b7bf8f0d63b	석재내벽붙이기	석재판재공사 > 석재내벽붙이기 > 사암내벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	사암내벽붙이기
+e4fb0a26-ec3f-4840-9b1e-dca5dc6949ab	인조석내벽붙이기	인조석내벽붙이기	b6103826-0560-4525-9cc9-2b7bf8f0d63b	석재내벽붙이기	석재판재공사 > 석재내벽붙이기 > 인조석내벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	인조석내벽붙이기
+a19891a0-5fff-43ea-a12f-fa0fb311068a	천연슬래이트(점판암)내벽붙이기	천연슬래이트(점판암)내벽붙이기	b6103826-0560-4525-9cc9-2b7bf8f0d63b	석재내벽붙이기	석재판재공사 > 석재내벽붙이기 > 천연슬래이트(점판암)내벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	천연슬래이트(점판암)내벽붙이기
+0349f8ca-ee1b-4942-9410-3e2d36938276	테라조내벽붙이기	테라조내벽붙이기	b6103826-0560-4525-9cc9-2b7bf8f0d63b	석재내벽붙이기	석재판재공사 > 석재내벽붙이기 > 테라조내벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	테라조내벽붙이기
+1acb551b-8d32-42ca-bd83-49c3cc358450	화강석내벽붙이기	화강석내벽붙이기	b6103826-0560-4525-9cc9-2b7bf8f0d63b	석재내벽붙이기	석재판재공사 > 석재내벽붙이기 > 화강석내벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	화강석내벽붙이기
+de4ed0fd-c05c-490a-b7c7-423274ee34b2	석재거친다듬마감	석재거친다듬마감	283ded33-4df9-486a-b46f-1a739a0fde76	석재마감공사	석재판재공사 > 석재마감공사 > 석재거친다듬마감	PROMOTED_FROM_SOURCE	DRAFT	1	석재거친다듬마감 - - 대․중․소 분류대․중․소 분류
+50550de8-5ade-4ca9-9c21-41ba5048bd89	석재골파기마감	석재골파기마감	283ded33-4df9-486a-b46f-1a739a0fde76	석재마감공사	석재판재공사 > 석재마감공사 > 석재골파기마감	PROMOTED_FROM_SOURCE	DRAFT	1	석재골파기마감
+0c751d96-fa9f-4693-a651-764bc25a83c5	석재물갈기	석재물갈기	283ded33-4df9-486a-b46f-1a739a0fde76	석재마감공사	석재판재공사 > 석재마감공사 > 석재물갈기	PROMOTED_FROM_SOURCE	DRAFT	1	석재물갈기
+5d999bef-19c2-4d31-b4c0-1f96fac982dc	석재잔다듬마감	석재잔다듬마감	283ded33-4df9-486a-b46f-1a739a0fde76	석재마감공사	석재판재공사 > 석재마감공사 > 석재잔다듬마감	PROMOTED_FROM_SOURCE	DRAFT	1	석재잔다듬마감
+8f0b754e-fcc4-485d-a2a9-ad999f384fc6	석재젯트버너마감	석재젯트버너마감	283ded33-4df9-486a-b46f-1a739a0fde76	석재마감공사	석재판재공사 > 석재마감공사 > 석재젯트버너마감	PROMOTED_FROM_SOURCE	DRAFT	1	석재젯트버너마감
+92b711a9-290f-4adb-9e7e-a5e3dcb2e4be	대리석깔기	대리석깔기	c3f2f7b9-18b4-4702-8b8d-7548f906d437	석재바닥깔기	석재판재공사 > 석재바닥깔기 > 대리석깔기	PROMOTED_FROM_SOURCE	DRAFT	1	대리석깔기
+0c83ab61-726a-406d-851b-664b425a655c	사암깔기	사암깔기	c3f2f7b9-18b4-4702-8b8d-7548f906d437	석재바닥깔기	석재판재공사 > 석재바닥깔기 > 사암깔기	PROMOTED_FROM_SOURCE	DRAFT	1	사암깔기
+f96c09f4-cb72-47a2-9449-c0388a8a7ca6	인조석깔기	인조석깔기	c3f2f7b9-18b4-4702-8b8d-7548f906d437	석재바닥깔기	석재판재공사 > 석재바닥깔기 > 인조석깔기	PROMOTED_FROM_SOURCE	DRAFT	1	인조석깔기
+4aa9997a-8bee-445c-b3ac-60e38c477d7b	천연슬레이트(점판암)깔기	천연슬레이트(점판암)깔기	c3f2f7b9-18b4-4702-8b8d-7548f906d437	석재바닥깔기	석재판재공사 > 석재바닥깔기 > 천연슬레이트(점판암)깔기	PROMOTED_FROM_SOURCE	DRAFT	1	천연슬레이트(점판암)깔기
+a2cbb9aa-6cc2-4343-aede-4173a75eb016	테라조타일깔기	테라조타일깔기	c3f2f7b9-18b4-4702-8b8d-7548f906d437	석재바닥깔기	석재판재공사 > 석재바닥깔기 > 테라조타일깔기	PROMOTED_FROM_SOURCE	DRAFT	1	테라조타일깔기
+1aaa3502-f902-4ce0-84c2-06ee4ac6abdf	화강석깔기	화강석깔기	c3f2f7b9-18b4-4702-8b8d-7548f906d437	석재바닥깔기	석재판재공사 > 석재바닥깔기 > 화강석깔기	PROMOTED_FROM_SOURCE	DRAFT	1	화강석깔기
+4c6f4bb3-91cd-4c13-95e6-27accadacde1	대리석외벽붙이기	대리석외벽붙이기	713e9be2-fff5-4455-a40f-e0157e998d2e	석재외벽붙이기	석재판재공사 > 석재외벽붙이기 > 대리석외벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	대리석외벽붙이기
+5ca783eb-e655-494d-89ba-57d722b39e6c	사암외벽붙이기	사암외벽붙이기	713e9be2-fff5-4455-a40f-e0157e998d2e	석재외벽붙이기	석재판재공사 > 석재외벽붙이기 > 사암외벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	사암외벽붙이기
+aaf22fc1-87ab-49a4-b30c-14d76581e4ef	인조석외벽붙이기	인조석외벽붙이기	713e9be2-fff5-4455-a40f-e0157e998d2e	석재외벽붙이기	석재판재공사 > 석재외벽붙이기 > 인조석외벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	인조석외벽붙이기
+888e27ad-7ef2-4b13-acdc-b8bb4f9e1ac4	천연슬래이트외벽붙이기	천연슬래이트외벽붙이기	713e9be2-fff5-4455-a40f-e0157e998d2e	석재외벽붙이기	석재판재공사 > 석재외벽붙이기 > 천연슬래이트외벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	천연슬래이트외벽붙이기
+9f47a92d-bea6-4496-af4e-0e4b69f14583	테라조외벽붙이기	테라조외벽붙이기	713e9be2-fff5-4455-a40f-e0157e998d2e	석재외벽붙이기	석재판재공사 > 석재외벽붙이기 > 테라조외벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	테라조외벽붙이기
+2a653256-c8f0-4931-8c24-2ba170e22112	화강석외벽붙이기	화강석외벽붙이기	713e9be2-fff5-4455-a40f-e0157e998d2e	석재외벽붙이기	석재판재공사 > 석재외벽붙이기 > 화강석외벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	화강석외벽붙이기
+01631d52-134e-440f-b86e-2afb09b6958b	전동기설치공사	전동기설치공사	fb896a27-ed87-4811-bd78-0bb2626216bf	기타전기설비공사	송배전․발 수변전전기공사 > 기타전기설비공사 > 전동기설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	전동기설치공사
+1ae33ea6-e02f-4daa-9179-d0eb2516fa5c	배전설비별기기류설치공사	배전설비별기기류설치공사	6b3c897a-bdae-4e37-ac77-5243c3d00a84	배전설비공사	송배전․발 수변전전기공사 > 배전설비공사 > 배전설비별기기류설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	배전설비별기기류설치공사
+78752ad8-563f-40b4-b785-345e3ad17c77	벽지바르기	벽지바르기	addfaf62-3805-4680-9941-6e299eeed209	도배공사	수장공사 > 도배공사 > 벽지바르기	PROMOTED_FROM_SOURCE	DRAFT	1	벽지바르기
+1333d6f6-7703-4f3e-afcf-9ab03b758cc9	장판지바르기	장판지바르기	addfaf62-3805-4680-9941-6e299eeed209	도배공사	수장공사 > 도배공사 > 장판지바르기	PROMOTED_FROM_SOURCE	DRAFT	1	장판지바르기
+9377e2e2-0199-4ffb-8a39-45eebe204ef8	창호지바르기	창호지바르기	addfaf62-3805-4680-9941-6e299eeed209	도배공사	수장공사 > 도배공사 > 창호지바르기	PROMOTED_FROM_SOURCE	DRAFT	1	창호지바르기
+55522a2a-9ebd-4dc1-bc67-8ec7cdae2b6a	천정지바르기	천정지바르기	addfaf62-3805-4680-9941-6e299eeed209	도배공사	수장공사 > 도배공사 > 천정지바르기	PROMOTED_FROM_SOURCE	DRAFT	1	천정지바르기
+06f54916-d26f-408f-90bd-297511825e27	온돌마루깔기	온돌마루깔기	3213c0e7-55e9-421b-91b7-740057165b8b	바닥깔기	수장공사 > 바닥깔기 > 온돌마루깔기	PROMOTED_FROM_SOURCE	DRAFT	1	온돌마루깔기
+b7984497-d014-471e-ac82-42f5de141088	인조잔디깔기	인조잔디깔기	3213c0e7-55e9-421b-91b7-740057165b8b	바닥깔기	수장공사 > 바닥깔기 > 인조잔디깔기	PROMOTED_FROM_SOURCE	DRAFT	1	인조잔디깔기
+58ce5ee0-546c-4386-95fb-d1ee90d08f50	카페트깔기	카페트깔기	3213c0e7-55e9-421b-91b7-740057165b8b	바닥깔기	수장공사 > 바닥깔기 > 카페트깔기	PROMOTED_FROM_SOURCE	DRAFT	1	카페트깔기
+2155936c-2027-4873-9d84-a369ff47b824	멜라민수지쉬트붙이기	멜라민수지쉬트붙이기	f341a82a-d015-42a2-ba95-73222b9510c2	박판쉬트(비니어)붙이기	수장공사 > 박판쉬트(비니어)붙이기 > 멜라민수지쉬트붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	멜라민수지쉬트붙이기
+22c5a852-db42-4bec-b3b8-03a4147f23bc	박판금속쉬트붙이기	박판금속쉬트붙이기	f341a82a-d015-42a2-ba95-73222b9510c2	박판쉬트(비니어)붙이기	수장공사 > 박판쉬트(비니어)붙이기 > 박판금속쉬트붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	박판금속쉬트붙이기
+d668e6e1-a5b6-4ba7-b40f-b1fd3e0bbd22	염화비닐수지쉬트붙이기	염화비닐수지쉬트붙이기	f341a82a-d015-42a2-ba95-73222b9510c2	박판쉬트(비니어)붙이기	수장공사 > 박판쉬트(비니어)붙이기 > 염화비닐수지쉬트붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	염화비닐수지쉬트붙이기
+0a24f8d3-2f4b-4b09-a59f-5a9135709340	우드비니어(무늬목)붙이기	우드비니어(무늬목)붙이기	f341a82a-d015-42a2-ba95-73222b9510c2	박판쉬트(비니어)붙이기	수장공사 > 박판쉬트(비니어)붙이기 > 우드비니어(무늬목)붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	우드비니어(무늬목)붙이기
+e284a432-5d1b-4e0a-860c-b1a79df76ae5	페놀수지쉬트붙이기	페놀수지쉬트붙이기	f341a82a-d015-42a2-ba95-73222b9510c2	박판쉬트(비니어)붙이기	수장공사 > 박판쉬트(비니어)붙이기 > 페놀수지쉬트붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	페놀수지쉬트붙이기
+31b9bee4-e990-491c-867c-6b6c23cce758	폴리에스테르수지쉬트붙이기	폴리에스테르수지쉬트붙이기	f341a82a-d015-42a2-ba95-73222b9510c2	박판쉬트(비니어)붙이기	수장공사 > 박판쉬트(비니어)붙이기 > 폴리에스테르수지쉬트붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	폴리에스테르수지쉬트붙이기
+caf1be65-959f-47d8-80a4-b50a26bfc0d6	벽체석고보드붙이기	벽체석고보드붙이기	ac2a3158-0c35-492f-8611-dd2c65d6aa30	벽체붙이기	수장공사 > 벽체붙이기 > 벽체석고보드붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	벽체석고보드붙이기
+d58a82f0-4dfd-45e0-a2fb-44533dccd83c	벽체석면시멘트판재붙이기	벽체석면시멘트판재붙이기	ac2a3158-0c35-492f-8611-dd2c65d6aa30	벽체붙이기	수장공사 > 벽체붙이기 > 벽체석면시멘트판재붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	벽체석면시멘트판재붙이기
+06da75ac-d4c3-4b60-a384-d57f9b2eb6dd	벽체섬유질판재붙이기	벽체섬유질판재붙이기	ac2a3158-0c35-492f-8611-dd2c65d6aa30	벽체붙이기	수장공사 > 벽체붙이기 > 벽체섬유질판재붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	벽체섬유질판재붙이기
+900c0052-ab6c-4631-8df0-c8cf4c466803	벽체카페트붙이기	벽체카페트붙이기	ac2a3158-0c35-492f-8611-dd2c65d6aa30	벽체붙이기	수장공사 > 벽체붙이기 > 벽체카페트붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	벽체카페트붙이기
+cefa4a51-f586-4f29-96c7-2b511e749ee7	벽체페브릭붙이기	벽체페브릭붙이기	ac2a3158-0c35-492f-8611-dd2c65d6aa30	벽체붙이기	수장공사 > 벽체붙이기 > 벽체페브릭붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	벽체페브릭붙이기
+cc37f2d9-e0e6-42ec-802a-dce98fe53cff	벽체합성수지판재붙이기	벽체합성수지판재붙이기	ac2a3158-0c35-492f-8611-dd2c65d6aa30	벽체붙이기	수장공사 > 벽체붙이기 > 벽체합성수지판재붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	벽체합성수지판재붙이기
+8f7050b0-0f96-4b56-83f4-c8c52ee529c7	그릴설치	그릴설치	fa8cfc12-4cef-4715-9d5e-68472a822b8b	장식공사	수장공사 > 장식공사 > 그릴설치	PROMOTED_FROM_SOURCE	DRAFT	1	그릴설치
+450fbad8-e272-4151-a2f4-c9dd17871d68	루버설치	루버설치	fa8cfc12-4cef-4715-9d5e-68472a822b8b	장식공사	수장공사 > 장식공사 > 루버설치	PROMOTED_FROM_SOURCE	DRAFT	1	루버설치
+cc808536-8587-4938-b905-be60d47111f5	수장마감부속재설치	수장마감부속재설치	fa8cfc12-4cef-4715-9d5e-68472a822b8b	장식공사	수장공사 > 장식공사 > 수장마감부속재설치	PROMOTED_FROM_SOURCE	DRAFT	1	수장마감부속재설치
+78725ef9-b85c-4ec5-b7e4-f5a29136b51d	천정석고보드붙이기	천정석고보드붙이기	02cd1121-108c-4ee3-89de-c83d73cda213	천정판재붙이기	수장공사 > 천정판재붙이기 > 천정석고보드붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	천정석고보드붙이기
+bee670cd-c633-441f-b15a-0fa2bb279a1d	천정석면시멘트판재붙이기	천정석면시멘트판재붙이기	02cd1121-108c-4ee3-89de-c83d73cda213	천정판재붙이기	수장공사 > 천정판재붙이기 > 천정석면시멘트판재붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	천정석면시멘트판재붙이기
+7269d84e-6670-4bef-ad33-9445339e0279	천정섬유질판재붙이기	천정섬유질판재붙이기	02cd1121-108c-4ee3-89de-c83d73cda213	천정판재붙이기	수장공사 > 천정판재붙이기 > 천정섬유질판재붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	천정섬유질판재붙이기
+3c60611c-319d-4805-a9b0-4c3e91730331	천정패브릭붙이기	천정패브릭붙이기	02cd1121-108c-4ee3-89de-c83d73cda213	천정판재붙이기	수장공사 > 천정판재붙이기 > 천정패브릭붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	천정패브릭붙이기
+d297e465-7ed2-4fb4-a53f-512040462129	천정합성수지판재붙이기	천정합성수지판재붙이기	02cd1121-108c-4ee3-89de-c83d73cda213	천정판재붙이기	수장공사 > 천정판재붙이기 > 천정합성수지판재붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	천정합성수지판재붙이기
+935ae655-347e-4ef9-b4a6-e90a353c6119	UBR(UnitBathRoom)설치	UBR(UnitBathRoom)설치	c948d983-8064-4528-b202-585025a072df	칸막이공사	수장공사 > 칸막이공사 > UBR(UnitBathRoom)설치	PROMOTED_FROM_SOURCE	DRAFT	1	UBR(UnitBathRoom)설치
+1546c452-2758-4c09-9aa6-411fd0cdecdd	시운전	시운전	EMPTY		시운전	PROMOTED_FROM_SOURCE	DRAFT	1	시운전
+6f0ff138-0d15-46bf-bc05-e2c2b02ac711	온수분배기 방열기설치공사	온수분배기 방열기설치공사	a5ff5522-3e4f-4d19-b18f-4fc7afefaa01	공기조화기기설비공사	열원기기설비및공기조화설비공사 > 공기조화기기설비공사 > 온수분배기 방열기설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	온수분배기 방열기설치공사
+7e6e9960-dfc1-4a89-9aaf-1ac81cd4652a	적외선히터설치공사	적외선히터설치공사	a5ff5522-3e4f-4d19-b18f-4fc7afefaa01	공기조화기기설비공사	열원기기설비및공기조화설비공사 > 공기조화기기설비공사 > 적외선히터설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	적외선히터설치공사
+3785d762-a369-46f6-ae1f-9612e8e50c0a	전열교환기설치공사	전열교환기설치공사	a5ff5522-3e4f-4d19-b18f-4fc7afefaa01	공기조화기기설비공사	열원기기설비및공기조화설비공사 > 공기조화기기설비공사 > 전열교환기설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	전열교환기설치공사
+89494215-9a3e-4f3c-926a-a0256d34a76b	컨벡터설치공사	컨벡터설치공사	a5ff5522-3e4f-4d19-b18f-4fc7afefaa01	공기조화기기설비공사	열원기기설비및공기조화설비공사 > 공기조화기기설비공사 > 컨벡터설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	컨벡터설치공사
+aa1423f8-6dd2-4f8f-853f-0a276f3dfff8	팩키지유닛설치공사	팩키지유닛설치공사	a5ff5522-3e4f-4d19-b18f-4fc7afefaa01	공기조화기기설비공사	열원기기설비및공기조화설비공사 > 공기조화기기설비공사 > 팩키지유닛설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	팩키지유닛설치공사
+f802efd0-59b9-4c7b-9d53-350f17727699	휀코일유닛설치공사	휀코일유닛설치공사	a5ff5522-3e4f-4d19-b18f-4fc7afefaa01	공기조화기기설비공사	열원기기설비및공기조화설비공사 > 공기조화기기설비공사 > 휀코일유닛설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	휀코일유닛설치공사
+97f8d079-cfee-47db-a3ae-19da78d1c240	냉각탑설치공사	냉각탑설치공사	be5ace6b-9692-4afb-979c-682df6d6f49e	냉동기․냉각탑공사	열원기기설비및공기조화설비공사 > 냉동기․냉각탑공사 > 냉각탑설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	냉각탑설치공사
+7c990ac0-30a7-4f50-ae18-30b121410837	냉동기및부속설비설치공사	냉동기및부속설비설치공사	be5ace6b-9692-4afb-979c-682df6d6f49e	냉동기․냉각탑공사	열원기기설비및공기조화설비공사 > 냉동기․냉각탑공사 > 냉동기및부속설비설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	냉동기및부속설비설치공사
+66cd57b6-be04-4dd1-846b-ae7e66d35828	냉수기설치공사	냉수기설치공사	043f0c06-e43d-4982-8cc3-18517188cd69	냉온수기설치공사	열원기기설비및공기조화설비공사 > 냉온수기설치공사 > 냉수기설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	냉수기설치공사
+d224c847-f301-459a-b00b-552893d73dba	온수기설치공사	온수기설치공사	043f0c06-e43d-4982-8cc3-18517188cd69	냉온수기설치공사	열원기기설비및공기조화설비공사 > 냉온수기설치공사 > 온수기설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	온수기설치공사
+a1b62ef8-87e4-40dd-a45c-439c1c56cedf	덕트설치공사	덕트설치공사	f0bbccab-664f-4f1b-ad59-994b723b7e90	덕트공사	열원기기설비및공기조화설비공사 > 덕트공사 > 덕트설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	덕트설치공사
+4af739fe-85ef-4764-936c-b047676fc079	덕트제작공사	덕트제작공사	f0bbccab-664f-4f1b-ad59-994b723b7e90	덕트공사	열원기기설비및공기조화설비공사 > 덕트공사 > 덕트제작공사	PROMOTED_FROM_SOURCE	DRAFT	1	덕트제작공사
+33e51c5d-35d5-4d2e-90bd-f657a2c03043	연도제작및설치공사	연도제작및설치공사	f0bbccab-664f-4f1b-ad59-994b723b7e90	덕트공사	열원기기설비및공기조화설비공사 > 덕트공사 > 연도제작및설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	연도제작및설치공사
+966dcde3-7c34-478e-b024-ad6e2ccb4901	열교환기 탱크류설치공사	열교환기 탱크류설치공사	08d5a2b9-552f-4b3b-a159-9a0212fdd90f	열교환기 탱크 헤더설치공사	열원기기설비및공기조화설비공사 > 열교환기 탱크 헤더설치공사 > 열교환기 탱크류설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	열교환기 탱크류설치공사
+1d62da9a-97a3-406c-97ed-f387fc3f52e4	헤더설치공사	헤더설치공사	08d5a2b9-552f-4b3b-a159-9a0212fdd90f	열교환기 탱크 헤더설치공사	열원기기설비및공기조화설비공사 > 열교환기 탱크 헤더설치공사 > 헤더설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	헤더설치공사
+678fda87-fe63-4387-8f25-fb4574e4d549	현장제작탱크설치공사	현장제작탱크설치공사	08d5a2b9-552f-4b3b-a159-9a0212fdd90f	열교환기 탱크 헤더설치공사	열원기기설비및공기조화설비공사 > 열교환기 탱크 헤더설치공사 > 현장제작탱크설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	현장제작탱크설치공사
+a54b55b5-2f53-48cd-8344-9e44035b3481	석축쌓기	석축쌓기	53a12554-80fd-467a-bab4-560fe63e32e0	옹벽공사	옹벽공사 > 석축쌓기	PROMOTED_FROM_SOURCE	DRAFT	1	석축쌓기
+1105ea86-722b-41ba-848b-b99ff89d811a	고정철물및부속재설치	고정철물및부속재설치	440e6421-a389-4415-991f-b1a4c350d3f1	커튼월프레임및앵커설치	외부판재공사 > 커튼월프레임및앵커설치 > 고정철물및부속재설치	PROMOTED_FROM_SOURCE	DRAFT	1	고정철물및부속재설치
+9fdbd43a-653f-4a4b-a1b7-995d12c7bc9b	장비운반	장비운반	EMPTY		장비운반	PROMOTED_FROM_SOURCE	DRAFT	1	장비운반
+e9ff679e-2270-4b59-a407-f7cf82f105b4	전기․통신공사관련도장및방청공사	전기․통신공사관련도장및방청공사	89c9da77-092d-400f-b40b-ae6c86aaad97	전기․통신공사관련기타공통공사	전기 자동제어 계장 신호 통신공통공사 > 전기․통신공사관련기타공통공사 > 전기․통신공사관련도장및방청공사	PROMOTED_FROM_SOURCE	DRAFT	1	전기․통신공사관련도장및방청공사
+358d86b6-969c-4abd-bfc0-2c6fb8d3e263	동력용전동기설치공사	동력용전동기설치공사	247db056-4c62-4af7-97b2-e1c6911aeb88	동력설비공사	전력부하설비공사 > 동력설비공사 > 동력용전동기설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	동력용전동기설치공사
+83515db5-647a-4993-b279-cf383cc682a8	비탈면녹화	비탈면녹화	959ac92b-b756-4cec-ab82-048497113fa2	녹화및보호공사	조경공사 > 녹화및보호공사 > 비탈면녹화	PROMOTED_FROM_SOURCE	DRAFT	1	비탈면녹화
+db7f7a69-75f1-4e7a-98f1-684805327b38	관목식재공사	관목식재공사	556d6799-5eb8-4626-8991-83953a8056ac	이식및식재공사	조경공사 > 이식및식재공사 > 관목식재공사	PROMOTED_FROM_SOURCE	DRAFT	1	관목식재공사
+0e3987c5-2272-4d01-a961-025c0a4bd863	관목이식공사	관목이식공사	556d6799-5eb8-4626-8991-83953a8056ac	이식및식재공사	조경공사 > 이식및식재공사 > 관목이식공사	PROMOTED_FROM_SOURCE	DRAFT	1	관목이식공사
+8b6a3fc1-a9db-4cc3-a346-04c12077b4bb	교목식재공사	교목식재공사	556d6799-5eb8-4626-8991-83953a8056ac	이식및식재공사	조경공사 > 이식및식재공사 > 교목식재공사	PROMOTED_FROM_SOURCE	DRAFT	1	교목식재공사
+94847414-cf6d-4eb2-bc57-cd98cc7c35ed	교목이식공사	교목이식공사	556d6799-5eb8-4626-8991-83953a8056ac	이식및식재공사	조경공사 > 이식및식재공사 > 교목이식공사	PROMOTED_FROM_SOURCE	DRAFT	1	교목이식공사
+2b53ac49-f12b-4e66-a97d-1d2d8d1e432d	묘목식재	묘목식재	556d6799-5eb8-4626-8991-83953a8056ac	이식및식재공사	조경공사 > 이식및식재공사 > 묘목식재	PROMOTED_FROM_SOURCE	DRAFT	1	묘목식재
+461f2858-2184-4d10-b72b-dc659a3b5c53	식재보호공사	식재보호공사	556d6799-5eb8-4626-8991-83953a8056ac	이식및식재공사	조경공사 > 이식및식재공사 > 식재보호공사	PROMOTED_FROM_SOURCE	DRAFT	1	식재보호공사
+19818427-27f6-428a-9cd9-b6659ea21ede	지피류및초화류식재	지피류및초화류식재	556d6799-5eb8-4626-8991-83953a8056ac	이식및식재공사	조경공사 > 이식및식재공사 > 지피류및초화류식재	MERGED_FROM_REVIEWED_SOURCES	DRAFT	2	지피류및초화류식재
+b9eb9b50-d7a0-4f3b-b944-7f3cd39c6d70	잔디식재	잔디식재	e3e9f2b0-e7f5-4411-ae3f-23bdeb4984c8	잔디공사	조경공사 > 잔디공사 > 잔디식재	PROMOTED_FROM_SOURCE	DRAFT	1	잔디식재
+6c6b7610-dd9e-4a85-88fc-0f6835c5a932	잔디씨뿌리기	잔디씨뿌리기	e3e9f2b0-e7f5-4411-ae3f-23bdeb4984c8	잔디공사	조경공사 > 잔디공사 > 잔디씨뿌리기	PROMOTED_FROM_SOURCE	DRAFT	1	잔디씨뿌리기
+de421c18-8665-4c82-9a90-24d24ecbf8e0	종자뿜어붙이기	종자뿜어붙이기	e3e9f2b0-e7f5-4411-ae3f-23bdeb4984c8	잔디공사	조경공사 > 잔디공사 > 종자뿜어붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	종자뿜어붙이기
+02304e5d-01c7-42de-b07a-97ab232db5dd	경계시설물설치	경계시설물설치	03e39a42-dde8-46e5-801a-859b93fed859	조경시설물설치	조경공사 > 조경시설물설치 > 경계시설물설치	PROMOTED_FROM_SOURCE	DRAFT	1	경계시설물설치
+269bd8c5-244d-4419-8174-4badca799cb0	관리시설물설치	관리시설물설치	03e39a42-dde8-46e5-801a-859b93fed859	조경시설물설치	조경공사 > 조경시설물설치 > 관리시설물설치	PROMOTED_FROM_SOURCE	DRAFT	1	관리시설물설치
+3d7618f7-a54a-44ca-b609-46417ae66b6f	수경시설물설치	수경시설물설치	03e39a42-dde8-46e5-801a-859b93fed859	조경시설물설치	조경공사 > 조경시설물설치 > 수경시설물설치	PROMOTED_FROM_SOURCE	DRAFT	1	수경시설물설치
+3cd25664-1a22-40cb-9efd-d6d58b141820	안내시설물설치	안내시설물설치	03e39a42-dde8-46e5-801a-859b93fed859	조경시설물설치	조경공사 > 조경시설물설치 > 안내시설물설치	PROMOTED_FROM_SOURCE	DRAFT	1	안내시설물설치
+2981d229-7f15-4cc6-87e8-7b65fb418dae	유희시설물설치	유희시설물설치	03e39a42-dde8-46e5-801a-859b93fed859	조경시설물설치	조경공사 > 조경시설물설치 > 유희시설물설치	PROMOTED_FROM_SOURCE	DRAFT	1	유희시설물설치
+1371b33d-5e28-4061-ac22-5fbd27c3115f	체력단련시설물설치	체력단련시설물설치	03e39a42-dde8-46e5-801a-859b93fed859	조경시설물설치	조경공사 > 조경시설물설치 > 체력단련시설물설치	PROMOTED_FROM_SOURCE	DRAFT	1	체력단련시설물설치
+12247ee2-2e4e-43ea-bfe5-141d49c92ad8	편의시설물설치	편의시설물설치	03e39a42-dde8-46e5-801a-859b93fed859	조경시설물설치	조경공사 > 조경시설물설치 > 편의시설물설치	PROMOTED_FROM_SOURCE	DRAFT	1	편의시설물설치
+e08227aa-7eec-4ce0-bfdd-5b41919aaad2	환경조형시설물설치	환경조형시설물설치	03e39a42-dde8-46e5-801a-859b93fed859	조경시설물설치	조경공사 > 조경시설물설치 > 환경조형시설물설치	PROMOTED_FROM_SOURCE	DRAFT	1	환경조형시설물설치
+3de39235-8303-4e05-a6cc-0e195d7281a8	휴게시설물설치	휴게시설물설치	03e39a42-dde8-46e5-801a-859b93fed859	조경시설물설치	조경공사 > 조경시설물설치 > 휴게시설물설치	PROMOTED_FROM_SOURCE	DRAFT	1	휴게시설물설치
+c30f3748-7e1e-4ff4-940c-6263913b5ccd	관수	관수	d16c487b-6ddd-4bfe-b650-b5c9d7fc5ecb	조경유지관리	조경공사 > 조경유지관리 > 관수	PROMOTED_FROM_SOURCE	DRAFT	1	관수
+465b80a7-2e60-4b84-9109-282b8aa67afa	교목수간보호	교목수간보호	d16c487b-6ddd-4bfe-b650-b5c9d7fc5ecb	조경유지관리	조경공사 > 조경유지관리 > 교목수간보호	PROMOTED_FROM_SOURCE	DRAFT	1	교목수간보호 - - 대․중․소 분류대․중․소 분류
+fc4a7552-a8b9-468b-be93-eaf98b979ddd	시비	시비	d16c487b-6ddd-4bfe-b650-b5c9d7fc5ecb	조경유지관리	조경공사 > 조경유지관리 > 시비	PROMOTED_FROM_SOURCE	DRAFT	1	시비
+2afe7bd3-4a4a-4778-a53b-3d84e105e01f	약제살포	약제살포	d16c487b-6ddd-4bfe-b650-b5c9d7fc5ecb	조경유지관리	조경공사 > 조경유지관리 > 약제살포	PROMOTED_FROM_SOURCE	DRAFT	1	약제살포
+d850ac9c-366d-4527-a2e8-dbed9788ec0a	월동작업	월동작업	d16c487b-6ddd-4bfe-b650-b5c9d7fc5ecb	조경유지관리	조경공사 > 조경유지관리 > 월동작업	PROMOTED_FROM_SOURCE	DRAFT	1	월동작업
+a7f51a9b-e365-46ad-8286-1596b2c0fc6e	전정	전정	d16c487b-6ddd-4bfe-b650-b5c9d7fc5ecb	조경유지관리	조경공사 > 조경유지관리 > 전정	PROMOTED_FROM_SOURCE	DRAFT	1	전정
+25dea9cd-9bbe-4d6d-a0b1-d9deef4d3a2d	제초및잔디깍기	제초및잔디깍기	d16c487b-6ddd-4bfe-b650-b5c9d7fc5ecb	조경유지관리	조경공사 > 조경유지관리 > 제초및잔디깍기	PROMOTED_FROM_SOURCE	DRAFT	1	제초및잔디깍기
+0a712330-9126-4abc-8a35-586d8b458fab	정지	정지	6be21583-e684-4d52-9623-37b1b6b22e17	토양준비및흙쌓기	조경공사 > 토양준비및흙쌓기 > 정지	PROMOTED_FROM_SOURCE	DRAFT	1	정지
+4e52f7c7-12d5-4ae5-9e3b-accf1143ae9f	초류종자살포	초류종자살포	b8eab2b5-cfe3-499f-8ca7-86d738a2276b	파종및살포	조경공사 > 파종및살포 > 초류종자살포	PROMOTED_FROM_SOURCE	DRAFT	1	초류종자살포
+fc232be6-65dd-4883-aac6-954733f4cb33	파종	파종	b8eab2b5-cfe3-499f-8ca7-86d738a2276b	파종및살포	조경공사 > 파종및살포 > 파종	PROMOTED_FROM_SOURCE	DRAFT	1	파종
+ac05b5fe-9f99-4c1d-bb79-dd4a2e3a990a	대리석조적	대리석조적	c31d427e-edb6-4d28-a9ae-ff5afd266a20	가공석재조적	조적공사 > 가공석재조적 > 대리석조적	PROMOTED_FROM_SOURCE	DRAFT	1	대리석조적
+0994b7cd-9810-4c56-8f78-217cf26e3b5a	사암조적	사암조적	c31d427e-edb6-4d28-a9ae-ff5afd266a20	가공석재조적	조적공사 > 가공석재조적 > 사암조적	PROMOTED_FROM_SOURCE	DRAFT	1	사암조적
+d3056f05-e8b8-482a-89af-52d9588891a6	석회암조적	석회암조적	c31d427e-edb6-4d28-a9ae-ff5afd266a20	가공석재조적	조적공사 > 가공석재조적 > 석회암조적	PROMOTED_FROM_SOURCE	DRAFT	1	석회암조적
+7014cca3-7fd8-4a1f-b21c-ee01887a31ec	인조석조적	인조석조적	c31d427e-edb6-4d28-a9ae-ff5afd266a20	가공석재조적	조적공사 > 가공석재조적 > 인조석조적	PROMOTED_FROM_SOURCE	DRAFT	1	인조석조적
+c67b2b32-64a9-4675-85eb-52125cbbb6b3	천연슬레이트조적	천연슬레이트조적	c31d427e-edb6-4d28-a9ae-ff5afd266a20	가공석재조적	조적공사 > 가공석재조적 > 천연슬레이트조적	PROMOTED_FROM_SOURCE	DRAFT	1	천연슬레이트조적
+5e70f4c1-2fec-49f7-adb2-9bff17269ca0	화강석조적	화강석조적	c31d427e-edb6-4d28-a9ae-ff5afd266a20	가공석재조적	조적공사 > 가공석재조적 > 화강석조적	PROMOTED_FROM_SOURCE	DRAFT	1	화강석조적
+49cb5eaf-f5ad-4d20-b91a-62265a665ead	유리블록쌓기	유리블록쌓기	07309343-35ef-4208-86db-a8bac28a8b72	조적공사	조적공사 > 유리블록쌓기	PROMOTED_FROM_SOURCE	DRAFT	1	유리블록쌓기
+faeef6a5-201a-4065-9407-a44865773400	유리블록판넬설치	유리블록판넬설치	07309343-35ef-4208-86db-a8bac28a8b72	조적공사	조적공사 > 유리블록판넬설치	PROMOTED_FROM_SOURCE	DRAFT	1	유리블록판넬설치
+1e300312-5faf-4bd9-8369-e0ee55e2a61e	보강기둥설치	보강기둥설치	e6e5c460-6c7a-4234-8823-ae8f98451029	조적부속공사	조적공사 > 조적부속공사 > 보강기둥설치	PROMOTED_FROM_SOURCE	DRAFT	1	보강기둥설치
+4b213b2e-3684-444a-bd85-d6a33c0d7df8	보강보설치	보강보설치	e6e5c460-6c7a-4234-8823-ae8f98451029	조적부속공사	조적공사 > 조적부속공사 > 보강보설치	PROMOTED_FROM_SOURCE	DRAFT	1	보강보설치
+d24d92c3-57e6-41a8-9a27-991983300646	외벽발수처리	외벽발수처리	e6e5c460-6c7a-4234-8823-ae8f98451029	조적부속공사	조적공사 > 조적부속공사 > 외벽발수처리	PROMOTED_FROM_SOURCE	DRAFT	1	외벽발수처리
+6e1433c6-385c-48c9-9a85-8099a29970a1	인방설치	인방설치	e6e5c460-6c7a-4234-8823-ae8f98451029	조적부속공사	조적공사 > 조적부속공사 > 인방설치	PROMOTED_FROM_SOURCE	DRAFT	1	인방설치
+57d54330-6e9e-41c5-8818-67f030a4d8fd	창선반(씰)설치	창선반(씰)설치	e6e5c460-6c7a-4234-8823-ae8f98451029	조적부속공사	조적공사 > 조적부속공사 > 창선반(씰)설치	PROMOTED_FROM_SOURCE	DRAFT	1	창선반(씰)설치
+0ca62c6e-768e-4f68-8198-9abed44589b1	그라우팅천공	그라우팅천공	ab2963c9-b780-484a-9dba-cac8ce651dc6	지반그라우팅	지반개량및지반보강공사 > 지반그라우팅 > 그라우팅천공	PROMOTED_FROM_SOURCE	DRAFT	1	그라우팅천공
+bb9b04dd-0b56-458d-aa15-fab82c712f0a	지반그라우팅검사	지반그라우팅검사	ab2963c9-b780-484a-9dba-cac8ce651dc6	지반그라우팅	지반개량및지반보강공사 > 지반그라우팅 > 지반그라우팅검사	PROMOTED_FROM_SOURCE	DRAFT	1	지반그라우팅검사 - - 대․중․소 분류대․중․소 분류
+a31d0dfa-79a6-45a4-8456-89bd45f50483	지반그라우팅준비공사	지반그라우팅준비공사	ab2963c9-b780-484a-9dba-cac8ce651dc6	지반그라우팅	지반개량및지반보강공사 > 지반그라우팅 > 지반그라우팅준비공사	PROMOTED_FROM_SOURCE	DRAFT	1	지반그라우팅준비공사
+188ffcfd-f2c2-4c92-9db5-9ec2a8cf653f	강제치환	강제치환	36e046ac-a36c-4555-b642-7c604555f379	치환	지반개량및지반보강공사 > 치환 > 강제치환	PROMOTED_FROM_SOURCE	DRAFT	1	강제치환
+820fa2f7-7a48-42e8-afdd-ed0851ae8fae	굴착치환	굴착치환	36e046ac-a36c-4555-b642-7c604555f379	치환	지반개량및지반보강공사 > 치환 > 굴착치환	PROMOTED_FROM_SOURCE	DRAFT	1	굴착치환
+d35c54fb-26bc-4f27-b5ef-cd6ce1e2e04e	암이외의지질시험굴착	암이외의지질시험굴착	b1711c33-2150-4175-af17-30437a6b908a	시험굴착	지반조사 > 시험굴착 > 암이외의지질시험굴착	PROMOTED_FROM_SOURCE	DRAFT	1	암이외의지질시험굴착
+68b825ff-07e8-4312-a109-005213651f4b	실내다짐도실험	실내다짐도실험	df28c14e-0fab-4d8b-93a2-4803a1e122b4	실내실험	지반조사 > 실내실험 > 실내다짐도실험	PROMOTED_FROM_SOURCE	DRAFT	1	실내다짐도실험
+175b3041-cc31-4af0-9d0c-6ffcfb5048b5	일반실내실험	일반실내실험	df28c14e-0fab-4d8b-93a2-4803a1e122b4	실내실험	지반조사 > 실내실험 > 일반실내실험	PROMOTED_FROM_SOURCE	DRAFT	1	일반실내실험
+908da121-620d-42bd-947b-d7945690e1f3	토사류기타시험	토사류기타시험	df28c14e-0fab-4d8b-93a2-4803a1e122b4	실내실험	지반조사 > 실내실험 > 토사류기타시험	PROMOTED_FROM_SOURCE	DRAFT	1	토사류기타시험
+74bf5cfd-b552-473c-9158-d4585291941f	투수시험	투수시험	df28c14e-0fab-4d8b-93a2-4803a1e122b4	실내실험	지반조사 > 실내실험 > 투수시험	PROMOTED_FROM_SOURCE	DRAFT	1	투수시험
+12389a9c-0581-4a2a-a5ea-e17be409bcf7	화학성분실험	화학성분실험	df28c14e-0fab-4d8b-93a2-4803a1e122b4	실내실험	지반조사 > 실내실험 > 화학성분실험	PROMOTED_FROM_SOURCE	DRAFT	1	화학성분실험
+0459ba9d-f79a-4f74-8291-20fc19430571	흙의강도시험	흙의강도시험	df28c14e-0fab-4d8b-93a2-4803a1e122b4	실내실험	지반조사 > 실내실험 > 흙의강도시험	PROMOTED_FROM_SOURCE	DRAFT	1	흙의강도시험
+08e9ba68-ac17-4295-9624-13d58b026807	암반시험	암반시험	6b2fd118-f45c-4ef3-8c3a-56769a54d6e1	암석 암반시험	지반조사 > 암석 암반시험 > 암반시험	PROMOTED_FROM_SOURCE	DRAFT	1	암반시험
+7978df0d-7318-4d00-a99c-133d5b7cdca7	암석시험	암석시험	6b2fd118-f45c-4ef3-8c3a-56769a54d6e1	암석 암반시험	지반조사 > 암석 암반시험 > 암석시험	PROMOTED_FROM_SOURCE	DRAFT	1	암석시험
+fcb16e1a-bff3-44e4-bd6f-80ee1e1c6a72	다짐시험	다짐시험	a94a4691-ba52-4ff6-8fac-bae9279adae5	현장시험	지반조사 > 현장시험 > 다짐시험	PROMOTED_FROM_SOURCE	DRAFT	1	다짐시험
+43a78d85-0950-4f82-99dc-6f2f14d82963	사운딩시험	사운딩시험	a94a4691-ba52-4ff6-8fac-bae9279adae5	현장시험	지반조사 > 현장시험 > 사운딩시험	PROMOTED_FROM_SOURCE	DRAFT	1	사운딩시험
+93cefdea-b09f-4999-ac7e-74633d5d8553	압밀시험	압밀시험	a94a4691-ba52-4ff6-8fac-bae9279adae5	현장시험	지반조사 > 현장시험 > 압밀시험	PROMOTED_FROM_SOURCE	DRAFT	1	압밀시험
+ba00b036-bed2-413a-86ca-d7262f0d86f2	일반현장시험	일반현장시험	a94a4691-ba52-4ff6-8fac-bae9279adae5	현장시험	지반조사 > 현장시험 > 일반현장시험	PROMOTED_FROM_SOURCE	DRAFT	1	일반현장시험
+4fc73930-ab28-4474-833d-d617a4f9c303	동판잇기	동판잇기	4710ef8e-000d-48e1-9448-af1eeda77bc0	금속잇기	지붕및홈통공사 > 금속잇기 > 동판잇기	PROMOTED_FROM_SOURCE	DRAFT	1	동판잇기
+b092fc22-cb9e-45f8-9506-d82e5c7ef2fb	법랑피복철판잇기	법랑피복철판잇기	4710ef8e-000d-48e1-9448-af1eeda77bc0	금속잇기	지붕및홈통공사 > 금속잇기 > 법랑피복철판잇기	PROMOTED_FROM_SOURCE	DRAFT	1	법랑피복철판잇기
+e7a992e4-8530-44db-8581-c502900576e5	스테인레스스틸판잇기	스테인레스스틸판잇기	4710ef8e-000d-48e1-9448-af1eeda77bc0	금속잇기	지붕및홈통공사 > 금속잇기 > 스테인레스스틸판잇기	PROMOTED_FROM_SOURCE	DRAFT	1	스테인레스스틸판잇기
+481c9458-2905-4aa0-8373-60dec5e4da4b	스틸테크잇기	스틸테크잇기	4710ef8e-000d-48e1-9448-af1eeda77bc0	금속잇기	지붕및홈통공사 > 금속잇기 > 스틸테크잇기	PROMOTED_FROM_SOURCE	DRAFT	1	스틸테크잇기
+16291883-6cc0-4649-8782-af4373ff2efc	알루니늄판잇기	알루니늄판잇기	4710ef8e-000d-48e1-9448-af1eeda77bc0	금속잇기	지붕및홈통공사 > 금속잇기 > 알루니늄판잇기	PROMOTED_FROM_SOURCE	DRAFT	1	알루니늄판잇기
+23b62e4b-c478-4597-8e2b-e6ea7a8d79e5	함석잇기	함석잇기	4710ef8e-000d-48e1-9448-af1eeda77bc0	금속잇기	지붕및홈통공사 > 금속잇기 > 함석잇기	PROMOTED_FROM_SOURCE	DRAFT	1	함석잇기
+cc7351b1-91d0-468d-b6f3-35605dc23571	금속기와잇기	금속기와잇기	fae1b190-575a-4e5f-add0-051c335c433b	기와잇기	지붕및홈통공사 > 기와잇기 > 금속기와잇기	PROMOTED_FROM_SOURCE	DRAFT	1	금속기와잇기
+f57ec6e5-330f-4907-a90a-3d4f258b601f	목재기와잇기	목재기와잇기	fae1b190-575a-4e5f-add0-051c335c433b	기와잇기	지붕및홈통공사 > 기와잇기 > 목재기와잇기	PROMOTED_FROM_SOURCE	DRAFT	1	목재기와잇기
+fbf8a823-eef3-49d0-8c30-8784a231c22d	슬레이트기와잇기	슬레이트기와잇기	fae1b190-575a-4e5f-add0-051c335c433b	기와잇기	지붕및홈통공사 > 기와잇기 > 슬레이트기와잇기	PROMOTED_FROM_SOURCE	DRAFT	1	슬레이트기와잇기
+ecc27cb0-a95a-41a0-bec6-f48848e5a95d	시멘트기와잇기	시멘트기와잇기	fae1b190-575a-4e5f-add0-051c335c433b	기와잇기	지붕및홈통공사 > 기와잇기 > 시멘트기와잇기	PROMOTED_FROM_SOURCE	DRAFT	1	시멘트기와잇기
+12ebc23a-9561-4a2a-a180-c63e5335566d	아스팔트슁글잇기	아스팔트슁글잇기	fae1b190-575a-4e5f-add0-051c335c433b	기와잇기	지붕및홈통공사 > 기와잇기 > 아스팔트슁글잇기	PROMOTED_FROM_SOURCE	DRAFT	1	아스팔트슁글잇기
+1552b89f-ac23-4b08-a7a8-904407cdb5fe	자기질기와잇기	자기질기와잇기	fae1b190-575a-4e5f-add0-051c335c433b	기와잇기	지붕및홈통공사 > 기와잇기 > 자기질기와잇기	PROMOTED_FROM_SOURCE	DRAFT	1	자기질기와잇기
+e834a6b2-6480-4ad6-8de9-736eca01b91e	점토질기와잇기	점토질기와잇기	fae1b190-575a-4e5f-add0-051c335c433b	기와잇기	지붕및홈통공사 > 기와잇기 > 점토질기와잇기	PROMOTED_FROM_SOURCE	DRAFT	1	점토질기와잇기
+5d2bd8fa-2c6f-4b75-8b40-0840c8980374	플라스틱기와잇기	플라스틱기와잇기	fae1b190-575a-4e5f-add0-051c335c433b	기와잇기	지붕및홈통공사 > 기와잇기 > 플라스틱기와잇기	PROMOTED_FROM_SOURCE	DRAFT	1	플라스틱기와잇기
+4491bee1-cdba-4618-bb57-8db92fa0bad5	너와지붕잇기	너와지붕잇기	b5bc9eb5-87b3-40b3-a882-ecb2aed5d9ba	자연형지붕잇기	지붕및홈통공사 > 자연형지붕잇기 > 너와지붕잇기	PROMOTED_FROM_SOURCE	DRAFT	1	너와지붕잇기
+1cc874df-0e7a-4459-aaf2-19d008f9e1c9	초가지붕잇기	초가지붕잇기	b5bc9eb5-87b3-40b3-a882-ecb2aed5d9ba	자연형지붕잇기	지붕및홈통공사 > 자연형지붕잇기 > 초가지붕잇기	PROMOTED_FROM_SOURCE	DRAFT	1	초가지붕잇기
+d61f51e4-e52c-46f1-bf67-1043aa6107a4	보양및청소	보양및청소	3b86bbd2-c2dc-4b44-8e9d-b08d97072b91	유리부속공사	창호공사 > 유리부속공사 > 보양및청소	PROMOTED_FROM_SOURCE	DRAFT	1	보양및청소
+819b80ab-829f-4538-b984-b289e98c02ef	절단및가공	절단및가공	3b86bbd2-c2dc-4b44-8e9d-b08d97072b91	유리부속공사	창호공사 > 유리부속공사 > 절단및가공	PROMOTED_FROM_SOURCE	DRAFT	1	절단및가공
+6fd08cd7-d483-4c25-b07e-0871a696ea25	석재공사코킹 실링	석재공사코킹 실링	946afb48-0059-4654-b316-804cc574ac1d	코킹및실링	창호공사 > 코킹및실링 > 석재공사코킹 실링	PROMOTED_FROM_SOURCE	DRAFT	1	석재공사코킹 실링
+b10f615b-c9a0-40d8-a613-ee84a0fd90fa	유리공사코킹 실링	유리공사코킹 실링	946afb48-0059-4654-b316-804cc574ac1d	코킹및실링	창호공사 > 코킹및실링 > 유리공사코킹 실링	PROMOTED_FROM_SOURCE	DRAFT	1	유리공사코킹 실링
+50123de1-1e05-4583-a545-d7da49345838	창호공사코킹 실링	창호공사코킹 실링	946afb48-0059-4654-b316-804cc574ac1d	코킹및실링	창호공사 > 코킹및실링 > 창호공사코킹 실링	PROMOTED_FROM_SOURCE	DRAFT	1	창호공사코킹 실링
+8eba4b74-708c-4469-827c-861b09e3bc8b	타일공사코킹 실링	타일공사코킹 실링	946afb48-0059-4654-b316-804cc574ac1d	코킹및실링	창호공사 > 코킹및실링 > 타일공사코킹 실링	PROMOTED_FROM_SOURCE	DRAFT	1	타일공사코킹 실링
+5aebdf52-f246-4667-8f2c-fab4948666fe	기타설비철거 해체	기타설비철거 해체	efa362d3-2550-439a-a444-c44d1639f8f5	기계설비철거 해체	철거해체공사및시설물보호 > 기계설비철거 해체 > 기타설비철거 해체	PROMOTED_FROM_SOURCE	DRAFT	1	기타설비철거 해체
+d6313284-b9da-4405-acca-109bfab538a0	덕트철거 해체	덕트철거 해체	efa362d3-2550-439a-a444-c44d1639f8f5	기계설비철거 해체	철거해체공사및시설물보호 > 기계설비철거 해체 > 덕트철거 해체	PROMOTED_FROM_SOURCE	DRAFT	1	덕트철거 해체
+b4be40c3-4b8e-47ff-b43c-3c690ebf65d9	보온재철거 해체	보온재철거 해체	efa362d3-2550-439a-a444-c44d1639f8f5	기계설비철거 해체	철거해체공사및시설물보호 > 기계설비철거 해체 > 보온재철거 해체	PROMOTED_FROM_SOURCE	DRAFT	1	보온재철거 해체
+0e0da9fe-15d9-460c-b3e4-b00fece2d593	위생도기철거 해체	위생도기철거 해체	efa362d3-2550-439a-a444-c44d1639f8f5	기계설비철거 해체	철거해체공사및시설물보호 > 기계설비철거 해체 > 위생도기철거 해체	PROMOTED_FROM_SOURCE	DRAFT	1	위생도기철거 해체
+fd590839-06c9-46fb-938a-c81d45fde853	배관철거 해체	배관철거 해체	25e2cf2e-83c2-4ecc-a6c0-e313f101102a	철거해체공사및시설물보호	철거해체공사및시설물보호 > 배관철거 해체	MERGED_FROM_REVIEWED_SOURCES	DRAFT	2	배관철거 해체
+d5d703c3-07d8-4e25-9631-3d24dec0d5cf	잡철물철거 해체	잡철물철거 해체	25e2cf2e-83c2-4ecc-a6c0-e313f101102a	철거해체공사및시설물보호	철거해체공사및시설물보호 > 잡철물철거 해체	MERGED_FROM_REVIEWED_SOURCES	DRAFT	2	잡철물철거 해체
+a230c986-0104-41b3-9363-bee3c3887732	장비철거 해체	장비철거 해체	25e2cf2e-83c2-4ecc-a6c0-e313f101102a	철거해체공사및시설물보호	철거해체공사및시설물보호 > 장비철거 해체	MERGED_FROM_REVIEWED_SOURCES	DRAFT	2	장비철거 해체
+9c97a7f9-2706-4e81-8676-bb197ce94669	관로철거 해체	관로철거 해체	e8320c12-4f59-4b4f-bbc1-952e327d1e68	전기 통신설비철거 해체	철거해체공사및시설물보호 > 전기 통신설비철거 해체 > 관로철거 해체	PROMOTED_FROM_SOURCE	DRAFT	1	관로철거 해체
+2250aaed-d2c7-4d5f-a883-ef9c311600ac	기타설비철거 해체	기타설비철거 해체	e8320c12-4f59-4b4f-bbc1-952e327d1e68	전기 통신설비철거 해체	철거해체공사및시설물보호 > 전기 통신설비철거 해체 > 기타설비철거 해체	PROMOTED_FROM_SOURCE	DRAFT	1	기타설비철거 해체
+146fdf2a-11d5-4950-9e4b-f702cba90007	옥내설비철거 해체	옥내설비철거 해체	e8320c12-4f59-4b4f-bbc1-952e327d1e68	전기 통신설비철거 해체	철거해체공사및시설물보호 > 전기 통신설비철거 해체 > 옥내설비철거 해체	PROMOTED_FROM_SOURCE	DRAFT	1	옥내설비철거 해체
+1dff0a5a-4b33-4951-bf7d-ea150494e57a	옥외설비철거 해체	옥외설비철거 해체	e8320c12-4f59-4b4f-bbc1-952e327d1e68	전기 통신설비철거 해체	철거해체공사및시설물보호 > 전기 통신설비철거 해체 > 옥외설비철거 해체	PROMOTED_FROM_SOURCE	DRAFT	1	옥외설비철거 해체
+7dda85c2-2670-4427-b53c-0215a9a4fa14	석축및옹벽철거	석축및옹벽철거	ee7cba05-c783-4381-821a-bcb3d17c1c87	지상구조물철거 해체	철거해체공사및시설물보호 > 지상구조물철거 해체 > 석축및옹벽철거	PROMOTED_FROM_SOURCE	DRAFT	1	석축및옹벽철거
+256009b0-1a5a-41e4-9a9a-bd19783e2e8b	철골구조물철거	철골구조물철거	ee7cba05-c783-4381-821a-bcb3d17c1c87	지상구조물철거 해체	철거해체공사및시설물보호 > 지상구조물철거 해체 > 철골구조물철거	PROMOTED_FROM_SOURCE	DRAFT	1	철골구조물철거
+f21e4973-4c74-49e3-ae03-7c57dfa29cae	콘크리트구조물철거	콘크리트구조물철거	ee7cba05-c783-4381-821a-bcb3d17c1c87	지상구조물철거 해체	철거해체공사및시설물보호 > 지상구조물철거 해체 > 콘크리트구조물철거	PROMOTED_FROM_SOURCE	DRAFT	1	콘크리트구조물철거
+64cc5b9c-74bc-41e3-97cb-f1fe81f0d0f9	포장제거	포장제거	ee7cba05-c783-4381-821a-bcb3d17c1c87	지상구조물철거 해체	철거해체공사및시설물보호 > 지상구조물철거 해체 > 포장제거	PROMOTED_FROM_SOURCE	DRAFT	1	포장제거
+0a9e3562-e5da-4fc7-bcf3-a8fd224dda13	벌개 제근	벌개 제근	35971f29-8d83-432e-b5d9-dea20b607c61	지상지장물철거 해체	철거해체공사및시설물보호 > 지상지장물철거 해체 > 벌개 제근	PROMOTED_FROM_SOURCE	DRAFT	1	벌개 제근
+545a5282-2c94-471a-9ed3-bd7fccfc6787	설치지장물제거	설치지장물제거	35971f29-8d83-432e-b5d9-dea20b607c61	지상지장물철거 해체	철거해체공사및시설물보호 > 지상지장물철거 해체 > 설치지장물제거	PROMOTED_FROM_SOURCE	DRAFT	1	설치지장물제거
+93b31a0b-6b50-4935-b40a-4e02877aaa05	암지장물제거	암지장물제거	35971f29-8d83-432e-b5d9-dea20b607c61	지상지장물철거 해체	철거해체공사및시설물보호 > 지상지장물철거 해체 > 암지장물제거	PROMOTED_FROM_SOURCE	DRAFT	1	암지장물제거
+e481516f-fb99-4104-a1b1-2187345f2031	지장수목이식	지장수목이식	35971f29-8d83-432e-b5d9-dea20b607c61	지상지장물철거 해체	철거해체공사및시설물보호 > 지상지장물철거 해체 > 지장수목이식	PROMOTED_FROM_SOURCE	DRAFT	1	지장수목이식
+4abc6255-93d5-4e5b-a95b-d45c34cecb89	토석제거	토석제거	35971f29-8d83-432e-b5d9-dea20b607c61	지상지장물철거 해체	철거해체공사및시설물보호 > 지상지장물철거 해체 > 토석제거	PROMOTED_FROM_SOURCE	DRAFT	1	토석제거
+4d3a6218-d432-48a5-a145-406137d63ee5	기존관보호	기존관보호	209d3e49-43e7-437f-b858-b024d7cb9b32	지장물보호	철거해체공사및시설물보호 > 지장물보호 > 기존관보호	PROMOTED_FROM_SOURCE	DRAFT	1	기존관보호
+32372575-6768-4b12-a062-7ddd80068c57	수목보호	수목보호	209d3e49-43e7-437f-b858-b024d7cb9b32	지장물보호	철거해체공사및시설물보호 > 지장물보호 > 수목보호	PROMOTED_FROM_SOURCE	DRAFT	1	수목보호
+b603fe0c-dbe5-499a-abae-47c44f3df190	지상구조물보호	지상구조물보호	209d3e49-43e7-437f-b858-b024d7cb9b32	지장물보호	철거해체공사및시설물보호 > 지장물보호 > 지상구조물보호	PROMOTED_FROM_SOURCE	DRAFT	1	지상구조물보호
+6289d8db-cf00-4cca-8799-ae5dee928f9b	지하구조물보호	지하구조물보호	209d3e49-43e7-437f-b858-b024d7cb9b32	지장물보호	철거해체공사및시설물보호 > 지장물보호 > 지하구조물보호	PROMOTED_FROM_SOURCE	DRAFT	1	지하구조물보호
+99d71e86-a3a7-4478-8b3f-b0b8412c2f35	기타지하구조물제거	기타지하구조물제거	abcb1e66-9a44-41c9-9baa-8482f9498106	지하구조물제거	철거해체공사및시설물보호 > 지하구조물제거 > 기타지하구조물제거	PROMOTED_FROM_SOURCE	DRAFT	1	기타지하구조물제거
+d4083196-f5da-4051-914f-d5b9df7e6f57	무근콘크리트제거	무근콘크리트제거	abcb1e66-9a44-41c9-9baa-8482f9498106	지하구조물제거	철거해체공사및시설물보호 > 지하구조물제거 > 무근콘크리트제거	PROMOTED_FROM_SOURCE	DRAFT	1	무근콘크리트제거
+b2c92947-03cb-49f8-83d6-8fdc655f37f8	암거제거	암거제거	abcb1e66-9a44-41c9-9baa-8482f9498106	지하구조물제거	철거해체공사및시설물보호 > 지하구조물제거 > 암거제거	PROMOTED_FROM_SOURCE	DRAFT	1	암거제거
+4f229d28-26e9-4f50-a58b-a172cd19cc56	철근콘크리트기초제거	철근콘크리트기초제거	abcb1e66-9a44-41c9-9baa-8482f9498106	지하구조물제거	철거해체공사및시설물보호 > 지하구조물제거 > 철근콘크리트기초제거	PROMOTED_FROM_SOURCE	DRAFT	1	철근콘크리트기초제거
+9cf5956f-642a-450b-bd8d-43033204f8c5	PVC관제거	PVC관제거	a285976c-d91c-435f-be2b-717d72e6d83f	지하지장물철거 해체	철거해체공사및시설물보호 > 지하지장물철거 해체 > PVC관제거	PROMOTED_FROM_SOURCE	DRAFT	1	PVC관제거
+0f6dfbd6-b755-4241-9e27-470e8a4b68e7	강관제거	강관제거	a285976c-d91c-435f-be2b-717d72e6d83f	지하지장물철거 해체	철거해체공사및시설물보호 > 지하지장물철거 해체 > 강관제거	PROMOTED_FROM_SOURCE	DRAFT	1	강관제거
+dc7a9f70-09a9-468e-a91f-822f0c832aa6	기타지하지장물제거	기타지하지장물제거	a285976c-d91c-435f-be2b-717d72e6d83f	지하지장물철거 해체	철거해체공사및시설물보호 > 지하지장물철거 해체 > 기타지하지장물제거	PROMOTED_FROM_SOURCE	DRAFT	1	기타지하지장물제거
+ad160a3c-f507-45de-bc66-82060376c638	전선관로제거	전선관로제거	a285976c-d91c-435f-be2b-717d72e6d83f	지하지장물철거 해체	철거해체공사및시설물보호 > 지하지장물철거 해체 > 전선관로제거	PROMOTED_FROM_SOURCE	DRAFT	1	전선관로제거
+f90a7410-7df8-46c7-b36a-c710a3d92cef	주철관제거	주철관제거	a285976c-d91c-435f-be2b-717d72e6d83f	지하지장물철거 해체	철거해체공사및시설물보호 > 지하지장물철거 해체 > 주철관제거	PROMOTED_FROM_SOURCE	DRAFT	1	주철관제거
+e80a8e00-e81e-4eea-ae0f-b514fa64f54c	콘크리트관제거	콘크리트관제거	a285976c-d91c-435f-be2b-717d72e6d83f	지하지장물철거 해체	철거해체공사및시설물보호 > 지하지장물철거 해체 > 콘크리트관제거	PROMOTED_FROM_SOURCE	DRAFT	1	콘크리트관제거
+6a2247a9-9e66-43b7-950c-89ea34a0f8e4	통신케이블제거	통신케이블제거	a285976c-d91c-435f-be2b-717d72e6d83f	지하지장물철거 해체	철거해체공사및시설물보호 > 지하지장물철거 해체 > 통신케이블제거	PROMOTED_FROM_SOURCE	DRAFT	1	통신케이블제거
+4ce2bef1-24a0-4fee-85db-596f91fe313b	해상조적구조물철거 해체	해상조적구조물철거 해체	df4016d2-ef88-480b-8c28-32f0585f8346	해상구조물철거 해체	철거해체공사및시설물보호 > 해상구조물철거 해체 > 해상조적구조물철거 해체	PROMOTED_FROM_SOURCE	DRAFT	1	해상조적구조물철거 해체
+059fee94-2440-449a-9bb1-05197b5176fe	해상철골구조물철거해체	해상철골구조물철거해체	df4016d2-ef88-480b-8c28-32f0585f8346	해상구조물철거 해체	철거해체공사및시설물보호 > 해상구조물철거 해체 > 해상철골구조물철거해체	PROMOTED_FROM_SOURCE	DRAFT	1	해상철골구조물철거해체
+c85d4beb-19a1-4acf-be09-01cba9bc60f1	해상콘크리트구조물철거 해체	해상콘크리트구조물철거 해체	df4016d2-ef88-480b-8c28-32f0585f8346	해상구조물철거 해체	철거해체공사및시설물보호 > 해상구조물철거 해체 > 해상콘크리트구조물철거 해체	PROMOTED_FROM_SOURCE	DRAFT	1	해상콘크리트구조물철거 해체
+8a44ad5c-8215-4fdc-8693-5120e1cc2983	해상토석제거	해상토석제거	df4016d2-ef88-480b-8c28-32f0585f8346	해상구조물철거 해체	철거해체공사및시설물보호 > 해상구조물철거 해체 > 해상토석제거	PROMOTED_FROM_SOURCE	DRAFT	1	해상토석제거
+0cb65197-0fe0-43db-8421-8cd559c8d4e5	골재채취 생산	골재채취 생산	71f3ec22-bbb7-483f-a6b5-f089eac9007c	철근콘크리트공사	철근콘크리트공사 > 골재채취 생산	PROMOTED_FROM_SOURCE	DRAFT	1	골재채취 생산
+be965f09-464b-4d53-9be4-d72f44d3d1ee	철근가공및조립	철근가공및조립	71232285-0ecb-449e-8505-f1007ff645ea	콘크리트보강공사	철근콘크리트공사 > 콘크리트보강공사 > 철근가공및조립	PROMOTED_FROM_SOURCE	DRAFT	1	철근가공및조립
+7d25ff27-d4fb-4959-b8fb-c7717e6c964f	포스트텐션프리스트레싱	포스트텐션프리스트레싱	71232285-0ecb-449e-8505-f1007ff645ea	콘크리트보강공사	철근콘크리트공사 > 콘크리트보강공사 > 포스트텐션프리스트레싱	PROMOTED_FROM_SOURCE	DRAFT	1	포스트텐션프리스트레싱
+46a00000-d9cc-44ed-b956-e1ac47687d33	부속물매입	부속물매입	03da6ebe-0db5-45a4-8564-6124ba14ad8f	콘크리트부속공사	철근콘크리트공사 > 콘크리트부속공사 > 부속물매입	PROMOTED_FROM_SOURCE	DRAFT	1	부속물매입
+0d7d1319-591c-45a5-a5e8-158594dea5fd	콘크리트면마감	콘크리트면마감	03da6ebe-0db5-45a4-8564-6124ba14ad8f	콘크리트부속공사	철근콘크리트공사 > 콘크리트부속공사 > 콘크리트면마감	PROMOTED_FROM_SOURCE	DRAFT	1	콘크리트면마감
+b94ee5b3-9867-47b9-9429-271af60626ef	콘크리트생산	콘크리트생산	ba7294ab-7de7-4c60-be42-43c35bcd5e13	콘크리트생산및구입	철근콘크리트공사 > 콘크리트생산및구입 > 콘크리트생산	PROMOTED_FROM_SOURCE	DRAFT	1	콘크리트생산
+6e2c2cdb-1fc5-46fc-b7c4-94b07be28d81	무근콘크리트타설	무근콘크리트타설	6fd8d8a8-6eaa-48fc-baaa-437318b8d0bc	콘크리트타설	철근콘크리트공사 > 콘크리트타설 > 무근콘크리트타설	PROMOTED_FROM_SOURCE	DRAFT	1	무근콘크리트타설
+d550a49b-b123-4c8a-9726-9aade049c92a	철근콘크리트타설	철근콘크리트타설	6fd8d8a8-6eaa-48fc-baaa-437318b8d0bc	콘크리트타설	철근콘크리트공사 > 콘크리트타설 > 철근콘크리트타설	PROMOTED_FROM_SOURCE	DRAFT	1	철근콘크리트타설
+3258e587-68ab-40c8-80df-dd4fa0db60b7	콘크리트양생	콘크리트양생	6fd8d8a8-6eaa-48fc-baaa-437318b8d0bc	콘크리트타설	철근콘크리트공사 > 콘크리트타설 > 콘크리트양생	PROMOTED_FROM_SOURCE	DRAFT	1	콘크리트양생
+fd0b3d15-3d76-4776-8602-dfbefc416b83	프리스트레스콘크리트타설	프리스트레스콘크리트타설	6fd8d8a8-6eaa-48fc-baaa-437318b8d0bc	콘크리트타설	철근콘크리트공사 > 콘크리트타설 > 프리스트레스콘크리트타설	PROMOTED_FROM_SOURCE	DRAFT	1	프리스트레스콘크리트타설
+6db1c63d-fa22-4a1d-82d5-85980f7177db	각측정	각측정	83af0eaa-fc44-43e9-8d32-04cceb71d6f3	기본측량	측량 > 기본측량 > 각측정	PROMOTED_FROM_SOURCE	DRAFT	1	각측정
+58da7351-6147-4834-95b0-0c4fa4f390a5	거리측정	거리측정	83af0eaa-fc44-43e9-8d32-04cceb71d6f3	기본측량	측량 > 기본측량 > 거리측정	PROMOTED_FROM_SOURCE	DRAFT	1	거리측정
+add5952f-f7be-4c76-9517-24c222390278	기준점측량	기준점측량	83af0eaa-fc44-43e9-8d32-04cceb71d6f3	기본측량	측량 > 기본측량 > 기준점측량	PROMOTED_FROM_SOURCE	DRAFT	1	기준점측량
+209d4e03-be2a-4ad6-8b79-4860f49f4199	다각측량	다각측량	83af0eaa-fc44-43e9-8d32-04cceb71d6f3	기본측량	측량 > 기본측량 > 다각측량	PROMOTED_FROM_SOURCE	DRAFT	1	다각측량
+87821858-f12e-485c-967f-d7cbe39552d9	사진측량	사진측량	83af0eaa-fc44-43e9-8d32-04cceb71d6f3	기본측량	측량 > 기본측량 > 사진측량	PROMOTED_FROM_SOURCE	DRAFT	1	사진측량
+36c03836-3955-4701-9f5c-890d3b809197	삼각측량	삼각측량	83af0eaa-fc44-43e9-8d32-04cceb71d6f3	기본측량	측량 > 기본측량 > 삼각측량	PROMOTED_FROM_SOURCE	DRAFT	1	삼각측량
+8f38d71d-77e4-4e2e-804f-fe8b519953ba	수심측량	수심측량	83af0eaa-fc44-43e9-8d32-04cceb71d6f3	기본측량	측량 > 기본측량 > 수심측량	PROMOTED_FROM_SOURCE	DRAFT	1	수심측량
+976603c1-0758-46a7-b7e8-c30874f776bf	수준측량	수준측량	83af0eaa-fc44-43e9-8d32-04cceb71d6f3	기본측량	측량 > 기본측량 > 수준측량	PROMOTED_FROM_SOURCE	DRAFT	1	수준측량
+fe0b5a0f-7e4a-419a-a64d-c27fecb90806	건축측량	건축측량	90903882-5745-43fe-86b4-0342dc0396ca	기타응용측량	측량 > 기타응용측량 > 건축측량	PROMOTED_FROM_SOURCE	DRAFT	1	건축측량
+00db3819-7b6a-4fc1-8497-2b3fb0998e16	농지및삼림측량	농지및삼림측량	90903882-5745-43fe-86b4-0342dc0396ca	기타응용측량	측량 > 기타응용측량 > 농지및삼림측량	PROMOTED_FROM_SOURCE	DRAFT	1	농지및삼림측량
+1a8da6c4-79e1-4a85-a96c-235ad91be16f	시가지측량	시가지측량	90903882-5745-43fe-86b4-0342dc0396ca	기타응용측량	측량 > 기타응용측량 > 시가지측량	PROMOTED_FROM_SOURCE	DRAFT	1	시가지측량
+80d29e8e-d871-433f-9af3-d06f1bf7e435	터널및광산측량	터널및광산측량	90903882-5745-43fe-86b4-0342dc0396ca	기타응용측량	측량 > 기타응용측량 > 터널및광산측량	PROMOTED_FROM_SOURCE	DRAFT	1	터널및광산측량
+8c9d4325-ac99-4ee8-a84d-cf644eb2dac3	공사측량	공사측량	9b9a1e82-d8f8-487d-9153-ad89ad4fb111	시공측량	측량 > 시공측량 > 공사측량	PROMOTED_FROM_SOURCE	DRAFT	1	공사측량
+a75e4a78-977f-4c36-b861-ddd8154793fe	면체적측량	면체적측량	9b9a1e82-d8f8-487d-9153-ad89ad4fb111	시공측량	측량 > 시공측량 > 면체적측량	PROMOTED_FROM_SOURCE	DRAFT	1	면체적측량
+47a50c36-d133-412c-ab03-dd3d5b3f47b5	벤치마킹설치	벤치마킹설치	9b9a1e82-d8f8-487d-9153-ad89ad4fb111	시공측량	측량 > 시공측량 > 벤치마킹설치	PROMOTED_FROM_SOURCE	DRAFT	1	벤치마킹설치
+ebc183b5-4ab7-4e65-a92f-690b51c2b18b	종단측량	종단측량	9b9a1e82-d8f8-487d-9153-ad89ad4fb111	시공측량	측량 > 시공측량 > 종단측량	PROMOTED_FROM_SOURCE	DRAFT	1	종단측량
+e0392064-a6af-45d0-9be8-df85542a92e8	중심선측량	중심선측량	9b9a1e82-d8f8-487d-9153-ad89ad4fb111	시공측량	측량 > 시공측량 > 중심선측량	PROMOTED_FROM_SOURCE	DRAFT	1	중심선측량
+45225c51-6a67-4e52-ac21-de4fc592e02a	횡단측량	횡단측량	9b9a1e82-d8f8-487d-9153-ad89ad4fb111	시공측량	측량 > 시공측량 > 횡단측량	PROMOTED_FROM_SOURCE	DRAFT	1	횡단측량
+3c689468-7750-4a95-b6a5-c7b2c3d64027	경계복원측량	경계복원측량	c3fc6f08-b063-4c2c-88d3-f2242493e17e	지적측량	측량 > 지적측량 > 경계복원측량	PROMOTED_FROM_SOURCE	DRAFT	1	경계복원측량
+d89e9dd8-a355-4fb1-bd42-a2823c52c424	등록전환측량	등록전환측량	c3fc6f08-b063-4c2c-88d3-f2242493e17e	지적측량	측량 > 지적측량 > 등록전환측량	PROMOTED_FROM_SOURCE	DRAFT	1	등록전환측량 - - 대․중․소 분류대․중․소 분류
+1ba06e66-85e5-4bdc-b93f-17b54e910fba	분할측량	분할측량	c3fc6f08-b063-4c2c-88d3-f2242493e17e	지적측량	측량 > 지적측량 > 분할측량	PROMOTED_FROM_SOURCE	DRAFT	1	분할측량
+1c707ccb-1db2-4f7b-84a9-34262edded2a	신규등록측량	신규등록측량	c3fc6f08-b063-4c2c-88d3-f2242493e17e	지적측량	측량 > 지적측량 > 신규등록측량	PROMOTED_FROM_SOURCE	DRAFT	1	신규등록측량
+cd26464f-04c2-4583-823b-07eaad2ab658	지적확정측량	지적확정측량	c3fc6f08-b063-4c2c-88d3-f2242493e17e	지적측량	측량 > 지적측량 > 지적확정측량	PROMOTED_FROM_SOURCE	DRAFT	1	지적확정측량
+c40ce204-ca58-4fa7-9ba2-0a3e0eb8ec09	계단디딤판(트레드)타일붙이기	계단디딤판(트레드)타일붙이기	733169a7-62d4-4547-8ee3-bdc46867713a	계단타일붙이기	타일공사 > 계단타일붙이기 > 계단디딤판(트레드)타일붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	계단디딤판(트레드)타일붙이기
+5aa26cb9-16a6-4ce5-9721-b0bafcaa7ce5	금속타일밑면붙이기	금속타일밑면붙이기	525fab4f-8a50-492c-851c-f6f5a15be109	구조물밑면타일붙이기	타일공사 > 구조물밑면타일붙이기 > 금속타일밑면붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	금속타일밑면붙이기
+9688c88b-46dd-49d5-9b4e-3702674ac868	도기질타일밑면붙이기	도기질타일밑면붙이기	525fab4f-8a50-492c-851c-f6f5a15be109	구조물밑면타일붙이기	타일공사 > 구조물밑면타일붙이기 > 도기질타일밑면붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	도기질타일밑면붙이기
+ad03eeda-8fe0-438c-9ba8-48282f69060c	석재타일밑면붙이기	석재타일밑면붙이기	525fab4f-8a50-492c-851c-f6f5a15be109	구조물밑면타일붙이기	타일공사 > 구조물밑면타일붙이기 > 석재타일밑면붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	석재타일밑면붙이기
+95c52524-d7fc-47f8-8f5e-308ba8688285	시멘트계타일밑면붙이기	시멘트계타일밑면붙이기	525fab4f-8a50-492c-851c-f6f5a15be109	구조물밑면타일붙이기	타일공사 > 구조물밑면타일붙이기 > 시멘트계타일밑면붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	시멘트계타일밑면붙이기
+98c99d85-880c-4c03-9524-b20a8556e426	유리질타일밑면붙이기	유리질타일밑면붙이기	525fab4f-8a50-492c-851c-f6f5a15be109	구조물밑면타일붙이기	타일공사 > 구조물밑면타일붙이기 > 유리질타일밑면붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	유리질타일밑면붙이기
+371c30b0-0543-4223-ae65-11e6c6ce180c	자기질타일밑면붙이기	자기질타일밑면붙이기	525fab4f-8a50-492c-851c-f6f5a15be109	구조물밑면타일붙이기	타일공사 > 구조물밑면타일붙이기 > 자기질타일밑면붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	자기질타일밑면붙이기
+56964d21-2aad-4866-bf84-3dbb85cf3fdc	점토질타일밑면붙이기	점토질타일밑면붙이기	525fab4f-8a50-492c-851c-f6f5a15be109	구조물밑면타일붙이기	타일공사 > 구조물밑면타일붙이기 > 점토질타일밑면붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	점토질타일밑면붙이기
+72d0a9ed-9592-4ad9-88a4-0edd4da1db1a	특수타일밑면붙이기	특수타일밑면붙이기	525fab4f-8a50-492c-851c-f6f5a15be109	구조물밑면타일붙이기	타일공사 > 구조물밑면타일붙이기 > 특수타일밑면붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	특수타일밑면붙이기
+c73e02fc-05b6-499e-a43b-6245def56253	합성수지타일밑면붙이기	합성수지타일밑면붙이기	525fab4f-8a50-492c-851c-f6f5a15be109	구조물밑면타일붙이기	타일공사 > 구조물밑면타일붙이기 > 합성수지타일밑면붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	합성수지타일밑면붙이기
+8f0c09b6-70e3-4f2a-88a4-44cbb488118d	금속타일내벽붙이기	금속타일내벽붙이기	03597104-73d5-4f11-bee7-2c3162f7270c	내벽타일붙이기	타일공사 > 내벽타일붙이기 > 금속타일내벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	금속타일내벽붙이기
+5f023b49-df63-4eeb-a0be-240a7be0d585	도기질타일내벽붙이기	도기질타일내벽붙이기	03597104-73d5-4f11-bee7-2c3162f7270c	내벽타일붙이기	타일공사 > 내벽타일붙이기 > 도기질타일내벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	도기질타일내벽붙이기
+56b14de8-6d7f-4406-8997-826d21de7abc	석재타일내벽붙이기	석재타일내벽붙이기	03597104-73d5-4f11-bee7-2c3162f7270c	내벽타일붙이기	타일공사 > 내벽타일붙이기 > 석재타일내벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	석재타일내벽붙이기
+d40a2fbb-df73-44b5-9924-e89eccd1cd01	시멘트계타일내벽붙이기	시멘트계타일내벽붙이기	03597104-73d5-4f11-bee7-2c3162f7270c	내벽타일붙이기	타일공사 > 내벽타일붙이기 > 시멘트계타일내벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	시멘트계타일내벽붙이기
+8226577d-7006-4d79-992a-d33bf592b30d	유리질타일내벽붙이기	유리질타일내벽붙이기	03597104-73d5-4f11-bee7-2c3162f7270c	내벽타일붙이기	타일공사 > 내벽타일붙이기 > 유리질타일내벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	유리질타일내벽붙이기
+f4e23b4c-6fae-4628-9f47-209bc28affbc	자기질타일내벽붙이기	자기질타일내벽붙이기	03597104-73d5-4f11-bee7-2c3162f7270c	내벽타일붙이기	타일공사 > 내벽타일붙이기 > 자기질타일내벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	자기질타일내벽붙이기
+2d025eae-4b07-4e46-b0d6-523d60517425	점토질타일내벽붙이기	점토질타일내벽붙이기	03597104-73d5-4f11-bee7-2c3162f7270c	내벽타일붙이기	타일공사 > 내벽타일붙이기 > 점토질타일내벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	점토질타일내벽붙이기
+41bb8e4f-ca4e-476f-8c3e-3f280ab5e6b0	특수타일내벽붙이기	특수타일내벽붙이기	03597104-73d5-4f11-bee7-2c3162f7270c	내벽타일붙이기	타일공사 > 내벽타일붙이기 > 특수타일내벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	특수타일내벽붙이기
+bad89edc-67cb-435e-82ff-34fc7726ad61	합성수지타일내벽붙이기	합성수지타일내벽붙이기	03597104-73d5-4f11-bee7-2c3162f7270c	내벽타일붙이기	타일공사 > 내벽타일붙이기 > 합성수지타일내벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	합성수지타일내벽붙이기
+b93df523-7f96-45ab-b7ce-fa92b0bf4149	금속타일바닥붙이기	금속타일바닥붙이기	1850eed5-cd9e-4d3e-9bc3-d99c95102c33	바닥타일붙이기	타일공사 > 바닥타일붙이기 > 금속타일바닥붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	금속타일바닥붙이기
+0af8704b-7d03-4654-936f-13a30cd526e1	도기질타일바닥붙이기	도기질타일바닥붙이기	1850eed5-cd9e-4d3e-9bc3-d99c95102c33	바닥타일붙이기	타일공사 > 바닥타일붙이기 > 도기질타일바닥붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	도기질타일바닥붙이기
+da972e5e-9d4b-441f-847f-033ede964ae8	석재타일바닥붙이기	석재타일바닥붙이기	1850eed5-cd9e-4d3e-9bc3-d99c95102c33	바닥타일붙이기	타일공사 > 바닥타일붙이기 > 석재타일바닥붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	석재타일바닥붙이기
+e76378e7-0cd1-421e-b22b-b747e11ba5f7	시멘트계타일바닥붙이기	시멘트계타일바닥붙이기	1850eed5-cd9e-4d3e-9bc3-d99c95102c33	바닥타일붙이기	타일공사 > 바닥타일붙이기 > 시멘트계타일바닥붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	시멘트계타일바닥붙이기
+436a96b0-af4b-4a7e-985b-a7e50753e010	유리질타일바닥붙이기	유리질타일바닥붙이기	1850eed5-cd9e-4d3e-9bc3-d99c95102c33	바닥타일붙이기	타일공사 > 바닥타일붙이기 > 유리질타일바닥붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	유리질타일바닥붙이기
+05954d38-bef7-419b-87b7-ab18d9a4f1e0	자기질타일바닥붙이기	자기질타일바닥붙이기	1850eed5-cd9e-4d3e-9bc3-d99c95102c33	바닥타일붙이기	타일공사 > 바닥타일붙이기 > 자기질타일바닥붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	자기질타일바닥붙이기
+1c90fcd4-5aec-489d-be5e-71d470acbed7	점토질타일바닥붙이기	점토질타일바닥붙이기	1850eed5-cd9e-4d3e-9bc3-d99c95102c33	바닥타일붙이기	타일공사 > 바닥타일붙이기 > 점토질타일바닥붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	점토질타일바닥붙이기
+8814ab10-8f4d-46aa-8aed-a151a8b6feed	특수타일바닥붙이기	특수타일바닥붙이기	1850eed5-cd9e-4d3e-9bc3-d99c95102c33	바닥타일붙이기	타일공사 > 바닥타일붙이기 > 특수타일바닥붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	특수타일바닥붙이기
+4d523a85-a823-423c-8d9f-9cf2f5d24d58	합성수지타일바닥붙이기	합성수지타일바닥붙이기	1850eed5-cd9e-4d3e-9bc3-d99c95102c33	바닥타일붙이기	타일공사 > 바닥타일붙이기 > 합성수지타일바닥붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	합성수지타일바닥붙이기
+3cfea292-3d08-4948-bfd7-0f51b3b523c8	금속타일외벽붙이기	금속타일외벽붙이기	34bee63b-6983-4524-83df-48e3a1012319	외벽타일붙이기	타일공사 > 외벽타일붙이기 > 금속타일외벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	금속타일외벽붙이기
+33f4ad93-61c7-4deb-a4a7-df11ad0d37f7	도기질타일외벽붙이기	도기질타일외벽붙이기	34bee63b-6983-4524-83df-48e3a1012319	외벽타일붙이기	타일공사 > 외벽타일붙이기 > 도기질타일외벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	도기질타일외벽붙이기
+787b7ad3-2f05-4d98-93f7-91e90a3ebdfc	석재타일외벽붙이기	석재타일외벽붙이기	34bee63b-6983-4524-83df-48e3a1012319	외벽타일붙이기	타일공사 > 외벽타일붙이기 > 석재타일외벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	석재타일외벽붙이기
+ebd16cf9-609e-4d19-a9e6-830660249d4b	시멘트계타일외벽붙이기	시멘트계타일외벽붙이기	34bee63b-6983-4524-83df-48e3a1012319	외벽타일붙이기	타일공사 > 외벽타일붙이기 > 시멘트계타일외벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	시멘트계타일외벽붙이기
+195c65b5-c80b-4984-b817-7a360cf43c87	유리질타일외벽붙이기	유리질타일외벽붙이기	34bee63b-6983-4524-83df-48e3a1012319	외벽타일붙이기	타일공사 > 외벽타일붙이기 > 유리질타일외벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	유리질타일외벽붙이기
+9bf2a8eb-01eb-458a-9120-ec03aa27ebb6	자기질타일외벽붙이기	자기질타일외벽붙이기	34bee63b-6983-4524-83df-48e3a1012319	외벽타일붙이기	타일공사 > 외벽타일붙이기 > 자기질타일외벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	자기질타일외벽붙이기
+fac1ab37-85d8-4d22-8d08-d584a263643d	점토질타일외벽붙이기	점토질타일외벽붙이기	34bee63b-6983-4524-83df-48e3a1012319	외벽타일붙이기	타일공사 > 외벽타일붙이기 > 점토질타일외벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	점토질타일외벽붙이기
+3cc30b81-6e91-4c22-a118-ea7f48dd7ff9	특수타일외벽붙이기	특수타일외벽붙이기	34bee63b-6983-4524-83df-48e3a1012319	외벽타일붙이기	타일공사 > 외벽타일붙이기 > 특수타일외벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	특수타일외벽붙이기
+e8bb70a6-9568-4e84-8813-3107fac8d691	합성수지타일외벽붙이기	합성수지타일외벽붙이기	34bee63b-6983-4524-83df-48e3a1012319	외벽타일붙이기	타일공사 > 외벽타일붙이기 > 합성수지타일외벽붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	합성수지타일외벽붙이기
+dccc5f5a-9612-4fa6-8cd3-0078f5758a94	그래픽타일붙이기	그래픽타일붙이기	b1e5dbad-5462-4f82-b31b-f7c9bbf44a6c	이형타일붙이기	타일공사 > 이형타일붙이기 > 그래픽타일붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	그래픽타일붙이기
+69381494-9a4c-4941-8ca9-c64d55fbdab8	띠타일붙이기	띠타일붙이기	b1e5dbad-5462-4f82-b31b-f7c9bbf44a6c	이형타일붙이기	타일공사 > 이형타일붙이기 > 띠타일붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	띠타일붙이기
+cdbf7194-0d2e-48bf-83c5-ea42c74698fb	모서리타일붙이기	모서리타일붙이기	b1e5dbad-5462-4f82-b31b-f7c9bbf44a6c	이형타일붙이기	타일공사 > 이형타일붙이기 > 모서리타일붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	모서리타일붙이기
+f9466a05-b8d4-4a05-808b-4beeb0fd2101	점자타일붙이기	점자타일붙이기	b1e5dbad-5462-4f82-b31b-f7c9bbf44a6c	이형타일붙이기	타일공사 > 이형타일붙이기 > 점자타일붙이기	PROMOTED_FROM_SOURCE	DRAFT	1	점자타일붙이기
+473d69ee-4433-487f-bc43-c35c1f2ea28f	발파굴착	발파굴착	63e696af-4c36-4e45-9442-c6167512ceb9	터널굴착공사	터널공사 > 터널굴착공사 > 발파굴착	PROMOTED_FROM_SOURCE	DRAFT	1	발파굴착
+e7443084-4c99-4aba-9da5-2d572a244d6d	토공장비굴착	토공장비굴착	63e696af-4c36-4e45-9442-c6167512ceb9	터널굴착공사	터널공사 > 터널굴착공사 > 토공장비굴착	PROMOTED_FROM_SOURCE	DRAFT	1	토공장비굴착
+bfaae860-0013-470f-a2db-80bd65b14433	터널궤도부레일부설	터널궤도부레일부설	fabd4b6c-e97f-4f74-b62c-53c51224393a	터널내부마감공사	터널공사 > 터널내부마감공사 > 터널궤도부레일부설	PROMOTED_FROM_SOURCE	DRAFT	1	터널궤도부레일부설
+1ce64852-8e8c-4391-b723-9ae8e6578f50	세그먼트(Segment)라이닝	세그먼트(Segment)라이닝	4b698a01-497b-45c6-ae08-76be05c9d604	터널라이닝	터널공사 > 터널라이닝 > 세그먼트(Segment)라이닝	PROMOTED_FROM_SOURCE	DRAFT	1	세그먼트(Segment)라이닝
+892b579d-42bf-4c3e-8a71-e37d8ce00e1b	현장타설콘크리트라이닝	현장타설콘크리트라이닝	4b698a01-497b-45c6-ae08-76be05c9d604	터널라이닝	터널공사 > 터널라이닝 > 현장타설콘크리트라이닝	PROMOTED_FROM_SOURCE	DRAFT	1	현장타설콘크리트라이닝
+30fe37a0-0bd8-4c44-bd9b-76b3625115f5	터널방수	터널방수	0ee3ee3a-4734-4f1a-af67-73c160e875c0	터널방수및배수	터널공사 > 터널방수및배수 > 터널방수	PROMOTED_FROM_SOURCE	DRAFT	1	터널방수
+af2b0139-71a3-4f32-b148-77b225a35bf1	감지천공	감지천공	61b431eb-4edf-4717-a1b6-7877f1f5deb8	터널보강및안정	터널공사 > 터널보강및안정 > 감지천공	PROMOTED_FROM_SOURCE	DRAFT	1	감지천공
+11af2f9f-366e-4fc3-8abb-87453ba4ece1	갱구숏크리트(Shotcrete)	갱구숏크리트(Shotcrete)	61b431eb-4edf-4717-a1b6-7877f1f5deb8	터널보강및안정	터널공사 > 터널보강및안정 > 갱구숏크리트(Shotcrete)	PROMOTED_FROM_SOURCE	DRAFT	1	갱구숏크리트(Shotcrete)
+45a1a7a2-d876-4dd6-846d-f2cf8f42c840	막장안정	막장안정	61b431eb-4edf-4717-a1b6-7877f1f5deb8	터널보강및안정	터널공사 > 터널보강및안정 > 막장안정	PROMOTED_FROM_SOURCE	DRAFT	1	막장안정
+3136b8cf-6e0d-4910-bd62-ac40c5c61fcc	터널복공뒷채움	터널복공뒷채움	61b431eb-4edf-4717-a1b6-7877f1f5deb8	터널보강및안정	터널공사 > 터널보강및안정 > 터널복공뒷채움	PROMOTED_FROM_SOURCE	DRAFT	1	터널복공뒷채움
+57f0e677-87f0-4692-b74e-613045f5d2e2	터널영구계측설비설치	터널영구계측설비설치	61b431eb-4edf-4717-a1b6-7877f1f5deb8	터널보강및안정	터널공사 > 터널보강및안정 > 터널영구계측설비설치	PROMOTED_FROM_SOURCE	DRAFT	1	터널영구계측설비설치
+6979154a-5ae3-4410-8101-d48193098c24	버럭되메우기	버럭되메우기	67981795-50b9-457d-999b-90e1c4bcbc43	되메우기	토공사 > 되메우기 > 버럭되메우기	PROMOTED_FROM_SOURCE	DRAFT	1	버럭되메우기
+07aa7b8b-a592-4c6a-9e67-7a0a86aba9fe	사석되메우기	사석되메우기	67981795-50b9-457d-999b-90e1c4bcbc43	되메우기	토공사 > 되메우기 > 사석되메우기	PROMOTED_FROM_SOURCE	DRAFT	1	사석되메우기
+bcd6c3f8-cd19-4b66-9519-59779f915afe	토사되메우기	토사되메우기	67981795-50b9-457d-999b-90e1c4bcbc43	되메우기	토공사 > 되메우기 > 토사되메우기	PROMOTED_FROM_SOURCE	DRAFT	1	토사되메우기
+e7bbec43-9986-4945-9774-180b40d3d365	혼합골재되메우기	혼합골재되메우기	67981795-50b9-457d-999b-90e1c4bcbc43	되메우기	토공사 > 되메우기 > 혼합골재되메우기	PROMOTED_FROM_SOURCE	DRAFT	1	혼합골재되메우기
+8e0a2b96-f984-4a6b-ae3c-0061642fd634	리핑암터파기	리핑암터파기	6ed865b8-abdc-43c9-9f9d-bac45610dfb4	터파기	토공사 > 터파기 > 리핑암터파기	PROMOTED_FROM_SOURCE	DRAFT	1	리핑암터파기
+936d4b44-2847-48f5-bf37-a760151a76df	발파암터파기	발파암터파기	6ed865b8-abdc-43c9-9f9d-bac45610dfb4	터파기	토공사 > 터파기 > 발파암터파기	PROMOTED_FROM_SOURCE	DRAFT	1	발파암터파기
+49d29123-1795-4cca-99ca-fa5e1adf4b54	인위적경화물질터파기	인위적경화물질터파기	6ed865b8-abdc-43c9-9f9d-bac45610dfb4	터파기	토공사 > 터파기 > 인위적경화물질터파기	PROMOTED_FROM_SOURCE	DRAFT	1	인위적경화물질터파기
+daac530d-fd1a-41a3-ab32-01eee952a1f4	토사터파기	토사터파기	6ed865b8-abdc-43c9-9f9d-bac45610dfb4	터파기	토공사 > 터파기 > 토사터파기	PROMOTED_FROM_SOURCE	DRAFT	1	토사터파기
+b80871a6-7b41-4e04-a83b-98e56e882d6f	성토재생산및선별	성토재생산및선별	5af253ad-9573-4ec2-bcfa-8e082eefe8d2	토사처리및운반	토공사 > 토사처리및운반 > 성토재생산및선별	PROMOTED_FROM_SOURCE	DRAFT	1	성토재생산및선별
+daf7a4ad-f737-4528-8982-7d1bdfd9c027	흙깍기․잔토처리	흙깍기․잔토처리	5af253ad-9573-4ec2-bcfa-8e082eefe8d2	토사처리및운반	토공사 > 토사처리및운반 > 흙깍기․잔토처리	PROMOTED_FROM_SOURCE	DRAFT	1	흙깍기․잔토처리
+01425edb-b5fc-4a3b-a43a-ec1b6df6006c	흙쌓기운반	흙쌓기운반	5af253ad-9573-4ec2-bcfa-8e082eefe8d2	토사처리및운반	토공사 > 토사처리및운반 > 흙쌓기운반	PROMOTED_FROM_SOURCE	DRAFT	1	흙쌓기운반
+59a1db14-8faa-4791-9754-15d62c35ff1d	경화물질트렌치터파기	경화물질트렌치터파기	e9cfa3fe-de63-425f-b5d3-75ca91c92b60	트랜치터파기	토공사 > 트랜치터파기 > 경화물질트렌치터파기	PROMOTED_FROM_SOURCE	DRAFT	1	경화물질트렌치터파기
+cf06a9fa-59cc-4d96-aa61-91c376294ad5	리핑암트렌치터파기	리핑암트렌치터파기	e9cfa3fe-de63-425f-b5d3-75ca91c92b60	트랜치터파기	토공사 > 트랜치터파기 > 리핑암트렌치터파기	PROMOTED_FROM_SOURCE	DRAFT	1	리핑암트렌치터파기
+e5cc726a-3b88-4ec1-bdfe-de0bf79914e0	발파암트렌치터파기	발파암트렌치터파기	e9cfa3fe-de63-425f-b5d3-75ca91c92b60	트랜치터파기	토공사 > 트랜치터파기 > 발파암트렌치터파기	PROMOTED_FROM_SOURCE	DRAFT	1	발파암트렌치터파기
+a00f51e1-36a7-4724-b075-27b044fc9daf	토사트렌치터파기	토사트렌치터파기	e9cfa3fe-de63-425f-b5d3-75ca91c92b60	트랜치터파기	토공사 > 트랜치터파기 > 토사트렌치터파기	PROMOTED_FROM_SOURCE	DRAFT	1	토사트렌치터파기
+f08910aa-06e1-4761-9fb7-0844d32f48b3	구조물지정	구조물지정	ed0b5c8b-42a0-460d-bfe4-188a13265758	표토제거및부지정지	토공사 > 표토제거및부지정지 > 구조물지정	PROMOTED_FROM_SOURCE	DRAFT	1	구조물지정
+6170ff36-851b-4541-8e0e-2155fcaecd15	사면면고르기	사면면고르기	ed0b5c8b-42a0-460d-bfe4-188a13265758	표토제거및부지정지	토공사 > 표토제거및부지정지 > 사면면고르기	PROMOTED_FROM_SOURCE	DRAFT	1	사면면고르기
+e26ed88c-bc75-4fe8-abc4-5831f0ab182c	성토면고르기	성토면고르기	ed0b5c8b-42a0-460d-bfe4-188a13265758	표토제거및부지정지	토공사 > 표토제거및부지정지 > 성토면고르기	PROMOTED_FROM_SOURCE	DRAFT	1	성토면고르기
+5bb130b1-f1ab-4cdb-86d8-9b0985bf9a81	일반부지정지	일반부지정지	ed0b5c8b-42a0-460d-bfe4-188a13265758	표토제거및부지정지	토공사 > 표토제거및부지정지 > 일반부지정지	PROMOTED_FROM_SOURCE	DRAFT	1	일반부지정지
+1ff1902b-89e9-4b8f-b173-4ea36c7047ea	절토면고르기	절토면고르기	ed0b5c8b-42a0-460d-bfe4-188a13265758	표토제거및부지정지	토공사 > 표토제거및부지정지 > 절토면고르기	PROMOTED_FROM_SOURCE	DRAFT	1	절토면고르기
+a7106b20-76ca-427f-aa45-2f0b1d417f15	표토제거	표토제거	ed0b5c8b-42a0-460d-bfe4-188a13265758	표토제거및부지정지	토공사 > 표토제거및부지정지 > 표토제거	PROMOTED_FROM_SOURCE	DRAFT	1	표토제거
+1d8903ba-04cf-419e-8aa5-feec2258627f	리핑암흙깍기	리핑암흙깍기	46d59aac-0786-4500-a7ac-257e93c55745	흙깍기(절토)	토공사 > 흙깍기(절토) > 리핑암흙깍기	PROMOTED_FROM_SOURCE	DRAFT	1	리핑암흙깍기
+bae014b7-2474-48f7-b5c0-0e9f30a0ff56	발파	발파	46d59aac-0786-4500-a7ac-257e93c55745	흙깍기(절토)	토공사 > 흙깍기(절토) > 발파	PROMOTED_FROM_SOURCE	DRAFT	1	발파
+feec8d54-f3ad-4a6d-9062-dbaa1293333c	발파암흙깍기	발파암흙깍기	46d59aac-0786-4500-a7ac-257e93c55745	흙깍기(절토)	토공사 > 흙깍기(절토) > 발파암흙깍기	PROMOTED_FROM_SOURCE	DRAFT	1	발파암흙깍기
+d99b67ac-2747-4703-9bba-e1a6f90ed0fd	인위적경화물질흙깍기	인위적경화물질흙깍기	46d59aac-0786-4500-a7ac-257e93c55745	흙깍기(절토)	토공사 > 흙깍기(절토) > 인위적경화물질흙깍기	PROMOTED_FROM_SOURCE	DRAFT	1	인위적경화물질흙깍기
+a4953296-0f57-40b6-b32a-84ff497699c3	토사흙깍기	토사흙깍기	46d59aac-0786-4500-a7ac-257e93c55745	흙깍기(절토)	토공사 > 흙깍기(절토) > 토사흙깍기	PROMOTED_FROM_SOURCE	DRAFT	1	토사흙깍기
+c26ab9b3-6f79-489a-a37f-d6e3ee709294	기타흙쌓기	기타흙쌓기	6c3e090b-1605-4add-8c25-f7726e27863f	흙쌓기(성토)	토공사 > 흙쌓기(성토) > 기타흙쌓기	PROMOTED_FROM_SOURCE	DRAFT	1	기타흙쌓기
+16567c62-bce4-4659-af47-5add24d54bf9	버럭쌓기	버럭쌓기	6c3e090b-1605-4add-8c25-f7726e27863f	흙쌓기(성토)	토공사 > 흙쌓기(성토) > 버럭쌓기	PROMOTED_FROM_SOURCE	DRAFT	1	버럭쌓기
+241a0ca1-e925-49ad-bd44-72d6a0b368c6	사석쌓기	사석쌓기	6c3e090b-1605-4add-8c25-f7726e27863f	흙쌓기(성토)	토공사 > 흙쌓기(성토) > 사석쌓기	PROMOTED_FROM_SOURCE	DRAFT	1	사석쌓기
+305774af-88d7-485a-a803-4d495baf8b78	토사흙쌓기	토사흙쌓기	6c3e090b-1605-4add-8c25-f7726e27863f	흙쌓기(성토)	토공사 > 흙쌓기(성토) > 토사흙쌓기	PROMOTED_FROM_SOURCE	DRAFT	1	토사흙쌓기
+d96f2e81-97ad-4364-9b21-343e29b63844	혼합골재쌓기	혼합골재쌓기	6c3e090b-1605-4add-8c25-f7726e27863f	흙쌓기(성토)	토공사 > 흙쌓기(성토) > 혼합골재쌓기	PROMOTED_FROM_SOURCE	DRAFT	1	혼합골재쌓기
+11a3ba49-a5cc-491c-b523-e8ac483f54dd	상수도배관검사	상수도배관검사	1e5f7b07-f903-43d9-9d58-ef1bd51290a5	상수도관갱생	토목배관공사및배수공사 > 상수도관갱생 > 상수도배관검사	PROMOTED_FROM_SOURCE	DRAFT	1	상수도배관검사
+6fa0e036-8f32-40e2-8c71-2c6b0c8fa03b	상수도배관내장애물제거	상수도배관내장애물제거	1e5f7b07-f903-43d9-9d58-ef1bd51290a5	상수도관갱생	토목배관공사및배수공사 > 상수도관갱생 > 상수도배관내장애물제거	PROMOTED_FROM_SOURCE	DRAFT	1	상수도배관내장애물제거
+08bb8f2b-22e8-4887-b214-c9bcde4a42c1	상수도배관보수	상수도배관보수	1e5f7b07-f903-43d9-9d58-ef1bd51290a5	상수도관갱생	토목배관공사및배수공사 > 상수도관갱생 > 상수도배관보수	PROMOTED_FROM_SOURCE	DRAFT	1	상수도배관보수
+5e1216a0-7201-40a6-9ccc-ee31d9480254	상수도배관청소	상수도배관청소	1e5f7b07-f903-43d9-9d58-ef1bd51290a5	상수도관갱생	토목배관공사및배수공사 > 상수도관갱생 > 상수도배관청소	PROMOTED_FROM_SOURCE	DRAFT	1	상수도배관청소
+97039c1e-22ec-4098-81c7-224d18d8738a	여과설비설치	여과설비설치	e8c65574-5c31-4438-a942-c83aa6091b76	토목배관공사및배수공사	토목배관공사및배수공사 > 여과설비설치	PROMOTED_FROM_SOURCE	DRAFT	1	여과설비설치
+10d43434-67f7-4d58-9102-fa0e1daf2813	검사관설치	검사관설치	135be024-0406-4ca9-8e07-5803429117f5	토목배관부대공사	토목배관공사및배수공사 > 토목배관부대공사 > 검사관설치	PROMOTED_FROM_SOURCE	DRAFT	1	검사관설치
+f6e725c2-6f4b-4feb-964e-452fc5279ab9	경사판설치	경사판설치	135be024-0406-4ca9-8e07-5803429117f5	토목배관부대공사	토목배관공사및배수공사 > 토목배관부대공사 > 경사판설치	PROMOTED_FROM_SOURCE	DRAFT	1	경사판설치
+6027181b-16a9-45f7-b8c6-e9a64fe2d31b	관부사	관부사	135be024-0406-4ca9-8e07-5803429117f5	토목배관부대공사	토목배관공사및배수공사 > 토목배관부대공사 > 관부사	PROMOTED_FROM_SOURCE	DRAFT	1	관부사
+5639c61f-0dff-4f8e-b611-3efc2ae3c1ff	구조물배관접합	구조물배관접합	135be024-0406-4ca9-8e07-5803429117f5	토목배관부대공사	토목배관공사및배수공사 > 토목배관부대공사 > 구조물배관접합	PROMOTED_FROM_SOURCE	DRAFT	1	구조물배관접합
+b50f788d-7cf4-4765-a64d-4b7e81710366	배관보온 보호공사	배관보온 보호공사	135be024-0406-4ca9-8e07-5803429117f5	토목배관부대공사	토목배관공사및배수공사 > 토목배관부대공사 > 배관보온 보호공사	PROMOTED_FROM_SOURCE	DRAFT	1	배관보온 보호공사
+17dfcfa8-a947-4f51-8e10-128124b7c90f	금속관부설	금속관부설	3b8c0252-1275-4fa7-b549-5954d2a2d5c6	토목배관부설	토목배관공사및배수공사 > 토목배관부설 > 금속관부설	PROMOTED_FROM_SOURCE	DRAFT	1	금속관부설
+87a25a7a-da52-4f6c-9fab-04138fe9c179	콘크리트관부설	콘크리트관부설	3b8c0252-1275-4fa7-b549-5954d2a2d5c6	토목배관부설	토목배관공사및배수공사 > 토목배관부설 > 콘크리트관부설	PROMOTED_FROM_SOURCE	DRAFT	1	콘크리트관부설
+e8876997-79a4-4923-bb22-3bc21c0205df	프라스틱관부설	프라스틱관부설	3b8c0252-1275-4fa7-b549-5954d2a2d5c6	토목배관부설	토목배관공사및배수공사 > 토목배관부설 > 프라스틱관부설	PROMOTED_FROM_SOURCE	DRAFT	1	프라스틱관부설
+ebce6550-fbdd-401c-abed-13ba0afdc20c	배관내부준설	배관내부준설	ac5f0489-f020-4af4-ac02-accc18d43cbf	하수도관갱생	토목배관공사및배수공사 > 하수도관갱생 > 배관내부준설	PROMOTED_FROM_SOURCE	DRAFT	1	배관내부준설
+7564ea67-d660-4536-82fd-fe2bf079488d	하수도배관검사	하수도배관검사	ac5f0489-f020-4af4-ac02-accc18d43cbf	하수도관갱생	토목배관공사및배수공사 > 하수도관갱생 > 하수도배관검사	PROMOTED_FROM_SOURCE	DRAFT	1	하수도배관검사
+9a21c07a-d808-41c4-88ba-efbd5c158ffb	하수도배관내장애물제거	하수도배관내장애물제거	ac5f0489-f020-4af4-ac02-accc18d43cbf	하수도관갱생	토목배관공사및배수공사 > 하수도관갱생 > 하수도배관내장애물제거	PROMOTED_FROM_SOURCE	DRAFT	1	하수도배관내장애물제거
+0ac7a953-50d6-4059-9bc9-58ecc65c33a1	하수도배관보수	하수도배관보수	ac5f0489-f020-4af4-ac02-accc18d43cbf	하수도관갱생	토목배관공사및배수공사 > 하수도관갱생 > 하수도배관보수	PROMOTED_FROM_SOURCE	DRAFT	1	하수도배관보수
+5ebc8ce7-3e95-4c2e-a280-d4679250745b	하수도배관청소	하수도배관청소	ac5f0489-f020-4af4-ac02-accc18d43cbf	하수도관갱생	토목배관공사및배수공사 > 하수도관갱생 > 하수도배관청소	PROMOTED_FROM_SOURCE	DRAFT	1	하수도배관청소
+b5e301ae-b390-4267-956b-5272ad4ed810	전기집진기관련부속설비설치공사	전기집진기관련부속설비설치공사	ceb698ea-4a98-4f97-badd-03635225312f	전기집진기설비공사	폐기물처리및대기환경설비관련공사 > 전기집진기설비공사 > 전기집진기관련부속설비설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	전기집진기관련부속설비설치공사
+5c9089a8-4350-4ffc-aedc-2a65002d46f3	전기집진기설비Fan Blower류설치공사	전기집진기설비Fan Blower류설치공사	ceb698ea-4a98-4f97-badd-03635225312f	전기집진기설비공사	폐기물처리및대기환경설비관련공사 > 전기집진기설비공사 > 전기집진기설비Fan Blower류설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	전기집진기설비Fan Blower류설치공사
+e1475038-f654-410b-af82-3346431b856a	전기집진기설비방풍벽설치공사	전기집진기설비방풍벽설치공사	ceb698ea-4a98-4f97-badd-03635225312f	전기집진기설비공사	폐기물처리및대기환경설비관련공사 > 전기집진기설비공사 > 전기집진기설비방풍벽설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	전기집진기설비방풍벽설치공사
+040f1f75-2e76-4bba-84b7-8ea96215b6c6	전기집진기설비본체설치공사	전기집진기설비본체설치공사	ceb698ea-4a98-4f97-badd-03635225312f	전기집진기설비공사	폐기물처리및대기환경설비관련공사 > 전기집진기설비공사 > 전기집진기설비본체설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	전기집진기설비본체설치공사
+d4f783a5-24d9-4da3-aec1-c0153108c0f6	탈질설비Support류설치공사	탈질설비Support류설치공사	4c6e576f-378d-4fa6-86e0-9c616abd1216	탈질설비공사	폐기물처리및대기환경설비관련공사 > 탈질설비공사 > 탈질설비Support류설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	탈질설비Support류설치공사
+22e25bbd-2102-46ac-9110-4eb16daa4f4a	탈질설비기기류설치공사	탈질설비기기류설치공사	4c6e576f-378d-4fa6-86e0-9c616abd1216	탈질설비공사	폐기물처리및대기환경설비관련공사 > 탈질설비공사 > 탈질설비기기류설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	탈질설비기기류설치공사
+99b54531-e7ea-49b8-a933-a716f7611445	탈질설비덕트류설치공사	탈질설비덕트류설치공사	4c6e576f-378d-4fa6-86e0-9c616abd1216	탈질설비공사	폐기물처리및대기환경설비관련공사 > 탈질설비공사 > 탈질설비덕트류설치공사	PROMOTED_FROM_SOURCE	DRAFT	1	탈질설비덕트류설치공사
+47150778-72d7-4a31-9e8c-540befa4be3c	포장콘크리트포설	포장콘크리트포설	98f10965-c760-4cf3-b3a2-ccdfdfb15ec3	콘크리트포장	포장및도로공사 > 콘크리트포장 > 포장콘크리트포설	PROMOTED_FROM_SOURCE	DRAFT	1	포장콘크리트포설
+5227a116-af13-419c-a618-89d084694406	경하중포장보수	경하중포장보수	277e2963-cbe3-4e70-a6cb-6383c37b6767	포장면및도로보수	포장및도로공사 > 포장면및도로보수 > 경하중포장보수	PROMOTED_FROM_SOURCE	DRAFT	1	경하중포장보수
+fd492606-af00-4df5-9581-a9a1fed1757a	아스콘포장덧씨우기	아스콘포장덧씨우기	277e2963-cbe3-4e70-a6cb-6383c37b6767	포장면및도로보수	포장및도로공사 > 포장면및도로보수 > 아스콘포장덧씨우기	PROMOTED_FROM_SOURCE	DRAFT	1	아스콘포장덧씨우기
+6478e021-a1d6-4c1f-b5b3-ef9c7a173531	아스콘포장보수	아스콘포장보수	277e2963-cbe3-4e70-a6cb-6383c37b6767	포장면및도로보수	포장및도로공사 > 포장면및도로보수 > 아스콘포장보수	PROMOTED_FROM_SOURCE	DRAFT	1	아스콘포장보수
+5bddd7b2-92c3-4d7c-acc6-3f0d2fcb5e6b	콘크리트포장보수	콘크리트포장보수	277e2963-cbe3-4e70-a6cb-6383c37b6767	포장면및도로보수	포장및도로공사 > 포장면및도로보수 > 콘크리트포장보수	PROMOTED_FROM_SOURCE	DRAFT	1	콘크리트포장보수
+1e14af59-33e6-4511-baa8-9d842c84ce1f	PC조인트그라우팅	PC조인트그라우팅	476efd01-d9c9-46c9-908b-3dcd7f719930	PC부속공사	프리케스트콘크리트공사 > PC부속공사 > PC조인트그라우팅	PROMOTED_FROM_SOURCE	DRAFT	1	PC조인트그라우팅
+e53a7854-2453-4d4b-8957-2e019766a73b	기타PC부재공장생산	기타PC부재공장생산	888bf357-3ff0-4beb-b338-c4153ab0cadc	PC부재생산	프리케스트콘크리트공사 > PC부재생산 > 기타PC부재공장생산	PROMOTED_FROM_SOURCE	DRAFT	1	기타PC부재공장생산
+97a63fe0-9bc2-4de3-9456-81f4acf47f49	기타PC부재현장생산	기타PC부재현장생산	888bf357-3ff0-4beb-b338-c4153ab0cadc	PC부재생산	프리케스트콘크리트공사 > PC부재생산 > 기타PC부재현장생산	PROMOTED_FROM_SOURCE	DRAFT	1	기타PC부재현장생산
+217b3732-a8a6-4773-b441-e41b16a3ef25	소형PC구조물공장생산	소형PC구조물공장생산	888bf357-3ff0-4beb-b338-c4153ab0cadc	PC부재생산	프리케스트콘크리트공사 > PC부재생산 > 소형PC구조물공장생산	PROMOTED_FROM_SOURCE	DRAFT	1	소형PC구조물공장생산
+404fe119-953b-4f78-9e39-e3b5a6e58b4e	소형PC구조물현장생산	소형PC구조물현장생산	888bf357-3ff0-4beb-b338-c4153ab0cadc	PC부재생산	프리케스트콘크리트공사 > PC부재생산 > 소형PC구조물현장생산	PROMOTED_FROM_SOURCE	DRAFT	1	소형PC구조물현장생산
+a2fd72a7-0838-41dc-ab4a-d3bc0be20f19	일반PC구조부재공장생산	일반PC구조부재공장생산	888bf357-3ff0-4beb-b338-c4153ab0cadc	PC부재생산	프리케스트콘크리트공사 > PC부재생산 > 일반PC구조부재공장생산	PROMOTED_FROM_SOURCE	DRAFT	1	일반PC구조부재공장생산
+187d4381-c2cf-42f2-a6f3-3dbf5f3985f0	일반PC구조부재현장생산	일반PC구조부재현장생산	888bf357-3ff0-4beb-b338-c4153ab0cadc	PC부재생산	프리케스트콘크리트공사 > PC부재생산 > 일반PC구조부재현장생산	PROMOTED_FROM_SOURCE	DRAFT	1	일반PC구조부재현장생산
+828eaca3-4ce3-4a53-a9cf-59d8c09ae5c3	특수PC구조부재공장생산	특수PC구조부재공장생산	888bf357-3ff0-4beb-b338-c4153ab0cadc	PC부재생산	프리케스트콘크리트공사 > PC부재생산 > 특수PC구조부재공장생산	PROMOTED_FROM_SOURCE	DRAFT	1	특수PC구조부재공장생산
+9561f173-c6f7-46fa-9f20-ee2cefc6b731	특수PC구조부재현장생산	특수PC구조부재현장생산	888bf357-3ff0-4beb-b338-c4153ab0cadc	PC부재생산	프리케스트콘크리트공사 > PC부재생산 > 특수PC구조부재현장생산	PROMOTED_FROM_SOURCE	DRAFT	1	특수PC구조부재현장생산
+2517aed8-23bc-4e23-a7c7-fcd8743847a7	PC부재운반	PC부재운반	e0ffb761-4531-42a9-bccc-a47102859054	프리케스트콘크리트공사	프리케스트콘크리트공사 > PC부재운반	PROMOTED_FROM_SOURCE	DRAFT	1	PC부재운반
+009a1643-f024-4c61-ac6b-182f7b85500a	세그멘탈부재조립	세그멘탈부재조립	eef6e4b5-298c-4bc5-a416-f75dded2d6c9	기타토목PC부재조립	프리케스트콘크리트공사 > 기타토목PC부재조립 > 세그멘탈부재조립	PROMOTED_FROM_SOURCE	DRAFT	1	세그멘탈부재조립
+ddb6c8e6-cce0-40f1-aeb1-35d86a7dc95d	암거PC부재조립	암거PC부재조립	eef6e4b5-298c-4bc5-a416-f75dded2d6c9	기타토목PC부재조립	프리케스트콘크리트공사 > 기타토목PC부재조립 > 암거PC부재조립	PROMOTED_FROM_SOURCE	DRAFT	1	암거PC부재조립
+23b29dfd-5e36-4052-bcc1-e8565646844a	지하도PC부재조립	지하도PC부재조립	eef6e4b5-298c-4bc5-a416-f75dded2d6c9	기타토목PC부재조립	프리케스트콘크리트공사 > 기타토목PC부재조립 > 지하도PC부재조립	PROMOTED_FROM_SOURCE	DRAFT	1	지하도PC부재조립 - - 대․중․소 분류대․중․소 분류
+a5dbd267-9f8c-4490-b224-f9366a7d5d66	PC슬라브조립	PC슬라브조립	877ee6f7-1b8a-4804-9865-ef3a65ac01d6	토목PC구조부재조립	프리케스트콘크리트공사 > 토목PC구조부재조립 > PC슬라브조립	PROMOTED_FROM_SOURCE	DRAFT	1	PC슬라브조립
+2480e55f-5bc7-4dbd-a1fa-8016dba70adc	기둥조립	기둥조립	877ee6f7-1b8a-4804-9865-ef3a65ac01d6	토목PC구조부재조립	프리케스트콘크리트공사 > 토목PC구조부재조립 > 기둥조립	PROMOTED_FROM_SOURCE	DRAFT	1	기둥조립
+97ea29b5-ebcd-497f-be4b-638493a7c394	일반PC보조립	일반PC보조립	877ee6f7-1b8a-4804-9865-ef3a65ac01d6	토목PC구조부재조립	프리케스트콘크리트공사 > 토목PC구조부재조립 > 일반PC보조립	PROMOTED_FROM_SOURCE	DRAFT	1	일반PC보조립
+7059e166-3f70-455f-92d3-fcb7118a88e5	포스트텐션PC보조립	포스트텐션PC보조립	877ee6f7-1b8a-4804-9865-ef3a65ac01d6	토목PC구조부재조립	프리케스트콘크리트공사 > 토목PC구조부재조립 > 포스트텐션PC보조립	PROMOTED_FROM_SOURCE	DRAFT	1	포스트텐션PC보조립
+4ea1d09f-ddce-4d8b-b7c4-b955644505a6	프리텐션PC보조립	프리텐션PC보조립	877ee6f7-1b8a-4804-9865-ef3a65ac01d6	토목PC구조부재조립	프리케스트콘크리트공사 > 토목PC구조부재조립 > 프리텐션PC보조립	PROMOTED_FROM_SOURCE	DRAFT	1	프리텐션PC보조립
+502a0445-cc87-4a02-918d-79a6e5876045	프리프렉스PC보조립	프리프렉스PC보조립	877ee6f7-1b8a-4804-9865-ef3a65ac01d6	토목PC구조부재조립	프리케스트콘크리트공사 > 토목PC구조부재조립 > 프리프렉스PC보조립	PROMOTED_FROM_SOURCE	DRAFT	1	프리프렉스PC보조립
+eb3c8347-93dc-45c1-8c70-6202bc0b33a5	고르기	고르기	015eafa3-b2e9-42be-b53e-68f5e8426785	사석공사	하천및항만공사 > 사석공사 > 고르기	PROMOTED_FROM_SOURCE	DRAFT	1	고르기
+1aade55d-613e-407d-9396-34fca4c63d60	경암준설	경암준설	73722a9b-e953-4423-8b10-6efcf5eef9bd	준설	하천및항만공사 > 준설 > 경암준설	PROMOTED_FROM_SOURCE	DRAFT	1	경암준설
+75ee7ca2-38e2-47ae-91bb-1477a3a2e142	연암준설	연암준설	73722a9b-e953-4423-8b10-6efcf5eef9bd	준설	하천및항만공사 > 준설 > 연암준설	PROMOTED_FROM_SOURCE	DRAFT	1	연암준설
+97b76470-5b36-4e30-b90a-dea4c55112e1	오니(오염토 오염퇴적물)준설	오니(오염토 오염퇴적물)준설	73722a9b-e953-4423-8b10-6efcf5eef9bd	준설	하천및항만공사 > 준설 > 오니(오염토 오염퇴적물)준설	PROMOTED_FROM_SOURCE	DRAFT	1	오니(오염토 오염퇴적물)준설
+97cf2571-0f3a-4bb2-8a85-837bbd502bb0	케이슨제작및설치	케이슨제작및설치	fc2dd2f2-43f2-42ec-9dd7-d3e757a52272	호안용콘크리트구조물제작및거치	하천및항만공사 > 호안용콘크리트구조물제작및거치 > 케이슨제작및설치	PROMOTED_FROM_SOURCE	DRAFT	1	케이슨제작및설치
+3402b126-2f66-4f01-beff-e4349c3dc6e4	콘크리트블록속채움	콘크리트블록속채움	fc2dd2f2-43f2-42ec-9dd7-d3e757a52272	호안용콘크리트구조물제작및거치	하천및항만공사 > 호안용콘크리트구조물제작및거치 > 콘크리트블록속채움	PROMOTED_FROM_SOURCE	DRAFT	1	콘크리트블록속채움
+abddbc6a-7020-4b14-b451-0910d4d49128	호안구조물운반및거치	호안구조물운반및거치	fc2dd2f2-43f2-42ec-9dd7-d3e757a52272	호안용콘크리트구조물제작및거치	하천및항만공사 > 호안용콘크리트구조물제작및거치 > 호안구조물운반및거치	PROMOTED_FROM_SOURCE	DRAFT	1	호안구조물운반및거치
+803c7137-ee2f-46cc-a0e2-666f7d5d41a9	호안용콘크리트구조물제작	호안용콘크리트구조물제작	fc2dd2f2-43f2-42ec-9dd7-d3e757a52272	호안용콘크리트구조물제작및거치	하천및항만공사 > 호안용콘크리트구조물제작및거치 > 호안용콘크리트구조물제작	PROMOTED_FROM_SOURCE	DRAFT	1	호안용콘크리트구조물제작
+a6b02dc8-0e65-47bf-a52a-2f656c04c159	가설수질오염방지	가설수질오염방지	26425132-352f-4b1a-85e2-88ef090df5cc	가설공해방지	현장유지관리 > 가설공해방지 > 가설수질오염방지	PROMOTED_FROM_SOURCE	DRAFT	1	가설수질오염방지
+d2f3c38f-31d0-4cdb-85ad-e76175192f4a	대기오염방지	대기오염방지	26425132-352f-4b1a-85e2-88ef090df5cc	가설공해방지	현장유지관리 > 가설공해방지 > 대기오염방지	PROMOTED_FROM_SOURCE	DRAFT	1	대기오염방지
+f10a1b64-d2ea-4bca-8d84-1c5f2d3335e4	도로오염방지	도로오염방지	26425132-352f-4b1a-85e2-88ef090df5cc	가설공해방지	현장유지관리 > 가설공해방지 > 도로오염방지	PROMOTED_FROM_SOURCE	DRAFT	1	도로오염방지 - - 대․중․소 분류대․중․소 분류
+c13a33b4-6c04-4387-bf5e-efe86bcc31ed	소음진동방지	소음진동방지	26425132-352f-4b1a-85e2-88ef090df5cc	가설공해방지	현장유지관리 > 가설공해방지 > 소음진동방지	PROMOTED_FROM_SOURCE	DRAFT	1	소음진동방지
+34d55509-74db-47b7-8ff1-d95c8670a4ae	토질오염방지	토질오염방지	26425132-352f-4b1a-85e2-88ef090df5cc	가설공해방지	현장유지관리 > 가설공해방지 > 토질오염방지	PROMOTED_FROM_SOURCE	DRAFT	1	토질오염방지
+f83726ec-cc45-4556-a71d-1b5ff4468456	폐기물처리	폐기물처리	26425132-352f-4b1a-85e2-88ef090df5cc	가설공해방지	현장유지관리 > 가설공해방지 > 폐기물처리	PROMOTED_FROM_SOURCE	DRAFT	1	폐기물처리
+e6051915-1330-4aa5-8a1c-60d19cc9accd	기존도로유지보수	기존도로유지보수	0e161468-6d4d-4208-837d-a0b0aaf1ac1d	현장유지관리	현장유지관리 > 기존도로유지보수	MERGED_FROM_REVIEWED_SOURCES	DRAFT	2	기존도로유지보수
+3e9ee77c-82dc-4e4e-aeb3-066b4b676d50	구조물건전성평가	구조물건전성평가	68f690db-ae64-421c-8bfa-b2859ec0bbad	준공및현장정리	현장유지관리 > 준공및현장정리 > 구조물건전성평가	PROMOTED_FROM_SOURCE	DRAFT	1	구조물건전성평가
+6f9bb3f3-a7c6-4484-8413-29b344d22afa	사후환경평가	사후환경평가	68f690db-ae64-421c-8bfa-b2859ec0bbad	준공및현장정리	현장유지관리 > 준공및현장정리 > 사후환경평가	PROMOTED_FROM_SOURCE	DRAFT	1	사후환경평가
+8cdeca1d-dfaf-44fb-88a6-0b239d718562	정기안전점검	정기안전점검	68f690db-ae64-421c-8bfa-b2859ec0bbad	준공및현장정리	현장유지관리 > 준공및현장정리 > 정기안전점검	PROMOTED_FROM_SOURCE	DRAFT	1	정기안전점검
+db977384-a8f5-4e32-8604-9a721c9147dc	준공정리	준공정리	68f690db-ae64-421c-8bfa-b2859ec0bbad	준공및현장정리	현장유지관리 > 준공및현장정리 > 준공정리	PROMOTED_FROM_SOURCE	DRAFT	1	준공정리
+86796d38-7d3f-483f-85d0-708f022f0e50	현장상시정리	현장상시정리	68f690db-ae64-421c-8bfa-b2859ec0bbad	준공및현장정리	현장유지관리 > 준공및현장정리 > 현장상시정리	PROMOTED_FROM_SOURCE	DRAFT	1	현장상시정리
