@@ -223,6 +223,12 @@ jobs:
         run: pytest tests/test_risk_kalis_materialization.py -q --tb=short
       - name: OBJ-RISK ABC final reconciliation
         run: pytest tests/test_risk_abc_final_reconcile.py -q --tb=short
+      - name: OBJ-CHEM CHEM-04 content audit tests
+        run: pytest tests/test_chem04_content_audit.py -q --tb=short
+      - name: OBJ-CHEM CHEM-04 bootstrap decision tests
+        run: pytest tests/test_chem04_bootstrap_decision.py -q --tb=short
+      - name: OBJ-CHEM CHEM-04 live sample tests
+        run: pytest tests/test_chem04_live_sample.py -q --tb=short
       - name: KOSHA GUIDE sync tests
         run: pytest tests/test_kosha_guide_sync.py -q --tb=short
 
