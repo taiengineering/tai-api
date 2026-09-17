@@ -39,8 +39,28 @@ inactive(42): construction_type, has_asbestos, has_biological_agent, has_casting
   has_plating, has_press, has_pressure_vessel, has_radiation, has_rolling, has_scaffold, has_septic_tank,
   has_steel_frame, has_subcontractor, has_temp_electric, has_welding, is_complex_building
 
-> The 66-field snapshot is retained for historical continuity: an inactive field in that snapshot may already be present in the CURRENT 205-field transport and be actively wired. Do not treat active=false in the historical snapshot as current inactivation.
-> Case fixtures written against the 66-field snapshot remain valid inputs; the CURRENT 205-field transport is a superset that carries them forward without regeneration.
+> The 66-field snapshot is retained for historical continuity. The relationship between HISTORICAL 66 and CURRENT 205 is **not a superset** relationship — it is recorded here as an exact machine set comparison (computed against tai-api main `fb656a66` `_LEG_INPUT_FIELDS`):
+>
+> ```
+> HIST66_COUNT                    = 66
+> CUR205_COUNT                    = 205
+> INTERSECTION_COUNT              = 51
+> HIST66_NOT_IN_CUR205  (15)      = [boiler_capacity_kw, has_biological_agent,
+>                                    has_central_hvac, has_chemical_substance,
+>                                    has_cooling_tower, has_electric_work,
+>                                    has_heat_treatment, has_injection,
+>                                    has_machinery, has_oil_storage,
+>                                    has_septic_tank, has_smoke_control,
+>                                    has_temp_electric, is_complex_building,
+>                                    ksic_major]
+> CUR205_NOT_IN_HIST66  (154)     = new/renamed fields; not listed in-line;
+>                                    authority = clients/leg_runtime_client.py
+> SUPERSET_CLAIM (CUR205 ⊇ HIST66) = FALSE
+> ```
+>
+> Note: `ksic_major` is present in HIST66 but **removed** from the CURRENT executable transport. Historical `active` flags do not necessarily reflect current inclusion.
+>
+> Dataset regeneration policy: `DATASET_REGENERATION = 0` (case fixtures / golden / baseline are governed by an approved freeze, not by any implicit superset relationship). Fixtures written against fields no longer in CUR205 remain in the fixture files as historical inputs; whether they are wired depends on the CURRENT transport authority (`_LEG_INPUT_FIELDS`), not on the historical snapshot.
 
 ## STEP 2 — Taxonomy (고정 계층)
 
