@@ -20,6 +20,7 @@ from services.kosha_msds.contract import (
     DETAIL_EMPTY_BUT_VALID,
     DETAIL_INCOMPLETE,
     DETAIL_OPERATION_PREFIX,
+    detail_operation,
     LIST_OPERATION,
     MAX_NUM_OF_ROWS,
     RATE_LIMIT_DAILY_CODES,
@@ -262,7 +263,7 @@ class KoshaMsdsClient:
             raise KoshaMsdsClientError("CHEM_ID_REQUIRED", "detail fetch requires chemId")
         token = section_token(section)
         _, text, key = self._get(
-            f"{DETAIL_OPERATION_PREFIX}{token}",
+            detail_operation(int(token)),
             {"chemId": cid},
         )
         try:
@@ -281,14 +282,14 @@ class KoshaMsdsClient:
         )
 
     def fetch_detail01_raw(self, chem_id: str) -> Detail01Raw:
-        """One getChemDetail01 call. Errors stay errors; never coerced to empty/ABSENT."""
+        """One getChemDetail011 call (v1.2 Detail section 1). Errors stay errors; never coerced to empty/ABSENT."""
         cid = normalize_chem_id(chem_id)
         if not cid:
             raise KoshaMsdsClientError("CHEM_ID_REQUIRED", "detail fetch requires chemId")
         t0 = time.perf_counter()
         try:
             status, text, _key = self._get(
-                f"{DETAIL_OPERATION_PREFIX}01",
+                detail_operation(1),
                 {"chemId": cid},
             )
             return Detail01Raw(

@@ -79,8 +79,13 @@ def test_02_chemid_leading_zero():
 
 def test_03_detail_url_generation():
     urls = [detail_url(n) for n in range(1, 17)]
-    assert urls[0].endswith("/getChemDetail01")
-    assert urls[15].endswith("/getChemDetail16")
+    # v1.2: operation name is getChemDetail{section:02d}1
+    assert urls[0].endswith("/getChemDetail011")
+    assert urls[15].endswith("/getChemDetail161")
+    assert urls[8].endswith("/getChemDetail091")
+    assert urls[9].endswith("/getChemDetail101")
+    # v1.2 base URL now ends in msdschem1 (not the old msdschem).
+    assert all("/msdschem1/getChemDetail" in url for url in urls)
     assert all("serviceKey" not in url for url in urls)
     assert all("?" not in url for url in urls)
 

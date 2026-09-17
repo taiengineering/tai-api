@@ -105,7 +105,8 @@ def _full_handler(list_pages: dict[str, str], *, fail_section_for: str | None = 
             page = str(params.get("pageNo") or "1")
             return 200, list_pages[page]
         chem_id = params.get("chemId")
-        section = url.rsplit("getChemDetail", 1)[1]
+        # v1.2 operation name: getChemDetailNN1 where NN is section:02d
+        section = url.rsplit("getChemDetail", 1)[1][:-1]
         if fail_section_for and chem_id == fail_section_for and section == "16":
             return 200, fx("error_result.xml")
         return 200, fx("empty_success_section.xml")
@@ -267,7 +268,8 @@ def test_new_triggers_detail16():
     run_hydration(client, one, subset_plan.hydration_targets, checkpoint)
     details = [rec for rec in log if "getChemDetail" in rec["url"]]
     assert len(details) == 16
-    assert {rec["url"].rsplit("getChemDetail", 1)[1] for rec in details} == {f"{n:02d}" for n in ALLOWED_SECTIONS}
+    # v1.2 operation name: getChemDetailNN1 where NN is section:02d
+    assert {rec["url"].rsplit("getChemDetail", 1)[1] for rec in details} == {f"{n:02d}1" for n in ALLOWED_SECTIONS}
     assert all(rec["params"]["chemId"] == "000001" for rec in details)
     assert subset_plan.detail_calls_planned == 16
     assert checkpoint.detail_calls == 16
