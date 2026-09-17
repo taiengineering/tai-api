@@ -62,7 +62,13 @@ resultCode 23             = 0
 consecutive error budget  = untriggered
 ```
 
-## Per-operation call counts (single day)
+## Per-operation call counts IN THIS RUN
+
+These are PER-OPERATION CALLS IN THIS RUN only — not a daily
+ceiling. Batch 1 started with 361 pairs pre-existing on disk (from
+prior Option-C sampling / v1.2 smoke), and v1.2 smoke calls may
+also have consumed some of the same quota window. Treat the
+numbers below strictly as this run's own send counts.
 
 ```text
 getChemDetail011          = 1,975
@@ -74,7 +80,7 @@ getChemDetail061          = 1,975
 getChemDetail071          = 1,975
 getChemDetail081          = 1,975
 getChemDetail091          = 1,975
-getChemDetail101          = 1,976   ← 1,976th call was the HTTP 429
+getChemDetail101          = 1,976   ← 1,976th call in this run was the terminal HTTP 429
 getChemDetail111          = 1,975
 getChemDetail121          = 1,975
 getChemDetail131          = 1,975
@@ -95,41 +101,68 @@ retry                     = 0    (immediate STOP per WO §18)
 additional probes         = 0    (WO §40)
 ```
 
-## Q4 answered — quota scope is PER-OPERATION
+## Q4 partial answer — what this run does and does not prove
 
-The portal-displayed `2,000 / operation / day` is enforced as an
-independent per-endpoint bucket. Evidence:
+This run does not prove the strict-independent-buckets model. It
+rules out the service-wide model and is strongly consistent with
+the portal's per-operation model, but the runner STOPPED
+immediately on the first 429 (per WO §18) and did not probe other
+operations after the quota-hit. So cross-endpoint availability
+post-quota was not tested here.
+
+```text
+SERVICE-WIDE 2,000/day                     = REJECTED BY OBSERVATION
+OBSERVED AGGREGATE BEFORE FIRST 429        = 31,601 requests in this run
+PORTAL PER-OPERATION 2,000 MODEL           = STRONGLY CONSISTENT WITH OBSERVATION
+INDEPENDENT PER-ENDPOINT BUCKETS           = NOT YET STRICTLY PROVEN
+```
+
+Direct evidence:
 
 ```text
 Total requests across 16 operations at first quota-hit = 31,601
-Per-operation calls at first quota-hit                 = 1,975 / 1,975 / ... / 1,976
-Operation that hit 429                                 = getChemDetail101  (its own 1,976th call)
-Other operations at that moment                        = 1,975 each (unaffected)
+Per-operation calls IN THIS RUN at first quota-hit     = 1,975 / 1,975 / ... / 1,976
+Operation that hit 429                                 = getChemDetail101
+                                                         (its own 1,976th call IN THIS RUN)
+Other operations at that moment                        = 1,975 calls IN THIS RUN each
+                                                         (not re-probed post-429)
 ```
 
-If the cap were service-wide 2,000/day, the 2,001st TOTAL call
-would have 429'd. Instead the runner made 31,601 total requests
-before any op reached its own ~1,976th call. Portal number ≈
-runtime enforcement, per operation, with ~24-request headroom
-above the displayed 2,000 (likely a soft grace / cache window).
+Why this is not proof of strict independence: a pooled ~32,000
+service-wide bucket that happens to be sized ≈ 16 × 2,000 is
+still logically consistent with observation, because we did not
+attempt another operation after Detail101 429'd. Distinguishing
+those two models requires an explicit probe of a different
+operation immediately after a per-op 429, which WO §40 forbids
+during Batch 1.
 
-Working conclusion for planning purposes (not a contractual
-guarantee — KOSHA can change enforcement without notice):
+Also: 1,975 / 1,976 are PER-OPERATION CALLS IN THIS RUN — not a
+daily ceiling. Batch 1 started with 361 pairs already completed
+(from earlier work in the same quota window), and v1.2 smoke
+calls also count against that window. So these counts cannot be
+subtracted from 2,000 to infer headroom.
+
+Working ceiling for planning purposes (not a contractual guarantee
+— KOSHA can change enforcement without notice):
 
 ```text
-DEVELOPMENT account daily capacity ≈ 16 × 2,000 ≈ 32,000
-                                     requests / day
-Batch 1 empirical daily ceiling    = 31,601
-                                     (very slightly above 16 × 1,975)
+EXACT DAILY PER-OP CEILING                 = NOT ISOLATED BY THIS RUN
+PORTAL DISPLAY                             = 2,000 / operation / day
+OBSERVED BEHAVIOR                          = consistent with approximately
+                                             2,000 / operation / day
+BATCH-1 USABLE AGGREGATE THROUGHPUT        = 31,600 successful new records
+                                             (31,601 requests, 1 terminal 429)
 ```
 
 ## Full-hydration horizon (informational)
 
 ```text
 FULL_OFFICIAL_CALLS remaining after Batch 1 = 329,088 - 31,961 = 297,127
-Daily ceiling observed empirically          = ~31,600
+Batch-1 usable aggregate throughput         = ~31,600 successful records
 Batches remaining                           = ceil(297,127 / 31,600) ≈ 10
 Wall-clock estimate                         = ~10 additional daily quota windows
+                                              (assuming similar future quota windows
+                                               — not a contractual guarantee)
 ```
 
 This is NOT a request for `10 batches at 31,600` to run
@@ -193,10 +226,12 @@ SECRET LEAK CHECK           = PASS (0 raw serviceKey occurrences across
 WO-CHEM-04-OFFICIAL-HYDRATE-V12-001  = PASS / BATCH1_QUOTA_MEASURED
 
 Batch 1 authoritative corpus         = 31,961 records saved locally (gitignored)
-Runtime quota scope                  = PER-OPERATION confirmed
-Per-op empirical ceiling             = ~1,976 calls / operation / day
-Daily aggregate ceiling              = ~31,600 calls / day
+Q4-A service-wide 2,000/day?         = NO / disproven by this run
+Q4-B strictly independent per-op?    = STRONGLY INDICATED
+                                       / NOT STRICTLY PROVEN (no post-429 probe)
+Batch-1 usable aggregate throughput  = ~31,600 successful records / run
 Full corpus hydration ETA            = ~10 more daily quota windows
+                                       (assuming similar future windows)
 
 NEXT                                 = GPT delta-only verify
                                        → Owner authorises Batch 2 explicitly
