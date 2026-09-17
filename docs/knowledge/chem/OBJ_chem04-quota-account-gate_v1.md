@@ -82,7 +82,7 @@ parameter issue         = NO EVIDENCE
 Q1  Current account type?              (Development / Operating)
 Q2  Current approved daily traffic?    (n / day)
 Q3  Operating-account transition or traffic increase available?
-Q4  Is the 1,000/day cap service-wide or per-endpoint (Detail01–16)?
+Q4  Is the portal-displayed per-operation cap enforced service-wide or per-endpoint?
 ```
 
 Note per WO §5: Q4 does NOT block the Gate. If public docs don't
@@ -198,8 +198,13 @@ TRAFFIC INCREASE                  = AVAILABLE  (운영계정 조건)
 PUBLIC MAX TRAFFIC                = NOT_PUBLISHED
 ```
 
-Whether the specific account we hold has that button visible right
-now still requires the Owner-side single-pass check above.
+The Owner has captured the specific account state on 2026-09-18
+(see §Account-specific state above). The account is `DEVELOPMENT`
+with 2,000 / operation / day displayed, valid 2026-09-17 through
+2028-09-17. Operating-account transition and traffic-increase
+requests are documented public procedures and are available as a
+**fallback** if runtime hydration throughput on the current
+DEVELOPMENT account turns out to be insufficient.
 
 ## Deterministic quota target math (§10 / §11)
 
@@ -268,17 +273,28 @@ TAI Safe — 산업안전관리 SaaS
 전체 재수집 = NO
 ```
 
-### 요청 사유 (트래픽 증가 근거)
+### 요청 사유 (트래픽 증가 근거) — FALLBACK ONLY
 
-현재 개발계정 트래픽(1,000/일) 기준으로는 초기 동기화가 사실상
-불가능(약 329일 소요)하며, 사업장 안전관리 SaaS로서 데이터의
-정확성·현행성 보장을 위해 KOSHA 공식 출처의 초기 동기화가 필요함.
-초기 동기화 이후 정상 운영 상태에서의 일일 호출량은 이보다 훨씬
-낮으므로, 초기 기간 한정으로 상향된 트래픽을 활용할 계획임.
+이 초안은 **즉시 사용 대상이 아니다.** 현재 계정은 개발계정으로
+승인 상태이며 포털 표시상 각 operation당 2,000/day가 부여되어
+있다. 우선 신 API로 실제 gateway가 허용하는 만큼 수집을 진행하고,
+throughput이 초기 동기화(329,088 calls)에 부족하다고 실측될
+경우에만 아래 사유를 사용해 운영계정 전환 / 트래픽 증설을
+신청한다.
 
-### 요청 트래픽 (Owner 결정)
+가상 사유 문구 (신청이 필요할 때만 채택):
 
-Owner가 GPT의 quota target 판정 이후에 확정한다. 참고 목표:
+> 사업장 안전관리 SaaS로서 KOSHA 공식 MSDS의 초기 대량 동기화가
+> 필요함. 개발계정 트래픽으로는 초기 동기화 기간이 사업 요구
+> 대비 과도하게 길어지므로, 초기 기간 한정으로 상향된 트래픽을
+> 활용하고자 함. 초기 이후 정상 운영에서의 일일 호출량은 훨씬
+> 낮음.
+
+### 요청 트래픽 (Owner 결정 — FALLBACK ONLY)
+
+즉시 결정할 필요가 없다. 신 API로 실제 gateway가 허용하는
+수집량을 먼저 측정한다. 신청이 필요해질 경우 Owner가 GPT의
+quota target 판정 이후에 확정한다. 참고 목표:
 
 ```text
 30일 완료 목표  →  11,000 / day  (여유 30/day)
@@ -327,21 +343,61 @@ external form submission          = NOT PERFORMED
 CHEM identity / content re-scan   = NOT PERFORMED
 ```
 
+## Runtime measurement plan (single source of truth)
+
+The current DEVELOPMENT account is APPROVED with a portal-displayed
+`2,000 / operation / day`. Whether the underlying gateway enforces
+that as an independent per-operation bucket or pools it across the
+service is `RUNTIME QUOTA SCOPE = UNVERIFIED` — this is a
+measurement question, not a paperwork question.
+
+The next hydration WO runs against the v1.2 endpoints and
+measures the real limit by observation:
+
+```text
+Do NOT pre-stop at 2,000.
+Do fail-closed at:
+  HTTP 429
+  resultCode 22
+  resultCode 23
+  explicit gateway quota error
+```
+
+At the first quota-hit: save checkpoint, STOP, resume in the next
+quota window. If measured throughput is insufficient for the
+initial 329,088-call hydration in a reasonable horizon, THEN the
+operating-account / traffic-increase draft above is used as
+a **fallback** (Owner submits, not Claude Code).
+
+Forbidden regardless of throughput:
+
+```text
+quota bypass
+key rotation
+parallel service accounts
+```
+
 ## Verdict
 
 ```text
-WO-CHEM-04-QUOTA-ACCOUNT-001      = PASS / QUOTA_DECISION_READY
-                                    (Exit A per WO §23 — account state now confirmed)
+WO-CHEM-04-QUOTA-ACCOUNT-001      = PASS / HYDRATION-RUNTIME-MEASUREMENT-READY
 
-CHANGED FILES                     = 1 (this document)
+Q1 ACCOUNT TYPE                   = DEVELOPMENT
+Q2 CURRENT APPROVED TRAFFIC       = 2,000 / operation / day (portal display)
+Q3 OPERATING / TRAFFIC INCREASE   = AVAILABLE (fallback, public procedure)
+Q4 RUNTIME QUOTA SCOPE            = UNVERIFIED (to be measured)
+
+QUOTA APPLICATION SUBMISSION      = FALLBACK / NOT IMMEDIATE
 LIVE API CALL                     = 0
 PRODUCTION INGEST                 = 0
 DB WRITE                          = 0
 MERGE                             = NOT AUTHORIZED (Claude Code does not merge)
-NEXT                              = GPT quota target decision (see the 30/14/7-day math above)
-                                    → Owner submits 운영계정 전환 or 트래픽 증가 신청 (draft included)
-                                    → after approval, resume official hydration under a
-                                      future WO-CHEM-04-OFFICIAL-HYDRATE-V12-001
-                                      (fail-closed at real 429/rc22, not pre-stopped at 2,000)
+
+NEXT = merge v1.2 API alignment (PR #380)
+       → open WO-CHEM-04-OFFICIAL-HYDRATE-V12-001
+         (fail-closed at real 429 / rc22 / rc23, not pre-stopped at 2,000)
+       → measure runtime gateway limit and either continue on
+         DEVELOPMENT account or, only if throughput is insufficient,
+         submit the operating-account / traffic-increase draft above
 STOP
 ```
