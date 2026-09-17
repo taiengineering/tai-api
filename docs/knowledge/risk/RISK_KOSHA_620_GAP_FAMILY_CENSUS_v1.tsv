@@ -1,0 +1,12 @@
+family_hint	group_count	represented_source_rows	project_kind_union
+MOBILIZATION_DELIVERY_FAMILY	17	56	교량 및 도로|댐|빌딩|아파트|지하철|터널
+UNCLASSIFIED	17	42	교량 및 도로|댐|빌딩|아파트|지하철|터널
+FORMWORK_FAMILY	12	29	교량 및 도로|댐|빌딩|아파트|지하철|터널
+PILE_FAMILY	4	16	교량 및 도로|빌딩|아파트|지하철
+TUNNEL_SUPPORT_FAMILY	4	8	지하철|터널
+REMOVAL_HAULOUT_FAMILY	3	12	교량 및 도로|댐|빌딩|아파트|지하철|터널
+UTILITY_PROTECTION_FAMILY	3	14	교량 및 도로|댐|빌딩|아파트|지하철|터널
+BACKFILL_COMPACT_FAMILY	2	9	교량 및 도로|댐|빌딩|아파트|지하철
+EXCAVATION_FAMILY	2	5	빌딩|아파트|지하철|터널
+ELECTRICAL_FAMILY	1	3	빌딩|아파트|지하철
+TUNNEL_WORK_FAMILY	1	2	지하철|터널
