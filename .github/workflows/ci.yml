@@ -211,6 +211,8 @@ jobs:
         run: pytest tests/test_risk_kosha_620_aggregate.py -q --tb=short
       - name: OBJ-RISK KOSHA gap consolidation
         run: pytest tests/test_risk_kosha_gap_consolidate.py -q --tb=short
+      - name: OBJ-RISK KOSHA MAP APPROVE001 owner approval
+        run: pytest tests/test_risk_kosha_map_approve001_owner_approval.py -q --tb=short
       - name: KOSHA GUIDE sync tests
         run: pytest tests/test_kosha_guide_sync.py -q --tb=short
 
