@@ -179,7 +179,7 @@ WO §24 forward plan).
 ```text
 main start                        = eaf199602770bf6fbcc524a356673723422dcd07
 branch                            = feature/chem04-api-v12-align
-changed files                     = 8
+changed files                     = 10
   services/kosha_msds/contract.py
   services/kosha_msds/client.py
   services/kosha_msds/live_sample.py
