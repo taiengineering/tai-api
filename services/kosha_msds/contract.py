@@ -5,14 +5,28 @@ Search results are candidates, not identity.
 from __future__ import annotations
 
 SOURCE_ID = "KOSHA_MSDS"
-SOURCE_CONTRACT_VERSION = "KOSHA_MSDS_OPENAPI_V1"
+# WO-CHEM-04-API-V12-ALIGN-001: aligned to official spec v1.2 (2026-09-16).
+# Change summary from spec cover page: "호출URL 현행화, 활용방법 추가".
+SOURCE_CONTRACT_VERSION = "KOSHA_MSDS_OPENAPI_V1_2"
+OFFICIAL_SPEC_VERSION = "1.2"
+OFFICIAL_SPEC_DATE = "2026-09-16"
 DATASET_ID = "15157612"
 DATASET_URL = "https://www.data.go.kr/data/15157612/openapi.do"
 PROVIDER = "한국산업안전보건공단"
-BASE_HOST_PATH = "apis.data.go.kr/B552468/msdschem"
-BASE_URL = "https://apis.data.go.kr/B552468/msdschem"
-LIST_OPERATION = "getChemList"
+BASE_HOST_PATH = "apis.data.go.kr/B552468/msdschem1"
+BASE_URL = "https://apis.data.go.kr/B552468/msdschem1"
+LIST_OPERATION = "getChemList001"
+# Under spec v1.2 every operation now ends in a trailing '1'. The section
+# number is zero-padded to 2 digits, then a literal '1' is appended:
+#   Detail 01 → getChemDetail011
+#   Detail 09 → getChemDetail091
+#   Detail 10 → getChemDetail101
+#   Detail 16 → getChemDetail161
+# The old bare prefix ("getChemDetail") is retained ONLY for historical
+# reference in errors that quote pre-v1.2 evidence. All new construction
+# must go through DETAIL_OPERATION_TEMPLATE / detail_operation().
 DETAIL_OPERATION_PREFIX = "getChemDetail"
+DETAIL_OPERATION_TEMPLATE = "getChemDetail{section:02d}1"
 CONTENT_ID_PREFIX = "CHEM:"
 LICENSE = "이용허락범위 제한 없음"
 ROLE = "PUBLIC_REFERENCE_CHEMICAL_KNOWLEDGE"
@@ -31,6 +45,26 @@ ALLOWED_SEARCH_CND = frozenset({0, 1, 2, 3, 4})
 SECTION_MIN = 1
 SECTION_MAX = 16
 ALLOWED_SECTIONS = tuple(range(SECTION_MIN, SECTION_MAX + 1))
+
+
+def detail_operation(section: int) -> str:
+    """v1.2 operation name for a given Detail section (1..16).
+
+    Under spec v1.2:
+      Detail 01 → getChemDetail011
+      Detail 09 → getChemDetail091
+      Detail 10 → getChemDetail101
+      Detail 16 → getChemDetail161
+    """
+    n = int(section)
+    if not (SECTION_MIN <= n <= SECTION_MAX):
+        raise ValueError(
+            f"section must be {SECTION_MIN}..{SECTION_MAX}, got {n}"
+        )
+    return DETAIL_OPERATION_TEMPLATE.format(section=n)
+
+
+DISCOVERY_SECTION = 1
 
 LIST_IDENTITY_FIELDS = (
     "chemId",
@@ -87,7 +121,7 @@ FULL_LIST_MEASURED_TOTAL_COUNT = 0
 # PATCH-3 empirical Detail01 identity discovery. Not a documented enumeration API.
 DISCOVERY_METHOD = "DETAIL01_ID_DISCOVERY"
 EMPIRICAL_API_CENSUS = "EMPIRICAL_API_CENSUS"
-DISCOVERY_OPERATION = "getChemDetail01"
+DISCOVERY_OPERATION = detail_operation(DISCOVERY_SECTION)
 DISCOVERY_DISCOVERED = "DISCOVERED"
 DISCOVERY_ABSENT = "ABSENT"
 DISCOVERY_UNKNOWN = "UNKNOWN"

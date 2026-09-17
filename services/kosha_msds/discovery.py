@@ -1,4 +1,4 @@
-"""CHEM-04 PATCH-3: empirical getChemDetail01 chemId discovery.
+"""CHEM-04 PATCH-3: empirical getChemDetail011 (v1.2 Detail 1) chemId discovery.
 
 This is DETAIL01_ID_DISCOVERY / EMPIRICAL_API_CENSUS.
 It is not a documented enumeration API and must not be called FULL_OFFICIAL.

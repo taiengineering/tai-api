@@ -19,6 +19,7 @@ from services.kosha_msds.client import (
 from services.kosha_msds.contract import (
     BASE_URL,
     DATASET_ID,
+    detail_operation,
     DETAIL_COMPLETE,
     DETAIL_EMPTY_BUT_VALID,
     DETAIL_INCOMPLETE,
@@ -27,7 +28,10 @@ from services.kosha_msds.contract import (
     IDENTITY_HOLD,
     IDENTITY_READY,
     LIST_OPERATION,
+    OFFICIAL_SPEC_DATE,
+    OFFICIAL_SPEC_VERSION,
     PUBLISH_PUBLISHED_FULL,
+    SOURCE_CONTRACT_VERSION,
     SOURCE_ID,
 )
 from services.kosha_msds.hash import source_content_hash
@@ -216,7 +220,8 @@ def test_sixteen_of_sixteen_complete():
     def handler(url, params, timeout):
         assert params["chemId"] == "001008"
         assert "kmcNo" not in params
-        section = url.rsplit("getChemDetail", 1)[1]
+        # v1.2 operation name: getChemDetailNN1 → section digits = first 2 chars
+        section = url.rsplit("getChemDetail", 1)[1][:-1]
         return 200, fx(f"benzene_detail_{section}.xml")
 
     detail = _client(handler).get_full_detail("001008")
@@ -231,7 +236,8 @@ def test_sixteen_of_sixteen_complete():
 
 def test_fifteen_of_sixteen_failure_incomplete():
     def handler(url, params, timeout):
-        section = url.rsplit("getChemDetail", 1)[1]
+        # v1.2 operation name: getChemDetailNN1 → section digits = first 2 chars
+        section = url.rsplit("getChemDetail", 1)[1][:-1]
         if section == "15":
             return 200, fx("error_result.xml")
         return 200, fx(f"benzene_detail_{section}.xml")
@@ -500,6 +506,49 @@ def test_service_key_never_in_fixtures_or_errors():
         text = path.read_text(encoding="utf-8", errors="replace")
         assert "serviceKey" not in text
         assert SECRET not in text
-    masked = redact_secret(f"{BASE_URL}/getChemList?serviceKey={SECRET}&searchCnd=1", SECRET)
+    masked = redact_secret(f"{BASE_URL}/getChemList001?serviceKey={SECRET}&searchCnd=1", SECRET)
     assert SECRET not in masked
     assert "[REDACTED]" in masked
+
+
+# ---------------------------------------------------------------------------
+# WO-CHEM-04-API-V12-ALIGN-001: KOSHA MSDS OpenAPI v1.2 (2026-09-16) contract
+# ---------------------------------------------------------------------------
+
+
+def test_v12_contract_version_marker():
+    assert SOURCE_CONTRACT_VERSION == "KOSHA_MSDS_OPENAPI_V1_2"
+    assert OFFICIAL_SPEC_VERSION == "1.2"
+    assert OFFICIAL_SPEC_DATE == "2026-09-16"
+
+
+def test_v12_base_url_and_list_operation():
+    assert BASE_URL == "https://apis.data.go.kr/B552468/msdschem1"
+    assert LIST_OPERATION == "getChemList001"
+
+
+def test_v12_detail_operation_helper_full_range():
+    # Under v1.2 every Detail operation is getChemDetail{section:02d}1.
+    expected = {
+        1: "getChemDetail011",
+        2: "getChemDetail021",
+        9: "getChemDetail091",
+        10: "getChemDetail101",
+        15: "getChemDetail151",
+        16: "getChemDetail161",
+    }
+    for section, op in expected.items():
+        assert detail_operation(section) == op
+    # And every section in the full 1..16 range is well-formed.
+    for section in range(1, 17):
+        op = detail_operation(section)
+        assert op.startswith("getChemDetail")
+        assert op.endswith("1")
+        assert len(op) == len("getChemDetail") + 3
+
+
+def test_v12_detail_operation_range_guard():
+    import pytest
+    for bad in (0, -1, 17, 100):
+        with pytest.raises(ValueError):
+            detail_operation(bad)

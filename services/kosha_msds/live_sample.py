@@ -19,6 +19,7 @@ from services.kosha_msds.contract import (
     ALLOWED_SECTIONS,
     BASE_URL,
     DETAIL_OPERATION_PREFIX,
+    detail_operation,
     EXPECTED_OPTIONC_SAMPLE_SHA256,
     LIVE_SAMPLE_HARD_CAP,
     LIVE_SAMPLE_KEY_ENV,
@@ -86,7 +87,7 @@ def live_sample_key() -> str:
 
 
 def detail_url(section_no: int) -> str:
-    return f"{BASE_URL}/{DETAIL_OPERATION_PREFIX}{section_token(section_no)}"
+    return f"{BASE_URL}/{detail_operation(section_no)}"
 
 
 def sha256_text(value: str) -> str:
@@ -262,7 +263,7 @@ def run_preflight(
     http_counter: Optional[list[int]] = None,
     hard_cap: int = LIVE_SAMPLE_HARD_CAP,
 ) -> dict[str, object]:
-    """One getChemDetail01 call for chemId 001008. Does not write the sample checkpoint."""
+    """One getChemDetail011 (v1.2 Detail 1) call for chemId 001008. Does not write the sample checkpoint."""
     payload: dict[str, object] = {
         "preflight": "FAIL",
         "chemId": PREFLIGHT_CHEM_ID,

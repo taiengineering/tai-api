@@ -52,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--probe", action="store_true", help="Cursor only: 1 chemId × 16 sections")
     mode.add_argument("--local-run", action="store_true", help="LOCAL PC only: preflight then frozen 16 × 16")
-    mode.add_argument("--preflight", action="store_true", help="001008 × getChemDetail01 once; does not resume sample")
+    mode.add_argument("--preflight", action="store_true", help="001008 × getChemDetail011 once; does not resume sample")
     parser.add_argument("--sample-manifest", default=str(FIXTURE_MANIFEST))
     parser.add_argument("--expected-sha", default=EXPECTED_OPTIONC_SAMPLE_SHA256)
     parser.add_argument("--train-jsonl", default=str(CONTENT_SOURCE / "train.jsonl"))
