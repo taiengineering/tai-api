@@ -23,7 +23,9 @@ site_kind · scale · workers · region · sector
 ```
 
 ### 1.2 LEG Transport Contract — CURRENT EXECUTABLE = 205 fields
-> **CURRENT executable transport authority** = `taiengineering/tai-api :: clients/leg_runtime_client.py :: _LEG_INPUT_FIELDS` (main `fb656a66b1f8b25e259434ef18a59cc1b5e056b8`, count = **205**). Machine-extracted; do not hand-list.
+> **CURRENT executable transport authority** = `taiengineering/tai-api :: clients/leg_runtime_client.py :: _LEG_INPUT_FIELDS`
+> **CURRENT_TRANSPORT_FIELD_COUNT** = **205** (machine-extracted; do not hand-list)
+> **VERIFIED_SOURCE_CODE_ANCHOR** = `fb656a66b1f8b25e259434ef18a59cc1b5e056b8` (immutable OBS009 closeout provenance; NOT a perpetual branch-tip assertion — see Dynamic SHA Rule at end of file)
 > Historical snapshot below (LEG Input Contract, 66-field: active 24 / inactive 42; source `leg-prod staging.requirement_input_contract_snapshot`) is **HISTORICAL / SNAPSHOT REFERENCE ONLY**. It is NOT the current executable transport authority.
 
 **HISTORICAL SNAPSHOT (66-field)** — do not treat as current executable contract.
@@ -39,7 +41,7 @@ inactive(42): construction_type, has_asbestos, has_biological_agent, has_casting
   has_plating, has_press, has_pressure_vessel, has_radiation, has_rolling, has_scaffold, has_septic_tank,
   has_steel_frame, has_subcontractor, has_temp_electric, has_welding, is_complex_building
 
-> The 66-field snapshot is retained for historical continuity. The relationship between HISTORICAL 66 and CURRENT 205 is **not a superset** relationship — it is recorded here as an exact machine set comparison (computed against tai-api main `fb656a66` `_LEG_INPUT_FIELDS`):
+> The 66-field snapshot is retained for historical continuity. The relationship between HISTORICAL 66 and CURRENT 205 is **not a superset** relationship — it is recorded here as an exact machine set comparison (computed against the verified tai-api source-code anchor `fb656a66` `_LEG_INPUT_FIELDS`):
 >
 > ```
 > HIST66_COUNT                    = 66
@@ -259,7 +261,7 @@ no semantic invention
 Freeze: Taxonomy · Object 집합 · 표준 코드 규칙 · Leaf→Semantic · Semantic→Contract(+GAP) · Allowed Matrix 규칙 · Case Schema
 Version: universe-v1
 Baseline anchor (HISTORICAL): Compiler 5필드 + LEG 66필드(active 24/inactive 42) @ 실측 시점
-CURRENT EXECUTABLE TRANSPORT AUTHORITY: tai-api clients/leg_runtime_client.py::_LEG_INPUT_FIELDS (count = 205, source main fb656a66b1f8b25e259434ef18a59cc1b5e056b8)
+CURRENT EXECUTABLE TRANSPORT AUTHORITY: tai-api clients/leg_runtime_client.py::_LEG_INPUT_FIELDS (count = 205; VERIFIED_SOURCE_CODE_ANCHOR = fb656a66b1f8b25e259434ef18a59cc1b5e056b8, immutable OBS009 closeout provenance)
 ```
 
 이번 STANDARD 갱신은 CURRENT executable transport 를 정확히 기록하고, EXISTENCE/LOCATION/PARENT/MISSING/GENERIC 경계 원칙을 명시하며, Material classification authority 를 정합화한다. 기존 Freeze 자산(dataset/cases/golden/baseline) 은 regenerate/promote 하지 않는다.
@@ -286,7 +288,7 @@ WO-E2E-DATASET-001 (Case 생성) → WO-E2E-001 (실행) → WO-E2E-SEMANTIC-001
 2026-09-17  WO-DOC-SYNC-PIPELINE-E2E-OBS009-CLOSE-001
             (1) LEG Transport Contract 를 66-field HISTORICAL SNAPSHOT / CURRENT
                 EXECUTABLE 205 (tai-api clients/leg_runtime_client.py::_LEG_INPUT_FIELDS,
-                main fb656a66) 로 분리. 66-field snapshot 표는 historical reference
+                VERIFIED_SOURCE_CODE_ANCHOR fb656a66) 로 분리. 66-field snapshot 표는 historical reference
                 로 보존.
             (2) Task/Equipment/Process object→contract 매핑에서 EXISTENCE≠USE,
                 LOCATION≠WORK, GENERIC≠SUBTYPE 위반 케이스 정정:
@@ -304,7 +306,26 @@ WO-E2E-DATASET-001 (Case 생성) → WO-E2E-001 (실행) → WO-E2E-SEMANTIC-001
             불변: dataset/cases/golden/baseline 재생성 없음. 문서 전용.
             Cross-repo anchors:
               CURRENT PSR = 365 / f5b5a9c22a01b745ff0d8956341849af (LEG)
-              CURRENT LEG main = edc83474be5d519fca00b139a2b71dfb7a660285
+              OBS009_CLOSEOUT_LEG_CODE_ANCHOR = edc83474be5d519fca00b139a2b71dfb7a660285
               OBS007/OBS008/OBS009/OBS010 = CLOSED
               E2E200-B1 = FROZEN / UNCHANGED
+
+2026-09-17  WO-DOC-SYNC-PIPELINE-E2E-OBS009-CLOSE-001-PATCH3
+            Dynamic-SHA loop fix. Renamed dynamic branch-tip references
+            ('main fb656a66', 'CURRENT LEG main = edc83474…') to immutable
+            provenance labels (VERIFIED_SOURCE_CODE_ANCHOR /
+            OBS009_CLOSEOUT_LEG_CODE_ANCHOR) so this document does not go
+            stale the instant a docs-only merge advances main. Content
+            (205 field count, exact set comparison, ksic_major note,
+            boundary principles, material facts) unchanged.
 ```
+
+## Dynamic SHA Rule (WO-DOC-SYNC-...-PATCH3)
+
+Git branch tip SHA is dynamic. A documentation-only merge may advance
+main without changing the underlying runtime/semantic contract.
+Therefore this STANDARD records immutable implementation/closeout SHAs as
+**provenance anchors** (`VERIFIED_SOURCE_CODE_ANCHOR`, `OBS009_CLOSEOUT_*_CODE_ANCHOR`),
+**not as perpetual CURRENT branch-tip assertions**. CURRENT production state
+is determined by the explicit runtime / PSR contract and live verification,
+not by a stale embedded Git main SHA.
