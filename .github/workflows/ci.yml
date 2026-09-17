@@ -221,6 +221,8 @@ jobs:
         run: pytest tests/test_risk_kalis_semantic_freeze.py -q --tb=short
       - name: OBJ-RISK KALIS mapping materialization contract
         run: pytest tests/test_risk_kalis_materialization.py -q --tb=short
+      - name: OBJ-RISK ABC final reconciliation
+        run: pytest tests/test_risk_abc_final_reconcile.py -q --tb=short
       - name: KOSHA GUIDE sync tests
         run: pytest tests/test_kosha_guide_sync.py -q --tb=short
 
