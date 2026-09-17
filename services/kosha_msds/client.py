@@ -269,6 +269,14 @@ class KoshaMsdsClient:
         try:
             parsed = parse_section_xml(text, require_success=True)
         except KoshaMsdsResultError as exc:
+            # WO-CHEM-04-OFFICIAL-HYDRATE-V12-001 §7: rc22/23 must surface as
+            # RATE_LIMIT (matching KoshaMsdsClient.search), so the hydration
+            # runner can distinguish real quota from generic result-code
+            # errors and STOP without retry.
+            if exc.result_code in RATE_LIMIT_DAILY_CODES | RATE_LIMIT_SECOND_CODES:
+                raise KoshaMsdsClientError(
+                    "RATE_LIMIT", redact_secret(exc.result_msg, key)
+                ) from exc
             raise KoshaMsdsClientError("RESULT_CODE", redact_secret(exc.result_msg, key)) from exc
         status = DETAIL_EMPTY_BUT_VALID if parsed.empty_but_valid else DETAIL_COMPLETE
         if parsed.result_code not in SUCCESS_RESULT_CODES:
