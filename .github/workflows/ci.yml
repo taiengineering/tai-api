@@ -203,6 +203,8 @@ jobs:
         run: pytest tests/test_risk_kosha_b06_semantic_evidence.py -q --tb=short
       - name: OBJ-RISK KOSHA B06 GPT semantic review
         run: pytest tests/test_risk_kosha_b06_gpt_semantic_review.py -q --tb=short
+      - name: OBJ-RISK KOSHA B07 semantic evidence
+        run: pytest tests/test_risk_kosha_b07_semantic_evidence.py -q --tb=short
       - name: KOSHA GUIDE sync tests
         run: pytest tests/test_kosha_guide_sync.py -q --tb=short
 
