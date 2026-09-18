@@ -83,7 +83,6 @@ from services.kosha_msds.contract import (
     SEO_PREVIEW_REQUIRED_SECTION_COUNT,
     SNAPSHOT_COMPLETED,
 )
-from services.kosha_msds.identity import new_content_id
 from tools.chem_seo_preview.build_preview_plan import build_preview_plan
 
 
@@ -275,6 +274,17 @@ def _run(args, *, store_factory=None) -> dict:
         raise ExecutorError(f"BLOCKED {BLOCK_MATERIALIZE_WRITE}: {exc}") from exc
 
     # ── Step 4: materialize
+    #
+    # WO-CHEM-FULL-READINESS-001 §5 — the write phase delegates to
+    # the shared incremental writer so that:
+    #   NEW        → INSERT (fresh UUID + CHEM:<uuid> content_id)
+    #   UNCHANGED  → no write (existing row's id/content_id preserved)
+    #   CHANGED    → UPDATE mutable columns; canonical identity kept
+    #   CONFLICT   → IncrementalWriteBlocked before any DB write
+    # Membership rows are always written for every plan chemical.
+    # This makes the SEO preview run against a non-empty DB idempotent
+    # and safe to replay while future FULL rollouts reuse the same
+    # code path.
     snapshot_id = args.snapshot_id or str(uuid.uuid4())
     started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -287,84 +297,19 @@ def _run(args, *, store_factory=None) -> dict:
     snapshot_row["started_at"] = started_at
     mat_store.insert_snapshot(snapshot_row)
 
-    # Insert chemicals + sections + snapshot_items in order.
-    # Generate deterministic client-side UUIDs so we can wire sections +
-    # snapshot_items without a round-trip lookup. Postgres accepts an
-    # explicit `id` uuid on kosha_msds_chemicals (schema line ≈13-30);
-    # the DEFAULT gen_random_uuid() only fires when `id` is absent.
-    chem_rows: list[dict] = []
-    section_rows: list[dict] = []
-    membership_rows: list[dict] = []
-    chem_uuid_by_key: dict[tuple[str, str], str] = {}
-    for c in built["plan_chemicals"]:
-        chem_uuid = str(uuid.uuid4())
-        chem_uuid_by_key[(c.get("source_id"), c.get("source_key"))] = chem_uuid
-        # Canonical TAI content identity is CHEM:<UUID> (see
-        # services.kosha_msds.identity.new_content_id + is_chem_content_id).
-        # It is deliberately separate from the KOSHA source identity
-        # (chem_id / source_key) so a re-hydration or bulk swap doesn't
-        # collide with an already-published TAI content_id.
-        chem_rows.append({
-            "id": chem_uuid,
-            "content_id": new_content_id(),
-            "source_id": c.get("source_id"),
-            "source_key": c.get("source_key"),
-            "chem_id": c.get("chem_id"),
-            "identity_status": c.get("identity_status"),
-            "chemical_name_ko": c.get("chemical_name_ko"),
-            "chemical_name_en": c.get("chemical_name_en"),
-            "cas_no": c.get("cas_no"),
-            "ke_no": c.get("ke_no"),
-            "en_no": c.get("en_no"),
-            "un_no": c.get("un_no"),
-            "last_date": c.get("last_date"),
-            "source_content_hash": c.get("source_content_hash"),
-            "source_dataset_url": c.get("source_dataset_url"),
-            "is_current": False,
-        })
-    mat_store.insert_chemicals(chem_rows)
+    try:
+        write_report = w.execute_incremental_write(
+            plan_inputs, store=mat_store, snapshot_id=snapshot_id,
+        )
+    except w.IncrementalWriteBlocked as exc:
+        raise ExecutorError(f"BLOCKED {BLOCK_MATERIALIZE_WRITE}: {exc}") from exc
 
-    # Re-read each chemical to confirm it landed. Under the live Supabase
-    # this is a cheap round-trip that also validates the CHECK constraints
-    # (source_id, source_key = chem_id, etc.). Under the in-memory store
-    # it just verifies our own bookkeeping.
-    for c in built["plan_chemicals"]:
-        expected = chem_uuid_by_key[(c.get("source_id"), c.get("source_key"))]
-        row = mat_store.get_chemical_by_natural_key(c.get("source_id"), c.get("source_key"))
-        if not row:
-            raise ExecutorError(
-                f"BLOCKED {BLOCK_MATERIALIZE_WRITE}: chemical missing after insert "
-                f"chem_id={c.get('chem_id')!r}"
-            )
-        got = row.get("id")
-        if got and got != expected:
-            raise ExecutorError(
-                f"BLOCKED {BLOCK_MATERIALIZE_WRITE}: chemical id drift for "
-                f"chem_id={c.get('chem_id')!r} expected={expected!r} got={got!r}"
-            )
-
-    for c in built["plan_chemicals"]:
-        chem_uuid = chem_uuid_by_key[(c.get("source_id"), c.get("source_key"))]
-        for s in c.get("sections") or []:
-            section_rows.append({
-                "chemical_id": chem_uuid,
-                "section_no": int(s.get("section_no")),
-                "payload_json": s.get("payload_json"),
-                "section_hash": s.get("section_hash"),
-                "result_code": s.get("result_code"),
-                "result_message": s.get("result_message"),
-                "fetched_at": s.get("fetched_at"),
-            })
-        membership_rows.append({
-            "snapshot_id": snapshot_id,
-            "chemical_id": chem_uuid,
-            "source_content_hash": c.get("source_content_hash"),
-            "identity_status": c.get("identity_status"),
-            "detail_status": c.get("detail_status"),
-            "in_snapshot": True,
-        })
-    mat_store.insert_sections(section_rows)
-    mat_store.insert_snapshot_items(membership_rows)
+    # `write_report.chem_uuid_by_key` resolves every plan chemical to
+    # either its newly-generated UUID (NEW) or its pre-existing UUID
+    # (UNCHANGED/CHANGED). We keep it under the original variable name
+    # so the return dict below remains byte-identical to the pre-refactor
+    # SEO preview execute path.
+    chem_uuid_by_key = write_report.chem_uuid_by_key
     mat_store.update_snapshot_status(snapshot_id, SNAPSHOT_COMPLETED)
 
     # ── Step 5: snapshot COMPLETED verify
@@ -419,9 +364,23 @@ def _run(args, *, store_factory=None) -> dict:
         "snapshot_id": snapshot_id,
         "expected_chemical_count": chem_count,
         "expected_section_count": sec_count,
-        "materialized_chemicals": len(chem_rows),
-        "materialized_sections": len(section_rows),
-        "materialized_snapshot_items": len(membership_rows),
+        # "materialized_*" carries the same plan-derived total the pre-
+        # refactor code exposed (chem_rows / section_rows / membership_rows
+        # were always == the plan totals). Under the incremental writer:
+        #   NEW + UNCHANGED + CHANGED = plan totals; CONFLICT is 0
+        #   because preflight would have blocked the run.
+        "materialized_chemicals": (
+            write_report.chemicals_new
+            + write_report.chemicals_unchanged
+            + write_report.chemicals_changed
+        ),
+        "materialized_sections": (
+            write_report.sections_new
+            + write_report.sections_unchanged
+            + write_report.sections_changed
+        ),
+        "materialized_snapshot_items": write_report.membership_rows,
+        "materialize_write_report": write_report.to_dict(),
         "snapshot_status_after_materialize": reread.get("status"),
         "publish_state_after_promote": post.get("publish_state"),
         "seo_preview_manifest_sha256": seo_manifest_sha,

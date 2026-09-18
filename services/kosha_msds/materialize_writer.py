@@ -105,6 +105,55 @@ class ProductionWriteForbidden(MaterializeWriterError):
     """
 
 
+class IncrementalWriteBlocked(MaterializeWriterError):
+    """Raised when the incremental writer encounters a CONFLICT row.
+
+    Preflight surfaces the same block reasons and fails first; this
+    exception is a defense in depth in case the writer is called with
+    a plan that was not preflight-validated.
+    """
+
+
+# ---------------------------------------------------------------------------
+# Field-mutability contract (WO-CHEM-FULL-READINESS-001 §2, §3).
+#
+# Canonical identity fields are NEVER overwritten on an existing row:
+# id / content_id are TAI-owned globally-unique identifiers, source_id /
+# source_key / chem_id are the KOSHA-owned natural key. All other columns
+# are content that can drift as KOSHA republishes MSDS content.
+# ---------------------------------------------------------------------------
+
+CHEMICAL_IMMUTABLE_FIELDS = frozenset({
+    "id", "content_id", "source_id", "source_key", "chem_id",
+})
+CHEMICAL_MUTABLE_FIELDS = frozenset({
+    "identity_status", "identity_reason",
+    "chemical_name_ko", "chemical_name_en",
+    "cas_no", "ke_no", "en_no", "un_no",
+    "last_date",
+    "source_content_hash", "source_dataset_url",
+    "is_current",
+    "last_seen_at", "updated_at",
+})
+SECTION_IMMUTABLE_FIELDS = frozenset({
+    "chemical_id", "section_no",
+})
+SECTION_MUTABLE_FIELDS = frozenset({
+    "payload_json", "section_hash",
+    "result_code", "result_message",
+    "fetched_at",
+})
+
+
+def _split_chemical_mutable(payload: Mapping[str, Any]) -> dict:
+    """Return the subset of payload that touches only mutable columns."""
+    return {k: v for k, v in payload.items() if k in CHEMICAL_MUTABLE_FIELDS}
+
+
+def _split_section_mutable(payload: Mapping[str, Any]) -> dict:
+    return {k: v for k, v in payload.items() if k in SECTION_MUTABLE_FIELDS}
+
+
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
@@ -295,6 +344,61 @@ class MemoryMaterializeStore:
     def insert_snapshot_items(self, rows: list[dict]) -> None:
         for m in rows:
             self._snapshot_items.append(dict(m))
+
+    def update_chemical(
+        self,
+        source_id: str,
+        source_key: str,
+        mutable_fields: Mapping[str, Any],
+    ) -> None:
+        """Update mutable columns on an existing chemical row.
+
+        Canonical identity (id / content_id / source_id / source_key /
+        chem_id) is NEVER overwritten — any of those keys in
+        `mutable_fields` raises ValueError. This mirrors the
+        Postgres-side contract: the SEO preview DB grants service_role
+        UPDATE but not DELETE/TRUNCATE, and this writer stays within
+        that permission set.
+        """
+        bad = set(mutable_fields.keys()) & CHEMICAL_IMMUTABLE_FIELDS
+        if bad:
+            raise ValueError(
+                f"cannot update immutable chemical fields {sorted(bad)}"
+            )
+        key = (str(source_id), str(source_key))
+        row = self._chemicals_by_key.get(key)
+        if row is None:
+            raise KeyError(
+                f"chemical not found for update: source_id={source_id!r} "
+                f"source_key={source_key!r}"
+            )
+        for k, v in mutable_fields.items():
+            row[k] = v
+
+    def update_section(
+        self,
+        chemical_id: str,
+        section_no: int,
+        mutable_fields: Mapping[str, Any],
+    ) -> None:
+        """Update mutable columns on an existing section row.
+
+        (chemical_id, section_no) is the natural key and NEVER changes.
+        """
+        bad = set(mutable_fields.keys()) & SECTION_IMMUTABLE_FIELDS
+        if bad:
+            raise ValueError(
+                f"cannot update immutable section fields {sorted(bad)}"
+            )
+        key = (str(chemical_id), int(section_no))
+        row = self._sections_by_pair.get(key)
+        if row is None:
+            raise KeyError(
+                f"section not found for update: chemical_id={chemical_id!r} "
+                f"section_no={section_no!r}"
+            )
+        for k, v in mutable_fields.items():
+            row[k] = v
 
 
 # ---------------------------------------------------------------------------
@@ -774,3 +878,339 @@ def dry_run(
         "wo_scope": WO_SCOPE,
         "production_write_allowed": PRODUCTION_WRITE_ALLOWED,
     }
+
+
+# ---------------------------------------------------------------------------
+# Incremental write helper (WO-CHEM-FULL-READINESS-001).
+#
+# Shared execution path that classifies each plan chemical / section
+# against the current store state and writes ONLY the changes:
+#
+#   NEW        -> INSERT (fresh id + content_id from id_factory)
+#   UNCHANGED  -> no store write
+#   CHANGED    -> UPDATE mutable columns; canonical identity preserved
+#   CONFLICT   -> IncrementalWriteBlocked (preflight should have caught
+#                                          this first)
+#
+# Membership rows are always written for every plan chemical (WO §4);
+# the snapshot's membership is the whole plan, not just the changing
+# subset. UNCHANGED chemicals stay in place under their existing UUID
+# and appear in the new snapshot's snapshot_items with that UUID.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class IncrementalWriteReport:
+    snapshot_id: str
+    chemicals_new: int
+    chemicals_unchanged: int
+    chemicals_changed: int
+    chemicals_conflict: int
+    sections_new: int
+    sections_unchanged: int
+    sections_changed: int
+    sections_conflict: int
+    membership_rows: int
+    chem_uuid_by_key: dict  # (source_id, source_key) -> chemical UUID
+
+    def to_dict(self) -> dict:
+        return {
+            "snapshot_id": self.snapshot_id,
+            "chemicals": {
+                "new": self.chemicals_new,
+                "unchanged": self.chemicals_unchanged,
+                "changed": self.chemicals_changed,
+                "conflict": self.chemicals_conflict,
+            },
+            "sections": {
+                "new": self.sections_new,
+                "unchanged": self.sections_unchanged,
+                "changed": self.sections_changed,
+                "conflict": self.sections_conflict,
+            },
+            "membership_rows": self.membership_rows,
+        }
+
+
+def _default_id_factory() -> tuple[str, str]:
+    """(chemical_uuid, content_id) for a NEW chemical.
+
+    Wraps `services.kosha_msds.identity.new_content_id` so the CHEM:*
+    content-id convention is inherited from the identity module (WO §5
+    of prior CHEM-08 — no forked identity generator).
+    """
+    import uuid
+    from services.kosha_msds.identity import new_content_id
+    return str(uuid.uuid4()), new_content_id()
+
+
+def _build_chemical_row(
+    bundle: Mapping[str, Any], *, chem_uuid: str, content_id: str,
+) -> dict:
+    """Map a plan.jsonl chemical bundle to a kosha_msds_chemicals row.
+
+    Extracted from tools/chem_seo_preview/execute_production.py so the
+    executor and the shared writer produce byte-identical INSERT rows
+    for the empty-DB path (F1). The `is_current` flag stays False —
+    CHEM-10 controls the flip via publish_state.
+    """
+    return {
+        "id": chem_uuid,
+        "content_id": content_id,
+        "source_id": bundle.get("source_id"),
+        "source_key": bundle.get("source_key"),
+        "chem_id": bundle.get("chem_id"),
+        "identity_status": bundle.get("identity_status"),
+        "chemical_name_ko": bundle.get("chemical_name_ko"),
+        "chemical_name_en": bundle.get("chemical_name_en"),
+        "cas_no": bundle.get("cas_no"),
+        "ke_no": bundle.get("ke_no"),
+        "en_no": bundle.get("en_no"),
+        "un_no": bundle.get("un_no"),
+        "last_date": bundle.get("last_date"),
+        "source_content_hash": bundle.get("source_content_hash"),
+        "source_dataset_url": bundle.get("source_dataset_url"),
+        "is_current": False,
+    }
+
+
+def _build_section_row(section: Mapping[str, Any], *, chemical_id: str) -> dict:
+    return {
+        "chemical_id": chemical_id,
+        "section_no": int(section.get("section_no")),
+        "payload_json": section.get("payload_json"),
+        "section_hash": section.get("section_hash"),
+        "result_code": section.get("result_code"),
+        "result_message": section.get("result_message"),
+        "fetched_at": section.get("fetched_at"),
+    }
+
+
+def _chemical_mutable_patch(bundle: Mapping[str, Any]) -> dict:
+    """Extract only the mutable columns from a plan chemical bundle."""
+    return _split_chemical_mutable({
+        "identity_status": bundle.get("identity_status"),
+        "identity_reason": bundle.get("identity_reason"),
+        "chemical_name_ko": bundle.get("chemical_name_ko"),
+        "chemical_name_en": bundle.get("chemical_name_en"),
+        "cas_no": bundle.get("cas_no"),
+        "ke_no": bundle.get("ke_no"),
+        "en_no": bundle.get("en_no"),
+        "un_no": bundle.get("un_no"),
+        "last_date": bundle.get("last_date"),
+        "source_content_hash": bundle.get("source_content_hash"),
+        "source_dataset_url": bundle.get("source_dataset_url"),
+    })
+
+
+def _section_mutable_patch(section: Mapping[str, Any]) -> dict:
+    return _split_section_mutable({
+        "payload_json": section.get("payload_json"),
+        "section_hash": section.get("section_hash"),
+        "result_code": section.get("result_code"),
+        "result_message": section.get("result_message"),
+        "fetched_at": section.get("fetched_at"),
+    })
+
+
+def execute_incremental_write(
+    inputs: MaterializePlanInputs,
+    *,
+    store,
+    snapshot_id: str,
+    id_factory=None,
+) -> IncrementalWriteReport:
+    """Classify then write only the diffs.
+
+    The store MUST expose insert_chemicals, insert_sections,
+    insert_snapshot_items, update_chemical, update_section,
+    get_chemical_by_natural_key, get_section. That contract is shared
+    by MemoryMaterializeStore (this module) and SupabaseMaterializeStore
+    (services/kosha_msds/production_store.py).
+
+    Chunking respects CHEMICAL_BATCH_SIZE / SECTION_BATCH_SIZE /
+    SNAPSHOT_ITEM_BATCH_SIZE. UPDATE calls are per-row (Supabase
+    REST does not support a filtered bulk UPDATE on differing
+    payloads); every insert is chunked. Since the SEO preview real-run
+    is 1,997 chemicals with 0 existing DB rows, this fully preserves
+    the F1 behavior exercised by
+    tests/test_chem_seo_preview_execute.py::test_happy_path_promotes_to_published_seo_preview.
+    """
+    if id_factory is None:
+        id_factory = _default_id_factory
+
+    chem_class = classify_chemicals(inputs.chemicals, store=store)
+    sec_class = classify_sections(inputs.chemicals, chem_class, store=store)
+
+    conflict_chems = [c for c in chem_class if c.kind == CONFLICT]
+    conflict_secs = [s for s in sec_class if s.kind == CONFLICT]
+    if conflict_chems or conflict_secs:
+        raise IncrementalWriteBlocked(
+            f"CONFLICT rows present: chemicals={len(conflict_chems)} "
+            f"sections={len(conflict_secs)} — preflight should have blocked "
+            f"this run before reaching execute_incremental_write()."
+        )
+
+    kind_by_chem_id = {c.chem_id: c.kind for c in chem_class}
+    db_uuid_by_chem_id = {c.chem_id: c.db_chemical_id for c in chem_class}
+
+    chem_uuid_by_key: dict[tuple[str, str], str] = {}
+    inserts_by_key: dict[tuple[str, str], dict] = {}
+    updates_by_key: dict[tuple[str, str], dict] = {}
+
+    for bundle in inputs.chemicals:
+        chem_id = bundle.get("chem_id")
+        key = (str(bundle.get("source_id")), str(bundle.get("source_key")))
+        kind = kind_by_chem_id.get(chem_id)
+        if kind == NEW:
+            chem_uuid, content_id = id_factory()
+            chem_uuid_by_key[key] = chem_uuid
+            inserts_by_key[key] = _build_chemical_row(
+                bundle, chem_uuid=chem_uuid, content_id=content_id,
+            )
+        elif kind == UNCHANGED:
+            existing_uuid = db_uuid_by_chem_id.get(chem_id)
+            if not existing_uuid:
+                raise IncrementalWriteBlocked(
+                    f"UNCHANGED chemical {chem_id!r} has no DB uuid; "
+                    f"classification inconsistent with store state."
+                )
+            chem_uuid_by_key[key] = str(existing_uuid)
+        elif kind == CHANGED:
+            existing_uuid = db_uuid_by_chem_id.get(chem_id)
+            if not existing_uuid:
+                raise IncrementalWriteBlocked(
+                    f"CHANGED chemical {chem_id!r} has no DB uuid; "
+                    f"classification inconsistent with store state."
+                )
+            chem_uuid_by_key[key] = str(existing_uuid)
+            updates_by_key[key] = _chemical_mutable_patch(bundle)
+        else:
+            # CONFLICT was caught above; anything else is a bug.
+            raise IncrementalWriteBlocked(
+                f"unexpected chemical kind {kind!r} for chem_id={chem_id!r}"
+            )
+
+    # Insert NEW chemicals in a single chunked call, mirroring the empty-DB
+    # SEO preview run so F1's byte-for-byte equivalence holds.
+    if inserts_by_key:
+        # Sort by chem_id so replays produce a deterministic INSERT order.
+        insert_rows = [
+            inserts_by_key[k]
+            for k in sorted(inserts_by_key.keys(),
+                            key=lambda kk: (kk[0], kk[1]))
+        ]
+        store.insert_chemicals(insert_rows)
+
+    # Verify each NEW chemical landed with the expected id, mirroring
+    # execute_production.py's post-insert sanity check.
+    for key, chem_uuid in sorted(chem_uuid_by_key.items()):
+        if key not in inserts_by_key:
+            continue
+        row = store.get_chemical_by_natural_key(key[0], key[1])
+        if not row:
+            raise IncrementalWriteBlocked(
+                f"chemical missing after insert source_id={key[0]!r} "
+                f"source_key={key[1]!r}"
+            )
+        got = row.get("id")
+        if got and str(got) != chem_uuid:
+            raise IncrementalWriteBlocked(
+                f"chemical id drift for source_key={key[1]!r} "
+                f"expected={chem_uuid!r} got={got!r}"
+            )
+
+    # UPDATE CHANGED chemicals (mutable fields only; identity preserved).
+    for key in sorted(updates_by_key.keys()):
+        patch = updates_by_key[key]
+        if patch:
+            store.update_chemical(key[0], key[1], patch)
+
+    # Sections. Group by chemical bundle, using resolved chemical_id.
+    section_inserts: list[dict] = []
+    section_updates: list[tuple[str, int, dict]] = []
+    for bundle in inputs.chemicals:
+        key = (str(bundle.get("source_id")), str(bundle.get("source_key")))
+        chem_uuid = chem_uuid_by_key.get(key)
+        if not chem_uuid:
+            # Should be unreachable — a CONFLICT would have raised above.
+            continue
+        for section in (bundle.get("sections") or []):
+            sec_no = int(section.get("section_no"))
+            plan_hash = section.get("section_hash")
+            # Section classification key was (chem_id, section_no) in
+            # classify_sections; look it up by re-computing.
+            existing = store.get_section(chem_uuid, sec_no)
+            if existing is None:
+                section_inserts.append(
+                    _build_section_row(section, chemical_id=chem_uuid)
+                )
+            else:
+                if existing.get("section_hash") == plan_hash:
+                    # UNCHANGED — no write.
+                    continue
+                section_updates.append(
+                    (chem_uuid, sec_no, _section_mutable_patch(section))
+                )
+
+    if section_inserts:
+        # Determinism: sort by (chemical_id, section_no) so replays
+        # write the same order.
+        section_inserts.sort(
+            key=lambda r: (str(r["chemical_id"]), int(r["section_no"]))
+        )
+        store.insert_sections(section_inserts)
+
+    for chem_uuid, sec_no, patch in sorted(
+        section_updates, key=lambda t: (str(t[0]), int(t[1]))
+    ):
+        if patch:
+            store.update_section(chem_uuid, sec_no, patch)
+
+    # Membership: one row per plan chemical, always, regardless of NEW/
+    # UNCHANGED/CHANGED. UNCHANGED chemicals stay under their existing
+    # UUID (which we resolved above).
+    membership_rows: list[dict] = []
+    for bundle in inputs.chemicals:
+        key = (str(bundle.get("source_id")), str(bundle.get("source_key")))
+        chem_uuid = chem_uuid_by_key.get(key)
+        if not chem_uuid:
+            continue
+        membership_rows.append({
+            "snapshot_id": snapshot_id,
+            "chemical_id": chem_uuid,
+            "source_content_hash": bundle.get("source_content_hash"),
+            "identity_status": bundle.get("identity_status"),
+            "detail_status": bundle.get("detail_status"),
+            "in_snapshot": True,
+        })
+    if membership_rows:
+        # Determinism: sort by chemical_id.
+        membership_rows.sort(key=lambda r: str(r["chemical_id"]))
+        store.insert_snapshot_items(membership_rows)
+
+    # Recount from classifications.
+    chem_kind_counts = {NEW: 0, UNCHANGED: 0, CHANGED: 0, CONFLICT: 0}
+    for c in chem_class:
+        chem_kind_counts[c.kind] = chem_kind_counts.get(c.kind, 0) + 1
+    sec_kind_counts = {NEW: 0, UNCHANGED: 0, CHANGED: 0, CONFLICT: 0}
+    for s in sec_class:
+        sec_kind_counts[s.kind] = sec_kind_counts.get(s.kind, 0) + 1
+    # Sections classified against DB. But a plan section can also be
+    # written as NEW when the chemical is UNCHANGED but the section is
+    # missing (classify_sections returns NEW in that case), so the
+    # counts above already reflect the DB-side classification.
+
+    return IncrementalWriteReport(
+        snapshot_id=snapshot_id,
+        chemicals_new=chem_kind_counts[NEW],
+        chemicals_unchanged=chem_kind_counts[UNCHANGED],
+        chemicals_changed=chem_kind_counts[CHANGED],
+        chemicals_conflict=chem_kind_counts[CONFLICT],
+        sections_new=sec_kind_counts[NEW],
+        sections_unchanged=sec_kind_counts[UNCHANGED],
+        sections_changed=sec_kind_counts[CHANGED],
+        sections_conflict=sec_kind_counts[CONFLICT],
+        membership_rows=len(membership_rows),
+        chem_uuid_by_key=chem_uuid_by_key,
+    )

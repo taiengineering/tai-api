@@ -178,6 +178,64 @@ class SupabaseMaterializeStore:
         for batch in _chunk(rows, SNAPSHOT_ITEM_BATCH_SIZE):
             self.sb.table(SNAPSHOT_ITEMS_TABLE).insert(list(batch)).execute()
 
+    def update_chemical(
+        self,
+        source_id: str,
+        source_key: str,
+        mutable_fields: dict,
+    ) -> None:
+        """Update mutable columns on an existing chemical row.
+
+        Canonical identity (id / content_id / source_id / source_key /
+        chem_id) is refused by the writer's field-mutability contract;
+        we mirror the check here for defense-in-depth.
+        """
+        from services.kosha_msds.materialize_writer import (
+            CHEMICAL_IMMUTABLE_FIELDS,
+        )
+        bad = set(mutable_fields.keys()) & CHEMICAL_IMMUTABLE_FIELDS
+        if bad:
+            raise ValueError(
+                f"cannot update immutable chemical fields {sorted(bad)}"
+            )
+        if not mutable_fields:
+            return
+        (
+            self.sb.table(CHEMICALS_TABLE)
+            .update(dict(mutable_fields))
+            .eq("source_id", source_id)
+            .eq("source_key", source_key)
+            .execute()
+        )
+
+    def update_section(
+        self,
+        chemical_id: str,
+        section_no: int,
+        mutable_fields: dict,
+    ) -> None:
+        """Update mutable columns on an existing section row.
+
+        (chemical_id, section_no) is the natural key and never changes.
+        """
+        from services.kosha_msds.materialize_writer import (
+            SECTION_IMMUTABLE_FIELDS,
+        )
+        bad = set(mutable_fields.keys()) & SECTION_IMMUTABLE_FIELDS
+        if bad:
+            raise ValueError(
+                f"cannot update immutable section fields {sorted(bad)}"
+            )
+        if not mutable_fields:
+            return
+        (
+            self.sb.table(SECTIONS_TABLE)
+            .update(dict(mutable_fields))
+            .eq("chemical_id", chemical_id)
+            .eq("section_no", int(section_no))
+            .execute()
+        )
+
 
 # ---------------------------------------------------------------------------
 # Publish store — matches the interface consumed by
