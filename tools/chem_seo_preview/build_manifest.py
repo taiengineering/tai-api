@@ -35,9 +35,22 @@ from services.kosha_msds.contract import (
     SEO_PREVIEW_REQUIRED_SECTION_COUNT,
     SUCCESS_RESULT_CODES,
 )
+from services.kosha_msds.hash import section_hash as _chem05_section_hash
 
 WO_CODE = "WO-CHEM-SEO-PREVIEW-LIVE-001"
-GENERATOR_VERSION = "1"
+# PATCH-1 rev: fail-closed on duplicate (chem_id, section_no) and on source
+# contract failures. Manifest is not written when either occurs. Bumped so
+# consumers can detect the semantic change from generator_version=1.
+GENERATOR_VERSION = "2"
+
+
+class ManifestBuildError(SystemExit):
+    """Non-zero exit for fail-closed manifest build failures.
+
+    PATCH-1 (WO-CHEM-SEO-PREVIEW-LIVE-001 §4/§21): the builder MUST refuse
+    to produce a manifest whenever the source hydration artifact violates
+    the SEO publication source contract. No silent skip, no last-write-wins.
+    """
 
 
 def _file_sha256(path: Path) -> str:
@@ -53,16 +66,15 @@ def _canonical_bytes(obj) -> bytes:
     return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
-def _canonical_section_hash(items: list) -> str:
+def _canonical_section_hash(items) -> str:
     """SHA256 over the canonical items array of one section response.
 
-    The KOSHA v1.2 items array is a list of {msdsItemCode, msdsItemNameKor,
-    itemDetail, ordrIdx, lev, upMsdsItemCode} objects. To be deterministic
-    across producer/consumer we sort each item's keys and take the array
-    order as-is (the API returns items in a stable ordrIdx order).
+    PATCH-1: delegates to services.kosha_msds.hash.section_hash so the
+    SEO manifest and CHEM-05's plan compute the same value for the same
+    items. Without this, the two producers disagree and the bridge cannot
+    bind SEO membership to a materialize plan.
     """
-    canonical = _canonical_bytes(items if isinstance(items, list) else [])
-    return hashlib.sha256(canonical).hexdigest()
+    return _chem05_section_hash(list(items) if isinstance(items, list) else [])
 
 
 def _iter_jsonl(path: Path) -> Iterable[dict]:
@@ -79,14 +91,49 @@ def _iter_jsonl(path: Path) -> Iterable[dict]:
                 ) from exc
 
 
+def _classify_row(row: dict) -> tuple[str | None, int | None, list | None, str | None]:
+    """Return (chem_id, section_no, items, contract_failure_reason).
+
+    PATCH-1: any contract violation is surfaced as a reason string;
+    build_manifest counts these and refuses to emit when any are found.
+    Silent skip is no longer permitted (WO §21 P4 + Source Contract Defense).
+    """
+    cid = row.get("chemId")
+    sno = row.get("sectionNo")
+    if not isinstance(cid, str) or not cid:
+        return None, None, None, "INVALID_CHEM_ID"
+    if not isinstance(sno, int) or isinstance(sno, bool):
+        return cid, None, None, "INVALID_SECTION_NO"
+    if sno not in ALLOWED_SECTIONS:
+        return cid, sno, None, "INVALID_SECTION_NO"
+    rc = row.get("result_code")
+    if rc is not None and rc not in SUCCESS_RESULT_CODES:
+        return cid, sno, None, "INVALID_RESULT_CODE"
+    if row.get("authoritative_verified") is False:
+        return cid, sno, None, "NOT_AUTHORITATIVE_VERIFIED"
+    items = row.get("items") or []
+    if not isinstance(items, list):
+        return cid, sno, None, "INVALID_ITEMS_TYPE"
+    return cid, sno, items, None
+
+
 def build_manifest(responses_path: Path) -> dict:
-    """Build the SEO preview manifest.
+    """Build the SEO preview manifest — fail-closed.
+
+    Raises ManifestBuildError (SystemExit) whenever the source hydration
+    artifact violates the SEO publication source contract:
+      * duplicate (chem_id, section_no) pairs → BLOCK
+      * invalid chemId / sectionNo / result_code → BLOCK
+      * authoritative_verified == false → BLOCK
+      * malformed items type → BLOCK
 
     Returns a dict with:
       * wo, generator_version, publication_scope
       * source: {responses_path, source_responses, responses_sha256}
       * census: {unique_chemicals, complete_chemicals, preview_sections,
-                 excluded_chemicals, excluded_chem_ids, section_count_distribution}
+                 excluded_chemicals, excluded_chem_ids,
+                 section_count_distribution,
+                 duplicate_pairs, source_contract_failures}
       * chemicals: sorted list of {chem_id, section_count, section_hashes_sha256}
       * manifest_sha256: self-hash over the canonicalized dict with the
                         manifest_sha256 field held at empty string
@@ -96,28 +143,43 @@ def build_manifest(responses_path: Path) -> dict:
 
     responses_sha = _file_sha256(responses_path)
 
-    # (chem_id, section_no) → items array (last write wins; artifact is expected
-    # to have no duplicates but we defensively de-dup by (chem_id, section_no)).
     per_pair_items: dict[tuple[str, int], list] = {}
-    result_bad = 0
-    authv_bad = 0
+    duplicate_pairs: list[tuple[str, int]] = []
+    contract_failures: list[dict] = []
     total = 0
-    for row in _iter_jsonl(responses_path):
+    for lineno, row in enumerate(_iter_jsonl(responses_path), start=1):
         total += 1
-        cid = row.get("chemId")
-        sno = row.get("sectionNo")
-        if not isinstance(cid, str) or not isinstance(sno, int):
+        cid, sno, items, failure = _classify_row(row)
+        if failure is not None:
+            contract_failures.append({
+                "lineno": lineno,
+                "reason": failure,
+                "chem_id": cid,
+                "section_no": sno,
+            })
             continue
-        if sno not in ALLOWED_SECTIONS:
-            continue
-        rc = row.get("result_code")
-        if rc is not None and rc not in SUCCESS_RESULT_CODES:
-            result_bad += 1
-            continue
-        if row.get("authoritative_verified") is False:
-            authv_bad += 1
-            continue
-        per_pair_items[(cid, sno)] = row.get("items") or []
+        key = (cid, sno)
+        if key in per_pair_items:
+            duplicate_pairs.append(key)
+            continue  # do NOT overwrite; last-write-wins is forbidden
+        per_pair_items[key] = items
+
+    # Fail-closed: if either duplicate pairs or source contract failures were
+    # found, refuse to emit a manifest. This is the PATCH-B/§21-P4 contract.
+    if duplicate_pairs or contract_failures:
+        detail = {
+            "duplicate_pairs": [
+                {"chem_id": c, "section_no": s} for (c, s) in duplicate_pairs[:10]
+            ],
+            "duplicate_pair_count": len(duplicate_pairs),
+            "source_contract_failures_sample": contract_failures[:10],
+            "source_contract_failure_count": len(contract_failures),
+        }
+        raise ManifestBuildError(
+            "BLOCKED: SEO preview manifest cannot be built from an artifact with "
+            "duplicate (chem_id, section_no) pairs or source contract failures. "
+            f"details={json.dumps(detail, ensure_ascii=False)}"
+        )
 
     # Regroup by chemical.
     sections_by_chem: dict[str, dict[int, list]] = defaultdict(dict)
@@ -167,8 +229,8 @@ def build_manifest(responses_path: Path) -> dict:
                 str(k): section_count_distribution[k]
                 for k in sorted(section_count_distribution)
             },
-            "result_code_dropped": result_bad,
-            "authoritative_verified_dropped": authv_bad,
+            "duplicate_pairs": 0,           # PATCH-1: fail-closed if > 0
+            "source_contract_failures": 0,  # PATCH-1: fail-closed if > 0
         },
         "chemicals": complete,
         "manifest_sha256": "",  # placeholder for self-hash

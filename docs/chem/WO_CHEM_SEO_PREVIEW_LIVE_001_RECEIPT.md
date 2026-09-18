@@ -1,9 +1,16 @@
-# WO-CHEM-SEO-PREVIEW-LIVE-001 — Receipt
+# WO-CHEM-SEO-PREVIEW-LIVE-001 — Receipt (PATCH-1 revision)
 
 **Goal:** `G-mu6k1c3v-f191a0` (tai-api) — 1,997 complete MSDS temporary SEO preview.
 **Branch:** `feat/chem-seo-preview-live-001` (off `origin/main` `7bd7aaf4`).
 **Turn scope:** IMPLEMENT → TEST → COMMIT → PUSH → PR OPEN. **No production DB write, no publish, no router activation** (WO §23).
-**Verdict target:** READY FOR GPT DELTA VERIFY.
+**Verdict target:** READY FOR GPT PATCH-1 DELTA VERIFY.
+
+## PATCH-1 addresses GPT's REQUEST_CHANGES verdict
+
+- **PATCH-A** (CHEM-08 materialize plan bridge): new tool `tools/chem_seo_preview/build_preview_plan.py` derives a valid `MaterializePlanInputs` from (CHEM-05 partial plan × SEO manifest). Bindings verified: responses_sha256 identity, per-member section presence (all 16), per-member section_hash agreement between the two producers, detail_status COMPLETE, no duplicate section_no. Emits preview manifest with `execute_eligible=true` and `snapshot.metrics_json = { publication_scope: SEO_PREVIEW, seo_preview_manifest_sha256, responses_sha256, seo_preview_expected_chemical_count, seo_preview_expected_section_count, source_plan_semantic_sha256, source_plan_file_sha256 }`. Integration test proves the chain end-to-end.
+- **PATCH-B** (fail-closed manifest builder): duplicate `(chem_id, section_no)` and source contract failures (invalid chemId / sectionNo / result_code / authoritative_verified=false / malformed items) now raise `ManifestBuildError` (non-zero exit) and no manifest file is written. Census gains explicit `duplicate_pairs` + `source_contract_failures` counters. Section hash unified with `services.kosha_msds.hash.section_hash` so SEO manifest and CHEM-05 agree on per-section hashes.
+- **Manifest re-hashed** (frozen artifact bytes unchanged, hash function changed): new `manifest_sha256 = f696a212fd9fd04659b7b75accd4c13fc539a1a71a663fb2a80599b9c255638d`. `responses_sha256` unchanged at `49994a2a8d44b5c2acfae60283d5f2f76fd65e0af5842a10db43383e26b643dd`.
+- **P4 rewrite**: no longer distribution-only. New synthetic responses.jsonl with a real duplicate `(A00001, 1)` proves the builder CLI exits non-zero and refuses to write output. Companion tests for source contract violations (`authoritative_verified=false`, `result_code≠00`) and a positive-control clean build.
 
 ---
 
@@ -42,7 +49,7 @@ Verified against `/Users/taiwangsim/Desktop/tai-api-obj-chem/artifacts/chem04/of
 | result_code non-success      | 0         | **0** |
 
 Manifest binding:
-- `manifest_sha256 = 58b52db4bb1d620162a2e498268defecdc3e50b95cd638cade7d64297bb92154`
+- `manifest_sha256 = f696a212fd9fd04659b7b75accd4c13fc539a1a71a663fb2a80599b9c255638d`
 - `responses_sha256 = 49994a2a8d44b5c2acfae60283d5f2f76fd65e0af5842a10db43383e26b643dd`
 - Manifest deterministic — `--check` reproduces the same SHA256 from the same artifact bytes.
 
@@ -73,9 +80,10 @@ Manifest binding:
 | `routers/kosha_public_msds.py` | +env `KOSHA_MSDS_PUBLIC_MODE`, +`_read_mode / _mode_to_scope / _require_active_mode`, threads scope into read/search |
 | `supabase/migrations/20260918_kosha_msds_seo_preview.sql` | **new** — extend publish_state CHECK, add pair-check, create `kosha_msds_seo_preview_current` view + grants |
 | `tools/chem_seo_preview/__init__.py` | **new** — package marker |
-| `tools/chem_seo_preview/build_manifest.py` | **new** — deterministic manifest builder + `--check` verify |
-| `docs/chem/seo-preview-manifest.json` | **new** — 1,997-chemical manifest (262 KB, self-SHA256 signed) |
-| `tests/test_chem_seo_preview.py` | **new** — P1–P12 + regression guards + manifest census assertions (19 tests) |
+| `tools/chem_seo_preview/build_manifest.py` | **new** — deterministic manifest builder + `--check` verify. PATCH-1 rev: fail-closed on duplicates + source contract failures; section hash unified with CHEM-05 |
+| `tools/chem_seo_preview/build_preview_plan.py` | **new (PATCH-A)** — CHEM-05 partial plan × SEO manifest → preview `MaterializePlanInputs` with `execute_eligible=true` and CHEM-10 binding in `snapshot.metrics_json` |
+| `docs/chem/seo-preview-manifest.json` | **new** — 1,997-chemical manifest (262 KB, self-SHA256 signed). PATCH-1 rev: `manifest_sha256=f696a212…638d` |
+| `tests/test_chem_seo_preview.py` | **new** — P1–P12 + regression guards + manifest census assertions + PATCH-A bridge chain integration tests (28 tests total) |
 | `tests/test_chem07_public_router.py` | fixture: `KOSHA_MSDS_PUBLIC_MODE=full` (existing tests target FULL; minimum churn to keep them green after the mode gate was added) |
 | `tests/test_chem09_search_adapter.py` | same fixture adjustment |
 | `.github/workflows/ci.yml` | +one CI step for `test_chem_seo_preview.py` |
@@ -178,29 +186,32 @@ The SEO stream owns sitemap generation (WO §15) and can pick up the manifest wi
 
 A future WO must (in order):
 1. Deploy the migration `20260918_kosha_msds_seo_preview.sql` to production.
-2. Flip `PRODUCTION_WRITE_ALLOWED = True` in a scope-limited PR and run CHEM-08 with `publication_scope=SEO_PREVIEW`, feeding the plan from the manifest above.
-3. Flip `PRODUCTION_PUBLISH_ALLOWED = True` and run CHEM-10 with `publication_scope=SEO_PREVIEW`, `seo_preview_expected_chemical_count=1997`, `seo_preview_expected_section_count=31952`, `expected_materialize_binding={"seo_preview_manifest_sha256": "58b52db4bb1d620162a2e498268defecdc3e50b95cd638cade7d64297bb92154"}`.
-4. Set `KOSHA_MSDS_PUBLIC_MODE=seo_preview` in the API deployment env.
-5. Register `routers/kosha_public_msds.router` in `router_registry/public.py`.
+2. Run CHEM-05 `build_materialize_plan.py` against the frozen CHEM-04 responses.jsonl. Produces `artifacts/chem05/materialize_plan.jsonl` + manifest + report. No code change required.
+3. **Run the PATCH-A bridge**: `python -m tools.chem_seo_preview.build_preview_plan --chem05-plan-jsonl artifacts/chem05/materialize_plan.jsonl --chem05-manifest artifacts/chem05/materialize_manifest.json --chem05-report artifacts/chem05/materialize_report.json --seo-manifest docs/chem/seo-preview-manifest.json --out-dir artifacts/chem_seo_preview/`. Emits a preview `MaterializePlanInputs` with `execute_eligible=true` and `snapshot.metrics_json.seo_preview_manifest_sha256`.
+4. Flip `PRODUCTION_WRITE_ALLOWED = True` in a scope-limited PR and run CHEM-08 with `publication_scope=SEO_PREVIEW` against the preview plan from step 3. Snapshot metrics_json inherits the SEO binding.
+5. Flip `PRODUCTION_PUBLISH_ALLOWED = True` and run CHEM-10 with `publication_scope=SEO_PREVIEW`, `seo_preview_expected_chemical_count=1997`, `seo_preview_expected_section_count=31952`, `expected_materialize_binding={"publication_scope": "SEO_PREVIEW", "seo_preview_manifest_sha256": "f696a212fd9fd04659b7b75accd4c13fc539a1a71a663fb2a80599b9c255638d", "responses_sha256": "49994a2a8d44b5c2acfae60283d5f2f76fd65e0af5842a10db43383e26b643dd"}`.
+6. Set `KOSHA_MSDS_PUBLIC_MODE=seo_preview` in the API deployment env.
+7. Register `routers/kosha_public_msds.router` in `router_registry/public.py`.
 
-This turn provides ALL scaffolding for steps 2–5 without executing any of them.
+This turn provides ALL scaffolding for steps 2–7 without executing any of them. The PATCH-A bridge produces the exact `MaterializePlanInputs` shape that `materialize_writer.load_plan_inputs()` consumes.
 
 ---
 
 ## 11. Tests
 
-Local run (`python3 -m pytest tests/test_chem06_read_service.py tests/test_chem07_public_router.py tests/test_chem08_materializer.py tests/test_chem09_search_adapter.py tests/test_chem10_publish_promoter.py tests/test_chem_seo_preview.py -q --tb=short`):
+PATCH-1 local run (`python3 -m pytest tests/test_chem05_materialize.py tests/test_chem06_read_service.py tests/test_chem07_public_router.py tests/test_chem08_materializer.py tests/test_chem09_search_adapter.py tests/test_chem10_publish_promoter.py tests/test_chem_seo_preview.py -q --tb=line`):
 
 ```
-129 passed in 8.70s
+155 passed in 9.54s
 ```
 
-- CHEM-06 read service: 27/27 (unchanged behavior)
-- CHEM-07 public router: 20/20 (with fixture `KOSHA_MSDS_PUBLIC_MODE=full`)
-- CHEM-08 materializer: 23/23 (additive kwarg backward-compatible)
-- CHEM-09 search adapter: 25/25 (with fixture `KOSHA_MSDS_PUBLIC_MODE=full`)
-- CHEM-10 publish promoter: 25/25 (additive kwargs backward-compatible)
-- SEO preview (this WO): 19/19 covering P1–P12 + regression guards
+- CHEM-05 materialize adapter: green (unchanged behavior)
+- CHEM-06 read service: green (additive scope kwarg backward-compatible)
+- CHEM-07 public router: green (fixture: `KOSHA_MSDS_PUBLIC_MODE=full`)
+- CHEM-08 materializer: green (additive `publication_scope` kwarg)
+- CHEM-09 search adapter: green (fixture: `KOSHA_MSDS_PUBLIC_MODE=full`)
+- CHEM-10 publish promoter: green (additive `publication_scope` + `seo_preview_expected_*` kwargs)
+- SEO preview (this WO PATCH-1): **28/28** covering P1–P12 + fail-closed builder + PATCH-A bridge chain (positive + tampered manifest SHA + responses SHA mismatch + missing membership + missing section + CHEM-10 binding round-trip)
 
 ---
 
@@ -225,7 +236,7 @@ preview chemicals =          1,997
 preview sections =           31,952
 excluded chemicals =         1
 excluded chem_ids =          ["432377"]
-manifest sha256 =            58b52db4bb1d620162a2e498268defecdc3e50b95cd638cade7d64297bb92154
+manifest sha256 =            f696a212fd9fd04659b7b75accd4c13fc539a1a71a663fb2a80599b9c255638d
 responses sha256 =           49994a2a8d44b5c2acfae60283d5f2f76fd65e0af5842a10db43383e26b643dd
 
 CANONICAL
@@ -252,7 +263,7 @@ enumeration available =      docs/chem/seo-preview-manifest.json (1,997 chem_ids
 
 TEST
 test command =               pytest tests/test_chem_seo_preview.py -q --tb=short
-result =                     19/19 PASS  (+110/110 regression across CHEM-06..10)
+result =                     28/28 PASS  (+127/127 regression across CHEM-05..10; 155/155 total)
 
 CHANGED FILES =
   services/kosha_msds/contract.py

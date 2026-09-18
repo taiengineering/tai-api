@@ -206,20 +206,110 @@ def test_P3_manifest_excludes_chemId_432377():
 
 
 # ---------------------------------------------------------------------------
-# P4 · duplicate section → exclusion (defense-in-depth: manifest builder
-# de-dupes by (chem_id, section_no); if artifact has duplicates the last
-# write wins but section_count is still counted correctly).
+# P4 (PATCH-1) · duplicate (chem_id, section_no) → builder fails non-zero,
+# no manifest file written. Synthetic responses.jsonl with a real duplicate
+# row proves the fail-closed contract (WO §21 P4 + PATCH-B).
 # ---------------------------------------------------------------------------
 
 
-def test_P4_manifest_section_count_distribution_no_double_counted():
-    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    dist = manifest["census"]["section_count_distribution"]
-    # Only two buckets expected under the current artifact: 9 (partial) and 16 (complete).
-    assert set(dist.keys()) == {"9", "16"}
-    # Every preview chemical has exactly 16 sections.
-    for row in manifest["chemicals"]:
-        assert row["section_count"] == SEO_PREVIEW_REQUIRED_SECTION_COUNT
+def _write_synth_responses(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        for r in rows:
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+def _synth_row(chem_id: str, section_no: int, *, result_code: str = "00",
+               authoritative: bool = True) -> dict:
+    return {
+        "chemId": chem_id,
+        "sectionNo": section_no,
+        "authoritative_verified": authoritative,
+        "result_code": result_code,
+        "items": [{"msdsItemCode": f"C{section_no:02d}", "itemDetail": "x"}],
+    }
+
+
+def test_P4_duplicate_pair_fails_builder_non_zero(tmp_path):
+    """A real synthetic artifact with (chem A, section 1) duplicated must
+    cause `build_manifest` CLI to exit non-zero and NOT write output."""
+    rows = [_synth_row("A00001", n) for n in range(1, 17)]
+    # Inject a real duplicate: (A00001, 1) appears TWICE.
+    rows.append(_synth_row("A00001", 1))
+    src = tmp_path / "responses.jsonl"
+    out = tmp_path / "manifest.json"
+    _write_synth_responses(src, rows)
+    r = subprocess.run(
+        [sys.executable, "-m", "tools.chem_seo_preview.build_manifest",
+         "--responses-jsonl", str(src), "--out", str(out)],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+    )
+    assert r.returncode != 0, f"builder should fail-closed on duplicate: {r.stdout} {r.stderr}"
+    assert not out.exists(), "manifest file must NOT be written on failure"
+    # Message must name the duplicate condition so operators can diagnose.
+    combined = r.stdout + r.stderr
+    assert "duplicate" in combined.lower() or "DUPLICATE" in combined
+
+
+def test_P4b_source_contract_failure_fails_builder(tmp_path):
+    """authoritative_verified == false must cause fail-closed exit."""
+    rows = [_synth_row("A00001", n) for n in range(1, 17)]
+    rows.append(_synth_row("B00002", 1, authoritative=False))   # contract failure
+    src = tmp_path / "responses.jsonl"
+    out = tmp_path / "manifest.json"
+    _write_synth_responses(src, rows)
+    r = subprocess.run(
+        [sys.executable, "-m", "tools.chem_seo_preview.build_manifest",
+         "--responses-jsonl", str(src), "--out", str(out)],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+    )
+    assert r.returncode != 0, "builder must fail-closed on source contract failure"
+    assert not out.exists(), "manifest file must NOT be written on failure"
+
+
+def test_P4c_bad_result_code_fails_builder(tmp_path):
+    """result_code outside SUCCESS set must cause fail-closed exit."""
+    rows = [_synth_row("A00001", n) for n in range(1, 17)]
+    rows.append(_synth_row("B00002", 1, result_code="99"))
+    src = tmp_path / "responses.jsonl"
+    out = tmp_path / "manifest.json"
+    _write_synth_responses(src, rows)
+    r = subprocess.run(
+        [sys.executable, "-m", "tools.chem_seo_preview.build_manifest",
+         "--responses-jsonl", str(src), "--out", str(out)],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+    )
+    assert r.returncode != 0, "builder must fail-closed on non-success result_code"
+    assert not out.exists()
+
+
+def test_P4d_clean_synthetic_artifact_builds_successfully(tmp_path):
+    """Positive control: a clean synthetic 2-chemical artifact yields a
+    complete manifest with the expected census (duplicate_pairs=0,
+    source_contract_failures=0). Proves the fail-closed path fires only
+    on real violations."""
+    rows = [_synth_row("A00001", n) for n in range(1, 17)]
+    rows += [_synth_row("B00002", n) for n in range(1, 17)]
+    src = tmp_path / "responses.jsonl"
+    out = tmp_path / "manifest.json"
+    _write_synth_responses(src, rows)
+    r = subprocess.run(
+        [sys.executable, "-m", "tools.chem_seo_preview.build_manifest",
+         "--responses-jsonl", str(src), "--out", str(out)],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+    )
+    assert r.returncode == 0, r.stderr
+    assert out.exists()
+    manifest = json.loads(out.read_text(encoding="utf-8"))
+    assert manifest["census"]["complete_chemicals"] == 2
+    assert manifest["census"]["preview_sections"] == 32
+    assert manifest["census"]["duplicate_pairs"] == 0
+    assert manifest["census"]["source_contract_failures"] == 0
+    assert manifest["generator_version"] == "2"
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +475,11 @@ def test_manifest_census_matches_wo_section_22():
     assert manifest["census"]["excluded_chemicals"] == 1
     assert manifest["census"]["excluded_chem_ids"] == ["432377"]
     assert manifest["census"]["unique_chemicals"] == 1998
+    # PATCH-1: frozen corpus must show zero duplicates and zero contract failures.
+    assert manifest["census"]["duplicate_pairs"] == 0
+    assert manifest["census"]["source_contract_failures"] == 0
+    # PATCH-1: generator bumped from 1 → 2 (semantic change: fail-closed).
+    assert manifest["generator_version"] == "2"
     # 16*1997 = 31952
     assert manifest["census"]["preview_sections"] == \
         manifest["census"]["complete_chemicals"] * SEO_PREVIEW_REQUIRED_SECTION_COUNT
@@ -505,3 +600,318 @@ def test_manifest_check_matches_source_when_artifact_present():
     payload = json.loads(result.stdout)
     assert payload["verdict"] == "MATCH"
     assert payload["complete_chemicals"] == 1997
+
+
+# ---------------------------------------------------------------------------
+# PATCH-A · SEO manifest → preview materialize plan bridge integration tests.
+#
+# End-to-end chain: build_manifest → build_preview_plan → materialize_writer.preflight
+# must yield can_execute=True and the snapshot metrics_json must carry the
+# seo_preview_manifest_sha256 binding CHEM-10 will later verify.
+# ---------------------------------------------------------------------------
+
+
+from services.kosha_msds import materialize_writer, materialize as chem05_lib
+from tools.chem_seo_preview import build_preview_plan as bridge_mod
+
+
+def _run_chem05_plan(responses_path: Path, out_dir: Path) -> dict:
+    """Run CHEM-05 build_materialize_plan.run() against a synthetic
+    responses.jsonl. Returns the paths to the three CHEM-05 artifacts."""
+    from tools.chem05.build_materialize_plan import run as chem05_run
+    chem05_run(responses_path=responses_path, census_path=None, out_dir=out_dir)
+    return {
+        "plan_jsonl": out_dir / "materialize_plan.jsonl",
+        "manifest": out_dir / "materialize_manifest.json",
+        "report": out_dir / "materialize_report.json",
+    }
+
+
+def _synth_full_row(chem_id: str, section_no: int, *, items_extra: str = "") -> dict:
+    """Full contract row that CHEM-05's build_plan accepts as an
+    authoritative section. Matches services.kosha_msds.materialize
+    REQUIRED_SOURCE = 'KOSHA_OFFICIAL' + KOSHA_MSDS_OPENAPI_V1_2 + spec 1.2."""
+    return {
+        "chemId": chem_id,
+        "sectionNo": section_no,
+        "authoritative_verified": True,
+        "result_code": "00",
+        "result_msg": "NORMAL SERVICE.",
+        "fetched_at": "2026-09-18T00:00:00Z",
+        "source": "KOSHA_OFFICIAL",
+        "official_spec_date": "2026-09-16",
+        "official_spec_version": "1.2",
+        "operation": f"getChemDetail{section_no:02d}1",
+        "source_contract_version": "KOSHA_MSDS_OPENAPI_V1_2",
+        "status": "OK",
+        "items": [{
+            "msdsItemCode": f"C{section_no:02d}",
+            "msdsItemNameKor": f"항목{section_no}",
+            "itemDetail": f"value{items_extra}",
+            "ordrIdx": "1",
+            "lev": "1",
+            "upMsdsItemCode": "A",
+        }],
+    }
+
+
+def _synth_full_artifact(chem_ids: list[str], tmp_path: Path,
+                          include_partial_chem: str | None = None) -> Path:
+    """Write a synthetic responses.jsonl with N chemicals × 16 sections
+    each, optionally including one partial chemical (sections 1..9)."""
+    src = tmp_path / "responses.jsonl"
+    with src.open("w", encoding="utf-8") as fh:
+        for cid in chem_ids:
+            for n in range(1, 17):
+                fh.write(json.dumps(_synth_full_row(cid, n), ensure_ascii=False) + "\n")
+        if include_partial_chem:
+            for n in range(1, 10):
+                fh.write(json.dumps(_synth_full_row(include_partial_chem, n), ensure_ascii=False) + "\n")
+    return src
+
+
+def _run_seo_manifest_build(responses_path: Path, out_path: Path) -> dict:
+    r = subprocess.run(
+        [sys.executable, "-m", "tools.chem_seo_preview.build_manifest",
+         "--responses-jsonl", str(responses_path), "--out", str(out_path)],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+    )
+    if r.returncode != 0:
+        pytest.fail(f"synthetic manifest build failed: {r.stderr}")
+    return json.loads(out_path.read_text(encoding="utf-8"))
+
+
+def test_bridge_positive_manifest_plan_preflight_can_execute(tmp_path):
+    """POSITIVE PATH: synthetic 3-complete + 1-partial responses
+    → CHEM-05 plan (partial=INCOMPLETE, complete=COMPLETE, execute_eligible=False)
+    → SEO manifest (3 preview chemicals, excluded=partial)
+    → bridge preview plan (3 chemicals × 16, execute_eligible=True)
+    → materialize_writer.preflight(publication_scope=SEO_PREVIEW).can_execute == True
+    → snapshot.metrics_json carries seo_preview_manifest_sha256.
+    """
+    src = _synth_full_artifact(["A00001", "A00002", "A00003"], tmp_path,
+                                include_partial_chem="P99999")
+    chem05_dir = tmp_path / "chem05"
+    chem05_paths = _run_chem05_plan(src, chem05_dir)
+    seo_manifest_path = tmp_path / "seo-manifest.json"
+    seo = _run_seo_manifest_build(src, seo_manifest_path)
+    assert seo["census"]["complete_chemicals"] == 3
+    assert seo["census"]["excluded_chem_ids"] == ["P99999"]
+
+    built = bridge_mod.build_preview_plan(
+        chem05_plan_jsonl=chem05_paths["plan_jsonl"],
+        chem05_manifest_json=chem05_paths["manifest"],
+        chem05_report_json=chem05_paths["report"],
+        seo_manifest_json=seo_manifest_path,
+    )
+    assert built["manifest"]["execute_eligible"] is True
+    assert built["manifest"]["counts"]["chemicals"] == 3
+    assert built["manifest"]["counts"]["sections"] == 48
+    metrics = built["manifest"]["snapshot"]["metrics_json"]
+    assert metrics["publication_scope"] == PUBLICATION_SCOPE_SEO_PREVIEW
+    assert metrics["seo_preview_manifest_sha256"] == seo["manifest_sha256"]
+    assert metrics["responses_sha256"] == seo["source"]["responses_sha256"]
+
+    # Write to disk so we can round-trip through load_plan_inputs.
+    out_dir = tmp_path / "preview_out"
+    manifest_disk = bridge_mod.write_preview_plan_artifacts(built, out_dir)
+    plan_path = out_dir / "preview_materialize_plan.jsonl"
+    inputs = materialize_writer.load_plan_inputs(
+        plan_jsonl=plan_path,
+        manifest_json=out_dir / "preview_materialize_manifest.json",
+        report_json=out_dir / "preview_materialize_report.json",
+    )
+    report = materialize_writer.preflight(
+        inputs, store=materialize_writer.MemoryMaterializeStore(),
+        publication_scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+    )
+    assert report.can_execute is True, f"preflight blocked: {list(report.block_reasons)}"
+    # The preview snapshot's metrics_json must carry the seo manifest SHA
+    # exactly, so CHEM-10's expected_materialize_binding will match.
+    assert manifest_disk["snapshot"]["metrics_json"]["seo_preview_manifest_sha256"] \
+        == seo["manifest_sha256"]
+
+
+def test_bridge_negative_seo_manifest_tampered_manifest_sha_integrity(tmp_path):
+    """SEO manifest with an intact structure but a tampered manifest_sha256
+    field must fail-closed at the integrity check."""
+    src = _synth_full_artifact(["A00001", "A00002"], tmp_path)
+    chem05_dir = tmp_path / "chem05"
+    chem05_paths = _run_chem05_plan(src, chem05_dir)
+    seo_manifest_path = tmp_path / "seo.json"
+    _run_seo_manifest_build(src, seo_manifest_path)
+    tampered = json.loads(seo_manifest_path.read_text(encoding="utf-8"))
+    tampered["manifest_sha256"] = "0" * 64   # blatantly wrong
+    seo_manifest_path.write_text(json.dumps(tampered), encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        bridge_mod.build_preview_plan(
+            chem05_plan_jsonl=chem05_paths["plan_jsonl"],
+            chem05_manifest_json=chem05_paths["manifest"],
+            chem05_report_json=chem05_paths["report"],
+            seo_manifest_json=seo_manifest_path,
+        )
+    assert "MANIFEST_SHA_INTEGRITY_FAILURE" in str(exc.value)
+
+
+def test_bridge_negative_responses_sha_mismatch(tmp_path):
+    """CHEM-05 manifest.responses_sha256 ≠ SEO manifest → BLOCK."""
+    src = _synth_full_artifact(["A00001", "A00002"], tmp_path)
+    chem05_dir = tmp_path / "chem05"
+    chem05_paths = _run_chem05_plan(src, chem05_dir)
+    seo_manifest_path = tmp_path / "seo.json"
+    _run_seo_manifest_build(src, seo_manifest_path)
+
+    # Tamper CHEM-05 manifest's responses_sha256 (and its own manifest_sha256
+    # so the file at least parses).
+    tampered = json.loads(chem05_paths["manifest"].read_text(encoding="utf-8"))
+    tampered["responses_sha256"] = "deadbeef" * 8
+    chem05_paths["manifest"].write_text(json.dumps(tampered), encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        bridge_mod.build_preview_plan(
+            chem05_plan_jsonl=chem05_paths["plan_jsonl"],
+            chem05_manifest_json=chem05_paths["manifest"],
+            chem05_report_json=chem05_paths["report"],
+            seo_manifest_json=seo_manifest_path,
+        )
+    assert "RESPONSES_SHA_MISMATCH" in str(exc.value)
+
+
+def test_bridge_negative_membership_missing_from_plan(tmp_path):
+    """SEO manifest lists chem_id X but CHEM-05 plan does not include X."""
+    # Build artifact + SEO manifest with chem A + B.
+    src = _synth_full_artifact(["A00001", "B00002"], tmp_path)
+    chem05_dir = tmp_path / "chem05"
+    chem05_paths = _run_chem05_plan(src, chem05_dir)
+    seo_manifest_path = tmp_path / "seo.json"
+    _run_seo_manifest_build(src, seo_manifest_path)
+
+    # Now delete chem A from CHEM-05 plan JSONL to simulate a producer disagreement.
+    # CHEM-05 writes JSONL with compact separators (no space after colon), so the
+    # match string must also be compact.
+    lines = chem05_paths["plan_jsonl"].read_text(encoding="utf-8").splitlines()
+    filtered = [ln for ln in lines if '"chem_id":"A00001"' not in ln]
+    assert len(filtered) < len(lines), "sanity: at least one line filtered"
+    chem05_paths["plan_jsonl"].write_text("\n".join(filtered) + "\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        bridge_mod.build_preview_plan(
+            chem05_plan_jsonl=chem05_paths["plan_jsonl"],
+            chem05_manifest_json=chem05_paths["manifest"],
+            chem05_report_json=chem05_paths["report"],
+            seo_manifest_json=seo_manifest_path,
+        )
+    assert "MANIFEST_MEMBER_NOT_IN_PLAN" in str(exc.value)
+
+
+def test_bridge_negative_one_section_missing(tmp_path):
+    """CHEM-05 plan bundle for a preview member is missing section 16.
+
+    We tamper the CHEM-05 plan JSONL directly to drop section 16 from chem
+    A00001, keeping the SEO manifest unchanged (which still expects 16
+    sections). Bridge must fail-closed.
+    """
+    src = _synth_full_artifact(["A00001", "B00002"], tmp_path)
+    chem05_dir = tmp_path / "chem05"
+    chem05_paths = _run_chem05_plan(src, chem05_dir)
+    seo_manifest_path = tmp_path / "seo.json"
+    _run_seo_manifest_build(src, seo_manifest_path)
+
+    # Drop section 16 from chem A00001 in the CHEM-05 plan JSONL.
+    rewritten = []
+    for line in chem05_paths["plan_jsonl"].read_text(encoding="utf-8").splitlines():
+        obj = json.loads(line)
+        if obj.get("chem_id") == "A00001":
+            obj["sections"] = [s for s in obj["sections"] if s.get("section_no") != 16]
+        rewritten.append(json.dumps(obj, sort_keys=True, ensure_ascii=False))
+    chem05_paths["plan_jsonl"].write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        bridge_mod.build_preview_plan(
+            chem05_plan_jsonl=chem05_paths["plan_jsonl"],
+            chem05_manifest_json=chem05_paths["manifest"],
+            chem05_report_json=chem05_paths["report"],
+            seo_manifest_json=seo_manifest_path,
+        )
+    reason_str = str(exc.value)
+    # Either the section-count check or the hash check fires depending on
+    # which producer noticed first; both are fail-closed exits.
+    assert (
+        "MEMBER_INCOMPLETE_SECTIONS" in reason_str
+        or "MEMBER_HASH_MISMATCH" in reason_str
+    ), reason_str
+
+
+def test_bridge_chem10_binding_flows_through_to_preflight(tmp_path):
+    """Prove the end-to-end binding: the preview snapshot's
+    metrics_json.seo_preview_manifest_sha256 (set by the bridge) is exactly
+    what CHEM-10's expected_materialize_binding will verify at production
+    time. This test simulates the CHEM-10 handshake using MemoryPublishStore.
+    """
+    src = _synth_full_artifact(["A00001", "A00002"], tmp_path)
+    chem05_dir = tmp_path / "chem05"
+    chem05_paths = _run_chem05_plan(src, chem05_dir)
+    seo_manifest_path = tmp_path / "seo.json"
+    seo = _run_seo_manifest_build(src, seo_manifest_path)
+    built = bridge_mod.build_preview_plan(
+        chem05_plan_jsonl=chem05_paths["plan_jsonl"],
+        chem05_manifest_json=chem05_paths["manifest"],
+        chem05_report_json=chem05_paths["report"],
+        seo_manifest_json=seo_manifest_path,
+    )
+
+    # Simulate a future CHEM-08 having materialized the preview plan:
+    # a snapshot row exists with the bridge's metrics_json copied verbatim.
+    snapshot_id = "snap-preview"
+    snapshot_row = {
+        "id": snapshot_id,
+        "status": SNAPSHOT_COMPLETED,
+        "enumeration_mode": ENUMERATION_FULL_OFFICIAL,
+        "publish_state": "NOT_PUBLISHED",
+        "expected_count": 2,
+        "discovered_count": 2,
+        "metrics_json": built["manifest"]["snapshot"]["metrics_json"],
+    }
+    snapshot_items = []
+    sections = []
+    from services.kosha_msds.contract import DETAIL_COMPLETE as DC
+    for cid in ("A00001", "A00002"):
+        snapshot_items.append({
+            "snapshot_id": snapshot_id, "chemical_id": cid,
+            "detail_status": DC, "in_snapshot": True,
+        })
+        for n in range(1, 17):
+            sections.append({"chemical_id": cid, "section_no": n})
+    store = publish.MemoryPublishStore(
+        snapshots=[snapshot_row], snapshot_items=snapshot_items, sections=sections,
+    )
+    # Verify CHEM-10 accepts this snapshot under SEO_PREVIEW scope with the
+    # correct manifest binding, and rejects it under a tampered binding.
+    report_ok = publish.preflight_publish(
+        snapshot_id, store=store,
+        publication_scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+        seo_preview_expected_chemical_count=2,
+        seo_preview_expected_section_count=32,
+        expected_materialize_binding={
+            "publication_scope": PUBLICATION_SCOPE_SEO_PREVIEW,
+            "seo_preview_manifest_sha256": seo["manifest_sha256"],
+            "responses_sha256": seo["source"]["responses_sha256"],
+        },
+    )
+    assert report_ok.eligible is True, f"blocked: {list(report_ok.block_reasons)}"
+
+    report_bad = publish.preflight_publish(
+        snapshot_id, store=store,
+        publication_scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+        seo_preview_expected_chemical_count=2,
+        seo_preview_expected_section_count=32,
+        expected_materialize_binding={
+            "publication_scope": PUBLICATION_SCOPE_SEO_PREVIEW,
+            "seo_preview_manifest_sha256": "0" * 64,   # tampered
+            "responses_sha256": seo["source"]["responses_sha256"],
+        },
+    )
+    assert report_bad.eligible is False
+    assert "MATERIALIZE_BINDING_MISMATCH" in report_bad.block_reasons
