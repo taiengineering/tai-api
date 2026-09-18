@@ -82,6 +82,7 @@ from services.kosha_msds.contract import (
     PUBLISH_PUBLISHED_SEO_PREVIEW,
     SEO_PREVIEW_REQUIRED_SECTION_COUNT,
     SNAPSHOT_COMPLETED,
+    SNAPSHOT_FAILED,
 )
 from tools.chem_seo_preview.build_preview_plan import build_preview_plan
 
@@ -297,12 +298,30 @@ def _run(args, *, store_factory=None) -> dict:
     snapshot_row["started_at"] = started_at
     mat_store.insert_snapshot(snapshot_row)
 
+    # ── PATCH-B: RUNNING → FAILED closure ──
+    # If ANY exception fires between snapshot open and COMPLETED, we
+    # best-effort mark the snapshot FAILED so the next attempt's
+    # preflight isn't blocked by BLOCK_EXISTING_RUNNING_SNAPSHOT. The
+    # snapshot row itself is preserved (no DELETE / no TRUNCATE); it
+    # stays visible as evidence of the failed run.
     try:
-        write_report = w.execute_incremental_write(
-            plan_inputs, store=mat_store, snapshot_id=snapshot_id,
-        )
-    except w.IncrementalWriteBlocked as exc:
-        raise ExecutorError(f"BLOCKED {BLOCK_MATERIALIZE_WRITE}: {exc}") from exc
+        try:
+            write_report = w.execute_incremental_write(
+                plan_inputs, store=mat_store, snapshot_id=snapshot_id,
+            )
+        except w.IncrementalWriteBlocked as exc:
+            raise ExecutorError(
+                f"BLOCKED {BLOCK_MATERIALIZE_WRITE}: {exc}"
+            ) from exc
+        mat_store.update_snapshot_status(snapshot_id, SNAPSHOT_COMPLETED)
+    except Exception:
+        # Best-effort close; swallow secondary failures so the original
+        # exception propagates.
+        try:
+            mat_store.update_snapshot_status(snapshot_id, SNAPSHOT_FAILED)
+        except Exception:
+            pass
+        raise
 
     # `write_report.chem_uuid_by_key` resolves every plan chemical to
     # either its newly-generated UUID (NEW) or its pre-existing UUID
@@ -310,7 +329,6 @@ def _run(args, *, store_factory=None) -> dict:
     # so the return dict below remains byte-identical to the pre-refactor
     # SEO preview execute path.
     chem_uuid_by_key = write_report.chem_uuid_by_key
-    mat_store.update_snapshot_status(snapshot_id, SNAPSHOT_COMPLETED)
 
     # ── Step 5: snapshot COMPLETED verify
     reread = mat_store.get_snapshot(snapshot_id)

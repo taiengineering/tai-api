@@ -210,21 +210,117 @@ Not modified: `supabase/migrations/*`, `routers/*`, `router_registry/*`,
   execution WOs (CHEM-08-EXECUTE / CHEM-10-EXECUTE / CHEM-12).
 - No merge under Claude Code — awaits GPT delta-only verify.
 
+## PATCH-1 — Bulk read + RUNNING closure
+
+Two independent fixes, no re-design.
+
+### PATCH-A — Bulk existing-state read
+
+The pre-PATCH classify+write flow issued a per-row point read per
+chemical AND per section, then re-read every section a second time
+during the write phase. At FULL scale that was 678,744 REST round-
+trips (20,568 + 329,088 + 329,088).
+
+PATCH-A collapses the entire classify+write into two bulk fetches
+via new store methods and a `_preload_existing_state` helper:
+
+```text
+services/kosha_msds/materialize_writer.py
+  MemoryMaterializeStore.get_chemicals_by_natural_keys(pairs)
+  MemoryMaterializeStore.get_sections_by_chemical_ids(chemical_ids)
+  _preload_existing_state(inputs, store) -> (chem_map, sec_map)
+
+  classify_chemicals(chemicals, *, store, preloaded_chemicals=None)
+  classify_sections(chemicals, chem_class, *, store,
+                    preloaded_sections=None)
+  execute_incremental_write() now:
+    1. preloads existing chemicals+sections in one bulk pass
+    2. classifies against the preloaded maps
+    3. reuses the preloaded section map for the write-phase check
+       (no second `get_section` call)
+
+services/kosha_msds/production_store.py (SupabaseMaterializeStore)
+  get_chemicals_by_natural_keys(pairs)
+    - groups by source_id, chunks source_keys @ _CHEMICAL_KEY_CHUNK = 200
+    - one REST round-trip per chunk via .in_("source_key", chunk)
+  get_sections_by_chemical_ids(chemical_ids)
+    - chunks chemical_ids @ _SECTION_CHEM_CHUNK = 200
+    - paginates within each chunk @ _SECTION_PAGE = 1000
+```
+
+Round-trip budget under FULL:
+
+```text
+before  20,568 chemical point reads
+       + 329,088 section point reads (classify)
+       + 329,088 section point reads (write)
+       ─────────
+       = 678,744
+
+after   ~103 chemical bulk fetches (20,568 / 200)
+       + ~412 section bulk fetches ((20,568 / 200) × ⌈3,200 / 1,000⌉)
+       ─────────
+       = ~515 REST round-trips
+```
+
+Backwards compat: stores lacking the bulk methods fall through to
+the per-row path via `getattr(store, "get_chemicals_by_natural_keys",
+None)` — pre-existing fixture doubles still work.
+
+### PATCH-B — RUNNING → FAILED closure
+
+`tools/chem_seo_preview/execute_production.py` now wraps the write
+phase in a try/except that best-effort transitions the RUNNING
+snapshot to FAILED before re-raising:
+
+```python
+try:
+    try:
+        write_report = w.execute_incremental_write(...)
+    except w.IncrementalWriteBlocked as exc:
+        raise ExecutorError(f"BLOCKED {BLOCK_MATERIALIZE_WRITE}: {exc}") from exc
+    mat_store.update_snapshot_status(snapshot_id, SNAPSHOT_COMPLETED)
+except Exception:
+    try:
+        mat_store.update_snapshot_status(snapshot_id, SNAPSHOT_FAILED)
+    except Exception:
+        pass  # secondary failures don't shadow the original exception
+    raise
+```
+
+The snapshot row itself is preserved as evidence of the failed run
+(no DELETE / no TRUNCATE). Future retries are unblocked because
+`BLOCK_EXISTING_RUNNING_SNAPSHOT` only fires on RUNNING snapshots.
+
+## PATCH-1 tests
+
+```text
+tests/test_chem_full_readiness.py                       13 / 13  PASS
+  F1..F8 unchanged
+  + A1  bulk-read replaces per-row reads in execute
+  + A2  round-trip count invariant across 5 vs 400 existing chemicals
+
+tests/test_chem_seo_preview_execute.py                  19 / 19  PASS
+  16 pre-existing tests unchanged
+  + F9   insert_sections failure → snapshot FAILED, publish never called
+  + F10  insert_chemicals failure → snapshot FAILED, PUBLISHED_* untouched
+  + F11  replay after failed run → 0 duplicate-key errors,
+         3 UNCHANGED chemicals + partial UNCHANGED/NEW sections
+
+Focused CHEM regression                                190 / 190  PASS
+```
+
 ## Verdict
 
 ```text
-WO-CHEM-FULL-READINESS-001 = PASS / READY FOR GPT DELTA VERIFY
+WO-CHEM-FULL-READINESS-001 PATCH-1 = PASS / READY FOR GPT FINAL DELTA VERIFY
 
-The SEO preview production writer is now safely re-runnable, and
-future FULL rollouts will use the same code path with the same
-canonical-identity guarantees. Nothing under this WO touches
-production data.
+- Incremental writer preserves canonical identity (PATCH-1 unchanged)
+- N+1 point reads eliminated; FULL round-trip budget cut ~1,300x
+- RUNNING snapshots are always closed to FAILED on write error
+- No production DB write under this WO
+- Pre-existing SEO preview tests all still pass unchanged
 
-NEXT  =  GPT delta-only verify
-         → P2 FULL Cutover Readiness (fixture-only)
-         → P3 Search acceptance
-         → P4 Ops observability
-         → P5 Full acceptance harness
-         → CHEM-04 hydration continues in Track H, unblocked
+NEXT  =  GPT final delta verify → merge → P2 FULL cutover rehearsal
 STOP
 ```

@@ -400,6 +400,43 @@ class MemoryMaterializeStore:
         for k, v in mutable_fields.items():
             row[k] = v
 
+    # -- bulk read side (WO-CHEM-FULL-READINESS-001 PATCH-A) --
+
+    def get_chemicals_by_natural_keys(
+        self,
+        pairs: Iterable[tuple[str, str]],
+    ) -> dict[tuple[str, str], dict]:
+        """Batch-read chemicals by (source_id, source_key) pairs.
+
+        Memory-store impl is a straight dict lookup so query count is
+        exactly 1 no matter how many pairs are passed; the Supabase
+        counterpart chunks the pairs by source_id and issues one REST
+        round-trip per chunk.
+        """
+        out: dict[tuple[str, str], dict] = {}
+        for pair in pairs:
+            key = (str(pair[0]), str(pair[1]))
+            row = self._chemicals_by_key.get(key)
+            if row is not None:
+                out[key] = dict(row)
+        return out
+
+    def get_sections_by_chemical_ids(
+        self,
+        chemical_ids: Iterable[str],
+    ) -> dict[tuple[str, int], dict]:
+        """Batch-read every (chemical_id, section_no) row for the given
+        chemical UUIDs. Memory-store impl is a filtered scan; Supabase
+        counterpart paginates by chunk + page (see production_store.py)."""
+        wanted = {str(cid) for cid in chemical_ids}
+        if not wanted:
+            return {}
+        out: dict[tuple[str, int], dict] = {}
+        for (cid, sec_no), row in self._sections_by_pair.items():
+            if cid in wanted:
+                out[(cid, int(sec_no))] = dict(row)
+        return out
+
 
 # ---------------------------------------------------------------------------
 # Input loading
@@ -495,14 +532,33 @@ def classify_chemicals(
     chemicals: Iterable[Mapping[str, Any]],
     *,
     store: MemoryMaterializeStore,
+    preloaded_chemicals: Optional[
+        Mapping[tuple[str, str], Mapping[str, Any]]
+    ] = None,
 ) -> list[ChemicalClassification]:
+    """Classify each plan chemical against DB state.
+
+    When `preloaded_chemicals` is supplied (WO-CHEM-FULL-READINESS-001
+    PATCH-A), the DB read is a dict lookup — no per-row store call is
+    issued. The keys are `(source_id, source_key)` tuples. Missing
+    entries in the preload map are treated as "not in DB" (i.e. NEW).
+    Callers that do not preload keep the pre-PATCH-A per-row lookup
+    semantics so existing fixture tests continue to pass.
+    """
     out: list[ChemicalClassification] = []
     for c in chemicals:
         chem_id = c.get("chem_id")
         source_id = c.get("source_id")
         source_key = c.get("source_key")
         plan_hash = c.get("source_content_hash")
-        db = store.get_chemical_by_natural_key(source_id, source_key)
+        if preloaded_chemicals is not None:
+            db = preloaded_chemicals.get(
+                (str(source_id) if source_id is not None else source_id,
+                 str(source_key) if source_key is not None else source_key)
+            )
+            db = dict(db) if db is not None else None
+        else:
+            db = store.get_chemical_by_natural_key(source_id, source_key)
         if db is None:
             out.append(ChemicalClassification(
                 chem_id=chem_id, kind=NEW,
@@ -550,10 +606,19 @@ def classify_sections(
     chem_classifications: Iterable[ChemicalClassification],
     *,
     store: MemoryMaterializeStore,
+    preloaded_sections: Optional[
+        Mapping[tuple[str, int], Mapping[str, Any]]
+    ] = None,
 ) -> list[SectionClassification]:
     """Classify every plan section against DB sections for the resolved
     chemical UUID (only meaningful for UNCHANGED/CHANGED/CONFLICT rows;
-    NEW chemicals imply NEW sections)."""
+    NEW chemicals imply NEW sections).
+
+    When `preloaded_sections` is supplied (WO-CHEM-FULL-READINESS-001
+    PATCH-A), the DB read is a dict lookup keyed by (chemical_id,
+    section_no). Missing entries mean "no row in DB". Callers that
+    do not preload keep the per-row `store.get_section` semantics.
+    """
     by_chem_id_uuid = {c.chem_id: c.db_chemical_id for c in chem_classifications}
     kind_by_chem_id = {c.chem_id: c.kind for c in chem_classifications}
     out: list[SectionClassification] = []
@@ -577,7 +642,11 @@ def classify_sections(
                     plan_section_hash=plan_hash,
                 ))
                 continue
-            db_sec = store.get_section(db_uuid, sec_no)
+            if preloaded_sections is not None:
+                db_sec_raw = preloaded_sections.get((str(db_uuid), int(sec_no)))
+                db_sec = dict(db_sec_raw) if db_sec_raw is not None else None
+            else:
+                db_sec = store.get_section(db_uuid, sec_no)
             if db_sec is None:
                 out.append(SectionClassification(
                     chem_id=chem_id, section_no=sec_no, kind=NEW,
@@ -1013,6 +1082,67 @@ def _section_mutable_patch(section: Mapping[str, Any]) -> dict:
     })
 
 
+def _preload_existing_state(
+    inputs: MaterializePlanInputs,
+    store,
+) -> tuple[
+    dict[tuple[str, str], dict],
+    dict[tuple[str, int], dict],
+]:
+    """One bulk-read pass for both chemicals and sections.
+
+    - Fetches every chemical whose natural key appears in the plan.
+    - From those results, collects the existing chemical UUIDs and
+      bulk-fetches all their sections in one paginated pass.
+
+    A store that lacks `get_chemicals_by_natural_keys` /
+    `get_sections_by_chemical_ids` (older test doubles) falls back to
+    per-row point reads so the writer stays backwards-compatible; new
+    stores (MemoryMaterializeStore in this module, SupabaseMaterializeStore
+    in production_store.py) always take the bulk path.
+    """
+    pairs: list[tuple[str, str]] = []
+    for bundle in inputs.chemicals:
+        sid = bundle.get("source_id")
+        skey = bundle.get("source_key")
+        if sid is None or skey is None:
+            continue
+        pairs.append((str(sid), str(skey)))
+
+    bulk_chems = getattr(store, "get_chemicals_by_natural_keys", None)
+    if callable(bulk_chems):
+        preloaded_chemicals = dict(bulk_chems(pairs))
+    else:
+        preloaded_chemicals = {}
+        for pair in pairs:
+            row = store.get_chemical_by_natural_key(pair[0], pair[1])
+            if row is not None:
+                preloaded_chemicals[pair] = dict(row)
+
+    existing_chem_uuids = {
+        str(row["id"])
+        for row in preloaded_chemicals.values()
+        if row.get("id") is not None
+    }
+
+    bulk_secs = getattr(store, "get_sections_by_chemical_ids", None)
+    if callable(bulk_secs) and existing_chem_uuids:
+        preloaded_sections = dict(bulk_secs(existing_chem_uuids))
+    elif existing_chem_uuids:
+        # Fallback for older store doubles: fetch each (chem_uuid, sec_no)
+        # by point read. Not efficient for FULL but preserves semantics.
+        preloaded_sections = {}
+        for cid in existing_chem_uuids:
+            for sec_no in range(1, 17):
+                row = store.get_section(cid, sec_no)
+                if row is not None:
+                    preloaded_sections[(cid, sec_no)] = dict(row)
+    else:
+        preloaded_sections = {}
+
+    return preloaded_chemicals, preloaded_sections
+
+
 def execute_incremental_write(
     inputs: MaterializePlanInputs,
     *,
@@ -1039,8 +1169,22 @@ def execute_incremental_write(
     if id_factory is None:
         id_factory = _default_id_factory
 
-    chem_class = classify_chemicals(inputs.chemicals, store=store)
-    sec_class = classify_sections(inputs.chemicals, chem_class, store=store)
+    # ── PATCH-A preload ──
+    # Bulk-read the existing DB state once, then reuse the maps for
+    # classification AND for the section-write decision below. This
+    # collapses what would have been 20,568 + 329,088 + 329,088
+    # per-row point reads under FULL (see the WO PATCH-1 numbers) into
+    # a handful of chunk/page round-trips.
+    preloaded_chems, preloaded_sections = _preload_existing_state(inputs, store)
+
+    chem_class = classify_chemicals(
+        inputs.chemicals, store=store,
+        preloaded_chemicals=preloaded_chems,
+    )
+    sec_class = classify_sections(
+        inputs.chemicals, chem_class, store=store,
+        preloaded_sections=preloaded_sections,
+    )
 
     conflict_chems = [c for c in chem_class if c.kind == CONFLICT]
     conflict_secs = [s for s in sec_class if s.kind == CONFLICT]
@@ -1138,9 +1282,10 @@ def execute_incremental_write(
         for section in (bundle.get("sections") or []):
             sec_no = int(section.get("section_no"))
             plan_hash = section.get("section_hash")
-            # Section classification key was (chem_id, section_no) in
-            # classify_sections; look it up by re-computing.
-            existing = store.get_section(chem_uuid, sec_no)
+            # PATCH-A: reuse the preloaded map — the same round-trip
+            # that fed classify_sections above answers this decision
+            # too, so we never call store.get_section() during write.
+            existing = preloaded_sections.get((str(chem_uuid), int(sec_no)))
             if existing is None:
                 section_inserts.append(
                     _build_section_row(section, chemical_id=chem_uuid)

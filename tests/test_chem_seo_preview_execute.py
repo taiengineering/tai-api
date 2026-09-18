@@ -37,6 +37,7 @@ from services.kosha_msds.contract import (
     PUBLISH_PUBLISHED_FULL,
     PUBLISH_PUBLISHED_SEO_PREVIEW,
     SNAPSHOT_COMPLETED,
+    SNAPSHOT_FAILED,
     SNAPSHOT_RUNNING,
 )
 from tools.chem_seo_preview import execute_production as ex
@@ -642,3 +643,230 @@ def test_section_count_paginates_across_two_chunks_and_pages():
     store = SupabasePublishStore(sb=_FakeSupabaseSectionsClient(sections_rows, items_rows))
     assert store.section_count_for_snapshot("snap-x") == 6400
     assert store.duplicate_section_pairs_for_snapshot("snap-x") == 0
+
+
+# ---------------------------------------------------------------------------
+# WO-CHEM-FULL-READINESS-001 PATCH-B — RUNNING → FAILED cleanup on write error
+# ---------------------------------------------------------------------------
+
+
+def _raising_store_factory(pipe, *, raise_on: str):
+    """Return a factory that produces a MemoryMaterializeStore whose
+    write method named by `raise_on` raises RuntimeError.
+
+    `pipe["store_factory"]` still owns the pub_store side so publish
+    inspection would remain functional if the executor got that far —
+    but it must NOT, because the write phase fails first."""
+
+    def _factory():
+        mat_store, pub_store = _shared_stores()
+        original = getattr(mat_store, raise_on)
+
+        def _raiser(*a, **kw):
+            raise RuntimeError(f"simulated {raise_on} failure")
+
+        setattr(mat_store, raise_on, _raiser)
+        # Keep the original reachable so post-hoc assertions can peek
+        # at the store's state if needed.
+        setattr(mat_store, f"__original_{raise_on}", original)
+        return mat_store, pub_store
+    return _factory
+
+
+def _shared_state_capture():
+    """Wrap _shared_stores so the caller can inspect state after the
+    executor raises. Returns (factory, holder). holder["mat"] and
+    ["pub"] are set when the factory fires."""
+    holder: dict = {}
+
+    def _factory():
+        mat_store, pub_store = _shared_stores()
+        holder["mat"] = mat_store
+        holder["pub"] = pub_store
+        return mat_store, pub_store
+    return _factory, holder
+
+
+def test_F9_writer_failure_marks_running_snapshot_failed(tmp_path):
+    """PATCH-B: if `insert_sections` raises during execute_incremental_write,
+    the RUNNING snapshot must be flipped to FAILED before the exception
+    propagates. Publish must never be reached."""
+    pipe = _make_pipeline(tmp_path, ["F00001", "F00002"])
+    factory, holder = _shared_state_capture()
+
+    def _factory():
+        mat_store, pub_store = factory()
+        original_insert_sections = mat_store.insert_sections
+
+        def _raise(rows):
+            raise RuntimeError("simulated insert_sections failure")
+
+        mat_store.insert_sections = _raise
+        return mat_store, pub_store
+
+    args = _args_ns(
+        seo_manifest=str(pipe["seo_path"]),
+        chem05_plan_jsonl=str(pipe["chem05"]["plan_jsonl"]),
+        chem05_manifest=str(pipe["chem05"]["manifest"]),
+        chem05_report=str(pipe["chem05"]["report"]),
+        snapshot_id="snap-F9",
+    )
+    with pytest.raises(RuntimeError, match="simulated insert_sections failure"):
+        ex._run(args, store_factory=_factory)
+
+    # Snapshot is FAILED (not RUNNING). The row itself is preserved.
+    assert holder["mat"] is not None
+    snap = holder["mat"].get_snapshot("snap-F9")
+    assert snap is not None
+    assert snap["status"] == SNAPSHOT_FAILED
+    # Publish was never invoked — nothing landed in the publish side.
+    for s in holder["pub"]._snapshots:
+        assert s.get("publish_state") != PUBLISH_PUBLISHED_SEO_PREVIEW
+
+
+def test_F10_chemical_insert_failure_marks_running_failed(tmp_path):
+    """PATCH-B: same as F9 but the failure is `insert_chemicals`."""
+    pipe = _make_pipeline(tmp_path, ["G00001", "G00002"])
+    factory, holder = _shared_state_capture()
+
+    def _factory():
+        mat_store, pub_store = factory()
+
+        def _raise(rows):
+            raise RuntimeError("simulated insert_chemicals failure")
+
+        mat_store.insert_chemicals = _raise
+        return mat_store, pub_store
+
+    args = _args_ns(
+        seo_manifest=str(pipe["seo_path"]),
+        chem05_plan_jsonl=str(pipe["chem05"]["plan_jsonl"]),
+        chem05_manifest=str(pipe["chem05"]["manifest"]),
+        chem05_report=str(pipe["chem05"]["report"]),
+        snapshot_id="snap-F10",
+    )
+    with pytest.raises(RuntimeError, match="simulated insert_chemicals failure"):
+        ex._run(args, store_factory=_factory)
+
+    snap = holder["mat"].get_snapshot("snap-F10")
+    assert snap["status"] == SNAPSHOT_FAILED
+    # PUBLISHED_SEO_PREVIEW must not have been touched.
+    for s in holder["pub"]._snapshots:
+        assert s.get("publish_state") != PUBLISH_PUBLISHED_SEO_PREVIEW
+    # And PUBLISHED_FULL certainly was not.
+    for s in holder["pub"]._snapshots:
+        from services.kosha_msds.contract import PUBLISH_PUBLISHED_FULL
+        assert s.get("publish_state") != PUBLISH_PUBLISHED_FULL
+
+
+def test_F11_replay_after_failed_run_succeeds(tmp_path):
+    """PATCH-B: A FAILED snapshot must not block a follow-up retry
+    (existing RUNNING guard was the reason we mark FAILED). Rerunning
+    the same plan with a fresh snapshot id after a partial-write crash
+    must complete cleanly with 0 duplicate-key errors — the shared
+    incremental writer reclassifies any surviving rows as UNCHANGED.
+    """
+    pipe = _make_pipeline(tmp_path, ["H00001", "H00002", "H00003"])
+
+    # First attempt: fail on the SECOND insert_sections call so the
+    # first N sections land but the rest do not. Under the shared
+    # MemoryMaterializeStore, `insert_sections` is called exactly once
+    # (all sections at once), so we simulate the partial state by
+    # manually pre-populating chemicals + some sections into a store
+    # for the SECOND run.
+    factory, holder1 = _shared_state_capture()
+
+    def _factory1():
+        mat_store, pub_store = factory()
+        original = mat_store.insert_sections
+        # Keep the original reachable so attempt 2 can restore it.
+        mat_store.__dict__["_original_insert_sections"] = original
+
+        def _raise(rows):
+            # Land the first bundle's worth of sections, then raise.
+            first_uuid = str(rows[0]["chemical_id"])
+            partial = [r for r in rows if str(r["chemical_id"]) == first_uuid]
+            original(partial)
+            raise RuntimeError("simulated partial insert_sections failure")
+
+        mat_store.insert_sections = _raise
+        return mat_store, pub_store
+
+    args1 = _args_ns(
+        seo_manifest=str(pipe["seo_path"]),
+        chem05_plan_jsonl=str(pipe["chem05"]["plan_jsonl"]),
+        chem05_manifest=str(pipe["chem05"]["manifest"]),
+        chem05_report=str(pipe["chem05"]["report"]),
+        snapshot_id="snap-F11-attempt1",
+    )
+    with pytest.raises(RuntimeError, match="simulated partial insert_sections"):
+        ex._run(args1, store_factory=_factory1)
+
+    # Attempt 1 left: 3 chemicals inserted (chunk was single call),
+    # 16 sections for the first chemical only, snapshot marked FAILED.
+    mat_store_1 = holder1["mat"]
+    assert mat_store_1.get_snapshot("snap-F11-attempt1")["status"] == SNAPSHOT_FAILED
+    assert len(mat_store_1._chemicals_by_key) == 3
+    # 16 sections landed for the first chemical.
+    assert sum(1 for _ in mat_store_1._sections_by_pair) == 16
+
+    # Second attempt: replay against the SAME state (same store), with
+    # a fresh snapshot id. Existing rows should reclassify as UNCHANGED
+    # (chemicals) or split UNCHANGED/NEW (sections) with no crash.
+    def _factory2():
+        # Return the same mat_store from attempt 1 so the DB state
+        # is carried forward — but restore the original
+        # `insert_sections` bound method so the raising stub from
+        # attempt 1 doesn't fire again.
+        original = mat_store_1.__dict__.get("_original_insert_sections")
+        if original is not None:
+            mat_store_1.insert_sections = original
+        # Rebuild a pub_store wired to mat_store_1's live dicts so
+        # publish_preflight's section-count check reads the sections
+        # actually written by the materialize phase (identical wiring
+        # to _shared_stores()).
+        pub_store = pub.MemoryPublishStore()
+        pub_store._snapshots = mat_store_1._snapshots
+        pub_store._items = mat_store_1._snapshot_items
+
+        def _sections_live(snapshot_id):
+            chem_uuids = {
+                str(i.get("chemical_id"))
+                for i in mat_store_1._snapshot_items
+                if str(i.get("snapshot_id")) == str(snapshot_id)
+                and i.get("in_snapshot", True) is True
+            }
+            return [
+                {"chemical_id": cid, "section_no": sno}
+                for (cid, sno) in mat_store_1._sections_by_pair.keys()
+                if str(cid) in chem_uuids
+            ]
+
+        pub_store.section_count_for_snapshot = (
+            lambda sid: len({(r["chemical_id"], int(r["section_no"]))
+                             for r in _sections_live(sid)})
+        )  # type: ignore
+        pub_store.duplicate_section_pairs_for_snapshot = lambda sid: 0  # type: ignore
+        return mat_store_1, pub_store
+
+    args2 = _args_ns(
+        seo_manifest=str(pipe["seo_path"]),
+        chem05_plan_jsonl=str(pipe["chem05"]["plan_jsonl"]),
+        chem05_manifest=str(pipe["chem05"]["manifest"]),
+        chem05_report=str(pipe["chem05"]["report"]),
+        snapshot_id="snap-F11-attempt2",
+    )
+    result = ex._run(args2, store_factory=_factory2)
+    # Replay succeeded end-to-end.
+    assert result["snapshot_status_after_materialize"] == SNAPSHOT_COMPLETED
+    # All 3 chemicals ended up in the second snapshot's membership.
+    assert result["materialized_snapshot_items"] == 3
+    # 0 chemical INSERTs on the replay — the 3 rows already existed
+    # from attempt 1 and reclassify as UNCHANGED.
+    write_report = result["materialize_write_report"]
+    assert write_report["chemicals"]["unchanged"] == 3
+    assert write_report["chemicals"]["new"] == 0
+    # First chemical's 16 sections are UNCHANGED; the other 2 chemicals'
+    # 16×2 = 32 sections are NEW on this replay.
+    assert write_report["sections"]["unchanged"] == 16
+    assert write_report["sections"]["new"] == 32

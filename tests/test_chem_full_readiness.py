@@ -541,6 +541,133 @@ def test_immutable_section_field_refused():
     assert store.get_section("uu-1", 5)["section_hash"] == "H_NEW"
 
 
+# ---------------------------------------------------------------------------
+# PATCH-A — bulk read (query-count scaling)
+# ---------------------------------------------------------------------------
+
+
+class _CountingStore(w.MemoryMaterializeStore):
+    """Memory store that counts every DB read for scaling assertions.
+
+    - `chem_point_reads` and `sec_point_reads` fire on the pre-PATCH-A
+      per-row lookup path (get_chemical_by_natural_key / get_section).
+    - `chem_bulk_reads` and `sec_bulk_reads` fire on the PATCH-A bulk
+      path (get_chemicals_by_natural_keys / get_sections_by_chemical_ids).
+    """
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.chem_point_reads = 0
+        self.sec_point_reads = 0
+        self.chem_bulk_reads = 0
+        self.sec_bulk_reads = 0
+
+    def get_chemical_by_natural_key(self, source_id, source_key):
+        self.chem_point_reads += 1
+        return super().get_chemical_by_natural_key(source_id, source_key)
+
+    def get_section(self, chemical_id, section_no):
+        self.sec_point_reads += 1
+        return super().get_section(chemical_id, section_no)
+
+    def get_chemicals_by_natural_keys(self, pairs):
+        self.chem_bulk_reads += 1
+        return super().get_chemicals_by_natural_keys(pairs)
+
+    def get_sections_by_chemical_ids(self, chemical_ids):
+        self.sec_bulk_reads += 1
+        return super().get_sections_by_chemical_ids(chemical_ids)
+
+
+def test_A1_bulk_read_replaces_point_reads_in_execute():
+    """execute_incremental_write MUST use the bulk-read helpers exactly
+    once each and MUST NOT issue per-row point reads during classify+write.
+    """
+    # 5 existing chemicals + 3 new ones in the plan (mixed workload).
+    ids = [(f"E{i:05d}", f"uu-E{i:05d}") for i in range(1, 6)]
+    chems_existing = [
+        _existing_chem_row(cid, id=uid, content_id=f"CHEM:{uid}",
+                           source_content_hash=f"H-{cid}")
+        for cid, uid in ids
+    ]
+    sections_existing = [
+        _existing_section_row(uid, n, f"H-{cid}-{n}")
+        for cid, uid in ids for n in range(1, 17)
+    ]
+    plan = [
+        _plan_bundle(cid, source_content_hash=f"H-{cid}",
+                     section_hashes={n: f"H-{cid}-{n}" for n in range(1, 17)})
+        for cid, _ in ids
+    ] + [_plan_bundle(f"N{i:05d}", source_content_hash=f"H-N{i}")
+         for i in range(1, 4)]
+    inputs = _plan_inputs(plan)
+    store = _CountingStore(
+        chemicals=chems_existing, sections=sections_existing,
+    )
+
+    report = w.execute_incremental_write(
+        inputs, store=store, snapshot_id="snap-A1",
+        id_factory=_deterministic_id_factory(),
+    )
+
+    # Exactly one bulk chemical read + one bulk section read fed both
+    # classify and the write-phase decision.
+    assert store.chem_bulk_reads == 1
+    assert store.sec_bulk_reads == 1
+    # Zero per-row section point reads during classify+write; the only
+    # per-row chemical point reads that are allowed are the post-INSERT
+    # sanity checks on NEW rows (one per NEW chemical, WO §7 verify).
+    assert store.sec_point_reads == 0
+    # 3 NEW chemicals × one sanity re-read each = 3 point reads allowed.
+    assert store.chem_point_reads == report.chemicals_new == 3
+
+
+def test_A2_bulk_read_query_count_scales_with_chunks_not_rows():
+    """Prove that adding more rows does NOT proportionally increase the
+    number of DB round-trips. Two runs — one with 5 existing chemicals
+    and one with 400 — must both make exactly 1 bulk chemical read
+    and 1 bulk section read for the classify+write pipeline."""
+    def _run(existing_count):
+        ids = [(f"P{i:05d}", f"uu-P{i:05d}") for i in range(1, existing_count + 1)]
+        chems_existing = [
+            _existing_chem_row(cid, id=uid, content_id=f"CHEM:{uid}",
+                               source_content_hash=f"H-{cid}")
+            for cid, uid in ids
+        ]
+        sections_existing = [
+            _existing_section_row(uid, n, f"H-{cid}-{n}")
+            for cid, uid in ids for n in range(1, 17)
+        ]
+        plan = [
+            _plan_bundle(cid, source_content_hash=f"H-{cid}",
+                         section_hashes={n: f"H-{cid}-{n}" for n in range(1, 17)})
+            for cid, _ in ids
+        ]
+        inputs = _plan_inputs(plan)
+        store = _CountingStore(
+            chemicals=chems_existing, sections=sections_existing,
+        )
+        w.execute_incremental_write(
+            inputs, store=store, snapshot_id="snap-A2",
+            id_factory=_deterministic_id_factory(),
+        )
+        return store
+
+    small = _run(5)
+    large = _run(400)
+    # Bulk call count is invariant across scale.
+    assert small.chem_bulk_reads == large.chem_bulk_reads == 1
+    assert small.sec_bulk_reads == large.sec_bulk_reads == 1
+    # And absolutely no per-row section point reads scaled with row count.
+    assert small.sec_point_reads == 0
+    assert large.sec_point_reads == 0
+
+
+# ---------------------------------------------------------------------------
+# PATCH-B — RUNNING → FAILED closure
+# ---------------------------------------------------------------------------
+
+
 def test_deterministic_replay_produces_identical_write_report():
     """Same plan + same store baseline + same id_factory → identical report."""
     plan = [_plan_bundle(f"P{i:05d}", source_content_hash=f"H{i}")
