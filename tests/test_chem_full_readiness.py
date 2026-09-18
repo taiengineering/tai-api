@@ -610,16 +610,15 @@ def test_A1_bulk_read_replaces_point_reads_in_execute():
         id_factory=_deterministic_id_factory(),
     )
 
-    # Exactly one bulk chemical read + one bulk section read fed both
-    # classify and the write-phase decision.
-    assert store.chem_bulk_reads == 1
-    assert store.sec_bulk_reads == 1
-    # Zero per-row section point reads during classify+write; the only
-    # per-row chemical point reads that are allowed are the post-INSERT
-    # sanity checks on NEW rows (one per NEW chemical, WO §7 verify).
+    # PATCH-2: (1) preload feeds classify + write-phase decision, and
+    # (2) NEW-post-insert verification is a single bulk fetch — total
+    # 2 chemical bulk reads and 1 section bulk read for the whole run.
+    assert store.chem_bulk_reads == 2   # preload + NEW verify
+    assert store.sec_bulk_reads == 1    # preload only; write uses the map
+    # PATCH-2 §2: NEW verification is bulk, not per-row — zero chemical
+    # point reads even with 3 NEW chemicals.
+    assert store.chem_point_reads == 0
     assert store.sec_point_reads == 0
-    # 3 NEW chemicals × one sanity re-read each = 3 point reads allowed.
-    assert store.chem_point_reads == report.chemicals_new == 3
 
 
 def test_A2_bulk_read_query_count_scales_with_chunks_not_rows():
@@ -664,8 +663,152 @@ def test_A2_bulk_read_query_count_scales_with_chunks_not_rows():
 
 
 # ---------------------------------------------------------------------------
-# PATCH-B — RUNNING → FAILED closure
+# PATCH-2 — preflight preload sharing + NEW bulk verify
 # ---------------------------------------------------------------------------
+
+
+def test_B1_preflight_plus_writer_zero_point_reads_end_to_end():
+    """The full preflight → writer chain (as invoked by the executor)
+    must issue zero per-row point reads. Under PATCH-2, the executor
+    calls preload_existing_state once and passes the ExistingState to
+    both preflight and execute_incremental_write, so no matter how
+    many existing rows there are, no chemical/section point read
+    scales with row count."""
+    ids = [(f"E{i:05d}", f"uu-E{i:05d}") for i in range(1, 51)]
+    chems_existing = [
+        _existing_chem_row(cid, id=uid, content_id=f"CHEM:{uid}",
+                           source_content_hash=f"H-{cid}")
+        for cid, uid in ids
+    ]
+    sections_existing = [
+        _existing_section_row(uid, n, f"H-{cid}-{n}")
+        for cid, uid in ids for n in range(1, 17)
+    ]
+    plan = [
+        _plan_bundle(cid, source_content_hash=f"H-{cid}",
+                     section_hashes={n: f"H-{cid}-{n}" for n in range(1, 17)})
+        for cid, _ in ids
+    ]
+    # Give the plan the eligibility fields preflight needs.
+    inputs = w.MaterializePlanInputs(
+        manifest={"execute_eligible": True,
+                  "responses_sha256": "resp-sha",
+                  "plan_file_sha256": "plan-file-sha",
+                  "plan_semantic_sha256": "plan-sem-sha",
+                  "snapshot": {"metrics_json": {}}},
+        report={"plan_sha256": "plan-sem-sha",
+                "responses_sha256": "resp-sha",
+                "execute_eligible": True},
+        chemicals=tuple(plan),
+    )
+    store = _CountingStore(
+        chemicals=chems_existing, sections=sections_existing,
+    )
+
+    # Executor-shaped call chain:
+    state = w.preload_existing_state(inputs, store)
+    _ = w.preflight(inputs, store=store, preloaded=state)
+    _ = w.execute_incremental_write(
+        inputs, store=store, snapshot_id="snap-B1",
+        id_factory=_deterministic_id_factory(),
+        preloaded=state,
+    )
+
+    # PATCH-2: exactly ONE bulk chemical read + ONE bulk section read
+    # for the whole preflight+writer chain. No NEW verify call because
+    # there are 0 NEW chemicals in this plan.
+    assert store.chem_bulk_reads == 1
+    assert store.sec_bulk_reads == 1
+    # Absolutely zero point reads across preflight + write.
+    assert store.chem_point_reads == 0
+    assert store.sec_point_reads == 0
+
+
+def test_B2_new_verification_is_bulk_not_per_row():
+    """400 NEW chemicals should be verified via a single bulk fetch,
+    not 400 per-row point reads. Under PATCH-2 §2 the executor's
+    chem_bulk_reads increments once for the preload and once for the
+    post-insert verification — 2 total — regardless of NEW count."""
+    plan = [_plan_bundle(f"N{i:05d}", source_content_hash=f"H-N{i}")
+            for i in range(1, 401)]
+    inputs = w.MaterializePlanInputs(
+        manifest={"execute_eligible": True,
+                  "responses_sha256": "resp-sha",
+                  "plan_file_sha256": "plan-file-sha",
+                  "plan_semantic_sha256": "plan-sem-sha",
+                  "snapshot": {"metrics_json": {}}},
+        report={"plan_sha256": "plan-sem-sha",
+                "responses_sha256": "resp-sha",
+                "execute_eligible": True},
+        chemicals=tuple(plan),
+    )
+    store = _CountingStore()  # empty DB → 400 NEW
+
+    state = w.preload_existing_state(inputs, store)
+    report = w.execute_incremental_write(
+        inputs, store=store, snapshot_id="snap-B2",
+        id_factory=_deterministic_id_factory(),
+        preloaded=state,
+    )
+
+    assert report.chemicals_new == 400
+    # 2 chemical bulk reads: preload + NEW verify. No 400-way point reads.
+    assert store.chem_bulk_reads == 2
+    assert store.chem_point_reads == 0
+    # No existing chemicals → no existing chemical UUIDs → the section
+    # preload optimization skips the bulk fetch. This is the correct
+    # empty-DB behavior; both A1 (partial existing) and B1 (all existing)
+    # cover the sec_bulk_reads == 1 case.
+    assert store.sec_bulk_reads == 0
+    assert store.sec_point_reads == 0
+
+
+def test_B3_preflight_regression_still_passes():
+    """The existing PATCH-1 regressions (CONFLICT fail-closed, identity
+    preservation, expanded corpus, deterministic replay) must all still
+    hold under PATCH-2. This test walks the same shape as F2 and F6
+    plus F4 under the new preload path to prove nothing regressed."""
+    # F2-style: replay against DB seeded with same rows → all UNCHANGED.
+    ids = [("P00001", "uu-P00001"), ("P00002", "uu-P00002")]
+    chems = [
+        _existing_chem_row(cid, id=uid, content_id=f"CHEM:{uid}",
+                           source_content_hash=f"H-{cid}")
+        for cid, uid in ids
+    ]
+    secs = [_existing_section_row(uid, n, f"H-{cid}-{n}")
+            for cid, uid in ids for n in range(1, 17)]
+    plan = [_plan_bundle(cid, source_content_hash=f"H-{cid}",
+                         section_hashes={n: f"H-{cid}-{n}" for n in range(1, 17)})
+            for cid, _ in ids]
+    inputs = _plan_inputs(plan)
+    store = w.MemoryMaterializeStore(chemicals=chems, sections=secs)
+    state = w.preload_existing_state(inputs, store)
+    r = w.execute_incremental_write(
+        inputs, store=store, snapshot_id="snap-B3-a",
+        id_factory=_deterministic_id_factory(), preloaded=state,
+    )
+    assert r.chemicals_unchanged == 2
+    assert r.chemicals_new == 0
+    assert r.chemicals_changed == 0
+    # Identity byte-stable.
+    for cid, uid in ids:
+        row = store.get_chemical_by_natural_key("KOSHA_MSDS", cid)
+        assert row["id"] == uid
+        assert row["content_id"] == f"CHEM:{uid}"
+
+    # F6-style: identity conflict → IncrementalWriteBlocked.
+    bad = _existing_chem_row("C00001", id="uu-C00001",
+                             content_id="CHEM:uu-C00001",
+                             source_content_hash="H")
+    bad["chem_id"] = "999999"
+    inputs_conflict = _plan_inputs([_plan_bundle("C00001", source_content_hash="H")])
+    store2 = w.MemoryMaterializeStore(chemicals=[bad])
+    state2 = w.preload_existing_state(inputs_conflict, store2)
+    with pytest.raises(w.IncrementalWriteBlocked):
+        w.execute_incremental_write(
+            inputs_conflict, store=store2, snapshot_id="snap-B3-b",
+            id_factory=_deterministic_id_factory(), preloaded=state2,
+        )
 
 
 def test_deterministic_replay_produces_identical_write_report():

@@ -253,11 +253,19 @@ def _run(args, *, store_factory=None) -> dict:
 
     mat_store, pub_store = store_factory()
 
-    # ── Step 3: live preflight
+    # ── PATCH-2 §1: preload existing DB state ONCE. The same
+    # `ExistingState` is passed to both preflight and the writer so
+    # the executor pipeline makes exactly one bulk chemical fetch +
+    # one bulk section fetch — instead of preflight doing point-reads
+    # over 20,568 + 329,088 rows before the writer even starts.
+    preloaded = w.preload_existing_state(plan_inputs, mat_store)
+
+    # ── Step 3: live preflight (reuses the preloaded state)
     preflight = w.preflight(
         plan_inputs,
         store=mat_store,
         publication_scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+        preloaded=preloaded,
     )
     if not preflight.can_execute:
         raise ExecutorError(
@@ -308,6 +316,7 @@ def _run(args, *, store_factory=None) -> dict:
         try:
             write_report = w.execute_incremental_write(
                 plan_inputs, store=mat_store, snapshot_id=snapshot_id,
+                preloaded=preloaded,
             )
         except w.IncrementalWriteBlocked as exc:
             raise ExecutorError(

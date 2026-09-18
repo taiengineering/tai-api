@@ -310,17 +310,96 @@ tests/test_chem_seo_preview_execute.py                  19 / 19  PASS
 Focused CHEM regression                                190 / 190  PASS
 ```
 
+## PATCH-2 — Preflight preload sharing + NEW bulk verify
+
+Two follow-up fixes to close the remaining N+1 in the executor's
+end-to-end path.
+
+### PATCH-2 §1 — single preload shared by preflight + writer
+
+Before PATCH-2, `preflight()` called `classify_chemicals` and
+`classify_sections` without preloaded maps, so those still issued
+per-row point reads:
+
+```text
+Executor _run:
+  preflight()             ← FULL: 20,568 chem + 329,088 sec point reads
+  execute_incremental_write()  ← preload here, then bulk classify + write
+```
+
+After PATCH-2, the executor calls `preload_existing_state` once and
+passes the returned `ExistingState` to both:
+
+```text
+services/kosha_msds/materialize_writer.py
+  @dataclass(frozen=True) class ExistingState
+  def preload_existing_state(inputs, store) -> ExistingState
+  def preflight(..., preloaded: Optional[ExistingState] = None)
+  def execute_incremental_write(..., preloaded: Optional[ExistingState] = None)
+
+tools/chem_seo_preview/execute_production.py
+  preloaded = w.preload_existing_state(plan_inputs, mat_store)
+  preflight  = w.preflight(..., preloaded=preloaded)
+  write_report = w.execute_incremental_write(..., preloaded=preloaded)
+```
+
+Round-trip budget for the whole executor pipeline (FULL):
+
+```text
+before PATCH-2   ~349,000 point reads before writer + ~515 bulk in writer
+after PATCH-2    ~515 bulk round-trips total across preflight + writer
+```
+
+Backwards compat: both `preflight()` and `execute_incremental_write()`
+still call `preload_existing_state` internally when `preloaded=None`,
+so pre-existing tests that don't preload still work — they just do
+the fetch inside instead of the executor.
+
+### PATCH-2 §2 — bulk NEW post-insert verification
+
+Before PATCH-2, the "did the INSERT actually land with the expected
+id?" sanity check ran one `get_chemical_by_natural_key` per NEW row.
+For FULL that's an extra 18k+ point reads.
+
+After PATCH-2, the writer issues a single
+`store.get_chemicals_by_natural_keys(new_keys)` after all NEW rows
+are inserted and validates the batch in memory. Backwards compat:
+stores lacking the bulk method fall through to the per-row path.
+
+## PATCH-2 tests
+
+```text
+tests/test_chem_full_readiness.py                       16 / 16  PASS
+
+  F1..F8 unchanged
+  A1 revised   preload + NEW verify = 2 chem bulk reads, 1 sec bulk read,
+                zero chem_point_reads (was 3, now 0), zero sec_point_reads
+  A2 unchanged round-trip count invariant across 5 vs 400 existing
+  + B1  full preflight + writer end-to-end zero point reads
+        (50 existing chemicals: 1 chem_bulk + 1 sec_bulk = 2 round-trips total)
+  + B2  400 NEW post-insert verification = 1 bulk fetch, 0 point reads
+        (was 400 point reads, now 0)
+  + B3  PATCH-2 preload path preserves F2/F4/F6 semantics
+        (all UNCHANGED replay + CONFLICT fail-closed)
+
+tests/test_chem_seo_preview_execute.py                  19 / 19  PASS  (unchanged)
+
+Focused CHEM regression                                193 / 193  PASS
+```
+
 ## Verdict
 
 ```text
-WO-CHEM-FULL-READINESS-001 PATCH-1 = PASS / READY FOR GPT FINAL DELTA VERIFY
+WO-CHEM-FULL-READINESS-001 PATCH-2 = PASS / READY FOR MERGE
 
-- Incremental writer preserves canonical identity (PATCH-1 unchanged)
-- N+1 point reads eliminated; FULL round-trip budget cut ~1,300x
+- Incremental writer preserves canonical identity
+- Preflight and writer share one preload (2 bulk fetches total)
+- NEW post-insert verification is bulk, not per-row
 - RUNNING snapshots are always closed to FAILED on write error
+- Executor pipeline (preflight → write) hits 0 point reads under FULL
 - No production DB write under this WO
 - Pre-existing SEO preview tests all still pass unchanged
 
-NEXT  =  GPT final delta verify → merge → P2 FULL cutover rehearsal
+NEXT  =  merge → P2 FULL cutover rehearsal
 STOP
 ```

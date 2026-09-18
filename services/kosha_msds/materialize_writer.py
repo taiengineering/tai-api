@@ -680,6 +680,7 @@ def preflight(
     on_disk_plan_file_sha256: Optional[str] = None,
     resume_snapshot_id: Optional[str] = None,
     publication_scope: str = PUBLICATION_SCOPE_FULL,
+    preloaded: Optional["ExistingState"] = None,
 ) -> PreflightReport:
     """Read-only preflight. Returns a PreflightReport whose can_execute
     is True only if all block gates are clean.
@@ -738,8 +739,19 @@ def preflight(
     if incomplete:
         reasons.append(BLOCK_INCOMPLETE_MEMBERSHIP)
 
-    chem_class = classify_chemicals(inputs.chemicals, store=store)
-    sec_class = classify_sections(inputs.chemicals, chem_class, store=store)
+    # PATCH-2: reuse a single bulk-preloaded map for both classify passes
+    # so preflight+writer make just one DB read pass total. Callers that
+    # pre-load and pass `preloaded=` avoid a duplicate fetch here.
+    if preloaded is None:
+        preloaded = preload_existing_state(inputs, store)
+    chem_class = classify_chemicals(
+        inputs.chemicals, store=store,
+        preloaded_chemicals=preloaded.chemicals,
+    )
+    sec_class = classify_sections(
+        inputs.chemicals, chem_class, store=store,
+        preloaded_sections=preloaded.sections,
+    )
 
     chem_conflicts = [c for c in chem_class if c.kind == CONFLICT]
     sec_conflicts = [s for s in sec_class if s.kind == CONFLICT]
@@ -1082,13 +1094,25 @@ def _section_mutable_patch(section: Mapping[str, Any]) -> dict:
     })
 
 
-def _preload_existing_state(
+@dataclass(frozen=True)
+class ExistingState:
+    """Bulk-preloaded DB snapshot shared by preflight and the writer.
+
+    Callers should acquire this once via `preload_existing_state()` and
+    pass it to both `preflight(preloaded=...)` and
+    `execute_incremental_write(preloaded=...)` so the classify pass in
+    preflight and the classify+write pass in the writer never issue
+    per-row point reads. Under FULL this reduces the read budget from
+    ~349k+ point reads to ~515 REST round-trips.
+    """
+    chemicals: Mapping[tuple[str, str], Mapping[str, Any]]
+    sections: Mapping[tuple[str, int], Mapping[str, Any]]
+
+
+def preload_existing_state(
     inputs: MaterializePlanInputs,
     store,
-) -> tuple[
-    dict[tuple[str, str], dict],
-    dict[tuple[str, int], dict],
-]:
+) -> ExistingState:
     """One bulk-read pass for both chemicals and sections.
 
     - Fetches every chemical whose natural key appears in the plan.
@@ -1140,7 +1164,16 @@ def _preload_existing_state(
     else:
         preloaded_sections = {}
 
-    return preloaded_chemicals, preloaded_sections
+    return ExistingState(
+        chemicals=preloaded_chemicals,
+        sections=preloaded_sections,
+    )
+
+
+# Back-compat alias — older internal callers used the underscore name.
+def _preload_existing_state(inputs, store):
+    state = preload_existing_state(inputs, store)
+    return dict(state.chemicals), dict(state.sections)
 
 
 def execute_incremental_write(
@@ -1149,6 +1182,7 @@ def execute_incremental_write(
     store,
     snapshot_id: str,
     id_factory=None,
+    preloaded: Optional["ExistingState"] = None,
 ) -> IncrementalWriteReport:
     """Classify then write only the diffs.
 
@@ -1169,13 +1203,16 @@ def execute_incremental_write(
     if id_factory is None:
         id_factory = _default_id_factory
 
-    # ── PATCH-A preload ──
-    # Bulk-read the existing DB state once, then reuse the maps for
-    # classification AND for the section-write decision below. This
-    # collapses what would have been 20,568 + 329,088 + 329,088
-    # per-row point reads under FULL (see the WO PATCH-1 numbers) into
-    # a handful of chunk/page round-trips.
-    preloaded_chems, preloaded_sections = _preload_existing_state(inputs, store)
+    # ── PATCH-A / PATCH-2 preload ──
+    # Bulk-read the existing DB state once and reuse the maps for
+    # classification AND for the section-write decision below. When
+    # the caller has already preloaded (typically the executor, which
+    # passes the same ExistingState to preflight() and to this call),
+    # we skip the fetch — see PATCH-2 §1.
+    if preloaded is None:
+        preloaded = preload_existing_state(inputs, store)
+    preloaded_chems = preloaded.chemicals
+    preloaded_sections = preloaded.sections
 
     chem_class = classify_chemicals(
         inputs.chemicals, store=store,
@@ -1246,23 +1283,37 @@ def execute_incremental_write(
         ]
         store.insert_chemicals(insert_rows)
 
-    # Verify each NEW chemical landed with the expected id, mirroring
-    # execute_production.py's post-insert sanity check.
-    for key, chem_uuid in sorted(chem_uuid_by_key.items()):
-        if key not in inserts_by_key:
-            continue
-        row = store.get_chemical_by_natural_key(key[0], key[1])
-        if not row:
-            raise IncrementalWriteBlocked(
-                f"chemical missing after insert source_id={key[0]!r} "
-                f"source_key={key[1]!r}"
-            )
-        got = row.get("id")
-        if got and str(got) != chem_uuid:
-            raise IncrementalWriteBlocked(
-                f"chemical id drift for source_key={key[1]!r} "
-                f"expected={chem_uuid!r} got={got!r}"
-            )
+    # PATCH-2 §2: bulk-verify every NEW chemical landed with the expected
+    # UUID. Under FULL (18k+ NEW rows) the pre-PATCH per-row point read
+    # would issue one round-trip per row; a single get_chemicals_by_natural_keys
+    # collapses that to `ceil(NEW / _CHEMICAL_KEY_CHUNK)` round-trips.
+    # Backwards compat: stores without the bulk method fall through to
+    # the old per-row path (older fixture doubles).
+    if inserts_by_key:
+        new_keys = sorted(inserts_by_key.keys())
+        bulk_verify = getattr(store, "get_chemicals_by_natural_keys", None)
+        if callable(bulk_verify):
+            verify_map = dict(bulk_verify(new_keys))
+        else:
+            verify_map = {}
+            for key in new_keys:
+                row = store.get_chemical_by_natural_key(key[0], key[1])
+                if row is not None:
+                    verify_map[key] = dict(row)
+        for key in new_keys:
+            expected_uuid = chem_uuid_by_key[key]
+            row = verify_map.get(key)
+            if not row:
+                raise IncrementalWriteBlocked(
+                    f"chemical missing after insert source_id={key[0]!r} "
+                    f"source_key={key[1]!r}"
+                )
+            got = row.get("id")
+            if got and str(got) != expected_uuid:
+                raise IncrementalWriteBlocked(
+                    f"chemical id drift for source_key={key[1]!r} "
+                    f"expected={expected_uuid!r} got={got!r}"
+                )
 
     # UPDATE CHANGED chemicals (mutable fields only; identity preserved).
     for key in sorted(updates_by_key.keys()):
