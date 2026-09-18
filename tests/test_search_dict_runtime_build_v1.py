@@ -149,15 +149,15 @@ def test_missing_projection_raises_search_dict_error(monkeypatch, tmp_path):
         svc.health()
 
 
-def test_kiwi_optional_missing_dict_graceful(built_dir, monkeypatch, tmp_path):
-    """If the Kiwi user dictionary is missing but the projection is
-    present, T4 must degrade gracefully — no exception, no 503, just
-    fewer active tiers. Deterministic tiers must still function."""
+def test_kiwi_missing_dict_disables_t4(built_dir, monkeypatch, tmp_path):
+    """PATCH-1 §A: if the Kiwi user dictionary is missing but the
+    projection is present, T4 is explicitly disabled — no exception,
+    no 503, but `token_tier=False`. Deterministic tiers must still
+    function. Previously the code passed `user_dict_path=None` to
+    `TokenTier` which let base Kiwi keep T4 nominally active — a
+    false-positive readiness signal for SEARCH-01 acceptance."""
     monkeypatch.setenv("TAI_SEARCH_PROJECTION",
                        str(built_dir / "TAI_SEARCH_RUNTIME_PROJECTION_v1.json"))
-    # Point Kiwi dict at a nonexistent path; svc._get_token_tier is
-    # tolerant of missing paths — the path is passed as None to the
-    # TokenTier constructor when the file doesn't exist.
     monkeypatch.setenv("TAI_SEARCH_KIWI_DICT",
                        str(tmp_path / "no-kiwi-dict.txt"))
     monkeypatch.delenv("TAI_SEARCH_SCRATCH_DSN", raising=False)
@@ -170,6 +170,62 @@ def test_kiwi_optional_missing_dict_graceful(built_dir, monkeypatch, tmp_path):
     # not Kiwi-dict-missing.
     h = svc.health()
     assert h["snapshot"] == "SEARCH-DICT-LEGPROD-2026-09-16"
-    # A deterministic lookup still works.
+    # PATCH-1 §A: token_tier MUST report False when the user dictionary
+    # is absent. This is the false-positive that PATCH-1 fixes.
+    assert h["token_tier"] is False, h
+    # And a deterministic (T1-T3) lookup still works.
     r = svc.lookup("MSDS", limit=3, subject_type="CHEM_TERM")
     assert any(it["subject_key"] == "물질안전보건자료" for it in r["items"]), r
+
+
+def test_helper_fails_when_manifest_missing(tmp_path, monkeypatch):
+    """PATCH-1 §B1: BUILD_SHA256SUMS.txt missing → helper returns
+    non-zero. The Dockerfile RUN will abort image build."""
+    fake_repo = tmp_path / "fake-repo"
+    fake_repo.mkdir()
+    # Copy the compiler + normalize + seed into a fake repo layout so
+    # `python3 tools/search_dict/build_dictionary.py build` still runs,
+    # but with no BUILD_SHA256SUMS.txt in artifacts/.
+    import shutil
+    shutil.copytree(REPO_ROOT / "tools", fake_repo / "tools")
+    shutil.copytree(REPO_ROOT / "scripts", fake_repo / "scripts")
+    (fake_repo / "tools" / "search_dict" / "artifacts" / "BUILD_SHA256SUMS.txt").unlink()
+
+    outdir = tmp_path / "out"
+    tmpdir = tmp_path / "tmp"
+    r = subprocess.run(
+        [sys.executable, str(fake_repo / "scripts" / "build_search_dict_runtime.py"),
+         "--outdir", str(outdir), "--tmpdir", str(tmpdir), "--seed", "seed_v2"],
+        cwd=str(fake_repo), capture_output=True, text=True, timeout=60,
+    )
+    assert r.returncode != 0, r.stdout
+    assert "manifest not found" in (r.stdout + r.stderr).lower()
+
+
+def test_helper_fails_when_manifest_missing_required_entry(tmp_path):
+    """PATCH-1 §B2: BUILD_SHA256SUMS.txt exists but lacks a required
+    runtime entry → helper returns non-zero. Canonical manifest in the
+    real repo is NOT modified — the test operates on a fake repo copy.
+    """
+    fake_repo = tmp_path / "fake-repo"
+    fake_repo.mkdir()
+    import shutil
+    shutil.copytree(REPO_ROOT / "tools", fake_repo / "tools")
+    shutil.copytree(REPO_ROOT / "scripts", fake_repo / "scripts")
+    # Strip out the projection entry from the manifest.
+    manifest = fake_repo / "tools" / "search_dict" / "artifacts" / "BUILD_SHA256SUMS.txt"
+    lines = manifest.read_text(encoding="utf-8").splitlines()
+    kept = [l for l in lines if "TAI_SEARCH_RUNTIME_PROJECTION_v1.json" not in l]
+    manifest.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+    outdir = tmp_path / "out"
+    tmpdir = tmp_path / "tmp"
+    r = subprocess.run(
+        [sys.executable, str(fake_repo / "scripts" / "build_search_dict_runtime.py"),
+         "--outdir", str(outdir), "--tmpdir", str(tmpdir), "--seed", "seed_v2"],
+        cwd=str(fake_repo), capture_output=True, text=True, timeout=60,
+    )
+    assert r.returncode != 0, r.stdout
+    msg = (r.stdout + r.stderr).lower()
+    assert "missing required entries" in msg
+    assert "tai_search_runtime_projection_v1.json" in msg

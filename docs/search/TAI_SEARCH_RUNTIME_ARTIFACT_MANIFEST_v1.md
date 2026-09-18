@@ -36,7 +36,7 @@ File-level SHA256 (byte-for-byte, for `sha256sum -c`):
 | File | Purpose | Runtime dep? | Expected SHA256 |
 |------|---------|--------------|-----------------|
 | `TAI_SEARCH_RUNTIME_PROJECTION_v1.json` | Deterministic tiers (T1-T3) projection | **Required** (else /search-dict = 503) | `4c1c7bb9bceafd8ccd700b2c130060d32776dbec1f7523f8ece0aeaf9f6677e1` |
-| `TAI_KIWI_USER_DICTIONARY_v1.txt` | Kiwi T4 user dictionary | Optional (T4 = graceful degradation if missing) | `780213e9eaf5fe3f5741aae01b06a3609fcd693632ded26753e1b4715bb4c469` |
+| `TAI_KIWI_USER_DICTIONARY_v1.txt` | Kiwi T4 user dictionary | **Required for T4** (missing ⇒ T4 explicitly disabled; deterministic tiers survive; NO HTTP 503) | `780213e9eaf5fe3f5741aae01b06a3609fcd693632ded26753e1b4715bb4c469` |
 | `TAI_KIWI_TERMS_v1.tsv` | Kiwi terms table (T4 evidence) | Optional (build-time artifact) | `20e48580904e769a1d1473673459de39c2cd6e4a91979534cea17df6101a07e6` |
 | `TAI_TERM_MASTER_v1.tsv` | Term master (offline verification) | Not runtime | `a906b95aa66a014601978ade18a1f1ef541c0cb96727070cfec1b6c66082d422` |
 | `TAI_TERM_RELATIONS_v1.tsv` | Term relations table (offline verification) | Not runtime | `2395054b487303ac455f66fc6f753fdf93e97b442463a61dc490558a4349b444` |
@@ -126,13 +126,17 @@ GET /search-dict/lookup?q=산업안전보건법
   →  status_code == 200
 ```
 
-## Optional tiers (unchanged)
+## Optional tiers
 
-- **T4 Kiwi**: available when `kiwipiepy` is importable (it is — pinned
-  in `requirements.txt:41-42`) AND the Kiwi user dictionary exists. The
-  Docker build produces both. Verified locally: `token_tier=True`.
-  Failure remains graceful — `TokenTier` init wrapped in
-  `try/except → False sentinel`; deterministic tiers continue serving.
+- **T4 Kiwi** — enabled only when BOTH `kiwipiepy` is importable
+  (pinned in `requirements.txt:41-42`) AND the Kiwi user dictionary
+  file exists. `_get_token_tier()` (post PATCH-1 §A) explicitly
+  short-circuits to `token_tier=False` when the dictionary is
+  missing — base-Kiwi fallback is not treated as an active T4
+  runtime. The Docker build produces the dictionary, so under normal
+  production this reports `token_tier=True`. If the dictionary is
+  removed or corrupted post-build, the service continues to serve
+  deterministic tiers with `token_tier=False` — NO HTTP 503.
 - **T6 Trigram**: enabled only when `TAI_SEARCH_SCRATCH_DSN` is set.
   UNSET in production; `trigram_tier=false` and `/search-dict/health`
   still returns HTTP 200.

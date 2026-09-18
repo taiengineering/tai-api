@@ -41,6 +41,12 @@ RUNTIME_FILES = (
     "TAI_SEARCH_RUNTIME_PROJECTION_v1.json",
     "TAI_KIWI_USER_DICTIONARY_v1.txt",
 )
+# Both runtime files are REQUIRED entries in BUILD_SHA256SUMS.txt.
+# PATCH-1 §B: a missing manifest or a missing required entry aborts
+# the image build (fail-closed). Previously the helper only warned
+# and skipped verification for the missing entry — that let a
+# manifest-corruption or accidental removal ship silently.
+REQUIRED_MANIFEST_ENTRIES = RUNTIME_FILES
 
 
 def _sha256(path: Path) -> str:
@@ -81,11 +87,25 @@ def build_runtime(outdir: Path, tmpdir: Path, seed: str) -> int:
     # to be the same as outdir, but local `--outdir /tmp/...` runs
     # still get real verification.
     manifest_path = repo_root / "tools" / "search_dict" / "artifacts" / "BUILD_SHA256SUMS.txt"
+
+    # PATCH-1 §B1: manifest file itself must exist. If someone deletes
+    # BUILD_SHA256SUMS.txt the build cannot verify SHAs and must abort.
+    if not manifest_path.exists():
+        print(f"ERROR: manifest not found: {manifest_path}", file=sys.stderr)
+        return 5
+
     expected = _parse_manifest(manifest_path)
-    for fn in RUNTIME_FILES:
-        if fn not in expected:
-            print(f"WARN: no expected SHA for {fn} in manifest; verification skipped for it",
-                  file=sys.stderr)
+
+    # PATCH-1 §B2: required runtime entries must be present in the
+    # manifest. WARN + skip is forbidden — a missing entry means the
+    # manifest is out of sync with production expectations and image
+    # build must fail-closed.
+    missing_entries = [fn for fn in REQUIRED_MANIFEST_ENTRIES
+                       if fn not in expected]
+    if missing_entries:
+        print(f"ERROR: manifest {manifest_path} is missing required entries: "
+              f"{missing_entries}", file=sys.stderr)
+        return 6
 
     tmpdir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
