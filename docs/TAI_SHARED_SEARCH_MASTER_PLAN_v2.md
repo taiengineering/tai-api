@@ -5,12 +5,16 @@
 > **Does NOT supersede** the Safety Knowledge Master Plan or the
 > Object Implementation Plan — see Authority Hierarchy below.
 > Owner: taiwang
-> Date frozen: 2026-09-18 (last touched: PR #402 PATCH-1 doc sync)
-> Live signal at freeze:
->   - PR #401 (CHEM-FULL-READINESS-005 harness) — OPEN, PATCH-1 in review
->   - PR #399 (CHEM-FULL-READINESS-004 ops observability) — MERGED to main (`f32e4a71`)
->   - production `/search-dict/*` — observed HTTP 503 during live acceptance
->     (in scope of SEARCH-01)
+> Date frozen: 2026-09-18 (last touched: 2026-09-19 post-#401 state sync)
+> Live signal:
+>   - PR #401 (CHEM-FULL-READINESS-005 harness + PATCH-1 + PATCH-2) —
+>     **MERGED** 2026-09-18. Merge commit `00e42587`. CHEM FULL
+>     readiness development = **CLOSED**.
+>   - PR #399 (CHEM-FULL-READINESS-004 ops observability) — MERGED (`f32e4a71`)
+>   - production `/search-dict/*` — observed HTTP 503 during live
+>     acceptance (in scope of SEARCH-01)
+>   - Current mainline = **SEARCH-00 Integration Audit** (this doc's
+>     first WO). CHEM P5 completion no longer gates SEARCH-00.
 
 ## Authority hierarchy
 
@@ -273,19 +277,30 @@ Paid Diagnosis 연결
 
 ### 1-6. CHEM
 
-현재 별도 Track에서 진행 중.
+**CHEM FULL 전환 준비개발 = CLOSED** (2026-09-18).
 
 ```text
 P1 Incremental Materializer     CLOSED / MERGED  (PR #395)
 P2 FULL Cutover/Rollback        CLOSED / MERGED  (PR #396)
 P3 Search backend QA            CLOSED / MERGED  (PR #398)
-P4 Ops Observability            CLOSED / MERGED  (PR #399, main = f32e4a71...)
-P5 FULL Acceptance Harness      IN_PROGRESS
-                                PR #401 OPEN, PATCH-1 REQUIRED
-                                (GPT delta verify: baseline gate + binding
-                                 verify + queue-required-on-full)
+P4 Ops Observability            CLOSED / MERGED  (PR #399)
+P5 FULL Acceptance Harness      CLOSED / MERGED  (PR #401,
+                                head = f3746dce…,
+                                merge commit = 00e42587…)
 
-CHEM-04 Hydration               병렬 진행 (별도 quota-limited stream)
+CHEM-04 Hydration               PARALLEL HOLD
+                                31,961 / 329,088 completed;
+                                next queue index → chemId=432377 / section=10;
+                                gate = 2026-09-19 09:30 KST + explicit
+                                       Owner GO required
+```
+
+각 후속 단계는 반드시 별도 Owner Approval:
+
+```text
+Hydration completion  ≠  FULL materialize
+                      ≠  PUBLISHED_FULL
+                      ≠  public_mode=full
 ```
 
 현재 Preview:
@@ -882,12 +897,13 @@ PR #399 merge. (완료 — main SHA `f32e4a71`)
 
 #### C1
 
-CHEM P5 Full Acceptance Harness. (PR #401 OPEN, PATCH-1 in review.)
+CHEM P5 Full Acceptance Harness. **CLOSED / MERGED** (PR #401,
+merge commit `00e42587`, 2026-09-18).
 
-CHEM hydration은 계속 별도 병렬.
+CHEM hydration은 계속 별도 병렬 (`PARALLEL HOLD`, 31,961 / 329,088).
 
-**이 Track 때문에 Search 작업을 기다리지 않는다** — SEARCH-00
-Integration Audit은 이 문서(#402) merge 직후부터 병렬 착수 가능.
+CHEM Track은 준비개발 종료. Search 본선(SEARCH-00~)이 지금
+현재 mainline.
 
 ---
 
@@ -1526,13 +1542,14 @@ Kiwi state
 NOW
 
 1. PR #399 merge                                = DONE (main = f32e4a71)
-2. CHEM P5                                      = PR #401 PATCH-1
-                                                  (does NOT block SEARCH-00)
+2. CHEM P5                                      = CLOSED / MERGED
+                                                  (PR #401, merge commit
+                                                   00e42587, 2026-09-18)
 
-병렬 (Track CHEM 과 무관)
+CHEM 준비개발 종료 — 이후 순서는 Track SEARCH가 mainline
 
-3. SEARCH-00 Integration Audit                  = may start immediately in
-                                                  parallel with #401 PATCH
+3. SEARCH-00 Integration Audit                  = CURRENT MAINLINE
+                                                  (WO-TAI-SHARED-SEARCH-000)
 4. SEARCH-01 Runtime 503 / v2 / Kiwi 정상화
 
         ↓
@@ -1722,24 +1739,28 @@ DUPLICATE
 
 ---
 
-## Appendix A. Parallel-track summary (post PATCH-1)
+## Appendix A. Track alignment (post-#401 merge)
 
 ```text
-Track CHEM                       Track SEARCH
-──────────                       ────────────
+Track CHEM                              Track SEARCH
+──────────                              ────────────
 
-PR #401 PATCH-1                  PR #402 merge (this doc)
-      │                                 │
-      └→ P5 close                       └→ SEARCH-00 Integration Audit
-                                              ↓
-                                          SEARCH-01
-                                          Runtime / v2 / Kiwi
-                                              ↓
-                                          Unified Search Index
-                                              ↓
-                                          Public / RISK / SaaS / Paid
+PR #395 P1  ─┐                          PR #402 (this doc)
+PR #396 P2  ─┤                                │
+PR #398 P3  ─┼─  ALL CLOSED / MERGED          └→ SEARCH-00 Integration Audit
+PR #399 P4  ─┤   (CHEM FULL readiness             = CURRENT MAINLINE
+PR #401 P5  ─┘    development = CLOSED)             ↓
+                                              SEARCH-01 Runtime / v2 / Kiwi
+CHEM-04 Hydration                                 ↓
+= PARALLEL HOLD                               SEARCH-02..05
+= 31,961 / 329,088                                ↓
+= Owner GO required                           SEARCH-06 Public migration
+                                                  ↓
+Next CHEM steps (materialize /                SEARCH-07 LEG candidate
+FULL publish / public_mode=full)                  ↓
+require separate Owner Approval each.         RISK-C0* / SaaS / Paid / Front
 ```
 
-**#402를 먼저 merge하든 #401을 먼저 merge하든 무방** (두 브랜치는
-독립). 그러나 CHEM P5 완료를 기다리지 않고 **SEARCH-00 Integration
-Audit은 지금 시작할 수 있다** — 그것이 이 문서의 핵심 결과다.
+CHEM 준비개발이 종료됐으므로 SEARCH-00은 **더 이상 대기할 이유가
+없다** — SEARCH 본선이 곧 mainline이다. CHEM-04 hydration의 별도
+safety gate는 이 흐름과 독립이다.
