@@ -254,9 +254,11 @@ def test_transport_allowlist_appends_work_facts_only():
     # WO-E2E-OBJ01-DIVING-COVERAGE-BACKLOG-FASTLANE-IMPLEMENT-001: +3 stable
     # diving-coverage inputs (diving_depth_m / diving_surface_ascent_restricted /
     # diving_decompression_stop_required). Baseline 212 → 215.
+    # WO-E2E-OBJ01-HIGH-PRESSURE-COMMON-COVERAGE-INTEGRATED-IMPLEMENT-001: +1
+    # has_caisson_work (Art.540/543 잠함공법). Baseline 215 → 216.
     # Uniqueness invariant preserved.
-    assert len(_LEG_INPUT_FIELDS) == 215
-    assert len(set(_LEG_INPUT_FIELDS)) == 215
+    assert len(_LEG_INPUT_FIELDS) == 216
+    assert len(set(_LEG_INPUT_FIELDS)) == 216
     assert KSIC_NOT_IN_TRANSPORT not in _LEG_INPUT_FIELDS
     assert "has_welding" in _LEG_INPUT_FIELDS
     assert "has_demolition" in _LEG_INPUT_FIELDS

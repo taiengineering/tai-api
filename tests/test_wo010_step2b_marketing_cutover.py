@@ -515,5 +515,5 @@ def test_T14_contract_files_still_importable_and_stable():
         "process_list", "equipment_list",
     ]
     assert hasattr(m4, "DiagnoseStep1Body")
-    assert len(m5._LEG_INPUT_FIELDS) == 215  # WO-...-DIVING-COVERAGE-BACKLOG-IMPLEMENT-001: 212→215 (+3 coverage inputs)
+    assert len(m5._LEG_INPUT_FIELDS) == 216  # WO-...-HPCC-INTEGRATED-IMPLEMENT-001: 215→216 (+1 has_caisson_work)
     assert len(m5._BUILDING_N1_FIELDS) == 32

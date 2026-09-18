@@ -166,6 +166,14 @@ _LEG_INPUT_FIELDS = (
     "diving_depth_m",
     "diving_surface_ascent_restricted",
     "diving_decompression_stop_required",
+    # WO-E2E-OBJ01-HIGH-PRESSURE-COMMON-COVERAGE-INTEGRATED-IMPLEMENT-001:
+    # +1 new HP-common stable input for Art.540/543 (잠함공법). No alias from
+    # has_high_pressure_work → has_caisson_work (caisson is a subtype axis).
+    # has_high_pressure_work / has_air_compressor /
+    # supplies_air_to_high_pressure_workroom_or_airlock /
+    # has_pressure_adjustment_chamber already exist in this allowlist; not
+    # re-added here.
+    "has_caisson_work",
     "has_confined_space", "has_welding", "has_mech_parking", "has_pressure_vessel",
     "has_demolition", "has_radiation", "has_rolling", "has_boiler", "has_conveyor",
     "has_steel_frame", "is_energy_intensive", "has_grinding", "has_painting", "has_blasting",
