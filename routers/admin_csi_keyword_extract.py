@@ -124,7 +124,7 @@ def _judge_group_resilient(rows: list[dict]) -> tuple[list[dict], list[dict]]:
 
 @router.post("/run")
 def run(
-    limit: int = Query(1000, ge=1, le=2000),
+    limit: int = Query(1000, ge=1, le=5000),
     x_internal_secret: str | None = Header(None, alias="X-Internal-Secret"),
 ):
     if not _secret_ok(x_internal_secret):
@@ -134,7 +134,7 @@ def run(
 
     sb = get_supabase()
     todo = (
-        sb.rpc("get_unprocessed_csi_keyword_rows", {"p_limit": limit})
+        sb.rpc("get_unprocessed_csi_keyword_rows_json", {"p_limit": limit})
         .execute()
     ).data or []
     if not todo:
