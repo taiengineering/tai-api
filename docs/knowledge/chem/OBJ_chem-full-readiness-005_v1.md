@@ -162,3 +162,76 @@ opens that path.
 ## PR
 
     feature/chem-full-readiness-005-acceptance-harness → main
+
+---
+
+## PATCH-1 — Final safety gates
+
+Independent verify identified three blind spots + one unrealistic
+fixture. PATCH-1 closes each without adding a new decision engine.
+
+### A. Materialize baseline is now an actual gate (was defined but not used)
+
+- `evaluate_full_acceptance` now auto-selects between `DEFAULT_PREVIEW_TO_FULL_BASELINE`
+  (PRE) and the new `FULL_REPLAY_BASELINE` (POST) based on Stage D.
+- Stage D runs *before* Stage C so its readiness picks the baseline:
+  - no FULL candidate → PRE (1997 UNCHANGED / 18,571 NEW / 0 CHANGED; 31,952 UNCHANGED / 297,136 NEW / 0 CHANGED)
+  - FULL candidate present → POST replay (20,568 UNCHANGED / 0 NEW / 0 CHANGED; 329,088 UNCHANGED / 0 NEW / 0 CHANGED)
+- Stage C evidence now carries `baseline_source` so operators see which one applied.
+- Any drift → BLOCKED / EXPECTED_BASELINE_DRIFT. Previously an ill-shaped classification could quietly reach READY_FOR_FULL_MATERIALIZE.
+
+### B. CHEM-04 ↔ CHEM-05 binding is now actually verified
+
+- Stage B calls `services.kosha_msds.materialize_writer.verify_manifest_binding()` — the canonical binding verifier. No new SHA logic.
+- The CLI recomputes the plan file's SHA256 from disk and threads it through as `on_disk_plan_file_sha256`; hydration's `responses_sha256` flows through as `hydration_responses_sha256`.
+- Any of {manifest.responses_sha256 ≠ hydration responses SHA, manifest.plan_semantic_sha256 ≠ report.plan_sha256, manifest.plan_file_sha256 ≠ recomputed} → BLOCKED / MANIFEST_BINDING_MISMATCH.
+
+### C. Frozen queue is required once hydration completes
+
+- Previously "queue file absent" silently skipped identity verification.
+- Now: hydration in progress → still `WAIT_HYDRATION` (queue may still be materializing).
+- Hydration complete + queue file absent or SHA/rows drift → BLOCKED / QUEUE_IDENTITY_MISMATCH.
+
+### D. H14 fixture now models real production lifecycle
+
+- Previously H14 mixed a preview-shaped materialize store with an already-materialized publish store — an impossible transient state (production has ONE Supabase DB).
+- PATCH-1 §D: H14 now uses `_full_materialize_store()` (20,568 chemicals × 16 sections all UNCHANGED against the plan) together with `_valid_full_publish_store()`. The auto-selected baseline is POST replay, and the verdict resolves cleanly to READY_FOR_FULL_CUTOVER.
+
+### E. Additional tests (H15..H20)
+
+| Case | What it exercises | Expected |
+|------|-------------------|----------|
+| H15  | PRE baseline drift (one fewer UNCHANGED chemical) | BLOCKED / EXPECTED_BASELINE_DRIFT |
+| H16  | POST-materialization replay (full mat store + full plan) | Stage C ready with all UNCHANGED |
+| H17  | hydration responses SHA ≠ manifest.responses_sha256 | BLOCKED / MANIFEST_BINDING_MISMATCH |
+| H18  | on-disk plan-file SHA ≠ manifest.plan_file_sha256 | BLOCKED / MANIFEST_BINDING_MISMATCH |
+| H19  | FULL source complete but queue file missing | BLOCKED / QUEUE_IDENTITY_MISMATCH |
+| H20  | current production (partial hydration) still yields | WAIT_HYDRATION with no block reasons |
+
+### F. BLOCKED reason integrity
+
+- A BLOCKED verdict can no longer be produced with an empty `overall_block_reasons`.
+- New derived reasons:
+  - `BLOCK_SEARCH_RUNTIME_NOT_READY` (fires when everything else is green but Stage F is not-ready → search-dictionary is offline / V1)
+  - When hydration is complete and no plan is supplied, `BLOCK_NOT_FULL_PLAN` is surfaced at the fallback branch.
+- Verdict vocabulary stays exactly four values: `WAIT_HYDRATION / BLOCKED / READY_FOR_FULL_MATERIALIZE / READY_FOR_FULL_CUTOVER`.
+
+### Read-only invariant (unchanged)
+
+    DB INSERT/UPDATE/DELETE = 0
+    PUBLISH                  = 0
+    ENV CHANGE               = 0
+    DEPLOY                   = 0
+    KOSHA API CALL           = 0
+    CHEM-04 RESUME           = 0
+
+### Anchors (PATCH-1)
+
+```text
+main at run   = f32e4a71a692865ff03ca5276b3d331a126547bf
+branch        = feature/chem-full-readiness-005-acceptance-harness
+old head      = f925b62347942223da46a8cf13b5e3ba3b0ece8f
+tests         = 21/21 pass (was 15) — H15..H20 added, H14 rewritten
+regression    = 287/287 CHEM tests pass
+local CLI     = WAIT_HYDRATION (queue rows 329,088, SHA matches frozen)
+```

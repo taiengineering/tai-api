@@ -64,21 +64,34 @@ def _build_stores(no_db: bool):
 
 
 def _load_plan_inputs(plan_dir: Optional[str]):
+    """Return (plan_inputs, on_disk_plan_file_sha256) or (None, None)."""
     if not plan_dir:
-        return None
+        return None, None
     p = Path(plan_dir)
     plan_jsonl = p / "materialize_plan.jsonl"
     manifest_json = p / "materialize_manifest.json"
     report_json = p / "materialize_report.json"
     missing = [str(x) for x in (plan_jsonl, manifest_json, report_json) if not x.exists()]
     if missing:
-        return None
+        return None, None
     from services.kosha_msds.materialize_writer import load_plan_inputs
-    return load_plan_inputs(
+
+    # PATCH-1 §B1: recompute plan_file_sha256 from the actual bytes on
+    # disk so the harness's Stage B can compare it against
+    # manifest.plan_file_sha256. Never trust the manifest alone.
+    import hashlib
+    h = hashlib.sha256()
+    with plan_jsonl.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    on_disk_plan_file_sha256 = h.hexdigest()
+
+    inputs = load_plan_inputs(
         plan_jsonl=plan_jsonl,
         manifest_json=manifest_json,
         report_json=report_json,
     )
+    return inputs, on_disk_plan_file_sha256
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -113,7 +126,7 @@ def main(argv: Optional[list] = None) -> int:
         args.live_base_url,
     ).to_dict()
     public_runtime = ops.collect_public_runtime()
-    plan_inputs = _load_plan_inputs(args.plan_dir)
+    plan_inputs, on_disk_plan_file_sha256 = _load_plan_inputs(args.plan_dir)
 
     # Running-snapshot hold (WO §19).
     try:
@@ -133,6 +146,8 @@ def main(argv: Optional[list] = None) -> int:
         public_mode=public_runtime.resolved_mode,
         queue_path=queue_path,
         running_snapshots=int(running or 0),
+        hydration_responses_sha256=hydration_status.get("responses_sha256"),
+        on_disk_plan_file_sha256=on_disk_plan_file_sha256,
     )
 
     envelope = {

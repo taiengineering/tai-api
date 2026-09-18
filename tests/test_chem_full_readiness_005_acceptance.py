@@ -18,6 +18,10 @@ constants. The composition logic under test is size-independent.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
+
 import pytest
 
 from services.kosha_msds import full_acceptance as fa
@@ -47,8 +51,10 @@ PREVIEW_SECS = PREVIEW_CHEMS * 16 # analog of 31,952
 
 
 @pytest.fixture(autouse=True)
-def _shrink_baselines(monkeypatch):
-    """Rebind harness + CHEM-10 constants to the test-size baseline."""
+def _shrink_baselines(monkeypatch, tmp_path):
+    """Rebind harness + CHEM-10 constants to the test-size baseline
+    AND materialize a matching fake queue file so PATCH-1 §C tests
+    don't spuriously fire QUEUE_IDENTITY_MISMATCH."""
     monkeypatch.setattr(fa, "EXPECTED_QUEUE_ROWS", TEST_QUEUE_ROWS)
     monkeypatch.setattr(fa, "EXPECTED_CHEMICAL_COUNT", TEST_CHEMICAL_COUNT)
     monkeypatch.setattr(fa, "EXPECTED_SECTION_COUNT", TEST_SECTION_COUNT)
@@ -63,8 +69,40 @@ def _shrink_baselines(monkeypatch):
             sections_changed=0,
         ),
     )
+    monkeypatch.setattr(
+        fa, "FULL_REPLAY_BASELINE",
+        fa.MaterializeExpectedBaseline(
+            chemicals_unchanged=TEST_CHEMICAL_COUNT,
+            chemicals_new=0,
+            chemicals_changed=0,
+            sections_unchanged=TEST_SECTION_COUNT,
+            sections_new=0,
+            sections_changed=0,
+        ),
+    )
     monkeypatch.setattr(pub, "FULL_OFFICIAL_CHEMICAL_COUNT", TEST_CHEMICAL_COUNT)
     monkeypatch.setattr(pub, "FULL_OFFICIAL_SECTION_COUNT", TEST_SECTION_COUNT)
+
+    # Fake queue: TEST_QUEUE_ROWS lines. Compute the actual SHA and
+    # rebind EXPECTED_QUEUE_SHA256 so the identity gate accepts it.
+    qp = tmp_path / "hydration_queue.jsonl"
+    with qp.open("w", encoding="utf-8") as fh:
+        for i in range(TEST_QUEUE_ROWS):
+            chem = i // 16
+            sec = (i % 16) + 1
+            fh.write(json.dumps({
+                "chemId": f"C{chem:05d}",
+                "sectionNo": sec,
+            }, ensure_ascii=False) + "\n")
+    sha = hashlib.sha256(qp.read_bytes()).hexdigest()
+    monkeypatch.setattr(fa, "EXPECTED_QUEUE_SHA256", sha)
+
+
+@pytest.fixture
+def valid_queue_path(tmp_path):
+    """Path to the queue file materialized in _shrink_baselines (same
+    tmp_path)."""
+    return tmp_path / "hydration_queue.jsonl"
 
 
 # ---------------------------------------------------------------------------
@@ -154,20 +192,29 @@ class _FakeMaterializeStore:
         return out
 
 
+DEFAULT_MANIFEST_RESPONSES_SHA = "resp-sha"
+DEFAULT_MANIFEST_PLAN_FILE_SHA = "plan-file-sha"
+DEFAULT_MANIFEST_PLAN_SEM_SHA = "plan-sem-sha"
+
+
 def _plan_inputs(*, chemicals, execute_eligible=True,
-                 execute_block_reasons=None) -> object:
+                 execute_block_reasons=None,
+                 responses_sha256=DEFAULT_MANIFEST_RESPONSES_SHA,
+                 plan_file_sha256=DEFAULT_MANIFEST_PLAN_FILE_SHA,
+                 plan_semantic_sha256=DEFAULT_MANIFEST_PLAN_SEM_SHA) -> object:
     from services.kosha_msds.materialize_writer import MaterializePlanInputs
     return MaterializePlanInputs(
         manifest={
             "adapter_version": "CHEM05_V1",
-            "plan_semantic_sha256": "plan-sem-sha",
-            "responses_sha256": "resp-sha",
-            "plan_file_sha256": "plan-file-sha",
+            "plan_semantic_sha256": plan_semantic_sha256,
+            "responses_sha256": responses_sha256,
+            "plan_file_sha256": plan_file_sha256,
             "execute_eligible": execute_eligible,
         },
         report={
             "execute_eligible": execute_eligible,
             "execute_block_reasons": list(execute_block_reasons or []),
+            "plan_sha256": plan_semantic_sha256,
         },
         chemicals=tuple(chemicals),
     )
@@ -190,6 +237,32 @@ def _preview_materialize_store() -> _FakeMaterializeStore:
             sections.append({
                 "chemical_id": uuid, "section_no": n,
                 "section_hash": f"h-{chem_id}-{n}",
+                "result_code": "00",
+            })
+    return _FakeMaterializeStore(chemicals=chemicals, sections=sections)
+
+
+def _full_materialize_store() -> _FakeMaterializeStore:
+    """Post-materialization slice: TEST_CHEMICAL_COUNT chemicals with
+    identical (source_content_hash / section_hash) to the plan. When
+    classified against the FULL plan the writer must classify every
+    row as UNCHANGED — this is the replay-safe state after a FULL
+    materialize has committed."""
+    chemicals = []
+    sections = []
+    for i in range(TEST_CHEMICAL_COUNT):
+        chem_id = f"C{i:05d}"
+        uuid = f"uu-full-{i:05d}"       # match _full_membership uuids
+        chemicals.append({
+            "id": uuid, "content_id": f"CHEM:{uuid}",
+            "source_id": "KOSHA_MSDS", "source_key": chem_id,
+            "chem_id": chem_id,
+            "source_content_hash": f"sha-{chem_id}",
+        })
+        for n in range(1, 17):
+            sections.append({
+                "chemical_id": uuid, "section_no": n,
+                "section_hash": f"h-{chem_id}-{n}",   # match plan hash
                 "result_code": "00",
             })
     return _FakeMaterializeStore(chemicals=chemicals, sections=sections)
@@ -316,7 +389,7 @@ def test_H2_hydration_short_by_one_returns_wait_hydration():
 # ---------------------------------------------------------------------------
 
 
-def test_H3_duplicate_source_pair_blocks():
+def test_H3_duplicate_source_pair_blocks(valid_queue_path):
     """CHEM-05 detected a duplicate (chem_id, section_no) pair; the
     harness surfaces it as BLOCK_DUPLICATE_SOURCE_PAIR and refuses."""
     chemicals = [_plan_row(i) for i in range(TEST_CHEMICAL_COUNT)]
@@ -329,6 +402,7 @@ def test_H3_duplicate_source_pair_blocks():
         hydration_status=_hydration_fully_complete(),
         plan_inputs=plan,
         dictionary_status=_dict_offline(),
+        queue_path=valid_queue_path,
     )
     assert r.verdict == fa.VERDICT_BLOCKED
     assert fa.BLOCK_DUPLICATE_SOURCE_PAIR in r.overall_block_reasons
@@ -339,21 +413,22 @@ def test_H3_duplicate_source_pair_blocks():
 # ---------------------------------------------------------------------------
 
 
-def test_H4_full_source_ready():
+def test_H4_full_source_ready(valid_queue_path):
     """Source-only readiness check. B/C/D/E are not-ready here (no
     plan / no store), but Stage A is ready — verdict is BLOCKED at
-    the intermediate branch because stages beyond A are pending."""
+    the intermediate branch because stages beyond A are pending. The
+    intermediate BLOCKED (PATCH-1 §F) names WHY: no plan supplied."""
     r = fa.evaluate_full_acceptance(
         hydration_status=_hydration_fully_complete(),
         dictionary_status=_dict_offline(),
+        queue_path=valid_queue_path,
     )
     src = next(s for s in r.stages if s.name == "source")
     assert src.ready is True
     assert src.block_reasons == ()
-    # A is ready but B is not (no plan), so we're neither WAIT_HYDRATION
-    # nor READY_FOR_*.
+    # A is ready but B is not (no plan) → BLOCKED with a derived reason.
     assert r.verdict == fa.VERDICT_BLOCKED
-    assert r.overall_block_reasons == ()
+    assert fa.BLOCK_NOT_FULL_PLAN in r.overall_block_reasons
 
 
 # ---------------------------------------------------------------------------
@@ -361,13 +436,14 @@ def test_H4_full_source_ready():
 # ---------------------------------------------------------------------------
 
 
-def test_H5_preview_plan_blocks_not_full_plan():
+def test_H5_preview_plan_blocks_not_full_plan(valid_queue_path):
     chemicals = [_plan_row(i) for i in range(PREVIEW_CHEMS)]
     plan = _plan_inputs(chemicals=chemicals, execute_eligible=True)
     r = fa.evaluate_full_acceptance(
         hydration_status=_hydration_fully_complete(),
         plan_inputs=plan,
         dictionary_status=_dict_offline(),
+        queue_path=valid_queue_path,
     )
     assert r.verdict == fa.VERDICT_BLOCKED
     assert fa.BLOCK_NOT_FULL_PLAN in r.overall_block_reasons
@@ -378,13 +454,14 @@ def test_H5_preview_plan_blocks_not_full_plan():
 # ---------------------------------------------------------------------------
 
 
-def test_H6_full_plan_ready():
+def test_H6_full_plan_ready(valid_queue_path):
     chemicals = [_plan_row(i) for i in range(TEST_CHEMICAL_COUNT)]
     plan = _plan_inputs(chemicals=chemicals, execute_eligible=True)
     r = fa.evaluate_full_acceptance(
         hydration_status=_hydration_fully_complete(),
         plan_inputs=plan,
         dictionary_status=_dict_offline(),
+        queue_path=valid_queue_path,
     )
     b = next(s for s in r.stages if s.name == "plan")
     assert b.ready is True
@@ -394,12 +471,13 @@ def test_H6_full_plan_ready():
 
 
 # ---------------------------------------------------------------------------
-# H7 — preview→FULL dry-run classifies 1997 UNCHANGED / 18571 NEW / 0 CONFLICT
+# H7 — preview→FULL dry-run under PRE baseline (no FULL candidate yet)
 # ---------------------------------------------------------------------------
 
 
-def test_H7_preview_to_full_dry_run_matches_expected_baseline():
-    """Store already carries PREVIEW_CHEMS chemicals; plan is FULL.
+def test_H7_preview_to_full_dry_run_matches_pre_baseline(valid_queue_path):
+    """Store already carries PREVIEW_CHEMS chemicals; plan is FULL; no
+    FULL candidate in publish store → harness auto-selects PRE baseline.
     Expected: PREVIEW_CHEMS UNCHANGED + (FULL - PREVIEW_CHEMS) NEW +
     0 CONFLICT at both chemical and section levels."""
     mat_store = _preview_materialize_store()
@@ -410,9 +488,11 @@ def test_H7_preview_to_full_dry_run_matches_expected_baseline():
         plan_inputs=plan,
         materialize_store=mat_store,
         dictionary_status=_dict_offline(),
+        queue_path=valid_queue_path,
     )
     c = next(s for s in r.stages if s.name == "materialize")
-    assert c.ready is True
+    assert c.ready is True, c.to_dict()
+    assert c.evidence["baseline_source"] == "pre_materialize_preview_to_full"
     counts_c = c.evidence["chemical_counts"]
     counts_s = c.evidence["section_counts"]
     assert counts_c["UNCHANGED"] == PREVIEW_CHEMS
@@ -428,12 +508,11 @@ def test_H7_preview_to_full_dry_run_matches_expected_baseline():
 # ---------------------------------------------------------------------------
 
 
-def test_H8_identity_regeneration_blocks():
+def test_H8_identity_regeneration_blocks(valid_queue_path):
     """Simulate a DB row that matches natural key and content hash but
     carries no `id` column (would force writer to mint a new UUID for
     an UNCHANGED chemical). The classifier surfaces this via
     db_chemical_id=None; the harness raises IDENTITY_REGENERATION."""
-    # Chemical row with matching hash but no `id` — identity regen bait.
     bad = [{
         "id": None, "source_id": "KOSHA_MSDS", "source_key": "C00000",
         "chem_id": "C00000",
@@ -448,6 +527,7 @@ def test_H8_identity_regeneration_blocks():
         plan_inputs=plan,
         materialize_store=mat_store,
         dictionary_status=_dict_offline(),
+        queue_path=valid_queue_path,
     )
     assert r.verdict == fa.VERDICT_BLOCKED
     assert fa.BLOCK_IDENTITY_REGENERATION in r.overall_block_reasons
@@ -458,7 +538,7 @@ def test_H8_identity_regeneration_blocks():
 # ---------------------------------------------------------------------------
 
 
-def test_H9_materialize_conflict_blocks():
+def test_H9_materialize_conflict_blocks(valid_queue_path):
     """DB row's chem_id disagrees with the plan's chem_id for the same
     natural key — a CONFLICT classification, must block."""
     bad = [{
@@ -475,6 +555,7 @@ def test_H9_materialize_conflict_blocks():
         plan_inputs=plan,
         materialize_store=mat_store,
         dictionary_status=_dict_offline(),
+        queue_path=valid_queue_path,
     )
     assert r.verdict == fa.VERDICT_BLOCKED
     assert fa.BLOCK_CHEMICAL_CONFLICT in r.overall_block_reasons
@@ -485,12 +566,11 @@ def test_H9_materialize_conflict_blocks():
 # ---------------------------------------------------------------------------
 
 
-def test_H10_no_full_snapshot_yields_ready_for_full_materialize():
-    """Source complete, plan ready, dry-run passes; publish_store has
-    no COMPLETED / FULL_OFFICIAL / NOT_PUBLISHED candidate. Harness
-    stops at READY_FOR_FULL_MATERIALIZE."""
+def test_H10_no_full_snapshot_yields_ready_for_full_materialize(valid_queue_path):
+    """Source complete, plan ready, dry-run passes (PRE baseline);
+    publish_store has no COMPLETED / FULL_OFFICIAL / NOT_PUBLISHED
+    candidate. Harness stops at READY_FOR_FULL_MATERIALIZE."""
     mat_store = _preview_materialize_store()
-    # Publish store carries only a PUBLISHED_SEO_PREVIEW snapshot.
     prev_snap = _snap_row("snap-preview",
                           publish_state=PUBLISH_PUBLISHED_SEO_PREVIEW,
                           expected=PREVIEW_CHEMS, discovered=PREVIEW_CHEMS)
@@ -503,8 +583,9 @@ def test_H10_no_full_snapshot_yields_ready_for_full_materialize():
         materialize_store=mat_store,
         publish_store=pub_store,
         dictionary_status=_dict_v2(),
+        queue_path=valid_queue_path,
     )
-    assert r.verdict == fa.VERDICT_READY_FOR_FULL_MATERIALIZE
+    assert r.verdict == fa.VERDICT_READY_FOR_FULL_MATERIALIZE, r.to_dict()
     d = next(s for s in r.stages if s.name == "materialized_full")
     assert d.ready is False
     assert d.evidence.get("note") == "NOT_YET_MATERIALIZED"
@@ -515,23 +596,30 @@ def test_H10_no_full_snapshot_yields_ready_for_full_materialize():
 # ---------------------------------------------------------------------------
 
 
-def test_H11_complete_full_candidate_publish_stage_ready():
+def test_H11_complete_full_candidate_publish_stage_ready(valid_queue_path):
     """Publish store has a fully-materialized FULL_OFFICIAL / NOT_PUBLISHED
     snapshot with expected/discovered/items/sections all lined up.
-    Publish stage should surface cutover.is_full_ready ready=True."""
+    Publish stage should surface cutover.is_full_ready ready=True.
+
+    PATCH-1 §A: the presence of a FULL candidate (D.ready) auto-picks
+    the POST replay baseline for Stage C; the materialize store passed
+    here matches that (full-materialized). Everything green except
+    public_mode → G not ready; verdict = BLOCKED but D and E still
+    surface as ready."""
     pub_store = _valid_full_publish_store()
-    # Cross-check is_full_ready in isolation first.
     ready = cutover.is_full_ready("snap-FULL", store=pub_store)
     assert ready.ready is True
 
-    # Now via harness. No plan / no materialize store — we're only
-    # verifying stage E on top of stage D. Stage C's "no plan" note
-    # keeps that stage not-ready; the verdict lands on BLOCKED for
-    # the intermediate branch. We only assert D + E readiness.
+    mat_store = _full_materialize_store()
+    chemicals = [_plan_row(i) for i in range(TEST_CHEMICAL_COUNT)]
+    plan = _plan_inputs(chemicals=chemicals, execute_eligible=True)
     r = fa.evaluate_full_acceptance(
         hydration_status=_hydration_fully_complete(),
+        plan_inputs=plan,
+        materialize_store=mat_store,
         publish_store=pub_store,
         dictionary_status=_dict_v2(),
+        queue_path=valid_queue_path,
     )
     d = next(s for s in r.stages if s.name == "materialized_full")
     e = next(s for s in r.stages if s.name == "publish")
@@ -542,16 +630,16 @@ def test_H11_complete_full_candidate_publish_stage_ready():
 
 
 # ---------------------------------------------------------------------------
-# H12 — search-dict 503 → SEARCH_RUNTIME_READY=false
+# H12 — search-dict 503 → SEARCH_RUNTIME_READY=false → BLOCKED with reason
 # ---------------------------------------------------------------------------
 
 
-def test_H12_search_dict_offline_blocks_public_cutover():
+def test_H12_search_dict_offline_blocks_public_cutover(valid_queue_path):
     """Dictionary probe returns UNVERIFIED_NETWORK. Stage F not-ready
-    prevents the READY_FOR_FULL_CUTOVER transition even if everything
-    else is green."""
+    prevents the READY_FOR_FULL_CUTOVER transition. PATCH-1 §F: the
+    resulting BLOCKED verdict names WHY via BLOCK_SEARCH_RUNTIME_NOT_READY."""
     pub_store = _valid_full_publish_store()
-    mat_store = _preview_materialize_store()
+    mat_store = _full_materialize_store()
     chemicals = [_plan_row(i) for i in range(TEST_CHEMICAL_COUNT)]
     plan = _plan_inputs(chemicals=chemicals, execute_eligible=True)
     r = fa.evaluate_full_acceptance(
@@ -561,10 +649,12 @@ def test_H12_search_dict_offline_blocks_public_cutover():
         publish_store=pub_store,
         dictionary_status=_dict_offline(),
         public_mode=PUBLIC_MODE_SEO_PREVIEW,
+        queue_path=valid_queue_path,
     )
     f = next(s for s in r.stages if s.name == "search_runtime")
     assert f.ready is False
-    assert r.verdict != fa.VERDICT_READY_FOR_FULL_CUTOVER
+    assert r.verdict == fa.VERDICT_BLOCKED
+    assert fa.BLOCK_SEARCH_RUNTIME_NOT_READY in r.overall_block_reasons
 
 
 # ---------------------------------------------------------------------------
@@ -578,26 +668,27 @@ def test_H13_search_dict_v2_makes_stage_ready():
     assert r_stage.evidence["binding"] == "V2_MATCH"
     assert r_stage.evidence["chem_term_msds_matched"] is True
 
-    # Also verify a partial-V2 (msds not matched) still refuses.
     partial = dict(_dict_v2())
     partial["chem_term_msds_matched"] = False
     assert fa.evaluate_search_runtime_stage(partial).ready is False
 
 
 # ---------------------------------------------------------------------------
-# H14 — everything green + public_mode=seo_preview → READY_FOR_FULL_CUTOVER
+# H14 — POST-materialization green path → READY_FOR_FULL_CUTOVER
 # ---------------------------------------------------------------------------
 
 
-def test_H14_all_green_returns_ready_for_full_cutover():
-    """Source complete + plan complete + preview→FULL dry-run at baseline
-    + FULL candidate materialized + preflight passes + search dict V2
-    + public_mode=seo_preview. Harness returns READY_FOR_FULL_CUTOVER."""
-    # Materialize store: 2 preview chemicals (existing rows), rest NEW.
-    mat_store = _preview_materialize_store()
-    # Publish store: FULL_OFFICIAL / NOT_PUBLISHED candidate ready to promote.
+def test_H14_post_materialization_all_green_returns_ready_for_full_cutover(
+    valid_queue_path,
+):
+    """PATCH-1 §D: H14 now models the real production lifecycle at the
+    point where FULL materialization has completed. Both stores hold
+    the FULL corpus (the same Supabase DB in production). Classifying
+    the plan against the FULL materialize store yields UNCHANGED for
+    every row (POST replay baseline). Publish preflight passes; search
+    dictionary is V2; public mode is seo_preview → READY_FOR_FULL_CUTOVER."""
+    mat_store = _full_materialize_store()
     pub_store = _valid_full_publish_store()
-
     chemicals = [_plan_row(i) for i in range(TEST_CHEMICAL_COUNT)]
     plan = _plan_inputs(chemicals=chemicals, execute_eligible=True)
 
@@ -608,24 +699,33 @@ def test_H14_all_green_returns_ready_for_full_cutover():
         publish_store=pub_store,
         dictionary_status=_dict_v2(),
         public_mode=PUBLIC_MODE_SEO_PREVIEW,
+        queue_path=valid_queue_path,
     )
+
+    c = next(s for s in r.stages if s.name == "materialize")
+    assert c.evidence["baseline_source"] == "post_materialize_replay"
+    counts_c = c.evidence["chemical_counts"]
+    counts_s = c.evidence["section_counts"]
+    assert counts_c["UNCHANGED"] == TEST_CHEMICAL_COUNT
+    assert counts_c["NEW"] == 0
+    assert counts_c["CHANGED"] == 0
+    assert counts_c["CONFLICT"] == 0
+    assert counts_s["UNCHANGED"] == TEST_SECTION_COUNT
+    assert counts_s["NEW"] == 0
 
     assert r.verdict == fa.VERDICT_READY_FOR_FULL_CUTOVER, r.to_dict()
     assert r.overall_block_reasons == ()
-    # Every stage ready.
     for s in r.stages:
         assert s.ready is True, f"stage {s.name} not ready: {s.to_dict()}"
 
 
 # ---------------------------------------------------------------------------
-# Auxiliary — running-snapshot hold (WO §19)
+# H14b — running-snapshot hold overrides even the green path (WO §19)
 # ---------------------------------------------------------------------------
 
 
-def test_H14b_running_snapshot_hold_forces_blocked():
-    """Even with everything else green, a nonzero running snapshot count
-    lands on VERDICT_BLOCKED with BLOCK_RUNNING_SNAPSHOT_HOLD."""
-    mat_store = _preview_materialize_store()
+def test_H14b_running_snapshot_hold_forces_blocked(valid_queue_path):
+    mat_store = _full_materialize_store()
     pub_store = _valid_full_publish_store()
     chemicals = [_plan_row(i) for i in range(TEST_CHEMICAL_COUNT)]
     plan = _plan_inputs(chemicals=chemicals, execute_eligible=True)
@@ -636,7 +736,160 @@ def test_H14b_running_snapshot_hold_forces_blocked():
         publish_store=pub_store,
         dictionary_status=_dict_v2(),
         public_mode=PUBLIC_MODE_SEO_PREVIEW,
+        queue_path=valid_queue_path,
         running_snapshots=1,
     )
     assert r.verdict == fa.VERDICT_BLOCKED
     assert fa.BLOCK_RUNNING_SNAPSHOT_HOLD in r.overall_block_reasons
+
+
+# ---------------------------------------------------------------------------
+# H15 — PRE baseline drift → BLOCKED / EXPECTED_BASELINE_DRIFT
+# ---------------------------------------------------------------------------
+
+
+def test_H15_pre_baseline_drift_blocks(valid_queue_path):
+    """Materialize store shape doesn't match the PRE baseline (one
+    fewer preview chemical, so UNCHANGED = PREVIEW_CHEMS - 1). No FULL
+    candidate → PRE baseline chosen → drift → BLOCKED."""
+    mat_store = _preview_materialize_store()
+    # Trim one preview chemical from the materialize store so the
+    # UNCHANGED count is PREVIEW_CHEMS - 1 (drift from PRE baseline).
+    mat_store._inner._chemicals_by_key.pop(("KOSHA_MSDS", "C00000"))
+    # Remove its sections too.
+    for n in range(1, 17):
+        mat_store._inner._sections_by_pair.pop(("uu-00000", n), None)
+
+    chemicals = [_plan_row(i) for i in range(TEST_CHEMICAL_COUNT)]
+    plan = _plan_inputs(chemicals=chemicals, execute_eligible=True)
+    r = fa.evaluate_full_acceptance(
+        hydration_status=_hydration_fully_complete(),
+        plan_inputs=plan,
+        materialize_store=mat_store,
+        dictionary_status=_dict_offline(),
+        queue_path=valid_queue_path,
+    )
+    assert r.verdict == fa.VERDICT_BLOCKED, r.to_dict()
+    assert fa.BLOCK_EXPECTED_BASELINE_DRIFT in r.overall_block_reasons
+
+
+# ---------------------------------------------------------------------------
+# H16 — POST materialization replay is UNCHANGED across the board
+# ---------------------------------------------------------------------------
+
+
+def test_H16_post_materialization_replay_passes(valid_queue_path):
+    """FULL candidate present + FULL materialize store → POST replay
+    baseline. Every plan row classifies UNCHANGED with 0 NEW / 0
+    CHANGED / 0 CONFLICT."""
+    mat_store = _full_materialize_store()
+    pub_store = _valid_full_publish_store()
+    chemicals = [_plan_row(i) for i in range(TEST_CHEMICAL_COUNT)]
+    plan = _plan_inputs(chemicals=chemicals, execute_eligible=True)
+    r = fa.evaluate_full_acceptance(
+        hydration_status=_hydration_fully_complete(),
+        plan_inputs=plan,
+        materialize_store=mat_store,
+        publish_store=pub_store,
+        dictionary_status=_dict_v2(),
+        queue_path=valid_queue_path,
+    )
+    c = next(s for s in r.stages if s.name == "materialize")
+    assert c.evidence["baseline_source"] == "post_materialize_replay"
+    assert c.ready is True
+    counts_c = c.evidence["chemical_counts"]
+    counts_s = c.evidence["section_counts"]
+    assert counts_c["UNCHANGED"] == TEST_CHEMICAL_COUNT
+    assert counts_c["NEW"] == 0
+    assert counts_c["CHANGED"] == 0
+    assert counts_c["CONFLICT"] == 0
+    assert counts_s["UNCHANGED"] == TEST_SECTION_COUNT
+    assert counts_s["NEW"] == 0
+    assert counts_s["CHANGED"] == 0
+    assert counts_s["CONFLICT"] == 0
+
+
+# ---------------------------------------------------------------------------
+# H17 — wrong hydration/plan binding → BLOCKED / MANIFEST_BINDING_MISMATCH
+# ---------------------------------------------------------------------------
+
+
+def test_H17_wrong_hydration_plan_binding_blocks(valid_queue_path):
+    """Hydration reports responses_sha256=A; the plan manifest claims
+    B. The harness must reject this — a plan built from a different
+    artifact than the one currently in hydration cannot pass."""
+    chemicals = [_plan_row(i) for i in range(TEST_CHEMICAL_COUNT)]
+    plan = _plan_inputs(chemicals=chemicals, execute_eligible=True,
+                        responses_sha256="manifest-sha-B")
+    r = fa.evaluate_full_acceptance(
+        hydration_status=_hydration_fully_complete(),
+        plan_inputs=plan,
+        dictionary_status=_dict_offline(),
+        queue_path=valid_queue_path,
+        hydration_responses_sha256="on-disk-sha-A",
+    )
+    assert r.verdict == fa.VERDICT_BLOCKED
+    assert fa.BLOCK_MANIFEST_BINDING_MISMATCH in r.overall_block_reasons
+
+
+# ---------------------------------------------------------------------------
+# H18 — plan file tamper → BLOCKED / MANIFEST_BINDING_MISMATCH
+# ---------------------------------------------------------------------------
+
+
+def test_H18_plan_file_tamper_blocks(valid_queue_path):
+    """manifest.plan_file_sha256 = A; on-disk plan file recomputes to
+    B. The harness's Stage B calls verify_manifest_binding with the
+    recomputed value and refuses."""
+    chemicals = [_plan_row(i) for i in range(TEST_CHEMICAL_COUNT)]
+    plan = _plan_inputs(chemicals=chemicals, execute_eligible=True,
+                        plan_file_sha256="manifest-plan-sha-A")
+    r = fa.evaluate_full_acceptance(
+        hydration_status=_hydration_fully_complete(),
+        plan_inputs=plan,
+        dictionary_status=_dict_offline(),
+        queue_path=valid_queue_path,
+        on_disk_plan_file_sha256="on-disk-plan-sha-B",
+    )
+    assert r.verdict == fa.VERDICT_BLOCKED
+    assert fa.BLOCK_MANIFEST_BINDING_MISMATCH in r.overall_block_reasons
+
+
+# ---------------------------------------------------------------------------
+# H19 — FULL source but queue file missing → BLOCKED / QUEUE_IDENTITY_MISMATCH
+# ---------------------------------------------------------------------------
+
+
+def test_H19_full_source_but_queue_missing_blocks(tmp_path):
+    """Hydration reports all-full but no queue file supplied. PATCH-1
+    §C requires the frozen queue as evidence at FULL — missing = block."""
+    missing = tmp_path / "does_not_exist.jsonl"
+    r = fa.evaluate_full_acceptance(
+        hydration_status=_hydration_fully_complete(),
+        dictionary_status=_dict_offline(),
+        queue_path=missing,
+    )
+    assert r.verdict == fa.VERDICT_BLOCKED
+    assert fa.BLOCK_QUEUE_IDENTITY_MISMATCH in r.overall_block_reasons
+
+
+# ---------------------------------------------------------------------------
+# H20 — current production baseline still yields WAIT_HYDRATION
+# ---------------------------------------------------------------------------
+
+
+def test_H20_current_production_still_wait_hydration(valid_queue_path):
+    """The PATCH-1 changes must not alter the current production
+    verdict (31,961 / 297,127 in the analog). Hydration incomplete →
+    WAIT_HYDRATION, no block reasons."""
+    hydration = _hydration(
+        completed=int(TEST_QUEUE_ROWS * 0.10),
+        remaining=int(TEST_QUEUE_ROWS * 0.90),
+    )
+    r = fa.evaluate_full_acceptance(
+        hydration_status=hydration,
+        dictionary_status=_dict_offline(),
+        queue_path=valid_queue_path,
+    )
+    assert r.verdict == fa.VERDICT_WAIT_HYDRATION
+    assert r.overall_block_reasons == ()

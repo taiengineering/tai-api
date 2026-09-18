@@ -77,6 +77,14 @@ BLOCK_SECTION_CONFLICT = "SECTION_CONFLICT"
 BLOCK_IDENTITY_REGENERATION = "IDENTITY_REGENERATION"
 BLOCK_EXPECTED_BASELINE_DRIFT = "EXPECTED_BASELINE_DRIFT"
 BLOCK_RUNNING_SNAPSHOT_HOLD = "RUNNING_SNAPSHOT_HOLD"
+# PATCH-1 §B: surface CHEM-08's binding failures (responses / plan-file
+# SHA drift) under the harness vocabulary. Wraps
+# materialize_writer.BLOCK_MANIFEST_BINDING_MISMATCH and BLOCK_PLAN_SHA_MISMATCH.
+BLOCK_MANIFEST_BINDING_MISMATCH = "MANIFEST_BINDING_MISMATCH"
+# PATCH-1 §F: derived block reason so a BLOCKED verdict caused by
+# search dictionary being offline / V1_OR_OTHER always names *why*
+# in overall_block_reasons.
+BLOCK_SEARCH_RUNTIME_NOT_READY = "SEARCH_RUNTIME_NOT_READY"
 
 
 # ---------------------------------------------------------------------------
@@ -151,8 +159,13 @@ def evaluate_source_stage(
     ev["complete_chemicals"] = complete
     ev["incomplete_chemicals"] = incomplete
 
-    # WO §5: frozen queue integrity. Only checked when queue_path exists.
-    if queue_path is not None and queue_path.exists():
+    # WO §5: frozen queue integrity. Path present + bytes must match
+    # the frozen SHA256 and row count. Path absent is handled below —
+    # after we know whether hydration is complete.
+    queue_file_present = bool(queue_path is not None and queue_path.exists())
+    ev["queue_path"] = str(queue_path) if queue_path is not None else None
+    ev["queue_file_present"] = queue_file_present
+    if queue_file_present:
         actual_rows = 0
         h = hashlib.sha256()
         try:
@@ -183,6 +196,14 @@ def evaluate_source_stage(
     )
     ev["all_full"] = bool(all_full)
 
+    # PATCH-1 §C: once hydration is complete the frozen queue file
+    # MUST be present (no more "verified by absence"). During
+    # in-progress hydration a missing queue is still expected — the
+    # runner is still writing it — so we only escalate this on FULL.
+    if all_full and not queue_file_present:
+        reasons.append(BLOCK_QUEUE_IDENTITY_MISMATCH)
+        integrity_violation = True
+
     return StageReport(
         name="source",
         ready=(all_full and not integrity_violation),
@@ -209,13 +230,23 @@ _CHEM05_BLOCK_TRANSLATION: Mapping[str, str] = {
 }
 
 
-def evaluate_full_plan_stage(plan_inputs) -> StageReport:
-    """Verify a MaterializePlanInputs represents a FULL corpus plan.
+def evaluate_full_plan_stage(
+    plan_inputs,
+    *,
+    hydration_responses_sha256: Optional[str] = None,
+    on_disk_plan_file_sha256: Optional[str] = None,
+) -> StageReport:
+    """Verify a MaterializePlanInputs represents a FULL corpus plan
+    AND that the plan is bound to the hydration artifact it claims.
 
     Preview plans (1,997 rows) are refused with BLOCK_NOT_FULL_PLAN.
     CHEM-05 execute_block_reasons on the report are translated into
     the harness vocabulary — the plan adapter is the authoritative
     source-contract / duplicate-pair judge, we just surface it.
+
+    PATCH-1 §B: any hydration↔manifest or manifest↔on-disk SHA drift
+    surfaces as BLOCK_MANIFEST_BINDING_MISMATCH via
+    materialize_writer.verify_manifest_binding. No new SHA logic here.
     """
     if plan_inputs is None:
         return StageReport(
@@ -241,6 +272,8 @@ def evaluate_full_plan_stage(plan_inputs) -> StageReport:
     ev["plan_semantic_sha256"] = manifest.get("plan_semantic_sha256")
     ev["responses_sha256"] = manifest.get("responses_sha256")
     ev["plan_file_sha256"] = manifest.get("plan_file_sha256")
+    ev["hydration_responses_sha256"] = hydration_responses_sha256
+    ev["on_disk_plan_file_sha256"] = on_disk_plan_file_sha256
 
     # Translate CHEM-05's own block reasons before deriving our own so
     # DUPLICATE_PAIRS / SOURCE_CONTRACT_FAIL surface with harness names.
@@ -250,6 +283,19 @@ def evaluate_full_plan_stage(plan_inputs) -> StageReport:
         reasons.append(
             _CHEM05_BLOCK_TRANSLATION.get(br, BLOCK_NOT_FULL_PLAN)
         )
+
+    # PATCH-1 §B — reuse the canonical binding verifier.
+    from services.kosha_msds import materialize_writer as w
+    binding_reasons = w.verify_manifest_binding(
+        plan_inputs,
+        on_disk_responses_sha256=hydration_responses_sha256,
+        on_disk_plan_file_sha256=on_disk_plan_file_sha256,
+    )
+    ev["binding_block_reasons"] = binding_reasons
+    for br in binding_reasons:
+        if br in (w.BLOCK_MANIFEST_BINDING_MISMATCH,
+                  w.BLOCK_PLAN_SHA_MISMATCH):
+            reasons.append(BLOCK_MANIFEST_BINDING_MISMATCH)
 
     if chemical_count != EXPECTED_CHEMICAL_COUNT:
         reasons.append(BLOCK_NOT_FULL_PLAN)
@@ -302,6 +348,21 @@ DEFAULT_PREVIEW_TO_FULL_BASELINE = MaterializeExpectedBaseline(
     chemicals_changed=0,
     sections_unchanged=31_952,     # 1,997 × 16
     sections_new=297_136,          # 329,088 − 31,952
+    sections_changed=0,
+)
+
+
+# PATCH-1 §A: after a FULL materialize completes, re-running the same
+# plan against the store must classify every row as UNCHANGED (nothing
+# new to write; nothing to change). Without this constant, the harness
+# would use PRE-baseline (expecting 18,571 NEW) and reject a healthy
+# post-materialization run — see PATCH-1 §A2.
+FULL_REPLAY_BASELINE = MaterializeExpectedBaseline(
+    chemicals_unchanged=20_568,
+    chemicals_new=0,
+    chemicals_changed=0,
+    sections_unchanged=329_088,
+    sections_new=0,
     sections_changed=0,
 )
 
@@ -495,6 +556,8 @@ def evaluate_full_acceptance(
     queue_path: Optional[Path] = None,
     running_snapshots: int = 0,
     materialize_expected_baseline: Optional[MaterializeExpectedBaseline] = None,
+    hydration_responses_sha256: Optional[str] = None,
+    on_disk_plan_file_sha256: Optional[str] = None,
 ) -> AcceptanceReport:
     """Compose stage reports into a single verdict + evidence dict.
 
@@ -505,6 +568,14 @@ def evaluate_full_acceptance(
     In production both slots receive their own Supabase-backed store
     class; in tests they can be the same object as long as the object
     implements both interfaces.
+
+    PATCH-1 §A: `materialize_expected_baseline` is now the OVERRIDE
+    knob; when None, the harness picks PRE (DEFAULT_PREVIEW_TO_FULL_BASELINE)
+    or POST (FULL_REPLAY_BASELINE) based on whether Stage D has
+    discovered a materialized FULL candidate.
+
+    PATCH-1 §B: `hydration_responses_sha256` + `on_disk_plan_file_sha256`
+    flow into Stage B so CHEM-04↔CHEM-05 binding is actually enforced.
     """
 
     # Stage A
@@ -515,25 +586,43 @@ def evaluate_full_acceptance(
     running_hold = running_snapshots > 0
 
     # Stage B
-    b = evaluate_full_plan_stage(plan_inputs)
+    b = evaluate_full_plan_stage(
+        plan_inputs,
+        hydration_responses_sha256=hydration_responses_sha256,
+        on_disk_plan_file_sha256=on_disk_plan_file_sha256,
+    )
 
-    # Stage C
-    mat_store = materialize_store if materialize_store is not None else publish_store
-    if mat_store is None or plan_inputs is None:
-        c = StageReport(name="materialize", ready=False,
-                        evidence={"note": "materialize_store or plan not supplied"})
-    else:
-        c = evaluate_materialize_dry_run_stage(
-            plan_inputs, store=mat_store,
-            expected=materialize_expected_baseline,
-        )
-
-    # Stage D
+    # Stage D FIRST (PATCH-1 §A3) — its readiness picks the C baseline.
     if publish_store is None:
         d = StageReport(name="materialized_full", ready=False,
                         evidence={"note": "no publish_store"})
     else:
         d = evaluate_materialized_stage(publish_store=publish_store)
+
+    # PATCH-1 §A: PRE vs POST baseline auto-selection.
+    if materialize_expected_baseline is not None:
+        chosen_baseline = materialize_expected_baseline
+        baseline_source = "override"
+    elif d.ready:
+        chosen_baseline = FULL_REPLAY_BASELINE
+        baseline_source = "post_materialize_replay"
+    else:
+        chosen_baseline = DEFAULT_PREVIEW_TO_FULL_BASELINE
+        baseline_source = "pre_materialize_preview_to_full"
+
+    # Stage C
+    mat_store = materialize_store if materialize_store is not None else publish_store
+    if mat_store is None or plan_inputs is None:
+        c = StageReport(name="materialize", ready=False,
+                        evidence={"note": "materialize_store or plan not supplied",
+                                  "baseline_source": baseline_source})
+    else:
+        c = evaluate_materialize_dry_run_stage(
+            plan_inputs, store=mat_store,
+            expected=chosen_baseline,
+        )
+        # Surface which baseline drove the check.
+        c.evidence["baseline_source"] = baseline_source
 
     # Stage E
     if publish_store is None or not d.ready:
@@ -587,9 +676,20 @@ def evaluate_full_acceptance(
     elif all_stages_ready and public_mode_pre_cutover:
         verdict = VERDICT_READY_FOR_FULL_CUTOVER
     else:
-        # Intermediate: A/B/C ready, D ready, E blocked (edge case).
+        # PATCH-1 §F: an intermediate BLOCKED (source complete but
+        # something downstream is not-ready without producing its own
+        # reason) must still name WHY. Derive reasons from stage state.
         verdict = VERDICT_BLOCKED
-        # Surface the missing readiness as a note; do not fabricate a reason.
+        if not b.ready and plan_inputs is None:
+            reasons.append(BLOCK_NOT_FULL_PLAN)
+        if a.ready and b.ready and c.ready and d.ready and not f.ready:
+            reasons.append(BLOCK_SEARCH_RUNTIME_NOT_READY)
+        elif a.ready and b.ready and c.ready and not d.ready:
+            # Should have been READY_FOR_FULL_MATERIALIZE — only reason
+            # we're here is F not-ready with D also not-ready. Still
+            # surface the search-runtime miss so users know.
+            if not f.ready:
+                reasons.append(BLOCK_SEARCH_RUNTIME_NOT_READY)
 
     return AcceptanceReport(
         verdict=verdict,
