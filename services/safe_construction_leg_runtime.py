@@ -27,7 +27,23 @@ class ConstructionSiteBridgeError(Exception):
 # SAFE 화면에서 진단 시 명시 가능한 canonical override field(RUNTIME20).
 #   assembler 가 값을 만들지 않는 위험작업/규제/has_subcontractor 축(20).
 #   subcontractor_count 는 포함하지 않는다(정본 컬럼 없음 · LEG passthrough 아님).
-SAFE_CST_OVERRIDE_FIELDS = tuple(RUNTIME_INPUT_FIELDS)
+# WO-E2E-OBJ01-SEM003-DIVING-FAMILY-FASTLANE-IMPLEMENT-001:
+#   SEM-003 5 stable diving subtype/supply booleans are consumer overrides
+#   (SafeConstructionConsumerInput) but are NOT in the audit-frozen
+#   RUNTIME_INPUT_FIELDS/TARGET_FIELDS canonical 27. Extend the override
+#   allowlist so they merge into `values` and flow through _LEG_INPUT_FIELDS
+#   filter to LEG runtime. Assembler contract remains at 27 unchanged.
+SEM003_DIVING_OVERRIDE_FIELDS = (
+    "has_scuba_diving",
+    "has_surface_supplied_diving",
+    "has_pressure_adjustment_chamber",
+    "supplies_air_to_diver_from_air_compressor",
+    "supplies_breathing_gas_to_diver_from_cylinder",
+    # PATCH-1: existing LEG numeric input for Art.531 boundary (≥10 kgf/cm²).
+    # Not re-added to _LEG_INPUT_FIELDS (already exists). Consumer-only override.
+    "breathing_gas_cylinder_pressure_kgf_cm2",
+)
+SAFE_CST_OVERRIDE_FIELDS = tuple(RUNTIME_INPUT_FIELDS) + SEM003_DIVING_OVERRIDE_FIELDS
 
 
 def run_safe_construction_leg(supabase, site_id: str, consumer_input) -> Dict[str, Any]:

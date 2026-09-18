@@ -515,5 +515,5 @@ def test_T14_contract_files_still_importable_and_stable():
         "process_list", "equipment_list",
     ]
     assert hasattr(m4, "DiagnoseStep1Body")
-    assert len(m5._LEG_INPUT_FIELDS) == 207  # WO-...-ART57B-FASTLANE-IMPLEMENT-001: 206→207
+    assert len(m5._LEG_INPUT_FIELDS) == 212  # WO-...-ART57B-FASTLANE-IMPLEMENT-001: 206→207
     assert len(m5._BUILDING_N1_FIELDS) == 32

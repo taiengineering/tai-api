@@ -148,6 +148,17 @@ _LEG_INPUT_FIELDS = (
     "has_crane", "has_excavation", "has_concrete_work", "has_hazardous_material",
     "has_gas", "is_multi_use", "has_safety_manager", "has_subcontractor", "has_scaffold",
     "has_diving", "has_dust_work", "has_forklift", "has_high_pressure_gas", "has_pile_work",
+    # WO-E2E-OBJ01-SEM003-DIVING-FAMILY-FASTLANE-IMPLEMENT-001:
+    # 5 stable diving subtype/supply booleans for LEG 27-atom partition
+    # correction. Consumer-provided via SafeConstructionConsumerInput;
+    # missing != false (omit on absence, never inject false).
+    # No alias / no derivation / no fallback from has_diving / has_air_compressor /
+    # has_high_pressure_work parents.
+    "has_scuba_diving",
+    "has_surface_supplied_diving",
+    "has_pressure_adjustment_chamber",
+    "supplies_air_to_diver_from_air_compressor",
+    "supplies_breathing_gas_to_diver_from_cylinder",
     "has_confined_space", "has_welding", "has_mech_parking", "has_pressure_vessel",
     "has_demolition", "has_radiation", "has_rolling", "has_boiler", "has_conveyor",
     "has_steel_frame", "is_energy_intensive", "has_grinding", "has_painting", "has_blasting",

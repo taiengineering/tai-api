@@ -37,8 +37,8 @@ def test_dust_exact_fields_in_allowlist():
     assert "has_tunnel_construction_work" in _LEG_INPUT_FIELDS
     for name in DUST_DETAILS + REROUTE_FACTS:
         assert name in _LEG_INPUT_FIELDS, name
-    assert len(_LEG_INPUT_FIELDS) == 207  # WO-...-ART57B-FASTLANE-IMPLEMENT-001: 206→207
-    assert len(set(_LEG_INPUT_FIELDS)) == 207  # WO-...-ART57B-FASTLANE-IMPLEMENT-001: 206→207
+    assert len(_LEG_INPUT_FIELDS) == 212  # WO-...-ART57B-FASTLANE-IMPLEMENT-001: 206→207
+    assert len(set(_LEG_INPUT_FIELDS)) == 212  # WO-...-ART57B-FASTLANE-IMPLEMENT-001: 206→207
 
 
 def test_has_dust_work_does_not_infer_details():
