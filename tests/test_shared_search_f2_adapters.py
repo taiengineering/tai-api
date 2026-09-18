@@ -175,8 +175,8 @@ def _legal_row(kind, ident="leg-001", law_name="산업안전보건법 시행규�
         "article_text": "이 규칙은 …을 정함을 목적으로 한다.",
         "source_id": "LEG_OFFICIAL",
         "source_key": ident,
-        "published_at": "2026-01-01T00:00:00+00:00",
-        "version_effective_at": "2026-01-01T00:00:00+00:00",
+        "enforcement_date": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:00+00:00",
     }
     if kind == "law_article":
         row["article_internal_key"] = ident

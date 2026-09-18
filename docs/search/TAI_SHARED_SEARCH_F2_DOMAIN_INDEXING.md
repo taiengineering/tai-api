@@ -69,12 +69,12 @@ matches under `services/shared_search/adapters/**`.
 | Domain | object_type | canonical_id source | source_id | source_key | publication gate | Notes |
 |---|---|---|---|---|---|---|
 | GUIDE | `GUIDE` | `kosha_guide.id` | `KOSHA_OFFICIAL_GUIDE` | `kosha_guide.id` | catalog + latest COMPLETED snapshot | PDF originals not chunked (LINK_ONLY) |
-| SAFETY_MATERIAL | `SAFETY_MATERIAL` | `kosha_safety_materials.id` | `KOSHA_OFFICIAL_MATERIAL` | `source_med_seq` (NULLABLE) | catalog + snapshot + no storage hold | `storage_hold=True` collapses to HOLD |
+| SAFETY_MATERIAL | `SAFETY_MATERIAL` | `kosha_safety_materials.id` | `KOSHA_OFFICIAL_MATERIAL` | `source_med_seq` (NULLABLE) | catalog + snapshot + no unresolved storage hold (real column: `status` ∈ {`OPEN`, `RESOLVED`}, F2 FINAL §1 — no `resolved` boolean) | `status != RESOLVED` (fail-closed on null) collapses to HOLD |
 | CSI_ACCIDENT | `CSI_ACCIDENT` | `csi_accident_cases.content_id` (`CSI:<uuid>`) | `CSI` | `NULL` (CSI file has none) | latest COMPLETED `snapshot_items.identity_status=READY` | detail = `/public/accidents/csi/{uuid_part}` |
 | CHEM | `CHEM` | `kosha_msds_chemicals.id` (uuid) | `KOSHA_MSDS` | `kosha_msds_chemicals.source_key` (chem_id) | present in `kosha_msds_seo_preview_current` OR `kosha_msds_full_current` | Search NEVER calls `cutover.is_full_ready`. PUBLIC visibility gated by `KOSHA_MSDS_PUBLIC_MODE` env at query time. CHEM_TERM per-row subject NOT auto-assigned (F2 §19). |
 | KNOWLEDGE | `KNOWLEDGE` | `safe_help_content.doc_id` | `TAI_HELP_CENTER` | `safe_help_content.doc_id` | `status = PUBLISHED` | `/help/search` operational endpoint unchanged; adapter mirrors content |
 | PRECEDENT | `PRECEDENT` | `industrial_accident_precedents.id` | `law_go_kr` | `prec_seq` (may be NULL for legacy) | `is_active = true` | Detail resolver DEFERRED_TO_DOMAIN_ADAPTER; adapter sets `public_url = null` |
-| LEGAL | `LEGAL` | `obligation_atom_id` OR `article_id` per subtype | `LEG_OFFICIAL` (default) or adapter-chosen | Domain-native (NULLABLE) | LEG PUBLISHED + APPROVED | `record_kind='norm_cluster'` raises `AdapterBlockedSubtype` (blocked; not indexed today) |
+| LEGAL | `LEGAL` | `law_article.id` (Domain PK) — F2 FINAL §7 forbids `article_internal_key` (7,642 distinct / 35,412 rows) | `LEG_OFFICIAL` | `NULL` (F2 FINAL §8: no synthetic composite) | active `law_master` + `law_article.is_deleted_in_version=false` (F2 FINAL §3-§10: assembled from `law_master`+`law_version`+`law_article`; `law_article_current` view does NOT exist) | `obligation_atom` / `norm_cluster` raise `AdapterBlockedSubtype` (blocked; `legal_obligations` has 0 rows) |
 | RISK | `RISK` | `risk_canonical_nodes.id` (when ACTIVE) | future | future | `status = ACTIVE` **AND** sector-linked | Currently 0 rows yielded — RISK-C02 opens the ACTIVE gate |
 
 ## 4. Adapter Protocol
@@ -169,24 +169,36 @@ railway run --service tai-api-prod \
 
 Zero SearchStore write. Zero RPC. Zero DML. Zero env change.
 
-### 7.3 Baseline anchors (F2 WO §7 / §40)
+### 7.3 Baseline anchors (F2 WO §7 / §40) + measured census (2026-09-19)
 
-The Owner-provided sanity anchors are:
+The Owner-provided sanity anchors and the actual READ-only census
+result (evidence: `docs/search/evidence/f2_census_20260919.json`):
 
-| Domain | Anchor |
-|---|---|
-| GUIDE | ≈ 1,039 current |
-| SAFETY_MATERIAL | catalog 30,775; latest COMPLETED membership 9,218; details 9,219; unresolved holds 501 |
-| CSI READY | ≈ 37,157 |
-| CHEM SEO PREVIEW | 1,997 |
-| CHEM FULL | 0 |
-| KNOWLEDGE PUBLISHED | 322 |
-| PRECEDENT active | 849 |
-| LEGAL obligations | 0 rows (obligation_atom BLOCKED per §32) |
-| LAW ARTICLE raw | 35,412 (eligible current is a subset per §29) |
+| Domain | Anchor | Measured | Δ | Verdict |
+|---|---|---|---|---|
+| GUIDE | ≈ 1,039 | **1,039** | 0 | anchor exact |
+| SAFETY_MATERIAL (member) | ≈ 9,218 | **9,218** | 0 | anchor exact |
+| SAFETY_MATERIAL (HOLD) | ≈ 501 | 135 | -366 | signal (join = hold ∩ membership, not raw hold count) |
+| CSI READY | ≈ 37,157 | 34,368 | -2,789 | signal (Domain state drift) |
+| CHEM SEO PREVIEW | 1,997 | 0 | -1,997 | signal (view returned 0 rows; investigate outside F2 scope) |
+| CHEM FULL | 0 | 0 | 0 | anchor exact |
+| KNOWLEDGE PUBLISHED | 322 | **322** | 0 | anchor exact |
+| PRECEDENT active | 849 | **849** | 0 | anchor exact |
+| LEGAL current-eligible articles | 35,412 | **35,412** | 0 | anchor exact — canonical_id = `law_article.id`, 35,412 unique, 0 duplicate |
+| LEGAL obligations | 0 (BLOCKED) | 0 (BLOCKED) | 0 | anchor exact |
+| RISK indexed | 0 | 0 | 0 | anchor exact — gate closed until RISK-C02 |
 
-Any post-run drift from these anchors is a signal — either the
-Domain state changed or a production binding needs adjustment.
+Hard-fail criteria (F2 WO §14):
+- duplicate canonical_ids: **0** across all 8 Domains
+- identity failures: **0**
+- title failures: **0**
+- timestamp failures: **0**
+- normalization failures: **0**
+- LEGAL yielded == 35,412: **PASS**
+
+Drift signals (Domain state / join semantics — not blockers): CSI,
+CHEM SEO preview, MATERIAL HOLD. Recorded here for the Owner and
+handed off to F3.
 
 ## 8. Boundary — what F2 does NOT do
 

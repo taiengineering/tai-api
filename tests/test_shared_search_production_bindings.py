@@ -148,7 +148,8 @@ def _empty_prod_supabase():
         "kosha_safety_material_snapshot_items": [],
         "kosha_safety_material_details": [],
         "kosha_safety_material_storage_holds": [],
-        "law_article_current": [],
+        "law_master": [],
+        "law_article": [],
     })
 
 
@@ -314,6 +315,8 @@ def test_precedent_binding_active_only():
 
 
 def test_material_binding_joins_catalog_details_holds():
+    """F2 FINAL §1: storage_holds real column is `status`
+    (OPEN / RESOLVED). No `resolved` boolean."""
     sb = FakeSupabase(tables={
         "kosha_safety_materials": [
             {"id": "m-1", "title": "Material 1",
@@ -322,6 +325,8 @@ def test_material_binding_joins_catalog_details_holds():
              "accident_type": "추락", "product_type": "video"},
             {"id": "m-2", "title": "Material 2",
              "url": "https://example/m2"},
+            {"id": "m-3", "title": "Material 3",
+             "url": "https://example/m3"},
         ],
         "kosha_safety_material_snapshots": [
             {"id": "snap-mat-1", "completed_at": "2026-06-01T00:00:00+00:00",
@@ -330,49 +335,175 @@ def test_material_binding_joins_catalog_details_holds():
         "kosha_safety_material_snapshot_items": [
             {"snapshot_id": "snap-mat-1", "material_id": "m-1"},
             {"snapshot_id": "snap-mat-1", "material_id": "m-2"},
+            {"snapshot_id": "snap-mat-1", "material_id": "m-3"},
         ],
         "kosha_safety_material_details": [
             {"material_id": "m-1", "source_med_seq": 1001,
              "source_title": "Detail 1", "source_description": "desc",
              "source_published_at": "2026-05-01T00:00:00+00:00",
              "source_updated_at": "2026-05-10T00:00:00+00:00"},
+            {"material_id": "m-2", "source_med_seq": 1002,
+             "source_updated_at": "2026-05-10T00:00:00+00:00"},
+            {"material_id": "m-3", "source_med_seq": 1003,
+             "source_updated_at": "2026-05-10T00:00:00+00:00"},
         ],
         "kosha_safety_material_storage_holds": [
-            {"material_id": "m-2", "resolved": False},
+            # m-2 has an OPEN hold → HOLD.
+            {"material_id": "m-2", "status": "OPEN"},
+            # m-3 had a hold that was RESOLVED → PUBLISHED (no longer held).
+            {"material_id": "m-3", "status": "RESOLVED",
+             "resolved_at": "2026-05-15T00:00:00+00:00"},
         ],
     })
     adapters = build_production_adapters(sb)
     mat_adapter = next(a for a in adapters if a.domain_name == "SAFETY_MATERIAL")
     docs = list(mat_adapter.iter_documents())
-    # m-1 published, m-2 storage hold.
     by_id = {d["canonical_id"]: d for d in docs}
     assert by_id["m-1"]["publication_status"] == "PUBLISHED"
     assert by_id["m-1"]["source_key"] == "1001"
     assert by_id["m-2"]["publication_status"] == "HOLD"
     assert by_id["m-2"]["visibility_scopes"] == []
+    assert by_id["m-3"]["publication_status"] == "PUBLISHED"
 
 
-def test_legal_binding_yields_law_articles_and_reports_block():
-    """production binding yields law_article rows and (empty) obligation
-    subtypes — obligation_atom source (`legal_obligations`) currently
-    has 0 rows in production, so it's not in `law_article_current`."""
+def test_material_binding_uses_real_status_column_not_resolved_boolean():
+    """Regression guard for the F2 FINAL §1 blocker: the production
+    binding MUST NOT reference a `resolved` column on
+    kosha_safety_material_storage_holds."""
+    import pathlib
+    bindings = (pathlib.Path(__file__).resolve().parents[1]
+                / "services" / "shared_search" / "production_bindings.py")
+    text = bindings.read_text(encoding="utf-8")
+    # The phantom column must not appear anywhere in the source.
+    assert "material_id,resolved" not in text
+    assert '"resolved"' not in text
+    # And the real column MUST appear.
+    assert "material_id,status" in text
+
+
+def test_legal_binding_reads_law_master_version_article_directly():
+    """F2 FINAL §3-§10: LEGAL binding assembles current-eligible
+    articles from law_master + law_version + law_article — the
+    `law_article_current` view does NOT exist in production. The
+    canonical_id MUST be `law_article.id` (not article_internal_key).
+    """
     sb = FakeSupabase(tables={
-        "law_article_current": [
-            {"id": "art-1", "article_internal_key": "law-1/art-1",
-             "law_name": "산업안전보건법",
+        "law_master": [
+            {"id": "lm-1", "law_name": "산업안전보건법",
+             "is_active": True, "current_version_id": "lv-1a"},
+            # inactive law — must be excluded.
+            {"id": "lm-inactive", "law_name": "구법",
+             "is_active": False, "current_version_id": "lv-old"},
+            # active law with a different current version.
+            {"id": "lm-2", "law_name": "산업안전보건법 시행규칙",
+             "is_active": True, "current_version_id": "lv-2c"},
+        ],
+        "law_article": [
+            # PUBLISHED (belongs to current version + not deleted).
+            {"id": "art-A", "law_id": "lm-1", "law_version_id": "lv-1a",
              "article_no": "1", "article_title": "목적",
-             "article_text": "이 법은...",
-             "published_at": "2026-01-01T00:00:00+00:00"},
+             "article_text": "이 법은…",
+             "is_deleted_in_version": False,
+             "enforcement_date": "2026-01-01T00:00:00+00:00"},
+            {"id": "art-B", "law_id": "lm-1", "law_version_id": "lv-1a",
+             "article_no": "2", "article_title": "정의",
+             "article_text": "이 법에서 …",
+             "is_deleted_in_version": False,
+             "enforcement_date": "2026-01-01T00:00:00+00:00"},
+            {"id": "art-C", "law_id": "lm-2", "law_version_id": "lv-2c",
+             "article_no": "1",
+             "article_text": "시행규칙 §1 …",
+             "is_deleted_in_version": False,
+             "enforcement_date": "2026-01-01T00:00:00+00:00"},
+            # Same article_internal_key as art-A but on the CURRENT
+            # version — proves canonical_id ≠ article_internal_key
+            # (F2 FINAL §6/§7). Both must survive as distinct rows.
+            {"id": "art-A-companion", "law_id": "lm-1", "law_version_id": "lv-1a",
+             "article_internal_key": "law-1/art-1",  # collides
+             "article_no": "3", "article_title": "적용대상",
+             "article_text": "…",
+             "is_deleted_in_version": False,
+             "enforcement_date": "2026-01-01T00:00:00+00:00"},
+            # Belongs to an OLD version — excluded.
+            {"id": "art-old", "law_id": "lm-1", "law_version_id": "lv-1-OLD",
+             "article_no": "1", "article_text": "예전",
+             "is_deleted_in_version": False,
+             "enforcement_date": "2025-01-01T00:00:00+00:00"},
+            # Current version but deleted in it — excluded.
+            {"id": "art-deleted", "law_id": "lm-1", "law_version_id": "lv-1a",
+             "article_no": "99", "article_text": "삭제됨",
+             "is_deleted_in_version": True,
+             "enforcement_date": "2026-01-01T00:00:00+00:00"},
+            # Belongs to an INACTIVE master — excluded.
+            {"id": "art-inactive", "law_id": "lm-inactive",
+             "law_version_id": "lv-old",
+             "article_no": "1", "article_text": "폐지",
+             "is_deleted_in_version": False,
+             "enforcement_date": "2024-01-01T00:00:00+00:00"},
         ],
     })
     adapters = build_production_adapters(sb)
     legal_adapter = next(a for a in adapters if a.domain_name == "LEGAL")
     docs = list(legal_adapter.iter_documents())
-    assert len(docs) == 1
-    d = docs[0]
-    assert d["canonical_id"] == "law-1/art-1"  # internal_key preferred
-    assert "산업안전보건법" in d["title"]
-    assert "제1조" in d["title"]
+    canonical_ids = [d["canonical_id"] for d in docs]
+    assert set(canonical_ids) == {"art-A", "art-B", "art-C", "art-A-companion"}
+    # Canonical uniqueness across the run.
+    assert len(canonical_ids) == len(set(canonical_ids))
+    # law_name projected onto each row.
+    d_a = next(d for d in docs if d["canonical_id"] == "art-A")
+    assert "산업안전보건법" in d_a["title"]
+    assert "제1조" in d_a["title"]
+    # article_internal_key collision does NOT collapse the two rows —
+    # they carry distinct canonical_id (law_article.id).
+    d_companion = next(d for d in docs
+                       if d["canonical_id"] == "art-A-companion")
+    assert d_companion["title"] != d_a["title"]
+
+
+def test_legal_binding_by_id_respects_current_version_gate():
+    sb = FakeSupabase(tables={
+        "law_master": [
+            {"id": "lm-1", "law_name": "L", "is_active": True,
+             "current_version_id": "lv-current"},
+        ],
+        "law_article": [
+            {"id": "current", "law_id": "lm-1", "law_version_id": "lv-current",
+             "article_no": "1", "article_text": "current",
+             "is_deleted_in_version": False,
+             "enforcement_date": "2026-01-01T00:00:00+00:00"},
+            {"id": "old", "law_id": "lm-1", "law_version_id": "lv-OLD",
+             "article_no": "1", "article_text": "old",
+             "is_deleted_in_version": False,
+             "enforcement_date": "2025-01-01T00:00:00+00:00"},
+            {"id": "deleted", "law_id": "lm-1", "law_version_id": "lv-current",
+             "article_no": "9", "article_text": "gone",
+             "is_deleted_in_version": True,
+             "enforcement_date": "2026-01-01T00:00:00+00:00"},
+        ],
+    })
+    adapters = build_production_adapters(sb)
+    legal_adapter = next(a for a in adapters if a.domain_name == "LEGAL")
+    # Current row → payload.
+    assert legal_adapter.object_reindex_payload("current") is not None
+    # Old version → None (should be tombstoned by indexer).
+    assert legal_adapter.object_reindex_payload("old") is None
+    # Current version but deleted → None.
+    assert legal_adapter.object_reindex_payload("deleted") is None
+
+
+def test_no_law_article_current_view_referenced():
+    """Regression guard for F2 FINAL §3: no production code path may
+    call `.table("law_article_current")`. Comments / docstrings that
+    document why we DON'T use it are allowed."""
+    import pathlib
+    import re
+    banned = re.compile(r'''\.table\(\s*["']law_article_current["']\s*\)''')
+    root = pathlib.Path(__file__).resolve().parents[1] / "services" / "shared_search"
+    for py in root.rglob("*.py"):
+        text = py.read_text(encoding="utf-8")
+        assert not banned.search(text), (
+            f"{py}: calls .table('law_article_current') which does not "
+            "exist in production; use law_master + law_article directly.")
 
 
 # ---------------------------------------------------------------------------
@@ -420,10 +551,15 @@ def test_registry_full_rebuild_all_domains(monkeypatch):
             "source_updated_at": "2026-01-02T00:00:00+00:00",
         }],
         "kosha_safety_material_storage_holds": [],
-        "law_article_current": [{
-            "id": "art-1", "article_internal_key": "l/1", "law_name": "L",
+        "law_master": [{
+            "id": "lm-1", "law_name": "L", "is_active": True,
+            "current_version_id": "lv-1",
+        }],
+        "law_article": [{
+            "id": "art-1", "law_id": "lm-1", "law_version_id": "lv-1",
             "article_no": "1", "article_text": "txt",
-            "published_at": "2026-01-01T00:00:00+00:00",
+            "is_deleted_in_version": False,
+            "enforcement_date": "2026-01-01T00:00:00+00:00",
         }],
     })
     adapters = build_production_adapters(sb)

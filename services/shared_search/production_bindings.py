@@ -327,11 +327,15 @@ def _make_safety_material_adapter(client: SupabaseClient) -> SafetyMaterialAdapt
                             "source_url,source_published_at,source_updated_at")
                     .in_("material_id", batch).execute().data or [])
             }
+            # Real schema uses status ∈ {OPEN, RESOLVED} + resolved_at
+            # (NOT a `resolved` boolean). Any status != RESOLVED counts
+            # as an active hold; unknown/null status is fail-closed —
+            # treated as an active hold — per F2 FINAL §1.
             holds = {
                 h["material_id"] for h in (client.table("kosha_safety_material_storage_holds")
-                    .select("material_id,resolved")
+                    .select("material_id,status")
                     .in_("material_id", batch).execute().data or [])
-                if not h.get("resolved")
+                if (h.get("status") or "OPEN") != "RESOLVED"
             }
             for mid in batch:
                 cat = catalogs.get(mid) or {}
@@ -358,12 +362,16 @@ def _make_safety_material_adapter(client: SupabaseClient) -> SafetyMaterialAdapt
         ) or {}
         hold_row = _fetch_one(
             client, table="kosha_safety_material_storage_holds",
-            select="material_id,resolved",
+            select="material_id,status",
             key_column="material_id", key_value=material_id,
+        )
+        active_hold = bool(
+            hold_row
+            and (hold_row.get("status") or "OPEN") != "RESOLVED"
         )
         return {**cat, **det,
                 "id": material_id,
-                "storage_hold": bool(hold_row and not hold_row.get("resolved")),
+                "storage_hold": active_hold,
                 "_snapshot_completed_at": _snapshot_completed_at(
                     client, snapshot_table="kosha_safety_material_snapshots",
                     snapshot_id=_latest_snapshot_id())}
@@ -372,47 +380,129 @@ def _make_safety_material_adapter(client: SupabaseClient) -> SafetyMaterialAdapt
 
 
 def _make_legal_adapter(client: SupabaseClient) -> LegalAdapter:
-    """LEGAL binds to law_master + law_version + law_article per §28-§30.
+    """LEGAL binds directly to law_master + law_version + law_article.
+
+    F2 FINAL §3-§10: `law_article_current` does NOT exist in
+    production; the binding assembles the current-eligible set at
+    query time by:
+
+        1. loading active law_master rows keyed by current_version_id
+        2. paginating law_article filtered to those current_version_id
+           values and `is_deleted_in_version = false`
+        3. joining the law_name from law_master back onto each row
+
+    canonical_id = `law_article.id` (Domain PK). WO §7 forbids
+    `article_internal_key` — production has 35,412 current-eligible
+    articles but only 7,642 distinct `article_internal_key` and
+    33,482 distinct `law_id + article_internal_key`. Semantic
+    identity continuity across law revisions is a Legal Domain
+    governance decision, not something F2 invents.
 
     Production reality (per F2 CO §27):
-      - `legal_obligations` has 0 rows → obligation_atom BLOCKED
-      - `law_article` has ~35,412 raw rows; a "currently published"
-        subset is defined by the three-table join predicate:
-            law_master.is_active = true
-            law_version.is_current = true
-            law_article.is_deleted_in_version = false
-
-    Every yielded row is tagged `record_kind = 'law_article'`; other
-    subtypes trip the BLOCKED_SUBTYPES path in LegalAdapter.
+      - legal_obligations has 0 rows → obligation_atom BLOCKED
+      - norm_cluster BLOCKED
     """
-    def _iter_current() -> Iterator[dict]:
-        # This binding assumes a materialized view or a Domain-side
-        # helper exposes `law_article_current` in the tai-api SoT.
-        # If that view is not yet defined the paginator will simply
-        # yield nothing — the LEGAL adapter then reports its
-        # BLOCKED_SUBTYPES on empty run, and F2 completes with LEGAL
-        # marked as an evidence gap rather than failing.
-        for row in paginate_supabase(
+    LAW_MASTER_SELECT = "id,law_name,is_active,current_version_id"
+    # Real columns verified via information_schema on production
+    # (F2 FINAL §14 read-only discovery). `published_at` /
+    # `version_effective_at` do NOT exist — timestamp resolution uses
+    # `enforcement_date` (per law_article + fall back to
+    # law_article.updated_at).
+    LAW_ARTICLE_SELECT = (
+        "id,law_id,law_version_id,article_no,article_sub_no,"
+        "article_title,article_text,is_deleted_in_version,"
+        "enforcement_date,updated_at"
+    )
+    CURRENT_VERSION_CHUNK = 400   # keep any single `.in_()` small
+
+    def _active_masters() -> tuple[dict[str, dict], list[str]]:
+        masters: dict[str, dict] = {}
+        current_version_ids: list[str] = []
+        for m in paginate_supabase(
             client,
-            table="law_article_current",
-            select=("id,article_internal_key,law_name,article_no,"
-                    "article_sub_no,article_title,article_text,"
-                    "published_at,version_effective_at,source_id,source_key"),
+            table="law_master",
+            select=LAW_MASTER_SELECT,
+            apply_filters=lambda q: q.eq("is_active", True),
             order_column="id",
         ):
-            row["record_kind"] = "law_article"
-            yield row
+            mid = m.get("id")
+            cvid = m.get("current_version_id")
+            if not mid or not cvid:
+                continue
+            masters[mid] = m
+            current_version_ids.append(cvid)
+        # De-duplicate + sort for deterministic order.
+        current_version_ids = sorted(set(current_version_ids))
+        return masters, current_version_ids
+
+    def _law_name_by_version(masters: dict[str, dict]) -> dict[str, str]:
+        # Map current_version_id → law_name (for the join back onto
+        # article rows).
+        out: dict[str, str] = {}
+        for m in masters.values():
+            cvid = m.get("current_version_id")
+            name = m.get("law_name")
+            if cvid and name:
+                out[cvid] = name
+        return out
+
+    def _iter_current() -> Iterator[dict]:
+        masters, current_version_ids = _active_masters()
+        if not current_version_ids:
+            return
+        name_map = _law_name_by_version(masters)
+
+        for start in range(0, len(current_version_ids), CURRENT_VERSION_CHUNK):
+            batch = current_version_ids[start:start + CURRENT_VERSION_CHUNK]
+            # Chunked SELECT for law_article. `.in_()` on
+            # law_version_id + `.eq("is_deleted_in_version", False)`.
+            # Range-paginate WITHIN the chunk to survive large chunks.
+            batch_start = 0
+            while True:
+                q = (client.table("law_article")
+                         .select(LAW_ARTICLE_SELECT)
+                         .in_("law_version_id", batch)
+                         .eq("is_deleted_in_version", False)
+                         .order("id")
+                         .range(batch_start, batch_start + 999))
+                r = q.execute()
+                rows = list(getattr(r, "data", None) or [])
+                if not rows:
+                    break
+                for row in rows:
+                    cvid = row.get("law_version_id")
+                    row["law_name"] = name_map.get(cvid)
+                    row["record_kind"] = "law_article"
+                    yield row
+                if len(rows) < 1000:
+                    break
+                batch_start += 1000
 
     def _by_id(article_id: str) -> Optional[dict]:
         row = _fetch_one(
-            client, table="law_article_current",
-            select=("id,article_internal_key,law_name,article_no,"
-                    "article_sub_no,article_title,article_text,"
-                    "published_at,version_effective_at,source_id,source_key"),
+            client, table="law_article",
+            select=LAW_ARTICLE_SELECT,
             key_column="id", key_value=article_id,
         )
-        if row is not None:
-            row["record_kind"] = "law_article"
+        if row is None:
+            return None
+        if row.get("is_deleted_in_version") is True:
+            return None
+        # Look up the law_master via law_id → must be active AND its
+        # current_version_id must equal this row's law_version_id.
+        master = _fetch_one(
+            client, table="law_master",
+            select=LAW_MASTER_SELECT,
+            key_column="id", key_value=row.get("law_id"),
+        )
+        if master is None:
+            return None
+        if not master.get("is_active"):
+            return None
+        if master.get("current_version_id") != row.get("law_version_id"):
+            return None
+        row["law_name"] = master.get("law_name")
+        row["record_kind"] = "law_article"
         return row
 
     return LegalAdapter(fetch_current=_iter_current, fetch_by_id=_by_id)

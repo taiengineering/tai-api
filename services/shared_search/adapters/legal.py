@@ -88,12 +88,14 @@ def _normalize_legal(row: dict) -> Optional[dict]:
     kind = (row.get("record_kind") or "").strip()
     if kind != "law_article":
         return None
-    # F2 CO §30: canonical continuity across revisions requires a
-    # stable id that survives version bumps. Prefer
-    # article_internal_key; fall back to id only when the Domain
-    # doesn't emit that stable key.
-    canonical_id = (row.get("article_internal_key")
-                    or row.get("id"))
+    # F2 FINAL §7: canonical_id MUST be the Domain PK
+    # (`law_article.id`). `article_internal_key` has ~7,642 distinct
+    # values across ~35,412 current-eligible articles and
+    # `law_id + article_internal_key` still collides (~33,482 distinct)
+    # — so neither is a valid canonical identity. Cross-version
+    # semantic continuity is Legal Domain governance, not something
+    # Search invents.
+    canonical_id = row.get("id")
     if not canonical_id:
         return None
     law_name = row.get("law_name")
@@ -113,12 +115,18 @@ def _normalize_legal(row: dict) -> Optional[dict]:
         title = " ".join(title_parts)
     else:
         title = article_title or f"law_article/{canonical_id}"
+    # F2 FINAL §14: real law_article columns (verified via
+    # information_schema on production) are `enforcement_date` +
+    # `updated_at`. `published_at` / `version_effective_at` do not
+    # exist. Adapter never invents timestamps — if both are absent
+    # the row is skipped.
     ts = first_present_iso(
-        row.get("published_at"),
-        row.get("version_effective_at"),
+        row.get("enforcement_date"),
+        row.get("updated_at"),
     )
     if ts is MISSING_TIMESTAMP:
         return None
+    # source_key: NULL rather than a synthetic composite (F2 FINAL §8).
     return {
         "object_type": LegalAdapter.object_type,
         "canonical_id": str(canonical_id),
