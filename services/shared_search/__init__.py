@@ -71,6 +71,8 @@ from services.shared_search.adapters import (
     ChemAdapter, KnowledgeAdapter, PrecedentAdapter,
     LegalAdapter, RiskAdapter,
 )
+from services.shared_search.census import DomainCensus, run_census
+from services.shared_search.production_bindings import build_production_adapters
 
 __all__ = [
     "PUBLICATION_STATUS_PUBLISHED", "PUBLICATION_STATUS_HOLD",
@@ -92,4 +94,6 @@ __all__ = [
     "GuideAdapter", "SafetyMaterialAdapter", "CsiAccidentAdapter",
     "ChemAdapter", "KnowledgeAdapter", "PrecedentAdapter",
     "LegalAdapter", "RiskAdapter",
+    "DomainCensus", "run_census",
+    "build_production_adapters",
 ]

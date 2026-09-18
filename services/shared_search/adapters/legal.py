@@ -1,26 +1,31 @@
-"""LEGAL adapter — WO-TAI-SHARED-SEARCH-F2 §23.
+"""LEGAL adapter — WO-TAI-SHARED-SEARCH-F2 §23 + F2 CO §27-§32.
 
-**Safety boundary**: LEGAL SearchResult is discovery only. Legal
-Engine remains the sole applicability authority. This adapter
-never writes / reads applicability decisions.
+Domain reality:
+- `legal_obligations` table exists but has ZERO rows today
+  (F2 CO §27). The adapter therefore treats obligation_atom as
+  a BLOCKED subtype until Domain evidence lands.
+- `law_article` has ~35,412 raw rows; the adapter supports the
+  law_article subtype when the production binding hands over a
+  Domain-side "is currently published" filter (law_master.is_active
+  = true AND law_version.is_current = true AND
+  law_article.is_deleted_in_version = false, per F2 CO §29).
 
-LEGAL SoT has multiple record kinds:
+Canonical identity for law articles is `article_internal_key` when
+present, else `id`. Version-row UUIDs are NEVER used as canonical_id
+(F2 CO §30 — canonical continuity across law revisions).
 
-    obligation_atom  — deterministic canonical unit (SEARCH-F2 supported)
-    law_article       — deterministic subject id (SEARCH-F2 supported)
-    norm_cluster      — needs additional evidence (BLOCKED subtype)
-
-The adapter yields only the kinds whose canonical identity is
-deterministically provable today; the rest raise
-`AdapterBlockedSubtype` so the Indexer records the block without
-failing the whole F2 run.
+Legal Engine remains the sole applicability authority. This adapter
+never sets `legal_applicable` / `is_required` / any applicability
+field — the writer's `FORBIDDEN_DOCUMENT_KEYS` guard rejects those
+by construction.
 """
 from __future__ import annotations
 
 from typing import Callable, Iterable, Iterator, Optional
 
 from services.shared_search.adapters._common import (
-    as_str_list, coerce_iso, expected_hashes_from_documents,
+    MISSING_TIMESTAMP, as_str_list, coerce_iso,
+    expected_hashes_from_documents, first_present_iso,
 )
 from services.shared_search.adapters.base import AdapterBlockedSubtype
 
@@ -28,8 +33,8 @@ from services.shared_search.adapters.base import AdapterBlockedSubtype
 Fetcher = Callable[[], Iterable[dict]]
 
 
-SUPPORTED_SUBTYPES = frozenset({"obligation_atom", "law_article"})
-BLOCKED_SUBTYPES = frozenset({"norm_cluster"})
+SUPPORTED_SUBTYPES = frozenset({"law_article"})
+BLOCKED_SUBTYPES = frozenset({"obligation_atom", "norm_cluster"})
 
 
 class LegalAdapter:
@@ -42,25 +47,20 @@ class LegalAdapter:
         fetch_current: Fetcher,
         fetch_by_id: Optional[Callable[[str], Optional[dict]]] = None,
     ):
-        # fetch_current yields LEG-published rows tagged with a
-        # `record_kind` field (obligation_atom / law_article / norm_cluster).
-        # SoT-side selection of "which rows count as PUBLISHED"
-        # remains the Domain's authority.
+        # Production binding supplies rows already filtered to
+        # "currently published" (per §29 join predicate). Each row
+        # carries `record_kind` so the adapter can select subtype.
         self._fetch_current = fetch_current
         self._fetch_by_id = fetch_by_id or (lambda _id: None)
         self._blocked_seen: set[str] = set()
 
     def iter_documents(self) -> Iterator[dict]:
-        # Iterate once; raise AdapterBlockedSubtype AFTER we've yielded
-        # every supported doc so the caller records the block but keeps
-        # the run's partial-success semantics intact.
         for row in self._fetch_current():
             kind = (row.get("record_kind") or "").strip()
             if kind in BLOCKED_SUBTYPES:
                 self._blocked_seen.add(kind)
                 continue
             if kind not in SUPPORTED_SUBTYPES:
-                # Unknown subtype = safe skip; write it up as a block.
                 self._blocked_seen.add(kind or "UNKNOWN")
                 continue
             payload = _normalize_legal(row)
@@ -86,49 +86,58 @@ class LegalAdapter:
 
 def _normalize_legal(row: dict) -> Optional[dict]:
     kind = (row.get("record_kind") or "").strip()
-    if kind == "obligation_atom":
-        canonical_id = row.get("obligation_atom_id")
-    elif kind == "law_article":
-        canonical_id = row.get("article_id")
-    else:
+    if kind != "law_article":
         return None
+    # F2 CO §30: canonical continuity across revisions requires a
+    # stable id that survives version bumps. Prefer
+    # article_internal_key; fall back to id only when the Domain
+    # doesn't emit that stable key.
+    canonical_id = (row.get("article_internal_key")
+                    or row.get("id"))
     if not canonical_id:
         return None
-    title = row.get("title")
-    if not title:
+    law_name = row.get("law_name")
+    article_no = row.get("article_no")
+    article_sub_no = row.get("article_sub_no")
+    article_title = row.get("article_title")
+    article_text = row.get("article_text")
+    # Compose a canonical title such as "산업안전보건법 제12조" or
+    # "산업안전보건법 제12조의2 (안전보건관리책임자)". Adapter never
+    # invents Korean; it only concatenates real Domain columns.
+    if law_name and article_no:
+        title_parts = [law_name, f"제{article_no}조"]
+        if article_sub_no:
+            title_parts[-1] = title_parts[-1] + f"의{article_sub_no}"
+        if article_title:
+            title_parts.append(f"({article_title})")
+        title = " ".join(title_parts)
+    else:
+        title = article_title or f"law_article/{canonical_id}"
+    ts = first_present_iso(
+        row.get("published_at"),
+        row.get("version_effective_at"),
+    )
+    if ts is MISSING_TIMESTAMP:
         return None
-    summary = row.get("summary")
-    body = row.get("body") or ""
-    subjects: list[dict] = []
-    subject_key = row.get("subject_key")
-    if subject_key:
-        subjects.append({
-            "subject_type": "LEGAL_TERM",
-            "subject_key": str(subject_key),
-        })
-    context: list[dict] = []
-    if kind == "obligation_atom":
-        context.append({
-            "context_type": "legal_obligation",
-            "context_key": str(canonical_id),
-        })
     return {
         "object_type": LegalAdapter.object_type,
         "canonical_id": str(canonical_id),
         "source_id": row.get("source_id") or "LEG_OFFICIAL",
         "source_key": (str(row["source_key"])
                        if row.get("source_key") is not None else None),
-        "title": str(title),
-        "summary": str(summary) if summary else None,
-        "search_text": " ".join(as_str_list([title, summary, body])),
-        "aliases": [],
-        "keywords": [],
-        "subjects": subjects,
-        "context": context,
-        "public_url": row.get("public_url"),
-        "saas_url": row.get("saas_url"),
+        "title": title,
+        "summary": None,
+        "search_text": " ".join(as_str_list([
+            title, article_text,
+        ])),
+        "aliases": as_str_list([article_no, article_sub_no]),
+        "keywords": as_str_list([law_name]),
+        "subjects": ([{"subject_type": "LEGAL_TERM",
+                        "subject_key": str(law_name)}] if law_name else []),
+        "context": [],
+        "public_url": None,
+        "saas_url": None,
         "publication_status": "PUBLISHED",
         "visibility_scopes": ["PUBLIC", "SAAS", "PAID"],
-        "source_updated_at": coerce_iso(row.get("published_at")
-                                        or row.get("updated_at")),
+        "source_updated_at": ts,
     }

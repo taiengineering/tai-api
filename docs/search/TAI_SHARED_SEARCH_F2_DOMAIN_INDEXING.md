@@ -141,17 +141,52 @@ The store never touches raw SQL beyond the RPC call. Its I/O
 surface is a duck-typed `client.table(...).select/.insert/.upsert/.update/.delete/.eq/.range/.execute()` — same subset the CHEM
 `production_store.py` and other TAI modules use.
 
-## 7. Read-only production census — placeholder
+## 7. Read-only production census
 
-The F2 WO §26 requires a read-only production census per Domain. That
-requires either (a) running `railway run --service tai-api-prod
-python3 -m tools.shared_search.census …` or (b) a stand-alone script
-that reads production Supabase via service role. Both need Owner
-approval — F2 delivers the tooling (adapter + dry-run + reconcile)
-but does not run the census against production yet.
+F2 CO §36-§40 delivers the tooling; the production run itself is an
+Owner-approved separate step.
 
-The dry-run tests in this repo exercise the same call path with
-in-memory fixtures.
+### 7.1 Tooling
+- `services/shared_search/census.py::run_census(adapter)` — READ-only
+  aggregator. Never writes to the SearchStore. Returns a
+  `DomainCensus` with `yielded_count / unique_canonical_ids /
+  duplicate_canonical_ids / identity_failures / title_failures /
+  timestamp_failures / normalization_failures /
+  visibility_{public,saas,paid,internal} / hash_collisions /
+  blocked_subtypes / warnings`.
+- `services/shared_search/production_bindings.py::build_production_adapters(supabase)`
+  — returns all 8 Domain adapters wired to the production views
+  through the shared paginator. Consumer never constructs fetchers.
+- `tools/shared_search/f2_census.py` — thin CLI wrapper.
+
+### 7.2 Run command (post Owner GO)
+
+```bash
+railway run --service tai-api-prod \
+    python3 -m tools.shared_search.f2_census --json \
+    > f2_census_$(date +%Y%m%d).json
+```
+
+Zero SearchStore write. Zero RPC. Zero DML. Zero env change.
+
+### 7.3 Baseline anchors (F2 WO §7 / §40)
+
+The Owner-provided sanity anchors are:
+
+| Domain | Anchor |
+|---|---|
+| GUIDE | ≈ 1,039 current |
+| SAFETY_MATERIAL | catalog 30,775; latest COMPLETED membership 9,218; details 9,219; unresolved holds 501 |
+| CSI READY | ≈ 37,157 |
+| CHEM SEO PREVIEW | 1,997 |
+| CHEM FULL | 0 |
+| KNOWLEDGE PUBLISHED | 322 |
+| PRECEDENT active | 849 |
+| LEGAL obligations | 0 rows (obligation_atom BLOCKED per §32) |
+| LAW ARTICLE raw | 35,412 (eligible current is a subset per §29) |
+
+Any post-run drift from these anchors is a signal — either the
+Domain state changed or a production binding needs adjustment.
 
 ## 8. Boundary — what F2 does NOT do
 

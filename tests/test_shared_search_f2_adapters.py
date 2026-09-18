@@ -39,66 +39,107 @@ UTC = _dt.timezone.utc
 # ---------------------------------------------------------------------------
 
 
-def _guide_row(guide_id="g-001", title="산업안전보건 관리 지침"):
+def _guide_row(guide_id="g-001", guide_title="산업안전보건 관리 지침"):
+    """Mirror of kosha_guide_current row shape.
+
+    Real columns: id / guide_no / guide_title / category_code /
+    category_name / guide_url / regist_date / content_hash /
+    snapshot_id. Reader supplies _snapshot_completed_at.
+    """
     return {
         "id": guide_id,
-        "title": title,
-        "description": "공정별 안전관리 요령",
+        "guide_no": "G-001",
+        "guide_title": guide_title,
+        "category_code": "S",
         "category_name": "안전관리",
-        "url": "https://kosha.or.kr/g/001",
-        "first_seen_at": "2026-01-01T00:00:00+00:00",
-        "last_seen_at": "2026-06-01T00:00:00+00:00",
+        "guide_url": "https://kosha.or.kr/g/001",
+        "regist_date": "2026-01-01T00:00:00+00:00",
+        "content_hash": "abc",
+        "snapshot_id": "snap-guide-001",
+        "_snapshot_completed_at": "2026-06-01T00:00:00+00:00",
     }
 
 
 def _material_row(mid="m-001", storage_hold=False):
+    """Assembled Domain read-model (F2 CO §10 join)."""
     return {
         "id": mid,
         "title": "고소작업 안전자료",
-        "summary": "추락 방지 요약",
+        "url": "https://kosha.or.kr/m/001",
         "category": "재해예방",
         "industry_category": "건설",
         "accident_type": "추락",
-        "url": "https://kosha.or.kr/m/001",
+        "product_type": "video",
         "source_med_seq": 12345,
-        "updated_at": "2026-05-01T00:00:00+00:00",
+        "source_title": "고소작업 안전자료 (official)",
+        "source_description": "추락 방지 요약",
+        "source_url": "https://kosha.or.kr/m/001/src",
+        "source_published_at": "2026-05-01T00:00:00+00:00",
+        "source_updated_at": "2026-05-15T00:00:00+00:00",
         "storage_hold": storage_hold,
+        "_snapshot_completed_at": "2026-06-01T00:00:00+00:00",
     }
 
 
 def _csi_row(uuid_part="abcd", identity_status="READY"):
+    """Mirror of csi_accident_current row shape."""
     return {
         "content_id": f"CSI:{uuid_part}",
+        "source_id": "CSI",
+        "source_key": None,
         "identity_status": identity_status,
         "title": "용접 작업 중 화재 사고",
-        "summary": "용접 스파크에 의한 화재 발생",
+        "occurred_at": "2026-03-01T00:00:00+00:00",
+        "construction_type": "건축",
+        "process_major": "설치",
+        "process_minor": "용접",
+        "object_major": "구조물",
+        "object_minor": "철골",
+        "work_process": "용접",
+        "accident_type_major": "화재",
         "accident_type": "화재",
-        "work_type": "용접",
-        "first_seen_at": "2026-03-01T00:00:00+00:00",
+        "cause_major": "부주의",
+        "cause_mid": None,
+        "cause_minor": None,
+        "cause_detail": None,
+        "summary": "용접 스파크에 의한 화재 발생",
+        "snapshot_id": "snap-csi-001",
+        "_snapshot_completed_at": "2026-03-05T00:00:00+00:00",
     }
 
 
 def _chem_row(uuid="chem-uuid-001", chem_id="C00001"):
+    """Mirror of kosha_msds_seo_preview_current / _current row."""
     return {
         "id": uuid,
+        "content_id": f"CHEM:{uuid}",
+        "source_id": "KOSHA_MSDS",
         "source_key": chem_id,
         "chem_id": chem_id,
+        "identity_status": "READY",
         "chemical_name_ko": "톨루엔",
         "chemical_name_en": "Toluene",
         "cas_no": "108-88-3",
         "ke_no": "KE-31580",
         "en_no": "203-625-9",
         "un_no": "1294",
-        "last_date": "2026-08-01T00:00:00+00:00",
+        "source_content_hash": "abc",
+        "source_dataset_url": None,
+        "snapshot_id": "snap-msds-preview",
+        "_snapshot_completed_at": "2026-08-01T00:00:00+00:00",
     }
 
 
 def _help_row(doc_id="h-001", status="PUBLISHED"):
+    """Mirror of safe_help_content row (real columns)."""
     return {
         "doc_id": doc_id,
         "slug": "how-to-use",
         "title": "사용 가이드",
-        "body_text": "본문 내용",
+        "question": "이 페이지는 어떻게 씁니까?",
+        "answer_short": "먼저 로그인하고 대시보드를 여세요.",
+        "body": "<p>본문 내용</p>",
+        "steps": [],
         "menu_group": "start",
         "status": status,
         "updated_at": "2026-04-01T00:00:00+00:00",
@@ -109,6 +150,7 @@ def _precedent_row(pid="p-001", is_active=True):
     return {
         "id": pid,
         "prec_seq": "202601010001",
+        "source": "law_go_kr",
         "case_number": "2026다1234",
         "case_name": "산업안전보건법 위반 사건",
         "court_name": "대법원",
@@ -122,21 +164,22 @@ def _precedent_row(pid="p-001", is_active=True):
     }
 
 
-def _legal_row(kind, ident="leg-001", title="산업안전보건법 시행규칙 제1조"):
+def _legal_row(kind, ident="leg-001", law_name="산업안전보건법 시행규칙"):
     row = {
         "record_kind": kind,
-        "title": title,
-        "summary": "요지",
-        "body": "본문",
-        "subject_key": "산업안전보건법 시행규칙",
+        "id": ident,
+        "law_name": law_name,
+        "article_no": "1",
+        "article_sub_no": None,
+        "article_title": "목적",
+        "article_text": "이 규칙은 …을 정함을 목적으로 한다.",
         "source_id": "LEG_OFFICIAL",
         "source_key": ident,
         "published_at": "2026-01-01T00:00:00+00:00",
+        "version_effective_at": "2026-01-01T00:00:00+00:00",
     }
-    if kind == "obligation_atom":
-        row["obligation_atom_id"] = ident
-    elif kind == "law_article":
-        row["article_id"] = ident
+    if kind == "law_article":
+        row["article_internal_key"] = ident
     return row
 
 
@@ -156,14 +199,26 @@ def test_guide_adapter_yields_published_document():
     assert d["object_type"] == "GUIDE"
     assert d["canonical_id"] == "g-001"
     assert d["source_id"] == "KOSHA_OFFICIAL_GUIDE"
-    assert d["source_key"] == "g-001"
+    # F2 CO: source_key = guide_no when present (not the row id).
+    assert d["source_key"] == "G-001"
     assert d["publication_status"] == "PUBLISHED"
     assert "PUBLIC" in d["visibility_scopes"]
+    # F2 CO §8: verified tai-www route /safety-guide/{id}.
+    assert d["public_url"] == "/safety-guide/g-001"
 
 
 def test_guide_adapter_missing_title_rejected():
     adapter = GuideAdapter(fetch_current=lambda: [
-        {"id": "g-1"}   # no title
+        {"id": "g-1", "guide_no": "N-1"}   # no guide_title
+    ])
+    assert list(adapter.iter_documents()) == []
+
+
+def test_guide_adapter_missing_timestamp_rejected():
+    """F2 CO §34: fake-epoch fallback is forbidden. A row with no
+    regist_date and no _snapshot_completed_at must be skipped."""
+    adapter = GuideAdapter(fetch_current=lambda: [
+        {"id": "g-x", "guide_no": "N-X", "guide_title": "Title"},
     ])
     assert list(adapter.iter_documents()) == []
 
@@ -195,7 +250,9 @@ def test_csi_adapter_uses_content_id_and_null_source_key():
     assert d["canonical_id"] == "CSI:abcd"
     assert d["source_id"] == "CSI"
     assert d["source_key"] is None
-    assert d["public_url"] == "/public/accidents/csi/abcd"
+    # F2 CO §16: verified tai-www route.
+    assert d["public_url"] == "/accident/csi/abcd"
+    assert d["saas_url"] is None
 
 
 def test_csi_adapter_non_ready_rejected():
@@ -210,8 +267,9 @@ def test_chem_adapter_public_gated_by_env(monkeypatch):
     adapter = ChemAdapter(fetch_current=lambda: [_chem_row()])
     d = list(adapter.iter_documents())[0]
     assert "PUBLIC" not in d["visibility_scopes"]
+    # F2 CO §19-§20: no verified HTML routes today.
     assert d["public_url"] is None
-    assert d["saas_url"].startswith("/saas/chemical/")
+    assert d["saas_url"] is None
 
 
 def test_chem_adapter_public_visible_when_env_seo_preview(monkeypatch):
@@ -219,7 +277,9 @@ def test_chem_adapter_public_visible_when_env_seo_preview(monkeypatch):
     adapter = ChemAdapter(fetch_current=lambda: [_chem_row()])
     d = list(adapter.iter_documents())[0]
     assert "PUBLIC" in d["visibility_scopes"]
-    assert d["public_url"].startswith("/public/kosha/msds/")
+    # Even with public mode ON, no verified HTML route today.
+    assert d["public_url"] is None
+    assert d["saas_url"] is None
 
 
 def test_chem_adapter_never_asserts_chem_term(monkeypatch):
@@ -268,30 +328,40 @@ def test_precedent_adapter_detail_resolver_deferred():
 
 
 def test_legal_adapter_supported_subtypes_pass():
+    """F2 CO §27: obligation_atom is BLOCKED today (legal_obligations
+    table has 0 rows). Only law_article is supported."""
     adapter = LegalAdapter(fetch_current=lambda: [
-        _legal_row("obligation_atom", ident="obl-1"),
         _legal_row("law_article", ident="art-1"),
     ])
     docs = list(adapter.iter_documents())
-    assert {d["canonical_id"] for d in docs} == {"obl-1", "art-1"}
-    # Obligation atoms carry a legal_obligation context tuple.
-    obl = next(d for d in docs if d["canonical_id"] == "obl-1")
-    assert any(c["context_type"] == "legal_obligation" for c in obl["context"])
+    assert {d["canonical_id"] for d in docs} == {"art-1"}
+    art = docs[0]
+    # LEGAL_TERM subject derived from law_name.
+    assert any(s["subject_type"] == "LEGAL_TERM"
+               and s["subject_key"] == "산업안전보건법 시행규칙"
+               for s in art["subjects"])
 
 
 def test_legal_adapter_blocks_unsupported_subtype():
+    """obligation_atom and norm_cluster both raise AdapterBlockedSubtype
+    per F2 CO §27 (obligation_atom has 0 rows in production)."""
     from services.shared_search import AdapterBlockedSubtype
     adapter = LegalAdapter(fetch_current=lambda: [
+        _legal_row("law_article", ident="art-1"),
         _legal_row("obligation_atom", ident="obl-1"),
         _legal_row("norm_cluster", ident="nc-1"),
     ])
     it = adapter.iter_documents()
     yielded = []
-    with pytest.raises(AdapterBlockedSubtype, match="norm_cluster"):
+    with pytest.raises(AdapterBlockedSubtype) as exc_info:
         for d in it:
             yielded.append(d)
-    # We still got the obligation_atom before the block was raised.
-    assert [d["canonical_id"] for d in yielded] == ["obl-1"]
+    msg = str(exc_info.value)
+    # Both subtypes appear in the block message.
+    assert "obligation_atom" in msg
+    assert "norm_cluster" in msg
+    # law_article still made it through before the raise.
+    assert [d["canonical_id"] for d in yielded] == ["art-1"]
 
 
 def test_risk_adapter_yields_nothing_by_default():
@@ -336,8 +406,9 @@ def _all_adapters(monkeypatch):
         ChemAdapter(fetch_current=lambda: [_chem_row()]),
         KnowledgeAdapter(fetch_current=lambda: [_help_row()]),
         PrecedentAdapter(fetch_current=lambda: [_precedent_row()]),
+        # F2 CO §27: only law_article is supported today.
         LegalAdapter(fetch_current=lambda: [
-            _legal_row("obligation_atom", ident="obl-1"),
+            _legal_row("law_article", ident="art-1"),
         ]),
     ]
 
@@ -375,13 +446,13 @@ def test_full_rebuild_legal_blocked_subtype_records_but_does_not_fail(monkeypatc
     indexer = Indexer(store)
     adapters = [
         LegalAdapter(fetch_current=lambda: [
-            _legal_row("obligation_atom", ident="obl-1"),
+            _legal_row("law_article", ident="art-1"),
             _legal_row("norm_cluster", ident="nc-1"),
         ]),
     ]
     result = indexer.full_rebuild(adapters)
     assert result.status == "PROMOTED"
-    assert result.promoted_count == 1     # obligation_atom only
+    assert result.promoted_count == 1     # law_article only
     assert any("LEGAL" == b["domain"] for b in result.blocked_subtypes)
 
 
@@ -417,7 +488,7 @@ def test_object_reindex_via_indexer(monkeypatch):
     # Update GUIDE title via object reindex
     adapter = GuideAdapter(
         fetch_current=lambda: [_guide_row()],
-        fetch_by_id=lambda _id: _guide_row(guide_id="g-001", title="새 제목"),
+        fetch_by_id=lambda _id: _guide_row(guide_id="g-001", guide_title="새 제목"),
     )
     assert indexer.object_reindex(adapter, "g-001") is True
     row = store.get_current("GUIDE", "g-001")
@@ -478,8 +549,8 @@ def test_duplicate_within_domain_is_upserted_not_duplicated(monkeypatch):
     """Two rows with the same (object_type, canonical_id) collapse to one."""
     store = MemoryStore()
     indexer = Indexer(store)
-    row1 = _guide_row(guide_id="dup", title="v1")
-    row2 = _guide_row(guide_id="dup", title="v2")
+    row1 = _guide_row(guide_id="dup", guide_title="v1")
+    row2 = _guide_row(guide_id="dup", guide_title="v2")
     indexer.full_rebuild([
         GuideAdapter(fetch_current=lambda: [row1, row2]),
     ])

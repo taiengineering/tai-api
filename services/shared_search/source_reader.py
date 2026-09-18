@@ -66,7 +66,10 @@ def paginate_supabase(
             q = q.order(order_column, desc=order_desc)
         q = q.range(start, start + page_size - 1)
         result = q.execute()
-        rows = list(getattr(result, "data", None) or result or [])
+        data = getattr(result, "data", None)
+        if data is None:
+            data = []
+        rows = list(data)
         if not rows:
             return
         for row in rows:

@@ -9,22 +9,41 @@ from datetime import datetime
 from typing import Any, Callable, Iterable, Iterator
 
 
-def coerce_iso(value: Any) -> str:
+MISSING_TIMESTAMP = object()   # sentinel for "no authoritative timestamp"
+
+
+def coerce_iso(value: Any) -> Any:
     """Coerce a Domain timestamp value into an ISO 8601 string.
 
-    Domain adapters normalize timestamps at the boundary so the
-    Common Writer sees a uniform shape. Falls back to the epoch if
-    no meaningful timestamp is available — the writer requires
-    source_updated_at to be present.
+    Returns:
+        - ISO 8601 str if the input carries a valid timestamp
+        - `MISSING_TIMESTAMP` sentinel when no authoritative
+          timestamp is available. Adapters MUST NOT hide the miss
+          behind an epoch — Foundation §34 forbids fake epoch dates.
+          Callers should skip the row or classify it in a census.
+
+    WO-TAI-SHARED-SEARCH-F2 CO §34: previously this helper returned
+    `1970-01-01T00:00:00+00:00` whenever the source lacked a
+    timestamp. That masked real Domain-side data quality issues.
+    Adapters now surface the missing case explicitly.
     """
     if isinstance(value, datetime):
         return value.isoformat()
-    if isinstance(value, str) and value:
-        return value
-    # Domain rows that don't carry a timestamp use the epoch marker.
-    # Reconciliation still functions; freshness scoring in F3 can
-    # de-weight these if it wants.
-    return "1970-01-01T00:00:00+00:00"
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return MISSING_TIMESTAMP
+
+
+def first_present_iso(*candidates: Any) -> Any:
+    """Return the first non-empty ISO timestamp among candidates,
+    or `MISSING_TIMESTAMP` if none exist. Used by adapters that have
+    multiple candidate timestamp columns (e.g. GUIDE `regist_date`
+    then snapshot `completed_at`)."""
+    for c in candidates:
+        result = coerce_iso(c)
+        if result is not MISSING_TIMESTAMP:
+            return result
+    return MISSING_TIMESTAMP
 
 
 def as_str_list(values: Iterable[Any]) -> list[str]:
