@@ -97,14 +97,6 @@ class FactoryCreate(BaseModel):
     has_asbestos_demo:       Optional[bool] = None
     has_blasting:            Optional[bool] = None
     has_diving:              Optional[bool] = None
-    # WO-E2E-OBJ01-SEM003-DIVING-FAMILY-FASTLANE-IMPLEMENT-001:
-    # 5 stable diving subtype/supply booleans for LEG runtime 27-atom
-    # partition correction. missing != false — sent to LEG only when set.
-    has_scuba_diving:                              Optional[bool] = None
-    has_surface_supplied_diving:                   Optional[bool] = None
-    has_pressure_adjustment_chamber:               Optional[bool] = None
-    supplies_air_to_diver_from_air_compressor:     Optional[bool] = None
-    supplies_breathing_gas_to_diver_from_cylinder: Optional[bool] = None
 
 
 class FactoryUpdate(BaseModel):
@@ -161,14 +153,6 @@ class FactoryUpdate(BaseModel):
     has_asbestos_demo:       Optional[bool] = None
     has_blasting:            Optional[bool] = None
     has_diving:              Optional[bool] = None
-    # WO-E2E-OBJ01-SEM003-DIVING-FAMILY-FASTLANE-IMPLEMENT-001:
-    # 5 stable diving subtype/supply booleans for LEG runtime 27-atom
-    # partition correction. missing != false — sent to LEG only when set.
-    has_scuba_diving:                              Optional[bool] = None
-    has_surface_supplied_diving:                   Optional[bool] = None
-    has_pressure_adjustment_chamber:               Optional[bool] = None
-    supplies_air_to_diver_from_air_compressor:     Optional[bool] = None
-    supplies_breathing_gas_to_diver_from_cylinder: Optional[bool] = None
 
 
 class FactoryContactBody(BaseModel):

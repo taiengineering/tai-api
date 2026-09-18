@@ -39,6 +39,9 @@ SEM003_DIVING_OVERRIDE_FIELDS = (
     "has_pressure_adjustment_chamber",
     "supplies_air_to_diver_from_air_compressor",
     "supplies_breathing_gas_to_diver_from_cylinder",
+    # PATCH-1: existing LEG numeric input for Art.531 boundary (≥10 kgf/cm²).
+    # Not re-added to _LEG_INPUT_FIELDS (already exists). Consumer-only override.
+    "breathing_gas_cylinder_pressure_kgf_cm2",
 )
 SAFE_CST_OVERRIDE_FIELDS = tuple(RUNTIME_INPUT_FIELDS) + SEM003_DIVING_OVERRIDE_FIELDS
 

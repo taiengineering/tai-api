@@ -102,14 +102,17 @@ class SafeConstructionConsumerInput(BaseModel):
     has_asbestos_demo: Optional[bool] = None
     has_blasting: Optional[bool] = None
     has_diving: Optional[bool] = None
-    # WO-E2E-OBJ01-SEM003-DIVING-FAMILY-FASTLANE-IMPLEMENT-001:
-    # 5 stable diving subtype/supply booleans; missing != false (Optional/None
-    # → LEG input omits key; explicit false preserved).
+    # WO-E2E-OBJ01-SEM003-DIVING-FAMILY-FASTLANE-IMPLEMENT-001 + PATCH-1:
+    # 5 stable diving subtype/supply booleans + 1 existing LEG numeric
+    # (breathing_gas_cylinder_pressure_kgf_cm2) for Art.531 boundary.
+    # All Optional/None → LEG input omits key (missing != false); explicit
+    # false/0 preserved.
     has_scuba_diving: Optional[bool] = None
     has_surface_supplied_diving: Optional[bool] = None
     has_pressure_adjustment_chamber: Optional[bool] = None
     supplies_air_to_diver_from_air_compressor: Optional[bool] = None
     supplies_breathing_gas_to_diver_from_cylinder: Optional[bool] = None
+    breathing_gas_cylinder_pressure_kgf_cm2: Optional[float] = None
     work_height_m: Optional[float] = None
     has_truck_loading_unloading: Optional[bool] = None
     truck_loading_height_m: Optional[float] = None
