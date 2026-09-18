@@ -178,6 +178,141 @@ class SupabaseMaterializeStore:
         for batch in _chunk(rows, SNAPSHOT_ITEM_BATCH_SIZE):
             self.sb.table(SNAPSHOT_ITEMS_TABLE).insert(list(batch)).execute()
 
+    def update_chemical(
+        self,
+        source_id: str,
+        source_key: str,
+        mutable_fields: dict,
+    ) -> None:
+        """Update mutable columns on an existing chemical row.
+
+        Canonical identity (id / content_id / source_id / source_key /
+        chem_id) is refused by the writer's field-mutability contract;
+        we mirror the check here for defense-in-depth.
+        """
+        from services.kosha_msds.materialize_writer import (
+            CHEMICAL_IMMUTABLE_FIELDS,
+        )
+        bad = set(mutable_fields.keys()) & CHEMICAL_IMMUTABLE_FIELDS
+        if bad:
+            raise ValueError(
+                f"cannot update immutable chemical fields {sorted(bad)}"
+            )
+        if not mutable_fields:
+            return
+        (
+            self.sb.table(CHEMICALS_TABLE)
+            .update(dict(mutable_fields))
+            .eq("source_id", source_id)
+            .eq("source_key", source_key)
+            .execute()
+        )
+
+    # -- bulk read side (WO-CHEM-FULL-READINESS-001 PATCH-A) --
+
+    # Chunk size for `source_key IN (...)` chemical fetches. Keeps
+    # PostgREST URL length bounded; each chunk is one REST round-trip.
+    _CHEMICAL_KEY_CHUNK = 200
+    # Chunk size for `chemical_id IN (...)` section fetches. The
+    # section rows within a chunk are further paginated by the default
+    # PostgREST page cap (1000).
+    _SECTION_CHEM_CHUNK = 200
+    _SECTION_PAGE = 1000
+
+    def get_chemicals_by_natural_keys(
+        self,
+        pairs,
+    ) -> dict[tuple[str, str], dict]:
+        """Batch-read every chemical whose natural key appears in `pairs`.
+
+        Groups by source_id, then issues one REST round-trip per chunk
+        of source_keys via `.in_("source_key", chunk)`. Under FULL
+        (20,568 chemicals, one source_id = KOSHA_MSDS, chunk size 200)
+        this is ~103 REST round-trips vs. 20,568 point reads.
+        """
+        by_source: dict[str, list[str]] = {}
+        for sid, skey in pairs:
+            by_source.setdefault(str(sid), []).append(str(skey))
+        out: dict[tuple[str, str], dict] = {}
+        for sid, keys in by_source.items():
+            for chunk in _chunk(sorted(set(keys)), self._CHEMICAL_KEY_CHUNK):
+                r = (
+                    self.sb.table(CHEMICALS_TABLE)
+                    .select(CHEMICAL_SELECT)
+                    .eq("source_id", sid)
+                    .in_("source_key", list(chunk))
+                    .execute()
+                )
+                for row in (r.data or []):
+                    key = (sid, str(row.get("source_key")))
+                    out[key] = dict(row)
+        return out
+
+    def get_sections_by_chemical_ids(
+        self,
+        chemical_ids,
+    ) -> dict[tuple[str, int], dict]:
+        """Batch-read every (chemical_id, section_no) row for the given
+        chemical UUIDs. Chunked by chemical_id and paginated within each
+        chunk. Under FULL (20,568 chemicals × 16 sections = 329,088
+        pairs, chemical chunk size 200, page size 1000) this is
+        ~103 × ⌈3,200 / 1,000⌉ ≈ 412 REST round-trips vs. 329,088
+        point reads.
+        """
+        wanted = sorted({str(cid) for cid in chemical_ids})
+        if not wanted:
+            return {}
+        out: dict[tuple[str, int], dict] = {}
+        select = "chemical_id,section_no,payload_json,section_hash,result_code,result_message,fetched_at"
+        for chunk in _chunk(wanted, self._SECTION_CHEM_CHUNK):
+            offset = 0
+            while True:
+                r = (
+                    self.sb.table(SECTIONS_TABLE)
+                    .select(select)
+                    .in_("chemical_id", list(chunk))
+                    .order("chemical_id")
+                    .order("section_no")
+                    .range(offset, offset + self._SECTION_PAGE - 1)
+                    .execute()
+                )
+                batch = list(r.data or [])
+                for row in batch:
+                    out[(str(row.get("chemical_id")),
+                         int(row.get("section_no")))] = dict(row)
+                if len(batch) < self._SECTION_PAGE:
+                    break
+                offset += self._SECTION_PAGE
+        return out
+
+    def update_section(
+        self,
+        chemical_id: str,
+        section_no: int,
+        mutable_fields: dict,
+    ) -> None:
+        """Update mutable columns on an existing section row.
+
+        (chemical_id, section_no) is the natural key and never changes.
+        """
+        from services.kosha_msds.materialize_writer import (
+            SECTION_IMMUTABLE_FIELDS,
+        )
+        bad = set(mutable_fields.keys()) & SECTION_IMMUTABLE_FIELDS
+        if bad:
+            raise ValueError(
+                f"cannot update immutable section fields {sorted(bad)}"
+            )
+        if not mutable_fields:
+            return
+        (
+            self.sb.table(SECTIONS_TABLE)
+            .update(dict(mutable_fields))
+            .eq("chemical_id", chemical_id)
+            .eq("section_no", int(section_no))
+            .execute()
+        )
+
 
 # ---------------------------------------------------------------------------
 # Publish store — matches the interface consumed by
