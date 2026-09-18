@@ -273,10 +273,17 @@ def search_by_q(
         # Deterministic candidate matching: exact/partial name against
         # both KO and EN fields. Read service returns identity envelope
         # + provenance; no canonical mutation happens on the DB side.
+        # WO-CHEM-FULL-READINESS-003 §12 pagination: each candidate
+        # source must return enough rows for `hits[off:off+lim]` to
+        # have material. Fetch up to MAX_LIMIT per source (already
+        # capped by CHEM-06 read); the outer aggregator applies the
+        # caller's slice.
+        from services.kosha_msds.read import MAX_LIMIT as _READ_MAX_LIMIT
+        internal_limit = _READ_MAX_LIMIT
         for kw in ("name_ko", "name_en"):
             envelope = read.search(
                 store=store,
-                limit=lim,
+                limit=internal_limit,
                 offset=0,
                 scope=scope,
                 **{kw: term},
