@@ -75,15 +75,14 @@ decision.
 | `search_document_id` | R | Projection row id | Projection (writer-assigned) | opaque | never emitted to public consumers | Projection primary key | first-index only |
 | `object_type` | R | Domain enum | Adapter (see §4) | UPPER_SNAKE_CASE from the fixed set | all consumer scopes | Domain classifier | reject on unknown |
 | `canonical_id` | R | Domain canonical id | Adapter reads Domain SoT | Domain-shape (UUID / text) | all scopes | detail-resolution key | on canonical change: reject + require WO |
-| `source_id` | R | provenance system id | Adapter | UPPER_SNAKE_CASE | INTERNAL only | provenance | multi-source merge tracked here |
-| `source_key` | R | provenance record key | Adapter | Domain-shape | INTERNAL only | provenance | may add rows, never overwrite |
+| `source_id` | R | provenance system id | Adapter | Domain-native (verbatim from Domain, e.g. `CSI`, `law_go_kr`, `KOSHA_MSDS`) | INTERNAL only | provenance | on canonical merge only |
+| `source_key` | **O (nullable)** | provenance record key | Adapter | Domain-native shape | INTERNAL only | provenance | may be NULL when the Domain has no source-native identifier (e.g. CSI); NEVER a placeholder / synthetic value |
 | `title` | R | canonical display title | Domain field | strip + trim; keep original case | scope-gated | display | on Domain title change |
 | `summary` | O | preview blurb (≤ 300 chars) | Domain field or first-N of body | strip HTML | scope-gated | display | with title |
 | `search_text` | R | searchable text projection | Adapter-composed | normalize_basic + compact | INTERNAL to engine only | retrieval | on title/summary/body change |
 | `aliases[]` | O | approved alternate surfaces | Adapter reads Domain-approved list | shared dict normalize | INTERNAL | retrieval | Adapter re-fetches |
 | `keywords[]` | O | Domain-native keywords | Adapter reads Domain metadata | strip + trim | INTERNAL | retrieval | on Domain metadata change |
-| `subject_types[]` | O | shared dictionary subject axes | Adapter maps via search-dict subjects | shared dict values only | INTERNAL | retrieval boost | when subjects join/leave |
-| `subject_keys[]` | O | shared dictionary subject keys | Adapter | shared dict values only | INTERNAL | retrieval boost | with subject_types |
+| `subjects[]` | O | shared-dictionary subject axes as `(subject_type, subject_key)` pairs | Adapter maps via search-dict subjects | pair-level; shared-dict values only; sorted + deduplicated | INTERNAL | retrieval boost | when subjects join/leave. Parallel `subject_types[]` / `subject_keys[]` arrays are NOT the canonical contract; the writer emits paired tuples. Physical storage (JSONB, side-table, etc.) is F1 schema's choice. |
 | `context[]` | O | typed context relations (§8) | Adapter derives from Domain + Graph read model | fixed vocabulary | scope-gated on query | filtering / boost | on Graph refresh |
 | `public_url` | O | canonical Public URL if any | Domain routing | absolute URL | PUBLIC + SAAS + PAID | display | on URL contract change |
 | `saas_url` | O | canonical SaaS URL if any | Domain routing | relative or absolute | SAAS + PAID | display | on URL contract change |
@@ -123,6 +122,8 @@ publication_status   = PUBLISHED  when active + snapshot COMPLETED
 
 ### 4.2 SAFETY_MATERIAL — KOSHA safety material catalog
 
+Verified from `services/kosha_safety_material_sync.py::catalog_row_from_official`.
+
 ```text
 object_type          = SAFETY_MATERIAL
 Domain SoT           = public.kosha_safety_materials  (catalog)
@@ -132,41 +133,70 @@ Details table        = kosha_safety_material_details
 Assets table         = kosha_safety_material_assets
                        kosha_safety_material_asset_versions
 canonical_id         = kosha_safety_materials.id
+                       (computed via catalog_identity(url, title, raw);
+                        stable identity of the material)
 source_id            = KOSHA_OFFICIAL_MATERIAL
-source_key           = kosha_safety_materials.material_id (KOSHA-issued)
-publication gate     = catalog row present + snapshot COMPLETED +
-                       asset storage policy ≠ HOLD (see
-                       kosha_safety_material_storage_holds*)
-current read model   = latest COMPLETED snapshot with holds excluded
-detail resolver      = existing MATERIAL read (tai-www server helper)
+source_key           = kosha_safety_materials.source_med_seq
+                       (KOSHA-issued media sequence, when present).
+                       source_key MAY be NULL for rows whose source-
+                       native identifier was not captured. `material_id`
+                       is a DETAILS-side field (see _resolve_material_id
+                       in the sync module) — it is NOT the catalog
+                       primary key and must not be used as source_key.
+publication gate     = catalog row + latest COMPLETED snapshot +
+                       storage policy not in HOLD state (see
+                       kosha_safety_material_storage_holds* migrations)
+current read model   = latest COMPLETED snapshot with storage holds excluded
+detail resolver      = MATERIAL read (tai-www server helper)
 public eligible      = YES
 saas eligible        = YES
 paid eligible        = YES
-publication_status   = PUBLISHED / HOLD / UNAVAILABLE
-                       (adapter maps kosha_safety_material_storage_holds*
-                        review / unavailable / oversize to HOLD)
+publication_status   = PUBLISHED  when catalog row + COMPLETED snapshot
+                                  membership present + no storage hold
+                     = HOLD       when a storage hold exists (review /
+                                  unavailable / oversize) OR no COMPLETED
+                                  membership yet
+                     = REMOVED    when the material is dropped from the
+                                  latest COMPLETED snapshot
+                       (UNAVAILABLE is NOT a shared enum value — the
+                        adapter collapses it into HOLD per §6.)
 ```
 
 ### 4.3 CSI (ACCIDENT) — construction accident cases
 
+Verified from `supabase/migrations/20260913_csi_accident_catalog.sql`:
+
 ```text
 object_type          = CSI_ACCIDENT
-Domain SoT           = public.csi_accident_cases
+Domain SoT           = public.csi_accident_cases (content_id PK, text)
 Snapshot tables      = csi_accident_snapshots
                        csi_accident_snapshot_items
-canonical_id         = csi_accident_cases.id
-source_id            = KOSHA_CSI
-source_key           = csi_accident_cases.case_id
-publication gate     = row.status == READY  (HOLD → 404 today per
-                       routers/public_csi_accidents.py)
+canonical_id         = csi_accident_cases.content_id     # 'CSI:<uuid>' text
+source_id            = "CSI"                              # NOT "KOSHA_CSI"
+source_key           = NULL                               # column is TEXT NULL;
+                                                          # per catalog COMMENT:
+                                                          # "Official source-native
+                                                          #  ID. CSI file has none;
+                                                          #  remains NULL."
+publication gate     = latest COMPLETED snapshot +
+                       snapshot_items.identity_status == READY
+                       (per catalog COMMENT: identity_status on the
+                        cases row is a "catalog convenience only.
+                        Matching/public/Graph status truth is
+                        COMPLETED snapshot_items.identity_status.")
 current read model   = READY-only public read
-detail resolver      = /public/accidents/*  (routers/public_csi_accidents.py)
+detail resolver      = /public/accidents/csi/{uuid_part}
+                       (routers/public_csi_accidents.py; uuid_part is
+                        the portion of content_id after the "CSI:" prefix)
 public eligible      = YES (READY only)
 saas eligible        = YES
 paid eligible        = YES
-publication_status   = PUBLISHED  when status=READY
-                     = HOLD       when status=HOLD
-                     = REMOVED    when status=REMOVED
+publication_status   = PUBLISHED  when latest COMPLETED snapshot_items row
+                                  is identity_status=READY for this content_id
+                     = HOLD       when identity_status=HOLD or no COMPLETED
+                                  membership present
+                     = REMOVED    when the case is no longer in any COMPLETED
+                                  snapshot
 ```
 
 ### 4.4 CHEM — MSDS chemicals
@@ -180,27 +210,57 @@ Snapshot tables      = public.kosha_msds_snapshots
 canonical_id         = kosha_msds_chemicals.id (uuid)
 content_id           = kosha_msds_chemicals.content_id
 source_id            = KOSHA_MSDS
-source_key           = kosha_msds_chemicals.source_key  (== chem_id)
-publication gate     = kosha_msds_snapshots.publish_state in
-                       (PUBLISHED_SEO_PREVIEW, PUBLISHED_FULL)
-                       + services/kosha_msds/cutover.is_full_ready
-                       for FULL scope
-publication scope    = PUBLICATION_SCOPE_SEO_PREVIEW (1,997 today)
-                       PUBLICATION_SCOPE_FULL       (0 today)
-publish_state enum   = NOT_PUBLISHED / PUBLISHED_SEO_PREVIEW / PUBLISHED_FULL
-current read model   = kosha_msds_seo_preview_current view (SEO preview)
-                       kosha_msds_full_current view (FULL)
-detail resolver      = CHEM-06 read service (currently dormant public
-                       via /public/kosha/msds when KOSHA_MSDS_PUBLIC_MODE set)
-public eligible      = YES when KOSHA_MSDS_PUBLIC_MODE ∈ {seo_preview, full}
+source_key           = kosha_msds_chemicals.source_key   (== chem_id)
+publication gate     = **Domain-owned**. Search NEVER invokes
+                       `services/kosha_msds/cutover.is_full_ready` at
+                       index time. The adapter READS one of the
+                       already-published current read models below
+                       and admits whatever the Domain has already
+                       promoted. Search never promotes CHEM state.
+Published read models = kosha_msds_seo_preview_current      (SEO preview)
+                        kosha_msds_full_current             (FULL)
+                       These views are the Domain's authoritative
+                       "what is currently published" surface. Adapter
+                       joins the parent chemical + its 16 sections
+                       through these views only.
+Publication scope    = SEO_PREVIEW vs FULL is a Domain-internal enum;
+                       it maps to the shared `publication_status`
+                       (PUBLISHED / HOLD / REMOVED) at the adapter
+                       boundary and does NOT surface as a shared
+                       SearchDocument field. The consumer scope
+                       (PUBLIC vs SAAS vs PAID) is set by
+                       `visibility_scopes[]`, which is separate from
+                       Domain scope.
+Public runtime gate  = KOSHA_MSDS_PUBLIC_MODE ∈ {seo_preview, full}
+                       is a RUNTIME EXPOSURE POLICY, distinct from
+                       publication eligibility. If public mode is
+                       `off`, PUBLIC visibility MUST be withheld even
+                       if the Domain has PUBLISHED_SEO_PREVIEW /
+                       PUBLISHED_FULL rows. The Retrieval Engine
+                       (F3 / SEARCH-05) enforces this; F1 schema
+                       must be able to represent it (via a scope
+                       filter overlay or an eligibility check that
+                       reads the env at query time).
+detail resolver      = CHEM-06 read service (`/public/kosha/msds`
+                       when KOSHA_MSDS_PUBLIC_MODE is set)
+public eligible      = YES only when (Domain has PUBLISHED_SEO_PREVIEW
+                       or PUBLISHED_FULL) AND public runtime gate is on
 saas eligible        = YES (context: chemical / process linkage)
 paid eligible        = YES (paid diagnosis chemical-related section)
-publication_status   = PUBLISHED  when publish_state in the PUBLISHED set
-                     = HOLD       otherwise
-special              = 16 sections per chemical fold into the
-                       parent SearchDocument's search_text +
-                       subjects[]; sections are NOT separate
-                       SearchDocument rows (§1 exception rationale).
+publication_status   = PUBLISHED  when the row is present in one of the
+                                  published current read models above
+                     = HOLD       when only NOT_PUBLISHED / RUNNING / FAILED
+                                  snapshots reference it
+                     = REMOVED    when the row drops from all published
+                                  current read models
+Cardinality note     = 16 sections per chemical fold into the parent
+                       SearchDocument's search_text and subjects[];
+                       sections are NOT separate SearchDocument rows
+                       (§1 exception rationale). Whether a chemical
+                       carries `CHEM_TERM / 물질안전보건자료` as one of
+                       its subjects is DEFERRED_TO_F2_CHEM_ADAPTER
+                       (CHEM_TERM is a query-terminology axis, not an
+                       automatic per-chemical property).
 Section granularity  = held for a separate future WO.
 ```
 
@@ -227,11 +287,14 @@ publication_status   = HOLD (uniformly today; PUBLISHED once ACTIVE)
 INDEXABLE?           = NO — see §7.2. Adapter MUST reject DRAFT rows.
 Multi-source note    = risk_source_mappings binds multiple
                        (source_id, source_key) tuples to one
-                       canonical_id. SearchDocument carries the
-                       canonical_id + the primary (source_id,
-                       source_key). Additional mappings surface via
-                       aliases[] only if the mapping_status is
-                       APPROVED_EXACT.
+                       canonical_id. SearchDocument carries ONE
+                       primary provenance pair (source_id,
+                       source_key). Additional mappings do NOT
+                       enter `aliases[]` — aliases is a searchable-
+                       expression channel, not a provenance ledger.
+                       The full provenance authority remains in
+                       risk_source_mappings; consumers who need
+                       the full mapping call RISK SoT directly.
 ```
 
 ### 4.6 LEGAL — law norms / obligations
@@ -243,12 +306,16 @@ Domain SoT           = LEG stack (kept out of tai-api's canonical
 Related tables       = law_revision_board (tai-www), LEG published
                        obligation norms, TAI legal engine
                        deterministic rules
-canonical_id         = leg obligation_atom_id (when applicable) OR
-                       law article identifier — adapter selects the
-                       most stable id per record type
-source_id            = LEG_OFFICIAL / LAW_REVISION_BOARD (choose per
-                       record kind)
-source_key           = leg identifier / revision id
+canonical_id         = an opaque stable Domain identifier chosen by
+                       the LEGAL adapter. Whether that is an
+                       obligation atom id, a law article identifier,
+                       or a norm-cluster id depends on which LEGAL
+                       record kind is being indexed:
+                       DEFERRED_TO_F2_LEGAL_ADAPTER.
+source_id            = adapter selects one of {LEG_OFFICIAL,
+                       LAW_REVISION_BOARD, …} per record kind
+source_key           = LEG identifier / revision id when present;
+                       NULL for records that lack a source-native key
 publication gate     = LEG published state + APPROVED
 current read model   = existing LEG read paths
 detail resolver      = LEG read endpoints
@@ -256,9 +323,10 @@ public eligible      = YES (law-updates on Public / safety-search)
 saas eligible        = YES (obligation-context — see SEARCH-07 gate)
 paid eligible        = YES (paid diagnosis obligation summaries)
 publication_status   = PUBLISHED / HOLD / REMOVED
-CRITICAL            = LEGAL SearchResult **must never** be treated as
+CRITICAL             = LEGAL SearchResult **must never** be treated as
                        an applicability decision. Consumers that need
-                       applicability call the Legal Engine.
+                       applicability call the Legal Engine. This is a
+                       constitutional invariant, not an adapter policy.
 ```
 
 ### 4.7 KNOWLEDGE_CENTER — help articles
@@ -289,22 +357,41 @@ notes                = today, /help/search runs its own Kiwi index
 
 ### 4.8 PRECEDENT — industrial accident precedents
 
+Verified from `scripts/collect_precedents.py` (ingest shape) and
+`routers/precedent_api.py` (query surface). The newer IAP table
+`industrial_accident_precedents` supersedes the legacy `posts`
+view for precedents.
+
 ```text
 object_type          = PRECEDENT
-Domain SoT           = public.industrial_accident_precedents (newer)
-                       + legacy public.posts view (adapter picks
-                       industrial_accident_precedents first)
-canonical_id         = industrial_accident_precedents.id
-source_id            = TAI_PRECEDENT_IAP  (or its legacy equivalent
-                       when the row was migrated from posts)
-source_key           = industrial_accident_precedents.source_id_of_precedent
-                       or legacy posts.source_id (verify per row)
-publication gate     = live row + not marked REMOVED
-detail resolver      = /precedents/{id}  (routers/precedent_api.py)
-public eligible      = YES
+Domain SoT           = public.industrial_accident_precedents  (newer,
+                       primary SearchDocument source)
+Legacy note          = public.posts still carries pre-migration rows;
+                       adapter prefers the IAP table and falls back
+                       to posts only when a row is not in IAP.
+canonical_id         = industrial_accident_precedents.id  (uuid)
+source_id            = law_go_kr                            # ingest
+                                                            # payload's
+                                                            # "source" column
+source_key           = industrial_accident_precedents.prec_seq
+                       (law.go.kr 판례일련번호; may be NULL for
+                        legacy / manual rows)
+publication gate     = is_active = true
+public columns       = case_number, case_name, court_name,
+                       decision_date, sector, hazard_type, summary,
+                       source_url
+detail resolver      = DEFERRED_TO_DOMAIN_ADAPTER
+                       (routers/precedent_api.py currently exposes
+                        /precedents/iap/search — the IAP listing — but
+                        the per-row detail resolver for new IAP rows
+                        is not finalized. Do NOT reuse the legacy
+                        /precedents/{id} posts resolver.)
+public eligible      = YES (when is_active = true)
 saas eligible        = YES
 paid eligible        = YES
-publication_status   = PUBLISHED / HOLD / REMOVED
+publication_status   = PUBLISHED  when is_active = true
+                     = HOLD       when is_active = false
+                     = REMOVED    when the row is deleted
 ```
 
 ## 5. content_hash contract
@@ -322,8 +409,8 @@ fields ONLY (retrieval-scoped, per Constitution §13):
     search_text
     aliases  (sorted, deduplicated)
     keywords (sorted, deduplicated)
-    subject_types + subject_keys (sorted paired list)
-    context  (sorted by (context_type, context_key))
+    subjects (sorted by (subject_type, subject_key), deduplicated)
+    context  (sorted by (context_type, context_key), deduplicated)
     publication_status
     visibility_scopes (sorted)
     public_url
@@ -341,26 +428,35 @@ Domain-side recomputed hash vs Projection-stored hash.
 
 ## 6. Publication eligibility contract
 
-Adapter maps Domain-specific publication state to the shared enum:
+The shared `publication_status` enum is EXACTLY **three** values:
+
+```text
+PUBLISHED   HOLD   REMOVED
+```
+
+Domain-specific values such as `DRAFT`, `REVIEW`, `RUNNING`,
+`FAILED`, `UNAVAILABLE`, `PROPOSED`, or `NOT_PUBLISHED` MUST NOT
+be surfaced on the SearchDocument. The adapter is the sole boundary
+that translates Domain state into one of the three shared values.
 
 | SearchDocument state | Semantic | Result eligibility |
 |---|---|---|
 | `PUBLISHED` | Domain object is authoritatively published under its own gate | eligible for all `visibility_scopes` it declares |
-| `HOLD` | Domain says "not yet" (draft / not ready / storage hold / abnormality flagged) | NOT indexed; if previously indexed, tombstone on next reindex |
-| `REMOVED` | Domain says "no longer valid" (deleted / unpublished / superseded) | tombstoned; must not surface in any scope |
+| `HOLD` | Domain says "not yet" (draft / review / running / failed / storage hold / abnormality / any pre-publication state) | NOT indexed as PUBLISHED; if previously PUBLISHED, tombstone on next reindex |
+| `REMOVED` | Domain says "no longer valid" (deleted / unpublished / superseded / dropped from the latest COMPLETED snapshot) | tombstoned; must not surface in any scope |
 
 Domain-adapter mapping table (from §4):
 
 | Domain | PUBLISHED | HOLD | REMOVED |
 |---|---|---|---|
-| GUIDE | catalog row + snapshot COMPLETED | otherwise | catalog delete |
-| SAFETY_MATERIAL | catalog row + snapshot COMPLETED + storage_holds NOT set | any storage hold OR unavailable OR review | catalog delete |
-| CSI_ACCIDENT | csi_accident_cases.status = READY | HOLD | REMOVED |
-| CHEM | kosha_msds_snapshots.publish_state ∈ {PUBLISHED_SEO_PREVIEW, PUBLISHED_FULL} | NOT_PUBLISHED / RUNNING / FAILED | catalog delete |
-| RISK | risk_canonical_nodes.status = ACTIVE | DRAFT (all rows today) | future-only |
-| LEGAL | LEG PUBLISHED | LEG DRAFT / HOLD | LEG SUPERSEDED / REMOVED |
-| KNOWLEDGE | safe_help_content.status = PUBLISHED | DRAFT / REVIEW | ARCHIVED / DELETE |
-| PRECEDENT | live row | staged/review | REMOVED |
+| GUIDE | catalog row present + latest snapshot COMPLETED | any pre-COMPLETED state | dropped from catalog |
+| SAFETY_MATERIAL | catalog row + latest snapshot COMPLETED + no storage hold | any storage hold (review / unavailable / oversize) OR no COMPLETED membership | dropped from the latest COMPLETED snapshot |
+| CSI_ACCIDENT | latest COMPLETED `csi_accident_snapshot_items.identity_status = READY` for this content_id | identity_status HOLD OR no COMPLETED membership | dropped from all COMPLETED snapshots |
+| CHEM | present in `kosha_msds_seo_preview_current` OR `kosha_msds_full_current` | only NOT_PUBLISHED / RUNNING / FAILED snapshots reference it | dropped from all published current read models |
+| RISK | `risk_canonical_nodes.status = ACTIVE` | `DRAFT` (all rows today) | future-only |
+| LEGAL | LEG PUBLISHED + APPROVED | LEG DRAFT / REVIEW / any pre-publish state | LEG SUPERSEDED / removed |
+| KNOWLEDGE | `safe_help_content.status = PUBLISHED` | DRAFT / REVIEW / any pre-publish | ARCHIVED / deleted |
+| PRECEDENT | `industrial_accident_precedents.is_active = true` | `is_active = false` | row deleted |
 
 ## 7. Visibility scope contract
 
@@ -447,25 +543,39 @@ active graph edges for the object; it does NOT duplicate the graph.
 - `confidence` — DEFERRED_TO_DOMAIN_ADAPTER
 - `authored_by` — DEFERRED_TO_DOMAIN_ADAPTER
 
-## 9. Fixtures (evidence-based)
+## 9. Illustrative shape examples
 
-Semantic fixtures using real repo objects. No test wire-up — just
-frozen expected shapes so SEARCH-03 has target data.
+The blocks below are **ILLUSTRATIVE SHAPE EXAMPLES** — not
+fixtures. Identifiers (`<kosha_guide.id>`, `<canonical_id>`, etc.)
+are placeholders that the reader substitutes with real values. Real
+row-level fixtures (with real content_ids / actual ingested titles)
+are produced by the Domain adapters in F2, not here.
 
-### F1 — GUIDE
+Two classifications used in this repo:
+
+```text
+REAL EVIDENCE FIXTURE       — pinned to an actual repo row, checked
+                              into tests as regression evidence
+                              (F2 Domain-adapter WOs produce these)
+ILLUSTRATIVE SHAPE EXAMPLE  — placeholder-valued example showing the
+                              contract's required shape (this section)
+```
+
+### E1 — GUIDE (illustrative)
 
 ```yaml
 object_type: GUIDE
 canonical_id: <kosha_guide.id>          # KOSHA-issued text
 source_id: KOSHA_OFFICIAL_GUIDE
-source_key: <kosha_guide.id>
-title: 산업안전보건 관리 지침 (예)
+source_key: <kosha_guide.id>            # same value; kosha_guide.id is
+                                         # KOSHA-issued so it acts as both
+title: 산업안전보건 관리 지침 (예시)
 summary: <first N chars of guide description>
 search_text: <title + description + category_name>
 aliases: []
 keywords: [<kosha_guide.category_name>]
-subject_types: [LEGAL_TERM]              # via search-dict mapping
-subject_keys: [산업안전보건법]
+subjects:
+  - {subject_type: LEGAL_TERM, subject_key: 산업안전보건법}   # adapter maps
 context:
   - {context_type: sector, context_key: construction}
 public_url: https://kosha.or.kr/...
@@ -474,42 +584,55 @@ publication_status: PUBLISHED
 visibility_scopes: [PUBLIC, SAAS, PAID]
 ```
 
-### F2 — CHEM
+### E2 — CHEM (illustrative)
 
 ```yaml
 object_type: CHEM
-canonical_id: <kosha_msds_chemicals.id>   # uuid
+canonical_id: <kosha_msds_chemicals.id>          # uuid
 source_id: KOSHA_MSDS
-source_key: <kosha_msds_chemicals.source_key>   # == chem_id
+source_key: <kosha_msds_chemicals.source_key>    # == chem_id
 title: <chemical_name_ko>
-summary: <2-3 line MSDS summary from section 1>
+summary: <2-3 line summary sourced from published section-1 canonical text>
 search_text: <chemical_name_ko + chemical_name_en + CAS/KE/EN/UN + section-1..3 canonical text>
 aliases: [<chemical_name_en>, <CAS>, <KE>, <EN>, <UN>]
 keywords: []
-subject_types: [CHEM_TERM]
-subject_keys: [물질안전보건자료]
+subjects: []
+                # NOTE: CHEM_TERM / 물질안전보건자료 is a QUERY-side
+                # terminology axis, not a per-chemical property.
+                # Whether individual chemicals carry it as a subject
+                # is DEFERRED_TO_F2_CHEM_ADAPTER (WO §17).
 context:
   - {context_type: chemical, context_key: <chem_id>}
-public_url: /public/kosha/msds/<canonical_id>  # only when KOSHA_MSDS_PUBLIC_MODE set
+public_url: /public/kosha/msds/<canonical_id>   # served only when the
+                                                 # public runtime gate
+                                                 # KOSHA_MSDS_PUBLIC_MODE
+                                                 # ∈ {seo_preview, full}
 saas_url: /saas/chemical/<canonical_id>
 publication_status: PUBLISHED
+                # Assumes the chemical is currently in one of the
+                # published current read models (SEO preview OR FULL).
+                # If public runtime gate is off, PUBLIC MUST be
+                # dropped from visibility_scopes at query time (F3).
 visibility_scopes: [PUBLIC, SAAS, PAID]
 ```
 
-### F3 — LEGAL
+### E3 — LEGAL (illustrative)
 
 ```yaml
 object_type: LEGAL
-canonical_id: <leg obligation_atom_id OR article id>
-source_id: LEG_OFFICIAL
-source_key: <leg identifier>
-title: 산업안전보건법 시행규칙 제XX조
+canonical_id: <opaque stable Domain identifier>
+                # exact shape is DEFERRED_TO_F2_LEGAL_ADAPTER —
+                # candidates: obligation_atom_id, article id, or
+                # norm-cluster id
+source_id: LEG_OFFICIAL                      # or LAW_REVISION_BOARD per record kind
+source_key: <leg identifier if any; null otherwise>
+title: 산업안전보건법 시행규칙 제XX조 (예시)
 summary: <norm short text>
 search_text: <title + norm body normalized>
 aliases: []
 keywords: []
-subject_types: [LEGAL_TERM]
-subject_keys: [산업안전보건법 시행규칙]
+subjects:
+  - {subject_type: LEGAL_TERM, subject_key: 산업안전보건법 시행규칙}
 context:
   - {context_type: legal_obligation, context_key: <obligation_atom_id>}
 public_url: https://taieng.co.kr/legal/...
@@ -518,43 +641,43 @@ publication_status: PUBLISHED
 visibility_scopes: [PUBLIC, SAAS, PAID]
 ```
 
-### F4 — CSI_ACCIDENT
+### E4 — CSI_ACCIDENT (illustrative)
 
 ```yaml
 object_type: CSI_ACCIDENT
-canonical_id: <csi_accident_cases.id>
-source_id: KOSHA_CSI
-source_key: <csi_accident_cases.case_id>
+canonical_id: CSI:<uuid>                  # csi_accident_cases.content_id
+source_id: CSI                            # verbatim; not "KOSHA_CSI"
+source_key: null                          # CSI file has no source-native id
 title: <case_title>
 summary: <accident summary>
 search_text: <title + summary + accident_type + work_type>
 aliases: []
 keywords: [<accident_type>]
-subject_types: [ACCIDENT_TERM]
-subject_keys: [추락]  # example
+subjects:
+  - {subject_type: ACCIDENT_TERM, subject_key: 추락}    # example, adapter maps
 context:
-  - {context_type: task, context_key: welding}   # if applicable
+  - {context_type: task, context_key: welding}          # if applicable
   - {context_type: sector, context_key: construction}
-public_url: /public/accidents/<canonical_id>
-saas_url: /saas/accident/<canonical_id>
+public_url: /public/accidents/csi/<uuid_part>
+saas_url: /saas/accident/<uuid_part>
 publication_status: PUBLISHED
 visibility_scopes: [PUBLIC, SAAS, PAID]
 ```
 
-### F5 — KNOWLEDGE_CENTER (help)
+### E5 — KNOWLEDGE_CENTER / help (illustrative)
 
 ```yaml
 object_type: KNOWLEDGE
 canonical_id: <safe_help_content.doc_id>
 source_id: TAI_HELP_CENTER
-source_key: <doc_id>
+source_key: <doc_id>                # same value; help center is
+                                     # self-issued so canonical == source_key
 title: <help article title>
 summary: <first paragraph, stripped>
 search_text: <title + body stripped>
 aliases: []
 keywords: [<menu_group>]
-subject_types: []
-subject_keys: []
+subjects: []
 context: []
 public_url: /help/<slug>
 saas_url: /saas/help/<slug>
@@ -562,44 +685,48 @@ publication_status: PUBLISHED
 visibility_scopes: [PUBLIC, SAAS, PAID]
 ```
 
-### F6 — PRECEDENT
+### E6 — PRECEDENT (illustrative)
 
 ```yaml
 object_type: PRECEDENT
-canonical_id: <industrial_accident_precedents.id>
-source_id: TAI_PRECEDENT_IAP
-source_key: <legacy source id>
+canonical_id: <industrial_accident_precedents.id>  # uuid
+source_id: law_go_kr                                # ingest "source" value
+source_key: <prec_seq>                              # 판례일련번호; MAY be null
+                                                     # for legacy/manual rows
 title: <precedent title>
 summary: <holding excerpt>
 search_text: <title + holding + reasoning>
 aliases: []
 keywords: []
-subject_types: [LEGAL_TERM]
-subject_keys: [산업안전보건법]
+subjects:
+  - {subject_type: LEGAL_TERM, subject_key: 산업안전보건법}  # example
 context: []
-public_url: /precedents/<canonical_id>
-saas_url: /saas/precedent/<canonical_id>
+public_url: null                                    # detail resolver
+                                                     # DEFERRED_TO_DOMAIN_ADAPTER
+saas_url: null
 publication_status: PUBLISHED
 visibility_scopes: [PUBLIC, SAAS, PAID]
 ```
 
-### F7 — RISK (NOT_INDEXABLE fixture)
+### E7 — RISK NOT_INDEXABLE (illustrative negative)
 
 ```yaml
 object_type: RISK
 canonical_id: <risk_canonical_nodes.id>
-canonical_code: <risk_canonical_nodes.canonical_code>
-source_id: <mapping.source_id>
-source_key: <mapping.source_key>
+source_id: <primary risk_source_mappings.source_id>
+source_key: <primary risk_source_mappings.source_key>
+                # additional (source_id, source_key) pairs stay in
+                # risk_source_mappings — they are NOT copied into
+                # aliases[] (§4.5).
 title: <canonical_code display>
 publication_status: HOLD
 visibility_scopes: []
-INDEXABLE: NO   # adapter MUST reject (status=DRAFT, 0 sector links)
+INDEXABLE: NO   # writer MUST reject (status=DRAFT, 0 sector links)
 ```
 
-This fixture exists as **negative evidence**: the writer must
-reject it. RISK-C02 opens the ACTIVE gate; only then does F7 become
-an F5-shaped PUBLISHED fixture.
+This example exists as **negative evidence**: the writer must
+reject it. RISK-C02 opens the ACTIVE gate; only then does E7 flip
+to an E1/E5-shaped PUBLISHED shape.
 
 ## 10. Domain adapter contract (input/output only)
 
@@ -732,7 +859,7 @@ Names checked against the current tree (`main` = `5d1fad8b`):
 | `source_key` | Same call sites as `source_id` | **Reuse verbatim.** |
 | `publication_status` | `services/kosha_msds/ops.py` uses `publication_status` in status reports; CHEM code uses `publish_state` for the actual enum column | **Adopt.** Shared enum `PUBLISHED / HOLD / REMOVED` is new but the name aligns with existing usage. CHEM adapter maps `publish_state` → `publication_status`. |
 | `publication_scope` | CHEM-only enum (`FULL / SEO_PREVIEW`) in `services/kosha_msds/contract.py`, `cutover.py`, `production_store.py` | **Keep Domain-scoped.** `publication_scope` stays a CHEM-specific column in Domain tables. The SearchDocument does NOT carry `publication_scope`; the CHEM adapter reads it internally to decide whether the row is PUBLISHED in the shared sense. |
-| `match_type` | `tools/search_dict/search_core.py::MATCH_SCORE` = `{EXACT, NORMALIZED_EXACT, PUNCTUATION, ABBREVIATION, SYNONYM, TOKEN, TRIGRAM}`; `services/legal_engine_policy.py` uses `match_type` for its own rule dispatch | **Reuse verbatim for search-dict-derived values.** SearchResult's `match_type` uses the search-dict vocabulary. Legal Engine's `match_type` is a private engine concern and must not be conflated in consumer code. |
+| `match_type` | `tools/search_dict/search_core.py::MATCH_SCORE` = `{EXACT, NORMALIZED_EXACT, PUNCTUATION, ABBREVIATION_OF, SPACING_VARIANT_OF, PUNCTUATION_VARIANT_OF, SPELLING_VARIANT_OF, ENGLISH_OF, EXACT_ALIAS, SYNONYM_OF, TOKEN, TRIGRAM}`; `services/legal_engine_policy.py` uses `match_type` for its own rule dispatch | **Reuse verbatim.** SearchResult's `match_type` uses the search-dict vocabulary exactly (no simplification of `ABBREVIATION_OF` → `ABBREVIATION`, etc.). Engine-level tiers (`IDENTIFIER_EXACT`, `CANONICAL_EXACT`, `TITLE_EXACT`, `CONTEXT`, `FTS`) are additive. Legal Engine's `match_type` is a private engine concern and must not be conflated in consumer code. |
 | `context` | Too generic; overloaded in multiple services | **Namespace to a typed tuple**: `context` in the SearchDocument is an array of `(context_type, context_key)` from the fixed vocabulary in §8. Callers that pass a generic "context" bag must map it into these tuples. |
 | `scope` | Also generic; used ephemerally | **Namespace to `visibility_scopes`** in the SearchDocument. Do not use the bare word `scope`. |
 
@@ -754,6 +881,35 @@ contract without per-Domain evidence:
 
 Each deferral is marked `DEFERRED_TO_DOMAIN_ADAPTER` and MUST be
 resolved before its Domain's SEARCH-04 indexer ships.
+
+## 14a. Contract consistency matrix
+
+All three contract documents (Constitution, Document Contract,
+Result Contract) MUST agree on the following axes. Any change to a
+row here requires an Owner-approved WO that updates all three
+documents together (Constitution Article 15).
+
+| Axis | Constitution | Document Contract | Result Contract |
+|------|--------------|-------------------|-----------------|
+| Publication enum values | Article 4, Article 14 (implicit) | §6 (`PUBLISHED / HOLD / REMOVED` exactly) | §5 (results only surface PUBLISHED objects) |
+| `search_document_id` vs `canonical_id` vs `(source_id, source_key)` | Article 3 | §2 (three-way separation) | §2 (only `canonical_id + object_type` emitted) |
+| `source_key` nullability | — (adapter concern) | §3 (nullable, no synthetic values) | §2 (never emitted; INTERNAL) |
+| Subjects representation | Article 5 (reuse existing runtime) | §3 (`subjects[]` as `(subject_type, subject_key)` pairs) | §2 (`subject_type` + `subject_key` are optional twin scalars per hit) |
+| Legal applicability authority | Article 2 (Search ≠ applicability) | §4.6 CRITICAL | §5.4 explainability + §10 governance |
+| RISK DRAFT exclusion | Article 4 (Search never promotes) | §7.2 (INDEXABLE=NO for DRAFT) | reflected in §6 (result set only over PUBLISHED) |
+| External discovery provider distinction | Article 7 | §12.2 (KOSHA Smart Search KEEP SEPARATE) | §7 (separate shape + presentation merge + failure isolation) |
+| `match_type` vocabulary | Article 5 (reuse current stack) | §13 (verbatim reuse of search-dict values) | §5.1 (verbatim runtime values + 5 engine-level tiers) |
+| Pagination | — (SEARCH-03 boundary) | — (schema concern) | §6.2 (DEFERRED_TO_F3; only "stable deterministic ordering" required now) |
+| LLM prohibition | Article 8 | §7.3 (no LLM output stored) | §3.3 (no LLM in ranking) + §10 (no `LLM_INFERRED` match_type) |
+| CHEM publication authority | Article 4 (Search never promotes) | §4.4 (Search reads published current read models; NEVER calls `is_full_ready`) | (implicit via publication_status contract) |
+| CHEM public runtime gate | Article 4 + Article 9 | §4.4 (public runtime gate distinct from publication) | §6/§8 (visibility_scopes filtered at query time; F3 concern) |
+| Consumer scopes | Article 9 | §7 (`PUBLIC / SAAS / PAID / INTERNAL`) | §8 (three consumer examples one per non-INTERNAL scope) |
+| Tenant secret exclusion | Article 9 (SaaS scope note) | §7.3 (must not store) | §2 (no tenant field in envelope) |
+| Reindex modes | Article 12 (three modes) | §11 (FULL REBUILD / OBJECT REINDEX / NIGHTLY RECONCILIATION) | (implicit — results only over promoted current) |
+| Fixture classification | — | §9 (ILLUSTRATIVE SHAPE EXAMPLE vs REAL EVIDENCE FIXTURE) | §8 (illustrative consumer examples only) |
+
+Any inconsistency between a specific claim in one document and its
+counterpart here means the specific claim is wrong. Escalate.
 
 ## 15. Exit criteria (from WO §49)
 

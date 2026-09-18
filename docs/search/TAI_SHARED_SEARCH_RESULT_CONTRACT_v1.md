@@ -194,27 +194,43 @@ Every SearchResult item carries a **black-box-free** explanation.
 
 ### 5.1 `match_type` vocabulary
 
-Reused verbatim from `tools/search_dict/search_core.py::MATCH_SCORE`
-plus the identifier and canonical tiers:
+The Retrieval Engine reuses `tools/search_dict/search_core.py::MATCH_SCORE`
+values **verbatim** (no simplification, no aliasing) and adds five
+engine-level tiers on top. Simplifying `ABBREVIATION_OF` to
+`ABBREVIATION` (or `SYNONYM_OF` to `SYNONYM`) is FORBIDDEN — the
+existing runtime keys already carry directionality that consumers
+depend on.
+
+Search-dict runtime values (verbatim from `MATCH_SCORE`):
 
 ```text
-IDENTIFIER          identifier gate (Constitution §6)
-CANONICAL           query == canonical_id / canonical_code
-EXACT               T1
-NORMALIZED_EXACT    T2
-PUNCTUATION         T2b
-ABBREVIATION        T3 expansion, abbreviation edge
-SYNONYM             T3 expansion, synonym edge
-TITLE_EXACT         title-exact (added at engine level)
-CONTEXT             context-tuple match (added at engine level)
-FTS                 Postgres FTS (added at engine level)
-TOKEN               T4 Kiwi
-TRIGRAM             T6 pg_trgm
+EXACT
+NORMALIZED_EXACT
+PUNCTUATION
+ABBREVIATION_OF
+SPACING_VARIANT_OF
+PUNCTUATION_VARIANT_OF
+SPELLING_VARIANT_OF
+ENGLISH_OF
+EXACT_ALIAS
+SYNONYM_OF
+TOKEN
+TRIGRAM
 ```
 
-The three engine-level values (`TITLE_EXACT`, `CONTEXT`, `FTS`) are
-added by SEARCH-05; the rest already exist in the search-dict
-runtime and carry over unchanged.
+Engine-level values (added by SEARCH-05, layered above the runtime):
+
+```text
+IDENTIFIER_EXACT    identifier gate (Constitution §6)
+CANONICAL_EXACT     query == canonical_id / canonical_code
+TITLE_EXACT         query == SearchDocument.title
+CONTEXT             context-tuple hit against SearchDocument.context
+FTS                 Postgres FTS over SearchDocument.search_text
+```
+
+`SOURCE_SEARCH` is the fixed value emitted by the external KOSHA
+Smart Search provider (§7); it is NOT part of the internal engine's
+`match_type` set.
 
 ### 5.2 `matched_term`
 
@@ -227,10 +243,13 @@ matched_term=건축법`).
 
 ### 5.3 `subject_type` + `subject_key`
 
-Populated only when the match went through the search-dictionary
-subject axis. Absent for identifier-exact, canonical-exact,
-title-exact, FTS, and pure Kiwi/Trigram matches that did not resolve
-to a subject.
+Populated whenever the query resolved to a search-dictionary
+subject, including subject-augmented T4/T6 hits. Production
+evidence: `건축법을 → TOKEN / subject_type=LEGAL_TERM /
+subject_key=건축법` (SEARCH-01 SMOKE-05). Absent for
+identifier-exact, canonical-exact, title-exact, FTS, and pure
+Kiwi/Trigram matches whose token did NOT collapse to a
+subject-approved surface.
 
 ### 5.4 Consumer-visible score
 
@@ -250,19 +269,18 @@ pagination correctness under identical `snapshot`.
 
 ### 6.2 Pagination
 
-The engine exposes cursor-based pagination in the standard TAI
-shape:
+Stable, deterministic ordering under a fixed `snapshot` is
+REQUIRED. The concrete pagination mechanism (cursor vs
+offset+limit, cursor encoding, `next_cursor` shape, `total`
+availability) is **DEFERRED_TO_F3** — SEARCH-05 picks it against
+the retrieval-engine's actual query plan.
 
-```yaml
-data:
-  items: [...]
-  total: <int, when caller opted in>
-  next_cursor: <opaque string, absent when no more>
-```
+Present-state note (not the contract):
 
-Cursor MUST encode the ranking key of the last item on the page
-(not raw offset). This is how CHEM-09 already paginates
-`/search-dict/*` (SEARCH-01 verified).
+- `/search-dict/lookup` today uses `limit` only (no cursor)
+- CHEM search adapter today uses `limit + offset`
+
+Neither is elevated to a shared contract here.
 
 ### 6.3 Limits
 
