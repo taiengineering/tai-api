@@ -74,6 +74,21 @@ WORK_TYPES: Dict[str, Dict[str, Any]] = {
         "attributes": {
             "is_dalbi": {"type": "boolean", "label": "달비계 여부"},
             "height_m": {"type": "number", "label": "비계 최고높이(m)"},
+            # WO-E2E-OBJ01-SEM002-ART57B-FASTLANE-IMPLEMENT-001:
+            # SCAFFOLD kind for Art.57 제2항 (강관비계/통나무비계 조립 → 쌍줄).
+            # Single enum, not two booleans, so a row's scaffold type stays
+            # unique per entity and same-entity binding is preserved by the
+            # projector's per-row evaluation. missing != OTHER: omit the key
+            # rather than defaulting to OTHER.
+            "scaffold_kind": {
+                "type": "enum",
+                "label": "비계 종류",
+                "options": (
+                    {"code": "STEEL_PIPE", "label": "강관비계"},
+                    {"code": "LOG", "label": "통나무비계"},
+                    {"code": "OTHER", "label": "기타 비계"},
+                ),
+            },
         },
         "optional_fields": ("equipment_ref", "location_ref"),
     },
@@ -102,6 +117,21 @@ CANONICAL_ATTR_PREFIXES: Tuple[str, ...] = (
 )
 
 
+def _attribute_metadata(code: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+    """UI-facing attribute descriptor. Adds `options` only when the spec defines them."""
+    out: Dict[str, Any] = {
+        "code": code,
+        "label": meta.get("label"),
+        "type": meta.get("type", "boolean"),
+    }
+    options = meta.get("options")
+    if options:
+        out["options"] = [
+            {"code": o.get("code"), "label": o.get("label")} for o in options
+        ]
+    return out
+
+
 def registry_public() -> Dict[str, Any]:
     """UI metadata. Labels are display-only."""
     items = []
@@ -115,11 +145,7 @@ def registry_public() -> Dict[str, Any]:
                     for sc, sl in (spec.get("subtypes") or {}).items()
                 ],
                 "attributes": [
-                    {
-                        "code": ac,
-                        "label": am.get("label"),
-                        "type": am.get("type", "boolean"),
-                    }
+                    _attribute_metadata(ac, am)
                     for ac, am in (spec.get("attributes") or {}).items()
                 ],
                 "optional_fields": list(spec.get("optional_fields") or ()),

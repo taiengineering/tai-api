@@ -198,6 +198,10 @@ _LEG_INPUT_FIELDS = (
     # Computed by services/work_source/projector.py from structured SCAFFOLD
     # work rows; NOT stored in DB. Exact-name Leaf.field in LEG applicable.py.
     "performs_scaffold_assembly_dismantle_or_modification_on_dalbi_or_ge5m_scaffold",
+    # WO-E2E-OBJ01-SEM002-ART57B-FASTLANE-IMPLEMENT-001: single existential
+    # boolean for Art.57 제2항 (같은 비계 S에 대해 S.kind IN {STEEL_PIPE,LOG}
+    # AND activity_on(S) == ASSEMBLY → 쌍줄). Computed by projector; not stored.
+    "performs_steel_pipe_or_log_scaffold_assembly",
     # WO-E2E-OBS007-CRANE-MINIMUM-MODIFY-001: Frozen Design Leaf.field exact-name.
     # No alias, no has_crane collapse, no crane_adjustment_work.
     "has_mobile_crane", "has_jib_crane", "has_gantry_crane",
