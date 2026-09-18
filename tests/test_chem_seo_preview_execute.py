@@ -589,6 +589,40 @@ def test_section_count_paginates_beyond_default_page_cap():
     assert dup_count == 0
 
 
+def test_executor_writes_canonical_content_id(tmp_path):
+    """content_id must be CHEM:<UUID> per services.kosha_msds.identity.
+    CHEM:<chem_id> would let KOSHA source identity leak into TAI content
+    identity — is_chem_content_id() would even accept it, but it violates
+    the intentional separation between source_id / chem_id and TAI's own
+    content identifier."""
+    from services.kosha_msds.identity import is_chem_content_id
+    pipe = _make_pipeline(tmp_path, ["A00001", "A00002"])
+    mat_store, pub_store = _shared_stores()
+
+    def _factory():
+        return mat_store, pub_store
+
+    args = _args_ns(
+        seo_manifest=str(pipe["seo_path"]),
+        chem05_plan_jsonl=str(pipe["chem05"]["plan_jsonl"]),
+        chem05_manifest=str(pipe["chem05"]["manifest"]),
+        chem05_report=str(pipe["chem05"]["report"]),
+    )
+    ex._run(args, store_factory=_factory)
+
+    # Every inserted chemical row must carry a canonical content_id.
+    for row in list(mat_store._chemicals_by_key.values()):
+        cid = row.get("content_id")
+        chem_id = row.get("chem_id")
+        assert is_chem_content_id(cid), f"content_id must be CHEM:<UUID>, got {cid!r}"
+        assert cid.startswith("CHEM:")
+        # Explicitly reject the pre-PATCH form CHEM:<chem_id>.
+        assert cid != f"CHEM:{chem_id}", (
+            f"content_id must NOT reuse KOSHA source identity ({chem_id!r}); "
+            "identity.py owns the UUID form"
+        )
+
+
 def test_section_count_paginates_across_two_chunks_and_pages():
     """400 chemicals cross both the CHEM-ID chunk boundary AND the
     per-chunk page boundary. Every row must still be counted exactly once."""

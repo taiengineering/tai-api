@@ -83,6 +83,7 @@ from services.kosha_msds.contract import (
     SEO_PREVIEW_REQUIRED_SECTION_COUNT,
     SNAPSHOT_COMPLETED,
 )
+from services.kosha_msds.identity import new_content_id
 from tools.chem_seo_preview.build_preview_plan import build_preview_plan
 
 
@@ -298,9 +299,14 @@ def _run(args, *, store_factory=None) -> dict:
     for c in built["plan_chemicals"]:
         chem_uuid = str(uuid.uuid4())
         chem_uuid_by_key[(c.get("source_id"), c.get("source_key"))] = chem_uuid
+        # Canonical TAI content identity is CHEM:<UUID> (see
+        # services.kosha_msds.identity.new_content_id + is_chem_content_id).
+        # It is deliberately separate from the KOSHA source identity
+        # (chem_id / source_key) so a re-hydration or bulk swap doesn't
+        # collide with an already-published TAI content_id.
         chem_rows.append({
             "id": chem_uuid,
-            "content_id": _content_id(c),
+            "content_id": new_content_id(),
             "source_id": c.get("source_id"),
             "source_key": c.get("source_key"),
             "chem_id": c.get("chem_id"),
@@ -422,11 +428,6 @@ def _run(args, *, store_factory=None) -> dict:
         "responses_sha256": responses_sha,
         "preview_plan_semantic_sha256": preview_manifest.get("plan_semantic_sha256"),
     }
-
-
-def _content_id(chem_row: dict) -> str:
-    """Reuse the existing CONTENT_ID_PREFIX + chem_id convention (contract.py)."""
-    return "CHEM:" + str(chem_row.get("chem_id"))
 
 
 # ---------------------------------------------------------------------------
