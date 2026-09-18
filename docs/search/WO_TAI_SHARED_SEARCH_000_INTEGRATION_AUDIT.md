@@ -1,6 +1,6 @@
-# WO-TAI-SHARED-SEARCH-000: Integration Audit (FROZEN STATE) — PATCH-1
+# WO-TAI-SHARED-SEARCH-000: Integration Audit (FROZEN STATE) — PATCH-2
 
-**Date**: 2026-09-19 (PATCH-1 revision)
+**Date**: 2026-09-19 (PATCH-2 revision)
 **Scope**: Read-only cross-repo audit of the current TAI shared-search
 infrastructure. Deliverable = Connection Matrix + Duplicate Matrix +
 SEARCH-01 handoff scope.
@@ -14,29 +14,42 @@ current state; it does not redecide the target.
 
 ---
 
-## 1. Repo anchors
+## 1. Canonical repo anchors (MAIN only)
 
-| Repo | Path | HEAD SHA | Branch |
-|------|------|----------|--------|
-| tai-api (primary, main) | `/Users/taiwangsim/Desktop/tai-api-obj-chem` | `7d033721` | origin/main after PR #401 + #402 merges |
-| tai-api (secondary read-only) | `/Users/taiwangsim/Desktop/tai-api` | `b36e032e` | `feat/free-result-additional-information` (cross-check only) |
-| tai-www (SaaS product) | `/Users/taiwangsim/Desktop/tai-www-seo-03c-meta` | `9723b955` | `feature/seo-03c-2-marketing` |
-| tai-www (secondary) | `/Users/taiwangsim/Desktop/tai-www-seo-03b-kb` | `d02ac711` | `feature/seo-03b-kb-decouple` |
-| tai-www (marketing/landing) | `/Users/taiwangsim/Desktop/tai-www` | `fc44c299` | `wo-safety-library-001-wp1c-r4c` |
-| tai-admin | `/Users/taiwangsim/Desktop/tai-engineering/tai-admin` | `447b04c7` | `feat/sem003-diving-family-ui` |
+The primary evidence tree for this audit is each repo's `origin/main`.
 
-**Notes on scope**:
+| Repo | GitHub | `origin/main` HEAD |
+|------|--------|--------------------|
+| **tai-api** | `taiengineering/tai-api` | `7d033721256113825199eff288a6ffeb6f3ce848` |
+| **tai-www** | `taiengineering/tai-www` | `04a6955e1973f957062135b16214f6a95735384c` |
+| **tai-admin** | `taiengineering/tai-admin` | `5f2d2cb079e5a9b47ed621a14678ed7bb07f3c52` |
 
-- The `/Users/taiwangsim/Desktop/tai-www` checkout is the public
-  marketing/landing site (static Astro pages consuming JSON modules
-  under `src/lib/modules/safety.js`). It does not host the SaaS
-  `/safety-search` product surface.
-- The SaaS `/safety-search` product surface lives in `tai-www` repo
-  under `src/lib/server/safetySearch.js`; multiple worktrees carry
-  identical or near-identical copies of this file (verified below
-  in §4).
-- `tai-admin` is a separate repo (`tai-engineering/tai-admin`); admin
-  operational search surfaces catalogued in §9.
+### Role labels (renamed per PATCH-2 §B)
+
+```text
+tai-www         = Public / marketing / discovery surface
+/safety-search  = Public safety knowledge search surface
+tai-admin       = SaaS application surface (Vue3 vue3/src/pages/**)
+tai-api         = Backend API (routers/**, services/**)
+```
+
+### Non-canonical local cross-check worktrees
+
+The following working checkouts were used only to cross-check that
+feature branches carry the same shape as `main`. They are NOT the
+audit's evidence source.
+
+| Working dir | HEAD | Branch | Role |
+|---|---|---|---|
+| `/Users/taiwangsim/Desktop/tai-api-obj-chem` | `7d033721` | tracks origin/main | primary tai-api checkout (identical to main) |
+| `/Users/taiwangsim/Desktop/tai-api` | `b36e032e` | `feat/free-result-additional-information` | non-canonical cross-check |
+| `/Users/taiwangsim/Desktop/tai-www-seo-03c-meta` | `9723b955` | `feature/seo-03c-2-marketing` | non-canonical cross-check |
+| `/Users/taiwangsim/Desktop/tai-www-seo-03b-kb` | `d02ac711` | `feature/seo-03b-kb-decouple` | non-canonical cross-check |
+| `/Users/taiwangsim/Desktop/tai-www` | `fc44c299` | `wo-safety-library-001-wp1c-r4c` | landing site (separate repo `taiengineering/www`), not the SaaS surface |
+| `/Users/taiwangsim/Desktop/tai-engineering/tai-admin` | `447b04c7` | `feat/sem003-diving-family-ui` | non-canonical cross-check |
+
+All `git show origin/main:<path>` reads in the rest of this document
+resolve against the SHAs in the canonical table above.
 
 ---
 
@@ -171,20 +184,19 @@ extract set, not the projection.
 
 ---
 
-## 4. Public safety-search product surface (S00-03) — CORRECTED
+## 4. Public safety-search — re-verified on tai-www main
 
-The prior audit conflated **the tai-api provider endpoint** with **the
-tai-www product surface**. They are separate layers:
+Layered evidence, re-run against `tai-www origin/main` = `04a6955e`.
 
 ### 4.1 tai-www product surface — `/safety-search`
 
-File: `tai-www/src/lib/server/safetySearch.js` (verified at
-`/Users/taiwangsim/Desktop/tai-www-seo-03c-meta/src/lib/server/safetySearch.js`).
+Evidence: `git show origin/main:src/lib/server/safetySearch.js`.
 
-**Groups composed in one page**:
+The `GROUP_DEFS` composition on main confirms **7 adapters** (6
+internal + 1 external provider):
 
 ```text
-GROUP_DEFS = [
+GROUP_DEFS = Object.freeze([
   { type: 'knowledge',  contentType: 'KNOWLEDGE_CENTER',  label: '지식센터' },
   { type: 'material',   contentType: 'SAFETY_MATERIAL',   label: '안전자료' },
   { type: 'guide',      contentType: 'KOSHA_GUIDE',       label: '안전가이드' },
@@ -192,11 +204,11 @@ GROUP_DEFS = [
   { type: 'law',        contentType: 'LAW_UPDATE',        label: '개정법령' },
   { type: 'precedent',  contentType: 'PRECEDENT',         label: '판례' },
   { type: 'kosha',      contentType: 'KOSHA_SEARCH',      label: 'KOSHA 공식검색' },
-]
+]);
 ```
 
-Data sources per group (from same file):
-- knowledge/material/precedent → static modules under `src/lib/modules/safety.js`
+Data sources per group (same file, main):
+- knowledge / material / precedent → static modules under `src/lib/modules/safety.js`
 - guide → `tai-www` server helper `koshaGuides.js` (`listGuides`)
 - accident → `csiAccidents.js` (`listCsiAccidents`)
 - law → Supabase `law_revision_board` via `sbQuery`
@@ -210,15 +222,15 @@ dictionary is **not** invoked by this endpoint today.
 ### 4.3 Layered verdict
 
 ```text
-PRODUCT SURFACE (tai-www /safety-search)  = CONNECTED / FEDERATED DIRECT ADAPTERS
-SHARED DICTIONARY INTEGRATION              = NOT_CONNECTED
-UNIFIED SEARCH INDEX                        = NOT_EXISTS
-KOSHA PROVIDER API (tai-api)                = CONNECTED
+PUBLIC PRODUCT SURFACE (tai-www /safety-search) = CONNECTED / FEDERATED DIRECT ADAPTERS
+SHARED SEARCH DICTIONARY INTEGRATION             = NOT_CONNECTED
+UNIFIED SEARCH INDEX                              = NOT_EXISTS
+KOSHA PROVIDER API (tai-api)                      = CONNECTED
 ```
 
-The composition is federated at the tai-www layer; each domain still
-runs its own read against its own source. This is exactly the shape
-`GAP-02 Unified Search Index 없음` in Master Plan v2 §2 describes.
+Federation lives at the tai-www layer; each domain still runs its own
+read against its own source. This matches `GAP-02 Unified Search
+Index 없음` in Master Plan v2 §2 (open).
 
 ---
 
@@ -322,18 +334,20 @@ consumer-migration WO is opened.
 
 ---
 
-## 9. Admin & operational search surfaces (NEW, from Owner evidence)
+## 9. Admin & operational search surfaces (verified on main)
 
-Separate from knowledge search. Not migration targets by default.
+Separate from knowledge search. Distinct backend catalog vs SaaS
+caller — do not collapse.
 
-| Endpoint | Router file | Kind |
-|---|---|---|
-| `GET /help/search` | `routers/safe_help.py` | Help-center Kiwi search (own index) |
-| `GET /factory-process/search` | `routers/factory_process_v3.py:66` | Operational lookup (factory process master) |
-| `GET /factory-process/kcsc/search` | `routers/factory_process_v3.py:212` | KCSC master ILIKE search |
-| `GET /engine-equipment/models` | `routers/engine_equipment.py:161` | Equipment model catalog list |
-| `GET /ksic-engine/search` | `routers/ksic_engine.py:151` | KSIC industry code lookup |
-| `GET /search` (admin) | tai-api admin router | Company / user / factory / payment cross-search |
+| Endpoint | Router file | Kind | Actual caller (tai-admin main) |
+|---|---|---|---|
+| `GET /help/search` | `routers/safe_help.py` | Help-center Kiwi search (own index) | `vue3/src/pages/help/useHelp.ts` |
+| `GET /factory-process/search` | `routers/factory_process_v3.py:66` | Operational process lookup | `vue3/src/pages/process-select/useProcessSelectList.ts` |
+| `GET /factory-process/kcsc/search` | `routers/factory_process_v3.py:212` | KCSC master ILIKE search | `vue3/src/pages/process-select/useKcscSearch.ts` |
+| `GET /engine-equipment/models` | `routers/engine_equipment.py:161` | Engine/master equipment catalog list | not observed in SaaS pages (reference/admin surface) |
+| `GET /equipment-assets/model/search` | `routers/equipment_assets.py` | SaaS equipment-model lookup (called from add-modal via raw fetch) | `vue3/public/assets/js/tai-rebuild/pages/my-equipment/MyEqAddModal.js` |
+| `GET /ksic-engine/search` | `routers/ksic_engine.py:151` | KSIC industry code lookup | (reference surface — not traced to a specific vue3 caller in this pass) |
+| `GET /search` (admin) | tai-api admin router | Company / user / factory / payment cross-search | admin panels only |
 
 Classifier:
 
@@ -342,61 +356,126 @@ Classifier:
 | `/help/search` | KNOWLEDGE DISCOVERY CANDIDATE — help articles could be indexed by shared engine downstream (SEARCH-04+); do NOT migrate under SEARCH-01 |
 | `/factory-process/search` | OPERATIONAL SEARCH — factory-scoped lookup, KEEP SEPARATE |
 | `/factory-process/kcsc/search` | REFERENCE DATA SEARCH — code lookup, KEEP SEPARATE |
-| `/engine-equipment/models` | REFERENCE DATA SEARCH — catalog list, KEEP SEPARATE |
+| `/engine-equipment/models` | ENGINE / MASTER CATALOG API — KEEP SEPARATE |
+| `/equipment-assets/model/search` | SAAS EQUIPMENT MODEL LOOKUP — KEEP SEPARATE (distinct caller from engine catalog) |
 | `/ksic-engine/search` | REFERENCE DATA SEARCH — industry code lookup, KEEP SEPARATE |
 | `/search` (admin) | ADMIN OPERATIONAL — KEEP SEPARATE |
 
-None of these are migration targets for the Shared Search Engine
-initiative; they operate on entity data, not knowledge/discovery.
-Their presence is documented so no future WO conflates them.
+`/engine-equipment/models` and `/equipment-assets/model/search` are
+NOT the same consumer even though both are equipment-scoped — one is
+an engine/master catalog list, the other is a SaaS `MyEqAddModal`
+raw-fetch lookup used during asset registration. Any future
+consolidation must be a deliberate WO, not an accidental merge.
+
+None of these seven are migration targets for the Shared Search
+Engine initiative; they operate on entity/reference data, not
+knowledge/discovery.
 
 ---
 
-## 10. Paid Diagnosis consumer
+## 10. Paid Diagnosis consumer (traced on tai-www main)
 
-Not traced in this audit pass. Master Plan v2 §2 GAP-06 documents
-this as open. Follow-up requires walking:
+Evidence: `git show origin/main:src/pages/paid-diagnosis-result.astro`
++ `paid-diagnosis-detail.astro` (tai-www).
 
-```text
-tai-www → free/paid diagnosis result page
-        → tai-api routers (report / diagnosis / obligations)
-        → related knowledge / GUIDE / CSI / RISK / CHEM sections
-```
+Grep for related-knowledge sections
+(`guide|material|csi|risk|chem|accident|related|knowledge`) on both
+Astro pages returns only:
 
-Verdict: **NOT TRACED / UNKNOWN**. Do not claim CONNECTED / PARTIAL
-without evidence.
+- a `rules_table / risk gauge / duty.what fallback = 0` comment on
+  `paid-diagnosis-result.astro`
+- a `risk_grade / grade` display key on `paid-diagnosis-detail.astro`
+
+No related-knowledge panels (no GUIDE / MATERIAL / CSI / RISK / CHEM
+sections) are wired.
+
+Verdict: **NOT_CONNECTED**. Matches Master Plan v2 `GAP-06 Paid
+Knowledge 연결 없음` (open).
 
 ---
 
-## 11. SaaS consumer matrix — HONEST STATUS
+## 11. SaaS consumer matrix — traced on tai-admin main
 
-Prior audit listed inferred REST endpoints and classified them.
-Those specific paths (`/companies/{id}/processes`, etc.) were **not
-verified against real code**. They are removed.
+Evidence: `git show origin/main:<file>` in `taiengineering/tai-admin`
+at `5f2d2cb0`. All 6 required page kinds (Process / Task / Equipment /
+Chemical / Obligation / Inspection) traced through the composable →
+API path → tai-api router chain.
 
-Real SaaS consumer wiring for each page kind requires tracing:
+### Direct-usage census in tai-admin `vue3/**`
 
 ```text
-tai-www SaaS route
-   → server-side loader / fetch
-   → tai-api router
-   → service
-   → data source (Graph / Search / Direct DB / RISK / CHEM / …)
+/search-dict     direct use = 0 files  (grep returns nothing)
+/knowledge-graph direct use = 0 files
+/help/search     direct use = 1 file   (vue3/src/pages/help/useHelp.ts)
 ```
 
-Until that trace is performed:
+**No SaaS page consumes the Shared Search Dictionary or the
+Knowledge Graph today.** Only the help center consumes its own
+Kiwi-backed `/help/search`.
 
-| Page kind | Status |
-|---|---|
-| company / factory | UNKNOWN — not traced |
-| process | UNKNOWN — not traced |
-| task | UNKNOWN — not traced |
-| equipment | UNKNOWN — not traced |
-| chemical | UNKNOWN — not traced |
-| obligation | UNKNOWN — not traced |
-| inspection | UNKNOWN — not traced |
+### Page-kind trace
 
-This maps to Master Plan v2 `GAP-05 SaaS Context Search 없음`.
+| Page kind | tai-admin page(s) | API endpoints called | Data source | Verdict |
+|---|---|---|---|---|
+| **PROCESS** | `vue3/src/pages/process-select/index.vue` + `useProcessSelectList.ts` + `useKcscSearch.ts` | `/factories`, `/factories/:id`, `/factory-process/search`, `/factory-process/:id/processes` (GET/POST/PATCH/DELETE), `/factory-process/kcsc/search` | tai-api factory_process_v3 router (Supabase-direct + KCSC master ILIKE) | **DIRECT_DOMAIN_QUERY** |
+| **TASK (work-schedule)** | `vue3/src/pages/work-schedule-list/**`, `vue3/src/pages/my-inspection/**` (schedules tab) | `/work-schedules`, `/inspection/schedules/:factory_id` | tai-api work_schedules / inspection routers | **DIRECT_DOMAIN_QUERY** |
+| **EQUIPMENT** | `vue3/src/pages/my-equipment/**` + `vue3/public/assets/js/tai-rebuild/pages/my-equipment/MyEqAddModal.js` | `/equipment-assets`, `/equipment-assets/model/search`, `/factories` | tai-api equipment_assets router (own catalog + Supabase table) | **DIRECT_DOMAIN_QUERY** |
+| **CHEMICAL** | *(no vue3 page)* | *(no page)* | — | **NOT_CONNECTED** — tai-admin `main` has no chemical/MSDS SaaS page (`git ls-tree ... vue3/src/pages | grep -iE "chem|msds"` returns nothing). CHEM-07 public router in tai-api is dormant. |
+| **OBLIGATION** | closest analog: `vue3/src/pages/compliance-report/index.vue` + inspection-anchor pages | `/factories`, `/inspection-sets?source=LEGAL_ENGINE`, `/construction-inspection-anchor`, `/inspection-anchor` (routes) | tai-api legal engine + inspection engine (deterministic rules) | **DIRECT_DOMAIN_QUERY** (via Legal Engine, not Shared Search) |
+| **INSPECTION** | `vue3/src/pages/my-inspection/**`, `vue3/src/pages/inspection-detail/[inspectionId].vue`, `vue3/src/pages/inspection-workbench/[inspectionId].vue` | `/inspection/status/:factory_id`, `/inspection-sets`, `/inspection-set-items`, `/inspection/schedules/:factory_id`, `/inspection/start/:id`, `/inspection/complete/:id`, `/inspection/result/:id/items` | tai-api inspection engine | **DIRECT_DOMAIN_QUERY** |
+
+### RISK UI trace (per PATCH-2 §I)
+
+RISK has a full SaaS UI in tai-admin main:
+
+- `vue3/src/pages/risk-assessment-list/**` (useRiskAssessmentList.ts)
+- `vue3/src/pages/risk-assessment-detail/**` (useRiskAssessmentDetail.ts)
+- `vue3/src/pages/risk-assessment-report/**`
+- `vue3/src/pages/risk-assessment-scale/**`
+
+API endpoints consumed:
+
+```text
+/risk-assessments                                (GET, POST)
+/risk-assessments/:id                            (GET)
+/risk-assessments/continuous-status              (GET)
+/risk-assessments/:id/complete                   (POST)
+/ra/scales?include_presets=true                  (GET)
+/ra/assessments/:id/items                        (GET, POST)
+/ra/assessments/:id/readiness                    (GET)
+/ra/items/:id/controls                           (POST)
+/ra/controls/:id                                 (PATCH)
+/ra/items/:id/reevaluate                         (POST)
+/ra/items/:id/revisions                          (GET)
+```
+
+Verdict: **DIRECT_DOMAIN_QUERY** against a dedicated
+`/risk-assessments` + `/ra/*` API — this is **NOT** the `risk_canonical_nodes`
+store (1,110 DRAFT / 0 ACTIVE / 0 sector links).
+
+Key distinction (per PATCH-2 §I):
+
+```text
+RISK UI (risk-assessment-list/detail/report/scale)
+    consumes /risk-assessments + /ra/*    → live SaaS domain
+
+RISK canonical (risk_canonical_nodes)
+    1,110 DRAFT / 0 ACTIVE / 0 sector    → not consumer-ready
+```
+
+"RISK UI exists" ≠ "RISK canonical is consumer-ready". The two must
+be tracked separately in the Consumer track; the canonical store's
+consumerization (RISK-C0*) is still open.
+
+### Aggregate SaaS verdict
+
+- **0 SaaS pages** consume `/search-dict` or `/knowledge-graph`.
+- **1 SaaS page** (help center) consumes its own `/help/search`.
+- **5 traced page kinds** are `DIRECT_DOMAIN_QUERY` against dedicated
+  domain APIs. Chemical is `NOT_CONNECTED` (no page).
+- Matches `GAP-05 SaaS Context Search 없음` in Master Plan v2 —
+  every SaaS page today runs domain-specific direct queries; none go
+  through a shared discovery layer.
 
 ---
 
@@ -422,7 +501,7 @@ Unified Search Index 없음` in Master Plan v2 §2, still open.
 
 ---
 
-## 13. Revised Connection Matrix
+## 13. Revised Connection Matrix (PATCH-2 traced)
 
 ```text
 Component                     Code    Prod    ShrDct   UnfIdx   Graph   Pub    SaaS    Paid   Evidence
@@ -433,13 +512,20 @@ T6 Trigram                    yes     UNVER   —        —        —      —
 Runtime projection artifact   build   UNVER   —        —        —      —      —       —      §3
 tai-www /safety-search        yes     live    NO       NO       partial fed'd  n/a     n/a    §4
 tai-api /public/…/kosha       yes     live    NO       NO       —      via UI —       —      §4
-LEG candidate adapter         yes     live    NO       NO       —      n/a    consumer indirect §6
-Knowledge Graph               yes     4/5     NO       NO       CODE=5 —      partial —      §7
-CHEM search adapter           yes     live    YES(CHEM_TERM) NO NO     via UI NOT TR NOT TR   §8
-RISK canonical                yes     1110D   NO       NO       NO     NO     NO      NO     §8
-LEGAL applicability           yes     live    partial  NO       NO     n/a    consumer consumer §8
-Help /help/search             yes     live    NO       NO       NO     via UI n/a     n/a    §9
-Factory / KCSC / KSIC / Eqp   yes     live    NO       NO       NO     —      admin   —      §9
+LEG candidate adapter         yes     live    NO       NO       —      n/a    n/a     n/a    §6
+Knowledge Graph               yes     4/5     NO       NO       CODE=5 —      NO      —      §7
+CHEM search adapter           yes     live    YES     NO       NO     via UI NO      NO     §11 (no SaaS page)
+RISK canonical                yes     1110D   NO       NO       NO     NO     NO      NO     §8, §11
+RISK UI (/risk-assessments)   yes     live    NO       NO       NO     n/a    DIRECT  NO     §11
+LEGAL applicability           yes     live    partial  NO       NO     n/a    via /inspection-sets NO §11
+Help /help/search             yes     live    NO       NO       NO     via UI DIRECT  n/a    §9, §11
+Process (factory-process)     yes     live    NO       NO       NO     —      DIRECT  —      §11
+Task (work-schedules)         yes     live    NO       NO       NO     —      DIRECT  —      §11
+Equipment (equipment-assets)  yes     live    NO       NO       NO     —      DIRECT  —      §11
+Chemical                      n/a     n/a     n/a      n/a      n/a    n/a    NONE    n/a    §11 (no page)
+Obligation (compliance)       yes     live    NO       NO       NO     —      DIRECT  n/a    §11
+Inspection                    yes     live    NO       NO       NO     —      DIRECT  —      §11
+Paid Diagnosis pages          yes     live    NO       NO       NO     —      —       DIRECT §10 (no related-knowledge panels)
 Admin /search                 yes     live    NO       NO       NO     —      —       —      §5
 ```
 
@@ -447,9 +533,14 @@ Columns: `Code` (present in repo) / `Prod` (verified live or
 UNVERIFIED) / `ShrDct` (uses shared dictionary) / `UnfIdx` (uses a
 unified index — NO everywhere) / `Graph` (uses knowledge graph
 relations) / `Pub` (public consumer wiring) / `SaaS` (SaaS
-consumer wiring) / `Paid` (paid diagnosis wiring).
+consumer wiring — `DIRECT` = domain-specific direct query) / `Paid`
+(paid diagnosis wiring).
 
-Cells marked NOT TR = "not traced in this pass; unknown".
+**Aggregate finding**: not a single SaaS consumer today reads
+through `/search-dict` or `/knowledge-graph`. Every SaaS page kind
+resolves through a dedicated domain API. This is exactly the state
+Master Plan v2 §2 describes as `GAP-02 / GAP-04 / GAP-05 / GAP-06`,
+all still open.
 
 ---
 
