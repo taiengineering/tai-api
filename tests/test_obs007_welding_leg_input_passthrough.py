@@ -30,8 +30,8 @@ def test_welding_detail_fields_in_allowlist():
     assert "has_high_pressure_work" in _LEG_INPUT_FIELDS
     for name in WELDING_DETAILS:
         assert name in _LEG_INPUT_FIELDS, name
-    assert len(_LEG_INPUT_FIELDS) == 215  # WO-...-DIVING-COVERAGE-BACKLOG-IMPLEMENT-001: 212→215 (+3 coverage inputs)
-    assert len(set(_LEG_INPUT_FIELDS)) == 215  # WO-...-DIVING-COVERAGE-BACKLOG-IMPLEMENT-001: 212→215 (+3 coverage inputs)
+    assert len(_LEG_INPUT_FIELDS) == 216  # WO-...-HPCC-INTEGRATED-IMPLEMENT-001: 215→216 (+1 has_caisson_work)
+    assert len(set(_LEG_INPUT_FIELDS)) == 216  # WO-...-HPCC-INTEGRATED-IMPLEMENT-001: 215→216 (+1 has_caisson_work)
 
 
 def test_has_welding_does_not_infer_details():

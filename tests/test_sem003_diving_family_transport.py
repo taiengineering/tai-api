@@ -87,17 +87,21 @@ def test_A5_zero_numeric_preserved():
 
 
 # ==========================================================================
-# A6 — SAFE_CST_OVERRIDE_FIELDS contains SEM003 prior 6 (5 bool + numeric).
-#      Prior IMPLEMENT-001 baseline; the newer DIVING-COVERAGE-BACKLOG WO
-#      extends SEM003 override to 9 (prior 6 + 3 new), so this now asserts
-#      subset containment; exact count of 9 lives in the coverage-backlog
-#      test file (test_diving_coverage_backlog_transport.py :: A5).
+# A6 — SAFE_CST_OVERRIDE_FIELDS covers SEM-003 originals except chamber (which
+#      WO-HPCC-INTEGRATED regrouped into HP-COMMON as it is a shared 고압/잠수
+#      axis). Chamber still reaches the merge tuple, just via HP-COMMON.
 # ==========================================================================
-def test_A6_safe_cst_override_contains_sem003_prior_six():
-    prior_six = set(DIVING5) | {NUMERIC}
-    assert prior_six.issubset(set(SEM003_DIVING_OVERRIDE_FIELDS))
-    for field in DIVING5:
+def test_A6_safe_cst_override_contains_sem003_diving_only_5_and_chamber_via_hp():
+    # DIVING5 minus chamber: the 4 truly diving-only booleans are still SEM-003.
+    diving_only_4 = set(DIVING5) - {"has_pressure_adjustment_chamber"}
+    assert diving_only_4.issubset(set(SEM003_DIVING_OVERRIDE_FIELDS))
+    for field in diving_only_4:
         assert field in SAFE_CST_OVERRIDE_FIELDS
+    # Chamber: NOT in SEM-003 anymore, but still in merge tuple via HP-COMMON.
+    assert "has_pressure_adjustment_chamber" not in SEM003_DIVING_OVERRIDE_FIELDS
+    assert "has_pressure_adjustment_chamber" in SAFE_CST_OVERRIDE_FIELDS
+    # Numeric (cylinder pressure) still in SEM-003.
+    assert NUMERIC in SEM003_DIVING_OVERRIDE_FIELDS
     assert NUMERIC in SAFE_CST_OVERRIDE_FIELDS
 
 

@@ -115,12 +115,19 @@ def test_A4b_depth_boundary_values_preserved():
 
 
 # ==========================================================================
-# A5 — SEM003 override count = 9 (5 prior bool + 1 prior numeric + 3 new)
+# A5 — SEM003 override contains the 5 remaining diving-only prior fields
+#      + 3 coverage fields (8 total). WO-HPCC-INTEGRATED-IMPLEMENT-001
+#      moved has_pressure_adjustment_chamber out of SEM-003 (chamber is
+#      HP-common: 고압작업자 OR 잠수작업자 shared axis) — exact-9 assertion
+#      no longer holds. Prior 3 coverage fields must all still be present.
 # ==========================================================================
-def test_A5_sem003_override_count_is_nine():
-    assert len(SEM003_DIVING_OVERRIDE_FIELDS) == 9
-    expected = set(SEM003_PRIOR_SIX) | set(COVERAGE3)
-    assert set(SEM003_DIVING_OVERRIDE_FIELDS) == expected
+def test_A5_sem003_override_carries_coverage_three():
+    # has_pressure_adjustment_chamber was regrouped out; SEM003 now = 8.
+    assert len(SEM003_DIVING_OVERRIDE_FIELDS) == 8
+    assert "has_pressure_adjustment_chamber" not in SEM003_DIVING_OVERRIDE_FIELDS
+    # But the 3 coverage-backlog fields must all still be in SEM-003.
+    for field in COVERAGE3:
+        assert field in SEM003_DIVING_OVERRIDE_FIELDS, field
     # Merge tuple contains the 3 new fields too.
     for field in COVERAGE3:
         assert field in SAFE_CST_OVERRIDE_FIELDS
@@ -217,9 +224,18 @@ def test_A10_merge_flow_carries_three_when_set():
 
 
 # ==========================================================================
-# A11 — SEM-003 previous 6 override fields untouched (regression guard).
+# A11 — SEM-003 previous 6 override fields still reachable via SAFE_CST_OVERRIDE_FIELDS.
+#       WO-HPCC-INTEGRATED-IMPLEMENT-001 regrouped has_pressure_adjustment_chamber
+#       from SEM-003 to HP-COMMON (chamber is a shared 고압/잠수 axis, not diving-only).
+#       All 6 must remain in the merge tuple; only membership in the SEM-003 sub-tuple
+#       changes for chamber.
 # ==========================================================================
-def test_A11_prior_six_intact():
+def test_A11_prior_six_reachable_via_merge_tuple():
     for field in SEM003_PRIOR_SIX:
-        assert field in SEM003_DIVING_OVERRIDE_FIELDS
-        assert field in SAFE_CST_OVERRIDE_FIELDS
+        assert field in SAFE_CST_OVERRIDE_FIELDS, field
+    # 5 of the 6 remain in SEM-003 sub-tuple.
+    for field in SEM003_PRIOR_SIX:
+        if field == "has_pressure_adjustment_chamber":
+            assert field not in SEM003_DIVING_OVERRIDE_FIELDS
+        else:
+            assert field in SEM003_DIVING_OVERRIDE_FIELDS, field

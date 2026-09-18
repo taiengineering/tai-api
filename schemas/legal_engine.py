@@ -121,6 +121,19 @@ class SafeConstructionConsumerInput(BaseModel):
     diving_depth_m: Optional[float] = None
     diving_surface_ascent_restricted: Optional[bool] = None
     diving_decompression_stop_required: Optional[bool] = None
+    # WO-E2E-OBJ01-HIGH-PRESSURE-COMMON-COVERAGE-INTEGRATED-IMPLEMENT-001:
+    # 4 additional consumer-wired HP-common fields. 3 of them
+    # (has_high_pressure_work, has_air_compressor,
+    # supplies_air_to_high_pressure_workroom_or_airlock) already exist in
+    # LEG _LEG_INPUT_FIELDS from prior WOs; this WO only wires them to the
+    # CONSTRUCTION consumer surface. has_caisson_work is new (transport
+    # allowlist +1). has_pressure_adjustment_chamber remains as declared
+    # above but is REGROUPED from SEM-003 Diving-only to HP-common in the
+    # runtime override tuple so it is not cleared when has_diving!=true.
+    has_high_pressure_work: Optional[bool] = None
+    has_air_compressor: Optional[bool] = None
+    supplies_air_to_high_pressure_workroom_or_airlock: Optional[bool] = None
+    has_caisson_work: Optional[bool] = None
     work_height_m: Optional[float] = None
     has_truck_loading_unloading: Optional[bool] = None
     truck_loading_height_m: Optional[float] = None

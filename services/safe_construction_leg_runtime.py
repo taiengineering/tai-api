@@ -36,7 +36,6 @@ class ConstructionSiteBridgeError(Exception):
 SEM003_DIVING_OVERRIDE_FIELDS = (
     "has_scuba_diving",
     "has_surface_supplied_diving",
-    "has_pressure_adjustment_chamber",
     "supplies_air_to_diver_from_air_compressor",
     "supplies_breathing_gas_to_diver_from_cylinder",
     # PATCH-1: existing LEG numeric input for Art.531 boundary (≥10 kgf/cm²).
@@ -44,12 +43,29 @@ SEM003_DIVING_OVERRIDE_FIELDS = (
     "breathing_gas_cylinder_pressure_kgf_cm2",
     # WO-E2E-OBJ01-DIVING-COVERAGE-BACKLOG-FASTLANE-IMPLEMENT-001:
     # 3 new stable inputs for Art.547③/⑥ (surface-supplied specific).
-    # Total SEM003 override count: 6 → 9.
     "diving_depth_m",
     "diving_surface_ascent_restricted",
     "diving_decompression_stop_required",
 )
-SAFE_CST_OVERRIDE_FIELDS = tuple(RUNTIME_INPUT_FIELDS) + SEM003_DIVING_OVERRIDE_FIELDS
+# WO-E2E-OBJ01-HIGH-PRESSURE-COMMON-COVERAGE-INTEGRATED-IMPLEMENT-001:
+# HP-common override axis is separate from SEM-003 Diving so that
+# has_pressure_adjustment_chamber does NOT get cleared when has_diving!=true
+# (기압조절실 = 고압작업자 OR 잠수작업자 공통 설비). 4 of the 5 keys
+# already exist in LEG _LEG_INPUT_FIELDS from prior WOs; only has_caisson_work
+# is new to the transport allowlist (215→216). Total SEM-003 override count
+# stays at 8; HP-common adds 5; SAFE_CST_OVERRIDE_FIELDS = 20 + 8 + 5 = 33.
+HIGH_PRESSURE_COMMON_OVERRIDE_FIELDS = (
+    "has_high_pressure_work",
+    "has_pressure_adjustment_chamber",
+    "has_air_compressor",
+    "supplies_air_to_high_pressure_workroom_or_airlock",
+    "has_caisson_work",
+)
+SAFE_CST_OVERRIDE_FIELDS = (
+    tuple(RUNTIME_INPUT_FIELDS)
+    + SEM003_DIVING_OVERRIDE_FIELDS
+    + HIGH_PRESSURE_COMMON_OVERRIDE_FIELDS
+)
 
 
 def run_safe_construction_leg(supabase, site_id: str, consumer_input) -> Dict[str, Any]:
