@@ -384,11 +384,12 @@ def test_22_cli_execute_blocked_even_with_owner_approved():
     assert rc == 2
 
 
-def test_23_router_registry_untouched():
-    """router_registry/public.py must not have been modified to register
-    routers.kosha_public_msds under this WO."""
+def test_23_router_registered_under_seo_preview_execute_wo():
+    """CHEM-10 originally asserted the router stayed unregistered. That
+    freeze ended when WO-CHEM-SEO-PREVIEW-EXECUTE-001 registered it
+    (still 503-dormant until KOSHA_MSDS_PUBLIC_MODE is set)."""
     modules = [entry.get("module") for entry in PUBLIC_ROUTERS]
-    assert "routers.kosha_public_msds" not in modules
+    assert "routers.kosha_public_msds" in modules
 
 
 def test_24_search_adapter_untouched():
