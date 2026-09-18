@@ -32,6 +32,11 @@ If any precondition is missing the executor exits non-zero without touching the 
 
 ---
 
+## 1a. FINAL PATCH notes (post-GPT verify)
+
+- **Supabase section pagination** — `SupabasePublishStore.section_count_for_snapshot` / `duplicate_section_pairs_for_snapshot` previously issued one `.execute()` per chemical_id chunk. PostgREST caps a single response at 1,000 rows, so a chunk of 200 chemicals × 16 sections = 3,200 would silently truncate. Both methods now go through `_iter_sections_for_chem_ids()` which paginates within each chunk via `.range(offset, offset+999)` until a short page arrives. Two new tests use a fake Supabase client that honours both `.in_()` and `.range()` to prove 3,200 / 6,400 rows are counted in full.
+- **Migration order** — PHASE 2 §2 (below) now applies `20260914_kosha_msds_catalog.sql` before `20260918_kosha_msds_seo_preview.sql` because the base tables don't exist in production yet.
+
 ## 2. Fail-closed matrix
 
 | Guard | Location | Trigger | Block reason |
@@ -103,7 +108,30 @@ After GPT final execution verify, run in-session:
 
 1. **Merge** — `gh pr merge <PR#> --squash --delete-branch`.
 
-2. **Migration deploy** — apply `supabase/migrations/20260918_kosha_msds_seo_preview.sql` to production Supabase. Sanity-check with `SELECT constraint_name FROM information_schema.check_constraints WHERE constraint_name = 'kosha_msds_snapshots_publish_state_check';` and `SELECT viewname FROM pg_views WHERE viewname = 'kosha_msds_seo_preview_current';`.
+2. **Migration deploy — BOTH files in order.** Production `taieng` currently has none of the `kosha_msds_*` tables applied, so the base migration must run first:
+
+   ```
+   supabase/migrations/20260914_kosha_msds_catalog.sql       # creates the 4 base tables + kosha_msds_current
+   supabase/migrations/20260918_kosha_msds_seo_preview.sql   # extends publish_state + adds kosha_msds_seo_preview_current
+   ```
+
+   Use the repository's regular migration mechanism so any pending migrations that precede these are applied in the same pass — do NOT run individual `psql` files by hand. Applying `20260918` before `20260914` fails because the `ALTER TABLE public.kosha_msds_snapshots …` in `20260918` references a table that does not exist yet.
+
+   Sanity after both applied:
+
+   ```sql
+   -- 4 base tables + 2 views must exist
+   SELECT relname, relkind FROM pg_class
+    WHERE relname IN (
+      'kosha_msds_chemicals','kosha_msds_sections',
+      'kosha_msds_snapshots','kosha_msds_snapshot_items',
+      'kosha_msds_current','kosha_msds_seo_preview_current'
+    );
+   -- Publish-state constraint must include PUBLISHED_SEO_PREVIEW
+   SELECT pg_get_constraintdef(oid)
+     FROM pg_constraint
+    WHERE conname = 'kosha_msds_snapshots_publish_state_check';
+   ```
 
 3. **CHEM-05 plan** —
    ```

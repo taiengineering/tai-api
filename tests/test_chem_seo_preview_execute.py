@@ -465,3 +465,146 @@ def test_public_router_registry_lists_msds_router():
     from router_registry.public import ROUTERS
     modules = [r.get("module") for r in ROUTERS]
     assert "routers.kosha_public_msds" in modules
+
+
+# ---------------------------------------------------------------------------
+# FINAL PATCH · Supabase section-read pagination.
+#
+# The prior implementation issued one .execute() per chemical_id chunk and
+# assumed the whole result came back in one page. PostgREST's default page
+# cap is 1,000 rows, so a chunk of 200 chemicals × 16 sections = 3,200 rows
+# would silently truncate to 1,000. section_count_for_snapshot and
+# duplicate_section_pairs_for_snapshot now paginate WITHIN each chunk. We
+# exercise that path with a fake Supabase client whose responses honour
+# both .in_(...) filtering AND .range(offset, offset+size-1).
+# ---------------------------------------------------------------------------
+
+
+class _FakeSupabaseSectionsClient:
+    """Minimal chainable stub that mimics the PostgREST/Supabase Python
+    client for the queries in SupabasePublishStore. Only the tables and
+    methods actually reached are implemented."""
+
+    def __init__(self, sections_rows: list[dict], items_rows: list[dict]):
+        self._sections = sections_rows
+        self._items = items_rows
+
+    def table(self, name: str):
+        if name == "kosha_msds_sections":
+            return _FakeSectionsQuery(self._sections)
+        if name == "kosha_msds_snapshot_items":
+            return _FakeItemsQuery(self._items)
+        raise KeyError(f"unexpected table: {name}")
+
+
+class _FakeSectionsQuery:
+    def __init__(self, rows: list[dict]):
+        self._rows = rows
+        self._filter_in: tuple[str, list] | None = None
+        self._range: tuple[int, int] | None = None
+
+    def select(self, *_a, **_kw): return self
+    def order(self, *_a, **_kw): return self
+
+    def in_(self, col: str, values):
+        self._filter_in = (col, list(values))
+        return self
+
+    def range(self, start: int, end: int):
+        self._range = (start, end)
+        return self
+
+    def execute(self):
+        rows = list(self._rows)
+        if self._filter_in is not None:
+            col, allowed = self._filter_in
+            rows = [r for r in rows if str(r.get(col)) in {str(v) for v in allowed}]
+        if self._range is not None:
+            start, end = self._range
+            rows = rows[start:end + 1]
+
+        class _R: pass
+        r = _R()
+        r.data = rows
+        return r
+
+
+class _FakeItemsQuery:
+    def __init__(self, rows: list[dict]):
+        self._rows = rows
+        self._eqs: dict[str, object] = {}
+        self._range: tuple[int, int] | None = None
+
+    def select(self, *_a, **_kw): return self
+
+    def eq(self, col: str, value):
+        self._eqs[col] = value
+        return self
+
+    def range(self, start: int, end: int):
+        self._range = (start, end)
+        return self
+
+    def execute(self):
+        rows = [r for r in self._rows
+                if all(r.get(k) == v for k, v in self._eqs.items())]
+        if self._range is not None:
+            start, end = self._range
+            rows = rows[start:end + 1]
+
+        class _R: pass
+        r = _R()
+        r.data = rows
+        return r
+
+
+def test_section_count_paginates_beyond_default_page_cap():
+    """Chunk of 200 chemicals × 16 sections = 3,200 rows. A single
+    .execute() (which caps at 1,000) would return only 1,000. The store
+    must page through .range(offset, offset+999) three times per chunk."""
+    from services.kosha_msds.production_store import SupabasePublishStore
+
+    # 200 chemicals, 16 sections each. Deterministic uuids for readability.
+    chem_ids = [f"chem-{i:04d}" for i in range(200)]
+    sections_rows: list[dict] = []
+    for cid in chem_ids:
+        for n in range(1, 17):
+            sections_rows.append({"chemical_id": cid, "section_no": n})
+    assert len(sections_rows) == 3200   # sanity
+
+    items_rows = [
+        {"snapshot_id": "snap-a", "chemical_id": cid, "in_snapshot": True,
+         "detail_status": "COMPLETE"}
+        for cid in chem_ids
+    ]
+
+    fake = _FakeSupabaseSectionsClient(sections_rows, items_rows)
+    store = SupabasePublishStore(sb=fake)
+    total = store.section_count_for_snapshot("snap-a")
+    assert total == 3200, (
+        f"pagination must count every (chemical_id, section_no) pair; got {total}"
+    )
+
+    dup_count = store.duplicate_section_pairs_for_snapshot("snap-a")
+    assert dup_count == 0
+
+
+def test_section_count_paginates_across_two_chunks_and_pages():
+    """400 chemicals cross both the CHEM-ID chunk boundary AND the
+    per-chunk page boundary. Every row must still be counted exactly once."""
+    from services.kosha_msds.production_store import SupabasePublishStore
+
+    chem_ids = [f"c-{i:05d}" for i in range(400)]
+    sections_rows = [
+        {"chemical_id": cid, "section_no": n}
+        for cid in chem_ids for n in range(1, 17)
+    ]
+    assert len(sections_rows) == 6400
+    items_rows = [
+        {"snapshot_id": "snap-x", "chemical_id": cid, "in_snapshot": True,
+         "detail_status": "COMPLETE"}
+        for cid in chem_ids
+    ]
+    store = SupabasePublishStore(sb=_FakeSupabaseSectionsClient(sections_rows, items_rows))
+    assert store.section_count_for_snapshot("snap-x") == 6400
+    assert store.duplicate_section_pairs_for_snapshot("snap-x") == 0

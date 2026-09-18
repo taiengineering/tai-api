@@ -232,48 +232,68 @@ class SupabasePublishStore:
             offset += page_size
         return acc
 
+    # Supabase PostgREST default page cap. A single .execute() returns
+    # at most this many rows regardless of how many match. For 1,997
+    # chemicals × 16 sections we cannot stuff a whole chunk into one
+    # round-trip without pagination.
+    _SECTIONS_PAGE_SIZE = 1000
+    # chemical_id chunk size for the .in_ filter — keeps the URL length
+    # bounded but the section count per chunk can still exceed 1000.
+    _CHEM_ID_CHUNK = 200
+
+    def _iter_sections_for_chem_ids(self, chem_ids: list[str]):
+        """Paginated read of (chemical_id, section_no) rows for the given
+        UUIDs. Yields every row exactly once, streaming across chemical_id
+        chunks AND across pages within each chunk. Complete enumeration
+        is required for the publish preflight counts to match the 1,997 ×
+        16 = 31,952 expectation.
+        """
+        for chunk in _chunk(sorted(chem_ids), self._CHEM_ID_CHUNK):
+            offset = 0
+            while True:
+                r = (
+                    self.sb.table(SECTIONS_TABLE)
+                    .select("chemical_id,section_no")
+                    .in_("chemical_id", chunk)
+                    .order("chemical_id")
+                    .order("section_no")
+                    .range(offset, offset + self._SECTIONS_PAGE_SIZE - 1)
+                    .execute()
+                )
+                batch = list(r.data or [])
+                for row in batch:
+                    yield row
+                if len(batch) < self._SECTIONS_PAGE_SIZE:
+                    break
+                offset += self._SECTIONS_PAGE_SIZE
+
     def section_count_for_snapshot(self, snapshot_id: str) -> int:
         # DISTINCT (chemical_id, section_no) count for the chemicals in
-        # this snapshot's membership. We enumerate item chemical_ids then
-        # walk the sections table paginated.
+        # this snapshot's membership. Paginated section walk so >1000
+        # rows per chemical_id chunk are counted (PostgREST default cap).
         items = self.snapshot_items(snapshot_id)
         chem_ids = {str(i.get("chemical_id")) for i in items}
         if not chem_ids:
             return 0
         pairs: set[tuple[str, int]] = set()
-        # Chunk the chem_id filter into groups so `in_` doesn't blow up.
-        chunks = _chunk(sorted(chem_ids), 200)
-        for chunk in chunks:
-            r = (
-                self.sb.table(SECTIONS_TABLE)
-                .select("chemical_id,section_no")
-                .in_("chemical_id", chunk)
-                .execute()
-            )
-            for row in (r.data or []):
-                pairs.add((str(row.get("chemical_id")), int(row.get("section_no"))))
+        for row in self._iter_sections_for_chem_ids(sorted(chem_ids)):
+            pairs.add((str(row.get("chemical_id")), int(row.get("section_no"))))
         return len(pairs)
 
     def duplicate_section_pairs_for_snapshot(self, snapshot_id: str) -> int:
         # Rely on the DB's PRIMARY KEY (chemical_id, section_no) — a
         # true duplicate is impossible at the DB level. The count is
-        # therefore always 0. We still enumerate defensively in case a
-        # future schema change relaxes the PK.
+        # therefore always 0. We still enumerate defensively (paginated,
+        # same as section_count_for_snapshot) in case a future schema
+        # change relaxes the PK.
         items = self.snapshot_items(snapshot_id)
         chem_ids = {str(i.get("chemical_id")) for i in items}
         if not chem_ids:
             return 0
         seen: dict[tuple[str, int], int] = {}
-        for chunk in _chunk(sorted(chem_ids), 200):
-            r = (
-                self.sb.table(SECTIONS_TABLE)
-                .select("chemical_id,section_no")
-                .in_("chemical_id", chunk)
-                .execute()
-            )
-            for row in (r.data or []):
-                key = (str(row.get("chemical_id")), int(row.get("section_no")))
-                seen[key] = seen.get(key, 0) + 1
+        for row in self._iter_sections_for_chem_ids(sorted(chem_ids)):
+            key = (str(row.get("chemical_id")), int(row.get("section_no")))
+            seen[key] = seen.get(key, 0) + 1
         return sum(1 for c in seen.values() if c > 1)
 
     def latest_published_snapshot(
