@@ -251,9 +251,12 @@ def test_transport_allowlist_appends_work_facts_only():
     # were appended by that patch. Baseline 202 → 205.
     # WO-E2E-OBJ01-SEM002-ART57A-CONSUMER-INPUT-WIRING-001: +1 canonical
     # existential fact for Art.57 first sentence. Baseline 205 → 206.
+    # WO-E2E-OBJ01-DIVING-COVERAGE-BACKLOG-FASTLANE-IMPLEMENT-001: +3 stable
+    # diving-coverage inputs (diving_depth_m / diving_surface_ascent_restricted /
+    # diving_decompression_stop_required). Baseline 212 → 215.
     # Uniqueness invariant preserved.
-    assert len(_LEG_INPUT_FIELDS) == 212
-    assert len(set(_LEG_INPUT_FIELDS)) == 212
+    assert len(_LEG_INPUT_FIELDS) == 215
+    assert len(set(_LEG_INPUT_FIELDS)) == 215
     assert KSIC_NOT_IN_TRANSPORT not in _LEG_INPUT_FIELDS
     assert "has_welding" in _LEG_INPUT_FIELDS
     assert "has_demolition" in _LEG_INPUT_FIELDS

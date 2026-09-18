@@ -113,6 +113,14 @@ class SafeConstructionConsumerInput(BaseModel):
     supplies_air_to_diver_from_air_compressor: Optional[bool] = None
     supplies_breathing_gas_to_diver_from_cylinder: Optional[bool] = None
     breathing_gas_cylinder_pressure_kgf_cm2: Optional[float] = None
+    # WO-E2E-OBJ01-DIVING-COVERAGE-BACKLOG-FASTLANE-IMPLEMENT-001:
+    # 3 new stable inputs for Art.547③/⑥ machine applicability
+    # AND(has_surface_supplied_diving, OR(depth≥18, ascent_restricted, decompression_stop_required)).
+    # Fixed workplace conditions, not operational triggers. Missing != false;
+    # numeric 0 preserved (0 m depth is a real reading distinct from missing).
+    diving_depth_m: Optional[float] = None
+    diving_surface_ascent_restricted: Optional[bool] = None
+    diving_decompression_stop_required: Optional[bool] = None
     work_height_m: Optional[float] = None
     has_truck_loading_unloading: Optional[bool] = None
     truck_loading_height_m: Optional[float] = None

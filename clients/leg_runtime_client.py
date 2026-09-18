@@ -159,6 +159,13 @@ _LEG_INPUT_FIELDS = (
     "has_pressure_adjustment_chamber",
     "supplies_air_to_diver_from_air_compressor",
     "supplies_breathing_gas_to_diver_from_cylinder",
+    # WO-E2E-OBJ01-DIVING-COVERAGE-BACKLOG-FASTLANE-IMPLEMENT-001:
+    # 3 new stable inputs for Art.547③/⑥ machine applicability
+    # (depth ≥ 18m OR ascent restriction OR decompression-stop plan).
+    # Verbatim EOK passthrough; missing != false; no alias/derivation.
+    "diving_depth_m",
+    "diving_surface_ascent_restricted",
+    "diving_decompression_stop_required",
     "has_confined_space", "has_welding", "has_mech_parking", "has_pressure_vessel",
     "has_demolition", "has_radiation", "has_rolling", "has_boiler", "has_conveyor",
     "has_steel_frame", "is_energy_intensive", "has_grinding", "has_painting", "has_blasting",
