@@ -235,3 +235,52 @@ tests         = 21/21 pass (was 15) — H15..H20 added, H14 rewritten
 regression    = 287/287 CHEM tests pass
 local CLI     = WAIT_HYDRATION (queue rows 329,088, SHA matches frozen)
 ```
+
+---
+
+## PATCH-2 — Final lineage & fail-closed seal
+
+Second independent verify surfaced three remaining safety gaps.
+PATCH-2 closes them, again without adding a new decision engine.
+
+### A. FULL snapshot ↔ current plan lineage binding
+
+- Stage E previously called `cutover.is_full_ready(snapshot_id, store=publish_store)` with `expected_materialize_binding=None`, leaving the FULL snapshot's materialize lineage unverified against the *current* plan.
+- CHEM-10 already carries the canonical `BLOCK_MATERIALIZE_BINDING_MISMATCH` gate — it just needed the current plan's binding.
+- PATCH-2 §A: the orchestrator now derives `expected_materialize_binding` from `plan_inputs.manifest.snapshot.metrics_json` (the exact dict CHEM-05 emits and CHEM-08 copies verbatim into the FULL snapshot's `metrics_json`) and passes it into `is_full_ready`.
+- Key set (per CHEM-05 manifest): `adapter_version`, `materialize_plan_sha256`, `artifact_responses_sha256` (plus any other keys present).
+- Any drift → BLOCKED / MATERIALIZE_BINDING_MISMATCH surfaces via CHEM-10 unchanged.
+
+### B. Public-mode block reason integrity
+
+- Previously, "A..F all ready + `public_mode != seo_preview`" landed at the fallback BLOCKED branch with an empty `overall_block_reasons`.
+- New harness constant `BLOCK_PUBLIC_MODE_NOT_SEO_PREVIEW` fires precisely for this case.
+- Verdict vocabulary still exactly four values.
+
+### C. FULL queue read failure is fail-closed
+
+- Previously: `queue_path.exists()==True` + `open()` raising OSError recorded `queue_error` in evidence but did not fire QUEUE_IDENTITY_MISMATCH.
+- Now: under `all_full=True`, `queue_read_failed` is an integrity violation → BLOCKED / QUEUE_IDENTITY_MISMATCH. In-progress hydration semantics unchanged (WAIT_HYDRATION still applies while the runner is still writing).
+
+### Tests (H21..H26)
+
+| Case | What it exercises | Expected |
+|------|-------------------|----------|
+| H21  | plan `plan_semantic_sha256` ≠ snapshot `materialize_plan_sha256` | BLOCKED / MATERIALIZE_BINDING_MISMATCH |
+| H22  | hydration/plan `responses_sha256` ≠ snapshot `artifact_responses_sha256` | BLOCKED / MATERIALIZE_BINDING_MISMATCH |
+| H23  | all lineage keys match | publish stage ready; `expected_materialize_binding` recorded in evidence |
+| H24  | A..F green + `public_mode=off` | BLOCKED / PUBLIC_MODE_NOT_SEO_PREVIEW |
+| H25  | A..F green + `public_mode=seo_preview` | READY_FOR_FULL_CUTOVER |
+| H26  | FULL source + queue file present but read raises OSError | BLOCKED / QUEUE_IDENTITY_MISMATCH |
+
+### Anchors (PATCH-2)
+
+```text
+main at run   = f32e4a71a692865ff03ca5276b3d331a126547bf
+branch        = feature/chem-full-readiness-005-acceptance-harness
+patch-1 head  = 6abc3244457458d2324aabede461ef7a529c7b80
+patch-2 head  = <post-push>
+tests         = 27/27 pass (was 21) — H21..H26 added
+regression    = 293/293 CHEM tests pass
+local CLI     = WAIT_HYDRATION (queue rows 329,088, SHA matches frozen)
+```

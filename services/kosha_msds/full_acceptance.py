@@ -85,6 +85,15 @@ BLOCK_MANIFEST_BINDING_MISMATCH = "MANIFEST_BINDING_MISMATCH"
 # search dictionary being offline / V1_OR_OTHER always names *why*
 # in overall_block_reasons.
 BLOCK_SEARCH_RUNTIME_NOT_READY = "SEARCH_RUNTIME_NOT_READY"
+# PATCH-2 §A: surface CHEM-10's MATERIALIZE_BINDING_MISMATCH under
+# the harness vocabulary. Same wrapping pattern as PATCH-1 §B —
+# CHEM-10 is the authoritative judge; we just relabel for the
+# harness verdict surface.
+BLOCK_MATERIALIZE_BINDING_MISMATCH = "MATERIALIZE_BINDING_MISMATCH"
+# PATCH-2 §B: derived block reason so a BLOCKED verdict at the
+# fallback branch (A..F all ready, public_mode wrong) always names
+# why. Verdict vocabulary itself stays at exactly four values.
+BLOCK_PUBLIC_MODE_NOT_SEO_PREVIEW = "PUBLIC_MODE_NOT_SEO_PREVIEW"
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +174,7 @@ def evaluate_source_stage(
     queue_file_present = bool(queue_path is not None and queue_path.exists())
     ev["queue_path"] = str(queue_path) if queue_path is not None else None
     ev["queue_file_present"] = queue_file_present
+    queue_read_failed = False        # PATCH-2 §C
     if queue_file_present:
         actual_rows = 0
         h = hashlib.sha256()
@@ -177,6 +187,7 @@ def evaluate_source_stage(
                     actual_rows += 1
         except OSError as exc:
             ev["queue_error"] = f"{type(exc).__name__}: {exc}"
+            queue_read_failed = True
         else:
             ev["queue_sha256"] = h.hexdigest()
             ev["queue_rows"] = actual_rows
@@ -202,6 +213,13 @@ def evaluate_source_stage(
     # runner is still writing it — so we only escalate this on FULL.
     if all_full and not queue_file_present:
         reasons.append(BLOCK_QUEUE_IDENTITY_MISMATCH)
+        integrity_violation = True
+
+    # PATCH-2 §C: file was present but the read raised — under FULL
+    # "queue exists" ≠ "queue identity verified". Fail-closed.
+    if all_full and queue_read_failed:
+        if BLOCK_QUEUE_IDENTITY_MISMATCH not in reasons:
+            reasons.append(BLOCK_QUEUE_IDENTITY_MISMATCH)
         integrity_violation = True
 
     return StageReport(
@@ -499,19 +517,31 @@ def evaluate_publish_stage(
     *,
     publish_store,
     snapshot_id: Optional[str],
+    expected_materialize_binding: Optional[Mapping[str, Any]] = None,
 ) -> StageReport:
+    """Delegate to cutover.is_full_ready, threading the current plan's
+    materialize binding (PATCH-2 §A). CHEM-10 already carries the
+    canonical MATERIALIZE_BINDING_MISMATCH gate — we just have to
+    give it the current plan's lineage to compare against.
+    """
     if not snapshot_id:
         return StageReport(
             name="publish", ready=False,
             evidence={"note": "no snapshot to evaluate"},
         )
     from services.kosha_msds.cutover import is_full_ready
-    report = is_full_ready(snapshot_id, store=publish_store)
+    report = is_full_ready(
+        snapshot_id, store=publish_store,
+        expected_materialize_binding=expected_materialize_binding,
+    )
+    evidence = {"snapshot_id": snapshot_id, **report.to_dict()}
+    if expected_materialize_binding is not None:
+        evidence["expected_materialize_binding"] = dict(expected_materialize_binding)
     return StageReport(
         name="publish",
         ready=report.ready,
         block_reasons=tuple(report.block_reasons),
-        evidence={"snapshot_id": snapshot_id, **report.to_dict()},
+        evidence=evidence,
     )
 
 
@@ -624,6 +654,19 @@ def evaluate_full_acceptance(
         # Surface which baseline drove the check.
         c.evidence["baseline_source"] = baseline_source
 
+    # PATCH-2 §A: derive `expected_materialize_binding` from the
+    # current plan's manifest.snapshot.metrics_json — CHEM-05 writes
+    # this identical dict into the FULL snapshot's metrics_json when
+    # the writer opens the snapshot, so equal manifests ↔ equal
+    # snapshots. If the plan is not supplied we cannot bind lineage
+    # and leave the check to CHEM-10 (no expected → not enforced).
+    if plan_inputs is not None:
+        _snap = (plan_inputs.manifest or {}).get("snapshot") or {}
+        _metrics = _snap.get("metrics_json") or {}
+        expected_materialize_binding = dict(_metrics) if _metrics else None
+    else:
+        expected_materialize_binding = None
+
     # Stage E
     if publish_store is None or not d.ready:
         e = StageReport(name="publish", ready=False,
@@ -632,6 +675,7 @@ def evaluate_full_acceptance(
         e = evaluate_publish_stage(
             publish_store=publish_store,
             snapshot_id=(d.evidence or {}).get("snapshot_id"),
+            expected_materialize_binding=expected_materialize_binding,
         )
 
     # Stage F
@@ -676,9 +720,10 @@ def evaluate_full_acceptance(
     elif all_stages_ready and public_mode_pre_cutover:
         verdict = VERDICT_READY_FOR_FULL_CUTOVER
     else:
-        # PATCH-1 §F: an intermediate BLOCKED (source complete but
-        # something downstream is not-ready without producing its own
-        # reason) must still name WHY. Derive reasons from stage state.
+        # PATCH-1 §F + PATCH-2 §B: an intermediate BLOCKED (source
+        # complete but something downstream is not-ready without
+        # producing its own reason) must still name WHY. Derive
+        # reasons from stage state.
         verdict = VERDICT_BLOCKED
         if not b.ready and plan_inputs is None:
             reasons.append(BLOCK_NOT_FULL_PLAN)
@@ -690,6 +735,10 @@ def evaluate_full_acceptance(
             # surface the search-runtime miss so users know.
             if not f.ready:
                 reasons.append(BLOCK_SEARCH_RUNTIME_NOT_READY)
+        # PATCH-2 §B: A..F all ready but public_mode ≠ seo_preview →
+        # cutover is blocked; overall_block_reasons must name it.
+        if all_stages_ready and not public_mode_pre_cutover:
+            reasons.append(BLOCK_PUBLIC_MODE_NOT_SEO_PREVIEW)
 
     return AcceptanceReport(
         verdict=verdict,

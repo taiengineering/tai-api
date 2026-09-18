@@ -195,21 +195,48 @@ class _FakeMaterializeStore:
 DEFAULT_MANIFEST_RESPONSES_SHA = "resp-sha"
 DEFAULT_MANIFEST_PLAN_FILE_SHA = "plan-file-sha"
 DEFAULT_MANIFEST_PLAN_SEM_SHA = "plan-sem-sha"
+DEFAULT_ADAPTER_VERSION = "CHEM05_V1"
+
+
+def _snapshot_metrics(
+    *,
+    adapter_version=DEFAULT_ADAPTER_VERSION,
+    materialize_plan_sha256=DEFAULT_MANIFEST_PLAN_SEM_SHA,
+    artifact_responses_sha256=DEFAULT_MANIFEST_RESPONSES_SHA,
+) -> dict:
+    """The exact dict CHEM-05 writes as `manifest.snapshot.metrics_json`
+    (and CHEM-08 copies verbatim into the FULL snapshot). Used by both
+    plan fixtures and publish-store snapshot fixtures so lineage
+    binding matches by default (PATCH-2 §A)."""
+    return {
+        "adapter_version": adapter_version,
+        "materialize_plan_sha256": materialize_plan_sha256,
+        "artifact_responses_sha256": artifact_responses_sha256,
+    }
 
 
 def _plan_inputs(*, chemicals, execute_eligible=True,
                  execute_block_reasons=None,
                  responses_sha256=DEFAULT_MANIFEST_RESPONSES_SHA,
                  plan_file_sha256=DEFAULT_MANIFEST_PLAN_FILE_SHA,
-                 plan_semantic_sha256=DEFAULT_MANIFEST_PLAN_SEM_SHA) -> object:
+                 plan_semantic_sha256=DEFAULT_MANIFEST_PLAN_SEM_SHA,
+                 snapshot_metrics=None) -> object:
+    """MaterializePlanInputs whose manifest.snapshot.metrics_json is the
+    same shape CHEM-05 emits. PATCH-2 §A: this dict is what the harness
+    passes to `is_full_ready` as `expected_materialize_binding`."""
     from services.kosha_msds.materialize_writer import MaterializePlanInputs
+    metrics = _snapshot_metrics(
+        materialize_plan_sha256=plan_semantic_sha256,
+        artifact_responses_sha256=responses_sha256,
+    ) if snapshot_metrics is None else dict(snapshot_metrics)
     return MaterializePlanInputs(
         manifest={
-            "adapter_version": "CHEM05_V1",
+            "adapter_version": DEFAULT_ADAPTER_VERSION,
             "plan_semantic_sha256": plan_semantic_sha256,
             "responses_sha256": responses_sha256,
             "plan_file_sha256": plan_file_sha256,
             "execute_eligible": execute_eligible,
+            "snapshot": {"metrics_json": metrics},
         },
         report={
             "execute_eligible": execute_eligible,
@@ -274,6 +301,9 @@ def _snap_row(id: str, *, status=SNAPSHOT_COMPLETED,
               completed_at="2026-09-20T10:00:00Z",
               started_at="2026-09-20T09:00:00Z",
               metrics=None) -> dict:
+    """FULL snapshot fixture. metrics_json defaults match _snapshot_metrics
+    so PATCH-2 §A lineage binding passes by default; individual tests
+    can pass `metrics={...}` to simulate drift."""
     return {
         "id": id, "source_id": "KOSHA_MSDS", "run_type": "FULL_SYNC",
         "status": status,
@@ -284,11 +314,7 @@ def _snap_row(id: str, *, status=SNAPSHOT_COMPLETED,
         "discovered_count": discovered,
         "started_at": started_at,
         "completed_at": completed_at,
-        "metrics_json": dict(metrics or {
-            "adapter_version": "CHEM05_V1",
-            "materialize_plan_sha256": "plan-sem-sha",
-            "responses_sha256": "resp-sha",
-        }),
+        "metrics_json": _snapshot_metrics() if metrics is None else dict(metrics),
     }
 
 
@@ -893,3 +919,198 @@ def test_H20_current_production_still_wait_hydration(valid_queue_path):
     )
     assert r.verdict == fa.VERDICT_WAIT_HYDRATION
     assert r.overall_block_reasons == ()
+
+
+# ---------------------------------------------------------------------------
+# H21 — plan semantic SHA ≠ snapshot's → BLOCKED / MATERIALIZE_BINDING_MISMATCH
+# ---------------------------------------------------------------------------
+
+
+def test_H21_plan_snapshot_binding_drift_blocks(valid_queue_path):
+    """FULL snapshot's metrics_json.materialize_plan_sha256 disagrees
+    with the current plan's plan_semantic_sha256. PATCH-2 §A: the
+    harness threads the plan's lineage into CHEM-10's canonical
+    MATERIALIZE_BINDING_MISMATCH gate, which fires."""
+    mat_store = _full_materialize_store()
+    # FULL snapshot was materialized from a DIFFERENT plan (SHA=B).
+    stale_snapshot = _snap_row(
+        "snap-FULL",
+        metrics=_snapshot_metrics(
+            materialize_plan_sha256="STALE-plan-sem-sha",
+            artifact_responses_sha256=DEFAULT_MANIFEST_RESPONSES_SHA,
+        ),
+    )
+    pub_store = pub.MemoryPublishStore(
+        snapshots=[stale_snapshot],
+        snapshot_items=_full_membership("snap-FULL"),
+        sections=_full_sections(),
+    )
+    chemicals = [_plan_row(i) for i in range(TEST_CHEMICAL_COUNT)]
+    plan = _plan_inputs(chemicals=chemicals, execute_eligible=True)
+
+    r = fa.evaluate_full_acceptance(
+        hydration_status=_hydration_fully_complete(),
+        plan_inputs=plan,
+        materialize_store=mat_store,
+        publish_store=pub_store,
+        dictionary_status=_dict_v2(),
+        queue_path=valid_queue_path,
+    )
+    e = next(s for s in r.stages if s.name == "publish")
+    assert e.ready is False, e.to_dict()
+    assert r.verdict == fa.VERDICT_BLOCKED
+    assert "MATERIALIZE_BINDING_MISMATCH" in r.overall_block_reasons
+
+
+# ---------------------------------------------------------------------------
+# H22 — hydration responses SHA ≠ snapshot's → BLOCKED
+# ---------------------------------------------------------------------------
+
+
+def test_H22_hydration_snapshot_binding_drift_blocks(valid_queue_path):
+    """Same failure surface as H21 but the drift is in
+    artifact_responses_sha256 (FULL snapshot was built from a
+    different hydration artifact than what the plan now points at)."""
+    mat_store = _full_materialize_store()
+    stale_snapshot = _snap_row(
+        "snap-FULL",
+        metrics=_snapshot_metrics(
+            materialize_plan_sha256=DEFAULT_MANIFEST_PLAN_SEM_SHA,
+            artifact_responses_sha256="STALE-artifact-responses-sha",
+        ),
+    )
+    pub_store = pub.MemoryPublishStore(
+        snapshots=[stale_snapshot],
+        snapshot_items=_full_membership("snap-FULL"),
+        sections=_full_sections(),
+    )
+    chemicals = [_plan_row(i) for i in range(TEST_CHEMICAL_COUNT)]
+    plan = _plan_inputs(chemicals=chemicals, execute_eligible=True)
+
+    r = fa.evaluate_full_acceptance(
+        hydration_status=_hydration_fully_complete(),
+        plan_inputs=plan,
+        materialize_store=mat_store,
+        publish_store=pub_store,
+        dictionary_status=_dict_v2(),
+        queue_path=valid_queue_path,
+    )
+    assert r.verdict == fa.VERDICT_BLOCKED
+    assert "MATERIALIZE_BINDING_MISMATCH" in r.overall_block_reasons
+
+
+# ---------------------------------------------------------------------------
+# H23 — all binding matches → publish stage PASSes with lineage recorded
+# ---------------------------------------------------------------------------
+
+
+def test_H23_all_binding_matches_publish_ready(valid_queue_path):
+    """FULL snapshot's metrics_json exactly matches the plan's
+    manifest.snapshot.metrics_json (default fixture shape). Publish
+    stage passes; evidence records the expected binding for
+    provenance."""
+    mat_store = _full_materialize_store()
+    pub_store = _valid_full_publish_store()
+    chemicals = [_plan_row(i) for i in range(TEST_CHEMICAL_COUNT)]
+    plan = _plan_inputs(chemicals=chemicals, execute_eligible=True)
+
+    r = fa.evaluate_full_acceptance(
+        hydration_status=_hydration_fully_complete(),
+        plan_inputs=plan,
+        materialize_store=mat_store,
+        publish_store=pub_store,
+        dictionary_status=_dict_v2(),
+        queue_path=valid_queue_path,
+    )
+    e = next(s for s in r.stages if s.name == "publish")
+    assert e.ready is True, e.to_dict()
+    assert "MATERIALIZE_BINDING_MISMATCH" not in r.overall_block_reasons
+    binding = e.evidence.get("expected_materialize_binding") or {}
+    assert binding.get("materialize_plan_sha256") == DEFAULT_MANIFEST_PLAN_SEM_SHA
+    assert binding.get("artifact_responses_sha256") == DEFAULT_MANIFEST_RESPONSES_SHA
+
+
+# ---------------------------------------------------------------------------
+# H24 — everything green except public_mode=off → BLOCKED with reason
+# ---------------------------------------------------------------------------
+
+
+def test_H24_public_mode_off_blocks_with_reason(valid_queue_path):
+    """A..F all ready but public_mode='off'. PATCH-2 §B: harness now
+    surfaces BLOCK_PUBLIC_MODE_NOT_SEO_PREVIEW so the BLOCKED verdict
+    is never reason-less."""
+    mat_store = _full_materialize_store()
+    pub_store = _valid_full_publish_store()
+    chemicals = [_plan_row(i) for i in range(TEST_CHEMICAL_COUNT)]
+    plan = _plan_inputs(chemicals=chemicals, execute_eligible=True)
+
+    r = fa.evaluate_full_acceptance(
+        hydration_status=_hydration_fully_complete(),
+        plan_inputs=plan,
+        materialize_store=mat_store,
+        publish_store=pub_store,
+        dictionary_status=_dict_v2(),
+        public_mode=PUBLIC_MODE_OFF,
+        queue_path=valid_queue_path,
+    )
+    assert r.verdict == fa.VERDICT_BLOCKED
+    assert fa.BLOCK_PUBLIC_MODE_NOT_SEO_PREVIEW in r.overall_block_reasons
+
+
+# ---------------------------------------------------------------------------
+# H25 — everything green with public_mode=seo_preview → READY_FOR_FULL_CUTOVER
+# ---------------------------------------------------------------------------
+
+
+def test_H25_public_mode_seo_preview_yields_ready_for_cutover(valid_queue_path):
+    """The mirror of H24: same green setup but public_mode=seo_preview
+    → READY_FOR_FULL_CUTOVER. Confirms H24's block reason is scoped
+    to the wrong mode only."""
+    mat_store = _full_materialize_store()
+    pub_store = _valid_full_publish_store()
+    chemicals = [_plan_row(i) for i in range(TEST_CHEMICAL_COUNT)]
+    plan = _plan_inputs(chemicals=chemicals, execute_eligible=True)
+
+    r = fa.evaluate_full_acceptance(
+        hydration_status=_hydration_fully_complete(),
+        plan_inputs=plan,
+        materialize_store=mat_store,
+        publish_store=pub_store,
+        dictionary_status=_dict_v2(),
+        public_mode=PUBLIC_MODE_SEO_PREVIEW,
+        queue_path=valid_queue_path,
+    )
+    assert r.verdict == fa.VERDICT_READY_FOR_FULL_CUTOVER, r.to_dict()
+    assert r.overall_block_reasons == ()
+
+
+# ---------------------------------------------------------------------------
+# H26 — FULL source but queue file unreadable → BLOCKED / QUEUE_IDENTITY_MISMATCH
+# ---------------------------------------------------------------------------
+
+
+def test_H26_full_source_queue_read_failure_blocks(tmp_path, monkeypatch):
+    """PATCH-2 §C: file exists but read raises. Under FULL that must
+    fail-closed. We stub queue_path.open to raise OSError while
+    keeping .exists()=True."""
+    fake_queue = tmp_path / "unreadable_queue.jsonl"
+    fake_queue.write_text("placeholder\n", encoding="utf-8")
+
+    real_open = Path.open
+
+    def _fail_open(self, *args, **kwargs):
+        if self == fake_queue:
+            raise OSError("simulated permission denied")
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", _fail_open)
+
+    r = fa.evaluate_full_acceptance(
+        hydration_status=_hydration_fully_complete(),
+        dictionary_status=_dict_offline(),
+        queue_path=fake_queue,
+    )
+    assert r.verdict == fa.VERDICT_BLOCKED
+    assert fa.BLOCK_QUEUE_IDENTITY_MISMATCH in r.overall_block_reasons
+    src = next(s for s in r.stages if s.name == "source")
+    assert "queue_error" in src.evidence
