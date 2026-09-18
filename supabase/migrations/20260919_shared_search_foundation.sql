@@ -174,6 +174,11 @@ BEGIN
   -- Atomic replace. TRUNCATE-then-INSERT would take a heavier lock;
   -- DELETE-then-INSERT under one transaction is sufficient at
   -- Foundation scale. If any INSERT raises the whole tx rolls back.
+  --
+  -- PUBLISHED-only filter (Foundation §11.4 tombstone contract +
+  -- Document Contract §6): HOLD and REMOVED staged rows never
+  -- enter the current projection. This matches the Python
+  -- RebuildFramework.promote() semantics.
   DELETE FROM public.search_documents;
 
   INSERT INTO public.search_documents (
@@ -205,7 +210,8 @@ BEGIN
       content_hash,
       now()
   FROM public.search_rebuild_documents
-  WHERE run_id = p_run_id;
+  WHERE run_id = p_run_id
+    AND document_json->>'publication_status' = 'PUBLISHED';
 
   GET DIAGNOSTICS v_count = ROW_COUNT;
 

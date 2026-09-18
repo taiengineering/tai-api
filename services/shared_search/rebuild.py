@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Iterable, Optional
 
 from services.shared_search.contract import (
@@ -32,6 +32,7 @@ from services.shared_search.contract import (
     SearchContractError,
 )
 from services.shared_search.writer import MemoryStore, Writer, WriterRejected
+from services.time import Clock, SYSTEM_CLOCK, now_kst
 
 
 class RebuildAborted(SearchContractError):
@@ -65,12 +66,19 @@ class RebuildFramework:
     marks the run FAILED and leaves the current projection untouched.
     """
 
-    def __init__(self, store: MemoryStore, writer: Optional[Writer] = None):
+    def __init__(
+        self,
+        store: MemoryStore,
+        writer: Optional[Writer] = None,
+        clock: Clock = SYSTEM_CLOCK,
+    ):
         self.store = store
-        self.writer = writer or Writer(store)
+        # Time contract compliance (WO §3).
+        self.clock = clock
+        self.writer = writer or Writer(store, clock=clock)
 
     def _now(self) -> datetime:
-        return datetime.now(timezone.utc)
+        return now_kst(self.clock)
 
     # ---------------------------------------------------------------
     # Lifecycle
@@ -145,45 +153,37 @@ class RebuildFramework:
         """Atomic swap: staged rows replace current. Only PUBLISHED
         staged rows enter the current projection; HOLD / REMOVED
         staged rows do NOT.
+
+        The actual atomic operation is delegated to
+        `store.replace_current_from_staging(run_id)`:
+
+        - In-memory backends build the new dict then swap it in one
+          assignment; a raise anywhere along the way leaves the
+          pre-swap current intact.
+        - Supabase backend (F2) delegates to the SQL function
+          `promote_search_rebuild(uuid)` — transaction rollback owns
+          atomicity there.
+
+        On any exception the run is marked FAILED and the exception
+        propagates so the caller can decide what to do next.
         """
         if run.status != RUN_STATUS_VALIDATED:
             raise RebuildAborted(
                 f"promote() requires VALIDATED status; got {run.status}")
-
-        # Snapshot current — used only if the swap raises, to prove
-        # we didn't corrupt it. Foundation is single-process so an
-        # exception aborts the caller; the SQL function relies on
-        # transaction rollback for the same guarantee.
-        current_snapshot = list(self.store.iter_current())
         try:
-            promoted_count = 0
-            # Build a NEW mapping from staging, filtering non-PUBLISHED.
-            new_current: dict[tuple[str, str], dict] = {}
-            for staged in self.store.iter_staging(run.run_id):
-                wire = staged["document_json"]
-                if wire.get("publication_status") != PUBLICATION_STATUS_PUBLISHED:
-                    continue
-                key = (wire["object_type"], wire["canonical_id"])
-                new_current[key] = dict(wire)
-                promoted_count += 1
-            # Atomic swap in memory.
-            self.store._current = new_current
-            run.status = RUN_STATUS_PROMOTED
-            run.completed_at = self._now()
-            self.store.update_run(
-                run.run_id,
-                status=RUN_STATUS_PROMOTED,
-                completed_at=run.completed_at.isoformat(),
-            )
-            return promoted_count
-        except Exception:
-            # Restore the current projection to guarantee no partial swap.
-            self.store._current = {
-                (r["object_type"], r["canonical_id"]): r
-                for r in current_snapshot
-            }
-            self.fail(run, "PROMOTION_ERROR", "atomic swap raised")
+            promoted_count = self.store.replace_current_from_staging(run.run_id)
+        except Exception as exc:
+            self.fail(run, "PROMOTION_ERROR",
+                      f"atomic swap raised: {type(exc).__name__}")
             raise
+        run.status = RUN_STATUS_PROMOTED
+        run.completed_at = self._now()
+        self.store.update_run(
+            run.run_id,
+            status=RUN_STATUS_PROMOTED,
+            completed_at=run.completed_at.isoformat(),
+        )
+        return promoted_count
 
     def fail(self, run: RebuildRun, error_code: str, error_message: str) -> None:
         run.status = RUN_STATUS_FAILED

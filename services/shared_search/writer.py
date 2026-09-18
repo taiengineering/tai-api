@@ -11,7 +11,6 @@ Contract source:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Iterable, Iterator, Optional
 
 from services.shared_search.contract import (
@@ -22,6 +21,8 @@ from services.shared_search.contract import (
 )
 from services.shared_search.document import SearchDocument, normalize_document
 from services.shared_search.hash_utils import content_hash, _document_as_dict
+from services.shared_search.store import SearchStore
+from services.time import Clock, SYSTEM_CLOCK, now_kst
 
 
 class WriterRejected(SearchContractError):
@@ -71,17 +72,29 @@ class MemoryStore:
     def replace_current_from_staging(self, run_id: str) -> int:
         """Atomic-in-memory analog of the SQL promote function.
 
-        In production this is implemented server-side by
-        `public.promote_search_rebuild(run_id)`; here we replicate the
-        semantics so tests can exercise the framework without a DB.
+        Semantics match `public.promote_search_rebuild(run_id)`:
+
+        - Only staged documents with `publication_status = 'PUBLISHED'`
+          enter the current projection. HOLD / REMOVED staged rows
+          are filtered out (Foundation §11.4 + WO §4).
+        - Build-then-swap: the new current dict is fully built in a
+          local variable before it is assigned to `self._current`.
+          If any exception raises during iteration the pre-swap
+          current is preserved (matches SQL transaction rollback).
         """
-        staged = self._staging.get(run_id)
-        if staged is None:
+        if run_id not in self._staging:
             raise WriterRejected(f"no staging for run_id={run_id}")
-        self._current.clear()
-        for k, v in staged.items():
-            self._current[k] = dict(v)
-        return len(self._current)
+        new_current: dict[tuple[str, str], dict] = {}
+        for staged in self.iter_staging(run_id):
+            wire = staged.get("document_json", staged)
+            if wire.get("publication_status") != PUBLICATION_STATUS_PUBLISHED:
+                continue
+            key = (wire["object_type"], wire["canonical_id"])
+            new_current[key] = dict(wire)
+        # Atomic swap — either fully replaces or the whole operation
+        # raised before reaching this line and `_current` is intact.
+        self._current = new_current
+        return len(new_current)
 
     # -- rebuild runs --
     def insert_run(self, run: dict) -> None:
@@ -131,8 +144,14 @@ class Writer:
     are rejected before any store call.
     """
 
-    def __init__(self, store: MemoryStore):
+    def __init__(self, store: SearchStore, clock: Clock = SYSTEM_CLOCK):
+        # store: any SearchStore Protocol implementation (MemoryStore
+        # in tests / F1; SupabaseSearchStore in F2 production).
         self.store = store
+        # Time contract compliance (WO §3): no direct datetime.now /
+        # timezone.utc — timestamps come from the injected Clock via
+        # services.time.now_kst.
+        self.clock = clock
 
     # -- helpers --
     def _prepare(self, payload: dict) -> tuple[SearchDocument, dict]:
@@ -140,9 +159,6 @@ class Writer:
         doc.content_hash = content_hash(doc)
         wire = _document_as_dict(doc)
         return doc, wire
-
-    def _now(self) -> datetime:
-        return datetime.now(timezone.utc)
 
     # -- current-projection APIs --
     def upsert_current(self, payload: dict) -> SearchDocument:
@@ -155,7 +171,7 @@ class Writer:
             self.store.delete_current(doc.object_type, doc.canonical_id)
             return doc
         # PUBLISHED path.
-        wire["indexed_at"] = self._now().isoformat()
+        wire["indexed_at"] = now_kst(self.clock).isoformat()
         self.store.upsert_current(wire)
         return doc
 

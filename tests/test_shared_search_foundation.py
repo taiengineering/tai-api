@@ -340,6 +340,65 @@ def test_rebuild_only_published_promoted():
 
 
 # ---------------------------------------------------------------------------
+# F1 CLOSEOUT §4-§5 — SQL/Python parity: PUBLISHED-only promotion.
+# ---------------------------------------------------------------------------
+
+
+def test_sql_promote_filters_published_only():
+    """The SQL migration function `promote_search_rebuild` must
+    contain the `publication_status = 'PUBLISHED'` filter so the SQL
+    behavior matches the Python RebuildFramework.promote() semantics.
+
+    We check the migration text directly (deterministic oracle) —
+    running the actual SQL against a database is out-of-scope for
+    F1 tests (no production apply)."""
+    mig = pathlib.Path(__file__).resolve().parents[1] / "supabase" / "migrations" / "20260919_shared_search_foundation.sql"
+    body = mig.read_text(encoding="utf-8")
+    # Find the promote_search_rebuild function body.
+    m = re.search(
+        r"CREATE OR REPLACE FUNCTION public\.promote_search_rebuild\(.*?\$\$;",
+        body, re.DOTALL,
+    )
+    assert m, "promote_search_rebuild function not found in migration"
+    fn_body = m.group(0)
+    # The filter must be present, and the loose "FROM search_rebuild_documents WHERE run_id = ..."
+    # without the PUBLISHED filter must NOT be the last predicate.
+    assert "publication_status" in fn_body, (
+        "SQL promote function must filter staging by publication_status")
+    assert "'PUBLISHED'" in fn_body, (
+        "SQL promote function must filter to PUBLISHED only")
+    # And the DELETE from search_documents must still be present
+    # (atomic replace semantics).
+    assert "DELETE FROM public.search_documents" in fn_body
+
+
+def test_python_and_sql_promotion_agree_on_published_only():
+    """Regression proof: after §4/§5 the Python promotion path and
+    the SQL text both enforce PUBLISHED-only. A staging set of
+    {PUBLISHED, HOLD, REMOVED} yields exactly one PUBLISHED row in
+    current on the Python side; the SQL text carries the equivalent
+    WHERE clause. Together this closes WO-F1-CO §4 blocker."""
+    store = MemoryStore()
+    fw = RebuildFramework(store)
+    run = fw.begin(expected_domains=["GUIDE"])
+    fw.stage(run, _payload(object_type="GUIDE", canonical_id="A",
+                            publication_status=PUBLICATION_STATUS_PUBLISHED))
+    fw.stage(run, _payload(object_type="GUIDE", canonical_id="B",
+                            publication_status=PUBLICATION_STATUS_HOLD,
+                            visibility_scopes=[]))
+    fw.stage(run, _payload(object_type="GUIDE", canonical_id="C",
+                            publication_status=PUBLICATION_STATUS_REMOVED,
+                            visibility_scopes=[]))
+    fw.mark_domain_done(run, "GUIDE")
+    fw.validate(run)
+    promoted = fw.promote(run)
+    assert promoted == 1
+    assert store.get_current("GUIDE", "A") is not None
+    assert store.get_current("GUIDE", "B") is None
+    assert store.get_current("GUIDE", "C") is None
+
+
+# ---------------------------------------------------------------------------
 # §48 OBJECT REINDEX
 # ---------------------------------------------------------------------------
 

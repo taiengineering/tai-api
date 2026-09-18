@@ -46,6 +46,7 @@ from services.shared_search.document import (
     normalize_document,
 )
 from services.shared_search.hash_utils import content_hash
+from services.shared_search.store import SearchStore
 from services.shared_search.writer import (
     MemoryStore,
     Writer,
@@ -72,6 +73,7 @@ __all__ = [
     "SearchContractError",
     "SearchDocument", "normalize_document",
     "content_hash",
+    "SearchStore",
     "MemoryStore", "Writer", "WriterRejected",
     "RebuildRun", "RebuildFramework", "RebuildAborted",
     "ReconcileReport", "reconcile",
