@@ -22,7 +22,13 @@ owner: taiwang
 site_kind · scale · workers · region · sector
 ```
 
-### 1.2 LEG Input Contract — 66필드 (active 24 / inactive 42)  [실측 leg-prod staging.requirement_input_contract_snapshot]
+### 1.2 LEG Transport Contract — CURRENT EXECUTABLE = 205 fields
+> **CURRENT executable transport authority** = `taiengineering/tai-api :: clients/leg_runtime_client.py :: _LEG_INPUT_FIELDS`
+> **CURRENT_TRANSPORT_FIELD_COUNT** = **205** (machine-extracted; do not hand-list)
+> **VERIFIED_SOURCE_CODE_ANCHOR** = `fb656a66b1f8b25e259434ef18a59cc1b5e056b8` (immutable OBS009 closeout provenance; NOT a perpetual branch-tip assertion — see Dynamic SHA Rule at end of file)
+> Historical snapshot below (LEG Input Contract, 66-field: active 24 / inactive 42; source `leg-prod staging.requirement_input_contract_snapshot`) is **HISTORICAL / SNAPSHOT REFERENCE ONLY**. It is NOT the current executable transport authority.
+
+**HISTORICAL SNAPSHOT (66-field)** — do not treat as current executable contract.
 active(24): boiler_capacity_kw, building_use_type, gas_capacity_kg, has_asbestos_demo, has_blasting,
   has_boiler, has_chemical, has_chemical_substance, has_diving, has_emergency_broadcast, has_emergency_gen,
   has_fire_hydrant, has_gas, has_high_pressure_gas, has_safety_manager, has_smoke_control, has_sprinkler,
@@ -35,8 +41,28 @@ inactive(42): construction_type, has_asbestos, has_biological_agent, has_casting
   has_plating, has_press, has_pressure_vessel, has_radiation, has_rolling, has_scaffold, has_septic_tank,
   has_steel_frame, has_subcontractor, has_temp_electric, has_welding, is_complex_building
 
-> active=false 필드는 현재 LEG 출력을 구동하지 않으나, Universe는 전체에 매핑을 정의한다.
-> 필드가 후에 활성화돼도 Case가 이미 값을 실어 나른다(재생성 불필요).
+> The 66-field snapshot is retained for historical continuity. The relationship between HISTORICAL 66 and CURRENT 205 is **not a superset** relationship — it is recorded here as an exact machine set comparison (computed against the verified tai-api source-code anchor `fb656a66` `_LEG_INPUT_FIELDS`):
+>
+> ```
+> HIST66_COUNT                    = 66
+> CUR205_COUNT                    = 205
+> INTERSECTION_COUNT              = 51
+> HIST66_NOT_IN_CUR205  (15)      = [boiler_capacity_kw, has_biological_agent,
+>                                    has_central_hvac, has_chemical_substance,
+>                                    has_cooling_tower, has_electric_work,
+>                                    has_heat_treatment, has_injection,
+>                                    has_machinery, has_oil_storage,
+>                                    has_septic_tank, has_smoke_control,
+>                                    has_temp_electric, is_complex_building,
+>                                    ksic_major]
+> CUR205_NOT_IN_HIST66  (154)     = new/renamed fields; not listed in-line;
+>                                    authority = clients/leg_runtime_client.py
+> SUPERSET_CLAIM (CUR205 ⊇ HIST66) = FALSE
+> ```
+>
+> Note: `ksic_major` is present in HIST66 but **removed** from the CURRENT executable transport. Historical `active` flags do not necessarily reflect current inclusion.
+>
+> Dataset regeneration policy: `DATASET_REGENERATION = 0` (case fixtures / golden / baseline are governed by an approved freeze, not by any implicit superset relationship). Fixtures written against fields no longer in CUR205 remain in the fixture files as historical inputs; whether they are wired depends on the CURRENT transport authority (`_LEG_INPUT_FIELDS`), not on the historical snapshot.
 
 ## STEP 2 — Taxonomy (고정 계층)
 
@@ -95,11 +121,16 @@ Case: CASE-<6digit>
 전기공사    → ElectricalWork    → has_electric_work, has_temp_electric
 ```
 
-### Process
+### Process (GENERIC ≠ SUBTYPE; do not auto-promote generic → detailed condition)
 ```
 용접  → Welding/HotWork  → has_welding
 절단  → Cutting/HotWork  → GAP: has_cutting 없음 (fire work 계열)
-도장  → Painting         → has_painting
+도장  → Painting         → has_painting (generic)
+                            ※ has_painting 은 generic painting fact 이며
+                              performs_spray_work_with_flammable_liquid_in_enclosed_space
+                              (인화성 액체·밀폐공간 spray 조건) 는 별도의 exact detailed
+                              condition 이다. generic painting 에서 상세 spray condition 을
+                              자동 승격하지 않는다.
 도금  → Plating          → has_plating
 열처리 → HeatTreatment   → has_heat_treatment
 프레스 → Pressing        → has_press
@@ -109,22 +140,31 @@ Case: CASE-<6digit>
 건조  → Drying           → ∅semantic-only
 ```
 
-### Task (대부분 risk modifier)
+### Task (대부분 risk modifier — EXISTENCE ≠ USE, LOCATION ≠ WORK 준수)
 ```
 점검·검사 → Inspection → ∅semantic-only
 정비·교체 → Maintenance → ∅semantic-only
 운전·가동 → Operation → ∅semantic-only
-청소 → Cleaning → has_confined_space (밀폐 청소 시) / else ∅
+청소 → Cleaning → ∅semantic-only
+  ※ 청소만으로 has_confined_space 또는 performs_confined_space_work 를 자동 부여하지 않는다.
+    has_confined_space = 밀폐공간 장소 존재 (place)
+    performs_confined_space_work = 실제 밀폐공간 작업 수행 (work execution)
+    두 사실 모두 explicit source fact 로만 부여한다. LOCATION ≠ WORK, PARENT ≠ DETAIL.
 충전 → Charging → ∅semantic-only
-운반 → Transport → has_forklift (지게차 운반 시) / else ∅
+운반 → Transport → ∅semantic-only
+  ※ 운반 task 만으로 uses_forklift 를 자동 부여하지 않는다.
+    has_forklift = 지게차 존재·보유 (equipment possession)
+    uses_forklift = 실제 지게차 사용 (actual use)
+    has_forklift=true 는 uses_forklift=true 를 함의하지 않는다. EXISTENCE ≠ USE.
+    uses_forklift 는 explicit source fact 로만 부여한다.
 ```
 
-### Equipment
+### Equipment (Equipment possession/existence; actual-use facts는 별도 explicit)
 ```
 압력용기 → has_pressure_vessel
 보일러   → has_boiler, boiler_capacity_kw
 크레인   → has_crane, has_tower_crane
-지게차   → has_forklift
+지게차   → has_forklift            (possession/existence ONLY; actual use = uses_forklift, 별도 explicit)
 승강기   → has_elevator
 컨베이어 → has_conveyor
 집진기   → has_dust_work
@@ -177,21 +217,62 @@ CASE-000001
 GAP 목록: 명시적 기록(날조 0)        → 5건(substation/transformer/switchgear/piping/cutting)
 ```
 
+## STEP 9-B — Core Boundary Principles (WO-DOC-SYNC-PIPELINE-E2E-OBS009-CLOSE-001, 2026-09-17)
+
+이 원칙들은 fixture-fact 생성·object→contract projection·GAP 처리 전 단계에서 반드시 준수한다. Fixture fact 는 E2E 입력 계약이며 production inference rule 이 아니다.
+
+```
+EXISTENCE ≠ USE            (has_forklift ≠ uses_forklift)
+LOCATION ≠ WORK            (has_confined_space ≠ performs_confined_space_work)
+PARENT ≠ DETAIL            (has_painting ≠ performs_spray_work_with_flammable_liquid_in_enclosed_space)
+MISSING ≠ FALSE            (fact 부재는 부정 판정이 아니다; explicit input wins on conflict)
+GENERIC ≠ SUBTYPE          (generic fact 에서 상세 detailed condition 을 자동 승격하지 않는다)
+```
+
+E2E fixture fact ≠ production inference rule. Fixture는 명시된 explicit facts만 실어 나른다.
+
+## STEP 9-C — Material Canonical Facts (Material classification authority)
+
+Material 관련 3 canonical facts:
+
+```
+is_managed_hazardous_substance
+is_permit_required_hazardous_substance
+is_special_management_substance
+```
+
+Authority = material `classification_code`.
+
+규칙:
+```
+missing ≠ false
+unknown classification code = ignored
+free-text only = authority 아님
+explicit input wins on merge conflict
+upstream load failure = fail-closed
+no alias
+no fallback
+no semantic invention
+```
+
 ## STEP 10 — Freeze 대상
 
 ```
 Freeze: Taxonomy · Object 집합 · 표준 코드 규칙 · Leaf→Semantic · Semantic→Contract(+GAP) · Allowed Matrix 규칙 · Case Schema
 Version: universe-v1
-Baseline anchor: Compiler 5필드 + LEG 66필드(active 24/inactive 42) @ 실측 시점
+Baseline anchor (HISTORICAL): Compiler 5필드 + LEG 66필드(active 24/inactive 42) @ 실측 시점
+CURRENT EXECUTABLE TRANSPORT AUTHORITY: tai-api clients/leg_runtime_client.py::_LEG_INPUT_FIELDS (count = 205; VERIFIED_SOURCE_CODE_ANCHOR = fb656a66b1f8b25e259434ef18a59cc1b5e056b8, immutable OBS009 closeout provenance)
 ```
+
+이번 STANDARD 갱신은 CURRENT executable transport 를 정확히 기록하고, EXISTENCE/LOCATION/PARENT/MISSING/GENERIC 경계 원칙을 명시하며, Material classification authority 를 정합화한다. 기존 Freeze 자산(dataset/cases/golden/baseline) 은 regenerate/promote 하지 않는다.
 
 ## 완료 기준
 
 ```
-입력 계약        PASS  (Compiler 5 + LEG 66 실측)
+입력 계약        PASS  (Compiler 5 + CURRENT LEG 205 실측; HISTORICAL 66-snapshot 참조 보존)
 Taxonomy         PASS
-Semantic Mapping PASS  (전 객체)
-Contract Mapping PASS  (매핑 + ∅ + GAP 5건 명시)
+Semantic Mapping PASS  (전 객체; existence/use, location/work, parent/detail 경계 준수)
+Contract Mapping PASS  (매핑 + ∅ + GAP 5건 명시; material classification authority 명시)
 Allowed Matrix   PASS  (규칙 정의)
 Case Schema      PASS  (기대값 없이)
 Universe Freeze  PASS
@@ -201,3 +282,50 @@ Universe Freeze  PASS
 ```
 WO-E2E-DATASET-001 (Case 생성) → WO-E2E-001 (실행) → WO-E2E-SEMANTIC-001 (검토)
 ```
+
+## Update History
+```
+2026-09-17  WO-DOC-SYNC-PIPELINE-E2E-OBS009-CLOSE-001
+            (1) LEG Transport Contract 를 66-field HISTORICAL SNAPSHOT / CURRENT
+                EXECUTABLE 205 (tai-api clients/leg_runtime_client.py::_LEG_INPUT_FIELDS,
+                VERIFIED_SOURCE_CODE_ANCHOR fb656a66) 로 분리. 66-field snapshot 표는 historical reference
+                로 보존.
+            (2) Task/Equipment/Process object→contract 매핑에서 EXISTENCE≠USE,
+                LOCATION≠WORK, GENERIC≠SUBTYPE 위반 케이스 정정:
+                  - 청소 → Cleaning: has_confined_space 자동부여 제거
+                  - 운반 → Transport: has_forklift 자동부여 제거, uses_forklift는 explicit
+                  - 지게차: possession-only 명시 (uses_forklift 는 별도 explicit)
+                  - 도장: has_painting 은 generic; performs_spray_work_... 는 별도 exact
+            (3) STEP 9-B Core Boundary Principles 신설: EXISTENCE/LOCATION/PARENT/
+                MISSING/GENERIC 5원칙 명시. Fixture fact ≠ production inference rule.
+            (4) STEP 9-C Material Canonical Facts 신설: 3 facts 및 classification_code
+                authority, missing≠false, upstream fail-closed 규칙 명시.
+            (5) STEP 10 Freeze: Baseline anchor 를 HISTORICAL 로 라벨, CURRENT
+                EXECUTABLE TRANSPORT AUTHORITY 를 tai-api _LEG_INPUT_FIELDS=205 로
+                기록.
+            불변: dataset/cases/golden/baseline 재생성 없음. 문서 전용.
+            Cross-repo anchors:
+              CURRENT PSR = 365 / f5b5a9c22a01b745ff0d8956341849af (LEG)
+              OBS009_CLOSEOUT_LEG_CODE_ANCHOR = edc83474be5d519fca00b139a2b71dfb7a660285
+              OBS007/OBS008/OBS009/OBS010 = CLOSED
+              E2E200-B1 = FROZEN / UNCHANGED
+
+2026-09-17  WO-DOC-SYNC-PIPELINE-E2E-OBS009-CLOSE-001-PATCH3
+            Dynamic-SHA loop fix. Renamed dynamic branch-tip references
+            ('main fb656a66', 'CURRENT LEG main = edc83474…') to immutable
+            provenance labels (VERIFIED_SOURCE_CODE_ANCHOR /
+            OBS009_CLOSEOUT_LEG_CODE_ANCHOR) so this document does not go
+            stale the instant a docs-only merge advances main. Content
+            (205 field count, exact set comparison, ksic_major note,
+            boundary principles, material facts) unchanged.
+```
+
+## Dynamic SHA Rule (WO-DOC-SYNC-...-PATCH3)
+
+Git branch tip SHA is dynamic. A documentation-only merge may advance
+main without changing the underlying runtime/semantic contract.
+Therefore this STANDARD records immutable implementation/closeout SHAs as
+**provenance anchors** (`VERIFIED_SOURCE_CODE_ANCHOR`, `OBS009_CLOSEOUT_*_CODE_ANCHOR`),
+**not as perpetual CURRENT branch-tip assertions**. CURRENT production state
+is determined by the explicit runtime / PSR contract and live verification,
+not by a stale embedded Git main SHA.
