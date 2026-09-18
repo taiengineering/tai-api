@@ -42,6 +42,12 @@ SEM003_DIVING_OVERRIDE_FIELDS = (
     # PATCH-1: existing LEG numeric input for Art.531 boundary (≥10 kgf/cm²).
     # Not re-added to _LEG_INPUT_FIELDS (already exists). Consumer-only override.
     "breathing_gas_cylinder_pressure_kgf_cm2",
+    # WO-E2E-OBJ01-DIVING-COVERAGE-BACKLOG-FASTLANE-IMPLEMENT-001:
+    # 3 new stable inputs for Art.547③/⑥ (surface-supplied specific).
+    # Total SEM003 override count: 6 → 9.
+    "diving_depth_m",
+    "diving_surface_ascent_restricted",
+    "diving_decompression_stop_required",
 )
 SAFE_CST_OVERRIDE_FIELDS = tuple(RUNTIME_INPUT_FIELDS) + SEM003_DIVING_OVERRIDE_FIELDS
 

@@ -33,9 +33,9 @@ PATCH2A_15_AXES = (
 
 
 def test_T1_vocabulary_len_and_distinct():
-    """T1: len(_LEG_INPUT_FIELDS) == 212 && distinct == 205 after OBS009 CWS 9-field append."""
-    assert len(_LEG_INPUT_FIELDS) == 212
-    assert len(set(_LEG_INPUT_FIELDS)) == 212
+    """T1: len(_LEG_INPUT_FIELDS) == 215 & distinct == 215 after DIVING-COVERAGE-BACKLOG +3 append."""
+    assert len(_LEG_INPUT_FIELDS) == 215
+    assert len(set(_LEG_INPUT_FIELDS)) == 215
     assert "has_building_elevator" not in _LEG_INPUT_FIELDS
     assert "has_furniture_moving_lift" in _LEG_INPUT_FIELDS
     assert "has_welding" in _LEG_INPUT_FIELDS

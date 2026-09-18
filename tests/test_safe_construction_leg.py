@@ -185,17 +185,26 @@ def test_D_explicit_override_false_zero(monkeypatch):
     assert "has_demolition" in out["unresolved_fields"]         # 미override 유지
 
 
-# ── override allowlist = RUNTIME20 (subcontractor_count 제외) ───────────
-# STEP-2C : subcontractor_count 는 _LEG_INPUT_FIELDS 밖 & RUNTIME20 밖 → 어차피 통과 불가.
+# ── override allowlist audit — RUNTIME20 frozen, subcontractor_count excluded ─
+# STEP-2C : subcontractor_count 는 _LEG_INPUT_FIELDS 밖 & 어차피 override 대상 아님.
 #   unresolved 계약(subcontractor_count in unresolved_fields) 은 무변.
-def test_override_allowlist_20(monkeypatch):
+# RUNTIME_INPUT_FIELDS 자체는 audit-frozen 20 을 유지한다. SEM-003 계열 SEM003_DIVING_OVERRIDE_FIELDS
+# append 는 별개 축이며 SAFE_CST_OVERRIDE_FIELDS 총량은 20 + SEM003(9) = 29.
+def test_override_allowlist_runtime20_frozen(monkeypatch):
+    from services.safe_construction_canonical_assembler import RUNTIME_INPUT_FIELDS
+    from services.safe_construction_leg_runtime import SEM003_DIVING_OVERRIDE_FIELDS
     cap = {"called": 0}
     _patch_leg(monkeypatch, cap)
     # subcontractor_count 는 override 대상 아님 → 넘겨도 unified filter 로 배제
     out = run_safe_construction_leg(_sb(), "S1", {"subcontractor_count": 5})
     assert "subcontractor_count" not in cap["step1"].input
     assert "subcontractor_count" in out["unresolved_fields"]
-    assert len(SAFE_CST_OVERRIDE_FIELDS) == 20
+    # audit-frozen RUNTIME20 불변.
+    assert len(RUNTIME_INPUT_FIELDS) == 20
+    # SAFE_CST_OVERRIDE_FIELDS = RUNTIME20 ++ SEM003_DIVING_OVERRIDE_FIELDS (아래는 subset invariant).
+    assert set(RUNTIME_INPUT_FIELDS).issubset(set(SAFE_CST_OVERRIDE_FIELDS))
+    assert set(SEM003_DIVING_OVERRIDE_FIELDS).issubset(set(SAFE_CST_OVERRIDE_FIELDS))
+    assert "subcontractor_count" not in SAFE_CST_OVERRIDE_FIELDS
 
 
 # ── STEP-2C : canonical27 final-cut 제거 이후 계약 ──────────────────────
@@ -249,11 +258,22 @@ def test_T1_runtime_denominator_20():
     assert len(RUNTIME_INPUT_FIELDS) == 20
     assert len(set(RUNTIME_INPUT_FIELDS)) == 20
 
-def test_T2_request_schema_20():
+def test_T2_request_schema_runtime20_subset():
+    """SEM-003 계열 override append 이후 consumer schema 는 RUNTIME20 exact-set 미러가
+    아니라 초집합이다. 불변은 두 축:
+      (1) RUNTIME_INPUT_FIELDS 는 여전히 audit-frozen 20.
+      (2) SafeConstructionConsumerInput 는 RUNTIME20 + SEM003_DIVING_OVERRIDE_FIELDS 로
+          정확히 결정된다(EXTRA 0, MISSING 0).
+    """
     from schemas.legal_engine import SafeConstructionConsumerInput
-    assert len(SafeConstructionConsumerInput.model_fields) == 20
-    # exact-set: request schema == RUNTIME_INPUT_FIELDS (EXTRA 0, MISSING 0).
-    assert set(SafeConstructionConsumerInput.model_fields) == set(RUNTIME_INPUT_FIELDS)
+    from services.safe_construction_leg_runtime import SEM003_DIVING_OVERRIDE_FIELDS
+    assert len(RUNTIME_INPUT_FIELDS) == 20
+    schema_keys = set(SafeConstructionConsumerInput.model_fields)
+    expected = set(RUNTIME_INPUT_FIELDS) | set(SEM003_DIVING_OVERRIDE_FIELDS)
+    assert schema_keys == expected, (
+        f"consumer schema 는 RUNTIME20 ∪ SEM003_DIVING_OVERRIDE_FIELDS 이어야 함. "
+        f"missing={expected - schema_keys}, extra={schema_keys - expected}"
+    )
 
 def test_T3_regulatory_false_preserved(monkeypatch):
     cap = {"called": 0}; _patch_leg(monkeypatch, cap)

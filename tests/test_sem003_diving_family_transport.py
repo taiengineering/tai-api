@@ -87,11 +87,15 @@ def test_A5_zero_numeric_preserved():
 
 
 # ==========================================================================
-# A6 — SAFE_CST_OVERRIDE_FIELDS contains exact SEM003 6 (5 bool + numeric)
+# A6 — SAFE_CST_OVERRIDE_FIELDS contains SEM003 prior 6 (5 bool + numeric).
+#      Prior IMPLEMENT-001 baseline; the newer DIVING-COVERAGE-BACKLOG WO
+#      extends SEM003 override to 9 (prior 6 + 3 new), so this now asserts
+#      subset containment; exact count of 9 lives in the coverage-backlog
+#      test file (test_diving_coverage_backlog_transport.py :: A5).
 # ==========================================================================
-def test_A6_safe_cst_override_contains_sem003_six():
-    assert set(SEM003_DIVING_OVERRIDE_FIELDS) == set(DIVING5) | {NUMERIC}
-    assert len(SEM003_DIVING_OVERRIDE_FIELDS) == 6
+def test_A6_safe_cst_override_contains_sem003_prior_six():
+    prior_six = set(DIVING5) | {NUMERIC}
+    assert prior_six.issubset(set(SEM003_DIVING_OVERRIDE_FIELDS))
     for field in DIVING5:
         assert field in SAFE_CST_OVERRIDE_FIELDS
     assert NUMERIC in SAFE_CST_OVERRIDE_FIELDS
