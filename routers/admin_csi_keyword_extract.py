@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, Header, HTTPException, Query
 from openai import OpenAI
@@ -20,6 +22,19 @@ MODEL = os.getenv("CSI_KEYWORD_MODEL", "gpt-4o-mini")
 CREATED_BY = "gpt-accident-csi-extract"
 GROUP_SIZE = 10
 MAX_WORKERS = int(os.getenv("CSI_KEYWORD_WORKERS", "16"))
+JOB_BATCH_SIZE = int(os.getenv("CSI_KEYWORD_JOB_BATCH_SIZE", "1000"))
+_JOB = {
+    "running": False,
+    "stop": False,
+    "started_at": None,
+    "last_update": None,
+    "cycles": 0,
+    "requested": 0,
+    "applied": 0,
+    "error_count": 0,
+    "last_errors": [],
+    "last_result": None,
+}
 
 SYSTEM_PROMPT = """너는 CSI 건설 재해사례의 페이지별 SEO 중심키워드 추출기다.
 각 입력은 하나의 사고 페이지이며 서로 독립적으로 판단한다.
@@ -122,16 +137,7 @@ def _judge_group_resilient(rows: list[dict]) -> tuple[list[dict], list[dict]]:
         return left_results + right_results, left_errors + right_errors
 
 
-@router.post("/run")
-def run(
-    limit: int = Query(1000, ge=1, le=5000),
-    x_internal_secret: str | None = Header(None, alias="X-Internal-Secret"),
-):
-    if not _secret_ok(x_internal_secret):
-        raise HTTPException(status_code=403, detail="forbidden")
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise HTTPException(status_code=503, detail="OPENAI_API_KEY missing")
-
+def _process_limit(limit: int) -> dict:
     sb = get_supabase()
     todo = (
         sb.rpc("get_unprocessed_csi_keyword_rows_json", {"p_limit": limit})
@@ -170,3 +176,100 @@ def run(
         "workers": MAX_WORKERS,
         "created_by": CREATED_BY,
     }
+
+
+def _run_all() -> None:
+    try:
+        for _ in range(100):
+            if _JOB["stop"]:
+                break
+            result = _process_limit(JOB_BATCH_SIZE)
+            _JOB["cycles"] += 1
+            _JOB["requested"] += int(result.get("requested", 0))
+            _JOB["applied"] += int(result.get("applied", 0))
+            _JOB["error_count"] += int(result.get("error_count", 0))
+            _JOB["last_errors"] = result.get("errors", [])[:20]
+            _JOB["last_result"] = result
+            _JOB["last_update"] = time.time()
+
+            if result.get("requested", 0) == 0:
+                break
+            if result.get("applied", 0) == 0:
+                break
+    finally:
+        _JOB["running"] = False
+        _JOB["last_update"] = time.time()
+
+
+@router.post("/run")
+def run(
+    limit: int = Query(1000, ge=1, le=5000),
+    x_internal_secret: str | None = Header(None, alias="X-Internal-Secret"),
+):
+    if not _secret_ok(x_internal_secret):
+        raise HTTPException(status_code=403, detail="forbidden")
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY missing")
+    return _process_limit(limit)
+
+
+@router.post("/start")
+def start(
+    x_internal_secret: str | None = Header(None, alias="X-Internal-Secret"),
+):
+    if not _secret_ok(x_internal_secret):
+        raise HTTPException(status_code=403, detail="forbidden")
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY missing")
+    if _JOB["running"]:
+        return {"status": "already_running", **_JOB}
+
+    _JOB.update({
+        "running": True,
+        "stop": False,
+        "started_at": time.time(),
+        "last_update": time.time(),
+        "cycles": 0,
+        "requested": 0,
+        "applied": 0,
+        "error_count": 0,
+        "last_errors": [],
+        "last_result": None,
+    })
+    threading.Thread(target=_run_all, daemon=True).start()
+    return {"status": "started", "batch_size": JOB_BATCH_SIZE, **_JOB}
+
+
+@router.get("/status")
+def status(
+    x_internal_secret: str | None = Header(None, alias="X-Internal-Secret"),
+):
+    if not _secret_ok(x_internal_secret):
+        raise HTTPException(status_code=403, detail="forbidden")
+    sb = get_supabase()
+    resp = (
+        sb.table("keyword_central_extracted")
+        .select("page_id", count="exact")
+        .eq("page_type", "accident_csi")
+        .limit(1)
+        .execute()
+    )
+    completed = int(resp.count or 0)
+    return {
+        **_JOB,
+        "completed": completed,
+        "remaining": max(0, 37196 - completed),
+        "target": 37196,
+        "model": MODEL,
+        "created_by": CREATED_BY,
+    }
+
+
+@router.post("/stop")
+def stop(
+    x_internal_secret: str | None = Header(None, alias="X-Internal-Secret"),
+):
+    if not _secret_ok(x_internal_secret):
+        raise HTTPException(status_code=403, detail="forbidden")
+    _JOB["stop"] = True
+    return {"status": "stopping", **_JOB}
