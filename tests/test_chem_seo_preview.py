@@ -795,6 +795,13 @@ def test_bridge_negative_membership_missing_from_plan(tmp_path):
     filtered = [ln for ln in lines if '"chem_id":"A00001"' not in ln]
     assert len(filtered) < len(lines), "sanity: at least one line filtered"
     chem05_paths["plan_jsonl"].write_text("\n".join(filtered) + "\n", encoding="utf-8")
+    # PATCH-2: keep the manifest's plan_file_sha256 in sync with the new JSONL
+    # so PATCH-2's SOURCE_PLAN_FILE_SHA_MISMATCH guard doesn't intercept first —
+    # this test targets the deeper MANIFEST_MEMBER_NOT_IN_PLAN reason.
+    from tools.chem_seo_preview.build_preview_plan import _file_sha256 as _sha
+    m = json.loads(chem05_paths["manifest"].read_text(encoding="utf-8"))
+    m["plan_file_sha256"] = _sha(chem05_paths["plan_jsonl"])
+    chem05_paths["manifest"].write_text(json.dumps(m), encoding="utf-8")
 
     with pytest.raises(SystemExit) as exc:
         bridge_mod.build_preview_plan(
@@ -819,14 +826,23 @@ def test_bridge_negative_one_section_missing(tmp_path):
     seo_manifest_path = tmp_path / "seo.json"
     _run_seo_manifest_build(src, seo_manifest_path)
 
-    # Drop section 16 from chem A00001 in the CHEM-05 plan JSONL.
+    # Drop section 16 from chem A00001 in the CHEM-05 plan JSONL. Use compact
+    # separators to match CHEM-05's own writer.
     rewritten = []
     for line in chem05_paths["plan_jsonl"].read_text(encoding="utf-8").splitlines():
         obj = json.loads(line)
         if obj.get("chem_id") == "A00001":
             obj["sections"] = [s for s in obj["sections"] if s.get("section_no") != 16]
-        rewritten.append(json.dumps(obj, sort_keys=True, ensure_ascii=False))
+        rewritten.append(json.dumps(obj, sort_keys=True, ensure_ascii=False,
+                                    separators=(",", ":")))
     chem05_paths["plan_jsonl"].write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+    # PATCH-2: sync manifest.plan_file_sha256 to the new JSONL so PATCH-2's
+    # SOURCE_PLAN_FILE_SHA_MISMATCH guard doesn't intercept first — this test
+    # targets the deeper MEMBER_INCOMPLETE_SECTIONS/MEMBER_HASH_MISMATCH reason.
+    from tools.chem_seo_preview.build_preview_plan import _file_sha256 as _sha
+    m = json.loads(chem05_paths["manifest"].read_text(encoding="utf-8"))
+    m["plan_file_sha256"] = _sha(chem05_paths["plan_jsonl"])
+    chem05_paths["manifest"].write_text(json.dumps(m), encoding="utf-8")
 
     with pytest.raises(SystemExit) as exc:
         bridge_mod.build_preview_plan(
@@ -915,3 +931,101 @@ def test_bridge_chem10_binding_flows_through_to_preflight(tmp_path):
     )
     assert report_bad.eligible is False
     assert "MATERIALIZE_BINDING_MISMATCH" in report_bad.block_reasons
+
+
+# ---------------------------------------------------------------------------
+# PATCH-2 · Source-plan file integrity guard.
+#
+# If the CHEM-05 plan JSONL is tampered on disk without updating its
+# accompanying manifest, the bridge must fail-closed at
+# SOURCE_PLAN_FILE_SHA_MISMATCH — not silently trust the JSONL and only
+# catch violations for chem_ids that happen to appear in the SEO manifest.
+# ---------------------------------------------------------------------------
+
+
+def test_patch2_tampered_chem05_plan_jsonl_fails_source_sha(tmp_path):
+    """Tamper one chemical row in the CHEM-05 plan JSONL (leave the manifest
+    untouched). The bridge must raise SOURCE_PLAN_FILE_SHA_MISMATCH and
+    write NO output files."""
+    src = _synth_full_artifact(["A00001", "B00002"], tmp_path)
+    chem05_dir = tmp_path / "chem05"
+    chem05_paths = _run_chem05_plan(src, chem05_dir)
+    seo_manifest_path = tmp_path / "seo.json"
+    _run_seo_manifest_build(src, seo_manifest_path)
+
+    # Sanity: a clean bridge run succeeds against these inputs.
+    clean = bridge_mod.build_preview_plan(
+        chem05_plan_jsonl=chem05_paths["plan_jsonl"],
+        chem05_manifest_json=chem05_paths["manifest"],
+        chem05_report_json=chem05_paths["report"],
+        seo_manifest_json=seo_manifest_path,
+    )
+    assert clean["manifest"]["execute_eligible"] is True
+
+    # Tamper chem A's chemical_name_ko field in the JSONL bytes without
+    # touching the manifest. This changes the file SHA but not (necessarily)
+    # any hash the manifest already recorded.
+    plan_lines = chem05_paths["plan_jsonl"].read_text(encoding="utf-8").splitlines()
+    tampered = []
+    for line in plan_lines:
+        obj = json.loads(line)
+        if obj.get("chem_id") == "A00001":
+            obj["chemical_name_ko"] = "TAMPERED"
+        tampered.append(json.dumps(obj, sort_keys=True, ensure_ascii=False,
+                                   separators=(",", ":")))
+    chem05_paths["plan_jsonl"].write_text("\n".join(tampered) + "\n", encoding="utf-8")
+
+    out_dir = tmp_path / "preview_out"
+    with pytest.raises(SystemExit) as exc:
+        built = bridge_mod.build_preview_plan(
+            chem05_plan_jsonl=chem05_paths["plan_jsonl"],
+            chem05_manifest_json=chem05_paths["manifest"],
+            chem05_report_json=chem05_paths["report"],
+            seo_manifest_json=seo_manifest_path,
+        )
+        # Should NEVER reach the write step.
+        bridge_mod.write_preview_plan_artifacts(built, out_dir)
+    assert "SOURCE_PLAN_FILE_SHA_MISMATCH" in str(exc.value)
+    # Fail-closed contract: no artifacts written.
+    assert not out_dir.exists() or not any(out_dir.iterdir())
+
+
+def test_patch2_tampered_chem05_semantic_sha_fails_semantic_check(tmp_path):
+    """Tamper the CHEM-05 report's plan_sha256 so it disagrees with the
+    manifest's plan_semantic_sha256. Bridge must fail-closed at
+    SOURCE_PLAN_SEMANTIC_SHA_MISMATCH."""
+    src = _synth_full_artifact(["A00001", "B00002"], tmp_path)
+    chem05_dir = tmp_path / "chem05"
+    chem05_paths = _run_chem05_plan(src, chem05_dir)
+    seo_manifest_path = tmp_path / "seo.json"
+    _run_seo_manifest_build(src, seo_manifest_path)
+
+    report = json.loads(chem05_paths["report"].read_text(encoding="utf-8"))
+    report["plan_sha256"] = "deadbeef" * 8   # deliberate disagreement
+    chem05_paths["report"].write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc:
+        bridge_mod.build_preview_plan(
+            chem05_plan_jsonl=chem05_paths["plan_jsonl"],
+            chem05_manifest_json=chem05_paths["manifest"],
+            chem05_report_json=chem05_paths["report"],
+            seo_manifest_json=seo_manifest_path,
+        )
+    assert "SOURCE_PLAN_SEMANTIC_SHA_MISMATCH" in str(exc.value)
+
+
+def test_patch2_positive_path_still_passes_after_new_guards(tmp_path):
+    """Regression: adding the PATCH-2 guards must not break the clean chain."""
+    src = _synth_full_artifact(["A00001", "A00002", "A00003"], tmp_path)
+    chem05_dir = tmp_path / "chem05"
+    chem05_paths = _run_chem05_plan(src, chem05_dir)
+    seo_manifest_path = tmp_path / "seo.json"
+    _run_seo_manifest_build(src, seo_manifest_path)
+    built = bridge_mod.build_preview_plan(
+        chem05_plan_jsonl=chem05_paths["plan_jsonl"],
+        chem05_manifest_json=chem05_paths["manifest"],
+        chem05_report_json=chem05_paths["report"],
+        seo_manifest_json=seo_manifest_path,
+    )
+    assert built["manifest"]["execute_eligible"] is True
+    assert built["manifest"]["counts"]["chemicals"] == 3

@@ -109,6 +109,9 @@ BLOCK_MEMBER_DETAIL_STATUS_NOT_COMPLETE = "MEMBER_DETAIL_STATUS_NOT_COMPLETE"
 BLOCK_MEMBER_HASH_MISMATCH = "MEMBER_HASH_MISMATCH"
 BLOCK_EXCLUDED_ID_PRESENT = "EXCLUDED_ID_PRESENT_IN_PLAN"
 BLOCK_MANIFEST_SHA_INTEGRITY = "MANIFEST_SHA_INTEGRITY_FAILURE"
+# PATCH-2: CHEM-05 source-plan integrity guards.
+BLOCK_SOURCE_PLAN_FILE_SHA_MISMATCH = "SOURCE_PLAN_FILE_SHA_MISMATCH"
+BLOCK_SOURCE_PLAN_SEMANTIC_SHA_MISMATCH = "SOURCE_PLAN_SEMANTIC_SHA_MISMATCH"
 
 
 class PreviewPlanBuildError(SystemExit):
@@ -211,6 +214,35 @@ def build_preview_plan(
     seo_manifest = json.loads(seo_manifest_json.read_text(encoding="utf-8"))
 
     _verify_seo_manifest_integrity(seo_manifest)
+
+    # ── PATCH-2 Binding 0: CHEM-05 source-plan file integrity.
+    # SHA256 of the plan.jsonl on disk must match the SHA the CHEM-05 producer
+    # recorded in materialize_manifest.json. Without this, an attacker (or a
+    # dev accident) could edit chemical rows in the JSONL and the bridge's
+    # per-section hash check would only catch violations for chem_ids that
+    # appear in the SEO manifest — chemicals outside the SEO membership would
+    # slip through unnoticed.
+    manifest_plan_file_sha = chem05_manifest.get("plan_file_sha256")
+    actual_plan_file_sha = _file_sha256(chem05_plan_jsonl)
+    if not manifest_plan_file_sha or manifest_plan_file_sha != actual_plan_file_sha:
+        raise PreviewPlanBuildError(
+            f"BLOCKED {BLOCK_SOURCE_PLAN_FILE_SHA_MISMATCH}: "
+            f"actual={actual_plan_file_sha!r} manifest={manifest_plan_file_sha!r}"
+        )
+
+    # ── PATCH-2 Binding 0.5: CHEM-05 semantic-hash consistency.
+    # The report's plan_sha256 and the manifest's plan_semantic_sha256 refer
+    # to the same value produced by services.kosha_msds.materialize.build_plan.
+    # If they disagree, the two artifacts describe different plans and we
+    # cannot trust either one as source.
+    m_semantic = chem05_manifest.get("plan_semantic_sha256")
+    r_semantic = chem05_report.get("plan_sha256") or chem05_report.get("plan_semantic_sha256")
+    if m_semantic and r_semantic and m_semantic != r_semantic:
+        raise PreviewPlanBuildError(
+            f"BLOCKED {BLOCK_SOURCE_PLAN_SEMANTIC_SHA_MISMATCH}: "
+            f"manifest.plan_semantic_sha256={m_semantic!r} "
+            f"report.plan_sha256={r_semantic!r}"
+        )
 
     # ── Binding 1: responses_sha256 must line up between CHEM-05 and SEO manifests.
     chem05_responses_sha = chem05_manifest.get("responses_sha256")

@@ -12,6 +12,18 @@
 - **Manifest re-hashed** (frozen artifact bytes unchanged, hash function changed): new `manifest_sha256 = f696a212fd9fd04659b7b75accd4c13fc539a1a71a663fb2a80599b9c255638d`. `responses_sha256` unchanged at `49994a2a8d44b5c2acfae60283d5f2f76fd65e0af5842a10db43383e26b643dd`.
 - **P4 rewrite**: no longer distribution-only. New synthetic responses.jsonl with a real duplicate `(A00001, 1)` proves the builder CLI exits non-zero and refuses to write output. Companion tests for source contract violations (`authoritative_verified=false`, `result_code≠00`) and a positive-control clean build.
 
+## PATCH-2 addresses GPT PATCH-1 delta verdict (MERGE HOLD)
+
+- **PATCH-C** (source-plan integrity guard in the bridge, `tools/chem_seo_preview/build_preview_plan.py`):
+  - **Binding 0**: `SHA256(chem05_plan_jsonl)` must equal `chem05_manifest.plan_file_sha256`. Mismatch → `BLOCK_SOURCE_PLAN_FILE_SHA_MISMATCH`, non-zero exit, no output.
+  - **Binding 0.5**: `chem05_report.plan_sha256` must equal `chem05_manifest.plan_semantic_sha256` when both are present. Mismatch → `BLOCK_SOURCE_PLAN_SEMANTIC_SHA_MISMATCH`.
+  - Order: these guards fire BEFORE responses_sha256 / membership / hash checks so a tampered JSONL is caught even for chem_ids outside the SEO manifest slice.
+- **New tests**:
+  - `test_patch2_tampered_chem05_plan_jsonl_fails_source_sha` — tamper `chemical_name_ko` in one bundle, leave manifest untouched → bridge raises SOURCE_PLAN_FILE_SHA_MISMATCH, no output files.
+  - `test_patch2_tampered_chem05_semantic_sha_fails_semantic_check` — tamper report.plan_sha256 → SOURCE_PLAN_SEMANTIC_SHA_MISMATCH.
+  - `test_patch2_positive_path_still_passes_after_new_guards` — clean chain still emits `execute_eligible=true`.
+- **Test count**: 31/31 SEO preview + 127/127 CHEM-05..10 = **158/158** green.
+
 ---
 
 ## 1. Design summary
@@ -211,7 +223,7 @@ PATCH-1 local run (`python3 -m pytest tests/test_chem05_materialize.py tests/tes
 - CHEM-08 materializer: green (additive `publication_scope` kwarg)
 - CHEM-09 search adapter: green (fixture: `KOSHA_MSDS_PUBLIC_MODE=full`)
 - CHEM-10 publish promoter: green (additive `publication_scope` + `seo_preview_expected_*` kwargs)
-- SEO preview (this WO PATCH-1): **28/28** covering P1–P12 + fail-closed builder + PATCH-A bridge chain (positive + tampered manifest SHA + responses SHA mismatch + missing membership + missing section + CHEM-10 binding round-trip)
+- SEO preview (this WO PATCH-1): **31/31** covering P1–P12 + fail-closed builder + PATCH-A bridge chain (positive + tampered manifest SHA + responses SHA mismatch + missing membership + missing section + CHEM-10 binding round-trip)
 
 ---
 
@@ -263,7 +275,7 @@ enumeration available =      docs/chem/seo-preview-manifest.json (1,997 chem_ids
 
 TEST
 test command =               pytest tests/test_chem_seo_preview.py -q --tb=short
-result =                     28/28 PASS  (+127/127 regression across CHEM-05..10; 155/155 total)
+result =                     31/31 PASS  (+127/127 regression across CHEM-05..10; 158/158 total)
 
 CHANGED FILES =
   services/kosha_msds/contract.py
