@@ -1,13 +1,50 @@
 # TAI Shared Search & Knowledge Consumer Master Plan v2
 
 > Status: **plan / not yet implemented**
-> Supersedes: prior CHEM-centric roadmap
+> Supersedes: prior CHEM-centric search/readiness roadmap only.
+> **Does NOT supersede** the Safety Knowledge Master Plan or the
+> Object Implementation Plan — see Authority Hierarchy below.
 > Owner: taiwang
-> Date frozen: 2026-09-18
+> Date frozen: 2026-09-18 (last touched: PR #402 PATCH-1 doc sync)
 > Live signal at freeze:
->   - PR #401 (CHEM-FULL-READINESS-005 harness) — OPEN
->   - PR #399 (CHEM-FULL-READINESS-004 ops observability) — merged into main
+>   - PR #401 (CHEM-FULL-READINESS-005 harness) — OPEN, PATCH-1 in review
+>   - PR #399 (CHEM-FULL-READINESS-004 ops observability) — MERGED to main (`f32e4a71`)
 >   - production `/search-dict/*` — observed HTTP 503 during live acceptance
+>     (in scope of SEARCH-01)
+
+## Authority hierarchy
+
+```text
+Upper-level authority (unchanged by this document):
+  - PLAN_safety-knowledge-hub-master_v0.1.md
+  - PLAN_safety-knowledge-object-implementation_v1.md
+
+This document (subordinate execution plan):
+  - Shared Search / Knowledge Consumer execution plan for TAI.
+  - Supersedes ONLY the prior CHEM-centric search/readiness roadmap.
+  - Does NOT alter the Safety Knowledge Master Plan or the Object
+    Implementation Plan; where those two disagree with this document,
+    they win.
+
+Authority order (highest → lowest):
+  1. PLAN_safety-knowledge-hub-master_v0.1.md
+  2. PLAN_safety-knowledge-object-implementation_v1.md
+  3. THIS DOCUMENT (docs/TAI_SHARED_SEARCH_MASTER_PLAN_v2.md)
+```
+
+한국어:
+
+본 문서는 기존 Safety Knowledge Master Plan 및 Object Implementation
+Plan을 대체하지 않는다. 본 문서는 그 하위의 **Shared Search /
+Knowledge Consumer 실행계획**이며, 대체 대상은 이전 CHEM-centric
+search/readiness 로드맵 뿐이다.
+
+## Auto-memory authority
+
+Auto-memory (Claude Code의 `~/.claude/projects/…/memory/`) 는 편의용
+context다. 정본(source of truth)은 이 저장소에 커밋된 문서 (본
+문서 + 상위 두 Plan) 이다. 다음 세션에서 memory와 repo 문서가
+어긋나면 **REPO PLAN WINS**.
 
 ## 0. 계획 재수립 목적
 
@@ -239,13 +276,16 @@ Paid Diagnosis 연결
 현재 별도 Track에서 진행 중.
 
 ```text
-P1 Incremental Materializer     DONE
-P2 FULL Cutover/Rollback        DONE
-P3 Search backend QA            DONE
-P4 Ops Observability            MERGE READY
-P5 FULL Acceptance Harness      NEXT
+P1 Incremental Materializer     CLOSED / MERGED  (PR #395)
+P2 FULL Cutover/Rollback        CLOSED / MERGED  (PR #396)
+P3 Search backend QA            CLOSED / MERGED  (PR #398)
+P4 Ops Observability            CLOSED / MERGED  (PR #399, main = f32e4a71...)
+P5 FULL Acceptance Harness      IN_PROGRESS
+                                PR #401 OPEN, PATCH-1 REQUIRED
+                                (GPT delta verify: baseline gate + binding
+                                 verify + queue-required-on-full)
 
-CHEM-04 Hydration               병렬 진행
+CHEM-04 Hydration               병렬 진행 (별도 quota-limited stream)
 ```
 
 현재 Preview:
@@ -842,11 +882,12 @@ PR #399 merge. (완료 — main SHA `f32e4a71`)
 
 #### C1
 
-CHEM P5 Full Acceptance Harness. (PR #401 open)
+CHEM P5 Full Acceptance Harness. (PR #401 OPEN, PATCH-1 in review.)
 
 CHEM hydration은 계속 별도 병렬.
 
-이 Track 때문에 Search 작업을 기다리지 않는다.
+**이 Track 때문에 Search 작업을 기다리지 않는다** — SEARCH-00
+Integration Audit은 이 문서(#402) merge 직후부터 병렬 착수 가능.
 
 ---
 
@@ -1484,12 +1525,14 @@ Kiwi state
 ```text
 NOW
 
-1. PR #399 merge                  ← 완료 (main = f32e4a71)
-2. CHEM P5                        ← PR #401 open
+1. PR #399 merge                                = DONE (main = f32e4a71)
+2. CHEM P5                                      = PR #401 PATCH-1
+                                                  (does NOT block SEARCH-00)
 
-동시에
+병렬 (Track CHEM 과 무관)
 
-3. SEARCH-00 Integration Audit
+3. SEARCH-00 Integration Audit                  = may start immediately in
+                                                  parallel with #401 PATCH
 4. SEARCH-01 Runtime 503 / v2 / Kiwi 정상화
 
         ↓
@@ -1676,3 +1719,27 @@ DUPLICATE
 - **CHEM 검색을 마친 뒤 프론트 QA**가 아니라, CHEM을 공용 검색엔진의 한 데이터 소스로 넣고 RISK·GUIDE·CSI·법령까지 같은 엔진으로 통합한 뒤 여러 SaaS 페이지가 그것을 소비하도록 만드는 것이 초기 설계의 핵심이다.
 - 현재 `/safety-search`는 이미 좋은 1차 구현이 있으므로 **버리는 게 아니라, 그 화면을 유지하면서 뒤의 6개 직접 조회를 공통 Search Index/Engine으로 교체**하는 방식이 가장 유지보수가 적다.
 - 검색엔진 = 하나 / 검색인덱스 = 하나 / Domain SoT = 각자 / Consumer = 여럿. 이 원칙만 유지되면 이후 CHEM FULL 수집, RISK ACTIVE 승격, Paid/SaaS/Front 통합은 각 track이 서로를 막지 않고 병렬 진행할 수 있다.
+
+---
+
+## Appendix A. Parallel-track summary (post PATCH-1)
+
+```text
+Track CHEM                       Track SEARCH
+──────────                       ────────────
+
+PR #401 PATCH-1                  PR #402 merge (this doc)
+      │                                 │
+      └→ P5 close                       └→ SEARCH-00 Integration Audit
+                                              ↓
+                                          SEARCH-01
+                                          Runtime / v2 / Kiwi
+                                              ↓
+                                          Unified Search Index
+                                              ↓
+                                          Public / RISK / SaaS / Paid
+```
+
+**#402를 먼저 merge하든 #401을 먼저 merge하든 무방** (두 브랜치는
+독립). 그러나 CHEM P5 완료를 기다리지 않고 **SEARCH-00 Integration
+Audit은 지금 시작할 수 있다** — 그것이 이 문서의 핵심 결과다.
