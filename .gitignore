@@ -28,3 +28,6 @@ artifacts/risk01/
 artifacts/risk02/
 artifacts/risk03/
 artifacts/risk04/
+
+# CHEM-05 local materialize plan / manifest / report — never commit
+artifacts/chem05/
