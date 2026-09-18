@@ -38,13 +38,17 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
 from services.kosha_msds.contract import (
+    ALLOWED_PUBLICATION_SCOPES,
     ALLOWED_SECTIONS,
     DETAIL_COMPLETE,
     DETAIL_EMPTY_BUT_VALID,
     DETAIL_INCOMPLETE,
     ENUMERATION_FULL_OFFICIAL,
+    PUBLICATION_SCOPE_FULL,
+    PUBLICATION_SCOPE_SEO_PREVIEW,
     PUBLISH_NOT_PUBLISHED,
     PUBLISH_PUBLISHED_FULL,
+    PUBLISH_PUBLISHED_SEO_PREVIEW,
     SNAPSHOT_COMPLETED,
     SNAPSHOT_FAILED,
     SNAPSHOT_RUNNING,
@@ -502,10 +506,26 @@ def preflight(
     on_disk_responses_sha256: Optional[str] = None,
     on_disk_plan_file_sha256: Optional[str] = None,
     resume_snapshot_id: Optional[str] = None,
+    publication_scope: str = PUBLICATION_SCOPE_FULL,
 ) -> PreflightReport:
     """Read-only preflight. Returns a PreflightReport whose can_execute
     is True only if all block gates are clean.
+
+    `publication_scope` (WO-CHEM-SEO-PREVIEW-LIVE-001) selects which
+    downstream publication path this materialization feeds:
+
+      * PUBLICATION_SCOPE_FULL         → downstream will PUBLISH_FULL. Full
+                                          20,568-chemical membership expected.
+      * PUBLICATION_SCOPE_SEO_PREVIEW  → downstream will PUBLISH_SEO_PREVIEW.
+                                          Partial-coverage membership allowed
+                                          because the manifest already filters
+                                          to complete-only chemicals.
+
+    Under BOTH scopes, PRODUCTION_WRITE_ALLOWED stays False in this WO;
+    scope only affects what preflight considers acceptable.
     """
+    if publication_scope not in ALLOWED_PUBLICATION_SCOPES:
+        raise ValueError(f"publication_scope must be one of {sorted(ALLOWED_PUBLICATION_SCOPES)}, got {publication_scope!r}")
     manifest = inputs.manifest or {}
     report = inputs.report or {}
 

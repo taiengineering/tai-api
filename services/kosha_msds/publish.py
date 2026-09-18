@@ -17,12 +17,16 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional
 
 from services.kosha_msds.contract import (
+    ALLOWED_PUBLICATION_SCOPES,
     DETAIL_COMPLETE,
     DETAIL_EMPTY_BUT_VALID,
     DETAIL_INCOMPLETE,
     ENUMERATION_FULL_OFFICIAL,
+    PUBLICATION_SCOPE_FULL,
+    PUBLICATION_SCOPE_SEO_PREVIEW,
     PUBLISH_NOT_PUBLISHED,
     PUBLISH_PUBLISHED_FULL,
+    PUBLISH_PUBLISHED_SEO_PREVIEW,
     SNAPSHOT_COMPLETED,
 )
 
@@ -37,6 +41,43 @@ PRODUCTION_PUBLISH_ALLOWED = False
 # Full-corpus expectations (aligned with CHEM-05 / CHEM-08).
 FULL_OFFICIAL_CHEMICAL_COUNT = 20568
 FULL_OFFICIAL_SECTION_COUNT = 329088
+
+
+# ---------------------------------------------------------------------------
+# Publication scope → target state + expected counts.
+# WO-CHEM-SEO-PREVIEW-LIVE-001 adds SEO_PREVIEW. Preview counts are NOT
+# hard-coded here (WO §13); the caller passes them from the deterministic
+# manifest binding (docs/chem/seo-preview-manifest.json).
+# ---------------------------------------------------------------------------
+def target_publish_state(publication_scope: str) -> str:
+    if publication_scope == PUBLICATION_SCOPE_FULL:
+        return PUBLISH_PUBLISHED_FULL
+    if publication_scope == PUBLICATION_SCOPE_SEO_PREVIEW:
+        return PUBLISH_PUBLISHED_SEO_PREVIEW
+    raise ValueError(f"unknown publication scope: {publication_scope!r}")
+
+
+def _resolve_expected_counts(
+    publication_scope: str,
+    seo_preview_expected_chemical_count: Optional[int],
+    seo_preview_expected_section_count: Optional[int],
+) -> tuple[int, int]:
+    """Return (expected_chemicals, expected_sections) for the given scope.
+
+    FULL         → the hard-coded full-corpus constants.
+    SEO_PREVIEW  → caller must pass explicit counts (from the manifest).
+                    No hard-coded 1997 (WO §13).
+    """
+    if publication_scope == PUBLICATION_SCOPE_FULL:
+        return FULL_OFFICIAL_CHEMICAL_COUNT, FULL_OFFICIAL_SECTION_COUNT
+    if publication_scope == PUBLICATION_SCOPE_SEO_PREVIEW:
+        if seo_preview_expected_chemical_count is None or seo_preview_expected_section_count is None:
+            raise ValueError(
+                "SEO_PREVIEW preflight requires seo_preview_expected_chemical_count and "
+                "seo_preview_expected_section_count (from docs/chem/seo-preview-manifest.json)."
+            )
+        return int(seo_preview_expected_chemical_count), int(seo_preview_expected_section_count)
+    raise ValueError(f"unknown publication scope: {publication_scope!r}")
 
 # Allowed detail_status values on snapshot_items when publishing.
 PUBLISHABLE_DETAIL_STATUSES = frozenset({DETAIL_COMPLETE, DETAIL_EMPTY_BUT_VALID})
@@ -178,9 +219,14 @@ class MemoryPublishStore:
             seen[k] = seen.get(k, 0) + 1
         return sum(1 for c in seen.values() if c > 1)
 
-    def latest_published_snapshot(self) -> Optional[dict]:
+    def latest_published_snapshot(
+        self,
+        *,
+        publication_scope: str = PUBLICATION_SCOPE_FULL,
+    ) -> Optional[dict]:
+        target_state = target_publish_state(publication_scope)
         pub = [s for s in self._snapshots
-               if s.get("publish_state") == PUBLISH_PUBLISHED_FULL
+               if s.get("publish_state") == target_state
                and s.get("status") == SNAPSHOT_COMPLETED
                and s.get("enumeration_mode") == ENUMERATION_FULL_OFFICIAL]
         if not pub:
@@ -191,9 +237,19 @@ class MemoryPublishStore:
 
     # -- fixture-only write side --
     def promote_to_published_full(self, snapshot_id: str) -> None:
+        """FULL scope promotion (fixture-only). See promote_to_state() for
+        the scope-aware variant used by SEO_PREVIEW."""
+        self.promote_to_state(snapshot_id, PUBLISH_PUBLISHED_FULL)
+
+    def promote_to_state(self, snapshot_id: str, target_state: str) -> None:
+        """Scope-aware fixture-only promotion. Target state must be one of
+        PUBLISH_PUBLISHED_FULL or PUBLISH_PUBLISHED_SEO_PREVIEW.
+        """
+        if target_state not in (PUBLISH_PUBLISHED_FULL, PUBLISH_PUBLISHED_SEO_PREVIEW):
+            raise ValueError(f"target_state must be PUBLISHED_FULL or PUBLISHED_SEO_PREVIEW, got {target_state!r}")
         for s in self._snapshots:
             if str(s.get("id")) == str(snapshot_id):
-                s["publish_state"] = PUBLISH_PUBLISHED_FULL
+                s["publish_state"] = target_state
                 return
         raise KeyError(f"snapshot not found: {snapshot_id}")
 
@@ -215,6 +271,9 @@ def preflight_publish(
     *,
     store: MemoryPublishStore,
     expected_materialize_binding: Optional[Mapping[str, Any]] = None,
+    publication_scope: str = PUBLICATION_SCOPE_FULL,
+    seo_preview_expected_chemical_count: Optional[int] = None,
+    seo_preview_expected_section_count: Optional[int] = None,
 ) -> PublishReport:
     """Read-only preflight over a MemoryPublishStore.
 
@@ -222,10 +281,34 @@ def preflight_publish(
     metrics_json fields (e.g. {"adapter_version": "CHEM05_V1",
     "materialize_plan_sha256": ..., "responses_sha256": ...}). Any
     mismatch produces BLOCK_MATERIALIZE_BINDING_MISMATCH.
+
+    `publication_scope` (WO-CHEM-SEO-PREVIEW-LIVE-001) selects the
+    target state and expected counts:
+
+      * PUBLICATION_SCOPE_FULL         → target = PUBLISHED_FULL,
+                                          expected counts = 20568 / 329088.
+      * PUBLICATION_SCOPE_SEO_PREVIEW  → target = PUBLISHED_SEO_PREVIEW,
+                                          expected counts must be passed
+                                          via seo_preview_expected_*
+                                          (from the manifest binding —
+                                          no hard-coded 1997/31952, WO §13).
+
+    The ALREADY_PUBLISHED check compares against the target state, so
+    SEO_PREVIEW re-promotion is blocked when a snapshot already sits at
+    PUBLISHED_SEO_PREVIEW.
     """
+    if publication_scope not in ALLOWED_PUBLICATION_SCOPES:
+        raise ValueError(f"publication_scope must be one of {sorted(ALLOWED_PUBLICATION_SCOPES)}, got {publication_scope!r}")
+    expected_chem_count, expected_sec_count = _resolve_expected_counts(
+        publication_scope,
+        seo_preview_expected_chemical_count,
+        seo_preview_expected_section_count,
+    )
+    target_state = target_publish_state(publication_scope)
+
     reasons: list[str] = []
     snap = store.get_snapshot(snapshot_id)
-    existing_pub = store.latest_published_snapshot()
+    existing_pub = store.latest_published_snapshot(publication_scope=publication_scope)
     existing_pub_id = str(existing_pub["id"]) if existing_pub else None
 
     if snap is None:
@@ -248,11 +331,11 @@ def preflight_publish(
         reasons.append(BLOCK_SNAPSHOT_NOT_COMPLETED)
     if enum_mode != ENUMERATION_FULL_OFFICIAL:
         reasons.append(BLOCK_NOT_FULL_OFFICIAL)
-    if publish_state == PUBLISH_PUBLISHED_FULL:
+    if publish_state == target_state:
         reasons.append(BLOCK_ALREADY_PUBLISHED)
-    if expected_count != FULL_OFFICIAL_CHEMICAL_COUNT:
+    if expected_count != expected_chem_count:
         reasons.append(BLOCK_EXPECTED_COUNT_MISMATCH)
-    if discovered_count != FULL_OFFICIAL_CHEMICAL_COUNT:
+    if discovered_count != expected_chem_count:
         reasons.append(BLOCK_DISCOVERED_COUNT_MISMATCH)
 
     items = store.snapshot_items(snapshot_id)
@@ -268,7 +351,7 @@ def preflight_publish(
         seen[str(i.get("chemical_id"))] = seen.get(str(i.get("chemical_id")), 0) + 1
     duplicate_memberships = sum(1 for c in seen.values() if c > 1)
 
-    if snapshot_item_count != FULL_OFFICIAL_CHEMICAL_COUNT:
+    if snapshot_item_count != expected_chem_count:
         reasons.append(BLOCK_SNAPSHOT_ITEM_COUNT_MISMATCH)
     if incomplete_memberships > 0:
         reasons.append(BLOCK_INCOMPLETE_MEMBERSHIP)
@@ -277,7 +360,7 @@ def preflight_publish(
 
     section_count = store.section_count_for_snapshot(snapshot_id)
     duplicate_sections = store.duplicate_section_pairs_for_snapshot(snapshot_id)
-    if section_count != FULL_OFFICIAL_SECTION_COUNT:
+    if section_count != expected_sec_count:
         reasons.append(BLOCK_SECTION_COUNT_MISMATCH)
     if duplicate_sections > 0:
         reasons.append(BLOCK_DUPLICATE_SECTION)

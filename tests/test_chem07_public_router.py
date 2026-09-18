@@ -92,6 +92,9 @@ def _make_store_two_currents() -> read.MemoryMsdsReadStore:
 
 @pytest.fixture
 def client(monkeypatch):
+    # WO-CHEM-SEO-PREVIEW-LIVE-001 added a public-mode gate. These
+    # pre-existing tests target FULL semantics, so we activate full mode.
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "full")
     store = _make_store_two_currents()
     monkeypatch.setattr(router_mod, "get_store", lambda: store)
     app = FastAPI()
@@ -102,6 +105,7 @@ def client(monkeypatch):
 
 @pytest.fixture
 def client_empty(monkeypatch):
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "full")
     store = read.MemoryMsdsReadStore()  # empty current view
     monkeypatch.setattr(router_mod, "get_store", lambda: store)
     app = FastAPI()
