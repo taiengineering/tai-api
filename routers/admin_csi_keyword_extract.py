@@ -118,23 +118,10 @@ def run(
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY missing")
 
     sb = get_supabase()
-    done = (
-        sb.table("keyword_central_extracted")
-        .select("page_id")
-        .eq("page_type", "accident_csi")
-        .limit(50000)
+    todo = (
+        sb.rpc("get_unprocessed_csi_keyword_rows", {"p_limit": limit})
         .execute()
     ).data or []
-    done_ids = {r["page_id"] for r in done}
-
-    rows = (
-        sb.table("csi_accident_snapshot_items")
-        .select("content_id,cause_detail,summary")
-        .order("content_id")
-        .limit(50000)
-        .execute()
-    ).data or []
-    todo = [r for r in rows if r["content_id"] not in done_ids][:limit]
     if not todo:
         return {
             "model": MODEL, "requested": 0, "applied": 0,
