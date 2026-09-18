@@ -68,16 +68,34 @@ def _get_engine():
 
 
 def _get_token_tier():
-    """Lazy-init TokenTier (Tier 4). Returns None if kiwipiepy unavailable."""
+    """Lazy-init TokenTier (Tier 4). Returns None if kiwipiepy unavailable.
+
+    WO-TAI-SHARED-SEARCH-001 PATCH-1 §A: the Kiwi user dictionary is
+    treated as a REQUIRED T4 runtime artifact under the SEARCH-01
+    production contract. If the dictionary is absent T4 is
+    explicitly disabled (token_tier=False) — deterministic tiers
+    (T1/T2/T2b/T3) continue serving. Previously the code passed
+    `user_dict_path=None` which let base Kiwi keep T4 nominally
+    active, causing `/search-dict/health` to report `token_tier=true`
+    even when the user dictionary was missing. That was a false-
+    positive readiness signal for SEARCH-01 acceptance.
+    """
     global _token_tier
     if _token_tier is not None or _token_tier is False:
         return _token_tier or None
     with _lock:
         if _token_tier is None:
+            # Explicit dict-missing check happens BEFORE the try/except
+            # so the failure mode is auditable rather than absorbed as
+            # a generic Exception.
+            if not os.path.exists(_KIWI_DICT_PATH):
+                _token_tier = False  # sentinel: dict missing, T4 disabled
+                return None
             try:
                 from tools.search_dict import search_runtime_ext as EXT
-                dict_path = _KIWI_DICT_PATH if os.path.exists(_KIWI_DICT_PATH) else None
-                _token_tier = EXT.TokenTier(_get_projection(), user_dict_path=dict_path)
+                _token_tier = EXT.TokenTier(
+                    _get_projection(), user_dict_path=_KIWI_DICT_PATH,
+                )
             except Exception:
                 _token_tier = False  # sentinel: attempted, unavailable
     return _token_tier or None
