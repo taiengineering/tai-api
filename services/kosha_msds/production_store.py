@@ -144,8 +144,10 @@ class SupabaseMaterializeStore:
             raise ValueError(f"invalid snapshot status: {status!r}")
         patch: dict[str, Any] = {"status": status}
         if status == SNAPSHOT_COMPLETED:
-            from datetime import datetime, timezone
-            patch["completed_at"] = datetime.now(tz=timezone.utc).isoformat()
+            # Repo time contract: never `datetime.now()` / `timezone.utc`
+            # directly (services/time is the sanctioned time source).
+            from services.time import now_kst, serialize_external_utc
+            patch["completed_at"] = serialize_external_utc(now_kst())
         (
             self.sb.table(SNAPSHOTS_TABLE)
             .update(patch)
