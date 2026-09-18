@@ -78,6 +78,29 @@ def project_work_row(row: Mapping[str, Any]) -> Dict[str, bool]:
             return {"performs_electrical_work": True}
         return {}
 
+    if work_type == "SCAFFOLD":
+        # WO-E2E-OBJ01-SEM002-ART57A-CONSUMER-INPUT-WIRING-001:
+        # LEG Art.57 first sentence = "(달비계 OR height>=5) AND
+        # (assembly/dismantle/modification activity)" bound to the SAME
+        # scaffold. Each row already represents one scaffold + one
+        # activity, so per-row evaluation preserves same-entity binding.
+        # missing != false — omit key when the row doesn't satisfy.
+        if subtype not in ("ASSEMBLY", "DISMANTLE", "MODIFICATION"):
+            return {}
+        is_dalbi = _truthy(attrs.get("is_dalbi"))
+        raw_h = attrs.get("height_m")
+        # numeric fail-closed: bool excluded, negative/None invalid.
+        height_ge5 = (
+            isinstance(raw_h, (int, float))
+            and not isinstance(raw_h, bool)
+            and raw_h >= 5
+        )
+        if is_dalbi or height_ge5:
+            return {
+                "performs_scaffold_assembly_dismantle_or_modification_on_dalbi_or_ge5m_scaffold": True
+            }
+        return {}
+
     return {}
 
 
