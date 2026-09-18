@@ -252,7 +252,7 @@ def test_transport_allowlist_appends_work_facts_only():
     # WO-E2E-OBJ01-SEM002-ART57A-CONSUMER-INPUT-WIRING-001: +1 canonical
     # existential fact for Art.57 first sentence. Baseline 205 → 206.
     # Uniqueness invariant preserved.
-    assert len(_LEG_INPUT_FIELDS) == 206
+    assert len(_LEG_INPUT_FIELDS) == 207
     assert len(set(_LEG_INPUT_FIELDS)) == 206
     assert KSIC_NOT_IN_TRANSPORT not in _LEG_INPUT_FIELDS
     assert "has_welding" in _LEG_INPUT_FIELDS

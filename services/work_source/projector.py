@@ -79,14 +79,18 @@ def project_work_row(row: Mapping[str, Any]) -> Dict[str, bool]:
         return {}
 
     if work_type == "SCAFFOLD":
-        # WO-E2E-OBJ01-SEM002-ART57A-CONSUMER-INPUT-WIRING-001:
-        # LEG Art.57 first sentence = "(달비계 OR height>=5) AND
-        # (assembly/dismantle/modification activity)" bound to the SAME
-        # scaffold. Each row already represents one scaffold + one
-        # activity, so per-row evaluation preserves same-entity binding.
+        # WO-E2E-OBJ01-SEM002-ART57A-CONSUMER-INPUT-WIRING-001 (Art.57 첫 문장) +
+        # WO-E2E-OBJ01-SEM002-ART57B-FASTLANE-IMPLEMENT-001    (Art.57 제2항).
+        # Each row = one scaffold + one activity, so per-row evaluation
+        # preserves same-entity binding for BOTH canonical facts. A row that
+        # satisfies both articles emits both facts (not an error).
         # missing != false — omit key when the row doesn't satisfy.
         if subtype not in ("ASSEMBLY", "DISMANTLE", "MODIFICATION"):
             return {}
+
+        out: Dict[str, bool] = {}
+
+        # --- Art.57 첫 문장 (Art.57-A) ---
         is_dalbi = _truthy(attrs.get("is_dalbi"))
         raw_h = attrs.get("height_m")
         # numeric fail-closed: bool excluded, negative/None invalid.
@@ -96,10 +100,17 @@ def project_work_row(row: Mapping[str, Any]) -> Dict[str, bool]:
             and raw_h >= 5
         )
         if is_dalbi or height_ge5:
-            return {
-                "performs_scaffold_assembly_dismantle_or_modification_on_dalbi_or_ge5m_scaffold": True
-            }
-        return {}
+            out["performs_scaffold_assembly_dismantle_or_modification_on_dalbi_or_ge5m_scaffold"] = True
+
+        # --- Art.57 제2항 (Art.57-B) — 강관비계 또는 통나무비계를 조립하는 경우 ---
+        # activity gate is stricter (ASSEMBLY only); kind gate accepts
+        # STEEL_PIPE or LOG. OTHER / missing → omit (missing != OTHER).
+        if subtype == "ASSEMBLY":
+            kind = attrs.get("scaffold_kind")
+            if kind in ("STEEL_PIPE", "LOG"):
+                out["performs_steel_pipe_or_log_scaffold_assembly"] = True
+
+        return out
 
     return {}
 
