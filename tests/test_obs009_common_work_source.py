@@ -248,13 +248,20 @@ def test_transport_allowlist_appends_work_facts_only():
         assert name in _LEG_INPUT_FIELDS
     # WO-OBS009-MATERIAL-CANONICAL-RUNTIME-WIRING-PATCH-001: +3 chemical canonical
     # booleans (is_managed_/is_permit_required_/is_special_management_hazardous_substance)
-    # were appended by that patch. Baseline 202 → 205. Uniqueness invariant preserved.
-    assert len(_LEG_INPUT_FIELDS) == 205
-    assert len(set(_LEG_INPUT_FIELDS)) == 205
+    # were appended by that patch. Baseline 202 → 205.
+    # WO-E2E-OBJ01-SEM002-ART57A-CONSUMER-INPUT-WIRING-001: +1 canonical
+    # existential fact for Art.57 first sentence. Baseline 205 → 206.
+    # Uniqueness invariant preserved.
+    assert len(_LEG_INPUT_FIELDS) == 206
+    assert len(set(_LEG_INPUT_FIELDS)) == 206
     assert KSIC_NOT_IN_TRANSPORT not in _LEG_INPUT_FIELDS
     assert "has_welding" in _LEG_INPUT_FIELDS
     assert "has_demolition" in _LEG_INPUT_FIELDS
     assert "performs_confined_space_work" in _LEG_INPUT_FIELDS
+    assert (
+        "performs_scaffold_assembly_dismantle_or_modification_on_dalbi_or_ge5m_scaffold"
+        in _LEG_INPUT_FIELDS
+    )
 
 
 def test_passthrough_projected_facts_do_not_invent_siblings():
@@ -299,12 +306,15 @@ def test_registry_is_common_only():
     data = registry_public()
     codes = {item["code"] for item in data["work_types"]}
     assert codes == ALLOWED_WORK_TYPES
+    # WO-E2E-OBJ01-SEM002-ART57A-CONSUMER-INPUT-WIRING-001: SCAFFOLD family
+    # added (still a COMMON work family — one work_type per family, not per law).
     assert codes == {
         "ELECTRICAL",
         "HIGH_PLACE",
         "FORKLIFT",
         "PAINTING",
         "MAINTENANCE",
+        "SCAFFOLD",
     }
 
 

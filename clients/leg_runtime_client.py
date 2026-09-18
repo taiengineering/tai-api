@@ -192,6 +192,12 @@ _LEG_INPUT_FIELDS = (
     # payment/건산 state facts 는 STATEFUL_BACKLOG(POST_LAUNCH). subcontractor_work_types(source)가
     # source adapter 에서 이 2 boolean 으로 deterministic expansion 됨.
     "has_fire_facility_subcontract", "has_ict_subcontract",
+    # WO-E2E-OBJ01-SEM002-ART57A-CONSUMER-INPUT-WIRING-001: single existential
+    # boolean for Art.57 first sentence (같은 비계 S에 대해 (S.type=DALBI OR
+    # S.height_m>=5) AND (activity IN {ASSEMBLY,DISMANTLE,MODIFICATION})).
+    # Computed by services/work_source/projector.py from structured SCAFFOLD
+    # work rows; NOT stored in DB. Exact-name Leaf.field in LEG applicable.py.
+    "performs_scaffold_assembly_dismantle_or_modification_on_dalbi_or_ge5m_scaffold",
     # WO-E2E-OBS007-CRANE-MINIMUM-MODIFY-001: Frozen Design Leaf.field exact-name.
     # No alias, no has_crane collapse, no crane_adjustment_work.
     "has_mobile_crane", "has_jib_crane", "has_gantry_crane",

@@ -59,6 +59,24 @@ WORK_TYPES: Dict[str, Dict[str, Any]] = {
         },
         "optional_fields": ("equipment_ref", "location_ref"),
     },
+    # WO-E2E-OBJ01-SEM002-ART57A-CONSUMER-INPUT-WIRING-001:
+    # SCAFFOLD family. Same-entity binding: each row = one specific
+    # scaffold (equipment_ref) with its type/height and the activity
+    # being performed on THAT scaffold. Projector never cross-combines
+    # attributes across rows. Adds no per-law boolean to the DB.
+    "SCAFFOLD": {
+        "label": "비계 작업",
+        "subtypes": {
+            "ASSEMBLY": "비계 조립 작업",
+            "DISMANTLE": "비계 해체 작업",
+            "MODIFICATION": "비계 변경 작업",
+        },
+        "attributes": {
+            "is_dalbi": {"type": "boolean", "label": "달비계 여부"},
+            "height_m": {"type": "number", "label": "비계 최고높이(m)"},
+        },
+        "optional_fields": ("equipment_ref", "location_ref"),
+    },
 }
 
 # Fix the accidental space in MAINTENANCE subtype label
