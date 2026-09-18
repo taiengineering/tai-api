@@ -18,7 +18,7 @@ router = APIRouter(prefix="/admin/csi-keyword-extract")
 
 MODEL = os.getenv("CSI_KEYWORD_MODEL", "gpt-4o-mini")
 CREATED_BY = "gpt-accident-csi-extract"
-GROUP_SIZE = 20
+GROUP_SIZE = 10
 MAX_WORKERS = int(os.getenv("CSI_KEYWORD_WORKERS", "10"))
 
 SYSTEM_PROMPT = """너는 CSI 건설 재해사례의 페이지별 SEO 중심키워드 추출기다.
@@ -91,7 +91,7 @@ def _judge_group(rows: list[dict]) -> list[dict]:
         model=MODEL,
         temperature=0,
         response_format={"type": "json_object"},
-        max_tokens=5000,
+        max_tokens=3200,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
