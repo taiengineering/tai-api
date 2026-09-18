@@ -184,6 +184,11 @@ class MemoryMsdsReadStore:
     def _rows_for_scope(self, scope: str) -> list[dict]:
         return self._preview if scope == PUBLICATION_SCOPE_SEO_PREVIEW else self._current
 
+    def count_current(self, *, scope: str = PUBLICATION_SCOPE_FULL) -> int:
+        """Row count of the current view for the given scope. Mirrors
+        SupabaseMsdsReadStore.count_current."""
+        return len(self._rows_for_scope(scope))
+
     def get_current_by_chem_id(self, chem_id: str, *, scope: str = PUBLICATION_SCOPE_FULL) -> Optional[dict]:
         for row in self._rows_for_scope(scope):
             if row.get("chem_id") == chem_id:
@@ -261,6 +266,27 @@ class SupabaseMsdsReadStore:
             from db.supabase_client import get_supabase
             sb = get_supabase()
         self.sb = sb
+
+    def count_current(self, *, scope: str = PUBLICATION_SCOPE_FULL) -> int:
+        """Row count of the current view for the given scope.
+
+        FULL scope → kosha_msds_current (currently 0 rows until a
+                     PUBLISHED_FULL snapshot exists).
+        SEO_PREVIEW → kosha_msds_seo_preview_current
+                     (currently 1,997 rows).
+
+        Used by ops.collect_production_status() to fill the
+        `chemicals` / `preview_current` / `full_current` fields
+        against a live Supabase — see WO-CHEM-FULL-READINESS-004
+        PATCH-1 §A.
+        """
+        r = (
+            self.sb.table(_view_for_scope(scope))
+            .select("chem_id", count="exact")
+            .limit(1)
+            .execute()
+        )
+        return int(getattr(r, "count", None) or 0)
 
     def get_current_by_chem_id(self, chem_id: str, *, scope: str = PUBLICATION_SCOPE_FULL) -> Optional[dict]:
         r = (

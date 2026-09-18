@@ -58,8 +58,13 @@ EXPECTED_V2_SNAPSHOT_ID = "SEARCH-DICT-LEGPROD-2026-09-16"
 
 
 # Alert vocabulary.
+# WO-CHEM-FULL-READINESS-004 PATCH-1 §E: renamed
+#   RUNNING_SNAPSHOT_STALE → RUNNING_SNAPSHOT_PRESENT
+# The prior name implied a time-threshold judgement that this WO does
+# not own; simply reporting that a RUNNING snapshot exists is enough
+# for an operator to investigate.
 ALERT_HYDRATION_ARTIFACT_MISSING = "HYDRATION_ARTIFACT_MISSING"
-ALERT_RUNNING_SNAPSHOT_STALE = "RUNNING_SNAPSHOT_STALE"
+ALERT_RUNNING_SNAPSHOT_PRESENT = "RUNNING_SNAPSHOT_PRESENT"
 ALERT_FAILED_SNAPSHOT_PRESENT = "FAILED_SNAPSHOT_PRESENT"
 ALERT_PREVIEW_COUNT_MISMATCH = "PREVIEW_COUNT_MISMATCH"
 ALERT_FULL_MODE_WITHOUT_FULL_PUBLICATION = "FULL_MODE_WITHOUT_FULL_PUBLICATION"
@@ -204,23 +209,35 @@ def collect_hydration_status(
         complete_chemicals = sum(1 for secs in by_chem.values() if len(secs) == 16)
         incomplete_chemicals = unique_chemicals - complete_chemicals
 
-    # next_pending: from checkpoint's last_completed pair, hop to the
-    # subsequent (chem, section) using the queue order that the runner
-    # itself walks (see tools/chem04/official_hydrate_v12.py). We do NOT
-    # scan the queue file here; instead we report the "first not-in-
-    # responses" pair via checkpoint's tail hint.
+    # next_pending resolution (WO-CHEM-FULL-READINESS-004 PATCH-1 §D).
+    # Priority order:
+    #   1. If the frozen hydration queue file exists AND the checkpoint
+    #      carries `next_queue_index`, read that line — the runner's
+    #      own resume pointer. Handles the sec=16 boundary correctly.
+    #   2. Fallback: checkpoint arithmetic (last_sec < 16 → same chem,
+    #      sec+1); sec=16 → None (queue file missing, can't resolve).
     if checkpoint is not None:
-        last_cid = checkpoint.get("last_completed_chemId")
-        last_sec = checkpoint.get("last_completed_sectionNo")
-        if last_cid and isinstance(last_sec, int):
-            if last_sec < 16:
+        queue_path = Path(
+            "artifacts/chem04/content/queues/hydration_queue.jsonl"
+        )
+        next_idx = checkpoint.get("next_queue_index")
+        if queue_path.exists() and isinstance(next_idx, int) and next_idx >= 0:
+            try:
+                with queue_path.open(encoding="utf-8") as fh:
+                    for i, line in enumerate(fh):
+                        if i == next_idx:
+                            row = json.loads(line)
+                            next_pending_chem_id = str(row.get("chemId") or "")
+                            next_pending_section = int(row.get("sectionNo"))
+                            break
+            except (OSError, json.JSONDecodeError, ValueError, TypeError):
+                pass
+        if next_pending_chem_id is None:
+            last_cid = checkpoint.get("last_completed_chemId")
+            last_sec = checkpoint.get("last_completed_sectionNo")
+            if last_cid and isinstance(last_sec, int) and last_sec < 16:
                 next_pending_chem_id = str(last_cid)
                 next_pending_section = last_sec + 1
-            else:
-                # runner steps to the next chemId; without a queue scan
-                # we cannot resolve which chemId is next, so leave None.
-                next_pending_chem_id = None
-                next_pending_section = None
 
     return HydrationStatus(
         artifact_dir=str(p),
@@ -263,22 +280,29 @@ class ProductionStatus:
 
 
 def collect_production_status(*, publish_store, read_store=None) -> ProductionStatus:
-    """Best-effort read against the (Supabase or memory) store.
+    """Read live counts via the store's public census methods.
 
-    The publish store already exposes `latest_published_snapshot` per
-    scope (CHEM-10). For chemicals / sections / snapshot_items totals
-    we walk the store's internal collections when they exist on a
-    MemoryPublishStore (test), otherwise we leave them None (this
-    module isn't meant to add production count queries — those live
-    in the SEO preview daily sync).
+    Both `SupabasePublishStore` and `MemoryPublishStore` implement:
+        count_chemicals / count_sections / count_snapshots /
+        count_snapshot_items / count_snapshots_by_status /
+        count_snapshots_by_publish_state / find_full_candidate
+
+    Both `SupabaseMsdsReadStore` and `MemoryMsdsReadStore` implement:
+        count_current(scope=...)
+
+    ops.py never peeks at private `_snapshots` / `_items` / `_current`
+    lists anymore — WO-CHEM-FULL-READINESS-004 PATCH-1 §A. That
+    means the Supabase-backed CLI reads real production counts, not
+    Nones.
     """
     status = ProductionStatus()
 
     latest_preview = None
     latest_full = None
-    latest_completed = None
     try:
-        from services.kosha_msds.contract import PUBLICATION_SCOPE_FULL, PUBLICATION_SCOPE_SEO_PREVIEW
+        from services.kosha_msds.contract import (
+            PUBLICATION_SCOPE_FULL, PUBLICATION_SCOPE_SEO_PREVIEW,
+        )
         preview = publish_store.latest_published_snapshot(
             publication_scope=PUBLICATION_SCOPE_SEO_PREVIEW,
         )
@@ -292,64 +316,69 @@ def collect_production_status(*, publish_store, read_store=None) -> ProductionSt
     except Exception as exc:
         status.note = f"publish_store scope lookup failed: {exc}"
 
-    # Memory-store internal peek: only if the collections are exposed
-    # (MemoryPublishStore has `_snapshots`, `_items`, `_sections`).
-    snaps = getattr(publish_store, "_snapshots", None)
-    items = getattr(publish_store, "_items", None)
-    sections = getattr(publish_store, "_sections", None)
-    if isinstance(snaps, list):
-        status.snapshots = len(snaps)
-        status.running_snapshots = sum(
-            1 for s in snaps if s.get("status") == SNAPSHOT_RUNNING
+    def _safe(fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception:
+            return None
+
+    # Publish-side counts (chemicals / sections / snapshots / items).
+    # The publish store owns the sections table under our schema; the
+    # chemicals table is owned by the read store's view surface, so we
+    # fill `chemicals` via the read store below.
+    status.sections = _safe(
+        getattr(publish_store, "count_sections", lambda: None)
+    )
+    status.snapshots = _safe(
+        getattr(publish_store, "count_snapshots", lambda: None)
+    )
+    status.snapshot_items = _safe(
+        getattr(publish_store, "count_snapshot_items", lambda: None)
+    )
+    status.running_snapshots = _safe(
+        getattr(publish_store, "count_snapshots_by_status", lambda s: None),
+        SNAPSHOT_RUNNING,
+    )
+    status.failed_snapshots = _safe(
+        getattr(publish_store, "count_snapshots_by_status", lambda s: None),
+        SNAPSHOT_FAILED,
+    )
+    # `chemicals` primary: publish store's count_chemicals (Supabase
+    # version reads kosha_msds_chemicals; memory version returns 0).
+    # Fallback: read store's count_current(scope=SEO_PREVIEW) if it's
+    # meaningful. The primary is authoritative — 1,997 rows sit in
+    # kosha_msds_chemicals under the SEO preview publication.
+    status.chemicals = _safe(
+        getattr(publish_store, "count_chemicals", lambda: None)
+    )
+
+    # Read-store current-view counts (WO §A production baseline).
+    if read_store is not None:
+        from services.kosha_msds.contract import (
+            PUBLICATION_SCOPE_FULL, PUBLICATION_SCOPE_SEO_PREVIEW,
         )
-        status.failed_snapshots = sum(
-            1 for s in snaps if s.get("status") == SNAPSHOT_FAILED
+        preview_count = _safe(
+            getattr(read_store, "count_current", lambda **kw: None),
+            scope=PUBLICATION_SCOPE_SEO_PREVIEW,
         )
-        # latest COMPLETED (any scope).
-        completed = [s for s in snaps if s.get("status") == SNAPSHOT_COMPLETED]
-        if completed:
-            completed.sort(
-                key=lambda s: (s.get("completed_at") or "",
-                               s.get("started_at") or ""), reverse=True,
-            )
-            latest_completed = completed[0].get("id")
-    if isinstance(items, list):
-        status.snapshot_items = len(items)
-        # Preview/full "current" counts: rows in items whose snapshot
-        # is currently PUBLISHED_SEO_PREVIEW / PUBLISHED_FULL.
-        by_snap = {}
-        if isinstance(snaps, list):
-            for s in snaps:
-                by_snap[str(s.get("id"))] = s.get("publish_state")
-        preview_count = sum(
-            1 for i in items
-            if by_snap.get(str(i.get("snapshot_id"))) == PUBLISH_PUBLISHED_SEO_PREVIEW
-            and i.get("in_snapshot", True) is True
-        )
-        full_count = sum(
-            1 for i in items
-            if by_snap.get(str(i.get("snapshot_id"))) == PUBLISH_PUBLISHED_FULL
-            and i.get("in_snapshot", True) is True
+        full_count = _safe(
+            getattr(read_store, "count_current", lambda **kw: None),
+            scope=PUBLICATION_SCOPE_FULL,
         )
         status.preview_current = preview_count
         status.full_current = full_count
-    if isinstance(sections, list):
-        status.sections = len({(str(s.get("chemical_id")), int(s.get("section_no")))
-                                for s in sections})
+        # For an all-memory Memory store fixture, chemicals via the
+        # publish store returns 0. If the read store's preview slice
+        # is populated, treat that as the authoritative `chemicals`
+        # count in memory tests.
+        if (status.chemicals is None or status.chemicals == 0) and preview_count:
+            status.chemicals = preview_count
 
-    # chemicals: derived from read_store if it exposes _current /
-    # _preview lists (MemoryMsdsReadStore).
-    if read_store is not None:
-        cur = getattr(read_store, "_current", None)
-        prev = getattr(read_store, "_preview", None)
-        if isinstance(cur, list):
-            status.chemicals = len(cur)
-        if isinstance(prev, list) and status.preview_current is None:
-            status.preview_current = len(prev)
-
-    status.latest_completed_snapshot = latest_completed
     status.latest_preview_snapshot = latest_preview
     status.latest_full_snapshot = latest_full
+    # No cheap "latest completed across scopes" query; ops surfaces
+    # scope-specific latest via publication section instead.
+    status.latest_completed_snapshot = None
     return status
 
 
@@ -375,6 +404,9 @@ class PublicationStatus:
 
 
 def collect_publication_status(*, publish_store) -> PublicationStatus:
+    """Publication counts via the store's public census methods
+    (WO-CHEM-FULL-READINESS-004 PATCH-1 §A). No private-attribute peek.
+    """
     status = PublicationStatus()
     from services.kosha_msds.contract import (
         PUBLICATION_SCOPE_FULL, PUBLICATION_SCOPE_SEO_PREVIEW,
@@ -389,15 +421,14 @@ def collect_publication_status(*, publish_store) -> PublicationStatus:
         status.latest_preview_snapshot = _snapshot_summary(prev)
     if full:
         status.latest_full_snapshot = _snapshot_summary(full)
-    snaps = getattr(publish_store, "_snapshots", None)
-    if isinstance(snaps, list):
-        status.preview_count = sum(
-            1 for s in snaps
-            if s.get("publish_state") == PUBLISH_PUBLISHED_SEO_PREVIEW
-        )
-        status.full_count = sum(
-            1 for s in snaps if s.get("publish_state") == PUBLISH_PUBLISHED_FULL
-        )
+
+    by_state = getattr(publish_store, "count_snapshots_by_publish_state", None)
+    if callable(by_state):
+        try:
+            status.preview_count = int(by_state(PUBLISH_PUBLISHED_SEO_PREVIEW) or 0)
+            status.full_count = int(by_state(PUBLISH_PUBLISHED_FULL) or 0)
+        except Exception:
+            pass
     return status
 
 
@@ -484,6 +515,23 @@ class DictionaryRuntimeStatus:
         }
 
 
+def _unwrap_search_dict_response(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Unwrap the shared TAI /search-dict envelope.
+
+    Production router (routers.search_dictionary) wraps its response in:
+
+        {"status": "success", "data": { ... }}
+
+    Older / raw fixtures may return the inner shape directly. This
+    helper handles both — WO-CHEM-FULL-READINESS-004 PATCH-1 §C.
+    """
+    if not isinstance(payload, Mapping):
+        return {}
+    if isinstance(payload.get("data"), Mapping):
+        return payload["data"]
+    return payload
+
+
 def collect_dictionary_runtime(
     live_base_url: Optional[str],
     *,
@@ -495,6 +543,10 @@ def collect_dictionary_runtime(
     `http_get` is injectable for tests: signature `(url: str, timeout: float) -> dict`.
     Production uses urllib. Any network failure returns
     binding=UNVERIFIED_NETWORK — never PASS-as-if-verified.
+
+    Production router envelopes its payload under `data` per
+    routers/search_dictionary.py. `_unwrap_search_dict_response`
+    handles both wrapped and raw forms — WO PATCH-1 §C.
     """
     if not live_base_url:
         return DictionaryRuntimeStatus(
@@ -509,15 +561,20 @@ def collect_dictionary_runtime(
 
     base = live_base_url.rstrip("/")
     try:
-        health = http_get(f"{base}/search-dict/health", timeout=timeout)
+        health_raw = http_get(f"{base}/search-dict/health", timeout=timeout)
+        health = _unwrap_search_dict_response(health_raw)
         snapshot = health.get("snapshot")
         subjects = health.get("subjects")
+        # health returns `indexed_terms`; census returns a
+        # distribution. Prefer health's flat value.
         terms = health.get("indexed_terms")
 
         msds_hit = _lookup_matches(
             http_get, base, "MSDS", subject_type="CHEM_TERM",
             expected_subject_key="물질안전보건자료", timeout=timeout,
         )
+        # SDS is REVIEWED (non-production) in the current v2 dictionary;
+        # a False here does NOT downgrade V2 binding on its own.
         sds_hit = _lookup_matches(
             http_get, base, "SDS", subject_type="CHEM_TERM",
             expected_subject_key="물질안전보건자료", timeout=timeout,
@@ -557,7 +614,8 @@ def _lookup_matches(
     if subject_type is not None:
         params["subject_type"] = subject_type
     url = f"{base}/search-dict/lookup?{urllib.parse.urlencode(params)}"
-    result = http_get(url, timeout=timeout)
+    result_raw = http_get(url, timeout=timeout)
+    result = _unwrap_search_dict_response(result_raw)
     for item in result.get("items") or []:
         if item.get("subject_key") == expected_subject_key:
             return True
@@ -598,16 +656,18 @@ def collect_full_readiness(*, publish_store) -> FullReadinessStatus:
     snapshot, report NO_FULL_CANDIDATE (not an error). Otherwise
     delegate to CHEM-08/CHEM-10 canonical readiness check via
     services.kosha_msds.cutover.is_full_ready.
+
+    WO-CHEM-FULL-READINESS-004 PATCH-1 §B: candidate discovery goes
+    through the store's public `find_full_candidate()` method so
+    Supabase + memory both work. No `_snapshots` peek.
     """
-    snaps = getattr(publish_store, "_snapshots", None)
+    find_fn = getattr(publish_store, "find_full_candidate", None)
     candidate = None
-    if isinstance(snaps, list):
-        for s in snaps:
-            if (s.get("status") == SNAPSHOT_COMPLETED
-                    and s.get("enumeration_mode") == ENUMERATION_FULL_OFFICIAL
-                    and s.get("publish_state") == PUBLISH_NOT_PUBLISHED):
-                candidate = s
-                break
+    if callable(find_fn):
+        try:
+            candidate = find_fn()
+        except Exception:
+            candidate = None
     if candidate is None:
         return FullReadinessStatus(
             ready=False, reason="NO_FULL_CANDIDATE",
@@ -656,7 +716,7 @@ def derive_alerts(
         ))
     if (production.running_snapshots or 0) > 0:
         alerts.append(Alert(
-            code=ALERT_RUNNING_SNAPSHOT_STALE,
+            code=ALERT_RUNNING_SNAPSHOT_PRESENT,
             severity="WARN",
             evidence=f"running_snapshots={production.running_snapshots}",
         ))

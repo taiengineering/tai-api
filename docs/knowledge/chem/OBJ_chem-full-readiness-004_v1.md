@@ -200,10 +200,192 @@ DICTIONARY REMAPPING              = 0
   the CLI with `--live-base-url` against production; the reading is
   not automated in CI.
 
+## PATCH-1 — production path, envelope, next_pending, alert rename
+
+Four bugs caught in review and fixed.
+
+### §A / §F — production census now works against Supabase
+
+Previous version of `collect_production_status()` peeked at
+Memory-store internal attributes (`_snapshots`, `_items`,
+`_sections`) that don't exist on the live Supabase stores. In
+production it would return None or 0 for most fields.
+
+Added a public census interface on both store implementations:
+
+```text
+SupabasePublishStore  (services/kosha_msds/production_store.py)
+MemoryPublishStore    (services/kosha_msds/publish.py)
+  count_chemicals()
+  count_sections()
+  count_snapshots()
+  count_snapshot_items()
+  count_snapshots_by_status(status)       (RUNNING / FAILED)
+  count_snapshots_by_publish_state(state) (PUBLISHED_SEO_PREVIEW /
+                                           PUBLISHED_FULL / NOT_PUBLISHED)
+  find_full_candidate()                   (COMPLETED / FULL_OFFICIAL /
+                                            NOT_PUBLISHED)
+
+SupabaseMsdsReadStore  (services/kosha_msds/read.py)
+MemoryMsdsReadStore    (services/kosha_msds/read.py)
+  count_current(scope=...)                (kosha_msds_current /
+                                           kosha_msds_seo_preview_current)
+```
+
+`ops.collect_production_status()` now uses these methods
+exclusively; no private-attribute peek anywhere. Same for
+`collect_publication_status()` (uses
+`count_snapshots_by_publish_state`).
+
+### §B — FULL candidate discovery now works against Supabase
+
+`collect_full_readiness()` previously did
+`getattr(publish_store, "_snapshots", None)`. Replaced with
+`publish_store.find_full_candidate()`, which SupabasePublishStore
+resolves via a real `.eq(status=COMPLETED).eq(enumeration_mode=
+FULL_OFFICIAL).eq(publish_state=NOT_PUBLISHED)` query. Eligibility
+still delegates to `services.kosha_msds.cutover.is_full_ready` —
+no new decision engine.
+
+### §C — /search-dict envelope unwrap
+
+Live router `routers.search_dictionary` returns
+`{"status":"success","data":{...}}`. Added
+`_unwrap_search_dict_response()` that transparently handles both
+the wrapped production shape and raw test-fixture payloads.
+
+### §D — hydration `next_pending` at the section=16 boundary
+
+`collect_hydration_status()` now reads the frozen hydration queue
+file at `artifacts/chem04/content/queues/hydration_queue.jsonl`
+and uses the checkpoint's own `next_queue_index` to resolve the
+next pending pair. Falls back to the previous last-sec+1
+arithmetic when the queue file is absent. This correctly handles
+the case where `last_completed_sectionNo == 16` (previously
+returned None).
+
+### §E — RUNNING alert renamed
+
+`ALERT_RUNNING_SNAPSHOT_STALE` → `ALERT_RUNNING_SNAPSHOT_PRESENT`.
+The old name implied a time-threshold judgement this WO does not
+own; simply reporting that a RUNNING snapshot exists is enough
+for an operator to investigate.
+
+## Live acceptance (Owner-facing operator run, PATCH-1 §H)
+
+Executed:
+
+```bash
+railway run --service tai-api-prod \
+  python3 -m tools.chem_ops.status \
+  --artifact-dir artifacts/chem04/official_v12 \
+  --live-base-url https://api.taieng.co.kr \
+  --no-deep-scan --format json
+```
+
+Output (WO baseline values verified against production):
+
+```text
+repository
+  git_main                    = 977718bc1d10f63f9586079ba47c9d1b69280cd1
+  contract_version            = KOSHA_MSDS_OPENAPI_V1_2
+
+hydration
+  status                      = OK
+  completed                   = 31,961
+  remaining                   = 297,127
+  next_pending                = 432377 / 10
+  last_terminal_reason        = QUOTA_LIMIT
+  last_run_at                 = 2026-09-18T00:28:09Z
+  responses_sha256            = 49994a2a…b643dd   (byte-verified)
+
+production_db
+  chemicals                   = 1,997    ✓
+  sections                    = 31,952   ✓
+  snapshots                   = 2        ✓
+  snapshot_items              = 1,997    ✓
+  preview_current             = 1,997    ✓
+  full_current                = 0        ✓
+  running_snapshots           = 0        ✓
+  failed_snapshots            = 1        ✓ ← previously invisible
+
+publication
+  preview_count               = 1
+  full_count                  = 0
+  latest_preview_snapshot.id  = 7bba6dfe-2761-4d79-a17c-1b8ac9f364c5
+
+public_runtime
+  raw_env_value               = seo_preview
+  resolved_mode               = seo_preview
+  effective_scope             = SEO_PREVIEW
+  is_failsafe_off             = false
+
+search_dictionary
+  binding                     = UNVERIFIED_NETWORK
+  error                       = HTTPError: HTTP Error 503: Service Unavailable
+  (api.taieng.co.kr returned 503 during the run — CLI correctly
+   reports UNVERIFIED_NETWORK and does NOT fake PASS. Owner can
+   retry when the search-dict endpoint is available.)
+
+full_readiness
+  ready                       = false
+  reason                      = NO_FULL_CANDIDATE
+
+alerts
+  [WARN] FAILED_SNAPSHOT_PRESENT   failed_snapshots=1
+```
+
+All PATCH-1 §A production baseline values verified live. No CLI
+crash under the 503; no fabricated PASS. The pre-existing FAILED
+snapshot the WO's independent verification flagged is now surfaced
+as `FAILED_SNAPSHOT_PRESENT` — closing the observability gap.
+
+## PATCH-1 tests (20 total)
+
+```text
+tests/test_chem_full_readiness_004_ops.py    20 / 20  PASS  (0.19s)
+
+  Original P4 (12):
+    O1, O2, O2b, O3, O4, O5, O6, O7, O7b, O8,
+    test_cli_smoke_no_db_no_live_url,
+    test_no_new_engine_no_kosha_safety_materials_coupling
+
+  PATCH-1 (8):
+    §A  test_F_supabase_shape_production_counts_correct
+         (Supabase-shape store with no _snapshots/_items/_sections/
+          _current/_preview yields 1997/31952/2/1997/1997/0/0/1)
+    §B  test_F_supabase_shape_full_candidate_discovery_works
+         (find_full_candidate reaches is_full_ready; PREFLIGHT_BLOCKED
+          under fake with no membership)
+    §B  test_F_supabase_shape_no_candidate_reports_no_full_candidate
+         (baseline: no candidate → NO_FULL_CANDIDATE)
+    §C  test_C_search_dict_wrapped_envelope_v2_match
+         ({status:success,data:{...}} → V2_MATCH; MSDS+SDS matched)
+    §C  test_C_search_dict_raw_shape_still_works
+         (raw payload also handled; original O4 semantics preserved)
+    §D  test_D_next_pending_at_section_16_boundary_via_queue
+         (chemA sec 16 done, next_queue_index=16 → chemB / sec 1)
+    §D  test_D_next_pending_current_baseline_still_432377_10
+         (fallback arithmetic; preview baseline preserved)
+    §E  test_E_running_alert_renamed
+         (constant is ALERT_RUNNING_SNAPSHOT_PRESENT; RUNNING snapshot
+          triggers the new alert)
+```
+
+Focused CHEM regression (after PATCH-1):
+
+```text
+chem05 + chem06 + chem07 + chem08 + chem09 + chem10
++ chem_seo_preview + chem_seo_preview_execute
++ chem_full_readiness + chem_full_readiness_002_cutover
++ chem_full_readiness_003_search_qa + chem_full_readiness_004_ops
+                                              266 / 266  PASS
+```
+
 ## Verdict
 
 ```text
-WO-CHEM-FULL-READINESS-004 = PASS / READY FOR GPT DELTA VERIFY
+WO-CHEM-FULL-READINESS-004 PATCH-1 = PASS / READY FOR MERGE
 
 Operators can now run:
 

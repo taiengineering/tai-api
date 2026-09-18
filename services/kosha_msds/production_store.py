@@ -333,6 +333,75 @@ class SupabasePublishStore:
             sb = get_supabase()
         self.sb = sb
 
+    # -- census methods (WO-CHEM-FULL-READINESS-004 PATCH-1 §A) --
+    # All read-only counts. PostgREST returns the count via the
+    # `Content-Range` header, exposed on the response as `.count`.
+
+    def _count(self, table: str, *filters) -> int:
+        q = self.sb.table(table).select("id", count="exact").limit(1)
+        for k, v in filters:
+            q = q.eq(k, v)
+        r = q.execute()
+        return int(getattr(r, "count", None) or 0)
+
+    def count_chemicals(self) -> int:
+        return self._count(CHEMICALS_TABLE)
+
+    def count_sections(self) -> int:
+        # Sections have no `id` column projected; use chemical_id for the
+        # count key. PostgREST count is independent of the projection.
+        r = (
+            self.sb.table(SECTIONS_TABLE)
+            .select("chemical_id", count="exact")
+            .limit(1)
+            .execute()
+        )
+        return int(getattr(r, "count", None) or 0)
+
+    def count_snapshots(self) -> int:
+        return self._count(SNAPSHOTS_TABLE)
+
+    def count_snapshot_items(self) -> int:
+        r = (
+            self.sb.table(SNAPSHOT_ITEMS_TABLE)
+            .select("snapshot_id", count="exact")
+            .eq("in_snapshot", True)
+            .limit(1)
+            .execute()
+        )
+        return int(getattr(r, "count", None) or 0)
+
+    def count_snapshots_by_status(self, status: str) -> int:
+        return self._count(SNAPSHOTS_TABLE, ("status", status))
+
+    def count_snapshots_by_publish_state(self, state: str) -> int:
+        return self._count(SNAPSHOTS_TABLE, ("publish_state", state))
+
+    def find_full_candidate(self) -> Optional[dict]:
+        """Return one snapshot that is COMPLETED / FULL_OFFICIAL /
+        NOT_PUBLISHED (i.e. ready for CHEM-10 preflight). None if
+        no such snapshot exists. Used by the ops observer's FULL
+        readiness collector to feed
+        services.kosha_msds.cutover.is_full_ready.
+        """
+        from services.kosha_msds.contract import (
+            ENUMERATION_FULL_OFFICIAL, PUBLISH_NOT_PUBLISHED,
+            SNAPSHOT_COMPLETED,
+        )
+        r = (
+            self.sb.table(SNAPSHOTS_TABLE)
+            .select(SNAPSHOT_SELECT)
+            .eq("status", SNAPSHOT_COMPLETED)
+            .eq("enumeration_mode", ENUMERATION_FULL_OFFICIAL)
+            .eq("publish_state", PUBLISH_NOT_PUBLISHED)
+            .order("completed_at", desc=True)
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = r.data or []
+        return dict(rows[0]) if rows else None
+
     def get_snapshot(self, snapshot_id: str) -> Optional[dict]:
         r = (
             self.sb.table(SNAPSHOTS_TABLE)
