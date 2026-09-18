@@ -49,6 +49,8 @@ ROUTERS = [
     {"module": "routers.operational_learning_api"},
     {"module": "routers.operational_closure_api"},
 
+    # ── 임시: CSI 재해사례 페이지별 핵심명사 전량 추출 ──
+    {"module": "routers.admin_csi_keyword_extract", "tags": ["csi-keyword-extract-temp"]},
     # ── 임시: executor 3층 LLM 보정 (작업 완료 후 제거) ──
     {"module": "routers.admin_executor_llm_fix", "tags": ["executor-llm-fix-temp"]},
     # ── 임시: D단계 의미절 직접 진단 테스트 (검증 후 정식 통합·제거) ──
