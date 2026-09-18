@@ -235,6 +235,53 @@ class MemoryPublishStore:
                                 s.get("started_at") or ""), reverse=True)
         return dict(pub[0])
 
+    # -- census methods (WO-CHEM-FULL-READINESS-004 PATCH-1 §A) --
+    # These mirror the SupabasePublishStore contract so ops.py can
+    # target both memory and live stores through the same interface.
+
+    def count_chemicals(self) -> int:
+        # Memory store doesn't own the chemicals table; the RE(a)D
+        # store does. The ops collector fills this via read_store,
+        # so we return None-equivalent here (i.e. defer). For tests
+        # that only supply the publish store, return 0.
+        return 0
+
+    def count_sections(self) -> int:
+        seen: set[tuple[str, int]] = set()
+        for s in self._sections:
+            seen.add((str(s.get("chemical_id")), int(s.get("section_no"))))
+        return len(seen)
+
+    def count_snapshots(self) -> int:
+        return len(self._snapshots)
+
+    def count_snapshot_items(self) -> int:
+        return sum(1 for i in self._items if i.get("in_snapshot", True) is True)
+
+    def count_snapshots_by_status(self, status: str) -> int:
+        return sum(1 for s in self._snapshots if s.get("status") == status)
+
+    def count_snapshots_by_publish_state(self, state: str) -> int:
+        return sum(1 for s in self._snapshots if s.get("publish_state") == state)
+
+    def find_full_candidate(self) -> Optional[dict]:
+        """Return one snapshot that is COMPLETED / FULL_OFFICIAL /
+        NOT_PUBLISHED. Mirrors SupabasePublishStore.find_full_candidate.
+        """
+        candidates = [
+            s for s in self._snapshots
+            if s.get("status") == SNAPSHOT_COMPLETED
+            and s.get("enumeration_mode") == ENUMERATION_FULL_OFFICIAL
+            and s.get("publish_state") == PUBLISH_NOT_PUBLISHED
+        ]
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda s: (s.get("completed_at") or "",
+                           s.get("started_at") or ""), reverse=True,
+        )
+        return dict(candidates[0])
+
     # -- fixture-only write side --
     def promote_to_published_full(self, snapshot_id: str) -> None:
         """FULL scope promotion (fixture-only). See promote_to_state() for
