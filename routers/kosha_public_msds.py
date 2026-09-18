@@ -33,6 +33,7 @@ from services.kosha_msds.read import (
     list_current,
     search,
 )
+from services.kosha_msds.search_adapter import search_by_q
 
 router = APIRouter(
     prefix="/public/kosha/msds",
@@ -68,6 +69,9 @@ def _has_any_search_filter(
 
 @router.get("")
 def list_or_search_msds(
+    q: Optional[str] = Query(default=None, description="Free-text natural-language query. "
+                                                        "Routed through CHEM-09 search adapter "
+                                                        "(Kiwi + shared terminology dictionary)."),
     chem_id: Optional[str] = Query(default=None),
     cas_no: Optional[str] = Query(default=None),
     ke_no: Optional[str] = Query(default=None),
@@ -78,12 +82,22 @@ def list_or_search_msds(
     limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
 ):
-    """List or filter-search the current KOSHA MSDS catalog.
+    """List / filter / free-text search the current KOSHA MSDS catalog.
 
-    - Zero filters → list_current (deterministic ORDER BY chem_id ASC).
-    - Any filter present → search (exact filters AND-ed; name partial).
+    Precedence:
+      - `q` present  → search_by_q  (CHEM-09 adapter → Kiwi + dictionary
+                                     → CHEM-06 read.search)
+      - structured filter present  → CHEM-06 read.search
+                                     (chem_id / cas_no / ke_no / en_no /
+                                      un_no / name_ko / name_en)
+      - nothing        → CHEM-06 read.list_current (chem_id ASC)
+
+    `q` and structured filters are not mixed in one call. If both are
+    supplied, `q` wins; structured filters are ignored for that request.
     """
     store = get_store()
+    if q is not None and q.strip():
+        return search_by_q(q=q, store=store, limit=limit, offset=offset)
     if _has_any_search_filter(chem_id, cas_no, ke_no, en_no, un_no, name_ko, name_en):
         return search(
             store=store,
