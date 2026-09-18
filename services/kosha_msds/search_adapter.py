@@ -40,6 +40,16 @@ IDENTIFIER_KE = "ke_no"
 IDENTIFIER_EN = "en_no"
 IDENTIFIER_UN = "un_no"
 
+# The shared TAI search dictionary (tools/search_dict, seed_v2) exposes a
+# CHEM_TERM subject_type that carries MSDS-domain terminology (currently
+# 1 subject `물질안전보건자료` with MSDS/SDS abbreviations, but future
+# additions will land under the same subject_type). Restricting
+# dictionary expansion to this subject_type prevents LEGAL_TERM /
+# EQUIPMENT_TERM / GENERAL_TERM candidates from being probed against
+# chemical names (WO-CHEM-FULL-READINESS-003 PATCH-1 §A3). Existing
+# subject_type reused — no new subject_type introduced (WO §14).
+MSDS_DICTIONARY_SUBJECT_TYPE = "CHEM_TERM"
+
 # 6-digit KOSHA chemId (leading zeros preserved). Matches "001008".
 _CHEM_ID_RE = re.compile(r"^\d{6}$")
 # CAS: N-N-N with 2..7 digits / 2 digits / 1 digit. Matches "71-43-2".
@@ -104,14 +114,21 @@ def _dictionary_expand(
     *,
     dictionary_lookup: Optional[Callable[..., dict]] = None,
     limit: int = 5,
+    subject_type: Optional[str] = MSDS_DICTIONARY_SUBJECT_TYPE,
 ) -> list[str]:
     """Optional term expansion via the shared TAI dictionary.
 
-    Callers may inject a custom `dictionary_lookup(q, limit=...)` for tests;
-    production defaults to services.search_query_svc.lookup. Any failure
-    (missing runtime projection, network hiccup, unavailable Kiwi user
-    dict) returns [] silently — the adapter still functions with just the
-    Kiwi tokens.
+    Callers may inject a custom `dictionary_lookup(q, limit=..., subject_type=...)`
+    for tests; production defaults to services.search_query_svc.lookup.
+    Any failure (missing runtime projection, network hiccup, unavailable
+    Kiwi user dict) returns [] silently — the adapter still functions
+    with just the Kiwi tokens.
+
+    `subject_type` defaults to MSDS_DICTIONARY_SUBJECT_TYPE ("CHEM_TERM")
+    per WO-CHEM-FULL-READINESS-003 PATCH-1 §A3. Callers that need the
+    unrestricted lookup can pass `subject_type=None`. Existing dictionary
+    stubs in tests are backwards-compatible via a TypeError fallback:
+    if a test double doesn't accept `subject_type`, we retry without it.
     """
     if dictionary_lookup is None:
         try:
@@ -120,7 +137,11 @@ def _dictionary_expand(
         except Exception:
             return []
     try:
-        result = dictionary_lookup(q, limit=limit)
+        try:
+            result = dictionary_lookup(q, limit=limit, subject_type=subject_type)
+        except TypeError:
+            # Older test doubles don't accept subject_type. Retry without.
+            result = dictionary_lookup(q, limit=limit)
     except Exception:
         return []
     items = (result or {}).get("items") or []
@@ -267,6 +288,15 @@ def search_by_q(
     seen: set[str] = set()
     hits: list[dict] = []
 
+    # WO-CHEM-FULL-READINESS-003 PATCH-1 §B: each candidate source
+    # must fully enumerate its matches so `total` and cross-page
+    # pagination are correct even when the true match count exceeds
+    # CHEM-06 read's MAX_LIMIT clamp (100). We paginate through the
+    # underlying read.search per candidate using the envelope's
+    # `total`, then the aggregator applies the caller's slice.
+    from services.kosha_msds.read import MAX_LIMIT as _READ_MAX_LIMIT
+    internal_page = _READ_MAX_LIMIT
+
     def _run(term: str, match_type: str) -> None:
         if not term:
             return
@@ -274,22 +304,34 @@ def search_by_q(
         # both KO and EN fields. Read service returns identity envelope
         # + provenance; no canonical mutation happens on the DB side.
         for kw in ("name_ko", "name_en"):
-            envelope = read.search(
-                store=store,
-                limit=lim,
-                offset=0,
-                scope=scope,
-                **{kw: term},
-            )
-            for row in envelope.get("items") or []:
-                cid = row.get("chem_id")
-                if cid in seen:
-                    continue
-                seen.add(cid)
-                out = dict(row)
-                out["match_type"] = match_type
-                out["matched_term"] = term
-                hits.append(out)
+            page_offset = 0
+            while True:
+                envelope = read.search(
+                    store=store,
+                    limit=internal_page,
+                    offset=page_offset,
+                    scope=scope,
+                    **{kw: term},
+                )
+                items_page = envelope.get("items") or []
+                for row in items_page:
+                    cid = row.get("chem_id")
+                    if cid in seen:
+                        continue
+                    seen.add(cid)
+                    out = dict(row)
+                    out["match_type"] = match_type
+                    out["matched_term"] = term
+                    hits.append(out)
+                # Exit conditions:
+                # 1. Short page → source exhausted.
+                # 2. total known and we've walked past it.
+                if len(items_page) < internal_page:
+                    break
+                total = envelope.get("total")
+                page_offset += internal_page
+                if isinstance(total, int) and page_offset >= total:
+                    break
 
     # Priority: normalized-query exact > dictionary expansion > Kiwi tokens.
     _run(plan.normalized_query, MATCH_NORMALIZED_EXACT)
