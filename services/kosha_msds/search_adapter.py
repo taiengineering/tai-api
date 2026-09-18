@@ -222,6 +222,7 @@ def search_by_q(
     limit: int = 20,
     offset: int = 0,
     dictionary_lookup: Optional[Callable[..., dict]] = None,
+    scope: Optional[str] = None,
 ) -> dict:
     """Free-text search entrypoint. Delegates to CHEM-06 read.search.
 
@@ -230,7 +231,9 @@ def search_by_q(
     item is annotated with `match_type` and `matched_term`.
 
     Preserves CHEM-06's canonical identity and provenance shape verbatim.
-    No DB mutation.
+    No DB mutation. `scope` selects the publication view (default FULL);
+    results are always constrained to the scoped membership so preview
+    mode never leaks non-preview chemicals (WO-CHEM-SEO-PREVIEW-LIVE-001 §7).
     """
     from services.kosha_msds import read
 
@@ -245,14 +248,14 @@ def search_by_q(
     }
 
     if plan.is_empty:
-        result = read.list_current(store=store, limit=lim, offset=off)
+        result = read.list_current(store=store, limit=lim, offset=off, scope=scope)
         result["match_metadata"] = match_meta
         return result
 
     if plan.identifier_kind is not None:
         # Identifier: exact-match filter via CHEM-06 search.
         kwargs = {plan.identifier_kind: plan.identifier_value}
-        result = read.search(store=store, limit=lim, offset=off, **kwargs)
+        result = read.search(store=store, limit=lim, offset=off, scope=scope, **kwargs)
         for item in result["items"]:
             item["match_type"] = MATCH_IDENTIFIER_EXACT
             item["matched_term"] = plan.identifier_value
@@ -275,6 +278,7 @@ def search_by_q(
                 store=store,
                 limit=lim,
                 offset=0,
+                scope=scope,
                 **{kw: term},
             )
             for row in envelope.get("items") or []:

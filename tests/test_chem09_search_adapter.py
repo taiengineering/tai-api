@@ -268,6 +268,9 @@ def test_18_dormant_router_remains_unregistered():
 
 @pytest.fixture
 def client(monkeypatch):
+    # WO-CHEM-SEO-PREVIEW-LIVE-001: router now requires a public mode.
+    # These pre-existing tests target FULL semantics.
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "full")
     store = _store()
     monkeypatch.setattr(router_mod, "get_store", lambda: store)
     app = FastAPI()

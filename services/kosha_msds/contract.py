@@ -89,6 +89,35 @@ SNAPSHOT_FAILED = "FAILED"
 
 PUBLISH_NOT_PUBLISHED = "NOT_PUBLISHED"
 PUBLISH_PUBLISHED_FULL = "PUBLISHED_FULL"
+# WO-CHEM-SEO-PREVIEW-LIVE-001: additive publish_state for the temporary
+# SEO preview publication path (1,997 fully-hydrated chemicals). Distinct
+# from PUBLISHED_FULL so kosha_msds_current (FULL only) is not affected.
+PUBLISH_PUBLISHED_SEO_PREVIEW = "PUBLISHED_SEO_PREVIEW"
+
+# Publication scope — orthogonal to enumeration_mode (which stays FULL_OFFICIAL
+# for both paths because the *source* hydration is FULL_OFFICIAL either way).
+PUBLICATION_SCOPE_FULL = "FULL"
+PUBLICATION_SCOPE_SEO_PREVIEW = "SEO_PREVIEW"
+ALLOWED_PUBLICATION_SCOPES = frozenset({PUBLICATION_SCOPE_FULL, PUBLICATION_SCOPE_SEO_PREVIEW})
+
+# Public router activation mode (env var: KOSHA_MSDS_PUBLIC_MODE).
+PUBLIC_MODE_OFF = "off"
+PUBLIC_MODE_SEO_PREVIEW = "seo_preview"
+PUBLIC_MODE_FULL = "full"
+ALLOWED_PUBLIC_MODES = frozenset({PUBLIC_MODE_OFF, PUBLIC_MODE_SEO_PREVIEW, PUBLIC_MODE_FULL})
+DEFAULT_PUBLIC_MODE = PUBLIC_MODE_OFF
+PUBLIC_MODE_ENV_VAR = "KOSHA_MSDS_PUBLIC_MODE"
+
+# SEO preview membership: a chemical is eligible only if ALL 16 sections are
+# present in the source hydration artifact. Partial coverage → whole chemical
+# excluded (WO §5, no partial-section leakage).
+SEO_PREVIEW_REQUIRED_SECTION_COUNT = 16
+
+# Preview manifest is a small deterministic summary derived from the CHEM-04
+# hydration artifact. Checked into the repo so GPT can delta-verify the
+# census without re-running hydration. Manifest binding is enforced at
+# CHEM-08/CHEM-10 pre-flight (materialize_binding_seo_preview_manifest_sha256).
+SEO_PREVIEW_MANIFEST_PATH = "docs/chem/seo-preview-manifest.json"
 
 IDENTITY_READY = "READY"
 IDENTITY_HOLD = "HOLD"
