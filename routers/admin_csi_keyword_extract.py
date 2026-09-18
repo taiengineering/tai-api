@@ -19,7 +19,7 @@ router = APIRouter(prefix="/admin/csi-keyword-extract")
 MODEL = os.getenv("CSI_KEYWORD_MODEL", "gpt-4o-mini")
 CREATED_BY = "gpt-accident-csi-extract"
 GROUP_SIZE = 10
-MAX_WORKERS = int(os.getenv("CSI_KEYWORD_WORKERS", "10"))
+MAX_WORKERS = int(os.getenv("CSI_KEYWORD_WORKERS", "16"))
 
 SYSTEM_PROMPT = """너는 CSI 건설 재해사례의 페이지별 SEO 중심키워드 추출기다.
 각 입력은 하나의 사고 페이지이며 서로 독립적으로 판단한다.
@@ -107,6 +107,21 @@ def _judge_group(rows: list[dict]) -> list[dict]:
     return [_validate(r, by_id[r["content_id"]]) for r in rows]
 
 
+def _judge_group_resilient(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    try:
+        return _judge_group(rows), []
+    except Exception as exc:
+        if len(rows) == 1:
+            return [], [{
+                "content_ids": [rows[0]["content_id"]],
+                "error": str(exc)[:300],
+            }]
+        mid = len(rows) // 2
+        left_results, left_errors = _judge_group_resilient(rows[:mid])
+        right_results, right_errors = _judge_group_resilient(rows[mid:])
+        return left_results + right_results, left_errors + right_errors
+
+
 @router.post("/run")
 def run(
     limit: int = Query(1000, ge=1, le=2000),
@@ -133,16 +148,11 @@ def run(
     errors: list[dict] = []
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        future_map = {pool.submit(_judge_group, group): group for group in groups}
+        future_map = {pool.submit(_judge_group_resilient, group): group for group in groups}
         for fut in as_completed(future_map):
-            group = future_map[fut]
-            try:
-                results.extend(fut.result())
-            except Exception as exc:
-                errors.append({
-                    "content_ids": [r["content_id"] for r in group],
-                    "error": str(exc)[:300],
-                })
+            group_results, group_errors = fut.result()
+            results.extend(group_results)
+            errors.extend(group_errors)
 
     if results:
         sb.table("keyword_central_extracted").upsert(
