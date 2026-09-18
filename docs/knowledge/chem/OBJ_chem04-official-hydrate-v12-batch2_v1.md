@@ -214,9 +214,24 @@ SECRET LEAK CHECK           = PASS (0 raw serviceKey= occurrences across
 
 CODE CHANGE                 = 0  (services/, tools/, tests/ untouched)
 TEST CHANGE                 = 0
-BULK ARTIFACT MUTATION      = 0 (responses.jsonl SHA unchanged;
-                                 errors.jsonl grew by 1 authorized
-                                 error line via runner)
+
+AUTHORITATIVE RESPONSE CORPUS DELTA = 0 records
+  responses.jsonl           = UNCHANGED  (byte-identical to Batch 1
+                                          frozen SHA 49994a2a…b643dd)
+
+RUNNER STATE ARTIFACT DELTA = EXPECTED  (runner rewrote its own
+                                         state files as designed;
+                                         no unauthorized mutation)
+  errors.jsonl              = +1 authorized HTTP 429 record
+                              (Batch 1 429 line preserved verbatim)
+  checkpoint.json           = UPDATED by runner (canonical SHA
+                              refreshed to 740a7d67…bf0b18)
+  run_report.json           = UPDATED by runner (canonical augmented
+                              SHA refreshed to c8855a75…48a6)
+
+CORPUS MUTATION             = 0
+RUNNER STATE MUTATION       = EXPECTED / PASS
+
 LIVE API CALLS              = 1  (the single resume request)
 QUOTA PROBE                 = 0
 POST-429 EXPERIMENT         = 0
