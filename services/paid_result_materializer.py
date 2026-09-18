@@ -148,6 +148,30 @@ def _listify(value: Any) -> List[Any]:
     return [value]
 
 
+def _field_name_list(value: Any) -> List[str]:
+    """WO-E2E-OBJ02-LAYER-CLEANUP-001 / LYR-002 — canonical field-name array 계약 보증.
+
+    Contract:
+      실제 missing field 존재 → array 는 canonical field 이름(non-empty str)만 담는다.
+      missing field 없음     → [].
+      blank / whitespace / null / non-str element → drop (센티널 사용 금지).
+
+    본 helper 는 `missing_fields`, `unknown_fields`, `invalid_fields`(str-only 축) 처럼
+    canonical field 이름 목록으로 계약된 필드에만 쓴다. `triggered_by`,
+    `source_atom_ids`, `active_fields` 등 다른 축은 _listify 를 그대로 쓴다.
+    """
+    items = _listify(value)
+    cleaned: List[str] = []
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        stripped = item.strip()
+        if not stripped:
+            continue
+        cleaned.append(stripped)
+    return cleaned
+
+
 def _bool_or_none(value: Any) -> Optional[bool]:
     """bool 만 bool 로 인정. 그 외는 None(추론하지 않는다)."""
     return value if isinstance(value, bool) else None
@@ -293,7 +317,8 @@ def _normalize_obligation(raw: Dict[str, Any], source_index: int) -> Dict[str, A
         "check_result": _text(raw.get("check_result")),
         "usable_for_evaluation": _bool_or_none(enrichment.get("usable_for_evaluation")),
         "completeness": _text(enrichment.get("completeness")),
-        "missing_fields": _listify(enrichment.get("missing_fields")),
+        # WO-E2E-OBJ02 / LYR-002 — canonical field-name array (센티널 금지).
+        "missing_fields": _field_name_list(enrichment.get("missing_fields")),
     }
     timing = _normalize_timing(detail.get("when"), enrichment.get("inspection_cycle"))
 
@@ -506,8 +531,11 @@ def _r07_information_gaps(contract: Dict[str, Any],
                 out.append(value)
         return out
 
-    missing = _distinct(_listify(contract.get("missing_fields")))
-    unknown = _distinct(_listify(contract.get("unknown_fields")))
+    # WO-E2E-OBJ02 / LYR-002 — missing_fields / unknown_fields 는 canonical
+    # field-name(str) 축이므로 센티널 금지 강화 helper 를 쓴다. invalid_fields 는
+    # {field, reason} dict 배열이므로 축이 달라 _listify 그대로 유지.
+    missing = _distinct(_field_name_list(contract.get("missing_fields")))
+    unknown = _distinct(_field_name_list(contract.get("unknown_fields")))
     invalid = _distinct(_listify(contract.get("invalid_fields")))
 
     diagnosis_input_gaps = {
@@ -711,8 +739,9 @@ def _r15_coverage_summary(contract: Dict[str, Any],
         "source": "full_result.contract",
         "availability": AVAILABLE if has_contract else NULL,
         "active_count": len(_listify(contract.get("active_fields"))),
-        "missing_count": len(_listify(contract.get("missing_fields"))),
-        "unknown_count": len(_listify(contract.get("unknown_fields"))),
+        # WO-E2E-OBJ02 / LYR-002 — canonical field-name 축은 센티널 필터.
+        "missing_count": len(_field_name_list(contract.get("missing_fields"))),
+        "unknown_count": len(_field_name_list(contract.get("unknown_fields"))),
         "invalid_count": len(_listify(contract.get("invalid_fields"))),
     }
 
