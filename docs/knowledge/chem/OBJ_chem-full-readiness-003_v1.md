@@ -41,91 +41,135 @@ main at run                 = 49a9dac614ebf20be0f894fbe225bf77dfd7bf07
 branch                      = work/chem-full-readiness-003-search-qa
 ```
 
-## Investigation — current terminology mapping state
+## Investigation — real terminology mapping state (PATCH-1 §A1)
 
-Source data committed at `tools/search_dict/extract/`:
+The initial P3 receipt counted RAW seed-file categories
+(`LAW_NAME 423 / AGENCY_NAME 26 / TECH_TERM 15`) as if they were
+final projection `subject_type` values. That was wrong: the v2
+build re-taxonomizes those raw categories into the production
+subject_types `LEGAL_TERM / GENERAL_TERM / EQUIPMENT_TERM /
+ACCIDENT_TERM / CHEM_TERM`.
+
+Correct v2 projection census (built deterministically via
+`SEARCH_DICT_SEED=seed_v2 python3 tools/search_dict/build_dictionary.py`):
 
 ```text
-GROUND_TRUTH_464.tsv    subject_type counts:
-  LAW_NAME     423   (statute names)
-  AGENCY_NAME   26   (government agencies)
-  TECH_TERM     15   (technical terms)
+snapshot_id           = SEARCH-DICT-LEGPROD-2026-09-16
+total subjects        = 471
+expansions            = 20
 
-LAW_ALIAS_15.tsv        law short-name → canonical statute alias table.
+subject_type census (subjects / production terms):
+  LEGAL_TERM       419 / 434
+  GENERAL_TERM      45 /  47
+  EQUIPMENT_TERM     3 /   5
+  ACCIDENT_TERM      3 /   3
+  CHEM_TERM          1 /   2        ← MSDS domain
 ```
 
-Runtime projection artifact
-`tools/search_dict/artifacts/TAI_SEARCH_RUNTIME_PROJECTION_v1.json`
-is gitignored (built by `tools/search_dict/build_dictionary.py`).
-In this repo's default state it is absent, so
-`services.search_query_svc.lookup()` raises "runtime projection not
-found"; CHEM-09's `_dictionary_expand()` catches this and returns
-[] (fail-open).
+**`CHEM_TERM` subject_type exists.** It carries 1 subject
+(`물질안전보건자료`) with the following mapped terms:
 
 ```text
-MSDS terminology subject_type =  0
-MSDS mapped subjects          =  0
-MSDS mapped terms             =  0
-MSDS synonyms / aliases       =  0
+subject_key = "물질안전보건자료"
+
+  ("물질안전보건자료",  SOURCE_NAME,   APPROVED)
+  ("MSDS",              ABBREVIATION,  APPROVED)
+  ("SDS",               SYNONYM,       REVIEWED / non-production)
 ```
 
-MSDS-specific terminology has **not yet** been added to the shared
-dictionary. All QA against MSDS synonyms in this WO uses a
-SYNTHETIC stub dictionary explicitly labeled `MSDS_SYNONYM`, which
-never touches the production build.
+That is the entire chemistry-domain footprint of the shared
+dictionary today — one MSDS-abbreviation subject. There is no
+per-chemical alias map (chem_id ↔ 아민/에탄올/etc.) anywhere in
+the repo (grep-verified across `tools/`, `services/`, `docs/`).
 
-### Cross-domain risk under production deployment
+### Runtime binding status
 
-When the runtime projection JSON is deployed to production, the
-current adapter passes NO `subject_type` filter to
-`services.search_query_svc.lookup()`. That means LAW_NAME /
-AGENCY_NAME / TECH_TERM entries would be returned as candidate
-expansions for chemical queries. The QA test
-`test_NEG_law_and_agency_queries_do_not_leak_chemicals` proves the
-current DB-side probe is the effective isolation gate: even if a
-law term is returned by `lookup()`, the follow-up `read.search()`
-against `chemical_name_ko` / `chemical_name_en` returns 0 rows for
-that term (no chemical is named after a statute). The risk
-therefore materializes only if a chemical name happens to contain
-a legal term substring — currently unobserved in the 1,997-row
-preview corpus.
+- `build_dictionary.py:33` defaults `SEARCH_DICT_SEED=seed_v1`.
+- `seed_v1` does **not** contain the `CHEM_TERM` subject; only
+  `seed_v2` does.
+- `router_registry/public.py:28` registers
+  `routers.search_dictionary` under `/search-dict/*`, but which
+  seed the deployed projection was built from is
+  INDETERMINATE_FROM_STATIC_REPO — verifying it requires a live
+  `GET api.taieng.co.kr/search-dict/census`, which is out of scope
+  for a static-repo WO.
 
-**Recommendation (deferred to a future WO):** when MSDS-specific
-terminology is added to the shared dictionary, thread a
-`subject_type=<MSDS constant>` filter through the CHEM adapter's
-`_dictionary_expand()`. That thin plumb is out of scope here
-because no MSDS subject_type exists yet to filter against, and WO
-§14 forbids new subject_type creation.
+## PATCH-1 §A3 — MSDS adapter filters dictionary to `CHEM_TERM`
 
-## Patch applied — minimal (WO §14)
-
-One correctness bug found during QA and patched.
-
-**Bug**: `services/kosha_msds/search_adapter.py::search_by_q()`
-passed `limit=lim` (the caller's requested page size) to each
-internal `read.search()` candidate query. For a caller who asks
-for `limit=1` on a query that matches multiple chemicals via
-`name_en` substring (e.g., "acid" → both "Sulfuric acid" and
-"Nitric acid"), the aggregator would see only 1 candidate per
-source, so `total` was under-reported and `offset=1` returned
-empty even though a second match existed.
-
-**Patch**: use `MAX_LIMIT` (100, from `services.kosha_msds.read`)
-as the internal per-candidate fetch, and apply the caller's
-`limit / offset` at aggregation time. This is a 4-line change; no
-new dependency, no new type, no new module.
+`services/kosha_msds/search_adapter.py::_dictionary_expand()` now
+passes `subject_type="CHEM_TERM"` to `search_query_svc.lookup()`
+by default. Existing subject_type reused — no new subject_type
+introduced (WO §14).
 
 ```text
+before:  lookup(q, limit=...)
+after :  lookup(q, limit=..., subject_type="CHEM_TERM")
+```
+
+Constant:
+
+```python
 services/kosha_msds/search_adapter.py
-  before:  envelope = read.search(store=store, limit=lim, offset=0, scope=scope, **{kw: term})
-  after :  internal_limit = read.MAX_LIMIT   # bounded, already the CHEM-06 clamp
-           envelope = read.search(store=store, limit=internal_limit,
-                                   offset=0, scope=scope, **{kw: term})
+  MSDS_DICTIONARY_SUBJECT_TYPE = "CHEM_TERM"
 ```
 
-`test_P_pagination_stable_no_cross_page_duplicates` PASS with
-`limit=1` on "acid" — page 0 and page 1 are disjoint and total is
-2. Existing CHEM-09 tests (25) still all PASS.
+Backwards compat for older test stubs that don't accept
+`subject_type` — a TypeError-fallback retries without the kwarg.
+Test `test_A3_backwards_compat_with_stubs_without_subject_type`
+verifies.
+
+This closes the cross-domain risk noted in the original PR body:
+LEGAL_TERM / GENERAL_TERM / etc. entries can no longer reach the
+CHEM adapter's name-partial-match probe. Test
+`test_A3_msds_adapter_filters_dictionary_by_chem_term` exercises
+a multi-type dictionary stub and asserts CHEM_TERM-only entries
+survive the filter.
+
+## PATCH-1 §B — pagination beyond MAX_LIMIT
+
+The initial P3 patch capped each candidate's internal fetch at
+`read.MAX_LIMIT=100`. That worked for 2-match fixtures but the
+same problem re-appears at 101+ matches: any candidate source
+returning more than 100 rows would have its overflow silently
+dropped, so `total` under-reports and offsets past 100 fail.
+
+PATCH-1 §B replaces the single-shot fetch with true pagination
+through each candidate:
+
+```python
+services/kosha_msds/search_adapter.py::search_by_q  (_run loop)
+
+for kw in ("name_ko", "name_en"):
+    page_offset = 0
+    while True:
+        envelope = read.search(store=store,
+                                limit=internal_page,  # = MAX_LIMIT (100)
+                                offset=page_offset,
+                                scope=scope,
+                                **{kw: term})
+        items_page = envelope.get("items") or []
+        for row in items_page:
+            # dedup by chem_id, tag with match_type, append to hits
+            ...
+        if len(items_page) < internal_page:
+            break                                    # source exhausted
+        total = envelope.get("total")
+        page_offset += internal_page
+        if isinstance(total, int) and page_offset >= total:
+            break
+```
+
+Test `test_B1_pagination_150_matches_across_pages` seeds a
+150-chemical corpus with a shared substring, then verifies
+`total == 150` and disjoint pages at offsets 0 / 100 / 140 / 149.
+
+Test `test_B2_multi_candidate_dedup_priority_preserved` verifies
+that when the same chemical is reachable via normalized +
+dictionary + Kiwi candidates, it appears exactly once and carries
+the highest-priority `match_type` (NORMALIZED_EXACT).
+
+Original 2-match "acid" fixture from PATCH-0 continues to PASS
+via `test_P_pagination_stable_no_cross_page_duplicates`.
 
 ## Acceptance matrix — results
 
@@ -203,14 +247,48 @@ Note the terminology hit rate is measured against a synthetic MSDS
 dictionary stub — it demonstrates the adapter's CAPABILITY to
 handle MSDS terms once they're added, not that any exist today.
 
-### Focused CHEM regression
+### Focused CHEM regression (after PATCH-1)
 
 ```text
 chem05 + chem06 + chem07 + chem08 + chem09 + chem10
 + chem_seo_preview + chem_seo_preview_execute
 + chem_full_readiness + chem_full_readiness_002_cutover
 + chem_full_readiness_003_search_qa
-                                              241 / 241  PASS
+                                              246 / 246  PASS
+
+  P3 acceptance test file itself                 36 / 36
+    original QA matrices (Q, N, T, K, NEG, S, R, P, contract)  31
+    PATCH-1 §A1 census                            1
+    PATCH-1 §A3 CHEM_TERM filter + backwards compat 2
+    PATCH-1 §B  150-match pagination + multi-candidate dedup  2
+```
+
+## Terminology QA distinction (WO §C)
+
+The receipt now separates:
+
+```text
+DICTIONARY ADAPTER CAPABILITY =
+  PASS via SYNTHETIC CHEM_TERM stubs
+  (3 terminology matrix cases; proves the adapter can consume MSDS
+   CHEM_TERM entries once populated).
+
+ACTUAL DICTIONARY MAPPING =
+  CHEM_TERM subject_type present via seed_v2.
+  1 subject (물질안전보건자료), 2 approved terms (MSDS, 물질안전보건자료),
+  1 reviewed term (SDS).
+  Individual per-chemical alias mapping artifact = NOT FOUND
+  (no chem_id ↔ 통용명/약칭 dictionary anywhere in the repo).
+
+PRODUCTION RUNTIME BINDING =
+  INDETERMINATE_FROM_STATIC_REPO
+  (build_dictionary.py:33 defaults SEARCH_DICT_SEED=seed_v1, which
+   does NOT contain CHEM_TERM. Verifying which seed the deployed
+   projection was built from requires a live
+   GET api.taieng.co.kr/search-dict/census.)
+
+LIVE TERMINOLOGY ACCEPTANCE =
+  NOT PERFORMED under this WO (no live API call was made).
 ```
 
 ## Governance

@@ -125,13 +125,13 @@ def _msds_dict_synthetic():
     dictionary in a future WO. Used only to demonstrate the intended
     behavior — never used as production fixture."""
     entries = {
-        "메틸알코올":   [{"subject_type": "MSDS_SYNONYM",
+        "메틸알코올":   [{"subject_type": "CHEM_TERM",
                           "subject_key": "메탄올",
                           "matched_term": "메틸알코올", "match_type": "SYNONYM_OF"}],
-        "가성소다":     [{"subject_type": "MSDS_SYNONYM",
+        "가성소다":     [{"subject_type": "CHEM_TERM",
                           "subject_key": "수산화나트륨",
                           "matched_term": "가성소다", "match_type": "SPELLING_VARIANT_OF"}],
-        "황산나트륨":   [{"subject_type": "MSDS_SYNONYM",
+        "황산나트륨":   [{"subject_type": "CHEM_TERM",
                           "subject_key": "황산", "matched_term": "황산나트륨",
                           "match_type": "SPELLING_VARIANT_OF"}],
     }
@@ -533,6 +533,212 @@ def test_no_canonical_mutation_after_search():
     _ = A.search_by_q(q="산안법", store=store, dictionary_lookup=_law_only_dict())
     after = [dict(r) for r in store._current]
     assert before == after
+
+
+# ---------------------------------------------------------------------------
+# PATCH-1 §A — actual v2 dictionary census
+# ---------------------------------------------------------------------------
+
+
+def test_A1_real_v2_projection_census_matches_expected():
+    """PATCH-1 §A1: build v2 deterministically and confirm CHEM_TERM
+    exists as the actual production subject_type for MSDS. Corrects
+    the initial P3 receipt's mistaken census (which counted RAW seed
+    categories LAW_NAME/AGENCY_NAME/TECH_TERM instead of the built
+    projection's final types)."""
+    import json, subprocess, tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as td:
+        r = subprocess.run(
+            ["python3", "tools/search_dict/build_dictionary.py", "build", td],
+            env={**__import__("os").environ, "SEARCH_DICT_SEED": "seed_v2"},
+            capture_output=True, text=True,
+        )
+        assert r.returncode == 0, r.stderr
+        proj = json.loads(Path(td, "TAI_SEARCH_RUNTIME_PROJECTION_v1.json").read_text())
+
+    assert proj["snapshot_id"] == "SEARCH-DICT-LEGPROD-2026-09-16"
+    by_type: dict[str, int] = {}
+    chem_term_subjects = []
+    for s in proj["subjects"]:
+        by_type[s["subject_type"]] = by_type.get(s["subject_type"], 0) + 1
+        if s["subject_type"] == "CHEM_TERM":
+            chem_term_subjects.append({
+                "subject_key": s["subject_key"],
+                "terms": sorted(
+                    [(t["term_normalized"], t["term_type"], t["status"])
+                     for t in s["terms"]]
+                ),
+            })
+
+    # Corrected census (per the WO §A1 correction):
+    assert by_type.get("CHEM_TERM") == 1
+    assert by_type.get("LEGAL_TERM") == 419
+    assert by_type.get("GENERAL_TERM") == 45
+    assert by_type.get("EQUIPMENT_TERM") == 3
+    assert by_type.get("ACCIDENT_TERM") == 3
+
+    # The single CHEM_TERM subject is the MSDS domain term.
+    assert len(chem_term_subjects) == 1
+    got = chem_term_subjects[0]
+    assert got["subject_key"] == "물질안전보건자료"
+    assert got["terms"] == sorted([
+        ("MSDS", "ABBREVIATION", "APPROVED"),
+        ("SDS", "SYNONYM", "REVIEWED"),
+        ("물질안전보건자료", "SOURCE_NAME", "APPROVED"),
+    ])
+
+
+def test_A3_msds_adapter_filters_dictionary_by_chem_term():
+    """PATCH-1 §A3: the CHEM adapter's default subject_type filter
+    is CHEM_TERM. Legal / equipment / general terms in the shared
+    dictionary must not leak into MSDS chemical name candidates.
+    """
+    from services.kosha_msds.search_adapter import MSDS_DICTIONARY_SUBJECT_TYPE
+    assert MSDS_DICTIONARY_SUBJECT_TYPE == "CHEM_TERM"
+
+    # Dictionary stub containing entries from multiple subject_types.
+    # Legal / equipment / general entries would leak under the pre-
+    # PATCH default (no filter). Post-PATCH, only CHEM_TERM entries
+    # are returned to the adapter.
+    def _multi_type_dict(q, limit=5, subject_type=None):
+        entries = {
+            "산안법": [
+                {"subject_type": "LEGAL_TERM",
+                 "subject_key": "산업안전보건법", "matched_term": "산안법"},
+                {"subject_type": "GENERAL_TERM",
+                 "subject_key": "산업 안전 보건 규정", "matched_term": "산안법"},
+            ],
+            "MSDS": [
+                {"subject_type": "CHEM_TERM",
+                 "subject_key": "물질안전보건자료", "matched_term": "MSDS"},
+                {"subject_type": "GENERAL_TERM",
+                 "subject_key": "안전자료", "matched_term": "MSDS"},
+            ],
+        }
+        rows = entries.get(q, [])
+        if subject_type is not None:
+            rows = [r for r in rows if r.get("subject_type") == subject_type]
+        return {"items": rows[:limit], "active_tiers": []}
+
+    # 산안법 → all entries are LEGAL_TERM / GENERAL_TERM → filter drops all.
+    out = A.search_by_q(q="산안법", store=_live_preview_store(),
+                        dictionary_lookup=_multi_type_dict)
+    # No chemical should match anyway (nothing named 산업안전보건법).
+    assert out["total"] == 0
+    assert out["match_metadata"]["expanded_terms"] == []
+
+    # MSDS → the CHEM_TERM entry survives the filter, GENERAL_TERM one drops.
+    # (물질안전보건자료 is not a chemical name in our corpus, so total is 0,
+    # but expanded_terms should contain ONLY the CHEM_TERM subject.)
+    out2 = A.search_by_q(q="MSDS", store=_live_preview_store(),
+                         dictionary_lookup=_multi_type_dict)
+    assert "물질안전보건자료" in out2["match_metadata"]["expanded_terms"]
+    # The GENERAL_TERM subject_key must NOT appear.
+    assert "안전자료" not in out2["match_metadata"]["expanded_terms"]
+
+
+def test_A3_backwards_compat_with_stubs_without_subject_type():
+    """Older test doubles that don't accept `subject_type` still work
+    via the adapter's TypeError-fallback retry."""
+    def _old_stub(q, limit=5):  # no subject_type param
+        return {"items": [{"subject_key": "메탄올",
+                            "matched_term": "메틸알코올",
+                            "subject_type": "CHEM_TERM"}],
+                "active_tiers": []}
+    out = A.search_by_q(q="메틸알코올", store=_live_preview_store(),
+                        dictionary_lookup=_old_stub)
+    # Adapter still expands via the old stub.
+    assert "메탄올" in out["match_metadata"]["expanded_terms"]
+
+
+# ---------------------------------------------------------------------------
+# PATCH-1 §B — pagination beyond MAX_LIMIT
+# ---------------------------------------------------------------------------
+
+
+def test_B1_pagination_150_matches_across_pages():
+    """150 chemicals whose Korean name shares a common substring.
+    Verify total=150, and offsets across the 100-boundary yield correct
+    disjoint pages."""
+    # Build a corpus of 150 chemicals with a shared substring in
+    # chemical_name_ko so the ilike substring matcher fires on all of
+    # them.
+    corpus = [
+        _row(f"{i:06d}", id=f"uu-{i:06d}", content_id=f"CHEM:uu-{i:06d}",
+             ko=f"공통물질_{i:04d}", en=f"CommonSubstance_{i:04d}")
+        for i in range(1, 151)
+    ]
+    store = read.MemoryMsdsReadStore(current_rows=corpus)
+
+    def _empty_dict(q, limit=5, subject_type=None):
+        return {"items": [], "active_tiers": []}
+
+    # Query matches all 150.
+    page0 = A.search_by_q(q="공통물질_", store=store,
+                          dictionary_lookup=_empty_dict,
+                          limit=10, offset=0)
+    page100 = A.search_by_q(q="공통물질_", store=store,
+                             dictionary_lookup=_empty_dict,
+                             limit=10, offset=100)
+    page140 = A.search_by_q(q="공통물질_", store=store,
+                             dictionary_lookup=_empty_dict,
+                             limit=10, offset=140)
+    page149 = A.search_by_q(q="공통물질_", store=store,
+                             dictionary_lookup=_empty_dict,
+                             limit=10, offset=149)
+
+    # Total is the true match count, not the first-page cap.
+    assert page0["total"] == 150
+    assert page100["total"] == 150
+    assert page140["total"] == 150
+    assert page149["total"] == 150
+
+    # Each page returns 10 rows except the last window (1 row).
+    assert len(page0["items"]) == 10
+    assert len(page100["items"]) == 10
+    assert len(page140["items"]) == 10
+    assert len(page149["items"]) == 1
+
+    # Cross-page duplicates = 0.
+    ids0 = {i["chem_id"] for i in page0["items"]}
+    ids100 = {i["chem_id"] for i in page100["items"]}
+    ids140 = {i["chem_id"] for i in page140["items"]}
+    ids149 = {i["chem_id"] for i in page149["items"]}
+    assert ids0.isdisjoint(ids100)
+    assert ids0.isdisjoint(ids140)
+    assert ids100.isdisjoint(ids140)
+    assert ids149 <= ids140 or ids149.isdisjoint(ids0)
+
+
+def test_B2_multi_candidate_dedup_priority_preserved():
+    """When the same chemical matches via normalized + dictionary + Kiwi
+    candidates, it appears exactly once with the highest-priority
+    match_type (NORMALIZED_EXACT)."""
+    # Chemical named "메탄올" (also the dictionary expansion target
+    # from MSDS→물질안전보건자료 mapping; and the Kiwi token surface).
+    corpus = [_row("097377", id="uu-9737", content_id="CHEM:9737",
+                    ko="메탄올", en="Methanol")]
+    store = read.MemoryMsdsReadStore(current_rows=corpus)
+
+    def _chem_term_dict(q, limit=5, subject_type=None):
+        if subject_type not in (None, "CHEM_TERM"):
+            return {"items": [], "active_tiers": []}
+        if q == "메탄올":
+            return {"items": [{"subject_type": "CHEM_TERM",
+                                "subject_key": "메탄올",
+                                "matched_term": "메탄올"}],
+                    "active_tiers": []}
+        return {"items": [], "active_tiers": []}
+
+    out = A.search_by_q(q="메탄올", store=store,
+                        dictionary_lookup=_chem_term_dict)
+    # Single row despite multiple candidate paths.
+    assert out["total"] == 1
+    row = out["items"][0]
+    assert row["chem_id"] == "097377"
+    # NORMALIZED_EXACT beats DICTIONARY / KIWI.
+    assert row["match_type"] == A.MATCH_NORMALIZED_EXACT
 
 
 def test_no_new_search_engine_or_llm_dependency_in_adapter():
