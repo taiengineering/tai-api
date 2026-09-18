@@ -1,0 +1,320 @@
+"""WO-CHEM-SEO-PREVIEW-EXECUTE-001 — Supabase adapters for materialize + publish.
+
+Provides live Supabase-backed stores that implement the same read/write
+contract as `services.kosha_msds.materialize_writer.MemoryMaterializeStore`
+and `services.kosha_msds.publish.MemoryPublishStore`. The stores talk to
+the pre-existing `kosha_msds_*` tables via `db.supabase_client.get_supabase()`.
+
+Design invariants:
+  * Never DELETE. Never TRUNCATE. Never REFERENCES/TRIGGER changes.
+    (Migration 20260914 revokes DELETE from service_role; a mistaken
+    call here would fail at the DB anyway, but we mirror the fence.)
+  * enumeration_mode is written once at INSERT (fail-closed trigger
+    fn_kosha_msds_snapshot_enumeration_immutable blocks any change).
+  * publish_state transitions go through promote_to_state() only, which
+    accepts PUBLISHED_FULL and PUBLISHED_SEO_PREVIEW.
+  * All writes are chunked by CHEMICAL_BATCH_SIZE / SECTION_BATCH_SIZE /
+    SNAPSHOT_ITEM_BATCH_SIZE to bound each REST round-trip.
+
+The stores are only opened by the SEO preview production executor
+(`tools/chem_seo_preview/execute_production.py`) and only when the
+executor has explicitly asserted publication_scope=SEO_PREVIEW +
+owner-approved. The prior WO-CHEM-08/WO-CHEM-10 module-level fences
+(PRODUCTION_WRITE_ALLOWED, PRODUCTION_PUBLISH_ALLOWED) remain False;
+the executor passes wo_scope_allows_write=True /
+wo_scope_allows_publish=True kwargs at the assertion sites only.
+"""
+from __future__ import annotations
+
+from typing import Any, Iterable, Optional
+
+from services.kosha_msds.contract import (
+    ENUMERATION_FULL_OFFICIAL,
+    PUBLICATION_SCOPE_FULL,
+    PUBLICATION_SCOPE_SEO_PREVIEW,
+    PUBLISH_PUBLISHED_FULL,
+    PUBLISH_PUBLISHED_SEO_PREVIEW,
+    SNAPSHOT_COMPLETED,
+    SNAPSHOT_FAILED,
+    SNAPSHOT_RUNNING,
+)
+
+CHEMICALS_TABLE = "kosha_msds_chemicals"
+SECTIONS_TABLE = "kosha_msds_sections"
+SNAPSHOTS_TABLE = "kosha_msds_snapshots"
+SNAPSHOT_ITEMS_TABLE = "kosha_msds_snapshot_items"
+
+CHEMICAL_SELECT = (
+    "id,content_id,source_id,source_key,chem_id,identity_status,"
+    "chemical_name_ko,chemical_name_en,cas_no,ke_no,en_no,un_no,"
+    "last_date,source_content_hash,source_dataset_url,is_current"
+)
+SECTION_SELECT = "chemical_id,section_no,section_hash"
+SNAPSHOT_SELECT = (
+    "id,source_id,run_type,status,enumeration_mode,publish_state,"
+    "expected_count,discovered_count,started_at,completed_at,"
+    "source_contract_version,metrics_json"
+)
+SNAPSHOT_ITEM_SELECT = "snapshot_id,chemical_id,detail_status,in_snapshot,source_content_hash,identity_status"
+
+
+def _chunk(seq: list, size: int) -> list[list]:
+    if size <= 0:
+        raise ValueError(f"chunk size must be > 0, got {size}")
+    return [seq[i:i + size] for i in range(0, len(seq), size)]
+
+
+# ---------------------------------------------------------------------------
+# Materialize store — matches the interface consumed by
+# services.kosha_msds.materialize_writer (see MemoryMaterializeStore).
+# ---------------------------------------------------------------------------
+
+
+class SupabaseMaterializeStore:
+    """Live Supabase adapter for CHEM-08 writer.
+
+    Method contract mirrors MemoryMaterializeStore. See writer.py for
+    which methods it calls at which point in the pipeline. Every write
+    goes through the four kosha_msds_* tables that migration 20260914
+    already created.
+    """
+
+    def __init__(self, sb=None):
+        if sb is None:
+            from db.supabase_client import get_supabase
+            sb = get_supabase()
+        self.sb = sb
+
+    # -- read side --
+
+    def get_chemical_by_natural_key(self, source_id: str, source_key: str) -> Optional[dict]:
+        r = (
+            self.sb.table(CHEMICALS_TABLE)
+            .select(CHEMICAL_SELECT)
+            .eq("source_id", source_id)
+            .eq("source_key", source_key)
+            .limit(1)
+            .execute()
+        )
+        rows = r.data or []
+        return dict(rows[0]) if rows else None
+
+    def get_section(self, chemical_id: str, section_no: int) -> Optional[dict]:
+        r = (
+            self.sb.table(SECTIONS_TABLE)
+            .select(SECTION_SELECT)
+            .eq("chemical_id", chemical_id)
+            .eq("section_no", int(section_no))
+            .limit(1)
+            .execute()
+        )
+        rows = r.data or []
+        return dict(rows[0]) if rows else None
+
+    def latest_running_snapshot(self) -> Optional[dict]:
+        r = (
+            self.sb.table(SNAPSHOTS_TABLE)
+            .select(SNAPSHOT_SELECT)
+            .eq("status", SNAPSHOT_RUNNING)
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = r.data or []
+        return dict(rows[0]) if rows else None
+
+    def get_snapshot(self, snapshot_id: str) -> Optional[dict]:
+        r = (
+            self.sb.table(SNAPSHOTS_TABLE)
+            .select(SNAPSHOT_SELECT)
+            .eq("id", snapshot_id)
+            .limit(1)
+            .execute()
+        )
+        rows = r.data or []
+        return dict(rows[0]) if rows else None
+
+    # -- write side --
+
+    def insert_snapshot(self, snapshot: dict) -> None:
+        self.sb.table(SNAPSHOTS_TABLE).insert(dict(snapshot)).execute()
+
+    def update_snapshot_status(self, snapshot_id: str, status: str) -> None:
+        if status not in {SNAPSHOT_RUNNING, SNAPSHOT_COMPLETED, SNAPSHOT_FAILED}:
+            raise ValueError(f"invalid snapshot status: {status!r}")
+        patch: dict[str, Any] = {"status": status}
+        if status == SNAPSHOT_COMPLETED:
+            from datetime import datetime, timezone
+            patch["completed_at"] = datetime.now(tz=timezone.utc).isoformat()
+        (
+            self.sb.table(SNAPSHOTS_TABLE)
+            .update(patch)
+            .eq("id", snapshot_id)
+            .execute()
+        )
+
+    def insert_chemicals(self, rows: list[dict]) -> None:
+        if not rows:
+            return
+        # Chunk to bound REST round-trip size. CHEMICAL_BATCH_SIZE is
+        # authoritative — see materialize_writer.CHEMICAL_BATCH_SIZE.
+        from services.kosha_msds.materialize_writer import CHEMICAL_BATCH_SIZE
+        for batch in _chunk(rows, CHEMICAL_BATCH_SIZE):
+            self.sb.table(CHEMICALS_TABLE).insert(list(batch)).execute()
+
+    def insert_sections(self, rows: list[dict]) -> None:
+        if not rows:
+            return
+        from services.kosha_msds.materialize_writer import SECTION_BATCH_SIZE
+        for batch in _chunk(rows, SECTION_BATCH_SIZE):
+            self.sb.table(SECTIONS_TABLE).insert(list(batch)).execute()
+
+    def insert_snapshot_items(self, rows: list[dict]) -> None:
+        if not rows:
+            return
+        from services.kosha_msds.materialize_writer import SNAPSHOT_ITEM_BATCH_SIZE
+        for batch in _chunk(rows, SNAPSHOT_ITEM_BATCH_SIZE):
+            self.sb.table(SNAPSHOT_ITEMS_TABLE).insert(list(batch)).execute()
+
+
+# ---------------------------------------------------------------------------
+# Publish store — matches the interface consumed by
+# services.kosha_msds.publish (see MemoryPublishStore).
+# ---------------------------------------------------------------------------
+
+
+class SupabasePublishStore:
+    """Live Supabase adapter for CHEM-10 promoter.
+
+    Method contract mirrors MemoryPublishStore. The single write path is
+    promote_to_state(); nothing else in this class mutates rows.
+    """
+
+    def __init__(self, sb=None):
+        if sb is None:
+            from db.supabase_client import get_supabase
+            sb = get_supabase()
+        self.sb = sb
+
+    def get_snapshot(self, snapshot_id: str) -> Optional[dict]:
+        r = (
+            self.sb.table(SNAPSHOTS_TABLE)
+            .select(SNAPSHOT_SELECT)
+            .eq("id", snapshot_id)
+            .limit(1)
+            .execute()
+        )
+        rows = r.data or []
+        return dict(rows[0]) if rows else None
+
+    def snapshot_items(self, snapshot_id: str) -> list[dict]:
+        # Paginated fetch: the preview slice is 1,997 rows which fits in
+        # a single Supabase page, but future FULL rollouts (20,568) need
+        # pagination. We stay safe under either.
+        page_size = 1000
+        offset = 0
+        acc: list[dict] = []
+        while True:
+            r = (
+                self.sb.table(SNAPSHOT_ITEMS_TABLE)
+                .select(SNAPSHOT_ITEM_SELECT)
+                .eq("snapshot_id", snapshot_id)
+                .eq("in_snapshot", True)
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            batch = list(r.data or [])
+            acc.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
+        return acc
+
+    def section_count_for_snapshot(self, snapshot_id: str) -> int:
+        # DISTINCT (chemical_id, section_no) count for the chemicals in
+        # this snapshot's membership. We enumerate item chemical_ids then
+        # walk the sections table paginated.
+        items = self.snapshot_items(snapshot_id)
+        chem_ids = {str(i.get("chemical_id")) for i in items}
+        if not chem_ids:
+            return 0
+        pairs: set[tuple[str, int]] = set()
+        # Chunk the chem_id filter into groups so `in_` doesn't blow up.
+        chunks = _chunk(sorted(chem_ids), 200)
+        for chunk in chunks:
+            r = (
+                self.sb.table(SECTIONS_TABLE)
+                .select("chemical_id,section_no")
+                .in_("chemical_id", chunk)
+                .execute()
+            )
+            for row in (r.data or []):
+                pairs.add((str(row.get("chemical_id")), int(row.get("section_no"))))
+        return len(pairs)
+
+    def duplicate_section_pairs_for_snapshot(self, snapshot_id: str) -> int:
+        # Rely on the DB's PRIMARY KEY (chemical_id, section_no) — a
+        # true duplicate is impossible at the DB level. The count is
+        # therefore always 0. We still enumerate defensively in case a
+        # future schema change relaxes the PK.
+        items = self.snapshot_items(snapshot_id)
+        chem_ids = {str(i.get("chemical_id")) for i in items}
+        if not chem_ids:
+            return 0
+        seen: dict[tuple[str, int], int] = {}
+        for chunk in _chunk(sorted(chem_ids), 200):
+            r = (
+                self.sb.table(SECTIONS_TABLE)
+                .select("chemical_id,section_no")
+                .in_("chemical_id", chunk)
+                .execute()
+            )
+            for row in (r.data or []):
+                key = (str(row.get("chemical_id")), int(row.get("section_no")))
+                seen[key] = seen.get(key, 0) + 1
+        return sum(1 for c in seen.values() if c > 1)
+
+    def latest_published_snapshot(
+        self,
+        *,
+        publication_scope: str = PUBLICATION_SCOPE_FULL,
+    ) -> Optional[dict]:
+        target_state = (
+            PUBLISH_PUBLISHED_SEO_PREVIEW
+            if publication_scope == PUBLICATION_SCOPE_SEO_PREVIEW
+            else PUBLISH_PUBLISHED_FULL
+        )
+        r = (
+            self.sb.table(SNAPSHOTS_TABLE)
+            .select(SNAPSHOT_SELECT)
+            .eq("status", SNAPSHOT_COMPLETED)
+            .eq("enumeration_mode", ENUMERATION_FULL_OFFICIAL)
+            .eq("publish_state", target_state)
+            .order("completed_at", desc=True)
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = r.data or []
+        return dict(rows[0]) if rows else None
+
+    def promote_to_published_full(self, snapshot_id: str) -> None:
+        """Explicit FULL promotion — not used by this WO but preserved
+        so the interface matches MemoryPublishStore."""
+        self.promote_to_state(snapshot_id, PUBLISH_PUBLISHED_FULL)
+
+    def promote_to_state(self, snapshot_id: str, target_state: str) -> None:
+        if target_state not in (PUBLISH_PUBLISHED_FULL, PUBLISH_PUBLISHED_SEO_PREVIEW):
+            raise ValueError(
+                f"target_state must be PUBLISHED_FULL or PUBLISHED_SEO_PREVIEW, "
+                f"got {target_state!r}"
+            )
+        # publish_state is atomic-per-row; historical snapshots are not
+        # demoted (WO §19). completed_at is set when the run finished; we
+        # do not overwrite it on promotion.
+        (
+            self.sb.table(SNAPSHOTS_TABLE)
+            .update({"publish_state": target_state})
+            .eq("id", snapshot_id)
+            .execute()
+        )

@@ -255,10 +255,14 @@ def test_17_no_result_handling():
     assert "tokens" in out["match_metadata"]
 
 
-def test_18_dormant_router_remains_unregistered():
-    """Router MUST stay out of router_registry/public.py under CHEM-09."""
+def test_18_router_registered_under_seo_preview_execute_wo():
+    """CHEM-09 originally asserted that routers.kosha_public_msds stayed
+    out of the registry. WO-CHEM-SEO-PREVIEW-EXECUTE-001 explicitly
+    authorized registering it (env default KOSHA_MSDS_PUBLIC_MODE=off
+    keeps it 503-dormant until the operational flag flip). This test is
+    now the positive complement: the router IS in the public registry."""
     modules = [entry.get("module") for entry in PUBLIC_ROUTERS]
-    assert "routers.kosha_public_msds" not in modules
+    assert "routers.kosha_public_msds" in modules
 
 
 # ---------------------------------------------------------------------------

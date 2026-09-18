@@ -271,13 +271,17 @@ def test_17_router_delegates_to_chem06_service_no_direct_bypass():
         assert token not in src, f"router should not contain {token!r}"
 
 
-def test_18_router_not_registered_in_public_registry():
-    """WO §16: this router MUST NOT be registered in router_registry."""
+def test_18_router_registered_under_seo_preview_execute_wo():
+    """CHEM-07 originally required the router to stay OUT of the
+    registry. That freeze ended at WO-CHEM-SEO-PREVIEW-EXECUTE-001,
+    which explicitly authorized registering routers.kosha_public_msds.
+    The runtime still shows 503 MSDS_PUBLIC_DORMANT unless
+    KOSHA_MSDS_PUBLIC_MODE is set to seo_preview or full."""
     registry_path = Path(__file__).resolve().parent.parent / "router_registry" / "public.py"
     src = registry_path.read_text(encoding="utf-8")
-    assert "kosha_public_msds" not in src, (
-        "routers/kosha_public_msds.py must NOT be registered under "
-        "WO-CHEM-07-MSDS-PUBLIC-ROUTER-001 (dormant router)"
+    assert "kosha_public_msds" in src, (
+        "routers.kosha_public_msds must be listed in router_registry/public.py "
+        "under WO-CHEM-SEO-PREVIEW-EXECUTE-001"
     )
 
 
