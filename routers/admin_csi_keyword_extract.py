@@ -20,8 +20,8 @@ router = APIRouter(prefix="/admin/csi-keyword-extract")
 
 MODEL = os.getenv("CSI_KEYWORD_MODEL", "gpt-4o-mini")
 CREATED_BY = "gpt-accident-csi-extract"
-GROUP_SIZE = 10
-MAX_WORKERS = int(os.getenv("CSI_KEYWORD_WORKERS", "16"))
+GROUP_SIZE = 20
+MAX_WORKERS = int(os.getenv("CSI_KEYWORD_WORKERS", "20"))
 JOB_BATCH_SIZE = int(os.getenv("CSI_KEYWORD_JOB_BATCH_SIZE", "1000"))
 _JOB = {
     "running": False,
@@ -106,7 +106,7 @@ def _judge_group(rows: list[dict]) -> list[dict]:
         model=MODEL,
         temperature=0,
         response_format={"type": "json_object"},
-        max_tokens=3200,
+        max_tokens=5000,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
