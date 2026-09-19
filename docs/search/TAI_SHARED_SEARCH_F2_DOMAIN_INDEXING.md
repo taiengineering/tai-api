@@ -68,7 +68,7 @@ matches under `services/shared_search/adapters/**`.
 
 | Domain | object_type | canonical_id source | source_id | source_key | publication gate | Notes |
 |---|---|---|---|---|---|---|
-| GUIDE | `GUIDE` | `kosha_guide.id` | `KOSHA_OFFICIAL_GUIDE` | `kosha_guide.id` | catalog + latest COMPLETED snapshot | PDF originals not chunked (LINK_ONLY) |
+| GUIDE | `GUIDE` | `kosha_guide.id` | `KOSHA_OFFICIAL_GUIDE` | `guide_no` (fallback: `kosha_guide.id` when `guide_no` absent) | catalog + latest COMPLETED snapshot | PDF originals not chunked (LINK_ONLY) |
 | SAFETY_MATERIAL | `SAFETY_MATERIAL` | `kosha_safety_materials.id` | `KOSHA_OFFICIAL_MATERIAL` | `source_med_seq` (NULLABLE) | catalog + snapshot + no unresolved storage hold (real column: `status` ∈ {`OPEN`, `RESOLVED`}, F2 FINAL §1 — no `resolved` boolean) | `status != RESOLVED` (fail-closed on null) collapses to HOLD |
 | CSI_ACCIDENT | `CSI_ACCIDENT` | `csi_accident_cases.content_id` (`CSI:<uuid>`) | `CSI` | `NULL` (CSI file has none) | latest COMPLETED `snapshot_items.identity_status=READY` | detail = `/public/accidents/csi/{uuid_part}` |
 | CHEM | `CHEM` | `kosha_msds_chemicals.id` (uuid) | `KOSHA_MSDS` | `kosha_msds_chemicals.source_key` (chem_id) | present in `kosha_msds_seo_preview_current` OR `kosha_msds_full_current` | Search NEVER calls `cutover.is_full_ready`. PUBLIC visibility gated by `KOSHA_MSDS_PUBLIC_MODE` env at query time. CHEM_TERM per-row subject NOT auto-assigned (F2 §19). |

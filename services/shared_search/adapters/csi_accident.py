@@ -42,12 +42,17 @@ class CsiAccidentAdapter:
         # this adapter still filters to READY as a defense-in-depth.
         self._fetch_current = fetch_current
         self._fetch_by_content_id = fetch_by_content_id or (lambda _id: None)
+        self.title_fallback_count = 0
 
     def iter_documents(self) -> Iterator[dict]:
+        self.title_fallback_count = 0
         for row in self._fetch_current():
             payload = _normalize_csi(row)
-            if payload is not None:
-                yield payload
+            if payload is None:
+                continue
+            if not row.get("title") and row.get("summary"):
+                self.title_fallback_count += 1
+            yield payload
 
     def iter_expected_hashes(self) -> Iterator[dict]:
         yield from expected_hashes_from_documents(self.iter_documents)
@@ -63,7 +68,10 @@ def _normalize_csi(row: dict) -> Optional[dict]:
         return None
     if row.get("identity_status") != "READY":
         return None
-    title = row.get("title")
+    # F2 FINAL2: READY rows with title=NULL still carry summary.
+    # Silent-drop is forbidden; SearchDocument.title uses the Domain
+    # field CSI.title OR CSI.summary. No AI / heuristic title.
+    title = row.get("title") or row.get("summary")
     summary = row.get("summary")
     if not title:
         return None

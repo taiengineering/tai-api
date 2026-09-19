@@ -55,7 +55,9 @@ def main(argv: list | None = None) -> int:
     else:
         for c in results:
             print(f"{c['domain']:>16s} object_type={c['object_type']:<16s} "
+                  f"eligible={c.get('eligible_source_count') or 0:>7d} "
                   f"yielded={c['yielded_count']:>7d} "
+                  f"drop={c.get('unexplained_drop') or 0:>3d} "
                   f"unique={c['unique_canonical_ids']:>7d} "
                   f"dup={c['duplicate_canonical_ids']:>3d} "
                   f"published={c['published']:>7d} "

@@ -7,12 +7,13 @@ Domain reality:
 - `law_article` has ~35,412 raw rows; the adapter supports the
   law_article subtype when the production binding hands over a
   Domain-side "is currently published" filter (law_master.is_active
-  = true AND law_version.is_current = true AND
-  law_article.is_deleted_in_version = false, per F2 CO §29).
+  = true AND law_master.current_version_id = law_article.law_version_id
+  AND law_article.is_deleted_in_version = false, per F2 FINAL §3-§10).
 
-Canonical identity for law articles is `article_internal_key` when
-present, else `id`. Version-row UUIDs are NEVER used as canonical_id
-(F2 CO §30 — canonical continuity across law revisions).
+Canonical identity for law articles is `law_article.id` (Domain PK).
+`article_internal_key` is never used as canonical_id (F2 FINAL §7 —
+production has 7,642 distinct keys across 35,412 current-eligible
+rows).
 
 Legal Engine remains the sole applicability authority. This adapter
 never sets `legal_applicable` / `is_required` / any applicability

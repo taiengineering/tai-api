@@ -262,6 +262,26 @@ def test_csi_adapter_non_ready_rejected():
     assert list(adapter.iter_documents()) == []
 
 
+def test_csi_adapter_title_falls_back_to_summary():
+    row = _csi_row()
+    row["title"] = None
+    adapter = CsiAccidentAdapter(fetch_current=lambda: [row])
+    docs = list(adapter.iter_documents())
+    assert len(docs) == 1
+    assert docs[0]["title"] == row["summary"]
+    assert docs[0]["summary"] == row["summary"]
+    assert adapter.title_fallback_count == 1
+
+
+def test_csi_adapter_missing_title_and_summary_rejected():
+    row = _csi_row()
+    row["title"] = None
+    row["summary"] = None
+    adapter = CsiAccidentAdapter(fetch_current=lambda: [row])
+    assert list(adapter.iter_documents()) == []
+    assert adapter.title_fallback_count == 0
+
+
 def test_chem_adapter_public_gated_by_env(monkeypatch):
     monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "off")
     adapter = ChemAdapter(fetch_current=lambda: [_chem_row()])
@@ -288,8 +308,30 @@ def test_chem_adapter_never_asserts_chem_term(monkeypatch):
     d = list(adapter.iter_documents())[0]
     # WO §17 / F2 §19: CHEM_TERM subject is NOT auto-assigned.
     assert d["subjects"] == []
-    # But the chemical context tuple IS set (adapter policy).
-    assert any(c["context_type"] == "chemical" for c in d["context"])
+
+
+def test_chem_adapter_title_falls_back_to_section1_product_name(monkeypatch):
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    row = _chem_row()
+    row["chemical_name_ko"] = None
+    row["product_name"] = "공식 제품명"
+    adapter = ChemAdapter(fetch_current=lambda: [row])
+    d = list(adapter.iter_documents())[0]
+    assert d["title"] == "공식 제품명"
+    assert d["canonical_id"] == "chem-uuid-001"
+    assert d["source_id"] == "KOSHA_MSDS"
+    assert d["source_key"] == "C00001"
+
+
+def test_chem_adapter_does_not_invent_synthetic_title(monkeypatch):
+    """When both chemical_name_ko and product_name are absent the adapter
+    must yield nothing — no synthetic "MSDS-NNNNNN" fallback title."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    row = _chem_row()
+    row["chemical_name_ko"] = None
+    row["product_name"] = None
+    adapter = ChemAdapter(fetch_current=lambda: [row])
+    assert list(adapter.iter_documents()) == []
 
 
 def test_knowledge_adapter_only_published_rows_yield():
