@@ -20,6 +20,7 @@ router = APIRouter(prefix="/admin/csi-keyword-extract")
 
 MODEL = os.getenv("CSI_KEYWORD_MODEL", "gpt-4o-mini")
 CREATED_BY = "gpt-accident-csi-extract"
+BLOCKLIST = {"기타", "자재", "공구류", "건물", "구조물", "설비", "부재"}
 GROUP_SIZE = 20
 MAX_WORKERS = int(os.getenv("CSI_KEYWORD_WORKERS", "20"))
 JOB_BATCH_SIZE = int(os.getenv("CSI_KEYWORD_JOB_BATCH_SIZE", "1000"))
@@ -53,6 +54,19 @@ reason은 어떤 원문 명사를 왜 골랐는지 한 줄.
 "relevance":"relevant"|"none","confidence":0.0,"reason":"..."}]}
 """
 
+REPAIR_PROMPT = """너는 CSI 재해사례 중심키워드 품질 보정기다.
+입력 행은 기존 central_keyword가 금지 일반어(기타/자재/공구류/건물/구조물/설비/부재)로 잘못 저장된 행이다.
+cause_detail을 우선 읽고, 거기에 구체 물체·설비·공법이 없거나 노이즈면 summary를 읽어라.
+반드시 원문에 실제로 존재하는 검색 가능한 구체 명사 1개(1~2어절)만 central_keyword로 선택하라.
+금지 일반어 기타, 자재, 공구류, 건물, 구조물, 설비, 부재는 central_keyword로 절대 출력하지 마라.
+구체 명사가 없으면 relevance='none', central_keyword=null, alt_keywords=[] 로 출력하라.
+title은 사용하지 않는다. 추측하거나 새 명사를 만들지 않는다.
+alt_keywords는 원문에 있는 대안 0~2개만 허용한다.
+출력 JSON:
+{"items":[{"content_id":"...","central_keyword":string|null,"alt_keywords":[string],
+"relevance":"relevant"|"none","confidence":0.0,"reason":"..."}]}
+"""
+
 
 def _secret_ok(value: str | None) -> bool:
     return bool(value) and value == os.environ.get("INTERNAL_API_SECRET")
@@ -77,6 +91,8 @@ def _validate(row: dict, out: dict) -> dict:
         alts = []
     elif not isinstance(kw, str) or not kw.strip():
         raise ValueError("relevant requires keyword")
+    if isinstance(kw, str) and kw.strip() in BLOCKLIST:
+        raise ValueError("blocked generic keyword")
     if not (0 <= conf <= 1):
         raise ValueError("invalid confidence")
     alts = [str(x).strip() for x in alts if str(x).strip()][:2]
@@ -92,7 +108,7 @@ def _validate(row: dict, out: dict) -> dict:
     }
 
 
-def _judge_group(rows: list[dict]) -> list[dict]:
+def _judge_group_with_prompt(rows: list[dict], prompt: str) -> list[dict]:
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     payload = [
         {
@@ -108,7 +124,7 @@ def _judge_group(rows: list[dict]) -> list[dict]:
         response_format={"type": "json_object"},
         max_tokens=5000,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ],
     )
@@ -120,6 +136,14 @@ def _judge_group(rows: list[dict]) -> list[dict]:
     if len(by_id) != len(rows):
         raise ValueError("batch ids mismatch")
     return [_validate(r, by_id[r["content_id"]]) for r in rows]
+
+
+def _judge_group(rows: list[dict]) -> list[dict]:
+    return _judge_group_with_prompt(rows, SYSTEM_PROMPT)
+
+
+def _judge_repair_group(rows: list[dict]) -> list[dict]:
+    return _judge_group_with_prompt(rows, REPAIR_PROMPT)
 
 
 def _judge_group_resilient(rows: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -134,6 +158,21 @@ def _judge_group_resilient(rows: list[dict]) -> tuple[list[dict], list[dict]]:
         mid = len(rows) // 2
         left_results, left_errors = _judge_group_resilient(rows[:mid])
         right_results, right_errors = _judge_group_resilient(rows[mid:])
+        return left_results + right_results, left_errors + right_errors
+
+
+def _judge_repair_resilient(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    try:
+        return _judge_repair_group(rows), []
+    except Exception as exc:
+        if len(rows) == 1:
+            return [], [{
+                "content_ids": [rows[0]["content_id"]],
+                "error": str(exc)[:300],
+            }]
+        mid = len(rows) // 2
+        left_results, left_errors = _judge_repair_resilient(rows[:mid])
+        right_results, right_errors = _judge_repair_resilient(rows[mid:])
         return left_results + right_results, left_errors + right_errors
 
 
@@ -199,6 +238,48 @@ def _run_all() -> None:
     finally:
         _JOB["running"] = False
         _JOB["last_update"] = time.time()
+
+
+@router.post("/repair-blocklist")
+def repair_blocklist(
+    limit: int = Query(500, ge=1, le=1000),
+    x_internal_secret: str | None = Header(None, alias="X-Internal-Secret"),
+):
+    if not _secret_ok(x_internal_secret):
+        raise HTTPException(status_code=403, detail="forbidden")
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY missing")
+
+    sb = get_supabase()
+    todo = (
+        sb.rpc("get_csi_blocklist_keyword_rows_json", {"p_limit": limit})
+        .execute()
+    ).data or []
+    if not todo:
+        return {"requested": 0, "applied": 0, "error_count": 0, "errors": []}
+
+    groups = _chunks(todo, 10)
+    results: list[dict] = []
+    errors: list[dict] = []
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        future_map = {pool.submit(_judge_repair_resilient, group): group for group in groups}
+        for fut in as_completed(future_map):
+            group_results, group_errors = fut.result()
+            results.extend(group_results)
+            errors.extend(group_errors)
+
+    if results:
+        sb.table("keyword_central_extracted").upsert(
+            results, on_conflict="page_type,page_id"
+        ).execute()
+
+    return {
+        "requested": len(todo),
+        "applied": len(results),
+        "error_count": len(errors),
+        "errors": errors[:20],
+        "created_by": CREATED_BY,
+    }
 
 
 @router.post("/run")
