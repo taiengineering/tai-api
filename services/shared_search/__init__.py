@@ -61,6 +61,18 @@ from services.shared_search.reconcile import (
     ReconcileReport,
     reconcile,
 )
+# F2 surface — Domain adapters + Common Indexer + shared paginator +
+# production store. Importing them here keeps a single Foundation
+# entry point for downstream callers.
+from services.shared_search.indexer import Indexer, RebuildResult, DryRunCensus
+from services.shared_search.adapters import (
+    DomainAdapter, AdapterBlockedSubtype,
+    GuideAdapter, SafetyMaterialAdapter, CsiAccidentAdapter,
+    ChemAdapter, KnowledgeAdapter, PrecedentAdapter,
+    LegalAdapter, RiskAdapter,
+)
+from services.shared_search.census import DomainCensus, run_census
+from services.shared_search.production_bindings import build_production_adapters
 
 __all__ = [
     "PUBLICATION_STATUS_PUBLISHED", "PUBLICATION_STATUS_HOLD",
@@ -77,4 +89,11 @@ __all__ = [
     "MemoryStore", "Writer", "WriterRejected",
     "RebuildRun", "RebuildFramework", "RebuildAborted",
     "ReconcileReport", "reconcile",
+    "Indexer", "RebuildResult", "DryRunCensus",
+    "DomainAdapter", "AdapterBlockedSubtype",
+    "GuideAdapter", "SafetyMaterialAdapter", "CsiAccidentAdapter",
+    "ChemAdapter", "KnowledgeAdapter", "PrecedentAdapter",
+    "LegalAdapter", "RiskAdapter",
+    "DomainCensus", "run_census",
+    "build_production_adapters",
 ]
