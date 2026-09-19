@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
 from opensearchpy import OpenSearch
@@ -37,6 +36,7 @@ from services.shared_search.opensearch_mapping import (
     build_alias_action,
     candidate_index_name,
 )
+from services.time.tai_time import SYSTEM_CLOCK
 
 logger = logging.getLogger(__name__)
 
@@ -275,7 +275,7 @@ class OpenSearchSearchStore:
 # ---------------------------------------------------------------------------
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return SYSTEM_CLOCK.now().isoformat()
 
 
 def _doc_to_os_body(doc: dict) -> dict:

@@ -102,8 +102,9 @@ def cmd_nori_analyze(args) -> int:
     out_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__)))), "docs", "search", "evidence")
     os.makedirs(out_dir, exist_ok=True)
-    from datetime import datetime
-    date_str = datetime.now().strftime("%Y%m%d")
+    import sys as _sys; _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from services.time.tai_time import SYSTEM_CLOCK
+    date_str = SYSTEM_CLOCK.now().strftime("%Y%m%d")
     out_path = os.path.join(out_dir, f"f3_opensearch_nori_analyze_{date_str}.json")
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump({"analyzer": "nori", "results": results}, fh,
