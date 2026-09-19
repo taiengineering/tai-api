@@ -892,5 +892,237 @@ class TestParityFixtures(unittest.TestCase):
         self.assertEqual(resp.items[0].object_type, "GUIDE")
 
 
+# --------------------------------------------------------------------------
+# §17 — F3-G1 Rebuild safety scoped unit tests (§2-§15, §22-§23)
+# --------------------------------------------------------------------------
+
+def _make_sample_payload(**overrides) -> dict:
+    """Minimal valid payload for prepare_search_document()."""
+    p = {
+        "object_type": "GUIDE", "canonical_id": "g-test-001", "title": "Test Doc",
+        "source_id": "KOSHA", "source_key": "g-001",
+        "publication_status": "PUBLISHED", "visibility_scopes": ["PUBLIC"],
+        "source_updated_at": "2026-09-19T00:00:00+00:00",
+        "search_text": "Test document for negative integration tests",
+    }
+    p.update(overrides)
+    return p
+
+
+class TestPrepareSDocumentHelper(unittest.TestCase):
+    """§5 — prepare_search_document() is the single canonical prepare authority."""
+
+    def test_prepare_returns_doc_and_wire(self):
+        from services.shared_search.writer import prepare_search_document
+        doc, wire = prepare_search_document(_make_sample_payload())
+        self.assertEqual(doc.object_type, "GUIDE")
+        self.assertIn("content_hash", wire)
+        self.assertIn("canonical_id", wire)
+
+    def test_prepare_sets_content_hash(self):
+        from services.shared_search.writer import prepare_search_document
+        doc, wire = prepare_search_document(_make_sample_payload())
+        self.assertIsNotNone(doc.content_hash)
+        self.assertTrue(len(doc.content_hash) >= 32)
+
+    def test_prepare_parity_with_writer_prepare(self):
+        """Writer._prepare() must delegate to prepare_search_document()."""
+        from services.shared_search.writer import prepare_search_document, Writer, MemoryStore
+        payload = _make_sample_payload()
+        doc_h, wire_h = prepare_search_document(payload)
+        writer = Writer(MemoryStore())
+        doc_w, wire_w = writer._prepare(payload)
+        self.assertEqual(doc_h.content_hash, doc_w.content_hash)
+        self.assertEqual(wire_h["canonical_id"], wire_w["canonical_id"])
+
+    def test_prepare_rejects_missing_required_field(self):
+        from services.shared_search.writer import prepare_search_document
+        from services.shared_search.contract import SearchContractError
+        bad = {k: v for k, v in _make_sample_payload().items() if k != "search_text"}
+        with self.assertRaises(SearchContractError):
+            prepare_search_document(bad)
+
+    def test_prepare_exported_from_package(self):
+        from services.shared_search import prepare_search_document
+        self.assertTrue(callable(prepare_search_document))
+
+
+class TestOpenSearchStoreSafetyGuards(unittest.TestCase):
+    """§8-§13 F3-G1 — Negative safety contracts via mocked client.
+
+    These tests are the authoritative fast unit tests. Full live tests
+    are done via the integration script (tests are mocked here).
+    """
+
+    def _make_store_and_client(self, run_source=None):
+        from services.shared_search.opensearch_store import OpenSearchSearchStore, RUN_STATUS_RUNNING
+        mc = MagicMock()
+        mc.indices.exists.return_value = False
+        mc.indices.create.return_value = {"acknowledged": True}
+        mc.index.return_value = {}
+        mc.count.return_value = {"count": 1}
+        mc.indices.refresh.return_value = {}
+        mc.indices.update_aliases.return_value = {}
+        mc.indices.get_alias.return_value = {"tai-shared-search-v1-oldddddddddddddd": {}}
+        _default_source = {
+            "status": RUN_STATUS_RUNNING, "failed_bulk_items": 0,
+            "expected_count": 0, "indexed_count": 0,
+            "previous_index": None, "manifest": {}, "duplicate_count": 0,
+        }
+        if run_source:
+            _default_source.update(run_source)
+        mc.get.return_value = {"_source": _default_source}
+        mc.update.return_value = {}
+        mc.search.return_value = {"aggregations": {"unique_ids": {"value": 1}}}
+        return OpenSearchSearchStore(mc), mc
+
+    def test_validate_run_fails_on_bulk_failures(self):
+        from services.shared_search.opensearch_store import RebuildRejected, RUN_STATUS_RUNNING
+        store, mc = self._make_store_and_client(
+            {"status": RUN_STATUS_RUNNING, "failed_bulk_items": 2})
+        with self.assertRaises(RebuildRejected) as ctx:
+            store.validate_run("run-x", expected_count=10)
+        self.assertIn("bulk", str(ctx.exception).lower())
+
+    def test_validate_run_fails_on_zero_expected(self):
+        from services.shared_search.opensearch_store import RebuildRejected, RUN_STATUS_RUNNING
+        store, mc = self._make_store_and_client(
+            {"status": RUN_STATUS_RUNNING, "failed_bulk_items": 0})
+        with self.assertRaises(RebuildRejected) as ctx:
+            store.validate_run("run-x", expected_count=0)
+        self.assertIn("expected_count == 0", str(ctx.exception))
+
+    def test_validate_run_fails_on_count_mismatch(self):
+        from services.shared_search.opensearch_store import RebuildRejected, RUN_STATUS_RUNNING
+        store, mc = self._make_store_and_client(
+            {"status": RUN_STATUS_RUNNING, "failed_bulk_items": 0})
+        # count() returns 1 but we expect 4
+        mc.count.return_value = {"count": 1}
+        with self.assertRaises(RebuildRejected) as ctx:
+            store.validate_run("run-x", expected_count=4)
+        self.assertIn("actual", str(ctx.exception).lower())
+
+    def test_validate_run_fails_on_per_domain_mismatch(self):
+        from services.shared_search.opensearch_store import RebuildRejected, RUN_STATUS_RUNNING
+        mc_source = {
+            "status": RUN_STATUS_RUNNING, "failed_bulk_items": 0,
+            "manifest": {"GUIDE": {"expected": 1, "indexed": 1}, "CSI": {"expected": 0, "indexed": 0}},
+        }
+        store, mc = self._make_store_and_client(mc_source)
+        mc.count.return_value = {"count": 1}
+        with self.assertRaises(RebuildRejected) as ctx:
+            store.validate_run("run-x", expected_count=1,
+                               per_domain_expected={"GUIDE": 1, "CSI": 5})
+        self.assertIn("domain", str(ctx.exception).lower())
+
+    def test_promote_rejects_when_not_validated(self):
+        from services.shared_search.opensearch_store import RebuildRejected, RUN_STATUS_RUNNING
+        store, mc = self._make_store_and_client({"status": RUN_STATUS_RUNNING})
+        with self.assertRaises(RebuildRejected) as ctx:
+            store.promote("run-x")
+        self.assertIn("VALIDATED", str(ctx.exception))
+
+    def test_promote_rejects_when_failed(self):
+        from services.shared_search.opensearch_store import RebuildRejected, RUN_STATUS_FAILED
+        store, mc = self._make_store_and_client({"status": RUN_STATUS_FAILED})
+        with self.assertRaises(RebuildRejected) as ctx:
+            store.promote("run-x")
+        self.assertIn("VALIDATED", str(ctx.exception))
+
+    def test_promote_rejects_when_indexed_ne_expected(self):
+        from services.shared_search.opensearch_store import RebuildRejected, RUN_STATUS_VALIDATED
+        store, mc = self._make_store_and_client({
+            "status": RUN_STATUS_VALIDATED, "failed_bulk_items": 0,
+            "expected_count": 10, "indexed_count": 9,
+        })
+        mc.indices.exists.return_value = True
+        with self.assertRaises(RebuildRejected) as ctx:
+            store.promote("run-x")
+        self.assertIn("blocked", str(ctx.exception).lower())
+
+    def test_promote_rejects_when_bulk_failures_nonzero(self):
+        from services.shared_search.opensearch_store import RebuildRejected, RUN_STATUS_VALIDATED
+        store, mc = self._make_store_and_client({
+            "status": RUN_STATUS_VALIDATED, "failed_bulk_items": 3,
+            "expected_count": 10, "indexed_count": 10,
+        })
+        with self.assertRaises(RebuildRejected) as ctx:
+            store.promote("run-x")
+        self.assertIn("blocked", str(ctx.exception).lower())
+
+    def test_promote_succeeds_when_validated(self):
+        from services.shared_search.opensearch_store import RUN_STATUS_VALIDATED
+        store, mc = self._make_store_and_client({
+            "status": RUN_STATUS_VALIDATED, "failed_bulk_items": 0,
+            "expected_count": 1, "indexed_count": 1,
+            "previous_index": "tai-shared-search-v1-oldddddddddddddd",
+        })
+        mc.indices.exists.return_value = True
+        mc.count.return_value = {"count": 1}
+        mc.indices.get_alias.return_value = {"tai-shared-search-v1-oldddddddddddddd": {}}
+        result = store.promote("run-x")
+        mc.indices.update_aliases.assert_called_once()
+        self.assertTrue(result.startswith("tai-shared-search-v1-"))
+
+    def test_alias_unchanged_after_validation_failure(self):
+        """Alias must not be touched when validate_run fails."""
+        from services.shared_search.opensearch_store import RebuildRejected, RUN_STATUS_RUNNING
+        store, mc = self._make_store_and_client(
+            {"status": RUN_STATUS_RUNNING, "failed_bulk_items": 1})
+        try:
+            store.validate_run("run-x", expected_count=10)
+        except RebuildRejected:
+            pass
+        mc.indices.update_aliases.assert_not_called()
+
+    def test_rebuild_tool_uses_real_adapter_api(self):
+        """Smoke: opensearch_rebuild imports and references correct API symbols."""
+        import ast, pathlib
+        src = pathlib.Path("tools/shared_search/opensearch_rebuild.py").read_text()
+        tree = ast.parse(src)
+        attr_names = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+        # Must reference the real F2 contract symbols
+        self.assertIn("build_production_adapters",
+                      {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)})
+        self.assertIn("prepare_search_document",
+                      {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)})
+        self.assertIn("domain_name", attr_names)
+        self.assertIn("iter_documents", attr_names)
+        # Must NOT reference banned F2 API symbols (§2 F3-G1)
+        self.assertNotIn("build_domain", attr_names)     # Indexer.build_domain() = nonexistent
+        self.assertNotIn("dry_run_census", attr_names)   # Indexer.dry_run_census() = nonexistent
+        self.assertNotIn("Indexer(adapters=", src)       # wrong constructor pattern
+        # adapter.domain (without _name) must not appear as attribute in full_rebuild
+        # (dry_run uses Indexer.dry_run(adapter) which is allowed §17)
+        self.assertNotIn(".build_domain(", src)
+        self.assertNotIn(".dry_run_census(", src)
+
+    def test_prepare_search_document_is_the_canonical_authority(self):
+        """Only prepare_search_document (not normalize_document directly) should be in store/rebuild."""
+        import pathlib
+        rebuild_src = pathlib.Path("tools/shared_search/opensearch_rebuild.py").read_text()
+        self.assertIn("prepare_search_document", rebuild_src)
+        # Should NOT call normalize_document directly
+        self.assertNotIn("normalize_document(", rebuild_src)
+
+
+class TestOpenSearchStoreRebuildConstants(unittest.TestCase):
+    """§31 — RUN_STATUS constants are correct strings."""
+
+    def test_run_status_values(self):
+        from services.shared_search.opensearch_store import (
+            RUN_STATUS_RUNNING, RUN_STATUS_VALIDATED,
+            RUN_STATUS_PROMOTED, RUN_STATUS_FAILED,
+        )
+        self.assertEqual(RUN_STATUS_RUNNING, "RUNNING")
+        self.assertEqual(RUN_STATUS_VALIDATED, "VALIDATED")
+        self.assertEqual(RUN_STATUS_PROMOTED, "PROMOTED")
+        self.assertEqual(RUN_STATUS_FAILED, "FAILED")
+
+    def test_rebuild_rejected_is_exception(self):
+        from services.shared_search.opensearch_store import RebuildRejected
+        self.assertTrue(issubclass(RebuildRejected, Exception))
+
+
 if __name__ == "__main__":
     unittest.main()

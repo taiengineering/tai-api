@@ -30,8 +30,9 @@ def candidate_index_name(run_id: str) -> str:
     """Return deterministic physical index name for a rebuild run.
 
     Format: tai-shared-search-v1-{first_16_of_run_id}
+    OpenSearch requires lowercase index names.
     """
-    short = run_id.replace("-", "")[:16]
+    short = run_id.replace("-", "").lower()[:16]
     return f"tai-shared-search-v1-{short}"
 
 

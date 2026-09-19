@@ -72,6 +72,7 @@ from services.shared_search.adapters import (
     LegalAdapter, RiskAdapter,
 )
 from services.shared_search.census import DomainCensus, run_census, CountingFetcher, source_yield_audit
+from services.shared_search.writer import prepare_search_document
 from services.shared_search.production_bindings import build_production_adapters
 # F3 surface — query understanding, retrieval engine, result contract.
 from services.shared_search.query import (
@@ -117,6 +118,7 @@ __all__ = [
     "ChemAdapter", "KnowledgeAdapter", "PrecedentAdapter",
     "LegalAdapter", "RiskAdapter",
     "DomainCensus", "run_census", "CountingFetcher", "source_yield_audit",
+    "prepare_search_document",
     "build_production_adapters",
     # F3 — query + retrieval
     "build_query_plan", "SearchQueryPlan", "SubjectCandidate", "TIER_PRECEDENCE",

@@ -30,6 +30,33 @@ class WriterRejected(SearchContractError):
 
 
 # ---------------------------------------------------------------------------
+# Public canonical preparation helper (§5 — WO-TAI-SHARED-SEARCH-F3-G1)
+# ---------------------------------------------------------------------------
+
+def prepare_search_document(payload: dict) -> tuple["SearchDocument", dict]:
+    """Normalize, validate, and hash a raw domain adapter payload.
+
+    This is the SINGLE authority for canonical SearchDocument preparation.
+    Both Writer._prepare() (Supabase/Memory path) and the OpenSearch
+    rebuild bulk path MUST go through this function — no duplicate
+    normalize + hash logic elsewhere.
+
+    Args:
+        payload: Raw dict from a Domain adapter (iter_documents output).
+
+    Returns:
+        (SearchDocument, wire_dict) where wire_dict is ready for storage.
+
+    Raises:
+        SearchContractError: if the payload fails contract validation.
+    """
+    doc = normalize_document(payload)
+    doc.content_hash = content_hash(doc)
+    wire = _document_as_dict(doc)
+    return doc, wire
+
+
+# ---------------------------------------------------------------------------
 # In-memory store (fixture / test / SEARCH-03 handoff surface)
 # ---------------------------------------------------------------------------
 
@@ -155,10 +182,8 @@ class Writer:
 
     # -- helpers --
     def _prepare(self, payload: dict) -> tuple[SearchDocument, dict]:
-        doc = normalize_document(payload)
-        doc.content_hash = content_hash(doc)
-        wire = _document_as_dict(doc)
-        return doc, wire
+        """Delegate to the shared canonical prepare helper (§5 F3-G1)."""
+        return prepare_search_document(payload)
 
     # -- current-projection APIs --
     def upsert_current(self, payload: dict) -> SearchDocument:
