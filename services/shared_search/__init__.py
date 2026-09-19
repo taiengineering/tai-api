@@ -71,8 +71,22 @@ from services.shared_search.adapters import (
     ChemAdapter, KnowledgeAdapter, PrecedentAdapter,
     LegalAdapter, RiskAdapter,
 )
-from services.shared_search.census import DomainCensus, run_census
+from services.shared_search.census import DomainCensus, run_census, CountingFetcher, source_yield_audit
 from services.shared_search.production_bindings import build_production_adapters
+# F3 surface — query understanding, retrieval engine, result contract.
+from services.shared_search.query import (
+    build_query_plan,
+    SearchQueryPlan,
+    SubjectCandidate,
+    TIER_PRECEDENCE,
+)
+from services.shared_search.result import SearchResult, SearchResponse
+from services.shared_search.retrieval import (
+    SharedRetrievalEngine,
+    MemorySearchReader,
+    SupabaseSearchReader,
+    retrieve,
+)
 
 __all__ = [
     "PUBLICATION_STATUS_PUBLISHED", "PUBLICATION_STATUS_HOLD",
@@ -94,6 +108,10 @@ __all__ = [
     "GuideAdapter", "SafetyMaterialAdapter", "CsiAccidentAdapter",
     "ChemAdapter", "KnowledgeAdapter", "PrecedentAdapter",
     "LegalAdapter", "RiskAdapter",
-    "DomainCensus", "run_census",
+    "DomainCensus", "run_census", "CountingFetcher", "source_yield_audit",
     "build_production_adapters",
+    # F3
+    "build_query_plan", "SearchQueryPlan", "SubjectCandidate", "TIER_PRECEDENCE",
+    "SearchResult", "SearchResponse",
+    "SharedRetrievalEngine", "MemorySearchReader", "SupabaseSearchReader", "retrieve",
 ]
