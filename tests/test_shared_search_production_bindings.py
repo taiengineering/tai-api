@@ -685,3 +685,189 @@ def test_census_is_shared_module_not_reimplemented_per_adapter():
             assert marker not in text, (
                 f"{py.name} contains census-specific pattern {marker!r}; "
                 "census belongs in services/shared_search/census.py")
+
+
+# ---------------------------------------------------------------------------
+# WO-TAI-SHARED-SEARCH-F2-PR408-CLEANROOM-REPAIR-001
+# SAFETY_MATERIAL object_reindex regression tests (§14-§15)
+# ---------------------------------------------------------------------------
+
+
+def _make_mat_supabase(
+    *,
+    snapshot_rows: list,
+    snapshot_items: list,
+    catalog_rows: list,
+    detail_rows: list,
+    hold_rows: list,
+) -> "FakeSupabase":
+    """Minimal FakeSupabase for SAFETY_MATERIAL object_reindex tests."""
+    return FakeSupabase(tables={
+        "kosha_safety_materials": catalog_rows,
+        "kosha_safety_material_snapshots": snapshot_rows,
+        "kosha_safety_material_snapshot_items": snapshot_items,
+        "kosha_safety_material_details": detail_rows,
+        "kosha_safety_material_storage_holds": hold_rows,
+    })
+
+
+def _mat_adapter(sb: "FakeSupabase"):
+    return next(
+        a for a in build_production_adapters(sb)
+        if a.domain_name == "SAFETY_MATERIAL"
+    )
+
+
+# T1 — no latest snapshot membership → object_reindex_payload = None
+def test_material_object_reindex_no_membership_returns_none():
+    """T1 (§14/§10): material exists in catalog and an older snapshot
+    but NOT in the latest COMPLETED snapshot.
+    object_reindex_payload must return None — snapshot gate missing
+    would re-publish a Domain-removed item on any single-item reindex.
+    """
+    sb = _make_mat_supabase(
+        snapshot_rows=[
+            {"id": "snap-old", "completed_at": "2026-05-01T00:00:00+00:00",
+             "status": "COMPLETED"},
+            {"id": "snap-latest", "completed_at": "2026-09-01T00:00:00+00:00",
+             "status": "COMPLETED"},
+        ],
+        snapshot_items=[
+            # m-stale was in old snapshot only — absent from snap-latest
+            {"snapshot_id": "snap-old", "material_id": "m-stale"},
+        ],
+        catalog_rows=[
+            {"id": "m-stale", "title": "Stale Material",
+             "url": "https://example/stale"},
+        ],
+        detail_rows=[
+            {"material_id": "m-stale", "source_med_seq": 9999,
+             "source_updated_at": "2026-05-01T00:00:00+00:00"},
+        ],
+        hold_rows=[],
+    )
+    adapter = _mat_adapter(sb)
+    assert adapter.object_reindex_payload("m-stale") is None, (
+        "Material absent from latest COMPLETED snapshot must return None"
+    )
+
+
+# T2 — latest member + OPEN hold → publication_status = HOLD
+def test_material_object_reindex_latest_member_open_hold_is_hold():
+    """T2 (§14): material IS in the latest COMPLETED snapshot but has
+    an OPEN hold → publication_status must be HOLD.
+    """
+    sb = _make_mat_supabase(
+        snapshot_rows=[
+            {"id": "snap-1", "completed_at": "2026-09-01T00:00:00+00:00",
+             "status": "COMPLETED"},
+        ],
+        snapshot_items=[{"snapshot_id": "snap-1", "material_id": "m-held"}],
+        catalog_rows=[
+            {"id": "m-held", "title": "Held Material",
+             "url": "https://example/held"},
+        ],
+        detail_rows=[
+            {"material_id": "m-held", "source_med_seq": 42,
+             "source_updated_at": "2026-08-01T00:00:00+00:00"},
+        ],
+        hold_rows=[{"material_id": "m-held", "status": "OPEN"}],
+    )
+    adapter = _mat_adapter(sb)
+    payload = adapter.object_reindex_payload("m-held")
+    assert payload is not None, "Member of latest snapshot must return payload"
+    assert payload["publication_status"] == "HOLD", (
+        f"Expected HOLD, got {payload['publication_status']!r}"
+    )
+
+
+# T3 — multiple holds (both row orderings) → HOLD (§15 row-order guard)
+def test_material_object_reindex_multiple_holds_any_open_is_hold():
+    """T3 (§14-§15): RESOLVED + OPEN coexist.
+    _fetch_one returns at most one row — depending on DB ordering it
+    could return RESOLVED and incorrectly mark the item PUBLISHED.
+    Both orderings must still yield HOLD.
+    """
+    for hold_order in [
+        [{"material_id": "m-multi", "status": "RESOLVED"},
+         {"material_id": "m-multi", "status": "OPEN"}],
+        [{"material_id": "m-multi", "status": "OPEN"},
+         {"material_id": "m-multi", "status": "RESOLVED"}],
+    ]:
+        sb = _make_mat_supabase(
+            snapshot_rows=[
+                {"id": "snap-1", "completed_at": "2026-09-01T00:00:00+00:00",
+                 "status": "COMPLETED"},
+            ],
+            snapshot_items=[{"snapshot_id": "snap-1", "material_id": "m-multi"}],
+            catalog_rows=[
+                {"id": "m-multi", "title": "Multi-hold Material",
+                 "url": "https://example/multi"},
+            ],
+            detail_rows=[
+                {"material_id": "m-multi", "source_med_seq": 7,
+                 "source_updated_at": "2026-09-01T00:00:00+00:00"},
+            ],
+            hold_rows=hold_order,
+        )
+        adapter = _mat_adapter(sb)
+        payload = adapter.object_reindex_payload("m-multi")
+        assert payload is not None
+        assert payload["publication_status"] == "HOLD", (
+            f"RESOLVED+OPEN must be HOLD regardless of row order; "
+            f"hold_rows={hold_order!r}, got {payload['publication_status']!r}"
+        )
+
+
+# T4 — latest member + all holds resolved → PUBLISHED
+def test_material_object_reindex_latest_member_all_resolved_is_published():
+    """T4 (§14): all hold rows RESOLVED → publication_status = PUBLISHED."""
+    sb = _make_mat_supabase(
+        snapshot_rows=[
+            {"id": "snap-1", "completed_at": "2026-09-01T00:00:00+00:00",
+             "status": "COMPLETED"},
+        ],
+        snapshot_items=[{"snapshot_id": "snap-1", "material_id": "m-ok"}],
+        catalog_rows=[
+            {"id": "m-ok", "title": "Clean Material",
+             "url": "https://example/ok"},
+        ],
+        detail_rows=[
+            {"material_id": "m-ok", "source_med_seq": 100,
+             "source_updated_at": "2026-09-01T00:00:00+00:00"},
+        ],
+        hold_rows=[
+            {"material_id": "m-ok", "status": "RESOLVED",
+             "resolved_at": "2026-08-20T00:00:00+00:00"},
+            {"material_id": "m-ok", "status": "RESOLVED",
+             "resolved_at": "2026-07-10T00:00:00+00:00"},
+        ],
+    )
+    adapter = _mat_adapter(sb)
+    payload = adapter.object_reindex_payload("m-ok")
+    assert payload is not None
+    assert payload["publication_status"] == "PUBLISHED", (
+        f"All-RESOLVED holds must yield PUBLISHED; got {payload['publication_status']!r}"
+    )
+
+
+# T5 — catalog gate: snapshot member but catalog absent → None
+def test_material_object_reindex_missing_catalog_returns_none():
+    """T5 (§11): material is in the latest COMPLETED snapshot but has
+    no row in kosha_safety_materials → None.
+    F2 publication contract: catalog + snapshot (§72).
+    """
+    sb = _make_mat_supabase(
+        snapshot_rows=[
+            {"id": "snap-1", "completed_at": "2026-09-01T00:00:00+00:00",
+             "status": "COMPLETED"},
+        ],
+        snapshot_items=[{"snapshot_id": "snap-1", "material_id": "m-nocatalog"}],
+        catalog_rows=[],   # intentionally absent
+        detail_rows=[],
+        hold_rows=[],
+    )
+    adapter = _mat_adapter(sb)
+    assert adapter.object_reindex_payload("m-nocatalog") is None, (
+        "Snapshot member without catalog row must return None"
+    )

@@ -26,7 +26,7 @@ supabase/migrations/*.sql or the Domain's own service module):
     kosha_safety_materials       (+ snapshot_items / details / holds)
     safe_help_content
     industrial_accident_precedents
-    law_master + law_version + law_article  (LEGAL — deferred; see §32)
+    law_master + law_version + law_article  (LEGAL — active; assembled at query time per §32)
     risk_canonical_nodes         (RISK — empty yield until RISK-C02)
 
 **Zero write.** Zero RPC. Zero DDL. Zero DML. Zero env change. The
@@ -347,6 +347,22 @@ def _make_safety_material_adapter(client: SupabaseClient) -> SafetyMaterialAdapt
                 yield row
 
     def _by_id(material_id: str) -> Optional[dict]:
+        # Step 1: latest COMPLETED snapshot — same gate as full rebuild.
+        snap = _latest_snapshot_id()
+        if snap is None:
+            return None
+        # Step 2: snapshot membership gate — material must be in the
+        # current Domain set. Catalog presence alone is NOT sufficient
+        # (WO-TAI-SHARED-SEARCH-F2-PR408-CLEANROOM-REPAIR-001 §10).
+        membership_r = (client.table("kosha_safety_material_snapshot_items")
+                               .select("material_id")
+                               .eq("snapshot_id", snap)
+                               .eq("material_id", material_id)
+                               .limit(1)
+                               .execute())
+        if not list(getattr(membership_r, "data", None) or []):
+            return None
+        # Step 3: catalog row (§11).
         cat = _fetch_one(
             client, table="kosha_safety_materials",
             select="id,title,url,category,industry_category,accident_type,product_type",
@@ -354,27 +370,35 @@ def _make_safety_material_adapter(client: SupabaseClient) -> SafetyMaterialAdapt
         )
         if cat is None:
             return None
+        # Step 4: details (optional — may be absent).
         det = _fetch_one(
             client, table="kosha_safety_material_details",
             select=("material_id,source_med_seq,source_title,source_description,"
                     "source_url,source_published_at,source_updated_at"),
             key_column="material_id", key_value=material_id,
         ) or {}
-        hold_row = _fetch_one(
-            client, table="kosha_safety_material_storage_holds",
-            select="material_id,status",
-            key_column="material_id", key_value=material_id,
+        # Step 5-6: ALL hold rows — fail-closed (§12).
+        # _fetch_one would return at most one row; with RESOLVED+OPEN
+        # coexisting the OPEN hold could be missed depending on row
+        # order.  Read every hold row and ANY non-RESOLVED → HOLD.
+        holds_r = (client.table("kosha_safety_material_storage_holds")
+                           .select("material_id,status")
+                           .eq("material_id", material_id)
+                           .execute())
+        hold_rows = list(getattr(holds_r, "data", None) or [])
+        active_hold = any(
+            (h.get("status") or "OPEN") != "RESOLVED"
+            for h in hold_rows
         )
-        active_hold = bool(
-            hold_row
-            and (hold_row.get("status") or "OPEN") != "RESOLVED"
-        )
+        # Step 7: reuse snap for timestamp — single _latest_snapshot_id
+        # call (§13).
+        snap_completed = _snapshot_completed_at(
+            client, snapshot_table="kosha_safety_material_snapshots",
+            snapshot_id=snap)
         return {**cat, **det,
                 "id": material_id,
                 "storage_hold": active_hold,
-                "_snapshot_completed_at": _snapshot_completed_at(
-                    client, snapshot_table="kosha_safety_material_snapshots",
-                    snapshot_id=_latest_snapshot_id())}
+                "_snapshot_completed_at": snap_completed}
 
     return SafetyMaterialAdapter(fetch_current=_iter_current, fetch_by_id=_by_id)
 
