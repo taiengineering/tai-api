@@ -1098,12 +1098,50 @@ class TestOpenSearchStoreSafetyGuards(unittest.TestCase):
         self.assertNotIn(".dry_run_census(", src)
 
     def test_prepare_search_document_is_the_canonical_authority(self):
-        """Only prepare_search_document (not normalize_document directly) should be in store/rebuild."""
+        """Only prepare_search_document (not normalize_document directly) should be in rebuild."""
         import pathlib
         rebuild_src = pathlib.Path("tools/shared_search/opensearch_rebuild.py").read_text()
         self.assertIn("prepare_search_document", rebuild_src)
-        # Should NOT call normalize_document directly
+        # Should NOT call normalize_document directly in rebuild
         self.assertNotIn("normalize_document(", rebuild_src)
+
+    def test_no_id_aggregation_in_store(self):
+        """_id cardinality aggregation must NOT exist in opensearch_store.py (§6 F3-G1).
+        OpenSearch _id is not aggregatable."""
+        import pathlib
+        src = pathlib.Path("services/shared_search/opensearch_store.py").read_text()
+        # Check for actual aggregation code patterns, not docstring mentions
+        self.assertNotIn('cardinality(field="_id"', src)
+        self.assertNotIn('"cardinality":', src)
+        self.assertNotIn("precision_threshold", src)
+        self.assertNotIn("check_duplicates", src)
+
+    def test_no_id_aggregation_in_rebuild(self):
+        """opensearch_rebuild.py must not reference _id aggregation (§6 F3-G1)."""
+        import pathlib
+        src = pathlib.Path("tools/shared_search/opensearch_rebuild.py").read_text()
+        # Check for actual aggregation code patterns
+        self.assertNotIn('cardinality(field="_id"', src)
+        self.assertNotIn('"cardinality":', src)
+        self.assertNotIn("precision_threshold", src)
+        self.assertNotIn("check_duplicates", src)
+
+    def test_global_seen_in_rebuild(self):
+        """Global identity tracking (global_seen) must be present in full_rebuild (§7-§9)."""
+        import pathlib
+        src = pathlib.Path("tools/shared_search/opensearch_rebuild.py").read_text()
+        self.assertIn("global_seen", src)
+
+    def test_dry_run_uses_run_census(self):
+        """dry_run() must use run_census() from census.py (§3 F3-G1 BLOCKER A)."""
+        import pathlib
+        src = pathlib.Path("tools/shared_search/opensearch_rebuild.py").read_text()
+        self.assertIn("run_census", src)
+        # Must NOT reference DryRunCensus field names that don't exist
+        self.assertNotIn("census.published_count", src)
+        self.assertNotIn("census.eligible_count", src)
+        self.assertNotIn("census.hold_count", src)
+        self.assertNotIn("census.duplicate_count", src)
 
 
 class TestOpenSearchStoreRebuildConstants(unittest.TestCase):
@@ -1122,6 +1160,156 @@ class TestOpenSearchStoreRebuildConstants(unittest.TestCase):
     def test_rebuild_rejected_is_exception(self):
         from services.shared_search.opensearch_store import RebuildRejected
         self.assertTrue(issubclass(RebuildRejected, Exception))
+
+    def test_check_duplicates_removed(self):
+        """check_duplicates() must NOT exist in OpenSearchSearchStore (§6 BLOCKER B).
+        OpenSearch _id is not aggregatable."""
+        from services.shared_search.opensearch_store import OpenSearchSearchStore
+        self.assertFalse(hasattr(OpenSearchSearchStore, "check_duplicates"))
+
+
+class TestGlobalDuplicateGuard(unittest.TestCase):
+    """§7-§11 F3-G1 — Global identity duplicate guard in rebuild.
+
+    Duplicate detection must happen in TAI canonical preparation (global_seen),
+    NOT in OpenSearch via _id aggregation.
+    """
+
+    def _make_valid_payload(self, otype: str, cid: str, title: str = "Doc") -> dict:
+        return {
+            "object_type": otype, "canonical_id": cid, "title": title,
+            "source_id": "KOSHA", "source_key": f"sk-{cid}",
+            "publication_status": "PUBLISHED", "visibility_scopes": ["PUBLIC"],
+            "source_updated_at": "2026-09-19T00:00:00+00:00",
+            "search_text": f"Search text for {cid}",
+        }
+
+    def test_D1_same_domain_duplicate_detected(self):
+        """D1: Same adapter yields duplicate (object_type, canonical_id) → detected."""
+        from services.shared_search.writer import prepare_search_document
+        from services.shared_search.contract import PUBLICATION_STATUS_PUBLISHED
+
+        payloads = [
+            self._make_valid_payload("GUIDE", "g-dup-001"),
+            self._make_valid_payload("GUIDE", "g-dup-001"),  # duplicate
+            self._make_valid_payload("GUIDE", "g-unique-002"),
+        ]
+
+        global_seen: set[tuple[str, str]] = set()
+        duplicates_found = 0
+
+        for payload in payloads:
+            try:
+                doc, wire = prepare_search_document(payload)
+            except Exception:
+                continue
+            if doc.publication_status != PUBLICATION_STATUS_PUBLISHED:
+                continue
+            identity = (doc.object_type, doc.canonical_id)
+            if identity in global_seen:
+                duplicates_found += 1
+            else:
+                global_seen.add(identity)
+
+        self.assertEqual(duplicates_found, 1, "D1: exactly 1 duplicate should be detected")
+
+    def test_D2_cross_adapter_duplicate_detected(self):
+        """D2: Two adapters emit same (object_type, canonical_id) → detected globally."""
+        from services.shared_search.writer import prepare_search_document
+        from services.shared_search.contract import PUBLICATION_STATUS_PUBLISHED
+
+        adapter_a_payloads = [
+            self._make_valid_payload("GUIDE", "cross-001"),
+        ]
+        adapter_b_payloads = [
+            self._make_valid_payload("GUIDE", "cross-001"),  # same identity from different adapter
+        ]
+
+        global_seen: set[tuple[str, str]] = set()
+        cross_dups = 0
+
+        for payload in adapter_a_payloads + adapter_b_payloads:
+            try:
+                doc, wire = prepare_search_document(payload)
+            except Exception:
+                continue
+            if doc.publication_status != PUBLICATION_STATUS_PUBLISHED:
+                continue
+            identity = (doc.object_type, doc.canonical_id)
+            if identity in global_seen:
+                cross_dups += 1
+            else:
+                global_seen.add(identity)
+
+        self.assertEqual(cross_dups, 1, "D2: cross-adapter duplicate must be detected")
+
+    def test_D3_duplicate_blocks_promotion_store_guard(self):
+        """D3: When rebuild detects duplicate and calls fail_run, promote() is blocked."""
+        from unittest.mock import MagicMock
+        from services.shared_search.opensearch_store import (
+            OpenSearchSearchStore, RebuildRejected, RUN_STATUS_FAILED
+        )
+        mc = MagicMock()
+        mc.indices.exists.return_value = False
+        mc.indices.create.return_value = {}
+        mc.index.return_value = {}
+        mc.get.return_value = {"_source": {"status": RUN_STATUS_FAILED,
+                                            "failed_bulk_items": 0,
+                                            "expected_count": 0, "indexed_count": 0,
+                                            "previous_index": None}}
+        mc.update.return_value = {}
+        mc.indices.update_aliases.return_value = {}
+        store = OpenSearchSearchStore(mc)
+
+        # Simulate: fail_run() was called due to duplicate
+        store.fail_run("run-dup", "Duplicate identity detected")
+
+        # promote() must be blocked
+        with self.assertRaises(RebuildRejected) as ctx:
+            store.promote("run-dup")
+        self.assertIn("VALIDATED", str(ctx.exception))
+        # alias must not have been touched
+        mc.indices.update_aliases.assert_not_called()
+
+    def test_D3_alias_unchanged_on_duplicate(self):
+        """D3: update_aliases is never called when duplicate detection fails the run."""
+        from unittest.mock import MagicMock
+        from services.shared_search.opensearch_store import (
+            OpenSearchSearchStore, RebuildRejected, RUN_STATUS_FAILED
+        )
+        mc = MagicMock()
+        mc.get.return_value = {"_source": {"status": RUN_STATUS_FAILED,
+                                            "failed_bulk_items": 0,
+                                            "expected_count": 0, "indexed_count": 0,
+                                            "previous_index": None}}
+        mc.update.return_value = {}
+        store = OpenSearchSearchStore(mc)
+        try:
+            store.promote("run-dup2")
+        except RebuildRejected:
+            pass
+        mc.indices.update_aliases.assert_not_called()
+
+    def test_no_id_aggregation_in_opensearch_store(self):
+        """OpenSearch _id is not aggregatable. Cardinality agg code must not exist."""
+        import pathlib
+        src = pathlib.Path("services/shared_search/opensearch_store.py").read_text()
+        # Check for actual aggregation code (not docstring mentions)
+        self.assertNotIn('cardinality(field="_id"', src)
+        self.assertNotIn('"cardinality":', src)
+        self.assertNotIn("precision_threshold", src)
+        self.assertNotIn("check_duplicates", src)
+
+    def test_global_seen_is_before_bulk_write(self):
+        """global_seen check must appear before stage_documents call in rebuild source."""
+        import pathlib
+        src = pathlib.Path("tools/shared_search/opensearch_rebuild.py").read_text()
+        idx_global = src.find("global_seen")
+        idx_stage  = src.find("stage_documents")
+        self.assertGreater(idx_global, 0, "global_seen must exist")
+        self.assertGreater(idx_stage, 0, "stage_documents must exist")
+        self.assertLess(idx_global, idx_stage,
+                        "global_seen must appear before stage_documents")
 
 
 if __name__ == "__main__":

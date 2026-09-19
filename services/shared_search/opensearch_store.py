@@ -12,9 +12,14 @@ Hard-fail rules (§8-§13 F3-G1):
   - actual_count != expected_count → FAILED (§9)
   - expected_count == 0 → FAILED (§9)
   - per-domain count mismatch → FAILED (§10)
-  - duplicate (object_type, canonical_id) → FAILED (§11)
   - promote() called with status != VALIDATED → REJECTED (§12)
   - promote() with pre-flight count mismatch → REJECTED (§13)
+
+NOTE — Duplicate detection (§7-§9 F3-G1):
+  OpenSearch _id is not aggregatable; _id cardinality aggregation is
+  NOT supported. Duplicate detection is NOT done here. It is done
+  in the canonical preparation stage in opensearch_rebuild.py via
+  a global_seen identity set BEFORE any write.
 
 All writes go through this class. Retrieval (read) uses
 opensearch_reader.OpenSearchSearchReader.
@@ -215,48 +220,6 @@ class OpenSearchSearchStore:
                          manifest=manifest)
         return success, 0
 
-    # --- duplicate guard (§11) ---
-
-    def check_duplicates(self, run_id: str) -> int:
-        """Count duplicate (object_type, canonical_id) in candidate index.
-
-        OpenSearch deterministic _id means duplicates overwrite silently.
-        This check counts docs where the _id appears more than once in
-        the staged source by aggregation.
-
-        Returns count of duplicate canonical identity pairs found.
-        Raises RebuildRejected if any duplicates detected.
-        """
-        idx = candidate_index_name(run_id)
-        self._client.indices.refresh(index=idx)
-        # Aggregate _id-based cardinality vs doc count
-        total_resp = self._client.count(index=idx)
-        total = total_resp.get("count", 0)
-
-        # Cardinality aggregation on _id
-        agg_resp = self._client.search(
-            index=idx,
-            body={
-                "size": 0,
-                "aggs": {
-                    "unique_ids": {
-                        "cardinality": {"field": "_id", "precision_threshold": 100000}
-                    }
-                },
-            },
-        )
-        unique = agg_resp.get("aggregations", {}).get("unique_ids", {}).get("value", total)
-        dups = total - unique
-        self._update_run(run_id, duplicate_count=dups)
-        if dups > 0:
-            reason = (
-                f"Duplicate canonical identity detected: {dups} duplicate(s) "
-                f"in candidate index. Promotion blocked."
-            )
-            self.fail_run(run_id, reason)
-            raise RebuildRejected(reason)
-        return 0
-
     # --- validation (§9) ---
 
     def validate_run(
@@ -447,7 +410,7 @@ class OpenSearchSearchStore:
                             "expected_count":   {"type": "integer"},
                             "indexed_count":    {"type": "integer"},
                             "failed_bulk_items":{"type": "integer"},
-                            "duplicate_count":  {"type": "integer"},
+                            "duplicate_count":  {"type": "integer"},  # set by rebuild tool, not store
                             "failure":          {"type": "text"},
                             "rollback_at":      {"type": "date"},
                             "rollback_target":  {"type": "keyword"},

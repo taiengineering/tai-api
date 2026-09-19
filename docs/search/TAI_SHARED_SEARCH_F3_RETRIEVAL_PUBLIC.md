@@ -353,18 +353,40 @@ rebuild required. Feature flag via environment variable; no new flag system.
 **Requires: Owner Approval after GPT independent verify + CI success**
 
 ```
-1. Apply F1 Foundation migration (20260919_shared_search_foundation.sql)
-2. Apply F3 Retrieval migration (20260919_shared_search_retrieval.sql)
-3. Verify schema: search_documents / search_rebuild_runs / search_rebuild_documents
-4. Run FULL rebuild (all 8 adapters)
+1. Provision OpenSearch cluster + install analysis-nori plugin
+2. Apply F1 Foundation migration (20260919_shared_search_foundation.sql)
+   (F3 Retrieval SQL migration removed — OpenSearch path replaces PostgreSQL FTS)
+3. Run opensearch_bootstrap.py — verify cluster health + Nori plugin
+4. Run FULL rebuild: python3 tools/shared_search/opensearch_rebuild.py --full
 5. Per-domain count reconcile vs. Domain SoT:
-   - GUIDE / SAFETY_MATERIAL / CSI / CHEM / KNOWLEDGE / PRECEDENT / LEGAL
+   - GUIDE / SAFETY_MATERIAL / CSI / CHEM / KNOWLEDGE / PRECEDENT / LEGAL / RISK
    - duplicate identity = 0
    - unexplained_drop = 0
-   - HOLD exposure = 0
-6. Retrieval smoke tests against production search_documents
+   - HOLD exposure in serving index = 0
+6. Retrieval smoke tests via /public/safety-search
 7. tai-api deploy + /public/safety-search health check
 ```
+
+#### Nori User Dictionary — DEFERRED
+
+TAI Search Dictionary remains the semantic authority for deterministic
+term expansion and subject matching (T0–T3 retrieval tiers).
+
+Nori `user_dictionary` integration (injecting domain terms into the
+Nori tokenizer at index time) is **intentionally deferred until
+production query-quality evidence demonstrates a need**.
+
+Rationale: injecting terms without production Golden Query data risks
+tokenization and ranking changes that cannot be validated without live
+traffic. The current `tai_nori_index` / `tai_nori_search` analyzers
+already produce correct Korean morphological analysis for all F3 golden
+terms (evidence: `docs/search/evidence/f3_opensearch_nori_analyze_20260919.json`).
+
+This deferral is NOT a gap — it is a deliberate quality-gating
+decision. Nori user dictionary integration will be scoped as a Search
+Quality Tuning item after G1 production evidence is collected.
+
+**This item is not required for F3-G1 infrastructure activation.**
 
 ### GATE-2 (F3-G2): Public Cutover
 
