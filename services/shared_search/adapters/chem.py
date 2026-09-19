@@ -56,6 +56,27 @@ class ChemAdapter:
         self._fetch_by_id = fetch_by_id or (lambda _id: None)
         self._public_mode = public_mode_getter
 
+    @staticmethod
+    def _extract_title(row: dict) -> Optional[str]:
+        """F2 CO §18-§21 title fallback: chemical_name_ko OR A02 product_name.
+        Returns None if both are absent (record is dropped downstream).
+        """
+        import json
+        ko = (row.get("chemical_name_ko") or "").strip() or None
+        if ko:
+            return ko
+        # Attempt A02 product_name from section1_payload
+        payload = row.get("section1_payload")
+        if payload:
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except Exception:
+                    return None
+            from services.kosha_msds.section_fields import extract_product_name
+            return extract_product_name(payload)
+        return None
+
     def iter_documents(self) -> Iterator[dict]:
         mode = self._public_mode()
         public_allowed = mode in ("seo_preview", "full")
@@ -80,7 +101,12 @@ def _normalize_chem(row: dict, *, public_allowed: bool) -> Optional[dict]:
     chem_uuid = row.get("id")
     chem_id = row.get("source_key") or row.get("chem_id")
     ko = row.get("chemical_name_ko")
-    if not chem_uuid or not chem_id or not ko:
+    # Official Section 1 A02 product name, attached by the CHEM
+    # Domain binding. Identity remains chemical UUID / chem_id;
+    # this is display-name only. No synthetic "MSDS-NNNNNN" title.
+    product_name = row.get("product_name")
+    title = ko or product_name
+    if not chem_uuid or not chem_id or not title:
         return None
     # F2 CO §21: the view has no per-chemical timestamp. The reader
     # surfaces `_snapshot_completed_at` from the snapshot join. If it
@@ -93,7 +119,7 @@ def _normalize_chem(row: dict, *, public_allowed: bool) -> Optional[dict]:
     ke = row.get("ke_no")
     en_no = row.get("en_no")
     un = row.get("un_no")
-    aliases = as_str_list([en, cas, ke, en_no, un])
+    aliases = as_str_list([en, product_name, cas, ke, en_no, un])
     scopes = ["SAAS", "PAID"]
     if public_allowed:
         scopes.insert(0, "PUBLIC")
@@ -102,9 +128,9 @@ def _normalize_chem(row: dict, *, public_allowed: bool) -> Optional[dict]:
         "canonical_id": str(chem_uuid),
         "source_id": "KOSHA_MSDS",
         "source_key": str(chem_id),
-        "title": str(ko),
+        "title": str(title),
         "summary": str(en) if en else None,
-        "search_text": " ".join(as_str_list([ko, en, cas, ke, en_no, un])),
+        "search_text": " ".join(as_str_list([title, ko, product_name, en, cas, ke, en_no, un])),
         "aliases": aliases,
         "keywords": [],
         "subjects": [],   # CHEM_TERM per-chemical subject assignment deferred

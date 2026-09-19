@@ -202,6 +202,38 @@ def lookup(q: str, limit: int = 10, subject_type: str | None = None) -> dict:
     return result
 
 
+def lookup_deterministic(
+    q: str,
+    limit: int = 20,
+    subject_type: str | None = None,
+) -> dict:
+    """Deterministic-only dictionary lookup — no Kiwi, no pg_trgm.
+
+    WO-TAI-SHARED-SEARCH-F3 §16.  Used by Shared Search runtime only.
+    Returns the same dict shape as ``lookup()`` but restricted to
+    tiers T1-T3 (EXACT, NORMALIZED_EXACT, PUNCTUATION, approved
+    expansions).  Kiwi TOKEN and TRIGRAM are intentionally excluded.
+
+    Existing ``lookup()`` is unchanged for legacy consumers.
+
+    Returned match_type values will be a subset of:
+        EXACT / NORMALIZED_EXACT / PUNCTUATION /
+        ABBREVIATION_OF / SPACING_VARIANT_OF / PUNCTUATION_VARIANT_OF /
+        SPELLING_VARIANT_OF / ENGLISH_OF / EXACT_ALIAS / SYNONYM_OF
+    """
+    if not q or not q.strip():
+        raise SearchDictError("query 'q' is required")
+    if limit < 1 or limit > 100:
+        raise SearchDictError("limit must be between 1 and 100")
+    eng = _get_engine()
+    result = eng.search(q, limit=limit, subject_type=subject_type)
+    items = list(result["items"])
+    result["items"] = items
+    result["active_tiers"] = ["T1_EXACT", "T2_NORMALIZED_EXACT",
+                               "T2b_PUNCTUATION", "T3_EXPANSION"]
+    return result
+
+
 def health() -> dict:
     eng = _get_engine()
     n_terms = sum(

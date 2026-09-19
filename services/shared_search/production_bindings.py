@@ -45,6 +45,7 @@ from services.shared_search.adapters import (
 from services.shared_search.source_reader import (
     SupabaseClient, paginate_supabase,
 )
+from services.kosha_msds.section_fields import extract_product_name
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +183,11 @@ def _make_chem_adapter(client: SupabaseClient) -> ChemAdapter:
     which one has rows. Both views project the same columns
     (verified in the CHEM catalog migration). We prefer FULL when
     non-empty (a FULL cutover has landed); else SEO preview.
+
+    Display name = chemical_name_ko OR official Section 1 A02
+    product name from kosha_msds_sections. Search never hydrates,
+    materializes, or publishes CHEM rows; it only binds the already
+    published current read model to the official product name.
     """
     def _pick_source() -> str:
         for candidate in ("kosha_msds_current",
@@ -192,9 +198,31 @@ def _make_chem_adapter(client: SupabaseClient) -> ChemAdapter:
                 return candidate
         return "kosha_msds_seo_preview_current"
 
+    def _section1_product_names() -> dict[str, Optional[str]]:
+        out: dict[str, Optional[str]] = {}
+        for sec in paginate_supabase(
+            client,
+            table="kosha_msds_sections",
+            select="chemical_id,section_no,payload_json",
+            apply_filters=lambda q: q.eq("section_no", 1),
+            order_column="chemical_id",
+        ):
+            cid = sec.get("chemical_id")
+            if not cid:
+                continue
+            out[str(cid)] = extract_product_name(sec.get("payload_json"))
+        return out
+
+    def _attach_product_name(row: dict, names: dict[str, Optional[str]]) -> dict:
+        cid = row.get("id")
+        if cid is not None:
+            row["product_name"] = names.get(str(cid))
+        return row
+
     def _iter_current() -> Iterator[dict]:
         table = _pick_source()
         snapshot_completed: dict[str, Optional[str]] = {}
+        names = _section1_product_names()
         for row in paginate_supabase(
             client,
             table=table,
@@ -210,7 +238,7 @@ def _make_chem_adapter(client: SupabaseClient) -> ChemAdapter:
                     client, snapshot_table="kosha_msds_snapshots",
                     snapshot_id=sid)
             row["_snapshot_completed_at"] = snapshot_completed[sid]
-            yield row
+            yield _attach_product_name(row, names)
 
     def _by_id(chem_uuid: str) -> Optional[dict]:
         for table in ("kosha_msds_current",
@@ -227,6 +255,15 @@ def _make_chem_adapter(client: SupabaseClient) -> ChemAdapter:
                     row["_snapshot_completed_at"] = _snapshot_completed_at(
                         client, snapshot_table="kosha_msds_snapshots",
                         snapshot_id=row["snapshot_id"])
+                sec = _fetch_one(
+                    client, table="kosha_msds_sections",
+                    select="chemical_id,section_no,payload_json",
+                    key_column="chemical_id", key_value=chem_uuid,
+                    extra_filters=lambda q: q.eq("section_no", 1),
+                )
+                if sec is not None:
+                    row["product_name"] = extract_product_name(
+                        sec.get("payload_json"))
                 return row
         return None
 
@@ -353,7 +390,7 @@ def _make_safety_material_adapter(client: SupabaseClient) -> SafetyMaterialAdapt
             return None
         # Step 2: snapshot membership gate — material must be in the
         # current Domain set. Catalog presence alone is NOT sufficient
-        # (WO-TAI-SHARED-SEARCH-F2-PR408-CLEANROOM-REPAIR-001 §10).
+        # (WO-TAI-SHARED-SEARCH-F2-FINAL-PATCH §3).
         membership_r = (client.table("kosha_safety_material_snapshot_items")
                                .select("material_id")
                                .eq("snapshot_id", snap)
@@ -362,7 +399,7 @@ def _make_safety_material_adapter(client: SupabaseClient) -> SafetyMaterialAdapt
                                .execute())
         if not list(getattr(membership_r, "data", None) or []):
             return None
-        # Step 3: catalog row (§11).
+        # Step 3: catalog row.
         cat = _fetch_one(
             client, table="kosha_safety_materials",
             select="id,title,url,category,industry_category,accident_type,product_type",
@@ -377,10 +414,10 @@ def _make_safety_material_adapter(client: SupabaseClient) -> SafetyMaterialAdapt
                     "source_url,source_published_at,source_updated_at"),
             key_column="material_id", key_value=material_id,
         ) or {}
-        # Step 5-6: ALL hold rows — fail-closed (§12).
-        # _fetch_one would return at most one row; with RESOLVED+OPEN
-        # coexisting the OPEN hold could be missed depending on row
-        # order.  Read every hold row and ANY non-RESOLVED → HOLD.
+        # Step 5-6: ALL hold rows for this material — fail-closed.
+        # Multiple holds possible (e.g. RESOLVED + OPEN); a single
+        # _fetch_one would miss the OPEN one. ANY non-RESOLVED hold
+        # produces active_hold = True (WO §4).
         holds_r = (client.table("kosha_safety_material_storage_holds")
                            .select("material_id,status")
                            .eq("material_id", material_id)
@@ -390,8 +427,6 @@ def _make_safety_material_adapter(client: SupabaseClient) -> SafetyMaterialAdapt
             (h.get("status") or "OPEN") != "RESOLVED"
             for h in hold_rows
         )
-        # Step 7: reuse snap for timestamp — single _latest_snapshot_id
-        # call (§13).
         snap_completed = _snapshot_completed_at(
             client, snapshot_table="kosha_safety_material_snapshots",
             snapshot_id=snap)

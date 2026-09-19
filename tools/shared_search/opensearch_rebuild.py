@@ -1,0 +1,300 @@
+"""OpenSearch full rebuild tool — WO-TAI-SHARED-SEARCH-F3 §46 + F3-G1 §2-§17.
+
+Rebuild flow (§16 F3-G1):
+  1. Supabase client 생성
+  2. build_production_adapters(supabase_client)    ← real F2 API (§3)
+  3. begin_run
+  4. create_candidate_index
+  5. for each adapter:
+       adapter.iter_documents()                     ← real F2 API
+         → prepare_search_document()               ← F1 canonical (§4-§5)
+         → PUBLISHED only (§6)
+         → global identity duplicate guard (§7-§9)
+         → bulk stage
+  6. per-domain expected/indexed comparison (§10)
+  7. failed_bulk_items == 0 check (§8)
+  8. refresh + validate_run (HARD: actual == expected, per-domain, §9-§10)
+  9. promote() — VALIDATED guard (§12-§14)
+
+Hard-fail: any partial bulk failure, count mismatch, or duplicate → FAILED,
+alias unchanged.
+
+OpenSearch _id aggregation is NOT used for duplicate detection (§6 BLOCKER B):
+OpenSearch _id field is not aggregatable. Duplicate detection is done in TAI
+canonical preparation (global_seen identity tracking), before any write.
+
+Usage:
+    DRY RUN (no OpenSearch writes):
+        python3 tools/shared_search/opensearch_rebuild.py --dry-run
+
+    FULL REBUILD (requires Owner GO — production OpenSearch):
+        python3 tools/shared_search/opensearch_rebuild.py --full
+
+Env vars:
+    TAI_OPENSEARCH_URL
+    SUPABASE_URL
+    SUPABASE_SERVICE_ROLE_KEY  (or SUPABASE_KEY)
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))))
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+from services.shared_search.contract import PUBLICATION_STATUS_PUBLISHED
+from services.shared_search.production_bindings import build_production_adapters
+from services.shared_search.writer import prepare_search_document
+from services.shared_search.contract import SearchContractError
+from services.shared_search.census import run_census
+from services.shared_search.opensearch_client import get_client
+from services.shared_search.opensearch_store import (
+    OpenSearchSearchStore,
+    RebuildRejected,
+    RUN_STATUS_FAILED,
+)
+
+
+# ---------------------------------------------------------------------------
+# Supabase client factory (same pattern as tools/shared_search/f2_census.py)
+# ---------------------------------------------------------------------------
+
+def _build_supabase_client():
+    """Import supabase-py lazily so CLI stays importable in tests."""
+    from supabase import create_client
+    url = os.environ["SUPABASE_URL"]
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ["SUPABASE_KEY"]
+    return create_client(url, key)
+
+
+# ---------------------------------------------------------------------------
+# Dry-run (no OpenSearch writes, uses real F2 adapter API + census.py)
+# §3 F3-G1: Use adapter.iter_documents() → prepare_search_document() via
+#            run_census(). Never duplicate census logic inside this script.
+# ---------------------------------------------------------------------------
+
+def dry_run() -> None:
+    """Dry-run census using real F2 adapter API (§17 F3-G1).
+
+    Reports per-domain: yielded, published, hold, removed, duplicates,
+    normalization_failure — without writing to OpenSearch.
+
+    Uses run_census() from services/shared_search/census.py as the
+    single census authority. No domain census logic is duplicated here.
+
+    Also performs global cross-adapter duplicate identity check
+    (object_type, canonical_id) in informational mode only.
+    """
+    supabase = _build_supabase_client()
+    adapters = build_production_adapters(supabase)
+
+    print("=== DRY RUN CENSUS ===")
+    print(f"  {'Domain':20s} {'yielded':>8s} {'published':>10s} {'hold':>6s} "
+          f"{'removed':>8s} {'dup':>5s} {'norm_fail':>10s}")
+
+    grand_total_yielded    = 0
+    grand_total_published  = 0
+    grand_total_hold       = 0
+    grand_total_removed    = 0
+    grand_total_dup        = 0
+    grand_total_norm_fail  = 0
+
+    # Global cross-adapter identity tracking
+    global_seen: set[tuple[str, str]] = set()
+    cross_adapter_dups: list[str] = []
+
+    for adapter in adapters:
+        # run_census() is READ-only and uses normalize_document internally.
+        # It tracks published / hold / removed / duplicate_canonical_ids.
+        census = run_census(adapter)
+
+        grand_total_yielded   += census.yielded_count
+        grand_total_published += census.published
+        grand_total_hold      += census.hold
+        grand_total_removed   += census.removed
+        grand_total_dup       += census.duplicate_canonical_ids
+        grand_total_norm_fail += (
+            census.normalization_failures
+            + census.identity_failures
+            + census.title_failures
+            + census.timestamp_failures
+        )
+
+        print(
+            f"  {adapter.domain_name:20s} "
+            f"{census.yielded_count:8d} "
+            f"{census.published:10d} "
+            f"{census.hold:6d} "
+            f"{census.removed:8d} "
+            f"{census.duplicate_canonical_ids:5d} "
+            f"{census.normalization_failures:10d}"
+        )
+
+        # Cross-adapter global duplicate detection (informational)
+        # Re-iterate adapter to check cross-domain identity conflicts
+        for payload in adapter.iter_documents():
+            try:
+                doc, _ = prepare_search_document(payload)
+            except SearchContractError:
+                continue
+            if doc.publication_status != PUBLICATION_STATUS_PUBLISHED:
+                continue
+            identity = (doc.object_type, doc.canonical_id)
+            if identity in global_seen:
+                cross_adapter_dups.append(
+                    f"{adapter.domain_name}:{doc.canonical_id}"
+                )
+            else:
+                global_seen.add(identity)
+
+    print(f"  {'TOTAL':20s} "
+          f"{grand_total_yielded:8d} "
+          f"{grand_total_published:10d} "
+          f"{grand_total_hold:6d} "
+          f"{grand_total_removed:8d} "
+          f"{grand_total_dup:5d} "
+          f"{grand_total_norm_fail:10d}")
+
+    if cross_adapter_dups:
+        print(f"\n  WARN: {len(cross_adapter_dups)} cross-adapter duplicates detected:")
+        for dup in cross_adapter_dups[:10]:
+            print(f"    {dup}")
+    else:
+        print("\n  Cross-adapter duplicate check: CLEAN")
+
+    print()
+    print(f"  OpenSearch write = 0, DB write = 0")
+
+
+# ---------------------------------------------------------------------------
+# Full rebuild
+# ---------------------------------------------------------------------------
+
+def full_rebuild() -> None:
+    """Production full rebuild (§16 F3-G1).
+
+    Duplicate detection via global_seen (§7-§9 F3-G1):
+    OpenSearch _id field is NOT aggregatable — no _id cardinality check.
+    Duplicates are detected in TAI canonical preparation stage,
+    before any OpenSearch write.
+    """
+    supabase = _build_supabase_client()
+    adapters = build_production_adapters(supabase)
+    client   = get_client()
+    store    = OpenSearchSearchStore(client)
+
+    expected_domains = [a.domain_name for a in adapters]
+    run_id = store.begin_run(expected_domains)
+    logger.info("Run ID: %s", run_id)
+
+    try:
+        idx = store.create_candidate_index(run_id)
+        logger.info("Candidate index: %s", idx)
+
+        total_prepared   = 0
+        per_domain_expected: dict[str, int] = {}
+
+        # §7-§9 F3-G1: Global identity guard — duplicate detection before write
+        # OpenSearch _id aggregation on _id is NOT supported (not aggregatable).
+        # TAI is the single authority for duplicate detection.
+        global_seen: set[tuple[str, str]] = set()
+
+        for adapter in adapters:
+            domain = adapter.domain_name
+            prepared_docs: list[dict] = []
+            prepared_count = 0
+
+            for raw_payload in adapter.iter_documents():
+                # §4-§5: canonical prepare (normalize + content_hash)
+                try:
+                    doc, wire = prepare_search_document(raw_payload)
+                except SearchContractError as exc:
+                    logger.warning("Normalization failure %s: %s", domain, exc)
+                    continue
+
+                # §6: PUBLISHED only
+                if doc.publication_status != PUBLICATION_STATUS_PUBLISHED:
+                    continue
+
+                # §7-§9: Global identity duplicate guard
+                identity = (doc.object_type, doc.canonical_id)
+                if identity in global_seen:
+                    reason = (
+                        f"Duplicate canonical identity "
+                        f"({doc.object_type}, {doc.canonical_id}) "
+                        f"in domain={domain}. Rebuild aborted."
+                    )
+                    store.fail_run(run_id, reason)
+                    raise RebuildRejected(reason)
+                global_seen.add(identity)
+
+                prepared_docs.append(wire)
+                prepared_count += 1
+
+            per_domain_expected[domain] = prepared_count
+            total_prepared += prepared_count
+
+            # Bulk stage (raises RebuildRejected on any failure §8)
+            indexed, failed = store.stage_documents(
+                run_id,
+                iter(prepared_docs),
+                domain_name=domain,
+                prepared_count=prepared_count,
+            )
+            logger.info(
+                "  %s: prepared=%d, indexed=%d, failed=%d",
+                domain, prepared_count, indexed, failed,
+            )
+
+        logger.info(
+            "Total: prepared=%d, domains=%d", total_prepared, len(adapters)
+        )
+
+        # §9-§10: Hard validation (actual == expected, per-domain parity)
+        store.validate_run(
+            run_id,
+            expected_count=total_prepared,
+            per_domain_expected=per_domain_expected,
+        )
+
+        # §12-§14: Promote with VALIDATED guard
+        new_idx = store.promote(run_id)
+        logger.info("REBUILD COMPLETE → %s", new_idx)
+
+    except RebuildRejected as exc:
+        logger.error("REBUILD FAILED (safety blocked): %s", exc)
+        sys.exit(1)
+    except Exception as exc:
+        store.fail_run(run_id, str(exc))
+        logger.error("REBUILD FAILED (unexpected): %s", exc)
+        raise
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--dry-run", action="store_true",
+                   help="Census without OpenSearch writes")
+    g.add_argument("--full", action="store_true",
+                   help="REQUIRES Owner GO — production write")
+    args = p.parse_args()
+
+    if args.dry_run:
+        dry_run()
+    else:
+        full_rebuild()
+
+
+if __name__ == "__main__":
+    main()
