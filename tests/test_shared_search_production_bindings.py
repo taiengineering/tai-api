@@ -17,6 +17,7 @@ from services.shared_search import (
     run_census, DomainCensus,
     GuideAdapter,
 )
+from services.shared_search.census import CountingFetcher, source_yield_audit
 
 
 # ---------------------------------------------------------------------------
@@ -685,6 +686,174 @@ def test_census_is_shared_module_not_reimplemented_per_adapter():
             assert marker not in text, (
                 f"{py.name} contains census-specific pattern {marker!r}; "
                 "census belongs in services/shared_search/census.py")
+
+
+# ---------------------------------------------------------------------------
+# F2 FINAL2 §7 — census source/yield audit (CountingFetcher + source_yield_audit)
+# ---------------------------------------------------------------------------
+
+
+def test_source_yield_audit_no_drop():
+    """eligible == yielded → unexplained_drop = 0."""
+    audit = source_yield_audit(eligible_source_count=100, yielded_count=100)
+    assert audit["eligible_source_count"] == 100
+    assert audit["yielded_count"] == 100
+    assert audit["source_yield_difference"] == 0
+    assert audit["unexplained_drop"] == 0
+    assert audit["explained_exclusion_count"] == 0
+
+
+def test_source_yield_audit_explained_exclusion():
+    """eligible=100, yielded=95, explained=5 → unexplained_drop=0."""
+    audit = source_yield_audit(
+        eligible_source_count=100,
+        yielded_count=95,
+        explained_exclusions=[{"reason": "HOLD", "count": 5}],
+    )
+    assert audit["source_yield_difference"] == 5
+    assert audit["explained_exclusion_count"] == 5
+    assert audit["unexplained_drop"] == 0
+
+
+def test_source_yield_audit_unexplained_drop():
+    """eligible=100, yielded=90, explained=5 → unexplained_drop=5."""
+    audit = source_yield_audit(
+        eligible_source_count=100,
+        yielded_count=90,
+        explained_exclusions=[{"reason": "HOLD", "count": 5}],
+    )
+    assert audit["unexplained_drop"] == 5
+
+
+def test_counting_fetcher_counts_rows():
+    """CountingFetcher wraps any iterable factory and tallies rows."""
+    data = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+    cf = CountingFetcher(lambda: iter(data))
+    result = list(cf())
+    assert result == data
+    assert cf.count == 3
+
+
+def test_counting_fetcher_resets_on_each_call():
+    """Second call resets count to the new iteration result."""
+    calls = [0]
+
+    def _factory():
+        calls[0] += 1
+        return iter([{"id": "x"}] * calls[0])
+
+    cf = CountingFetcher(_factory)
+    list(cf())
+    assert cf.count == 1
+    list(cf())
+    assert cf.count == 2
+
+
+def test_census_counting_fetcher_detects_silent_drop():
+    """F2 FINAL2 §7: when adapter silently returns None for some source
+    rows, run_census must detect the discrepancy via CountingFetcher.
+    No eligible_source_count is supplied — census auto-wraps the fetcher.
+    """
+    from services.shared_search.adapters.csi_accident import CsiAccidentAdapter
+
+    def _make_row(idx: int, *, include_title: bool = True) -> dict:
+        return {
+            "content_id": f"CSI:test-{idx:04d}",
+            "identity_status": "READY",
+            "title": f"사고 {idx}" if include_title else None,
+            "summary": None,          # no fallback either → adapter drops
+            "occurred_at": "2026-01-01T00:00:00+00:00",
+            "work_process": None,
+            "accident_type": None,
+            "accident_type_major": None,
+            "process_major": None,
+            "process_minor": None,
+            "object_major": None,
+            "cause_major": None,
+            "construction_type": None,
+            "snapshot_id": None,
+        }
+
+    # 5 rows eligible; 2 have title=None AND summary=None → silently dropped.
+    source_rows = [_make_row(i, include_title=(i < 3)) for i in range(5)]
+    adapter = CsiAccidentAdapter(fetch_current=lambda: iter(source_rows))
+
+    census = run_census(adapter)  # no eligible_source_count arg
+    assert census.eligible_source_count == 5, (
+        "CountingFetcher must report how many rows the source emitted")
+    assert census.yielded_count == 3
+    assert census.source_yield_difference == 2
+    # The 2 rows had both title and summary = None — not explained → unexplained.
+    assert census.unexplained_drop == 2
+    assert any("unexplained" in w for w in census.warnings)
+
+
+def test_census_title_fallback_not_counted_as_drop():
+    """CSI rows where title=None but summary exists MUST yield a document.
+    CountingFetcher should see 0 unexplained_drop for those rows."""
+    from services.shared_search.adapters.csi_accident import CsiAccidentAdapter
+
+    def _row(idx: int) -> dict:
+        return {
+            "content_id": f"CSI:fb-{idx:04d}",
+            "identity_status": "READY",
+            "title": None,
+            "summary": f"요약 {idx}",
+            "occurred_at": "2026-01-01T00:00:00+00:00",
+            "work_process": None,
+            "accident_type": None,
+            "accident_type_major": None,
+            "process_major": None,
+            "process_minor": None,
+            "object_major": None,
+            "cause_major": None,
+            "construction_type": None,
+            "snapshot_id": None,
+        }
+
+    rows = [_row(i) for i in range(3)]
+    adapter = CsiAccidentAdapter(fetch_current=lambda: iter(rows))
+    census = run_census(adapter)
+
+    assert census.eligible_source_count == 3
+    assert census.yielded_count == 3      # all 3 yielded via summary fallback
+    assert census.unexplained_drop == 0
+    assert census.adapter_extras.get("title_fallback_count") == 3
+
+
+def test_census_chem_all_product_name_fallback_no_drop():
+    """CHEM rows where chemical_name_ko=None but product_name exists MUST
+    yield; eligible_source_count == yielded_count, unexplained_drop = 0."""
+    import os
+    os.environ.setdefault("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    from services.shared_search.adapters.chem import ChemAdapter
+
+    def _row(idx: int) -> dict:
+        return {
+            "id": f"chem-uuid-{idx:04d}",
+            "source_key": f"C{idx:05d}",
+            "chem_id": f"C{idx:05d}",
+            "chemical_name_ko": None,          # all NULL, as in production
+            "product_name": f"A02 공식제품명 {idx}",  # from Section 1 A02
+            "chemical_name_en": None,
+            "cas_no": None,
+            "ke_no": None,
+            "en_no": None,
+            "un_no": None,
+            "_snapshot_completed_at": "2026-09-19T00:00:00+00:00",
+        }
+
+    rows = [_row(i) for i in range(5)]
+    adapter = ChemAdapter(
+        fetch_current=lambda: iter(rows),
+        public_mode_getter=lambda: "seo_preview",
+    )
+    census = run_census(adapter)
+
+    assert census.eligible_source_count == 5
+    assert census.yielded_count == 5
+    assert census.unexplained_drop == 0
+    assert census.title_failures == 0
 
 
 # ---------------------------------------------------------------------------
