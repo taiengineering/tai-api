@@ -1,12 +1,11 @@
 """Shared Search Result Contract — WO-TAI-SHARED-SEARCH-F3 §30-§31.
 
-Defines `SearchResult` (one hit) and `SearchResponse` (paginated
-page) that ALL consumers — Public, SaaS, Paid — use without
-modification.  No per-consumer shaping happens here.
+Defines `SearchResult` (one hit) and `SearchResponse` (paginated page).
+Stable across Public, SaaS, and Paid consumers.
 
-QA / logging: every result carries enough explanation to answer
-"why was this returned?" without exposing internal SQL or scoring
-coefficients.
+Tier vocabulary updated for OpenSearch backend (§31):
+  BM25_NORI       replaces FTS
+  FUZZY_FALLBACK  replaces TRIGRAM
 """
 from __future__ import annotations
 
@@ -18,7 +17,9 @@ from typing import Optional
 class SearchResult:
     """One retrieval hit.
 
-    Null-tolerant: callers may leave optional fields None.
+    `match_type` carries the winning tier name.
+    `opensearch_score` is available for internal QA/logging but is
+    NOT included in the public-facing to_dict() output.
     """
     object_type:          str
     canonical_id:         str
@@ -27,29 +28,32 @@ class SearchResult:
     # Provenance
     source_id:            str
     source_key:           Optional[str]
-    source_updated_at:    Optional[str]  # ISO-8601 string as stored
+    source_updated_at:    Optional[str]
 
     # Presentation
     summary:              Optional[str] = None
     public_url:           Optional[str] = None
     saas_url:             Optional[str] = None
 
-    # Retrieval explanation (§31): preserved for QA/logging.
-    # Consumers decide which of these to surface to end-users.
-    match_type:           str = ""        # winning tier name
-    matched_on:           Optional[str] = None   # e.g. the actual term matched
-    rank_tier:            int = 0         # tier precedence index (0 = highest)
+    # Retrieval explanation (§31)
+    match_type:           str = ""      # winning tier name
+    matched_on:           Optional[str] = None
+    rank_tier:            int = 0       # tier precedence index (0 = highest)
 
-    # Subject evidence when match came via SUBJECT tier
+    # Subject evidence (when match came via DICTIONARY_EXACT / SUBJECT tiers)
     subject_type:         Optional[str] = None
     subject_key:          Optional[str] = None
-    subject_match_type:   Optional[str] = None   # EXACT / SYNONYM_OF / TOKEN …
+    subject_match_type:   Optional[str] = None
     matched_term:         Optional[str] = None
 
-    # Internal scoring detail (available for logging; not part of public API)
+    # Internal QA field — not in public response (§31)
+    opensearch_score:     Optional[float] = None
+
+    # Score detail dict for structured logging
     score_detail:         dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
+        """Public-safe serialisation. No internal scores or debug SQL."""
         return {
             "object_type":        self.object_type,
             "canonical_id":       self.canonical_id,
@@ -79,14 +83,13 @@ class SearchResponse:
     total:               int
     items:               list[SearchResult] = field(default_factory=list)
 
-    # Active tiers that produced at least one hit (for diagnostics/UI).
+    # Active tiers that produced ≥ 1 hit (for diagnostics/UI)
     active_tiers:        list[str] = field(default_factory=list)
 
-    # Dictionary snapshot (§34): last-built / current version string,
-    # or None if unavailable.
+    # Dictionary snapshot version, if available
     dictionary_snapshot: Optional[str] = None
 
-    status:              str = "ok"   # "ok" | "empty" | "error"
+    status:              str = "ok"    # "ok" | "empty" | "error"
 
     def to_dict(self) -> dict:
         return {

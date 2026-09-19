@@ -84,9 +84,17 @@ from services.shared_search.result import SearchResult, SearchResponse
 from services.shared_search.retrieval import (
     SharedRetrievalEngine,
     MemorySearchReader,
-    SupabaseSearchReader,
     retrieve,
 )
+# F3 OpenSearch surface
+from services.shared_search.opensearch_client import (
+    get_client as get_opensearch_client,
+    OpenSearchUnavailable,
+    CURRENT_ALIAS as OPENSEARCH_CURRENT_ALIAS,
+)
+from services.shared_search.opensearch_mapping import INDEX_BODY as OPENSEARCH_INDEX_BODY
+from services.shared_search.opensearch_store import OpenSearchSearchStore
+from services.shared_search.opensearch_reader import OpenSearchSearchReader
 
 __all__ = [
     "PUBLICATION_STATUS_PUBLISHED", "PUBLICATION_STATUS_HOLD",
@@ -110,8 +118,11 @@ __all__ = [
     "LegalAdapter", "RiskAdapter",
     "DomainCensus", "run_census", "CountingFetcher", "source_yield_audit",
     "build_production_adapters",
-    # F3
+    # F3 — query + retrieval
     "build_query_plan", "SearchQueryPlan", "SubjectCandidate", "TIER_PRECEDENCE",
     "SearchResult", "SearchResponse",
-    "SharedRetrievalEngine", "MemorySearchReader", "SupabaseSearchReader", "retrieve",
+    "SharedRetrievalEngine", "MemorySearchReader", "retrieve",
+    # F3 — OpenSearch backend
+    "get_opensearch_client", "OpenSearchUnavailable", "OPENSEARCH_CURRENT_ALIAS",
+    "OPENSEARCH_INDEX_BODY", "OpenSearchSearchStore", "OpenSearchSearchReader",
 ]

@@ -40,6 +40,10 @@ boto3>=1.34.0,<2
 # 라이선스: LGPL v3 — 동적 링크 사용 OK (NOTICE 파일 별도 관리 필요)
 kiwipiepy>=0.22.0,<0.24.0
 kiwipiepy-model>=0.22.0
+
+# OpenSearch: Shared Search retrieval engine (F3). READ-only consumer.
+# opensearch-dsl 미사용 — direct HTTP via opensearch-py만 사용.
+opensearch-py>=2.4.0,<3
 playwright
 
 # === WO-8 Gmail 채널 — 서비스계정 도메인 위임 발송/수신 (2026-07-28 추가) ===

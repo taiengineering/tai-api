@@ -1,124 +1,74 @@
 """Shared Retrieval Engine — WO-TAI-SHARED-SEARCH-F3 §21-§29.
 
-ONE engine used by Public, SaaS, and Paid.  F4 MUST NOT copy this;
-it passes different `visibility_scopes` instead.
+ONE engine for Public, SaaS, and Paid (F4 passes different
+visibility_scopes; no engine copy or modification needed).
 
-Architecture
-------------
-`SharedRetrievalEngine` accepts a `SearchDocumentReader` Protocol.
-Two implementations are provided:
+Backend: OpenSearch via opensearch_reader.OpenSearchSearchReader.
+PostgreSQL and Kiwi paths are not present in this module (§4).
 
-  MemorySearchReader   — for unit tests (no DB).
-  SupabaseSearchReader — production (Supabase-py client against
-                         search_documents after GATE-1 apply).
+Tier precedence (§21, fixed):
+  T0  SOURCE_KEY_EXACT
+  T1  CANONICAL_ID_EXACT
+  T2  DICTIONARY_EXACT
+  T3  DICTIONARY_EXPANSION
+  T4  TITLE_EXACT
+  T5  ALIAS_EXACT
+  T6  SUBJECT_EXACT
+  T7  CONTEXT_EXACT
+  T8  BM25_NORI
+  T9  FUZZY_FALLBACK
 
-Query plan comes from `query.py` (which wraps search_query_svc).
-Result contract is in `result.py`.
+_msearch (§22): T0-T8 in ONE HTTP round-trip via opensearch_reader.
+FUZZY_FALLBACK fires separately only when T0-T8 yield insufficient
+results (§25).
 
-Tier precedence (§22, fixed):
-  1. IDENTIFIER_EXACT
-  2. CANONICAL_EXACT
-  3. SUBJECT
-  4. TITLE_EXACT
-  5. ALIAS_EXACT
-  6. CONTEXT
-  7. FTS
-  8. TRIGRAM
+Ranking (§29):
+  tier precedence → _score DESC → source_updated_at DESC
+  → object_type ASC → canonical_id ASC
 
-Ranking within a tier (§24):
-  tier precedence → source_updated_at DESC → object_type ASC → canonical_id ASC
-
-Dedup (§25): (object_type, canonical_id); highest tier wins.
-Pagination (§26): stable offset pagination with deterministic ordering.
-Visibility (§27): publication_status=PUBLISHED AND scope ∈ visibility_scopes.
-Legal authority (§29): no applicability fields produced here.
+Dedup (§28): (object_type, canonical_id), highest tier wins.
+Pagination (§30): stable offset, page_size ≤ 50.
+Visibility (§27): enforced in reader queries.
+Legal authority (§7): no applicability fields produced.
+CHEM public mode (§28): controlled by adapter layer, not engine.
 """
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Iterable, Optional, Protocol, runtime_checkable
+from typing import Any, Iterable, Optional
 
 from services.shared_search.query import (
     SearchQueryPlan,
     SubjectCandidate,
-    TIER_ALIAS_EXACT,
-    TIER_CANONICAL_EXACT,
-    TIER_CONTEXT,
-    TIER_FTS,
-    TIER_IDENTIFIER_EXACT,
+    TIER_BM25_NORI,
+    TIER_CANONICAL_ID_EXACT,
+    TIER_CONTEXT_EXACT,
+    TIER_DICTIONARY_EXACT,
+    TIER_DICTIONARY_EXPANSION,
+    TIER_FUZZY_FALLBACK,
     TIER_PRECEDENCE,
-    TIER_SUBJECT,
+    TIER_SOURCE_KEY_EXACT,
+    TIER_SUBJECT_EXACT,
     TIER_TITLE_EXACT,
-    TIER_TRIGRAM,
+    TIER_ALIAS_EXACT,
     build_query_plan,
 )
 from services.shared_search.result import SearchResponse, SearchResult
 
 
 # ---------------------------------------------------------------------------
-# Reader Protocol — abstraction over DB / memory (testable without DB)
-# ---------------------------------------------------------------------------
-
-@runtime_checkable
-class SearchDocumentReader(Protocol):
-    """Read-only access to the search_documents projection.
-
-    Every method returns raw dicts from the projection (same keys as
-    the SQL table). The engine normalises them into `SearchResult`.
-
-    `object_types` — if non-empty, restrict results to these types.
-    `visibility`   — list of required scopes (e.g. ["PUBLIC"]).
-    """
-
-    def query_identifier_exact(
-        self, q: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]: ...
-
-    def query_canonical_exact(
-        self, q: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]: ...
-
-    def query_subject(
-        self, subject_key: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]: ...
-
-    def query_title_exact(
-        self, title: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]: ...
-
-    def query_alias_exact(
-        self, alias: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]: ...
-
-    def query_context(
-        self, context_key: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]: ...
-
-    def query_fts(
-        self, q: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]: ...
-
-    def query_trigram(
-        self, q: str, *, object_types: list[str], visibility: list[str],
-        similarity_threshold: float,
-    ) -> list[dict]: ...
-
-
-# ---------------------------------------------------------------------------
-# MemorySearchReader — in-process store for unit tests
+# MemorySearchReader — unit tests only (§20)
 # ---------------------------------------------------------------------------
 
 class MemorySearchReader:
-    """Implements SearchDocumentReader against an in-process list.
+    """In-process reader for unit tests. No DB / no HTTP.
 
-    Accepts dicts matching the search_documents schema.
-    Used exclusively in tests — never in production paths.
+    Supports the same 10-tier vocabulary as OpenSearchSearchReader.
+    PostgreSQL-specific tier names (FTS, TRIGRAM) are not present.
     """
 
     def __init__(self, documents: list[dict]):
         self._docs = list(documents)
-
-    # --- helpers ---
 
     def _visible(self, doc: dict, visibility: list[str]) -> bool:
         if doc.get("publication_status") != "PUBLISHED":
@@ -131,261 +81,148 @@ class MemorySearchReader:
             return docs
         return [d for d in docs if d.get("object_type") in object_types]
 
-    def _base(self, object_types: list[str], visibility: list[str]) -> list[dict]:
+    def _base(self, ot: list[str], vis: list[str]) -> list[dict]:
         return self._filter_type(
-            [d for d in self._docs if self._visible(d, visibility)],
-            object_types,
+            [d for d in self._docs if self._visible(d, vis)], ot
         )
 
-    # --- tier implementations ---
+    def run_msearch(
+        self,
+        *,
+        normalized_query: str,
+        identifier_candidates: list[str],
+        subject_candidates: list[Any],
+        object_types: list[str],
+        visibility: list[str],
+    ) -> dict[str, list[dict]]:
+        """Return dict: tier_name → matching docs."""
+        q   = normalized_query
+        ot  = object_types
+        vis = visibility
+        result: dict[str, list[dict]] = {}
 
-    def query_identifier_exact(
-        self, q: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]:
+        def add(tier: str, docs: list[dict]) -> None:
+            if docs:
+                result.setdefault(tier, []).extend(docs)
+
         q_lower = q.lower()
-        return [
-            d for d in self._base(object_types, visibility)
-            if (d.get("source_key") or "").lower() == q_lower
-        ]
 
-    def query_canonical_exact(
-        self, q: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]:
-        q_lower = q.lower()
-        return [
-            d for d in self._base(object_types, visibility)
-            if (d.get("canonical_id") or "").lower() == q_lower
-        ]
+        # T0: source_key exact
+        for ident in identifier_candidates:
+            add(TIER_SOURCE_KEY_EXACT,
+                [d for d in self._base(ot, vis)
+                 if (d.get("source_key") or "").lower() == ident.lower()])
 
-    def query_subject(
-        self, subject_key: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]:
-        key_lower = subject_key.lower()
-        result = []
-        for d in self._base(object_types, visibility):
-            subjects = d.get("subjects") or []
-            if isinstance(subjects, str):
-                try:
-                    subjects = json.loads(subjects)
-                except Exception:
-                    subjects = []
-            for s in subjects:
-                if isinstance(s, dict) and (s.get("subject_key") or "").lower() == key_lower:
-                    result.append(d)
-                    break
-        return result
+        # T1: canonical_id exact
+        for ident in identifier_candidates:
+            add(TIER_CANONICAL_ID_EXACT,
+                [d for d in self._base(ot, vis)
+                 if (d.get("canonical_id") or "").lower() == ident.lower()])
 
-    def query_title_exact(
-        self, title: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]:
-        t_lower = title.lower()
-        return [
-            d for d in self._base(object_types, visibility)
-            if (d.get("title") or "").lower() == t_lower
-        ]
+        # T2/T3: dictionary subject candidates
+        _dict_exact_types = {"EXACT", "NORMALIZED_EXACT", "PUNCTUATION", "EXACT_ALIAS"}
+        for cand in subject_candidates:
+            sk_lower = (cand.subject_key or "").lower()
+            tier = (TIER_DICTIONARY_EXACT
+                    if cand.match_type in _dict_exact_types
+                    else TIER_DICTIONARY_EXPANSION)
+            matching = []
+            for d in self._base(ot, vis):
+                subjects = d.get("subjects") or []
+                if isinstance(subjects, str):
+                    try:
+                        subjects = json.loads(subjects)
+                    except Exception:
+                        subjects = []
+                for s in subjects:
+                    if isinstance(s, dict) and (s.get("subject_key") or "").lower() == sk_lower:
+                        matching.append(d)
+                        break
+            add(tier, matching)
 
-    def query_alias_exact(
-        self, alias: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]:
-        a_lower = alias.lower()
-        return [
-            d for d in self._base(object_types, visibility)
-            if any(
-                (a or "").lower() == a_lower
-                for a in (d.get("aliases") or [])
-            )
-        ]
+        # T4: title exact
+        add(TIER_TITLE_EXACT,
+            [d for d in self._base(ot, vis)
+             if (d.get("title") or "").lower() == q_lower])
 
-    def query_context(
-        self, context_key: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]:
-        ck_lower = context_key.lower()
-        result = []
-        for d in self._base(object_types, visibility):
-            ctx = d.get("context") or []
-            if isinstance(ctx, str):
-                try:
-                    ctx = json.loads(ctx)
-                except Exception:
-                    ctx = []
-            for c in ctx:
-                if isinstance(c, dict) and (c.get("context_key") or "").lower() == ck_lower:
-                    result.append(d)
-                    break
-        return result
+        # T5: alias exact
+        add(TIER_ALIAS_EXACT,
+            [d for d in self._base(ot, vis)
+             if any((a or "").lower() == q_lower for a in (d.get("aliases") or []))])
 
-    def query_fts(
-        self, q: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]:
-        """Simple substring FTS fallback for tests.
-        Production uses to_tsvector(simple, search_text) @@ plainto_tsquery."""
+        # T6: subject_key = raw query (single token)
+        if " " not in q.strip():
+            matching = []
+            for d in self._base(ot, vis):
+                subjects = d.get("subjects") or []
+                if isinstance(subjects, str):
+                    try:
+                        subjects = json.loads(subjects)
+                    except Exception:
+                        subjects = []
+                for s in subjects:
+                    if isinstance(s, dict) and (s.get("subject_key") or "").lower() == q_lower:
+                        matching.append(d)
+                        break
+            add(TIER_SUBJECT_EXACT, matching)
+
+        # T7: context_key = raw query (single token)
+        if " " not in q.strip():
+            matching = []
+            for d in self._base(ot, vis):
+                ctx = d.get("context") or []
+                if isinstance(ctx, str):
+                    try:
+                        ctx = json.loads(ctx)
+                    except Exception:
+                        ctx = []
+                for c in ctx:
+                    if isinstance(c, dict) and (c.get("context_key") or "").lower() == q_lower:
+                        matching.append(d)
+                        break
+            add(TIER_CONTEXT_EXACT, matching)
+
+        # T8: BM25_NORI — simple substring for tests
         tokens = q.lower().split()
-        if not tokens:
-            return []
-        result = []
-        for d in self._base(object_types, visibility):
-            text = (d.get("search_text") or "").lower()
-            if all(t in text for t in tokens):
-                result.append(d)
+        if tokens:
+            add(TIER_BM25_NORI,
+                [d for d in self._base(ot, vis)
+                 if all(t in (d.get("search_text") or "").lower() for t in tokens)])
+
         return result
 
-    def query_trigram(
-        self, q: str, *, object_types: list[str], visibility: list[str],
-        similarity_threshold: float = 0.3,
+    def run_fuzzy(
+        self,
+        normalized_query: str,
+        *,
+        object_types: list[str],
+        visibility: list[str],
     ) -> list[dict]:
-        """Simple prefix trigram fallback for tests.
-        Production uses title % $q (pg_trgm)."""
-        q_lower = q.lower()
-        result = []
-        for d in self._base(object_types, visibility):
-            title = (d.get("title") or "").lower()
-            if q_lower in title or title in q_lower:
-                result.append(d)
-        return result
+        """FUZZY_FALLBACK: prefix/substring match on title."""
+        q_lower = normalized_query.lower()
+        return [
+            d for d in self._base(object_types, visibility)
+            if q_lower in (d.get("title") or "").lower()
+        ]
 
 
 # ---------------------------------------------------------------------------
-# SupabaseSearchReader — production reader (SQL against search_documents)
+# Retrieve function — combines query plan + reader
 # ---------------------------------------------------------------------------
 
-class SupabaseSearchReader:
-    """Production SearchDocumentReader backed by Supabase-py.
-
-    All queries are READ-only SELECT statements. Zero write / RPC mutation.
-    Index shapes must match 20260919_shared_search_retrieval.sql.
+def _doc_sort_key(doc: dict, tier_idx: int) -> tuple:
+    """Deterministic within-tier sort (§29):
+    tier_idx ASC → _score DESC → source_updated_at DESC
+    → object_type ASC → canonical_id ASC
     """
-
-    # Maximum rows fetched per tier query. The engine deduplicates
-    # across tiers so over-fetching a little avoids losing results.
-    _TIER_LIMIT = 500
-
-    def __init__(self, client: Any):
-        self._client = client
-
-    def _visibility_filter(self, q: Any, visibility: list[str]) -> Any:
-        """Apply publication_status + all required visibility_scopes."""
-        q = q.eq("publication_status", "PUBLISHED")
-        for scope in visibility:
-            q = q.contains("visibility_scopes", [scope])
-        return q
-
-    def _type_filter(self, q: Any, object_types: list[str]) -> Any:
-        if object_types:
-            q = q.in_("object_type", object_types)
-        return q
-
-    def _select(self) -> Any:
-        return self._client.table("search_documents").select(
-            "object_type,canonical_id,title,summary,source_id,source_key,"
-            "source_updated_at,public_url,saas_url,subjects,context,aliases,"
-            "keywords,publication_status,visibility_scopes,content_hash"
-        )
-
-    def _run(self, q: Any) -> list[dict]:
-        r = q.limit(self._TIER_LIMIT).execute()
-        return list(getattr(r, "data", None) or [])
-
-    def query_identifier_exact(
-        self, q: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]:
-        query = self._select().eq("source_key", q)
-        query = self._visibility_filter(query, visibility)
-        query = self._type_filter(query, object_types)
-        return self._run(query)
-
-    def query_canonical_exact(
-        self, q: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]:
-        query = self._select().eq("canonical_id", q)
-        query = self._visibility_filter(query, visibility)
-        query = self._type_filter(query, object_types)
-        return self._run(query)
-
-    def query_subject(
-        self, subject_key: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]:
-        # subjects @> '[{"subject_key": "X"}]'::jsonb
-        payload = json.dumps([{"subject_key": subject_key}])
-        query = self._select().contains("subjects", payload)
-        query = self._visibility_filter(query, visibility)
-        query = self._type_filter(query, object_types)
-        return self._run(query)
-
-    def query_title_exact(
-        self, title: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]:
-        # Case-insensitive exact via lower() index
-        query = self._select().ilike("title", title)
-        query = self._visibility_filter(query, visibility)
-        query = self._type_filter(query, object_types)
-        return self._run(query)
-
-    def query_alias_exact(
-        self, alias: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]:
-        query = self._select().contains("aliases", [alias])
-        query = self._visibility_filter(query, visibility)
-        query = self._type_filter(query, object_types)
-        return self._run(query)
-
-    def query_context(
-        self, context_key: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]:
-        payload = json.dumps([{"context_key": context_key}])
-        query = self._select().contains("context", payload)
-        query = self._visibility_filter(query, visibility)
-        query = self._type_filter(query, object_types)
-        return self._run(query)
-
-    def query_fts(
-        self, q: str, *, object_types: list[str], visibility: list[str]
-    ) -> list[dict]:
-        # Uses FTS index: to_tsvector('simple', search_text) @@ ...
-        # Supabase-py textSearch uses `@@` operator.
-        query = self._select().text_search("search_text", q, config="simple")
-        query = self._visibility_filter(query, visibility)
-        query = self._type_filter(query, object_types)
-        return self._run(query)
-
-    def query_trigram(
-        self, q: str, *, object_types: list[str], visibility: list[str],
-        similarity_threshold: float = 0.3,
-    ) -> list[dict]:
-        # pg_trgm: title % $q — must use raw filter via Supabase-py
-        # The GT filter on similarity() requires a raw SQL RPC or a
-        # custom function. We use a Supabase RPC wrapper.
-        # Fallback: if RPC unavailable, return empty (trigram is last resort).
-        try:
-            r = self._client.rpc(
-                "search_by_trigram",
-                {
-                    "p_q": q,
-                    "p_similarity": similarity_threshold,
-                    "p_visibility": visibility,
-                    "p_object_types": object_types or [],
-                    "p_limit": self._TIER_LIMIT,
-                },
-            ).execute()
-            return list(getattr(r, "data", None) or [])
-        except Exception:
-            return []
-
-
-# ---------------------------------------------------------------------------
-# Shared Retrieval Engine (§21-§29)
-# ---------------------------------------------------------------------------
-
-def _doc_sort_key(row: dict, tier_idx: int) -> tuple:
-    """Deterministic sort key within a tier (§24):
-    tier_precedence → source_updated_at DESC → object_type ASC → canonical_id ASC
-    """
-    # Negate ts so that DESC sort works with a natural sort.
-    ts = row.get("source_updated_at") or ""
-    return (tier_idx, -len(ts), ts[::-1], row.get("object_type", ""), row.get("canonical_id", ""))
+    score = float(doc.get("_opensearch_score") or 0)
+    ts    = doc.get("source_updated_at") or ""
+    return (tier_idx, -score, -len(ts), ts[::-1],
+            doc.get("object_type", ""), doc.get("canonical_id", ""))
 
 
 def _make_result(
-    row: dict,
+    doc: dict,
     *,
     tier_name: str,
     tier_idx: int,
@@ -393,150 +230,151 @@ def _make_result(
     subject_candidate: Optional[SubjectCandidate] = None,
 ) -> SearchResult:
     r = SearchResult(
-        object_type=row.get("object_type", ""),
-        canonical_id=row.get("canonical_id", ""),
-        title=row.get("title", ""),
-        source_id=row.get("source_id", ""),
-        source_key=row.get("source_key"),
-        source_updated_at=row.get("source_updated_at"),
-        summary=row.get("summary"),
-        public_url=row.get("public_url"),
-        saas_url=row.get("saas_url"),
-        match_type=tier_name,
-        matched_on=matched_on,
-        rank_tier=tier_idx,
+        object_type       = doc.get("object_type", ""),
+        canonical_id      = doc.get("canonical_id", ""),
+        title             = doc.get("title", ""),
+        source_id         = doc.get("source_id", ""),
+        source_key        = doc.get("source_key"),
+        source_updated_at = doc.get("source_updated_at"),
+        summary           = doc.get("summary"),
+        public_url        = doc.get("public_url"),
+        saas_url          = doc.get("saas_url"),
+        match_type        = tier_name,
+        matched_on        = matched_on,
+        rank_tier         = tier_idx,
+        opensearch_score  = doc.get("_opensearch_score"),
     )
     if subject_candidate is not None:
-        r.subject_type = subject_candidate.subject_type
-        r.subject_key = subject_candidate.subject_key
+        r.subject_type       = subject_candidate.subject_type
+        r.subject_key        = subject_candidate.subject_key
         r.subject_match_type = subject_candidate.match_type
-        r.matched_term = subject_candidate.matched_term
+        r.matched_term       = subject_candidate.matched_term
     return r
 
 
 def retrieve(
     plan: SearchQueryPlan,
-    reader: SearchDocumentReader,
+    reader: Any,  # MemorySearchReader | OpenSearchSearchReader
+    *,
+    fuzzy_trigger_threshold: int = 0,
 ) -> SearchResponse:
-    """Execute the retrieval plan against `reader`.
+    """Execute the retrieval plan.
 
-    Tier precedence: IDENTIFIER_EXACT → … → TRIGRAM (§22).
-    Dedup: (object_type, canonical_id); highest-priority tier wins (§25).
-    Sort within tier: source_updated_at DESC, object_type ASC, canonical_id ASC (§24).
-    Pagination: stable offset (§26).
-    Legal authority: no applicability fields produced (§29).
-    CHEM public mode: visibility_scopes filter enforces PUBLIC (§27-§28).
+    1. Fire _msearch (T0-T8) via reader.run_msearch().
+    2. Optionally fire FUZZY if hit count ≤ fuzzy_trigger_threshold (§25).
+    3. Dedup by (object_type, canonical_id) — highest tier wins (§28).
+    4. Sort globally by (tier_idx, -score, ts, otype, cid).
+    5. Paginate (§30).
     """
-    seen: dict[tuple[str, str], SearchResult] = {}   # (object_type, canonical_id) → result
-    active_tiers_hit: list[str] = []
-
     ot  = plan.object_types
     vis = plan.visibility_scopes
 
-    def _try_tier(tier_name: str, rows: list[dict], **kwargs: Any) -> None:
+    tier_results = reader.run_msearch(
+        normalized_query    = plan.normalized_query,
+        identifier_candidates = plan.identifier_candidates,
+        subject_candidates  = plan.subject_candidates,
+        object_types        = ot,
+        visibility          = vis,
+    )
+
+    # Materialise subject_candidate lookup for explanation preservation
+    sk_to_cand: dict[str, SubjectCandidate] = {
+        c.subject_key: c for c in plan.subject_candidates
+    }
+
+    # Dedup + collect — process tiers in TIER_PRECEDENCE order
+    seen: dict[tuple[str, str], SearchResult] = {}
+    active_tiers_hit: list[str] = []
+
+    for tier_name in TIER_PRECEDENCE:
+        docs = tier_results.get(tier_name)
+        if not docs:
+            continue
         tier_idx = TIER_PRECEDENCE.index(tier_name)
-        if not rows:
-            return
         if tier_name not in active_tiers_hit:
             active_tiers_hit.append(tier_name)
-        sorted_rows = sorted(rows, key=lambda r: _doc_sort_key(r, tier_idx))
-        for row in sorted_rows:
-            key = (row.get("object_type", ""), row.get("canonical_id", ""))
+        sorted_docs = sorted(docs, key=lambda d: _doc_sort_key(d, tier_idx))
+        for doc in sorted_docs:
+            key = (doc.get("object_type", ""), doc.get("canonical_id", ""))
             if key not in seen:
-                seen[key] = _make_result(row, tier_name=tier_name, tier_idx=tier_idx, **kwargs)
+                cand = None
+                if tier_name in (TIER_DICTIONARY_EXACT, TIER_DICTIONARY_EXPANSION):
+                    # try to find matching subject candidate for explanation
+                    subjects = doc.get("subjects") or []
+                    if isinstance(subjects, str):
+                        try:
+                            subjects = json.loads(subjects)
+                        except Exception:
+                            subjects = []
+                    for s in subjects:
+                        if isinstance(s, dict):
+                            cand = sk_to_cand.get(s.get("subject_key", ""))
+                            if cand:
+                                break
+                seen[key] = _make_result(
+                    doc,
+                    tier_name=tier_name,
+                    tier_idx=tier_idx,
+                    matched_on=plan.normalized_query,
+                    subject_candidate=cand,
+                )
 
-    # Tier 1 — IDENTIFIER_EXACT
-    if TIER_IDENTIFIER_EXACT in plan.active_tiers:
-        for ident in plan.identifier_candidates:
-            _try_tier(TIER_IDENTIFIER_EXACT,
-                      reader.query_identifier_exact(ident, object_types=ot, visibility=vis),
-                      matched_on=ident)
+    # FUZZY_FALLBACK (§25): only when upper tiers are insufficient
+    if len(seen) <= fuzzy_trigger_threshold and TIER_FUZZY_FALLBACK in plan.active_tiers:
+        fuzzy_docs = reader.run_fuzzy(plan.normalized_query, object_types=ot, visibility=vis)
+        tier_idx   = TIER_PRECEDENCE.index(TIER_FUZZY_FALLBACK)
+        if fuzzy_docs:
+            active_tiers_hit.append(TIER_FUZZY_FALLBACK)
+        for doc in fuzzy_docs:
+            key = (doc.get("object_type", ""), doc.get("canonical_id", ""))
+            if key not in seen:
+                seen[key] = _make_result(
+                    doc,
+                    tier_name=TIER_FUZZY_FALLBACK,
+                    tier_idx=tier_idx,
+                    matched_on=plan.normalized_query,
+                )
 
-    # Tier 2 — CANONICAL_EXACT
-    if TIER_CANONICAL_EXACT in plan.active_tiers:
-        for ident in plan.identifier_candidates:
-            _try_tier(TIER_CANONICAL_EXACT,
-                      reader.query_canonical_exact(ident, object_types=ot, visibility=vis),
-                      matched_on=ident)
-
-    # Tier 3 — SUBJECT (one query per dictionary candidate)
-    if TIER_SUBJECT in plan.active_tiers:
-        for cand in plan.subject_candidates:
-            rows = reader.query_subject(cand.subject_key, object_types=ot, visibility=vis)
-            _try_tier(TIER_SUBJECT, rows,
-                      matched_on=cand.subject_key,
-                      subject_candidate=cand)
-
-    # Tier 4 — TITLE_EXACT
-    if TIER_TITLE_EXACT in plan.active_tiers:
-        _try_tier(TIER_TITLE_EXACT,
-                  reader.query_title_exact(plan.normalized_query, object_types=ot, visibility=vis),
-                  matched_on=plan.normalized_query)
-
-    # Tier 5 — ALIAS_EXACT
-    if TIER_ALIAS_EXACT in plan.active_tiers:
-        _try_tier(TIER_ALIAS_EXACT,
-                  reader.query_alias_exact(plan.normalized_query, object_types=ot, visibility=vis),
-                  matched_on=plan.normalized_query)
-
-    # Tier 6 — CONTEXT (reuse identifier candidates as context keys)
-    if TIER_CONTEXT in plan.active_tiers:
-        for ident in plan.identifier_candidates:
-            _try_tier(TIER_CONTEXT,
-                      reader.query_context(ident, object_types=ot, visibility=vis),
-                      matched_on=ident)
-        # Also check dictionary subject keys as context keys
-        for cand in plan.subject_candidates:
-            _try_tier(TIER_CONTEXT,
-                      reader.query_context(cand.subject_key, object_types=ot, visibility=vis),
-                      matched_on=cand.subject_key)
-
-    # Tier 7 — FTS
-    if TIER_FTS in plan.active_tiers:
-        _try_tier(TIER_FTS,
-                  reader.query_fts(plan.normalized_query, object_types=ot, visibility=vis),
-                  matched_on=plan.normalized_query)
-
-    # Tier 8 — TRIGRAM (last resort)
-    if TIER_TRIGRAM in plan.active_tiers:
-        _try_tier(TIER_TRIGRAM,
-                  reader.query_trigram(plan.normalized_query, object_types=ot, visibility=vis,
-                                       similarity_threshold=0.3),
-                  matched_on=plan.normalized_query)
-
-    # Global sort across all tiers: by tier_idx ASC, then within-tier keys
+    # Global sort
     all_results = sorted(
         seen.values(),
-        key=lambda r: (r.rank_tier, -(len(r.source_updated_at or "")),
-                       (r.source_updated_at or "")[::-1],
-                       r.object_type, r.canonical_id),
+        key=lambda r: (
+            r.rank_tier,
+            -(r.opensearch_score or 0),
+            -(len(r.source_updated_at or "")),
+            (r.source_updated_at or "")[::-1],
+            r.object_type,
+            r.canonical_id,
+        ),
     )
 
     total = len(all_results)
-
-    # Pagination (§26): stable offset
     offset = (plan.page - 1) * plan.page_size
     page_results = all_results[offset: offset + plan.page_size]
 
     return SearchResponse(
-        query=plan.raw_query,
-        page=plan.page,
-        page_size=plan.page_size,
-        total=total,
-        items=page_results,
-        active_tiers=active_tiers_hit,
-        status="ok" if total > 0 else "empty",
+        query      = plan.raw_query,
+        page       = plan.page,
+        page_size  = plan.page_size,
+        total      = total,
+        items      = page_results,
+        active_tiers = active_tiers_hit,
+        status     = "ok" if total > 0 else "empty",
     )
 
 
-class SharedRetrievalEngine:
-    """Convenience wrapper that combines `build_query_plan` + `retrieve`.
+# ---------------------------------------------------------------------------
+# SharedRetrievalEngine — convenience wrapper
+# ---------------------------------------------------------------------------
 
-    Public, SaaS, and Paid callers pass different `visibility_scopes`.
+class SharedRetrievalEngine:
+    """Convenience wrapper: build_query_plan + retrieve.
+
+    Public/SaaS/Paid pass different visibility_scopes.
     F4 reuses this class without modification.
     """
 
-    def __init__(self, reader: SearchDocumentReader):
+    def __init__(self, reader: Any):
         self._reader = reader
 
     def search(
@@ -547,18 +385,15 @@ class SharedRetrievalEngine:
         object_types: Optional[list[str]] = None,
         page: int = 1,
         page_size: int = 10,
+        fuzzy_trigger_threshold: int = 0,
     ) -> SearchResponse:
-        """Run end-to-end retrieval.
-
-        Raises ``ValueError`` on blank query (§35).
-        Returns ``SearchResponse`` with status="empty" when no hits.
-        Does NOT raise on zero results — that is not an error.
-        """
+        """End-to-end retrieval. Raises ValueError on blank query (§35)."""
         plan = build_query_plan(
             q,
-            object_types=object_types,
-            visibility_scopes=visibility_scopes or ["PUBLIC"],
-            page=page,
-            page_size=min(max(1, page_size), 50),
+            object_types      = object_types,
+            visibility_scopes = visibility_scopes or ["PUBLIC"],
+            page              = page,
+            page_size         = min(max(1, page_size), 50),
         )
-        return retrieve(plan, self._reader)
+        return retrieve(plan, self._reader,
+                        fuzzy_trigger_threshold=fuzzy_trigger_threshold)

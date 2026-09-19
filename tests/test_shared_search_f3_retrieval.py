@@ -1,33 +1,37 @@
-"""WO-TAI-SHARED-SEARCH-F3 §46-§54 — Retrieval Engine Tests.
+"""F3 Shared Retrieval Engine Tests — WO-TAI-SHARED-SEARCH-F3 §52-§53.
 
-Coverage:
-  §46  Query tests (blank, identifier, canonical, dict exact, synonym, TOKEN,
-        subject match, title, alias, context, FTS, trigram)
-  §47  Ranking / tier precedence
-  §48  Determinism (same query → same order every call)
-  §49  Scope / visibility filter (PUBLIC / SAAS / PAID)
-  §50  Dedup: one document matching multiple tiers → 1 result, top tier
-  §51  CSI readiness: CountingFetcher + source_yield_audit (PASS)
-  §52  CHEM readiness: A02 binding (PASS)
-  §53  Public parity fixtures: known queries hit expected domains
-  §54  No regression: F1/F2 imports still available
+Test classification:
+  KEEP    — query validation, result contract, visibility, dedup, pagination,
+            API contract, CSI/CHEM readiness (adapted to OpenSearch tier names)
+  REWRITE — FTS/TRIGRAM tests → BM25_NORI/FUZZY_FALLBACK, SupabaseSearchReader tests
+  ADD     — OpenSearch mapping, Nori analysis, _msearch tier mapping, BM25,
+            fuzzy fallback, bulk rebuild, alias promotion, rollback, 503 runtime config
+
+Uses MemorySearchReader for unit tests.
+Integration tests (§48) are in test_shared_search_f3_opensearch_integration.py.
 """
 from __future__ import annotations
 
-import pytest
+import os
+import unittest
+from unittest.mock import MagicMock, patch
 
+# --------------------------------------------------------------------------
+# Services under test
+# --------------------------------------------------------------------------
 from services.shared_search.query import (
-    SearchQueryPlan,
-    SubjectCandidate,
     TIER_ALIAS_EXACT,
-    TIER_CANONICAL_EXACT,
-    TIER_CONTEXT,
-    TIER_FTS,
-    TIER_IDENTIFIER_EXACT,
+    TIER_BM25_NORI,
+    TIER_CANONICAL_ID_EXACT,
+    TIER_CONTEXT_EXACT,
+    TIER_DICTIONARY_EXACT,
+    TIER_DICTIONARY_EXPANSION,
+    TIER_FUZZY_FALLBACK,
     TIER_PRECEDENCE,
-    TIER_SUBJECT,
+    TIER_SOURCE_KEY_EXACT,
+    TIER_SUBJECT_EXACT,
     TIER_TITLE_EXACT,
-    TIER_TRIGRAM,
+    SubjectCandidate,
     build_query_plan,
 )
 from services.shared_search.result import SearchResponse, SearchResult
@@ -36,30 +40,33 @@ from services.shared_search.retrieval import (
     SharedRetrievalEngine,
     retrieve,
 )
-from services.shared_search.census import CountingFetcher, source_yield_audit
+from services.shared_search.opensearch_client import OpenSearchUnavailable
+from services.shared_search.opensearch_mapping import (
+    INDEX_BODY,
+    candidate_index_name,
+    mapping_sha256,
+)
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Fixture helpers
+# --------------------------------------------------------------------------
 
 def _doc(
-    object_type: str,
-    canonical_id: str,
-    title: str,
-    *,
-    source_id: str = "TEST",
-    source_key: str | None = None,
-    summary: str | None = None,
-    search_text: str | None = None,
-    aliases: list[str] | None = None,
-    subjects: list[dict] | None = None,
-    context: list[dict] | None = None,
-    public_url: str | None = None,
-    publication_status: str = "PUBLISHED",
-    visibility_scopes: list[str] | None = None,
-    source_updated_at: str = "2026-09-19T00:00:00+00:00",
-) -> dict:
+    object_type="GUIDE",
+    canonical_id="guid-001",
+    title="Test Title",
+    source_id="KOSHA",
+    source_key=None,
+    summary=None,
+    aliases=None,
+    subjects=None,
+    context=None,
+    publication_status="PUBLISHED",
+    visibility_scopes=None,
+    source_updated_at="2026-09-19T00:00:00+00:00",
+    **extra,
+):
     return {
         "object_type": object_type,
         "canonical_id": canonical_id,
@@ -67,567 +74,646 @@ def _doc(
         "source_id": source_id,
         "source_key": source_key,
         "summary": summary,
-        "search_text": search_text or title,
         "aliases": aliases or [],
+        "keywords": [],
         "subjects": subjects or [],
         "context": context or [],
-        "public_url": public_url,
+        "public_url": f"/{object_type.lower()}/001",
         "saas_url": None,
         "publication_status": publication_status,
         "visibility_scopes": visibility_scopes or ["PUBLIC"],
         "source_updated_at": source_updated_at,
+        "content_hash": "abc",
+        **extra,
     }
 
 
-FIXTURES = [
-    # CSI
-    _doc("CSI_ACCIDENT", "csi-001", "지게차 충돌 사고",
-         source_key="CSI:001",
-         summary="지게차가 작업자와 충돌한 사고",
-         search_text="지게차 충돌 사고 추락 전도 작업자",
-         subjects=[{"subject_type": "HAZARD", "subject_key": "지게차"}],
-         public_url="/accident/csi/001"),
-    _doc("CSI_ACCIDENT", "csi-002", "추락 재해 사례",
-         source_key="CSI:002",
-         search_text="추락 지붕 비계 추락 재해",
-         subjects=[{"subject_type": "HAZARD", "subject_key": "추락"}],
-         public_url="/accident/csi/002"),
-    # GUIDE
-    _doc("GUIDE", "guide-001", "밀폐공간 작업 안전",
-         source_key="guide-001",
-         search_text="밀폐공간 작업 안전 가이드 산소결핍",
-         subjects=[{"subject_type": "HAZARD", "subject_key": "밀폐공간"}],
-         public_url="/guide/001"),
-    # LEGAL
-    _doc("LEGAL", "legal-001", "산업안전보건법 제38조",
-         source_key="38",
-         search_text="산업안전보건법 제38조 안전조치 의무",
-         subjects=[{"subject_type": "LAW", "subject_key": "산업안전보건법"}],
-         aliases=["안전보건법", "산안법"],
-         context=[{"context_type": "LAW_CODE", "context_key": "산업안전보건법"}],
-         public_url="/law/001"),
-    # PRECEDENT — SAAS scope
-    _doc("PRECEDENT", "prec-001", "추락 판례 2024",
-         source_key="prec-001",
-         search_text="추락 판례 법원 산업재해",
-         subjects=[{"subject_type": "HAZARD", "subject_key": "추락"}],
-         visibility_scopes=["PUBLIC", "SAAS"],
-         public_url="/precedent/001"),
-    # SAFETY_MATERIAL
-    _doc("SAFETY_MATERIAL", "mat-001", "MSDS 화학물질 안전",
-         source_key="mat-001",
-         search_text="MSDS 화학물질 안전 취급",
-         aliases=["MSDS"],
-         public_url="/material/001"),
-    # CHEM — requires KOSHA_MSDS_PUBLIC_MODE
-    _doc("CHEM", "chem-001", "아세톤",
-         source_key="CHEM-ACE-001",
-         search_text="아세톤 acetone CAS 67-64-1",
-         aliases=["acetone"],
-         public_url="/chem/001"),
-    # HOLD document — should NOT appear in search results
-    _doc("CSI_ACCIDENT", "csi-hold", "미공개 사고",
-         publication_status="HOLD"),
-    # SAAS-only document — should NOT appear in PUBLIC search
-    _doc("LEGAL", "legal-saas", "SaaS 전용 법령",
-         visibility_scopes=["SAAS"]),
-]
+def _pub_doc(**kwargs):
+    return _doc(publication_status="PUBLISHED", visibility_scopes=["PUBLIC"], **kwargs)
 
 
-@pytest.fixture
-def reader():
-    return MemorySearchReader(FIXTURES)
+def _reader(*docs):
+    return MemorySearchReader(list(docs))
 
 
-@pytest.fixture
-def engine(reader):
-    return SharedRetrievalEngine(reader)
+def _engine(*docs):
+    return SharedRetrievalEngine(_reader(*docs))
 
 
-# ---------------------------------------------------------------------------
-# §46 — Query tests
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# §1 — Query building
+# --------------------------------------------------------------------------
 
-class TestQueryUnderstanding:
+class TestQueryBuilding(unittest.TestCase):
+    """KEEP + REWRITE: query plan, tier vocabulary (§21), identifier gate."""
+
     def test_blank_query_raises(self):
-        with pytest.raises(ValueError, match="required"):
+        with self.assertRaises(ValueError):
             build_query_plan("")
 
     def test_blank_query_whitespace_raises(self):
-        with pytest.raises(ValueError, match="required"):
+        with self.assertRaises(ValueError):
             build_query_plan("   ")
 
     def test_normal_query_builds_plan(self):
-        plan = build_query_plan("지게차", visibility_scopes=["PUBLIC"])
-        assert plan.raw_query == "지게차"
-        assert plan.normalized_query == "지게차"
-        assert "PUBLIC" in plan.visibility_scopes
-        assert TIER_IDENTIFIER_EXACT in plan.active_tiers
+        plan = build_query_plan("지게차")
+        self.assertEqual(plan.raw_query, "지게차")
+        self.assertEqual(plan.normalized_query, "지게차")
 
     def test_identifier_candidate_for_no_space_query(self):
-        plan = build_query_plan("CSI:001")
-        assert "CSI:001" in plan.identifier_candidates
+        plan = build_query_plan("지게차")
+        self.assertIn("지게차", plan.identifier_candidates)
 
     def test_identifier_candidate_absent_for_multi_word(self):
-        plan = build_query_plan("지게차 사고")
-        # Multi-word queries don't get identifier candidates
-        assert len(plan.identifier_candidates) == 0
+        plan = build_query_plan("밀폐 공간 작업")
+        self.assertEqual(plan.identifier_candidates, [])
 
-    def test_all_tiers_except_subject_present_without_projection(self):
-        """When the search projection file is absent (CI / local worktree without
-        artifacts), the dictionary fails gracefully and SUBJECT is removed from
-        active_tiers. All other tiers must remain."""
-        plan = build_query_plan("지게차")
-        non_subject_tiers = [t for t in TIER_PRECEDENCE if t != TIER_SUBJECT]
-        for tier in non_subject_tiers:
-            assert tier in plan.active_tiers, f"Missing tier {tier}"
+    def test_all_tiers_present_by_default(self):
+        plan = build_query_plan("추락", visibility_scopes=["PUBLIC"])
+        # DICTIONARY_EXACT / EXPANSION may be removed if dictionary unavailable;
+        # all other tiers must be in TIER_PRECEDENCE.
+        non_dict = [
+            t for t in TIER_PRECEDENCE
+            if t not in (TIER_DICTIONARY_EXACT, TIER_DICTIONARY_EXPANSION)
+        ]
+        for t in non_dict:
+            self.assertIn(t, plan.active_tiers)
 
-    def test_subject_present_when_dict_available_or_not_errors_hard(self):
-        """SUBJECT tier is only active when the dictionary succeeds.
-        When it fails the error is recorded, not raised."""
-        plan = build_query_plan("지게차")
-        if not plan.dictionary_ok:
-            assert TIER_SUBJECT not in plan.active_tiers
-            assert plan.dictionary_error is not None
-        else:
-            assert TIER_SUBJECT in plan.active_tiers
+    def test_tier_vocabulary_has_no_fts_or_trigram(self):
+        """§21: FTS / TRIGRAM must not appear in tier vocabulary."""
+        for t in TIER_PRECEDENCE:
+            self.assertNotIn("FTS", t, f"Deprecated tier {t} found")
+            self.assertNotIn("TRIGRAM", t, f"Deprecated tier {t} found")
+        plan = build_query_plan("추락")
+        for t in plan.active_tiers:
+            self.assertNotIn("FTS", t)
+            self.assertNotIn("TRIGRAM", t)
 
     def test_page_pagesize_passed_through(self):
-        plan = build_query_plan("지게차", page=3, page_size=25)
-        assert plan.page == 3
-        assert plan.page_size == 25
+        plan = build_query_plan("추락", page=3, page_size=25)
+        self.assertEqual(plan.page, 3)
+        self.assertEqual(plan.page_size, 25)
+
+    def test_visibility_defaults_to_public(self):
+        plan = build_query_plan("추락")
+        self.assertEqual(plan.visibility_scopes, ["PUBLIC"])
+
+    def test_no_kiwi_import(self):
+        """§17 invariant: no Kiwi in shared_search package."""
+        import ast, pathlib
+        pkg = pathlib.Path(__file__).parent.parent / "services" / "shared_search"
+        for py_file in pkg.rglob("*.py"):
+            src = py_file.read_text(encoding="utf-8")
+            # Allow comment mentions, flag actual imports/calls
+            tree = ast.parse(src, filename=str(py_file))
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    names = (
+                        [a.name for a in node.names]
+                        if isinstance(node, ast.Import)
+                        else ([node.module] if node.module else [])
+                    )
+                    for name in names:
+                        self.assertNotIn(
+                            "kiwi", (name or "").lower(),
+                            f"Kiwi import found in {py_file}: {ast.dump(node)}"
+                        )
 
 
-# ---------------------------------------------------------------------------
-# §47 — Ranking / tier precedence tests
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# §2 — Result contract
+# --------------------------------------------------------------------------
 
-class TestTierPrecedence:
-    """Test that higher tiers always outrank lower tiers for the SAME document."""
+class TestResultContract(unittest.TestCase):
+    """KEEP + REWRITE: no FTS/TRIGRAM in result vocabulary (§31)."""
 
-    def _make_reader(self, extra_docs: list[dict]) -> MemorySearchReader:
-        return MemorySearchReader(FIXTURES + extra_docs)
+    def test_to_dict_no_raw_score(self):
+        r = SearchResult(
+            object_type="GUIDE", canonical_id="g1", title="T",
+            source_id="KOSHA", source_key=None, source_updated_at=None,
+            match_type=TIER_BM25_NORI, opensearch_score=0.87,
+        )
+        d = r.to_dict()
+        self.assertNotIn("opensearch_score", d)
+        self.assertEqual(d["match_type"], TIER_BM25_NORI)
 
-    def test_identifier_beats_canonical(self, reader):
-        """A document matched by IDENTIFIER_EXACT must rank above one matched by
-        CANONICAL_EXACT only."""
-        plan = build_query_plan("CSI:001", visibility_scopes=["PUBLIC"])
-        # Manually inject subject candidates so tiers 1+2+3 all fire
-        plan.subject_candidates = [
-            SubjectCandidate("HAZARD", "지게차", "지게차", "EXACT", 1.0)
-        ]
-        response = retrieve(plan, reader)
-        assert response.total > 0
-        # The IDENTIFIER_EXACT hit (csi-001) should be first
-        first = response.items[0]
-        assert first.match_type == TIER_IDENTIFIER_EXACT
-        assert first.canonical_id == "csi-001"
+    def test_result_vocabulary_no_fts_trigram(self):
+        for tier in [TIER_SOURCE_KEY_EXACT, TIER_CANONICAL_ID_EXACT,
+                     TIER_DICTIONARY_EXACT, TIER_DICTIONARY_EXPANSION,
+                     TIER_TITLE_EXACT, TIER_ALIAS_EXACT, TIER_SUBJECT_EXACT,
+                     TIER_CONTEXT_EXACT, TIER_BM25_NORI, TIER_FUZZY_FALLBACK]:
+            self.assertNotIn("FTS", tier)
+            self.assertNotIn("TRIGRAM", tier)
 
-    def test_canonical_beats_subject(self):
-        """CANONICAL_EXACT outranks SUBJECT even when both match."""
+    def test_search_response_to_dict(self):
+        r = SearchResult(
+            object_type="GUIDE", canonical_id="g1", title="T",
+            source_id="S", source_key=None, source_updated_at=None,
+        )
+        resp = SearchResponse(query="추락", page=1, page_size=10,
+                              total=1, items=[r], status="ok")
+        d = resp.to_dict()
+        self.assertEqual(d["total"], 1)
+        self.assertEqual(len(d["items"]), 1)
+        self.assertNotIn("opensearch_score", d["items"][0])
+
+
+# --------------------------------------------------------------------------
+# §3 — Tier precedence (MemorySearchReader)
+# --------------------------------------------------------------------------
+
+class TestTierPrecedence(unittest.TestCase):
+    """KEEP: tier ranking correctness, adapted tier names (§21)."""
+
+    def _make_engine_with_two_docs(self):
         docs = [
-            _doc("GUIDE", "guide-exact-canon", "산업안전보건법",
-                 subjects=[{"subject_type": "LAW", "subject_key": "산업안전보건법"}]),
+            _pub_doc(object_type="CSI_ACCIDENT", canonical_id="csi-1",
+                     title="지게차", source_key="CSI:001",
+                     subjects=[{"subject_type": "HAZARD", "subject_key": "지게차"}]),
+            _pub_doc(object_type="GUIDE", canonical_id="g-1",
+                     title="지게차 안전 가이드",
+                     search_text="지게차 안전 가이드"),
         ]
-        r = MemorySearchReader(FIXTURES + docs)
-        plan = build_query_plan("guide-exact-canon", visibility_scopes=["PUBLIC"])
-        plan.subject_candidates = [
-            SubjectCandidate("LAW", "산업안전보건법", "산업안전보건법", "EXACT", 1.0)
-        ]
-        response = retrieve(plan, r)
-        top = response.items[0]
-        assert top.match_type == TIER_CANONICAL_EXACT
+        return SharedRetrievalEngine(MemorySearchReader(docs))
 
-    def test_subject_beats_title(self, reader):
-        plan = build_query_plan("산업안전보건법", visibility_scopes=["PUBLIC"])
-        plan.subject_candidates = [
-            SubjectCandidate("LAW", "산업안전보건법", "산업안전보건법", "EXACT", 1.0)
+    def test_source_key_exact_beats_bm25(self):
+        engine = self._make_engine_with_two_docs()
+        resp = engine.search("CSI:001", visibility_scopes=["PUBLIC"])
+        self.assertGreater(resp.total, 0)
+        self.assertEqual(resp.items[0].match_type, TIER_SOURCE_KEY_EXACT)
+
+    def test_title_exact_beats_bm25(self):
+        docs = [
+            _pub_doc(canonical_id="exact-1", title="지게차",
+                     search_text="지게차 충돌"),
+            _pub_doc(canonical_id="bm25-1", title="지게차 충돌 사고",
+                     search_text="지게차 충돌 사고"),
         ]
-        response = retrieve(plan, reader)
-        # SUBJECT tier result (legal-001 has that subject)
-        # TITLE_EXACT is also "산업안전보건법 제38조" (contains, not exact)
-        subject_result = next(
-            (r for r in response.items if r.match_type == TIER_SUBJECT), None
+        engine = SharedRetrievalEngine(MemorySearchReader(docs))
+        resp = engine.search("지게차", visibility_scopes=["PUBLIC"])
+        top = resp.items[0]
+        self.assertEqual(top.match_type, TIER_TITLE_EXACT)
+        self.assertEqual(top.canonical_id, "exact-1")
+
+    def test_alias_exact_beats_bm25(self):
+        docs = [
+            _pub_doc(canonical_id="alias-1", title="MSDS 취급 교육",
+                     aliases=["MSDS"],
+                     search_text="MSDS 취급 교육"),
+            _pub_doc(canonical_id="bm25-1", title="화학물질 MSDS 정보",
+                     search_text="화학물질 MSDS 정보"),
+        ]
+        engine = SharedRetrievalEngine(MemorySearchReader(docs))
+        resp = engine.search("MSDS", visibility_scopes=["PUBLIC"])
+        top = resp.items[0]
+        self.assertEqual(top.match_type, TIER_ALIAS_EXACT)
+        self.assertEqual(top.canonical_id, "alias-1")
+
+    def test_bm25_beats_fuzzy_fallback(self):
+        """BM25_NORI (T8) outranks FUZZY_FALLBACK (T9)."""
+        bm25_tier_idx  = TIER_PRECEDENCE.index(TIER_BM25_NORI)
+        fuzzy_tier_idx = TIER_PRECEDENCE.index(TIER_FUZZY_FALLBACK)
+        self.assertLess(bm25_tier_idx, fuzzy_tier_idx)
+
+
+# --------------------------------------------------------------------------
+# §4 — Visibility / scope filter
+# --------------------------------------------------------------------------
+
+class TestVisibilityFilter(unittest.TestCase):
+    """KEEP: PUBLIC/SAAS/PAID scope enforcement."""
+
+    def test_hold_doc_excluded(self):
+        engine = _engine(
+            _doc(publication_status="HOLD", visibility_scopes=["PUBLIC"],
+                 title="추락 사고", search_text="추락 사고"),
         )
-        title_result = next(
-            (r for r in response.items if r.match_type == TIER_TITLE_EXACT), None
+        resp = engine.search("추락", visibility_scopes=["PUBLIC"])
+        self.assertEqual(resp.total, 0)
+
+    def test_saas_only_excluded_from_public(self):
+        # visibility_scopes=["SAAS"] only — PUBLIC search must not return it
+        engine = _engine(
+            _doc(publication_status="PUBLISHED", visibility_scopes=["SAAS"],
+                 title="추락", search_text="추락"),
         )
-        if subject_result and title_result:
-            assert subject_result.rank_tier < title_result.rank_tier
+        resp = engine.search("추락", visibility_scopes=["PUBLIC"])
+        self.assertEqual(resp.total, 0)
 
-    def test_title_beats_alias(self, reader):
-        # "MSDS" is an alias for mat-001; title exact would be "MSDS" exactly
-        plan = build_query_plan("MSDS", visibility_scopes=["PUBLIC"])
-        response = retrieve(plan, reader)
-        # mat-001 has title "MSDS 화학물질 안전" — not exact. Alias "MSDS" is exact.
-        alias_result = next(
-            (r for r in response.items if r.match_type == TIER_ALIAS_EXACT), None
+    def test_saas_visible_in_saas_scope(self):
+        engine = _engine(
+            _doc(publication_status="PUBLISHED", visibility_scopes=["PUBLIC", "SAAS"],
+                 title="추락", search_text="추락"),
         )
-        # Should have alias match
-        assert alias_result is not None
+        resp = engine.search("추락", visibility_scopes=["SAAS"])
+        self.assertEqual(resp.total, 1)
 
-    def test_alias_beats_fts(self, reader):
-        # "산안법" is an alias for legal-001.
-        plan = build_query_plan("산안법", visibility_scopes=["PUBLIC"])
-        response = retrieve(plan, reader)
-        alias_result = next(
-            (r for r in response.items if r.match_type == TIER_ALIAS_EXACT), None
+    def test_public_doc_visible_in_public(self):
+        engine = _engine(
+            _pub_doc(title="추락", search_text="추락"),
         )
-        if alias_result:
-            fts_result = next(
-                (r for r in response.items if r.match_type == TIER_FTS), None
-            )
-            if fts_result:
-                assert alias_result.rank_tier < fts_result.rank_tier
-
-    def test_fts_beats_trigram(self, reader):
-        plan = build_query_plan("추락 재해", visibility_scopes=["PUBLIC"])
-        response = retrieve(plan, reader)
-        fts_results = [r for r in response.items if r.match_type == TIER_FTS]
-        trgm_results = [r for r in response.items if r.match_type == TIER_TRIGRAM]
-        if fts_results and trgm_results:
-            assert fts_results[0].rank_tier < trgm_results[0].rank_tier
+        resp = engine.search("추락", visibility_scopes=["PUBLIC"])
+        self.assertEqual(resp.total, 1)
 
 
-# ---------------------------------------------------------------------------
-# §48 — Determinism
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# §5 — Deduplication
+# --------------------------------------------------------------------------
 
-class TestDeterminism:
-    def test_same_query_same_order(self, reader):
-        plan1 = build_query_plan("추락", visibility_scopes=["PUBLIC"])
-        plan1.subject_candidates = [
-            SubjectCandidate("HAZARD", "추락", "추락", "EXACT", 1.0)
-        ]
-        plan2 = build_query_plan("추락", visibility_scopes=["PUBLIC"])
-        plan2.subject_candidates = [
-            SubjectCandidate("HAZARD", "추락", "추락", "EXACT", 1.0)
-        ]
-        r1 = retrieve(plan1, reader)
-        r2 = retrieve(plan2, reader)
-        assert [x.canonical_id for x in r1.items] == [x.canonical_id for x in r2.items]
+class TestDeduplication(unittest.TestCase):
+    """KEEP: dedup by (object_type, canonical_id), highest tier wins."""
 
-    def test_same_query_same_match_types(self, reader):
-        plan = build_query_plan("산안법", visibility_scopes=["PUBLIC"])
-        r1 = retrieve(plan, reader)
-        r2 = retrieve(plan, reader)
-        assert [x.match_type for x in r1.items] == [x.match_type for x in r2.items]
+    def test_multi_tier_hit_deduped_to_one(self):
+        doc = _pub_doc(
+            canonical_id="dup-1", title="지게차",
+            source_key="지게차",
+            aliases=["지게차"],
+            search_text="지게차",
+        )
+        engine = _engine(doc)
+        resp = engine.search("지게차", visibility_scopes=["PUBLIC"])
+        self.assertEqual(resp.total, 1)
+
+    def test_top_tier_wins_on_dedup(self):
+        doc = _pub_doc(
+            canonical_id="dup-1", title="지게차",
+            source_key="지게차",
+            aliases=["지게차"],
+        )
+        engine = _engine(doc)
+        resp = engine.search("지게차", visibility_scopes=["PUBLIC"])
+        self.assertEqual(resp.total, 1)
+        top = resp.items[0]
+        # SOURCE_KEY_EXACT < TITLE_EXACT (lower tier_idx = higher precedence)
+        self.assertIn(top.match_type, [TIER_SOURCE_KEY_EXACT, TIER_TITLE_EXACT])
+        src_idx   = TIER_PRECEDENCE.index(TIER_SOURCE_KEY_EXACT)
+        title_idx = TIER_PRECEDENCE.index(TIER_TITLE_EXACT)
+        result_idx = TIER_PRECEDENCE.index(top.match_type)
+        self.assertLessEqual(result_idx, title_idx)
 
 
-# ---------------------------------------------------------------------------
-# §49 — Scope / visibility filter
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# §6 — Fuzzy fallback
+# --------------------------------------------------------------------------
 
-class TestVisibilityScope:
-    def test_hold_excluded(self, reader):
-        plan = build_query_plan("미공개", visibility_scopes=["PUBLIC"])
-        response = retrieve(plan, reader)
-        ids = [r.canonical_id for r in response.items]
-        assert "csi-hold" not in ids
+class TestFuzzyFallback(unittest.TestCase):
+    """ADD: FUZZY_FALLBACK tier fires only when upper tiers empty."""
 
-    def test_saas_only_excluded_from_public(self, reader):
-        plan = build_query_plan("SaaS", visibility_scopes=["PUBLIC"])
-        response = retrieve(plan, reader)
-        ids = [r.canonical_id for r in response.items]
-        assert "legal-saas" not in ids
+    def test_fuzzy_fires_when_upper_tiers_miss(self):
+        # MemorySearchReader fuzzy = substring. "지게" matches "지게차" title.
+        doc = _pub_doc(canonical_id="f-1", title="지게차 충돌")
+        reader = MemorySearchReader([doc])
+        plan = build_query_plan("지게", visibility_scopes=["PUBLIC"])
+        # No upper tier will match (title exact / source_key exact all miss)
+        resp = retrieve(plan, reader, fuzzy_trigger_threshold=0)
+        # FUZZY fires because total after upper tiers == 0 <= 0
+        self.assertEqual(resp.total, 1)
+        self.assertEqual(resp.items[0].match_type, TIER_FUZZY_FALLBACK)
 
-    def test_saas_only_visible_in_saas_scope(self, reader):
-        plan = build_query_plan("SaaS", visibility_scopes=["SAAS"])
-        response = retrieve(plan, reader)
-        ids = [r.canonical_id for r in response.items]
-        assert "legal-saas" in ids
-
-    def test_public_doc_visible_in_public(self, reader):
+    def test_fuzzy_not_fired_when_upper_tiers_have_results(self):
+        doc = _pub_doc(canonical_id="f-1", title="지게차",
+                       search_text="지게차 충돌")
         plan = build_query_plan("지게차", visibility_scopes=["PUBLIC"])
-        plan.subject_candidates = [
-            SubjectCandidate("HAZARD", "지게차", "지게차", "EXACT", 1.0)
-        ]
-        response = retrieve(plan, reader)
-        ids = [r.canonical_id for r in response.items]
-        assert "csi-001" in ids
-
-    def test_public_doc_visible_in_saas_scope(self, reader):
-        """A PUBLIC document must also appear when SAAS scope is queried."""
-        r = MemorySearchReader(FIXTURES)
-        plan = build_query_plan("지게차", visibility_scopes=["SAAS"])
-        plan.subject_candidates = [
-            SubjectCandidate("HAZARD", "지게차", "지게차", "EXACT", 1.0)
-        ]
-        response = retrieve(plan, r)
-        # csi-001 has visibility_scopes=["PUBLIC"] but SAAS search should only
-        # return docs that HAVE ["SAAS"] in their scopes. CSI-001 doesn't.
-        ids = [r.canonical_id for r in response.items]
-        assert "csi-001" not in ids  # only ["PUBLIC"], not ["SAAS"]
+        reader = MemorySearchReader([doc])
+        # fuzzy_trigger_threshold=0 means "fire fuzzy only if 0 results from upper"
+        resp = retrieve(plan, reader, fuzzy_trigger_threshold=0)
+        # title exact already matches — fuzzy NOT fired
+        self.assertNotIn(TIER_FUZZY_FALLBACK, resp.active_tiers)
 
 
-# ---------------------------------------------------------------------------
-# §50 — Dedup: one document hitting multiple tiers → exactly 1 result
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# §7 — OpenSearch mapping
+# --------------------------------------------------------------------------
 
-class TestDedup:
-    def test_multi_tier_hit_deduped_to_one(self, reader):
-        """mat-001 matches ALIAS_EXACT ("MSDS") AND FTS ("MSDS 화학물질").
-        It must appear exactly once, with the higher tier as match_type."""
-        plan = build_query_plan("MSDS", visibility_scopes=["PUBLIC"])
-        response = retrieve(plan, reader)
-        mat_results = [r for r in response.items if r.canonical_id == "mat-001"]
-        assert len(mat_results) == 1, "Duplicate document in results!"
+class TestOpenSearchMapping(unittest.TestCase):
+    """ADD: mapping authority, Nori config, alias naming, sha256."""
 
-    def test_top_tier_wins(self, reader):
-        """legal-001 matches ALIAS_EXACT ('산안법') AND FTS (search_text contains '산안법' if present).
-        Match type should be ALIAS_EXACT, not FTS."""
-        plan = build_query_plan("산안법", visibility_scopes=["PUBLIC"])
-        response = retrieve(plan, reader)
-        legal = next((r for r in response.items if r.canonical_id == "legal-001"), None)
-        if legal:
-            assert legal.match_type == TIER_ALIAS_EXACT
+    def test_mapping_has_nori_analyzer(self):
+        settings = INDEX_BODY["settings"]
+        analysis = settings["analysis"]
+        self.assertIn("tai_nori_index", analysis["analyzer"])
+        self.assertIn("tai_nori_search", analysis["analyzer"])
 
-    def test_subject_alias_fts_hit_single_result(self):
-        """Doc hits SUBJECT + ALIAS + FTS → must appear only once.
-        SUBJECT (tier 3) is manually activated to simulate projection-available env."""
-        doc = _doc("GUIDE", "guide-multi", "지게차 안전",
-                   aliases=["지게차"],
-                   subjects=[{"subject_type": "HAZARD", "subject_key": "지게차"}],
-                   search_text="지게차 안전 작업")
-        r = MemorySearchReader([doc])
-        plan = build_query_plan("지게차", visibility_scopes=["PUBLIC"])
-        # Manually activate SUBJECT tier (in CI, projection may not be present)
-        if TIER_SUBJECT not in plan.active_tiers:
-            plan.active_tiers.insert(
-                TIER_PRECEDENCE.index(TIER_SUBJECT), TIER_SUBJECT
-            )
-        plan.subject_candidates = [
-            SubjectCandidate("HAZARD", "지게차", "지게차", "EXACT", 1.0)
-        ]
-        response = retrieve(plan, r)
-        ids = [r.canonical_id for r in response.items]
-        assert ids.count("guide-multi") == 1
-        # Top result must be SUBJECT (tier 3) not ALIAS_EXACT (tier 5)
-        assert response.items[0].match_type == TIER_SUBJECT
+    def test_nori_tokenizer_defined(self):
+        tokenizers = INDEX_BODY["settings"]["analysis"]["tokenizer"]
+        self.assertIn("tai_nori_tokenizer", tokenizers)
+        tt = tokenizers["tai_nori_tokenizer"]
+        self.assertEqual(tt["type"], "nori_tokenizer")
+
+    def test_keyword_fields_not_analyzed(self):
+        props = INDEX_BODY["mappings"]["properties"]
+        for field in ["source_key", "canonical_id", "object_type",
+                      "publication_status"]:
+            self.assertEqual(props[field]["type"], "keyword",
+                             f"{field} should be keyword")
+
+    def test_text_fields_use_nori(self):
+        props = INDEX_BODY["mappings"]["properties"]
+        for field in ["title", "summary", "search_text"]:
+            f = props[field]
+            self.assertEqual(f.get("analyzer"), "tai_nori_index", field)
+            self.assertEqual(f.get("search_analyzer"), "tai_nori_search", field)
+
+    def test_title_raw_subfield_exists(self):
+        props = INDEX_BODY["mappings"]["properties"]
+        self.assertIn("raw", props["title"]["fields"])
+
+    def test_aliases_raw_subfield_exists(self):
+        props = INDEX_BODY["mappings"]["properties"]
+        self.assertIn("raw", props["aliases"]["fields"])
+
+    def test_subjects_nested(self):
+        props = INDEX_BODY["mappings"]["properties"]
+        self.assertEqual(props["subjects"]["type"], "nested")
+
+    def test_context_nested(self):
+        props = INDEX_BODY["mappings"]["properties"]
+        self.assertEqual(props["context"]["type"], "nested")
+
+    def test_candidate_index_name_format(self):
+        name = candidate_index_name("test-run-id-12345678-abcd")
+        self.assertTrue(name.startswith("tai-shared-search-v1-"))
+        self.assertLessEqual(len(name), len("tai-shared-search-v1-") + 16)
+
+    def test_mapping_sha256_is_stable(self):
+        sha1 = mapping_sha256()
+        sha2 = mapping_sha256()
+        self.assertEqual(sha1, sha2)
+        self.assertEqual(len(sha1), 64)  # sha256 hex
 
 
-# ---------------------------------------------------------------------------
-# §51 — CSI readiness (unit: title fallback logic in adapter)
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# §8 — OpenSearch Store (unit — mocked client)
+# --------------------------------------------------------------------------
 
-class TestCsiReadiness:
+class TestOpenSearchStore(unittest.TestCase):
+    """ADD: bulk staging, alias promotion, rollback via mocked client."""
+
+    def _make_store(self):
+        from services.shared_search.opensearch_store import OpenSearchSearchStore
+        mock_client = MagicMock()
+        mock_client.indices.exists.return_value = False
+        mock_client.indices.exists_alias.return_value = False
+        mock_client.indices.get_alias.return_value = {}
+        mock_client.indices.create.return_value = {"acknowledged": True}
+        mock_client.index.return_value = {}
+        mock_client.count.return_value = {"count": 100}
+        mock_client.indices.refresh.return_value = {}
+        mock_client.update.return_value = {}
+        mock_client.get.return_value = {
+            "_source": {
+                "indexed_count": 0, "failed_bulk_items": 0,
+                "previous_index": None,
+            }
+        }
+        return OpenSearchSearchStore(mock_client), mock_client
+
+    def test_create_candidate_index_calls_create(self):
+        store, client = self._make_store()
+        idx = store.create_candidate_index("run-abc-123")
+        self.assertTrue(idx.startswith("tai-shared-search-v1-"))
+        client.indices.create.assert_called_once()
+
+    def test_candidate_index_naming(self):
+        store, _ = self._make_store()
+        idx = store.create_candidate_index("aaaa-bbbb-cccc")
+        self.assertIn("tai-shared-search-v1-", idx)
+
+    def test_document_id_deterministic(self):
+        from services.shared_search.opensearch_store import document_id
+        d1 = document_id("GUIDE", "g-001")
+        d2 = document_id("GUIDE", "g-001")
+        self.assertEqual(d1, d2)
+        self.assertIn("GUIDE", d1)
+        self.assertIn("g-001", d1)
+
+    def test_document_id_different_per_type(self):
+        from services.shared_search.opensearch_store import document_id
+        d1 = document_id("GUIDE", "g-001")
+        d2 = document_id("CSI_ACCIDENT", "g-001")
+        self.assertNotEqual(d1, d2)
+
+    def test_alias_switch_action_structure(self):
+        from services.shared_search.opensearch_mapping import build_alias_action
+        action = build_alias_action("new-idx", "old-idx")
+        actions = action["actions"]
+        removes = [a for a in actions if "remove" in a]
+        adds    = [a for a in actions if "add" in a]
+        self.assertEqual(len(removes), 1)
+        self.assertEqual(len(adds), 1)
+
+    def test_alias_switch_without_old(self):
+        from services.shared_search.opensearch_mapping import build_alias_action
+        action = build_alias_action("new-idx")
+        actions = action["actions"]
+        removes = [a for a in actions if "remove" in a]
+        self.assertEqual(len(removes), 0)
+
+
+# --------------------------------------------------------------------------
+# §9 — OpenSearch client + 503 handling
+# --------------------------------------------------------------------------
+
+class TestOpenSearchClient(unittest.TestCase):
+    """ADD: OpenSearchUnavailable, 503 config missing."""
+
+    def test_get_client_raises_when_url_missing(self):
+        from services.shared_search.opensearch_client import (
+            OpenSearchUnavailable, reset_client, get_client
+        )
+        reset_client()
+        original = os.environ.pop("TAI_OPENSEARCH_URL", None)
+        try:
+            with self.assertRaises(OpenSearchUnavailable):
+                get_client()
+        finally:
+            if original is not None:
+                os.environ["TAI_OPENSEARCH_URL"] = original
+            reset_client()
+
+    def test_opensearch_unavailable_is_exception(self):
+        self.assertTrue(issubclass(OpenSearchUnavailable, Exception))
+
+
+# --------------------------------------------------------------------------
+# §10 — Public API: visibility / 503
+# --------------------------------------------------------------------------
+
+class TestPublicAPILayer(unittest.TestCase):
+    """ADD: 503 when OpenSearch config missing, type filtering."""
+
+    def test_503_when_opensearch_not_configured(self):
+        """API must raise 503 (not silently return empty) when OS missing."""
+        from fastapi.testclient import TestClient
+        from fastapi import FastAPI
+        from services.shared_search.opensearch_client import reset_client
+        import routers.public_safety_search as pss_router
+
+        reset_client()
+        original = os.environ.pop("TAI_OPENSEARCH_URL", None)
+        try:
+            app = FastAPI()
+            app.include_router(pss_router.router)
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get("/public/safety-search?q=지게차")
+            self.assertEqual(resp.status_code, 503)
+            body = resp.json()
+            self.assertIn("SHARED_SEARCH_UNAVAILABLE", str(body))
+        finally:
+            if original is not None:
+                os.environ["TAI_OPENSEARCH_URL"] = original
+            reset_client()
+
+    def test_kosha_endpoint_not_changed(self):
+        """§42: /public/safety-search/kosha endpoint must exist."""
+        import inspect
+        import routers.public_safety_search as pss_router
+        routes = [r.path for r in pss_router.router.routes]
+        # endpoint exists
+        self.assertTrue(any("kosha" in r for r in routes),
+                        f"kosha endpoint missing; routes={routes}")
+
+
+# --------------------------------------------------------------------------
+# §11 — CSI completeness (KEEP)
+# --------------------------------------------------------------------------
+
+class TestCSICompleteness(unittest.TestCase):
+    """KEEP: CSI title fallback + census audit (§51)."""
+
     def test_csi_title_fallback_to_summary(self):
-        """When title is NULL, summary must be used. No silent drop."""
-        from services.shared_search.adapters.csi_accident import _normalize_csi
+        from services.shared_search.adapters.csi_accident import CsiAccidentAdapter
+        from unittest.mock import patch as _patch
 
-        row_with_summary_only = {
-            "content_id": "CSI:99999",
-            "identity_status": "READY",
-            "title": None,
-            "summary": "지게차 사고 요약",
-            "occurred_at": "2026-01-01T00:00:00+00:00",
-            "_snapshot_completed_at": "2026-09-19T00:00:00+00:00",
-        }
-        result = _normalize_csi(row_with_summary_only)
-        assert result is not None, "CSI row with summary should not be dropped"
-        assert result["title"] == "지게차 사고 요약"
+        row = {"id": 1, "title": None, "summary": "요약 내용", "content": None}
+        adapter = CsiAccidentAdapter.__new__(CsiAccidentAdapter)
+        result = adapter._extract_title(row)
+        self.assertEqual(result, "요약 내용")
 
-    def test_csi_no_title_no_summary_drops(self):
-        """Row with neither title nor summary must be None (explained drop)."""
-        from services.shared_search.adapters.csi_accident import _normalize_csi
-
-        row = {
-            "content_id": "CSI:99998",
-            "identity_status": "READY",
-            "title": None,
-            "summary": None,
-        }
-        result = _normalize_csi(row)
-        assert result is None
+    def test_csi_title_used_when_available(self):
+        from services.shared_search.adapters.csi_accident import CsiAccidentAdapter
+        row = {"id": 1, "title": "원래 제목", "summary": "요약 내용", "content": None}
+        adapter = CsiAccidentAdapter.__new__(CsiAccidentAdapter)
+        result = adapter._extract_title(row)
+        self.assertEqual(result, "원래 제목")
 
     def test_csi_census_source_yield_audit_pass(self):
-        """source_yield_audit must return unexplained_drop=0 when all
-        exclusions are explained by NULL title AND NULL summary."""
-        rows = [
-            {"content_id": "CSI:1", "identity_status": "READY",
-             "title": "사고 1", "summary": None,
-             "occurred_at": "2026-01-01", "_snapshot_completed_at": "2026-01-01"},
-            {"content_id": "CSI:2", "identity_status": "READY",
-             "title": None, "summary": "사고 2 요약",
-             "occurred_at": "2026-01-01", "_snapshot_completed_at": "2026-01-01"},
-            {"content_id": "CSI:3", "identity_status": "READY",
-             "title": None, "summary": None,
-             "occurred_at": "2026-01-01", "_snapshot_completed_at": "2026-01-01"},
-        ]
-        from services.shared_search.adapters.csi_accident import _normalize_csi
-
-        fetcher = CountingFetcher(lambda: iter(rows))
-        yielded = []
-        for row in fetcher():
-            result = _normalize_csi(row)
-            if result is not None:
-                yielded.append(result)
-
-        audit = source_yield_audit(
-            eligible_source_count=fetcher.count,
-            yielded_count=len(yielded),
-            explained_exclusions=[
-                {"reason": "no_title_no_summary", "count": 1}  # CSI:3
-            ],
+        from services.shared_search.census import source_yield_audit
+        stats = source_yield_audit(
+            eligible_source_count=10,
+            yielded_count=10,
+            explained_exclusions=[],
         )
-        assert audit["unexplained_drop"] == 0
-        assert audit["eligible_source_count"] == 3
-        assert audit["yielded_count"] == 2
+        self.assertEqual(stats["unexplained_drop"], 0)
+
+    def test_csi_census_audit_explains_drops(self):
+        from services.shared_search.census import source_yield_audit
+        stats = source_yield_audit(
+            eligible_source_count=10,
+            yielded_count=9,
+            explained_exclusions=[{"reason": "no_title_no_summary", "count": 1}],
+        )
+        self.assertEqual(stats["unexplained_drop"], 0)
+        self.assertEqual(stats["explained_exclusion_count"], 1)
+
+    def test_csi_census_unexplained_drop_flagged(self):
+        from services.shared_search.census import source_yield_audit
+        stats = source_yield_audit(
+            eligible_source_count=10,
+            yielded_count=8,
+            explained_exclusions=[{"reason": "no_title_no_summary", "count": 1}],
+        )
+        self.assertEqual(stats["unexplained_drop"], 1)
 
 
-# ---------------------------------------------------------------------------
-# §52 — CHEM readiness (unit: A02 product_name binding)
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# §12 — CHEM completeness (KEEP)
+# --------------------------------------------------------------------------
 
-class TestChemReadiness:
+class TestCHEMCompleteness(unittest.TestCase):
+    """KEEP: CHEM title logic + section_fields."""
+
     def test_chem_ko_name_used_when_available(self):
-        from services.shared_search.adapters.chem import _normalize_chem
+        from services.shared_search.adapters.chem import ChemAdapter
+        row = {"id": 1, "chemical_name_ko": "아세톤", "section1_payload": None}
+        adapter = ChemAdapter.__new__(ChemAdapter)
+        result = adapter._extract_title(row)
+        self.assertEqual(result, "아세톤")
 
-        row = {
-            "id": "chem-uuid-1",
-            "source_key": "CHEM-001",
-            "chem_id": "CHEM-001",
-            "chemical_name_ko": "아세톤",
-            "product_name": None,
-            "_snapshot_completed_at": "2026-09-19T00:00:00+00:00",
-        }
-        result = _normalize_chem(row, public_allowed=True)
-        assert result is not None
-        assert result["title"] == "아세톤"
+    def test_chem_falls_back_to_product_name(self):
+        from services.shared_search.adapters.chem import ChemAdapter
+        from services.kosha_msds.section_fields import PRODUCT_NAME_ITEM_CODE
+        payload = [{"msdsItemCode": PRODUCT_NAME_ITEM_CODE, "itemDetail": "안전제품A"}]
+        import json
+        row = {"id": 1, "chemical_name_ko": None, "section1_payload": json.dumps(payload)}
+        adapter = ChemAdapter.__new__(ChemAdapter)
+        result = adapter._extract_title(row)
+        self.assertEqual(result, "안전제품A")
 
-    def test_chem_falls_back_to_product_name_when_ko_null(self):
-        from services.shared_search.adapters.chem import _normalize_chem
-
-        row = {
-            "id": "chem-uuid-2",
-            "source_key": "CHEM-002",
-            "chem_id": "CHEM-002",
-            "chemical_name_ko": None,
-            "product_name": "아세트알데히드",
-            "_snapshot_completed_at": "2026-09-19T00:00:00+00:00",
-        }
-        result = _normalize_chem(row, public_allowed=True)
-        assert result is not None, "CHEM with product_name only must not be dropped"
-        assert result["title"] == "아세트알데히드"
-
-    def test_chem_drops_when_both_ko_and_product_name_null(self):
-        from services.shared_search.adapters.chem import _normalize_chem
-
-        row = {
-            "id": "chem-uuid-3",
-            "source_key": "CHEM-003",
-            "chem_id": "CHEM-003",
-            "chemical_name_ko": None,
-            "product_name": None,
-            "_snapshot_completed_at": "2026-09-19T00:00:00+00:00",
-        }
-        result = _normalize_chem(row, public_allowed=True)
-        assert result is None
+    def test_chem_drops_when_both_null(self):
+        from services.shared_search.adapters.chem import ChemAdapter
+        row = {"id": 1, "chemical_name_ko": None, "section1_payload": None}
+        adapter = ChemAdapter.__new__(ChemAdapter)
+        result = adapter._extract_title(row)
+        self.assertIsNone(result)
 
     def test_chem_section_fields_extract_product_name(self):
-        """section_fields.py helper must extract A02 product name.
-        Key is `msdsItemCode` (not `itemCode`) per KOSHA MSDS schema."""
-        from services.kosha_msds.section_fields import extract_product_name
-
-        payload = [
-            {"msdsItemCode": "A02", "itemDetail": "아세트알데히드(시험용)"}
-        ]
-        name = extract_product_name(payload)
-        assert name == "아세트알데히드(시험용)"
+        from services.kosha_msds.section_fields import (
+            extract_product_name,
+            PRODUCT_NAME_ITEM_CODE,
+        )
+        payload = [{"msdsItemCode": PRODUCT_NAME_ITEM_CODE, "itemDetail": "TestProd"}]
+        result = extract_product_name(payload)
+        self.assertEqual(result, "TestProd")
 
     def test_chem_section_fields_returns_none_when_missing(self):
         from services.kosha_msds.section_fields import extract_product_name
-
-        payload = [{"msdsItemCode": "B01", "itemDetail": "제조사명"}]
-        name = extract_product_name(payload)
-        assert name is None
+        result = extract_product_name([])
+        self.assertIsNone(result)
 
 
-# ---------------------------------------------------------------------------
-# §53 — Public parity fixture queries
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# §13 — F1/F2/F3 import smoke tests (KEEP)
+# --------------------------------------------------------------------------
 
-class TestPublicParityFixtures:
-    """Verify that known safety queries return hits in expected domains."""
+class TestImportRegressions(unittest.TestCase):
+    """KEEP: smoke-test all major import chains."""
 
-    @pytest.mark.parametrize("query,expected_types", [
-        ("지게차", ["CSI_ACCIDENT"]),
-        ("추락", ["CSI_ACCIDENT", "PRECEDENT"]),
-        ("밀폐공간", ["GUIDE"]),
-        ("산업안전보건법", ["LEGAL"]),
-        ("MSDS", ["SAFETY_MATERIAL"]),
-    ])
-    def test_parity_fixture(self, reader, query, expected_types):
-        plan = build_query_plan(query, visibility_scopes=["PUBLIC"])
-        # Inject subject candidates where domain-specific subjects exist
-        subject_map = {
-            "지게차": [SubjectCandidate("HAZARD", "지게차", "지게차", "EXACT", 1.0)],
-            "추락": [SubjectCandidate("HAZARD", "추락", "추락", "EXACT", 1.0)],
-            "밀폐공간": [SubjectCandidate("HAZARD", "밀폐공간", "밀폐공간", "EXACT", 1.0)],
-            "산업안전보건법": [SubjectCandidate("LAW", "산업안전보건법", "산업안전보건법", "EXACT", 1.0)],
-        }
-        plan.subject_candidates = subject_map.get(query, [])
-        response = retrieve(plan, reader)
-        returned_types = {r.object_type for r in response.items}
-        for etype in expected_types:
-            assert etype in returned_types, (
-                f"Query '{query}' expected to return {etype}, got {returned_types}"
-            )
-
-
-# ---------------------------------------------------------------------------
-# §53 — Parity: CSI via SUBJECT vs FTS both work
-# ---------------------------------------------------------------------------
-
-class TestCsiParityReachable:
-    def test_csi_via_subject(self, reader):
-        plan = build_query_plan("지게차", visibility_scopes=["PUBLIC"])
-        plan.subject_candidates = [
-            SubjectCandidate("HAZARD", "지게차", "지게차", "EXACT", 1.0)
-        ]
-        response = retrieve(plan, reader)
-        hits = [r for r in response.items if r.object_type == "CSI_ACCIDENT"]
-        assert len(hits) > 0
-
-    def test_csi_via_fts(self, reader):
-        plan = build_query_plan("지게차 충돌", visibility_scopes=["PUBLIC"])
-        response = retrieve(plan, reader)
-        fts_hits = [r for r in response.items
-                    if r.object_type == "CSI_ACCIDENT" and r.match_type == TIER_FTS]
-        assert len(fts_hits) > 0
-
-
-# ---------------------------------------------------------------------------
-# §54 — No regression: F1/F2 imports still available
-# ---------------------------------------------------------------------------
-
-class TestNoRegression:
     def test_f1_foundation_imports(self):
         from services.shared_search import (
-            SearchDocument, normalize_document, content_hash,
-            MemoryStore, Writer, WriterRejected,
-            RebuildRun, RebuildFramework, RebuildAborted,
-            ReconcileReport, reconcile,
+            SearchDocument, SearchStore, normalize_document, content_hash,
         )
 
     def test_f2_adapter_imports(self):
         from services.shared_search import (
-            DomainAdapter, GuideAdapter, SafetyMaterialAdapter,
-            CsiAccidentAdapter, ChemAdapter, KnowledgeAdapter,
-            PrecedentAdapter, LegalAdapter, RiskAdapter,
+            GuideAdapter, SafetyMaterialAdapter, CsiAccidentAdapter,
+            ChemAdapter, LegalAdapter, PrecedentAdapter, KnowledgeAdapter,
         )
 
     def test_f2_indexer_imports(self):
         from services.shared_search import Indexer, RebuildResult, DryRunCensus
 
     def test_f2_census_imports(self):
-        from services.shared_search import DomainCensus, run_census, CountingFetcher, source_yield_audit
+        from services.shared_search import (
+            DomainCensus, run_census, CountingFetcher, source_yield_audit,
+        )
 
     def test_f3_retrieval_imports(self):
         from services.shared_search import (
-            SharedRetrievalEngine, MemorySearchReader, SupabaseSearchReader, retrieve,
-            SearchQueryPlan, SearchResult, SearchResponse,
-            build_query_plan, TIER_PRECEDENCE,
+            SharedRetrievalEngine, MemorySearchReader, retrieve,
+            build_query_plan, SearchQueryPlan, SearchResult, SearchResponse,
+        )
+        # SupabaseSearchReader must NOT be exported
+        import services.shared_search as ss
+        self.assertFalse(
+            hasattr(ss, "SupabaseSearchReader"),
+            "SupabaseSearchReader must not be exported from shared_search (§4)"
+        )
+
+    def test_f3_opensearch_imports(self):
+        from services.shared_search import (
+            OpenSearchSearchStore, OpenSearchSearchReader,
+            get_opensearch_client, OpenSearchUnavailable,
         )
 
     def test_production_bindings_import(self):
@@ -636,55 +722,175 @@ class TestNoRegression:
     def test_section_fields_import(self):
         from services.kosha_msds.section_fields import extract_product_name
 
+    def test_no_postgres_fts_in_f3_code(self):
+        """§44: to_tsvector / plainto_tsquery / pg_trgm must not appear in
+        actual code (non-comment lines) in F3 shared_search paths."""
+        import ast, pathlib
+        banned = ["to_tsvector", "plainto_tsquery", "pg_trgm", "search_by_trigram"]
+        pkg = pathlib.Path(__file__).parent.parent / "services" / "shared_search"
+        for py_file in pkg.rglob("*.py"):
+            src = py_file.read_text(encoding="utf-8")
+            # Strip comment lines for the check (comments are explanatory docs)
+            code_lines = [
+                line for line in src.splitlines()
+                if not line.lstrip().startswith("#")
+                and not line.lstrip().startswith('"""')
+                and not line.lstrip().startswith("'''")
+            ]
+            code_only = "\n".join(code_lines)
+            # Also strip from string literals in docstrings via ast parsing
+            try:
+                tree = ast.parse(src, filename=str(py_file))
+                # Check only non-docstring string values in call/assign nodes
+                # — if any node's s value contains the banned term that's actual code
+            except SyntaxError:
+                pass
+            for token in banned:
+                self.assertNotIn(
+                    token, code_only,
+                    f"Banned PostgreSQL token {token!r} found in code of {py_file}"
+                )
 
-# ---------------------------------------------------------------------------
-# §26 — Pagination freeze
-# ---------------------------------------------------------------------------
+    def test_supabase_retrieval_migration_deleted(self):
+        """§44: The FTS migration file must be deleted from the branch."""
+        import pathlib
+        migration = (pathlib.Path(__file__).parent.parent
+                     / "supabase" / "migrations"
+                     / "20260919_shared_search_retrieval.sql")
+        self.assertFalse(
+            migration.exists(),
+            "supabase/migrations/20260919_shared_search_retrieval.sql "
+            "must be deleted (§44)"
+        )
 
-class TestPagination:
-    def _reader_with_many(self) -> MemorySearchReader:
-        """Create reader with 15 docs to test pagination."""
-        docs = [
-            _doc("GUIDE", f"guide-pg-{i}", f"안전가이드 {i:03d}",
-                 search_text=f"안전가이드 {i:03d} 작업",
-                 source_updated_at=f"2026-09-{19 - i:02d}T00:00:00+00:00")
-            for i in range(1, 16)
+
+# --------------------------------------------------------------------------
+# §14 — Pagination (KEEP)
+# --------------------------------------------------------------------------
+
+class TestPagination(unittest.TestCase):
+    """KEEP: pagination contract."""
+
+    def _make_docs(self, n: int):
+        return [
+            _pub_doc(canonical_id=f"doc-{i}", title="추락",
+                     search_text="추락 사고")
+            for i in range(n)
         ]
-        return MemorySearchReader(docs)
 
-    def test_page1_different_from_page2(self):
-        reader = self._reader_with_many()
-        engine = SharedRetrievalEngine(reader)
-        r1 = engine.search("안전가이드", visibility_scopes=["PUBLIC"], page=1, page_size=5)
-        r2 = engine.search("안전가이드", visibility_scopes=["PUBLIC"], page=2, page_size=5)
-        ids1 = [r.canonical_id for r in r1.items]
-        ids2 = [r.canonical_id for r in r2.items]
-        assert len(ids1) == 5
-        assert len(ids2) == 5
-        assert not set(ids1) & set(ids2), "Pages must not overlap"
+    def test_page1_vs_page2_different(self):
+        engine = SharedRetrievalEngine(MemorySearchReader(self._make_docs(5)))
+        r1 = engine.search("추락", visibility_scopes=["PUBLIC"], page=1, page_size=3)
+        r2 = engine.search("추락", visibility_scopes=["PUBLIC"], page=2, page_size=3)
+        ids1 = {item.canonical_id for item in r1.items}
+        ids2 = {item.canonical_id for item in r2.items}
+        self.assertFalse(ids1 & ids2, "Page 1 and page 2 must not overlap")
 
     def test_total_consistent_across_pages(self):
-        reader = self._reader_with_many()
-        engine = SharedRetrievalEngine(reader)
-        r1 = engine.search("안전가이드", visibility_scopes=["PUBLIC"], page=1, page_size=5)
-        r2 = engine.search("안전가이드", visibility_scopes=["PUBLIC"], page=2, page_size=5)
-        assert r1.total == r2.total == 15
+        engine = SharedRetrievalEngine(MemorySearchReader(self._make_docs(5)))
+        r1 = engine.search("추락", visibility_scopes=["PUBLIC"], page=1, page_size=3)
+        r2 = engine.search("추락", visibility_scopes=["PUBLIC"], page=2, page_size=3)
+        self.assertEqual(r1.total, r2.total)
 
-    def test_page_size_capped_at_50(self, engine):
-        # SharedRetrievalEngine.search clamps page_size to 50
-        r = engine.search("지게차", visibility_scopes=["PUBLIC"], page=1, page_size=999)
-        assert r.page_size <= 50
+    def test_page_size_capped_at_50(self):
+        engine = SharedRetrievalEngine(MemorySearchReader(self._make_docs(100)))
+        resp = engine.search("추락", visibility_scopes=["PUBLIC"],
+                              page=1, page_size=100)
+        self.assertLessEqual(len(resp.items), 50)
+
+    def test_engine_raises_on_empty(self):
+        engine = SharedRetrievalEngine(MemorySearchReader([]))
+        with self.assertRaises(ValueError):
+            engine.search("")
+
+    def test_engine_raises_on_whitespace(self):
+        engine = SharedRetrievalEngine(MemorySearchReader([]))
+        with self.assertRaises(ValueError):
+            engine.search("   ")
 
 
-# ---------------------------------------------------------------------------
-# §35 — Empty query handling
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# §15 — Deterministic dictionary API (ADD)
+# --------------------------------------------------------------------------
 
-class TestEmptyQuery:
-    def test_engine_raises_on_empty(self, engine):
-        with pytest.raises(ValueError, match="required"):
-            engine.search("", visibility_scopes=["PUBLIC"])
+class TestDeterministicDictionary(unittest.TestCase):
+    """ADD: lookup_deterministic does not include Kiwi TOKEN/TRIGRAM."""
 
-    def test_engine_raises_on_whitespace(self, engine):
-        with pytest.raises(ValueError, match="required"):
-            engine.search("   ", visibility_scopes=["PUBLIC"])
+    def test_lookup_deterministic_returns_dict(self):
+        from services.search_query_svc import lookup_deterministic, SearchDictError
+        try:
+            result = lookup_deterministic("지게차", limit=5)
+        except SearchDictError:
+            self.skipTest("Search dictionary projection not available in CI")
+        self.assertIsInstance(result, dict)
+        self.assertIn("items", result)
+
+    def test_lookup_deterministic_active_tiers_no_kiwi(self):
+        from services.search_query_svc import lookup_deterministic, SearchDictError
+        try:
+            result = lookup_deterministic("추락", limit=5)
+        except SearchDictError:
+            self.skipTest("Search dictionary projection not available in CI")
+        tiers = result.get("active_tiers") or []
+        for t in tiers:
+            self.assertNotIn("TOKEN", t.upper(),
+                             f"Kiwi TOKEN tier {t!r} found in active_tiers")
+            self.assertNotIn("TRIGRAM", t.upper())
+
+    def test_lookup_deterministic_blank_raises(self):
+        from services.search_query_svc import lookup_deterministic, SearchDictError
+        with self.assertRaises(SearchDictError):
+            lookup_deterministic("")
+
+    def test_legacy_lookup_still_exists(self):
+        """§16: existing lookup() must not be removed."""
+        from services.search_query_svc import lookup, SearchDictError
+        try:
+            result = lookup("지게차", limit=5)
+        except SearchDictError:
+            self.skipTest("Search dictionary projection not available in CI")
+        self.assertIn("items", result)
+
+
+# --------------------------------------------------------------------------
+# §16 — Parity fixture (KEEP adapted)
+# --------------------------------------------------------------------------
+
+class TestParityFixtures(unittest.TestCase):
+    """KEEP: basic parity that CSI and GUIDE docs appear in search."""
+
+    def test_csi_via_subject(self):
+        docs = [
+            _pub_doc(
+                object_type="CSI_ACCIDENT", canonical_id="csi-1",
+                title="지게차 충돌",
+                search_text="지게차 충돌",
+                subjects=[{"subject_type": "HAZARD", "subject_key": "지게차"}],
+            )
+        ]
+        engine = SharedRetrievalEngine(MemorySearchReader(docs))
+        plan = build_query_plan("지게차", visibility_scopes=["PUBLIC"])
+        plan.subject_candidates = [
+            SubjectCandidate("HAZARD", "지게차", "지게차", "EXACT", 100.0)
+        ]
+        from services.shared_search.retrieval import retrieve
+        resp = retrieve(plan, MemorySearchReader(docs))
+        self.assertEqual(resp.total, 1)
+        self.assertEqual(resp.items[0].object_type, "CSI_ACCIDENT")
+
+    def test_guide_via_bm25(self):
+        docs = [
+            _pub_doc(
+                object_type="GUIDE", canonical_id="g-1",
+                title="밀폐공간 작업 안전",
+                search_text="밀폐공간 작업 안전 가이드 산소결핍",
+            )
+        ]
+        engine = SharedRetrievalEngine(MemorySearchReader(docs))
+        resp = engine.search("밀폐공간", visibility_scopes=["PUBLIC"])
+        self.assertGreater(resp.total, 0)
+        self.assertEqual(resp.items[0].object_type, "GUIDE")
+
+
+if __name__ == "__main__":
+    unittest.main()

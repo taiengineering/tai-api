@@ -44,6 +44,11 @@ class CsiAccidentAdapter:
         self._fetch_by_content_id = fetch_by_content_id or (lambda _id: None)
         self.title_fallback_count = 0
 
+    @staticmethod
+    def _extract_title(row: dict) -> Optional[str]:
+        """F2 FINAL2 title fallback: CSI.title OR CSI.summary (§14-§17)."""
+        return row.get("title") or row.get("summary") or None
+
     def iter_documents(self) -> Iterator[dict]:
         self.title_fallback_count = 0
         for row in self._fetch_current():

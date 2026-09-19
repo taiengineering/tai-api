@@ -56,6 +56,27 @@ class ChemAdapter:
         self._fetch_by_id = fetch_by_id or (lambda _id: None)
         self._public_mode = public_mode_getter
 
+    @staticmethod
+    def _extract_title(row: dict) -> Optional[str]:
+        """F2 CO §18-§21 title fallback: chemical_name_ko OR A02 product_name.
+        Returns None if both are absent (record is dropped downstream).
+        """
+        import json
+        ko = (row.get("chemical_name_ko") or "").strip() or None
+        if ko:
+            return ko
+        # Attempt A02 product_name from section1_payload
+        payload = row.get("section1_payload")
+        if payload:
+            if isinstance(payload, str):
+                try:
+                    payload = json.loads(payload)
+                except Exception:
+                    return None
+            from services.kosha_msds.section_fields import extract_product_name
+            return extract_product_name(payload)
+        return None
+
     def iter_documents(self) -> Iterator[dict]:
         mode = self._public_mode()
         public_allowed = mode in ("seo_preview", "full")
