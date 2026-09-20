@@ -43,7 +43,7 @@ BEGIN
   )
   ON CONFLICT (job_code, scheduled_for) WHERE scheduled_for IS NOT NULL
   DO NOTHING
-  RETURNING id, attempt_no, cron_job_log.trace_id INTO v_id, v_attempt, v_trace;
+  RETURNING id, cron_job_log.attempt_no, cron_job_log.trace_id INTO v_id, v_attempt, v_trace;
 
   IF v_id IS NOT NULL THEN
     log_id := v_id;

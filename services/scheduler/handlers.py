@@ -195,7 +195,7 @@ def _run_shared_search_incremental(p):
     from services.shared_search.incremental import process_queue
     limit = int(p.get("limit", 50))
     return process_queue(
-        limit=limit,
+        batch_size=limit,
         supabase_client=_sb(),
     )
 
@@ -203,7 +203,17 @@ def _run_shared_search_incremental(p):
 def _run_shared_search_reconcile(p):
     """OpenSearch ↔ Domain SoT reconcile — safety net (§35-§37)."""
     from services.shared_search.opensearch_reconcile import run_reconcile
-    return run_reconcile(supabase_client=_sb())
+    from services.shared_search.production_bindings import build_production_adapters
+    from services.shared_search.opensearch_client import get_client, CURRENT_ALIAS
+    sb = _sb()
+    adapters = build_production_adapters(sb)
+    client = get_client()
+    return run_reconcile(
+        adapters=adapters,
+        client=client,
+        index=CURRENT_ALIAS,
+        supabase=sb,
+    )
 
 
 def register_direct_handlers() -> dict[str, Handler]:
