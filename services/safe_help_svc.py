@@ -44,6 +44,8 @@ def upsert_help(doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     saved = (res.data or [None])[0]
     if saved and saved.get("id"):
         sb.rpc("reindex_help", {"p_id": saved["id"], "p_txt": _doc_index_text(saved)}).execute()
+    if saved and saved.get("doc_id"):
+        _enqueue_knowledge_sync(sb, saved["doc_id"], reason="upsert_help")
     return saved
 
 
@@ -150,14 +152,37 @@ def set_status(doc_id: str, status: str) -> Optional[Dict[str, Any]]:
         raise ValueError("status 는 필수입니다.")
     sb = get_supabase()
     res = sb.table(_TABLE).update({"status": status}).eq("doc_id", doc_id).execute()
-    return (res.data or [None])[0]
+    saved = (res.data or [None])[0]
+    if saved and saved.get("doc_id"):
+        _enqueue_knowledge_sync(sb, saved["doc_id"], reason="set_status")
+    return saved
 
 
 def delete_help(doc_id: str) -> bool:
     """단일 문서 삭제(doc_id 기준). 반환: 삭제 성공 여부."""
     sb = get_supabase()
     res = sb.table(_TABLE).delete().eq("doc_id", doc_id).execute()
+    if res.data:
+        _enqueue_knowledge_sync(sb, doc_id, reason="delete_help")
     return bool(res.data)
+
+
+def _enqueue_knowledge_sync(sb, doc_id: str, *, reason: str) -> None:
+    import uuid
+    event_key = f"knowledge:{doc_id}:{reason}:{uuid.uuid4()}"
+    try:
+        sb.rpc("enqueue_search_index_sync", {
+            "p_domain_name":  "KNOWLEDGE",
+            "p_object_type":  "KNOWLEDGE",
+            "p_canonical_id": doc_id,
+            "p_event_key":    event_key,
+            "p_reason":       reason,
+        }).execute()
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "enqueue_search_index_sync KNOWLEDGE/%s failed: %s", doc_id, exc
+        )
 
 
 def list_menu_groups() -> List[str]:

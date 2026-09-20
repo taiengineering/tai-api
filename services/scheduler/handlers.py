@@ -190,6 +190,22 @@ def _run_holiday_sync(p):
     return sync_current_and_next(created_by=None)
 
 
+def _run_shared_search_incremental(p):
+    """Drain the search_index_outbox — incremental OpenSearch sync (§21-§23)."""
+    from services.shared_search.incremental import process_queue
+    limit = int(p.get("limit", 50))
+    return process_queue(
+        limit=limit,
+        supabase_client=_sb(),
+    )
+
+
+def _run_shared_search_reconcile(p):
+    """OpenSearch ↔ Domain SoT reconcile — safety net (§35-§37)."""
+    from services.shared_search.opensearch_reconcile import run_reconcile
+    return run_reconcile(supabase_client=_sb())
+
+
 def register_direct_handlers() -> dict[str, Handler]:
     if DIRECT_HANDLERS:
         return DIRECT_HANDLERS
@@ -222,6 +238,8 @@ def register_direct_handlers() -> dict[str, Handler]:
         "direct://cron_job_log_retention": _run_cron_job_log_retention,
         "direct://business_event_retention": _run_business_event_retention,
         "direct://holiday_sync": _run_holiday_sync,
+        "direct://shared_search_incremental": _run_shared_search_incremental,
+        "direct://shared_search_reconcile":   _run_shared_search_reconcile,
     })
     return DIRECT_HANDLERS
 

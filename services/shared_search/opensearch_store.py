@@ -443,3 +443,7 @@ def _doc_to_os_body(doc: dict) -> dict:
     body["visibility_scopes"] = list(doc.get("visibility_scopes") or [])
     body["indexed_at"]        = _now_iso()
     return body
+
+
+# Public alias — single authority for wire→OS body conversion (BLOCKER 3)
+doc_to_os_body = _doc_to_os_body

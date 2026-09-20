@@ -409,6 +409,7 @@ class SupabaseGuideStore:
         self.sb.table("kosha_guide_snapshots").update(
             {"status": "COMPLETED", "completed_at": completed_at}
         ).eq("id", snapshot_id).eq("status", "RUNNING").execute()
+        _enqueue_guide_snapshot(self.sb, snapshot_id)
 
     def fail_snapshot(self, snapshot_id: str, reason: str, completed_at: str) -> None:
         self.sb.table("kosha_guide_snapshots").update(
@@ -418,6 +419,46 @@ class SupabaseGuideStore:
                 "completed_at": completed_at,
             }
         ).eq("id", snapshot_id).execute()
+
+
+def _enqueue_guide_snapshot(sb, snapshot_id: str) -> None:
+    """Enqueue SYNC_OBJECT for NEW snapshot items UNION OLD snapshot items (BLOCKER 5B).
+
+    Enqueuing the union ensures items removed from the new snapshot (present only
+    in the previous snapshot) are tombstoned by the incremental worker.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        new_rows = sb.table("kosha_guide_snapshot_items") \
+                     .select("guide_id") \
+                     .eq("snapshot_id", snapshot_id) \
+                     .execute()
+        new_ids = {r["guide_id"] for r in (new_rows.data or []) if r.get("guide_id")}
+
+        prev_ids: set = set()
+        prev_snap = (sb.table("kosha_guide_snapshots")
+                       .select("id").eq("status", "COMPLETED")
+                       .neq("id", snapshot_id)
+                       .order("completed_at", desc=True).limit(1).execute())
+        if prev_snap.data:
+            prev_sid = prev_snap.data[0]["id"]
+            prev_rows = sb.table("kosha_guide_snapshot_items") \
+                          .select("guide_id") \
+                          .eq("snapshot_id", prev_sid) \
+                          .execute()
+            prev_ids = {r["guide_id"] for r in (prev_rows.data or []) if r.get("guide_id")}
+
+        for gid in new_ids | prev_ids:
+            sb.rpc("enqueue_search_index_sync", {
+                "p_domain_name":  "GUIDE",
+                "p_object_type":  "GUIDE",
+                "p_canonical_id": str(gid),
+                "p_event_key":    f"guide_snapshot:{snapshot_id}:{gid}",
+                "p_reason":       "snapshot_completed",
+            }).execute()
+    except Exception as exc:
+        log.warning("enqueue_guide_snapshot failed: %s", exc)
 
 
 def _catalog_row(g: NormalizedGuide, now_s: str) -> dict:

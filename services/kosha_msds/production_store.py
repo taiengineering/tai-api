@@ -64,6 +64,42 @@ def _chunk(seq: list, size: int) -> list[list]:
     return [seq[i:i + size] for i in range(0, len(seq), size)]
 
 
+def _enqueue_chem_snapshot(sb, snapshot_id: str) -> None:
+    """Enqueue SYNC_OBJECT for NEW snapshot items UNION OLD snapshot items (BLOCKER 5B)."""
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        new_rows = sb.table(SNAPSHOT_ITEMS_TABLE) \
+                     .select("chemical_id") \
+                     .eq("snapshot_id", snapshot_id) \
+                     .execute()
+        new_ids = {r["chemical_id"] for r in (new_rows.data or []) if r.get("chemical_id")}
+
+        prev_ids: set = set()
+        prev_snap = (sb.table(SNAPSHOTS_TABLE)
+                       .select("id").eq("status", SNAPSHOT_COMPLETED)
+                       .neq("id", snapshot_id)
+                       .order("completed_at", desc=True).limit(1).execute())
+        if prev_snap.data:
+            prev_sid = prev_snap.data[0]["id"]
+            prev_rows = sb.table(SNAPSHOT_ITEMS_TABLE) \
+                          .select("chemical_id") \
+                          .eq("snapshot_id", prev_sid) \
+                          .execute()
+            prev_ids = {r["chemical_id"] for r in (prev_rows.data or []) if r.get("chemical_id")}
+
+        for chem_id in new_ids | prev_ids:
+            sb.rpc("enqueue_search_index_sync", {
+                "p_domain_name":  "CHEM",
+                "p_object_type":  "CHEM",
+                "p_canonical_id": str(chem_id),
+                "p_event_key":    f"chem_snapshot:{snapshot_id}:{chem_id}",
+                "p_reason":       "snapshot_completed",
+            }).execute()
+    except Exception as exc:
+        log.warning("enqueue_chem_snapshot failed: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Materialize store — matches the interface consumed by
 # services.kosha_msds.materialize_writer (see MemoryMaterializeStore).
@@ -154,6 +190,8 @@ class SupabaseMaterializeStore:
             .eq("id", snapshot_id)
             .execute()
         )
+        if status == SNAPSHOT_COMPLETED:
+            _enqueue_chem_snapshot(self.sb, snapshot_id)
 
     def insert_chemicals(self, rows: list[dict]) -> None:
         if not rows:
