@@ -155,23 +155,32 @@ $$;
 -- ---------------------------------------------------------------------------
 -- RPC: fail_search_index_event
 -- Exponential backoff retry (PENDING) up to p_max_attempts; DEAD after that.
+-- PATCH-3: requires p_worker_id + p_attempt_no for stale-worker fence.
 -- ---------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.fail_search_index_event(
     p_event_id     BIGINT,
     p_reason       TEXT,
+    p_worker_id    TEXT,
+    p_attempt_no   INT,
     p_max_attempts INT DEFAULT 8
 ) RETURNS VOID LANGUAGE plpgsql AS $$
 DECLARE
     v_attempt INT;
     v_delay_s  INT;
 BEGIN
-    SELECT attempt_no INTO v_attempt FROM public.search_index_outbox WHERE id = p_event_id;
+    SELECT attempt_no INTO v_attempt
+    FROM public.search_index_outbox
+    WHERE id = p_event_id AND worker_id = p_worker_id AND attempt_no = p_attempt_no;
+
+    IF NOT FOUND THEN
+        RETURN; -- stale worker; row owned by another attempt
+    END IF;
 
     IF COALESCE(v_attempt, 0) >= p_max_attempts THEN
         UPDATE public.search_index_outbox
         SET status = 'DEAD', failed_at = NOW(), failure_reason = p_reason, updated_at = NOW()
-        WHERE id = p_event_id;
+        WHERE id = p_event_id AND worker_id = p_worker_id AND attempt_no = p_attempt_no;
     ELSE
         v_delay_s := LEAST(3600, (2 ^ COALESCE(v_attempt, 0))::INT);
         UPDATE public.search_index_outbox
@@ -181,32 +190,36 @@ BEGIN
             failure_reason = p_reason,
             failed_at      = NOW(),
             updated_at     = NOW()
-        WHERE id = p_event_id;
+        WHERE id = p_event_id AND worker_id = p_worker_id AND attempt_no = p_attempt_no;
     END IF;
 END;
 $$;
 
 -- ---------------------------------------------------------------------------
--- RPC: requeue_search_index_event (unchanged)
+-- RPC: requeue_search_index_event
+-- PATCH-3: requires p_worker_id + p_attempt_no for stale-worker fence.
 -- ---------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.requeue_search_index_event(
-    p_event_id  BIGINT,
-    p_reason    TEXT DEFAULT NULL
-)
-RETURNS VOID
-LANGUAGE plpgsql
-AS $$
+    p_event_id   BIGINT,
+    p_worker_id  TEXT,
+    p_attempt_no INT,
+    p_reason     TEXT DEFAULT NULL
+) RETURNS VOID LANGUAGE plpgsql AS $$
 BEGIN
     UPDATE public.search_index_outbox
     SET
         status         = 'PENDING',
         claimed_by     = NULL,
         claimed_at     = NULL,
+        lease_until    = NULL,
         worker_id      = NULL,
         failure_reason = p_reason,
+        available_at   = NOW(),
         updated_at     = NOW()
-    WHERE id = p_event_id;
+    WHERE id = p_event_id
+      AND worker_id   = p_worker_id
+      AND attempt_no  = p_attempt_no;
 END;
 $$;
 

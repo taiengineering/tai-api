@@ -206,6 +206,11 @@ def _replay_outbox_into_candidate(
                             total_errors += 1
                             continue
                         if doc.publication_status != PUBLICATION_STATUS_PUBLISHED:
+                            try:
+                                client.delete(index=candidate_index, id=doc_id_val, refresh=False)
+                            except Exception:
+                                pass
+                            total_deleted += 1
                             continue
                         body = doc_to_os_body(wire)
                         client.index(
@@ -296,9 +301,9 @@ def _post_replay_validate(adapters: list, client, candidate_index: str) -> None:
         while True:
             body = {
                 "query": {"term": {"object_type": adapter.object_type}},
-                "_source": ["content_hash"],
+                "_source": ["content_hash", "canonical_id"],
                 "size": 500,
-                "sort": [{"_id": "asc"}],
+                "sort": [{"canonical_id": "asc"}],
             }
             if search_after:
                 body["search_after"] = search_after
@@ -307,8 +312,10 @@ def _post_replay_validate(adapters: list, client, candidate_index: str) -> None:
             if not hits:
                 break
             for hit in hits:
-                doc_id = hit.get("_id", "")
-                os_hash = (hit.get("_source") or {}).get("content_hash", "")
+                src = hit.get("_source") or {}
+                cid_val = src.get("canonical_id") or ""
+                doc_id = document_id(adapter.object_type, cid_val) if cid_val else ""
+                os_hash = src.get("content_hash", "")
                 sot_hash = sot.get(doc_id)
                 if sot_hash is None:
                     mismatches.append(

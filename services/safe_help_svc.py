@@ -167,11 +167,15 @@ def delete_help(doc_id: str) -> bool:
 
 
 def _enqueue_knowledge_sync(sb, doc_id: str, *, reason: str) -> None:
+    from services.time import now_kst
+    ts = now_kst().strftime('%Y%m%dT%H%M%S')
+    event_key = f"knowledge:{doc_id}:{reason}:{ts}"
     try:
         sb.rpc("enqueue_search_index_sync", {
             "p_domain_name":  "KNOWLEDGE",
             "p_object_type":  "KNOWLEDGE",
             "p_canonical_id": doc_id,
+            "p_event_key":    event_key,
             "p_reason":       reason,
         }).execute()
     except Exception as exc:

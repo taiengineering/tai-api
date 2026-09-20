@@ -85,12 +85,15 @@ def _rebuild_active(supabase: Any) -> bool:
 # Requeue / fail helpers
 # ---------------------------------------------------------------------------
 
-def _fail_event(supabase: Any, event_id: int, reason: str) -> None:
+def _fail_event(supabase: Any, event_id: int, reason: str,
+                worker_id: str, attempt_no: int) -> None:
     """Mark an event as permanently failed."""
     try:
         supabase.rpc("fail_search_index_event", {
-            "p_event_id": event_id,
-            "p_reason": reason,
+            "p_event_id":   event_id,
+            "p_reason":     reason,
+            "p_worker_id":  worker_id,
+            "p_attempt_no": attempt_no,
         }).execute()
     except Exception as exc:
         logger.warning("fail_event failed for event %s: %s", event_id, exc)
@@ -281,6 +284,7 @@ def process_queue(
         domain_name = event.get("domain_name", "")
         object_type = event.get("object_type", "")
         canonical_id = event.get("canonical_id", "")
+        attempt_no  = event.get("attempt_no", 1)
 
         try:
             result = sync_object(
@@ -296,7 +300,7 @@ def process_queue(
                 "sync_object failed for event %s (%s/%s/%s): %s",
                 event_id, domain_name, object_type, canonical_id, exc,
             )
-            _fail_event(sb, event_id, str(exc)[:500])
+            _fail_event(sb, event_id, str(exc)[:500], worker_id, attempt_no)
             obs["failed"] += 1
             continue
 
@@ -306,7 +310,9 @@ def process_queue(
             # Fence became active mid-batch — requeue, don't complete
             try:
                 sb.rpc("requeue_search_index_event", {
-                    "p_event_id": event_id,
+                    "p_event_id":   event_id,
+                    "p_worker_id":  worker_id,
+                    "p_attempt_no": attempt_no,
                     "p_reason": "fence_active_mid_batch",
                 }).execute()
             except Exception as exc:
@@ -314,7 +320,7 @@ def process_queue(
             continue  # don't complete
 
         if outcome == "SKIP_NO_ADAPTER":
-            _fail_event(sb, event_id, f"no adapter for domain {domain_name}")
+            _fail_event(sb, event_id, f"no adapter for domain {domain_name}", worker_id, attempt_no)
             obs["failed"] += 1
             continue  # don't complete
 

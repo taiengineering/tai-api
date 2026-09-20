@@ -251,6 +251,7 @@ def _enqueue_precedent_delta() -> None:
                 "p_domain_name":  "PRECEDENT",
                 "p_object_type":  "PRECEDENT",
                 "p_canonical_id": str(rid),
+                "p_event_key":    f"precedent_delta:{rid}:{cutoff}",
                 "p_reason":       "edge_collect",
             }).execute()
             count += 1

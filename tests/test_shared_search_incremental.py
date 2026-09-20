@@ -652,3 +652,167 @@ class TestRlsInMigration:
     def test_revoke_from_anon(self):
         sql = open("supabase/migrations/20260920_shared_search_incremental_outbox.sql").read()
         assert "REVOKE" in sql and "anon" in sql
+
+
+# ---------------------------------------------------------------------------
+# PATCH-3 new test classes
+# ---------------------------------------------------------------------------
+
+class TestKnowledgeEventKey:
+    def test_event_key_included(self):
+        from unittest.mock import MagicMock, patch
+        sb = MagicMock()
+        rpc_mock = MagicMock()
+        sb.rpc.return_value = rpc_mock
+
+        with patch("services.safe_help_svc.get_supabase", return_value=sb):
+            import importlib, services.safe_help_svc as svc
+            svc._enqueue_knowledge_sync(sb, "doc-1", reason="upsert")
+
+        call_kwargs = sb.rpc.call_args[0][1]
+        assert "p_event_key" in call_kwargs
+        assert "doc-1" in call_kwargs["p_event_key"]
+        assert "upsert" in call_kwargs["p_event_key"]
+
+    def test_event_key_varies_across_invocations(self):
+        """Two calls at different (mocked) times produce different event keys."""
+        from unittest.mock import MagicMock, patch
+        import datetime
+
+        sb = MagicMock()
+        keys = []
+
+        def capture_rpc(name, params):
+            keys.append(params.get("p_event_key", ""))
+            return MagicMock()
+
+        sb.rpc.side_effect = capture_rpc
+
+        t1 = datetime.datetime(2026, 9, 20, 10, 0, 0, tzinfo=datetime.timezone.utc)
+        t2 = datetime.datetime(2026, 9, 20, 10, 0, 5, tzinfo=datetime.timezone.utc)
+
+        with patch("services.time.now_kst", side_effect=[t1, t2]):
+            import services.safe_help_svc as svc
+            svc._enqueue_knowledge_sync(sb, "doc-1", reason="upsert")
+            svc._enqueue_knowledge_sync(sb, "doc-1", reason="upsert")
+
+        assert len(keys) == 2
+        assert keys[0] != keys[1], "Same doc+reason at different times must have different event keys"
+
+
+class TestPrecedentEventKey:
+    def test_event_key_included(self):
+        sql_check = "precedent_delta"
+        import inspect
+        from routers.precedent_api import _enqueue_precedent_delta
+        src = inspect.getsource(_enqueue_precedent_delta)
+        assert "p_event_key" in src
+        assert "precedent_delta" in src
+
+
+class TestReconcileRunId:
+    def test_event_key_includes_run_id(self):
+        import inspect
+        from services.shared_search import opensearch_reconcile as rc
+        src = inspect.getsource(rc._reconcile_domain)
+        assert "reconcile_run_id" in src
+        assert "p_event_key" in src
+
+    def test_run_reconcile_generates_run_id(self):
+        import inspect
+        from services.shared_search import opensearch_reconcile as rc
+        src = inspect.getsource(rc.run_reconcile)
+        assert "reconcile_run_id" in src or "uuid" in src
+
+
+class TestPublishedOnlyExpected:
+    def test_hold_excluded_from_expected_hashes(self):
+        from unittest.mock import patch, MagicMock
+        from services.shared_search.adapters._common import expected_hashes_from_documents
+
+        hold_payload = {
+            "object_type": "SAFETY_MATERIAL",
+            "canonical_id": "mat-hold-1",
+            "publication_status": "HOLD",
+            "title": "Hold Material",
+            "source_id": "KOSHA",
+            "source_key": "k1",
+            "source_updated_at": "2026-01-01T00:00:00+00:00",
+            "search_text": "hold material text",
+        }
+        published_payload = {
+            "object_type": "SAFETY_MATERIAL",
+            "canonical_id": "mat-pub-1",
+            "publication_status": "PUBLISHED",
+            "title": "Published Material",
+            "source_id": "KOSHA",
+            "source_key": "k2",
+            "source_updated_at": "2026-01-01T00:00:00+00:00",
+            "search_text": "published material text",
+        }
+
+        def docs():
+            yield hold_payload
+            yield published_payload
+
+        results = list(expected_hashes_from_documents(docs))
+        canonical_ids = [r["canonical_id"] for r in results]
+        assert "mat-hold-1" not in canonical_ids, "HOLD must not appear in expected hashes"
+        assert "mat-pub-1" in canonical_ids, "PUBLISHED must appear in expected hashes"
+
+
+class TestSortField:
+    def test_reconcile_scan_uses_canonical_id_sort(self):
+        import inspect
+        from services.shared_search import opensearch_reconcile as rc
+        src = inspect.getsource(rc._scan_os_domain)
+        assert '"_id"' not in src and "'_id'" not in src
+        assert "canonical_id" in src
+
+    def test_post_replay_validate_uses_canonical_id_sort(self):
+        import inspect
+        from tools.shared_search import opensearch_rebuild as rb
+        src = inspect.getsource(rb._post_replay_validate)
+        assert '"_id"' not in src and "'_id'" not in src
+        assert "canonical_id" in src
+
+
+class TestStaleWorkerFence:
+    def test_fail_rpc_includes_worker_id_and_attempt_no(self):
+        from unittest.mock import MagicMock
+        from services.shared_search.incremental import _fail_event
+
+        sb = MagicMock()
+        _fail_event(sb, event_id=42, reason="boom", worker_id="w-1", attempt_no=3)
+
+        call_kwargs = sb.rpc.call_args[0][1]
+        assert call_kwargs["p_worker_id"] == "w-1"
+        assert call_kwargs["p_attempt_no"] == 3
+
+    def test_fail_rpc_name(self):
+        from unittest.mock import MagicMock
+        from services.shared_search.incremental import _fail_event
+
+        sb = MagicMock()
+        _fail_event(sb, event_id=1, reason="x", worker_id="w", attempt_no=1)
+        assert sb.rpc.call_args[0][0] == "fail_search_index_event"
+
+    def test_migration_fail_has_worker_fence(self):
+        sql = open("supabase/migrations/20260920_shared_search_incremental_outbox.sql").read()
+        # fail function must check worker_id and attempt_no
+        assert "p_worker_id" in sql and "p_attempt_no" in sql
+
+    def test_migration_requeue_has_worker_fence(self):
+        sql = open("supabase/migrations/20260920_shared_search_incremental_outbox.sql").read()
+        # requeue function must check worker_id and attempt_no
+        assert "requeue_search_index_event" in sql
+        # Check that the requeue WHERE clause includes worker_id
+        import re
+        requeue_body = sql[sql.find("requeue_search_index_event"):sql.find("requeue_search_index_event")+2000]
+        assert "worker_id" in requeue_body and "attempt_no" in requeue_body
+
+
+class TestCiRegistration:
+    def test_incremental_tests_in_ci(self):
+        ci = open(".github/workflows/ci.yml").read()
+        assert "test_shared_search_incremental" in ci

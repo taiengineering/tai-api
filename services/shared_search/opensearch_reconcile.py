@@ -17,6 +17,7 @@ All three categories are enqueued (BLOCKER 5A: extra → enqueue with
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -62,7 +63,7 @@ def _scan_os_domain(client, index: str, object_type: str, *, page_size: int = 50
             "query": {"term": {"object_type": object_type}},
             "_source": ["content_hash", "canonical_id"],
             "size": page_size,
-            "sort": [{"_id": "asc"}],
+            "sort": [{"canonical_id": "asc"}],
         }
         if search_after:
             body["search_after"] = search_after
@@ -71,9 +72,11 @@ def _scan_os_domain(client, index: str, object_type: str, *, page_size: int = 50
         if not hits:
             break
         for hit in hits:
-            doc_id = hit.get("_id", "")
             src = hit.get("_source") or {}
-            result[doc_id] = src.get("content_hash") or ""
+            cid = src.get("canonical_id") or ""
+            doc_id = f"{object_type}::{cid}" if cid else ""
+            if doc_id:
+                result[doc_id] = src.get("content_hash") or ""
         search_after = hits[-1].get("sort")
         if len(hits) < page_size:
             break
@@ -93,6 +96,7 @@ def _reconcile_domain(
     client,
     index: str,
     supabase: Any,
+    reconcile_run_id: str = "",
 ) -> ReconcileReport:
     """Reconcile one domain adapter against the live OpenSearch index."""
     domain_name = adapter.domain_name
@@ -162,7 +166,7 @@ def _reconcile_domain(
                 "p_domain_name": domain_name,
                 "p_object_type": object_type,
                 "p_canonical_id": cid,
-                "p_event_key": f"reconcile:{domain_name}:{cid}",
+                "p_event_key": f"reconcile:{reconcile_run_id}:{domain_name}:{cid}",
                 "p_reason": reason,
             }).execute()
         except Exception as exc:
@@ -182,6 +186,7 @@ def run_reconcile(
     supabase: Any,
 ) -> dict:
     """Reconcile all adapters. Returns a summary dict."""
+    reconcile_run_id = str(uuid.uuid4())
     reports = []
     total_missing = 0
     total_stale = 0
@@ -191,7 +196,7 @@ def run_reconcile(
 
     for adapter in adapters:
         try:
-            report = _reconcile_domain(adapter, client, index, supabase)
+            report = _reconcile_domain(adapter, client, index, supabase, reconcile_run_id)
             reports.append(report)
             total_missing += len(report.missing)
             total_stale += len(report.stale_by_hash)

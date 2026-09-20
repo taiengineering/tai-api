@@ -77,6 +77,7 @@ def expected_hashes_from_documents(
     # (document.py is used by many other modules too).
     from services.shared_search.document import normalize_document
     from services.shared_search.hash_utils import content_hash
+    from services.shared_search.contract import PUBLICATION_STATUS_PUBLISHED
     for payload in iter_documents():
         try:
             doc = normalize_document(payload)
@@ -84,6 +85,8 @@ def expected_hashes_from_documents(
             # A payload the writer would reject cannot participate in
             # reconciliation either; skip.
             continue
+        if doc.publication_status != PUBLICATION_STATUS_PUBLISHED:
+            continue  # HOLD/REMOVED are not expected in OpenSearch
         yield {
             "canonical_id": doc.canonical_id,
             "content_hash": content_hash(doc),
