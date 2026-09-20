@@ -24,6 +24,7 @@ CHEM public mode is controlled by the adapter layer (§28).
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from typing import Any, Optional
@@ -63,6 +64,42 @@ def _type_filter(object_types: list[str]) -> list[dict]:
 
 def _base_filter(visibility: list[str], object_types: list[str]) -> list[dict]:
     return _visibility_filter(visibility) + _type_filter(object_types)
+
+
+def _within_filter(within_query: str) -> list[dict]:
+    """Filter-context clauses for within search: each token must appear
+    in at least one of the text fields (AND across tokens, zero score contribution).
+    """
+    tokens = [t for t in within_query.strip().split() if t]
+    if not tokens:
+        return []
+    _fields = ["title", "aliases", "keywords", "summary", "search_text"]
+    clauses = []
+    for token in tokens:
+        clauses.append({
+            "bool": {
+                "should": [
+                    {"match": {f: {"query": token, "analyzer": "tai_nori_search"}}}
+                    for f in _fields
+                ],
+                "minimum_should_match": 1,
+            }
+        })
+    return clauses
+
+
+def _inject_within(query_body: dict, within_query: Optional[str]) -> dict:
+    """Inject within filter clauses into an existing bool query. No score contribution."""
+    if not within_query or not within_query.strip():
+        return query_body
+    clauses = _within_filter(within_query)
+    if not clauses:
+        return query_body
+    q = copy.deepcopy(query_body)
+    bool_q = q.get("query", {}).get("bool", {})
+    bool_q["filter"] = bool_q.get("filter", []) + clauses
+    q["query"]["bool"] = bool_q
+    return q
 
 
 # ---------------------------------------------------------------------------
@@ -235,8 +272,12 @@ class OpenSearchSearchReader:
         subject_candidates: list[Any],    # SubjectCandidate objects
         object_types: list[str],
         visibility: list[str],
+        within_query: Optional[str] = None,
     ) -> dict[str, list[dict]]:
         """Fire one _msearch with all eager tiers.
+
+        ``within_query`` is injected as a filter-context clause on every tier.
+        It narrows the result set but does not contribute to scores.
 
         Returns dict mapping tier_name → list of raw OS hit docs.
         """
@@ -288,6 +329,13 @@ class OpenSearchSearchReader:
         if not requests:
             return {}
 
+        # Inject within filter into every tier (filter context = zero score contribution)
+        if within_query and within_query.strip():
+            requests = [
+                (tier, _inject_within(qbody, within_query))
+                for tier, qbody in requests
+            ]
+
         # Flatten to _msearch body (alternating header + body lines)
         msearch_body: list[dict] = []
         for _tier, qbody in requests:
@@ -322,12 +370,13 @@ class OpenSearchSearchReader:
         *,
         object_types: list[str],
         visibility: list[str],
+        within_query: Optional[str] = None,
     ) -> list[dict]:
         """FUZZY_FALLBACK — separate round-trip (§25, only when needed)."""
-        resp = self._client.search(
-            index=self._index,
-            body=_q_fuzzy(normalized_query, visibility, object_types),
-        )
+        qbody = _q_fuzzy(normalized_query, visibility, object_types)
+        if within_query and within_query.strip():
+            qbody = _inject_within(qbody, within_query)
+        resp = self._client.search(index=self._index, body=qbody)
         return [_hit_to_doc(h) for h in resp.get("hits", {}).get("hits", [])]
 
 
