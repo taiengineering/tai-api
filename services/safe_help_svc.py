@@ -161,15 +161,15 @@ def set_status(doc_id: str, status: str) -> Optional[Dict[str, Any]]:
 def delete_help(doc_id: str) -> bool:
     """단일 문서 삭제(doc_id 기준). 반환: 삭제 성공 여부."""
     sb = get_supabase()
-    _enqueue_knowledge_sync(sb, doc_id, reason="delete_help")
     res = sb.table(_TABLE).delete().eq("doc_id", doc_id).execute()
+    if res.data:
+        _enqueue_knowledge_sync(sb, doc_id, reason="delete_help")
     return bool(res.data)
 
 
 def _enqueue_knowledge_sync(sb, doc_id: str, *, reason: str) -> None:
-    from services.time import now_kst
-    ts = now_kst().strftime('%Y%m%dT%H%M%S')
-    event_key = f"knowledge:{doc_id}:{reason}:{ts}"
+    import uuid
+    event_key = f"knowledge:{doc_id}:{reason}:{uuid.uuid4()}"
     try:
         sb.rpc("enqueue_search_index_sync", {
             "p_domain_name":  "KNOWLEDGE",

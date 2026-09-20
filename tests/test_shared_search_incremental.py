@@ -816,3 +816,185 @@ class TestCiRegistration:
     def test_incremental_tests_in_ci(self):
         ci = open(".github/workflows/ci.yml").read()
         assert "test_shared_search_incremental" in ci
+
+
+# ---------------------------------------------------------------------------
+# PATCH-4: Reconcile scan failure, KNOWLEDGE event key, delete ordering
+# ---------------------------------------------------------------------------
+
+class TestReconcileScanFailure:
+    def test_scan_failure_propagates_not_empty_map(self):
+        """Scan failure must raise, not silently return {}."""
+        from unittest.mock import MagicMock
+        from services.shared_search import opensearch_reconcile
+
+        adapter = MagicMock()
+        adapter.domain_name = "TEST"
+        adapter.object_type = "TEST"
+        adapter.iter_expected_hashes.return_value = [
+            {"canonical_id": "c1", "content_hash": "h1"},
+        ]
+
+        client = MagicMock()
+        client.search.side_effect = RuntimeError("OS unreachable")
+
+        sb = MagicMock()
+        with pytest.raises(RuntimeError, match="OS unreachable"):
+            opensearch_reconcile._reconcile_domain(
+                adapter, client, "test-index", sb, reconcile_run_id="r1"
+            )
+
+    def test_scan_failure_sets_all_ok_false_in_run_reconcile(self):
+        """run_reconcile must mark all_ok=False when a domain scan raises."""
+        from unittest.mock import MagicMock, patch
+        from services.shared_search import opensearch_reconcile
+
+        adapter = MagicMock()
+        adapter.domain_name = "TEST"
+        adapter.object_type = "TEST"
+
+        client = MagicMock()
+        sb = MagicMock()
+
+        with patch.object(
+            opensearch_reconcile, "_reconcile_domain", side_effect=RuntimeError("boom")
+        ):
+            result = opensearch_reconcile.run_reconcile(
+                adapters=[adapter], client=client, index="test-index", supabase=sb
+            )
+
+        assert result["all_ok"] is False
+
+    def test_scan_failure_no_enqueue(self):
+        """When scan raises, run_reconcile must not enqueue anything for that domain."""
+        from unittest.mock import MagicMock, patch
+        from services.shared_search import opensearch_reconcile
+
+        adapter = MagicMock()
+        adapter.domain_name = "TEST"
+        adapter.object_type = "TEST"
+
+        client = MagicMock()
+        sb = MagicMock()
+
+        with patch.object(
+            opensearch_reconcile, "_reconcile_domain", side_effect=RuntimeError("boom")
+        ):
+            opensearch_reconcile.run_reconcile(
+                adapters=[adapter], client=client, index="test-index", supabase=sb
+            )
+
+        sb.rpc.assert_not_called()
+
+
+class TestKnowledgeEventKeyUniqueness:
+    def test_two_calls_same_second_different_keys(self):
+        """Two enqueue calls within the same second must produce distinct event_keys."""
+        from unittest.mock import MagicMock, patch
+        import services.safe_help_svc as svc
+
+        keys = []
+        original_rpc = None
+
+        def capture_rpc(name, params):
+            if name == "enqueue_search_index_sync":
+                keys.append(params["p_event_key"])
+            m = MagicMock()
+            m.execute.return_value = MagicMock()
+            return m
+
+        sb = MagicMock()
+        sb.rpc.side_effect = capture_rpc
+
+        svc._enqueue_knowledge_sync(sb, "doc-1", reason="upsert_help")
+        svc._enqueue_knowledge_sync(sb, "doc-1", reason="upsert_help")
+
+        assert len(keys) == 2
+        assert keys[0] != keys[1], "Same-second event keys must be unique"
+
+    def test_event_key_contains_doc_id_and_reason(self):
+        """Event key must embed doc_id and reason for traceability."""
+        from unittest.mock import MagicMock
+        import services.safe_help_svc as svc
+
+        keys = []
+
+        def capture_rpc(name, params):
+            if name == "enqueue_search_index_sync":
+                keys.append(params["p_event_key"])
+            m = MagicMock()
+            m.execute.return_value = MagicMock()
+            return m
+
+        sb = MagicMock()
+        sb.rpc.side_effect = capture_rpc
+
+        svc._enqueue_knowledge_sync(sb, "my-doc-id", reason="delete_help")
+
+        assert len(keys) == 1
+        assert "my-doc-id" in keys[0]
+        assert "delete_help" in keys[0]
+
+
+class TestKnowledgeDeleteOrdering:
+    def test_delete_success_enqueues_tombstone(self):
+        """Successful delete must trigger exactly one enqueue call."""
+        from unittest.mock import MagicMock, patch
+        import services.safe_help_svc as svc
+
+        sb = MagicMock()
+        sb.table.return_value.delete.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"doc_id": "doc-1"}]
+        )
+
+        with patch.object(svc, "_enqueue_knowledge_sync") as mock_enqueue:
+            with patch.object(svc, "get_supabase", return_value=sb):
+                result = svc.delete_help("doc-1")
+
+        assert result is True
+        mock_enqueue.assert_called_once_with(sb, "doc-1", reason="delete_help")
+
+    def test_delete_failure_no_enqueue(self):
+        """Failed delete (no rows affected) must NOT enqueue a tombstone."""
+        from unittest.mock import MagicMock, patch
+        import services.safe_help_svc as svc
+
+        sb = MagicMock()
+        sb.table.return_value.delete.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[]
+        )
+
+        with patch.object(svc, "_enqueue_knowledge_sync") as mock_enqueue:
+            with patch.object(svc, "get_supabase", return_value=sb):
+                result = svc.delete_help("doc-1")
+
+        assert result is False
+        mock_enqueue.assert_not_called()
+
+    def test_delete_called_before_enqueue(self):
+        """DB delete must be called before enqueue (ordering invariant)."""
+        from unittest.mock import MagicMock, patch, call
+        import services.safe_help_svc as svc
+
+        call_order = []
+
+        sb = MagicMock()
+
+        def track_delete(*args, **kwargs):
+            call_order.append("delete")
+            m = MagicMock()
+            m.execute.return_value = MagicMock(data=[{"doc_id": "doc-1"}])
+            return m
+
+        sb.table.return_value.delete.return_value.eq.side_effect = track_delete
+
+        def track_enqueue(sb_, doc_id, *, reason):
+            call_order.append("enqueue")
+
+        with patch.object(svc, "_enqueue_knowledge_sync", side_effect=track_enqueue):
+            with patch.object(svc, "get_supabase", return_value=sb):
+                svc.delete_help("doc-1")
+
+        assert call_order == ["delete", "enqueue"], (
+            f"Expected delete then enqueue, got: {call_order}"
+        )

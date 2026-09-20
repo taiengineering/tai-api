@@ -114,11 +114,9 @@ def _reconcile_domain(
     report.expected = len(sot)
 
     # --- OpenSearch side ---
-    try:
-        os_map = _scan_os_domain(client, index, object_type)
-    except Exception as exc:
-        logger.warning("reconcile OS scan failed for %s: %s", domain_name, exc)
-        os_map = {}
+    # Fail-closed: scan failure propagates to caller (run_reconcile catches it,
+    # sets all_ok=False, and skips enqueue for this domain).
+    os_map = _scan_os_domain(client, index, object_type)
     report.indexed = len(os_map)
 
     # --- Classify ---
