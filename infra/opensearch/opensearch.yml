@@ -1,0 +1,8 @@
+cluster.name: tai-shared-search
+node.name: tai-opensearch-node-1
+discovery.type: single-node
+network.host: 0.0.0.0
+
+# Single shard, zero replica — HA=NO (TAI search projection only)
+index.number_of_shards: 1
+index.number_of_replicas: 0

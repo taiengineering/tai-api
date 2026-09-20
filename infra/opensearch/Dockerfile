@@ -3,6 +3,7 @@ FROM opensearchproject/opensearch:2.17.0
 # Install analysis-nori at build time — never at runtime
 RUN ./bin/opensearch-plugin install analysis-nori
 
+COPY opensearch.yml /usr/share/opensearch/config/opensearch.yml
 COPY entrypoint.sh /usr/local/bin/tai-entrypoint.sh
 RUN chmod +x /usr/local/bin/tai-entrypoint.sh
 
