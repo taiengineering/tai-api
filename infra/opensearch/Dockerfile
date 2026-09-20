@@ -4,8 +4,7 @@ FROM opensearchproject/opensearch:2.17.0
 RUN ./bin/opensearch-plugin install analysis-nori
 
 COPY opensearch.yml /usr/share/opensearch/config/opensearch.yml
-COPY entrypoint.sh /usr/local/bin/tai-entrypoint.sh
-RUN chmod +x /usr/local/bin/tai-entrypoint.sh
+COPY --chmod=755 entrypoint.sh /usr/local/bin/tai-entrypoint.sh
 
 EXPOSE 9200 9600
 
