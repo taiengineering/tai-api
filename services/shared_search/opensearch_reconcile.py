@@ -51,22 +51,22 @@ class ReconcileReport:
 # ---------------------------------------------------------------------------
 
 def _scan_os_domain(client, index: str, object_type: str, *, page_size: int = 500) -> dict[str, str]:
-    """Page through OpenSearch for all docs of ``object_type``.
+    """Scan OpenSearch for all docs of object_type using search_after (no 10k cap).
 
     Returns ``{doc_id: content_hash}`` for the domain.
     """
     result: dict[str, str] = {}
-    from_ = 0
+    search_after = None
     while True:
-        resp = client.search(
-            index=index,
-            body={
-                "query": {"term": {"object_type": object_type}},
-                "_source": ["content_hash", "canonical_id"],
-                "size": page_size,
-                "from": from_,
-            },
-        )
+        body: dict = {
+            "query": {"term": {"object_type": object_type}},
+            "_source": ["content_hash", "canonical_id"],
+            "size": page_size,
+            "sort": [{"_id": "asc"}],
+        }
+        if search_after:
+            body["search_after"] = search_after
+        resp = client.search(index=index, body=body)
         hits = (resp.get("hits") or {}).get("hits") or []
         if not hits:
             break
@@ -74,9 +74,9 @@ def _scan_os_domain(client, index: str, object_type: str, *, page_size: int = 50
             doc_id = hit.get("_id", "")
             src = hit.get("_source") or {}
             result[doc_id] = src.get("content_hash") or ""
+        search_after = hits[-1].get("sort")
         if len(hits) < page_size:
             break
-        from_ += page_size
     return result
 
 
@@ -187,6 +187,7 @@ def run_reconcile(
     total_stale = 0
     total_extra = 0
     total_enqueued = 0
+    all_ok = True
 
     for adapter in adapters:
         try:
@@ -208,6 +209,7 @@ def run_reconcile(
                 logger.info("Reconcile %s: OK (expected=%d)", report.domain_name, report.expected)
         except Exception as exc:
             logger.error("Reconcile domain %s failed: %s", adapter.domain_name, exc)
+            all_ok = False  # domain failure makes whole run not-ok
 
     return {
         "domains": len(reports),
@@ -215,5 +217,5 @@ def run_reconcile(
         "total_stale": total_stale,
         "total_extra": total_extra,
         "total_enqueued": total_enqueued,
-        "all_ok": total_missing == 0 and total_stale == 0 and total_extra == 0,
+        "all_ok": all_ok and total_missing == 0 and total_stale == 0 and total_extra == 0,
     }

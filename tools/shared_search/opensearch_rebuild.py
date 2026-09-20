@@ -92,7 +92,7 @@ MAX_REPLAY_ROUNDS = 10
 
 
 def _fence_on(supabase, candidate_index: str) -> int:
-    """Set rebuild_active=True; return start_event_id watermark.
+    """Set rebuild_active=True on search_index_fence; return start_event_id watermark.
 
     start_event_id = max(id) from search_index_outbox at this moment.
     Incremental workers skip writes for events that arrive while the
@@ -100,16 +100,12 @@ def _fence_on(supabase, candidate_index: str) -> int:
     after fence drops.  Events with id > start_event_id that arrive
     during the rebuild are replayed into the candidate before promotion.
     """
-    # Watermark: highest outbox id at fence-set time
     r = (supabase.table("search_index_outbox")
-                 .select("id")
-                 .order("id", desc=True)
-                 .limit(1)
-                 .execute())
+                 .select("id").order("id", desc=True).limit(1).execute())
     rows = list(getattr(r, "data", None) or [])
     start_event_id = rows[0]["id"] if rows else 0
 
-    supabase.table("search_index_runtime_state").update({
+    supabase.table("search_index_fence").update({
         "rebuild_active":     True,
         "candidate_index":    candidate_index,
         "rebuild_started_at": _now_iso(),
@@ -117,17 +113,14 @@ def _fence_on(supabase, candidate_index: str) -> int:
         "updated_at":         _now_iso(),
     }).eq("id", 1).execute()
 
-    logger.info(
-        "Rebuild fence ON — candidate=%s start_event_id=%s",
-        candidate_index, start_event_id,
-    )
+    logger.info("Rebuild fence ON — candidate=%s start_event_id=%s", candidate_index, start_event_id)
     return start_event_id
 
 
 def _fence_off(supabase) -> None:
     """Clear rebuild fence.  Called on both promote-success and any failure."""
     try:
-        supabase.table("search_index_runtime_state").update({
+        supabase.table("search_index_fence").update({
             "rebuild_active":  False,
             "candidate_index": None,
             "updated_at":      _now_iso(),
@@ -154,13 +147,13 @@ def _replay_outbox_into_candidate(
     Replay target = candidate physical index (NOT the current alias).
     """
     adapter_map = {a.domain_name: a for a in adapters}
-    seen: set[tuple[str, str, str]] = set()
     total_replayed = total_deleted = total_errors = 0
     last_replayed_id = start_event_id
     round_no = 0
 
     while round_no < MAX_REPLAY_ROUNDS:
         round_no += 1
+        seen: set = set()   # PER ROUND — so second-round changes are not skipped
 
         r = (supabase.table("search_index_outbox")
                      .select("id")
@@ -240,6 +233,19 @@ def _replay_outbox_into_candidate(
         if new_max <= last_replayed_id:
             break
 
+    # After while loop exits — check if it exited due to MAX_ROUNDS
+    # If last known high_water > last_replayed_id, we didn't converge
+    r = (supabase.table("search_index_outbox")
+                 .select("id").order("id", desc=True).limit(1).execute())
+    rows = list(getattr(r, "data", None) or [])
+    final_max = rows[0]["id"] if rows else last_replayed_id
+    if final_max > last_replayed_id:
+        raise RebuildRejected(
+            f"Candidate replay did not converge after {MAX_REPLAY_ROUNDS} rounds "
+            f"(last_replayed={last_replayed_id}, current_max={final_max}). "
+            "Aborting to prevent stale promotion."
+        )
+
     logger.info(
         "Candidate replay: %d rounds, replayed=%d deleted=%d errors=%d (start_id=%s)",
         round_no, total_replayed, total_deleted, total_errors, start_event_id,
@@ -253,27 +259,74 @@ def _replay_outbox_into_candidate(
 
 
 def _post_replay_validate(adapters: list, client, candidate_index: str) -> None:
-    """Per-domain count parity check after replay — MUST pass before promote (BLOCKER 6).
+    """Per-domain count + content_hash parity after replay (BLOCKER 6).
 
-    Raises RebuildRejected if any domain count in the candidate differs from the
-    adapter's current expected count.
+    1. Count parity: OpenSearch count per domain == adapter.iter_expected_hashes() count.
+    2. Hash parity: For every (canonical_id, content_hash) from the adapter,
+       the OpenSearch document must exist with the same content_hash.
+
+    Raises RebuildRejected on any mismatch.
     """
     client.indices.refresh(index=candidate_index)
     mismatches = []
+
     for adapter in adapters:
-        expected_count = sum(1 for _ in adapter.iter_expected_hashes())
+        # Build SoT hash map {doc_id: content_hash}
+        sot: dict[str, str] = {}
+        for row in adapter.iter_expected_hashes():
+            cid = str(row.get("canonical_id") or "")
+            h   = row.get("content_hash") or ""
+            if cid:
+                sot[document_id(adapter.object_type, cid)] = h
+
+        # Count parity
         resp = client.count(
             index=candidate_index,
             body={"query": {"term": {"object_type": adapter.object_type}}},
         )
         actual_count = resp.get("count", 0)
-        if expected_count != actual_count:
+        if len(sot) != actual_count:
             mismatches.append(
-                f"{adapter.domain_name}: expected={expected_count} actual={actual_count}"
+                f"{adapter.domain_name}: count expected={len(sot)} actual={actual_count}"
             )
+            continue  # skip hash check if counts differ
+
+        # Hash parity via search_after
+        search_after = None
+        while True:
+            body = {
+                "query": {"term": {"object_type": adapter.object_type}},
+                "_source": ["content_hash"],
+                "size": 500,
+                "sort": [{"_id": "asc"}],
+            }
+            if search_after:
+                body["search_after"] = search_after
+            resp = client.search(index=candidate_index, body=body)
+            hits = (resp.get("hits") or {}).get("hits") or []
+            if not hits:
+                break
+            for hit in hits:
+                doc_id = hit.get("_id", "")
+                os_hash = (hit.get("_source") or {}).get("content_hash", "")
+                sot_hash = sot.get(doc_id)
+                if sot_hash is None:
+                    mismatches.append(
+                        f"{adapter.domain_name}: EXTRA doc {doc_id} in candidate"
+                    )
+                elif sot_hash != os_hash:
+                    mismatches.append(
+                        f"{adapter.domain_name}: HASH MISMATCH {doc_id} "
+                        f"sot={sot_hash[:8]} os={os_hash[:8]}"
+                    )
+            search_after = hits[-1].get("sort")
+            if len(hits) < 500:
+                break
+
     if mismatches:
         raise RebuildRejected(
-            f"Post-replay parity FAIL: {'; '.join(mismatches)}"
+            f"Post-replay parity FAIL ({len(mismatches)} mismatches): "
+            + "; ".join(mismatches[:5])
         )
     logger.info("Post-replay parity PASS: %d domains", len(adapters))
 
@@ -390,7 +443,7 @@ def full_rebuild() -> None:
     before any OpenSearch write.
 
     Rebuild fence (§39-§44):
-    Sets search_index_runtime_state.rebuild_active=True during the run so
+    Sets search_index_fence.rebuild_active=True during the run so
     incremental workers skip writes until the rebuild is complete.
     Fence is cleared on both success and failure paths.
     """
@@ -495,6 +548,14 @@ def full_rebuild() -> None:
 
         # BLOCKER 6: Post-replay per-domain parity check before promote
         _post_replay_validate(adapters, client, idx)
+
+        # Resync run expected/indexed count to post-replay actual
+        # (replay may add/delete documents relative to the pre-replay expected_count;
+        #  promote() checks live_count == expected_count so they must match)
+        client.indices.refresh(index=idx)
+        post_replay_count = client.count(index=idx).get("count", 0)
+        store._update_run(run_id, expected_count=post_replay_count, indexed_count=post_replay_count)
+        logger.info("Post-replay count resync: %d documents in candidate", post_replay_count)
 
         # §12-§14: Promote with VALIDATED guard
         new_idx = store.promote(run_id)

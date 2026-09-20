@@ -489,3 +489,166 @@ class TestSchedulerJobsInMigration:
         import re
         # Find the insert block for these jobs
         assert "false" in sql.lower()  # is_active = false
+
+
+# ---------------------------------------------------------------------------
+# PATCH-2 new test classes
+# ---------------------------------------------------------------------------
+
+class TestOutboxRetryBackoff:
+    """ITEM 2: fail → PENDING with backoff, DEAD after max attempts."""
+
+    def test_fail_sets_pending_with_available_at(self):
+        # Migration SQL: fail_search_index_event with attempt < max
+        # Check SQL contains 'available_at' and PENDING path
+        sql = open("supabase/migrations/20260920_shared_search_incremental_outbox.sql").read()
+        assert "'PENDING'" in sql and "available_at" in sql and "v_delay_s" in sql
+
+    def test_fail_sets_dead_at_max_attempts(self):
+        sql = open("supabase/migrations/20260920_shared_search_incremental_outbox.sql").read()
+        assert "'DEAD'" in sql and "p_max_attempts" in sql
+
+    def test_claim_reclaims_expired_lease(self):
+        sql = open("supabase/migrations/20260920_shared_search_incremental_outbox.sql").read()
+        assert "lease_until < NOW()" in sql
+
+    def test_complete_checks_rowcount(self):
+        sql = open("supabase/migrations/20260920_shared_search_incremental_outbox.sql").read()
+        assert "GET DIAGNOSTICS" in sql and "ROW_COUNT" in sql
+
+    def test_event_key_unique_constraint(self):
+        sql = open("supabase/migrations/20260920_shared_search_incremental_outbox.sql").read()
+        assert "UNIQUE" in sql and "event_key" in sql
+
+
+class TestFenceUnification:
+    """ITEM 1: both rebuild and worker use search_index_fence."""
+
+    def test_rebuild_uses_fence_table_not_runtime_state(self):
+        import inspect
+        from tools.shared_search import opensearch_rebuild as rb
+        src = inspect.getsource(rb)
+        assert "search_index_fence" in src
+        assert "search_index_runtime_state" not in src
+
+    def test_incremental_uses_fence_table(self):
+        import inspect
+        from services.shared_search import incremental as inc
+        src = inspect.getsource(inc)
+        assert "search_index_fence" in src
+        assert "search_index_runtime_state" not in src
+
+
+class TestAliasSafetyStrict:
+    """ITEM 3: alias must resolve to exactly 1 index; failure raises, not SKIP_FENCE."""
+
+    def test_two_indices_raises(self):
+        from unittest.mock import MagicMock
+        from services.shared_search.incremental import sync_object, ProjectionWriteError
+        client = MagicMock()
+        client.indices.get_alias.return_value = {"idx_a": {}, "idx_b": {}}
+        sb = _fake_sb(rebuild_active=False)
+        with pytest.raises(ProjectionWriteError, match="exactly 1 index"):
+            sync_object(
+                domain_name="KNOWLEDGE", object_type="KNOWLEDGE",
+                canonical_id="k1",
+                supabase_client=sb,
+                os_client=client,
+                adapter_map={"KNOWLEDGE": _fake_adapter("KNOWLEDGE", "KNOWLEDGE")},
+            )
+
+    def test_alias_lookup_failure_raises_not_skip(self):
+        from unittest.mock import MagicMock
+        from services.shared_search.incremental import sync_object, ProjectionWriteError
+        client = MagicMock()
+        client.indices.get_alias.side_effect = Exception("connection refused")
+        sb = _fake_sb(rebuild_active=False)
+        with pytest.raises(ProjectionWriteError, match="alias lookup failed"):
+            sync_object(
+                domain_name="KNOWLEDGE", object_type="KNOWLEDGE",
+                canonical_id="k1",
+                supabase_client=sb,
+                os_client=client,
+                adapter_map={"KNOWLEDGE": _fake_adapter("KNOWLEDGE", "KNOWLEDGE")},
+            )
+
+
+class TestProcessQueueOutcomeRouting:
+    """ITEM 3: SKIP_FENCE → requeue; SKIP_NO_ADAPTER → fail."""
+
+    def test_skip_no_adapter_fails_event(self):
+        from unittest.mock import MagicMock, patch
+        from services.shared_search.incremental import process_queue
+
+        events = [{"id": 77, "domain_name": "UNKNOWN_DOMAIN", "object_type": "X", "canonical_id": "c1"}]
+
+        sb = MagicMock()
+        fence_row = MagicMock()
+        fence_row.data = [{"rebuild_active": False}]
+        sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value = fence_row
+
+        claim_result = MagicMock()
+        claim_result.data = events
+        sb.rpc.return_value.execute.return_value = claim_result
+
+        os_client = MagicMock()
+        os_client.indices.get_alias.return_value = {"idx_a": {}}
+
+        with patch("services.shared_search.incremental._rebuild_active", return_value=False):
+            with patch("services.shared_search.production_bindings.build_production_adapters", return_value=[]):
+                obs = process_queue(supabase_client=sb, os_client=os_client)
+
+        assert obs["failed"] >= 1
+
+
+class TestReplaySeen:
+    """ITEM 4: seen set is per-round so second-round changes are replayed."""
+
+    def test_seen_is_per_round_identity_replayed_twice(self):
+        import inspect
+        from tools.shared_search import opensearch_rebuild as rb
+        src = inspect.getsource(rb._replay_outbox_into_candidate)
+        # seen = set() should appear inside the while loop body
+        lines = src.splitlines()
+        while_found = False
+        seen_inside = False
+        for line in lines:
+            stripped = line.lstrip()
+            if "while round_no <" in stripped:
+                while_found = True
+            if while_found and stripped.startswith("seen") and "set()" in stripped:
+                seen_inside = True
+                break
+        assert seen_inside, "seen = set() must be inside the while loop"
+
+    def test_max_rounds_raises_rebuild_rejected(self):
+        from unittest.mock import MagicMock
+        from tools.shared_search.opensearch_rebuild import _replay_outbox_into_candidate, MAX_REPLAY_ROUNDS
+        from services.shared_search.opensearch_store import RebuildRejected
+
+        supabase = MagicMock()
+        # Always return a new high-water so it never converges
+        call_count = [0]
+        def always_new_max(*args, **kwargs):
+            call_count[0] += 1
+            result = MagicMock()
+            result.data = [{"id": call_count[0] * 1000}]
+            return result
+        supabase.table.return_value.select.return_value.order.return_value.limit.return_value.execute.side_effect = always_new_max
+        # Return empty rows for the range query so no actual replay happens
+        supabase.table.return_value.select.return_value.gt.return_value.lte.return_value.order.return_value.range.return_value.execute.return_value.data = []
+
+        with pytest.raises(RebuildRejected, match="did not converge"):
+            _replay_outbox_into_candidate(supabase, [], MagicMock(), "idx", 0)
+
+
+class TestRlsInMigration:
+    """ITEM 8: RLS and REVOKE present in migration."""
+
+    def test_rls_enabled(self):
+        sql = open("supabase/migrations/20260920_shared_search_incremental_outbox.sql").read()
+        assert "ENABLE ROW LEVEL SECURITY" in sql
+
+    def test_revoke_from_anon(self):
+        sql = open("supabase/migrations/20260920_shared_search_incremental_outbox.sql").read()
+        assert "REVOKE" in sql and "anon" in sql

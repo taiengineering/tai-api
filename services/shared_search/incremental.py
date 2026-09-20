@@ -81,40 +81,9 @@ def _rebuild_active(supabase: Any) -> bool:
         return True  # FAIL-CLOSED: treat as active to prevent writes
 
 
-def _fence_off(supabase: Any) -> None:
-    """Set rebuild_active = True on the fence row."""
-    try:
-        supabase.table(_FENCE_TABLE).update(
-            {"rebuild_active": True}
-        ).eq("id", 1).execute()
-    except Exception as exc:
-        logger.warning("fence_off failed: %s", exc)
-
-
-def _fence_clear(supabase: Any) -> None:
-    """Set rebuild_active = False on the fence row."""
-    try:
-        supabase.table(_FENCE_TABLE).update(
-            {"rebuild_active": False}
-        ).eq("id", 1).execute()
-    except Exception as exc:
-        logger.warning("fence_clear failed: %s", exc)
-
-
 # ---------------------------------------------------------------------------
 # Requeue / fail helpers
 # ---------------------------------------------------------------------------
-
-def _requeue_fenced(supabase: Any, event_id: int) -> None:
-    """Return an event to the queue when the fence is active."""
-    try:
-        supabase.rpc("requeue_search_index_event", {
-            "p_event_id": event_id,
-            "p_reason": "fence_active",
-        }).execute()
-    except Exception as exc:
-        logger.warning("requeue_fenced failed for event %s: %s", event_id, exc)
-
 
 def _fail_event(supabase: Any, event_id: int, reason: str) -> None:
     """Mark an event as permanently failed."""
@@ -186,14 +155,22 @@ def sync_object(
             f"but {domain_name} adapter expects {adapter.object_type!r}"
         )
 
-    # Resolve OpenSearch index (via alias)
+    # Resolve OpenSearch index (via alias) — must resolve to exactly 1 index
     try:
         alias_resp = os_client.indices.get_alias(name=CURRENT_ALIAS)
-        physical_index = next(iter(alias_resp))
+        indices = list(alias_resp.keys())
+        if len(indices) != 1:
+            raise ProjectionWriteError(
+                f"alias {CURRENT_ALIAS} must resolve to exactly 1 index; "
+                f"found {len(indices)}: {indices}"
+            )
+        physical_index = indices[0]
+    except ProjectionWriteError:
+        raise
     except Exception as exc:
-        logger.warning("get_alias failed: %s", exc)
-        result["outcome"] = "SKIP_FENCE"
-        return result
+        raise ProjectionWriteError(
+            f"alias lookup failed for {CURRENT_ALIAS}: {exc}"
+        ) from exc
 
     doc_id = document_id(object_type, canonical_id)
 
@@ -314,9 +291,6 @@ def process_queue(
                 os_client=os_client,
                 adapter_map=adapter_map,
             )
-            outcome = result.get("outcome", "")
-            if outcome == "NOOP":
-                obs["noop"] += 1
         except Exception as exc:
             logger.error(
                 "sync_object failed for event %s (%s/%s/%s): %s",
@@ -325,6 +299,28 @@ def process_queue(
             _fail_event(sb, event_id, str(exc)[:500])
             obs["failed"] += 1
             continue
+
+        outcome = result.get("outcome", "")
+
+        if outcome == "SKIP_FENCE":
+            # Fence became active mid-batch — requeue, don't complete
+            try:
+                sb.rpc("requeue_search_index_event", {
+                    "p_event_id": event_id,
+                    "p_reason": "fence_active_mid_batch",
+                }).execute()
+            except Exception as exc:
+                logger.warning("requeue failed for event %s: %s", event_id, exc)
+            continue  # don't complete
+
+        if outcome == "SKIP_NO_ADAPTER":
+            _fail_event(sb, event_id, f"no adapter for domain {domain_name}")
+            obs["failed"] += 1
+            continue  # don't complete
+
+        if outcome == "NOOP":
+            obs["noop"] += 1
+        # UPSERT / DELETE / DELETE_NOOP all fall through to complete
 
         # Complete the event
         try:
