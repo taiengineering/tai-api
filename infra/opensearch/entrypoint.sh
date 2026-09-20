@@ -3,9 +3,8 @@ set -e
 
 DATA_DIR=/usr/share/opensearch/data
 
-# Fix Railway volume ownership (mounted as root:root) before starting OpenSearch.
-# Running as root here; opensearch-docker-entrypoint.sh drops to opensearch user.
+# Fix Railway volume ownership (mounted as root:root) and drop to opensearch (UID 1000)
 mkdir -p "$DATA_DIR"
 chown -R 1000:1000 "$DATA_DIR"
 
-exec /usr/share/opensearch/opensearch-docker-entrypoint.sh "$@"
+exec gosu 1000 /usr/share/opensearch/opensearch-docker-entrypoint.sh "$@"
