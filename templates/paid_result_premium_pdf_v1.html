@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>유료 법정의무 진단 결과{% if cover and cover.company_name %} — {{ cover.company_name }}{% endif %}</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap');
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Noto Sans KR', 'Apple SD Gothic Neo', sans-serif;
+  font-size: 9pt;
+  color: #0f172a;
+  background: #fff;
+  line-height: 1.55;
+}
+
+:root {
+  --blue:      #1A5FD4;
+  --blue-dark: #1248a8;
+  --blue-light:#e8f0fc;
+  --ink:       #0f172a;
+  --sub:       #64748b;
+  --border:    #e2e8f0;
+  --gray-bg:   #f8fafc;
+}
+
+@page {
+  size: A4;
+  margin: 16mm 16mm 18mm;
+}
+
+.cover {
+  padding: 8mm 0 10mm;
+  border-bottom: 2px solid var(--blue);
+  margin-bottom: 12px;
+}
+.cover-brand {
+  font-size: 11pt;
+  font-weight: 900;
+  color: var(--blue);
+  letter-spacing: -0.02em;
+  margin-bottom: 10px;
+}
+.cover-title {
+  font-size: 18pt;
+  font-weight: 900;
+  line-height: 1.3;
+  margin-bottom: 8px;
+}
+.cover-company {
+  font-size: 12pt;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.cover-meta {
+  font-size: 9pt;
+  color: var(--sub);
+  margin-bottom: 12px;
+}
+.stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.stat-box {
+  background: var(--gray-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  min-width: 48mm;
+}
+.stat-box .sv { font-size: 14pt; font-weight: 900; color: var(--blue); line-height: 1.2; }
+.stat-box .sl { font-size: 7.5pt; color: var(--sub); font-weight: 700; margin-top: 2px; }
+
+.sec { margin: 14px 0 16px; }
+.sec-deliverables, .sec-outline { page-break-inside: avoid; break-inside: avoid; }
+.sec-tag {
+  display: inline-block;
+  background: var(--blue);
+  color: #fff;
+  font-size: 7pt;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 3px;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+.sec-title {
+  font-size: 13pt;
+  font-weight: 900;
+  color: var(--ink);
+  line-height: 1.25;
+  margin-bottom: 4px;
+}
+.sec-intro {
+  font-size: 8.5pt;
+  color: var(--sub);
+  margin-bottom: 10px;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 8pt;
+  margin-bottom: 10px;
+  table-layout: fixed;
+}
+th {
+  background: var(--blue);
+  color: #fff;
+  font-weight: 700;
+  padding: 6px 8px;
+  text-align: left;
+  font-size: 7.5pt;
+}
+td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  line-height: 1.45;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+tr:nth-child(even) td { background: var(--gray-bg); }
+
+.ov-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.ov-item {
+  background: var(--gray-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 7px 10px;
+}
+.ov-label { font-size: 7pt; color: var(--sub); font-weight: 700; margin-bottom: 2px; }
+.ov-value { font-size: 9pt; font-weight: 700; color: var(--ink); word-break: break-word; overflow-wrap: anywhere; }
+
+.badge {
+  display: inline-block;
+  font-size: 7pt;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #dbeafe;
+  color: #1e40af;
+  margin-right: 4px;
+}
+
+.ob-card { margin-bottom: 10px; }
+.ob-meta { font-size: 8pt; color: var(--sub); margin: 4px 0 6px; }
+.canon, .article-text, .long {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-size: 8.5pt;
+  line-height: 1.55;
+}
+.canon {
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+.fact-row {
+  display: grid;
+  grid-template-columns: 28mm 1fr;
+  gap: 6px;
+  padding: 3px 0;
+  border-top: 1px solid var(--border);
+  font-size: 8pt;
+}
+.fact-label { color: var(--sub); font-weight: 700; }
+.fact-value { word-break: break-word; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+.toc-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 4px 0;
+  border-bottom: 1px dotted var(--border);
+  font-size: 9pt;
+}
+
+.doc-end {
+  margin-top: 16px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 7pt;
+  color: var(--sub);
+  line-height: 1.45;
+  page-break-before: avoid;
+}
+
+@media print {
+  .ob-card { page-break-inside: avoid; }
+  .article-block { page-break-inside: auto; }
+  tr { page-break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+
+{% if cover %}
+<section class="cover" data-section="cover">
+  <div class="cover-brand">TAI Engineering</div>
+  <div class="cover-title">{{ cover.title }}</div>
+  {% if cover.company_name %}
+  <div class="cover-company">{{ cover.company_name }}</div>
+  {% endif %}
+  {% if cover.diagnosed_at %}
+  <div class="cover-meta">진단일 {{ cover.diagnosed_at }}</div>
+  {% endif %}
+  {% if cover.stats %}
+  <div class="stat-row">
+    {% for s in cover.stats %}
+    <div class="stat-box"><div class="sv">{{ s.value }}</div><div class="sl">{{ s.label }}</div></div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if outline %}
+<section class="sec sec-outline" data-section="outline">
+  <div class="sec-tag">목차</div>
+  {% for s in outline %}
+  <div class="toc-row"><span>{{ s.no }} {{ s.title }}</span></div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if business %}
+<section class="sec" data-section="business">
+  <div class="sec-tag">02</div>
+  <div class="sec-title">{{ business.title }}</div>
+  <div class="ov-grid">
+    {% for row in business.rows %}
+    <div class="ov-item"{% if row.label == '주소' %} style="grid-column:1/-1;"{% endif %}>
+      <div class="ov-label">{{ row.label }}</div>
+      <div class="ov-value long">{{ row.value }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% if business.presence %}
+  <div class="sec-intro">{{ business.presence_title }}</div>
+  <div class="ov-grid">
+    {% for row in business.presence %}
+    <div class="ov-item">
+      <div class="ov-label">{{ row.label }}</div>
+      <div class="ov-value">{{ row.value }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if glance %}
+<section class="sec" data-section="glance">
+  <div class="sec-tag">03</div>
+  <div class="sec-title">{{ glance.title }}</div>
+  <div class="stat-row">
+    {% for s in glance.stats %}
+    <div class="stat-box"><div class="sv">{{ s.value }}</div><div class="sl">{{ s.label }}</div></div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if findings %}
+<section class="sec" data-section="findings">
+  <div class="sec-tag">04</div>
+  <div class="sec-title">{{ findings.title }}</div>
+  <table>
+    <thead><tr><th style="width:38%;">항목</th><th>내용</th></tr></thead>
+    <tbody>
+      {% for item in findings.rows %}
+      <tr><td>{{ item.label }}</td><td class="long">{{ item.value }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if landscape %}
+<section class="sec" data-section="landscape">
+  <div class="sec-tag">05</div>
+  <div class="sec-title">{{ landscape.title }}</div>
+  {% if landscape.portfolio %}
+  <table>
+    <thead><tr><th>법령</th><th>의무</th><th>조문</th></tr></thead>
+    <tbody>
+      {% for row in landscape.portfolio %}
+      <tr>
+        <td class="long">{{ row.law_name }}</td>
+        <td>{{ row.obligation_count }}</td>
+        <td>{{ row.article_count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if landscape.actors %}
+  <table>
+    <thead><tr><th>법령상 수행주체</th><th>건수</th></tr></thead>
+    <tbody>
+      {% for row in landscape.actors %}
+      <tr><td class="long">{{ row.actor }}</td><td>{{ row.count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if workbench %}
+<section class="sec" data-section="workbench">
+  <div class="sec-tag">06</div>
+  <div class="sec-title">{{ workbench.title }}</div>
+  <div class="sec-intro">{{ workbench.intro }}</div>
+  {% for item in workbench.cards %}
+  <article class="card ob-card" data-ref="{{ item.ref }}">
+    {% for b in item.badges %}<span class="badge">{{ b }}</span>{% endfor %}
+    <div class="ob-meta">
+      {% if item.law_name %}{{ item.law_name }}{% endif %}
+      {% if item.law_article %} {{ item.law_article }}{% endif %}
+    </div>
+    <div class="canon" data-canonical-ref="{{ item.ref }}">{{ item.canonical }}</div>
+    {% for fact in item.facts %}
+    <div class="fact-row" data-fact="{{ fact.key }}">
+      <div class="fact-label">{{ fact.label }}</div>
+      <div class="fact-value">{{ fact.value }}</div>
+    </div>
+    {% endfor %}
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if legal %}
+<section class="sec" data-section="legal">
+  <div class="sec-tag">07</div>
+  <div class="sec-title">{{ legal.title }}</div>
+  {% if legal.portfolio %}
+  <table>
+    <thead><tr><th>법령</th><th>의무</th><th>조문</th></tr></thead>
+    <tbody>
+      {% for row in legal.portfolio %}
+      <tr>
+        <td class="long">{{ row.law_name }}</td>
+        <td>{{ row.obligation_count }}</td>
+        <td>{{ row.article_count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if legal.bundles %}
+  <table>
+    <thead><tr><th>법령</th><th>조문</th><th>건수</th></tr></thead>
+    <tbody>
+      {% for row in legal.bundles %}
+      <tr>
+        <td class="long">{{ row.law_name }}</td>
+        <td>{{ row.law_article }}</td>
+        <td>{{ row.count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if confirm %}
+<section class="sec" data-section="confirm">
+  <div class="sec-tag">08</div>
+  <div class="sec-title">{{ confirm.title }}</div>
+  <table>
+    <thead><tr><th>항목</th><th>내용</th></tr></thead>
+    <tbody>
+      {% for row in confirm.rows %}
+      <tr><td>{{ row.label }}</td><td>{{ row.value }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if evidence %}
+<section class="sec" data-section="evidence">
+  <div class="sec-tag">09</div>
+  <div class="sec-title">{{ evidence.title }}</div>
+  <div class="sec-intro">{{ evidence.intro }}</div>
+  {% for article in evidence.articles %}
+  <article class="card article-block" data-article-no="{{ article.article_no }}" data-article-sub-no="{{ article.article_sub_no }}">
+    <div style="font-size:9pt;font-weight:800;margin-bottom:6px;">{{ article.heading }}</div>
+    {% if article.related_refs_text %}
+    <div class="sec-intro">관련 의무 {{ article.related_refs_text }}</div>
+    {% endif %}
+    <div class="article-text">{{ article.article_text }}</div>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if deliverables %}
+<section class="sec sec-deliverables" data-section="deliverables">
+  <div class="sec-tag">10</div>
+  <div class="sec-title">{{ deliverables.title }}</div>
+  <ul>
+    {% for item in deliverables.list %}
+    <li data-deliverable="{{ item.key }}">{{ item.label }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<div class="doc-end">본 진단 결과는 참고용이며 법적 효력이 없습니다. 정확한 법적 판단은 관련 전문가에게 문의하시기 바랍니다.</div>
+
+</body>
+</html>
