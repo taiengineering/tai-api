@@ -7,6 +7,5 @@ network.host: 0.0.0.0
 # Uses niofs instead; acceptable for TAI search projection scale
 node.store.allow_mmap: false
 
-# Single shard, zero replica — HA=NO (TAI search projection only)
-index.number_of_shards: 1
-index.number_of_replicas: 0
+# index.number_of_shards / index.number_of_replicas are index-level settings.
+# They are set per-index by opensearch_mapping.py (TAI mapping authority).
