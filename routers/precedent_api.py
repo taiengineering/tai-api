@@ -232,9 +232,10 @@ def _enqueue_precedent_delta() -> None:
     PRECEDENT producer authority: Supabase Edge Function `collect-precedents`.
     This bridge is the only hook point available without modifying the Edge Fn.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import timedelta
+    from services.time import now_kst
     sb = get_supabase()
-    cutoff = (datetime.now(tz=timezone.utc) - timedelta(hours=1)).isoformat()
+    cutoff = (now_kst() - timedelta(hours=1)).isoformat()
     try:
         rows = (sb.table("industrial_accident_precedents")
                   .select("id")

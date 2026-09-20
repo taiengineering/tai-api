@@ -456,6 +456,8 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
         "updated_at": serialize_business_datetime(now_kst()),
     }, on_conflict="law_key").execute()
     law_id = master_res.data[0]["id"]
+    # Capture old current_version_id BEFORE any update — needed for tombstone union (BLOCKER 5C)
+    old_version_id = master_res.data[0].get("current_version_id")
 
     existing_version = supabase.table("law_version")\
         .select("id").eq("law_id", law_id).eq("law_mst_no", law_mst_no).execute()
@@ -543,7 +545,7 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
     }, on_conflict="law_id").execute()
 
     if is_new_version:
-        _enqueue_legal_version(supabase, version_id)
+        _enqueue_legal_version(supabase, version_id, old_version_id=old_version_id)
 
     return {"law_id": law_id, "version_id": version_id,
             "is_new_version": is_new_version, "article_count": article_count}
@@ -880,20 +882,32 @@ async def get_collection_status():
     }
 
 
-def _enqueue_legal_version(supabase, version_id: str) -> None:
-    """Enqueue SYNC_OBJECT for every law_article in a newly promoted version."""
+def _enqueue_legal_version(supabase, version_id: str, *, old_version_id: str = None) -> None:
+    """Enqueue SYNC_OBJECT for new version articles UNION old version articles (BLOCKER 5C).
+
+    Old version articles are enqueued so they are tombstoned by the incremental
+    worker via the adapter's current-version gate (adapter returns None for articles
+    whose law_version_id is no longer the current version).
+    """
     import logging
     log = logging.getLogger(__name__)
     try:
-        rows = supabase.table("law_article") \
-                       .select("id") \
-                       .eq("law_version_id", version_id) \
-                       .eq("is_deleted_in_version", False) \
-                       .execute()
-        for r in (rows.data or []):
-            aid = r.get("id")
-            if not aid:
-                continue
+        new_rows = supabase.table("law_article") \
+                           .select("id") \
+                           .eq("law_version_id", version_id) \
+                           .eq("is_deleted_in_version", False) \
+                           .execute()
+        new_ids = {r["id"] for r in (new_rows.data or []) if r.get("id")}
+
+        old_ids: set = set()
+        if old_version_id and old_version_id != version_id:
+            old_rows = supabase.table("law_article") \
+                               .select("id") \
+                               .eq("law_version_id", old_version_id) \
+                               .execute()
+            old_ids = {r["id"] for r in (old_rows.data or []) if r.get("id")}
+
+        for aid in new_ids | old_ids:
             supabase.rpc("enqueue_search_index_sync", {
                 "p_domain_name":  "LEGAL",
                 "p_object_type":  "LEGAL",

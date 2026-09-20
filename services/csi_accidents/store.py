@@ -323,18 +323,30 @@ class SupabaseCsiStore:
 
 
 def _enqueue_csi_snapshot(sb, snapshot_id: str) -> None:
-    """Enqueue SYNC_OBJECT for every READY content_id in the completed snapshot."""
+    """Enqueue SYNC_OBJECT for NEW snapshot items UNION OLD snapshot items (BLOCKER 5B)."""
     import logging
     log = logging.getLogger(__name__)
     try:
-        rows = sb.table("csi_accident_snapshot_items") \
-                 .select("content_id") \
-                 .eq("snapshot_id", snapshot_id) \
-                 .execute()
-        for r in (rows.data or []):
-            cid = r.get("content_id")
-            if not cid:
-                continue
+        new_rows = sb.table("csi_accident_snapshot_items") \
+                     .select("content_id") \
+                     .eq("snapshot_id", snapshot_id) \
+                     .execute()
+        new_ids = {r["content_id"] for r in (new_rows.data or []) if r.get("content_id")}
+
+        prev_ids: set = set()
+        prev_snap = (sb.table("csi_accident_snapshots")
+                       .select("id").eq("status", "COMPLETED")
+                       .neq("id", snapshot_id)
+                       .order("completed_at", desc=True).limit(1).execute())
+        if prev_snap.data:
+            prev_sid = prev_snap.data[0]["id"]
+            prev_rows = sb.table("csi_accident_snapshot_items") \
+                          .select("content_id") \
+                          .eq("snapshot_id", prev_sid) \
+                          .execute()
+            prev_ids = {r["content_id"] for r in (prev_rows.data or []) if r.get("content_id")}
+
+        for cid in new_ids | prev_ids:
             sb.rpc("enqueue_search_index_sync", {
                 "p_domain_name":  "CSI_ACCIDENT",
                 "p_object_type":  "CSI_ACCIDENT",

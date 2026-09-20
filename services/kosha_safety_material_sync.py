@@ -575,18 +575,30 @@ class SupabaseSnapshotStore:
 
 
 def _enqueue_safety_material_snapshot(sb, snapshot_id: str) -> None:
-    """Enqueue SYNC_OBJECT for every material in the completed snapshot."""
+    """Enqueue SYNC_OBJECT for NEW snapshot items UNION OLD snapshot items (BLOCKER 5B)."""
     import logging
     log = logging.getLogger(__name__)
     try:
-        rows = sb.table(ITEM_TABLE) \
-                 .select("material_id") \
-                 .eq("snapshot_id", snapshot_id) \
-                 .execute()
-        for r in (rows.data or []):
-            mid = r.get("material_id")
-            if not mid:
-                continue
+        new_rows = sb.table(ITEM_TABLE) \
+                     .select("material_id") \
+                     .eq("snapshot_id", snapshot_id) \
+                     .execute()
+        new_ids = {r["material_id"] for r in (new_rows.data or []) if r.get("material_id")}
+
+        prev_ids: set = set()
+        prev_snap = (sb.table("kosha_safety_material_snapshots")
+                       .select("id").eq("status", "COMPLETED")
+                       .neq("id", snapshot_id)
+                       .order("completed_at", desc=True).limit(1).execute())
+        if prev_snap.data:
+            prev_sid = prev_snap.data[0]["id"]
+            prev_rows = sb.table(ITEM_TABLE) \
+                          .select("material_id") \
+                          .eq("snapshot_id", prev_sid) \
+                          .execute()
+            prev_ids = {r["material_id"] for r in (prev_rows.data or []) if r.get("material_id")}
+
+        for mid in new_ids | prev_ids:
             sb.rpc("enqueue_search_index_sync", {
                 "p_domain_name":  "SAFETY_MATERIAL",
                 "p_object_type":  "SAFETY_MATERIAL",

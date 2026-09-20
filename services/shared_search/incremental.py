@@ -1,87 +1,134 @@
-"""Incremental indexer — WO-TAI-SHARED-SEARCH-INCREMENTAL-001 §18.
+"""Shared Search — incremental indexing pipeline (durable outbox drain).
 
-Entry points:
-    sync_object(...)     — index a single canonical_id from any Domain
-    process_queue(...)   — claim + drain outbox events (§12)
+Pulls events from ``search_index_outbox`` via the
+``claim_search_index_events`` RPC, processes them through the appropriate
+Domain adapter, and writes/deletes in the live OpenSearch alias.
 
-Design rules:
-    - Adapters: reuse DomainAdapter.object_reindex_payload() (§16)
-    - Alias guard: resolve_alias_target() before every write (§17)
-    - content_hash NOOP: skip write if hash unchanged (§19)
-    - DELETE: adapter returns None → delete document (§20)
-    - Rebuild fence: halt if search_index_runtime_state.rebuild_active (§39)
-    - production_bindings: build adapters once per process_queue call
+Fence semantics (fail-closed):
+  - ``_rebuild_active(sb)`` reads ``search_index_fence.rebuild_active``.
+    On any DB error it returns ``True`` (fail-closed — refuse to write
+    while fence state is unknown).
+  - ``process_queue()`` checks the fence BEFORE claiming any events.
+    If the fence is active, the function returns immediately with
+    ``{"claimed": 0, "fence_active": True}``.
 
-No activation.  This module may be imported without side-effects.
+Object-type safety:
+  - ``sync_object()`` verifies that the event's ``object_type`` matches
+    the adapter's ``object_type`` before processing.  Mismatch raises
+    ``ValueError`` immediately (fail-closed).
+
+Canonical preparation:
+  - After ``adapter.object_reindex_payload()`` returns a non-None payload,
+    the payload is normalized via ``prepare_search_document()`` before any
+    OpenSearch write.  A ``SearchContractError`` during normalization raises
+    ``ProjectionWriteError`` (fail-closed — event is not silently skipped).
+
+Completion RPC:
+  - ``complete_search_index_event`` returns a boolean.  A ``False`` response
+    (fence triggered at completion time) is logged but does not increment
+    the ``completed`` counter.
 """
 from __future__ import annotations
 
 import logging
-import os
 import uuid
 from typing import Any, Optional
 
-from opensearchpy import OpenSearch
-
-from services.shared_search.opensearch_client import (
-    CURRENT_ALIAS,
-    OpenSearchUnavailable,
-    get_client,
+from services.shared_search.contract import (
+    PUBLICATION_STATUS_PUBLISHED,
+    SearchContractError,
 )
+from services.shared_search.opensearch_client import CURRENT_ALIAS
 from services.shared_search.opensearch_projection import (
-    AliasNotReady,
-    ProjectionWriteError,
     delete_document,
-    resolve_alias_target,
     upsert_document,
 )
 from services.shared_search.opensearch_store import document_id
-from services.shared_search.production_bindings import build_production_adapters
+from services.shared_search.writer import prepare_search_document
 
 logger = logging.getLogger(__name__)
 
-# Claim batch size for process_queue
-_DEFAULT_CLAIM_LIMIT = int(os.environ.get("TAI_INCREMENTAL_CLAIM_LIMIT", "50"))
 
-# Lease seconds (must exceed longest adapter fetch)
-_DEFAULT_LEASE_SECONDS = int(
-    os.environ.get("TAI_INCREMENTAL_LEASE_SECONDS", "180")
-)
+class ProjectionWriteError(Exception):
+    """Raised when an incremental projection write fails fatally."""
 
 
 # ---------------------------------------------------------------------------
-# Rebuild fence (§39-§45)
+# Fence helpers
 # ---------------------------------------------------------------------------
 
-def _rebuild_active(supabase_client) -> bool:
-    """Return True if a full rebuild is in progress (fence = on)."""
+_FENCE_TABLE = "search_index_fence"
+
+
+def _rebuild_active(supabase: Any) -> bool:
+    """Read ``search_index_fence.rebuild_active``.
+
+    Returns ``True`` (fail-closed) on any DB error so we never write
+    while rebuild state is unknown.
+    """
     try:
-        r = (supabase_client
-             .table("search_index_runtime_state")
-             .select("rebuild_active")
-             .eq("id", 1)
-             .limit(1)
-             .execute())
+        r = (supabase.table(_FENCE_TABLE)
+                     .select("rebuild_active")
+                     .eq("id", 1)
+                     .limit(1)
+                     .execute())
         rows = list(getattr(r, "data", None) or [])
-        return bool(rows[0].get("rebuild_active")) if rows else False
-    except Exception as exc:
-        # Fail-open on DB error: proceed with incremental (fence unavailable)
-        logger.warning("rebuild fence read failed: %s", exc)
+        if rows:
+            return bool(rows[0].get("rebuild_active", False))
         return False
+    except Exception as exc:
+        logger.warning("rebuild fence read failed (fail-closed): %s", exc)
+        return True  # FAIL-CLOSED: treat as active to prevent writes
+
+
+def _fence_off(supabase: Any) -> None:
+    """Set rebuild_active = True on the fence row."""
+    try:
+        supabase.table(_FENCE_TABLE).update(
+            {"rebuild_active": True}
+        ).eq("id", 1).execute()
+    except Exception as exc:
+        logger.warning("fence_off failed: %s", exc)
+
+
+def _fence_clear(supabase: Any) -> None:
+    """Set rebuild_active = False on the fence row."""
+    try:
+        supabase.table(_FENCE_TABLE).update(
+            {"rebuild_active": False}
+        ).eq("id", 1).execute()
+    except Exception as exc:
+        logger.warning("fence_clear failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
-# Adapter registry helpers
+# Requeue / fail helpers
 # ---------------------------------------------------------------------------
 
-def _build_adapter_map(supabase_client) -> dict[str, Any]:
-    """Return {domain_name: adapter} from production_bindings."""
-    adapters = build_production_adapters(supabase_client)
-    return {a.domain_name: a for a in adapters}
+def _requeue_fenced(supabase: Any, event_id: int) -> None:
+    """Return an event to the queue when the fence is active."""
+    try:
+        supabase.rpc("requeue_search_index_event", {
+            "p_event_id": event_id,
+            "p_reason": "fence_active",
+        }).execute()
+    except Exception as exc:
+        logger.warning("requeue_fenced failed for event %s: %s", event_id, exc)
+
+
+def _fail_event(supabase: Any, event_id: int, reason: str) -> None:
+    """Mark an event as permanently failed."""
+    try:
+        supabase.rpc("fail_search_index_event", {
+            "p_event_id": event_id,
+            "p_reason": reason,
+        }).execute()
+    except Exception as exc:
+        logger.warning("fail_event failed for event %s: %s", event_id, exc)
 
 
 # ---------------------------------------------------------------------------
-# sync_object — single-document incremental index (§18)
+# Core: single-object sync
 # ---------------------------------------------------------------------------
 
 def sync_object(
@@ -89,230 +136,212 @@ def sync_object(
     domain_name: str,
     object_type: str,
     canonical_id: str,
-    supabase_client,
-    os_client: Optional[OpenSearch] = None,
+    supabase_client: Any,
+    os_client: Any,
     adapter_map: Optional[dict] = None,
 ) -> dict:
-    """Index or tombstone one canonical object.
+    """Sync a single canonical object to OpenSearch.
 
-    Returns an observability dict:
-        outcome     — "UPSERT" | "NOOP" | "DELETE" | "NOT_FOUND" | "SKIP_FENCE"
-        domain_name — echoed
-        object_type — echoed
-        canonical_id — echoed
-        doc_id      — OpenSearch _id used
-        error       — present only on failure (raise still propagates)
+    Checks the rebuild fence first.  Returns a result dict with an
+    ``"outcome"`` key.
+
+    Possible outcomes:
+      ``"SKIP_FENCE"``   — fence is active; write refused.
+      ``"SKIP_NO_ADAPTER"`` — no adapter registered for domain_name.
+      ``"UPSERT"`` / ``"NOOP"`` — document written or skipped (hash match).
+      ``"DELETE"`` / ``"DELETE_NOOP"`` — tombstone applied.
+
+    Raises:
+      ``ValueError``            — object_type mismatch between event and adapter.
+      ``ProjectionWriteError``  — normalization failure.
     """
-    result: dict[str, Any] = {
+    result: dict = {
         "domain_name": domain_name,
         "object_type": object_type,
         "canonical_id": canonical_id,
+        "outcome": None,
     }
 
-    # Rebuild fence (§39): if rebuild is active, skip incremental writes
+    # Fence check
     if _rebuild_active(supabase_client):
-        logger.info(
-            "incremental SKIP_FENCE %s/%s/%s — rebuild in progress",
-            domain_name, object_type, canonical_id,
-        )
         result["outcome"] = "SKIP_FENCE"
         return result
 
-    # Resolve alias before any write (§17)
-    c = os_client or get_client()
-    physical_index = resolve_alias_target(c)
-
     # Adapter lookup
     if adapter_map is None:
-        adapter_map = _build_adapter_map(supabase_client)
+        from services.shared_search.production_bindings import build_production_adapters
+        adapters = build_production_adapters(supabase_client)
+        adapter_map = {a.domain_name: a for a in adapters}
 
     adapter = adapter_map.get(domain_name)
     if adapter is None:
-        raise ValueError(f"No adapter registered for domain_name={domain_name!r}")
-
-    doc_id = document_id(object_type, canonical_id)
-    result["doc_id"] = doc_id
-
-    # Fetch payload (§20: None → DELETE)
-    payload = adapter.object_reindex_payload(canonical_id)
-
-    if payload is None:
-        outcome = delete_document(c, physical_index, doc_id)
-        result["outcome"] = outcome
-        logger.info(
-            "incremental %s %s/%s/%s",
-            outcome, domain_name, object_type, canonical_id,
-        )
+        logger.warning("No adapter for domain %s", domain_name)
+        result["outcome"] = "SKIP_NO_ADAPTER"
         return result
 
-    # UPSERT (with content_hash NOOP, §19)
-    outcome = upsert_document(c, physical_index, doc_id, payload)
+    # BLOCKER 4: object_type mismatch guard
+    if adapter.object_type != object_type:
+        raise ValueError(
+            f"object_type mismatch: event object_type={object_type!r} "
+            f"but {domain_name} adapter expects {adapter.object_type!r}"
+        )
+
+    # Resolve OpenSearch index (via alias)
+    try:
+        alias_resp = os_client.indices.get_alias(name=CURRENT_ALIAS)
+        physical_index = next(iter(alias_resp))
+    except Exception as exc:
+        logger.warning("get_alias failed: %s", exc)
+        result["outcome"] = "SKIP_FENCE"
+        return result
+
+    doc_id = document_id(object_type, canonical_id)
+
+    # Fetch payload from SoT
+    try:
+        payload = adapter.object_reindex_payload(canonical_id)
+    except Exception as exc:
+        raise ProjectionWriteError(
+            f"adapter.object_reindex_payload failed for {canonical_id}: {exc}"
+        ) from exc
+
+    if payload is None:
+        # Tombstone
+        outcome = delete_document(os_client, physical_index, doc_id)
+        result["outcome"] = outcome
+        return result
+
+    # BLOCKER 1 (revisited): canonical preparation
+    try:
+        doc, wire = prepare_search_document(payload)
+    except SearchContractError as exc:
+        raise ProjectionWriteError(
+            f"normalization failed for {canonical_id}: {exc}"
+        ) from exc
+
+    if doc.publication_status != PUBLICATION_STATUS_PUBLISHED:
+        # Adapter returned payload but it's not published → tombstone
+        outcome = delete_document(os_client, physical_index, doc_id)
+        result["outcome"] = outcome
+        return result
+
+    # NOOP check + write via canonical wire
+    outcome = upsert_document(os_client, physical_index, doc_id, wire)
     result["outcome"] = outcome
-    logger.info(
-        "incremental %s %s/%s/%s",
-        outcome, domain_name, object_type, canonical_id,
-    )
     return result
 
 
 # ---------------------------------------------------------------------------
-# process_queue — drain outbox events (§12, §47)
+# Queue processor
 # ---------------------------------------------------------------------------
 
 def process_queue(
     *,
-    limit: int = _DEFAULT_CLAIM_LIMIT,
-    supabase_client=None,
-    os_client: Optional[OpenSearch] = None,
+    supabase_client: Any,
+    os_client: Any = None,
     worker_id: Optional[str] = None,
-    lease_seconds: int = _DEFAULT_LEASE_SECONDS,
+    batch_size: int = 50,
 ) -> dict:
-    """Claim and process up to *limit* PENDING outbox events.
+    """Drain one batch of events from the outbox.
 
-    Returns observability dict (§47):
-        worker_id       — worker identifier used
-        claimed         — events claimed from outbox
-        completed       — events marked DONE
-        noop            — content-hash unchanged (skipped writes)
-        deleted         — DELETE outcomes
-        failed          — events that failed (marked retry or DEAD)
-        fence_skipped   — events skipped due to rebuild fence
-        errors          — list of {event_id, error} for failed events
+    BLOCKER 9: fence is checked BEFORE claiming any events.
+
+    Returns an ``obs`` dict with metrics:
+      ``fence_active`` — True if fence blocked processing.
+      ``claimed``      — number of events claimed.
+      ``completed``    — number successfully completed.
+      ``failed``       — number marked failed.
+      ``noop``         — number NOOP (hash matched, no write).
     """
-    if supabase_client is None:
-        raise ValueError(
-            "process_queue requires a supabase_client — "
-            "pass the process-level client from the scheduler handler."
-        )
-
-    sb = supabase_client
-    c  = os_client or get_client()
-    wid = worker_id or f"incremental-{uuid.uuid4().hex[:8]}"
-
-    obs: dict[str, Any] = {
-        "worker_id":     wid,
-        "claimed":       0,
-        "completed":     0,
-        "noop":          0,
-        "deleted":       0,
-        "failed":        0,
-        "fence_skipped": 0,
-        "errors":        [],
+    obs: dict = {
+        "fence_active": False,
+        "claimed": 0,
+        "completed": 0,
+        "failed": 0,
+        "noop": 0,
     }
 
-    # Claim events atomically (§12 FOR UPDATE SKIP LOCKED)
+    sb = supabase_client
+
+    # BLOCKER 9: check fence BEFORE claiming
+    if _rebuild_active(sb):
+        obs["fence_active"] = True
+        return obs  # claimed=0, no attempt consumption
+
+    if worker_id is None:
+        worker_id = str(uuid.uuid4())
+
+    if os_client is None:
+        from services.shared_search.opensearch_client import get_client
+        os_client = get_client()
+
+    # Claim a batch of events
     try:
-        resp = sb.rpc("claim_search_index_events", {
-            "p_limit":          limit,
-            "p_worker_id":      wid,
-            "p_lease_seconds":  lease_seconds,
+        claim_resp = sb.rpc("claim_search_index_events", {
+            "p_worker_id": worker_id,
+            "p_batch_size": batch_size,
         }).execute()
+        events = list(getattr(claim_resp, "data", None) or [])
     except Exception as exc:
         logger.error("claim_search_index_events failed: %s", exc)
-        raise
+        return obs
 
-    events = list(getattr(resp, "data", None) or [])
     obs["claimed"] = len(events)
     if not events:
         return obs
 
-    # Build adapter map once for the entire batch
-    adapter_map = _build_adapter_map(sb)
-
-    # Resolve alias once; if alias is not ready, fail all claimed events back
+    # Build adapter map once per batch
     try:
-        physical_index = resolve_alias_target(c)
-    except AliasNotReady as exc:
-        logger.error("alias not ready — returning all claimed events: %s", exc)
-        for ev in events:
-            _fail_event(sb, ev, str(exc), attempt_ok=False)
-            obs["failed"] += 1
+        from services.shared_search import production_bindings as _pb
+        adapters = _pb.build_production_adapters(sb)
+        adapter_map = {a.domain_name: a for a in adapters}
+    except Exception as exc:
+        logger.error("build_production_adapters failed: %s", exc)
         return obs
 
-    for ev in events:
-        event_id   = ev["id"]
-        attempt_no = ev["attempt_no"]
-        domain     = ev["domain_name"]
-        obj_type   = ev["object_type"]
-        cid        = ev["canonical_id"]
+    for event in events:
+        event_id = event.get("id")
+        domain_name = event.get("domain_name", "")
+        object_type = event.get("object_type", "")
+        canonical_id = event.get("canonical_id", "")
 
         try:
             result = sync_object(
-                domain_name=domain,
-                object_type=obj_type,
-                canonical_id=cid,
+                domain_name=domain_name,
+                object_type=object_type,
+                canonical_id=canonical_id,
                 supabase_client=sb,
-                os_client=c,
+                os_client=os_client,
                 adapter_map=adapter_map,
             )
-            outcome = result.get("outcome", "UNKNOWN")
-
-            if outcome == "SKIP_FENCE":
-                obs["fence_skipped"] += 1
-                # Return to PENDING immediately (don't count as attempt)
-                _requeue_fenced(sb, ev)
-                continue
-
+            outcome = result.get("outcome", "")
             if outcome == "NOOP":
                 obs["noop"] += 1
-            elif outcome in ("DELETE", "NOT_FOUND"):
-                obs["deleted"] += 1
-
-            # Mark DONE (§13 fenced completion)
-            ok = sb.rpc("complete_search_index_event", {
-                "p_event_id":  event_id,
-                "p_worker_id": wid,
-                "p_attempt":   attempt_no,
-            }).execute()
-            obs["completed"] += 1
-
-        except (AliasNotReady, ProjectionWriteError, OpenSearchUnavailable) as exc:
-            logger.warning(
-                "incremental fail %s/%s/%s attempt=%s: %s",
-                domain, obj_type, cid, attempt_no, exc,
-            )
-            _fail_event(sb, ev, str(exc))
-            obs["failed"] += 1
-            obs["errors"].append({"event_id": event_id, "error": str(exc)})
-
         except Exception as exc:
-            logger.exception(
-                "incremental unexpected error %s/%s/%s attempt=%s",
-                domain, obj_type, cid, attempt_no,
+            logger.error(
+                "sync_object failed for event %s (%s/%s/%s): %s",
+                event_id, domain_name, object_type, canonical_id, exc,
             )
-            _fail_event(sb, ev, str(exc))
+            _fail_event(sb, event_id, str(exc)[:500])
             obs["failed"] += 1
-            obs["errors"].append({"event_id": event_id, "error": str(exc)})
+            continue
+
+        # Complete the event
+        try:
+            ok_resp = sb.rpc("complete_search_index_event", {
+                "p_event_id": event_id,
+                "p_worker_id": worker_id,
+            }).execute()
+            completed_ok = ok_resp.data if isinstance(ok_resp.data, bool) else bool(ok_resp.data if ok_resp.data else False)
+            if completed_ok:
+                obs["completed"] += 1
+            else:
+                logger.warning("completion fenced for event %s", event_id)
+                # Don't increment completed
+        except Exception as exc:
+            logger.warning(
+                "complete_search_index_event failed for event %s: %s",
+                event_id, exc,
+            )
 
     return obs
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _fail_event(sb, ev: dict, error: str, *, attempt_ok: bool = True) -> None:
-    """Call fail_search_index_event RPC to mark retry or DEAD."""
-    try:
-        sb.rpc("fail_search_index_event", {
-            "p_event_id":  ev["id"],
-            "p_worker_id": ev["worker_id"],
-            "p_attempt":   ev["attempt_no"],
-            "p_error":     error[:1000],
-        }).execute()
-    except Exception as exc:
-        logger.error("fail_search_index_event RPC error: %s", exc)
-
-
-def _requeue_fenced(sb, ev: dict) -> None:
-    """Return a fence-skipped event to PENDING without consuming an attempt."""
-    try:
-        sb.rpc("fail_search_index_event", {
-            "p_event_id":    ev["id"],
-            "p_worker_id":   ev["worker_id"],
-            "p_attempt":     ev["attempt_no"],
-            "p_error":       "rebuild_fence_active",
-            "p_backoff_secs": 30,
-        }).execute()
-    except Exception as exc:
-        logger.error("requeue_fenced RPC error: %s", exc)

@@ -422,18 +422,34 @@ class SupabaseGuideStore:
 
 
 def _enqueue_guide_snapshot(sb, snapshot_id: str) -> None:
-    """Enqueue SYNC_OBJECT for every guide in the completed snapshot."""
+    """Enqueue SYNC_OBJECT for NEW snapshot items UNION OLD snapshot items (BLOCKER 5B).
+
+    Enqueuing the union ensures items removed from the new snapshot (present only
+    in the previous snapshot) are tombstoned by the incremental worker.
+    """
     import logging
     log = logging.getLogger(__name__)
     try:
-        rows = sb.table("kosha_guide_snapshot_items") \
-                 .select("guide_id") \
-                 .eq("snapshot_id", snapshot_id) \
-                 .execute()
-        for r in (rows.data or []):
-            gid = r.get("guide_id")
-            if not gid:
-                continue
+        new_rows = sb.table("kosha_guide_snapshot_items") \
+                     .select("guide_id") \
+                     .eq("snapshot_id", snapshot_id) \
+                     .execute()
+        new_ids = {r["guide_id"] for r in (new_rows.data or []) if r.get("guide_id")}
+
+        prev_ids: set = set()
+        prev_snap = (sb.table("kosha_guide_snapshots")
+                       .select("id").eq("status", "COMPLETED")
+                       .neq("id", snapshot_id)
+                       .order("completed_at", desc=True).limit(1).execute())
+        if prev_snap.data:
+            prev_sid = prev_snap.data[0]["id"]
+            prev_rows = sb.table("kosha_guide_snapshot_items") \
+                          .select("guide_id") \
+                          .eq("snapshot_id", prev_sid) \
+                          .execute()
+            prev_ids = {r["guide_id"] for r in (prev_rows.data or []) if r.get("guide_id")}
+
+        for gid in new_ids | prev_ids:
             sb.rpc("enqueue_search_index_sync", {
                 "p_domain_name":  "GUIDE",
                 "p_object_type":  "GUIDE",

@@ -58,11 +58,11 @@ from services.shared_search.production_bindings import build_production_adapters
 from services.shared_search.writer import prepare_search_document
 from services.shared_search.census import run_census
 from services.shared_search.opensearch_client import get_client
-from services.shared_search.opensearch_projection import doc_to_os_body
 from services.shared_search.opensearch_store import (
     OpenSearchSearchStore,
     RebuildRejected,
     RUN_STATUS_FAILED,
+    doc_to_os_body,
     document_id,
 )
 
@@ -84,8 +84,11 @@ def _build_supabase_client():
 # ---------------------------------------------------------------------------
 
 def _now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(tz=timezone.utc).isoformat()
+    from services.time.tai_time import SYSTEM_CLOCK
+    return SYSTEM_CLOCK.now().isoformat()
+
+
+MAX_REPLAY_ROUNDS = 10
 
 
 def _fence_on(supabase, candidate_index: str) -> int:
@@ -141,78 +144,138 @@ def _replay_outbox_into_candidate(
     candidate_index: str,
     start_event_id: int,
 ) -> dict:
-    """Replay outbox events id > start_event_id into the candidate physical index.
+    """Replay outbox events [start_event_id < id <= high_water] into the candidate
+    physical index using a convergence loop (BLOCKER 7).
 
-    Called after validate_run() (base parity confirmed), before promote().
-    Ensures events that arrived during the rebuild are applied to the
-    candidate so promotion does not expose stale data to any consumer.
+    Each round fetches the current high-water mark and replays up to it.  Loops
+    until the high-water stabilises (no new events arrive during the round) or
+    MAX_REPLAY_ROUNDS is reached.
 
     Replay target = candidate physical index (NOT the current alias).
     """
     adapter_map = {a.domain_name: a for a in adapters}
     seen: set[tuple[str, str, str]] = set()
-    replayed = deleted = errors = 0
+    total_replayed = total_deleted = total_errors = 0
+    last_replayed_id = start_event_id
+    round_no = 0
 
-    batch_start = 0
-    while True:
+    while round_no < MAX_REPLAY_ROUNDS:
+        round_no += 1
+
         r = (supabase.table("search_index_outbox")
-                     .select("domain_name,object_type,canonical_id")
-                     .gt("id", start_event_id)
-                     .order("id")
-                     .range(batch_start, batch_start + 999)
+                     .select("id")
+                     .order("id", desc=True)
+                     .limit(1)
                      .execute())
         rows = list(getattr(r, "data", None) or [])
-        if not rows:
+        high_water = rows[0]["id"] if rows else last_replayed_id
+
+        if high_water <= last_replayed_id:
             break
 
-        for row in rows:
-            identity = (row["domain_name"], row["object_type"], row["canonical_id"])
-            if identity in seen:
-                continue  # only replay latest state per identity
-            seen.add(identity)
+        batch_start = 0
+        while True:
+            r = (supabase.table("search_index_outbox")
+                         .select("domain_name,object_type,canonical_id")
+                         .gt("id", last_replayed_id)
+                         .lte("id", high_water)
+                         .order("id")
+                         .range(batch_start, batch_start + 999)
+                         .execute())
+            rows = list(getattr(r, "data", None) or [])
+            if not rows:
+                break
 
-            adapter = adapter_map.get(row["domain_name"])
-            if adapter is None:
-                continue
+            for row in rows:
+                identity = (row["domain_name"], row["object_type"], row["canonical_id"])
+                if identity in seen:
+                    continue
+                seen.add(identity)
 
-            doc_id_val = document_id(row["object_type"], row["canonical_id"])
+                adapter = adapter_map.get(row["domain_name"])
+                if adapter is None:
+                    continue
 
-            try:
-                payload = adapter.object_reindex_payload(row["canonical_id"])
-                if payload is None:
-                    # Tombstone: remove from candidate (ignore 404)
-                    try:
-                        client.delete(index=candidate_index, id=doc_id_val, refresh=False)
-                    except Exception:
-                        pass
-                    deleted += 1
-                else:
-                    try:
-                        doc, wire = prepare_search_document(payload)
-                    except SearchContractError as exc:
-                        logger.warning("replay norm error %s: %s", doc_id_val, exc)
-                        errors += 1
-                        continue
-                    if doc.publication_status != PUBLICATION_STATUS_PUBLISHED:
-                        continue
-                    body = doc_to_os_body(wire)
-                    client.index(
-                        index=candidate_index, id=doc_id_val, body=body, refresh=False
-                    )
-                    replayed += 1
-            except Exception as exc:
-                logger.warning("replay error %s: %s", doc_id_val, exc)
-                errors += 1
+                doc_id_val = document_id(row["object_type"], row["canonical_id"])
+                try:
+                    payload = adapter.object_reindex_payload(row["canonical_id"])
+                    if payload is None:
+                        try:
+                            client.delete(index=candidate_index, id=doc_id_val, refresh=False)
+                        except Exception:
+                            pass
+                        total_deleted += 1
+                    else:
+                        try:
+                            doc, wire = prepare_search_document(payload)
+                        except SearchContractError as exc:
+                            logger.warning("replay norm error %s: %s", doc_id_val, exc)
+                            total_errors += 1
+                            continue
+                        if doc.publication_status != PUBLICATION_STATUS_PUBLISHED:
+                            continue
+                        body = doc_to_os_body(wire)
+                        client.index(
+                            index=candidate_index, id=doc_id_val, body=body, refresh=False
+                        )
+                        total_replayed += 1
+                except Exception as exc:
+                    logger.warning("replay error %s: %s", doc_id_val, exc)
+                    total_errors += 1
 
-        if len(rows) < 1000:
+            if len(rows) < 1000:
+                break
+            batch_start += 1000
+
+        last_replayed_id = high_water
+
+        # Stable check — no new events during this round
+        r = (supabase.table("search_index_outbox")
+                     .select("id")
+                     .order("id", desc=True)
+                     .limit(1)
+                     .execute())
+        rows = list(getattr(r, "data", None) or [])
+        new_max = rows[0]["id"] if rows else last_replayed_id
+        if new_max <= last_replayed_id:
             break
-        batch_start += 1000
 
     logger.info(
-        "Candidate replay: replayed=%d deleted=%d errors=%d (id>%s)",
-        replayed, deleted, errors, start_event_id,
+        "Candidate replay: %d rounds, replayed=%d deleted=%d errors=%d (start_id=%s)",
+        round_no, total_replayed, total_deleted, total_errors, start_event_id,
     )
-    return {"replayed": replayed, "deleted": deleted, "errors": errors}
+    return {
+        "replayed": total_replayed,
+        "deleted": total_deleted,
+        "errors": total_errors,
+        "rounds": round_no,
+    }
+
+
+def _post_replay_validate(adapters: list, client, candidate_index: str) -> None:
+    """Per-domain count parity check after replay — MUST pass before promote (BLOCKER 6).
+
+    Raises RebuildRejected if any domain count in the candidate differs from the
+    adapter's current expected count.
+    """
+    client.indices.refresh(index=candidate_index)
+    mismatches = []
+    for adapter in adapters:
+        expected_count = sum(1 for _ in adapter.iter_expected_hashes())
+        resp = client.count(
+            index=candidate_index,
+            body={"query": {"term": {"object_type": adapter.object_type}}},
+        )
+        actual_count = resp.get("count", 0)
+        if expected_count != actual_count:
+            mismatches.append(
+                f"{adapter.domain_name}: expected={expected_count} actual={actual_count}"
+            )
+    if mismatches:
+        raise RebuildRejected(
+            f"Post-replay parity FAIL: {'; '.join(mismatches)}"
+        )
+    logger.info("Post-replay parity PASS: %d domains", len(adapters))
 
 
 # ---------------------------------------------------------------------------
@@ -419,9 +482,19 @@ def full_rebuild() -> None:
             supabase, adapters, client, idx, start_event_id
         )
         logger.info(
-            "Replay complete: replayed=%d deleted=%d errors=%d",
-            replay["replayed"], replay["deleted"], replay["errors"],
+            "Replay complete: replayed=%d deleted=%d errors=%d rounds=%d",
+            replay["replayed"], replay["deleted"], replay["errors"], replay["rounds"],
         )
+
+        # BLOCKER 6: Replay errors gate — any error aborts promotion
+        if replay["errors"] > 0:
+            reason = f"Candidate replay had {replay['errors']} errors — aborting promotion"
+            store.fail_run(run_id, reason)
+            _fence_off(supabase)
+            raise RebuildRejected(reason)
+
+        # BLOCKER 6: Post-replay per-domain parity check before promote
+        _post_replay_validate(adapters, client, idx)
 
         # §12-§14: Promote with VALIDATED guard
         new_idx = store.promote(run_id)
