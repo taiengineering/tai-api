@@ -121,9 +121,26 @@ def get_notifications(
     trigger_group: Optional[str] = Query(default=None),
     is_read:       Optional[bool] = Query(default=None),
     priority:      Optional[str] = Query(default=None),
+    # [23] 화면(notification-list)이 보내는 별칭 파라미터 — 기존 파라미터와 하위호환.
+    #   기존 trigger_group/is_read/size 는 그대로 두고, 화면이 쓰는 type/read/limit/from/to 를 수용한다.
+    type_:         Optional[str]  = Query(default=None, alias="type"),   # → trigger_group
+    read:          Optional[bool] = Query(default=None),                 # → is_read
+    limit:         Optional[int]  = Query(default=None, ge=1, le=100),   # → size
+    date_from:     Optional[str]  = Query(default=None, alias="from"),   # created_at >=
+    date_to:       Optional[str]  = Query(default=None, alias="to"),     # created_at <=
+    # ⚠ factory_id 는 notifications 테이블에 컬럼이 없어 서버가 필터할 수 없다(미지원, 무시).
+    #   시설 축 필터가 필요하면 스키마/매핑 결정이 선행돼야 한다(별건).
 ):
     """알림 목록 조회 (worker_id, phone 파라미터 추가)"""
     supabase = get_supabase()
+
+    # [23] 별칭 병합 — 별칭이 오면 채택하되 기존 파라미터를 우선 유지(하위호환).
+    if not trigger_group and type_:
+        trigger_group = type_
+    if is_read is None and read is not None:
+        is_read = read
+    if limit is not None:
+        size = limit
 
     # phone → user_id 변환
     resolved_user_id = user_id
@@ -145,6 +162,9 @@ def get_notifications(
     if trigger_group:    query = query.eq("trigger_group", trigger_group)
     if is_read is not None: query = query.eq("is_read", is_read)
     if priority:         query = query.eq("priority", priority)
+    # [23] 기간 필터 (created_at) — 화면 from/to
+    if date_from:        query = query.gte("created_at", date_from)
+    if date_to:          query = query.lte("created_at", date_to)
 
     offset = (page - 1) * size
     res = query.order("created_at", desc=True)\
