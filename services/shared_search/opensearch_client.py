@@ -114,6 +114,6 @@ def check_health(client: Optional[OpenSearch] = None) -> dict:
     """Return cluster health dict.  Raises ``OpenSearchUnavailable`` on error."""
     c = client or get_client()
     try:
-        return c.cluster.health(params={"timeout": "5s"})
+        return c.cluster.health()
     except (OSConnectionError, TransportError) as exc:
         raise OpenSearchUnavailable(f"OpenSearch cluster unreachable: {exc}") from exc
