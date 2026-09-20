@@ -409,6 +409,7 @@ class SupabaseGuideStore:
         self.sb.table("kosha_guide_snapshots").update(
             {"status": "COMPLETED", "completed_at": completed_at}
         ).eq("id", snapshot_id).eq("status", "RUNNING").execute()
+        _enqueue_guide_snapshot(self.sb, snapshot_id)
 
     def fail_snapshot(self, snapshot_id: str, reason: str, completed_at: str) -> None:
         self.sb.table("kosha_guide_snapshots").update(
@@ -418,6 +419,30 @@ class SupabaseGuideStore:
                 "completed_at": completed_at,
             }
         ).eq("id", snapshot_id).execute()
+
+
+def _enqueue_guide_snapshot(sb, snapshot_id: str) -> None:
+    """Enqueue SYNC_OBJECT for every guide in the completed snapshot."""
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        rows = sb.table("kosha_guide_snapshot_items") \
+                 .select("guide_id") \
+                 .eq("snapshot_id", snapshot_id) \
+                 .execute()
+        for r in (rows.data or []):
+            gid = r.get("guide_id")
+            if not gid:
+                continue
+            sb.rpc("enqueue_search_index_sync", {
+                "p_domain_name":  "GUIDE",
+                "p_object_type":  "GUIDE",
+                "p_canonical_id": str(gid),
+                "p_event_key":    f"guide_snapshot:{snapshot_id}:{gid}",
+                "p_reason":       "snapshot_completed",
+            }).execute()
+    except Exception as exc:
+        log.warning("enqueue_guide_snapshot failed: %s", exc)
 
 
 def _catalog_row(g: NormalizedGuide, now_s: str) -> dict:

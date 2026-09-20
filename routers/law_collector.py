@@ -542,6 +542,9 @@ def save_law_to_db(law_info: dict, raw_xml: str, articles: list, supabase) -> di
         "updated_at": serialize_business_datetime(now_kst()),
     }, on_conflict="law_id").execute()
 
+    if is_new_version:
+        _enqueue_legal_version(supabase, version_id)
+
     return {"law_id": law_id, "version_id": version_id,
             "is_new_version": is_new_version, "article_count": article_count}
 
@@ -875,3 +878,28 @@ async def get_collection_status():
         "needs_review_rules":   needs_rev.count,
         "recent_failed":        failed.data,
     }
+
+
+def _enqueue_legal_version(supabase, version_id: str) -> None:
+    """Enqueue SYNC_OBJECT for every law_article in a newly promoted version."""
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        rows = supabase.table("law_article") \
+                       .select("id") \
+                       .eq("law_version_id", version_id) \
+                       .eq("is_deleted_in_version", False) \
+                       .execute()
+        for r in (rows.data or []):
+            aid = r.get("id")
+            if not aid:
+                continue
+            supabase.rpc("enqueue_search_index_sync", {
+                "p_domain_name":  "LEGAL",
+                "p_object_type":  "LEGAL",
+                "p_canonical_id": str(aid),
+                "p_event_key":    f"legal_version:{version_id}:{aid}",
+                "p_reason":       "new_law_version",
+            }).execute()
+    except Exception as exc:
+        log.warning("enqueue_legal_version failed: %s", exc)

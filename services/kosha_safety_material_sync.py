@@ -537,6 +537,8 @@ class SupabaseSnapshotStore:
     def update_snapshot(self, snapshot_id: str, fields: dict) -> None:
         self.sb.table(SNAPSHOT_TABLE).update(fields).eq("id", snapshot_id).execute()
         self.mutations["snapshot_updates"] += 1
+        if fields.get("status") == STATUS_COMPLETED:
+            _enqueue_safety_material_snapshot(self.sb, snapshot_id)
 
     def insert_catalog_rows(self, rows: list[dict]) -> int:
         n = 0
@@ -570,6 +572,30 @@ class SupabaseSnapshotStore:
             .execute()
         )
         return int(r.count or 0)
+
+
+def _enqueue_safety_material_snapshot(sb, snapshot_id: str) -> None:
+    """Enqueue SYNC_OBJECT for every material in the completed snapshot."""
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        rows = sb.table(ITEM_TABLE) \
+                 .select("material_id") \
+                 .eq("snapshot_id", snapshot_id) \
+                 .execute()
+        for r in (rows.data or []):
+            mid = r.get("material_id")
+            if not mid:
+                continue
+            sb.rpc("enqueue_search_index_sync", {
+                "p_domain_name":  "SAFETY_MATERIAL",
+                "p_object_type":  "SAFETY_MATERIAL",
+                "p_canonical_id": str(mid),
+                "p_event_key":    f"safety_material_snapshot:{snapshot_id}:{mid}",
+                "p_reason":       "snapshot_completed",
+            }).execute()
+    except Exception as exc:
+        log.warning("enqueue_safety_material_snapshot failed: %s", exc)
 
 
 def _official_as_diff_items(items: list[NormalizedOfficial]) -> list[dict]:

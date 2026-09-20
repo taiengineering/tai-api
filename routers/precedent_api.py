@@ -206,9 +206,53 @@ async def _call_collect_edge() -> dict:
 
         result = resp.json()
         log.info("[PRECEDENT] Edge collect 완료: %s", result)
+
+        # INCREMENTAL-001 §26: PRECEDENT producer bridge (B3 path).
+        # Edge Function is the actual writer to industrial_accident_precedents —
+        # it is not in this repo and cannot be modified directly.
+        # Bridge: after Edge call succeeds, scan collected_at >= (now - 60min)
+        # to discover IDs just written and enqueue them for incremental indexing.
+        _enqueue_precedent_delta()
+
         return result
 
     except (httpx.ConnectError, httpx.TimeoutException) as e:
         log.error("[PRECEDENT] Edge Function 연결 실패: %s", e)
         raise HTTPException(status_code=503,
                             detail=f"Edge Function 연결 실패: {type(e).__name__}")
+
+
+def _enqueue_precedent_delta() -> None:
+    """Enqueue recently collected/updated precedent IDs for incremental indexing.
+
+    Uses a 60-minute window on collected_at so any record upserted by the
+    Edge Function in this run is included.  The incremental worker will NOOP
+    records whose content_hash is unchanged.
+
+    PRECEDENT producer authority: Supabase Edge Function `collect-precedents`.
+    This bridge is the only hook point available without modifying the Edge Fn.
+    """
+    from datetime import datetime, timedelta, timezone
+    sb = get_supabase()
+    cutoff = (datetime.now(tz=timezone.utc) - timedelta(hours=1)).isoformat()
+    try:
+        rows = (sb.table("industrial_accident_precedents")
+                  .select("id")
+                  .gte("collected_at", cutoff)
+                  .eq("is_active", True)
+                  .execute())
+        count = 0
+        for r in (rows.data or []):
+            rid = r.get("id")
+            if not rid:
+                continue
+            sb.rpc("enqueue_search_index_sync", {
+                "p_domain_name":  "PRECEDENT",
+                "p_object_type":  "PRECEDENT",
+                "p_canonical_id": str(rid),
+                "p_reason":       "edge_collect",
+            }).execute()
+            count += 1
+        log.info("[PRECEDENT] delta enqueued %d records (collected_at >= %s)", count, cutoff)
+    except Exception as exc:
+        log.warning("[PRECEDENT] delta enqueue failed: %s", exc)
