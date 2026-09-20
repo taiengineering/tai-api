@@ -101,6 +101,10 @@ class SearchQueryPlan:
     dictionary_ok:            bool = True
     dictionary_error:         Optional[str] = None
 
+    # Additional MUST narrowing filter (WO-MKT-SEARCH-02)
+    # Applied after q-based ranking. Does not affect tier scores.
+    within_query:             Optional[str] = None
+
 
 def build_query_plan(
     q: str,
@@ -110,6 +114,7 @@ def build_query_plan(
     page: int = 1,
     page_size: int = 10,
     dict_limit: int = 20,
+    within_query: Optional[str] = None,
 ) -> SearchQueryPlan:
     """Build a `SearchQueryPlan` for the given raw query string.
 
@@ -129,6 +134,7 @@ def build_query_plan(
         visibility_scopes=list(visibility_scopes or ["PUBLIC"]),
         page=page,
         page_size=page_size,
+        within_query=within_query.strip() if within_query and within_query.strip() else None,
     )
 
     # Identifier gate (§19): single-token → SOURCE_KEY / CANONICAL_ID candidates

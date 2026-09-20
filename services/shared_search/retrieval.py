@@ -81,10 +81,27 @@ class MemorySearchReader:
             return docs
         return [d for d in docs if d.get("object_type") in object_types]
 
-    def _base(self, ot: list[str], vis: list[str]) -> list[dict]:
-        return self._filter_type(
+    def _within_match(self, doc: dict, within_query: str) -> bool:
+        """True if all within tokens appear in any text field (AND across tokens, OR across fields)."""
+        tokens = [t for t in within_query.strip().lower().split() if t]
+        if not tokens:
+            return True
+        text = " ".join([
+            doc.get("title") or "",
+            " ".join(doc.get("aliases") or []),
+            " ".join(doc.get("keywords") or []),
+            doc.get("summary") or "",
+            doc.get("search_text") or "",
+        ]).lower()
+        return all(token in text for token in tokens)
+
+    def _base(self, ot: list[str], vis: list[str], within_query: Optional[str] = None) -> list[dict]:
+        docs = self._filter_type(
             [d for d in self._docs if self._visible(d, vis)], ot
         )
+        if within_query and within_query.strip():
+            docs = [d for d in docs if self._within_match(d, within_query)]
+        return docs
 
     def run_msearch(
         self,
@@ -94,11 +111,18 @@ class MemorySearchReader:
         subject_candidates: list[Any],
         object_types: list[str],
         visibility: list[str],
+        within_query: Optional[str] = None,
     ) -> dict[str, list[dict]]:
-        """Return dict: tier_name → matching docs."""
+        """Return dict: tier_name → matching docs.
+
+        ``within_query`` is applied as an additional MUST narrowing filter
+        (AND across tokens, OR across title/aliases/keywords/summary/search_text).
+        It does not affect tier scores.
+        """
         q   = normalized_query
         ot  = object_types
         vis = visibility
+        wq  = within_query or None
         result: dict[str, list[dict]] = {}
 
         def add(tier: str, docs: list[dict]) -> None:
@@ -110,13 +134,13 @@ class MemorySearchReader:
         # T0: source_key exact
         for ident in identifier_candidates:
             add(TIER_SOURCE_KEY_EXACT,
-                [d for d in self._base(ot, vis)
+                [d for d in self._base(ot, vis, within_query=wq)
                  if (d.get("source_key") or "").lower() == ident.lower()])
 
         # T1: canonical_id exact
         for ident in identifier_candidates:
             add(TIER_CANONICAL_ID_EXACT,
-                [d for d in self._base(ot, vis)
+                [d for d in self._base(ot, vis, within_query=wq)
                  if (d.get("canonical_id") or "").lower() == ident.lower()])
 
         # T2/T3: dictionary subject candidates
@@ -127,7 +151,7 @@ class MemorySearchReader:
                     if cand.match_type in _dict_exact_types
                     else TIER_DICTIONARY_EXPANSION)
             matching = []
-            for d in self._base(ot, vis):
+            for d in self._base(ot, vis, within_query=wq):
                 subjects = d.get("subjects") or []
                 if isinstance(subjects, str):
                     try:
@@ -142,18 +166,18 @@ class MemorySearchReader:
 
         # T4: title exact
         add(TIER_TITLE_EXACT,
-            [d for d in self._base(ot, vis)
+            [d for d in self._base(ot, vis, within_query=wq)
              if (d.get("title") or "").lower() == q_lower])
 
         # T5: alias exact
         add(TIER_ALIAS_EXACT,
-            [d for d in self._base(ot, vis)
+            [d for d in self._base(ot, vis, within_query=wq)
              if any((a or "").lower() == q_lower for a in (d.get("aliases") or []))])
 
         # T6: subject_key = raw query (single token)
         if " " not in q.strip():
             matching = []
-            for d in self._base(ot, vis):
+            for d in self._base(ot, vis, within_query=wq):
                 subjects = d.get("subjects") or []
                 if isinstance(subjects, str):
                     try:
@@ -169,7 +193,7 @@ class MemorySearchReader:
         # T7: context_key = raw query (single token)
         if " " not in q.strip():
             matching = []
-            for d in self._base(ot, vis):
+            for d in self._base(ot, vis, within_query=wq):
                 ctx = d.get("context") or []
                 if isinstance(ctx, str):
                     try:
@@ -186,7 +210,7 @@ class MemorySearchReader:
         tokens = q.lower().split()
         if tokens:
             add(TIER_BM25_NORI,
-                [d for d in self._base(ot, vis)
+                [d for d in self._base(ot, vis, within_query=wq)
                  if all(t in (d.get("search_text") or "").lower() for t in tokens)])
 
         return result
@@ -197,11 +221,12 @@ class MemorySearchReader:
         *,
         object_types: list[str],
         visibility: list[str],
+        within_query: Optional[str] = None,
     ) -> list[dict]:
         """FUZZY_FALLBACK: prefix/substring match on title."""
         q_lower = normalized_query.lower()
         return [
-            d for d in self._base(object_types, visibility)
+            d for d in self._base(object_types, visibility, within_query=within_query)
             if q_lower in (d.get("title") or "").lower()
         ]
 
@@ -275,6 +300,7 @@ def retrieve(
         subject_candidates  = plan.subject_candidates,
         object_types        = ot,
         visibility          = vis,
+        within_query        = plan.within_query,
     )
 
     # Materialise subject_candidate lookup for explanation preservation
@@ -321,7 +347,7 @@ def retrieve(
 
     # FUZZY_FALLBACK (§25): only when upper tiers are insufficient
     if len(seen) <= fuzzy_trigger_threshold and TIER_FUZZY_FALLBACK in plan.active_tiers:
-        fuzzy_docs = reader.run_fuzzy(plan.normalized_query, object_types=ot, visibility=vis)
+        fuzzy_docs = reader.run_fuzzy(plan.normalized_query, object_types=ot, visibility=vis, within_query=plan.within_query)
         tier_idx   = TIER_PRECEDENCE.index(TIER_FUZZY_FALLBACK)
         if fuzzy_docs:
             active_tiers_hit.append(TIER_FUZZY_FALLBACK)
@@ -386,6 +412,7 @@ class SharedRetrievalEngine:
         page: int = 1,
         page_size: int = 10,
         fuzzy_trigger_threshold: int = 0,
+        within_query: Optional[str] = None,
     ) -> SearchResponse:
         """End-to-end retrieval. Raises ValueError on blank query (§35)."""
         plan = build_query_plan(
@@ -394,6 +421,7 @@ class SharedRetrievalEngine:
             visibility_scopes = visibility_scopes or ["PUBLIC"],
             page              = page,
             page_size         = min(max(1, page_size), 50),
+            within_query      = within_query,
         )
         return retrieve(plan, self._reader,
                         fuzzy_trigger_threshold=fuzzy_trigger_threshold)

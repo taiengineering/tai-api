@@ -66,6 +66,7 @@ async def public_shared_search(
         None,
         description="object_type 필터. 허용값: " + ", ".join(_TYPE_MAP.keys()),
     ),
+    within: Optional[str] = Query(None, description="결과 내 검색어 (optional narrowing)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=50),
 ):
@@ -78,6 +79,8 @@ async def public_shared_search(
     """
     if not q or not q.strip():
         raise HTTPException(status_code=422, detail="query 'q' is required")
+
+    within_query = within.strip() if within and within.strip() else None
 
     # Build object_type filter (§33)
     object_types: list[str]
@@ -123,6 +126,7 @@ async def public_shared_search(
             object_types=object_types,
             page=page,
             page_size=page_size,
+            within_query=within_query,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

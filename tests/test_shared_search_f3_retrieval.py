@@ -1312,5 +1312,219 @@ class TestGlobalDuplicateGuard(unittest.TestCase):
                         "global_seen must appear before stage_documents")
 
 
+class TestWithinSearch(unittest.TestCase):
+    """WO-MKT-SEARCH-02 Within Search — B01-B10."""
+
+    # ------------------------------------------------------------------
+    # Shared fixtures
+    # ------------------------------------------------------------------
+
+    def _doc_with_text(self, cid, title, search_text="", summary="", aliases=None, keywords=None):
+        return {
+            "object_type": "GUIDE",
+            "canonical_id": cid,
+            "title": title,
+            "source_id": "KOSHA",
+            "source_key": None,
+            "summary": summary,
+            "aliases": aliases or [],
+            "keywords": keywords or [],
+            "subjects": [],
+            "context": [],
+            "public_url": f"/guide/{cid}",
+            "saas_url": None,
+            "publication_status": "PUBLISHED",
+            "visibility_scopes": ["PUBLIC"],
+            "source_updated_at": "2026-09-19T00:00:00+00:00",
+            "search_text": search_text,
+            "content_hash": "abc",
+        }
+
+    def _forklift_doc(self, cid="fork-001"):
+        return self._doc_with_text(cid, "지게차 안전작업", search_text="지게차 안전 작업 매뉴얼")
+
+    def _crane_doc(self, cid="crane-001"):
+        return self._doc_with_text(cid, "크레인 안전", search_text="크레인 안전 지침")
+
+    # ------------------------------------------------------------------
+    # B01: within=None yields same results as omitting within
+    # ------------------------------------------------------------------
+
+    def test_B01_within_None_equals_no_within(self):
+        """B01: within=None → same result count as baseline (no narrowing)."""
+        engine = _engine(self._forklift_doc(), self._crane_doc())
+        r_none   = engine.search("안전", within_query=None)
+        r_base   = engine.search("안전")
+        self.assertEqual(r_none.total, r_base.total)
+        self.assertEqual(
+            [i.canonical_id for i in r_none.items],
+            [i.canonical_id for i in r_base.items],
+        )
+
+    # ------------------------------------------------------------------
+    # B02: within single token filters to matching docs only
+    # ------------------------------------------------------------------
+
+    def test_B02_within_single_token_filters(self):
+        """B02: within='지게차' keeps only docs whose text contains '지게차'."""
+        engine = _engine(self._forklift_doc(), self._crane_doc())
+        result = engine.search("안전", within_query="지게차")
+        cids = {r.canonical_id for r in result.items}
+        self.assertIn("fork-001", cids,    "forklift doc must survive within filter")
+        self.assertNotIn("crane-001", cids, "crane doc must be filtered out")
+
+    # ------------------------------------------------------------------
+    # B03: within="" is treated as no within (ignored)
+    # ------------------------------------------------------------------
+
+    def test_B03_within_empty_string_ignored(self):
+        """B03: within='' → same as within=None, no narrowing applied."""
+        engine = _engine(self._forklift_doc(), self._crane_doc())
+        r_empty = engine.search("안전", within_query="")
+        r_none  = engine.search("안전", within_query=None)
+        self.assertEqual(r_empty.total, r_none.total)
+
+    # ------------------------------------------------------------------
+    # B04: within multi-token is AND across tokens
+    # ------------------------------------------------------------------
+
+    def test_B04_within_multi_token_AND(self):
+        """B04: within='지게차 안전' keeps only docs containing BOTH tokens."""
+        doc_both   = self._doc_with_text("both-001", "지게차 안전", search_text="지게차 안전 관련 내용")
+        doc_fork   = self._doc_with_text("fork-002", "지게차만", search_text="지게차 운전 방법")
+        doc_safety = self._doc_with_text("safe-001", "안전만", search_text="일반 안전 지침")
+        engine = _engine(doc_both, doc_fork, doc_safety)
+        result = engine.search("안전", within_query="지게차 안전")
+        cids = {r.canonical_id for r in result.items}
+        self.assertIn("both-001", cids,    "doc with both tokens must survive")
+        self.assertNotIn("fork-002", cids, "doc missing '안전' must be filtered")
+        self.assertNotIn("safe-001", cids, "doc missing '지게차' must be filtered")
+
+    # ------------------------------------------------------------------
+    # B05: within all-excluded returns empty
+    # ------------------------------------------------------------------
+
+    def test_B05_within_all_excluded_returns_empty(self):
+        """B05: within='존재하지않는키워드' → 0 results, status='empty'."""
+        engine = _engine(self._forklift_doc(), self._crane_doc())
+        result = engine.search("안전", within_query="존재하지않는키워드")
+        self.assertEqual(result.total, 0)
+        self.assertEqual(result.status, "empty")
+
+    # ------------------------------------------------------------------
+    # B06: within does not change tier precedence order
+    # ------------------------------------------------------------------
+
+    def test_B06_within_does_not_change_tier_order(self):
+        """B06: Within filter narrows set but winner tier ranking is unchanged.
+
+        If doc A (TITLE_EXACT match) and doc B (BM25_NORI match) both pass
+        within, doc A must still rank higher.
+        """
+        # q = "지게차" → title exact hit on fork-A
+        doc_a = self._doc_with_text("fork-A", "지게차", search_text="지게차 안전")
+        doc_b = self._doc_with_text("fork-B", "산업 안전", search_text="지게차 산업 안전 내용")
+        engine = _engine(doc_a, doc_b)
+        result = engine.search("지게차", within_query="안전")
+        self.assertGreater(result.total, 0)
+        # doc_a wins via TITLE_EXACT (lower tier_idx = higher precedence)
+        top = result.items[0]
+        self.assertEqual(top.canonical_id, "fork-A")
+        self.assertLessEqual(
+            top.rank_tier,
+            result.items[-1].rank_tier if len(result.items) > 1 else top.rank_tier,
+        )
+
+    # ------------------------------------------------------------------
+    # B07: _inject_within adds clauses to bool.filter (not must)
+    # ------------------------------------------------------------------
+
+    def test_B07_inject_within_adds_filter_context(self):
+        """B07: _inject_within appends within clauses to bool.filter, not bool.must."""
+        from services.shared_search.opensearch_reader import _inject_within
+
+        base_query = {
+            "query": {
+                "bool": {
+                    "must": [{"term": {"title.raw": "지게차"}}],
+                    "filter": [{"term": {"publication_status": "PUBLISHED"}}],
+                }
+            },
+            "size": 200,
+        }
+        result = _inject_within(base_query, "지게차 안전")
+        bool_q = result["query"]["bool"]
+
+        # must is unchanged
+        self.assertEqual(len(bool_q["must"]), 1)
+        # filter has original + 2 new within clauses (one per token)
+        self.assertEqual(len(bool_q["filter"]), 3)  # 1 original + 2 tokens
+        # original query is not mutated
+        self.assertEqual(len(base_query["query"]["bool"]["filter"]), 1)
+
+    # ------------------------------------------------------------------
+    # B08: _within_filter produces one bool.should clause per token
+    # ------------------------------------------------------------------
+
+    def test_B08_within_filter_multi_token_AND_clauses(self):
+        """B08: _within_filter('a b') returns 2 clauses, each a bool.should over all fields."""
+        from services.shared_search.opensearch_reader import _within_filter
+
+        clauses = _within_filter("지게차 안전")
+        self.assertEqual(len(clauses), 2, "one clause per token")
+        for clause in clauses:
+            self.assertIn("bool", clause)
+            self.assertIn("should", clause["bool"])
+            # each should branch covers 5 fields
+            self.assertEqual(len(clause["bool"]["should"]), 5)
+
+    # ------------------------------------------------------------------
+    # B09: FUZZY fallback also applies within filter
+    # ------------------------------------------------------------------
+
+    def test_B09_fuzzy_within_pass_through(self):
+        """B09: run_fuzzy with within_query returns only within-matching docs."""
+        reader = MemorySearchReader([
+            self._forklift_doc("fork-001"),
+            self._crane_doc("crane-001"),
+        ])
+        fuzzy_all    = reader.run_fuzzy("안", object_types=[], visibility=["PUBLIC"])
+        fuzzy_within = reader.run_fuzzy("안", object_types=[], visibility=["PUBLIC"],
+                                        within_query="지게차")
+        all_cids    = {d["canonical_id"] for d in fuzzy_all}
+        within_cids = {d["canonical_id"] for d in fuzzy_within}
+
+        self.assertIn("fork-001", all_cids)
+        self.assertIn("crane-001", all_cids)
+        self.assertIn("fork-001", within_cids)
+        self.assertNotIn("crane-001", within_cids,
+                         "crane doc does not contain '지게차', must be excluded")
+
+    # ------------------------------------------------------------------
+    # B10: SharedRetrievalEngine.search passes within_query to plan
+    # ------------------------------------------------------------------
+
+    def test_B10_engine_search_passes_within_to_plan(self):
+        """B10: engine.search(within_query='X') passes within_query through to plan."""
+        from unittest.mock import patch as _patch, MagicMock
+
+        captured = {}
+
+        def fake_retrieve(plan, reader, **kwargs):
+            captured["within_query"] = plan.within_query
+            resp = MagicMock()
+            resp.total = 0
+            resp.items = []
+            resp.active_tiers = []
+            resp.status = "empty"
+            return resp
+
+        with _patch("services.shared_search.retrieval.retrieve", side_effect=fake_retrieve):
+            engine = _engine(self._forklift_doc())
+            engine.search("안전", within_query="지게차")
+
+        self.assertEqual(captured.get("within_query"), "지게차")
+
+
 if __name__ == "__main__":
     unittest.main()
