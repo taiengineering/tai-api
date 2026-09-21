@@ -1,8 +1,9 @@
 """Public Safety Search router — WO-TAI-SHARED-SEARCH-F3 §32-§35, §40-§41.
 
 Routes:
-    GET /public/safety-search       — Shared Search (OpenSearch backend)
-    GET /public/safety-search/kosha — External KOSHA Smart Search (unchanged §42)
+    GET /public/safety-search          — Shared Search (OpenSearch backend)
+    GET /public/safety-search/sections — Domain-sectioned search (WO-MKT-SEARCH-06R-1)
+    GET /public/safety-search/kosha    — External KOSHA Smart Search (unchanged §42)
 
 OpenSearch config missing → HTTP 503 SHARED_SEARCH_UNAVAILABLE (§41).
 No silent fallback to empty MemorySearchReader in production.
@@ -58,6 +59,17 @@ _TYPE_MAP: dict[str, list[str]] = {
     "law":       ["LEGAL"],
     "legal":     ["LEGAL"],
 }
+
+# Section order for /sections endpoint (§12 fixed presentation order)
+_SECTION_TYPES: list[tuple[str, str]] = [
+    ("guide",     "GUIDE"),
+    ("material",  "SAFETY_MATERIAL"),
+    ("accident",  "CSI_ACCIDENT"),
+    ("chem",      "CHEM"),
+    ("knowledge", "KNOWLEDGE"),
+    ("precedent", "PRECEDENT"),
+    ("law",       "LEGAL"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +154,131 @@ async def public_shared_search(
         ) from exc
 
     return response.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# GET /public/safety-search/sections — Domain-sectioned search (WO-MKT-SEARCH-06R-1)
+# One independent search per domain. Single client/reader/engine per request.
+# KOSHA excluded (external provider). Legal applicability: 0 fields (§7).
+# ---------------------------------------------------------------------------
+
+def _search_public_section(
+    engine: object,
+    q: str,
+    object_type: str,
+    section_type: str,
+    section_size: int,
+    within_query: Optional[str],
+) -> dict:
+    """Execute one domain search and return a section payload.
+
+    Requests section_size+1 items to determine has_more without a
+    separate count query. Returns exactly section_size items to callers.
+    """
+    try:
+        resp = engine.search(
+            q,
+            visibility_scopes=["PUBLIC"],
+            object_types=[object_type],
+            page=1,
+            page_size=section_size + 1,
+            within_query=within_query,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OpenSearchUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "SHARED_SEARCH_UNAVAILABLE", "message": str(exc)},
+        ) from exc
+
+    raw = resp.items
+    has_more = len(raw) > section_size
+    items = [r.to_dict() for r in raw[:section_size]]
+    return {
+        "type":        section_type,
+        "object_type": object_type,
+        "status":      "ok" if items else "empty",
+        "items":       items,
+        "page":        1,
+        "page_size":   section_size,
+        "has_more":    has_more,
+    }
+
+
+@router.get("/sections")
+async def public_search_sections(
+    q: str = Query(..., min_length=1, description="검색어"),
+    within: Optional[str] = Query(None, description="결과 내 검색어 (optional narrowing)"),
+    section_size: int = Query(5, ge=1, le=10, description="섹션당 초기 결과 수 (1-10)"),
+):
+    """Domain-sectioned Public Search.
+
+    Returns 7 internal-domain sections in fixed order (§12):
+      guide → GUIDE
+      material → SAFETY_MATERIAL
+      accident → CSI_ACCIDENT
+      chem → CHEM
+      knowledge → KNOWLEDGE
+      precedent → PRECEDENT
+      law → LEGAL
+
+    KOSHA is NOT included (external provider, use /kosha endpoint).
+    Each domain is searched independently with the same engine.
+    has_more is determined by requesting section_size+1 items (no total count).
+    Legal applicability: 0 fields produced (§7).
+    CHEM: excluded unless KOSHA_MSDS_PUBLIC_MODE active (§28).
+    OpenSearch not configured → 503 SHARED_SEARCH_UNAVAILABLE.
+    """
+    if not q or not q.strip():
+        raise HTTPException(status_code=422, detail="query 'q' is required")
+
+    within_query = within.strip() if within and within.strip() else None
+
+    chem_mode = (os.environ.get("KOSHA_MSDS_PUBLIC_MODE") or "off").strip().lower()
+    chem_public = chem_mode in ("seo_preview", "full")
+
+    try:
+        client = get_client()
+    except OpenSearchUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "SHARED_SEARCH_UNAVAILABLE",
+                "message": str(exc),
+                "hint": f"Set {ENV_URL} environment variable.",
+            },
+        ) from exc
+
+    from services.shared_search.opensearch_reader import OpenSearchSearchReader
+    from services.shared_search.retrieval import SharedRetrievalEngine
+
+    reader = OpenSearchSearchReader(client)
+    engine = SharedRetrievalEngine(reader)
+
+    sections = []
+    for section_type, object_type in _SECTION_TYPES:
+        if object_type == "CHEM" and not chem_public:
+            sections.append({
+                "type":        section_type,
+                "object_type": object_type,
+                "status":      "empty",
+                "items":       [],
+                "page":        1,
+                "page_size":   section_size,
+                "has_more":    False,
+            })
+            continue
+        sections.append(
+            _search_public_section(engine, q, object_type, section_type, section_size, within_query)
+        )
+
+    return {
+        "query":        q,
+        "within":       within_query,
+        "section_size": section_size,
+        "sections":     sections,
+    }
 
 
 # ---------------------------------------------------------------------------
