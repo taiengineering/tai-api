@@ -27,12 +27,23 @@ def _auto_tier(
     floor_area: float = 0.0,
     contract_amount_eok: float = 0.0,
     user_tier: Optional[str] = None,
+    worker_count: int = 0,
 ) -> str:
     if sector == "BUILDING":
-        return "BUILDING_LARGE_V2" if (floor_area or 0) >= 5000 else "BUILDING_V2"
+        # 5,000㎡ 이하 → BASIC (이하: ≤ 5000), 5,000㎡ 초과 → STANDARD
+        return "BUILDING_LARGE_V2" if (floor_area or 0) > 5000 else "BUILDING_V2"
     if sector == "CONSTRUCTION":
+        # 50억 미만 → STANDARD, 50억 이상 → PREMIUM (이상: ≥ 50)
         return "CONSTRUCTION_PREMIUM" if (contract_amount_eok or 0) >= 50 else "CONSTRUCTION"
-    return user_tier or "INDUSTRY_V2"
+    # INDUSTRY / INDUSTRIAL: user_tier overrides; else worker_count-based auto-assign
+    if user_tier:
+        return user_tier
+    wc = int(worker_count or 0)
+    if wc >= 300:
+        return "INDUSTRY_PREMIUM"
+    if wc >= 50:
+        return "INDUSTRY_STANDARD"
+    return "INDUSTRY_V2"
 
 
 def _ensure_source_on_rule_row(row: Any) -> dict:

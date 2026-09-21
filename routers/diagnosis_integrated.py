@@ -55,15 +55,18 @@ DISCLAIMER_TEXT = (
     "관할 행정기관 또는 법률 전문가에게 확인하시기 바랍니다."
 )
 
-# 다음 TIER구도 동일 페이지 접수용 가격 테이블
+# 진단 상품 가격 SSOT (목업). 섹터·규모 기준 확정 가격. VAT 별도.
 PAID_TIER_PRICES: Dict[str, int] = {
-    "BUILDING_V2":         99000,
-    "BUILDING_LARGE_V2":  249000,
-    "INDUSTRY_V2":         79000,
-    "INDUSTRY_STANDARD":  149000,
-    "INDUSTRY_PREMIUM":   249000,
-    "CONSTRUCTION":       145000,
-    "CONSTRUCTION_PREMIUM": 299000,
+    # BUILDING: 5,000㎡ 이하 / 초과
+    "BUILDING_V2":          149000,
+    "BUILDING_LARGE_V2":    349000,
+    # INDUSTRY: 49인 이하 / 50~299인 / 300인 이상
+    "INDUSTRY_V2":          149000,
+    "INDUSTRY_STANDARD":    299000,
+    "INDUSTRY_PREMIUM":     499000,
+    # CONSTRUCTION: 50억 미만 / 이상
+    "CONSTRUCTION":         249000,
+    "CONSTRUCTION_PREMIUM": 499000,
 }
 
 FREE_TIER_CODES = frozenset({
