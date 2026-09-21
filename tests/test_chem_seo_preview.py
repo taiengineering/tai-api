@@ -408,7 +408,7 @@ def test_P10_preview_mode_does_not_touch_published_full():
     # The read layer view mapping keeps PUBLISHED_FULL sourced from
     # kosha_msds_current and PUBLISHED_SEO_PREVIEW from the preview view.
     assert read._view_for_scope(PUBLICATION_SCOPE_FULL) == "kosha_msds_current"
-    assert read._view_for_scope(PUBLICATION_SCOPE_SEO_PREVIEW) == "kosha_msds_seo_preview_display"
+    assert read._view_for_scope(PUBLICATION_SCOPE_SEO_PREVIEW) == "kosha_msds_seo_preview_current"
 
     # The CHEM-10 target state mapping is scope-aware and PUBLISHED_FULL
     # is reserved for the FULL scope.
