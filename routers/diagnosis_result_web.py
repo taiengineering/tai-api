@@ -176,7 +176,7 @@ def _rule_row_to_obligation_src(row: Dict[str, Any]) -> Dict[str, Any]:
         "id": str(row.get("rule_id") or row.get("id") or ""),
         "category": cat_key, "type": cat_key,
         "title": human or "의무사항", "name": human or "", "description": human or "",
-        "risk_level": row.get("risk_level") or "MEDIUM",
+        "risk_level": row.get("risk_level"),
         "legal_basis": law_ref, "evidence": [law_ref] if law_ref else [],
     }
 
@@ -513,16 +513,6 @@ def _build_free_obligations(rules_table: List[Dict[str, Any]]) -> List[Dict[str,
     return [_project_free_obligation(r) for r in rules_table]
 
 
-RECOMMEND_PLAN = {
-    "BUILDING_V2":          {"name": "건물 소형 플랜",  "price": "월 59,000원~"},
-    "BUILDING_LARGE_V2":    {"name": "건물 대형 플랜",  "price": "월 145,000원~"},
-    "INDUSTRY_V2":          {"name": "산업 STARTER",   "price": "월 79,000원~"},
-    "INDUSTRY_STANDARD":    {"name": "산업 BUSINESS",  "price": "월 149,000원~"},
-    "INDUSTRY_PREMIUM":     {"name": "산업 PRO",       "price": "월 249,000원~"},
-    "CONSTRUCTION":         {"name": "건설 STANDARD",  "price": "월 145,000원~"},
-    "CONSTRUCTION_PREMIUM": {"name": "건설 PREMIUM",   "price": "월 385,000원~"},
-}
-
 
 @router.get("/result/{public_token}")
 def get_diagnosis_result_web(public_token: str):
@@ -646,7 +636,7 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
 
     summary = full_result.get("summary") or leg_summary or {}
     total = full_result.get("applicable_count") or summary.get("total") or len(rules_table)
-    risk_level = full_result.get("risk_level") or "MEDIUM"
+    risk_level = full_result.get("risk_level")
     worker_count = input_data.get("workers") or input_data.get("worker_count") or 0
 
     law_groups: Dict[str, list] = {}
@@ -663,7 +653,6 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
         label = r.get("category") or r.get("obligation_type") or "기타"
         ob_counts[label] = ob_counts.get(label, 0) + 1
 
-    plan_info = RECOMMEND_PLAN.get(tier_code, {})
     company_name = input_data.get("company_name") or full_result.get("company_name") or "사업장"
 
     limit = free_preview_limit if is_free else None
@@ -701,7 +690,6 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
                 "form_linked": summary.get("form_linked") or 0,
                 "law_count": len(law_badges),
                 "worker_count": worker_count,
-                "csia_applicable": int(worker_count or 0) >= 5,
             },
             "obligation_counts": ob_counts,
             "warnings": warnings,
@@ -723,7 +711,6 @@ def _build_result_payload(public_token: str, free_preview_limit: Optional[int],
                 "floor_area": input_data.get("floor_area") or input_data.get("total_floor_area") or "",
                 "form_data": project_free_input_snapshot(supabase, sector, input_data),
             },
-            "recommended_plan": plan_info,
             "pdf_url": f"/diagnosis/report-pdf/{public_token}",
         },
     }

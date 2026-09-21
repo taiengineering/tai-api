@@ -243,13 +243,32 @@ def test_B14_legacy_response_fields_unchanged(monkeypatch):
         "rules_table", "appointment_required", "inspection_required",
         "law_badges", "key_obligations", "inspection_schedule", "law_groups",
         "free_obligations", "free_obligation_count", "input_data",
-        "recommended_plan", "pdf_url",
+        "pdf_url",
     }
     assert expected <= set(legacy)
     row = data["rules_table"][0]
     assert row["obligation_summary"] == "점검"
     assert data["is_free"] is False
     assert data["public_token"] == "tok-1"
+
+
+def test_B14b_legacy_removed_fields_absent(monkeypatch):
+    """Regression: stale self-inference fields must not reappear in payload."""
+    rec = stored_rec([leg_obligation("a0", "점검")], tier="BUILDING_V2")
+    install(monkeypatch, rec, product_items=[source_item(0, "a0", "원문A")])
+    data = rw.get_paid_result_web("tok-1")["data"]
+
+    # stale SaaS price recommendation absent
+    assert "recommended_plan" not in data
+
+    # worker-count-only CSIA inference absent
+    assert "csia_applicable" not in data["summary"]
+
+    # invented MEDIUM risk_level absent — engine omits → None, not "MEDIUM"
+    assert data["risk_level"] is None
+
+    # per-row risk_level: LEG-path rows do not invent MEDIUM
+    assert data["rules_table"][0].get("risk_level") is None
 
 
 PRESENTATION_F13_KEYS = (
