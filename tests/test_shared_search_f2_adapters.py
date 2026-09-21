@@ -318,13 +318,72 @@ def test_precedent_adapter_provenance_preserved():
     assert d["source_key"] == "202601010001"
 
 
-def test_precedent_adapter_detail_resolver_deferred():
+def test_precedent_p01_public_url_wired():
+    """P01: public_url = /precedent/{pid} (no longer None)."""
     adapter = PrecedentAdapter(fetch_current=lambda: [_precedent_row()])
     d = list(adapter.iter_documents())[0]
-    # F2 WO §22: detail resolver DEFERRED — do NOT reuse the legacy
-    # /precedents/{id} posts route.
-    assert d["public_url"] is None
+    assert d["public_url"] == "/precedent/p-001"
+
+
+def test_precedent_p02_public_url_preserves_pid_exactly():
+    """P02: URL uses the raw id value from the row unchanged."""
+    row = _precedent_row(pid="2026다567")
+    adapter = PrecedentAdapter(fetch_current=lambda: [row])
+    d = list(adapter.iter_documents())[0]
+    assert d["public_url"] == "/precedent/2026다567"
+
+
+def test_precedent_p03_numeric_style_pid():
+    """P03: numeric-style id is stringified into the URL segment."""
+    row = dict(_precedent_row())
+    row["id"] = "9999"
+    adapter = PrecedentAdapter(fetch_current=lambda: [row])
+    d = list(adapter.iter_documents())[0]
+    assert d["public_url"] == "/precedent/9999"
+
+
+def test_precedent_p04_saas_url_still_none():
+    """P04: saas_url remains None — no SaaS detail route today."""
+    adapter = PrecedentAdapter(fetch_current=lambda: [_precedent_row()])
+    d = list(adapter.iter_documents())[0]
     assert d["saas_url"] is None
+
+
+def test_precedent_p05_canonical_id_matches_url_key():
+    """P05: canonical_id and URL key are the same value (no identity gap)."""
+    adapter = PrecedentAdapter(fetch_current=lambda: [_precedent_row(pid="xyz-99")])
+    d = list(adapter.iter_documents())[0]
+    assert d["canonical_id"] == "xyz-99"
+    assert d["public_url"] == "/precedent/xyz-99"
+
+
+def test_precedent_p06_reindex_payload_wires_public_url():
+    """P06: object_reindex_payload also returns the wired public_url."""
+    row = _precedent_row(pid="p-reidx")
+    adapter = PrecedentAdapter(
+        fetch_current=lambda: [],
+        fetch_by_id=lambda _: row,
+    )
+    payload = adapter.object_reindex_payload("p-reidx")
+    assert payload is not None
+    assert payload["public_url"] == "/precedent/p-reidx"
+
+
+def test_precedent_p07_reindex_payload_none_when_not_found():
+    """P07: object_reindex_payload returns None when fetch_by_id returns None."""
+    adapter = PrecedentAdapter(
+        fetch_current=lambda: [],
+        fetch_by_id=lambda _: None,
+    )
+    assert adapter.object_reindex_payload("missing") is None
+
+
+def test_precedent_p08_public_visibility():
+    """P08: PUBLISHED + PUBLIC scope — result is reachable anonymously."""
+    adapter = PrecedentAdapter(fetch_current=lambda: [_precedent_row()])
+    d = list(adapter.iter_documents())[0]
+    assert d["publication_status"] == "PUBLISHED"
+    assert "PUBLIC" in d["visibility_scopes"]
 
 
 def test_legal_adapter_supported_subtypes_pass():

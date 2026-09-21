@@ -7,12 +7,10 @@ Real columns include: id, case_number, case_name, court_name,
 decision_date, sector, hazard_type, summary, source_url, prec_seq,
 source, is_active, collected_at.
 
-Detail resolver for the newer IAP table is DEFERRED (F2 §22). The
-legacy `/precedents/{id}` route (tai-api posts read) is NOT the IAP
-resolver — the F2 adapter returns null on both URL fields to avoid
-routing consumers to a wrong page. tai-www has
-`src/pages/precedent/[id].astro` but it consumes the LEGACY posts
-API, not the new IAP table.
+Public detail route: tai-www `src/pages/precedent/[id].astro` reads
+`industrial_accident_precedents` directly — same SoT as this adapter.
+Route key: `id` (exact match with adapter canonical_id).
+Coverage: 849/849 is_active=True records have full_text (verified 2026-09-21).
 """
 from __future__ import annotations
 
@@ -89,9 +87,8 @@ def _normalize_precedent(row: dict) -> Optional[dict]:
         "subjects": [],
         "context": ([{"context_type": "sector", "context_key": sector}]
                     if sector else []),
-        # F2 §22: IAP detail resolver DEFERRED_TO_DOMAIN_ADAPTER.
-        # Do NOT reuse the legacy posts /precedent/{id} tai-www page.
-        "public_url": None,
+        # Public detail route: tai-www /precedent/{pid} — verified 2026-09-21.
+        "public_url": f"/precedent/{pid}",
         "saas_url": None,
         "publication_status": "PUBLISHED",
         "visibility_scopes": ["PUBLIC", "SAAS", "PAID"],
