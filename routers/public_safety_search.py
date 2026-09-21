@@ -369,3 +369,64 @@ async def public_legal_detail(canonical_id: str):
         raise HTTPException(status_code=503, detail="LEGAL_DETAIL_INCOMPLETE")
 
     return _build_legal_detail(canonical_id, row)
+
+
+# ---------------------------------------------------------------------------
+# GET /public/safety-search/sitemap/legal-articles — sitemap list
+# Returns [{id, updated_at}] for current-eligible law_articles (paginated).
+# Used by tai-www worker to generate /sitemap_legal_articles.xml.
+# No auth. Stable pagination via id ORDER.
+# ---------------------------------------------------------------------------
+
+@router.get("/sitemap/legal-articles")
+async def public_legal_sitemap_articles(
+    offset: int = 0,
+    limit: int = Query(default=1000, le=2000),
+):
+    """Paginated [{id, updated_at}] for sitemap. Filter: active law_master version
+    match + is_deleted_in_version=False + article_text IS NOT NULL."""
+    client = _legal_supabase_dep()
+
+    masters_res = client.table("law_master").select("current_version_id").eq("is_active", True).execute()
+    version_ids = sorted(set(
+        r["current_version_id"] for r in masters_res.data if r.get("current_version_id")
+    ))
+    if not version_ids:
+        return []
+
+    CHUNK = 400
+    if len(version_ids) <= CHUNK:
+        res = (
+            client.table("law_article")
+            .select("id,updated_at")
+            .in_("law_version_id", version_ids)
+            .eq("is_deleted_in_version", False)
+            .filter("article_text", "not.is", "null")
+            .order("id")
+            .range(offset, offset + limit - 1)
+            .execute()
+        )
+        return res.data
+
+    # Fallback for >400 active laws: collect all, merge-sort, slice.
+    all_rows: list[dict] = []
+    for i in range(0, len(version_ids), CHUNK):
+        batch = version_ids[i:i + CHUNK]
+        chunk_start = 0
+        while True:
+            res = (
+                client.table("law_article")
+                .select("id,updated_at")
+                .in_("law_version_id", batch)
+                .eq("is_deleted_in_version", False)
+                .filter("article_text", "not.is", "null")
+                .order("id")
+                .range(chunk_start, chunk_start + 999)
+                .execute()
+            )
+            all_rows.extend(res.data)
+            if len(res.data) < 1000:
+                break
+            chunk_start += 1000
+    all_rows.sort(key=lambda r: r["id"])
+    return all_rows[offset:offset + limit]
