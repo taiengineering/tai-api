@@ -438,6 +438,56 @@ def _make_safety_material_adapter(client: SupabaseClient) -> SafetyMaterialAdapt
     return SafetyMaterialAdapter(fetch_current=_iter_current, fetch_by_id=_by_id)
 
 
+# ---------------------------------------------------------------------------
+# LEGAL shared helpers — module-level so the detail API and the adapter
+# share a single source of truth (single authority, §WO-5B-1).
+# ---------------------------------------------------------------------------
+
+_LEGAL_LAW_MASTER_SELECT = "id,law_name,is_active,current_version_id"
+_LEGAL_LAW_ARTICLE_SELECT = (
+    "id,law_id,law_version_id,article_no,article_sub_no,"
+    "article_title,article_text,is_deleted_in_version,"
+    "enforcement_date,updated_at"
+)
+
+
+def get_current_legal_article_by_id(
+    client: SupabaseClient,
+    article_id: str,
+) -> Optional[dict]:
+    """Fetch a current-eligible law_article row by UUID.
+
+    Eligibility: law_master.is_active=True AND
+                 law_master.current_version_id = law_article.law_version_id AND
+                 law_article.is_deleted_in_version = False.
+
+    Returns the row with ``law_name`` and ``record_kind`` injected, or None.
+    """
+    row = _fetch_one(
+        client, table="law_article",
+        select=_LEGAL_LAW_ARTICLE_SELECT,
+        key_column="id", key_value=article_id,
+    )
+    if row is None:
+        return None
+    if row.get("is_deleted_in_version") is True:
+        return None
+    master = _fetch_one(
+        client, table="law_master",
+        select=_LEGAL_LAW_MASTER_SELECT,
+        key_column="id", key_value=row.get("law_id"),
+    )
+    if master is None:
+        return None
+    if not master.get("is_active"):
+        return None
+    if master.get("current_version_id") != row.get("law_version_id"):
+        return None
+    row["law_name"] = master.get("law_name")
+    row["record_kind"] = "law_article"
+    return row
+
+
 def _make_legal_adapter(client: SupabaseClient) -> LegalAdapter:
     """LEGAL binds directly to law_master + law_version + law_article.
 
@@ -461,17 +511,6 @@ def _make_legal_adapter(client: SupabaseClient) -> LegalAdapter:
       - legal_obligations has 0 rows → obligation_atom BLOCKED
       - norm_cluster BLOCKED
     """
-    LAW_MASTER_SELECT = "id,law_name,is_active,current_version_id"
-    # Real columns verified via information_schema on production
-    # (F2 FINAL §14 read-only discovery). `published_at` /
-    # `version_effective_at` do NOT exist — timestamp resolution uses
-    # `enforcement_date` (per law_article + fall back to
-    # law_article.updated_at).
-    LAW_ARTICLE_SELECT = (
-        "id,law_id,law_version_id,article_no,article_sub_no,"
-        "article_title,article_text,is_deleted_in_version,"
-        "enforcement_date,updated_at"
-    )
     CURRENT_VERSION_CHUNK = 400   # keep any single `.in_()` small
 
     def _active_masters() -> tuple[dict[str, dict], list[str]]:
@@ -480,7 +519,7 @@ def _make_legal_adapter(client: SupabaseClient) -> LegalAdapter:
         for m in paginate_supabase(
             client,
             table="law_master",
-            select=LAW_MASTER_SELECT,
+            select=_LEGAL_LAW_MASTER_SELECT,
             apply_filters=lambda q: q.eq("is_active", True),
             order_column="id",
         ):
@@ -519,7 +558,7 @@ def _make_legal_adapter(client: SupabaseClient) -> LegalAdapter:
             batch_start = 0
             while True:
                 q = (client.table("law_article")
-                         .select(LAW_ARTICLE_SELECT)
+                         .select(_LEGAL_LAW_ARTICLE_SELECT)
                          .in_("law_version_id", batch)
                          .eq("is_deleted_in_version", False)
                          .order("id")
@@ -538,31 +577,7 @@ def _make_legal_adapter(client: SupabaseClient) -> LegalAdapter:
                 batch_start += 1000
 
     def _by_id(article_id: str) -> Optional[dict]:
-        row = _fetch_one(
-            client, table="law_article",
-            select=LAW_ARTICLE_SELECT,
-            key_column="id", key_value=article_id,
-        )
-        if row is None:
-            return None
-        if row.get("is_deleted_in_version") is True:
-            return None
-        # Look up the law_master via law_id → must be active AND its
-        # current_version_id must equal this row's law_version_id.
-        master = _fetch_one(
-            client, table="law_master",
-            select=LAW_MASTER_SELECT,
-            key_column="id", key_value=row.get("law_id"),
-        )
-        if master is None:
-            return None
-        if not master.get("is_active"):
-            return None
-        if master.get("current_version_id") != row.get("law_version_id"):
-            return None
-        row["law_name"] = master.get("law_name")
-        row["record_kind"] = "law_article"
-        return row
+        return get_current_legal_article_by_id(client, article_id)
 
     return LegalAdapter(fetch_current=_iter_current, fetch_by_id=_by_id)
 
