@@ -49,7 +49,9 @@ def resolve_plan(supabase, service_type, sector, value=None) -> dict:
 
     - service_type: DIAGNOSIS / SAAS
     - sector: BUILDING(연면적) / INDUSTRY(근로자수) / CONSTRUCTION(공사금액)
-    - value: 기준값. criteria_min <= value < criteria_max 인 행을 반환(FLAT은 value 무관).
+    - value: 기준값. FLAT은 value 무관.
+      WORKER_COUNT / FLOOR_AREA: criteria_min <= value <= criteria_max (상한 포함)
+      CONTRACT_AMOUNT: criteria_min <= value < criteria_max (상한 제외)
     """
     rows = load_prices(supabase, service_type.upper(), sector.upper())
     if not rows:
@@ -62,12 +64,18 @@ def resolve_plan(supabase, service_type, sector, value=None) -> dict:
 
     match = None
     for r in rows:
+        ctype = r.get("criteria_type")
+        if ctype == "FLAT":
+            continue
         cmin = r.get("criteria_min")
         cmax = r.get("criteria_max")
         lo_ok = cmin is None or value >= float(cmin)
-        hi_ok = cmax is None or value < float(cmax)
-        if r.get("criteria_type") == "FLAT":
-            continue
+        if cmax is None:
+            hi_ok = True
+        elif ctype in ("WORKER_COUNT", "FLOOR_AREA"):
+            hi_ok = value <= float(cmax)   # 이하 포함 (49인 이하, 5000㎡ 이하)
+        else:
+            hi_ok = value < float(cmax)    # 미만 (50억 미만 → STANDARD)
         if lo_ok and hi_ok:
             match = r
             break
