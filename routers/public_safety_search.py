@@ -506,3 +506,95 @@ async def public_legal_detail(canonical_id: str):
         raise HTTPException(status_code=503, detail="LEGAL_DETAIL_INCOMPLETE")
 
     return _build_legal_detail(canonical_id, row)
+
+
+# ---------------------------------------------------------------------------
+# GET /public/safety-search/sitemap/legal-articles — sitemap list
+# Returns [{id, updated_at}] for current-eligible law_articles (paginated).
+# Used by tai-www worker to generate /sitemap_legal_articles.xml.
+# No auth. Stable pagination via id ORDER.
+# ---------------------------------------------------------------------------
+
+@router.get("/sitemap/legal-articles")
+async def public_legal_sitemap_articles(
+    after_id: str = "",
+    limit: int = Query(default=1000, le=2000),
+):
+    """Cursor-paginated [{id, updated_at}] for sitemap generation.
+
+    Filter: active law_master version match + is_deleted_in_version=False +
+    article_text >= 50 chars (thin content excluded per WO spec).
+    Cursor: after_id (UUID exclusive lower bound, stable UUID sort).
+    Returns plain list; has_more inferred from len == limit.
+    """
+    client = _legal_supabase_dep()
+
+    masters_res = client.table("law_master").select("current_version_id").eq("is_active", True).execute()
+    version_ids = sorted(set(
+        r["current_version_id"] for r in masters_res.data if r.get("current_version_id")
+    ))
+    if not version_ids:
+        return []
+
+    collected: list[dict] = []
+    cursor = after_id
+    CHUNK = 400
+    FETCH = min(limit * 2, 4000)  # Overfetch: ~17% thin rate, 2× is sufficient
+    MAX_ITER = 20
+
+    for _ in range(MAX_ITER):
+        if len(collected) >= limit:
+            break
+
+        if len(version_ids) <= CHUNK:
+            q = (
+                client.table("law_article")
+                .select("id,updated_at,article_text")
+                .in_("law_version_id", version_ids)
+                .eq("is_deleted_in_version", False)
+                .filter("article_text", "not.is", "null")
+                .order("id")
+                .range(0, FETCH - 1)
+            )
+            if cursor:
+                q = q.gt("id", cursor)
+            batch = q.execute().data
+        else:
+            all_chunk: list[dict] = []
+            for i in range(0, len(version_ids), CHUNK):
+                part = version_ids[i:i + CHUNK]
+                q = (
+                    client.table("law_article")
+                    .select("id,updated_at,article_text")
+                    .in_("law_version_id", part)
+                    .eq("is_deleted_in_version", False)
+                    .filter("article_text", "not.is", "null")
+                    .order("id")
+                    .range(0, FETCH - 1)
+                )
+                if cursor:
+                    q = q.gt("id", cursor)
+                all_chunk.extend(q.execute().data)
+            all_chunk.sort(key=lambda r: r["id"])
+            seen: set[str] = set()
+            batch = []
+            for r in all_chunk:
+                if r["id"] not in seen:
+                    seen.add(r["id"])
+                    batch.append(r)
+                    if len(batch) >= FETCH:
+                        break
+
+        if not batch:
+            break
+
+        for r in batch:
+            if len(r.get("article_text") or "") >= 50:
+                collected.append({"id": r["id"], "updated_at": r.get("updated_at")})
+
+        if len(batch) < FETCH:
+            break  # exhausted
+
+        cursor = batch[-1]["id"]
+
+    return collected[:limit]
