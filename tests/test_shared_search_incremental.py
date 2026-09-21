@@ -1062,7 +1062,8 @@ def _fake_os_client(physical_index="tai-test-001", mget_results=None, bulk_error
     client.indices.get_alias.return_value = {physical_index: {}}
 
     def _mget(**kwargs):
-        ids = kwargs.get("body", {}).get("ids", [])
+        raw_docs = kwargs.get("body", {}).get("docs", [])
+        ids = [d["_id"] for d in raw_docs]
         docs = []
         for doc_id in ids:
             if mget_results and doc_id in mget_results:
@@ -1392,7 +1393,7 @@ class TestBulkSyncB11:
         sb = MagicMock()
         client = _fake_os_client()
         client.mget.side_effect = lambda **kwargs: {
-            "docs": [{"_id": i, "found": False} for i in kwargs["body"]["ids"]]
+            "docs": [{"_id": d["_id"], "found": False} for d in kwargs["body"]["docs"]]
         }
 
         ids = [f"c{i}" for i in range(4)]
@@ -1440,7 +1441,7 @@ class TestBulkSyncB12:
         client = MagicMock()
         client.indices.get_alias.side_effect = _get_alias
         client.mget.side_effect = lambda **kwargs: {
-            "docs": [{"_id": i, "found": False} for i in kwargs["body"]["ids"]]
+            "docs": [{"_id": d["_id"], "found": False} for d in kwargs["body"]["docs"]]
         }
 
         ids = [f"c{i}" for i in range(4)]
@@ -1475,7 +1476,7 @@ class TestBulkSyncB13:
         sb = _fake_sb(rebuild_active=False)
         client = _fake_os_client()
         client.mget.side_effect = lambda **kwargs: {
-            "docs": [{"_id": i, "found": False} for i in kwargs["body"]["ids"]]
+            "docs": [{"_id": d["_id"], "found": False} for d in kwargs["body"]["docs"]]
         }
 
         ids = [f"c{i}" for i in range(4)]
@@ -1519,9 +1520,9 @@ class TestBulkSyncB14:
         sb = _fake_sb(rebuild_active=False)
         client = _fake_os_client()
         client.mget.side_effect = lambda **kwargs: {
-            "docs": [{"_id": i, "found": True,
+            "docs": [{"_id": d["_id"], "found": True,
                        "_source": {"content_hash": "SAME"}}
-                     for i in kwargs["body"]["ids"]]
+                     for d in kwargs["body"]["docs"]]
         }
 
         expected = [{"canonical_id": f"c{i}", "content_hash": "SAME"} for i in range(N)]
@@ -1552,7 +1553,7 @@ class TestBulkSyncB15:
         sb = _fake_sb(rebuild_active=False)
         client = _fake_os_client()
         client.mget.side_effect = lambda **kwargs: {
-            "docs": [{"_id": i, "found": False} for i in kwargs["body"]["ids"]]
+            "docs": [{"_id": d["_id"], "found": False} for d in kwargs["body"]["docs"]]
         }
 
         hash_map = {f"c{i}": f"H{i}" for i in range(N)}
@@ -1590,7 +1591,7 @@ class TestBulkSyncB16:
         sb = _fake_sb(rebuild_active=False)
         client = _fake_os_client()
         client.mget.side_effect = lambda **kwargs: {
-            "docs": [{"_id": i, "found": False} for i in kwargs["body"]["ids"]]
+            "docs": [{"_id": d["_id"], "found": False} for d in kwargs["body"]["docs"]]
         }
 
         hash_map = {f"c{i}": f"H{i}" for i in range(N)}

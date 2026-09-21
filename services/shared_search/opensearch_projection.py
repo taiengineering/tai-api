@@ -97,7 +97,7 @@ def get_document_content_hashes(
     if not doc_ids:
         return {}
     resp = client.mget(
-        body={"ids": doc_ids, "_source": ["content_hash"]},
+        body={"docs": [{"_id": d, "_source": ["content_hash"]} for d in doc_ids]},
         index=index,
     )
     result: dict[str, Optional[str]] = {}
