@@ -12,9 +12,12 @@ CHEM PUBLIC exposure follows KOSHA_MSDS_PUBLIC_MODE env var (§28).
 from __future__ import annotations
 
 import os
+import re
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
+
+from services import safe_help_svc
 
 from services.kosha_smart_search import (
     MAX_PAGE_SIZE,
@@ -155,3 +158,52 @@ async def public_kosha_smart_search(
         return await search_kosha_public(q=q, page=page, page_size=page_size)
     except SmartSearchQueryError as exc:
         raise HTTPException(status_code=422, detail=exc.code) from exc
+
+
+# ---------------------------------------------------------------------------
+# GET /public/safety-search/knowledge/{canonical_id} — KNOWLEDGE detail
+# Identity: safe_help_content.doc_id. Not slug. Status must be PUBLISHED.
+# ---------------------------------------------------------------------------
+
+def _build_knowledge_detail(canonical_id: str, row: dict) -> dict:
+    answer_short = row.get("answer_short") or None
+    body = row.get("body") or None
+
+    if answer_short:
+        summary = answer_short
+    elif body:
+        text = re.sub(r"<[^>]+>", " ", body)
+        text = re.sub(r"\s+", " ", text).strip()
+        summary = text[:200] if text else None
+    else:
+        summary = None
+
+    return {
+        "object_type": "KNOWLEDGE",
+        "canonical_id": canonical_id,
+        "title": row.get("title"),
+        "summary": summary,
+        "detail": {
+            "doc_id": row.get("doc_id"),
+            "type": row.get("type"),
+            "slug": row.get("slug"),
+            "question": row.get("question"),
+            "answer_short": answer_short,
+            "body": body,
+            "menu_group": row.get("menu_group"),
+            "updated_at": str(row["updated_at"]) if row.get("updated_at") else None,
+        },
+    }
+
+
+@router.get("/knowledge/{canonical_id}")
+async def public_knowledge_detail(canonical_id: str):
+    """KNOWLEDGE canonical detail for Public Search results.
+
+    Identity: safe_help_content.doc_id (not slug).
+    404 for non-PUBLISHED or missing doc_id.
+    """
+    row = safe_help_svc.get_published_by_doc_id(canonical_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="KNOWLEDGE_NOT_FOUND")
+    return _build_knowledge_detail(canonical_id, row)
