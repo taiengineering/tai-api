@@ -38,7 +38,7 @@ from services.kosha_msds.contract import (
 )
 
 CURRENT_VIEW = "kosha_msds_current"
-PREVIEW_VIEW = "kosha_msds_seo_preview_current"
+PREVIEW_VIEW = "kosha_msds_seo_preview_display"
 SECTIONS_TABLE = "kosha_msds_sections"
 CHEMICALS_TABLE = "kosha_msds_chemicals"
 
@@ -75,9 +75,17 @@ CURRENT_VIEW_SELECT = (
     "chemical_name_ko,chemical_name_en,cas_no,ke_no,en_no,un_no,"
     "source_content_hash,source_dataset_url,snapshot_id"
 )
+PREVIEW_VIEW_SELECT = (
+    CURRENT_VIEW_SELECT
+    + ",hazard_class,signal_word,pictograms,reg_saolaw,reg_dangerous,last_date"
+)
 # Extra columns fetched from kosha_msds_chemicals for a chemical that
 # IS already in the current view. This preserves the publish gate.
 CHEMICALS_EXTRA_SELECT = "id,last_date"
+
+
+def _select_for_scope(scope: str) -> str:
+    return PREVIEW_VIEW_SELECT if scope == PUBLICATION_SCOPE_SEO_PREVIEW else CURRENT_VIEW_SELECT
 
 SECTIONS_SELECT = (
     "chemical_id,section_no,payload_json,section_hash,result_code,"
@@ -122,7 +130,12 @@ def _current_row_to_contract(row: dict, *, last_date: Optional[str]) -> dict:
         "ke_no": row.get("ke_no"),
         "en_no": row.get("en_no"),
         "un_no": row.get("un_no"),
-        "last_date": last_date,
+        "last_date": row.get("last_date") if row.get("last_date") is not None else last_date,
+        "hazard_class": row.get("hazard_class"),
+        "signal_word": row.get("signal_word"),
+        "pictograms": row.get("pictograms"),
+        "reg_saolaw": row.get("reg_saolaw"),
+        "reg_dangerous": row.get("reg_dangerous"),
         "provenance": {
             "source_id": row.get("source_id"),
             "source_key": row.get("source_key"),
@@ -291,7 +304,7 @@ class SupabaseMsdsReadStore:
     def get_current_by_chem_id(self, chem_id: str, *, scope: str = PUBLICATION_SCOPE_FULL) -> Optional[dict]:
         r = (
             self.sb.table(_view_for_scope(scope))
-            .select(CURRENT_VIEW_SELECT)
+            .select(_select_for_scope(scope))
             .eq("chem_id", chem_id)
             .limit(1)
             .execute()
@@ -313,7 +326,7 @@ class SupabaseMsdsReadStore:
     def list_current(self, *, limit: int, offset: int, scope: str = PUBLICATION_SCOPE_FULL) -> tuple[list[dict], int]:
         r = (
             self.sb.table(_view_for_scope(scope))
-            .select(CURRENT_VIEW_SELECT, count="exact")
+            .select(_select_for_scope(scope), count="exact")
             .order("chem_id")
             .range(offset, offset + limit - 1)
             .execute()
@@ -334,7 +347,7 @@ class SupabaseMsdsReadStore:
         offset: int,
         scope: str = PUBLICATION_SCOPE_FULL,
     ) -> tuple[list[dict], int]:
-        q = self.sb.table(_view_for_scope(scope)).select(CURRENT_VIEW_SELECT, count="exact")
+        q = self.sb.table(_view_for_scope(scope)).select(_select_for_scope(scope), count="exact")
         if chem_id:
             q = q.eq("chem_id", chem_id)
         if cas_no:
