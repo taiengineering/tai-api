@@ -174,7 +174,7 @@ def _build_knowledge_detail(canonical_id: str, row: dict) -> dict:
     elif body:
         text = re.sub(r"<[^>]+>", " ", body)
         text = re.sub(r"\s+", " ", text).strip()
-        summary = text[:220] if text else None
+        summary = text[:200] if text else None
     else:
         summary = None
 

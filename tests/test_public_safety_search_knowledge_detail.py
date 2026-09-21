@@ -159,3 +159,19 @@ def test_k10_no_auth_required(client):
             # deliberately no Authorization header
         )
     assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# K11 — body fallback summary is exactly 200 chars (contract alignment)
+# ---------------------------------------------------------------------------
+def test_k11_body_fallback_summary_exactly_200(client):
+    row = _published_row()
+    row["answer_short"] = None
+    row["body"] = "<p>" + ("가" * 230) + "</p>"
+    with patch.object(pss_mod.safe_help_svc, "get_published_by_doc_id", return_value=row):
+        r = client.get("/public/safety-search/knowledge/FAQ-test")
+    assert r.status_code == 200
+    summary = r.json()["summary"]
+    assert "<" not in summary, "HTML tag leaked into summary"
+    assert len(summary) == 200
+    assert summary == "가" * 200
