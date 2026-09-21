@@ -37,6 +37,7 @@ class MemoryDisplayStore:
         self.snapshots: list[dict] = []
         self.items: list[dict] = []
         self.versions: list[dict] = []
+        self.holds: list[dict] = []
         self.writes = 0
         self.kosha_network = 0
         self.r2_put = 0
@@ -71,6 +72,13 @@ class MemoryDisplayStore:
             dict(v) for v in self.versions
             if v.get("material_id") == material_id and v.get("is_current_version") is True
         ]
+
+    def hold_active(self, material_id: str) -> bool:
+        return any(
+            (h.get("status") or "OPEN") != "RESOLVED"
+            for h in self.holds
+            if h.get("material_id") == material_id
+        )
 
     def list_current(
         self,
@@ -187,6 +195,16 @@ class SupabaseDisplayStore:
             .execute()
         )
         return [dict(v) for v in (r.data or [])]
+
+    def hold_active(self, material_id: str) -> bool:
+        r = (
+            self.sb.table("kosha_safety_material_storage_holds")
+            .select("material_id,status")
+            .eq("material_id", material_id)
+            .execute()
+        )
+        rows = list(r.data or [])
+        return any((h.get("status") or "OPEN") != "RESOLVED" for h in rows)
 
     def _current_catalog(self, snapshot_id: str, columns: str):
         return (

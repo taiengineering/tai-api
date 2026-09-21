@@ -15,9 +15,10 @@ import os
 import re
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from services import safe_help_svc
+from services.kosha_safety_materials.display import load_public_material
 
 from services.kosha_smart_search import (
     MAX_PAGE_SIZE,
@@ -207,3 +208,83 @@ async def public_knowledge_detail(canonical_id: str):
     if row is None:
         raise HTTPException(status_code=404, detail="KNOWLEDGE_NOT_FOUND")
     return _build_knowledge_detail(canonical_id, row)
+
+
+# ---------------------------------------------------------------------------
+# GET /public/safety-search/material/{canonical_id} — SAFETY_MATERIAL detail
+# Eligibility: latest COMPLETED snapshot member + no active storage hold.
+# ---------------------------------------------------------------------------
+
+_mat_store = None
+_mat_signer = None
+
+
+def _mat_store_dep():
+    global _mat_store
+    if _mat_store is None:
+        from services.kosha_safety_materials.display import SupabaseDisplayStore
+        _mat_store = SupabaseDisplayStore()
+    return _mat_store
+
+
+def _mat_signer_dep():
+    global _mat_signer
+    if _mat_signer is None:
+        from services.kosha_safety_materials.storage.r2_store import (
+            credentials_from_env,
+            make_s3_client,
+        )
+        from services.kosha_safety_materials.storage.signed_url import R2GetSigner
+        creds = credentials_from_env()
+        _mat_signer = R2GetSigner(make_s3_client(creds))
+    return _mat_signer
+
+
+def _build_material_search_detail(canonical_id: str, display: dict) -> dict:
+    return {
+        "object_type": "SAFETY_MATERIAL",
+        "canonical_id": canonical_id,
+        "title": display.get("title") or "",
+        "summary": display.get("description"),
+        "detail": display,
+    }
+
+
+@router.get("/material/{canonical_id}")
+async def public_material_detail(
+    canonical_id: str,
+    store=Depends(_mat_store_dep),
+):
+    """SAFETY_MATERIAL search detail. Eligibility: snapshot member + no active hold.
+
+    503 if no current snapshot.
+    404 if not a snapshot member or has an active storage hold.
+    Signer is initialized only after eligibility is confirmed (fail-closed ordering).
+    """
+    from services.kosha_safety_materials.storage.r2_store import R2Error
+
+    snap = store.latest_completed()
+    if not snap or snap.get("status") != "COMPLETED":
+        raise HTTPException(status_code=503, detail="CURRENT_SNAPSHOT_UNAVAILABLE")
+
+    if not store.membership_has(snap["id"], canonical_id):
+        raise HTTPException(status_code=404, detail="MATERIAL_NOT_FOUND")
+
+    if store.hold_active(canonical_id):
+        raise HTTPException(status_code=404, detail="MATERIAL_NOT_FOUND")
+
+    try:
+        signer = _mat_signer_dep()
+        display = load_public_material(canonical_id, store=store, signer=signer)
+    except R2Error as exc:
+        if exc.code == "R2_INTEGRATION_BLOCKED":
+            raise HTTPException(status_code=503, detail="STORAGE_UNAVAILABLE") from exc
+        raise
+
+    if display is None:
+        raise HTTPException(status_code=404, detail="MATERIAL_NOT_FOUND")
+
+    if display.get("id") != canonical_id:
+        raise HTTPException(status_code=503, detail="MATERIAL_IDENTITY_MISMATCH")
+
+    return _build_material_search_detail(canonical_id, display)
