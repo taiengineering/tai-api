@@ -24,6 +24,7 @@ by construction.
 from __future__ import annotations
 
 from typing import Callable, Iterable, Iterator, Optional
+from urllib.parse import quote
 
 from services.shared_search.adapters._common import (
     MISSING_TIMESTAMP, as_str_list, coerce_iso,
@@ -145,7 +146,7 @@ def _normalize_legal(row: dict) -> Optional[dict]:
         "subjects": ([{"subject_type": "LEGAL_TERM",
                         "subject_key": str(law_name)}] if law_name else []),
         "context": [],
-        "public_url": None,
+        "public_url": f"/safety-search/legal/{quote(str(canonical_id), safe='')}",
         "saas_url": None,
         "publication_status": "PUBLISHED",
         "visibility_scopes": ["PUBLIC", "SAAS", "PAID"],
