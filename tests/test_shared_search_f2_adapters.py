@@ -242,6 +242,62 @@ def test_material_adapter_source_key_uses_source_med_seq():
     assert d["source_key"] == "12345"
 
 
+# ---------------------------------------------------------------------------
+# S01-S05: public_url wiring — WO-MKT-SEARCH-04B-3C-1
+# ---------------------------------------------------------------------------
+
+def test_material_s01_published_url():
+    """S01: no storage hold → public_url = /safety-news/{id}, PUBLISHED."""
+    adapter = SafetyMaterialAdapter(fetch_current=lambda: [_material_row("MAT-001")])
+    d = list(adapter.iter_documents())[0]
+    assert d["canonical_id"] == "MAT-001"
+    assert d["public_url"] == "/safety-news/MAT-001"
+    assert d["publication_status"] == "PUBLISHED"
+
+
+def test_material_s02_hold_public_url_none():
+    """S02: storage hold → public_url None, HOLD, visibility_scopes []."""
+    adapter = SafetyMaterialAdapter(
+        fetch_current=lambda: [_material_row("MAT-001", storage_hold=True)],
+    )
+    d = list(adapter.iter_documents())[0]
+    assert d["publication_status"] == "HOLD"
+    assert d["public_url"] is None
+    assert d["visibility_scopes"] == []
+
+
+def test_material_s03_route_key_is_canonical_id():
+    """S03: route key = canonical material id, not slug or source_med_seq."""
+    adapter = SafetyMaterialAdapter(fetch_current=lambda: [_material_row("m-xyz")])
+    d = list(adapter.iter_documents())[0]
+    assert d["canonical_id"] == "m-xyz"
+    assert d["public_url"] == "/safety-news/m-xyz"
+    assert "12345" not in d["public_url"]  # source_med_seq never used
+
+
+def test_material_s04_encoding():
+    """S04: canonical_id preserved raw; URL path encodes special chars."""
+    from urllib.parse import quote
+    tricky_id = "한글 id/test"
+    row = dict(_material_row("placeholder"), id=tricky_id)
+    adapter = SafetyMaterialAdapter(fetch_current=lambda: [row])
+    d = list(adapter.iter_documents())[0]
+    assert d["canonical_id"] == tricky_id
+    assert d["public_url"] == f"/safety-news/{quote(tricky_id, safe='')}"
+    assert " " not in d["public_url"]
+
+
+def test_material_s05_object_reindex_payload_wires_public_url():
+    """S05: object_reindex_payload also returns wired public_url."""
+    adapter = SafetyMaterialAdapter(
+        fetch_current=lambda: [],
+        fetch_by_id=lambda _id: _material_row(_id),
+    )
+    payload = adapter.object_reindex_payload("MAT-001")
+    assert payload is not None
+    assert payload["public_url"] == "/safety-news/MAT-001"
+
+
 def test_csi_adapter_uses_content_id_and_null_source_key():
     adapter = CsiAccidentAdapter(
         fetch_current=lambda: [_csi_row()],
