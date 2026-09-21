@@ -13,14 +13,14 @@ The view has NO timestamp column. Production binding joins to
 `kosha_msds_snapshots.completed_at` via `snapshot_id` and the reader
 surfaces it as `_snapshot_completed_at`.
 
-Public URL: no verified tai-www HTML route for MSDS today.
-Foundation returns `public_url = null`; the `/public/kosha/msds/*`
-tai-api endpoint is a JSON API, not a public HTML page.
+Public URL: `/msds/{chem_id}` when public_mode is seo_preview or full
+(existing tai-www /msds/ route). Off-mode returns null.
 """
 from __future__ import annotations
 
 import os
 from typing import Callable, Iterable, Iterator, Optional
+from urllib.parse import quote
 
 from services.shared_search.adapters._common import (
     MISSING_TIMESTAMP, as_str_list, coerce_iso,
@@ -123,6 +123,7 @@ def _normalize_chem(row: dict, *, public_allowed: bool) -> Optional[dict]:
     scopes = ["SAAS", "PAID"]
     if public_allowed:
         scopes.insert(0, "PUBLIC")
+    public_url = f"/msds/{quote(str(chem_id), safe='')}" if public_allowed else None
     return {
         "object_type": ChemAdapter.object_type,
         "canonical_id": str(chem_uuid),
@@ -135,11 +136,7 @@ def _normalize_chem(row: dict, *, public_allowed: bool) -> Optional[dict]:
         "keywords": [],
         "subjects": [],   # CHEM_TERM per-chemical subject assignment deferred
         "context": [{"context_type": "chemical", "context_key": str(chem_id)}],
-        # F2 CO §19-§20: no verified HTML public/saas routes for CHEM.
-        # `/public/kosha/msds/*` is a tai-api JSON endpoint, NOT a
-        # public HTML page. Returning null avoids fabricating a route
-        # that the retrieval engine would then present as a link.
-        "public_url": None,
+        "public_url": public_url,
         "saas_url": None,
         "publication_status": "PUBLISHED",
         "visibility_scopes": scopes,

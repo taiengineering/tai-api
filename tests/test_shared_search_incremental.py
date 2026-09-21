@@ -998,3 +998,592 @@ class TestKnowledgeDeleteOrdering:
         assert call_order == ["delete", "enqueue"], (
             f"Expected delete then enqueue, got: {call_order}"
         )
+
+
+# ---------------------------------------------------------------------------
+# B01-B16: bulk_sync_published_domain — WO-MKT-SEARCH-04B-4A-FAST
+# ---------------------------------------------------------------------------
+
+def _make_bulk_adapter(domain_name, object_type, expected_hashes, documents):
+    """Build a mock adapter for bulk tests."""
+    adapter = MagicMock()
+    adapter.domain_name = domain_name
+    adapter.object_type = object_type
+    adapter.iter_expected_hashes.return_value = iter(list(expected_hashes))
+    adapter.iter_documents.return_value = iter(list(documents))
+    return adapter
+
+
+def _bulk_payload(canonical_id, pub_status="PUBLISHED"):
+    """Raw adapter payload dict (input to prepare_search_document)."""
+    return {
+        "object_type": "CHEM",
+        "canonical_id": canonical_id,
+        "title": f"Chem {canonical_id}",
+        "source_id": "KOSHA_MSDS",
+        "source_key": canonical_id,
+        "publication_status": pub_status,
+        "visibility_scopes": ["PUBLIC", "SAAS", "PAID"],
+        "subjects": [], "context": [], "aliases": [], "keywords": [],
+        "search_text": f"chem {canonical_id}",
+        "source_updated_at": "2026-09-01T00:00:00+00:00",
+        "public_url": f"/msds/{canonical_id}",
+        "saas_url": None,
+        "summary": None,
+    }
+
+
+def _mock_prepare(cid_hash_map):
+    """Return a side_effect function for patching prepare_search_document.
+
+    cid_hash_map: {canonical_id: content_hash}
+    Returned (doc, wire) pairs match the expected hashes so PASS1/PASS2 guard passes.
+    """
+    def _side_effect(payload):
+        cid = payload.get("canonical_id")
+        ch = cid_hash_map.get(cid, f"HASH_{cid}")
+        doc = MagicMock()
+        doc.publication_status = "PUBLISHED"
+        doc.canonical_id = cid
+        wire = {"content_hash": ch, "canonical_id": cid, "title": payload.get("title", "")}
+        return doc, wire
+    return _side_effect
+
+
+# Alias for backward compat
+def _bulk_wire(canonical_id, content_hash="HASH_ABC"):
+    """Legacy alias — used only in B09/B10 where we want the raw payload dict."""
+    return _bulk_payload(canonical_id)
+
+
+def _fake_os_client(physical_index="tai-test-001", mget_results=None, bulk_errors=0):
+    """Build a mock OS client for bulk tests."""
+    client = MagicMock()
+    client.indices.get_alias.return_value = {physical_index: {}}
+
+    def _mget(**kwargs):
+        ids = kwargs.get("body", {}).get("ids", [])
+        docs = []
+        for doc_id in ids:
+            if mget_results and doc_id in mget_results:
+                stored = mget_results[doc_id]
+                if stored is None:
+                    docs.append({"_id": doc_id, "found": False})
+                else:
+                    docs.append({"_id": doc_id, "found": True, "_source": {"content_hash": stored}})
+            else:
+                docs.append({"_id": doc_id, "found": False})
+        return {"docs": docs}
+
+    client.mget.side_effect = _mget
+    return client
+
+
+class TestBulkSyncB01:
+    """B01: Fence active at start → write=0, MGET=0."""
+
+    def test_fence_active_returns_immediately(self):
+        from services.shared_search.incremental import bulk_sync_published_domain
+        sb = _fake_sb(rebuild_active=True)
+        client = MagicMock()
+        adapter = _make_bulk_adapter("CHEM", "CHEM",
+            expected_hashes=[{"canonical_id": "c1", "content_hash": "H1"}],
+            documents=[_bulk_wire("c1", "H1")],
+        )
+        result = bulk_sync_published_domain(
+            domain_name="CHEM", object_type="CHEM",
+            os_client=client, supabase_client=sb,
+            adapter_map={"CHEM": adapter},
+        )
+        assert result["fence_blocked"] is True
+        assert result["upsert"] == 0
+        client.mget.assert_not_called()
+        client.indices.get_alias.assert_not_called()
+
+
+class TestBulkSyncB02:
+    """B02: Alias target 0 or >1 → write=0."""
+
+    def test_alias_zero_indices_raises(self):
+        from services.shared_search.incremental import bulk_sync_published_domain, ProjectionWriteError
+        sb = _fake_sb(rebuild_active=False)
+        client = MagicMock()
+        client.indices.get_alias.return_value = {}
+        adapter = _make_bulk_adapter("CHEM", "CHEM", [], [])
+        with pytest.raises(ProjectionWriteError, match="exactly 1 index"):
+            bulk_sync_published_domain(
+                domain_name="CHEM", object_type="CHEM",
+                os_client=client, supabase_client=sb,
+                adapter_map={"CHEM": adapter},
+            )
+
+    def test_alias_two_indices_raises(self):
+        from services.shared_search.incremental import bulk_sync_published_domain, ProjectionWriteError
+        sb = _fake_sb(rebuild_active=False)
+        client = MagicMock()
+        client.indices.get_alias.return_value = {"idx_a": {}, "idx_b": {}}
+        adapter = _make_bulk_adapter("CHEM", "CHEM", [], [])
+        with pytest.raises(ProjectionWriteError, match="exactly 1 index"):
+            bulk_sync_published_domain(
+                domain_name="CHEM", object_type="CHEM",
+                os_client=client, supabase_client=sb,
+                adapter_map={"CHEM": adapter},
+            )
+
+
+class TestBulkSyncB03:
+    """B03: Adapter/object_type mismatch → write=0."""
+
+    def test_object_type_mismatch_raises(self):
+        from services.shared_search.incremental import bulk_sync_published_domain
+        sb = _fake_sb(rebuild_active=False)
+        client = _fake_os_client()
+        adapter = _make_bulk_adapter("CHEM", "CHEM", [], [])
+        with pytest.raises(ValueError, match="object_type mismatch"):
+            bulk_sync_published_domain(
+                domain_name="CHEM", object_type="LEGAL",  # mismatch
+                os_client=client, supabase_client=sb,
+                adapter_map={"CHEM": adapter},
+            )
+        client.mget.assert_not_called()
+
+
+class TestBulkSyncB04:
+    """B04: Expected set duplicate → write=0."""
+
+    def test_duplicate_canonical_id_raises(self):
+        from services.shared_search.incremental import bulk_sync_published_domain, ProjectionWriteError
+        sb = _fake_sb(rebuild_active=False)
+        client = _fake_os_client()
+        adapter = _make_bulk_adapter("CHEM", "CHEM",
+            expected_hashes=[
+                {"canonical_id": "c1", "content_hash": "H1"},
+                {"canonical_id": "c1", "content_hash": "H1"},  # duplicate
+            ],
+            documents=[],
+        )
+        with pytest.raises(ProjectionWriteError, match="Duplicate"):
+            bulk_sync_published_domain(
+                domain_name="CHEM", object_type="CHEM",
+                os_client=client, supabase_client=sb,
+                adapter_map={"CHEM": adapter},
+            )
+        client.mget.assert_not_called()
+
+
+class TestBulkSyncB05:
+    """B05: DB frozen set != adapter set → write=0."""
+
+    def test_db_only_raises(self):
+        from services.shared_search.incremental import bulk_sync_published_domain, ProjectionWriteError
+        sb = _fake_sb(rebuild_active=False)
+        client = _fake_os_client()
+        adapter = _make_bulk_adapter("CHEM", "CHEM",
+            expected_hashes=[{"canonical_id": "c1", "content_hash": "H1"}],
+            documents=[],
+        )
+        with pytest.raises(ProjectionWriteError, match="parity"):
+            bulk_sync_published_domain(
+                domain_name="CHEM", object_type="CHEM",
+                os_client=client, supabase_client=sb,
+                adapter_map={"CHEM": adapter},
+                db_canonical_ids={"c1", "c2"},  # c2 DB-only
+            )
+        client.mget.assert_not_called()
+
+    def test_adapter_only_raises(self):
+        from services.shared_search.incremental import bulk_sync_published_domain, ProjectionWriteError
+        sb = _fake_sb(rebuild_active=False)
+        client = _fake_os_client()
+        adapter = _make_bulk_adapter("CHEM", "CHEM",
+            expected_hashes=[
+                {"canonical_id": "c1", "content_hash": "H1"},
+                {"canonical_id": "c2", "content_hash": "H2"},
+            ],
+            documents=[],
+        )
+        with pytest.raises(ProjectionWriteError, match="parity"):
+            bulk_sync_published_domain(
+                domain_name="CHEM", object_type="CHEM",
+                os_client=client, supabase_client=sb,
+                adapter_map={"CHEM": adapter},
+                db_canonical_ids={"c1"},  # c2 adapter-only
+            )
+
+
+class TestBulkSyncB06:
+    """B06: MGET all hashes same → NOOP=N, UPSERT=0, bulk call=0."""
+
+    def test_all_noop_no_bulk(self):
+        from services.shared_search.incremental import bulk_sync_published_domain
+        sb = _fake_sb(rebuild_active=False)
+        ids = [f"c{i}" for i in range(5)]
+        mget_results = {f"CHEM::{cid}": "SAME_HASH" for cid in ids}
+        client = _fake_os_client(mget_results=mget_results)
+        expected = [{"canonical_id": cid, "content_hash": "SAME_HASH"} for cid in ids]
+        adapter = _make_bulk_adapter("CHEM", "CHEM", expected, [])
+        result = bulk_sync_published_domain(
+            domain_name="CHEM", object_type="CHEM",
+            os_client=client, supabase_client=sb,
+            adapter_map={"CHEM": adapter},
+        )
+        assert result["noop"] == 5
+        assert result["upsert"] == 0
+        assert result["batches"] == 0
+        # no bulk write needed
+        from opensearchpy.helpers import bulk as os_bulk
+        # bulk never called — verify via upsert==0 and batches==0
+
+
+class TestBulkSyncB07:
+    """B07: Some hash diff → NOOP=A, UPSERT=B, A+B=N, bulk gets B only."""
+
+    def test_partial_upsert(self):
+        from services.shared_search.incremental import bulk_sync_published_domain
+        from unittest.mock import patch
+        sb = _fake_sb(rebuild_active=False)
+
+        # c0, c1 match; c2, c3 differ
+        mget_results = {
+            "CHEM::c0": "HASH_0", "CHEM::c1": "HASH_1",
+            "CHEM::c2": "OLD_HASH_2", "CHEM::c3": None,
+        }
+        client = _fake_os_client(mget_results=mget_results)
+
+        hash_map = {"c0": "HASH_0", "c1": "HASH_1", "c2": "HASH_2", "c3": "HASH_3"}
+        expected = [{"canonical_id": cid, "content_hash": h} for cid, h in hash_map.items()]
+        documents = [_bulk_payload("c2"), _bulk_payload("c3")]
+        adapter = _make_bulk_adapter("CHEM", "CHEM", expected, documents)
+
+        with patch("services.shared_search.incremental.prepare_search_document",
+                   side_effect=_mock_prepare(hash_map)):
+            with patch("services.shared_search.incremental.bulk_upsert_documents",
+                       return_value=(2, 0)) as mock_bulk:
+                result = bulk_sync_published_domain(
+                    domain_name="CHEM", object_type="CHEM",
+                    os_client=client, supabase_client=sb,
+                    adapter_map={"CHEM": adapter},
+                )
+
+        assert result["noop"] == 2
+        assert result["upsert"] == 2
+        assert result["noop"] + result["upsert"] == 4
+        # bulk received only the 2 changed docs
+        call_items = list(mock_bulk.call_args[0][2])
+        assert len(call_items) == 2
+
+
+class TestBulkSyncB08:
+    """B08: Missing OS document → treated as UPSERT candidate."""
+
+    def test_missing_doc_is_upsert(self):
+        from services.shared_search.incremental import bulk_sync_published_domain
+        from unittest.mock import patch
+        sb = _fake_sb(rebuild_active=False)
+        client = _fake_os_client(mget_results={"CHEM::c1": None})  # not found
+
+        hash_map = {"c1": "HASH_1"}
+        expected = [{"canonical_id": "c1", "content_hash": "HASH_1"}]
+        documents = [_bulk_payload("c1")]
+        adapter = _make_bulk_adapter("CHEM", "CHEM", expected, documents)
+
+        with patch("services.shared_search.incremental.prepare_search_document",
+                   side_effect=_mock_prepare(hash_map)):
+            with patch("services.shared_search.incremental.bulk_upsert_documents",
+                       return_value=(1, 0)):
+                result = bulk_sync_published_domain(
+                    domain_name="CHEM", object_type="CHEM",
+                    os_client=client, supabase_client=sb,
+                    adapter_map={"CHEM": adapter},
+                )
+
+        assert result["upsert"] == 1
+        assert result["noop"] == 0
+
+
+class TestBulkSyncB09:
+    """B09: PASS1/PASS2 hash mismatch → BLOCKED before write."""
+
+    def test_hash_mismatch_raises(self):
+        from services.shared_search.incremental import bulk_sync_published_domain, ProjectionWriteError
+        from unittest.mock import patch
+        sb = _fake_sb(rebuild_active=False)
+        client = _fake_os_client(mget_results={"CHEM::c1": None})
+
+        # PASS1 hash differs from what prepare_search_document returns
+        expected = [{"canonical_id": "c1", "content_hash": "PASS1_HASH"}]
+        documents = [_bulk_payload("c1")]
+        adapter = _make_bulk_adapter("CHEM", "CHEM", expected, documents)
+
+        # prepare returns PASS2_DIFFERENT_HASH — deliberately mismatches PASS1_HASH
+        with patch("services.shared_search.incremental.prepare_search_document",
+                   side_effect=_mock_prepare({"c1": "PASS2_DIFFERENT_HASH"})):
+            with pytest.raises(ProjectionWriteError, match="hash mismatch"):
+                bulk_sync_published_domain(
+                    domain_name="CHEM", object_type="CHEM",
+                    os_client=client, supabase_client=sb,
+                    adapter_map={"CHEM": adapter},
+                )
+
+
+class TestBulkSyncB10:
+    """B10: Non-PUBLISHED payload → BLOCKED, DELETE=0."""
+
+    def test_hold_payload_raises(self):
+        from services.shared_search.incremental import bulk_sync_published_domain, ProjectionWriteError
+        sb = _fake_sb(rebuild_active=False)
+        client = _fake_os_client(mget_results={"CHEM::c1": None})
+
+        expected = [{"canonical_id": "c1", "content_hash": "HASH_1"}]
+        hold_doc = dict(_bulk_payload("c1"), publication_status="HOLD")
+        adapter = _make_bulk_adapter("CHEM", "CHEM", expected, [hold_doc])
+
+        with pytest.raises(ProjectionWriteError, match="Non-PUBLISHED"):
+            bulk_sync_published_domain(
+                domain_name="CHEM", object_type="CHEM",
+                os_client=client, supabase_client=sb,
+                adapter_map={"CHEM": adapter},
+            )
+
+
+class TestBulkSyncB11:
+    """B11: Fence activates before second batch → batch1 written, batch2 not."""
+
+    def test_fence_mid_run(self):
+        from services.shared_search.incremental import bulk_sync_published_domain
+        from unittest.mock import patch
+
+        # fence calls: initial check (False), batch1 check (False), batch2 check (True)
+        fence_calls = [0]
+        def _fence(sb):
+            fence_calls[0] += 1
+            return fence_calls[0] >= 3  # inactive x1(initial)+x1(batch1), active x1(batch2)+
+
+        sb = MagicMock()
+        client = _fake_os_client()
+        client.mget.side_effect = lambda **kwargs: {
+            "docs": [{"_id": i, "found": False} for i in kwargs["body"]["ids"]]
+        }
+
+        ids = [f"c{i}" for i in range(4)]
+        hash_map = {cid: f"H{i}" for i, cid in enumerate(ids)}
+        expected = [{"canonical_id": cid, "content_hash": h} for cid, h in hash_map.items()]
+        documents = [_bulk_payload(cid) for cid in ids]
+        adapter = _make_bulk_adapter("CHEM", "CHEM", expected, documents)
+
+        def _bulk(client, index, items, chunk_size=500):
+            return len(list(items)), 0
+
+        with patch("services.shared_search.incremental._rebuild_active", side_effect=_fence):
+            with patch("services.shared_search.incremental.prepare_search_document",
+                       side_effect=_mock_prepare(hash_map)):
+                with patch("services.shared_search.incremental.bulk_upsert_documents",
+                           side_effect=_bulk):
+                    result = bulk_sync_published_domain(
+                        domain_name="CHEM", object_type="CHEM",
+                        os_client=client, supabase_client=sb,
+                        adapter_map={"CHEM": adapter},
+                        chunk_size=2,
+                    )
+
+        assert result["fence_blocked"] is True
+        assert result["batches"] == 1  # only first chunk written
+
+
+class TestBulkSyncB12:
+    """B12: Alias changes before second batch → batch1 written, batch2 not."""
+
+    def test_alias_drift_mid_run(self):
+        from services.shared_search.incremental import bulk_sync_published_domain
+        from unittest.mock import patch
+
+        sb = _fake_sb(rebuild_active=False)
+
+        alias_calls = [0]
+        def _get_alias(name):
+            alias_calls[0] += 1
+            if alias_calls[0] <= 2:  # initial freeze + batch-1 guard
+                return {"tai-original-001": {}}
+            return {"tai-new-index-002": {}}  # drifted at batch-2 guard
+
+        client = MagicMock()
+        client.indices.get_alias.side_effect = _get_alias
+        client.mget.side_effect = lambda **kwargs: {
+            "docs": [{"_id": i, "found": False} for i in kwargs["body"]["ids"]]
+        }
+
+        ids = [f"c{i}" for i in range(4)]
+        hash_map = {cid: f"H{i}" for i, cid in enumerate(ids)}
+        expected = [{"canonical_id": cid, "content_hash": h} for cid, h in hash_map.items()]
+        documents = [_bulk_payload(cid) for cid in ids]
+        adapter = _make_bulk_adapter("CHEM", "CHEM", expected, documents)
+
+        with patch("services.shared_search.incremental.prepare_search_document",
+                   side_effect=_mock_prepare(hash_map)):
+            with patch("services.shared_search.incremental.bulk_upsert_documents",
+                       return_value=(2, 0)):
+                result = bulk_sync_published_domain(
+                    domain_name="CHEM", object_type="CHEM",
+                    os_client=client, supabase_client=sb,
+                    adapter_map={"CHEM": adapter},
+                    chunk_size=2,
+                )
+
+        assert result["alias_drift"] is True
+        assert result["batches"] == 1  # first chunk written before drift detected
+
+
+class TestBulkSyncB13:
+    """B13: Bulk item failure → next batch not written, failed>0."""
+
+    def test_bulk_failure_stops(self):
+        from services.shared_search.incremental import bulk_sync_published_domain
+        from unittest.mock import patch
+
+        sb = _fake_sb(rebuild_active=False)
+        client = _fake_os_client()
+        client.mget.side_effect = lambda **kwargs: {
+            "docs": [{"_id": i, "found": False} for i in kwargs["body"]["ids"]]
+        }
+
+        ids = [f"c{i}" for i in range(4)]
+        hash_map = {cid: f"H{i}" for i, cid in enumerate(ids)}
+        expected = [{"canonical_id": cid, "content_hash": h} for cid, h in hash_map.items()]
+        documents = [_bulk_payload(cid) for cid in ids]
+        adapter = _make_bulk_adapter("CHEM", "CHEM", expected, documents)
+
+        call_counts = [0]
+        def _bulk(client, index, items, chunk_size=500):
+            call_counts[0] += 1
+            items_list = list(items)
+            if call_counts[0] == 1:
+                return len(items_list) - 1, 1  # 1 failure in first batch
+            return len(items_list), 0
+
+        with patch("services.shared_search.incremental.prepare_search_document",
+                   side_effect=_mock_prepare(hash_map)):
+            with patch("services.shared_search.incremental.bulk_upsert_documents",
+                       side_effect=_bulk):
+                result = bulk_sync_published_domain(
+                    domain_name="CHEM", object_type="CHEM",
+                    os_client=client, supabase_client=sb,
+                    adapter_map={"CHEM": adapter},
+                    chunk_size=2,
+                )
+
+        assert result["failed"] > 0
+        assert result["batches"] == 1  # stopped after first failed batch
+
+
+class TestBulkSyncB14:
+    """B14: No per-object GET; N=1000 → client.get calls=0, mget calls≈2."""
+
+    def test_no_per_object_get_calls(self):
+        from services.shared_search.incremental import bulk_sync_published_domain
+        from unittest.mock import patch
+
+        N = 1000
+        sb = _fake_sb(rebuild_active=False)
+        client = _fake_os_client()
+        client.mget.side_effect = lambda **kwargs: {
+            "docs": [{"_id": i, "found": True,
+                       "_source": {"content_hash": "SAME"}}
+                     for i in kwargs["body"]["ids"]]
+        }
+
+        expected = [{"canonical_id": f"c{i}", "content_hash": "SAME"} for i in range(N)]
+        adapter = _make_bulk_adapter("CHEM", "CHEM", expected, [])
+
+        bulk_sync_published_domain(
+            domain_name="CHEM", object_type="CHEM",
+            os_client=client, supabase_client=sb,
+            adapter_map={"CHEM": adapter},
+            mget_batch_size=500,
+        )
+
+        # Zero per-object GET calls
+        client.get.assert_not_called()
+        # Exactly 2 MGET calls (1000 / 500)
+        assert client.mget.call_count == 2
+
+
+class TestBulkSyncB15:
+    """B15: No per-object alias lookup; N=1000/chunk=500 → initial + batch guards."""
+
+    def test_alias_lookup_count(self):
+        from services.shared_search.incremental import bulk_sync_published_domain
+        from unittest.mock import patch
+
+        N = 1000
+        sb = _fake_sb(rebuild_active=False)
+        client = _fake_os_client()
+        client.mget.side_effect = lambda **kwargs: {
+            "docs": [{"_id": i, "found": False} for i in kwargs["body"]["ids"]]
+        }
+
+        hash_map = {f"c{i}": f"H{i}" for i in range(N)}
+        expected = [{"canonical_id": cid, "content_hash": h} for cid, h in hash_map.items()]
+        documents = [_bulk_payload(f"c{i}") for i in range(N)]
+        adapter = _make_bulk_adapter("CHEM", "CHEM", expected, documents)
+
+        with patch("services.shared_search.incremental.prepare_search_document",
+                   side_effect=_mock_prepare(hash_map)):
+            with patch("services.shared_search.incremental.bulk_upsert_documents",
+                       return_value=(500, 0)):
+                bulk_sync_published_domain(
+                    domain_name="CHEM", object_type="CHEM",
+                    os_client=client, supabase_client=sb,
+                    adapter_map={"CHEM": adapter},
+                    mget_batch_size=500,
+                    chunk_size=500,
+                )
+
+        # 1 initial freeze + 2 per-batch re-checks = 3
+        assert client.indices.get_alias.call_count == 3
+        # NOT 1000
+        assert client.indices.get_alias.call_count < N
+
+
+class TestBulkSyncB16:
+    """B16: No per-object fence reads; N=1000 → initial + batch guards."""
+
+    def test_fence_read_count(self):
+        from services.shared_search.incremental import bulk_sync_published_domain
+        from unittest.mock import patch
+
+        N = 1000
+        sb = _fake_sb(rebuild_active=False)
+        client = _fake_os_client()
+        client.mget.side_effect = lambda **kwargs: {
+            "docs": [{"_id": i, "found": False} for i in kwargs["body"]["ids"]]
+        }
+
+        hash_map = {f"c{i}": f"H{i}" for i in range(N)}
+        expected = [{"canonical_id": cid, "content_hash": h} for cid, h in hash_map.items()]
+        documents = [_bulk_payload(f"c{i}") for i in range(N)]
+        adapter = _make_bulk_adapter("CHEM", "CHEM", expected, documents)
+
+        fence_read_count = [0]
+
+        def _count_fence(sb):
+            fence_read_count[0] += 1
+            return False
+
+        with patch("services.shared_search.incremental._rebuild_active",
+                   side_effect=_count_fence):
+            with patch("services.shared_search.incremental.prepare_search_document",
+                       side_effect=_mock_prepare(hash_map)):
+                with patch("services.shared_search.incremental.bulk_upsert_documents",
+                           return_value=(500, 0)):
+                    bulk_sync_published_domain(
+                        domain_name="CHEM", object_type="CHEM",
+                        os_client=client, supabase_client=sb,
+                        adapter_map={"CHEM": adapter},
+                        mget_batch_size=500,
+                        chunk_size=500,
+                    )
+
+        # 1 initial + 2 per-batch = 3 total fence reads
+        assert fence_read_count[0] == 3
+        # NOT 1000
+        assert fence_read_count[0] < N

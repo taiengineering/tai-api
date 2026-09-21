@@ -333,8 +333,7 @@ def test_chem_adapter_public_visible_when_env_seo_preview(monkeypatch):
     adapter = ChemAdapter(fetch_current=lambda: [_chem_row()])
     d = list(adapter.iter_documents())[0]
     assert "PUBLIC" in d["visibility_scopes"]
-    # Even with public mode ON, no verified HTML route today.
-    assert d["public_url"] is None
+    assert d["public_url"] == "/msds/C00001"
     assert d["saas_url"] is None
 
 
@@ -346,6 +345,76 @@ def test_chem_adapter_never_asserts_chem_term(monkeypatch):
     assert d["subjects"] == []
     # But the chemical context tuple IS set (adapter policy).
     assert any(c["context_type"] == "chemical" for c in d["context"])
+
+
+# ---------------------------------------------------------------------------
+# C01-C06: public_url wiring — WO-MKT-SEARCH-04B-4A-FAST
+# ---------------------------------------------------------------------------
+
+def test_chem_c01_seo_preview_public_url(monkeypatch):
+    """C01: seo_preview → public_url = /msds/{chem_id}."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    adapter = ChemAdapter(fetch_current=lambda: [_chem_row(uuid="uuid-1", chem_id="C00001")])
+    d = list(adapter.iter_documents())[0]
+    assert d["public_url"] == "/msds/C00001"
+    assert d["publication_status"] == "PUBLISHED"
+    assert "PUBLIC" in d["visibility_scopes"]
+
+
+def test_chem_c02_full_mode_public_url(monkeypatch):
+    """C02: full → public_url = /msds/{chem_id}."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "full")
+    adapter = ChemAdapter(fetch_current=lambda: [_chem_row(uuid="uuid-1", chem_id="C00002")])
+    d = list(adapter.iter_documents())[0]
+    assert d["public_url"] == "/msds/C00002"
+    assert "PUBLIC" in d["visibility_scopes"]
+
+
+def test_chem_c03_off_mode_public_url_none(monkeypatch):
+    """C03: off → public_url None, no PUBLIC scope."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "off")
+    adapter = ChemAdapter(fetch_current=lambda: [_chem_row()])
+    d = list(adapter.iter_documents())[0]
+    assert d["public_url"] is None
+    assert "PUBLIC" not in d["visibility_scopes"]
+
+
+def test_chem_c04_canonical_uuid_route_chem_id(monkeypatch):
+    """C04: canonical_id = UUID, route key = chem_id (1:1 but separate identities)."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    adapter = ChemAdapter(fetch_current=lambda: [_chem_row(uuid="uuid-abc", chem_id="KE-99999")])
+    d = list(adapter.iter_documents())[0]
+    assert d["canonical_id"] == "uuid-abc"
+    assert d["source_key"] == "KE-99999"
+    assert d["public_url"] == "/msds/KE-99999"
+    assert "uuid-abc" not in d["public_url"]
+
+
+def test_chem_c05_encoding(monkeypatch):
+    """C05: chem_id with special chars is percent-encoded in URL."""
+    from urllib.parse import quote
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    tricky_chem_id = "한글 id/test"
+    row = dict(_chem_row(), source_key=tricky_chem_id, chem_id=tricky_chem_id)
+    adapter = ChemAdapter(fetch_current=lambda: [row])
+    d = list(adapter.iter_documents())[0]
+    assert d["public_url"] == f"/msds/{quote(tricky_chem_id, safe='')}"
+    assert " " not in d["public_url"]
+    assert "/" not in d["public_url"].replace("/msds/", "")
+
+
+def test_chem_c06_object_reindex_payload_wires_public_url(monkeypatch):
+    """C06: object_reindex_payload also returns the wired public_url."""
+    monkeypatch.setenv("KOSHA_MSDS_PUBLIC_MODE", "seo_preview")
+    row = _chem_row(uuid="uuid-1", chem_id="C00001")
+    adapter = ChemAdapter(
+        fetch_current=lambda: [],
+        fetch_by_id=lambda _: row,
+    )
+    payload = adapter.object_reindex_payload("uuid-1")
+    assert payload is not None
+    assert payload["public_url"] == "/msds/C00001"
+    assert payload["canonical_id"] == "uuid-1"
 
 
 def test_knowledge_adapter_only_published_rows_yield():

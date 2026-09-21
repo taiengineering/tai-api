@@ -25,9 +25,10 @@ REMOVED:
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Iterable, Optional
 
 from opensearchpy import NotFoundError
+from opensearchpy.helpers import bulk as os_bulk
 
 from services.shared_search.opensearch_store import doc_to_os_body
 
@@ -81,6 +82,64 @@ def upsert_document(
     client.index(index=index, id=doc_id, body=body, refresh=False)
     logger.debug("UPSERT %s (hash=%s)", doc_id, canonical_hash)
     return "UPSERT"
+
+
+def get_document_content_hashes(
+    client,
+    index: str,
+    doc_ids: list[str],
+) -> dict[str, Optional[str]]:
+    """Batch-read content_hash fields via OpenSearch _mget.
+
+    Returns a dict mapping doc_id → content_hash (None if not found or
+    field absent).  Raises on transport error (fail-closed).
+    """
+    if not doc_ids:
+        return {}
+    resp = client.mget(
+        body={"ids": doc_ids, "_source": ["content_hash"]},
+        index=index,
+    )
+    result: dict[str, Optional[str]] = {}
+    for item in resp.get("docs", []):
+        doc_id = item.get("_id")
+        if item.get("found"):
+            result[doc_id] = item.get("_source", {}).get("content_hash")
+        else:
+            result[doc_id] = None
+    return result
+
+
+def bulk_upsert_documents(
+    client,
+    index: str,
+    items: Iterable[tuple[str, dict]],
+    chunk_size: int = 500,
+) -> tuple[int, int]:
+    """Bulk-upsert (doc_id, wire) pairs into OpenSearch.
+
+    Returns ``(success, failed)``.  DELETE is not supported — this
+    helper is PUBLISHED-UPSERT-ONLY.
+    """
+    actions = [
+        {
+            "_index": index,
+            "_id": doc_id,
+            "_source": doc_to_os_body(wire),
+        }
+        for doc_id, wire in items
+    ]
+    if not actions:
+        return 0, 0
+    success, errors = os_bulk(
+        client,
+        actions,
+        chunk_size=chunk_size,
+        raise_on_error=False,
+        stats_only=True,
+    )
+    failed = errors if isinstance(errors, int) else len(errors or [])
+    return success, failed
 
 
 def delete_document(
