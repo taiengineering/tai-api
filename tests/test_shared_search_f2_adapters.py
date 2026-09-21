@@ -302,6 +302,63 @@ def test_knowledge_adapter_only_published_rows_yield():
     assert docs[0]["canonical_id"] == "h-2"
 
 
+def test_knowledge_k01_public_url_wired():
+    """K01: PUBLISHED row → public_url = /safety-search/knowledge/{doc_id}."""
+    adapter = KnowledgeAdapter(fetch_current=lambda: [_help_row(doc_id="h-001")])
+    d = list(adapter.iter_documents())[0]
+    assert d["object_type"] == "KNOWLEDGE"
+    assert d["canonical_id"] == "h-001"
+    assert d["source_key"] == "h-001"
+    assert d["public_url"] == "/safety-search/knowledge/h-001"
+    assert d["saas_url"] is None
+
+
+def test_knowledge_k02_slug_independence():
+    """K02: public_url uses doc_id, never slug."""
+    row = _help_row(doc_id="FAQ-test")
+    row["slug"] = "totally-different-slug"
+    adapter = KnowledgeAdapter(fetch_current=lambda: [row])
+    d = list(adapter.iter_documents())[0]
+    assert d["public_url"] == "/safety-search/knowledge/FAQ-test"
+    assert "totally-different-slug" not in d["public_url"]
+
+
+def test_knowledge_k03_encoding():
+    """K03: canonical_id identity preserved; URL segment percent-encoded."""
+    tricky = "한글 id/test"
+    from urllib.parse import quote
+    expected_url = "/safety-search/knowledge/" + quote(tricky, safe="")
+    row = _help_row(doc_id=tricky)
+    adapter = KnowledgeAdapter(fetch_current=lambda: [row])
+    d = list(adapter.iter_documents())[0]
+    assert d["canonical_id"] == tricky
+    assert d["source_key"] == tricky
+    assert d["public_url"] == expected_url
+    assert " " not in d["public_url"]
+    assert "/" not in d["public_url"].replace("/safety-search/knowledge/", "")
+
+
+def test_knowledge_k04_non_published_yields_nothing():
+    """K04: DRAFT rows produce no documents."""
+    adapter = KnowledgeAdapter(fetch_current=lambda: [
+        _help_row(doc_id="h-draft", status="DRAFT"),
+    ])
+    assert list(adapter.iter_documents()) == []
+
+
+def test_knowledge_k05_object_reindex_payload_wires_public_url():
+    """K05: object_reindex_payload also returns the wired public_url."""
+    row = _help_row(doc_id="h-001")
+    adapter = KnowledgeAdapter(
+        fetch_current=lambda: [],
+        fetch_by_id=lambda _: row,
+    )
+    payload = adapter.object_reindex_payload("h-001")
+    assert payload is not None
+    assert payload["public_url"] == "/safety-search/knowledge/h-001"
+    assert payload["canonical_id"] == "h-001"
+
+
 def test_precedent_adapter_is_active_false_rejected():
     adapter = PrecedentAdapter(fetch_current=lambda: [
         _precedent_row(pid="p-1", is_active=True),

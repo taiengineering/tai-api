@@ -7,13 +7,16 @@ related_pages, menu_group, doc_id, slug, title, status, updated_at).
 
 Publication gate: `status = 'PUBLISHED'`.
 
-Public/SaaS HTML routes not verified in tai-www today — returning
-null on both URL fields (F2 CO §24).
+Verified Public Search detail route:
+ /safety-search/knowledge/{canonical_id} (WO-MKT-SEARCH-04B-2C-1)
+
+SaaS route: none.
 """
 from __future__ import annotations
 
 import re
 from typing import Callable, Iterable, Iterator, Optional
+from urllib.parse import quote
 
 from services.shared_search.adapters._common import (
     MISSING_TIMESTAMP, as_str_list, coerce_iso,
@@ -70,6 +73,7 @@ def _normalize_help(row: dict) -> Optional[dict]:
     ts = first_present_iso(row.get("updated_at"))
     if ts is MISSING_TIMESTAMP:
         return None
+    canonical_id = str(doc_id)
     # F2 CO §23: real columns are body / question / answer_short (not
     # body_text / body_stripped).
     body_html = row.get("body") or ""
@@ -79,9 +83,9 @@ def _normalize_help(row: dict) -> Optional[dict]:
     menu_group = row.get("menu_group")
     return {
         "object_type": KnowledgeAdapter.object_type,
-        "canonical_id": str(doc_id),
+        "canonical_id": canonical_id,
         "source_id": "TAI_HELP_CENTER",
-        "source_key": str(doc_id),
+        "source_key": canonical_id,
         "title": str(title),
         "summary": (answer_short or (body_text[:200] if body_text else None)),
         "search_text": " ".join(as_str_list([
@@ -91,8 +95,8 @@ def _normalize_help(row: dict) -> Optional[dict]:
         "keywords": as_str_list([menu_group]),
         "subjects": [],
         "context": [],
-        # F2 CO §24: no verified tai-www help route today.
-        "public_url": None,
+        # Verified Public Search canonical detail route (WO-MKT-SEARCH-04B-2C-1).
+        "public_url": f"/safety-search/knowledge/{quote(canonical_id, safe='')}",
         "saas_url": None,
         "publication_status": "PUBLISHED",
         "visibility_scopes": ["PUBLIC", "SAAS", "PAID"],
