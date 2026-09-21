@@ -333,6 +333,7 @@ def _build_legal_detail(canonical_id: str, row: dict) -> dict:
         "title": title,
         "summary": None,
         "detail": {
+            "law_article_id": canonical_id,
             "law_name": law_name or None,
             "article_no": article_no,
             "article_sub_no": article_sub_no,
@@ -351,9 +352,20 @@ async def public_legal_detail(canonical_id: str):
     canonical_id = law_article.id (UUID).
     Eligibility: law_master.is_active AND current_version_id match AND not deleted.
     404 for non-eligible or missing.
+    503 LEGAL_IDENTITY_MISMATCH if row.id != requested canonical_id.
+    503 LEGAL_DETAIL_INCOMPLETE if article_text is absent.
     """
     client = _legal_supabase_dep()
     row = get_current_legal_article_by_id(client, canonical_id)
     if row is None:
         raise HTTPException(status_code=404, detail="LEGAL_NOT_FOUND")
+
+    row_id = str(row.get("id") or "")
+    if row_id != canonical_id:
+        raise HTTPException(status_code=503, detail="LEGAL_IDENTITY_MISMATCH")
+
+    article_text = row.get("article_text")
+    if not article_text or not article_text.strip():
+        raise HTTPException(status_code=503, detail="LEGAL_DETAIL_INCOMPLETE")
+
     return _build_legal_detail(canonical_id, row)

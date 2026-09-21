@@ -1,5 +1,5 @@
-"""L01-L12: LEGAL canonical detail endpoint tests.
-WO-MKT-SEARCH-04B-5B-1.
+"""L01-L15: LEGAL canonical detail endpoint tests.
+WO-MKT-SEARCH-04B-5B-1 + PATCH1.
 
 No real DB / network. get_current_legal_article_by_id and
 _legal_supabase_dep are mocked throughout.
@@ -112,8 +112,8 @@ def test_l04_detail_fields_present(client):
     for field in ("object_type", "canonical_id", "title", "summary"):
         assert field in body, f"top-level field missing: {field}"
     detail = body["detail"]
-    for field in ("law_name", "article_no", "article_sub_no", "article_title",
-                  "article_text", "enforcement_date", "updated_at"):
+    for field in ("law_article_id", "law_name", "article_no", "article_sub_no",
+                  "article_title", "article_text", "enforcement_date", "updated_at"):
         assert field in detail, f"detail field missing: {field}"
 
 
@@ -214,3 +214,53 @@ def test_l12_regression_other_routes(client):
     with patch.object(pss_mod, "search_kosha_public", new=AsyncMock(return_value=mock_result)):
         r = client.get("/public/safety-search/kosha?q=test")
     assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# L13 — identity mismatch guard: row.id != requested → 503
+# ---------------------------------------------------------------------------
+_OTHER_ID = "ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb"
+
+
+def test_l13_identity_mismatch_returns_503(client):
+    row = _eligible_row()
+    row["id"] = _OTHER_ID  # helper returned a different row
+    sb = patch.object(pss_mod, "_legal_supabase_dep", return_value=_MOCK_CLIENT)
+    fn = patch.object(pss_mod, "get_current_legal_article_by_id", return_value=row)
+    with sb, fn:
+        r = client.get(f"/public/safety-search/legal/{_CANONICAL_ID}")
+    assert r.status_code == 503
+    assert r.json()["detail"] == "LEGAL_IDENTITY_MISMATCH"
+
+
+# ---------------------------------------------------------------------------
+# L14 — article_text null → 503 LEGAL_DETAIL_INCOMPLETE
+# ---------------------------------------------------------------------------
+def test_l14_null_article_text_returns_503(client):
+    row = _eligible_row(article_text=None)
+    sb, fn = _patched(row)
+    with sb, fn:
+        r = client.get(f"/public/safety-search/legal/{_CANONICAL_ID}")
+    assert r.status_code == 503
+    assert r.json()["detail"] == "LEGAL_DETAIL_INCOMPLETE"
+
+
+def test_l14b_blank_article_text_returns_503(client):
+    row = _eligible_row(article_text="   ")
+    sb, fn = _patched(row)
+    with sb, fn:
+        r = client.get(f"/public/safety-search/legal/{_CANONICAL_ID}")
+    assert r.status_code == 503
+    assert r.json()["detail"] == "LEGAL_DETAIL_INCOMPLETE"
+
+
+# ---------------------------------------------------------------------------
+# L15 — identity proof: canonical_id == detail.law_article_id == requested
+# ---------------------------------------------------------------------------
+def test_l15_identity_proof(client):
+    sb, fn = _patched(_eligible_row())
+    with sb, fn:
+        r = client.get(f"/public/safety-search/legal/{_CANONICAL_ID}")
+    body = r.json()
+    assert body["canonical_id"] == _CANONICAL_ID
+    assert body["detail"]["law_article_id"] == _CANONICAL_ID
