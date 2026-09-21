@@ -40,6 +40,7 @@ Expected dict keys (from production binding assembly):
 from __future__ import annotations
 
 from typing import Callable, Iterable, Iterator, Optional
+from urllib.parse import quote
 
 from services.shared_search.adapters._common import (
     MISSING_TIMESTAMP, as_str_list, coerce_iso,
@@ -129,9 +130,7 @@ def _normalize_material(row: dict) -> Optional[dict]:
         "subjects": [],
         "context": ([{"context_type": "sector", "context_key": industry}]
                     if industry else []),
-        # No verified tai-www material HTML route today; JSON lives on
-        # tai-api. Returning null avoids fabricating a link.
-        "public_url": None,
+        "public_url": f"/safety-news/{quote(str(mid), safe='')}",
         "saas_url": None,
         "publication_status": "PUBLISHED",
         "visibility_scopes": ["PUBLIC", "SAAS", "PAID"],
