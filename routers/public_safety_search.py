@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from services import safe_help_svc
 from services.kosha_safety_materials.display import load_public_material
+from services.shared_search.production_bindings import get_current_legal_article_by_id
 
 from services.kosha_smart_search import (
     MAX_PAGE_SIZE,
@@ -288,3 +289,83 @@ async def public_material_detail(
         raise HTTPException(status_code=503, detail="MATERIAL_IDENTITY_MISMATCH")
 
     return _build_material_search_detail(canonical_id, display)
+
+
+# ---------------------------------------------------------------------------
+# GET /public/safety-search/legal/{canonical_id} — LEGAL detail
+# canonical_id = law_article.id (UUID).
+# Eligibility: law_master.is_active AND current_version_id match AND not deleted.
+# ---------------------------------------------------------------------------
+
+_legal_supabase = None
+
+
+def _legal_supabase_dep():
+    global _legal_supabase
+    if _legal_supabase is None:
+        from supabase import create_client
+        _legal_supabase = create_client(
+            os.environ["SUPABASE_URL"],
+            os.environ["SUPABASE_SERVICE_ROLE_KEY"],
+        )
+    return _legal_supabase
+
+
+def _build_legal_detail(canonical_id: str, row: dict) -> dict:
+    law_name = row.get("law_name") or ""
+    article_no = row.get("article_no")
+    article_sub_no = row.get("article_sub_no")
+    article_title = row.get("article_title")
+
+    if law_name and article_no:
+        title_parts = [law_name, f"제{article_no}조"]
+        if article_sub_no:
+            title_parts[-1] = title_parts[-1] + f"의{article_sub_no}"
+        if article_title:
+            title_parts.append(f"({article_title})")
+        title = " ".join(title_parts)
+    else:
+        title = article_title or f"law_article/{canonical_id}"
+
+    return {
+        "object_type": "LEGAL",
+        "canonical_id": canonical_id,
+        "title": title,
+        "summary": None,
+        "detail": {
+            "law_article_id": canonical_id,
+            "law_name": law_name or None,
+            "article_no": article_no,
+            "article_sub_no": article_sub_no,
+            "article_title": article_title,
+            "article_text": row.get("article_text"),
+            "enforcement_date": row.get("enforcement_date"),
+            "updated_at": str(row["updated_at"]) if row.get("updated_at") else None,
+        },
+    }
+
+
+@router.get("/legal/{canonical_id}")
+async def public_legal_detail(canonical_id: str):
+    """LEGAL canonical detail for Public Search results.
+
+    canonical_id = law_article.id (UUID).
+    Eligibility: law_master.is_active AND current_version_id match AND not deleted.
+    404 for non-eligible or missing.
+    503 LEGAL_IDENTITY_MISMATCH if row.id != requested canonical_id.
+    503 LEGAL_DETAIL_INCOMPLETE if article_text is absent.
+    """
+    client = _legal_supabase_dep()
+    row = get_current_legal_article_by_id(client, canonical_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="LEGAL_NOT_FOUND")
+
+    row_id = str(row.get("id") or "")
+    if row_id != canonical_id:
+        raise HTTPException(status_code=503, detail="LEGAL_IDENTITY_MISMATCH")
+
+    article_text = row.get("article_text")
+    if not article_text or not article_text.strip():
+        raise HTTPException(status_code=503, detail="LEGAL_DETAIL_INCOMPLETE")
+
+    return _build_legal_detail(canonical_id, row)
