@@ -605,6 +605,81 @@ def test_legal_adapter_blocks_unsupported_subtype():
     assert [d["canonical_id"] for d in yielded] == ["art-1"]
 
 
+# ---------------------------------------------------------------------------
+# LG01-LG07 — LEGAL public_url (WO-MKT-SEARCH-04B-5C-1)
+# ---------------------------------------------------------------------------
+
+
+def test_lg01_public_url_present():
+    """LG01: law_article document has a non-None public_url."""
+    adapter = LegalAdapter(fetch_current=lambda: [_legal_row("law_article", ident="art-1")])
+    doc = list(adapter.iter_documents())[0]
+    assert doc["public_url"] is not None
+
+
+def test_lg02_public_url_format():
+    """LG02: public_url is /safety-search/legal/{canonical_id}."""
+    adapter = LegalAdapter(fetch_current=lambda: [_legal_row("law_article", ident="art-1")])
+    doc = list(adapter.iter_documents())[0]
+    assert doc["public_url"] == "/safety-search/legal/art-1"
+
+
+def test_lg03_public_url_uses_canonical_id():
+    """LG03: public_url embeds the same UUID that appears in canonical_id."""
+    uid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    adapter = LegalAdapter(fetch_current=lambda: [_legal_row("law_article", ident=uid)])
+    doc = list(adapter.iter_documents())[0]
+    assert doc["canonical_id"] == uid
+    assert doc["public_url"] == f"/safety-search/legal/{uid}"
+
+
+def test_lg04_public_url_percent_encodes_special_chars():
+    """LG04: canonical_ids with URL-unsafe characters are percent-encoded."""
+    ident = "abc def"
+    adapter = LegalAdapter(fetch_current=lambda: [_legal_row("law_article", ident=ident)])
+    doc = list(adapter.iter_documents())[0]
+    assert doc["public_url"] == "/safety-search/legal/abc%20def"
+    assert " " not in doc["public_url"]
+
+
+def test_lg05_blocked_subtype_has_no_public_url():
+    """LG05: obligation_atom rows are blocked and never appear in output."""
+    from services.shared_search import AdapterBlockedSubtype
+    adapter = LegalAdapter(fetch_current=lambda: [
+        _legal_row("obligation_atom", ident="obl-1"),
+    ])
+    docs = []
+    with pytest.raises(AdapterBlockedSubtype):
+        for d in adapter.iter_documents():
+            docs.append(d)
+    assert docs == []
+
+
+def test_lg06_object_reindex_public_url():
+    """LG06: object_reindex_payload also includes correct public_url."""
+    uid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    row = _legal_row("law_article", ident=uid)
+    adapter = LegalAdapter(
+        fetch_current=lambda: [],
+        fetch_by_id=lambda _id: row,
+    )
+    doc = adapter.object_reindex_payload(uid)
+    assert doc is not None
+    assert doc["public_url"] == f"/safety-search/legal/{uid}"
+
+
+def test_lg07_public_url_not_none_in_full_rebuild(monkeypatch):
+    """LG07: public_url is wired through the full rebuild → store path."""
+    store = MemoryStore()
+    indexer = Indexer(store)
+    indexer.full_rebuild([
+        LegalAdapter(fetch_current=lambda: [_legal_row("law_article", ident="art-1")]),
+    ])
+    row = store.get_current("LEGAL", "art-1")
+    assert row is not None
+    assert row["public_url"] == "/safety-search/legal/art-1"
+
+
 def test_risk_adapter_yields_nothing_by_default():
     adapter = RiskAdapter()
     assert list(adapter.iter_documents()) == []
