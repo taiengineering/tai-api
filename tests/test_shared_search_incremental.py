@@ -1094,6 +1094,7 @@ class TestBulkSyncB01:
             domain_name="CHEM", object_type="CHEM",
             os_client=client, supabase_client=sb,
             adapter_map={"CHEM": adapter},
+            db_canonical_ids={"c1"},
         )
         assert result["fence_blocked"] is True
         assert result["upsert"] == 0
@@ -1115,6 +1116,7 @@ class TestBulkSyncB02:
                 domain_name="CHEM", object_type="CHEM",
                 os_client=client, supabase_client=sb,
                 adapter_map={"CHEM": adapter},
+                db_canonical_ids=set(),
             )
 
     def test_alias_two_indices_raises(self):
@@ -1128,6 +1130,7 @@ class TestBulkSyncB02:
                 domain_name="CHEM", object_type="CHEM",
                 os_client=client, supabase_client=sb,
                 adapter_map={"CHEM": adapter},
+                db_canonical_ids=set(),
             )
 
 
@@ -1144,6 +1147,7 @@ class TestBulkSyncB03:
                 domain_name="CHEM", object_type="LEGAL",  # mismatch
                 os_client=client, supabase_client=sb,
                 adapter_map={"CHEM": adapter},
+                db_canonical_ids=set(),
             )
         client.mget.assert_not_called()
 
@@ -1167,6 +1171,7 @@ class TestBulkSyncB04:
                 domain_name="CHEM", object_type="CHEM",
                 os_client=client, supabase_client=sb,
                 adapter_map={"CHEM": adapter},
+                db_canonical_ids={"c1"},
             )
         client.mget.assert_not_called()
 
@@ -1211,6 +1216,26 @@ class TestBulkSyncB05:
             )
 
 
+class TestBulkSyncB05C:
+    """B05C: db_canonical_ids is required — omitting it raises TypeError."""
+
+    def test_omitting_db_canonical_ids_raises_typeerror(self):
+        from services.shared_search.incremental import bulk_sync_published_domain
+        sb = _fake_sb(rebuild_active=False)
+        client = _fake_os_client()
+        adapter = _make_bulk_adapter("CHEM", "CHEM",
+            expected_hashes=[{"canonical_id": "c1", "content_hash": "H1"}],
+            documents=[],
+        )
+        with pytest.raises(TypeError):
+            bulk_sync_published_domain(
+                domain_name="CHEM", object_type="CHEM",
+                os_client=client, supabase_client=sb,
+                adapter_map={"CHEM": adapter},
+                # db_canonical_ids intentionally omitted
+            )
+
+
 class TestBulkSyncB06:
     """B06: MGET all hashes same → NOOP=N, UPSERT=0, bulk call=0."""
 
@@ -1226,6 +1251,7 @@ class TestBulkSyncB06:
             domain_name="CHEM", object_type="CHEM",
             os_client=client, supabase_client=sb,
             adapter_map={"CHEM": adapter},
+            db_canonical_ids=set(ids),
         )
         assert result["noop"] == 5
         assert result["upsert"] == 0
@@ -1263,6 +1289,7 @@ class TestBulkSyncB07:
                     domain_name="CHEM", object_type="CHEM",
                     os_client=client, supabase_client=sb,
                     adapter_map={"CHEM": adapter},
+                    db_canonical_ids=set(hash_map),
                 )
 
         assert result["noop"] == 2
@@ -1295,6 +1322,7 @@ class TestBulkSyncB08:
                     domain_name="CHEM", object_type="CHEM",
                     os_client=client, supabase_client=sb,
                     adapter_map={"CHEM": adapter},
+                    db_canonical_ids={"c1"},
                 )
 
         assert result["upsert"] == 1
@@ -1323,6 +1351,7 @@ class TestBulkSyncB09:
                     domain_name="CHEM", object_type="CHEM",
                     os_client=client, supabase_client=sb,
                     adapter_map={"CHEM": adapter},
+                    db_canonical_ids={"c1"},
                 )
 
 
@@ -1343,6 +1372,7 @@ class TestBulkSyncB10:
                 domain_name="CHEM", object_type="CHEM",
                 os_client=client, supabase_client=sb,
                 adapter_map={"CHEM": adapter},
+                db_canonical_ids={"c1"},
             )
 
 
@@ -1383,6 +1413,7 @@ class TestBulkSyncB11:
                         domain_name="CHEM", object_type="CHEM",
                         os_client=client, supabase_client=sb,
                         adapter_map={"CHEM": adapter},
+                        db_canonical_ids=set(ids),
                         chunk_size=2,
                     )
 
@@ -1426,6 +1457,7 @@ class TestBulkSyncB12:
                     domain_name="CHEM", object_type="CHEM",
                     os_client=client, supabase_client=sb,
                     adapter_map={"CHEM": adapter},
+                    db_canonical_ids=set(ids),
                     chunk_size=2,
                 )
 
@@ -1468,6 +1500,7 @@ class TestBulkSyncB13:
                     domain_name="CHEM", object_type="CHEM",
                     os_client=client, supabase_client=sb,
                     adapter_map={"CHEM": adapter},
+                    db_canonical_ids=set(ids),
                     chunk_size=2,
                 )
 
@@ -1498,6 +1531,7 @@ class TestBulkSyncB14:
             domain_name="CHEM", object_type="CHEM",
             os_client=client, supabase_client=sb,
             adapter_map={"CHEM": adapter},
+            db_canonical_ids={f"c{i}" for i in range(N)},
             mget_batch_size=500,
         )
 
@@ -1534,6 +1568,7 @@ class TestBulkSyncB15:
                     domain_name="CHEM", object_type="CHEM",
                     os_client=client, supabase_client=sb,
                     adapter_map={"CHEM": adapter},
+                    db_canonical_ids={f"c{i}" for i in range(N)},
                     mget_batch_size=500,
                     chunk_size=500,
                 )
@@ -1579,6 +1614,7 @@ class TestBulkSyncB16:
                         domain_name="CHEM", object_type="CHEM",
                         os_client=client, supabase_client=sb,
                         adapter_map={"CHEM": adapter},
+                        db_canonical_ids={f"c{i}" for i in range(N)},
                         mget_batch_size=500,
                         chunk_size=500,
                     )

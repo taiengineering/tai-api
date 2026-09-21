@@ -224,7 +224,7 @@ def bulk_sync_published_domain(
     os_client: Any,
     supabase_client: Any,
     adapter_map: Optional[dict] = None,
-    db_canonical_ids: Optional[set] = None,
+    db_canonical_ids: set,
     mget_batch_size: int = 500,
     chunk_size: int = 500,
 ) -> dict:
@@ -239,8 +239,8 @@ def bulk_sync_published_domain(
 
     Args:
         db_canonical_ids: frozen set of canonical IDs currently
-            eligible in the DB.  Must equal the adapter expected set
-            (set-parity gate).  Pass None to skip parity check.
+            eligible in the DB.  Required — must equal the adapter
+            expected set (set-parity gate, always enforced, fail-closed).
 
     Returns a result dict with keys:
         domain_name, object_type, physical_index,
@@ -320,15 +320,14 @@ def bulk_sync_published_domain(
 
     result["expected"] = len(expected_hashes)
 
-    # --- set parity gate ---
-    if db_canonical_ids is not None:
-        db_only = db_canonical_ids - set(expected_hashes)
-        adapter_only = set(expected_hashes) - db_canonical_ids
-        if db_only or adapter_only:
-            raise ProjectionWriteError(
-                f"Set parity failed for {domain_name}: "
-                f"DB-only={len(db_only)}, adapter-only={len(adapter_only)}"
-            )
+    # --- set parity gate (always enforced — fail-closed) ---
+    db_only = db_canonical_ids - set(expected_hashes)
+    adapter_only = set(expected_hashes) - db_canonical_ids
+    if db_only or adapter_only:
+        raise ProjectionWriteError(
+            f"Set parity failed for {domain_name}: "
+            f"DB-only={len(db_only)}, adapter-only={len(adapter_only)}"
+        )
 
     # --- MGET hash comparison ---
     doc_ids_list = [document_id(object_type, cid) for cid in expected_hashes]
