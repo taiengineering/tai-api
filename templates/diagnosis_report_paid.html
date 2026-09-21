@@ -429,7 +429,7 @@ tr:last-child td { border-bottom: none; }
     </div>
     <div class="card" style="text-align: center; border-color: var(--blue);">
       <div class="big-num" style="color: var(--red);">{{ appointment_count }}</div>
-      <div class="num-label">선임 의무 (미이행 시 즉시 과태료)</div>
+      <div class="num-label">선임 의무</div>
     </div>
     <div class="card" style="text-align: center;">
       <div class="big-num">{{ law_count }}</div>
@@ -456,31 +456,6 @@ tr:last-child td { border-bottom: none; }
       <div class="sl">보고·신고</div>
     </div>
   </div>
-
-  <!-- TOP 5 리스크 -->
-  <div class="card">
-    <div style="font-size: 9pt; font-weight: 800; color: var(--ink); margin-bottom: 8px;">⚠ 주요 리스크 TOP {{ top5_risks | length }}</div>
-    {% for r in top5_risks %}
-    <div class="risk-row">
-      <div class="risk-rank">{{ loop.index }}</div>
-      <div class="risk-content">
-        <div class="rc-title">{{ r.title }}</div>
-        <div class="rc-law">{{ r.law_ref }}{%- if r.penalty_summary %} · {{ r.penalty_summary }}{% endif %}</div>
-      </div>
-    </div>
-    {% endfor %}
-  </div>
-
-  <!-- 미이행 시 최대 과태료 -->
-  {% if max_penalty_text %}
-  <div class="card-red">
-    <div style="font-size: 8.5pt; font-weight: 800; color: var(--red); margin-bottom: 4px;">미이행 시 최대 과태료</div>
-    <div style="font-size: 9pt; font-weight: 700; color: var(--ink);">{{ max_penalty_text }}</div>
-    {% if csia_applicable %}
-    <div style="font-size: 7.5pt; color: var(--red); margin-top: 4px;">* 중대재해처벌법 적용 사업장 — 사망사고 발생 시 경영책임자 형사처벌</div>
-    {% endif %}
-  </div>
-  {% endif %}
 
   <div style="font-size: 7.5pt; color: var(--sub); margin-top: 8px;">
     상세 내역은 본문 SECTION 02 및 부록 A·B·C를 참조하시기 바랍니다.
@@ -634,18 +609,6 @@ tr:last-child td { border-bottom: none; }
   </div>
   {% endif %}
 
-  <!-- 중대재해법 박스 -->
-  {% if csia_applicable %}
-  <div class="card-red" style="margin-top: 10px;">
-    <div style="font-size: 9pt; font-weight: 800; color: var(--red); margin-bottom: 5px;">⚠ 중대재해처벌법 적용 사업장</div>
-    <div style="font-size: 8pt; color: #7f1d1d; line-height: 1.6;">
-      상시근로자 5인 이상 사업장으로 중대재해처벌법이 적용됩니다.<br>
-      중대산업재해 발생 시 경영책임자는 1년 이상 징역 또는 10억원 이하 벌금에 처할 수 있습니다.<br>
-      안전보건관리체계 구축·이행이 법적 의무입니다.
-    </div>
-  </div>
-  {% endif %}
-
   <div class="rpt-footer">
     <span class="rpt-footer-disclaimer">본 진단 결과는 참고용이며 법적 효력이 없습니다. 정확한 법적 판단은 관련 전문가에게 문의하시기 바랍니다.</span>
     <span>p.4</span>
@@ -728,19 +691,6 @@ tr:last-child td { border-bottom: none; }
   <div class="sec-tag">SECTION 03</div>
   <div class="sec-title">처벌 조항 및 리스크</div>
   <div class="sec-subtitle">미이행 시 법적 제재 항목 — penalty_amount 기재 규칙 기준</div>
-
-  <!-- 중대재해법 경고 박스 -->
-  {% if csia_applicable %}
-  <div class="penalty-warn">
-    <div class="pw-title">⚠ 중대재해처벌법 — 경영책임자 형사처벌</div>
-    <div class="pw-body">
-      안전보건관리체계 미구축 등 의무 위반으로 중대산업재해 발생 시:<br>
-      경영책임자 → 1년 이상 징역 또는 10억원 이하 벌금<br>
-      법인 → 50억원 이하 벌금 (양벌규정)<br>
-      <strong>즉각적인 체계 구축이 필요합니다.</strong>
-    </div>
-  </div>
-  {% endif %}
 
   <!-- 과태료 있는 규칙 테이블 -->
   {% set penalty_rules = all_rules | selectattr('penalty_summary') | list %}
@@ -881,33 +831,11 @@ tr:last-child td { border-bottom: none; }
     안전관리자 1인 집중 구조 → 전 작업자 참여 분산 구조</p>
   </div>
 
-  <div class="saas-plans">
-    <div class="saas-plan-card">
-      <div class="sp-sector">건물</div>
-      <div class="sp-price">59,000원~</div>
-      <div class="sp-label">/월 · VAT 별도</div>
-    </div>
-    <div class="saas-plan-card {% if recommended_plan_name == 'INDUSTRY' %}saas-plan-recommended{% endif %}">
-      <div class="sp-sector">산업</div>
-      <div class="sp-price">79,000원~</div>
-      <div class="sp-label">/월 · VAT 별도</div>
-    </div>
-    <div class="saas-plan-card">
-      <div class="sp-sector">건설</div>
-      <div class="sp-price">145,000원~</div>
-      <div class="sp-label">/월 · VAT 별도</div>
-    </div>
+  <div class="card-blue" style="margin-top: 14px; text-align: center; padding: 16px 20px;">
+    <div style="font-size: 9pt; color: var(--sub); margin-bottom: 6px;">진단 후 지속적인 의무·점검 관리는</div>
+    <div style="font-size: 12pt; font-weight: 900; color: var(--blue-dark);">TAI Safe에서 이어서 관리할 수 있습니다</div>
+    <div style="font-size: 8.5pt; color: var(--sub); margin-top: 8px;">🌐 safe.taieng.co.kr</div>
   </div>
-
-  {% if recommended_plan_name %}
-  <div class="card-blue" style="margin-top: 10px; text-align: center;">
-    <div style="font-size: 8pt; color: var(--sub); margin-bottom: 4px;">귀 사업장 추천 플랜</div>
-    <div style="font-size: 12pt; font-weight: 900; color: var(--blue-dark);">{{ recommended_plan_name }}</div>
-    {% if recommended_plan_price %}
-    <div style="font-size: 10pt; font-weight: 700; color: var(--blue);">{{ recommended_plan_price }}</div>
-    {% endif %}
-  </div>
-  {% endif %}
 
   <div class="card" style="margin-top: 10px; text-align: center;">
     <div style="font-size: 9pt; font-weight: 700; color: var(--ink); margin-bottom: 8px;">지금 바로 시작하기</div>

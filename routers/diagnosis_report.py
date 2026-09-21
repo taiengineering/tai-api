@@ -1,15 +1,18 @@
 """
-routers/diagnosis_report.py — v2.0.0
+routers/diagnosis_report.py — v3.0.0
 
 유료 진단 상세 PDF 생성 엔드포인트
   GET /diagnosis/report-pdf/{public_token}
 
+v3.0.0 (2026-09-21):
+  - SaaS 추천 플랜/가격 제거 (RECOMMEND_PLAN)
+  - 과태료 최대값 계산 제거 (_extract_max_penalty, max_penalty_text)
+  - worker_count 기반 중대재해법 heuristic 제거 (csia_applicable)
+  - TOP 5 리스크 생성 제거 (_build_top5_risks)
+  - risk_level 기본값 생성 제거
+  - 렌더러는 DB/엔진 값만 표현, 새로운 판단 생성 금지
 v2.0.0 (2026-04-20):
   - xhtml2pdf → Gotenberg Chromium PDF 엔진 전환
-  - _replace_css_vars() 제거 (Gotenberg는 CSS 변수 지원)
-v1.0.1 (2026-04-19):
-  - xhtml2pdf CSS 변수(var()) 미지원 → _replace_css_vars() 자동 치환
-  - _extract_max_penalty 징역 우선 로직 유지
 v1.0.0 (2026-04-18):
   - 최초 생성
 """
@@ -60,16 +63,6 @@ OB_LABEL: Dict[str, str] = {
     "NOTIFY":  "신고",
 }
 
-# 추천 플랜 매핑
-RECOMMEND_PLAN: Dict[str, Dict[str, str]] = {
-    "BUILDING_V2":          {"name": "건물 소형 플랜",  "price": "월 59,000원~"},
-    "BUILDING_LARGE_V2":    {"name": "건물 대형 플랜",  "price": "월 145,000원~"},
-    "INDUSTRY_V2":          {"name": "산업 STARTER",   "price": "월 79,000원~"},
-    "INDUSTRY_STANDARD":    {"name": "산업 BUSINESS",  "price": "월 149,000원~"},
-    "INDUSTRY_PREMIUM":     {"name": "산업 PRO",       "price": "월 249,000원~"},
-    "CONSTRUCTION":         {"name": "건설 STANDARD",  "price": "월 145,000원~"},
-    "CONSTRUCTION_PREMIUM": {"name": "건설 PREMIUM",   "price": "월 385,000원~"},
-}
 
 
 # ───────────────────────────────────────────────────────────
@@ -125,52 +118,6 @@ def _build_law_groups(
     return law_groups, remaining
 
 
-def _build_top5_risks(
-    rules: List[Dict[str, Any]],
-    appointment: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    """
-    TOP 5 리스크 항목 구성:
-      1. 선임 의무 우선
-      2. 과태료 있는 항목
-      3. 나머지 채우기
-    """
-    seen: set = set()
-    result: List[Dict[str, Any]] = []
-
-    def _add(r: Dict[str, Any]) -> None:
-        key = (r.get("law_name"), r.get("law_article"), r.get("obligation_type"))
-        if key not in seen and len(result) < 5:
-            seen.add(key)
-            result.append({
-                "title":          r.get("obligation_summary") or "",
-                "law_ref":        f"{r.get('law_name','')} {r.get('law_article','')}".strip(),
-                "penalty_summary": r.get("penalty_summary") or "",
-            })
-
-    for r in appointment:
-        _add(r)
-    for r in rules:
-        if r.get("penalty_summary"):
-            _add(r)
-    for r in rules:
-        _add(r)
-
-    return result
-
-
-def _extract_max_penalty(rules: List[Dict[str, Any]]) -> str:
-    """penalty_summary 중 가장 큰 금액 텍스트 반환 (단순 첫 번째 유의미 값 사용)."""
-    # 중대재해 먼저
-    for r in rules:
-        ps = (r.get("penalty_summary") or "").strip()
-        if ps and "징역" in ps:
-            return ps
-    for r in rules:
-        ps = (r.get("penalty_summary") or "").strip()
-        if ps:
-            return ps
-    return ""
 
 
 def _render_html(template_vars: Dict[str, Any]) -> str:
@@ -296,8 +243,6 @@ async def get_paid_report_pdf(public_token: str):
 
     # 5. 전처리
     law_groups, remaining_law_count = _build_law_groups(all_rules, max_groups=10)
-    top5_risks = _build_top5_risks(all_rules, appointment_rules)
-    max_penalty_text = _extract_max_penalty(all_rules)
 
     summary = full_result.get("summary") or {}
     total           = full_result.get("applicable_count") or summary.get("total") or len(all_rules)
@@ -307,14 +252,6 @@ async def get_paid_report_pdf(public_token: str):
     report_cnt      = (summary.get("report") or 0) + (summary.get("notify") or 0)
     law_badges      = full_result.get("law_badges") or []
     law_count       = len(law_badges) or len({r.get("law_name") for r in all_rules if r.get("law_name")})
-    risk_level      = full_result.get("risk_level") or "MEDIUM"
-
-    # CSIA (중대재해처벌법) 적용 여부
-    worker_count     = input_data.get("workers") or input_data.get("worker_count") or 0
-    csia_applicable  = int(worker_count or 0) >= 5
-
-    # 추천 플랜
-    plan_info = RECOMMEND_PLAN.get(tier_code, {})
 
     # 6. 입력 데이터 추출
     company_name = (
@@ -325,6 +262,8 @@ async def get_paid_report_pdf(public_token: str):
     receipt_no = public_token[:8].upper()
 
     # 7. Jinja2 렌더링
+    worker_count = input_data.get("workers") or input_data.get("worker_count") or ""
+
     template_vars: Dict[str, Any] = {
         # 기본 정보
         "company_name":          company_name,
@@ -338,7 +277,7 @@ async def get_paid_report_pdf(public_token: str):
         "ceo_name":              input_data.get("ceo_name") or "",
         "address":               input_data.get("address") or "",
         "industry_type":         input_data.get("industry_type") or input_data.get("ksic_major") or "",
-        "worker_count":          worker_count or "",
+        "worker_count":          worker_count,
         "area":                  input_data.get("floor_area") or input_data.get("total_floor_area") or "",
         "floors":                input_data.get("floor_count") or "",
         "equip_summary":         input_data.get("equip_summary") or "",
@@ -350,19 +289,12 @@ async def get_paid_report_pdf(public_token: str):
         "action_count":          action_cnt,
         "report_notify_count":   report_cnt,
         "law_count":             law_count,
-        "risk_level":            risk_level,
-        "max_penalty_text":      max_penalty_text,
-        "csia_applicable":       csia_applicable,
         # 데이터 리스트
-        "top5_risks":            top5_risks,
         "law_groups":            law_groups,
         "remaining_law_count":   remaining_law_count,
         "all_rules":             all_rules,
         "inspection_rules":      inspection_rules,
         "appointment_rules":     appointment_rules,
-        # SaaS 추천
-        "recommended_plan_name":  plan_info.get("name") or "",
-        "recommended_plan_price": plan_info.get("price") or "",
     }
 
     try:

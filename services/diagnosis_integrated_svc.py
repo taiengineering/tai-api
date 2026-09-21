@@ -194,10 +194,10 @@ def get_price_tier_payload(
 
     determination_note = ""
     if sector == "BUILDING":
-        if floor_area >= 5000:
-            determination_note = f"입력 면적 {floor_area:,.0f}㎡ ≥ 5,000㎡ → 대형건물로 자동 판정"
+        if floor_area > 5000:
+            determination_note = f"입력 면적 {floor_area:,.1f}㎡ > 5,000㎡ → 대형건물로 자동 판정"
         else:
-            determination_note = f"입력 면적 {floor_area:,.0f}㎡ < 5,000㎡ → 소형건물로 자동 판정"
+            determination_note = f"입력 면적 {floor_area:,.1f}㎡ ≤ 5,000㎡ → 소형건물로 자동 판정"
     elif sector == "CONSTRUCTION":
         if contract_amount_eok >= 50:
             determination_note = f"공사금액 {contract_amount_eok}억 ≥ 50억 → 종합으로 자동 판정"
@@ -359,6 +359,18 @@ def _build_unified_step1_body(
     #   BUILDING alias 승격 스킵으로 has_chemical 도 만들어지지 않는다 → BUILDING facility 무영향.
     step1_body = unified_factory(
         sector=engine_sector, source_facts=runtime_facts, factory_id=factory_id,
+    )
+    # WO-SM-C2-CONTRACT-AMOUNT-EOK-ALIGN-001 / Definition §14:
+    # current-product boundary emits contract_amount_eok [EOK] from
+    # project_amount [MANWON] / 10000. Top-level canonical field only.
+    # Does not add to _LEG_INPUT_FIELDS / body.input (C3 / build_facility 불변).
+    from services.canonical.construction_amount_c2 import (
+        attach_contract_amount_eok,
+        resolve_contract_amount_eok_c2,
+    )
+    step1_body = attach_contract_amount_eok(
+        step1_body,
+        resolve_contract_amount_eok_c2(engine_sector=engine_sector, body=body),
     )
     if engine_sector == "BUILDING":
         # elevator_count: derived source(103 vocab 밖). body 우선 → form_data 순.
