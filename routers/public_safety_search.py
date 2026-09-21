@@ -655,3 +655,53 @@ async def public_hub_candidates(
 
     result.sort(key=lambda x: (-x["domain_span"], -x["total_docs"]))
     return result[:limit]
+
+
+# ---------------------------------------------------------------------------
+# GET /public/safety-search/hub/equipment — Equipment hub list
+# WO-SEO-HUB-EQUIPMENT. Source SoT: CSI object_minor normalized + blocklist.
+# Curated list derived from csi_accident_snapshot_items.object_minor distinct.
+# Blocklist (일반어·비검색어) and label normalization (괄호 앞 핵심어) applied.
+# ---------------------------------------------------------------------------
+
+_EQUIPMENT_HUBS: list[dict] = [
+    # ── pilot 10 ──────────────────────────────────────────────────────────
+    {"value": "비계",           "display_name": "비계"},
+    {"value": "거푸집",         "display_name": "거푸집"},
+    {"value": "굴착기",         "display_name": "굴착기"},
+    {"value": "사다리",         "display_name": "사다리"},
+    {"value": "지게차",         "display_name": "지게차"},
+    {"value": "타워크레인",     "display_name": "타워크레인"},
+    {"value": "고소작업대",     "display_name": "고소작업대"},
+    {"value": "작업발판",       "display_name": "작업발판"},
+    {"value": "시스템동바리",   "display_name": "시스템동바리"},
+    {"value": "배관",           "display_name": "배관"},
+    # ── 확대 후보 ─────────────────────────────────────────────────────────
+    {"value": "철근",           "display_name": "철근"},
+    {"value": "흙막이가시설",   "display_name": "흙막이가시설"},
+    {"value": "이동식크레인",   "display_name": "이동식크레인"},  # 기중기(이동식크레인 등)
+    {"value": "항타기",         "display_name": "항타기"},        # 항타 및 항발기
+    {"value": "데크플레이트",   "display_name": "데크플레이트"},
+    {"value": "파이프서포트",   "display_name": "파이프서포트"},
+    {"value": "강관동바리",     "display_name": "강관동바리"},
+    {"value": "가설계단",       "display_name": "가설계단"},
+    {"value": "옹벽",           "display_name": "옹벽"},
+    {"value": "콘크리트펌프",   "display_name": "콘크리트펌프"},
+    {"value": "천공기",         "display_name": "천공기"},
+    {"value": "와이어로프",     "display_name": "와이어로프"},
+    {"value": "롤러",           "display_name": "롤러"},
+    {"value": "덤프트럭",       "display_name": "덤프트럭"},
+    {"value": "갱폼",           "display_name": "갱폼"},          # 특수거푸집(갱폼 등)
+    {"value": "복공판",         "display_name": "복공판"},
+    {"value": "거더",           "display_name": "거더"},
+]
+
+@router.get("/hub/equipment")
+async def public_hub_equipment_list():
+    """Curated equipment hub list derived from CSI object_minor SoT.
+
+    Returns [{value, display_name}] for all active equipment hubs.
+    Blocklist applied. Labels normalized (parenthetical stripped/refined).
+    Used by tai-www sitemap worker and hub-candidates tooling.
+    """
+    return _EQUIPMENT_HUBS
