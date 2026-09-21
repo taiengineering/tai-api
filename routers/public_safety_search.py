@@ -380,11 +380,16 @@ async def public_legal_detail(canonical_id: str):
 
 @router.get("/sitemap/legal-articles")
 async def public_legal_sitemap_articles(
-    offset: int = 0,
+    after_id: str = "",
     limit: int = Query(default=1000, le=2000),
 ):
-    """Paginated [{id, updated_at}] for sitemap. Filter: active law_master version
-    match + is_deleted_in_version=False + article_text IS NOT NULL."""
+    """Cursor-paginated [{id, updated_at}] for sitemap generation.
+
+    Filter: active law_master version match + is_deleted_in_version=False +
+    article_text >= 50 chars (thin content excluded per WO spec).
+    Cursor: after_id (UUID exclusive lower bound, stable UUID sort).
+    Returns plain list; has_more inferred from len == limit.
+    """
     client = _legal_supabase_dep()
 
     masters_res = client.table("law_master").select("current_version_id").eq("is_active", True).execute()
@@ -394,39 +399,65 @@ async def public_legal_sitemap_articles(
     if not version_ids:
         return []
 
+    collected: list[dict] = []
+    cursor = after_id
     CHUNK = 400
-    if len(version_ids) <= CHUNK:
-        res = (
-            client.table("law_article")
-            .select("id,updated_at")
-            .in_("law_version_id", version_ids)
-            .eq("is_deleted_in_version", False)
-            .filter("article_text", "not.is", "null")
-            .order("id")
-            .range(offset, offset + limit - 1)
-            .execute()
-        )
-        return res.data
+    FETCH = min(limit * 2, 4000)  # Overfetch: ~17% thin rate, 2× is sufficient
+    MAX_ITER = 20
 
-    # Fallback for >400 active laws: collect all, merge-sort, slice.
-    all_rows: list[dict] = []
-    for i in range(0, len(version_ids), CHUNK):
-        batch = version_ids[i:i + CHUNK]
-        chunk_start = 0
-        while True:
-            res = (
+    for _ in range(MAX_ITER):
+        if len(collected) >= limit:
+            break
+
+        if len(version_ids) <= CHUNK:
+            q = (
                 client.table("law_article")
-                .select("id,updated_at")
-                .in_("law_version_id", batch)
+                .select("id,updated_at,article_text")
+                .in_("law_version_id", version_ids)
                 .eq("is_deleted_in_version", False)
                 .filter("article_text", "not.is", "null")
                 .order("id")
-                .range(chunk_start, chunk_start + 999)
-                .execute()
+                .range(0, FETCH - 1)
             )
-            all_rows.extend(res.data)
-            if len(res.data) < 1000:
-                break
-            chunk_start += 1000
-    all_rows.sort(key=lambda r: r["id"])
-    return all_rows[offset:offset + limit]
+            if cursor:
+                q = q.gt("id", cursor)
+            batch = q.execute().data
+        else:
+            all_chunk: list[dict] = []
+            for i in range(0, len(version_ids), CHUNK):
+                part = version_ids[i:i + CHUNK]
+                q = (
+                    client.table("law_article")
+                    .select("id,updated_at,article_text")
+                    .in_("law_version_id", part)
+                    .eq("is_deleted_in_version", False)
+                    .filter("article_text", "not.is", "null")
+                    .order("id")
+                    .range(0, FETCH - 1)
+                )
+                if cursor:
+                    q = q.gt("id", cursor)
+                all_chunk.extend(q.execute().data)
+            all_chunk.sort(key=lambda r: r["id"])
+            seen: set[str] = set()
+            batch = []
+            for r in all_chunk:
+                if r["id"] not in seen:
+                    seen.add(r["id"])
+                    batch.append(r)
+                    if len(batch) >= FETCH:
+                        break
+
+        if not batch:
+            break
+
+        for r in batch:
+            if len(r.get("article_text") or "") >= 50:
+                collected.append({"id": r["id"], "updated_at": r.get("updated_at")})
+
+        if len(batch) < FETCH:
+            break  # exhausted
+
+        cursor = batch[-1]["id"]
+
+    return collected[:limit]
