@@ -598,3 +598,60 @@ async def public_legal_sitemap_articles(
         cursor = batch[-1]["id"]
 
     return collected[:limit]
+
+
+# ---------------------------------------------------------------------------
+# GET /public/safety-search/hub-candidates — Hub keyword aggregation
+# Source: keyword_central_extracted (taeng Supabase).
+# WO-SEO-HUB-FROM-OPENSEARCH option (b): OpenSearch keywords field is
+# analyzed text (Nori), not aggregatable via terms agg. This endpoint
+# aggregates from the existing keyword extraction table instead.
+# Law articles excluded (separate system, no page_type in this table).
+# ---------------------------------------------------------------------------
+
+@router.get("/hub-candidates")
+async def public_hub_candidates(
+    min_domain_span: int = Query(default=2, ge=1, le=10),
+    min_docs: int = Query(default=5, ge=1, le=10000),
+    limit: int = Query(default=200, ge=1, le=500),
+):
+    """Aggregate keyword_central_extracted → hub candidate list.
+
+    Returns keywords that appear across multiple content domains,
+    sorted by domain_span desc, total_docs desc.
+    Used for owner curation of ~100 static safety hub keywords.
+    """
+    from collections import defaultdict
+    from db.supabase_client import get_supabase
+
+    sb = get_supabase()
+    rows = (
+        sb.table("keyword_central_extracted")
+        .select("page_type,central_keyword")
+        .eq("relevance", "relevant")
+        .not_.is_("central_keyword", "null")
+        .execute()
+    ).data or []
+
+    kw_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for r in rows:
+        kw = (r.get("central_keyword") or "").strip()
+        pt = r.get("page_type") or ""
+        if kw and pt:
+            kw_counts[kw][pt] += 1
+
+    result = []
+    for kw, domain_counts in kw_counts.items():
+        total_docs = sum(domain_counts.values())
+        domain_span = len(domain_counts)
+        if total_docs >= min_docs and domain_span >= min_domain_span:
+            result.append({
+                "keyword": kw,
+                "total_docs": total_docs,
+                "domain_span": domain_span,
+                "domains": sorted(domain_counts.keys()),
+                "per_domain_counts": dict(domain_counts),
+            })
+
+    result.sort(key=lambda x: (-x["domain_span"], -x["total_docs"]))
+    return result[:limit]
