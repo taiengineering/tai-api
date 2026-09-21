@@ -96,6 +96,29 @@ def get_by_slug(slug: str) -> Optional[Dict[str, Any]]:
     return (res.data or [None])[0]
 
 
+_SEARCH_DETAIL_COLS = (
+    "doc_id, type, slug, title, question, answer_short, body, menu_group, updated_at"
+)
+
+
+def get_published_by_doc_id(doc_id: str) -> Optional[Dict[str, Any]]:
+    """KNOWLEDGE canonical detail by doc_id — search-result detail path only.
+
+    Returns the row only when status = PUBLISHED. None for DRAFT/HOLD/REMOVED
+    or missing doc_id. Selects the search-detail column allowlist only.
+    """
+    sb = get_supabase()
+    res = (
+        sb.table(_TABLE)
+        .select(_SEARCH_DETAIL_COLS)
+        .eq("doc_id", doc_id)
+        .eq("status", "PUBLISHED")
+        .limit(1)
+        .execute()
+    )
+    return (res.data or [None])[0]
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # 관리자(admin) CRUD — safe.taieng.co.kr 헬프센터(매뉴얼) 관리 화면용.
 # 설계: admin-vue3 '서비스 운영 > 매뉴얼'. 목록/상태토글/삭제. 등록·수정은 upsert_help 재사용.
