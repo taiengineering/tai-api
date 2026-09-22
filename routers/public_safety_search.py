@@ -761,3 +761,70 @@ async def public_hub_accident_type_list():
     Returns [{value, display_name}] for all 13 active accident type hubs.
     """
     return _ACCIDENT_TYPE_HUBS
+
+
+# ---------------------------------------------------------------------------
+# GET /public/safety-search/hub/task — Work process hub list (DB-backed)
+# WO-SEO-HUB-TASK. Source SoT: csi_accident_snapshot_items.work_process.
+# Blocklist and label normalization applied. ~30 hub values expected.
+# ---------------------------------------------------------------------------
+
+_TASK_BLOCKLIST: frozenset = frozenset({
+    "기타", "이동", "정리작업", "준비작업", "확인 및 점검작업",
+    "물뿌리기 작업", "반출작업",
+})
+
+_TASK_NORMALIZATION: dict[str, str] = {
+    "상차 및 하역작업": "하역작업",
+    "보수 및 교체작업": "보수작업",
+    "부설 및 다짐작업": "다짐작업",
+    "장약 및 발파작업": "발파작업",
+    "항타 및 항발작업": "항타작업",
+    "형틀 및 목공": "형틀목공",
+}
+
+
+@router.get("/hub/task")
+async def public_hub_task_list():
+    """DB-backed work process hub list from CSI work_process.
+
+    Queries csi_accident_snapshot_items.work_process with pagination,
+    applies blocklist and normalization, returns sorted [{value, display_name}].
+    """
+    from db.supabase_client import get_supabase
+
+    sb = get_supabase()
+    _FETCH = 1000
+    offset = 0
+    seen_raw: set[str] = set()
+    normalized_set: set[str] = set()
+
+    while True:
+        result = (
+            sb.table("csi_accident_snapshot_items")
+            .select("work_process")
+            .not_.is_("work_process", "null")
+            .range(offset, offset + _FETCH - 1)
+            .execute()
+        )
+        batch = result.data or []
+        if not batch:
+            break
+
+        for r in batch:
+            raw = (r.get("work_process") or "").strip()
+            if not raw or raw in seen_raw:
+                continue
+            seen_raw.add(raw)
+            normalized = _TASK_NORMALIZATION.get(raw, raw)
+            if normalized and normalized not in _TASK_BLOCKLIST:
+                normalized_set.add(normalized)
+
+        if len(batch) < _FETCH:
+            break
+        offset += _FETCH
+
+    return sorted(
+        [{"value": v, "display_name": v} for v in normalized_set],
+        key=lambda x: x["value"],
+    )
