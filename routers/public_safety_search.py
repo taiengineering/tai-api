@@ -828,3 +828,165 @@ async def public_hub_task_list():
         [{"value": v, "display_name": v} for v in normalized_set],
         key=lambda x: x["value"],
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /public/safety-search/hub/law — Law hub list (DB-backed)
+# WO-SEO-HUB-LAW. Source SoT: leg-prod law_master (is_active=True).
+# Returns laws with article_count >= min_articles (default 20).
+# Paginates law_article to build per-law counts in Python.
+# ---------------------------------------------------------------------------
+
+
+def _slug_law_name(name: str) -> str:
+    """정규화: 법령명에서 특수문자(「」()（）) 제거 + strip."""
+    import re
+    s = str(name or "").strip()
+    s = re.sub(r'[「」『』【】\[\]()（）]', '', s)
+    return s.strip()
+
+
+@router.get("/hub/law")
+async def public_hub_law_list(
+    min_articles: int = Query(default=20, ge=1, le=5000),
+):
+    """DB-backed law hub list from law_master.
+
+    Returns is_active laws that have >= min_articles articles.
+    Sorted by display_name (law_name).
+    value = slug(law_name) for URL use.
+    """
+    client = _legal_supabase_dep()
+
+    # Step 1: All active law masters
+    masters_res = client.table("law_master").select(
+        "id,law_name,law_name_short,ministry_name,law_type_code,current_version_id"
+    ).eq("is_active", True).execute()
+    masters = masters_res.data or []
+    if not masters:
+        return []
+
+    # Build version_id → master map
+    vid_to_master: dict[str, dict] = {}
+    for m in masters:
+        vid = m.get("current_version_id")
+        if vid and m.get("law_name"):
+            vid_to_master[vid] = m
+
+    if not vid_to_master:
+        return []
+
+    version_ids = list(vid_to_master.keys())
+
+    # Step 2: Count articles per version_id via pagination
+    # law_article rows can be 29k+ but we only select law_version_id (tiny payload).
+    from collections import Counter
+    version_counts: Counter = Counter()
+    _FETCH = 1000
+    offset = 0
+
+    while True:
+        batch = (
+            client.table("law_article")
+            .select("law_version_id")
+            .eq("is_deleted_in_version", False)
+            .range(offset, offset + _FETCH - 1)
+            .execute()
+        ).data or []
+        if not batch:
+            break
+        for r in batch:
+            vid = r.get("law_version_id")
+            if vid and vid in vid_to_master:
+                version_counts[vid] += 1
+        if len(batch) < _FETCH:
+            break
+        offset += _FETCH
+
+    # Step 3: Filter and build result
+    result = []
+    for vid, master in vid_to_master.items():
+        count = version_counts.get(vid, 0)
+        if count < min_articles:
+            continue
+        law_name = master.get("law_name") or ""
+        slug = _slug_law_name(law_name)
+        if not slug:
+            continue
+        result.append({
+            "value": slug,
+            "display_name": law_name,
+            "article_count": count,
+            "ministry": master.get("ministry_name"),
+            "law_type": master.get("law_type_code"),
+        })
+
+    return sorted(result, key=lambda x: x["display_name"])
+
+
+# ---------------------------------------------------------------------------
+# GET /public/safety-search/hub/law/detail?name= — Single law detail
+# WO-SEO-HUB-LAW. Returns law meta + first 30 articles for SSR hub page.
+# ---------------------------------------------------------------------------
+
+@router.get("/hub/law/detail")
+async def public_hub_law_detail(
+    name: str = Query(..., max_length=200),
+):
+    """Single law meta + first 30 articles (for SSR hub page).
+
+    name = slug(law_name) or law_name. Matched via slug normalization.
+    Returns: {meta: {law_name, ministry, law_type, enforcement_date},
+              articles: [{id, article_no, article_sub_no, article_title}]}
+    """
+    client = _legal_supabase_dep()
+    name_stripped = _slug_law_name(name)
+
+    # Find matching law_master by slug match
+    masters_res = client.table("law_master").select(
+        "id,law_name,law_name_short,ministry_name,law_type_code,current_version_id"
+    ).eq("is_active", True).execute()
+    masters = masters_res.data or []
+
+    master = None
+    for m in masters:
+        if _slug_law_name(m.get("law_name") or "") == name_stripped:
+            master = m
+            break
+
+    if not master:
+        raise HTTPException(status_code=404, detail="LAW_NOT_FOUND")
+
+    vid = master.get("current_version_id")
+    if not vid:
+        raise HTTPException(status_code=404, detail="LAW_NO_VERSION")
+
+    # Fetch first 30 articles ordered by article_no
+    articles_res = (
+        client.table("law_article")
+        .select("id,article_no,article_sub_no,article_title")
+        .eq("law_version_id", vid)
+        .eq("is_deleted_in_version", False)
+        .order("article_no", desc=False)
+        .limit(30)
+        .execute()
+    )
+    articles = articles_res.data or []
+
+    return {
+        "meta": {
+            "law_name": master.get("law_name"),
+            "law_name_short": master.get("law_name_short"),
+            "ministry": master.get("ministry_name"),
+            "law_type": master.get("law_type_code"),
+        },
+        "articles": [
+            {
+                "id": str(a.get("id") or ""),
+                "article_no": a.get("article_no"),
+                "article_sub_no": a.get("article_sub_no"),
+                "article_title": a.get("article_title"),
+            }
+            for a in articles
+        ],
+    }
