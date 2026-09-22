@@ -658,50 +658,106 @@ async def public_hub_candidates(
 
 
 # ---------------------------------------------------------------------------
-# GET /public/safety-search/hub/equipment — Equipment hub list
-# WO-SEO-HUB-EQUIPMENT. Source SoT: CSI object_minor normalized + blocklist.
-# Curated list derived from csi_accident_snapshot_items.object_minor distinct.
-# Blocklist (일반어·비검색어) and label normalization (괄호 앞 핵심어) applied.
+# GET /public/safety-search/hub/equipment — Equipment hub list (DB-backed)
+# WO-SEO-HUB-EXPAND Part A. Source SoT: csi_accident_snapshot_items.object_minor.
+# Blocklist (일반어·비검색어) and label normalization applied.
 # ---------------------------------------------------------------------------
 
-_EQUIPMENT_HUBS: list[dict] = [
-    # ── pilot 10 ──────────────────────────────────────────────────────────
-    {"value": "비계",           "display_name": "비계"},
-    {"value": "거푸집",         "display_name": "거푸집"},
-    {"value": "굴착기",         "display_name": "굴착기"},
-    {"value": "사다리",         "display_name": "사다리"},
-    {"value": "지게차",         "display_name": "지게차"},
-    {"value": "타워크레인",     "display_name": "타워크레인"},
-    {"value": "고소작업대",     "display_name": "고소작업대"},
-    {"value": "작업발판",       "display_name": "작업발판"},
-    {"value": "시스템동바리",   "display_name": "시스템동바리"},
-    {"value": "배관",           "display_name": "배관"},
-    # ── 확대 후보 ─────────────────────────────────────────────────────────
-    {"value": "철근",           "display_name": "철근"},
-    {"value": "흙막이가시설",   "display_name": "흙막이가시설"},
-    {"value": "이동식크레인",   "display_name": "이동식크레인"},  # 기중기(이동식크레인 등)
-    {"value": "항타기",         "display_name": "항타기"},        # 항타 및 항발기
-    {"value": "데크플레이트",   "display_name": "데크플레이트"},
-    {"value": "파이프서포트",   "display_name": "파이프서포트"},
-    {"value": "강관동바리",     "display_name": "강관동바리"},
-    {"value": "가설계단",       "display_name": "가설계단"},
-    {"value": "옹벽",           "display_name": "옹벽"},
-    {"value": "콘크리트펌프",   "display_name": "콘크리트펌프"},
-    {"value": "천공기",         "display_name": "천공기"},
-    {"value": "와이어로프",     "display_name": "와이어로프"},
-    {"value": "롤러",           "display_name": "롤러"},
-    {"value": "덤프트럭",       "display_name": "덤프트럭"},
-    {"value": "갱폼",           "display_name": "갱폼"},          # 특수거푸집(갱폼 등)
-    {"value": "복공판",         "display_name": "복공판"},
-    {"value": "거더",           "display_name": "거더"},
-]
+_EQUIPMENT_BLOCKLIST: frozenset = frozenset({
+    "기타", "자재", "공구류", "건물", "질병", "차량", "지반", "지지대", "벽체",
+    "핀", "비산물", "부석", "건설폐기물", "지하매설물", "불명", "해당없음",
+    "기타장비", "없음",
+})
+
+_EQUIPMENT_NORMALIZATION: dict[str, str] = {
+    "기중기(이동식크레인 등)": "이동식크레인",
+    "고소작업차(고소작업대 등)": "고소작업대",
+    "특수거푸집(갱폼 등)": "갱폼",
+    "항타 및 항발기": "항타기",
+    "굴착기(포크레인 등)": "굴착기",
+    "기중기": "이동식크레인",
+    "흙막이(가시설)": "흙막이가시설",
+    "시스템 동바리": "시스템동바리",
+    "파이프 서포트": "파이프서포트",
+    "콘크리트 펌프카": "콘크리트펌프",
+    "이동식 크레인": "이동식크레인",
+    "타워 크레인": "타워크레인",
+}
+
 
 @router.get("/hub/equipment")
 async def public_hub_equipment_list():
-    """Curated equipment hub list derived from CSI object_minor SoT.
+    """DB-backed equipment hub list from CSI object_minor.
 
-    Returns [{value, display_name}] for all active equipment hubs.
-    Blocklist applied. Labels normalized (parenthetical stripped/refined).
-    Used by tai-www sitemap worker and hub-candidates tooling.
+    Queries csi_accident_snapshot_items.object_minor with pagination,
+    applies blocklist and normalization, returns sorted [{value, display_name}].
     """
-    return _EQUIPMENT_HUBS
+    from db.supabase_client import get_supabase
+
+    sb = get_supabase()
+    _FETCH = 1000
+    offset = 0
+    seen_raw: set[str] = set()
+    normalized_set: set[str] = set()
+
+    while True:
+        result = (
+            sb.table("csi_accident_snapshot_items")
+            .select("object_minor")
+            .not_.is_("object_minor", "null")
+            .range(offset, offset + _FETCH - 1)
+            .execute()
+        )
+        batch = result.data or []
+        if not batch:
+            break
+
+        for r in batch:
+            raw = (r.get("object_minor") or "").strip()
+            if not raw or raw in seen_raw:
+                continue
+            seen_raw.add(raw)
+            normalized = _EQUIPMENT_NORMALIZATION.get(raw, raw)
+            if normalized and normalized not in _EQUIPMENT_BLOCKLIST:
+                normalized_set.add(normalized)
+
+        if len(batch) < _FETCH:
+            break
+        offset += _FETCH
+
+    return sorted(
+        [{"value": v, "display_name": v} for v in normalized_set],
+        key=lambda x: x["value"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /public/safety-search/hub/accident — Accident type hub list
+# WO-SEO-HUB-EXPAND Part B. Source SoT: CSI accident_type taxonomy (hardcoded).
+# Standard Korean construction safety accident type classification.
+# ---------------------------------------------------------------------------
+
+_ACCIDENT_TYPE_HUBS: list[dict] = [
+    {"value": "물체에 맞음",   "display_name": "물체에 맞음"},
+    {"value": "끼임",          "display_name": "끼임"},
+    {"value": "넘어짐",        "display_name": "넘어짐"},
+    {"value": "부딪힘",        "display_name": "부딪힘"},
+    {"value": "떨어짐",        "display_name": "떨어짐"},
+    {"value": "절단·베임",     "display_name": "절단·베임"},
+    {"value": "깔림·뒤집힘",   "display_name": "깔림·뒤집힘"},
+    {"value": "찔림",          "display_name": "찔림"},
+    {"value": "감전",          "display_name": "감전"},
+    {"value": "화재",          "display_name": "화재"},
+    {"value": "폭발",          "display_name": "폭발"},
+    {"value": "질식",          "display_name": "질식"},
+    {"value": "산소결핍",      "display_name": "산소결핍"},
+]
+
+
+@router.get("/hub/accident")
+async def public_hub_accident_type_list():
+    """Curated accident type hub list from CSI taxonomy.
+
+    Returns [{value, display_name}] for all 13 active accident type hubs.
+    """
+    return _ACCIDENT_TYPE_HUBS
