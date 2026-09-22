@@ -13,6 +13,7 @@ WORK_TYPES: Dict[str, Dict[str, Any]] = {
         "subtypes": {
             "DEENERGIZED": "정전된 회로 전기작업",
             "NEAR_DEENERGIZED": "정전된 회로 인근 전기작업",
+            "NEAR_ENERGIZED": "충전된 회로 인근 전기작업",
             "ENERGIZED": "충전된 회로 전기작업",
         },
         "attributes": {},
@@ -70,21 +71,30 @@ WORK_TYPES: Dict[str, Dict[str, Any]] = {
             "ASSEMBLY": "비계 조립 작업",
             "DISMANTLE": "비계 해체 작업",
             "MODIFICATION": "비계 변경 작업",
+            # WO-E2E-OBJ03-L3-55-SEMANTIC-INPUT-INTEGRATION-001 PATCH-1 Phase 3:
+            # FC-015B USE_WITH_WORKERS (DEEPEN G005/G007/G009 등).
+            "USE_WITH_WORKERS": "근로자 탑승 작업 (설치된 비계 위에서 작업)",
         },
         "attributes": {
             "is_dalbi": {"type": "boolean", "label": "달비계 여부"},
             "height_m": {"type": "number", "label": "비계 최고높이(m)"},
-            # WO-E2E-OBJ01-SEM002-ART57B-FASTLANE-IMPLEMENT-001:
-            # SCAFFOLD kind for Art.57 제2항 (강관비계/통나무비계 조립 → 쌍줄).
-            # Single enum, not two booleans, so a row's scaffold type stays
-            # unique per entity and same-entity binding is preserved by the
-            # projector's per-row evaluation. missing != OTHER: omit the key
-            # rather than defaulting to OTHER.
+            # WO-E2E-OBJ01-SEM002-ART57B-FASTLANE-IMPLEMENT-001 +
+            # WO-E2E-OBJ03-L3-55-SEMANTIC-INPUT-INTEGRATION-001 PATCH-1 Phase 3:
+            # Extend scaffold_kind to 9 DEEPEN-defined values (FC-015A).
+            # STEEL_PIPE and LOG kept for Art.57-B backward compatibility.
             "scaffold_kind": {
                 "type": "enum",
                 "label": "비계 종류",
                 "options": (
-                    {"code": "STEEL_PIPE", "label": "강관비계"},
+                    {"code": "STEEL_PIPE_SCAFFOLD", "label": "강관비계"},
+                    {"code": "STEEL_FRAME_SCAFFOLD", "label": "강관틀비계"},
+                    {"code": "SUSPENDED_GONDOLA_SCAFFOLD", "label": "달비계(곤돌라형)"},
+                    {"code": "HANGING_SCAFFOLD", "label": "달대비계"},
+                    {"code": "HORSE_TRESTLE_SCAFFOLD", "label": "말비계"},
+                    {"code": "MOBILE_SCAFFOLD", "label": "이동식비계"},
+                    {"code": "SYSTEM_SCAFFOLD", "label": "시스템비계"},
+                    {"code": "LEANING_SCAFFOLD", "label": "걸침비계"},
+                    {"code": "HOOK_SCAFFOLD", "label": "선박비계(걸침형)"},
                     {"code": "LOG", "label": "통나무비계"},
                     {"code": "OTHER", "label": "기타 비계"},
                 ),

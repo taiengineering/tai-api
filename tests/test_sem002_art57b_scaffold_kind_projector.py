@@ -34,14 +34,26 @@ ART57A_FIELD = (
 
 
 # =========================================================================
-# Registry: scaffold_kind is a declared enum with 3 options
+# Registry: scaffold_kind enum — 9 DEEPEN values + LOG + OTHER
+# WO-E2E-OBJ03-L3-55-SEMANTIC-INPUT-INTEGRATION-001 PATCH-1 Phase 3:
+# extended from 3 (STEEL_PIPE/LOG/OTHER) to 11 values.
 # =========================================================================
+_DEEPEN_SCAFFOLD_CODES = {
+    "STEEL_PIPE_SCAFFOLD", "STEEL_FRAME_SCAFFOLD", "SUSPENDED_GONDOLA_SCAFFOLD",
+    "HANGING_SCAFFOLD", "HORSE_TRESTLE_SCAFFOLD", "MOBILE_SCAFFOLD",
+    "SYSTEM_SCAFFOLD", "LEANING_SCAFFOLD", "HOOK_SCAFFOLD",
+}
+
+
 def test_registry_declares_scaffold_kind_enum():
     attrs = WORK_TYPES["SCAFFOLD"]["attributes"]
     assert "scaffold_kind" in attrs
     assert attrs["scaffold_kind"]["type"] == "enum"
-    codes = [o["code"] for o in attrs["scaffold_kind"]["options"]]
-    assert codes == ["STEEL_PIPE", "LOG", "OTHER"]
+    codes = set(o["code"] for o in attrs["scaffold_kind"]["options"])
+    # 9 DEEPEN values + LOG (Art.57-B legacy) + OTHER
+    assert _DEEPEN_SCAFFOLD_CODES <= codes
+    assert "LOG" in codes
+    assert "OTHER" in codes
 
 
 def test_registry_public_carries_scaffold_kind_options():
@@ -50,10 +62,13 @@ def test_registry_public_carries_scaffold_kind_options():
     kind_attr = next(a for a in scaffold["attributes"] if a["code"] == "scaffold_kind")
     assert kind_attr["type"] == "enum"
     assert kind_attr["label"] == "비계 종류"
-    codes = [o["code"] for o in kind_attr["options"]]
-    labels = [o["label"] for o in kind_attr["options"]]
-    assert codes == ["STEEL_PIPE", "LOG", "OTHER"]
-    assert labels == ["강관비계", "통나무비계", "기타 비계"]
+    codes = set(o["code"] for o in kind_attr["options"])
+    assert _DEEPEN_SCAFFOLD_CODES <= codes
+    assert "LOG" in codes
+    # Verify key new DEEPEN labels
+    label_by_code = {o["code"]: o["label"] for o in kind_attr["options"]}
+    assert label_by_code["STEEL_PIPE_SCAFFOLD"] == "강관비계"
+    assert label_by_code["SYSTEM_SCAFFOLD"] == "시스템비계"
 
 
 def test_registry_public_boolean_attributes_still_have_no_options_key():

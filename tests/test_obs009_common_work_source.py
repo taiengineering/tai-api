@@ -256,9 +256,12 @@ def test_transport_allowlist_appends_work_facts_only():
     # diving_decompression_stop_required). Baseline 212 → 215.
     # WO-E2E-OBJ01-HIGH-PRESSURE-COMMON-COVERAGE-INTEGRATED-IMPLEMENT-001: +1
     # has_caisson_work (Art.540/543 잠함공법). Baseline 215 → 216.
+    # WO-E2E-OBJ03-L3-55-SEMANTIC-INPUT-INTEGRATION-001 PATCH-1: +3
+    # scaffold_kind_is_steel_pipe_scaffold, scaffold_kind_is_system_scaffold,
+    # performs_electrical_work_near_energized_circuit. Baseline 216 → 219.
     # Uniqueness invariant preserved.
-    assert len(_LEG_INPUT_FIELDS) == 216
-    assert len(set(_LEG_INPUT_FIELDS)) == 216
+    assert len(_LEG_INPUT_FIELDS) == 219
+    assert len(set(_LEG_INPUT_FIELDS)) == 219
     assert KSIC_NOT_IN_TRANSPORT not in _LEG_INPUT_FIELDS
     assert "has_welding" in _LEG_INPUT_FIELDS
     assert "has_demolition" in _LEG_INPUT_FIELDS

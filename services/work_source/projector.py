@@ -72,6 +72,8 @@ def project_work_row(row: Mapping[str, Any]) -> Dict[str, bool]:
             return {"performs_deenergized_circuit_electrical_work": True}
         if subtype == "NEAR_DEENERGIZED":
             return {"performs_electrical_work_near_deenergized_circuit": True}
+        if subtype == "NEAR_ENERGIZED":
+            return {"performs_electrical_work_near_energized_circuit": True}
         if subtype == "ENERGIZED":
             return {"performs_energized_circuit_electrical_work": True}
         if subtype in (None, ""):
@@ -80,34 +82,46 @@ def project_work_row(row: Mapping[str, Any]) -> Dict[str, bool]:
 
     if work_type == "SCAFFOLD":
         # WO-E2E-OBJ01-SEM002-ART57A-CONSUMER-INPUT-WIRING-001 (Art.57 첫 문장) +
-        # WO-E2E-OBJ01-SEM002-ART57B-FASTLANE-IMPLEMENT-001    (Art.57 제2항).
-        # Each row = one scaffold + one activity, so per-row evaluation
-        # preserves same-entity binding for BOTH canonical facts. A row that
-        # satisfies both articles emits both facts (not an error).
-        # missing != false — omit key when the row doesn't satisfy.
-        if subtype not in ("ASSEMBLY", "DISMANTLE", "MODIFICATION"):
-            return {}
-
+        # WO-E2E-OBJ01-SEM002-ART57B-FASTLANE-IMPLEMENT-001    (Art.57 제2항) +
+        # WO-E2E-OBJ03-L3-55-SEMANTIC-INPUT-INTEGRATION-001 PATCH-1 Phase 3
+        #   (DEEPEN G002/G004/G011: FC-015A scaffold_kind exact subtype facts).
+        # Each row = one scaffold + one activity; per-row evaluation preserves
+        # same-entity binding. missing != false — omit absent keys.
+        kind = attrs.get("scaffold_kind")
         out: Dict[str, bool] = {}
 
-        # --- Art.57 첫 문장 (Art.57-A) ---
-        is_dalbi = _truthy(attrs.get("is_dalbi"))
-        raw_h = attrs.get("height_m")
-        # numeric fail-closed: bool excluded, negative/None invalid.
-        height_ge5 = (
-            isinstance(raw_h, (int, float))
-            and not isinstance(raw_h, bool)
-            and raw_h >= 5
-        )
-        if is_dalbi or height_ge5:
-            out["performs_scaffold_assembly_dismantle_or_modification_on_dalbi_or_ge5m_scaffold"] = True
+        # --- Per-kind structural facts (independent of activity subtype) ---
+        # WO-E2E-OBJ03-L3-55-SEMANTIC-INPUT-INTEGRATION-001 PATCH-1 Phase 3:
+        # DEEPEN FC-015A exact subtype facts. Only emitted for NEW DEEPEN codes
+        # (STEEL_PIPE_SCAFFOLD / SYSTEM_SCAFFOLD); legacy STEEL_PIPE / LOG / OTHER
+        # codes preserve prior behavior unchanged (no new fact).
+        if kind == "STEEL_PIPE_SCAFFOLD":
+            out["scaffold_kind_is_steel_pipe_scaffold"] = True
+        elif kind == "SYSTEM_SCAFFOLD":
+            out["scaffold_kind_is_system_scaffold"] = True
 
-        # --- Art.57 제2항 (Art.57-B) — 강관비계 또는 통나무비계를 조립하는 경우 ---
-        # activity gate is stricter (ASSEMBLY only); kind gate accepts
-        # STEEL_PIPE or LOG. OTHER / missing → omit (missing != OTHER).
+        # --- Activity-dependent facts ---
+        _activity_subtypes = ("ASSEMBLY", "DISMANTLE", "MODIFICATION", "USE_WITH_WORKERS")
+        if subtype not in _activity_subtypes:
+            return out  # return any per-kind facts; no activity facts
+
+        # --- Art.57 첫 문장 (Art.57-A): ASSEMBLY/DISMANTLE/MODIFICATION only ---
+        if subtype in ("ASSEMBLY", "DISMANTLE", "MODIFICATION"):
+            is_dalbi = _truthy(attrs.get("is_dalbi"))
+            raw_h = attrs.get("height_m")
+            # numeric fail-closed: bool excluded, negative/None invalid.
+            height_ge5 = (
+                isinstance(raw_h, (int, float))
+                and not isinstance(raw_h, bool)
+                and raw_h >= 5
+            )
+            if is_dalbi or height_ge5:
+                out["performs_scaffold_assembly_dismantle_or_modification_on_dalbi_or_ge5m_scaffold"] = True
+
+        # --- Art.57 제2항 (Art.57-B): ASSEMBLY only ---
+        # Legacy STEEL_PIPE + LOG + new STEEL_PIPE_SCAFFOLD all qualify.
         if subtype == "ASSEMBLY":
-            kind = attrs.get("scaffold_kind")
-            if kind in ("STEEL_PIPE", "LOG"):
+            if kind in ("STEEL_PIPE", "STEEL_PIPE_SCAFFOLD", "LOG"):
                 out["performs_steel_pipe_or_log_scaffold_assembly"] = True
 
         return out

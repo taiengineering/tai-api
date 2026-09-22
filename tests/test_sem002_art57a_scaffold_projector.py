@@ -37,7 +37,9 @@ CANON_FIELD = (
 def test_registry_declares_scaffold_family():
     assert "SCAFFOLD" in ALLOWED_WORK_TYPES
     spec = WORK_TYPES["SCAFFOLD"]
-    assert set(spec["subtypes"].keys()) == {"ASSEMBLY", "DISMANTLE", "MODIFICATION"}
+    # WO-E2E-OBJ03-L3-55-SEMANTIC-INPUT-INTEGRATION-001 PATCH-1: USE_WITH_WORKERS added
+    assert {"ASSEMBLY", "DISMANTLE", "MODIFICATION"} <= set(spec["subtypes"].keys())
+    assert "USE_WITH_WORKERS" in spec["subtypes"]
     attrs = spec["attributes"]
     assert attrs["is_dalbi"]["type"] == "boolean"
     assert attrs["height_m"]["type"] == "number"

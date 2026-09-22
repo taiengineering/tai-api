@@ -228,6 +228,12 @@ _LEG_INPUT_FIELDS = (
     # boolean for Art.57 제2항 (같은 비계 S에 대해 S.kind IN {STEEL_PIPE,LOG}
     # AND activity_on(S) == ASSEMBLY → 쌍줄). Computed by projector; not stored.
     "performs_steel_pipe_or_log_scaffold_assembly",
+    # WO-E2E-OBJ03-L3-55-SEMANTIC-INPUT-INTEGRATION-001 PATCH-1 Phase 3:
+    # DEEPEN FC-015A scaffold subtype exact facts.
+    # G002 Art.54②/G004 Art.60 → scaffold_kind_is_steel_pipe_scaffold
+    # G011 Art.69 → scaffold_kind_is_system_scaffold
+    "scaffold_kind_is_steel_pipe_scaffold",
+    "scaffold_kind_is_system_scaffold",
     # WO-E2E-OBS007-CRANE-MINIMUM-MODIFY-001: Frozen Design Leaf.field exact-name.
     # No alias, no has_crane collapse, no crane_adjustment_work.
     "has_mobile_crane", "has_jib_crane", "has_gantry_crane",
@@ -343,6 +349,7 @@ _LEG_INPUT_FIELDS = (
     "performs_electrical_work",
     "performs_deenergized_circuit_electrical_work",
     "performs_electrical_work_near_deenergized_circuit",
+    "performs_electrical_work_near_energized_circuit",
     "performs_energized_circuit_electrical_work",
     # WO-OBS009-MATERIAL-CANONICAL-RUNTIME-WIRING-PATCH-001: Common Material canonical
     # adapter outputs (OPTION A per-factory boolean presence). Transport allowlist only.
