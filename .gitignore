@@ -31,3 +31,7 @@ artifacts/risk04/
 
 # CHEM-05 local materialize plan / manifest / report — never commit
 artifacts/chem05/
+
+# CHEM-05 v12 and SEO preview v12 bulk artifacts — never commit (196MB / 170MB plan.jsonl)
+artifacts/chem05_v12/
+artifacts/chem_seo_preview_v12/
