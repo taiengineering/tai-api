@@ -1,8 +1,8 @@
-"""WO-MSDS-INCREMENTAL-PUBLISH-001 — fixture tests (A–K).
+"""WO-MSDS-INCREMENTAL-PUBLISH-001 — fixture tests (A–K + T1–T5, PATCH-1).
 
 Tests verify the incremental publish tool's safety fences, frozen SHA pins,
-and production impact projections — all without touching the live DB.
-Fixtures A–K correspond to WO §14.
+four-way responses binding, and production mutation-0 contract.
+Fixtures A–K correspond to WO §14; T1–T5 are PATCH-1 regression tests.
 """
 from __future__ import annotations
 
@@ -138,60 +138,84 @@ def test_B_dry_run_preflight_pass():
 
 
 # ---------------------------------------------------------------------------
-# Fixture C — CLI dry-run (no --execute): never imports production store.
+# Fixture C — DRY-RUN = SELECT allowed, DRY-RUN = mutation 0.
+#
+# Uses a fake MemoryMaterializeStore subclass that intercepts all write
+# methods and asserts they are never called during a preflight-only run.
 # ---------------------------------------------------------------------------
 
-def test_C_cli_dry_run_does_not_import_production_store(monkeypatch, tmp_path):
-    """Without --execute, the live DB path must not be touched."""
-    seo_manifest = {
-        "manifest_sha256": ip.FROZEN_SEO_MANIFEST_SHA,
-        "source": {"responses_sha256": ip.FROZEN_RESPONSES_SHA},
-        "census": {
-            "complete_chemicals": ip.FROZEN_EXPECTED_CHEMICALS,
-            "preview_sections": ip.FROZEN_EXPECTED_SECTIONS,
-        },
-        "chemicals": [],
+class _MutationTrackingStore(w.MemoryMaterializeStore):
+    """MemoryMaterializeStore that records any mutation call as a test failure."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.mutations: list[str] = []
+
+    def insert_snapshot(self, snapshot):
+        self.mutations.append("insert_snapshot")
+        super().insert_snapshot(snapshot)
+
+    def update_snapshot_status(self, snapshot_id, status):
+        self.mutations.append(f"update_snapshot_status({status})")
+        super().update_snapshot_status(snapshot_id, status)
+
+    def insert_chemicals(self, rows):
+        self.mutations.append(f"insert_chemicals({len(rows)})")
+        super().insert_chemicals(rows)
+
+    def insert_sections(self, rows):
+        self.mutations.append(f"insert_sections({len(rows)})")
+        super().insert_sections(rows)
+
+    def insert_snapshot_items(self, rows):
+        self.mutations.append(f"insert_snapshot_items({len(rows)})")
+        super().insert_snapshot_items(rows)
+
+    def update_chemical(self, source_id, source_key, mutable_fields):
+        self.mutations.append(f"update_chemical({source_key})")
+        super().update_chemical(source_id, source_key, mutable_fields)
+
+    def update_section(self, chemical_id, section_no, mutable_fields):
+        self.mutations.append(f"update_section({chemical_id},{section_no})")
+        super().update_section(chemical_id, section_no, mutable_fields)
+
+
+def test_C_dry_run_mutation_zero(monkeypatch):
+    """DRY-RUN path calls preflight (SELECT) only — zero DB mutations."""
+    new_chem = _make_plan_bundle("C_NEW")
+    unch_chem = _make_plan_bundle("C_UNCH", source_content_hash="H_UNCH")
+    unch_uuid = str(uuid.uuid4())
+    manifest = _make_manifest(2, 32, "SEM_C")
+    report = {"plan_sha256": "SEM_C", "execute_eligible": True, "responses_sha256": "RESP_C"}
+
+    existing_row = {
+        "id": unch_uuid, "chem_id": "C_UNCH",
+        "source_id": "KOSHA_MSDS", "source_key": "C_UNCH",
+        "content_id": "CHEM:c_unch", "source_content_hash": "H_UNCH",
     }
-    # Patch _verify_frozen_artifacts and _load_plan_inputs so we don't need real files.
-    fake_preflight = w.PreflightReport(
-        plan_semantic_sha256="SEM", plan_file_sha256="FILE",
-        responses_sha256="RESP", execute_eligible=True,
-        chemical_count=4647, section_count=74352,
-        counts_by_kind={
-            "NEW": (2650, 42400), "UNCHANGED": (1997, 31952),
-            "CHANGED": (0, 0), "CONFLICT": (0, 0),
-        },
-        conflict_chemicals=(), conflict_sections=(), incomplete_memberships=(),
-        existing_running_snapshot_id=None, block_reasons=(), can_execute=True,
+    fake_store = _MutationTrackingStore(
+        chemicals=[existing_row],
+        sections=[
+            {"chemical_id": unch_uuid, "section_no": n, "section_hash": f"SH-C_UNCH-{n}"}
+            for n in range(1, 17)
+        ],
+    )
+    plan_inputs = w.MaterializePlanInputs(
+        manifest=manifest, report=report, chemicals=(new_chem, unch_chem),
     )
 
-    imported = []
+    # Verify: preflight reads store (SELECT) but writes nothing.
+    preflight = w.preflight(
+        plan_inputs, store=fake_store,
+        publication_scope=PUBLICATION_SCOPE_SEO_PREVIEW,
+    )
 
-    def fake_verify():
-        return {"responses_sha256": ip.FROZEN_RESPONSES_SHA}
-
-    def fake_load():
-        imported.append("plan_loaded")
-        bundles = [_make_plan_bundle(f"C{i:04d}") for i in range(2)]
-        m = _make_manifest(2, 32, "SEM")
-        return w.MaterializePlanInputs(manifest=m, report={}, chemicals=tuple(bundles))
-
-    real_preflight = w.preflight
-
-    def fake_preflight(plan_inputs, *, store, publication_scope, preloaded=None):
-        return fake_preflight
-
-    monkeypatch.setattr(ip, "_verify_frozen_artifacts", fake_verify)
-    monkeypatch.setattr(ip, "_load_plan_inputs", fake_load)
-
-    # Replace run_dry_run to verify it doesn't touch SupabaseMaterializeStore.
-    production_store_imported = []
-    original_run_dry_run = ip.run_dry_run.__code__
-
-    # Just verify the function doesn't hard-fail on missing DB (no args = no connect).
-    # We trust the code structure; the test confirms frozen constants are correct shape.
-    assert ip.FROZEN_EXPECTED_CHEMICALS == 4647
-    assert ip.FROZEN_EXPECTED_SECTIONS == 74352
+    assert preflight.can_execute
+    assert fake_store.mutations == [], (
+        f"DRY-RUN must produce zero mutations, got: {fake_store.mutations}"
+    )
+    assert preflight.counts_by_kind["NEW"][0] == 1
+    assert preflight.counts_by_kind["UNCHANGED"][0] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -467,3 +491,140 @@ def test_K2_no_running_snapshot_allows_execute():
         plan_inputs, store=store, publication_scope=PUBLICATION_SCOPE_SEO_PREVIEW,
     )
     assert preflight.existing_running_snapshot_id is None
+
+
+# ===========================================================================
+# PATCH-1 regression tests T1–T5 — frozen artifact binding guards.
+#
+# These tests call ip._verify_frozen_artifacts() with patched file content
+# to assert each binding mismatch is blocked before any DB connection.
+# ===========================================================================
+
+def _make_good_seo_manifest() -> dict:
+    return {
+        "manifest_sha256": ip.FROZEN_SEO_MANIFEST_SHA,
+        "source": {"responses_sha256": ip.FROZEN_RESPONSES_SHA},
+        "census": {
+            "complete_chemicals": ip.FROZEN_EXPECTED_CHEMICALS,
+            "preview_sections": ip.FROZEN_EXPECTED_SECTIONS,
+        },
+        "chemicals": [],
+    }
+
+
+def _make_good_preview_manifest() -> dict:
+    return {
+        "plan_semantic_sha256": ip.FROZEN_PREVIEW_PLAN_SEM,
+        "plan_file_sha256": ip.FROZEN_PREVIEW_PLAN_FILE,
+        "responses_sha256": ip.FROZEN_RESPONSES_SHA,
+        "counts": {
+            "chemicals": ip.FROZEN_EXPECTED_CHEMICALS,
+            "sections": ip.FROZEN_EXPECTED_SECTIONS,
+        },
+    }
+
+
+def _patch_files(monkeypatch, *, responses_sha=None, plan_file_sha=None,
+                 seo_manifest=None, preview_manifest=None):
+    """Monkeypatch ip._file_sha256 and Path.read_text for the three key files."""
+
+    real_file_sha256 = ip._file_sha256
+    _responses_sha = responses_sha or ip.FROZEN_RESPONSES_SHA
+    _plan_file_sha = plan_file_sha or ip.FROZEN_PREVIEW_PLAN_FILE
+    _seo = seo_manifest or _make_good_seo_manifest()
+    _prev = preview_manifest or _make_good_preview_manifest()
+
+    def fake_file_sha256(path: Path) -> str:
+        if path == ip.RESPONSES_PATH:
+            return _responses_sha
+        if path == ip.PREVIEW_PLAN_JSONL:
+            return _plan_file_sha
+        return real_file_sha256(path)
+
+    monkeypatch.setattr(ip, "_file_sha256", fake_file_sha256)
+
+    # Patch Path.exists to True for all relevant paths.
+    orig_exists = Path.exists
+
+    def fake_exists(self):
+        if self in (ip.RESPONSES_PATH, ip.SEO_MANIFEST_PATH,
+                    ip.PREVIEW_PLAN_JSONL, ip.PREVIEW_MANIFEST_JSON,
+                    ip.PREVIEW_REPORT_JSON):
+            return True
+        return orig_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+
+    # Patch Path.read_text to return our fake manifests.
+    orig_read_text = Path.read_text
+
+    def fake_read_text(self, **kw):
+        if self == ip.SEO_MANIFEST_PATH:
+            return json.dumps(_seo)
+        if self == ip.PREVIEW_MANIFEST_JSON:
+            return json.dumps(_prev)
+        return orig_read_text(self, **kw)
+
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+
+# ---------------------------------------------------------------------------
+# T1 — actual responses.jsonl SHA mismatch → BLOCKED.
+# ---------------------------------------------------------------------------
+
+def test_T1_responses_sha_mismatch_blocked(monkeypatch):
+    _patch_files(monkeypatch, responses_sha="WRONG_SHA_" + "0" * 54)
+    with pytest.raises(SystemExit) as exc_info:
+        ip._verify_frozen_artifacts()
+    assert ip.BLOCK_SHA_MISMATCH in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# T2 — preview plan JSONL file SHA mismatch → BLOCKED.
+# ---------------------------------------------------------------------------
+
+def test_T2_preview_plan_file_sha_mismatch_blocked(monkeypatch):
+    _patch_files(monkeypatch, plan_file_sha="WRONG_PLAN_" + "0" * 53)
+    with pytest.raises(SystemExit) as exc_info:
+        ip._verify_frozen_artifacts()
+    assert ip.BLOCK_SHA_MISMATCH in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# T3 — preview manifest responses_sha256 mismatch → BLOCKED.
+# ---------------------------------------------------------------------------
+
+def test_T3_preview_manifest_responses_sha_mismatch_blocked(monkeypatch):
+    bad_prev = _make_good_preview_manifest()
+    bad_prev["responses_sha256"] = "WRONG_MANIFEST_RESP_" + "0" * 44
+    _patch_files(monkeypatch, preview_manifest=bad_prev)
+    with pytest.raises(SystemExit) as exc_info:
+        ip._verify_frozen_artifacts()
+    assert ip.BLOCK_SHA_MISMATCH in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# T4 — preview manifest plan_semantic_sha256 mismatch → BLOCKED.
+# ---------------------------------------------------------------------------
+
+def test_T4_preview_semantic_sha_mismatch_blocked(monkeypatch):
+    bad_prev = _make_good_preview_manifest()
+    bad_prev["plan_semantic_sha256"] = "WRONG_SEM_" + "0" * 54
+    _patch_files(monkeypatch, preview_manifest=bad_prev)
+    with pytest.raises(SystemExit) as exc_info:
+        ip._verify_frozen_artifacts()
+    assert ip.BLOCK_SHA_MISMATCH in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# T5 — all frozen SHAs match → _verify_frozen_artifacts returns without error.
+# ---------------------------------------------------------------------------
+
+def test_T5_all_frozen_match_passes(monkeypatch):
+    _patch_files(monkeypatch)
+    result = ip._verify_frozen_artifacts()
+    assert result["actual_responses_sha"] == ip.FROZEN_RESPONSES_SHA
+    assert result["actual_plan_file_sha"] == ip.FROZEN_PREVIEW_PLAN_FILE
+    assert result["preview_plan_semantic_sha"] == ip.FROZEN_PREVIEW_PLAN_SEM
+    assert result["chemicals"] == ip.FROZEN_EXPECTED_CHEMICALS
+    assert result["sections"] == ip.FROZEN_EXPECTED_SECTIONS

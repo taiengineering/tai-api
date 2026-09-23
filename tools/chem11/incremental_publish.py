@@ -4,17 +4,23 @@ Publishes the v12 responses.jsonl artifact (4,647 complete chemicals) as a new
 PUBLISHED_SEO_PREVIEW snapshot. The new snapshot unions the 1,997 already-published
 chemicals with the 2,650 new complete chemicals, giving 4,647 total.
 
-Pre-built artifacts (all deterministic, SHA-pinned):
-    artifacts/chem05_v12/         — chem05 plan from v12 responses
-    artifacts/chem_seo_preview_v12/ — preview plan bridging chem05_v12 + SEO manifest v12
-    docs/chem/seo-preview-manifest-v12.json — SEO membership manifest
+Pre-built frozen artifacts (SHA-pinned, gitignored):
+    artifacts/chem04/official_v12/responses.jsonl    — source hydration artifact
+    artifacts/chem_seo_preview_v12/                  — pre-built preview plan (use directly)
+    docs/chem/seo-preview-manifest-v12.json          — SEO membership manifest (committed)
 
 Safety fences (fail-closed):
-    * DRY-RUN by default: only preflight; no DB writes.
+    * DRY-RUN by default: preflight SELECT only; no DB writes.
     * --execute requires --owner-approved (GPT + Owner).
-    * Expected SHA/count pins verified before any DB connection.
+    * Four-way responses SHA binding verified before any DB connection:
+        file SHA == FROZEN_RESPONSES_SHA == preview_manifest.responses_sha256
+              == SEO manifest source.responses_sha256
+    * Preview plan file SHA verified; frozen artifacts used directly as execution
+      input (no re-build from source, no divergence between verified and executed plan).
+    * preview manifest plan_semantic_sha256 verified against FROZEN_PREVIEW_PLAN_SEM.
+    * preflight receives on_disk_responses_sha256 + on_disk_plan_file_sha256 so
+      verify_manifest_binding() is NOT bypassed.
     * No DELETE, no TRUNCATE, no publish_state rollback.
-    * production_store import deferred; never imported on dry-run.
 
 CLI (dry-run):
     python -m tools.chem11.incremental_publish
@@ -24,7 +30,7 @@ CLI (execute, AFTER GPT + Owner approval):
         --execute --owner-approved \\
         --snapshot-id <uuid>
 
-Frozen artifact bindings (WO §9):
+Frozen artifact bindings (WO §9 / PATCH-1):
     responses_sha256:          ce817e9cccd97e8b5e93b572aaa577fc32426a80f65359d7e753956c3f3cac67
     seo_manifest_sha256:       b6f9e86da727617d253d04f03aebfee0b6d5cb2426f123add46133db8d36cf88
     preview_plan_semantic_sha: ff3b1a13853db201ac8da53f8e5cbe056c1537531ade5d73ae8c24615fc9ce27
@@ -45,16 +51,16 @@ from typing import Optional
 
 WO_CODE = "WO-MSDS-INCREMENTAL-PUBLISH-001"
 
-# Frozen artifact paths (relative to repo root).
-SEO_MANIFEST_PATH = Path("docs/chem/seo-preview-manifest-v12.json")
-CHEM05_PLAN_JSONL = Path("artifacts/chem05_v12/materialize_plan.jsonl")
-CHEM05_MANIFEST  = Path("artifacts/chem05_v12/materialize_manifest.json")
-CHEM05_REPORT    = Path("artifacts/chem05_v12/materialize_report.json")
-PREVIEW_PLAN_JSONL   = Path("artifacts/chem_seo_preview_v12/preview_materialize_plan.jsonl")
+# Source artifact path.
+RESPONSES_PATH = Path("artifacts/chem04/official_v12/responses.jsonl")
+
+# Frozen pre-built artifact paths (relative to repo root).
+SEO_MANIFEST_PATH     = Path("docs/chem/seo-preview-manifest-v12.json")
+PREVIEW_PLAN_JSONL    = Path("artifacts/chem_seo_preview_v12/preview_materialize_plan.jsonl")
 PREVIEW_MANIFEST_JSON = Path("artifacts/chem_seo_preview_v12/preview_materialize_manifest.json")
 PREVIEW_REPORT_JSON   = Path("artifacts/chem_seo_preview_v12/preview_materialize_report.json")
 
-# Frozen SHA pins (WO §9).
+# Frozen SHA pins (WO §9 / PATCH-1).
 FROZEN_RESPONSES_SHA      = "ce817e9cccd97e8b5e93b572aaa577fc32426a80f65359d7e753956c3f3cac67"
 FROZEN_SEO_MANIFEST_SHA   = "b6f9e86da727617d253d04f03aebfee0b6d5cb2426f123add46133db8d36cf88"
 FROZEN_PREVIEW_PLAN_SEM   = "ff3b1a13853db201ac8da53f8e5cbe056c1537531ade5d73ae8c24615fc9ce27"
@@ -90,37 +96,80 @@ def _print(obj: dict) -> None:
 
 
 def _verify_frozen_artifacts() -> dict:
-    """Verify all frozen artifact SHAs. Raises on any mismatch."""
-    results = {}
-    checks = [
-        ("seo_manifest", SEO_MANIFEST_PATH, "manifest_sha256", FROZEN_SEO_MANIFEST_SHA),
-        ("preview_plan_file", PREVIEW_PLAN_JSONL, None, FROZEN_PREVIEW_PLAN_FILE),
-    ]
-    for label, path, json_field, expected in checks:
-        if not path.exists():
-            raise IncrementalPublishError(f"BLOCKED {BLOCK_SHA_MISMATCH}: {path} not found")
-        if json_field:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            actual = data.get(json_field)
-        else:
-            actual = _file_sha256(path)
-        if actual != expected:
-            raise IncrementalPublishError(
-                f"BLOCKED {BLOCK_SHA_MISMATCH}: {label} actual={actual!r} expected={expected!r}"
-            )
-        results[label] = actual
+    """Verify all frozen artifact SHAs and SHA binding chain. Raises on any mismatch.
 
-    # Check preview manifest's semantic sha.
+    PATCH-1 binding chain (four-way responses SHA equality):
+        actual file SHA
+        == FROZEN_RESPONSES_SHA
+        == preview_manifest.responses_sha256
+        == SEO manifest source.responses_sha256
+
+    Returns a dict with verified SHA values for downstream use.
+    """
+    # ── 1. Compute actual responses.jsonl SHA and four-way equality check.
+    if not RESPONSES_PATH.exists():
+        raise IncrementalPublishError(
+            f"BLOCKED {BLOCK_SHA_MISMATCH}: responses.jsonl not found: {RESPONSES_PATH}"
+        )
+    actual_responses_sha = _file_sha256(RESPONSES_PATH)
+    if actual_responses_sha != FROZEN_RESPONSES_SHA:
+        raise IncrementalPublishError(
+            f"BLOCKED {BLOCK_SHA_MISMATCH}: responses.jsonl actual={actual_responses_sha!r} "
+            f"frozen={FROZEN_RESPONSES_SHA!r}"
+        )
+
+    # ── 2. SEO manifest self-integrity (on-disk SHA field).
+    if not SEO_MANIFEST_PATH.exists():
+        raise IncrementalPublishError(
+            f"BLOCKED {BLOCK_SHA_MISMATCH}: SEO manifest not found: {SEO_MANIFEST_PATH}"
+        )
+    seo_manifest = json.loads(SEO_MANIFEST_PATH.read_text(encoding="utf-8"))
+    seo_manifest_sha = seo_manifest.get("manifest_sha256")
+    if seo_manifest_sha != FROZEN_SEO_MANIFEST_SHA:
+        raise IncrementalPublishError(
+            f"BLOCKED {BLOCK_SHA_MISMATCH}: seo_manifest actual={seo_manifest_sha!r} "
+            f"frozen={FROZEN_SEO_MANIFEST_SHA!r}"
+        )
+    seo_responses_sha = (seo_manifest.get("source") or {}).get("responses_sha256")
+    if seo_responses_sha != FROZEN_RESPONSES_SHA:
+        raise IncrementalPublishError(
+            f"BLOCKED {BLOCK_SHA_MISMATCH}: SEO manifest source.responses_sha256="
+            f"{seo_responses_sha!r} != FROZEN_RESPONSES_SHA={FROZEN_RESPONSES_SHA!r}"
+        )
+
+    # ── 3. Preview plan JSONL file SHA.
+    if not PREVIEW_PLAN_JSONL.exists():
+        raise IncrementalPublishError(
+            f"BLOCKED {BLOCK_SHA_MISMATCH}: preview plan JSONL not found: {PREVIEW_PLAN_JSONL}"
+        )
+    actual_plan_file_sha = _file_sha256(PREVIEW_PLAN_JSONL)
+    if actual_plan_file_sha != FROZEN_PREVIEW_PLAN_FILE:
+        raise IncrementalPublishError(
+            f"BLOCKED {BLOCK_SHA_MISMATCH}: preview_plan_file actual={actual_plan_file_sha!r} "
+            f"frozen={FROZEN_PREVIEW_PLAN_FILE!r}"
+        )
+
+    # ── 4. Preview manifest: semantic SHA + responses SHA + census counts.
+    if not PREVIEW_MANIFEST_JSON.exists():
+        raise IncrementalPublishError(
+            f"BLOCKED {BLOCK_SHA_MISMATCH}: preview manifest not found: {PREVIEW_MANIFEST_JSON}"
+        )
     preview_manifest = json.loads(PREVIEW_MANIFEST_JSON.read_text(encoding="utf-8"))
+
     sem_sha = preview_manifest.get("plan_semantic_sha256")
     if sem_sha != FROZEN_PREVIEW_PLAN_SEM:
         raise IncrementalPublishError(
             f"BLOCKED {BLOCK_SHA_MISMATCH}: preview_plan_semantic actual={sem_sha!r} "
-            f"expected={FROZEN_PREVIEW_PLAN_SEM!r}"
+            f"frozen={FROZEN_PREVIEW_PLAN_SEM!r}"
         )
-    results["preview_plan_semantic"] = sem_sha
 
-    # Verify census counts in preview manifest.
+    manifest_responses_sha = preview_manifest.get("responses_sha256")
+    if manifest_responses_sha != FROZEN_RESPONSES_SHA:
+        raise IncrementalPublishError(
+            f"BLOCKED {BLOCK_SHA_MISMATCH}: preview_manifest.responses_sha256="
+            f"{manifest_responses_sha!r} != FROZEN_RESPONSES_SHA={FROZEN_RESPONSES_SHA!r}"
+        )
+
     counts = preview_manifest.get("counts") or {}
     if int(counts.get("chemicals") or 0) != FROZEN_EXPECTED_CHEMICALS:
         raise IncrementalPublishError(
@@ -132,28 +181,30 @@ def _verify_frozen_artifacts() -> dict:
             f"BLOCKED {BLOCK_CENSUS_MISMATCH}: sections "
             f"actual={counts.get('sections')} expected={FROZEN_EXPECTED_SECTIONS}"
         )
-    results["chemicals"] = counts["chemicals"]
-    results["sections"] = counts["sections"]
-    results["responses_sha256"] = preview_manifest.get("responses_sha256")
-    return results
+
+    return {
+        "actual_responses_sha": actual_responses_sha,
+        "actual_plan_file_sha": actual_plan_file_sha,
+        "seo_manifest_sha": seo_manifest_sha,
+        "preview_plan_semantic_sha": sem_sha,
+        "chemicals": counts["chemicals"],
+        "sections": counts["sections"],
+    }
 
 
-def _load_plan_inputs():
+def _load_plan_inputs(*, actual_responses_sha: str, actual_plan_file_sha: str):
+    """Load MaterializePlanInputs from the pre-built frozen preview artifacts.
+
+    PATCH-1: uses materialize_writer.load_plan_inputs() directly against the
+    pre-built PREVIEW_PLAN_JSONL / PREVIEW_MANIFEST_JSON / PREVIEW_REPORT_JSON.
+    No re-invocation of build_preview_plan() — the verified file IS the input.
+    """
     from services.kosha_msds import materialize_writer as w
-    from tools.chem_seo_preview.build_preview_plan import build_preview_plan
 
-    built = build_preview_plan(
-        chem05_plan_jsonl=CHEM05_PLAN_JSONL,
-        chem05_manifest_json=CHEM05_MANIFEST,
-        chem05_report_json=CHEM05_REPORT,
-        seo_manifest_json=SEO_MANIFEST_PATH,
-    )
-    preview_manifest = dict(built["manifest"])
-    preview_manifest.setdefault("plan_file_sha256", preview_manifest["plan_semantic_sha256"])
-    return w.MaterializePlanInputs(
-        manifest=preview_manifest,
-        report=dict(built["report"]),
-        chemicals=tuple(built["plan_chemicals"]),
+    return w.load_plan_inputs(
+        plan_jsonl=PREVIEW_PLAN_JSONL,
+        manifest_json=PREVIEW_MANIFEST_JSON,
+        report_json=PREVIEW_REPORT_JSON,
     )
 
 
@@ -162,8 +213,14 @@ def run_dry_run() -> dict:
     from services.kosha_msds.contract import PUBLICATION_SCOPE_SEO_PREVIEW
     from services.kosha_msds.production_store import SupabaseMaterializeStore
 
-    _verify_frozen_artifacts()
-    plan_inputs = _load_plan_inputs()
+    verified = _verify_frozen_artifacts()
+    actual_responses_sha = verified["actual_responses_sha"]
+    actual_plan_file_sha = verified["actual_plan_file_sha"]
+
+    plan_inputs = _load_plan_inputs(
+        actual_responses_sha=actual_responses_sha,
+        actual_plan_file_sha=actual_plan_file_sha,
+    )
 
     mat_store = SupabaseMaterializeStore()
     preloaded = w.preload_existing_state(plan_inputs, mat_store)
@@ -172,6 +229,8 @@ def run_dry_run() -> dict:
         store=mat_store,
         publication_scope=PUBLICATION_SCOPE_SEO_PREVIEW,
         preloaded=preloaded,
+        on_disk_responses_sha256=actual_responses_sha,
+        on_disk_plan_file_sha256=actual_plan_file_sha,
     )
 
     if not preflight.can_execute:
@@ -183,6 +242,16 @@ def run_dry_run() -> dict:
         "wo": WO_CODE,
         "mode": "DRY_RUN",
         "status": "PREFLIGHT_PASS",
+        "binding": {
+            "responses_sha256_actual": actual_responses_sha,
+            "responses_sha256_frozen": FROZEN_RESPONSES_SHA,
+            "responses_sha256_match": actual_responses_sha == FROZEN_RESPONSES_SHA,
+            "preview_plan_file_sha_actual": actual_plan_file_sha,
+            "preview_plan_file_sha_frozen": FROZEN_PREVIEW_PLAN_FILE,
+            "preview_plan_file_sha_match": actual_plan_file_sha == FROZEN_PREVIEW_PLAN_FILE,
+            "preview_plan_semantic_sha": verified["preview_plan_semantic_sha"],
+            "seo_manifest_sha256": verified["seo_manifest_sha"],
+        },
         "frozen": {
             "responses_sha256": FROZEN_RESPONSES_SHA,
             "seo_manifest_sha256": FROZEN_SEO_MANIFEST_SHA,
@@ -220,20 +289,28 @@ def run_execute(*, snapshot_id: Optional[str] = None) -> dict:
         SupabaseMaterializeStore, SupabasePublishStore,
     )
 
-    artifact_results = _verify_frozen_artifacts()
-    plan_inputs = _load_plan_inputs()
+    verified = _verify_frozen_artifacts()
+    actual_responses_sha = verified["actual_responses_sha"]
+    actual_plan_file_sha = verified["actual_plan_file_sha"]
+    seo_sha = verified["seo_manifest_sha"]
+
+    plan_inputs = _load_plan_inputs(
+        actual_responses_sha=actual_responses_sha,
+        actual_plan_file_sha=actual_plan_file_sha,
+    )
     snap_id = snapshot_id or str(_uuid_mod.uuid4())
 
     mat_store = SupabaseMaterializeStore()
     pub_store = SupabasePublishStore()
 
-    # Preflight with preloaded state.
     preloaded = w.preload_existing_state(plan_inputs, mat_store)
     preflight = w.preflight(
         plan_inputs,
         store=mat_store,
         publication_scope=PUBLICATION_SCOPE_SEO_PREVIEW,
         preloaded=preloaded,
+        on_disk_responses_sha256=actual_responses_sha,
+        on_disk_plan_file_sha256=actual_plan_file_sha,
     )
     if not preflight.can_execute:
         raise IncrementalPublishError(
@@ -249,25 +326,18 @@ def run_execute(*, snapshot_id: Optional[str] = None) -> dict:
     except w.ProductionWriteForbidden as exc:
         raise IncrementalPublishError(f"BLOCKED {BLOCK_MATERIALIZE_FAIL}: {exc}") from exc
 
-    # Open snapshot.
-    preview_manifest = plan_inputs.manifest
-    seo_manifest = json.loads(SEO_MANIFEST_PATH.read_text(encoding="utf-8"))
-    seo_sha = seo_manifest.get("manifest_sha256")
-    responses_sha = artifact_results.get("responses_sha256")
-
     snap_row = w.open_snapshot(
         snapshot_id=snap_id,
-        manifest=preview_manifest,
+        manifest=plan_inputs.manifest,
         discovered_count=FROZEN_EXPECTED_CHEMICALS,
         expected_count=FROZEN_EXPECTED_CHEMICALS,
     )
     snap_row["started_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    # Inject binding into metrics_json so publish preflight can verify.
     metrics = dict(snap_row.get("metrics_json") or {})
     metrics.update({
         "publication_scope": PUBLICATION_SCOPE_SEO_PREVIEW,
         "seo_preview_manifest_sha256": seo_sha,
-        "responses_sha256": responses_sha,
+        "responses_sha256": actual_responses_sha,
         "seo_preview_expected_chemical_count": FROZEN_EXPECTED_CHEMICALS,
         "seo_preview_expected_section_count": FROZEN_EXPECTED_SECTIONS,
     })
@@ -289,14 +359,12 @@ def run_execute(*, snapshot_id: Optional[str] = None) -> dict:
             pass
         raise
 
-    # Verify snapshot completed.
     reread = mat_store.get_snapshot(snap_id)
     if not reread or reread.get("status") != SNAPSHOT_COMPLETED:
         raise IncrementalPublishError(
             f"BLOCKED {BLOCK_SNAPSHOT_VERIFY_FAIL}: post-materialize state={reread}"
         )
 
-    # Publish preflight.
     publish_report = pub.preflight_publish(
         snap_id,
         store=pub_store,
@@ -306,7 +374,7 @@ def run_execute(*, snapshot_id: Optional[str] = None) -> dict:
         expected_materialize_binding={
             "publication_scope": PUBLICATION_SCOPE_SEO_PREVIEW,
             "seo_preview_manifest_sha256": seo_sha,
-            "responses_sha256": responses_sha,
+            "responses_sha256": actual_responses_sha,
         },
     )
     if not publish_report.eligible:
@@ -334,6 +402,10 @@ def run_execute(*, snapshot_id: Optional[str] = None) -> dict:
         "mode": "EXECUTE",
         "status": "OK",
         "snapshot_id": snap_id,
+        "binding": {
+            "responses_sha256_actual": actual_responses_sha,
+            "preview_plan_file_sha_actual": actual_plan_file_sha,
+        },
         "frozen": {
             "responses_sha256": FROZEN_RESPONSES_SHA,
             "seo_manifest_sha256": FROZEN_SEO_MANIFEST_SHA,
