@@ -204,3 +204,188 @@ def get_dashboard(days: int = 90) -> Dict[str, Any]:
         "products": products,
         "marketing": marketing,
     }
+
+
+# ── OBJ08B Canonical Marketing Business Outcomes ──────────────────────────────
+
+_KST = timezone(timedelta(hours=9))
+
+
+def _parse_date_token(token: str) -> Optional["datetime"]:
+    """date token → KST datetime(date 시작, 00:00:00). 실패 → None."""
+    import re
+    token = (token or "").strip()
+    if token == "today":
+        return now_kst().replace(hour=0, minute=0, second=0, microsecond=0)
+    if token == "yesterday":
+        return (now_kst() - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    m = re.fullmatch(r"(\d+)daysAgo", token)
+    if m:
+        n = int(m.group(1))
+        return (now_kst() - timedelta(days=n)).replace(hour=0, minute=0, second=0, microsecond=0)
+    # YYYY-MM-DD
+    try:
+        from datetime import date as _date
+        d = _date.fromisoformat(token)
+        return datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=_KST)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _count_exact_strict(table: str, build: Optional[Callable] = None) -> int:
+    """엄격 count — DB 오류 시 0이 아니라 예외 전파. 0과 장애를 구분."""
+    q = get_supabase().table(table).select("id", count="exact")
+    if build:
+        q = build(q)
+    result = q.execute()
+    return result.count or 0
+
+
+def get_marketing_business_outcomes(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> Dict[str, Any]:
+    """OBJ08B Canonical Marketing Business Outcomes.
+
+    반환: {available, date_from, date_to, timezone, flows, current_stock,
+           rates, cohort_joined, semantics}
+
+    fail-closed: DB 오류 → available=False, flows=None, current_stock=None.
+    0건 ≠ 오류. rates=None(cohort join 금지). cohort_joined=False.
+    """
+    from_token = date_from or "28daysAgo"
+    to_token = date_to or "today"
+
+    from_dt = _parse_date_token(from_token)
+    to_dt = _parse_date_token(to_token)
+
+    if from_dt is None or to_dt is None:
+        raise ValueError(f"invalid date token: from={from_token!r} to={to_token!r}")
+
+    # to_dt: 해당 날짜 다음날 00:00:00 KST (exclusive upper bound)
+    to_exclusive = to_dt + timedelta(days=1)
+
+    if from_dt >= to_exclusive:
+        raise ValueError(f"date range invalid: from={from_token!r} >= to={to_token!r}")
+
+    from_iso = from_dt.isoformat()
+    to_iso = to_exclusive.isoformat()
+
+    # date_from/date_to 응답용 (YYYY-MM-DD)
+    from_label = from_dt.strftime("%Y-%m-%d")
+    to_label = to_dt.strftime("%Y-%m-%d")
+
+    snapshot_at = serialize_external_utc(now_kst())
+
+    try:
+        # B01 Canonical: anonymous_diagnosis_results.created_at within period
+        free_diagnosis_completed = _count_exact_strict(
+            "anonymous_diagnosis_results",
+            lambda q: q.gte("created_at", from_iso).lt("created_at", to_iso),
+        )
+
+        # B02 Canonical: users WHERE auth_id IS NOT NULL AND created_at within period
+        # auth_id is set ONLY by /auth/register (Supabase sign_up) and /auth/ensure-user (social OAuth JWT).
+        # Excludes: worker OTP (_ensure_user_row: auth_id NULL), admin /users (auth_id NULL),
+        #           company invite accept (auth_id NULL).
+        # Residual: ensure-user may UPDATE auth_id on an admin-created row with matching email.
+        #   That row's created_at precedes the social login, so period attribution is the admin
+        #   creation date — not structurally fixable without a new schema column.
+        signup_complete = _count_exact_strict(
+            "users",
+            lambda q: (
+                q.not_.is_("auth_id", "null")
+                 .gte("created_at", from_iso)
+                 .lt("created_at", to_iso)
+            ),
+        )
+
+        # B04 Canonical: payments WHERE product_type='DIAGNOSIS' AND status='SUCCESS'
+        # AND paid_at IS NOT NULL AND paid_at within period
+        paid_diagnosis_purchased = _count_exact_strict(
+            "payments",
+            lambda q: (
+                q.eq("product_type", "DIAGNOSIS")
+                 .eq("status_code", "SUCCESS")
+                 .not_.is_("paid_at", "null")
+                 .gte("paid_at", from_iso)
+                 .lt("paid_at", to_iso)
+            ),
+        )
+
+        # B05 Canonical: payments WHERE product_type LIKE 'SAAS%' AND status='SUCCESS'
+        # AND paid_at IS NOT NULL AND paid_at within period
+        saas_payment_success = _count_exact_strict(
+            "payments",
+            lambda q: (
+                q.like("product_type", "SAAS%")
+                 .eq("status_code", "SUCCESS")
+                 .not_.is_("paid_at", "null")
+                 .gte("paid_at", from_iso)
+                 .lt("paid_at", to_iso)
+            ),
+        )
+
+        # B06 Current stock (no date filter — point-in-time)
+        saas_service_active = _count_exact_strict(
+            "contracts",
+            lambda q: (
+                q.eq("service_type", "SAAS")
+                 .eq("status_code", "ACTIVE")
+                 .eq("is_active", True)
+            ),
+        )
+
+        # B07 Canonical: anonymous_diagnosis_results WHERE claimed_user_id IS NOT NULL
+        # AND created_at within period (진단 생성 시점 기준, claimed_at 컬럼 없음)
+        free_diagnosis_claimed = _count_exact_strict(
+            "anonymous_diagnosis_results",
+            lambda q: (
+                q.not_.is_("claimed_user_id", "null")
+                 .gte("created_at", from_iso)
+                 .lt("created_at", to_iso)
+            ),
+        )
+
+        # B08 Current stock (no date filter — point-in-time)
+        # subscriptions.status='ACTIVE' ≠ contracts.service_type='SAAS'
+        subscription_active = _count_exact_strict(
+            "subscriptions",
+            lambda q: q.eq("status", "ACTIVE"),
+        )
+
+    except Exception as e:
+        log.warning("[MKT-OUTCOMES] DB query failed: %s", e)
+        return {
+            "available": False,
+            "date_from": from_label,
+            "date_to": to_label,
+            "timezone": "Asia/Seoul",
+            "flows": None,
+            "current_stock": None,
+            "rates": None,
+            "cohort_joined": False,
+            "semantics": "independent_business_facts_not_cohort",
+        }
+
+    return {
+        "available": True,
+        "date_from": from_label,
+        "date_to": to_label,
+        "timezone": "Asia/Seoul",
+        "flows": {
+            "free_diagnosis_completed": free_diagnosis_completed,
+            "free_diagnosis_claimed": free_diagnosis_claimed,
+            "signup_complete": signup_complete,
+            "paid_diagnosis_purchased": paid_diagnosis_purchased,
+            "saas_payment_success": saas_payment_success,
+        },
+        "current_stock": {
+            "saas_service_active": saas_service_active,
+            "subscription_active": subscription_active,
+            "snapshot_at": snapshot_at,
+        },
+        "rates": None,
+        "cohort_joined": False,
+        "semantics": "independent_business_facts_not_cohort",
+    }
