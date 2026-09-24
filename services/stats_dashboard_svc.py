@@ -284,13 +284,17 @@ def get_marketing_business_outcomes(
             lambda q: q.gte("created_at", from_iso).lt("created_at", to_iso),
         )
 
-        # B02/B03 Canonical: users WHERE identity_verified=true AND identity_ci IS NOT NULL
-        # (작업자 OTP 계정 제외 — /auth/register 일반 회원가입만)
+        # B02 Canonical: users WHERE auth_id IS NOT NULL AND created_at within period
+        # auth_id is set ONLY by /auth/register (Supabase sign_up) and /auth/ensure-user (social OAuth JWT).
+        # Excludes: worker OTP (_ensure_user_row: auth_id NULL), admin /users (auth_id NULL),
+        #           company invite accept (auth_id NULL).
+        # Residual: ensure-user may UPDATE auth_id on an admin-created row with matching email.
+        #   That row's created_at precedes the social login, so period attribution is the admin
+        #   creation date — not structurally fixable without a new schema column.
         signup_complete = _count_exact_strict(
             "users",
             lambda q: (
-                q.eq("identity_verified", True)
-                 .not_.is_("identity_ci", "null")
+                q.not_.is_("auth_id", "null")
                  .gte("created_at", from_iso)
                  .lt("created_at", to_iso)
             ),

@@ -99,20 +99,27 @@ def test_b01_free_diagnosis_uses_anonymous_diagnosis_results():
     assert "anonymous_diagnosis_results" in tables
 
 
-def test_b02_signup_identity_verified_filter():
+def test_b02_signup_uses_auth_id_not_null_filter():
+    """SIGNUP_COMPLETE canonical: auth_id IS NOT NULL (register + social OAuth 모두 포함)."""
     _, captured = _intercept_run("2026-09-01", "2026-09-23")
     users_qs = _calls_for_table(captured, "users")
     assert users_qs, "users 테이블 쿼리 없음"
     q = users_qs[0]
-    assert q.has("eq", "identity_verified", True), "identity_verified=True 필터 없음"
+    assert q.has("not_is_", "auth_id", "null"), "auth_id IS NOT NULL 필터 없음"
 
 
-def test_b03_signup_excludes_workers_via_identity_ci_not_null():
+def test_b03_signup_does_not_use_identity_ci_filter():
+    """auth_id predicate는 identity_ci 필터를 사용하지 않는다 (social OAuth 제외하지 않음)."""
     _, captured = _intercept_run("2026-09-01", "2026-09-23")
     users_qs = _calls_for_table(captured, "users")
     assert users_qs
     q = users_qs[0]
-    assert q.has("not_is_", "identity_ci", "null"), "identity_ci IS NOT NULL 필터 없음"
+    assert not q.has("not_is_", "identity_ci", "null"), (
+        "identity_ci 필터가 있으면 social OAuth(ensure-user) 를 잘못 제외함"
+    )
+    assert not q.has("eq", "identity_verified", True), (
+        "identity_verified 필터가 있으면 social OAuth(ensure-user) 를 잘못 제외함"
+    )
 
 
 def test_b04_paid_diagnosis_canonical_filter():
@@ -360,21 +367,26 @@ def test_b24_two_new_facts_present_in_response():
     assert "subscription_active" in result["current_stock"], "current_stock 에 subscription_active 없음"
 
 
-def test_b25_signup_predicate_paths_documented():
-    """signup_complete 쿼리: identity_verified=True AND identity_ci IS NOT NULL (3가지 경로 증거).
+def test_b25_signup_predicate_auth_id_based():
+    """signup_complete 쿼리: auth_id IS NOT NULL (5가지 경로 증거).
 
     경로 분석:
-    1. /auth/register: identity_verified=True, identity_ci=hash (KYC 완료 자기 회원가입)
-    2. /auth/ensure-user: identity_verified=False (소셜 OAuth, KYC 미완료 — 제외 정당)
-    3. _ensure_user_row: role_code='014' (현장작업자 OTP — identity_ci 없으므로 자동 제외)
-    → predicate identity_verified=True AND identity_ci IS NOT NULL 는 Path 1만 포함 = 정본
+    1. /auth/register: auth_id SET (supabase.auth.sign_up) → 포함
+    2. /auth/ensure-user: auth_id SET (JWT token) → 포함 (소셜 OAuth 실제 계정생성)
+    3. _ensure_user_row (worker OTP): auth_id NULL at creation → 제외
+    4. /users admin create: auth_id NULL (UserCreate 모델에 없음) → 제외
+    5. company-users invite accept: auth_id NULL (user_row에 없음) → 제외
+    잔여: ensure-user가 admin-created 유저의 auth_id를 UPDATE할 수 있음 (동일 이메일).
+    해당 유저의 created_at이 admin 생성 기간에 속하면 오탐 가능.
+    현재 스키마로는 제거 불가 — 스키마 컬럼 추가 없이 도달 가능한 최선.
     """
     _, captured = _intercept_run("2026-09-01", "2026-09-23")
     users_qs = _calls_for_table(captured, "users")
     assert users_qs
     q = users_qs[0]
-    assert q.has("eq", "identity_verified", True)
-    assert q.has("not_is_", "identity_ci", "null")
+    assert q.has("not_is_", "auth_id", "null"), "auth_id IS NOT NULL 필터 없음"
+    assert any(c[0] == "gte" for c in q._calls), "created_at >= 날짜 필터 없음"
+    assert any(c[0] == "lt" for c in q._calls), "created_at < 날짜 필터 없음"
 
 
 def test_b26_diagnosis_purchases_not_referenced():
