@@ -332,6 +332,24 @@ def get_marketing_business_outcomes(
             ),
         )
 
+        # B07 Canonical: anonymous_diagnosis_results WHERE claimed_user_id IS NOT NULL
+        # AND created_at within period (진단 생성 시점 기준, claimed_at 컬럼 없음)
+        free_diagnosis_claimed = _count_exact_strict(
+            "anonymous_diagnosis_results",
+            lambda q: (
+                q.not_.is_("claimed_user_id", "null")
+                 .gte("created_at", from_iso)
+                 .lt("created_at", to_iso)
+            ),
+        )
+
+        # B08 Current stock (no date filter — point-in-time)
+        # subscriptions.status='ACTIVE' ≠ contracts.service_type='SAAS'
+        subscription_active = _count_exact_strict(
+            "subscriptions",
+            lambda q: q.eq("status", "ACTIVE"),
+        )
+
     except Exception as e:
         log.warning("[MKT-OUTCOMES] DB query failed: %s", e)
         return {
@@ -353,12 +371,14 @@ def get_marketing_business_outcomes(
         "timezone": "Asia/Seoul",
         "flows": {
             "free_diagnosis_completed": free_diagnosis_completed,
+            "free_diagnosis_claimed": free_diagnosis_claimed,
             "signup_complete": signup_complete,
             "paid_diagnosis_purchased": paid_diagnosis_purchased,
             "saas_payment_success": saas_payment_success,
         },
         "current_stock": {
             "saas_service_active": saas_service_active,
+            "subscription_active": subscription_active,
             "snapshot_at": snapshot_at,
         },
         "rates": None,

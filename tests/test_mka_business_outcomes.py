@@ -1,4 +1,4 @@
-"""OBJ08B Canonical Marketing Business Outcomes — B01–B21.
+"""OBJ08B Canonical Marketing Business Outcomes — B01–B26 (corrective: B22-B26).
 
 실 DB·네트워크 0. _count_exact_strict 인터셉트로 쿼리 조건 검증.
 Router auth는 FastAPI TestClient 로 검증.
@@ -320,3 +320,67 @@ def test_b21_cohort_joined_always_false():
     result, _ = _intercept_run("2026-09-01", "2026-09-23", return_val=3)
     assert result["cohort_joined"] is False
     assert result["semantics"] == "independent_business_facts_not_cohort"
+
+
+# ── B22–B26 Corrective: missing facts + signup predicate evidence ─────────────
+
+def test_b22_free_diagnosis_claimed_not_null_filter():
+    """FREE_DIAGNOSIS_CLAIMED: claimed_user_id IS NOT NULL + created_at within period."""
+    _, captured = _intercept_run("2026-09-01", "2026-09-23")
+    anon_qs = _calls_for_table(captured, "anonymous_diagnosis_results")
+    # Two queries on this table: one without claimed filter (completed), one with (claimed)
+    claimed_q = next(
+        (q for q in anon_qs if q.has("not_is_", "claimed_user_id", "null")),
+        None,
+    )
+    assert claimed_q is not None, "claimed_user_id IS NOT NULL 필터가 없음"
+    # Must also have date filter
+    assert any(c[0] == "gte" for c in claimed_q._calls), "created_at >= 날짜 필터 없음"
+    assert any(c[0] == "lt" for c in claimed_q._calls), "created_at < 날짜 필터 없음"
+
+
+def test_b23_subscription_active_no_date_filter():
+    """SUBSCRIPTION_ACTIVE: subscriptions WHERE status='ACTIVE', 날짜 필터 없음(point-in-time)."""
+    _, captured = _intercept_run("2026-09-01", "2026-09-23")
+    sub_qs = _calls_for_table(captured, "subscriptions")
+    assert sub_qs, "subscriptions 테이블 쿼리 없음"
+    active_q = next(
+        (q for q in sub_qs if q.has("eq", "status", "ACTIVE")),
+        None,
+    )
+    assert active_q is not None, "subscriptions.status=ACTIVE 필터 없음"
+    date_calls = [c for c in active_q._calls if c[0] in ("gte", "lt")]
+    assert not date_calls, "subscription_active 에 날짜 필터가 있으면 안 됨 (point-in-time)"
+
+
+def test_b24_two_new_facts_present_in_response():
+    """free_diagnosis_claimed, subscription_active 가 응답에 존재해야 한다."""
+    result, _ = _intercept_run("2026-09-01", "2026-09-23", return_val=2)
+    assert "free_diagnosis_claimed" in result["flows"], "flows 에 free_diagnosis_claimed 없음"
+    assert "subscription_active" in result["current_stock"], "current_stock 에 subscription_active 없음"
+
+
+def test_b25_signup_predicate_paths_documented():
+    """signup_complete 쿼리: identity_verified=True AND identity_ci IS NOT NULL (3가지 경로 증거).
+
+    경로 분석:
+    1. /auth/register: identity_verified=True, identity_ci=hash (KYC 완료 자기 회원가입)
+    2. /auth/ensure-user: identity_verified=False (소셜 OAuth, KYC 미완료 — 제외 정당)
+    3. _ensure_user_row: role_code='014' (현장작업자 OTP — identity_ci 없으므로 자동 제외)
+    → predicate identity_verified=True AND identity_ci IS NOT NULL 는 Path 1만 포함 = 정본
+    """
+    _, captured = _intercept_run("2026-09-01", "2026-09-23")
+    users_qs = _calls_for_table(captured, "users")
+    assert users_qs
+    q = users_qs[0]
+    assert q.has("eq", "identity_verified", True)
+    assert q.has("not_is_", "identity_ci", "null")
+
+
+def test_b26_diagnosis_purchases_not_referenced():
+    """diagnosis_purchases 테이블은 OBJ08B 에서 사용하지 않아야 한다 (deprecated source)."""
+    _, captured = _intercept_run("2026-09-01", "2026-09-23")
+    tables_queried = [t for t, _ in captured]
+    assert "diagnosis_purchases" not in tables_queried, (
+        "diagnosis_purchases 는 canonical Business SoT 아님 — OBJ08B 에서 참조 금지"
+    )
