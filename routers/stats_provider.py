@@ -9,10 +9,15 @@ Goal: G-ms4je4z3-33eada (통계 대시보드 G-ms5pdquz-9e76e5)
 - GET /stats/fulfillment — (신규) 서비스 이행: 문서 생성·점검셋·배정 백로그 + 상태 분포.
 - GET /stats/workers — (신규) 워커 활동: 작업 배정 추이·상태 + 워커/교육/보고 카운트.
 - GET /stats/overview — (신규) 운영개요: 5개 영역 헤드라인 KPI + 대표 추이(퍼널·매출).
+- GET /stats/marketing-outcomes — (OBJ08B) Canonical Marketing Business Outcomes.
 """
-from fastapi import APIRouter, Query
+import hmac
+import os
+from typing import Optional
 
-from services.stats_dashboard_svc import get_dashboard
+from fastapi import APIRouter, Header, HTTPException, Query
+
+from services.stats_dashboard_svc import get_dashboard, get_marketing_business_outcomes
 from services.stats_fulfillment_svc import get_fulfillment
 from services.stats_ops_svc import get_customers, get_funnel, get_revenue
 from services.stats_overview_svc import get_overview
@@ -20,6 +25,15 @@ from services.stats_provider_svc import get_stats
 from services.stats_workers_svc import get_workers
 
 router = APIRouter(prefix="/stats", tags=["경영지표"])
+
+
+def _verify_mkt_stats_token(token: Optional[str]) -> None:
+    """MKT_STATS_SHARED_TOKEN 인증. 미설정=503, 불일치/없음=403. secret 로그 금지."""
+    secret = os.environ.get("MKT_STATS_SHARED_TOKEN")
+    if not secret:
+        raise HTTPException(status_code=503, detail="MKT_STATS_TOKEN_UNCONFIGURED")
+    if not token or not hmac.compare_digest(token, secret):
+        raise HTTPException(status_code=403, detail="FORBIDDEN")
 
 
 @router.get("/business")
@@ -68,3 +82,19 @@ def workers_stats(days: int = Query(default=90, ge=7, le=365)):
 def overview_stats(days: int = Query(default=90, ge=7, le=365)):
     """운영개요 — 5개 영역 헤드라인 KPI + 대표 추이(퍼널·매출)."""
     return {"status": "success", "data": get_overview(days)}
+
+
+@router.get("/marketing-outcomes")
+def marketing_outcomes_stats(
+    from_: Optional[str] = Query(default=None, alias="from"),
+    to: Optional[str] = Query(default=None),
+    x_mkt_stats_token: Optional[str] = Header(default=None, alias="X-MKT-Stats-Token"),
+):
+    """OBJ08B Canonical Marketing Business Outcomes (protected read-only).
+    Auth: X-MKT-Stats-Token header. 미설정=503, 불일치=403."""
+    _verify_mkt_stats_token(x_mkt_stats_token)
+    try:
+        data = get_marketing_business_outcomes(date_from=from_, date_to=to)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"status": "success", "data": data}
