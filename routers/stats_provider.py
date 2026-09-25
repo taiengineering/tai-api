@@ -10,6 +10,7 @@ Goal: G-ms4je4z3-33eada (통계 대시보드 G-ms5pdquz-9e76e5)
 - GET /stats/workers — (신규) 워커 활동: 작업 배정 추이·상태 + 워커/교육/보고 카운트.
 - GET /stats/overview — (신규) 운영개요: 5개 영역 헤드라인 KPI + 대표 추이(퍼널·매출).
 - GET /stats/marketing-outcomes — (OBJ08B) Canonical Marketing Business Outcomes.
+- GET /stats/marketing-journey — (OBJ13) LINKED_BUSINESS_JOURNEY_SEGMENTS.
 """
 import hmac
 import os
@@ -95,6 +96,23 @@ def marketing_outcomes_stats(
     _verify_mkt_stats_token(x_mkt_stats_token)
     try:
         data = get_marketing_business_outcomes(date_from=from_, date_to=to)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"status": "success", "data": data}
+
+
+@router.get("/marketing-journey")
+def marketing_journey_stats(
+    from_: Optional[str] = Query(default=None, alias="from"),
+    to: Optional[str] = Query(default=None),
+    x_mkt_stats_token: Optional[str] = Header(default=None, alias="X-MKT-Stats-Token"),
+):
+    """OBJ13 LINKED_BUSINESS_JOURNEY_SEGMENTS (protected read-only).
+    Auth: X-MKT-Stats-Token header."""
+    _verify_mkt_stats_token(x_mkt_stats_token)
+    try:
+        from services.stats_marketing_journey_svc import get_marketing_journey
+        data = get_marketing_journey(date_from=from_, date_to=to)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     return {"status": "success", "data": data}
