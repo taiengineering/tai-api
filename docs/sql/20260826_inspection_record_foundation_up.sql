@@ -423,12 +423,12 @@ BEGIN
                 'detail', format('%s -> %s', v_before->>'inspection_status', v_to));
         END IF;
         v_after   := jsonb_set(v_after, '{inspection_status}', to_jsonb('COMPLETED'::text));
-        v_changed := v_changed || 'inspection_status';
+        v_changed := array_append(v_changed, 'inspection_status');
 
     ELSIF p_event_type = 'INSPECTION_DEACTIVATION' THEN
         -- already-inactive is handled by the step-7 guard (INSPECTION_INACTIVE)
         v_after   := jsonb_set(v_after, '{is_active}', to_jsonb(false));
-        v_changed := v_changed || 'is_active';
+        v_changed := array_append(v_changed, 'is_active');
 
     ELSIF p_event_type = 'RESULT_DEACTIVATION' THEN
         IF p_target_result_id IS NULL THEN

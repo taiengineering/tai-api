@@ -181,8 +181,9 @@ def _seed(db: MemDB, *,
           end_date=None,
           next_planned=None,
           category="GENERAL",
-          name="월간점검"):
-    db.tables["work_schedules"].append({
+          name="월간점검",
+          repeat_type=None):
+    ws_row = {
         "id": ws_id,
         "factory_id": factory_id,
         "inspection_set_id": set_id,
@@ -191,7 +192,10 @@ def _seed(db: MemDB, *,
         "completed_at": completed_at,
         "status_code": "in_progress",
         "assigned_user_id": "USER-OLD",
-    })
+    }
+    if repeat_type is not None:
+        ws_row["repeat_type"] = repeat_type
+    db.tables["work_schedules"].append(ws_row)
     db.tables["inspection_sets"].append({
         "id": set_id,
         "factory_id": factory_id,
@@ -530,3 +534,23 @@ def test_r18_obj01_base_update_delete_0():
     ).read()
     assert "record_safe_result_batch" in chk
     assert "CREATE TABLE" not in chk and "ALTER TABLE" not in rolling_src
+
+
+def test_r19_once_repeat_type_skipped():
+    """R19: repeat_type=once → successor 생성 금지."""
+    db = _seed(MemDB(), cycle_unit=None, cycle_value=None, repeat_type="once")
+    out = ensure_next_rolling_schedule(db, "WS-1", date(2026, 1, 20))
+    assert out == {"created": False, "next_planned_date": None, "skipped": True}
+    assert db.upsert_kwargs == []
+    new_ws = [r for r in db.tables["work_schedules"] if r.get("planned_date") != "2026-01-15"]
+    assert new_ws == []
+
+
+def test_r20_one_time_repeat_type_skipped():
+    """R20: repeat_type=one_time → successor 생성 금지."""
+    db = _seed(MemDB(), repeat_type="one_time")
+    out = ensure_next_rolling_schedule(db, "WS-1", date(2026, 1, 20))
+    assert out == {"created": False, "next_planned_date": None, "skipped": True}
+    assert db.upsert_kwargs == []
+    new_ws = [r for r in db.tables["work_schedules"] if r.get("planned_date") != "2026-01-15"]
+    assert new_ws == []
