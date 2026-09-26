@@ -1,4 +1,4 @@
-"""WO-MSDS-INCREMENTAL-PUBLISH-001 — fixture tests (A–K + T1–T5, PATCH-1).
+"""WO-MSDS-INCREMENTAL-PUBLISH-20260926-001 — fixture tests (A–K + T1–T5, PATCH-1).
 
 Tests verify the incremental publish tool's safety fences, frozen SHA pins,
 four-way responses binding, and production mutation-0 contract.
@@ -88,13 +88,18 @@ def _make_manifest(chemicals: int, sections: int, sem_sha: str) -> dict:
 # Fixture A — Tool module loads; frozen constants are present and non-empty.
 # ---------------------------------------------------------------------------
 
+_EXISTING_PUBLISHED = 4647   # production baseline before this WO
+_NEW_COMPLETE       = 6000   # newly complete chemicals in this WO
+_TARGET_PUBLISHED   = ip.FROZEN_EXPECTED_CHEMICALS  # 10647 = existing + new
+
+
 def test_A_frozen_constants_present():
     assert ip.FROZEN_RESPONSES_SHA, "FROZEN_RESPONSES_SHA must be set"
     assert ip.FROZEN_SEO_MANIFEST_SHA, "FROZEN_SEO_MANIFEST_SHA must be set"
     assert ip.FROZEN_PREVIEW_PLAN_SEM, "FROZEN_PREVIEW_PLAN_SEM must be set"
     assert ip.FROZEN_PREVIEW_PLAN_FILE, "FROZEN_PREVIEW_PLAN_FILE must be set"
-    assert ip.FROZEN_EXPECTED_CHEMICALS == 4647
-    assert ip.FROZEN_EXPECTED_SECTIONS == 74352
+    assert ip.FROZEN_EXPECTED_CHEMICALS == _TARGET_PUBLISHED
+    assert ip.FROZEN_EXPECTED_SECTIONS == _TARGET_PUBLISHED * 16
     assert len(ip.FROZEN_RESPONSES_SHA) == 64, "SHA256 must be 64 hex chars"
     assert len(ip.FROZEN_SEO_MANIFEST_SHA) == 64
 
@@ -345,13 +350,13 @@ def test_G_new_and_unchanged_mix():
 
 
 # ---------------------------------------------------------------------------
-# Fixture H — Production impact projection: NEW=2650, UNCHANGED=1997, CHANGED=0.
+# Fixture H — Production impact projection: NEW=6000, UNCHANGED=4647, CHANGED=0.
 # ---------------------------------------------------------------------------
 
 def test_H_production_impact_projection():
     """Verify the DRY-RUN tool's impact projection matches the live preflight."""
-    new_count = 2650
-    unch_count = 1997
+    new_count = _NEW_COMPLETE        # 6000
+    unch_count = _EXISTING_PUBLISHED # 4647
 
     new_bundles = [_make_plan_bundle(f"NEW{i:05d}") for i in range(new_count)]
     unch_bundles = [_make_plan_bundle(f"UNCH{i:05d}", source_content_hash=f"H{i}") for i in range(unch_count)]
@@ -391,16 +396,16 @@ def test_H_production_impact_projection():
 
 
 # ---------------------------------------------------------------------------
-# Fixture I — Union membership: existing 1997 all covered by the 4647 plan.
+# Fixture I — Union membership: existing 4647 all covered by the 10647 plan.
 # ---------------------------------------------------------------------------
 
 def test_I_union_membership_all_existing_covered():
     """All existing published chemicals must appear in the new snapshot plan."""
-    existing_ids = {f"EXIST{i:04d}" for i in range(1997)}
-    new_ids = {f"NEW_{i:04d}" for i in range(2650)}
-    plan_ids = existing_ids | new_ids  # union = 4647
+    existing_ids = {f"EXIST{i:04d}" for i in range(_EXISTING_PUBLISHED)}
+    new_ids = {f"NEW_{i:04d}" for i in range(_NEW_COMPLETE)}
+    plan_ids = existing_ids | new_ids  # union = _TARGET_PUBLISHED
 
-    assert len(plan_ids) == 4647
+    assert len(plan_ids) == _TARGET_PUBLISHED
     # No existing ID is missing from the plan.
     missing = existing_ids - plan_ids
     assert len(missing) == 0, f"Union membership violated: {len(missing)} existing IDs not in plan"

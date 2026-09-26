@@ -1,8 +1,8 @@
-"""WO-MSDS-INCREMENTAL-PUBLISH-001 — incremental KOSHA MSDS SEO preview publisher.
+"""WO-MSDS-INCREMENTAL-PUBLISH-20260926-001 — incremental KOSHA MSDS SEO preview publisher.
 
-Publishes the v12 responses.jsonl artifact (4,647 complete chemicals) as a new
-PUBLISHED_SEO_PREVIEW snapshot. The new snapshot unions the 1,997 already-published
-chemicals with the 2,650 new complete chemicals, giving 4,647 total.
+Publishes the v12 responses.jsonl artifact (10,647 complete chemicals) as a new
+PUBLISHED_SEO_PREVIEW snapshot. The new snapshot unions the 4,647 already-published
+chemicals with the 6,000 new complete chemicals, giving 10,647 total.
 
 Pre-built frozen artifacts (SHA-pinned, gitignored):
     artifacts/chem04/official_v12/responses.jsonl    — source hydration artifact
@@ -30,13 +30,13 @@ CLI (execute, AFTER GPT + Owner approval):
         --execute --owner-approved \\
         --snapshot-id <uuid>
 
-Frozen artifact bindings (WO §9 / PATCH-1):
-    responses_sha256:          ce817e9cccd97e8b5e93b572aaa577fc32426a80f65359d7e753956c3f3cac67
-    seo_manifest_sha256:       b6f9e86da727617d253d04f03aebfee0b6d5cb2426f123add46133db8d36cf88
-    preview_plan_semantic_sha: ff3b1a13853db201ac8da53f8e5cbe056c1537531ade5d73ae8c24615fc9ce27
-    preview_plan_file_sha:     360b4ccedde15bae7d287a660ff38f22c8f05cbb8860c6eb5c7ce62c599b6505
-    expected_chemicals:        4647
-    expected_sections:         74352
+Frozen artifact bindings (WO-MSDS-INCREMENTAL-PUBLISH-20260926-001):
+    responses_sha256:          3f626f67a3f529aa2e922b6b4b2c2fd956a2129ad47f3f7102d4241136c15b6c
+    seo_manifest_sha256:       2038e17f8ac6fbea5a57ca120d4aba852615d57dd02e44b0cc088adf6cbb8a4b
+    preview_plan_semantic_sha: 4a84ec25fe7813b9c2d0d12e87fb1bfd2d68fa9ad083267520b72ae62cfe9425
+    preview_plan_file_sha:     00d39e5486f1d07a4cc4df161a282b5275c60624b0601e1999dd168f72cb1595
+    expected_chemicals:        10647
+    expected_sections:         170352
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ import uuid as _uuid_mod
 from pathlib import Path
 from typing import Optional
 
-WO_CODE = "WO-MSDS-INCREMENTAL-PUBLISH-001"
+WO_CODE = "WO-MSDS-INCREMENTAL-PUBLISH-20260926-001"
 
 # Source artifact path.
 RESPONSES_PATH = Path("artifacts/chem04/official_v12/responses.jsonl")
@@ -60,13 +60,13 @@ PREVIEW_PLAN_JSONL    = Path("artifacts/chem_seo_preview_v12/preview_materialize
 PREVIEW_MANIFEST_JSON = Path("artifacts/chem_seo_preview_v12/preview_materialize_manifest.json")
 PREVIEW_REPORT_JSON   = Path("artifacts/chem_seo_preview_v12/preview_materialize_report.json")
 
-# Frozen SHA pins (WO §9 / PATCH-1).
-FROZEN_RESPONSES_SHA      = "ce817e9cccd97e8b5e93b572aaa577fc32426a80f65359d7e753956c3f3cac67"
-FROZEN_SEO_MANIFEST_SHA   = "b6f9e86da727617d253d04f03aebfee0b6d5cb2426f123add46133db8d36cf88"
-FROZEN_PREVIEW_PLAN_SEM   = "ff3b1a13853db201ac8da53f8e5cbe056c1537531ade5d73ae8c24615fc9ce27"
-FROZEN_PREVIEW_PLAN_FILE  = "360b4ccedde15bae7d287a660ff38f22c8f05cbb8860c6eb5c7ce62c599b6505"
-FROZEN_EXPECTED_CHEMICALS = 4647
-FROZEN_EXPECTED_SECTIONS  = 74352
+# Frozen SHA pins (WO-MSDS-INCREMENTAL-PUBLISH-20260926-001).
+FROZEN_RESPONSES_SHA      = "3f626f67a3f529aa2e922b6b4b2c2fd956a2129ad47f3f7102d4241136c15b6c"
+FROZEN_SEO_MANIFEST_SHA   = "2038e17f8ac6fbea5a57ca120d4aba852615d57dd02e44b0cc088adf6cbb8a4b"
+FROZEN_PREVIEW_PLAN_SEM   = "4a84ec25fe7813b9c2d0d12e87fb1bfd2d68fa9ad083267520b72ae62cfe9425"
+FROZEN_PREVIEW_PLAN_FILE  = "00d39e5486f1d07a4cc4df161a282b5275c60624b0601e1999dd168f72cb1595"
+FROZEN_EXPECTED_CHEMICALS = 10647
+FROZEN_EXPECTED_SECTIONS  = 170352
 
 BLOCK_EXECUTE_NOT_REQUESTED  = "EXECUTE_NOT_REQUESTED"
 BLOCK_OWNER_NOT_APPROVED     = "OWNER_NOT_APPROVED"
