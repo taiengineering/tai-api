@@ -35,7 +35,7 @@ def _add_cycle(base: date, cycle_unit: str, cycle_value: int) -> date:
 def ensure_next_rolling_schedule(supabase: Any, work_schedule_id: str, completion_anchor) -> Dict[str, Any]:
     """멱등 rolling. 반환 {created, next_planned_date, skipped}."""
     ws = supabase.table("work_schedules").select(
-        "id, factory_id, inspection_set_id, planned_date, company_id"
+        "id, factory_id, inspection_set_id, planned_date, company_id, repeat_type"
     ).eq("id", work_schedule_id).limit(1).execute()
     if not ws.data:
         return {"created": False, "next_planned_date": None, "skipped": True}
@@ -45,6 +45,11 @@ def ensure_next_rolling_schedule(supabase: Any, work_schedule_id: str, completio
     factory_id = row.get("factory_id")
     source_planned = row.get("planned_date")
     if not inspection_set_id:                      # rolling 대상 아님(기존 의미 보존)
+        return {"created": False, "next_planned_date": None, "skipped": True}
+
+    # one-shot guard: repeat_type=once/one_time → successor 생성 금지
+    repeat_type = (row.get("repeat_type") or "").lower()
+    if repeat_type in {"once", "one_time"}:
         return {"created": False, "next_planned_date": None, "skipped": True}
 
     iset = supabase.table("inspection_sets").select(

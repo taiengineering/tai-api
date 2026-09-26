@@ -181,3 +181,14 @@ def test_fix1_result_code_hardening():
     up = _up()
     assert "jsonb_typeof(p_changes->'result_code') <> 'string'" in up
     assert "(p_changes->>'result_code') IN ('NORMAL','ABNORMAL','HOLD')" in up
+
+
+def test_array_append_operator_fix():
+    # OBJ16 C-01: 22P02 regression guard.
+    # || 'inspection_status' picks anyarray||anyarray overload → cast fails.
+    # array_append() is unambiguous.
+    up = _up()
+    assert "v_changed := v_changed || 'inspection_status'" not in up
+    assert "v_changed := v_changed || 'is_active'" not in up
+    assert "array_append(v_changed, 'inspection_status')" in up
+    assert "array_append(v_changed, 'is_active')" in up
