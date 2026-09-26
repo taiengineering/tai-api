@@ -36,6 +36,14 @@ class MaterialSourceLoadError(RuntimeError):
         self.factory_id = factory_id
 
 
+_FC001_VALID_MODES: frozenset = frozenset({
+    "INDOOR_HANDLING",
+    "MANUFACTURE_OR_USE",
+    "STORAGE_TRANSPORT",
+    "TANK_EQUIPMENT_WORK",
+})
+
+
 def _blank(val: Any) -> bool:
     return val is None or (isinstance(val, str) and not val.strip())
 
@@ -107,6 +115,11 @@ def validate_factory_payload(
         if val is None:
             out["handling_mode_codes"] = None
         elif isinstance(val, list) and all(isinstance(x, str) for x in val):
+            invalid = [m for m in val if m not in _FC001_VALID_MODES]
+            if invalid:
+                raise MaterialSourceValidationError(
+                    "handling_mode_codes contains invalid values: {}".format(sorted(invalid))
+                )
             out["handling_mode_codes"] = val
         else:
             raise MaterialSourceValidationError("handling_mode_codes must be a string list or null")

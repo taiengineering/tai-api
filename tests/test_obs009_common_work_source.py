@@ -256,9 +256,25 @@ def test_transport_allowlist_appends_work_facts_only():
     # diving_decompression_stop_required). Baseline 212 → 215.
     # WO-E2E-OBJ01-HIGH-PRESSURE-COMMON-COVERAGE-INTEGRATED-IMPLEMENT-001: +1
     # has_caisson_work (Art.540/543 잠함공법). Baseline 215 → 216.
+    # WO-E2E-OBJ03-L3-55-SEMANTIC-INPUT-INTEGRATION-001 PATCH-1: +3
+    # scaffold_kind_is_steel_pipe_scaffold, scaffold_kind_is_system_scaffold,
+    # performs_electrical_work_near_energized_circuit. Baseline 216 → 219.
+    # WO-E2E-OBJ04-L3-COVERAGE-ACTIVATION-WAVE1-DESIGN-001 PR-W1-A: +7
+    # scaffold_kind_is_{steel_frame,suspended_gondola,hanging,horse_trestle,
+    # mobile,leaning,hook}_scaffold. Baseline 219 → 226.
+    # PR-W1-A CORRECTION-1: +8 same-row composite facts. Baseline 226 → 234.
+    # PR-W1-A SEMANTIC CORRECTION-2: +1 scaffold_kind_is_work_chair_suspended_scaffold,
+    # -2 wrong _assembly composites, +3 _installation composites. Baseline 234 → 236.
+    # PR-W1-B FC-035: +1 has_regulated_building_water_tank. Baseline 236 → 237.
+    # PR-W1-C FC-021: +1 has_work_platform_or_path_edge_or_opening_fall_risk. Baseline 237 → 238.
+    # PR-W1-D FC-018/019C/019D: +3 maintenance exact fields. Baseline 238 → 241.
+    # PR-W1-E FC-011: +1 excavation_machinery_in_use. Baseline 241 → 242.
+    # A5 FC-024: +1 has_asbestos_waste_dust_processing_work. Baseline 242 → 243.
+    # WO-A5-FC001-TRACK1: +6 FC-001 per-row synthesis booleans. Baseline 243 → 249.
+    #   (fc001_any_manufacture_or_use excluded: removed by CORRECTION-001, 0 runtime consumers.)
     # Uniqueness invariant preserved.
-    assert len(_LEG_INPUT_FIELDS) == 216
-    assert len(set(_LEG_INPUT_FIELDS)) == 216
+    assert len(_LEG_INPUT_FIELDS) == 249
+    assert len(set(_LEG_INPUT_FIELDS)) == 249
     assert KSIC_NOT_IN_TRANSPORT not in _LEG_INPUT_FIELDS
     assert "has_welding" in _LEG_INPUT_FIELDS
     assert "has_demolition" in _LEG_INPUT_FIELDS
@@ -313,6 +329,8 @@ def test_registry_is_common_only():
     assert codes == ALLOWED_WORK_TYPES
     # WO-E2E-OBJ01-SEM002-ART57A-CONSUMER-INPUT-WIRING-001: SCAFFOLD family
     # added (still a COMMON work family — one work_type per family, not per law).
+    # PR-W1-E FC-011: EXCAVATION added.
+    # A5 FC-024: ASBESTOS_WASTE_DUST_PROCESSING added.
     assert codes == {
         "ELECTRICAL",
         "HIGH_PLACE",
@@ -320,6 +338,8 @@ def test_registry_is_common_only():
         "PAINTING",
         "MAINTENANCE",
         "SCAFFOLD",
+        "EXCAVATION",
+        "ASBESTOS_WASTE_DUST_PROCESSING",
     }
 
 
