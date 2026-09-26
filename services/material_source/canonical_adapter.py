@@ -20,10 +20,11 @@ Invariants:
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from services.material_source.projector import project_factory_material_rows
 from services.material_source.registry import ALLOWED_CLASSIFICATION_CODES
+from services.material_source.store import catalog_index
 
 
 CLASSIFICATION_TO_CANONICAL: Dict[str, str] = {
@@ -137,3 +138,82 @@ def merge_or_raise(
     if conflicts:
         raise MaterialCanonicalMergeConflict(conflicts)
     return merged
+
+
+# WO-A5-FC001-TRACK1-SOURCE-TRANSPORT-IMPLEMENT-001: FC-001 per-row synthesis.
+# (synthetic_field, classification_code_filter, mode_code)
+# classification_code_filter=None → any active row regardless of classification.
+_FC001_ROW_SPEC: Tuple[Tuple[str, Optional[str], str], ...] = (
+    ("fc001_managed_indoor_handling",       "MANAGED_HAZARDOUS_SUBSTANCE",         "INDOOR_HANDLING"),
+    ("fc001_managed_manufacture_or_use",    "MANAGED_HAZARDOUS_SUBSTANCE",         "MANUFACTURE_OR_USE"),
+    ("fc001_managed_storage_transport",     "MANAGED_HAZARDOUS_SUBSTANCE",         "STORAGE_TRANSPORT"),
+    ("fc001_managed_tank_equipment_work",   "MANAGED_HAZARDOUS_SUBSTANCE",         "TANK_EQUIPMENT_WORK"),
+    ("fc001_permit_manufacture_or_use",     "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE", "MANUFACTURE_OR_USE"),
+    ("fc001_permit_storage_transport",      "PERMIT_REQUIRED_HAZARDOUS_SUBSTANCE", "STORAGE_TRANSPORT"),
+)
+
+
+def _fc001_row_state(
+    qualifying: List[Mapping[str, Any]],
+    target_mode: str,
+) -> Optional[bool]:
+    """True/False/None(omit→UNKNOWN) for one mode across qualifying rows.
+
+    True   — at least one row has target_mode in handling_mode_codes.
+    False  — qualifying rows exist and all have explicit modes that exclude target_mode.
+    None   — qualifying rows exist but some have NULL handling_mode_codes (not yet entered).
+    """
+    if not qualifying:
+        return None  # no qualifying rows → cannot confirm or deny (UNKNOWN)
+    has_null = False
+    for row in qualifying:
+        hm = row.get("handling_mode_codes")
+        if hm is None:
+            has_null = True
+        elif target_mode in hm:
+            return True
+    return None if has_null else False
+
+
+def project_material_fc001_facts(
+    rows: Optional[Iterable[Mapping[str, Any]]],
+    *,
+    authority_dir=None,
+) -> Dict[str, Any]:
+    """Per-row FC-001 HAZARDOUS_MATERIAL_HANDLING_MODE synthesis.
+
+    Reads classification codes per row via material_master_key → catalog lookup,
+    then checks handling_mode_codes for each (classification, mode) pair.
+    Tri-state per pair: True/False in output, None = omit (LEG UNKNOWN).
+    Only active rows are considered (is_active=True).
+    """
+    active_rows = [r for r in (rows or ()) if r.get("is_active") is True]
+    if not active_rows:
+        return {}
+
+    idx = catalog_index(authority_dir)
+    cls_by_key = idx["classifications_by_key"]
+
+    row_cls: List[Set[str]] = []
+    for row in active_rows:
+        key = row.get("material_master_key")
+        if isinstance(key, str) and key.strip():
+            hits = cls_by_key.get(key) or []
+            codes: Set[str] = {h["classification_code"] for h in hits if h.get("active") is not False}
+        else:
+            codes = set()
+        row_cls.append(codes)
+
+    out: Dict[str, Any] = {}
+    for field, cls_filter, mode in _FC001_ROW_SPEC:
+        if cls_filter is None:
+            qualifying = active_rows
+        else:
+            qualifying = [r for r, codes in zip(active_rows, row_cls) if cls_filter in codes]
+        state = _fc001_row_state(qualifying, mode)
+        if state is True:
+            out[field] = True
+        elif state is False:
+            out[field] = False
+        # None → omit (UNKNOWN)
+    return out

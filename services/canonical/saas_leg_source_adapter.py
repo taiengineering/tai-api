@@ -28,6 +28,7 @@ from services.canonical.leg_input_contract import build_unified_leg_input
 from services.material_source.canonical_adapter import (
     merge_or_raise as merge_material_or_raise,
     project_material_canonical_facts_from_rows,
+    project_material_fc001_facts,
 )
 from services.work_source.merge import merge_or_raise
 
@@ -70,6 +71,10 @@ def build_saas_leg_step1(
         projected = project_material_canonical_facts_from_rows(material_rows)
         if projected:
             facts = merge_material_or_raise(facts, projected=projected)
+        fc001 = project_material_fc001_facts(material_rows)
+        for k, v in fc001.items():
+            if k not in facts:
+                facts[k] = v
 
     # ── 승인된 alias 만 canonical key 로 승격 (신규 alias 0) ──
     #   consumer key(has_chemical_substance) 값이 있고 canonical key 미존재 시만.

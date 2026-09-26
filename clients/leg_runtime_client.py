@@ -177,7 +177,22 @@ _LEG_INPUT_FIELDS = (
     "has_confined_space", "has_welding", "has_mech_parking", "has_pressure_vessel",
     "has_demolition", "has_radiation", "has_rolling", "has_boiler", "has_conveyor",
     "has_steel_frame", "is_energy_intensive", "has_grinding", "has_painting", "has_blasting",
-    "has_high_place_work", "gas_capacity_kg", "has_gondola", "has_water_tank", "has_press",
+    "has_high_place_work", "gas_capacity_kg", "has_gondola", "has_water_tank",
+    # PR-W1-B FC-035: 수도법 시행령 제50조 법정 관리대상 저수조. has_water_tank alias 금지.
+    "has_regulated_building_water_tank",
+    # PR-W1-C FC-021: 작업발판·통로 끝 또는 개구부 추락위험.
+    "has_work_platform_or_path_edge_or_opening_fall_risk",
+    # PR-W1-D FC-018: 공기정화설비 청소·개보수.
+    "performs_air_purification_equipment_maintenance_or_cleaning",
+    # PR-W1-D FC-019C: 열차 정기적 점검·정비.
+    "performs_periodic_train_maintenance_or_inspection",
+    # PR-W1-D FC-019D: 원심기·분쇄기 정비·청소·검사.
+    "performs_centrifuge_or_crusher_maintenance_cleaning_or_inspection",
+    # PR-W1-E FC-011: 굴착작업 시 굴착기계등 실제 사용. has_excavation alias 금지.
+    "excavation_machinery_in_use",
+    # A5 FC-024: 석면 1% 이상 함유 폐기물 처리 + 석면분진 발생 우려 작업.
+    "has_asbestos_waste_dust_processing_work",
+    "has_press",
     "has_fire_hydrant", "has_emergency_broadcast", "has_hazmat_storage", "has_sprinkler",
     "has_emergency_gen", "has_casting", "has_plating",
     # WO-LEG-SAFETY-3-CONSUMER-INPUT-IMPLEMENT-01: 산안49/187/665 소비자 입력 5축(append).
@@ -228,6 +243,33 @@ _LEG_INPUT_FIELDS = (
     # boolean for Art.57 제2항 (같은 비계 S에 대해 S.kind IN {STEEL_PIPE,LOG}
     # AND activity_on(S) == ASSEMBLY → 쌍줄). Computed by projector; not stored.
     "performs_steel_pipe_or_log_scaffold_assembly",
+    # WO-E2E-OBJ03-L3-55-SEMANTIC-INPUT-INTEGRATION-001 PATCH-1 Phase 3 +
+    # WO-E2E-OBJ04-L3-COVERAGE-ACTIVATION-WAVE1-DESIGN-001 PR-W1-A:
+    # DEEPEN FC-015A scaffold subtype exact facts (all 9 DEEPEN-defined subtypes).
+    "scaffold_kind_is_steel_pipe_scaffold",
+    "scaffold_kind_is_system_scaffold",
+    "scaffold_kind_is_steel_frame_scaffold",
+    "scaffold_kind_is_suspended_gondola_scaffold",
+    "scaffold_kind_is_hanging_scaffold",
+    "scaffold_kind_is_horse_trestle_scaffold",
+    "scaffold_kind_is_mobile_scaffold",
+    "scaffold_kind_is_leaning_scaffold",
+    "scaffold_kind_is_hook_scaffold",
+    # PR-W1-A SEMANTIC CORRECTION-2: WORK_CHAIR_SUSPENDED_SCAFFOLD exact subtype.
+    "scaffold_kind_is_work_chair_suspended_scaffold",
+    # PR-W1-A CORRECTION-1 + SEMANTIC CORRECTION-2: same-row composite facts.
+    # INSTALLATION composites (설치: Art.63 달비계, Art.66의2 걸침비계).
+    "performs_suspended_gondola_scaffold_installation",
+    "performs_work_chair_suspended_scaffold_installation",
+    "performs_hook_scaffold_installation",
+    # ASSEMBLY-only.
+    "performs_system_scaffold_assembly",
+    "performs_steel_pipe_scaffold_assembly",
+    # ASSEMBLY or USE_WITH_WORKERS.
+    "performs_hanging_scaffold_assembly_or_use_with_workers",
+    "performs_steel_frame_scaffold_assembly_or_use_with_workers",
+    "performs_mobile_scaffold_assembly_or_use_with_workers",
+    "performs_horse_trestle_scaffold_assembly_or_use_with_workers",
     # WO-E2E-OBS007-CRANE-MINIMUM-MODIFY-001: Frozen Design Leaf.field exact-name.
     # No alias, no has_crane collapse, no crane_adjustment_work.
     "has_mobile_crane", "has_jib_crane", "has_gantry_crane",
@@ -343,6 +385,7 @@ _LEG_INPUT_FIELDS = (
     "performs_electrical_work",
     "performs_deenergized_circuit_electrical_work",
     "performs_electrical_work_near_deenergized_circuit",
+    "performs_electrical_work_near_energized_circuit",
     "performs_energized_circuit_electrical_work",
     # WO-OBS009-MATERIAL-CANONICAL-RUNTIME-WIRING-PATCH-001: Common Material canonical
     # adapter outputs (OPTION A per-factory boolean presence). Transport allowlist only.
@@ -352,6 +395,17 @@ _LEG_INPUT_FIELDS = (
     "is_managed_hazardous_substance",
     "is_permit_required_hazardous_substance",
     "is_special_management_substance",
+    # WO-A5-FC001-TRACK1-SOURCE-TRANSPORT-IMPLEMENT-001: FC-001 per-row synthesis booleans.
+    # Per-row conjunction: (classification present in row) AND (mode in row.handling_mode_codes).
+    # True=confirmed, False=explicitly absent, omit=UNKNOWN(some rows have NULL handling_mode_codes).
+    # Consumed by applicable.py _FC001_REUSE_ATOMS exact-identity overlay (28 REUSE atoms).
+    # FOG-045 deferred (MULTI_CLUSTER co-dependency FC-005/FC-038 not yet implemented).
+    "fc001_managed_indoor_handling",
+    "fc001_managed_manufacture_or_use",
+    "fc001_managed_storage_transport",
+    "fc001_managed_tank_equipment_work",
+    "fc001_permit_manufacture_or_use",
+    "fc001_permit_storage_transport",
 )
 
 # WO-FIX-BUILDFACILITY-SECTOR-GATE-001: WIRING-016 append BUILDING N1 raw primitive 32축.

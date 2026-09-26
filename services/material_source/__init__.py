@@ -9,6 +9,7 @@ from services.material_source.canonical_adapter import (
     merge_material_canonical_into_facts,
     project_material_canonical_facts,
     project_material_canonical_facts_from_rows,
+    project_material_fc001_facts,
 )
 from services.material_source.projector import (
     project_factory_material_rows,
@@ -26,6 +27,7 @@ __all__ = [
     "project_factory_material_rows",
     "project_material_canonical_facts",
     "project_material_canonical_facts_from_rows",
+    "project_material_fc001_facts",
     "project_material_row",
     "registry_public",
 ]
