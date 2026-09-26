@@ -586,20 +586,24 @@ def test_chem10_preflight_seo_preview_uses_manifest_counts():
 
 def test_manifest_check_matches_source_when_artifact_present():
     """Skipped if the source artifact is not on this machine (CI runners
-    typically won't have the 31,961-line jsonl). Locally we verify."""
+    typically won't have the 182,459-line jsonl). Locally we verify.
+    Updated WO-MSDS-INCREMENTAL-PUBLISH-20260926-001: checks v12 manifest
+    (10,647 complete chemicals from the current official_v12 responses.jsonl).
+    """
     artifact = Path("/Users/taiwangsim/Desktop/tai-api-obj-chem/artifacts/chem04/official_v12/responses.jsonl")
     if not artifact.exists():
         pytest.skip("hydration artifact not available on this host")
+    manifest_v12 = REPO_ROOT / "docs" / "chem" / "seo-preview-manifest-v12.json"
     result = subprocess.run(
         [sys.executable, "-m", "tools.chem_seo_preview.build_manifest",
          "--responses-jsonl", str(artifact),
-         "--check", str(MANIFEST_PATH)],
+         "--check", str(manifest_v12)],
         cwd=REPO_ROOT, capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
     )
     assert result.returncode == 0, f"manifest check failed: stdout={result.stdout} stderr={result.stderr}"
     payload = json.loads(result.stdout)
     assert payload["verdict"] == "MATCH"
-    assert payload["complete_chemicals"] == 1997
+    assert payload["complete_chemicals"] == 10647
 
 
 # ---------------------------------------------------------------------------
