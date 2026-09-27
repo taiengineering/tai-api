@@ -288,3 +288,149 @@ def test_snapshot_negative_total_rejected():
 def test_worker_snapshot_manager_capacity_zero():
     snap = SaasWorkerPricingSnapshot(capacity=0, amount=0, brackets=[])
     assert snap.capacity == 0
+
+
+# ── PATCH-1: Strict Integer Contract ─────────────────────────────────────────
+
+# P01~P03 base_amount strict
+
+def test_P01_base_amount_integral_float_rejected():
+    with pytest.raises(ValidationError):
+        data = _site()
+        data["base_amount"] = 149000.0
+        SaasSiteScope(**data)
+
+
+def test_P02_base_amount_string_rejected():
+    with pytest.raises(ValidationError):
+        data = _site()
+        data["base_amount"] = "149000"
+        SaasSiteScope(**data)
+
+
+def test_P03_base_amount_bool_rejected():
+    with pytest.raises(ValidationError):
+        data = _site()
+        data["base_amount"] = True
+        SaasSiteScope(**data)
+
+
+# P04 final_site_amount strict
+
+def test_P04_final_site_amount_float_rejected():
+    with pytest.raises(ValidationError):
+        data = _site()
+        data["final_site_amount"] = 149000.0
+        SaasSiteScope(**data)
+
+
+# P05~P06 applied_rate_bps strict
+
+def test_P05_applied_rate_bps_float_rejected():
+    with pytest.raises(ValidationError):
+        SaasSiteScope(**_site(rate_bps=8000.0))
+
+
+def test_P06_applied_rate_bps_bool_rejected():
+    with pytest.raises(ValidationError):
+        SaasSiteScope(**_site(rate_bps=True))
+
+
+# P07~P08 worker_capacity strict
+
+def test_P07_worker_capacity_float_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialSelection(
+            product_tier="FIELD",
+            pricing_mode="STANDARD",
+            worker_capacity=100.0,
+            term_months=1,
+        )
+
+
+def test_P08_worker_capacity_bool_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialSelection(
+            product_tier="FIELD",
+            pricing_mode="STANDARD",
+            worker_capacity=True,
+            term_months=1,
+        )
+
+
+# P09~P10 term_months strict
+
+def test_P09_term_months_float_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialSelection(
+            product_tier="MANAGER",
+            pricing_mode="STANDARD",
+            worker_capacity=0,
+            term_months=12.0,
+        )
+
+
+def test_P10_term_months_bool_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialSelection(
+            product_tier="MANAGER",
+            pricing_mode="STANDARD",
+            worker_capacity=0,
+            term_months=True,
+        )
+
+
+# P11~P13 worker bracket strict
+
+def test_P11_unit_rate_float_rejected():
+    with pytest.raises(ValidationError):
+        SaasWorkerBracketLine(range_from=1, range_to=20, unit_rate=3000.0, units=10, amount=30000)
+
+
+def test_P12_units_float_rejected():
+    with pytest.raises(ValidationError):
+        SaasWorkerBracketLine(range_from=1, range_to=20, unit_rate=3000, units=20.0, amount=60000)
+
+
+def test_P13_bracket_amount_float_rejected():
+    with pytest.raises(ValidationError):
+        SaasWorkerBracketLine(range_from=1, range_to=20, unit_rate=3000, units=20, amount=60000.0)
+
+
+# P14~P15 range_to strict
+
+def test_P14_range_to_float_rejected():
+    with pytest.raises(ValidationError):
+        SaasWorkerBracketLine(range_from=1, range_to=20.0, unit_rate=3000, units=20, amount=60000)
+
+
+def test_P15_range_to_none_accepted():
+    bracket = SaasWorkerBracketLine(range_from=301, range_to=None, unit_rate=1200, units=10, amount=12000)
+    assert bracket.range_to is None
+
+
+# P16~P20 snapshot integer fields strict
+
+def test_P16_monthly_supply_float_rejected():
+    with pytest.raises(ValidationError):
+        SaasPricingSnapshotV2(**_snapshot(monthly_supply_amount=149000.0))
+
+
+def test_P17_prepaid_supply_float_rejected():
+    with pytest.raises(ValidationError):
+        SaasPricingSnapshotV2(**_snapshot(prepaid_supply_amount=149000.0))
+
+
+def test_P18_vat_rate_bps_float_rejected():
+    with pytest.raises(ValidationError):
+        SaasPricingSnapshotV2(**_snapshot(vat_rate_bps=1000.0))
+
+
+def test_P19_vat_amount_float_rejected():
+    with pytest.raises(ValidationError):
+        SaasPricingSnapshotV2(**_snapshot(vat_amount=14900.0))
+
+
+def test_P20_total_amount_float_rejected():
+    with pytest.raises(ValidationError):
+        SaasPricingSnapshotV2(**_snapshot(total_amount=163900.0))

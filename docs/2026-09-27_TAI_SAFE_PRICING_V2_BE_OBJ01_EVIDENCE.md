@@ -140,6 +140,65 @@ tai-admin useAuth.ts PLAN_MAP에 _V2/_V3 suffix normalize 없음.
 
 ---
 
+---
+
+## PATCH-1 — Strict Integer Contract (2026-09-27)
+
+### GPT SOURCE VERIFY FINDING
+
+```
+BLOCKER: STRICT INTEGER CONTRACT NOT ENFORCED
+
+Pydantic v2 int 타입은 다음을 허용:
+  149000.0  → coercion 허용 (integral float)
+  True      → coercion 허용 (bool-as-int)
+
+이는 "float money 금지" Architecture Contract 위반.
+```
+
+### PATCH APPLIED
+
+`schemas/saas_pricing_v2.py`:
+- `from pydantic import StrictInt` 추가
+- 지정 integer domain 필드 전체를 `StrictInt` (또는 `Optional[StrictInt]`)로 교체
+- 대상: worker_capacity, term_months, base_amount, applied_rate_bps, final_site_amount, range_from, range_to, unit_rate, units, amount(bracket), capacity, amount(worker), term_discount_rate_bps, monthly_supply_amount, prepaid_supply_amount, vat_rate_bps, vat_amount, total_amount
+
+`tests/test_saas_pricing_v2_contract.py`:
+- P01~P20 strict integer 테스트 추가
+
+### TEST RESULT
+
+```
+기존 tests  : 28 PASS
+신규 P01~P20: 20 PASS
+합계        : 48 PASS / 0 FAIL
+
+python3 -m pytest -q tests/test_saas_pricing_v2_contract.py
+................................................
+48 passed in 0.13s
+```
+
+### Strict Integer 검증 매트릭스
+
+| 입력 | 결과 |
+|---|---|
+| `149000` (int) | ACCEPT |
+| `149000.0` (integral float) | REJECT |
+| `149000.5` (fractional float) | REJECT |
+| `"149000"` (string) | REJECT |
+| `True` (bool) | REJECT |
+| `False` (bool) | REJECT |
+| `None` (range_to만 해당) | ACCEPT |
+
+### FILES MODIFIED
+
+```
+schemas/saas_pricing_v2.py
+tests/test_saas_pricing_v2_contract.py
+```
+
+---
+
 ```
 GPT REVIEW REQUIRED
 ```

@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, StrictInt, field_validator, model_validator
 
 # ── Schema Version ─────────────────────────────────────────────────────────────
 
@@ -42,8 +42,8 @@ class SaasCommercialSelection(BaseModel):
 
     product_tier: ProductTier
     pricing_mode: PricingMode
-    worker_capacity: int
-    term_months: int
+    worker_capacity: StrictInt
+    term_months: StrictInt
 
     @field_validator("worker_capacity")
     @classmethod
@@ -75,10 +75,10 @@ class SaasSiteScope(BaseModel):
     entity_id: UUID
     sector: SaasSector
     base_band_code: str
-    base_amount: int
+    base_amount: StrictInt
     is_primary: bool
-    applied_rate_bps: int
-    final_site_amount: int
+    applied_rate_bps: StrictInt
+    final_site_amount: StrictInt
 
     @field_validator("base_amount", "final_site_amount")
     @classmethod
@@ -110,11 +110,11 @@ class SaasSiteScope(BaseModel):
 class SaasWorkerBracketLine(BaseModel):
     """단위 작업자 구간 스냅샷 한 줄."""
 
-    range_from: int
-    range_to: Optional[int]
-    unit_rate: int
-    units: int
-    amount: int
+    range_from: StrictInt
+    range_to: Optional[StrictInt]
+    unit_rate: StrictInt
+    units: StrictInt
+    amount: StrictInt
 
     @field_validator("range_from")
     @classmethod
@@ -136,8 +136,8 @@ class SaasWorkerBracketLine(BaseModel):
 class SaasWorkerPricingSnapshot(BaseModel):
     """작업자 선불 용량 및 요금 스냅샷."""
 
-    capacity: int
-    amount: int
+    capacity: StrictInt
+    amount: StrictInt
     brackets: List[SaasWorkerBracketLine]
 
     @field_validator("capacity", "amount")
@@ -162,15 +162,15 @@ class SaasPricingSnapshotV2(BaseModel):
     sites: List[SaasSiteScope]
     worker: SaasWorkerPricingSnapshot
 
-    term_months: int
-    term_discount_rate_bps: int
+    term_months: StrictInt
+    term_discount_rate_bps: StrictInt
 
-    monthly_supply_amount: int
-    prepaid_supply_amount: int
+    monthly_supply_amount: StrictInt
+    prepaid_supply_amount: StrictInt
 
-    vat_rate_bps: int
-    vat_amount: int
-    total_amount: int
+    vat_rate_bps: StrictInt
+    vat_amount: StrictInt
+    total_amount: StrictInt
 
     @field_validator("term_months")
     @classmethod
