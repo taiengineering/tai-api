@@ -190,6 +190,12 @@ def evaluate_saas_change_order_v2(
             f"selection.product_tier={target_selection.product_tier} != "
             f"snapshot.product_tier={target_snap.product_tier}",
         )
+    if target_selection.pricing_mode != target_snap.pricing_mode:
+        raise SaasChangeOrderError(
+            "TARGET_SNAPSHOT_MISMATCH",
+            f"selection.pricing_mode={target_selection.pricing_mode} != "
+            f"snapshot.pricing_mode={target_snap.pricing_mode}",
+        )
     if target_selection.worker_capacity != target_snap.worker.capacity:
         raise SaasChangeOrderError(
             "TARGET_SNAPSHOT_MISMATCH",

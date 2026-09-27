@@ -41,6 +41,18 @@ RenewalOnlyType = Literal[
     "TERM_CHANGE",
 ]
 
+ChangeLineType = Literal[
+    "PRODUCT_TIER_UPGRADE",
+    "WORKER_CAPACITY_INCREASE",
+    "SITE_ADDED",
+    "SCALE_BAND_INCREASE",
+    "PRODUCT_TIER_DECREASE",
+    "WORKER_CAPACITY_DECREASE",
+    "SITE_REMOVED",
+    "SCALE_BAND_DECREASE",
+    "TERM_CHANGE",
+]
+
 # Canonical orders (§72, §73)
 CHANGE_TYPE_ORDER: Tuple[str, ...] = (
     "PRODUCT_TIER_UPGRADE",
@@ -63,7 +75,7 @@ RENEWAL_ONLY_TYPE_ORDER: Tuple[str, ...] = (
 class SaasCommercialChangeLineV2(BaseModel):
     """단일 상업적 변경 내역."""
 
-    change_type: str  # ChangeType | RenewalOnlyType
+    change_type: ChangeLineType
 
     # Site identity (SITE_ADDED / SITE_REMOVED / SCALE_BAND_*)
     entity_type: Optional[EntityType] = None
@@ -71,8 +83,8 @@ class SaasCommercialChangeLineV2(BaseModel):
     sector: Optional[SaasSector] = None
 
     # Tier change
-    from_product_tier: Optional[str] = None
-    to_product_tier: Optional[str] = None
+    from_product_tier: Optional[ProductTier] = None
+    to_product_tier: Optional[ProductTier] = None
 
     # Worker change
     from_worker_capacity: Optional[int] = None
@@ -104,8 +116,8 @@ class SaasChangeOrderProposalV2(BaseModel):
     current_version_no: int
     proposed_next_version_no: int
 
-    current_product_tier: str
-    target_product_tier: str
+    current_product_tier: ProductTier
+    target_product_tier: ProductTier
 
     current_worker_capacity: int
     target_worker_capacity: int

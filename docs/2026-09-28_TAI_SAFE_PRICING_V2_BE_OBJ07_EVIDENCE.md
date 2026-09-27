@@ -16,6 +16,7 @@ review_required: GPT REVIEW REQUIRED
 ```
 Branch : docs/pricing-canonical-20260927
 Base   : f9573f51
+PATCH1 : 33758549
 ```
 
 ---
@@ -211,6 +212,11 @@ target snapshot is None (but status == READY) → TARGET_PRICING_NOT_READY
 | C68 | APIRouter 없음 | PASS |
 | C69 | datetime.now() 없음 | PASS |
 | C70 | CHANGE_TYPE_ORDER immutable tuple | PASS |
+| C71 | pricing_mode 불일치 → TARGET_SNAPSHOT_MISMATCH | PASS |
+| C72 | pricing_mode 일치 → accepted | PASS |
+| C73 | 임의 change_type 문자열 → ValidationError | PASS |
+| C74 | proposal 유효하지 않은 product_tier → ValidationError | PASS |
+| C75 | change line 유효하지 않은 from/to product_tier → ValidationError | PASS |
 
 ```
 python3 -m pytest -q \
@@ -222,7 +228,7 @@ python3 -m pytest -q \
   tests/test_saas_entitlement_gate_v2.py \
   tests/test_saas_change_order_v2.py
 
-406 passed in 0.37s
+411 passed in 0.38s
 ```
 
 ---
@@ -230,10 +236,40 @@ python3 -m pytest -q \
 ## 14. PREVIOUS REGRESSION
 
 ```
-이전 기준 : 336 PASS
-이번 이후 : 406 PASS (336 regression + 70 OBJ07)
+이전 기준 : 336 PASS (OBJ07 이전)
+OBJ07     : 406 PASS (336 regression + 70 OBJ07)
+PATCH1    : 411 PASS (406 regression + 5 PATCH1)
 
 FAIL = 0
+```
+
+---
+
+## 14b. PATCH1 CHANGES
+
+GPT 독립검증 결과 2건 보정:
+
+**PATCH-A — pricing_mode cross validation 추가 (service):**
+```
+Step 7에 target_selection.pricing_mode != target_snap.pricing_mode
+→ TARGET_SNAPSHOT_MISMATCH 추가
+```
+
+**PATCH-B — Change Line type hardening (schema):**
+```
+SaasCommercialChangeLineV2.change_type: str
+→ change_type: ChangeLineType (9종 canonical Literal)
+
+임의 문자열 "UPGRADE", "FOO" 등 차단
+```
+
+**Section 6 — ProductTier strict (schema):**
+```
+SaasCommercialChangeLineV2.from_product_tier/to_product_tier: Optional[str]
+→ Optional[ProductTier]
+
+SaasChangeOrderProposalV2.current_product_tier/target_product_tier: str
+→ ProductTier
 ```
 
 ---

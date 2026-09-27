@@ -1,6 +1,6 @@
 """Tests for WO-PRICING-V2-BE-OBJ07 — Change Order Domain V2.
 
-Coverage: C01–C70 (70 tests)
+Coverage: C01–C75 (75 tests)
 """
 from __future__ import annotations
 
@@ -11,7 +11,13 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from schemas.saas_change_order_v2 import CHANGE_TYPE_ORDER
+from pydantic import ValidationError
+
+from schemas.saas_change_order_v2 import (
+    CHANGE_TYPE_ORDER,
+    SaasChangeOrderProposalV2,
+    SaasCommercialChangeLineV2,
+)
 from schemas.saas_commercial_fit_v2 import SaasComplianceBandCatalogEntryV2
 from schemas.saas_contract_commercial_v2 import SaasContractStorageBundleV2
 from schemas.saas_pricing_policy_v2 import (
@@ -757,3 +763,66 @@ def test_C70_no_contracts_mutation():
     code = _code_lines(_SVC_SRC)
     for kw in [".insert(", ".update(", ".delete(", ".upsert("]:
         assert kw not in code, f"Mutation: {kw}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# C71–C75: PATCH1 — pricing_mode + type hardening
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_C71_pricing_mode_mismatch_rejected():
+    s = [_site(_SITE_A)]
+    bundle = _cur_mgr(s)
+    sel, result = _ready("MANAGER", s)
+    bad_snap = result.snapshot.model_copy(update={"pricing_mode": "CUSTOM"})
+    bad = result.model_copy(update={"snapshot": bad_snap})
+    with pytest.raises(SaasChangeOrderError) as exc:
+        _eval(bundle, sel, bad)
+    assert exc.value.code == "TARGET_SNAPSHOT_MISMATCH"
+
+
+def test_C72_matching_pricing_mode_accepted():
+    s = [_site(_SITE_A)]
+    r = _eval(_cur_mgr(s), *_ready("MANAGER", s))
+    assert r.status == "NO_CHANGE"
+
+
+def test_C73_invalid_change_type_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialChangeLineV2(change_type="UPGRADE")
+
+
+def test_C74_proposal_invalid_product_tier_rejected():
+    with pytest.raises(ValidationError):
+        SaasChangeOrderProposalV2(
+            status="NO_CHANGE",
+            contract_id=_CONTRACT,
+            current_version_no=1,
+            proposed_next_version_no=2,
+            current_product_tier="STANDARD",
+            target_product_tier="MANAGER",
+            current_worker_capacity=0,
+            target_worker_capacity=0,
+            current_site_count=1,
+            target_site_count=1,
+            change_types=[],
+            renewal_only_types=[],
+            change_lines=[],
+            current_monthly_supply_amount=None,
+            target_monthly_supply_amount=None,
+            monthly_supply_delta=0,
+            requires_remaining_term_prepaid=False,
+            current_policy_version="V1",
+            target_policy_version="V1",
+            current_term_months=1,
+            target_term_months=1,
+            requested_effective_at=_now(),
+        )
+
+
+def test_C75_change_line_invalid_product_tier_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialChangeLineV2(
+            change_type="PRODUCT_TIER_UPGRADE",
+            from_product_tier="STARTER",
+            to_product_tier="FIELD",
+        )
