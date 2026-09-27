@@ -20,7 +20,7 @@ SCHEMA_VERSION = "SAAS_PRICING_V2"
 
 # ── Domain Value Enumerations ──────────────────────────────────────────────────
 
-ProductTier = Literal["MANAGER", "FIELD"]
+ProductTier = Literal["MANAGER", "FIELD", "CUSTOM"]
 PricingMode = Literal["STANDARD", "CUSTOM"]
 SaasSector = Literal["INDUSTRY", "BUILDING", "CONSTRUCTION"]
 EntityType = Literal["factory", "site"]
@@ -63,6 +63,16 @@ class SaasCommercialSelection(BaseModel):
     def _manager_no_workers(self) -> "SaasCommercialSelection":
         if self.product_tier == "MANAGER" and self.worker_capacity != 0:
             raise ValueError("MANAGER tier는 worker_capacity가 0이어야 합니다.")
+        return self
+
+    @model_validator(mode="after")
+    def _tier_mode_combination(self) -> "SaasCommercialSelection":
+        valid_pairs = {("MANAGER", "STANDARD"), ("FIELD", "STANDARD"), ("CUSTOM", "CUSTOM")}
+        if (self.product_tier, self.pricing_mode) not in valid_pairs:
+            raise ValueError(
+                f"product_tier={self.product_tier}와 pricing_mode={self.pricing_mode} 조합은 허용되지 않습니다. "
+                f"허용: MANAGER+STANDARD, FIELD+STANDARD, CUSTOM+CUSTOM"
+            )
         return self
 
 
@@ -198,4 +208,18 @@ class SaasPricingSnapshotV2(BaseModel):
     def _schema_version_canonical(cls, v: str) -> str:
         if v != SCHEMA_VERSION:
             raise ValueError(f"schema_version은 '{SCHEMA_VERSION}'이어야 합니다.")
+        return v
+
+    @field_validator("product_tier")
+    @classmethod
+    def _not_custom_tier(cls, v: str) -> str:
+        if v == "CUSTOM":
+            raise ValueError("CUSTOM tier는 SaasPricingSnapshotV2를 생성할 수 없습니다.")
+        return v
+
+    @field_validator("pricing_mode")
+    @classmethod
+    def _standard_pricing_mode_only(cls, v: str) -> str:
+        if v != "STANDARD":
+            raise ValueError("SaasPricingSnapshotV2는 pricing_mode=STANDARD만 허용합니다.")
         return v

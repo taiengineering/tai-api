@@ -79,9 +79,9 @@ def test_T02_field_valid():
     assert sel.product_tier == "FIELD"
 
 
-# ── T03 CUSTOM product_tier rejected ─────────────────────────────────────────
+# ── T03 CUSTOM + STANDARD rejected (K06) — CUSTOM tier는 CUSTOM mode만 허용 ───
 
-def test_T03_custom_product_tier_rejected():
+def test_T03_custom_standard_rejected():
     with pytest.raises(ValidationError):
         SaasCommercialSelection(
             product_tier="CUSTOM",
@@ -261,16 +261,16 @@ def test_T24_pricing_mode_standard_accepted():
     assert sel.pricing_mode == "STANDARD"
 
 
-# ── T25 pricing_mode CUSTOM accepted ─────────────────────────────────────────
+# ── T25 MANAGER + CUSTOM rejected (K04) ──────────────────────────────────────
 
-def test_T25_pricing_mode_custom_accepted():
-    sel = SaasCommercialSelection(
-        product_tier="MANAGER",
-        pricing_mode="CUSTOM",
-        worker_capacity=0,
-        term_months=1,
-    )
-    assert sel.pricing_mode == "CUSTOM"
+def test_T25_manager_custom_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialSelection(
+            product_tier="MANAGER",
+            pricing_mode="CUSTOM",
+            worker_capacity=0,
+            term_months=1,
+        )
 
 
 # ── Additional guards ─────────────────────────────────────────────────────────
@@ -434,3 +434,114 @@ def test_P19_vat_amount_float_rejected():
 def test_P20_total_amount_float_rejected():
     with pytest.raises(ValidationError):
         SaasPricingSnapshotV2(**_snapshot(total_amount=163900.0))
+
+
+# ── CANONICAL TIER CORRECTION: K01~K14 ────────────────────────────────────────
+
+# K01 MANAGER + STANDARD accepted
+def test_K01_manager_standard_accepted():
+    sel = SaasCommercialSelection(
+        product_tier="MANAGER", pricing_mode="STANDARD", worker_capacity=0, term_months=1
+    )
+    assert sel.product_tier == "MANAGER"
+    assert sel.pricing_mode == "STANDARD"
+
+
+# K02 FIELD + STANDARD accepted
+def test_K02_field_standard_accepted():
+    sel = SaasCommercialSelection(
+        product_tier="FIELD", pricing_mode="STANDARD", worker_capacity=5, term_months=1
+    )
+    assert sel.product_tier == "FIELD"
+    assert sel.pricing_mode == "STANDARD"
+
+
+# K03 CUSTOM + CUSTOM accepted
+def test_K03_custom_custom_accepted():
+    sel = SaasCommercialSelection(
+        product_tier="CUSTOM", pricing_mode="CUSTOM", worker_capacity=0, term_months=1
+    )
+    assert sel.product_tier == "CUSTOM"
+    assert sel.pricing_mode == "CUSTOM"
+
+
+# K04 MANAGER + CUSTOM rejected
+def test_K04_manager_custom_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialSelection(
+            product_tier="MANAGER", pricing_mode="CUSTOM", worker_capacity=0, term_months=1
+        )
+
+
+# K05 FIELD + CUSTOM rejected
+def test_K05_field_custom_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialSelection(
+            product_tier="FIELD", pricing_mode="CUSTOM", worker_capacity=5, term_months=1
+        )
+
+
+# K06 CUSTOM + STANDARD rejected
+def test_K06_custom_standard_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialSelection(
+            product_tier="CUSTOM", pricing_mode="STANDARD", worker_capacity=0, term_months=1
+        )
+
+
+# K07 CUSTOM worker_capacity=0 accepted
+def test_K07_custom_worker_capacity_zero_accepted():
+    sel = SaasCommercialSelection(
+        product_tier="CUSTOM", pricing_mode="CUSTOM", worker_capacity=0, term_months=1
+    )
+    assert sel.worker_capacity == 0
+
+
+# K08 CUSTOM worker_capacity>0 accepted
+def test_K08_custom_worker_capacity_positive_accepted():
+    sel = SaasCommercialSelection(
+        product_tier="CUSTOM", pricing_mode="CUSTOM", worker_capacity=300, term_months=1
+    )
+    assert sel.worker_capacity == 300
+
+
+# K09 STARTER still rejected
+def test_K09_starter_still_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialSelection(
+            product_tier="STARTER", pricing_mode="STANDARD", worker_capacity=0, term_months=1
+        )
+
+
+# K10 BUSINESS rejected
+def test_K10_business_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialSelection(
+            product_tier="BUSINESS", pricing_mode="STANDARD", worker_capacity=0, term_months=1
+        )
+
+
+# K11 PRO rejected
+def test_K11_pro_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialSelection(
+            product_tier="PRO", pricing_mode="STANDARD", worker_capacity=0, term_months=1
+        )
+
+
+# K12 CUSTOM snapshot rejected
+def test_K12_custom_snapshot_rejected():
+    with pytest.raises(ValidationError):
+        SaasPricingSnapshotV2(**_snapshot(product_tier="CUSTOM"))
+
+
+# K13 MANAGER + STANDARD snapshot accepted
+def test_K13_manager_standard_snapshot_accepted():
+    snap = SaasPricingSnapshotV2(**_snapshot(product_tier="MANAGER", pricing_mode="STANDARD"))
+    assert snap.product_tier == "MANAGER"
+
+
+# K14 FIELD + STANDARD snapshot accepted
+def test_K14_field_standard_snapshot_accepted():
+    snap = SaasPricingSnapshotV2(**_snapshot(product_tier="FIELD", pricing_mode="STANDARD"))
+    assert snap.product_tier == "FIELD"

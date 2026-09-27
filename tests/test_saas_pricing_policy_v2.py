@@ -401,3 +401,13 @@ def test_Q08_duplicate_worker_range_from_rejected():
     ]
     with pytest.raises(ValidationError):
         SaasPricingPolicyV2(**_policy_data(worker_brackets=brackets))
+
+
+# ── CANONICAL TIER CORRECTION: K15 ────────────────────────────────────────────
+
+def test_K15_policy_has_no_custom_amount_fields():
+    """Pricing Policy 모델에 CUSTOM 가격 필드가 없음을 검증."""
+    from schemas.saas_pricing_policy_v2 import SaasPricingPolicyV2 as _PolicyModel
+    fields = set(_PolicyModel.model_fields.keys())
+    custom_fields = {f for f in fields if "custom" in f.lower()}
+    assert custom_fields == set(), f"Policy에 CUSTOM 가격 필드 발견: {custom_fields}"

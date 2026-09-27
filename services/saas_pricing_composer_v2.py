@@ -166,8 +166,8 @@ def calculate_saas_price_v2(
     if policy is None:
         policy = get_canonical_pricing_policy_v2()
 
-    # Step 1: CUSTOM — 자동 가격 계산 불가
-    if selection.pricing_mode == "CUSTOM":
+    # Step 1: CUSTOM — Product Tier가 권위값. pricing_mode는 secondary guard
+    if selection.product_tier == "CUSTOM":
         return SaasPricingCalculationResult(
             status="CUSTOM_REQUIRED",
             policy_version=policy.policy_version,
@@ -178,7 +178,7 @@ def calculate_saas_price_v2(
             term_months=selection.term_months,
             term_discount_rate_bps=None,
             snapshot=None,
-            block_reason="pricing_mode=CUSTOM: 자동 가격 계산 불가",
+            block_reason="product_tier=CUSTOM: 자동 가격 계산 불가, 별도 견적 필요",
         )
 
     # Step 2: STANDARD site guard

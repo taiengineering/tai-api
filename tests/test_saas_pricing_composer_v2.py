@@ -457,11 +457,11 @@ def test_field_per_site_uplift_and_worker():
     assert result.worker_breakdown.amount == 60000  # 20명 × 3000
 
 
-# ── CUSTOM: zero sites → CUSTOM_REQUIRED ─────────────────────────────────────
+# ── CUSTOM: zero sites → CUSTOM_REQUIRED (product_tier 기준) ─────────────────
 
 def test_custom_zero_sites_custom_required():
     result = calculate_saas_price_v2(
-        _sel(pricing_mode="CUSTOM"),
+        _sel(product_tier="CUSTOM", pricing_mode="CUSTOM"),
         [],
         _resolved_policy(),
     )
@@ -469,11 +469,11 @@ def test_custom_zero_sites_custom_required():
     assert result.snapshot is None
 
 
-# ── CUSTOM: snapshot=None ─────────────────────────────────────────────────────
+# ── CUSTOM: snapshot=None (product_tier 기준) ─────────────────────────────────
 
 def test_custom_snapshot_none():
     result = calculate_saas_price_v2(
-        _sel(pricing_mode="CUSTOM"),
+        _sel(product_tier="CUSTOM", pricing_mode="CUSTOM"),
         [_site()],
         _resolved_policy(),
     )
@@ -517,3 +517,100 @@ def test_result_determinism():
     result1 = calculate_saas_price_v2(_sel(), sites, policy)
     result2 = calculate_saas_price_v2(_sel(), sites, policy)
     assert result1.model_dump() == result2.model_dump()
+
+
+# ── CANONICAL TIER CORRECTION: K16~K24 ────────────────────────────────────────
+
+# K16 CUSTOM + zero sites → CUSTOM_REQUIRED
+def test_K16_custom_zero_sites_custom_required():
+    result = calculate_saas_price_v2(
+        _sel(product_tier="CUSTOM", pricing_mode="CUSTOM"),
+        [],
+        _resolved_policy(),
+    )
+    assert result.status == "CUSTOM_REQUIRED"
+
+
+# K17 CUSTOM + sites present → CUSTOM_REQUIRED
+def test_K17_custom_with_sites_custom_required():
+    result = calculate_saas_price_v2(
+        _sel(product_tier="CUSTOM", pricing_mode="CUSTOM"),
+        [_site()],
+        _resolved_policy(),
+    )
+    assert result.status == "CUSTOM_REQUIRED"
+
+
+# K18 CUSTOM + worker_capacity > 0 → CUSTOM_REQUIRED, worker_breakdown=None
+def test_K18_custom_with_workers_custom_required():
+    result = calculate_saas_price_v2(
+        _sel(product_tier="CUSTOM", pricing_mode="CUSTOM", worker_capacity=100),
+        [_site()],
+        _resolved_policy(),
+    )
+    assert result.status == "CUSTOM_REQUIRED"
+    assert result.worker_breakdown is None
+
+
+# K19 CUSTOM snapshot=None
+def test_K19_custom_snapshot_none():
+    result = calculate_saas_price_v2(
+        _sel(product_tier="CUSTOM", pricing_mode="CUSTOM"),
+        [_site()],
+        _resolved_policy(),
+    )
+    assert result.snapshot is None
+
+
+# K20 CUSTOM monthly_supply_amount=None
+def test_K20_custom_monthly_none():
+    result = calculate_saas_price_v2(
+        _sel(product_tier="CUSTOM", pricing_mode="CUSTOM"),
+        [_site()],
+        _resolved_policy(),
+    )
+    assert result.monthly_supply_amount is None
+
+
+# K21 CUSTOM raw_prepaid_supply_amount=None
+def test_K21_custom_raw_prepaid_none():
+    result = calculate_saas_price_v2(
+        _sel(product_tier="CUSTOM", pricing_mode="CUSTOM"),
+        [_site()],
+        _resolved_policy(),
+    )
+    assert result.raw_prepaid_supply_amount is None
+
+
+# K22 MANAGER 3-site calculation regression
+def test_K22_manager_calculation_regression():
+    sites = [
+        _site(entity_id=_UUID_A, base_amount=149000),
+        _site(entity_id=_UUID_B, base_amount=299000),
+        _site(entity_id=_UUID_C, base_amount=499000),
+    ]
+    result = calculate_saas_price_v2(_sel(), sites, _resolved_policy())
+    assert result.monthly_supply_amount == 857400
+
+
+# K23 FIELD 3-site calculation regression
+def test_K23_field_calculation_regression():
+    sites = [
+        _site(entity_id=_UUID_A, base_amount=149000),
+        _site(entity_id=_UUID_B, base_amount=299000),
+        _site(entity_id=_UUID_C, base_amount=499000),
+    ]
+    result = calculate_saas_price_v2(
+        _sel(product_tier="FIELD", worker_capacity=0),
+        sites,
+        _resolved_policy(),
+    )
+    assert result.monthly_supply_amount == 1117400
+
+
+# K24 Composer CUSTOM 분기가 product_tier를 기준으로 동작함
+def test_K24_custom_branch_uses_product_tier():
+    import inspect
+    from services import saas_pricing_composer_v2
+    source = inspect.getsource(saas_pricing_composer_v2.calculate_saas_price_v2)
+    assert 'selection.product_tier == "CUSTOM"' in source
