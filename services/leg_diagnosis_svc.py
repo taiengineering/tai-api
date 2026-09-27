@@ -8,9 +8,14 @@ headline/roi/risk_summary 등 TAI-rich 필드는 생성하지 않는다(임의�
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, List
 
 from clients import leg_runtime_client as leg_client
+
+# CONSTRUCTION /rtm/evaluate는 최대 ~16s가 관측되므로 전용 budget을 부여한다.
+# BUILDING/INDUSTRIAL는 None → 하위 클라이언트의 LEG_RUNTIME_TIMEOUT 그대로 사용.
+LEG_RTM_CONSTRUCTION_TIMEOUT = float(os.getenv("LEG_RTM_CONSTRUCTION_TIMEOUT", "30.0"))
 
 log = logging.getLogger("services.leg_diagnosis")
 
@@ -54,7 +59,10 @@ def run_leg_diagnosis(step1_body: Any) -> Dict[str, Any]:
     """LEG 전용 진단. 반환 = full_result(LEG). 실패 시 LegDiagnosisError/LegRuntimeError 전파."""
     facility = leg_client.build_facility(step1_body)
     context = leg_client.build_engine_context(step1_body)
-    data = leg_client.evaluate_rtm(facility, context=context or None)  # net/parse 실패 시 LegRuntimeError
+    rtm_timeout = (
+        LEG_RTM_CONSTRUCTION_TIMEOUT if context.get("sector") == "CONSTRUCTION" else None
+    )
+    data = leg_client.evaluate_rtm(facility, context=context or None, timeout=rtm_timeout)
 
     status = data.get("status")
     error_code = data.get("error_code")
