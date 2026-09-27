@@ -1,0 +1,290 @@
+"""WO-PRICING-V2-BE-OBJ01 — Commercial Domain Contract V2 테스트.
+
+T01~T25 모두 DB / Runtime 없이 순수 Pydantic validation 검증.
+"""
+import uuid
+
+import pytest
+from pydantic import ValidationError
+
+from schemas.saas_pricing_v2 import (
+    SCHEMA_VERSION,
+    SaasCommercialSelection,
+    SaasPricingSnapshotV2,
+    SaasSiteScope,
+    SaasWorkerBracketLine,
+    SaasWorkerPricingSnapshot,
+)
+
+_UUID = str(uuid.uuid4())
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _site(sector="INDUSTRY", entity_type="factory", rate_bps=10000):
+    return dict(
+        entity_type=entity_type,
+        entity_id=_UUID,
+        sector=sector,
+        base_band_code="INDUSTRY_STARTER",
+        base_amount=149000,
+        is_primary=True,
+        applied_rate_bps=rate_bps,
+        final_site_amount=149000,
+    )
+
+def _worker(capacity=0, amount=0, brackets=None):
+    return dict(capacity=capacity, amount=amount, brackets=brackets or [])
+
+def _snapshot(**overrides):
+    base = dict(
+        schema_version=SCHEMA_VERSION,
+        policy_version="2026-09-27",
+        product_tier="MANAGER",
+        pricing_mode="STANDARD",
+        sites=[_site()],
+        worker=_worker(),
+        term_months=1,
+        term_discount_rate_bps=0,
+        monthly_supply_amount=149000,
+        prepaid_supply_amount=149000,
+        vat_rate_bps=1000,
+        vat_amount=14900,
+        total_amount=163900,
+    )
+    base.update(overrides)
+    return base
+
+
+# ── T01 MANAGER valid ─────────────────────────────────────────────────────────
+
+def test_T01_manager_valid():
+    sel = SaasCommercialSelection(
+        product_tier="MANAGER",
+        pricing_mode="STANDARD",
+        worker_capacity=0,
+        term_months=1,
+    )
+    assert sel.product_tier == "MANAGER"
+
+
+# ── T02 FIELD valid ───────────────────────────────────────────────────────────
+
+def test_T02_field_valid():
+    sel = SaasCommercialSelection(
+        product_tier="FIELD",
+        pricing_mode="STANDARD",
+        worker_capacity=5,
+        term_months=12,
+    )
+    assert sel.product_tier == "FIELD"
+
+
+# ── T03 CUSTOM product_tier rejected ─────────────────────────────────────────
+
+def test_T03_custom_product_tier_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialSelection(
+            product_tier="CUSTOM",
+            pricing_mode="STANDARD",
+            worker_capacity=0,
+            term_months=1,
+        )
+
+
+# ── T04 STARTER product_tier rejected ────────────────────────────────────────
+
+def test_T04_starter_product_tier_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialSelection(
+            product_tier="STARTER",
+            pricing_mode="STANDARD",
+            worker_capacity=0,
+            term_months=1,
+        )
+
+
+# ── T05 MANAGER + worker_capacity > 0 rejected ───────────────────────────────
+
+def test_T05_manager_with_workers_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialSelection(
+            product_tier="MANAGER",
+            pricing_mode="STANDARD",
+            worker_capacity=1,
+            term_months=1,
+        )
+
+
+# ── T06 FIELD + worker_capacity 0 accepted ───────────────────────────────────
+
+def test_T06_field_worker_capacity_zero_accepted():
+    sel = SaasCommercialSelection(
+        product_tier="FIELD",
+        pricing_mode="STANDARD",
+        worker_capacity=0,
+        term_months=1,
+    )
+    assert sel.worker_capacity == 0
+
+
+# ── T07~T11 term months accepted ─────────────────────────────────────────────
+
+@pytest.mark.parametrize("months", [1, 3, 6, 9, 12])
+def test_T07_to_T11_term_months_accepted(months):
+    sel = SaasCommercialSelection(
+        product_tier="MANAGER",
+        pricing_mode="STANDARD",
+        worker_capacity=0,
+        term_months=months,
+    )
+    assert sel.term_months == months
+
+
+# ── T12 term 2 rejected ───────────────────────────────────────────────────────
+
+def test_T12_term_2_rejected():
+    with pytest.raises(ValidationError):
+        SaasCommercialSelection(
+            product_tier="MANAGER",
+            pricing_mode="STANDARD",
+            worker_capacity=0,
+            term_months=2,
+        )
+
+
+# ── T13 INDUSTRY + factory accepted ──────────────────────────────────────────
+
+def test_T13_industry_factory_accepted():
+    scope = SaasSiteScope(**_site(sector="INDUSTRY", entity_type="factory"))
+    assert scope.entity_type == "factory"
+
+
+# ── T14 BUILDING + factory accepted ──────────────────────────────────────────
+
+def test_T14_building_factory_accepted():
+    scope = SaasSiteScope(**_site(sector="BUILDING", entity_type="factory"))
+    assert scope.entity_type == "factory"
+
+
+# ── T15 CONSTRUCTION + site accepted ─────────────────────────────────────────
+
+def test_T15_construction_site_accepted():
+    scope = SaasSiteScope(**_site(sector="CONSTRUCTION", entity_type="site"))
+    assert scope.entity_type == "site"
+
+
+# ── T16 INDUSTRY + site rejected ─────────────────────────────────────────────
+
+def test_T16_industry_site_rejected():
+    with pytest.raises(ValidationError):
+        SaasSiteScope(**_site(sector="INDUSTRY", entity_type="site"))
+
+
+# ── T17 CONSTRUCTION + factory rejected ──────────────────────────────────────
+
+def test_T17_construction_factory_rejected():
+    with pytest.raises(ValidationError):
+        SaasSiteScope(**_site(sector="CONSTRUCTION", entity_type="factory"))
+
+
+# ── T18 negative money rejected ──────────────────────────────────────────────
+
+def test_T18_negative_money_rejected():
+    with pytest.raises(ValidationError):
+        data = _site()
+        data["base_amount"] = -1
+        SaasSiteScope(**data)
+
+
+# ── T19 float money prohibition verified ─────────────────────────────────────
+
+def test_T19_float_money_rejected():
+    with pytest.raises(ValidationError):
+        SaasSiteScope(
+            entity_type="factory",
+            entity_id=_UUID,
+            sector="INDUSTRY",
+            base_band_code="INDUSTRY_STARTER",
+            base_amount=149000.5,  # float
+            is_primary=True,
+            applied_rate_bps=10000,
+            final_site_amount=149000,
+        )
+
+
+# ── T20 applied_rate_bps > 10000 rejected ────────────────────────────────────
+
+def test_T20_rate_bps_over_max_rejected():
+    with pytest.raises(ValidationError):
+        SaasSiteScope(**_site(rate_bps=10001))
+
+
+# ── T21 schema_version canonical value verified ──────────────────────────────
+
+def test_T21_schema_version_canonical():
+    snap = SaasPricingSnapshotV2(**_snapshot())
+    assert snap.schema_version == SCHEMA_VERSION
+    assert snap.schema_version == "SAAS_PRICING_V2"
+
+
+# ── T22 policy_version independent from schema_version ───────────────────────
+
+def test_T22_policy_version_independent():
+    snap = SaasPricingSnapshotV2(**_snapshot(policy_version="2027-01-01"))
+    assert snap.policy_version == "2027-01-01"
+    assert snap.schema_version == SCHEMA_VERSION
+    assert snap.policy_version != snap.schema_version
+
+
+# ── T23 worker bracket open-ended range_to=null accepted ─────────────────────
+
+def test_T23_worker_bracket_open_range_accepted():
+    bracket = SaasWorkerBracketLine(
+        range_from=51,
+        range_to=None,
+        unit_rate=1200,
+        units=10,
+        amount=12000,
+    )
+    assert bracket.range_to is None
+
+
+# ── T24 pricing_mode STANDARD accepted ───────────────────────────────────────
+
+def test_T24_pricing_mode_standard_accepted():
+    sel = SaasCommercialSelection(
+        product_tier="MANAGER",
+        pricing_mode="STANDARD",
+        worker_capacity=0,
+        term_months=1,
+    )
+    assert sel.pricing_mode == "STANDARD"
+
+
+# ── T25 pricing_mode CUSTOM accepted ─────────────────────────────────────────
+
+def test_T25_pricing_mode_custom_accepted():
+    sel = SaasCommercialSelection(
+        product_tier="MANAGER",
+        pricing_mode="CUSTOM",
+        worker_capacity=0,
+        term_months=1,
+    )
+    assert sel.pricing_mode == "CUSTOM"
+
+
+# ── Additional guards ─────────────────────────────────────────────────────────
+
+def test_wrong_schema_version_rejected():
+    with pytest.raises(ValidationError):
+        SaasPricingSnapshotV2(**_snapshot(schema_version="SAAS_PRICING_V1"))
+
+
+def test_snapshot_negative_total_rejected():
+    with pytest.raises(ValidationError):
+        SaasPricingSnapshotV2(**_snapshot(total_amount=-1))
+
+
+def test_worker_snapshot_manager_capacity_zero():
+    snap = SaasWorkerPricingSnapshot(capacity=0, amount=0, brackets=[])
+    assert snap.capacity == 0
