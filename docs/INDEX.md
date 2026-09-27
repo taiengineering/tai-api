@@ -9,7 +9,9 @@
 
 | 파일 | 설명 |
 |---|---|
-| **PRICING_FINAL.md** | 🔴 확정 가격표 (SaaS + 법령진단) — 유일한 가격 기준 |
+| **TAI_SAFE_PRICING_CANONICAL.md** | 🔴 현행 가격정책 정본 포인터 — 여기서 시작할 것 |
+| **2026-09-27_TAI_SAFE_PRICING_FINAL_CANONICAL.md** | 🔴 TAI Safe 가격정책 최종 정본 (2026-09-27 Owner Decision) |
+| ~~PRICING_FINAL.md~~ | ~~V4 구 SoT~~ → 2026-09-27_TAI_SAFE_PRICING_FINAL_CANONICAL.md로 대체 (Historical) |
 | ENGINE_INTEGRITY.md | 법령진단 엔진 무결성 체크 가이드 |
 | fs04-storage-migration.md | Supabase Storage 사진 업로드 교체 스니펫 |
 
