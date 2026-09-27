@@ -395,6 +395,14 @@ def _build_unified_step1_body(
         sector=engine_sector, source_facts=runtime_facts, factory_id=factory_id,
     )
     if engine_sector == "BUILDING":
+        # has_chemical_substance: _LEG_INPUT_FIELDS 외부이므로 build_unified_leg_input이 drop.
+        # build_facility PATCH-A가 inp.get("has_chemical_substance")로 소비 → step1_body.input에 직접 주입.
+        # false 보존, missing이면 생성 안 함, has_chemical alias 생성 금지.
+        _hcs = runtime_facts.get("has_chemical_substance")
+        if _hcs is not None and not (isinstance(_hcs, str) and not _hcs.strip()):
+            _new_inp = dict(step1_body.input or {})
+            _new_inp["has_chemical_substance"] = _hcs
+            step1_body = step1_body.model_copy(update={"input": _new_inp})
         # elevator_count: derived source(103 vocab 밖). body 우선 → form_data 순.
         _bld_fd = getattr(body, "form_data", None) or {}
         _elev = getattr(body, "elevator_count", None)
