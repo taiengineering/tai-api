@@ -16,6 +16,7 @@ review_required: GPT REVIEW REQUIRED
 ```
 Branch : docs/pricing-canonical-20260927
 Base   : 0371d958
+PATCH1 : 45dc0624
 ```
 
 ---
@@ -200,6 +201,12 @@ FIELD   → COMPLIANCE_CORE = ALLOWED  (E50 PASS)
 | E48 | no router | PASS |
 | E49 | MANAGER COMPLIANCE_CORE LEG contract | PASS |
 | E50 | FIELD COMPLIANCE_CORE LEG contract | PASS |
+| E51 | canonical order is immutable tuple | PASS |
+| E51b | MANAGER_ENTITLEMENTS is tuple | PASS |
+| E51c | FIELD_ENTITLEMENTS is tuple | PASS |
+| E52 | batch unknown entitlement rejected cleanly | PASS |
+| E53 | batch unknown does not expose KeyError | PASS |
+| E54 | valid batch canonical ordered | PASS |
 
 ```
 python3 -m pytest -q \
@@ -210,7 +217,7 @@ python3 -m pytest -q \
   tests/test_saas_commercial_fit_gate_v2.py \
   tests/test_saas_entitlement_gate_v2.py
 
-330 passed in 0.30s
+336 passed in 0.34s
 ```
 
 ---
@@ -219,7 +226,7 @@ python3 -m pytest -q \
 
 ```
 이전 기준 : 280 PASS
-이번 이후 : 330 PASS (280 regression + 50 신규)
+이번 이후 : 336 PASS (280 regression + 50 OBJ06 + 6 PATCH1)
 
 FAIL = 0
 ```

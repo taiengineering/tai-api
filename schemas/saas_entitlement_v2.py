@@ -8,8 +8,7 @@
 """
 from __future__ import annotations
 
-from typing import List, Literal, Optional
-from uuid import UUID
+from typing import List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, field_validator, model_validator
 
@@ -32,15 +31,15 @@ SaasEntitlementDecisionStatus = Literal[
     "CUSTOM_CONTEXT_REQUIRED",
 ]
 
-# Canonical entitlement order — 정렬 기준
-ENTITLEMENT_CANONICAL_ORDER: List[SaasEntitlementCode] = [
+# Canonical entitlement order — 정렬 기준 (immutable)
+ENTITLEMENT_CANONICAL_ORDER: Tuple[SaasEntitlementCode, ...] = (
     "COMPLIANCE_CORE",
     "FIELD_TBM",
     "FIELD_RA",
     "FIELD_INSPECTION",
     "FIELD_SIGN",
     "FIELD_HAZARD_REPORT",
-]
+)
 
 
 # ── Input: Entitlement Context ────────────────────────────────────────────────

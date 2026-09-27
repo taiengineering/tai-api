@@ -385,3 +385,49 @@ def test_E49_manager_compliance_core_leg_contract():
 def test_E50_field_compliance_core_leg_contract():
     r = evaluate_saas_entitlement_v2(_field(), "COMPLIANCE_CORE")
     assert r.status == "ALLOWED"
+
+
+# ── E51–E54: PATCH1 — Immutability + Batch Validation ────────────────────────
+
+def test_E51_canonical_order_is_immutable_tuple():
+    from schemas.saas_entitlement_v2 import ENTITLEMENT_CANONICAL_ORDER
+    assert isinstance(ENTITLEMENT_CANONICAL_ORDER, tuple)
+    assert not isinstance(ENTITLEMENT_CANONICAL_ORDER, list)
+
+
+def test_E51b_manager_entitlements_is_tuple():
+    assert isinstance(MANAGER_ENTITLEMENTS, tuple)
+
+
+def test_E51c_field_entitlements_is_tuple():
+    assert isinstance(FIELD_ENTITLEMENTS, tuple)
+
+
+def test_E52_batch_unknown_entitlement_rejected():
+    with pytest.raises(Exception) as exc_info:
+        evaluate_saas_entitlements_v2(
+            _mgr(),
+            ["UNKNOWN_FEATURE"],  # type: ignore[list-item]
+        )
+    assert type(exc_info.value).__name__ != "KeyError"
+
+
+def test_E53_batch_unknown_does_not_expose_key_error():
+    try:
+        evaluate_saas_entitlements_v2(
+            _mgr(),
+            ["TOTALLY_INVALID"],  # type: ignore[list-item]
+        )
+    except KeyError:
+        pytest.fail("KeyError가 외부로 노출됨 — ValidationError여야 합니다.")
+    except Exception:
+        pass  # ValidationError 또는 SaasEntitlementGateError 허용
+
+
+def test_E54_valid_batch_canonical_order():
+    result = evaluate_saas_entitlements_v2(
+        _field(),
+        ["FIELD_HAZARD_REPORT", "COMPLIANCE_CORE", "FIELD_TBM"],
+    )
+    codes = [d.requested_entitlement for d in result.decisions]
+    assert codes == ["COMPLIANCE_CORE", "FIELD_TBM", "FIELD_HAZARD_REPORT"]

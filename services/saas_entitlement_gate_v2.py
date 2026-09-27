@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from typing import List, Set
 
+from pydantic import TypeAdapter
+
 from schemas.saas_entitlement_v2 import (
     ENTITLEMENT_CANONICAL_ORDER,
     SaasEntitlementBatchDecisionV2,
@@ -48,6 +50,7 @@ _MANAGER_SET: frozenset[SaasEntitlementCode] = frozenset(MANAGER_ENTITLEMENTS)
 _FIELD_SET: frozenset[SaasEntitlementCode] = frozenset(FIELD_ENTITLEMENTS)
 
 _CANONICAL_ORDER_INDEX = {code: i for i, code in enumerate(ENTITLEMENT_CANONICAL_ORDER)}
+_ENTITLEMENT_CODE_ADAPTER: TypeAdapter[SaasEntitlementCode] = TypeAdapter(SaasEntitlementCode)
 
 
 # ── Gate Error ────────────────────────────────────────────────────────────────
@@ -121,6 +124,9 @@ def evaluate_saas_entitlements_v2(
     requested_entitlements: List[SaasEntitlementCode],
 ) -> SaasEntitlementBatchDecisionV2:
     """복수 Entitlement 판정. 입력 순서와 무관하게 canonical order로 결과 반환."""
+    for code in requested_entitlements:
+        _ENTITLEMENT_CODE_ADAPTER.validate_python(code)
+
     seen: Set[SaasEntitlementCode] = set()
     for code in requested_entitlements:
         if code in seen:
