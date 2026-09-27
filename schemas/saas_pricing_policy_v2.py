@@ -176,6 +176,13 @@ class SaasPricingPolicyV2(BaseModel):
     def _validate_worker_brackets(
         cls, v: List[SaasWorkerRateBracketPolicy]
     ) -> List[SaasWorkerRateBracketPolicy]:
+        # (1) 입력 순서가 range_from 오름차순이어야 한다 — out-of-order REJECT
+        input_order = [b.range_from for b in v]
+        if input_order != sorted(input_order):
+            raise ValueError(
+                f"worker_brackets는 range_from 오름차순으로 입력해야 합니다. (입력: {input_order})"
+            )
+        # (2) 연속성 검증
         _validate_bracket_list(v)
         return v
 
@@ -184,10 +191,17 @@ class SaasPricingPolicyV2(BaseModel):
     def _validate_term_discounts(
         cls, v: List[SaasTermDiscountPolicy]
     ) -> List[SaasTermDiscountPolicy]:
-        months = {td.term_months for td in v}
-        if months != VALID_TERM_MONTHS_POLICY:
+        # (1) 정확히 5개
+        if len(v) != 5:
             raise ValueError(
-                f"term_discounts에는 정확히 {sorted(VALID_TERM_MONTHS_POLICY)} 항목이 있어야 합니다."
+                f"term_discounts는 정확히 5개여야 합니다. (입력: {len(v)}개)"
+            )
+        # (2) canonical order 1,3,6,9,12 — duplicate 및 out-of-order REJECT
+        canonical_order = sorted(VALID_TERM_MONTHS_POLICY)  # [1, 3, 6, 9, 12]
+        input_months = [td.term_months for td in v]
+        if input_months != canonical_order:
+            raise ValueError(
+                f"term_discounts는 {canonical_order} 순서여야 합니다. (입력: {input_months})"
             )
         return v
 

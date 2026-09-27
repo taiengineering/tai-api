@@ -297,3 +297,107 @@ def test_P37_canonical_policy_immutable_and_isolated():
     # 두 번째 호출은 별도 instance이며 올바른 값을 유지
     assert policy1 is not policy2
     assert policy2.field_uplift_amount == 100000
+
+
+# ── PATCH-1: Canonical Collection Integrity ───────────────────────────────────
+
+# Q01~Q03 Term duplicate
+
+def test_Q01_duplicate_term_1_rejected():
+    terms = [
+        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),  # 중복
+        SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=None),
+    ]
+    with pytest.raises(ValidationError):
+        SaasPricingPolicyV2(**_policy_data(term_discounts=terms))
+
+
+def test_Q02_duplicate_term_12_rejected():
+    terms = [
+        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),  # 중복
+    ]
+    with pytest.raises(ValidationError):
+        SaasPricingPolicyV2(**_policy_data(term_discounts=terms))
+
+
+def test_Q03_six_entries_same_valid_set_rejected():
+    # set이 {1,3,6,9,12}여도 6개면 거부
+    terms = [
+        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),
+    ]
+    with pytest.raises(ValidationError):
+        SaasPricingPolicyV2(**_policy_data(term_discounts=terms))
+
+
+# Q04~Q05 Term order
+
+def test_Q04_term_out_of_order_rejected():
+    terms = [
+        SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),  # 순서 뒤집힘
+        SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),
+    ]
+    with pytest.raises(ValidationError):
+        SaasPricingPolicyV2(**_policy_data(term_discounts=terms))
+
+
+def test_Q05_canonical_term_order_accepted():
+    terms = [
+        SaasTermDiscountPolicy(term_months=1,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=3,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=6,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=9,  discount_rate_bps=None),
+        SaasTermDiscountPolicy(term_months=12, discount_rate_bps=None),
+    ]
+    policy = SaasPricingPolicyV2(**_policy_data(term_discounts=terms))
+    assert [td.term_months for td in policy.term_discounts] == [1, 3, 6, 9, 12]
+
+
+# Q06~Q07 Worker bracket order
+
+def test_Q06_worker_bracket_out_of_order_rejected():
+    brackets = [
+        SaasWorkerRateBracketPolicy(range_from=21,  range_to=50,   unit_rate=2500),  # 먼저 옴
+        SaasWorkerRateBracketPolicy(range_from=1,   range_to=20,   unit_rate=3000),
+        SaasWorkerRateBracketPolicy(range_from=51,  range_to=100,  unit_rate=2000),
+        SaasWorkerRateBracketPolicy(range_from=101, range_to=300,  unit_rate=1500),
+        SaasWorkerRateBracketPolicy(range_from=301, range_to=None, unit_rate=1200),
+    ]
+    with pytest.raises(ValidationError):
+        SaasPricingPolicyV2(**_policy_data(worker_brackets=brackets))
+
+
+def test_Q07_canonical_worker_order_accepted():
+    policy = get_canonical_pricing_policy_v2()
+    from_vals = [b.range_from for b in policy.worker_brackets]
+    assert from_vals == [1, 21, 51, 101, 301]
+
+
+# Q08 Duplicate worker range_from (caught by overlap)
+
+def test_Q08_duplicate_worker_range_from_rejected():
+    # 동일 range_from은 out-of-order 거부 또는 overlap으로 거부
+    brackets = [
+        SaasWorkerRateBracketPolicy(range_from=1,   range_to=20,   unit_rate=3000),
+        SaasWorkerRateBracketPolicy(range_from=1,   range_to=50,   unit_rate=2500),  # 동일 range_from
+        SaasWorkerRateBracketPolicy(range_from=51,  range_to=100,  unit_rate=2000),
+        SaasWorkerRateBracketPolicy(range_from=101, range_to=300,  unit_rate=1500),
+        SaasWorkerRateBracketPolicy(range_from=301, range_to=None, unit_rate=1200),
+    ]
+    with pytest.raises(ValidationError):
+        SaasPricingPolicyV2(**_policy_data(worker_brackets=brackets))

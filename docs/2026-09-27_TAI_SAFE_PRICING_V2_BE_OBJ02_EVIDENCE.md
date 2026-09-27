@@ -163,6 +163,74 @@ git status --short
 
 ---
 
+---
+
+## PATCH-1 — Canonical Policy Collection Integrity (2026-09-27)
+
+### GPT SOURCE VERIFY FINDINGS
+
+```
+BLOCKER-1: DUPLICATE TERM ENTRY CAN PASS
+  기존 validator: set 비교만 수행.
+  1,1,3,6,9,12 → set={1,3,6,9,12} → 통과 가능.
+
+BLOCKER-2: OUT-OF-ORDER WORKER BRACKETS CAN PASS
+  기존 validator: sorted(v)로 검증 후 원본 v 반환.
+  21~50, 1~20, ... 순서 입력이 검증을 통과하고 원본 순서로 저장 가능.
+```
+
+### PATCH APPLIED
+
+`schemas/saas_pricing_policy_v2.py`:
+
+**_validate_term_discounts 보정:**
+- count == 5 명시적 검사 추가
+- canonical order [1,3,6,9,12] 입력 일치 검사 추가 → duplicate + out-of-order 동시 차단
+
+**_validate_worker_brackets 보정:**
+- 입력 순서 = range_from 오름차순 여부 사전 검사 추가 → out-of-order REJECT
+- 검증 후 원본 v 반환 (canonical order 보장됨)
+
+`tests/test_saas_pricing_policy_v2.py`:
+- Q01~Q08 신규 추가
+
+### TEST RESULT
+
+```
+OBJ01 regression : 48 PASS
+OBJ02 original   : 37 PASS
+PATCH-1 Q01~Q08  :  8 PASS
+합계             : 93 PASS / 0 FAIL
+
+python3 -m pytest -q tests/test_saas_pricing_v2_contract.py tests/test_saas_pricing_policy_v2.py
+........................................................................
+.....................
+93 passed in 0.17s
+```
+
+| ID | 설명 | 결과 |
+|---|---|---|
+| Q01 | duplicate term 1 rejected | PASS |
+| Q02 | duplicate term 12 rejected | PASS |
+| Q03 | six entries with same valid set rejected | PASS |
+| Q04 | term out-of-order rejected | PASS |
+| Q05 | canonical term order accepted | PASS |
+| Q06 | worker bracket out-of-order rejected | PASS |
+| Q07 | canonical worker order accepted | PASS |
+| Q08 | duplicate worker range_from rejected (overlap 경로) | PASS |
+
+Q08 Note: 동일 range_from 입력은 out-of-order 검사(입력순서=동일 range_from→정렬불변) 이후
+overlap 검사 경로에서 거부됨. 별도 duplicate 검사 없이 기존 연속성 검증으로 포착됨.
+
+### FILES MODIFIED
+
+```
+schemas/saas_pricing_policy_v2.py   (+17 lines)
+tests/test_saas_pricing_policy_v2.py (+104 lines)
+```
+
+---
+
 ```
 GPT REVIEW REQUIRED
 ```
