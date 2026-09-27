@@ -22,7 +22,7 @@ IMPLEMENTATION STATUS: NOT YET APPLIED TO RUNTIME/DB/UI
 
 ## 1. 상품 구조 — 최종 확정
 
-TAI Safe는 일반 공개상품 기준으로 **2개 Tier + Custom** 구조로 한다.
+TAI Safe는 일반 공개상품 기준으로 **3개 Product Tier** 구조로 한다.
 
 ### Tier 1. 관리자형
 
@@ -88,7 +88,9 @@ VAT 별도
 
 ---
 
-### Tier 3. Custom / Enterprise
+### Tier 3. 커스터마이징 (CUSTOM)
+
+CUSTOM은 세 번째 Product Tier다. 자동가격 없음. 별도 견적 전용.
 
 다음과 같은 표준 SaaS 범위를 넘어서는 요구만 별도 견적한다:
 
@@ -158,6 +160,16 @@ VAT 별도
 현장참여형 Base
 =
 해당 사업장의 관리자형 Compliance Base + 100,000원
+```
+
+uplift +100,000원은 사업장별로 각각 적용한다.
+
+다사업장에서 추가 사업장 80% 할인을 적용할 때는 uplift를 포함한 금액에 할인을 적용한다:
+
+```
+추가 사업장 현장참여형 금액
+= (관리자형 Compliance Base + 100,000원) × 80%
+≠ (관리자형 Compliance Base × 80%) + 100,000원
 ```
 
 **예시:**
@@ -323,9 +335,9 @@ TAI는 후불 Active User 과금 서비스가 아니다. **선불 계약 구조*
 **공통 상품:**
 
 ```
-관리자형
-현장참여형
-Custom / Enterprise
+관리자형 (MANAGER)
+현장참여형 (FIELD)
+커스터마이징 (CUSTOM)
 ```
 
 대신 사업장 Compliance 기본가격은 기존 섹터/규모 구조를 사용한다.
@@ -463,11 +475,13 @@ TAI가 선불 서비스라는 원칙은 본 정본에 포함한다.
 
 > 안전관리자와 현장 작업자가 TBM·위험성평가·점검 등 안전관리에 함께 참여
 
-### Custom / Enterprise
+### 커스터마이징 (CUSTOM)
 
 ```
 별도 견적
 ```
+
+CUSTOM = 세 번째 Product Tier. 자동가격 없음.
 
 ---
 
@@ -499,10 +513,12 @@ TAI가 선불 서비스라는 원칙은 본 정본에 포함한다.
 1. 업종/섹터
 2. 사업장 규모
 3. 사업장 수
-4. 관리자형 / 현장참여형
+4. 관리자형 / 현장참여형 / 커스터마이징
 5. 현장참여 Capacity
 6. 계약기간
 ```
+
+커스터마이징 선택 시 자동 가격 계산 없음 — 별도 견적 CTA로 전환.
 
 **결과:**
 

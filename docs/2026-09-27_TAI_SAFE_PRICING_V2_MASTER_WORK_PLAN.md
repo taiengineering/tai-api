@@ -51,31 +51,45 @@ TAI는 선불 구조를 유지한다.
 
 ## 2.1 Product Tier
 
-정식 Tier는 두 개뿐이다.
+정식 Tier는 세 개다.
 
 ```
 MANAGER
 FIELD
+CUSTOM
 ```
 
 ### MANAGER
 
 안전관리자가 중심이 되어 법령의무·점검·일정·문서·수행·증빙을 관리한다.
 
+자동가격 적용. pricing_mode = STANDARD.
+
 ### FIELD
 
 MANAGER 기능에 더해 현장 작업자가 직접 참여한다.
 (TBM, 위험성평가, 점검, 전자확인, 위험제보, 사진/증빙)
 
+자동가격 적용. pricing_mode = STANDARD.
+
+### CUSTOM
+
+표준 SaaS 범위를 넘어서는 커스터마이징 요구 또는 별도 견적이 필요한 상품.
+
+자동가격 없음. pricing_mode = CUSTOM. 별도 견적.
+
 ---
 
 # 3. Custom의 위치
 
-Custom은 세 번째 Tier가 아니다.
+CUSTOM은 세 번째 Product Tier다.
 
 ```
-product_tier = MANAGER | FIELD
-pricing_mode = STANDARD | CUSTOM
+product_tier = MANAGER | FIELD | CUSTOM
+
+MANAGER → pricing_mode = STANDARD (자동가격)
+FIELD   → pricing_mode = STANDARD (자동가격)
+CUSTOM  → pricing_mode = CUSTOM   (자동가격 없음, 별도 견적)
 ```
 
 Custom 대상: ERP, SSO, API, On-premise, 대량 Migration, 고객전용 Workflow, 전용 문서양식, 별도 SLA, 대규모 특수구조
@@ -146,7 +160,8 @@ Pack 강제구매 없음.
 
 목표 구조:
 ```
-Product Tier  ────────── MANAGER | FIELD
+Product Tier  ────────── MANAGER | FIELD | CUSTOM
+                         (자동가격: MANAGER / FIELD  |  별도견적: CUSTOM)
 Compliance Base ──────── Sector + Scale
 Site Scope ──────────── 사업장별 가격
 Worker Capacity ─────── FIELD 참여인원
@@ -283,6 +298,7 @@ STATUS = NOT OPENED
 ```
 MANAGER: COMPLIANCE_CORE
 FIELD:   COMPLIANCE_CORE + FIELD_TBM + FIELD_RA + FIELD_INSPECTION + FIELD_SIGN + FIELD_HAZARD_REPORT
+CUSTOM:  contract-specific entitlement composition (별도 Object에서 구체화)
 ```
 
 LEG Core = MANAGER + FIELD 모두 가능.
@@ -294,6 +310,8 @@ STATUS = NOT OPENED
 ## BE-OBJ07 — Change Order / Expansion
 
 MANAGER→FIELD / Capacity 증가 / 사업장 추가 / Compliance Base 증가를 Commercial Change 개념으로 처리.
+
+CUSTOM 계약의 Change Order는 별도 견적 경로를 따른다. 자동 Change Order 적용 금지.
 
 ```
 구조: CURRENT SNAPSHOT → TARGET SNAPSHOT → DELTA → PREPAID PAYMENT → APPLY
@@ -335,7 +353,9 @@ STATUS = NOT OPENED
 
 기존 STARTER/BUSINESS/PRO 카드 제거.
 
-표시: 관리자형(149,000원부터) / 현장참여형(249,000원부터) / Custom(별도문의)
+표시: 관리자형(149,000원부터) / 현장참여형(249,000원부터) / 커스터마이징(별도 견적)
+
+CUSTOM = 세 번째 Product Tier. 별도 견적 CTA. 자동가격 없음.
 
 ```
 STATUS = NOT OPENED
@@ -343,7 +363,9 @@ STATUS = NOT OPENED
 
 ## FE-WWW-OBJ02 — Price Calculator
 
-입력: 업종 / 사업장 규모 / 사업장 수 / Tier / 현장참여 인원 / 계약기간
+입력: 업종 / 사업장 규모 / 사업장 수 / Tier (관리자형 / 현장참여형 / 커스터마이징) / 현장참여 인원 / 계약기간
+
+커스터마이징 선택 시: 자동 가격 계산 없음 → 별도 견적 CTA로 전환.
 
 Backend Preview 호출. Frontend 계산 금지.
 
@@ -474,7 +496,8 @@ SaaS Pricing V2 진행을 막지 않음
 | Unit | Tier validation / Worker brackets / Site discount / Term / VAT / Snapshot |
 | Contract | API request / response / DB snapshot |
 | Integration | Pricing / Quote / Contract / Payment / Upgrade / Renewal / Entitlement |
-| E2E | 3 sectors × 2 tiers × scale boundaries × site counts × worker boundaries × contract terms |
+| E2E | 3 sectors × 2 priced tiers (MANAGER/FIELD) × scale boundaries × site counts × worker boundaries × contract terms |
+| E2E | CUSTOM: 선택 → 자동가격 없음 → 별도 견적 CTA 진입 검증 |
 
 Critical Boundary Cases:
 - INDUSTRY: 49/50, 299/300, 499/500
@@ -515,9 +538,12 @@ Claude PASS 보고 = 자동 CLOSED 아님.
 
 | Object | 상태 |
 |---|---|
-| OBJ00 | CLOSED |
-| BE-OBJ01 | CLAUDE EXECUTION PASS / GPT SOURCE VERIFY PENDING |
-| BE-OBJ02+ | NOT OPENED |
+| OBJ00 | CLOSED (34a6b51a) |
+| BE-OBJ01 | CLAUDE EXECUTION PASS (f7025efd → d1bbfc91) / GPT VERIFY PENDING |
+| BE-OBJ02 | CLAUDE EXECUTION PASS (d1bbfc91) / GPT VERIFY PENDING |
+| BE-OBJ03 | CLAUDE EXECUTION PASS (894aa020 → d1bbfc91) / GPT VERIFY PENDING |
+| WO-CANONICAL-TIER-CORRECTION-001 PATCH1 | IN PROGRESS (문서 정렬 중) |
+| BE-OBJ04+ | NOT OPENED |
 | Frontend | NOT STARTED |
 | DB Migration | NOT STARTED |
 | Production Price Change | 0 |
@@ -527,19 +553,20 @@ Claude PASS 보고 = 자동 CLOSED 아님.
 # 24. 다음 순서
 
 ```
-STEP 1: BE-OBJ01 remote/source independent verification
-STEP 2: BE-OBJ01 CLOSED (PASS 시)
-STEP 3: BE-OBJ02 Pricing Policy Model 작업지시
+STEP 1: WO-CANONICAL-TIER-CORRECTION-001 PATCH1 완료 및 commit
+STEP 2: BE-OBJ01 + BE-OBJ02 + BE-OBJ03 + PATCH1 GPT 독립검증
+STEP 3: 전체 GPT VERIFY PASS → 각 Object CLOSED
+STEP 4: BE-OBJ04 Commercial Contract Storage 작업지시
 ```
 
-BE-OBJ01 검증 전에 BE-OBJ02를 열지 않는다.
+GPT 독립검증 없이 BE-OBJ04를 열지 않는다.
 
 ---
 
 # 25. Master Exit Criteria
 
-- [ ] 2 Tier 구조
-- [ ] Custom 별도
+- [ ] 3 Product Tier 구조 (MANAGER / FIELD / CUSTOM)
+- [ ] CUSTOM 자동가격 없음 / 별도 견적
 - [ ] Compliance Base와 Product Tier 분리
 - [ ] Worker Capacity 과금
 - [ ] 다사업장 20% 할인
