@@ -147,7 +147,7 @@ V3에서 FIELD 가격은 249,000 고정이지만 Resolver 호출은 유지한다
 | `SaasPricingSnapshotV2.term_months` | `StrictInt` | `payment_months: StrictInt` | rename |
 | `SaasPricingSnapshotV2._term_months_allowed` | validator name | `_payment_months_allowed` (rename) | follow field |
 | `SaasPricingSnapshotV2._schema_version_canonical` | checks `"SAAS_PRICING_V2"` | checks `"SAAS_PRICING_V3"` | version bump |
-| `SaasSiteScope` | unchanged | KEEP AS-IS | V3 FIELD base_amount = compliance evidence |
+| `SaasSiteScope` | unchanged | KEEP AS-IS | base_amount = resolver 당시 scale/band 반환 금액 기록. 법적 compliance evidence로 단정 금지 |
 | `SaasWorkerBracketLine`, `SaasWorkerPricingSnapshot` | unchanged | KEEP AS-IS | |
 
 **파일명**: KEEP `schemas/saas_pricing_v2.py`
@@ -475,7 +475,7 @@ Pricing V3 "FIELD 가격이 scale-independent"라는 사실만으로 Commercial 
 | **Commercial Fit Gate Schema** | REUSE-AS-IS | 변경 없음 (새 enum 추가 = OBJ07) | `saas_commercial_fit_v2.py` | NO |
 | **Commercial Fit Gate Service** | REUSE-AS-IS FOR NOW | FIELD scale semantics = UNRESOLVED. OBJ07 결정 후 PATCH 여부 확정 | `saas_commercial_fit_gate_v2.py` | NO |
 | **Commercial Fit Gate Tests** | BASELINE CAPTURE | 현재 동작 기록. FIELD scope V3 guard = OBJ07 결정 후 추가 | `test_saas_commercial_fit_gate_v2.py` | NO |
-| **Change Order** | PATCH | Conflict 2 FIELD guard (price_delta=0, enum 추가 금지); `term_months→payment_months` = semantic patch; Conflict 1 = no change; Conflict 3 = OBJ05 | `saas_change_order_v2.py` | YES (C3) |
+| **Change Order** | PATCH | Conflict 2: FIELD price_delta=0 CONFIRMED / commercial classification = UNRESOLVED / FIELD guard = NOT YET DECIDED; `term_months→payment_months` = semantic patch; Conflict 1 = no change; Conflict 3 = OBJ05 | `saas_change_order_v2.py` | YES (C3) |
 | **Atomic New Contract OBJ10-C** | OBJ05 DEPENDENT | DDL not applied; V3 기준 최초 작성 | `migrations/…atomic_apply.sql` | YES |
 | **Renewal Adapter D-A** | PATCH + OBJ05 | `snap.term_months→payment_months` (×4) | `saas_renewal_v2_adapter.py` | YES |
 | **Temporal Logic D-B1** | OBJ05 DEPENDENT | `payment_months↔contract.end_date` | `payment_post_process.py` | YES (core) |
@@ -855,9 +855,20 @@ OBJ06
 OBJ07
 — Change Order + Commercial Fit + Renewal Integration
   DESIGN DECISION: "FIELD scale band = commercial scope 계약 한도인가?"
-  → YES: Commercial Fit Gate Step 7 FIELD guard 추가 + price_delta=0 guard (Change Order Conflict 2)
-  → NO: SCALE_BAND_EXCEEDED 불발생 + FIT 처리 + price_delta=0 (같은 결과)
-  → METADATA_ONLY: 별도 이벤트 분류 설계
+
+  A. YES — FIELD scale band = 계약 한도
+     Commercial Fit: required_sort > contracted_sort → SCALE_BAND_EXCEEDED → CHANGE_REQUIRED 유지
+                     FIELD guard 추가하지 않음. 현재 동작 그대로.
+     Change Order: price_delta = 0 유지. commercial event/classification 방식은 OBJ07에서 설계.
+
+  B. NO — FIELD scale band ≠ 계약 한도
+     Commercial Fit: FIELD scale 증가로 SCALE_BAND_EXCEEDED 발생하지 않도록 Step 7 guard patch.
+     Change Order: price_delta = 0. scale event 처리 여부 OBJ07 확정.
+
+  C. METADATA_ONLY — FIELD scale band = scope metadata only
+     Commercial Fit: scale 증가만으로 CHANGE_REQUIRED 발생하지 않음.
+                     Metadata 기록 방식은 OBJ07에서 별도 결정. 새 enum 사전 확정 금지.
+
   결정 후 Commercial Fit Gate + Change Order Conflict 2 최소 패치 실행
   D-A/B1/B2/B3 OBJ05 기반 패치
 
@@ -877,7 +888,18 @@ BE-V3-OBJ02 = COMPLETE (REVIEW_REQUIRED)
 
 다음 Gate (OBJ02 GPT PASS 후):
   BE-V3-OBJ03 — Pricing Core Minimal Patch
-  (saas_pricing_v2.py / saas_pricing_policy_v2.py / saas_pricing_composer_v2.py)
+
+  코드 대상:
+    schemas/saas_pricing_policy_v2.py
+    services/saas_pricing_composer_v2.py
+    tests/test_saas_pricing_policy_v2.py
+    tests/test_saas_pricing_composer_v2.py
+
+  OBJ03 금지:
+    schemas/saas_pricing_v2.py 변경
+    term_months / payment_months rename
+    SAAS_PRICING_V3 / SAAS_QUOTE_V3 version bump
+    Commercial schema 변경
 ```
 
 ---
