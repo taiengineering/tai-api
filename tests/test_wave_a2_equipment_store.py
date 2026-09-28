@@ -200,3 +200,53 @@ def test_capacity_value_not_repurposed():
     out = project_equipment_row(validated)
     assert "capacity_value" not in out
     assert out == {"has_boiler": True}
+
+
+# ── PATCH2: EMPTY_CODE / WHITESPACE_CODE gate ────────────────────────────────
+
+def test_empty_string_code_422():
+    """equipment_type_code="" (key present, empty string) must reach validator → error."""
+    with pytest.raises(EquipmentSourceValidationError):
+        validate_equipment_source_row({"equipment_type_code": ""})
+
+
+def test_whitespace_code_422():
+    """equipment_type_code="  " (key present, whitespace) must reach validator → error."""
+    with pytest.raises(EquipmentSourceValidationError):
+        validate_equipment_source_row({"equipment_type_code": "   "})
+
+
+def test_none_code_legacy_no_projection():
+    """equipment_type_code=None (key present but None) is legacy row; passes validation, no projection."""
+    row = {"equipment_type_code": None, "is_operating": True}
+    result = validate_equipment_source_row(row)
+    assert result is row
+    assert project_equipment_row(result) == {}
+
+
+def test_absent_code_legacy_no_projection():
+    """Row without equipment_type_code key is legacy; passes validation, no projection."""
+    row = {"equipment_type": "PRESS", "asset_name": "프레스"}
+    result = validate_equipment_source_row(row)
+    assert result is row
+    assert project_equipment_row(result) == {}
+
+
+# ── PATCH2: resolver parity (014 / 023 / 024 MATCH confirmed) ────────────────
+
+def test_014_resolver_parity():
+    """code_condition_resolver "014" → has_boiler matches A2 registry."""
+    row = validate_equipment_source_row({"equipment_type_code": "014"})
+    assert project_equipment_row(row) == {"has_boiler": True}
+
+
+def test_023_resolver_parity():
+    """code_condition_resolver "023" → has_press matches A2 registry."""
+    row = validate_equipment_source_row({"equipment_type_code": "023"})
+    assert project_equipment_row(row) == {"has_press": True}
+
+
+def test_024_resolver_parity():
+    """code_condition_resolver "024" → has_conveyor matches A2 registry."""
+    row = validate_equipment_source_row({"equipment_type_code": "024"})
+    assert project_equipment_row(row) == {"has_conveyor": True}

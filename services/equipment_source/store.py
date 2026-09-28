@@ -61,3 +61,23 @@ def validate_equipment_source_row(
             )
 
     return payload
+
+
+# STRUCTURED_SOURCE_UPGRADE_REPLAY_CANDIDATE — STATUS: SEPARATE WO / NOT IMPLEMENTED
+#
+# initial run_diagnosis:
+#   work_rows / material_rows / equipment_list → source validator/projector path exists.
+#
+# upgrade_diagnosis (tier upgrade re-run):
+#   raw_structured_input stored on initial diagnosis is not replayed through
+#   source validator/projector. Path not confirmed in diagnosis_integrated_svc.py.
+#
+# Possible effect:
+#   Between initial diagnosis and a tier upgrade re-run, structured-source canonical
+#   facts (e.g. has_boiler, has_press from equipment_list) may diverge because the
+#   upgrade path does not re-project from stored structured sources.
+#
+# Note: this is distinct from the equipment_assets.attributes historical backfill
+# problem (pre-Wave-A2 rows lacking attributes JSONB data) — that is a separate candidate.
+#
+# PATCH2: comment only. Implementation deferred to a dedicated WO.
